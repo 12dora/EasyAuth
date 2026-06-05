@@ -1,0 +1,298 @@
+# S10 Authentik 用户同步和离职撤权上下文
+
+## 执行摘要
+
+S10 的目标不是实现登录，也不是接入真实 Authentik 网络 API，而是新增 Authentik 用户事件/同步 payload 到 EasyAuth 用户镜像的边界，并在用户变为非 active 时撤销该用户所有 active grants。公共用户标识必须使用 Authentik OIDC subject，并映射为 `UserMirror.authentik_user_id`。
+
+## 当前工作区状态
+
+命令：
+
+```text
+git status --short
+```
+
+退出码：0
+
+关键输出：
+
+```text
+ M .gitignore
+ M .omo/plans/easyauth-mvp-incremental-tdd-plan.md
+?? .omo/boulder.json
+?? .omo/evidence/
+?? .omo/start-work/
+?? .python-version
+?? docker-compose.yml
+?? manage.py
+?? pyproject.toml
+?? src/
+?? tests/
+?? typings/
+?? uv.lock
+```
+
+说明：工作区已有大量未提交/未跟踪文件，S10 worker 不应回滚或覆盖无关修改。
+
+## 验证命令记录
+
+### 代码和文档检索
+
+命令：
+
+```text
+rg -n "Authentik|authentik|departure|departed|disabled|revoke|UserMirror|GrantService" docs src tests .omo/plans/easyauth-mvp-incremental-tdd-plan.md
+```
+
+退出码：0
+
+关键输出摘要：
+
+```text
+.omo/plans/easyauth-mvp-incremental-tdd-plan.md:253:### S10. 实现 Authentik 用户同步和离职撤权
+.omo/plans/easyauth-mvp-incremental-tdd-plan.md:255:**所有权**：执行子代理拥有 `src/easyauth/integrations/authentik/`、`src/easyauth/accounts/services.py`、`src/easyauth/tasks/authentik.py`。
+.omo/plans/easyauth-mvp-incremental-tdd-plan.md:257:**TDD 步骤**：先写 payload 解析、状态映射、webhook upsert、定时同步入口、inactive/disabled/departed 撤权测试；确认失败后实现适配器和服务。
+.omo/plans/easyauth-mvp-incremental-tdd-plan.md:261:- Authentik OIDC subject 映射为 `authentik_user_id`。
+.omo/plans/easyauth-mvp-incremental-tdd-plan.md:263:- 非 active 状态触发所有 active grants revoke、version 递增和审计。
+docs/architecture/easyauth-architecture-design.md:100:镜像 Authentik 用户。公共接口使用 `authentik_user_id`，内部数据库主键只用于关系和查询优化。
+docs/architecture/easyauth-architecture-design.md:120:- `authentik_user_id` 全局唯一且不可变。
+docs/architecture/easyauth-architecture-design.md:122:- Authentik `inactive` 或 `disabled` 会映射为不可保留授权的状态。
+docs/architecture/easyauth-architecture-design.md:416:GrantService.revoke_for_user(user, reason, actor) -> list[AccessGrant]
+docs/architecture/easyauth-architecture-design.md:417:AuthentikSyncService.upsert_user(authentik_payload) -> UserMirror
+docs/architecture/easyauth-architecture-design.md:480:Authentik 状态通过 webhook 和定时同步两条路径进入 EasyAuth。
+docs/architecture/easyauth-architecture-design.md:485:当 Authentik 表示用户 inactive、disabled 或 departed：
+docs/architecture/easyauth-architecture-design.md:487:1. `AuthentikSyncService` 更新 `UserMirror.status`。
+docs/architecture/easyauth-architecture-design.md:488:2. `GrantService.revoke_for_user` 撤销该用户所有 active grant。
+docs/architecture/easyauth-architecture-design.md:490:4. 写入 `user_departure_detected` 与 `grant_revoked` 审计事件。
+src/easyauth/accounts/models.py:12:USER_STATUS_DISABLED: Final = "disabled"
+src/easyauth/accounts/models.py:13:USER_STATUS_DEPARTED: Final = "departed"
+src/easyauth/accounts/models.py:22:class UserMirror(models.Model):
+src/easyauth/grants/services.py:154:class GrantService:
+src/easyauth/grants/services.py:193:    def revoke_grant(
+src/easyauth/grants/query.py:56:        case "disabled" | "departed":
+tests/unit/accounts/test_models.py:21:@pytest.mark.parametrize("status", ["active", "disabled", "departed"])
+tests/unit/grants/test_services.py:124:def test_revoke_grant_marks_current_grant_revoked_and_is_idempotent() -> None:
+tests/unit/grants/test_query.py:53:def test_resolve_user_permissions_returns_empty_for_disabled_user() -> None:
+tests/unit/grants/test_query.py:73:def test_resolve_user_permissions_returns_empty_for_departed_user() -> None:
+```
+
+### `src/easyauth/accounts/models.py`
+
+命令：
+
+```text
+sed -n '1,220p' src/easyauth/accounts/models.py
+```
+
+退出码：0
+
+关键输出：
+
+```text
+USER_STATUS_ACTIVE: Final = "active"
+USER_STATUS_DISABLED: Final = "disabled"
+USER_STATUS_DEPARTED: Final = "departed"
+
+class UserMirror(models.Model):
+    authentik_user_id = models.CharField(max_length=128, unique=True)
+    name = models.CharField(max_length=128, blank=True)
+    email = models.EmailField(blank=True)
+    department = models.CharField(max_length=128, blank=True)
+    status = models.CharField(max_length=16, choices=USER_STATUS_CHOICES, default=USER_STATUS_ACTIVE)
+    dingtalk_union_id = models.CharField(max_length=128, blank=True)
+    dingtalk_userid = models.CharField(max_length=128, blank=True)
+    dingtalk_corp_id = models.CharField(max_length=128, blank=True)
+    employee_number = models.CharField(max_length=64, blank=True)
+    manager_userid = models.CharField(max_length=128, blank=True)
+
+    def delete(...):
+        raise ValidationError(USER_MIRROR_DELETE_ERROR)
+```
+
+### `src/easyauth/grants/services.py`
+
+命令：
+
+```text
+sed -n '1,260p' src/easyauth/grants/services.py
+```
+
+退出码：0
+
+关键输出：
+
+```text
+class GrantService:
+    @staticmethod
+    def create_grant(input_data: GrantMutationInput) -> AccessGrant:
+        ...
+
+    @staticmethod
+    def change_grant(input_data: GrantMutationInput) -> AccessGrant:
+        ...
+
+    @staticmethod
+    def revoke_grant(*, user: UserMirror, app: App, actor_type: str, actor_id: str) -> AccessGrant | None:
+        with transaction.atomic():
+            grant = _current_grant(user, app)
+            if grant is None:
+                return None
+            match _parse_status(grant.status):
+                case "active":
+                    grant.status = GRANT_STATUS_REVOKED
+                case "revoked" | "expired":
+                    return None
+            grant.is_current = False
+            grant.version += 1
+            grant.full_clean()
+            grant.save(update_fields=["status", "is_current", "version", "updated_at"])
+            _record_grant_event(... action="grant_revoked" ...)
+            return grant
+
+    @staticmethod
+    def expire_grant(...):
+        ...
+```
+
+现状：已有单个 app 的撤销边界和审计写入；架构契约里的 `GrantService.revoke_for_user` 尚未实现。
+
+### `src/easyauth/grants/query.py`
+
+命令：
+
+```text
+sed -n '1,220p' src/easyauth/grants/query.py
+```
+
+退出码：0
+
+关键输出：
+
+```text
+def resolve_user_permissions(*, user: UserSelector, app: App) -> PermissionSnapshot:
+    resolved_user = _resolve_user(user)
+    user_id = _user_id(user)
+    if resolved_user is None:
+        return _empty_snapshot(user_id=user_id, app=app, version=0)
+
+    latest_grant = AccessGrant.objects.filter(user=resolved_user, app=app).order_by("-version", "-id").first()
+    version = 0 if latest_grant is None else latest_grant.version
+
+    match _parse_user_status(resolved_user.status):
+        case "active":
+            pass
+        case "disabled" | "departed":
+            return _empty_snapshot(user_id=user_id, app=app, version=version)
+
+    if not latest_grant.is_current:
+        return _empty_snapshot(user_id=user_id, app=app, version=version)
+
+    match _parse_grant_status(latest_grant.status):
+        case "active":
+            pass
+        case "revoked" | "expired":
+            return _empty_snapshot(user_id=user_id, app=app, version=version)
+```
+
+现状：权限查询已经把 unknown user、disabled/departed user、非 current grant、revoked/expired grant 解析为空权限。S10 重点是让同步状态变化主动撤销 grant，保证 version 和审计语义一致。
+
+### cleanup probe
+
+命令：
+
+```text
+curl -i http://127.0.0.1:8790/health/
+```
+
+退出码：7
+
+关键输出：
+
+```text
+curl: (7) Failed to connect to 127.0.0.1 port 8790 after 0 ms: Couldn't connect to server
+```
+
+判定：PASS。此只读任务没有启动服务器，8790 未被本任务占用；连接失败符合预期。
+
+## S10 必须行为
+
+1. Authentik OIDC subject 必须映射为 `UserMirror.authentik_user_id`，不能使用邮箱、用户名、工号或 DingTalk ID 作为规范授权标识。
+2. webhook 和定时同步两条路径都必须调用同一套 payload 解析和 upsert 语义。
+3. Authentik payload 的用户状态映射到 `UserMirror.status`：active 保留授权；inactive、disabled、departed 进入 EasyAuth 非 active 状态。
+4. 用户变为非 active 时，必须触发该用户所有 current active grants 的撤销，每条受影响 grant `version += 1`，`status=revoked`，`is_current=False`。
+5. 同步撤权必须写审计：至少 `user_departure_detected` 和每条 grant 的 `grant_revoked`。`grant_revoked` 可复用现有 `GrantService.revoke_grant` 的审计格式，actor 建议为 `actor_type="authentik"` 或架构允许的系统身份。
+6. 重复 webhook 或重复定时同步必须幂等：已 disabled/departed 且已撤销的 grant 不应再次递增 version，也不应重复写 grant revoke 审计。
+7. 没有真实 Authentik 凭据时，测试必须使用夹具 payload 和模拟 client；不得要求真实网络环境。
+
+## 现有可复用代码
+
+- `src/easyauth/accounts/models.py`：`UserMirror` 已有 `authentik_user_id` 唯一约束、`active/disabled/departed` 状态、基础用户字段、禁止物理删除。
+- `tests/unit/accounts/test_models.py`：已覆盖 `authentik_user_id` 唯一、支持状态、拒绝未知状态、拒绝物理删除，可作为 S10 upsert 后模型断言基线。
+- `src/easyauth/grants/services.py`：`GrantService.revoke_grant(user, app, actor_type, actor_id)` 已实现单 app current grant 撤销、version 递增、幂等和 `grant_revoked` 审计。
+- `tests/unit/grants/test_services.py`：已有 `test_revoke_grant_marks_current_grant_revoked_and_is_idempotent`，可扩展新增 `revoke_for_user` 的多 app/历史 grant 行为测试。
+- `src/easyauth/grants/query.py`：`resolve_user_permissions` 已对 disabled/departed 用户和 revoked/expired grant 返回空 roles/permissions。
+- `tests/unit/grants/test_query.py` 和 `tests/integration/api/test_permission_query.py`：已有 disabled/departed/revoked/expired 空权限断言，可作为 S10 后置行为 PIN。
+- `src/easyauth/audit/services.py`：`AuditService.record(AuditRecord)` 可用于 `user_departure_detected`。
+- `src/easyauth/audit/models.py`：`AuditLog` append-only，适合作为同步撤权审计证据。
+
+## 建议 worker 先写的 RED/PIN 测试
+
+1. `tests/unit/integrations/authentik/test_payloads.py`
+   - Authentik user write event payload 中 `user.pk` 或 OIDC subject 字段解析为 `authentik_user_id`。
+   - `user.email`、`user.username`、`context.name/email/username` 映射到 `UserMirror` 可变展示字段，但不替代 subject。
+   - `context.attributes` 中的部门、工号、DingTalk 字段存在时能映射；缺失时落为空字符串或保持既有值，按实现契约固定。
+   - `is_active=True` 映射 `active`；`is_active=False` 映射 `disabled` 或 `departed` 中的明确一种；payload 明示 departed 时映射 `departed`。
+   - malformed payload：缺 subject/user pk、user 不是对象、email 类型错误、attributes 不是对象、is_active 缺失或非布尔、payload 同时给出冲突身份字段，必须返回类型化错误或拒绝，不要静默创建错误用户。
+
+2. `tests/unit/accounts/test_services.py`
+   - `AuthentikSyncService.upsert_user(payload)` 首次创建 `UserMirror`，重复同 subject 更新 name/email/department/status 但不新建用户。
+   - subject 变化时不得把既有用户改成新 `authentik_user_id`；应创建新用户或拒绝，具体按 parser 契约测试固定。
+   - active -> disabled/departed 触发撤权；disabled/departed -> active 只更新用户状态，不自动恢复 grants。
+   - 重复 disabled/departed 同步幂等，不重复递增 grant version。
+
+3. `tests/unit/grants/test_services.py`
+   - 新增 `GrantService.revoke_for_user(user, reason, actor)`：同一用户多个 app 的 current active grants 全部撤销。
+   - 非 current、已 revoked、已 expired grant 不受影响。
+   - 每条撤销 grant version 递增一次，写一条 `grant_revoked`。
+   - 没有 active grants 返回空列表，不写 grant revoke 审计。
+
+4. `tests/integration/authentik/test_sync.py`
+   - webhook path 和 scheduled sync path 都调用同一 upsert 行为。
+   - Authentik inactive/disabled/departed payload 后，权限查询对该用户返回空 roles/permissions，version 为撤销后的最新 version。
+   - 多 app 授权场景下每个 app 查询都能看到撤权后的空权限。
+
+5. PIN 测试建议
+   - 保留并运行现有 `tests/unit/grants/test_query.py`，确认 disabled/departed 和 revoked/expired 空权限不回归。
+   - 保留现有 `tests/unit/grants/test_services.py::test_revoke_grant_marks_current_grant_revoked_and_is_idempotent`，确认单 app revoke 语义不因 `revoke_for_user` 破坏。
+
+## 不能越界实现的内容
+
+- 不要实现 S12 Authentik OIDC 登录、portal session、login callback 或 session middleware。
+- 不要实现真实 Authentik 网络 client、真实凭据读取、真实 issuer/client secret 配置校验。
+- 不要实现 S15 定时过期清理；S10 只需要定时同步入口或任务壳调用模拟 client，不处理 grant expiration 扫描。
+- 不要绕过 `GrantService` 直接批量 update grants，否则会丢失 version、审计和幂等语义。
+- 不要把 email、username、employee_number、DingTalk ID 当作权限查询的公共 user_id。
+- 不要把离职用户物理删除；`UserMirror` 设计为镜像记录且禁止物理删除。
+
+## 风险和未知点
+
+- Authentik payload 字段形态需要在实现中类型化固定。官方依据已确认 user write event payload 含 `user.pk/email/username`、`context.attributes`、`context.name/email/username`，但 OIDC subject 在 webhook payload 中的具体字段可能需要通过夹具约定；项目要求最终映射为 `authentik_user_id`。
+- `inactive` 到 EasyAuth 的 `disabled` 还是 `departed` 需要实现者明确规则。架构只说 inactive/disabled 会映射为不可保留授权状态，S10 标题强调离职撤权；建议用 payload 明示 departed 时映射 `departed`，否则 `is_active=False` 默认 `disabled`。
+- 架构契约要求 `GrantService.revoke_for_user`，现有代码只有 `revoke_grant(user, app, ...)`。worker 需要补一个用户级撤权边界，且保持事务和 select_for_update 行为。
+- `user_departure_detected` 审计目前没有现成封装；可以直接复用 `AuditService.record`，但 target_type/target_id/metadata 需要由测试固定。
+- 目前 `src/easyauth/accounts/services.py`、`src/easyauth/integrations/authentik/`、`src/easyauth/tasks/authentik.py` 不存在；新增文件应遵守当前 Python typing 风格和中文文档规则。
+- 定时同步入口如何接入任务系统尚未有 Celery 基线代码。S10 可以先提供可测试函数/任务壳和模拟 client，不应引入真实 worker 配置。
+
+## 建议实现顺序
+
+1. 先新增 Authentik payload parser 的 RED 测试，固定 subject、展示字段、状态映射和 malformed payload。
+2. 再新增 `GrantService.revoke_for_user` 的 RED 测试，复用现有单 app revoke 语义。
+3. 实现 `GrantService.revoke_for_user`，让它按用户遍历 current active grants 并调用或等价复用单 grant 撤销逻辑。
+4. 新增 `AuthentikSyncService.upsert_user`，在一个事务中 upsert `UserMirror`，状态变为非 active 时调用 `GrantService.revoke_for_user` 并记录 `user_departure_detected`。
+5. 新增 webhook handler 和 scheduled sync 入口的薄封装测试，确保两条路径共享同一 upsert 服务。
+
+## 本任务未执行的事项
+
+- 未运行测试，符合任务要求。
+- 未启动服务器或后台进程。
+- 除本 evidence 文件外未修改代码、测试或文档。

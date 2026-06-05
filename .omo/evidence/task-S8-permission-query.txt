@@ -1,0 +1,384 @@
+FFFFFFFF                                                                 [100%]
+=================================== FAILURES ===================================
+_ test_permission_query_returns_active_roles_permissions_version_expiration_and_audit _
+
+    @override_settings(EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS=PERMISSION_QUERY_TTL_SECONDS)
+    def test_permission_query_returns_active_roles_permissions_version_expiration_and_audit() -> None:
+        # Given: 应用静态 token 绑定了当前应用，用户有当前有效授权。
+        user = UserMirror.objects.create(authentik_user_id="user-api-active")
+        app = App.objects.create(app_key="crm-api-active", name="CRM API Active")
+        issue = StaticTokenService.create_token(app=app, name="CRM integration")
+        admin = Role.objects.create(app=app, key="admin", name="Admin")
+        auditor = Role.objects.create(app=app, key="auditor", name="Auditor")
+        approve = Permission.objects.create(app=app, key="invoice.approve", name="Approve invoices")
+        read = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
+        write = Permission.objects.create(app=app, key="invoice.write", name="Write invoices")
+        _ = RolePermission.objects.create(role=admin, permission=write)
+        _ = RolePermission.objects.create(role=auditor, permission=read)
+        _ = RolePermission.objects.create(role=auditor, permission=write)
+        grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
+        _ = AccessGrantRole.objects.create(grant=grant, role=auditor)
+        _ = AccessGrantRole.objects.create(grant=grant, role=admin)
+        _ = AccessGrantPermission.objects.create(grant=grant, permission=approve)
+    
+        # When: 应用通过静态 Bearer token 查询该用户权限。
+        before = timezone.now()
+        response = Client().get(
+            _permission_url(app.app_key, user.authentik_user_id),
+            HTTP_AUTHORIZATION=_bearer(issue.plaintext_token),
+        )
+        after = timezone.now()
+    
+        # Then: 响应返回稳定排序、去重权限、当前版本、缓存过期时间，并写入审计。
+>       assert response.status_code == 200
+E       assert 404 == 200
+E        +  where 404 = <HttpResponseNotFound status_code=404, "text/html; charset=utf-8">.status_code
+
+tests/integration/api/test_permission_query.py:59: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  django.request:log.py:253 Not Found: /api/v1/apps/crm-api-active/users/user-api-active/permissions
+_ test_permission_query_returns_empty_for_unknown_disabled_or_departed_user[user-api-unknown-None-0] _
+
+user_id = 'user-api-unknown', status = None, expected_version = 0
+
+    @pytest.mark.parametrize(
+        ("user_id", "status", "expected_version"),
+        [
+            ("user-api-unknown", None, 0),
+            ("user-api-disabled", "disabled", 1),
+            ("user-api-departed", "departed", 1),
+        ],
+    )
+    def test_permission_query_returns_empty_for_unknown_disabled_or_departed_user(
+        user_id: str,
+        status: str | None,
+        expected_version: int,
+    ) -> None:
+        # Given: 用户不存在或不处于 active 状态。
+        app = App.objects.create(app_key=f"{user_id}-app", name=f"{user_id} App")
+        issue = StaticTokenService.create_token(app=app, name="integration")
+        if status is not None:
+            user = UserMirror.objects.create(authentik_user_id=user_id, status=status)
+            grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
+            permission = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
+            _ = AccessGrantPermission.objects.create(grant=grant, permission=permission)
+    
+        # When: 应用查询该 user_id 的权限。
+        response = Client().get(
+            _permission_url(app.app_key, user_id),
+            HTTP_AUTHORIZATION=_bearer(issue.plaintext_token),
+        )
+    
+        # Then: 响应不暴露用户存在性，只返回空授权结果。
+>       assert response.status_code == 200
+E       assert 404 == 200
+E        +  where 404 = <HttpResponseNotFound status_code=404, "text/html; charset=utf-8">.status_code
+
+tests/integration/api/test_permission_query.py:116: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  django.request:log.py:253 Not Found: /api/v1/apps/user-api-unknown-app/users/user-api-unknown/permissions
+_ test_permission_query_returns_empty_for_unknown_disabled_or_departed_user[user-api-disabled-disabled-1] _
+
+user_id = 'user-api-disabled', status = 'disabled', expected_version = 1
+
+    @pytest.mark.parametrize(
+        ("user_id", "status", "expected_version"),
+        [
+            ("user-api-unknown", None, 0),
+            ("user-api-disabled", "disabled", 1),
+            ("user-api-departed", "departed", 1),
+        ],
+    )
+    def test_permission_query_returns_empty_for_unknown_disabled_or_departed_user(
+        user_id: str,
+        status: str | None,
+        expected_version: int,
+    ) -> None:
+        # Given: 用户不存在或不处于 active 状态。
+        app = App.objects.create(app_key=f"{user_id}-app", name=f"{user_id} App")
+        issue = StaticTokenService.create_token(app=app, name="integration")
+        if status is not None:
+            user = UserMirror.objects.create(authentik_user_id=user_id, status=status)
+            grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
+            permission = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
+            _ = AccessGrantPermission.objects.create(grant=grant, permission=permission)
+    
+        # When: 应用查询该 user_id 的权限。
+        response = Client().get(
+            _permission_url(app.app_key, user_id),
+            HTTP_AUTHORIZATION=_bearer(issue.plaintext_token),
+        )
+    
+        # Then: 响应不暴露用户存在性，只返回空授权结果。
+>       assert response.status_code == 200
+E       assert 404 == 200
+E        +  where 404 = <HttpResponseNotFound status_code=404, "text/html; charset=utf-8">.status_code
+
+tests/integration/api/test_permission_query.py:116: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  django.request:log.py:253 Not Found: /api/v1/apps/user-api-disabled-app/users/user-api-disabled/permissions
+_ test_permission_query_returns_empty_for_unknown_disabled_or_departed_user[user-api-departed-departed-1] _
+
+user_id = 'user-api-departed', status = 'departed', expected_version = 1
+
+    @pytest.mark.parametrize(
+        ("user_id", "status", "expected_version"),
+        [
+            ("user-api-unknown", None, 0),
+            ("user-api-disabled", "disabled", 1),
+            ("user-api-departed", "departed", 1),
+        ],
+    )
+    def test_permission_query_returns_empty_for_unknown_disabled_or_departed_user(
+        user_id: str,
+        status: str | None,
+        expected_version: int,
+    ) -> None:
+        # Given: 用户不存在或不处于 active 状态。
+        app = App.objects.create(app_key=f"{user_id}-app", name=f"{user_id} App")
+        issue = StaticTokenService.create_token(app=app, name="integration")
+        if status is not None:
+            user = UserMirror.objects.create(authentik_user_id=user_id, status=status)
+            grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
+            permission = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
+            _ = AccessGrantPermission.objects.create(grant=grant, permission=permission)
+    
+        # When: 应用查询该 user_id 的权限。
+        response = Client().get(
+            _permission_url(app.app_key, user_id),
+            HTTP_AUTHORIZATION=_bearer(issue.plaintext_token),
+        )
+    
+        # Then: 响应不暴露用户存在性，只返回空授权结果。
+>       assert response.status_code == 200
+E       assert 404 == 200
+E        +  where 404 = <HttpResponseNotFound status_code=404, "text/html; charset=utf-8">.status_code
+
+tests/integration/api/test_permission_query.py:116: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  django.request:log.py:253 Not Found: /api/v1/apps/user-api-departed-app/users/user-api-departed/permissions
+_ test_permission_query_returns_empty_for_revoked_or_expired_grant[user-api-revoked-revoked-2] _
+
+user_id = 'user-api-revoked', grant_status = 'revoked', expected_version = 2
+
+    @pytest.mark.parametrize(
+        ("user_id", "grant_status", "expected_version"),
+        [
+            ("user-api-revoked", GRANT_STATUS_REVOKED, 2),
+            ("user-api-expired", GRANT_STATUS_EXPIRED, 3),
+        ],
+    )
+    def test_permission_query_returns_empty_for_revoked_or_expired_grant(
+        user_id: str,
+        grant_status: str,
+        expected_version: int,
+    ) -> None:
+        # Given: 用户最近授权已撤销或过期。
+        user = UserMirror.objects.create(authentik_user_id=user_id)
+        app = App.objects.create(app_key=f"{user_id}-app", name=f"{user_id} App")
+        issue = StaticTokenService.create_token(app=app, name="integration")
+        grant = AccessGrant.objects.create(
+            user=user,
+            app=app,
+            grant_type=GRANT_TYPE_PERMANENT,
+            status=grant_status,
+            is_current=False,
+            version=expected_version,
+        )
+        permission = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
+        _ = AccessGrantPermission.objects.create(grant=grant, permission=permission)
+    
+        # When: 应用查询该用户权限。
+        response = Client().get(
+            _permission_url(app.app_key, user_id),
+            HTTP_AUTHORIZATION=_bearer(issue.plaintext_token),
+        )
+    
+        # Then: 响应保留最新版本但不返回任何授权。
+>       assert response.status_code == 200
+E       assert 404 == 200
+E        +  where 404 = <HttpResponseNotFound status_code=404, "text/html; charset=utf-8">.status_code
+
+tests/integration/api/test_permission_query.py:158: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  django.request:log.py:253 Not Found: /api/v1/apps/user-api-revoked-app/users/user-api-revoked/permissions
+_ test_permission_query_returns_empty_for_revoked_or_expired_grant[user-api-expired-expired-3] _
+
+user_id = 'user-api-expired', grant_status = 'expired', expected_version = 3
+
+    @pytest.mark.parametrize(
+        ("user_id", "grant_status", "expected_version"),
+        [
+            ("user-api-revoked", GRANT_STATUS_REVOKED, 2),
+            ("user-api-expired", GRANT_STATUS_EXPIRED, 3),
+        ],
+    )
+    def test_permission_query_returns_empty_for_revoked_or_expired_grant(
+        user_id: str,
+        grant_status: str,
+        expected_version: int,
+    ) -> None:
+        # Given: 用户最近授权已撤销或过期。
+        user = UserMirror.objects.create(authentik_user_id=user_id)
+        app = App.objects.create(app_key=f"{user_id}-app", name=f"{user_id} App")
+        issue = StaticTokenService.create_token(app=app, name="integration")
+        grant = AccessGrant.objects.create(
+            user=user,
+            app=app,
+            grant_type=GRANT_TYPE_PERMANENT,
+            status=grant_status,
+            is_current=False,
+            version=expected_version,
+        )
+        permission = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
+        _ = AccessGrantPermission.objects.create(grant=grant, permission=permission)
+    
+        # When: 应用查询该用户权限。
+        response = Client().get(
+            _permission_url(app.app_key, user_id),
+            HTTP_AUTHORIZATION=_bearer(issue.plaintext_token),
+        )
+    
+        # Then: 响应保留最新版本但不返回任何授权。
+>       assert response.status_code == 200
+E       assert 404 == 200
+E        +  where 404 = <HttpResponseNotFound status_code=404, "text/html; charset=utf-8">.status_code
+
+tests/integration/api/test_permission_query.py:158: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  django.request:log.py:253 Not Found: /api/v1/apps/user-api-expired-app/users/user-api-expired/permissions
+__ test_permission_query_uses_earlier_timed_grant_expiration_when_before_ttl ___
+
+    @override_settings(EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS=PERMISSION_QUERY_TTL_SECONDS)
+    def test_permission_query_uses_earlier_timed_grant_expiration_when_before_ttl() -> None:
+        # Given: 当前有效 timed grant 比默认缓存 TTL 更早过期。
+        user = UserMirror.objects.create(authentik_user_id="user-api-timed")
+        app = App.objects.create(app_key="timed-api-app", name="Timed API App")
+        issue = StaticTokenService.create_token(app=app, name="integration")
+        permission = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
+        grant_expires_at = timezone.now() + timedelta(seconds=30)
+        grant = AccessGrant.objects.create(
+            user=user,
+            app=app,
+            grant_type=GRANT_TYPE_TIMED,
+            grant_expires_at=grant_expires_at,
+        )
+        _ = AccessGrantPermission.objects.create(grant=grant, permission=permission)
+    
+        # When: 应用查询该用户权限。
+        response = Client().get(
+            _permission_url(app.app_key, user.authentik_user_id),
+            HTTP_AUTHORIZATION=_bearer(issue.plaintext_token),
+        )
+    
+        # Then: expires_at 使用 grant_expires_at，而不是默认 TTL。
+>       assert response.status_code == 200
+E       assert 404 == 200
+E        +  where 404 = <HttpResponseNotFound status_code=404, "text/html; charset=utf-8">.status_code
+
+tests/integration/api/test_permission_query.py:188: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  django.request:log.py:253 Not Found: /api/v1/apps/timed-api-app/users/user-api-timed/permissions
+_ test_permission_query_rejects_missing_invalid_disabled_and_cross_app_tokens __
+
+    def test_permission_query_rejects_missing_invalid_disabled_and_cross_app_tokens() -> None:
+        # Given: 存在有效 token、无效 token、禁用 token、禁用应用 token 和跨应用路径。
+        app = App.objects.create(app_key="crm-api-errors", name="CRM API Errors")
+        other_app = App.objects.create(app_key="erp-api-errors", name="ERP API Errors")
+        disabled_app = App.objects.create(
+            app_key="disabled-api-errors",
+            name="Disabled API Errors",
+            is_active=False,
+        )
+        issue = StaticTokenService.create_token(app=app, name="integration")
+        disabled_issue = StaticTokenService.create_token(app=app, name="disabled")
+        disabled_app_issue = StaticTokenService.create_token(app=disabled_app, name="disabled-app")
+        _ = app.credentials.filter(id=disabled_issue.credential_id).update(is_active=False)
+    
+        # When: 各种无权访问请求命中权限查询接口。
+        missing = Client().get(_permission_url(app.app_key, "user-api-errors"))
+        invalid = Client().get(
+            _permission_url(app.app_key, "user-api-errors"),
+            HTTP_AUTHORIZATION=_bearer("eat_invalid"),
+        )
+        disabled = Client().get(
+            _permission_url(app.app_key, "user-api-errors"),
+            HTTP_AUTHORIZATION=_bearer(disabled_issue.plaintext_token),
+        )
+        disabled_app_response = Client().get(
+            _permission_url(disabled_app.app_key, "user-api-errors"),
+            HTTP_AUTHORIZATION=_bearer(disabled_app_issue.plaintext_token),
+        )
+        cross_app = Client().get(
+            _permission_url(other_app.app_key, "user-api-errors"),
+            HTTP_AUTHORIZATION=_bearer(issue.plaintext_token),
+        )
+    
+        # Then: 认证失败返回 401，应用禁用和跨应用访问返回 403，且全部使用统一错误结构。
+>       _assert_error(missing, status_code=401, code=ErrorCode.AUTHENTICATION_FAILED)
+
+tests/integration/api/test_permission_query.py:227: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+response = <HttpResponseNotFound status_code=404, "text/html; charset=utf-8">
+
+    def _assert_error(response: HttpResponse, *, status_code: int, code: ErrorCode) -> None:
+>       assert response.status_code == status_code
+E       assert 404 == 401
+E        +  where 404 = <HttpResponseNotFound status_code=404, "text/html; charset=utf-8">.status_code
+
+tests/integration/api/test_permission_query.py:243: AssertionError
+------------------------------ Captured log call -------------------------------
+WARNING  django.request:log.py:253 Not Found: /api/v1/apps/crm-api-errors/users/user-api-errors/permissions
+WARNING  django.request:log.py:253 Not Found: /api/v1/apps/crm-api-errors/users/user-api-errors/permissions
+WARNING  django.request:log.py:253 Not Found: /api/v1/apps/crm-api-errors/users/user-api-errors/permissions
+WARNING  django.request:log.py:253 Not Found: /api/v1/apps/disabled-api-errors/users/user-api-errors/permissions
+WARNING  django.request:log.py:253 Not Found: /api/v1/apps/erp-api-errors/users/user-api-errors/permissions
+=========================== short test summary info ============================
+FAILED tests/integration/api/test_permission_query.py::test_permission_query_returns_active_roles_permissions_version_expiration_and_audit
+FAILED tests/integration/api/test_permission_query.py::test_permission_query_returns_empty_for_unknown_disabled_or_departed_user[user-api-unknown-None-0]
+FAILED tests/integration/api/test_permission_query.py::test_permission_query_returns_empty_for_unknown_disabled_or_departed_user[user-api-disabled-disabled-1]
+FAILED tests/integration/api/test_permission_query.py::test_permission_query_returns_empty_for_unknown_disabled_or_departed_user[user-api-departed-departed-1]
+FAILED tests/integration/api/test_permission_query.py::test_permission_query_returns_empty_for_revoked_or_expired_grant[user-api-revoked-revoked-2]
+FAILED tests/integration/api/test_permission_query.py::test_permission_query_returns_empty_for_revoked_or_expired_grant[user-api-expired-expired-3]
+FAILED tests/integration/api/test_permission_query.py::test_permission_query_uses_earlier_timed_grant_expiration_when_before_ttl
+FAILED tests/integration/api/test_permission_query.py::test_permission_query_rejects_missing_invalid_disabled_and_cross_app_tokens
+8 failed in 1.58s
+
+=== GREEN / QUALITY ===
+pytest tests/integration/api/test_permission_query.py -q: 8 passed
+pytest tests/unit/grants tests/integration/api -q: 34 passed
+python manage.py check: no issues
+ruff check src/easyauth/api src/easyauth/grants src/easyauth/config tests/integration/api tests/unit/grants: all checks passed
+basedpyright src/easyauth/api src/easyauth/grants src/easyauth/config tests/integration/api tests/unit/grants: 0 errors
+
+=== ROOT REVIEW / FINAL VERIFICATION ===
+root 收敛:
+- S8 worker 静默超时后由 root 接管复核；worker 派生的只读 quick gate review 产物为 PASS，但最终由 root 重新跑命令确认。
+- 小步重构：`query_user_permissions` 的 TTL 改为运行时读取 `django.conf.settings`；审计 metadata 的 `credential_type` 改为使用 `principal.credential_type`。
+- 复核测试：`.tools/uv-venv/bin/uv run --extra dev pytest tests/integration/api/test_permission_query.py -q` -> `8 passed`。
+- 相关测试：`.tools/uv-venv/bin/uv run --extra dev pytest tests/unit/grants tests/integration/api -q` -> `34 passed`。
+- 全量测试：`.tools/uv-venv/bin/uv run --extra dev pytest -q` -> `89 passed`。
+- 质量检查：`.tools/uv-venv/bin/uv run --extra dev ruff check .` -> `All checks passed!`。
+- 类型检查：`.tools/uv-venv/bin/uv run --extra dev basedpyright` -> `0 errors, 0 warnings, 0 notes`。
+- Django 检查：`.tools/uv-venv/bin/uv run --extra dev python manage.py check` -> `System check identified no issues`。
+- migration 检查：`makemigrations --check` -> `No changes detected`；`migrate --check` -> 退出码 0。
+- token 泄露检查：`rg 'eat_[A-Za-z0-9_-]{20,}' .omo/evidence/task-S8*.txt` 无匹配。
+- cleanup：`lsof -nP -iTCP:8768 -sTCP:LISTEN` 无输出；quick gate 同时确认 8769/8770/8771 无监听。
+
+=== MANUAL QA 2026-06-05 ===
+runserver: http://127.0.0.1:8768/
+health: HTTP 200
+success response:
+{"user_id": "manual-s8-user", "app_key": "manual-s8-app", "roles": ["operator"], "permissions": ["invoice.approve", "invoice.read"], "version": 1, "expires_at": "2026-06-05T06:00:05.951358+00:00"}
+HTTP_STATUS:200
+
+cross-app response:
+{"error": {"code": "PERMISSION_DENIED", "message": "\u5e94\u7528\u65e0\u6743\u67e5\u8be2\u8be5\u8d44\u6e90\u3002", "details": {}}}
+HTTP_STATUS:403
+
+invalid-token response:
+{"error": {"code": "AUTHENTICATION_FAILED", "message": "\u5e94\u7528\u8ba4\u8bc1\u51ed\u636e\u65e0\u6548\u3002", "details": {}}}
+HTTP_STATUS:401
+
+runserver stopped; 127.0.0.1:8768 verified with lsof. Plaintext token was not written to evidence.

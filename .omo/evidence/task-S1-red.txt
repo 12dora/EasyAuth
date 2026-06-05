@@ -1,0 +1,5 @@
+Traceback (most recent call last):
+  File "<stdin>", line 3, in <module>
+  File "/Users/konata/code/EasyAuth/tests/unit/config/test_project_baseline.py", line 14, in test_django_project_baseline_is_loadable
+    import django
+ModuleNotFoundError: No module named 'django'

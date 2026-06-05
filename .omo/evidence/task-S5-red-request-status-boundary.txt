@@ -1,0 +1,42 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+_________ test_approved_request_rejects_applied_timestamp_when_cleaned _________
+
+    def test_approved_request_rejects_applied_timestamp_when_cleaned() -> None:
+        # Given
+        user = UserMirror.objects.create(authentik_user_id="user-approved-applied-at")
+        app = App.objects.create(app_key="approved-applied-at-app", name="Approved Applied App")
+        access_request = AccessRequest(
+            user=user,
+            app=app,
+            status="approved",
+            applied_at=timezone.now(),
+        )
+    
+        # When / Then
+>       with pytest.raises(ValidationError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE <class 'django.core.exceptions.ValidationError'>
+
+tests/unit/access_requests/test_models.py:98: Failed
+______ test_grant_applied_request_requires_applied_timestamp_when_cleaned ______
+
+    def test_grant_applied_request_requires_applied_timestamp_when_cleaned() -> None:
+        # Given
+        user = UserMirror.objects.create(authentik_user_id="user-grant-applied-no-timestamp")
+        app = App.objects.create(
+            app_key="grant-applied-no-timestamp-app",
+            name="Grant Applied App",
+        )
+        access_request = AccessRequest(user=user, app=app, status="grant_applied")
+    
+        # When / Then
+>       with pytest.raises(ValidationError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE <class 'django.core.exceptions.ValidationError'>
+
+tests/unit/access_requests/test_models.py:112: Failed
+=========================== short test summary info ============================
+FAILED tests/unit/access_requests/test_models.py::test_approved_request_rejects_applied_timestamp_when_cleaned
+FAILED tests/unit/access_requests/test_models.py::test_grant_applied_request_requires_applied_timestamp_when_cleaned
+2 failed in 0.36s

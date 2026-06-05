@@ -1,0 +1,39 @@
+S4 API 契约证据
+
+RED 阶段
+- 命令：`.tools/uv-venv/bin/uv run --extra dev pytest tests/integration/api/test_contract.py -q`
+- 退出码：1
+- 关键输出：6 个测试失败，原因均为 `ModuleNotFoundError: No module named 'easyauth.api'`。
+- 结论：失败原因是 `/api/v1` 契约模块尚未存在，符合 RED 预期。
+
+GREEN 实现
+- 新增 `src/easyauth/api/__init__.py`。
+- 新增 `src/easyauth/api/errors.py`，定义 `ErrorCode` 和 `build_error_response()`。
+- 新增 `src/easyauth/api/serializers.py`，定义 `PermissionQueryResponseSerializer`。
+- 新增 `tests/integration/__init__.py`、`tests/integration/api/__init__.py`、`tests/integration/api/test_contract.py`。
+- 未实现真实权限查询 view、authentication、URL 路由或数据库查询。
+
+验证
+- `.tools/uv-venv/bin/uv run --extra dev pytest tests/integration/api/test_contract.py -q`：通过，`6 passed`。
+- `.tools/uv-venv/bin/uv run --extra dev ruff check src/easyauth/api tests/integration/api`：通过，`All checks passed!`。
+- `.tools/uv-venv/bin/uv run --extra dev basedpyright src/easyauth/api tests/integration/api`：通过，`0 errors, 0 warnings, 0 notes`。
+- `.tools/uv-venv/bin/uv run --extra dev python manage.py check`：通过，`System check identified no issues`。
+
+手工契约 QA
+- 命令：`.tools/uv-venv/bin/uv run --extra dev python - <<'PY' ... PY`。
+- 输出包含 `VALIDATION_ERROR`、`serializer_valid True`、`user_id`、`permissions`。
+- 证据：`.omo/evidence/task-S4-manual-contract.txt`。
+
+Adversarial QA
+- malformed input：缺少 `version`、`roles` 非列表两类 serializer 输入均被拒绝，`2 passed`。
+- prompt injection：不适用，S4 只是 Python 契约对象，没有 prompt、LLM 或用户文本执行面。
+- cancel/resume：RED/GREEN/验证证据均写入本文件，可恢复。
+- stale state：S4 契约测试连续两次通过。
+- dirty worktree：工作区已有未提交内容，未回滚用户文档变更。
+- hung commands：所有验证命令均观察到退出码，无后台资源。
+- flaky tests：S4 契约测试重复两次通过。
+- misleading success output：同时检查退出码和关键输出。
+- repeated interruptions：未发生影响本切片验证的外部中断。
+
+清理
+- S4 未启动服务器、tmux、Docker 或后台进程。

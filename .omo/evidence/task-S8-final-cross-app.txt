@@ -1,0 +1,11 @@
+HTTP/1.1 403 Forbidden
+Date: Fri, 05 Jun 2026 06:09:28 GMT
+Server: WSGIServer/0.2 CPython/3.12.13
+Content-Type: application/json
+X-Frame-Options: DENY
+Content-Length: 130
+X-Content-Type-Options: nosniff
+Referrer-Policy: same-origin
+Cross-Origin-Opener-Policy: same-origin
+
+{"error": {"code": "PERMISSION_DENIED", "message": "\u5e94\u7528\u65e0\u6743\u67e5\u8be2\u8be5\u8d44\u6e90\u3002", "details": {}}}

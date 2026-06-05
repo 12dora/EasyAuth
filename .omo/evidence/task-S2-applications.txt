@@ -1,0 +1,71 @@
+S2 applications 证据记录
+
+范围
+- 已实现 `App`、`Role`、`Permission`、`RolePermission`、`ApprovalRule` 配置模型。
+- 已注册 `easyauth.applications.apps.ApplicationsConfig`。
+- 已生成 `src/easyauth/applications/migrations/0001_initial.py`。
+- 未提交 git commit，未修改 `.omo/plans/`、`.omo/start-work/ledger.jsonl`、`.omo/boulder.json`。
+
+RED
+- 命令：`.tools/uv-venv/bin/uv run --extra dev pytest tests/unit/applications -q`
+- 退出码：2
+- 关键输出：`ModuleNotFoundError: No module named 'easyauth.applications'`
+- 结论：失败原因是 S2 app/model 尚不存在，符合 RED 预期。
+
+GREEN
+- 新增 `src/easyauth/applications/__init__.py`
+- 新增 `src/easyauth/applications/apps.py`
+- 新增 `src/easyauth/applications/models.py`
+- 新增 `src/easyauth/applications/migrations/__init__.py`
+- 新增 `src/easyauth/applications/migrations/0001_initial.py`
+- 新增 `tests/unit/applications/__init__.py`
+- 新增 `tests/unit/applications/test_models.py`
+- 修改 `src/easyauth/config/settings/base.py`，追加 applications app 配置。
+
+验证
+- 命令：`.tools/uv-venv/bin/uv run --extra dev pytest tests/unit/applications -q`
+  - 第一次退出码：0
+  - 关键输出：`8 passed in 0.30s`
+  - 第二次退出码：0
+  - 关键输出：`8 passed in 0.28s`
+- 命令：`.tools/uv-venv/bin/uv run --extra dev python manage.py makemigrations --check`
+  - 退出码：0
+  - 关键输出：`No changes detected`
+- 命令：`.tools/uv-venv/bin/uv run --extra dev ruff check src/easyauth/applications tests/unit/applications`
+  - 退出码：0
+  - 关键输出：`All checks passed!`
+- 命令：`.tools/uv-venv/bin/uv run --extra dev basedpyright src/easyauth/applications tests/unit/applications`
+  - 退出码：0
+  - 关键输出：`0 errors, 0 warnings, 0 notes`
+- 命令：`.tools/uv-venv/bin/uv run --extra dev python manage.py check`
+  - 退出码：0
+  - 关键输出：`System check identified no issues (0 silenced).`
+- 额外回归命令：`.tools/uv-venv/bin/uv run --extra dev pytest tests/unit -q`
+  - 退出码：0
+  - 关键输出：`10 passed in 0.67s`
+
+手工 QA
+- 命令行表面：`.tools/uv-venv/bin/uv run --extra dev python manage.py check`
+- PASS：输出包含 `System check identified no issues`。
+
+对抗场景
+- malformed input：单独运行 `test_approval_rule_requires_exactly_one_target_when_cleaned` 与 `test_approval_rule_requires_dingtalk_approver_userids_when_cleaned`。
+  - 命令：`.tools/uv-venv/bin/uv run --extra dev pytest tests/unit/applications/test_models.py::test_approval_rule_requires_exactly_one_target_when_cleaned tests/unit/applications/test_models.py::test_approval_rule_requires_dingtalk_approver_userids_when_cleaned -q`
+  - 退出码：0
+  - 关键输出：`2 passed in 0.29s`
+- stale state/flaky：S2 pytest 连续两次通过。
+- dirty worktree：`git status --short` 显示仓库已有未提交内容，包括 `.gitignore`、`.omo/plans/easyauth-mvp-incremental-tdd-plan.md`、`.omo/boulder.json`、`.omo/start-work/`、`src/`、`tests/` 等；本任务未回滚这些内容。
+- hung commands/misleading success：所有验证命令均返回退出码 0；RED 命令返回退出码 2 且失败原因与缺失 app/model 一致。
+- prompt injection/cancel-resume/repeated interruptions：不适用，本任务没有处理外部输入载荷；中途 status 请求未改变执行范围。
+
+残余风险
+- 当前仅实现 S2 配置模型和模型层约束，未实现 token、OAuth、grant、admin 或 API 行为。
+
+Root 复核
+- `.tools/uv-venv/bin/uv run --extra dev pytest tests/unit/applications -q`：通过，`8 passed`。
+- `.tools/uv-venv/bin/uv run --extra dev python manage.py makemigrations --check`：通过，`No changes detected`。
+- `.tools/uv-venv/bin/uv run --extra dev python manage.py migrate --check`：通过，退出码 0。
+- `.tools/uv-venv/bin/uv run --extra dev ruff check src/easyauth/applications tests/unit/applications`：通过，`All checks passed!`。
+- `.tools/uv-venv/bin/uv run --extra dev basedpyright src/easyauth/applications tests/unit/applications`：通过，`0 errors, 0 warnings, 0 notes`。
+- `.tools/uv-venv/bin/uv run --extra dev python manage.py check`：通过，`System check identified no issues`。
+- 独立 QA 子任务指出当前环境没有 `tmux`，因此指定 tmux 通道未能执行；root 使用命令行表面 `manage.py check` 作为 S2 手工验证，并记录该环境限制。

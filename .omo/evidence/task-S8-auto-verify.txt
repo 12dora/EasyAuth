@@ -1,0 +1,80 @@
+
+=== S8 auto verification run: 2026-06-05T14:03:54+08:00 ===
+cwd=/Users/konata/code/EasyAuth
+
+## git status --short (start)
+ M .gitignore
+ M .omo/plans/easyauth-mvp-incremental-tdd-plan.md
+?? .omo/boulder.json
+?? .omo/evidence/
+?? .omo/start-work/
+?? .python-version
+?? docker-compose.yml
+?? manage.py
+?? pyproject.toml
+?? src/
+?? tests/
+?? uv.lock
+
+## TDD RED evidence check
+PASS: RED evidence contains `8 failed` and 404 route failures before implementation.
+
+## COMMAND 1
+$ ./.tools/uv-venv/bin/uv run --extra dev pytest tests/integration/api/test_permission_query.py -q
+........                                                                 [100%]
+8 passed in 3.01s
+exit_status=0 duration_seconds=4
+
+## COMMAND 2
+$ ./.tools/uv-venv/bin/uv run --extra dev pytest tests/unit/grants tests/integration/api -q
+..................................                                       [100%]
+34 passed in 3.65s
+exit_status=0 duration_seconds=4
+
+## COMMAND 3
+$ ./.tools/uv-venv/bin/uv run --extra dev python manage.py check
+System check identified no issues (0 silenced).
+exit_status=0 duration_seconds=0
+
+## COMMAND 4
+$ ./.tools/uv-venv/bin/uv run --extra dev ruff check src/easyauth/api src/easyauth/grants src/easyauth/config tests/integration/api tests/unit/grants
+All checks passed!
+exit_status=0 duration_seconds=0
+
+## COMMAND 5
+$ ./.tools/uv-venv/bin/uv run --extra dev basedpyright src/easyauth/api src/easyauth/grants src/easyauth/config tests/integration/api tests/unit/grants
+0 errors, 0 warnings, 0 notes
+exit_status=0 duration_seconds=1
+
+## Manual QA preflight: lsof 8770 before runserver
+$ lsof -nP -iTCP:8770 -sTCP:LISTEN
+PASS: no listener on 8770 before manual QA.
+
+## Manual QA server readiness
+$ lsof -nP -iTCP:8770 -sTCP:LISTEN
+COMMAND     PID   USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME
+python3.1 60015 konata    3u  IPv4 0x60d882fdfde2a288      0t0  TCP 127.0.0.1:8770 (LISTEN)
+zsh:4: read-only variable: status
+
+## Manual QA curl invalid bearer
+$ curl -i -H 'Authorization: Bearer eat_invalid' http://127.0.0.1:8770/api/v1/apps/no-such-app/users/no-such-user/permissions
+  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
+                                 Dload  Upload   Total   Spent    Left  Speed
+  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0[05/Jun/2026 14:05:46] "GET /api/v1/apps/no-such-app/users/no-such-user/permissions HTTP/1.1" 401 128
+100   128  100   128    0     0    302      0 --:--:-- --:--:-- --:--:--   303
+HTTP/1.1 401 Unauthorized
+Date: Fri, 05 Jun 2026 06:05:46 GMT
+Server: WSGIServer/0.2 CPython/3.12.13
+Content-Type: application/json
+X-Frame-Options: DENY
+Content-Length: 128
+X-Content-Type-Options: nosniff
+Referrer-Policy: same-origin
+Cross-Origin-Opener-Policy: same-origin
+
+{"error": {"code": "AUTHENTICATION_FAILED", "message": "\u5e94\u7528\u8ba4\u8bc1\u51ed\u636e\u65e0\u6548\u3002", "details": {}}}exit_status=0 duration_seconds=0
+
+## Manual QA cleanup: lsof 8770 after runserver stop
+$ lsof -nP -iTCP:8770 -sTCP:LISTEN
+PASS: no listener on 8770 after cleanup.
+exit_status=0

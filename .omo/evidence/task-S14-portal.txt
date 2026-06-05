@@ -1,0 +1,46 @@
+S14 员工门户前端证据
+
+范围：
+- 新增授权申请服务边界：`src/easyauth/access_requests/services.py`。
+- 门户从纯文本入口改为 SSR 表单和状态表：`src/easyauth/portal/views.py`、`src/easyauth/portal/forms.py`、`src/easyauth/portal/templates/portal/home.html`。
+- 样式遵循 Jiefa 企业应用风格：白色/ slate 基底、细边框、低圆角、紧凑表单、表格优先，样式拆入 `portal/_styles.html`。
+- 门户提交只创建 `AccessRequest` 和 `AccessRequestRole`，不创建 `AccessGrant`。
+
+TDD 证据：
+- RED：`.venv/bin/pytest tests/unit/access_requests/test_services_s14.py` 初始失败，原因是缺少 `easyauth.access_requests.services`。
+- RED：`.venv/bin/python -m pytest tests/integration/portal/test_access_request_s14.py` 初始失败，原因是 `/portal/` 仍返回纯文本且缺少申请表单、提交边界和状态表。
+- RED：新增 `test_s14_portal_request_rows_load_role_names_in_bulk` 后先看到 6 次查询，证明状态行角色名存在 N+1。
+- GREEN：`.venv/bin/pytest tests/unit/access_requests/test_services_s14.py tests/unit/access_requests/test_services_s14_validation.py tests/integration/portal/test_access_request_s14.py -q` 通过，18 passed。
+
+覆盖点：
+- 表单展示应用、角色、授权期限、过期时间和申请原因。
+- 角色选项只包含 active app、active role、requestable role 和 active approval rule 的组合。
+- 提交永久授权后状态为 `submitted`，页面显示“已提交”，且 `AccessGrant.objects.count() == 0`。
+- 没有审批规则、停用应用、空角色、重复角色、跨应用角色、不可申请角色、停用角色和授权期限形状错误均有测试覆盖。
+- 状态表区分 `submitted`、`approved`、`grant_applied`、`rejected`、`grant_failed` 的中文文案。
+- 状态表角色名使用批量查询，3 条申请行固定 2 次查询。
+
+浏览器/HTTP 表面验证：
+- 由于 Codex Browser 对直接 `/portal/` 路径返回 `net::ERR_BLOCKED_BY_CLIENT`，使用临时根路径代理转发到同一个 Django `/portal/` 响应并携带真实 session cookie。
+- Browser 打开代理根路径后确认页面标题为 `EasyAuth 员工门户`，页面包含 `访问申请`、`S14 CRM`、`CRM 审计员`。
+- Browser 选择 `S14 CRM`、`CRM 审计员`、`permanent`，填写 `浏览器冒烟申请` 并点击 `提交申请`。
+- Browser 提交后页面显示 `已提交`、`CRM 审计员` 和申请原因。
+- 数据库核验：申请状态为 `submitted`，申请角色为 `auditor`，匹配授权数量为 0。
+- 直接 `curl` 真实 `/portal/` 响应确认包含 `EasyAuth 员工门户`、`S14 CRM`、`CRM 审计员`、`已提交`、`浏览器冒烟申请`。
+- 临时 8784/8790 服务和代理已清理，端口无监听。
+
+当前聚焦验证：
+- `.venv/bin/pytest tests/unit/access_requests/test_services_s14.py tests/unit/access_requests/test_services_s14_validation.py tests/integration/portal/test_access_request_s14.py -q`：18 passed。
+- `.venv/bin/ruff check tests/unit/access_requests/test_services_s14.py tests/unit/access_requests/test_services_s14_validation.py tests/integration/portal/test_access_request_s14.py src/easyauth/access_requests/models.py src/easyauth/portal/views.py`：All checks passed。
+- `.venv/bin/basedpyright tests/unit/access_requests/test_services_s14.py tests/unit/access_requests/test_services_s14_validation.py tests/integration/portal/test_access_request_s14.py src/easyauth/access_requests/models.py src/easyauth/portal/views.py`：0 errors, 0 warnings, 0 notes。
+- Pure LOC：`models.py` 192，`services.py` 140，`forms.py` 220，`views.py` 188，`home.html` 147，`_styles.html` 159，`test_services_s14.py` 226，`test_services_s14_validation.py` 79，`test_access_request_s14.py` 199。
+
+最终全量验证：
+- `.venv/bin/pytest -q`：177 passed。
+- `.venv/bin/ruff check .`：All checks passed。
+- `.venv/bin/basedpyright`：0 errors, 0 warnings, 0 notes。
+- `.venv/bin/python manage.py check`：System check identified no issues。
+- `.venv/bin/python manage.py makemigrations --check --dry-run`：No changes detected。
+- `.venv/bin/python manage.py migrate --check`：退出码 0。
+- 最终 Browser smoke：通过临时 8790 根路径代理打开真实 `/portal/` 响应，确认标题、表单、状态表、`S14 终验 CRM`、`终验 CRM 审计员`、应用/角色选择控件和关键 Jiefa 样式值；浏览器 console error/warning 为空。
+- 清理：关闭 Browser smoke tab，停止 8784 Django 服务和 8790 临时代理，`lsof -iTCP:8784 -sTCP:LISTEN; lsof -iTCP:8790 -sTCP:LISTEN` 无输出。

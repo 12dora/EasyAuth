@@ -1,0 +1,2 @@
+{"user_id": "manual-s8-user", "app_key": "manual-s8-app", "roles": ["operator"], "permissions": ["invoice.approve", "invoice.read"], "version": 1, "expires_at": "2026-06-05T06:00:05.951358+00:00"}
+HTTP_STATUS:200

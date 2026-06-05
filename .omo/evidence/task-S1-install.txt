@@ -1,0 +1,399 @@
+WARNING: Cache entry deserialization failed, entry ignored
+Obtaining file:///Users/konata/code/EasyAuth
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Checking if build backend supports build_editable: started
+  Checking if build backend supports build_editable: finished with status 'done'
+  Getting requirements to build editable: started
+  Getting requirements to build editable: finished with status 'done'
+  Installing backend dependencies: started
+  Installing backend dependencies: finished with status 'done'
+  Preparing editable metadata (pyproject.toml): started
+  Preparing editable metadata (pyproject.toml): finished with status 'done'
+Collecting celery<5.6,>=5.5 (from celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Downloading celery-5.5.3-py3-none-any.whl.metadata (22 kB)
+Collecting django-oauth-toolkit<4.0,>=3.0 (from easyauth==0.1.0)
+  Downloading django_oauth_toolkit-3.3.0-py3-none-any.whl.metadata (7.6 kB)
+Collecting django<5.3,>=5.2 (from easyauth==0.1.0)
+  Downloading django-5.2.15-py3-none-any.whl.metadata (4.1 kB)
+Collecting djangorestframework<3.17,>=3.16 (from easyauth==0.1.0)
+  Downloading djangorestframework-3.16.1-py3-none-any.whl.metadata (11 kB)
+Collecting psycopg<4.0,>=3.2 (from psycopg[binary]<4.0,>=3.2->easyauth==0.1.0)
+  Downloading psycopg-3.3.4-py3-none-any.whl.metadata (4.3 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting redis<7.0,>=6.0 (from easyauth==0.1.0)
+  Downloading redis-6.4.0-py3-none-any.whl.metadata (10 kB)
+Collecting basedpyright<2,>=1.34 (from easyauth==0.1.0)
+  Downloading basedpyright-1.39.6-py3-none-any.whl.metadata (2.4 kB)
+Collecting django-stubs<6,>=5.2 (from easyauth==0.1.0)
+  Downloading django_stubs-5.2.9-py3-none-any.whl.metadata (21 kB)
+Collecting djangorestframework-stubs<4,>=3.16 (from easyauth==0.1.0)
+  Downloading djangorestframework_stubs-3.17.0-py3-none-any.whl.metadata (3.9 kB)
+Collecting pytest-django<5,>=4.11 (from easyauth==0.1.0)
+  Downloading pytest_django-4.12.0-py3-none-any.whl.metadata (8.0 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting pytest<9,>=8.4 (from easyauth==0.1.0)
+  Downloading pytest-8.4.2-py3-none-any.whl.metadata (7.7 kB)
+Collecting ruff<0.14,>=0.13 (from easyauth==0.1.0)
+  Downloading ruff-0.13.3-py3-none-macosx_11_0_arm64.whl.metadata (25 kB)
+Collecting uv<1,>=0.8 (from easyauth==0.1.0)
+  Downloading uv-0.11.19-py3-none-macosx_11_0_arm64.whl.metadata (11 kB)
+Collecting nodejs-wheel-binaries>=20.13.1 (from basedpyright<2,>=1.34->easyauth==0.1.0)
+  Downloading nodejs_wheel_binaries-24.16.0-py2.py3-none-macosx_13_0_arm64.whl.metadata (4.6 kB)
+Collecting billiard<5.0,>=4.2.1 (from celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Downloading billiard-4.2.4-py3-none-any.whl.metadata (4.8 kB)
+Collecting kombu<5.6,>=5.5.2 (from celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Downloading kombu-5.5.4-py3-none-any.whl.metadata (3.5 kB)
+Collecting vine<6.0,>=5.1.0 (from celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Downloading vine-5.1.0-py3-none-any.whl.metadata (2.7 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting click<9.0,>=8.1.2 (from celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Using cached click-8.4.1-py3-none-any.whl.metadata (2.6 kB)
+Collecting click-didyoumean>=0.3.0 (from celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Downloading click_didyoumean-0.3.1-py3-none-any.whl.metadata (3.9 kB)
+Collecting click-repl>=0.2.0 (from celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Downloading click_repl-0.3.0-py3-none-any.whl.metadata (3.6 kB)
+Collecting click-plugins>=1.1.1 (from celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Downloading click_plugins-1.1.1.2-py2.py3-none-any.whl.metadata (6.5 kB)
+Collecting python-dateutil>=2.8.2 (from celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Using cached python_dateutil-2.9.0.post0-py2.py3-none-any.whl.metadata (8.4 kB)
+Collecting asgiref>=3.8.1 (from django<5.3,>=5.2->easyauth==0.1.0)
+  Downloading asgiref-3.11.1-py3-none-any.whl.metadata (9.3 kB)
+Collecting sqlparse>=0.3.1 (from django<5.3,>=5.2->easyauth==0.1.0)
+  Downloading sqlparse-0.5.5-py3-none-any.whl.metadata (4.7 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting requests>=2.13.0 (from django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Using cached requests-2.34.2-py3-none-any.whl.metadata (4.8 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting oauthlib>=3.3.0 (from django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Using cached oauthlib-3.3.1-py3-none-any.whl.metadata (7.9 kB)
+Collecting jwcrypto>=1.5.0 (from django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Downloading jwcrypto-1.5.7-py3-none-any.whl.metadata (3.3 kB)
+Collecting django-stubs-ext>=5.2.9 (from django-stubs<6,>=5.2->easyauth==0.1.0)
+  Downloading django_stubs_ext-6.0.5-py3-none-any.whl.metadata (3.7 kB)
+Collecting types-pyyaml (from django-stubs<6,>=5.2->easyauth==0.1.0)
+  Downloading types_pyyaml-6.0.12.20260518-py3-none-any.whl.metadata (1.7 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting typing-extensions>=4.11.0 (from django-stubs<6,>=5.2->easyauth==0.1.0)
+  Using cached typing_extensions-4.15.0-py3-none-any.whl.metadata (3.3 kB)
+INFO: pip is looking at multiple versions of djangorestframework-stubs to determine which version is compatible with other requirements. This could take a while.
+Collecting djangorestframework-stubs<4,>=3.16 (from easyauth==0.1.0)
+  Downloading djangorestframework_stubs-3.16.9-py3-none-any.whl.metadata (3.9 kB)
+Collecting amqp<6.0.0,>=5.1.1 (from kombu<5.6,>=5.5.2->celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Downloading amqp-5.3.1-py3-none-any.whl.metadata (8.9 kB)
+Collecting tzdata>=2025.2 (from kombu<5.6,>=5.5.2->celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Downloading tzdata-2026.2-py2.py3-none-any.whl.metadata (1.4 kB)
+Collecting packaging (from kombu<5.6,>=5.5.2->celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Using cached packaging-26.2-py3-none-any.whl.metadata (3.5 kB)
+Collecting psycopg-binary==3.3.4 (from psycopg[binary]<4.0,>=3.2->easyauth==0.1.0)
+  Downloading psycopg_binary-3.3.4-cp314-cp314-macosx_11_0_arm64.whl.metadata (2.7 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting iniconfig>=1 (from pytest<9,>=8.4->easyauth==0.1.0)
+  Using cached iniconfig-2.3.0-py3-none-any.whl.metadata (2.5 kB)
+Collecting pluggy<2,>=1.5 (from pytest<9,>=8.4->easyauth==0.1.0)
+  Using cached pluggy-1.6.0-py3-none-any.whl.metadata (4.8 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting pygments>=2.7.2 (from pytest<9,>=8.4->easyauth==0.1.0)
+  Using cached pygments-2.20.0-py3-none-any.whl.metadata (2.5 kB)
+Collecting prompt-toolkit>=3.0.36 (from click-repl>=0.2.0->celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Downloading prompt_toolkit-3.0.52-py3-none-any.whl.metadata (6.4 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting cryptography>=3.4 (from jwcrypto>=1.5.0->django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Using cached cryptography-48.0.0-cp311-abi3-macosx_10_9_universal2.whl.metadata (4.3 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting cffi>=2.0.0 (from cryptography>=3.4->jwcrypto>=1.5.0->django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Using cached cffi-2.0.0-cp314-cp314-macosx_11_0_arm64.whl.metadata (2.6 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting pycparser (from cffi>=2.0.0->cryptography>=3.4->jwcrypto>=1.5.0->django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Using cached pycparser-3.0-py3-none-any.whl.metadata (8.2 kB)
+Collecting wcwidth (from prompt-toolkit>=3.0.36->click-repl>=0.2.0->celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Downloading wcwidth-0.7.0-py3-none-any.whl.metadata (36 kB)
+Collecting six>=1.5 (from python-dateutil>=2.8.2->celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Using cached six-1.17.0-py2.py3-none-any.whl.metadata (1.7 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting charset_normalizer<4,>=2 (from requests>=2.13.0->django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Using cached charset_normalizer-3.4.7-cp314-cp314-macosx_10_15_universal2.whl.metadata (40 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting idna<4,>=2.5 (from requests>=2.13.0->django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Downloading idna-3.18-py3-none-any.whl.metadata (6.1 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting urllib3<3,>=1.26 (from requests>=2.13.0->django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Using cached urllib3-2.7.0-py3-none-any.whl.metadata (6.9 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting certifi>=2023.5.7 (from requests>=2.13.0->django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Using cached certifi-2026.5.20-py3-none-any.whl.metadata (2.5 kB)
+INFO: pip is looking at multiple versions of kombu[redis] to determine which version is compatible with other requirements. This could take a while.
+Collecting kombu[redis] (from celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Downloading kombu-5.5.3-py3-none-any.whl.metadata (3.5 kB)
+  Downloading kombu-5.5.2-py3-none-any.whl.metadata (3.3 kB)
+Collecting tzdata>=2025.2 (from kombu<5.6,>=5.5.2->celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Downloading tzdata-2025.2-py2.py3-none-any.whl.metadata (1.4 kB)
+Collecting celery[redis]<5.6,>=5.5 (from easyauth==0.1.0)
+  Downloading celery-5.5.2-py3-none-any.whl.metadata (22 kB)
+INFO: pip is looking at multiple versions of celery[redis] to determine which version is compatible with other requirements. This could take a while.
+  Downloading celery-5.5.1-py3-none-any.whl.metadata (22 kB)
+  Downloading celery-5.5.0-py3-none-any.whl.metadata (22 kB)
+Collecting sqlparse>=0.3.1 (from django<5.3,>=5.2->easyauth==0.1.0)
+  Downloading sqlparse-0.5.4-py3-none-any.whl.metadata (4.7 kB)
+INFO: pip is still looking at multiple versions of kombu[redis] to determine which version is compatible with other requirements. This could take a while.
+Collecting six>=1.5 (from python-dateutil>=2.8.2->celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Downloading six-1.16.0-py2.py3-none-any.whl.metadata (1.8 kB)
+Collecting certifi>=2023.5.7 (from requests>=2.13.0->django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Downloading certifi-2026.4.22-py3-none-any.whl.metadata (2.5 kB)
+INFO: This is taking longer than usual. You might need to provide the dependency resolver with stricter constraints to reduce runtime. See https://pip.pypa.io/warnings/backtracking for guidance. If you want to abort this run, press Ctrl + C.
+Collecting urllib3<3,>=1.26 (from requests>=2.13.0->django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Downloading urllib3-2.6.3-py3-none-any.whl.metadata (6.9 kB)
+Collecting idna<4,>=2.5 (from requests>=2.13.0->django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Using cached idna-3.17-py3-none-any.whl.metadata (6.4 kB)
+Collecting charset_normalizer<4,>=2 (from requests>=2.13.0->django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Downloading charset_normalizer-3.4.6-cp314-cp314-macosx_10_15_universal2.whl.metadata (40 kB)
+Collecting requests>=2.13.0 (from django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Downloading requests-2.34.1-py3-none-any.whl.metadata (4.8 kB)
+Collecting python-dateutil>=2.8.2 (from celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Downloading python_dateutil-2.9.0-py2.py3-none-any.whl.metadata (8.3 kB)
+Collecting pygments>=2.7.2 (from pytest<9,>=8.4->easyauth==0.1.0)
+  Downloading pygments-2.19.2-py3-none-any.whl.metadata (2.5 kB)
+Collecting prompt-toolkit>=3.0.36 (from click-repl>=0.2.0->celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Downloading prompt_toolkit-3.0.51-py3-none-any.whl.metadata (6.4 kB)
+Collecting packaging (from kombu<5.6,>=5.5.2->celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Downloading packaging-26.1-py3-none-any.whl.metadata (3.5 kB)
+Collecting oauthlib>=3.3.0 (from django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Downloading oauthlib-3.3.0-py3-none-any.whl.metadata (7.9 kB)
+Collecting nodejs-wheel-binaries>=20.13.1 (from basedpyright<2,>=1.34->easyauth==0.1.0)
+  Downloading nodejs_wheel_binaries-24.15.0-py2.py3-none-macosx_13_0_arm64.whl.metadata (4.6 kB)
+Collecting cryptography>=3.4 (from jwcrypto>=1.5.0->django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Downloading cryptography-47.0.0-cp311-abi3-macosx_10_9_universal2.whl.metadata (4.5 kB)
+Collecting jwcrypto>=1.5.0 (from django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Downloading jwcrypto-1.5.6-py3-none-any.whl.metadata (3.1 kB)
+Collecting iniconfig>=1 (from pytest<9,>=8.4->easyauth==0.1.0)
+  Downloading iniconfig-2.2.0-py3-none-any.whl.metadata (2.5 kB)
+Collecting django-stubs-ext>=5.2.9 (from django-stubs<6,>=5.2->easyauth==0.1.0)
+  Downloading django_stubs_ext-6.0.4-py3-none-any.whl.metadata (3.7 kB)
+Collecting click-repl>=0.2.0 (from celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Downloading click_repl-0.2.0-py3-none-any.whl.metadata (316 bytes)
+Collecting click-plugins>=1.1.1 (from celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Downloading click_plugins-1.1.1.1-py2.py3-none-any.whl.metadata (6.3 kB)
+Collecting click-didyoumean>=0.3.0 (from celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Downloading click_didyoumean-0.3.0-py3-none-any.whl.metadata (495 bytes)
+Collecting asgiref>=3.8.1 (from django<5.3,>=5.2->easyauth==0.1.0)
+  Downloading asgiref-3.11.0-py3-none-any.whl.metadata (9.3 kB)
+Collecting uv<1,>=0.8 (from easyauth==0.1.0)
+  Downloading uv-0.11.18-py3-none-macosx_11_0_arm64.whl.metadata (11 kB)
+Collecting ruff<0.14,>=0.13 (from easyauth==0.1.0)
+  Downloading ruff-0.13.2-py3-none-macosx_11_0_arm64.whl.metadata (25 kB)
+Collecting pytest-django<5,>=4.11 (from easyauth==0.1.0)
+  Downloading pytest_django-4.11.1-py3-none-any.whl.metadata (8.3 kB)
+Collecting pluggy<2,>=1.5 (from pytest<9,>=8.4->easyauth==0.1.0)
+  Downloading pluggy-1.5.0-py3-none-any.whl.metadata (4.8 kB)
+Collecting pytest<9,>=8.4 (from easyauth==0.1.0)
+  Downloading pytest-8.4.1-py3-none-any.whl.metadata (7.7 kB)
+Collecting psycopg[binary]<4.0,>=3.2 (from easyauth==0.1.0)
+  Downloading psycopg-3.3.3-py3-none-any.whl.metadata (4.3 kB)
+Collecting amqp<6.0.0,>=5.1.1 (from kombu<5.6,>=5.5.2->celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Downloading amqp-5.3.0-py3-none-any.whl.metadata (8.9 kB)
+Collecting djangorestframework<3.17,>=3.16 (from easyauth==0.1.0)
+  Downloading djangorestframework-3.16.0-py3-none-any.whl.metadata (11 kB)
+Collecting django-stubs<6,>=5.2 (from easyauth==0.1.0)
+  Downloading django_stubs-5.2.8-py3-none-any.whl.metadata (20 kB)
+Collecting django-oauth-toolkit<4.0,>=3.0 (from easyauth==0.1.0)
+  Downloading django_oauth_toolkit-3.2.0-py3-none-any.whl.metadata (7.6 kB)
+Collecting django<5.3,>=5.2 (from easyauth==0.1.0)
+  Downloading django-5.2.14-py3-none-any.whl.metadata (4.1 kB)
+Collecting click<9.0,>=8.1.2 (from celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Using cached click-8.4.0-py3-none-any.whl.metadata (2.6 kB)
+INFO: pip is still looking at multiple versions of celery[redis] to determine which version is compatible with other requirements. This could take a while.
+Collecting billiard<5.0,>=4.2.1 (from celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Downloading billiard-4.2.3-py3-none-any.whl.metadata (4.8 kB)
+INFO: This is taking longer than usual. You might need to provide the dependency resolver with stricter constraints to reduce runtime. See https://pip.pypa.io/warnings/backtracking for guidance. If you want to abort this run, press Ctrl + C.
+Collecting basedpyright<2,>=1.34 (from easyauth==0.1.0)
+  Downloading basedpyright-1.39.5-py3-none-any.whl.metadata (2.4 kB)
+ERROR: Cannot install None, celery[redis]==5.5.0, celery[redis]==5.5.1, celery[redis]==5.5.2 and easyauth[dev]==0.1.0 because these package versions have conflicting dependencies.
+
+The conflict is caused by:
+    easyauth 0.1.0 depends on redis<7.0 and >=6.0
+    easyauth[dev] 0.1.0 depends on redis<7.0 and >=6.0
+    celery[redis] 5.5.2 depends on redis!=4.5.5, <6.0.0 and >=4.5.2; extra == "redis"
+    celery[redis] 5.5.1 depends on redis!=4.5.5, <6.0.0 and >=4.5.2; extra == "redis"
+    celery[redis] 5.5.0 depends on redis!=4.5.5, <6.0.0 and >=4.5.2; extra == "redis"
+
+Additionally, some packages in these conflicts have no matching distributions available for your environment:
+    redis
+
+To fix this you could try to:
+1. loosen the range of package versions you've specified
+2. remove package versions to allow pip to attempt to solve the dependency conflict
+
+ERROR: ResolutionImpossible: for help visit https://pip.pypa.io/en/latest/topics/dependency-resolution/#dealing-with-dependency-conflicts
+Obtaining file:///Users/konata/code/EasyAuth
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Checking if build backend supports build_editable: started
+  Checking if build backend supports build_editable: finished with status 'done'
+  Getting requirements to build editable: started
+  Getting requirements to build editable: finished with status 'done'
+  Installing backend dependencies: started
+  Installing backend dependencies: finished with status 'done'
+  Preparing editable metadata (pyproject.toml): started
+  Preparing editable metadata (pyproject.toml): finished with status 'done'
+Collecting celery<5.6,>=5.5 (from celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Using cached celery-5.5.3-py3-none-any.whl.metadata (22 kB)
+Collecting django-oauth-toolkit<4.0,>=3.0 (from easyauth==0.1.0)
+  Using cached django_oauth_toolkit-3.3.0-py3-none-any.whl.metadata (7.6 kB)
+Collecting django<5.3,>=5.2 (from easyauth==0.1.0)
+  Using cached django-5.2.15-py3-none-any.whl.metadata (4.1 kB)
+Collecting djangorestframework<3.17,>=3.16 (from easyauth==0.1.0)
+  Using cached djangorestframework-3.16.1-py3-none-any.whl.metadata (11 kB)
+Collecting psycopg<4.0,>=3.2 (from psycopg[binary]<4.0,>=3.2->easyauth==0.1.0)
+  Using cached psycopg-3.3.4-py3-none-any.whl.metadata (4.3 kB)
+Collecting redis<6.0,>=5.2 (from easyauth==0.1.0)
+  Downloading redis-5.3.1-py3-none-any.whl.metadata (9.2 kB)
+Collecting basedpyright<2,>=1.34 (from easyauth==0.1.0)
+  Using cached basedpyright-1.39.6-py3-none-any.whl.metadata (2.4 kB)
+Collecting django-stubs<6,>=5.2 (from easyauth==0.1.0)
+  Using cached django_stubs-5.2.9-py3-none-any.whl.metadata (21 kB)
+Collecting djangorestframework-stubs<3.17,>=3.16 (from easyauth==0.1.0)
+  Using cached djangorestframework_stubs-3.16.9-py3-none-any.whl.metadata (3.9 kB)
+Collecting pytest-django<5,>=4.11 (from easyauth==0.1.0)
+  Using cached pytest_django-4.12.0-py3-none-any.whl.metadata (8.0 kB)
+Collecting pytest<9,>=8.4 (from easyauth==0.1.0)
+  Using cached pytest-8.4.2-py3-none-any.whl.metadata (7.7 kB)
+Collecting ruff<0.14,>=0.13 (from easyauth==0.1.0)
+  Using cached ruff-0.13.3-py3-none-macosx_11_0_arm64.whl.metadata (25 kB)
+Collecting uv<1,>=0.8 (from easyauth==0.1.0)
+  Using cached uv-0.11.19-py3-none-macosx_11_0_arm64.whl.metadata (11 kB)
+Collecting nodejs-wheel-binaries>=20.13.1 (from basedpyright<2,>=1.34->easyauth==0.1.0)
+  Using cached nodejs_wheel_binaries-24.16.0-py2.py3-none-macosx_13_0_arm64.whl.metadata (4.6 kB)
+Collecting billiard<5.0,>=4.2.1 (from celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Using cached billiard-4.2.4-py3-none-any.whl.metadata (4.8 kB)
+Collecting kombu<5.6,>=5.5.2 (from celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Using cached kombu-5.5.4-py3-none-any.whl.metadata (3.5 kB)
+Collecting vine<6.0,>=5.1.0 (from celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Using cached vine-5.1.0-py3-none-any.whl.metadata (2.7 kB)
+Collecting click<9.0,>=8.1.2 (from celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Using cached click-8.4.1-py3-none-any.whl.metadata (2.6 kB)
+Collecting click-didyoumean>=0.3.0 (from celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Using cached click_didyoumean-0.3.1-py3-none-any.whl.metadata (3.9 kB)
+Collecting click-repl>=0.2.0 (from celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Using cached click_repl-0.3.0-py3-none-any.whl.metadata (3.6 kB)
+Collecting click-plugins>=1.1.1 (from celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Using cached click_plugins-1.1.1.2-py2.py3-none-any.whl.metadata (6.5 kB)
+Collecting python-dateutil>=2.8.2 (from celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Using cached python_dateutil-2.9.0.post0-py2.py3-none-any.whl.metadata (8.4 kB)
+Collecting asgiref>=3.8.1 (from django<5.3,>=5.2->easyauth==0.1.0)
+  Using cached asgiref-3.11.1-py3-none-any.whl.metadata (9.3 kB)
+Collecting sqlparse>=0.3.1 (from django<5.3,>=5.2->easyauth==0.1.0)
+  Using cached sqlparse-0.5.5-py3-none-any.whl.metadata (4.7 kB)
+Collecting requests>=2.13.0 (from django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Using cached requests-2.34.2-py3-none-any.whl.metadata (4.8 kB)
+Collecting oauthlib>=3.3.0 (from django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Using cached oauthlib-3.3.1-py3-none-any.whl.metadata (7.9 kB)
+Collecting jwcrypto>=1.5.0 (from django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Using cached jwcrypto-1.5.7-py3-none-any.whl.metadata (3.3 kB)
+Collecting django-stubs-ext>=5.2.9 (from django-stubs<6,>=5.2->easyauth==0.1.0)
+  Using cached django_stubs_ext-6.0.5-py3-none-any.whl.metadata (3.7 kB)
+Collecting types-pyyaml (from django-stubs<6,>=5.2->easyauth==0.1.0)
+  Using cached types_pyyaml-6.0.12.20260518-py3-none-any.whl.metadata (1.7 kB)
+Collecting typing-extensions>=4.11.0 (from django-stubs<6,>=5.2->easyauth==0.1.0)
+  Using cached typing_extensions-4.15.0-py3-none-any.whl.metadata (3.3 kB)
+Collecting amqp<6.0.0,>=5.1.1 (from kombu<5.6,>=5.5.2->celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Using cached amqp-5.3.1-py3-none-any.whl.metadata (8.9 kB)
+Collecting tzdata>=2025.2 (from kombu<5.6,>=5.5.2->celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Using cached tzdata-2026.2-py2.py3-none-any.whl.metadata (1.4 kB)
+Collecting packaging (from kombu<5.6,>=5.5.2->celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Using cached packaging-26.2-py3-none-any.whl.metadata (3.5 kB)
+Collecting psycopg-binary==3.3.4 (from psycopg[binary]<4.0,>=3.2->easyauth==0.1.0)
+  Using cached psycopg_binary-3.3.4-cp314-cp314-macosx_11_0_arm64.whl.metadata (2.7 kB)
+Collecting iniconfig>=1 (from pytest<9,>=8.4->easyauth==0.1.0)
+  Using cached iniconfig-2.3.0-py3-none-any.whl.metadata (2.5 kB)
+Collecting pluggy<2,>=1.5 (from pytest<9,>=8.4->easyauth==0.1.0)
+  Using cached pluggy-1.6.0-py3-none-any.whl.metadata (4.8 kB)
+Collecting pygments>=2.7.2 (from pytest<9,>=8.4->easyauth==0.1.0)
+  Using cached pygments-2.20.0-py3-none-any.whl.metadata (2.5 kB)
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting PyJWT>=2.9.0 (from redis<6.0,>=5.2->easyauth==0.1.0)
+  Using cached pyjwt-2.13.0-py3-none-any.whl.metadata (3.4 kB)
+Collecting prompt-toolkit>=3.0.36 (from click-repl>=0.2.0->celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Using cached prompt_toolkit-3.0.52-py3-none-any.whl.metadata (6.4 kB)
+Collecting cryptography>=3.4 (from jwcrypto>=1.5.0->django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Using cached cryptography-48.0.0-cp311-abi3-macosx_10_9_universal2.whl.metadata (4.3 kB)
+Collecting cffi>=2.0.0 (from cryptography>=3.4->jwcrypto>=1.5.0->django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Using cached cffi-2.0.0-cp314-cp314-macosx_11_0_arm64.whl.metadata (2.6 kB)
+Collecting pycparser (from cffi>=2.0.0->cryptography>=3.4->jwcrypto>=1.5.0->django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Using cached pycparser-3.0-py3-none-any.whl.metadata (8.2 kB)
+Collecting wcwidth (from prompt-toolkit>=3.0.36->click-repl>=0.2.0->celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Using cached wcwidth-0.7.0-py3-none-any.whl.metadata (36 kB)
+Collecting six>=1.5 (from python-dateutil>=2.8.2->celery<5.6,>=5.5->celery[redis]<5.6,>=5.5->easyauth==0.1.0)
+  Using cached six-1.17.0-py2.py3-none-any.whl.metadata (1.7 kB)
+Collecting charset_normalizer<4,>=2 (from requests>=2.13.0->django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Using cached charset_normalizer-3.4.7-cp314-cp314-macosx_10_15_universal2.whl.metadata (40 kB)
+Collecting idna<4,>=2.5 (from requests>=2.13.0->django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Using cached idna-3.18-py3-none-any.whl.metadata (6.1 kB)
+Collecting urllib3<3,>=1.26 (from requests>=2.13.0->django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Using cached urllib3-2.7.0-py3-none-any.whl.metadata (6.9 kB)
+Collecting certifi>=2023.5.7 (from requests>=2.13.0->django-oauth-toolkit<4.0,>=3.0->easyauth==0.1.0)
+  Using cached certifi-2026.5.20-py3-none-any.whl.metadata (2.5 kB)
+Collecting redis<6.0,>=5.2 (from easyauth==0.1.0)
+  Downloading redis-5.2.1-py3-none-any.whl.metadata (9.1 kB)
+Downloading basedpyright-1.39.6-py3-none-any.whl (13.2 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 13.2/13.2 MB 8.7 MB/s  0:00:01
+Downloading celery-5.5.3-py3-none-any.whl (438 kB)
+Downloading billiard-4.2.4-py3-none-any.whl (87 kB)
+Using cached click-8.4.1-py3-none-any.whl (116 kB)
+Downloading django-5.2.15-py3-none-any.whl (8.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 8.3/8.3 MB 6.6 MB/s  0:00:01
+Downloading django_oauth_toolkit-3.3.0-py3-none-any.whl (88 kB)
+Downloading django_stubs-5.2.9-py3-none-any.whl (508 kB)
+Downloading djangorestframework-3.16.1-py3-none-any.whl (1.1 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.1/1.1 MB 7.5 MB/s  0:00:00
+Downloading djangorestframework_stubs-3.16.9-py3-none-any.whl (57 kB)
+Downloading kombu-5.5.4-py3-none-any.whl (210 kB)
+Downloading vine-5.1.0-py3-none-any.whl (9.6 kB)
+Downloading amqp-5.3.1-py3-none-any.whl (50 kB)
+Downloading psycopg-3.3.4-py3-none-any.whl (213 kB)
+Downloading psycopg_binary-3.3.4-cp314-cp314-macosx_11_0_arm64.whl (4.7 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.7/4.7 MB 5.1 MB/s  0:00:00
+Downloading pytest-8.4.2-py3-none-any.whl (365 kB)
+Using cached pluggy-1.6.0-py3-none-any.whl (20 kB)
+Downloading pytest_django-4.12.0-py3-none-any.whl (26 kB)
+Downloading ruff-0.13.3-py3-none-macosx_11_0_arm64.whl (12.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 12.3/12.3 MB 4.0 MB/s  0:00:03
+Downloading uv-0.11.19-py3-none-macosx_11_0_arm64.whl (21.8 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 21.8/21.8 MB 6.2 MB/s  0:00:03
+Downloading asgiref-3.11.1-py3-none-any.whl (24 kB)
+Downloading click_didyoumean-0.3.1-py3-none-any.whl (3.6 kB)
+Downloading click_plugins-1.1.1.2-py2.py3-none-any.whl (11 kB)
+Downloading click_repl-0.3.0-py3-none-any.whl (10 kB)
+Downloading django_stubs_ext-6.0.5-py3-none-any.whl (10 kB)
+Using cached iniconfig-2.3.0-py3-none-any.whl (7.5 kB)
+Downloading jwcrypto-1.5.7-py3-none-any.whl (94 kB)
+Using cached cryptography-48.0.0-cp311-abi3-macosx_10_9_universal2.whl (8.0 MB)
+Using cached cffi-2.0.0-cp314-cp314-macosx_11_0_arm64.whl (181 kB)
+Downloading nodejs_wheel_binaries-24.16.0-py2.py3-none-macosx_13_0_arm64.whl (55.7 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 55.7/55.7 MB 6.2 MB/s  0:00:09
+Using cached oauthlib-3.3.1-py3-none-any.whl (160 kB)
+Using cached packaging-26.2-py3-none-any.whl (100 kB)
+Downloading prompt_toolkit-3.0.52-py3-none-any.whl (391 kB)
+Using cached pygments-2.20.0-py3-none-any.whl (1.2 MB)
+Using cached python_dateutil-2.9.0.post0-py2.py3-none-any.whl (229 kB)
+Using cached requests-2.34.2-py3-none-any.whl (73 kB)
+Using cached charset_normalizer-3.4.7-cp314-cp314-macosx_10_15_universal2.whl (309 kB)
+Downloading idna-3.18-py3-none-any.whl (65 kB)
+Using cached urllib3-2.7.0-py3-none-any.whl (131 kB)
+Using cached certifi-2026.5.20-py3-none-any.whl (134 kB)
+Using cached six-1.17.0-py2.py3-none-any.whl (11 kB)
+Downloading sqlparse-0.5.5-py3-none-any.whl (46 kB)
+Using cached typing_extensions-4.15.0-py3-none-any.whl (44 kB)
+Downloading tzdata-2026.2-py2.py3-none-any.whl (349 kB)
+Downloading redis-5.2.1-py3-none-any.whl (261 kB)
+Using cached pycparser-3.0-py3-none-any.whl (48 kB)
+Downloading types_pyyaml-6.0.12.20260518-py3-none-any.whl (20 kB)
+Downloading wcwidth-0.7.0-py3-none-any.whl (110 kB)
+Building wheels for collected packages: easyauth
+  Building editable for easyauth (pyproject.toml): started
+  Building editable for easyauth (pyproject.toml): finished with status 'done'
+  Created wheel for easyauth: filename=easyauth-0.1.0-py3-none-any.whl size=2068 sha256=c9776a0c9327cc1c475a58c2153fc5af32c1c5817234592532dc05f5b930747b
+  Stored in directory: /private/var/folders/p2/y7wq5j652bb97yc9jhshfmlh0000gn/T/pip-ephem-wheel-cache-7qwqf4rb/wheels/01/b3/99/3a9b51f3c196d29c102696b6aea42832c42781517eaf5ab92f
+Successfully built easyauth
+Installing collected packages: wcwidth, vine, uv, urllib3, tzdata, typing-extensions, types-pyyaml, sqlparse, six, ruff, redis, pygments, pycparser, psycopg-binary, psycopg, pluggy, packaging, oauthlib, nodejs-wheel-binaries, iniconfig, idna, click, charset_normalizer, certifi, billiard, asgiref, requests, python-dateutil, pytest, prompt-toolkit, django, click-plugins, click-didyoumean, cffi, basedpyright, amqp, pytest-django, kombu, djangorestframework, django-stubs-ext, cryptography, click-repl, jwcrypto, django-stubs, celery, djangorestframework-stubs, django-oauth-toolkit, easyauth
+
+Successfully installed amqp-5.3.1 asgiref-3.11.1 basedpyright-1.39.6 billiard-4.2.4 celery-5.5.3 certifi-2026.5.20 cffi-2.0.0 charset_normalizer-3.4.7 click-8.4.1 click-didyoumean-0.3.1 click-plugins-1.1.1.2 click-repl-0.3.0 cryptography-48.0.0 django-5.2.15 django-oauth-toolkit-3.3.0 django-stubs-5.2.9 django-stubs-ext-6.0.5 djangorestframework-3.16.1 djangorestframework-stubs-3.16.9 easyauth-0.1.0 idna-3.18 iniconfig-2.3.0 jwcrypto-1.5.7 kombu-5.5.4 nodejs-wheel-binaries-24.16.0 oauthlib-3.3.1 packaging-26.2 pluggy-1.6.0 prompt-toolkit-3.0.52 psycopg-3.3.4 psycopg-binary-3.3.4 pycparser-3.0 pygments-2.20.0 pytest-8.4.2 pytest-django-4.12.0 python-dateutil-2.9.0.post0 redis-5.2.1 requests-2.34.2 ruff-0.13.3 six-1.17.0 sqlparse-0.5.5 types-pyyaml-6.0.12.20260518 typing-extensions-4.15.0 tzdata-2026.2 urllib3-2.7.0 uv-0.11.19 vine-5.1.0 wcwidth-0.7.0

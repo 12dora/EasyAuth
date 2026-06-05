@@ -1,0 +1,79 @@
+S2 applications 模型验证报告
+
+结论
+- 状态：FAIL / BLOCKED
+- 阻塞原因：指定手工 QA 通道必须使用 `tmux`，但当前环境没有可执行的 `tmux`；精确 invocation 返回退出码 127，无法捕获 tmux pane，也无法按要求用 `tmux kill-session` 和 `tmux has-session` 完成清理证明。
+- 最小复现命令：`tmux new-session -d -s easyauth-s2-model-verifier 'cd /Users/konata/code/EasyAuth && .tools/uv-venv/bin/uv run --extra dev python manage.py check; printf "\nEXIT:$?\n"; sleep 30'`
+
+检查过的文件
+- `src/easyauth/applications/__init__.py`
+- `src/easyauth/applications/apps.py`
+- `src/easyauth/applications/models.py`
+- `src/easyauth/applications/migrations/0001_initial.py`
+- `src/easyauth/applications/migrations/__init__.py`
+- `tests/unit/applications/__init__.py`
+- `tests/unit/applications/test_models.py`
+- `src/easyauth/config/settings/base.py`
+- `.omo/evidence/task-S2-applications.txt`
+
+只读检查结果
+- `.omo/evidence/task-S2-applications.txt` 记录了 RED 命令 `.tools/uv-venv/bin/uv run --extra dev pytest tests/unit/applications -q`。
+- RED 记录包含退出码 2 和 `ModuleNotFoundError: No module named 'easyauth.applications'`，符合 S2 app/model 尚不存在时的预期失败。
+- 测试覆盖了 `App.app_key` 唯一、同 app 内 `Role.key` 唯一、同 app 内 `Permission.key` 唯一、跨 app role key 可重复、跨 app permission key 可重复、`RolePermission.full_clean()` 拒绝跨 app、`ApprovalRule.full_clean()` 要求有且仅有一个目标、DingTalk `approver_userids` 列表非空。
+- 实现范围限于 `App`、`Role`、`Permission`、`RolePermission`、`ApprovalRule`、首个迁移和 `INSTALLED_APPS` 注册；未发现超出 S2 模型范围的 API、admin、OAuth、token 或 grant 实现。
+
+自动验证命令
+- 命令：`.tools/uv-venv/bin/uv run --extra dev pytest tests/unit/applications -q`
+  - 退出码：0
+  - 关键输出：`8 passed in 0.36s`
+- 命令：`.tools/uv-venv/bin/uv run --extra dev python manage.py makemigrations --check`
+  - 退出码：0
+  - 关键输出：`No changes detected`
+- 命令：`.tools/uv-venv/bin/uv run --extra dev ruff check src/easyauth/applications tests/unit/applications`
+  - 退出码：0
+  - 关键输出：`All checks passed!`
+- 命令：`.tools/uv-venv/bin/uv run --extra dev basedpyright src/easyauth/applications tests/unit/applications`
+  - 退出码：0
+  - 关键输出：`0 errors, 0 warnings, 0 notes`
+
+手工 QA 通道
+- 要求通道：tmux
+- 精确 invocation：`tmux new-session -d -s easyauth-s2-model-verifier 'cd /Users/konata/code/EasyAuth && .tools/uv-venv/bin/uv run --extra dev python manage.py check; printf "\nEXIT:$?\n"; sleep 30'`
+  - 退出码：127
+  - 关键输出：`zsh:1: command not found: tmux`
+- `command -v tmux`
+  - 退出码：1
+  - 关键输出：空
+- `ls /opt/homebrew/bin/tmux /usr/local/bin/tmux /usr/bin/tmux 2>/dev/null`
+  - 退出码：1
+  - 关键输出：空
+- `tmux -V`
+  - 退出码：127
+  - 关键输出：`zsh:1: command not found: tmux`
+- 直接校验命令：`.tools/uv-venv/bin/uv run --extra dev python manage.py check`
+  - 退出码：0
+  - 关键输出：`System check identified no issues (0 silenced).`
+- 判定：直接 `manage.py check` 通过，但这不能替代指定 tmux 通道，因此手工 QA 未通过。
+
+对抗验证
+- malformed input：运行 `test_approval_rule_requires_exactly_one_target_when_cleaned` 与 `test_approval_rule_requires_dingtalk_approver_userids_when_cleaned`。
+  - 命令：`.tools/uv-venv/bin/uv run --extra dev pytest tests/unit/applications/test_models.py::test_approval_rule_requires_exactly_one_target_when_cleaned tests/unit/applications/test_models.py::test_approval_rule_requires_dingtalk_approver_userids_when_cleaned -q`
+  - 退出码：0
+  - 关键输出：`2 passed in 0.29s`
+- prompt injection：不适用，S2 仅为 Django 配置模型，没有 prompt、LLM 或用户文本执行边界。
+- cancel/resume：`.omo/evidence/task-S2-applications.txt` 存在且可读。
+- stale state：S2 pytest 在本轮重复运行两次，均退出码 0。
+- flaky tests：第二次 `.tools/uv-venv/bin/uv run --extra dev pytest tests/unit/applications -q` 退出码 0，关键输出 `8 passed in 0.30s`。
+- dirty worktree：`git status --short` 显示既有未提交内容：`.gitignore`、`.omo/plans/easyauth-mvp-incremental-tdd-plan.md`、`.omo/boulder.json`、`.omo/evidence/`、`.omo/start-work/`、`.python-version`、`docker-compose.yml`、`manage.py`、`pyproject.toml`、`src/`、`tests/`、`uv.lock`。本验证未回滚或修改这些内容。
+- hung/long commands：所有已运行命令都有观察到的退出码；tmux session 未能创建。
+- misleading success output：自动验证同时检查退出码 0 和关键输出；tmux QA 因退出码 127 判为失败。
+- repeated interruptions：未观察到影响验证范围的中断。
+
+清理回执
+- `tmux kill-session -t easyauth-s2-model-verifier`
+  - 退出码：127
+  - 关键输出：`zsh:1: command not found: tmux`
+- `tmux has-session -t easyauth-s2-model-verifier`
+  - 退出码：127
+  - 关键输出：`zsh:1: command not found: tmux`
+- QA 资源残留：没有成功创建 tmux session 的证据；由于 `tmux` 命令本身不存在，无法用 tmux 命令证明 session 已不存在。

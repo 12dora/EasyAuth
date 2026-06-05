@@ -1,0 +1,115 @@
+S10 Authentik 同步证据
+
+范围
+- 工作目录：/Users/konata/code/EasyAuth
+- 允许修改文件：src/easyauth/integrations/authentik/payloads.py、src/easyauth/accounts/services.py、src/easyauth/tasks/authentik.py、tests/unit/integrations/authentik/test_payloads_s10.py、tests/integration/authentik/test_sync_s10.py、tests/unit/grants/test_revoke_for_user_s10.py、.omo/evidence/task-S10-authentik-sync.txt
+
+初始状态
+- `git status --short`：工作区已有大量未跟踪/已修改文件；本任务不回退非本任务改动。
+- S10 源文件行数：payloads.py 205 行、accounts/services.py 116 行、tasks/authentik.py 41 行；未触发 250 纯 LOC 强制拆分。
+
+基线验证（生产代码未改动）
+- `.tools/uv-venv/bin/uv run --extra dev pytest tests/unit/integrations/authentik tests/integration/authentik tests/unit/grants -q`
+  - 退出码：0
+  - 关键输出：`37 passed in 0.63s`
+- `.tools/uv-venv/bin/uv run --extra dev pytest tests/unit/accounts tests/unit/grants -q`
+  - 退出码：0
+  - 关键输出：`25 passed in 0.56s`
+- `.tools/uv-venv/bin/uv run --extra dev ruff check src/easyauth/integrations src/easyauth/accounts src/easyauth/tasks tests/unit/integrations tests/integration/authentik tests/unit/accounts tests/unit/grants`
+  - 退出码：1
+  - 关键输出：`Found 17 errors.`；包含 `F401` 未使用导入、`EM101` 异常参数字面量、`TC001/TC003` 类型专用导入、`PLR2004` 魔法值、`PT006` 参数化名称需使用 tuple。
+- `.tools/uv-venv/bin/uv run --extra dev basedpyright src/easyauth/integrations src/easyauth/accounts src/easyauth/tasks tests/unit/integrations tests/integration/authentik tests/unit/accounts tests/unit/grants`
+  - 退出码：1
+  - 关键输出：`4 errors, 0 warnings, 0 notes`；包含 `USER_STATUS_*` 未使用导入、`AuthentikPayloadError.__str__` 缺少 `@override`。
+- `.tools/uv-venv/bin/uv run --extra dev python manage.py check`
+  - 退出码：0
+  - 关键输出：`System check identified no issues (0 silenced).`
+
+TDD RED
+- 通过的基线刻画测试：`.tools/uv-venv/bin/uv run --extra dev pytest tests/integration/authentik/test_sync_s10.py::test_s10_first_time_active_sync_without_grants_does_not_record_departure_event -q`
+  - 退出码：0
+  - 关键输出：`1 passed in 0.55s`
+- RED 测试：`.tools/uv-venv/bin/uv run --extra dev pytest tests/integration/authentik/test_sync_s10.py::test_s10_first_time_disabled_sync_without_grants_records_departure_once -q`
+  - 退出码：1
+  - 关键输出：`assert departure_logs.count() == EXPECTED_DEPARTURE_EVENTS` 失败，实际 `0`，期望 `1`。
+
+补充 RED / GREEN
+- RED 测试：`.tools/uv-venv/bin/uv run --extra dev pytest tests/unit/integrations/authentik/test_payloads_s10.py::test_s10_parse_inactive_status_maps_to_disabled_status -q`
+  - 退出码：1
+  - 关键输出：`AuthentikPayloadError: Invalid Authentik payload status: unsupported status: inactive`
+- GREEN 重跑：`.tools/uv-venv/bin/uv run --extra dev pytest tests/unit/integrations/authentik/test_payloads_s10.py::test_s10_parse_inactive_status_maps_to_disabled_status -q`
+  - 退出码：0
+  - 关键输出：`1 passed in 0.02s`
+- RED 测试：`.tools/uv-venv/bin/uv run --extra dev pytest tests/unit/grants/test_revoke_for_user_s10.py::test_s10_revoke_for_user_revokes_all_current_active_grants_once -q`
+  - 退出码：1
+  - 关键输出：`KeyError: 'reason'`
+- GREEN 重跑：`.tools/uv-venv/bin/uv run --extra dev pytest tests/unit/grants/test_revoke_for_user_s10.py::test_s10_revoke_for_user_revokes_all_current_active_grants_once -q`
+  - 退出码：0
+  - 关键输出：`1 passed in 0.60s`
+
+实现摘要
+- 新增 `src/easyauth/integrations/authentik/payloads.py`，解析 Authentik webhook/同步 payload，支持 `user.uid`、`context.sub`、`context.attributes.uid` 到 `authentik_user_id`，并把 `inactive` / `is_active=false` 映射为 EasyAuth `disabled`。
+- 新增 `src/easyauth/accounts/services.py` 的 `AuthentikSyncService.sync_payload()`，统一 upsert `UserMirror`，非 active 状态调用 `GrantService.revoke_for_user()`，记录 `user_departure_detected`。
+- 新增 `src/easyauth/tasks/authentik.py` 的定时同步入口和静态 payload source。
+- 扩展 `GrantService.revoke_for_user()`，批量撤销当前 active grants，按 app_key 稳定排序，version 递增，并在 `grant_revoked` metadata 中记录 `reason`。
+
+自动验证
+- `.tools/uv-venv/bin/uv run --extra dev pytest tests/unit/integrations/authentik tests/integration/authentik tests/unit/grants -q`
+  - 退出码：0
+  - 关键输出：`41 passed in 2.13s`
+- `.tools/uv-venv/bin/uv run --extra dev pytest tests/unit/accounts tests/unit/grants -q`
+  - 退出码：0
+  - 关键输出：`25 passed in 2.04s`
+- `.tools/uv-venv/bin/uv run --extra dev pytest tests/unit/integrations/authentik/test_payloads_s10.py -q`
+  - 退出码：0
+  - 关键输出：`15 passed in 0.02s`
+- `.tools/uv-venv/bin/uv run --extra dev pytest -q`
+  - 退出码：0
+  - 关键输出：`118 passed in 8.58s`
+- `.tools/uv-venv/bin/uv run --extra dev ruff check .`
+  - 退出码：0
+  - 关键输出：`All checks passed!`
+- `.tools/uv-venv/bin/uv run --extra dev basedpyright`
+  - 退出码：0
+  - 关键输出：`0 errors, 0 warnings, 0 notes`
+- `.tools/uv-venv/bin/uv run --extra dev python manage.py check`
+  - 退出码：0
+  - 关键输出：`System check identified no issues (0 silenced).`
+- `.tools/uv-venv/bin/uv run --extra dev python manage.py makemigrations --check`
+  - 退出码：0
+  - 关键输出：`No changes detected`
+- `.tools/uv-venv/bin/uv run --extra dev python manage.py migrate --check`
+  - 退出码：0
+
+Manual QA：HTTP call
+- 资源登记：启动 `python manage.py runserver 127.0.0.1:8792`，日志 `.omo/evidence/task-S10-runserver.log`，退出时清理 PID。
+- 场景：创建真实 app、user、static token、active grant；调用 `AuthentikSyncService.sync_payload({"user": {"uid": user_id}, "status": "inactive"})`；再执行 `curl -i -H "Authorization: Bearer <redacted>" http://127.0.0.1:8792/api/v1/apps/<app_key>/users/<user_id>/permissions`。
+- 结果 artifact：`.omo/evidence/task-S10-manual-curl.txt`
+- PASS 判定：HTTP 200；JSON body 中 `roles == []`、`permissions == []`、`version == 2`。
+- 机器断言：`.tools/uv-venv/bin/uv run --extra dev python - <<'PY' ... json.loads(body) ... PY`
+  - 退出码：0
+  - 关键输出：`MANUAL_QA_JSON_ASSERT_PASS artifact=.omo/evidence/task-S10-manual-curl.txt`
+
+UltraQA 对抗类
+- malformed input：PASS。parser tests 覆盖空 subject、非 bool `is_active`、unsupported status、非对象 user/context、空 uid、冲突 subject。
+- prompt injection：NOT-APPLICABLE。S10 无 prompt、LLM 或自然语言执行面。
+- cancel/resume：PASS。plan、ledger、evidence 均在 `.omo/` 下可恢复；静默子 agent 被关闭后由 root 继续。
+- stale state：PASS。focused pytest 和全量 pytest 在最终实现后重新运行通过。
+- dirty worktree：PASS。记录 `git status --short`，未回滚既有 `.omo/`、`src/`、`tests/` 等未跟踪工程文件。
+- hung or long commands：PASS。所有命令有退出码；runserver 8792 已停止。
+- flaky tests：PASS。重复运行 parser/focused pytest 均通过。
+- misleading success output：PASS。不只记录测试通过，还记录 RED 失败原因、ruff、basedpyright、Django check、HTTP artifact 和 JSON 断言。
+- repeated interruptions：PASS。多轮静默/越权子 agent 后关闭 agent 树，重读关键文件并重新跑最终门禁。
+
+子 agent 协调记录
+- 已派发 S10 实现/审查/最终门禁/清理审计子 agent。
+- 部分子 agent 超出只读范围派生可写任务或长时间静默；未将其结果计为通过，已关闭相关 agent 树。
+- root 基于当前文件状态重读并完成最终验证。
+
+清理回执
+- `lsof -iTCP:8792 -sTCP:LISTEN`：退出码 1，无监听。
+- `lsof -iTCP:8793 -sTCP:LISTEN`：由审计任务检查，无持续使用；最终未保留监听。
+- `tmux`：未使用。
+- browser / agent-browser：未使用。
+- Docker/container：未启动。
+- 临时目录：未创建专用临时目录。

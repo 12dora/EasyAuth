@@ -220,7 +220,7 @@ approved
   - `id`
   - `user_id`
   - `app_id`
-  - `status`: `active`、`revoked`
+  - `status`: `active`、`revoked`、`expired`
   - `source_request_id`
   - `version`
   - `grant_lifetime_type`
@@ -496,7 +496,7 @@ Celery beat 定期扫描 `grant_lifetime_type=timed` 且 `grant_expires_at <= no
 
 处理规则：
 
-- 每条过期 grant 在事务中从 active 转为 revoked。
+- 每条过期 grant 在事务中从 active 转为 expired。
 - 递增 version。
 - 写入 `grant_expired` 审计事件。
 - 如果同一 grant 已被人工撤销或离职清理撤销，过期任务必须幂等跳过。

@@ -1,0 +1,96 @@
+S8 final gate evidence
+Date: 2026-06-05
+CWD: /Users/konata/code/EasyAuth
+
+F                                                                        [100%]
+=================================== FAILURES ===================================
+_ test_permission_query_returns_active_roles_permissions_version_expiration_and_audit _
+
+    @override_settings(EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS=PERMISSION_QUERY_TTL_SECONDS)
+    def test_permission_query_returns_active_roles_permissions_version_expiration_and_audit() -> None:
+        # Given: 应用静态 token 绑定了当前应用, 用户有当前有效授权。
+        user = UserMirror.objects.create(authentik_user_id="user-api-active")
+        app = App.objects.create(app_key="crm-api-active", name="CRM API Active")
+        issue = StaticTokenService.create_token(app=app, name="CRM integration")
+        admin = Role.objects.create(app=app, key="admin", name="Admin")
+        auditor = Role.objects.create(app=app, key="auditor", name="Auditor")
+        approve = Permission.objects.create(app=app, key="invoice.approve", name="Approve invoices")
+        read = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
+        write = Permission.objects.create(app=app, key="invoice.write", name="Write invoices")
+        _ = RolePermission.objects.create(role=admin, permission=write)
+        _ = RolePermission.objects.create(role=auditor, permission=read)
+        _ = RolePermission.objects.create(role=auditor, permission=write)
+        grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
+        _ = AccessGrantRole.objects.create(grant=grant, role=auditor)
+        _ = AccessGrantRole.objects.create(grant=grant, role=admin)
+        _ = AccessGrantPermission.objects.create(grant=grant, permission=approve)
+    
+        # When: 应用通过静态 Bearer token 查询该用户权限。
+        before = timezone.now()
+        response = Client().get(
+            _permission_url(app.app_key, user.authentik_user_id),
+            HTTP_AUTHORIZATION=_bearer(issue.plaintext_token),
+        )
+        after = timezone.now()
+    
+        # Then: 响应返回稳定排序、去重权限、当前版本、缓存过期时间, 并写入审计。
+        assert response.status_code == HTTPStatus.OK
+        payload = _permission_payload(response)
+        assert payload["user_id"] == "user-api-active"
+        assert payload["app_key"] == "crm-api-active"
+        assert payload["roles"] == ["admin", "auditor"]
+        assert payload["permissions"] == ["invoice.approve", "invoice.read", "invoice.write"]
+        assert payload["version"] == 1
+        expires_at = datetime.fromisoformat(payload["expires_at"])
+        assert expires_at.tzinfo is not None
+        assert before + timedelta(seconds=PERMISSION_QUERY_TTL_SECONDS) <= expires_at
+>       assert expires_at <= after + timedelta(seconds=PERMISSION_QUERY_TTL_SECONDS)
+E       assert datetime.datetime(2026, 6, 5, 6, 12, 30, 399787, tzinfo=datetime.timezone.utc) <= (datetime.datetime(2026, 6, 5, 6, 7, 30, 400158, tzinfo=datetime.timezone.utc) + datetime.timedelta(seconds=120))
+E        +  where datetime.timedelta(seconds=120) = timedelta(seconds=120)
+
+tests/integration/api/test_permission_query.py:78: AssertionError
+=========================== short test summary info ============================
+FAILED tests/integration/api/test_permission_query.py::test_permission_query_returns_active_roles_permissions_version_expiration_and_audit
+1 failed in 0.63s
+
+== pytest S8 focused ==
+........                                                                 [100%]
+8 passed in 2.89s
+
+== pytest unit/grants integration/api ==
+..................................                                       [100%]
+34 passed in 3.79s
+
+== manage.py check ==
+
+== ruff targeted ==
+
+== basedpyright targeted ==
+All checks passed!
+System check identified no issues (0 silenced).
+0 errors, 0 warnings, 0 notes
+
+== pure LOC changed Python files ==
+src/easyauth/api/views.py      113
+src/easyauth/api/urls.py       10
+src/easyauth/config/urls.py        9
+src/easyauth/config/settings/base.py       74
+src/easyauth/grants/query.py      118
+tests/integration/api/test_permission_query.py      231
+25 objects imported automatically (use -v 2 for details).
+
+fixture app=gate-s8-app user=gate-s8-user credential_id=9 grant_expires_at=2026-06-05T06:10:41.742856+00:00
+25 objects imported automatically (use -v 2 for details).
+
+audit actor_type=app actor_id=gate-s8-app target_id=gate-s8-user:gate-s8-app metadata={'app_key': 'gate-s8-app', 'user_id': 'gate-s8-user', 'version': 1, 'role_count': 1, 'permission_count': 2, 'credential_type': 'static_token', 'credential_id': 9}
+
+== focused pytest after manual QA ==
+........                                                                 [100%]
+8 passed in 3.00s
+
+== cleanup and adversarial summary ==
+ports 8768/8769/8770/8771/8772: no listeners (lsof exit 1 for each)
+token leak scan: rg eat_[A-Za-z0-9_-]{20,} .omo/evidence/task-S8*.txt returned no matches
+token tmp files:
+manual artifacts: task-S8-final-success.txt, task-S8-final-cross-app.txt, task-S8-final-invalid-token.txt, task-S8-final-missing-token.txt
+adversarial: malformed input=missing/invalid token curl 401; prompt injection=not applicable no prompt/LLM surface; cancel/resume=evidence and ledger append-only; stale state=migrate/check/focused tests rerun; dirty worktree=git status recorded; hung commands=ports closed; flaky tests=focused tests repeated; misleading success output=HTTP statuses and bodies captured; repeated interruptions=final gate artifact appended after each phase.

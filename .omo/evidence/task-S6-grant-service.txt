@@ -1,0 +1,53 @@
+S6 GrantService 与权限解析证据
+
+执行说明：
+- S6 worker 写入了 `test_services.py`、`test_query.py`、`services.py`、`query.py`，但长时间没有回报，也没有写出本证据文件。
+- root 在只读检查中观察到测试文件先于 `services.py`/`query.py` 出现；随后 worker 在后台完成实现。
+- root 捕获 RED 时实现已落地，`task-S6-red.txt` 已经通过，因此不能作为严格 RED 证据。这里如实记录该缺口。
+- root 后续只做质量门修正和验证，没有扩展 S6 范围。
+
+GREEN 实现：
+- 新增 `src/easyauth/grants/services.py`：
+  - `GrantMutationInput`
+  - `GrantService.create_grant()`
+  - `GrantService.change_grant()`
+  - `GrantService.revoke_grant()`
+  - `GrantService.expire_grant()`
+  - grant 变更审计事件：`grant_created`、`grant_changed`、`grant_revoked`、`grant_expired`
+- 新增 `src/easyauth/grants/query.py`：
+  - `PermissionSnapshot`
+  - `resolve_user_permissions()`
+- 新增 `tests/unit/grants/test_services.py` 和 `tests/unit/grants/test_query.py`。
+- 未实现 API、审批回调、OAuth、Celery 或前端。
+
+验证：
+- `.tools/uv-venv/bin/uv run --extra dev pytest tests/unit/grants -q`：通过，`16 passed`。
+- `.tools/uv-venv/bin/uv run --extra dev ruff check src/easyauth/grants tests/unit/grants`：通过，`All checks passed!`。
+- `.tools/uv-venv/bin/uv run --extra dev basedpyright src/easyauth/grants tests/unit/grants`：通过，`0 errors, 0 warnings, 0 notes`。
+- `.tools/uv-venv/bin/uv run --extra dev python manage.py check`：通过，`System check identified no issues`。
+- 全局回归：`.tools/uv-venv/bin/uv run --extra dev pytest -q` 通过，`63 passed`。
+- 全局质量门：`ruff check .`、`basedpyright` 均通过。
+
+手工表面 QA：
+- 命令行表面：`.tools/uv-venv/bin/uv run --extra dev python manage.py check`。
+- PASS：输出 `System check identified no issues`。
+- 未启动服务器、tmux 或 Docker。
+
+Adversarial QA：
+- malformed input：disabled/departed user、revoked/expired grant、unknown user、重复 revoke、重复 expire 均由测试覆盖并通过。
+- prompt injection：不适用，S6 没有 prompt、LLM 或用户文本执行面。
+- cancel/resume：本文件、测试输出和 `.omo/boulder.json` 已写入，可恢复。
+- stale state：S6 pytest 连续两次通过。
+- dirty worktree：`git status --short` 已记录；未回滚用户文档变更。
+- hung commands：所有验证命令均观察到退出码，无后台资源。
+- flaky tests：重复 S6 pytest 两次均通过。
+- misleading success output：同时检查退出码和关键输出。
+- repeated interruptions：未发生影响 S6 验证的外部中断。
+
+清理：
+- 本切片未启动服务器、tmux、Docker 或后台进程。
+- 没有 QA 资源残留。
+
+残余风险：
+- S6 缺少严格可回放的原始 RED 输出；原因是 worker 未写证据且在 root 捕获前已完成 GREEN。
+- 并发事务使用 `transaction.atomic()` 和 `select_for_update()`，但 SQLite 本地验证不能证明 PostgreSQL 锁语义；后续集成测试需要在 PostgreSQL 上覆盖。

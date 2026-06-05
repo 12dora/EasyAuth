@@ -1,0 +1,6 @@
+WARNING: Cache entry deserialization failed, entry ignored
+Collecting uv<1,>=0.8
+  Using cached uv-0.11.19-py3-none-macosx_11_0_arm64.whl.metadata (11 kB)
+Using cached uv-0.11.19-py3-none-macosx_11_0_arm64.whl (21.8 MB)
+Installing collected packages: uv
+Successfully installed uv-0.11.19

@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EasyAuth 员工门户</title>
+  <style>{% include "portal/_styles.html" %}</style>
+</head>
+<body>
+  <header class="portal-topbar">
+    <div class="portal-brand">
+      <strong>EasyAuth</strong>
+      <span>员工门户</span>
+    </div>
+    <div class="portal-user">{{ user.authentik_user_id }}</div>
+  </header>
+
+  <main data-s14-surface="access-request">
+    <section class="page-header">
+      <div>
+        <h1>访问申请</h1>
+        <p class="subtitle">选择已配置审批规则的角色，提交后等待审批和授权落库。</p>
+      </div>
+    </section>
+
+    {% if submitted_request %}
+      <div class="notice">已提交，当前状态为 submitted。</div>
+    {% endif %}
+
+    <div class="portal-grid">
+      <section class="panel" aria-labelledby="request-form-title">
+        <div class="panel-header">
+          <h2 id="request-form-title">新建申请</h2>
+        </div>
+        <div class="panel-body">
+          <form method="post" novalidate>
+            {% csrf_token %}
+            <div class="field-stack">
+              <div class="field">
+                <label for="app_id">应用</label>
+                <select id="app_id" class="portal-field" name="app_id">
+                  <option value="">选择应用</option>
+                  {% for option in app_options %}
+                    <option value="{{ option.id_value }}" {% if option.id_value == form.app_id_value %}selected{% endif %}>{{ option.name }}</option>
+                  {% endfor %}
+                </select>
+                {% if form.app_errors %}
+                  <ul class="errorlist">
+                    {% for error in form.app_errors %}
+                      <li>{{ error }}</li>
+                    {% endfor %}
+                  </ul>
+                {% endif %}
+              </div>
+              <div class="field">
+                <label for="role_id">申请角色</label>
+                <select id="role_id" class="portal-field" name="role_id">
+                  <option value="">选择角色</option>
+                  {% for option in role_options %}
+                    <option value="{{ option.id_value }}" data-app-id="{{ option.app_id_value }}" {% if option.id_value == form.role_id_value %}selected{% endif %}>{{ option.label }}</option>
+                  {% endfor %}
+                </select>
+                {% if form.role_errors %}
+                  <ul class="errorlist">
+                    {% for error in form.role_errors %}
+                      <li>{{ error }}</li>
+                    {% endfor %}
+                  </ul>
+                {% endif %}
+              </div>
+              <div class="field">
+                <label for="grant_type">授权期限</label>
+                <select id="grant_type" class="portal-field" name="grant_type">
+                  <option value="permanent" {% if form.grant_type_value == "permanent" %}selected{% endif %}>长期</option>
+                  <option value="timed" {% if form.grant_type_value == "timed" %}selected{% endif %}>限时</option>
+                </select>
+                {% if form.grant_type_errors %}
+                  <ul class="errorlist">
+                    {% for error in form.grant_type_errors %}
+                      <li>{{ error }}</li>
+                    {% endfor %}
+                  </ul>
+                {% endif %}
+              </div>
+              <div class="field">
+                <label for="grant_expires_at">过期时间</label>
+                <input id="grant_expires_at" class="portal-field" type="datetime-local" name="grant_expires_at" value="{{ form.grant_expires_at_value }}">
+                {% if form.grant_expires_at_errors %}
+                  <ul class="errorlist">
+                    {% for error in form.grant_expires_at_errors %}
+                      <li>{{ error }}</li>
+                    {% endfor %}
+                  </ul>
+                {% endif %}
+              </div>
+              <div class="field">
+                <label for="reason">申请原因</label>
+                <textarea id="reason" class="portal-field" name="reason" rows="3">{{ form.reason_value }}</textarea>
+                {% if form.reason_errors %}
+                  <ul class="errorlist">
+                    {% for error in form.reason_errors %}
+                      <li>{{ error }}</li>
+                    {% endfor %}
+                  </ul>
+                {% endif %}
+              </div>
+              <button class="portal-button" type="submit">提交申请</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <section class="panel" aria-labelledby="request-list-title">
+        <div class="panel-header">
+          <h2 id="request-list-title">申请状态</h2>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>状态</th>
+                <th>应用</th>
+                <th>角色</th>
+                <th>期限</th>
+                <th>提交时间</th>
+                <th>原因</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in request_rows %}
+                <tr data-status="{{ row.status }}">
+                  <td><span class="badge {{ row.status_tone }}">{{ row.status_label }}</span></td>
+                  <td>{{ row.app_name }}</td>
+                  <td>{{ row.role_names }}</td>
+                  <td>{{ row.grant_label }}</td>
+                  <td>{{ row.submitted_at|date:"Y-m-d H:i" }}</td>
+                  <td class="reason">{{ row.reason|default:"-" }}</td>
+                </tr>
+              {% empty %}
+                <tr>
+                  <td class="empty-row" colspan="6">暂无申请</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

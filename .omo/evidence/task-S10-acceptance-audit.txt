@@ -1,0 +1,46 @@
+S10 acceptance audit: FAIL
+
+Observed scope:
+- Workdir: /Users/konata/code/EasyAuth
+- git status --short: dirty/untracked project state present; no files modified by this audit except this artifact.
+- Plan TODO still shows S10 unchecked.
+- Ledger tail has completed entries through S9 only; no S10 completion ledger entry observed.
+
+Acceptance review:
+- Authentik OIDC subject mapping: implemented and tested via user.uid, context.sub, and context.attributes.uid parser tests.
+- Webhook/upsert: implemented as AuthentikSyncService.sync_payload and covered by upsert tests.
+- Scheduled sync: implemented as sync_authentik_users_from_source with StaticAuthentikPayloadSource and covered by integration test.
+- Non-active status revoke: partially implemented. false is_active and departed active-grant paths revoke current grants, increment version, and emit audit rows.
+- GrantService.revoke_for_user(reason=...) path: implemented and unit-tested, but AuthentikSyncService does not call it. It loops active grants and calls GrantService.revoke_grant(), which does not pass reason metadata.
+- inactive with active grants: not directly tested. inactive mapping is tested, inactive without grants is tested, and false is_active/departed active-grant revocation is tested.
+
+Latest automated verification:
+- .tools/uv-venv/bin/uv run --extra dev pytest tests/unit/integrations/authentik tests/integration/authentik tests/unit/grants -q
+  - First run: exit 0, 41 passed.
+  - Repeat after observed concurrent test-state change: exit 1, 1 failed and 40 passed.
+  - Failure: tests/integration/authentik/test_sync_s10.py::test_s10_departed_sync_revokes_all_active_grants_and_is_idempotent raises KeyError: 'reason' at audit_log.metadata["reason"].
+- .tools/uv-venv/bin/uv run --extra dev ruff check .
+  - exit 0, All checks passed.
+- .tools/uv-venv/bin/uv run --extra dev basedpyright
+  - exit 0, 0 errors, 0 warnings, 0 notes.
+- .tools/uv-venv/bin/uv run --extra dev python manage.py check
+  - exit 0, System check identified no issues.
+
+Manual QA channel:
+- .omo/evidence/task-S10-manual-curl.txt exists.
+- Artifact contains HTTP/1.1 200 OK and JSON body roles=[], permissions=[], version=2.
+- Manual channel PASS for the specified status/body criteria.
+
+Adversarial class coverage:
+- malformed input: parser tests cover missing subject, non-bool is_active, unsupported status, malformed user/context/attributes, empty uid, non-string profile fields, and conflicting subject fields.
+- prompt injection: N/A, no LLM/prompt execution surface in S10.
+- cancel/resume: evidence files exist, but plan checkbox and ledger are stale relative to S10 implementation/tests.
+- stale state: FAIL signal; plan S10 unchecked and ledger lacks S10 completion, while S10 files/tests/evidence exist.
+- dirty worktree: dirty/untracked state observed and recorded.
+- hung/long commands: requested commands completed.
+- flaky tests/concurrent edits: first focused pytest passed, repeat failed after test assertion for reason metadata was present.
+- misleading success output: latest focused pytest failure supersedes earlier pass.
+- repeated interruptions: evidence is durable enough for root continuation, but acceptance should not be marked complete.
+
+Decision:
+FAIL. S10 cannot be accepted until Authentik sync proves and implements Authentik revoke reason metadata on grant_revoked audit rows, preferably by using GrantService.revoke_for_user(reason="authentik_departure", actor_type="authentik", actor_id=user.authentik_user_id), and until inactive-with-active-grants is directly covered or explicitly accepted as covered by equivalent false-is_active/departed paths.

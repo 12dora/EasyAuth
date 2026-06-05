@@ -1,0 +1,48 @@
+FF                                                                       [100%]
+=================================== FAILURES ===================================
+________ test_saved_audit_log_rejects_bulk_update_when_queryset_updates ________
+
+    def test_saved_audit_log_rejects_bulk_update_when_queryset_updates() -> None:
+        # Given
+        audit_log = AuditService.record(
+            AuditRecord(
+                actor_type="system",
+                actor_id="scheduler",
+                action="grant_changed",
+                target_type="grant",
+                target_id="grant-004",
+                metadata={"reason": "change"},
+            ),
+        )
+    
+        # When / Then
+>       with pytest.raises(ValidationError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE <class 'django.core.exceptions.ValidationError'>
+
+tests/unit/audit/test_services.py:95: Failed
+________ test_saved_audit_log_rejects_bulk_delete_when_queryset_deletes ________
+
+    def test_saved_audit_log_rejects_bulk_delete_when_queryset_deletes() -> None:
+        # Given
+        audit_log = AuditService.record(
+            AuditRecord(
+                actor_type="system",
+                actor_id="scheduler",
+                action="grant_removed",
+                target_type="grant",
+                target_id="grant-005",
+                metadata={"reason": "remove"},
+            ),
+        )
+    
+        # When / Then
+>       with pytest.raises(ValidationError):
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E       Failed: DID NOT RAISE <class 'django.core.exceptions.ValidationError'>
+
+tests/unit/audit/test_services.py:115: Failed
+=========================== short test summary info ============================
+FAILED tests/unit/audit/test_services.py::test_saved_audit_log_rejects_bulk_update_when_queryset_updates
+FAILED tests/unit/audit/test_services.py::test_saved_audit_log_rejects_bulk_delete_when_queryset_deletes
+2 failed in 0.34s
