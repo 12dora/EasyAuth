@@ -1,134 +1,93 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, final, override
+from typing import TYPE_CHECKING, final
 
 from django.db import transaction
 
+from easyauth.access_requests.application import (
+    AccessRequestApplication,
+    AccessRequestApplicationError,
+    apply_approved_access_request,
+)
 from easyauth.access_requests.models import (
     REQUEST_STATUS_SUBMITTED,
     REQUEST_TYPE_GRANT,
     AccessRequest,
+    AccessRequestPermission,
     AccessRequestRole,
 )
-from easyauth.applications.models import ApprovalRule
+from easyauth.access_requests.submission_types import (
+    AccessRequestGrantType,
+    AccessRequestInput,
+    AccessRequestSubmission,
+    AccessRequestSubmissionError,
+    AccessRequestType,
+)
+from easyauth.access_requests.submission_validation import (
+    unique_permissions,
+    unique_roles,
+    validate_submission_scope,
+    validated_request_type,
+)
 from easyauth.audit.services import AuditRecord, AuditService
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
-    from datetime import datetime
-
-    from easyauth.accounts.models import UserMirror
-    from easyauth.applications.models import App, Role
+    from easyauth.applications.models import Permission, Role
     from easyauth.audit.models import JsonValue
 
-type AccessRequestGrantType = Literal["permanent", "timed"]
-
-
-@dataclass(frozen=True, slots=True)
-class AccessRequestSubmissionError(Exception):
-    messages: tuple[str, ...]
-
-    @override
-    def __str__(self) -> str:
-        return "; ".join(self.messages)
-
-
-@dataclass(frozen=True, slots=True)
-class AccessRequestSubmission:
-    user: UserMirror
-    app: App
-    roles: Iterable[Role]
-    grant_type: AccessRequestGrantType
-    grant_expires_at: datetime | None
-    reason: str
-    actor_type: str
-    actor_id: str
-
-
-AccessRequestInput = AccessRequestSubmission
+__all__ = (
+    "AccessRequestApplication",
+    "AccessRequestApplicationError",
+    "AccessRequestGrantType",
+    "AccessRequestInput",
+    "AccessRequestService",
+    "AccessRequestSubmission",
+    "AccessRequestSubmissionError",
+    "AccessRequestType",
+)
 
 
 @final
 class AccessRequestService:
     @staticmethod
     def submit_grant_request(input_data: AccessRequestSubmission) -> AccessRequest:
-        roles = _unique_roles(input_data.roles)
-        _validate_expiration_shape(input_data)
-        _validate_app(input_data.app)
-        _validate_roles(input_data.app, roles)
+        return _submit_access_request(input_data, request_type=REQUEST_TYPE_GRANT)
 
-        with transaction.atomic():
-            access_request = AccessRequest(
-                user=input_data.user,
-                app=input_data.app,
-                request_type=REQUEST_TYPE_GRANT,
-                status=REQUEST_STATUS_SUBMITTED,
-                grant_type=input_data.grant_type,
-                grant_expires_at=input_data.grant_expires_at,
-                reason=input_data.reason,
-            )
-            access_request.full_clean()
-            access_request.save()
-            _create_role_links(access_request, roles)
-            _record_submitted_event(input_data, access_request, roles)
-            return access_request
+    @staticmethod
+    def submit_access_request(input_data: AccessRequestSubmission) -> AccessRequest:
+        return _submit_access_request(input_data, request_type=input_data.request_type)
+
+    @staticmethod
+    def apply_approved_access_request(input_data: AccessRequestApplication) -> AccessRequest:
+        return apply_approved_access_request(input_data)
 
 
-def _validate_expiration_shape(input_data: AccessRequestSubmission) -> None:
-    match input_data.grant_type:
-        case "permanent":
-            if input_data.grant_expires_at is not None:
-                raise AccessRequestSubmissionError(
-                    ("Permanent requests must not include an expiration",),
-                )
-        case "timed":
-            if input_data.grant_expires_at is None:
-                raise AccessRequestSubmissionError(
-                    ("Timed requests must include an expiration",),
-                )
+def _submit_access_request(
+    input_data: AccessRequestSubmission,
+    *,
+    request_type: str,
+) -> AccessRequest:
+    parsed_request_type = validated_request_type(request_type)
+    roles = unique_roles(input_data.roles)
+    permissions = unique_permissions(input_data.permissions)
+    validate_submission_scope(input_data, parsed_request_type, roles, permissions)
 
-
-def _unique_roles(roles: Iterable[Role]) -> tuple[Role, ...]:
-    role_by_id: dict[int, Role] = {}
-    for role in roles:
-        role_by_id[role.id] = role
-    return tuple(role_by_id.values())
-
-
-def _validate_app(app: App) -> None:
-    if not app.is_active:
-        raise AccessRequestSubmissionError(("app is not active",))
-
-
-def _validate_roles(app: App, roles: tuple[Role, ...]) -> None:
-    if not roles:
-        raise AccessRequestSubmissionError(("at least one role is required",))
-
-    errors: list[str] = []
-    for role in roles:
-        role_errors = _role_errors(app, role)
-        errors.extend(f"{role.key}: {message}" for message in role_errors)
-
-    if errors:
-        raise AccessRequestSubmissionError(tuple(errors))
-
-
-def _role_errors(app: App, role: Role) -> list[str]:
-    errors: list[str] = []
-    if role.app != app:
-        errors.append("Role must belong to the access request app.")
-    if not role.requestable:
-        errors.append("Role must be requestable.")
-    if not role.is_active:
-        errors.append("Role must be active.")
-    if not _has_active_approval_rule(app, role):
-        errors.append("Role must have an active approval rule.")
-    return errors
-
-
-def _has_active_approval_rule(app: App, role: Role) -> bool:
-    return ApprovalRule.objects.filter(app=app, role=role, is_active=True).exists()
+    with transaction.atomic():
+        access_request = AccessRequest(
+            user=input_data.user,
+            app=input_data.app,
+            request_type=parsed_request_type,
+            status=REQUEST_STATUS_SUBMITTED,
+            grant_type=input_data.grant_type,
+            grant_expires_at=input_data.grant_expires_at,
+            reason=input_data.reason,
+        )
+        access_request.full_clean()
+        access_request.save()
+        _create_role_links(access_request, roles)
+        _create_permission_links(access_request, permissions)
+        _record_submitted_event(input_data, access_request, roles, permissions)
+        return access_request
 
 
 def _create_role_links(access_request: AccessRequest, roles: tuple[Role, ...]) -> None:
@@ -138,10 +97,21 @@ def _create_role_links(access_request: AccessRequest, roles: tuple[Role, ...]) -
         link.save()
 
 
+def _create_permission_links(
+    access_request: AccessRequest,
+    permissions: tuple[Permission, ...],
+) -> None:
+    for permission in permissions:
+        link = AccessRequestPermission(access_request=access_request, permission=permission)
+        link.full_clean()
+        link.save()
+
+
 def _record_submitted_event(
     input_data: AccessRequestSubmission,
     access_request: AccessRequest,
     roles: tuple[Role, ...],
+    permissions: tuple[Permission, ...],
 ) -> None:
     _ = AuditService.record(
         AuditRecord(
@@ -150,22 +120,28 @@ def _record_submitted_event(
             action="access_request_submitted",
             target_type="access_request",
             target_id=_request_target_id(access_request),
-            metadata=_audit_metadata(input_data, roles),
+            metadata=_audit_metadata(input_data, access_request, roles, permissions),
         ),
     )
 
 
 def _audit_metadata(
     input_data: AccessRequestSubmission,
+    access_request: AccessRequest,
     roles: tuple[Role, ...],
+    permissions: tuple[Permission, ...],
 ) -> dict[str, JsonValue]:
     role_keys: list[JsonValue] = [role.key for role in roles]
+    permission_keys: list[JsonValue] = [permission.key for permission in permissions]
     return {
         "user_id": input_data.user.authentik_user_id,
         "app_key": input_data.app.app_key,
+        "request_type": access_request.request_type,
         "grant_type": input_data.grant_type,
         "roles": role_keys,
         "role_keys": role_keys,
+        "permissions": permission_keys,
+        "permission_keys": permission_keys,
         "reason": input_data.reason,
     }
 

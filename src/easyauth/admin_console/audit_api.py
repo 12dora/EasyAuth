@@ -1,0 +1,110 @@
+from __future__ import annotations
+
+from http import HTTPStatus
+
+from django.db.models import QuerySet
+from django.http import HttpRequest, JsonResponse
+
+from easyauth.admin_console.operation_filters import Page, filter_audit_logs, paginate_queryset
+from easyauth.api.errors import ErrorCode, ErrorResponse, JsonValue, build_error_response
+from easyauth.applications.models import App
+from easyauth.applications.ownership import ConsoleActor, can_manage_app
+from easyauth.audit.models import AuditLog
+
+type ConsoleApiResult = ConsoleActor | JsonResponse
+type AuditQuerysetResult = QuerySet[AuditLog] | JsonResponse
+
+
+def console_audit_logs(request: HttpRequest) -> JsonResponse:
+    match _actor_from_request(request):
+        case ConsoleActor() as actor:
+            pass
+        case JsonResponse() as response:
+            return response
+
+    match _audit_queryset_for_actor(request, actor):
+        case JsonResponse() as response:
+            return response
+        case queryset:
+            pass
+
+    queryset = filter_audit_logs(queryset, request.GET)
+    return _page_response(paginate_queryset(queryset, request.GET))
+
+
+def _audit_item(audit_log: AuditLog) -> dict[str, JsonValue]:
+    return {
+        "actor_type": audit_log.actor_type,
+        "actor_id": audit_log.actor_id,
+        "event_type": audit_log.event_type,
+        "target_type": audit_log.target_type,
+        "target_id": audit_log.target_id,
+        "metadata": audit_log.metadata,
+        "created_at": audit_log.created_at.isoformat(),
+    }
+
+
+def _actor_from_request(request: HttpRequest) -> ConsoleApiResult:
+    user = request.user
+    if not user.is_authenticated:
+        return _error_response(
+            ErrorCode.AUTHENTICATION_FAILED,
+            "控制台登录已失效。",
+            status=HTTPStatus.UNAUTHORIZED,
+        )
+    return ConsoleActor(
+        user_id=user.get_username(),
+        is_superuser=bool(getattr(user, "is_superuser", False)),
+    )
+
+
+def _audit_queryset_for_actor(request: HttpRequest, actor: ConsoleActor) -> AuditQuerysetResult:
+    if actor.is_superuser:
+        return AuditLog.objects.all()
+
+    app_key = request.GET.get("app_key", "")
+    app = App.objects.filter(app_key=app_key).first()
+    if app_key == "" or app is None or not can_manage_app(actor, app):
+        return _error_response(
+            ErrorCode.PERMISSION_DENIED,
+            "只有 App owner 可以查看该 App 审计日志。",
+            status=HTTPStatus.FORBIDDEN,
+        )
+    return AuditLog.objects.filter(metadata__app_key=app.app_key)
+
+
+def _page_response(page: Page[AuditLog]) -> JsonResponse:
+    result: list[JsonValue] = []
+    result.extend(_audit_item(audit_log) for audit_log in page.items)
+    return _json_response({"items": result, "pagination": _pagination_item(page)})
+
+
+def _pagination_item(page: Page[AuditLog]) -> dict[str, JsonValue]:
+    return {
+        "page": page.page,
+        "page_size": page.page_size,
+        "total_items": page.total_items,
+        "total_pages": page.total_pages,
+    }
+
+
+def _error_response(
+    code: ErrorCode,
+    message: str,
+    details: dict[str, JsonValue] | None = None,
+    *,
+    status: HTTPStatus,
+) -> JsonResponse:
+    return _json_response(build_error_response(code, message, details), status=status)
+
+
+def _json_response(
+    payload: dict[str, JsonValue] | ErrorResponse,
+    *,
+    status: HTTPStatus = HTTPStatus.OK,
+) -> JsonResponse:
+    return JsonResponse(
+        payload,
+        status=status,
+        json_dumps_params={"ensure_ascii": False},
+    )

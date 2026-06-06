@@ -6,9 +6,13 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 
-from easyauth.applications import oauth_models
+from easyauth.applications import oauth_models, ops_models
 
 OAuthClientBinding = oauth_models.OAuthClientBinding
+AppMembership = ops_models.AppMembership
+PermissionGroup = ops_models.PermissionGroup
+PermissionTemplateVersion = ops_models.PermissionTemplateVersion
+RoleAccessPolicy = ops_models.RoleAccessPolicy
 
 if TYPE_CHECKING:
     from datetime import date, datetime
@@ -19,6 +23,7 @@ type JsonValue = None | bool | int | float | str | list[JsonValue] | dict[str, J
 class App(models.Model):
     if TYPE_CHECKING:
         id: ClassVar[int]
+        app_id: ClassVar[int]
 
     app_key: models.CharField[str, str] = models.CharField(max_length=64, unique=True)
     name: models.CharField[str, str] = models.CharField(max_length=128)
@@ -76,6 +81,7 @@ AppStaticToken = AppCredential
 class Role(models.Model):
     if TYPE_CHECKING:
         id: ClassVar[int]
+        app_id: ClassVar[int]
 
     app: models.ForeignKey[App, App] = models.ForeignKey(
         App,
@@ -109,15 +115,32 @@ class Role(models.Model):
 
 
 class Permission(models.Model):
+    if TYPE_CHECKING:
+        id: ClassVar[int]
+        app_id: ClassVar[int]
+
     app: models.ForeignKey[App, App] = models.ForeignKey(
         App,
         on_delete=models.CASCADE,
         related_name="permissions",
     )
+    group: models.ForeignKey[PermissionGroup | None, PermissionGroup | None] = (
+        models.ForeignKey(
+            "applications.PermissionGroup",
+            on_delete=models.SET_NULL,
+            related_name="permissions",
+            blank=True,
+            null=True,
+        )
+    )
     key: models.CharField[str, str] = models.CharField(max_length=128)
     name: models.CharField[str, str] = models.CharField(max_length=128)
     description: models.TextField[str, str] = models.TextField(blank=True)
     is_active: models.BooleanField[bool, bool] = models.BooleanField(default=True)
+    deprecated_at: models.DateTimeField[str | date | datetime | None, datetime | None] = (
+        models.DateTimeField(blank=True, null=True)
+    )
+    deprecated_reason: models.TextField[str, str] = models.TextField(blank=True)
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
     )
@@ -137,6 +160,13 @@ class Permission(models.Model):
     @override
     def __str__(self) -> str:
         return f"{self.app.app_key}:{self.key}"
+
+    @override
+    def clean(self) -> None:
+        super().clean()
+        group = self.group
+        if group is not None and group.app_id != self.app_id:
+            raise ValidationError({"group": "Permission group must belong to the same app."})
 
 
 class RolePermission(models.Model):
@@ -181,6 +211,9 @@ class RolePermission(models.Model):
 
 
 class ApprovalRule(models.Model):
+    if TYPE_CHECKING:
+        id: ClassVar[int]
+
     app: models.ForeignKey[App, App] = models.ForeignKey(
         App,
         on_delete=models.CASCADE,

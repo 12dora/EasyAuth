@@ -1,0 +1,391 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EasyAuth 管理控制台</title>
+  {% include "admin_console/_styles.html" %}
+</head>
+<body>
+  <main class="console-shell" data-ops1-console="app-detail">
+    <header class="console-header">
+      <div>
+        <p class="muted">EasyAuth 管理控制台</p>
+        <h1>{{ app.name }}</h1>
+        <p class="muted">{{ app.app_key }}</p>
+      </div>
+      <nav class="app-nav" aria-label="应用">
+        {% for visible_app in visible_apps %}
+          <a href="{% url 'admin_console:app-detail' visible_app.app_key %}"
+             class="{% if visible_app.id == app.id %}active{% endif %}">
+            {{ visible_app.name }}
+          </a>
+        {% endfor %}
+      </nav>
+    </header>
+
+    <div class="console-grid">
+      <section class="console-stack">
+        <div class="console-panel">
+          <h2>配置完整性</h2>
+          <p class="muted">状态：{{ readiness.status }}</p>
+          {% if readiness.issues %}
+            <ul class="issue-list">
+              {% for issue in readiness.issues %}
+                <li>
+                  <code>{{ issue.code }}</code>
+                  {% if issue.subject %}<strong>{{ issue.subject }}</strong>{% endif %}
+                  {{ issue.message }}
+                </li>
+              {% endfor %}
+            </ul>
+          {% else %}
+            <p>ready</p>
+          {% endif %}
+        </div>
+
+        <div class="console-panel">
+          <h2>权限模板</h2>
+          {% if template_result %}
+            <div class="query-result" data-ops1-template-result="{{ template_result.state }}">
+              <p>{{ template_result.message }}</p>
+              {% if template_result.error_code %}
+                <p><code>{{ template_result.error_code }}</code> {{ template_result.error_subject }}</p>
+              {% endif %}
+              {% if template_result.actions %}
+                <table>
+                  <thead>
+                    <tr>
+                      <th>差异</th>
+                      <th>key</th>
+                      <th>父级</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {% for action in template_result.actions %}
+                      <tr>
+                        <td><code>{{ action.action }}</code></td>
+                        <td><code>{{ action.key }}</code></td>
+                        <td><code>{{ action.parent_key }}</code></td>
+                      </tr>
+                    {% endfor %}
+                  </tbody>
+                </table>
+              {% else %}
+                <p>没有差异</p>
+              {% endif %}
+              {% if template_result.state == "preview" and can_manage %}
+                <form method="post" class="compact-form">
+                  {% csrf_token %}
+                  <input type="hidden" name="action" value="apply_permission_template">
+                  <input type="hidden" name="template_format" value="{{ template_result.template_format }}">
+                  <input type="hidden" name="template_content" value="{{ template_result.raw_template }}">
+                  <button type="submit" class="primary">确认导入</button>
+                </form>
+              {% endif %}
+            </div>
+          {% endif %}
+          {% if can_manage %}
+            <form method="post" class="compact-form">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="preview_permission_template">
+              <label>
+                格式
+                <select name="template_format">
+                  <option value="yaml" {% if template_result.template_format != "json" %}selected{% endif %}>YAML</option>
+                  <option value="json" {% if template_result.template_format == "json" %}selected{% endif %}>JSON</option>
+                </select>
+              </label>
+              <label>模板内容 <textarea name="template_content" rows="10" required>{% if template_result %}{{ template_result.raw_template }}{% endif %}</textarea></label>
+              <button type="submit" class="primary">预览差异</button>
+            </form>
+          {% endif %}
+        </div>
+
+        <div class="console-panel">
+          <h2>RolePermission 矩阵</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>分组</th>
+                <th>Permission</th>
+                {% for role in roles %}
+                  <th>{{ role.name }}</th>
+                {% endfor %}
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in matrix_rows %}
+                <tr>
+                  <td><code>{{ row.group_label }}</code></td>
+                  <td><code>{{ row.permission.key }}</code></td>
+                  {% for cell in row.cells %}
+                    <td class="matrix-cell">
+                      <form method="post">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="set_role_permission">
+                        <input type="hidden" name="role_id" value="{{ cell.role.id }}">
+                        <input type="hidden" name="permission_id" value="{{ row.permission.id }}">
+                        <label>
+                          <span class="muted">{{ cell.role.key }}</span>
+                          <input type="checkbox" name="enabled" {% if cell.checked %}checked{% endif %} {% if not can_manage %}disabled{% endif %}>
+                        </label>
+                        {% if can_manage %}
+                          <button type="submit">保存</button>
+                        {% endif %}
+                      </form>
+                    </td>
+                  {% endfor %}
+                </tr>
+              {% empty %}
+                <tr>
+                  <td colspan="3">暂无权限</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+
+        <div class="console-panel">
+          <h2>联调测试台</h2>
+          {% if query_test_result %}
+            <div class="query-result">
+              <p>状态码 {{ query_test_result.status_code }}</p>
+              <p>{{ query_test_result.explanation }}</p>
+              <p>version {{ query_test_result.version }}</p>
+              {% if query_test_result.roles %}
+                <p>roles：
+                  {% for role_key in query_test_result.roles %}
+                    <code>{{ role_key }}</code>
+                  {% endfor %}
+                </p>
+              {% endif %}
+              {% if query_test_result.permissions %}
+                <p>permissions：
+                  {% for permission_key in query_test_result.permissions %}
+                    <code>{{ permission_key }}</code>
+                  {% endfor %}
+                </p>
+              {% endif %}
+              {% if query_test_result.expires_at %}
+                <p>expires_at <code>{{ query_test_result.expires_at|date:"c" }}</code></p>
+              {% endif %}
+            </div>
+          {% endif %}
+          <form method="post" class="compact-form">
+            {% csrf_token %}
+            <input type="hidden" name="action" value="run_permission_query_test">
+            <label>Authentik sub <input name="test_user_id"></label>
+            <label>Bearer token <input type="password" name="test_token" autocomplete="off"></label>
+            <button type="submit" class="primary">执行联调</button>
+          </form>
+        </div>
+
+        <div class="console-panel">
+          <h2>接入说明</h2>
+          <table>
+            <tbody>
+              <tr><th>app_key</th><td><code>{{ app.app_key }}</code></td></tr>
+              <tr><th>API</th><td><code>/api/v1/apps/{{ app.app_key }}/users/{user_id}/permissions</code></td></tr>
+              <tr><th>字段</th><td><code>roles</code> <code>permissions</code> <code>version</code> <code>expires_at</code></td></tr>
+            </tbody>
+          </table>
+          <pre><code>curl -H "Authorization: Bearer ${APP_TOKEN}" \
+  "https://easyauth.example.com/api/v1/apps/{{ app.app_key }}/users/{user_id}/permissions"</code></pre>
+          <pre><code>python
+import urllib.request
+request = urllib.request.Request(
+    "https://easyauth.example.com/api/v1/apps/{{ app.app_key }}/users/{user_id}/permissions",
+    headers={"Authorization": "Bearer " + app_token},
+)</code></pre>
+          <pre><code>typescript
+await fetch("/api/v1/apps/{{ app.app_key }}/users/{user_id}/permissions", {
+  headers: { Authorization: `Bearer ${appToken}` },
+});</code></pre>
+          <p class="muted">
+            {% for role in roles %}
+              <code>{{ role.key }}</code>{% if not forloop.last %} / {% endif %}
+            {% endfor %}
+            {% for row in matrix_rows %}
+              <code>{{ row.permission.key }}</code>{% if not forloop.last %} / {% endif %}
+            {% endfor %}
+          </p>
+        </div>
+      </section>
+
+      <aside class="console-stack">
+        <div class="console-panel">
+          <h2>Role</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>key</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for role in roles %}
+                <tr>
+                  <td><code>{{ role.key }}</code></td>
+                  <td>
+                    {% if role.requestable and role.id not in approval_rule_role_ids %}
+                      缺少审批规则
+                    {% elif role.requestable %}
+                      可申请
+                    {% else %}
+                      不可申请
+                    {% endif %}
+                  </td>
+                </tr>
+              {% empty %}
+                <tr><td colspan="2">暂无角色</td></tr>
+              {% endfor %}
+            </tbody>
+          </table>
+          {% if can_manage %}
+            <form method="post" class="compact-form">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="create_role">
+              <label>key <input name="role_key" required></label>
+              <label>名称 <input name="role_name" required></label>
+              <label><span><input type="checkbox" name="requestable" checked> 可申请</span></label>
+              <button type="submit" class="primary">新增 Role</button>
+            </form>
+          {% endif %}
+        </div>
+
+        <div class="console-panel">
+          <h2>Permission</h2>
+          {% if permission_group_tree_rows %}
+            <table data-ops1-permission-tree="groups">
+              <thead>
+                <tr>
+                  <th>模块</th>
+                  <th>Permission</th>
+                </tr>
+              </thead>
+              <tbody>
+                {% for row in permission_group_tree_rows %}
+                  <tr>
+                    <td><code>{{ row.path }}</code><br>{{ row.group.name }}</td>
+                    <td>
+                      {% for permission_key in row.permission_keys %}
+                        <code>{{ permission_key }}</code>
+                      {% empty %}
+                        <span class="muted">暂无叶子权限</span>
+                      {% endfor %}
+                    </td>
+                  </tr>
+                {% endfor %}
+              </tbody>
+            </table>
+          {% endif %}
+          {% if can_manage %}
+            <form method="post" class="compact-form">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="create_permission">
+              <label>key <input name="permission_key" required></label>
+              <label>名称 <input name="permission_name" required></label>
+              <button type="submit" class="primary">新增 Permission</button>
+            </form>
+          {% endif %}
+        </div>
+
+        <div class="console-panel">
+          <h2>凭据</h2>
+          {% if one_time_secret %}
+            <dl data-ops1-secret="one-time">
+              <dt>{{ one_time_secret.label }}</dt>
+              <dd><code>{{ one_time_secret.value }}</code></dd>
+              {% if one_time_secret.secondary_label %}
+                <dt>{{ one_time_secret.secondary_label }}</dt>
+                <dd><code>{{ one_time_secret.secondary_value }}</code></dd>
+              {% endif %}
+            </dl>
+          {% endif %}
+          <table>
+            <thead>
+              <tr>
+                <th>类型</th>
+                <th>名称</th>
+                <th>状态</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for credential in credentials %}
+                <tr>
+                  <td>{{ credential.credential_type }}</td>
+                  <td>{{ credential.name }}</td>
+                  <td>{% if credential.is_active %}active{% else %}disabled{% endif %}</td>
+                  <td>
+                    {% if can_manage and credential.is_active %}
+                      <form method="post" class="inline-form">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="rotate_static_token">
+                        <input type="hidden" name="credential_id" value="{{ credential.id }}">
+                        <button type="submit">轮换</button>
+                      </form>
+                      <form method="post" class="inline-form">
+                        {% csrf_token %}
+                        <input type="hidden" name="action" value="disable_static_token">
+                        <input type="hidden" name="credential_id" value="{{ credential.id }}">
+                        <button type="submit">禁用</button>
+                      </form>
+                    {% endif %}
+                  </td>
+                </tr>
+              {% endfor %}
+              {% for binding in oauth_bindings %}
+                <tr>
+                  <td>{{ binding.credential_type }}</td>
+                  <td>{{ binding.name }}</td>
+                  <td>{% if binding.is_active %}active{% else %}disabled{% endif %}</td>
+                  <td><code>{{ binding.oauth_application.client_id }}</code></td>
+                </tr>
+              {% endfor %}
+              {% if not credentials and not oauth_bindings %}
+                <tr><td colspan="4">暂无凭据</td></tr>
+              {% endif %}
+            </tbody>
+          </table>
+          {% if can_manage %}
+            <form method="post" class="compact-form">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="create_static_token">
+              <label>名称 <input name="credential_name" required></label>
+              <button type="submit" class="primary">创建静态 token</button>
+            </form>
+            <form method="post" class="compact-form">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="create_oauth_client">
+              <label>名称 <input name="credential_name" required></label>
+              <button type="submit" class="primary">创建 OAuth client</button>
+            </form>
+          {% endif %}
+        </div>
+
+        <div class="console-panel">
+          <h2>ApprovalRule</h2>
+          {% if can_manage %}
+            <form method="post" class="compact-form">
+              {% csrf_token %}
+              <input type="hidden" name="action" value="create_approval_rule">
+              <label>
+                Role
+                <select name="approval_role_id" required>
+                  {% for role in roles %}
+                    <option value="{{ role.id }}">{{ role.key }}</option>
+                  {% endfor %}
+                </select>
+              </label>
+              <label>审批人 userid <input name="approver_userids" required></label>
+              <button type="submit" class="primary">新增 ApprovalRule</button>
+            </form>
+          {% endif %}
+        </div>
+      </aside>
+    </div>
+  </main>
+</body>
+</html>

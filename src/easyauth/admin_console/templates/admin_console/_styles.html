@@ -1,0 +1,254 @@
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #f7f8fa;
+    --surface: #ffffff;
+    --line: #d7dce2;
+    --line-strong: #aab3bf;
+    --text: #1f2933;
+    --muted: #657282;
+    --primary: #0f6b5f;
+    --primary-dark: #0a4c44;
+    --danger: #b42318;
+    --warning: #9a5b00;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+
+  .console-shell {
+    max-width: 1200px;
+    margin: 0 auto;
+    padding: 24px;
+  }
+
+  .console-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+
+  h1,
+  h2,
+  h3 {
+    margin: 0;
+    font-weight: 650;
+    letter-spacing: 0;
+  }
+
+  h1 {
+    font-size: 28px;
+  }
+
+  h2 {
+    font-size: 18px;
+  }
+
+  h3 {
+    font-size: 15px;
+  }
+
+  .muted {
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .app-nav {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    justify-content: flex-end;
+  }
+
+  .app-nav a,
+  button,
+  .button {
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    min-height: 34px;
+    padding: 6px 10px;
+    text-decoration: none;
+    font: inherit;
+    font-size: 13px;
+  }
+
+  button.primary,
+  .app-nav a.active {
+    background: var(--primary);
+    border-color: var(--primary);
+    color: #ffffff;
+  }
+
+  button.primary:hover,
+  .app-nav a.active:hover {
+    background: var(--primary-dark);
+  }
+
+  .console-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 360px;
+    gap: 16px;
+  }
+
+  .console-stack {
+    display: grid;
+    gap: 16px;
+  }
+
+  .console-panel {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 16px;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 12px;
+    table-layout: fixed;
+  }
+
+  th,
+  td {
+    border-bottom: 1px solid var(--line);
+    padding: 9px 8px;
+    text-align: left;
+    vertical-align: middle;
+    overflow-wrap: anywhere;
+    font-size: 13px;
+  }
+
+  th {
+    color: var(--muted);
+    font-weight: 600;
+  }
+
+  .issue-list {
+    display: grid;
+    gap: 8px;
+    margin: 12px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+
+  .issue-list li {
+    border-left: 3px solid var(--warning);
+    padding: 8px 10px;
+    background: #fff9ed;
+  }
+
+  code {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+  }
+
+  pre {
+    margin: 12px 0 0;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    overflow-x: auto;
+    background: #f3f5f7;
+  }
+
+  .query-result {
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    margin-top: 12px;
+    padding: 10px;
+    background: #f8fbff;
+  }
+
+  .query-result p {
+    margin: 6px 0;
+  }
+
+  form.compact-form {
+    display: grid;
+    gap: 10px;
+    margin-top: 12px;
+  }
+
+  label {
+    display: grid;
+    gap: 5px;
+    font-size: 13px;
+  }
+
+  input,
+  select {
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
+    min-height: 34px;
+    padding: 6px 8px;
+    font: inherit;
+  }
+
+  input[type="checkbox"] {
+    min-height: 0;
+  }
+
+  .matrix-cell form {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .inline-form {
+    display: inline-flex;
+    margin-right: 6px;
+  }
+
+  dl {
+    display: grid;
+    grid-template-columns: max-content minmax(0, 1fr);
+    gap: 8px 12px;
+    margin: 12px 0;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: #eef8f6;
+  }
+
+  dt {
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  dd {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+
+  @media (max-width: 860px) {
+    .console-shell {
+      padding: 16px;
+    }
+
+    .console-header,
+    .console-grid {
+      display: grid;
+      grid-template-columns: 1fr;
+    }
+
+    .app-nav {
+      justify-content: flex-start;
+    }
+  }
+</style>

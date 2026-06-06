@@ -1,0 +1,101 @@
+from __future__ import annotations
+
+from http import HTTPStatus
+from typing import ClassVar, Final
+
+import pytest
+from django.contrib.auth.models import User
+from django.test import Client
+from pydantic import BaseModel, ConfigDict
+
+from easyauth.access_requests.models import AccessRequest
+from easyauth.accounts.models import UserMirror
+from easyauth.applications.models import App
+from easyauth.audit.models import AuditLog
+
+pytestmark = pytest.mark.django_db
+
+LOGIN_VALUE: Final = "console-ops3-contract"
+ACCESS_REQUESTS_API_URL: Final = "/console/api/v1/operations/access-requests"
+DEPENDENCY_HEALTH_API_URL: Final = "/console/api/v1/operations/dependency-health"
+
+
+class _AccessRequestOperationItem(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+
+    id: int
+    dingtalk_process_instance_id: str | None
+    dingtalk_callback_path: str
+    dingtalk_callback_status: str | None
+    dingtalk_callback_received_at: str | None
+
+
+class _AccessRequestsResponse(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+
+    items: tuple[_AccessRequestOperationItem, ...]
+
+
+class _DependencyHealthComponent(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+
+    status: str
+
+
+class _DependencyHealthResponse(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+
+    authentik: _DependencyHealthComponent
+    dingtalk: _DependencyHealthComponent
+    celery: _DependencyHealthComponent
+
+
+def test_ops3_access_requests_include_dingtalk_process_and_callback_fields() -> None:
+    # Given: 一条运营申请已绑定 DingTalk 审批实例。
+    client = _logged_in_superuser("ops3-contract-access-admin")
+    user = UserMirror.objects.create(authentik_user_id="ops3-contract-user")
+    app = App.objects.create(app_key="ops3-contract-app", name="Contract App")
+    access_request = AccessRequest.objects.create(
+        user=user,
+        app=app,
+        reason="需要临时权限",
+        dingtalk_process_instance_id="proc-ops3-contract",
+    )
+
+    # When: 系统管理员查询 access-requests 运营列表。
+    response = client.get(ACCESS_REQUESTS_API_URL, {"app_key": app.app_key})
+
+    # Then: 响应包含 DingTalk process 和 callback 字段, 并保留原有基础字段。
+    body = _AccessRequestsResponse.model_validate_json(response.content)
+    assert response.status_code == HTTPStatus.OK
+    assert body.items[0].id == access_request.id
+    assert body.items[0].dingtalk_process_instance_id == "proc-ops3-contract"
+    assert body.items[0].dingtalk_callback_path == "/integrations/dingtalk/callback"
+    assert body.items[0].dingtalk_callback_status is None
+    assert body.items[0].dingtalk_callback_received_at is None
+
+
+def test_ops3_dependency_health_read_writes_audit() -> None:
+    # Given: 系统管理员准备读取 dependency health。
+    client = _logged_in_superuser("ops3-contract-health-admin")
+
+    # When: 系统管理员读取 dependency health API。
+    response = client.get(DEPENDENCY_HEALTH_API_URL)
+
+    # Then: API 返回健康列表并写入读取审计。
+    body = _DependencyHealthResponse.model_validate_json(response.content)
+    audit = AuditLog.objects.get(event_type="dependency_health_read")
+    assert response.status_code == HTTPStatus.OK
+    assert body.authentik.status == "unknown"
+    assert body.dingtalk.status == "unknown"
+    assert body.celery.status == "unknown"
+    assert audit.actor_type == "admin"
+    assert audit.actor_id == "ops3-contract-health-admin"
+    assert audit.target_type == "dependency_health"
+
+
+def _logged_in_superuser(username: str) -> Client:
+    _ = User.objects.create_superuser(username=username, password=LOGIN_VALUE)
+    client = Client(HTTP_HOST="localhost")
+    assert client.login(username=username, password=LOGIN_VALUE) is True
+    return client

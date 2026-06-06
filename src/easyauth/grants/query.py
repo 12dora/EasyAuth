@@ -68,19 +68,24 @@ def resolve_user_permissions(*, user: UserSelector, app: App) -> PermissionSnaps
     roles = tuple(
         link.role.key
         for link in AccessGrantRole.objects.select_related("role")
-        .filter(grant=latest_grant)
+        .filter(grant=latest_grant, role__is_active=True)
         .order_by("role__key")
     )
     direct_permission_keys = {
         link.permission.key
         for link in AccessGrantPermission.objects.select_related("permission").filter(
             grant=latest_grant,
+            permission__is_active=True,
+            permission__deprecated_at__isnull=True,
         )
     }
     role_permission_keys = {
         link.permission.key
         for link in RolePermission.objects.select_related("permission").filter(
             role__access_grant_roles__grant=latest_grant,
+            role__is_active=True,
+            permission__is_active=True,
+            permission__deprecated_at__isnull=True,
         )
     }
     return PermissionSnapshot(

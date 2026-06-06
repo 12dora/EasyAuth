@@ -11,7 +11,13 @@ from django.utils import timezone
 
 from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode
-from easyauth.applications.models import App, AppStaticToken, Permission, Role, RolePermission
+from easyauth.applications.models import (
+    App,
+    AppStaticToken,
+    Permission,
+    Role,
+    RolePermission,
+)
 from easyauth.applications.services import StaticTokenService
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import (

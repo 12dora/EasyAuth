@@ -643,3 +643,151 @@ Django 工程和质量门槛
 - CRM 试点 app owner 是谁？首批审批路由、roles、permissions 和 approvers 是什么？
 - 生产域名、HTTPS 证书和网络访问策略是什么？
 - 试点上线前需要满足什么审计日志保留周期和导出要求？
+
+## 2026-06-06 当前进度快照
+
+### 当前状态
+
+- 状态：暂停，不能标记为完成。
+- 本轮已按 TDD 推进 OPS-1、OPS-2、OPS-3 和 OPS-4 的后端能力，并使用多个子 Agent 并行完成实现、QA 和复审。
+- QA 执行复审通过，但目标约束、安全、上下文契约和代码质量复审均发现阻塞项。
+- 下一次继续开发时，应先处理下方阻塞项，再重新跑完整质量门和复审。
+
+### 已实现范围
+
+- OPS-1 管理端私有 API：App 列表与详情、配置状态、成员管理、审批规则、凭据管理、权限联调、权限模板预览与确认、模板版本、权限树、权限组、角色、权限、角色权限矩阵。
+- OPS-2 门户 API：我的授权、即将过期授权、我的申请、直接权限申请、分页。
+- OPS-3 运营 API：申请和授权列表筛选、失败授权重试、紧急撤权、依赖健康、审计查询。
+- OPS-4 生命周期申请：change、revoke、renew 提交与审批后应用、DingTalk 模拟回调、回调签名、process instance ID 唯一约束、高风险角色续期最长时长策略。
+- 安全/一致性修复：developer 写权限边界、矩阵保存原子性、retry 幂等、inactive role 公共权限查询过滤、审批应用阶段目标二次校验。
+
+### 已通过验证
+
+- `.venv/bin/ruff check .`
+- `.venv/bin/basedpyright`
+- `.venv/bin/python manage.py check`
+- `.venv/bin/python manage.py makemigrations --check --dry-run`
+- `.venv/bin/python manage.py migrate --check`
+- `.venv/bin/pytest -q`，结果为 `346 passed`
+- `git diff --check`
+- Python 有效代码行扫描通过，单个 Python 文件未超过 250 pure LOC。
+- QA 子 Agent 额外执行 OPS-1、OPS-2、OPS-3、OPS-4 聚焦测试和本地 HTTP 冒烟检查，未发现运行阻塞。
+
+### 历史未完成或受阻事项（2026-06-06 复审前）
+
+- in-app Browser 对 `http://127.0.0.1:8000/` 被 URL 策略阻止，未完成真实浏览器截图/交互冒烟检查。
+- 下列契约差异和复审未通过结论为本轮恢复开发前的历史状态，已在 2026-06-06 恢复开发和最终复审中逐项处理。
+- 当前状态以本文后续“2026-06-06 最终复审快照”为准。
+
+### 历史优先阻塞项（已在 2026-06-06 恢复开发中处理）
+
+1. OPS-1 API 契约对齐：
+   - 补齐 `PATCH /permission-groups/{group_key}`、`PATCH /roles/{role_key}`、`PATCH /permissions/{permission_key}`。
+   - 审批规则 API 支持 `target_type`/`target_key`，并支持 permission 目标规则创建、查询和更新。
+   - 列表 API 与文档的分页和 `data + pagination` 响应结构对齐，或同步修订文档。
+2. OPS-3 失败重试：
+   - `grant_failed` 重试需要支持 change、revoke、renew，不能只走 `create_grant`。
+   - 重试应复用审批应用语义，并补生命周期失败重试幂等测试。
+3. 门户授权过滤：
+   - `/portal/api/v1/me/grants` 需要过滤 inactive role 及其 role-derived permissions。
+4. DingTalk 回调安全：
+   - 签名校验增加 timestamp 新鲜度窗口，拒绝过旧和过未来回调。
+   - approved 标记和授权应用需要更一致的事务边界，避免 rejected 回调覆盖 approved 但尚未应用完成的状态窗口。
+5. 审批规则过期校验：
+   - 应用阶段需要处理目标 ApprovalRule 被删除或改绑到其他目标后的“零规则”场景，必须进入 `grant_failed` 且不创建或变更授权。
+6. 权限目录写接口质量：
+   - 已废弃权限重新启用时，要清理 `deprecated_at`/`deprecated_reason`，或明确拒绝重新启用。
+   - 权限组移动非叶子节点时，要递归更新子树 depth，或拒绝移动有子节点的组。
+   - 权限矩阵乐观版本复核需放入事务或锁内，并补并发测试。
+7. 文档契约差距：
+   - AppMembership 写权限需与文档“仅系统管理员”对齐，或修订文档和需求。
+   - 权限模板预览请求字段需要兼容 `format`/`content`，确认响应需要补齐文档字段。
+   - 凭据禁用接口需要支持通用路径、禁用 reason 和 OAuth client 禁用。
+   - 运营看板需要返回 DingTalk process instance、最近回调时间和处理结果；依赖健康检查是否审计需要与需求对齐。
+
+### 下次继续建议
+
+- 继续使用 TDD：每个阻塞项先补失败测试，再做最小修复。
+- 优先处理安全阻塞项和文档契约阻塞项，再处理浏览器冒烟检查。
+- 修复后重新运行完整质量门，并重新启动目标、代码质量、安全、QA、上下文五路复审。
+
+## 2026-06-06 恢复开发完成快照
+
+### 当前状态
+
+- 状态：本轮恢复开发已完成实现、门禁和最终复审；按用户要求，更新本文档后暂停，等待下一步指令。
+- 本轮继续使用 TDD 和并行子 Agent，已关闭完成或失效的子 Agent；当前不保留未使用后台任务。
+- 未执行提交、推送或发布动作。
+
+### 本轮已完成修复
+
+- 门户授权列表过滤 inactive Role 及其 role-derived permissions，避免 `/portal/api/v1/me/grants` 泄漏已停用角色权限。
+- DingTalk callback 签名增加 timestamp 新鲜度校验，并防止迟到 rejected callback 覆盖已经进入 approved、grant_applied 或 grant_failed 的申请状态。
+- 审批应用阶段补齐目标二次校验：change、revoke、renew 的 Role/Permission 被停用、审批规则被删除或改绑后，申请进入 `grant_failed` 且不变更授权事实。
+- `grant_failed` retry 支持 change、revoke、renew；retry 前 lifecycle 目标已失效时返回语义错误并保持授权事实不变，同时保持 `grant_applied` 重复 retry 幂等。
+- Admin Console 契约补齐：
+  - list 响应兼容 `items` 与 `data`。
+  - AppMembership 写入改为 sysadmin-only。
+  - 权限模板 preview 支持 `format`/`content`，同时保留旧字段兼容。
+  - 通用 credentials disable 支持 static token 与 OAuth client，并记录 reason。
+  - catalog 支持 key-based PATCH route。
+  - App list 支持 `page`、`page_size`、`status`、`owner_user_id` 与 `pagination`，并保留 `items`/`data` 兼容。
+  - App detail 返回负责人、开发者、Role/Permission 数量、active 凭据数量、最新模板版本和配置摘要。
+  - ApprovalRule 支持 `target_type`/`target_key`，包括 permission target。
+  - operations access-requests 返回 DingTalk process 与 callback 兼容字段。
+  - dependency-health 返回 list 与顶层依赖 map 兼容字段，并写入读取审计。
+  - retry-grant 响应补齐 `request_id`，emergency revoke 响应补齐 `status: accepted`。
+  - OAuth client 通用禁用接口保持历史 binding 和 OAuth application，仅标记 inactive 并记录 reason。
+  - RolePermission matrix 兼容 `permission_tree`、key-based `assignments`、`base_version`、`add`/`remove`，并同时记录 `role_permission_matrix_changed` 审计事件。
+- 权限目录质量修复：
+  - deprecated Permission 拒绝直接重新启用，避免 console 与 runtime 查询状态漂移。
+  - `deprecated_reason` 与 `is_active=true` 同请求时最终仍强制 inactive，matrix 也拒绝 active 但已 deprecated 的 Permission。
+  - PermissionGroup 移动后递归更新子树 depth。
+  - PermissionGroup 移动若后代 depth 更新失败，会在事务中回滚已移动节点和后代，避免 422 后部分落库。
+  - RolePermission matrix 在事务内锁定并复核版本。
+  - permission tree 的 `children` 兼容 permission 节点，同时保留旧 `permissions` 字段。
+- Portal 分页响应补齐 `data` 字段，与 `items` 保持兼容。
+- API 文档中 RolePermission matrix 的 `version`/`base_version` 示例已改为字符串，匹配当前 hash 版本实现。
+
+### 已通过验证
+
+- `.venv/bin/ruff check .`：通过。
+- `.venv/bin/basedpyright`：`0 errors, 0 warnings, 0 notes`。
+- `.venv/bin/python manage.py check`：通过。
+- `.venv/bin/python manage.py makemigrations --check --dry-run`：`No changes detected`。
+- `.venv/bin/python manage.py migrate --check`：通过。
+- `git diff --check`：通过。
+- Python pure LOC 扫描：未发现超过 250 行的非 migration Python 文件。
+- `.venv/bin/pytest -q`：`396 passed`。
+- 受影响 Admin Console focused suite：`49 passed`；本次 lifecycle/retry focused suite：`79 passed`。
+- 五路最终复审曾发现 PermissionGroup 移动回滚和 renew/revoke stale target 缺口；两项均已按 TDD 补回归测试并修复。
+
+### 仍需说明的限制
+
+- 本线程此前尝试 in-app Browser 打开 `http://127.0.0.1:8000/` 被 URL 策略阻止；本轮未重新尝试 localhost/127.0.0.1 浏览器冒烟。当前可用证据来自 HTTP/API 测试、Django 检查和 pytest 行为测试。
+- 仍未执行真实 DingTalk、真实 Authentik 或生产环境联调；当前覆盖基于本地模型、mock callback 和集成测试。
+
+### 后续建议
+
+- 若继续推进 MVP，应优先补试点接入文档和可运行的端到端冒烟入口。
+- 若环境允许访问本地浏览器目标，再补员工门户真实浏览器交互截图/冒烟记录。
+
+## 2026-06-06 最终复审快照
+
+### 当前结论
+
+- 实现契约无新增阻塞；后续目标/安全复审指出的 renew/revoke stale target 缺口已修复并通过回归测试。
+- 质量门禁最新结果：`ruff` 通过、`basedpyright` 0 errors、Django check/migration/diff check 通过、全量 pytest `396 passed`。
+- 已关闭当前任务使用的子 Agent；未执行提交、推送或发布。
+
+### 最终补齐项
+
+- App list/detail、配置完整性、permission tree、permission group/permission key-based payload、RolePermission matrix 主要文档契约已实现或兼容。
+- RolePermission matrix 文档示例的 `version`/`base_version` 已改为字符串，避免调用方按数字版本提交。
+- PermissionGroup 移动失败回滚已补测试，避免返回 422 时留下 parent/depth 部分更新。
+- renew/revoke 审批应用和 retry-grant 均会重验保留或续期目标，避免 stale Role/Permission 或 stale ApprovalRule 继续改写授权事实。
+
+### 剩余限制
+
+- 本线程仍未完成真实浏览器冒烟；此前 in-app Browser 对 `http://127.0.0.1:8000/` 被 URL 策略阻止。
+- 仍未执行真实 DingTalk、真实 Authentik 或生产环境联调。

@@ -16,7 +16,7 @@ from easyauth.grants.models import AccessGrant
 pytestmark = pytest.mark.django_db
 
 
-@pytest.mark.parametrize("request_type", ["grant", "change", "revoke"])
+@pytest.mark.parametrize("request_type", ["grant", "change", "revoke", "renew"])
 def test_request_type_accepts_supported_values_when_access_request_is_cleaned(
     request_type: str,
 ) -> None:

@@ -35,6 +35,7 @@ INSTALLED_APPS: list[str] = [
     "easyauth.access_requests.apps.AccessRequestsConfig",
     "easyauth.grants.apps.GrantsConfig",
     "easyauth.portal.apps.PortalConfig",
+    "easyauth.admin_console.apps.AdminConsoleConfig",
 ]
 
 MIDDLEWARE: list[str] = [
@@ -180,6 +181,7 @@ EASYAUTH_AUTHENTIK_OIDC_HTTP_TIMEOUT_SECONDS = float(
     os.environ.get("EASYAUTH_AUTHENTIK_OIDC_HTTP_TIMEOUT_SECONDS", "5"),
 )
 EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS = 300
+EASYAUTH_DINGTALK_CALLBACK_SECRET = os.environ.get("EASYAUTH_DINGTALK_CALLBACK_SECRET", "")
 
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")

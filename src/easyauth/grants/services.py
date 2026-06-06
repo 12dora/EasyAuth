@@ -123,6 +123,7 @@ class GrantService:
         app: App,
         actor_type: str,
         actor_id: str,
+        reason: str = "",
     ) -> AccessGrant | None:
         with transaction.atomic():
             grant = current_grant(user, app)
@@ -144,6 +145,7 @@ class GrantService:
                 action="grant_revoked",
                 actor_type=actor_type,
                 actor_id=actor_id,
+                reason=reason,
             )
             return grant
 

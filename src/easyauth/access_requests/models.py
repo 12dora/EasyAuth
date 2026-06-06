@@ -15,15 +15,18 @@ if TYPE_CHECKING:
 REQUEST_TYPE_GRANT: Final = "grant"
 REQUEST_TYPE_CHANGE: Final = "change"
 REQUEST_TYPE_REVOKE: Final = "revoke"
+REQUEST_TYPE_RENEW: Final = "renew"
 REQUEST_TYPE_CHOICES: Final[tuple[tuple[str, str], ...]] = (
     (REQUEST_TYPE_GRANT, "grant"),
     (REQUEST_TYPE_CHANGE, "change"),
     (REQUEST_TYPE_REVOKE, "revoke"),
+    (REQUEST_TYPE_RENEW, "renew"),
 )
 REQUEST_TYPE_VALUES: Final[tuple[str, ...]] = (
     REQUEST_TYPE_GRANT,
     REQUEST_TYPE_CHANGE,
     REQUEST_TYPE_REVOKE,
+    REQUEST_TYPE_RENEW,
 )
 
 REQUEST_STATUS_SUBMITTED: Final = "submitted"
@@ -100,6 +103,12 @@ class AccessRequest(models.Model):
         str | date | datetime | None,
         datetime | None,
     ] = models.DateTimeField(blank=True, null=True)
+    dingtalk_process_instance_id: models.CharField[str | None, str | None] = models.CharField(
+        max_length=128,
+        unique=True,
+        blank=True,
+        null=True,
+    )
 
     class Meta:
         constraints: ClassVar[list[models.BaseConstraint]] = [

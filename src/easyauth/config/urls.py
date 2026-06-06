@@ -14,6 +14,8 @@ urlpatterns = [
     path("admin/", admin.site.urls),
     path("auth/", include("easyauth.accounts.urls")),
     path("api/v1/", include("easyauth.api.urls")),
+    path("console/", include("easyauth.admin_console.urls")),
+    path("integrations/dingtalk/", include("easyauth.integrations.dingtalk.urls")),
     path("oauth/token", TokenView.as_view(), name="oauth-token"),
     path("portal/", include("easyauth.portal.urls")),
     path("health/", health, name="health"),

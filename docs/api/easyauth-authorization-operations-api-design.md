@@ -563,7 +563,7 @@ GET /console/api/v1/apps/{app_key}/role-permission-matrix
       "permission_key": "customer:view:department"
     }
   ],
-  "version": 7
+  "version": "8b7f3a0c9e..."
 }
 ```
 
@@ -574,7 +574,7 @@ PATCH /console/api/v1/apps/{app_key}/role-permission-matrix
 Content-Type: application/json
 
 {
-  "base_version": 7,
+  "base_version": "8b7f3a0c9e...",
   "add": [
     {
       "role_key": "sales_manager",

@@ -1,0 +1,273 @@
+from __future__ import annotations
+
+from http import HTTPStatus
+from json import dumps
+from re import escape, findall, search
+from typing import Final, Protocol
+
+import pytest
+from django.contrib.auth.models import User
+from django.test import Client
+
+from easyauth.accounts.models import UserMirror
+from easyauth.api.errors import ErrorCode
+from easyauth.applications.models import App, AppMembership, Permission, Role, RolePermission
+from easyauth.applications.services import StaticTokenService
+from easyauth.audit.models import AuditLog
+from easyauth.grants.models import AccessGrant, AccessGrantRole
+
+pytestmark = pytest.mark.django_db
+
+LOGIN_VALUE: Final = "console-login"
+QUERY_TEST_API_URL: Final = "/console/api/v1/apps/{app_key}/permission-query-tests"
+
+
+class HttpResponseLike(Protocol):
+    content: bytes
+
+
+def test_ops1_console_query_tester_runs_real_permission_query_without_storing_token() -> None:
+    # Given: App 有静态 token, 测试用户有 active grant 和角色权限。
+    client = _logged_in_client("owner-ops1-query-success")
+    app = _owned_app("ops1-query-success", "owner-ops1-query-success")
+    issue = StaticTokenService.create_token(app=app, name="query tester")
+    user = UserMirror.objects.create(authentik_user_id="query-user")
+    role = Role.objects.create(app=app, key="auditor", name="Auditor")
+    permission = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
+    _ = RolePermission.objects.create(role=role, permission=permission)
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantRole.objects.create(grant=grant, role=role)
+
+    # When: owner 在联调测试台粘贴 token 并查询测试用户。
+    response = client.post(
+        f"/console/apps/{app.app_key}/",
+        {
+            "action": "run_permission_query_test",
+            "test_user_id": user.authentik_user_id,
+            "test_token": issue.plaintext_token,
+        },
+    )
+
+    # Then: 页面展示真实权限结果, 审计 metadata 不保存明文 token。
+    html = response.content.decode()
+    assert response.status_code == HTTPStatus.OK
+    assert "状态码 200" in html
+    assert "auditor" in html
+    assert "invoice.read" in html
+    audit_log = AuditLog.objects.get(event_type="permission_query_test_executed")
+    assert issue.plaintext_token not in str(audit_log.metadata)
+
+
+def test_ops1_console_query_tester_explains_401_403_and_422_errors() -> None:
+    # Given: owner 有目标 App, 另一个 App 有不同 token。
+    client = _logged_in_client("owner-ops1-query-errors")
+    app = _owned_app("ops1-query-errors", "owner-ops1-query-errors")
+    other_app = App.objects.create(app_key="ops1-query-other", name="Other")
+    other_issue = StaticTokenService.create_token(app=other_app, name="other token")
+
+    # When: 分别提交空用户、无效 token、跨 App token。
+    missing_user = client.post(
+        f"/console/apps/{app.app_key}/",
+        {"action": "run_permission_query_test", "test_user_id": "", "test_token": "eat_bad"},
+    )
+    invalid_token = client.post(
+        f"/console/apps/{app.app_key}/",
+        {
+            "action": "run_permission_query_test",
+            "test_user_id": "query-user",
+            "test_token": "eat_bad",
+        },
+    )
+    mismatched_app = client.post(
+        f"/console/apps/{app.app_key}/",
+        {
+            "action": "run_permission_query_test",
+            "test_user_id": "query-user",
+            "test_token": other_issue.plaintext_token,
+        },
+    )
+
+    # Then: 页面给出 422、401、403 的中文解释。
+    assert "状态码 422" in missing_user.content.decode()
+    assert "测试用户不能为空" in missing_user.content.decode()
+    assert "状态码 401" in invalid_token.content.decode()
+    assert "缺失或无效凭据" in invalid_token.content.decode()
+    assert "状态码 403" in mismatched_app.content.decode()
+    assert "凭据绑定 App 与路径 app_key 不一致" in mismatched_app.content.decode()
+
+
+def test_ops1_console_query_tester_explains_internal_permission_query_error() -> None:
+    # Given: App token 有效, 但测试用户数据状态异常会触发权限查询内部校验失败。
+    client = _logged_in_client("owner-ops1-query-internal-error")
+    app = _owned_app("ops1-query-internal-error", "owner-ops1-query-internal-error")
+    issue = StaticTokenService.create_token(app=app, name="query tester")
+    user = UserMirror.objects.create(authentik_user_id="query-broken-user", status="unsupported")
+    grant = AccessGrant.objects.create(user=user, app=app)
+    role = Role.objects.create(app=app, key="auditor", name="Auditor")
+    _ = AccessGrantRole.objects.create(grant=grant, role=role)
+
+    # When: owner 在联调测试台查询该用户。
+    response = client.post(
+        f"/console/apps/{app.app_key}/",
+        {
+            "action": "run_permission_query_test",
+            "test_user_id": user.authentik_user_id,
+            "test_token": issue.plaintext_token,
+        },
+    )
+
+    # Then: 页面展示 500 错误解释, 且审计 metadata 不保存明文 token。
+    html = response.content.decode()
+    assert response.status_code == HTTPStatus.OK
+    assert "状态码 500" in html
+    assert "权限查询内部错误" in html
+    audit_log = AuditLog.objects.get(event_type="permission_query_test_executed")
+    assert issue.plaintext_token not in str(audit_log.metadata)
+
+
+def test_ops1_console_integration_guide_contains_current_app_examples() -> None:
+    # Given: 应用负责人打开 App 详情页。
+    client = _logged_in_client("owner-ops1-guide")
+    app = _owned_app("ops1-guide", "owner-ops1-guide")
+    _ = Role.objects.create(app=app, key="operator", name="Operator")
+    _ = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
+
+    # When: 页面渲染接入说明。
+    response = client.get(f"/console/apps/{app.app_key}/")
+
+    # Then: 接入说明包含 app_key、公共 API、curl、Python 和 TypeScript 示例。
+    html = response.content.decode()
+    assert response.status_code == HTTPStatus.OK
+    assert app.app_key in html
+    assert f"/api/v1/apps/{app.app_key}/users/{{user_id}}/permissions" in html
+    assert "curl" in html
+    assert "python" in html
+    assert "typescript" in html
+    assert "invoice.read" in html
+
+
+@pytest.mark.parametrize("membership_role", ["owner", "developer"])
+def test_ops1_console_query_test_api_allows_owner_and_developer(
+    membership_role: str,
+) -> None:
+    # Given: App 成员有 owner/developer 角色, 且测试用户有有效角色权限。
+    username = f"ops1-query-api-{membership_role}"
+    client = _logged_in_client(username)
+    app = _member_app(f"ops1-query-api-{membership_role}", username, membership_role)
+    issue = StaticTokenService.create_token(app=app, name="query api")
+    user = UserMirror.objects.create(authentik_user_id=f"query-api-user-{membership_role}")
+    role = Role.objects.create(app=app, key=f"auditor-{membership_role}", name="Auditor")
+    permission = Permission.objects.create(
+        app=app,
+        key=f"invoice.{membership_role}.read",
+        name="Read invoices",
+    )
+    _ = RolePermission.objects.create(role=role, permission=permission)
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantRole.objects.create(grant=grant, role=role)
+
+    # When: 成员通过 private console API 发起联调。
+    response = client.post(
+        _query_test_api_url(app.app_key),
+        data=dumps(
+            {
+                "user_id": user.authentik_user_id,
+                "token": issue.plaintext_token,
+            },
+        ),
+        content_type="application/json",
+    )
+
+    # Then: API 返回真实权限结果, 并只记录一次不含明文 token 的审计。
+    assert response.status_code == HTTPStatus.OK
+    assert _json_bool(response, "allowed") is True
+    assert _json_string_array(response, "roles") == [role.key]
+    assert _json_string_array(response, "permissions") == [permission.key]
+    audit_log = AuditLog.objects.get(event_type="permission_query_test_executed")
+    assert audit_log.actor_id == username
+    assert issue.plaintext_token not in str(audit_log.metadata)
+
+
+def test_ops1_console_query_test_api_rejects_non_member() -> None:
+    # Given: 登录用户不是目标 App 成员。
+    client = _logged_in_client("ops1-query-api-outsider")
+    app = App.objects.create(app_key="ops1-query-api-denied", name="Denied")
+
+    # When: 非成员调用 App 的联调 API。
+    response = client.post(
+        _query_test_api_url(app.app_key),
+        data=dumps({"user_id": "query-user", "token": "eat_bad"}),
+        content_type="application/json",
+    )
+
+    # Then: API 返回统一权限错误, 且不写入联调审计。
+    assert response.status_code == HTTPStatus.FORBIDDEN
+    assert _json_string(response, "code") == ErrorCode.PERMISSION_DENIED
+    assert AuditLog.objects.count() == 0
+
+
+def test_ops1_console_query_test_api_returns_structured_validation_errors() -> None:
+    # Given: owner 可访问目标 App。
+    client = _logged_in_client("ops1-query-api-validation")
+    app = _owned_app("ops1-query-api-validation", "ops1-query-api-validation")
+
+    # When: 分别提交空 user_id 和非法 JSON 请求体。
+    empty_user = client.post(
+        _query_test_api_url(app.app_key),
+        data=dumps({"user_id": " ", "token": "eat_bad"}),
+        content_type="application/json",
+    )
+    invalid_payload = client.post(
+        _query_test_api_url(app.app_key),
+        data="{",
+        content_type="application/json",
+    )
+
+    # Then: API 使用统一错误结构返回 422。
+    assert empty_user.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert _json_string(empty_user, "code") == ErrorCode.VALIDATION_ERROR
+    assert invalid_payload.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert _json_string(invalid_payload, "code") == ErrorCode.VALIDATION_ERROR
+
+
+def _query_test_api_url(app_key: str) -> str:
+    return QUERY_TEST_API_URL.format(app_key=app_key)
+
+
+def _member_app(app_key: str, user_id: str, role: str) -> App:
+    app = App.objects.create(app_key=app_key, name=app_key)
+    _ = AppMembership.objects.create(app=app, user_id=user_id, role=role)
+    return app
+
+
+def _json_string(response: HttpResponseLike, key: str) -> str:
+    return _json_field_match(response, key, r'"{key}"\s*:\s*"([^"]*)"')
+
+
+def _json_string_array(response: HttpResponseLike, key: str) -> list[str]:
+    array_content = _json_field_match(response, key, r'"{key}"\s*:\s*\[(.*?)\]')
+    return findall(r'"([^"]*)"', array_content)
+
+
+def _json_bool(response: HttpResponseLike, key: str) -> bool:
+    return _json_field_match(response, key, r'"{key}"\s*:\s*(true|false)') == "true"
+
+
+def _json_field_match(response: HttpResponseLike, key: str, pattern: str) -> str:
+    match = search(pattern.format(key=escape(key)), response.content.decode())
+    if match is None:
+        raise AssertionError(response.content.decode())
+    return match.group(1)
+
+
+def _owned_app(app_key: str, owner_user_id: str) -> App:
+    app = App.objects.create(app_key=app_key, name=app_key)
+    _ = AppMembership.objects.create(app=app, user_id=owner_user_id, role="owner")
+    return app
+
+
+def _logged_in_client(username: str) -> Client:
+    _ = User.objects.create_user(username=username, password=LOGIN_VALUE)
+    client = Client(HTTP_HOST="localhost")
+    assert client.login(username=username, password=LOGIN_VALUE) is True
+    return client
