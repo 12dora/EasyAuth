@@ -4,6 +4,10 @@
 
 1. [EasyAuth 架构设计文档](architecture/easyauth-architecture-design.md)
 2. [EasyAuth MVP 实施计划](plans/easyauth-mvp-implementation-plan.md)
+3. [EasyAuth 业务授权运营增强需求方案](requirements/easyauth-business-authorization-operations.md)
+4. [EasyAuth 业务授权运营增强架构设计](architecture/easyauth-authorization-operations-design.md)
+5. [EasyAuth 业务授权运营页面 API 设计](api/easyauth-authorization-operations-api-design.md)
+6. [ADR-001：业务授权运营边界](decisions/ADR-001-业务授权运营边界.md)
 
 ## 文档规则
 
@@ -12,11 +16,14 @@
 - 历史规格、历史技术规划和旧 MVP 方案已删除，避免多个文档同时描述同一决策。
 - 新增重大架构决策时，优先更新当前架构文档；如果需要记录独立决策历史，再在 `docs/decisions/` 增加 ADR。
 - 新增公共 API 时，必须在架构文档或专门 API 文档中同时记录请求、响应、错误语义和兼容性规则。
+- MVP 实施阶段使用 `MVP-1`、`MVP-2` 这类前缀；业务授权运营增强阶段使用 `OPS-1`、`OPS-2` 这类前缀，避免不同计划中的“阶段 4”混淆。
+- 每个阶段说明至少包含阶段目标、交付物或任务、验收标准、阶段约束和验证方式。
 
 ## 建议后续文档顺序
 
 1. `docs/README.md`：文档入口和维护规则。
 2. `docs/architecture/`：当前架构、模块边界、公共契约和实现顺序。
 3. `docs/plans/`：保存从当前架构拆分出的实施计划和阶段任务。
-4. `docs/decisions/`：只保存需要长期追踪的架构决策记录。
-5. `docs/api/`：实现开始后保存 OpenAPI 或接入文档。
+4. `docs/requirements/`：保存独立产品需求、边界核对和验收标准。
+5. `docs/decisions/`：只保存需要长期追踪的架构决策记录。
+6. `docs/api/`：实现开始后保存 OpenAPI 或接入文档。

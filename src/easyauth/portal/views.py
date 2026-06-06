@@ -17,6 +17,7 @@ from easyauth.access_requests.services import (
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.portal.forms import AccessRequestForm, app_options, role_options
+from easyauth.portal.grant_rows import current_grant_rows_for_user, expiring_grant_rows
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -87,11 +88,14 @@ def portal_home(request: HttpRequest) -> HttpResponse:
     else:
         form = AccessRequestForm.empty()
 
+    current_grant_rows = current_grant_rows_for_user(user)
     return render(
         request,
         PORTAL_TEMPLATE,
         {
             "app_options": app_options(),
+            "current_grant_rows": current_grant_rows,
+            "expiring_grant_rows": expiring_grant_rows(current_grant_rows),
             "form": form,
             "role_options": role_options(),
             "request_rows": request_rows_for_user(user),

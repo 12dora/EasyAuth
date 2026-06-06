@@ -59,7 +59,27 @@ Django 工程和质量门槛
                           +-- 试点接入包和端到端冒烟
 ```
 
-## 阶段 1：基础建设
+本文阶段使用 `MVP-*` 前缀，专指 MVP 实施计划，不等同于业务授权运营增强需求中的 `OPS-*` 阶段。
+
+## 阶段 1（MVP-1）：基础建设
+
+### 阶段目标
+
+- 建立可持续开发的 Django 工程、质量门槛和核心数据模型。
+- 在不接入外部系统的前提下，先固定 App、Role、Permission、ApprovalRule、UserMirror、AuditLog、AccessRequest 和 AccessGrant 的基础约束。
+
+### 阶段验收
+
+- 本地项目可以运行基础检查、测试、lint 和类型检查。
+- Django Admin 可以创建 CRM 试点所需的基础应用配置数据。
+- 核心模型的唯一性、跨 App 约束、生命周期字段和审计只读约束都有测试覆盖。
+
+### 阶段约束
+
+- 阶段 1 不实现公共权限查询 API。
+- 阶段 1 不接入 Authentik 或 DingTalk 真实凭据。
+- 阶段 1 不开发员工门户前端。
+- 阶段 1 的模型变更必须服务后续授权闭环，不能引入 IAM 或 SSO 配置模型。
 
 ### 任务 1：初始化 Django 工程和质量门槛
 
@@ -187,7 +207,26 @@ Django 工程和质量门槛
 - [ ] `basedpyright`
 - [ ] Django Admin 可以创建 CRM 试点所需的 App、Role、Permission、RolePermission 和 ApprovalRule 配置数据。
 
-## 阶段 2：第一条可用授权查询 API
+## 阶段 2（MVP-2）：第一条可用授权查询 API
+
+### 阶段目标
+
+- 建立下游应用可用的第一条稳定授权查询路径。
+- 让静态 app token 和 OAuth2 client credentials 都映射为相同的 `AppPrincipal`。
+- 固定公共权限查询 API 的响应字段、错误语义、缓存过期和 version 规则。
+
+### 阶段验收
+
+- CRM 试点 App 可以使用静态 token 和 OAuth2 access token 查询同一用户权限，并得到完全一致结果。
+- disabled、departed、revoked、expired 和 unknown user 场景都返回文档约定结果。
+- 查询结果 roles 和 permissions 稳定排序，`expires_at` 不越过授权生命周期。
+
+### 阶段约束
+
+- 阶段 2 不开发员工门户。
+- 阶段 2 不让 OAuth2 client credentials 变成用户登录 OIDC client。
+- 阶段 2 不暴露 EasyAuth 内部数据库用户 ID。
+- 阶段 2 后公共 API 只能向后兼容扩展，不能修改既有字段语义。
 
 ### 任务 5：实现 GrantService 授权语义
 
@@ -309,7 +348,26 @@ Django 工程和质量门槛
 - [ ] validation、authentication、authorization、conflict、semantic validation 和 internal errors 都使用统一错误格式。
 - [ ] `python manage.py check`、`pytest`、`ruff check .` 和 `basedpyright` 通过。
 
-## 阶段 3：身份、审批和后端运营能力
+## 阶段 3（MVP-3）：身份、审批和后端运营能力
+
+### 阶段目标
+
+- 补齐身份同步、审批回调、员工申请后端、授权过期和紧急撤权，形成后端授权闭环。
+- 保证所有授权写入仍通过 `GrantService`，所有申请写入仍通过 `AccessRequestService`。
+
+### 阶段验收
+
+- Authentik 非 active 用户会触发撤权，并让后续权限查询返回空权限。
+- DingTalk mock approval 可以批准申请并通过 `GrantService` 应用 grant。
+- 重复回调、过期清理和紧急撤权保持幂等。
+- Django Admin 试点配置保护敏感字段和审计只读性。
+
+### 阶段约束
+
+- 阶段 3 不把 DingTalk 审批结果直接作为授权事实。
+- 阶段 3 不配置 Authentik Source、Provider、Flow 或 MFA。
+- 阶段 3 不允许管理员绕过服务层直接写 AccessGrant。
+- 阶段 3 的紧急撤权只能减少权限，不能授予或增加权限。
 
 ### 任务 9：实现 Authentik 用户同步和离职撤权
 
@@ -463,7 +521,25 @@ Django 工程和质量门槛
 - [ ] 重放回调、过期清理和紧急撤权保持幂等。
 - [ ] `pytest`、`ruff check .` 和 `basedpyright` 通过；此检查点不要求浏览器冒烟。
 
-## 阶段 4：前端和试点接入包
+## 阶段 4（MVP-4）：前端和试点接入包
+
+### 阶段目标
+
+- 在后端闭环完成后，交付员工可使用的申请表面和试点应用可使用的接入包。
+- 通过浏览器和下游 API 表面证明 MVP 能按预期完成申请、审批、授权落库和权限查询。
+
+### 阶段验收
+
+- 员工可以通过门户提交 CRM role 申请并看到状态变化。
+- 试点接入文档足以让内部应用在一个工作日内完成权限查询接入。
+- 端到端冒烟覆盖 Authentik 登录、申请、DingTalk mock 审批、授权落库和 CRM 权限查询。
+
+### 阶段约束
+
+- 阶段 4 前端只能调用后端服务，不承载新的授权规则。
+- 阶段 4 员工门户不替代 Authentik Application Dashboard。
+- 阶段 4 试点接入包不发布 SDK 作为必需依赖。
+- 阶段 4 不新增破坏性公共 API 字段或新的下游认证协议。
 
 ### 任务 14：实现员工门户前端
 

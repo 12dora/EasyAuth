@@ -18,8 +18,8 @@
   <main data-s14-surface="access-request">
     <section class="page-header">
       <div>
-        <h1>访问申请</h1>
-        <p class="subtitle">选择已配置审批规则的角色，提交后等待审批和授权落库。</p>
+        <h1>访问与权限</h1>
+        <p class="subtitle">查看当前授权和到期提醒，需要新增权限时提交申请。</p>
       </div>
     </section>
 
@@ -27,7 +27,44 @@
       <div class="notice">已提交，当前状态为 submitted。</div>
     {% endif %}
 
+    <section class="panel portal-section" data-ops2-section="current-permissions" aria-labelledby="current-permissions-title">
+      <div class="panel-header">
+        <h2 id="current-permissions-title">我的权限</h2>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>应用</th>
+              <th>角色</th>
+              <th>权限</th>
+              <th>授权期限</th>
+              <th>版本</th>
+              <th>过期时间</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for row in current_grant_rows %}
+              <tr>
+                <td>{{ row.app_name }}</td>
+                <td class="long-text">{{ row.role_names }}</td>
+                <td class="long-text">{{ row.permission_keys }}</td>
+                <td>{{ row.grant_label }}</td>
+                <td>v{{ row.version }}</td>
+                <td>{% if row.grant_expires_at %}{{ row.grant_expires_at|date:"Y-m-d H:i" }}{% else %}-{% endif %}</td>
+              </tr>
+            {% empty %}
+              <tr>
+                <td class="empty-row" colspan="6">暂无当前授权</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
     <div class="portal-grid">
+      <div class="portal-stack">
       <section class="panel" aria-labelledby="request-form-title">
         <div class="panel-header">
           <h2 id="request-form-title">新建申请</h2>
@@ -110,9 +147,46 @@
         </div>
       </section>
 
-      <section class="panel" aria-labelledby="request-list-title">
+      <section class="panel" data-ops2-section="expiring-grants" aria-labelledby="expiring-grants-title">
+        <div class="panel-header">
+          <h2 id="expiring-grants-title">即将过期</h2>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>应用</th>
+                <th>期限</th>
+                <th>过期时间</th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for row in expiring_grant_rows %}
+                <tr>
+                  <td>{{ row.app_name }}</td>
+                  <td>{{ row.grant_label }}</td>
+                  <td>{% if row.grant_expires_at %}{{ row.grant_expires_at|date:"Y-m-d H:i" }}{% else %}-{% endif %}</td>
+                </tr>
+              {% empty %}
+                <tr>
+                  <td class="empty-row" colspan="3">暂无即将过期授权</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </section>
+      </div>
+
+      <section class="panel" data-ops2-section="request-status" aria-labelledby="request-list-title">
         <div class="panel-header">
           <h2 id="request-list-title">申请状态</h2>
+        </div>
+        <div class="status-guide" aria-label="申请状态说明">
+          <span><strong>已提交</strong> 等待审批</span>
+          <span><strong>已批准</strong> 审批已通过, 等待授权落库</span>
+          <span><strong>已授权</strong> 授权已落库, 权限已生效</span>
+          <span><strong>授权失败</strong> 授权落库失败</span>
         </div>
         <div class="table-wrap">
           <table>

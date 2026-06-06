@@ -140,6 +140,10 @@ class Permission(models.Model):
 
 
 class RolePermission(models.Model):
+    if TYPE_CHECKING:
+        role_id: ClassVar[int]
+        permission_id: ClassVar[int]
+
     role: models.ForeignKey[Role, Role] = models.ForeignKey(
         Role,
         on_delete=models.CASCADE,

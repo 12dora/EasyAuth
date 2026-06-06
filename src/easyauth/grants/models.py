@@ -36,6 +36,9 @@ GRANT_STATUS_VALUES: Final[tuple[str, ...]] = (
 
 
 class AccessGrant(models.Model):
+    if TYPE_CHECKING:
+        id: ClassVar[int]
+
     user: models.ForeignKey[UserMirror, UserMirror] = models.ForeignKey(
         UserMirror,
         on_delete=models.CASCADE,
@@ -111,6 +114,10 @@ class AccessGrant(models.Model):
 
 
 class AccessGrantRole(models.Model):
+    if TYPE_CHECKING:
+        grant_id: ClassVar[int]
+        role_id: ClassVar[int]
+
     grant: models.ForeignKey[AccessGrant, AccessGrant] = models.ForeignKey(
         AccessGrant,
         on_delete=models.CASCADE,
@@ -146,6 +153,10 @@ class AccessGrantRole(models.Model):
 
 
 class AccessGrantPermission(models.Model):
+    if TYPE_CHECKING:
+        grant_id: ClassVar[int]
+        permission_id: ClassVar[int]
+
     grant: models.ForeignKey[AccessGrant, AccessGrant] = models.ForeignKey(
         AccessGrant,
         on_delete=models.CASCADE,
