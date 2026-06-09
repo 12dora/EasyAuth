@@ -2,15 +2,17 @@ from __future__ import annotations
 
 from http import HTTPStatus
 from secrets import token_urlsafe
+from urllib.parse import urlsplit
 
 from django.conf import settings as django_settings
-from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
+from django.http import Http404, HttpRequest, HttpResponse, HttpResponseRedirect
 
 from easyauth.accounts.auth import (
     OIDC_NONCE_SESSION_KEY,
     OIDC_STATE_SESSION_KEY,
     OidcClientConfig,
     OidcSessionError,
+    VerifiedOidcClaims,
     bind_oidc_session,
     build_authorization_url,
     clear_auth_session,
@@ -18,9 +20,13 @@ from easyauth.accounts.auth import (
     verify_callback_state,
     verify_oidc_claims,
 )
+from easyauth.accounts.models import USER_STATUS_ACTIVE
 from easyauth.accounts.oidc_exchange import exchange_authorization_code_for_claims
 
 FIELD_AUTHORIZATION_CODE = "code"
+DEFAULT_DEV_LOGIN_NEXT = "/portal/"
+DEFAULT_DEV_LOGIN_USER_ID = "dev-user"
+DEV_LOGIN_NAME = "本地开发用户"
 REASON_CODE_REQUIRED = "is required"
 SETTING_CLIENT_ID = "EASYAUTH_AUTHENTIK_OIDC_CLIENT_ID"
 SETTING_CLIENT_SECRET = "EASYAUTH_AUTHENTIK_OIDC_CLIENT_SECRET"  # noqa: S105 - 配置键名, 不是密钥值.
@@ -32,6 +38,28 @@ SETTING_REDIRECT_URI = "EASYAUTH_AUTHENTIK_OIDC_REDIRECT_URI"
 SETTING_SIGNING_ALGORITHMS = "EASYAUTH_AUTHENTIK_OIDC_SIGNING_ALGORITHMS"
 SETTING_SCOPES = "EASYAUTH_AUTHENTIK_OIDC_SCOPES"
 SETTING_TOKEN_ENDPOINT = "EASYAUTH_AUTHENTIK_OIDC_TOKEN_ENDPOINT"  # noqa: S105 - 配置键名, 不是密钥值.
+
+
+def dev_login(request: HttpRequest) -> HttpResponseRedirect:
+    if not _bool_setting("DEBUG") or not _bool_setting("EASYAUTH_ENABLE_DEV_LOGIN"):
+        raise Http404
+
+    user_id = request.GET.get("user_id", DEFAULT_DEV_LOGIN_USER_ID).strip()
+    if user_id == "":
+        user_id = DEFAULT_DEV_LOGIN_USER_ID
+    user = bind_oidc_session(
+        request,
+        VerifiedOidcClaims(
+            subject=user_id,
+            name=DEV_LOGIN_NAME,
+            email=f"{user_id}@dev.local",
+        ),
+    )
+    if user.status != USER_STATUS_ACTIVE:
+        user.status = USER_STATUS_ACTIVE
+        user.full_clean()
+        user.save(update_fields=["status", "updated_at"])
+    return HttpResponseRedirect(_safe_dev_login_next(request))
 
 
 def oidc_login(request: HttpRequest) -> HttpResponseRedirect:
@@ -134,9 +162,32 @@ def _float_setting(name: str) -> float:
             raise OidcSessionError(name, "must be a number")
 
 
+def _bool_setting(name: str) -> bool:
+    value: bool | None = getattr(django_settings, name, None)
+    match value:
+        case bool() as bool_value:
+            return bool_value
+        case _:
+            return False
+
+
 def _require_authorization_code(code: str) -> None:
     if code == "":
         raise OidcSessionError(FIELD_AUTHORIZATION_CODE, REASON_CODE_REQUIRED)
+
+
+def _safe_dev_login_next(request: HttpRequest) -> str:
+    next_path = request.GET.get("next", DEFAULT_DEV_LOGIN_NEXT)
+    if _is_local_absolute_path(next_path):
+        return next_path
+    return DEFAULT_DEV_LOGIN_NEXT
+
+
+def _is_local_absolute_path(value: str) -> bool:
+    if not value.startswith("/") or value.startswith("//") or "\\" in value:
+        return False
+    parsed = urlsplit(value)
+    return parsed.scheme == "" and parsed.netloc == ""
 
 
 def _session_string(request: HttpRequest, key: str) -> str:

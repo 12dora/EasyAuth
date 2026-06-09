@@ -16,9 +16,7 @@ def apply_target_errors(
     permissions: tuple[Permission, ...],
 ) -> tuple[str, ...]:
     match request_type:
-        case "grant":
-            return _role_errors(app, roles)
-        case "change" | "revoke" | "renew":
+        case "grant" | "change" | "revoke" | "renew":
             return (*_role_errors(app, roles), *_permission_errors(app, permissions))
 
 
@@ -43,6 +41,8 @@ def _permission_errors(app: App, permissions: tuple[Permission, ...]) -> tuple[s
             errors.append(f"{permission.key}: Permission must belong to the access request app.")
         if not permission.is_active:
             errors.append(f"{permission.key}: Permission must be active.")
+        if permission.deprecated_at is not None:
+            errors.append(f"{permission.key}: Permission must not be deprecated.")
         if _permission_rule_is_stale(app, permission):
             errors.append(f"{permission.key}: Permission must have an active approval rule.")
     return tuple(errors)

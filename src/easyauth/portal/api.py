@@ -15,7 +15,7 @@ from easyauth.access_requests.services import (
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.api.errors import ErrorCode, ErrorResponse, JsonValue, build_error_response
-from easyauth.applications.models import App, Permission, Role
+from easyauth.applications.models import App, Permission, PermissionGroup, Role
 from easyauth.portal.api_data import (
     access_request_item,
     access_request_items_for_user,
@@ -98,6 +98,36 @@ def portal_access_requests(request: HttpRequest) -> JsonResponse:
                 build_error_response(ErrorCode.VALIDATION_ERROR, "请求方法无效。"),
                 status=HTTPStatus.METHOD_NOT_ALLOWED,
             )
+
+
+def portal_request_catalog(request: HttpRequest) -> JsonResponse:
+    match _active_user(request):
+        case UserMirror():
+            pass
+        case JsonResponse() as response:
+            return response
+    if request.method != "GET":
+        return JsonResponse(
+            build_error_response(ErrorCode.VALIDATION_ERROR, "请求方法无效。"),
+            status=HTTPStatus.METHOD_NOT_ALLOWED,
+        )
+
+    roles = _request_catalog_roles()
+    permissions = _request_catalog_permissions()
+    app_ids = {role.app_id for role in roles} | {permission.app_id for permission in permissions}
+    apps = tuple(App.objects.filter(id__in=app_ids, is_active=True).order_by("app_key"))
+    return _json_response(
+        {
+            "apps": [_catalog_app_item(app) for app in apps],
+            "roles": [_catalog_role_item(role) for role in roles],
+            "permission_groups": _catalog_permission_groups(permissions),
+            "ungrouped_permissions": [
+                _catalog_permission_item(permission)
+                for permission in permissions
+                if permission.group_id is None
+            ],
+        },
+    )
 
 
 def _submit_access_request(request: HttpRequest, user: UserMirror) -> JsonResponse:
@@ -217,6 +247,121 @@ def _permissions_for_keys(
             {"permission_keys": _json_strings(missing_permission_keys)},
         )
     return tuple(permission_by_key[key] for key in permission_keys)
+
+
+def _request_catalog_roles() -> tuple[Role, ...]:
+    return tuple(
+        Role.objects.select_related("app")
+        .filter(
+            app__is_active=True,
+            is_active=True,
+            requestable=True,
+            approval_rules__is_active=True,
+        )
+        .distinct()
+        .order_by("app__app_key", "key"),
+    )
+
+
+def _request_catalog_permissions() -> tuple[Permission, ...]:
+    return tuple(
+        Permission.objects.select_related("app", "group")
+        .filter(
+            app__is_active=True,
+            is_active=True,
+            deprecated_at__isnull=True,
+            approval_rules__is_active=True,
+        )
+        .distinct()
+        .order_by("app__app_key", "group__display_order", "group__key", "key"),
+    )
+
+
+def _catalog_app_item(app: App) -> dict[str, JsonValue]:
+    return {
+        "id": app.id,
+        "app_key": app.app_key,
+        "name": app.name,
+        "description": app.description,
+    }
+
+
+def _catalog_role_item(role: Role) -> dict[str, JsonValue]:
+    return {
+        "id": role.id,
+        "app_key": role.app.app_key,
+        "key": role.key,
+        "name": role.name,
+        "description": role.description,
+        "requestable": role.requestable,
+        "requires_approval": True,
+    }
+
+
+def _catalog_permission_groups(permissions: tuple[Permission, ...]) -> list[JsonValue]:
+    groups_by_id: dict[int, PermissionGroup] = {}
+    permissions_by_group: dict[int, list[Permission]] = {}
+    for permission in permissions:
+        group = permission.group
+        if group is None:
+            continue
+        permissions_by_group.setdefault(group.id, []).append(permission)
+        while group is not None:
+            if group.is_active:
+                groups_by_id[group.id] = group
+            group = group.parent
+
+    children_by_parent: dict[int | None, list[PermissionGroup]] = {}
+    for group in sorted(groups_by_id.values(), key=_group_sort_key):
+        parent_id = group.parent_id if group.parent_id in groups_by_id else None
+        children_by_parent.setdefault(parent_id, []).append(group)
+
+    return [
+        _catalog_group_item(group, children_by_parent, permissions_by_group)
+        for group in children_by_parent.get(None, [])
+    ]
+
+
+def _catalog_group_item(
+    group: PermissionGroup,
+    children_by_parent: dict[int | None, list[PermissionGroup]],
+    permissions_by_group: dict[int, list[Permission]],
+) -> dict[str, JsonValue]:
+    permission_items: list[JsonValue] = [
+        _catalog_permission_item(permission) for permission in permissions_by_group.get(group.id, [])
+    ]
+    children: list[JsonValue] = [
+        _catalog_group_item(child, children_by_parent, permissions_by_group)
+        for child in children_by_parent.get(group.id, [])
+    ]
+    children.extend(permission_items)
+    return {
+        "id": group.id,
+        "app_key": group.app.app_key,
+        "type": "group",
+        "key": group.key,
+        "name": group.name,
+        "description": group.description,
+        "depth": group.depth,
+        "children": children,
+        "permissions": permission_items,
+    }
+
+
+def _catalog_permission_item(permission: Permission) -> dict[str, JsonValue]:
+    return {
+        "id": permission.id,
+        "app_key": permission.app.app_key,
+        "type": "permission",
+        "key": permission.key,
+        "name": permission.name,
+        "description": permission.description,
+        "group_key": "" if permission.group is None else permission.group.key,
+    }
+
+
+def _group_sort_key(group: PermissionGroup) -> tuple[str, int, int, str]:
+    return (group.app.app_key, group.depth, group.display_order, group.key)
 
 
 def _semantic_error_details(exc: PortalApiSemanticError | AccessRequestSubmissionError) -> dict[

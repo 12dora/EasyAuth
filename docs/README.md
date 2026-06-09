@@ -8,6 +8,7 @@
 4. [EasyAuth 业务授权运营增强架构设计](architecture/easyauth-authorization-operations-design.md)
 5. [EasyAuth 业务授权运营页面 API 设计](api/easyauth-authorization-operations-api-design.md)
 6. [ADR-001：业务授权运营边界](decisions/ADR-001-业务授权运营边界.md)
+7. [EasyAuth 员工门户 React 私有 API](api/easyauth-portal-react-api.md)
 
 ## 文档规则
 
@@ -18,6 +19,18 @@
 - 新增公共 API 时，必须在架构文档或专门 API 文档中同时记录请求、响应、错误语义和兼容性规则。
 - MVP 实施阶段使用 `MVP-1`、`MVP-2` 这类前缀；业务授权运营增强阶段使用 `OPS-1`、`OPS-2` 这类前缀，避免不同计划中的“阶段 4”混淆。
 - 每个阶段说明至少包含阶段目标、交付物或任务、验收标准、阶段约束和验证方式。
+
+## 本地开发登录
+
+开发过程中需要先 mock 上游 Authentik 身份、暂不做真实联调时，可以仅在本地开发环境启用受控入口：
+
+```bash
+DJANGO_DEBUG=1 EASYAUTH_ENABLE_DEV_LOGIN=1 .venv/bin/python manage.py runserver
+```
+
+启动后访问 `/auth/dev-login/?next=/portal/` 会创建或更新 `dev-user`，写入门户 session，并跳转到 `/portal/`。如果需要指定测试用户，可访问 `/auth/dev-login/?user_id=alice&next=/portal/`。
+
+该入口是本地 mock Authentik 的开发能力，不是生产登录方式。它必须同时满足 `DEBUG=True` 和 `EASYAUTH_ENABLE_DEV_LOGIN=1` 才可用；默认关闭。`next` 只接受站内绝对路径，外部地址会回退到 `/portal/`，避免开放重定向。生产 OIDC 登录仍使用 `/auth/login/` 和 `/auth/callback/`。
 
 ## 建议后续文档顺序
 

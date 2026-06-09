@@ -44,6 +44,7 @@ from easyauth.applications.ownership import (
     can_manage_app,
     can_view_app,
 )
+from easyauth.frontend_shell import render_react_shell
 
 CONSOLE_TEMPLATE: Literal["admin_console/app_detail.html"] = "admin_console/app_detail.html"
 CONFIG_ACTIONS: Final = frozenset(
@@ -65,6 +66,22 @@ CREDENTIAL_ACTIONS: Final = frozenset(
 )
 
 
+def console_home(request: HttpRequest) -> HttpResponse:
+    match _actor_from_request(request):
+        case ConsoleActor():
+            return render_react_shell(request, surface="console", title="EasyAuth 控制台")
+        case None:
+            return _login_redirect(request)
+
+
+def console_operations(request: HttpRequest, _path: str = "") -> HttpResponse:
+    match _actor_from_request(request):
+        case ConsoleActor():
+            return render_react_shell(request, surface="console", title="EasyAuth 控制台")
+        case None:
+            return _login_redirect(request)
+
+
 @dataclass(frozen=True, slots=True)
 class _RenderState:
     one_time_secret: OneTimeSecret | None = None
@@ -83,7 +100,12 @@ def app_detail(request: HttpRequest, app_key: str) -> HttpResponse:
     if request.method == "POST":
         return _post_response(request, actor, app)
 
-    return _render_detail(request, actor, app, state=_RenderState())
+    return render_react_shell(
+        request,
+        surface="console",
+        title=f"{app.name} - EasyAuth 控制台",
+        initial_app_key=app.app_key,
+    )
 
 
 def _post_response(request: HttpRequest, actor: ConsoleActor, app: App) -> HttpResponse:

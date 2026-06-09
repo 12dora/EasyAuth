@@ -12,6 +12,7 @@ from easyauth.accounts.models import USER_STATUS_ACTIVE, USER_STATUS_DISABLED, U
 pytestmark = pytest.mark.django_db
 
 PORTAL_URL: Final = "/portal/"
+GRANTS_API_URL: Final = "/portal/api/v1/me/grants"
 LOGIN_URL_PREFIX: Final = "/auth/login/"
 
 
@@ -27,7 +28,7 @@ def test_portal_redirects_to_login_when_session_has_no_authentik_user() -> None:
     assert response.headers["Location"].startswith(LOGIN_URL_PREFIX)
 
 
-def test_portal_returns_active_user_identity_when_session_is_bound() -> None:
+def test_portal_api_accepts_active_user_session_when_session_is_bound() -> None:
     # Given
     client = Client()
     user = UserMirror.objects.create(
@@ -40,11 +41,11 @@ def test_portal_returns_active_user_identity_when_session_is_bound() -> None:
     session.save()
 
     # When
-    response = client.get(PORTAL_URL)
+    response = client.get(GRANTS_API_URL)
 
     # Then
     assert response.status_code == HTTPStatus.OK
-    assert user.authentik_user_id in response.content.decode()
+    assert response.json()["items"] == []
 
 
 @pytest.mark.parametrize("authentik_user_id", ["s12-portal-missing-user", "s12-portal-disabled"])

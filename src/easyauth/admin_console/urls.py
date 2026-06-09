@@ -57,6 +57,7 @@ from easyauth.admin_console.roles_api import console_role_detail, console_roles
 app_name = "admin_console"
 
 urlpatterns = [
+    path("", views.console_home, name="console-home"),
     path("api/v1/apps", console_apps, name="console-apps"),
     path(
         "api/v1/apps/<str:app_key>/configuration-status",
@@ -201,5 +202,7 @@ urlpatterns = [
         console_oauth_client_create,
         name="console-oauth-client-create",
     ),
+    path("operations/", views.console_operations, name="console-operations"),
+    path("operations/<path:_path>", views.console_operations, name="console-operations-path"),
     path("apps/<str:app_key>/", views.app_detail, name="app-detail"),
 ]

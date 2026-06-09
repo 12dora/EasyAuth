@@ -9,6 +9,7 @@ import pytest
 from django.test import Client
 from django.utils import timezone
 
+from easyauth.access_requests.models import AccessRequest, AccessRequestPermission
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.applications.models import App, ApprovalRule, Permission, Role, RolePermission
@@ -24,6 +25,42 @@ pytestmark = pytest.mark.django_db
 
 GRANTS_API_URL: Final = "/portal/api/v1/me/grants"
 REQUESTS_API_URL: Final = "/portal/api/v1/me/access-requests"
+
+
+def test_ops4_portal_api_submits_grant_request_with_direct_permission() -> None:
+    # Given: 当前员工还没有授权, 目标 direct Permission 配置了审批规则。
+    client, user = _logged_in_client("ops4-grant-direct-permission-user")
+    app = App.objects.create(app_key="ops4-grant-direct-permission", name="OPS4 Grant Permission")
+    permission = _requestable_permission(app=app, key="invoice.read")
+
+    # When: 员工提交 direct Permission 授权申请。
+    response = client.post(
+        REQUESTS_API_URL,
+        data=dumps(
+            {
+                "app_key": app.app_key,
+                "request_type": "grant",
+                "role_keys": [],
+                "permission_keys": [permission.key],
+                "grant_type": "permanent",
+                "grant_expires_at": None,
+                "reason": "申请 direct permission",
+            },
+        ),
+        content_type="application/json",
+    )
+
+    # Then: API 创建 grant 申请并保留 permission 目标。
+    access_request = AccessRequest.objects.get(user=user, app=app)
+    permission_keys = tuple(
+        AccessRequestPermission.objects.filter(access_request=access_request).values_list(
+            "permission__key",
+            flat=True,
+        ),
+    )
+    assert response.status_code == HTTPStatus.CREATED
+    assert access_request.request_type == "grant"
+    assert permission_keys == (permission.key,)
 
 
 def test_ops4_portal_api_lists_access_request_direct_permissions() -> None:

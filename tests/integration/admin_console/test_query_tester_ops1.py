@@ -38,22 +38,19 @@ def test_ops1_console_query_tester_runs_real_permission_query_without_storing_to
     grant = AccessGrant.objects.create(user=user, app=app)
     _ = AccessGrantRole.objects.create(grant=grant, role=role)
 
-    # When: owner 在联调测试台粘贴 token 并查询测试用户。
+    # When: owner 通过 private API 粘贴 token 并查询测试用户。
     response = client.post(
-        f"/console/apps/{app.app_key}/",
-        {
-            "action": "run_permission_query_test",
-            "test_user_id": user.authentik_user_id,
-            "test_token": issue.plaintext_token,
-        },
+        _query_test_api_url(app.app_key),
+        data=dumps({"user_id": user.authentik_user_id, "token": issue.plaintext_token}),
+        content_type="application/json",
     )
 
-    # Then: 页面展示真实权限结果, 审计 metadata 不保存明文 token。
-    html = response.content.decode()
+    # Then: API 返回真实权限结果, 审计 metadata 不保存明文 token。
     assert response.status_code == HTTPStatus.OK
-    assert "状态码 200" in html
-    assert "auditor" in html
-    assert "invoice.read" in html
+    assert _json_bool(response, "allowed") is True
+    assert _json_string_array(response, "roles") == ["auditor"]
+    assert _json_string_array(response, "permissions") == ["invoice.read"]
+    assert '"status_code": 200' in response.content.decode()
     audit_log = AuditLog.objects.get(event_type="permission_query_test_executed")
     assert issue.plaintext_token not in str(audit_log.metadata)
 
@@ -65,34 +62,29 @@ def test_ops1_console_query_tester_explains_401_403_and_422_errors() -> None:
     other_app = App.objects.create(app_key="ops1-query-other", name="Other")
     other_issue = StaticTokenService.create_token(app=other_app, name="other token")
 
-    # When: 分别提交空用户、无效 token、跨 App token。
+    # When: 分别通过 private API 提交空用户、无效 token、跨 App token。
     missing_user = client.post(
-        f"/console/apps/{app.app_key}/",
-        {"action": "run_permission_query_test", "test_user_id": "", "test_token": "eat_bad"},
+        _query_test_api_url(app.app_key),
+        data=dumps({"user_id": "", "token": "eat_bad"}),
+        content_type="application/json",
     )
     invalid_token = client.post(
-        f"/console/apps/{app.app_key}/",
-        {
-            "action": "run_permission_query_test",
-            "test_user_id": "query-user",
-            "test_token": "eat_bad",
-        },
+        _query_test_api_url(app.app_key),
+        data=dumps({"user_id": "query-user", "token": "eat_bad"}),
+        content_type="application/json",
     )
     mismatched_app = client.post(
-        f"/console/apps/{app.app_key}/",
-        {
-            "action": "run_permission_query_test",
-            "test_user_id": "query-user",
-            "test_token": other_issue.plaintext_token,
-        },
+        _query_test_api_url(app.app_key),
+        data=dumps({"user_id": "query-user", "token": other_issue.plaintext_token}),
+        content_type="application/json",
     )
 
-    # Then: 页面给出 422、401、403 的中文解释。
-    assert "状态码 422" in missing_user.content.decode()
-    assert "测试用户不能为空" in missing_user.content.decode()
-    assert "状态码 401" in invalid_token.content.decode()
+    # Then: API 给出 422、401、403 的结构化解释。
+    assert missing_user.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert _json_string(missing_user, "code") == ErrorCode.VALIDATION_ERROR
+    assert invalid_token.status_code == HTTPStatus.UNAUTHORIZED
     assert "缺失或无效凭据" in invalid_token.content.decode()
-    assert "状态码 403" in mismatched_app.content.decode()
+    assert mismatched_app.status_code == HTTPStatus.FORBIDDEN
     assert "凭据绑定 App 与路径 app_key 不一致" in mismatched_app.content.decode()
 
 
@@ -106,44 +98,43 @@ def test_ops1_console_query_tester_explains_internal_permission_query_error() ->
     role = Role.objects.create(app=app, key="auditor", name="Auditor")
     _ = AccessGrantRole.objects.create(grant=grant, role=role)
 
-    # When: owner 在联调测试台查询该用户。
+    # When: owner 通过 private API 查询该用户。
     response = client.post(
-        f"/console/apps/{app.app_key}/",
-        {
-            "action": "run_permission_query_test",
-            "test_user_id": user.authentik_user_id,
-            "test_token": issue.plaintext_token,
-        },
+        _query_test_api_url(app.app_key),
+        data=dumps({"user_id": user.authentik_user_id, "token": issue.plaintext_token}),
+        content_type="application/json",
     )
 
-    # Then: 页面展示 500 错误解释, 且审计 metadata 不保存明文 token。
-    html = response.content.decode()
-    assert response.status_code == HTTPStatus.OK
-    assert "状态码 500" in html
-    assert "权限查询内部错误" in html
+    # Then: API 返回 500 错误解释, 且审计 metadata 不保存明文 token。
+    assert response.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
+    assert _json_string(response, "code") == ErrorCode.INTERNAL_ERROR
+    assert "权限查询内部错误" in response.content.decode()
     audit_log = AuditLog.objects.get(event_type="permission_query_test_executed")
     assert issue.plaintext_token not in str(audit_log.metadata)
 
 
 def test_ops1_console_integration_guide_contains_current_app_examples() -> None:
-    # Given: 应用负责人打开 App 详情页。
+    # Given: 应用负责人需要读取 App 接入说明。
     client = _logged_in_client("owner-ops1-guide")
     app = _owned_app("ops1-guide", "owner-ops1-guide")
     _ = Role.objects.create(app=app, key="operator", name="Operator")
     _ = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
 
-    # When: 页面渲染接入说明。
-    response = client.get(f"/console/apps/{app.app_key}/")
+    # When: React shell 使用 private API 读取接入说明和权限目录。
+    guide = client.get(_api_url(app.app_key, "integration-guide"))
+    permissions = client.get(_api_url(app.app_key, "permissions"))
 
-    # Then: 接入说明包含 app_key、公共 API、curl、Python 和 TypeScript 示例。
-    html = response.content.decode()
-    assert response.status_code == HTTPStatus.OK
-    assert app.app_key in html
-    assert f"/api/v1/apps/{app.app_key}/users/{{user_id}}/permissions" in html
-    assert "curl" in html
-    assert "python" in html
-    assert "typescript" in html
-    assert "invoice.read" in html
+    # Then: API 包含 app_key、公共权限查询端点和当前权限目录。
+    body = guide.content.decode() + permissions.content.decode()
+    assert guide.status_code == HTTPStatus.OK
+    assert permissions.status_code == HTTPStatus.OK
+    assert app.app_key in body
+    assert f"/api/v1/apps/{app.app_key}/users/{{user_id}}/permissions" in body
+    assert "invoice.read" in body
+
+
+def _api_url(app_key: str, endpoint: str) -> str:
+    return f"/console/api/v1/apps/{app_key}/{endpoint}"
 
 
 @pytest.mark.parametrize("membership_role", ["owner", "developer"])

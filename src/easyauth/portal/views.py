@@ -16,6 +16,7 @@ from easyauth.access_requests.services import (
 )
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
+from easyauth.frontend_shell import render_react_shell
 from easyauth.portal.forms import AccessRequestForm, app_options, role_options
 from easyauth.portal.grant_rows import current_grant_rows_for_user, expiring_grant_rows
 
@@ -65,28 +66,41 @@ def portal_home(request: HttpRequest) -> HttpResponse:
         request.session.pop(AUTHENTIK_SESSION_KEY, None)
         return _login_redirect(request)
 
-    submitted_request: AccessRequest | None = None
     if request.method == "POST":
-        form = AccessRequestForm.bind(request.POST)
-        if form.is_valid():
-            selected_role = form.selected_role()
-            try:
-                submitted_request = _submit_access_request(
-                    requester=user,
-                    submission=PortalSubmission(
-                        app=form.selected_app(),
-                        grant_expires_at=form.selected_grant_expires_at(),
-                        lifetime=form.selected_lifetime(),
-                        reason=form.selected_reason(),
-                        roles=(selected_role,),
-                    ),
-                )
-            except AccessRequestSubmissionError as exc:
-                form = form.with_role_error(str(exc))
-            else:
-                form = AccessRequestForm.empty()
-    else:
-        form = AccessRequestForm.empty()
+        return _legacy_post_response(request, user)
+
+    return render_react_shell(
+        request,
+        surface="portal",
+        title="员工门户",
+        current_user_id=user.authentik_user_id,
+    )
+
+
+def portal_react_route(request: HttpRequest, _portal_path: str) -> HttpResponse:
+    return portal_home(request)
+
+
+def _legacy_post_response(request: HttpRequest, user: UserMirror) -> HttpResponse:
+    submitted_request: AccessRequest | None = None
+    form = AccessRequestForm.bind(request.POST)
+    if form.is_valid():
+        selected_role = form.selected_role()
+        try:
+            submitted_request = _submit_access_request(
+                requester=user,
+                submission=PortalSubmission(
+                    app=form.selected_app(),
+                    grant_expires_at=form.selected_grant_expires_at(),
+                    lifetime=form.selected_lifetime(),
+                    reason=form.selected_reason(),
+                    roles=(selected_role,),
+                ),
+            )
+        except AccessRequestSubmissionError as exc:
+            form = form.with_role_error(str(exc))
+        else:
+            form = AccessRequestForm.empty()
 
     current_grant_rows = current_grant_rows_for_user(user)
     return render(

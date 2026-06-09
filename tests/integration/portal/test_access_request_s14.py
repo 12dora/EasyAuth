@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 from http import HTTPStatus
+from json import dumps
 from typing import Final
 
 import pytest
@@ -29,14 +30,14 @@ from easyauth.portal.views import request_rows_for_user
 
 pytestmark = pytest.mark.django_db
 
-PORTAL_URL: Final = "/portal/"
+REQUESTS_API_URL: Final = "/portal/api/v1/me/access-requests"
 EXPECTED_REQUEST_ROW_COUNT: Final = 3
 EXPECTED_REQUEST_ROW_QUERIES: Final = 2
 
 
-def test_s14_portal_renders_compact_request_form_for_requestable_roles() -> None:
+def test_s14_portal_api_accepts_only_requestable_roles_with_approval_rules() -> None:
     # Given: 员工已登录, 且只有一个角色满足可申请和审批规则要求。
-    client, _user = _logged_in_client("s14-portal-form-user")
+    client, user = _logged_in_client("s14-portal-form-user")
     app = App.objects.create(app_key="s14-portal-crm", name="CRM")
     requestable_role = Role.objects.create(
         app=app,
@@ -56,20 +57,37 @@ def test_s14_portal_renders_compact_request_form_for_requestable_roles() -> None
         approver_userids=["manager-001"],
     )
 
-    # When: 员工打开门户。
-    response = client.get(PORTAL_URL)
+    # When: 员工分别通过门户 API 申请可申请角色和无审批规则角色。
+    accepted = client.post(
+        REQUESTS_API_URL,
+        data=_access_request_payload(
+            app_key=app.app_key,
+            role_keys=[requestable_role.key],
+            grant_type=GRANT_TYPE_PERMANENT,
+            grant_expires_at=None,
+            reason="需要管理员权限",
+        ),
+        content_type="application/json",
+    )
+    rejected = client.post(
+        REQUESTS_API_URL,
+        data=_access_request_payload(
+            app_key=app.app_key,
+            role_keys=["internal"],
+            grant_type=GRANT_TYPE_PERMANENT,
+            grant_expires_at=None,
+            reason="尝试申请内部维护",
+        ),
+        content_type="application/json",
+    )
 
-    # Then: 页面展示真实申请表单, 且不展示无审批规则角色。
-    html = response.content.decode()
-    assert response.status_code == HTTPStatus.OK
-    assert response.headers["Content-Type"].startswith("text/html")
-    assert "EasyAuth 员工门户" in html
-    assert "CRM 管理员" in html
-    assert "内部维护" not in html
-    assert 'name="grant_type"' in html
-    assert 'name="grant_expires_at"' in html
-    assert 'name="reason"' in html
-    assert 'data-s14-surface="access-request"' in html
+    # Then: API 只创建合规角色申请, 不绕过审批规则约束。
+    access_request = AccessRequest.objects.get(user=user, app=app)
+    assert accepted.status_code == HTTPStatus.CREATED
+    assert rejected.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert AccessRequestRole.objects.get(access_request=access_request).role == requestable_role
+    assert AccessRequest.objects.count() == 1
+    assert AccessGrant.objects.count() == 0
 
 
 def test_s14_portal_submit_creates_request_through_service_without_creating_grant() -> None:
@@ -79,29 +97,28 @@ def test_s14_portal_submit_creates_request_through_service_without_creating_gran
     role = Role.objects.create(app=app, key="auditor", name="CRM 审计员", requestable=True)
     _ = ApprovalRule.objects.create(app=app, role=role, approver_userids=["manager-001"])
 
-    # When: 员工提交门户表单。
+    # When: 员工提交门户申请 API。
     response = client.post(
-        PORTAL_URL,
-        {
-            "app_id": str(app.id),
-            "role_id": str(role.id),
-            "grant_type": GRANT_TYPE_PERMANENT,
-            "grant_expires_at": "",
-            "reason": "需要查看客户变更记录",
-        },
-        follow=True,
+        REQUESTS_API_URL,
+        data=_access_request_payload(
+            app_key=app.app_key,
+            role_keys=[role.key],
+            grant_type=GRANT_TYPE_PERMANENT,
+            grant_expires_at=None,
+            reason="需要查看客户变更记录",
+        ),
+        content_type="application/json",
     )
 
-    # Then: 门户展示 submitted 状态, 数据只经过申请服务落库, 不直接授权。
-    html = response.content.decode()
+    # Then: 门户 API 返回 submitted 状态, 数据只经过申请服务落库, 不直接授权。
     access_request = AccessRequest.objects.get(user=user, app=app)
-    assert response.status_code == HTTPStatus.OK
+    assert response.status_code == HTTPStatus.CREATED
     assert access_request.status == REQUEST_STATUS_SUBMITTED
     assert AccessRequestRole.objects.get(access_request=access_request).role == role
     assert access_request.reason == "需要查看客户变更记录"
     assert AccessGrant.objects.count() == 0
-    assert "已提交" in html
-    assert "CRM 审计员" in html
+    assert "等待审批" in response.content.decode()
+    assert "CRM 审计员" in response.content.decode()
 
 
 def test_s14_portal_rejects_role_without_approval_rule() -> None:
@@ -110,22 +127,22 @@ def test_s14_portal_rejects_role_without_approval_rule() -> None:
     app = App.objects.create(app_key="s14-portal-invalid-app", name="CRM")
     role = Role.objects.create(app=app, key="no-rule", name="无规则角色", requestable=True)
 
-    # When: 员工提交门户表单。
+    # When: 员工提交门户申请 API。
     response = client.post(
-        PORTAL_URL,
-        {
-            "app_id": str(app.id),
-            "role_id": str(role.id),
-            "grant_type": GRANT_TYPE_PERMANENT,
-            "grant_expires_at": "",
-            "reason": "测试非法配置",
-        },
+        REQUESTS_API_URL,
+        data=_access_request_payload(
+            app_key=app.app_key,
+            role_keys=[role.key],
+            grant_type=GRANT_TYPE_PERMANENT,
+            grant_expires_at=None,
+            reason="测试非法配置",
+        ),
+        content_type="application/json",
     )
 
-    # Then: 门户拒绝提交, 且没有绕过服务创建申请或授权。
-    html = response.content.decode()
-    assert response.status_code == HTTPStatus.OK
-    assert "该角色当前不可申请" in html
+    # Then: 门户 API 拒绝提交, 且没有绕过服务创建申请或授权。
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert "Role must have an active approval rule" in response.content.decode()
     assert AccessRequest.objects.count() == 0
     assert AccessGrant.objects.count() == 0
 
@@ -152,16 +169,16 @@ def test_s14_portal_status_list_distinguishes_request_statuses() -> None:
         )
         _ = AccessRequestRole.objects.create(access_request=access_request, role=role)
 
-    # When: 员工打开门户。
-    response = client.get(PORTAL_URL)
+    # When: 员工读取门户申请列表 API。
+    response = client.get(REQUESTS_API_URL)
 
-    # Then: 状态列表用业务文案区分所有状态。
-    html = response.content.decode()
-    assert "已提交" in html
-    assert "已批准" in html
-    assert "已授权" in html
-    assert "已拒绝" in html
-    assert "授权失败" in html
+    # Then: API 状态列表用业务文案区分所有状态。
+    body = response.content.decode()
+    assert "等待审批" in body
+    assert "审批已通过, 等待授权落库" in body
+    assert "授权已落库, 权限已生效" in body
+    assert "已拒绝" in body
+    assert "授权落库失败" in body
 
 
 def test_s14_portal_request_rows_load_role_names_in_bulk() -> None:
@@ -195,22 +212,22 @@ def test_s14_portal_timed_request_requires_expiration() -> None:
     role = Role.objects.create(app=app, key="operator", name="CRM 操作员", requestable=True)
     _ = ApprovalRule.objects.create(app=app, role=role, approver_userids=["manager-001"])
 
-    # When: 员工提交无到期时间的限时申请。
+    # When: 员工通过门户 API 提交无到期时间的限时申请。
     response = client.post(
-        PORTAL_URL,
-        {
-            "app_id": str(app.id),
-            "role_id": str(role.id),
-            "grant_type": GRANT_TYPE_TIMED,
-            "grant_expires_at": "",
-            "reason": "临时处理客户资料",
-        },
+        REQUESTS_API_URL,
+        data=_access_request_payload(
+            app_key=app.app_key,
+            role_keys=[role.key],
+            grant_type=GRANT_TYPE_TIMED,
+            grant_expires_at=None,
+            reason="临时处理客户资料",
+        ),
+        content_type="application/json",
     )
 
-    # Then: 门户提示生命周期校验错误。
-    html = response.content.decode()
-    assert response.status_code == HTTPStatus.OK
-    assert "请选择限时授权的到期时间" in html
+    # Then: API 提示生命周期校验错误。
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert "Timed requests must include an expiration" in response.content.decode()
     assert AccessRequest.objects.count() == 0
 
 
@@ -222,22 +239,22 @@ def test_s14_portal_timed_request_creates_request_with_expiration() -> None:
     _ = ApprovalRule.objects.create(app=app, role=role, approver_userids=["manager-001"])
     expires_at = timezone.localtime(timezone.now() + timedelta(days=7))
 
-    # When: 员工提交限时申请。
+    # When: 员工通过门户 API 提交限时申请。
     response = client.post(
-        PORTAL_URL,
-        {
-            "app_id": str(app.id),
-            "role_id": str(role.id),
-            "grant_type": GRANT_TYPE_TIMED,
-            "grant_expires_at": expires_at.strftime("%Y-%m-%dT%H:%M"),
-            "reason": "临时处理客户资料",
-        },
-        follow=True,
+        REQUESTS_API_URL,
+        data=_access_request_payload(
+            app_key=app.app_key,
+            role_keys=[role.key],
+            grant_type=GRANT_TYPE_TIMED,
+            grant_expires_at=expires_at.isoformat(),
+            reason="临时处理客户资料",
+        ),
+        content_type="application/json",
     )
 
     # Then: 申请保留限时生命周期和到期时间。
     access_request = AccessRequest.objects.get(user=user, app=app)
-    assert response.status_code == HTTPStatus.OK
+    assert response.status_code == HTTPStatus.CREATED
     assert access_request.grant_type == GRANT_TYPE_TIMED
     assert access_request.grant_expires_at is not None
 
@@ -253,3 +270,22 @@ def _logged_in_client(authentik_user_id: str) -> tuple[Client, UserMirror]:
     session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
     session.save()
     return client, user
+
+
+def _access_request_payload(
+    *,
+    app_key: str,
+    role_keys: list[str],
+    grant_type: str,
+    grant_expires_at: str | None,
+    reason: str,
+) -> str:
+    return dumps(
+        {
+            "app_key": app_key,
+            "role_keys": role_keys,
+            "grant_type": grant_type,
+            "grant_expires_at": grant_expires_at,
+            "reason": reason,
+        },
+    )

@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from http import HTTPStatus
 from json import dumps
-from re import search
 from typing import Final, Protocol
 
 import pytest
@@ -26,26 +25,28 @@ class HttpResponseLike(Protocol):
 
 
 def test_ops1_console_static_token_create_displays_plaintext_only_once() -> None:
-    # Given: 应用负责人打开凭据运营入口。
+    # Given: 应用负责人管理一个 App。
     client = _logged_in_client("owner-ops1-token-create")
     app = _owned_app("ops1-token-create", "owner-ops1-token-create")
 
-    # When: owner 创建静态 app token。
+    # When: owner 通过 private API 创建静态 app token。
     response = client.post(
-        f"/console/apps/{app.app_key}/",
-        {"action": "create_static_token", "credential_name": "primary integration"},
+        _credentials_api_url(app.app_key, "static-tokens"),
+        data=dumps({"name": "primary integration"}),
+        content_type="application/json",
     )
 
-    # Then: 明文 token 只出现在本次响应, 不进入审计 metadata 或后续 GET。
-    html = response.content.decode()
-    plaintext_token = _extract_static_token(html)
+    # Then: 明文 token 只出现在本次 API 响应, 不进入审计 metadata 或后续列表。
+    body = response.content.decode()
+    payload = _json_dict(response)
+    plaintext_token = _json_string(_json_object(payload["one_time_secret"])["app_token"])
     credential = AppCredential.objects.get(app=app)
-    assert response.status_code == HTTPStatus.OK
-    assert 'data-ops1-secret="one-time"' in html
+    assert response.status_code == HTTPStatus.CREATED
+    assert plaintext_token in body
     assert plaintext_token not in credential.token_hash
     for audit_log in AuditLog.objects.all():
         assert plaintext_token not in str(audit_log.metadata)
-    followup = client.get(f"/console/apps/{app.app_key}/")
+    followup = client.get(_credentials_api_url(app.app_key))
     assert plaintext_token not in followup.content.decode()
 
 
@@ -55,21 +56,17 @@ def test_ops1_console_static_token_disable_makes_public_api_fail_safely() -> Non
     app = _owned_app("ops1-token-disable", "owner-ops1-token-disable")
     issue = StaticTokenService.create_token(app=app, name="primary integration")
 
-    # When: owner 在控制台禁用该 token。
+    # When: owner 通过 private API 禁用该 token。
     response = client.post(
-        f"/console/apps/{app.app_key}/",
-        {
-            "action": "disable_static_token",
-            "credential_id": str(issue.credential_id),
-        },
-        follow=True,
+        _credentials_api_url(app.app_key, f"static-tokens/{issue.credential_id}/disable"),
+        content_type="application/json",
     )
     api_response = Client().get(
         f"/api/v1/apps/{app.app_key}/users/some-user/permissions",
         HTTP_AUTHORIZATION=f"Bearer {issue.plaintext_token}",
     )
 
-    # Then: 控制台返回成功, 公共权限查询 API 对禁用凭据返回 401。
+    # Then: private API 返回成功, 公共权限查询 API 对禁用凭据返回 401。
     assert response.status_code == HTTPStatus.OK
     assert api_response.status_code == HTTPStatus.UNAUTHORIZED
     assert AppCredential.objects.get(id=issue.credential_id).is_active is False
@@ -82,22 +79,24 @@ def test_ops1_console_oauth_client_secret_is_one_time_and_not_visible_to_develop
     app = _owned_app("ops1-oauth", "owner-ops1-oauth")
     _ = AppMembership.objects.create(app=app, user_id="developer-ops1-oauth", role="developer")
 
-    # When: owner 创建 OAuth2 client credentials, developer 尝试创建静态 token。
+    # When: owner 通过 private API 创建 OAuth2 client credentials, developer 尝试创建静态 token。
     owner_response = owner_client.post(
-        f"/console/apps/{app.app_key}/",
-        {"action": "create_oauth_client", "credential_name": "oauth integration"},
+        _credentials_api_url(app.app_key, "oauth-clients"),
+        data=dumps({"name": "oauth integration"}),
+        content_type="application/json",
     )
     developer_response = developer_client.post(
-        f"/console/apps/{app.app_key}/",
-        {"action": "create_static_token", "credential_name": "developer attempt"},
+        _credentials_api_url(app.app_key, "static-tokens"),
+        data=dumps({"name": "developer attempt"}),
+        content_type="application/json",
     )
 
-    # Then: OAuth secret 只在 owner 响应出现一次, developer 被拒绝操作凭据。
-    html = owner_response.content.decode()
-    client_secret = _extract_oauth_secret(html)
-    assert owner_response.status_code == HTTPStatus.OK
+    # Then: OAuth secret 只在 owner API 响应出现一次, developer 被拒绝操作凭据。
+    owner_body = _json_dict(owner_response)
+    client_secret = _json_string(_json_object(owner_body["one_time_secret"])["client_secret"])
+    assert owner_response.status_code == HTTPStatus.CREATED
     assert developer_response.status_code == HTTPStatus.FORBIDDEN
-    assert client_secret not in owner_client.get(f"/console/apps/{app.app_key}/").content.decode()
+    assert client_secret not in owner_client.get(_credentials_api_url(app.app_key)).content.decode()
     for audit_log in AuditLog.objects.all():
         assert client_secret not in str(audit_log.metadata)
     assert AppCredential.objects.filter(app=app, name="developer attempt").exists() is False
@@ -282,20 +281,6 @@ def _logged_in_client(username: str) -> Client:
     client = Client(HTTP_HOST="localhost")
     assert client.login(username=username, password=LOGIN_VALUE) is True
     return client
-
-
-def _extract_static_token(html: str) -> str:
-    match = search(r"eat_[A-Za-z0-9_-]+", html)
-    if match is None:
-        raise AssertionError(html)
-    return match.group(0)
-
-
-def _extract_oauth_secret(html: str) -> str:
-    match = search(r"client_secret</dt>\s*<dd><code>([^<]+)</code>", html)
-    if match is None:
-        raise AssertionError(html)
-    return match.group(1)
 
 
 def _credentials_api_url(app_key: str, suffix: str = "") -> str:

@@ -63,8 +63,11 @@ def validate_submission_scope(
 
     match request_type:
         case "grant":
-            _validate_roles(input_data.app, roles)
-            _validate_no_permissions_for_grant(permissions)
+            _validate_targets_present(roles, permissions)
+            if roles:
+                _validate_roles(input_data.app, roles)
+            if permissions:
+                _validate_permissions(input_data.app, permissions)
         case "change":
             _ = _active_lifecycle_grant(input_data.user, input_data.app)
             _validate_targets_present(roles, permissions)
@@ -113,11 +116,6 @@ def _validate_expiration_shape(
 def _validate_app(app: App) -> None:
     if not app.is_active:
         raise AccessRequestSubmissionError(("app is not active",))
-
-
-def _validate_no_permissions_for_grant(permissions: tuple[Permission, ...]) -> None:
-    if permissions:
-        raise AccessRequestSubmissionError(("grant requests do not accept direct permissions",))
 
 
 def _validate_targets_present(
@@ -295,6 +293,8 @@ def _permission_errors(app: App, permission: Permission) -> list[str]:
         errors.append("Permission must belong to the access request app.")
     if not permission.is_active:
         errors.append("Permission must be active.")
+    if permission.deprecated_at is not None:
+        errors.append("Permission must not be deprecated.")
     if not ApprovalRule.objects.filter(app=app, permission=permission, is_active=True).exists():
         errors.append("Permission must have an active approval rule.")
     return errors

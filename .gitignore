@@ -9,3 +9,10 @@ __pycache__/
 db.sqlite3
 htmlcov/
 .coverage
+node_modules/
+*.tsbuildinfo
+frontend/test-results/
+src/easyauth/static/easyauth/frontend/.vite/*
+src/easyauth/static/easyauth/frontend/assets/*
+!src/easyauth/static/easyauth/frontend/.vite/.gitkeep
+!src/easyauth/static/easyauth/frontend/assets/.gitkeep

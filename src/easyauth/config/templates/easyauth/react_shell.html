@@ -1,0 +1,19 @@
+{% load static %}
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }}</title>
+  {% for stylesheet in vite_assets.stylesheets %}
+    <link rel="stylesheet" href="{% static stylesheet.path %}">
+  {% endfor %}
+</head>
+<body data-easyauth-react-shell="{{ shell }}" data-brand-logo-url="{% static 'easyauth/frontend/assets/brand/jiefa_logo.webp' %}"{% if initial_app_key %} data-initial-app-key="{{ initial_app_key }}"{% endif %}{% if current_user_id %} data-current-user-id="{{ current_user_id }}"{% endif %}>
+  <form hidden>{% csrf_token %}</form>
+  <div id="easyauth-root"></div>
+  {% for script in vite_assets.scripts %}
+    <script type="module" src="{% static script.path %}"></script>
+  {% endfor %}
+</body>
+</html>

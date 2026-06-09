@@ -8,6 +8,12 @@ import pytest
 from django.test import Client
 from django.utils import timezone
 
+from easyauth.access_requests.models import (
+    REQUEST_STATUS_APPROVED,
+    REQUEST_STATUS_GRANT_APPLIED,
+    REQUEST_STATUS_GRANT_FAILED,
+    AccessRequest,
+)
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.applications.models import App, Permission, Role, RolePermission
@@ -22,7 +28,9 @@ from easyauth.grants.models import (
 
 pytestmark = pytest.mark.django_db
 
-PORTAL_URL: Final = "/portal/"
+GRANTS_API_URL: Final = "/portal/api/v1/me/grants"
+EXPIRING_API_URL: Final = "/portal/api/v1/me/grants/expiring"
+REQUESTS_API_URL: Final = "/portal/api/v1/me/access-requests"
 EXPIRING_SOON_DAYS: Final = 14
 
 
@@ -56,21 +64,20 @@ def test_ops2_portal_lists_my_current_permissions_for_active_grants() -> None:
         app_name="已撤销应用",
     )
 
-    # When: 员工打开门户。
-    response = client.get(PORTAL_URL)
+    # When: 员工读取当前授权 API。
+    response = client.get(GRANTS_API_URL)
 
-    # Then: “我的权限”只展示当前登录员工的 active current grant。
-    section = _section_html(response.content.decode(), "current-permissions")
+    # Then: API 只返回当前登录员工的 active current grant。
+    body = response.content.decode()
     assert response.status_code == HTTPStatus.OK
-    assert "我的权限" in section
-    assert "CRM" in section
-    assert "CRM 审计员" in section
-    assert "invoice.approve" in section
-    assert "invoice.read" in section
-    assert "v3" in section
-    assert "长期" in section
-    assert "其他用户应用" not in section
-    assert "已撤销应用" not in section
+    assert "CRM" in body
+    assert "CRM 审计员" in body
+    assert "invoice.approve" in body
+    assert "invoice.read" in body
+    assert '"version": 3' in body
+    assert GRANT_TYPE_PERMANENT in body
+    assert "其他用户应用" not in body
+    assert "已撤销应用" not in body
 
 
 def test_ops2_portal_lists_only_expiring_grants_within_fourteen_days() -> None:
@@ -91,46 +98,50 @@ def test_ops2_portal_lists_only_expiring_grants_within_fourteen_days() -> None:
     )
     _ = _create_grant(user=user, app_key="ops2-permanent", app_name="长期授权应用")
 
-    # When: 员工打开门户。
-    response = client.get(PORTAL_URL)
+    # When: 员工读取即将过期授权 API。
+    response = client.get(EXPIRING_API_URL, {"days": str(EXPIRING_SOON_DAYS)})
 
-    # Then: “即将过期”只展示未来 14 天内的限时授权。
-    section = _section_html(response.content.decode(), "expiring-grants")
+    # Then: API 只返回未来 14 天内的限时授权。
+    body = response.content.decode()
     assert response.status_code == HTTPStatus.OK
-    assert "即将过期" in section
-    assert "即将过期 CRM" in section
-    assert "限时" in section
-    assert "暂不提醒应用" not in section
-    assert "长期授权应用" not in section
+    assert "即将过期 CRM" in body
+    assert GRANT_TYPE_TIMED in body
+    assert "暂不提醒应用" not in body
+    assert "长期授权应用" not in body
 
 
 def test_ops2_portal_shows_empty_states_when_user_has_no_current_grants() -> None:
     # Given: 当前登录员工没有任何当前有效授权。
     client, _user = _logged_in_client("ops2-empty-user")
 
-    # When: 员工打开门户。
-    response = client.get(PORTAL_URL)
+    # When: 员工读取当前授权和即将过期授权 API。
+    grants = client.get(GRANTS_API_URL)
+    expiring = client.get(EXPIRING_API_URL)
 
-    # Then: 门户用中文空状态区分当前授权和即将过期授权。
-    html = response.content.decode()
-    assert response.status_code == HTTPStatus.OK
-    assert "暂无当前授权" in html
-    assert "暂无即将过期授权" in html
+    # Then: API 返回空列表, 空状态文案由 React shell 呈现。
+    assert grants.status_code == HTTPStatus.OK
+    assert expiring.status_code == HTTPStatus.OK
+    assert grants.json()["items"] == []
+    assert expiring.json()["items"] == []
 
 
 def test_ops2_portal_explains_request_status_before_grant_is_effective() -> None:
-    # Given: 当前登录员工打开申请状态面板。
-    client, _user = _logged_in_client("ops2-status-guide-user")
+    # Given: 当前登录员工已有审批通过、授权生效和授权失败申请。
+    client, user = _logged_in_client("ops2-status-guide-user")
+    app = App.objects.create(app_key="ops2-status-guide-app", name="CRM")
+    _ = AccessRequest.objects.create(user=user, app=app, status=REQUEST_STATUS_APPROVED)
+    _ = AccessRequest.objects.create(user=user, app=app, status=REQUEST_STATUS_GRANT_APPLIED)
+    _ = AccessRequest.objects.create(user=user, app=app, status=REQUEST_STATUS_GRANT_FAILED)
 
-    # When: 员工打开门户。
-    response = client.get(PORTAL_URL)
+    # When: 员工读取申请状态 API。
+    response = client.get(REQUESTS_API_URL)
 
-    # Then: 状态说明明确区分审批通过和授权生效。
-    section = _section_html(response.content.decode(), "request-status")
+    # Then: API 状态文案明确区分审批通过和授权生效。
+    body = response.content.decode()
     assert response.status_code == HTTPStatus.OK
-    assert "审批已通过, 等待授权落库" in section
-    assert "授权已落库, 权限已生效" in section
-    assert "授权落库失败" in section
+    assert "审批已通过, 等待授权落库" in body
+    assert "授权已落库, 权限已生效" in body
+    assert "授权落库失败" in body
 
 
 def _logged_in_client(authentik_user_id: str) -> tuple[Client, UserMirror]:
@@ -200,14 +211,3 @@ def _create_revoked_grant(
 def _create_other_user_grant(*, app_name: str) -> None:
     other_user = UserMirror.objects.create(authentik_user_id="ops2-other-user")
     _ = _create_grant(user=other_user, app_key="ops2-other-app", app_name=app_name)
-
-
-def _section_html(html: str, section_name: str) -> str:
-    marker = f'data-ops2-section="{section_name}"'
-    start_index = html.find(marker)
-    if start_index == -1:
-        return ""
-    end_index = html.find("</section>", start_index)
-    if end_index == -1:
-        return html[start_index:]
-    return html[start_index:end_index]

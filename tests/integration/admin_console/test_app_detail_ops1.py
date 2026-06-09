@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from http import HTTPStatus
+from json import dumps
 from re import search
-from typing import Final
+from typing import Final, Protocol
 
 import pytest
 from django.contrib.auth.models import User
@@ -35,6 +36,10 @@ groups:
 """
 
 
+class HttpResponseLike(Protocol):
+    content: bytes
+
+
 def test_ops1_console_app_detail_shows_readiness_matrix_and_approval_prompt() -> None:
     # Given: 应用负责人拥有 CRM App, 且存在分组、角色和权限, 但缺少审批规则。
     client = _logged_in_client("owner-ops1-detail")
@@ -50,18 +55,21 @@ def test_ops1_console_app_detail_shows_readiness_matrix_and_approval_prompt() ->
     )
     _ = RolePermission.objects.create(role=role, permission=permission)
 
-    # When: 应用负责人打开 App 详情页。
-    response = client.get(f"/console/apps/{app.app_key}/")
+    # When: 应用负责人通过 React shell 使用的 private API 读取配置和矩阵。
+    configuration = client.get(_api_url(app.app_key, "configuration-status"))
+    matrix = client.get(_api_url(app.app_key, "role-permission-matrix"))
+    tree = client.get(_api_url(app.app_key, "permission-tree"))
 
-    # Then: 页面展示配置完整性、分组矩阵和 ApprovalRule 缺失提示。
-    html = response.content.decode()
-    assert response.status_code == HTTPStatus.OK
-    assert 'data-ops1-console="app-detail"' in html
-    assert "配置完整性" in html
-    assert "requestable_role_approval_rule_missing" in html
-    assert "PIPELINE_GROUP" in html
-    assert "Operator" in html
-    assert "ALLOW_PIPELINE_CREATE" in html
+    # Then: API 返回配置完整性、分组矩阵和 ApprovalRule 缺失提示。
+    body = configuration.content.decode() + matrix.content.decode() + tree.content.decode()
+    assert configuration.status_code == HTTPStatus.OK
+    assert matrix.status_code == HTTPStatus.OK
+    assert tree.status_code == HTTPStatus.OK
+    assert "requestable_role_approval_rule_missing" in body
+    assert "PIPELINE_GROUP" in body
+    assert "operator" in body
+    assert "ALLOW_PIPELINE_CREATE" in body
+    assert '"enabled": true' in body
 
 
 def test_ops1_console_owner_cannot_access_unowned_app_detail() -> None:
@@ -86,16 +94,19 @@ def test_ops1_console_matrix_save_writes_role_permission_and_audit_without_grant
     role = Role.objects.create(app=app, key="auditor", name="Auditor", requestable=True)
     permission = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
 
-    # When: owner 在矩阵中勾选 RolePermission。
+    initial = client.get(_api_url(app.app_key, "role-permission-matrix"))
+    version = _json_string(initial, "version")
+
+    # When: owner 通过矩阵 API 勾选 RolePermission。
     response = client.post(
-        f"/console/apps/{app.app_key}/",
-        {
-            "action": "set_role_permission",
-            "role_id": str(role.id),
-            "permission_id": str(permission.id),
-            "enabled": "on",
-        },
-        follow=True,
+        _api_url(app.app_key, "role-permission-matrix"),
+        data=_matrix_payload(
+            version=version,
+            role_id=role.id,
+            permission_id=permission.id,
+            enabled=True,
+        ),
+        content_type="application/json",
     )
 
     # Then: 保存只写 RolePermission 和审计, 不直接创建 AccessGrant。
@@ -125,15 +136,30 @@ def test_ops1_console_invalid_matrix_post_returns_controlled_bad_request(
     }
     form_data[invalid_field] = "not-a-number"
 
-    # When: owner 提交非法矩阵表单。
+    initial = client.get(_api_url(app.app_key, "role-permission-matrix"))
+    version = _json_string(initial, "version")
+
+    # When: owner 提交非法矩阵 JSON。
     response = client.post(
-        f"/console/apps/{app.app_key}/",
-        form_data,
+        _api_url(app.app_key, "role-permission-matrix"),
+        data=dumps(
+            {
+                "version": version,
+                "assignments": [
+                    {
+                        "role_id": form_data["role_id"],
+                        "permission_id": form_data["permission_id"],
+                        "enabled": True,
+                    },
+                ],
+            },
+        ),
+        content_type="application/json",
     )
 
-    # Then: 控制台返回受控 400, 不产生 RolePermission 或审计写入。
+    # Then: 控制台 API 返回受控 400, 不产生 RolePermission 或审计写入。
     assert response.status_code == HTTPStatus.BAD_REQUEST
-    assert "表单参数无效" in response.content.decode()
+    assert "VALIDATION_ERROR" in response.content.decode()
     assert RolePermission.objects.count() == 0
     assert AuditLog.objects.count() == 0
 
@@ -146,52 +172,45 @@ def test_ops1_console_config_post_requires_csrf_token_when_enforced() -> None:
     get_response = client.get(f"/console/apps/{app.app_key}/")
     csrf_token = _extract_csrf_token(get_response.content.decode())
 
-    # When: 分别提交无 CSRF token 和带 CSRF token 的新增 Role 表单。
+    # When: 分别提交无 CSRF token 和带 CSRF token 的新增 Role API 请求。
     missing_token = client.post(
-        f"/console/apps/{app.app_key}/",
-        {"action": "create_role", "role_key": "operator", "role_name": "Operator"},
+        _api_url(app.app_key, "roles"),
+        data=dumps({"key": "operator", "name": "Operator"}),
+        content_type="application/json",
     )
     accepted = client.post(
-        f"/console/apps/{app.app_key}/",
-        {
-            "action": "create_role",
-            "role_key": "operator",
-            "role_name": "Operator",
-            "csrfmiddlewaretoken": csrf_token,
-        },
-        follow=True,
+        _api_url(app.app_key, "roles"),
+        data=dumps({"key": "operator", "name": "Operator"}),
+        content_type="application/json",
+        HTTP_X_CSRFTOKEN=csrf_token,
     )
 
-    # Then: 无 CSRF token 被拒绝, 合法表单可写入。
+    # Then: 无 CSRF token 被拒绝, 合法 API 请求可写入。
     assert missing_token.status_code == HTTPStatus.FORBIDDEN
-    assert accepted.status_code == HTTPStatus.OK
+    assert accepted.status_code == HTTPStatus.CREATED
     assert Role.objects.filter(app=app, key="operator").exists() is True
 
 
 def test_ops1_console_permission_template_preview_shows_diff_without_writes() -> None:
-    # Given: owner 打开空 App 的权限模板导入入口。
+    # Given: owner 管理一个空 App。
     client = _logged_in_client("owner-ops1-template-preview")
     app = App.objects.create(app_key="ops1-console-template-preview", name="Template Preview")
     _ = AppMembership.objects.create(app=app, user_id="owner-ops1-template-preview", role="owner")
 
-    # When: owner 粘贴 YAML 模板并点击预览。
+    # When: owner 通过模板预览 API 提交 YAML。
     response = client.post(
-        f"/console/apps/{app.app_key}/",
-        {
-            "action": "preview_permission_template",
-            "template_format": "yaml",
-            "template_content": PIPELINE_TEMPLATE_YAML,
-        },
+        _api_url(app.app_key, "permission-template-imports/preview"),
+        data=dumps({"template_format": "yaml", "template": PIPELINE_TEMPLATE_YAML}),
+        content_type="application/json",
     )
 
-    # Then: 页面展示差异确认, 但不创建 group、permission 或模板版本。
-    html = response.content.decode()
+    # Then: API 返回差异确认, 但不创建 group、permission 或模板版本。
+    body = response.content.decode()
     assert response.status_code == HTTPStatus.OK
-    assert 'data-ops1-template-result="preview"' in html
-    assert "create_group" in html
-    assert "PIPELINE_GROUP" in html
-    assert "create_permission" in html
-    assert "ALLOW_PIPELINE_CREATE" in html
+    assert "create_group" in body
+    assert "PIPELINE_GROUP" in body
+    assert "create_permission" in body
+    assert "ALLOW_PIPELINE_CREATE" in body
     assert PermissionGroup.objects.count() == 0
     assert Permission.objects.count() == 0
     assert PermissionTemplateVersion.objects.count() == 0
@@ -204,30 +223,31 @@ def test_ops1_console_permission_template_apply_imports_and_updates_matrix() -> 
     _ = AppMembership.objects.create(app=app, user_id="owner-ops1-template-apply", role="owner")
     _ = Role.objects.create(app=app, key="operator", name="Operator")
 
-    # When: owner 确认导入 YAML 模板。
+    # When: owner 先预览再确认导入 YAML 模板。
+    preview = client.post(
+        _api_url(app.app_key, "permission-template-imports/preview"),
+        data=dumps({"template_format": "yaml", "template": PIPELINE_TEMPLATE_YAML}),
+        content_type="application/json",
+    )
+    preview_id = _json_string(preview, "preview_id")
     response = client.post(
-        f"/console/apps/{app.app_key}/",
-        {
-            "action": "apply_permission_template",
-            "template_format": "yaml",
-            "template_content": PIPELINE_TEMPLATE_YAML,
-        },
+        _api_url(app.app_key, f"permission-template-imports/{preview_id}/confirm"),
+        content_type="application/json",
     )
 
-    # Then: 模板创建分组和叶子权限, 矩阵展示叶子权限, 且不直接创建授权事实。
-    html = response.content.decode()
+    # Then: 模板创建分组和叶子权限, 矩阵 API 展示叶子权限, 且不直接创建授权事实。
+    matrix = client.get(_api_url(app.app_key, "role-permission-matrix"))
+    body = matrix.content.decode()
     assert response.status_code == HTTPStatus.OK
-    assert 'data-ops1-template-result="applied"' in html
     assert PermissionGroup.objects.get(app=app, key="PIPELINE_GROUP").name == "流水线"
     assert Permission.objects.get(app=app, key="ALLOW_PIPELINE_CREATE").group is not None
     assert PermissionTemplateVersion.objects.get(app=app).version == 1
     assert AuditLog.objects.get(event_type="permission_template_imported").actor_id == (
         "owner-ops1-template-apply"
     )
-    assert "PIPELINE_GROUP" in html
-    assert "ALLOW_PIPELINE_CREATE" in html
-    assert 'data-ops1-permission-tree="groups"' in html
-    assert "流水线" in html
+    assert "PIPELINE_GROUP" in body
+    assert "ALLOW_PIPELINE_CREATE" in body
+    assert "流水线" in body
     assert AccessGrant.objects.count() == 0
 
 
@@ -246,4 +266,26 @@ def _extract_csrf_token(html: str) -> str:
     match = search(r'name="csrfmiddlewaretoken" value="([^"]+)"', html)
     if match is None:
         raise AssertionError(html)
+    return match.group(1)
+
+
+def _api_url(app_key: str, endpoint: str) -> str:
+    return f"/console/api/v1/apps/{app_key}/{endpoint}"
+
+
+def _matrix_payload(*, version: str, role_id: int, permission_id: int, enabled: bool) -> str:
+    return dumps(
+        {
+            "version": version,
+            "assignments": [
+                {"role_id": role_id, "permission_id": permission_id, "enabled": enabled},
+            ],
+        },
+    )
+
+
+def _json_string(response: HttpResponseLike, key: str) -> str:
+    match = search(rf'"{key}"\s*:\s*"([^"]+)"', response.content.decode())
+    if match is None:
+        raise AssertionError(response.content.decode())
     return match.group(1)
