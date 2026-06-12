@@ -5,7 +5,7 @@ import { BrowserRouter } from "react-router-dom";
 
 import { App } from "./App";
 import { queryClient } from "./lib/query";
-import "./styles.css";
+import "./styles/index.css";
 
 const rootElement = document.getElementById("easyauth-root") ?? document.getElementById("root");
 

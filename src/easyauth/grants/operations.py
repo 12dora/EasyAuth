@@ -6,15 +6,13 @@ from django.core.exceptions import ValidationError
 
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.grants.models import (
-    GRANT_STATUS_ACTIVE,
-    GRANT_STATUS_EXPIRED,
-    GRANT_STATUS_REVOKED,
     GRANT_TYPE_PERMANENT,
     GRANT_TYPE_TIMED,
     AccessGrant,
     AccessGrantPermission,
     AccessGrantRole,
 )
+from easyauth.grants.status import GrantStatus, parse_grant_status
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -22,20 +20,11 @@ if TYPE_CHECKING:
     from easyauth.accounts.models import UserMirror
     from easyauth.applications.models import App, Permission, Role
 
-type GrantStatus = Literal["active", "revoked", "expired"]
 type GrantType = Literal["permanent", "timed"]
 
 
 def parse_status(status: str) -> GrantStatus:
-    match status:
-        case "active":
-            return GRANT_STATUS_ACTIVE
-        case "revoked":
-            return GRANT_STATUS_REVOKED
-        case "expired":
-            return GRANT_STATUS_EXPIRED
-        case unsupported:
-            raise ValidationError({"status": f"Unsupported grant status: {unsupported}"})
+    return parse_grant_status(status)
 
 
 def parse_grant_type(grant_type: str) -> GrantType:

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Literal
+
 import pytest
 from django.utils import timezone
 
@@ -107,7 +109,7 @@ def test_ops4_apply_approved_change_rejects_stale_permission_target() -> None:
     ["permission_active", "permission_deprecated", "permission_rule"],
 )
 def test_ops4_apply_approved_grant_rejects_stale_direct_permission_target(
-    stale_target: str,
+    stale_target: Literal["permission_active", "permission_deprecated", "permission_rule"],
 ) -> None:
     # Given: grant 申请审批通过后, 目标 direct Permission 配置失效。
     user = UserMirror.objects.create(authentik_user_id=f"ops4-stale-grant-{stale_target}")

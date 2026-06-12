@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Literal
 
 from easyauth.applications.permission_templates import (
     PermissionTemplateImportError,
+    PermissionTemplateInput,
     TemplateAction,
     apply_permission_template,
     parse_permission_template,
@@ -46,31 +47,14 @@ def handle_permission_template_post(
         )
         match action:
             case "preview_permission_template":
-                preview = preview_permission_template(app=app, template=template)
-                return PermissionTemplateConsoleResult(
-                    state="preview",
-                    message="模板预览完成, 请确认差异后导入。",
-                    template_format=template_format,
-                    raw_template=raw_template,
-                    actions=preview.actions,
-                )
+                return _preview_template_result(app, template, template_format, raw_template)
             case "apply_permission_template":
-                result = apply_permission_template(app=app, template=template)
-                return PermissionTemplateConsoleResult(
-                    state="applied",
-                    message="模板已导入。",
-                    template_format=template_format,
-                    raw_template=raw_template,
-                    actions=result.actions,
-                )
+                return _apply_template_result(app, template, template_format, raw_template)
             case _:
-                return PermissionTemplateConsoleResult(
-                    state="error",
-                    message="未知模板操作。",
-                    template_format=raw_format,
+                return _unknown_template_action_result(
+                    action=action,
+                    raw_format=raw_format,
                     raw_template=raw_template,
-                    error_code="permission_template_action_invalid",
-                    error_subject=action,
                 )
     except PermissionTemplateImportError as exc:
         return PermissionTemplateConsoleResult(
@@ -81,3 +65,51 @@ def handle_permission_template_post(
             error_code=exc.code,
             error_subject=exc.subject,
         )
+
+
+def _preview_template_result(
+    app: App,
+    template: PermissionTemplateInput,
+    template_format: str,
+    raw_template: str,
+) -> PermissionTemplateConsoleResult:
+    preview = preview_permission_template(app=app, template=template)
+    return PermissionTemplateConsoleResult(
+        state="preview",
+        message="模板预览完成, 请确认差异后导入。",
+        template_format=template_format,
+        raw_template=raw_template,
+        actions=preview.actions,
+    )
+
+
+def _apply_template_result(
+    app: App,
+    template: PermissionTemplateInput,
+    template_format: str,
+    raw_template: str,
+) -> PermissionTemplateConsoleResult:
+    result = apply_permission_template(app=app, template=template)
+    return PermissionTemplateConsoleResult(
+        state="applied",
+        message="模板已导入。",
+        template_format=template_format,
+        raw_template=raw_template,
+        actions=result.actions,
+    )
+
+
+def _unknown_template_action_result(
+    *,
+    action: str,
+    raw_format: str,
+    raw_template: str,
+) -> PermissionTemplateConsoleResult:
+    return PermissionTemplateConsoleResult(
+        state="error",
+        message="未知模板操作。",
+        template_format=raw_format,
+        raw_template=raw_template,
+        error_code="permission_template_action_invalid",
+        error_subject=action,
+    )

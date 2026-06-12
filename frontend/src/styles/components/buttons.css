@@ -1,0 +1,118 @@
+.button {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 8px 16px;
+  border: 1px solid rgba(15, 23, 42, 0.3);
+  border-radius: var(--radius-tight);
+  background: var(--surface);
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0;
+  line-height: 1;
+  transition: background-color 150ms ease-out, border-color 150ms ease-out, color 150ms ease-out, opacity 150ms ease-out, transform 150ms ease-out;
+  white-space: nowrap;
+}
+
+.button:hover:not(:disabled) {
+  border-color: rgba(15, 23, 42, 0.6);
+  background: rgba(15, 23, 42, 0.04);
+  color: var(--ink);
+}
+
+.button:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.button-primary {
+  border-color: var(--ink);
+  background: var(--ink);
+  color: #fff;
+}
+
+.button-primary:hover:not(:disabled) {
+  border-color: rgba(15, 23, 42, 0.9);
+  background: rgba(15, 23, 42, 0.9);
+  color: #fff;
+}
+
+.button-secondary {
+  border-color: rgba(15, 23, 42, 0.3);
+  background: transparent;
+  color: var(--ink);
+}
+
+.button-danger {
+  border-color: var(--danger);
+  background: var(--danger);
+  color: #fff;
+}
+
+.button-danger:hover:not(:disabled) {
+  border-color: #b91c1c;
+  background: #b91c1c;
+  color: #fff;
+}
+
+.button-ghost {
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
+}
+
+.button-ghost:hover:not(:disabled) {
+  border-color: transparent;
+  background: rgba(15, 23, 42, 0.04);
+  color: var(--ink);
+}
+
+.button-icon {
+  display: inline-flex;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--surface);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.badge-neutral {
+  background: #f8fafc;
+  color: var(--muted);
+}
+
+.badge-primary {
+  background: #eff6ff;
+  color: var(--brand);
+}
+
+.badge-success {
+  background: #ecfdf5;
+  color: var(--success);
+}
+
+.badge-warning {
+  background: #fffbeb;
+  color: var(--warning);
+}
+
+.badge-danger {
+  background: #fef2f2;
+  color: var(--danger);
+}

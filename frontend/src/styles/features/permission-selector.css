@@ -1,0 +1,112 @@
+.permission-selector {
+  overflow: auto;
+  max-height: 320px;
+  border: 1px solid var(--line-strong);
+  border-radius: 2px;
+  background: var(--surface);
+}
+
+.permission-selector-empty {
+  min-height: 36px;
+  padding: 10px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 2px;
+  color: var(--muted);
+  background: var(--surface-strong);
+}
+
+.permission-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.permission-table th,
+.permission-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.permission-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-strong);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.permission-table th:last-child,
+.permission-table td:last-child {
+  width: 72px;
+  text-align: center;
+}
+
+.permission-table tr:last-child td {
+  border-bottom: 0;
+}
+
+.permission-group-row {
+  background: var(--surface-strong);
+}
+
+.permission-row:hover {
+  background: #f8fafc;
+}
+
+.permission-group-toggle,
+.permission-name {
+  --permission-depth: 0;
+  margin-left: calc(var(--permission-depth) * 18px);
+}
+
+.permission-group-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--ink);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+  text-align: left;
+  transition: background-color 150ms ease-out;
+}
+
+.permission-group-toggle:hover {
+  background: rgba(15, 23, 42, 0.05);
+}
+
+.permission-group-toggle svg {
+  color: var(--faint);
+  transition: transform 150ms ease-out, color 150ms ease-out;
+}
+
+.permission-group-toggle svg.expanded {
+  transform: rotate(90deg);
+  color: var(--brand);
+}
+
+.permission-group-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 800;
+}
+
+.permission-group-count {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.permission-name {
+  display: inline-block;
+  font-weight: 700;
+}

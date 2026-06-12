@@ -9,8 +9,9 @@ from django.contrib.auth.models import User
 from django.test import Client
 from pydantic import TypeAdapter
 
-from easyauth.api.errors import JsonValue
-from easyauth.applications.models import App, AppMembership, OAuthClientBinding
+from easyauth.api.errors import ErrorCode, JsonValue
+from easyauth.applications.models import App, AppCredential, AppMembership, OAuthClientBinding
+from easyauth.applications.services import StaticTokenService
 from easyauth.audit.models import AuditLog
 
 pytestmark = pytest.mark.django_db
@@ -54,6 +55,66 @@ def test_ops1_credentials_api_disables_oauth_client_without_deleting_history() -
         oauth_application__isnull=False,
     ).exists()
     assert audit.metadata["reason"] == "停用试点接入"
+
+
+def test_ops1_credentials_api_returns_401_when_disabling_static_token_without_login() -> None:
+    # Given: App 已存在 active 静态 token。
+    app = _owned_app("ops1-static-disable-unauth", "owner-ops1-static-disable-unauth")
+    issue = StaticTokenService.create_token(app=app, name="disable token")
+
+    # When: 未登录用户尝试禁用静态 token。
+    response = Client(HTTP_HOST="localhost").post(
+        _credentials_api_url(app.app_key, f"static-tokens/{issue.credential_id}/disable"),
+        content_type="application/json",
+    )
+
+    # Then: API 返回 401, 且不修改凭据。
+    credential = AppCredential.objects.get(id=issue.credential_id)
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert credential.is_active is True
+
+
+def test_ops1_credentials_api_returns_403_when_developer_disables_static_token() -> None:
+    # Given: developer 可见 App, App 已存在 active 静态 token。
+    client = _logged_in_client("developer-ops1-static-disable")
+    app = App.objects.create(app_key="ops1-static-disable-dev", name="Static Disable Dev")
+    _ = AppMembership.objects.create(
+        app=app,
+        user_id="developer-ops1-static-disable",
+        role="developer",
+    )
+    issue = StaticTokenService.create_token(app=app, name="developer disable")
+
+    # When: developer 尝试禁用静态 token。
+    response = client.post(
+        _credentials_api_url(app.app_key, f"static-tokens/{issue.credential_id}/disable"),
+        content_type="application/json",
+    )
+
+    # Then: API 拒绝写操作且不修改凭据。
+    credential = AppCredential.objects.get(id=issue.credential_id)
+    assert response.status_code == HTTPStatus.FORBIDDEN
+    assert _json_object(_json_dict(response)["error"])["code"] == ErrorCode.PERMISSION_DENIED
+    assert credential.is_active is True
+
+
+def test_ops1_credentials_api_returns_404_when_owner_disables_other_app_static_token() -> None:
+    # Given: owner 管理当前 App, 另一个 App 拥有 active 静态 token。
+    client = _logged_in_client("owner-ops1-static-disable-cross-app")
+    app = _owned_app("ops1-static-disable-own-app", "owner-ops1-static-disable-cross-app")
+    other_app = _owned_app("ops1-static-disable-other-app", "owner-ops1-static-disable-other")
+    issue = StaticTokenService.create_token(app=other_app, name="other app token")
+
+    # When: owner 在当前 App 路径下禁用其他 App 的 credential_id。
+    response = client.post(
+        _credentials_api_url(app.app_key, f"static-tokens/{issue.credential_id}/disable"),
+        content_type="application/json",
+    )
+
+    # Then: API 返回 404, 目标凭据仍为 active。
+    credential = AppCredential.objects.get(id=issue.credential_id)
+    assert response.status_code == HTTPStatus.NOT_FOUND
+    assert credential.is_active is True
 
 
 def _owned_app(app_key: str, owner_user_id: str) -> App:

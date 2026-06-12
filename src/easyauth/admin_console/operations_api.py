@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import TYPE_CHECKING, ClassVar, override
+from typing import ClassVar, override
 
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -10,6 +10,13 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from easyauth.access_requests.models import AccessRequest
 from easyauth.accounts.models import UserMirror
 from easyauth.admin_console.api_payloads import list_payload, paginated_list_payload
+from easyauth.admin_console.api_responses import (
+    error_response as _error_response,
+)
+from easyauth.admin_console.api_responses import (
+    json_response as _json_response,
+)
+from easyauth.admin_console.authz import require_superuser
 from easyauth.admin_console.operation_filters import (
     Page,
     filter_access_grants,
@@ -22,15 +29,13 @@ from easyauth.admin_console.operations_payloads import (
     dependency_health_map_payload,
     health_item,
 )
-from easyauth.api.errors import ErrorCode, ErrorResponse, JsonValue, build_error_response
+from easyauth.api.datetime_json import datetime_value
+from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.dependency_health import DependencyHealthService
 from easyauth.applications.models import App
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.grants.models import AccessGrant
 from easyauth.grants.services import GrantService
-
-if TYPE_CHECKING:
-    from datetime import datetime
 
 type ConsoleApiResult = str | JsonResponse
 
@@ -57,7 +62,7 @@ class _EmergencyRevokePayload(BaseModel):
 
 
 def operations_access_requests(request: HttpRequest) -> JsonResponse:
-    match _require_superuser(request):
+    match require_superuser(request):
         case str():
             return _access_request_page_response(_access_request_page(request))
         case JsonResponse() as response:
@@ -65,7 +70,7 @@ def operations_access_requests(request: HttpRequest) -> JsonResponse:
 
 
 def operations_access_grants(request: HttpRequest) -> JsonResponse:
-    match _require_superuser(request):
+    match require_superuser(request):
         case str():
             return _access_grant_page_response(_access_grant_page(request))
         case JsonResponse() as response:
@@ -73,7 +78,7 @@ def operations_access_grants(request: HttpRequest) -> JsonResponse:
 
 
 def operations_emergency_revokes(request: HttpRequest) -> JsonResponse:
-    match _require_superuser(request):
+    match require_superuser(request):
         case str() as actor_id:
             pass
         case JsonResponse() as response:
@@ -85,16 +90,7 @@ def operations_emergency_revokes(request: HttpRequest) -> JsonResponse:
             status=HTTPStatus.METHOD_NOT_ALLOWED,
         )
     try:
-        payload = _EmergencyRevokePayload.model_validate_json(request.body)
-        user = _user_for_id(payload.user_id)
-        app = _app_for_key(payload.app_key)
-        revoked_grant = GrantService.revoke_grant(
-            user=user,
-            app=app,
-            actor_type="admin",
-            actor_id=actor_id,
-            reason=payload.reason,
-        )
+        result = _execute_emergency_revoke(request=request, actor_id=actor_id)
     except ValidationError as exc:
         return _error_response(
             ErrorCode.VALIDATION_ERROR,
@@ -109,26 +105,54 @@ def operations_emergency_revokes(request: HttpRequest) -> JsonResponse:
             exc.details,
             status=HTTPStatus.UNPROCESSABLE_ENTITY,
         )
-    revoked_count = 0 if revoked_grant is None else 1
     _record_emergency_revoke(
         actor_id=actor_id,
-        user_id=payload.user_id,
-        app_key=payload.app_key,
+        user_id=result.payload.user_id,
+        app_key=result.payload.app_key,
+        reason=result.payload.reason,
+        revoked_count=result.revoked_count,
+    )
+    return _json_response(_emergency_revoke_response_payload(result))
+
+
+@dataclass(frozen=True, slots=True)
+class _EmergencyRevokeResult:
+    payload: _EmergencyRevokePayload
+    revoked_count: int
+
+
+def _execute_emergency_revoke(
+    *,
+    request: HttpRequest,
+    actor_id: str,
+) -> _EmergencyRevokeResult:
+    payload = _EmergencyRevokePayload.model_validate_json(request.body)
+    user = _user_for_id(payload.user_id)
+    app = _app_for_key(payload.app_key)
+    revoked_grant = GrantService.revoke_grant(
+        user=user,
+        app=app,
+        actor_type="admin",
+        actor_id=actor_id,
         reason=payload.reason,
-        revoked_count=revoked_count,
     )
-    return _json_response(
-        {
-            "status": "accepted",
-            "revoked_count": revoked_count,
-            "user_id": payload.user_id,
-            "app_key": payload.app_key,
-        },
-    )
+    revoked_count = 0 if revoked_grant is None else 1
+    return _EmergencyRevokeResult(payload=payload, revoked_count=revoked_count)
+
+
+def _emergency_revoke_response_payload(
+    result: _EmergencyRevokeResult,
+) -> dict[str, JsonValue]:
+    return {
+        "status": "accepted",
+        "revoked_count": result.revoked_count,
+        "user_id": result.payload.user_id,
+        "app_key": result.payload.app_key,
+    }
 
 
 def operations_dependency_health(request: HttpRequest) -> JsonResponse:
-    match _require_superuser(request):
+    match require_superuser(request):
         case str() as actor_id:
             record_dependency_health_read(actor_id)
             items = DependencyHealthService.latest_items()
@@ -174,25 +198,8 @@ def _access_grant_item(access_grant: AccessGrant) -> dict[str, JsonValue]:
         "grant_type": access_grant.grant_type,
         "version": access_grant.version,
         "is_current": access_grant.is_current,
-        "grant_expires_at": _datetime_value(access_grant.grant_expires_at),
+        "grant_expires_at": datetime_value(access_grant.grant_expires_at),
     }
-
-
-def _require_superuser(request: HttpRequest) -> ConsoleApiResult:
-    user = request.user
-    if not user.is_authenticated:
-        return _error_response(
-            ErrorCode.AUTHENTICATION_FAILED,
-            "控制台登录已失效。",
-            status=HTTPStatus.UNAUTHORIZED,
-        )
-    if not bool(getattr(user, "is_superuser", False)):
-        return _error_response(
-            ErrorCode.PERMISSION_DENIED,
-            "只有系统管理员可以执行该操作。",
-            status=HTTPStatus.FORBIDDEN,
-        )
-    return user.get_username()
 
 
 def _user_for_id(user_id: str) -> UserMirror:
@@ -234,12 +241,6 @@ def _record_emergency_revoke(
     )
 
 
-def _datetime_value(value: datetime | None) -> str | None:
-    if value is None:
-        return None
-    return str(value)
-
-
 def _access_request_page_response(page: Page[AccessRequest]) -> JsonResponse:
     result: list[JsonValue] = []
     result.extend(_access_request_item(access_request) for access_request in page.items)
@@ -263,25 +264,3 @@ def _pagination_item(page: Page[AccessRequest] | Page[AccessGrant]) -> dict[str,
         "total_items": page.total_items,
         "total_pages": page.total_pages,
     }
-
-
-def _error_response(
-    code: ErrorCode,
-    message: str,
-    details: dict[str, JsonValue] | None = None,
-    *,
-    status: HTTPStatus,
-) -> JsonResponse:
-    return _json_response(build_error_response(code, message, details), status=status)
-
-
-def _json_response(
-    payload: dict[str, JsonValue] | ErrorResponse,
-    *,
-    status: HTTPStatus = HTTPStatus.OK,
-) -> JsonResponse:
-    return JsonResponse(
-        payload,
-        status=status,
-        json_dumps_params={"ensure_ascii": False},
-    )

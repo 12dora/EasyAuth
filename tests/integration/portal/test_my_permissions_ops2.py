@@ -5,7 +5,6 @@ from http import HTTPStatus
 from typing import Final
 
 import pytest
-from django.test import Client
 from django.utils import timezone
 
 from easyauth.access_requests.models import (
@@ -14,8 +13,7 @@ from easyauth.access_requests.models import (
     REQUEST_STATUS_GRANT_FAILED,
     AccessRequest,
 )
-from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
-from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
+from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import App, Permission, Role, RolePermission
 from easyauth.grants.models import (
     GRANT_STATUS_REVOKED,
@@ -25,6 +23,7 @@ from easyauth.grants.models import (
     AccessGrantPermission,
     AccessGrantRole,
 )
+from tests.integration.portal.helpers import logged_in_client
 
 pytestmark = pytest.mark.django_db
 
@@ -36,7 +35,7 @@ EXPIRING_SOON_DAYS: Final = 14
 
 def test_ops2_portal_lists_my_current_permissions_for_active_grants() -> None:
     # Given: 当前登录员工有一条长期有效授权, 以及不应展示的他人授权和历史授权。
-    client, user = _logged_in_client("ops2-current-user")
+    client, user = logged_in_client("ops2-current-user")
     crm_app, crm_grant = _create_grant(
         user=user,
         app_key="ops2-current-crm",
@@ -82,7 +81,7 @@ def test_ops2_portal_lists_my_current_permissions_for_active_grants() -> None:
 
 def test_ops2_portal_lists_only_expiring_grants_within_fourteen_days() -> None:
     # Given: 当前员工有 14 天内到期、14 天后到期和长期授权。
-    client, user = _logged_in_client("ops2-expiring-user")
+    client, user = logged_in_client("ops2-expiring-user")
     now = timezone.now()
     _ = _create_timed_grant(
         user=user,
@@ -112,7 +111,7 @@ def test_ops2_portal_lists_only_expiring_grants_within_fourteen_days() -> None:
 
 def test_ops2_portal_shows_empty_states_when_user_has_no_current_grants() -> None:
     # Given: 当前登录员工没有任何当前有效授权。
-    client, _user = _logged_in_client("ops2-empty-user")
+    client, _user = logged_in_client("ops2-empty-user")
 
     # When: 员工读取当前授权和即将过期授权 API。
     grants = client.get(GRANTS_API_URL)
@@ -127,7 +126,7 @@ def test_ops2_portal_shows_empty_states_when_user_has_no_current_grants() -> Non
 
 def test_ops2_portal_explains_request_status_before_grant_is_effective() -> None:
     # Given: 当前登录员工已有审批通过、授权生效和授权失败申请。
-    client, user = _logged_in_client("ops2-status-guide-user")
+    client, user = logged_in_client("ops2-status-guide-user")
     app = App.objects.create(app_key="ops2-status-guide-app", name="CRM")
     _ = AccessRequest.objects.create(user=user, app=app, status=REQUEST_STATUS_APPROVED)
     _ = AccessRequest.objects.create(user=user, app=app, status=REQUEST_STATUS_GRANT_APPLIED)
@@ -142,19 +141,6 @@ def test_ops2_portal_explains_request_status_before_grant_is_effective() -> None
     assert "审批已通过, 等待授权落库" in body
     assert "授权已落库, 权限已生效" in body
     assert "授权落库失败" in body
-
-
-def _logged_in_client(authentik_user_id: str) -> tuple[Client, UserMirror]:
-    client = Client()
-    user = UserMirror.objects.create(
-        authentik_user_id=authentik_user_id,
-        name="门户用户",
-        status=USER_STATUS_ACTIVE,
-    )
-    session = client.session
-    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
-    session.save()
-    return client, user
 
 
 def _create_grant(

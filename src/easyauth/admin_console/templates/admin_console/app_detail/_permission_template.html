@@ -1,0 +1,57 @@
+<div class="console-panel">
+  <h2>权限模板</h2>
+  {% if template_result %}
+    <div class="query-result" data-ops1-template-result="{{ template_result.state }}">
+      <p>{{ template_result.message }}</p>
+      {% if template_result.error_code %}
+        <p><code>{{ template_result.error_code }}</code> {{ template_result.error_subject }}</p>
+      {% endif %}
+      {% if template_result.actions %}
+        <table>
+          <thead>
+            <tr>
+              <th>差异</th>
+              <th>key</th>
+              <th>父级</th>
+            </tr>
+          </thead>
+          <tbody>
+            {% for action in template_result.actions %}
+              <tr>
+                <td><code>{{ action.action }}</code></td>
+                <td><code>{{ action.key }}</code></td>
+                <td><code>{{ action.parent_key }}</code></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      {% else %}
+        <p>没有差异</p>
+      {% endif %}
+      {% if template_result.state == "preview" and can_manage %}
+        <form method="post" class="compact-form">
+          {% csrf_token %}
+          <input type="hidden" name="action" value="apply_permission_template">
+          <input type="hidden" name="template_format" value="{{ template_result.template_format }}">
+          <input type="hidden" name="template_content" value="{{ template_result.raw_template }}">
+          <button type="submit" class="primary">确认导入</button>
+        </form>
+      {% endif %}
+    </div>
+  {% endif %}
+  {% if can_manage %}
+    <form method="post" class="compact-form">
+      {% csrf_token %}
+      <input type="hidden" name="action" value="preview_permission_template">
+      <label>
+        格式
+        <select name="template_format">
+          <option value="yaml" {% if template_result.template_format != "json" %}selected{% endif %}>YAML</option>
+          <option value="json" {% if template_result.template_format == "json" %}selected{% endif %}>JSON</option>
+        </select>
+      </label>
+      <label>模板内容 <textarea name="template_content" rows="10" required>{% if template_result %}{{ template_result.raw_template }}{% endif %}</textarea></label>
+      <button type="submit" class="primary">预览差异</button>
+    </form>
+  {% endif %}
+</div>

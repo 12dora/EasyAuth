@@ -11,7 +11,11 @@ from easyauth.access_requests.submission_types import (
     AccessRequestSubmissionError,
     AccessRequestType,
 )
-from easyauth.applications.models import ApprovalRule, RolePermission
+from easyauth.access_requests.target_validation import (
+    AccessRequestTargetValidationError,
+    validate_request_targets,
+)
+from easyauth.applications.models import RolePermission
 from easyauth.grants.models import (
     GRANT_STATUS_ACTIVE as GRANT_RECORD_STATUS_ACTIVE,
 )
@@ -255,46 +259,14 @@ def _validate_roles(app: App, roles: tuple[Role, ...]) -> None:
     if not roles:
         raise AccessRequestSubmissionError(("at least one role is required",))
 
-    errors: list[str] = []
-    for role in roles:
-        role_errors = _role_errors(app, role)
-        errors.extend(f"{role.key}: {message}" for message in role_errors)
-
-    if errors:
-        raise AccessRequestSubmissionError(tuple(errors))
-
-
-def _role_errors(app: App, role: Role) -> list[str]:
-    errors: list[str] = []
-    if role.app != app:
-        errors.append("Role must belong to the access request app.")
-    if not role.requestable:
-        errors.append("Role must be requestable.")
-    if not role.is_active:
-        errors.append("Role must be active.")
-    if not ApprovalRule.objects.filter(app=app, role=role, is_active=True).exists():
-        errors.append("Role must have an active approval rule.")
-    return errors
+    try:
+        validate_request_targets(app, roles, ())
+    except AccessRequestTargetValidationError as exc:
+        raise AccessRequestSubmissionError(exc.messages) from exc
 
 
 def _validate_permissions(app: App, permissions: tuple[Permission, ...]) -> None:
-    errors: list[str] = []
-    for permission in permissions:
-        permission_errors = _permission_errors(app, permission)
-        errors.extend(f"{permission.key}: {message}" for message in permission_errors)
-
-    if errors:
-        raise AccessRequestSubmissionError(tuple(errors))
-
-
-def _permission_errors(app: App, permission: Permission) -> list[str]:
-    errors: list[str] = []
-    if permission.app != app:
-        errors.append("Permission must belong to the access request app.")
-    if not permission.is_active:
-        errors.append("Permission must be active.")
-    if permission.deprecated_at is not None:
-        errors.append("Permission must not be deprecated.")
-    if not ApprovalRule.objects.filter(app=app, permission=permission, is_active=True).exists():
-        errors.append("Permission must have an active approval rule.")
-    return errors
+    try:
+        validate_request_targets(app, (), permissions)
+    except AccessRequestTargetValidationError as exc:
+        raise AccessRequestSubmissionError(exc.messages) from exc

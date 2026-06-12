@@ -7,7 +7,6 @@ from typing import Final
 
 import pytest
 from django.db import connection
-from django.test import Client
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
@@ -22,11 +21,10 @@ from easyauth.access_requests.models import (
     AccessRequest,
     AccessRequestRole,
 )
-from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
-from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.applications.models import App, ApprovalRule, Role
 from easyauth.grants.models import AccessGrant
 from easyauth.portal.views import request_rows_for_user
+from tests.integration.portal.helpers import logged_in_client
 
 pytestmark = pytest.mark.django_db
 
@@ -37,7 +35,7 @@ EXPECTED_REQUEST_ROW_QUERIES: Final = 2
 
 def test_s14_portal_api_accepts_only_requestable_roles_with_approval_rules() -> None:
     # Given: 员工已登录, 且只有一个角色满足可申请和审批规则要求。
-    client, user = _logged_in_client("s14-portal-form-user")
+    client, user = logged_in_client("s14-portal-form-user")
     app = App.objects.create(app_key="s14-portal-crm", name="CRM")
     requestable_role = Role.objects.create(
         app=app,
@@ -92,7 +90,7 @@ def test_s14_portal_api_accepts_only_requestable_roles_with_approval_rules() -> 
 
 def test_s14_portal_submit_creates_request_through_service_without_creating_grant() -> None:
     # Given: 员工选择一个有效角色和永久授权生命周期。
-    client, user = _logged_in_client("s14-portal-submit-user")
+    client, user = logged_in_client("s14-portal-submit-user")
     app = App.objects.create(app_key="s14-portal-submit-app", name="CRM")
     role = Role.objects.create(app=app, key="auditor", name="CRM 审计员", requestable=True)
     _ = ApprovalRule.objects.create(app=app, role=role, approver_userids=["manager-001"])
@@ -123,7 +121,7 @@ def test_s14_portal_submit_creates_request_through_service_without_creating_gran
 
 def test_s14_portal_rejects_role_without_approval_rule() -> None:
     # Given: 员工提交一个没有审批规则的角色。
-    client, _user = _logged_in_client("s14-portal-invalid-user")
+    client, _user = logged_in_client("s14-portal-invalid-user")
     app = App.objects.create(app_key="s14-portal-invalid-app", name="CRM")
     role = Role.objects.create(app=app, key="no-rule", name="无规则角色", requestable=True)
 
@@ -149,7 +147,7 @@ def test_s14_portal_rejects_role_without_approval_rule() -> None:
 
 def test_s14_portal_status_list_distinguishes_request_statuses() -> None:
     # Given: 员工已经有各类申请状态。
-    client, user = _logged_in_client("s14-portal-status-user")
+    client, user = logged_in_client("s14-portal-status-user")
     app = App.objects.create(app_key="s14-portal-status-app", name="CRM")
     role = Role.objects.create(app=app, key="admin", name="CRM 管理员", requestable=True)
     _ = ApprovalRule.objects.create(app=app, role=role, approver_userids=["manager-001"])
@@ -183,7 +181,7 @@ def test_s14_portal_status_list_distinguishes_request_statuses() -> None:
 
 def test_s14_portal_request_rows_load_role_names_in_bulk() -> None:
     # Given: 员工有多条申请状态行。
-    _client, user = _logged_in_client("s14-portal-query-user")
+    _client, user = logged_in_client("s14-portal-query-user")
     app = App.objects.create(app_key="s14-portal-query-app", name="CRM")
     role = Role.objects.create(app=app, key="admin", name="CRM 管理员", requestable=True)
     _ = ApprovalRule.objects.create(app=app, role=role, approver_userids=["manager-001"])
@@ -207,7 +205,7 @@ def test_s14_portal_request_rows_load_role_names_in_bulk() -> None:
 
 def test_s14_portal_timed_request_requires_expiration() -> None:
     # Given: 员工选择限时授权但没有填写到期时间。
-    client, _user = _logged_in_client("s14-portal-timed-user")
+    client, _user = logged_in_client("s14-portal-timed-user")
     app = App.objects.create(app_key="s14-portal-timed-app", name="CRM")
     role = Role.objects.create(app=app, key="operator", name="CRM 操作员", requestable=True)
     _ = ApprovalRule.objects.create(app=app, role=role, approver_userids=["manager-001"])
@@ -233,7 +231,7 @@ def test_s14_portal_timed_request_requires_expiration() -> None:
 
 def test_s14_portal_timed_request_creates_request_with_expiration() -> None:
     # Given: 员工选择限时授权并填写到期时间。
-    client, user = _logged_in_client("s14-portal-timed-submit-user")
+    client, user = logged_in_client("s14-portal-timed-submit-user")
     app = App.objects.create(app_key="s14-portal-timed-submit-app", name="CRM")
     role = Role.objects.create(app=app, key="operator", name="CRM 操作员", requestable=True)
     _ = ApprovalRule.objects.create(app=app, role=role, approver_userids=["manager-001"])
@@ -257,19 +255,6 @@ def test_s14_portal_timed_request_creates_request_with_expiration() -> None:
     assert response.status_code == HTTPStatus.CREATED
     assert access_request.grant_type == GRANT_TYPE_TIMED
     assert access_request.grant_expires_at is not None
-
-
-def _logged_in_client(authentik_user_id: str) -> tuple[Client, UserMirror]:
-    client = Client()
-    user = UserMirror.objects.create(
-        authentik_user_id=authentik_user_id,
-        name="门户用户",
-        status=USER_STATUS_ACTIVE,
-    )
-    session = client.session
-    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
-    session.save()
-    return client, user
 
 
 def _access_request_payload(

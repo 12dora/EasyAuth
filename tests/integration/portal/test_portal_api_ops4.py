@@ -6,7 +6,6 @@ from json import dumps
 from typing import Final
 
 import pytest
-from django.test import Client
 from django.utils import timezone
 
 from easyauth.access_requests.models import (
@@ -14,8 +13,7 @@ from easyauth.access_requests.models import (
     AccessRequestPermission,
     AccessRequestRole,
 )
-from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
-from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
+from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import App, ApprovalRule, Permission, Role
 from easyauth.grants.models import (
     GRANT_TYPE_TIMED,
@@ -23,6 +21,7 @@ from easyauth.grants.models import (
     AccessGrantPermission,
     AccessGrantRole,
 )
+from tests.integration.portal.helpers import logged_in_client
 from tests.integration.portal.json_helpers import json_object
 
 pytestmark = pytest.mark.django_db
@@ -35,7 +34,7 @@ def test_ops4_portal_api_submits_lifecycle_request_for_session_user(
     request_type: str,
 ) -> None:
     # Given: 当前员工已有当前授权, 并为生命周期目标角色配置了审批规则。
-    client, user = _logged_in_client(f"ops4-lifecycle-{request_type}-user")
+    client, user = logged_in_client(f"ops4-lifecycle-{request_type}-user")
     app = App.objects.create(app_key=f"ops4-lifecycle-{request_type}", name="OPS4 CRM")
     keep_role = _requestable_role(app=app, key="viewer")
     old_role = _requestable_role(app=app, key="operator")
@@ -82,7 +81,7 @@ def test_ops4_portal_api_submits_lifecycle_request_for_session_user(
 
 def test_ops4_portal_api_rejects_lifecycle_requester_spoofing() -> None:
     # Given: 登录员工尝试在生命周期申请 JSON 中伪造 requester。
-    client, user = _logged_in_client("ops4-lifecycle-spoof-user")
+    client, user = logged_in_client("ops4-lifecycle-spoof-user")
     app = App.objects.create(app_key="ops4-lifecycle-spoof", name="OPS4 Spoof")
     role = _requestable_role(app=app, key="viewer")
     grant = AccessGrant.objects.create(user=user, app=app)
@@ -114,7 +113,7 @@ def test_ops4_portal_api_rejects_lifecycle_request_for_other_user_grant(
     request_type: str,
 ) -> None:
     # Given: 当前员工没有目标应用授权, 只有另一个员工有当前授权。
-    client, _user = _logged_in_client("ops4-lifecycle-cross-user")
+    client, _user = logged_in_client("ops4-lifecycle-cross-user")
     other_user = UserMirror.objects.create(authentik_user_id="ops4-lifecycle-owner")
     app = App.objects.create(app_key="ops4-lifecycle-cross", name="OPS4 Cross")
     role = _requestable_role(app=app, key="viewer")
@@ -141,7 +140,7 @@ def test_ops4_portal_api_rejects_lifecycle_request_for_other_user_grant(
 
 def test_ops4_portal_api_rejects_lifecycle_extra_fields() -> None:
     # Given: 当前员工已有当前授权。
-    client, user = _logged_in_client("ops4-lifecycle-extra-user")
+    client, user = logged_in_client("ops4-lifecycle-extra-user")
     app = App.objects.create(app_key="ops4-lifecycle-extra", name="OPS4 Extra")
     role = _requestable_role(app=app, key="viewer")
     grant = AccessGrant.objects.create(user=user, app=app)
@@ -170,7 +169,7 @@ def test_ops4_portal_api_rejects_lifecycle_extra_fields() -> None:
 
 def test_ops4_portal_api_accepts_empty_role_keys_for_full_revoke() -> None:
     # Given: 当前员工已有当前授权, 想主动撤销整个 App 授权。
-    client, user = _logged_in_client("ops4-lifecycle-full-revoke-user")
+    client, user = logged_in_client("ops4-lifecycle-full-revoke-user")
     app = App.objects.create(app_key="ops4-lifecycle-full-revoke", name="OPS4 Full Revoke")
     role = _requestable_role(app=app, key="viewer")
     grant = AccessGrant.objects.create(user=user, app=app)
@@ -199,7 +198,7 @@ def test_ops4_portal_api_accepts_empty_role_keys_for_full_revoke() -> None:
 
 def test_ops4_portal_api_submits_lifecycle_request_with_permission_keys() -> None:
     # Given: 当前员工已有 direct Permission 授权, 目标权限配置了审批规则。
-    client, user = _logged_in_client("ops4-lifecycle-permission-user")
+    client, user = logged_in_client("ops4-lifecycle-permission-user")
     app = App.objects.create(app_key="ops4-lifecycle-permission", name="OPS4 Permission")
     old_permission = _requestable_permission(app=app, key="invoice.read")
     new_permission = _requestable_permission(app=app, key="invoice.write")
@@ -237,19 +236,6 @@ def test_ops4_portal_api_submits_lifecycle_request_with_permission_keys() -> Non
     assert permission_keys == (new_permission.key,)
     assert AccessRequestRole.objects.filter(access_request=access_request).count() == 0
     assert AccessGrant.objects.get(id=current_grant.id).is_current is True
-
-
-def _logged_in_client(authentik_user_id: str) -> tuple[Client, UserMirror]:
-    client = Client()
-    user = UserMirror.objects.create(
-        authentik_user_id=authentik_user_id,
-        name="门户用户",
-        status=USER_STATUS_ACTIVE,
-    )
-    session = client.session
-    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
-    session.save()
-    return client, user
 
 
 def _requestable_role(*, app: App, key: str) -> Role:

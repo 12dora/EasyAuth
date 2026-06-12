@@ -7,6 +7,12 @@ from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from easyauth.admin_console.api_payloads import list_payload
+from easyauth.admin_console.api_responses import (
+    error_response as _error_response,
+)
+from easyauth.admin_console.api_responses import (
+    json_response as _json_response,
+)
 from easyauth.admin_console.credentials import (
     CredentialActor,
     CredentialOperationError,
@@ -20,11 +26,11 @@ from easyauth.admin_console.credentials_api_payloads import (
     oauth_client_item,
     static_credential_item,
 )
-from easyauth.api.errors import ErrorCode, ErrorResponse, JsonValue, build_error_response
+from easyauth.admin_console.request_guards import require_console_actor, require_post
+from easyauth.api.errors import ErrorCode
 from easyauth.applications.models import App, AppCredential, OAuthClientBinding
 from easyauth.applications.ownership import ConsoleActor, can_manage_app, can_view_app
 
-type CredentialsApiResult = ConsoleActor | JsonResponse
 type AppApiResult = App | JsonResponse
 
 
@@ -48,8 +54,8 @@ def console_credentials(request: HttpRequest, app_key: str) -> JsonResponse:
 
 
 def console_static_token_create(request: HttpRequest, app_key: str) -> JsonResponse:
-    if request.method != "POST":
-        return _method_not_allowed_response()
+    if response := require_post(request):
+        return response
 
     match credential_write_context(request, app_key):
         case (App() as app, ConsoleActor() as actor):
@@ -80,8 +86,8 @@ def console_static_token_rotate(
     app_key: str,
     credential_id: int,
 ) -> JsonResponse:
-    if request.method != "POST":
-        return _method_not_allowed_response()
+    if response := require_post(request):
+        return response
 
     match credential_write_context(request, app_key):
         case (App() as app, ConsoleActor() as actor):
@@ -105,8 +111,8 @@ def console_static_token_rotate(
 
 
 def console_oauth_client_create(request: HttpRequest, app_key: str) -> JsonResponse:
-    if request.method != "POST":
-        return _method_not_allowed_response()
+    if response := require_post(request):
+        return response
 
     match credential_write_context(request, app_key):
         case (App() as app, ConsoleActor() as actor):
@@ -147,7 +153,7 @@ def _create_payload(request: HttpRequest) -> CredentialCreatePayload | JsonRespo
 
 
 def _read_context(request: HttpRequest, app_key: str) -> AppApiResult:
-    match _actor_from_request(request):
+    match require_console_actor(request):
         case ConsoleActor() as actor:
             pass
         case JsonResponse() as response:
@@ -175,7 +181,11 @@ def credential_write_context(
         case JsonResponse() as response:
             return response
 
-    actor = _authenticated_actor(request)
+    match require_console_actor(request):
+        case ConsoleActor() as actor:
+            pass
+        case JsonResponse() as response:
+            return response
     if not can_manage_app(actor, app):
         return _error_response(
             ErrorCode.PERMISSION_DENIED,
@@ -183,25 +193,6 @@ def credential_write_context(
             status=HTTPStatus.FORBIDDEN,
         )
     return app, actor
-
-
-def _actor_from_request(request: HttpRequest) -> CredentialsApiResult:
-    user = request.user
-    if not user.is_authenticated:
-        return _error_response(
-            ErrorCode.AUTHENTICATION_FAILED,
-            "控制台登录已失效。",
-            status=HTTPStatus.UNAUTHORIZED,
-        )
-    return _authenticated_actor(request)
-
-
-def _authenticated_actor(request: HttpRequest) -> ConsoleActor:
-    user = request.user
-    return ConsoleActor(
-        user_id=user.get_username(),
-        is_superuser=bool(getattr(user, "is_superuser", False)),
-    )
 
 
 def _method_not_allowed_response() -> JsonResponse:
@@ -217,26 +208,4 @@ def _not_found_response() -> JsonResponse:
         ErrorCode.NOT_FOUND,
         "凭据不存在。",
         status=HTTPStatus.NOT_FOUND,
-    )
-
-
-def _error_response(
-    code: ErrorCode,
-    message: str,
-    details: dict[str, JsonValue] | None = None,
-    *,
-    status: HTTPStatus,
-) -> JsonResponse:
-    return _json_response(build_error_response(code, message, details), status=status)
-
-
-def _json_response(
-    payload: dict[str, JsonValue] | ErrorResponse,
-    *,
-    status: HTTPStatus = HTTPStatus.OK,
-) -> JsonResponse:
-    return JsonResponse(
-        payload,
-        status=status,
-        json_dumps_params={"ensure_ascii": False},
     )

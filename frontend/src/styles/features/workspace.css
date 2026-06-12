@@ -1,0 +1,86 @@
+.tabbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.tabbar button {
+  padding: 9px 12px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.tabbar button.active {
+  border-color: var(--brand);
+  color: var(--brand);
+  font-weight: 800;
+}
+
+.workspace-grid,
+.stack {
+  display: grid;
+  gap: 14px;
+}
+
+.two-column {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 14px;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.metric {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.metric span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.metric strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 28px;
+}
+
+.status-banner {
+  display: flex;
+  gap: 10px;
+  padding: 12px 14px;
+}
+
+.status-banner p {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+
+.status-success {
+  border-color: rgba(5, 150, 105, 0.35);
+}
+
+.status-danger {
+  border-color: rgba(220, 38, 38, 0.35);
+}
+
+.status-warning {
+  border-color: rgba(217, 119, 6, 0.35);
+}
+
+.status-primary {
+  border-color: rgba(37, 99, 235, 0.35);
+}

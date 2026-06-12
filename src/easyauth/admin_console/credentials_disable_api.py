@@ -6,6 +6,12 @@ from typing import ClassVar
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from easyauth.admin_console.api_responses import (
+    error_response as _error_response,
+)
+from easyauth.admin_console.api_responses import (
+    json_response as _json_response,
+)
 from easyauth.admin_console.credentials import (
     CredentialActor,
     CredentialOperationError,
@@ -17,7 +23,7 @@ from easyauth.admin_console.credentials_api_payloads import (
     oauth_client_item,
     static_credential_item,
 )
-from easyauth.api.errors import ErrorCode, ErrorResponse, JsonValue, build_error_response
+from easyauth.api.errors import ErrorCode
 from easyauth.applications.models import App, AppCredential, OAuthClientBinding
 from easyauth.applications.ownership import ConsoleActor
 
@@ -121,26 +127,4 @@ def _not_found_response() -> JsonResponse:
         ErrorCode.NOT_FOUND,
         "凭据不存在。",
         status=HTTPStatus.NOT_FOUND,
-    )
-
-
-def _error_response(
-    code: ErrorCode,
-    message: str,
-    details: dict[str, JsonValue] | None = None,
-    *,
-    status: HTTPStatus,
-) -> JsonResponse:
-    return _json_response(build_error_response(code, message, details), status=status)
-
-
-def _json_response(
-    payload: dict[str, JsonValue] | ErrorResponse,
-    *,
-    status: HTTPStatus = HTTPStatus.OK,
-) -> JsonResponse:
-    return JsonResponse(
-        payload,
-        status=status,
-        json_dumps_params={"ensure_ascii": False},
     )

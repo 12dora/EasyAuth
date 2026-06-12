@@ -1,0 +1,100 @@
+.code-block {
+  overflow: hidden;
+}
+
+.code-block-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-strong);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.code-block pre {
+  margin: 0;
+  padding: 14px;
+  overflow: auto;
+  background: #0f172a;
+  color: #f8fafc;
+}
+
+.code-block code {
+  color: inherit;
+}
+
+.dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: grid;
+  place-items: center;
+  padding: 20px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.dialog {
+  width: min(620px, 100%);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+}
+
+.dialog-header,
+.dialog-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+
+.dialog-header h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.dialog-body {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.dialog-footer {
+  justify-content: flex-end;
+  border-top: 1px solid var(--line);
+  border-bottom: 0;
+}
+
+.secret-warning {
+  padding: 10px 12px;
+  border: 1px solid rgba(217, 119, 6, 0.3);
+  border-radius: 2px;
+  background: #fffbeb;
+  color: #92400e;
+}
+
+.toast {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  width: fit-content;
+  padding: 10px 12px;
+  border-radius: 2px;
+  font-weight: 700;
+}
+
+.toast-success {
+  background: #ecfdf5;
+  color: var(--success);
+}
+
+.toast-danger {
+  background: #fef2f2;
+  color: var(--danger);
+}

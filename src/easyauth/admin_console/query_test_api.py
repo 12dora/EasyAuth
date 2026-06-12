@@ -6,15 +6,21 @@ from typing import ClassVar
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from easyauth.admin_console.api_responses import (
+    error_response as _error_response,
+)
+from easyauth.admin_console.api_responses import (
+    json_response as _json_response,
+)
 from easyauth.admin_console.query_tester import (
     PermissionQueryTestResult,
     run_permission_query_test,
 )
-from easyauth.api.errors import ErrorCode, ErrorResponse, JsonValue, build_error_response
+from easyauth.admin_console.request_guards import require_console_actor, require_post
+from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import App
 from easyauth.applications.ownership import ConsoleActor, can_view_app
 
-type ConsoleApiResult = ConsoleActor | JsonResponse
 type AppLookupResult = App | JsonResponse
 
 
@@ -26,7 +32,7 @@ class _PermissionQueryTestPayload(BaseModel):
 
 
 def console_permission_query_test(request: HttpRequest, app_key: str) -> JsonResponse:
-    match _actor_from_request(request):
+    match require_console_actor(request):
         case ConsoleActor() as actor:
             pass
         case JsonResponse() as response:
@@ -38,12 +44,8 @@ def console_permission_query_test(request: HttpRequest, app_key: str) -> JsonRes
         case JsonResponse() as response:
             return response
 
-    if request.method != "POST":
-        return _error_response(
-            ErrorCode.VALIDATION_ERROR,
-            "请求方法无效。",
-            status=HTTPStatus.METHOD_NOT_ALLOWED,
-        )
+    if response := require_post(request):
+        return response
     try:
         payload = _PermissionQueryTestPayload.model_validate_json(request.body)
     except ValidationError as exc:
@@ -61,20 +63,6 @@ def console_permission_query_test(request: HttpRequest, app_key: str) -> JsonRes
         actor_id=actor.user_id,
     )
     return _result_response(app=app, user_id=payload.user_id.strip(), result=result)
-
-
-def _actor_from_request(request: HttpRequest) -> ConsoleApiResult:
-    user = request.user
-    if not user.is_authenticated:
-        return _error_response(
-            ErrorCode.AUTHENTICATION_FAILED,
-            "控制台登录已失效。",
-            status=HTTPStatus.UNAUTHORIZED,
-        )
-    return ConsoleActor(
-        user_id=user.get_username(),
-        is_superuser=bool(getattr(user, "is_superuser", False)),
-    )
 
 
 def _app_for_actor(actor: ConsoleActor, app_key: str) -> AppLookupResult:
@@ -151,25 +139,3 @@ def _error_code(result: PermissionQueryTestResult) -> ErrorCode:
             return ErrorCode.INTERNAL_ERROR
         case _:
             return ErrorCode.INTERNAL_ERROR
-
-
-def _error_response(
-    code: ErrorCode,
-    message: str,
-    details: dict[str, JsonValue] | None = None,
-    *,
-    status: int,
-) -> JsonResponse:
-    return _json_response(build_error_response(code, message, details), status=status)
-
-
-def _json_response(
-    payload: dict[str, JsonValue] | ErrorResponse,
-    *,
-    status: int = HTTPStatus.OK,
-) -> JsonResponse:
-    return JsonResponse(
-        payload,
-        status=status,
-        json_dumps_params={"ensure_ascii": False},
-    )

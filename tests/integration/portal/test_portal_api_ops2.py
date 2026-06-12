@@ -4,7 +4,7 @@ from datetime import timedelta
 from http import HTTPStatus
 from json import dumps
 from re import search
-from typing import Final
+from typing import Final, cast
 
 import pytest
 from django.test import Client
@@ -92,7 +92,7 @@ def test_ops2_portal_api_lists_access_requests_for_session_user() -> None:
         user=user,
         app=app,
         status=REQUEST_STATUS_APPROVED,
-        reason="审批已通过",
+        reason="审批原因",
     )
     applied = AccessRequest.objects.create(
         user=user,
@@ -112,8 +112,11 @@ def test_ops2_portal_api_lists_access_requests_for_session_user() -> None:
     # Then: 响应只包含当前员工申请, 并区分 approved 与 grant_applied。
     body = response.content.decode()
     assert response.status_code == HTTPStatus.OK
-    assert "审批已通过" in body
-    assert "授权已落库, 权限已生效" in body
+    payload = cast("dict[str, object]", response.json())
+    items = cast("list[dict[str, str]]", payload["items"])
+    labels_by_status = {item["status"]: item["status_label"] for item in items}
+    assert labels_by_status[REQUEST_STATUS_APPROVED] == "审批已通过, 等待授权落库"
+    assert labels_by_status[REQUEST_STATUS_GRANT_APPLIED] == "授权已落库, 权限已生效"
     assert REQUEST_STATUS_APPROVED in body
     assert REQUEST_STATUS_GRANT_APPLIED in body
     assert "不应泄露" not in body

@@ -205,6 +205,50 @@ def test_permission_query_uses_earlier_timed_grant_expiration_when_before_ttl() 
     assert datetime.fromisoformat(payload["expires_at"]) == grant_expires_at
 
 
+@pytest.mark.parametrize("ttl_setting", [0, -1, "60", True, False, None])
+def test_permission_query_uses_default_ttl_for_invalid_configuration(ttl_setting: object) -> None:
+    # Given: 权限查询 TTL 配置为非法值。
+    user = UserMirror.objects.create(authentik_user_id="user-api-invalid-ttl")
+    app = App.objects.create(app_key="invalid-ttl-api-app", name="Invalid TTL API App")
+    issue = StaticTokenService.create_token(app=app, name="integration")
+
+    # When: 应用查询该用户权限。
+    with override_settings(EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS=ttl_setting):
+        before = timezone.now()
+        response = Client().get(
+            _permission_url(app.app_key, user.authentik_user_id),
+            HTTP_AUTHORIZATION=_bearer(issue.plaintext_token),
+        )
+        after = timezone.now()
+
+    # Then: 非法 TTL 退回默认 300 秒。
+    assert response.status_code == HTTPStatus.OK
+    expires_at = datetime.fromisoformat(_permission_payload(response)["expires_at"])
+    assert before + timedelta(seconds=300) <= expires_at
+    assert expires_at <= after + timedelta(seconds=300)
+
+
+def test_permission_query_uses_default_ttl_when_no_override_is_configured() -> None:
+    # Given: 权限查询 TTL 使用项目默认配置。
+    user = UserMirror.objects.create(authentik_user_id="user-api-default-ttl")
+    app = App.objects.create(app_key="default-ttl-api-app", name="Default TTL API App")
+    issue = StaticTokenService.create_token(app=app, name="integration")
+
+    # When: 应用查询该用户权限。
+    before = timezone.now()
+    response = Client().get(
+        _permission_url(app.app_key, user.authentik_user_id),
+        HTTP_AUTHORIZATION=_bearer(issue.plaintext_token),
+    )
+    after = timezone.now()
+
+    # Then: 未覆盖配置时使用默认 300 秒。
+    assert response.status_code == HTTPStatus.OK
+    expires_at = datetime.fromisoformat(_permission_payload(response)["expires_at"])
+    assert before + timedelta(seconds=300) <= expires_at
+    assert expires_at <= after + timedelta(seconds=300)
+
+
 def test_permission_query_rejects_missing_invalid_disabled_and_cross_app_tokens() -> None:
     # Given: 存在有效 token、无效 token、禁用 token、禁用应用 token 和跨应用路径。
     app = App.objects.create(app_key="crm-api-errors", name="CRM API Errors")
