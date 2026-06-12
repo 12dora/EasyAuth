@@ -1,15 +1,16 @@
 import { Bell, Globe2 } from "lucide-react";
 
+import type { CurrentUser } from "../../App";
 import { UserSummary } from "./UserSummary";
 
 interface TopbarProps {
   brandLogoUrl: string;
-  currentUserId?: string;
+  currentUser?: CurrentUser;
   mode: "console" | "portal";
 }
 
-export function Topbar({ brandLogoUrl, currentUserId = "", mode }: TopbarProps) {
-  const shellTitle = mode === "console" ? "管理控制台" : "员工门户";
+export function Topbar({ brandLogoUrl, currentUser, mode }: TopbarProps) {
+  const shellTitle = currentUser ? (mode === "console" ? "管理控制台" : "员工门户") : "统一权限中心";
 
   return (
     <header className="topbar">
@@ -28,8 +29,12 @@ export function Topbar({ brandLogoUrl, currentUserId = "", mode }: TopbarProps) 
           <button className="icon-button" type="button" aria-label="通知中心" title="通知中心">
             <Bell size={17} />
           </button>
-          <span className="topbar-divider" aria-hidden="true" />
-          <UserSummary currentUserId={currentUserId} mode={mode} />
+          {currentUser ? (
+            <>
+              <span className="topbar-divider" aria-hidden="true" />
+              <UserSummary currentUser={currentUser} mode={mode} />
+            </>
+          ) : null}
         </div>
       </div>
     </header>

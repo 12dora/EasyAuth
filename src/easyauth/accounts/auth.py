@@ -21,6 +21,7 @@ OIDC_NEXT_SESSION_KEY: Final = "easyauth_oidc_next"
 DEFAULT_AUTH_SUCCESS_NEXT: Final = "/portal/"
 FIELD_AUDIENCE: Final = "audience"
 FIELD_AUTHORIZED_PARTY: Final = "azp"
+FIELD_AVATAR_URL: Final = "picture"
 FIELD_ISSUER: Final = "issuer"
 FIELD_NONCE: Final = "nonce"
 FIELD_STATE: Final = "state"
@@ -60,6 +61,7 @@ class VerifiedOidcClaims:
     subject: str
     name: str
     email: str
+    avatar_url: str = ""
     groups: tuple[str, ...] = ()
     dingtalk_org: object | None = None
 
@@ -74,17 +76,27 @@ class OidcSessionError(ValueError):
         return f"Invalid OIDC {self.field}: {self.reason}"
 
 
-def build_authorization_url(config: OidcClientConfig, *, state: str, nonce: str) -> str:
-    query = urlencode(
-        {
-            "client_id": config.client_id,
-            "nonce": nonce,
-            "redirect_uri": config.redirect_uri,
-            "response_type": "code",
-            "scope": " ".join(config.scopes),
-            "state": state,
-        },
-    )
+def build_authorization_url(
+    config: OidcClientConfig,
+    *,
+    state: str,
+    nonce: str,
+    prompt: str = "",
+    max_age: str = "",
+) -> str:
+    query_params = {
+        "client_id": config.client_id,
+        "nonce": nonce,
+        "redirect_uri": config.redirect_uri,
+        "response_type": "code",
+        "scope": " ".join(config.scopes),
+        "state": state,
+    }
+    if prompt:
+        query_params["prompt"] = prompt
+    if max_age:
+        query_params["max_age"] = max_age
+    query = urlencode(query_params)
     endpoint = config.authorization_endpoint or _authorization_endpoint(config.issuer)
     return f"{endpoint}?{query}"
 
@@ -118,8 +130,9 @@ def verify_oidc_claims(
 
     return VerifiedOidcClaims(
         subject=subject,
-        name=_optional_string_claim(claims, "name"),
+        name=_display_name_claim(claims),
         email=_optional_string_claim(claims, "email"),
+        avatar_url=_avatar_url_claim(claims),
         groups=_optional_string_tuple_claim(claims, "groups"),
         dingtalk_org=claims.get("dingtalk_org"),
     )
@@ -130,6 +143,7 @@ def bind_oidc_session(request: HttpRequest, claims: VerifiedOidcClaims) -> UserM
         user, created = UserMirror.objects.select_for_update().get_or_create(
             authentik_user_id=claims.subject,
             defaults={
+                "avatar_url": claims.avatar_url,
                 "email": claims.email,
                 "name": claims.name,
                 "status": USER_STATUS_ACTIVE,
@@ -243,7 +257,45 @@ def _update_existing_user_profile(user: UserMirror, claims: VerifiedOidcClaims) 
     if claims.email and user.email != claims.email:
         user.email = claims.email
         changed_fields.append("email")
+    if user.avatar_url != claims.avatar_url:
+        user.avatar_url = claims.avatar_url
+        changed_fields.append("avatar_url")
     if changed_fields:
         changed_fields.append("updated_at")
         user.full_clean()
         user.save(update_fields=changed_fields)
+
+
+def _display_name_claim(claims: OidcClaimsInput) -> str:
+    for key in ("name", "preferred_username", "nickname", "email"):
+        value = _optional_string_claim(claims, key)
+        if value:
+            return value
+    return _dingtalk_display_name_claim(claims)
+
+
+def _dingtalk_display_name_claim(claims: OidcClaimsInput) -> str:
+    for section_key in ("dingtalk", "dingtalk_org"):
+        value = claims.get(section_key)
+        if isinstance(value, dict):
+            for field in ("name", "nick"):
+                field_value = value.get(field)
+                if isinstance(field_value, str) and field_value:
+                    return field_value
+    return ""
+
+
+def _avatar_url_claim(claims: OidcClaimsInput) -> str:
+    avatar_url = _optional_string_claim(claims, FIELD_AVATAR_URL)
+    if _is_safe_avatar_url(avatar_url):
+        return avatar_url
+    return ""
+
+
+def _is_safe_avatar_url(value: str) -> bool:
+    if value == "":
+        return True
+    if value.startswith("/") and not value.startswith("//") and "\\" not in value:
+        return True
+    parsed = urlsplit(value)
+    return parsed.scheme == "https" and parsed.netloc != ""

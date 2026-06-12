@@ -46,11 +46,14 @@ class AuthentikDingTalkAttributes(TypedDict, total=False):
     user_id: str
     union_id: str
     job_number: str
+    name: str
+    nick: str
 
 
 class AuthentikDingTalkOrgAttributes(TypedDict, total=False):
     department: str
     manager_userid: str
+    name: str
 
 
 class AuthentikPayloadSection(TypedDict, total=False):
@@ -96,7 +99,7 @@ def parse_authentik_payload(payload: AuthentikPayloadInput) -> AuthentikUserProf
     dingtalk_org = _first_dingtalk_org_attributes(user_attributes, context_attributes)
     return AuthentikUserProfile(
         authentik_user_id=subject,
-        name=_first_string(user, context, "name"),
+        name=_first_string(user, context, "name") or _dingtalk_display_name(dingtalk, dingtalk_org),
         email=_first_string(user, context, "email"),
         department=dingtalk_org.get(
             "department",
@@ -263,7 +266,7 @@ def _parse_dingtalk(
     match value:
         case dict() as attributes:
             parsed: AuthentikDingTalkAttributes = {}
-            for field in ("corp_id", "user_id", "union_id", "job_number"):
+            for field in ("corp_id", "user_id", "union_id", "job_number", "name", "nick"):
                 if field in attributes:
                     parsed[field] = _required_string(attributes[field], f"{field_name}.{field}")
             return parsed
@@ -281,6 +284,7 @@ def _parse_dingtalk_org(
             return {
                 "department": _first_department_name(org_attributes.get("departments")),
                 "manager_userid": _manager_user_id(org_attributes.get("manager")),
+                "name": _optional_mapping_string(org_attributes, "name"),
             }
         case _:
             raise AuthentikPayloadError(field_name, "must be an object")
@@ -319,3 +323,15 @@ def _first_dingtalk_org_attributes(
     context_attributes: AuthentikAttributes,
 ) -> AuthentikDingTalkOrgAttributes:
     return user_attributes.get("dingtalk_org", {}) or context_attributes.get("dingtalk_org", {})
+
+
+def _dingtalk_display_name(
+    dingtalk: AuthentikDingTalkAttributes,
+    dingtalk_org: AuthentikDingTalkOrgAttributes,
+) -> str:
+    return dingtalk.get("name", "") or dingtalk.get("nick", "") or dingtalk_org.get("name", "")
+
+
+def _optional_mapping_string(mapping: dict[str, AuthentikPayloadValue], key: str) -> str:
+    value = mapping.get(key)
+    return value if isinstance(value, str) else ""

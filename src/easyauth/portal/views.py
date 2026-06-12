@@ -15,8 +15,9 @@ from easyauth.access_requests.services import (
     AccessRequestSubmissionError,
 )
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
+from easyauth.accounts.logout_state import browser_is_marked_logged_out, logged_out_redirect
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
-from easyauth.frontend_shell import render_react_shell
+from easyauth.frontend_shell import render_react_shell, shell_user_from_user
 from easyauth.portal.forms import AccessRequestForm, app_options, role_options
 from easyauth.portal.grant_rows import current_grant_rows_for_user, expiring_grant_rows
 from easyauth.portal.status_text import StatusTone, status_label, status_tone
@@ -71,7 +72,7 @@ def portal_home(request: HttpRequest) -> HttpResponse:
         request,
         surface="portal",
         title="员工门户",
-        current_user_id=user.authentik_user_id,
+        current_user=shell_user_from_user(request, user),
     )
 
 
@@ -119,6 +120,8 @@ def _legacy_post_response(request: HttpRequest, user: UserMirror) -> HttpRespons
 
 
 def _login_redirect(request: HttpRequest) -> HttpResponseRedirect:
+    if browser_is_marked_logged_out(request):
+        return logged_out_redirect(request)
     query = urlencode({"next": request.get_full_path()})
     return HttpResponseRedirect(f"{LOGIN_URL}?{query}")
 

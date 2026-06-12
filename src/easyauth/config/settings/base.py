@@ -46,6 +46,7 @@ MIDDLEWARE: list[str] = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "easyauth.config.middleware.SafeNotFoundMiddleware",
 ]
 
 ROOT_URLCONF = "easyauth.config.urls"

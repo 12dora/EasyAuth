@@ -15,6 +15,7 @@ from django.http import (
 )
 from django.shortcuts import render
 
+from easyauth.accounts.logout_state import browser_is_marked_logged_out, logged_out_redirect
 from easyauth.admin_console.configuration import ConsoleConfigurationError
 from easyauth.admin_console.configuration_forms import (
     ConsoleConfigurationFormError,
@@ -254,6 +255,8 @@ def _action_requires_manage(action: str) -> bool:
 
 
 def _login_redirect(request: HttpRequest) -> HttpResponseRedirect:
+    if browser_is_marked_logged_out(request):
+        return logged_out_redirect(request)
     return HttpResponseRedirect(f"/auth/login/?next={quote(request.get_full_path())}")
 
 

@@ -1,20 +1,23 @@
 import { Outlet, useLocation } from "react-router-dom";
 
+import type { CurrentUser } from "../App";
 import { Sidebar } from "./shell/Sidebar";
 import { Topbar } from "./shell/Topbar";
 
 interface AppShellProps {
   mode: "console" | "portal";
+  currentUser?: CurrentUser;
   currentUserId?: string;
   brandLogoUrl?: string;
 }
 
-export function AppShell({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUserId = "", mode }: AppShellProps) {
+export function AppShell({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUser, currentUserId = "", mode }: AppShellProps) {
   const location = useLocation();
+  const shellUser = currentUser ?? (currentUserId ? { id: currentUserId } : undefined);
 
   return (
     <div className="app-shell">
-      <Topbar brandLogoUrl={brandLogoUrl} currentUserId={currentUserId} mode={mode} />
+      <Topbar brandLogoUrl={brandLogoUrl} currentUser={shellUser} mode={mode} />
       <div className="shell-body">
         <Sidebar mode={mode} />
         <main className="content">

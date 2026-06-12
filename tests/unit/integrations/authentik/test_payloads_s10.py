@@ -47,6 +47,7 @@ def test_s10_parse_payload_maps_dingtalk_summary_fields() -> None:
                     "user_id": "user-1",
                     "union_id": "union-1",
                     "job_number": "E001",
+                    "name": "钉钉张三",
                     "mobile": "13800000000",
                     "raw": {"ignored": True},
                 },
@@ -62,6 +63,7 @@ def test_s10_parse_payload_maps_dingtalk_summary_fields() -> None:
 
     profile = parse_authentik_payload(payload)
 
+    assert profile.name == "钉钉张三"
     assert profile.dingtalk_corp_id == "corp-1"
     assert profile.dingtalk_userid == "user-1"
     assert profile.dingtalk_union_id == "union-1"

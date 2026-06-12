@@ -21,6 +21,7 @@ def test_bind_oidc_session_updates_dingtalk_org_context() -> None:
         email="zhangsan@example.test",
         groups=("EasyAuth Admins",),
         dingtalk_org={
+            "name": "钉钉张三",
             "corp_id": "ding-corp",
             "user_id": "ding-user",
             "departments": [{"name": "销售部"}],
@@ -37,6 +38,7 @@ def test_bind_oidc_session_updates_dingtalk_org_context() -> None:
 
     assert user.dingtalk_corp_id == "ding-corp"
     assert user.dingtalk_userid == "ding-user"
+    assert user.name == "张三"
     assert user.department == "销售部"
     assert user.manager_userid == "ding-manager"
     assert request.session["easyauth_authentik_groups"] == ["EasyAuth Admins"]

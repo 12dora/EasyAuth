@@ -9,7 +9,7 @@
     <link rel="stylesheet" href="{% static stylesheet.path %}">
   {% endfor %}
 </head>
-<body data-easyauth-react-shell="{{ shell }}" data-brand-logo-url="{% static 'easyauth/frontend/assets/brand/jiefa_logo.webp' %}"{% if initial_app_key %} data-initial-app-key="{{ initial_app_key }}"{% endif %}{% if current_user_id %} data-current-user-id="{{ current_user_id }}"{% endif %}>
+<body data-easyauth-react-shell="{{ shell }}" data-brand-logo-url="{% static 'easyauth/frontend/assets/brand/jiefa_logo.webp' %}" data-logout-url="{{ logout_url }}"{% if initial_app_key %} data-initial-app-key="{{ initial_app_key }}"{% endif %}{% if current_user %} data-current-user-id="{{ current_user.user_id }}" data-current-user-display-name="{{ current_user.display_name }}" data-current-user-role="{{ current_user.role }}" data-current-user-avatar-url="{{ current_user.avatar_url }}"{% endif %}>
   <form hidden>{% csrf_token %}</form>
   <div id="easyauth-root"></div>
   {% for script in vite_assets.scripts %}

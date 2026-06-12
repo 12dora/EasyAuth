@@ -15,7 +15,11 @@ import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 from django.test import Client, RequestFactory, override_settings
 
-from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY, OidcClientConfig, OidcSessionError
+from easyauth.accounts.auth import (
+    AUTHENTIK_SESSION_KEY,
+    OidcClientConfig,
+    OidcSessionError,
+)
 from easyauth.accounts.oidc_exchange import exchange_authorization_code_for_claims
 
 if TYPE_CHECKING:

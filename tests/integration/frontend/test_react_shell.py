@@ -14,7 +14,12 @@ pytestmark = pytest.mark.django_db
 
 def test_console_home_serves_react_shell_for_authenticated_admin() -> None:
     # Given: 系统管理员已登录控制台。
-    client = _logged_in_console_user("react-console-admin", is_superuser=True)
+    client = _logged_in_console_user(
+        "react-console-admin",
+        is_superuser=True,
+        name="控制台用户",
+        avatar_url="https://authentik.example.test/media/avatars/admin.png",
+    )
 
     # When: 打开控制台首页。
     response = client.get("/console/")
@@ -22,8 +27,17 @@ def test_console_home_serves_react_shell_for_authenticated_admin() -> None:
     # Then: Django 返回 React 挂载壳, 由前端消费同源私有 API。
     html = response.content.decode()
     assert response.status_code == HTTPStatus.OK
+    assert response.headers["Cache-Control"] == "no-store"
     assert 'data-easyauth-react-shell="console"' in html
     assert 'data-brand-logo-url="/static/easyauth/frontend/assets/brand/jiefa_logo.webp"' in html
+    assert 'data-current-user-id="react-console-admin"' in html
+    assert 'data-current-user-display-name="控制台用户"' in html
+    assert 'data-current-user-role="EasyAuth Admins"' in html
+    assert (
+        'data-current-user-avatar-url="https://authentik.example.test/media/avatars/admin.png"'
+        in html
+    )
+    assert 'data-logout-url="/auth/logout/"' in html
     assert 'id="easyauth-root"' in html
     assert 'name="csrfmiddlewaretoken"' in html
 
@@ -53,6 +67,40 @@ def test_portal_serves_react_shell_for_active_session_user() -> None:
     user = UserMirror.objects.create(
         authentik_user_id="react-portal-user",
         name="门户用户",
+        avatar_url="https://authentik.example.test/media/avatars/portal.png",
+        status=USER_STATUS_ACTIVE,
+    )
+    session = client.session
+    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
+    session[AUTHENTIK_GROUPS_SESSION_KEY] = ["研发中心"]
+    session.save()
+
+    # When: 打开员工门户。
+    response = client.get("/portal/")
+
+    # Then: Django 返回员工门户 React 壳。
+    html = response.content.decode()
+    assert response.status_code == HTTPStatus.OK
+    assert response.headers["Cache-Control"] == "no-store"
+    assert 'data-easyauth-react-shell="portal"' in html
+    assert 'data-current-user-id="react-portal-user"' in html
+    assert 'data-current-user-display-name="门户用户"' in html
+    assert 'data-current-user-role="研发中心"' in html
+    assert (
+        'data-current-user-avatar-url="https://authentik.example.test/media/avatars/portal.png"'
+        in html
+    )
+    assert 'data-logout-url="/auth/logout/"' in html
+    assert 'id="easyauth-root"' in html
+    assert "员工门户" in html
+
+
+def test_portal_shell_uses_placeholder_display_name_when_profile_name_is_missing() -> None:
+    # Given: authentik subject 很长, 但还没有同步到友好的 name/email。
+    client = Client()
+    long_subject = "dingmockcorp000000000000000000000000:100000000000000001"
+    user = UserMirror.objects.create(
+        authentik_user_id=long_subject,
         status=USER_STATUS_ACTIVE,
     )
     session = client.session
@@ -62,12 +110,31 @@ def test_portal_serves_react_shell_for_active_session_user() -> None:
     # When: 打开员工门户。
     response = client.get("/portal/")
 
-    # Then: Django 返回员工门户 React 壳。
+    # Then: 展示名不回退到超长 subject。
     html = response.content.decode()
     assert response.status_code == HTTPStatus.OK
+    assert 'data-current-user-id="dingmockcorp000000000000000000000000:100000000000000001"' in html
+    assert 'data-current-user-display-name="当前用户"' in html
+
+
+def test_logged_out_page_serves_portal_react_shell_without_current_user() -> None:
+    # Given: 浏览器被登出重定向到本地登出页。
+    client = Client()
+
+    # When: 打开登出页。
+    response = client.get("/auth/logged-out/?next=%2Fportal%2F")
+
+    # Then: Django 返回共用 React 壳, 且不会注入当前用户姓名、角色或头像。
+    html = response.content.decode()
+    assert response.status_code == HTTPStatus.OK
+    assert response.headers["Cache-Control"] == "no-store"
     assert 'data-easyauth-react-shell="portal"' in html
     assert 'id="easyauth-root"' in html
-    assert "员工门户" in html
+    assert "已登出 - EasyAuth" in html
+    assert "data-current-user-id" not in html
+    assert "data-current-user-display-name" not in html
+    assert "data-current-user-role" not in html
+    assert "data-current-user-avatar-url" not in html
 
 
 @pytest.mark.parametrize(
@@ -94,7 +161,7 @@ def test_portal_client_routes_serve_react_shell_for_active_session_user(path: st
     assert response.status_code == HTTPStatus.OK
     assert 'data-easyauth-react-shell="portal"' in html
     assert 'id="easyauth-root"' in html
-    assert user.authentik_user_id in html
+    assert 'data-current-user-display-name="门户路由用户"' in html
 
 
 def test_portal_client_route_redirects_to_login_without_session() -> None:
@@ -121,11 +188,21 @@ def test_portal_api_route_is_not_captured_by_react_catch_all() -> None:
     assert response.headers["Content-Type"].startswith("application/json")
 
 
-def _logged_in_console_user(username: str, *, is_superuser: bool = False) -> Client:
+def _logged_in_console_user(
+    username: str,
+    *,
+    avatar_url: str = "",
+    is_superuser: bool = False,
+    name: str = "",
+) -> Client:
     user, _created = UserMirror.objects.get_or_create(
         authentik_user_id=username,
-        defaults={"status": USER_STATUS_ACTIVE},
+        defaults={"avatar_url": avatar_url, "name": name, "status": USER_STATUS_ACTIVE},
     )
+    if user.name != name or user.avatar_url != avatar_url:
+        user.name = name
+        user.avatar_url = avatar_url
+        user.save(update_fields=["name", "avatar_url", "updated_at"])
     client = Client(HTTP_HOST="localhost")
     session = client.session
     session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id

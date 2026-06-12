@@ -4,6 +4,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 
 import { App } from "./App";
+import type { CurrentUser } from "./App";
 import { queryClient } from "./lib/query";
 import "./styles/index.css";
 
@@ -15,13 +16,14 @@ if (!rootElement) {
 
 const shell = readShell(rootElement);
 const currentUserId = readCurrentUserId(rootElement);
+const currentUser = readCurrentUser(rootElement, currentUserId);
 const brandLogoUrl = readBrandLogoUrl(rootElement);
 
 createRoot(rootElement).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
-        <App brandLogoUrl={brandLogoUrl} currentUserId={currentUserId} shell={shell} />
+        <App brandLogoUrl={brandLogoUrl} currentUser={currentUser} currentUserId={currentUserId} shell={shell} />
       </BrowserRouter>
     </QueryClientProvider>
   </StrictMode>,
@@ -40,6 +42,20 @@ function readShell(root: HTMLElement): "console" | "portal" {
 
 function readCurrentUserId(root: HTMLElement): string {
   return root.dataset.currentUserId ?? document.body.dataset.currentUserId ?? "";
+}
+
+function readCurrentUser(root: HTMLElement, currentUserId: string): CurrentUser | undefined {
+  if (!currentUserId) {
+    return undefined;
+  }
+  const dataset = { ...document.body.dataset, ...root.dataset };
+  return {
+    avatarUrl: dataset.currentUserAvatarUrl ?? "",
+    displayName: dataset.currentUserDisplayName ?? "",
+    id: currentUserId,
+    logoutUrl: dataset.logoutUrl ?? "/auth/logout/",
+    role: dataset.currentUserRole ?? "",
+  };
 }
 
 function readBrandLogoUrl(root: HTMLElement): string {
