@@ -4,22 +4,28 @@ import json
 from http import HTTPStatus
 from typing import TYPE_CHECKING, cast
 
-from django.contrib.auth.models import AnonymousUser, User
+import pytest
+from django.contrib.auth.models import AnonymousUser
+from django.contrib.sessions.middleware import SessionMiddleware
 from django.http import JsonResponse
-from django.test import RequestFactory
+from django.test import RequestFactory, override_settings
 
+from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
+from easyauth.accounts.models import USER_STATUS_DISABLED, UserMirror
 from easyauth.admin_console.request_guards import require_console_actor, require_post
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.ownership import ConsoleActor
 
 if TYPE_CHECKING:
-    from django.http import HttpResponse
+    from django.http import HttpRequest, HttpResponse
 
 type JsonObject = dict[str, JsonValue]
 
+pytestmark = pytest.mark.django_db
+
 
 def test_require_console_actor_returns_401_when_user_is_not_authenticated() -> None:
-    request = RequestFactory().get("/console/apps")
+    request = _request_with_session()
     request.user = AnonymousUser()
 
     response = require_console_actor(request)
@@ -33,9 +39,10 @@ def test_require_console_actor_returns_401_when_user_is_not_authenticated() -> N
     }
 
 
-def test_require_console_actor_maps_authenticated_user_to_console_actor() -> None:
-    request = RequestFactory().get("/console/apps")
-    request.user = User(username="console-user", is_superuser=False)
+def test_require_console_actor_maps_active_authentik_session_to_console_actor() -> None:
+    _ = UserMirror.objects.create(authentik_user_id="console-user")
+    request = _request_with_session(authentik_user_id="console-user")
+    request.user = AnonymousUser()
 
     actor = require_console_actor(request)
 
@@ -43,14 +50,46 @@ def test_require_console_actor_maps_authenticated_user_to_console_actor() -> Non
     assert actor == ConsoleActor(user_id="console-user", is_superuser=False)
 
 
-def test_require_console_actor_preserves_superuser_flag() -> None:
-    request = RequestFactory().get("/console/apps")
-    request.user = User(username="root", is_superuser=True)
+@override_settings(EASYAUTH_CONSOLE_SUPERUSER_GROUPS=("easyauth-admins",))
+def test_require_console_actor_marks_superuser_from_authentik_group_session() -> None:
+    _ = UserMirror.objects.create(authentik_user_id="root")
+    request = _request_with_session(
+        authentik_user_id="root",
+        groups=("developers", "easyauth-admins"),
+    )
+    request.user = AnonymousUser()
 
     actor = require_console_actor(request)
 
     assert isinstance(actor, ConsoleActor)
     assert actor == ConsoleActor(user_id="root", is_superuser=True)
+
+
+@override_settings(EASYAUTH_CONSOLE_SUPERUSER_IDS=("legacy-root",))
+def test_require_console_actor_keeps_legacy_superuser_id_compatibility() -> None:
+    _ = UserMirror.objects.create(authentik_user_id="legacy-root")
+    request = _request_with_session(authentik_user_id="legacy-root")
+    request.user = AnonymousUser()
+
+    actor = require_console_actor(request)
+
+    assert isinstance(actor, ConsoleActor)
+    assert actor == ConsoleActor(user_id="legacy-root", is_superuser=True)
+
+
+def test_require_console_actor_clears_session_for_inactive_user_mirror() -> None:
+    _ = UserMirror.objects.create(
+        authentik_user_id="disabled-user",
+        status=USER_STATUS_DISABLED,
+    )
+    request = _request_with_session(authentik_user_id="disabled-user")
+    request.user = AnonymousUser()
+
+    response = require_console_actor(request)
+
+    assert isinstance(response, JsonResponse)
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert AUTHENTIK_SESSION_KEY not in request.session
 
 
 def test_require_post_returns_none_for_post_request() -> None:
@@ -77,3 +116,19 @@ def _json_object(response: HttpResponse) -> JsonObject:
     payload: JsonObject = cast("JsonObject", json.loads(response.content.decode()))
     assert isinstance(payload, dict)
     return payload
+
+
+def _request_with_session(
+    *,
+    authentik_user_id: str = "",
+    groups: tuple[str, ...] = (),
+) -> HttpRequest:
+    request = RequestFactory().get("/console/apps")
+    middleware = SessionMiddleware(lambda _request: JsonResponse({}))
+    middleware.process_request(request)
+    request.session.save()
+    if authentik_user_id:
+        request.session[AUTHENTIK_SESSION_KEY] = authentik_user_id
+    if groups:
+        request.session["easyauth_authentik_groups"] = list(groups)
+    return request

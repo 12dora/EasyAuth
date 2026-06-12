@@ -1,24 +1,20 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import Final
 
 import pytest
-from django.contrib.auth.models import User
 from django.test import Client
 
-from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
+from easyauth.accounts.auth import AUTHENTIK_GROUPS_SESSION_KEY, AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.applications.models import App, AppMembership
 
 pytestmark = pytest.mark.django_db
 
-LOGIN_VALUE: Final = "react-shell-login"
-
 
 def test_console_home_serves_react_shell_for_authenticated_admin() -> None:
     # Given: 系统管理员已登录控制台。
-    client = _logged_in_django_user("react-console-admin", is_superuser=True)
+    client = _logged_in_console_user("react-console-admin", is_superuser=True)
 
     # When: 打开控制台首页。
     response = client.get("/console/")
@@ -34,7 +30,7 @@ def test_console_home_serves_react_shell_for_authenticated_admin() -> None:
 
 def test_console_app_detail_serves_react_shell_without_leaking_unowned_app() -> None:
     # Given: 应用负责人只拥有一个 App。
-    client = _logged_in_django_user("react-console-owner")
+    client = _logged_in_console_user("react-console-owner")
     owned_app = App.objects.create(app_key="react-owned-crm", name="React CRM")
     unowned_app = App.objects.create(app_key="react-unowned-erp", name="React ERP")
     _ = AppMembership.objects.create(app=owned_app, user_id="react-console-owner", role="owner")
@@ -125,13 +121,15 @@ def test_portal_api_route_is_not_captured_by_react_catch_all() -> None:
     assert response.headers["Content-Type"].startswith("application/json")
 
 
-def _logged_in_django_user(username: str, *, is_superuser: bool = False) -> Client:
-    _ = User.objects.create_user(
-        username=username,
-        password=LOGIN_VALUE,
-        is_superuser=is_superuser,
-        is_staff=is_superuser,
+def _logged_in_console_user(username: str, *, is_superuser: bool = False) -> Client:
+    user, _created = UserMirror.objects.get_or_create(
+        authentik_user_id=username,
+        defaults={"status": USER_STATUS_ACTIVE},
     )
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    session = client.session
+    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
+    if is_superuser:
+        session[AUTHENTIK_GROUPS_SESSION_KEY] = ["EasyAuth Admins"]
+    session.save()
     return client

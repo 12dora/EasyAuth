@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -25,6 +25,7 @@ CLIENT_SECRET: Final = "s12-client-secret"  # noqa: S105 - 测试夹具密钥值
 SESSION_KEY: Final = AUTHENTIK_SESSION_KEY
 STATE_SESSION_KEY: Final = "easyauth_oidc_state"
 NONCE_SESSION_KEY: Final = "easyauth_oidc_nonce"
+NEXT_SESSION_KEY: Final = "easyauth_oidc_next"
 OIDC_STATE: Final = "s12-state"
 OIDC_NONCE: Final = "s12-nonce"
 OIDC_CODE: Final = "s12-code"
@@ -65,6 +66,29 @@ def test_s12_login_redirects_to_authentik_authorization_endpoint_with_state_and_
     assert query["nonce"][0] == client.session[NONCE_SESSION_KEY]
     assert query["state"][0]
     assert query["nonce"][0]
+
+
+@override_settings(
+    EASYAUTH_AUTHENTIK_OIDC_ISSUER=AUTHENTIK_ISSUER,
+    EASYAUTH_AUTHENTIK_OIDC_AUTHORIZATION_ENDPOINT="",
+    EASYAUTH_AUTHENTIK_OIDC_CLIENT_ID=CLIENT_ID,
+    EASYAUTH_AUTHENTIK_OIDC_REDIRECT_URI=REDIRECT_URI,
+    EASYAUTH_AUTHENTIK_OIDC_SCOPES=("openid", "profile", "email"),
+)
+def test_s12_login_stores_safe_local_next_and_rejects_external_next() -> None:
+    # Given
+    client = Client()
+
+    # When
+    safe_response = client.get("/auth/login/?next=/console/apps/?tab=roles")
+    safe_next = cast("str", client.session[NEXT_SESSION_KEY])
+    unsafe_response = client.get("/auth/login/?next=https://evil.example.test/console")
+
+    # Then
+    assert safe_response.status_code == HTTPStatus.FOUND
+    assert unsafe_response.status_code == HTTPStatus.FOUND
+    assert safe_next == "/console/apps/?tab=roles"
+    assert client.session[NEXT_SESSION_KEY] == "/portal/"
 
 
 @override_settings(
@@ -110,6 +134,52 @@ def test_s12_callback_binds_session_to_user_mirror_when_claims_are_valid(
     assert response.status_code == HTTPStatus.FOUND
     assert response.headers["Location"] == "/portal/"
     assert client.session[SESSION_KEY] == user.authentik_user_id
+
+
+@override_settings(
+    EASYAUTH_AUTHENTIK_OIDC_ISSUER=AUTHENTIK_ISSUER,
+    EASYAUTH_AUTHENTIK_OIDC_CLIENT_ID=CLIENT_ID,
+    EASYAUTH_AUTHENTIK_OIDC_CLIENT_SECRET=CLIENT_SECRET,
+    EASYAUTH_AUTHENTIK_OIDC_REDIRECT_URI=REDIRECT_URI,
+)
+def test_s12_callback_redirects_to_saved_next_and_pops_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given
+    client = Client()
+    _ = UserMirror.objects.create(authentik_user_id=OIDC_SUBJECT, name="OIDC 用户")
+    _seed_oidc_attempt(client, next_path="/console/apps/?tab=roles")
+    _patch_claim_exchange(monkeypatch, _valid_claims())
+
+    # When
+    response = client.get(f"/auth/callback/?code={OIDC_CODE}&state={OIDC_STATE}")
+
+    # Then
+    assert response.status_code == HTTPStatus.FOUND
+    assert response.headers["Location"] == "/console/apps/?tab=roles"
+    assert NEXT_SESSION_KEY not in client.session
+
+
+@override_settings(
+    EASYAUTH_AUTHENTIK_OIDC_ISSUER=AUTHENTIK_ISSUER,
+    EASYAUTH_AUTHENTIK_OIDC_CLIENT_ID=CLIENT_ID,
+    EASYAUTH_AUTHENTIK_OIDC_CLIENT_SECRET=CLIENT_SECRET,
+    EASYAUTH_AUTHENTIK_OIDC_REDIRECT_URI=REDIRECT_URI,
+)
+def test_s12_callback_stores_authentik_groups_in_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = Client()
+    _seed_oidc_attempt(client)
+    _patch_claim_exchange(
+        monkeypatch,
+        {**_valid_claims(), "groups": ("EasyAuth Admins", "开发者")},
+    )
+
+    response = client.get(f"/auth/callback/?code={OIDC_CODE}&state={OIDC_STATE}")
+
+    assert response.status_code == HTTPStatus.FOUND
+    assert client.session["easyauth_authentik_groups"] == ["EasyAuth Admins", "开发者"]
 
 
 def _valid_claims() -> OidcClaims:
@@ -200,10 +270,11 @@ def test_s12_callback_rejects_state_mismatch_and_clears_login_attempt() -> None:
     assert NONCE_SESSION_KEY not in client.session
 
 
-def _seed_oidc_attempt(client: Client) -> None:
+def _seed_oidc_attempt(client: Client, *, next_path: str = "/portal/") -> None:
     session = client.session
     session[STATE_SESSION_KEY] = OIDC_STATE
     session[NONCE_SESSION_KEY] = OIDC_NONCE
+    session[NEXT_SESSION_KEY] = next_path
     session.save()
 
 

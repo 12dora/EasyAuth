@@ -57,6 +57,11 @@ def _upsert_user(profile: AuthentikUserProfile) -> _UserUpsertResult:
             "email": profile.email,
             "department": profile.department,
             "status": profile.status,
+            "dingtalk_corp_id": profile.dingtalk_corp_id,
+            "dingtalk_userid": profile.dingtalk_userid,
+            "dingtalk_union_id": profile.dingtalk_union_id,
+            "employee_number": profile.employee_number,
+            "manager_userid": profile.manager_userid,
         },
     )
     if created:
@@ -67,8 +72,26 @@ def _upsert_user(profile: AuthentikUserProfile) -> _UserUpsertResult:
     user.email = profile.email
     user.department = profile.department
     user.status = profile.status
+    user.dingtalk_corp_id = profile.dingtalk_corp_id
+    user.dingtalk_userid = profile.dingtalk_userid
+    user.dingtalk_union_id = profile.dingtalk_union_id
+    user.employee_number = profile.employee_number
+    user.manager_userid = profile.manager_userid
     user.full_clean()
-    user.save(update_fields=["name", "email", "department", "status", "updated_at"])
+    user.save(
+        update_fields=[
+            "name",
+            "email",
+            "department",
+            "status",
+            "dingtalk_corp_id",
+            "dingtalk_userid",
+            "dingtalk_union_id",
+            "employee_number",
+            "manager_userid",
+            "updated_at",
+        ],
+    )
     return _UserUpsertResult(user=user, created=False, was_non_active=was_non_active)
 
 

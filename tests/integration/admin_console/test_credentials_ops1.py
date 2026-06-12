@@ -5,10 +5,11 @@ from json import dumps
 from typing import Final, Protocol
 
 import pytest
-from django.contrib.auth.models import User
 from django.test import Client
 from pydantic import TypeAdapter
 
+from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
+from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import App, AppCredential, AppMembership
 from easyauth.applications.services import StaticTokenService
@@ -406,9 +407,11 @@ def _owned_app(app_key: str, owner_user_id: str) -> App:
 
 
 def _logged_in_client(username: str) -> Client:
-    _ = User.objects.create_user(username=username, password=LOGIN_VALUE)
+    user, _created = UserMirror.objects.get_or_create(authentik_user_id=username)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    session = client.session
+    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
+    session.save()
     return client
 
 

@@ -4,11 +4,11 @@ from http import HTTPStatus
 from typing import ClassVar, Final
 
 import pytest
-from django.contrib.auth.models import User
 from django.test import Client
 from pydantic import BaseModel, ConfigDict
 
 from easyauth.access_requests.models import AccessRequest
+from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import App
 from easyauth.audit.models import AuditLog
@@ -46,6 +46,7 @@ class _DependencyHealthResponse(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
 
     authentik: _DependencyHealthComponent
+    authentik_directory: _DependencyHealthComponent
     dingtalk: _DependencyHealthComponent
     celery: _DependencyHealthComponent
 
@@ -87,6 +88,7 @@ def test_ops3_dependency_health_read_writes_audit() -> None:
     audit = AuditLog.objects.get(event_type="dependency_health_read")
     assert response.status_code == HTTPStatus.OK
     assert body.authentik.status == "unknown"
+    assert body.authentik_directory.status == "unknown"
     assert body.dingtalk.status == "unknown"
     assert body.celery.status == "unknown"
     assert audit.actor_type == "admin"
@@ -95,7 +97,10 @@ def test_ops3_dependency_health_read_writes_audit() -> None:
 
 
 def _logged_in_superuser(username: str) -> Client:
-    _ = User.objects.create_superuser(username=username, password=LOGIN_VALUE)
+    _ = UserMirror.objects.create(authentik_user_id=username)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    session = client.session
+    session[AUTHENTIK_SESSION_KEY] = username
+    session["easyauth_authentik_groups"] = ["EasyAuth Admins"]
+    session.save()
     return client

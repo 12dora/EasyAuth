@@ -3,11 +3,10 @@ from __future__ import annotations
 from http import HTTPStatus
 from json import dumps
 from re import search
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import pytest
-from django.contrib.auth.models import User
-from django.test import Client
+from django.test import Client, override_settings
 
 from easyauth.access_requests.models import (
     REQUEST_STATUS_GRANT_APPLIED,
@@ -16,10 +15,14 @@ from easyauth.access_requests.models import (
     AccessRequest,
     AccessRequestRole,
 )
+from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import App, ApprovalRule, Role
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import GRANT_STATUS_REVOKED, GRANT_TYPE_PERMANENT, AccessGrant
+
+if TYPE_CHECKING:
+    from django.conf import LazySettings
 
 pytestmark = pytest.mark.django_db
 
@@ -29,6 +32,11 @@ ACCESS_GRANTS_API_URL: Final = "/console/api/v1/operations/access-grants"
 EMERGENCY_REVOKES_API_URL: Final = "/console/api/v1/operations/emergency-revokes"
 AUDIT_LOGS_API_URL: Final = "/console/api/v1/audit-logs"
 DEPENDENCY_HEALTH_API_URL: Final = "/console/api/v1/operations/dependency-health"
+
+
+@pytest.fixture(autouse=True)
+def _console_superuser_groups(settings: LazySettings) -> None:  # pyright: ignore[reportUnusedFunction]
+    settings.EASYAUTH_CONSOLE_SUPERUSER_GROUPS = ("easyauth-admins",)
 
 
 def test_ops3_console_operations_api_filters_access_requests_and_grants() -> None:
@@ -260,21 +268,47 @@ def test_ops3_console_dependency_health_is_read_only_and_secret_free() -> None:
     assert "token" not in body.lower()
 
 
+@override_settings(EASYAUTH_CONSOLE_SUPERUSER_GROUPS=("easyauth-admins",))
+def test_ops3_console_superuser_group_session_can_read_operations() -> None:
+    # Given: Authentik session 中包含系统管理员组。
+    client = _logged_in_superuser("ops3-group-admin")
+
+    # When
+    response = client.get(ACCESS_REQUESTS_API_URL)
+
+    # Then
+    assert response.status_code == HTTPStatus.OK
+
+
 def _logged_in_superuser(
     username: str,
     *,
     enforce_csrf_checks: bool = False,
 ) -> Client:
-    _ = User.objects.create_superuser(username=username, password=LOGIN_VALUE)
-    client = Client(HTTP_HOST="localhost", enforce_csrf_checks=enforce_csrf_checks)
-    assert client.login(username=username, password=LOGIN_VALUE) is True
-    return client
+    return _authentik_client(
+        username,
+        enforce_csrf_checks=enforce_csrf_checks,
+        groups=("easyauth-admins",),
+    )
 
 
 def _logged_in_user(username: str) -> Client:
-    _ = User.objects.create_user(username=username, password=LOGIN_VALUE)
-    client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    return _authentik_client(username)
+
+
+def _authentik_client(
+    username: str,
+    *,
+    enforce_csrf_checks: bool = False,
+    groups: tuple[str, ...] = (),
+) -> Client:
+    user, _created = UserMirror.objects.get_or_create(authentik_user_id=username)
+    client = Client(HTTP_HOST="localhost", enforce_csrf_checks=enforce_csrf_checks)
+    session = client.session
+    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
+    if groups:
+        session["easyauth_authentik_groups"] = list(groups)
+    session.save()
     return client
 
 

@@ -26,12 +26,12 @@ from easyauth.api.errors import ErrorCode
 from easyauth.applications.models import App, PermissionTemplateVersion
 from easyauth.applications.ownership import ConsoleActor, can_manage_app, can_view_app
 
-type AppApiResult = App | JsonResponse
+type AppActorApiResult = tuple[App, ConsoleActor] | JsonResponse
 
 
 def permission_template_preview_api(request: HttpRequest, app_key: str) -> JsonResponse:
     match _read_context(request, app_key):
-        case App() as app:
+        case (App() as app, ConsoleActor() as actor):
             pass
         case JsonResponse() as response:
             return response
@@ -39,7 +39,7 @@ def permission_template_preview_api(request: HttpRequest, app_key: str) -> JsonR
     if response := require_post(request):
         return response
     try:
-        payload = preview_template_import(app, request.body, request.user.get_username())
+        payload = preview_template_import(app, request.body, actor.user_id)
     except TemplateHandlerError as error:
         return _template_error_response(error)
     return _json_response(payload)
@@ -51,7 +51,7 @@ def permission_template_confirm_api(
     preview_id: str,
 ) -> JsonResponse:
     match _write_context(request, app_key):
-        case App() as app:
+        case (App() as app, ConsoleActor() as actor):
             pass
         case JsonResponse() as response:
             return response
@@ -59,7 +59,7 @@ def permission_template_confirm_api(
     if response := require_post(request):
         return response
     try:
-        payload = confirm_template_import(app, preview_id, request.user.get_username())
+        payload = confirm_template_import(app, preview_id, actor.user_id)
     except TemplateHandlerError as error:
         return _template_error_response(error)
     return _json_response(payload)
@@ -67,7 +67,7 @@ def permission_template_confirm_api(
 
 def permission_template_versions_api(request: HttpRequest, app_key: str) -> JsonResponse:
     match _read_context(request, app_key):
-        case App() as app:
+        case (App() as app, ConsoleActor()):
             pass
         case JsonResponse() as response:
             return response
@@ -96,7 +96,7 @@ def permission_template_versions_api(request: HttpRequest, app_key: str) -> Json
     )
 
 
-def _read_context(request: HttpRequest, app_key: str) -> AppApiResult:
+def _read_context(request: HttpRequest, app_key: str) -> AppActorApiResult:
     match require_console_actor(request):
         case ConsoleActor() as actor:
             pass
@@ -109,10 +109,10 @@ def _read_context(request: HttpRequest, app_key: str) -> AppApiResult:
             "应用不存在。",
             status=HTTPStatus.NOT_FOUND,
         )
-    return app
+    return app, actor
 
 
-def _write_context(request: HttpRequest, app_key: str) -> AppApiResult:
+def _write_context(request: HttpRequest, app_key: str) -> AppActorApiResult:
     match require_console_actor(request):
         case ConsoleActor() as actor:
             pass
@@ -131,7 +131,7 @@ def _write_context(request: HttpRequest, app_key: str) -> AppApiResult:
             "只有 active App owner 可以确认导入权限模板。",
             status=HTTPStatus.FORBIDDEN,
         )
-    return app
+    return app, actor
 
 
 def _template_error_response(error: TemplateHandlerError) -> JsonResponse:

@@ -38,7 +38,8 @@ def health_item(item: DependencyHealthItem) -> JsonObject:
 
 
 def dependency_health_map_payload(items: tuple[DependencyHealthItem, ...]) -> JsonObject:
-    return {item.component: _dependency_component(item) for item in items}
+    health_map: JsonObject = {item.component: _dependency_component(item) for item in items}
+    return {"health_map": health_map, **health_map}
 
 
 def _dependency_component(item: DependencyHealthItem) -> JsonObject:
@@ -56,6 +57,10 @@ def _dependency_alias_fields(item: DependencyHealthItem) -> JsonObject:
     last_checked_at = datetime_value(item.last_checked_at)
     aliases: dict[str, JsonObject] = {
         health_models.DEPENDENCY_AUTHENTIK: {
+            "last_sync_at": last_checked_at,
+            "last_sync_result": item.summary,
+        },
+        health_models.DEPENDENCY_AUTHENTIK_DIRECTORY: {
             "last_sync_at": last_checked_at,
             "last_sync_result": item.summary,
         },

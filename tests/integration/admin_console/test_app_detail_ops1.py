@@ -7,9 +7,10 @@ from re import search
 from typing import Final, Protocol
 
 import pytest
-from django.contrib.auth.models import User
 from django.test import Client
 
+from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
+from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import (
     App,
     AppMembership,
@@ -101,6 +102,18 @@ def test_ops1_console_owner_cannot_access_unowned_app_detail() -> None:
 
     # Then: 控制台拒绝暴露未授权 App。
     assert response.status_code == HTTPStatus.NOT_FOUND
+
+
+def test_ops1_console_entry_redirects_unauthenticated_user_to_authentik_login() -> None:
+    # Given: 未建立 Authentik 控制台会话。
+    client = Client(HTTP_HOST="localhost")
+
+    # When: 用户访问控制台入口。
+    response = client.get("/console/?tab=roles")
+
+    # Then: 控制台跳转到 OIDC 登录并携带当前本地路径。
+    assert response.status_code == HTTPStatus.FOUND
+    assert response.headers["Location"] == "/auth/login/?next=/console/%3Ftab%3Droles"
 
 
 def test_ops1_console_app_detail_template_preserves_sections_forms_and_partials() -> None:
@@ -341,9 +354,11 @@ def _logged_in_client(username: str, *, enforce_csrf_checks: bool = False) -> Cl
 
 
 def _login_client(*, username: str, enforce_csrf_checks: bool) -> Client:
-    _ = User.objects.create_user(username=username, password=LOGIN_VALUE)
+    user, _created = UserMirror.objects.get_or_create(authentik_user_id=username)
     client = Client(HTTP_HOST="localhost", enforce_csrf_checks=enforce_csrf_checks)
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    session = client.session
+    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
+    session.save()
     return client
 
 

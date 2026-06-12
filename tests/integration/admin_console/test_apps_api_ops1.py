@@ -2,21 +2,30 @@ from __future__ import annotations
 
 from http import HTTPStatus
 from json import dumps
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 import pytest
-from django.contrib.auth.models import User
 from django.test import Client
 
+from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
+from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode
 from easyauth.applications.models import App, AppMembership, Role
 from easyauth.applications.services import StaticTokenService
 from easyauth.audit.models import AuditLog
 
+if TYPE_CHECKING:
+    from django.conf import LazySettings
+
 pytestmark = pytest.mark.django_db
 
 LOGIN_VALUE: Final = "console-ops1-api"
 APPS_API_URL: Final = "/console/api/v1/apps"
+
+
+@pytest.fixture(autouse=True)
+def _console_superuser_groups(settings: LazySettings) -> None:  # pyright: ignore[reportUnusedFunction]
+    settings.EASYAUTH_CONSOLE_SUPERUSER_GROUPS = ("easyauth-admins",)
 
 
 def test_ops1_apps_api_superuser_lists_all_apps() -> None:
@@ -314,14 +323,19 @@ def test_ops1_configuration_status_api_can_return_ready_status() -> None:
 
 
 def _logged_in_superuser(username: str) -> Client:
-    _ = User.objects.create_superuser(username=username, password=LOGIN_VALUE)
-    client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
-    return client
+    return _authentik_client(username, groups=("easyauth-admins",))
 
 
 def _logged_in_user(username: str) -> Client:
-    _ = User.objects.create_user(username=username, password=LOGIN_VALUE)
+    return _authentik_client(username)
+
+
+def _authentik_client(username: str, *, groups: tuple[str, ...] = ()) -> Client:
+    user, _created = UserMirror.objects.get_or_create(authentik_user_id=username)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    session = client.session
+    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
+    if groups:
+        session["easyauth_authentik_groups"] = list(groups)
+    session.save()
     return client

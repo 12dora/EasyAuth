@@ -10,15 +10,18 @@ if TYPE_CHECKING:
     from datetime import date, datetime
 
 DEPENDENCY_AUTHENTIK: Final = "authentik"
+DEPENDENCY_AUTHENTIK_DIRECTORY: Final = "authentik_directory"
 DEPENDENCY_DINGTALK: Final = "dingtalk"
 DEPENDENCY_CELERY: Final = "celery"
 DEPENDENCY_HEALTH_DEPENDENCY_VALUES: Final[tuple[str, ...]] = (
     DEPENDENCY_AUTHENTIK,
+    DEPENDENCY_AUTHENTIK_DIRECTORY,
     DEPENDENCY_DINGTALK,
     DEPENDENCY_CELERY,
 )
 DEPENDENCY_HEALTH_DEPENDENCY_CHOICES: Final[tuple[tuple[str, str], ...]] = (
     (DEPENDENCY_AUTHENTIK, "authentik"),
+    (DEPENDENCY_AUTHENTIK_DIRECTORY, "authentik_directory"),
     (DEPENDENCY_DINGTALK, "dingtalk"),
     (DEPENDENCY_CELERY, "celery"),
 )

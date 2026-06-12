@@ -29,6 +29,7 @@ from easyauth.admin_console.credentials import (
     disable_static_token_for_console,
     rotate_static_token_for_console,
 )
+from easyauth.admin_console.identity import actor_from_request
 from easyauth.admin_console.permission_templates import (
     PermissionTemplateConsoleResult,
     handle_permission_template_post,
@@ -67,7 +68,7 @@ CREDENTIAL_ACTIONS: Final = frozenset(
 
 
 def console_home(request: HttpRequest) -> HttpResponse:
-    match _actor_from_request(request):
+    match actor_from_request(request):
         case ConsoleActor():
             return render_react_shell(request, surface="console", title="EasyAuth 控制台")
         case None:
@@ -75,7 +76,7 @@ def console_home(request: HttpRequest) -> HttpResponse:
 
 
 def console_operations(request: HttpRequest, _path: str = "") -> HttpResponse:
-    match _actor_from_request(request):
+    match actor_from_request(request):
         case ConsoleActor():
             return render_react_shell(request, surface="console", title="EasyAuth 控制台")
         case None:
@@ -90,7 +91,7 @@ class _RenderState:
 
 
 def app_detail(request: HttpRequest, app_key: str) -> HttpResponse:
-    match _actor_from_request(request):
+    match actor_from_request(request):
         case ConsoleActor() as actor:
             pass
         case None:
@@ -252,16 +253,8 @@ def _action_requires_manage(action: str) -> bool:
     return action != "run_permission_query_test"
 
 
-def _actor_from_request(request: HttpRequest) -> ConsoleActor | None:
-    user = request.user
-    if not user.is_authenticated:
-        return None
-    is_superuser = bool(getattr(user, "is_superuser", False))
-    return ConsoleActor(user_id=user.get_username(), is_superuser=is_superuser)
-
-
 def _login_redirect(request: HttpRequest) -> HttpResponseRedirect:
-    return HttpResponseRedirect(f"/admin/login/?next={quote(request.get_full_path())}")
+    return HttpResponseRedirect(f"/auth/login/?next={quote(request.get_full_path())}")
 
 
 def _post_int(request: HttpRequest, key: str) -> int:

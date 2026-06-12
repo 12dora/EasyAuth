@@ -182,13 +182,32 @@ EASYAUTH_AUTHENTIK_OIDC_HTTP_TIMEOUT_SECONDS = float(
     os.environ.get("EASYAUTH_AUTHENTIK_OIDC_HTTP_TIMEOUT_SECONDS", "5"),
 )
 EASYAUTH_ENABLE_DEV_LOGIN = os.environ.get("EASYAUTH_ENABLE_DEV_LOGIN", "0") == "1"
+EASYAUTH_CONSOLE_SUPERUSER_GROUPS = tuple(
+    group.strip()
+    for group in os.environ.get("EASYAUTH_CONSOLE_SUPERUSER_GROUPS", "EasyAuth Admins").split(",")
+    if group.strip()
+)
+EASYAUTH_CONSOLE_SUPERUSER_IDS = tuple(
+    user_id.strip()
+    for user_id in os.environ.get("EASYAUTH_CONSOLE_SUPERUSER_IDS", "").split(",")
+    if user_id.strip()
+)
 EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS = 300
 EASYAUTH_DINGTALK_CALLBACK_SECRET = os.environ.get("EASYAUTH_DINGTALK_CALLBACK_SECRET", "")
+EASYAUTH_AUTHENTIK_BASE_URL = os.environ.get(
+    "EASYAUTH_AUTHENTIK_BASE_URL",
+    "http://localhost:19000",
+).rstrip("/")
+EASYAUTH_AUTHENTIK_API_TOKEN = os.environ.get("EASYAUTH_AUTHENTIK_API_TOKEN", "")
+EASYAUTH_AUTHENTIK_DINGTALK_SOURCE_SLUG = os.environ.get(
+    "EASYAUTH_AUTHENTIK_DINGTALK_SOURCE_SLUG",
+    "dingtalk",
+)
 
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
 CELERY_TASK_EAGER_PROPAGATES = True
-CELERY_IMPORTS = ("easyauth.tasks.grants",)
+CELERY_IMPORTS = ("easyauth.tasks.grants", "easyauth.tasks.authentik")
 CELERY_BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
     "grant-expiration-cleanup": {
         "task": "easyauth.grants.cleanup_expired_grants",

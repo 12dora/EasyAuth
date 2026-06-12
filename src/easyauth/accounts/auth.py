@@ -8,13 +8,17 @@ from urllib.parse import urlencode, urlsplit, urlunsplit
 from django.db import transaction
 
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
+from easyauth.accounts.org_context import apply_dingtalk_org_context
 
 if TYPE_CHECKING:
     from django.http import HttpRequest
 
 AUTHENTIK_SESSION_KEY: Final = "easyauth_authentik_user_id"
+AUTHENTIK_GROUPS_SESSION_KEY: Final = "easyauth_authentik_groups"
 OIDC_STATE_SESSION_KEY: Final = "easyauth_oidc_state"
 OIDC_NONCE_SESSION_KEY: Final = "easyauth_oidc_nonce"
+OIDC_NEXT_SESSION_KEY: Final = "easyauth_oidc_next"
+DEFAULT_AUTH_SUCCESS_NEXT: Final = "/portal/"
 FIELD_AUDIENCE: Final = "audience"
 FIELD_AUTHORIZED_PARTY: Final = "azp"
 FIELD_ISSUER: Final = "issuer"
@@ -31,7 +35,9 @@ REASON_LOGIN_STATE_MISMATCH: Final = "does not match login attempt"
 REASON_LOGIN_STATE_MISSING: Final = "login state is missing"
 REASON_CODE_EXCHANGE_UNIMPLEMENTED: Final = "is not implemented"
 
-type OidcClaimValue = None | bool | int | float | str | tuple[str, ...] | list[str]
+type OidcClaimValue = (
+    None | bool | int | float | str | tuple[str, ...] | list[str] | dict[str, object]
+)
 type OidcClaimsInput = Mapping[str, OidcClaimValue]
 
 
@@ -54,6 +60,8 @@ class VerifiedOidcClaims:
     subject: str
     name: str
     email: str
+    groups: tuple[str, ...] = ()
+    dingtalk_org: object | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,6 +120,8 @@ def verify_oidc_claims(
         subject=subject,
         name=_optional_string_claim(claims, "name"),
         email=_optional_string_claim(claims, "email"),
+        groups=_optional_string_tuple_claim(claims, "groups"),
+        dingtalk_org=claims.get("dingtalk_org"),
     )
 
 
@@ -127,18 +137,29 @@ def bind_oidc_session(request: HttpRequest, claims: VerifiedOidcClaims) -> UserM
         )
         if not created:
             _update_existing_user_profile(user, claims)
+        changed_fields = apply_dingtalk_org_context(user, claims.dingtalk_org)
+        if changed_fields:
+            changed_fields.append("updated_at")
+            user.full_clean()
+            user.save(update_fields=changed_fields)
     request.session.cycle_key()
     request.session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
+    if claims.groups:
+        request.session[AUTHENTIK_GROUPS_SESSION_KEY] = list(claims.groups)
+    else:
+        request.session.pop(AUTHENTIK_GROUPS_SESSION_KEY, None)
     return user
 
 
 def clear_oidc_login_attempt(request: HttpRequest) -> None:
     request.session.pop(OIDC_STATE_SESSION_KEY, None)
     request.session.pop(OIDC_NONCE_SESSION_KEY, None)
+    request.session.pop(OIDC_NEXT_SESSION_KEY, None)
 
 
 def clear_auth_session(request: HttpRequest) -> None:
     request.session.pop(AUTHENTIK_SESSION_KEY, None)
+    request.session.pop(AUTHENTIK_GROUPS_SESSION_KEY, None)
 
 
 def exchange_authorization_code_for_claims(
@@ -171,6 +192,21 @@ def _optional_string_claim(claims: OidcClaimsInput, key: str) -> str:
             return claim
         case _:
             return ""
+
+
+def _optional_string_tuple_claim(claims: OidcClaimsInput, key: str) -> tuple[str, ...]:
+    value = claims.get(key)
+    match value:
+        case None:
+            return ()
+        case str() as claim:
+            return (claim,) if claim else ()
+        case tuple() as values:
+            return tuple(value for value in values if value)
+        case list() as values:
+            return tuple(value for value in values if value)
+        case _:
+            raise OidcSessionError(key, "must be a string sequence")
 
 
 def _audience_values(claims: OidcClaimsInput) -> frozenset[str]:

@@ -210,8 +210,8 @@ def _oidc_claim_value_or_none(value: JsonValue) -> OidcClaimValue:
             return value
         case list() as items:
             return _string_list_or_empty(items)
-        case _:
-            return None
+        case dict() as mapping:
+            return cast("dict[str, object]", mapping)
 
 
 def _string_list_or_empty(items: list[JsonValue]) -> list[str]:

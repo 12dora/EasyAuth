@@ -36,6 +36,40 @@ def test_s10_parse_user_uid_maps_to_authentik_user_id_and_active_status() -> Non
     assert profile.department == "研发部"
 
 
+def test_s10_parse_payload_maps_dingtalk_summary_fields() -> None:
+    payload: AuthentikPayloadInput = {
+        "user": {
+            "uid": "s10-payload-dingtalk",
+            "attributes": {
+                "department": "旧部门",
+                "dingtalk": {
+                    "corp_id": "corp-1",
+                    "user_id": "user-1",
+                    "union_id": "union-1",
+                    "job_number": "E001",
+                    "mobile": "13800000000",
+                    "raw": {"ignored": True},
+                },
+                "dingtalk_org": {
+                    "departments": [{"name": "销售部"}],
+                    "manager": {"user_id": "manager-1", "name": "主管"},
+                    "email": "manager@example.test",
+                },
+            },
+        },
+        "is_active": True,
+    }
+
+    profile = parse_authentik_payload(payload)
+
+    assert profile.dingtalk_corp_id == "corp-1"
+    assert profile.dingtalk_userid == "user-1"
+    assert profile.dingtalk_union_id == "union-1"
+    assert profile.employee_number == "E001"
+    assert profile.department == "销售部"
+    assert profile.manager_userid == "manager-1"
+
+
 def test_s10_parse_context_sub_maps_oidc_subject_to_authentik_user_id() -> None:
     # Given
     payload: AuthentikPayloadInput = {

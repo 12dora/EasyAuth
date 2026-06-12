@@ -8,6 +8,8 @@ from django.conf import settings as django_settings
 from django.http import Http404, HttpRequest, HttpResponse, HttpResponseRedirect
 
 from easyauth.accounts.auth import (
+    DEFAULT_AUTH_SUCCESS_NEXT,
+    OIDC_NEXT_SESSION_KEY,
     OIDC_NONCE_SESSION_KEY,
     OIDC_STATE_SESSION_KEY,
     OidcClientConfig,
@@ -68,6 +70,7 @@ def oidc_login(request: HttpRequest) -> HttpResponseRedirect:
     nonce = token_urlsafe(32)
     request.session[OIDC_STATE_SESSION_KEY] = state
     request.session[OIDC_NONCE_SESSION_KEY] = nonce
+    request.session[OIDC_NEXT_SESSION_KEY] = _safe_auth_success_next(request)
     return HttpResponseRedirect(build_authorization_url(config, state=state, nonce=nonce))
 
 
@@ -93,8 +96,9 @@ def oidc_callback(request: HttpRequest) -> HttpResponse:
         clear_oidc_login_attempt(request)
         return HttpResponse(str(error), status=HTTPStatus.BAD_REQUEST, content_type="text/plain")
 
+    next_path = _session_string(request, OIDC_NEXT_SESSION_KEY) or DEFAULT_AUTH_SUCCESS_NEXT
     clear_oidc_login_attempt(request)
-    return HttpResponseRedirect("/portal/")
+    return HttpResponseRedirect(next_path)
 
 
 def _oidc_config_from_settings() -> OidcClientConfig:
@@ -181,6 +185,13 @@ def _safe_dev_login_next(request: HttpRequest) -> str:
     if _is_local_absolute_path(next_path):
         return next_path
     return DEFAULT_DEV_LOGIN_NEXT
+
+
+def _safe_auth_success_next(request: HttpRequest) -> str:
+    next_path = request.GET.get("next", DEFAULT_AUTH_SUCCESS_NEXT)
+    if _is_local_absolute_path(next_path):
+        return next_path
+    return DEFAULT_AUTH_SUCCESS_NEXT
 
 
 def _is_local_absolute_path(value: str) -> bool:
