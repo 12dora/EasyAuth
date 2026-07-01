@@ -338,24 +338,32 @@ def _upsert_permission_groups(
     manifest: AppManifestInput,
 ) -> dict[str, PermissionGroup]:
     depth_by_key = _permission_group_depths(manifest.permission_groups)
+    incoming_keys = {spec.key for spec in manifest.permission_groups}
     group_by_key = {group.key: group for group in PermissionGroup.objects.filter(app=app)}
     for spec in manifest.permission_groups:
-        group = group_by_key.get(spec.key) or PermissionGroup(app=app, key=spec.key)
+        group = group_by_key.get(spec.key)
+        if group is None:
+            group = PermissionGroup(app=app, key=spec.key, depth=1)
         group.name = spec.name
         group.description = spec.description
         group.display_order = spec.display_order
         group.is_active = spec.is_active
-        group.depth = depth_by_key[spec.key]
+        group.parent = None
+        group.depth = 1
         group.full_clean(exclude=["parent"])
         group.save()
         group_by_key[spec.key] = group
-    for spec in manifest.permission_groups:
+    for spec in sorted(manifest.permission_groups, key=lambda group: depth_by_key[group.key]):
         group = group_by_key[spec.key]
         group.parent = group_by_key.get(spec.parent_key) if spec.parent_key else None
+        group.depth = depth_by_key[spec.key]
         group.full_clean()
-        group.save(update_fields=["parent", "updated_at"])
+        group.save(update_fields=["parent", "depth", "updated_at"])
+    _detach_missing_permission_group_roots(app, incoming_keys)
+    _sync_permission_group_depths(app)
+    group_by_key = {group.key: group for group in PermissionGroup.objects.filter(app=app)}
     for key, group in group_by_key.items():
-        if key not in {spec.key for spec in manifest.permission_groups} and group.is_active:
+        if key not in incoming_keys and group.is_active:
             group.is_active = False
             group.full_clean()
             group.save(update_fields=["is_active", "updated_at"])
@@ -402,9 +410,7 @@ def _upsert_authorization_groups(
     manifest: AppManifestInput,
 ) -> dict[str, AuthorizationGroup]:
     incoming = {group.key: group for group in manifest.authorization_groups}
-    group_by_key = {
-        group.key: group for group in AuthorizationGroup.objects.filter(app=app)
-    }
+    group_by_key = {group.key: group for group in AuthorizationGroup.objects.filter(app=app)}
     for key, spec in incoming.items():
         group = group_by_key.get(key) or AuthorizationGroup(app=app, key=key)
         group.kind = spec.kind
@@ -510,6 +516,45 @@ def _permission_group_depths(
     for group in groups:
         _ = depth_for(group.key)
     return depths
+
+
+def _sync_permission_group_depths(app: App) -> None:
+    groups = list(PermissionGroup.objects.filter(app=app).select_related("parent"))
+    group_by_id = {group.id: group for group in groups}
+    depth_by_id: dict[int, int] = {}
+
+    def depth_for(group: PermissionGroup) -> int:
+        if group.id in depth_by_id:
+            return depth_by_id[group.id]
+        parent_id = group.parent_id
+        depth = 1 if parent_id is None else depth_for(group_by_id[parent_id]) + 1
+        depth_by_id[group.id] = depth
+        return depth
+
+    for group in groups:
+        _ = depth_for(group)
+
+    for group in sorted(groups, key=lambda item: depth_by_id[item.id]):
+        expected_depth = depth_by_id[group.id]
+        if group.depth == expected_depth:
+            continue
+        group.depth = expected_depth
+        if group.parent_id is not None:
+            group.parent = group_by_id[group.parent_id]
+        group.full_clean()
+        group.save(update_fields=["depth", "updated_at"])
+
+
+def _detach_missing_permission_group_roots(app: App, incoming_keys: set[str]) -> None:
+    group_by_key = {group.key: group for group in PermissionGroup.objects.filter(app=app)}
+    incoming_ids = {group_by_key[key].id for key in incoming_keys}
+    for key, group in group_by_key.items():
+        if key in incoming_keys or group.parent_id not in incoming_ids:
+            continue
+        group.parent = None
+        group.depth = 1
+        group.full_clean()
+        group.save(update_fields=["parent", "depth", "updated_at"])
 
 
 def _latest_manifest_schema_version(app: App) -> int:

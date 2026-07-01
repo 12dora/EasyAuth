@@ -56,8 +56,11 @@ export function RulesTab({ appKey }: { appKey: string }) {
   });
   const toggleMutation = useMutation({
     mutationFn: (rule: EditableApprovalRule) =>
-      apiRequest(`/console/api/v1/apps/${appKey}/approval-rules/${rule.id}/${rule.is_active ? "disable" : "enable"}`, {
-        method: "POST",
+      apiRequest(`/console/api/v1/apps/${appKey}/approval-rules/${rule.id}`, {
+        method: "PATCH",
+        body: {
+          is_active: !rule.is_active,
+        },
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey }),
   });

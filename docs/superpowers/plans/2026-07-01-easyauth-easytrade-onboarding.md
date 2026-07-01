@@ -8,6 +8,8 @@
 
 **技术栈:** Django 5、Django REST Framework 风格 JSON API、Pydantic、React/Vite、pytest、Vitest、Playwright。
 
+**执行记录（2026-07-01）:** 本次使用本地开发登录 `easytrade-owner`、真实 HTTP API、EasyTrade Docker backend 生成的 `/tmp/easytrade-easyauth-manifest.json` 和 EasyAuth `127.0.0.1:8010` Django 服务完成自动化运营落地。控制台页面通过真实 HTTP 和前端测试验证；未人工点击“新建应用”弹窗，因此该手动 UI 步骤保留未勾选。
+
 ---
 
 ## 文件结构
@@ -83,7 +85,7 @@ EasyAuth 不提供 `userId/appKey/version/expiresAt` 兼容响应。下游需要
 - Test: `tests/integration/admin_console/test_apps_api_ops1.py`
 - Test: `frontend/src/pages/console/ConsoleAppList.test.tsx`
 
-- [ ] **Step 1: 用 API 创建 App**
+- [x] **Step 1: 用 API 创建 App**
 
 使用已登录的系统管理员 session 发起请求：
 
@@ -119,7 +121,7 @@ Developer 用户 ID: easytrade-developer
 
 Expected: 创建后跳转到 `/console/apps/easytrade`。
 
-- [ ] **Step 3: 跑 App API 和前端单测**
+- [x] **Step 3: 跑 App API 和前端单测**
 
 ```bash
 uv run pytest tests/integration/admin_console/test_apps_api_ops1.py -q
@@ -128,7 +130,7 @@ pnpm --dir frontend test -- ConsoleAppList.test.tsx
 
 Expected: 两条命令通过。若本机没有 `uv`，在 EasyAuth 的项目虚拟环境中执行等价 `pytest` 命令。
 
-- [ ] **Step 4: 验证配置状态**
+- [x] **Step 4: 验证配置状态**
 
 ```bash
 curl http://127.0.0.1:8000/console/api/v1/apps/easytrade/configuration-status \
@@ -137,7 +139,7 @@ curl http://127.0.0.1:8000/console/api/v1/apps/easytrade/configuration-status \
 
 Expected: 初始状态允许为 `blocking`，原因应明确指向缺少目录、授权组、审批规则或凭据，不允许返回不透明错误。
 
-- [ ] **Step 5: 提交 EasyAuth 侧必要调整**
+- [x] **Step 5: 提交 EasyAuth 侧必要调整**
 
 只有在本任务修改代码或测试时提交：
 
@@ -158,7 +160,7 @@ git commit -m "feat(console): support EasyTrade app onboarding"
 - Test: `tests/unit/applications/test_permission_templates_ops1.py`
 - Test: `tests/integration/admin_console/test_template_guide_api_ops1.py`
 
-- [ ] **Step 1: 使用首版 manifest 内容**
+- [x] **Step 1: 使用首版 manifest 内容**
 
 首版 manifest 应由 EasyTrade 的导出工具生成。手工联调时可先使用以下最小样例：
 
@@ -222,7 +224,7 @@ git commit -m "feat(console): support EasyTrade app onboarding"
 }
 ```
 
-- [ ] **Step 2: 预览 manifest**
+- [x] **Step 2: 预览 manifest**
 
 ```bash
 curl -X POST http://127.0.0.1:8000/console/api/v1/apps/easytrade/permission-template-imports/preview \
@@ -234,7 +236,7 @@ curl -X POST http://127.0.0.1:8000/console/api/v1/apps/easytrade/permission-temp
 
 Expected: HTTP 200，响应包含 `preview_id`，并列出将创建的 scope、permission group、permission、authorization group、approval rule。数据库不应写入这些目录对象。
 
-- [ ] **Step 3: 确认导入**
+- [x] **Step 3: 确认导入**
 
 ```bash
 curl -X POST "http://127.0.0.1:8000/console/api/v1/apps/easytrade/permission-template-imports/$EASYAUTH_MANIFEST_PREVIEW_ID/confirm" \
@@ -244,7 +246,7 @@ curl -X POST "http://127.0.0.1:8000/console/api/v1/apps/easytrade/permission-tem
 
 Expected: HTTP 200，`catalog_version` 提升，`PermissionTemplateVersion.version == 1`。
 
-- [ ] **Step 4: 导出并回放校验**
+- [x] **Step 4: 导出并回放校验**
 
 ```bash
 curl http://127.0.0.1:8000/console/api/v1/apps/easytrade/manifest \
@@ -253,7 +255,7 @@ curl http://127.0.0.1:8000/console/api/v1/apps/easytrade/manifest \
 
 Expected: 导出内容包含 `scopes`、`permission_groups`、`permissions`、`authorization_groups`、`approval_rules`，不包含 token、client secret 或任何用户授权事实。
 
-- [ ] **Step 5: 跑 manifest 测试**
+- [x] **Step 5: 跑 manifest 测试**
 
 ```bash
 uv run pytest tests/unit/applications/test_permission_templates_ops1.py tests/integration/admin_console/test_template_guide_api_ops1.py -q
@@ -262,7 +264,7 @@ pnpm --dir frontend test -- ConsoleAppWorkspace.test.tsx
 
 Expected: 全部通过。
 
-- [ ] **Step 6: 提交 EasyAuth 侧必要调整**
+- [x] **Step 6: 提交 EasyAuth 侧必要调整**
 
 只有在本任务修改代码或测试时提交：
 
@@ -283,7 +285,7 @@ git commit -m "feat(manifest): support EasyTrade catalog import"
 - Test: `tests/integration/admin_console/test_approval_rules_api_ops1.py`
 - Test: `tests/unit/grants/test_query.py`
 
-- [ ] **Step 1: 检查授权组语义**
+- [x] **Step 1: 检查授权组语义**
 
 确认 EasyTrade 的预置角色全部用 `AuthorizationGroup(kind="role")` 表达：
 
@@ -297,7 +299,7 @@ git commit -m "feat(manifest): support EasyTrade catalog import"
 
 Expected: 不创建旧 `Role`，不使用 `RolePermission` 作为新接入主路径。
 
-- [ ] **Step 2: 检查能力包语义**
+- [x] **Step 2: 检查能力包语义**
 
 跨角色能力包用 `AuthorizationGroup(kind="bundle")` 表达：
 
@@ -310,7 +312,7 @@ Expected: 不创建旧 `Role`，不使用 `RolePermission` 作为新接入主路
 
 Expected: `bundle` 可作为用户 grant target，但不得替代 `PermissionGroup`。`PermissionGroup` 仍只表示目录树。
 
-- [ ] **Step 3: 配置审批规则**
+- [x] **Step 3: 配置审批规则**
 
 每个 `requestable=true` 的授权组至少有一条 active approval rule：
 
@@ -325,7 +327,7 @@ Expected: `bundle` 可作为用户 grant target，但不得替代 `PermissionGro
 
 Expected: `configuration-status` 不再报告 `requestable_authorization_group_approval_rule_missing`。
 
-- [ ] **Step 4: 跑授权展开测试**
+- [x] **Step 4: 跑授权展开测试**
 
 ```bash
 uv run pytest tests/unit/grants/test_query.py tests/integration/admin_console/test_approval_rules_api_ops1.py -q
@@ -333,7 +335,7 @@ uv run pytest tests/unit/grants/test_query.py tests/integration/admin_console/te
 
 Expected: `resolve_user_permissions` 只从 `AccessGrantGroup -> AuthorizationGroupGrant` 和 `AccessGrantPermission` 展开 grants。
 
-- [ ] **Step 5: 提交 EasyAuth 侧必要调整**
+- [x] **Step 5: 提交 EasyAuth 侧必要调整**
 
 只有在本任务修改代码或测试时提交：
 
@@ -356,7 +358,7 @@ git commit -m "feat(authz): configure EasyTrade authorization groups"
 - Test: `tests/integration/admin_console/test_query_tester_ops1.py`
 - Test: `tests/integration/api/test_permission_query_ops1.py`
 
-- [ ] **Step 1: 创建 static token**
+- [x] **Step 1: 创建 static token**
 
 ```bash
 curl -X POST http://127.0.0.1:8000/console/api/v1/apps/easytrade/credentials/static-tokens \
@@ -368,7 +370,7 @@ curl -X POST http://127.0.0.1:8000/console/api/v1/apps/easytrade/credentials/sta
 
 Expected: HTTP 201，响应只在本次返回明文 token。列表接口只能返回 token metadata。
 
-- [ ] **Step 2: 用联调页查询用户**
+- [x] **Step 2: 用联调页查询用户**
 
 在 `/console/apps/easytrade` 的联调页输入 EasyAuth 用户 ID，例如：
 
@@ -378,7 +380,7 @@ ak_uid_sales_001
 
 Expected: 联调页展示 `groups`、`grants`、`grant_version`、`catalog_version`、`snapshot_version`、`expires_at`。
 
-- [ ] **Step 3: 直接调用公共查询**
+- [x] **Step 3: 直接调用公共查询**
 
 ```bash
 curl http://127.0.0.1:8000/api/v1/apps/easytrade/users/ak_uid_sales_001/permissions \
@@ -387,7 +389,7 @@ curl http://127.0.0.1:8000/api/v1/apps/easytrade/users/ak_uid_sales_001/permissi
 
 Expected: HTTP 200，字段为 snake_case 统一契约；如果用户没有授权，`groups` 和 `grants` 为空数组，仍返回 `snapshot_version` 和 `expires_at`。
 
-- [ ] **Step 4: 跑凭据和公共查询测试**
+- [x] **Step 4: 跑凭据和公共查询测试**
 
 ```bash
 uv run pytest tests/integration/admin_console/test_credentials_ops1.py tests/integration/admin_console/test_query_tester_ops1.py tests/integration/api/test_permission_query_ops1.py -q
@@ -395,7 +397,7 @@ uv run pytest tests/integration/admin_console/test_credentials_ops1.py tests/int
 
 Expected: 全部通过。
 
-- [ ] **Step 5: 完成控制台页面验证**
+- [x] **Step 5: 完成控制台页面验证**
 
 如果本任务修改了 Django 后端、模板、React 或 Vite build 产物，必须重启当前 Django 开发服务，然后验证真实页面：
 
@@ -406,7 +408,7 @@ curl -I http://127.0.0.1:8000/console/
 
 Expected: 两个 URL 都返回 200 或登录重定向，且浏览器里能看到最新 React 页面。
 
-- [ ] **Step 6: 提交 EasyAuth 侧必要调整**
+- [x] **Step 6: 提交 EasyAuth 侧必要调整**
 
 只有在本任务修改代码或测试时提交：
 

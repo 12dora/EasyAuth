@@ -210,6 +210,48 @@ def test_permission_query_excludes_inactive_groups_group_grants_permissions_and_
     assert "invoice.inactive-scope" not in body
 
 
+def test_permission_query_returns_empty_snake_case_snapshot_without_envelope() -> None:
+    # Given: 用户有 App 级授权快照, 但没有任何授权组或直授权限。
+    user = UserMirror.objects.create(authentik_user_id="user-api-empty-grants")
+    app = App.objects.create(app_key="empty-grants-api-app", name="Empty Grants API App")
+    issue = StaticTokenService.create_token(app=app, name="integration")
+    _ = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
+
+    # When: 应用查询该用户权限。
+    response = Client().get(
+        _permission_url(app.app_key, user.authentik_user_id),
+        HTTP_AUTHORIZATION=_bearer(issue.plaintext_token),
+    )
+
+    # Then: 公共 API 保持统一 snake_case 契约, 空授权不包专用 envelope。
+    assert response.status_code == HTTPStatus.OK
+    payload = response.json()
+    assert set(payload) == {
+        "user_id",
+        "app_key",
+        "groups",
+        "grants",
+        "grant_version",
+        "catalog_version",
+        "snapshot_version",
+        "expires_at",
+    }
+    assert payload["user_id"] == user.authentik_user_id
+    assert payload["app_key"] == app.app_key
+    assert payload["groups"] == []
+    assert payload["grants"] == []
+    assert payload["grant_version"] == 1
+    assert payload["catalog_version"] == 1
+    assert payload["snapshot_version"] == "1.1"
+    assert isinstance(payload["expires_at"], str)
+    assert "userId" not in payload
+    assert "appKey" not in payload
+    assert "expiresAt" not in payload
+    assert "version" not in payload
+    assert "data" not in payload
+    assert "result" not in payload
+
+
 def _permission_url(app_key: str, user_id: str) -> str:
     return f"/api/v1/apps/{app_key}/users/{user_id}/permissions"
 

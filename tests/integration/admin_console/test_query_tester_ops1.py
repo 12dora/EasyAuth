@@ -91,6 +91,33 @@ def test_ops1_console_query_tester_runs_real_permission_query_without_storing_to
     assert issue.plaintext_token not in str(audit_log.metadata)
 
 
+def test_ops1_console_query_tester_returns_empty_snapshot_with_versions() -> None:
+    # Given: App 有静态 token, 测试用户存在但没有任何授权组或直授权限。
+    client = _logged_in_client("owner-ops1-query-empty")
+    app = _owned_app("ops1-query-empty", "owner-ops1-query-empty")
+    issue = StaticTokenService.create_token(app=app, name="query tester")
+    user = UserMirror.objects.create(authentik_user_id="query-empty-user")
+    _ = AccessGrant.objects.create(user=user, app=app)
+
+    # When: owner 通过 private API 查询该用户。
+    response = client.post(
+        _query_test_api_url(app.app_key),
+        data=dumps({"user_id": user.authentik_user_id, "token": issue.plaintext_token}),
+        content_type="application/json",
+    )
+
+    # Then: 空授权仍返回统一快照字段, 便于下游区分“已认证但无业务授权”。
+    assert response.status_code == HTTPStatus.OK
+    payload = response.json()
+    assert payload["allowed"] is False
+    assert payload["groups"] == []
+    assert payload["grants"] == []
+    assert payload["grant_version"] == 1
+    assert payload["catalog_version"] == 1
+    assert payload["snapshot_version"] == "1.1"
+    assert isinstance(payload["expires_at"], str)
+
+
 def test_ops1_console_query_tester_explains_401_403_and_422_errors() -> None:
     # Given: owner 有目标 App, 另一个 App 有不同 token。
     client = _logged_in_client("owner-ops1-query-errors")

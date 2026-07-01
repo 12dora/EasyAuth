@@ -27,6 +27,11 @@ from easyauth.applications.services import StaticTokenService
 pytestmark = pytest.mark.django_db
 
 LOGIN_VALUE: Final = "console-login"
+MAX_CONFIRM_URL_PREVIEW_ID_LENGTH: Final = 256
+ROOT_PERMISSION_GROUP_DEPTH: Final = 1
+CHILD_PERMISSION_GROUP_DEPTH: Final = 2
+GRANDCHILD_PERMISSION_GROUP_DEPTH: Final = 3
+DETACHED_MISSING_LEAF_DEPTH: Final = 4
 JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
@@ -115,9 +120,193 @@ def test_ops1_template_confirm_api_imports_previewed_manifest() -> None:
     assert PermissionGroup.objects.get(app=app, key="billing").name == "账务"
     assert Permission.objects.get(app=app, key="billing.read").supported_scopes == ["SELF"]
     assert AuthorizationGroupGrant.objects.get(authorization_group=auth_group).scope_key == "SELF"
-    assert PermissionTemplateVersion.objects.get(app=app).import_summary[
-        "manifest_schema_version"
-    ] == 1
+    assert (
+        PermissionTemplateVersion.objects.get(app=app).import_summary["manifest_schema_version"]
+        == 1
+    )
+
+
+def test_ops1_template_preview_uses_short_confirm_id_for_large_manifest() -> None:
+    # Given: EasyTrade 这类真实 manifest 体积可能很大, preview_id 不能携带整份内容进 URL。
+    client = _logged_in_client("ops1-manifest-api-large-owner")
+    app = _member_app("ops1-manifest-api-large", "ops1-manifest-api-large-owner", "owner")
+    manifest = _manifest_payload(app.app_key)
+    manifest["app"]["description"] = "大型权限目录" * 1000
+
+    preview = client.post(
+        f"/console/api/v1/apps/{app.app_key}/permission-template-imports/preview",
+        data=dumps({"template_format": "json", "template": dumps(manifest)}),
+        content_type="application/json",
+    )
+    preview_id = _required_str(_json_object(preview), "preview_id")
+    confirm = client.post(
+        f"/console/api/v1/apps/{app.app_key}/permission-template-imports/{preview_id}/confirm",
+    )
+
+    assert preview.status_code == HTTPStatus.OK
+    assert len(preview_id) < MAX_CONFIRM_URL_PREVIEW_ID_LENGTH
+    assert confirm.status_code == HTTPStatus.OK, confirm.content.decode()
+    assert PermissionTemplateVersion.objects.filter(app=app, version=1).exists()
+
+
+def test_ops1_template_confirm_imports_nested_permission_groups() -> None:
+    # Given: EasyTrade manifest 使用 domain.resource 形式的多层权限目录。
+    client = _logged_in_client("ops1-manifest-api-nested-owner")
+    app = _member_app("ops1-manifest-api-nested", "ops1-manifest-api-nested-owner", "owner")
+    manifest = _manifest_payload(app.app_key)
+    manifest["permission_groups"] = [
+        {"key": "customer", "name": "客户", "display_order": 10},
+        {
+            "key": "customer.profile",
+            "name": "客户资料",
+            "parent_key": "customer",
+            "display_order": 20,
+        },
+    ]
+    manifest["permissions"][0]["group_key"] = "customer.profile"
+
+    preview = client.post(
+        f"/console/api/v1/apps/{app.app_key}/permission-template-imports/preview",
+        data=dumps({"template_format": "json", "template": dumps(manifest)}),
+        content_type="application/json",
+    )
+    preview_id = _required_str(_json_object(preview), "preview_id")
+    confirm = client.post(
+        f"/console/api/v1/apps/{app.app_key}/permission-template-imports/{preview_id}/confirm",
+    )
+
+    assert confirm.status_code == HTTPStatus.OK, confirm.content.decode()
+    parent = PermissionGroup.objects.get(app=app, key="customer")
+    child = PermissionGroup.objects.get(app=app, key="customer.profile")
+    permission = Permission.objects.get(app=app, key="billing.read")
+    assert parent.depth == ROOT_PERMISSION_GROUP_DEPTH
+    assert child.parent == parent
+    assert child.depth == CHILD_PERMISSION_GROUP_DEPTH
+    assert permission.group == child
+
+
+def test_ops1_template_confirm_reparents_existing_permission_groups() -> None:
+    # Given: 已有目录树为 customer -> customer.profile。
+    client = _logged_in_client("ops1-manifest-api-reparent-owner")
+    app = _member_app("ops1-manifest-api-reparent", "ops1-manifest-api-reparent-owner", "owner")
+    initial_manifest = _manifest_payload(app.app_key)
+    initial_manifest["permission_groups"] = [
+        {"key": "customer", "name": "客户", "display_order": 10},
+        {
+            "key": "customer.profile",
+            "name": "客户资料",
+            "parent_key": "customer",
+            "display_order": 20,
+        },
+    ]
+    initial_manifest["permissions"][0]["group_key"] = "customer.profile"
+    _confirm_payload_manifest(client, app, initial_manifest)
+
+    # When: 新版本合法地把目录重排为 customer.profile -> customer。
+    reparent_manifest = _manifest_payload(app.app_key, version=2)
+    reparent_manifest["permission_groups"] = [
+        {
+            "key": "customer",
+            "name": "客户",
+            "parent_key": "customer.profile",
+            "display_order": 20,
+        },
+        {"key": "customer.profile", "name": "客户资料", "display_order": 10},
+    ]
+    reparent_manifest["permissions"][0]["group_key"] = "customer"
+    confirm = _confirm_payload_manifest(client, app, reparent_manifest)
+
+    # Then: 导入不应被旧 parent 关系误判成环, 最终树按 manifest 落库。
+    assert confirm.status_code == HTTPStatus.OK, confirm.content.decode()
+    parent = PermissionGroup.objects.get(app=app, key="customer.profile")
+    child = PermissionGroup.objects.get(app=app, key="customer")
+    permission = Permission.objects.get(app=app, key="billing.read")
+    assert parent.parent is None
+    assert parent.depth == ROOT_PERMISSION_GROUP_DEPTH
+    assert child.parent == parent
+    assert child.depth == CHILD_PERMISSION_GROUP_DEPTH
+    assert permission.group == child
+
+
+def test_ops1_template_confirm_reparents_group_before_deactivating_missing_child() -> None:
+    # Given: 旧目录树里 b 是 a 的子目录, c 是独立目录。
+    client = _logged_in_client("ops1-manifest-api-reparent-missing-owner")
+    app = _member_app(
+        "ops1-manifest-api-reparent-missing",
+        "ops1-manifest-api-reparent-missing-owner",
+        "owner",
+    )
+    initial_manifest = _manifest_payload(app.app_key)
+    initial_manifest["permission_groups"] = [
+        {"key": "a", "name": "A", "display_order": 10},
+        {"key": "b", "name": "B", "parent_key": "a", "display_order": 20},
+        {"key": "c", "name": "C", "display_order": 30},
+    ]
+    initial_manifest["permissions"][0]["group_key"] = "b"
+    _confirm_payload_manifest(client, app, initial_manifest)
+
+    # When: 新 manifest 把 a 挂到 c 下, 并遗漏旧子目录 b。
+    reparent_manifest = _manifest_payload(app.app_key, version=2)
+    reparent_manifest["permission_groups"] = [
+        {"key": "c", "name": "C", "display_order": 10},
+        {"key": "a", "name": "A", "parent_key": "c", "display_order": 20},
+    ]
+    reparent_manifest["permissions"][0]["group_key"] = "a"
+    confirm = _confirm_payload_manifest(client, app, reparent_manifest)
+
+    # Then: 缺失子目录 b 作为 missing 子树根被 detach 后停用, 保持历史目录树不变量。
+    assert confirm.status_code == HTTPStatus.OK, confirm.content.decode()
+    root = PermissionGroup.objects.get(app=app, key="c")
+    retained = PermissionGroup.objects.get(app=app, key="a")
+    missing_child = PermissionGroup.objects.get(app=app, key="b")
+    assert root.depth == ROOT_PERMISSION_GROUP_DEPTH
+    assert retained.parent == root
+    assert retained.depth == CHILD_PERMISSION_GROUP_DEPTH
+    assert missing_child.parent is None
+    assert missing_child.depth == ROOT_PERMISSION_GROUP_DEPTH
+    assert missing_child.is_active is False
+
+
+def test_ops1_template_confirm_detaches_deep_missing_subtree_before_deactivate() -> None:
+    # Given: 旧目录树里 a 的 missing 子树已达到最大深度。
+    client = _logged_in_client("ops1-manifest-api-deep-missing-owner")
+    app = _member_app(
+        "ops1-manifest-api-deep-missing",
+        "ops1-manifest-api-deep-missing-owner",
+        "owner",
+    )
+    initial_manifest = _manifest_payload(app.app_key)
+    initial_manifest["permission_groups"] = [
+        {"key": "a", "name": "A", "display_order": 10},
+        {"key": "b", "name": "B", "parent_key": "a", "display_order": 20},
+        {"key": "d", "name": "D", "parent_key": "b", "display_order": 30},
+        {"key": "e", "name": "E", "parent_key": "d", "display_order": 40},
+        {"key": "f", "name": "F", "parent_key": "e", "display_order": 50},
+        {"key": "c", "name": "C", "display_order": 60},
+    ]
+    initial_manifest["permissions"][0]["group_key"] = "f"
+    _confirm_payload_manifest(client, app, initial_manifest)
+
+    # When: 新 manifest 只保留 c 与 a, 并把 a 挂到 c 下。
+    reparent_manifest = _manifest_payload(app.app_key, version=2)
+    reparent_manifest["permission_groups"] = [
+        {"key": "c", "name": "C", "display_order": 10},
+        {"key": "a", "name": "A", "parent_key": "c", "display_order": 20},
+    ]
+    reparent_manifest["permissions"][0]["group_key"] = "a"
+    confirm = _confirm_payload_manifest(client, app, reparent_manifest)
+
+    # Then: missing 子树从保留父节点 detach 后停用, 不会被新活跃树挤到非法深度。
+    assert confirm.status_code == HTTPStatus.OK, confirm.content.decode()
+    retained = PermissionGroup.objects.get(app=app, key="a")
+    missing_root = PermissionGroup.objects.get(app=app, key="b")
+    missing_leaf = PermissionGroup.objects.get(app=app, key="f")
+    assert retained.parent == PermissionGroup.objects.get(app=app, key="c")
+    assert retained.depth == CHILD_PERMISSION_GROUP_DEPTH
+    assert missing_root.parent is None
+    assert missing_root.depth == ROOT_PERMISSION_GROUP_DEPTH
+    assert missing_leaf.depth == DETACHED_MISSING_LEAF_DEPTH
+    assert missing_leaf.is_active is False
 
 
 def test_ops1_template_confirm_api_rejects_duplicate_or_old_version() -> None:
@@ -293,6 +482,23 @@ def _confirm_manifest(client: Client, app: App, *, version: int = 1) -> None:
         f"/console/api/v1/apps/{app.app_key}/permission-template-imports/{preview_id}/confirm",
     )
     assert response.status_code == HTTPStatus.OK, response.content.decode()
+
+
+def _confirm_payload_manifest(
+    client: Client,
+    app: App,
+    manifest: dict[str, Any],
+) -> HttpResponseLike:
+    preview = client.post(
+        f"/console/api/v1/apps/{app.app_key}/permission-template-imports/preview",
+        data=dumps({"template_format": "json", "template": dumps(manifest)}),
+        content_type="application/json",
+    )
+    assert preview.status_code == HTTPStatus.OK, preview.content.decode()
+    preview_id = _required_str(_json_object(preview), "preview_id")
+    return client.post(
+        f"/console/api/v1/apps/{app.app_key}/permission-template-imports/{preview_id}/confirm",
+    )
 
 
 def _json_object(response: HttpResponseLike) -> dict[str, JsonValue]:

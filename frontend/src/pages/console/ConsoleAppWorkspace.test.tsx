@@ -389,13 +389,15 @@ describe("ConsoleAppWorkspace", () => {
         return jsonResponse({ id: 3 });
       }
       if (url === "/console/api/v1/apps/demo/approval-rules/2" && init?.method === "PATCH") {
+        const body = parseJsonBody(init);
+        if ("is_active" in body && !("target_key" in body)) {
+          expect(body).toEqual({ is_active: true });
+          rules = rules.map((rule) => (rule.id === 2 ? { ...rule, is_active: true, blocking: false } : rule));
+          return jsonResponse({ ok: true });
+        }
         rules = rules.map((rule) =>
           rule.id === 2 ? { ...rule, target_key: "invoice.approve.high", approver_userids: ["security", "owner"] } : rule,
         );
-        return jsonResponse({ ok: true });
-      }
-      if (url === "/console/api/v1/apps/demo/approval-rules/2/enable" && init?.method === "POST") {
-        rules = rules.map((rule) => (rule.id === 2 ? { ...rule, is_active: true, blocking: false } : rule));
         return jsonResponse({ ok: true });
       }
       throw new Error(`Unexpected fetch: ${url}`);
@@ -429,7 +431,13 @@ describe("ConsoleAppWorkspace", () => {
     expect(editedRow).not.toBeNull();
     await user.click(within(editedRow as HTMLTableRowElement).getByRole("button", { name: "启用" }));
     await waitFor(() => {
-      expect(findFetchCall(fetchMock, "/console/api/v1/apps/demo/approval-rules/2/enable", "POST")).toBeDefined();
+      expect(fetchMock.mock.calls).toContainEqual([
+        "/console/api/v1/apps/demo/approval-rules/2",
+        expect.objectContaining({
+          method: "PATCH",
+          body: JSON.stringify({ is_active: true }),
+        }),
+      ]);
     });
   });
   test("总览页可编辑基本信息并提交 PATCH", async () => {
