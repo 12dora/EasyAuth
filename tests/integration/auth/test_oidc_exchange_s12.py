@@ -17,6 +17,7 @@ from django.test import Client, RequestFactory, override_settings
 
 from easyauth.accounts.auth import (
     AUTHENTIK_SESSION_KEY,
+    OIDC_ID_TOKEN_SESSION_KEY,
     OidcClientConfig,
     OidcSessionError,
 )
@@ -35,6 +36,7 @@ REDIRECT_URI: Final = "http://testserver/auth/callback/"
 TOKEN_ENDPOINT: Final = "https://authentik.example.test/application/o/token/"  # noqa: S105 - 测试 URL, 不是密钥值.
 JWKS_URL: Final = "https://authentik.example.test/application/o/easyauth/jwks/"
 SESSION_KEY: Final = AUTHENTIK_SESSION_KEY
+ID_TOKEN_SESSION_KEY: Final = OIDC_ID_TOKEN_SESSION_KEY
 STATE_SESSION_KEY: Final = "easyauth_oidc_state"
 NONCE_SESSION_KEY: Final = "easyauth_oidc_nonce"
 OIDC_STATE: Final = "s12-state"
@@ -122,6 +124,7 @@ def test_s12_callback_exchanges_code_and_verifies_jwks_id_token(
     assert captured_form["client_secret"] == CLIENT_SECRET
     assert captured_form["redirect_uri"] == REDIRECT_URI
     assert client.session[SESSION_KEY] == OIDC_SUBJECT
+    assert client.session[ID_TOKEN_SESSION_KEY] == id_token
     assert client.session.session_key != old_session_key
     assert STATE_SESSION_KEY not in client.session
     assert NONCE_SESSION_KEY not in client.session

@@ -12,6 +12,9 @@
 
 - Authentik Application 与 Provider：<https://docs.goauthentik.io/add-secure-apps/applications/manage_apps/>
 - Authentik OAuth2/OIDC Provider：<https://docs.goauthentik.io/add-secure-apps/providers/oauth2/>
+- Authentik Single Logout：<https://docs.goauthentik.io/add-secure-apps/providers/single-logout/>
+- Authentik User Logout Stage：<https://docs.goauthentik.io/add-secure-apps/flows-stages/stages/user_logout/>
+- Authentik Brands：<https://docs.goauthentik.io/brands/>
 - Authentik Provider Property Mapping：<https://docs.goauthentik.io/add-secure-apps/providers/property-mappings/>
 - Authentik OAuth Source：<https://docs.goauthentik.io/users-sources/sources/protocols/oauth/>
 - Authentik Group 管理：<https://docs.goauthentik.io/users-sources/groups/manage_groups/>
@@ -27,10 +30,14 @@
 3. Authentik 有 OAuth2/OIDC Provider，client id 为 `easyauth-portal`。
 4. Authentik 有 Application，slug 为 `easyauth`，名称为 `EasyAuth Portal`。
 5. EasyAuth Provider 允许 `https://easyauth.example.com/auth/callback/` 或本地等价回调。
-6. EasyAuth Provider 绑定 `openid`、`profile`、`email`、`easyauth_org` 和可选 `dingtalk` scope mapping。
-7. `easyauth_org` mapping 返回 `groups` 和 `dingtalk_org`。
-8. EasyAuth 运行配置指向该 Provider，并请求 `openid profile email dingtalk easyauth_org`。
-9. 不通过 Authentik Application Binding 表达 EasyAuth 系统管理员。
+6. EasyAuth Provider 允许 `https://easyauth.example.com/auth/logged-out/?next=%2Fportal%2F` 或本地等价 logout redirect。
+7. EasyAuth Provider 绑定 `openid`、`profile`、`email`、`easyauth_org` 和可选 `dingtalk` scope mapping。
+8. `easyauth_org` mapping 返回 `groups` 和 `dingtalk_org`。
+9. `default-provider-invalidation-flow` 绑定 `default-invalidation-logout` User Logout stage。
+10. 当前 Brand 的 `default_application` 指向 EasyAuth Application。
+11. 默认 authentication flow 的 Identification stage 包含 DingTalk Source。
+12. EasyAuth 运行配置指向该 Provider，并请求 `openid profile email dingtalk easyauth_org`。
+13. 不通过 Authentik Application Binding 表达 EasyAuth 系统管理员。
 
 ## 不变量
 
@@ -49,6 +56,7 @@
 AUTHENTIK_BASE_URL=https://auth.example.com
 EASYAUTH_BASE_URL=https://easyauth.example.com
 EASYAUTH_CALLBACK=https://easyauth.example.com/auth/callback/
+EASYAUTH_LOGGED_OUT_URL=https://easyauth.example.com/auth/logged-out/?next=%2Fportal%2F
 EASYAUTH_APPLICATION_SLUG=easyauth
 EASYAUTH_APPLICATION_NAME=EasyAuth Portal
 EASYAUTH_CLIENT_ID=easyauth-portal
@@ -65,6 +73,7 @@ DINGTALK_CLIENT_SECRET=<钉钉应用 secret>
 AUTHENTIK_BASE_URL=http://localhost:19000
 EASYAUTH_BASE_URL=http://localhost:8001
 EASYAUTH_CALLBACK=http://localhost:8001/auth/callback/
+EASYAUTH_LOGGED_OUT_URL=http://localhost:8001/auth/logged-out/?next=%2Fportal%2F
 ```
 
 钉钉真实登录仍需要公网 Authentik 域名。
@@ -208,16 +217,43 @@ name = EasyAuth Portal OIDC
 client_id = easyauth-portal
 client_type = confidential
 redirect_uris 包含 EASYAUTH_CALLBACK
+redirect_uris 包含 EASYAUTH_LOGGED_OUT_URL，类型为 logout
 property_mappings 包含 openid、profile、email、easyauth_org 和可选 dingtalk
 signing_key 使用非空证书，便于 EasyAuth 通过 JWKS 和 RS256 验签
+invalidation_flow = default-provider-invalidation-flow
 ```
 
 若已存在 Provider：
 
 1. 不轮换 client secret，除非明确要求。
-2. 只追加缺失的 redirect URI。
+2. 只追加缺失的 redirect URI，不删除未知 redirect URI。
 3. 只追加缺失的 scope mapping。
 4. 不删除未知 mapping。
+
+自动化写入 `redirect_uris` 时，必须区分类型：
+
+```text
+authorization：${EASYAUTH_CALLBACK}
+logout：${EASYAUTH_LOGGED_OUT_URL}
+```
+
+若运行实例使用 Authentik API，`redirect_uris` 条目应包含：
+
+```json
+{
+  "matching_mode": "strict",
+  "url": "https://easyauth.example.com/auth/callback/",
+  "redirect_uri_type": "authorization"
+}
+```
+
+```json
+{
+  "matching_mode": "strict",
+  "url": "https://easyauth.example.com/auth/logged-out/?next=%2Fportal%2F",
+  "redirect_uri_type": "logout"
+}
+```
 
 ### 创建或复用 Application
 
@@ -231,6 +267,60 @@ launch_url = https://easyauth.example.com/console/
 ```
 
 若已经存在同 slug Application，只更新缺失或错误字段。不要删除 Application。
+
+### 配置 Provider invalidation flow 清理 Authentik 登录态
+
+目标：
+
+```text
+flow.slug = default-provider-invalidation-flow
+stage.name = default-invalidation-logout
+binding.target = default-provider-invalidation-flow
+binding.stage = default-invalidation-logout
+binding.order = 0
+```
+
+若 `default-invalidation-logout` 不存在，创建 `User Logout Stage`。若绑定已存在，不重复创建。
+
+该配置使用 Authentik 现有能力，不修改 Authentik 核心代码。EasyAuth 登出时跳转到 Provider End Session：
+
+```text
+${AUTHENTIK_BASE_URL}/application/o/${EASYAUTH_APPLICATION_SLUG}/end-session/
+```
+
+End Session 执行 Provider 的 `default-provider-invalidation-flow`，再由 `User Logout Stage` 清理 Authentik 浏览器登录态。不要把 EasyAuth 的登出目标配置成 `/if/flow/default-invalidation-flow/`。
+
+Blueprint 片段参考：
+
+```yaml
+version: 1
+metadata:
+  name: EasyAuth logout integration
+entries:
+  - model: authentik_flows.flowstagebinding
+    identifiers:
+      target: !Find [authentik_flows.flow, [slug, default-provider-invalidation-flow]]
+      stage: !Find [authentik_stages_user_logout.userlogoutstage, [name, default-invalidation-logout]]
+      order: 0
+```
+
+### 配置 Brand 默认应用
+
+目标：
+
+```text
+brand.default_application = EasyAuth Portal
+```
+
+该配置用于外部用户登录后跳回 EasyAuth，避免外部用户进入 Authentik 内部界面并看到：
+
+```text
+Permission denied
+Request has been denied.
+Interface can only be accessed by internal users.
+```
+
+若使用 API，检查 `/api/v3/core/brands/`，更新当前域名使用的 Brand。不要盲目新建 Brand；全新安装的默认 Brand 通常已经存在。
 
 ### Application Binding 策略
 
@@ -260,13 +350,34 @@ export EASYAUTH_AUTHENTIK_OIDC_SCOPES="openid profile email dingtalk easyauth_or
 export EASYAUTH_CONSOLE_SUPERUSER_GROUPS="EasyAuth Admins"
 ```
 
+EasyAuth 默认会从 Issuer 推导 Provider End Session URL，通常不需要显式配置：
+
+```text
+${AUTHENTIK_BASE_URL}/application/o/easyauth/end-session/
+```
+
+只有当 Provider slug 或反向代理路径无法由 Issuer 推导时，才显式设置：
+
+```bash
+export EASYAUTH_AUTHENTIK_LOGOUT_URL="${AUTHENTIK_BASE_URL}/application/o/easyauth/end-session/"
+```
+
+如果 Authentik Provider 已登记完全一致的 `logout` 类型 Redirect URI，可设置：
+
+```bash
+export EASYAUTH_AUTHENTIK_POST_LOGOUT_REDIRECT_URI="${EASYAUTH_LOGGED_OUT_URL}"
+```
+
+如果没有登记 logout Redirect URI，不要设置 `EASYAUTH_AUTHENTIK_POST_LOGOUT_REDIRECT_URI`。否则 Authentik End Session 会返回 `Bad Request`。
+
 自动化配置 Authentik Provider 时，Redirect URIs 至少要包含：
 
 ```text
-${EASYAUTH_BASE_URL}/auth/callback/
+authorization：${EASYAUTH_CALLBACK}
+logout：${EASYAUTH_LOGGED_OUT_URL}
 ```
 
-EasyAuth 登出只清理本地会话并跳转到本地 `/auth/logged-out/` 页面，因此自动化配置不需要额外的 Authentik 登出配置。
+EasyAuth 登出会先清理本地会话，再跳转到 Authentik Provider End Session。自动化配置 Authentik 时，确认 `default-provider-invalidation-flow` 绑定 `default-invalidation-logout` User Logout stage。
 
 如需目录 API：
 
@@ -325,6 +436,7 @@ issuer = ${AUTHENTIK_BASE_URL}/application/o/easyauth/
 authorization_endpoint = ${AUTHENTIK_BASE_URL}/application/o/authorize/
 token_endpoint = ${AUTHENTIK_BASE_URL}/application/o/token/
 jwks_uri = ${AUTHENTIK_BASE_URL}/application/o/easyauth/jwks/
+end_session_endpoint = ${AUTHENTIK_BASE_URL}/application/o/easyauth/end-session/
 ```
 
 ### JWKS
@@ -378,6 +490,24 @@ ${AUTHENTIK_BASE_URL}/source/oauth/callback/dingtalk/
 
 不要把 ID token 或 access token 明文写入日志。
 
+### EasyAuth 登出跳转
+
+在已登录 EasyAuth 的浏览器会话中点击登出，或对带 session cookie 的 `/auth/logout/` 发起 POST。
+
+预期：
+
+1. EasyAuth 响应 `302`。
+2. `Location` 指向：
+
+```text
+${AUTHENTIK_BASE_URL}/application/o/easyauth/end-session/
+```
+
+3. 如果本轮登录保存了 `id_token`，`Location` 包含 `id_token_hint`。
+4. 只有配置了 `EASYAUTH_AUTHENTIK_POST_LOGOUT_REDIRECT_URI` 时，`Location` 才包含 `post_logout_redirect_uri`。
+5. Authentik 不应返回 `Bad Request`。
+6. 再次点击钉钉登录时，应重新进入 Authentik/DingTalk 登录流程，不应凭旧 Authentik session 直接返回 EasyAuth。
+
 ## 回滚策略
 
 1. 从 EasyAuth 运行配置恢复旧 OIDC 配置。
@@ -406,6 +536,32 @@ curl -I "${AUTHENTIK_BASE_URL}/source/oauth/login/dingtalk/"
 2. Authentik Provider `redirect_uris`。
 
 两者必须逐字匹配，包括协议、host、端口和尾部斜杠。
+
+### Authentik End Session 报 Bad Request
+
+优先检查：
+
+1. EasyAuth 是否设置了 `EASYAUTH_AUTHENTIK_POST_LOGOUT_REDIRECT_URI`。
+2. Authentik Provider 是否登记了完全一致的 `logout` 类型 Redirect URI。
+3. EasyAuth 是否把登出目标错误配置成 `/if/flow/default-invalidation-flow/`。
+
+修复：
+
+1. 登出目标使用 Provider End Session：`${AUTHENTIK_BASE_URL}/application/o/easyauth/end-session/`。
+2. Provider `redirect_uris` 追加 `logout：${EASYAUTH_LOGGED_OUT_URL}`。
+3. 如果无法立刻登记 logout Redirect URI，先移除 EasyAuth 的 `EASYAUTH_AUTHENTIK_POST_LOGOUT_REDIRECT_URI`。
+
+### 钉钉登录后提示只能内部用户访问
+
+错误形如：
+
+```text
+Permission denied
+Request has been denied.
+Interface can only be accessed by internal users.
+```
+
+优先检查当前 Brand 的 `default_application` 是否指向 EasyAuth Application。外部用户不应落到 Authentik 内部界面。
 
 ### 登录成功但 EasyAuth 不是系统管理员
 

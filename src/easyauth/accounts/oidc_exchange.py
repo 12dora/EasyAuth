@@ -15,6 +15,7 @@ from jwt import InvalidTokenError
 
 from easyauth.accounts.auth import (
     FIELD_CODE_EXCHANGE,
+    OIDC_ID_TOKEN_SESSION_KEY,
     OidcClaimsInput,
     OidcClaimValue,
     OidcClientConfig,
@@ -77,7 +78,9 @@ def exchange_authorization_code_for_claims(
 
     token_response = _post_token_request(code, config)
     id_token = _required_json_string(token_response, FIELD_ID_TOKEN)
-    return _verify_id_token(id_token, config)
+    claims = _verify_id_token(id_token, config)
+    _request.session[OIDC_ID_TOKEN_SESSION_KEY] = id_token
+    return claims
 
 
 def _post_token_request(code: str, config: OidcClientConfig) -> JsonObject:

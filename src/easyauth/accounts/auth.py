@@ -18,6 +18,7 @@ AUTHENTIK_GROUPS_SESSION_KEY: Final = "easyauth_authentik_groups"
 OIDC_STATE_SESSION_KEY: Final = "easyauth_oidc_state"
 OIDC_NONCE_SESSION_KEY: Final = "easyauth_oidc_nonce"
 OIDC_NEXT_SESSION_KEY: Final = "easyauth_oidc_next"
+OIDC_ID_TOKEN_SESSION_KEY: Final = "easyauth_oidc_id_token"  # noqa: S105 - session key 名称, 不是 token 值.
 DEFAULT_AUTH_SUCCESS_NEXT: Final = "/portal/"
 FIELD_AUDIENCE: Final = "audience"
 FIELD_AUTHORIZED_PARTY: Final = "azp"
@@ -174,6 +175,7 @@ def clear_oidc_login_attempt(request: HttpRequest) -> None:
 def clear_auth_session(request: HttpRequest) -> None:
     request.session.pop(AUTHENTIK_SESSION_KEY, None)
     request.session.pop(AUTHENTIK_GROUPS_SESSION_KEY, None)
+    request.session.pop(OIDC_ID_TOKEN_SESSION_KEY, None)
 
 
 def exchange_authorization_code_for_claims(

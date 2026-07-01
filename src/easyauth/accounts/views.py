@@ -4,7 +4,7 @@ from dataclasses import replace
 from http import HTTPStatus
 from secrets import token_urlsafe
 from typing import Final
-from urllib.parse import SplitResult, urlsplit, urlunsplit
+from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
 
 from django.conf import settings as django_settings
 from django.http import Http404, HttpRequest, HttpResponse, HttpResponseRedirect
@@ -12,6 +12,7 @@ from django.views.decorators.http import require_POST
 
 from easyauth.accounts.auth import (
     DEFAULT_AUTH_SUCCESS_NEXT,
+    OIDC_ID_TOKEN_SESSION_KEY,
     OIDC_NEXT_SESSION_KEY,
     OIDC_NONCE_SESSION_KEY,
     OIDC_STATE_SESSION_KEY,
@@ -42,6 +43,8 @@ REASON_CODE_REQUIRED = "is required"
 SETTING_CLIENT_ID = "EASYAUTH_AUTHENTIK_OIDC_CLIENT_ID"
 SETTING_CLIENT_SECRET = "EASYAUTH_AUTHENTIK_OIDC_CLIENT_SECRET"  # noqa: S105 - 配置键名, 不是密钥值.
 SETTING_AUTHORIZATION_ENDPOINT = "EASYAUTH_AUTHENTIK_OIDC_AUTHORIZATION_ENDPOINT"
+SETTING_AUTHENTIK_LOGOUT_URL = "EASYAUTH_AUTHENTIK_LOGOUT_URL"
+SETTING_POST_LOGOUT_REDIRECT_URI = "EASYAUTH_AUTHENTIK_POST_LOGOUT_REDIRECT_URI"
 SETTING_HTTP_TIMEOUT_SECONDS = "EASYAUTH_AUTHENTIK_OIDC_HTTP_TIMEOUT_SECONDS"
 SETTING_ISSUER = "EASYAUTH_AUTHENTIK_OIDC_ISSUER"
 SETTING_JWKS_URL = "EASYAUTH_AUTHENTIK_OIDC_JWKS_URL"
@@ -49,6 +52,7 @@ SETTING_REDIRECT_URI = "EASYAUTH_AUTHENTIK_OIDC_REDIRECT_URI"
 SETTING_SIGNING_ALGORITHMS = "EASYAUTH_AUTHENTIK_OIDC_SIGNING_ALGORITHMS"
 SETTING_SCOPES = "EASYAUTH_AUTHENTIK_OIDC_SCOPES"
 SETTING_TOKEN_ENDPOINT = "EASYAUTH_AUTHENTIK_OIDC_TOKEN_ENDPOINT"  # noqa: S105 - 配置键名, 不是密钥值.
+OIDC_ISSUER_PROVIDER_SLUG_SEGMENT_COUNT: Final = 3
 
 
 def dev_login(request: HttpRequest) -> HttpResponseRedirect:
@@ -128,8 +132,12 @@ def oidc_callback(request: HttpRequest) -> HttpResponse:
 
 @require_POST
 def logout(request: HttpRequest) -> HttpResponseRedirect:
+    id_token_hint = _session_string(request, OIDC_ID_TOKEN_SESSION_KEY)
     request.session.flush()
-    response = HttpResponseRedirect("/auth/logged-out/?next=%2Fportal%2F")
+    redirect_url = _authentik_logout_url(id_token_hint=id_token_hint)
+    if redirect_url == "":
+        redirect_url = "/auth/logged-out/?next=%2Fportal%2F"
+    response = HttpResponseRedirect(redirect_url)
     mark_browser_logged_out(response)
     return response
 
@@ -198,11 +206,70 @@ def _absolute_url_on_same_origin(origin_url: str, path: str) -> str:
     return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 
+def _authentik_logout_url(*, id_token_hint: str) -> str:
+    configured_url = _optional_string_setting(SETTING_AUTHENTIK_LOGOUT_URL)
+    if configured_url != "":
+        endpoint = configured_url
+    else:
+        endpoint = _authentik_logout_url_from_issuer(_optional_string_setting(SETTING_ISSUER))
+    if endpoint == "":
+        return ""
+    return _with_logout_query(endpoint, id_token_hint=id_token_hint)
+
+
+def _authentik_logout_url_from_issuer(issuer: str) -> str:
+    parsed = urlsplit(issuer)
+    if parsed.scheme == "" or parsed.netloc == "":
+        return ""
+    issuer_path = parsed.path.strip("/")
+    issuer_segments = issuer_path.split("/")
+    if (
+        len(issuer_segments) < OIDC_ISSUER_PROVIDER_SLUG_SEGMENT_COUNT
+        or issuer_segments[:2] != ["application", "o"]
+    ):
+        return ""
+    provider_slug = issuer_segments[2]
+    if provider_slug == "":
+        return ""
+    return urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            f"/application/o/{provider_slug}/end-session/",
+            "",
+            "",
+        ),
+    )
+
+
+def _with_logout_query(endpoint: str, *, id_token_hint: str) -> str:
+    parsed = urlsplit(endpoint)
+    query_params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    if id_token_hint != "":
+        query_params.setdefault("id_token_hint", id_token_hint)
+        post_logout_redirect_uri = _optional_string_setting(SETTING_POST_LOGOUT_REDIRECT_URI)
+        if post_logout_redirect_uri != "":
+            query_params.setdefault("post_logout_redirect_uri", post_logout_redirect_uri)
+    if not query_params:
+        return endpoint
+    query = urlencode(query_params)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, query, ""))
+
+
 def _required_setting(name: str) -> str:
     value = _string_setting(name)
     if value == "":
         raise OidcSessionError(name, "is not configured")
     return value
+
+
+def _optional_string_setting(name: str) -> str:
+    value = getattr(django_settings, name, "")
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    raise OidcSessionError(name, "must be a string")
 
 
 def _string_setting(name: str) -> str:
