@@ -298,7 +298,7 @@ describe("PortalPage tables", () => {
       expect(screen.getByText(/group:sales-reader/)).toBeVisible();
       expect(screen.getByText(/dashboard\.view:GLOBAL/)).toBeVisible();
       expect(screen.getByText(/direct/)).toBeVisible();
-      expect(screen.getByText("grant 3 / catalog 7 / snapshot 3.7")).toBeVisible();
+      expect(screen.getByText("授权 3 / 目录 7 / 快照 3.7")).toBeVisible();
     } finally {
       vi.unstubAllGlobals();
     }

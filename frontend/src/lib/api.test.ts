@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { apiRequest, readCsrfToken } from "./api";
+import { apiRequest, itemsFromPayload, readCsrfToken } from "./api";
 
 const domainSource = readFileSync(resolve(process.cwd(), "src/lib/domain.ts"), "utf8");
 
@@ -99,6 +99,20 @@ describe("readCsrfToken", () => {
     document.body.innerHTML = '<input name="csrfmiddlewaretoken" value="token-from-shell" />';
 
     expect(readCsrfToken()).toBe("token-from-shell");
+  });
+});
+
+describe("itemsFromPayload", () => {
+  test("缺少列表数据时返回稳定空数组引用", () => {
+    expect(itemsFromPayload(undefined)).toBe(itemsFromPayload(undefined));
+    expect(itemsFromPayload({})).toBe(itemsFromPayload({ data: undefined }));
+  });
+
+  test("保留 payload 中已有列表引用", () => {
+    const items = [{ id: 1 }];
+
+    expect(itemsFromPayload<{ id: number }>({ items })).toBe(items);
+    expect(itemsFromPayload<{ id: number }>({ data: items })).toBe(items);
   });
 });
 

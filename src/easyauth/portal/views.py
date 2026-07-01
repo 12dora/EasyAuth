@@ -1,36 +1,25 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from http import HTTPStatus
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Final
 from urllib.parse import urlencode
 
-from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
-from django.shortcuts import render
+from django.http import HttpRequest, HttpResponse, HttpResponseNotAllowed, HttpResponseRedirect
 
 from easyauth.access_requests.models import AccessRequest, AccessRequestGroup
-from easyauth.access_requests.services import (
-    AccessRequestService,
-    AccessRequestSubmission,
-    AccessRequestSubmissionError,
-)
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.logout_state import browser_is_marked_logged_out, logged_out_redirect
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
-from easyauth.applications.models import AuthorizationGroup
 from easyauth.frontend_shell import render_react_shell, shell_user_from_user
-from easyauth.portal.forms import AccessRequestForm, app_options, role_options
-from easyauth.portal.grant_rows import current_grant_rows_for_user, expiring_grant_rows
 from easyauth.portal.status_text import StatusTone, status_label, status_tone
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from datetime import datetime
 
-    from easyauth.applications.models import App, Role
 
 LOGIN_URL: Final = "/auth/login/"
-PORTAL_TEMPLATE: Final = "portal/home.html"
+
 
 @dataclass(frozen=True, slots=True)
 class AccessRequestRow:
@@ -42,15 +31,6 @@ class AccessRequestRow:
     status_label: str
     status_tone: StatusTone
     submitted_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class PortalSubmission:
-    app: App
-    grant_expires_at: datetime | None
-    lifetime: str
-    reason: str
-    authorization_groups: tuple[AuthorizationGroup, ...]
 
 
 def portal_home(request: HttpRequest) -> HttpResponse:
@@ -67,7 +47,11 @@ def portal_home(request: HttpRequest) -> HttpResponse:
         return _login_redirect(request)
 
     if request.method == "POST":
-        return _legacy_post_response(request, user)
+        return HttpResponseNotAllowed(
+            ["GET"],
+            "旧门户表单入口已关闭, 请使用 /portal/api/v1/me/access-requests 接口。",
+            content_type="text/plain; charset=utf-8",
+        )
 
     return render_react_shell(
         request,
@@ -79,48 +63,6 @@ def portal_home(request: HttpRequest) -> HttpResponse:
 
 def portal_react_route(request: HttpRequest, _portal_path: str) -> HttpResponse:
     return portal_home(request)
-
-
-def _legacy_post_response(request: HttpRequest, user: UserMirror) -> HttpResponse:
-    submitted_request: AccessRequest | None = None
-    form = AccessRequestForm.bind(request.POST)
-    if form.is_valid():
-        selected_role = form.selected_role()
-        try:
-            submitted_request = _submit_access_request(
-                requester=user,
-                submission=PortalSubmission(
-                    app=form.selected_app(),
-                    grant_expires_at=form.selected_grant_expires_at(),
-                    lifetime=form.selected_lifetime(),
-                    reason=form.selected_reason(),
-                    authorization_groups=_authorization_groups_for_legacy_roles(
-                        form.selected_app(),
-                        (selected_role,),
-                    ),
-                ),
-            )
-        except AccessRequestSubmissionError as exc:
-            form = form.with_role_error(str(exc))
-        else:
-            form = AccessRequestForm.empty()
-
-    current_grant_rows = current_grant_rows_for_user(user)
-    return render(
-        request,
-        PORTAL_TEMPLATE,
-        {
-            "app_options": app_options(),
-            "current_grant_rows": current_grant_rows,
-            "expiring_grant_rows": expiring_grant_rows(current_grant_rows),
-            "form": form,
-            "role_options": role_options(),
-            "request_rows": request_rows_for_user(user),
-            "submitted_request": submitted_request,
-            "user": user,
-        },
-        status=HTTPStatus.OK,
-    )
 
 
 def _login_redirect(request: HttpRequest) -> HttpResponseRedirect:
@@ -182,45 +124,3 @@ def _grant_label(access_request: AccessRequest) -> str:
             return "限时"
         case _:
             return "-"
-
-
-def _submit_access_request(
-    *,
-    requester: UserMirror,
-    submission: PortalSubmission,
-) -> AccessRequest:
-    return AccessRequestService.submit_grant_request(
-        AccessRequestSubmission(
-            user=requester,
-            app=submission.app,
-            authorization_groups=submission.authorization_groups,
-            grant_type=_grant_type(submission.lifetime),
-            grant_expires_at=submission.grant_expires_at,
-            reason=submission.reason,
-            actor_type="user",
-            actor_id=requester.authentik_user_id,
-        ),
-    )
-
-
-def _authorization_groups_for_legacy_roles(
-    app: App,
-    roles: tuple[Role, ...],
-) -> tuple[AuthorizationGroup, ...]:
-    role_keys = tuple(role.key for role in roles)
-    group_by_key = {
-        group.key: group
-        for group in AuthorizationGroup.objects.filter(app=app, key__in=role_keys)
-    }
-    return tuple(group_by_key[key] for key in role_keys if key in group_by_key)
-
-
-def _grant_type(lifetime: str) -> Literal["permanent", "timed"]:
-    match lifetime:
-        case "permanent":
-            return "permanent"
-        case "timed":
-            return "timed"
-        case _:
-            message = "授权期限必须是 permanent 或 timed。"
-            raise TypeError(message)

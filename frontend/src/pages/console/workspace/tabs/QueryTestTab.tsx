@@ -1,10 +1,11 @@
 import { useMutation } from "@tanstack/react-query";
+import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
 import { Play } from "lucide-react";
 import { useState } from "react";
+import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../../components/ui/TablePrimitives";
 
 import { Button } from "../../../../components/Button";
 import { CodeBlock } from "../../../../components/CodeBlock";
-import { DataTable } from "../../../../components/DataTable";
 import { Field, TextInput } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { Toast } from "../../../../components/Toast";
@@ -43,10 +44,37 @@ export function QueryTestTab({ appKey }: { appKey: string }) {
       setToken("");
     },
   });
+  const groupColumns: ColumnDef<QueryTestGroup>[] = [
+    { header: "授权组", cell: ({ row }) => row.original.key ?? "-" },
+    { header: "名称", cell: ({ row }) => row.original.name ?? "-" },
+    { header: "来源", cell: ({ row }) => row.original.source ?? "-" },
+    { header: "快照版本", cell: ({ row }) => row.original.snapshot_version ?? result?.snapshot_version ?? "-" },
+  ];
+  const grantColumns: ColumnDef<QueryTestGrant>[] = [
+    { header: "授权项", cell: ({ row }) => row.original.permission ?? "-" },
+    { header: "Scope", cell: ({ row }) => row.original.scope ?? "-" },
+    { header: "名称", cell: ({ row }) => row.original.name ?? "-" },
+    { header: "类型", cell: ({ row }) => row.original.grant_type ?? "-" },
+    {
+      header: "来源",
+      cell: ({ row }) => (row.original.source_key ? `${row.original.source_type ?? "-"}:${row.original.source_key}` : row.original.source_type ?? "-"),
+    },
+    { header: "快照版本", cell: ({ row }) => row.original.snapshot_version ?? result?.snapshot_version ?? "-" },
+  ];
+  const groupTable = useReactTable({
+    data: result?.groups ?? [],
+    columns: groupColumns,
+    getCoreRowModel: getCoreRowModel(),
+  });
+  const grantTable = useReactTable({
+    data: result?.grants ?? [],
+    columns: grantColumns,
+    getCoreRowModel: getCoreRowModel(),
+  });
 
   return (
-    <section className="stack">
-      <div className="inline-form">
+    <section className="space-y-6">
+      <div className="grid items-end gap-4 rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper p-5 shadow-sm md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
         <Field label="用户 ID">
           <TextInput value={userId} onChange={(event) => setUserId(event.currentTarget.value)} />
         </Field>
@@ -57,48 +85,76 @@ export function QueryTestTab({ appKey }: { appKey: string }) {
           执行联调
         </Button>
       </div>
-      {testMutation.error ? <StatusBanner tone="danger" title="联调失败" message={(testMutation.error as Error).message} /> : null}
+      {testMutation.error ? <StatusBanner tone="signal" title="联调失败" message={(testMutation.error as Error).message} /> : null}
       {result ? (
         <>
-          <Toast tone="success" message={result.allowed ? "权限查询命中授权" : "查询成功，无授权命中"} />
-          <div className="metric-grid">
-            <div className="metric-card">
-              <span className="metric-label">source</span>
-              <strong>来源：{result.source ?? "-"}</strong>
+          <Toast tone="evergreen" message={result.allowed ? "权限查询命中授权" : "查询成功，无授权命中"} />
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper p-4 shadow-sm">
+              <span className="text-xs font-semibold text-ink-faint">source</span>
+              <strong className="mt-2 block text-sm font-semibold text-ink">来源：{result.source ?? "-"}</strong>
             </div>
-            <div className="metric-card">
-              <span className="metric-label">snapshot_version</span>
-              <strong>快照版本：{result.snapshot_version ?? result.version ?? "-"}</strong>
+            <div className="rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper p-4 shadow-sm">
+              <span className="text-xs font-semibold text-ink-faint">snapshot_version</span>
+              <strong className="mt-2 block text-sm font-semibold text-ink">快照版本：{result.snapshot_version ?? result.version ?? "-"}</strong>
             </div>
           </div>
-          <DataTable
-            data={result.groups ?? []}
-            columns={[
-              { header: "授权组", cell: ({ row }) => row.original.key ?? "-" },
-              { header: "名称", cell: ({ row }) => row.original.name ?? "-" },
-              { header: "来源", cell: ({ row }) => row.original.source ?? "-" },
-              { header: "快照版本", cell: ({ row }) => row.original.snapshot_version ?? result.snapshot_version ?? "-" },
-            ]}
-            emptyText="暂无授权组"
-          />
-          <DataTable
-            data={result.grants ?? []}
-            columns={[
-              { header: "授权项", cell: ({ row }) => row.original.permission ?? "-" },
-              { header: "Scope", cell: ({ row }) => row.original.scope ?? "-" },
-              { header: "名称", cell: ({ row }) => row.original.name ?? "-" },
-              { header: "类型", cell: ({ row }) => row.original.grant_type ?? "-" },
-              {
-                header: "来源",
-                cell: ({ row }) =>
-                  row.original.source_key
-                    ? `${row.original.source_type ?? "-"}:${row.original.source_key}`
-                    : row.original.source_type ?? "-",
-              },
-              { header: "快照版本", cell: ({ row }) => row.original.snapshot_version ?? result.snapshot_version ?? "-" },
-            ]}
-            emptyText="暂无授权项"
-          />
+          <TableFrame>
+            <TableRoot>
+              <TableHead>
+                {groupTable.getHeaderGroups().map((headerGroup) => (
+                  <TableRow key={headerGroup.id}>
+                    {headerGroup.headers.map((header) => (
+                      <TableHeaderCell key={header.id}>{header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}</TableHeaderCell>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableHead>
+              <TableBody>
+                {groupTable.getRowModel().rows.length > 0 ? (
+                  groupTable.getRowModel().rows.map((row) => (
+                    <TableRow key={row.id}>
+                      {row.getVisibleCells().map((cell) => (
+                        <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                      ))}
+                    </TableRow>
+                  ))
+                ) : (
+                  <TableEmptyRow colSpan={groupColumns.length}>
+                      暂无授权组
+                    </TableEmptyRow>
+                )}
+              </TableBody>
+            </TableRoot>
+          </TableFrame>
+          <TableFrame>
+            <TableRoot>
+              <TableHead>
+                {grantTable.getHeaderGroups().map((headerGroup) => (
+                  <TableRow key={headerGroup.id}>
+                    {headerGroup.headers.map((header) => (
+                      <TableHeaderCell key={header.id}>{header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}</TableHeaderCell>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableHead>
+              <TableBody>
+                {grantTable.getRowModel().rows.length > 0 ? (
+                  grantTable.getRowModel().rows.map((row) => (
+                    <TableRow key={row.id}>
+                      {row.getVisibleCells().map((cell) => (
+                        <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                      ))}
+                    </TableRow>
+                  ))
+                ) : (
+                  <TableEmptyRow colSpan={grantColumns.length}>
+                      暂无授权项
+                    </TableEmptyRow>
+                )}
+              </TableBody>
+            </TableRoot>
+          </TableFrame>
           <CodeBlock language="json" code={JSON.stringify(result, null, 2)} />
         </>
       ) : null}

@@ -1,11 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
 import { Download, Eye, FileUp, UploadCloud } from "lucide-react";
 import { useRef, useState } from "react";
+import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../../components/ui/TablePrimitives";
 
 import { Badge } from "../../../../components/Badge";
 import { Button } from "../../../../components/Button";
 import { CodeBlock } from "../../../../components/CodeBlock";
-import { DataTable } from "../../../../components/DataTable";
 import { Field, TextArea } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { Toast } from "../../../../components/Toast";
@@ -55,6 +56,16 @@ export function ManifestTab({ appKey }: { appKey: string }) {
     queryFn: () => apiRequest<{ items?: ManifestVersion[] }>(`/console/api/v1/apps/${appKey}/permission-template-versions`),
   });
   const versions = itemsFromPayload<ManifestVersion>(versionsQuery.data);
+  const versionColumns: ColumnDef<ManifestVersion>[] = [
+    { header: "版本", cell: ({ row }) => row.original.catalog_version ?? row.original.version ?? "-" },
+    { header: "导入时间", cell: ({ row }) => row.original.imported_at ?? row.original.created_at ?? "-" },
+    { header: "导入人", cell: ({ row }) => row.original.imported_by ?? "-" },
+  ];
+  const versionsTable = useReactTable({
+    data: versions,
+    columns: versionColumns,
+    getCoreRowModel: getCoreRowModel(),
+  });
   const previewMutation = useMutation({
     mutationFn: () =>
       apiRequest<ManifestPreviewPayload>(`/console/api/v1/apps/${appKey}/permission-template-imports/preview`, {
@@ -75,8 +86,8 @@ export function ManifestTab({ appKey }: { appKey: string }) {
   });
 
   return (
-    <section className="stack">
-      <div className="inline-actions">
+    <section className="space-y-6">
+      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper p-4 shadow-sm">
         <input
           ref={fileInputRef}
           type="file"
@@ -92,7 +103,7 @@ export function ManifestTab({ appKey }: { appKey: string }) {
           }}
         />
         <Button icon={<FileUp size={16} />} onClick={() => fileInputRef.current?.click()}>
-          上传
+          上传文件
         </Button>
         <Button
           icon={<Download size={16} />}
@@ -100,7 +111,7 @@ export function ManifestTab({ appKey }: { appKey: string }) {
             window.location.assign(`/console/api/v1/apps/${appKey}/manifest`);
           }}
         >
-          导出
+          导出清单
         </Button>
       </div>
       <Field label="Manifest 内容" hint="支持粘贴 JSON 或 YAML；上传文件后会填充到这里。">
@@ -113,7 +124,7 @@ export function ManifestTab({ appKey }: { appKey: string }) {
           }}
         />
       </Field>
-      <div className="inline-actions">
+      <div className="flex flex-wrap items-center gap-2">
         <Button variant="primary" icon={<Eye size={16} />} disabled={!content || previewMutation.isPending} onClick={() => previewMutation.mutate()}>
           预览差异
         </Button>
@@ -126,19 +137,38 @@ export function ManifestTab({ appKey }: { appKey: string }) {
           确认导入
         </Button>
       </div>
-      {previewMutation.error ? <StatusBanner tone="danger" title="Manifest 预览失败" message={(previewMutation.error as Error).message} /> : null}
-      {importMutation.error ? <StatusBanner tone="danger" title="Manifest 导入失败" message={(importMutation.error as Error).message} /> : null}
-      {catalogVersion ? <Toast message={`当前目录版本：${catalogVersion}`} /> : null}
+      {previewMutation.error ? <StatusBanner tone="signal" title="Manifest 预览失败" message={(previewMutation.error as Error).message} /> : null}
+      {importMutation.error ? <StatusBanner tone="signal" title="Manifest 导入失败" message={(importMutation.error as Error).message} /> : null}
+      {catalogVersion ? <Toast tone="evergreen" message={`当前目录版本：${catalogVersion}`} /> : null}
       {preview ? <ManifestDiffView preview={preview} /> : null}
-      <DataTable
-        data={versions}
-        columns={[
-          { header: "版本", cell: ({ row }) => row.original.catalog_version ?? row.original.version ?? "-" },
-          { header: "导入时间", cell: ({ row }) => row.original.imported_at ?? row.original.created_at ?? "-" },
-          { header: "导入人", cell: ({ row }) => row.original.imported_by ?? "-" },
-        ]}
-        emptyText={versionsQuery.isLoading ? "加载中" : "暂无版本历史"}
-      />
+      <TableFrame>
+        <TableRoot>
+          <TableHead>
+            {versionsTable.getHeaderGroups().map((headerGroup) => (
+              <TableRow key={headerGroup.id}>
+                {headerGroup.headers.map((header) => (
+                  <TableHeaderCell key={header.id}>{header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}</TableHeaderCell>
+                ))}
+              </TableRow>
+            ))}
+          </TableHead>
+          <TableBody>
+            {versionsTable.getRowModel().rows.length > 0 ? (
+              versionsTable.getRowModel().rows.map((row) => (
+                <TableRow key={row.id}>
+                  {row.getVisibleCells().map((cell) => (
+                    <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                  ))}
+                </TableRow>
+              ))
+            ) : (
+              <TableEmptyRow colSpan={versionColumns.length}>
+                  {versionsQuery.isLoading ? "加载中" : "暂无版本历史"}
+                </TableEmptyRow>
+            )}
+          </TableBody>
+        </TableRoot>
+      </TableFrame>
     </section>
   );
 }
@@ -146,30 +176,66 @@ export function ManifestTab({ appKey }: { appKey: string }) {
 function ManifestDiffView({ preview }: { preview: ManifestPreviewPayload }) {
   const diff = preview.diff ?? diffFromChanges(preview.changes ?? []);
   const sections = [
-    { title: "新增", tone: "success" as const, items: diff.added ?? [] },
-    { title: "变更", tone: "warning" as const, items: diff.changed ?? [] },
-    { title: "移除", tone: "danger" as const, items: diff.removed ?? [] },
+    { title: "新增", tone: "evergreen" as const, items: diff.added ?? [] },
+    { title: "变更", tone: "amber" as const, items: diff.changed ?? [] },
+    { title: "移除", tone: "signal" as const, items: diff.removed ?? [] },
   ];
 
   return (
-    <div className="stack">
+    <div className="space-y-4">
       {sections.map((section) => (
-        <div className="panel" key={section.title}>
-          <div className="section-heading">
+        <div className="space-y-3 rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper p-4 shadow-sm" key={section.title}>
+          <div className="flex items-center justify-between gap-3">
             <Badge tone={section.tone}>{section.title}</Badge>
           </div>
-          <DataTable
-            data={section.items}
-            columns={[
-              { header: "对象", cell: ({ row }) => `${row.original.type ?? "-"}:${row.original.key ?? "-"}` },
-              { header: "名称", cell: ({ row }) => row.original.name ?? "-" },
-              { header: "详情", cell: ({ row }) => <CodeBlock language="json" code={JSON.stringify({ before: row.original.before, after: row.original.after }, null, 2)} /> },
-            ]}
-            emptyText="无差异"
-          />
+          <ManifestDiffTable items={section.items} />
         </div>
       ))}
     </div>
+  );
+}
+
+function ManifestDiffTable({ items }: { items: ManifestDiffItem[] }) {
+  const columns: ColumnDef<ManifestDiffItem>[] = [
+    { header: "对象", cell: ({ row }) => `${row.original.type ?? "-"}:${row.original.key ?? "-"}` },
+    { header: "名称", cell: ({ row }) => row.original.name ?? "-" },
+    { header: "详情", cell: ({ row }) => <CodeBlock language="json" code={JSON.stringify({ before: row.original.before, after: row.original.after }, null, 2)} /> },
+  ];
+  const table = useReactTable({
+    data: items,
+    columns,
+    getCoreRowModel: getCoreRowModel(),
+  });
+
+  return (
+    <TableFrame>
+      <TableRoot>
+        <TableHead>
+          {table.getHeaderGroups().map((headerGroup) => (
+            <TableRow key={headerGroup.id}>
+              {headerGroup.headers.map((header) => (
+                <TableHeaderCell key={header.id}>{header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}</TableHeaderCell>
+              ))}
+            </TableRow>
+          ))}
+        </TableHead>
+        <TableBody>
+          {table.getRowModel().rows.length > 0 ? (
+            table.getRowModel().rows.map((row) => (
+              <TableRow key={row.id}>
+                {row.getVisibleCells().map((cell) => (
+                  <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                ))}
+              </TableRow>
+            ))
+          ) : (
+            <TableEmptyRow colSpan={columns.length}>
+                无差异
+              </TableEmptyRow>
+          )}
+        </TableBody>
+      </TableRoot>
+    </TableFrame>
   );
 }
 

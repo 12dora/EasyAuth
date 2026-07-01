@@ -177,6 +177,35 @@ def test_ops2_portal_api_post_access_request_uses_session_user_and_csrf() -> Non
     assert AccessGrant.objects.count() == 0
 
 
+def test_ops2_portal_home_legacy_form_post_is_closed() -> None:
+    # Given: 登录员工和一个按旧表单字段可申请的授权组。
+    client, user = _logged_in_client("ops2-legacy-form-user")
+    app = App.objects.create(app_key="ops2-legacy-form-app", name="CRM")
+    group = _requestable_group_with_rule(
+        app=app,
+        key="auditor",
+        name="审计员",
+    )
+
+    # When: 员工直连旧 Django 表单 POST 入口。
+    response = client.post(
+        PORTAL_URL,
+        data={
+            "app_id": str(app.id),
+            "role_id": str(group.id),
+            "lifetime": GRANT_TYPE_PERMANENT,
+            "reason": "旧表单提交",
+        },
+    )
+
+    # Then: 旧表单入口已关闭, 不再渲染旧门户 HTML UI, 也不创建申请。
+    body = response.content.decode()
+    assert response.status_code == HTTPStatus.METHOD_NOT_ALLOWED
+    assert "旧门户表单入口已关闭" in body
+    assert "旧表单提交" not in body
+    assert AccessRequest.objects.filter(user=user, app=app).exists() is False
+
+
 def test_ops2_portal_api_rejects_missing_session_and_requester_spoofing() -> None:
     # Given: 登录员工尝试在 JSON 里伪造 requester。
     anonymous = Client()

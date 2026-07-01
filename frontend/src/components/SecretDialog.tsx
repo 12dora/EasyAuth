@@ -31,11 +31,13 @@ export function SecretDialog({
         </Button>
       }
     >
-      <div className="secret-warning">
+      <div className="mb-4 rounded-md border border-amber-ink/20 bg-amber-ink/10 px-4 py-3 text-sm leading-6 text-ink">
         明文凭据仅本次展示。关闭后前端会清除该值，后续只能重新创建或轮换。
       </div>
-      <CodeBlock language={primaryLabel} code={primaryValue} />
-      {secondaryLabel && secondaryValue ? <CodeBlock language={secondaryLabel} code={secondaryValue} /> : null}
+      <div className="space-y-4">
+        <CodeBlock language={primaryLabel} code={primaryValue} />
+        {secondaryLabel && secondaryValue ? <CodeBlock language={secondaryLabel} code={secondaryValue} /> : null}
+      </div>
     </Dialog>
   );
 }

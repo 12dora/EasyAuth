@@ -1,10 +1,16 @@
+import {
+  flexRender,
+  getCoreRowModel,
+  useReactTable,
+  type ColumnDef,
+} from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Edit3, Save, ToggleLeft, ToggleRight } from "lucide-react";
 import { useState } from "react";
+import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../../components/ui/TablePrimitives";
 
 import { Badge } from "../../../../components/Badge";
 import { Button } from "../../../../components/Button";
-import { DataTable } from "../../../../components/DataTable";
 import { Field, SelectInput, TextInput } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
@@ -64,10 +70,55 @@ export function RulesTab({ appKey }: { appKey: string }) {
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey }),
   });
+  const ruleColumns: ColumnDef<EditableApprovalRule>[] = [
+    { header: "对象", cell: ({ row }) => `${row.original.target_type ?? "-"}:${row.original.target_key ?? "-"}` },
+    { header: "审批人", cell: ({ row }) => safeJoin(row.original.approver_userids) },
+    {
+      header: "状态",
+      cell: ({ row }) => (
+        <div className="flex flex-wrap gap-2">
+          <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>{row.original.is_active ? "启用" : "停用"}</Badge>
+          {isBlocking(row.original) ? <Badge tone="signal">阻塞</Badge> : null}
+        </div>
+      ),
+    },
+    {
+      header: "操作",
+      cell: ({ row }) => (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            icon={<Edit3 size={16} />}
+            onClick={() => {
+              setEditingRuleId(row.original.id);
+              setForm({
+                target_type: normalizeTargetType(row.original.target_type),
+                target_key: row.original.target_key ?? "",
+                approver_userids: (row.original.approver_userids ?? []).join(","),
+              });
+            }}
+          >
+            编辑
+          </Button>
+          <Button
+            icon={row.original.is_active ? <ToggleLeft size={16} /> : <ToggleRight size={16} />}
+            onClick={() => toggleMutation.mutate(row.original)}
+            disabled={toggleMutation.isPending}
+          >
+            {row.original.is_active ? "停用" : "启用"}
+          </Button>
+        </div>
+      ),
+    },
+  ];
+  const ruleTable = useReactTable({
+    data: rules,
+    columns: ruleColumns,
+    getCoreRowModel: getCoreRowModel(),
+  });
 
   return (
-    <section className="stack">
-      <div className="inline-form">
+    <section className="space-y-6">
+      <div className="grid items-end gap-4 rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper p-5 shadow-sm lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.3fr)_auto]">
         <Field label="规则目标类型">
           <SelectInput
             aria-label="规则目标类型"
@@ -91,9 +142,9 @@ export function RulesTab({ appKey }: { appKey: string }) {
             }}
           />
         </Field>
-        <Field label="审批人 userids" hint="多个审批人用英文逗号分隔">
+        <Field label="审批人 user_id" hint="多个审批人用英文逗号分隔">
           <TextInput
-            aria-label="审批人 userids"
+            aria-label="审批人 user_id"
             value={form.approver_userids}
             onChange={(event) => {
               const approverUserids = event.currentTarget.value;
@@ -110,52 +161,38 @@ export function RulesTab({ appKey }: { appKey: string }) {
           {editingRuleId ? "保存规则" : "新建规则"}
         </Button>
       </div>
-      {saveMutation.error ? <StatusBanner tone="danger" title="审批规则保存失败" message={(saveMutation.error as Error).message} /> : null}
-      {toggleMutation.error ? <StatusBanner tone="danger" title="审批规则状态更新失败" message={(toggleMutation.error as Error).message} /> : null}
-      <DataTable
-        data={rules}
-        columns={[
-          { header: "对象", cell: ({ row }) => `${row.original.target_type ?? "-"}:${row.original.target_key ?? "-"}` },
-          { header: "审批人", cell: ({ row }) => safeJoin(row.original.approver_userids) },
-          {
-            header: "状态",
-            cell: ({ row }) => (
-              <div className="inline-actions">
-                <Badge tone={row.original.is_active ? "success" : "neutral"}>{row.original.is_active ? "启用" : "停用"}</Badge>
-                {isBlocking(row.original) ? <Badge tone="danger">Blocking</Badge> : null}
-              </div>
-            ),
-          },
-          {
-            header: "操作",
-            cell: ({ row }) => (
-              <div className="inline-actions">
-                <Button
-                  icon={<Edit3 size={16} />}
-                  onClick={() => {
-                    setEditingRuleId(row.original.id);
-                    setForm({
-                      target_type: normalizeTargetType(row.original.target_type),
-                      target_key: row.original.target_key ?? "",
-                      approver_userids: (row.original.approver_userids ?? []).join(","),
-                    });
-                  }}
-                >
-                  编辑
-                </Button>
-                <Button
-                  icon={row.original.is_active ? <ToggleLeft size={16} /> : <ToggleRight size={16} />}
-                  onClick={() => toggleMutation.mutate(row.original)}
-                  disabled={toggleMutation.isPending}
-                >
-                  {row.original.is_active ? "停用" : "启用"}
-                </Button>
-              </div>
-            ),
-          },
-        ]}
-        emptyText={rulesQuery.isLoading ? "加载中" : "暂无审批规则"}
-      />
+      {saveMutation.error ? <StatusBanner tone="signal" title="审批规则保存失败" message={(saveMutation.error as Error).message} /> : null}
+      {toggleMutation.error ? <StatusBanner tone="signal" title="审批规则状态更新失败" message={(toggleMutation.error as Error).message} /> : null}
+      <TableFrame>
+        <TableRoot>
+          <TableHead>
+            {ruleTable.getHeaderGroups().map((headerGroup) => (
+              <TableRow key={headerGroup.id}>
+                {headerGroup.headers.map((header) => (
+                  <TableHeaderCell key={header.id}>
+                    {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                  </TableHeaderCell>
+                ))}
+              </TableRow>
+            ))}
+          </TableHead>
+          <TableBody>
+            {ruleTable.getRowModel().rows.length > 0 ? (
+              ruleTable.getRowModel().rows.map((row) => (
+                <TableRow key={row.id}>
+                  {row.getVisibleCells().map((cell) => (
+                    <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                  ))}
+                </TableRow>
+              ))
+            ) : (
+              <TableEmptyRow colSpan={ruleTable.getAllLeafColumns().length}>
+                  {rulesQuery.isLoading ? "加载中" : "暂无审批规则"}
+                </TableEmptyRow>
+            )}
+          </TableBody>
+        </TableRoot>
+      </TableFrame>
     </section>
   );
 }

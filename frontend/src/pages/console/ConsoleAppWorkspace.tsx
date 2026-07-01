@@ -21,11 +21,15 @@ const TABS: Array<{ key: WorkspaceTab; label: string }> = [
   { key: "catalog", label: "权限目录" },
   { key: "matrix", label: "授权组" },
   { key: "rules", label: "审批规则" },
-  { key: "manifest", label: "Manifest" },
+  { key: "manifest", label: "清单" },
   { key: "credentials", label: "凭据" },
   { key: "test", label: "联调" },
   { key: "guide", label: "接入说明" },
 ];
+
+function cn(...classes: Array<string | false | null | undefined>) {
+  return classes.filter(Boolean).join(" ");
+}
 
 export function ConsoleAppWorkspace() {
   const { appKey = "" } = useParams();
@@ -43,20 +47,33 @@ export function ConsoleAppWorkspace() {
   return (
     <>
       <PageHeader
-        eyebrow="Workspace"
+        eyebrow="控制台工作台"
         title={app?.name ?? appKey}
         description={app?.description || "应用授权配置、接入凭据和联调入口。"}
-        actions={<Link className="button button-secondary" to="/console">返回应用列表</Link>}
+        actions={
+          <Link
+            className="inline-flex h-9 items-center justify-center rounded-md border border-[rgb(var(--hairline-strong))] bg-paper-deep px-3.5 text-sm font-medium text-ink transition-colors hover:border-ink-faint hover:bg-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-ink/50"
+            to="/console"
+          >
+            返回应用列表
+          </Link>
+        }
       />
       {appQuery.error ? (
-        <StatusBanner tone="danger" title="应用加载失败" message={(appQuery.error as Error).message} />
+        <StatusBanner tone="signal" title="应用加载失败" message={(appQuery.error as Error).message} />
       ) : null}
-      <div className="tabbar">
+      <div className="mb-6 flex gap-1 overflow-x-auto border-b border-[rgb(var(--hairline))]">
         {TABS.map((item) => (
           <button
             key={item.key}
-            className={item.key === activeTab ? "active" : ""}
+            className={cn(
+              "relative -mb-px h-10 shrink-0 border-b-2 px-3 text-sm font-semibold transition-colors",
+              item.key === activeTab
+                ? "border-amber-ink text-ink"
+                : "border-transparent text-ink-soft hover:border-[rgb(var(--hairline-strong))] hover:text-ink",
+            )}
             onClick={() => setSearchParams({ tab: item.key })}
+            type="button"
           >
             {item.label}
           </button>

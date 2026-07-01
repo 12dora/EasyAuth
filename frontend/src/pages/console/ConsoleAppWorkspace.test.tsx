@@ -79,7 +79,7 @@ describe("ConsoleAppWorkspace", () => {
     expect(screen.getByText("财务权限")).toBeInTheDocument();
     expect(screen.getByText("invoice.read")).toBeInTheDocument();
     expect(screen.getByText("SELF、TEAM")).toBeInTheDocument();
-    expect(screen.getAllByText("high").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("高").length).toBeGreaterThan(0);
   });
 
   test("授权组保存 payload 包含 permission 和 scope", async () => {
@@ -409,11 +409,11 @@ describe("ConsoleAppWorkspace", () => {
 
     expect(await screen.findByText("authorization_group:finance")).toBeInTheDocument();
     expect(screen.getByText("permission:invoice.approve")).toBeInTheDocument();
-    expect(screen.getByText("Blocking")).toBeInTheDocument();
+    expect(screen.getByText("阻塞")).toBeInTheDocument();
 
     await user.selectOptions(screen.getByLabelText("规则目标类型"), "permission");
     await user.type(screen.getByLabelText("目标 Key"), "invoice.pay");
-    await user.type(screen.getByLabelText("审批人 userids"), "owner");
+    await user.type(screen.getByLabelText("审批人 user_id"), "owner");
     await user.click(screen.getByRole("button", { name: "新建规则" }));
     expect(await screen.findByText("permission:invoice.pay")).toBeInTheDocument();
 
@@ -422,8 +422,8 @@ describe("ConsoleAppWorkspace", () => {
     await user.click(within(blockedRow as HTMLTableRowElement).getByRole("button", { name: "编辑" }));
     await user.clear(screen.getByLabelText("目标 Key"));
     await user.type(screen.getByLabelText("目标 Key"), "invoice.approve.high");
-    await user.clear(screen.getByLabelText("审批人 userids"));
-    await user.type(screen.getByLabelText("审批人 userids"), "security,owner");
+    await user.clear(screen.getByLabelText("审批人 user_id"));
+    await user.type(screen.getByLabelText("审批人 user_id"), "security,owner");
     await user.click(screen.getByRole("button", { name: "保存规则" }));
     expect(await screen.findByText("permission:invoice.approve.high")).toBeInTheDocument();
 

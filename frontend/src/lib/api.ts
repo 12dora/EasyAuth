@@ -33,6 +33,8 @@ export interface ApiRequestOptions extends Omit<RequestInit, "body"> {
   body?: BodyInit | JsonValue;
 }
 
+const EMPTY_ITEMS: never[] = [];
+
 export function readCsrfToken(): string {
   const input = document.querySelector<HTMLInputElement>('input[name="csrfmiddlewaretoken"]');
   if (input?.value) {
@@ -98,7 +100,7 @@ export function itemsFromPayload<T>(payload: unknown): T[] {
       return items as T[];
     }
   }
-  return [];
+  return EMPTY_ITEMS;
 }
 
 function shouldAttachCsrf(method: string): boolean {

@@ -1,0 +1,303 @@
+{
+  "generatedAt": "2026-07-01T15:11:17.170Z",
+  "results": [
+    {
+      "app": "easytrade",
+      "slug": "pipeline",
+      "url": "http://localhost:3000/zh-CN/admin/pipeline",
+      "viewport": "desktop",
+      "screenshot": "easytrade-pipeline-desktop.png",
+      "status": "ok",
+      "login": {
+        "attempted": false
+      },
+      "httpStatus": 200,
+      "finalUrl": "http://localhost:3000/zh-CN/admin/pipeline",
+      "title": "EasyTrade — Document Center",
+      "issues": {
+        "textOverflow": [],
+        "coveredButtons": [],
+        "tableScroll": [],
+        "documentWidth": 1280,
+        "viewportWidth": 1280,
+        "hasPageHorizontalOverflow": false
+      }
+    },
+    {
+      "app": "easytrade",
+      "slug": "orders",
+      "url": "http://localhost:3000/zh-CN/admin/orders",
+      "viewport": "desktop",
+      "screenshot": "easytrade-orders-desktop.png",
+      "status": "ok",
+      "login": {
+        "attempted": false
+      },
+      "httpStatus": 200,
+      "finalUrl": "http://localhost:3000/zh-CN/admin/orders",
+      "title": "EasyTrade — Document Center",
+      "issues": {
+        "textOverflow": [],
+        "coveredButtons": [],
+        "tableScroll": [],
+        "documentWidth": 1280,
+        "viewportWidth": 1280,
+        "hasPageHorizontalOverflow": false
+      }
+    },
+    {
+      "app": "easytrade",
+      "slug": "settings",
+      "url": "http://localhost:3000/zh-CN/admin/settings",
+      "viewport": "desktop",
+      "screenshot": "easytrade-settings-desktop.png",
+      "status": "ok",
+      "login": {
+        "attempted": false
+      },
+      "httpStatus": 200,
+      "finalUrl": "http://localhost:3000/zh-CN/admin/settings/general",
+      "title": "EasyTrade — Document Center",
+      "issues": {
+        "textOverflow": [],
+        "coveredButtons": [],
+        "tableScroll": [],
+        "documentWidth": 1280,
+        "viewportWidth": 1280,
+        "hasPageHorizontalOverflow": false
+      }
+    },
+    {
+      "app": "easytrade",
+      "slug": "pipeline",
+      "url": "http://localhost:3000/zh-CN/admin/pipeline",
+      "viewport": "mobile390",
+      "screenshot": "easytrade-pipeline-mobile390.png",
+      "status": "ok",
+      "login": {
+        "attempted": false
+      },
+      "httpStatus": 200,
+      "finalUrl": "http://localhost:3000/zh-CN/admin/pipeline",
+      "title": "EasyTrade — Document Center",
+      "issues": {
+        "textOverflow": [],
+        "coveredButtons": [],
+        "tableScroll": [],
+        "documentWidth": 390,
+        "viewportWidth": 390,
+        "hasPageHorizontalOverflow": false
+      }
+    },
+    {
+      "app": "easytrade",
+      "slug": "orders",
+      "url": "http://localhost:3000/zh-CN/admin/orders",
+      "viewport": "mobile390",
+      "screenshot": "easytrade-orders-mobile390.png",
+      "status": "ok",
+      "login": {
+        "attempted": false
+      },
+      "httpStatus": 200,
+      "finalUrl": "http://localhost:3000/zh-CN/admin/orders",
+      "title": "EasyTrade — Document Center",
+      "issues": {
+        "textOverflow": [],
+        "coveredButtons": [],
+        "tableScroll": [],
+        "documentWidth": 390,
+        "viewportWidth": 390,
+        "hasPageHorizontalOverflow": false
+      }
+    },
+    {
+      "app": "easytrade",
+      "slug": "settings",
+      "url": "http://localhost:3000/zh-CN/admin/settings",
+      "viewport": "mobile390",
+      "screenshot": "easytrade-settings-mobile390.png",
+      "status": "ok",
+      "login": {
+        "attempted": false
+      },
+      "httpStatus": 200,
+      "finalUrl": "http://localhost:3000/zh-CN/admin/settings/general",
+      "title": "EasyTrade — Document Center",
+      "issues": {
+        "textOverflow": [],
+        "coveredButtons": [],
+        "tableScroll": [],
+        "documentWidth": 390,
+        "viewportWidth": 390,
+        "hasPageHorizontalOverflow": false
+      }
+    },
+    {
+      "app": "easyauth",
+      "slug": "console",
+      "url": "http://127.0.0.1:5173/console",
+      "viewport": "desktop",
+      "screenshot": "easyauth-console-desktop.png",
+      "status": "ok",
+      "httpStatus": 200,
+      "finalUrl": "http://127.0.0.1:5173/console",
+      "title": "EasyAuth",
+      "issues": {
+        "textOverflow": [],
+        "coveredButtons": [],
+        "tableScroll": [],
+        "documentWidth": 1280,
+        "viewportWidth": 1280,
+        "hasPageHorizontalOverflow": false
+      }
+    },
+    {
+      "app": "easyauth",
+      "slug": "console-operations-access-requests",
+      "url": "http://127.0.0.1:5173/console/operations/access-requests",
+      "viewport": "desktop",
+      "screenshot": "easyauth-console-operations-access-requests-desktop.png",
+      "status": "ok",
+      "httpStatus": 200,
+      "finalUrl": "http://127.0.0.1:5173/console/operations/access-requests",
+      "title": "EasyAuth",
+      "issues": {
+        "textOverflow": [],
+        "coveredButtons": [],
+        "tableScroll": [],
+        "documentWidth": 1280,
+        "viewportWidth": 1280,
+        "hasPageHorizontalOverflow": false
+      }
+    },
+    {
+      "app": "easyauth",
+      "slug": "portal",
+      "url": "http://127.0.0.1:5173/portal",
+      "viewport": "desktop",
+      "screenshot": "easyauth-portal-desktop.png",
+      "status": "ok",
+      "httpStatus": 200,
+      "finalUrl": "http://127.0.0.1:5173/portal",
+      "title": "EasyAuth",
+      "issues": {
+        "textOverflow": [],
+        "coveredButtons": [],
+        "tableScroll": [],
+        "documentWidth": 1280,
+        "viewportWidth": 1280,
+        "hasPageHorizontalOverflow": false
+      }
+    },
+    {
+      "app": "easyauth",
+      "slug": "portal-request",
+      "url": "http://127.0.0.1:5173/portal/request",
+      "viewport": "desktop",
+      "screenshot": "easyauth-portal-request-desktop.png",
+      "status": "ok",
+      "httpStatus": 200,
+      "finalUrl": "http://127.0.0.1:5173/portal/request",
+      "title": "EasyAuth",
+      "issues": {
+        "textOverflow": [],
+        "coveredButtons": [],
+        "tableScroll": [],
+        "documentWidth": 1280,
+        "viewportWidth": 1280,
+        "hasPageHorizontalOverflow": false
+      }
+    },
+    {
+      "app": "easyauth",
+      "slug": "console",
+      "url": "http://127.0.0.1:5173/console",
+      "viewport": "mobile390",
+      "screenshot": "easyauth-console-mobile390.png",
+      "status": "ok",
+      "httpStatus": 200,
+      "finalUrl": "http://127.0.0.1:5173/console",
+      "title": "EasyAuth",
+      "issues": {
+        "textOverflow": [],
+        "coveredButtons": [],
+        "tableScroll": [],
+        "documentWidth": 390,
+        "viewportWidth": 390,
+        "hasPageHorizontalOverflow": false
+      }
+    },
+    {
+      "app": "easyauth",
+      "slug": "console-operations-access-requests",
+      "url": "http://127.0.0.1:5173/console/operations/access-requests",
+      "viewport": "mobile390",
+      "screenshot": "easyauth-console-operations-access-requests-mobile390.png",
+      "status": "ok",
+      "httpStatus": 200,
+      "finalUrl": "http://127.0.0.1:5173/console/operations/access-requests",
+      "title": "EasyAuth",
+      "issues": {
+        "textOverflow": [],
+        "coveredButtons": [],
+        "tableScroll": [
+          {
+            "className": "table-scroll",
+            "clientWidth": 350,
+            "scrollWidth": 362,
+            "overflowX": "visible"
+          }
+        ],
+        "documentWidth": 390,
+        "viewportWidth": 390,
+        "hasPageHorizontalOverflow": false
+      }
+    },
+    {
+      "app": "easyauth",
+      "slug": "portal",
+      "url": "http://127.0.0.1:5173/portal",
+      "viewport": "mobile390",
+      "screenshot": "easyauth-portal-mobile390.png",
+      "status": "ok",
+      "httpStatus": 200,
+      "finalUrl": "http://127.0.0.1:5173/portal",
+      "title": "EasyAuth",
+      "issues": {
+        "textOverflow": [],
+        "coveredButtons": [],
+        "tableScroll": [
+          {
+            "className": "table-scroll",
+            "clientWidth": 350,
+            "scrollWidth": 764,
+            "overflowX": "visible"
+          }
+        ],
+        "documentWidth": 390,
+        "viewportWidth": 390,
+        "hasPageHorizontalOverflow": false
+      }
+    },
+    {
+      "app": "easyauth",
+      "slug": "portal-request",
+      "url": "http://127.0.0.1:5173/portal/request",
+      "viewport": "mobile390",
+      "screenshot": "easyauth-portal-request-mobile390.png",
+      "status": "ok",
+      "httpStatus": 200,
+      "finalUrl": "http://127.0.0.1:5173/portal/request",
+      "title": "EasyAuth",
+      "issues": {
+        "textOverflow": [],
+        "coveredButtons": [],
+        "tableScroll": [],
+        "documentWidth": 390,
+        "viewportWidth": 390,
+        "hasPageHorizontalOverflow": false
+      }
+    }
+  ]
+}

@@ -1,16 +1,21 @@
-import type { ColumnDef } from "@tanstack/react-table";
+import {
+  flexRender,
+  getCoreRowModel,
+  useReactTable,
+  type ColumnDef,
+} from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { FormEvent } from "react";
 import { useEffect, useState } from "react";
+import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../../components/ui/TablePrimitives";
 
 import { Badge } from "../../../../components/Badge";
 import { Button } from "../../../../components/Button";
-import { DataTable } from "../../../../components/DataTable";
 import { Field, SelectInput, TextArea, TextInput } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
 import type { JsonObject } from "../../../../lib/api";
-import type { AppSummary, ConfigurationStatus } from "../../../../lib/domain";
+import type { AppSummary, ConfigurationIssue, ConfigurationStatus } from "../../../../lib/domain";
 import { readinessLabel, readinessTone } from "../../../../lib/status";
 
 export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary }) {
@@ -66,19 +71,35 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
     canWrite: isAdmin,
     onDisable: (membershipId) => disableMembershipMutation.mutate(membershipId),
   });
+  const membershipTable = useReactTable({
+    data: memberships,
+    columns: membershipColumns,
+    getCoreRowModel: getCoreRowModel(),
+  });
+  const issueColumns: ColumnDef<ConfigurationIssue>[] = [
+    { header: "级别", cell: ({ row }) => row.original.severity ?? row.original.level ?? "-" },
+    { header: "对象", cell: ({ row }) => row.original.subject ?? row.original.target_id ?? "-" },
+    { header: "说明", cell: ({ row }) => row.original.message ?? "-" },
+    { header: "代码", cell: ({ row }) => <code>{row.original.code ?? "-"}</code> },
+  ];
+  const issuesTable = useReactTable({
+    data: issues,
+    columns: issueColumns,
+    getCoreRowModel: getCoreRowModel(),
+  });
 
   return (
-    <section className="workspace-grid">
-      <div className="metric-grid">
+    <section className="space-y-6">
+      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Metric label="角色" value={app?.role_count ?? 0} />
         <Metric label="权限" value={app?.permission_count ?? 0} />
         <Metric label="活跃凭据" value={app?.active_credential_count ?? 0} />
         <Metric label="配置问题" value={app?.configuration_summary?.issue_count ?? issues.length} />
       </div>
       <StatusBanner tone={readinessTone(status)} title={`配置${readinessLabel(status)}`} />
-      <section className="stack">
-        <div className="panel-toolbar">
-          <h2>基本信息</h2>
+      <section className="space-y-4 rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper p-5 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-base font-semibold text-ink">基本信息</h2>
           {canEditBasicInfo ? (
             <Button
               onClick={() => {
@@ -100,9 +121,9 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
           />
         ) : null}
       </section>
-      <section className="stack">
-        <div className="panel-toolbar">
-          <h2>成员</h2>
+      <section className="space-y-4 rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper p-5 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-base font-semibold text-ink">成员</h2>
         </div>
         {isAdmin ? (
           <MembershipCreateForm
@@ -112,27 +133,72 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
           />
         ) : null}
         {membershipsQuery.error ? (
-          <StatusBanner tone="danger" title="成员加载失败" message={(membershipsQuery.error as Error).message} />
+          <StatusBanner tone="signal" title="成员加载失败" message={(membershipsQuery.error as Error).message} />
         ) : null}
         {disableMembershipMutation.error ? (
-          <StatusBanner tone="danger" title="成员操作失败" message={(disableMembershipMutation.error as Error).message} />
+          <StatusBanner tone="signal" title="成员操作失败" message={(disableMembershipMutation.error as Error).message} />
         ) : null}
-        <DataTable
-          data={memberships}
-          columns={membershipColumns}
-          emptyText={membershipsQuery.isLoading ? "加载中" : "暂无成员"}
-        />
+        <TableFrame>
+          <TableRoot>
+            <TableHead>
+              {membershipTable.getHeaderGroups().map((headerGroup) => (
+                <TableRow key={headerGroup.id}>
+                  {headerGroup.headers.map((header) => (
+                    <TableHeaderCell key={header.id}>
+                      {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                    </TableHeaderCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableHead>
+            <TableBody>
+              {membershipTable.getRowModel().rows.length > 0 ? (
+                membershipTable.getRowModel().rows.map((row) => (
+                  <TableRow key={row.id}>
+                    {row.getVisibleCells().map((cell) => (
+                      <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              ) : (
+                <TableEmptyRow colSpan={membershipTable.getAllLeafColumns().length}>
+                    {membershipsQuery.isLoading ? "加载中" : "暂无成员"}
+                  </TableEmptyRow>
+              )}
+            </TableBody>
+          </TableRoot>
+        </TableFrame>
       </section>
-      <DataTable
-        data={issues}
-        columns={[
-          { header: "级别", cell: ({ row }) => row.original.severity ?? row.original.level ?? "-" },
-          { header: "对象", cell: ({ row }) => row.original.subject ?? row.original.target_id ?? "-" },
-          { header: "说明", cell: ({ row }) => row.original.message ?? "-" },
-          { header: "代码", cell: ({ row }) => <code>{row.original.code ?? "-"}</code> },
-        ]}
-        emptyText={statusQuery.isLoading ? "加载中" : "暂无配置问题"}
-      />
+      <TableFrame>
+        <TableRoot>
+          <TableHead>
+            {issuesTable.getHeaderGroups().map((headerGroup) => (
+              <TableRow key={headerGroup.id}>
+                {headerGroup.headers.map((header) => (
+                  <TableHeaderCell key={header.id}>
+                    {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                  </TableHeaderCell>
+                ))}
+              </TableRow>
+            ))}
+          </TableHead>
+          <TableBody>
+            {issuesTable.getRowModel().rows.length > 0 ? (
+              issuesTable.getRowModel().rows.map((row) => (
+                <TableRow key={row.id}>
+                  {row.getVisibleCells().map((cell) => (
+                    <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                  ))}
+                </TableRow>
+              ))
+            ) : (
+              <TableEmptyRow colSpan={issuesTable.getAllLeafColumns().length}>
+                  {statusQuery.isLoading ? "加载中" : "暂无配置问题"}
+                </TableEmptyRow>
+            )}
+          </TableBody>
+        </TableRoot>
+      </TableFrame>
     </section>
   );
 }
@@ -188,29 +254,29 @@ function AppBasicInfoForm({
   };
 
   return (
-    <form className="form-grid" onSubmit={submit}>
+    <form className="grid gap-4 md:grid-cols-2" onSubmit={submit}>
       <Field label="名称">
         <TextInput value={name} onChange={(event) => setName(event.currentTarget.value)} required />
       </Field>
       <Field label="描述">
         <TextArea rows={3} value={description} onChange={(event) => setDescription(event.currentTarget.value)} />
       </Field>
-      <label className="field">
-        <span className="field-label">状态</span>
-        <span>
+      <div className="flex flex-col gap-2">
+        <span className="text-[13px] font-semibold leading-none text-ink">状态</span>
+        <label className="inline-flex items-center gap-2 text-sm text-ink-soft">
           <input
             aria-label="启用应用"
             type="checkbox"
             checked={isActive}
             onChange={(event) => setIsActive(event.currentTarget.checked)}
-          />{" "}
+          />
           启用应用
-        </span>
-      </label>
+        </label>
+      </div>
       <Button type="submit" variant="primary" disabled={isSubmitting}>
         保存
       </Button>
-      {errorMessage ? <StatusBanner tone="danger" title="保存失败" message={errorMessage} /> : null}
+      {errorMessage ? <StatusBanner tone="signal" title="保存失败" message={errorMessage} /> : null}
     </form>
   );
 }
@@ -238,7 +304,7 @@ function MembershipCreateForm({
   };
 
   return (
-    <form className="form-grid" onSubmit={submit}>
+    <form className="grid gap-4 md:grid-cols-3" onSubmit={submit}>
       <Field label="成员用户 ID">
         <TextInput value={userId} onChange={(event) => setUserId(event.currentTarget.value)} required />
       </Field>
@@ -251,7 +317,7 @@ function MembershipCreateForm({
       <Button type="submit" variant="primary" disabled={isSubmitting}>
         新增成员
       </Button>
-      {errorMessage ? <StatusBanner tone="danger" title="新增成员失败" message={errorMessage} /> : null}
+      {errorMessage ? <StatusBanner tone="signal" title="新增成员失败" message={errorMessage} /> : null}
     </form>
   );
 }
@@ -269,7 +335,7 @@ function membershipTableColumns({
     {
       header: "状态",
       cell: ({ row }) => (
-        <Badge tone={row.original.is_active ? "success" : "neutral"}>
+        <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>
           {row.original.is_active ? "启用" : "停用"}
         </Badge>
       ),
@@ -299,9 +365,9 @@ function roleLabel(role: string): string {
 
 function Metric({ label, value }: { label: string; value: number }) {
   return (
-    <div className="metric">
-      <span>{label}</span>
-      <strong>{value}</strong>
+    <div className="rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper p-4 shadow-sm">
+      <span className="text-xs font-semibold text-ink-faint">{label}</span>
+      <strong className="mt-2 block text-2xl font-semibold leading-none text-ink">{value}</strong>
     </div>
   );
 }

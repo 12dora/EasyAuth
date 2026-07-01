@@ -11,9 +11,9 @@ describe("accessRequestStatusLabel", () => {
 });
 
 describe("badgeToneForAccessRequestStatus", () => {
-  test("失败状态使用危险色, 生效状态使用成功色", () => {
-    expect(badgeToneForAccessRequestStatus("grant_failed")).toBe("danger");
-    expect(badgeToneForAccessRequestStatus("rejected")).toBe("danger");
-    expect(badgeToneForAccessRequestStatus("grant_applied")).toBe("success");
+  test("失败状态使用 signal, 生效状态使用 evergreen", () => {
+    expect(badgeToneForAccessRequestStatus("grant_failed")).toBe("signal");
+    expect(badgeToneForAccessRequestStatus("rejected")).toBe("signal");
+    expect(badgeToneForAccessRequestStatus("grant_applied")).toBe("evergreen");
   });
 });

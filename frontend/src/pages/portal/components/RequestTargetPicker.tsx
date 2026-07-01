@@ -66,8 +66,10 @@ export function RequestTargetPicker({
           ))}
         </SelectInput>
       </Field>
-      <div className="field">
-        <span className="field-label">直接权限</span>
+      <Field
+        label="直接权限"
+        hint={appKey ? `已选 ${selectedPermissionKeys.length} 项直接权限，可留空。` : "请先选择应用后再选择直接权限。"}
+      >
         <PermissionSelector
           appKey={appKey}
           groups={permissionGroups}
@@ -81,10 +83,7 @@ export function RequestTargetPicker({
           onPermissionScopeChange={onPermissionScopeChange}
           onToggleGroup={onToggleGroup}
         />
-        <span className="field-hint">
-          {appKey ? `已选 ${selectedPermissionKeys.length} 项直接权限，可留空。` : "请先选择应用后再选择直接权限。"}
-        </span>
-      </div>
+      </Field>
     </>
   );
 }

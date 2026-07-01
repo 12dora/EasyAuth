@@ -1,10 +1,16 @@
+import {
+  flexRender,
+  getCoreRowModel,
+  useReactTable,
+  type ColumnDef,
+} from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
+import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../../components/ui/TablePrimitives";
 
 import { Badge } from "../../../../components/Badge";
 import { Button } from "../../../../components/Button";
-import { DataTable } from "../../../../components/DataTable";
 import { Field, SelectInput, TextArea, TextInput } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
@@ -124,54 +130,137 @@ export function CatalogTab({ appKey }: { appKey: string }) {
       void queryClient.invalidateQueries({ queryKey: ["console", "app", appKey, "permission-tree"] });
     },
   });
+  const groupRows = treeGroups.length > 0 ? treeGroups : groups;
+  const groupColumns: ColumnDef<PermissionGroupItem>[] = [
+    { header: "权限分组", cell: ({ row }) => <code>{row.original.key}</code> },
+    { header: "名称", accessorKey: "name" },
+    { header: "层级", cell: ({ row }) => row.original.depth ?? "-" },
+    { header: "权限数", cell: ({ row }) => row.original.permissions?.length ?? 0 },
+    {
+      header: "操作",
+      cell: ({ row }) => (
+        <Button onClick={() => editGroup(row.original, setGroupForm, setEditingGroupKey)}>
+          编辑
+        </Button>
+      ),
+    },
+  ];
+  const groupTable = useReactTable({
+    data: groupRows,
+    columns: groupColumns,
+    getCoreRowModel: getCoreRowModel(),
+  });
+  const scopeColumns: ColumnDef<AppScopeItem>[] = [
+    { header: "Scope", cell: ({ row }) => <code>{row.original.key}</code> },
+    { header: "名称", accessorKey: "name" },
+    { header: "排序", accessorKey: "display_order" },
+    { header: "状态", cell: ({ row }) => <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>{row.original.is_active ? "启用" : "停用"}</Badge> },
+    {
+      header: "操作",
+      cell: ({ row }) => (
+        <div className="flex flex-wrap items-center gap-2">
+          <Button size="sm" onClick={() => editScope(row.original, setScopeForm, setEditingScopeKey)}>编辑</Button>
+          <Button size="sm" variant="ghost-danger" onClick={() => deactivateScope(row.original, setScopeForm, setEditingScopeKey)}>停用</Button>
+        </div>
+      ),
+    },
+  ];
+  const scopeTable = useReactTable({
+    data: scopes,
+    columns: scopeColumns,
+    getCoreRowModel: getCoreRowModel(),
+  });
+  const permissionColumns: ColumnDef<PermissionItem>[] = [
+    { header: "Permission", cell: ({ row }) => <code>{row.original.key}</code> },
+    { header: "名称", accessorKey: "name" },
+    { header: "分组", cell: ({ row }) => row.original.group_key || "-" },
+    { header: "支持 Scope", cell: ({ row }) => (row.original.supported_scopes ?? []).join("、") || "-" },
+    { header: "风险级别", cell: ({ row }) => <Badge tone={row.original.risk_level === "high" ? "signal" : "neutral"}>{riskLevelLabel(row.original.risk_level)}</Badge> },
+    {
+      header: "操作",
+      cell: ({ row }) => (
+        <Button onClick={() => editPermission(row.original, setPermissionForm, setEditingPermissionKey)}>
+          编辑
+        </Button>
+      ),
+    },
+  ];
+  const permissionTable = useReactTable({
+    data: permissions,
+    columns: permissionColumns,
+    getCoreRowModel: getCoreRowModel(),
+  });
 
   return (
-    <section className="stack">
-      <div className="two-column">
-        <DataTable
-          data={treeGroups.length > 0 ? treeGroups : groups}
-          columns={[
-            { header: "权限分组", cell: ({ row }) => <code>{row.original.key}</code> },
-            { header: "名称", accessorKey: "name" },
-            { header: "层级", cell: ({ row }) => row.original.depth ?? "-" },
-            { header: "权限数", cell: ({ row }) => row.original.permissions?.length ?? 0 },
-            {
-              header: "操作",
-              cell: ({ row }) => (
-                <Button onClick={() => editGroup(row.original, setGroupForm, setEditingGroupKey)}>
-                  编辑
-                </Button>
-              ),
-            },
-          ]}
-          emptyText={treeQuery.isLoading || groupsQuery.isLoading ? "加载中" : "暂无权限分组"}
-        />
-        <DataTable
-          data={scopes}
-          columns={[
-            { header: "Scope", cell: ({ row }) => <code>{row.original.key}</code> },
-            { header: "名称", accessorKey: "name" },
-            { header: "排序", accessorKey: "display_order" },
-            { header: "状态", cell: ({ row }) => <Badge tone={row.original.is_active ? "success" : "neutral"}>{row.original.is_active ? "启用" : "停用"}</Badge> },
-            {
-              header: "操作",
-              cell: ({ row }) => (
-                <div className="inline-actions">
-                  <Button onClick={() => editScope(row.original, setScopeForm, setEditingScopeKey)}>编辑</Button>
-                  <Button onClick={() => deactivateScope(row.original, setScopeForm, setEditingScopeKey)}>停用</Button>
-                </div>
-              ),
-            },
-          ]}
-          emptyText={scopesQuery.isLoading ? "加载中" : "暂无 scope"}
-        />
+    <section className="space-y-6">
+      <div className="grid gap-6 xl:grid-cols-2">
+        <TableFrame>
+          <TableRoot>
+            <TableHead>
+              {groupTable.getHeaderGroups().map((headerGroup) => (
+                <TableRow key={headerGroup.id}>
+                  {headerGroup.headers.map((header) => (
+                    <TableHeaderCell key={header.id}>
+                      {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                    </TableHeaderCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableHead>
+            <TableBody>
+              {groupTable.getRowModel().rows.length > 0 ? (
+                groupTable.getRowModel().rows.map((row) => (
+                  <TableRow key={row.id}>
+                    {row.getVisibleCells().map((cell) => (
+                      <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              ) : (
+                <TableEmptyRow colSpan={groupTable.getAllLeafColumns().length}>
+                    {treeQuery.isLoading || groupsQuery.isLoading ? "加载中" : "暂无权限分组"}
+                  </TableEmptyRow>
+              )}
+            </TableBody>
+          </TableRoot>
+        </TableFrame>
+        <TableFrame>
+          <TableRoot>
+            <TableHead>
+              {scopeTable.getHeaderGroups().map((headerGroup) => (
+                <TableRow key={headerGroup.id}>
+                  {headerGroup.headers.map((header) => (
+                    <TableHeaderCell key={header.id}>
+                      {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                    </TableHeaderCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableHead>
+            <TableBody>
+              {scopeTable.getRowModel().rows.length > 0 ? (
+                scopeTable.getRowModel().rows.map((row) => (
+                  <TableRow key={row.id}>
+                    {row.getVisibleCells().map((cell) => (
+                      <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              ) : (
+                <TableEmptyRow colSpan={scopeTable.getAllLeafColumns().length}>
+                    {scopesQuery.isLoading ? "加载中" : "暂无 scope"}
+                  </TableEmptyRow>
+              )}
+            </TableBody>
+          </TableRoot>
+        </TableFrame>
       </div>
 
-      <div className="two-column">
-        <section className="form-surface">
-          <h2>新增 Scope</h2>
-          <form className="form-grid" onSubmit={(event) => submit(event, () => saveScopeMutation.mutate())}>
-            <Field label="Scope Key">
+      <div className="grid gap-6 xl:grid-cols-2">
+        <section className="space-y-4 rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper p-5 shadow-sm">
+          <h2 className="text-base font-semibold text-ink">{editingScopeKey ? "编辑 Scope" : "新增 Scope"}</h2>
+          <form className="grid gap-4" onSubmit={(event) => submit(event, () => saveScopeMutation.mutate())}>
+            <Field label="Scope key">
               <TextInput value={scopeForm.key} onChange={(event) => setScopeForm((current) => ({ ...current, key: event.currentTarget.value }))} required />
             </Field>
             <Field label="名称">
@@ -184,13 +273,13 @@ export function CatalogTab({ appKey }: { appKey: string }) {
               保存 Scope
             </Button>
           </form>
-          {saveScopeMutation.error ? <StatusBanner tone="danger" title="Scope 保存失败" message={(saveScopeMutation.error as Error).message} /> : null}
+          {saveScopeMutation.error ? <StatusBanner tone="signal" title="Scope 保存失败" message={(saveScopeMutation.error as Error).message} /> : null}
         </section>
 
-        <section className="form-surface">
-          <h2>编辑 Permission Group</h2>
-          <form className="form-grid" onSubmit={(event) => submit(event, () => saveGroupMutation.mutate())}>
-            <Field label="Group Key">
+        <section className="space-y-4 rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper p-5 shadow-sm">
+          <h2 className="text-base font-semibold text-ink">{editingGroupKey ? "编辑权限分组" : "新增权限分组"}</h2>
+          <form className="grid gap-4" onSubmit={(event) => submit(event, () => saveGroupMutation.mutate())}>
+            <Field label="分组 key">
               <TextInput value={groupForm.key} onChange={(event) => setGroupForm((current) => ({ ...current, key: event.currentTarget.value }))} required />
             </Field>
             <Field label="名称">
@@ -208,17 +297,17 @@ export function CatalogTab({ appKey }: { appKey: string }) {
               <TextArea value={groupForm.description} onChange={(event) => setGroupForm((current) => ({ ...current, description: event.currentTarget.value }))} />
             </Field>
             <Button type="submit" icon={<Plus size={16} />} disabled={saveGroupMutation.isPending || !groupForm.key || !groupForm.name}>
-              保存 Permission Group
+              保存权限分组
             </Button>
           </form>
-          {saveGroupMutation.error ? <StatusBanner tone="danger" title="Permission Group 保存失败" message={(saveGroupMutation.error as Error).message} /> : null}
+          {saveGroupMutation.error ? <StatusBanner tone="signal" title="权限分组保存失败" message={(saveGroupMutation.error as Error).message} /> : null}
         </section>
       </div>
 
-      <section className="form-surface">
-        <h2>新增 Permission</h2>
-        <form className="form-grid" onSubmit={(event) => submit(event, () => savePermissionMutation.mutate())}>
-            <Field label="Permission Key">
+      <section className="space-y-4 rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper p-5 shadow-sm">
+        <h2 className="text-base font-semibold text-ink">{editingPermissionKey ? "编辑 Permission" : "新增 Permission"}</h2>
+        <form className="grid gap-4 md:grid-cols-2" onSubmit={(event) => submit(event, () => savePermissionMutation.mutate())}>
+            <Field label="Permission key">
               <TextInput value={permissionForm.key} onChange={(event) => setPermissionForm((current) => ({ ...current, key: event.currentTarget.value }))} required />
             </Field>
             <Field label="名称">
@@ -232,10 +321,10 @@ export function CatalogTab({ appKey }: { appKey: string }) {
                 ))}
               </SelectInput>
             </Field>
-            <Field label="Supported Scopes" hint="多个 scope 用逗号分隔。">
+            <Field label="支持 Scope" hint="多个 scope 用逗号分隔。">
               <TextInput value={permissionForm.supported_scopes} onChange={(event) => setPermissionForm((current) => ({ ...current, supported_scopes: event.currentTarget.value }))} />
             </Field>
-            <Field label="Risk Level">
+            <Field label="风险级别">
               <SelectInput value={permissionForm.risk_level} onChange={(event) => setPermissionForm((current) => ({ ...current, risk_level: event.currentTarget.value }))}>
                 <option value="standard">standard</option>
                 <option value="high">high</option>
@@ -248,30 +337,51 @@ export function CatalogTab({ appKey }: { appKey: string }) {
               保存 Permission
             </Button>
           </form>
-          {savePermissionMutation.error ? <StatusBanner tone="danger" title="Permission 保存失败" message={(savePermissionMutation.error as Error).message} /> : null}
+          {savePermissionMutation.error ? <StatusBanner tone="signal" title="Permission 保存失败" message={(savePermissionMutation.error as Error).message} /> : null}
       </section>
 
-      <DataTable
-        data={permissions}
-        columns={[
-          { header: "Permission", cell: ({ row }) => <code>{row.original.key}</code> },
-          { header: "名称", accessorKey: "name" },
-          { header: "分组", cell: ({ row }) => row.original.group_key || "-" },
-          { header: "Supported Scopes", cell: ({ row }) => (row.original.supported_scopes ?? []).join("、") || "-" },
-          { header: "Risk", cell: ({ row }) => <Badge tone={row.original.risk_level === "high" ? "danger" : "neutral"}>{row.original.risk_level ?? "standard"}</Badge> },
-          {
-            header: "操作",
-            cell: ({ row }) => (
-              <Button onClick={() => editPermission(row.original, setPermissionForm, setEditingPermissionKey)}>
-                编辑
-              </Button>
-            ),
-          },
-        ]}
-        emptyText={permissionsQuery.isLoading ? "加载中" : "暂无权限"}
-      />
+      <TableFrame>
+        <TableRoot>
+          <TableHead>
+            {permissionTable.getHeaderGroups().map((headerGroup) => (
+              <TableRow key={headerGroup.id}>
+                {headerGroup.headers.map((header) => (
+                  <TableHeaderCell key={header.id}>
+                    {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                  </TableHeaderCell>
+                ))}
+              </TableRow>
+            ))}
+          </TableHead>
+          <TableBody>
+            {permissionTable.getRowModel().rows.length > 0 ? (
+              permissionTable.getRowModel().rows.map((row) => (
+                <TableRow key={row.id}>
+                  {row.getVisibleCells().map((cell) => (
+                    <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                  ))}
+                </TableRow>
+              ))
+            ) : (
+              <TableEmptyRow colSpan={permissionTable.getAllLeafColumns().length}>
+                  {permissionsQuery.isLoading ? "加载中" : "暂无权限"}
+                </TableEmptyRow>
+            )}
+          </TableBody>
+        </TableRoot>
+      </TableFrame>
     </section>
   );
+}
+
+function riskLevelLabel(value: string | undefined): string {
+  if (value === "high") {
+    return "高";
+  }
+  if (value === "standard" || !value) {
+    return "标准";
+  }
+  return value;
 }
 
 function submit(event: FormEvent<HTMLFormElement>, action: () => void) {

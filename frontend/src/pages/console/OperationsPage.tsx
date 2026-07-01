@@ -1,11 +1,18 @@
-import type { ColumnDef } from "@tanstack/react-table";
+import {
+  flexRender,
+  getCoreRowModel,
+  useReactTable,
+  type ColumnDef,
+} from "@tanstack/react-table";
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCcw } from "lucide-react";
 import { useParams } from "react-router-dom";
+import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../components/ui/TablePrimitives";
+import { EmptyState } from "../../components/ui/EmptyState";
+import { PageState } from "../../components/ui/PageState";
 
 import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
-import { DataTable } from "../../components/DataTable";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
 import { apiRequest, itemsFromPayload } from "../../lib/api";
@@ -28,6 +35,11 @@ export function OperationsPage() {
   });
   const rows = itemsFromPayload<OperationRow>(query.data);
   const columns = operationColumns(section);
+  const table = useReactTable({
+    data: rows,
+    columns,
+    getCoreRowModel: getCoreRowModel(),
+  });
 
   return (
     <>
@@ -35,10 +47,55 @@ export function OperationsPage() {
         eyebrow="Operations"
         title={config.title}
         description="系统管理员的授权运营和依赖观测入口。"
-        actions={<Button icon={<RefreshCcw size={16} />} onClick={() => void query.refetch()}>刷新</Button>}
+        actions={<Button icon={<RefreshCcw size={16} />} loading={query.isFetching} onClick={() => void query.refetch()}>刷新</Button>}
       />
-      {query.error ? <StatusBanner tone="danger" title="运营数据加载失败" message={(query.error as Error).message} /> : null}
-      <DataTable data={rows} columns={columns} emptyText={query.isLoading ? "加载中" : "暂无数据"} />
+      {query.error ? <StatusBanner tone="signal" title="运营数据加载失败" message={(query.error as Error).message} /> : null}
+      {query.error && rows.length === 0 ? (
+        <PageState
+          tone="signal"
+          title="运营数据加载失败"
+          description={(query.error as Error).message}
+          action={
+            <Button icon={<RefreshCcw size={16} />} loading={query.isFetching} onClick={() => void query.refetch()}>
+              重新加载
+            </Button>
+          }
+        />
+      ) : (
+        <TableFrame>
+          <TableRoot>
+            <TableHead>
+              {table.getHeaderGroups().map((headerGroup) => (
+                <TableRow key={headerGroup.id}>
+                  {headerGroup.headers.map((header) => (
+                    <TableHeaderCell key={header.id}>
+                      {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                    </TableHeaderCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableHead>
+            <TableBody>
+              {table.getRowModel().rows.length > 0 ? (
+                table.getRowModel().rows.map((row) => (
+                  <TableRow key={row.id}>
+                    {row.getVisibleCells().map((cell) => (
+                      <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              ) : (
+                <TableEmptyRow colSpan={table.getAllLeafColumns().length}>
+                  <EmptyState
+                    title={query.isLoading ? "运营数据加载中" : "暂无运营数据"}
+                    description={query.isLoading ? "正在读取当前运营视图。" : "当前筛选下没有可展示的记录。"}
+                  />
+                </TableEmptyRow>
+              )}
+            </TableBody>
+          </TableRoot>
+        </TableFrame>
+      )}
     </>
   );
 }
@@ -47,7 +104,7 @@ function operationColumns(section: string): ColumnDef<OperationRow>[] {
   if (section === "dependency-health") {
     return [
       { header: "组件", cell: ({ row }) => <code>{stringValue(row.original.component)}</code> },
-      { header: "状态", cell: ({ row }) => <Badge tone={row.original.status === "healthy" ? "success" : "danger"}>{stringValue(row.original.status)}</Badge> },
+      { header: "状态", cell: ({ row }) => <Badge tone={row.original.status === "healthy" ? "evergreen" : "signal"}>{stringValue(row.original.status)}</Badge> },
       { header: "摘要", cell: ({ row }) => stringValue(row.original.summary) },
       { header: "错误", cell: ({ row }) => stringValue(row.original.error_summary) },
       { header: "检查时间", cell: ({ row }) => formatDateTime(stringValue(row.original.last_checked_at)) },
@@ -57,7 +114,7 @@ function operationColumns(section: string): ColumnDef<OperationRow>[] {
     return [
       { header: "用户", cell: ({ row }) => <code>{stringValue(row.original.user_id)}</code> },
       { header: "应用", cell: ({ row }) => <code>{stringValue(row.original.app_key)}</code> },
-      { header: "状态", cell: ({ row }) => <Badge tone={row.original.status === "active" ? "success" : "neutral"}>{stringValue(row.original.status)}</Badge> },
+      { header: "状态", cell: ({ row }) => <Badge tone={row.original.status === "active" ? "evergreen" : "neutral"}>{stringValue(row.original.status)}</Badge> },
       { header: "类型", cell: ({ row }) => stringValue(row.original.grant_type) },
       { header: "过期时间", cell: ({ row }) => formatDateTime(stringValue(row.original.grant_expires_at)) },
     ];

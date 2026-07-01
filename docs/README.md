@@ -9,6 +9,7 @@
 5. [EasyAuth 业务授权运营页面 API 设计](api/easyauth-authorization-operations-api-design.md)
 6. [ADR-001：业务授权运营边界](decisions/ADR-001-业务授权运营边界.md)
 7. [EasyAuth 员工门户 React 私有 API](api/easyauth-portal-react-api.md)
+8. [EasyAuth 前端视觉契约](architecture/easyauth-frontend-visual-contract.md)
 
 ## 文档规则
 
@@ -17,6 +18,7 @@
 - 历史规格、历史技术规划和旧 MVP 方案已删除，避免多个文档同时描述同一决策。
 - 新增重大架构决策时，优先更新当前架构文档；如果需要记录独立决策历史，再在 `docs/decisions/` 增加 ADR。
 - 新增公共 API 时，必须在架构文档或专门 API 文档中同时记录请求、响应、错误语义和兼容性规则。
+- 新增或修改控制台、员工门户视觉系统时，必须同步核对 [EasyAuth 前端视觉契约](architecture/easyauth-frontend-visual-contract.md)。
 - MVP 实施阶段使用 `MVP-1`、`MVP-2` 这类前缀；业务授权运营增强阶段使用 `OPS-1`、`OPS-2` 这类前缀，避免不同计划中的“阶段 4”混淆。
 - 每个阶段说明至少包含阶段目标、交付物或任务、验收标准、阶段约束和验证方式。
 

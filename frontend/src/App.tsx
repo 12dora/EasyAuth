@@ -77,10 +77,16 @@ function LoggedOutPage() {
       <h1 id="logged-out-title">已登出</h1>
       <p className="page-description">你已经退出当前 EasyAuth 会话。</p>
       <div className="logged-out-actions">
-        <a className="button button-primary" href={loginHref}>
+        <a
+          className="inline-flex h-9 items-center justify-center rounded-md border border-amber-ink bg-amber-ink px-3.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-amber-ink/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-ink/50"
+          href={loginHref}
+        >
           重新登录
         </a>
-        <a className="button button-secondary" href="/portal/">
+        <a
+          className="inline-flex h-9 items-center justify-center rounded-md border border-[rgb(var(--hairline-strong))] bg-paper-deep px-3.5 text-sm font-medium text-ink transition-colors hover:border-ink-faint hover:bg-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-ink/50"
+          href="/portal/"
+        >
           返回门户
         </a>
       </div>

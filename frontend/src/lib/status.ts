@@ -1,4 +1,4 @@
-export type BadgeTone = "neutral" | "primary" | "success" | "warning" | "danger";
+export type BadgeTone = "neutral" | "faint" | "ink" | "amber" | "evergreen" | "signal" | "bond";
 
 const REQUEST_STATUS_LABELS: Record<string, string> = {
   submitted: "已提交",
@@ -18,14 +18,14 @@ export function accessRequestStatusLabel(status: string | null | undefined): str
 export function badgeToneForAccessRequestStatus(status: string | null | undefined): BadgeTone {
   switch (status) {
     case "grant_applied":
-      return "success";
+      return "evergreen";
     case "approved":
-      return "primary";
+      return "bond";
     case "submitted":
-      return "warning";
+      return "amber";
     case "rejected":
     case "grant_failed":
-      return "danger";
+      return "signal";
     default:
       return "neutral";
   }
@@ -47,11 +47,11 @@ export function readinessLabel(status: string | null | undefined): string {
 export function readinessTone(status: string | null | undefined): BadgeTone {
   switch (status) {
     case "ready":
-      return "success";
+      return "evergreen";
     case "warning":
-      return "warning";
+      return "amber";
     case "blocked":
-      return "danger";
+      return "signal";
     default:
       return "neutral";
   }

@@ -1,10 +1,16 @@
+import {
+  flexRender,
+  getCoreRowModel,
+  useReactTable,
+  type ColumnDef,
+} from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../../components/ui/TablePrimitives";
 
 import { Badge } from "../../../../components/Badge";
 import { Button } from "../../../../components/Button";
-import { DataTable } from "../../../../components/DataTable";
 import { Field, SelectInput, TextArea, TextInput } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
@@ -110,11 +116,65 @@ export function MatrixTab({ appKey }: { appKey: string }) {
       };
     });
   };
+  const authorizationGroupColumns: ColumnDef<AuthorizationGroupItem>[] = [
+    { header: "授权组 key", cell: ({ row }) => <code>{row.original.key}</code> },
+    { header: "名称", accessorKey: "name" },
+    { header: "类型", accessorKey: "kind" },
+    {
+      header: "状态",
+      cell: ({ row }) => (
+        <div className="flex flex-wrap gap-2">
+          <Badge tone={row.original.requestable ? "evergreen" : "neutral"}>{row.original.requestable ? "可申请" : "不可申请"}</Badge>
+          <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>{row.original.is_active ? "启用" : "停用"}</Badge>
+        </div>
+      ),
+    },
+    {
+      header: "操作",
+      cell: ({ row }) => (
+        <Button onClick={() => setSelectedKey(row.original.key)}>
+          编辑
+        </Button>
+      ),
+    },
+  ];
+  const authorizationGroupTable = useReactTable({
+    data: authorizationGroups,
+    columns: authorizationGroupColumns,
+    getCoreRowModel: getCoreRowModel(),
+  });
+  const grantColumns: ColumnDef<AuthorizationGroupGrantItem>[] = [
+    { header: "Grant", cell: ({ row }) => `${row.original.permission} / ${row.original.scope}` },
+    { header: "状态", cell: ({ row }) => <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>{row.original.is_active ? "启用" : "停用"}</Badge> },
+    {
+      header: "操作",
+      cell: ({ row }) => (
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="inline-flex items-center gap-2 text-sm text-ink-soft">
+            <input
+              type="checkbox"
+              checked={row.original.is_active}
+              onChange={(event) => updateGrant(form.grants, row.original, event.currentTarget.checked, setForm)}
+            />{" "}
+            启用
+          </label>
+          <Button size="sm" variant="ghost-danger" icon={<Trash2 size={16} />} onClick={() => removeGrant(row.original, setForm)}>
+            移除
+          </Button>
+        </div>
+      ),
+    },
+  ];
+  const grantTable = useReactTable({
+    data: form.grants,
+    columns: grantColumns,
+    getCoreRowModel: getCoreRowModel(),
+  });
 
   return (
-    <section className="matrix-panel">
-      <div className="panel-toolbar">
-        <h2>授权组管理</h2>
+    <section className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-base font-semibold text-ink">授权组管理</h2>
         <Button
           icon={<Plus size={16} />}
           onClick={() => {
@@ -125,53 +185,57 @@ export function MatrixTab({ appKey }: { appKey: string }) {
           新建授权组
         </Button>
       </div>
-      {saveMutation.error ? <StatusBanner tone="danger" title="授权组保存失败" message={(saveMutation.error as Error).message} /> : null}
-      <div className="two-column">
-        <DataTable
-          data={authorizationGroups}
-          columns={[
-            { header: "Key", cell: ({ row }) => <code>{row.original.key}</code> },
-            { header: "名称", accessorKey: "name" },
-            { header: "Kind", accessorKey: "kind" },
-            {
-              header: "状态",
-              cell: ({ row }) => (
-                <div className="inline-actions">
-                  <Badge tone={row.original.requestable ? "success" : "neutral"}>{row.original.requestable ? "可申请" : "不可申请"}</Badge>
-                  <Badge tone={row.original.is_active ? "success" : "neutral"}>{row.original.is_active ? "启用" : "停用"}</Badge>
-                </div>
-              ),
-            },
-            {
-              header: "操作",
-              cell: ({ row }) => (
-                <Button onClick={() => setSelectedKey(row.original.key)}>
-                  编辑
-                </Button>
-              ),
-            },
-          ]}
-          emptyText={groupsQuery.isLoading ? "加载中" : "暂无授权组"}
-        />
-        <div className="stack">
-          <div className="form-surface">
-            <div className="form-grid">
-              <Field label="授权组 Key">
+      {saveMutation.error ? <StatusBanner tone="signal" title="授权组保存失败" message={(saveMutation.error as Error).message} /> : null}
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(28rem,1.15fr)]">
+        <TableFrame>
+          <TableRoot>
+            <TableHead>
+              {authorizationGroupTable.getHeaderGroups().map((headerGroup) => (
+                <TableRow key={headerGroup.id}>
+                  {headerGroup.headers.map((header) => (
+                    <TableHeaderCell key={header.id}>
+                      {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                    </TableHeaderCell>
+                  ))}
+                </TableRow>
+              ))}
+            </TableHead>
+            <TableBody>
+              {authorizationGroupTable.getRowModel().rows.length > 0 ? (
+                authorizationGroupTable.getRowModel().rows.map((row) => (
+                  <TableRow key={row.id}>
+                    {row.getVisibleCells().map((cell) => (
+                      <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              ) : (
+                <TableEmptyRow colSpan={authorizationGroupTable.getAllLeafColumns().length}>
+                    {groupsQuery.isLoading ? "加载中" : "暂无授权组"}
+                  </TableEmptyRow>
+              )}
+            </TableBody>
+          </TableRoot>
+        </TableFrame>
+        <div className="space-y-4">
+          <div className="space-y-4 rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper p-5 shadow-sm">
+            <div className="grid gap-4 md:grid-cols-2">
+              <Field label="授权组 key">
                 <TextInput value={form.key} onChange={(event) => setForm((current) => ({ ...current, key: event.currentTarget.value }))} />
               </Field>
               <Field label="授权组名称">
                 <TextInput value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.currentTarget.value }))} />
               </Field>
-              <Field label="Kind">
+              <Field label="授权组类型">
                 <SelectInput value={form.kind} onChange={(event) => setForm((current) => ({ ...current, kind: event.currentTarget.value }))}>
                   <option value="role">role</option>
                   <option value="bundle">bundle</option>
                 </SelectInput>
               </Field>
               <Field label="状态">
-                <div className="inline-actions">
-                  <label><input type="checkbox" checked={form.requestable} onChange={(event) => setForm((current) => ({ ...current, requestable: event.currentTarget.checked }))} /> 可申请</label>
-                  <label><input type="checkbox" checked={form.is_active} onChange={(event) => setForm((current) => ({ ...current, is_active: event.currentTarget.checked }))} /> 启用</label>
+                <div className="flex flex-wrap gap-3">
+                  <label className="inline-flex items-center gap-2 text-sm text-ink-soft"><input type="checkbox" checked={form.requestable} onChange={(event) => setForm((current) => ({ ...current, requestable: event.currentTarget.checked }))} /> 可申请</label>
+                  <label className="inline-flex items-center gap-2 text-sm text-ink-soft"><input type="checkbox" checked={form.is_active} onChange={(event) => setForm((current) => ({ ...current, is_active: event.currentTarget.checked }))} /> 启用</label>
                 </div>
               </Field>
             </div>
@@ -179,7 +243,7 @@ export function MatrixTab({ appKey }: { appKey: string }) {
               <TextArea value={form.description ?? ""} onChange={(event) => setForm((current) => ({ ...current, description: event.currentTarget.value }))} />
             </Field>
           </div>
-          <div className="inline-form">
+          <div className="grid items-end gap-4 rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper p-5 shadow-sm md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
             <Field label="Grant Permission">
               <SelectInput value={grantPermission} onChange={(event) => setGrantPermission(event.currentTarget.value)}>
                 {permissions.map((permission) => (
@@ -198,34 +262,38 @@ export function MatrixTab({ appKey }: { appKey: string }) {
               添加 Grant
             </Button>
           </div>
-          <DataTable
-            data={form.grants}
-            columns={[
-              { header: "展开 Grants", cell: ({ row }) => `${row.original.permission} / ${row.original.scope}` },
-              { header: "状态", cell: ({ row }) => <Badge tone={row.original.is_active ? "success" : "neutral"}>{row.original.is_active ? "启用" : "停用"}</Badge> },
-              {
-                header: "操作",
-                cell: ({ row }) => (
-                  <div className="inline-actions">
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={row.original.is_active}
-                        onChange={(event) => updateGrant(form.grants, row.original, event.currentTarget.checked, setForm)}
-                      />{" "}
-                      启用
-                    </label>
-                    <Button icon={<Trash2 size={16} />} onClick={() => removeGrant(row.original, setForm)}>
-                      移除
-                    </Button>
-                  </div>
-                ),
-              },
-            ]}
-            emptyText="暂无 Grant"
-          />
-          <div className="panel-toolbar">
-            <span>展开后 grants 预览：{form.grants.map((grant) => `${grant.permission} / ${grant.scope}`).join("，") || "-"}</span>
+          <TableFrame>
+            <TableRoot>
+              <TableHead>
+                {grantTable.getHeaderGroups().map((headerGroup) => (
+                  <TableRow key={headerGroup.id}>
+                    {headerGroup.headers.map((header) => (
+                      <TableHeaderCell key={header.id}>
+                        {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                      </TableHeaderCell>
+                    ))}
+                  </TableRow>
+                ))}
+              </TableHead>
+              <TableBody>
+                {grantTable.getRowModel().rows.length > 0 ? (
+                  grantTable.getRowModel().rows.map((row) => (
+                    <TableRow key={row.id}>
+                      {row.getVisibleCells().map((cell) => (
+                        <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                      ))}
+                    </TableRow>
+                  ))
+                ) : (
+                  <TableEmptyRow colSpan={grantTable.getAllLeafColumns().length}>
+                      暂无 Grant
+                    </TableEmptyRow>
+                )}
+              </TableBody>
+            </TableRoot>
+          </TableFrame>
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper-deep p-4">
+            <span className="min-w-0 text-sm text-ink-soft">展开后 grants 预览：{form.grants.map((grant) => `${grant.permission} / ${grant.scope}`).join("，") || "-"}</span>
             <Button
               variant="primary"
               icon={<Check size={16} />}
