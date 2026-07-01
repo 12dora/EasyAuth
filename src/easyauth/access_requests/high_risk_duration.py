@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Final
 
 from django.utils import timezone
 
-from easyauth.applications.models import RoleAccessPolicy
+from easyauth.applications.ops_models import RoleAccessPolicy
 
 if TYPE_CHECKING:
     from datetime import datetime

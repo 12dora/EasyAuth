@@ -1,0 +1,43 @@
+<div class="console-panel">
+  <h2>RolePermission 矩阵</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>分组</th>
+        <th>Permission</th>
+        {% for role in roles %}
+          <th>{{ role.name }}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in matrix_rows %}
+        <tr>
+          <td><code>{{ row.group_label }}</code></td>
+          <td><code>{{ row.permission.key }}</code></td>
+          {% for cell in row.cells %}
+            <td class="matrix-cell">
+              <form method="post">
+                {% csrf_token %}
+                <input type="hidden" name="action" value="set_role_permission">
+                <input type="hidden" name="role_id" value="{{ cell.role.id }}">
+                <input type="hidden" name="permission_id" value="{{ row.permission.id }}">
+                <label>
+                  <span class="muted">{{ cell.role.key }}</span>
+                  <input type="checkbox" name="enabled" {% if cell.checked %}checked{% endif %} {% if not can_manage %}disabled{% endif %}>
+                </label>
+                {% if can_manage %}
+                  <button type="submit">保存</button>
+                {% endif %}
+              </form>
+            </td>
+          {% endfor %}
+        </tr>
+      {% empty %}
+        <tr>
+          <td colspan="3">暂无权限</td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>

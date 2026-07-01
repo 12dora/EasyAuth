@@ -39,43 +39,59 @@ def handle_configuration_form_post(
     mutation_actor = ConsoleMutationActor(actor_id=actor_id)
     match action:
         case "set_role_permission":
-            set_role_permission(
-                RolePermissionMutation(
-                    app=app,
-                    role=_role_for_app(post, "role_id", app),
-                    permission=_permission_for_app(post, "permission_id", app),
-                    enabled=post.get("enabled") == "on",
-                    actor=mutation_actor,
-                ),
-            )
+            _set_role_permission(post=post, app=app, actor=mutation_actor)
         case "create_role":
-            _ = create_role(
-                app=app,
-                key=post.get("role_key", "").strip(),
-                name=post.get("role_name", "").strip(),
-                requestable=post.get("requestable") == "on",
-                actor=mutation_actor,
-            )
+            _create_role(post=post, app=app, actor=mutation_actor)
         case "create_permission":
-            _ = create_permission(
-                app=app,
-                key=post.get("permission_key", "").strip(),
-                name=post.get("permission_name", "").strip(),
-                actor=mutation_actor,
-            )
+            _create_permission(post=post, app=app, actor=mutation_actor)
         case "create_approval_rule":
-            _ = create_approval_rule(
-                ApprovalRuleCreateMutation(
-                    app=app,
-                    role=_role_for_app(post, "approval_role_id", app),
-                    permission=None,
-                    approver_userids=_approver_userids(post.get("approver_userids", "")),
-                    is_active=True,
-                    actor=mutation_actor,
-                ),
-            )
+            _create_approval_rule(post=post, app=app, actor=mutation_actor)
         case _:
             return
+
+
+def _set_role_permission(*, post: QueryDict, app: App, actor: ConsoleMutationActor) -> None:
+    set_role_permission(
+        RolePermissionMutation(
+            app=app,
+            role=_role_for_app(post, "role_id", app),
+            permission=_permission_for_app(post, "permission_id", app),
+            enabled=post.get("enabled") == "on",
+            actor=actor,
+        ),
+    )
+
+
+def _create_role(*, post: QueryDict, app: App, actor: ConsoleMutationActor) -> None:
+    _ = create_role(
+        app=app,
+        key=post.get("role_key", "").strip(),
+        name=post.get("role_name", "").strip(),
+        requestable=post.get("requestable") == "on",
+        actor=actor,
+    )
+
+
+def _create_permission(*, post: QueryDict, app: App, actor: ConsoleMutationActor) -> None:
+    _ = create_permission(
+        app=app,
+        key=post.get("permission_key", "").strip(),
+        name=post.get("permission_name", "").strip(),
+        actor=actor,
+    )
+
+
+def _create_approval_rule(*, post: QueryDict, app: App, actor: ConsoleMutationActor) -> None:
+    _ = create_approval_rule(
+        ApprovalRuleCreateMutation(
+            app=app,
+            role=_role_for_app(post, "approval_role_id", app),
+            permission=None,
+            approver_userids=_approver_userids(post.get("approver_userids", "")),
+            is_active=True,
+            actor=actor,
+        ),
+    )
 
 
 def _post_int(post: QueryDict, key: str) -> int:

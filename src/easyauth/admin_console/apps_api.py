@@ -6,9 +6,16 @@ from typing import TYPE_CHECKING, Final
 from django.http import HttpRequest, JsonResponse
 
 from easyauth.admin_console.api_payloads import paginated_list_payload
+from easyauth.admin_console.api_responses import (
+    error_response as _error_response,
+)
+from easyauth.admin_console.api_responses import (
+    json_response as _json_response,
+)
 from easyauth.admin_console.operation_filters import Page, paginate_queryset
 from easyauth.admin_console.permission_template_api_data import template_version_item
-from easyauth.api.errors import ErrorCode, ErrorResponse, JsonValue, build_error_response
+from easyauth.admin_console.request_guards import require_console_actor
+from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.configuration import (
     ConfigurationIssue,
     ConfigurationReadiness,
@@ -32,7 +39,6 @@ from easyauth.applications.ownership import (
 if TYPE_CHECKING:
     from django.db.models import QuerySet
 
-type ConsoleAppsApiResult = ConsoleActor | JsonResponse
 type VisibleAppResult = App | JsonResponse
 
 CONFIGURATION_ISSUE_TARGET_TYPES: Final = {
@@ -46,7 +52,7 @@ CONFIGURATION_ISSUE_TARGET_TYPES: Final = {
 
 
 def console_apps(request: HttpRequest) -> JsonResponse:
-    match _actor_from_request(request):
+    match require_console_actor(request):
         case ConsoleActor() as actor:
             pass
         case JsonResponse() as response:
@@ -57,7 +63,7 @@ def console_apps(request: HttpRequest) -> JsonResponse:
 
 
 def console_app_detail(request: HttpRequest, app_key: str) -> JsonResponse:
-    match _actor_from_request(request):
+    match require_console_actor(request):
         case ConsoleActor() as actor:
             pass
         case JsonResponse() as response:
@@ -71,7 +77,7 @@ def console_app_detail(request: HttpRequest, app_key: str) -> JsonResponse:
 
 
 def console_app_configuration_status(request: HttpRequest, app_key: str) -> JsonResponse:
-    match _actor_from_request(request):
+    match require_console_actor(request):
         case ConsoleActor() as actor:
             pass
         case JsonResponse() as response:
@@ -91,20 +97,6 @@ def console_app_configuration_status(request: HttpRequest, app_key: str) -> Json
             return _json_response(payload)
         case JsonResponse() as response:
             return response
-
-
-def _actor_from_request(request: HttpRequest) -> ConsoleAppsApiResult:
-    user = request.user
-    if not user.is_authenticated:
-        return _error_response(
-            ErrorCode.AUTHENTICATION_FAILED,
-            "控制台登录已失效。",
-            status=HTTPStatus.UNAUTHORIZED,
-        )
-    return ConsoleActor(
-        user_id=user.get_username(),
-        is_superuser=bool(getattr(user, "is_superuser", False)),
-    )
 
 
 def _visible_app(actor: ConsoleActor, app_key: str) -> VisibleAppResult:
@@ -253,25 +245,3 @@ def _pagination_item(page: Page[App]) -> dict[str, JsonValue]:
         "total_items": page.total_items,
         "total_pages": page.total_pages,
     }
-
-
-def _error_response(
-    code: ErrorCode,
-    message: str,
-    details: dict[str, JsonValue] | None = None,
-    *,
-    status: HTTPStatus,
-) -> JsonResponse:
-    return _json_response(build_error_response(code, message, details), status=status)
-
-
-def _json_response(
-    payload: dict[str, JsonValue] | ErrorResponse,
-    *,
-    status: HTTPStatus = HTTPStatus.OK,
-) -> JsonResponse:
-    return JsonResponse(
-        payload,
-        status=status,
-        json_dumps_params={"ensure_ascii": False},
-    )

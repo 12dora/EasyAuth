@@ -1,27 +1,22 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal
-
-from django.core.exceptions import ValidationError
+from typing import TYPE_CHECKING
 
 from easyauth.accounts.models import UserMirror
+from easyauth.accounts.status import parse_user_status
 from easyauth.applications.models import App, RolePermission
 from easyauth.grants.models import (
-    GRANT_STATUS_ACTIVE,
-    GRANT_STATUS_EXPIRED,
-    GRANT_STATUS_REVOKED,
     AccessGrant,
     AccessGrantPermission,
     AccessGrantRole,
 )
+from easyauth.grants.status import parse_grant_status
 
 if TYPE_CHECKING:
     from datetime import datetime
 
 type UserSelector = UserMirror | str
-type UserStatus = Literal["active", "disabled", "departed"]
-type GrantStatus = Literal["active", "revoked", "expired"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,62 +35,11 @@ def resolve_user_permissions(*, user: UserSelector, app: App) -> PermissionSnaps
     if resolved_user is None:
         return _empty_snapshot(user_id=user_id, app=app, version=0)
 
-    latest_grant = (
-        AccessGrant.objects.filter(user=resolved_user, app=app)
-        .order_by("-version", "-id")
-        .first()
-    )
+    latest_grant = _latest_grant(resolved_user, app)
     version = 0 if latest_grant is None else latest_grant.version
-
-    if latest_grant is None:
+    if latest_grant is None or not _grant_has_effective_permissions(resolved_user, latest_grant):
         return _empty_snapshot(user_id=user_id, app=app, version=version)
-
-    match _parse_user_status(resolved_user.status):
-        case "active":
-            pass
-        case "disabled" | "departed":
-            return _empty_snapshot(user_id=user_id, app=app, version=version)
-
-    if not latest_grant.is_current:
-        return _empty_snapshot(user_id=user_id, app=app, version=version)
-
-    match _parse_grant_status(latest_grant.status):
-        case "active":
-            pass
-        case "revoked" | "expired":
-            return _empty_snapshot(user_id=user_id, app=app, version=version)
-
-    roles = tuple(
-        link.role.key
-        for link in AccessGrantRole.objects.select_related("role")
-        .filter(grant=latest_grant, role__is_active=True)
-        .order_by("role__key")
-    )
-    direct_permission_keys = {
-        link.permission.key
-        for link in AccessGrantPermission.objects.select_related("permission").filter(
-            grant=latest_grant,
-            permission__is_active=True,
-            permission__deprecated_at__isnull=True,
-        )
-    }
-    role_permission_keys = {
-        link.permission.key
-        for link in RolePermission.objects.select_related("permission").filter(
-            role__access_grant_roles__grant=latest_grant,
-            role__is_active=True,
-            permission__is_active=True,
-            permission__deprecated_at__isnull=True,
-        )
-    }
-    return PermissionSnapshot(
-        user_id=user_id,
-        app_key=app.app_key,
-        version=version,
-        roles=roles,
-        permissions=tuple(sorted(direct_permission_keys | role_permission_keys)),
-        grant_expires_at=latest_grant.grant_expires_at,
-    )
+    return _grant_snapshot(user_id=user_id, app=app, grant=latest_grant, version=version)
 
 
 def _resolve_user(user: UserSelector) -> UserMirror | None:
@@ -114,28 +58,80 @@ def _user_id(user: UserSelector) -> str:
             return user_id
 
 
-def _parse_user_status(status: str) -> UserStatus:
-    match status:
-        case "active":
-            return "active"
-        case "disabled":
-            return "disabled"
-        case "departed":
-            return "departed"
-        case unsupported:
-            raise ValidationError({"status": f"Unsupported user status: {unsupported}"})
+def _latest_grant(user: UserMirror, app: App) -> AccessGrant | None:
+    return (
+        AccessGrant.objects.filter(user=user, app=app)
+        .order_by("-version", "-id")
+        .first()
+    )
 
 
-def _parse_grant_status(status: str) -> GrantStatus:
-    match status:
+def _grant_has_effective_permissions(user: UserMirror, grant: AccessGrant) -> bool:
+    match parse_user_status(user.status):
         case "active":
-            return GRANT_STATUS_ACTIVE
-        case "revoked":
-            return GRANT_STATUS_REVOKED
-        case "expired":
-            return GRANT_STATUS_EXPIRED
-        case unsupported:
-            raise ValidationError({"status": f"Unsupported grant status: {unsupported}"})
+            pass
+        case "disabled" | "departed":
+            return False
+
+    if not grant.is_current:
+        return False
+
+    match parse_grant_status(grant.status):
+        case "active":
+            return True
+        case "revoked" | "expired":
+            return False
+
+
+def _grant_snapshot(
+    *,
+    user_id: str,
+    app: App,
+    grant: AccessGrant,
+    version: int,
+) -> PermissionSnapshot:
+    direct_permission_keys = _direct_permission_keys(grant)
+    role_permission_keys = _role_permission_keys(grant)
+    return PermissionSnapshot(
+        user_id=user_id,
+        app_key=app.app_key,
+        version=version,
+        roles=_role_keys(grant),
+        permissions=tuple(sorted(direct_permission_keys | role_permission_keys)),
+        grant_expires_at=grant.grant_expires_at,
+    )
+
+
+def _role_keys(grant: AccessGrant) -> tuple[str, ...]:
+    return tuple(
+        link.role.key
+        for link in AccessGrantRole.objects.select_related("role")
+        .filter(grant=grant, role__is_active=True)
+        .order_by("role__key")
+    )
+
+
+def _direct_permission_keys(grant: AccessGrant) -> set[str]:
+    return {
+        link.permission.key
+        for link in AccessGrantPermission.objects.select_related("permission").filter(
+            grant=grant,
+            permission__is_active=True,
+            permission__deprecated_at__isnull=True,
+        )
+    }
+
+
+def _role_permission_keys(grant: AccessGrant) -> set[str]:
+    return {
+        link.permission.key
+        for link in RolePermission.objects.select_related("permission").filter(
+            role__access_grant_roles__grant=grant,
+            role__is_active=True,
+            permission__is_active=True,
+            permission__deprecated_at__isnull=True,
+        )
+    }
 
 
 def _empty_snapshot(*, user_id: str, app: App, version: int) -> PermissionSnapshot:

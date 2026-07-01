@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta
 from http import HTTPStatus
 from json import dumps
 from re import escape, findall, search
@@ -7,11 +8,19 @@ from typing import Final, Protocol
 
 import pytest
 from django.contrib.auth.models import User
-from django.test import Client
+from django.test import Client, override_settings
+from django.utils import timezone
 
 from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode
-from easyauth.applications.models import App, AppMembership, Permission, Role, RolePermission
+from easyauth.applications.models import (
+    App,
+    AppMembership,
+    AppStaticToken,
+    Permission,
+    Role,
+    RolePermission,
+)
 from easyauth.applications.services import StaticTokenService
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import AccessGrant, AccessGrantRole
@@ -86,6 +95,85 @@ def test_ops1_console_query_tester_explains_401_403_and_422_errors() -> None:
     assert "缺失或无效凭据" in invalid_token.content.decode()
     assert mismatched_app.status_code == HTTPStatus.FORBIDDEN
     assert "凭据绑定 App 与路径 app_key 不一致" in mismatched_app.content.decode()
+
+
+def test_ops1_console_query_tester_rejects_disabled_token_and_disabled_app() -> None:
+    # Given: owner 有目标 App, 同时存在禁用 token 和禁用 App 的 token。
+    client = _logged_in_client("owner-ops1-query-disabled")
+    app = _owned_app("ops1-query-disabled", "owner-ops1-query-disabled")
+    disabled_token_issue = StaticTokenService.create_token(app=app, name="disabled token")
+    _ = AppStaticToken.objects.filter(id=disabled_token_issue.credential_id).update(
+        is_active=False,
+    )
+    disabled_app = App.objects.create(
+        app_key="ops1-query-disabled-app",
+        name="Disabled App",
+        is_active=False,
+    )
+    disabled_app_issue = StaticTokenService.create_token(app=disabled_app, name="disabled app")
+
+    # When: 联调 API 分别提交禁用 token 和禁用 App token。
+    disabled_token = client.post(
+        _query_test_api_url(app.app_key),
+        data=dumps({"user_id": "query-user", "token": disabled_token_issue.plaintext_token}),
+        content_type="application/json",
+    )
+    disabled_app_response = client.post(
+        _query_test_api_url(disabled_app.app_key),
+        data=dumps({"user_id": "query-user", "token": disabled_app_issue.plaintext_token}),
+        content_type="application/json",
+    )
+
+    # Then: 禁用 token 为 401, 禁用 App 为 403, 与正式权限查询认证口径一致。
+    assert disabled_token.status_code == HTTPStatus.UNAUTHORIZED
+    assert _json_string(disabled_token, "code") == ErrorCode.AUTHENTICATION_FAILED
+    assert disabled_app_response.status_code == HTTPStatus.FORBIDDEN
+    assert _json_string(disabled_app_response, "code") == ErrorCode.PERMISSION_DENIED
+
+
+def test_ops1_console_query_tester_preserves_submitted_token_bytes() -> None:
+    # Given: owner 有目标 App 和有效 token。
+    client = _logged_in_client("owner-ops1-query-token-bytes")
+    app = _owned_app("ops1-query-token-bytes", "owner-ops1-query-token-bytes")
+    issue = StaticTokenService.create_token(app=app, name="query tester")
+
+    # When: 联调 API 提交末尾带空格的 token。
+    response = client.post(
+        _query_test_api_url(app.app_key),
+        data=dumps({"user_id": "query-user", "token": f"{issue.plaintext_token} "}),
+        content_type="application/json",
+    )
+
+    # Then: token 原样认证, 不通过额外 strip() 放宽正式 API 的 Bearer 行为。
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert _json_string(response, "code") == ErrorCode.AUTHENTICATION_FAILED
+
+
+@override_settings(EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS="60")
+def test_ops1_console_query_tester_uses_default_ttl_for_invalid_configuration() -> None:
+    # Given: 联调 API 命中非法 TTL 配置。
+    client = _logged_in_client("owner-ops1-query-invalid-ttl")
+    app = _owned_app("ops1-query-invalid-ttl", "owner-ops1-query-invalid-ttl")
+    issue = StaticTokenService.create_token(app=app, name="query tester")
+    user = UserMirror.objects.create(authentik_user_id="query-invalid-ttl-user")
+    grant = AccessGrant.objects.create(user=user, app=app)
+    role = Role.objects.create(app=app, key="auditor", name="Auditor")
+    _ = AccessGrantRole.objects.create(grant=grant, role=role)
+
+    # When: owner 通过 private API 查询该用户。
+    before = timezone.now()
+    response = client.post(
+        _query_test_api_url(app.app_key),
+        data=dumps({"user_id": user.authentik_user_id, "token": issue.plaintext_token}),
+        content_type="application/json",
+    )
+    after = timezone.now()
+
+    # Then: 非法 TTL 退回默认 300 秒。
+    assert response.status_code == HTTPStatus.OK
+    expires_at = datetime.fromisoformat(_json_string(response, "expires_at"))
+    assert before + timedelta(seconds=300) <= expires_at
+    assert expires_at <= after + timedelta(seconds=300)
 
 
 def test_ops1_console_query_tester_explains_internal_permission_query_error() -> None:

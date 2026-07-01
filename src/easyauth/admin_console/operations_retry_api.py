@@ -19,12 +19,17 @@ from easyauth.access_requests.models import (
     REQUEST_TYPE_GRANT,
     AccessRequest,
 )
-from easyauth.api.errors import ErrorCode, ErrorResponse, JsonValue, build_error_response
+from easyauth.admin_console.api_responses import (
+    error_response as _error_response,
+)
+from easyauth.admin_console.api_responses import (
+    json_response as _json_response,
+)
+from easyauth.admin_console.authz import require_superuser
+from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.grants.models import AccessGrant
 from easyauth.grants.operations import current_grant
-
-type ConsoleApiResult = str | JsonResponse
 
 REQUEST_NOT_FOUND_MESSAGE = "申请不存在。"
 REQUEST_NOT_RETRYABLE_MESSAGE = "该申请当前不可重试。"
@@ -56,7 +61,7 @@ class _RetryGrantPayload(BaseModel):
 
 
 def operations_retry_grant(request: HttpRequest, request_id: int) -> JsonResponse:
-    match _require_superuser(request):
+    match require_superuser(request):
         case str() as actor_id:
             pass
         case JsonResponse() as response:
@@ -205,43 +210,4 @@ def _record_retry_event(
                 "reason": reason,
             },
         ),
-    )
-
-
-def _require_superuser(request: HttpRequest) -> ConsoleApiResult:
-    user = request.user
-    if not user.is_authenticated:
-        return _error_response(
-            ErrorCode.AUTHENTICATION_FAILED,
-            "控制台登录已失效。",
-            status=HTTPStatus.UNAUTHORIZED,
-        )
-    if not bool(getattr(user, "is_superuser", False)):
-        return _error_response(
-            ErrorCode.PERMISSION_DENIED,
-            "只有系统管理员可以执行该操作。",
-            status=HTTPStatus.FORBIDDEN,
-        )
-    return user.get_username()
-
-
-def _error_response(
-    code: ErrorCode,
-    message: str,
-    details: dict[str, JsonValue] | None = None,
-    *,
-    status: HTTPStatus,
-) -> JsonResponse:
-    return _json_response(build_error_response(code, message, details), status=status)
-
-
-def _json_response(
-    payload: dict[str, JsonValue] | ErrorResponse,
-    *,
-    status: HTTPStatus = HTTPStatus.OK,
-) -> JsonResponse:
-    return JsonResponse(
-        payload,
-        status=status,
-        json_dumps_params={"ensure_ascii": False},
     )

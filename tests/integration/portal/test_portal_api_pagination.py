@@ -6,14 +6,13 @@ from http import HTTPStatus
 from typing import TYPE_CHECKING, Final, Protocol
 
 import pytest
-from django.test import Client
 from django.utils import timezone
 
 from easyauth.access_requests.models import AccessRequest
-from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
-from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
+from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import App
 from easyauth.grants.models import GRANT_TYPE_PERMANENT, GRANT_TYPE_TIMED, AccessGrant
+from tests.integration.portal.helpers import logged_in_client
 
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
@@ -50,7 +49,7 @@ class _ListPayload:
 
 def test_portal_grants_returns_requested_page_for_session_user() -> None:
     # Given: 当前员工有三条授权, 另一个员工也有授权。
-    client, user = _logged_in_client("portal-page-grants-user")
+    client, user = logged_in_client("portal-page-grants-user")
     _ = _create_grant(user=user, app_key="portal-page-grant-1")
     _ = _create_grant(user=user, app_key="portal-page-grant-2")
     _ = _create_grant(user=user, app_key="portal-page-grant-3")
@@ -78,7 +77,7 @@ def test_portal_grants_returns_requested_page_for_session_user() -> None:
 
 def test_portal_expiring_grants_returns_requested_page_after_expiring_filter() -> None:
     # Given: 当前员工有三条即将过期授权和一条远期授权。
-    client, user = _logged_in_client("portal-page-expiring-user")
+    client, user = logged_in_client("portal-page-expiring-user")
     _ = _create_grant(user=user, app_key="portal-page-expiring-1", expires_in_days=3)
     _ = _create_grant(user=user, app_key="portal-page-expiring-2", expires_in_days=4)
     _ = _create_grant(user=user, app_key="portal-page-expiring-3", expires_in_days=5)
@@ -101,7 +100,7 @@ def test_portal_expiring_grants_returns_requested_page_after_expiring_filter() -
 
 def test_portal_access_requests_returns_requested_page_for_session_user() -> None:
     # Given: 当前员工有三条申请, 另一个员工也有申请。
-    client, user = _logged_in_client("portal-page-requests-user")
+    client, user = logged_in_client("portal-page-requests-user")
     app = App.objects.create(app_key="portal-page-requests-app", name="Portal Requests")
     oldest = AccessRequest.objects.create(user=user, app=app, reason="第二页申请")
     _ = AccessRequest.objects.create(user=user, app=app, reason="第一页申请 2")
@@ -126,19 +125,6 @@ def test_portal_access_requests_returns_requested_page_for_session_user() -> Non
         total_items=EXPECTED_TOTAL_ITEMS,
         total_pages=EXPECTED_TOTAL_PAGES,
     )
-
-
-def _logged_in_client(authentik_user_id: str) -> tuple[Client, UserMirror]:
-    client = Client()
-    user = UserMirror.objects.create(
-        authentik_user_id=authentik_user_id,
-        name="门户用户",
-        status=USER_STATUS_ACTIVE,
-    )
-    session = client.session
-    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
-    session.save()
-    return client, user
 
 
 def _create_grant(

@@ -15,10 +15,12 @@ from easyauth.access_requests.services import (
     AccessRequestSubmissionError,
 )
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
+from easyauth.accounts.logout_state import browser_is_marked_logged_out, logged_out_redirect
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
-from easyauth.frontend_shell import render_react_shell
+from easyauth.frontend_shell import render_react_shell, shell_user_from_user
 from easyauth.portal.forms import AccessRequestForm, app_options, role_options
 from easyauth.portal.grant_rows import current_grant_rows_for_user, expiring_grant_rows
+from easyauth.portal.status_text import StatusTone, status_label, status_tone
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -28,9 +30,6 @@ if TYPE_CHECKING:
 
 LOGIN_URL: Final = "/auth/login/"
 PORTAL_TEMPLATE: Final = "portal/home.html"
-
-type StatusTone = Literal["primary", "secondary", "success", "danger"]
-
 
 @dataclass(frozen=True, slots=True)
 class AccessRequestRow:
@@ -73,7 +72,7 @@ def portal_home(request: HttpRequest) -> HttpResponse:
         request,
         surface="portal",
         title="员工门户",
-        current_user_id=user.authentik_user_id,
+        current_user=shell_user_from_user(request, user),
     )
 
 
@@ -121,6 +120,8 @@ def _legacy_post_response(request: HttpRequest, user: UserMirror) -> HttpRespons
 
 
 def _login_redirect(request: HttpRequest) -> HttpResponseRedirect:
+    if browser_is_marked_logged_out(request):
+        return logged_out_redirect(request)
     query = urlencode({"next": request.get_full_path()})
     return HttpResponseRedirect(f"{LOGIN_URL}?{query}")
 
@@ -141,8 +142,8 @@ def request_rows_for_user(user: UserMirror) -> list[AccessRequestRow]:
             reason=access_request.reason,
             role_names=role_names_by_request_id.get(access_request.id, "-"),
             status=access_request.status,
-            status_label=_status_label(access_request.status),
-            status_tone=_status_tone(access_request.status),
+            status_label=status_label(access_request.status),
+            status_tone=status_tone(access_request.status),
             submitted_at=access_request.submitted_at,
         )
         for access_request in access_requests
@@ -177,36 +178,6 @@ def _grant_label(access_request: AccessRequest) -> str:
             return "限时"
         case _:
             return "-"
-
-
-def _status_label(status: str) -> str:
-    match status:
-        case "submitted":
-            return "已提交"
-        case "approved":
-            return "已批准"
-        case "grant_applied":
-            return "已授权"
-        case "rejected":
-            return "已拒绝"
-        case "grant_failed":
-            return "授权失败"
-        case _:
-            return "未知"
-
-
-def _status_tone(status: str) -> StatusTone:
-    match status:
-        case "submitted":
-            return "primary"
-        case "approved":
-            return "secondary"
-        case "grant_applied":
-            return "success"
-        case "rejected" | "grant_failed":
-            return "danger"
-        case _:
-            return "secondary"
 
 
 def _submit_access_request(

@@ -69,6 +69,39 @@ def test_s10_webhook_sync_upserts_new_and_existing_user() -> None:
     assert user.status == USER_STATUS_ACTIVE
 
 
+def test_sync_payload_updates_dingtalk_fields() -> None:
+    result = AuthentikSyncService.sync_payload(
+        {
+            "user": {
+                "uid": "ak-user",
+                "name": "张三",
+                "email": "zhangsan@example.test",
+                "attributes": {
+                    "department": "旧部门",
+                    "status": "active",
+                    "dingtalk": {
+                        "corp_id": "corp-1",
+                        "user_id": "user-1",
+                        "union_id": "union-1",
+                        "job_number": "E001",
+                    },
+                    "dingtalk_org": {
+                        "manager": {"user_id": "manager-1"},
+                        "departments": [{"name": "销售部"}],
+                    },
+                },
+            }
+        },
+    )
+
+    assert result.user.dingtalk_corp_id == "corp-1"
+    assert result.user.dingtalk_userid == "user-1"
+    assert result.user.dingtalk_union_id == "union-1"
+    assert result.user.employee_number == "E001"
+    assert result.user.department == "销售部"
+    assert result.user.manager_userid == "manager-1"
+
+
 def test_s10_first_time_active_sync_without_grants_does_not_record_departure_event() -> None:
     # Given
     user_id = "s10-sync-new-active-without-grants"

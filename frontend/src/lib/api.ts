@@ -9,12 +9,6 @@ export interface Pagination {
   total_pages: number;
 }
 
-export interface PaginatedPayload<T> {
-  items: T[];
-  data?: T[];
-  pagination?: Pagination;
-}
-
 export interface ApiErrorShape {
   code?: string;
   message?: string;

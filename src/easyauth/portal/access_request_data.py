@@ -7,11 +7,11 @@ from easyauth.access_requests.models import (
     AccessRequestPermission,
     AccessRequestRole,
 )
+from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import JsonValue
+from easyauth.portal.status_text import status_label
 
 if TYPE_CHECKING:
-    from datetime import datetime
-
     from easyauth.accounts.models import UserMirror
 
 type PortalJsonObject = dict[str, JsonValue]
@@ -103,9 +103,9 @@ def _access_request_item(
         "app_name": access_request.app.name,
         "request_type": access_request.request_type,
         "status": access_request.status,
-        "status_label": _status_label(access_request.status),
+        "status_label": status_label(access_request.status),
         "grant_type": access_request.grant_type,
-        "grant_expires_at": _datetime_value(access_request.grant_expires_at),
+        "grant_expires_at": datetime_value(access_request.grant_expires_at),
         "reason": access_request.reason,
         "submitted_at": access_request.submitted_at.isoformat(),
         "roles": _json_strings(role_keys),
@@ -113,28 +113,6 @@ def _access_request_item(
         "permissions": _json_strings(permission_keys),
         "permission_names": _json_strings(permission_names),
     }
-
-
-def _status_label(status: str) -> str:
-    match status:
-        case "submitted":
-            return "等待审批"
-        case "approved":
-            return "审批已通过, 等待授权落库"
-        case "grant_applied":
-            return "授权已落库, 权限已生效"
-        case "rejected":
-            return "已拒绝"
-        case "grant_failed":
-            return "授权落库失败"
-        case _:
-            return "未知"
-
-
-def _datetime_value(value: datetime | None) -> str | None:
-    if value is None:
-        return None
-    return value.isoformat()
 
 
 def _json_strings(values: tuple[str, ...]) -> list[JsonValue]:

@@ -7,7 +7,50 @@ from django.db import models
 from django.db.models import Q
 from django.utils import timezone
 
-from easyauth.applications import health_models
+from .health_models import (
+    DEPENDENCY_AUTHENTIK,
+    DEPENDENCY_AUTHENTIK_DIRECTORY,
+    DEPENDENCY_CELERY,
+    DEPENDENCY_DINGTALK,
+    DEPENDENCY_HEALTH_STATUS_HEALTHY,
+    DEPENDENCY_HEALTH_STATUS_UNHEALTHY,
+    DEPENDENCY_HEALTH_STATUS_UNKNOWN,
+    DEPENDENCY_HEALTH_STATUS_WARNING,
+    DependencyHealthSnapshot,
+)
+from .permission_group_rules import (
+    PERMISSION_GROUP_MAX_DEPTH,
+    permission_group_clean_errors,
+)
+from .role_access_policy_rules import role_access_policy_max_duration_clean_errors
+
+__all__ = (
+    "APP_MEMBERSHIP_ROLE_CHOICES",
+    "APP_MEMBERSHIP_ROLE_DEVELOPER",
+    "APP_MEMBERSHIP_ROLE_OWNER",
+    "APP_MEMBERSHIP_ROLE_VALUES",
+    "DEPENDENCY_AUTHENTIK",
+    "DEPENDENCY_AUTHENTIK_DIRECTORY",
+    "DEPENDENCY_CELERY",
+    "DEPENDENCY_DINGTALK",
+    "DEPENDENCY_HEALTH_STATUS_HEALTHY",
+    "DEPENDENCY_HEALTH_STATUS_UNHEALTHY",
+    "DEPENDENCY_HEALTH_STATUS_UNKNOWN",
+    "DEPENDENCY_HEALTH_STATUS_WARNING",
+    "PERMISSION_GROUP_MAX_DEPTH",
+    "TEMPLATE_SOURCE_CHOICES",
+    "TEMPLATE_SOURCE_MANUAL",
+    "TEMPLATE_SOURCE_PASTE",
+    "TEMPLATE_SOURCE_UPLOAD",
+    "TEMPLATE_STATUS_CHOICES",
+    "TEMPLATE_STATUS_IMPORTED",
+    "TEMPLATE_STATUS_REJECTED",
+    "AppMembership",
+    "DependencyHealthSnapshot",
+    "PermissionGroup",
+    "PermissionTemplateVersion",
+    "RoleAccessPolicy",
+)
 
 if TYPE_CHECKING:
     from datetime import date, datetime
@@ -22,7 +65,6 @@ APP_MEMBERSHIP_ROLE_VALUES: Final[tuple[str, ...]] = (
     APP_MEMBERSHIP_ROLE_OWNER,
     APP_MEMBERSHIP_ROLE_DEVELOPER,
 )
-PERMISSION_GROUP_MAX_DEPTH: Final = 5
 TEMPLATE_SOURCE_UPLOAD: Final = "upload"
 TEMPLATE_SOURCE_PASTE: Final = "paste"
 TEMPLATE_SOURCE_MANUAL: Final = "manual"
@@ -37,14 +79,6 @@ TEMPLATE_STATUS_CHOICES: Final[tuple[tuple[str, str], ...]] = (
     (TEMPLATE_STATUS_IMPORTED, "imported"),
     (TEMPLATE_STATUS_REJECTED, "rejected"),
 )
-DEPENDENCY_AUTHENTIK = health_models.DEPENDENCY_AUTHENTIK
-DEPENDENCY_CELERY = health_models.DEPENDENCY_CELERY
-DEPENDENCY_DINGTALK = health_models.DEPENDENCY_DINGTALK
-DEPENDENCY_HEALTH_STATUS_HEALTHY = health_models.DEPENDENCY_HEALTH_STATUS_HEALTHY
-DEPENDENCY_HEALTH_STATUS_UNKNOWN = health_models.DEPENDENCY_HEALTH_STATUS_UNKNOWN
-DEPENDENCY_HEALTH_STATUS_UNHEALTHY = health_models.DEPENDENCY_HEALTH_STATUS_UNHEALTHY
-DEPENDENCY_HEALTH_STATUS_WARNING = health_models.DEPENDENCY_HEALTH_STATUS_WARNING
-DependencyHealthSnapshot = health_models.DependencyHealthSnapshot
 
 type JsonValue = None | bool | int | float | str | list[JsonValue] | dict[str, JsonValue]
 
@@ -150,20 +184,7 @@ class PermissionGroup(models.Model):
     @override
     def clean(self) -> None:
         super().clean()
-        errors: dict[str, str] = {}
-        parent = self.parent
-        if parent is None:
-            expected_depth = 1
-        else:
-            if parent.app_id != self.app_id:
-                errors["parent"] = "Permission group parent must belong to the same app."
-            expected_depth = parent.depth + 1
-            if _has_group_cycle(self, parent):
-                errors["parent"] = "Permission group tree cannot contain cycles."
-        if self.depth != expected_depth:
-            errors["depth"] = "Permission group depth must match its parent."
-        if self.depth > PERMISSION_GROUP_MAX_DEPTH:
-            errors["depth"] = "Permission group depth cannot exceed 5."
+        errors = permission_group_clean_errors(self)
         if errors:
             raise ValidationError(errors)
 
@@ -255,21 +276,9 @@ class RoleAccessPolicy(models.Model):
     @override
     def clean(self) -> None:
         super().clean()
-        max_days = self.max_grant_duration_days
-        if self.is_high_risk and max_days is None:
-            raise ValidationError(
-                {"max_grant_duration_days": "High-risk roles need a max duration."},
-            )
-        if not self.is_high_risk and max_days is not None:
-            raise ValidationError(
-                {"max_grant_duration_days": "Only high-risk roles may set max duration."},
-            )
-
-
-def _has_group_cycle(group: PermissionGroup, parent: PermissionGroup) -> bool:
-    ancestor: PermissionGroup | None = parent
-    while ancestor is not None:
-        if ancestor.id == group.id:
-            return True
-        ancestor = ancestor.parent
-    return False
+        errors = role_access_policy_max_duration_clean_errors(
+            is_high_risk=self.is_high_risk,
+            max_grant_duration_days=self.max_grant_duration_days,
+        )
+        if errors:
+            raise ValidationError(errors)

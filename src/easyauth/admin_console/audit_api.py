@@ -5,18 +5,24 @@ from http import HTTPStatus
 from django.db.models import QuerySet
 from django.http import HttpRequest, JsonResponse
 
+from easyauth.admin_console.api_responses import (
+    error_response as _error_response,
+)
+from easyauth.admin_console.api_responses import (
+    json_response as _json_response,
+)
 from easyauth.admin_console.operation_filters import Page, filter_audit_logs, paginate_queryset
-from easyauth.api.errors import ErrorCode, ErrorResponse, JsonValue, build_error_response
+from easyauth.admin_console.request_guards import require_console_actor
+from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import App
 from easyauth.applications.ownership import ConsoleActor, can_manage_app
 from easyauth.audit.models import AuditLog
 
-type ConsoleApiResult = ConsoleActor | JsonResponse
 type AuditQuerysetResult = QuerySet[AuditLog] | JsonResponse
 
 
 def console_audit_logs(request: HttpRequest) -> JsonResponse:
-    match _actor_from_request(request):
+    match require_console_actor(request):
         case ConsoleActor() as actor:
             pass
         case JsonResponse() as response:
@@ -42,20 +48,6 @@ def _audit_item(audit_log: AuditLog) -> dict[str, JsonValue]:
         "metadata": audit_log.metadata,
         "created_at": audit_log.created_at.isoformat(),
     }
-
-
-def _actor_from_request(request: HttpRequest) -> ConsoleApiResult:
-    user = request.user
-    if not user.is_authenticated:
-        return _error_response(
-            ErrorCode.AUTHENTICATION_FAILED,
-            "控制台登录已失效。",
-            status=HTTPStatus.UNAUTHORIZED,
-        )
-    return ConsoleActor(
-        user_id=user.get_username(),
-        is_superuser=bool(getattr(user, "is_superuser", False)),
-    )
 
 
 def _audit_queryset_for_actor(request: HttpRequest, actor: ConsoleActor) -> AuditQuerysetResult:
@@ -86,25 +78,3 @@ def _pagination_item(page: Page[AuditLog]) -> dict[str, JsonValue]:
         "total_items": page.total_items,
         "total_pages": page.total_pages,
     }
-
-
-def _error_response(
-    code: ErrorCode,
-    message: str,
-    details: dict[str, JsonValue] | None = None,
-    *,
-    status: HTTPStatus,
-) -> JsonResponse:
-    return _json_response(build_error_response(code, message, details), status=status)
-
-
-def _json_response(
-    payload: dict[str, JsonValue] | ErrorResponse,
-    *,
-    status: HTTPStatus = HTTPStatus.OK,
-) -> JsonResponse:
-    return JsonResponse(
-        payload,
-        status=status,
-        json_dumps_params={"ensure_ascii": False},
-    )

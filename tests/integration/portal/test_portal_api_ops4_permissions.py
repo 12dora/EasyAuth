@@ -6,12 +6,9 @@ from json import dumps
 from typing import Final
 
 import pytest
-from django.test import Client
 from django.utils import timezone
 
 from easyauth.access_requests.models import AccessRequest, AccessRequestPermission
-from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
-from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.applications.models import App, ApprovalRule, Permission, Role, RolePermission
 from easyauth.grants.models import (
     GRANT_TYPE_TIMED,
@@ -19,6 +16,7 @@ from easyauth.grants.models import (
     AccessGrantPermission,
     AccessGrantRole,
 )
+from tests.integration.portal.helpers import logged_in_client
 from tests.integration.portal.json_helpers import json_object
 
 pytestmark = pytest.mark.django_db
@@ -29,7 +27,7 @@ REQUESTS_API_URL: Final = "/portal/api/v1/me/access-requests"
 
 def test_ops4_portal_api_submits_grant_request_with_direct_permission() -> None:
     # Given: 当前员工还没有授权, 目标 direct Permission 配置了审批规则。
-    client, user = _logged_in_client("ops4-grant-direct-permission-user")
+    client, user = logged_in_client("ops4-grant-direct-permission-user")
     app = App.objects.create(app_key="ops4-grant-direct-permission", name="OPS4 Grant Permission")
     permission = _requestable_permission(app=app, key="invoice.read")
 
@@ -65,7 +63,7 @@ def test_ops4_portal_api_submits_grant_request_with_direct_permission() -> None:
 
 def test_ops4_portal_api_lists_access_request_direct_permissions() -> None:
     # Given: 当前员工提交了只包含 direct Permission 目标的 change 申请。
-    client, user = _logged_in_client("ops4-list-request-permission-user")
+    client, user = logged_in_client("ops4-list-request-permission-user")
     app = App.objects.create(app_key="ops4-list-request-permission", name="OPS4 List Permission")
     old_permission = _requestable_permission(app=app, key="invoice.read")
     new_permission = _requestable_permission(app=app, key="invoice.write")
@@ -104,7 +102,7 @@ def test_ops4_portal_api_lists_access_request_direct_permissions() -> None:
 
 def test_ops4_portal_api_hides_inactive_role_and_derived_permissions() -> None:
     # Given: 当前员工授权同时绑定 active Role、inactive Role 和 direct Permission。
-    client, user = _logged_in_client("ops4-grants-inactive-role-user")
+    client, user = logged_in_client("ops4-grants-inactive-role-user")
     app = App.objects.create(app_key="ops4-grants-inactive-role", name="OPS4 Inactive Role")
     active_role = Role.objects.create(app=app, key="active-role", name="有效角色")
     inactive_role = Role.objects.create(
@@ -139,19 +137,6 @@ def test_ops4_portal_api_hides_inactive_role_and_derived_permissions() -> None:
     assert item["roles"] == [active_role.key]
     assert item["role_names"] == [active_role.name]
     assert item["permissions"] == [active_permission.key, direct_permission.key]
-
-
-def _logged_in_client(authentik_user_id: str) -> tuple[Client, UserMirror]:
-    client = Client()
-    user = UserMirror.objects.create(
-        authentik_user_id=authentik_user_id,
-        name="门户用户",
-        status=USER_STATUS_ACTIVE,
-    )
-    session = client.session
-    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
-    session.save()
-    return client, user
 
 
 def _requestable_permission(*, app: App, key: str) -> Permission:

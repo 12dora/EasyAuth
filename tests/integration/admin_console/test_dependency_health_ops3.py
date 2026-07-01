@@ -2,15 +2,19 @@ from __future__ import annotations
 
 from datetime import timedelta
 from http import HTTPStatus
-from typing import ClassVar, Final
+from typing import TYPE_CHECKING, ClassVar, Final, cast
 
 import pytest
-from django.contrib.auth.models import User
 from django.test import Client
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict
 
+from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
+from easyauth.accounts.models import UserMirror
 from easyauth.applications.ops_models import DependencyHealthSnapshot
+
+if TYPE_CHECKING:
+    from easyauth.api.errors import JsonValue
 
 pytestmark = pytest.mark.django_db
 
@@ -40,7 +44,9 @@ class _HealthResponse(BaseModel):
 
     items: tuple[_HealthItem, ...]
     data: tuple[_HealthItem, ...]
+    health_map: dict[str, _HealthComponent]
     authentik: _HealthComponent
+    authentik_directory: _HealthComponent
     dingtalk: _HealthComponent
     celery: _HealthComponent
 
@@ -86,6 +92,7 @@ def test_ops3_console_dependency_health_returns_latest_snapshots_without_secrets
     assert response.status_code == HTTPStatus.OK
     assert len(payload.data) == len(payload.items)
     assert payload.authentik.status == "healthy"
+    assert payload.authentik_directory.status == "unknown"
     assert payload.dingtalk.status == "warning"
     assert payload.celery.status == "healthy"
     assert items["authentik"].status == "healthy"
@@ -104,8 +111,28 @@ def test_ops3_console_dependency_health_returns_latest_snapshots_without_secrets
     assert "ghi" not in body
 
 
+def test_dependency_health_includes_authentik_directory_status() -> None:
+    client = _logged_in_superuser("ops3-health-directory-admin")
+    _ = DependencyHealthSnapshot.objects.create(
+        dependency="authentik_directory",
+        status="healthy",
+        summary="钉钉目录最近同步成功",
+    )
+
+    response = client.get(DEPENDENCY_HEALTH_API_URL)
+
+    assert response.status_code == HTTPStatus.OK
+    payload = cast("dict[str, JsonValue]", response.json())
+    health_map = cast("dict[str, dict[str, JsonValue]]", payload["health_map"])
+    assert health_map["authentik_directory"]["status"] == "healthy"
+    assert health_map["authentik_directory"]["summary"] == "钉钉目录最近同步成功"
+
+
 def _logged_in_superuser(username: str) -> Client:
-    _ = User.objects.create_superuser(username=username, password=LOGIN_VALUE)
+    _ = UserMirror.objects.create(authentik_user_id=username)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    session = client.session
+    session[AUTHENTIK_SESSION_KEY] = username
+    session["easyauth_authentik_groups"] = ["EasyAuth Admins"]
+    session.save()
     return client

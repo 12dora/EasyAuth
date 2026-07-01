@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from http import HTTPStatus
-from typing import Annotated, ClassVar, Literal, override
 
 from django.http import HttpRequest, JsonResponse
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError
+from pydantic import ValidationError
 
 from easyauth.access_requests.services import (
     AccessRequestService,
@@ -14,8 +12,16 @@ from easyauth.access_requests.services import (
 )
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
-from easyauth.api.errors import ErrorCode, ErrorResponse, JsonValue, build_error_response
-from easyauth.applications.models import App, Permission, PermissionGroup, Role
+from easyauth.api.errors import ErrorCode, JsonValue
+from easyauth.api.responses import error_response as _error_response
+from easyauth.api.responses import json_response as _json_response
+from easyauth.portal.access_request_payloads import (
+    AccessRequestPayload,
+    AccessRequestTargetError,
+    app_for_key,
+    permissions_for_keys,
+    roles_for_keys,
+)
 from easyauth.portal.api_data import (
     access_request_item,
     access_request_items_for_user,
@@ -23,40 +29,12 @@ from easyauth.portal.api_data import (
     expiring_grant_items_for_user,
 )
 from easyauth.portal.pagination import PortalPage, paginate_items
+from easyauth.portal.request_catalog import request_catalog_payload
 
-type RoleKey = Annotated[str, Field(min_length=1, max_length=128)]
-type PermissionKey = Annotated[str, Field(min_length=1, max_length=128)]
-type GrantType = Literal["permanent", "timed"]
-type RequestType = Literal["grant", "change", "revoke", "renew"]
 type PortalApiResult = UserMirror | JsonResponse
 
 MIN_EXPIRING_DAYS = 1
 MAX_EXPIRING_DAYS = 90
-APP_NOT_REQUESTABLE_MESSAGE = "应用当前不可申请。"
-ROLE_NOT_REQUESTABLE_MESSAGE = "角色当前不可申请。"
-PERMISSION_NOT_REQUESTABLE_MESSAGE = "权限当前不可申请。"
-
-
-@dataclass(frozen=True, slots=True)
-class PortalApiSemanticError(Exception):
-    message: str
-    details: dict[str, JsonValue]
-
-    @override
-    def __str__(self) -> str:
-        return self.message
-
-
-class _AccessRequestPayload(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
-
-    app_key: str = Field(min_length=1, max_length=128)
-    request_type: RequestType = "grant"
-    role_keys: tuple[RoleKey, ...] = Field(default=(), max_length=20)
-    permission_keys: tuple[PermissionKey, ...] = Field(default=(), max_length=50)
-    grant_type: GrantType
-    grant_expires_at: AwareDatetime | None = None
-    reason: str = Field(min_length=1, max_length=1000)
 
 
 def portal_grants(request: HttpRequest) -> JsonResponse:
@@ -94,8 +72,9 @@ def portal_access_requests(request: HttpRequest) -> JsonResponse:
         case "POST":
             return _submit_access_request(request, user)
         case _:
-            return JsonResponse(
-                build_error_response(ErrorCode.VALIDATION_ERROR, "请求方法无效。"),
+            return _error_response(
+                ErrorCode.VALIDATION_ERROR,
+                "请求方法无效。",
                 status=HTTPStatus.METHOD_NOT_ALLOWED,
             )
 
@@ -107,35 +86,21 @@ def portal_request_catalog(request: HttpRequest) -> JsonResponse:
         case JsonResponse() as response:
             return response
     if request.method != "GET":
-        return JsonResponse(
-            build_error_response(ErrorCode.VALIDATION_ERROR, "请求方法无效。"),
+        return _error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "请求方法无效。",
             status=HTTPStatus.METHOD_NOT_ALLOWED,
         )
 
-    roles = _request_catalog_roles()
-    permissions = _request_catalog_permissions()
-    app_ids = {role.app_id for role in roles} | {permission.app_id for permission in permissions}
-    apps = tuple(App.objects.filter(id__in=app_ids, is_active=True).order_by("app_key"))
-    return _json_response(
-        {
-            "apps": [_catalog_app_item(app) for app in apps],
-            "roles": [_catalog_role_item(role) for role in roles],
-            "permission_groups": _catalog_permission_groups(permissions),
-            "ungrouped_permissions": [
-                _catalog_permission_item(permission)
-                for permission in permissions
-                if permission.group_id is None
-            ],
-        },
-    )
+    return _json_response(request_catalog_payload())
 
 
 def _submit_access_request(request: HttpRequest, user: UserMirror) -> JsonResponse:
     try:
-        payload = _AccessRequestPayload.model_validate_json(request.body)
-        app = _app_for_key(payload.app_key)
-        roles = _roles_for_keys(app=app, role_keys=payload.role_keys)
-        permissions = _permissions_for_keys(app=app, permission_keys=payload.permission_keys)
+        payload = AccessRequestPayload.model_validate_json(request.body)
+        app = app_for_key(payload.app_key)
+        roles = roles_for_keys(app=app, role_keys=payload.role_keys)
+        permissions = permissions_for_keys(app=app, permission_keys=payload.permission_keys)
         access_request = AccessRequestService.submit_access_request(
             AccessRequestSubmission(
                 user=user,
@@ -157,7 +122,7 @@ def _submit_access_request(request: HttpRequest, user: UserMirror) -> JsonRespon
             {"errors": str(exc)},
             status=HTTPStatus.UNPROCESSABLE_ENTITY,
         )
-    except (PortalApiSemanticError, AccessRequestSubmissionError) as exc:
+    except (AccessRequestTargetError, AccessRequestSubmissionError) as exc:
         return _error_response(
             ErrorCode.SEMANTIC_VALIDATION_ERROR,
             str(exc),
@@ -213,163 +178,12 @@ def _parse_days(request: HttpRequest) -> int | JsonResponse:
     return days
 
 
-def _app_for_key(app_key: str) -> App:
-    app = App.objects.filter(app_key=app_key, is_active=True).first()
-    if app is None:
-        raise PortalApiSemanticError(APP_NOT_REQUESTABLE_MESSAGE, {"app_key": app_key})
-    return app
-
-
-def _roles_for_keys(*, app: App, role_keys: tuple[str, ...]) -> tuple[Role, ...]:
-    role_by_key = {role.key: role for role in Role.objects.filter(app=app, key__in=role_keys)}
-    missing_role_keys = tuple(key for key in role_keys if key not in role_by_key)
-    if missing_role_keys:
-        raise PortalApiSemanticError(
-            ROLE_NOT_REQUESTABLE_MESSAGE,
-            {"role_keys": _json_strings(missing_role_keys)},
-        )
-    return tuple(role_by_key[key] for key in role_keys)
-
-
-def _permissions_for_keys(
-    *,
-    app: App,
-    permission_keys: tuple[str, ...],
-) -> tuple[Permission, ...]:
-    permission_by_key = {
-        permission.key: permission
-        for permission in Permission.objects.filter(app=app, key__in=permission_keys)
-    }
-    missing_permission_keys = tuple(key for key in permission_keys if key not in permission_by_key)
-    if missing_permission_keys:
-        raise PortalApiSemanticError(
-            PERMISSION_NOT_REQUESTABLE_MESSAGE,
-            {"permission_keys": _json_strings(missing_permission_keys)},
-        )
-    return tuple(permission_by_key[key] for key in permission_keys)
-
-
-def _request_catalog_roles() -> tuple[Role, ...]:
-    return tuple(
-        Role.objects.select_related("app")
-        .filter(
-            app__is_active=True,
-            is_active=True,
-            requestable=True,
-            approval_rules__is_active=True,
-        )
-        .distinct()
-        .order_by("app__app_key", "key"),
-    )
-
-
-def _request_catalog_permissions() -> tuple[Permission, ...]:
-    return tuple(
-        Permission.objects.select_related("app", "group")
-        .filter(
-            app__is_active=True,
-            is_active=True,
-            deprecated_at__isnull=True,
-            approval_rules__is_active=True,
-        )
-        .distinct()
-        .order_by("app__app_key", "group__display_order", "group__key", "key"),
-    )
-
-
-def _catalog_app_item(app: App) -> dict[str, JsonValue]:
-    return {
-        "id": app.id,
-        "app_key": app.app_key,
-        "name": app.name,
-        "description": app.description,
-    }
-
-
-def _catalog_role_item(role: Role) -> dict[str, JsonValue]:
-    return {
-        "id": role.id,
-        "app_key": role.app.app_key,
-        "key": role.key,
-        "name": role.name,
-        "description": role.description,
-        "requestable": role.requestable,
-        "requires_approval": True,
-    }
-
-
-def _catalog_permission_groups(permissions: tuple[Permission, ...]) -> list[JsonValue]:
-    groups_by_id: dict[int, PermissionGroup] = {}
-    permissions_by_group: dict[int, list[Permission]] = {}
-    for permission in permissions:
-        group = permission.group
-        if group is None:
-            continue
-        permissions_by_group.setdefault(group.id, []).append(permission)
-        while group is not None:
-            if group.is_active:
-                groups_by_id[group.id] = group
-            group = group.parent
-
-    children_by_parent: dict[int | None, list[PermissionGroup]] = {}
-    for group in sorted(groups_by_id.values(), key=_group_sort_key):
-        parent_id = group.parent_id if group.parent_id in groups_by_id else None
-        children_by_parent.setdefault(parent_id, []).append(group)
-
-    return [
-        _catalog_group_item(group, children_by_parent, permissions_by_group)
-        for group in children_by_parent.get(None, [])
-    ]
-
-
-def _catalog_group_item(
-    group: PermissionGroup,
-    children_by_parent: dict[int | None, list[PermissionGroup]],
-    permissions_by_group: dict[int, list[Permission]],
-) -> dict[str, JsonValue]:
-    permission_items: list[JsonValue] = [
-        _catalog_permission_item(permission) for permission in permissions_by_group.get(group.id, [])
-    ]
-    children: list[JsonValue] = [
-        _catalog_group_item(child, children_by_parent, permissions_by_group)
-        for child in children_by_parent.get(group.id, [])
-    ]
-    children.extend(permission_items)
-    return {
-        "id": group.id,
-        "app_key": group.app.app_key,
-        "type": "group",
-        "key": group.key,
-        "name": group.name,
-        "description": group.description,
-        "depth": group.depth,
-        "children": children,
-        "permissions": permission_items,
-    }
-
-
-def _catalog_permission_item(permission: Permission) -> dict[str, JsonValue]:
-    return {
-        "id": permission.id,
-        "app_key": permission.app.app_key,
-        "type": "permission",
-        "key": permission.key,
-        "name": permission.name,
-        "description": permission.description,
-        "group_key": "" if permission.group is None else permission.group.key,
-    }
-
-
-def _group_sort_key(group: PermissionGroup) -> tuple[str, int, int, str]:
-    return (group.app.app_key, group.depth, group.display_order, group.key)
-
-
-def _semantic_error_details(exc: PortalApiSemanticError | AccessRequestSubmissionError) -> dict[
+def _semantic_error_details(exc: AccessRequestTargetError | AccessRequestSubmissionError) -> dict[
     str,
     JsonValue,
 ]:
     match exc:
-        case PortalApiSemanticError(details=details):
+        case AccessRequestTargetError(details=details):
             return details
         case AccessRequestSubmissionError(messages=messages):
             return {"messages": _json_strings(messages)}
@@ -379,16 +193,6 @@ def _json_strings(values: tuple[str, ...]) -> list[JsonValue]:
     result: list[JsonValue] = []
     result.extend(values)
     return result
-
-
-def _error_response(
-    code: ErrorCode,
-    message: str,
-    details: dict[str, JsonValue] | None = None,
-    *,
-    status: HTTPStatus,
-) -> JsonResponse:
-    return _json_response(build_error_response(code, message, details), status=status)
 
 
 def _page_response(page: PortalPage) -> JsonResponse:
@@ -412,14 +216,3 @@ def _json_objects(items: tuple[dict[str, JsonValue], ...]) -> list[JsonValue]:
     result.extend(items)
     return result
 
-
-def _json_response(
-    payload: dict[str, JsonValue] | ErrorResponse,
-    *,
-    status: HTTPStatus = HTTPStatus.OK,
-) -> JsonResponse:
-    return JsonResponse(
-        payload,
-        status=status,
-        json_dumps_params={"ensure_ascii": False},
-    )

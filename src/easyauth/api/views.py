@@ -4,13 +4,15 @@ from datetime import datetime, timedelta
 from http import HTTPStatus
 from typing import Final
 
-from django.conf import settings
 from django.http import HttpRequest, JsonResponse
 from django.utils import timezone
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 
-from easyauth.api.authentication import AppBearerAuthentication
 from easyauth.api.errors import ErrorCode, build_error_response
+from easyauth.api.permission_query_auth import (
+    authenticate_permission_query_token,
+    permission_query_ttl_seconds,
+)
 from easyauth.api.serializers import (
     PermissionQueryResponseInput,
     PermissionQueryResponseSerializer,
@@ -24,8 +26,7 @@ PERMISSION_QUERY_EVENT: Final = "app_permission_queried"
 PERMISSION_QUERY_TARGET_TYPE: Final = "user_permission"
 _AUTHENTICATION_FAILED_MESSAGE: Final = "应用认证凭据无效。"
 _PERMISSION_DENIED_MESSAGE: Final = "应用无权查询该资源。"
-_PERMISSION_QUERY_TTL_SETTING: Final = "EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS"
-_DEFAULT_PERMISSION_QUERY_TTL_SECONDS: Final = 300
+_AUTH_SCHEME: Final = "Bearer"
 
 
 def query_user_permissions(request: HttpRequest, app_key: str, user_id: str) -> JsonResponse:
@@ -65,39 +66,38 @@ def query_user_permissions(request: HttpRequest, app_key: str, user_id: str) -> 
 
 
 def _authenticate_app(request: HttpRequest) -> AppPrincipal | JsonResponse:
+    token = _permission_query_token_from_request(request)
+    if token is None:
+        return _authentication_failed_response()
+
     try:
-        result = AppBearerAuthentication().authenticate(request)
+        return authenticate_permission_query_token(token)
     except AuthenticationFailed:
         return _authentication_failed_response()
     except PermissionDenied:
         return _permission_denied_response()
 
-    match result:
-        case (AppPrincipal() as principal, None):
-            return principal
-        case None:
-            return _authentication_failed_response()
+
+def _permission_query_token_from_request(request: HttpRequest) -> str | None:
+    raw_header: str | None = request.META.get("HTTP_AUTHORIZATION")
+    if raw_header is None:
+        return None
+    scheme, separator, token = raw_header.partition(" ")
+    if not separator:
+        return None
+    if scheme != _AUTH_SCHEME:
+        return None
+    if not token:
+        return None
+    return token
 
 
 def _permission_query_expires_at(snapshot: PermissionSnapshot) -> datetime:
-    ttl_expires_at = timezone.now() + timedelta(seconds=_permission_query_ttl_seconds())
+    ttl_expires_at = timezone.now() + timedelta(seconds=permission_query_ttl_seconds())
     grant_expires_at = snapshot.grant_expires_at
     if grant_expires_at is None:
         return ttl_expires_at
     return min(ttl_expires_at, grant_expires_at)
-
-
-def _permission_query_ttl_seconds() -> int:
-    value: int | bool | str = getattr(
-        settings,
-        _PERMISSION_QUERY_TTL_SETTING,
-        _DEFAULT_PERMISSION_QUERY_TTL_SECONDS,
-    )
-    if isinstance(value, bool):
-        return _DEFAULT_PERMISSION_QUERY_TTL_SECONDS
-    if isinstance(value, int):
-        return value
-    return _DEFAULT_PERMISSION_QUERY_TTL_SECONDS
 
 
 def _record_permission_query(*, principal: AppPrincipal, snapshot: PermissionSnapshot) -> None:

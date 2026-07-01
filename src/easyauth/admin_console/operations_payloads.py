@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final
 
+from easyauth.api.datetime_json import datetime_value
 from easyauth.applications import health_models
 
 if TYPE_CHECKING:
-    from datetime import datetime
-
     from easyauth.access_requests.models import AccessRequest
     from easyauth.api.errors import JsonValue
     from easyauth.applications.dependency_health import DependencyHealthItem
@@ -29,7 +28,7 @@ def health_item(item: DependencyHealthItem) -> JsonObject:
     payload: JsonObject = {
         "component": item.component,
         "status": item.status,
-        "last_checked_at": _datetime_value(item.last_checked_at),
+        "last_checked_at": datetime_value(item.last_checked_at),
         "summary": item.summary,
         "error_summary": item.error_summary,
     }
@@ -39,13 +38,14 @@ def health_item(item: DependencyHealthItem) -> JsonObject:
 
 
 def dependency_health_map_payload(items: tuple[DependencyHealthItem, ...]) -> JsonObject:
-    return {item.component: _dependency_component(item) for item in items}
+    health_map: JsonObject = {item.component: _dependency_component(item) for item in items}
+    return {"health_map": health_map, **health_map}
 
 
 def _dependency_component(item: DependencyHealthItem) -> JsonObject:
     payload: JsonObject = {
         "status": item.status,
-        "last_checked_at": _datetime_value(item.last_checked_at),
+        "last_checked_at": datetime_value(item.last_checked_at),
         "summary": item.summary,
         "error_summary": item.error_summary,
     }
@@ -54,9 +54,13 @@ def _dependency_component(item: DependencyHealthItem) -> JsonObject:
 
 
 def _dependency_alias_fields(item: DependencyHealthItem) -> JsonObject:
-    last_checked_at = _datetime_value(item.last_checked_at)
+    last_checked_at = datetime_value(item.last_checked_at)
     aliases: dict[str, JsonObject] = {
         health_models.DEPENDENCY_AUTHENTIK: {
+            "last_sync_at": last_checked_at,
+            "last_sync_result": item.summary,
+        },
+        health_models.DEPENDENCY_AUTHENTIK_DIRECTORY: {
             "last_sync_at": last_checked_at,
             "last_sync_result": item.summary,
         },
@@ -84,10 +88,4 @@ def _callback_status(access_request: AccessRequest) -> str | None:
 def _callback_received_at(access_request: AccessRequest) -> str | None:
     if access_request.approved_at is not None:
         return access_request.approved_at.isoformat()
-    return _datetime_value(access_request.applied_at)
-
-
-def _datetime_value(value: datetime | None) -> str | None:
-    if value is None:
-        return None
-    return value.isoformat()
+    return datetime_value(access_request.applied_at)

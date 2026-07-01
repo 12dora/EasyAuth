@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from json import loads
 from pathlib import Path
@@ -7,6 +8,8 @@ from typing import TYPE_CHECKING, Final, Literal, TypeGuard, cast
 
 from django.shortcuts import render
 
+from easyauth.accounts.auth import AUTHENTIK_GROUPS_SESSION_KEY, AUTHENTIK_SESSION_KEY
+from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.config.settings.base import BASE_DIR
 
 if TYPE_CHECKING:
@@ -34,24 +37,92 @@ class ViteEntryAssets:
     stylesheets: tuple[ViteAsset, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class ShellUser:
+    user_id: str
+    display_name: str
+    role: str
+    avatar_url: str = ""
+
+
 def render_react_shell(
     request: HttpRequest,
     *,
     surface: ShellName,
     title: str,
     initial_app_key: str = "",
-    current_user_id: str = "",
+    current_user: ShellUser | None = None,
 ) -> HttpResponse:
-    return render(
+    shell_user = current_user or shell_user_from_session(request)
+    return _render_react_shell_response(
+        request,
+        surface=surface,
+        title=title,
+        initial_app_key=initial_app_key,
+        shell_user=shell_user,
+    )
+
+
+def render_public_react_shell(
+    request: HttpRequest,
+    *,
+    surface: ShellName,
+    title: str,
+    initial_app_key: str = "",
+) -> HttpResponse:
+    return _render_react_shell_response(
+        request,
+        surface=surface,
+        title=title,
+        initial_app_key=initial_app_key,
+        shell_user=None,
+    )
+
+
+def _render_react_shell_response(
+    request: HttpRequest,
+    *,
+    surface: ShellName,
+    title: str,
+    initial_app_key: str,
+    shell_user: ShellUser | None,
+) -> HttpResponse:
+    response = render(
         request,
         REACT_SHELL_TEMPLATE,
         {
             "initial_app_key": initial_app_key,
-            "current_user_id": current_user_id,
+            "current_user": shell_user,
+            "logout_url": "/auth/logout/",
             "shell": surface,
             "title": title,
             "vite_assets": vite_entry_assets(),
         },
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def shell_user_from_session(request: HttpRequest) -> ShellUser | None:
+    user_id = _session_string(request, AUTHENTIK_SESSION_KEY)
+    if user_id == "":
+        return None
+
+    user = UserMirror.objects.filter(
+        authentik_user_id=user_id,
+        status=USER_STATUS_ACTIVE,
+    ).first()
+    if user is None:
+        return None
+    return shell_user_from_user(request, user)
+
+
+def shell_user_from_user(request: HttpRequest, user: UserMirror) -> ShellUser:
+    return ShellUser(
+        user_id=user.authentik_user_id,
+        display_name=_display_name(user),
+        role=_role_label(request),
+        avatar_url=user.avatar_url,
     )
 
 
@@ -108,3 +179,35 @@ def _is_json_value(value: object) -> TypeGuard[JsonValue]:
         items = cast("list[object]", value)
         return all(_is_json_value(item) for item in items)
     return _is_json_object(value)
+
+
+def _display_name(user: UserMirror) -> str:
+    for value in (user.name, user.email):
+        normalized_value = value.strip()
+        if normalized_value:
+            return normalized_value
+    return "当前用户"
+
+
+def _role_label(request: HttpRequest) -> str:
+    groups = _session_string_list(request, AUTHENTIK_GROUPS_SESSION_KEY)
+    if groups:
+        return "、".join(groups[:2])
+    return "未分组"
+
+
+def _session_string(request: HttpRequest, key: str) -> str:
+    match request.session.get(key):
+        case str() as value:
+            return value
+        case _:
+            return ""
+
+
+def _session_string_list(request: HttpRequest, key: str) -> tuple[str, ...]:
+    value = request.session.get(key)
+    if isinstance(value, str):
+        return tuple(part for part in value.split() if part)
+    if isinstance(value, Sequence):
+        return tuple(item for item in value if isinstance(item, str) and item)
+    return ()

@@ -8,12 +8,18 @@ from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from easyauth.admin_console.api_payloads import list_payload
-from easyauth.api.errors import ErrorCode, ErrorResponse, JsonValue, build_error_response
+from easyauth.admin_console.api_responses import (
+    error_response as _error_response,
+)
+from easyauth.admin_console.api_responses import (
+    json_response as _json_response,
+)
+from easyauth.admin_console.request_guards import require_console_actor
+from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import App, AppMembership
 from easyauth.applications.ownership import ConsoleActor, can_view_app
 from easyauth.audit.services import AuditRecord, AuditService
 
-type ConsoleMembershipsApiResult = ConsoleActor | JsonResponse
 type VisibleAppResult = App | JsonResponse
 type ManageableAppResult = tuple[App, ConsoleActor] | JsonResponse
 type MembershipRole = Literal["owner", "developer"]
@@ -39,7 +45,7 @@ def console_app_memberships(request: HttpRequest, app_key: str) -> JsonResponse:
     if request.method != "GET":
         return _method_not_allowed()
 
-    match _actor_from_request(request):
+    match require_console_actor(request):
         case ConsoleActor() as actor:
             pass
         case JsonResponse() as response:
@@ -150,20 +156,6 @@ def _apply_membership_patch(
     return changed
 
 
-def _actor_from_request(request: HttpRequest) -> ConsoleMembershipsApiResult:
-    user = request.user
-    if not user.is_authenticated:
-        return _error_response(
-            ErrorCode.AUTHENTICATION_FAILED,
-            "控制台登录已失效。",
-            status=HTTPStatus.UNAUTHORIZED,
-        )
-    return ConsoleActor(
-        user_id=user.get_username(),
-        is_superuser=bool(getattr(user, "is_superuser", False)),
-    )
-
-
 def _visible_app(actor: ConsoleActor, app_key: str) -> VisibleAppResult:
     app = App.objects.filter(app_key=app_key).first()
     if app is None or not can_view_app(actor, app):
@@ -176,7 +168,7 @@ def _visible_app(actor: ConsoleActor, app_key: str) -> VisibleAppResult:
 
 
 def _manageable_app(request: HttpRequest, app_key: str) -> ManageableAppResult:
-    match _actor_from_request(request):
+    match require_console_actor(request):
         case ConsoleActor() as actor:
             pass
         case JsonResponse() as response:
@@ -265,26 +257,4 @@ def _membership_conflict_response() -> JsonResponse:
         ErrorCode.CONFLICT,
         "成员关系已存在。",
         status=HTTPStatus.CONFLICT,
-    )
-
-
-def _error_response(
-    code: ErrorCode,
-    message: str,
-    details: dict[str, JsonValue] | None = None,
-    *,
-    status: HTTPStatus,
-) -> JsonResponse:
-    return _json_response(build_error_response(code, message, details), status=status)
-
-
-def _json_response(
-    payload: dict[str, JsonValue] | ErrorResponse,
-    *,
-    status: HTTPStatus = HTTPStatus.OK,
-) -> JsonResponse:
-    return JsonResponse(
-        payload,
-        status=status,
-        json_dumps_params={"ensure_ascii": False},
     )

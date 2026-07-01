@@ -21,6 +21,7 @@ from easyauth.grants.services import GrantMutationInput, GrantService
 if TYPE_CHECKING:
     from datetime import datetime
 
+    from easyauth.access_requests.submission_types import AccessRequestType
     from easyauth.applications.models import Permission, Role
     from easyauth.grants.models import AccessGrant
 
@@ -66,45 +67,69 @@ def apply_grant_fact(
     request_type = validated_request_type(access_request.request_type)
     if apply_target_errors(access_request.app, request_type, roles, permissions):
         raise GrantApplyFailureError(TARGET_CONFIGURATION_REQUIRED_MESSAGE)
+    return _apply_validated_grant_request(
+        access_request=access_request,
+        input_data=input_data,
+        roles=roles,
+        permissions=permissions,
+        request_type=request_type,
+    )
+
+
+def _apply_validated_grant_request(
+    *,
+    access_request: AccessRequest,
+    input_data: _GrantApplicationInput,
+    roles: tuple[Role, ...],
+    permissions: tuple[Permission, ...],
+    request_type: AccessRequestType,
+) -> AccessGrant:
     match request_type:
         case "grant":
-            return GrantService.create_grant(
-                _grant_mutation_input(
-                    access_request,
-                    input_data,
-                    roles,
-                    permissions,
-                    _request_grant_lifecycle(access_request),
-                ),
-            )
+            return _create_request_grant(access_request, input_data, roles, permissions)
         case "change":
             _ = _active_current_grant(access_request)
-            return GrantService.change_grant(
-                _grant_mutation_input(
-                    access_request,
-                    input_data,
-                    roles,
-                    permissions,
-                    _request_grant_lifecycle(access_request),
-                ),
-            )
+            return _change_request_grant(access_request, input_data, roles, permissions)
         case "renew":
-            current = _active_current_grant(access_request)
-            _validate_renew_target(current, roles, permissions, access_request.grant_expires_at)
-            duration_error = high_risk_duration_error(roles, access_request.grant_expires_at)
-            if duration_error:
-                raise GrantApplyFailureError(duration_error)
-            return GrantService.change_grant(
-                _grant_mutation_input(
-                    access_request,
-                    input_data,
-                    roles,
-                    permissions,
-                    _request_grant_lifecycle(access_request),
-                ),
-            )
+            return _apply_renew_request(access_request, input_data, roles, permissions)
         case "revoke":
             return _apply_revoke_request(access_request, input_data, roles, permissions)
+
+
+def _create_request_grant(
+    access_request: AccessRequest,
+    input_data: _GrantApplicationInput,
+    roles: tuple[Role, ...],
+    permissions: tuple[Permission, ...],
+) -> AccessGrant:
+    return GrantService.create_grant(
+        _request_grant_mutation_input(access_request, input_data, roles, permissions),
+    )
+
+
+def _change_request_grant(
+    access_request: AccessRequest,
+    input_data: _GrantApplicationInput,
+    roles: tuple[Role, ...],
+    permissions: tuple[Permission, ...],
+) -> AccessGrant:
+    return GrantService.change_grant(
+        _request_grant_mutation_input(access_request, input_data, roles, permissions),
+    )
+
+
+def _apply_renew_request(
+    access_request: AccessRequest,
+    input_data: _GrantApplicationInput,
+    roles: tuple[Role, ...],
+    permissions: tuple[Permission, ...],
+) -> AccessGrant:
+    current = _active_current_grant(access_request)
+    _validate_renew_target(current, roles, permissions, access_request.grant_expires_at)
+    duration_error = high_risk_duration_error(roles, access_request.grant_expires_at)
+    if duration_error:
+        raise GrantApplyFailureError(duration_error)
+    return _change_request_grant(access_request, input_data, roles, permissions)
 
 
 def _validate_request_scope(access_request: AccessRequest) -> None:
@@ -145,6 +170,21 @@ def _apply_revoke_request(
     if revoked is None:
         raise GrantApplyFailureError(CURRENT_GRANT_REQUIRED_MESSAGE)
     return revoked
+
+
+def _request_grant_mutation_input(
+    access_request: AccessRequest,
+    input_data: _GrantApplicationInput,
+    roles: tuple[Role, ...],
+    permissions: tuple[Permission, ...],
+) -> GrantMutationInput:
+    return _grant_mutation_input(
+        access_request,
+        input_data,
+        roles,
+        permissions,
+        _request_grant_lifecycle(access_request),
+    )
 
 
 def _request_grant_lifecycle(access_request: AccessRequest) -> _GrantLifecycle:

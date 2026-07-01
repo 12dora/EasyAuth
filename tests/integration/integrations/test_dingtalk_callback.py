@@ -17,13 +17,16 @@ from easyauth.access_requests.models import (
     REQUEST_STATUS_APPROVED,
     REQUEST_STATUS_GRANT_APPLIED,
     REQUEST_STATUS_GRANT_FAILED,
+    REQUEST_STATUS_REJECTED,
     REQUEST_STATUS_SUBMITTED,
     REQUEST_TYPE_CHANGE,
     AccessRequest,
     AccessRequestRole,
 )
 from easyauth.accounts.models import UserMirror
+from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import App, ApprovalRule, Permission, Role, RolePermission
+from easyauth.audit.models import AuditLog
 from easyauth.grants.models import AccessGrant, AccessGrantRole
 from easyauth.grants.query import resolve_user_permissions
 
@@ -38,6 +41,8 @@ APPLIED_VERSION: Final = 2
 
 class _CallbackResponse(Protocol):
     status_code: int
+
+    def json(self) -> dict[str, JsonValue]: ...
 
 
 @override_settings(EASYAUTH_DINGTALK_CALLBACK_SECRET=CALLBACK_KEY)
@@ -95,6 +100,64 @@ def test_dingtalk_callback_returns_not_found_for_unknown_process() -> None:
     assert response.status_code == HTTPStatus.NOT_FOUND
     assert AccessRequest.objects.count() == 0
     assert AccessGrant.objects.count() == 0
+
+
+@override_settings(EASYAUTH_DINGTALK_CALLBACK_SECRET=CALLBACK_KEY)
+def test_dingtalk_callback_rejects_malformed_json_with_payload_audit_event() -> None:
+    # Given: 一条 submitted 申请存在, 但 DingTalk 回调 body 不是合法 JSON。
+    access_request = _submitted_grant_request(
+        user_key="dingtalk-malformed-json-user",
+        app_key="dingtalk-malformed-json-app",
+        role_key="reader",
+        process_instance_id="proc-malformed-json",
+    )
+    body = b'{"process_instance_id":"proc-malformed-json","status":'
+
+    # When: DingTalk 使用有效签名投递 malformed JSON。
+    response = _post_callback(body)
+
+    # Then: 接口拒绝 payload, 写入 payload_rejected 审计且不创建授权。
+    access_request.refresh_from_db()
+    audit_log = AuditLog.objects.get(event_type="dingtalk_callback_payload_rejected")
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert access_request.status == REQUEST_STATUS_SUBMITTED
+    assert audit_log.target_type == "dingtalk_callback"
+    assert AccessGrant.objects.count() == 0
+
+
+@override_settings(EASYAUTH_DINGTALK_CALLBACK_SECRET=CALLBACK_KEY)
+def test_dingtalk_callback_rejects_missing_process_instance_id_with_standard_error() -> None:
+    # Given: DingTalk 回调 body 缺少 process_instance_id。
+    body = json.dumps({"status": "approved"}, separators=(",", ":")).encode()
+
+    # When: DingTalk 使用有效签名请求接口。
+    response = _post_callback(body)
+
+    # Then: 接口返回 EasyAuth 标准错误结构。
+    payload = response.json()
+    error = payload["error"]
+    assert isinstance(error, dict)
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert set(payload) == {"error"}
+    assert set(error) == {"code", "message", "details"}
+    assert error["code"] == ErrorCode.VALIDATION_ERROR
+
+
+@override_settings(EASYAUTH_DINGTALK_CALLBACK_SECRET=CALLBACK_KEY)
+def test_dingtalk_callback_rejects_unsupported_status_with_raw_payload_summary() -> None:
+    # Given: DingTalk 回调 body 使用 EasyAuth 不支持的状态。
+    body = _callback_body("proc-unsupported-status", "cancelled")
+
+    # When: DingTalk 使用有效签名请求接口。
+    response = _post_callback(body)
+
+    # Then: 接口拒绝 payload, 审计 metadata 保留原始 payload 摘要。
+    audit_log = AuditLog.objects.get(event_type="dingtalk_callback_payload_rejected")
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert audit_log.metadata["payload_summary"] == {
+        "process_instance_id": "proc-unsupported-status",
+        "status": "cancelled",
+    }
 
 
 @override_settings(EASYAUTH_DINGTALK_CALLBACK_SECRET=CALLBACK_KEY)
@@ -234,6 +297,42 @@ def test_dingtalk_callback_rejected_request_does_not_override_failed_grant() -> 
     access_request.refresh_from_db()
     assert response.status_code == HTTPStatus.OK
     assert access_request.status == REQUEST_STATUS_GRANT_FAILED
+
+
+@pytest.mark.parametrize(
+    ("current_status", "process_instance_id"),
+    [
+        (REQUEST_STATUS_REJECTED, "proc-approved-rejected"),
+        (REQUEST_STATUS_GRANT_FAILED, "proc-approved-failed"),
+    ],
+)
+@override_settings(EASYAUTH_DINGTALK_CALLBACK_SECRET=CALLBACK_KEY)
+def test_dingtalk_callback_rejects_approved_callback_for_conflicting_terminal_status(
+    current_status: str,
+    process_instance_id: str,
+) -> None:
+    # Given: 申请已经进入与 approved 回调冲突的终态。
+    user = UserMirror.objects.create(authentik_user_id=f"dingtalk-{process_instance_id}-user")
+    app = App.objects.create(
+        app_key=f"dingtalk-{process_instance_id}-app",
+        name=process_instance_id,
+    )
+    access_request = AccessRequest.objects.create(
+        user=user,
+        app=app,
+        status=current_status,
+        dingtalk_process_instance_id=process_instance_id,
+    )
+    body = _callback_body(process_instance_id, "approved")
+
+    # When: DingTalk 延迟投递 approved 回调。
+    response = _post_callback(body)
+
+    # Then: 接口返回冲突, 不创建或修改授权。
+    access_request.refresh_from_db()
+    assert response.status_code == HTTPStatus.CONFLICT
+    assert access_request.status == current_status
+    assert AccessGrant.objects.count() == 0
 
 
 def test_dingtalk_process_instance_id_is_unique_when_present() -> None:

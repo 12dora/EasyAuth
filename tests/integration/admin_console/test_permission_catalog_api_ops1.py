@@ -3,13 +3,14 @@ from __future__ import annotations
 from http import HTTPStatus
 from json import dumps
 from re import escape, search
-from typing import Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol
 
 import pytest
-from django.contrib.auth.models import User
 from django.test import Client
 from pydantic import TypeAdapter
 
+from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
+from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import JsonValue
 from easyauth.applications.models import (
     App,
@@ -21,10 +22,18 @@ from easyauth.applications.models import (
 )
 from easyauth.audit.models import AuditLog
 
+if TYPE_CHECKING:
+    from django.conf import LazySettings
+
 pytestmark = pytest.mark.django_db
 
 LOGIN_VALUE: Final = "console-catalog"
 JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+
+
+@pytest.fixture(autouse=True)
+def _console_superuser_groups(settings: LazySettings) -> None:  # pyright: ignore[reportUnusedFunction]
+    settings.EASYAUTH_CONSOLE_SUPERUSER_GROUPS = ("easyauth-admins",)
 
 
 class HttpResponseLike(Protocol):
@@ -316,14 +325,19 @@ def _json_list(value: JsonValue) -> list[JsonValue]:
 
 
 def _logged_in_user(username: str) -> Client:
-    _ = User.objects.create_user(username=username, password=LOGIN_VALUE)
-    client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
-    return client
+    return _authentik_client(username)
 
 
 def _logged_in_superuser(username: str) -> Client:
-    _ = User.objects.create_superuser(username=username, password=LOGIN_VALUE)
+    return _authentik_client(username, groups=("easyauth-admins",))
+
+
+def _authentik_client(username: str, *, groups: tuple[str, ...] = ()) -> Client:
+    user, _created = UserMirror.objects.get_or_create(authentik_user_id=username)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    session = client.session
+    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
+    if groups:
+        session["easyauth_authentik_groups"] = list(groups)
+    session.save()
     return client

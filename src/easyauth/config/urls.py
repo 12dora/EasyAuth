@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from django.contrib import admin
-from django.http import HttpRequest, HttpResponse
+from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
 from django.urls import include, path
 from oauth2_provider.views import TokenView
 
@@ -10,7 +10,12 @@ def health(_request: HttpRequest) -> HttpResponse:
     return HttpResponse("ok", content_type="text/plain")
 
 
+def home(_request: HttpRequest) -> HttpResponseRedirect:
+    return HttpResponseRedirect("/portal/")
+
+
 urlpatterns = [
+    path("", home, name="home"),
     path("admin/", admin.site.urls),
     path("auth/", include("easyauth.accounts.urls")),
     path("api/v1/", include("easyauth.api.urls")),
@@ -20,3 +25,5 @@ urlpatterns = [
     path("portal/", include("easyauth.portal.urls")),
     path("health/", health, name="health"),
 ]
+
+handler404 = "easyauth.config.error_views.not_found"

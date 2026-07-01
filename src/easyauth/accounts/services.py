@@ -6,6 +6,7 @@ from typing import Final, final
 from django.db import transaction
 
 from easyauth.accounts.models import UserMirror
+from easyauth.accounts.status import is_non_active_status
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.grants.services import GrantService
 from easyauth.integrations.authentik.payloads import (
@@ -56,23 +57,46 @@ def _upsert_user(profile: AuthentikUserProfile) -> _UserUpsertResult:
             "email": profile.email,
             "department": profile.department,
             "status": profile.status,
+            "dingtalk_corp_id": profile.dingtalk_corp_id,
+            "dingtalk_userid": profile.dingtalk_userid,
+            "dingtalk_union_id": profile.dingtalk_union_id,
+            "employee_number": profile.employee_number,
+            "manager_userid": profile.manager_userid,
         },
     )
     if created:
         return _UserUpsertResult(user=user, created=True, was_non_active=False)
 
-    was_non_active = _is_non_active_status(user.status)
+    was_non_active = is_non_active_status(user.status)
     user.name = profile.name
     user.email = profile.email
     user.department = profile.department
     user.status = profile.status
+    user.dingtalk_corp_id = profile.dingtalk_corp_id
+    user.dingtalk_userid = profile.dingtalk_userid
+    user.dingtalk_union_id = profile.dingtalk_union_id
+    user.employee_number = profile.employee_number
+    user.manager_userid = profile.manager_userid
     user.full_clean()
-    user.save(update_fields=["name", "email", "department", "status", "updated_at"])
+    user.save(
+        update_fields=[
+            "name",
+            "email",
+            "department",
+            "status",
+            "dingtalk_corp_id",
+            "dingtalk_userid",
+            "dingtalk_union_id",
+            "employee_number",
+            "manager_userid",
+            "updated_at",
+        ],
+    )
     return _UserUpsertResult(user=user, created=False, was_non_active=was_non_active)
 
 
 def _revoke_current_grants_for_departed_user(user: UserMirror) -> int:
-    if not _is_non_active_status(user.status):
+    if not is_non_active_status(user.status):
         return 0
 
     revoked_grants = GrantService.revoke_for_user(
@@ -84,18 +108,8 @@ def _revoke_current_grants_for_departed_user(user: UserMirror) -> int:
     return len(revoked_grants)
 
 
-def _is_non_active_status(status: str) -> bool:
-    match status:
-        case "active":
-            return False
-        case "disabled" | "departed":
-            return True
-        case _:
-            return False
-
-
 def _should_record_departure_event(*, upsert: _UserUpsertResult, revoked_count: int) -> bool:
-    if not _is_non_active_status(upsert.user.status):
+    if not is_non_active_status(upsert.user.status):
         return False
     return revoked_count > 0 or not upsert.was_non_active
 

@@ -2,13 +2,15 @@ from __future__ import annotations
 
 from http import HTTPStatus
 from json import dumps
+from pathlib import Path
 from re import search
 from typing import Final, Protocol
 
 import pytest
-from django.contrib.auth.models import User
 from django.test import Client
 
+from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
+from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import (
     App,
     AppMembership,
@@ -34,6 +36,22 @@ groups:
         name: 创建流水线
         type: permission
 """
+APP_DETAIL_TEMPLATE: Final = (
+    Path(__file__).parents[3]
+    / "src/easyauth/admin_console/templates/admin_console/app_detail.html"
+)
+MIN_CSRF_TOKEN_FIELDS: Final = 8
+APP_DETAIL_PARENT_MAX_LINES: Final = 120
+APP_DETAIL_PARTIALS: Final = (
+    "admin_console/app_detail/_readiness.html",
+    "admin_console/app_detail/_permission_template.html",
+    "admin_console/app_detail/_role_permission_matrix.html",
+    "admin_console/app_detail/_query_tester.html",
+    "admin_console/app_detail/_integration_guide.html",
+    "admin_console/app_detail/_roles_permissions.html",
+    "admin_console/app_detail/_credentials.html",
+    "admin_console/app_detail/_approval_rules.html",
+)
 
 
 class HttpResponseLike(Protocol):
@@ -84,6 +102,86 @@ def test_ops1_console_owner_cannot_access_unowned_app_detail() -> None:
 
     # Then: 控制台拒绝暴露未授权 App。
     assert response.status_code == HTTPStatus.NOT_FOUND
+
+
+def test_ops1_console_entry_redirects_unauthenticated_user_to_authentik_login() -> None:
+    # Given: 未建立 Authentik 控制台会话。
+    client = Client(HTTP_HOST="localhost")
+
+    # When: 用户访问控制台入口。
+    response = client.get("/console/?tab=roles")
+
+    # Then: 控制台跳转到 OIDC 登录并携带当前本地路径。
+    assert response.status_code == HTTPStatus.FOUND
+    assert response.headers["Location"] == "/auth/login/?next=/console/%3Ftab%3Droles"
+
+
+def test_ops1_console_app_detail_template_preserves_sections_forms_and_partials() -> None:
+    # Given: owner 管理一个含角色、权限和凭据入口的 App。
+    client = _logged_in_client("owner-ops1-template-sections")
+    app = App.objects.create(app_key="ops1-console-template-sections", name="Template Sections")
+    _ = AppMembership.objects.create(app=app, user_id="owner-ops1-template-sections", role="owner")
+    group = PermissionGroup.objects.create(app=app, key="PIPELINE_GROUP", name="Pipeline")
+    role = Role.objects.create(app=app, key="operator", name="Operator", requestable=True)
+    permission = Permission.objects.create(
+        app=app,
+        group=group,
+        key="ALLOW_PIPELINE_CREATE",
+        name="Create pipeline",
+    )
+    _ = RolePermission.objects.create(role=role, permission=permission)
+
+    # When: owner 通过联调测试 POST 触发 Django app detail 模板页。
+    response = client.post(
+        f"/console/apps/{app.app_key}/",
+        data={"action": "run_permission_query_test", "test_user_id": "owner", "test_token": ""},
+    )
+
+    # Then: 拆分 partial 后仍保留每个区块关键文本、提交 action 和 csrf 字段。
+    body = response.content.decode()
+    assert response.status_code == HTTPStatus.OK
+    for expected_text in (
+        "配置完整性",
+        "权限模板",
+        "RolePermission 矩阵",
+        "联调测试台",
+        "接入说明",
+        "Role",
+        "Permission",
+        "凭据",
+        "ApprovalRule",
+    ):
+        assert expected_text in body
+    rendered_actions = (
+        "preview_permission_template",
+        "set_role_permission",
+        "run_permission_query_test",
+        "create_role",
+        "create_permission",
+        "create_static_token",
+        "create_oauth_client",
+        "create_approval_rule",
+    )
+    for expected_action in rendered_actions:
+        assert f'name="action" value="{expected_action}"' in body
+    assert body.count('name="csrfmiddlewaretoken"') >= MIN_CSRF_TOKEN_FIELDS
+
+    template_source = APP_DETAIL_TEMPLATE.read_text()
+    for partial in APP_DETAIL_PARTIALS:
+        assert f'{{% include "{partial}" %}}' in template_source
+    assert len(template_source.splitlines()) < APP_DETAIL_PARENT_MAX_LINES
+
+    partial_source = "\n".join(
+        (APP_DETAIL_TEMPLATE.parent / "app_detail" / Path(partial).name).read_text()
+        for partial in APP_DETAIL_PARTIALS
+    )
+    for expected_action in (
+        *rendered_actions,
+        "apply_permission_template",
+        "rotate_static_token",
+        "disable_static_token",
+    ):
+        assert f'name="action" value="{expected_action}"' in partial_source
 
 
 def test_ops1_console_matrix_save_writes_role_permission_and_audit_without_grants() -> None:
@@ -256,9 +354,11 @@ def _logged_in_client(username: str, *, enforce_csrf_checks: bool = False) -> Cl
 
 
 def _login_client(*, username: str, enforce_csrf_checks: bool) -> Client:
-    _ = User.objects.create_user(username=username, password=LOGIN_VALUE)
+    user, _created = UserMirror.objects.get_or_create(authentik_user_id=username)
     client = Client(HTTP_HOST="localhost", enforce_csrf_checks=enforce_csrf_checks)
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    session = client.session
+    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
+    session.save()
     return client
 
 

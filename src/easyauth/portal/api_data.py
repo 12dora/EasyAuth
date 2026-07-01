@@ -6,17 +6,21 @@ from typing import TYPE_CHECKING, Final
 from django.db.models import Q, QuerySet
 from django.utils import timezone
 
+from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import JsonValue
-from easyauth.applications.models import RolePermission
 from easyauth.grants.models import (
     GRANT_STATUS_ACTIVE,
     GRANT_TYPE_PERMANENT,
     GRANT_TYPE_TIMED,
     AccessGrant,
-    AccessGrantPermission,
     AccessGrantRole,
 )
 from easyauth.portal.access_request_data import access_request_item, access_request_items_for_user
+from easyauth.portal.permission_aggregation import (
+    direct_permission_keys_by_grant_id,
+    permission_keys,
+    role_permission_keys_by_role_id,
+)
 
 if TYPE_CHECKING:
     from easyauth.accounts.models import UserMirror
@@ -77,8 +81,8 @@ def _current_visible_grants(
 def _grant_items(grants: tuple[AccessGrant, ...]) -> tuple[PortalJsonObject, ...]:
     grant_ids = tuple(grant.id for grant in grants)
     role_keys, role_names, role_ids = _grant_roles_by_grant_id(grant_ids)
-    direct_permissions = _direct_permission_keys_by_grant_id(grant_ids)
-    role_permissions = _role_permission_keys_by_role_id(
+    direct_permissions = direct_permission_keys_by_grant_id(grant_ids)
+    role_permissions = role_permission_keys_by_role_id(
         tuple(sorted({role_id for ids in role_ids.values() for role_id in ids})),
     )
     return tuple(
@@ -86,7 +90,7 @@ def _grant_items(grants: tuple[AccessGrant, ...]) -> tuple[PortalJsonObject, ...
             grant,
             role_keys=role_keys.get(grant.id, ()),
             role_names=role_names.get(grant.id, ()),
-            permission_keys=_permission_keys(
+            permission_keys=permission_keys(
                 direct_permission_keys=direct_permissions.get(grant.id, set()),
                 role_ids=role_ids.get(grant.id, ()),
                 role_permission_keys_by_role_id=role_permissions,
@@ -111,7 +115,7 @@ def _grant_item(
         "permissions": _json_strings(permission_keys),
         "version": grant.version,
         "grant_type": grant.grant_type,
-        "grant_expires_at": _datetime_value(grant.grant_expires_at),
+        "grant_expires_at": datetime_value(grant.grant_expires_at),
     }
 
 
@@ -135,57 +139,6 @@ def _grant_roles_by_grant_id(
         {grant_id: tuple(names) for grant_id, names in role_names.items()},
         {grant_id: tuple(ids) for grant_id, ids in role_ids.items()},
     )
-
-
-def _direct_permission_keys_by_grant_id(grant_ids: tuple[int, ...]) -> dict[int, set[str]]:
-    permission_keys: dict[int, set[str]] = {grant_id: set() for grant_id in grant_ids}
-    links = (
-        AccessGrantPermission.objects.select_related("permission")
-        .filter(
-            grant_id__in=grant_ids,
-            permission__is_active=True,
-            permission__deprecated_at__isnull=True,
-        )
-        .order_by("grant_id", "permission__key")
-    )
-    for link in links:
-        permission_keys.setdefault(link.grant_id, set()).add(link.permission.key)
-    return permission_keys
-
-
-def _role_permission_keys_by_role_id(role_ids: tuple[int, ...]) -> dict[int, set[str]]:
-    permission_keys: dict[int, set[str]] = {role_id: set() for role_id in role_ids}
-    links = (
-        RolePermission.objects.select_related("permission")
-        .filter(
-            role_id__in=role_ids,
-            role__is_active=True,
-            permission__is_active=True,
-            permission__deprecated_at__isnull=True,
-        )
-        .order_by("role_id", "permission__key")
-    )
-    for link in links:
-        permission_keys.setdefault(link.role_id, set()).add(link.permission.key)
-    return permission_keys
-
-
-def _permission_keys(
-    *,
-    direct_permission_keys: set[str],
-    role_ids: tuple[int, ...],
-    role_permission_keys_by_role_id: dict[int, set[str]],
-) -> tuple[str, ...]:
-    permission_keys = set(direct_permission_keys)
-    for role_id in role_ids:
-        permission_keys.update(role_permission_keys_by_role_id.get(role_id, set()))
-    return tuple(sorted(permission_keys))
-
-
-def _datetime_value(value: datetime | None) -> str | None:
-    if value is None:
-        return None
-    return value.isoformat()
 
 
 def _json_strings(values: tuple[str, ...]) -> list[JsonValue]:

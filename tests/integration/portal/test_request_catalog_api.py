@@ -6,9 +6,8 @@ from typing import Final
 import pytest
 from django.test import Client
 
-from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
-from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.applications.models import App, ApprovalRule, Permission, PermissionGroup, Role
+from tests.integration.portal.helpers import logged_in_client
 from tests.integration.portal.json_helpers import json_object
 
 pytestmark = pytest.mark.django_db
@@ -18,7 +17,7 @@ REQUEST_CATALOG_URL: Final = "/portal/api/v1/request-catalog"
 
 def test_portal_request_catalog_lists_only_requestable_roles_with_approval_rules() -> None:
     # Given: active 员工和多种可申请/不可申请角色。
-    client, _user = _logged_in_client("portal-catalog-user")
+    client, _user = logged_in_client("portal-catalog-user")
     crm = App.objects.create(app_key="catalog-crm", name="CRM", description="客户系统")
     inactive_app = App.objects.create(app_key="catalog-inactive", name="停用系统", is_active=False)
     requestable_role = Role.objects.create(
@@ -98,7 +97,7 @@ def test_portal_request_catalog_lists_only_requestable_roles_with_approval_rules
 
 def test_portal_request_catalog_lists_requestable_permissions_as_group_tree() -> None:
     # Given: active 员工和一个包含多层权限组的可申请 App。
-    client, _user = _logged_in_client("portal-catalog-permission-user")
+    client, _user = logged_in_client("portal-catalog-permission-user")
     crm = App.objects.create(app_key="catalog-permission-crm", name="CRM")
     billing = PermissionGroup.objects.create(app=crm, key="billing", name="账务", depth=1)
     invoice = PermissionGroup.objects.create(
@@ -151,9 +150,13 @@ def test_portal_request_catalog_lists_requestable_permissions_as_group_tree() ->
     assert isinstance(groups, list)
     root = groups[0]
     assert isinstance(root, dict)
-    child = root["children"][0]
+    children = root["children"]
+    assert isinstance(children, list)
+    child = children[0]
     assert isinstance(child, dict)
-    permission = child["children"][0]
+    child_children = child["children"]
+    assert isinstance(child_children, list)
+    permission = child_children[0]
     assert isinstance(permission, dict)
     assert root["app_key"] == crm.app_key
     assert root["key"] == billing.key
@@ -174,16 +177,3 @@ def test_portal_request_catalog_rejects_missing_session() -> None:
 
     # Then: 仍使用员工门户 session 边界。
     assert response.status_code == HTTPStatus.UNAUTHORIZED
-
-
-def _logged_in_client(authentik_user_id: str) -> tuple[Client, UserMirror]:
-    client = Client()
-    user = UserMirror.objects.create(
-        authentik_user_id=authentik_user_id,
-        name="门户用户",
-        status=USER_STATUS_ACTIVE,
-    )
-    session = client.session
-    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
-    session.save()
-    return client, user

@@ -9,6 +9,7 @@ from django.db import IntegrityError
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from easyauth.admin_console.request_guards import require_console_actor
 from easyauth.api.errors import ErrorCode, ErrorResponse, JsonValue, build_error_response
 from easyauth.applications.models import App
 from easyauth.applications.ownership import ConsoleActor, can_manage_app
@@ -50,17 +51,11 @@ class ResourceIdPayload(BaseModel):
 
 
 def write_context(request: HttpRequest, app_key: str) -> WriteContextResult:
-    user = request.user
-    if not user.is_authenticated:
-        return error_response(
-            ErrorCode.AUTHENTICATION_FAILED,
-            "控制台登录已失效。",
-            status=HTTPStatus.UNAUTHORIZED,
-        )
-    actor = ConsoleActor(
-        user_id=user.get_username(),
-        is_superuser=bool(getattr(user, "is_superuser", False)),
-    )
+    match require_console_actor(request):
+        case ConsoleActor() as actor:
+            pass
+        case JsonResponse() as response:
+            return response
     app = App.objects.filter(app_key=app_key).first()
     if app is None:
         return error_response(ErrorCode.NOT_FOUND, "App 不存在。", status=HTTPStatus.NOT_FOUND)

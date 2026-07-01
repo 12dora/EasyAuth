@@ -5,10 +5,11 @@ from json import dumps
 from typing import Final, Protocol
 
 import pytest
-from django.contrib.auth.models import User
 from django.test import Client
 from pydantic import TypeAdapter
 
+from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
+from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import App, AppCredential, AppMembership
 from easyauth.applications.services import StaticTokenService
@@ -144,6 +145,21 @@ def test_ops1_credentials_api_owner_lists_without_secret_material() -> None:
     assert client_secret not in body
 
 
+def test_ops1_credentials_api_returns_401_when_listing_without_login() -> None:
+    # Given: App 已存在 active 静态 token。
+    app = _owned_app("ops1-credentials-list-unauth", "owner-ops1-list-unauth")
+    issue = StaticTokenService.create_token(app=app, name="existing token")
+
+    # When: 未登录用户查询凭据列表。
+    response = Client(HTTP_HOST="localhost").get(_credentials_api_url(app.app_key))
+
+    # Then: API 返回 401, 且不修改已有凭据。
+    credential = AppCredential.objects.get(id=issue.credential_id)
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert credential.is_active is True
+    assert AppCredential.objects.filter(app=app).count() == 1
+
+
 def test_ops1_credentials_api_creates_static_token_with_one_time_plaintext() -> None:
     # Given: owner 管理一个没有凭据的 App。
     client = _logged_in_client("owner-ops1-static-api-create")
@@ -176,6 +192,54 @@ def test_ops1_credentials_api_creates_static_token_with_one_time_plaintext() -> 
     assert credential.token_hash not in list_response.content.decode()
 
 
+def test_ops1_credentials_api_returns_401_when_creating_static_token_without_login() -> None:
+    # Given: App 已存在且没有凭据。
+    app = _owned_app("ops1-static-api-create-unauth", "owner-ops1-create-unauth")
+
+    # When: 未登录用户尝试创建静态 token。
+    response = Client(HTTP_HOST="localhost").post(
+        _credentials_api_url(app.app_key, "static-tokens"),
+        data=dumps({"name": "api token"}),
+        content_type="application/json",
+    )
+
+    # Then: API 返回 401, 且不创建凭据。
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert AppCredential.objects.filter(app=app).exists() is False
+
+
+@pytest.mark.parametrize(
+    ("payload", "case_id"),
+    [
+        ({"name": ""}, "blank-name"),
+        ({"name": "valid token", "unexpected": "field"}, "extra-field"),
+        ({"name": "x" * 129}, "overlong-name"),
+    ],
+    ids=["blank-name", "extra-field", "overlong-name"],
+)
+def test_ops1_credentials_api_rejects_invalid_static_token_create_payload(
+    payload: dict[str, str],
+    case_id: str,
+) -> None:
+    # Given: owner 管理一个没有凭据的 App。
+    client = _logged_in_client(f"owner-ops1-static-api-invalid-{case_id}")
+    app = _owned_app(
+        f"ops1-static-api-invalid-{case_id}",
+        f"owner-ops1-static-api-invalid-{case_id}",
+    )
+
+    # When: owner 使用非法 payload 创建静态 token。
+    response = client.post(
+        _credentials_api_url(app.app_key, "static-tokens"),
+        data=dumps(payload),
+        content_type="application/json",
+    )
+
+    # Then: API 返回输入错误, 且不创建凭据。
+    assert response.status_code in {HTTPStatus.BAD_REQUEST, HTTPStatus.UNPROCESSABLE_ENTITY}
+    assert AppCredential.objects.filter(app=app).exists() is False
+
+
 def test_ops1_credentials_api_rotates_static_token_with_one_time_plaintext() -> None:
     # Given: owner 管理一个已有静态 token 的 App。
     client = _logged_in_client("owner-ops1-static-api-rotate")
@@ -197,6 +261,72 @@ def test_ops1_credentials_api_rotates_static_token_with_one_time_plaintext() -> 
     assert credential["name"] == "rotated token"
     assert new_token.startswith("eat_")
     assert new_token != original.plaintext_token
+
+
+def test_ops1_credentials_api_returns_401_when_rotating_static_token_without_login() -> None:
+    # Given: App 已存在 active 静态 token。
+    app = _owned_app("ops1-static-api-rotate-unauth", "owner-ops1-rotate-unauth")
+    original = StaticTokenService.create_token(app=app, name="rotated token")
+
+    # When: 未登录用户尝试轮换静态 token。
+    response = Client(HTTP_HOST="localhost").post(
+        _credentials_api_url(app.app_key, f"static-tokens/{original.credential_id}/rotate"),
+        content_type="application/json",
+    )
+
+    # Then: API 返回 401, 且不创建新凭据、不停用原凭据。
+    credential = AppCredential.objects.get(id=original.credential_id)
+    assert response.status_code == HTTPStatus.UNAUTHORIZED
+    assert credential.is_active is True
+    assert AppCredential.objects.filter(app=app).count() == 1
+
+
+def test_ops1_credentials_api_returns_403_when_developer_rotates_static_token() -> None:
+    # Given: developer 可见 App, App 已存在 active 静态 token。
+    client = _logged_in_client("developer-ops1-credentials-rotate")
+    app = App.objects.create(app_key="ops1-credentials-dev-rotate", name="Dev Rotate")
+    _ = AppMembership.objects.create(
+        app=app,
+        user_id="developer-ops1-credentials-rotate",
+        role="developer",
+    )
+    original = StaticTokenService.create_token(app=app, name="developer rotate")
+
+    # When: developer 尝试轮换静态 token。
+    response = client.post(
+        _credentials_api_url(app.app_key, f"static-tokens/{original.credential_id}/rotate"),
+        content_type="application/json",
+    )
+
+    # Then: API 拒绝写操作且不修改凭据。
+    credential = AppCredential.objects.get(id=original.credential_id)
+    assert response.status_code == HTTPStatus.FORBIDDEN
+    assert _json_object(_json_dict(response)["error"])["code"] == ErrorCode.PERMISSION_DENIED
+    assert credential.is_active is True
+    assert AppCredential.objects.filter(app=app).count() == 1
+
+
+def test_ops1_credentials_api_returns_404_when_owner_rotates_other_app_static_token() -> None:
+    # Given: owner 管理当前 App, 另一个 App 拥有 active 静态 token。
+    client = _logged_in_client("owner-ops1-credentials-rotate-cross-app")
+    app = _owned_app("ops1-credentials-rotate-own-app", "owner-ops1-credentials-rotate-cross-app")
+    other_app = _owned_app(
+        "ops1-credentials-rotate-other-app",
+        "owner-ops1-credentials-rotate-other",
+    )
+    target = StaticTokenService.create_token(app=other_app, name="other app token")
+
+    # When: owner 在当前 App 路径下轮换其他 App 的 credential_id。
+    response = client.post(
+        _credentials_api_url(app.app_key, f"static-tokens/{target.credential_id}/rotate"),
+        content_type="application/json",
+    )
+
+    # Then: API 返回 404, 目标凭据仍为 active。
+    credential = AppCredential.objects.get(id=target.credential_id)
+    assert response.status_code == HTTPStatus.NOT_FOUND
+    assert credential.is_active is True
+    assert AppCredential.objects.filter(app=other_app).count() == 1
 
 
 def test_ops1_credentials_api_disables_static_token() -> None:
@@ -277,9 +407,11 @@ def _owned_app(app_key: str, owner_user_id: str) -> App:
 
 
 def _logged_in_client(username: str) -> Client:
-    _ = User.objects.create_user(username=username, password=LOGIN_VALUE)
+    user, _created = UserMirror.objects.get_or_create(authentik_user_id=username)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    session = client.session
+    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
+    session.save()
     return client
 
 

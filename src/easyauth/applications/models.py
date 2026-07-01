@@ -6,13 +6,29 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 
-from easyauth.applications import oauth_models, ops_models
+from .approval_rule_rules import approval_rule_clean_errors
+from .oauth_models import OAuthClientBinding
+from .ops_models import (
+    AppMembership,
+    PermissionGroup,
+    PermissionTemplateVersion,
+    RoleAccessPolicy,
+)
 
-OAuthClientBinding = oauth_models.OAuthClientBinding
-AppMembership = ops_models.AppMembership
-PermissionGroup = ops_models.PermissionGroup
-PermissionTemplateVersion = ops_models.PermissionTemplateVersion
-RoleAccessPolicy = ops_models.RoleAccessPolicy
+__all__ = (
+    "App",
+    "AppCredential",
+    "AppMembership",
+    "AppStaticToken",
+    "ApprovalRule",
+    "OAuthClientBinding",
+    "Permission",
+    "PermissionGroup",
+    "PermissionTemplateVersion",
+    "Role",
+    "RoleAccessPolicy",
+    "RolePermission",
+)
 
 if TYPE_CHECKING:
     from datetime import date, datetime
@@ -268,27 +284,6 @@ class ApprovalRule(models.Model):
     @override
     def clean(self) -> None:
         super().clean()
-        errors: dict[str, str] = {}
-        role = self.role
-        permission = self.permission
-        has_role = role is not None
-        has_permission = permission is not None
-
-        if has_role == has_permission:
-            errors["role"] = "Approval rule must target exactly one role or permission."
-            errors["permission"] = "Approval rule must target exactly one role or permission."
-        if role is not None and role.app != self.app:
-            errors["role"] = "Role must belong to the approval rule app."
-        if permission is not None and permission.app != self.app:
-            errors["permission"] = "Permission must belong to the approval rule app."
-
-        match self.approver_userids:
-            case list() as approver_userids if approver_userids and all(
-                isinstance(userid, str) and userid for userid in approver_userids
-            ):
-                pass
-            case _:
-                errors["approver_userids"] = "DingTalk approver userids must be a non-empty list."
-
+        errors = approval_rule_clean_errors(self)
         if errors:
             raise ValidationError(errors)

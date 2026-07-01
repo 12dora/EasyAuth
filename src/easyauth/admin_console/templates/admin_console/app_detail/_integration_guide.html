@@ -1,0 +1,30 @@
+<div class="console-panel">
+  <h2>接入说明</h2>
+  <table>
+    <tbody>
+      <tr><th>app_key</th><td><code>{{ app.app_key }}</code></td></tr>
+      <tr><th>API</th><td><code>/api/v1/apps/{{ app.app_key }}/users/{user_id}/permissions</code></td></tr>
+      <tr><th>字段</th><td><code>roles</code> <code>permissions</code> <code>version</code> <code>expires_at</code></td></tr>
+    </tbody>
+  </table>
+  <pre><code>curl -H "Authorization: Bearer ${APP_TOKEN}" \
+  "https://easyauth.example.com/api/v1/apps/{{ app.app_key }}/users/{user_id}/permissions"</code></pre>
+  <pre><code>python
+import urllib.request
+request = urllib.request.Request(
+    "https://easyauth.example.com/api/v1/apps/{{ app.app_key }}/users/{user_id}/permissions",
+    headers={"Authorization": "Bearer " + app_token},
+)</code></pre>
+  <pre><code>typescript
+await fetch("/api/v1/apps/{{ app.app_key }}/users/{user_id}/permissions", {
+  headers: { Authorization: `Bearer ${appToken}` },
+});</code></pre>
+  <p class="muted">
+    {% for role in roles %}
+      <code>{{ role.key }}</code>{% if not forloop.last %} / {% endif %}
+    {% endfor %}
+    {% for row in matrix_rows %}
+      <code>{{ row.permission.key }}</code>{% if not forloop.last %} / {% endif %}
+    {% endfor %}
+  </p>
+</div>

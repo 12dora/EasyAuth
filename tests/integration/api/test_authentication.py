@@ -1,14 +1,25 @@
 from __future__ import annotations
 
 import pytest
+from django.conf import settings
 from django.test import RequestFactory
+from django.test.utils import override_settings
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 
 from easyauth.api.authentication import AppBearerAuthentication, AppPrincipal
+from easyauth.api.permission_query_auth import permission_query_ttl_seconds
 from easyauth.applications.models import App, AppStaticToken
-from easyauth.applications.services import StaticTokenService
+from easyauth.applications.oauth import (
+    APP_CREDENTIAL_TYPE_OAUTH_CLIENT,
+    OAuthClientAppDisabledError,
+    OAuthClientAuthenticationError,
+    OAuthClientService,
+)
+from easyauth.applications.services import StaticTokenAuthenticationError, StaticTokenService
 
 pytestmark = pytest.mark.django_db
+
+DEFAULT_PERMISSION_QUERY_TTL_SECONDS = 300
 
 
 def test_app_bearer_authentication_returns_app_principal_for_valid_static_token() -> None:
@@ -45,6 +56,64 @@ def test_app_bearer_authentication_returns_none_when_authorization_is_missing() 
     assert result is None
 
 
+def test_app_bearer_authentication_returns_oauth_principal_when_static_token_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given
+    expected = AppPrincipal(
+        app_id=123,
+        app_key="crm-oauth",
+        credential_type=APP_CREDENTIAL_TYPE_OAUTH_CLIENT,
+        credential_id=456,
+    )
+
+    def reject_static_token(_token: str) -> AppPrincipal:
+        raise StaticTokenAuthenticationError
+
+    def accept_oauth_token(credential: str) -> AppPrincipal:
+        assert credential == "oauth-access-token"
+        return expected
+
+    monkeypatch.setattr(StaticTokenService, "authenticate_for_api", reject_static_token)
+    monkeypatch.setattr(OAuthClientService, "authenticate_access_token_for_api", accept_oauth_token)
+    request = RequestFactory().get(
+        "/api/v1/auth-probe",
+        HTTP_AUTHORIZATION="Bearer oauth-access-token",
+    )
+
+    # When
+    result = AppBearerAuthentication().authenticate(request)
+
+    # Then
+    assert result == (expected, None)
+
+
+def test_app_bearer_authentication_raises_permission_denied_when_oauth_app_is_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given
+    def reject_static_token(_token: str) -> AppPrincipal:
+        raise StaticTokenAuthenticationError
+
+    def reject_disabled_oauth_app(_token: str) -> AppPrincipal:
+        raise OAuthClientAppDisabledError(app_id=1)
+
+    monkeypatch.setattr(StaticTokenService, "authenticate_for_api", reject_static_token)
+    monkeypatch.setattr(
+        OAuthClientService,
+        "authenticate_access_token_for_api",
+        reject_disabled_oauth_app,
+    )
+    request = RequestFactory().get(
+        "/api/v1/auth-probe",
+        HTTP_AUTHORIZATION="Bearer oauth-disabled-token",
+    )
+
+    # When / Then
+    with pytest.raises(PermissionDenied):
+        _ = AppBearerAuthentication().authenticate(request)
+
+
 def test_app_bearer_authentication_rejects_malformed_or_invalid_bearer_token() -> None:
     # Given
     malformed_request = RequestFactory().get(
@@ -61,6 +130,61 @@ def test_app_bearer_authentication_rejects_malformed_or_invalid_bearer_token() -
         _ = AppBearerAuthentication().authenticate(malformed_request)
     with pytest.raises(AuthenticationFailed):
         _ = AppBearerAuthentication().authenticate(invalid_request)
+
+
+@pytest.mark.parametrize(
+    "authorization",
+    [
+        "Bearer ",
+        "Bearer",
+        "bearer token",
+    ],
+)
+def test_app_bearer_authentication_rejects_malformed_bearer_headers(
+    monkeypatch: pytest.MonkeyPatch,
+    authorization: str,
+) -> None:
+    # Given
+    def fail_if_called(_token: str) -> AppPrincipal:
+        raise AssertionError
+
+    monkeypatch.setattr(StaticTokenService, "authenticate_for_api", fail_if_called)
+    monkeypatch.setattr(OAuthClientService, "authenticate_access_token_for_api", fail_if_called)
+    request = RequestFactory().get(
+        "/api/v1/auth-probe",
+        HTTP_AUTHORIZATION=authorization,
+    )
+
+    # When / Then
+    with pytest.raises(AuthenticationFailed):
+        _ = AppBearerAuthentication().authenticate(request)
+
+
+def test_app_bearer_authentication_preserves_extra_bearer_whitespace_as_token(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given
+    observed_tokens: list[str] = []
+
+    def reject_static_token(token: str) -> AppPrincipal:
+        observed_tokens.append(token)
+        raise StaticTokenAuthenticationError
+
+    def reject_oauth_token(token: str) -> AppPrincipal:
+        observed_tokens.append(token)
+        raise OAuthClientAuthenticationError
+
+    monkeypatch.setattr(StaticTokenService, "authenticate_for_api", reject_static_token)
+    monkeypatch.setattr(OAuthClientService, "authenticate_access_token_for_api", reject_oauth_token)
+    request = RequestFactory().get(
+        "/api/v1/auth-probe",
+        HTTP_AUTHORIZATION="Bearer  token",
+    )
+
+    # When / Then
+    with pytest.raises(AuthenticationFailed):
+        _ = AppBearerAuthentication().authenticate(request)
+    assert observed_tokens == [" token", " token"]
 
 
 def test_app_bearer_authentication_rejects_disabled_token_and_disabled_app() -> None:
@@ -87,3 +211,19 @@ def test_app_bearer_authentication_rejects_disabled_token_and_disabled_app() -> 
         _ = AppBearerAuthentication().authenticate(disabled_token_request)
     with pytest.raises(PermissionDenied):
         _ = AppBearerAuthentication().authenticate(disabled_app_request)
+
+
+@pytest.mark.parametrize("invalid_ttl", [False, True, "60", None, 0, -1])
+def test_permission_query_ttl_seconds_uses_default_for_invalid_values(
+    invalid_ttl: object,
+) -> None:
+    with override_settings(EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS=invalid_ttl):
+        assert permission_query_ttl_seconds() == DEFAULT_PERMISSION_QUERY_TTL_SECONDS
+
+
+def test_permission_query_ttl_seconds_uses_default_when_setting_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delattr(settings, "EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS", raising=False)
+
+    assert permission_query_ttl_seconds() == DEFAULT_PERMISSION_QUERY_TTL_SECONDS
