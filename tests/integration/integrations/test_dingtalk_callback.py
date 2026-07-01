@@ -21,13 +21,13 @@ from easyauth.access_requests.models import (
     REQUEST_STATUS_SUBMITTED,
     REQUEST_TYPE_CHANGE,
     AccessRequest,
-    AccessRequestRole,
+    AccessRequestGroup,
 )
 from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode, JsonValue
-from easyauth.applications.models import App, ApprovalRule, Permission, Role, RolePermission
+from easyauth.applications.models import App, ApprovalRule, AuthorizationGroup
 from easyauth.audit.models import AuditLog
-from easyauth.grants.models import AccessGrant, AccessGrantRole
+from easyauth.grants.models import AccessGrant, AccessGrantGroup
 from easyauth.grants.query import resolve_user_permissions
 
 pytestmark = pytest.mark.django_db
@@ -186,23 +186,28 @@ def test_dingtalk_callback_applies_submitted_approved_request() -> None:
 
 @override_settings(EASYAUTH_DINGTALK_CALLBACK_SECRET=CALLBACK_KEY)
 def test_dingtalk_callback_repeated_approved_request_does_not_increment_version() -> None:
-    # Given: submitted change 申请将当前角色替换为新角色。
+    # Given: submitted change 申请将当前授权组替换为新授权组。
     user = UserMirror.objects.create(authentik_user_id="dingtalk-repeat-user")
     app = App.objects.create(app_key="dingtalk-repeat-app", name="DingTalk Repeat")
-    old_role = Role.objects.create(app=app, key="reader", name="Reader")
-    new_role = Role.objects.create(app=app, key="writer", name="Writer")
-    permission = Permission.objects.create(app=app, key="invoice.write", name="Invoice Write")
-    _ = RolePermission.objects.create(role=new_role, permission=permission)
-    _ = ApprovalRule.objects.create(app=app, role=new_role, approver_userids=["manager-001"])
+    old_group = _authorization_group(app, "reader")
+    new_group = _authorization_group(app, "writer")
+    _ = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=new_group,
+        approver_userids=["manager-001"],
+    )
     grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-    _ = AccessGrantRole.objects.create(grant=grant, role=old_role)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=old_group)
     access_request = AccessRequest.objects.create(
         user=user,
         app=app,
         request_type=REQUEST_TYPE_CHANGE,
         dingtalk_process_instance_id="proc-repeat",
     )
-    _ = AccessRequestRole.objects.create(access_request=access_request, role=new_role)
+    _ = AccessRequestGroup.objects.create(
+        access_request=access_request,
+        authorization_group=new_group,
+    )
     body = _callback_body("proc-repeat", "approved")
 
     # When: DingTalk 重复投递同一个批准回调。
@@ -224,9 +229,9 @@ def test_dingtalk_callback_rejected_request_does_not_override_applied_grant() ->
     # Given: 申请已经完成授权应用。
     user = UserMirror.objects.create(authentik_user_id="dingtalk-reject-applied-user")
     app = App.objects.create(app_key="dingtalk-reject-applied-app", name="DingTalk Reject Applied")
-    role = Role.objects.create(app=app, key="reader", name="Reader")
+    group = _authorization_group(app, "reader")
     grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-    _ = AccessGrantRole.objects.create(grant=grant, role=role)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
     access_request = AccessRequest.objects.create(
         user=user,
         app=app,
@@ -255,7 +260,7 @@ def test_dingtalk_callback_rejected_request_does_not_override_approved_request()
         app_key="dingtalk-reject-approved-app",
         name="DingTalk Reject Approved",
     )
-    role = Role.objects.create(app=app, key="reader", name="Reader")
+    group = _authorization_group(app, "reader")
     _ = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
     access_request = AccessRequest.objects.create(
         user=user,
@@ -264,7 +269,7 @@ def test_dingtalk_callback_rejected_request_does_not_override_approved_request()
         approved_at=timezone.now() - timedelta(minutes=1),
         dingtalk_process_instance_id="proc-rejected-approved",
     )
-    _ = AccessRequestRole.objects.create(access_request=access_request, role=role)
+    _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
     body = _callback_body("proc-rejected-approved", "rejected")
 
     # When: DingTalk 延迟投递 rejected 回调。
@@ -362,15 +367,23 @@ def _submitted_grant_request(
 ) -> AccessRequest:
     user = UserMirror.objects.create(authentik_user_id=user_key)
     app = App.objects.create(app_key=app_key, name=app_key)
-    role = Role.objects.create(app=app, key=role_key, name=role_key)
-    _ = ApprovalRule.objects.create(app=app, role=role, approver_userids=["manager-001"])
+    group = _authorization_group(app, role_key)
+    _ = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=group,
+        approver_userids=["manager-001"],
+    )
     access_request = AccessRequest.objects.create(
         user=user,
         app=app,
         dingtalk_process_instance_id=process_instance_id,
     )
-    _ = AccessRequestRole.objects.create(access_request=access_request, role=role)
+    _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
     return access_request
+
+
+def _authorization_group(app: App, key: str) -> AuthorizationGroup:
+    return AuthorizationGroup.objects.create(app=app, key=key, kind="role", name=key)
 
 
 def _callback_body(process_instance_id: str, status: str) -> bytes:

@@ -69,6 +69,7 @@ def preview_template_import(app: App, body: bytes, imported_by: str) -> dict[str
         payload = _TemplatePreviewPayload.model_validate_json(body)
         template_format = parse_template_format(payload.template_format)
         template = parse_permission_template(
+            app_key=app.app_key,
             raw_template=payload.template,
             template_format=template_format,
             imported_by=imported_by,
@@ -92,7 +93,7 @@ def preview_template_import(app: App, body: bytes, imported_by: str) -> dict[str
                 template=payload.template,
             ),
         ),
-        "summary": preview_summary(template.version, preview.actions),
+        "summary": preview_summary(template.schema_version, preview.actions),
         "changes": preview_changes(preview.actions),
     }
 
@@ -113,6 +114,7 @@ def confirm_template_import(app: App, preview_id: str, imported_by: str) -> dict
     try:
         template_format = parse_template_format(cached.template_format)
         template = parse_permission_template(
+            app_key=app.app_key,
             raw_template=cached.template,
             template_format=template_format,
             imported_by=imported_by,
@@ -123,11 +125,12 @@ def confirm_template_import(app: App, preview_id: str, imported_by: str) -> dict
     version = template_version_item(result.template_version)
     return {
         "app_key": app.app_key,
+        "catalog_version": app.catalog_version,
         "template_version": result.template_version.version,
         "status": result.template_version.status,
         "version": version,
         "template_version_detail": version,
-        "summary": preview_summary(template.version, result.actions),
+        "summary": preview_summary(template.schema_version, result.actions),
         "changes": preview_changes(result.actions),
     }
 

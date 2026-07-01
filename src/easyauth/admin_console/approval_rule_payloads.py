@@ -5,7 +5,7 @@ from typing import Annotated, ClassVar, Final, Literal, Self
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_core import PydanticCustomError
 
-type TargetType = Literal["role", "permission"]
+type TargetType = Literal["authorization_group", "permission"]
 type ApproverUserid = Annotated[str, Field(min_length=1)]
 
 APPROVERS_REQUIRED_CODE: Final = "approvers_required"
@@ -59,7 +59,7 @@ class ApprovalRulePatchPayload(BaseModel):
 def create_target_type(payload: ApprovalRuleCreatePayload) -> TargetType:
     if payload.target_type is not None:
         return payload.target_type
-    return "role"
+    return "authorization_group"
 
 
 def create_target_key(payload: ApprovalRuleCreatePayload) -> str:
@@ -82,7 +82,7 @@ def patch_has_target(payload: ApprovalRulePatchPayload) -> bool:
 def patch_target_type(payload: ApprovalRulePatchPayload) -> TargetType:
     if payload.target_type is not None:
         return payload.target_type
-    return "role"
+    return "authorization_group"
 
 
 def patch_target_key(payload: ApprovalRulePatchPayload) -> str:

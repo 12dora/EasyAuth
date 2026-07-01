@@ -45,9 +45,22 @@ def query_user_permissions(request: HttpRequest, app_key: str, user_id: str) -> 
     payload: PermissionQueryResponseInput = {
         "user_id": snapshot.user_id,
         "app_key": snapshot.app_key,
-        "roles": list(snapshot.roles),
-        "permissions": list(snapshot.permissions),
-        "version": snapshot.version,
+        "groups": [
+            {"key": group.key, "kind": group.kind, "name": group.name}
+            for group in snapshot.groups
+        ],
+        "grants": [
+            {
+                "permission": grant.permission,
+                "scope": grant.scope,
+                "source_type": grant.source_type,
+                "source_key": grant.source_key,
+            }
+            for grant in snapshot.grants
+        ],
+        "grant_version": snapshot.grant_version,
+        "catalog_version": snapshot.catalog_version,
+        "snapshot_version": snapshot.snapshot_version,
         "expires_at": expires_at.isoformat(),
     }
     serializer = PermissionQueryResponseSerializer(data=payload)
@@ -111,9 +124,11 @@ def _record_permission_query(*, principal: AppPrincipal, snapshot: PermissionSna
             metadata={
                 "app_key": snapshot.app_key,
                 "user_id": snapshot.user_id,
-                "version": snapshot.version,
-                "role_count": len(snapshot.roles),
-                "permission_count": len(snapshot.permissions),
+                "group_count": len(snapshot.groups),
+                "grant_count": len(snapshot.grants),
+                "grant_version": snapshot.grant_version,
+                "catalog_version": snapshot.catalog_version,
+                "snapshot_version": snapshot.snapshot_version,
                 "credential_type": principal.credential_type,
                 "credential_id": principal.credential_id,
             },

@@ -56,9 +56,9 @@ def test_s13_permission_query_returns_empty_after_expiration_cleanup() -> None:
     # Then: 查询结果为空权限, 但保留撤权后的版本号。
     assert result.expired_count == 1
     assert response.status_code == HTTPStatus.OK
-    assert _json_string_array(response, "roles") == []
-    assert _json_string_array(response, "permissions") == []
-    assert _json_int(response, "version") == EXPIRED_VERSION
+    assert _json_string_array(response, "groups") == []
+    assert _json_string_array(response, "grants") == []
+    assert _json_int(response, "grant_version") == EXPIRED_VERSION
 
 
 def test_s13_permission_query_returns_empty_after_emergency_revoke() -> None:
@@ -88,9 +88,9 @@ def test_s13_permission_query_returns_empty_after_emergency_revoke() -> None:
     # Then: 查询结果为空权限, 但保留撤权后的版本号。
     assert result.revoked_count == 1
     assert response.status_code == HTTPStatus.OK
-    assert _json_string_array(response, "roles") == []
-    assert _json_string_array(response, "permissions") == []
-    assert _json_int(response, "version") == EXPIRED_VERSION
+    assert _json_string_array(response, "groups") == []
+    assert _json_string_array(response, "grants") == []
+    assert _json_int(response, "grant_version") == EXPIRED_VERSION
 
 
 def _json_string_array(response: HttpResponseLike, key: str) -> list[str]:

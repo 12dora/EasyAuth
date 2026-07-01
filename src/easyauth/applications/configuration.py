@@ -6,12 +6,12 @@ from typing import Final, Literal
 from easyauth.applications.models import (
     App,
     AppCredential,
+    AppMembership,
     ApprovalRule,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
     OAuthClientBinding,
     Permission,
-    PermissionGroup,
-    Role,
-    RolePermission,
 )
 from easyauth.applications.services import APP_CREDENTIAL_STATIC_KIND
 
@@ -53,11 +53,25 @@ def _blocking_issues(app: App) -> list[ConfigurationIssue]:
                 subject=app.app_key,
             ),
         )
-    if not Role.objects.filter(app=app, is_active=True).exists():
+    if not Permission.objects.filter(app=app, is_active=True, deprecated_at__isnull=True).exists():
         issues.append(
             _blocking_issue(
-                code="active_role_missing",
-                message="active App 至少需要一个 active Role。",
+                code="active_permission_missing",
+                message="active App 至少需要一个 active Permission。",
+            ),
+        )
+    if not AuthorizationGroup.objects.filter(app=app, is_active=True).exists():
+        issues.append(
+            _blocking_issue(
+                code="active_authorization_group_missing",
+                message="active App 至少需要一个 active AuthorizationGroup。",
+            ),
+        )
+    if not AppMembership.objects.filter(app=app, role="owner", is_active=True).exists():
+        issues.append(
+            _blocking_issue(
+                code="active_owner_missing",
+                message="active App 至少需要一个 active owner。",
             ),
         )
     if not _has_active_credential(app):
@@ -67,50 +81,87 @@ def _blocking_issues(app: App) -> list[ConfigurationIssue]:
                 message="active App 至少需要一个 active 静态 token 或 OAuth2 client。",
             ),
         )
-    issues.extend(_requestable_role_issues(app))
+    issues.extend(_requestable_authorization_group_issues(app))
+    issues.extend(_authorization_group_grant_issues(app))
     return issues
 
 
-def _requestable_role_issues(app: App) -> list[ConfigurationIssue]:
+def _requestable_authorization_group_issues(app: App) -> list[ConfigurationIssue]:
     issues: list[ConfigurationIssue] = []
-    roles = Role.objects.filter(app=app, is_active=True, requestable=True).order_by("key")
-    for role in roles:
-        if not ApprovalRule.objects.filter(app=app, role=role, is_active=True).exists():
+    groups = AuthorizationGroup.objects.filter(
+        app=app,
+        is_active=True,
+        requestable=True,
+    ).order_by("key")
+    for group in groups:
+        has_active_rule = ApprovalRule.objects.filter(
+            app=app,
+            authorization_group=group,
+            is_active=True,
+        ).exists()
+        if not has_active_rule:
             issues.append(
                 _blocking_issue(
-                    code="requestable_role_approval_rule_missing",
-                    message="requestable Role 必须存在 active ApprovalRule。",
-                    subject=role.key,
-                ),
-            )
-        if not RolePermission.objects.filter(
-            role=role,
-            permission__is_active=True,
-        ).exists():
-            issues.append(
-                _blocking_issue(
-                    code="requestable_role_permission_missing",
-                    message="requestable Role 至少需要映射一个 active Permission。",
-                    subject=role.key,
+                    code="requestable_authorization_group_approval_rule_missing",
+                    message="requestable AuthorizationGroup 必须存在 active ApprovalRule。",
+                    subject=group.key,
                 ),
             )
     return issues
+
+
+def _authorization_group_grant_issues(app: App) -> list[ConfigurationIssue]:
+    grants = AuthorizationGroupGrant.objects.filter(
+        authorization_group__app=app,
+        is_active=True,
+    ).select_related("authorization_group", "permission")
+    return [
+        _blocking_issue(
+            code="authorization_group_grant_target_inactive",
+            message="AuthorizationGroupGrant 不能指向 inactive 授权组或 Permission。",
+            subject=_authorization_group_grant_subject(grant),
+        )
+        for grant in grants.order_by("authorization_group__key", "permission__key", "scope_key")
+        if not grant.authorization_group.is_active or not grant.permission.is_active
+    ]
+
+
+def _authorization_group_grant_subject(grant: AuthorizationGroupGrant) -> str:
+    return (
+        f"{grant.authorization_group.key}:"
+        f"{grant.permission.key}:"
+        f"{grant.scope_key}"
+    )
 
 
 def _warning_issues(app: App) -> list[ConfigurationIssue]:
-    if not PermissionGroup.objects.filter(app=app, is_active=True).exists():
-        return []
-
-    return [
-        ConfigurationIssue(
-            code="permission_group_missing",
-            severity=CONFIGURATION_STATUS_WARNING,
-            message="权限模板存在 group 时, active Permission 应归属到 group。",
-            subject=permission.key,
-        )
-        for permission in Permission.objects.filter(app=app, is_active=True, group__isnull=True)
-        .order_by("key")
-    ]
+    issues: list[ConfigurationIssue] = []
+    permissions = Permission.objects.filter(
+        app=app,
+        is_active=True,
+        deprecated_at__isnull=True,
+    ).select_related("group")
+    for permission in permissions.order_by("key"):
+        if not permission.supported_scopes:
+            issues.append(
+                ConfigurationIssue(
+                    code="permission_supported_scopes_missing",
+                    severity=CONFIGURATION_STATUS_WARNING,
+                    message="active Permission 必须声明 supported_scopes。",
+                    subject=permission.key,
+                ),
+            )
+        group = permission.group
+        if group is not None and not group.is_active:
+            issues.append(
+                ConfigurationIssue(
+                    code="permission_group_inactive",
+                    severity=CONFIGURATION_STATUS_WARNING,
+                    message="active Permission 不应归属 inactive PermissionGroup。",
+                    subject=permission.key,
+                ),
+            )
+    return issues
 
 
 def _has_active_credential(app: App) -> bool:

@@ -13,10 +13,17 @@ from easyauth.access_requests.models import (
     REQUEST_STATUS_SUBMITTED,
     REQUEST_TYPE_CHANGE,
     AccessRequest,
-    AccessRequestRole,
+    AccessRequestGroup,
 )
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App, ApprovalRule, Permission, Role, RolePermission
+from easyauth.applications.models import (
+    App,
+    ApprovalRule,
+    AppScope,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
+    Permission,
+)
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import AccessGrant
 from easyauth.grants.query import resolve_user_permissions
@@ -57,9 +64,9 @@ def test_apply_approval_callback_rejects_submitted_request_without_creating_gran
         "app_key": "callback-rejected-app",
     }
     assert AccessGrant.objects.count() == 0
-    assert snapshot.version == 0
-    assert snapshot.roles == ()
-    assert snapshot.permissions == ()
+    assert snapshot.grant_version == 0
+    assert snapshot.groups == ()
+    assert snapshot.grants == ()
 
 
 def test_apply_approval_callback_returns_not_found_for_unknown_process_with_audit() -> None:
@@ -85,14 +92,14 @@ def test_apply_approval_callback_returns_application_error_when_apply_fails() ->
     # Given: submitted change 申请审批通过后找不到当前授权, 应用授权会失败。
     user = UserMirror.objects.create(authentik_user_id="callback-apply-error-user")
     app = App.objects.create(app_key="callback-apply-error-app", name="Callback Apply Error")
-    role = Role.objects.create(app=app, key="writer", name="Writer")
+    group = AuthorizationGroup.objects.create(app=app, key="writer", kind="role", name="Writer")
     access_request = AccessRequest.objects.create(
         user=user,
         app=app,
         request_type=REQUEST_TYPE_CHANGE,
         dingtalk_process_instance_id="proc-apply-error",
     )
-    _ = AccessRequestRole.objects.create(access_request=access_request, role=role)
+    _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
 
     # When: 入站审批回调批准该申请。
     with pytest.raises(ApprovalCallbackError) as exc_info:
@@ -152,19 +159,29 @@ def _submitted_grant_request(
 ) -> AccessRequest:
     user = UserMirror.objects.create(authentik_user_id=user_key)
     app = App.objects.create(app_key=app_key, name=app_key)
-    role = Role.objects.create(app=app, key=role_key, name=role_key)
+    scope = AppScope.objects.create(app=app, key="GLOBAL", name="Global")
+    group = AuthorizationGroup.objects.create(app=app, key=role_key, kind="role", name=role_key)
     permission = Permission.objects.create(
         app=app,
         key=f"{role_key}.view",
         name=f"{role_key} View",
+        supported_scopes=[scope.key],
     )
-    _ = RolePermission.objects.create(role=role, permission=permission)
-    _ = ApprovalRule.objects.create(app=app, role=role, approver_userids=["manager-001"])
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key=scope.key,
+    )
+    _ = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=group,
+        approver_userids=["manager-001"],
+    )
     access_request = AccessRequest.objects.create(
         user=user,
         app=app,
         grant_type=GRANT_TYPE_PERMANENT,
         dingtalk_process_instance_id=process_instance_id,
     )
-    _ = AccessRequestRole.objects.create(access_request=access_request, role=role)
+    _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
     return access_request

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar, Final, override
 
+from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
@@ -152,6 +153,47 @@ class AccessGrantRole(models.Model):
             raise ValidationError({"role": "Role must belong to the access grant app."})
 
 
+class AccessGrantGroup(models.Model):
+    if TYPE_CHECKING:
+        grant_id: ClassVar[int]
+        authorization_group_id: ClassVar[int]
+
+    grant: models.ForeignKey[AccessGrant, AccessGrant] = models.ForeignKey(
+        AccessGrant,
+        on_delete=models.CASCADE,
+        related_name="grant_groups",
+    )
+    authorization_group: models.ForeignKey = models.ForeignKey(
+        "applications.AuthorizationGroup",
+        on_delete=models.CASCADE,
+        related_name="access_grant_groups",
+    )
+    created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["grant", "authorization_group"],
+                name="grants_access_grant_group_unique",
+            ),
+        ]
+        ordering: ClassVar[list[str]] = ["grant_id", "authorization_group__key"]
+
+    @override
+    def __str__(self) -> str:
+        return f"{self.grant} -> {self.authorization_group}"
+
+    @override
+    def clean(self) -> None:
+        super().clean()
+        if self.authorization_group.app_id != self.grant.app_id:
+            raise ValidationError(
+                {"authorization_group": "Authorization group must belong to the access grant app."},
+            )
+
+
 class AccessGrantPermission(models.Model):
     if TYPE_CHECKING:
         grant_id: ClassVar[int]
@@ -167,6 +209,8 @@ class AccessGrantPermission(models.Model):
         on_delete=models.CASCADE,
         related_name="access_grant_permissions",
     )
+    scope_key: models.CharField[str, str] = models.CharField(max_length=64, default="GLOBAL")
+    source_note: models.TextField[str, str] = models.TextField(blank=True, default="")
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
     )
@@ -174,11 +218,11 @@ class AccessGrantPermission(models.Model):
     class Meta:
         constraints: ClassVar[list[models.BaseConstraint]] = [
             models.UniqueConstraint(
-                fields=["grant", "permission"],
+                fields=["grant", "permission", "scope_key"],
                 name="grants_access_grant_permission_unique",
             ),
         ]
-        ordering: ClassVar[list[str]] = ["grant_id", "permission__key"]
+        ordering: ClassVar[list[str]] = ["grant_id", "permission__key", "scope_key"]
 
     @override
     def __str__(self) -> str:
@@ -187,7 +231,17 @@ class AccessGrantPermission(models.Model):
     @override
     def clean(self) -> None:
         super().clean()
-        if self.permission.app != self.grant.app:
-            raise ValidationError(
-                {"permission": "Permission must belong to the access grant app."},
-            )
+        errors: dict[str, str] = {}
+        if self.permission.app_id != self.grant.app_id:
+            errors["permission"] = "Permission must belong to the access grant app."
+
+        app_scope = apps.get_model("applications", "AppScope")
+        if not app_scope.objects.filter(app_id=self.grant.app_id, key=self.scope_key).exists():
+            errors["scope_key"] = "Scope must belong to the access grant app."
+
+        supported_scopes = self.permission.supported_scopes
+        if self.scope_key not in supported_scopes:
+            errors["scope_key"] = "Scope must be supported by the permission."
+
+        if errors:
+            raise ValidationError(errors)

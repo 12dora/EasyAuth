@@ -15,18 +15,20 @@ export function AccessRequestForm() {
       <div className="form-grid">
         <RequestTargetPicker
           appKey={form.appKey}
-          roleKey={form.roleKey}
+          authorizationGroupKey={form.authorizationGroupKey}
           apps={form.apps}
-          roles={form.roles}
+          authorizationGroups={form.authorizationGroups}
           permissionGroups={form.permissionGroups}
           ungroupedPermissions={form.ungroupedPermissions}
           selectedPermissionKeys={form.selectedPermissionKeys}
+          selectedPermissionScopes={form.selectedPermissionScopes}
           expandedGroupKeys={form.expandedGroupKeys}
           catalogIsLoading={form.catalogIsLoading}
           catalogErrorMessage={form.catalogErrorMessage}
           onAppKeyChange={form.changeAppKey}
-          onRoleKeyChange={form.changeRoleKey}
+          onAuthorizationGroupKeyChange={form.changeAuthorizationGroupKey}
           onTogglePermission={form.togglePermission}
+          onPermissionScopeChange={form.changePermissionScope}
           onToggleGroup={form.toggleGroup}
         />
         <AccessRequestFields
@@ -40,7 +42,7 @@ export function AccessRequestForm() {
       </div>
       {form.catalogErrorMessage ? <StatusBanner tone="danger" title="申请目录加载失败" message={form.catalogErrorMessage} /> : null}
       {!form.catalogIsLoading && form.appKey && form.visiblePermissionKeys.length === 0 ? (
-        <StatusBanner tone="warning" title="未发现可选直接权限" message="当前应用没有返回权限目录，可仅按角色发起申请。" />
+        <StatusBanner tone="warning" title="未发现可选直接权限" message="当前应用没有返回权限目录，可仅按权限组发起申请。" />
       ) : null}
       <div className="panel-toolbar">
         <Button variant="primary" icon={<Send size={16} />} disabled={!form.canSubmit} onClick={form.submit}>

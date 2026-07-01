@@ -6,33 +6,91 @@ from typing import TYPE_CHECKING, Literal, override
 if TYPE_CHECKING:
     from easyauth.applications.models import PermissionTemplateVersion
 
-type TemplateNodeType = Literal["group", "permission"]
 type TemplateSource = Literal["upload", "paste", "manual"]
-type TemplateActionType = Literal[
-    "create_group",
-    "update_group",
-    "create_permission",
-    "update_permission",
-    "move_permission",
-    "deprecate_permission",
-]
+type AuthorizationGroupKind = Literal["role", "bundle"]
+type ApprovalRuleTargetType = Literal["authorization_group", "permission"]
+type TemplateActionType = str
 
 
 @dataclass(frozen=True, slots=True)
-class TemplateNodeInput:
+class AppManifestAppInput:
+    app_key: str
+    name: str
+    description: str = ""
+    is_active: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class AppManifestScopeInput:
     key: str
     name: str
-    node_type: TemplateNodeType
-    children: tuple[TemplateNodeInput, ...] = ()
+    description: str = ""
+    is_active: bool = True
+    display_order: int = 0
 
 
 @dataclass(frozen=True, slots=True)
-class PermissionTemplateInput:
-    version: int
+class AppManifestPermissionGroupInput:
+    key: str
+    name: str
+    description: str = ""
+    parent_key: str = ""
+    display_order: int = 0
+    is_active: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class AppManifestPermissionInput:
+    key: str
+    name: str
+    description: str = ""
+    group_key: str = ""
+    supported_scopes: tuple[str, ...] = ()
+    risk_level: str = "standard"
+    is_active: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class AppManifestGrantInput:
+    permission: str
+    scope: str
+    is_active: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class AppManifestAuthorizationGroupInput:
+    key: str
+    kind: AuthorizationGroupKind
+    name: str
+    description: str = ""
+    requestable: bool = True
+    is_active: bool = True
+    grants: tuple[AppManifestGrantInput, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class AppManifestApprovalRuleInput:
+    target_type: ApprovalRuleTargetType
+    target_key: str
+    approver_userids: tuple[str, ...]
+    is_active: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class AppManifestInput:
+    schema_version: int
     source: TemplateSource
     imported_by: str
     raw_template: str
-    nodes: tuple[TemplateNodeInput, ...]
+    app: AppManifestAppInput
+    scopes: tuple[AppManifestScopeInput, ...]
+    permission_groups: tuple[AppManifestPermissionGroupInput, ...]
+    permissions: tuple[AppManifestPermissionInput, ...]
+    authorization_groups: tuple[AppManifestAuthorizationGroupInput, ...]
+    approval_rules: tuple[AppManifestApprovalRuleInput, ...]
+
+
+PermissionTemplateInput = AppManifestInput
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,22 +125,5 @@ class PermissionTemplateImportError(Exception):
 
 
 @dataclass(frozen=True, slots=True)
-class GroupSpec:
-    key: str
-    name: str
-    parent_key: str
-    depth: int
-    display_order: int
-
-
-@dataclass(frozen=True, slots=True)
-class PermissionSpec:
-    key: str
-    name: str
-    group_key: str
-
-
-@dataclass(frozen=True, slots=True)
 class FlattenedTemplate:
-    groups: tuple[GroupSpec, ...]
-    permissions: tuple[PermissionSpec, ...]
+    manifest: AppManifestInput

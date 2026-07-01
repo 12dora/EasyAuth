@@ -25,6 +25,7 @@ from easyauth.admin_console.request_guards import require_console_actor, require
 from easyauth.api.errors import ErrorCode
 from easyauth.applications.models import App, PermissionTemplateVersion
 from easyauth.applications.ownership import ConsoleActor, can_manage_app, can_view_app
+from easyauth.applications.permission_templates import export_manifest
 
 type AppActorApiResult = tuple[App, ConsoleActor] | JsonResponse
 
@@ -94,6 +95,22 @@ def permission_template_versions_api(request: HttpRequest, app_key: str) -> Json
             ),
         },
     )
+
+
+def app_manifest_api(request: HttpRequest, app_key: str) -> JsonResponse:
+    match _read_context(request, app_key):
+        case (App() as app, ConsoleActor()):
+            pass
+        case JsonResponse() as response:
+            return response
+
+    if request.method != "GET":
+        return _error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "请求方法无效。",
+            status=HTTPStatus.METHOD_NOT_ALLOWED,
+        )
+    return _json_response(export_manifest(app))
 
 
 def _read_context(request: HttpRequest, app_key: str) -> AppActorApiResult:

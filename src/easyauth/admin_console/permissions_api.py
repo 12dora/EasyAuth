@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from http import HTTPStatus
+from typing import TYPE_CHECKING
 
+from django.db import transaction
 from django.http import HttpRequest, JsonResponse
 
 from easyauth.admin_console.catalog_relationships import ResolvedGroupReference
@@ -32,7 +34,14 @@ from easyauth.admin_console.permission_write_helpers import (
     permission_update_payload,
     resolved_group_reference,
 )
-from easyauth.applications.models import Permission, PermissionGroup
+from easyauth.applications.catalog_version import bump_catalog_version
+from easyauth.applications.models import AppScope, Permission, PermissionGroup
+
+if TYPE_CHECKING:
+    from easyauth.applications.models import App
+    from easyauth.applications.ownership import ConsoleActor
+
+type PermissionUpdateInputs = tuple["App", "ConsoleActor", Permission]
 
 
 def console_permissions(request: HttpRequest, app_key: str) -> JsonResponse:
@@ -71,21 +80,34 @@ def _create_permission(request: HttpRequest, app_key: str) -> JsonResponse:
             pass
         case JsonResponse() as response:
             return response
-    match save_model(permission):
-        case None:
-            pass
-        case JsonResponse() as response:
-            return response
-    record_catalog_event(
-        CatalogEvent(
-            app=app,
-            actor=actor,
-            action="permission_created",
-            target_type="permission",
-            target_id=str(permission.id),
+    if response := _validate_permission_supported_scopes(
+        app_id=app.id,
+        supported_scopes=_supported_scope_keys(permission),
+        is_active=permission.is_active,
+    ):
+        return response
+    with transaction.atomic():
+        match save_model(permission):
+            case None:
+                pass
+            case JsonResponse() as response:
+                return response
+        record_catalog_event(
+            CatalogEvent(
+                app=app,
+                actor=actor,
+                action="permission_created",
+                target_type="permission",
+                target_id=str(permission.id),
+                metadata={"permission_key": permission.key},
+            ),
+        )
+        _ = bump_catalog_version(
+            app,
+            actor_id=actor.user_id,
+            reason="permission_created",
             metadata={"permission_key": permission.key},
-        ),
-    )
+        )
     return json_response({"item": permission_item(permission)}, status=HTTPStatus.CREATED)
 
 
@@ -110,6 +132,8 @@ def _new_permission(
                 name=payload.name,
                 description=payload.description,
                 is_active=payload.is_active,
+                supported_scopes=payload.supported_scopes,
+                risk_level=payload.risk_level,
             )
         case None:
             permission = Permission(
@@ -119,6 +143,8 @@ def _new_permission(
                 name=payload.name,
                 description=payload.description,
                 is_active=payload.is_active,
+                supported_scopes=payload.supported_scopes,
+                risk_level=payload.risk_level,
             )
         case JsonResponse() as response:
             return response
@@ -131,6 +157,19 @@ def _update_permission(
     app_key: str,
     permission_key: str | None = None,
 ) -> JsonResponse:
+    match _permission_update_inputs(request, app_key, permission_key):
+        case (app, actor, permission):
+            pass
+        case JsonResponse() as response:
+            return response
+    return _save_permission_update(app, actor, permission)
+
+
+def _permission_update_inputs(
+    request: HttpRequest,
+    app_key: str,
+    permission_key: str | None,
+) -> PermissionUpdateInputs | JsonResponse:
     match write_context(request, app_key):
         case CatalogWriteContext(app=app, actor=actor):
             pass
@@ -149,19 +188,73 @@ def _update_permission(
             pass
         case JsonResponse() as response:
             return response
-    match save_model(permission):
-        case None:
-            pass
-        case JsonResponse() as response:
-            return response
-    record_catalog_event(
-        CatalogEvent(
-            app=app,
-            actor=actor,
-            action="permission_updated",
-            target_type="permission",
-            target_id=str(permission.id),
+    if response := _validate_permission_supported_scopes(
+        app_id=app.id,
+        supported_scopes=_supported_scope_keys(permission),
+        is_active=permission.is_active,
+    ):
+        return response
+    return app, actor, permission
+
+
+def _save_permission_update(
+    app: App,
+    actor: ConsoleActor,
+    permission: Permission,
+) -> JsonResponse:
+    with transaction.atomic():
+        match save_model(permission):
+            case None:
+                pass
+            case JsonResponse() as response:
+                return response
+        record_catalog_event(
+            CatalogEvent(
+                app=app,
+                actor=actor,
+                action="permission_updated",
+                target_type="permission",
+                target_id=str(permission.id),
+                metadata={"permission_key": permission.key},
+            ),
+        )
+        _ = bump_catalog_version(
+            app,
+            actor_id=actor.user_id,
+            reason="permission_updated",
             metadata={"permission_key": permission.key},
+        )
+    return json_response({"item": permission_item(permission)})
+
+
+def _validate_permission_supported_scopes(
+    *,
+    app_id: int,
+    supported_scopes: list[str],
+    is_active: bool,
+) -> JsonResponse | None:
+    if is_active and not supported_scopes:
+        return semantic_response("启用的权限必须显式配置 supported_scopes。")
+    if len(set(supported_scopes)) != len(supported_scopes):
+        return semantic_response("supported_scopes 不能重复。")
+    if not supported_scopes:
+        return None
+    existing_scope_keys = set(
+        AppScope.objects.filter(app_id=app_id, key__in=supported_scopes).values_list(
+            "key",
+            flat=True,
         ),
     )
-    return json_response({"item": permission_item(permission)})
+    missing_scope_keys = sorted(set(supported_scopes) - existing_scope_keys)
+    if missing_scope_keys:
+        return semantic_response("supported_scopes 引用了不存在的 Scope。")
+    return None
+
+
+def _supported_scope_keys(permission: Permission) -> list[str]:
+    supported_scopes = permission.supported_scopes
+    if isinstance(supported_scopes, list) and all(
+        isinstance(scope_key, str) for scope_key in supported_scopes
+    ):
+        return [scope_key for scope_key in supported_scopes if isinstance(scope_key, str)]
+    return []

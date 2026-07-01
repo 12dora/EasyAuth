@@ -13,11 +13,11 @@ from easyauth.access_requests.models import (
     REQUEST_STATUS_GRANT_FAILED,
     REQUEST_STATUS_SUBMITTED,
     AccessRequest,
-    AccessRequestRole,
+    AccessRequestGroup,
 )
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App, ApprovalRule, Role
+from easyauth.applications.models import App, ApprovalRule, AuthorizationGroup
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import GRANT_STATUS_REVOKED, GRANT_TYPE_PERMANENT, AccessGrant
 
@@ -169,15 +169,19 @@ def test_ops3_console_retry_grant_failed_applies_once_without_reincrementing_ver
     client = _logged_in_superuser("ops3-retry-admin")
     target_user = UserMirror.objects.create(authentik_user_id="ops3-retry-target")
     app = App.objects.create(app_key="ops3-retry-app", name="Retry CRM")
-    role = Role.objects.create(app=app, key="auditor", name="审计员")
-    _ = ApprovalRule.objects.create(app=app, role=role, approver_userids=["manager-001"])
+    group = AuthorizationGroup.objects.create(app=app, key="auditor", kind="role", name="审计员")
+    _ = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=group,
+        approver_userids=["manager-001"],
+    )
     access_request = AccessRequest.objects.create(
         user=target_user,
         app=app,
         status=REQUEST_STATUS_GRANT_FAILED,
         reason="首次授权落库失败",
     )
-    _ = AccessRequestRole.objects.create(access_request=access_request, role=role)
+    _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
 
     # When: 管理员执行重试, 随后对已处理申请重复重试。
     first = client.post(

@@ -16,6 +16,7 @@ EXPECTED_ERROR_CODES: Final = {
     "INTERNAL_ERROR",
 }
 EXPECTED_VERSION: Final = 7
+EXPECTED_CATALOG_VERSION: Final = 3
 
 
 def test_error_code_contains_api_v1_contract_values() -> None:
@@ -66,60 +67,84 @@ def test_permission_query_response_serializer_accepts_contract_payload() -> None
     payload = {
         "user_id": "user-001",
         "app_key": "crm",
-        "roles": ["admin", "auditor"],
-        "permissions": ["account.read", "account.write"],
-        "version": EXPECTED_VERSION,
+        "groups": [
+            {"key": "admin", "kind": "role", "name": "管理员"},
+            {"key": "auditor", "kind": "role", "name": "审计员"},
+        ],
+        "grants": [
+            {
+                "permission": "account.read",
+                "scope": "SELF",
+                "source_type": "group",
+                "source_key": "admin",
+            },
+            {
+                "permission": "account.write",
+                "scope": "ALL",
+                "source_type": "direct",
+                "source_key": "",
+            },
+        ],
+        "grant_version": EXPECTED_VERSION,
+        "catalog_version": EXPECTED_CATALOG_VERSION,
+        "snapshot_version": "7.3",
         "expires_at": "2026-06-05T10:20:30Z",
     }
 
     # When: serializer 校验并序列化响应。
     serializer = PermissionQueryResponseSerializer(data=payload)
 
-    # Then: 字符串列表、整数版本和 ISO datetime 字符串都保留在契约输出中。
+    # Then: 授权组、展开 grants、版本和 ISO datetime 字符串都保留在契约输出中。
     assert serializer.is_valid(), serializer.errors
     assert serializer.data["user_id"] == "user-001"
     assert serializer.data["app_key"] == "crm"
-    assert serializer.data["roles"] == ["admin", "auditor"]
-    assert serializer.data["permissions"] == ["account.read", "account.write"]
-    assert serializer.data["version"] == EXPECTED_VERSION
+    assert serializer.data["groups"][0]["key"] == "admin"
+    assert serializer.data["grants"][1]["permission"] == "account.write"
+    assert serializer.data["grant_version"] == EXPECTED_VERSION
+    assert serializer.data["catalog_version"] == EXPECTED_CATALOG_VERSION
+    assert serializer.data["snapshot_version"] == "7.3"
     expires_at = serializer.data["expires_at"]
     assert isinstance(expires_at, str)
     parsed_expires_at = datetime.fromisoformat(expires_at)
     assert parsed_expires_at.tzinfo is not None
 
 
-def test_permission_query_response_serializer_rejects_missing_version() -> None:
-    # Given: 权限查询响应缺少必填 version。
+def test_permission_query_response_serializer_rejects_missing_grant_version() -> None:
+    # Given: 权限查询响应缺少必填 grant_version。
     payload = {
         "user_id": "user-001",
         "app_key": "crm",
-        "roles": ["admin"],
-        "permissions": ["account.read"],
+        "groups": [{"key": "admin", "kind": "role", "name": "管理员"}],
+        "grants": [],
+        "catalog_version": EXPECTED_CATALOG_VERSION,
+        "snapshot_version": "7.3",
         "expires_at": "2026-06-05T10:20:30Z",
     }
 
     # When: serializer 校验输入。
     serializer = PermissionQueryResponseSerializer(data=payload)
 
-    # Then: 契约校验失败并指出 version 问题。
+    # Then: 契约校验失败并指出 grant_version 问题。
     assert serializer.is_valid() is False
-    assert "version" in serializer.errors
+    assert "grant_version" in serializer.errors
 
 
-def test_permission_query_response_serializer_rejects_non_list_roles() -> None:
-    # Given: roles 使用字符串而不是字符串列表。
+def test_permission_query_response_serializer_rejects_non_list_groups() -> None:
+    # Given: groups 使用字符串而不是对象列表。
     payload = {
         "user_id": "user-001",
         "app_key": "crm",
-        "roles": "admin",
-        "permissions": ["account.read"],
-        "version": EXPECTED_VERSION,
+        "groups": "admin",
+        "grants": [],
+        "grant_version": EXPECTED_VERSION,
+        "catalog_version": EXPECTED_CATALOG_VERSION,
+        "snapshot_version": "7.3",
         "expires_at": "2026-06-05T10:20:30Z",
     }
 
     # When: serializer 校验输入。
     serializer = PermissionQueryResponseSerializer(data=payload)
 
-    # Then: 契约校验失败并指出 roles 问题。
+    # Then: 契约校验失败并指出 groups 问题。
     assert serializer.is_valid() is False
-    assert "roles" in serializer.errors
+    assert "groups" in serializer.errors

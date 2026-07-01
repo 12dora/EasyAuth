@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from easyauth.applications.models import App, ApprovalRule, Permission, Role
+from easyauth.applications.models import App, ApprovalRule, AuthorizationGroup, Permission
 
 if TYPE_CHECKING:
     from easyauth.admin_console.approval_rule_payloads import TargetType
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 class ApprovalRuleTarget:
     target_type: TargetType
     target_key: str
-    role: Role | None
+    authorization_group: AuthorizationGroup | None
     permission: Permission | None
 
 
@@ -25,14 +25,14 @@ def approval_rule_target_for_key(
     target_key: str,
 ) -> ApprovalRuleTarget | None:
     match target_type:
-        case "role":
-            role = Role.objects.filter(app=app, key=target_key).first()
-            if role is None:
+        case "authorization_group":
+            authorization_group = AuthorizationGroup.objects.filter(app=app, key=target_key).first()
+            if authorization_group is None:
                 return None
             return ApprovalRuleTarget(
-                target_type="role",
-                target_key=role.key,
-                role=role,
+                target_type="authorization_group",
+                target_key=authorization_group.key,
+                authorization_group=authorization_group,
                 permission=None,
             )
         case "permission":
@@ -42,35 +42,40 @@ def approval_rule_target_for_key(
             return ApprovalRuleTarget(
                 target_type="permission",
                 target_key=permission.key,
-                role=None,
+                authorization_group=None,
                 permission=permission,
             )
 
 
 def approval_rule_target(rule: ApprovalRule) -> ApprovalRuleTarget:
-    role = rule.role
+    authorization_group = rule.authorization_group
     permission = rule.permission
-    if role is not None:
+    if authorization_group is not None:
         return ApprovalRuleTarget(
-            target_type="role",
-            target_key=role.key,
-            role=role,
+            target_type="authorization_group",
+            target_key=authorization_group.key,
+            authorization_group=authorization_group,
             permission=None,
         )
     if permission is not None:
         return ApprovalRuleTarget(
             target_type="permission",
             target_key=permission.key,
-            role=None,
+            authorization_group=None,
             permission=permission,
         )
-    return ApprovalRuleTarget(target_type="role", target_key="", role=None, permission=None)
+    return ApprovalRuleTarget(
+        target_type="authorization_group",
+        target_key="",
+        authorization_group=None,
+        permission=None,
+    )
 
 
 def approval_rule_items(app: App) -> list[JsonValue]:
     return [
         approval_rule_item(rule)
-        for rule in ApprovalRule.objects.select_related("role", "permission")
+        for rule in ApprovalRule.objects.select_related("authorization_group", "permission")
         .filter(app=app)
         .order_by("id")
     ]
@@ -105,10 +110,10 @@ def _approval_rule_id(rule: ApprovalRule) -> int:
 
 
 def _role_key(rule: ApprovalRule) -> str:
-    role = rule.role
-    if role is None:
+    authorization_group = rule.authorization_group
+    if authorization_group is None:
         return ""
-    return role.key
+    return authorization_group.key
 
 
 def _approver_value(rule: ApprovalRule) -> list[JsonValue]:

@@ -1,38 +1,43 @@
 import { Field, SelectInput } from "../../../components/Field";
-import type { PermissionGroupItem, PermissionItem, PortalCatalogApp, PortalCatalogRole } from "../../../lib/domain";
+import type { PortalCatalogApp } from "../../../lib/domain";
+import type { AuthorizationGroupItem, ScopedPermissionGroupItem, ScopedPermissionItem } from "../hooks/useAccessRequestForm";
 import { PermissionSelector } from "./PermissionSelector";
 
 interface RequestTargetPickerProps {
   appKey: string;
-  roleKey: string;
+  authorizationGroupKey: string;
   apps: PortalCatalogApp[];
-  roles: PortalCatalogRole[];
-  permissionGroups: PermissionGroupItem[];
-  ungroupedPermissions: PermissionItem[];
+  authorizationGroups: AuthorizationGroupItem[];
+  permissionGroups: ScopedPermissionGroupItem[];
+  ungroupedPermissions: ScopedPermissionItem[];
   selectedPermissionKeys: string[];
+  selectedPermissionScopes: Record<string, string>;
   expandedGroupKeys: string[];
   catalogIsLoading: boolean;
   catalogErrorMessage: string;
   onAppKeyChange: (appKey: string) => void;
-  onRoleKeyChange: (roleKey: string) => void;
+  onAuthorizationGroupKeyChange: (groupKey: string) => void;
   onTogglePermission: (key: string) => void;
+  onPermissionScopeChange: (permissionKey: string, scopeKey: string) => void;
   onToggleGroup: (key: string) => void;
 }
 
 export function RequestTargetPicker({
   appKey,
-  roleKey,
+  authorizationGroupKey,
   apps,
-  roles,
+  authorizationGroups,
   permissionGroups,
   ungroupedPermissions,
   selectedPermissionKeys,
+  selectedPermissionScopes,
   expandedGroupKeys,
   catalogIsLoading,
   catalogErrorMessage,
   onAppKeyChange,
-  onRoleKeyChange,
+  onAuthorizationGroupKeyChange,
   onTogglePermission,
+  onPermissionScopeChange,
   onToggleGroup,
 }: RequestTargetPickerProps) {
   return (
@@ -47,12 +52,16 @@ export function RequestTargetPicker({
           ))}
         </SelectInput>
       </Field>
-      <Field label="角色" hint="仅展示 active、requestable 且有审批规则的角色。">
-        <SelectInput value={roleKey} onChange={(event) => onRoleKeyChange(event.currentTarget.value)} disabled={!appKey}>
-          <option value="">不选择角色</option>
-          {roles.map((role) => (
-            <option key={`${role.app_key}:${role.key}`} value={role.key}>
-              {role.name} ({role.key})
+      <Field label="可申请权限组" hint="展示 active、requestable 且有审批规则的 role 或 bundle。">
+        <SelectInput
+          value={authorizationGroupKey}
+          onChange={(event) => onAuthorizationGroupKeyChange(event.currentTarget.value)}
+          disabled={!appKey}
+        >
+          <option value="">不选择权限组</option>
+          {authorizationGroups.map((group) => (
+            <option key={`${group.app_key}:${group.key}`} value={group.key}>
+              {group.name} [{group.kind}] ({group.key})
             </option>
           ))}
         </SelectInput>
@@ -64,10 +73,12 @@ export function RequestTargetPicker({
           groups={permissionGroups}
           ungroupedPermissions={ungroupedPermissions}
           selectedKeys={selectedPermissionKeys}
+          selectedScopes={selectedPermissionScopes}
           expandedGroupKeys={expandedGroupKeys}
           loading={catalogIsLoading}
           errorMessage={catalogErrorMessage}
           onTogglePermission={onTogglePermission}
+          onPermissionScopeChange={onPermissionScopeChange}
           onToggleGroup={onToggleGroup}
         />
         <span className="field-hint">

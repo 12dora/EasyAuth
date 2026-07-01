@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar, Final, override
 
+from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
@@ -188,6 +189,51 @@ class AccessRequestRole(models.Model):
             raise ValidationError({"role": "Role must belong to the access request app."})
 
 
+class AccessRequestGroup(models.Model):
+    if TYPE_CHECKING:
+        access_request_id: ClassVar[int]
+        authorization_group_id: ClassVar[int]
+
+    access_request: models.ForeignKey[AccessRequest, AccessRequest] = models.ForeignKey(
+        AccessRequest,
+        on_delete=models.CASCADE,
+        related_name="target_groups",
+    )
+    authorization_group = models.ForeignKey(
+        "applications.AuthorizationGroup",
+        on_delete=models.CASCADE,
+        related_name="access_request_groups",
+    )
+    created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["access_request", "authorization_group"],
+                name="access_requests_request_group_unique",
+            ),
+        ]
+        ordering: ClassVar[list[str]] = ["access_request_id", "authorization_group__key"]
+
+    @override
+    def __str__(self) -> str:
+        return f"{self.access_request} -> {self.authorization_group}"
+
+    @override
+    def clean(self) -> None:
+        super().clean()
+        if self.authorization_group.app_id != self.access_request.app_id:
+            raise ValidationError(
+                {
+                    "authorization_group": (
+                        "Authorization group must belong to the access request app."
+                    ),
+                },
+            )
+
+
 class AccessRequestPermission(models.Model):
     access_request: models.ForeignKey[AccessRequest, AccessRequest] = models.ForeignKey(
         AccessRequest,
@@ -199,6 +245,7 @@ class AccessRequestPermission(models.Model):
         on_delete=models.CASCADE,
         related_name="access_request_permissions",
     )
+    scope_key: models.CharField[str, str] = models.CharField(max_length=128, default="GLOBAL")
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
     )
@@ -206,20 +253,34 @@ class AccessRequestPermission(models.Model):
     class Meta:
         constraints: ClassVar[list[models.BaseConstraint]] = [
             models.UniqueConstraint(
-                fields=["access_request", "permission"],
+                fields=["access_request", "permission", "scope_key"],
                 name="access_requests_request_permission_unique",
             ),
         ]
-        ordering: ClassVar[list[str]] = ["access_request_id", "permission__key"]
+        ordering: ClassVar[list[str]] = ["access_request_id", "permission__key", "scope_key"]
 
     @override
     def __str__(self) -> str:
-        return f"{self.access_request} -> {self.permission}"
+        return f"{self.access_request} -> {self.permission}:{self.scope_key}"
 
     @override
     def clean(self) -> None:
         super().clean()
-        if self.permission.app != self.access_request.app:
-            raise ValidationError(
-                {"permission": "Permission must belong to the access request app."},
-            )
+        errors: dict[str, str] = {}
+        if self.permission.app_id != self.access_request.app_id:
+            errors["permission"] = "Permission must belong to the access request app."
+
+        supported_scopes = self.permission.supported_scopes
+        if self.scope_key not in supported_scopes:
+            errors["scope_key"] = "Scope key must be supported by the permission."
+
+        AppScope = apps.get_model("applications", "AppScope")
+        scope_exists = AppScope.objects.filter(
+            app_id=self.access_request.app_id,
+            key=self.scope_key,
+        ).exists()
+        if not scope_exists:
+            errors["scope_key"] = "Scope key must reference an app scope."
+
+        if errors:
+            raise ValidationError(errors)

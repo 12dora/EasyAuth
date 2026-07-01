@@ -14,8 +14,8 @@ from easyauth.access_requests.models import (
     REQUEST_TYPE_RENEW,
     REQUEST_TYPE_REVOKE,
     AccessRequest,
+    AccessRequestGroup,
     AccessRequestPermission,
-    AccessRequestRole,
 )
 from easyauth.access_requests.services import (
     AccessRequestApplication,
@@ -23,9 +23,9 @@ from easyauth.access_requests.services import (
     AccessRequestService,
 )
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App, ApprovalRule, Permission, Role
+from easyauth.applications.models import App, ApprovalRule, AppScope, AuthorizationGroup, Permission
 from easyauth.audit.models import AuditLog
-from easyauth.grants.models import AccessGrant, AccessGrantPermission, AccessGrantRole
+from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
 
 pytestmark = pytest.mark.django_db
 
@@ -38,20 +38,24 @@ LIFECYCLE_REQUEST_TYPES: Final[tuple[LifecycleRequestType, ...]] = (
 
 
 @pytest.mark.parametrize("request_type", LIFECYCLE_REQUEST_TYPES)
-def test_ops4_apply_approved_lifecycle_request_rejects_deleted_role_approval_rule(
+def test_ops4_apply_approved_lifecycle_request_rejects_deleted_group_approval_rule(
     request_type: LifecycleRequestType,
 ) -> None:
-    # Given: lifecycle 申请审批通过后, 目标 Role 的 ApprovalRule 被删除。
+    # Given: lifecycle 申请审批通过后, 目标 AuthorizationGroup 的 ApprovalRule 被删除。
     user = UserMirror.objects.create(
-        authentik_user_id=f"ops4-lifecycle-deleted-role-rule-{request_type}",
+        authentik_user_id=f"ops4-lifecycle-deleted-group-rule-{request_type}",
     )
     app = App.objects.create(
-        app_key=f"ops4-lifecycle-deleted-role-rule-{request_type}",
-        name="OPS4 Lifecycle Role Rule",
+        app_key=f"ops4-lifecycle-deleted-group-rule-{request_type}",
+        name="OPS4 Lifecycle Group Rule",
     )
-    keep_role = Role.objects.create(app=app, key="viewer", name="Viewer")
-    remove_role = Role.objects.create(app=app, key="operator", name="Operator")
-    rule = ApprovalRule.objects.create(app=app, role=keep_role, approver_userids=["manager-001"])
+    keep_group = _authorization_group(app, key="viewer", name="Viewer")
+    remove_group = _authorization_group(app, key="operator", name="Operator")
+    rule = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=keep_group,
+        approver_userids=["manager-001"],
+    )
     current_expires_at = timezone.now() + timedelta(days=3)
     grant = AccessGrant.objects.create(
         user=user,
@@ -59,8 +63,8 @@ def test_ops4_apply_approved_lifecycle_request_rejects_deleted_role_approval_rul
         grant_type=_grant_type(request_type),
         grant_expires_at=_grant_expires_at(request_type, current_expires_at),
     )
-    _ = AccessGrantRole.objects.create(grant=grant, role=keep_role)
-    _add_revoke_role_target(request_type, grant=grant, role=remove_role)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=keep_group)
+    _add_revoke_group_target(request_type, grant=grant, authorization_group=remove_group)
     access_request = _approved_request(
         user=user,
         app=app,
@@ -68,7 +72,10 @@ def test_ops4_apply_approved_lifecycle_request_rejects_deleted_role_approval_rul
         grant_type=_grant_type(request_type),
         grant_expires_at=_requested_expires_at(request_type),
     )
-    _ = AccessRequestRole.objects.create(access_request=access_request, role=keep_role)
+    _ = AccessRequestGroup.objects.create(
+        access_request=access_request,
+        authorization_group=keep_group,
+    )
     _ = rule.delete()
 
     # When: 审批回调尝试应用失去审批规则的 lifecycle 目标。
@@ -78,12 +85,12 @@ def test_ops4_apply_approved_lifecycle_request_rejects_deleted_role_approval_rul
     # Then: 当前授权事实不变, 申请进入 grant_failed。
     grant.refresh_from_db()
     access_request.refresh_from_db()
-    role_keys = tuple(
-        AccessGrantRole.objects.filter(grant=grant)
-        .order_by("role__key")
-        .values_list("role__key", flat=True),
+    group_keys = tuple(
+        AccessGrantGroup.objects.filter(grant=grant)
+        .order_by("authorization_group__key")
+        .values_list("authorization_group__key", flat=True),
     )
-    assert role_keys == _expected_role_keys(request_type)
+    assert group_keys == _expected_group_keys(request_type)
     assert grant.grant_expires_at == _grant_expires_at(request_type, current_expires_at)
     assert grant.version == 1
     assert access_request.status == REQUEST_STATUS_GRANT_FAILED
@@ -103,8 +110,8 @@ def test_ops4_apply_approved_lifecycle_request_rejects_inactive_direct_permissio
         app_key=f"ops4-lifecycle-inactive-permission-{request_type}",
         name="OPS4 Lifecycle Permission",
     )
-    keep_permission = Permission.objects.create(app=app, key="invoice.read", name="Read")
-    remove_permission = Permission.objects.create(app=app, key="invoice.write", name="Write")
+    keep_permission = _scoped_permission(app, key="invoice.read", name="Read")
+    remove_permission = _scoped_permission(app, key="invoice.write", name="Write")
     _ = ApprovalRule.objects.create(
         app=app,
         permission=keep_permission,
@@ -117,7 +124,11 @@ def test_ops4_apply_approved_lifecycle_request_rejects_inactive_direct_permissio
         grant_type=_grant_type(request_type),
         grant_expires_at=_grant_expires_at(request_type, current_expires_at),
     )
-    _ = AccessGrantPermission.objects.create(grant=grant, permission=keep_permission)
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=keep_permission,
+        scope_key="GLOBAL",
+    )
     _add_revoke_permission_target(request_type, grant=grant, permission=remove_permission)
     access_request = _approved_request(
         user=user,
@@ -129,6 +140,7 @@ def test_ops4_apply_approved_lifecycle_request_rejects_inactive_direct_permissio
     _ = AccessRequestPermission.objects.create(
         access_request=access_request,
         permission=keep_permission,
+        scope_key="GLOBAL",
     )
     keep_permission.is_active = False
     keep_permission.save(update_fields=["is_active"])
@@ -140,12 +152,12 @@ def test_ops4_apply_approved_lifecycle_request_rejects_inactive_direct_permissio
     # Then: 当前授权事实不变, 申请进入 grant_failed。
     grant.refresh_from_db()
     access_request.refresh_from_db()
-    permission_keys = tuple(
+    permission_targets = tuple(
         AccessGrantPermission.objects.filter(grant=grant)
-        .order_by("permission__key")
-        .values_list("permission__key", flat=True),
+        .order_by("permission__key", "scope_key")
+        .values_list("permission__key", "scope_key"),
     )
-    assert permission_keys == _expected_permission_keys(request_type)
+    assert permission_targets == _expected_permission_targets(request_type)
     assert grant.grant_expires_at == _grant_expires_at(request_type, current_expires_at)
     assert grant.version == 1
     assert access_request.status == REQUEST_STATUS_GRANT_FAILED
@@ -181,17 +193,34 @@ def _application(access_request: AccessRequest) -> AccessRequestApplication:
     )
 
 
-def _add_revoke_role_target(
+def _authorization_group(app: App, *, key: str, name: str) -> AuthorizationGroup:
+    return AuthorizationGroup.objects.create(app=app, key=key, kind="role", name=name)
+
+
+def _scoped_permission(app: App, *, key: str, name: str) -> Permission:
+    _ = AppScope.objects.get_or_create(app=app, key="GLOBAL", defaults={"name": "Global"})
+    return Permission.objects.create(
+        app=app,
+        key=key,
+        name=name,
+        supported_scopes=["GLOBAL"],
+    )
+
+
+def _add_revoke_group_target(
     request_type: LifecycleRequestType,
     *,
     grant: AccessGrant,
-    role: Role,
+    authorization_group: AuthorizationGroup,
 ) -> None:
     match request_type:
         case "renew":
             return
         case "revoke":
-            _ = AccessGrantRole.objects.create(grant=grant, role=role)
+            _ = AccessGrantGroup.objects.create(
+                grant=grant,
+                authorization_group=authorization_group,
+            )
 
 
 def _add_revoke_permission_target(
@@ -204,7 +233,11 @@ def _add_revoke_permission_target(
         case "renew":
             return
         case "revoke":
-            _ = AccessGrantPermission.objects.create(grant=grant, permission=permission)
+            _ = AccessGrantPermission.objects.create(
+                grant=grant,
+                permission=permission,
+                scope_key="GLOBAL",
+            )
 
 
 def _grant_type(request_type: LifecycleRequestType) -> str:
@@ -234,7 +267,7 @@ def _requested_expires_at(request_type: LifecycleRequestType) -> datetime | None
             return None
 
 
-def _expected_role_keys(request_type: LifecycleRequestType) -> tuple[str, ...]:
+def _expected_group_keys(request_type: LifecycleRequestType) -> tuple[str, ...]:
     match request_type:
         case "renew":
             return ("viewer",)
@@ -242,9 +275,9 @@ def _expected_role_keys(request_type: LifecycleRequestType) -> tuple[str, ...]:
             return ("operator", "viewer")
 
 
-def _expected_permission_keys(request_type: LifecycleRequestType) -> tuple[str, ...]:
+def _expected_permission_targets(request_type: LifecycleRequestType) -> tuple[tuple[str, str], ...]:
     match request_type:
         case "renew":
-            return ("invoice.read",)
+            return (("invoice.read", "GLOBAL"),)
         case "revoke":
-            return ("invoice.read", "invoice.write")
+            return (("invoice.read", "GLOBAL"), ("invoice.write", "GLOBAL"))

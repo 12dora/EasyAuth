@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from http import HTTPStatus
+from typing import TYPE_CHECKING
 
 from django.http import HttpRequest, JsonResponse
 from pydantic import ValidationError
@@ -27,9 +28,12 @@ from easyauth.admin_console.permission_catalog_handlers import (
 )
 from easyauth.admin_console.permission_matrix_payloads import MatrixSavePayload
 from easyauth.admin_console.request_guards import require_console_actor
-from easyauth.api.errors import ErrorCode
+from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import App
 from easyauth.applications.ownership import ConsoleActor, can_manage_app, can_view_app
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 type AppApiResult = App | JsonResponse
 type MatrixWriteContextResult = MatrixWriteContext | JsonResponse
@@ -45,6 +49,18 @@ def console_permission_tree(request: HttpRequest, app_key: str) -> JsonResponse:
     match _read_context(request, app_key):
         case App() as app:
             return _json_response(permission_tree_payload(app))
+        case JsonResponse() as response:
+            return response
+
+
+def read_context_response(
+    request: HttpRequest,
+    app_key: str,
+    payload_func: Callable[[App], dict[str, JsonValue]],
+) -> JsonResponse:
+    match _read_context(request, app_key):
+        case App() as app:
+            return _json_response(payload_func(app))
         case JsonResponse() as response:
             return response
 

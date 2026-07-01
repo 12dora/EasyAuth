@@ -16,18 +16,18 @@ from easyauth.access_requests.models import (
     REQUEST_TYPE_RENEW,
     REQUEST_TYPE_REVOKE,
     AccessRequest,
-    AccessRequestRole,
+    AccessRequestGroup,
 )
 from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode, JsonValue
-from easyauth.applications.models import App, ApprovalRule, Role
+from easyauth.applications.models import App, ApprovalRule, AuthorizationGroup
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import (
     GRANT_STATUS_ACTIVE,
     GRANT_TYPE_PERMANENT,
     GRANT_TYPE_TIMED,
     AccessGrant,
-    AccessGrantRole,
+    AccessGrantGroup,
 )
 
 pytestmark = pytest.mark.django_db
@@ -52,13 +52,17 @@ class ErrorEnvelope(BaseModel):
     error: ErrorItem
 
 
-def test_retry_failed_renew_rejects_inactive_role_target_without_mutating_grant() -> None:
-    # Given: grant_failed renew 申请重试前, 当前 Role 已被停用。
+def test_retry_failed_renew_rejects_inactive_group_target_without_mutating_grant() -> None:
+    # Given: grant_failed renew 申请重试前, 当前授权组已被停用。
     client = _logged_in_superuser("ops4-retry-renew-inactive-role-admin")
     target_user = UserMirror.objects.create(authentik_user_id="ops4-retry-renew-inactive-target")
     app = App.objects.create(app_key="ops4-retry-renew-inactive-app", name="Retry Renew Stale")
-    role = Role.objects.create(app=app, key="reader", name="Reader")
-    _ = ApprovalRule.objects.create(app=app, role=role, approver_userids=["manager-001"])
+    group = AuthorizationGroup.objects.create(app=app, key="reader", kind="role", name="Reader")
+    _ = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=group,
+        approver_userids=["manager-001"],
+    )
     current_expires_at = timezone.now() + timedelta(days=3)
     grant = AccessGrant.objects.create(
         user=target_user,
@@ -67,7 +71,7 @@ def test_retry_failed_renew_rejects_inactive_role_target_without_mutating_grant(
         grant_expires_at=current_expires_at,
         version=EXISTING_GRANT_VERSION,
     )
-    _ = AccessGrantRole.objects.create(grant=grant, role=role)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
     access_request = AccessRequest.objects.create(
         user=target_user,
         app=app,
@@ -77,9 +81,9 @@ def test_retry_failed_renew_rejects_inactive_role_target_without_mutating_grant(
         grant_expires_at=timezone.now() + timedelta(days=10),
         reason="续期授权写入失败",
     )
-    _ = AccessRequestRole.objects.create(access_request=access_request, role=role)
-    role.is_active = False
-    role.save(update_fields=["is_active"])
+    _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
+    group.is_active = False
+    group.save(update_fields=["is_active"])
 
     # When: 管理员通过 retry API 重试该过期 renew 申请。
     response = client.post(
@@ -104,22 +108,36 @@ def test_retry_failed_renew_rejects_inactive_role_target_without_mutating_grant(
     assert AuditLog.objects.count() == 0
 
 
-def test_retry_failed_revoke_rejects_inactive_retained_role_without_mutating_grant() -> None:
-    # Given: grant_failed partial revoke 申请重试前, 保留目标 Role 已被停用。
+def test_retry_failed_revoke_rejects_inactive_retained_group_without_mutating_grant() -> None:
+    # Given: grant_failed partial revoke 申请重试前, 保留目标授权组已被停用。
     client = _logged_in_superuser("ops4-retry-revoke-inactive-role-admin")
     target_user = UserMirror.objects.create(authentik_user_id="ops4-retry-revoke-inactive-target")
     app = App.objects.create(app_key="ops4-retry-revoke-inactive-app", name="Retry Revoke Stale")
-    keep_role = Role.objects.create(app=app, key="viewer", name="Viewer")
-    remove_role = Role.objects.create(app=app, key="operator", name="Operator")
-    _ = ApprovalRule.objects.create(app=app, role=keep_role, approver_userids=["manager-001"])
+    keep_group = AuthorizationGroup.objects.create(
+        app=app,
+        key="viewer",
+        kind="role",
+        name="Viewer",
+    )
+    remove_group = AuthorizationGroup.objects.create(
+        app=app,
+        key="operator",
+        kind="role",
+        name="Operator",
+    )
+    _ = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=keep_group,
+        approver_userids=["manager-001"],
+    )
     grant = AccessGrant.objects.create(
         user=target_user,
         app=app,
         grant_type=GRANT_TYPE_PERMANENT,
         version=EXISTING_GRANT_VERSION,
     )
-    _ = AccessGrantRole.objects.create(grant=grant, role=keep_role)
-    _ = AccessGrantRole.objects.create(grant=grant, role=remove_role)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=keep_group)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=remove_group)
     access_request = AccessRequest.objects.create(
         user=target_user,
         app=app,
@@ -127,9 +145,12 @@ def test_retry_failed_revoke_rejects_inactive_retained_role_without_mutating_gra
         status=REQUEST_STATUS_GRANT_FAILED,
         reason="撤权授权写入失败",
     )
-    _ = AccessRequestRole.objects.create(access_request=access_request, role=keep_role)
-    keep_role.is_active = False
-    keep_role.save(update_fields=["is_active"])
+    _ = AccessRequestGroup.objects.create(
+        access_request=access_request,
+        authorization_group=keep_group,
+    )
+    keep_group.is_active = False
+    keep_group.save(update_fields=["is_active"])
 
     # When: 管理员通过 retry API 重试该过期 partial revoke 申请。
     response = client.post(
@@ -142,16 +163,16 @@ def test_retry_failed_revoke_rejects_inactive_retained_role_without_mutating_gra
     grant.refresh_from_db()
     access_request.refresh_from_db()
     body = ErrorEnvelope.model_validate_json(response.content)
-    role_keys = tuple(
-        AccessGrantRole.objects.filter(grant=grant)
-        .order_by("role__key")
-        .values_list("role__key", flat=True),
+    group_keys = tuple(
+        AccessGrantGroup.objects.filter(grant=grant)
+        .order_by("authorization_group__key")
+        .values_list("authorization_group__key", flat=True),
     )
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
     assert body.error.code == ErrorCode.SEMANTIC_VALIDATION_ERROR
     assert body.error.details["request_id"] == access_request.id
     assert body.error.details["error"] == TARGET_CONFIGURATION_ERROR
-    assert role_keys == ("operator", "viewer")
+    assert group_keys == ("operator", "viewer")
     assert grant.status == GRANT_STATUS_ACTIVE
     assert grant.version == EXISTING_GRANT_VERSION
     assert access_request.status == REQUEST_STATUS_GRANT_FAILED

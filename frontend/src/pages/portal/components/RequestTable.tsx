@@ -13,13 +13,30 @@ import {
   grantTypeLabel,
 } from "../../../lib/status";
 
+interface PortalRequestGroup {
+  key?: string;
+  kind?: string;
+  name?: string;
+}
+
+interface PortalRequestDirectGrant {
+  permission?: string;
+  permission_name?: string;
+  scope?: string;
+}
+
+type PortalRequestRow = PortalRequest & {
+  authorization_groups?: PortalRequestGroup[];
+  direct_grants?: PortalRequestDirectGrant[];
+};
+
 export function RequestTable() {
   const query = useQuery({
     queryKey: ["portal", "requests"],
-    queryFn: () => apiRequest<{ items?: PortalRequest[]; data?: PortalRequest[] }>("/portal/api/v1/me/access-requests"),
+    queryFn: () => apiRequest<{ items?: PortalRequestRow[]; data?: PortalRequestRow[] }>("/portal/api/v1/me/access-requests"),
   });
-  const requests = itemsFromPayload<PortalRequest>(query.data);
-  const columns: ColumnDef<PortalRequest>[] = [
+  const requests = itemsFromPayload<PortalRequestRow>(query.data);
+  const columns: ColumnDef<PortalRequestRow>[] = [
     {
       header: "状态",
       cell: ({ row }) => (
@@ -29,8 +46,8 @@ export function RequestTable() {
       ),
     },
     { header: "应用", cell: ({ row }) => row.original.app_name ?? row.original.app_key ?? "-" },
-    { header: "角色", cell: ({ row }) => join(row.original.role_names ?? row.original.roles) },
-    { header: "权限", cell: ({ row }) => join(row.original.permissions) },
+    { header: "权限组", cell: ({ row }) => formatGroups(row.original.authorization_groups) },
+    { header: "Direct Grants", cell: ({ row }) => formatDirectGrants(row.original.direct_grants) },
     { header: "期限", cell: ({ row }) => grantTypeLabel(row.original.grant_type) },
     { header: "提交时间", cell: ({ row }) => formatDateTime(row.original.submitted_at) },
     { header: "原因", cell: ({ row }) => row.original.reason ?? "-" },
@@ -44,6 +61,18 @@ export function RequestTable() {
   );
 }
 
-function join(values: string[] | undefined): string {
-  return values && values.length > 0 ? values.join("、") : "-";
+function formatGroups(groups: PortalRequestGroup[] | undefined): string {
+  if (!groups || groups.length === 0) {
+    return "-";
+  }
+  return groups.map((group) => `${group.name ?? group.key ?? "-"} [${group.kind ?? "-"}]`).join("、");
+}
+
+function formatDirectGrants(directGrants: PortalRequestDirectGrant[] | undefined): string {
+  if (!directGrants || directGrants.length === 0) {
+    return "-";
+  }
+  return directGrants
+    .map((grant) => `${grant.permission_name ?? grant.permission ?? "-"} (${grant.permission ?? "-"}):${grant.scope ?? "-"}`)
+    .join("、");
 }

@@ -14,7 +14,7 @@ from easyauth.access_requests.models import (
     REQUEST_TYPE_RENEW,
     REQUEST_TYPE_REVOKE,
     AccessRequest,
-    AccessRequestRole,
+    AccessRequestGroup,
 )
 from easyauth.access_requests.services import (
     AccessRequestApplication,
@@ -22,9 +22,9 @@ from easyauth.access_requests.services import (
     AccessRequestService,
 )
 from easyauth.accounts.models import USER_STATUS_DISABLED, UserMirror
-from easyauth.applications.models import App, ApprovalRule, Role
+from easyauth.applications.models import App, ApprovalRule, AuthorizationGroup
 from easyauth.audit.models import AuditLog
-from easyauth.grants.models import AccessGrant, AccessGrantRole
+from easyauth.grants.models import AccessGrant, AccessGrantGroup
 
 pytestmark = pytest.mark.django_db
 
@@ -36,10 +36,10 @@ def test_ops4_apply_approved_request_rejects_disabled_user_without_mutating_gran
         status=USER_STATUS_DISABLED,
     )
     app = App.objects.create(app_key="ops4-apply-disabled-app", name="OPS4 Disabled")
-    role = Role.objects.create(app=app, key="reader", name="Reader")
+    group = _authorization_group(app, key="reader", name="Reader")
     grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
     access_request = _approved_request(user=user, app=app, request_type=REQUEST_TYPE_CHANGE)
-    _ = AccessRequestRole.objects.create(access_request=access_request, role=role)
+    _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
 
     # When: 审批回调尝试应用该申请。
     with pytest.raises(AccessRequestApplicationError):
@@ -61,10 +61,10 @@ def test_ops4_apply_approved_request_rejects_inactive_app_without_mutating_grant
         name="OPS4 Inactive App",
         is_active=False,
     )
-    role = Role.objects.create(app=app, key="reader", name="Reader")
+    group = _authorization_group(app, key="reader", name="Reader")
     grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
     access_request = _approved_request(user=user, app=app, request_type=REQUEST_TYPE_CHANGE)
-    _ = AccessRequestRole.objects.create(access_request=access_request, role=role)
+    _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
 
     # When: 审批回调尝试应用该申请。
     with pytest.raises(AccessRequestApplicationError):
@@ -79,39 +79,53 @@ def test_ops4_apply_approved_request_rejects_inactive_app_without_mutating_grant
 
 
 def test_ops4_apply_stale_partial_revoke_rejects_non_current_target() -> None:
-    # Given: revoke 申请审批后, 当前授权角色已变更。
+    # Given: revoke 申请审批后, 当前授权组已变更。
     user = UserMirror.objects.create(authentik_user_id="ops4-apply-stale-revoke-user")
     app = App.objects.create(app_key="ops4-apply-stale-revoke-app", name="OPS4 Stale Revoke")
-    old_role = Role.objects.create(app=app, key="old", name="Old")
-    new_role = Role.objects.create(app=app, key="new", name="New")
-    _ = ApprovalRule.objects.create(app=app, role=old_role, approver_userids=["manager-001"])
+    old_group = _authorization_group(app, key="old", name="Old")
+    new_group = _authorization_group(app, key="new", name="New")
+    _ = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=old_group,
+        approver_userids=["manager-001"],
+    )
     grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-    _ = AccessGrantRole.objects.create(grant=grant, role=new_role)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=new_group)
     access_request = _approved_request(user=user, app=app, request_type=REQUEST_TYPE_REVOKE)
-    _ = AccessRequestRole.objects.create(access_request=access_request, role=old_role)
+    _ = AccessRequestGroup.objects.create(
+        access_request=access_request,
+        authorization_group=old_group,
+    )
 
     # When: 审批回调尝试应用过期目标。
     with pytest.raises(AccessRequestApplicationError):
         _ = AccessRequestService.apply_approved_access_request(_application(access_request))
 
-    # Then: 不会把旧角色重新写回当前授权。
+    # Then: 不会把旧授权组重新写回当前授权。
     grant.refresh_from_db()
     access_request.refresh_from_db()
-    role_keys = tuple(
-        AccessGrantRole.objects.filter(grant=grant).values_list("role__key", flat=True),
+    group_keys = tuple(
+        AccessGrantGroup.objects.filter(grant=grant).values_list(
+            "authorization_group__key",
+            flat=True,
+        ),
     )
-    assert role_keys == ("new",)
+    assert group_keys == ("new",)
     assert grant.version == 1
     assert access_request.status == REQUEST_STATUS_GRANT_FAILED
 
 
 def test_ops4_apply_stale_renew_rejects_changed_membership() -> None:
-    # Given: renew 申请审批后, 当前授权角色已变更。
+    # Given: renew 申请审批后, 当前授权组已变更。
     user = UserMirror.objects.create(authentik_user_id="ops4-apply-stale-renew-user")
     app = App.objects.create(app_key="ops4-apply-stale-renew-app", name="OPS4 Stale Renew")
-    old_role = Role.objects.create(app=app, key="old", name="Old")
-    new_role = Role.objects.create(app=app, key="new", name="New")
-    _ = ApprovalRule.objects.create(app=app, role=old_role, approver_userids=["manager-001"])
+    old_group = _authorization_group(app, key="old", name="Old")
+    new_group = _authorization_group(app, key="new", name="New")
+    _ = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=old_group,
+        approver_userids=["manager-001"],
+    )
     current_expires_at = timezone.now() + timedelta(days=3)
     grant = AccessGrant.objects.create(
         user=user,
@@ -119,7 +133,7 @@ def test_ops4_apply_stale_renew_rejects_changed_membership() -> None:
         grant_type=GRANT_TYPE_TIMED,
         grant_expires_at=current_expires_at,
     )
-    _ = AccessGrantRole.objects.create(grant=grant, role=new_role)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=new_group)
     access_request = _approved_request(
         user=user,
         app=app,
@@ -127,7 +141,10 @@ def test_ops4_apply_stale_renew_rejects_changed_membership() -> None:
         grant_type=GRANT_TYPE_TIMED,
         grant_expires_at=timezone.now() + timedelta(days=10),
     )
-    _ = AccessRequestRole.objects.create(access_request=access_request, role=old_role)
+    _ = AccessRequestGroup.objects.create(
+        access_request=access_request,
+        authorization_group=old_group,
+    )
 
     # When: 审批回调尝试应用过期续期目标。
     with pytest.raises(AccessRequestApplicationError):
@@ -136,10 +153,13 @@ def test_ops4_apply_stale_renew_rejects_changed_membership() -> None:
     # Then: 授权成员和期限都保持当前事实。
     grant.refresh_from_db()
     access_request.refresh_from_db()
-    role_keys = tuple(
-        AccessGrantRole.objects.filter(grant=grant).values_list("role__key", flat=True),
+    group_keys = tuple(
+        AccessGrantGroup.objects.filter(grant=grant).values_list(
+            "authorization_group__key",
+            flat=True,
+        ),
     )
-    assert role_keys == ("new",)
+    assert group_keys == ("new",)
     assert grant.grant_expires_at == current_expires_at
     assert grant.version == 1
     assert access_request.status == REQUEST_STATUS_GRANT_FAILED
@@ -163,6 +183,10 @@ def _approved_request(
         reason="审批已通过",
         approved_at=timezone.now(),
     )
+
+
+def _authorization_group(app: App, *, key: str, name: str) -> AuthorizationGroup:
+    return AuthorizationGroup.objects.create(app=app, key=key, kind="role", name=name)
 
 
 def _application(access_request: AccessRequest) -> AccessRequestApplication:

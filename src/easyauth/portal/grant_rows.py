@@ -12,14 +12,9 @@ from easyauth.grants.models import (
     GRANT_TYPE_PERMANENT,
     GRANT_TYPE_TIMED,
     AccessGrant,
-    AccessGrantRole,
 )
 from easyauth.grants.operations import parse_grant_type
-from easyauth.portal.permission_aggregation import (
-    direct_permission_keys_by_grant_id,
-    permission_keys,
-    role_permission_keys_by_role_id,
-)
+from easyauth.grants.query import resolve_user_permissions
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -77,30 +72,9 @@ def _grant_rows(
     *,
     current_time: datetime,
 ) -> tuple[PortalGrantRow, ...]:
-    grant_ids = tuple(grant.id for grant in grants)
-    role_names_by_grant_id, role_ids_by_grant_id = _role_memberships_by_grant_id(grant_ids)
-    direct_permission_keys = direct_permission_keys_by_grant_id(grant_ids, active_only=False)
-    role_permissions = role_permission_keys_by_role_id(
-        tuple(
-            sorted(
-                {
-                    role_id
-                    for role_ids in role_ids_by_grant_id.values()
-                    for role_id in role_ids
-                },
-            ),
-        ),
-        active_only=False,
-    )
     return tuple(
         _grant_row(
             grant,
-            role_names=role_names_by_grant_id.get(grant.id, ()),
-            permission_keys=permission_keys(
-                direct_permission_keys=direct_permission_keys.get(grant.id, set()),
-                role_ids=role_ids_by_grant_id.get(grant.id, ()),
-                role_permission_keys_by_role_id=role_permissions,
-            ),
             current_time=current_time,
         )
         for grant in grants
@@ -110,37 +84,19 @@ def _grant_rows(
 def _grant_row(
     grant: AccessGrant,
     *,
-    role_names: tuple[str, ...],
-    permission_keys: tuple[str, ...],
     current_time: datetime,
 ) -> PortalGrantRow:
+    snapshot = resolve_user_permissions(user=grant.user, app=grant.app)
     return PortalGrantRow(
         app_name=grant.app.name,
         grant_label=_grant_label(grant.grant_type),
-        role_names=_label(role_names),
-        permission_keys=_label(permission_keys),
+        role_names=_label(tuple(group.name for group in snapshot.groups)),
+        permission_keys=_label(
+            tuple(f"{item.permission}:{item.scope}" for item in snapshot.grants),
+        ),
         version=grant.version,
         grant_expires_at=grant.grant_expires_at,
         is_expiring_soon=_is_expiring_soon(grant, current_time=current_time),
-    )
-
-
-def _role_memberships_by_grant_id(
-    grant_ids: tuple[int, ...],
-) -> tuple[dict[int, tuple[str, ...]], dict[int, tuple[int, ...]]]:
-    role_names: dict[int, list[str]] = {grant_id: [] for grant_id in grant_ids}
-    role_ids: dict[int, list[int]] = {grant_id: [] for grant_id in grant_ids}
-    links = (
-        AccessGrantRole.objects.select_related("role")
-        .filter(grant_id__in=grant_ids)
-        .order_by("grant_id", "role__key")
-    )
-    for link in links:
-        role_names.setdefault(link.grant_id, []).append(link.role.name)
-        role_ids.setdefault(link.grant_id, []).append(link.role_id)
-    return (
-        {grant_id: tuple(names) for grant_id, names in role_names.items()},
-        {grant_id: tuple(ids) for grant_id, ids in role_ids.items()},
     )
 
 

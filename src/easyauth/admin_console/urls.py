@@ -13,6 +13,10 @@ from easyauth.admin_console.apps_api import (
     console_apps,
 )
 from easyauth.admin_console.audit_api import console_audit_logs
+from easyauth.admin_console.authorization_groups_api import (
+    console_authorization_group_detail,
+    console_authorization_groups,
+)
 from easyauth.admin_console.console_app_api import (
     integration_guide_api,
 )
@@ -46,6 +50,7 @@ from easyauth.admin_console.permission_groups_api import (
     console_permission_groups,
 )
 from easyauth.admin_console.permission_template_api import (
+    app_manifest_api,
     permission_template_confirm_api,
     permission_template_preview_api,
     permission_template_versions_api,
@@ -53,6 +58,7 @@ from easyauth.admin_console.permission_template_api import (
 from easyauth.admin_console.permissions_api import console_permission_detail, console_permissions
 from easyauth.admin_console.query_test_api import console_permission_query_test
 from easyauth.admin_console.roles_api import console_role_detail, console_roles
+from easyauth.admin_console.scopes_api import console_scope_detail, console_scopes
 
 app_name = "admin_console"
 
@@ -122,6 +128,11 @@ urlpatterns = [
         name="permission-template-versions-api",
     ),
     path(
+        "api/v1/apps/<str:app_key>/manifest",
+        app_manifest_api,
+        name="app-manifest-api",
+    ),
+    path(
         "api/v1/apps/<str:app_key>/permission-tree",
         console_permission_tree,
         name="console-permission-tree",
@@ -141,6 +152,22 @@ urlpatterns = [
         "api/v1/apps/<str:app_key>/roles/<str:role_key>",
         console_role_detail,
         name="console-role-detail",
+    ),
+    path("api/v1/apps/<str:app_key>/scopes", console_scopes, name="console-scopes"),
+    path(
+        "api/v1/apps/<str:app_key>/scopes/<str:scope_key>",
+        console_scope_detail,
+        name="console-scope-detail",
+    ),
+    path(
+        "api/v1/apps/<str:app_key>/authorization-groups",
+        console_authorization_groups,
+        name="console-authorization-groups",
+    ),
+    path(
+        "api/v1/apps/<str:app_key>/authorization-groups/<str:authorization_group_key>",
+        console_authorization_group_detail,
+        name="console-authorization-group-detail",
     ),
     path(
         "api/v1/apps/<str:app_key>/permissions",

@@ -103,8 +103,7 @@ def apply_permission_update(
             pass
         case JsonResponse() as response:
             return response
-    if payload.is_active is not None:
-        permission.is_active = payload.is_active
+    _apply_permission_state_fields(permission, payload)
     apply_permission_deprecation(permission, payload)
     return None
 
@@ -129,6 +128,30 @@ def _apply_permission_text_fields(
         permission.name = payload.name
     if payload.description is not None:
         permission.description = payload.description
+
+
+def _apply_permission_state_fields(
+    permission: Permission,
+    payload: PermissionUpdatePayload,
+) -> None:
+    if payload.is_active is not None:
+        permission.is_active = payload.is_active
+    if payload.supported_scopes is not None:
+        permission.supported_scopes = _normalized_scopes(payload.supported_scopes)
+    if payload.risk_level is not None:
+        permission.risk_level = payload.risk_level
+
+
+def _normalized_scopes(scopes: list[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for scope in scopes:
+        key = scope.strip()
+        if key == "" or key in seen:
+            continue
+        seen.add(key)
+        normalized.append(key)
+    return normalized
 
 
 def _apply_group_update(

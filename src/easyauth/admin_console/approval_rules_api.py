@@ -103,7 +103,7 @@ def _create_rule(request: HttpRequest, app: App, actor: ConsoleActor) -> JsonRes
         rule = create_approval_rule(
             ApprovalRuleCreateMutation(
                 app=app,
-                role=target.role,
+                authorization_group=target.authorization_group,
                 permission=target.permission,
                 approver_userids=approver_userids,
                 is_active=payload.is_active,
@@ -180,8 +180,8 @@ def _target_for_key(app: App, target_type: TargetType, target_key: str) -> Targe
         case None:
             pass
     match target_type:
-        case "role":
-            message = "Role 不属于当前 App。"
+        case "authorization_group":
+            message = "AuthorizationGroup 不属于当前 App。"
         case "permission":
             message = "Permission 不属于当前 App。"
     return _error_response(

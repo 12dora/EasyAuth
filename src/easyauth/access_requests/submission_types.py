@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from easyauth.accounts.models import UserMirror
-    from easyauth.applications.models import App, Permission, Role
+    from easyauth.applications.models import App, AuthorizationGroup, Permission
 
 type AccessRequestType = Literal["grant", "change", "revoke", "renew"]
 type AccessRequestGrantType = Literal["permanent", "timed"]
@@ -26,17 +26,23 @@ class AccessRequestSubmissionError(Exception):
 
 
 @dataclass(frozen=True, slots=True)
+class ScopedAccessRequestGrant:
+    permission: Permission
+    scope_key: str
+
+
+@dataclass(frozen=True, slots=True)
 class AccessRequestSubmission:
     user: UserMirror
     app: App
-    roles: Iterable[Role]
     grant_type: AccessRequestGrantType
     grant_expires_at: datetime | None
     reason: str
     actor_type: str
     actor_id: str
     request_type: AccessRequestType = REQUEST_TYPE_GRANT
-    permissions: Iterable[Permission] = ()
+    authorization_groups: Iterable[AuthorizationGroup] = ()
+    direct_grants: Iterable[ScopedAccessRequestGrant] = ()
 
 
 AccessRequestInput = AccessRequestSubmission

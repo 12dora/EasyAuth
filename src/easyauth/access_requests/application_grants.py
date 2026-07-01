@@ -9,20 +9,20 @@ from easyauth.access_requests.application_target_validation import apply_target_
 from easyauth.access_requests.high_risk_duration import high_risk_duration_error
 from easyauth.access_requests.models import (
     AccessRequest,
+    AccessRequestGroup,
     AccessRequestPermission,
-    AccessRequestRole,
 )
+from easyauth.access_requests.submission_types import ScopedAccessRequestGrant
 from easyauth.access_requests.submission_validation import validated_request_type
-from easyauth.applications.models import RolePermission
-from easyauth.grants.models import AccessGrantPermission, AccessGrantRole
+from easyauth.grants.models import AccessGrantGroup, AccessGrantPermission
 from easyauth.grants.operations import current_grant
-from easyauth.grants.services import GrantMutationInput, GrantService
+from easyauth.grants.services import GrantMutationInput, GrantService, ScopedDirectGrantInput
 
 if TYPE_CHECKING:
     from datetime import datetime
 
     from easyauth.access_requests.submission_types import AccessRequestType
-    from easyauth.applications.models import Permission, Role
+    from easyauth.applications.models import AuthorizationGroup
     from easyauth.grants.models import AccessGrant
 
 type ApplicationGrantType = Literal["permanent", "timed"]
@@ -62,16 +62,16 @@ def apply_grant_fact(
     input_data: _GrantApplicationInput,
 ) -> AccessGrant:
     _validate_request_scope(access_request)
-    roles = _selected_roles(access_request)
-    permissions = _selected_permissions(access_request)
+    authorization_groups = _selected_authorization_groups(access_request)
+    direct_grants = _selected_direct_grants(access_request)
     request_type = validated_request_type(access_request.request_type)
-    if apply_target_errors(access_request.app, request_type, roles, permissions):
+    if apply_target_errors(access_request.app, request_type, authorization_groups, direct_grants):
         raise GrantApplyFailureError(TARGET_CONFIGURATION_REQUIRED_MESSAGE)
     return _apply_validated_grant_request(
         access_request=access_request,
         input_data=input_data,
-        roles=roles,
-        permissions=permissions,
+        authorization_groups=authorization_groups,
+        direct_grants=direct_grants,
         request_type=request_type,
     )
 
@@ -80,56 +80,88 @@ def _apply_validated_grant_request(
     *,
     access_request: AccessRequest,
     input_data: _GrantApplicationInput,
-    roles: tuple[Role, ...],
-    permissions: tuple[Permission, ...],
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
     request_type: AccessRequestType,
 ) -> AccessGrant:
     match request_type:
         case "grant":
-            return _create_request_grant(access_request, input_data, roles, permissions)
+            return _create_request_grant(
+                access_request,
+                input_data,
+                authorization_groups,
+                direct_grants,
+            )
         case "change":
             _ = _active_current_grant(access_request)
-            return _change_request_grant(access_request, input_data, roles, permissions)
+            return _change_request_grant(
+                access_request,
+                input_data,
+                authorization_groups,
+                direct_grants,
+            )
         case "renew":
-            return _apply_renew_request(access_request, input_data, roles, permissions)
+            return _apply_renew_request(
+                access_request,
+                input_data,
+                authorization_groups,
+                direct_grants,
+            )
         case "revoke":
-            return _apply_revoke_request(access_request, input_data, roles, permissions)
+            return _apply_revoke_request(
+                access_request,
+                input_data,
+                authorization_groups,
+                direct_grants,
+            )
 
 
 def _create_request_grant(
     access_request: AccessRequest,
     input_data: _GrantApplicationInput,
-    roles: tuple[Role, ...],
-    permissions: tuple[Permission, ...],
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> AccessGrant:
     return GrantService.create_grant(
-        _request_grant_mutation_input(access_request, input_data, roles, permissions),
+        _request_grant_mutation_input(
+            access_request,
+            input_data,
+            authorization_groups,
+            direct_grants,
+        ),
     )
 
 
 def _change_request_grant(
     access_request: AccessRequest,
     input_data: _GrantApplicationInput,
-    roles: tuple[Role, ...],
-    permissions: tuple[Permission, ...],
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> AccessGrant:
     return GrantService.change_grant(
-        _request_grant_mutation_input(access_request, input_data, roles, permissions),
+        _request_grant_mutation_input(
+            access_request,
+            input_data,
+            authorization_groups,
+            direct_grants,
+        ),
     )
 
 
 def _apply_renew_request(
     access_request: AccessRequest,
     input_data: _GrantApplicationInput,
-    roles: tuple[Role, ...],
-    permissions: tuple[Permission, ...],
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> AccessGrant:
     current = _active_current_grant(access_request)
-    _validate_renew_target(current, roles, permissions, access_request.grant_expires_at)
-    duration_error = high_risk_duration_error(roles, access_request.grant_expires_at)
-    if duration_error:
-        raise GrantApplyFailureError(duration_error)
-    return _change_request_grant(access_request, input_data, roles, permissions)
+    _validate_renew_target(
+        current,
+        authorization_groups,
+        direct_grants,
+        access_request.grant_expires_at,
+    )
+    return _change_request_grant(access_request, input_data, authorization_groups, direct_grants)
 
 
 def _validate_request_scope(access_request: AccessRequest) -> None:
@@ -145,18 +177,18 @@ def _validate_request_scope(access_request: AccessRequest) -> None:
 def _apply_revoke_request(
     access_request: AccessRequest,
     input_data: _GrantApplicationInput,
-    roles: tuple[Role, ...],
-    permissions: tuple[Permission, ...],
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> AccessGrant:
     current = _active_current_grant(access_request)
-    if roles or permissions:
-        _validate_revoke_target(current, roles, permissions)
+    if authorization_groups or direct_grants:
+        _validate_revoke_target(current, authorization_groups, direct_grants)
         return GrantService.change_grant(
             _grant_mutation_input(
                 access_request,
                 input_data,
-                roles,
-                permissions,
+                authorization_groups,
+                direct_grants,
                 _current_grant_lifecycle(access_request),
             ),
         )
@@ -175,14 +207,14 @@ def _apply_revoke_request(
 def _request_grant_mutation_input(
     access_request: AccessRequest,
     input_data: _GrantApplicationInput,
-    roles: tuple[Role, ...],
-    permissions: tuple[Permission, ...],
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> GrantMutationInput:
     return _grant_mutation_input(
         access_request,
         input_data,
-        roles,
-        permissions,
+        authorization_groups,
+        direct_grants,
         _request_grant_lifecycle(access_request),
     )
 
@@ -225,72 +257,70 @@ def _active_current_grant(access_request: AccessRequest) -> AccessGrant:
 
 def _validate_revoke_target(
     current: AccessGrant,
-    roles: tuple[Role, ...],
-    permissions: tuple[Permission, ...],
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> None:
-    current_role_ids = _current_role_ids(current)
-    target_role_ids = {role.id for role in roles}
-    if not target_role_ids.issubset(current_role_ids):
+    current_group_ids = _current_group_ids(current)
+    target_group_ids = {group.id for group in authorization_groups}
+    if not target_group_ids.issubset(current_group_ids):
         raise GrantApplyFailureError(CURRENT_GRANT_REQUIRED_MESSAGE)
-    current_permission_ids = _current_permission_ids(current)
-    target_permission_ids = {permission.id for permission in permissions}
-    if not target_permission_ids.issubset(current_permission_ids):
+    current_direct_grants = _current_direct_grants(current)
+    target_direct_grants = _target_direct_grants(direct_grants)
+    if not target_direct_grants.issubset(current_direct_grants):
         raise GrantApplyFailureError(CURRENT_GRANT_REQUIRED_MESSAGE)
-    if (
-        target_role_ids == current_role_ids
-        and _target_permission_ids(roles, permissions) == current_permission_ids
-    ):
+    if target_group_ids == current_group_ids and target_direct_grants == current_direct_grants:
         raise GrantApplyFailureError(CURRENT_GRANT_REQUIRED_MESSAGE)
 
 
 def _validate_renew_target(
     current: AccessGrant,
-    roles: tuple[Role, ...],
-    permissions: tuple[Permission, ...],
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
     requested_expires_at: datetime | None,
 ) -> None:
-    if {role.id for role in roles} != _current_role_ids(current):
+    if {group.id for group in authorization_groups} != _current_group_ids(current):
         raise GrantApplyFailureError(CURRENT_GRANT_REQUIRED_MESSAGE)
-    if _target_permission_ids(roles, permissions) != _current_permission_ids(current):
+    if _target_direct_grants(direct_grants) != _current_direct_grants(current):
         raise GrantApplyFailureError(CURRENT_GRANT_REQUIRED_MESSAGE)
     current_expires_at = current.grant_expires_at
     if current_expires_at is None or requested_expires_at is None:
         raise GrantApplyFailureError(CURRENT_GRANT_REQUIRED_MESSAGE)
     if requested_expires_at <= current_expires_at:
         raise GrantApplyFailureError(CURRENT_GRANT_REQUIRED_MESSAGE)
+    high_risk_error = high_risk_duration_error(authorization_groups, requested_expires_at)
+    if high_risk_error:
+        raise GrantApplyFailureError(high_risk_error)
 
 
-def _current_role_ids(grant: AccessGrant) -> set[int]:
-    return set(AccessGrantRole.objects.filter(grant=grant).values_list("role_id", flat=True))
-
-
-def _current_permission_ids(grant: AccessGrant) -> set[int]:
-    direct_ids = set(
-        AccessGrantPermission.objects.filter(grant=grant).values_list("permission_id", flat=True),
+def _current_group_ids(grant: AccessGrant) -> set[int]:
+    return set(
+        AccessGrantGroup.objects.filter(grant=grant).values_list(
+            "authorization_group_id",
+            flat=True,
+        ),
     )
-    role_ids = AccessGrantRole.objects.filter(grant=grant).values_list("role_id", flat=True)
-    role_permission_ids = set(
-        RolePermission.objects.filter(role_id__in=role_ids).values_list("permission_id", flat=True),
-    )
-    return direct_ids | role_permission_ids
 
 
-def _target_permission_ids(
-    roles: tuple[Role, ...],
-    permissions: tuple[Permission, ...],
-) -> set[int]:
-    role_ids = tuple(role.id for role in roles)
-    role_permission_ids = set(
-        RolePermission.objects.filter(role_id__in=role_ids).values_list("permission_id", flat=True),
+def _current_direct_grants(grant: AccessGrant) -> set[tuple[int, str]]:
+    return set(
+        AccessGrantPermission.objects.filter(grant=grant).values_list(
+            "permission_id",
+            "scope_key",
+        ),
     )
-    return role_permission_ids | {permission.id for permission in permissions}
+
+
+def _target_direct_grants(
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
+) -> set[tuple[int, str]]:
+    return {(grant.permission.id, grant.scope_key) for grant in direct_grants}
 
 
 def _grant_mutation_input(
     access_request: AccessRequest,
     input_data: _GrantApplicationInput,
-    roles: tuple[Role, ...],
-    permissions: tuple[Permission, ...],
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
     lifecycle: _GrantLifecycle,
 ) -> GrantMutationInput:
     return GrantMutationInput(
@@ -298,25 +328,31 @@ def _grant_mutation_input(
         app=access_request.app,
         grant_type=lifecycle.grant_type,
         grant_expires_at=lifecycle.grant_expires_at,
-        roles=roles,
-        permissions=permissions,
+        authorization_groups=authorization_groups,
+        direct_grants=tuple(
+            ScopedDirectGrantInput(
+                permission=direct_grant.permission,
+                scope_key=direct_grant.scope_key,
+            )
+            for direct_grant in direct_grants
+        ),
         actor_type=input_data.actor_type,
         actor_id=input_data.actor_id,
     )
 
 
-def _selected_roles(access_request: AccessRequest) -> tuple[Role, ...]:
+def _selected_authorization_groups(access_request: AccessRequest) -> tuple[AuthorizationGroup, ...]:
     return tuple(
-        link.role
-        for link in AccessRequestRole.objects.select_related("role").filter(
+        link.authorization_group
+        for link in AccessRequestGroup.objects.select_related("authorization_group").filter(
             access_request=access_request,
         )
     )
 
 
-def _selected_permissions(access_request: AccessRequest) -> tuple[Permission, ...]:
+def _selected_direct_grants(access_request: AccessRequest) -> tuple[ScopedAccessRequestGrant, ...]:
     return tuple(
-        link.permission
+        ScopedAccessRequestGrant(permission=link.permission, scope_key=link.scope_key)
         for link in AccessRequestPermission.objects.select_related("permission").filter(
             access_request=access_request,
         )

@@ -16,7 +16,8 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from easyauth.accounts.models import UserMirror
-    from easyauth.applications.models import App, Permission, Role
+    from easyauth.applications.models import App, AuthorizationGroup
+    from easyauth.grants.services import ScopedDirectGrantInput
 type GrantType = Literal["permanent", "timed"]
 
 
@@ -34,10 +35,10 @@ class GrantMutationData(Protocol):
     def grant_expires_at(self) -> datetime | None: ...
 
     @property
-    def roles(self) -> Iterable[Role]: ...
+    def authorization_groups(self) -> Iterable[AuthorizationGroup]: ...
 
     @property
-    def permissions(self) -> Iterable[Permission]: ...
+    def direct_grants(self) -> Iterable[ScopedDirectGrantInput]: ...
 
     @property
     def actor_type(self) -> str: ...
@@ -58,7 +59,7 @@ def create_current_grant(input_data: GrantMutationData, *, action: str) -> Acces
     )
     grant.full_clean()
     grant.save()
-    replace_memberships(grant, input_data.roles, input_data.permissions)
+    replace_memberships(grant, input_data.authorization_groups, input_data.direct_grants)
     record_grant_event(
         grant,
         action=action,
@@ -89,7 +90,7 @@ def change_current_grant(input_data: GrantMutationData) -> AccessGrant:
             "updated_at",
         ],
     )
-    replace_memberships(grant, input_data.roles, input_data.permissions)
+    replace_memberships(grant, input_data.authorization_groups, input_data.direct_grants)
     record_grant_event(
         grant,
         action="grant_changed",

@@ -19,8 +19,8 @@ from easyauth.portal.access_request_payloads import (
     AccessRequestPayload,
     AccessRequestTargetError,
     app_for_key,
-    permissions_for_keys,
-    roles_for_keys,
+    authorization_groups_for_keys,
+    direct_grants_for_payloads,
 )
 from easyauth.portal.api_data import (
     access_request_item,
@@ -99,14 +99,17 @@ def _submit_access_request(request: HttpRequest, user: UserMirror) -> JsonRespon
     try:
         payload = AccessRequestPayload.model_validate_json(request.body)
         app = app_for_key(payload.app_key)
-        roles = roles_for_keys(app=app, role_keys=payload.role_keys)
-        permissions = permissions_for_keys(app=app, permission_keys=payload.permission_keys)
+        authorization_groups = authorization_groups_for_keys(
+            app=app,
+            authorization_group_keys=payload.authorization_group_keys,
+        )
+        direct_grants = direct_grants_for_payloads(app=app, direct_grants=payload.direct_grants)
         access_request = AccessRequestService.submit_access_request(
             AccessRequestSubmission(
                 user=user,
                 app=app,
-                roles=roles,
-                permissions=permissions,
+                authorization_groups=authorization_groups,
+                direct_grants=direct_grants,
                 request_type=payload.request_type,
                 grant_type=payload.grant_type,
                 grant_expires_at=payload.grant_expires_at,
@@ -215,4 +218,3 @@ def _json_objects(items: tuple[dict[str, JsonValue], ...]) -> list[JsonValue]:
     result: list[JsonValue] = []
     result.extend(items)
     return result
-

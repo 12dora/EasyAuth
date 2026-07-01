@@ -16,6 +16,8 @@ class PermissionCreatePayload(BaseModel):
     group_id: int | None = Field(default=None, gt=0)
     group_key: str | None = Field(default=None, min_length=1, max_length=128)
     is_active: bool = True
+    supported_scopes: list[str] = Field(default_factory=list)
+    risk_level: str = "standard"
     deprecated_reason: str | None = None
 
 
@@ -26,6 +28,8 @@ class PermissionUpdatePayload(ResourceIdPayload):
     group_id: int | None = Field(default=None, gt=0)
     group_key: str | None = Field(default=None, min_length=1, max_length=128)
     is_active: bool | None = None
+    supported_scopes: list[str] | None = None
+    risk_level: str | None = None
     deprecated_reason: str | None = None
 
 
@@ -38,4 +42,6 @@ class PermissionKeyUpdatePayload(BaseModel):
     group_id: int | None = Field(default=None, gt=0)
     group_key: str | None = Field(default=None, min_length=1, max_length=128)
     is_active: bool | None = None
+    supported_scopes: list[str] | None = None
+    risk_level: str | None = None
     deprecated_reason: str | None = None

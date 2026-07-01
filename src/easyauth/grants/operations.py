@@ -9,8 +9,8 @@ from easyauth.grants.models import (
     GRANT_TYPE_PERMANENT,
     GRANT_TYPE_TIMED,
     AccessGrant,
+    AccessGrantGroup,
     AccessGrantPermission,
-    AccessGrantRole,
 )
 from easyauth.grants.status import GrantStatus, parse_grant_status
 
@@ -18,7 +18,8 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from easyauth.accounts.models import UserMirror
-    from easyauth.applications.models import App, Permission, Role
+    from easyauth.applications.models import App, AuthorizationGroup
+    from easyauth.grants.services import ScopedDirectGrantInput
 
 type GrantType = Literal["permanent", "timed"]
 
@@ -54,19 +55,28 @@ def next_version(user: UserMirror, app: App) -> int:
 
 def replace_memberships(
     grant: AccessGrant,
-    roles: Iterable[Role],
-    permissions: Iterable[Permission],
+    authorization_groups: Iterable[AuthorizationGroup],
+    direct_grants: Iterable[ScopedDirectGrantInput],
 ) -> None:
-    _ = AccessGrantRole.objects.filter(grant=grant).delete()
+    _ = AccessGrantGroup.objects.filter(grant=grant).delete()
     _ = AccessGrantPermission.objects.filter(grant=grant).delete()
 
-    for role in roles:
-        link = AccessGrantRole(grant=grant, role=role)
+    groups_by_id = {group.id: group for group in authorization_groups}
+    for group in groups_by_id.values():
+        link = AccessGrantGroup(grant=grant, authorization_group=group)
         link.full_clean()
         link.save()
 
-    for permission in permissions:
-        link = AccessGrantPermission(grant=grant, permission=permission)
+    direct_grants_by_identity = {
+        (direct_grant.permission.id, direct_grant.scope_key): direct_grant
+        for direct_grant in direct_grants
+    }
+    for direct_grant in direct_grants_by_identity.values():
+        link = AccessGrantPermission(
+            grant=grant,
+            permission=direct_grant.permission,
+            scope_key=direct_grant.scope_key,
+        )
         link.full_clean()
         link.save()
 

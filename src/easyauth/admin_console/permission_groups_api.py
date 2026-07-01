@@ -31,6 +31,7 @@ from easyauth.admin_console.permission_group_write_helpers import (
     parent_group,
     resolved_parent_reference,
 )
+from easyauth.applications.catalog_version import bump_catalog_version
 from easyauth.applications.models import PermissionGroup
 
 
@@ -84,6 +85,12 @@ def _create_permission_group(request: HttpRequest, app_key: str) -> JsonResponse
             target_id=str(group.id),
             metadata={"permission_group_key": group.key},
         ),
+    )
+    bump_catalog_version(
+        app,
+        actor_id=actor.user_id,
+        reason="permission_group_created",
+        metadata={"permission_group_key": group.key},
     )
     return json_response({"item": group_item(group)}, status=HTTPStatus.CREATED)
 
@@ -159,5 +166,11 @@ def _update_permission_group(
             target_id=str(group.id),
             metadata={"permission_group_key": group.key},
         ),
+    )
+    bump_catalog_version(
+        app,
+        actor_id=actor.user_id,
+        reason="permission_group_updated",
+        metadata={"permission_group_key": group.key},
     )
     return json_response({"item": group_item(group)})

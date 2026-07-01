@@ -12,18 +12,18 @@ from easyauth.access_requests.models import (
     REQUEST_STATUS_GRANT_FAILED,
     REQUEST_TYPE_CHANGE,
     AccessRequest,
+    AccessRequestGroup,
     AccessRequestPermission,
-    AccessRequestRole,
 )
 from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode
-from easyauth.applications.models import App, ApprovalRule, Permission, Role
+from easyauth.applications.models import App, ApprovalRule, AuthorizationGroup, Permission
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import (
     GRANT_TYPE_PERMANENT,
     AccessGrant,
+    AccessGrantGroup,
     AccessGrantPermission,
-    AccessGrantRole,
 )
 
 pytestmark = pytest.mark.django_db
@@ -88,16 +88,30 @@ def test_retry_grant_requires_superuser_without_mutating_state() -> None:
     assert AuditLog.objects.count() == 0
 
 
-def test_retry_failed_change_rejects_deleted_role_approval_rule() -> None:
-    # Given: grant_failed change 申请重试前, 目标 Role 的 ApprovalRule 已被删除。
-    client = _logged_in_user("ops4-retry-stale-role-admin", is_superuser=True)
-    target_user = UserMirror.objects.create(authentik_user_id="ops4-retry-stale-role-target")
-    app = App.objects.create(app_key="ops4-retry-stale-role-app", name="Retry Stale Role")
-    current_role = Role.objects.create(app=app, key="reader", name="Reader")
-    target_role = Role.objects.create(app=app, key="writer", name="Writer")
-    rule = ApprovalRule.objects.create(app=app, role=target_role, approver_userids=["manager-001"])
+def test_retry_failed_change_rejects_deleted_group_approval_rule() -> None:
+    # Given: grant_failed change 申请重试前, 目标授权组的 ApprovalRule 已被删除。
+    client = _logged_in_user("ops4-retry-stale-group-admin", is_superuser=True)
+    target_user = UserMirror.objects.create(authentik_user_id="ops4-retry-stale-group-target")
+    app = App.objects.create(app_key="ops4-retry-stale-group-app", name="Retry Stale Group")
+    current_group = AuthorizationGroup.objects.create(
+        app=app,
+        key="reader",
+        kind="role",
+        name="Reader",
+    )
+    target_group = AuthorizationGroup.objects.create(
+        app=app,
+        key="writer",
+        kind="role",
+        name="Writer",
+    )
+    rule = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=target_group,
+        approver_userids=["manager-001"],
+    )
     grant = AccessGrant.objects.create(user=target_user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-    _ = AccessGrantRole.objects.create(grant=grant, role=current_role)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=current_group)
     access_request = AccessRequest.objects.create(
         user=target_user,
         app=app,
@@ -105,7 +119,10 @@ def test_retry_failed_change_rejects_deleted_role_approval_rule() -> None:
         status=REQUEST_STATUS_GRANT_FAILED,
         reason="变更授权写入失败",
     )
-    _ = AccessRequestRole.objects.create(access_request=access_request, role=target_role)
+    _ = AccessRequestGroup.objects.create(
+        access_request=access_request,
+        authorization_group=target_group,
+    )
     _ = rule.delete()
 
     # When: 管理员通过 retry API 重试该过期申请。
@@ -118,12 +135,15 @@ def test_retry_failed_change_rejects_deleted_role_approval_rule() -> None:
     # Then: API 返回语义错误, 且当前授权和申请状态不变。
     grant.refresh_from_db()
     access_request.refresh_from_db()
-    role_keys = tuple(
-        AccessGrantRole.objects.filter(grant=grant).values_list("role__key", flat=True),
+    group_keys = tuple(
+        AccessGrantGroup.objects.filter(grant=grant).values_list(
+            "authorization_group__key",
+            flat=True,
+        ),
     )
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
     assert response.json()["error"]["code"] == ErrorCode.SEMANTIC_VALIDATION_ERROR
-    assert role_keys == ("reader",)
+    assert group_keys == ("reader",)
     assert grant.version == 1
     assert access_request.status == REQUEST_STATUS_GRANT_FAILED
     assert AuditLog.objects.count() == 0

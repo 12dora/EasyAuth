@@ -13,8 +13,8 @@ from easyauth.access_requests.models import (
     REQUEST_STATUS_SUBMITTED,
     REQUEST_TYPE_GRANT,
     AccessRequest,
+    AccessRequestGroup,
     AccessRequestPermission,
-    AccessRequestRole,
 )
 from easyauth.access_requests.submission_types import (
     AccessRequestGrantType,
@@ -22,17 +22,18 @@ from easyauth.access_requests.submission_types import (
     AccessRequestSubmission,
     AccessRequestSubmissionError,
     AccessRequestType,
+    ScopedAccessRequestGrant,
 )
 from easyauth.access_requests.submission_validation import (
-    unique_permissions,
-    unique_roles,
+    unique_authorization_groups,
+    unique_direct_grants,
     validate_submission_scope,
     validated_request_type,
 )
 from easyauth.audit.services import AuditRecord, AuditService
 
 if TYPE_CHECKING:
-    from easyauth.applications.models import Permission, Role
+    from easyauth.applications.models import AuthorizationGroup
     from easyauth.audit.models import JsonValue
 
 __all__ = (
@@ -68,9 +69,9 @@ def _submit_access_request(
     request_type: str,
 ) -> AccessRequest:
     parsed_request_type = validated_request_type(request_type)
-    roles = unique_roles(input_data.roles)
-    permissions = unique_permissions(input_data.permissions)
-    validate_submission_scope(input_data, parsed_request_type, roles, permissions)
+    authorization_groups = unique_authorization_groups(input_data.authorization_groups)
+    direct_grants = unique_direct_grants(input_data.direct_grants)
+    validate_submission_scope(input_data, parsed_request_type, authorization_groups, direct_grants)
 
     with transaction.atomic():
         access_request = AccessRequest(
@@ -84,25 +85,32 @@ def _submit_access_request(
         )
         access_request.full_clean()
         access_request.save()
-        _create_role_links(access_request, roles)
-        _create_permission_links(access_request, permissions)
-        _record_submitted_event(input_data, access_request, roles, permissions)
+        _create_group_links(access_request, authorization_groups)
+        _create_direct_grant_links(access_request, direct_grants)
+        _record_submitted_event(input_data, access_request, authorization_groups, direct_grants)
         return access_request
 
 
-def _create_role_links(access_request: AccessRequest, roles: tuple[Role, ...]) -> None:
-    for role in roles:
-        link = AccessRequestRole(access_request=access_request, role=role)
+def _create_group_links(
+    access_request: AccessRequest,
+    authorization_groups: tuple[AuthorizationGroup, ...],
+) -> None:
+    for group in authorization_groups:
+        link = AccessRequestGroup(access_request=access_request, authorization_group=group)
         link.full_clean()
         link.save()
 
 
-def _create_permission_links(
+def _create_direct_grant_links(
     access_request: AccessRequest,
-    permissions: tuple[Permission, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> None:
-    for permission in permissions:
-        link = AccessRequestPermission(access_request=access_request, permission=permission)
+    for direct_grant in direct_grants:
+        link = AccessRequestPermission(
+            access_request=access_request,
+            permission=direct_grant.permission,
+            scope_key=direct_grant.scope_key,
+        )
         link.full_clean()
         link.save()
 
@@ -110,8 +118,8 @@ def _create_permission_links(
 def _record_submitted_event(
     input_data: AccessRequestSubmission,
     access_request: AccessRequest,
-    roles: tuple[Role, ...],
-    permissions: tuple[Permission, ...],
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> None:
     _ = AuditService.record(
         AuditRecord(
@@ -120,7 +128,12 @@ def _record_submitted_event(
             action="access_request_submitted",
             target_type="access_request",
             target_id=_request_target_id(access_request),
-            metadata=_audit_metadata(input_data, access_request, roles, permissions),
+            metadata=_audit_metadata(
+                input_data,
+                access_request,
+                authorization_groups,
+                direct_grants,
+            ),
         ),
     )
 
@@ -128,20 +141,21 @@ def _record_submitted_event(
 def _audit_metadata(
     input_data: AccessRequestSubmission,
     access_request: AccessRequest,
-    roles: tuple[Role, ...],
-    permissions: tuple[Permission, ...],
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> dict[str, JsonValue]:
-    role_keys: list[JsonValue] = [role.key for role in roles]
-    permission_keys: list[JsonValue] = [permission.key for permission in permissions]
+    authorization_group_keys: list[JsonValue] = [group.key for group in authorization_groups]
+    direct_grant_items: list[JsonValue] = [
+        {"permission": direct_grant.permission.key, "scope": direct_grant.scope_key}
+        for direct_grant in direct_grants
+    ]
     return {
         "user_id": input_data.user.authentik_user_id,
         "app_key": input_data.app.app_key,
         "request_type": access_request.request_type,
         "grant_type": input_data.grant_type,
-        "roles": role_keys,
-        "role_keys": role_keys,
-        "permissions": permission_keys,
-        "permission_keys": permission_keys,
+        "authorization_group_keys": authorization_group_keys,
+        "direct_grants": direct_grant_items,
         "reason": input_data.reason,
     }
 

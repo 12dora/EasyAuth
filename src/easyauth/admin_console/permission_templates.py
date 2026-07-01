@@ -41,6 +41,7 @@ def handle_permission_template_post(
     try:
         template_format = parse_template_format(raw_format)
         template = parse_permission_template(
+            app_key=app.app_key,
             raw_template=raw_template,
             template_format=template_format,
             imported_by=actor_id,

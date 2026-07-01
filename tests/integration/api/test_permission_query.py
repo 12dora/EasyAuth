@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from http import HTTPStatus
-from re import escape, findall, search
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import Final, Protocol
 
 import pytest
 from django.test import Client, override_settings
@@ -13,10 +12,11 @@ from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode
 from easyauth.applications.models import (
     App,
+    AppScope,
     AppStaticToken,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
     Permission,
-    Role,
-    RolePermission,
 )
 from easyauth.applications.services import StaticTokenService
 from easyauth.audit.models import AuditLog
@@ -26,41 +26,54 @@ from easyauth.grants.models import (
     GRANT_TYPE_PERMANENT,
     GRANT_TYPE_TIMED,
     AccessGrant,
+    AccessGrantGroup,
     AccessGrantPermission,
-    AccessGrantRole,
 )
-
-if TYPE_CHECKING:
-    from easyauth.api.serializers import PermissionQueryResponsePayload
 
 pytestmark = pytest.mark.django_db
 
 PERMISSION_QUERY_TTL_SECONDS: Final = 120
+ACTIVE_APP_CATALOG_VERSION: Final = 12
+EMPTY_APP_CATALOG_VERSION: Final = 7
 
 
 class HttpResponseLike(Protocol):
     status_code: int
     content: bytes
 
+    def json(self) -> dict[str, object]: ...
+
 
 @override_settings(EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS=PERMISSION_QUERY_TTL_SECONDS)
-def test_permission_query_returns_active_roles_permissions_version_expiration_and_audit() -> None:
+def test_permission_query_returns_groups_grants_versions_expiration_and_audit() -> None:
     # Given: 应用静态 token 绑定了当前应用, 用户有当前有效授权。
     user = UserMirror.objects.create(authentik_user_id="user-api-active")
-    app = App.objects.create(app_key="crm-api-active", name="CRM API Active")
+    app = App.objects.create(
+        app_key="crm-api-active",
+        name="CRM API Active",
+        catalog_version=ACTIVE_APP_CATALOG_VERSION,
+    )
+    _scope(app, "SELF")
+    _scope(app, "TEAM")
     issue = StaticTokenService.create_token(app=app, name="CRM integration")
-    admin = Role.objects.create(app=app, key="admin", name="Admin")
-    auditor = Role.objects.create(app=app, key="auditor", name="Auditor")
-    approve = Permission.objects.create(app=app, key="invoice.approve", name="Approve invoices")
-    read = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
-    write = Permission.objects.create(app=app, key="invoice.write", name="Write invoices")
-    _ = RolePermission.objects.create(role=admin, permission=write)
-    _ = RolePermission.objects.create(role=auditor, permission=read)
-    _ = RolePermission.objects.create(role=auditor, permission=write)
+    sales = AuthorizationGroup.objects.create(app=app, key="sales", kind="role", name="销售")
+    finance = AuthorizationGroup.objects.create(app=app, key="finance", kind="bundle", name="财务")
+    approve = _permission(app, "invoice.approve", scopes=["TEAM"])
+    read = _permission(app, "invoice.read", scopes=["SELF"])
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=sales,
+        permission=read,
+        scope_key="SELF",
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=finance,
+        permission=approve,
+        scope_key="TEAM",
+    )
     grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-    _ = AccessGrantRole.objects.create(grant=grant, role=auditor)
-    _ = AccessGrantRole.objects.create(grant=grant, role=admin)
-    _ = AccessGrantPermission.objects.create(grant=grant, permission=approve)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=sales)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=finance)
+    _ = AccessGrantPermission.objects.create(grant=grant, permission=approve, scope_key="TEAM")
 
     # When: 应用通过静态 Bearer token 查询该用户权限。
     before = timezone.now()
@@ -70,15 +83,39 @@ def test_permission_query_returns_active_roles_permissions_version_expiration_an
     )
     after = timezone.now()
 
-    # Then: 响应返回稳定排序、去重权限、当前版本、缓存过期时间, 并写入审计。
+    # Then: 响应返回新版快照结构和审计 metadata。
     assert response.status_code == HTTPStatus.OK
-    payload = _permission_payload(response)
+    payload = response.json()
     assert payload["user_id"] == "user-api-active"
     assert payload["app_key"] == "crm-api-active"
-    assert payload["roles"] == ["admin", "auditor"]
-    assert payload["permissions"] == ["invoice.approve", "invoice.read", "invoice.write"]
-    assert payload["version"] == 1
-    expires_at = datetime.fromisoformat(payload["expires_at"])
+    assert payload["groups"] == [
+        {"key": "finance", "kind": "bundle", "name": "财务"},
+        {"key": "sales", "kind": "role", "name": "销售"},
+    ]
+    assert payload["grants"] == [
+        {
+            "permission": "invoice.approve",
+            "scope": "TEAM",
+            "source_type": "direct",
+            "source_key": "",
+        },
+        {
+            "permission": "invoice.approve",
+            "scope": "TEAM",
+            "source_type": "group",
+            "source_key": "finance",
+        },
+        {
+            "permission": "invoice.read",
+            "scope": "SELF",
+            "source_type": "group",
+            "source_key": "sales",
+        },
+    ]
+    assert payload["grant_version"] == 1
+    assert payload["catalog_version"] == ACTIVE_APP_CATALOG_VERSION
+    assert payload["snapshot_version"] == "1.12"
+    expires_at = datetime.fromisoformat(str(payload["expires_at"]))
     assert expires_at.tzinfo is not None
     assert before + timedelta(seconds=PERMISSION_QUERY_TTL_SECONDS) <= expires_at
     assert expires_at <= after + timedelta(seconds=PERMISSION_QUERY_TTL_SECONDS)
@@ -90,9 +127,11 @@ def test_permission_query_returns_active_roles_permissions_version_expiration_an
     assert audit_log.metadata == {
         "app_key": "crm-api-active",
         "user_id": "user-api-active",
-        "version": 1,
-        "role_count": 2,
-        "permission_count": 3,
+        "group_count": 2,
+        "grant_count": 3,
+        "grant_version": 1,
+        "catalog_version": ACTIVE_APP_CATALOG_VERSION,
+        "snapshot_version": "1.12",
         "credential_type": "static_token",
         "credential_id": issue.credential_id,
     }
@@ -113,13 +152,22 @@ def test_permission_query_returns_empty_for_unknown_disabled_or_departed_user(
     expected_version: int,
 ) -> None:
     # Given: 用户不存在或不处于 active 状态。
-    app = App.objects.create(app_key=f"{user_id}-app", name=f"{user_id} App")
+    app = App.objects.create(
+        app_key=f"{user_id}-app",
+        name=f"{user_id} App",
+        catalog_version=EMPTY_APP_CATALOG_VERSION,
+    )
+    _scope(app, "SELF")
     issue = StaticTokenService.create_token(app=app, name="integration")
     if status is not None:
         user = UserMirror.objects.create(authentik_user_id=user_id, status=status)
         grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-        permission = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
-        _ = AccessGrantPermission.objects.create(grant=grant, permission=permission)
+        permission = _permission(app, "invoice.read", scopes=["SELF"])
+        _ = AccessGrantPermission.objects.create(
+            grant=grant,
+            permission=permission,
+            scope_key="SELF",
+        )
 
     # When: 应用查询该 user_id 的权限。
     response = Client().get(
@@ -129,11 +177,13 @@ def test_permission_query_returns_empty_for_unknown_disabled_or_departed_user(
 
     # Then: 响应不暴露用户存在性, 只返回空授权结果。
     assert response.status_code == HTTPStatus.OK
-    payload = _permission_payload(response)
+    payload = response.json()
     assert payload["user_id"] == user_id
-    assert payload["roles"] == []
-    assert payload["permissions"] == []
-    assert payload["version"] == expected_version
+    assert payload["groups"] == []
+    assert payload["grants"] == []
+    assert payload["grant_version"] == expected_version
+    assert payload["catalog_version"] == EMPTY_APP_CATALOG_VERSION
+    assert payload["snapshot_version"] == f"{expected_version}.{EMPTY_APP_CATALOG_VERSION}"
 
 
 @pytest.mark.parametrize(
@@ -151,6 +201,7 @@ def test_permission_query_returns_empty_for_revoked_or_expired_grant(
     # Given: 用户最近授权已撤销或过期。
     user = UserMirror.objects.create(authentik_user_id=user_id)
     app = App.objects.create(app_key=f"{user_id}-app", name=f"{user_id} App")
+    _scope(app, "SELF")
     issue = StaticTokenService.create_token(app=app, name="integration")
     grant = AccessGrant.objects.create(
         user=user,
@@ -160,8 +211,8 @@ def test_permission_query_returns_empty_for_revoked_or_expired_grant(
         is_current=False,
         version=expected_version,
     )
-    permission = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
-    _ = AccessGrantPermission.objects.create(grant=grant, permission=permission)
+    permission = _permission(app, "invoice.read", scopes=["SELF"])
+    _ = AccessGrantPermission.objects.create(grant=grant, permission=permission, scope_key="SELF")
 
     # When: 应用查询该用户权限。
     response = Client().get(
@@ -171,10 +222,10 @@ def test_permission_query_returns_empty_for_revoked_or_expired_grant(
 
     # Then: 响应保留最新版本但不返回任何授权。
     assert response.status_code == HTTPStatus.OK
-    payload = _permission_payload(response)
-    assert payload["roles"] == []
-    assert payload["permissions"] == []
-    assert payload["version"] == expected_version
+    payload = response.json()
+    assert payload["groups"] == []
+    assert payload["grants"] == []
+    assert payload["grant_version"] == expected_version
 
 
 @override_settings(EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS=PERMISSION_QUERY_TTL_SECONDS)
@@ -182,8 +233,9 @@ def test_permission_query_uses_earlier_timed_grant_expiration_when_before_ttl() 
     # Given: 当前有效 timed grant 比默认缓存 TTL 更早过期。
     user = UserMirror.objects.create(authentik_user_id="user-api-timed")
     app = App.objects.create(app_key="timed-api-app", name="Timed API App")
+    _scope(app, "SELF")
     issue = StaticTokenService.create_token(app=app, name="integration")
-    permission = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
+    permission = _permission(app, "invoice.read", scopes=["SELF"])
     grant_expires_at = timezone.now() + timedelta(seconds=30)
     grant = AccessGrant.objects.create(
         user=user,
@@ -191,7 +243,7 @@ def test_permission_query_uses_earlier_timed_grant_expiration_when_before_ttl() 
         grant_type=GRANT_TYPE_TIMED,
         grant_expires_at=grant_expires_at,
     )
-    _ = AccessGrantPermission.objects.create(grant=grant, permission=permission)
+    _ = AccessGrantPermission.objects.create(grant=grant, permission=permission, scope_key="SELF")
 
     # When: 应用查询该用户权限。
     response = Client().get(
@@ -201,8 +253,8 @@ def test_permission_query_uses_earlier_timed_grant_expiration_when_before_ttl() 
 
     # Then: expires_at 使用 grant_expires_at, 而不是默认 TTL。
     assert response.status_code == HTTPStatus.OK
-    payload = _permission_payload(response)
-    assert datetime.fromisoformat(payload["expires_at"]) == grant_expires_at
+    payload = response.json()
+    assert datetime.fromisoformat(str(payload["expires_at"])) == grant_expires_at
 
 
 @pytest.mark.parametrize("ttl_setting", [0, -1, "60", True, False, None])
@@ -223,7 +275,7 @@ def test_permission_query_uses_default_ttl_for_invalid_configuration(ttl_setting
 
     # Then: 非法 TTL 退回默认 300 秒。
     assert response.status_code == HTTPStatus.OK
-    expires_at = datetime.fromisoformat(_permission_payload(response)["expires_at"])
+    expires_at = datetime.fromisoformat(str(response.json()["expires_at"]))
     assert before + timedelta(seconds=300) <= expires_at
     assert expires_at <= after + timedelta(seconds=300)
 
@@ -244,7 +296,7 @@ def test_permission_query_uses_default_ttl_when_no_override_is_configured() -> N
 
     # Then: 未覆盖配置时使用默认 300 秒。
     assert response.status_code == HTTPStatus.OK
-    expires_at = datetime.fromisoformat(_permission_payload(response)["expires_at"])
+    expires_at = datetime.fromisoformat(str(response.json()["expires_at"]))
     assert before + timedelta(seconds=300) <= expires_at
     assert expires_at <= after + timedelta(seconds=300)
 
@@ -298,45 +350,17 @@ def _bearer(token: str) -> str:
     return f"Bearer {token}"
 
 
-def _permission_payload(response: HttpResponseLike) -> PermissionQueryResponsePayload:
-    return {
-        "user_id": _json_string(response, "user_id"),
-        "app_key": _json_string(response, "app_key"),
-        "roles": _json_string_array(response, "roles"),
-        "permissions": _json_string_array(response, "permissions"),
-        "version": _json_int(response, "version"),
-        "expires_at": _json_string(response, "expires_at"),
-    }
+def _scope(app: App, key: str, *, is_active: bool = True) -> AppScope:
+    return AppScope.objects.create(app=app, key=key, name=key.title(), is_active=is_active)
 
 
-def _json_string(response: HttpResponseLike, key: str) -> str:
-    return _json_field_match(response, key, r'"{key}"\s*:\s*"([^"]*)"')
-
-
-def _json_string_array(response: HttpResponseLike, key: str) -> list[str]:
-    array_content = _json_field_match(response, key, r'"{key}"\s*:\s*\[(.*?)\]')
-    return findall(r'"([^"]*)"', array_content)
-
-
-def _json_int(response: HttpResponseLike, key: str) -> int:
-    return int(_json_field_match(response, key, r'"{key}"\s*:\s*(\d+)'))
-
-
-def _json_field_match(response: HttpResponseLike, key: str, pattern: str) -> str:
-    match search(pattern.format(key=escape(key)), _response_body(response)):
-        case None:
-            raise AssertionError(_response_body(response))
-        case result:
-            return result.group(1)
-
-
-def _response_body(response: HttpResponseLike) -> str:
-    return response.content.decode()
+def _permission(app: App, key: str, *, scopes: list[str]) -> Permission:
+    return Permission.objects.create(app=app, key=key, name=key, supported_scopes=scopes)
 
 
 def _assert_error(response: HttpResponseLike, *, status_code: HTTPStatus, code: ErrorCode) -> None:
     assert response.status_code == status_code
-    body = _response_body(response)
-    assert search(r'"code"\s*:\s*"' + escape(code.value) + r'"', body) is not None
-    assert search(r'"message"\s*:\s*"[^"]*"', body) is not None
-    assert search(r'"details"\s*:\s*\{\}', body) is not None
+    payload = response.json()["error"]
+    assert payload["code"] == code.value
+    assert isinstance(payload["message"], str)
+    assert payload["details"] == {}

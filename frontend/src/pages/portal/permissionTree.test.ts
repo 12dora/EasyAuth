@@ -101,4 +101,9 @@ describe("portal permission tree helpers", () => {
     expect(isPermissionGroupItem(groups[0])).toBe(true);
     expect(isPermissionGroupItem(crmOrderRead)).toBe(false);
   });
+
+  test("PermissionGroup 只做目录展示，不进入可提交权限 key", () => {
+    expect(collectPermissionKeys([groups[0]], [])).not.toContain("orders");
+    expect(collectPermissionKeys([groups[0]], [])).not.toContain("orders.refund");
+  });
 });

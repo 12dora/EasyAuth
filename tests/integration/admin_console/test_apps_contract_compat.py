@@ -15,10 +15,13 @@ from easyauth.applications.models import (
     App,
     AppCredential,
     AppMembership,
+    ApprovalRule,
+    AppScope,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
     Permission,
     PermissionTemplateVersion,
     Role,
-    RolePermission,
 )
 from easyauth.applications.services import StaticTokenService
 
@@ -98,7 +101,7 @@ def test_apps_list_supports_documented_filters_and_pagination() -> None:
 
 
 def test_app_detail_includes_documented_summary_fields() -> None:
-    # Given: owner 可见一个含成员、Role、Permission、active 凭据和模板版本的 App。
+    # Given: owner 可见一个含成员、Role、Permission、授权组、active 凭据和模板版本的 App。
     client = _logged_in_user("apps-contract-detail-owner")
     app = App.objects.create(app_key="apps-contract-detail-crm", name="CRM")
     _ = AppMembership.objects.create(app=app, user_id="apps-contract-detail-owner", role="owner")
@@ -113,10 +116,33 @@ def test_app_detail_includes_documented_summary_fields() -> None:
         role="developer",
         is_active=False,
     )
+    _ = AppScope.objects.create(app=app, key="GLOBAL", name="全局")
     _ = Role.objects.create(app=app, key="sales", name="Sales")
     _ = Role.objects.create(app=app, key="finance", name="Finance")
-    _ = Permission.objects.create(app=app, key="deal.read", name="Read deals")
-    _ = Permission.objects.create(app=app, key="deal.write", name="Write deals")
+    read_permission = Permission.objects.create(
+        app=app,
+        key="deal.read",
+        name="Read deals",
+        supported_scopes=["GLOBAL"],
+    )
+    write_permission = Permission.objects.create(
+        app=app,
+        key="deal.write",
+        name="Write deals",
+        supported_scopes=["GLOBAL"],
+    )
+    sales_group = _authorization_group_with_rule(app=app, key="sales", name="Sales")
+    finance_group = _authorization_group_with_rule(app=app, key="finance", name="Finance")
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=sales_group,
+        permission=read_permission,
+        scope_key="GLOBAL",
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=finance_group,
+        permission=write_permission,
+        scope_key="GLOBAL",
+    )
     active_token = StaticTokenService.create_token(app=app, name="active")
     inactive_token = StaticTokenService.create_token(app=app, name="inactive")
     _ = AppCredential.objects.filter(id=inactive_token.credential_id).update(is_active=False)
@@ -150,9 +176,9 @@ def test_app_detail_includes_documented_summary_fields() -> None:
         "action_count": 1,
     }
     assert item["configuration_summary"] == {
-        "status": "blocking",
-        "issue_count": 4,
-        "blocking_count": 4,
+        "status": "ready",
+        "issue_count": 0,
+        "blocking_count": 0,
         "warning_count": 0,
     }
 
@@ -250,13 +276,29 @@ def test_apps_create_and_patch_errors_use_documented_error_codes() -> None:
 
 
 def test_configuration_status_includes_items_alias_with_documented_target_fields() -> None:
-    # Given: owner 可见一个 requestable Role 缺少 active ApprovalRule 的 App。
+    # Given: owner 可见一个 requestable AuthorizationGroup 缺少 active ApprovalRule 的 App。
     client = _logged_in_user("apps-contract-config-owner")
     app = App.objects.create(app_key="apps-contract-config-crm", name="CRM")
     _ = AppMembership.objects.create(app=app, user_id="apps-contract-config-owner", role="owner")
-    role = Role.objects.create(app=app, key="sales_manager", name="Sales Manager")
-    permission = Permission.objects.create(app=app, key="deal.read", name="Read deals")
-    _ = RolePermission.objects.create(role=role, permission=permission)
+    _ = AppScope.objects.create(app=app, key="GLOBAL", name="全局")
+    role = AuthorizationGroup.objects.create(
+        app=app,
+        key="sales_manager",
+        kind="role",
+        name="Sales Manager",
+        requestable=True,
+    )
+    permission = Permission.objects.create(
+        app=app,
+        key="deal.read",
+        name="Read deals",
+        supported_scopes=["GLOBAL"],
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=role,
+        permission=permission,
+        scope_key="GLOBAL",
+    )
     _ = StaticTokenService.create_token(app=app, name="token")
 
     # When: owner 查询配置完整性。
@@ -271,9 +313,9 @@ def test_configuration_status_includes_items_alias_with_documented_target_fields
     assert body["status"] == "blocking"
     assert items == issues
     assert item["level"] == "blocking"
-    assert item["code"] == "requestable_role_approval_rule_missing"
-    assert item["message"] == "requestable Role 必须存在 active ApprovalRule。"
-    assert item["target_type"] == "role"
+    assert item["code"] == "requestable_authorization_group_approval_rule_missing"
+    assert item["message"] == "requestable AuthorizationGroup 必须存在 active ApprovalRule。"
+    assert item["target_type"] == "authorization_group"
     assert item["target_id"] == "sales_manager"
 
 
@@ -311,6 +353,22 @@ def _error_code(response: HttpResponseLike) -> JsonValue:
     body = _response_json_object(response)
     error = _json_object(body["error"])
     return error["code"]
+
+
+def _authorization_group_with_rule(*, app: App, key: str, name: str) -> AuthorizationGroup:
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key=key,
+        kind="role",
+        name=name,
+        requestable=True,
+    )
+    _ = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=group,
+        approver_userids=["manager-001"],
+    )
+    return group
 
 
 def _expected_detail_fields() -> set[str]:

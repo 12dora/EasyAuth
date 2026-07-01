@@ -5,7 +5,15 @@ from typing import override
 
 from django.db import transaction
 
-from easyauth.applications.models import App, ApprovalRule, Permission, Role, RolePermission
+from easyauth.applications.catalog_version import bump_catalog_version
+from easyauth.applications.models import (
+    App,
+    ApprovalRule,
+    AuthorizationGroup,
+    Permission,
+    Role,
+    RolePermission,
+)
 from easyauth.audit.services import AuditRecord, AuditService
 
 
@@ -27,7 +35,7 @@ class RolePermissionMutation:
 class ApprovalRuleMutation:
     app: App
     rule: ApprovalRule
-    role: Role | None
+    authorization_group: AuthorizationGroup | None
     permission: Permission | None
     approver_userids: tuple[str, ...]
     is_active: bool
@@ -37,7 +45,7 @@ class ApprovalRuleMutation:
 @dataclass(frozen=True, slots=True)
 class ApprovalRuleCreateMutation:
     app: App
-    role: Role | None
+    authorization_group: AuthorizationGroup | None
     permission: Permission | None
     approver_userids: tuple[str, ...]
     is_active: bool
@@ -88,6 +96,12 @@ def set_role_permission(input_data: RolePermissionMutation) -> None:
         actor=input_data.actor,
         metadata=metadata,
     )
+    bump_catalog_version(
+        input_data.app,
+        actor_id=input_data.actor.actor_id,
+        reason="role_permission_matrix_changed",
+        metadata=metadata,
+    )
 
 
 @transaction.atomic
@@ -135,7 +149,7 @@ def create_permission(
 def create_approval_rule(input_data: ApprovalRuleCreateMutation) -> ApprovalRule:
     rule = ApprovalRule(
         app=input_data.app,
-        role=input_data.role,
+        authorization_group=input_data.authorization_group,
         permission=input_data.permission,
         approver_userids=list(input_data.approver_userids),
         is_active=input_data.is_active,
@@ -147,7 +161,17 @@ def create_approval_rule(input_data: ApprovalRuleCreateMutation) -> ApprovalRule
         app=input_data.app,
         actor=input_data.actor,
         metadata=_approval_rule_metadata(
-            role=input_data.role,
+            authorization_group=input_data.authorization_group,
+            permission=input_data.permission,
+            approver_count=len(input_data.approver_userids),
+        ),
+    )
+    bump_catalog_version(
+        input_data.app,
+        actor_id=input_data.actor.actor_id,
+        reason="approval_rule_created",
+        metadata=_approval_rule_metadata(
+            authorization_group=input_data.authorization_group,
             permission=input_data.permission,
             approver_count=len(input_data.approver_userids),
         ),
@@ -159,23 +183,46 @@ def create_approval_rule(input_data: ApprovalRuleCreateMutation) -> ApprovalRule
 def update_approval_rule(input_data: ApprovalRuleMutation) -> ApprovalRule:
     if input_data.rule.app != input_data.app:
         raise ConsoleConfigurationError(code="approval_rule_app_mismatch")
-    if input_data.role is not None and input_data.role.app_id != input_data.app.id:
-        raise ConsoleConfigurationError(code="role_app_mismatch")
+    if (
+        input_data.authorization_group is not None
+        and input_data.authorization_group.app_id != input_data.app.id
+    ):
+        raise ConsoleConfigurationError(code="authorization_group_app_mismatch")
     if input_data.permission is not None and input_data.permission.app_id != input_data.app.id:
         raise ConsoleConfigurationError(code="permission_app_mismatch")
 
-    input_data.rule.role = input_data.role
+    input_data.rule.role = None
+    input_data.rule.authorization_group = input_data.authorization_group
     input_data.rule.permission = input_data.permission
     input_data.rule.approver_userids = list(input_data.approver_userids)
     input_data.rule.is_active = input_data.is_active
     input_data.rule.full_clean()
-    input_data.rule.save(update_fields=["role", "permission", "approver_userids", "is_active"])
+    input_data.rule.save(
+        update_fields=[
+            "role",
+            "authorization_group",
+            "permission",
+            "approver_userids",
+            "is_active",
+        ],
+    )
     _record_config_event(
         action="approval_rule_updated",
         app=input_data.app,
         actor=input_data.actor,
         metadata=_approval_rule_metadata(
-            role=input_data.role,
+            authorization_group=input_data.authorization_group,
+            permission=input_data.permission,
+            approver_count=len(input_data.approver_userids),
+            is_active=input_data.is_active,
+        ),
+    )
+    bump_catalog_version(
+        input_data.app,
+        actor_id=input_data.actor.actor_id,
+        reason="approval_rule_updated",
+        metadata=_approval_rule_metadata(
+            authorization_group=input_data.authorization_group,
             permission=input_data.permission,
             approver_count=len(input_data.approver_userids),
             is_active=input_data.is_active,
@@ -186,16 +233,17 @@ def update_approval_rule(input_data: ApprovalRuleMutation) -> ApprovalRule:
 
 def _approval_rule_metadata(
     *,
-    role: Role | None,
+    authorization_group: AuthorizationGroup | None,
     permission: Permission | None,
     approver_count: int,
     is_active: bool | None = None,
 ) -> dict[str, str | bool | int]:
     metadata: dict[str, str | bool | int] = {"approver_count": approver_count}
-    if role is not None:
-        metadata["target_type"] = "role"
-        metadata["target_key"] = role.key
-        metadata["role_key"] = role.key
+    if authorization_group is not None:
+        metadata["target_type"] = "authorization_group"
+        metadata["target_key"] = authorization_group.key
+        metadata["authorization_group_key"] = authorization_group.key
+        metadata["role_key"] = authorization_group.key
     if permission is not None:
         metadata["target_type"] = "permission"
         metadata["target_key"] = permission.key

@@ -8,7 +8,7 @@ from urllib.parse import urlencode
 from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
 from django.shortcuts import render
 
-from easyauth.access_requests.models import AccessRequest, AccessRequestRole
+from easyauth.access_requests.models import AccessRequest, AccessRequestGroup
 from easyauth.access_requests.services import (
     AccessRequestService,
     AccessRequestSubmission,
@@ -17,6 +17,7 @@ from easyauth.access_requests.services import (
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.logout_state import browser_is_marked_logged_out, logged_out_redirect
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
+from easyauth.applications.models import AuthorizationGroup
 from easyauth.frontend_shell import render_react_shell, shell_user_from_user
 from easyauth.portal.forms import AccessRequestForm, app_options, role_options
 from easyauth.portal.grant_rows import current_grant_rows_for_user, expiring_grant_rows
@@ -49,7 +50,7 @@ class PortalSubmission:
     grant_expires_at: datetime | None
     lifetime: str
     reason: str
-    roles: tuple[Role, ...]
+    authorization_groups: tuple[AuthorizationGroup, ...]
 
 
 def portal_home(request: HttpRequest) -> HttpResponse:
@@ -93,7 +94,10 @@ def _legacy_post_response(request: HttpRequest, user: UserMirror) -> HttpRespons
                     grant_expires_at=form.selected_grant_expires_at(),
                     lifetime=form.selected_lifetime(),
                     reason=form.selected_reason(),
-                    roles=(selected_role,),
+                    authorization_groups=_authorization_groups_for_legacy_roles(
+                        form.selected_app(),
+                        (selected_role,),
+                    ),
                 ),
             )
         except AccessRequestSubmissionError as exc:
@@ -132,7 +136,7 @@ def request_rows_for_user(user: UserMirror) -> list[AccessRequestRow]:
         .filter(user=user)
         .order_by("-submitted_at", "id")
     )
-    role_names_by_request_id = _role_names_by_request_id(
+    group_names_by_request_id = _group_names_by_request_id(
         [access_request.id for access_request in access_requests],
     )
     return [
@@ -140,7 +144,7 @@ def request_rows_for_user(user: UserMirror) -> list[AccessRequestRow]:
             app_name=access_request.app.name,
             grant_label=_grant_label(access_request),
             reason=access_request.reason,
-            role_names=role_names_by_request_id.get(access_request.id, "-"),
+            role_names=group_names_by_request_id.get(access_request.id, "-"),
             status=access_request.status,
             status_label=status_label(access_request.status),
             status_tone=status_tone(access_request.status),
@@ -150,23 +154,23 @@ def request_rows_for_user(user: UserMirror) -> list[AccessRequestRow]:
     ]
 
 
-def _role_names_by_request_id(request_ids: Sequence[int]) -> dict[int, str]:
+def _group_names_by_request_id(request_ids: Sequence[int]) -> dict[int, str]:
     if not request_ids:
         return {}
 
-    role_name_lists: dict[int, list[str]] = {request_id: [] for request_id in request_ids}
-    request_roles = (
-        AccessRequestRole.objects.select_related("role")
+    group_name_lists: dict[int, list[str]] = {request_id: [] for request_id in request_ids}
+    request_groups = (
+        AccessRequestGroup.objects.select_related("authorization_group")
         .filter(access_request_id__in=request_ids)
-        .order_by("access_request_id", "role__key")
+        .order_by("access_request_id", "authorization_group__key")
     )
-    for request_role in request_roles:
-        role_name_lists.setdefault(request_role.access_request_id, []).append(
-            request_role.role.name,
+    for request_group in request_groups:
+        group_name_lists.setdefault(request_group.access_request_id, []).append(
+            request_group.authorization_group.name,
         )
     return {
-        request_id: "、".join(role_names) if role_names else "-"
-        for request_id, role_names in role_name_lists.items()
+        request_id: "、".join(group_names) if group_names else "-"
+        for request_id, group_names in group_name_lists.items()
     }
 
 
@@ -189,7 +193,7 @@ def _submit_access_request(
         AccessRequestSubmission(
             user=requester,
             app=submission.app,
-            roles=submission.roles,
+            authorization_groups=submission.authorization_groups,
             grant_type=_grant_type(submission.lifetime),
             grant_expires_at=submission.grant_expires_at,
             reason=submission.reason,
@@ -197,6 +201,18 @@ def _submit_access_request(
             actor_id=requester.authentik_user_id,
         ),
     )
+
+
+def _authorization_groups_for_legacy_roles(
+    app: App,
+    roles: tuple[Role, ...],
+) -> tuple[AuthorizationGroup, ...]:
+    role_keys = tuple(role.key for role in roles)
+    group_by_key = {
+        group.key: group
+        for group in AuthorizationGroup.objects.filter(app=app, key__in=role_keys)
+    }
+    return tuple(group_by_key[key] for key in role_keys if key in group_by_key)
 
 
 def _grant_type(lifetime: str) -> Literal["permanent", "timed"]:

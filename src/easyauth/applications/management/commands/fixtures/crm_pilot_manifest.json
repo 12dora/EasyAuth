@@ -1,0 +1,110 @@
+{
+  "schema_version": 1,
+  "app": {
+    "app_key": "crm",
+    "name": "CRM",
+    "description": "CRM 试点应用"
+  },
+  "scopes": [
+    {
+      "key": "SELF",
+      "name": "本人",
+      "description": "本人数据范围",
+      "is_active": true,
+      "display_order": 10
+    },
+    {
+      "key": "MANAGED",
+      "name": "管理范围",
+      "description": "管理范围内数据",
+      "is_active": true,
+      "display_order": 20
+    },
+    {
+      "key": "ALL",
+      "name": "全部",
+      "description": "全部数据范围",
+      "is_active": true,
+      "display_order": 30
+    }
+  ],
+  "permission_groups": [
+    {
+      "key": "crm.customer",
+      "name": "客户管理",
+      "description": "客户资料和导出能力",
+      "parent_key": "",
+      "display_order": 10,
+      "is_active": true
+    }
+  ],
+  "permissions": [
+    {
+      "key": "customer.profile.view",
+      "name": "查看客户资料",
+      "description": "查看客户基本资料",
+      "group_key": "crm.customer",
+      "supported_scopes": ["SELF", "MANAGED", "ALL"],
+      "risk_level": "standard",
+      "is_active": true
+    },
+    {
+      "key": "customer.export",
+      "name": "导出客户",
+      "description": "导出客户数据",
+      "group_key": "crm.customer",
+      "supported_scopes": ["MANAGED", "ALL"],
+      "risk_level": "high",
+      "is_active": true
+    },
+    {
+      "key": "customer.profile.edit",
+      "name": "编辑客户资料",
+      "description": "编辑客户基本资料",
+      "group_key": "crm.customer",
+      "supported_scopes": ["MANAGED", "ALL"],
+      "risk_level": "standard",
+      "is_active": true
+    }
+  ],
+  "authorization_groups": [
+    {
+      "key": "admin",
+      "kind": "role",
+      "name": "CRM 管理员",
+      "description": "CRM 管理员授权组",
+      "requestable": true,
+      "is_active": true,
+      "grants": [
+        {"permission": "customer.profile.view", "scope": "ALL"},
+        {"permission": "customer.export", "scope": "ALL"},
+        {"permission": "customer.profile.edit", "scope": "ALL"}
+      ]
+    },
+    {
+      "key": "auditor",
+      "kind": "role",
+      "name": "CRM 审计员",
+      "description": "CRM 审计员授权组",
+      "requestable": true,
+      "is_active": true,
+      "grants": [
+        {"permission": "customer.profile.view", "scope": "MANAGED"}
+      ]
+    }
+  ],
+  "approval_rules": [
+    {
+      "target_type": "authorization_group",
+      "target_key": "admin",
+      "approver_userids": ["manager-001"],
+      "is_active": true
+    },
+    {
+      "target_type": "authorization_group",
+      "target_key": "auditor",
+      "approver_userids": ["manager-001"],
+      "is_active": true
+    }
+  ]
+}

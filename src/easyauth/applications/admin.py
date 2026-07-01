@@ -8,6 +8,9 @@ from easyauth.applications.models import (
     App,
     AppCredential,
     ApprovalRule,
+    AppScope,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
     Permission,
     Role,
     RolePermission,
@@ -20,6 +23,15 @@ if TYPE_CHECKING:
         pass
 
     class RoleAdminBase(admin.ModelAdmin[Role]):
+        pass
+
+    class AppScopeAdminBase(admin.ModelAdmin[AppScope]):
+        pass
+
+    class AuthorizationGroupAdminBase(admin.ModelAdmin[AuthorizationGroup]):
+        pass
+
+    class AuthorizationGroupGrantAdminBase(admin.ModelAdmin[AuthorizationGroupGrant]):
         pass
 
     class PermissionAdminBase(admin.ModelAdmin[Permission]):
@@ -40,6 +52,15 @@ else:
         pass
 
     class RoleAdminBase(admin.ModelAdmin):
+        pass
+
+    class AppScopeAdminBase(admin.ModelAdmin):
+        pass
+
+    class AuthorizationGroupAdminBase(admin.ModelAdmin):
+        pass
+
+    class AuthorizationGroupGrantAdminBase(admin.ModelAdmin):
         pass
 
     class PermissionAdminBase(admin.ModelAdmin):
@@ -83,17 +104,78 @@ class RoleAdmin(RoleAdminBase):
     def approval_rule_status(self, obj: Role) -> str:
         if not obj.requestable:
             return "不可申请"
-        if ApprovalRule.objects.filter(role=obj, is_active=True).exists():
+        authorization_group = AuthorizationGroup.objects.filter(
+            app=obj.app,
+            key=obj.key,
+            kind="role",
+            is_active=True,
+        ).first()
+        if (
+            authorization_group is not None
+            and ApprovalRule.objects.filter(
+                authorization_group=authorization_group,
+                is_active=True,
+            ).exists()
+        ):
             return "有效"
         return "缺少有效审批规则"
+
+
+@admin.register(AppScope)
+@final
+class AppScopeAdmin(AppScopeAdminBase):
+    list_display = ("app", "key", "name", "is_active", "display_order", "created_at", "updated_at")
+    search_fields = ("app__app_key", "key", "name")
+    list_filter = ("app", "is_active")
+    readonly_fields = ("created_at", "updated_at")
 
 
 @admin.register(Permission)
 @final
 class PermissionAdmin(PermissionAdminBase):
-    list_display = ("app", "key", "name", "is_active", "created_at", "updated_at")
+    list_display = (
+        "app",
+        "key",
+        "name",
+        "risk_level",
+        "is_active",
+        "created_at",
+        "updated_at",
+    )
     search_fields = ("app__app_key", "key", "name")
-    list_filter = ("app", "is_active")
+    list_filter = ("app", "risk_level", "is_active")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(AuthorizationGroup)
+@final
+class AuthorizationGroupAdmin(AuthorizationGroupAdminBase):
+    list_display = (
+        "app",
+        "key",
+        "kind",
+        "name",
+        "requestable",
+        "is_active",
+        "created_at",
+        "updated_at",
+    )
+    search_fields = ("app__app_key", "key", "name")
+    list_filter = ("app", "kind", "requestable", "is_active")
+    readonly_fields = ("created_at", "updated_at")
+
+
+@admin.register(AuthorizationGroupGrant)
+@final
+class AuthorizationGroupGrantAdmin(AuthorizationGroupGrantAdminBase):
+    list_display = ("authorization_group", "permission", "scope_key", "is_active", "created_at")
+    search_fields = (
+        "authorization_group__app__app_key",
+        "authorization_group__key",
+        "permission__key",
+        "scope_key",
+    )
+    list_filter = ("authorization_group__app", "scope_key", "is_active")
     readonly_fields = ("created_at", "updated_at")
 
 

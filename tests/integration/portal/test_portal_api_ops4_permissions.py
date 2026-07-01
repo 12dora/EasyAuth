@@ -9,12 +9,19 @@ import pytest
 from django.utils import timezone
 
 from easyauth.access_requests.models import AccessRequest, AccessRequestPermission
-from easyauth.applications.models import App, ApprovalRule, Permission, Role, RolePermission
+from easyauth.applications.models import (
+    App,
+    ApprovalRule,
+    AppScope,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
+    Permission,
+)
 from easyauth.grants.models import (
     GRANT_TYPE_TIMED,
     AccessGrant,
+    AccessGrantGroup,
     AccessGrantPermission,
-    AccessGrantRole,
 )
 from tests.integration.portal.helpers import logged_in_client
 from tests.integration.portal.json_helpers import json_object
@@ -23,6 +30,7 @@ pytestmark = pytest.mark.django_db
 
 GRANTS_API_URL: Final = "/portal/api/v1/me/grants"
 REQUESTS_API_URL: Final = "/portal/api/v1/me/access-requests"
+DEFAULT_SCOPE_KEY: Final = "GLOBAL"
 
 
 def test_ops4_portal_api_submits_grant_request_with_direct_permission() -> None:
@@ -38,8 +46,8 @@ def test_ops4_portal_api_submits_grant_request_with_direct_permission() -> None:
             {
                 "app_key": app.app_key,
                 "request_type": "grant",
-                "role_keys": [],
-                "permission_keys": [permission.key],
+                "authorization_group_keys": [],
+                "direct_grants": [{"permission": permission.key, "scope": DEFAULT_SCOPE_KEY}],
                 "grant_type": "permanent",
                 "grant_expires_at": None,
                 "reason": "申请 direct permission",
@@ -56,9 +64,16 @@ def test_ops4_portal_api_submits_grant_request_with_direct_permission() -> None:
             flat=True,
         ),
     )
+    scope_keys = tuple(
+        AccessRequestPermission.objects.filter(access_request=access_request).values_list(
+            "scope_key",
+            flat=True,
+        ),
+    )
     assert response.status_code == HTTPStatus.CREATED
     assert access_request.request_type == "grant"
     assert permission_keys == (permission.key,)
+    assert scope_keys == (DEFAULT_SCOPE_KEY,)
 
 
 def test_ops4_portal_api_lists_access_request_direct_permissions() -> None:
@@ -68,15 +83,19 @@ def test_ops4_portal_api_lists_access_request_direct_permissions() -> None:
     old_permission = _requestable_permission(app=app, key="invoice.read")
     new_permission = _requestable_permission(app=app, key="invoice.write")
     current_grant = AccessGrant.objects.create(user=user, app=app)
-    _ = AccessGrantPermission.objects.create(grant=current_grant, permission=old_permission)
+    _ = AccessGrantPermission.objects.create(
+        grant=current_grant,
+        permission=old_permission,
+        scope_key=DEFAULT_SCOPE_KEY,
+    )
     post_response = client.post(
         REQUESTS_API_URL,
         data=dumps(
             {
                 "app_key": app.app_key,
                 "request_type": "change",
-                "role_keys": [],
-                "permission_keys": [new_permission.key],
+                "authorization_group_keys": [],
+                "direct_grants": [{"permission": new_permission.key, "scope": DEFAULT_SCOPE_KEY}],
                 "grant_type": GRANT_TYPE_TIMED,
                 "grant_expires_at": (timezone.now() + timedelta(days=30)).isoformat(),
                 "reason": "提交 direct permission 申请",
@@ -95,52 +114,107 @@ def test_ops4_portal_api_lists_access_request_direct_permissions() -> None:
     assert isinstance(item, dict), response.content.decode()
     assert post_response.status_code == HTTPStatus.CREATED
     assert response.status_code == HTTPStatus.OK
-    assert item["permissions"] == [new_permission.key]
-    assert item["permission_names"] == [new_permission.name]
-    assert item["roles"] == []
+    assert item["direct_grants"] == [
+        {
+            "permission": new_permission.key,
+            "permission_name": new_permission.name,
+            "scope": DEFAULT_SCOPE_KEY,
+        },
+    ]
+    assert item["authorization_groups"] == []
 
 
-def test_ops4_portal_api_hides_inactive_role_and_derived_permissions() -> None:
-    # Given: 当前员工授权同时绑定 active Role、inactive Role 和 direct Permission。
+def test_ops4_portal_api_hides_inactive_group_and_derived_grants() -> None:
+    # Given: 当前员工授权同时绑定 active group、inactive group 和 direct grant。
     client, user = logged_in_client("ops4-grants-inactive-role-user")
     app = App.objects.create(app_key="ops4-grants-inactive-role", name="OPS4 Inactive Role")
-    active_role = Role.objects.create(app=app, key="active-role", name="有效角色")
-    inactive_role = Role.objects.create(
+    _ = AppScope.objects.create(app=app, key=DEFAULT_SCOPE_KEY, name="Global")
+    active_group = AuthorizationGroup.objects.create(
+        app=app,
+        key="active-role",
+        kind="role",
+        name="有效角色",
+    )
+    inactive_group = AuthorizationGroup.objects.create(
         app=app,
         key="inactive-role",
+        kind="role",
         name="停用角色",
         is_active=False,
     )
-    active_permission = Permission.objects.create(app=app, key="active.read", name="有效权限")
+    active_permission = Permission.objects.create(
+        app=app,
+        key="active.read",
+        name="有效权限",
+        supported_scopes=[DEFAULT_SCOPE_KEY],
+    )
     inactive_role_permission = Permission.objects.create(
         app=app,
         key="inactive-role.read",
         name="停用角色派生权限",
+        supported_scopes=[DEFAULT_SCOPE_KEY],
     )
-    direct_permission = Permission.objects.create(app=app, key="direct.read", name="直接权限")
-    _ = RolePermission.objects.create(role=active_role, permission=active_permission)
-    _ = RolePermission.objects.create(role=inactive_role, permission=inactive_role_permission)
+    direct_permission = Permission.objects.create(
+        app=app,
+        key="direct.read",
+        name="直接权限",
+        supported_scopes=[DEFAULT_SCOPE_KEY],
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=active_group,
+        permission=active_permission,
+        scope_key=DEFAULT_SCOPE_KEY,
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=inactive_group,
+        permission=inactive_role_permission,
+        scope_key=DEFAULT_SCOPE_KEY,
+    )
     grant = AccessGrant.objects.create(user=user, app=app)
-    _ = AccessGrantRole.objects.create(grant=grant, role=active_role)
-    _ = AccessGrantRole.objects.create(grant=grant, role=inactive_role)
-    _ = AccessGrantPermission.objects.create(grant=grant, permission=direct_permission)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=active_group)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=inactive_group)
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=direct_permission,
+        scope_key=DEFAULT_SCOPE_KEY,
+    )
 
     # When: 员工读取自己的当前授权 API。
     response = client.get(GRANTS_API_URL)
 
-    # Then: 响应不返回 inactive Role, 也不返回 inactive Role 派生权限。
+    # Then: 响应不返回 inactive group, 也不返回 inactive group 派生 grant。
     items = json_object(response)["items"]
     assert isinstance(items, list), response.content.decode()
     item = items[0]
     assert isinstance(item, dict), response.content.decode()
     assert response.status_code == HTTPStatus.OK
-    assert item["roles"] == [active_role.key]
-    assert item["role_names"] == [active_role.name]
-    assert item["permissions"] == [active_permission.key, direct_permission.key]
+    assert item["groups"] == [
+        {"key": active_group.key, "kind": active_group.kind, "name": active_group.name},
+    ]
+    assert item["grants"] == [
+        {
+            "permission": active_permission.key,
+            "scope": DEFAULT_SCOPE_KEY,
+            "source_type": "group",
+            "source_key": active_group.key,
+        },
+        {
+            "permission": direct_permission.key,
+            "scope": DEFAULT_SCOPE_KEY,
+            "source_type": "direct",
+            "source_key": "",
+        },
+    ]
 
 
 def _requestable_permission(*, app: App, key: str) -> Permission:
-    permission = Permission.objects.create(app=app, key=key, name=key)
+    _ = AppScope.objects.get_or_create(app=app, key=DEFAULT_SCOPE_KEY, defaults={"name": "Global"})
+    permission = Permission.objects.create(
+        app=app,
+        key=key,
+        name=key,
+        supported_scopes=[DEFAULT_SCOPE_KEY],
+    )
     _ = ApprovalRule.objects.create(
         app=app,
         permission=permission,

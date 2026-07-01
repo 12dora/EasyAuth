@@ -13,7 +13,7 @@ from easyauth.access_requests.models import (
     REQUEST_STATUS_GRANT_FAILED,
     REQUEST_TYPE_RENEW,
     AccessRequest,
-    AccessRequestRole,
+    AccessRequestGroup,
 )
 from easyauth.access_requests.services import (
     AccessRequestApplication,
@@ -21,9 +21,14 @@ from easyauth.access_requests.services import (
     AccessRequestService,
 )
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App, ApprovalRule, Role, RoleAccessPolicy
+from easyauth.applications.models import (
+    App,
+    ApprovalRule,
+    AuthorizationGroup,
+    AuthorizationGroupAccessPolicy,
+)
 from easyauth.audit.models import AuditLog
-from easyauth.grants.models import GRANT_STATUS_ACTIVE, AccessGrant, AccessGrantRole
+from easyauth.grants.models import GRANT_STATUS_ACTIVE, AccessGrant, AccessGrantGroup
 
 pytestmark = pytest.mark.django_db
 
@@ -31,14 +36,23 @@ INITIAL_VERSION: Final = 1
 
 
 def test_ops4_apply_approved_renew_request_rechecks_high_risk_duration_policy() -> None:
-    # Given: 续期申请审批通过后, 高风险角色策略在应用前被收紧。
+    # Given: 续期申请审批通过后, 高风险授权组策略在应用前被收紧。
     user = UserMirror.objects.create(authentik_user_id="ops4-apply-renew-high-risk-user")
     app = App.objects.create(
         app_key="ops4-apply-renew-high-risk-app",
         name="OPS4 Apply Renew High Risk",
     )
-    role = Role.objects.create(app=app, key="admin", name="Admin")
-    _ = ApprovalRule.objects.create(app=app, role=role, approver_userids=["manager-001"])
+    authorization_group = AuthorizationGroup.objects.create(
+        app=app,
+        key="admin",
+        kind="role",
+        name="Admin",
+    )
+    _ = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=authorization_group,
+        approver_userids=["manager-001"],
+    )
     current_expires_at = timezone.now() + timedelta(days=3)
     requested_expires_at = timezone.now() + timedelta(days=10)
     grant = AccessGrant.objects.create(
@@ -47,7 +61,7 @@ def test_ops4_apply_approved_renew_request_rechecks_high_risk_duration_policy() 
         grant_type=GRANT_TYPE_TIMED,
         grant_expires_at=current_expires_at,
     )
-    _ = AccessGrantRole.objects.create(grant=grant, role=role)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=authorization_group)
     access_request = _approved_request(
         user=user,
         app=app,
@@ -55,9 +69,12 @@ def test_ops4_apply_approved_renew_request_rechecks_high_risk_duration_policy() 
         grant_type=GRANT_TYPE_TIMED,
         grant_expires_at=requested_expires_at,
     )
-    _ = AccessRequestRole.objects.create(access_request=access_request, role=role)
-    _ = RoleAccessPolicy.objects.create(
-        role=role,
+    _ = AccessRequestGroup.objects.create(
+        access_request=access_request,
+        authorization_group=authorization_group,
+    )
+    _ = AuthorizationGroupAccessPolicy.objects.create(
+        authorization_group=authorization_group,
         is_high_risk=True,
         max_grant_duration_days=5,
     )

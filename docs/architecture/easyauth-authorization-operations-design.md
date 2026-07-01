@@ -18,7 +18,7 @@
 - 应用开发者可以获得当前 App 的接入说明、示例请求、错误语义和联调结果。
 - 普通员工可以看到自己的当前授权、申请状态和即将过期授权。
 - 系统管理员可以定位失败申请、失败授权、凭据风险、依赖健康和审计事件。
-- 下游应用继续通过现有权限查询 API 消费扁平 `permissions`，不感知权限模板和模块分组。
+- 下游应用继续通过权限查询 API 消费授权快照；EasyAuth 内部用 App manifest 维护 scope、权限分组、原子权限、授权组、授权组 grant 和审批规则。
 
 ## 非目标
 
@@ -26,7 +26,7 @@
 - 不实现下游应用 OIDC、SAML、Proxy 或 SCIM 登录接入。
 - 不实现 DingTalk 审批流程设计器。
 - 不把 DingTalk 审批结果直接作为授权事实。
-- 不让权限模板直接授予用户权限。
+- 不让 App manifest 直接授予用户权限；manifest 只定义目录事实，授权事实仍由申请、审批和 `GrantService` 产生。
 - 不实现 ABAC、行级权限、字段级权限、AI 权限推荐或跨应用权限复制。
 
 ## 架构分层
@@ -40,7 +40,7 @@
 
 运营服务层
   AppConfigurationService
-  PermissionTemplateImportService
+  AppManifestImportService
   CredentialOperationService
   PermissionQueryTestService
   GrantFailureRecoveryService
@@ -55,7 +55,7 @@
   PermissionQueryService
 
 持久化层
-  App、Role、Permission、PermissionGroup、PermissionTemplateVersion
+  App、AppScope、Permission、PermissionGroup、AuthorizationGroup、AuthorizationGroupGrant、PermissionTemplateVersion
   ApprovalRule、AccessRequest、AccessGrant、AppCredential、AuditLog
 ```
 
@@ -68,12 +68,12 @@
 - 只能读取自己的 `AccessGrant`、`AccessRequest` 和授权到期提醒。
 - 可以提交新增权限申请。
 - 二期再支持变更、撤销和续期申请。
-- 不能直接创建、编辑或禁用 App、Role、Permission、ApprovalRule 或凭据。
+- 不能直接创建、编辑或禁用 App、AuthorizationGroup、Permission、ApprovalRule 或凭据。
 
 ### 应用负责人
 
 - 通过 `AppMembership(role=owner)` 获得某个 App 的运营权限。
-- 只能管理自己负责 App 的 Role、Permission、RolePermission、ApprovalRule、PermissionGroup、PermissionTemplateVersion 和凭据。
+- 只能管理自己负责 App 的 scope、Permission、AuthorizationGroup、AuthorizationGroupGrant、ApprovalRule、PermissionGroup、manifest 版本和凭据。
 - 可以查看本 App 的申请、授权、审计和联调结果。
 - 不能执行全局审计、全局紧急撤权或跨 App 配置。
 
@@ -113,7 +113,7 @@
 
 ### PermissionGroup
 
-用途：表达权限模板中的 group 节点和手工维护的模块分组。
+用途：表达 App manifest 中的权限目录分组和手工维护的模块分组。
 
 关键字段：
 
@@ -152,9 +152,9 @@
 - 同一 Permission 同一时间只能有一个直接父 group。
 - `deprecated_at` 不等于删除；历史授权、审计和 RolePermission 仍可引用该 Permission。
 
-### PermissionTemplateVersion
+### Manifest 版本记录
 
-用途：记录下游应用提供的权限目录快照，以及导入行为的可追溯信息。
+用途：记录下游应用提供的 App manifest 快照，以及导入行为的可追溯信息。短期复用 `PermissionTemplateVersion` 表时，语义必须按 manifest 版本理解，不能再把它当作只包含 group/permission 树的模板。
 
 关键字段：
 
@@ -172,7 +172,7 @@
 规则：
 
 - 同一个 App 下 `version` 单调递增。
-- `content_hash` 用于识别重复模板。
+- `content_hash` 用于识别重复 manifest。
 - `raw_template` 保存原始 JSON/YAML 时必须控制大小，不能保存密钥或外部系统凭据。
 - `import_summary` 记录新增、禁用、移动、重命名和废弃结果。
 - 模板预览结果不写入 `PermissionTemplateVersion`，只允许进入短期缓存或专用 Preview 记录。
@@ -193,24 +193,25 @@
 
 健康快照不保存 Authentik、DingTalk 或 OAuth client secret。
 
-## 权限模板导入流程
+## App Manifest 导入流程
 
 ```text
-1. 应用负责人上传或粘贴 JSON/YAML 模板。
+1. 应用负责人上传或粘贴 JSON/YAML manifest。
 2. 边界层解析格式并限制大小。
-3. PermissionTemplateImportService 校验 schema、key 唯一性、最大深度和环。
-4. 服务按 App 当前 PermissionGroup 与 Permission 计算差异。
+3. AppManifestImportService 校验 schema、key 唯一性、引用完整性和 scope 支持关系。
+4. 服务按 App 当前 scope、PermissionGroup、Permission、AuthorizationGroup、AuthorizationGroupGrant 和 ApprovalRule 计算差异。
 5. 页面展示新增、移动、重命名、禁用和废弃清单。
 6. 应用负责人确认导入。
-7. 服务在事务中写入 PermissionGroup、Permission 归属和 PermissionTemplateVersion。
-8. 写入 permission_template_imported 审计事件。
+7. 服务在事务中写入 App 基本信息、scope、权限分组、权限、授权组、授权组 grant、审批规则和 manifest 版本记录。
+8. 通过统一目录版本服务提升 `App.catalog_version`。
+9. 写入 manifest 导入审计事件。
 ```
 
 导入规则：
 
-- 新出现的 permission key 可以创建为 active Permission。
-- 模板缺失但已有引用的 Permission 只能标记 inactive 或 deprecated。
-- 模板缺失且无任何引用的 Permission 也建议先 inactive，不做物理删除。
+- 新出现的 scope、permission group、permission 和 authorization group 可以创建为 active。
+- manifest 缺失但已有引用的 Permission 只能标记 inactive 或 deprecated。
+- manifest 缺失且无任何引用的 Permission 也建议先 inactive，不做物理删除。
 - group key 改名视为新增 group 加旧 group inactive，除非用户明确选择“重命名展示名”。
 - permission key 的业务含义变化必须新建 key。
 
@@ -220,14 +221,14 @@
 
 最低检查项：
 
-- active App 至少有一个 active Role。
-- requestable Role 必须 active。
-- requestable Role 必须存在 active ApprovalRule。
-- RolePermission 不能跨 App。
-- ApprovalRule 目标必须属于同一个 App。
-- 可申请 Role 至少映射一个 active Permission。
+- active App 至少有一个 active Permission。
+- active App 至少有一个 active AuthorizationGroup。
+- active App 至少有一个 active owner。
 - active App 至少有一个 active 静态 app token 或 active OAuth2 client binding。
-- 权限模板存在 group 时，叶子 Permission 应尽量归属到 group；未归类只作为 warning。
+- requestable AuthorizationGroup 必须存在 active ApprovalRule。
+- AuthorizationGroupGrant 不能指向 inactive AuthorizationGroup 或 Permission。
+- active Permission 必须声明 supported_scopes。
+- active Permission 不应归属 inactive PermissionGroup。
 
 结果分级：
 
@@ -340,19 +341,19 @@
 交付物：
 
 - `AppMembership`。
-- `PermissionGroup`、`PermissionTemplateVersion` 和 Permission 分组/废弃字段。
+- `AppScope`、`PermissionGroup`、`AuthorizationGroup`、`AuthorizationGroupGrant`、manifest 版本记录和 Permission 分组/废弃字段。
 - `AppConfigurationService`。
-- `PermissionTemplateImportService`。
-- RolePermission 矩阵配置。
+- `AppManifestImportService`。
+- 授权组 grant 配置和兼容期 RolePermission 矩阵配置。
 - 凭据创建、轮换、禁用入口。
 - 联调测试台和接入说明页。
 
 验收标准：
 
 - 应用负责人只能管理自己负责的 App。
-- 模板支持 group 节点、permission 叶子节点和最多 5 层嵌套。
-- 模板导入不会删除历史 Permission，也不会改变既有 `Permission.key` 含义。
-- RolePermission 矩阵保存后，公共权限查询 API 契约和字段语义不变。
+- manifest 支持 scope、permission group、permission、authorization group、grant 和 approval rule。
+- manifest 导入不会删除历史 Permission，也不会改变既有 `Permission.key` 含义。
+- 目录配置变更后必须提升 `App.catalog_version`，权限查询快照通过 grant version 与 catalog version 表达授权事实版本。
 - 联调测试可以展示真实权限查询结果和常见错误解释。
 
 约束：

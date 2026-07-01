@@ -19,6 +19,7 @@ from easyauth.applications.models import (
     App,
     AppCredential,
     ApprovalRule,
+    AuthorizationGroup,
     Permission,
     Role,
     RolePermission,
@@ -129,11 +130,16 @@ def test_app_credential_admin_does_not_allow_direct_existing_credential_mutation
     assert credential_admin.has_view_permission(request, credential) is True
 
 
-def test_approval_rule_admin_rejects_role_from_another_app() -> None:
+def test_approval_rule_admin_rejects_authorization_group_from_another_app() -> None:
     # Given
     crm = App.objects.create(app_key="crm-admin-rule", name="CRM Admin Rule")
     erp = App.objects.create(app_key="erp-admin-rule", name="ERP Admin Rule")
-    cross_app_role = Role.objects.create(app=erp, key="admin", name="Admin")
+    cross_app_group = AuthorizationGroup.objects.create(
+        app=erp,
+        key="admin",
+        kind="role",
+        name="Admin",
+    )
     rule_admin = ApprovalRuleAdmin(ApprovalRule, AdminSite())
     form_class = rule_admin.get_form(_request())
 
@@ -141,7 +147,7 @@ def test_approval_rule_admin_rejects_role_from_another_app() -> None:
     form = form_class(
         data={
             "app": str(crm.id),
-            "role": str(cross_app_role.id),
+            "authorization_group": str(cross_app_group.id),
             "permission": "",
             "approver_userids": '["manager-001"]',
             "is_active": "on",
@@ -150,7 +156,7 @@ def test_approval_rule_admin_rejects_role_from_another_app() -> None:
 
     # Then
     assert form.is_valid() is False
-    assert "Role must belong to the approval rule app." in str(form.errors)
+    assert "Authorization group must belong to the approval rule app." in str(form.errors)
 
 
 def test_role_admin_marks_requestable_role_without_active_rule_as_invalid() -> None:
@@ -162,13 +168,19 @@ def test_role_admin_marks_requestable_role_without_active_rule_as_invalid() -> N
         name="Admin",
         requestable=True,
     )
+    authorization_group = AuthorizationGroup.objects.create(
+        app=app,
+        key=requestable_role.key,
+        kind="role",
+        name=requestable_role.name,
+    )
     role_admin = RoleAdmin(Role, AdminSite())
 
     # When
     status_without_rule = role_admin.approval_rule_status(requestable_role)
     _ = ApprovalRule.objects.create(
         app=app,
-        role=requestable_role,
+        authorization_group=authorization_group,
         approver_userids=["manager-001"],
     )
     status_with_rule = role_admin.approval_rule_status(requestable_role)

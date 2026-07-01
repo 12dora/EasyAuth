@@ -6,7 +6,7 @@ import pytest
 from django.utils import timezone
 
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App, Permission, Role, RolePermission
+from easyauth.applications.models import App, AppScope, AuthorizationGroup, Permission
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import (
     GRANT_STATUS_ACTIVE,
@@ -15,27 +15,48 @@ from easyauth.grants.models import (
     GRANT_TYPE_PERMANENT,
     GRANT_TYPE_TIMED,
     AccessGrant,
+    AccessGrantGroup,
     AccessGrantPermission,
-    AccessGrantRole,
 )
-from easyauth.grants.services import GrantExpirationInput, GrantMutationInput, GrantService
+from easyauth.grants.services import (
+    GrantExpirationInput,
+    GrantMutationInput,
+    GrantService,
+    ScopedDirectGrantInput,
+)
 
 pytestmark = pytest.mark.django_db
 
 INITIAL_VERSION: Final = 1
 CHANGED_VERSION: Final = 2
+DEFAULT_SCOPE_KEY: Final = "GLOBAL"
 
 
 def grant_target_id(user: UserMirror, app: App) -> str:
     return f"{user.authentik_user_id}:{app.app_key}"
 
 
-def test_create_grant_creates_current_grant_with_memberships_and_audit_log() -> None:
+def _scoped_permission(app: App, *, key: str, name: str) -> Permission:
+    _ = AppScope.objects.get_or_create(app=app, key=DEFAULT_SCOPE_KEY, defaults={"name": "Global"})
+    return Permission.objects.create(
+        app=app,
+        key=key,
+        name=name,
+        supported_scopes=[DEFAULT_SCOPE_KEY],
+    )
+
+
+def test_create_grant_creates_current_grant_with_groups_scoped_grants_and_audit_log() -> None:
     # Given
     user = UserMirror.objects.create(authentik_user_id="user-create-grant")
     app = App.objects.create(app_key="create-grant-app", name="Create Grant App")
-    role = Role.objects.create(app=app, key="operator", name="Operator")
-    permission = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="operator",
+        kind="role",
+        name="Operator",
+    )
+    permission = _scoped_permission(app, key="invoice.read", name="Read invoices")
 
     # When
     grant = GrantService.create_grant(
@@ -44,8 +65,8 @@ def test_create_grant_creates_current_grant_with_memberships_and_audit_log() -> 
             app=app,
             grant_type=GRANT_TYPE_PERMANENT,
             grant_expires_at=None,
-            roles=(role,),
-            permissions=(permission,),
+            authorization_groups=(group,),
+            direct_grants=(ScopedDirectGrantInput(permission, DEFAULT_SCOPE_KEY),),
             actor_type="admin",
             actor_id="admin-create",
         ),
@@ -55,14 +76,20 @@ def test_create_grant_creates_current_grant_with_memberships_and_audit_log() -> 
     assert grant.status == GRANT_STATUS_ACTIVE
     assert grant.is_current is True
     assert grant.version == INITIAL_VERSION
-    role_keys = list(
-        AccessGrantRole.objects.filter(grant=grant).values_list("role__key", flat=True),
+    group_keys = list(
+        AccessGrantGroup.objects.filter(grant=grant).values_list(
+            "authorization_group__key",
+            flat=True,
+        ),
     )
-    permission_keys = list(
-        AccessGrantPermission.objects.filter(grant=grant).values_list("permission__key", flat=True),
+    scoped_permission_keys = list(
+        AccessGrantPermission.objects.filter(grant=grant).values_list(
+            "permission__key",
+            "scope_key",
+        ),
     )
-    assert role_keys == ["operator"]
-    assert permission_keys == ["invoice.read"]
+    assert group_keys == ["operator"]
+    assert scoped_permission_keys == [("invoice.read", DEFAULT_SCOPE_KEY)]
     audit_log = AuditLog.objects.get(
         event_type="grant_created",
         target_id=grant_target_id(user, app),
@@ -72,17 +99,31 @@ def test_create_grant_creates_current_grant_with_memberships_and_audit_log() -> 
     assert audit_log.metadata["version"] == INITIAL_VERSION
 
 
-def test_change_grant_replaces_current_grant_memberships_and_records_audit_log() -> None:
+def test_change_grant_replaces_current_group_and_scoped_direct_grants() -> None:
     # Given
     user = UserMirror.objects.create(authentik_user_id="user-change-grant")
     app = App.objects.create(app_key="change-grant-app", name="Change Grant App")
-    old_role = Role.objects.create(app=app, key="reader", name="Reader")
-    new_role = Role.objects.create(app=app, key="writer", name="Writer")
-    old_permission = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
-    new_permission = Permission.objects.create(app=app, key="invoice.write", name="Write invoices")
+    old_group = AuthorizationGroup.objects.create(
+        app=app,
+        key="reader",
+        kind="role",
+        name="Reader",
+    )
+    new_group = AuthorizationGroup.objects.create(
+        app=app,
+        key="writer",
+        kind="role",
+        name="Writer",
+    )
+    old_permission = _scoped_permission(app, key="invoice.read", name="Read invoices")
+    new_permission = _scoped_permission(app, key="invoice.write", name="Write invoices")
     current = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-    _ = AccessGrantRole.objects.create(grant=current, role=old_role)
-    _ = AccessGrantPermission.objects.create(grant=current, permission=old_permission)
+    _ = AccessGrantGroup.objects.create(grant=current, authorization_group=old_group)
+    _ = AccessGrantPermission.objects.create(
+        grant=current,
+        permission=old_permission,
+        scope_key=DEFAULT_SCOPE_KEY,
+    )
 
     # When
     changed = GrantService.change_grant(
@@ -91,8 +132,8 @@ def test_change_grant_replaces_current_grant_memberships_and_records_audit_log()
             app=app,
             grant_type=GRANT_TYPE_PERMANENT,
             grant_expires_at=None,
-            roles=(new_role,),
-            permissions=(new_permission,),
+            authorization_groups=(new_group,),
+            direct_grants=(ScopedDirectGrantInput(new_permission, DEFAULT_SCOPE_KEY),),
             actor_type="admin",
             actor_id="admin-change",
         ),
@@ -103,17 +144,20 @@ def test_change_grant_replaces_current_grant_memberships_and_records_audit_log()
     assert changed.status == GRANT_STATUS_ACTIVE
     assert changed.is_current is True
     assert changed.version == CHANGED_VERSION
-    role_keys = list(
-        AccessGrantRole.objects.filter(grant=changed).values_list("role__key", flat=True),
-    )
-    permission_keys = list(
-        AccessGrantPermission.objects.filter(grant=changed).values_list(
-            "permission__key",
+    group_keys = list(
+        AccessGrantGroup.objects.filter(grant=changed).values_list(
+            "authorization_group__key",
             flat=True,
         ),
     )
-    assert role_keys == ["writer"]
-    assert permission_keys == ["invoice.write"]
+    scoped_permission_keys = list(
+        AccessGrantPermission.objects.filter(grant=changed).values_list(
+            "permission__key",
+            "scope_key",
+        ),
+    )
+    assert group_keys == ["writer"]
+    assert scoped_permission_keys == [("invoice.write", DEFAULT_SCOPE_KEY)]
     audit_log = AuditLog.objects.get(
         event_type="grant_changed",
         target_id=grant_target_id(user, app),
@@ -200,9 +244,12 @@ def test_change_grant_without_current_grant_creates_initial_current_grant() -> N
     # Given
     user = UserMirror.objects.create(authentik_user_id="user-change-without-current")
     app = App.objects.create(app_key="change-without-current-app", name="Change Without Current")
-    role = Role.objects.create(app=app, key="auditor", name="Auditor")
-    permission = Permission.objects.create(app=app, key="audit.read", name="Read audit")
-    _ = RolePermission.objects.create(role=role, permission=permission)
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="auditor",
+        kind="role",
+        name="Auditor",
+    )
 
     # When
     grant = GrantService.change_grant(
@@ -211,8 +258,8 @@ def test_change_grant_without_current_grant_creates_initial_current_grant() -> N
             app=app,
             grant_type=GRANT_TYPE_PERMANENT,
             grant_expires_at=None,
-            roles=(role,),
-            permissions=(),
+            authorization_groups=(group,),
+            direct_grants=(),
             actor_type="admin",
             actor_id="admin-initial-change",
         ),
@@ -221,7 +268,53 @@ def test_change_grant_without_current_grant_creates_initial_current_grant() -> N
     # Then
     assert grant.version == INITIAL_VERSION
     assert grant.is_current is True
-    role_keys = list(
-        AccessGrantRole.objects.filter(grant=grant).values_list("role__key", flat=True),
+    group_keys = list(
+        AccessGrantGroup.objects.filter(grant=grant).values_list(
+            "authorization_group__key",
+            flat=True,
+        ),
     )
-    assert role_keys == ["auditor"]
+    assert group_keys == ["auditor"]
+
+
+def test_change_grant_preserves_distinct_direct_grants_for_same_permission_across_scopes() -> None:
+    # Given
+    user = UserMirror.objects.create(authentik_user_id="user-change-scopes")
+    app = App.objects.create(app_key="change-scopes-app", name="Change Scopes")
+    _ = AppScope.objects.create(app=app, key="SELF", name="Self")
+    _ = AppScope.objects.create(app=app, key="TEAM", name="Team")
+    permission = Permission.objects.create(
+        app=app,
+        key="invoice.export",
+        name="Export invoices",
+        supported_scopes=["SELF", "TEAM"],
+    )
+
+    # When
+    grant = GrantService.change_grant(
+        GrantMutationInput(
+            user=user,
+            app=app,
+            grant_type=GRANT_TYPE_PERMANENT,
+            grant_expires_at=None,
+            authorization_groups=(),
+            direct_grants=(
+                ScopedDirectGrantInput(permission, "SELF"),
+                ScopedDirectGrantInput(permission, "TEAM"),
+            ),
+            actor_type="admin",
+            actor_id="admin-scopes",
+        ),
+    )
+
+    # Then
+    scoped_permission_keys = list(
+        AccessGrantPermission.objects.filter(grant=grant).values_list(
+            "permission__key",
+            "scope_key",
+        ),
+    )
+    assert scoped_permission_keys == [
+        ("invoice.export", "SELF"),
+        ("invoice.export", "TEAM"),
+    ]

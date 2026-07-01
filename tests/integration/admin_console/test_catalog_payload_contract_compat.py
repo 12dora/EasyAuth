@@ -10,7 +10,7 @@ from django.test import Client
 from pydantic import TypeAdapter
 
 from easyauth.api.errors import ErrorCode, JsonValue
-from easyauth.applications.models import App, AppMembership, Permission, PermissionGroup
+from easyauth.applications.models import App, AppMembership, AppScope, Permission, PermissionGroup
 
 pytestmark = pytest.mark.django_db
 
@@ -59,11 +59,19 @@ def test_permission_writes_accept_group_key_contract() -> None:
     app = _member_app("catalog-payload-permission", "catalog-payload-permission-owner")
     source = PermissionGroup.objects.create(app=app, key="SOURCE", name="Source")
     target = PermissionGroup.objects.create(app=app, key="TARGET", name="Target")
+    scope = AppScope.objects.create(app=app, key="GLOBAL", name="Global")
 
     # When: owner 使用 group_key 创建 Permission, 再通过 key route 移动到另一个分组。
     created = client.post(
         f"{APPS_API_URL}/{app.app_key}/permissions",
-        data=dumps({"key": "report.read", "name": "Read report", "group_key": source.key}),
+        data=dumps(
+            {
+                "key": "report.read",
+                "name": "Read report",
+                "group_key": source.key,
+                "supported_scopes": [scope.key],
+            },
+        ),
         content_type="application/json",
     )
     moved = client.patch(

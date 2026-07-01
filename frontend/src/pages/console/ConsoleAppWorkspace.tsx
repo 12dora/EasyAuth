@@ -8,18 +8,20 @@ import type { AppListPayload } from "../../lib/domain";
 import { CatalogTab } from "./workspace/tabs/CatalogTab";
 import { CredentialsTab } from "./workspace/tabs/CredentialsTab";
 import { GuideTab } from "./workspace/tabs/GuideTab";
+import { ManifestTab } from "./workspace/tabs/ManifestTab";
 import { MatrixTab } from "./workspace/tabs/MatrixTab";
 import { OverviewTab } from "./workspace/tabs/OverviewTab";
 import { QueryTestTab } from "./workspace/tabs/QueryTestTab";
 import { RulesTab } from "./workspace/tabs/RulesTab";
 
-type WorkspaceTab = "overview" | "catalog" | "matrix" | "rules" | "credentials" | "test" | "guide";
+type WorkspaceTab = "overview" | "catalog" | "matrix" | "rules" | "manifest" | "credentials" | "test" | "guide";
 
 const TABS: Array<{ key: WorkspaceTab; label: string }> = [
   { key: "overview", label: "总览" },
   { key: "catalog", label: "权限目录" },
-  { key: "matrix", label: "矩阵" },
+  { key: "matrix", label: "授权组" },
   { key: "rules", label: "审批规则" },
+  { key: "manifest", label: "Manifest" },
   { key: "credentials", label: "凭据" },
   { key: "test", label: "联调" },
   { key: "guide", label: "接入说明" },
@@ -64,6 +66,7 @@ export function ConsoleAppWorkspace() {
       {activeTab === "catalog" ? <CatalogTab appKey={appKey} /> : null}
       {activeTab === "matrix" ? <MatrixTab appKey={appKey} /> : null}
       {activeTab === "rules" ? <RulesTab appKey={appKey} /> : null}
+      {activeTab === "manifest" ? <ManifestTab appKey={appKey} /> : null}
       {activeTab === "credentials" ? <CredentialsTab appKey={appKey} /> : null}
       {activeTab === "test" ? <QueryTestTab appKey={appKey} /> : null}
       {activeTab === "guide" ? <GuideTab appKey={appKey} /> : null}

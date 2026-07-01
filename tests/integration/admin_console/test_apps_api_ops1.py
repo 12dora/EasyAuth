@@ -10,7 +10,16 @@ from django.test import Client
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode, JsonValue
-from easyauth.applications.models import App, AppMembership, Role
+from easyauth.applications.models import (
+    App,
+    AppMembership,
+    ApprovalRule,
+    AppScope,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
+    Permission,
+    PermissionGroup,
+)
 from easyauth.applications.services import StaticTokenService
 from easyauth.audit.models import AuditLog
 
@@ -340,7 +349,7 @@ def test_ops1_apps_api_patch_rejects_app_key_payload() -> None:
 
 
 def test_ops1_configuration_status_api_uses_app_readiness_service() -> None:
-    # Given: developer 可见一个缺少 active Role 和凭据的 App。
+    # Given: developer 可见一个缺少 active 授权目录、owner 和凭据的 App。
     client = _logged_in_user("ops1-app-config-api-developer")
     app = App.objects.create(app_key="ops1-api-config-crm", name="CRM")
     _ = AppMembership.objects.create(
@@ -356,8 +365,20 @@ def test_ops1_configuration_status_api_uses_app_readiness_service() -> None:
     body = response.content.decode()
     assert response.status_code == HTTPStatus.OK
     assert response.json()["status"] == "blocking"
-    assert "active_role_missing" in body
+    assert "active_permission_missing" in body
+    assert "active_authorization_group_missing" in body
+    assert "active_owner_missing" in body
     assert "active_credential_missing" in body
+    issues = response.json()["issues"]
+    assert {
+        (issue["code"], issue["target_type"])
+        for issue in issues
+    } >= {
+        ("active_permission_missing", "permission"),
+        ("active_authorization_group_missing", "authorization_group"),
+        ("active_owner_missing", "membership"),
+        ("active_credential_missing", "credential"),
+    }
 
 
 def test_ops1_memberships_api_lists_app_memberships_for_visible_app() -> None:
@@ -557,11 +578,36 @@ def test_ops1_apps_api_rejects_anonymous_user() -> None:
 
 
 def test_ops1_configuration_status_api_can_return_ready_status() -> None:
-    # Given: owner 可见一个具备 active Role 和 active 凭据的 App。
+    # Given: owner 可见一个具备 active 授权目录和 active 凭据的 App。
     client = _logged_in_user("ops1-config-ready-owner")
     app = App.objects.create(app_key="ops1-api-config-ready", name="Ready CRM")
     _ = AppMembership.objects.create(app=app, user_id="ops1-config-ready-owner", role="owner")
-    _ = Role.objects.create(app=app, key="auditor", name="Auditor", requestable=False)
+    _ = AppScope.objects.create(app=app, key="GLOBAL", name="Global")
+    permission_group = PermissionGroup.objects.create(app=app, key="CUSTOMER", name="Customer")
+    permission = Permission.objects.create(
+        app=app,
+        group=permission_group,
+        key="customer.read",
+        name="Read customer",
+        supported_scopes=["GLOBAL"],
+    )
+    authorization_group = AuthorizationGroup.objects.create(
+        app=app,
+        key="auditor",
+        kind="role",
+        name="Auditor",
+        requestable=True,
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=authorization_group,
+        permission=permission,
+        scope_key="GLOBAL",
+    )
+    _ = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=authorization_group,
+        approver_userids=["manager-001"],
+    )
     _ = StaticTokenService.create_token(app=app, name="token")
 
     # When: owner 查询配置状态。

@@ -4,8 +4,8 @@ from typing import TYPE_CHECKING
 
 from easyauth.access_requests.models import (
     AccessRequest,
+    AccessRequestGroup,
     AccessRequestPermission,
-    AccessRequestRole,
 )
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import JsonValue
@@ -24,78 +24,75 @@ def access_request_items_for_user(user: UserMirror) -> tuple[PortalJsonObject, .
         .order_by("-submitted_at", "id"),
     )
     request_ids = tuple(access_request.id for access_request in access_requests)
-    role_keys, role_names = _request_roles_by_request_id(request_ids)
-    permission_keys, permission_names = _request_permissions_by_request_id(request_ids)
+    group_items = _request_groups_by_request_id(request_ids)
+    direct_grant_items = _request_direct_grants_by_request_id(request_ids)
     return tuple(
         _access_request_item(
             access_request,
-            role_keys=role_keys.get(access_request.id, ()),
-            role_names=role_names.get(access_request.id, ()),
-            permission_keys=permission_keys.get(access_request.id, ()),
-            permission_names=permission_names.get(access_request.id, ()),
+            group_items=group_items.get(access_request.id, ()),
+            direct_grant_items=direct_grant_items.get(access_request.id, ()),
         )
         for access_request in access_requests
     )
 
 
 def access_request_item(access_request: AccessRequest) -> PortalJsonObject:
-    role_keys, role_names = _request_roles_by_request_id((access_request.id,))
-    permission_keys, permission_names = _request_permissions_by_request_id((access_request.id,))
+    group_items = _request_groups_by_request_id((access_request.id,))
+    direct_grant_items = _request_direct_grants_by_request_id((access_request.id,))
     return _access_request_item(
         access_request,
-        role_keys=role_keys.get(access_request.id, ()),
-        role_names=role_names.get(access_request.id, ()),
-        permission_keys=permission_keys.get(access_request.id, ()),
-        permission_names=permission_names.get(access_request.id, ()),
+        group_items=group_items.get(access_request.id, ()),
+        direct_grant_items=direct_grant_items.get(access_request.id, ()),
     )
 
 
-def _request_roles_by_request_id(
+def _request_groups_by_request_id(
     request_ids: tuple[int, ...],
-) -> tuple[dict[int, tuple[str, ...]], dict[int, tuple[str, ...]]]:
-    role_keys: dict[int, list[str]] = {request_id: [] for request_id in request_ids}
-    role_names: dict[int, list[str]] = {request_id: [] for request_id in request_ids}
+) -> dict[int, tuple[dict[str, JsonValue], ...]]:
+    group_items: dict[int, list[dict[str, JsonValue]]] = {
+        request_id: [] for request_id in request_ids
+    }
     links = (
-        AccessRequestRole.objects.select_related("role")
+        AccessRequestGroup.objects.select_related("authorization_group")
         .filter(access_request_id__in=request_ids)
-        .order_by("access_request_id", "role__key")
+        .order_by("access_request_id", "authorization_group__key")
     )
     for link in links:
-        role_keys.setdefault(link.access_request_id, []).append(link.role.key)
-        role_names.setdefault(link.access_request_id, []).append(link.role.name)
-    return (
-        {request_id: tuple(keys) for request_id, keys in role_keys.items()},
-        {request_id: tuple(names) for request_id, names in role_names.items()},
-    )
+        group = link.authorization_group
+        group_items.setdefault(link.access_request_id, []).append(
+            {"key": group.key, "kind": group.kind, "name": group.name},
+        )
+    return {request_id: tuple(items) for request_id, items in group_items.items()}
 
 
-def _request_permissions_by_request_id(
+def _request_direct_grants_by_request_id(
     request_ids: tuple[int, ...],
-) -> tuple[dict[int, tuple[str, ...]], dict[int, tuple[str, ...]]]:
-    permission_keys: dict[int, list[str]] = {request_id: [] for request_id in request_ids}
-    permission_names: dict[int, list[str]] = {request_id: [] for request_id in request_ids}
+) -> dict[int, tuple[dict[str, JsonValue], ...]]:
+    direct_grant_items: dict[int, list[dict[str, JsonValue]]] = {
+        request_id: [] for request_id in request_ids
+    }
     links = (
         AccessRequestPermission.objects.select_related("access_request", "permission")
         .filter(access_request_id__in=request_ids)
-        .order_by("access_request_id", "permission__key")
+        .order_by("access_request_id", "permission__key", "scope_key")
     )
     for link in links:
         request_id = link.access_request.id
-        permission_keys.setdefault(request_id, []).append(link.permission.key)
-        permission_names.setdefault(request_id, []).append(link.permission.name)
-    return (
-        {request_id: tuple(keys) for request_id, keys in permission_keys.items()},
-        {request_id: tuple(names) for request_id, names in permission_names.items()},
-    )
+        direct_grant_items.setdefault(request_id, []).append(
+            {
+                "permission": link.permission.key,
+                "permission_name": link.permission.name,
+                "scope": link.scope_key,
+            },
+        )
+    return {request_id: tuple(items) for request_id, items in direct_grant_items.items()}
 
 
 def _access_request_item(
     access_request: AccessRequest,
     *,
-    role_keys: tuple[str, ...],
-    role_names: tuple[str, ...],
-    permission_keys: tuple[str, ...],
-    permission_names: tuple[str, ...],
+    group_items: tuple[dict[str, JsonValue], ...],
+    direct_grant_items: tuple[dict[str, JsonValue], ...],
 ) -> PortalJsonObject:
     return {
         "id": access_request.id,
@@ -108,14 +105,12 @@ def _access_request_item(
         "grant_expires_at": datetime_value(access_request.grant_expires_at),
         "reason": access_request.reason,
         "submitted_at": access_request.submitted_at.isoformat(),
-        "roles": _json_strings(role_keys),
-        "role_names": _json_strings(role_names),
-        "permissions": _json_strings(permission_keys),
-        "permission_names": _json_strings(permission_names),
+        "authorization_groups": _json_objects(group_items),
+        "direct_grants": _json_objects(direct_grant_items),
     }
 
 
-def _json_strings(values: tuple[str, ...]) -> list[JsonValue]:
+def _json_objects(values: tuple[dict[str, JsonValue], ...]) -> list[JsonValue]:
     result: list[JsonValue] = []
     result.extend(values)
     return result

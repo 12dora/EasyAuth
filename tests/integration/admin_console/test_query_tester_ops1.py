@@ -16,14 +16,16 @@ from easyauth.api.errors import ErrorCode
 from easyauth.applications.models import (
     App,
     AppMembership,
+    AppScope,
     AppStaticToken,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
     Permission,
     Role,
-    RolePermission,
 )
 from easyauth.applications.services import StaticTokenService
 from easyauth.audit.models import AuditLog
-from easyauth.grants.models import AccessGrant, AccessGrantRole
+from easyauth.grants.models import AccessGrant, AccessGrantGroup
 
 pytestmark = pytest.mark.django_db
 
@@ -34,18 +36,30 @@ QUERY_TEST_API_URL: Final = "/console/api/v1/apps/{app_key}/permission-query-tes
 class HttpResponseLike(Protocol):
     content: bytes
 
+    def json(self) -> dict[str, object]: ...
+
 
 def test_ops1_console_query_tester_runs_real_permission_query_without_storing_token() -> None:
-    # Given: App 有静态 token, 测试用户有 active grant 和角色权限。
+    # Given: App 有静态 token, 测试用户有 active grant 和授权组权限。
     client = _logged_in_client("owner-ops1-query-success")
     app = _owned_app("ops1-query-success", "owner-ops1-query-success")
+    _scope(app, "SELF")
     issue = StaticTokenService.create_token(app=app, name="query tester")
     user = UserMirror.objects.create(authentik_user_id="query-user")
-    role = Role.objects.create(app=app, key="auditor", name="Auditor")
-    permission = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
-    _ = RolePermission.objects.create(role=role, permission=permission)
+    group = AuthorizationGroup.objects.create(app=app, key="auditor", kind="role", name="Auditor")
+    permission = Permission.objects.create(
+        app=app,
+        key="invoice.read",
+        name="Read invoices",
+        supported_scopes=["SELF"],
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key="SELF",
+    )
     grant = AccessGrant.objects.create(user=user, app=app)
-    _ = AccessGrantRole.objects.create(grant=grant, role=role)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
 
     # When: owner 通过 private API 粘贴 token 并查询测试用户。
     response = client.post(
@@ -57,10 +71,23 @@ def test_ops1_console_query_tester_runs_real_permission_query_without_storing_to
     # Then: API 返回真实权限结果, 审计 metadata 不保存明文 token。
     assert response.status_code == HTTPStatus.OK
     assert _json_bool(response, "allowed") is True
-    assert _json_string_array(response, "roles") == ["auditor"]
-    assert _json_string_array(response, "permissions") == ["invoice.read"]
+    payload = response.json()
+    assert payload["groups"] == [{"key": "auditor", "kind": "role", "name": "Auditor"}]
+    assert payload["grants"] == [
+        {
+            "permission": "invoice.read",
+            "scope": "SELF",
+            "source_type": "group",
+            "source_key": "auditor",
+        },
+    ]
     assert '"status_code": 200' in response.content.decode()
     audit_log = AuditLog.objects.get(event_type="permission_query_test_executed")
+    assert audit_log.metadata["group_count"] == 1
+    assert audit_log.metadata["grant_count"] == 1
+    assert audit_log.metadata["grant_version"] == 1
+    assert audit_log.metadata["catalog_version"] == 1
+    assert audit_log.metadata["snapshot_version"] == "1.1"
     assert issue.plaintext_token not in str(audit_log.metadata)
 
 
@@ -156,9 +183,7 @@ def test_ops1_console_query_tester_uses_default_ttl_for_invalid_configuration() 
     app = _owned_app("ops1-query-invalid-ttl", "owner-ops1-query-invalid-ttl")
     issue = StaticTokenService.create_token(app=app, name="query tester")
     user = UserMirror.objects.create(authentik_user_id="query-invalid-ttl-user")
-    grant = AccessGrant.objects.create(user=user, app=app)
-    role = Role.objects.create(app=app, key="auditor", name="Auditor")
-    _ = AccessGrantRole.objects.create(grant=grant, role=role)
+    _ = AccessGrant.objects.create(user=user, app=app)
 
     # When: owner 通过 private API 查询该用户。
     before = timezone.now()
@@ -182,9 +207,7 @@ def test_ops1_console_query_tester_explains_internal_permission_query_error() ->
     app = _owned_app("ops1-query-internal-error", "owner-ops1-query-internal-error")
     issue = StaticTokenService.create_token(app=app, name="query tester")
     user = UserMirror.objects.create(authentik_user_id="query-broken-user", status="unsupported")
-    grant = AccessGrant.objects.create(user=user, app=app)
-    role = Role.objects.create(app=app, key="auditor", name="Auditor")
-    _ = AccessGrantRole.objects.create(grant=grant, role=role)
+    _ = AccessGrant.objects.create(user=user, app=app)
 
     # When: owner 通过 private API 查询该用户。
     response = client.post(
@@ -229,21 +252,32 @@ def _api_url(app_key: str, endpoint: str) -> str:
 def test_ops1_console_query_test_api_allows_owner_and_developer(
     membership_role: str,
 ) -> None:
-    # Given: App 成员有 owner/developer 角色, 且测试用户有有效角色权限。
+    # Given: App 成员有 owner/developer 角色, 且测试用户有有效授权组权限。
     username = f"ops1-query-api-{membership_role}"
     client = _logged_in_client(username)
     app = _member_app(f"ops1-query-api-{membership_role}", username, membership_role)
+    _scope(app, "SELF")
     issue = StaticTokenService.create_token(app=app, name="query api")
     user = UserMirror.objects.create(authentik_user_id=f"query-api-user-{membership_role}")
-    role = Role.objects.create(app=app, key=f"auditor-{membership_role}", name="Auditor")
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key=f"auditor-{membership_role}",
+        kind="role",
+        name="Auditor",
+    )
     permission = Permission.objects.create(
         app=app,
         key=f"invoice.{membership_role}.read",
         name="Read invoices",
+        supported_scopes=["SELF"],
     )
-    _ = RolePermission.objects.create(role=role, permission=permission)
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key="SELF",
+    )
     grant = AccessGrant.objects.create(user=user, app=app)
-    _ = AccessGrantRole.objects.create(grant=grant, role=role)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
 
     # When: 成员通过 private console API 发起联调。
     response = client.post(
@@ -260,8 +294,16 @@ def test_ops1_console_query_test_api_allows_owner_and_developer(
     # Then: API 返回真实权限结果, 并只记录一次不含明文 token 的审计。
     assert response.status_code == HTTPStatus.OK
     assert _json_bool(response, "allowed") is True
-    assert _json_string_array(response, "roles") == [role.key]
-    assert _json_string_array(response, "permissions") == [permission.key]
+    payload = response.json()
+    assert payload["groups"] == [{"key": group.key, "kind": "role", "name": "Auditor"}]
+    assert payload["grants"] == [
+        {
+            "permission": permission.key,
+            "scope": "SELF",
+            "source_type": "group",
+            "source_key": group.key,
+        },
+    ]
     audit_log = AuditLog.objects.get(event_type="permission_query_test_executed")
     assert audit_log.actor_id == username
     assert issue.plaintext_token not in str(audit_log.metadata)
@@ -317,6 +359,10 @@ def _member_app(app_key: str, user_id: str, role: str) -> App:
     app = App.objects.create(app_key=app_key, name=app_key)
     _ = AppMembership.objects.create(app=app, user_id=user_id, role=role)
     return app
+
+
+def _scope(app: App, key: str) -> AppScope:
+    return AppScope.objects.create(app=app, key=key, name=key.title())
 
 
 def _json_string(response: HttpResponseLike, key: str) -> str:

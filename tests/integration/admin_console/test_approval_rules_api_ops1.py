@@ -9,7 +9,13 @@ from django.contrib.auth.models import User
 from django.test import Client
 from pydantic import BaseModel, ConfigDict
 
-from easyauth.applications.models import App, AppMembership, ApprovalRule, Permission, Role
+from easyauth.applications.models import (
+    App,
+    AppMembership,
+    ApprovalRule,
+    AuthorizationGroup,
+    Permission,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -41,16 +47,23 @@ class ApprovalRuleListEnvelope(BaseModel):
 
 
 def test_ops1_owner_creates_reads_and_updates_approval_rule() -> None:
-    # Given: owner 管理一个 requestable Role, 该 Role 尚无审批规则。
+    # Given: owner 管理一个 requestable AuthorizationGroup, 该授权组尚无审批规则。
     client = _logged_in_user("ops1-rule-owner")
     app = _member_app("ops1-rule-owner-app", "ops1-rule-owner", role="owner")
-    role = Role.objects.create(app=app, key="auditor", name="Auditor", requestable=True)
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="auditor",
+        kind="role",
+        name="Auditor",
+        requestable=True,
+    )
 
-    # When: owner 创建、读取并更新该 Role 的 ApprovalRule。
+    # When: owner 创建、读取并更新该 AuthorizationGroup 的 ApprovalRule。
     created = client.post(
         _rules_url(app.app_key),
         data=_rule_payload(
-            role_key=role.key,
+            target_type="authorization_group",
+            target_key=group.key,
             approver_value=("manager-001",),
             is_active=True,
         ),
@@ -71,7 +84,7 @@ def test_ops1_owner_creates_reads_and_updates_approval_rule() -> None:
     assert created.status_code == HTTPStatus.CREATED
     assert created_body.approval_rule.model_dump() == {
         "id": rule_id,
-        "target_type": "role",
+        "target_type": "authorization_group",
         "target_key": "auditor",
         "role_key": "auditor",
         "approver_type": "dingtalk_userids",
@@ -83,7 +96,7 @@ def test_ops1_owner_creates_reads_and_updates_approval_rule() -> None:
     assert updated.status_code == HTTPStatus.OK
     assert updated_body.approval_rule.model_dump() == {
         "id": rule_id,
-        "target_type": "role",
+        "target_type": "authorization_group",
         "target_key": "auditor",
         "role_key": "auditor",
         "approver_type": "dingtalk_userids",
@@ -91,7 +104,8 @@ def test_ops1_owner_creates_reads_and_updates_approval_rule() -> None:
         "is_active": False,
     }
     rule = ApprovalRule.objects.get(id=rule_id)
-    assert rule.role == role
+    assert rule.authorization_group == group
+    assert rule.role is None
     assert rule.approver_userids == ["manager-002", "manager-003"]
     assert rule.is_active is False
 
@@ -100,13 +114,20 @@ def test_ops1_superuser_manages_approval_rules_without_membership() -> None:
     # Given: App 无成员关系, 但系统管理员已登录。
     client = _logged_in_superuser("ops1-rule-admin")
     app = App.objects.create(app_key="ops1-rule-admin-app", name="Admin App")
-    role = Role.objects.create(app=app, key="operator", name="Operator", requestable=True)
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="operator",
+        kind="role",
+        name="Operator",
+        requestable=True,
+    )
 
     # When: superuser 创建、读取并禁用 ApprovalRule。
     created = client.post(
         _rules_url(app.app_key),
         data=_rule_payload(
-            role_key=role.key,
+            target_type="authorization_group",
+            target_key=group.key,
             approver_value=("manager-010",),
             is_active=True,
         ),
@@ -134,15 +155,26 @@ def test_ops1_developer_reads_but_cannot_write_approval_rules() -> None:
     # Given: developer 是 App active 成员, App 已有 ApprovalRule。
     client = _logged_in_user("ops1-rule-developer")
     app = _member_app("ops1-rule-developer-app", "ops1-rule-developer", role="developer")
-    role = Role.objects.create(app=app, key="viewer", name="Viewer", requestable=True)
-    rule = ApprovalRule.objects.create(app=app, role=role, approver_userids=["manager-001"])
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="viewer",
+        kind="role",
+        name="Viewer",
+        requestable=True,
+    )
+    rule = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=group,
+        approver_userids=["manager-001"],
+    )
 
     # When: developer 读取、创建并更新 ApprovalRule。
     listed = client.get(_rules_url(app.app_key))
     created = client.post(
         _rules_url(app.app_key),
         data=_rule_payload(
-            role_key=role.key,
+            target_type="authorization_group",
+            target_key=group.key,
             approver_value=("manager-002",),
             is_active=True,
         ),
@@ -160,7 +192,7 @@ def test_ops1_developer_reads_but_cannot_write_approval_rules() -> None:
     assert [item.model_dump() for item in listed_body.items] == [
         {
             "id": listed_body.items[0].id,
-            "target_type": "role",
+            "target_type": "authorization_group",
             "target_key": "viewer",
             "role_key": "viewer",
             "approver_type": "dingtalk_userids",
@@ -179,8 +211,18 @@ def test_ops1_non_member_cannot_read_approval_rules() -> None:
     # Given: 普通用户不属于目标 App。
     client = _logged_in_user("ops1-rule-outsider")
     app = App.objects.create(app_key="ops1-rule-outsider-app", name="Outsider App")
-    role = Role.objects.create(app=app, key="viewer", name="Viewer", requestable=True)
-    _ = ApprovalRule.objects.create(app=app, role=role, approver_userids=["manager-001"])
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="viewer",
+        kind="role",
+        name="Viewer",
+        requestable=True,
+    )
+    _ = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=group,
+        approver_userids=["manager-001"],
+    )
 
     # When: 普通用户读取该 App 的 ApprovalRule。
     response = client.get(_rules_url(app.app_key))
@@ -279,13 +321,15 @@ def _rule_url(app_key: str, rule_id: int) -> str:
 
 def _rule_payload(
     *,
-    role_key: str,
+    target_type: str,
+    target_key: str,
     approver_value: tuple[str, ...],
     is_active: bool,
 ) -> str:
     return dumps(
         {
-            "role_key": role_key,
+            "target_type": target_type,
+            "target_key": target_key,
             "approver_type": "dingtalk_userids",
             "approver_value": list(approver_value),
             "is_active": is_active,

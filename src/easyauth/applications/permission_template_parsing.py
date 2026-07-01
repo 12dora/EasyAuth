@@ -9,33 +9,101 @@ from easyauth.applications.permission_template_flattening import (
     PERMISSION_TEMPLATE_MAX_RAW_LENGTH,
 )
 from easyauth.applications.permission_template_types import (
+    AppManifestAppInput,
+    AppManifestApprovalRuleInput,
+    AppManifestAuthorizationGroupInput,
+    AppManifestGrantInput,
+    AppManifestInput,
+    AppManifestPermissionGroupInput,
+    AppManifestPermissionInput,
+    AppManifestScopeInput,
     PermissionTemplateImportError,
-    PermissionTemplateInput,
-    TemplateNodeInput,
-    TemplateNodeType,
 )
 
 type TemplateFormat = Literal["json", "yaml"]
 
 
-class _TemplateNodePayload(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(
-        extra="forbid",
-        frozen=True,
-        populate_by_name=True,
-    )
+class _AppPayload(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
+
+    app_key: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=128)
+    description: str = ""
+    is_active: bool = True
+
+
+class _ScopePayload(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
+
+    key: str = Field(min_length=1, max_length=64)
+    name: str = Field(min_length=1, max_length=128)
+    description: str = ""
+    is_active: bool = True
+    display_order: int = 0
+
+
+class _PermissionGroupPayload(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
 
     key: str = Field(min_length=1, max_length=128)
     name: str = Field(min_length=1, max_length=128)
-    node_type: TemplateNodeType = Field(default="group", alias="type")
-    children: tuple[_TemplateNodePayload, ...] = ()
+    description: str = ""
+    parent_key: str = ""
+    display_order: int = 0
+    is_active: bool = True
 
 
-class _PermissionTemplatePayload(BaseModel):
+class _PermissionPayload(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
 
-    version: int = Field(ge=1)
-    groups: tuple[_TemplateNodePayload, ...]
+    key: str = Field(min_length=1, max_length=128)
+    name: str = Field(min_length=1, max_length=128)
+    description: str = ""
+    group_key: str = Field(min_length=1, max_length=128)
+    supported_scopes: tuple[str, ...] = Field(min_length=1)
+    risk_level: str = "standard"
+    is_active: bool = True
+
+
+class _GrantPayload(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
+
+    permission: str = Field(min_length=1, max_length=128)
+    scope: str = Field(min_length=1, max_length=64)
+    is_active: bool = True
+
+
+class _AuthorizationGroupPayload(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
+
+    key: str = Field(min_length=1, max_length=64)
+    kind: Literal["role", "bundle"]
+    name: str = Field(min_length=1, max_length=128)
+    description: str = ""
+    requestable: bool = True
+    is_active: bool = True
+    grants: tuple[_GrantPayload, ...] = ()
+
+
+class _ApprovalRulePayload(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
+
+    target_type: Literal["authorization_group", "permission"]
+    target_key: str = Field(min_length=1, max_length=128)
+    approver_userids: tuple[str, ...] = Field(min_length=1)
+    is_active: bool = True
+
+
+class _AppManifestPayload(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: int = Field(ge=1)
+    app: _AppPayload
+    scopes: tuple[_ScopePayload, ...] = Field(min_length=1)
+    permission_groups: tuple[_PermissionGroupPayload, ...] = ()
+    permissions: tuple[_PermissionPayload, ...] = ()
+    authorization_groups: tuple[_AuthorizationGroupPayload, ...] = ()
+    approval_rules: tuple[_ApprovalRulePayload, ...] = ()
 
 
 def parse_template_format(raw_format: str) -> TemplateFormat:
@@ -47,62 +115,242 @@ def parse_template_format(raw_format: str) -> TemplateFormat:
         case _:
             raise PermissionTemplateImportError(
                 code="permission_template_format_invalid",
-                message="权限模板格式必须是 JSON 或 YAML。",
+                message="App manifest 格式必须是 JSON 或 YAML。",
                 subject=raw_format,
             )
 
 
 def parse_permission_template(
     *,
+    app_key: str,
     raw_template: str,
     template_format: TemplateFormat,
     imported_by: str,
-) -> PermissionTemplateInput:
+) -> AppManifestInput:
     try:
         payload = _parse_payload(raw_template=raw_template, template_format=template_format)
-    except (ValidationError, ValueError, YAMLError) as exc:
+        _validate_manifest_payload(app_key=app_key, payload=payload)
+    except PermissionTemplateImportError:
+        raise
+    except (ValidationError, ValueError, YAMLError, TypeError) as exc:
         raise PermissionTemplateImportError(
             code="permission_template_parse_error",
-            message="权限模板无法解析。",
+            message="App manifest 无法解析。",
             subject=template_format,
         ) from exc
-    return PermissionTemplateInput(
-        version=payload.version,
-        source="paste",
-        imported_by=imported_by,
-        raw_template=raw_template,
-        nodes=_template_nodes(payload.groups),
-    )
+    return _manifest_input(payload=payload, raw_template=raw_template, imported_by=imported_by)
 
 
 def _parse_payload(
     *,
     raw_template: str,
     template_format: TemplateFormat,
-) -> _PermissionTemplatePayload:
+) -> _AppManifestPayload:
     if len(raw_template) > PERMISSION_TEMPLATE_MAX_RAW_LENGTH:
         raise PermissionTemplateImportError(
             code="permission_template_too_large",
-            message="权限模板不符合导入约束。",
+            message="App manifest 不符合导入约束。",
             subject=str(len(raw_template)),
         )
     match template_format:
         case "json":
-            return _PermissionTemplatePayload.model_validate_json(raw_template)
+            return _AppManifestPayload.model_validate_json(raw_template)
         case "yaml":
-            return _PermissionTemplatePayload.model_validate(safe_load(raw_template))
+            return _AppManifestPayload.model_validate(safe_load(raw_template))
 
 
-def _template_nodes(
-    payloads: tuple[_TemplateNodePayload, ...],
-) -> tuple[TemplateNodeInput, ...]:
-    return tuple(_template_node(payload) for payload in payloads)
+def _validate_manifest_payload(*, app_key: str, payload: _AppManifestPayload) -> None:
+    if payload.app.app_key != app_key:
+        _raise_manifest_error("app_manifest_app_key_mismatch", payload.app.app_key)
+
+    scope_keys = _unique_keys("scope", [scope.key for scope in payload.scopes])
+    group_keys = _unique_keys(
+        "permission_group",
+        [group.key for group in payload.permission_groups],
+    )
+    permission_keys = _unique_keys(
+        "permission",
+        [permission.key for permission in payload.permissions],
+    )
+    authorization_group_keys = _unique_keys(
+        "authorization_group",
+        [authorization_group.key for authorization_group in payload.authorization_groups],
+    )
+    permission_scope_map = _validate_permission_references(
+        payload=payload,
+        scope_keys=scope_keys,
+        group_keys=group_keys,
+    )
+    _validate_authorization_group_references(
+        payload=payload,
+        scope_keys=scope_keys,
+        permission_keys=permission_keys,
+        permission_scope_map=permission_scope_map,
+    )
+    _validate_approval_rule_references(
+        payload=payload,
+        permission_keys=permission_keys,
+        authorization_group_keys=authorization_group_keys,
+    )
 
 
-def _template_node(payload: _TemplateNodePayload) -> TemplateNodeInput:
-    return TemplateNodeInput(
-        key=payload.key,
-        name=payload.name,
-        node_type=payload.node_type,
-        children=_template_nodes(payload.children),
+def _validate_permission_references(
+    *,
+    payload: _AppManifestPayload,
+    scope_keys: set[str],
+    group_keys: set[str],
+) -> dict[str, set[str]]:
+    for group in payload.permission_groups:
+        if group.parent_key and group.parent_key not in group_keys:
+            _raise_manifest_error("app_manifest_unknown_permission_group", group.parent_key)
+
+    permission_scope_map: dict[str, set[str]] = {}
+    for permission in payload.permissions:
+        if permission.group_key not in group_keys:
+            _raise_manifest_error("app_manifest_unknown_permission_group", permission.group_key)
+        supported_scopes = set(permission.supported_scopes)
+        unknown_scopes = sorted(supported_scopes - scope_keys)
+        if unknown_scopes:
+            _raise_manifest_error("app_manifest_unknown_scope", unknown_scopes[0])
+        permission_scope_map[permission.key] = supported_scopes
+    return permission_scope_map
+
+
+def _validate_authorization_group_references(
+    *,
+    payload: _AppManifestPayload,
+    scope_keys: set[str],
+    permission_keys: set[str],
+    permission_scope_map: dict[str, set[str]],
+) -> None:
+    for authorization_group in payload.authorization_groups:
+        seen_grants: set[tuple[str, str]] = set()
+        for grant in authorization_group.grants:
+            if grant.permission not in permission_keys:
+                _raise_manifest_error("app_manifest_unknown_permission", grant.permission)
+            if grant.scope not in scope_keys:
+                _raise_manifest_error("app_manifest_unknown_scope", grant.scope)
+            if grant.scope not in permission_scope_map[grant.permission]:
+                _raise_manifest_error("app_manifest_grant_scope_unsupported", grant.scope)
+            grant_key = (grant.permission, grant.scope)
+            if grant_key in seen_grants:
+                _raise_manifest_error(
+                    "app_manifest_duplicate_key",
+                    f"{authorization_group.key}:{grant.permission}:{grant.scope}",
+                )
+            seen_grants.add(grant_key)
+
+
+def _validate_approval_rule_references(
+    *,
+    payload: _AppManifestPayload,
+    permission_keys: set[str],
+    authorization_group_keys: set[str],
+) -> None:
+    for approval_rule in payload.approval_rules:
+        if approval_rule.target_type == "authorization_group":
+            if approval_rule.target_key not in authorization_group_keys:
+                _raise_manifest_error(
+                    "app_manifest_unknown_approval_target",
+                    approval_rule.target_key,
+                )
+        elif approval_rule.target_key not in permission_keys:
+            _raise_manifest_error("app_manifest_unknown_approval_target", approval_rule.target_key)
+
+
+def _unique_keys(kind: str, keys: list[str]) -> set[str]:
+    seen: set[str] = set()
+    for key in keys:
+        if key in seen:
+            _raise_manifest_error("app_manifest_duplicate_key", f"{kind}:{key}")
+        seen.add(key)
+    return seen
+
+
+def _manifest_input(
+    *,
+    payload: _AppManifestPayload,
+    raw_template: str,
+    imported_by: str,
+) -> AppManifestInput:
+    return AppManifestInput(
+        schema_version=payload.schema_version,
+        source="paste",
+        imported_by=imported_by,
+        raw_template=raw_template,
+        app=AppManifestAppInput(
+            app_key=payload.app.app_key,
+            name=payload.app.name,
+            description=payload.app.description,
+            is_active=payload.app.is_active,
+        ),
+        scopes=tuple(
+            AppManifestScopeInput(
+                key=scope.key,
+                name=scope.name,
+                description=scope.description,
+                is_active=scope.is_active,
+                display_order=scope.display_order,
+            )
+            for scope in payload.scopes
+        ),
+        permission_groups=tuple(
+            AppManifestPermissionGroupInput(
+                key=group.key,
+                name=group.name,
+                description=group.description,
+                parent_key=group.parent_key,
+                display_order=group.display_order,
+                is_active=group.is_active,
+            )
+            for group in payload.permission_groups
+        ),
+        permissions=tuple(
+            AppManifestPermissionInput(
+                key=permission.key,
+                name=permission.name,
+                description=permission.description,
+                group_key=permission.group_key,
+                supported_scopes=permission.supported_scopes,
+                risk_level=permission.risk_level,
+                is_active=permission.is_active,
+            )
+            for permission in payload.permissions
+        ),
+        authorization_groups=tuple(
+            AppManifestAuthorizationGroupInput(
+                key=authorization_group.key,
+                kind=authorization_group.kind,
+                name=authorization_group.name,
+                description=authorization_group.description,
+                requestable=authorization_group.requestable,
+                is_active=authorization_group.is_active,
+                grants=tuple(
+                    AppManifestGrantInput(
+                        permission=grant.permission,
+                        scope=grant.scope,
+                        is_active=grant.is_active,
+                    )
+                    for grant in authorization_group.grants
+                ),
+            )
+            for authorization_group in payload.authorization_groups
+        ),
+        approval_rules=tuple(
+            AppManifestApprovalRuleInput(
+                target_type=approval_rule.target_type,
+                target_key=approval_rule.target_key,
+                approver_userids=approval_rule.approver_userids,
+                is_active=approval_rule.is_active,
+            )
+            for approval_rule in payload.approval_rules
+        ),
+    )
+
+
+def _raise_manifest_error(code: str, subject: str) -> None:
+    raise PermissionTemplateImportError(
+        code=code,
+        message="App manifest 引用关系无效。",
+        subject=subject,
     )

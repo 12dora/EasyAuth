@@ -19,12 +19,23 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from easyauth.accounts.models import UserMirror
-    from easyauth.applications.models import App, Permission, Role
+    from easyauth.applications.models import App, AuthorizationGroup, Permission
 
 type GrantStatus = Literal["active", "revoked", "expired"]
 type GrantType = Literal["permanent", "timed"]
 
-__all__ = ["GrantExpirationInput", "GrantMutationInput", "GrantService"]
+__all__ = [
+    "GrantExpirationInput",
+    "GrantMutationInput",
+    "GrantService",
+    "ScopedDirectGrantInput",
+]
+
+
+@dataclass(frozen=True, slots=True)
+class ScopedDirectGrantInput:
+    permission: Permission
+    scope_key: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -33,8 +44,8 @@ class GrantMutationInput:
     app: App
     grant_type: GrantType = GRANT_TYPE_PERMANENT
     grant_expires_at: datetime | None = None
-    roles: Iterable[Role] = ()
-    permissions: Iterable[Permission] = ()
+    authorization_groups: Iterable[AuthorizationGroup] = ()
+    direct_grants: Iterable[ScopedDirectGrantInput] = ()
     actor_type: str = "system"
     actor_id: str = "system"
 

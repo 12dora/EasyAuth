@@ -13,7 +13,13 @@ from django.utils import timezone
 
 from easyauth.access_requests.models import REQUEST_STATUS_SUBMITTED, AccessRequest
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App, Permission
+from easyauth.applications.models import (
+    App,
+    AppScope,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
+    Permission,
+)
 from easyauth.applications.services import StaticTokenService
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import (
@@ -21,7 +27,7 @@ from easyauth.grants.models import (
     GRANT_TYPE_PERMANENT,
     GRANT_TYPE_TIMED,
     AccessGrant,
-    AccessGrantPermission,
+    AccessGrantGroup,
 )
 
 pytestmark = pytest.mark.django_db
@@ -171,14 +177,26 @@ def test_ops3_emergency_revoke_removes_public_permission_query_result() -> None:
     admin_client = _logged_in_superuser("ops3-public-revoke-admin")
     target_user = UserMirror.objects.create(authentik_user_id="ops3-public-revoke-target")
     app = App.objects.create(app_key="ops3-public-revoke-app", name="Emergency CRM")
+    _ = AppScope.objects.create(app=app, key="SELF", name="Self")
     issue = StaticTokenService.create_token(app=app, name="CRM integration")
-    permission = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
+    permission = Permission.objects.create(
+        app=app,
+        key="invoice.read",
+        name="Read invoices",
+        supported_scopes=["SELF"],
+    )
+    group = AuthorizationGroup.objects.create(app=app, key="auditor", kind="role", name="Auditor")
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key="SELF",
+    )
     grant = AccessGrant.objects.create(
         user=target_user,
         app=app,
         grant_type=GRANT_TYPE_PERMANENT,
     )
-    _ = AccessGrantPermission.objects.create(grant=grant, permission=permission)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
 
     # When: 管理员紧急撤权后, 应用再次调用公共权限查询 API。
     revoke_response = admin_client.post(
@@ -197,11 +215,13 @@ def test_ops3_emergency_revoke_removes_public_permission_query_result() -> None:
         HTTP_AUTHORIZATION=f"Bearer {issue.plaintext_token}",
     )
 
-    # Then: 撤权成功, 公共权限查询返回空角色和空权限。
+    # Then: 撤权成功, 公共权限查询返回空授权组和空授权明细。
+    grant.refresh_from_db()
     assert revoke_response.status_code == HTTPStatus.OK
     assert permission_response.status_code == HTTPStatus.OK
-    assert _json_string_array(permission_response, "roles") == []
-    assert _json_string_array(permission_response, "permissions") == []
+    assert _json_string_array(permission_response, "groups") == []
+    assert _json_string_array(permission_response, "grants") == []
+    assert _json_int(permission_response, "grant_version") == grant.version
 
 
 def _logged_in_superuser(username: str) -> Client:

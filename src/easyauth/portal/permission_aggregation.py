@@ -1,61 +1,42 @@
 from __future__ import annotations
 
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
-from easyauth.applications.models import RolePermission
-from easyauth.grants.models import AccessGrantPermission
+if TYPE_CHECKING:
+    from easyauth.api.errors import JsonValue
+    from easyauth.grants.query import ExpandedGrant, GroupSnapshot, PermissionSnapshot
 
 __all__: Final = (
-    "direct_permission_keys_by_grant_id",
-    "permission_keys",
-    "role_permission_keys_by_role_id",
+    "grant_items",
+    "json_expanded_grants",
+    "json_groups",
 )
 
 
-def direct_permission_keys_by_grant_id(
-    grant_ids: tuple[int, ...],
-    *,
-    active_only: bool = True,
-) -> dict[int, set[str]]:
-    permission_keys_by_grant_id: dict[int, set[str]] = {grant_id: set() for grant_id in grant_ids}
-    links = AccessGrantPermission.objects.select_related("permission").filter(
-        grant_id__in=grant_ids,
-    )
-    if active_only:
-        links = links.filter(
-            permission__is_active=True,
-            permission__deprecated_at__isnull=True,
-        )
-    for link in links.order_by("grant_id", "permission__key"):
-        permission_keys_by_grant_id.setdefault(link.grant_id, set()).add(link.permission.key)
-    return permission_keys_by_grant_id
+def grant_items(snapshot: PermissionSnapshot) -> tuple[dict[str, JsonValue], ...]:
+    return tuple(json_expanded_grant(grant) for grant in snapshot.grants)
 
 
-def role_permission_keys_by_role_id(
-    role_ids: tuple[int, ...],
-    *,
-    active_only: bool = True,
-) -> dict[int, set[str]]:
-    permission_keys_by_role_id: dict[int, set[str]] = {role_id: set() for role_id in role_ids}
-    links = RolePermission.objects.select_related("permission").filter(role_id__in=role_ids)
-    if active_only:
-        links = links.filter(
-            role__is_active=True,
-            permission__is_active=True,
-            permission__deprecated_at__isnull=True,
-        )
-    for link in links.order_by("role_id", "permission__key"):
-        permission_keys_by_role_id.setdefault(link.role_id, set()).add(link.permission.key)
-    return permission_keys_by_role_id
+def json_groups(groups: tuple[GroupSnapshot, ...]) -> list[JsonValue]:
+    return [json_group(group) for group in groups]
 
 
-def permission_keys(
-    *,
-    direct_permission_keys: set[str],
-    role_ids: tuple[int, ...],
-    role_permission_keys_by_role_id: dict[int, set[str]],
-) -> tuple[str, ...]:
-    aggregated_permission_keys = set(direct_permission_keys)
-    for role_id in role_ids:
-        aggregated_permission_keys.update(role_permission_keys_by_role_id.get(role_id, set()))
-    return tuple(sorted(aggregated_permission_keys))
+def json_expanded_grants(grants: tuple[ExpandedGrant, ...]) -> list[JsonValue]:
+    return [json_expanded_grant(grant) for grant in grants]
+
+
+def json_group(group: GroupSnapshot) -> dict[str, JsonValue]:
+    return {
+        "key": group.key,
+        "kind": group.kind,
+        "name": group.name,
+    }
+
+
+def json_expanded_grant(grant: ExpandedGrant) -> dict[str, JsonValue]:
+    return {
+        "permission": grant.permission,
+        "scope": grant.scope,
+        "source_type": grant.source_type,
+        "source_key": grant.source_key,
+    }

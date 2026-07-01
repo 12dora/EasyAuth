@@ -50,11 +50,14 @@ APP_KEY_PATTERN: Final = re.compile(r"^[a-z0-9][a-z0-9_-]{1,63}$")
 NAME_BLANK_MESSAGE: Final = "name 不能为空。"
 CONFIGURATION_ISSUE_TARGET_TYPES: Final = {
     "app_inactive": "app",
-    "active_role_missing": "app",
-    "active_credential_missing": "app",
-    "requestable_role_approval_rule_missing": "role",
-    "requestable_role_permission_missing": "role",
-    "permission_group_missing": "permission",
+    "active_credential_missing": "credential",
+    "active_permission_missing": "permission",
+    "active_authorization_group_missing": "authorization_group",
+    "active_owner_missing": "membership",
+    "requestable_authorization_group_approval_rule_missing": "authorization_group",
+    "authorization_group_grant_target_inactive": "authorization_group_grant",
+    "permission_supported_scopes_missing": "permission",
+    "permission_group_inactive": "permission_group",
 }
 
 

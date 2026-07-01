@@ -1,10 +1,18 @@
 from __future__ import annotations
 
-from hashlib import sha256
 from typing import TYPE_CHECKING
 
 from easyauth.admin_console.api_payloads import list_payload
-from easyauth.applications.models import App, Permission, PermissionGroup, Role, RolePermission
+from easyauth.applications.models import (
+    App,
+    AppScope,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
+    Permission,
+    PermissionGroup,
+    Role,
+    RolePermission,
+)
 
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
@@ -27,6 +35,7 @@ def permission_tree_payload(app: App) -> dict[str, JsonValue]:
         "ungrouped_permissions": [
             permission_item(permission) for permission in permissions_by_group.get(None, [])
         ],
+        "catalog_version": app.catalog_version,
         "version": catalog_version(app),
     }
 
@@ -35,6 +44,7 @@ def permission_groups_payload(app: App) -> dict[str, JsonValue]:
     return {
         "app_key": app.app_key,
         **list_payload([group_item(group) for group in active_groups(app)]),
+        "catalog_version": app.catalog_version,
         "version": catalog_version(app),
     }
 
@@ -43,6 +53,26 @@ def roles_payload(app: App) -> dict[str, JsonValue]:
     return {
         "app_key": app.app_key,
         **list_payload([role_item(role) for role in active_roles(app)]),
+        "catalog_version": app.catalog_version,
+        "version": catalog_version(app),
+    }
+
+
+def scopes_payload(app: App) -> dict[str, JsonValue]:
+    return {
+        "app_key": app.app_key,
+        **list_payload([scope_item(scope) for scope in active_scopes(app)]),
+        "catalog_version": app.catalog_version,
+        "version": catalog_version(app),
+    }
+
+
+def authorization_groups_payload(app: App) -> dict[str, JsonValue]:
+    groups = [authorization_group_item(group) for group in active_authorization_groups(app)]
+    return {
+        "app_key": app.app_key,
+        **list_payload(groups),
+        "catalog_version": app.catalog_version,
         "version": catalog_version(app),
     }
 
@@ -51,6 +81,7 @@ def permissions_payload(app: App) -> dict[str, JsonValue]:
     return {
         "app_key": app.app_key,
         **list_payload([permission_item(permission) for permission in active_permissions(app)]),
+        "catalog_version": app.catalog_version,
         "version": catalog_version(app),
     }
 
@@ -82,6 +113,7 @@ def matrix_payload(app: App) -> dict[str, JsonValue]:
             for permission in permissions
             for role in roles
         ],
+        "catalog_version": app.catalog_version,
         "version": catalog_version(app),
     }
 
@@ -134,6 +166,18 @@ def active_roles(app: App) -> tuple[Role, ...]:
     return tuple(Role.objects.filter(app=app, is_active=True).order_by("key"))
 
 
+def active_scopes(app: App) -> tuple[AppScope, ...]:
+    return tuple(AppScope.objects.filter(app=app).order_by("display_order", "key"))
+
+
+def active_authorization_groups(app: App) -> tuple[AuthorizationGroup, ...]:
+    return tuple(
+        AuthorizationGroup.objects.filter(app=app, is_active=True)
+        .prefetch_related("grants__permission")
+        .order_by("kind", "key"),
+    )
+
+
 def active_permissions(app: App) -> tuple[Permission, ...]:
     return tuple(
         Permission.objects.filter(app=app, is_active=True, deprecated_at__isnull=True)
@@ -143,21 +187,7 @@ def active_permissions(app: App) -> tuple[Permission, ...]:
 
 
 def catalog_version(app: App) -> str:
-    hasher = sha256()
-    for group in active_groups(app):
-        hasher.update(f"group:{group.id}:{group.key}:{group.updated_at.isoformat()}|".encode())
-    for role in active_roles(app):
-        hasher.update(f"role:{role.id}:{role.key}:{role.updated_at.isoformat()}|".encode())
-    for permission in active_permissions(app):
-        hasher.update(
-            f"permission:{permission.id}:{permission.key}:{permission.updated_at.isoformat()}|".encode(),
-        )
-    links = RolePermission.objects.filter(role__app=app).order_by("role_id", "permission_id")
-    for link in links:
-        hasher.update(
-            f"link:{link.role_id}:{link.permission_id}:{link.created_at.isoformat()}|".encode(),
-        )
-    return hasher.hexdigest()
+    return str(app.catalog_version)
 
 
 def group_item(group: PermissionGroup) -> dict[str, JsonValue]:
@@ -189,6 +219,44 @@ def role_item(role: Role) -> dict[str, JsonValue]:
     }
 
 
+def scope_item(scope: AppScope) -> dict[str, JsonValue]:
+    return {
+        "id": scope.id,
+        "key": scope.key,
+        "name": scope.name,
+        "description": scope.description,
+        "is_active": scope.is_active,
+        "display_order": scope.display_order,
+    }
+
+
+def authorization_group_item(group: AuthorizationGroup) -> dict[str, JsonValue]:
+    return {
+        "id": group.id,
+        "app_key": group.app.app_key,
+        "key": group.key,
+        "kind": group.kind,
+        "name": group.name,
+        "description": group.description,
+        "requestable": group.requestable,
+        "is_active": group.is_active,
+        "grants": [
+            authorization_group_grant_item(grant)
+            for grant in AuthorizationGroupGrant.objects.filter(authorization_group=group)
+            .select_related("permission")
+            .order_by("permission__key", "scope_key")
+        ],
+    }
+
+
+def authorization_group_grant_item(grant: AuthorizationGroupGrant) -> dict[str, JsonValue]:
+    return {
+        "permission": grant.permission.key,
+        "scope": grant.scope_key,
+        "is_active": grant.is_active,
+    }
+
+
 def permission_item(permission: Permission) -> dict[str, JsonValue]:
     group_key = ""
     if permission.group is not None:
@@ -206,6 +274,8 @@ def permission_item(permission: Permission) -> dict[str, JsonValue]:
         "is_deprecated": permission.deprecated_at is not None,
         "deprecated_at": None if deprecated_at is None else deprecated_at.isoformat(),
         "deprecated_reason": permission.deprecated_reason,
+        "supported_scopes": permission.supported_scopes,
+        "risk_level": permission.risk_level,
     }
 
 

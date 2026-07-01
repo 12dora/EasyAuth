@@ -13,6 +13,7 @@ from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import (
     App,
     AppMembership,
+    AppScope,
     OAuthClientBinding,
     Permission,
     PermissionGroup,
@@ -26,14 +27,35 @@ LOGIN_VALUE: Final = "console-contract"
 APPS_API_URL: Final = "/console/api/v1/apps"
 JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 TEMPLATE_YAML: Final = """
-version: 1
-groups:
+schema_version: 1
+app:
+  app_key: ops-contract-template-app
+  name: Contract Template App
+  description: ""
+scopes:
+  - key: GLOBAL
+    name: Global
+permission_groups:
   - key: ROOT
     name: Root
-    children:
-      - key: REPORTS
-        name: Reports
-        type: permission
+permissions:
+  - key: reports.read
+    name: Read reports
+    group_key: ROOT
+    supported_scopes: [GLOBAL]
+    risk_level: standard
+authorization_groups:
+  - key: auditor
+    kind: role
+    name: Auditor
+    requestable: true
+    grants:
+      - permission: reports.read
+        scope: GLOBAL
+approval_rules:
+  - target_type: authorization_group
+    target_key: auditor
+    approver_userids: [manager-001]
 """.strip()
 
 
@@ -195,7 +217,13 @@ def _seed_catalog_resource(*, app: App, endpoint: str, key: str) -> None:
         case "roles":
             _ = Role.objects.create(app=app, key=key, name=key)
         case "permissions":
-            _ = Permission.objects.create(app=app, key=key, name=key)
+            scope = AppScope.objects.create(app=app, key="GLOBAL", name="Global")
+            _ = Permission.objects.create(
+                app=app,
+                key=key,
+                name=key,
+                supported_scopes=[scope.key],
+            )
         case unreachable:
             raise AssertionError(unreachable)
 

@@ -14,14 +14,20 @@ from easyauth.access_requests.models import (
     AccessRequest,
 )
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App, Permission, Role, RolePermission
+from easyauth.applications.models import (
+    App,
+    AppScope,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
+    Permission,
+)
 from easyauth.grants.models import (
     GRANT_STATUS_REVOKED,
     GRANT_TYPE_PERMANENT,
     GRANT_TYPE_TIMED,
     AccessGrant,
+    AccessGrantGroup,
     AccessGrantPermission,
-    AccessGrantRole,
 )
 from tests.integration.portal.helpers import logged_in_client
 
@@ -42,20 +48,36 @@ def test_ops2_portal_lists_my_current_permissions_for_active_grants() -> None:
         app_name="CRM",
         version=3,
     )
-    crm_role = Role.objects.create(app=crm_app, key="auditor", name="CRM 审计员")
+    _ = AppScope.objects.create(app=crm_app, key="SELF", name="本人")
+    crm_group = AuthorizationGroup.objects.create(
+        app=crm_app,
+        key="auditor",
+        kind="role",
+        name="CRM 审计员",
+    )
     read_permission = Permission.objects.create(
         app=crm_app,
         key="invoice.read",
         name="查看发票",
+        supported_scopes=["SELF"],
     )
     approve_permission = Permission.objects.create(
         app=crm_app,
         key="invoice.approve",
         name="审批发票",
+        supported_scopes=["SELF"],
     )
-    _ = RolePermission.objects.create(role=crm_role, permission=read_permission)
-    _ = AccessGrantRole.objects.create(grant=crm_grant, role=crm_role)
-    _ = AccessGrantPermission.objects.create(grant=crm_grant, permission=approve_permission)
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=crm_group,
+        permission=read_permission,
+        scope_key="SELF",
+    )
+    _ = AccessGrantGroup.objects.create(grant=crm_grant, authorization_group=crm_group)
+    _ = AccessGrantPermission.objects.create(
+        grant=crm_grant,
+        permission=approve_permission,
+        scope_key="SELF",
+    )
     _create_other_user_grant(app_name="其他用户应用")
     _ = _create_revoked_grant(
         user=user,
@@ -73,7 +95,9 @@ def test_ops2_portal_lists_my_current_permissions_for_active_grants() -> None:
     assert "CRM 审计员" in body
     assert "invoice.approve" in body
     assert "invoice.read" in body
-    assert '"version": 3' in body
+    assert '"grant_version": 3' in body
+    assert '"catalog_version": 1' in body
+    assert '"snapshot_version": "3.1"' in body
     assert GRANT_TYPE_PERMANENT in body
     assert "其他用户应用" not in body
     assert "已撤销应用" not in body

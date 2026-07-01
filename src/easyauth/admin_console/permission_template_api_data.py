@@ -51,12 +51,22 @@ def preview_summary(
     return {
         "version": version,
         "action_count": len(actions),
-        "create_group_count": action_counts["create_group"],
+        "create_scope_count": action_counts["create_scope"],
+        "update_scope_count": action_counts["update_scope"],
+        "deactivate_scope_count": action_counts["deactivate_scope"],
+        "create_permission_group_count": action_counts["create_permission_group"],
+        "update_permission_group_count": action_counts["update_permission_group"],
+        "deactivate_permission_group_count": action_counts["deactivate_permission_group"],
         "create_permission_count": action_counts["create_permission"],
-        "update_group_count": action_counts["update_group"],
         "update_permission_count": action_counts["update_permission"],
-        "move_permission_count": action_counts["move_permission"],
-        "deprecate_permission_count": action_counts["deprecate_permission"],
+        "deactivate_permission_count": action_counts["deactivate_permission"],
+        "create_authorization_group_count": action_counts["create_authorization_group"],
+        "update_authorization_group_count": action_counts["update_authorization_group"],
+        "deactivate_authorization_group_count": action_counts["deactivate_authorization_group"],
+        "create_approval_rule_count": action_counts["create_approval_rule"],
+        "update_approval_rule_count": action_counts["update_approval_rule"],
+        "deactivate_approval_rule_count": action_counts["deactivate_approval_rule"],
+        "update_app_count": action_counts["update_app"],
     }
 
 

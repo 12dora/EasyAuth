@@ -6,7 +6,14 @@ from typing import Final
 import pytest
 from django.test import Client
 
-from easyauth.applications.models import App, ApprovalRule, Permission, PermissionGroup, Role
+from easyauth.applications.models import (
+    App,
+    ApprovalRule,
+    AppScope,
+    AuthorizationGroup,
+    Permission,
+    PermissionGroup,
+)
 from tests.integration.portal.helpers import logged_in_client
 from tests.integration.portal.json_helpers import json_object
 
@@ -15,62 +22,45 @@ pytestmark = pytest.mark.django_db
 REQUEST_CATALOG_URL: Final = "/portal/api/v1/request-catalog"
 
 
-def test_portal_request_catalog_lists_only_requestable_roles_with_approval_rules() -> None:
-    # Given: active 员工和多种可申请/不可申请角色。
+def test_portal_request_catalog_lists_only_requestable_authorization_groups() -> None:
+    # Given: active 员工和多种可申请/不可申请授权组。
     client, _user = logged_in_client("portal-catalog-user")
     crm = App.objects.create(app_key="catalog-crm", name="CRM", description="客户系统")
     inactive_app = App.objects.create(app_key="catalog-inactive", name="停用系统", is_active=False)
-    requestable_role = Role.objects.create(
+    requestable_group = AuthorizationGroup.objects.create(
         app=crm,
         key="auditor",
+        kind="role",
         name="审计员",
         requestable=True,
     )
-    inactive_role = Role.objects.create(
+    inactive_group = AuthorizationGroup.objects.create(
         app=crm,
         key="inactive",
+        kind="role",
         name="停用角色",
         is_active=False,
         requestable=True,
     )
-    no_rule_role = Role.objects.create(app=crm, key="no-rule", name="缺少审批", requestable=True)
-    not_requestable_role = Role.objects.create(
+    not_requestable_group = AuthorizationGroup.objects.create(
         app=crm,
         key="not-requestable",
+        kind="bundle",
         name="不可申请",
         requestable=False,
     )
-    inactive_app_role = Role.objects.create(
+    inactive_app_group = AuthorizationGroup.objects.create(
         app=inactive_app,
         key="inactive-app-role",
+        kind="role",
         name="停用应用角色",
         requestable=True,
-    )
-    _ = ApprovalRule.objects.create(
-        app=crm,
-        role=requestable_role,
-        approver_userids=["manager-001"],
-    )
-    _ = ApprovalRule.objects.create(
-        app=crm,
-        role=inactive_role,
-        approver_userids=["manager-001"],
-    )
-    _ = ApprovalRule.objects.create(
-        app=crm,
-        role=not_requestable_role,
-        approver_userids=["manager-001"],
-    )
-    _ = ApprovalRule.objects.create(
-        app=inactive_app,
-        role=inactive_app_role,
-        approver_userids=["manager-001"],
     )
 
     # When: 读取申请目录。
     response = client.get(REQUEST_CATALOG_URL)
 
-    # Then: 只返回 active App 下 active/requestable/有 active 审批规则的角色。
+    # Then: 只返回 active App 下 active/requestable 授权组。
     payload = json_object(response)
     assert response.status_code == HTTPStatus.OK
     assert payload["apps"] == [
@@ -79,20 +69,25 @@ def test_portal_request_catalog_lists_only_requestable_roles_with_approval_rules
             "app_key": crm.app_key,
             "name": crm.name,
             "description": crm.description,
+            "catalog_version": crm.catalog_version,
         },
     ]
-    assert payload["roles"] == [
+    assert payload["authorization_groups"] == [
         {
-            "id": requestable_role.id,
+            "id": requestable_group.id,
             "app_key": crm.app_key,
-            "key": requestable_role.key,
-            "name": requestable_role.name,
-            "description": requestable_role.description,
+            "key": requestable_group.key,
+            "kind": requestable_group.kind,
+            "name": requestable_group.name,
+            "description": requestable_group.description,
             "requestable": True,
             "requires_approval": True,
         },
     ]
-    assert no_rule_role.key not in response.content.decode()
+    body = response.content.decode()
+    assert inactive_group.key not in body
+    assert not_requestable_group.key not in body
+    assert inactive_app_group.key not in body
 
 
 def test_portal_request_catalog_lists_requestable_permissions_as_group_tree() -> None:
@@ -145,6 +140,7 @@ def test_portal_request_catalog_lists_requestable_permissions_as_group_tree() ->
             "app_key": crm.app_key,
             "name": crm.name,
             "description": crm.description,
+            "catalog_version": crm.catalog_version,
         },
     ]
     assert isinstance(groups, list)
@@ -177,3 +173,77 @@ def test_portal_request_catalog_rejects_missing_session() -> None:
 
     # Then: 仍使用员工门户 session 边界。
     assert response.status_code == HTTPStatus.UNAUTHORIZED
+
+
+def test_portal_request_catalog_returns_authorization_groups_and_catalog_version() -> None:
+    # Given: active 员工和新授权组目录。
+    client, _user = logged_in_client("portal-catalog-authorization-group-user")
+    crm = App.objects.create(app_key="catalog-authz-crm", name="CRM", catalog_version=7)
+    active_group = AuthorizationGroup.objects.create(
+        app=crm,
+        key="sales",
+        kind="role",
+        name="销售",
+        requestable=True,
+    )
+    _ = AuthorizationGroup.objects.create(
+        app=crm,
+        key="internal",
+        kind="bundle",
+        name="内部",
+        requestable=False,
+    )
+
+    # When: 读取申请目录。
+    response = client.get(REQUEST_CATALOG_URL)
+
+    # Then: 目录返回 authorization_groups 和 catalog_version, 不再返回 roles。
+    payload = json_object(response)
+    assert response.status_code == HTTPStatus.OK
+    assert payload["authorization_groups"] == [
+        {
+            "id": active_group.id,
+            "app_key": crm.app_key,
+            "key": active_group.key,
+            "kind": active_group.kind,
+            "name": active_group.name,
+            "description": active_group.description,
+            "requestable": True,
+            "requires_approval": True,
+        },
+    ]
+    assert payload["apps"][0]["catalog_version"] == crm.catalog_version
+    assert "roles" not in payload
+
+
+def test_portal_request_catalog_includes_direct_grant_scope_options() -> None:
+    # Given: active direct Permission 支持多个 scope。
+    client, _user = logged_in_client("portal-catalog-direct-grant-scope-user")
+    crm = App.objects.create(app_key="catalog-direct-scope-crm", name="CRM")
+    _ = AppScope.objects.create(app=crm, key="SELF", name="本人")
+    _ = AppScope.objects.create(app=crm, key="TEAM", name="团队")
+    _ = AppScope.objects.create(app=crm, key="DISABLED", name="停用", is_active=False)
+    permission = Permission.objects.create(
+        app=crm,
+        key="invoice.export",
+        name="导出发票",
+        supported_scopes=["SELF", "TEAM", "DISABLED"],
+    )
+    _ = ApprovalRule.objects.create(
+        app=crm,
+        permission=permission,
+        approver_userids=["manager-001"],
+    )
+
+    # When: 读取申请目录。
+    response = client.get(REQUEST_CATALOG_URL)
+
+    # Then: direct grant 目标只暴露 active 且 permission 支持的 scopes。
+    payload = json_object(response)
+    direct_grants = payload["ungrouped_permissions"]
+    assert response.status_code == HTTPStatus.OK
+    assert direct_grants[0]["key"] == permission.key
+    assert direct_grants[0]["scopes"] == [
+        {"key": "SELF", "name": "本人", "description": ""},
+        {"key": "TEAM", "name": "团队", "description": ""},
+    ]

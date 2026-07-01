@@ -10,27 +10,21 @@ from easyauth.access_requests.submission_types import (
     AccessRequestSubmission,
     AccessRequestSubmissionError,
     AccessRequestType,
+    ScopedAccessRequestGrant,
 )
 from easyauth.access_requests.target_validation import (
     AccessRequestTargetValidationError,
     validate_request_targets,
 )
-from easyauth.applications.models import RolePermission
-from easyauth.grants.models import (
-    GRANT_STATUS_ACTIVE as GRANT_RECORD_STATUS_ACTIVE,
-)
-from easyauth.grants.models import (
-    AccessGrant,
-    AccessGrantPermission,
-    AccessGrantRole,
-)
+from easyauth.grants.models import GRANT_STATUS_ACTIVE as GRANT_RECORD_STATUS_ACTIVE
+from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
     from datetime import datetime
 
     from easyauth.accounts.models import UserMirror
-    from easyauth.applications.models import App, Permission, Role
+    from easyauth.applications.models import App, AuthorizationGroup
 
 
 def validated_request_type(request_type: str) -> AccessRequestType:
@@ -41,25 +35,29 @@ def validated_request_type(request_type: str) -> AccessRequestType:
             raise AccessRequestSubmissionError(("unsupported request type",))
 
 
-def unique_roles(roles: Iterable[Role]) -> tuple[Role, ...]:
-    role_by_id: dict[int, Role] = {}
-    for role in roles:
-        role_by_id[role.id] = role
-    return tuple(role_by_id.values())
+def unique_authorization_groups(
+    authorization_groups: Iterable[AuthorizationGroup],
+) -> tuple[AuthorizationGroup, ...]:
+    group_by_id: dict[int, AuthorizationGroup] = {}
+    for group in authorization_groups:
+        group_by_id[group.id] = group
+    return tuple(group_by_id.values())
 
 
-def unique_permissions(permissions: Iterable[Permission]) -> tuple[Permission, ...]:
-    permission_by_id: dict[int, Permission] = {}
-    for permission in permissions:
-        permission_by_id[permission.id] = permission
-    return tuple(permission_by_id.values())
+def unique_direct_grants(
+    direct_grants: Iterable[ScopedAccessRequestGrant],
+) -> tuple[ScopedAccessRequestGrant, ...]:
+    grant_by_identity: dict[tuple[int, str], ScopedAccessRequestGrant] = {}
+    for grant in direct_grants:
+        grant_by_identity[(grant.permission.id, grant.scope_key)] = grant
+    return tuple(grant_by_identity.values())
 
 
 def validate_submission_scope(
     input_data: AccessRequestSubmission,
     request_type: AccessRequestType,
-    roles: tuple[Role, ...],
-    permissions: tuple[Permission, ...],
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> None:
     _validate_user(input_data.user)
     _validate_expiration_shape(input_data.grant_type, input_data.grant_expires_at)
@@ -67,29 +65,22 @@ def validate_submission_scope(
 
     match request_type:
         case "grant":
-            _validate_targets_present(roles, permissions)
-            if roles:
-                _validate_roles(input_data.app, roles)
-            if permissions:
-                _validate_permissions(input_data.app, permissions)
+            _validate_targets_present(authorization_groups, direct_grants)
+            _validate_targets(input_data.app, authorization_groups, direct_grants)
         case "change":
             _ = _active_lifecycle_grant(input_data.user, input_data.app)
-            _validate_targets_present(roles, permissions)
-            if roles:
-                _validate_roles(input_data.app, roles)
-            _validate_permissions(input_data.app, permissions)
+            _validate_targets_present(authorization_groups, direct_grants)
+            _validate_targets(input_data.app, authorization_groups, direct_grants)
         case "revoke":
             grant = _active_lifecycle_grant(input_data.user, input_data.app)
-            _validate_targets_belong_to_app(input_data.app, roles, permissions)
-            _validate_revoke_subset(grant, roles, permissions)
+            _validate_targets_belong_to_app(input_data.app, authorization_groups, direct_grants)
+            _validate_revoke_subset(grant, authorization_groups, direct_grants)
         case "renew":
             grant = _active_lifecycle_grant(input_data.user, input_data.app)
             _validate_renew_request(input_data.grant_type, input_data.grant_expires_at, grant)
-            _validate_targets_belong_to_app(input_data.app, roles, permissions)
-            _validate_renew_targets(grant, roles, permissions)
-            duration_error = high_risk_duration_error(roles, input_data.grant_expires_at)
-            if duration_error:
-                raise AccessRequestSubmissionError((duration_error,))
+            _validate_targets_belong_to_app(input_data.app, authorization_groups, direct_grants)
+            _validate_renew_targets(grant, authorization_groups, direct_grants)
+            _validate_high_risk_duration(authorization_groups, input_data.grant_expires_at)
 
 
 def _validate_user(user: UserMirror) -> None:
@@ -123,11 +114,13 @@ def _validate_app(app: App) -> None:
 
 
 def _validate_targets_present(
-    roles: tuple[Role, ...],
-    permissions: tuple[Permission, ...],
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> None:
-    if not roles and not permissions:
-        raise AccessRequestSubmissionError(("at least one role or permission is required",))
+    if not authorization_groups and not direct_grants:
+        raise AccessRequestSubmissionError(
+            ("at least one authorization group or direct grant is required",),
+        )
 
 
 def _active_lifecycle_grant(user: UserMirror, app: App) -> AccessGrant:
@@ -177,96 +170,94 @@ def _validate_renew_request(
 
 def _validate_revoke_subset(
     grant: AccessGrant,
-    roles: tuple[Role, ...],
-    permissions: tuple[Permission, ...],
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> None:
-    current_role_ids = set(
-        AccessGrantRole.objects.filter(grant=grant).values_list("role_id", flat=True),
-    )
-    target_role_ids = {role.id for role in roles}
-    if not target_role_ids.issubset(current_role_ids):
-        raise AccessRequestSubmissionError(("target roles must be subset of current grant",))
+    current_group_ids = _current_group_ids(grant)
+    target_group_ids = {group.id for group in authorization_groups}
+    if not target_group_ids.issubset(current_group_ids):
+        raise AccessRequestSubmissionError(("target groups must be subset of current grant",))
 
-    current_permission_ids = _current_permission_ids(grant)
-    target_permission_ids = {permission.id for permission in permissions}
-    if not target_permission_ids.issubset(current_permission_ids):
-        raise AccessRequestSubmissionError(("target permissions must be subset of current grant",))
-    target_effective_permission_ids = _target_permission_ids(roles, permissions)
-    if (
-        target_role_ids == current_role_ids
-        and target_effective_permission_ids == current_permission_ids
-    ):
+    current_direct_grants = _current_direct_grants(grant)
+    target_direct_grants = _target_direct_grants(direct_grants)
+    if not target_direct_grants.issubset(current_direct_grants):
+        raise AccessRequestSubmissionError(
+            ("target direct grants must be subset of current grant",),
+        )
+    if target_group_ids == current_group_ids and target_direct_grants == current_direct_grants:
         raise AccessRequestSubmissionError(("revoke request must reduce current grant",))
 
 
 def _validate_renew_targets(
     grant: AccessGrant,
-    roles: tuple[Role, ...],
-    permissions: tuple[Permission, ...],
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> None:
-    current_role_ids = set(
-        AccessGrantRole.objects.filter(grant=grant).values_list("role_id", flat=True),
-    )
-    if {role.id for role in roles} != current_role_ids:
-        raise AccessRequestSubmissionError(("renew request must keep current roles",))
-    if _target_permission_ids(roles, permissions) != _current_permission_ids(grant):
-        raise AccessRequestSubmissionError(("renew request must keep current permissions",))
+    if {group.id for group in authorization_groups} != _current_group_ids(grant):
+        raise AccessRequestSubmissionError(("renew request must keep current groups",))
+    if _target_direct_grants(direct_grants) != _current_direct_grants(grant):
+        raise AccessRequestSubmissionError(("renew request must keep current direct grants",))
 
 
-def _current_permission_ids(grant: AccessGrant) -> set[int]:
-    direct_ids = set(
-        AccessGrantPermission.objects.filter(grant=grant).values_list("permission_id", flat=True),
-    )
-    role_ids = AccessGrantRole.objects.filter(grant=grant).values_list("role_id", flat=True)
-    role_permission_ids = set(
-        RolePermission.objects.filter(role_id__in=role_ids).values_list("permission_id", flat=True),
-    )
-    return direct_ids | role_permission_ids
+def _validate_high_risk_duration(
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    grant_expires_at: datetime | None,
+) -> None:
+    error = high_risk_duration_error(authorization_groups, grant_expires_at)
+    if error:
+        raise AccessRequestSubmissionError((error,))
 
 
-def _target_permission_ids(
-    roles: tuple[Role, ...],
-    permissions: tuple[Permission, ...],
-) -> set[int]:
-    role_ids = tuple(role.id for role in roles)
-    role_permission_ids = set(
-        RolePermission.objects.filter(role_id__in=role_ids).values_list("permission_id", flat=True),
+def _current_group_ids(grant: AccessGrant) -> set[int]:
+    return set(
+        AccessGrantGroup.objects.filter(grant=grant).values_list(
+            "authorization_group_id",
+            flat=True,
+        ),
     )
-    return role_permission_ids | {permission.id for permission in permissions}
+
+
+def _current_direct_grants(grant: AccessGrant) -> set[tuple[int, str]]:
+    return set(
+        AccessGrantPermission.objects.filter(grant=grant).values_list(
+            "permission_id",
+            "scope_key",
+        ),
+    )
+
+
+def _target_direct_grants(
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
+) -> set[tuple[int, str]]:
+    return {(grant.permission.id, grant.scope_key) for grant in direct_grants}
 
 
 def _validate_targets_belong_to_app(
     app: App,
-    roles: tuple[Role, ...],
-    permissions: tuple[Permission, ...],
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> None:
     errors: list[str] = []
     errors.extend(
-        f"{role.key}: Role must belong to the access request app."
-        for role in roles
-        if role.app != app
+        f"{group.key}: Authorization group must belong to the access request app."
+        for group in authorization_groups
+        if group.app_id != app.id
     )
     errors.extend(
-        f"{permission.key}: Permission must belong to the access request app."
-        for permission in permissions
-        if permission.app != app
+        f"{grant.permission.key}: Permission must belong to the access request app."
+        for grant in direct_grants
+        if grant.permission.app_id != app.id
     )
     if errors:
         raise AccessRequestSubmissionError(tuple(errors))
 
 
-def _validate_roles(app: App, roles: tuple[Role, ...]) -> None:
-    if not roles:
-        raise AccessRequestSubmissionError(("at least one role is required",))
-
+def _validate_targets(
+    app: App,
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
+) -> None:
     try:
-        validate_request_targets(app, roles, ())
-    except AccessRequestTargetValidationError as exc:
-        raise AccessRequestSubmissionError(exc.messages) from exc
-
-
-def _validate_permissions(app: App, permissions: tuple[Permission, ...]) -> None:
-    try:
-        validate_request_targets(app, (), permissions)
+        validate_request_targets(app, authorization_groups, direct_grants)
     except AccessRequestTargetValidationError as exc:
         raise AccessRequestSubmissionError(exc.messages) from exc

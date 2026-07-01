@@ -46,6 +46,7 @@ __all__ = (
     "TEMPLATE_STATUS_IMPORTED",
     "TEMPLATE_STATUS_REJECTED",
     "AppMembership",
+    "AuthorizationGroupAccessPolicy",
     "DependencyHealthSnapshot",
     "PermissionGroup",
     "PermissionTemplateVersion",
@@ -272,6 +273,66 @@ class RoleAccessPolicy(models.Model):
     @override
     def __str__(self) -> str:
         return f"{self.role}:access-policy"
+
+    @override
+    def clean(self) -> None:
+        super().clean()
+        errors = role_access_policy_max_duration_clean_errors(
+            is_high_risk=self.is_high_risk,
+            max_grant_duration_days=self.max_grant_duration_days,
+        )
+        if errors:
+            raise ValidationError(errors)
+
+
+class AuthorizationGroupAccessPolicy(models.Model):
+    if TYPE_CHECKING:
+        id: ClassVar[int]
+        authorization_group_id: ClassVar[int]
+
+    authorization_group = models.ForeignKey(
+        "applications.AuthorizationGroup",
+        on_delete=models.CASCADE,
+        related_name="access_policies",
+    )
+    is_high_risk: models.BooleanField[bool, bool] = models.BooleanField(default=False)
+    max_grant_duration_days: models.PositiveIntegerField[int | None, int | None] = (
+        models.PositiveIntegerField(blank=True, null=True)
+    )
+    created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
+        auto_now_add=True,
+    )
+    updated_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["authorization_group"],
+                name="applications_authorization_group_access_policy_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(max_grant_duration_days__isnull=True)
+                | Q(max_grant_duration_days__gte=1),
+                name="applications_authorization_group_access_policy_max_duration_positive",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(is_high_risk=True, max_grant_duration_days__isnull=False)
+                    | Q(is_high_risk=False, max_grant_duration_days__isnull=True)
+                ),
+                name="applications_authorization_group_access_policy_high_risk_shape",
+            ),
+        ]
+        ordering: ClassVar[list[str]] = [
+            "authorization_group__app__app_key",
+            "authorization_group__key",
+        ]
+
+    @override
+    def __str__(self) -> str:
+        return f"{self.authorization_group}:access-policy"
 
     @override
     def clean(self) -> None:

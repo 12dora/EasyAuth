@@ -109,17 +109,28 @@ def _success_payload(
     user_id: str,
     result: PermissionQueryTestResult,
 ) -> dict[str, JsonValue]:
-    roles: list[JsonValue] = []
-    roles.extend(result.roles)
-    permissions: list[JsonValue] = []
-    permissions.extend(result.permissions)
+    groups: list[JsonValue] = [
+        {"key": group.key, "kind": group.kind, "name": group.name}
+        for group in result.groups
+    ]
+    grants: list[JsonValue] = [
+        {
+            "permission": grant.permission,
+            "scope": grant.scope,
+            "source_type": grant.source_type,
+            "source_key": grant.source_key,
+        }
+        for grant in result.grants
+    ]
     return {
         "app_key": app.app_key,
         "user_id": user_id,
-        "allowed": len(result.roles) > 0 or len(result.permissions) > 0,
-        "roles": roles,
-        "permissions": permissions,
-        "version": result.version,
+        "allowed": len(result.groups) > 0 or len(result.grants) > 0,
+        "groups": groups,
+        "grants": grants,
+        "grant_version": result.grant_version,
+        "catalog_version": result.catalog_version,
+        "snapshot_version": result.snapshot_version,
         "expires_at": None if result.expires_at is None else result.expires_at.isoformat(),
         "status_code": result.status_code,
         "code": result.code,

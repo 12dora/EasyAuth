@@ -14,7 +14,12 @@ from easyauth.api.permission_query_auth import (
     permission_query_ttl_seconds,
 )
 from easyauth.audit.services import AuditRecord, AuditService
-from easyauth.grants.query import PermissionSnapshot, resolve_user_permissions
+from easyauth.grants.query import (
+    ExpandedGrant,
+    GroupSnapshot,
+    PermissionSnapshot,
+    resolve_user_permissions,
+)
 
 if TYPE_CHECKING:
     from easyauth.applications.models import App
@@ -27,9 +32,11 @@ class PermissionQueryTestResult:
     status_code: int
     code: str
     explanation: str
-    roles: tuple[str, ...] = ()
-    permissions: tuple[str, ...] = ()
-    version: int = 0
+    groups: tuple[GroupSnapshot, ...] = ()
+    grants: tuple[ExpandedGrant, ...] = ()
+    grant_version: int = 0
+    catalog_version: int = 0
+    snapshot_version: str = "0.0"
     expires_at: datetime | None = None
 
 
@@ -136,9 +143,11 @@ def _resolve_snapshot_result(
         status_code=HTTPStatus.OK,
         code="ok",
         explanation=_success_explanation(snapshot),
-        roles=snapshot.roles,
-        permissions=snapshot.permissions,
-        version=snapshot.version,
+        groups=snapshot.groups,
+        grants=snapshot.grants,
+        grant_version=snapshot.grant_version,
+        catalog_version=snapshot.catalog_version,
+        snapshot_version=snapshot.snapshot_version,
         expires_at=_expires_at(snapshot),
     )
 
@@ -161,7 +170,7 @@ def _authenticate_token(plaintext_token: str) -> AppPrincipal | PermissionQueryT
 
 
 def _success_explanation(snapshot: PermissionSnapshot) -> str:
-    if not snapshot.roles and not snapshot.permissions:
+    if not snapshot.groups and not snapshot.grants:
         return "空权限响应。"
     return "权限查询成功。"
 
@@ -191,6 +200,12 @@ def _record_query_test(
     if principal is not None:
         metadata["credential_type"] = principal.credential_type
         metadata["credential_id"] = principal.credential_id
+    if result.status_code == HTTPStatus.OK:
+        metadata["group_count"] = len(result.groups)
+        metadata["grant_count"] = len(result.grants)
+        metadata["grant_version"] = result.grant_version
+        metadata["catalog_version"] = result.catalog_version
+        metadata["snapshot_version"] = result.snapshot_version
     _ = AuditService.record(
         AuditRecord(
             actor_type="user",

@@ -12,7 +12,14 @@ from django.db import transaction as django_transaction
 from django.test import Client
 
 import easyauth.admin_console.permission_catalog_api as catalog_api
-from easyauth.applications.models import App, AppMembership, Permission, Role, RolePermission
+from easyauth.applications.models import (
+    App,
+    AppMembership,
+    AppScope,
+    Permission,
+    Role,
+    RolePermission,
+)
 from easyauth.audit.models import AuditLog
 
 if TYPE_CHECKING:
@@ -23,6 +30,7 @@ pytestmark = pytest.mark.django_db
 LOGIN_VALUE: Final = "console-matrix-version"
 STALE_VERSION: Final = "stale-version"
 CURRENT_VERSION: Final = "current-version"
+EXPECTED_CATALOG_VERSION: Final = 7
 
 
 def test_ops1_matrix_save_rechecks_catalog_version_inside_transaction(
@@ -41,7 +49,7 @@ def test_ops1_matrix_save_rechecks_catalog_version_inside_transaction(
     real_atomic = django_transaction.atomic
 
     @contextmanager
-    def tracked_atomic() -> Generator[None, None, None]:
+    def tracked_atomic_context() -> Generator[None, None, None]:
         nonlocal inside_matrix_write_transaction
         with real_atomic():
             inside_matrix_write_transaction = True
@@ -49,6 +57,11 @@ def test_ops1_matrix_save_rechecks_catalog_version_inside_transaction(
                 yield
             finally:
                 inside_matrix_write_transaction = False
+
+    def tracked_atomic(*args: object, **kwargs: object) -> object:
+        if args and callable(args[0]):
+            return real_atomic(*args, **kwargs)
+        return tracked_atomic_context()
 
     def catalog_version_reloaded_in_transaction(_app: App) -> str:
         if inside_matrix_write_transaction:
@@ -75,6 +88,59 @@ def test_ops1_matrix_save_rechecks_catalog_version_inside_transaction(
     assert _json_string(response.content.decode(), "current_version") == CURRENT_VERSION
     assert RolePermission.objects.filter(role=role, permission=permission).exists() is False
     assert AuditLog.objects.count() == 0
+
+
+def test_ops1_catalog_payload_uses_app_catalog_version() -> None:
+    # Given: App 的目录版本已经由统一服务维护。
+    client = _logged_in_user("ops1-catalog-payload-version")
+    app = _member_app("ops1-catalog-payload-version", "ops1-catalog-payload-version", role="owner")
+    app.catalog_version = EXPECTED_CATALOG_VERSION
+    app.save(update_fields=["catalog_version", "updated_at"])
+    _ = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
+
+    # When: owner 查询权限目录。
+    response = client.get(_api_url(app.app_key, "permissions"))
+
+    # Then: payload 使用 App.catalog_version 作为主目录版本, 不再使用目录 hash。
+    assert response.status_code == HTTPStatus.OK
+    assert response.json()["catalog_version"] == EXPECTED_CATALOG_VERSION
+    assert response.json()["version"] == str(EXPECTED_CATALOG_VERSION)
+
+
+def test_ops1_permission_create_bumps_catalog_version() -> None:
+    # Given: owner 面对一个已有目录版本的 App。
+    client = _logged_in_user("ops1-permission-bumps-version")
+    app = _member_app(
+        "ops1-permission-bumps-version",
+        "ops1-permission-bumps-version",
+        role="owner",
+    )
+    initial_version = app.catalog_version
+    scope = AppScope.objects.create(app=app, key="GLOBAL", name="Global")
+
+    # When: owner 新增 Permission。
+    response = client.post(
+        _api_url(app.app_key, "permissions"),
+        data=dumps(
+            {
+                "key": "invoice.read",
+                "name": "Read invoices",
+                "supported_scopes": [scope.key],
+            },
+        ),
+        content_type="application/json",
+    )
+
+    # Then: 写操作通过统一目录版本服务提升版本。
+    app.refresh_from_db()
+    assert response.status_code == HTTPStatus.CREATED
+    assert app.catalog_version == initial_version + 1
+    assert AuditLog.objects.filter(
+        actor_id="ops1-permission-bumps-version",
+        event_type="app_catalog_version_bumped",
+        metadata__reason="permission_created",
+        metadata__catalog_version=app.catalog_version,
+    ).exists()
 
 
 def _member_app(app_key: str, username: str, *, role: str) -> App:

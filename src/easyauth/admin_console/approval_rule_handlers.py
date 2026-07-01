@@ -32,7 +32,7 @@ from easyauth.applications.models import App, ApprovalRule
 APPROVAL_RULE_NOT_FOUND = "审批规则不存在。"
 APPROVAL_RULE_INVALID = "审批规则参数无效。"
 APPROVAL_RULE_PAYLOAD_INVALID = "审批规则提交参数无效。"
-ROLE_TARGET_INVALID = "Role 不属于当前 App。"
+AUTHORIZATION_GROUP_TARGET_INVALID = "AuthorizationGroup 不属于当前 App。"
 PERMISSION_TARGET_INVALID = "Permission 不属于当前 App。"
 
 
@@ -79,7 +79,7 @@ def patch_approval_rule(
             ApprovalRuleMutation(
                 app=app,
                 rule=rule,
-                role=target.role,
+                authorization_group=target.authorization_group,
                 permission=target.permission,
                 approver_userids=approver_userids,
                 is_active=is_active,
@@ -121,8 +121,8 @@ def _patched_target(
         case None:
             pass
     message = (
-        ROLE_TARGET_INVALID
-        if patch_target_type(payload) == "role"
+        AUTHORIZATION_GROUP_TARGET_INVALID
+        if patch_target_type(payload) == "authorization_group"
         else PERMISSION_TARGET_INVALID
     )
     raise ApprovalRulePatchError(

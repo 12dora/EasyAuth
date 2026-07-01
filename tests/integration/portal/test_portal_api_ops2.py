@@ -16,12 +16,19 @@ from easyauth.access_requests.models import (
     REQUEST_STATUS_APPROVED,
     REQUEST_STATUS_GRANT_APPLIED,
     AccessRequest,
-    AccessRequestRole,
+    AccessRequestGroup,
 )
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
-from easyauth.applications.models import App, ApprovalRule, Permission, Role, RolePermission
-from easyauth.grants.models import AccessGrant, AccessGrantPermission, AccessGrantRole
+from easyauth.applications.models import (
+    App,
+    ApprovalRule,
+    AppScope,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
+    Permission,
+)
+from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
 
 pytestmark = pytest.mark.django_db
 
@@ -87,7 +94,11 @@ def test_ops2_portal_api_lists_access_requests_for_session_user() -> None:
     # Given: 当前员工和其他员工都有申请记录。
     client, user = _logged_in_client("ops2-api-requests-user")
     app = App.objects.create(app_key="ops2-api-requests-app", name="CRM")
-    role = Role.objects.create(app=app, key="auditor", name="审计员", requestable=True)
+    group = _requestable_group_with_rule(
+        app=app,
+        key="auditor",
+        name="审计员",
+    )
     approved = AccessRequest.objects.create(
         user=user,
         app=app,
@@ -101,8 +112,8 @@ def test_ops2_portal_api_lists_access_requests_for_session_user() -> None:
         applied_at=timezone.now(),
         reason="已落库",
     )
-    _ = AccessRequestRole.objects.create(access_request=approved, role=role)
-    _ = AccessRequestRole.objects.create(access_request=applied, role=role)
+    _ = AccessRequestGroup.objects.create(access_request=approved, authorization_group=group)
+    _ = AccessRequestGroup.objects.create(access_request=applied, authorization_group=group)
     other_user = UserMirror.objects.create(authentik_user_id="ops2-api-request-other")
     _ = AccessRequest.objects.create(user=other_user, app=app, reason="不应泄露")
 
@@ -123,15 +134,19 @@ def test_ops2_portal_api_lists_access_requests_for_session_user() -> None:
 
 
 def test_ops2_portal_api_post_access_request_uses_session_user_and_csrf() -> None:
-    # Given: 强制 CSRF 的员工 client 和一个可申请角色。
+    # Given: 强制 CSRF 的员工 client 和一个可申请授权组。
     client, user = _logged_in_client("ops2-api-submit-user", enforce_csrf_checks=True)
     app = App.objects.create(app_key="ops2-api-submit-app", name="CRM")
-    role = Role.objects.create(app=app, key="auditor", name="审计员", requestable=True)
-    _ = ApprovalRule.objects.create(app=app, role=role, approver_userids=["manager-001"])
+    group = _requestable_group_with_rule(
+        app=app,
+        key="auditor",
+        name="审计员",
+    )
     csrf_token = _extract_csrf_token(client.get(PORTAL_URL).content.decode())
     payload = {
         "app_key": app.app_key,
-        "role_keys": [role.key],
+        "authorization_group_keys": [group.key],
+        "direct_grants": [],
         "grant_type": GRANT_TYPE_PERMANENT,
         "grant_expires_at": None,
         "reason": "需要查看客户记录",
@@ -154,7 +169,10 @@ def test_ops2_portal_api_post_access_request_uses_session_user_and_csrf() -> Non
     access_request = AccessRequest.objects.get(user=user, app=app)
     assert missing_token.status_code == HTTPStatus.FORBIDDEN
     assert accepted.status_code == HTTPStatus.CREATED
-    assert AccessRequestRole.objects.get(access_request=access_request).role == role
+    assert (
+        AccessRequestGroup.objects.get(access_request=access_request).authorization_group
+        == group
+    )
     assert access_request.reason == "需要查看客户记录"
     assert AccessGrant.objects.count() == 0
 
@@ -164,8 +182,12 @@ def test_ops2_portal_api_rejects_missing_session_and_requester_spoofing() -> Non
     anonymous = Client()
     client, _user = _logged_in_client("ops2-api-spoof-user")
     app = App.objects.create(app_key="ops2-api-spoof-app", name="CRM")
-    role = Role.objects.create(app=app, key="auditor", name="审计员", requestable=True)
-    _ = ApprovalRule.objects.create(app=app, role=role, approver_userids=["manager-001"])
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="auditor",
+        kind="role",
+        name="审计员",
+    )
 
     # When: 未登录访问 API, 登录员工提交包含 requester_user_id 的 JSON。
     unauthenticated = anonymous.get(GRANTS_API_URL)
@@ -174,7 +196,8 @@ def test_ops2_portal_api_rejects_missing_session_and_requester_spoofing() -> Non
         data=dumps(
             {
                 "app_key": app.app_key,
-                "role_keys": [role.key],
+                "authorization_group_keys": [group.key],
+                "direct_grants": [],
                 "grant_type": GRANT_TYPE_PERMANENT,
                 "grant_expires_at": None,
                 "reason": "尝试代提",
@@ -216,9 +239,24 @@ def _create_grant_with_role_permission(
     expires_in_days: int | None,
 ) -> App:
     app = App.objects.create(app_key=app_key, name=app_name)
-    role = Role.objects.create(app=app, key="operator", name="操作员")
-    permission = Permission.objects.create(app=app, key=permission_key, name=permission_key)
-    _ = RolePermission.objects.create(role=role, permission=permission)
+    _ = AppScope.objects.create(app=app, key="GLOBAL", name="全局")
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="operator",
+        kind="role",
+        name="操作员",
+    )
+    permission = Permission.objects.create(
+        app=app,
+        key=permission_key,
+        name=permission_key,
+        supported_scopes=["GLOBAL"],
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key="GLOBAL",
+    )
     grant = AccessGrant.objects.create(
         user=user,
         app=app,
@@ -227,9 +265,29 @@ def _create_grant_with_role_permission(
             None if expires_in_days is None else timezone.now() + timedelta(days=expires_in_days)
         ),
     )
-    _ = AccessGrantRole.objects.create(grant=grant, role=role)
-    _ = AccessGrantPermission.objects.create(grant=grant, permission=permission)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=permission,
+        scope_key="GLOBAL",
+    )
     return app
+
+
+def _requestable_group_with_rule(*, app: App, key: str, name: str) -> AuthorizationGroup:
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key=key,
+        kind="role",
+        name=name,
+        requestable=True,
+    )
+    _ = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=group,
+        approver_userids=["manager-001"],
+    )
+    return group
 
 
 def _extract_csrf_token(html: str) -> str:

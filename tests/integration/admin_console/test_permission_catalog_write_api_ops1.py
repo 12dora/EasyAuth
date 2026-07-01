@@ -10,7 +10,15 @@ from django.test import Client
 from django.utils import timezone
 
 from easyauth.api.errors import ErrorCode
-from easyauth.applications.models import App, AppMembership, Permission, PermissionGroup, Role
+from easyauth.applications.models import (
+    App,
+    AppMembership,
+    AppScope,
+    AuthorizationGroup,
+    Permission,
+    PermissionGroup,
+    Role,
+)
 from easyauth.applications.services import StaticTokenService
 
 pytestmark = pytest.mark.django_db
@@ -50,10 +58,17 @@ def test_ops1_owner_creates_and_updates_permission_group() -> None:
 
 
 def test_ops1_superuser_creates_requestable_role_and_readiness_reports_missing_rule() -> None:
-    # Given: 系统管理员管理一个缺少 ApprovalRule 的 App。
+    # Given: 系统管理员管理一个存在 requestable AuthorizationGroup 但缺少 ApprovalRule 的 App。
     client = _logged_in_superuser("ops1-catalog-role-admin")
     app = App.objects.create(app_key="ops1-catalog-role-write", name="Role Write")
     _ = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
+    authorization_group = AuthorizationGroup.objects.create(
+        app=app,
+        key="auditor",
+        kind="role",
+        name="Auditor",
+        requestable=True,
+    )
     _ = StaticTokenService.create_token(app=app, name="token")
 
     # When: superuser 创建 requestable Role 并更新描述。
@@ -79,9 +94,9 @@ def test_ops1_superuser_creates_requestable_role_and_readiness_reports_missing_r
     assert readiness.status_code == HTTPStatus.OK
     readiness_body = readiness.content.decode()
     assert '"status": "blocking"' in readiness_body
-    assert "requestable_role_approval_rule_missing" in readiness_body
-    assert "requestable_role_permission_missing" in readiness_body
-    assert role.key in readiness_body
+    assert "requestable_authorization_group_approval_rule_missing" in readiness_body
+    assert "active_authorization_group_missing" not in readiness_body
+    assert authorization_group.key in readiness_body
 
 
 def test_ops1_owner_creates_and_updates_permission_with_group() -> None:
@@ -93,11 +108,19 @@ def test_ops1_owner_creates_and_updates_permission_with_group() -> None:
         role="owner",
     )
     group = PermissionGroup.objects.create(app=app, key="BILLING", name="Billing")
+    scope = AppScope.objects.create(app=app, key="GLOBAL", name="Global")
 
     # When: owner 在分组下创建权限后更新名称。
     created = client.post(
         _api_url(app.app_key, "permissions"),
-        data=dumps({"key": "billing.read", "name": "Read billing", "group_id": group.id}),
+        data=dumps(
+            {
+                "key": "billing.read",
+                "name": "Read billing",
+                "group_id": group.id,
+                "supported_scopes": [scope.key],
+            },
+        ),
         content_type="application/json",
     )
     assert created.status_code == HTTPStatus.CREATED

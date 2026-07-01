@@ -1,136 +1,191 @@
 from __future__ import annotations
 
 import pytest
-from django.utils import timezone
 
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App, Permission, Role, RolePermission
-from easyauth.grants.models import AccessGrant, AccessGrantPermission, AccessGrantRole
+from easyauth.applications.models import (
+    App,
+    AppScope,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
+    Permission,
+)
+from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
+from easyauth.grants.query import ExpandedGrant, GroupSnapshot
 from easyauth.portal.api_data import current_grant_items_for_user
 from easyauth.portal.grant_rows import current_grant_rows_for_user
-from easyauth.portal.permission_aggregation import (
-    direct_permission_keys_by_grant_id,
-    permission_keys,
-)
+from easyauth.portal.permission_aggregation import json_expanded_grants, json_groups
 
 pytestmark = pytest.mark.django_db
 
 
-def test_direct_permission_keys_by_grant_id_prefills_empty_sets_for_each_input_grant_id() -> None:
-    # Given: 调用方传入没有 direct Permission 关联的 grant id。
-    grant_ids = (101, 202, 303)
+def test_current_permission_api_returns_groups_and_expanded_scoped_grants() -> None:
+    # Given: 当前授权同时包含授权组和 direct scoped grant。
+    user, app, grant = _create_current_grant("portal-expanded-api")
+    self_scope = _create_scope(app, "SELF", "本人")
+    team_scope = _create_scope(app, "TEAM", "团队")
+    read_permission = _create_permission(app, "orders.read", self_scope.key)
+    refund_permission = _create_permission(app, "orders.refund.approve", team_scope.key)
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="sales-reader",
+        kind="role",
+        name="销售只读",
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=read_permission,
+        scope_key=self_scope.key,
+    )
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=refund_permission,
+        scope_key=team_scope.key,
+    )
 
-    # When: 聚合 direct Permission。
-    keys_by_grant_id = direct_permission_keys_by_grant_id(grant_ids)
+    # When: 当前权限 API 聚合授权事实。
+    item = current_grant_items_for_user(user)[0]
 
-    # Then: 每个输入 grant id 都有稳定的空 set 结果。
-    assert keys_by_grant_id == {101: set(), 202: set(), 303: set()}
+    # Then: 响应包含授权组快照、expanded grants 和版本信息。
+    assert item["groups"] == [{"key": "sales-reader", "kind": "role", "name": "销售只读"}]
+    assert item["grants"] == [
+        {
+            "permission": "orders.read",
+            "scope": "SELF",
+            "source_type": "group",
+            "source_key": "sales-reader",
+        },
+        {
+            "permission": "orders.refund.approve",
+            "scope": "TEAM",
+            "source_type": "direct",
+            "source_key": "",
+        },
+    ]
+    assert item["grant_version"] == grant.version
+    assert item["catalog_version"] == app.catalog_version
+    assert item["snapshot_version"] == f"{grant.version}.{app.catalog_version}"
 
 
 def test_current_permission_api_excludes_inactive_and_deprecated_permissions() -> None:
-    # Given: 当前授权包含 active、inactive 和 deprecated direct Permission。
+    # Given: 当前授权包含 active、inactive 和 deprecated direct scoped grants。
     user, app, grant = _create_current_grant("portal-active-only-api")
-    active_permission = Permission.objects.create(
-        app=app,
-        key="invoice.active",
-        name="有效权限",
-    )
-    inactive_permission = Permission.objects.create(
-        app=app,
-        key="invoice.inactive",
-        name="停用权限",
+    scope = _create_scope(app, "GLOBAL", "全局")
+    active_permission = _create_permission(app, "invoice.active", scope.key)
+    inactive_permission = _create_permission(
+        app,
+        "invoice.inactive",
+        scope.key,
         is_active=False,
     )
-    deprecated_permission = Permission.objects.create(
-        app=app,
-        key="invoice.deprecated",
-        name="废弃权限",
-        deprecated_at=timezone.now(),
+    deprecated_permission = _create_permission(
+        app,
+        "invoice.deprecated",
+        scope.key,
+        deprecated=True,
     )
-    _ = AccessGrantPermission.objects.create(grant=grant, permission=active_permission)
-    _ = AccessGrantPermission.objects.create(grant=grant, permission=inactive_permission)
-    _ = AccessGrantPermission.objects.create(grant=grant, permission=deprecated_permission)
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=active_permission,
+        scope_key=scope.key,
+    )
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=inactive_permission,
+        scope_key=scope.key,
+    )
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=deprecated_permission,
+        scope_key=scope.key,
+    )
 
     # When: 当前权限 API 聚合授权项。
     item = current_grant_items_for_user(user)[0]
 
-    # Then: API 只返回当前有效权限。
-    assert item["permissions"] == [active_permission.key]
+    # Then: API 只返回当前有效授权项。
+    assert item["grants"] == [
+        {
+            "permission": active_permission.key,
+            "scope": scope.key,
+            "source_type": "direct",
+            "source_key": "",
+        },
+    ]
 
 
-def test_current_grant_rows_keep_inactive_and_deprecated_permissions_for_history_display() -> None:
-    # Given: 历史展示行需要保留当前授权上已经停用或废弃的 direct Permission。
-    user, app, grant = _create_current_grant("portal-history-rows")
-    inactive_permission = Permission.objects.create(
+def test_current_grant_rows_render_group_names_and_scoped_permission_labels() -> None:
+    # Given: 门户行展示需要把授权组和 scoped grants 展成稳定中文分隔文本。
+    user, app, grant = _create_current_grant("portal-row-labels")
+    global_scope = _create_scope(app, "GLOBAL", "全局")
+    team_scope = _create_scope(app, "TEAM", "团队")
+    dashboard_permission = _create_permission(app, "dashboard.view", global_scope.key)
+    refund_permission = _create_permission(app, "orders.refund.approve", team_scope.key)
+    group = AuthorizationGroup.objects.create(
         app=app,
-        key="invoice.inactive",
-        name="停用权限",
-        is_active=False,
+        key="ops-bundle",
+        kind="bundle",
+        name="运营包",
     )
-    deprecated_permission = Permission.objects.create(
-        app=app,
-        key="invoice.deprecated",
-        name="废弃权限",
-        deprecated_at=timezone.now(),
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=refund_permission,
+        scope_key=team_scope.key,
     )
-    _ = AccessGrantPermission.objects.create(grant=grant, permission=inactive_permission)
-    _ = AccessGrantPermission.objects.create(grant=grant, permission=deprecated_permission)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=dashboard_permission,
+        scope_key=global_scope.key,
+    )
 
     # When: 门户授权行聚合展示权限。
     row = current_grant_rows_for_user(user)[0]
 
-    # Then: row 展示保留历史权限 key。
-    assert row.permission_keys == "invoice.deprecated、invoice.inactive"
+    # Then: row 展示授权组名称和 permission:scope 标签。
+    assert row.role_names == "运营包"
+    assert row.permission_keys == "dashboard.view:GLOBAL、orders.refund.approve:TEAM"
 
 
-def test_permission_keys_deduplicates_role_and_direct_permissions_and_sorts_by_key() -> None:
-    # Given: role 派生权限和 direct Permission 存在重复, 且输入顺序不是字典序。
-    role_ids = (30, 20)
-    direct_keys = {"billing.write", "billing.read"}
-    role_keys_by_role_id = {
-        20: {"billing.approve", "billing.write"},
-        30: {"billing.read", "billing.export"},
-    }
-
-    # When: 聚合最终权限 key。
-    keys = permission_keys(
-        direct_permission_keys=direct_keys,
-        role_ids=role_ids,
-        role_permission_keys_by_role_id=role_keys_by_role_id,
+def test_json_helpers_serialize_new_authorization_fact_shapes() -> None:
+    # Given: 新授权事实快照包含 groups 和 expanded grants。
+    groups = (GroupSnapshot(key="sales-reader", kind="role", name="销售只读"),)
+    grants = (
+        ExpandedGrant(
+            permission="orders.read",
+            scope="SELF",
+            source_type="group",
+            source_key="sales-reader",
+        ),
+        ExpandedGrant(
+            permission="dashboard.view",
+            scope="GLOBAL",
+            source_type="direct",
+            source_key="",
+        ),
     )
 
-    # Then: 重复 key 只出现一次, 且输出按 permission key 排序。
-    assert keys == (
-        "billing.approve",
-        "billing.export",
-        "billing.read",
-        "billing.write",
-    )
+    # When: 门户 API 序列化授权事实。
+    group_payload = json_groups(groups)
+    grant_payload = json_expanded_grants(grants)
 
-
-def test_current_grant_rows_keep_inactive_role_permissions_for_history_display() -> None:
-    # Given: 历史展示行需要保留 inactive Role 派生的历史权限。
-    user, app, grant = _create_current_grant("portal-history-role-rows")
-    inactive_role = Role.objects.create(
-        app=app,
-        key="inactive-role",
-        name="停用角色",
-        is_active=False,
-    )
-    inactive_role_permission = Permission.objects.create(
-        app=app,
-        key="role.inactive",
-        name="停用角色权限",
-        is_active=False,
-    )
-    _ = RolePermission.objects.create(role=inactive_role, permission=inactive_role_permission)
-    _ = AccessGrantRole.objects.create(grant=grant, role=inactive_role)
-
-    # When: 门户授权行聚合展示权限。
-    row = current_grant_rows_for_user(user)[0]
-
-    # Then: row 展示保留 inactive Role 的历史权限 key。
-    assert row.permission_keys == inactive_role_permission.key
+    # Then: 输出字段与前端表格契约一致。
+    assert group_payload == [{"key": "sales-reader", "kind": "role", "name": "销售只读"}]
+    assert grant_payload == [
+        {
+            "permission": "orders.read",
+            "scope": "SELF",
+            "source_type": "group",
+            "source_key": "sales-reader",
+        },
+        {
+            "permission": "dashboard.view",
+            "scope": "GLOBAL",
+            "source_type": "direct",
+            "source_key": "",
+        },
+    ]
 
 
 def _create_current_grant(key_suffix: str) -> tuple[UserMirror, App, AccessGrant]:
@@ -138,3 +193,29 @@ def _create_current_grant(key_suffix: str) -> tuple[UserMirror, App, AccessGrant
     app = App.objects.create(app_key=f"{key_suffix}-app", name="门户应用")
     grant = AccessGrant.objects.create(user=user, app=app)
     return user, app, grant
+
+
+def _create_scope(app: App, key: str, name: str) -> AppScope:
+    return AppScope.objects.create(app=app, key=key, name=name)
+
+
+def _create_permission(
+    app: App,
+    key: str,
+    scope_key: str,
+    *,
+    is_active: bool = True,
+    deprecated: bool = False,
+) -> Permission:
+    permission = Permission.objects.create(
+        app=app,
+        key=key,
+        name=key,
+        is_active=is_active,
+        supported_scopes=[scope_key],
+    )
+    if deprecated:
+        permission.deprecated_reason = "废弃"
+        permission.deprecated_at = permission.updated_at
+        permission.save(update_fields=["deprecated_at", "deprecated_reason"])
+    return permission

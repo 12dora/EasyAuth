@@ -14,6 +14,9 @@ from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import (
     App,
     AppMembership,
+    AppScope,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
     Permission,
     PermissionGroup,
     PermissionTemplateVersion,
@@ -26,16 +29,6 @@ from easyauth.grants.models import AccessGrant
 pytestmark = pytest.mark.django_db
 
 LOGIN_VALUE: Final = "console-login"
-PIPELINE_TEMPLATE_YAML: Final = """
-version: 1
-groups:
-  - key: PIPELINE_GROUP
-    name: 流水线
-    children:
-      - key: ALLOW_PIPELINE_CREATE
-        name: 创建流水线
-        type: permission
-"""
 APP_DETAIL_TEMPLATE: Final = (
     Path(__file__).parents[3]
     / "src/easyauth/admin_console/templates/admin_console/app_detail.html"
@@ -59,19 +52,33 @@ class HttpResponseLike(Protocol):
 
 
 def test_ops1_console_app_detail_shows_readiness_matrix_and_approval_prompt() -> None:
-    # Given: 应用负责人拥有 CRM App, 且存在分组、角色和权限, 但缺少审批规则。
+    # Given: 应用负责人拥有 CRM App, 且存在分组、角色、权限和授权组, 但授权组缺少审批规则。
     client = _logged_in_client("owner-ops1-detail")
     app = App.objects.create(app_key="ops1-console-crm", name="CRM Console")
     _ = AppMembership.objects.create(app=app, user_id="owner-ops1-detail", role="owner")
+    _ = AppScope.objects.create(app=app, key="GLOBAL", name="全局")
     group = PermissionGroup.objects.create(app=app, key="PIPELINE_GROUP", name="Pipeline")
     role = Role.objects.create(app=app, key="operator", name="Operator", requestable=True)
+    authorization_group = AuthorizationGroup.objects.create(
+        app=app,
+        key="operator",
+        kind="role",
+        name="Operator",
+        requestable=True,
+    )
     permission = Permission.objects.create(
         app=app,
         group=group,
         key="ALLOW_PIPELINE_CREATE",
         name="Create pipeline",
+        supported_scopes=["GLOBAL"],
     )
     _ = RolePermission.objects.create(role=role, permission=permission)
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=authorization_group,
+        permission=permission,
+        scope_key="GLOBAL",
+    )
 
     # When: 应用负责人通过 React shell 使用的 private API 读取配置和矩阵。
     configuration = client.get(_api_url(app.app_key, "configuration-status"))
@@ -83,7 +90,7 @@ def test_ops1_console_app_detail_shows_readiness_matrix_and_approval_prompt() ->
     assert configuration.status_code == HTTPStatus.OK
     assert matrix.status_code == HTTPStatus.OK
     assert tree.status_code == HTTPStatus.OK
-    assert "requestable_role_approval_rule_missing" in body
+    assert "requestable_authorization_group_approval_rule_missing" in body
     assert "PIPELINE_GROUP" in body
     assert "operator" in body
     assert "ALLOW_PIPELINE_CREATE" in body
@@ -298,17 +305,19 @@ def test_ops1_console_permission_template_preview_shows_diff_without_writes() ->
     # When: owner 通过模板预览 API 提交 YAML。
     response = client.post(
         _api_url(app.app_key, "permission-template-imports/preview"),
-        data=dumps({"template_format": "yaml", "template": PIPELINE_TEMPLATE_YAML}),
+        data=dumps({"template_format": "yaml", "template": _pipeline_template_yaml(app)}),
         content_type="application/json",
     )
 
     # Then: API 返回差异确认, 但不创建 group、permission 或模板版本。
     body = response.content.decode()
     assert response.status_code == HTTPStatus.OK
-    assert "create_group" in body
+    assert "create_permission_group" in body
     assert "PIPELINE_GROUP" in body
     assert "create_permission" in body
     assert "ALLOW_PIPELINE_CREATE" in body
+    assert "create_authorization_group" in body
+    assert "create_approval_rule" in body
     assert PermissionGroup.objects.count() == 0
     assert Permission.objects.count() == 0
     assert PermissionTemplateVersion.objects.count() == 0
@@ -324,7 +333,7 @@ def test_ops1_console_permission_template_apply_imports_and_updates_matrix() -> 
     # When: owner 先预览再确认导入 YAML 模板。
     preview = client.post(
         _api_url(app.app_key, "permission-template-imports/preview"),
-        data=dumps({"template_format": "yaml", "template": PIPELINE_TEMPLATE_YAML}),
+        data=dumps({"template_format": "yaml", "template": _pipeline_template_yaml(app)}),
         content_type="application/json",
     )
     preview_id = _json_string(preview, "preview_id")
@@ -340,7 +349,7 @@ def test_ops1_console_permission_template_apply_imports_and_updates_matrix() -> 
     assert PermissionGroup.objects.get(app=app, key="PIPELINE_GROUP").name == "流水线"
     assert Permission.objects.get(app=app, key="ALLOW_PIPELINE_CREATE").group is not None
     assert PermissionTemplateVersion.objects.get(app=app).version == 1
-    assert AuditLog.objects.get(event_type="permission_template_imported").actor_id == (
+    assert AuditLog.objects.get(event_type="app_manifest_imported").actor_id == (
         "owner-ops1-template-apply"
     )
     assert "PIPELINE_GROUP" in body
@@ -382,6 +391,39 @@ def _matrix_payload(*, version: str, role_id: int, permission_id: int, enabled: 
             ],
         },
     )
+
+
+def _pipeline_template_yaml(app: App) -> str:
+    return f"""
+schema_version: 1
+app:
+  app_key: {app.app_key}
+  name: {app.name}
+scopes:
+  - key: GLOBAL
+    name: 全局
+permission_groups:
+  - key: PIPELINE_GROUP
+    name: 流水线
+permissions:
+  - key: ALLOW_PIPELINE_CREATE
+    name: 创建流水线
+    group_key: PIPELINE_GROUP
+    supported_scopes:
+      - GLOBAL
+authorization_groups:
+  - key: operator
+    kind: role
+    name: Operator
+    grants:
+      - permission: ALLOW_PIPELINE_CREATE
+        scope: GLOBAL
+approval_rules:
+  - target_type: authorization_group
+    target_key: operator
+    approver_userids:
+      - manager-001
+"""
 
 
 def _json_string(response: HttpResponseLike, key: str) -> str:

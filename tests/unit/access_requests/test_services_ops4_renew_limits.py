@@ -17,21 +17,26 @@ from easyauth.access_requests.services import (
     AccessRequestSubmissionError,
 )
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App, Role, RoleAccessPolicy
+from easyauth.applications.models import App, AuthorizationGroup, AuthorizationGroupAccessPolicy
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import GRANT_TYPE_TIMED as GRANT_RECORD_TYPE_TIMED
-from easyauth.grants.models import AccessGrant, AccessGrantRole
+from easyauth.grants.models import AccessGrant, AccessGrantGroup
 
 pytestmark = pytest.mark.django_db
 
 
-def test_ops4_submit_renew_request_rejects_high_risk_role_beyond_max_duration() -> None:
-    # Given: 员工当前限时授权包含高风险角色, 角色策略最多只允许 7 天。
+def test_ops4_submit_renew_request_rejects_high_risk_group_beyond_max_duration() -> None:
+    # Given: 员工当前限时授权包含高风险授权组, 策略最多只允许 7 天。
     user = UserMirror.objects.create(authentik_user_id="ops4-renew-high-risk-user")
     app = App.objects.create(app_key="ops4-renew-high-risk-app", name="OPS4 Renew High Risk")
-    role = Role.objects.create(app=app, key="admin", name="Admin")
-    _ = RoleAccessPolicy.objects.create(
-        role=role,
+    authorization_group = AuthorizationGroup.objects.create(
+        app=app,
+        key="admin",
+        kind="role",
+        name="Admin",
+    )
+    _ = AuthorizationGroupAccessPolicy.objects.create(
+        authorization_group=authorization_group,
         is_high_risk=True,
         max_grant_duration_days=7,
     )
@@ -42,7 +47,7 @@ def test_ops4_submit_renew_request_rejects_high_risk_role_beyond_max_duration() 
         grant_type=GRANT_RECORD_TYPE_TIMED,
         grant_expires_at=now + timedelta(days=3),
     )
-    _ = AccessGrantRole.objects.create(grant=grant, role=role)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=authorization_group)
 
     # When / Then: 续期目标超过策略上限时被拒绝, 不写入申请或审计。
     with pytest.raises(AccessRequestSubmissionError) as exc_info:
@@ -50,7 +55,7 @@ def test_ops4_submit_renew_request_rejects_high_risk_role_beyond_max_duration() 
             AccessRequestSubmission(
                 user=user,
                 app=app,
-                roles=(role,),
+                authorization_groups=(authorization_group,),
                 grant_type=GRANT_TYPE_TIMED,
                 grant_expires_at=now + timedelta(days=10),
                 reason="高风险权限项目延期过长",
@@ -61,19 +66,24 @@ def test_ops4_submit_renew_request_rejects_high_risk_role_beyond_max_duration() 
         )
 
     grant.refresh_from_db()
-    assert "high-risk role max duration" in str(exc_info.value)
+    assert "high-risk authorization group max duration" in str(exc_info.value)
     assert AccessRequest.objects.count() == 0
     assert AuditLog.objects.count() == 0
     assert grant.grant_expires_at == now + timedelta(days=3)
 
 
-def test_ops4_submit_renew_request_accepts_high_risk_role_within_max_duration() -> None:
-    # Given: 员工当前限时授权包含高风险角色, 续期目标仍在策略上限内。
+def test_ops4_submit_renew_request_accepts_high_risk_group_within_max_duration() -> None:
+    # Given: 员工当前限时授权包含高风险授权组, 续期目标仍在策略上限内。
     user = UserMirror.objects.create(authentik_user_id="ops4-renew-high-risk-ok-user")
     app = App.objects.create(app_key="ops4-renew-high-risk-ok-app", name="OPS4 Renew Risk OK")
-    role = Role.objects.create(app=app, key="admin", name="Admin")
-    _ = RoleAccessPolicy.objects.create(
-        role=role,
+    authorization_group = AuthorizationGroup.objects.create(
+        app=app,
+        key="admin",
+        kind="role",
+        name="Admin",
+    )
+    _ = AuthorizationGroupAccessPolicy.objects.create(
+        authorization_group=authorization_group,
         is_high_risk=True,
         max_grant_duration_days=14,
     )
@@ -84,14 +94,14 @@ def test_ops4_submit_renew_request_accepts_high_risk_role_within_max_duration() 
         grant_type=GRANT_RECORD_TYPE_TIMED,
         grant_expires_at=now + timedelta(days=3),
     )
-    _ = AccessGrantRole.objects.create(grant=grant, role=role)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=authorization_group)
 
     # When: 员工提交未超过高风险策略上限的续期申请。
     access_request = AccessRequestService.submit_access_request(
-        AccessRequestSubmission(
-            user=user,
-            app=app,
-            roles=(role,),
+            AccessRequestSubmission(
+                user=user,
+                app=app,
+                authorization_groups=(authorization_group,),
             grant_type=GRANT_TYPE_TIMED,
             grant_expires_at=now + timedelta(days=10),
             reason="高风险权限项目延期",

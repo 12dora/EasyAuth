@@ -14,6 +14,7 @@ class _ApprovalTarget(Protocol):
 class _ApprovalRule(Protocol):
     app: _BoundApp
     role: _ApprovalTarget | None
+    authorization_group: _ApprovalTarget | None
     permission: _ApprovalTarget | None
     approver_userids: object
 
@@ -21,16 +22,22 @@ class _ApprovalRule(Protocol):
 def approval_rule_clean_errors(rule: object) -> dict[str, str]:
     typed_rule = cast("_ApprovalRule", rule)
     errors: dict[str, str] = {}
-    role = typed_rule.role
+    authorization_group = typed_rule.authorization_group
     permission = typed_rule.permission
-    has_role = role is not None
-    has_permission = permission is not None
+    target_count = sum(
+        target is not None for target in (authorization_group, permission)
+    )
 
-    if has_role == has_permission:
-        errors["role"] = "Approval rule must target exactly one role or permission."
-        errors["permission"] = "Approval rule must target exactly one role or permission."
-    if role is not None and role.app != typed_rule.app:
-        errors["role"] = "Role must belong to the approval rule app."
+    if target_count != 1:
+        message = "Approval rule must target exactly one authorization group or permission."
+        errors["authorization_group"] = message
+        errors["permission"] = message
+    if typed_rule.role is not None:
+        errors["role"] = "Role is no longer a supported approval rule target."
+    if authorization_group is not None and authorization_group.app != typed_rule.app:
+        errors["authorization_group"] = (
+            "Authorization group must belong to the approval rule app."
+        )
     if permission is not None and permission.app != typed_rule.app:
         errors["permission"] = "Permission must belong to the approval rule app."
 

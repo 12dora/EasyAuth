@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Final, final, override
 
 from django.core.management.base import BaseCommand
@@ -10,19 +12,24 @@ from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import (
     App,
     AppCredential,
+    AppMembership,
     ApprovalRule,
+    AppScope,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
     Permission,
-    Role,
-    RolePermission,
+    PermissionGroup,
 )
 from easyauth.applications.services import APP_CREDENTIAL_TYPE_STATIC_TOKEN, StaticTokenService
 from easyauth.grants.models import AccessGrant
-from easyauth.grants.services import GrantMutationInput, GrantService
+from easyauth.grants.services import GrantMutationInput, GrantService, ScopedDirectGrantInput
 
 CRM_APP_KEY: Final = "crm"
 CRM_CREDENTIAL_NAME: Final = "CRM pilot static credential"
 CRM_PILOT_USER_ID: Final = "crm-pilot-user"
-CRM_APPROVERS: Final[tuple[str, ...]] = ("manager-001",)
+CRM_OWNER_USER_ID: Final = "crm-owner"
+CRM_DEVELOPER_USER_ID: Final = "crm-developer"
+CRM_MANIFEST_PATH: Final = Path(__file__).with_name("fixtures") / "crm_pilot_manifest.json"
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,62 +55,176 @@ class Command(BaseCommand):
 
 @transaction.atomic
 def seed_crm_pilot() -> SeedResult:
-    app, _ = App.objects.get_or_create(
-        app_key=CRM_APP_KEY,
-        defaults={"name": "CRM"},
-    )
-    admin_role = _role(app=app, key="admin", name="CRM 管理员")
-    auditor_role = _role(app=app, key="auditor", name="CRM 审计员")
-    view_permission = _permission(
-        app=app,
-        key="customer:view:department",
-        name="查看本部门客户",
-    )
-    export_permission = _permission(app=app, key="customer:export", name="导出客户")
-    _ = _permission(app=app, key="customer:edit", name="编辑客户")
-    _ = _role_permission(role=admin_role, permission=view_permission)
-    _ = _role_permission(role=admin_role, permission=export_permission)
-    _ = _role_permission(role=auditor_role, permission=view_permission)
-    _ = _approval_rule(app=app, role=admin_role)
-    _ = _approval_rule(app=app, role=auditor_role)
+    manifest = _load_manifest()
+    app = _upsert_manifest_app(manifest)
+    _ensure_memberships(app)
+    _upsert_manifest_scopes(app, manifest)
+    group_by_key = _upsert_manifest_permission_groups(app, manifest)
+    permission_by_key = _upsert_manifest_permissions(app, manifest, group_by_key)
+    group_models = _upsert_manifest_authorization_groups(app, manifest, permission_by_key)
+    _upsert_manifest_approval_rules(app, manifest, group_models)
     plaintext_token = _ensure_static_token(app)
-    _ensure_seed_grant(app=app, role=admin_role)
+    _ensure_seed_grant(
+        app=app,
+        authorization_group=group_models["admin"],
+        direct_permission=permission_by_key["customer.profile.view"],
+    )
     return SeedResult(app=app, plaintext_token=plaintext_token)
 
 
-def _role(*, app: App, key: str, name: str) -> Role:
-    role, _ = Role.objects.get_or_create(
-        app=app,
-        key=key,
-        defaults={"name": name, "requestable": True},
+def _load_manifest() -> dict[str, object]:
+    return json.loads(CRM_MANIFEST_PATH.read_text(encoding="utf-8"))
+
+
+def _upsert_manifest_app(manifest: dict[str, object]) -> App:
+    app_payload = _dict(manifest["app"])
+    app_key = str(app_payload["app_key"])
+    if app_key != CRM_APP_KEY:
+        message = "CRM manifest app_key 与 seed 目标不一致。"
+        raise ValueError(message)
+    app, _created = App.objects.update_or_create(
+        app_key=app_key,
+        defaults={
+            "name": str(app_payload["name"]),
+            "description": str(app_payload.get("description", "")),
+        },
     )
-    if not role.requestable:
-        role.requestable = True
-        role.save(update_fields=["requestable", "updated_at"])
-    return role
+    return app
 
 
-def _permission(*, app: App, key: str, name: str) -> Permission:
-    permission, _ = Permission.objects.get_or_create(
+def _ensure_memberships(app: App) -> None:
+    _owner, _created = AppMembership.objects.get_or_create(
         app=app,
-        key=key,
-        defaults={"name": name},
+        user_id=CRM_OWNER_USER_ID,
+        role="owner",
     )
-    return permission
-
-
-def _approval_rule(*, app: App, role: Role) -> ApprovalRule:
-    approval_rule, _ = ApprovalRule.objects.get_or_create(
+    _developer, _created = AppMembership.objects.get_or_create(
         app=app,
-        role=role,
-        defaults={"approver_userids": list(CRM_APPROVERS)},
+        user_id=CRM_DEVELOPER_USER_ID,
+        role="developer",
     )
-    return approval_rule
 
 
-def _role_permission(*, role: Role, permission: Permission) -> RolePermission:
-    role_permission, _ = RolePermission.objects.get_or_create(role=role, permission=permission)
-    return role_permission
+def _upsert_manifest_scopes(app: App, manifest: dict[str, object]) -> None:
+    for payload in _list(manifest["scopes"]):
+        scope_payload = _dict(payload)
+        _scope, _created = AppScope.objects.update_or_create(
+            app=app,
+            key=str(scope_payload["key"]),
+            defaults={
+                "name": str(scope_payload["name"]),
+                "description": str(scope_payload.get("description", "")),
+                "is_active": bool(scope_payload.get("is_active", True)),
+                "display_order": int(scope_payload.get("display_order", 0)),
+            },
+        )
+
+
+def _upsert_manifest_permission_groups(
+    app: App,
+    manifest: dict[str, object],
+) -> dict[str, PermissionGroup]:
+    group_by_key = {group.key: group for group in PermissionGroup.objects.filter(app=app)}
+    for payload in _list(manifest["permission_groups"]):
+        group_payload = _dict(payload)
+        parent_key = str(group_payload.get("parent_key", ""))
+        parent = group_by_key.get(parent_key) if parent_key else None
+        group, _created = PermissionGroup.objects.update_or_create(
+            app=app,
+            key=str(group_payload["key"]),
+            defaults={
+                "name": str(group_payload["name"]),
+                "description": str(group_payload.get("description", "")),
+                "parent": parent,
+                "depth": 1 if parent is None else parent.depth + 1,
+                "display_order": int(group_payload.get("display_order", 0)),
+                "is_active": bool(group_payload.get("is_active", True)),
+            },
+        )
+        group_by_key[group.key] = group
+    return group_by_key
+
+
+def _upsert_manifest_permissions(
+    app: App,
+    manifest: dict[str, object],
+    group_by_key: dict[str, PermissionGroup],
+) -> dict[str, Permission]:
+    permission_by_key = {
+        permission.key: permission for permission in Permission.objects.filter(app=app)
+    }
+    for payload in _list(manifest["permissions"]):
+        permission_payload = _dict(payload)
+        permission, _created = Permission.objects.update_or_create(
+            app=app,
+            key=str(permission_payload["key"]),
+            defaults={
+                "name": str(permission_payload["name"]),
+                "description": str(permission_payload.get("description", "")),
+                "group": group_by_key[str(permission_payload.get("group_key", ""))],
+                "supported_scopes": [
+                    str(scope) for scope in _list(permission_payload["supported_scopes"])
+                ],
+                "risk_level": str(permission_payload.get("risk_level", "standard")),
+                "is_active": bool(permission_payload.get("is_active", True)),
+                "deprecated_at": None,
+                "deprecated_reason": "",
+            },
+        )
+        permission_by_key[permission.key] = permission
+    return permission_by_key
+
+
+def _upsert_manifest_authorization_groups(
+    app: App,
+    manifest: dict[str, object],
+    permission_by_key: dict[str, Permission],
+) -> dict[str, AuthorizationGroup]:
+    group_by_key: dict[str, AuthorizationGroup] = {}
+    for payload in _list(manifest["authorization_groups"]):
+        group_payload = _dict(payload)
+        group, _created = AuthorizationGroup.objects.update_or_create(
+            app=app,
+            key=str(group_payload["key"]),
+            defaults={
+                "kind": str(group_payload.get("kind", "role")),
+                "name": str(group_payload["name"]),
+                "description": str(group_payload.get("description", "")),
+                "requestable": bool(group_payload.get("requestable", True)),
+                "is_active": bool(group_payload.get("is_active", True)),
+            },
+        )
+        group_by_key[group.key] = group
+        for grant_payload in _list(group_payload.get("grants", [])):
+            grant = _dict(grant_payload)
+            _link, _created = AuthorizationGroupGrant.objects.update_or_create(
+                authorization_group=group,
+                permission=permission_by_key[str(grant["permission"])],
+                scope_key=str(grant["scope"]),
+                defaults={"is_active": True},
+            )
+    return group_by_key
+
+
+def _upsert_manifest_approval_rules(
+    app: App,
+    manifest: dict[str, object],
+    groups: dict[str, AuthorizationGroup],
+) -> None:
+    for payload in _list(manifest["approval_rules"]):
+        rule_payload = _dict(payload)
+        target_key = str(rule_payload["target_key"])
+        group = groups[target_key]
+        _rule, _created = ApprovalRule.objects.update_or_create(
+            app=app,
+            authorization_group=group,
+            defaults={
+                "approver_userids": [
+                    str(user_id) for user_id in _list(rule_payload["approver_userids"])
+                ],
+                "is_active": bool(rule_payload.get("is_active", True)),
+            },
+        )
 
 
 def _ensure_static_token(app: App) -> str | None:
@@ -117,7 +238,12 @@ def _ensure_static_token(app: App) -> str | None:
     return StaticTokenService.create_token(app=app, name=CRM_CREDENTIAL_NAME).plaintext_token
 
 
-def _ensure_seed_grant(*, app: App, role: Role) -> None:
+def _ensure_seed_grant(
+    *,
+    app: App,
+    authorization_group: AuthorizationGroup,
+    direct_permission: Permission,
+) -> None:
     user, _ = UserMirror.objects.get_or_create(
         authentik_user_id=CRM_PILOT_USER_ID,
         defaults={
@@ -133,8 +259,25 @@ def _ensure_seed_grant(*, app: App, role: Role) -> None:
         GrantMutationInput(
             user=user,
             app=app,
-            roles=(role,),
+            authorization_groups=(authorization_group,),
+            direct_grants=(
+                ScopedDirectGrantInput(permission=direct_permission, scope_key="SELF"),
+            ),
             actor_type="system",
             actor_id="seed_crm_pilot",
         ),
     )
+
+
+def _dict(value: object) -> dict[str, object]:
+    if not isinstance(value, dict):
+        message = "manifest 节点必须是对象。"
+        raise TypeError(message)
+    return value
+
+
+def _list(value: object) -> list[object]:
+    if not isinstance(value, list):
+        message = "manifest 节点必须是列表。"
+        raise TypeError(message)
+    return value

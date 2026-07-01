@@ -3,10 +3,17 @@ from __future__ import annotations
 import pytest
 
 from easyauth.applications.models import App, Permission, PermissionGroup, PermissionTemplateVersion
-from easyauth.applications.permission_templates import (
+from easyauth.applications.permission_template_types import (
+    AppManifestAppInput,
+    AppManifestAuthorizationGroupInput,
+    AppManifestGrantInput,
+    AppManifestInput,
+    AppManifestPermissionGroupInput,
+    AppManifestPermissionInput,
+    AppManifestScopeInput,
     PermissionTemplateImportError,
-    PermissionTemplateInput,
-    TemplateNodeInput,
+)
+from easyauth.applications.permission_templates import (
     apply_permission_template,
 )
 
@@ -45,25 +52,43 @@ def _pipeline_template(
     version: int,
     group_name: str,
     permission_name: str,
-) -> PermissionTemplateInput:
-    return PermissionTemplateInput(
-        version=version,
+) -> AppManifestInput:
+    return AppManifestInput(
+        schema_version=version,
         source="paste",
         imported_by="owner-001",
         raw_template="pipeline-template",
-        nodes=(
-            _group(
-                "PIPELINE_GROUP",
-                group_name,
-                _permission("ALLOW_PIPELINE_CREATE", permission_name),
+        app=AppManifestAppInput(
+            app_key="ops1-template-version-lower",
+            name="Version Lower",
+        ),
+        scopes=(AppManifestScopeInput(key="GLOBAL", name="Global"),),
+        permission_groups=(
+            AppManifestPermissionGroupInput(
+                key="PIPELINE_GROUP",
+                name=group_name,
             ),
         ),
+        permissions=(
+            AppManifestPermissionInput(
+                key="ALLOW_PIPELINE_CREATE",
+                name=permission_name,
+                group_key="PIPELINE_GROUP",
+                supported_scopes=("GLOBAL",),
+            ),
+        ),
+        authorization_groups=(
+            AppManifestAuthorizationGroupInput(
+                key="operator",
+                kind="role",
+                name="Operator",
+                grants=(
+                    AppManifestGrantInput(
+                        permission="ALLOW_PIPELINE_CREATE",
+                        scope="GLOBAL",
+                    ),
+                ),
+            ),
+        ),
+        approval_rules=(),
     )
-
-
-def _group(key: str, name: str, *children: TemplateNodeInput) -> TemplateNodeInput:
-    return TemplateNodeInput(key=key, name=name, node_type="group", children=children)
-
-
-def _permission(key: str, name: str) -> TemplateNodeInput:
-    return TemplateNodeInput(key=key, name=name, node_type="permission")

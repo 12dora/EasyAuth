@@ -28,16 +28,16 @@ EasyAuth 负责“审批后你在应用里能做什么”。
 | 来源 | 已有内容 | 本需求处理方式 |
 | --- | --- | --- |
 | `docs/architecture/easyauth-architecture-design.md` | 已明确 EasyAuth 不替代 Authentik 的认证和身份生命周期能力，也不替代 DingTalk 的审批流程能力 | 新需求不包含上游认证源向导、OIDC/SAML Provider、SCIM Provider 或 DingTalk 审批流设计器 |
-| `docs/architecture/easyauth-architecture-design.md` | 已定义 `App`、`Role`、`Permission`、`ApprovalRule`、`AccessRequest`、`AccessGrant` 和权限查询 API 契约 | 新需求只做这些对象的运营界面、校验提示、联调和可视化，不重建领域模型 |
+| `docs/architecture/easyauth-architecture-design.md` | 已定义 `App`、`Role`、`Permission`、`ApprovalRule`、`AccessRequest`、`AccessGrant` 和权限查询 API 契约 | 新需求在此基础上引入 scope、授权组和 scoped grant 运营能力，不重建上游认证模型 |
 | `src/easyauth/applications/models.py` | 已实现应用、角色、权限、角色权限映射、审批规则和静态凭据模型 | 复用现有模型，新增界面必须通过服务层或模型约束保存 |
 | `src/easyauth/applications/admin.py` | 已有 Django Admin 基础配置，且 `AppCredential` 禁止直接新增、修改和查看 token hash | 新需求将 Django Admin 能力产品化为受控管理控制台，不降低凭据保护 |
 | `src/easyauth/applications/services.py` | 已实现静态 app token 创建、轮换、禁用、hash 存储和 `AppPrincipal` | 新需求只增加安全操作入口和一次性展示体验，不改变 token 语义 |
 | `src/easyauth/applications/oauth.py`、`src/easyauth/applications/oauth_models.py` | 已实现 OAuth2 client credentials 与 App 绑定 | 新需求只把创建、禁用、联调状态可视化，不新增下游 OIDC 登录能力 |
-| `src/easyauth/api/views.py`、`src/easyauth/api/authentication.py` | 已实现 `GET /api/v1/apps/{app_key}/users/{user_id}/permissions` 和 Bearer app 凭据认证 | 新需求保持该公共 API 向后兼容，不修改字段含义 |
+| `src/easyauth/api/views.py`、`src/easyauth/api/authentication.py` | 已实现 `GET /api/v1/apps/{app_key}/users/{user_id}/permissions` 和 Bearer app 凭据认证 | 新需求继续复用该查询入口，并通过 `catalog_version` 表达目录配置版本 |
 | `src/easyauth/grants/services.py`、`src/easyauth/grants/query.py` | 已实现授权创建、变更、撤销、过期、权限解析和版本语义 | 新需求只增加人工运营入口、状态可视化和失败恢复流程 |
 | `src/easyauth/accounts/services.py` | 已实现 Authentik 用户同步后对非 active 用户撤权 | 新需求只展示同步健康和撤权结果，不配置 Authentik Source |
 | `src/easyauth/portal/forms.py`、`src/easyauth/portal/views.py`、`src/easyauth/portal/templates/portal/home.html` | 已有员工访问申请表单和申请状态列表 | 新需求扩展为“我的权限、申请、变更、撤销、即将过期”，不替代 Authentik Application Dashboard |
-| 现有 `Permission.key` | 当前是扁平业务权限 key，适合下游应用消费 | 新需求新增可嵌套权限模板和模块分组作为配置与展示层；权限查询响应仍返回扁平 `permissions` |
+| 现有 `Permission.key` | 当前是扁平业务权限 key，适合下游应用消费 | 新需求新增 App manifest、scope、权限分组和授权组作为配置层；权限查询响应按授权快照返回有效 permission |
 
 ## 明确不做
 
@@ -53,14 +53,14 @@ EasyAuth 负责“审批后你在应用里能做什么”。
 - 不重新设计现有权限查询 API。
 - 不让 DingTalk 审批结果直接成为授权事实。
 - 不实现 ABAC、行级权限、字段级权限、AI 权限推荐或跨应用权限复制。
-- 不让权限模板直接授予用户权限；模板只能定义应用可用权限目录，授权仍由申请、审批和 `GrantService` 产生。
+- 不让 App manifest 直接授予用户权限；manifest 只能定义应用可用授权目录，授权仍由申请、审批和 `GrantService` 产生。
 
 ## 需求目标
 
 本需求目标是把现有授权闭环从“工程可用”提升到“运营可用”：
 
 - 应用负责人可以在受控界面中配置本应用业务角色、权限、审批规则和接入凭据。
-- 下游应用可以提供可嵌套的权限模板，EasyAuth 根据模板维护本应用的模块分组和权限目录。
+- 下游应用可以提供 App manifest，EasyAuth 根据 manifest 维护本应用的 scope、模块分组、权限目录、授权组和审批规则。
 - 员工可以查看自己已有业务权限、提交新增权限申请、查看申请状态，并识别即将过期的授权。
 - 应用开发者可以从应用详情页获得自动生成的接入说明、示例请求和联调结果。
 - 系统管理员可以看到授权配置完整性、失败授权、过期撤权、离职撤权和审计记录。
@@ -86,8 +86,8 @@ EasyAuth 负责“审批后你在应用里能做什么”。
 应用负责人只管理自己负责的业务应用。
 
 - 查看应用配置完整性。
-- 配置业务角色、业务权限和角色权限映射。
-- 配置可申请角色和对应审批人。
+- 配置授权组、业务权限、scope 和授权组 grant。
+- 配置可申请授权组和对应审批人。
 - 创建或轮换 EasyAuth app token。
 - 创建或查看 OAuth2 client credentials 绑定状态。
 - 使用联调工具验证测试用户的权限响应。
@@ -155,14 +155,18 @@ EasyAuth 负责“审批后你在应用里能做什么”。
 一期能力：
 
 - 按应用展示基本信息、状态、负责人、配置完整性和最近变更时间。
-- 以矩阵方式展示 Role 到 Permission 的映射。
-- 支持创建、编辑、禁用 Role 和 Permission。
-- 支持维护 `Role.requestable`。
-- 支持维护 ApprovalRule，并在保存时提示缺少审批人的可申请角色。
+- 以目录方式展示 AuthorizationGroup 到 scoped Permission 的 grant。
+- 支持创建、编辑、禁用 AuthorizationGroup 和 Permission。
+- 支持维护 `AuthorizationGroup.requestable`。
+- 支持维护 ApprovalRule，并在保存时提示缺少审批人的可申请授权组。
 - 支持配置校验：
-  - active App 至少有一个 active Role。
-  - requestable Role 必须有 active ApprovalRule。
-  - RolePermission 不能跨 App。
+  - active App 至少有一个 active Permission。
+  - active App 至少有一个 active AuthorizationGroup。
+  - active App 至少有一个 active owner。
+  - requestable AuthorizationGroup 必须有 active ApprovalRule。
+  - AuthorizationGroupGrant 不能指向 inactive 目标。
+  - Permission 必须声明 supported_scopes。
+  - Permission 不应归属 inactive PermissionGroup。
   - ApprovalRule 目标必须属于同一个 App。
 - 保存配置时必须写入审计日志。
 
@@ -173,58 +177,68 @@ EasyAuth 负责“审批后你在应用里能做什么”。
 - 不维护应用 Launch URL 作为主入口。
 - 不维护下游 SAML metadata、OIDC redirect URI 或 SCIM base URL。
 
-### 2. 权限模板与模块分组
+### 2. App Manifest 与模块分组
 
-下游应用应该能向 EasyAuth 提供本应用的权限模板。权限模板是应用能力目录，不是授权记录；它用于初始化和组织 `Permission`，并帮助应用负责人按模块配置 Role 到 Permission 的映射。
+下游应用应该能向 EasyAuth 提供本应用的 App manifest。manifest 是应用能力目录，不是授权记录；它用于初始化和组织 `AppScope`、`PermissionGroup`、`Permission`、`AuthorizationGroup`、`AuthorizationGroupGrant` 和 `ApprovalRule`，并帮助应用负责人按模块配置授权组到 scoped Permission 的映射。
 
-权限模板需要支持模块分组和嵌套。例如：
+manifest 需要支持 scope、模块分组和授权组。例如：
 
-```yaml
-version: 1
-groups:
-  - key: PIPELINE_GROUP
-    name: 流水线
-    children:
-      - key: ALLOW_PIPELINE_CREATE
-        name: 创建流水线
-        type: permission
-      - key: PIPELINE_BRANCH_GROUP
-        name: 分支管理
-        type: group
-        children:
-          - key: ALLOW_PIPELINE_BRANCH_DELETE
-            name: 删除流水线分支
-            type: permission
+```json
+{
+  "schema_version": 1,
+  "app": {"app_key": "crm", "name": "CRM"},
+  "scopes": [{"key": "SELF", "name": "本人"}],
+  "permission_groups": [{"key": "crm.customer", "name": "客户管理"}],
+  "permissions": [
+    {
+      "key": "customer.profile.view",
+      "name": "查看客户资料",
+      "group_key": "crm.customer",
+      "supported_scopes": ["SELF"]
+    }
+  ],
+  "authorization_groups": [
+    {
+      "key": "sales",
+      "kind": "role",
+      "name": "销售",
+      "grants": [{"permission": "customer.profile.view", "scope": "SELF"}]
+    }
+  ],
+  "approval_rules": [
+    {"target_type": "authorization_group", "target_key": "sales", "approver_userids": ["manager001"]}
+  ]
+}
 ```
 
 一期能力：
 
-- 支持应用负责人上传或粘贴 JSON/YAML 权限模板。
+- 支持应用负责人上传或粘贴 JSON/YAML manifest。
 - 支持在界面中手工维护权限分组树。
 - 支持 group 节点和 permission 叶子节点。
 - 支持任意 permission 归属到一个直接父 group。
 - 支持 group 嵌套，默认最大深度为 5 层。
-- 支持同一 App 下 group key 唯一、permission key 唯一。
-- 支持模板预览、差异对比和确认导入。
-- 支持新增权限、禁用缺失权限、移动分组和重命名展示名。
-- 支持按模块分组展示 RolePermission 矩阵。
-- 支持在员工申请页按模块展示角色包含的权限摘要。
+- 支持同一 App 下 scope key、group key、permission key 和 authorization group key 各自唯一。
+- 支持 manifest 预览、差异对比和确认导入。
+- 支持新增权限、禁用缺失权限、移动分组、维护 supported scopes 和重命名展示名。
+- 支持按模块分组展示授权组 grant。
+- 支持在员工申请页按模块展示授权组包含的权限摘要。
 
 关键规则：
 
 - `Permission.key` 是下游应用消费的稳定能力标识，例如 `ALLOW_PIPELINE_CREATE`。
 - group key 只用于 EasyAuth 管理和展示，不出现在权限查询 API 的 `permissions` 中。
-- 模板导入不能删除已被 Role、AccessGrant 或历史审计引用的 Permission，只能标记为 inactive 或 deprecated。
-- 模板导入不能改变既有 `Permission.key` 的含义；如业务含义变化，应新增 key 并废弃旧 key。
+- manifest 导入不能删除已被授权组、AccessGrant 或历史审计引用的 Permission，只能标记为 inactive 或 deprecated。
+- manifest 导入不能改变既有 `Permission.key` 的含义；如业务含义变化，应新增 key 并废弃旧 key。
 - 权限树不能有环。
 - 同一个 Permission 同一时间只能有一个直接父 group，避免在申请页和审计页出现歧义。
-- 权限模板不授予任何人权限；只有 RolePermission、AccessRequest、审批结果和 GrantService 才会影响授权事实。
+- manifest 不授予任何人权限；只有 AccessRequest、审批结果、AuthorizationGroup grant、direct grant 和 `GrantService` 才会影响授权事实。
 
 不做：
 
 - 不把 group 当作可返回给下游应用的权限。
-- 不让员工直接申请单个 permission；MVP 仍以 Role 作为主要申请单元。
-- 不支持跨 App 复用权限模板。
+- 不让员工直接申请单个 permission；MVP 以 AuthorizationGroup 作为主要申请单元。
+- 不支持跨 App 复用 manifest。
 - 不根据权限模板自动创建 Authentik group、role 或 entitlement。
 - 不支持模板中的条件表达式、ABAC 规则或运行时代码。
 
@@ -348,7 +362,7 @@ groups:
 - 缓存和撤权 SLA。
 - curl、Python、TypeScript 示例。
 - 本应用当前 Role 和 Permission 清单。
-- 本应用当前权限模板版本、模块分组树和权限 key 清单。
+- 本应用当前 manifest 版本、模块分组树和权限 key 清单。
 
 不做：
 
@@ -366,16 +380,16 @@ GET /api/v1/apps/{app_key}/users/{user_id}/permissions
 Authorization: Bearer {app_token_or_oauth_access_token}
 ```
 
-现有响应字段语义保持不变：
+响应必须表达授权事实和版本：
 
 - `user_id`
 - `app_key`
-- `roles`
+- `roles` 或等价的授权组摘要
 - `permissions`
-- `version`
+- `version`、`grant_version` 或 `catalog_version`
 - `expires_at`
 
-权限模板不会改变该响应结构。即使 EasyAuth 内部按 `PIPELINE_GROUP` 等 group 组织权限，下游应用收到的 `permissions` 仍只包含 `ALLOW_PIPELINE_CREATE` 这类叶子权限 key。
+manifest 中的 group key 不作为 permission 返回。下游应用收到的 `permissions` 只包含 `customer.profile.view` 这类原子权限 key，目录配置变化通过 `catalog_version` 参与快照版本。
 
 如后续新增管理端 API，必须满足：
 
@@ -391,7 +405,7 @@ Authorization: Bearer {app_token_or_oauth_access_token}
 建议新增或补齐的最小数据：
 
 - 应用负责人与应用的关系，用于限制应用负责人只能管理自己负责的 App。
-- 权限模板版本，用于记录下游应用提供的权限目录快照。
+- manifest 版本，用于记录下游应用提供的授权目录快照。
 - 权限模块分组树，用于表达 group 节点、父子关系、展示顺序和层级路径。
 - Permission 与模块分组的归属关系，用于按模块展示和导入差异计算。
 - 凭据最近使用时间，用于凭据运营和泄露排查。
@@ -421,7 +435,7 @@ Authorization: Bearer {app_token_or_oauth_access_token}
 ### 产品验收
 
 - 应用负责人可以在不直接进入 Django Admin 原始表的情况下完成一个试点 App 的业务角色、权限、审批规则和凭据配置。
-- 配置完整性检查能阻止 requestable Role 缺少 active ApprovalRule 的发布状态。
+- 配置完整性检查能阻止 requestable AuthorizationGroup 缺少 active ApprovalRule 的发布状态。
 - 权限模板支持 `PIPELINE_GROUP -> ALLOW_PIPELINE_CREATE` 这类模块分组，并支持至少 5 层 group 嵌套。
 - 导入权限模板后，RolePermission 矩阵可以按模块展示 Permission。
 - 应用负责人可以使用联调测试台验证测试用户的真实权限查询响应。
@@ -433,7 +447,7 @@ Authorization: Bearer {app_token_or_oauth_access_token}
 ### 技术验收
 
 - 现有权限查询 API 响应字段和语义保持向后兼容。
-- 权限模板导入不会让 group key 出现在权限查询 API 的 `permissions` 中。
+- manifest 导入不会让 group key 出现在权限查询 API 的 `permissions` 中。
 - 模板删除或改名不会破坏历史授权、历史审计和既有 `Permission.key`。
 - 所有授权写入仍通过 `GrantService`。
 - 所有访问申请写入仍通过 `AccessRequestService`。
@@ -452,14 +466,14 @@ Authorization: Bearer {app_token_or_oauth_access_token}
 
 - 让应用负责人可以自助完成现有业务授权模型的配置、凭据准备和联调验证。
 - 让应用开发者可以从应用详情页获得足够接入资料，不再依赖人工解释底层模型。
-- 在不改变公共权限查询 API 的前提下，引入权限模板、模块分组和 RolePermission 矩阵。
+- 引入 App manifest、模块分组、scope、授权组和 scoped grant 配置。
 
 阶段交付物：
 
 - 构建应用详情页和配置完整性检查。
-- 构建权限模板导入、预览、差异确认和模块分组树。
-- 构建 Role、Permission、RolePermission 的矩阵式配置界面。
-- 构建 ApprovalRule 缺失提示。
+- 构建 manifest 导入、预览、差异确认和模块分组树。
+- 构建 AuthorizationGroup、Permission、scope 和 grant 的配置界面。
+- 构建 requestable AuthorizationGroup 的 ApprovalRule 缺失提示。
 - 构建静态 app token 和 OAuth2 client credentials 的受控操作入口。
 - 构建联调测试台。
 - 构建接入文档自动生成页。
@@ -467,18 +481,18 @@ Authorization: Bearer {app_token_or_oauth_access_token}
 验收标准：
 
 - 从空 App 到联调成功不需要直接编辑数据库。
-- `PIPELINE_GROUP` 下嵌套 `ALLOW_PIPELINE_CREATE` 的模板可以成功导入并在矩阵中展示。
-- 权限模板导入只创建、移动、禁用或废弃 Permission，不删除历史 Permission。
-- RolePermission 矩阵保存后，公共权限查询 API 返回的 `permissions` 仍只包含叶子权限 key。
+- 包含 scope、permission group、permission、authorization group、grant 和 approval rule 的 manifest 可以成功导入并在目录中展示。
+- manifest 导入只创建、移动、禁用或废弃 Permission，不删除历史 Permission。
+- 目录配置保存后提升 `catalog_version`，权限查询 API 返回的 `permissions` 仍只包含原子权限 key。
 - 静态 app token 和 OAuth2 client secret 明文只在创建或轮换响应中展示一次。
 - 联调测试台可以展示成功响应、空权限响应和 401/403/422/500 错误解释。
 - 不引入 Authentik Provider 或 Source 配置。
-- 权限查询 API 契约不变。
+- 权限查询 API 必须保留授权事实查询能力，并清晰暴露 grant version 与 catalog version。
 
 阶段约束：
 
 - 管理端必须复用现有服务层和模型约束，不能直接写 `AccessGrant`。
-- 权限模板不能授予用户权限，不能让 group key 出现在下游 `permissions` 中。
+- manifest 不能直接授予用户权限，不能让 group key 出现在下游 `permissions` 中。
 - 凭据明文不能进入列表页、详情页、日志、审计 metadata 或浏览器持久存储。
 - 应用负责人只能管理自己负责的 App；系统管理员管理 App 负责人归属。
 

@@ -10,16 +10,16 @@
 
 ## 范围
 
-本文定义 EasyAuth 管理控制台和员工门户使用的同源私有 API。它们用于业务授权运营增强，包括应用配置、权限模板、矩阵配置、凭据操作、联调测试、员工门户增强、运营看板和健康状态。
+本文定义 EasyAuth 管理控制台和员工门户使用的同源私有 API。它们用于业务授权运营增强，包括应用配置、App manifest、授权目录配置、凭据操作、联调测试、员工门户增强、运营看板和健康状态。
 
-公共下游应用权限查询 API 不变：
+下游应用权限查询仍通过原有路径完成：
 
 ```http
 GET /api/v1/apps/{app_key}/users/{user_id}/permissions
 Authorization: Bearer {app_token_or_oauth_access_token}
 ```
 
-公共响应仍只包含 `user_id`、`app_key`、`roles`、`permissions`、`version` 和 `expires_at`。权限模板 group 不会出现在 `permissions` 中。
+响应以当前授权事实和目录版本为准。目录配置变更通过 `catalog_version` 进入快照版本；manifest 中的目录分组不会作为 permission key 返回给下游应用。
 
 ## API 边界
 
@@ -39,8 +39,8 @@ Authorization: Bearer {app_token_or_oauth_access_token}
 
 阶段目标：
 
-- 支撑应用负责人从空 App 完成配置、权限模板导入、凭据准备和联调。
-- 保持公共权限查询 API 不变，所有新增接口都限定在页面私有 API。
+- 支撑应用负责人从空 App 完成配置、manifest 导入、凭据准备和联调。
+- 所有新增管理端接口都限定在页面私有 API；下游应用只消费授权查询结果。
 
 接口范围：
 
@@ -62,7 +62,7 @@ Authorization: Bearer {app_token_or_oauth_access_token}
 验收标准：
 
 - 应用负责人只能访问自己负责 App 的接口。
-- 模板预览不写入 Permission、PermissionGroup 或 PermissionTemplateVersion。
+- manifest 预览不写入 AppScope、PermissionGroup、Permission、AuthorizationGroup、ApprovalRule 或版本记录。
 - 矩阵保存冲突返回 409。
 - 凭据创建或轮换只在响应中一次性返回明文。
 - 联调接口可以返回真实权限查询结果和错误解释。
@@ -314,17 +314,17 @@ Content-Type: application/json
 }
 ```
 
-## 权限模板
+## App Manifest
 
-### 预览模板导入
+### 预览 Manifest 导入
 
 ```http
 POST /console/api/v1/apps/{app_key}/permission-template-imports/preview
 Content-Type: application/json
 
 {
-  "format": "yaml",
-  "content": "version: 1\ngroups: []\n"
+  "format": "json",
+  "content": "{\"schema_version\":1,\"app\":{\"app_key\":\"crm\",\"name\":\"CRM\"},\"scopes\":[],\"permission_groups\":[],\"permissions\":[],\"authorization_groups\":[],\"approval_rules\":[]}"
 }
 ```
 
@@ -335,17 +335,18 @@ Content-Type: application/json
   "preview_id": "pti_20260606_001",
   "app_key": "crm",
   "summary": {
-    "groups_to_create": 2,
-    "groups_to_update": 1,
+    "scopes_to_create": 3,
+    "permission_groups_to_create": 2,
     "permissions_to_create": 3,
-    "permissions_to_deprecate": 1
+    "authorization_groups_to_create": 2,
+    "approval_rules_to_create": 2
   },
   "changes": [
     {
       "change_type": "create_permission",
-      "key": "ALLOW_PIPELINE_CREATE",
-      "name": "创建流水线",
-      "group_key": "PIPELINE_GROUP"
+      "key": "customer.profile.view",
+      "name": "查看客户资料",
+      "group_key": "crm.customer"
     }
   ],
   "blocking_errors": []
@@ -354,12 +355,12 @@ Content-Type: application/json
 
 规则：
 
-- 预览不写入 Permission、PermissionGroup 或 PermissionTemplateVersion。
-- 预览结果只能写入短期缓存或专用 Preview 记录，不能作为已导入模板版本。
-- 预览结果必须有过期时间，避免长期保存未确认模板。
+- 预览不写入 AppScope、PermissionGroup、Permission、AuthorizationGroup、ApprovalRule 或版本记录。
+- 预览结果只能写入短期缓存或专用 Preview 记录，不能作为已导入 manifest 版本。
+- 预览结果必须有过期时间，避免长期保存未确认 manifest。
 - `content` 大小必须受限。
 
-### 确认模板导入
+### 确认 Manifest 导入
 
 ```http
 POST /console/api/v1/apps/{app_key}/permission-template-imports/{preview_id}/confirm
@@ -369,19 +370,22 @@ POST /console/api/v1/apps/{app_key}/permission-template-imports/{preview_id}/con
 
 ```json
 {
-  "template_version": 4,
+  "manifest_version": 4,
   "status": "imported",
-  "imported_at": "2026-06-06T10:15:00Z"
+  "catalog_version": 12,
+  "imported_at": "2026-07-01T10:15:00Z"
 }
 ```
 
 规则：
 
 - 确认导入必须重新校验 preview 与当前数据版本，避免覆盖并发变更。
+- 导入写入 App 基本信息、scope、权限分组、权限、授权组、授权组 grant 和审批规则。
 - 导入不能删除历史 Permission，只能 inactive 或 deprecated。
-- 写入 `permission_template_imported` 审计事件。
+- 确认导入必须通过统一目录版本服务提升 `catalog_version`。
+- 写入 manifest 导入审计事件。
 
-### 查询模板版本
+### 查询 Manifest 版本
 
 ```http
 GET /console/api/v1/apps/{app_key}/permission-template-versions?page=1&page_size=20
@@ -493,7 +497,7 @@ Content-Type: application/json
 
 - `role_key` 在同一 App 下唯一。
 - 禁用 Role 不会直接撤销既有 AccessGrant；授权事实变化仍必须通过申请、审批、撤权或 `GrantService`。
-- requestable Role 必须存在 active ApprovalRule 才能进入可申请状态。
+- requestable AuthorizationGroup 必须存在 active ApprovalRule 才能进入可申请状态。
 
 ### 查询权限
 
@@ -563,7 +567,8 @@ GET /console/api/v1/apps/{app_key}/role-permission-matrix
       "permission_key": "customer:view:department"
     }
   ],
-  "version": "8b7f3a0c9e..."
+  "catalog_version": 8,
+  "version": "8"
 }
 ```
 
@@ -574,7 +579,7 @@ PATCH /console/api/v1/apps/{app_key}/role-permission-matrix
 Content-Type: application/json
 
 {
-  "base_version": "8b7f3a0c9e...",
+  "base_version": "8",
   "add": [
     {
       "role_key": "sales_manager",
@@ -593,8 +598,8 @@ Content-Type: application/json
 规则：
 
 - 服务端必须重新校验 Role 和 Permission 都属于同一个 App。
-- `base_version` 冲突返回 409。
-- 保存后写入 `role_permission_matrix_changed` 审计事件。
+- `base_version` 使用 `App.catalog_version` 的字符串形式，冲突返回 409。
+- 保存后写入 `role_permission_matrix_changed` 审计事件，并通过统一目录版本服务提升 `catalog_version`。
 - 该接口只改变 RolePermission，不直接改 AccessGrant。
 
 ## 审批规则
@@ -612,7 +617,7 @@ POST /console/api/v1/apps/{app_key}/approval-rules
 Content-Type: application/json
 
 {
-  "target_type": "role",
+  "target_type": "authorization_group",
   "target_key": "sales_manager",
   "approver_userids": ["manager001"],
   "is_active": true
@@ -621,7 +626,7 @@ Content-Type: application/json
 
 规则：
 
-- 一条规则只能指向一个 role 或 permission。
+- 一条规则只能指向一个授权目录目标；当前实现需要能映射到同 App 内可申请授权组。
 - 目标必须属于同一个 App。
 - `approver_userids` 必须是非空字符串数组。
 
@@ -639,7 +644,7 @@ Content-Type: application/json
 
 规则：
 
-- 禁用 ApprovalRule 后，对应 requestable Role 会在配置完整性中变为 blocking。
+- 禁用 ApprovalRule 后，对应 requestable AuthorizationGroup 会在配置完整性中变为 blocking。
 - 更新审批人不改变已经提交的 AccessRequest 审批实例。
 
 ## 凭据运营
@@ -786,7 +791,7 @@ GET /console/api/v1/apps/{app_key}/integration-guide
 - 401、403、422、500 错误说明。
 - 缓存和撤权 SLA。
 - curl、Python 和 TypeScript 示例。
-- 当前 Role、Permission 和权限模板版本摘要。
+- 当前 AuthorizationGroup、Permission 和 manifest 版本摘要。
 
 不得包含明文历史凭据。
 
