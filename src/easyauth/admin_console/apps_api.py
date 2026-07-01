@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import re
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, ClassVar, Final
 
+from django.db import IntegrityError, transaction
 from django.http import HttpRequest, JsonResponse
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from easyauth.admin_console.api_payloads import paginated_list_payload
 from easyauth.admin_console.api_responses import (
@@ -35,12 +38,16 @@ from easyauth.applications.ownership import (
     can_manage_app,
     can_view_app,
 )
+from easyauth.audit.services import AuditRecord, AuditService
 
 if TYPE_CHECKING:
     from django.db.models import QuerySet
 
 type VisibleAppResult = App | JsonResponse
 
+APP_KEY_INVALID_MESSAGE: Final = "app_key 格式无效。"
+APP_KEY_PATTERN: Final = re.compile(r"^[a-z0-9][a-z0-9_-]{1,63}$")
+NAME_BLANK_MESSAGE: Final = "name 不能为空。"
 CONFIGURATION_ISSUE_TARGET_TYPES: Final = {
     "app_inactive": "app",
     "active_role_missing": "app",
@@ -51,7 +58,74 @@ CONFIGURATION_ISSUE_TARGET_TYPES: Final = {
 }
 
 
+class AppCreatePayload(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
+
+    app_key: str = Field(max_length=64)
+    name: str = Field(max_length=128)
+    description: str = ""
+    is_active: bool = True
+    owner_user_ids: list[str] = Field(default_factory=list)
+    developer_user_ids: list[str] = Field(default_factory=list)
+
+    @field_validator("app_key")
+    @classmethod
+    def validate_app_key(cls, value: str) -> str:
+        normalized = value.strip()
+        if APP_KEY_PATTERN.fullmatch(normalized) is None:
+            raise ValueError(APP_KEY_INVALID_MESSAGE)
+        return normalized
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        normalized = value.strip()
+        if normalized == "":
+            raise ValueError(NAME_BLANK_MESSAGE)
+        return normalized
+
+    @field_validator("description")
+    @classmethod
+    def normalize_description(cls, value: str) -> str:
+        return value.strip()
+
+    @field_validator("owner_user_ids", "developer_user_ids")
+    @classmethod
+    def normalize_user_ids(cls, value: list[str]) -> list[str]:
+        return _normalize_user_ids(value)
+
+
+class AppPatchPayload(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
+
+    name: str | None = Field(default=None, max_length=128)
+    description: str | None = None
+    is_active: bool | None = None
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        normalized = value.strip()
+        if normalized == "":
+            raise ValueError(NAME_BLANK_MESSAGE)
+        return normalized
+
+    @field_validator("description")
+    @classmethod
+    def normalize_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip()
+
+
 def console_apps(request: HttpRequest) -> JsonResponse:
+    if request.method == "POST":
+        return _create_app(request)
+    if request.method != "GET":
+        return _method_not_allowed()
+
     match require_console_actor(request):
         case ConsoleActor() as actor:
             pass
@@ -63,6 +137,11 @@ def console_apps(request: HttpRequest) -> JsonResponse:
 
 
 def console_app_detail(request: HttpRequest, app_key: str) -> JsonResponse:
+    if request.method == "PATCH":
+        return _patch_app(request, app_key)
+    if request.method != "GET":
+        return _method_not_allowed()
+
     match require_console_actor(request):
         case ConsoleActor() as actor:
             pass
@@ -99,6 +178,114 @@ def console_app_configuration_status(request: HttpRequest, app_key: str) -> Json
             return response
 
 
+def _create_app(request: HttpRequest) -> JsonResponse:
+    match require_console_actor(request):
+        case ConsoleActor() as actor:
+            pass
+        case JsonResponse() as response:
+            return response
+
+    if not actor.is_superuser:
+        return _error_response(
+            ErrorCode.PERMISSION_DENIED,
+            "只有系统管理员可以创建应用。",
+            status=HTTPStatus.FORBIDDEN,
+        )
+
+    try:
+        payload = AppCreatePayload.model_validate_json(request.body)
+    except ValidationError as error:
+        return _payload_error_response("应用参数无效。", error)
+
+    if App.objects.filter(app_key=payload.app_key).exists():
+        return _error_response(
+            ErrorCode.CONFLICT,
+            "应用标识已存在。",
+            status=HTTPStatus.CONFLICT,
+        )
+
+    owner_user_ids = payload.owner_user_ids or [actor.user_id]
+    developer_user_ids = [
+        user_id for user_id in payload.developer_user_ids if user_id not in set(owner_user_ids)
+    ]
+
+    try:
+        with transaction.atomic():
+            app = App.objects.create(
+                app_key=payload.app_key,
+                name=payload.name,
+                description=payload.description,
+                is_active=payload.is_active,
+            )
+            memberships = [
+                AppMembership(app=app, user_id=user_id, role="owner")
+                for user_id in owner_user_ids
+            ]
+            memberships.extend(
+                AppMembership(app=app, user_id=user_id, role="developer")
+                for user_id in developer_user_ids
+            )
+            _ = AppMembership.objects.bulk_create(memberships)
+            owner_metadata: list[JsonValue] = list(owner_user_ids)
+            developer_metadata: list[JsonValue] = list(developer_user_ids)
+            _record_app_event(
+                app,
+                actor,
+                "console_app_created",
+                {
+                    "app_key": app.app_key,
+                    "owner_user_ids": owner_metadata,
+                    "developer_user_ids": developer_metadata,
+                    "is_active": app.is_active,
+                },
+            )
+    except IntegrityError:
+        return _error_response(
+            ErrorCode.CONFLICT,
+            "应用或成员关系已存在。",
+            status=HTTPStatus.CONFLICT,
+        )
+
+    return _json_response({"app": _app_detail_item(actor, app)}, status=HTTPStatus.CREATED)
+
+
+def _patch_app(request: HttpRequest, app_key: str) -> JsonResponse:
+    match require_console_actor(request):
+        case ConsoleActor() as actor:
+            pass
+        case JsonResponse() as response:
+            return response
+
+    match _visible_app(actor, app_key):
+        case App() as app:
+            pass
+        case JsonResponse() as response:
+            return response
+
+    try:
+        payload = AppPatchPayload.model_validate_json(request.body)
+    except ValidationError as error:
+        return _payload_error_response("应用参数无效。", error)
+
+    changed_fields = _patch_changed_fields(payload)
+    if not changed_fields:
+        return _error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "应用参数无效。",
+            status=HTTPStatus.BAD_REQUEST,
+        )
+
+    if permission_response := _app_patch_permission_response(actor, app, changed_fields):
+        return permission_response
+
+    for field_name, value in changed_fields.items():
+        setattr(app, field_name, value)
+    with transaction.atomic():
+        app.save(update_fields=[*changed_fields, "updated_at"])
+        _record_app_event(app, actor, "console_app_updated", changed_fields)
+    return _json_response({"app": _app_detail_item(actor, app)})
+
+
 def _visible_app(actor: ConsoleActor, app_key: str) -> VisibleAppResult:
     app = App.objects.filter(app_key=app_key).first()
     if app is None or not can_view_app(actor, app):
@@ -108,6 +295,67 @@ def _visible_app(actor: ConsoleActor, app_key: str) -> VisibleAppResult:
             status=HTTPStatus.NOT_FOUND,
         )
     return app
+
+
+def _normalize_user_ids(user_ids: list[str]) -> list[str]:
+    normalized_ids: list[str] = []
+    seen: set[str] = set()
+    for user_id in user_ids:
+        normalized = user_id.strip()
+        if normalized == "" or normalized in seen:
+            continue
+        seen.add(normalized)
+        normalized_ids.append(normalized)
+    return normalized_ids
+
+
+def _patch_changed_fields(payload: AppPatchPayload) -> dict[str, JsonValue]:
+    changed_fields: dict[str, JsonValue] = {}
+    if "name" in payload.model_fields_set and payload.name is not None:
+        changed_fields["name"] = payload.name
+    if "description" in payload.model_fields_set and payload.description is not None:
+        changed_fields["description"] = payload.description
+    if "is_active" in payload.model_fields_set and payload.is_active is not None:
+        changed_fields["is_active"] = payload.is_active
+    return changed_fields
+
+
+def _app_patch_permission_response(
+    actor: ConsoleActor,
+    app: App,
+    changed_fields: dict[str, JsonValue],
+) -> JsonResponse | None:
+    if not can_manage_app(actor, app):
+        return _error_response(
+            ErrorCode.PERMISSION_DENIED,
+            "没有权限编辑应用。",
+            status=HTTPStatus.FORBIDDEN,
+        )
+    if not actor.is_superuser and "is_active" in changed_fields:
+        return _error_response(
+            ErrorCode.PERMISSION_DENIED,
+            "只有系统管理员可以启停应用。",
+            status=HTTPStatus.FORBIDDEN,
+        )
+    return None
+
+
+def _record_app_event(
+    app: App,
+    actor: ConsoleActor,
+    action: str,
+    metadata: dict[str, JsonValue],
+) -> None:
+    _ = AuditService.record(
+        AuditRecord(
+            actor_type="user",
+            actor_id=actor.user_id,
+            action=action,
+            target_type="app",
+            target_id=str(app.id),
+            metadata=metadata,
+        ),
+    )
 
 
 def _app_item(app: App) -> dict[str, JsonValue]:
@@ -225,6 +473,23 @@ def _configuration_summary(readiness: ConfigurationReadiness) -> dict[str, JsonV
 
 def _issue_count(readiness: ConfigurationReadiness, severity: str) -> int:
     return sum(1 for issue in readiness.issues if issue.severity == severity)
+
+
+def _method_not_allowed() -> JsonResponse:
+    return _error_response(
+        ErrorCode.VALIDATION_ERROR,
+        "不支持的请求方法。",
+        status=HTTPStatus.METHOD_NOT_ALLOWED,
+    )
+
+
+def _payload_error_response(message: str, error: ValidationError) -> JsonResponse:
+    return _error_response(
+        ErrorCode.VALIDATION_ERROR,
+        message,
+        {"errors": str(error)},
+        status=HTTPStatus.BAD_REQUEST,
+    )
 
 
 def _items_response(

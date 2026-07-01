@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from http import HTTPStatus
+from json import dumps
 from typing import Final, Protocol
 
 import pytest
@@ -9,7 +10,7 @@ from django.contrib.auth.models import User
 from django.test import Client
 from pydantic import TypeAdapter
 
-from easyauth.api.errors import JsonValue
+from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import (
     App,
     AppCredential,
@@ -156,6 +157,98 @@ def test_app_detail_includes_documented_summary_fields() -> None:
     }
 
 
+def test_apps_create_success_response_uses_detail_contract() -> None:
+    # Given: 系统管理员提交 App 创建请求。
+    client = _logged_in_superuser("apps-contract-create-admin")
+
+    # When: 创建 App。
+    response = client.post(
+        APPS_API_URL,
+        data=dumps(
+            {
+                "app_key": "apps-contract-create-crm",
+                "name": "CRM",
+                "description": "客户管理",
+                "owner_user_ids": ["apps-contract-create-owner"],
+                "developer_user_ids": ["apps-contract-create-dev"],
+            },
+        ),
+        content_type="application/json",
+    )
+
+    # Then: 成功响应使用完整 detail 契约。
+    body = _response_json_object(response)
+    item = _json_object(body["app"])
+    assert response.status_code == HTTPStatus.CREATED
+    assert set(item) == _expected_detail_fields()
+    assert item["app_key"] == "apps-contract-create-crm"
+    assert item["description"] == "客户管理"
+    assert item["owners"] == ["apps-contract-create-owner"]
+    assert item["developers"] == ["apps-contract-create-dev"]
+
+
+def test_apps_patch_success_response_uses_detail_contract() -> None:
+    # Given: owner 可见 CRM App。
+    client = _logged_in_user("apps-contract-patch-owner")
+    app = App.objects.create(app_key="apps-contract-patch-crm", name="CRM")
+    _ = AppMembership.objects.create(app=app, user_id="apps-contract-patch-owner", role="owner")
+
+    # When: owner 修改 name。
+    response = client.patch(
+        f"{APPS_API_URL}/{app.app_key}",
+        data=dumps({"name": "CRM 新版"}),
+        content_type="application/json",
+    )
+
+    # Then: 成功响应仍使用完整 detail 契约。
+    body = _response_json_object(response)
+    item = _json_object(body["app"])
+    assert response.status_code == HTTPStatus.OK
+    assert set(item) == _expected_detail_fields()
+    assert item["app_key"] == app.app_key
+    assert item["name"] == "CRM 新版"
+
+
+def test_apps_create_and_patch_errors_use_documented_error_codes() -> None:
+    # Given: 系统管理员和 developer 面对 App 写入错误场景。
+    admin = _logged_in_superuser("apps-contract-errors-admin")
+    developer = _logged_in_user("apps-contract-errors-dev")
+    app = App.objects.create(app_key="apps-contract-errors-crm", name="CRM")
+    _ = AppMembership.objects.create(app=app, user_id="apps-contract-errors-dev", role="developer")
+
+    # When: 创建 payload 校验失败、重复创建、developer 修改 App。
+    invalid_create = admin.post(
+        APPS_API_URL,
+        data=dumps({"app_key": "Invalid Key", "name": "CRM"}),
+        content_type="application/json",
+    )
+    duplicate_create = admin.post(
+        APPS_API_URL,
+        data=dumps({"app_key": app.app_key, "name": "CRM"}),
+        content_type="application/json",
+    )
+    forbidden_patch = developer.patch(
+        f"{APPS_API_URL}/{app.app_key}",
+        data=dumps({"name": "CRM 新版"}),
+        content_type="application/json",
+    )
+    missing_patch = admin.patch(
+        f"{APPS_API_URL}/apps-contract-errors-missing",
+        data=dumps({"name": "CRM 新版"}),
+        content_type="application/json",
+    )
+
+    # Then: 错误响应固定使用统一 error.code。
+    assert invalid_create.status_code == HTTPStatus.BAD_REQUEST
+    assert _error_code(invalid_create) == ErrorCode.VALIDATION_ERROR
+    assert duplicate_create.status_code == HTTPStatus.CONFLICT
+    assert _error_code(duplicate_create) == ErrorCode.CONFLICT
+    assert forbidden_patch.status_code == HTTPStatus.FORBIDDEN
+    assert _error_code(forbidden_patch) == ErrorCode.PERMISSION_DENIED
+    assert missing_patch.status_code == HTTPStatus.NOT_FOUND
+    assert _error_code(missing_patch) == ErrorCode.NOT_FOUND
+
+
 def test_configuration_status_includes_items_alias_with_documented_target_fields() -> None:
     # Given: owner 可见一个 requestable Role 缺少 active ApprovalRule 的 App。
     client = _logged_in_user("apps-contract-config-owner")
@@ -212,3 +305,29 @@ def _json_object(value: JsonValue) -> dict[str, JsonValue]:
 def _json_list(value: JsonValue) -> list[JsonValue]:
     assert isinstance(value, list), value
     return value
+
+
+def _error_code(response: HttpResponseLike) -> JsonValue:
+    body = _response_json_object(response)
+    error = _json_object(body["error"])
+    return error["code"]
+
+
+def _expected_detail_fields() -> set[str]:
+    return {
+        "id",
+        "app_key",
+        "name",
+        "description",
+        "is_active",
+        "owners",
+        "configuration_status",
+        "updated_at",
+        "can_manage",
+        "developers",
+        "role_count",
+        "permission_count",
+        "active_credential_count",
+        "latest_template_version",
+        "configuration_summary",
+    }

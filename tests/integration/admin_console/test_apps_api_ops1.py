@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from http import HTTPStatus
 from json import dumps
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
 import pytest
 from django.test import Client
 
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import UserMirror
-from easyauth.api.errors import ErrorCode
+from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import App, AppMembership, Role
 from easyauth.applications.services import StaticTokenService
 from easyauth.audit.models import AuditLog
@@ -70,6 +70,141 @@ def test_ops1_apps_api_member_lists_only_visible_apps() -> None:
     assert erp.app_key not in body
 
 
+def test_ops1_apps_api_superuser_creates_app_with_memberships_and_audit() -> None:
+    # Given: 系统管理员提交包含重复和空白成员的 App 创建请求。
+    client = _logged_in_superuser("ops1-app-create-admin")
+
+    # When: 系统管理员创建 App。
+    response = client.post(
+        APPS_API_URL,
+        data=dumps(
+            {
+                "app_key": "ops1-api-create-crm",
+                "name": "  CRM  ",
+                "description": "客户管理",
+                "is_active": False,
+                "owner_user_ids": [" owner-a ", "", "owner-a", "shared-user"],
+                "developer_user_ids": ["dev-a", " shared-user ", "", "dev-a"],
+            },
+        ),
+        content_type="application/json",
+    )
+
+    # Then: API 在同一事务中创建 App、active membership 和审计记录。
+    app = App.objects.get(app_key="ops1-api-create-crm")
+    owners = list(
+        AppMembership.objects.filter(app=app, role="owner", is_active=True)
+        .order_by("user_id")
+        .values_list("user_id", flat=True),
+    )
+    developers = list(
+        AppMembership.objects.filter(app=app, role="developer", is_active=True)
+        .order_by("user_id")
+        .values_list("user_id", flat=True),
+    )
+    body = cast("dict[str, JsonValue]", response.json())
+    response_app = cast("dict[str, JsonValue]", body["app"])
+    assert response.status_code == HTTPStatus.CREATED
+    assert app.name == "CRM"
+    assert app.description == "客户管理"
+    assert app.is_active is False
+    assert owners == ["owner-a", "shared-user"]
+    assert developers == ["dev-a"]
+    assert response_app["app_key"] == app.app_key
+    assert response_app["owners"] == owners
+    assert response_app["developers"] == developers
+    assert AuditLog.objects.filter(
+        actor_id="ops1-app-create-admin",
+        event_type="console_app_created",
+        target_id=str(app.id),
+        metadata__app_key=app.app_key,
+        metadata__owner_user_ids=owners,
+        metadata__developer_user_ids=developers,
+        metadata__is_active=False,
+    ).exists()
+
+
+def test_ops1_apps_api_create_defaults_owner_to_current_actor() -> None:
+    # Given: 系统管理员创建 App 时不传 owner。
+    client = _logged_in_superuser("ops1-app-create-default-owner")
+
+    # When: 提交最小创建 payload。
+    response = client.post(
+        APPS_API_URL,
+        data=dumps({"app_key": "ops1-api-create-default-owner", "name": "CRM"}),
+        content_type="application/json",
+    )
+
+    # Then: 当前 actor 自动成为 owner。
+    app = App.objects.get(app_key="ops1-api-create-default-owner")
+    assert response.status_code == HTTPStatus.CREATED
+    assert response.json()["app"]["owners"] == ["ops1-app-create-default-owner"]
+    assert AppMembership.objects.filter(
+        app=app,
+        user_id="ops1-app-create-default-owner",
+        role="owner",
+        is_active=True,
+    ).exists()
+
+
+def test_ops1_apps_api_non_superuser_cannot_create_app() -> None:
+    # Given: 普通用户尝试创建 App。
+    client = _logged_in_user("ops1-app-create-denied")
+
+    # When: 普通用户提交创建请求。
+    response = client.post(
+        APPS_API_URL,
+        data=dumps({"app_key": "ops1-api-create-denied", "name": "CRM"}),
+        content_type="application/json",
+    )
+
+    # Then: API 拒绝请求且不落库。
+    assert response.status_code == HTTPStatus.FORBIDDEN
+    assert response.json()["error"]["code"] == ErrorCode.PERMISSION_DENIED
+    assert App.objects.filter(app_key="ops1-api-create-denied").exists() is False
+
+
+def test_ops1_apps_api_create_rejects_duplicate_app_key() -> None:
+    # Given: 已存在同名 app_key。
+    client = _logged_in_superuser("ops1-app-create-conflict-admin")
+    _ = App.objects.create(app_key="ops1-api-create-conflict", name="CRM")
+
+    # When: 系统管理员重复创建。
+    response = client.post(
+        APPS_API_URL,
+        data=dumps({"app_key": "ops1-api-create-conflict", "name": "CRM 2"}),
+        content_type="application/json",
+    )
+
+    # Then: API 返回冲突错误。
+    assert response.status_code == HTTPStatus.CONFLICT
+    assert response.json()["error"]["code"] == ErrorCode.CONFLICT
+
+
+def test_ops1_apps_api_create_rejects_invalid_app_key_and_blank_name() -> None:
+    # Given: 系统管理员准备创建 App。
+    client = _logged_in_superuser("ops1-app-create-validation-admin")
+
+    # When: app_key 非法或 name 为空。
+    invalid_key = client.post(
+        APPS_API_URL,
+        data=dumps({"app_key": "Invalid Key", "name": "CRM"}),
+        content_type="application/json",
+    )
+    blank_name = client.post(
+        APPS_API_URL,
+        data=dumps({"app_key": "ops1-api-create-blank-name", "name": "   "}),
+        content_type="application/json",
+    )
+
+    # Then: API 返回受控校验错误且不落库。
+    assert invalid_key.status_code == HTTPStatus.BAD_REQUEST
+    assert invalid_key.json()["error"]["code"] == ErrorCode.VALIDATION_ERROR
+    assert blank_name.status_code == HTTPStatus.BAD_REQUEST
+    assert blank_name.json()["error"]["code"] == ErrorCode.VALIDATION_ERROR
+    assert App.objects.filter(app_key="ops1-api-create-blank-name").exists() is False
+
+
 def test_ops1_app_detail_api_requires_visible_membership() -> None:
     # Given: owner 只拥有 CRM App, 不属于 ERP App。
     client = _logged_in_user("ops1-app-detail-api-owner")
@@ -87,6 +222,121 @@ def test_ops1_app_detail_api_requires_visible_membership() -> None:
     assert allowed.json()["app"]["can_manage"] is True
     assert denied.status_code == HTTPStatus.NOT_FOUND
     assert denied.json()["error"]["code"] == ErrorCode.NOT_FOUND
+
+
+def test_ops1_apps_api_owner_patches_name_and_description() -> None:
+    # Given: owner 可管理一个 CRM App。
+    client = _logged_in_user("ops1-app-patch-owner")
+    app = App.objects.create(app_key="ops1-api-patch-owner", name="CRM")
+    _ = AppMembership.objects.create(app=app, user_id="ops1-app-patch-owner", role="owner")
+
+    # When: owner 修改 name 和 description。
+    response = client.patch(
+        f"{APPS_API_URL}/{app.app_key}",
+        data=dumps({"name": "  CRM 新版  ", "description": "更新说明"}),
+        content_type="application/json",
+    )
+
+    # Then: API 保存允许字段并写审计。
+    app.refresh_from_db()
+    assert response.status_code == HTTPStatus.OK
+    assert app.name == "CRM 新版"
+    assert app.description == "更新说明"
+    assert response.json()["app"]["name"] == "CRM 新版"
+    assert AuditLog.objects.filter(
+        actor_id="ops1-app-patch-owner",
+        event_type="console_app_updated",
+        target_id=str(app.id),
+        metadata={"name": "CRM 新版", "description": "更新说明"},
+    ).exists()
+
+
+def test_ops1_apps_api_owner_cannot_patch_is_active() -> None:
+    # Given: owner 可见 active CRM App。
+    client = _logged_in_user("ops1-app-patch-owner-active")
+    app = App.objects.create(app_key="ops1-api-patch-owner-active", name="CRM", is_active=True)
+    _ = AppMembership.objects.create(app=app, user_id="ops1-app-patch-owner-active", role="owner")
+
+    # When: owner 尝试停用 App。
+    response = client.patch(
+        f"{APPS_API_URL}/{app.app_key}",
+        data=dumps({"is_active": False}),
+        content_type="application/json",
+    )
+
+    # Then: API 拒绝且数据库状态不变。
+    app.refresh_from_db()
+    assert response.status_code == HTTPStatus.FORBIDDEN
+    assert response.json()["error"]["code"] == ErrorCode.PERMISSION_DENIED
+    assert app.is_active is True
+
+
+def test_ops1_apps_api_superuser_patches_is_active() -> None:
+    # Given: 系统管理员面对 active CRM App。
+    client = _logged_in_superuser("ops1-app-patch-admin")
+    app = App.objects.create(app_key="ops1-api-patch-admin", name="CRM", is_active=True)
+
+    # When: 系统管理员停用 App。
+    response = client.patch(
+        f"{APPS_API_URL}/{app.app_key}",
+        data=dumps({"is_active": False}),
+        content_type="application/json",
+    )
+
+    # Then: API 保存 is_active 并记录审计变更字段。
+    app.refresh_from_db()
+    assert response.status_code == HTTPStatus.OK
+    assert app.is_active is False
+    assert response.json()["app"]["is_active"] is False
+    assert AuditLog.objects.filter(
+        actor_id="ops1-app-patch-admin",
+        event_type="console_app_updated",
+        target_id=str(app.id),
+        metadata={"is_active": False},
+    ).exists()
+
+
+def test_ops1_apps_api_developer_cannot_patch_app() -> None:
+    # Given: developer 可见 CRM App。
+    client = _logged_in_user("ops1-app-patch-developer")
+    app = App.objects.create(app_key="ops1-api-patch-developer", name="CRM")
+    _ = AppMembership.objects.create(
+        app=app,
+        user_id="ops1-app-patch-developer",
+        role="developer",
+    )
+
+    # When: developer 尝试修改 App。
+    response = client.patch(
+        f"{APPS_API_URL}/{app.app_key}",
+        data=dumps({"name": "CRM 新版"}),
+        content_type="application/json",
+    )
+
+    # Then: API 拒绝且数据库不变。
+    app.refresh_from_db()
+    assert response.status_code == HTTPStatus.FORBIDDEN
+    assert response.json()["error"]["code"] == ErrorCode.PERMISSION_DENIED
+    assert app.name == "CRM"
+
+
+def test_ops1_apps_api_patch_rejects_app_key_payload() -> None:
+    # Given: 系统管理员面对 CRM App。
+    client = _logged_in_superuser("ops1-app-patch-app-key-admin")
+    app = App.objects.create(app_key="ops1-api-patch-app-key", name="CRM")
+
+    # When: payload 试图修改 app_key。
+    response = client.patch(
+        f"{APPS_API_URL}/{app.app_key}",
+        data=dumps({"app_key": "ops1-api-patch-new-key", "name": "CRM 新版"}),
+        content_type="application/json",
+    )
+
+    # Then: API 返回校验错误且 app_key 不变。
+    app.refresh_from_db()
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+    assert response.json()["error"]["code"] == ErrorCode.VALIDATION_ERROR
+    assert app.app_key == "ops1-api-patch-app-key"
 
 
 def test_ops1_configuration_status_api_uses_app_readiness_service() -> None:
