@@ -15,6 +15,7 @@ htmlcov/
 node_modules/
 *.tsbuildinfo
 frontend/test-results/
+.superpowers/
 src/easyauth/static/easyauth/frontend/.vite/*
 src/easyauth/static/easyauth/frontend/assets/*
 !src/easyauth/static/easyauth/frontend/.vite/.gitkeep
