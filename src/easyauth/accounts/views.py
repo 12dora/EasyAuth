@@ -52,12 +52,22 @@ SETTING_REDIRECT_URI = "EASYAUTH_AUTHENTIK_OIDC_REDIRECT_URI"
 SETTING_SIGNING_ALGORITHMS = "EASYAUTH_AUTHENTIK_OIDC_SIGNING_ALGORITHMS"
 SETTING_SCOPES = "EASYAUTH_AUTHENTIK_OIDC_SCOPES"
 SETTING_TOKEN_ENDPOINT = "EASYAUTH_AUTHENTIK_OIDC_TOKEN_ENDPOINT"  # noqa: S105 - 配置键名, 不是密钥值.
+SETTING_CONSOLE_SUPERUSER_GROUPS = "EASYAUTH_CONSOLE_SUPERUSER_GROUPS"
 OIDC_ISSUER_PROVIDER_SLUG_SEGMENT_COUNT: Final = 3
 
 
 def dev_login(request: HttpRequest) -> HttpResponseRedirect:
     if not _bool_setting("DEBUG") or not _bool_setting("EASYAUTH_ENABLE_DEV_LOGIN"):
         raise Http404
+
+    groups = _string_tuple_setting(SETTING_CONSOLE_SUPERUSER_GROUPS)
+    if not groups:
+        clear_auth_session(request)
+        return HttpResponse(
+            f"{SETTING_CONSOLE_SUPERUSER_GROUPS} is required for dev login",
+            status=HTTPStatus.BAD_REQUEST,
+            content_type="text/plain",
+        )
 
     user_id = request.GET.get("user_id", DEFAULT_DEV_LOGIN_USER_ID).strip()
     if user_id == "":
@@ -68,6 +78,7 @@ def dev_login(request: HttpRequest) -> HttpResponseRedirect:
             subject=user_id,
             name=DEV_LOGIN_NAME,
             email=f"{user_id}@dev.local",
+            groups=groups,
         ),
     )
     if user.status != USER_STATUS_ACTIVE:
