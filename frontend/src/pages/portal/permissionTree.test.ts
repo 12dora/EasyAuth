@@ -92,10 +92,28 @@ describe("portal permission tree helpers", () => {
     expect(collectPermissionKeys([groups[0]], [sharedAuditView])).toEqual([
       "orders.read",
       "reports.view",
-      "reports.view",
       "orders.refund.approve",
       "audit.view",
     ]);
+  });
+
+  test("collectPermissionKeys 对 permissions 和 children 中重复的直接权限按 key 去重", () => {
+    expect(
+      collectPermissionKeys(
+        [
+          {
+            id: 5,
+            app_key: "crm",
+            type: "group",
+            key: "activity.log",
+            name: "活动日志",
+            permissions: [crmOrderRead],
+            children: [crmOrderRead],
+          },
+        ],
+        [],
+      ),
+    ).toEqual(["orders.read"]);
   });
 
   test("isPermissionGroupItem 只识别权限组节点", () => {

@@ -9,9 +9,16 @@ export function collectPermissions(groups: PermissionGroupItem[]): PermissionIte
 }
 
 export function collectGroupPermissions(group: PermissionGroupItem): PermissionItem[] {
-  const childGroups = (group.children ?? []).filter(isPermissionGroupItem);
-  const childPermissions = (group.children ?? []).filter((child): child is PermissionItem => !isPermissionGroupItem(child));
-  return [...(group.permissions ?? []), ...childPermissions, ...childGroups.flatMap((childGroup) => collectGroupPermissions(childGroup))];
+  const permissionsByKey = new Map<string, PermissionItem>();
+  for (const permission of directPermissionsForGroup(group)) {
+    permissionsByKey.set(permission.key, permission);
+  }
+  for (const childGroup of childGroupsForGroup(group)) {
+    for (const permission of collectGroupPermissions(childGroup)) {
+      permissionsByKey.set(permission.key, permission);
+    }
+  }
+  return Array.from(permissionsByKey.values());
 }
 
 export function isPermissionGroupItem(item: PermissionGroupItem | PermissionItem): item is PermissionGroupItem {
@@ -51,4 +58,21 @@ export function filterPermissionByApp(permission: PermissionItem, appKey: string
     return null;
   }
   return permission;
+}
+
+function childGroupsForGroup(group: PermissionGroupItem): PermissionGroupItem[] {
+  return (group.children ?? []).filter(isPermissionGroupItem);
+}
+
+function directPermissionsForGroup(group: PermissionGroupItem): PermissionItem[] {
+  const permissionsByKey = new Map<string, PermissionItem>();
+  for (const permission of group.permissions ?? []) {
+    permissionsByKey.set(permission.key, permission);
+  }
+  for (const child of group.children ?? []) {
+    if (!isPermissionGroupItem(child)) {
+      permissionsByKey.set(child.key, child);
+    }
+  }
+  return Array.from(permissionsByKey.values());
 }

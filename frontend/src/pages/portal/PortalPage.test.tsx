@@ -1150,6 +1150,79 @@ describe("PortalPage access request form", () => {
     }
   });
 
+  test("easytrade 权限组 direct permissions 与 children 重叠时展开收起活动日志不重复渲染权限", async () => {
+    const createActivityLogPermission = {
+      id: 101,
+      app_key: "easytrade",
+      key: "activity.log.create",
+      name: "创建活动日志",
+      scopes: [{ key: "SELF", name: "本人" }],
+    };
+    const readActivityLogPermission = {
+      id: 102,
+      app_key: "easytrade",
+      key: "activity.log.read",
+      name: "查看活动日志",
+      scopes: [{ key: "SELF", name: "本人" }],
+    };
+    const fetchMock = permissionSelectorFetchMock({
+      apps: [{ id: 1, app_key: "easytrade", name: "EasyTrade" }],
+      approver_options: [],
+      authorization_groups: [],
+      permission_groups: [
+        {
+          id: 1,
+          app_key: "easytrade",
+          type: "group",
+          key: "activity",
+          name: "活动",
+          permissions: [],
+          children: [
+            {
+              id: 2,
+              app_key: "easytrade",
+              type: "group",
+              key: "activity.log",
+              name: "活动日志",
+              permissions: [createActivityLogPermission, readActivityLogPermission],
+              children: [createActivityLogPermission, readActivityLogPermission],
+            },
+          ],
+        },
+      ],
+      ungrouped_permissions: [],
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage();
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "EasyTrade (easytrade)" });
+      await user.selectOptions(screen.getByLabelText("应用"), "easytrade");
+      const permissionTable = await screen.findByRole("table", { name: "权限选择" });
+
+      await user.click(within(permissionTable).getByRole("button", { name: "展开 活动" }));
+      await user.click(within(permissionTable).getByRole("button", { name: "展开 活动日志" }));
+
+      expect(within(permissionTable).queryAllByText("activity.log.create")).toHaveLength(1);
+      expect(within(permissionTable).queryAllByText("activity.log.read")).toHaveLength(1);
+
+      await user.click(within(permissionTable).getByRole("button", { name: "收起 活动日志" }));
+      await waitFor(() => expect(within(permissionTable).queryByText("activity.log.create")).not.toBeInTheDocument());
+      expect(within(permissionTable).queryByText("activity.log.read")).not.toBeInTheDocument();
+
+      for (let index = 0; index < 3; index += 1) {
+        await user.click(within(permissionTable).getByRole("button", { name: "展开 活动日志" }));
+        await waitFor(() => expect(within(permissionTable).queryAllByText("activity.log.create").length).toBeLessThanOrEqual(1));
+        await user.click(within(permissionTable).getByRole("button", { name: "收起 活动日志" }));
+        await waitFor(() => expect(within(permissionTable).queryByText("activity.log.create")).not.toBeInTheDocument());
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   test("应用存在但没有直接权限时直接权限区域显示空状态", async () => {
     const fetchMock = permissionSelectorFetchMock(emptyDirectPermissionCatalog);
     vi.stubGlobal("fetch", fetchMock);

@@ -585,8 +585,8 @@ function buildGroupRows(
   isAncestorEntering: boolean,
   isAncestorExiting: boolean,
 ): PermissionSelectorRow[] {
-  const childGroups = (group.children ?? []).filter(isPermissionGroupItem);
-  const directChildPermissions = (group.children ?? []).filter((child): child is ScopedPermissionItem => !isPermissionGroupItem(child));
+  const childGroups = childGroupsForGroup(group);
+  const directPermissions = directPermissionsForGroup(group);
   const descendantPermissions = collectScopedGroupPermissions(group);
   const isExpanded = expandedGroupKeys.includes(group.key);
   const isGroupEntering = enteringGroupKeys.includes(group.key);
@@ -616,16 +616,7 @@ function buildGroupRows(
   }
 
   rows.push(
-    ...(group.permissions ?? []).map((permission) => ({
-      type: "permission" as const,
-      id: `permission:${permission.key}`,
-      permission,
-      depth: depth + 1,
-      isSelected: isPermissionSelected(permission.key, selectedKeys),
-      isEntering: isChildEntering,
-      isExiting: isChildExiting,
-    })),
-    ...directChildPermissions.map((permission) => ({
+    ...directPermissions.map((permission) => ({
       type: "permission" as const,
       id: `permission:${permission.key}`,
       permission,
@@ -851,11 +842,31 @@ function eventTargetIsInteractive(target: EventTarget): boolean {
 }
 
 function collectScopedGroupPermissions(group: ScopedPermissionGroupItem): ScopedPermissionItem[] {
-  const childGroups = (group.children ?? []).filter(isPermissionGroupItem);
-  const childPermissions = (group.children ?? []).filter((child): child is ScopedPermissionItem => !isPermissionGroupItem(child));
-  return [
-    ...(group.permissions ?? []),
-    ...childPermissions,
-    ...childGroups.flatMap((childGroup) => collectScopedGroupPermissions(childGroup)),
-  ];
+  const permissionsByKey = new Map<string, ScopedPermissionItem>();
+  for (const permission of directPermissionsForGroup(group)) {
+    permissionsByKey.set(permission.key, permission);
+  }
+  for (const childGroup of childGroupsForGroup(group)) {
+    for (const permission of collectScopedGroupPermissions(childGroup)) {
+      permissionsByKey.set(permission.key, permission);
+    }
+  }
+  return Array.from(permissionsByKey.values());
+}
+
+function childGroupsForGroup(group: ScopedPermissionGroupItem): ScopedPermissionGroupItem[] {
+  return (group.children ?? []).filter(isPermissionGroupItem);
+}
+
+function directPermissionsForGroup(group: ScopedPermissionGroupItem): ScopedPermissionItem[] {
+  const permissionsByKey = new Map<string, ScopedPermissionItem>();
+  for (const permission of group.permissions ?? []) {
+    permissionsByKey.set(permission.key, permission);
+  }
+  for (const child of group.children ?? []) {
+    if (!isPermissionGroupItem(child)) {
+      permissionsByKey.set(child.key, child);
+    }
+  }
+  return Array.from(permissionsByKey.values());
 }
