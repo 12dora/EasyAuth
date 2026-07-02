@@ -27,6 +27,7 @@ from easyauth.access_requests.submission_types import (
 from easyauth.access_requests.submission_validation import (
     unique_authorization_groups,
     unique_direct_grants,
+    validated_approver_user_ids,
     validate_submission_scope,
     validated_request_type,
 )
@@ -72,6 +73,7 @@ def _submit_access_request(
     authorization_groups = unique_authorization_groups(input_data.authorization_groups)
     direct_grants = unique_direct_grants(input_data.direct_grants)
     validate_submission_scope(input_data, parsed_request_type, authorization_groups, direct_grants)
+    approver_user_ids = validated_approver_user_ids(input_data.approver_user_ids)
 
     with transaction.atomic():
         access_request = AccessRequest(
@@ -82,12 +84,19 @@ def _submit_access_request(
             grant_type=input_data.grant_type,
             grant_expires_at=input_data.grant_expires_at,
             reason=input_data.reason,
+            approver_user_ids=list(approver_user_ids),
         )
         access_request.full_clean()
         access_request.save()
         _create_group_links(access_request, authorization_groups)
         _create_direct_grant_links(access_request, direct_grants)
-        _record_submitted_event(input_data, access_request, authorization_groups, direct_grants)
+        _record_submitted_event(
+            input_data,
+            access_request,
+            authorization_groups,
+            direct_grants,
+            approver_user_ids,
+        )
         return access_request
 
 
@@ -120,6 +129,7 @@ def _record_submitted_event(
     access_request: AccessRequest,
     authorization_groups: tuple[AuthorizationGroup, ...],
     direct_grants: tuple[ScopedAccessRequestGrant, ...],
+    approver_user_ids: tuple[str, ...],
 ) -> None:
     _ = AuditService.record(
         AuditRecord(
@@ -133,6 +143,7 @@ def _record_submitted_event(
                 access_request,
                 authorization_groups,
                 direct_grants,
+                approver_user_ids,
             ),
         ),
     )
@@ -143,12 +154,14 @@ def _audit_metadata(
     access_request: AccessRequest,
     authorization_groups: tuple[AuthorizationGroup, ...],
     direct_grants: tuple[ScopedAccessRequestGrant, ...],
+    approver_user_ids: tuple[str, ...],
 ) -> dict[str, JsonValue]:
     authorization_group_keys: list[JsonValue] = [group.key for group in authorization_groups]
     direct_grant_items: list[JsonValue] = [
         {"permission": direct_grant.permission.key, "scope": direct_grant.scope_key}
         for direct_grant in direct_grants
     ]
+    approver_user_id_items: list[JsonValue] = list(approver_user_ids)
     return {
         "user_id": input_data.user.authentik_user_id,
         "app_key": input_data.app.app_key,
@@ -156,6 +169,7 @@ def _audit_metadata(
         "grant_type": input_data.grant_type,
         "authorization_group_keys": authorization_group_keys,
         "direct_grants": direct_grant_items,
+        "approver_user_ids": approver_user_id_items,
         "reason": input_data.reason,
     }
 

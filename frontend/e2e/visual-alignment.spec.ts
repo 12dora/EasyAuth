@@ -16,16 +16,69 @@ for (const viewport of VIEWPORTS) {
   for (const target of TARGETS) {
     test(`视觉对齐主路径 ${target.path} ${viewport.name}`, async ({ page }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await setConsoleAdmin(page);
       await mockVisualData(page);
 
       await page.goto(target.path);
 
       await expect(page.getByText(target.marker).first()).toBeVisible();
       await expect(page.getByTestId("route-transition")).toHaveAttribute("data-route-pathname", target.path);
-      await expectVisibleControlsAreClickable(page);
+      await expectVisibleControlsAreClickable(page.getByRole("main"));
+      if (target.path === "/console") {
+        await expectCreateAppDialogIsCovered(page);
+      }
       await expectVisibleTextFits(page);
     });
   }
+}
+
+async function expectCreateAppDialogIsCovered(page: Page) {
+  await page.getByRole("button", { name: "新建应用" }).click();
+  const dialog = page.getByRole("dialog", { name: "新建应用" });
+  await expect(dialog).toBeVisible();
+  await expect(page.getByLabel("app_key")).toBeVisible();
+  await expect(page.getByLabel("名称")).toBeVisible();
+  await expect(page.getByLabel("描述")).toBeVisible();
+  await expect(page.getByRole("button", { name: "创建" })).toBeVisible();
+  await expectVisibleControlsAreClickable(dialog);
+}
+
+async function setConsoleAdmin(page: Page) {
+  await page.route("**/*", async (route) => {
+    const request = route.request();
+    if (request.resourceType() !== "document") {
+      await route.fallback();
+      return;
+    }
+    const response = await route.fetch();
+    const html = await response.text();
+    await route.fulfill({
+      response,
+      body: html
+        .replace("<body", '<body data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001"')
+        .replace(
+          '<div id="root"',
+          '<div id="root" data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001"',
+        )
+        .replace(
+          '<div id="easyauth-root"',
+          '<div id="easyauth-root" data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001"',
+        ),
+      headers: { ...response.headers(), "content-type": "text/html" },
+    });
+  });
+  await page.addInitScript(() => {
+    document.documentElement.dataset.currentUserRole = "EasyAuth Admins";
+    document.addEventListener("DOMContentLoaded", () => {
+      document.body.dataset.currentUserRole = "EasyAuth Admins";
+      document.body.dataset.currentUserId = "admin-001";
+      const root = document.getElementById("easyauth-root") ?? document.getElementById("root");
+      if (root) {
+        root.dataset.currentUserRole = "EasyAuth Admins";
+        root.dataset.currentUserId = "admin-001";
+      }
+    });
+  });
 }
 
 async function mockVisualData(page: Page) {
@@ -120,8 +173,8 @@ async function mockVisualData(page: Page) {
   });
 }
 
-async function expectVisibleControlsAreClickable(page: Page) {
-  const controls = page.locator("button:visible, a:visible, select:visible, input:visible, textarea:visible");
+async function expectVisibleControlsAreClickable(scope: Page | Locator) {
+  const controls = scope.locator("button:visible, a:visible, select:visible, input:visible, textarea:visible");
   const count = Math.min(await controls.count(), 12);
   for (let index = 0; index < count; index += 1) {
     await expectNotCovered(controls.nth(index));

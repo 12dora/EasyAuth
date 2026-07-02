@@ -21,6 +21,7 @@ from easyauth.access_requests.models import (
     AccessRequest,
     AccessRequestGroup,
 )
+from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import App, ApprovalRule, AuthorizationGroup
 from easyauth.grants.models import AccessGrant
 from easyauth.portal.views import request_rows_for_user
@@ -285,11 +286,15 @@ def _access_request_payload(
     grant_expires_at: str | None,
     reason: str,
 ) -> str:
+    approver, _created = UserMirror.objects.get_or_create(
+        authentik_user_id="s14-portal-default-approver",
+    )
     return dumps(
         {
             "app_key": app_key,
             "authorization_group_keys": authorization_group_keys,
             "direct_grants": [],
+            "approver_user_ids": [approver.authentik_user_id],
             "grant_type": grant_type,
             "grant_expires_at": grant_expires_at,
             "reason": reason,

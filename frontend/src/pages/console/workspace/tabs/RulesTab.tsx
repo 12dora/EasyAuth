@@ -1,16 +1,20 @@
 import {
   flexRender,
   getCoreRowModel,
+  getPaginationRowModel,
   useReactTable,
   type ColumnDef,
 } from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Edit3, Save, ToggleLeft, ToggleRight } from "lucide-react";
-import { useState } from "react";
+import { Plus } from "lucide-react";
+import { Fragment, useState } from "react";
 import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../../components/ui/TablePrimitives";
+import { TableActionCell, TableRowActionButton } from "../../../../components/ui/TableActions";
+import { TablePagination } from "../../../../components/ui/TablePagination";
 
 import { Badge } from "../../../../components/Badge";
 import { Button } from "../../../../components/Button";
+import { Dialog } from "../../../../components/Dialog";
 import { Field, SelectInput, TextInput } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
@@ -30,6 +34,7 @@ export function RulesTab({ appKey }: { appKey: string }) {
   const queryClient = useQueryClient();
   const [editingRuleId, setEditingRuleId] = useState<number | null>(null);
   const [form, setForm] = useState(emptyForm);
+  const [dialogOpen, setDialogOpen] = useState(false);
   const queryKey = ["console", "app", appKey, "approval-rules"];
   const rulesQuery = useQuery({
     queryKey,
@@ -57,6 +62,7 @@ export function RulesTab({ appKey }: { appKey: string }) {
     onSuccess: async () => {
       setEditingRuleId(null);
       setForm(emptyForm);
+      setDialogOpen(false);
       await queryClient.invalidateQueries({ queryKey });
     },
   });
@@ -83,11 +89,12 @@ export function RulesTab({ appKey }: { appKey: string }) {
       ),
     },
     {
+      id: "actions",
       header: "操作",
       cell: ({ row }) => (
-        <div className="flex flex-wrap items-center gap-2">
-          <Button
-            icon={<Edit3 size={16} />}
+        <TableActionCell>
+          <TableRowActionButton
+            type="button"
             onClick={() => {
               setEditingRuleId(row.original.id);
               setForm({
@@ -95,18 +102,20 @@ export function RulesTab({ appKey }: { appKey: string }) {
                 target_key: row.original.target_key ?? "",
                 approver_userids: (row.original.approver_userids ?? []).join(","),
               });
+              setDialogOpen(true);
             }}
           >
             编辑
-          </Button>
-          <Button
-            icon={row.original.is_active ? <ToggleLeft size={16} /> : <ToggleRight size={16} />}
+          </TableRowActionButton>
+          <TableRowActionButton
+            type="button"
+            variant={row.original.is_active ? "ghost-danger" : "ghost"}
             onClick={() => toggleMutation.mutate(row.original)}
             disabled={toggleMutation.isPending}
           >
             {row.original.is_active ? "停用" : "启用"}
-          </Button>
-        </div>
+          </TableRowActionButton>
+        </TableActionCell>
       ),
     },
   ];
@@ -114,51 +123,24 @@ export function RulesTab({ appKey }: { appKey: string }) {
     data: rules,
     columns: ruleColumns,
     getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
   });
 
   return (
     <section className="space-y-6">
-      <div className="grid items-end gap-4 rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper p-5 shadow-sm lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.3fr)_auto]">
-        <Field label="规则目标类型">
-          <SelectInput
-            aria-label="规则目标类型"
-            value={form.target_type}
-            onChange={(event) => {
-              const targetType = event.currentTarget.value as RuleTargetType;
-              setForm((current) => ({ ...current, target_type: targetType }));
-            }}
-          >
-            <option value="authorization_group">authorization_group</option>
-            <option value="permission">permission</option>
-          </SelectInput>
-        </Field>
-        <Field label="目标 Key">
-          <TextInput
-            aria-label="目标 Key"
-            value={form.target_key}
-            onChange={(event) => {
-              const targetKey = event.currentTarget.value;
-              setForm((current) => ({ ...current, target_key: targetKey }));
-            }}
-          />
-        </Field>
-        <Field label="审批人 user_id" hint="多个审批人用英文逗号分隔">
-          <TextInput
-            aria-label="审批人 user_id"
-            value={form.approver_userids}
-            onChange={(event) => {
-              const approverUserids = event.currentTarget.value;
-              setForm((current) => ({ ...current, approver_userids: approverUserids }));
-            }}
-          />
-        </Field>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-base font-semibold text-ink">审批规则</h2>
         <Button
+          type="button"
           variant="primary"
-          icon={<Save size={16} />}
-          disabled={!form.target_key || !form.approver_userids || saveMutation.isPending}
-          onClick={() => saveMutation.mutate()}
+          icon={<Plus size={16} />}
+          onClick={() => {
+            setEditingRuleId(null);
+            setForm(emptyForm);
+            setDialogOpen(true);
+          }}
         >
-          {editingRuleId ? "保存规则" : "新建规则"}
+          新建
         </Button>
       </div>
       {saveMutation.error ? <StatusBanner tone="signal" title="审批规则保存失败" message={(saveMutation.error as Error).message} /> : null}
@@ -181,7 +163,11 @@ export function RulesTab({ appKey }: { appKey: string }) {
               ruleTable.getRowModel().rows.map((row) => (
                 <TableRow key={row.id}>
                   {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                    cell.column.id === "actions" ? (
+                      <Fragment key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Fragment>
+                    ) : (
+                      <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                    )
                   ))}
                 </TableRow>
               ))
@@ -192,7 +178,63 @@ export function RulesTab({ appKey }: { appKey: string }) {
             )}
           </TableBody>
         </TableRoot>
+        <TablePagination table={ruleTable} />
       </TableFrame>
+      {dialogOpen ? (
+        <Dialog title={editingRuleId ? "编辑审批规则" : "新建审批规则"} onClose={() => setDialogOpen(false)} footer={
+          <>
+            <Button type="button" onClick={() => setDialogOpen(false)}>取消</Button>
+            <Button
+              form="approval-rule-form"
+              type="submit"
+              variant="primary"
+              loading={saveMutation.isPending}
+              disabled={!form.target_key || !form.approver_userids || saveMutation.isPending}
+            >
+              保存
+            </Button>
+          </>
+        }>
+          <form id="approval-rule-form" className="grid gap-4" onSubmit={(event) => {
+            event.preventDefault();
+            saveMutation.mutate();
+          }}>
+            <Field label="规则目标类型">
+              <SelectInput
+                aria-label="规则目标类型"
+                value={form.target_type}
+                onChange={(event) => {
+                  const targetType = event.currentTarget.value as RuleTargetType;
+                  setForm((current) => ({ ...current, target_type: targetType }));
+                }}
+              >
+                <option value="authorization_group">authorization_group</option>
+                <option value="permission">permission</option>
+              </SelectInput>
+            </Field>
+            <Field label="目标 Key">
+              <TextInput
+                aria-label="目标 Key"
+                value={form.target_key}
+                onChange={(event) => {
+                  const targetKey = event.currentTarget.value;
+                  setForm((current) => ({ ...current, target_key: targetKey }));
+                }}
+              />
+            </Field>
+            <Field label="审批人 user_id" hint="多个审批人用英文逗号分隔">
+              <TextInput
+                aria-label="审批人 user_id"
+                value={form.approver_userids}
+                onChange={(event) => {
+                  const approverUserids = event.currentTarget.value;
+                  setForm((current) => ({ ...current, approver_userids: approverUserids }));
+                }}
+              />
+            </Field>
+          </form>
+        </Dialog>
+      ) : null}
     </section>
   );
 }

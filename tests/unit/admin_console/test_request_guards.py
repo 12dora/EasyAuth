@@ -10,7 +10,7 @@ from django.contrib.sessions.middleware import SessionMiddleware
 from django.http import JsonResponse
 from django.test import RequestFactory, override_settings
 
-from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
+from easyauth.accounts.auth import AUTHENTIK_GROUPS_SESSION_KEY, AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import USER_STATUS_DISABLED, UserMirror
 from easyauth.admin_console.request_guards import require_console_actor, require_post
 from easyauth.api.errors import ErrorCode, JsonValue
@@ -39,15 +39,20 @@ def test_require_console_actor_returns_401_when_user_is_not_authenticated() -> N
     }
 
 
-def test_require_console_actor_maps_active_authentik_session_to_console_actor() -> None:
+def test_require_console_actor_rejects_active_non_admin_session() -> None:
     _ = UserMirror.objects.create(authentik_user_id="console-user")
     request = _request_with_session(authentik_user_id="console-user")
     request.user = AnonymousUser()
 
-    actor = require_console_actor(request)
+    response = require_console_actor(request)
 
-    assert isinstance(actor, ConsoleActor)
-    assert actor == ConsoleActor(user_id="console-user", is_superuser=False)
+    assert isinstance(response, JsonResponse)
+    assert response.status_code == HTTPStatus.FORBIDDEN
+    assert _json_object(response)["error"] == {
+        "code": ErrorCode.PERMISSION_DENIED,
+        "message": "无权访问控制台。",
+        "details": {},
+    }
 
 
 @override_settings(EASYAUTH_CONSOLE_SUPERUSER_GROUPS=("easyauth-admins",))
@@ -130,5 +135,5 @@ def _request_with_session(
     if authentik_user_id:
         request.session[AUTHENTIK_SESSION_KEY] = authentik_user_id
     if groups:
-        request.session["easyauth_authentik_groups"] = list(groups)
+        request.session[AUTHENTIK_GROUPS_SESSION_KEY] = list(groups)
     return request

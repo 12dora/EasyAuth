@@ -100,6 +100,24 @@ def test_direct_grant_target_errors_returns_deprecated_permission_error() -> Non
     assert errors == ("invoice.read:SELF: Permission must not be deprecated.",)
 
 
+def test_direct_grant_target_errors_allows_permission_without_approval_rule() -> None:
+    app = App.objects.create(app_key="target-direct-grant-no-rule", name="Target App")
+    _ = AppScope.objects.create(app=app, key="SELF", name="本人")
+    permission = Permission.objects.create(
+        app=app,
+        key="invoice.read",
+        name="Read invoices",
+        supported_scopes=["SELF"],
+    )
+
+    errors = direct_grant_target_errors(
+        app,
+        (ScopedAccessRequestGrant(permission=permission, scope_key="SELF"),),
+    )
+
+    assert errors == ()
+
+
 def test_validate_request_targets_raises_group_errors_before_direct_grant_errors() -> None:
     app = App.objects.create(app_key="target-validation-order", name="Target App")
     other_app = App.objects.create(app_key="target-validation-order-other", name="Other App")

@@ -6,8 +6,10 @@ from typing import Final
 import pytest
 from django.test import Client
 
+from easyauth.accounts.models import USER_STATUS_DISABLED, UserMirror
 from easyauth.applications.models import (
     App,
+    AppMembership,
     ApprovalRule,
     AppScope,
     AuthorizationGroup,
@@ -23,8 +25,8 @@ REQUEST_CATALOG_URL: Final = "/portal/api/v1/request-catalog"
 
 
 def test_portal_request_catalog_lists_only_requestable_authorization_groups() -> None:
-    # Given: active 员工和多种可申请/不可申请授权组。
-    client, _user = logged_in_client("portal-catalog-user")
+    # Given: active 员工和多种可提交/不可提交授权组。
+    client, user = logged_in_client("portal-catalog-user")
     crm = App.objects.create(app_key="catalog-crm", name="CRM", description="客户系统")
     inactive_app = App.objects.create(app_key="catalog-inactive", name="停用系统", is_active=False)
     requestable_group = AuthorizationGroup.objects.create(
@@ -56,11 +58,16 @@ def test_portal_request_catalog_lists_only_requestable_authorization_groups() ->
         name="停用应用角色",
         requestable=True,
     )
+    _ = ApprovalRule.objects.create(
+        app=crm,
+        authorization_group=requestable_group,
+        approver_userids=["manager-001"],
+    )
 
     # When: 读取申请目录。
     response = client.get(REQUEST_CATALOG_URL)
 
-    # Then: 只返回 active App 下 active/requestable 授权组。
+    # Then: 只返回 active App 下 active/requestable 且有 active 审批规则的授权组。
     payload = json_object(response)
     assert response.status_code == HTTPStatus.OK
     assert payload["apps"] == [
@@ -70,6 +77,7 @@ def test_portal_request_catalog_lists_only_requestable_authorization_groups() ->
             "name": crm.name,
             "description": crm.description,
             "catalog_version": crm.catalog_version,
+            "default_approver_user_ids": [],
         },
     ]
     assert payload["authorization_groups"] == [
@@ -82,6 +90,15 @@ def test_portal_request_catalog_lists_only_requestable_authorization_groups() ->
             "description": requestable_group.description,
             "requestable": True,
             "requires_approval": True,
+            "default_approver_user_ids": [],
+        },
+    ]
+    assert payload["approver_options"] == [
+        {
+            "user_id": user.authentik_user_id,
+            "name": user.name,
+            "email": user.email,
+            "department": user.department,
         },
     ]
     body = response.content.decode()
@@ -94,6 +111,7 @@ def test_portal_request_catalog_lists_requestable_permissions_as_group_tree() ->
     # Given: active 员工和一个包含多层权限组的可申请 App。
     client, _user = logged_in_client("portal-catalog-permission-user")
     crm = App.objects.create(app_key="catalog-permission-crm", name="CRM")
+    _ = AppScope.objects.create(app=crm, key="GLOBAL", name="全局")
     billing = PermissionGroup.objects.create(app=crm, key="billing", name="账务", depth=1)
     invoice = PermissionGroup.objects.create(
         app=crm,
@@ -107,12 +125,14 @@ def test_portal_request_catalog_lists_requestable_permissions_as_group_tree() ->
         group=invoice,
         key="invoice.read",
         name="查看发票",
+        supported_scopes=["GLOBAL"],
     )
     no_rule_permission = Permission.objects.create(
         app=crm,
         group=invoice,
         key="invoice.secret",
         name="隐藏发票",
+        supported_scopes=["GLOBAL"],
     )
     inactive_permission = Permission.objects.create(
         app=crm,
@@ -141,6 +161,7 @@ def test_portal_request_catalog_lists_requestable_permissions_as_group_tree() ->
             "name": crm.name,
             "description": crm.description,
             "catalog_version": crm.catalog_version,
+            "default_approver_user_ids": [],
         },
     ]
     assert isinstance(groups, list)
@@ -160,8 +181,59 @@ def test_portal_request_catalog_lists_requestable_permissions_as_group_tree() ->
     assert permission["type"] == "permission"
     assert permission["app_key"] == crm.app_key
     assert permission["key"] == requestable_permission.key
-    assert no_rule_permission.key not in body
+    assert no_rule_permission.key in body
     assert inactive_permission.key not in body
+
+
+def test_portal_request_catalog_excludes_requestable_group_without_active_approval_rule() -> None:
+    client, _user = logged_in_client("request-catalog-no-rule-user")
+    app_without_rule = App.objects.create(app_key="catalog-no-rule", name="No Rule")
+    app_with_rule = App.objects.create(app_key="catalog-with-rule", name="With Rule")
+    group_without_rule = AuthorizationGroup.objects.create(
+        app=app_without_rule,
+        key="reader",
+        kind="role",
+        name="无审批规则角色",
+        requestable=True,
+    )
+    group_with_rule = AuthorizationGroup.objects.create(
+        app=app_with_rule,
+        key="auditor",
+        kind="role",
+        name="有审批规则角色",
+        requestable=True,
+    )
+    _ = ApprovalRule.objects.create(
+        app=app_with_rule,
+        authorization_group=group_with_rule,
+        approver_userids=["manager-001"],
+    )
+
+    response = client.get(REQUEST_CATALOG_URL)
+
+    body = response.content.decode()
+    payload = json_object(response)
+    assert response.status_code == HTTPStatus.OK
+    assert group_with_rule.key in body
+    assert group_without_rule.key not in body
+    assert payload["apps"] == [
+        {
+            "id": app_without_rule.id,
+            "app_key": app_without_rule.app_key,
+            "name": app_without_rule.name,
+            "description": app_without_rule.description,
+            "catalog_version": app_without_rule.catalog_version,
+            "default_approver_user_ids": [],
+        },
+        {
+            "id": app_with_rule.id,
+            "app_key": app_with_rule.app_key,
+            "name": app_with_rule.name,
+            "description": app_with_rule.description,
+            "catalog_version": app_with_rule.catalog_version,
+            "default_approver_user_ids": [],
+        },
+    ]
 
 
 def test_portal_request_catalog_rejects_missing_session() -> None:
@@ -193,6 +265,11 @@ def test_portal_request_catalog_returns_authorization_groups_and_catalog_version
         name="内部",
         requestable=False,
     )
+    _ = ApprovalRule.objects.create(
+        app=crm,
+        authorization_group=active_group,
+        approver_userids=["manager-001"],
+    )
 
     # When: 读取申请目录。
     response = client.get(REQUEST_CATALOG_URL)
@@ -210,6 +287,7 @@ def test_portal_request_catalog_returns_authorization_groups_and_catalog_version
             "description": active_group.description,
             "requestable": True,
             "requires_approval": True,
+            "default_approver_user_ids": [],
         },
     ]
     assert payload["apps"][0]["catalog_version"] == crm.catalog_version
@@ -247,3 +325,78 @@ def test_portal_request_catalog_includes_direct_grant_scope_options() -> None:
         {"key": "SELF", "name": "本人", "description": ""},
         {"key": "TEAM", "name": "团队", "description": ""},
     ]
+
+
+def test_portal_request_catalog_returns_active_approver_options_and_defaults() -> None:
+    # Given: 当前员工有直属主管, App 有 owner, 目标也可有审批规则审批人。
+    client, user = logged_in_client("portal-catalog-approver-user")
+    user.manager_userid = "manager-dt"
+    user.save(update_fields=["manager_userid"])
+    manager = UserMirror.objects.create(
+        authentik_user_id="portal-catalog-manager",
+        name="主管",
+        dingtalk_userid="manager-dt",
+    )
+    owner = UserMirror.objects.create(authentik_user_id="portal-catalog-owner", name="Owner")
+    rule_approver = UserMirror.objects.create(
+        authentik_user_id="portal-catalog-rule-approver",
+        name="规则审批人",
+        dingtalk_userid="rule-dt",
+    )
+    _ = UserMirror.objects.create(
+        authentik_user_id="portal-catalog-disabled-approver",
+        name="停用审批人",
+        status=USER_STATUS_DISABLED,
+    )
+    app = App.objects.create(app_key="catalog-approver-app", name="审批 App")
+    orphan_app = App.objects.create(app_key="catalog-approver-orphan", name="无目标 App")
+    _ = AppMembership.objects.create(app=app, user_id=owner.authentik_user_id, role="owner")
+    _ = AppScope.objects.create(app=app, key="GLOBAL", name="全局")
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="finance",
+        kind="role",
+        name="财务",
+        requestable=True,
+    )
+    permission = Permission.objects.create(
+        app=app,
+        key="invoice.read",
+        name="查看发票",
+        supported_scopes=["GLOBAL"],
+    )
+    _ = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=group,
+        approver_userids=["rule-dt"],
+    )
+
+    # When: 读取申请目录。
+    response = client.get(REQUEST_CATALOG_URL)
+
+    # Then: 目录返回 active 系统用户审批人选项, 默认值按目标规则优先, 否则直属主管。
+    payload = json_object(response)
+    assert response.status_code == HTTPStatus.OK
+    option_ids = {option["user_id"] for option in payload["approver_options"]}
+    app_defaults = {
+        app_item["app_key"]: app_item["default_approver_user_ids"]
+        for app_item in payload["apps"]
+    }
+    group_defaults = {
+        group_item["key"]: group_item["default_approver_user_ids"]
+        for group_item in payload["authorization_groups"]
+    }
+    permission_defaults = {
+        permission_item["key"]: permission_item["default_approver_user_ids"]
+        for permission_item in payload["ungrouped_permissions"]
+    }
+    assert option_ids == {
+        user.authentik_user_id,
+        manager.authentik_user_id,
+        owner.authentik_user_id,
+        rule_approver.authentik_user_id,
+    }
+    assert app_defaults[app.app_key] == [manager.authentik_user_id]
+    assert app_defaults[orphan_app.app_key] == [manager.authentik_user_id]
+    assert group_defaults[group.key] == [rule_approver.authentik_user_id]
+    assert permission_defaults[permission.key] == [manager.authentik_user_id]

@@ -35,6 +35,7 @@ describe("PortalPage access request form", () => {
       if (url === "/portal/api/v1/request-catalog") {
         return jsonResponse({
           apps: [{ id: 1, app_key: "crm", name: "CRM" }],
+          approver_options: [{ user_id: "manager-001", name: "直属主管" }],
           authorization_groups: [],
           permission_groups: [],
           ungrouped_permissions: [],
@@ -50,9 +51,13 @@ describe("PortalPage access request form", () => {
       const user = userEvent.setup();
 
       await screen.findByRole("option", { name: "CRM (crm)" });
-      await user.selectOptions(screen.getAllByRole("combobox")[0], "crm");
-      await user.type(screen.getByRole("textbox"), "需要申请权限");
+      await user.selectOptions(screen.getByLabelText("应用"), "crm");
+      expect(screen.getByLabelText("过期时间")).toBeDisabled();
+      await user.type(screen.getByLabelText("申请原因"), "需要申请权限");
 
+      expect(await screen.findByRole("status")).toHaveTextContent("当前应用没有可直接申请的权限，可仅按权限组发起申请。");
+      expect(screen.queryByText("未发现可选直接权限")).not.toBeInTheDocument();
+      expect(screen.queryByText("暂无可选直接权限")).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: "提交申请" })).toBeDisabled();
     } finally {
       vi.unstubAllGlobals();
@@ -64,7 +69,8 @@ describe("PortalPage access request form", () => {
       const url = String(input);
       if (url === "/portal/api/v1/request-catalog") {
         return jsonResponse({
-          apps: [{ id: 1, app_key: "crm", name: "CRM" }],
+          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["manager-001"] }],
+          approver_options: [{ user_id: "manager-001", name: "直属主管" }],
           authorization_groups: [
             { id: 11, app_key: "crm", key: "reader", kind: "role", name: "只读权限组", requestable: true, requires_approval: true },
           ],
@@ -82,10 +88,10 @@ describe("PortalPage access request form", () => {
       const user = userEvent.setup();
 
       await screen.findByRole("option", { name: "CRM (crm)" });
-      await user.selectOptions(screen.getAllByRole("combobox")[0], "crm");
-      await user.selectOptions(screen.getAllByRole("combobox")[1], "reader");
-      await user.type(screen.getByRole("textbox"), "临时处理跨部门工单");
-      await user.selectOptions(screen.getAllByRole("combobox")[2], "timed");
+      await user.selectOptions(screen.getByLabelText("应用"), "crm");
+      await user.selectOptions(screen.getByLabelText("可申请权限组"), "reader");
+      await user.type(screen.getByLabelText("申请原因"), "临时处理跨部门工单");
+      await user.selectOptions(screen.getByLabelText("授权期限"), "timed");
 
       const submitButton = screen.getByRole("button", { name: "提交申请" });
       expect(submitButton).toBeDisabled();
@@ -103,10 +109,23 @@ describe("PortalPage access request form", () => {
       const url = String(input);
       if (url === "/portal/api/v1/request-catalog") {
         return jsonResponse({
-          apps: [{ id: 1, app_key: "crm", name: "CRM" }],
+          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["app-owner"] }],
+          approver_options: [
+            { user_id: "app-owner", name: "应用负责人" },
+            { user_id: "ops-owner", name: "运营负责人" },
+          ],
           authorization_groups: [
             { id: 11, app_key: "crm", key: "sales-reader", kind: "role", name: "销售只读", requestable: true, requires_approval: true },
-            { id: 12, app_key: "crm", key: "order-ops", kind: "bundle", name: "订单运营包", requestable: true, requires_approval: true },
+            {
+              id: 12,
+              app_key: "crm",
+              key: "order-ops",
+              kind: "bundle",
+              name: "订单运营包",
+              requestable: true,
+              requires_approval: true,
+              default_approver_user_ids: ["ops-owner"],
+            },
           ],
           permission_groups: [],
           ungrouped_permissions: [],
@@ -125,13 +144,15 @@ describe("PortalPage access request form", () => {
       const user = userEvent.setup();
 
       await screen.findByRole("option", { name: "CRM (crm)" });
-      await user.selectOptions(screen.getAllByRole("combobox")[0], "crm");
+      await user.selectOptions(screen.getByLabelText("应用"), "crm");
+      expect(screen.getByLabelText("选择审批人 app-owner")).toBeChecked();
       expect(screen.getByText("可申请权限组")).toBeVisible();
       expect(screen.getByRole("option", { name: "销售只读 [role] (sales-reader)" })).toBeVisible();
       expect(screen.getByRole("option", { name: "订单运营包 [bundle] (order-ops)" })).toBeVisible();
 
-      await user.selectOptions(screen.getAllByRole("combobox")[1], "order-ops");
-      await user.type(screen.getByRole("textbox"), "处理订单运营");
+      await user.selectOptions(screen.getByLabelText("可申请权限组"), "order-ops");
+      expect(screen.getByLabelText("选择审批人 ops-owner")).toBeChecked();
+      await user.type(screen.getByLabelText("申请原因"), "处理订单运营");
       await user.click(screen.getByRole("button", { name: "提交申请" }));
 
       await waitFor(() =>
@@ -146,6 +167,7 @@ describe("PortalPage access request form", () => {
               request_type: "grant",
               authorization_group_keys: ["order-ops"],
               direct_grants: [],
+              approver_user_ids: ["ops-owner"],
               grant_type: "permanent",
               grant_expires_at: null,
               reason: "处理订单运营",
@@ -163,7 +185,11 @@ describe("PortalPage access request form", () => {
       const url = String(input);
       if (url === "/portal/api/v1/request-catalog") {
         return jsonResponse({
-          apps: [{ id: 1, app_key: "crm", name: "CRM" }],
+          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["app-owner"] }],
+          approver_options: [
+            { user_id: "app-owner", name: "应用负责人" },
+            { user_id: "security-owner", name: "安全负责人" },
+          ],
           authorization_groups: [],
           permission_groups: [
             {
@@ -186,6 +212,7 @@ describe("PortalPage access request form", () => {
                       app_key: "crm",
                       key: "orders.refund.approve",
                       name: "审批退款",
+                      default_approver_user_ids: ["security-owner"],
                       scopes: [
                         { key: "SELF", name: "本人" },
                         { key: "TEAM", name: "团队" },
@@ -212,7 +239,7 @@ describe("PortalPage access request form", () => {
       const user = userEvent.setup();
 
       await screen.findByRole("option", { name: "CRM (crm)" });
-      await user.selectOptions(screen.getAllByRole("combobox")[0], "crm");
+      await user.selectOptions(screen.getByLabelText("应用"), "crm");
 
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
       expect(permissionTable).toBeVisible();
@@ -227,7 +254,7 @@ describe("PortalPage access request form", () => {
       await user.click(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve SELF" }));
       await user.click(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve TEAM" }));
       await user.click(within(permissionTable).getByRole("checkbox", { name: "选择 dashboard.view" }));
-      await user.type(screen.getByRole("textbox"), "处理跨部门工单");
+      await user.type(screen.getByLabelText("申请原因"), "处理跨部门工单");
       await user.click(screen.getByRole("button", { name: "提交申请" }));
 
       await waitFor(() =>
@@ -246,6 +273,7 @@ describe("PortalPage access request form", () => {
                 { permission: "orders.refund.approve", scope: "TEAM" },
                 { permission: "dashboard.view", scope: "GLOBAL" },
               ],
+              approver_user_ids: ["security-owner"],
               grant_type: "permanent",
               grant_expires_at: null,
               reason: "处理跨部门工单",
@@ -255,6 +283,63 @@ describe("PortalPage access request form", () => {
       );
 
       expect(await screen.findByRole("status")).toHaveTextContent("申请已提交");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("手动修改审批人后目标变化不覆盖，应用切换重置为新应用默认", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/request-catalog") {
+        return jsonResponse({
+          apps: [
+            { id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["app-owner"] },
+            { id: 2, app_key: "erp", name: "ERP", default_approver_user_ids: ["finance-owner"] },
+          ],
+          approver_options: [
+            { user_id: "app-owner", name: "应用负责人" },
+            { user_id: "ops-owner", name: "运营负责人" },
+            { user_id: "finance-owner", name: "财务负责人" },
+          ],
+          authorization_groups: [
+            {
+              id: 12,
+              app_key: "crm",
+              key: "order-ops",
+              kind: "bundle",
+              name: "订单运营包",
+              requestable: true,
+              requires_approval: true,
+              default_approver_user_ids: ["ops-owner"],
+            },
+          ],
+          permission_groups: [],
+          ungrouped_permissions: [],
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage();
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "CRM (crm)" });
+      await user.selectOptions(screen.getByLabelText("应用"), "crm");
+      expect(await screen.findByLabelText("选择审批人 app-owner")).toBeChecked();
+
+      await user.click(screen.getByLabelText("选择审批人 app-owner"));
+      await user.selectOptions(screen.getByLabelText("可申请权限组"), "order-ops");
+
+      await user.type(screen.getByLabelText("搜索审批人"), "owner");
+      expect(screen.getByLabelText("选择审批人 app-owner")).not.toBeChecked();
+      expect(screen.getByLabelText("选择审批人 ops-owner")).not.toBeChecked();
+
+      await user.selectOptions(screen.getByLabelText("应用"), "erp");
+      expect(await screen.findByLabelText("选择审批人 finance-owner")).toBeChecked();
     } finally {
       vi.unstubAllGlobals();
     }

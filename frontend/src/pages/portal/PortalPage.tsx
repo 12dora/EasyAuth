@@ -1,12 +1,14 @@
 import {
   flexRender,
   getCoreRowModel,
+  getPaginationRowModel,
   useReactTable,
   type ColumnDef,
 } from "@tanstack/react-table";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "react-router-dom";
 import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../components/ui/TablePrimitives";
+import { TablePagination } from "../../components/ui/TablePagination";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { PageState } from "../../components/ui/PageState";
 
@@ -22,6 +24,8 @@ import {
   grantTypeLabel,
 } from "../../lib/status";
 import { AccessRequestForm } from "./components/AccessRequestForm";
+
+const MONO_TEXT_CLASS = "font-mono text-[13px] leading-5 text-ink-soft";
 
 type PortalView = "grants" | "request" | "requests" | "expiring";
 
@@ -69,11 +73,7 @@ export function PortalPage() {
 
   return (
     <>
-      <PageHeader
-        eyebrow="Portal"
-        title={viewTitle(view)}
-        description="按当前员工 session 查看授权、申请记录和到期提醒。"
-      />
+      <PageHeader eyebrow="Portal" title={viewTitle(view)} />
       {view === "grants" ? <PortalGrantSection endpoint="/portal/api/v1/me/grants" emptyText="暂无当前授权" /> : null}
       {view === "expiring" ? <PortalGrantSection endpoint="/portal/api/v1/me/grants/expiring" emptyText="暂无即将过期授权" /> : null}
       {view === "requests" ? <PortalRequestSection /> : null}
@@ -94,21 +94,22 @@ function PortalGrantSection({ endpoint, emptyText }: { endpoint: string; emptyTe
       cell: ({ row }) => (
         <div className="flex min-w-0 flex-col gap-1">
           <strong>{row.original.app_name ?? row.original.app_key ?? "-"}</strong>
-          <code className="text-xs text-slate-500">{row.original.app_key ?? "-"}</code>
+          <code className={MONO_TEXT_CLASS}>{row.original.app_key ?? "-"}</code>
         </div>
       ),
     },
     { header: "权限组", cell: ({ row }) => formatGroups(row.original.groups) },
-    { header: "展开授权", cell: ({ row }) => formatExpandedGrants(row.original.grants) },
-    { header: "来源", cell: ({ row }) => formatSources(row.original.grants) },
+    { id: "expanded_grants", header: "展开授权", cell: ({ row }) => formatExpandedGrants(row.original.grants) },
+    { id: "grant_sources", header: "来源", cell: ({ row }) => formatSources(row.original.grants) },
     { header: "期限", cell: ({ row }) => grantTypeLabel(row.original.grant_type) },
-    { header: "版本", cell: ({ row }) => formatVersions(row.original) },
+    { id: "versions", header: "版本", cell: ({ row }) => formatVersions(row.original) },
     { header: "过期时间", cell: ({ row }) => formatDateTime(row.original.grant_expires_at) },
   ];
   const table = useReactTable({
     data: grants,
     columns,
     getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
   });
 
   return (
@@ -145,7 +146,7 @@ function PortalRequestSection() {
     },
     { header: "应用", cell: ({ row }) => row.original.app_name ?? row.original.app_key ?? "-" },
     { header: "权限组", cell: ({ row }) => formatGroups(row.original.authorization_groups) },
-    { header: "直接授权", cell: ({ row }) => formatDirectGrants(row.original.direct_grants) },
+    { id: "direct_grants", header: "直接授权", cell: ({ row }) => formatDirectGrants(row.original.direct_grants) },
     { header: "期限", cell: ({ row }) => grantTypeLabel(row.original.grant_type) },
     { header: "提交时间", cell: ({ row }) => formatDateTime(row.original.submitted_at) },
     { header: "原因", cell: ({ row }) => row.original.reason ?? "-" },
@@ -154,6 +155,7 @@ function PortalRequestSection() {
     data: requests,
     columns,
     getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
   });
 
   return (
@@ -203,7 +205,9 @@ function PortalTable<T>({
             table.getRowModel().rows.map((row) => (
               <TableRow key={row.id}>
                 {row.getVisibleCells().map((cell) => (
-                  <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                  <TableCell key={cell.id} className={isMonoPortalColumn(cell.column.id) ? MONO_TEXT_CLASS : undefined}>
+                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                  </TableCell>
                 ))}
               </TableRow>
             ))
@@ -214,8 +218,13 @@ function PortalTable<T>({
           )}
         </TableBody>
       </TableRoot>
+      <TablePagination table={table} />
     </TableFrame>
   );
+}
+
+function isMonoPortalColumn(columnId: string): boolean {
+  return ["expanded_grants", "grant_sources", "versions", "direct_grants"].includes(columnId);
 }
 
 function portalViewFromPath(pathname: string): PortalView {

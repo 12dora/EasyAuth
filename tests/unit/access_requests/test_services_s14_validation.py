@@ -94,6 +94,7 @@ def test_s14_submit_grant_request_deduplicates_repeated_groups() -> None:
             reason="重复角色应去重",
             actor_type="user",
             actor_id=user.authentik_user_id,
+            approver_user_ids=(user.authentik_user_id,),
         ),
     )
 

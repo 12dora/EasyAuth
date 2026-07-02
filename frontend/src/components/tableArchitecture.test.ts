@@ -42,7 +42,10 @@ function forbiddenMatches(file: string): string[] {
     /table-wrap/,
     /empty-row/,
   ];
-  return forbiddenPatterns
+  const tablePrimitivePatterns =
+    relativePath === "components/ui/TablePrimitives.tsx" ? [/rounded-lg/, /slate-/, /shadow-slate/, /bg-white/] : [];
+
+  return [...forbiddenPatterns, ...tablePrimitivePatterns]
     .filter((pattern) => pattern.test(content))
     .map((pattern) => `${relativePath}: ${pattern.source}`);
 }

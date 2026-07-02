@@ -1,16 +1,21 @@
 import {
   flexRender,
   getCoreRowModel,
+  getPaginationRowModel,
   useReactTable,
   type ColumnDef,
 } from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Plus, Trash2 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Check, Plus } from "lucide-react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../../components/ui/TablePrimitives";
+import { PanelSurface } from "../../../../components/ui/PanelSurface";
+import { TableActionCell, TableRowActionButton } from "../../../../components/ui/TableActions";
+import { TablePagination } from "../../../../components/ui/TablePagination";
 
 import { Badge } from "../../../../components/Badge";
 import { Button } from "../../../../components/Button";
+import { Dialog } from "../../../../components/Dialog";
 import { Field, SelectInput, TextArea, TextInput } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
@@ -32,6 +37,7 @@ const emptyGroupForm: AuthorizationGroupForm = {
 export function MatrixTab({ appKey }: { appKey: string }) {
   const queryClient = useQueryClient();
   const [selectedKey, setSelectedKey] = useState("");
+  const [groupDialogOpen, setGroupDialogOpen] = useState(false);
   const [form, setForm] = useState<AuthorizationGroupForm>(emptyGroupForm);
   const [grantPermission, setGrantPermission] = useState("");
   const [grantScope, setGrantScope] = useState("");
@@ -53,7 +59,6 @@ export function MatrixTab({ appKey }: { appKey: string }) {
   const authorizationGroups = itemsFromPayload<AuthorizationGroupItem>(groupsQuery.data);
   const permissions = itemsFromPayload<PermissionItem>(permissionsQuery.data);
   const scopes = itemsFromPayload<AppScopeItem>(scopesQuery.data);
-  const selectedGroup = authorizationGroups.find((group) => group.key === selectedKey) ?? authorizationGroups[0];
   const activeScopes = scopes.filter((scope) => scope.is_active);
   const scopeOptions = useMemo(
     () =>
@@ -63,15 +68,6 @@ export function MatrixTab({ appKey }: { appKey: string }) {
       }),
     [activeScopes, grantPermission, permissions],
   );
-
-  useEffect(() => {
-    if (!selectedGroup) {
-      setForm(emptyGroupForm);
-      return;
-    }
-    setSelectedKey(selectedGroup.key);
-    setForm({ ...selectedGroup, description: selectedGroup.description ?? "", grants: normalizeGrants(selectedGroup.grants ?? []) });
-  }, [selectedGroup?.key, groupsQuery.data]);
 
   useEffect(() => {
     if (!grantPermission && permissions[0]?.key) {
@@ -91,14 +87,17 @@ export function MatrixTab({ appKey }: { appKey: string }) {
   const saveMutation = useMutation({
     mutationFn: () => {
       const payload = buildAuthorizationGroupPayload(form);
-      const method = selectedGroup ? "PATCH" : "POST";
-      const url = selectedGroup
-        ? `/console/api/v1/apps/${appKey}/authorization-groups/${selectedGroup.key}`
+      const method = selectedKey ? "PATCH" : "POST";
+      const url = selectedKey
+        ? `/console/api/v1/apps/${appKey}/authorization-groups/${selectedKey}`
         : `/console/api/v1/apps/${appKey}/authorization-groups`;
       return apiRequest(url, { method, body: payload });
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: groupsQueryKey });
+      setGroupDialogOpen(false);
+      setSelectedKey("");
+      setForm(emptyGroupForm);
     },
   });
 
@@ -130,11 +129,18 @@ export function MatrixTab({ appKey }: { appKey: string }) {
       ),
     },
     {
+      id: "actions",
       header: "操作",
       cell: ({ row }) => (
-        <Button onClick={() => setSelectedKey(row.original.key)}>
-          编辑
-        </Button>
+        <TableActionCell>
+          <TableRowActionButton type="button" onClick={() => {
+            setSelectedKey(row.original.key);
+            setForm({ ...row.original, description: row.original.description ?? "", grants: normalizeGrants(row.original.grants ?? []) });
+            setGroupDialogOpen(true);
+          }}>
+            编辑
+          </TableRowActionButton>
+        </TableActionCell>
       ),
     },
   ];
@@ -142,26 +148,27 @@ export function MatrixTab({ appKey }: { appKey: string }) {
     data: authorizationGroups,
     columns: authorizationGroupColumns,
     getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
   });
   const grantColumns: ColumnDef<AuthorizationGroupGrantItem>[] = [
     { header: "Grant", cell: ({ row }) => `${row.original.permission} / ${row.original.scope}` },
     { header: "状态", cell: ({ row }) => <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>{row.original.is_active ? "启用" : "停用"}</Badge> },
     {
+      id: "actions",
       header: "操作",
       cell: ({ row }) => (
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="inline-flex items-center gap-2 text-sm text-ink-soft">
-            <input
-              type="checkbox"
-              checked={row.original.is_active}
-              onChange={(event) => updateGrant(form.grants, row.original, event.currentTarget.checked, setForm)}
-            />{" "}
-            启用
-          </label>
-          <Button size="sm" variant="ghost-danger" icon={<Trash2 size={16} />} onClick={() => removeGrant(row.original, setForm)}>
+        <TableActionCell>
+          <TableRowActionButton
+            type="button"
+            variant={row.original.is_active ? "ghost-danger" : "ghost"}
+            onClick={() => updateGrant(form.grants, row.original, !row.original.is_active, setForm)}
+          >
+            {row.original.is_active ? "停用" : "启用"}
+          </TableRowActionButton>
+          <TableRowActionButton type="button" variant="ghost-danger" onClick={() => removeGrant(row.original, setForm)}>
             移除
-          </Button>
-        </div>
+          </TableRowActionButton>
+        </TableActionCell>
       ),
     },
   ];
@@ -169,6 +176,7 @@ export function MatrixTab({ appKey }: { appKey: string }) {
     data: form.grants,
     columns: grantColumns,
     getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
   });
 
   return (
@@ -176,49 +184,75 @@ export function MatrixTab({ appKey }: { appKey: string }) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-base font-semibold text-ink">授权组管理</h2>
         <Button
+          type="button"
+          variant="primary"
           icon={<Plus size={16} />}
           onClick={() => {
             setSelectedKey("");
             setForm(emptyGroupForm);
+            setGroupDialogOpen(true);
           }}
         >
-          新建授权组
+          新建
         </Button>
       </div>
       {saveMutation.error ? <StatusBanner tone="signal" title="授权组保存失败" message={(saveMutation.error as Error).message} /> : null}
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_minmax(28rem,1.15fr)]">
-        <TableFrame>
-          <TableRoot>
-            <TableHead>
-              {authorizationGroupTable.getHeaderGroups().map((headerGroup) => (
-                <TableRow key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => (
-                    <TableHeaderCell key={header.id}>
-                      {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                    </TableHeaderCell>
+      <TableFrame>
+        <TableRoot>
+          <TableHead>
+            {authorizationGroupTable.getHeaderGroups().map((headerGroup) => (
+              <TableRow key={headerGroup.id}>
+                {headerGroup.headers.map((header) => (
+                  <TableHeaderCell key={header.id}>
+                    {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                  </TableHeaderCell>
+                ))}
+              </TableRow>
+            ))}
+          </TableHead>
+          <TableBody>
+            {authorizationGroupTable.getRowModel().rows.length > 0 ? (
+              authorizationGroupTable.getRowModel().rows.map((row) => (
+                <TableRow key={row.id}>
+                  {row.getVisibleCells().map((cell) => (
+                    cell.column.id === "actions" ? (
+                      <Fragment key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Fragment>
+                    ) : (
+                      <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                    )
                   ))}
                 </TableRow>
-              ))}
-            </TableHead>
-            <TableBody>
-              {authorizationGroupTable.getRowModel().rows.length > 0 ? (
-                authorizationGroupTable.getRowModel().rows.map((row) => (
-                  <TableRow key={row.id}>
-                    {row.getVisibleCells().map((cell) => (
-                      <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                    ))}
-                  </TableRow>
-                ))
-              ) : (
-                <TableEmptyRow colSpan={authorizationGroupTable.getAllLeafColumns().length}>
-                    {groupsQuery.isLoading ? "加载中" : "暂无授权组"}
-                  </TableEmptyRow>
-              )}
-            </TableBody>
-          </TableRoot>
-        </TableFrame>
-        <div className="space-y-4">
-          <div className="space-y-4 rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper p-5 shadow-sm">
+              ))
+            ) : (
+              <TableEmptyRow colSpan={authorizationGroupTable.getAllLeafColumns().length}>
+                  {groupsQuery.isLoading ? "加载中" : "暂无授权组"}
+                </TableEmptyRow>
+            )}
+          </TableBody>
+        </TableRoot>
+        <TablePagination table={authorizationGroupTable} />
+      </TableFrame>
+      {groupDialogOpen ? (
+        <Dialog title={selectedKey ? "编辑授权组" : "新建授权组"} size="xl" onClose={() => setGroupDialogOpen(false)} footer={
+          <>
+            <Button type="button" onClick={() => setGroupDialogOpen(false)}>取消</Button>
+            <Button
+              form="authorization-group-form"
+              type="submit"
+              variant="primary"
+              icon={<Check size={16} />}
+              disabled={!form.key || !form.name || saveMutation.isPending}
+              loading={saveMutation.isPending}
+            >
+              保存
+            </Button>
+          </>
+        }>
+        <form id="authorization-group-form" className="space-y-4" onSubmit={(event) => {
+          event.preventDefault();
+          saveMutation.mutate();
+        }}>
+          <PanelSurface padding="lg" className="space-y-4">
             <div className="grid gap-4 md:grid-cols-2">
               <Field label="授权组 key">
                 <TextInput value={form.key} onChange={(event) => setForm((current) => ({ ...current, key: event.currentTarget.value }))} />
@@ -234,16 +268,20 @@ export function MatrixTab({ appKey }: { appKey: string }) {
               </Field>
               <Field label="状态">
                 <div className="flex flex-wrap gap-3">
-                  <label className="inline-flex items-center gap-2 text-sm text-ink-soft"><input type="checkbox" checked={form.requestable} onChange={(event) => setForm((current) => ({ ...current, requestable: event.currentTarget.checked }))} /> 可申请</label>
-                  <label className="inline-flex items-center gap-2 text-sm text-ink-soft"><input type="checkbox" checked={form.is_active} onChange={(event) => setForm((current) => ({ ...current, is_active: event.currentTarget.checked }))} /> 启用</label>
+                  <Button type="button" variant={form.requestable ? "ghost-danger" : "ghost"} onClick={() => setForm((current) => ({ ...current, requestable: !current.requestable }))}>
+                    {form.requestable ? "设为不可申请" : "设为可申请"}
+                  </Button>
+                  <Button type="button" variant={form.is_active ? "ghost-danger" : "ghost"} onClick={() => setForm((current) => ({ ...current, is_active: !current.is_active }))}>
+                    {form.is_active ? "停用" : "启用"}
+                  </Button>
                 </div>
               </Field>
             </div>
             <Field label="描述">
               <TextArea value={form.description ?? ""} onChange={(event) => setForm((current) => ({ ...current, description: event.currentTarget.value }))} />
             </Field>
-          </div>
-          <div className="grid items-end gap-4 rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper p-5 shadow-sm md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+          </PanelSurface>
+          <PanelSurface padding="lg" className="grid items-end gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
             <Field label="Grant Permission">
               <SelectInput value={grantPermission} onChange={(event) => setGrantPermission(event.currentTarget.value)}>
                 {permissions.map((permission) => (
@@ -258,10 +296,10 @@ export function MatrixTab({ appKey }: { appKey: string }) {
                 ))}
               </SelectInput>
             </Field>
-            <Button icon={<Plus size={16} />} onClick={addGrant} disabled={!grantPermission || !grantScope}>
+            <Button type="button" icon={<Plus size={16} />} onClick={addGrant} disabled={!grantPermission || !grantScope}>
               添加 Grant
             </Button>
-          </div>
+          </PanelSurface>
           <TableFrame>
             <TableRoot>
               <TableHead>
@@ -280,7 +318,11 @@ export function MatrixTab({ appKey }: { appKey: string }) {
                   grantTable.getRowModel().rows.map((row) => (
                     <TableRow key={row.id}>
                       {row.getVisibleCells().map((cell) => (
-                        <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                        cell.column.id === "actions" ? (
+                          <Fragment key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Fragment>
+                        ) : (
+                          <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                        )
                       ))}
                     </TableRow>
                   ))
@@ -291,20 +333,14 @@ export function MatrixTab({ appKey }: { appKey: string }) {
                 )}
               </TableBody>
             </TableRoot>
+            <TablePagination table={grantTable} />
           </TableFrame>
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper-deep p-4">
+          <PanelSurface className="flex flex-wrap items-center justify-between gap-3 bg-paper-deep">
             <span className="min-w-0 text-sm text-ink-soft">展开后 grants 预览：{form.grants.map((grant) => `${grant.permission} / ${grant.scope}`).join("，") || "-"}</span>
-            <Button
-              variant="primary"
-              icon={<Check size={16} />}
-              disabled={!form.key || !form.name || saveMutation.isPending}
-              onClick={() => saveMutation.mutate()}
-            >
-              保存授权组
-            </Button>
-          </div>
-        </div>
-      </div>
+          </PanelSurface>
+        </form>
+        </Dialog>
+      ) : null}
     </section>
   );
 }

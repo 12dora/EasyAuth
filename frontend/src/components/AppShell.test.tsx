@@ -1,10 +1,15 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, test } from "vitest";
 
 import { App } from "../App";
 import { AppShell } from "./AppShell";
+
+const layoutShellCss = readFileSync(resolve(__dirname, "../styles/layout-shell.css"), "utf8");
+const responsiveCss = readFileSync(resolve(__dirname, "../styles/responsive.css"), "utf8");
 
 function renderShell(
   mode: "console" | "portal" = "console",
@@ -213,5 +218,29 @@ describe("AppShell", () => {
     expect(screen.getByRole("link", { name: "申请权限" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByTestId("nav-active-indicator")).toHaveAttribute("data-active-path", "/portal/request");
     expect(screen.getByTestId("route-transition")).toHaveAttribute("data-route-pathname", "/portal/request");
+  });
+
+  test("壳层布局保留 EasyTrade 基准尺寸并收敛导航圆角", () => {
+    expect(layoutShellCss).toContain("height: 56px;");
+    expect(layoutShellCss).toContain("grid-template-columns: 240px minmax(0, 1fr);");
+    expect(layoutShellCss).toContain("width: min(1440px, 100%);");
+    expect(layoutShellCss).toMatch(/\.nav-list a\s*\{[^}]*border-radius: 2px;/s);
+    expect(layoutShellCss).toMatch(/\.sidebar-footer a\s*\{[^}]*border-radius: 2px;/s);
+    expect(layoutShellCss).not.toMatch(/border-radius:\s*6px/);
+    expect(layoutShellCss).toContain("background: rgb(var(--amber));");
+  });
+
+  test("用户菜单浮层使用 2px 圆角、hairline 边框和低阴影", () => {
+    expect(layoutShellCss).toMatch(/\.user-menu-popover\s*\{[^}]*border: 1px solid rgb\(var\(--hairline\)\);/s);
+    expect(layoutShellCss).toMatch(/\.user-menu-popover\s*\{[^}]*border-radius: 2px;/s);
+    expect(layoutShellCss).toMatch(/\.user-menu-popover\s*\{[^}]*box-shadow: 0 8px 18px rgba\(15, 23, 42, 0\.08\);/s);
+    expect(layoutShellCss).not.toContain("0 14px 32px");
+  });
+
+  test("内容区桌面保持 40px 留白且移动端防止横向溢出", () => {
+    expect(layoutShellCss).toMatch(/\.content\s*\{[^}]*padding: 40px;/s);
+    expect(responsiveCss).toMatch(/\.content\s*\{[^}]*padding: 28px 20px;/s);
+    expect(responsiveCss).toMatch(/\.shell-body\s*\{[^}]*overflow-x: hidden;/s);
+    expect(responsiveCss).toMatch(/\.content\s*\{[^}]*overflow-x: hidden;/s);
   });
 });

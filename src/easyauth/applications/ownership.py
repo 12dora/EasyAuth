@@ -37,15 +37,8 @@ def can_operate_credentials(actor: ConsoleActor, app: App) -> bool:
 
 
 def apps_visible_to_actor(actor: ConsoleActor) -> list[App]:
-    if actor.is_superuser:
-        return list(App.objects.order_by("app_key"))
-
-    app_ids = AppMembership.objects.filter(
-        user_id=actor.user_id,
-        role__in=(APP_MEMBERSHIP_ROLE_OWNER, APP_MEMBERSHIP_ROLE_DEVELOPER),
-        is_active=True,
-    ).values_list("app_id", flat=True)
-    return list(App.objects.filter(id__in=app_ids).order_by("app_key").distinct())
+    _ = actor
+    return list(App.objects.order_by("app_key"))
 
 
 def _has_active_owner_membership(actor: ConsoleActor, app: App) -> bool:

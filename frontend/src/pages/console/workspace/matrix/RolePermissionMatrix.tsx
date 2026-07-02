@@ -1,11 +1,13 @@
 import {
   flexRender,
   getCoreRowModel,
+  getPaginationRowModel,
   useReactTable,
   type ColumnDef,
 } from "@tanstack/react-table";
 import { useMemo } from "react";
 import { TableBody, TableCell, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../../components/ui/TablePrimitives";
+import { TablePagination } from "../../../../components/ui/TablePagination";
 
 import type { MatrixPayload } from "../../../../lib/domain";
 import { matrixCellKey } from "./useMatrixDraft";
@@ -52,6 +54,7 @@ export function RolePermissionMatrix({ matrix, isCellEnabled, onCellChange }: Ro
     data: permissions,
     columns,
     getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
     getRowId: (permission) => String(permission.id),
   });
 
@@ -64,7 +67,7 @@ export function RolePermissionMatrix({ matrix, isCellEnabled, onCellChange }: Ro
               {headerGroup.headers.map((header) => (
                 <TableHeaderCell
                   key={header.id}
-                  className={header.column.id === "permission" ? "sticky left-0 z-20 min-w-60 bg-slate-50" : "text-center"}
+                  className={header.column.id === "permission" ? "sticky left-0 z-20 min-w-60 bg-paper-deep" : "text-center"}
                 >
                   {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
                 </TableHeaderCell>
@@ -78,7 +81,7 @@ export function RolePermissionMatrix({ matrix, isCellEnabled, onCellChange }: Ro
               {row.getVisibleCells().map((cell) => (
                 <TableCell
                   key={cell.column.id === "permission" ? cell.id : matrixCellKey(Number(cell.column.id), row.original.id)}
-                  className={cell.column.id === "permission" ? "sticky left-0 z-10 min-w-60 bg-white" : "text-center"}
+                  className={cell.column.id === "permission" ? "sticky left-0 z-10 min-w-60 bg-inherit" : "text-center"}
                 >
                   {flexRender(cell.column.columnDef.cell, cell.getContext())}
                 </TableCell>
@@ -87,6 +90,7 @@ export function RolePermissionMatrix({ matrix, isCellEnabled, onCellChange }: Ro
           ))}
         </TableBody>
       </TableRoot>
+      <TablePagination table={table} />
     </TableFrame>
   );
 }

@@ -11,7 +11,6 @@ from django.utils import timezone
 from easyauth.access_requests.models import AccessRequest, AccessRequestPermission
 from easyauth.applications.models import (
     App,
-    ApprovalRule,
     AppScope,
     AuthorizationGroup,
     AuthorizationGroupGrant,
@@ -33,8 +32,8 @@ REQUESTS_API_URL: Final = "/portal/api/v1/me/access-requests"
 DEFAULT_SCOPE_KEY: Final = "GLOBAL"
 
 
-def test_ops4_portal_api_submits_grant_request_with_direct_permission() -> None:
-    # Given: 当前员工还没有授权, 目标 direct Permission 配置了审批规则。
+def test_ops4_portal_api_submits_grant_request_with_direct_permission_without_rule() -> None:
+    # Given: 当前员工还没有授权, 目标 direct Permission 没有配置审批规则。
     client, user = logged_in_client("ops4-grant-direct-permission-user")
     app = App.objects.create(app_key="ops4-grant-direct-permission", name="OPS4 Grant Permission")
     permission = _requestable_permission(app=app, key="invoice.read")
@@ -48,6 +47,7 @@ def test_ops4_portal_api_submits_grant_request_with_direct_permission() -> None:
                 "request_type": "grant",
                 "authorization_group_keys": [],
                 "direct_grants": [{"permission": permission.key, "scope": DEFAULT_SCOPE_KEY}],
+                "approver_user_ids": [user.authentik_user_id],
                 "grant_type": "permanent",
                 "grant_expires_at": None,
                 "reason": "申请 direct permission",
@@ -72,8 +72,38 @@ def test_ops4_portal_api_submits_grant_request_with_direct_permission() -> None:
     )
     assert response.status_code == HTTPStatus.CREATED
     assert access_request.request_type == "grant"
+    assert access_request.approver_user_ids == [user.authentik_user_id]
     assert permission_keys == (permission.key,)
     assert scope_keys == (DEFAULT_SCOPE_KEY,)
+
+
+def test_ops4_portal_api_rejects_access_request_without_approver() -> None:
+    # Given: direct Permission 本身可申请。
+    client, user = logged_in_client("ops4-grant-missing-approver-user")
+    app = App.objects.create(app_key="ops4-grant-missing-approver", name="OPS4 Missing Approver")
+    permission = _requestable_permission(app=app, key="invoice.read")
+
+    # When: 员工提交时没有提供审批人。
+    response = client.post(
+        REQUESTS_API_URL,
+        data=dumps(
+            {
+                "app_key": app.app_key,
+                "request_type": "grant",
+                "authorization_group_keys": [],
+                "direct_grants": [{"permission": permission.key, "scope": DEFAULT_SCOPE_KEY}],
+                "approver_user_ids": [],
+                "grant_type": "permanent",
+                "grant_expires_at": None,
+                "reason": "申请 direct permission",
+            },
+        ),
+        content_type="application/json",
+    )
+
+    # Then: API 拒绝提交, 不创建申请。
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert AccessRequest.objects.filter(user=user, app=app).exists() is False
 
 
 def test_ops4_portal_api_lists_access_request_direct_permissions() -> None:
@@ -96,6 +126,7 @@ def test_ops4_portal_api_lists_access_request_direct_permissions() -> None:
                 "request_type": "change",
                 "authorization_group_keys": [],
                 "direct_grants": [{"permission": new_permission.key, "scope": DEFAULT_SCOPE_KEY}],
+                "approver_user_ids": [user.authentik_user_id],
                 "grant_type": GRANT_TYPE_TIMED,
                 "grant_expires_at": (timezone.now() + timedelta(days=30)).isoformat(),
                 "reason": "提交 direct permission 申请",
@@ -214,10 +245,5 @@ def _requestable_permission(*, app: App, key: str) -> Permission:
         key=key,
         name=key,
         supported_scopes=[DEFAULT_SCOPE_KEY],
-    )
-    _ = ApprovalRule.objects.create(
-        app=app,
-        permission=permission,
-        approver_userids=["manager-001"],
     )
     return permission

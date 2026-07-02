@@ -1,5 +1,7 @@
 # EasyAuth 与 EasyTrade 视觉对齐修复计划
 
+> 归档说明：本计划已被 `docs/plans/2026-07-02-easyauth-easytrade-visual-consistency-remediation-plan.md` 纠偏并执行。后续判断以 2026-07-02 计划、`docs/architecture/easyauth-frontend-visual-contract.md` 和本轮真实验证记录为准；本文仅保留为历史设计背景。
+
 ## 目标
 
 把 EasyAuth 控制台和员工门户调整为与 EasyTrade 同一企业产品线的视觉语言。重点统一按钮、表格、表单、状态标签、页头、面板、弹窗、空态、加载态和导航密度；不改变授权业务语义，旧 UI 入口必须删除，不保留两套视觉系统。

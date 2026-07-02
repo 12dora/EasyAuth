@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Final, cast
 import pytest
 from django.test import Client
 
-from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
+from easyauth.accounts.auth import AUTHENTIK_GROUPS_SESSION_KEY, AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import (
@@ -58,7 +58,20 @@ def test_ops1_apps_api_superuser_lists_all_apps() -> None:
     assert response.json()["items"][1]["is_active"] is False
 
 
-def test_ops1_apps_api_member_lists_only_visible_apps() -> None:
+def test_ops1_apps_api_rejects_non_admin_user() -> None:
+    client = _non_admin_client("ops1-apps-api-non-admin")
+
+    response = client.get(APPS_API_URL)
+
+    assert response.status_code == HTTPStatus.FORBIDDEN
+    assert response.json()["error"] == {
+        "code": ErrorCode.PERMISSION_DENIED,
+        "message": "无权访问控制台。",
+        "details": {},
+    }
+
+
+def test_ops1_apps_api_member_lists_all_apps() -> None:
     # Given: developer 只属于 CRM App, 另一个 ERP App 不属于该用户。
     client = _logged_in_user("ops1-apps-api-developer")
     crm = App.objects.create(app_key="ops1-api-member-crm", name="CRM")
@@ -72,11 +85,11 @@ def test_ops1_apps_api_member_lists_only_visible_apps() -> None:
     # When: developer 查询 App 列表。
     response = client.get(APPS_API_URL)
 
-    # Then: API 只返回该用户可见的 App。
+    # Then: API 返回所有 App, 不再按成员关系隐藏。
     body = response.content.decode()
     assert response.status_code == HTTPStatus.OK
     assert crm.app_key in body
-    assert erp.app_key not in body
+    assert erp.app_key in body
 
 
 def test_ops1_apps_api_superuser_creates_app_with_memberships_and_audit() -> None:
@@ -214,7 +227,7 @@ def test_ops1_apps_api_create_rejects_invalid_app_key_and_blank_name() -> None:
     assert App.objects.filter(app_key="ops1-api-create-blank-name").exists() is False
 
 
-def test_ops1_app_detail_api_requires_visible_membership() -> None:
+def test_ops1_app_detail_api_allows_read_without_membership() -> None:
     # Given: owner 只拥有 CRM App, 不属于 ERP App。
     client = _logged_in_user("ops1-app-detail-api-owner")
     crm = App.objects.create(app_key="ops1-api-detail-crm", name="CRM")
@@ -225,12 +238,13 @@ def test_ops1_app_detail_api_requires_visible_membership() -> None:
     allowed = client.get(f"{APPS_API_URL}/{crm.app_key}")
     denied = client.get(f"{APPS_API_URL}/{erp.app_key}")
 
-    # Then: 所属 App 返回详情, 未授权 App 按不存在处理。
+    # Then: 所属 App 和未授权 App 都可读取, 但未授权 App 不可管理。
     assert allowed.status_code == HTTPStatus.OK
     assert allowed.json()["app"]["app_key"] == crm.app_key
     assert allowed.json()["app"]["can_manage"] is True
-    assert denied.status_code == HTTPStatus.NOT_FOUND
-    assert denied.json()["error"]["code"] == ErrorCode.NOT_FOUND
+    assert denied.status_code == HTTPStatus.OK
+    assert denied.json()["app"]["app_key"] == erp.app_key
+    assert denied.json()["app"]["can_manage"] is False
 
 
 def test_ops1_apps_api_owner_patches_name_and_description() -> None:
@@ -303,6 +317,44 @@ def test_ops1_apps_api_superuser_patches_is_active() -> None:
         target_id=str(app.id),
         metadata={"is_active": False},
     ).exists()
+
+
+def test_ops1_apps_api_superuser_deletes_app_and_records_audit() -> None:
+    # Given: 系统管理员面对一个待删除 App。
+    client = _logged_in_superuser("ops1-app-delete-admin")
+    app = App.objects.create(app_key="ops1-api-delete", name="Delete Me", is_active=False)
+    app_id = app.id
+
+    # When: 系统管理员删除 App。
+    response = client.delete(f"{APPS_API_URL}/{app.app_key}")
+
+    # Then: API 硬删除 App，并在删除前写入审计记录。
+    assert response.status_code == HTTPStatus.NO_CONTENT
+    assert App.objects.filter(id=app_id).exists() is False
+    assert AuditLog.objects.filter(
+        actor_id="ops1-app-delete-admin",
+        event_type="console_app_deleted",
+        target_id=str(app_id),
+        metadata__app_key="ops1-api-delete",
+        metadata__name="Delete Me",
+        metadata__is_active=False,
+    ).exists()
+
+
+def test_ops1_apps_api_non_superuser_cannot_delete_app() -> None:
+    # Given: owner 可见一个 App。
+    client = _logged_in_user("ops1-app-delete-owner")
+    app = App.objects.create(app_key="ops1-api-delete-denied", name="Delete Denied")
+    _ = AppMembership.objects.create(app=app, user_id="ops1-app-delete-owner", role="owner")
+
+    # When: owner 尝试删除 App。
+    response = client.delete(f"{APPS_API_URL}/{app.app_key}")
+
+    # Then: API 拒绝删除且 App 仍存在。
+    app.refresh_from_db()
+    assert response.status_code == HTTPStatus.FORBIDDEN
+    assert response.json()["error"]["code"] == ErrorCode.PERMISSION_DENIED
+    assert app.app_key == "ops1-api-delete-denied"
 
 
 def test_ops1_apps_api_developer_cannot_patch_app() -> None:
@@ -631,7 +683,15 @@ def _authentik_client(username: str, *, groups: tuple[str, ...] = ()) -> Client:
     client = Client(HTTP_HOST="localhost")
     session = client.session
     session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
-    if groups:
-        session["easyauth_authentik_groups"] = list(groups)
+    session[AUTHENTIK_GROUPS_SESSION_KEY] = list(groups or ("EasyAuth Admins",))
+    session.save()
+    return client
+
+
+def _non_admin_client(username: str) -> Client:
+    user, _created = UserMirror.objects.get_or_create(authentik_user_id=username)
+    client = Client(HTTP_HOST="localhost")
+    session = client.session
+    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
     session.save()
     return client

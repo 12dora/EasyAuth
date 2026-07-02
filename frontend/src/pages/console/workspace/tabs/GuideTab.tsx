@@ -1,6 +1,7 @@
 import { useQuery } from "@tanstack/react-query";
-import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
+import { flexRender, getCoreRowModel, getPaginationRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
 import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../../components/ui/TablePrimitives";
+import { TablePagination } from "../../../../components/ui/TablePagination";
 
 import { CodeBlock } from "../../../../components/CodeBlock";
 import { apiRequest } from "../../../../lib/api";
@@ -21,6 +22,7 @@ export function GuideTab({ appKey }: { appKey: string }) {
     data: guideQuery.data?.credential_modes ?? [],
     columns: credentialModeColumns,
     getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
   });
   const endpoint = guideQuery.data?.permission_query_endpoint ?? `/api/v1/apps/${appKey}/users/{user_id}/permissions`;
   const curl = `curl -H "Authorization: Bearer $APP_TOKEN" "${endpoint}"`;
@@ -55,6 +57,7 @@ export function GuideTab({ appKey }: { appKey: string }) {
             )}
           </TableBody>
         </TableRoot>
+        <TablePagination table={credentialModeTable} />
       </TableFrame>
       <CodeBlock language="curl" code={curl} />
       <CodeBlock language="typescript" code={ts} />

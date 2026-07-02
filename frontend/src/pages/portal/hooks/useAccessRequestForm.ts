@@ -25,7 +25,19 @@ export interface AuthorizationGroupItem {
   description?: string;
   requestable?: boolean;
   requires_approval?: boolean;
+  default_approver_user_ids?: string[];
 }
+
+export interface ApproverOption {
+  user_id: string;
+  name?: string;
+  label?: string;
+  display_name?: string;
+  email?: string;
+  department?: string;
+}
+
+type PortalCatalogAppView = PortalCatalogApp & { default_approver_user_ids?: string[] };
 
 export interface ScopeOption {
   key: string;
@@ -33,7 +45,7 @@ export interface ScopeOption {
   description?: string;
 }
 
-export type ScopedPermissionItem = PermissionItem & { scopes?: ScopeOption[] };
+export type ScopedPermissionItem = PermissionItem & { scopes?: ScopeOption[]; default_approver_user_ids?: string[] };
 export type ScopedPermissionGroupItem = Omit<PermissionGroupItem, "children" | "permissions"> & {
   children?: Array<ScopedPermissionGroupItem | ScopedPermissionItem>;
   permissions?: ScopedPermissionItem[];
@@ -42,18 +54,22 @@ export type ScopedPermissionGroupItem = Omit<PermissionGroupItem, "children" | "
 const directGrantSelectionSeparator = "::scope::";
 
 interface PortalRequestCatalogView extends Omit<PortalRequestCatalog, "permission_groups" | "ungrouped_permissions"> {
+  apps?: PortalCatalogAppView[];
+  approver_options?: ApproverOption[];
   authorization_groups?: AuthorizationGroupItem[];
   permission_groups?: ScopedPermissionGroupItem[];
   ungrouped_permissions?: ScopedPermissionItem[];
 }
 
 interface CatalogView {
-  apps: PortalCatalogApp[];
+  apps: PortalCatalogAppView[];
+  approverOptions: ApproverOption[];
   authorizationGroups: AuthorizationGroupItem[];
   permissionGroups: ScopedPermissionGroupItem[];
   ungroupedPermissions: ScopedPermissionItem[];
   visiblePermissionKeys: string[];
   scopesByPermissionKey: Record<string, ScopeOption[]>;
+  permissionsByKey: Record<string, ScopedPermissionItem>;
 }
 
 interface AccessRequestPayloadValues {
@@ -61,6 +77,7 @@ interface AccessRequestPayloadValues {
   authorizationGroupKey: string;
   selectedPermissionKeys: string[];
   selectedPermissionScopes: Record<string, string>;
+  selectedApproverUserIds: string[];
   grantType: AccessGrantType;
   expiresAt: string;
   reason: string;
@@ -68,10 +85,13 @@ interface AccessRequestPayloadValues {
 
 interface AccessRequestFields extends AccessRequestPayloadValues {
   expandedGroupKeys: string[];
+  approverSelectionWasEdited: boolean;
   setAppKey: Dispatch<SetStateAction<string>>;
   setAuthorizationGroupKey: Dispatch<SetStateAction<string>>;
   setSelectedPermissionKeys: Dispatch<SetStateAction<string[]>>;
   setSelectedPermissionScopes: Dispatch<SetStateAction<Record<string, string>>>;
+  setSelectedApproverUserIds: Dispatch<SetStateAction<string[]>>;
+  setApproverSelectionWasEdited: Dispatch<SetStateAction<boolean>>;
   setExpandedGroupKeys: Dispatch<SetStateAction<string[]>>;
   setGrantType: Dispatch<SetStateAction<AccessGrantType>>;
   setExpiresAt: Dispatch<SetStateAction<string>>;
@@ -80,7 +100,9 @@ interface AccessRequestFields extends AccessRequestPayloadValues {
 
 interface AccessRequestActions {
   changeAppKey: (nextAppKey: string) => void;
+  changeAuthorizationGroupKey: (groupKey: string) => void;
   togglePermission: (key: string) => void;
+  toggleApprover: (userId: string) => void;
   changePermissionScope: (permissionKey: string, scopeKey: string) => void;
   toggleGroup: (key: string) => void;
   submit: () => void;
@@ -91,11 +113,13 @@ interface AccessRequestFormResult {
   authorizationGroupKey: string;
   selectedPermissionKeys: string[];
   selectedPermissionScopes: Record<string, string>;
+  selectedApproverUserIds: string[];
   expandedGroupKeys: string[];
   grantType: AccessGrantType;
   expiresAt: string;
   reason: string;
-  apps: PortalCatalogApp[];
+  apps: PortalCatalogAppView[];
+  approverOptions: ApproverOption[];
   authorizationGroups: AuthorizationGroupItem[];
   permissionGroups: ScopedPermissionGroupItem[];
   ungroupedPermissions: ScopedPermissionItem[];
@@ -107,10 +131,11 @@ interface AccessRequestFormResult {
   canSubmit: boolean;
   isSubmitting: boolean;
   changeAppKey: (nextAppKey: string) => void;
-  changeAuthorizationGroupKey: Dispatch<SetStateAction<string>>;
+  changeAuthorizationGroupKey: (groupKey: string) => void;
   changeGrantType: Dispatch<SetStateAction<AccessGrantType>>;
   changeExpiresAt: Dispatch<SetStateAction<string>>;
   changeReason: Dispatch<SetStateAction<string>>;
+  toggleApprover: (userId: string) => void;
   togglePermission: (key: string) => void;
   changePermissionScope: (permissionKey: string, scopeKey: string) => void;
   toggleGroup: (key: string) => void;
@@ -125,6 +150,7 @@ export function useAccessRequestForm(): AccessRequestFormResult {
   });
   const catalogView = useMemo(() => buildCatalogView(catalogQuery.data, fields.appKey), [fields.appKey, catalogQuery.data]);
   useDefaultSingleScopes(fields.setSelectedPermissionScopes, catalogView);
+  useDefaultApprovers(fields, catalogView);
   const submitMutation = useAccessRequestSubmitMutation(fields);
   const actions = buildAccessRequestActions(fields, () => submitMutation.mutate());
   const hasTarget = Boolean(fields.authorizationGroupKey || fields.selectedPermissionKeys.length > 0);
@@ -133,6 +159,7 @@ export function useAccessRequestForm(): AccessRequestFormResult {
     fields.appKey &&
       hasTarget &&
       selectedScopesAreComplete &&
+      fields.selectedApproverUserIds.length > 0 &&
       fields.reason &&
       (fields.grantType === "permanent" || fields.expiresAt) &&
       !submitMutation.isPending,
@@ -146,6 +173,8 @@ function useAccessRequestFields(): AccessRequestFields {
   const [authorizationGroupKey, setAuthorizationGroupKey] = useState("");
   const [selectedPermissionKeys, setSelectedPermissionKeys] = useState<string[]>([]);
   const [selectedPermissionScopes, setSelectedPermissionScopes] = useState<Record<string, string>>({});
+  const [selectedApproverUserIds, setSelectedApproverUserIds] = useState<string[]>([]);
+  const [approverSelectionWasEdited, setApproverSelectionWasEdited] = useState(false);
   const [expandedGroupKeys, setExpandedGroupKeys] = useState<string[]>([]);
   const [grantType, setGrantType] = useState<AccessGrantType>("permanent");
   const [expiresAt, setExpiresAt] = useState("");
@@ -156,7 +185,9 @@ function useAccessRequestFields(): AccessRequestFields {
     authorizationGroupKey,
     selectedPermissionKeys,
     selectedPermissionScopes,
+    selectedApproverUserIds,
     expandedGroupKeys,
+    approverSelectionWasEdited,
     grantType,
     expiresAt,
     reason,
@@ -164,6 +195,8 @@ function useAccessRequestFields(): AccessRequestFields {
     setAuthorizationGroupKey,
     setSelectedPermissionKeys,
     setSelectedPermissionScopes,
+    setSelectedApproverUserIds,
+    setApproverSelectionWasEdited,
     setExpandedGroupKeys,
     setGrantType,
     setExpiresAt,
@@ -182,6 +215,7 @@ function useAccessRequestSubmitMutation(fields: AccessRequestFields): UseMutatio
       fields.setAuthorizationGroupKey("");
       fields.setSelectedPermissionKeys([]);
       fields.setSelectedPermissionScopes({});
+      fields.setApproverSelectionWasEdited(false);
       fields.setReason("");
       void queryClient.invalidateQueries({ queryKey: ["portal", "requests"] });
     },
@@ -202,11 +236,13 @@ function buildAccessRequestFormResult(
     authorizationGroupKey: fields.authorizationGroupKey,
     selectedPermissionKeys: fields.selectedPermissionKeys,
     selectedPermissionScopes: fields.selectedPermissionScopes,
+    selectedApproverUserIds: fields.selectedApproverUserIds,
     expandedGroupKeys: fields.expandedGroupKeys,
     grantType: fields.grantType,
     expiresAt: fields.expiresAt,
     reason: fields.reason,
     apps: catalogView.apps,
+    approverOptions: catalogView.approverOptions,
     authorizationGroups: catalogView.authorizationGroups,
     permissionGroups: catalogView.permissionGroups,
     ungroupedPermissions: catalogView.ungroupedPermissions,
@@ -214,14 +250,15 @@ function buildAccessRequestFormResult(
     catalogIsLoading,
     catalogErrorMessage: catalogError ? catalogError.message : "",
     submitErrorMessage: submitMutation.error ? submitMutation.error.message : "",
-    toastMessage: submitMutation.isSuccess ? "申请已提交" : "",
+    toastMessage: submitMutation.isSuccess ? "申请已提交" : noDirectPermissionsToastMessage(fields, catalogView, catalogIsLoading),
     canSubmit,
     isSubmitting: submitMutation.isPending,
     changeAppKey: actions.changeAppKey,
-    changeAuthorizationGroupKey: fields.setAuthorizationGroupKey,
+    changeAuthorizationGroupKey: actions.changeAuthorizationGroupKey,
     changeGrantType: fields.setGrantType,
     changeExpiresAt: fields.setExpiresAt,
     changeReason: fields.setReason,
+    toggleApprover: actions.toggleApprover,
     togglePermission: actions.togglePermission,
     changePermissionScope: actions.changePermissionScope,
     toggleGroup: actions.toggleGroup,
@@ -237,9 +274,18 @@ function buildAccessRequestActions(fields: AccessRequestFields, submit: () => vo
       fields.setSelectedPermissionKeys([]);
       fields.setSelectedPermissionScopes({});
       fields.setExpandedGroupKeys([]);
+      fields.setSelectedApproverUserIds([]);
+      fields.setApproverSelectionWasEdited(false);
+    },
+    changeAuthorizationGroupKey: (groupKey: string) => {
+      fields.setAuthorizationGroupKey(groupKey);
     },
     togglePermission: (key: string) => {
       fields.setSelectedPermissionKeys((current) => toggleListItem(current, key));
+    },
+    toggleApprover: (userId: string) => {
+      fields.setApproverSelectionWasEdited(true);
+      fields.setSelectedApproverUserIds((current) => toggleListItem(current, userId));
     },
     changePermissionScope: (permissionKey: string, scopeKey: string) => {
       fields.setSelectedPermissionScopes((current) => ({ ...current, [permissionKey]: scopeKey }));
@@ -257,14 +303,17 @@ function buildCatalogView(catalog: PortalRequestCatalogView | undefined, appKey:
     (permission) => !appKey || permission.app_key === appKey,
   );
   const scopesByPermissionKey = buildScopesByPermissionKey(permissionGroups, ungroupedPermissions);
+  const permissionsByKey = buildPermissionsByKey(permissionGroups, ungroupedPermissions);
 
   return {
     apps: catalog?.apps ?? [],
+    approverOptions: catalog?.approver_options ?? [],
     authorizationGroups: (catalog?.authorization_groups ?? []).filter((group) => !appKey || group.app_key === appKey),
     permissionGroups,
     ungroupedPermissions,
     visiblePermissionKeys: collectPermissionKeys(permissionGroups, ungroupedPermissions),
     scopesByPermissionKey,
+    permissionsByKey,
   };
 }
 
@@ -277,6 +326,7 @@ function buildAccessRequestPayload(values: AccessRequestPayloadValues): JsonObje
       permission: directGrantSelectionPermissionKey(permissionKey),
       scope: directGrantSelectionScopeKey(permissionKey) ?? values.selectedPermissionScopes[permissionKey],
     })),
+    approver_user_ids: values.selectedApproverUserIds,
     grant_type: values.grantType,
     grant_expires_at: values.grantType === "timed" && values.expiresAt ? new Date(values.expiresAt).toISOString() : null,
     reason: values.reason,
@@ -331,6 +381,45 @@ function useDefaultSingleScopes(
   }, [catalogView.scopesByPermissionKey, catalogView.visiblePermissionKeys, setSelectedPermissionScopes]);
 }
 
+function useDefaultApprovers(fields: AccessRequestFields, catalogView: CatalogView): void {
+  const defaultApproverUserIds = useMemo(
+    () => buildDefaultApproverUserIds(fields, catalogView),
+    [catalogView, fields.appKey, fields.authorizationGroupKey, fields.selectedPermissionKeys],
+  );
+
+  useEffect(() => {
+    if (fields.approverSelectionWasEdited) {
+      return;
+    }
+    fields.setSelectedApproverUserIds((current) =>
+      listsAreEqual(current, defaultApproverUserIds) ? current : defaultApproverUserIds,
+    );
+  }, [defaultApproverUserIds, fields]);
+}
+
+function buildDefaultApproverUserIds(values: AccessRequestPayloadValues, catalogView: CatalogView): string[] {
+  const app = catalogView.apps.find((item) => item.app_key === values.appKey);
+  const authorizationGroup = catalogView.authorizationGroups.find((group) => group.key === values.authorizationGroupKey);
+  const directGrantPermissionKeys = Array.from(
+    new Set(values.selectedPermissionKeys.map((key) => directGrantSelectionPermissionKey(key))),
+  );
+  const directGrantApprovers = directGrantPermissionKeys.flatMap(
+    (permissionKey) => catalogView.permissionsByKey[permissionKey]?.default_approver_user_ids ?? [],
+  );
+  const targetApprovers = uniqueUserIds([...(authorizationGroup?.default_approver_user_ids ?? []), ...directGrantApprovers]);
+  if (targetApprovers.length > 0) {
+    return targetApprovers;
+  }
+  return uniqueUserIds(app?.default_approver_user_ids ?? []);
+}
+
+function noDirectPermissionsToastMessage(fields: AccessRequestFields, catalogView: CatalogView, catalogIsLoading: boolean): string {
+  if (catalogIsLoading || !fields.appKey || catalogView.visiblePermissionKeys.length > 0) {
+    return "";
+  }
+  return "当前应用没有可直接申请的权限，可仅按权限组发起申请。";
+}
+
 function buildScopesByPermissionKey(
   groups: ScopedPermissionGroupItem[],
   ungroupedPermissions: ScopedPermissionItem[],
@@ -339,11 +428,30 @@ function buildScopesByPermissionKey(
   return Object.fromEntries(permissions.map((permission) => [permission.key, permission.scopes ?? []]));
 }
 
+function buildPermissionsByKey(
+  groups: ScopedPermissionGroupItem[],
+  ungroupedPermissions: ScopedPermissionItem[],
+): Record<string, ScopedPermissionItem> {
+  const permissions = [...collectScopedPermissions(groups), ...ungroupedPermissions];
+  return Object.fromEntries(permissions.map((permission) => [permission.key, permission]));
+}
+
 function collectScopedPermissions(groups: ScopedPermissionGroupItem[]): ScopedPermissionItem[] {
   return groups.flatMap((group) => {
     const childGroups = (group.children ?? []).filter(
       (child): child is ScopedPermissionGroupItem => "type" in child && child.type === "group",
     );
-    return [...(group.permissions ?? []), ...collectScopedPermissions(childGroups)];
+    const childPermissions = (group.children ?? []).filter(
+      (child): child is ScopedPermissionItem => !("type" in child) || child.type !== "group",
+    );
+    return [...(group.permissions ?? []), ...childPermissions, ...collectScopedPermissions(childGroups)];
   });
+}
+
+function uniqueUserIds(userIds: string[]): string[] {
+  return Array.from(new Set(userIds.filter(Boolean)));
+}
+
+function listsAreEqual(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((item, index) => item === right[index]);
 }

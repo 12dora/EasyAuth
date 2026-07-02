@@ -139,4 +139,34 @@ curl -I "http://127.0.0.1:${DJANGO_PORT}/portal/"
 curl -s "http://127.0.0.1:${DJANGO_PORT}/console/" | rg 'easyauth/frontend/assets/.*\.css|easyauth/frontend/assets/.*\.js'
 ```
 
-本轮最终页面验证已完成：前端类型检查、单测、Chromium smoke 与视觉回归、前端构建、控制台和门户集成测试均通过。Django 开发服务已在 `8010` 端口重启，真实 `/console/` 和 `/portal/request` 浏览器页面确认加载最新 `main-DFMPJgHS.css` 与 `main-DBahzC0E.js`。
+## 2026-07-02 视觉纠偏记录
+
+本轮以 EasyTrade 的本地 UI primitives 为基准，完成 EasyAuth React 前端的视觉纠偏：
+
+- `Button` 语义切换为 EasyTrade 口径：`primary` 为深墨底，`secondary` 为品牌蓝底，默认按钮为 `outline`。
+- `Badge`、`Field`、`Dialog`、`PanelSurface`、`EmptyState`、`PageState`、`StatusBanner`、`Toast`、`CodeBlock` 和 `SecretDialog` 已收敛到小圆角、细边框、低阴影和 RGB token。
+- 表格渲染统一使用 `TablePrimitives`，表头、单元格密度、hover 和 skeleton 对齐 EasyTrade。
+- 控制台、员工门户、运营页、权限选择器、工作台 tabs 和矩阵类页面已清理旧大圆角、`slate-*`、旧按钮色和旧表格类依赖。
+- `frontend/e2e/visual-alignment.spec.ts` 已把 `/console` 新建应用弹窗纳入视觉回归。
+
+已完成的验证：
+
+```bash
+pnpm --dir frontend typecheck
+pnpm --dir frontend test
+pnpm --dir frontend exec playwright test e2e/smoke.spec.ts --project=chromium
+pnpm --dir frontend exec playwright test e2e/visual-alignment.spec.ts --project=chromium
+pnpm --dir frontend build
+rg -n 'rounded-lg|rounded-md|slate-|bg-amber-ink|text-bond-strong|shadow-2xl|text-xs text-slate' frontend/src
+rg -n -- '--bg|--surface|--muted|--line|--brand|--accent|--danger|--success|--warning' frontend/src
+rg -n 'tanstack-table|table-scroll|permission-table|matrix-table|DataTable|CredentialTable|GrantTable|RequestTable' frontend/src
+```
+
+扫描说明：旧视觉扫描和旧表格扫描的剩余命中只允许出现在 `frontend/src/components/tableArchitecture.test.ts` 的禁止规则文本中；产品代码不得命中。
+
+本轮构建生成的 Vite 入口资源为：
+
+- `easyauth/frontend/assets/main-Cu5N2CWW.css`
+- `easyauth/frontend/assets/main-wfsOZ_xe.js`
+
+Django 真实页面响应验证记录见 `docs/audits/visual-alignment/2026-07-02/README.md`。

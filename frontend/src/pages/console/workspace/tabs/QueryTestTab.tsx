@@ -1,8 +1,10 @@
 import { useMutation } from "@tanstack/react-query";
-import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
+import { flexRender, getCoreRowModel, getPaginationRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
 import { Play } from "lucide-react";
 import { useState } from "react";
 import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../../components/ui/TablePrimitives";
+import { PanelSurface } from "../../../../components/ui/PanelSurface";
+import { TablePagination } from "../../../../components/ui/TablePagination";
 
 import { Button } from "../../../../components/Button";
 import { CodeBlock } from "../../../../components/CodeBlock";
@@ -65,16 +67,18 @@ export function QueryTestTab({ appKey }: { appKey: string }) {
     data: result?.groups ?? [],
     columns: groupColumns,
     getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
   });
   const grantTable = useReactTable({
     data: result?.grants ?? [],
     columns: grantColumns,
     getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
   });
 
   return (
     <section className="space-y-6">
-      <div className="grid items-end gap-4 rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper p-5 shadow-sm md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+      <PanelSurface padding="lg" className="grid items-end gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
         <Field label="用户 ID">
           <TextInput value={userId} onChange={(event) => setUserId(event.currentTarget.value)} />
         </Field>
@@ -84,20 +88,20 @@ export function QueryTestTab({ appKey }: { appKey: string }) {
         <Button variant="primary" icon={<Play size={16} />} disabled={!userId || !token} onClick={() => testMutation.mutate()}>
           执行联调
         </Button>
-      </div>
+      </PanelSurface>
       {testMutation.error ? <StatusBanner tone="signal" title="联调失败" message={(testMutation.error as Error).message} /> : null}
       {result ? (
         <>
           <Toast tone="evergreen" message={result.allowed ? "权限查询命中授权" : "查询成功，无授权命中"} />
           <div className="grid gap-3 sm:grid-cols-2">
-            <div className="rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper p-4 shadow-sm">
+            <PanelSurface>
               <span className="text-xs font-semibold text-ink-faint">source</span>
               <strong className="mt-2 block text-sm font-semibold text-ink">来源：{result.source ?? "-"}</strong>
-            </div>
-            <div className="rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper p-4 shadow-sm">
+            </PanelSurface>
+            <PanelSurface>
               <span className="text-xs font-semibold text-ink-faint">snapshot_version</span>
               <strong className="mt-2 block text-sm font-semibold text-ink">快照版本：{result.snapshot_version ?? result.version ?? "-"}</strong>
-            </div>
+            </PanelSurface>
           </div>
           <TableFrame>
             <TableRoot>
@@ -126,6 +130,7 @@ export function QueryTestTab({ appKey }: { appKey: string }) {
                 )}
               </TableBody>
             </TableRoot>
+            <TablePagination table={groupTable} />
           </TableFrame>
           <TableFrame>
             <TableRoot>
@@ -154,6 +159,7 @@ export function QueryTestTab({ appKey }: { appKey: string }) {
                 )}
               </TableBody>
             </TableRoot>
+            <TablePagination table={grantTable} />
           </TableFrame>
           <CodeBlock language="json" code={JSON.stringify(result, null, 2)} />
         </>

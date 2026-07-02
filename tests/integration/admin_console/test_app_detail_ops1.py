@@ -8,7 +8,7 @@ from typing import Final, Protocol
 import pytest
 from django.test import Client
 
-from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
+from easyauth.accounts.auth import AUTHENTIK_GROUPS_SESSION_KEY, AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import (
     App,
@@ -80,7 +80,7 @@ def test_ops1_console_app_detail_shows_readiness_matrix_and_approval_prompt() ->
     assert '"enabled": true' in body
 
 
-def test_ops1_console_owner_cannot_access_unowned_app_detail() -> None:
+def test_ops1_console_owner_can_read_unowned_app_detail() -> None:
     # Given: 用户只拥有 CRM App, 不拥有 ERP App。
     client = _logged_in_client("owner-ops1-scope")
     crm = App.objects.create(app_key="ops1-owned-crm", name="Owned CRM")
@@ -90,8 +90,8 @@ def test_ops1_console_owner_cannot_access_unowned_app_detail() -> None:
     # When: 用户直连未负责 App 的详情页。
     response = client.get(f"/console/apps/{erp.app_key}/")
 
-    # Then: 控制台拒绝暴露未授权 App。
-    assert response.status_code == HTTPStatus.NOT_FOUND
+    # Then: 控制台不再按成员关系隐藏 App 详情页。
+    assert response.status_code == HTTPStatus.OK
 
 
 def test_ops1_console_entry_redirects_unauthenticated_user_to_authentik_login() -> None:
@@ -104,6 +104,25 @@ def test_ops1_console_entry_redirects_unauthenticated_user_to_authentik_login() 
     # Then: 控制台跳转到 OIDC 登录并携带当前本地路径。
     assert response.status_code == HTTPStatus.FOUND
     assert response.headers["Location"] == "/auth/login/?next=/console/%3Ftab%3Droles"
+
+
+def test_ops1_console_entry_redirects_non_admin_user_to_forbidden_page() -> None:
+    client = _non_admin_client("developer-no-console")
+
+    response = client.get("/console/")
+
+    assert response.status_code == HTTPStatus.FOUND
+    assert response.headers["Location"] == "/errors/forbidden/"
+
+
+def test_ops1_console_app_detail_redirects_non_admin_user_to_forbidden_page() -> None:
+    client = _non_admin_client("developer-no-console-detail")
+    app = App.objects.create(app_key="ops1-no-console", name="No Console")
+
+    response = client.get(f"/console/apps/{app.app_key}/")
+
+    assert response.status_code == HTTPStatus.FOUND
+    assert response.headers["Location"] == "/errors/forbidden/"
 
 
 def test_ops1_console_app_detail_legacy_form_post_is_closed() -> None:
@@ -314,6 +333,16 @@ def _logged_in_client(username: str, *, enforce_csrf_checks: bool = False) -> Cl
 def _login_client(*, username: str, enforce_csrf_checks: bool) -> Client:
     user, _created = UserMirror.objects.get_or_create(authentik_user_id=username)
     client = Client(HTTP_HOST="localhost", enforce_csrf_checks=enforce_csrf_checks)
+    session = client.session
+    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
+    session[AUTHENTIK_GROUPS_SESSION_KEY] = ["EasyAuth Admins"]
+    session.save()
+    return client
+
+
+def _non_admin_client(username: str) -> Client:
+    user, _created = UserMirror.objects.get_or_create(authentik_user_id=username)
+    client = Client(HTTP_HOST="localhost")
     session = client.session
     session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
     session.save()

@@ -14,6 +14,18 @@ import { Toast } from "./Toast";
 import { EmptyState } from "./ui/EmptyState";
 import { PageState } from "./ui/PageState";
 import { PanelSurface } from "./ui/PanelSurface";
+import {
+  TableBody,
+  TableCell,
+  TableFrame,
+  TableHead,
+  TableHeaderCell,
+  TableRoot,
+  TableRow,
+  TableSkeletonRows,
+} from "./ui/TablePrimitives";
+import { TablePagination } from "./ui/TablePagination";
+import { flexRender, getCoreRowModel, getPaginationRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
 
 describe("Button", () => {
   test("默认使用 outline 视觉并保持 md 高度", () => {
@@ -21,7 +33,7 @@ describe("Button", () => {
 
     const button = screen.getByRole("button", { name: "返回" });
     expect(button).not.toHaveClass("button", "button-secondary");
-    expect(button).toHaveClass("h-9", "border", "bg-paper");
+    expect(button).toHaveClass("h-9", "border", "bg-transparent", "text-ink");
   });
 
   test("支持尺寸、图标、loading 禁用点击", async () => {
@@ -34,7 +46,7 @@ describe("Button", () => {
 
     const button = screen.getByRole("button", { name: "保存" });
     expect(button).toBeDisabled();
-    expect(button).toHaveClass("h-7");
+    expect(button).toHaveClass("h-7", "bg-ink", "text-paper");
     expect(button.querySelector('[data-slot="spinner"]')).toHaveClass("size-3");
 
     await userEvent.click(button);
@@ -43,12 +55,13 @@ describe("Button", () => {
 });
 
 describe("Badge", () => {
-  test("使用新版 tone, 不输出旧 badge class", () => {
+  test("使用 EasyTrade badge 视觉 token", () => {
     render(<Badge tone="evergreen">启用</Badge>);
 
     const badge = screen.getByText("启用");
-    expect(badge).not.toHaveClass("badge", "badge-success");
-    expect(badge).toHaveClass("bg-evergreen/10", "text-evergreen");
+    expect(badge).not.toHaveClass("badge");
+    expect(badge).toHaveClass("rounded-[2px]", "px-1.5", "py-0.5", "font-mono", "text-[10.5px]", "uppercase", "tracking-[0.14em]");
+    expect(badge).toHaveClass("bg-[rgb(var(--evergreen))]/[0.08]", "text-[rgb(var(--evergreen))]");
   });
 });
 
@@ -62,12 +75,31 @@ describe("Dialog", () => {
     );
 
     const dialog = screen.getByRole("dialog", { name: "创建应用" });
-    expect(dialog).toHaveClass("max-w-4xl");
+    expect(dialog).toHaveClass("paper-card", "max-w-5xl", "rounded-[3px]", "p-0");
     expect(dialog).not.toHaveClass("dialog");
     expect(screen.getByText("表单内容")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "关闭弹窗" }));
+    const closeButton = screen.getByRole("button", { name: "关闭弹窗" });
+    expect(closeButton).toHaveClass("border-transparent", "bg-transparent", "text-ink-soft");
+    await userEvent.click(closeButton);
     expect(onClose).toHaveBeenCalledOnce();
+  });
+
+  test("支持 eyebrow、遮罩点击和 Escape 关闭", async () => {
+    const onClose = vi.fn();
+    const user = userEvent.setup();
+    render(
+      <Dialog title="创建应用" eyebrow="Console" onClose={onClose}>
+        <p>表单内容</p>
+      </Dialog>,
+    );
+
+    expect(screen.getByText("Console")).toHaveClass("eyebrow");
+    await user.keyboard("{Escape}");
+    expect(onClose).toHaveBeenCalledOnce();
+
+    await user.click(screen.getByRole("button", { name: "关闭弹窗遮罩" }));
+    expect(onClose).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -75,11 +107,11 @@ describe("Toast", () => {
   test("使用 evergreen 和 signal tone", () => {
     const { rerender } = render(<Toast message="保存成功" />);
 
-    expect(screen.getByRole("status")).toHaveClass("border-evergreen/20", "text-evergreen");
+    expect(screen.getByRole("status")).toHaveClass("rounded-[2px]", "border-[rgb(var(--evergreen))]/30", "text-[rgb(var(--evergreen))]");
 
     rerender(<Toast tone="signal" message="保存失败" />);
-    expect(screen.getByRole("status")).toHaveClass("border-signal/20", "text-signal");
-    expect(screen.getByRole("status")).not.toHaveClass("toast", "toast-danger");
+    expect(screen.getByRole("status")).toHaveClass("border-[rgb(var(--signal))]/30", "text-[rgb(var(--signal))]");
+    expect(screen.getByRole("status")).not.toHaveClass("toast");
   });
 });
 
@@ -93,7 +125,9 @@ describe("Field", () => {
 
     const input = screen.getByLabelText("应用名称");
     expect(input).not.toHaveClass("control");
-    expect(input).toHaveClass("h-9", "border", "bg-paper");
+    expect(screen.getByText("应用名称")).toHaveClass("text-[11px]", "uppercase", "tracking-[0.14em]", "text-ink-soft", "font-medium");
+    expect(input).toHaveClass("h-9", "rounded-[2px]", "border-ink/15", "bg-paper-soft", "text-[13px]", "focus:border-[rgb(var(--amber))]");
+    expect(input).not.toHaveClass("shadow-sm", "focus:ring-2");
     expect(screen.getByText("展示给用户")).toHaveClass("text-ink-faint");
     expect(screen.getByText("必填")).toHaveClass("text-signal");
   });
@@ -118,30 +152,40 @@ describe("StatusBanner", () => {
     render(<StatusBanner tone="amber" title="需关注" message="配置未完成" />);
 
     const banner = screen.getByText("需关注").closest("div")?.parentElement;
-    expect(banner).toHaveClass("border-amber-ink/20", "bg-amber-ink/10");
-    expect(banner).not.toHaveClass("status-banner", "status-warning");
+    expect(banner).toHaveClass("border-[rgb(var(--amber))]/30", "bg-[rgb(var(--amber))]/[0.08]");
+    expect(banner).not.toHaveClass("status-banner");
   });
 });
 
 describe("CodeBlock", () => {
   test("直接使用 Tailwind class 并支持复制", async () => {
     const writeText = vi.fn();
-    Object.assign(navigator, { clipboard: { writeText } });
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
 
     render(<CodeBlock language="json" code={'{"ok":true}'} />);
 
-    expect(screen.getByText("json").parentElement?.parentElement).not.toHaveClass("code-block");
+    const codeBlock = screen.getByText("json").parentElement?.parentElement;
+    expect(codeBlock).toHaveClass("rounded-[3px]", "border-[rgb(var(--hairline-strong))]", "bg-ink", "text-paper");
+    expect(codeBlock).not.toHaveClass("code-block");
     await userEvent.click(screen.getByRole("button", { name: "复制" }));
     expect(writeText).toHaveBeenCalledWith('{"ok":true}');
   });
 });
 
 describe("SecretDialog", () => {
-  test("组合新版组件且不输出旧 secret-warning class", () => {
+  test("组合新版组件并使用 amber token 警示块", () => {
     render(
       <SecretDialog title="凭据已创建" primaryLabel="client_secret" primaryValue="secret_once" onClose={vi.fn()} />,
     );
 
+    expect(screen.getByText(/明文凭据仅本次展示/)).toHaveClass(
+      "rounded-[3px]",
+      "border-[rgb(var(--amber))]/30",
+      "bg-[rgb(var(--amber))]/[0.08]",
+    );
     expect(screen.getByText(/明文凭据仅本次展示/)).not.toHaveClass("secret-warning");
     expect(screen.getByRole("dialog", { name: "凭据已创建" })).toBeInTheDocument();
     expect(screen.getByText("secret_once")).toBeInTheDocument();
@@ -157,8 +201,121 @@ describe("UI primitives", () => {
       </PanelSurface>,
     );
 
-    expect(screen.getByText("暂无数据").parentElement?.parentElement).toHaveClass("rounded-lg");
-    expect(screen.getByText("加载中").parentElement).toHaveClass("text-center");
-    expect(screen.getByText("暂无数据").closest("section")).toHaveClass("border", "bg-paper");
+    expect(screen.getByText("暂无数据").parentElement).toHaveClass("rounded-[3px]", "bg-paper-soft");
+    expect(screen.getByText("加载中").parentElement).toHaveClass("rounded-[3px]", "bg-paper-soft", "text-center");
+    expect(screen.getByText("暂无数据").closest("section")).toHaveClass("paper-card", "p-4");
+  });
+
+  test("TablePrimitives 使用 EasyTrade 表格视觉 token", () => {
+    const { container } = render(
+      <TableFrame data-testid="table-frame">
+        <TableRoot>
+          <TableHead>
+            <TableRow>
+              <TableHeaderCell>名称</TableHeaderCell>
+            </TableRow>
+          </TableHead>
+          <TableBody>
+            <TableRow>
+              <TableCell>EasyAuth</TableCell>
+            </TableRow>
+            <TableSkeletonRows columns={1} rows={1} />
+          </TableBody>
+        </TableRoot>
+      </TableFrame>,
+    );
+
+    const frame = screen.getByTestId("table-frame");
+    expect(frame).toHaveClass("paper-card", "overflow-hidden", "rounded-[3px]", "p-0");
+    expect(frame.firstElementChild).toHaveClass("overflow-x-auto");
+    expect(container.querySelector("table")).toHaveClass("min-w-full", "border-separate", "border-spacing-0", "text-[13px]");
+    expect(container.querySelector("thead")).toHaveClass("bg-paper-deep/60");
+    expect(screen.getByRole("columnheader", { name: "名称" })).toHaveClass(
+      "border-b",
+      "border-ink/15",
+      "px-3",
+      "py-2.5",
+      "text-left",
+      "align-bottom",
+      "font-mono",
+      "text-[10.5px]",
+      "uppercase",
+      "tracking-[0.14em]",
+      "text-ink-soft",
+      "font-medium",
+    );
+    expect(screen.getByRole("cell", { name: "EasyAuth" })).toHaveClass(
+      "border-b",
+      "border-ink/8",
+      "px-3",
+      "py-2.5",
+      "text-[13px]",
+      "text-ink",
+      "align-middle",
+    );
+    expect(container.querySelector("tr")).toHaveClass("hover:bg-[rgb(var(--amber))]/[0.05]");
+    expect(container.querySelector(".animate-shimmer")).toHaveClass("bg-paper-deep");
+  });
+
+  test("TablePagination 支持翻页和切换每页条目数", async () => {
+    const user = userEvent.setup();
+    render(<PaginatedFixture />);
+
+    expect(screen.getByText("第 1-10 条 / 共 12 条")).toBeInTheDocument();
+    expect(screen.getByText("item-10")).toBeInTheDocument();
+    expect(screen.queryByText("item-11")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "下一页" }));
+    expect(await screen.findByText("第 11-12 条 / 共 12 条")).toBeInTheDocument();
+    expect(screen.getByText("item-11")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "下一页" })).toBeDisabled();
+
+    await user.selectOptions(screen.getByLabelText("每页条目数"), "5");
+    expect(await screen.findByText("第 1-5 条 / 共 12 条")).toBeInTheDocument();
+    expect(screen.getByText("item-5")).toBeInTheDocument();
+    expect(screen.queryByText("item-6")).not.toBeInTheDocument();
   });
 });
+
+function PaginatedFixture() {
+  const table = useReactTable({
+    data: paginatedData,
+    columns: paginatedColumns,
+    getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+    initialState: { pagination: { pageIndex: 0, pageSize: 10 } },
+  });
+
+  return (
+    <TableFrame>
+      <TableRoot>
+        <TableHead>
+          {table.getHeaderGroups().map((headerGroup) => (
+            <TableRow key={headerGroup.id}>
+              {headerGroup.headers.map((header) => (
+                <TableHeaderCell key={header.id}>
+                  {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                </TableHeaderCell>
+              ))}
+            </TableRow>
+          ))}
+        </TableHead>
+        <TableBody>
+          {table.getRowModel().rows.map((row) => (
+            <TableRow key={row.id}>
+              {row.getVisibleCells().map((cell) => (
+                <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+              ))}
+            </TableRow>
+          ))}
+        </TableBody>
+      </TableRoot>
+      <TablePagination table={table} />
+    </TableFrame>
+  );
+}
+
+type PaginatedRow = { name: string };
+
+const paginatedData: PaginatedRow[] = Array.from({ length: 12 }, (_, index) => ({ name: `item-${index + 1}` }));
+const paginatedColumns: ColumnDef<PaginatedRow>[] = [{ header: "名称", accessorKey: "name" }];

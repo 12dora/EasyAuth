@@ -13,6 +13,7 @@ if TYPE_CHECKING:
 type RoleKey = Annotated[str, Field(min_length=1, max_length=128)]
 type PermissionKey = Annotated[str, Field(min_length=1, max_length=128)]
 type ScopeKey = Annotated[str, Field(min_length=1, max_length=64)]
+type ApproverUserId = Annotated[str, Field(min_length=1, max_length=128)]
 type GrantType = Literal["permanent", "timed"]
 type RequestType = Literal["grant", "change", "revoke", "renew"]
 
@@ -35,6 +36,7 @@ class AccessRequestPayload(BaseModel):
     request_type: RequestType = "grant"
     authorization_group_keys: tuple[RoleKey, ...] = Field(default=(), max_length=20)
     direct_grants: tuple[DirectGrantPayload, ...] = Field(default=(), max_length=50)
+    approver_user_ids: tuple[ApproverUserId, ...] = Field(min_length=1, max_length=20)
     grant_type: GrantType
     grant_expires_at: AwareDatetime | None = None
     reason: str = Field(min_length=1, max_length=1000)

@@ -47,7 +47,7 @@ def test_ops1_developer_can_view_but_cannot_manage_or_operate_credentials() -> N
     assert can_operate is False
 
 
-def test_ops1_inactive_membership_does_not_grant_console_access() -> None:
+def test_ops1_inactive_membership_does_not_grant_scoped_console_access() -> None:
     # Given: 用户只有 inactive owner membership。
     app = App.objects.create(app_key="ops1-inactive-owner", name="Inactive Owner")
     actor = ConsoleActor(user_id="former-owner", is_superuser=False)
@@ -62,9 +62,26 @@ def test_ops1_inactive_membership_does_not_grant_console_access() -> None:
     can_view = can_view_app(actor, app)
     can_manage = can_manage_app(actor, app)
 
-    # Then: inactive membership 不授予任何控制台访问权限。
+    # Then: inactive membership 不授予 scoped 工作台数据访问或管理权限。
     assert can_view is False
     assert can_manage is False
+
+
+def test_ops1_regular_actor_lists_all_apps_without_membership() -> None:
+    # Given: 普通控制台用户没有任何 AppMembership。
+    crm = App.objects.create(app_key="ops1-visible-all-crm", name="CRM")
+    erp = App.objects.create(app_key="ops1-visible-all-erp", name="ERP")
+    actor = ConsoleActor(user_id="regular-001", is_superuser=False)
+
+    # When: 控制台列出该用户展示 App 并判断 scoped 数据访问权限。
+    visible_app_keys = [app.app_key for app in apps_visible_to_actor(actor)]
+    crm_can_view = can_view_app(actor, crm)
+    erp_can_view = can_view_app(actor, erp)
+
+    # Then: 所有 App 都展示, 但 scoped 工作台数据仍按成员关系控制。
+    assert visible_app_keys == ["ops1-visible-all-crm", "ops1-visible-all-erp"]
+    assert crm_can_view is False
+    assert erp_can_view is False
 
 
 def test_ops1_superuser_can_view_and_manage_all_apps_without_membership() -> None:

@@ -60,6 +60,7 @@ def test_s14_submit_grant_request_creates_submitted_request_without_creating_gra
             reason="需要处理客户资料",
             actor_type="user",
             actor_id=user.authentik_user_id,
+            approver_user_ids=(user.authentik_user_id,),
         ),
     )
 
@@ -76,6 +77,7 @@ def test_s14_submit_grant_request_creates_submitted_request_without_creating_gra
     assert audit_log.target_type == "access_request"
     assert audit_log.metadata["app_key"] == app.app_key
     assert audit_log.metadata["authorization_group_keys"] == [group.key]
+    assert audit_log.metadata["approver_user_ids"] == [user.authentik_user_id]
 
 
 def test_s14_submit_grant_request_rejects_group_without_active_approval_rule() -> None:
@@ -294,6 +296,7 @@ def test_s14_submit_timed_grant_request_preserves_requested_expiration() -> None
             reason="临时处理活动客户",
             actor_type="user",
             actor_id=user.authentik_user_id,
+            approver_user_ids=(user.authentik_user_id,),
         ),
     )
 

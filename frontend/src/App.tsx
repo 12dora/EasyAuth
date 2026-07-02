@@ -41,6 +41,11 @@ export function App({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUse
     );
   }
 
+  if (currentUser?.role !== "EasyAuth Admins") {
+    window.location.replace("/errors/forbidden/");
+    return null;
+  }
+
   return (
     <Routes>
       <Route element={<AppShell brandLogoUrl={brandLogoUrl} currentUser={currentUser} currentUserId={currentUserId} mode="console" />}>
@@ -78,13 +83,13 @@ function LoggedOutPage() {
       <p className="page-description">你已经退出当前 EasyAuth 会话。</p>
       <div className="logged-out-actions">
         <a
-          className="inline-flex h-9 items-center justify-center rounded-md border border-amber-ink bg-amber-ink px-3.5 text-sm font-medium text-white shadow-sm transition-colors hover:bg-amber-ink/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-ink/50"
+          className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-[2px] border border-ink bg-ink px-3.5 text-[13px] font-medium tracking-wide text-paper transition-all duration-150 hover:bg-ink/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[rgb(var(--amber)_/_0.5)] active:[transform:translateY(1px)]"
           href={loginHref}
         >
           重新登录
         </a>
         <a
-          className="inline-flex h-9 items-center justify-center rounded-md border border-[rgb(var(--hairline-strong))] bg-paper-deep px-3.5 text-sm font-medium text-ink transition-colors hover:border-ink-faint hover:bg-paper focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-ink/50"
+          className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-[2px] border border-ink/30 bg-transparent px-3.5 text-[13px] font-medium tracking-wide text-ink transition-all duration-150 hover:border-ink/60 hover:bg-ink/[0.04] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[rgb(var(--amber)_/_0.5)] active:[transform:translateY(1px)]"
           href="/portal/"
         >
           返回门户

@@ -2,26 +2,26 @@ import { AlertCircle, CheckCircle2, Info } from "lucide-react";
 
 import type { BadgeTone } from "../lib/status";
 
+type StatusBannerTone = Extract<BadgeTone, "amber" | "evergreen" | "signal" | "bond" | "neutral">;
+
 interface StatusBannerProps {
-  tone?: BadgeTone;
+  tone?: StatusBannerTone;
   title: string;
   message?: string;
 }
 
-const TONE_CLASSES: Record<BadgeTone, string> = {
-  neutral: "border-[rgb(var(--hairline-strong))] bg-paper-deep text-ink-soft",
-  faint: "border-[rgb(var(--hairline-soft))] bg-paper-deep text-ink-faint",
-  ink: "border-ink/15 bg-ink/10 text-ink",
-  amber: "border-amber-ink/20 bg-amber-ink/10 text-amber-ink",
-  evergreen: "border-evergreen/20 bg-evergreen/10 text-evergreen",
-  signal: "border-signal/20 bg-signal/10 text-signal",
-  bond: "border-bond/20 bg-bond/10 text-bond",
+const TONE_CLASSES: Record<StatusBannerTone, string> = {
+  neutral: "border-ink/15 bg-paper-soft text-ink-soft",
+  amber: "border-[rgb(var(--amber))]/30 bg-[rgb(var(--amber))]/[0.08] text-[rgb(var(--amber))]",
+  evergreen: "border-[rgb(var(--evergreen))]/30 bg-[rgb(var(--evergreen))]/[0.08] text-[rgb(var(--evergreen))]",
+  signal: "border-[rgb(var(--signal))]/30 bg-[rgb(var(--signal))]/[0.08] text-[rgb(var(--signal))]",
+  bond: "border-[rgb(var(--bond))]/30 bg-[rgb(var(--bond))]/[0.08] text-[rgb(var(--bond))]",
 };
 
 export function StatusBanner({ tone = "neutral", title, message }: StatusBannerProps) {
   const Icon = tone === "evergreen" ? CheckCircle2 : tone === "signal" || tone === "amber" ? AlertCircle : Info;
   return (
-    <div className={`flex items-start gap-3 rounded-md border px-4 py-3 ${TONE_CLASSES[tone]}`}>
+    <div className={`flex items-start gap-3 rounded-[3px] border px-4 py-3 ${TONE_CLASSES[tone]}`}>
       <Icon size={18} className="mt-0.5 shrink-0" />
       <div className="min-w-0">
         <strong className="block text-sm font-semibold leading-5">{title}</strong>

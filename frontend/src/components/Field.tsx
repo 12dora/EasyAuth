@@ -9,7 +9,7 @@ interface FieldProps {
 }
 
 const INPUT_CLASSES =
-  "w-full rounded-md border border-[rgb(var(--hairline-strong))] bg-paper px-3 text-sm text-ink shadow-sm transition-colors placeholder:text-ink-faint focus:border-amber-ink focus:outline-none focus:ring-2 focus:ring-amber-ink/15 disabled:cursor-not-allowed disabled:bg-paper-deep disabled:text-ink-faint";
+  "w-full rounded-[2px] border border-ink/15 bg-paper-soft px-2.5 text-[13px] text-ink transition-colors placeholder:text-ink-faint focus:border-[rgb(var(--amber))] focus:outline-none disabled:cursor-not-allowed disabled:opacity-50";
 
 function cn(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
@@ -30,7 +30,7 @@ export function Field({ label, hint, error, children }: FieldProps) {
 
   return (
     <div className="flex flex-col gap-2">
-      <label className="text-[13px] font-semibold leading-none text-ink" htmlFor={inputId}>
+      <label className="text-[11px] uppercase tracking-[0.14em] text-ink-soft font-medium" htmlFor={inputId}>
         {label}
       </label>
       {inputElement}

@@ -98,15 +98,16 @@ def test_ops4_submit_renew_request_accepts_high_risk_group_within_max_duration()
 
     # When: 员工提交未超过高风险策略上限的续期申请。
     access_request = AccessRequestService.submit_access_request(
-            AccessRequestSubmission(
-                user=user,
-                app=app,
-                authorization_groups=(authorization_group,),
+        AccessRequestSubmission(
+            user=user,
+            app=app,
+            authorization_groups=(authorization_group,),
             grant_type=GRANT_TYPE_TIMED,
             grant_expires_at=now + timedelta(days=10),
             reason="高风险权限项目延期",
             actor_type="user",
             actor_id=user.authentik_user_id,
+            approver_user_ids=(user.authentik_user_id,),
             request_type=REQUEST_TYPE_RENEW,
         ),
     )

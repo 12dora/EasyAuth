@@ -8,6 +8,7 @@ from django.utils import timezone
 from easyauth.access_requests.models import (
     GRANT_TYPE_PERMANENT,
     REQUEST_STATUS_APPROVED,
+    REQUEST_STATUS_GRANT_APPLIED,
     REQUEST_STATUS_GRANT_FAILED,
     REQUEST_TYPE_CHANGE,
     REQUEST_TYPE_GRANT,
@@ -124,14 +125,13 @@ def test_ops4_apply_approved_change_rejects_stale_permission_target() -> None:
 
 @pytest.mark.parametrize(
     "stale_target",
-    ["permission_active", "permission_deprecated", "scope_active", "permission_rule"],
+    ["permission_active", "permission_deprecated", "scope_active"],
 )
 def test_ops4_apply_approved_grant_rejects_stale_direct_permission_target(
     stale_target: Literal[
         "permission_active",
         "permission_deprecated",
         "scope_active",
-        "permission_rule",
     ],
 ) -> None:
     # Given: grant 申请审批通过后, 目标 direct Permission 配置失效。
@@ -147,7 +147,7 @@ def test_ops4_apply_approved_grant_rejects_stale_direct_permission_target(
         name="Read",
         supported_scopes=[scope.key],
     )
-    rule = ApprovalRule.objects.create(
+    _ = ApprovalRule.objects.create(
         app=app,
         permission=target_permission,
         approver_userids=["manager-001"],
@@ -173,9 +173,6 @@ def test_ops4_apply_approved_grant_rejects_stale_direct_permission_target(
         case "scope_active":
             scope.is_active = False
             scope.save(update_fields=["is_active"])
-        case "permission_rule":
-            rule.is_active = False
-            rule.save(update_fields=["is_active"])
 
     # When: 审批回调尝试应用该过期 direct Permission。
     with pytest.raises(AccessRequestApplicationError):
@@ -267,7 +264,7 @@ def test_ops4_apply_approved_change_rejects_deleted_authorization_group_approval
     assert AuditLog.objects.filter(event_type="grant_apply_failed").count() == 1
 
 
-def test_ops4_apply_approved_change_rejects_retargeted_permission_approval_rule() -> None:
+def test_ops4_apply_approved_change_allows_retargeted_permission_approval_rule() -> None:
     # Given: change 申请审批通过后, 目标 Permission 的 ApprovalRule 被改到其他权限。
     user = UserMirror.objects.create(authentik_user_id="ops4-retarget-permission-rule")
     app = App.objects.create(
@@ -297,23 +294,20 @@ def test_ops4_apply_approved_change_rejects_retargeted_permission_approval_rule(
     rule.permission = other_permission
     rule.save(update_fields=["permission"])
 
-    # When: 审批回调尝试应用失去审批规则的权限目标。
-    with pytest.raises(AccessRequestApplicationError):
-        _ = AccessRequestService.apply_approved_access_request(_application(access_request))
+    # When: 审批回调应用该 direct Permission 目标。
+    applied_request = AccessRequestService.apply_approved_access_request(_application(access_request))
 
-    # Then: 授权事实不变, 申请进入 grant_failed。
+    # Then: direct Permission 不再因审批规则变更被落库前置拦截。
     grant.refresh_from_db()
-    access_request.refresh_from_db()
     permission_keys = tuple(
-        AccessGrantPermission.objects.filter(grant=grant).values_list(
+        AccessGrantPermission.objects.filter(grant__user=user, grant__app=app).values_list(
             "permission__key",
             "scope_key",
         ),
     )
-    assert permission_keys == (("invoice.read", "GLOBAL"),)
-    assert grant.version == 1
-    assert access_request.status == REQUEST_STATUS_GRANT_FAILED
-    assert AuditLog.objects.filter(event_type="grant_apply_failed").count() == 1
+    assert applied_request.status == REQUEST_STATUS_GRANT_APPLIED
+    assert permission_keys == (("invoice.write", "GLOBAL"),)
+    assert AccessGrant.objects.filter(user=user, app=app, is_current=True).count() == 1
 
 
 def _approved_request(

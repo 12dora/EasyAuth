@@ -6,6 +6,7 @@ from json import loads
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, TypeGuard, cast
 
+from django.conf import settings
 from django.shortcuts import render
 
 from easyauth.accounts.auth import AUTHENTIK_GROUPS_SESSION_KEY, AUTHENTIK_SESSION_KEY
@@ -191,6 +192,11 @@ def _display_name(user: UserMirror) -> str:
 
 def _role_label(request: HttpRequest) -> str:
     groups = _session_string_list(request, AUTHENTIK_GROUPS_SESSION_KEY)
+    configured_admin_groups = _string_values(
+        getattr(settings, "EASYAUTH_CONSOLE_SUPERUSER_GROUPS", ()),
+    )
+    if configured_admin_groups and not set(groups).isdisjoint(configured_admin_groups):
+        return "EasyAuth Admins"
     if groups:
         return "、".join(groups[:2])
     return "未分组"
@@ -206,6 +212,14 @@ def _session_string(request: HttpRequest, key: str) -> str:
 
 def _session_string_list(request: HttpRequest, key: str) -> tuple[str, ...]:
     value = request.session.get(key)
+    if isinstance(value, str):
+        return tuple(part for part in value.split() if part)
+    if isinstance(value, Sequence):
+        return tuple(item for item in value if isinstance(item, str) and item)
+    return ()
+
+
+def _string_values(value: object) -> tuple[str, ...]:
     if isinstance(value, str):
         return tuple(part for part in value.split() if part)
     if isinstance(value, Sequence):

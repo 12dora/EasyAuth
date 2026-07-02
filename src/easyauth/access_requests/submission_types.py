@@ -40,6 +40,7 @@ class AccessRequestSubmission:
     reason: str
     actor_type: str
     actor_id: str
+    approver_user_ids: Iterable[str] = ()
     request_type: AccessRequestType = REQUEST_TYPE_GRANT
     authorization_groups: Iterable[AuthorizationGroup] = ()
     direct_grants: Iterable[ScopedAccessRequestGrant] = ()

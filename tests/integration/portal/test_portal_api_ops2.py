@@ -147,6 +147,7 @@ def test_ops2_portal_api_post_access_request_uses_session_user_and_csrf() -> Non
         "app_key": app.app_key,
         "authorization_group_keys": [group.key],
         "direct_grants": [],
+        "approver_user_ids": [user.authentik_user_id],
         "grant_type": GRANT_TYPE_PERMANENT,
         "grant_expires_at": None,
         "reason": "需要查看客户记录",

@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING
 
 from django.utils import timezone
 
+from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.access_requests.high_risk_duration import high_risk_duration_error
 from easyauth.access_requests.submission_types import (
     AccessRequestGrantType,
@@ -53,6 +54,24 @@ def unique_direct_grants(
     return tuple(grant_by_identity.values())
 
 
+def validated_approver_user_ids(approver_user_ids: Iterable[str]) -> tuple[str, ...]:
+    user_ids = _unique_non_empty_strings(approver_user_ids)
+    if not user_ids:
+        raise AccessRequestSubmissionError(("at least one approver is required",))
+
+    active_user_ids = set(
+        UserMirror.objects.filter(
+            authentik_user_id__in=user_ids,
+            status=USER_STATUS_ACTIVE,
+        ).values_list("authentik_user_id", flat=True),
+    )
+    invalid_user_ids = tuple(user_id for user_id in user_ids if user_id not in active_user_ids)
+    if invalid_user_ids:
+        invalid = ", ".join(invalid_user_ids)
+        raise AccessRequestSubmissionError((f"approver must be an active system user: {invalid}",))
+    return user_ids
+
+
 def validate_submission_scope(
     input_data: AccessRequestSubmission,
     request_type: AccessRequestType,
@@ -81,6 +100,18 @@ def validate_submission_scope(
             _validate_targets_belong_to_app(input_data.app, authorization_groups, direct_grants)
             _validate_renew_targets(grant, authorization_groups, direct_grants)
             _validate_high_risk_duration(authorization_groups, input_data.grant_expires_at)
+
+
+def _unique_non_empty_strings(values: Iterable[str]) -> tuple[str, ...]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = value.strip()
+        if normalized == "" or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return tuple(result)
 
 
 def _validate_user(user: UserMirror) -> None:

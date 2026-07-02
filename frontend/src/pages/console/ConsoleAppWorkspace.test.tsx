@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { lazy, Suspense, type ReactElement } from "react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { ManifestTab } from "./workspace/tabs/ManifestTab";
@@ -71,7 +71,10 @@ describe("ConsoleAppWorkspace", () => {
 
     renderWorkspace("/console/apps/demo?tab=catalog");
 
-    await screen.findByRole("heading", { name: "新增 Scope" });
+    await screen.findByRole("heading", { name: "权限分组" });
+    expect(screen.getByRole("heading", { name: "Scopes" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Permissions" })).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "新建" })).toHaveLength(3);
     await screen.findByText("SELF");
     expect(screen.getByText("团队")).toBeInTheDocument();
     expect(screen.getAllByText("停用").length).toBeGreaterThan(0);
@@ -80,6 +83,35 @@ describe("ConsoleAppWorkspace", () => {
     expect(screen.getByText("invoice.read")).toBeInTheDocument();
     expect(screen.getByText("SELF、TEAM")).toBeInTheDocument();
     expect(screen.getAllByText("高").length).toBeGreaterThan(0);
+  });
+
+  test("切换工作台 tab 时更新 URL 并显示目标内容", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/demo") {
+        return jsonResponse(appPayload);
+      }
+      if (url === "/console/api/v1/apps/demo/configuration-status") {
+        return jsonResponse({ status: "ready", issues: [] });
+      }
+      if (url === "/console/api/v1/apps/demo/memberships") {
+        return jsonResponse({ items: [] });
+      }
+      if (url === "/console/api/v1/apps/demo/approval-rules") {
+        return jsonResponse({ items: [] });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWorkspace("/console/apps/demo");
+
+    expect(await screen.findByTestId("location")).toHaveTextContent("/console/apps/demo");
+    await user.click(screen.getByRole("button", { name: "审批规则" }));
+
+    expect(await screen.findByRole("heading", { name: "审批规则" })).toBeVisible();
+    expect(screen.getByTestId("location")).toHaveTextContent("/console/apps/demo?tab=rules");
   });
 
   test("授权组保存 payload 包含 permission 和 scope", async () => {
@@ -135,12 +167,14 @@ describe("ConsoleAppWorkspace", () => {
     await screen.findByRole("heading", { name: "授权组管理" });
     await screen.findByText("会计只读");
     expect(screen.getAllByText("role").length).toBeGreaterThan(0);
-    expect(screen.getAllByText("invoice.read / SELF").length).toBeGreaterThan(0);
 
-    await user.selectOptions(screen.getByLabelText("Grant Permission"), "invoice.export");
-    await user.selectOptions(screen.getByLabelText("Grant Scope"), "TEAM");
-    await user.click(screen.getByRole("button", { name: "添加 Grant" }));
-    await user.click(screen.getByRole("button", { name: "保存授权组" }));
+    await user.click(screen.getByRole("button", { name: "编辑" }));
+    const dialog = await screen.findByRole("dialog", { name: "编辑授权组" });
+    expect(within(dialog).getByText("invoice.read / SELF")).toBeInTheDocument();
+    await user.selectOptions(within(dialog).getByLabelText("Grant Permission"), "invoice.export");
+    await user.selectOptions(within(dialog).getByLabelText("Grant Scope"), "TEAM");
+    await user.click(within(dialog).getByRole("button", { name: "添加 Grant" }));
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
 
     await waitFor(() => {
       const patchCall = findFetchCall(fetchMock, "/console/api/v1/apps/demo/authorization-groups/accountant", "PATCH");
@@ -180,8 +214,11 @@ describe("ConsoleAppWorkspace", () => {
 
     renderWorkspace("/console/apps/demo?tab=credentials");
 
-    await user.type(await screen.findByLabelText("凭据名称"), "primary token");
-    await user.click(screen.getByRole("button", { name: "静态 token" }));
+    expect(await screen.findByRole("heading", { name: "凭据" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "新建" }));
+    const dialog = await screen.findByRole("dialog", { name: "新建凭据" });
+    await user.type(within(dialog).getByLabelText("凭据名称"), "primary token");
+    await user.click(within(dialog).getByRole("button", { name: "静态 token" }));
 
     expect(await screen.findByText("plain-secret-once")).toBeInTheDocument();
 
@@ -411,20 +448,24 @@ describe("ConsoleAppWorkspace", () => {
     expect(screen.getByText("permission:invoice.approve")).toBeInTheDocument();
     expect(screen.getByText("阻塞")).toBeInTheDocument();
 
-    await user.selectOptions(screen.getByLabelText("规则目标类型"), "permission");
-    await user.type(screen.getByLabelText("目标 Key"), "invoice.pay");
-    await user.type(screen.getByLabelText("审批人 user_id"), "owner");
-    await user.click(screen.getByRole("button", { name: "新建规则" }));
+    expect(screen.getByRole("heading", { name: "审批规则" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "新建" }));
+    let dialog = await screen.findByRole("dialog", { name: "新建审批规则" });
+    await user.selectOptions(within(dialog).getByLabelText("规则目标类型"), "permission");
+    await user.type(within(dialog).getByLabelText("目标 Key"), "invoice.pay");
+    await user.type(within(dialog).getByLabelText("审批人 user_id"), "owner");
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
     expect(await screen.findByText("permission:invoice.pay")).toBeInTheDocument();
 
     const blockedRow = screen.getByText("permission:invoice.approve").closest("tr");
     expect(blockedRow).not.toBeNull();
     await user.click(within(blockedRow as HTMLTableRowElement).getByRole("button", { name: "编辑" }));
-    await user.clear(screen.getByLabelText("目标 Key"));
-    await user.type(screen.getByLabelText("目标 Key"), "invoice.approve.high");
-    await user.clear(screen.getByLabelText("审批人 user_id"));
-    await user.type(screen.getByLabelText("审批人 user_id"), "security,owner");
-    await user.click(screen.getByRole("button", { name: "保存规则" }));
+    dialog = await screen.findByRole("dialog", { name: "编辑审批规则" });
+    await user.clear(within(dialog).getByLabelText("目标 Key"));
+    await user.type(within(dialog).getByLabelText("目标 Key"), "invoice.approve.high");
+    await user.clear(within(dialog).getByLabelText("审批人 user_id"));
+    await user.type(within(dialog).getByLabelText("审批人 user_id"), "security,owner");
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
     expect(await screen.findByText("permission:invoice.approve.high")).toBeInTheDocument();
 
     const editedRow = screen.getByText("permission:invoice.approve.high").closest("tr");
@@ -476,22 +517,23 @@ describe("ConsoleAppWorkspace", () => {
 
     renderWorkspace("/console/apps/demo");
 
-    await user.click(await screen.findByRole("button", { name: "编辑基本信息" }));
-    const nameInput = screen.getByLabelText("名称");
+    expect(await screen.findByRole("heading", { name: "基本信息" })).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "编辑" }));
+    const dialog = await screen.findByRole("dialog", { name: "编辑基本信息" });
+    expect(within(dialog).queryByLabelText("启用应用")).not.toBeInTheDocument();
+    const nameInput = within(dialog).getByLabelText("名称");
     await user.clear(nameInput);
     await user.type(nameInput, "Demo Renamed");
-    const descriptionInput = screen.getByLabelText("描述");
+    const descriptionInput = within(dialog).getByLabelText("描述");
     await user.clear(descriptionInput);
     await user.type(descriptionInput, "Updated description");
-    await user.click(screen.getByLabelText("启用应用"));
-    await user.click(screen.getByRole("button", { name: "保存" }));
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
 
     await waitFor(() => {
       const patchCall = findFetchCall(fetchMock, "/console/api/v1/apps/demo", "PATCH");
       expect(parseJsonBody(patchCall?.[1])).toEqual({
         name: "Demo Renamed",
         description: "Updated description",
-        is_active: false,
       });
     });
   });
@@ -530,9 +572,11 @@ describe("ConsoleAppWorkspace", () => {
     await waitFor(() => expect(screen.getByText("owner-a")).toBeInTheDocument());
     expect(screen.getByText("dev-a")).toBeInTheDocument();
 
-    await user.type(screen.getByLabelText("成员用户 ID"), "dev-b");
-    await user.selectOptions(screen.getByLabelText("成员角色"), "developer");
-    await user.click(screen.getByRole("button", { name: "新增成员" }));
+    await user.click(screen.getByRole("button", { name: "新建" }));
+    const dialog = await screen.findByRole("dialog", { name: "新建成员" });
+    await user.type(within(dialog).getByLabelText("成员用户 ID"), "dev-b");
+    await user.selectOptions(within(dialog).getByLabelText("成员角色"), "developer");
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
 
     await waitFor(() => {
       const postCall = findFetchCall(fetchMock, "/console/api/v1/apps/demo/memberships", "POST");
@@ -557,14 +601,22 @@ function renderWorkspace(initialEntry: string) {
         <Route
           path="/console/apps/:appKey"
           element={
-            <Suspense fallback={null}>
-              <LazyConsoleAppWorkspace />
-            </Suspense>
+            <>
+              <Suspense fallback={null}>
+                <LazyConsoleAppWorkspace />
+              </Suspense>
+              <LocationProbe />
+            </>
           }
         />
       </Routes>
     </MemoryRouter>,
   );
+}
+
+function LocationProbe() {
+  const location = useLocation();
+  return <div data-testid="location">{location.pathname + location.search}</div>;
 }
 
 function renderWithClient(ui: ReactElement) {

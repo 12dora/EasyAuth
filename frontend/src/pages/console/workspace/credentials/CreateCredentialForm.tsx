@@ -20,7 +20,7 @@ export function CreateCredentialForm({ onCreateCredential }: CreateCredentialFor
   };
 
   return (
-    <div className="grid items-end gap-4 rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper p-5 shadow-sm md:grid-cols-[minmax(0,1fr)_auto_auto]">
+    <div className="grid items-end gap-4 md:grid-cols-[minmax(0,1fr)_auto_auto]">
       <Field label="凭据名称">
         <TextInput value={name} onChange={(event) => setName(event.currentTarget.value)} placeholder="主接入凭据" />
       </Field>

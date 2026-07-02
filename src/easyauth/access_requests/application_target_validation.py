@@ -38,6 +38,7 @@ def _approval_rule_errors(
     authorization_groups: tuple[AuthorizationGroup, ...],
     direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> tuple[str, ...]:
+    _ = direct_grants
     errors: list[str] = []
     errors.extend(
         f"{group.key}: Active approval rule is required."
@@ -45,15 +46,6 @@ def _approval_rule_errors(
         if not ApprovalRule.objects.filter(
             app=app,
             authorization_group=group,
-            is_active=True,
-        ).exists()
-    )
-    errors.extend(
-        f"{grant.permission.key}:{grant.scope_key}: Active approval rule is required."
-        for grant in direct_grants
-        if not ApprovalRule.objects.filter(
-            app=app,
-            permission=grant.permission,
             is_active=True,
         ).exists()
     )

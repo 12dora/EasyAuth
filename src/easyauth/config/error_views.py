@@ -16,3 +16,12 @@ def not_found(request: HttpRequest, exception: object | None = None) -> HttpResp
         "404.html",
         status=HTTPStatus.NOT_FOUND,
     )
+
+
+def forbidden(request: HttpRequest, exception: object | None = None) -> HttpResponse:
+    _ = exception
+    return render(
+        request,
+        "403.html",
+        status=HTTPStatus.FORBIDDEN,
+    )

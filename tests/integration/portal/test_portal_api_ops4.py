@@ -295,10 +295,18 @@ def _lifecycle_payload(
             {"permission": permission_key, "scope": scope_key}
             for permission_key, scope_key in direct_grants
         ],
+        "approver_user_ids": [_default_approver_user_id()],
         "grant_type": GRANT_TYPE_TIMED,
         "grant_expires_at": (timezone.now() + timedelta(days=30)).isoformat(),
         "reason": f"提交 {request_type} 申请",
     }
+
+
+def _default_approver_user_id() -> str:
+    approver, _created = UserMirror.objects.get_or_create(
+        authentik_user_id="ops4-portal-default-approver",
+    )
+    return approver.authentik_user_id
 
 
 def _group_keys_for_lifecycle(

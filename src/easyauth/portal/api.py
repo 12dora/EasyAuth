@@ -81,7 +81,7 @@ def portal_access_requests(request: HttpRequest) -> JsonResponse:
 
 def portal_request_catalog(request: HttpRequest) -> JsonResponse:
     match _active_user(request):
-        case UserMirror():
+        case UserMirror() as user:
             pass
         case JsonResponse() as response:
             return response
@@ -92,7 +92,7 @@ def portal_request_catalog(request: HttpRequest) -> JsonResponse:
             status=HTTPStatus.METHOD_NOT_ALLOWED,
         )
 
-    return _json_response(request_catalog_payload())
+    return _json_response(request_catalog_payload(user))
 
 
 def _submit_access_request(request: HttpRequest, user: UserMirror) -> JsonResponse:
@@ -110,6 +110,7 @@ def _submit_access_request(request: HttpRequest, user: UserMirror) -> JsonRespon
                 app=app,
                 authorization_groups=authorization_groups,
                 direct_grants=direct_grants,
+                approver_user_ids=payload.approver_user_ids,
                 request_type=payload.request_type,
                 grant_type=payload.grant_type,
                 grant_expires_at=payload.grant_expires_at,

@@ -1,6 +1,7 @@
 import {
   flexRender,
   getCoreRowModel,
+  getPaginationRowModel,
   useReactTable,
   type ColumnDef,
 } from "@tanstack/react-table";
@@ -10,6 +11,7 @@ import { useMemo } from "react";
 import { SelectInput } from "../../../components/Field";
 import { EmptyState } from "../../../components/ui/EmptyState";
 import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../components/ui/TablePrimitives";
+import { TablePagination } from "../../../components/ui/TablePagination";
 
 import { collectGroupPermissions, isPermissionGroupItem } from "../permissionTree";
 import {
@@ -17,6 +19,8 @@ import {
   directGrantSelectionPermissionKey,
 } from "../hooks/useAccessRequestForm";
 import type { ScopedPermissionGroupItem, ScopedPermissionItem } from "../hooks/useAccessRequestForm";
+
+const MONO_TEXT_CLASS = "font-mono text-[13px] leading-5 text-ink-soft";
 
 interface PermissionSelectorProps {
   appKey: string;
@@ -90,7 +94,11 @@ export function PermissionSelector({
       {
         id: "key",
         header: "权限 key",
-        cell: ({ row }) => <code>{row.original.type === "group" ? row.original.group.key : row.original.permission.key}</code>,
+        cell: ({ row }) => (
+          <code className={MONO_TEXT_CLASS}>
+            {row.original.type === "group" ? row.original.group.key : row.original.permission.key}
+          </code>
+        ),
       },
       {
         id: "scope",
@@ -129,6 +137,7 @@ export function PermissionSelector({
     data: rows,
     columns,
     getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
     getRowId: (row) => row.id,
   });
 
@@ -141,6 +150,9 @@ export function PermissionSelector({
   if (errorMessage) {
     return <EmptyState title="权限目录加载失败" description={errorMessage} />;
   }
+  if (rows.length === 0) {
+    return null;
+  }
 
   return (
     <TableFrame>
@@ -151,7 +163,7 @@ export function PermissionSelector({
               {headerGroup.headers.map((header) => (
                 <TableHeaderCell
                   key={header.id}
-                  className={header.column.id === "permission" ? "sticky left-0 z-20 bg-slate-50" : undefined}
+                  className={header.column.id === "permission" ? "sticky left-0 z-20 bg-paper-deep/95" : undefined}
                 >
                   {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
                 </TableHeaderCell>
@@ -162,7 +174,7 @@ export function PermissionSelector({
         <TableBody>
           {table.getRowModel().rows.length > 0 ? (
             table.getRowModel().rows.map((row) => (
-              <TableRow key={row.id} className={row.original.type === "group" ? "bg-slate-50/70 hover:bg-slate-50" : undefined}>
+              <TableRow key={row.id} className={row.original.type === "group" ? "bg-paper-deep/60 hover:bg-paper-deep" : undefined}>
                 {row.getVisibleCells().map((cell) => (
                   <TableCell
                     key={cell.id}
@@ -180,6 +192,7 @@ export function PermissionSelector({
           )}
         </TableBody>
       </TableRoot>
+      <TablePagination table={table} />
     </TableFrame>
   );
 }
@@ -202,7 +215,7 @@ function PermissionGroupNameCell({
   return (
     <button
       type="button"
-      className="inline-flex min-w-0 items-center gap-2 rounded-md px-1.5 py-1 text-left text-sm font-semibold text-ink transition-colors hover:bg-ink/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-ink/50"
+      className="inline-flex min-w-0 items-center gap-2 rounded-[2px] px-1.5 py-1 text-left text-[13px] font-semibold text-ink transition-colors hover:bg-ink/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[rgb(var(--amber)_/_0.5)]"
       onClick={() => onToggleGroup(group.key)}
       aria-expanded={isExpanded}
       aria-label={`${isExpanded ? "收起" : "展开"} ${group.name}`}
@@ -210,7 +223,7 @@ function PermissionGroupNameCell({
     >
       <ChevronRight size={16} className={isExpanded ? "rotate-90 transition-transform" : "transition-transform"} />
       <span className="truncate">{group.name}</span>
-      <span className="rounded bg-paper px-1.5 py-0.5 text-xs font-medium text-ink-soft">
+      <span className="rounded-[2px] bg-paper px-1.5 py-0.5 font-mono text-[10.5px] font-medium leading-4 text-ink-soft">
         {selectedCount}/{permissionCount}
       </span>
     </button>
@@ -251,7 +264,7 @@ function PermissionScopeCell({
       ) : (
         <div className="flex flex-wrap items-center gap-2">
           {scopes.map((scope) => (
-            <label key={scope.key} className="inline-flex items-center gap-2 rounded-md border border-[rgb(var(--hairline-strong))] bg-paper px-2.5 py-1.5 text-sm text-ink-soft">
+            <label key={scope.key} className="inline-flex items-center gap-2 rounded-[2px] border border-[rgb(var(--hairline-strong))] bg-paper px-2.5 py-1.5 text-[13px] text-ink-soft">
               <input
                 type="checkbox"
                 checked={selectedKeys.includes(directGrantSelectionKey(permission.key, scope.key))}

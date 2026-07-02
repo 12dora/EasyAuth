@@ -337,7 +337,6 @@ def _authentik_client(username: str, *, groups: tuple[str, ...] = ()) -> Client:
     client = Client(HTTP_HOST="localhost")
     session = client.session
     session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
-    if groups:
-        session["easyauth_authentik_groups"] = list(groups)
+    session["easyauth_authentik_groups"] = list(groups or ("EasyAuth Admins",))
     session.save()
     return client

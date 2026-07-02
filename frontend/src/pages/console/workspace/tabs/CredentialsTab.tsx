@@ -2,14 +2,20 @@ import { useQuery } from "@tanstack/react-query";
 import {
   flexRender,
   getCoreRowModel,
+  getPaginationRowModel,
   useReactTable,
   type ColumnDef,
 } from "@tanstack/react-table";
-import { RotateCw, ShieldOff } from "lucide-react";
+import { Fragment } from "react";
+import { Plus } from "lucide-react";
+import { useState } from "react";
 import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../../components/ui/TablePrimitives";
+import { TableActionCell, TableRowActionButton } from "../../../../components/ui/TableActions";
+import { TablePagination } from "../../../../components/ui/TablePagination";
 
 import { Badge } from "../../../../components/Badge";
 import { Button } from "../../../../components/Button";
+import { Dialog } from "../../../../components/Dialog";
 import { SecretDialog } from "../../../../components/SecretDialog";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
@@ -19,6 +25,7 @@ import { useCredentialsActions } from "../credentials/useCredentialsActions";
 import { credentialKindLabel } from "../utils";
 
 export function CredentialsTab({ appKey }: { appKey: string }) {
+  const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const credentialsQuery = useQuery({
     queryKey: ["console", "app", appKey, "credentials"],
     queryFn: () => apiRequest<{ items?: CredentialItem[] }>(`/console/api/v1/apps/${appKey}/credentials`),
@@ -40,26 +47,26 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
       ),
     },
     {
+      id: "actions",
       header: "操作",
       cell: ({ row }) => (
-        <div className="flex items-center gap-2">
+        <TableActionCell>
           {row.original.kind === "static_token" ? (
-            <Button
-              variant="ghost"
-              size="sm"
-              icon={<RotateCw size={14} />}
+            <TableRowActionButton
+              type="button"
               onClick={() => rotateCredential(row.original.id)}
-              aria-label="轮换"
-            />
+            >
+              轮换
+            </TableRowActionButton>
           ) : null}
-          <Button
+          <TableRowActionButton
+            type="button"
             variant="ghost-danger"
-            size="sm"
-            icon={<ShieldOff size={14} />}
             onClick={() => disableCredential(row.original)}
-            aria-label="禁用"
-          />
-        </div>
+          >
+            禁用
+          </TableRowActionButton>
+        </TableActionCell>
       ),
     },
   ];
@@ -67,11 +74,17 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
     data: credentials,
     columns: credentialColumns,
     getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
   });
 
   return (
     <section className="space-y-6">
-      <CreateCredentialForm onCreateCredential={createCredential} />
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h2 className="text-base font-semibold text-ink">凭据</h2>
+        <Button type="button" variant="primary" icon={<Plus size={16} />} onClick={() => setCreateDialogOpen(true)}>
+          新建
+        </Button>
+      </div>
       {operationError ? (
         <StatusBanner tone="signal" title="凭据操作失败" message={(operationError as Error).message} />
       ) : null}
@@ -93,7 +106,11 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
               credentialTable.getRowModel().rows.map((row) => (
                 <TableRow key={row.id}>
                   {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                    cell.column.id === "actions" ? (
+                      <Fragment key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Fragment>
+                    ) : (
+                      <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                    )
                   ))}
                 </TableRow>
               ))
@@ -104,7 +121,18 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
             )}
           </TableBody>
         </TableRoot>
+        <TablePagination table={credentialTable} />
       </TableFrame>
+      {createDialogOpen ? (
+        <Dialog title="新建凭据" onClose={() => setCreateDialogOpen(false)}>
+          <CreateCredentialForm
+            onCreateCredential={async (kind, name) => {
+              await createCredential(kind, name);
+              setCreateDialogOpen(false);
+            }}
+          />
+        </Dialog>
+      ) : null}
       {secretEntries[0] ? (
         <SecretDialog
           title="一次性凭据"

@@ -1,8 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { flexRender, getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
+import { flexRender, getCoreRowModel, getPaginationRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
 import { Download, Eye, FileUp, UploadCloud } from "lucide-react";
 import { useRef, useState } from "react";
 import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../../components/ui/TablePrimitives";
+import { PanelSurface } from "../../../../components/ui/PanelSurface";
+import { TablePagination } from "../../../../components/ui/TablePagination";
 
 import { Badge } from "../../../../components/Badge";
 import { Button } from "../../../../components/Button";
@@ -65,6 +67,7 @@ export function ManifestTab({ appKey }: { appKey: string }) {
     data: versions,
     columns: versionColumns,
     getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
   });
   const previewMutation = useMutation({
     mutationFn: () =>
@@ -87,7 +90,7 @@ export function ManifestTab({ appKey }: { appKey: string }) {
 
   return (
     <section className="space-y-6">
-      <div className="flex flex-wrap items-center gap-2 rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper p-4 shadow-sm">
+      <PanelSurface className="flex flex-wrap items-center gap-2">
         <input
           ref={fileInputRef}
           type="file"
@@ -113,7 +116,7 @@ export function ManifestTab({ appKey }: { appKey: string }) {
         >
           导出清单
         </Button>
-      </div>
+      </PanelSurface>
       <Field label="Manifest 内容" hint="支持粘贴 JSON 或 YAML；上传文件后会填充到这里。">
         <TextArea
           aria-label="Manifest 内容"
@@ -168,6 +171,7 @@ export function ManifestTab({ appKey }: { appKey: string }) {
             )}
           </TableBody>
         </TableRoot>
+        <TablePagination table={versionsTable} />
       </TableFrame>
     </section>
   );
@@ -184,12 +188,12 @@ function ManifestDiffView({ preview }: { preview: ManifestPreviewPayload }) {
   return (
     <div className="space-y-4">
       {sections.map((section) => (
-        <div className="space-y-3 rounded-lg border border-[rgb(var(--hairline-strong))] bg-paper p-4 shadow-sm" key={section.title}>
+        <PanelSurface className="space-y-3" key={section.title}>
           <div className="flex items-center justify-between gap-3">
             <Badge tone={section.tone}>{section.title}</Badge>
           </div>
           <ManifestDiffTable items={section.items} />
-        </div>
+        </PanelSurface>
       ))}
     </div>
   );
@@ -205,6 +209,7 @@ function ManifestDiffTable({ items }: { items: ManifestDiffItem[] }) {
     data: items,
     columns,
     getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
   });
 
   return (
@@ -235,6 +240,7 @@ function ManifestDiffTable({ items }: { items: ManifestDiffItem[] }) {
           )}
         </TableBody>
       </TableRoot>
+      <TablePagination table={table} />
     </TableFrame>
   );
 }

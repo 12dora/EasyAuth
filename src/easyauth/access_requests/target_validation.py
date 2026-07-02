@@ -97,12 +97,4 @@ def _direct_grant_error_messages(
         is_active=True,
     ).exists():
         errors.append("Scope must belong to the access request app and be active.")
-    if errors:
-        return tuple(errors)
-    if not ApprovalRule.objects.filter(
-        app=app,
-        permission=permission,
-        is_active=True,
-    ).exists():
-        errors.append("Permission must have an active approval rule.")
     return tuple(errors)

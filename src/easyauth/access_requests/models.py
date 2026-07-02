@@ -93,6 +93,10 @@ class AccessRequest(models.Model):
         datetime | None,
     ] = models.DateTimeField(blank=True, null=True)
     reason: models.TextField[str, str] = models.TextField(blank=True)
+    approver_user_ids: models.JSONField[list[str], list[str]] = models.JSONField(
+        blank=True,
+        default=list,
+    )
     submitted_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
     )

@@ -310,8 +310,7 @@ def _authentik_client(
     client = Client(HTTP_HOST="localhost", enforce_csrf_checks=enforce_csrf_checks)
     session = client.session
     session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
-    if groups:
-        session["easyauth_authentik_groups"] = list(groups)
+    session["easyauth_authentik_groups"] = list(groups or ("EasyAuth Admins",))
     session.save()
     return client
 

@@ -411,6 +411,7 @@ def _logged_in_client(username: str) -> Client:
     client = Client(HTTP_HOST="localhost")
     session = client.session
     session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
+    session["easyauth_authentik_groups"] = ["EasyAuth Admins"]
     session.save()
     return client
 

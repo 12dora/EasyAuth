@@ -227,7 +227,7 @@
   border: 1px solid rgb(var(--hairline));
   border-radius: 2px;
   background: rgb(var(--paper-soft));
-  box-shadow: 0 14px 32px rgba(15, 23, 42, 0.14);
+  box-shadow: 0 8px 18px rgba(15, 23, 42, 0.08);
   opacity: 0;
   pointer-events: none;
   transform: translateY(-4px);
@@ -264,7 +264,7 @@
 
 .user-menu-popover button:hover,
 .user-menu-popover button:focus-visible {
-  background: #f1f5f9;
+  background: rgb(var(--paper-deep));
   color: rgb(var(--ink));
   outline: none;
 }
@@ -307,7 +307,7 @@
   gap: 10px;
   min-height: 34px;
   padding: 8px 12px;
-  border-radius: 6px;
+  border-radius: 2px;
   color: rgb(var(--ink-soft));
   font-size: 13px;
   font-weight: 500;
@@ -321,7 +321,7 @@
 
 .nav-list a.active,
 .nav-list a:hover {
-  background: #f1f5f9;
+  background: rgb(var(--paper-deep));
   color: rgb(var(--ink));
 }
 
@@ -354,7 +354,7 @@
   align-items: center;
   min-height: 34px;
   padding: 8px 12px;
-  border-radius: 6px;
+  border-radius: 2px;
   color: rgb(var(--ink-soft));
   font-size: 13px;
   font-weight: 500;
@@ -363,7 +363,7 @@
 
 .sidebar-footer a.active,
 .sidebar-footer a:hover {
-  background: #f1f5f9;
+  background: rgb(var(--paper-deep));
   color: rgb(var(--ink));
 }
 

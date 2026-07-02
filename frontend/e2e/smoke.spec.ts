@@ -123,6 +123,7 @@ for (const viewport of VIEWPORTS) {
     await expect(page.getByLabel("应用")).toBeVisible();
     await expect(page.getByLabel("可申请权限组")).toBeVisible();
     await expect(page.getByLabel("授权期限")).toBeVisible();
+    await expect(page.getByLabel("过期时间")).toBeDisabled();
     await expect(page.getByLabel("申请原因")).toBeVisible();
 
     await page.getByLabel("应用").selectOption("demo");

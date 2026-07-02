@@ -5,7 +5,7 @@ from http import HTTPStatus
 from typing import TYPE_CHECKING, ClassVar, Final
 
 from django.db import IntegrityError, transaction
-from django.http import HttpRequest, JsonResponse
+from django.http import HttpRequest, HttpResponse, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from easyauth.admin_console.api_payloads import paginated_list_payload
@@ -36,7 +36,6 @@ from easyauth.applications.models import (
 from easyauth.applications.ownership import (
     ConsoleActor,
     can_manage_app,
-    can_view_app,
 )
 from easyauth.audit.services import AuditRecord, AuditService
 
@@ -139,9 +138,11 @@ def console_apps(request: HttpRequest) -> JsonResponse:
     return _items_response(tuple(_app_item(app) for app in page.items), page)
 
 
-def console_app_detail(request: HttpRequest, app_key: str) -> JsonResponse:
+def console_app_detail(request: HttpRequest, app_key: str) -> JsonResponse | HttpResponse:
     if request.method == "PATCH":
         return _patch_app(request, app_key)
+    if request.method == "DELETE":
+        return _delete_app(request, app_key)
     if request.method != "GET":
         return _method_not_allowed()
 
@@ -289,9 +290,41 @@ def _patch_app(request: HttpRequest, app_key: str) -> JsonResponse:
     return _json_response({"app": _app_detail_item(actor, app)})
 
 
+def _delete_app(request: HttpRequest, app_key: str) -> JsonResponse | HttpResponse:
+    match require_console_actor(request):
+        case ConsoleActor() as actor:
+            pass
+        case JsonResponse() as response:
+            return response
+
+    if not actor.is_superuser:
+        return _error_response(
+            ErrorCode.PERMISSION_DENIED,
+            "只有系统管理员可以删除应用。",
+            status=HTTPStatus.FORBIDDEN,
+        )
+
+    match _visible_app(actor, app_key):
+        case App() as app:
+            pass
+        case JsonResponse() as response:
+            return response
+
+    metadata: dict[str, JsonValue] = {
+        "app_key": app.app_key,
+        "name": app.name,
+        "is_active": app.is_active,
+    }
+    with transaction.atomic():
+        _record_app_event(app, actor, "console_app_deleted", metadata)
+        _ = app.delete()
+    return HttpResponse(status=HTTPStatus.NO_CONTENT)
+
+
 def _visible_app(actor: ConsoleActor, app_key: str) -> VisibleAppResult:
+    _ = actor
     app = App.objects.filter(app_key=app_key).first()
-    if app is None or not can_view_app(actor, app):
+    if app is None:
         return _error_response(
             ErrorCode.NOT_FOUND,
             "应用不存在。",
@@ -415,15 +448,8 @@ def _app_member_ids(app: App, role: str) -> list[JsonValue]:
 
 
 def _visible_apps_queryset(actor: ConsoleActor) -> QuerySet[App]:
-    if actor.is_superuser:
-        return App.objects.order_by("app_key")
-
-    app_ids = AppMembership.objects.filter(
-        user_id=actor.user_id,
-        role__in=("owner", "developer"),
-        is_active=True,
-    ).values_list("app_id", flat=True)
-    return App.objects.filter(id__in=app_ids).order_by("app_key").distinct()
+    _ = actor
+    return App.objects.order_by("app_key")
 
 
 def _filter_apps(queryset: QuerySet[App], request: HttpRequest) -> QuerySet[App]:

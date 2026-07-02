@@ -1,15 +1,18 @@
 import {
   flexRender,
   getCoreRowModel,
+  getPaginationRowModel,
   useReactTable,
   type ColumnDef,
 } from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Plus, RefreshCcw } from "lucide-react";
-import type { FormEvent } from "react";
+import { Fragment, type FormEvent } from "react";
 import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../components/ui/TablePrimitives";
+import { TablePagination } from "../../components/ui/TablePagination";
+import { TableActionCell, TableRowActionButton, TableRowActionLink } from "../../components/ui/TableActions";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { PageState } from "../../components/ui/PageState";
 
@@ -24,11 +27,12 @@ import type { JsonObject } from "../../lib/api";
 import type { AppListPayload, AppSummary } from "../../lib/domain";
 import { formatDateTime, readinessLabel, readinessTone } from "../../lib/status";
 
+const MONO_TEXT_CLASS = "font-mono text-[13px] leading-5 text-ink-soft";
+
 export function ConsoleAppList() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
-  const isAdmin = isConsoleAdmin();
   const appsQuery = useQuery({
     queryKey: ["console", "apps"],
     queryFn: () => apiRequest<AppListPayload>("/console/api/v1/apps"),
@@ -48,6 +52,21 @@ export function ConsoleAppList() {
       }
     },
   });
+  const updateStatusMutation = useMutation({
+    mutationFn: ({ appKey, isActive }: { appKey: string; isActive: boolean }) =>
+      apiRequest(`/console/api/v1/apps/${appKey}`, {
+        method: "PATCH",
+        body: { is_active: isActive },
+      }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["console", "apps"] }),
+  });
+  const deleteMutation = useMutation({
+    mutationFn: (appKey: string) =>
+      apiRequest(`/console/api/v1/apps/${appKey}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["console", "apps"] }),
+  });
 
   const columns: ColumnDef<AppSummary>[] = [
     {
@@ -55,7 +74,7 @@ export function ConsoleAppList() {
       cell: ({ row }) => (
         <div className="flex min-w-0 flex-col gap-1">
           <strong>{row.original.name}</strong>
-          <code className="text-xs text-slate-500">{row.original.app_key}</code>
+          <code className={MONO_TEXT_CLASS}>{row.original.app_key}</code>
         </div>
       ),
     },
@@ -85,15 +104,36 @@ export function ConsoleAppList() {
     },
     {
       id: "actions",
-      header: "",
+      header: "操作",
       cell: ({ row }) => (
-        <Link
-          className="inline-flex items-center gap-1.5 whitespace-nowrap text-sm font-medium text-bond hover:text-bond-strong"
-          to={`/console/apps/${row.original.app_key}`}
-        >
-          <span>进入</span>
-          <ArrowRight size={15} />
-        </Link>
+        <TableActionCell>
+          <TableRowActionButton
+            type="button"
+            variant={row.original.is_active ? "ghost-danger" : "ghost"}
+            disabled={updateStatusMutation.isPending}
+            onClick={() => updateStatusMutation.mutate({ appKey: row.original.app_key, isActive: !row.original.is_active })}
+          >
+            {row.original.is_active ? "停用" : "启用"}
+          </TableRowActionButton>
+          <TableRowActionButton
+            type="button"
+            variant="ghost-danger"
+            disabled={deleteMutation.isPending}
+            onClick={() => deleteMutation.mutate(row.original.app_key)}
+          >
+            删除
+          </TableRowActionButton>
+          <TableRowActionLink
+            href={`/console/apps/${row.original.app_key}`}
+            icon={<ArrowRight size={15} />}
+            onClick={(event) => {
+              event.preventDefault();
+              void navigate(`/console/apps/${row.original.app_key}`);
+            }}
+          >
+            进入
+          </TableRowActionLink>
+        </TableActionCell>
       ),
     },
   ];
@@ -101,6 +141,7 @@ export function ConsoleAppList() {
     data: apps,
     columns,
     getCoreRowModel: getCoreRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
   });
 
   return (
@@ -110,16 +151,9 @@ export function ConsoleAppList() {
         title="应用列表"
         description="查看可管理应用、配置完整性和接入入口。"
         actions={
-          <>
-            {isAdmin ? (
-              <Button variant="primary" icon={<Plus size={16} />} onClick={() => setCreateDialogOpen(true)}>
-                新建应用
-              </Button>
-            ) : null}
-            <Button icon={<RefreshCcw size={16} />} loading={appsQuery.isFetching} onClick={() => void appsQuery.refetch()}>
-              刷新
-            </Button>
-          </>
+          <Button icon={<RefreshCcw size={16} />} loading={appsQuery.isFetching} onClick={() => void appsQuery.refetch()}>
+            刷新
+          </Button>
         }
       />
       {appsQuery.error ? (
@@ -137,41 +171,54 @@ export function ConsoleAppList() {
           }
         />
       ) : (
-        <TableFrame>
-          <TableRoot>
-            <TableHead>
-              {table.getHeaderGroups().map((headerGroup) => (
-                <TableRow key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => (
-                    <TableHeaderCell key={header.id}>
-                      {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                    </TableHeaderCell>
-                  ))}
-                </TableRow>
-              ))}
-            </TableHead>
-            <TableBody>
-              {table.getRowModel().rows.length > 0 ? (
-                table.getRowModel().rows.map((row) => (
-                  <TableRow key={row.id}>
-                    {row.getVisibleCells().map((cell) => (
-                      <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+        <section className="space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-base font-semibold text-ink">应用列表</h2>
+            <Button type="button" variant="primary" icon={<Plus size={16} />} onClick={() => setCreateDialogOpen(true)}>
+              新建
+            </Button>
+          </div>
+          <TableFrame>
+            <TableRoot>
+              <TableHead>
+                {table.getHeaderGroups().map((headerGroup) => (
+                  <TableRow key={headerGroup.id}>
+                    {headerGroup.headers.map((header) => (
+                      <TableHeaderCell key={header.id}>
+                        {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                      </TableHeaderCell>
                     ))}
                   </TableRow>
-                ))
-              ) : (
-                <TableEmptyRow colSpan={table.getAllLeafColumns().length}>
-                  <EmptyState
-                    title={appsQuery.isLoading ? "应用加载中" : "暂无可见应用"}
-                    description={appsQuery.isLoading ? "正在读取控制台应用列表。" : "当前账号暂无可管理或可查看的应用。"}
-                  />
-                </TableEmptyRow>
-              )}
-            </TableBody>
-          </TableRoot>
-        </TableFrame>
+                ))}
+              </TableHead>
+              <TableBody>
+                {table.getRowModel().rows.length > 0 ? (
+                  table.getRowModel().rows.map((row) => (
+                    <TableRow key={row.id}>
+                      {row.getVisibleCells().map((cell) => (
+                        cell.column.id === "actions" ? (
+                          <Fragment key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Fragment>
+                        ) : (
+                          <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                        )
+                      ))}
+                    </TableRow>
+                  ))
+                ) : (
+                  <TableEmptyRow colSpan={table.getAllLeafColumns().length}>
+                    <EmptyState
+                      title={appsQuery.isLoading ? "应用加载中" : "暂无可见应用"}
+                      description={appsQuery.isLoading ? "正在读取控制台应用列表。" : "当前账号暂无可管理或可查看的应用。"}
+                    />
+                  </TableEmptyRow>
+                )}
+              </TableBody>
+            </TableRoot>
+            <TablePagination table={table} />
+          </TableFrame>
+        </section>
       )}
-      {createDialogOpen && isAdmin ? (
+      {createDialogOpen ? (
         <CreateAppDialog
           errorMessage={createMutation.error ? (createMutation.error as Error).message : ""}
           isSubmitting={createMutation.isPending}
@@ -193,7 +240,6 @@ interface AppCreateFormPayload {
   description: string;
   owner_user_ids: string[];
   developer_user_ids: string[];
-  is_active: boolean;
 }
 
 function CreateAppDialog({
@@ -212,7 +258,6 @@ function CreateAppDialog({
   const [description, setDescription] = useState("");
   const [ownerUserIds, setOwnerUserIds] = useState("");
   const [developerUserIds, setDeveloperUserIds] = useState("");
-  const [isActive, setIsActive] = useState(true);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -222,7 +267,6 @@ function CreateAppDialog({
       description: description.trim(),
       owner_user_ids: splitUserIds(ownerUserIds),
       developer_user_ids: splitUserIds(developerUserIds),
-      is_active: isActive,
     });
   };
 
@@ -265,9 +309,6 @@ function CreateAppDialog({
             onChange={(event) => setDeveloperUserIds(event.currentTarget.value)}
           />
         </Field>
-        <Field label="启用应用" hint="勾选后应用可被正常访问。">
-          <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.currentTarget.checked)} />
-        </Field>
         {errorMessage ? <StatusBanner tone="signal" title="创建失败" message={errorMessage} /> : null}
       </form>
     </Dialog>
@@ -279,13 +320,4 @@ function splitUserIds(value: string): string[] {
     .split(/[,\n]/)
     .map((item) => item.trim())
     .filter(Boolean);
-}
-
-function isConsoleAdmin(): boolean {
-  const role =
-    document.body.dataset.currentUserRole ??
-    document.documentElement.dataset.currentUserRole ??
-    document.getElementById("easyauth-root")?.dataset.currentUserRole ??
-    "";
-  return role === "EasyAuth Admins";
 }
