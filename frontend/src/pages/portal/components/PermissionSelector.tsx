@@ -5,7 +5,7 @@ import {
   useReactTable,
   type ColumnDef,
 } from "@tanstack/react-table";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
 import type { CSSProperties, MouseEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { EmptyState } from "../../../components/ui/EmptyState";
@@ -25,7 +25,6 @@ interface PermissionSelectorProps {
   groups: ScopedPermissionGroupItem[];
   ungroupedPermissions: ScopedPermissionItem[];
   selectedKeys: string[];
-  selectedScopes: Record<string, string>;
   expandedGroupKeys: string[];
   loading: boolean;
   errorMessage: string;
@@ -72,7 +71,6 @@ export function PermissionSelector({
   groups,
   ungroupedPermissions,
   selectedKeys,
-  selectedScopes,
   expandedGroupKeys,
   loading,
   errorMessage,
@@ -94,10 +92,6 @@ export function PermissionSelector({
   const displayRows = useMemo(
     () => (showSelectedOnly ? filterRowsToSelected(rows) : rows),
     [rows, showSelectedOnly],
-  );
-  const toolbarStats = useMemo(
-    () => buildPermissionSelectorToolbarStats(selectedKeys, selectedScopes),
-    [selectedKeys, selectedScopes],
   );
   const columns = useMemo<ColumnDef<PermissionSelectorRow>[]>(
     () => [
@@ -195,13 +189,13 @@ export function PermissionSelector({
   return (
     <div className="permission-selector__surface">
       <PermissionSelectorToolbar
-        selectedCount={toolbarStats.selectedCount}
-        configuredScopeCount={toolbarStats.configuredScopeCount}
+        selectedCount={selectedKeys.length}
         showSelectedOnly={showSelectedOnly}
         onShowSelectedOnlyChange={setShowSelectedOnly}
         onExpandAll={() => onExpandGroups(currentPageGroupKeysFromRows(currentPageRows))}
         onCollapseAll={() => onCollapseGroups(currentPageGroupKeysFromRows(currentPageRows))}
         onSelectAll={() => onSelectPermissionKeys(currentPageSelectionKeysFromRows(currentPageRows))}
+        onSelectScope={(scopeKey) => onSelectPermissionKeys(currentPageSelectionKeysFromRows(currentPageRows, scopeKey))}
         onClear={() => onClearPermissionKeys(currentPageSelectionKeysFromRows(currentPageRows))}
       />
       <div className="overflow-x-auto">
@@ -326,28 +320,73 @@ export function PermissionSelector({
 
 function PermissionSelectorToolbar({
   selectedCount,
-  configuredScopeCount,
   showSelectedOnly,
   onShowSelectedOnlyChange,
   onExpandAll,
   onCollapseAll,
   onSelectAll,
+  onSelectScope,
   onClear,
 }: {
   selectedCount: number;
-  configuredScopeCount: number;
   showSelectedOnly: boolean;
   onShowSelectedOnlyChange: (showSelectedOnly: boolean) => void;
   onExpandAll: () => void;
   onCollapseAll: () => void;
   onSelectAll: () => void;
+  onSelectScope: (scopeKey: string) => void;
   onClear: () => void;
 }) {
+  const [selectScopeMenuIsOpen, setSelectScopeMenuIsOpen] = useState(false);
+  const selectScopeMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!selectScopeMenuIsOpen) {
+      return;
+    }
+
+    function closeOnOutsidePointerDown(event: PointerEvent) {
+      if (!selectScopeMenuRef.current?.contains(event.target as Node)) {
+        setSelectScopeMenuIsOpen(false);
+      }
+    }
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setSelectScopeMenuIsOpen(false);
+      }
+    }
+
+    document.addEventListener("pointerdown", closeOnOutsidePointerDown);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointerDown);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [selectScopeMenuIsOpen]);
+
+  function selectScope(scopeKey: string) {
+    onSelectScope(scopeKey);
+    setSelectScopeMenuIsOpen(false);
+  }
+
   return (
     <div className="permission-selector__toolbar">
       <div className="permission-selector__toolbar-stats" aria-label="权限选择状态">
         <span className="permission-selector__toolbar-stat">已选 {selectedCount} 项</span>
-        <span className="permission-selector__toolbar-stat">已设置权限范围 {configuredScopeCount} 项</span>
+        <label className="permission-selector__toolbar-toggle">
+          <input
+            type="checkbox"
+            role="switch"
+            aria-label="仅看已选"
+            checked={showSelectedOnly}
+            onChange={(event) => onShowSelectedOnlyChange(event.currentTarget.checked)}
+          />
+          <span aria-hidden="true" className="permission-selector__toolbar-toggle-track">
+            <span className="permission-selector__toolbar-toggle-thumb" />
+          </span>
+          <span>仅看已选</span>
+        </label>
       </div>
       <div className="permission-selector__toolbar-actions">
         <button type="button" className="permission-selector__toolbar-button" onClick={onExpandAll}>
@@ -356,26 +395,38 @@ function PermissionSelectorToolbar({
         <button type="button" className="permission-selector__toolbar-button" onClick={onCollapseAll}>
           折叠全部
         </button>
-        <button type="button" className="permission-selector__toolbar-button" onClick={onSelectAll}>
-          全选
-        </button>
+        <div ref={selectScopeMenuRef} className="permission-selector__toolbar-split-button">
+          <button type="button" className="permission-selector__toolbar-button" onClick={onSelectAll}>
+            全选
+          </button>
+          <button
+            type="button"
+            className="permission-selector__toolbar-button"
+            aria-label="展开全选范围选项"
+            aria-haspopup="menu"
+            aria-expanded={selectScopeMenuIsOpen}
+            onClick={() => setSelectScopeMenuIsOpen((isOpen) => !isOpen)}
+          >
+            <ChevronDown size={15} aria-hidden="true" />
+          </button>
+          {selectScopeMenuIsOpen ? (
+            <div role="menu" className="permission-selector__toolbar-menu">
+              <button type="button" role="menuitem" className="permission-selector__toolbar-menu-item" onClick={() => selectScope("SELF")}>
+                本人
+              </button>
+              <button type="button" role="menuitem" className="permission-selector__toolbar-menu-item" onClick={() => selectScope("MANAGED_USERS")}>
+                管理范围
+              </button>
+              <button type="button" role="menuitem" className="permission-selector__toolbar-menu-item" onClick={() => selectScope("ALL")}>
+                全部
+              </button>
+            </div>
+          ) : null}
+        </div>
         <button type="button" className="permission-selector__toolbar-button" onClick={onClear}>
           清空
         </button>
       </div>
-      <label className="permission-selector__toolbar-toggle">
-        <input
-          type="checkbox"
-          role="switch"
-          aria-label="仅看已选"
-          checked={showSelectedOnly}
-          onChange={(event) => onShowSelectedOnlyChange(event.currentTarget.checked)}
-        />
-        <span aria-hidden="true" className="permission-selector__toolbar-toggle-track">
-          <span className="permission-selector__toolbar-toggle-thumb" />
-        </span>
-        <span>仅看已选</span>
-      </label>
     </div>
   );
 }
@@ -521,25 +572,6 @@ function ScopeChip({
       <span>{label}</span>
     </label>
   );
-}
-
-interface PermissionSelectorToolbarStats {
-  selectedCount: number;
-  configuredScopeCount: number;
-}
-
-function buildPermissionSelectorToolbarStats(
-  selectedKeys: string[],
-  selectedScopes: Record<string, string>,
-): PermissionSelectorToolbarStats {
-  return {
-    selectedCount: selectedKeys.length,
-    configuredScopeCount: countConfiguredScopes(selectedScopes),
-  };
-}
-
-function countConfiguredScopes(selectedScopes: Record<string, string>): number {
-  return Object.values(selectedScopes).filter(Boolean).length;
 }
 
 function filterRowsToSelected(rows: PermissionSelectorRow[]): PermissionSelectorRow[] {
@@ -797,7 +829,7 @@ function groupScopeOptions(group: ScopedPermissionGroupItem): ScopeOptionView[] 
   return Array.from(scopesByKey.values());
 }
 
-function currentPageSelectionKeysFromRows(rows: Array<{ original: PermissionSelectorRow }>): string[] {
+function currentPageSelectionKeysFromRows(rows: Array<{ original: PermissionSelectorRow }>, scopeKey?: string): string[] {
   const permissionsByKey = new Map<string, ScopedPermissionItem>();
   for (const row of rows) {
     if (row.original.type === "permission") {
@@ -808,7 +840,13 @@ function currentPageSelectionKeysFromRows(rows: Array<{ original: PermissionSele
       permissionsByKey.set(permission.key, permission);
     }
   }
-  return Array.from(permissionsByKey.values()).flatMap((permission) => permissionSelectionKeys(permission));
+  return Array.from(permissionsByKey.values()).flatMap((permission) =>
+    scopeKey ? permissionSelectionKeysForScope(permission, scopeKey) : permissionSelectionKeys(permission),
+  );
+}
+
+function permissionSelectionKeysForScope(permission: ScopedPermissionItem, scopeKey: string): string[] {
+  return (permission.scopes ?? []).some((scope) => scope.key === scopeKey) ? [directGrantSelectionKey(permission.key, scopeKey)] : [];
 }
 
 function currentPageGroupKeysFromRows(rows: Array<{ original: PermissionSelectorRow }>): string[] {

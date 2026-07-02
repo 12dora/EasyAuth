@@ -38,9 +38,17 @@ describe("表格架构", () => {
 
     expect(content).toMatch(/showSelectedOnly/);
     expect(content).toMatch(/filterRowsToSelected/);
-    expect(content).toMatch(/buildPermissionSelectorToolbarStats/);
     expect(content).toMatch(/role="switch"/);
     expect(content).toMatch(/aria-label="仅看已选"/);
+  });
+
+  test("门户权限选择工具栏状态只保留已选数量", () => {
+    const file = join(sourceRoot, "pages/portal/components/PermissionSelector.tsx");
+    const content = readFileSync(file, "utf8");
+
+    expect(content).toMatch(/selectedCount/);
+    expect(content).not.toMatch(/configuredScopeCount/);
+    expect(content).not.toMatch(/已设置权限范围/);
   });
 
   test("门户权限选择退出动画状态不会在每次渲染返回新数组", () => {

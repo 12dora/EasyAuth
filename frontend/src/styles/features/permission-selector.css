@@ -20,6 +20,7 @@
 .permission-selector__toolbar-stats {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 0.5rem;
 }
 
@@ -41,6 +42,7 @@
   flex: 0 1 auto;
   flex-wrap: wrap;
   justify-content: flex-end;
+  margin-left: auto;
   gap: 0.5rem;
 }
 
@@ -70,6 +72,67 @@
 .permission-selector__toolbar-button:focus-visible {
   outline: 2px solid rgb(var(--amber) / 0.5);
   outline-offset: 2px;
+}
+
+.permission-selector__toolbar-split-button {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+}
+
+.permission-selector__toolbar-split-button > .permission-selector__toolbar-button {
+  position: relative;
+  border-radius: 4px 0 0 4px;
+}
+
+.permission-selector__toolbar-split-button > .permission-selector__toolbar-button + .permission-selector__toolbar-button {
+  margin-left: -1px;
+  border-radius: 0 4px 4px 0;
+  padding-inline: 0.45rem;
+}
+
+.permission-selector__toolbar-split-button > .permission-selector__toolbar-button:hover,
+.permission-selector__toolbar-split-button > .permission-selector__toolbar-button:focus-visible {
+  z-index: 1;
+}
+
+.permission-selector__toolbar-menu {
+  position: absolute;
+  top: calc(100% + 0.375rem);
+  right: 0;
+  z-index: 30;
+  min-width: 8rem;
+  border: 1px solid rgb(var(--hairline));
+  border-radius: 6px;
+  background: rgb(var(--paper));
+  box-shadow: 0 14px 30px rgb(15 23 42 / 0.12);
+  padding: 0.25rem;
+}
+
+.permission-selector__toolbar-menu-item {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  min-height: 1.75rem;
+  border-radius: 4px;
+  padding: 0.35rem 0.55rem;
+  color: rgb(var(--ink-soft));
+  font-size: 12px;
+  font-weight: 700;
+  text-align: left;
+  white-space: nowrap;
+  transition: background 160ms var(--ease-press), color 160ms var(--ease-press);
+}
+
+.permission-selector__toolbar-menu-item:hover,
+.permission-selector__toolbar-menu-item:focus-visible {
+  background: rgb(var(--paper-deep));
+  color: rgb(var(--ink));
+}
+
+.permission-selector__toolbar-menu-item:focus-visible {
+  outline: 2px solid rgb(var(--amber) / 0.5);
+  outline-offset: -1px;
 }
 
 .permission-selector__toolbar-toggle {
@@ -378,6 +441,8 @@
   .permission-selector__toolbar-toggle-track,
   .permission-selector__toolbar-toggle-thumb,
   .permission-selector__toolbar-button,
+  .permission-selector__toolbar-menu,
+  .permission-selector__toolbar-menu-item,
   .permission-selector__chevron {
     transition: none;
   }

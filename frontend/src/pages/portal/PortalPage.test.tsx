@@ -380,7 +380,7 @@ describe("PortalPage access request form", () => {
                       default_approver_user_ids: ["security-owner"],
                       scopes: [
                         { key: "SELF", name: "本人" },
-                        { key: "MANAGED", name: "管理范围" },
+                        { key: "MANAGED_USERS", name: "管理用户" },
                         { key: "ALL", name: "全部" },
                       ],
                     },
@@ -435,7 +435,7 @@ describe("PortalPage access request form", () => {
               authorization_group_keys: [],
               direct_grants: [
                 { permission: "orders.refund.approve", scope: "SELF" },
-                { permission: "orders.refund.approve", scope: "MANAGED" },
+                { permission: "orders.refund.approve", scope: "MANAGED_USERS" },
                 { permission: "orders.refund.approve", scope: "ALL" },
                 { permission: "dashboard.view", scope: "GLOBAL" },
               ],
@@ -477,7 +477,7 @@ describe("PortalPage access request form", () => {
                   name: "查看订单",
                   scopes: [
                     { key: "SELF", name: "本人" },
-                    { key: "MANAGED", name: "管理范围" },
+                    { key: "MANAGED_USERS", name: "管理用户" },
                     { key: "ALL", name: "全部" },
                   ],
                 },
@@ -498,7 +498,7 @@ describe("PortalPage access request form", () => {
                       name: "审批退款",
                       scopes: [
                         { key: "SELF", name: "本人" },
-                        { key: "MANAGED", name: "管理范围" },
+                        { key: "MANAGED_USERS", name: "管理用户" },
                         { key: "ALL", name: "全部" },
                       ],
                     },
@@ -547,10 +547,10 @@ describe("PortalPage access request form", () => {
               authorization_group_keys: [],
               direct_grants: [
                 { permission: "orders.read", scope: "SELF" },
-                { permission: "orders.read", scope: "MANAGED" },
+                { permission: "orders.read", scope: "MANAGED_USERS" },
                 { permission: "orders.read", scope: "ALL" },
                 { permission: "orders.refund.approve", scope: "SELF" },
-                { permission: "orders.refund.approve", scope: "MANAGED" },
+                { permission: "orders.refund.approve", scope: "MANAGED_USERS" },
                 { permission: "orders.refund.approve", scope: "ALL" },
               ],
               approver_user_ids: ["app-owner"],
@@ -785,7 +785,7 @@ describe("PortalPage access request form", () => {
       expect(within(permissionTable).getByRole("columnheader", { name: "权限范围" })).toBeVisible();
       expect(within(permissionTable).queryByRole("columnheader", { name: "scope" })).not.toBeInTheDocument();
       expect(within(permissionTable).queryByRole("columnheader", { name: "选择" })).not.toBeInTheDocument();
-      expect(screen.getByText("已设置权限范围 3 项")).toBeVisible();
+      expect(screen.queryByText(/已设置权限范围/)).not.toBeInTheDocument();
       expect(screen.queryByText(/当前显示/)).not.toBeInTheDocument();
 
       const expandButton = within(permissionTable).getByRole("button", { name: "展开 订单" });
@@ -853,18 +853,18 @@ describe("PortalPage access request form", () => {
       await user.click(within(permissionTable).getByRole("button", { name: "展开 退款" }));
 
       const self = within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 本人" });
-      const managed = within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 管理范围" });
+      const managed = within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 管理用户" });
       const all = within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 全部" });
 
       await user.click(all);
       expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 本人" })).toBeChecked();
-      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 管理范围" })).toBeChecked();
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 管理用户" })).toBeChecked();
       expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 全部" })).toBeChecked();
       expect(screen.getByText("已选 3 项")).toBeVisible();
 
       await user.click(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 本人" }));
       expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 本人" })).not.toBeChecked();
-      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 管理范围" })).not.toBeChecked();
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 管理用户" })).not.toBeChecked();
       expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 全部" })).not.toBeChecked();
       expect(screen.getByText("已选 0 项")).toBeVisible();
     } finally {
@@ -890,7 +890,7 @@ describe("PortalPage access request form", () => {
       await user.click(within(permissionTable).getByRole("checkbox", { name: "选择权限组 orders 全部" }));
 
       expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 本人" })).toBeChecked();
-      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 管理范围" })).toBeChecked();
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 管理用户" })).toBeChecked();
       expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 全部" })).toBeChecked();
 
       await user.click(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 全部" }));
@@ -900,7 +900,7 @@ describe("PortalPage access request form", () => {
       expect(within(permissionTable).getByRole("checkbox", { name: "选择权限组 orders 全部" })).not.toBeChecked();
       expect(within(permissionTable).getByRole("checkbox", { name: "选择权限组 orders 全部" })).toHaveAttribute("aria-checked", "false");
       expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 本人" })).not.toBeChecked();
-      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 管理范围" })).not.toBeChecked();
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 管理用户" })).not.toBeChecked();
       expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 全部" })).not.toBeChecked();
     } finally {
       vi.unstubAllGlobals();
@@ -995,27 +995,34 @@ describe("PortalPage access request form", () => {
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
 
-      expect(screen.getByText("已选 0 项")).toBeVisible();
-      expect(screen.getByText("已设置权限范围 3 项")).toBeVisible();
+      const selectionStatus = screen.getByLabelText("权限选择状态");
+      expect(within(selectionStatus).getByText("已选 0 项")).toBeVisible();
+      expect(within(selectionStatus).getByRole("switch", { name: "仅看已选" })).toBeVisible();
+      expect(screen.queryByText(/已设置权限范围/)).not.toBeInTheDocument();
       expect(screen.queryByText(/当前显示/)).not.toBeInTheDocument();
       expect(screen.getByRole("button", { name: "展开全部" })).toBeVisible();
       expect(screen.getByRole("button", { name: "折叠全部" })).toBeVisible();
       expect(screen.getByRole("button", { name: "全选" })).toBeVisible();
       expect(screen.getByRole("button", { name: "清空" })).toBeVisible();
+      await user.click(screen.getByLabelText("展开全选范围选项"));
+      const selectAllScopeMenu = screen.getByRole("menu");
+      expect(within(selectAllScopeMenu).getByRole("menuitem", { name: "本人" })).toBeVisible();
+      expect(within(selectAllScopeMenu).getByRole("menuitem", { name: "管理范围" })).toBeVisible();
+      expect(within(selectAllScopeMenu).getByRole("menuitem", { name: "全部" })).toBeVisible();
 
       await user.click(within(permissionTable).getByRole("button", { name: "展开 订单" }));
 
       await user.click(within(permissionTable).getByRole("checkbox", { name: "选择 orders.export 本人" }));
-      expect(screen.getByText("已选 1 项")).toBeVisible();
+      expect(within(screen.getByLabelText("权限选择状态")).getByText("已选 1 项")).toBeVisible();
 
-      await user.click(screen.getByRole("switch", { name: "仅看已选" }));
+      await user.click(within(screen.getByLabelText("权限选择状态")).getByRole("switch", { name: "仅看已选" }));
       expect(within(permissionTable).getByText("订单")).toBeVisible();
       expect(within(permissionTable).getByText("导出订单")).toBeVisible();
       expect(within(permissionTable).queryByText("查看订单")).not.toBeInTheDocument();
       expect(within(permissionTable).queryByText("查看看板")).not.toBeInTheDocument();
       expect(screen.getByText("第 1-2 条 / 共 2 条")).toBeVisible();
 
-      await user.click(screen.getByRole("switch", { name: "仅看已选" }));
+      await user.click(within(screen.getByLabelText("权限选择状态")).getByRole("switch", { name: "仅看已选" }));
       expect(within(permissionTable).getByText("查看订单")).toBeVisible();
       expect(within(permissionTable).getByText("查看看板")).toBeVisible();
     } finally {
@@ -1069,6 +1076,131 @@ describe("PortalPage access request form", () => {
 
       await user.click(screen.getByRole("button", { name: "清空" }));
       expect(screen.getByText("已选 0 项")).toBeVisible();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("工具条全选主按钮仍选择当前页所有权限范围", async () => {
+    const fetchMock = permissionSelectorFetchMock(portalPermissionSelectorCatalog);
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage();
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "CRM (crm)" });
+      await user.selectOptions(screen.getByLabelText("应用"), "crm");
+      const permissionTable = await screen.findByRole("table", { name: "权限选择" });
+
+      await user.click(screen.getByRole("button", { name: "展开全部" }));
+      await user.click(screen.getByRole("button", { name: "全选" }));
+      await user.click(within(permissionTable).getByRole("button", { name: "展开 退款" }));
+
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.read 本人" })).toBeChecked();
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.export 本人" })).toBeChecked();
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 本人" })).toBeChecked();
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 管理用户" })).toBeChecked();
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 全部" })).toBeChecked();
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 dashboard.view 全局" })).toBeChecked();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("工具条全选范围下拉按 scope 精确选择并提交时过滤不支持的权限范围", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/request-catalog") {
+        return jsonResponse({
+          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["app-owner"] }],
+          approver_options: [{ user_id: "app-owner", name: "应用负责人" }],
+          authorization_groups: [],
+          permission_groups: [
+            {
+              id: 1,
+              app_key: "crm",
+              type: "group",
+              key: "orders",
+              name: "订单",
+              permissions: [
+                {
+                  id: 101,
+                  app_key: "crm",
+                  key: "orders.refund.approve",
+                  name: "审批退款",
+                  scopes: [
+                    { key: "SELF", name: "本人" },
+                    { key: "MANAGED_USERS", name: "管理范围" },
+                    { key: "ALL", name: "全部" },
+                  ],
+                },
+                { id: 102, app_key: "crm", key: "orders.export", name: "导出订单", scopes: [{ key: "SELF", name: "本人" }] },
+              ],
+            },
+          ],
+          ungrouped_permissions: [],
+        });
+      }
+      if (url === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
+        return jsonResponse({ ok: true });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage();
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "CRM (crm)" });
+      await user.selectOptions(screen.getByLabelText("应用"), "crm");
+      const permissionTable = await screen.findByRole("table", { name: "权限选择" });
+      await user.click(screen.getByRole("button", { name: "展开全部" }));
+
+      await user.click(screen.getByLabelText("展开全选范围选项"));
+      await user.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "本人" }));
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 本人" })).toBeChecked();
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 管理范围" })).not.toBeChecked();
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 全部" })).not.toBeChecked();
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.export 本人" })).toBeChecked();
+
+      await user.click(screen.getByRole("button", { name: "清空" }));
+      await user.click(screen.getByLabelText("展开全选范围选项"));
+      await user.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "管理范围" }));
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 本人" })).not.toBeChecked();
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 管理范围" })).toBeChecked();
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 全部" })).not.toBeChecked();
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.export 本人" })).not.toBeChecked();
+
+      await user.click(screen.getByRole("button", { name: "清空" }));
+      await user.click(screen.getByLabelText("展开全选范围选项"));
+      await user.click(within(screen.getByRole("menu")).getByRole("menuitem", { name: "全部" }));
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 本人" })).not.toBeChecked();
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 管理范围" })).not.toBeChecked();
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 全部" })).toBeChecked();
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.export 本人" })).not.toBeChecked();
+
+      await user.type(screen.getByLabelText("申请原因"), "申请全部范围审批退款");
+      await user.click(screen.getByRole("button", { name: "提交申请" }));
+
+      await waitFor(() =>
+        expect(fetchMock).toHaveBeenCalledWith(
+          "/portal/api/v1/me/access-requests",
+          expect.objectContaining({
+            body: JSON.stringify({
+              app_key: "crm",
+              request_type: "grant",
+              authorization_group_keys: [],
+              direct_grants: [{ permission: "orders.refund.approve", scope: "ALL" }],
+              approver_user_ids: ["app-owner"],
+              grant_type: "permanent",
+              grant_expires_at: null,
+              reason: "申请全部范围审批退款",
+            }),
+          }),
+        ),
+      );
     } finally {
       vi.unstubAllGlobals();
     }
@@ -1352,7 +1484,7 @@ const portalPermissionSelectorCatalog = {
               name: "审批退款",
               scopes: [
                 { key: "SELF", name: "本人" },
-                { key: "MANAGED", name: "管理范围" },
+                { key: "MANAGED_USERS", name: "管理用户" },
                 { key: "ALL", name: "全部" },
               ],
             },

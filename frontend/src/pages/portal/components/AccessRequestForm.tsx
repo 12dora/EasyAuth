@@ -22,7 +22,6 @@ export function AccessRequestForm() {
           permissionGroups={form.permissionGroups}
           ungroupedPermissions={form.ungroupedPermissions}
           selectedPermissionKeys={form.selectedPermissionKeys}
-          selectedPermissionScopes={form.selectedPermissionScopes}
           expandedGroupKeys={form.expandedGroupKeys}
           catalogIsLoading={form.catalogIsLoading}
           catalogErrorMessage={form.catalogErrorMessage}

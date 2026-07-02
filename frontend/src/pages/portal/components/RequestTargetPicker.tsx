@@ -11,7 +11,6 @@ interface RequestTargetPickerProps {
   permissionGroups: ScopedPermissionGroupItem[];
   ungroupedPermissions: ScopedPermissionItem[];
   selectedPermissionKeys: string[];
-  selectedPermissionScopes: Record<string, string>;
   expandedGroupKeys: string[];
   catalogIsLoading: boolean;
   catalogErrorMessage: string;
@@ -34,7 +33,6 @@ export function RequestTargetPicker({
   permissionGroups,
   ungroupedPermissions,
   selectedPermissionKeys,
-  selectedPermissionScopes,
   expandedGroupKeys,
   catalogIsLoading,
   catalogErrorMessage,
@@ -85,7 +83,6 @@ export function RequestTargetPicker({
           groups={permissionGroups}
           ungroupedPermissions={ungroupedPermissions}
           selectedKeys={selectedPermissionKeys}
-          selectedScopes={selectedPermissionScopes}
           expandedGroupKeys={expandedGroupKeys}
           loading={catalogIsLoading}
           errorMessage={catalogErrorMessage}
