@@ -1,0 +1,62 @@
+.permission-selector__row {
+  --permission-depth: 0;
+}
+
+.permission-selector__row:not(.permission-selector__row--group) {
+  animation: permissionSelectorRowEnter 160ms var(--ease-out-paper) both;
+}
+
+.permission-selector__row--group {
+  cursor: pointer;
+}
+
+.permission-selector__row--exiting {
+  pointer-events: none;
+  animation: permissionSelectorRowExit 160ms var(--ease-press) both;
+}
+
+.permission-selector__group-button,
+.permission-selector__permission-name {
+  margin-left: calc(var(--permission-depth, 0) * 1.25rem);
+}
+
+.permission-selector__permission-name {
+  position: relative;
+  padding-left: calc(var(--permission-depth, 0) * 0.25rem + 0.45rem);
+}
+
+.permission-selector__permission-name::before {
+  position: absolute;
+  left: 0;
+  color: rgb(var(--ink-faint));
+  content: "·";
+}
+
+@keyframes permissionSelectorRowEnter {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes permissionSelectorRowExit {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .permission-selector__row:not(.permission-selector__row--group),
+  .permission-selector__row--exiting {
+    animation: none;
+  }
+}

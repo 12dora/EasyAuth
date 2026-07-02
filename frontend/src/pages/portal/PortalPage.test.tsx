@@ -288,6 +288,198 @@ describe("PortalPage access request form", () => {
     }
   });
 
+  test("权限组行支持整行展开、父级勾选和父级 scope 批量应用", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/request-catalog") {
+        return jsonResponse({
+          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["app-owner"] }],
+          approver_options: [{ user_id: "app-owner", name: "应用负责人" }],
+          authorization_groups: [],
+          permission_groups: [
+            {
+              id: 1,
+              app_key: "crm",
+              type: "group",
+              key: "orders",
+              name: "订单",
+              permissions: [
+                {
+                  id: 101,
+                  app_key: "crm",
+                  key: "orders.read",
+                  name: "查看订单",
+                  scopes: [
+                    { key: "SELF", name: "本人" },
+                    { key: "TEAM", name: "团队" },
+                  ],
+                },
+                { id: 102, app_key: "crm", key: "orders.export", name: "导出订单", scopes: [{ key: "SELF", name: "本人" }] },
+              ],
+              children: [
+                {
+                  id: 2,
+                  app_key: "crm",
+                  type: "group",
+                  key: "orders.refund",
+                  name: "退款",
+                  permissions: [
+                    {
+                      id: 103,
+                      app_key: "crm",
+                      key: "orders.refund.approve",
+                      name: "审批退款",
+                      scopes: [
+                        { key: "SELF", name: "本人" },
+                        { key: "TEAM", name: "团队" },
+                      ],
+                    },
+                  ],
+                },
+              ],
+            },
+          ],
+          ungrouped_permissions: [],
+        });
+      }
+      if (url === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
+        return jsonResponse({ ok: true });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage();
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "CRM (crm)" });
+      await user.selectOptions(screen.getByLabelText("应用"), "crm");
+      const permissionTable = await screen.findByRole("table", { name: "权限选择" });
+
+      await user.click(within(permissionTable).getByRole("row", { name: /订单/ }));
+      expect(within(permissionTable).getByText("查看订单")).toBeVisible();
+
+      const groupCheckbox = within(permissionTable).getByRole("checkbox", { name: "选择权限组 orders" });
+      await user.click(groupCheckbox);
+      expect(within(permissionTable).getByText("查看订单")).toBeVisible();
+      expect(groupCheckbox).toBeChecked();
+
+      await user.selectOptions(within(permissionTable).getByLabelText("orders 权限组 scope"), "TEAM");
+      await user.type(screen.getByLabelText("申请原因"), "批量申请订单权限");
+      await user.click(screen.getByRole("button", { name: "提交申请" }));
+
+      await waitFor(() =>
+        expect(fetchMock).toHaveBeenCalledWith(
+          "/portal/api/v1/me/access-requests",
+          expect.objectContaining({
+            body: JSON.stringify({
+              app_key: "crm",
+              request_type: "grant",
+              authorization_group_keys: [],
+              direct_grants: [
+                { permission: "orders.read", scope: "TEAM" },
+                { permission: "orders.export", scope: "SELF" },
+                { permission: "orders.refund.approve", scope: "TEAM" },
+              ],
+              approver_user_ids: ["app-owner"],
+              grant_type: "permanent",
+              grant_expires_at: null,
+              reason: "批量申请订单权限",
+            }),
+          }),
+        ),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("父级 checkbox 在只选择部分后代权限时显示半选状态", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/request-catalog") {
+        return jsonResponse({
+          apps: [{ id: 1, app_key: "crm", name: "CRM" }],
+          approver_options: [],
+          authorization_groups: [],
+          permission_groups: [
+            {
+              id: 1,
+              app_key: "crm",
+              type: "group",
+              key: "orders",
+              name: "订单",
+              permissions: [
+                { id: 101, app_key: "crm", key: "orders.read", name: "查看订单", scopes: [{ key: "SELF", name: "本人" }] },
+                { id: 102, app_key: "crm", key: "orders.export", name: "导出订单", scopes: [{ key: "SELF", name: "本人" }] },
+              ],
+            },
+          ],
+          ungrouped_permissions: [],
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage();
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "CRM (crm)" });
+      await user.selectOptions(screen.getByLabelText("应用"), "crm");
+      const permissionTable = await screen.findByRole("table", { name: "权限选择" });
+
+      await user.click(within(permissionTable).getByRole("button", { name: "展开 订单" }));
+      await user.click(within(permissionTable).getByRole("checkbox", { name: "选择 orders.read" }));
+
+      const groupCheckbox = within(permissionTable).getByRole("checkbox", { name: "选择权限组 orders" }) as HTMLInputElement;
+      expect(groupCheckbox).not.toBeChecked();
+      expect(groupCheckbox.indeterminate).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("审批人列表只展示姓名和部门但仍支持按用户 ID 搜索", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/request-catalog") {
+        return jsonResponse({
+          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["manager-001"] }],
+          approver_options: [{ user_id: "manager-001", name: "直属主管", department: "销售部", email: "manager@example.test" }],
+          authorization_groups: [],
+          permission_groups: [],
+          ungrouped_permissions: [],
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage();
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "CRM (crm)" });
+      await user.selectOptions(screen.getByLabelText("应用"), "crm");
+      expect(await screen.findByText("直属主管")).toBeVisible();
+      expect(screen.getByText("· 销售部")).toBeVisible();
+      expect(screen.queryByText("manager-001")).not.toBeInTheDocument();
+
+      await user.clear(screen.getByLabelText("搜索审批人"));
+      await user.type(screen.getByLabelText("搜索审批人"), "manager-001");
+      expect(screen.getByText("直属主管")).toBeVisible();
+      expect(screen.getByText("· 销售部")).toBeVisible();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   test("手动修改审批人后目标变化不覆盖，应用切换重置为新应用默认", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);

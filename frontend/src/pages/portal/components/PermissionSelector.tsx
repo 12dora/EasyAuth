@@ -7,7 +7,7 @@ import {
 } from "@tanstack/react-table";
 import { ChevronRight } from "lucide-react";
 import type { CSSProperties } from "react";
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { SelectInput } from "../../../components/Field";
 import { EmptyState } from "../../../components/ui/EmptyState";
 import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../components/ui/TablePrimitives";
@@ -45,13 +45,21 @@ type PermissionSelectorRow =
       isExpanded: boolean;
       selectedCount: number;
       permissionCount: number;
+      selectionState: GroupSelectionState;
+      scopeOptions: string[];
+      isExiting: boolean;
     }
   | {
       type: "permission";
       id: string;
       permission: ScopedPermissionItem;
       depth: number;
+      isExiting: boolean;
     };
+
+type GroupSelectionState = "checked" | "indeterminate" | "unchecked";
+
+const EXIT_ANIMATION_MS = 160;
 
 export function PermissionSelector({
   appKey,
@@ -66,9 +74,10 @@ export function PermissionSelector({
   onPermissionScopeChange,
   onToggleGroup,
 }: PermissionSelectorProps) {
+  const exitingGroupKeys = useExitingGroupKeys(expandedGroupKeys);
   const rows = useMemo(
-    () => buildPermissionRows(groups, ungroupedPermissions, expandedGroupKeys, selectedKeys),
-    [expandedGroupKeys, groups, selectedKeys, ungroupedPermissions],
+    () => buildPermissionRows(groups, ungroupedPermissions, expandedGroupKeys, exitingGroupKeys, selectedKeys),
+    [expandedGroupKeys, exitingGroupKeys, groups, selectedKeys, ungroupedPermissions],
   );
   const columns = useMemo<ColumnDef<PermissionSelectorRow>[]>(
     () => [
@@ -86,7 +95,7 @@ export function PermissionSelector({
               onToggleGroup={onToggleGroup}
             />
           ) : (
-            <span className="block font-medium text-ink" style={depthStyle(row.original.depth)}>
+            <span className="permission-selector__permission-name block font-medium text-ink" style={depthStyle(row.original.depth)}>
               {row.original.permission.name}
             </span>
           ),
@@ -105,7 +114,14 @@ export function PermissionSelector({
         header: "scope",
         cell: ({ row }) =>
           row.original.type === "group" ? (
-            <span aria-label="权限组无 scope">-</span>
+            <PermissionGroupScopeCell
+              group={row.original.group}
+              scopeOptions={row.original.scopeOptions}
+              selectedKeys={selectedKeys}
+              selectedScopes={selectedScopes}
+              onToggle={onTogglePermission}
+              onScopeChange={onPermissionScopeChange}
+            />
           ) : (
             <PermissionScopeCell
               permission={row.original.permission}
@@ -121,7 +137,12 @@ export function PermissionSelector({
         header: "选择",
         cell: ({ row }) =>
           row.original.type === "group" ? (
-            <span aria-label="权限组不可直接选择">-</span>
+            <PermissionGroupSelectionCell
+              group={row.original.group}
+              selectionState={row.original.selectionState}
+              selectedKeys={selectedKeys}
+              onToggle={onTogglePermission}
+            />
           ) : (
             <PermissionSelectionCell
               permission={row.original.permission}
@@ -174,7 +195,15 @@ export function PermissionSelector({
         <TableBody>
           {table.getRowModel().rows.length > 0 ? (
             table.getRowModel().rows.map((row) => (
-              <TableRow key={row.id} className={row.original.type === "group" ? "bg-paper-deep/60 hover:bg-paper-deep" : undefined}>
+              <TableRow
+                key={row.id}
+                className={joinClassNames(
+                  "permission-selector__row",
+                  row.original.type === "group" && "permission-selector__row--group bg-paper-deep/60 hover:bg-paper-deep",
+                  row.original.isExiting && "permission-selector__row--exiting",
+                )}
+                onClick={groupRowClickHandler(row.original, onToggleGroup)}
+              >
                 {row.getVisibleCells().map((cell) => (
                   <TableCell
                     key={cell.id}
@@ -215,8 +244,11 @@ function PermissionGroupNameCell({
   return (
     <button
       type="button"
-      className="inline-flex min-w-0 items-center gap-2 rounded-[2px] px-1.5 py-1 text-left text-[13px] font-semibold text-ink transition-colors hover:bg-ink/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[rgb(var(--amber)_/_0.5)]"
-      onClick={() => onToggleGroup(group.key)}
+      className="permission-selector__group-button inline-flex min-w-0 items-center gap-2 rounded-[2px] px-1.5 py-1 text-left text-[13px] font-semibold text-ink transition-colors hover:bg-ink/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[rgb(var(--amber)_/_0.5)]"
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggleGroup(group.key);
+      }}
       aria-expanded={isExpanded}
       aria-label={`${isExpanded ? "收起" : "展开"} ${group.name}`}
       style={depthStyle(depth)}
@@ -227,6 +259,73 @@ function PermissionGroupNameCell({
         {selectedCount}/{permissionCount}
       </span>
     </button>
+  );
+}
+
+function PermissionGroupScopeCell({
+  group,
+  scopeOptions,
+  selectedKeys,
+  selectedScopes,
+  onToggle,
+  onScopeChange,
+}: {
+  group: ScopedPermissionGroupItem;
+  scopeOptions: string[];
+  selectedKeys: string[];
+  selectedScopes: Record<string, string>;
+  onToggle: (key: string) => void;
+  onScopeChange: (permissionKey: string, scopeKey: string) => void;
+}) {
+  if (scopeOptions.length === 0) {
+    return <span aria-label="权限组无 scope">-</span>;
+  }
+
+  return (
+    <SelectInput
+      value=""
+      onClick={(event) => event.stopPropagation()}
+      onChange={(event) => applyGroupScope(group, event.currentTarget.value, selectedKeys, selectedScopes, onToggle, onScopeChange)}
+      aria-label={`${group.key} 权限组 scope`}
+    >
+      <option value="">批量 scope</option>
+      {scopeOptions.map((scopeKey) => (
+        <option key={scopeKey} value={scopeKey}>
+          {scopeKey}
+        </option>
+      ))}
+    </SelectInput>
+  );
+}
+
+function PermissionGroupSelectionCell({
+  group,
+  selectionState,
+  selectedKeys,
+  onToggle,
+}: {
+  group: ScopedPermissionGroupItem;
+  selectionState: GroupSelectionState;
+  selectedKeys: string[];
+  onToggle: (key: string) => void;
+}) {
+  const checkboxRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (checkboxRef.current) {
+      checkboxRef.current.indeterminate = selectionState === "indeterminate";
+    }
+  }, [selectionState]);
+
+  return (
+    <input
+      ref={checkboxRef}
+      type="checkbox"
+      checked={selectionState === "checked"}
+      onClick={(event) => event.stopPropagation()}
+      onChange={() => toggleGroupSelection(group, selectionState !== "checked", selectedKeys, onToggle)}
+      aria-label={`选择权限组 ${group.key}`}
+    />
   );
 }
 
@@ -251,6 +350,7 @@ function PermissionScopeCell({
       {singleScope ? (
         <SelectInput
           value={selectedScope}
+          onClick={(event) => event.stopPropagation()}
           onChange={(event) => onScopeChange(permission.key, event.currentTarget.value)}
           aria-label={`${permission.key} scope`}
         >
@@ -268,6 +368,7 @@ function PermissionScopeCell({
               <input
                 type="checkbox"
                 checked={selectedKeys.includes(directGrantSelectionKey(permission.key, scope.key))}
+                onClick={(event) => event.stopPropagation()}
                 onChange={() => onToggle(directGrantSelectionKey(permission.key, scope.key))}
                 aria-label={`选择 ${permission.key} ${scope.key}`}
               />
@@ -299,6 +400,7 @@ function PermissionSelectionCell({
         <input
           type="checkbox"
           checked={checked}
+          onClick={(event) => event.stopPropagation()}
           onChange={() => onToggle(permission.key)}
           aria-label={`选择 ${permission.key}`}
         />
@@ -313,15 +415,17 @@ function buildPermissionRows(
   groups: ScopedPermissionGroupItem[],
   ungroupedPermissions: ScopedPermissionItem[],
   expandedGroupKeys: string[],
+  exitingGroupKeys: string[],
   selectedKeys: string[],
 ): PermissionSelectorRow[] {
   return [
-    ...groups.flatMap((group) => buildGroupRows(group, 0, expandedGroupKeys, selectedKeys)),
+    ...groups.flatMap((group) => buildGroupRows(group, 0, expandedGroupKeys, exitingGroupKeys, selectedKeys, false)),
     ...ungroupedPermissions.map((permission) => ({
       type: "permission" as const,
       id: `permission:${permission.key}`,
       permission,
       depth: 0,
+      isExiting: false,
     })),
   ];
 }
@@ -330,11 +434,15 @@ function buildGroupRows(
   group: ScopedPermissionGroupItem,
   depth: number,
   expandedGroupKeys: string[],
+  exitingGroupKeys: string[],
   selectedKeys: string[],
+  isAncestorExiting: boolean,
 ): PermissionSelectorRow[] {
   const childGroups = (group.children ?? []).filter(isPermissionGroupItem);
-  const childPermissions = collectGroupPermissions(group);
+  const childPermissions = collectScopedGroupPermissions(group);
   const isExpanded = expandedGroupKeys.includes(group.key);
+  const isGroupExiting = exitingGroupKeys.includes(group.key);
+  const isChildExiting = isAncestorExiting || isGroupExiting;
   const rows: PermissionSelectorRow[] = [
     {
       type: "group",
@@ -344,10 +452,13 @@ function buildGroupRows(
       isExpanded,
       selectedCount: childPermissions.filter((permission) => isPermissionSelected(permission.key, selectedKeys)).length,
       permissionCount: childPermissions.length,
+      selectionState: groupSelectionState(group, selectedKeys),
+      scopeOptions: groupScopeOptions(group),
+      isExiting: isAncestorExiting,
     },
   ];
 
-  if (!isExpanded) {
+  if (!isExpanded && !isGroupExiting && !isAncestorExiting) {
     return rows;
   }
 
@@ -357,8 +468,9 @@ function buildGroupRows(
       id: `permission:${permission.key}`,
       permission,
       depth: depth + 1,
+      isExiting: isChildExiting,
     })),
-    ...childGroups.flatMap((childGroup) => buildGroupRows(childGroup, depth + 1, expandedGroupKeys, selectedKeys)),
+    ...childGroups.flatMap((childGroup) => buildGroupRows(childGroup, depth + 1, expandedGroupKeys, exitingGroupKeys, selectedKeys, isChildExiting)),
   );
 
   return rows;
@@ -370,4 +482,122 @@ function depthStyle(depth: number): CSSProperties {
 
 function isPermissionSelected(permissionKey: string, selectedKeys: string[]): boolean {
   return selectedKeys.some((key) => directGrantSelectionPermissionKey(key) === permissionKey);
+}
+
+function useExitingGroupKeys(expandedGroupKeys: string[]): string[] {
+  const previousExpandedGroupKeys = useRef(expandedGroupKeys);
+  const [exitingGroupKeys, setExitingGroupKeys] = useState<string[]>([]);
+
+  useEffect(() => {
+    const removedGroupKeys = previousExpandedGroupKeys.current.filter((key) => !expandedGroupKeys.includes(key));
+    previousExpandedGroupKeys.current = expandedGroupKeys;
+    if (removedGroupKeys.length === 0) {
+      setExitingGroupKeys((current) => current.filter((key) => !expandedGroupKeys.includes(key)));
+      return;
+    }
+
+    setExitingGroupKeys((current) => Array.from(new Set([...current, ...removedGroupKeys])));
+    const timeoutId = window.setTimeout(() => {
+      setExitingGroupKeys((current) => current.filter((key) => !removedGroupKeys.includes(key)));
+    }, EXIT_ANIMATION_MS);
+    return () => window.clearTimeout(timeoutId);
+  }, [expandedGroupKeys]);
+
+  return exitingGroupKeys.filter((key) => !expandedGroupKeys.includes(key));
+}
+
+function groupSelectionState(group: ScopedPermissionGroupItem, selectedKeys: string[]): GroupSelectionState {
+  const selectionKeys = collectGroupSelectionKeys(group);
+  if (selectionKeys.length === 0) {
+    return "unchecked";
+  }
+  const selectedCount = selectionKeys.filter((key) => selectedKeys.includes(key)).length;
+  if (selectedCount === 0) {
+    return "unchecked";
+  }
+  return selectedCount === selectionKeys.length ? "checked" : "indeterminate";
+}
+
+function toggleGroupSelection(
+  group: ScopedPermissionGroupItem,
+  shouldSelect: boolean,
+  selectedKeys: string[],
+  onToggle: (key: string) => void,
+): void {
+  for (const key of collectGroupSelectionKeys(group)) {
+    const isSelected = selectedKeys.includes(key);
+    if ((shouldSelect && !isSelected) || (!shouldSelect && isSelected)) {
+      onToggle(key);
+    }
+  }
+}
+
+function collectGroupSelectionKeys(group: ScopedPermissionGroupItem): string[] {
+  return collectScopedGroupPermissions(group).flatMap((permission) => permissionSelectionKeys(permission));
+}
+
+function permissionSelectionKeys(permission: ScopedPermissionItem): string[] {
+  const scopes = permission.scopes ?? [];
+  if (scopes.length > 1) {
+    return scopes.map((scope) => directGrantSelectionKey(permission.key, scope.key));
+  }
+  return [permission.key];
+}
+
+function groupScopeOptions(group: ScopedPermissionGroupItem): string[] {
+  return Array.from(
+    new Set(
+      collectScopedGroupPermissions(group).flatMap((permission) => (permission.scopes ?? []).map((scope) => scope.key)),
+    ),
+  );
+}
+
+function applyGroupScope(
+  group: ScopedPermissionGroupItem,
+  scopeKey: string,
+  selectedKeys: string[],
+  selectedScopes: Record<string, string>,
+  onToggle: (key: string) => void,
+  onScopeChange: (permissionKey: string, scopeKey: string) => void,
+): void {
+  if (!scopeKey) {
+    return;
+  }
+
+  for (const permission of collectScopedGroupPermissions(group)) {
+    const scopes = permission.scopes ?? [];
+    if (!scopes.some((scope) => scope.key === scopeKey)) {
+      continue;
+    }
+    if (scopes.length > 1) {
+      for (const scope of scopes) {
+        const selectionKey = directGrantSelectionKey(permission.key, scope.key);
+        const shouldSelect = scope.key === scopeKey;
+        const isSelected = selectedKeys.includes(selectionKey);
+        if ((shouldSelect && !isSelected) || (!shouldSelect && isSelected)) {
+          onToggle(selectionKey);
+        }
+      }
+      continue;
+    }
+    if (selectedScopes[permission.key] !== scopeKey) {
+      onScopeChange(permission.key, scopeKey);
+    }
+  }
+}
+
+function joinClassNames(...classNames: Array<string | false | null | undefined>): string {
+  return classNames.filter(Boolean).join(" ");
+}
+
+function groupRowClickHandler(
+  row: PermissionSelectorRow,
+  onToggleGroup: (key: string) => void,
+): (() => void) | undefined {
+  return row.type === "group" ? () => onToggleGroup(row.group.key) : undefined;
+}
+
+function collectScopedGroupPermissions(group: ScopedPermissionGroupItem): ScopedPermissionItem[] {
+  const childGroups = (group.children ?? []).filter(isPermissionGroupItem);
+  return [...(group.permissions ?? []), ...childGroups.flatMap((childGroup) => collectScopedGroupPermissions(childGroup))];
 }

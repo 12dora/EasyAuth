@@ -1,6 +1,7 @@
 @import "tailwindcss";
 @import "./layout-shell.css";
 @import "./responsive.css";
+@import "./features/permission-selector.css";
 
 :root {
   color-scheme: light;

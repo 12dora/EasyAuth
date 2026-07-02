@@ -115,7 +115,7 @@ function ApproverMultiSelect({
                     aria-label={`选择审批人 ${option.user_id}`}
                   />
                   <span className="text-ink">{approverOptionLabel(option)}</span>
-                  <code className="font-mono text-[12px] text-ink-faint">{option.user_id}</code>
+                  {option.department ? <span className="text-ink-faint">· {option.department}</span> : null}
                 </label>
               ))}
             </div>
@@ -147,7 +147,7 @@ function filterApproverOptions(options: ApproverOption[], selectedUserIds: strin
 }
 
 function approverOptionLabel(option: ApproverOption): string {
-  return option.name ?? option.display_name ?? option.label ?? option.user_id;
+  return option.name ?? option.display_name ?? option.label ?? "未命名审批人";
 }
 
 function approverSearchText(option: ApproverOption): string {
