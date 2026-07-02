@@ -134,7 +134,33 @@
   position: relative;
 }
 
-.permission-selector__row:not(.permission-selector__row--group) {
+.permission-selector__sticky-column {
+  position: sticky;
+  left: 0;
+  z-index: 10;
+  min-width: 18rem;
+  background: rgb(var(--paper));
+  background-clip: padding-box;
+}
+
+.permission-selector__sticky-column--header {
+  z-index: 24;
+  background: rgb(var(--paper-deep) / 0.98);
+}
+
+.permission-selector__row--group > .permission-selector__sticky-column {
+  background: rgb(var(--paper-deep));
+}
+
+.permission-selector__row--selected > .permission-selector__sticky-column {
+  background: rgb(var(--amber) / 0.055);
+}
+
+.permission-selector__row--group-selected > .permission-selector__sticky-column {
+  background: rgb(var(--amber) / 0.075);
+}
+
+.permission-selector__row--entering {
   animation: permissionSelectorRowEnter 160ms var(--ease-out-paper) both;
 }
 
@@ -344,7 +370,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .permission-selector__row:not(.permission-selector__row--group),
+  .permission-selector__row--entering,
   .permission-selector__row--exiting {
     animation: none;
   }

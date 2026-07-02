@@ -49,6 +49,7 @@ type PermissionSelectorRow =
       permissionCount: number;
       selectionState: GroupSelectionState;
       scopeOptions: ScopeOptionView[];
+      isEntering: boolean;
       isExiting: boolean;
     }
   | {
@@ -57,6 +58,7 @@ type PermissionSelectorRow =
       permission: ScopedPermissionItem;
       depth: number;
       isSelected: boolean;
+      isEntering: boolean;
       isExiting: boolean;
     };
 
@@ -83,9 +85,10 @@ export function PermissionSelector({
   onToggleGroup,
 }: PermissionSelectorProps) {
   const exitingGroupKeys = useExitingGroupKeys(expandedGroupKeys);
+  const enteringGroupKeys = useEnteringGroupKeys(expandedGroupKeys);
   const rows = useMemo(
-    () => buildPermissionRows(groups, ungroupedPermissions, expandedGroupKeys, exitingGroupKeys, selectedKeys),
-    [expandedGroupKeys, exitingGroupKeys, groups, selectedKeys, ungroupedPermissions],
+    () => buildPermissionRows(groups, ungroupedPermissions, expandedGroupKeys, enteringGroupKeys, exitingGroupKeys, selectedKeys),
+    [enteringGroupKeys, expandedGroupKeys, exitingGroupKeys, groups, selectedKeys, ungroupedPermissions],
   );
   const [showSelectedOnly, setShowSelectedOnly] = useState(false);
   const displayRows = useMemo(
@@ -212,7 +215,7 @@ export function PermissionSelector({
                     colSpan={header.colSpan}
                     className={joinClassNames(
                       "border-b border-ink/15 px-3 py-2.5 text-left align-bottom font-mono text-[10.5px] font-medium uppercase tracking-[0.14em] text-ink-soft",
-                      header.column.id === "permission" && "sticky left-0 z-20 bg-paper-deep/95",
+                      header.column.id === "permission" && "permission-selector__sticky-column permission-selector__sticky-column--header",
                       header.column.id === "scope" && "permission-selector__scope-cell",
                     )}
                   >
@@ -233,6 +236,7 @@ export function PermissionSelector({
                     row.original.type === "group" && "permission-selector__row--group bg-paper-deep/60 hover:bg-paper-deep",
                     row.original.type === "group" && row.original.selectionState !== "unchecked" && "permission-selector__row--group-selected",
                     row.original.type === "permission" && row.original.isSelected && "permission-selector__row--selected",
+                    row.original.isEntering && "permission-selector__row--entering",
                     row.original.isExiting && "permission-selector__row--exiting",
                   )}
                   onClick={groupRowClickHandler(row.original, onToggleGroup)}
@@ -242,7 +246,7 @@ export function PermissionSelector({
                       key={cell.id}
                       className={joinClassNames(
                         "border-b border-ink/8 px-3 py-2.5 align-middle text-[13px] text-ink",
-                        cell.column.id === "permission" && "sticky left-0 z-10 bg-inherit",
+                        cell.column.id === "permission" && "permission-selector__sticky-column",
                         cell.column.id === "scope" && "permission-selector__scope-cell",
                       )}
                     >
@@ -440,7 +444,7 @@ function PermissionGroupScopeCell({
             checked={selectionState === "checked"}
             mixed={selectionState === "indeterminate"}
             ariaLabel={`选择权限组 ${group.key} ${scope.name}`}
-            onChange={() => onScopeChange(group, scope.key, selectionState !== "checked")}
+            onChange={() => onScopeChange(group, scope.key, selectionState === "unchecked")}
           />
         );
       })}
@@ -553,17 +557,19 @@ function buildPermissionRows(
   groups: ScopedPermissionGroupItem[],
   ungroupedPermissions: ScopedPermissionItem[],
   expandedGroupKeys: string[],
+  enteringGroupKeys: string[],
   exitingGroupKeys: string[],
   selectedKeys: string[],
 ): PermissionSelectorRow[] {
   return [
-    ...groups.flatMap((group) => buildGroupRows(group, 0, expandedGroupKeys, exitingGroupKeys, selectedKeys, false)),
+    ...groups.flatMap((group) => buildGroupRows(group, 0, expandedGroupKeys, enteringGroupKeys, exitingGroupKeys, selectedKeys, false, false)),
     ...ungroupedPermissions.map((permission) => ({
       type: "permission" as const,
       id: `permission:${permission.key}`,
       permission,
       depth: 0,
       isSelected: isPermissionSelected(permission.key, selectedKeys),
+      isEntering: false,
       isExiting: false,
     })),
   ];
@@ -573,15 +579,19 @@ function buildGroupRows(
   group: ScopedPermissionGroupItem,
   depth: number,
   expandedGroupKeys: string[],
+  enteringGroupKeys: string[],
   exitingGroupKeys: string[],
   selectedKeys: string[],
+  isAncestorEntering: boolean,
   isAncestorExiting: boolean,
 ): PermissionSelectorRow[] {
   const childGroups = (group.children ?? []).filter(isPermissionGroupItem);
   const directChildPermissions = (group.children ?? []).filter((child): child is ScopedPermissionItem => !isPermissionGroupItem(child));
   const descendantPermissions = collectScopedGroupPermissions(group);
   const isExpanded = expandedGroupKeys.includes(group.key);
+  const isGroupEntering = enteringGroupKeys.includes(group.key);
   const isGroupExiting = exitingGroupKeys.includes(group.key);
+  const isChildEntering = isAncestorEntering || isGroupEntering;
   const isChildExiting = isAncestorExiting || isGroupExiting;
   const rows: PermissionSelectorRow[] = [
     {
@@ -594,11 +604,14 @@ function buildGroupRows(
       permissionCount: descendantPermissions.length,
       selectionState: groupSelectionState(group, selectedKeys),
       scopeOptions: groupScopeOptions(group),
+      isEntering: isAncestorEntering,
       isExiting: isAncestorExiting,
     },
   ];
 
-  if (!isExpanded && !isGroupExiting) {
+  const shouldRenderChildren = isExpanded || (isGroupExiting && !isAncestorEntering);
+
+  if (!shouldRenderChildren) {
     return rows;
   }
 
@@ -609,6 +622,7 @@ function buildGroupRows(
       permission,
       depth: depth + 1,
       isSelected: isPermissionSelected(permission.key, selectedKeys),
+      isEntering: isChildEntering,
       isExiting: isChildExiting,
     })),
     ...directChildPermissions.map((permission) => ({
@@ -617,9 +631,21 @@ function buildGroupRows(
       permission,
       depth: depth + 1,
       isSelected: isPermissionSelected(permission.key, selectedKeys),
+      isEntering: isChildEntering,
       isExiting: isChildExiting,
     })),
-    ...childGroups.flatMap((childGroup) => buildGroupRows(childGroup, depth + 1, expandedGroupKeys, exitingGroupKeys, selectedKeys, isChildExiting)),
+    ...childGroups.flatMap((childGroup) =>
+      buildGroupRows(
+        childGroup,
+        depth + 1,
+        expandedGroupKeys,
+        enteringGroupKeys,
+        exitingGroupKeys,
+        selectedKeys,
+        isChildEntering,
+        isChildExiting,
+      ),
+    ),
   );
 
   return rows;
@@ -633,8 +659,43 @@ function isPermissionSelected(permissionKey: string, selectedKeys: string[]): bo
   return selectedKeys.some((key) => directGrantSelectionPermissionKey(key) === permissionKey);
 }
 
+function useEnteringGroupKeys(expandedGroupKeys: string[]): string[] {
+  const previousExpandedGroupKeys = useRef(expandedGroupKeys);
+  const [enteringGroupKeys, setEnteringGroupKeys] = useState<string[]>([]);
+
+  useEffect(() => {
+    const addedGroupKeys = expandedGroupKeys.filter((key) => !previousExpandedGroupKeys.current.includes(key));
+    previousExpandedGroupKeys.current = expandedGroupKeys;
+    if (addedGroupKeys.length === 0) {
+      setEnteringGroupKeys((current) => {
+        const next = current.filter((key) => expandedGroupKeys.includes(key));
+        return stringListsAreEqual(current, next) ? current : next;
+      });
+      return;
+    }
+
+    setEnteringGroupKeys((current) => {
+      const next = Array.from(new Set([...current, ...addedGroupKeys]));
+      return stringListsAreEqual(current, next) ? current : next;
+    });
+    const timeoutId = window.setTimeout(() => {
+      setEnteringGroupKeys((current) => {
+        const next = current.filter((key) => !addedGroupKeys.includes(key));
+        return stringListsAreEqual(current, next) ? current : next;
+      });
+    }, EXIT_ANIMATION_MS);
+    return () => window.clearTimeout(timeoutId);
+  }, [expandedGroupKeys]);
+
+  return useMemo(
+    () => enteringGroupKeys.filter((key) => expandedGroupKeys.includes(key)),
+    [enteringGroupKeys, expandedGroupKeys],
+  );
+}
+
 function useExitingGroupKeys(expandedGroupKeys: string[]): string[] {
   const previousExpandedGroupKeys = useRef(expandedGroupKeys);
+  const timeoutIdsByKey = useRef(new Map<string, number>());
   const [exitingGroupKeys, setExitingGroupKeys] = useState<string[]>([]);
 
   useEffect(() => {
@@ -652,14 +713,30 @@ function useExitingGroupKeys(expandedGroupKeys: string[]): string[] {
       const next = Array.from(new Set([...current, ...removedGroupKeys]));
       return stringListsAreEqual(current, next) ? current : next;
     });
-    const timeoutId = window.setTimeout(() => {
-      setExitingGroupKeys((current) => {
-        const next = current.filter((key) => !removedGroupKeys.includes(key));
-        return stringListsAreEqual(current, next) ? current : next;
-      });
-    }, EXIT_ANIMATION_MS);
-    return () => window.clearTimeout(timeoutId);
+    for (const removedGroupKey of removedGroupKeys) {
+      if (timeoutIdsByKey.current.has(removedGroupKey)) {
+        continue;
+      }
+      const timeoutId = window.setTimeout(() => {
+        timeoutIdsByKey.current.delete(removedGroupKey);
+        setExitingGroupKeys((current) => {
+          const next = current.filter((key) => key !== removedGroupKey);
+          return stringListsAreEqual(current, next) ? current : next;
+        });
+      }, EXIT_ANIMATION_MS);
+      timeoutIdsByKey.current.set(removedGroupKey, timeoutId);
+    }
   }, [expandedGroupKeys]);
+
+  useEffect(() => {
+    const timeoutIds = timeoutIdsByKey.current;
+    return () => {
+      for (const timeoutId of timeoutIds.values()) {
+        window.clearTimeout(timeoutId);
+      }
+      timeoutIds.clear();
+    };
+  }, []);
 
   return useMemo(
     () => exitingGroupKeys.filter((key) => !expandedGroupKeys.includes(key)),

@@ -1,18 +1,15 @@
 import { useMemo, useState } from "react";
 
 import { Field, SelectInput, TextArea, TextInput } from "../../../components/Field";
-import type { AccessGrantType, ApproverOption, AuthorizationGroupItem } from "../hooks/useAccessRequestForm";
+import type { AccessGrantType, ApproverOption } from "../hooks/useAccessRequestForm";
 
 interface AccessRequestFieldsProps {
   appKey: string;
-  authorizationGroupKey: string;
-  authorizationGroups: AuthorizationGroupItem[];
   approverOptions: ApproverOption[];
   selectedApproverUserIds: string[];
   grantType: AccessGrantType;
   expiresAt: string;
   reason: string;
-  onAuthorizationGroupKeyChange: (groupKey: string) => void;
   onApproverToggle: (userId: string) => void;
   onGrantTypeChange: (grantType: AccessGrantType) => void;
   onExpiresAtChange: (expiresAt: string) => void;
@@ -21,14 +18,11 @@ interface AccessRequestFieldsProps {
 
 export function AccessRequestFields({
   appKey,
-  authorizationGroupKey,
-  authorizationGroups,
   approverOptions,
   selectedApproverUserIds,
   grantType,
   expiresAt,
   reason,
-  onAuthorizationGroupKeyChange,
   onApproverToggle,
   onGrantTypeChange,
   onExpiresAtChange,
@@ -36,40 +30,28 @@ export function AccessRequestFields({
 }: AccessRequestFieldsProps) {
   return (
     <>
-      <Field label="可申请权限组">
-        <SelectInput
-          value={authorizationGroupKey}
-          onChange={(event) => onAuthorizationGroupKeyChange(event.currentTarget.value)}
-          disabled={!appKey}
-        >
-          <option value="">不选择权限组</option>
-          {authorizationGroups.map((group) => (
-            <option key={`${group.app_key}:${group.key}`} value={group.key}>
-              {group.name} [{group.kind}] ({group.key})
-            </option>
-          ))}
-        </SelectInput>
-      </Field>
       <ApproverMultiSelect
         appKey={appKey}
         options={approverOptions}
         selectedUserIds={selectedApproverUserIds}
         onToggle={onApproverToggle}
       />
-      <Field label="授权期限">
-        <SelectInput value={grantType} onChange={(event) => onGrantTypeChange(event.currentTarget.value as AccessGrantType)}>
-          <option value="permanent">长期</option>
-          <option value="timed">限时</option>
-        </SelectInput>
-      </Field>
-      <Field label="过期时间">
-        <TextInput
-          type="datetime-local"
-          value={expiresAt}
-          onChange={(event) => onExpiresAtChange(event.currentTarget.value)}
-          disabled={grantType !== "timed"}
-        />
-      </Field>
+      <div className="grid gap-4 md:grid-cols-2">
+        <Field label="授权期限">
+          <SelectInput value={grantType} onChange={(event) => onGrantTypeChange(event.currentTarget.value as AccessGrantType)}>
+            <option value="permanent">长期</option>
+            <option value="timed">限时</option>
+          </SelectInput>
+        </Field>
+        <Field label="过期时间">
+          <TextInput
+            type="datetime-local"
+            value={expiresAt}
+            onChange={(event) => onExpiresAtChange(event.currentTarget.value)}
+            disabled={grantType !== "timed"}
+          />
+        </Field>
+      </div>
       <Field label="申请原因">
         <TextArea rows={4} value={reason} onChange={(event) => onReasonChange(event.currentTarget.value)} />
       </Field>

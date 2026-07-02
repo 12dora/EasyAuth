@@ -309,7 +309,7 @@ function buildAccessRequestActions(fields: AccessRequestFields, catalogView: Cat
       fields.setExpandedGroupKeys((current) => uniqueStrings([...current, ...keys]));
     },
     collapseGroups: (keys: string[]) => {
-      const keySet = new Set(keys);
+      const keySet = new Set(keys.flatMap((key) => [key, ...descendantGroupKeys(catalogView.permissionGroups, key)]));
       fields.setExpandedGroupKeys((current) => current.filter((key) => !keySet.has(key)));
     },
     togglePermission: (key: string) => {
@@ -355,13 +355,21 @@ function buildAccessRequestActions(fields: AccessRequestFields, catalogView: Cat
       fields.setSelectedPermissionKeys((current) => {
         let next = current;
         for (const permission of supportedPermissions) {
-          next = nextPermissionScopeSelection(permission, scopeKey, shouldSelect, next);
+          next = shouldSelect
+            ? nextPermissionScopeSelection(permission, scopeKey, true, next)
+            : nextPermissionScopeCascadeClearSelection(permission, scopeKey, next);
         }
         return next;
       });
     },
     toggleGroup: (key: string) => {
-      fields.setExpandedGroupKeys((current) => toggleListItem(current, key));
+      fields.setExpandedGroupKeys((current) => {
+        if (!current.includes(key)) {
+          return [...current, key];
+        }
+        const keySet = new Set([key, ...descendantGroupKeys(catalogView.permissionGroups, key)]);
+        return current.filter((item) => !keySet.has(item));
+      });
     },
     submit,
   };
@@ -488,6 +496,26 @@ export function nextPermissionScopeSelection(
   return uniqueStrings([...otherSelectionKeys, ...nextPermissionSelectionKeys]);
 }
 
+function nextPermissionScopeCascadeClearSelection(
+  permission: ScopedPermissionItem,
+  scopeKey: string,
+  selectedPermissionKeys: string[],
+): string[] {
+  const scopes = permission.scopes ?? [];
+  const targetScopeIndex = scopes.findIndex((scope) => scope.key === scopeKey);
+  if (targetScopeIndex === -1) {
+    return selectedPermissionKeys;
+  }
+  const removableScopeKeys = new Set(scopes.slice(0, targetScopeIndex + 1).map((scope) => scope.key));
+  const removableSelectionKeys = new Set(
+    permissionSelectionKeys(permission).filter((selectionKey) => {
+      const selectedScopeKey = directGrantSelectionScopeKey(selectionKey);
+      return selectedScopeKey !== null && removableScopeKeys.has(selectedScopeKey);
+    }),
+  );
+  return selectedPermissionKeys.filter((selectionKey) => !removableSelectionKeys.has(selectionKey));
+}
+
 function nextWholePermissionSelection(permission: ScopedPermissionItem, selectedPermissionKeys: string[]): string[] {
   const selectionKeys = permissionSelectionKeys(permission);
   if (selectionKeys.length === 0) {
@@ -512,6 +540,34 @@ function collectScopedGroupPermissions(group: ScopedPermissionGroupItem): Scoped
     ...childPermissions,
     ...childGroups.flatMap((childGroup) => collectScopedGroupPermissions(childGroup)),
   ];
+}
+
+function descendantGroupKeys(groups: ScopedPermissionGroupItem[], groupKey: string): string[] {
+  const group = findPermissionGroup(groups, groupKey);
+  return group ? collectDescendantGroupKeys(group) : [];
+}
+
+function findPermissionGroup(groups: ScopedPermissionGroupItem[], groupKey: string): ScopedPermissionGroupItem | null {
+  for (const group of groups) {
+    if (group.key === groupKey) {
+      return group;
+    }
+    const childGroups = (group.children ?? []).filter(
+      (child): child is ScopedPermissionGroupItem => "type" in child && child.type === "group",
+    );
+    const childResult = findPermissionGroup(childGroups, groupKey);
+    if (childResult) {
+      return childResult;
+    }
+  }
+  return null;
+}
+
+function collectDescendantGroupKeys(group: ScopedPermissionGroupItem): string[] {
+  const childGroups = (group.children ?? []).filter(
+    (child): child is ScopedPermissionGroupItem => "type" in child && child.type === "group",
+  );
+  return childGroups.flatMap((childGroup) => [childGroup.key, ...collectDescendantGroupKeys(childGroup)]);
 }
 
 function useDefaultSingleScopes(

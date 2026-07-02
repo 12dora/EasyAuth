@@ -13,45 +13,41 @@ export function AccessRequestForm() {
 
   return (
     <PanelSurface>
-      <div className="grid items-start gap-5 lg:grid-cols-2">
-        <div className="self-start">
-          <RequestTargetPicker
-            appKey={form.appKey}
-            apps={form.apps}
-            permissionGroups={form.permissionGroups}
-            ungroupedPermissions={form.ungroupedPermissions}
-            selectedPermissionKeys={form.selectedPermissionKeys}
-            selectedPermissionScopes={form.selectedPermissionScopes}
-            expandedGroupKeys={form.expandedGroupKeys}
-            catalogIsLoading={form.catalogIsLoading}
-            catalogErrorMessage={form.catalogErrorMessage}
-            onAppKeyChange={form.changeAppKey}
-            onPermissionScopeChange={form.changePermissionScope}
-            onPermissionGroupScopeChange={form.changePermissionGroupScope}
-            onSelectPermissionKeys={form.selectPermissionKeys}
-            onClearPermissionKeys={form.clearPermissionKeys}
-            onExpandGroups={form.expandGroups}
-            onCollapseGroups={form.collapseGroups}
-            onToggleGroup={form.toggleGroup}
-          />
-        </div>
-        <div className="self-start">
-          <AccessRequestFields
-            appKey={form.appKey}
-            authorizationGroupKey={form.authorizationGroupKey}
-            authorizationGroups={form.authorizationGroups}
-            approverOptions={form.approverOptions}
-            selectedApproverUserIds={form.selectedApproverUserIds}
-            grantType={form.grantType}
-            expiresAt={form.expiresAt}
-            reason={form.reason}
-            onAuthorizationGroupKeyChange={form.changeAuthorizationGroupKey}
-            onApproverToggle={form.toggleApprover}
-            onGrantTypeChange={form.changeGrantType}
-            onExpiresAtChange={form.changeExpiresAt}
-            onReasonChange={form.changeReason}
-          />
-        </div>
+      <div className="flex flex-col gap-5">
+        <RequestTargetPicker
+          appKey={form.appKey}
+          apps={form.apps}
+          authorizationGroupKey={form.authorizationGroupKey}
+          authorizationGroups={form.authorizationGroups}
+          permissionGroups={form.permissionGroups}
+          ungroupedPermissions={form.ungroupedPermissions}
+          selectedPermissionKeys={form.selectedPermissionKeys}
+          selectedPermissionScopes={form.selectedPermissionScopes}
+          expandedGroupKeys={form.expandedGroupKeys}
+          catalogIsLoading={form.catalogIsLoading}
+          catalogErrorMessage={form.catalogErrorMessage}
+          onAppKeyChange={form.changeAppKey}
+          onAuthorizationGroupKeyChange={form.changeAuthorizationGroupKey}
+          onPermissionScopeChange={form.changePermissionScope}
+          onPermissionGroupScopeChange={form.changePermissionGroupScope}
+          onSelectPermissionKeys={form.selectPermissionKeys}
+          onClearPermissionKeys={form.clearPermissionKeys}
+          onExpandGroups={form.expandGroups}
+          onCollapseGroups={form.collapseGroups}
+          onToggleGroup={form.toggleGroup}
+        />
+        <AccessRequestFields
+          appKey={form.appKey}
+          approverOptions={form.approverOptions}
+          selectedApproverUserIds={form.selectedApproverUserIds}
+          grantType={form.grantType}
+          expiresAt={form.expiresAt}
+          reason={form.reason}
+          onApproverToggle={form.toggleApprover}
+          onGrantTypeChange={form.changeGrantType}
+          onExpiresAtChange={form.changeExpiresAt}
+          onReasonChange={form.changeReason}
+        />
       </div>
       {form.catalogErrorMessage ? <StatusBanner tone="signal" title="申请目录加载失败" message={form.catalogErrorMessage} /> : null}
       <div className="mt-5 flex flex-wrap items-center justify-end gap-3">
