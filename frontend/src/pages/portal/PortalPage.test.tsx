@@ -96,6 +96,77 @@ describe("PortalPage access request form", () => {
     }
   });
 
+  test("StrictMode 下点击权限组选择 checkbox 后表单仍可提交", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/request-catalog") {
+        return jsonResponse({
+          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["manager-001"] }],
+          approver_options: [{ user_id: "manager-001", name: "直属主管" }],
+          authorization_groups: [],
+          permission_groups: [
+            {
+              id: 1,
+              app_key: "crm",
+              type: "group",
+              key: "crm.customer",
+              name: "客户管理",
+              permissions: [
+                { id: 101, app_key: "crm", key: "crm.customer.read", name: "查看客户", scopes: [{ key: "SELF", name: "本人" }] },
+              ],
+            },
+          ],
+          ungrouped_permissions: [],
+        });
+      }
+      if (url === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
+        return jsonResponse({ ok: true });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPageStrict();
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "CRM (crm)" });
+      await user.selectOptions(screen.getByLabelText("应用"), "crm");
+
+      const permissionTable = await screen.findByRole("table", { name: "权限选择" });
+      const groupCheckbox = within(permissionTable).getByRole("checkbox", { name: "选择权限组 crm.customer" });
+      await user.click(groupCheckbox);
+
+      await waitFor(() => expect(groupCheckbox).toBeChecked());
+      await user.type(screen.getByLabelText("申请原因"), "申请查看客户");
+      expect(screen.getByRole("button", { name: "提交申请" })).toBeEnabled();
+
+      await user.click(screen.getByRole("button", { name: "提交申请" }));
+
+      await waitFor(() =>
+        expect(fetchMock).toHaveBeenCalledWith(
+          "/portal/api/v1/me/access-requests",
+          expect.objectContaining({
+            method: "POST",
+            body: JSON.stringify({
+              app_key: "crm",
+              request_type: "grant",
+              authorization_group_keys: [],
+              direct_grants: [{ permission: "crm.customer.read", scope: "SELF" }],
+              approver_user_ids: ["manager-001"],
+              grant_type: "permanent",
+              grant_expires_at: null,
+              reason: "申请查看客户",
+            }),
+          }),
+        ),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   test("未选择权限组或直接权限时不能提交申请", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);

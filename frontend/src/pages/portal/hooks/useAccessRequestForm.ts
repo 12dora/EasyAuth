@@ -472,19 +472,20 @@ function useDefaultSingleScopes(
 }
 
 function useDefaultApprovers(fields: AccessRequestFields, catalogView: CatalogView): void {
+  const { appKey, authorizationGroupKey, selectedPermissionKeys, approverSelectionWasEdited, setSelectedApproverUserIds } = fields;
   const defaultApproverUserIds = useMemo(
     () => buildDefaultApproverUserIds(fields, catalogView),
-    [catalogView, fields.appKey, fields.authorizationGroupKey, fields.selectedPermissionKeys],
+    [catalogView, appKey, authorizationGroupKey, selectedPermissionKeys],
   );
 
   useEffect(() => {
-    if (fields.approverSelectionWasEdited) {
+    if (approverSelectionWasEdited) {
       return;
     }
-    fields.setSelectedApproverUserIds((current) =>
+    setSelectedApproverUserIds((current) =>
       listsAreEqual(current, defaultApproverUserIds) ? current : defaultApproverUserIds,
     );
-  }, [defaultApproverUserIds, fields]);
+  }, [approverSelectionWasEdited, defaultApproverUserIds, setSelectedApproverUserIds]);
 }
 
 function buildDefaultApproverUserIds(values: AccessRequestPayloadValues, catalogView: CatalogView): string[] {

@@ -22,6 +22,14 @@ describe("表格架构", () => {
     expect(content).toMatch(/useReactTable/);
     expect(content).toMatch(/<table\b/);
   });
+
+  test("门户权限选择退出动画状态不会在每次渲染返回新数组", () => {
+    const file = join(sourceRoot, "pages/portal/components/PermissionSelector.tsx");
+    const content = readFileSync(file, "utf8");
+
+    expect(content).toMatch(/return useMemo\(\s*\(\) => exitingGroupKeys\.filter/);
+    expect(content).toMatch(/stringListsAreEqual\(current, next\) \? current : next/);
+  });
 });
 
 function sourceFiles(directory: string): string[] {

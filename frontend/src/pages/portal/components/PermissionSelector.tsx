@@ -548,18 +548,30 @@ function useExitingGroupKeys(expandedGroupKeys: string[]): string[] {
     const removedGroupKeys = previousExpandedGroupKeys.current.filter((key) => !expandedGroupKeys.includes(key));
     previousExpandedGroupKeys.current = expandedGroupKeys;
     if (removedGroupKeys.length === 0) {
-      setExitingGroupKeys((current) => current.filter((key) => !expandedGroupKeys.includes(key)));
+      setExitingGroupKeys((current) => {
+        const next = current.filter((key) => !expandedGroupKeys.includes(key));
+        return stringListsAreEqual(current, next) ? current : next;
+      });
       return;
     }
 
-    setExitingGroupKeys((current) => Array.from(new Set([...current, ...removedGroupKeys])));
+    setExitingGroupKeys((current) => {
+      const next = Array.from(new Set([...current, ...removedGroupKeys]));
+      return stringListsAreEqual(current, next) ? current : next;
+    });
     const timeoutId = window.setTimeout(() => {
-      setExitingGroupKeys((current) => current.filter((key) => !removedGroupKeys.includes(key)));
+      setExitingGroupKeys((current) => {
+        const next = current.filter((key) => !removedGroupKeys.includes(key));
+        return stringListsAreEqual(current, next) ? current : next;
+      });
     }, EXIT_ANIMATION_MS);
     return () => window.clearTimeout(timeoutId);
   }, [expandedGroupKeys]);
 
-  return exitingGroupKeys.filter((key) => !expandedGroupKeys.includes(key));
+  return useMemo(
+    () => exitingGroupKeys.filter((key) => !expandedGroupKeys.includes(key)),
+    [expandedGroupKeys, exitingGroupKeys],
+  );
 }
 
 function groupSelectionState(group: ScopedPermissionGroupItem, selectedKeys: string[]): GroupSelectionState {
@@ -596,6 +608,10 @@ function groupScopeOptions(group: ScopedPermissionGroupItem): string[] {
 
 function joinClassNames(...classNames: Array<string | false | null | undefined>): string {
   return classNames.filter(Boolean).join(" ");
+}
+
+function stringListsAreEqual(left: string[], right: string[]): boolean {
+  return left.length === right.length && left.every((item, index) => item === right[index]);
 }
 
 function groupRowClickHandler(
