@@ -6,7 +6,7 @@ from re import search
 from typing import Final, Protocol
 
 import pytest
-from django.test import Client
+from django.test import Client, override_settings
 
 from easyauth.accounts.auth import AUTHENTIK_GROUPS_SESSION_KEY, AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import UserMirror
@@ -106,6 +106,20 @@ def test_ops1_console_entry_redirects_unauthenticated_user_to_authentik_login() 
     assert response.headers["Location"] == "/auth/login/?next=/console/%3Ftab%3Droles"
 
 
+@override_settings(DEBUG=True, EASYAUTH_ENABLE_DEV_LOGIN=True)
+def test_ops1_console_entry_auto_binds_dev_admin_when_dev_login_is_enabled() -> None:
+    client = Client(HTTP_HOST="localhost")
+
+    response = client.get("/console/")
+
+    html = response.content.decode()
+    assert response.status_code == HTTPStatus.OK
+    assert 'data-easyauth-react-shell="console"' in html
+    assert 'data-current-user-role="EasyAuth Admins"' in html
+    assert client.session[AUTHENTIK_SESSION_KEY] == "dev-user"
+    assert client.session[AUTHENTIK_GROUPS_SESSION_KEY] == ["EasyAuth Admins"]
+
+
 def test_ops1_console_entry_redirects_non_admin_user_to_forbidden_page() -> None:
     client = _non_admin_client("developer-no-console")
 
@@ -113,6 +127,20 @@ def test_ops1_console_entry_redirects_non_admin_user_to_forbidden_page() -> None
 
     assert response.status_code == HTTPStatus.FOUND
     assert response.headers["Location"] == "/errors/forbidden/"
+
+
+@override_settings(DEBUG=True, EASYAUTH_ENABLE_DEV_LOGIN=True)
+def test_ops1_console_entry_upgrades_non_admin_session_in_dev_login_mode() -> None:
+    client = _non_admin_client("developer-no-console-dev")
+
+    response = client.get("/console/")
+
+    html = response.content.decode()
+    assert response.status_code == HTTPStatus.OK
+    assert 'data-easyauth-react-shell="console"' in html
+    assert 'data-current-user-role="EasyAuth Admins"' in html
+    assert client.session[AUTHENTIK_SESSION_KEY] == "dev-user"
+    assert client.session[AUTHENTIK_GROUPS_SESSION_KEY] == ["EasyAuth Admins"]
 
 
 def test_ops1_console_app_detail_redirects_non_admin_user_to_forbidden_page() -> None:

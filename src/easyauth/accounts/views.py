@@ -18,26 +18,27 @@ from easyauth.accounts.auth import (
     OIDC_STATE_SESSION_KEY,
     OidcClientConfig,
     OidcSessionError,
-    VerifiedOidcClaims,
-    bind_oidc_session,
     build_authorization_url,
     clear_auth_session,
     clear_oidc_login_attempt,
     verify_callback_state,
     verify_oidc_claims,
 )
+from easyauth.accounts.dev_login import (
+    DEFAULT_DEV_LOGIN_USER_ID,
+    DevLoginConfigurationError,
+    bind_dev_login_session,
+    dev_login_is_enabled,
+)
 from easyauth.accounts.logout_state import (
     clear_browser_logged_out,
     logged_out_response,
     mark_browser_logged_out,
 )
-from easyauth.accounts.models import USER_STATUS_ACTIVE
 from easyauth.accounts.oidc_exchange import exchange_authorization_code_for_claims
 
 FIELD_AUTHORIZATION_CODE = "code"
 DEFAULT_DEV_LOGIN_NEXT = "/portal/"
-DEFAULT_DEV_LOGIN_USER_ID = "dev-user"
-DEV_LOGIN_NAME = "本地开发用户"
 LOCAL_LOOPBACK_HOSTS: Final = frozenset({"127.0.0.1", "::1", "localhost"})
 REASON_CODE_REQUIRED = "is required"
 SETTING_CLIENT_ID = "EASYAUTH_AUTHENTIK_OIDC_CLIENT_ID"
@@ -52,39 +53,22 @@ SETTING_REDIRECT_URI = "EASYAUTH_AUTHENTIK_OIDC_REDIRECT_URI"
 SETTING_SIGNING_ALGORITHMS = "EASYAUTH_AUTHENTIK_OIDC_SIGNING_ALGORITHMS"
 SETTING_SCOPES = "EASYAUTH_AUTHENTIK_OIDC_SCOPES"
 SETTING_TOKEN_ENDPOINT = "EASYAUTH_AUTHENTIK_OIDC_TOKEN_ENDPOINT"  # noqa: S105 - 配置键名, 不是密钥值.
-SETTING_CONSOLE_SUPERUSER_GROUPS = "EASYAUTH_CONSOLE_SUPERUSER_GROUPS"
 OIDC_ISSUER_PROVIDER_SLUG_SEGMENT_COUNT: Final = 3
 
 
 def dev_login(request: HttpRequest) -> HttpResponseRedirect:
-    if not _bool_setting("DEBUG") or not _bool_setting("EASYAUTH_ENABLE_DEV_LOGIN"):
+    if not dev_login_is_enabled():
         raise Http404
 
-    groups = _string_tuple_setting(SETTING_CONSOLE_SUPERUSER_GROUPS)
-    if not groups:
-        clear_auth_session(request)
+    user_id = request.GET.get("user_id", DEFAULT_DEV_LOGIN_USER_ID).strip()
+    try:
+        _ = bind_dev_login_session(request, user_id=user_id)
+    except DevLoginConfigurationError as error:
         return HttpResponse(
-            f"{SETTING_CONSOLE_SUPERUSER_GROUPS} is required for dev login",
+            str(error),
             status=HTTPStatus.BAD_REQUEST,
             content_type="text/plain",
         )
-
-    user_id = request.GET.get("user_id", DEFAULT_DEV_LOGIN_USER_ID).strip()
-    if user_id == "":
-        user_id = DEFAULT_DEV_LOGIN_USER_ID
-    user = bind_oidc_session(
-        request,
-        VerifiedOidcClaims(
-            subject=user_id,
-            name=DEV_LOGIN_NAME,
-            email=f"{user_id}@dev.local",
-            groups=groups,
-        ),
-    )
-    if user.status != USER_STATUS_ACTIVE:
-        user.status = USER_STATUS_ACTIVE
-        user.full_clean()
-        user.save(update_fields=["status", "updated_at"])
     return HttpResponseRedirect(_safe_dev_login_next(request))
 
 
