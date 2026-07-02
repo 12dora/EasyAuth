@@ -49,7 +49,7 @@
 约束：
 
 - `(app, key)` 唯一。
-- `key` 使用稳定字符集，建议与 `app_key` 同样只允许大写字母、数字和下划线，示例为 `SELF/MANAGED/ALL/GLOBAL`。
+- `key` 使用稳定字符集，建议与 `app_key` 同样只允许大写字母、数字和下划线，示例为 `SELF/MANAGED_USERS/ALL/GLOBAL`。
 
 ### `AuthorizationGroup`
 

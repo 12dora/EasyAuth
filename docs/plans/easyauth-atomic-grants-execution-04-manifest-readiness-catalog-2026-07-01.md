@@ -33,7 +33,7 @@
   },
   "scopes": [
     {"key": "SELF", "name": "本人", "description": "", "is_active": true, "display_order": 10},
-    {"key": "MANAGED", "name": "管理范围", "description": "", "is_active": true, "display_order": 20},
+    {"key": "MANAGED_USERS", "name": "管理范围", "description": "由 EasyAuth 解析出的被管理用户", "is_active": true, "display_order": 20},
     {"key": "ALL", "name": "全部", "description": "", "is_active": true, "display_order": 30}
   ],
   "permission_groups": [
@@ -45,7 +45,7 @@
       "name": "查看客户资料",
       "description": "",
       "group_key": "crm.customer",
-      "supported_scopes": ["SELF", "MANAGED", "ALL"],
+      "supported_scopes": ["SELF", "MANAGED_USERS", "ALL"],
       "risk_level": "standard",
       "is_active": true
     }

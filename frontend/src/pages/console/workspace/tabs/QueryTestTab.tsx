@@ -12,10 +12,10 @@ import { Field, TextInput } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { Toast } from "../../../../components/Toast";
 import { apiRequest } from "../../../../lib/api";
-import type { QueryTestResult } from "../../../../lib/domain";
+import type { ExpandedGrantItem, QueryTestResult } from "../../../../lib/domain";
 
 type QueryTestGroup = { key?: string; name?: string; source?: string; snapshot_version?: string };
-type QueryTestGrant = {
+type QueryTestGrant = Partial<ExpandedGrantItem> & {
   permission?: string;
   scope?: string;
   source_type?: string;
@@ -61,6 +61,9 @@ export function QueryTestTab({ appKey }: { appKey: string }) {
       header: "来源",
       cell: ({ row }) => (row.original.source_key ? `${row.original.source_type ?? "-"}:${row.original.source_key}` : row.original.source_type ?? "-"),
     },
+    { header: "Resolved 用户数", cell: ({ row }) => (row.original.resolved ? row.original.resolved.user_ids.length : "-") },
+    { header: "Resolver", cell: ({ row }) => row.original.resolved?.resolver ?? "-" },
+    { header: "Resolved at", cell: ({ row }) => row.original.resolved?.resolved_at ?? "-" },
     { header: "快照版本", cell: ({ row }) => row.original.snapshot_version ?? result?.snapshot_version ?? "-" },
   ];
   const groupTable = useReactTable({

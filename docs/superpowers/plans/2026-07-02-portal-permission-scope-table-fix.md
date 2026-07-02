@@ -57,7 +57,7 @@
 
 - [ ] **步骤 1: 扩展测试 fixture**
 
-把 `portalPermissionSelectorCatalog` 中多权限范围权限改成递增业务口径，确保至少包含 `SELF`、`MANAGED`、`ALL`：
+把 `portalPermissionSelectorCatalog` 中多权限范围权限改成递增业务口径，确保至少包含 `SELF`、`MANAGED_USERS`、`ALL`：
 
 ```ts
 {
@@ -67,7 +67,7 @@
   name: "审批退款",
   scopes: [
     { key: "SELF", name: "本人" },
-    { key: "MANAGED", name: "管理范围" },
+    { key: "MANAGED_USERS", name: "管理范围" },
     { key: "ALL", name: "全部" },
   ],
 }

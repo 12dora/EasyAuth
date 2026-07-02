@@ -44,4 +44,56 @@ describe("grantDraft", () => {
       ],
     });
   });
+
+  test("构造授权组保存 payload 时保留管理范围策略字段", () => {
+    const payload = buildAuthorizationGroupPayload({
+      key: "manager",
+      kind: "role",
+      name: "主管",
+      description: "管理范围角色",
+      requestable: true,
+      is_active: true,
+      grants: [
+        {
+          permission: "order.read",
+          scope: "MANAGED_USERS",
+          is_active: true,
+          managed_scope_policy: {
+            mode: "override",
+            resolver: "dingtalk_manager_chain",
+            enabled: true,
+          },
+          effective_managed_scope_policy: {
+            resolver: "dingtalk_manager_chain",
+            source: "authorization_group_grant",
+            inherited_from: null,
+            health_status: "healthy",
+          },
+        },
+        {
+          permission: "invoice.read",
+          scope: "SELF",
+          is_active: true,
+        },
+      ],
+    });
+
+    expect(payload.grants).toEqual([
+      {
+        permission: "order.read",
+        scope: "MANAGED_USERS",
+        is_active: true,
+        managed_scope_policy: {
+          mode: "override",
+          resolver: "dingtalk_manager_chain",
+          enabled: true,
+        },
+      },
+      {
+        permission: "invoice.read",
+        scope: "SELF",
+        is_active: true,
+      },
+    ]);
+  });
 });

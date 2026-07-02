@@ -174,7 +174,7 @@ git commit -m "feat(console): support EasyTrade app onboarding"
   },
   "scopes": [
     {"key": "SELF", "name": "本人", "description": "本人 owner 范围", "display_order": 10},
-    {"key": "MANAGED", "name": "管理范围", "description": "本人、同 region 或同 segment 的 active 用户", "display_order": 20},
+    {"key": "MANAGED_USERS", "name": "管理范围", "description": "由 EasyAuth 解析出的被管理用户", "display_order": 20},
     {"key": "ALL", "name": "全部", "description": "不按 owner 过滤", "display_order": 30}
   ],
   "permission_groups": [
@@ -187,7 +187,7 @@ git commit -m "feat(console): support EasyTrade app onboarding"
       "name": "查看客户",
       "description": "",
       "group_key": "customer",
-      "supported_scopes": ["SELF", "MANAGED", "ALL"],
+      "supported_scopes": ["SELF", "MANAGED_USERS", "ALL"],
       "risk_level": "standard"
     },
     {
@@ -195,7 +195,7 @@ git commit -m "feat(console): support EasyTrade app onboarding"
       "name": "查看 Pipeline",
       "description": "",
       "group_key": "pipeline",
-      "supported_scopes": ["SELF", "MANAGED", "ALL"],
+      "supported_scopes": ["SELF", "MANAGED_USERS", "ALL"],
       "risk_level": "standard"
     }
   ],

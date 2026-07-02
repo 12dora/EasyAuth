@@ -15,6 +15,7 @@ from easyauth.applications.models import (
     AppScope,
     AuthorizationGroup,
     AuthorizationGroupGrant,
+    ManagedScopePolicy,
     Permission,
     PermissionGroup,
 )
@@ -45,7 +46,7 @@ def test_ops1_configuration_readiness_blocks_active_app_without_catalog_owner_or
 def test_ops1_configuration_readiness_blocks_requestable_authorization_group_without_rule() -> None:
     # Given: 可申请授权组已有 grant、凭据和 owner, 但没有 active ApprovalRule。
     app = App.objects.create(app_key="ops1-missing-rule", name="OPS1 Missing Rule")
-    _ready_catalog(app, group_key="admin", requestable=True, approval_rule=False)
+    _ = _ready_catalog(app, group_key="admin", requestable=True, approval_rule=False)
 
     # When: 应用负责人查看配置完整性。
     readiness = configuration_readiness_for_app(app)
@@ -61,7 +62,7 @@ def test_ops1_configuration_readiness_blocks_requestable_authorization_group_wit
 def test_ops1_configuration_readiness_is_ready_when_required_configuration_exists() -> None:
     # Given: active App 具备 owner、active Permission、AuthorizationGroup、ApprovalRule 和凭据。
     app = App.objects.create(app_key="ops1-ready", name="OPS1 Ready")
-    _ready_catalog(app, group_key="auditor", requestable=True, approval_rule=True)
+    _ = _ready_catalog(app, group_key="auditor", requestable=True, approval_rule=True)
 
     # When: 应用负责人查看配置完整性。
     readiness = configuration_readiness_for_app(app)
@@ -69,6 +70,53 @@ def test_ops1_configuration_readiness_is_ready_when_required_configuration_exist
     # Then: 配置完整性返回 ready 且没有风险项。
     assert readiness.status == CONFIGURATION_STATUS_READY
     assert readiness.issues == ()
+
+
+def test_ops1_configuration_readiness_blocks_managed_users_grant_without_policy() -> None:
+    # Given: App 已满足基础发布要求, 但 MANAGED_USERS grant 没有 override 或 app default 策略。
+    app = App.objects.create(app_key="ops1-managed-policy-missing", name="OPS1 Managed Missing")
+    _ = _ready_managed_scope_catalog(app)
+
+    # When: 应用负责人查看配置完整性。
+    readiness = configuration_readiness_for_app(app)
+
+    # Then: MANAGED_USERS grant 缺少有效策略会阻止发布。
+    assert readiness.status == CONFIGURATION_STATUS_BLOCKING
+    assert [issue.code for issue in readiness.issues] == [
+        "managed_scope_app_default_policy_missing",
+    ]
+    assert readiness.issues[0].severity == CONFIGURATION_STATUS_BLOCKING
+    assert readiness.issues[0].subject == "admin:invoice.read:MANAGED_USERS"
+
+
+def test_ops1_configuration_readiness_blocks_disabled_managed_scope_policy() -> None:
+    # Given: MANAGED_USERS grant 只有 disabled override, 即使 app default 可用也不能继承。
+    app = App.objects.create(app_key="ops1-managed-policy-disabled", name="OPS1 Managed Disabled")
+    grant = _ready_managed_scope_catalog(app)
+    _ = ManagedScopePolicy.objects.create(
+        app=app,
+        target_type="app_default",
+        target_id=app.id,
+        scope="MANAGED_USERS",
+        resolver="dingtalk_manager_chain",
+    )
+    _ = ManagedScopePolicy.objects.create(
+        app=app,
+        target_type="authorization_group_grant",
+        target_id=grant.id,
+        scope="MANAGED_USERS",
+        resolver="dingtalk_manager_chain",
+        enabled=False,
+    )
+
+    # When: 应用负责人查看配置完整性。
+    readiness = configuration_readiness_for_app(app)
+
+    # Then: disabled 策略作为显式阻断项暴露。
+    assert readiness.status == CONFIGURATION_STATUS_BLOCKING
+    assert [issue.code for issue in readiness.issues] == ["managed_scope_policy_disabled"]
+    assert readiness.issues[0].severity == CONFIGURATION_STATUS_BLOCKING
+    assert readiness.issues[0].subject == "admin:invoice.read:MANAGED_USERS"
 
 
 def test_ops1_configuration_readiness_warns_when_permission_supported_scopes_missing() -> None:
@@ -124,7 +172,7 @@ def test_ops1_configuration_readiness_warns_when_permission_supported_scopes_mis
 def test_ops1_configuration_readiness_blocks_inactive_grant_targets() -> None:
     # Given: 授权组 grant 指向 inactive Permission。
     app = App.objects.create(app_key="ops1-inactive-grant-target", name="OPS1 Inactive Grant")
-    _ready_catalog(app, permission_active=False, approval_rule=True)
+    _ = _ready_catalog(app, permission_active=False, approval_rule=True)
 
     # When: 应用负责人查看配置完整性。
     readiness = configuration_readiness_for_app(app)
@@ -190,3 +238,35 @@ def _ready_catalog(
         )
     _ = StaticTokenService.create_token(app=app, name="OPS1 token")
     return permission_group
+
+
+def _ready_managed_scope_catalog(app: App) -> AuthorizationGroupGrant:
+    _ = AppMembership.objects.create(app=app, user_id=f"{app.app_key}-owner", role="owner")
+    _ = AppScope.objects.create(app=app, key="MANAGED_USERS", name="下属")
+    permission_group = PermissionGroup.objects.create(app=app, key="CUSTOMER", name="Customer")
+    permission = Permission.objects.create(
+        app=app,
+        group=permission_group,
+        key="invoice.read",
+        name="Read invoices",
+        supported_scopes=["MANAGED_USERS"],
+    )
+    authorization_group = AuthorizationGroup.objects.create(
+        app=app,
+        key="admin",
+        kind="role",
+        name="admin",
+        requestable=True,
+    )
+    grant = AuthorizationGroupGrant.objects.create(
+        authorization_group=authorization_group,
+        permission=permission,
+        scope_key="MANAGED_USERS",
+    )
+    _ = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=authorization_group,
+        approver_userids=["manager-001"],
+    )
+    _ = StaticTokenService.create_token(app=app, name="OPS1 token")
+    return grant

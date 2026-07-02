@@ -30,6 +30,8 @@ from easyauth.admin_console.credentials_disable_api import (
     console_credential_disable,
     console_static_token_disable,
 )
+from easyauth.admin_console.managed_scope_policy_api import console_managed_scope_policy
+from easyauth.admin_console.managed_users_preview_api import console_managed_users_preview
 from easyauth.admin_console.memberships_api import (
     console_app_membership_detail,
     console_app_memberships,
@@ -84,6 +86,16 @@ urlpatterns = [
         "api/v1/apps/<str:app_key>/memberships/<int:membership_id>",
         console_app_membership_detail,
         name="console-app-membership-detail",
+    ),
+    path(
+        "api/v1/apps/<str:app_key>/managed-scope-policy",
+        console_managed_scope_policy,
+        name="console-managed-scope-policy",
+    ),
+    path(
+        "api/v1/apps/<str:app_key>/managed-users-preview",
+        console_managed_users_preview,
+        name="console-managed-users-preview",
     ),
     path("api/v1/apps/<str:app_key>", console_app_detail, name="console-app-detail"),
     path(

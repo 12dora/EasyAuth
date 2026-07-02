@@ -3,10 +3,14 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TypedDict, override
+from typing import NotRequired, TypedDict, cast, override
 
 type PermissionQueryScalar = str | int
-type PermissionQueryObject = Mapping[str, PermissionQueryScalar]
+type PermissionQueryResolvedObject = Mapping[str, str | list[object]]
+type PermissionQueryObject = Mapping[
+    str,
+    PermissionQueryScalar | list[str] | PermissionQueryResolvedObject,
+]
 type PermissionQueryResponseInputValue = PermissionQueryScalar | list[PermissionQueryObject]
 type PermissionQueryResponseInput = Mapping[str, PermissionQueryResponseInputValue]
 type SerializerErrors = dict[str, list[str]]
@@ -21,11 +25,18 @@ class PermissionQueryGroupPayload(TypedDict):
     name: str
 
 
+class PermissionQueryResolvedManagedUsersPayload(TypedDict):
+    user_ids: list[str]
+    resolver: str
+    resolved_at: str
+
+
 class PermissionQueryGrantPayload(TypedDict):
     permission: str
     scope: str
     source_type: str
     source_key: str
+    resolved: NotRequired[PermissionQueryResolvedManagedUsersPayload]
 
 
 class PermissionQueryResponsePayload(TypedDict):
@@ -187,9 +198,10 @@ def _read_groups(
 def _read_group(value: object) -> PermissionQueryGroupPayload | None:
     if not isinstance(value, Mapping):
         return None
-    key = value.get("key")
-    kind = value.get("kind")
-    name = value.get("name")
+    group_value = cast("PermissionQueryObject", value)
+    key = group_value.get("key")
+    kind = group_value.get("kind")
+    name = group_value.get("name")
     if isinstance(key, str) and isinstance(kind, str) and isinstance(name, str):
         return {"key": key, "kind": kind, "name": name}
     return None
@@ -215,21 +227,62 @@ def _read_grants(
 def _read_grant(value: object) -> PermissionQueryGrantPayload | None:
     if not isinstance(value, Mapping):
         return None
-    permission = value.get("permission")
-    scope = value.get("scope")
-    source_type = value.get("source_type")
-    source_key = value.get("source_key")
+    grant_value = cast("PermissionQueryObject", value)
+    permission = grant_value.get("permission")
+    scope = grant_value.get("scope")
+    source_type = grant_value.get("source_type")
+    source_key = grant_value.get("source_key")
     if (
         isinstance(permission, str)
         and isinstance(scope, str)
         and isinstance(source_type, str)
         and isinstance(source_key, str)
     ):
-        return {
+        grant: PermissionQueryGrantPayload = {
             "permission": permission,
             "scope": scope,
             "source_type": source_type,
             "source_key": source_key,
+        }
+        if "resolved" not in grant_value:
+            return grant
+        if scope != "MANAGED_USERS":
+            return None
+        resolved = _read_resolved_managed_users(grant_value.get("resolved"))
+        if resolved is None:
+            return None
+        grant["resolved"] = resolved
+        return grant
+    return None
+
+
+def _read_resolved_managed_users(
+    value: object,
+) -> PermissionQueryResolvedManagedUsersPayload | None:
+    if not isinstance(value, Mapping):
+        return None
+    resolved_value = cast("PermissionQueryResolvedObject", value)
+    user_ids = resolved_value.get("user_ids")
+    resolver = resolved_value.get("resolver")
+    resolved_at = resolved_value.get("resolved_at")
+    if not isinstance(user_ids, list):
+        return None
+
+    resolved_user_ids: list[str] = []
+    for user_id in user_ids:
+        if not isinstance(user_id, str):
+            return None
+        resolved_user_ids.append(user_id)
+
+    if (
+        isinstance(resolver, str)
+        and isinstance(resolved_at, str)
+        and _valid_datetime_string(resolved_at)
+    ):
+        return {
+            "user_ids": resolved_user_ids,
+            "resolver": resolver,
+            "resolved_at": resolved_at,
         }
     return None
 
@@ -239,15 +292,19 @@ def _read_datetime_string(payload: PermissionQueryResponseInput, key: str) -> st
     if value is None:
         return None
 
-    try:
-        parsed_value = datetime.fromisoformat(value)
-    except ValueError:
-        return None
-
-    if parsed_value.tzinfo is None:
+    if not _valid_datetime_string(value):
         return None
 
     return value
+
+
+def _valid_datetime_string(value: str) -> bool:
+    try:
+        parsed_value = datetime.fromisoformat(value)
+    except ValueError:
+        return False
+
+    return parsed_value.tzinfo is not None
 
 
 def _collect_permission_query_errors(fields: _ParsedPermissionQueryFields) -> SerializerErrors:

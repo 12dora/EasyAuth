@@ -768,6 +768,114 @@ describe("PortalPage access request form", () => {
     }
   });
 
+  test("MANAGED_USERS 目标缺少直属上级时提示补全审批人", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/request-catalog") {
+        return jsonResponse({
+          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["app-owner"] }],
+          approver_options: [
+            { user_id: "app-owner", name: "应用负责人" },
+            { user_id: "security-owner", name: "安全负责人" },
+          ],
+          authorization_groups: [],
+          permission_groups: [],
+          ungrouped_permissions: [
+            {
+              id: 101,
+              app_key: "crm",
+              key: "customer.assign",
+              name: "分配客户",
+              scopes: [{ key: "MANAGED_USERS", name: "下级用户" }],
+              default_approver_user_ids: [],
+              approver_resolution_status: "direct_manager_missing",
+            },
+          ],
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage();
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "CRM (crm)" });
+      await user.selectOptions(screen.getByLabelText("应用"), "crm");
+      await user.click(screen.getByRole("checkbox", { name: "选择 customer.assign 下级用户" }));
+
+      expect(await screen.findByText("未找到直属上级，请补全审批人")).toBeVisible();
+      await user.type(screen.getByLabelText("搜索审批人"), "app-owner");
+      expect(screen.getByLabelText("选择审批人 app-owner")).not.toBeChecked();
+      expect(screen.getByRole("button", { name: "提交申请" })).toBeDisabled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("MANAGED_USERS 目标优先使用直属上级默认审批人且手动修改后不再覆盖", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/request-catalog") {
+        return jsonResponse({
+          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["app-owner"] }],
+          approver_options: [
+            { user_id: "app-owner", name: "应用负责人" },
+            { user_id: "direct-manager", name: "直属上级" },
+            { user_id: "security-owner", name: "安全负责人" },
+          ],
+          authorization_groups: [],
+          permission_groups: [],
+          ungrouped_permissions: [
+            {
+              id: 101,
+              app_key: "crm",
+              key: "customer.assign",
+              name: "分配客户",
+              scopes: [{ key: "MANAGED_USERS", name: "下级用户" }],
+              default_approver_user_ids: ["direct-manager"],
+              approver_resolution_status: "direct_manager_resolved",
+            },
+            {
+              id: 102,
+              app_key: "crm",
+              key: "customer.export",
+              name: "导出客户",
+              scopes: [{ key: "MANAGED_USERS", name: "下级用户" }],
+              default_approver_user_ids: ["security-owner"],
+              approver_resolution_status: "direct_manager_resolved",
+            },
+          ],
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage();
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "CRM (crm)" });
+      await user.selectOptions(screen.getByLabelText("应用"), "crm");
+      await user.click(screen.getByRole("checkbox", { name: "选择 customer.assign 下级用户" }));
+      expect(await screen.findByLabelText("选择审批人 direct-manager")).toBeChecked();
+
+      await user.click(screen.getByLabelText("选择审批人 direct-manager"));
+      await user.type(screen.getByLabelText("搜索审批人"), "owner");
+      await user.click(screen.getByLabelText("选择审批人 app-owner"));
+      await user.click(screen.getByRole("checkbox", { name: "选择 customer.export 下级用户" }));
+
+      expect(screen.getByLabelText("选择审批人 app-owner")).toBeChecked();
+      expect(screen.getByLabelText("选择审批人 security-owner")).not.toBeChecked();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   test("权限选择表格保留表头语义、展开状态和 checkbox 冒泡边界", async () => {
     const fetchMock = permissionSelectorFetchMock(portalPermissionSelectorCatalog);
     vi.stubGlobal("fetch", fetchMock);

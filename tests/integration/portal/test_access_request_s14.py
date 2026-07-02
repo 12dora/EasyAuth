@@ -21,8 +21,20 @@ from easyauth.access_requests.models import (
     AccessRequest,
     AccessRequestGroup,
 )
+from easyauth.access_requests.services import AccessRequestService
+from easyauth.access_requests.submission_types import (
+    AccessRequestSubmission,
+    AccessRequestSubmissionError,
+    ScopedAccessRequestGrant,
+)
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App, ApprovalRule, AuthorizationGroup
+from easyauth.applications.models import (
+    App,
+    ApprovalRule,
+    AppScope,
+    AuthorizationGroup,
+    Permission,
+)
 from easyauth.grants.models import AccessGrant
 from easyauth.portal.views import request_rows_for_user
 from tests.integration.portal.helpers import logged_in_client
@@ -276,6 +288,45 @@ def test_s14_portal_timed_request_creates_request_with_expiration() -> None:
     assert response.status_code == HTTPStatus.CREATED
     assert access_request.grant_type == GRANT_TYPE_TIMED
     assert access_request.grant_expires_at is not None
+
+
+def test_s14_submission_validation_requires_approver_for_managed_users_target() -> None:
+    # Given: 员工提交包含 MANAGED_USERS scope 的 direct Permission 申请。
+    _client, user = logged_in_client("s14-managed-users-no-approver-user")
+    app = App.objects.create(app_key="s14-managed-users-no-approver", name="Managed Users")
+    _ = AppScope.objects.create(app=app, key="MANAGED_USERS", name="下属")
+    permission = Permission.objects.create(
+        app=app,
+        key="customer.profile.view",
+        name="查看下属客户",
+        supported_scopes=["MANAGED_USERS"],
+    )
+
+    # When / Then: 没有审批人时 submission_validation 返回 MANAGED_USERS 专用错误。
+    with pytest.raises(AccessRequestSubmissionError) as exc_info:
+        AccessRequestService.submit_access_request(
+            AccessRequestSubmission(
+                user=user,
+                app=app,
+                grant_type=GRANT_TYPE_PERMANENT,
+                grant_expires_at=None,
+                reason="查看下属客户",
+                actor_type="user",
+                actor_id=user.authentik_user_id,
+                approver_user_ids=(),
+                direct_grants=(
+                    ScopedAccessRequestGrant(
+                        permission=permission,
+                        scope_key="MANAGED_USERS",
+                    ),
+                ),
+            ),
+        )
+
+    assert exc_info.value.messages == (
+        "MANAGED_USERS requests require a direct manager approver.",
+    )
+    assert AccessRequest.objects.count() == 0
 
 
 def _access_request_payload(

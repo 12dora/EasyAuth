@@ -47,11 +47,19 @@ def test_seed_crm_pilot_creates_idempotent_configuration_and_one_time_token() ->
     plaintext_token = token_match.group(0)
     app = App.objects.get(app_key="crm")
     assert AppScope.objects.filter(app=app).count() == EXPECTED_SCOPE_COUNT
+    scope_keys = list(
+        AppScope.objects.filter(app=app).order_by("display_order").values_list("key", flat=True),
+    )
+    assert scope_keys == [
+        "SELF",
+        "MANAGED_USERS",
+        "ALL",
+    ]
     assert PermissionGroup.objects.filter(app=app, key="crm.customer").exists()
     assert Permission.objects.filter(
         app=app,
         key="customer.profile.view",
-        supported_scopes=["SELF", "MANAGED", "ALL"],
+        supported_scopes=["SELF", "MANAGED_USERS", "ALL"],
     ).exists()
     assert Permission.objects.filter(app=app, key="customer.export", risk_level="high").exists()
     assert AuthorizationGroup.objects.filter(app=app, key="admin", requestable=True).exists()
@@ -62,6 +70,12 @@ def test_seed_crm_pilot_creates_idempotent_configuration_and_one_time_token() ->
         AuthorizationGroupGrant.objects.filter(authorization_group__app=app).count()
         == EXPECTED_AUTHORIZATION_GROUP_GRANT_COUNT
     )
+    assert AuthorizationGroupGrant.objects.filter(
+        authorization_group__app=app,
+        authorization_group__key="auditor",
+        permission__key="customer.profile.view",
+        scope_key="MANAGED_USERS",
+    ).exists()
     assert ApprovalRule.objects.filter(
         app=app,
         authorization_group__key="admin",

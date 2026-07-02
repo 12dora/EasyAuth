@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, cast
 
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.applications.models import (
@@ -9,12 +10,33 @@ from easyauth.applications.models import (
     ApprovalRule,
     AppScope,
     AuthorizationGroup,
+    AuthorizationGroupGrant,
     Permission,
     PermissionGroup,
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from easyauth.api.errors import JsonValue
+
+MANAGED_USERS_SCOPE = "MANAGED_USERS"
+APPROVER_RESOLUTION_DEFAULT_POLICY = "default_policy"
+APPROVER_RESOLUTION_DIRECT_MANAGER_MISSING = "direct_manager_missing"
+APPROVER_RESOLUTION_RESOLVED_BY_DIRECT_MANAGER = "resolved_by_direct_manager"
+
+
+@dataclass(frozen=True, slots=True)
+class _ApproverResolution:
+    user_ids: tuple[str, ...]
+    status: str
+
+
+@dataclass(frozen=True, slots=True)
+class _PermissionCatalogContext:
+    scope_options_by_app_id: dict[int, list[dict[str, JsonValue]]]
+    default_approver_by_app_id: dict[int, _ApproverResolution]
+    default_approver_by_permission_id: dict[int, _ApproverResolution]
 
 
 def request_catalog_payload(user: UserMirror) -> dict[str, JsonValue]:
@@ -28,44 +50,51 @@ def request_catalog_payload(user: UserMirror) -> dict[str, JsonValue]:
     )
     approver_users = _active_approver_users()
     resolver = _ApproverResolver(approver_users)
-    default_approver_user_ids_by_app_id = _app_default_approver_user_ids_by_app_id(
+    direct_manager_resolution = _direct_manager_approver_resolution(user, resolver)
+    default_approver_by_app_id = _app_default_approver_by_app_id(
         apps,
         user,
         resolver,
     )
-    default_approver_user_ids_by_group_id = _approval_rule_approvers_by_group_id(
+    default_approver_by_group_id = _approval_rule_approvers_by_group_id(
         authorization_groups,
         resolver,
+        direct_manager_resolution,
     )
-    default_approver_user_ids_by_permission_id = _approval_rule_approvers_by_permission_id(
+    default_approver_by_permission_id = _approval_rule_approvers_by_permission_id(
         permissions,
         resolver,
+        direct_manager_resolution,
     )
     return {
         "apps": [
-            _catalog_app_item(app, default_approver_user_ids_by_app_id.get(app.id, ()))
+            _catalog_app_item(app, default_approver_by_app_id[app.id])
             for app in apps
         ],
         "authorization_groups": [
             _catalog_authorization_group_item(
                 group,
-                default_approver_user_ids_by_group_id.get(group.id)
-                or default_approver_user_ids_by_app_id.get(group.app_id, ()),
+                default_approver_by_group_id.get(group.id) or default_approver_by_app_id[
+                    group.app_id
+                ],
             )
             for group in authorization_groups
         ],
         "permission_groups": _catalog_permission_groups(
             permissions,
-            scope_options_by_app_id,
-            default_approver_user_ids_by_app_id,
-            default_approver_user_ids_by_permission_id,
+            _PermissionCatalogContext(
+                scope_options_by_app_id=scope_options_by_app_id,
+                default_approver_by_app_id=default_approver_by_app_id,
+                default_approver_by_permission_id=default_approver_by_permission_id,
+            ),
         ),
         "ungrouped_permissions": [
             _catalog_permission_item(
                 permission,
                 scope_options_by_app_id,
-                default_approver_user_ids_by_permission_id.get(permission.id)
-                or default_approver_user_ids_by_app_id.get(permission.app_id, ()),
+                default_approver_by_permission_id.get(permission.id) or default_approver_by_app_id[
+                    permission.app_id
+                ],
             )
             for permission in permissions
             if permission.group is None
@@ -103,7 +132,7 @@ def _request_catalog_permissions() -> tuple[Permission, ...]:
 
 def _catalog_app_item(
     app: App,
-    default_approver_user_ids: tuple[str, ...],
+    approver_resolution: _ApproverResolution,
 ) -> dict[str, JsonValue]:
     return {
         "id": app.id,
@@ -111,13 +140,14 @@ def _catalog_app_item(
         "name": app.name,
         "description": app.description,
         "catalog_version": app.catalog_version,
-        "default_approver_user_ids": _json_strings(default_approver_user_ids),
+        "default_approver_user_ids": _json_strings(approver_resolution.user_ids),
+        "approver_resolution_status": approver_resolution.status,
     }
 
 
 def _catalog_authorization_group_item(
     group: AuthorizationGroup,
-    default_approver_user_ids: tuple[str, ...],
+    approver_resolution: _ApproverResolution,
 ) -> dict[str, JsonValue]:
     return {
         "id": group.id,
@@ -128,15 +158,14 @@ def _catalog_authorization_group_item(
         "description": group.description,
         "requestable": group.requestable,
         "requires_approval": True,
-        "default_approver_user_ids": _json_strings(default_approver_user_ids),
+        "default_approver_user_ids": _json_strings(approver_resolution.user_ids),
+        "approver_resolution_status": approver_resolution.status,
     }
 
 
 def _catalog_permission_groups(
     permissions: tuple[Permission, ...],
-    scope_options_by_app_id: dict[int, list[dict[str, JsonValue]]],
-    default_approver_user_ids_by_app_id: dict[int, tuple[str, ...]],
-    default_approver_user_ids_by_permission_id: dict[int, tuple[str, ...]],
+    context: _PermissionCatalogContext,
 ) -> list[JsonValue]:
     groups_by_id: dict[int, PermissionGroup] = {}
     permissions_by_group: dict[int, list[Permission]] = {}
@@ -161,9 +190,7 @@ def _catalog_permission_groups(
             group,
             children_by_parent,
             permissions_by_group,
-            scope_options_by_app_id,
-            default_approver_user_ids_by_app_id,
-            default_approver_user_ids_by_permission_id,
+            context,
         )
         for group in children_by_parent.get(None, [])
     ]
@@ -173,16 +200,14 @@ def _catalog_group_item(
     group: PermissionGroup,
     children_by_parent: dict[int | None, list[PermissionGroup]],
     permissions_by_group: dict[int, list[Permission]],
-    scope_options_by_app_id: dict[int, list[dict[str, JsonValue]]],
-    default_approver_user_ids_by_app_id: dict[int, tuple[str, ...]],
-    default_approver_user_ids_by_permission_id: dict[int, tuple[str, ...]],
+    context: _PermissionCatalogContext,
 ) -> dict[str, JsonValue]:
     permission_items: list[JsonValue] = [
         _catalog_permission_item(
             permission,
-            scope_options_by_app_id,
-            default_approver_user_ids_by_permission_id.get(permission.id)
-            or default_approver_user_ids_by_app_id.get(permission.app_id, ()),
+            context.scope_options_by_app_id,
+            context.default_approver_by_permission_id.get(permission.id)
+            or context.default_approver_by_app_id[permission.app_id],
         )
         for permission in permissions_by_group.get(group.id, [])
     ]
@@ -191,9 +216,7 @@ def _catalog_group_item(
             child,
             children_by_parent,
             permissions_by_group,
-            scope_options_by_app_id,
-            default_approver_user_ids_by_app_id,
-            default_approver_user_ids_by_permission_id,
+            context,
         )
         for child in children_by_parent.get(group.id, [])
     ]
@@ -214,10 +237,12 @@ def _catalog_group_item(
 def _catalog_permission_item(
     permission: Permission,
     scope_options_by_app_id: dict[int, list[dict[str, JsonValue]]],
-    default_approver_user_ids: tuple[str, ...],
+    approver_resolution: _ApproverResolution,
 ) -> dict[str, JsonValue]:
     group = permission.group
     scopes = _permission_scope_options(permission, scope_options_by_app_id)
+    scope_items: list[JsonValue] = []
+    scope_items.extend(scopes)
     return {
         "id": permission.id,
         "app_key": permission.app.app_key,
@@ -226,8 +251,9 @@ def _catalog_permission_item(
         "name": permission.name,
         "description": permission.description,
         "group_key": "" if group is None else group.key,
-        "scopes": scopes,
-        "default_approver_user_ids": _json_strings(default_approver_user_ids),
+        "scopes": scope_items,
+        "default_approver_user_ids": _json_strings(approver_resolution.user_ids),
+        "approver_resolution_status": approver_resolution.status,
     }
 
 
@@ -253,11 +279,17 @@ def _permission_scope_options(
     permission: Permission,
     scope_options_by_app_id: dict[int, list[dict[str, JsonValue]]],
 ) -> list[dict[str, JsonValue]]:
-    return [
-        scope
-        for scope in scope_options_by_app_id.get(permission.app_id, [])
-        if scope["key"] in permission.supported_scopes
-    ]
+    options: list[dict[str, JsonValue]] = []
+    for scope in scope_options_by_app_id.get(permission.app_id, []):
+        scope_key = scope["key"]
+        if isinstance(scope_key, str) and _permission_supports_scope(permission, scope_key):
+            options.append(scope)
+    return options
+
+
+def _permission_supports_scope(permission: Permission, scope_key: str) -> bool:
+    supported_scopes = permission.supported_scopes
+    return isinstance(supported_scopes, list) and scope_key in supported_scopes
 
 
 def _active_approver_users() -> tuple[UserMirror, ...]:
@@ -275,29 +307,51 @@ def _approver_option(user: UserMirror) -> dict[str, JsonValue]:
     }
 
 
-def _app_default_approver_user_ids_by_app_id(
+def _app_default_approver_by_app_id(
     apps: tuple[App, ...],
     user: UserMirror,
     resolver: _ApproverResolver,
-) -> dict[int, tuple[str, ...]]:
+) -> dict[int, _ApproverResolution]:
     app_ids = tuple(app.id for app in apps)
     owner_user_ids_by_app_id = _owner_user_ids_by_app_id(app_ids)
     manager_user_ids = resolver.resolve((user.manager_userid,))
     return {
-        app.id: manager_user_ids or resolver.resolve(owner_user_ids_by_app_id.get(app.id, ()))
+        app.id: _ApproverResolution(
+            user_ids=manager_user_ids
+            or resolver.resolve(owner_user_ids_by_app_id.get(app.id, ())),
+            status=APPROVER_RESOLUTION_DEFAULT_POLICY,
+        )
         for app in apps
     }
 
 
+def _direct_manager_approver_resolution(
+    user: UserMirror,
+    resolver: _ApproverResolver,
+) -> _ApproverResolution:
+    manager_user_ids = resolver.resolve((user.manager_userid,))
+    if manager_user_ids:
+        return _ApproverResolution(
+            user_ids=manager_user_ids,
+            status=APPROVER_RESOLUTION_RESOLVED_BY_DIRECT_MANAGER,
+        )
+    return _ApproverResolution(
+        user_ids=(),
+        status=APPROVER_RESOLUTION_DIRECT_MANAGER_MISSING,
+    )
+
+
 def _owner_user_ids_by_app_id(app_ids: tuple[int, ...]) -> dict[int, tuple[str, ...]]:
     owner_user_ids_by_app_id: dict[int, list[str]] = {app_id: [] for app_id in app_ids}
-    memberships = AppMembership.objects.filter(
+    membership_rows = AppMembership.objects.filter(
         app_id__in=app_ids,
         role="owner",
         is_active=True,
-    ).order_by("app_id", "user_id")
-    for membership in memberships:
-        owner_user_ids_by_app_id.setdefault(membership.app_id, []).append(membership.user_id)
+    ).order_by("app_id", "user_id").values_list("app_id", "user_id")
+    for raw_app_id, raw_user_id in cast("Iterable[tuple[object, object]]", membership_rows):
+        app_id = cast("int", raw_app_id)
+        user_id = cast("str", raw_user_id)
+        owner_user_ids_by_app_id.setdefault(app_id, []).append(user_id)
     return {
         app_id: tuple(owner_user_ids)
         for app_id, owner_user_ids in owner_user_ids_by_app_id.items()
@@ -307,51 +361,82 @@ def _owner_user_ids_by_app_id(app_ids: tuple[int, ...]) -> dict[int, tuple[str, 
 def _approval_rule_approvers_by_group_id(
     groups: tuple[AuthorizationGroup, ...],
     resolver: _ApproverResolver,
-) -> dict[int, tuple[str, ...]]:
+    direct_manager_resolution: _ApproverResolution,
+) -> dict[int, _ApproverResolution]:
     group_ids = tuple(group.id for group in groups)
     if not group_ids:
         return {}
-    defaults: dict[int, tuple[str, ...]] = {}
-    rules = ApprovalRule.objects.filter(
+    defaults: dict[int, _ApproverResolution] = {}
+    raw_managed_group_ids = AuthorizationGroupGrant.objects.filter(
         authorization_group_id__in=group_ids,
         is_active=True,
-    ).order_by("authorization_group_id", "id")
-    for rule in rules:
-        if rule.authorization_group_id in defaults:
+        scope_key=MANAGED_USERS_SCOPE,
+    ).values_list("authorization_group_id", flat=True)
+    managed_group_ids = tuple(
+        cast("int", group_id)
+        for group_id in cast("Iterable[object]", raw_managed_group_ids)
+    )
+    for group_id in managed_group_ids:
+        defaults[group_id] = direct_manager_resolution
+    rule_rows = ApprovalRule.objects.filter(
+        authorization_group_id__in=group_ids,
+        is_active=True,
+    ).order_by("authorization_group_id", "id").values_list(
+        "authorization_group_id",
+        "approver_userids",
+    )
+    for raw_group_id, approver_userids in cast("Iterable[tuple[object, object]]", rule_rows):
+        group_id = cast("int", raw_group_id)
+        if group_id in defaults:
             continue
-        approver_user_ids = resolver.resolve(rule.approver_userids)
+        approver_user_ids = resolver.resolve(approver_userids)
         if approver_user_ids:
-            defaults[rule.authorization_group_id] = approver_user_ids
+            defaults[group_id] = _ApproverResolution(
+                user_ids=approver_user_ids,
+                status=APPROVER_RESOLUTION_DEFAULT_POLICY,
+            )
     return defaults
 
 
 def _approval_rule_approvers_by_permission_id(
     permissions: tuple[Permission, ...],
     resolver: _ApproverResolver,
-) -> dict[int, tuple[str, ...]]:
+    direct_manager_resolution: _ApproverResolution,
+) -> dict[int, _ApproverResolution]:
     permission_ids = tuple(permission.id for permission in permissions)
     if not permission_ids:
         return {}
-    defaults: dict[int, tuple[str, ...]] = {}
-    rules = ApprovalRule.objects.filter(
+    defaults: dict[int, _ApproverResolution] = {
+        permission.id: direct_manager_resolution
+        for permission in permissions
+        if _permission_supports_scope(permission, MANAGED_USERS_SCOPE)
+    }
+    rule_rows = ApprovalRule.objects.filter(
         permission_id__in=permission_ids,
         is_active=True,
-    ).order_by("permission_id", "id")
-    for rule in rules:
-        if rule.permission_id in defaults:
+    ).order_by("permission_id", "id").values_list("permission_id", "approver_userids")
+    for raw_permission_id, approver_userids in cast(
+        "Iterable[tuple[object, object]]",
+        rule_rows,
+    ):
+        permission_id = cast("int", raw_permission_id)
+        if permission_id in defaults:
             continue
-        approver_user_ids = resolver.resolve(rule.approver_userids)
+        approver_user_ids = resolver.resolve(approver_userids)
         if approver_user_ids:
-            defaults[rule.permission_id] = approver_user_ids
+            defaults[permission_id] = _ApproverResolution(
+                user_ids=approver_user_ids,
+                status=APPROVER_RESOLUTION_DEFAULT_POLICY,
+            )
     return defaults
 
 
 class _ApproverResolver:
     def __init__(self, users: tuple[UserMirror, ...]) -> None:
-        self._user_id_by_authentik_user_id = {
+        self._user_id_by_authentik_user_id: dict[str, str] = {
             user.authentik_user_id: user.authentik_user_id for user in users
         }
-        self._user_id_by_dingtalk_userid = {
+        self._user_id_by_dingtalk_userid: dict[str, str] = {
             user.dingtalk_userid: user.authentik_user_id
             for user in users
             if user.dingtalk_userid
@@ -362,7 +447,7 @@ class _ApproverResolver:
             return ()
         resolved_user_ids: list[str] = []
         seen: set[str] = set()
-        for raw_user_id in raw_user_ids:
+        for raw_user_id in cast("list[object] | tuple[object, ...]", raw_user_ids):
             if not isinstance(raw_user_id, str):
                 continue
             user_id = self._user_id_by_authentik_user_id.get(

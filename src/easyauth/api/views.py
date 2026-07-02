@@ -13,6 +13,7 @@ from easyauth.api.permission_query_auth import (
     authenticate_permission_query_token,
     permission_query_ttl_seconds,
 )
+from easyauth.api.permission_query_payloads import expanded_grant_payload
 from easyauth.api.serializers import (
     PermissionQueryResponseInput,
     PermissionQueryResponseSerializer,
@@ -50,12 +51,7 @@ def query_user_permissions(request: HttpRequest, app_key: str, user_id: str) -> 
             for group in snapshot.groups
         ],
         "grants": [
-            {
-                "permission": grant.permission,
-                "scope": grant.scope,
-                "source_type": grant.source_type,
-                "source_key": grant.source_key,
-            }
+            expanded_grant_payload(grant)
             for grant in snapshot.grants
         ],
         "grant_version": snapshot.grant_version,

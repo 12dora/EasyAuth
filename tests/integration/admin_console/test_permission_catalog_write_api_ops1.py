@@ -15,11 +15,14 @@ from easyauth.applications.models import (
     AppMembership,
     AppScope,
     AuthorizationGroup,
+    AuthorizationGroupGrant,
+    ManagedScopePolicy,
     Permission,
     PermissionGroup,
     Role,
 )
 from easyauth.applications.services import StaticTokenService
+from easyauth.audit.models import AuditLog
 
 pytestmark = pytest.mark.django_db
 
@@ -137,6 +140,167 @@ def test_ops1_owner_creates_and_updates_permission_with_group() -> None:
     assert permission.group == group
     assert permission.name == "Read billing records"
     assert f'"group_id": {group.id}' in updated.content.decode()
+
+
+def test_ops1_owner_writes_authorization_group_grant_managed_scope_policy() -> None:
+    # Given: owner 管理一个带 MANAGED_USERS Scope 的 App。
+    client = _logged_in_user("ops1-catalog-authz-policy")
+    app = _member_app("ops1-catalog-authz-policy", "ops1-catalog-authz-policy", role="owner")
+    scope = AppScope.objects.create(app=app, key="MANAGED_USERS", name="Managed users")
+    permission = Permission.objects.create(
+        app=app,
+        key="order.read",
+        name="Read orders",
+        supported_scopes=[scope.key],
+    )
+
+    # When: owner 创建授权组 grant 覆盖策略, 随后改为 disabled, 最后移除 grant。
+    created = client.post(
+        _api_url(app.app_key, "authorization-groups"),
+        data=dumps(
+            {
+                "key": "manager",
+                "kind": "role",
+                "name": "Manager",
+                "grants": [
+                    {
+                        "permission": permission.key,
+                        "scope": scope.key,
+                        "managed_scope_policy": {
+                            "mode": "override",
+                            "resolver": "dingtalk_manager_chain",
+                            "enabled": True,
+                        },
+                    },
+                ],
+            },
+        ),
+        content_type="application/json",
+    )
+    assert created.status_code == HTTPStatus.CREATED
+    grant = AuthorizationGroupGrant.objects.get(
+        authorization_group__app=app,
+        authorization_group__key="manager",
+        permission=permission,
+        scope_key=scope.key,
+    )
+    policy = ManagedScopePolicy.objects.get(
+        app=app,
+        target_type="authorization_group_grant",
+        target_id=grant.id,
+        scope="MANAGED_USERS",
+    )
+    assert policy.resolver == "dingtalk_manager_chain"
+    assert policy.enabled is True
+
+    disabled = client.patch(
+        _authorization_group_detail_url(app.app_key, "manager"),
+        data=dumps(
+            {
+                "key": "manager",
+                "kind": "role",
+                "name": "Manager",
+                "grants": [
+                    {
+                        "permission": permission.key,
+                        "scope": scope.key,
+                        "managed_scope_policy": {
+                            "mode": "disabled",
+                            "resolver": "disabled",
+                            "enabled": True,
+                        },
+                    },
+                ],
+            },
+        ),
+        content_type="application/json",
+    )
+    policy.refresh_from_db()
+    assert disabled.status_code == HTTPStatus.OK
+    assert policy.resolver == "disabled"
+    assert policy.enabled is True
+
+    inherited = client.patch(
+        _authorization_group_detail_url(app.app_key, "manager"),
+        data=dumps(
+            {
+                "key": "manager",
+                "kind": "role",
+                "name": "Manager",
+                "grants": [
+                    {
+                        "permission": permission.key,
+                        "scope": scope.key,
+                        "managed_scope_policy": {"mode": "inherit"},
+                    },
+                ],
+            },
+        ),
+        content_type="application/json",
+    )
+    grant.refresh_from_db()
+    assert inherited.status_code == HTTPStatus.OK
+    assert grant.is_active is True
+    assert ManagedScopePolicy.objects.filter(
+        app=app,
+        target_type="authorization_group_grant",
+        target_id=grant.id,
+        scope="MANAGED_USERS",
+    ).exists() is False
+    policy_audits = list(
+        AuditLog.objects.filter(event_type="managed_scope_policy_updated").order_by("id"),
+    )
+    assert [audit.target_type for audit in policy_audits] == [
+        "authorization_group_grant",
+        "authorization_group_grant",
+        "authorization_group_grant",
+    ]
+    assert [audit.metadata for audit in policy_audits] == [
+        {
+            "app_key": app.app_key,
+            "authorization_group_key": "manager",
+            "permission_key": permission.key,
+            "scope": "MANAGED_USERS",
+            "resolver": "dingtalk_manager_chain",
+        },
+        {
+            "app_key": app.app_key,
+            "authorization_group_key": "manager",
+            "permission_key": permission.key,
+            "scope": "MANAGED_USERS",
+            "resolver": "disabled",
+        },
+        {
+            "app_key": app.app_key,
+            "authorization_group_key": "manager",
+            "permission_key": permission.key,
+            "scope": "MANAGED_USERS",
+            "resolver": "app_default",
+        },
+    ]
+
+    removed = client.patch(
+        _authorization_group_detail_url(app.app_key, "manager"),
+        data=dumps(
+            {
+                "key": "manager",
+                "kind": "role",
+                "name": "Manager",
+                "grants": [],
+            },
+        ),
+        content_type="application/json",
+    )
+
+    grant.refresh_from_db()
+    assert removed.status_code == HTTPStatus.OK
+    assert grant.is_active is False
+    assert ManagedScopePolicy.objects.filter(
+        app=app,
+        target_type="authorization_group_grant",
+        target_id=grant.id,
+        scope="MANAGED_USERS",
+    ).exists() is False
 
 
 def test_ops1_permission_patch_rejects_deprecated_permission_reactivation() -> None:
@@ -309,6 +473,10 @@ def _member_app(app_key: str, username: str, *, role: str) -> App:
 
 def _api_url(app_key: str, endpoint: str) -> str:
     return f"/console/api/v1/apps/{app_key}/{endpoint}"
+
+
+def _authorization_group_detail_url(app_key: str, authorization_group_key: str) -> str:
+    return f"{_api_url(app_key, 'authorization-groups')}/{authorization_group_key}"
 
 
 def _seed_resource(*, app: App, endpoint: str, key: str) -> None:

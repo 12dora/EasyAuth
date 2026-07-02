@@ -6,6 +6,9 @@ from typing import cast
 type DirectoryJson = dict[str, JsonValue]
 type JsonValue = None | bool | int | float | str | list[JsonValue] | dict[str, JsonValue]
 
+INVALID_MANAGED_USERS_FIELD_TYPE = "invalid managed users field type"
+EMPTY_MANAGED_USERS_FIELD = "empty managed users field"
+
 
 @dataclass(frozen=True, slots=True)
 class DingTalkDirectoryStatus:
@@ -45,6 +48,27 @@ class DingTalkDirectoryOrgContext:
     manager_chain: tuple[DirectoryJson, ...]
     stale: bool
     last_synced_at: str
+
+
+@dataclass(frozen=True, slots=True)
+class DingTalkManagedUser:
+    source_user_id: str
+    authentik_user_id: str
+    authentik_user_active: bool
+    directory_active: bool
+    is_deleted: bool
+
+
+@dataclass(frozen=True, slots=True)
+class DingTalkManagedUsers:
+    source_slug: str
+    corp_id: str
+    manager_user_id: str
+    resolver: str
+    stale: bool
+    resolved_at: str
+    users: tuple[DingTalkManagedUser, ...]
+    active_authentik_user_ids: tuple[str, ...]
 
 
 def parse_status(payload: DirectoryJson, *, source_slug: str) -> DingTalkDirectoryStatus:
@@ -107,6 +131,43 @@ def parse_org_context(payload: DirectoryJson, *, source_slug: str) -> DingTalkDi
     )
 
 
+def parse_managed_users(payload: DirectoryJson, *, source_slug: str) -> DingTalkManagedUsers:
+    parsed_users = tuple(
+        _parse_managed_user(_safe_mapping(item)) for item in _required_list(payload, "users")
+    )
+    return DingTalkManagedUsers(
+        source_slug=_required_string(payload, "source_slug") or source_slug,
+        corp_id=_required_string(payload, "corp_id"),
+        manager_user_id=_required_string(payload, "manager_user_id"),
+        resolver=_string(payload.get("resolver")),
+        stale=payload.get("stale") is True,
+        resolved_at=_string(payload.get("resolved_at")),
+        users=parsed_users,
+        active_authentik_user_ids=tuple(
+            user.authentik_user_id for user in parsed_users if _is_active_linked_user(user)
+        ),
+    )
+
+
+def _parse_managed_user(payload: DirectoryJson) -> DingTalkManagedUser:
+    return DingTalkManagedUser(
+        source_user_id=_required_string(payload, "source_user_id"),
+        authentik_user_id=_required_string(payload, "authentik_user_id", allow_empty=True),
+        authentik_user_active=_required_bool(payload, "authentik_user_active"),
+        directory_active=_required_bool(payload, "directory_active"),
+        is_deleted=_required_bool(payload, "is_deleted"),
+    )
+
+
+def _is_active_linked_user(user: DingTalkManagedUser) -> bool:
+    return (
+        user.authentik_user_id != ""
+        and user.authentik_user_active
+        and user.directory_active
+        and not user.is_deleted
+    )
+
+
 def _items(payload: DirectoryJson) -> tuple[DirectoryJson, ...]:
     if isinstance(payload.get("results"), list):
         return tuple(_safe_mapping(item) for item in _list(payload.get("results")))
@@ -133,6 +194,29 @@ def _string(value: object) -> str:
 
 def _int(value: object) -> int:
     return value if isinstance(value, int) else 0
+
+
+def _required_string(payload: DirectoryJson, key: str, *, allow_empty: bool = False) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str):
+        raise TypeError(INVALID_MANAGED_USERS_FIELD_TYPE)
+    if not allow_empty and value == "":
+        raise ValueError(EMPTY_MANAGED_USERS_FIELD)
+    return value
+
+
+def _required_bool(payload: DirectoryJson, key: str) -> bool:
+    value = payload.get(key)
+    if not isinstance(value, bool):
+        raise TypeError(INVALID_MANAGED_USERS_FIELD_TYPE)
+    return value
+
+
+def _required_list(payload: DirectoryJson, key: str) -> list[object]:
+    value = payload.get(key)
+    if not isinstance(value, list):
+        raise TypeError(INVALID_MANAGED_USERS_FIELD_TYPE)
+    return cast("list[object]", value)
 
 
 def _user_status(payload: DirectoryJson) -> str:

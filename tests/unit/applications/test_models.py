@@ -169,7 +169,7 @@ def test_authorization_group_grant_rejects_cross_app_permission_when_cleaned() -
 def test_authorization_group_grant_rejects_unsupported_scope_when_cleaned() -> None:
     # Given
     app = App.objects.create(app_key="crm", name="CRM")
-    _ = AppScope.objects.create(app=app, key="MANAGED", name="Managed")
+    _ = AppScope.objects.create(app=app, key="MANAGED_USERS", name="Managed")
     group = AuthorizationGroup.objects.create(app=app, key="ADMIN", kind="role", name="Admin")
     permission = Permission.objects.create(
         app=app,
@@ -180,7 +180,7 @@ def test_authorization_group_grant_rejects_unsupported_scope_when_cleaned() -> N
     grant = AuthorizationGroupGrant(
         authorization_group=group,
         permission=permission,
-        scope_key="MANAGED",
+        scope_key="MANAGED_USERS",
     )
 
     # When / Then

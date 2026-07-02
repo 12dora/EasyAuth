@@ -13,6 +13,7 @@ from easyauth.applications.models import (
     ApprovalRule,
     AppScope,
     AuthorizationGroup,
+    AuthorizationGroupGrant,
     Permission,
     PermissionGroup,
 )
@@ -78,6 +79,7 @@ def test_portal_request_catalog_lists_only_requestable_authorization_groups() ->
             "description": crm.description,
             "catalog_version": crm.catalog_version,
             "default_approver_user_ids": [],
+            "approver_resolution_status": "default_policy",
         },
     ]
     assert payload["authorization_groups"] == [
@@ -91,6 +93,7 @@ def test_portal_request_catalog_lists_only_requestable_authorization_groups() ->
             "requestable": True,
             "requires_approval": True,
             "default_approver_user_ids": [],
+            "approver_resolution_status": "default_policy",
         },
     ]
     assert payload["approver_options"] == [
@@ -162,6 +165,7 @@ def test_portal_request_catalog_lists_requestable_permissions_as_group_tree() ->
             "description": crm.description,
             "catalog_version": crm.catalog_version,
             "default_approver_user_ids": [],
+            "approver_resolution_status": "default_policy",
         },
     ]
     assert isinstance(groups, list)
@@ -224,6 +228,7 @@ def test_portal_request_catalog_excludes_requestable_group_without_active_approv
             "description": app_without_rule.description,
             "catalog_version": app_without_rule.catalog_version,
             "default_approver_user_ids": [],
+            "approver_resolution_status": "default_policy",
         },
         {
             "id": app_with_rule.id,
@@ -232,6 +237,7 @@ def test_portal_request_catalog_excludes_requestable_group_without_active_approv
             "description": app_with_rule.description,
             "catalog_version": app_with_rule.catalog_version,
             "default_approver_user_ids": [],
+            "approver_resolution_status": "default_policy",
         },
     ]
 
@@ -288,6 +294,7 @@ def test_portal_request_catalog_returns_authorization_groups_and_catalog_version
             "requestable": True,
             "requires_approval": True,
             "default_approver_user_ids": [],
+            "approver_resolution_status": "default_policy",
         },
     ]
     assert payload["apps"][0]["catalog_version"] == crm.catalog_version
@@ -400,3 +407,98 @@ def test_portal_request_catalog_returns_active_approver_options_and_defaults() -
     assert app_defaults[orphan_app.app_key] == [manager.authentik_user_id]
     assert group_defaults[group.key] == [rule_approver.authentik_user_id]
     assert permission_defaults[permission.key] == [manager.authentik_user_id]
+
+
+def test_portal_request_catalog_uses_direct_manager_for_managed_users_targets() -> None:
+    # Given: 员工有 active 直属主管, 可申请授权组和 direct Permission 都包含 MANAGED_USERS。
+    client, user = logged_in_client("portal-catalog-managed-user")
+    user.manager_userid = "managed-manager-dt"
+    user.save(update_fields=["manager_userid"])
+    manager = UserMirror.objects.create(
+        authentik_user_id="portal-catalog-managed-manager",
+        name="直属主管",
+        dingtalk_userid="managed-manager-dt",
+    )
+    owner = UserMirror.objects.create(authentik_user_id="portal-catalog-managed-owner")
+    app = App.objects.create(app_key="catalog-managed-app", name="Managed App")
+    _ = AppMembership.objects.create(app=app, user_id=owner.authentik_user_id, role="owner")
+    _ = AppScope.objects.create(app=app, key="MANAGED_USERS", name="下属")
+    group_permission = Permission.objects.create(
+        app=app,
+        key="customer.profile.view",
+        name="查看客户资料",
+        supported_scopes=["MANAGED_USERS"],
+    )
+    direct_permission = Permission.objects.create(
+        app=app,
+        key="customer.profile.export",
+        name="导出客户资料",
+        supported_scopes=["MANAGED_USERS"],
+    )
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="team-customer-reader",
+        kind="role",
+        name="团队客户查看",
+        requestable=True,
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=group_permission,
+        scope_key="MANAGED_USERS",
+    )
+    _ = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=group,
+        approver_userids=[owner.authentik_user_id],
+    )
+    _ = ApprovalRule.objects.create(
+        app=app,
+        permission=direct_permission,
+        approver_userids=[owner.authentik_user_id],
+    )
+
+    # When: 读取申请目录。
+    response = client.get(REQUEST_CATALOG_URL)
+
+    # Then: MANAGED_USERS 目标默认审批人为直属主管, 不回退到 App owner 或规则审批人。
+    payload = json_object(response)
+    group_item = payload["authorization_groups"][0]
+    permission_item = payload["ungrouped_permissions"][0]
+    assert response.status_code == HTTPStatus.OK
+    assert group_item["default_approver_user_ids"] == [manager.authentik_user_id]
+    assert group_item["approver_resolution_status"] == "resolved_by_direct_manager"
+    assert permission_item["default_approver_user_ids"] == [manager.authentik_user_id]
+    assert permission_item["approver_resolution_status"] == "resolved_by_direct_manager"
+
+
+def test_portal_request_catalog_does_not_fallback_owner_for_managed_users() -> None:
+    # Given: 员工的直属主管无法解析为 active EasyAuth 用户。
+    client, user = logged_in_client("portal-catalog-managed-missing-user")
+    user.manager_userid = "missing-manager"
+    user.save(update_fields=["manager_userid"])
+    owner = UserMirror.objects.create(authentik_user_id="portal-catalog-managed-missing-owner")
+    app = App.objects.create(app_key="catalog-managed-missing-app", name="Managed Missing App")
+    _ = AppMembership.objects.create(app=app, user_id=owner.authentik_user_id, role="owner")
+    _ = AppScope.objects.create(app=app, key="MANAGED_USERS", name="下属")
+    permission = Permission.objects.create(
+        app=app,
+        key="customer.profile.view",
+        name="查看客户资料",
+        supported_scopes=["MANAGED_USERS"],
+    )
+    _ = ApprovalRule.objects.create(
+        app=app,
+        permission=permission,
+        approver_userids=[owner.authentik_user_id],
+    )
+
+    # When: 读取申请目录。
+    response = client.get(REQUEST_CATALOG_URL)
+
+    # Then: MANAGED_USERS 目标找不到 active 直属主管时返回空默认审批人和缺失状态。
+    payload = json_object(response)
+    permission_item = payload["ungrouped_permissions"][0]
+    assert response.status_code == HTTPStatus.OK
+    assert permission_item["default_approver_user_ids"] == []
+    assert permission_item["approver_resolution_status"] == "direct_manager_missing"

@@ -13,7 +13,7 @@ EasyAuth 当前已经具备 App、Scope、Permission、AuthorizationGroup、Acce
 - 公共权限查询在 `MANAGED_USERS` grant 上返回 `resolved.user_ids`、`resolver`、`resolved_at`。
 - 控制台提供图形化策略配置、有效策略展示、健康状态和预览能力。
 - 员工自助申请包含 `MANAGED_USERS` grant 时，默认审批人取申请人的直属上级；找不到直属上级时留空并要求用户补全。
-- 统一试点数据、manifest、测试和文档里的管理范围命名为 `MANAGED_USERS`，不保留旧 `MANAGED` 兼容口径。
+- 统一试点数据、manifest、测试和文档里的管理范围命名为 `MANAGED_USERS`，不保留旧管理范围兼容口径。
 
 ## 非目标
 
@@ -253,7 +253,7 @@ EasyAuth 侧改造：
 
 ### 7. 试点数据、manifest 和文档
 
-必须统一旧 `MANAGED` 命名：
+必须统一旧管理范围命名到 `MANAGED_USERS`：
 
 - `src/easyauth/applications/management/commands/fixtures/crm_pilot_manifest.json`
 - `src/easyauth/applications/management/commands/seed_crm_pilot.py`
@@ -261,14 +261,14 @@ EasyAuth 侧改造：
 - `tests/integration/admin/test_seed_crm_pilot.py`
 - `docs/README.md`
 - `CONTEXT.md`
-- 仍包含旧 `MANAGED` 业务语义的 `docs/plans/*` 和 `docs/superpowers/plans/*`
+- 仍包含旧管理范围业务语义的 `docs/plans/*` 和 `docs/superpowers/plans/*`
 
 要求：
 
 - 新 manifest 声明 `MANAGED_USERS` scope。
 - 使用管理范围的权限 `supported_scopes` 包含 `MANAGED_USERS`。
 - 试点授权组 grant 使用 `MANAGED_USERS`。
-- 不新增 `MANAGED` 到 `MANAGED_USERS` 的兼容转换。
+- 不新增旧管理范围到 `MANAGED_USERS` 的兼容转换。
 
 ## 实施阶段
 
@@ -413,12 +413,12 @@ curl -i \
 - 本地递归 DingTalk 下级容易引入多部门、循环链、未绑定用户和 stale 语义错误：第一版优先消费 Authentik 归一化接口。
 - 公共查询链路被门户和联调页复用：所有变更必须先补测试，再实现。
 - 员工门户当前有静态默认审批人逻辑：改造时要精确限定 `MANAGED_USERS` 场景，避免破坏普通授权申请体验。
-- 旧 `MANAGED` 名称残留会导致上下游契约分裂：必须一次性改为 `MANAGED_USERS`，不保留兼容字段。
+- 旧管理范围名称残留会导致上下游契约分裂：必须一次性改为 `MANAGED_USERS`，不保留兼容字段。
 
 ## 完成标准
 
 - `MANAGED_USERS` scope、策略模型、解析服务、公共响应、控制台配置、预览、健康检查、自助申请规则全部落地。
-- 所有旧 `MANAGED` 业务语义已迁移到 `MANAGED_USERS`。
+- 所有旧管理范围业务语义已迁移到 `MANAGED_USERS`。
 - 后端与前端测试覆盖关键成功和失败分支。
 - 前端 build 与 Django check 成功。
 - 影响页面响应的变更已重启 Django 开发服务并用真实 HTTP 或浏览器验证。

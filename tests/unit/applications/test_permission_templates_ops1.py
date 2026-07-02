@@ -113,7 +113,7 @@ approval_rules:
         ),
         (
             lambda manifest: manifest["authorization_groups"][0]["grants"][0].update(
-                {"scope": "MANAGED"},
+                {"scope": "MANAGED_USERS"},
             ),
             "app_manifest_grant_scope_unsupported",
         ),
@@ -164,7 +164,7 @@ def test_ops1_app_manifest_preview_reports_manifest_diff_without_writing_databas
     assert [(action.action, action.key) for action in preview.actions] == [
         ("update_app", APP_KEY),
         ("create_scope", "SELF"),
-        ("create_scope", "MANAGED"),
+        ("create_scope", "MANAGED_USERS"),
         ("create_permission_group", "billing"),
         ("create_permission", "billing.read"),
         ("create_authorization_group", "accountant"),
@@ -265,7 +265,12 @@ def _manifest_payload() -> dict[str, Any]:
         },
         "scopes": [
             {"key": "SELF", "name": "本人", "description": "", "display_order": 10},
-            {"key": "MANAGED", "name": "管理范围", "description": "", "display_order": 20},
+            {
+                "key": "MANAGED_USERS",
+                "name": "管理用户范围",
+                "description": "",
+                "display_order": 20,
+            },
         ],
         "permission_groups": [
             {"key": "billing", "name": "账务", "display_order": 10},

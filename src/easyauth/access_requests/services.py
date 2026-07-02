@@ -25,10 +25,11 @@ from easyauth.access_requests.submission_types import (
     ScopedAccessRequestGrant,
 )
 from easyauth.access_requests.submission_validation import (
+    ensure_managed_users_requests_have_approver,
     unique_authorization_groups,
     unique_direct_grants,
-    validated_approver_user_ids,
     validate_submission_scope,
+    validated_approver_user_ids,
     validated_request_type,
 )
 from easyauth.audit.services import AuditRecord, AuditService
@@ -73,6 +74,11 @@ def _submit_access_request(
     authorization_groups = unique_authorization_groups(input_data.authorization_groups)
     direct_grants = unique_direct_grants(input_data.direct_grants)
     validate_submission_scope(input_data, parsed_request_type, authorization_groups, direct_grants)
+    ensure_managed_users_requests_have_approver(
+        authorization_groups=authorization_groups,
+        direct_grants=direct_grants,
+        approver_user_ids=input_data.approver_user_ids,
+    )
     approver_user_ids = validated_approver_user_ids(input_data.approver_user_ids)
 
     with transaction.atomic():

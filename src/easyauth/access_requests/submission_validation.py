@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING
 
 from django.utils import timezone
 
-from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.access_requests.high_risk_duration import high_risk_duration_error
 from easyauth.access_requests.submission_types import (
     AccessRequestGrantType,
@@ -17,14 +16,20 @@ from easyauth.access_requests.target_validation import (
     AccessRequestTargetValidationError,
     validate_request_targets,
 )
+from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
+from easyauth.applications.models import AuthorizationGroupGrant
 from easyauth.grants.models import GRANT_STATUS_ACTIVE as GRANT_RECORD_STATUS_ACTIVE
 from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
+
+MANAGED_USERS_SCOPE = "MANAGED_USERS"
+MANAGED_USERS_APPROVER_REQUIRED_MESSAGE = (
+    "MANAGED_USERS requests require a direct manager approver."
+)
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
     from datetime import datetime
 
-    from easyauth.accounts.models import UserMirror
     from easyauth.applications.models import App, AuthorizationGroup
 
 
@@ -72,6 +77,18 @@ def validated_approver_user_ids(approver_user_ids: Iterable[str]) -> tuple[str, 
     return user_ids
 
 
+def ensure_managed_users_requests_have_approver(
+    *,
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
+    approver_user_ids: Iterable[str],
+) -> None:
+    user_ids = _unique_non_empty_strings(approver_user_ids)
+    if user_ids or not _has_managed_users_target(authorization_groups, direct_grants):
+        return
+    raise AccessRequestSubmissionError((MANAGED_USERS_APPROVER_REQUIRED_MESSAGE,))
+
+
 def validate_submission_scope(
     input_data: AccessRequestSubmission,
     request_type: AccessRequestType,
@@ -86,20 +103,24 @@ def validate_submission_scope(
         case "grant":
             _validate_targets_present(authorization_groups, direct_grants)
             _validate_targets(input_data.app, authorization_groups, direct_grants)
+            _validate_managed_users_approver(input_data, authorization_groups, direct_grants)
         case "change":
             _ = _active_lifecycle_grant(input_data.user, input_data.app)
             _validate_targets_present(authorization_groups, direct_grants)
             _validate_targets(input_data.app, authorization_groups, direct_grants)
+            _validate_managed_users_approver(input_data, authorization_groups, direct_grants)
         case "revoke":
             grant = _active_lifecycle_grant(input_data.user, input_data.app)
             _validate_targets_belong_to_app(input_data.app, authorization_groups, direct_grants)
             _validate_revoke_subset(grant, authorization_groups, direct_grants)
+            _validate_managed_users_approver(input_data, authorization_groups, direct_grants)
         case "renew":
             grant = _active_lifecycle_grant(input_data.user, input_data.app)
             _validate_renew_request(input_data.grant_type, input_data.grant_expires_at, grant)
             _validate_targets_belong_to_app(input_data.app, authorization_groups, direct_grants)
             _validate_renew_targets(grant, authorization_groups, direct_grants)
             _validate_high_risk_duration(authorization_groups, input_data.grant_expires_at)
+            _validate_managed_users_approver(input_data, authorization_groups, direct_grants)
 
 
 def _unique_non_empty_strings(values: Iterable[str]) -> tuple[str, ...]:
@@ -112,6 +133,22 @@ def _unique_non_empty_strings(values: Iterable[str]) -> tuple[str, ...]:
         seen.add(normalized)
         result.append(normalized)
     return tuple(result)
+
+
+def _has_managed_users_target(
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
+) -> bool:
+    if any(grant.scope_key == MANAGED_USERS_SCOPE for grant in direct_grants):
+        return True
+    group_ids = tuple(group.id for group in authorization_groups)
+    if not group_ids:
+        return False
+    return AuthorizationGroupGrant.objects.filter(
+        authorization_group_id__in=group_ids,
+        is_active=True,
+        scope_key=MANAGED_USERS_SCOPE,
+    ).exists()
 
 
 def _validate_user(user: UserMirror) -> None:
@@ -152,6 +189,34 @@ def _validate_targets_present(
         raise AccessRequestSubmissionError(
             ("at least one authorization group or direct grant is required",),
         )
+
+
+def _validate_managed_users_approver(
+    input_data: AccessRequestSubmission,
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
+) -> None:
+    if _unique_non_empty_strings(input_data.approver_user_ids):
+        return
+    if not _contains_managed_users_target(authorization_groups, direct_grants):
+        return
+    raise AccessRequestSubmissionError((MANAGED_USERS_APPROVER_REQUIRED_MESSAGE,))
+
+
+def _contains_managed_users_target(
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
+) -> bool:
+    if any(grant.scope_key == MANAGED_USERS_SCOPE for grant in direct_grants):
+        return True
+    group_ids = tuple(group.id for group in authorization_groups)
+    if not group_ids:
+        return False
+    return AuthorizationGroupGrant.objects.filter(
+        authorization_group_id__in=group_ids,
+        is_active=True,
+        scope_key=MANAGED_USERS_SCOPE,
+    ).exists()
 
 
 def _active_lifecycle_grant(user: UserMirror, app: App) -> AccessGrant:

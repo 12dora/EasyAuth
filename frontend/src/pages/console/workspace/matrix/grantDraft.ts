@@ -1,10 +1,24 @@
 import type { JsonObject } from "../../../../lib/api";
-import type { AuthorizationGroupGrantItem, AuthorizationGroupItem } from "../../../../lib/domain";
+import type {
+  AuthorizationGroupGrantItem,
+  AuthorizationGroupItem,
+  EffectiveManagedScopePolicyItem,
+  ManagedScopePolicyItem,
+} from "../../../../lib/domain";
 
-export interface AuthorizationGroupGrantPayload extends JsonObject {
+export type AuthorizationGroupGrantPayload = JsonObject & {
   permission: string;
   scope: string;
   is_active: boolean;
+  managed_scope_policy?: JsonObject;
+};
+
+export interface AuthorizationGroupGrantDraft {
+  permission: string;
+  scope: string;
+  is_active: boolean;
+  managed_scope_policy?: ManagedScopePolicyItem;
+  effective_managed_scope_policy?: EffectiveManagedScopePolicyItem | null;
 }
 
 export interface AuthorizationGroupSavePayload extends JsonObject {
@@ -47,13 +61,13 @@ export function buildAuthorizationGroupPayload(group: AuthorizationGroupItem): A
     description: group.description ?? "",
     requestable: group.requestable,
     is_active: group.is_active,
-    grants: normalizeGrants(group.grants),
+    grants: normalizeGrants(group.grants).map(grantPayload),
   };
 }
 
-export function normalizeGrants(grants: AuthorizationGroupGrantItem[]): AuthorizationGroupGrantPayload[] {
+export function normalizeGrants(grants: AuthorizationGroupGrantItem[]): AuthorizationGroupGrantDraft[] {
   const seen = new Set<string>();
-  const normalized: AuthorizationGroupGrantPayload[] = [];
+  const normalized: AuthorizationGroupGrantDraft[] = [];
   for (const grant of grants) {
     if (!grant.permission || !grant.scope) {
       continue;
@@ -67,6 +81,8 @@ export function normalizeGrants(grants: AuthorizationGroupGrantItem[]): Authoriz
       permission: grant.permission,
       scope: grant.scope,
       is_active: grant.is_active !== false,
+      ...(grant.managed_scope_policy ? { managed_scope_policy: normalizeManagedScopePolicy(grant.managed_scope_policy) } : {}),
+      ...(grant.effective_managed_scope_policy ? { effective_managed_scope_policy: grant.effective_managed_scope_policy } : {}),
     });
   }
   return normalized;
@@ -78,4 +94,27 @@ export function grantKey(permission: string, scope: string): string {
 
 function sameGrant(grant: AuthorizationGroupGrantItem, permission: string, scope: string): boolean {
   return grant.permission === permission && grant.scope === scope;
+}
+
+function grantPayload(grant: AuthorizationGroupGrantDraft): AuthorizationGroupGrantPayload {
+  return {
+    permission: grant.permission,
+    scope: grant.scope,
+    is_active: grant.is_active,
+    ...(grant.managed_scope_policy ? { managed_scope_policy: managedScopePolicyPayload(grant.managed_scope_policy) } : {}),
+  };
+}
+
+function normalizeManagedScopePolicy(policy: ManagedScopePolicyItem): ManagedScopePolicyItem {
+  if (policy.mode === "disabled") {
+    return { mode: "disabled", resolver: "disabled", enabled: policy.enabled !== false };
+  }
+  if (policy.mode === "override") {
+    return { mode: "override", resolver: "dingtalk_manager_chain", enabled: policy.enabled !== false };
+  }
+  return { mode: "inherit", resolver: null, enabled: policy.enabled !== false };
+}
+
+function managedScopePolicyPayload(policy: ManagedScopePolicyItem): JsonObject {
+  return normalizeManagedScopePolicy(policy) as unknown as JsonObject;
 }

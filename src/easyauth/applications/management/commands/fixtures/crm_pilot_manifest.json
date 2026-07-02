@@ -14,9 +14,9 @@
       "display_order": 10
     },
     {
-      "key": "MANAGED",
-      "name": "管理范围",
-      "description": "管理范围内数据",
+      "key": "MANAGED_USERS",
+      "name": "管理用户范围",
+      "description": "管理用户范围内数据",
       "is_active": true,
       "display_order": 20
     },
@@ -44,7 +44,7 @@
       "name": "查看客户资料",
       "description": "查看客户基本资料",
       "group_key": "crm.customer",
-      "supported_scopes": ["SELF", "MANAGED", "ALL"],
+      "supported_scopes": ["SELF", "MANAGED_USERS", "ALL"],
       "risk_level": "standard",
       "is_active": true
     },
@@ -53,7 +53,7 @@
       "name": "导出客户",
       "description": "导出客户数据",
       "group_key": "crm.customer",
-      "supported_scopes": ["MANAGED", "ALL"],
+      "supported_scopes": ["MANAGED_USERS", "ALL"],
       "risk_level": "high",
       "is_active": true
     },
@@ -62,7 +62,7 @@
       "name": "编辑客户资料",
       "description": "编辑客户基本资料",
       "group_key": "crm.customer",
-      "supported_scopes": ["MANAGED", "ALL"],
+      "supported_scopes": ["MANAGED_USERS", "ALL"],
       "risk_level": "standard",
       "is_active": true
     }
@@ -89,7 +89,7 @@
       "requestable": true,
       "is_active": true,
       "grants": [
-        {"permission": "customer.profile.view", "scope": "MANAGED"}
+        {"permission": "customer.profile.view", "scope": "MANAGED_USERS"}
       ]
     }
   ],

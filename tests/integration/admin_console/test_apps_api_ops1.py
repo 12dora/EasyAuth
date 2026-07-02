@@ -17,6 +17,7 @@ from easyauth.applications.models import (
     AppScope,
     AuthorizationGroup,
     AuthorizationGroupGrant,
+    ManagedScopePolicy,
     Permission,
     PermissionGroup,
 )
@@ -328,7 +329,7 @@ def test_ops1_apps_api_superuser_deletes_app_and_records_audit() -> None:
     # When: 系统管理员删除 App。
     response = client.delete(f"{APPS_API_URL}/{app.app_key}")
 
-    # Then: API 硬删除 App，并在删除前写入审计记录。
+    # Then: API 硬删除 App, 并在删除前写入审计记录。
     assert response.status_code == HTTPStatus.NO_CONTENT
     assert App.objects.filter(id=app_id).exists() is False
     assert AuditLog.objects.filter(
@@ -421,7 +422,8 @@ def test_ops1_configuration_status_api_uses_app_readiness_service() -> None:
     assert "active_authorization_group_missing" in body
     assert "active_owner_missing" in body
     assert "active_credential_missing" in body
-    issues = response.json()["issues"]
+    readiness_body = cast("dict[str, JsonValue]", response.json())
+    issues = cast("list[dict[str, JsonValue]]", readiness_body["issues"])
     assert {
         (issue["code"], issue["target_type"])
         for issue in issues
@@ -431,6 +433,67 @@ def test_ops1_configuration_status_api_uses_app_readiness_service() -> None:
         ("active_owner_missing", "membership"),
         ("active_credential_missing", "credential"),
     }
+
+
+def test_ops1_configuration_status_api_exposes_managed_scope_policy_issue_fields() -> None:
+    # Given: App 下 MANAGED_USERS grant 的显式策略已禁用。
+    client = _logged_in_superuser("ops1-app-config-managed-owner")
+    app = App.objects.create(app_key="ops1-api-config-managed", name="Managed CRM")
+    _ = AppMembership.objects.create(app=app, user_id="ops1-app-config-managed-owner", role="owner")
+    _ = AppScope.objects.create(app=app, key="MANAGED_USERS", name="下属")
+    permission_group = PermissionGroup.objects.create(app=app, key="CUSTOMER", name="Customer")
+    permission = Permission.objects.create(
+        app=app,
+        group=permission_group,
+        key="customer.read",
+        name="Read customer",
+        supported_scopes=["MANAGED_USERS"],
+    )
+    authorization_group = AuthorizationGroup.objects.create(
+        app=app,
+        key="auditor",
+        kind="role",
+        name="Auditor",
+        requestable=True,
+    )
+    grant = AuthorizationGroupGrant.objects.create(
+        authorization_group=authorization_group,
+        permission=permission,
+        scope_key="MANAGED_USERS",
+    )
+    _ = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=authorization_group,
+        approver_userids=["manager-001"],
+    )
+    _ = StaticTokenService.create_token(app=app, name="token")
+    _ = ManagedScopePolicy.objects.create(
+        app=app,
+        target_type="authorization_group_grant",
+        target_id=grant.id,
+        scope="MANAGED_USERS",
+        resolver="dingtalk_manager_chain",
+        enabled=False,
+    )
+
+    # When: owner 查询配置状态。
+    response = client.get(f"{APPS_API_URL}/{app.app_key}/configuration-status")
+
+    # Then: API 暴露 blocking issue 的 subject、target_type、target_id 和中文 message。
+    assert response.status_code == HTTPStatus.OK
+    body = cast("dict[str, JsonValue]", response.json())
+    assert body["status"] == "blocking"
+    assert body["issues"] == [
+        {
+            "code": "managed_scope_policy_disabled",
+            "severity": "blocking",
+            "level": "blocking",
+            "message": "MANAGED_USERS grant 的 managed scope policy 已禁用。",
+            "subject": "auditor:customer.read:MANAGED_USERS",
+            "target_type": "authorization_group_grant",
+            "target_id": "auditor:customer.read:MANAGED_USERS",
+        },
+    ]
 
 
 def test_ops1_memberships_api_lists_app_memberships_for_visible_app() -> None:

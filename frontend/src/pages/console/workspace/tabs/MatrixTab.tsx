@@ -19,7 +19,7 @@ import { Dialog } from "../../../../components/Dialog";
 import { Field, SelectInput, TextArea, TextInput } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
-import type { AppScopeItem, AuthorizationGroupGrantItem, AuthorizationGroupItem, PermissionItem } from "../../../../lib/domain";
+import type { AppScopeItem, AuthorizationGroupGrantItem, AuthorizationGroupItem, ManagedScopePolicyItem, PermissionItem } from "../../../../lib/domain";
 import { buildAuthorizationGroupPayload, grantKey, normalizeGrants } from "../matrix/grantDraft";
 
 type AuthorizationGroupForm = AuthorizationGroupItem;
@@ -111,7 +111,12 @@ export function MatrixTab({ appKey }: { appKey: string }) {
       }
       return {
         ...current,
-        grants: [...current.grants, { permission: grantPermission, scope: grantScope, is_active: true }],
+        grants: [...current.grants, {
+          permission: grantPermission,
+          scope: grantScope,
+          is_active: true,
+          ...(grantScope === "MANAGED_USERS" ? { managed_scope_policy: inheritManagedScopePolicy() } : {}),
+        }],
       };
     });
   };
@@ -152,6 +157,37 @@ export function MatrixTab({ appKey }: { appKey: string }) {
   });
   const grantColumns: ColumnDef<AuthorizationGroupGrantItem>[] = [
     { header: "Grant", cell: ({ row }) => `${row.original.permission} / ${row.original.scope}` },
+    {
+      header: "管理范围计算方式",
+      cell: ({ row }) => {
+        if (!isManagedUsersGrant(row.original)) {
+          return "-";
+        }
+        return (
+          <SelectInput
+            aria-label={`${row.original.permission} / ${row.original.scope} 管理范围计算方式`}
+            value={managedScopePolicyMode(row.original.managed_scope_policy)}
+            onChange={(event) => updateGrantManagedScopePolicy(form.grants, row.original, event.currentTarget.value, setForm)}
+          >
+            <option value="inherit">继承应用默认</option>
+            <option value="override">按钉钉主管关系</option>
+            <option value="disabled">不启用</option>
+          </SelectInput>
+        );
+      },
+    },
+    {
+      header: "有效策略",
+      cell: ({ row }) => managedScopeEffectivePolicyLabel(row.original),
+    },
+    {
+      header: "继承来源",
+      cell: ({ row }) => managedScopeInheritedFromLabel(row.original),
+    },
+    {
+      header: "健康状态",
+      cell: ({ row }) => managedScopeHealthLabel(row.original),
+    },
     { header: "状态", cell: ({ row }) => <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>{row.original.is_active ? "启用" : "停用"}</Badge> },
     {
       id: "actions",
@@ -358,6 +394,23 @@ function updateGrant(
   }));
 }
 
+function updateGrantManagedScopePolicy(
+  grants: AuthorizationGroupGrantItem[],
+  target: AuthorizationGroupGrantItem,
+  mode: string,
+  setForm: React.Dispatch<React.SetStateAction<AuthorizationGroupForm>>,
+) {
+  const targetKey = grantKey(target.permission, target.scope);
+  setForm((current) => ({
+    ...current,
+    grants: grants.map((grant) =>
+      grantKey(grant.permission, grant.scope) === targetKey
+        ? { ...grant, managed_scope_policy: managedScopePolicyFromMode(mode) }
+        : grant,
+    ),
+  }));
+}
+
 function removeGrant(
   target: AuthorizationGroupGrantItem,
   setForm: React.Dispatch<React.SetStateAction<AuthorizationGroupForm>>,
@@ -367,4 +420,73 @@ function removeGrant(
     ...current,
     grants: current.grants.filter((grant) => grantKey(grant.permission, grant.scope) !== targetKey),
   }));
+}
+
+function isManagedUsersGrant(grant: AuthorizationGroupGrantItem): boolean {
+  return grant.scope === "MANAGED_USERS";
+}
+
+function inheritManagedScopePolicy(): ManagedScopePolicyItem {
+  return { mode: "inherit", resolver: null, enabled: true };
+}
+
+function managedScopePolicyMode(policy: ManagedScopePolicyItem | undefined): string {
+  if (policy?.mode === "override" || policy?.mode === "disabled") {
+    return policy.mode;
+  }
+  return "inherit";
+}
+
+function managedScopePolicyFromMode(mode: string): ManagedScopePolicyItem {
+  if (mode === "override") {
+    return { mode: "override", resolver: "dingtalk_manager_chain", enabled: true };
+  }
+  if (mode === "disabled") {
+    return { mode: "disabled", resolver: "disabled", enabled: true };
+  }
+  return inheritManagedScopePolicy();
+}
+
+function managedScopeEffectivePolicyLabel(grant: AuthorizationGroupGrantItem): string {
+  if (!isManagedUsersGrant(grant)) {
+    return "-";
+  }
+  if (grant.effective_managed_scope_policy?.resolver === "dingtalk_manager_chain") {
+    return "按钉钉主管关系";
+  }
+  return "必须配置管理范围计算方式后才能生效";
+}
+
+function managedScopeInheritedFromLabel(grant: AuthorizationGroupGrantItem): string {
+  if (!isManagedUsersGrant(grant)) {
+    return "-";
+  }
+  const inheritedFrom = grant.effective_managed_scope_policy?.inherited_from;
+  if (inheritedFrom === "app_default") {
+    return "应用默认";
+  }
+  if (grant.effective_managed_scope_policy?.source === "authorization_group_grant") {
+    return "Grant 覆盖";
+  }
+  return "-";
+}
+
+function managedScopeHealthLabel(grant: AuthorizationGroupGrantItem): string {
+  if (!isManagedUsersGrant(grant)) {
+    return "-";
+  }
+  const status = grant.effective_managed_scope_policy?.health_status;
+  if (status === "healthy") {
+    return "健康";
+  }
+  if (status === "warning") {
+    return "警告";
+  }
+  if (status === "blocked") {
+    return "阻断";
+  }
+  if (status === "disabled") {
+    return "不启用";
+  }
+  return grant.effective_managed_scope_policy?.health_message ?? "未配置";
 }

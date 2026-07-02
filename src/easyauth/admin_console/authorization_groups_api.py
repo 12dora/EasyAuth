@@ -27,10 +27,15 @@ from easyauth.admin_console.permission_catalog_data import (
 )
 from easyauth.applications.catalog_version import bump_catalog_version
 from easyauth.applications.models import (
+    MANAGED_SCOPE_POLICY_RESOLVER_DINGTALK_MANAGER_CHAIN,
+    MANAGED_SCOPE_POLICY_RESOLVER_DISABLED,
+    MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS,
+    MANAGED_SCOPE_POLICY_TARGET_AUTHORIZATION_GROUP_GRANT,
     App,
     AppScope,
     AuthorizationGroup,
     AuthorizationGroupGrant,
+    ManagedScopePolicy,
     Permission,
 )
 
@@ -56,6 +61,15 @@ class ResolvedAuthorizationGroupGrant:
     permission: Permission
     scope_key: str
     is_active: bool
+    managed_scope_policy: ManagedScopePolicyPayload | None
+
+
+class ManagedScopePolicyPayload(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
+
+    mode: str = Field(default="inherit", min_length=1, max_length=64)
+    resolver: str = Field(default="", max_length=64)
+    enabled: bool = True
 
 
 class AuthorizationGroupGrantPayload(BaseModel):
@@ -64,6 +78,7 @@ class AuthorizationGroupGrantPayload(BaseModel):
     permission: str = Field(min_length=1, max_length=128)
     scope: str = Field(min_length=1, max_length=64)
     is_active: bool = True
+    managed_scope_policy: ManagedScopePolicyPayload | None = None
 
 
 class AuthorizationGroupPayload(BaseModel):
@@ -150,7 +165,7 @@ def _save_authorization_group_create(
                 pass
             case JsonResponse() as response:
                 return response
-        match _replace_grants(group, grants):
+        match _replace_grants(group, grants, actor):
             case None:
                 pass
             case JsonResponse() as response:
@@ -223,7 +238,7 @@ def _save_authorization_group_update(
                 pass
             case JsonResponse() as response:
                 return response
-        match _replace_grants(group, grants):
+        match _replace_grants(group, grants, actor):
             case None:
                 pass
             case JsonResponse() as response:
@@ -254,11 +269,14 @@ def _resolve_grants(
                 return response
         if payload.scope not in _supported_scope_keys(permission):
             return semantic_response("授权组 grant 的 Scope 不在 Permission supported_scopes 中。")
+        if response := _validate_managed_scope_policy_payload(payload.managed_scope_policy):
+            return response
         resolved.append(
             ResolvedAuthorizationGroupGrant(
                 permission=permission,
                 scope_key=payload.scope,
                 is_active=payload.is_active,
+                managed_scope_policy=payload.managed_scope_policy,
             ),
         )
     return tuple(resolved)
@@ -276,11 +294,13 @@ def _supported_scope_keys(permission: Permission) -> list[str]:
 def _replace_grants(
     group: AuthorizationGroup,
     grants: tuple[ResolvedAuthorizationGroupGrant, ...],
+    actor: ConsoleActor,
 ) -> JsonResponse | None:
     for payload in grants:
         match _upsert_grant(group, payload):
-            case None:
-                pass
+            case AuthorizationGroupGrant() as grant:
+                if response := _replace_grant_managed_scope_policy(group, grant, payload, actor):
+                    return response
             case JsonResponse() as response:
                 return response
     seen = {(grant.permission.key, grant.scope_key) for grant in grants}
@@ -318,7 +338,7 @@ def _validate_unique_grant(
 def _upsert_grant(
     group: AuthorizationGroup,
     payload: ResolvedAuthorizationGroupGrant,
-) -> JsonResponse | None:
+) -> AuthorizationGroupGrant | JsonResponse:
     grant, _created = AuthorizationGroupGrant.objects.get_or_create(
         authorization_group=group,
         permission=payload.permission,
@@ -326,7 +346,62 @@ def _upsert_grant(
         defaults={"is_active": payload.is_active},
     )
     grant.is_active = payload.is_active
-    return save_model(grant)
+    if response := save_model(grant):
+        return response
+    return grant
+
+
+def _replace_grant_managed_scope_policy(
+    group: AuthorizationGroup,
+    grant: AuthorizationGroupGrant,
+    payload: ResolvedAuthorizationGroupGrant,
+    actor: ConsoleActor,
+) -> JsonResponse | None:
+    if not payload.is_active:
+        if _delete_grant_managed_scope_policy(group, grant):
+            _record_managed_scope_policy_updated(
+                group,
+                actor,
+                grant,
+                resolver=MANAGED_SCOPE_POLICY_RESOLVER_DISABLED,
+            )
+        return None
+    normalized = _normalized_managed_scope_policy_payload(payload.managed_scope_policy)
+    if normalized is None:
+        if _delete_grant_managed_scope_policy(group, grant):
+            _record_managed_scope_policy_updated(group, actor, grant, resolver="app_default")
+        return None
+    policy, _created = ManagedScopePolicy.objects.get_or_create(
+        app=group.app,
+        target_type=MANAGED_SCOPE_POLICY_TARGET_AUTHORIZATION_GROUP_GRANT,
+        target_id=grant.id,
+        scope=MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS,
+        defaults={
+            "resolver": normalized.resolver,
+            "enabled": normalized.enabled,
+        },
+    )
+    previous = None if _created else (policy.resolver, policy.enabled)
+    policy.resolver = normalized.resolver
+    policy.enabled = normalized.enabled
+    if response := save_model(policy):
+        return response
+    if previous != (policy.resolver, policy.enabled):
+        _record_managed_scope_policy_updated(group, actor, grant, resolver=policy.resolver)
+    return None
+
+
+def _delete_grant_managed_scope_policy(
+    group: AuthorizationGroup,
+    grant: AuthorizationGroupGrant,
+) -> bool:
+    deleted_count, _deleted_by_model = ManagedScopePolicy.objects.filter(
+        app=group.app,
+        target_type=MANAGED_SCOPE_POLICY_TARGET_AUTHORIZATION_GROUP_GRANT,
+        target_id=grant.id,
+        scope=MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS,
+    ).delete()
+    return deleted_count > 0
 
 
 def _grant_permission(
@@ -354,10 +429,46 @@ def _deactivate_missing_grants(
             grant.is_active = False
             match save_model(grant):
                 case None:
-                    pass
+                    _ = _delete_grant_managed_scope_policy(group, grant)
                 case JsonResponse() as response:
                     return response
+        elif key not in seen:
+            _ = _delete_grant_managed_scope_policy(group, grant)
     return None
+
+
+def _validate_managed_scope_policy_payload(
+    payload: ManagedScopePolicyPayload | None,
+) -> JsonResponse | None:
+    try:
+        _ = _normalized_managed_scope_policy_payload(payload)
+    except ValueError as error:
+        return semantic_response(str(error))
+    return None
+
+
+def _normalized_managed_scope_policy_payload(
+    payload: ManagedScopePolicyPayload | None,
+) -> ManagedScopePolicyPayload | None:
+    if payload is None or payload.mode in {"inherit", "app_default"}:
+        return None
+    if payload.mode == MANAGED_SCOPE_POLICY_RESOLVER_DISABLED:
+        return ManagedScopePolicyPayload(
+            mode=MANAGED_SCOPE_POLICY_RESOLVER_DISABLED,
+            resolver=MANAGED_SCOPE_POLICY_RESOLVER_DISABLED,
+            enabled=True,
+        )
+    resolver = payload.resolver if payload.mode == "override" else payload.mode
+    if resolver == MANAGED_SCOPE_POLICY_RESOLVER_DISABLED:
+        return ManagedScopePolicyPayload(
+            mode=MANAGED_SCOPE_POLICY_RESOLVER_DISABLED,
+            resolver=resolver,
+            enabled=payload.enabled,
+        )
+    if resolver != MANAGED_SCOPE_POLICY_RESOLVER_DINGTALK_MANAGER_CHAIN:
+        message = "授权组 grant managed_scope_policy resolver 不受支持。"
+        raise ValueError(message)
+    return ManagedScopePolicyPayload(mode="override", resolver=resolver, enabled=payload.enabled)
 
 
 def _record_group_event(
@@ -374,5 +485,29 @@ def _record_group_event(
             target_type="authorization_group",
             target_id=str(group.id),
             metadata={"authorization_group_key": group.key},
+        ),
+    )
+
+
+def _record_managed_scope_policy_updated(
+    group: AuthorizationGroup,
+    actor: ConsoleActor,
+    grant: AuthorizationGroupGrant,
+    *,
+    resolver: str,
+) -> None:
+    record_catalog_event(
+        CatalogEvent(
+            app=group.app,
+            actor=actor,
+            action="managed_scope_policy_updated",
+            target_type="authorization_group_grant",
+            target_id=str(grant.id),
+            metadata={
+                "authorization_group_key": group.key,
+                "permission_key": grant.permission.key,
+                "scope": MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS,
+                "resolver": resolver,
+            },
         ),
     )

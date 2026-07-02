@@ -9,6 +9,7 @@ import pytest
 
 from easyauth.integrations.authentik.directory_client import (
     AuthentikDirectoryClient,
+    AuthentikDirectoryNotFoundError,
     AuthentikDirectoryPermissionError,
     AuthentikDirectoryUnavailableError,
 )
@@ -144,6 +145,216 @@ def test_directory_client_iterates_paginated_users(monkeypatch: pytest.MonkeyPat
         "http://authentik.test/api/v3/sources/oauth/dingtalk-directory/dingtalk/users/?page=1",
         "http://authentik.test/api/v3/sources/oauth/dingtalk-directory/dingtalk/users/?page=2",
     ]
+
+
+def test_directory_client_fetches_managed_users(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_urlopen(request: Request, *, timeout: float) -> _Response:
+        assert timeout == TIMEOUT_SECONDS
+        assert request.full_url == (
+            "http://authentik.test/api/v3/sources/oauth/dingtalk-directory/dingtalk/"
+            "managed-users/by-manager/corp%2F1/manager%201/"
+        )
+        body = b"""
+            {
+              "source_slug": "dingtalk",
+              "corp_id": "corp/1",
+              "manager_user_id": "manager 1",
+              "resolver": "dingtalk_manager_chain",
+              "stale": false,
+              "resolved_at": "2026-07-02T12:00:00+08:00",
+              "users": [
+                {
+                  "source_user_id": "employee-1",
+                  "authentik_user_id": "ak-user-1",
+                  "authentik_user_active": true,
+                  "directory_active": true,
+                  "is_deleted": false
+                },
+                {
+                  "source_user_id": "employee-2",
+                  "authentik_user_id": "ak-user-2",
+                  "authentik_user_active": false,
+                  "directory_active": true,
+                  "is_deleted": false
+                },
+                {
+                  "source_user_id": "employee-3",
+                  "authentik_user_id": "",
+                  "authentik_user_active": true,
+                  "directory_active": true,
+                  "is_deleted": false
+                }
+              ]
+            }
+            """
+        return _Response(body)
+
+    monkeypatch.setattr("easyauth.integrations.authentik.directory_client.urlopen", fake_urlopen)
+
+    result = AuthentikDirectoryClient(
+        base_url="http://authentik.test",
+        api_token=TEST_API_TOKEN,
+        source_slug="dingtalk",
+        timeout_seconds=TIMEOUT_SECONDS,
+    ).get_managed_users("corp/1", "manager 1")
+
+    assert result.source_slug == "dingtalk"
+    assert result.corp_id == "corp/1"
+    assert result.manager_user_id == "manager 1"
+    assert result.resolver == "dingtalk_manager_chain"
+    assert result.resolved_at == "2026-07-02T12:00:00+08:00"
+    assert result.active_authentik_user_ids == ("ak-user-1",)
+    assert [user.source_user_id for user in result.users] == [
+        "employee-1",
+        "employee-2",
+        "employee-3",
+    ]
+    assert result.users[1].authentik_user_active is False
+    assert result.users[2].authentik_user_id == ""
+
+
+def test_directory_client_rejects_managed_users_missing_fields(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_urlopen(_request: Request, *, timeout: float) -> _Response:
+        _ = timeout
+        return _Response(b'{"corp_id": "corp-1", "manager_user_id": "manager-1", "users": []}')
+
+    monkeypatch.setattr("easyauth.integrations.authentik.directory_client.urlopen", fake_urlopen)
+
+    with pytest.raises(AuthentikDirectoryUnavailableError):
+        _ = AuthentikDirectoryClient(
+            base_url="http://authentik.test",
+            api_token=TEST_API_TOKEN,
+            source_slug="dingtalk",
+            timeout_seconds=TIMEOUT_SECONDS,
+        ).get_managed_users("corp-1", "manager-1")
+
+
+def test_directory_client_excludes_inactive_managed_users(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_urlopen(_request: Request, *, timeout: float) -> _Response:
+        _ = timeout
+        return _Response(
+            b"""
+            {
+              "source_slug": "dingtalk",
+              "corp_id": "corp-1",
+              "manager_user_id": "manager-1",
+              "users": [
+                {
+                  "source_user_id": "employee-1",
+                  "authentik_user_id": "ak-user-1",
+                  "authentik_user_active": true,
+                  "directory_active": false,
+                  "is_deleted": false
+                },
+                {
+                  "source_user_id": "employee-2",
+                  "authentik_user_id": "ak-user-2",
+                  "authentik_user_active": true,
+                  "directory_active": true,
+                  "is_deleted": true
+                },
+                {
+                  "source_user_id": "employee-3",
+                  "authentik_user_id": "ak-user-3",
+                  "authentik_user_active": false,
+                  "directory_active": true,
+                  "is_deleted": false
+                }
+              ]
+            }
+            """,
+        )
+
+    monkeypatch.setattr("easyauth.integrations.authentik.directory_client.urlopen", fake_urlopen)
+
+    result = AuthentikDirectoryClient(
+        base_url="http://authentik.test",
+        api_token=TEST_API_TOKEN,
+        source_slug="dingtalk",
+        timeout_seconds=TIMEOUT_SECONDS,
+    ).get_managed_users("corp-1", "manager-1")
+
+    assert result.active_authentik_user_ids == ()
+    assert result.users[0].directory_active is False
+    assert result.users[1].is_deleted is True
+    assert result.users[2].authentik_user_active is False
+
+
+def test_directory_client_excludes_unbound_managed_users(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_urlopen(_request: Request, *, timeout: float) -> _Response:
+        _ = timeout
+        return _Response(
+            b"""
+            {
+              "source_slug": "dingtalk",
+              "corp_id": "corp-1",
+              "manager_user_id": "manager-1",
+              "users": [
+                {
+                  "source_user_id": "employee-1",
+                  "authentik_user_id": "",
+                  "authentik_user_active": true,
+                  "directory_active": true,
+                  "is_deleted": false
+                }
+              ]
+            }
+            """,
+        )
+
+    monkeypatch.setattr("easyauth.integrations.authentik.directory_client.urlopen", fake_urlopen)
+
+    result = AuthentikDirectoryClient(
+        base_url="http://authentik.test",
+        api_token=TEST_API_TOKEN,
+        source_slug="dingtalk",
+        timeout_seconds=TIMEOUT_SECONDS,
+    ).get_managed_users("corp-1", "manager-1")
+
+    assert result.active_authentik_user_ids == ()
+    assert result.users[0].authentik_user_id == ""
+
+
+def test_directory_client_maps_managed_users_404_to_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_urlopen(request: Request, *, timeout: float) -> _Response:
+        _ = timeout
+        raise HTTPError(request.full_url, HTTPStatus.NOT_FOUND, "missing", Message(), None)
+
+    monkeypatch.setattr("easyauth.integrations.authentik.directory_client.urlopen", fake_urlopen)
+
+    with pytest.raises(AuthentikDirectoryNotFoundError):
+        _ = AuthentikDirectoryClient(
+            base_url="http://authentik.test",
+            api_token=TEST_API_TOKEN,
+            source_slug="dingtalk",
+            timeout_seconds=TIMEOUT_SECONDS,
+        ).get_managed_users("corp-1", "manager-1")
+
+
+def test_directory_client_rejects_managed_users_invalid_json(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_urlopen(_request: Request, *, timeout: float) -> _Response:
+        _ = timeout
+        return _Response(b"{")
+
+    monkeypatch.setattr("easyauth.integrations.authentik.directory_client.urlopen", fake_urlopen)
+
+    with pytest.raises(AuthentikDirectoryUnavailableError):
+        _ = AuthentikDirectoryClient(
+            base_url="http://authentik.test",
+            api_token=TEST_API_TOKEN,
+            source_slug="dingtalk",
+            timeout_seconds=TIMEOUT_SECONDS,
+        ).get_managed_users("corp-1", "manager-1")
 
 
 def test_directory_client_maps_403_to_permission_error(monkeypatch: pytest.MonkeyPatch) -> None:

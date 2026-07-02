@@ -3,11 +3,18 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from easyauth.admin_console.api_payloads import list_payload
+from easyauth.applications.managed_scope_policy import ManagedScopePolicyService
 from easyauth.applications.models import (
+    MANAGED_SCOPE_POLICY_RESOLVER_DINGTALK_MANAGER_CHAIN,
+    MANAGED_SCOPE_POLICY_RESOLVER_DISABLED,
+    MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS,
+    MANAGED_SCOPE_POLICY_TARGET_APP_DEFAULT,
+    MANAGED_SCOPE_POLICY_TARGET_AUTHORIZATION_GROUP_GRANT,
     App,
     AppScope,
     AuthorizationGroup,
     AuthorizationGroupGrant,
+    ManagedScopePolicy,
     Permission,
     PermissionGroup,
     Role,
@@ -254,7 +261,88 @@ def authorization_group_grant_item(grant: AuthorizationGroupGrant) -> dict[str, 
         "permission": grant.permission.key,
         "scope": grant.scope_key,
         "is_active": grant.is_active,
+        "managed_scope_policy": _grant_managed_scope_policy_item(grant),
+        "effective_managed_scope_policy": _effective_managed_scope_policy_item(grant),
     }
+
+
+def _grant_managed_scope_policy_item(grant: AuthorizationGroupGrant) -> dict[str, JsonValue]:
+    override = ManagedScopePolicyService.get_grant_override_policy(
+        app=grant.authorization_group.app,
+        grant=grant,
+    )
+    if override is not None:
+        return {
+            "mode": _managed_scope_policy_mode(override),
+            "resolver": override.resolver,
+            "enabled": override.enabled,
+            "source": MANAGED_SCOPE_POLICY_TARGET_AUTHORIZATION_GROUP_GRANT,
+            "health_status": _managed_scope_policy_health(override),
+            "health_message": _managed_scope_policy_health_message(override),
+        }
+    app_default = ManagedScopePolicyService.get_app_default_policy(
+        app=grant.authorization_group.app,
+    )
+    if app_default is not None:
+        return {
+            "mode": "inherit",
+            "resolver": "",
+            "enabled": False,
+            "source": MANAGED_SCOPE_POLICY_TARGET_APP_DEFAULT,
+            "health_status": "healthy",
+            "health_message": "继承应用默认管理范围策略。",
+        }
+    return {
+        "mode": "inherit",
+        "resolver": "",
+        "enabled": False,
+        "source": "",
+        "health_status": "blocked",
+        "health_message": "必须配置管理范围计算方式后才能生效。",
+    }
+
+
+def _effective_managed_scope_policy_item(
+    grant: AuthorizationGroupGrant,
+) -> dict[str, JsonValue] | None:
+    effective = ManagedScopePolicyService.get_effective_policy(
+        app=grant.authorization_group.app,
+        grant=grant,
+    )
+    if effective is None:
+        return None
+    return {
+        "resolver": effective.resolver,
+        "enabled": effective.policy.enabled,
+        "source": effective.source,
+        "inherited_from": effective.inherited_from,
+        "health_status": "healthy",
+        "health_message": "管理范围策略已配置。",
+    }
+
+
+def _managed_scope_policy_mode(policy: ManagedScopePolicy) -> str:
+    if policy.resolver == MANAGED_SCOPE_POLICY_RESOLVER_DISABLED:
+        return MANAGED_SCOPE_POLICY_RESOLVER_DISABLED
+    if policy.resolver == MANAGED_SCOPE_POLICY_RESOLVER_DINGTALK_MANAGER_CHAIN:
+        return "override"
+    return policy.resolver
+
+
+def _managed_scope_policy_health(policy: ManagedScopePolicy) -> str:
+    if not policy.enabled or policy.resolver == MANAGED_SCOPE_POLICY_RESOLVER_DISABLED:
+        return "disabled"
+    if policy.scope != MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS:
+        return "invalid"
+    return "healthy"
+
+
+def _managed_scope_policy_health_message(policy: ManagedScopePolicy) -> str:
+    if not policy.enabled or policy.resolver == MANAGED_SCOPE_POLICY_RESOLVER_DISABLED:
+        return "当前 grant 不启用管理范围授权。"
+    if policy.scope != MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS:
+        return "管理范围策略 scope 无效。"
+    return "管理范围策略已配置。"
 
 
 def permission_item(permission: Permission) -> dict[str, JsonValue]:

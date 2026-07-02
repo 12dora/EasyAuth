@@ -6,11 +6,13 @@ from typing import TYPE_CHECKING
 from easyauth.accounts.models import UserMirror
 from easyauth.accounts.status import parse_user_status
 from easyauth.applications.models import App, AppScope, AuthorizationGroupGrant
+from easyauth.grants.managed_users import MANAGED_USERS_SCOPE, resolve_managed_users
 from easyauth.grants.models import (
     AccessGrant,
     AccessGrantGroup,
     AccessGrantPermission,
 )
+from easyauth.grants.query_types import ResolvedManagedUsers  # noqa: TC001 - 对外重导出类型。
 from easyauth.grants.status import parse_grant_status
 
 if TYPE_CHECKING:
@@ -32,6 +34,7 @@ class ExpandedGrant:
     scope: str
     source_type: str
     source_key: str
+    resolved: ResolvedManagedUsers | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -164,17 +167,32 @@ def _group_grants(grant: AccessGrant, active_scope_keys: set[str]) -> set[Expand
         )
         .order_by("permission__key", "scope_key", "authorization_group__key")
     )
-    return {
-        ExpandedGrant(
-            permission=link.permission.key,
-            scope=link.scope_key,
-            source_type="group",
-            source_key=link.authorization_group.key,
+    expanded: set[ExpandedGrant] = set()
+    for link in links:
+        if not (
+            link.scope_key in active_scope_keys
+            and link.scope_key in link.permission.supported_scopes
+        ):
+            continue
+        resolved = None
+        if link.scope_key == MANAGED_USERS_SCOPE:
+            resolved = resolve_managed_users(
+                user=grant.user,
+                app=grant.app,
+                authorization_group_grant=link,
+            )
+            if resolved is None:
+                continue
+        expanded.add(
+            ExpandedGrant(
+                permission=link.permission.key,
+                scope=link.scope_key,
+                source_type="group",
+                source_key=link.authorization_group.key,
+                resolved=resolved,
+            ),
         )
-        for link in links
-        if link.scope_key in active_scope_keys
-        and link.scope_key in link.permission.supported_scopes
-    }
+    return expanded
 
 
 def _direct_grants(grant: AccessGrant, active_scope_keys: set[str]) -> set[ExpandedGrant]:
@@ -187,17 +205,28 @@ def _direct_grants(grant: AccessGrant, active_scope_keys: set[str]) -> set[Expan
         )
         .order_by("permission__key", "scope_key")
     )
-    return {
-        ExpandedGrant(
-            permission=link.permission.key,
-            scope=link.scope_key,
-            source_type="direct",
-            source_key="",
+    expanded: set[ExpandedGrant] = set()
+    for link in links:
+        if not (
+            link.scope_key in active_scope_keys
+            and link.scope_key in link.permission.supported_scopes
+        ):
+            continue
+        resolved = None
+        if link.scope_key == MANAGED_USERS_SCOPE:
+            resolved = resolve_managed_users(user=grant.user, app=grant.app)
+            if resolved is None:
+                continue
+        expanded.add(
+            ExpandedGrant(
+                permission=link.permission.key,
+                scope=link.scope_key,
+                source_type="direct",
+                source_key="",
+                resolved=resolved,
+            ),
         )
-        for link in links
-        if link.scope_key in active_scope_keys
-        and link.scope_key in link.permission.supported_scopes
-    }
+    return expanded
 
 
 def _expanded_grant_sort_key(grant: ExpandedGrant) -> tuple[str, str, str, str]:

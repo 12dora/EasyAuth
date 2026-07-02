@@ -55,6 +55,9 @@ CONFIGURATION_ISSUE_TARGET_TYPES: Final = {
     "active_owner_missing": "membership",
     "requestable_authorization_group_approval_rule_missing": "authorization_group",
     "authorization_group_grant_target_inactive": "authorization_group_grant",
+    "managed_scope_app_default_policy_missing": "authorization_group_grant",
+    "managed_scope_grant_policy_missing": "authorization_group_grant",
+    "managed_scope_policy_disabled": "authorization_group_grant",
     "permission_supported_scopes_missing": "permission",
     "permission_group_inactive": "permission_group",
 }

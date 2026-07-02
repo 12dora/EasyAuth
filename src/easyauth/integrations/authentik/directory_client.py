@@ -15,9 +15,11 @@ from easyauth.integrations.authentik.directory_payloads import (
     DingTalkDirectoryOrgContext,
     DingTalkDirectoryStatus,
     DingTalkDirectoryUser,
+    DingTalkManagedUsers,
     DirectoryJson,
     JsonValue,
     parse_departments,
+    parse_managed_users,
     parse_org_context,
     parse_status,
     parse_users,
@@ -101,6 +103,19 @@ class AuthentikDirectoryClient:
             self._get_json(f"users/{quoted_corp}/{quoted_user}/org/"),
             source_slug=self.source_slug,
         )
+
+    def get_managed_users(self, corp_id: str, manager_user_id: str) -> DingTalkManagedUsers:
+        quoted_corp = quote(corp_id, safe="")
+        quoted_manager = quote(manager_user_id, safe="")
+        try:
+            return parse_managed_users(
+                self._get_json(
+                    f"managed-users/by-manager/{quoted_corp}/{quoted_manager}/",
+                ),
+                source_slug=self.source_slug,
+            )
+        except (TypeError, ValueError) as error:
+            raise AuthentikDirectoryUnavailableError(DIRECTORY_INVALID_FORMAT_MESSAGE) from error
 
     def _iter_paginated(self, suffix: str) -> Iterator[DirectoryJson]:
         page = 1

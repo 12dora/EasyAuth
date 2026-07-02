@@ -18,6 +18,7 @@ from easyauth.admin_console.query_tester import (
 )
 from easyauth.admin_console.request_guards import require_console_actor, require_post
 from easyauth.api.errors import ErrorCode, JsonValue
+from easyauth.api.permission_query_payloads import expanded_grant_payload
 from easyauth.applications.models import App
 from easyauth.applications.ownership import ConsoleActor, can_view_app
 
@@ -113,15 +114,7 @@ def _success_payload(
         {"key": group.key, "kind": group.kind, "name": group.name}
         for group in result.groups
     ]
-    grants: list[JsonValue] = [
-        {
-            "permission": grant.permission,
-            "scope": grant.scope,
-            "source_type": grant.source_type,
-            "source_key": grant.source_key,
-        }
-        for grant in result.grants
-    ]
+    grants: list[JsonValue] = [expanded_grant_payload(grant) for grant in result.grants]
     return {
         "app_key": app.app_key,
         "user_id": user_id,

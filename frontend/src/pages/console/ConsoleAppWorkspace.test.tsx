@@ -114,6 +114,113 @@ describe("ConsoleAppWorkspace", () => {
     expect(screen.getByTestId("location")).toHaveTextContent("/console/apps/demo?tab=rules");
   });
 
+  test("管理范围 tab 读取并保存应用默认 MANAGED_USERS 策略", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/demo") {
+        return jsonResponse({ app: { ...appPayload.app, can_manage: true } });
+      }
+      if (url === "/console/api/v1/apps/demo/managed-scope-policy" && !init?.method) {
+        return jsonResponse({
+          managed_scope_policy: null,
+          effective_managed_scope_policy: null,
+        });
+      }
+      if (url === "/console/api/v1/apps/demo/managed-scope-policy" && init?.method === "PATCH") {
+        return jsonResponse({
+          managed_scope_policy: { mode: "override", resolver: "dingtalk_manager_chain", enabled: true },
+          effective_managed_scope_policy: {
+            resolver: "dingtalk_manager_chain",
+            source: "app_default",
+            health_status: "healthy",
+            health_message: "已启用",
+          },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWorkspace("/console/apps/demo");
+
+    await user.click(await screen.findByRole("button", { name: "管理范围" }));
+
+    expect(await screen.findByRole("heading", { name: "管理范围" })).toBeInTheDocument();
+    expect(screen.getAllByText("未配置").length).toBeGreaterThan(0);
+    const select = screen.getByLabelText("应用默认 MANAGED_USERS 策略");
+    expect(within(select).getByRole("option", { name: "按钉钉主管关系" })).toBeInTheDocument();
+    expect(within(select).getByRole("option", { name: "不启用" })).toBeInTheDocument();
+
+    await user.selectOptions(select, "dingtalk_manager_chain");
+    await user.click(screen.getByRole("button", { name: "保存策略" }));
+
+    await waitFor(() => {
+      const patchCall = findFetchCall(fetchMock, "/console/api/v1/apps/demo/managed-scope-policy", "PATCH");
+      expect(parseJsonBody(patchCall?.[1])).toEqual({
+        managed_scope_policy: {
+          mode: "override",
+          resolver: "dingtalk_manager_chain",
+          enabled: true,
+        },
+      });
+    });
+    await waitFor(() => expect(screen.getAllByText("按钉钉主管关系").length).toBeGreaterThan(1));
+  });
+
+  test("管理范围 tab 可保存不启用应用默认策略", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/demo") {
+        return jsonResponse({ app: { ...appPayload.app, can_manage: true } });
+      }
+      if (url === "/console/api/v1/apps/demo/managed-scope-policy" && !init?.method) {
+        return jsonResponse({
+          managed_scope_policy: { mode: "override", resolver: "dingtalk_manager_chain", enabled: true },
+          effective_managed_scope_policy: {
+            resolver: "dingtalk_manager_chain",
+            source: "app_default",
+            health_status: "healthy",
+          },
+        });
+      }
+      if (url === "/console/api/v1/apps/demo/managed-scope-policy" && init?.method === "PATCH") {
+        return jsonResponse({
+          managed_scope_policy: { mode: "disabled", resolver: "disabled", enabled: false },
+          effective_managed_scope_policy: {
+            resolver: "disabled",
+            source: "app_default",
+            health_status: "disabled",
+            health_message: "应用默认策略已停用",
+          },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWorkspace("/console/apps/demo?tab=managed-scope");
+
+    const select = await screen.findByLabelText("应用默认 MANAGED_USERS 策略");
+    await waitFor(() => expect(select).toHaveValue("dingtalk_manager_chain"));
+
+    await user.selectOptions(select, "disabled");
+    await user.click(screen.getByRole("button", { name: "保存策略" }));
+
+    await waitFor(() => {
+      const patchCall = findFetchCall(fetchMock, "/console/api/v1/apps/demo/managed-scope-policy", "PATCH");
+      expect(parseJsonBody(patchCall?.[1])).toEqual({
+        managed_scope_policy: {
+          mode: "disabled",
+          resolver: "disabled",
+          enabled: false,
+        },
+      });
+    });
+    await waitFor(() => expect(screen.getAllByText("不启用").length).toBeGreaterThan(1));
+  });
+
   test("授权组保存 payload 包含 permission 和 scope", async () => {
     const authorizationGroupsPayload = {
       version: "catalog-v1",

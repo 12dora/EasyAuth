@@ -11,8 +11,10 @@ from easyauth.applications.models import (
     AppScope,
     AuthorizationGroup,
     AuthorizationGroupGrant,
+    ManagedScopePolicy,
     Permission,
 )
+from easyauth.audit.models import AuditLog
 from easyauth.grants.models import (
     GRANT_STATUS_EXPIRED,
     GRANT_STATUS_REVOKED,
@@ -21,7 +23,13 @@ from easyauth.grants.models import (
     AccessGrantGroup,
     AccessGrantPermission,
 )
-from easyauth.grants.query import ExpandedGrant, GroupSnapshot, resolve_user_permissions
+from easyauth.grants.query import (
+    ExpandedGrant,
+    GroupSnapshot,
+    ResolvedManagedUsers,
+    resolve_user_permissions,
+)
+from easyauth.integrations.authentik.directory_payloads import DingTalkManagedUsers
 
 pytestmark = pytest.mark.django_db
 
@@ -82,7 +90,6 @@ def test_resolve_user_permissions_expands_group_grants_and_sorts_groups_and_gran
         ),
     )
 
-
 def test_resolve_user_permissions_expands_direct_scoped_grants() -> None:
     # Given
     user = UserMirror.objects.create(authentik_user_id="user-direct-scoped")
@@ -109,7 +116,6 @@ def test_resolve_user_permissions_expands_direct_scoped_grants() -> None:
             source_key="",
         ),
     )
-
 
 def test_resolve_user_permissions_preserves_same_permission_with_different_scopes() -> None:
     # Given
@@ -155,6 +161,173 @@ def test_resolve_user_permissions_keeps_group_and_direct_sources_for_same_scope(
     assert snapshot.grants == (
         ExpandedGrant("invoice.read", "SELF", "direct", ""),
         ExpandedGrant("invoice.read", "SELF", "group", "sales"),
+    )
+
+
+def test_expanded_grant_supports_optional_resolved_managed_users_contract() -> None:
+    # Given
+    resolved = ResolvedManagedUsers(
+        user_ids=("user-001", "user-002"),
+        resolver="manual",
+        resolved_at="2026-06-05T10:20:30Z",
+    )
+
+    # When
+    regular_grant = ExpandedGrant("invoice.read", "SELF", "direct", "")
+    managed_users_grant = ExpandedGrant(
+        "invoice.read",
+        "MANAGED_USERS",
+        "direct",
+        "",
+        resolved=resolved,
+    )
+
+    # Then
+    assert regular_grant.resolved is None
+    assert managed_users_grant.resolved == resolved
+
+
+def test_resolve_user_permissions_resolves_managed_users_with_effective_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: 用户持有 MANAGED_USERS 授权组, App 配置了有效管理范围策略。
+    user = UserMirror.objects.create(
+        authentik_user_id="manager-ak",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="manager-dt",
+    )
+    app = App.objects.create(app_key="crm-managed-query", name="CRM")
+    _scope(app, "MANAGED_USERS")
+    permission = _permission(app, "customer.profile.view", scopes=["MANAGED_USERS"])
+    group = AuthorizationGroup.objects.create(app=app, key="team-manager", kind="role", name="主管")
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key="MANAGED_USERS",
+    )
+    _ = ManagedScopePolicy.objects.create(
+        app=app,
+        target_type="app_default",
+        target_id=app.id,
+        scope="MANAGED_USERS",
+        resolver="dingtalk_manager_chain",
+    )
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
+    monkeypatch.setattr(
+        "easyauth.grants.managed_users.AuthentikDirectoryClient.from_settings",
+        lambda: _ManagedUsersClient(("employee-1", "manager-ak", "employee-2")),
+    )
+
+    # When: 查询用户权限。
+    snapshot = resolve_user_permissions(user=user, app=app)
+
+    # Then: MANAGED_USERS grant 带 resolved, 且不包含当前用户本人。
+    assert snapshot.grants == (
+        ExpandedGrant(
+            permission="customer.profile.view",
+            scope="MANAGED_USERS",
+            source_type="group",
+            source_key="team-manager",
+            resolved=ResolvedManagedUsers(
+                user_ids=("employee-1", "employee-2"),
+                resolver="dingtalk_manager_chain",
+                resolved_at="2026-07-02T12:00:00+08:00",
+            ),
+        ),
+    )
+    audit_log = AuditLog.objects.get(event_type="managed_users_resolution_succeeded")
+    assert audit_log.actor_type == "system"
+    assert audit_log.actor_id == "managed_users_resolver"
+    assert audit_log.target_type == "authorization_group_grant"
+    assert audit_log.metadata == {
+        "app_key": app.app_key,
+        "authorization_group_key": group.key,
+        "permission_key": permission.key,
+        "scope": "MANAGED_USERS",
+        "resolver": "dingtalk_manager_chain",
+        "resolved_count": 2,
+    }
+
+
+def test_resolve_user_permissions_filters_managed_users_grant_without_effective_policy() -> None:
+    # Given: 用户持有 MANAGED_USERS 授权组, 但 App 没有有效策略。
+    user = UserMirror.objects.create(
+        authentik_user_id="manager-no-policy",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="manager-dt",
+    )
+    app = App.objects.create(app_key="crm-managed-no-policy", name="CRM")
+    _scope(app, "MANAGED_USERS")
+    permission = _permission(app, "customer.profile.view", scopes=["MANAGED_USERS"])
+    group = AuthorizationGroup.objects.create(app=app, key="team-manager", kind="role", name="主管")
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key="MANAGED_USERS",
+    )
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
+
+    # When: 查询用户权限。
+    snapshot = resolve_user_permissions(user=user, app=app)
+
+    # Then: 无有效策略时该 MANAGED_USERS grant 不生效。
+    assert snapshot.grants == ()
+    audit_log = AuditLog.objects.get(event_type="managed_users_resolution_failed")
+    assert audit_log.actor_type == "system"
+    assert audit_log.actor_id == "managed_users_resolver"
+    assert audit_log.target_type == "authorization_group_grant"
+    assert audit_log.metadata == {
+        "app_key": app.app_key,
+        "authorization_group_key": group.key,
+        "permission_key": permission.key,
+        "scope": "MANAGED_USERS",
+        "resolver": "missing",
+        "error_code": "managed_scope_policy_missing",
+    }
+
+
+def test_resolve_user_permissions_keeps_managed_users_grant_when_resolved_users_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: 策略有效, 但下级列表为空。
+    user = UserMirror.objects.create(
+        authentik_user_id="manager-empty",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="manager-dt",
+    )
+    app = App.objects.create(app_key="crm-managed-empty", name="CRM")
+    _scope(app, "MANAGED_USERS")
+    permission = _permission(app, "customer.profile.view", scopes=["MANAGED_USERS"])
+    group = AuthorizationGroup.objects.create(app=app, key="team-manager", kind="role", name="主管")
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key="MANAGED_USERS",
+    )
+    _ = ManagedScopePolicy.objects.create(
+        app=app,
+        target_type="app_default",
+        target_id=app.id,
+        scope="MANAGED_USERS",
+        resolver="dingtalk_manager_chain",
+    )
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
+    monkeypatch.setattr(
+        "easyauth.grants.managed_users.AuthentikDirectoryClient.from_settings",
+        lambda: _ManagedUsersClient(()),
+    )
+
+    # When: 查询用户权限。
+    snapshot = resolve_user_permissions(user=user, app=app)
+
+    # Then: 策略有效但结果为空时保留 grant 并返回空 resolved。
+    assert snapshot.grants[0].resolved == ResolvedManagedUsers(
+        user_ids=(),
+        resolver="dingtalk_manager_chain",
+        resolved_at="2026-07-02T12:00:00+08:00",
     )
 
 
@@ -380,3 +553,22 @@ def _permission(
         is_active=is_active,
         deprecated_at=deprecated_at,
     )
+
+
+class _ManagedUsersClient:
+    def __init__(self, user_ids: tuple[str, ...]) -> None:
+        self._user_ids = user_ids
+
+    def get_managed_users(self, corp_id: str, manager_user_id: str) -> DingTalkManagedUsers:
+        assert corp_id == "corp-1"
+        assert manager_user_id == "manager-dt"
+        return DingTalkManagedUsers(
+            source_slug="dingtalk",
+            corp_id=corp_id,
+            manager_user_id=manager_user_id,
+            resolver="dingtalk_manager_chain",
+            stale=False,
+            resolved_at="2026-07-02T12:00:00+08:00",
+            users=(),
+            active_authentik_user_ids=self._user_ids,
+        )

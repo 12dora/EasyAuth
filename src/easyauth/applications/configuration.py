@@ -3,13 +3,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Final, Literal
 
+from easyauth.applications.managed_scope_policy import ManagedScopePolicyService
 from easyauth.applications.models import (
+    MANAGED_SCOPE_POLICY_RESOLVER_DISABLED,
+    MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS,
     App,
     AppCredential,
     AppMembership,
     ApprovalRule,
     AuthorizationGroup,
     AuthorizationGroupGrant,
+    ManagedScopePolicy,
     OAuthClientBinding,
     Permission,
 )
@@ -83,6 +87,7 @@ def _blocking_issues(app: App) -> list[ConfigurationIssue]:
         )
     issues.extend(_requestable_authorization_group_issues(app))
     issues.extend(_authorization_group_grant_issues(app))
+    issues.extend(_managed_scope_policy_issues(app))
     return issues
 
 
@@ -132,6 +137,51 @@ def _authorization_group_grant_subject(grant: AuthorizationGroupGrant) -> str:
         f"{grant.permission.key}:"
         f"{grant.scope_key}"
     )
+
+
+def _managed_scope_policy_issues(app: App) -> list[ConfigurationIssue]:
+    issues: list[ConfigurationIssue] = []
+    app_default = ManagedScopePolicyService.get_app_default_policy(app=app)
+    grants = AuthorizationGroupGrant.objects.filter(
+        authorization_group__app=app,
+        is_active=True,
+        scope_key=MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS,
+    ).select_related("authorization_group", "permission")
+    for grant in grants.order_by("authorization_group__key", "permission__key", "id"):
+        override = ManagedScopePolicyService.get_grant_override_policy(app=app, grant=grant)
+        subject = _authorization_group_grant_subject(grant)
+        if override is not None:
+            if _managed_scope_policy_disabled(override):
+                issues.append(
+                    _blocking_issue(
+                        code="managed_scope_policy_disabled",
+                        message="MANAGED_USERS grant 的 managed scope policy 已禁用。",
+                        subject=subject,
+                    ),
+                )
+            continue
+        if app_default is None:
+            issues.append(
+                _blocking_issue(
+                    code="managed_scope_app_default_policy_missing",
+                    message="MANAGED_USERS grant 缺少 app default managed scope policy。",
+                    subject=subject,
+                ),
+            )
+            continue
+        if _managed_scope_policy_disabled(app_default):
+            issues.append(
+                _blocking_issue(
+                    code="managed_scope_policy_disabled",
+                    message="MANAGED_USERS grant 继承的 app default managed scope policy 已禁用。",
+                    subject=subject,
+                ),
+            )
+    return issues
+
+
+def _managed_scope_policy_disabled(policy: ManagedScopePolicy) -> bool:
+    return not policy.enabled or policy.resolver == MANAGED_SCOPE_POLICY_RESOLVER_DISABLED
 
 
 def _warning_issues(app: App) -> list[ConfigurationIssue]:

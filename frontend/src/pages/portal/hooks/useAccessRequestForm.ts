@@ -26,6 +26,8 @@ export interface AuthorizationGroupItem {
   requestable?: boolean;
   requires_approval?: boolean;
   default_approver_user_ids?: string[];
+  approver_resolution_status?: string;
+  scopes?: ScopeOption[];
 }
 
 export interface ApproverOption {
@@ -45,7 +47,11 @@ export interface ScopeOption {
   description?: string;
 }
 
-export type ScopedPermissionItem = PermissionItem & { scopes?: ScopeOption[]; default_approver_user_ids?: string[] };
+export type ScopedPermissionItem = PermissionItem & {
+  scopes?: ScopeOption[];
+  default_approver_user_ids?: string[];
+  approver_resolution_status?: string;
+};
 export type ScopedPermissionGroupItem = Omit<PermissionGroupItem, "children" | "permissions"> & {
   children?: Array<ScopedPermissionGroupItem | ScopedPermissionItem>;
   permissions?: ScopedPermissionItem[];
@@ -262,7 +268,7 @@ function buildAccessRequestFormResult(
     catalogIsLoading,
     catalogErrorMessage: catalogError ? catalogError.message : "",
     submitErrorMessage: submitMutation.error ? submitMutation.error.message : "",
-    toastMessage: submitMutation.isSuccess ? "申请已提交" : noDirectPermissionsToastMessage(fields, catalogView, catalogIsLoading),
+    toastMessage: submitMutation.isSuccess ? "申请已提交" : accessRequestToastMessage(fields, catalogView, catalogIsLoading),
     canSubmit,
     isSubmitting: submitMutation.isPending,
     changeAppKey: actions.changeAppKey,
@@ -621,7 +627,17 @@ function buildDefaultApproverUserIds(values: AccessRequestPayloadValues, catalog
   if (targetApprovers.length > 0) {
     return targetApprovers;
   }
+  if (selectedManagedUsersTargetHasMissingDirectManager(values, catalogView)) {
+    return [];
+  }
   return uniqueUserIds(app?.default_approver_user_ids ?? []);
+}
+
+function accessRequestToastMessage(fields: AccessRequestFields, catalogView: CatalogView, catalogIsLoading: boolean): string {
+  if (selectedManagedUsersTargetHasMissingDirectManager(fields, catalogView)) {
+    return "未找到直属上级，请补全审批人";
+  }
+  return noDirectPermissionsToastMessage(fields, catalogView, catalogIsLoading);
 }
 
 function noDirectPermissionsToastMessage(fields: AccessRequestFields, catalogView: CatalogView, catalogIsLoading: boolean): string {
@@ -629,6 +645,37 @@ function noDirectPermissionsToastMessage(fields: AccessRequestFields, catalogVie
     return "";
   }
   return "当前应用没有可直接申请的权限，可仅按权限组发起申请。";
+}
+
+function selectedManagedUsersTargetHasMissingDirectManager(values: AccessRequestPayloadValues, catalogView: CatalogView): boolean {
+  return selectedManagedUsersTargets(values, catalogView).some(
+    (target) => target.approver_resolution_status === "direct_manager_missing",
+  );
+}
+
+function selectedManagedUsersTargets(
+  values: AccessRequestPayloadValues,
+  catalogView: CatalogView,
+): Array<AuthorizationGroupItem | ScopedPermissionItem> {
+  const targets: Array<AuthorizationGroupItem | ScopedPermissionItem> = [];
+  const authorizationGroup = catalogView.authorizationGroups.find((group) => group.key === values.authorizationGroupKey);
+  if (authorizationGroup && targetHasManagedUsersScope(authorizationGroup)) {
+    targets.push(authorizationGroup);
+  }
+  const directGrantPermissionKeys = Array.from(
+    new Set(values.selectedPermissionKeys.map((key) => directGrantSelectionPermissionKey(key))),
+  );
+  for (const permissionKey of directGrantPermissionKeys) {
+    const permission = catalogView.permissionsByKey[permissionKey];
+    if (permission && targetHasManagedUsersScope(permission)) {
+      targets.push(permission);
+    }
+  }
+  return targets;
+}
+
+function targetHasManagedUsersScope(target: AuthorizationGroupItem | ScopedPermissionItem): boolean {
+  return (target.scopes ?? []).some((scope) => scope.key === "MANAGED_USERS");
 }
 
 function buildScopesByPermissionKey(

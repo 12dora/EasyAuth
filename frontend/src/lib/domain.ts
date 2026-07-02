@@ -102,10 +102,31 @@ export interface PermissionItem {
   deprecated_at?: string | null;
 }
 
+export interface ManagedScopePolicyItem {
+  mode: "inherit" | "override" | "disabled" | string;
+  resolver?: "dingtalk_manager_chain" | "disabled" | string | null;
+  enabled?: boolean;
+}
+
+export interface EffectiveManagedScopePolicyItem {
+  resolver?: "dingtalk_manager_chain" | "disabled" | string | null;
+  source?: "app_default" | "authorization_group_grant" | string | null;
+  inherited_from?: "app_default" | "authorization_group_grant" | string | null;
+  health_status?: "healthy" | "warning" | "blocked" | "disabled" | string | null;
+  health_message?: string | null;
+}
+
+export interface AppManagedScopePolicyPayload {
+  managed_scope_policy?: ManagedScopePolicyItem | null;
+  effective_managed_scope_policy?: EffectiveManagedScopePolicyItem | null;
+}
+
 export interface AuthorizationGroupGrantItem {
   permission: string;
   scope: string;
   is_active: boolean;
+  managed_scope_policy?: ManagedScopePolicyItem;
+  effective_managed_scope_policy?: EffectiveManagedScopePolicyItem | null;
 }
 
 export interface AuthorizationGroupItem {
@@ -177,11 +198,18 @@ export interface IntegrationGuide {
   credential_modes?: Array<{ mode: string; active_count: number }>;
 }
 
+export interface ResolvedManagedUsers {
+  user_ids: string[];
+  resolver: string;
+  resolved_at: string;
+}
+
 export interface ExpandedGrantItem {
   permission: string;
   scope: string;
   source_type: "group" | "direct" | string;
   source_key: string;
+  resolved?: ResolvedManagedUsers;
 }
 
 export interface PermissionQueryGroupItem {

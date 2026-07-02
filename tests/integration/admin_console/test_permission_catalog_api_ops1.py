@@ -15,6 +15,10 @@ from easyauth.api.errors import JsonValue
 from easyauth.applications.models import (
     App,
     AppMembership,
+    AppScope,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
+    ManagedScopePolicy,
     Permission,
     PermissionGroup,
     Role,
@@ -98,6 +102,92 @@ def test_ops1_developer_reads_role_permission_matrix_for_member_app() -> None:
     assert "operator" in body
     assert "pipeline.read" in body
     assert '"enabled": true' in body
+
+
+def test_ops1_superuser_reads_authorization_group_grant_managed_scope_policy() -> None:
+    # Given: superuser 管理一个含 App 默认策略、grant 覆盖策略和继承 grant 的 App。
+    client = _logged_in_superuser("ops1-catalog-authz-read")
+    app = App.objects.create(app_key="ops1-catalog-authz-read", name="Authz Read")
+    scope = AppScope.objects.create(app=app, key="MANAGED_USERS", name="Managed users")
+    direct_permission = Permission.objects.create(
+        app=app,
+        key="order.read",
+        name="Read orders",
+        supported_scopes=[scope.key],
+    )
+    inherited_permission = Permission.objects.create(
+        app=app,
+        key="order.audit",
+        name="Audit orders",
+        supported_scopes=[scope.key],
+    )
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="manager",
+        kind="role",
+        name="Manager",
+    )
+    direct_grant = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=direct_permission,
+        scope_key=scope.key,
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=inherited_permission,
+        scope_key=scope.key,
+    )
+    _ = ManagedScopePolicy.objects.create(
+        app=app,
+        target_type="app_default",
+        target_id=app.id,
+        scope="MANAGED_USERS",
+        resolver="dingtalk_manager_chain",
+    )
+    _ = ManagedScopePolicy.objects.create(
+        app=app,
+        target_type="authorization_group_grant",
+        target_id=direct_grant.id,
+        scope="MANAGED_USERS",
+        resolver="disabled",
+        enabled=True,
+    )
+
+    # When: owner 读取授权组目录。
+    response = client.get(_api_url(app.app_key, "authorization-groups"))
+
+    # Then: 每个 grant 返回自身策略、有效策略、继承来源和健康状态。
+    body = _response_json_object(response)
+    group_item = _json_object(_json_list(body["items"])[0])
+    grants = [_json_object(grant) for grant in _json_list(group_item["grants"])]
+    direct = next(grant for grant in grants if grant["permission"] == direct_permission.key)
+    inherited = next(grant for grant in grants if grant["permission"] == inherited_permission.key)
+    assert response.status_code == HTTPStatus.OK
+    assert direct["managed_scope_policy"] == {
+        "mode": "disabled",
+        "resolver": "disabled",
+        "enabled": True,
+        "source": "authorization_group_grant",
+        "health_status": "disabled",
+        "health_message": "当前 grant 不启用管理范围授权。",
+    }
+    assert direct["effective_managed_scope_policy"] is None
+    assert inherited["managed_scope_policy"] == {
+        "mode": "inherit",
+        "resolver": "",
+        "enabled": False,
+        "source": "app_default",
+        "health_status": "healthy",
+        "health_message": "继承应用默认管理范围策略。",
+    }
+    assert inherited["effective_managed_scope_policy"] == {
+        "resolver": "dingtalk_manager_chain",
+        "enabled": True,
+        "source": "app_default",
+        "inherited_from": "app_default",
+        "health_status": "healthy",
+        "health_message": "管理范围策略已配置。",
+    }
 
 
 def test_ops1_inactive_member_cannot_read_permission_catalog() -> None:

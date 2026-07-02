@@ -32,7 +32,7 @@
 
 - 不建立长期 `Role` 与 `AuthorizationGroup` 双模型。项目尚未投产，主代码路径应一次性切到 `AuthorizationGroup(kind=role|bundle)`。
 - `PermissionGroup` 不得作为授权对象，也不得被复用为权限包。
-- scope 是 App 内字典 key，EasyAuth 只负责存储、校验和返回，不解释 `SELF/MANAGED/ALL` 的业务含义。
+- scope 是 App 内字典 key，EasyAuth 只负责存储、校验和返回，不解释 `SELF/MANAGED_USERS/ALL` 的业务含义。
 - 禁用的 App、用户、授权组、权限、scope 或已废弃权限不得出现在公共查询 `grants` 中。
 - `catalog_version` 必须是 App 级持久版本，不得用当前权限矩阵 hash 或 `PermissionTemplateVersion.version` 近似替代。
 - 公共查询主契约以 `grants` 为准；若实施期间临时输出 `roles/permissions`，只能作为短迁移窗口的兼容字段，不写入新主文档。
