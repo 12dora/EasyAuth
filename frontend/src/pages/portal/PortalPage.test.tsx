@@ -1,6 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, test, vi } from "vitest";
 
@@ -28,7 +29,73 @@ function renderPortalPage(initialEntry = "/portal/request") {
   );
 }
 
+function renderPortalPageStrict(initialEntry = "/portal/request") {
+  const client = new QueryClient({
+    defaultOptions: {
+      queries: {
+        retry: false,
+      },
+    },
+  });
+
+  render(
+    <StrictMode>
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={[initialEntry]}>
+          <Routes>
+            <Route path="/portal/request" element={<PortalPage />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    </StrictMode>,
+  );
+}
+
 describe("PortalPage access request form", () => {
+  test("StrictMode 下点击权限组行不会卡死", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/request-catalog") {
+        return jsonResponse({
+          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["manager-001"] }],
+          approver_options: [{ user_id: "manager-001", name: "直属主管" }],
+          authorization_groups: [],
+          permission_groups: [
+            {
+              id: 1,
+              app_key: "crm",
+              type: "group",
+              key: "crm.customer",
+              name: "客户管理",
+              permissions: [
+                { id: 101, app_key: "crm", key: "crm.customer.read", name: "查看客户", scopes: [{ key: "SELF", name: "本人" }] },
+              ],
+            },
+          ],
+          ungrouped_permissions: [],
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPageStrict();
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "CRM (crm)" });
+      await user.selectOptions(screen.getByLabelText("应用"), "crm");
+      const permissionTable = await screen.findByRole("table", { name: "权限选择" });
+
+      await user.click(within(permissionTable).getByRole("row", { name: /客户管理/ }));
+
+      expect(within(permissionTable).getByText("查看客户")).toBeVisible();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   test("未选择权限组或直接权限时不能提交申请", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);

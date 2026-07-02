@@ -12,6 +12,16 @@ describe("表格架构", () => {
 
     expect(violations).toEqual([]);
   });
+
+  test("门户权限选择表格直接使用 TanStack Table 渲染原生表格", () => {
+    const file = join(sourceRoot, "pages/portal/components/PermissionSelector.tsx");
+    const content = readFileSync(file, "utf8");
+
+    expect(content).not.toMatch(/components\/ui\/TablePrimitives/);
+    expect(content).not.toMatch(/components\/ui\/TablePagination/);
+    expect(content).toMatch(/useReactTable/);
+    expect(content).toMatch(/<table\b/);
+  });
 });
 
 function sourceFiles(directory: string): string[] {

@@ -5,13 +5,11 @@ import {
   useReactTable,
   type ColumnDef,
 } from "@tanstack/react-table";
-import { ChevronRight } from "lucide-react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import type { CSSProperties } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { SelectInput } from "../../../components/Field";
 import { EmptyState } from "../../../components/ui/EmptyState";
-import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../components/ui/TablePrimitives";
-import { TablePagination } from "../../../components/ui/TablePagination";
 
 import { isPermissionGroupItem } from "../permissionTree";
 import {
@@ -21,6 +19,7 @@ import {
 import type { ScopedPermissionGroupItem, ScopedPermissionItem } from "../hooks/useAccessRequestForm";
 
 const MONO_TEXT_CLASS = "font-mono text-[13px] leading-5 text-ink-soft";
+const PERMISSION_TABLE_PAGE_SIZE_OPTIONS = [5, 10, 20, 50] as const;
 
 interface PermissionSelectorProps {
   appKey: string;
@@ -175,54 +174,119 @@ export function PermissionSelector({
     return null;
   }
 
+  const pagination = table.getState().pagination;
+  const totalRows = table.getPrePaginationRowModel().rows.length;
+  const visibleRows = table.getRowModel().rows;
+  const pageStart = totalRows === 0 ? 0 : pagination.pageIndex * pagination.pageSize + 1;
+  const pageEnd = totalRows === 0 ? 0 : pageStart + visibleRows.length - 1;
+
   return (
-    <TableFrame>
-      <TableRoot aria-label="权限选择">
-        <TableHead>
-          {table.getHeaderGroups().map((headerGroup) => (
-            <TableRow key={headerGroup.id}>
-              {headerGroup.headers.map((header) => (
-                <TableHeaderCell
-                  key={header.id}
-                  className={header.column.id === "permission" ? "sticky left-0 z-20 bg-paper-deep/95" : undefined}
-                >
-                  {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                </TableHeaderCell>
-              ))}
-            </TableRow>
-          ))}
-        </TableHead>
-        <TableBody>
-          {table.getRowModel().rows.length > 0 ? (
-            table.getRowModel().rows.map((row) => (
-              <TableRow
-                key={row.id}
-                className={joinClassNames(
-                  "permission-selector__row",
-                  row.original.type === "group" && "permission-selector__row--group bg-paper-deep/60 hover:bg-paper-deep",
-                  row.original.isExiting && "permission-selector__row--exiting",
-                )}
-                onClick={groupRowClickHandler(row.original, onToggleGroup)}
-              >
-                {row.getVisibleCells().map((cell) => (
-                  <TableCell
-                    key={cell.id}
-                    className={cell.column.id === "permission" ? "sticky left-0 z-10 bg-inherit" : undefined}
+    <div className="paper-card overflow-hidden rounded-[3px] p-0">
+      <div className="overflow-x-auto">
+        <table aria-label="权限选择" className="min-w-full border-separate border-spacing-0 text-[13px]">
+          <thead className="bg-paper-deep/60">
+            {table.getHeaderGroups().map((headerGroup) => (
+              <tr key={headerGroup.id} className="group transition-colors hover:bg-[rgb(var(--amber))]/[0.05]">
+                {headerGroup.headers.map((header) => (
+                  <th
+                    key={header.id}
+                    colSpan={header.colSpan}
+                    className={joinClassNames(
+                      "border-b border-ink/15 px-3 py-2.5 text-left align-bottom font-mono text-[10.5px] font-medium uppercase tracking-[0.14em] text-ink-soft",
+                      header.column.id === "permission" && "sticky left-0 z-20 bg-paper-deep/95",
+                    )}
                   >
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </TableCell>
+                    {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                  </th>
                 ))}
-              </TableRow>
-            ))
-          ) : (
-            <TableEmptyRow colSpan={table.getAllLeafColumns().length}>
-              <EmptyState title="暂无可选直接权限" description="当前应用未返回可直接申请的权限，可仅选择权限组发起申请。" />
-            </TableEmptyRow>
-          )}
-        </TableBody>
-      </TableRoot>
-      <TablePagination table={table} />
-    </TableFrame>
+              </tr>
+            ))}
+          </thead>
+          <tbody>
+            {visibleRows.length > 0 ? (
+              visibleRows.map((row) => (
+                <tr
+                  key={row.id}
+                  className={joinClassNames(
+                    "group transition-colors hover:bg-[rgb(var(--amber))]/[0.05]",
+                    "permission-selector__row",
+                    row.original.type === "group" && "permission-selector__row--group bg-paper-deep/60 hover:bg-paper-deep",
+                    row.original.isExiting && "permission-selector__row--exiting",
+                  )}
+                  onClick={groupRowClickHandler(row.original, onToggleGroup)}
+                >
+                  {row.getVisibleCells().map((cell) => (
+                    <td
+                      key={cell.id}
+                      className={joinClassNames(
+                        "border-b border-ink/8 px-3 py-2.5 align-middle text-[13px] text-ink",
+                        cell.column.id === "permission" && "sticky left-0 z-10 bg-inherit",
+                      )}
+                    >
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </td>
+                  ))}
+                </tr>
+              ))
+            ) : (
+              <tr className="group transition-colors hover:bg-transparent">
+                <td colSpan={table.getAllLeafColumns().length} className="border-b border-ink/8 px-3 py-10 text-center text-[13px] text-ink-soft">
+                  <EmptyState title="暂无可选直接权限" description="当前应用未返回可直接申请的权限，可仅选择权限组发起申请。" />
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-ink/10 bg-paper-deep/30 px-3 py-2.5">
+        <span className="text-[12px] font-medium text-ink-soft">
+          第 {pageStart}-{pageEnd} 条 / 共 {totalRows} 条
+        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-2 text-[12px] font-medium text-ink-soft">
+            每页
+            <select
+              aria-label="每页条目数"
+              className="h-8 w-20 rounded-[3px] border border-[rgb(var(--hairline-strong))] bg-paper px-2 text-[13px] text-ink outline-none transition-colors focus:border-[rgb(var(--amber))] focus:ring-2 focus:ring-[rgb(var(--amber)_/_0.18)]"
+              value={String(pagination.pageSize)}
+              onChange={(event) => {
+                table.setPageIndex(0);
+                table.setPageSize(Number(event.currentTarget.value));
+              }}
+            >
+              {PERMISSION_TABLE_PAGE_SIZE_OPTIONS.map((pageSize) => (
+                <option key={pageSize} value={pageSize}>
+                  {pageSize}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              aria-label="上一页"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-[3px] border border-[rgb(var(--hairline-strong))] bg-paper text-ink transition-colors hover:border-[rgb(var(--amber))] hover:bg-[rgb(var(--amber))]/[0.08] disabled:cursor-not-allowed disabled:opacity-45"
+              disabled={!table.getCanPreviousPage()}
+              onClick={() => table.previousPage()}
+            >
+              <ChevronLeft size={15} aria-hidden="true" />
+            </button>
+            <span className="min-w-16 text-center font-mono text-[12px] text-ink-soft">
+              {table.getPageCount() === 0 ? 0 : pagination.pageIndex + 1} / {table.getPageCount()}
+            </span>
+            <button
+              type="button"
+              aria-label="下一页"
+              className="inline-flex h-8 w-8 items-center justify-center rounded-[3px] border border-[rgb(var(--hairline-strong))] bg-paper text-ink transition-colors hover:border-[rgb(var(--amber))] hover:bg-[rgb(var(--amber))]/[0.08] disabled:cursor-not-allowed disabled:opacity-45"
+              disabled={!table.getCanNextPage()}
+              onClick={() => table.nextPage()}
+            >
+              <ChevronRight size={15} aria-hidden="true" />
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
