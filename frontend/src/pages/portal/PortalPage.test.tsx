@@ -195,7 +195,7 @@ describe("PortalPage access request form", () => {
 
       expect(await screen.findByRole("status")).toHaveTextContent("当前应用没有可直接申请的权限，可仅按权限组发起申请。");
       expect(screen.queryByText("未发现可选直接权限")).not.toBeInTheDocument();
-      expect(screen.queryByText("暂无可选直接权限")).not.toBeInTheDocument();
+      expect(screen.getByText("当前应用未返回可直接申请的权限，可仅选择权限组发起申请。")).toBeVisible();
       expect(screen.getByRole("button", { name: "提交申请" })).toBeDisabled();
     } finally {
       vi.unstubAllGlobals();
@@ -735,6 +735,151 @@ describe("PortalPage access request form", () => {
       vi.unstubAllGlobals();
     }
   });
+
+  test("权限选择表格保留表头语义、展开状态和 checkbox 冒泡边界", async () => {
+    const fetchMock = permissionSelectorFetchMock(portalPermissionSelectorCatalog);
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage();
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "CRM (crm)" });
+      await user.selectOptions(screen.getByLabelText("应用"), "crm");
+      const permissionTable = await screen.findByRole("table", { name: "权限选择" });
+
+      expect(within(permissionTable).getByRole("columnheader", { name: "权限" })).toBeVisible();
+      expect(within(permissionTable).getByRole("columnheader", { name: "权限 key" })).toBeVisible();
+      expect(within(permissionTable).getByRole("columnheader", { name: "scope" })).toBeVisible();
+      expect(within(permissionTable).getByRole("columnheader", { name: "选择" })).toBeVisible();
+
+      const expandButton = within(permissionTable).getByRole("button", { name: "展开 订单" });
+      expect(expandButton).toHaveAttribute("aria-expanded", "false");
+      expect(within(permissionTable).queryByText("查看订单")).not.toBeInTheDocument();
+
+      const groupCheckbox = within(permissionTable).getByRole("checkbox", { name: "选择权限组 orders" });
+      await user.click(groupCheckbox);
+      expect(groupCheckbox).toBeChecked();
+      expect(within(permissionTable).getByRole("button", { name: "展开 订单" })).toHaveAttribute("aria-expanded", "false");
+      expect(within(permissionTable).queryByText("查看订单")).not.toBeInTheDocument();
+
+      await user.click(within(permissionTable).getByRole("button", { name: "展开 订单" }));
+      expect(within(permissionTable).getByRole("button", { name: "收起 订单" })).toHaveAttribute("aria-expanded", "true");
+      expect(within(permissionTable).getByText("查看订单")).toBeVisible();
+
+      await user.click(within(permissionTable).getByRole("button", { name: "收起 订单" }));
+      expect(within(permissionTable).getByRole("button", { name: "展开 订单" })).toHaveAttribute("aria-expanded", "false");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("多 scope 权限选择列显示按 scope 选择语义", async () => {
+    const fetchMock = permissionSelectorFetchMock(portalPermissionSelectorCatalog);
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage();
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "CRM (crm)" });
+      await user.selectOptions(screen.getByLabelText("应用"), "crm");
+      const permissionTable = await screen.findByRole("table", { name: "权限选择" });
+
+      await user.click(within(permissionTable).getByRole("button", { name: "展开 订单" }));
+      await user.click(within(permissionTable).getByRole("button", { name: "展开 退款" }));
+
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve SELF" })).toBeVisible();
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve TEAM" })).toBeVisible();
+      const selectionHint = within(permissionTable).getByLabelText("orders.refund.approve 多 scope 选择");
+      expect(selectionHint).toHaveTextContent("按 scope 选择");
+      expect(selectionHint).not.toHaveTextContent("-");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("权限选择工具条展示状态并支持仅看已选过滤", async () => {
+    const fetchMock = permissionSelectorFetchMock(portalPermissionSelectorCatalog);
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage();
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "CRM (crm)" });
+      await user.selectOptions(screen.getByLabelText("应用"), "crm");
+      const permissionTable = await screen.findByRole("table", { name: "权限选择" });
+
+      expect(screen.getByText("已选 0 项")).toBeVisible();
+      expect(screen.getByText("scope 已设置 3 项")).toBeVisible();
+      expect(screen.getByText("当前显示 2/2")).toBeVisible();
+
+      await user.click(within(permissionTable).getByRole("button", { name: "展开 订单" }));
+      expect(screen.getByText("当前显示 5/5")).toBeVisible();
+
+      await user.click(within(permissionTable).getByRole("checkbox", { name: "选择 orders.export" }));
+      expect(screen.getByText("已选 1 项")).toBeVisible();
+
+      await user.click(screen.getByRole("switch", { name: "仅看已选" }));
+      expect(within(permissionTable).getByText("订单")).toBeVisible();
+      expect(within(permissionTable).getByText("导出订单")).toBeVisible();
+      expect(within(permissionTable).queryByText("查看订单")).not.toBeInTheDocument();
+      expect(within(permissionTable).queryByText("查看看板")).not.toBeInTheDocument();
+      expect(screen.getByText("当前显示 2/5")).toBeVisible();
+      expect(screen.getByText("第 1-2 条 / 共 2 条")).toBeVisible();
+
+      await user.click(screen.getByRole("switch", { name: "仅看已选" }));
+      expect(within(permissionTable).getByText("查看订单")).toBeVisible();
+      expect(within(permissionTable).getByText("查看看板")).toBeVisible();
+      expect(screen.getByText("当前显示 5/5")).toBeVisible();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("仅看已选无结果时显示表格内空状态", async () => {
+    const fetchMock = permissionSelectorFetchMock(portalPermissionSelectorCatalog);
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage();
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "CRM (crm)" });
+      await user.selectOptions(screen.getByLabelText("应用"), "crm");
+      const permissionTable = await screen.findByRole("table", { name: "权限选择" });
+
+      await user.click(screen.getByRole("switch", { name: "仅看已选" }));
+      expect(permissionTable).toBeVisible();
+      expect(within(permissionTable).getByText("当前没有已选直接权限")).toBeVisible();
+      expect(screen.getByText("当前显示 0/2")).toBeVisible();
+
+      await user.click(screen.getByRole("switch", { name: "仅看已选" }));
+      expect(within(permissionTable).getByText("订单")).toBeVisible();
+      expect(within(permissionTable).getByText("查看看板")).toBeVisible();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("应用存在但没有直接权限时直接权限区域显示空状态", async () => {
+    const fetchMock = permissionSelectorFetchMock(emptyDirectPermissionCatalog);
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage();
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "CRM (crm)" });
+      await user.selectOptions(screen.getByLabelText("应用"), "crm");
+
+      expect(await screen.findByRole("status")).toHaveTextContent("当前应用没有可直接申请的权限，可仅按权限组发起申请。");
+      expect(screen.getByText("当前应用未返回可直接申请的权限，可仅选择权限组发起申请。")).toBeVisible();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe("PortalPage tables", () => {
@@ -816,6 +961,65 @@ describe("PortalPage tables", () => {
     }
   });
 });
+
+const portalPermissionSelectorCatalog = {
+  apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["app-owner"] }],
+  approver_options: [{ user_id: "app-owner", name: "应用负责人" }],
+  authorization_groups: [],
+  permission_groups: [
+    {
+      id: 1,
+      app_key: "crm",
+      type: "group",
+      key: "orders",
+      name: "订单",
+      permissions: [
+        { id: 101, app_key: "crm", key: "orders.read", name: "查看订单", scopes: [{ key: "SELF", name: "本人" }] },
+        { id: 102, app_key: "crm", key: "orders.export", name: "导出订单", scopes: [{ key: "SELF", name: "本人" }] },
+      ],
+      children: [
+        {
+          id: 2,
+          app_key: "crm",
+          type: "group",
+          key: "orders.refund",
+          name: "退款",
+          permissions: [
+            {
+              id: 103,
+              app_key: "crm",
+              key: "orders.refund.approve",
+              name: "审批退款",
+              scopes: [
+                { key: "SELF", name: "本人" },
+                { key: "TEAM", name: "团队" },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+  ],
+  ungrouped_permissions: [{ id: 104, app_key: "crm", key: "dashboard.view", name: "查看看板", scopes: [{ key: "GLOBAL", name: "全局" }] }],
+};
+
+const emptyDirectPermissionCatalog = {
+  apps: [{ id: 1, app_key: "crm", name: "CRM" }],
+  approver_options: [{ user_id: "app-owner", name: "应用负责人" }],
+  authorization_groups: [],
+  permission_groups: [],
+  ungrouped_permissions: [],
+};
+
+function permissionSelectorFetchMock(payload: unknown) {
+  return vi.fn<typeof fetch>(async (input) => {
+    const url = String(input);
+    if (url === "/portal/api/v1/request-catalog") {
+      return jsonResponse(payload);
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  });
+}
 
 function jsonResponse(payload: unknown) {
   return new Response(JSON.stringify(payload), {

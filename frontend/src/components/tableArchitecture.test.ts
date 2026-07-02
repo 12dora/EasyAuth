@@ -19,8 +19,28 @@ describe("表格架构", () => {
 
     expect(content).not.toMatch(/components\/ui\/TablePrimitives/);
     expect(content).not.toMatch(/components\/ui\/TablePagination/);
+    expect(content).not.toMatch(/\bDataTable\b/);
+    expect(content).not.toMatch(/\bTableFrame\b/);
+    expect(content).not.toMatch(/\bTableRoot\b/);
+    expect(content).not.toMatch(/\bTableEmptyRow\b/);
     expect(content).toMatch(/useReactTable/);
+    expect(content).toMatch(/getCoreRowModel/);
+    expect(content).toMatch(/getPaginationRowModel/);
+    expect(content).toMatch(/getRowId/);
+    expect(content).toMatch(/flexRender/);
     expect(content).toMatch(/<table\b/);
+    expect(content).toMatch(/aria-label="权限选择"/);
+  });
+
+  test("门户权限选择仅看已选是组件内本地展示状态", () => {
+    const file = join(sourceRoot, "pages/portal/components/PermissionSelector.tsx");
+    const content = readFileSync(file, "utf8");
+
+    expect(content).toMatch(/showSelectedOnly/);
+    expect(content).toMatch(/filterRowsToSelected/);
+    expect(content).toMatch(/buildPermissionSelectorToolbarStats/);
+    expect(content).toMatch(/role="switch"/);
+    expect(content).toMatch(/aria-label="仅看已选"/);
   });
 
   test("门户权限选择退出动画状态不会在每次渲染返回新数组", () => {

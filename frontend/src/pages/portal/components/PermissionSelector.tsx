@@ -55,6 +55,7 @@ type PermissionSelectorRow =
       id: string;
       permission: ScopedPermissionItem;
       depth: number;
+      isSelected: boolean;
       isExiting: boolean;
     };
 
@@ -82,6 +83,15 @@ export function PermissionSelector({
     () => buildPermissionRows(groups, ungroupedPermissions, expandedGroupKeys, exitingGroupKeys, selectedKeys),
     [expandedGroupKeys, exitingGroupKeys, groups, selectedKeys, ungroupedPermissions],
   );
+  const [showSelectedOnly, setShowSelectedOnly] = useState(false);
+  const displayRows = useMemo(
+    () => (showSelectedOnly ? filterRowsToSelected(rows) : rows),
+    [rows, showSelectedOnly],
+  );
+  const toolbarStats = useMemo(
+    () => buildPermissionSelectorToolbarStats(rows, displayRows, selectedKeys, selectedScopes),
+    [displayRows, rows, selectedKeys, selectedScopes],
+  );
   const columns = useMemo<ColumnDef<PermissionSelectorRow>[]>(
     () => [
       {
@@ -98,8 +108,9 @@ export function PermissionSelector({
               onToggleGroup={onToggleGroup}
             />
           ) : (
-            <span className="permission-selector__permission-name block font-medium text-ink" style={depthStyle(row.original.depth)}>
-              {row.original.permission.name}
+            <span className="permission-selector__permission-name" style={depthStyle(row.original.depth)}>
+              <span className="permission-selector__leaf-marker" aria-hidden="true" />
+              <span className="permission-selector__permission-label">{row.original.permission.name}</span>
             </span>
           ),
       },
@@ -154,12 +165,20 @@ export function PermissionSelector({
     [onPermissionGroupScopeChange, onPermissionScopeChange, onToggleGroup, onTogglePermission, onTogglePermissionGroup, selectedKeys, selectedScopes],
   );
   const table = useReactTable({
-    data: rows,
+    data: displayRows,
     columns,
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
     getRowId: (row) => row.id,
   });
+  const previousShowSelectedOnly = useRef(showSelectedOnly);
+
+  useEffect(() => {
+    if (previousShowSelectedOnly.current !== showSelectedOnly) {
+      previousShowSelectedOnly.current = showSelectedOnly;
+      table.setPageIndex(0);
+    }
+  }, [showSelectedOnly, table]);
 
   if (!appKey) {
     return <EmptyState title="选择应用后加载权限目录" description="直接权限可留空，也可在应用目录加载后勾选具体权限。" />;
@@ -171,7 +190,11 @@ export function PermissionSelector({
     return <EmptyState title="权限目录加载失败" description={errorMessage} />;
   }
   if (rows.length === 0) {
-    return null;
+    return (
+      <div className="permission-selector__surface">
+        <EmptyState title="暂无可选直接权限" description="当前应用未返回可直接申请的权限，可仅选择权限组发起申请。" />
+      </div>
+    );
   }
 
   const pagination = table.getState().pagination;
@@ -181,7 +204,15 @@ export function PermissionSelector({
   const pageEnd = totalRows === 0 ? 0 : pageStart + visibleRows.length - 1;
 
   return (
-    <div className="paper-card overflow-hidden rounded-[3px] p-0">
+    <div className="permission-selector__surface">
+      <PermissionSelectorToolbar
+        selectedCount={toolbarStats.selectedCount}
+        configuredScopeCount={toolbarStats.configuredScopeCount}
+        visibleCount={toolbarStats.visibleCount}
+        totalCount={toolbarStats.totalCount}
+        showSelectedOnly={showSelectedOnly}
+        onShowSelectedOnlyChange={setShowSelectedOnly}
+      />
       <div className="overflow-x-auto">
         <table aria-label="权限选择" className="min-w-full border-separate border-spacing-0 text-[13px]">
           <thead className="bg-paper-deep/60">
@@ -211,6 +242,8 @@ export function PermissionSelector({
                     "group transition-colors hover:bg-[rgb(var(--amber))]/[0.05]",
                     "permission-selector__row",
                     row.original.type === "group" && "permission-selector__row--group bg-paper-deep/60 hover:bg-paper-deep",
+                    row.original.type === "group" && row.original.selectionState !== "unchecked" && "permission-selector__row--group-selected",
+                    row.original.type === "permission" && row.original.isSelected && "permission-selector__row--selected",
                     row.original.isExiting && "permission-selector__row--exiting",
                   )}
                   onClick={groupRowClickHandler(row.original, onToggleGroup)}
@@ -231,7 +264,14 @@ export function PermissionSelector({
             ) : (
               <tr className="group transition-colors hover:bg-transparent">
                 <td colSpan={table.getAllLeafColumns().length} className="border-b border-ink/8 px-3 py-10 text-center text-[13px] text-ink-soft">
-                  <EmptyState title="暂无可选直接权限" description="当前应用未返回可直接申请的权限，可仅选择权限组发起申请。" />
+                  <EmptyState
+                    title={showSelectedOnly ? "当前没有已选直接权限" : "暂无可选直接权限"}
+                    description={
+                      showSelectedOnly
+                        ? "关闭仅看已选后可继续浏览并选择权限。"
+                        : "当前应用未返回可直接申请的权限，可仅选择权限组发起申请。"
+                    }
+                  />
                 </td>
               </tr>
             )}
@@ -290,6 +330,45 @@ export function PermissionSelector({
   );
 }
 
+function PermissionSelectorToolbar({
+  selectedCount,
+  configuredScopeCount,
+  visibleCount,
+  totalCount,
+  showSelectedOnly,
+  onShowSelectedOnlyChange,
+}: {
+  selectedCount: number;
+  configuredScopeCount: number;
+  visibleCount: number;
+  totalCount: number;
+  showSelectedOnly: boolean;
+  onShowSelectedOnlyChange: (showSelectedOnly: boolean) => void;
+}) {
+  return (
+    <div className="permission-selector__toolbar">
+      <div className="permission-selector__toolbar-stats" aria-label="权限选择状态">
+        <span className="permission-selector__toolbar-stat">已选 {selectedCount} 项</span>
+        <span className="permission-selector__toolbar-stat">scope 已设置 {configuredScopeCount} 项</span>
+        <span className="permission-selector__toolbar-stat">当前显示 {visibleCount}/{totalCount}</span>
+      </div>
+      <label className="permission-selector__toolbar-toggle">
+        <input
+          type="checkbox"
+          role="switch"
+          aria-label="仅看已选"
+          checked={showSelectedOnly}
+          onChange={(event) => onShowSelectedOnlyChange(event.currentTarget.checked)}
+        />
+        <span aria-hidden="true" className="permission-selector__toolbar-toggle-track">
+          <span className="permission-selector__toolbar-toggle-thumb" />
+        </span>
+        <span>仅看已选</span>
+      </label>
+    </div>
+  );
+}
+
 function PermissionGroupNameCell({
   group,
   depth,
@@ -308,7 +387,7 @@ function PermissionGroupNameCell({
   return (
     <button
       type="button"
-      className="permission-selector__group-button inline-flex min-w-0 items-center gap-2 rounded-[2px] px-1.5 py-1 text-left text-[13px] font-semibold text-ink transition-colors hover:bg-ink/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[rgb(var(--amber)_/_0.5)]"
+      className="permission-selector__group-button"
       onClick={(event) => {
         event.stopPropagation();
         onToggleGroup(group.key);
@@ -317,9 +396,10 @@ function PermissionGroupNameCell({
       aria-label={`${isExpanded ? "收起" : "展开"} ${group.name}`}
       style={depthStyle(depth)}
     >
-      <ChevronRight size={16} className={isExpanded ? "rotate-90 transition-transform" : "transition-transform"} />
-      <span className="truncate">{group.name}</span>
-      <span className="rounded-[2px] bg-paper px-1.5 py-0.5 font-mono text-[10.5px] font-medium leading-4 text-ink-soft">
+      <span className="permission-selector__tree-rail" aria-hidden="true" />
+      <ChevronRight size={16} className={isExpanded ? "permission-selector__chevron permission-selector__chevron--expanded" : "permission-selector__chevron"} />
+      <span className="permission-selector__group-name">{group.name}</span>
+      <span className={selectedCount > 0 ? "permission-selector__group-count permission-selector__group-count--active" : "permission-selector__group-count"}>
         {selectedCount}/{permissionCount}
       </span>
     </button>
@@ -341,15 +421,16 @@ function PermissionGroupScopeCell({
 
   return (
     <SelectInput
+      className="permission-selector__scope-bulk-select"
       value=""
       onClick={(event) => event.stopPropagation()}
       onChange={(event) => onScopeChange(group, event.currentTarget.value)}
       aria-label={`${group.key} 权限组 scope`}
     >
-      <option value="">批量 scope</option>
+      <option value="">批量应用 scope</option>
       {scopeOptions.map((scopeKey) => (
         <option key={scopeKey} value={scopeKey}>
-          {scopeKey}
+          应用 {scopeKey}
         </option>
       ))}
     </SelectInput>
@@ -418,21 +499,31 @@ function PermissionScopeCell({
           ))}
         </SelectInput>
       ) : (
-        <div className="flex flex-wrap items-center gap-2">
-          {scopes.map((scope) => (
-            <label key={scope.key} className="inline-flex items-center gap-2 rounded-[2px] border border-[rgb(var(--hairline-strong))] bg-paper px-2.5 py-1.5 text-[13px] text-ink-soft">
-              <input
-                type="checkbox"
-                checked={selectedKeys.includes(directGrantSelectionKey(permission.key, scope.key))}
-                onClick={(event) => event.stopPropagation()}
-                onChange={() => onToggle(directGrantSelectionKey(permission.key, scope.key))}
-                aria-label={`选择 ${permission.key} ${scope.key}`}
-              />
-              <span>
-                {scope.name} ({scope.key})
-              </span>
-            </label>
-          ))}
+        <div className="permission-selector__scope-chip-list">
+          {scopes.map((scope) => {
+            const selectionKey = directGrantSelectionKey(permission.key, scope.key);
+
+            return (
+              <label
+                key={scope.key}
+                className={joinClassNames(
+                  "permission-selector__scope-chip",
+                  selectedKeys.includes(selectionKey) && "permission-selector__scope-chip--checked",
+                )}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedKeys.includes(selectionKey)}
+                  onClick={(event) => event.stopPropagation()}
+                  onChange={() => onToggle(selectionKey)}
+                  aria-label={`选择 ${permission.key} ${scope.key}`}
+                />
+                <span>
+                  {scope.name} ({scope.key})
+                </span>
+              </label>
+            );
+          })}
         </div>
       )}
     </>
@@ -461,10 +552,48 @@ function PermissionSelectionCell({
           aria-label={`选择 ${permission.key}`}
         />
       ) : (
-        <span aria-label={`${permission.key} 多 scope 选择`}>-</span>
+        <span className="permission-selector__selection-hint" aria-label={`${permission.key} 多 scope 选择`}>
+          按 scope 选择
+        </span>
       )}
     </>
   );
+}
+
+interface PermissionSelectorToolbarStats {
+  selectedCount: number;
+  configuredScopeCount: number;
+  visibleCount: number;
+  totalCount: number;
+}
+
+function buildPermissionSelectorToolbarStats(
+  rows: PermissionSelectorRow[],
+  displayRows: PermissionSelectorRow[],
+  selectedKeys: string[],
+  selectedScopes: Record<string, string>,
+): PermissionSelectorToolbarStats {
+  return {
+    selectedCount: selectedKeys.length,
+    configuredScopeCount: countConfiguredScopes(selectedScopes),
+    visibleCount: displayRows.length,
+    totalCount: rows.length,
+  };
+}
+
+function countConfiguredScopes(selectedScopes: Record<string, string>): number {
+  return Object.values(selectedScopes).filter(Boolean).length;
+}
+
+function filterRowsToSelected(rows: PermissionSelectorRow[]): PermissionSelectorRow[] {
+  return rows.filter((row) => rowMatchesSelected(row));
+}
+
+function rowMatchesSelected(row: PermissionSelectorRow): boolean {
+  if (row.type === "group") {
+    return row.selectionState !== "unchecked";
+  }
+  return row.isSelected;
 }
 
 function buildPermissionRows(
@@ -481,6 +610,7 @@ function buildPermissionRows(
       id: `permission:${permission.key}`,
       permission,
       depth: 0,
+      isSelected: isPermissionSelected(permission.key, selectedKeys),
       isExiting: false,
     })),
   ];
@@ -524,6 +654,7 @@ function buildGroupRows(
       id: `permission:${permission.key}`,
       permission,
       depth: depth + 1,
+      isSelected: isPermissionSelected(permission.key, selectedKeys),
       isExiting: isChildExiting,
     })),
     ...childGroups.flatMap((childGroup) => buildGroupRows(childGroup, depth + 1, expandedGroupKeys, exitingGroupKeys, selectedKeys, isChildExiting)),
