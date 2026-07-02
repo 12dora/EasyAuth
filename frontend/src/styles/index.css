@@ -152,6 +152,13 @@ table,
   display: none;
 }
 
+.paper-card {
+  background: rgb(var(--paper));
+  border: 1px solid rgb(var(--hairline));
+  border-radius: 0.5rem;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
+}
+
 @keyframes fadeUp {
   from {
     opacity: 0;
