@@ -1,3 +1,6 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+
 import { Copy, Plus } from "lucide-react";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -26,6 +29,19 @@ import {
 } from "./ui/TablePrimitives";
 import { TablePagination } from "./ui/TablePagination";
 import { flexRender, getCoreRowModel, getPaginationRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
+
+const globalStylesCss = readFileSync(resolve(__dirname, "../styles/index.css"), "utf8");
+
+describe("全局基础样式契约", () => {
+  test("定义 paper-card 表面样式", () => {
+    const paperCardRule = globalStylesCss.match(/\.paper-card\s*\{(?<body>[^}]*)\}/);
+
+    expect(paperCardRule).not.toBeNull();
+    expect(paperCardRule?.groups?.body).toMatch(/\bbackground\s*:/);
+    expect(paperCardRule?.groups?.body).toMatch(/\bborder\s*:/);
+    expect(paperCardRule?.groups?.body).toMatch(/\bbox-shadow\s*:/);
+  });
+});
 
 describe("Button", () => {
   test("默认使用 outline 视觉并保持 md 高度", () => {
