@@ -92,6 +92,7 @@ describe("portal permission tree helpers", () => {
     expect(collectPermissionKeys([groups[0]], [sharedAuditView])).toEqual([
       "orders.read",
       "reports.view",
+      "reports.view",
       "orders.refund.approve",
       "audit.view",
     ]);

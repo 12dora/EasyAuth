@@ -26,10 +26,12 @@ export function AccessRequestForm() {
             catalogIsLoading={form.catalogIsLoading}
             catalogErrorMessage={form.catalogErrorMessage}
             onAppKeyChange={form.changeAppKey}
-            onTogglePermission={form.togglePermission}
-            onTogglePermissionGroup={form.togglePermissionGroup}
             onPermissionScopeChange={form.changePermissionScope}
             onPermissionGroupScopeChange={form.changePermissionGroupScope}
+            onSelectPermissionKeys={form.selectPermissionKeys}
+            onClearPermissionKeys={form.clearPermissionKeys}
+            onExpandGroups={form.expandGroups}
+            onCollapseGroups={form.collapseGroups}
             onToggleGroup={form.toggleGroup}
           />
         </div>

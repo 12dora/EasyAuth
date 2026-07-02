@@ -36,6 +36,42 @@
   font-weight: 600;
 }
 
+.permission-selector__toolbar-actions {
+  display: flex;
+  flex: 0 1 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.permission-selector__toolbar-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 1.75rem;
+  border: 1px solid rgb(var(--hairline));
+  border-radius: 4px;
+  background: rgb(var(--paper));
+  padding: 0.25rem 0.65rem;
+  color: rgb(var(--ink-soft));
+  font-size: 12px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  transition: border-color 160ms var(--ease-press), background 160ms var(--ease-press), color 160ms var(--ease-press);
+}
+
+.permission-selector__toolbar-button:hover {
+  border-color: rgb(var(--hairline-strong));
+  background: rgb(var(--paper-deep));
+  color: rgb(var(--ink));
+}
+
+.permission-selector__toolbar-button:focus-visible {
+  outline: 2px solid rgb(var(--amber) / 0.5);
+  outline-offset: 2px;
+}
+
 .permission-selector__toolbar-toggle {
   position: relative;
   display: inline-flex;
@@ -227,9 +263,9 @@
   white-space: nowrap;
 }
 
-.permission-selector__scope-bulk-select {
-  min-width: 8rem;
-  font-weight: 600;
+.permission-selector__scope-cell {
+  min-width: 18rem;
+  white-space: nowrap;
 }
 
 .permission-selector__scope-chip-list {
@@ -239,8 +275,15 @@
   gap: 0.5rem;
 }
 
+.permission-selector__scope-chip-list--single-line {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+
 .permission-selector__scope-chip {
   display: inline-flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 0.5rem;
   border: 1px solid rgb(var(--hairline-strong));
@@ -250,6 +293,7 @@
   color: rgb(var(--ink-soft));
   font-size: 12px;
   font-weight: 600;
+  white-space: nowrap;
 }
 
 .permission-selector__scope-chip:has(input:checked),
@@ -257,6 +301,12 @@
   border-color: rgb(var(--evergreen) / 0.45);
   background: rgb(var(--evergreen) / 0.08);
   color: rgb(var(--evergreen));
+}
+
+.permission-selector__scope-chip--mixed {
+  border-color: rgb(var(--amber) / 0.5);
+  background: rgb(var(--amber) / 0.1);
+  color: rgb(var(--amber));
 }
 
 .permission-selector__selection-hint {
@@ -301,6 +351,7 @@
 
   .permission-selector__toolbar-toggle-track,
   .permission-selector__toolbar-toggle-thumb,
+  .permission-selector__toolbar-button,
   .permission-selector__chevron {
     transition: none;
   }

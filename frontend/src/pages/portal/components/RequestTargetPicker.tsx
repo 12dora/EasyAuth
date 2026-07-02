@@ -14,10 +14,12 @@ interface RequestTargetPickerProps {
   catalogIsLoading: boolean;
   catalogErrorMessage: string;
   onAppKeyChange: (appKey: string) => void;
-  onTogglePermission: (key: string) => void;
-  onTogglePermissionGroup: (group: ScopedPermissionGroupItem, shouldSelect: boolean) => void;
-  onPermissionScopeChange: (permissionKey: string, scopeKey: string) => void;
-  onPermissionGroupScopeChange: (group: ScopedPermissionGroupItem, scopeKey: string) => void;
+  onPermissionScopeChange: (permission: ScopedPermissionItem, scopeKey: string) => void;
+  onPermissionGroupScopeChange: (group: ScopedPermissionGroupItem, scopeKey: string, shouldSelect: boolean) => void;
+  onSelectPermissionKeys: (selectionKeys: string[]) => void;
+  onClearPermissionKeys: (selectionKeys: string[]) => void;
+  onExpandGroups: (groupKeys: string[]) => void;
+  onCollapseGroups: (groupKeys: string[]) => void;
   onToggleGroup: (key: string) => void;
 }
 
@@ -32,10 +34,12 @@ export function RequestTargetPicker({
   catalogIsLoading,
   catalogErrorMessage,
   onAppKeyChange,
-  onTogglePermission,
-  onTogglePermissionGroup,
   onPermissionScopeChange,
   onPermissionGroupScopeChange,
+  onSelectPermissionKeys,
+  onClearPermissionKeys,
+  onExpandGroups,
+  onCollapseGroups,
   onToggleGroup,
 }: RequestTargetPickerProps) {
   return (
@@ -52,7 +56,7 @@ export function RequestTargetPicker({
       </Field>
       <Field
         label="直接权限"
-        hint={appKey ? `已选 ${selectedPermissionKeys.length} 项直接权限，可留空。` : "请先选择应用后再选择直接权限。"}
+        hint={appKey ? `已选 ${selectedPermissionKeys.length} 项权限范围，可留空。` : "请先选择应用后再选择直接权限。"}
       >
         <PermissionSelector
           appKey={appKey}
@@ -63,10 +67,12 @@ export function RequestTargetPicker({
           expandedGroupKeys={expandedGroupKeys}
           loading={catalogIsLoading}
           errorMessage={catalogErrorMessage}
-          onTogglePermission={onTogglePermission}
-          onTogglePermissionGroup={onTogglePermissionGroup}
           onPermissionScopeChange={onPermissionScopeChange}
           onPermissionGroupScopeChange={onPermissionGroupScopeChange}
+          onSelectPermissionKeys={onSelectPermissionKeys}
+          onClearPermissionKeys={onClearPermissionKeys}
+          onExpandGroups={onExpandGroups}
+          onCollapseGroups={onCollapseGroups}
           onToggleGroup={onToggleGroup}
         />
       </Field>

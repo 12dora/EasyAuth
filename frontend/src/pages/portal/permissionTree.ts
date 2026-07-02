@@ -10,7 +10,8 @@ export function collectPermissions(groups: PermissionGroupItem[]): PermissionIte
 
 export function collectGroupPermissions(group: PermissionGroupItem): PermissionItem[] {
   const childGroups = (group.children ?? []).filter(isPermissionGroupItem);
-  return [...(group.permissions ?? []), ...childGroups.flatMap((childGroup) => collectGroupPermissions(childGroup))];
+  const childPermissions = (group.children ?? []).filter((child): child is PermissionItem => !isPermissionGroupItem(child));
+  return [...(group.permissions ?? []), ...childPermissions, ...childGroups.flatMap((childGroup) => collectGroupPermissions(childGroup))];
 }
 
 export function isPermissionGroupItem(item: PermissionGroupItem | PermissionItem): item is PermissionGroupItem {

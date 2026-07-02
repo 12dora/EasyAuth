@@ -101,11 +101,15 @@ interface AccessRequestFields extends AccessRequestPayloadValues {
 interface AccessRequestActions {
   changeAppKey: (nextAppKey: string) => void;
   changeAuthorizationGroupKey: (groupKey: string) => void;
+  selectPermissionKeys: (keys: string[]) => void;
+  clearPermissionKeys: (keys: string[]) => void;
+  expandGroups: (keys: string[]) => void;
+  collapseGroups: (keys: string[]) => void;
   togglePermission: (key: string) => void;
   togglePermissionGroup: (group: ScopedPermissionGroupItem, shouldSelect: boolean) => void;
   toggleApprover: (userId: string) => void;
-  changePermissionScope: (permissionKey: string, scopeKey: string) => void;
-  changePermissionGroupScope: (group: ScopedPermissionGroupItem, scopeKey: string) => void;
+  changePermissionScope: (permission: ScopedPermissionItem, scopeKey: string) => void;
+  changePermissionGroupScope: (group: ScopedPermissionGroupItem, scopeKey: string, shouldSelect: boolean) => void;
   toggleGroup: (key: string) => void;
   submit: () => void;
 }
@@ -137,11 +141,15 @@ interface AccessRequestFormResult {
   changeGrantType: Dispatch<SetStateAction<AccessGrantType>>;
   changeExpiresAt: Dispatch<SetStateAction<string>>;
   changeReason: Dispatch<SetStateAction<string>>;
+  selectPermissionKeys: (keys: string[]) => void;
+  clearPermissionKeys: (keys: string[]) => void;
+  expandGroups: (keys: string[]) => void;
+  collapseGroups: (keys: string[]) => void;
   toggleApprover: (userId: string) => void;
   togglePermission: (key: string) => void;
   togglePermissionGroup: (group: ScopedPermissionGroupItem, shouldSelect: boolean) => void;
-  changePermissionScope: (permissionKey: string, scopeKey: string) => void;
-  changePermissionGroupScope: (group: ScopedPermissionGroupItem, scopeKey: string) => void;
+  changePermissionScope: (permission: ScopedPermissionItem, scopeKey: string) => void;
+  changePermissionGroupScope: (group: ScopedPermissionGroupItem, scopeKey: string, shouldSelect: boolean) => void;
   toggleGroup: (key: string) => void;
   submit: () => void;
 }
@@ -156,7 +164,7 @@ export function useAccessRequestForm(): AccessRequestFormResult {
   useDefaultSingleScopes(fields.setSelectedPermissionScopes, catalogView);
   useDefaultApprovers(fields, catalogView);
   const submitMutation = useAccessRequestSubmitMutation(fields);
-  const actions = buildAccessRequestActions(fields, () => submitMutation.mutate());
+  const actions = buildAccessRequestActions(fields, catalogView, () => submitMutation.mutate());
   const hasTarget = Boolean(fields.authorizationGroupKey || fields.selectedPermissionKeys.length > 0);
   const selectedScopesAreComplete = fields.selectedPermissionKeys.every((key) => hasSelectionScope(key, fields.selectedPermissionScopes));
   const canSubmit = Boolean(
@@ -262,6 +270,10 @@ function buildAccessRequestFormResult(
     changeGrantType: fields.setGrantType,
     changeExpiresAt: fields.setExpiresAt,
     changeReason: fields.setReason,
+    selectPermissionKeys: actions.selectPermissionKeys,
+    clearPermissionKeys: actions.clearPermissionKeys,
+    expandGroups: actions.expandGroups,
+    collapseGroups: actions.collapseGroups,
     toggleApprover: actions.toggleApprover,
     togglePermission: actions.togglePermission,
     togglePermissionGroup: actions.togglePermissionGroup,
@@ -272,7 +284,7 @@ function buildAccessRequestFormResult(
   };
 }
 
-function buildAccessRequestActions(fields: AccessRequestFields, submit: () => void): AccessRequestActions {
+function buildAccessRequestActions(fields: AccessRequestFields, catalogView: CatalogView, submit: () => void): AccessRequestActions {
   return {
     changeAppKey: (nextAppKey: string) => {
       fields.setAppKey(nextAppKey);
@@ -286,75 +298,66 @@ function buildAccessRequestActions(fields: AccessRequestFields, submit: () => vo
     changeAuthorizationGroupKey: (groupKey: string) => {
       fields.setAuthorizationGroupKey(groupKey);
     },
+    selectPermissionKeys: (keys: string[]) => {
+      fields.setSelectedPermissionKeys((current) => uniqueStrings([...current, ...keys]));
+    },
+    clearPermissionKeys: (keys: string[]) => {
+      const keySet = new Set(keys);
+      fields.setSelectedPermissionKeys((current) => current.filter((key) => !keySet.has(key)));
+    },
+    expandGroups: (keys: string[]) => {
+      fields.setExpandedGroupKeys((current) => uniqueStrings([...current, ...keys]));
+    },
+    collapseGroups: (keys: string[]) => {
+      const keySet = new Set(keys);
+      fields.setExpandedGroupKeys((current) => current.filter((key) => !keySet.has(key)));
+    },
     togglePermission: (key: string) => {
-      fields.setSelectedPermissionKeys((current) => toggleListItem(current, key));
+      const permissionKey = directGrantSelectionPermissionKey(key);
+      const permission = catalogView.permissionsByKey[permissionKey];
+      const scopeKey = directGrantSelectionScopeKey(key);
+      if (!permission) {
+        fields.setSelectedPermissionKeys((current) => toggleListItem(current, key));
+        return;
+      }
+      fields.setSelectedPermissionKeys((current) => {
+        return scopeKey
+          ? nextPermissionScopeSelection(permission, scopeKey, !selectedScopeKeysForPermission(permission, current).includes(scopeKey), current)
+          : nextWholePermissionSelection(permission, current);
+      });
     },
     togglePermissionGroup: (group: ScopedPermissionGroupItem, shouldSelect: boolean) => {
       const groupSelectionKeys = collectPermissionGroupSelectionKeys(group);
       const groupSelectionKeySet = new Set(groupSelectionKeys);
-      fields.setSelectedPermissionKeys((current) =>
-        shouldSelect ? uniqueStrings([...current, ...groupSelectionKeys]) : current.filter((key) => !groupSelectionKeySet.has(key)),
-      );
+      const permissions = collectScopedGroupPermissions(group);
+      fields.setSelectedPermissionKeys((current) => {
+        return shouldSelect
+          ? uniqueStrings([...current, ...groupSelectionKeys])
+          : current.filter((key) => !groupSelectionKeySet.has(key));
+      });
     },
     toggleApprover: (userId: string) => {
       fields.setApproverSelectionWasEdited(true);
       fields.setSelectedApproverUserIds((current) => toggleListItem(current, userId));
     },
-    changePermissionScope: (permissionKey: string, scopeKey: string) => {
-      fields.setSelectedPermissionScopes((current) => ({ ...current, [permissionKey]: scopeKey }));
+    changePermissionScope: (permission: ScopedPermissionItem, scopeKey: string) => {
+      fields.setSelectedPermissionKeys((current) => {
+        const shouldSelect = !selectedScopeKeysForPermission(permission, current).includes(scopeKey);
+        return nextPermissionScopeSelection(permission, scopeKey, shouldSelect, current);
+      });
     },
-    changePermissionGroupScope: (group: ScopedPermissionGroupItem, scopeKey: string) => {
+    changePermissionGroupScope: (group: ScopedPermissionGroupItem, scopeKey: string, shouldSelect: boolean) => {
       if (!scopeKey) {
         return;
       }
-      const supportedPermissions = collectScopedGroupPermissions(group).filter((permission) =>
-        (permission.scopes ?? []).some((scope) => scope.key === scopeKey),
-      );
-      const targetSelectionKeyByPermissionKey = new Map(
-        supportedPermissions
-          .filter((permission) => (permission.scopes ?? []).length > 1)
-          .map((permission) => [permission.key, directGrantSelectionKey(permission.key, scopeKey)]),
-      );
+      const supportedPermissions = collectScopedGroupPermissions(group).filter((permission) => permissionScopeSelectionKey(permission, scopeKey));
 
       fields.setSelectedPermissionKeys((current) => {
-        const handledPermissionKeys = new Set<string>();
-        const next: string[] = [];
-        for (const selectionKey of current) {
-          const permissionKey = directGrantSelectionPermissionKey(selectionKey);
-          const targetSelectionKey = targetSelectionKeyByPermissionKey.get(permissionKey);
-          if (targetSelectionKey) {
-            if (!handledPermissionKeys.has(permissionKey)) {
-              next.push(targetSelectionKey);
-              handledPermissionKeys.add(permissionKey);
-            }
-            continue;
-          }
-          next.push(selectionKey);
-        }
+        let next = current;
         for (const permission of supportedPermissions) {
-          const scopes = permission.scopes ?? [];
-          if (scopes.length > 1) {
-            if (!handledPermissionKeys.has(permission.key)) {
-              next.push(directGrantSelectionKey(permission.key, scopeKey));
-              handledPermissionKeys.add(permission.key);
-            }
-            continue;
-          }
-          next.push(permission.key);
+          next = nextPermissionScopeSelection(permission, scopeKey, shouldSelect, next);
         }
-        return uniqueStrings(next);
-      });
-      fields.setSelectedPermissionScopes((current) => {
-        let changed = false;
-        const next = { ...current };
-        for (const permission of supportedPermissions) {
-          const scopes = permission.scopes ?? [];
-          if (scopes.length <= 1 && next[permission.key] !== scopeKey) {
-            next[permission.key] = scopeKey;
-            changed = true;
-          }
-        }
-        return changed ? next : current;
+        return next;
       });
     },
     toggleGroup: (key: string) => {
@@ -389,14 +392,22 @@ function buildAccessRequestPayload(values: AccessRequestPayloadValues): JsonObje
     app_key: values.appKey,
     request_type: "grant",
     authorization_group_keys: values.authorizationGroupKey ? [values.authorizationGroupKey] : [],
-    direct_grants: values.selectedPermissionKeys.map((permissionKey) => ({
-      permission: directGrantSelectionPermissionKey(permissionKey),
-      scope: directGrantSelectionScopeKey(permissionKey) ?? values.selectedPermissionScopes[permissionKey],
-    })),
+    direct_grants: values.selectedPermissionKeys.map((selectionKey) => buildDirectGrantPayload(selectionKey)),
     approver_user_ids: values.selectedApproverUserIds,
     grant_type: values.grantType,
     grant_expires_at: values.grantType === "timed" && values.expiresAt ? new Date(values.expiresAt).toISOString() : null,
     reason: values.reason,
+  };
+}
+
+function buildDirectGrantPayload(selectionKey: string): JsonObject {
+  const scopeKey = directGrantSelectionScopeKey(selectionKey);
+  if (!scopeKey) {
+    throw new Error(`直接权限选择缺少权限范围: ${selectionKey}`);
+  }
+  return {
+    permission: directGrantSelectionPermissionKey(selectionKey),
+    scope: scopeKey,
   };
 }
 
@@ -414,7 +425,7 @@ export function directGrantSelectionScopeKey(selectionKey: string): string | nul
 }
 
 function hasSelectionScope(selectionKey: string, selectedScopes: Record<string, string>): boolean {
-  return Boolean(directGrantSelectionScopeKey(selectionKey) ?? selectedScopes[selectionKey]);
+  return Boolean(directGrantSelectionScopeKey(selectionKey));
 }
 
 function toggleListItem(items: string[], key: string): string[] {
@@ -429,19 +440,78 @@ function collectPermissionGroupSelectionKeys(group: ScopedPermissionGroupItem): 
   return collectScopedGroupPermissions(group).flatMap((permission) => permissionSelectionKeys(permission));
 }
 
-function permissionSelectionKeys(permission: ScopedPermissionItem): string[] {
+export function permissionSelectionKeys(permission: ScopedPermissionItem): string[] {
+  return permissionScopeKeys(permission).map((scopeKey) => directGrantSelectionKey(permission.key, scopeKey));
+}
+
+export function permissionScopeSelectionKey(permission: ScopedPermissionItem, scopeKey: string): string | null {
+  return (permission.scopes ?? []).some((scope) => scope.key === scopeKey)
+    ? directGrantSelectionKey(permission.key, scopeKey)
+    : null;
+}
+
+export function permissionScopeKeys(permission: ScopedPermissionItem): string[] {
   const scopes = permission.scopes ?? [];
-  if (scopes.length > 1) {
-    return scopes.map((scope) => directGrantSelectionKey(permission.key, scope.key));
+  return scopes.map((scope) => scope.key);
+}
+
+export function selectedScopeKeysForPermission(permission: ScopedPermissionItem, selectedPermissionKeys: string[]): string[] {
+  const selectedKeySet = new Set(selectedPermissionKeys);
+  return (permission.scopes ?? [])
+    .filter((scope) => selectedKeySet.has(directGrantSelectionKey(permission.key, scope.key)))
+    .map((scope) => scope.key);
+}
+
+export function nextPermissionScopeSelection(
+  permission: ScopedPermissionItem,
+  scopeKey: string,
+  shouldSelect: boolean,
+  selectedPermissionKeys: string[],
+): string[] {
+  const scopes = permission.scopes ?? [];
+  const targetScopeIndex = scopes.findIndex((scope) => scope.key === scopeKey);
+  if (targetScopeIndex === -1) {
+    return selectedPermissionKeys;
   }
-  return [permission.key];
+  const currentScopeKeys = selectedScopeKeysForPermission(permission, selectedPermissionKeys);
+  const nextScopeKeys = shouldSelect
+    ? scopes.slice(0, targetScopeIndex + 1).map((scope) => scope.key)
+    : currentScopeKeys.filter((currentScopeKey) => {
+        const currentScopeIndex = scopes.findIndex((scope) => scope.key === currentScopeKey);
+        return currentScopeIndex !== -1 && currentScopeIndex < targetScopeIndex;
+      });
+  const permissionScopeKeySet = new Set(permissionSelectionKeys(permission));
+  const otherSelectionKeys = selectedPermissionKeys.filter((selectionKey) => !permissionScopeKeySet.has(selectionKey));
+  const nextPermissionSelectionKeys = nextScopeKeys
+    .map((nextScopeKey) => permissionScopeSelectionKey(permission, nextScopeKey))
+    .filter((selectionKey): selectionKey is string => Boolean(selectionKey));
+  return uniqueStrings([...otherSelectionKeys, ...nextPermissionSelectionKeys]);
+}
+
+function nextWholePermissionSelection(permission: ScopedPermissionItem, selectedPermissionKeys: string[]): string[] {
+  const selectionKeys = permissionSelectionKeys(permission);
+  if (selectionKeys.length === 0) {
+    return selectedPermissionKeys;
+  }
+  const shouldSelect = selectionKeys.some((selectionKey) => !selectedPermissionKeys.includes(selectionKey));
+  const selectionKeySet = new Set(selectionKeys);
+  return shouldSelect
+    ? uniqueStrings([...selectedPermissionKeys, ...selectionKeys])
+    : selectedPermissionKeys.filter((selectionKey) => !selectionKeySet.has(selectionKey));
 }
 
 function collectScopedGroupPermissions(group: ScopedPermissionGroupItem): ScopedPermissionItem[] {
   const childGroups = (group.children ?? []).filter(
     (child): child is ScopedPermissionGroupItem => "type" in child && child.type === "group",
   );
-  return [...(group.permissions ?? []), ...childGroups.flatMap((childGroup) => collectScopedGroupPermissions(childGroup))];
+  const childPermissions = (group.children ?? []).filter(
+    (child): child is ScopedPermissionItem => !("type" in child) || child.type !== "group",
+  );
+  return [
+    ...(group.permissions ?? []),
+    ...childPermissions,
+    ...childGroups.flatMap((childGroup) => collectScopedGroupPermissions(childGroup)),
+  ];
 }
 
 function useDefaultSingleScopes(
