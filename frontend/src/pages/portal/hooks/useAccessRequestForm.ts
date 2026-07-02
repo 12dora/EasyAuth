@@ -102,8 +102,10 @@ interface AccessRequestActions {
   changeAppKey: (nextAppKey: string) => void;
   changeAuthorizationGroupKey: (groupKey: string) => void;
   togglePermission: (key: string) => void;
+  togglePermissionGroup: (group: ScopedPermissionGroupItem, shouldSelect: boolean) => void;
   toggleApprover: (userId: string) => void;
   changePermissionScope: (permissionKey: string, scopeKey: string) => void;
+  changePermissionGroupScope: (group: ScopedPermissionGroupItem, scopeKey: string) => void;
   toggleGroup: (key: string) => void;
   submit: () => void;
 }
@@ -137,7 +139,9 @@ interface AccessRequestFormResult {
   changeReason: Dispatch<SetStateAction<string>>;
   toggleApprover: (userId: string) => void;
   togglePermission: (key: string) => void;
+  togglePermissionGroup: (group: ScopedPermissionGroupItem, shouldSelect: boolean) => void;
   changePermissionScope: (permissionKey: string, scopeKey: string) => void;
+  changePermissionGroupScope: (group: ScopedPermissionGroupItem, scopeKey: string) => void;
   toggleGroup: (key: string) => void;
   submit: () => void;
 }
@@ -260,7 +264,9 @@ function buildAccessRequestFormResult(
     changeReason: fields.setReason,
     toggleApprover: actions.toggleApprover,
     togglePermission: actions.togglePermission,
+    togglePermissionGroup: actions.togglePermissionGroup,
     changePermissionScope: actions.changePermissionScope,
+    changePermissionGroupScope: actions.changePermissionGroupScope,
     toggleGroup: actions.toggleGroup,
     submit: actions.submit,
   };
@@ -283,12 +289,73 @@ function buildAccessRequestActions(fields: AccessRequestFields, submit: () => vo
     togglePermission: (key: string) => {
       fields.setSelectedPermissionKeys((current) => toggleListItem(current, key));
     },
+    togglePermissionGroup: (group: ScopedPermissionGroupItem, shouldSelect: boolean) => {
+      const groupSelectionKeys = collectPermissionGroupSelectionKeys(group);
+      const groupSelectionKeySet = new Set(groupSelectionKeys);
+      fields.setSelectedPermissionKeys((current) =>
+        shouldSelect ? uniqueStrings([...current, ...groupSelectionKeys]) : current.filter((key) => !groupSelectionKeySet.has(key)),
+      );
+    },
     toggleApprover: (userId: string) => {
       fields.setApproverSelectionWasEdited(true);
       fields.setSelectedApproverUserIds((current) => toggleListItem(current, userId));
     },
     changePermissionScope: (permissionKey: string, scopeKey: string) => {
       fields.setSelectedPermissionScopes((current) => ({ ...current, [permissionKey]: scopeKey }));
+    },
+    changePermissionGroupScope: (group: ScopedPermissionGroupItem, scopeKey: string) => {
+      if (!scopeKey) {
+        return;
+      }
+      const supportedPermissions = collectScopedGroupPermissions(group).filter((permission) =>
+        (permission.scopes ?? []).some((scope) => scope.key === scopeKey),
+      );
+      const targetSelectionKeyByPermissionKey = new Map(
+        supportedPermissions
+          .filter((permission) => (permission.scopes ?? []).length > 1)
+          .map((permission) => [permission.key, directGrantSelectionKey(permission.key, scopeKey)]),
+      );
+
+      fields.setSelectedPermissionKeys((current) => {
+        const handledPermissionKeys = new Set<string>();
+        const next: string[] = [];
+        for (const selectionKey of current) {
+          const permissionKey = directGrantSelectionPermissionKey(selectionKey);
+          const targetSelectionKey = targetSelectionKeyByPermissionKey.get(permissionKey);
+          if (targetSelectionKey) {
+            if (!handledPermissionKeys.has(permissionKey)) {
+              next.push(targetSelectionKey);
+              handledPermissionKeys.add(permissionKey);
+            }
+            continue;
+          }
+          next.push(selectionKey);
+        }
+        for (const permission of supportedPermissions) {
+          const scopes = permission.scopes ?? [];
+          if (scopes.length > 1) {
+            if (!handledPermissionKeys.has(permission.key)) {
+              next.push(directGrantSelectionKey(permission.key, scopeKey));
+              handledPermissionKeys.add(permission.key);
+            }
+            continue;
+          }
+          next.push(permission.key);
+        }
+        return uniqueStrings(next);
+      });
+      fields.setSelectedPermissionScopes((current) => {
+        let changed = false;
+        const next = { ...current };
+        for (const permission of supportedPermissions) {
+          const scopes = permission.scopes ?? [];
+          if (scopes.length <= 1 && next[permission.key] !== scopeKey) {
+            next[permission.key] = scopeKey;
+            changed = true;
+          }
+        }
+        return changed ? next : current;
+      });
     },
     toggleGroup: (key: string) => {
       fields.setExpandedGroupKeys((current) => toggleListItem(current, key));
@@ -352,6 +419,29 @@ function hasSelectionScope(selectionKey: string, selectedScopes: Record<string, 
 
 function toggleListItem(items: string[], key: string): string[] {
   return items.includes(key) ? items.filter((item) => item !== key) : [...items, key];
+}
+
+function uniqueStrings(items: string[]): string[] {
+  return Array.from(new Set(items.filter(Boolean)));
+}
+
+function collectPermissionGroupSelectionKeys(group: ScopedPermissionGroupItem): string[] {
+  return collectScopedGroupPermissions(group).flatMap((permission) => permissionSelectionKeys(permission));
+}
+
+function permissionSelectionKeys(permission: ScopedPermissionItem): string[] {
+  const scopes = permission.scopes ?? [];
+  if (scopes.length > 1) {
+    return scopes.map((scope) => directGrantSelectionKey(permission.key, scope.key));
+  }
+  return [permission.key];
+}
+
+function collectScopedGroupPermissions(group: ScopedPermissionGroupItem): ScopedPermissionItem[] {
+  const childGroups = (group.children ?? []).filter(
+    (child): child is ScopedPermissionGroupItem => "type" in child && child.type === "group",
+  );
+  return [...(group.permissions ?? []), ...childGroups.flatMap((childGroup) => collectScopedGroupPermissions(childGroup))];
 }
 
 function useDefaultSingleScopes(

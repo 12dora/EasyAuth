@@ -13,7 +13,7 @@ import { EmptyState } from "../../../components/ui/EmptyState";
 import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../components/ui/TablePrimitives";
 import { TablePagination } from "../../../components/ui/TablePagination";
 
-import { collectGroupPermissions, isPermissionGroupItem } from "../permissionTree";
+import { isPermissionGroupItem } from "../permissionTree";
 import {
   directGrantSelectionKey,
   directGrantSelectionPermissionKey,
@@ -32,7 +32,9 @@ interface PermissionSelectorProps {
   loading: boolean;
   errorMessage: string;
   onTogglePermission: (key: string) => void;
+  onTogglePermissionGroup: (group: ScopedPermissionGroupItem, shouldSelect: boolean) => void;
   onPermissionScopeChange: (permissionKey: string, scopeKey: string) => void;
+  onPermissionGroupScopeChange: (group: ScopedPermissionGroupItem, scopeKey: string) => void;
   onToggleGroup: (key: string) => void;
 }
 
@@ -71,7 +73,9 @@ export function PermissionSelector({
   loading,
   errorMessage,
   onTogglePermission,
+  onTogglePermissionGroup,
   onPermissionScopeChange,
+  onPermissionGroupScopeChange,
   onToggleGroup,
 }: PermissionSelectorProps) {
   const exitingGroupKeys = useExitingGroupKeys(expandedGroupKeys);
@@ -117,10 +121,7 @@ export function PermissionSelector({
             <PermissionGroupScopeCell
               group={row.original.group}
               scopeOptions={row.original.scopeOptions}
-              selectedKeys={selectedKeys}
-              selectedScopes={selectedScopes}
-              onToggle={onTogglePermission}
-              onScopeChange={onPermissionScopeChange}
+              onScopeChange={onPermissionGroupScopeChange}
             />
           ) : (
             <PermissionScopeCell
@@ -140,8 +141,7 @@ export function PermissionSelector({
             <PermissionGroupSelectionCell
               group={row.original.group}
               selectionState={row.original.selectionState}
-              selectedKeys={selectedKeys}
-              onToggle={onTogglePermission}
+              onToggleGroup={onTogglePermissionGroup}
             />
           ) : (
             <PermissionSelectionCell
@@ -152,7 +152,7 @@ export function PermissionSelector({
           ),
       },
     ],
-    [onPermissionScopeChange, onToggleGroup, onTogglePermission, selectedKeys, selectedScopes],
+    [onPermissionGroupScopeChange, onPermissionScopeChange, onToggleGroup, onTogglePermission, onTogglePermissionGroup, selectedKeys, selectedScopes],
   );
   const table = useReactTable({
     data: rows,
@@ -265,17 +265,11 @@ function PermissionGroupNameCell({
 function PermissionGroupScopeCell({
   group,
   scopeOptions,
-  selectedKeys,
-  selectedScopes,
-  onToggle,
   onScopeChange,
 }: {
   group: ScopedPermissionGroupItem;
   scopeOptions: string[];
-  selectedKeys: string[];
-  selectedScopes: Record<string, string>;
-  onToggle: (key: string) => void;
-  onScopeChange: (permissionKey: string, scopeKey: string) => void;
+  onScopeChange: (group: ScopedPermissionGroupItem, scopeKey: string) => void;
 }) {
   if (scopeOptions.length === 0) {
     return <span aria-label="权限组无 scope">-</span>;
@@ -285,7 +279,7 @@ function PermissionGroupScopeCell({
     <SelectInput
       value=""
       onClick={(event) => event.stopPropagation()}
-      onChange={(event) => applyGroupScope(group, event.currentTarget.value, selectedKeys, selectedScopes, onToggle, onScopeChange)}
+      onChange={(event) => onScopeChange(group, event.currentTarget.value)}
       aria-label={`${group.key} 权限组 scope`}
     >
       <option value="">批量 scope</option>
@@ -301,13 +295,11 @@ function PermissionGroupScopeCell({
 function PermissionGroupSelectionCell({
   group,
   selectionState,
-  selectedKeys,
-  onToggle,
+  onToggleGroup,
 }: {
   group: ScopedPermissionGroupItem;
   selectionState: GroupSelectionState;
-  selectedKeys: string[];
-  onToggle: (key: string) => void;
+  onToggleGroup: (group: ScopedPermissionGroupItem, shouldSelect: boolean) => void;
 }) {
   const checkboxRef = useRef<HTMLInputElement>(null);
 
@@ -323,7 +315,7 @@ function PermissionGroupSelectionCell({
       type="checkbox"
       checked={selectionState === "checked"}
       onClick={(event) => event.stopPropagation()}
-      onChange={() => toggleGroupSelection(group, selectionState !== "checked", selectedKeys, onToggle)}
+      onChange={() => onToggleGroup(group, selectionState !== "checked")}
       aria-label={`选择权限组 ${group.key}`}
     />
   );
@@ -458,7 +450,7 @@ function buildGroupRows(
     },
   ];
 
-  if (!isExpanded && !isGroupExiting && !isAncestorExiting) {
+  if (!isExpanded && !isGroupExiting) {
     return rows;
   }
 
@@ -518,20 +510,6 @@ function groupSelectionState(group: ScopedPermissionGroupItem, selectedKeys: str
   return selectedCount === selectionKeys.length ? "checked" : "indeterminate";
 }
 
-function toggleGroupSelection(
-  group: ScopedPermissionGroupItem,
-  shouldSelect: boolean,
-  selectedKeys: string[],
-  onToggle: (key: string) => void,
-): void {
-  for (const key of collectGroupSelectionKeys(group)) {
-    const isSelected = selectedKeys.includes(key);
-    if ((shouldSelect && !isSelected) || (!shouldSelect && isSelected)) {
-      onToggle(key);
-    }
-  }
-}
-
 function collectGroupSelectionKeys(group: ScopedPermissionGroupItem): string[] {
   return collectScopedGroupPermissions(group).flatMap((permission) => permissionSelectionKeys(permission));
 }
@@ -550,40 +528,6 @@ function groupScopeOptions(group: ScopedPermissionGroupItem): string[] {
       collectScopedGroupPermissions(group).flatMap((permission) => (permission.scopes ?? []).map((scope) => scope.key)),
     ),
   );
-}
-
-function applyGroupScope(
-  group: ScopedPermissionGroupItem,
-  scopeKey: string,
-  selectedKeys: string[],
-  selectedScopes: Record<string, string>,
-  onToggle: (key: string) => void,
-  onScopeChange: (permissionKey: string, scopeKey: string) => void,
-): void {
-  if (!scopeKey) {
-    return;
-  }
-
-  for (const permission of collectScopedGroupPermissions(group)) {
-    const scopes = permission.scopes ?? [];
-    if (!scopes.some((scope) => scope.key === scopeKey)) {
-      continue;
-    }
-    if (scopes.length > 1) {
-      for (const scope of scopes) {
-        const selectionKey = directGrantSelectionKey(permission.key, scope.key);
-        const shouldSelect = scope.key === scopeKey;
-        const isSelected = selectedKeys.includes(selectionKey);
-        if ((shouldSelect && !isSelected) || (!shouldSelect && isSelected)) {
-          onToggle(selectionKey);
-        }
-      }
-      continue;
-    }
-    if (selectedScopes[permission.key] !== scopeKey) {
-      onScopeChange(permission.key, scopeKey);
-    }
-  }
 }
 
 function joinClassNames(...classNames: Array<string | false | null | undefined>): string {

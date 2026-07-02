@@ -15,7 +15,9 @@ interface RequestTargetPickerProps {
   catalogErrorMessage: string;
   onAppKeyChange: (appKey: string) => void;
   onTogglePermission: (key: string) => void;
+  onTogglePermissionGroup: (group: ScopedPermissionGroupItem, shouldSelect: boolean) => void;
   onPermissionScopeChange: (permissionKey: string, scopeKey: string) => void;
+  onPermissionGroupScopeChange: (group: ScopedPermissionGroupItem, scopeKey: string) => void;
   onToggleGroup: (key: string) => void;
 }
 
@@ -31,7 +33,9 @@ export function RequestTargetPicker({
   catalogErrorMessage,
   onAppKeyChange,
   onTogglePermission,
+  onTogglePermissionGroup,
   onPermissionScopeChange,
+  onPermissionGroupScopeChange,
   onToggleGroup,
 }: RequestTargetPickerProps) {
   return (
@@ -60,7 +64,9 @@ export function RequestTargetPicker({
           loading={catalogIsLoading}
           errorMessage={catalogErrorMessage}
           onTogglePermission={onTogglePermission}
+          onTogglePermissionGroup={onTogglePermissionGroup}
           onPermissionScopeChange={onPermissionScopeChange}
+          onPermissionGroupScopeChange={onPermissionGroupScopeChange}
           onToggleGroup={onToggleGroup}
         />
       </Field>

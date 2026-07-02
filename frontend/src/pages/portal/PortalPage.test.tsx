@@ -444,6 +444,67 @@ describe("PortalPage access request form", () => {
     }
   });
 
+  test("收拢父权限组时不临时渲染未展开子组的权限", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/request-catalog") {
+        return jsonResponse({
+          apps: [{ id: 1, app_key: "crm", name: "CRM" }],
+          approver_options: [],
+          authorization_groups: [],
+          permission_groups: [
+            {
+              id: 1,
+              app_key: "crm",
+              type: "group",
+              key: "orders",
+              name: "订单",
+              permissions: [{ id: 101, app_key: "crm", key: "orders.read", name: "查看订单", scopes: [{ key: "SELF", name: "本人" }] }],
+              children: [
+                {
+                  id: 2,
+                  app_key: "crm",
+                  type: "group",
+                  key: "orders.refund",
+                  name: "退款",
+                  permissions: [
+                    { id: 102, app_key: "crm", key: "orders.refund.approve", name: "审批退款", scopes: [{ key: "SELF", name: "本人" }] },
+                  ],
+                },
+              ],
+            },
+          ],
+          ungrouped_permissions: [],
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage();
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "CRM (crm)" });
+      await user.selectOptions(screen.getByLabelText("应用"), "crm");
+      const permissionTable = await screen.findByRole("table", { name: "权限选择" });
+
+      await user.click(within(permissionTable).getByRole("button", { name: "展开 订单" }));
+      expect(within(permissionTable).getByText("查看订单")).toBeVisible();
+      expect(within(permissionTable).getByText("退款")).toBeVisible();
+      expect(within(permissionTable).queryByText("审批退款")).not.toBeInTheDocument();
+
+      await user.click(within(permissionTable).getByRole("button", { name: "收起 订单" }));
+
+      expect(within(permissionTable).getByText("查看订单")).toBeVisible();
+      expect(within(permissionTable).getByText("退款")).toBeVisible();
+      expect(within(permissionTable).queryByText("审批退款")).not.toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   test("审批人列表只展示姓名和部门但仍支持按用户 ID 搜索", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);

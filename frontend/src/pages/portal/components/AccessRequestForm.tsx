@@ -27,7 +27,9 @@ export function AccessRequestForm() {
             catalogErrorMessage={form.catalogErrorMessage}
             onAppKeyChange={form.changeAppKey}
             onTogglePermission={form.togglePermission}
+            onTogglePermissionGroup={form.togglePermissionGroup}
             onPermissionScopeChange={form.changePermissionScope}
+            onPermissionGroupScopeChange={form.changePermissionGroupScope}
             onToggleGroup={form.toggleGroup}
           />
         </div>
