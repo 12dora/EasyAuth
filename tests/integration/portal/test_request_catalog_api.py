@@ -89,7 +89,9 @@ def test_portal_request_catalog_lists_only_requestable_authorization_groups() ->
             "key": requestable_group.key,
             "kind": requestable_group.kind,
             "name": requestable_group.name,
+            "name_en": "",
             "description": requestable_group.description,
+            "description_en": "",
             "requestable": True,
             "requires_approval": True,
             "default_approver_user_ids": [],
@@ -284,7 +286,9 @@ def test_portal_request_catalog_returns_authorization_groups_and_catalog_version
             "key": active_group.key,
             "kind": active_group.kind,
             "name": active_group.name,
+            "name_en": "",
             "description": active_group.description,
+            "description_en": "",
             "requestable": True,
             "requires_approval": True,
             "default_approver_user_ids": [],
@@ -299,7 +303,13 @@ def test_portal_request_catalog_includes_direct_grant_scope_options() -> None:
     # Given: active direct Permission 支持多个 scope。
     client, _user = logged_in_client("portal-catalog-direct-grant-scope-user")
     crm = App.objects.create(app_key="catalog-direct-scope-crm", name="CRM")
-    _ = AppScope.objects.create(app=crm, key="SELF", name="本人")
+    _ = AppScope.objects.create(
+        app=crm,
+        key="SELF",
+        name="本人",
+        name_en="Self",
+        description_en="Only the requester",
+    )
     _ = AppScope.objects.create(app=crm, key="TEAM", name="团队")
     _ = AppScope.objects.create(app=crm, key="DISABLED", name="停用", is_active=False)
     permission = Permission.objects.create(
@@ -323,8 +333,14 @@ def test_portal_request_catalog_includes_direct_grant_scope_options() -> None:
     assert response.status_code == HTTPStatus.OK
     assert direct_grants[0]["key"] == permission.key
     assert direct_grants[0]["scopes"] == [
-        {"key": "SELF", "name": "本人", "description": ""},
-        {"key": "TEAM", "name": "团队", "description": ""},
+        {
+            "key": "SELF",
+            "name": "本人",
+            "name_en": "Self",
+            "description": "",
+            "description_en": "Only the requester",
+        },
+        {"key": "TEAM", "name": "团队", "name_en": "", "description": "", "description_en": ""},
     ]
 
 

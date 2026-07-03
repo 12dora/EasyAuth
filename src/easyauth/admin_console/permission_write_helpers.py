@@ -126,8 +126,12 @@ def _apply_permission_text_fields(
 ) -> None:
     if payload.name is not None:
         permission.name = payload.name
+    if payload.name_en is not None:
+        permission.name_en = payload.name_en
     if payload.description is not None:
         permission.description = payload.description
+    if payload.description_en is not None:
+        permission.description_en = payload.description_en
 
 
 def _apply_permission_state_fields(

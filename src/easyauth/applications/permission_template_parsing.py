@@ -37,7 +37,9 @@ class _ScopePayload(BaseModel):
 
     key: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=128)
+    name_en: str = Field(default="", max_length=128)
     description: str = ""
+    description_en: str = ""
     is_active: bool = True
     display_order: int = 0
 
@@ -47,7 +49,9 @@ class _PermissionGroupPayload(BaseModel):
 
     key: str = Field(min_length=1, max_length=128)
     name: str = Field(min_length=1, max_length=128)
+    name_en: str = Field(default="", max_length=128)
     description: str = ""
+    description_en: str = ""
     parent_key: str = ""
     display_order: int = 0
     is_active: bool = True
@@ -58,7 +62,9 @@ class _PermissionPayload(BaseModel):
 
     key: str = Field(min_length=1, max_length=128)
     name: str = Field(min_length=1, max_length=128)
+    name_en: str = Field(default="", max_length=128)
     description: str = ""
+    description_en: str = ""
     group_key: str = Field(min_length=1, max_length=128)
     supported_scopes: tuple[str, ...] = Field(min_length=1)
     risk_level: str = "standard"
@@ -79,7 +85,9 @@ class _AuthorizationGroupPayload(BaseModel):
     key: str = Field(min_length=1, max_length=64)
     kind: Literal["role", "bundle"]
     name: str = Field(min_length=1, max_length=128)
+    name_en: str = Field(default="", max_length=128)
     description: str = ""
+    description_en: str = ""
     requestable: bool = True
     is_active: bool = True
     grants: tuple[_GrantPayload, ...] = ()
@@ -288,7 +296,9 @@ def _manifest_input(
             AppManifestScopeInput(
                 key=scope.key,
                 name=scope.name,
+                name_en=scope.name_en,
                 description=scope.description,
+                description_en=scope.description_en,
                 is_active=scope.is_active,
                 display_order=scope.display_order,
             )
@@ -298,7 +308,9 @@ def _manifest_input(
             AppManifestPermissionGroupInput(
                 key=group.key,
                 name=group.name,
+                name_en=group.name_en,
                 description=group.description,
+                description_en=group.description_en,
                 parent_key=group.parent_key,
                 display_order=group.display_order,
                 is_active=group.is_active,
@@ -309,7 +321,9 @@ def _manifest_input(
             AppManifestPermissionInput(
                 key=permission.key,
                 name=permission.name,
+                name_en=permission.name_en,
                 description=permission.description,
+                description_en=permission.description_en,
                 group_key=permission.group_key,
                 supported_scopes=permission.supported_scopes,
                 risk_level=permission.risk_level,
@@ -322,7 +336,9 @@ def _manifest_input(
                 key=authorization_group.key,
                 kind=authorization_group.kind,
                 name=authorization_group.name,
+                name_en=authorization_group.name_en,
                 description=authorization_group.description,
+                description_en=authorization_group.description_en,
                 requestable=authorization_group.requestable,
                 is_active=authorization_group.is_active,
                 grants=tuple(

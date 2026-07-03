@@ -134,8 +134,12 @@ def _apply_group_text_fields(
 ) -> None:
     if payload.name is not None:
         group.name = payload.name
+    if payload.name_en is not None:
+        group.name_en = payload.name_en
     if payload.description is not None:
         group.description = payload.description
+    if payload.description_en is not None:
+        group.description_en = payload.description_en
 
 
 def _apply_parent_update(

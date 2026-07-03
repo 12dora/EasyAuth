@@ -87,7 +87,9 @@ class AuthorizationGroupPayload(BaseModel):
     key: str = Field(min_length=1, max_length=64)
     kind: str = Field(min_length=1, max_length=32)
     name: str = Field(min_length=1, max_length=128)
+    name_en: str = Field(default="", max_length=128)
     description: str = ""
+    description_en: str = ""
     requestable: bool = True
     is_active: bool = True
     grants: tuple[AuthorizationGroupGrantPayload, ...] = ()
@@ -156,7 +158,9 @@ def _save_authorization_group_create(
             key=payload.key,
             kind=payload.kind,
             name=payload.name,
+            name_en=payload.name_en,
             description=payload.description,
+            description_en=payload.description_en,
             requestable=payload.requestable,
             is_active=payload.is_active,
         )
@@ -318,7 +322,9 @@ def _apply_authorization_group_update(
     group.key = payload.key
     group.kind = payload.kind
     group.name = payload.name
+    group.name_en = payload.name_en
     group.description = payload.description
+    group.description_en = payload.description_en
     group.requestable = payload.requestable
     group.is_active = payload.is_active
     return None

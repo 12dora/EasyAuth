@@ -150,7 +150,13 @@ class AppScope(models.Model):
     )
     key: models.CharField[str, str] = models.CharField(max_length=64)
     name: models.CharField[str, str] = models.CharField(max_length=128)
+    name_en: models.CharField[str, str] = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+    )
     description: models.TextField[str, str] = models.TextField(blank=True)
+    description_en: models.TextField[str, str] = models.TextField(blank=True, default="")
     is_active: models.BooleanField[bool, bool] = models.BooleanField(default=True)
     display_order: models.IntegerField[int, int] = models.IntegerField(default=0)
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
@@ -244,7 +250,13 @@ class Permission(models.Model):
     )
     key: models.CharField[str, str] = models.CharField(max_length=128)
     name: models.CharField[str, str] = models.CharField(max_length=128)
+    name_en: models.CharField[str, str] = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+    )
     description: models.TextField[str, str] = models.TextField(blank=True)
+    description_en: models.TextField[str, str] = models.TextField(blank=True, default="")
     is_active: models.BooleanField[bool, bool] = models.BooleanField(default=True)
     supported_scopes: models.JSONField[JsonValue, JsonValue] = models.JSONField(
         blank=True,
@@ -313,7 +325,13 @@ class AuthorizationGroup(models.Model):
     key: models.CharField[str, str] = models.CharField(max_length=64)
     kind: models.CharField[str, str] = models.CharField(max_length=32)
     name: models.CharField[str, str] = models.CharField(max_length=128)
+    name_en: models.CharField[str, str] = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+    )
     description: models.TextField[str, str] = models.TextField(blank=True)
+    description_en: models.TextField[str, str] = models.TextField(blank=True, default="")
     requestable: models.BooleanField[bool, bool] = models.BooleanField(default=True)
     is_active: models.BooleanField[bool, bool] = models.BooleanField(default=True)
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(

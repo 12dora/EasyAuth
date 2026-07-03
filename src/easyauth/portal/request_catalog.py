@@ -164,7 +164,9 @@ def _catalog_authorization_group_item(
         "key": group.key,
         "kind": group.kind,
         "name": group.name,
+        "name_en": group.name_en,
         "description": group.description,
+        "description_en": group.description_en,
         "requestable": group.requestable,
         "requires_approval": True,
         "default_approver_user_ids": _json_strings(approver_resolution.user_ids),
@@ -236,7 +238,9 @@ def _catalog_group_item(
         "type": "group",
         "key": group.key,
         "name": group.name,
+        "name_en": group.name_en,
         "description": group.description,
+        "description_en": group.description_en,
         "depth": group.depth,
         "children": children,
         "permissions": permission_items,
@@ -258,7 +262,9 @@ def _catalog_permission_item(
         "type": "permission",
         "key": permission.key,
         "name": permission.name,
+        "name_en": permission.name_en,
         "description": permission.description,
+        "description_en": permission.description_en,
         "group_key": "" if group is None else group.key,
         "scopes": scope_items,
         "default_approver_user_ids": _json_strings(approver_resolution.user_ids),
@@ -279,7 +285,13 @@ def _scope_options_by_app_id(app_ids: tuple[int, ...]) -> dict[int, list[dict[st
     )
     for scope in scopes:
         options_by_app_id.setdefault(scope.app_id, []).append(
-            {"key": scope.key, "name": scope.name, "description": scope.description},
+            {
+                "key": scope.key,
+                "name": scope.name,
+                "name_en": scope.name_en,
+                "description": scope.description,
+                "description_en": scope.description_en,
+            },
         )
     return options_by_app_id
 

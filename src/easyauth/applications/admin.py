@@ -198,8 +198,17 @@ class RoleAdmin(CatalogVersionAdminMixin, RoleAdminBase):
 @admin.register(AppScope)
 @final
 class AppScopeAdmin(CatalogVersionAdminMixin, AppScopeAdminBase):
-    list_display = ("app", "key", "name", "is_active", "display_order", "created_at", "updated_at")
-    search_fields = ("app__app_key", "key", "name")
+    list_display = (
+        "app",
+        "key",
+        "name",
+        "name_en",
+        "is_active",
+        "display_order",
+        "created_at",
+        "updated_at",
+    )
+    search_fields = ("app__app_key", "key", "name", "name_en")
     list_filter = ("app", "is_active")
     readonly_fields = ("created_at", "updated_at")
 
@@ -211,12 +220,13 @@ class PermissionAdmin(CatalogVersionAdminMixin, PermissionAdminBase):
         "app",
         "key",
         "name",
+        "name_en",
         "risk_level",
         "is_active",
         "created_at",
         "updated_at",
     )
-    search_fields = ("app__app_key", "key", "name")
+    search_fields = ("app__app_key", "key", "name", "name_en")
     list_filter = ("app", "risk_level", "is_active")
     readonly_fields = ("created_at", "updated_at")
 
@@ -229,12 +239,13 @@ class AuthorizationGroupAdmin(CatalogVersionAdminMixin, AuthorizationGroupAdminB
         "key",
         "kind",
         "name",
+        "name_en",
         "requestable",
         "is_active",
         "created_at",
         "updated_at",
     )
-    search_fields = ("app__app_key", "key", "name")
+    search_fields = ("app__app_key", "key", "name", "name_en")
     list_filter = ("app", "kind", "requestable", "is_active")
     readonly_fields = ("created_at", "updated_at")
 

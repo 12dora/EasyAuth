@@ -415,6 +415,66 @@ def test_ops1_manifest_export_api_returns_replayable_current_state_without_secre
     assert "token" not in body.lower()
 
 
+def test_ops1_manifest_import_export_roundtrips_bilingual_fields() -> None:
+    # Given: owner 导入一个携带双语字段的 manifest。
+    client = _logged_in_client("ops1-manifest-api-bilingual-owner")
+    app = _member_app("ops1-manifest-api-bilingual", "ops1-manifest-api-bilingual-owner", "owner")
+    manifest = _manifest_payload(app.app_key)
+    manifest["scopes"] = [
+        {
+            "key": "SELF",
+            "name": "本人",
+            "name_en": "Self",
+            "description": "",
+            "description_en": "Only the requester",
+            "display_order": 10,
+        },
+    ]
+    preview = client.post(
+        f"/console/api/v1/apps/{app.app_key}/permission-template-imports/preview",
+        data=dumps({"template_format": "json", "template": dumps(manifest)}),
+        content_type="application/json",
+    )
+    assert preview.status_code == HTTPStatus.OK, preview.content.decode()
+    preview_id = _required_str(_json_object(preview), "preview_id")
+    confirm = client.post(
+        f"/console/api/v1/apps/{app.app_key}/permission-template-imports/{preview_id}/confirm",
+    )
+    assert confirm.status_code == HTTPStatus.OK, confirm.content.decode()
+
+    # When: owner 导出 manifest 并回放导入 preview。
+    response = client.get(f"/console/api/v1/apps/{app.app_key}/manifest")
+    exported = _json_object(response)
+    replay = client.post(
+        f"/console/api/v1/apps/{app.app_key}/permission-template-imports/preview",
+        data=dumps({"template_format": "json", "template": dumps(exported)}),
+        content_type="application/json",
+    )
+
+    # Then: 双语字段仅在非空时输出, 且导出内容可无差异回放。
+    assert response.status_code == HTTPStatus.OK
+    assert exported["scopes"] == [
+        {
+            "key": "SELF",
+            "name": "本人",
+            "name_en": "Self",
+            "description": "",
+            "description_en": "Only the requester",
+            "is_active": True,
+            "display_order": 10,
+        },
+    ]
+    permission_groups = exported["permission_groups"]
+    assert isinstance(permission_groups, list)
+    first_group = permission_groups[0]
+    assert isinstance(first_group, dict)
+    assert "name_en" not in first_group
+    assert "description_en" not in first_group
+    replay_summary = _json_object(replay)["summary"]
+    assert isinstance(replay_summary, dict)
+    assert replay_summary["action_count"] == 0
+
+
 def test_ops1_integration_guide_api_returns_credential_summary_without_secrets() -> None:
     client = _logged_in_client("ops1-guide-api-owner")
     app = _member_app("ops1-guide-api", "ops1-guide-api-owner", "owner")

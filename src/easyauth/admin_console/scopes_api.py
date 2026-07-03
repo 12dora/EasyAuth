@@ -34,7 +34,9 @@ class ScopeCreatePayload(BaseModel):
 
     key: str = Field(min_length=1, max_length=64)
     name: str = Field(min_length=1, max_length=128)
+    name_en: str = Field(default="", max_length=128)
     description: str = ""
+    description_en: str = ""
     display_order: int = 0
     is_active: bool = True
 
@@ -42,7 +44,9 @@ class ScopeCreatePayload(BaseModel):
 class ScopeUpdatePayload(ResourceIdPayload):
     key: str | None = Field(default=None, min_length=1, max_length=64)
     name: str | None = Field(default=None, min_length=1, max_length=128)
+    name_en: str | None = Field(default=None, max_length=128)
     description: str | None = None
+    description_en: str | None = None
     display_order: int | None = None
     is_active: bool | None = None
 
@@ -52,7 +56,9 @@ class ScopeKeyUpdatePayload(BaseModel):
 
     key: str | None = Field(default=None, min_length=1, max_length=64)
     name: str | None = Field(default=None, min_length=1, max_length=128)
+    name_en: str | None = Field(default=None, max_length=128)
     description: str | None = None
+    description_en: str | None = None
     display_order: int | None = None
     is_active: bool | None = None
 
@@ -90,7 +96,9 @@ def _create_scope(request: HttpRequest, app_key: str) -> JsonResponse:
         app=app,
         key=payload.key,
         name=payload.name,
+        name_en=payload.name_en,
         description=payload.description,
+        description_en=payload.description_en,
         display_order=payload.display_order,
         is_active=payload.is_active,
     )
@@ -145,8 +153,12 @@ def _apply_scope_update(
 def _apply_scope_fields(scope: AppScope, payload: ScopeUpdatePayload) -> None:
     if payload.name is not None:
         scope.name = payload.name
+    if payload.name_en is not None:
+        scope.name_en = payload.name_en
     if payload.description is not None:
         scope.description = payload.description
+    if payload.description_en is not None:
+        scope.description_en = payload.description_en
     if payload.display_order is not None:
         scope.display_order = payload.display_order
     if payload.is_active is not None:
@@ -169,7 +181,9 @@ def _scope_update_payload(
                 id=scope.id,
                 key=payload.key,
                 name=payload.name,
+                name_en=payload.name_en,
                 description=payload.description,
+                description_en=payload.description_en,
                 display_order=payload.display_order,
                 is_active=payload.is_active,
             )

@@ -135,6 +135,10 @@ def export_manifest(app: App) -> dict[str, Any]:
                 "key": scope.key,
                 "name": scope.name,
                 "description": scope.description,
+                **_bilingual_export_fields(
+                    name_en=scope.name_en,
+                    description_en=scope.description_en,
+                ),
                 "is_active": scope.is_active,
                 "display_order": scope.display_order,
             }
@@ -145,6 +149,10 @@ def export_manifest(app: App) -> dict[str, Any]:
                 "key": group.key,
                 "name": group.name,
                 "description": group.description,
+                **_bilingual_export_fields(
+                    name_en=group.name_en,
+                    description_en=group.description_en,
+                ),
                 "parent_key": group.parent.key if group.parent_id else "",
                 "display_order": group.display_order,
                 "is_active": group.is_active,
@@ -158,6 +166,10 @@ def export_manifest(app: App) -> dict[str, Any]:
                 "key": permission.key,
                 "name": permission.name,
                 "description": permission.description,
+                **_bilingual_export_fields(
+                    name_en=permission.name_en,
+                    description_en=permission.description_en,
+                ),
                 "group_key": permission.group.key if permission.group_id else "",
                 "supported_scopes": permission.supported_scopes,
                 "risk_level": permission.risk_level,
@@ -194,7 +206,9 @@ def _scope_actions(app: App, manifest: AppManifestInput) -> list[TemplateAction]
             actions.append(TemplateAction("create_scope", key))
         elif (
             current.name != scope.name
+            or current.name_en != scope.name_en
             or current.description != scope.description
+            or current.description_en != scope.description_en
             or current.is_active != scope.is_active
             or current.display_order != scope.display_order
         ):
@@ -217,7 +231,9 @@ def _permission_group_actions(app: App, manifest: AppManifestInput) -> list[Temp
             actions.append(TemplateAction("create_permission_group", key, group.parent_key))
         elif (
             current.name != group.name
+            or current.name_en != group.name_en
             or current.description != group.description
+            or current.description_en != group.description_en
             or _group_parent_key(current) != group.parent_key
             or current.display_order != group.display_order
             or current.is_active != group.is_active
@@ -241,7 +257,9 @@ def _permission_actions(app: App, manifest: AppManifestInput) -> list[TemplateAc
             actions.append(TemplateAction("create_permission", key, permission.group_key))
         elif (
             current.name != permission.name
+            or current.name_en != permission.name_en
             or current.description != permission.description
+            or current.description_en != permission.description_en
             or _permission_group_key(current) != permission.group_key
             or current.supported_scopes != list(permission.supported_scopes)
             or current.risk_level != permission.risk_level
@@ -270,7 +288,9 @@ def _authorization_group_actions(app: App, manifest: AppManifestInput) -> list[T
         elif (
             current.kind != group.kind
             or current.name != group.name
+            or current.name_en != group.name_en
             or current.description != group.description
+            or current.description_en != group.description_en
             or current.requestable != group.requestable
             or current.is_active != group.is_active
             or _grant_set(current) != _incoming_grant_set(group)
@@ -319,7 +339,9 @@ def _upsert_scopes(app: App, manifest: AppManifestInput) -> dict[str, AppScope]:
     for key, spec in incoming.items():
         scope = scope_by_key.get(key) or AppScope(app=app, key=key)
         scope.name = spec.name
+        scope.name_en = spec.name_en
         scope.description = spec.description
+        scope.description_en = spec.description_en
         scope.is_active = spec.is_active
         scope.display_order = spec.display_order
         scope.full_clean()
@@ -345,7 +367,9 @@ def _upsert_permission_groups(
         if group is None:
             group = PermissionGroup(app=app, key=spec.key, depth=1)
         group.name = spec.name
+        group.name_en = spec.name_en
         group.description = spec.description
+        group.description_en = spec.description_en
         group.display_order = spec.display_order
         group.is_active = spec.is_active
         group.parent = None
@@ -383,7 +407,9 @@ def _upsert_permissions(
     for key, spec in incoming.items():
         permission = permission_by_key.get(key) or Permission(app=app, key=key)
         permission.name = spec.name
+        permission.name_en = spec.name_en
         permission.description = spec.description
+        permission.description_en = spec.description_en
         permission.group = group_by_key.get(spec.group_key)
         permission.supported_scopes = list(spec.supported_scopes)
         permission.risk_level = spec.risk_level
@@ -415,7 +441,9 @@ def _upsert_authorization_groups(
         group = group_by_key.get(key) or AuthorizationGroup(app=app, key=key)
         group.kind = spec.kind
         group.name = spec.name
+        group.name_en = spec.name_en
         group.description = spec.description
+        group.description_en = spec.description_en
         group.requestable = spec.requestable
         group.is_active = spec.is_active
         group.full_clean()
@@ -562,12 +590,23 @@ def _latest_manifest_schema_version(app: App) -> int:
     return latest.version if latest is not None else 1
 
 
+def _bilingual_export_fields(*, name_en: str, description_en: str) -> dict[str, str]:
+    # 导出的 manifest 只在双语字段非空时输出对应键, 保持导出干净且可直接回放导入。
+    fields: dict[str, str] = {}
+    if name_en:
+        fields["name_en"] = name_en
+    if description_en:
+        fields["description_en"] = description_en
+    return fields
+
+
 def _export_authorization_group(group: AuthorizationGroup) -> dict[str, Any]:
     return {
         "key": group.key,
         "kind": group.kind,
         "name": group.name,
         "description": group.description,
+        **_bilingual_export_fields(name_en=group.name_en, description_en=group.description_en),
         "requestable": group.requestable,
         "is_active": group.is_active,
         "grants": [

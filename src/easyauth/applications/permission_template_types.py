@@ -24,7 +24,9 @@ class AppManifestAppInput:
 class AppManifestScopeInput:
     key: str
     name: str
+    name_en: str = ""
     description: str = ""
+    description_en: str = ""
     is_active: bool = True
     display_order: int = 0
 
@@ -33,7 +35,9 @@ class AppManifestScopeInput:
 class AppManifestPermissionGroupInput:
     key: str
     name: str
+    name_en: str = ""
     description: str = ""
+    description_en: str = ""
     parent_key: str = ""
     display_order: int = 0
     is_active: bool = True
@@ -43,7 +47,9 @@ class AppManifestPermissionGroupInput:
 class AppManifestPermissionInput:
     key: str
     name: str
+    name_en: str = ""
     description: str = ""
+    description_en: str = ""
     group_key: str = ""
     supported_scopes: tuple[str, ...] = ()
     risk_level: str = "standard"
@@ -62,7 +68,9 @@ class AppManifestAuthorizationGroupInput:
     key: str
     kind: AuthorizationGroupKind
     name: str
+    name_en: str = ""
     description: str = ""
+    description_en: str = ""
     requestable: bool = True
     is_active: bool = True
     grants: tuple[AppManifestGrantInput, ...] = ()

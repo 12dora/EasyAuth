@@ -303,6 +303,110 @@ def test_ops1_owner_writes_authorization_group_grant_managed_scope_policy() -> N
     ).exists() is False
 
 
+def test_ops1_catalog_writes_persist_bilingual_display_fields() -> None:
+    # Given: owner 管理一个 App。
+    client = _logged_in_user("ops1-catalog-bilingual-owner")
+    app = _member_app("ops1-catalog-bilingual", "ops1-catalog-bilingual-owner", role="owner")
+
+    # When: owner 创建 scope/permission group/permission/authorization group 时携带双语字段。
+    scope_created = client.post(
+        _api_url(app.app_key, "scopes"),
+        data=dumps(
+            {
+                "key": "GLOBAL",
+                "name": "全局",
+                "name_en": "Global",
+                "description_en": "All users",
+            },
+        ),
+        content_type="application/json",
+    )
+    group_created = client.post(
+        _api_url(app.app_key, "permission-groups"),
+        data=dumps({"key": "billing", "name": "账务", "name_en": "Billing"}),
+        content_type="application/json",
+    )
+    assert group_created.status_code == HTTPStatus.CREATED
+    group = PermissionGroup.objects.get(app=app, key="billing")
+    permission_created = client.post(
+        _api_url(app.app_key, "permissions"),
+        data=dumps(
+            {
+                "key": "billing.read",
+                "name": "查看账务",
+                "name_en": "Read billing",
+                "group_id": group.id,
+                "supported_scopes": ["GLOBAL"],
+            },
+        ),
+        content_type="application/json",
+    )
+    authz_created = client.post(
+        _api_url(app.app_key, "authorization-groups"),
+        data=dumps(
+            {
+                "key": "accountant",
+                "kind": "role",
+                "name": "会计",
+                "name_en": "Accountant",
+                "description_en": "Accountant role",
+                "grants": [{"permission": "billing.read", "scope": "GLOBAL"}],
+            },
+        ),
+        content_type="application/json",
+    )
+
+    # Then: 双语字段落库并出现在响应 payload 中。
+    scope = AppScope.objects.get(app=app, key="GLOBAL")
+    permission = Permission.objects.get(app=app, key="billing.read")
+    authz_group = AuthorizationGroup.objects.get(app=app, key="accountant")
+    assert scope_created.status_code == HTTPStatus.CREATED
+    assert permission_created.status_code == HTTPStatus.CREATED
+    assert authz_created.status_code == HTTPStatus.CREATED
+    assert (scope.name_en, scope.description_en) == ("Global", "All users")
+    assert group.name_en == "Billing"
+    assert permission.name_en == "Read billing"
+    assert (authz_group.name_en, authz_group.description_en) == ("Accountant", "Accountant role")
+    assert '"name_en": "Global"' in scope_created.content.decode()
+    assert '"name_en": "Accountant"' in authz_created.content.decode()
+
+    # When: owner 通过 PATCH 更新双语字段(含 key route)。
+    scope_updated = client.patch(
+        f"{_api_url(app.app_key, 'scopes')}/GLOBAL",
+        data=dumps({"description_en": "All tenant users"}),
+        content_type="application/json",
+    )
+    permission_updated = client.patch(
+        _api_url(app.app_key, "permissions"),
+        data=dumps(
+            {
+                "id": permission.id,
+                "name_en": "Read billing records",
+                "description_en": "Read-only billing access",
+            },
+        ),
+        content_type="application/json",
+    )
+
+    # Then: PATCH 只覆盖显式提交的双语字段。
+    scope.refresh_from_db()
+    permission.refresh_from_db()
+    assert scope_updated.status_code == HTTPStatus.OK
+    assert permission_updated.status_code == HTTPStatus.OK
+    assert (scope.name_en, scope.description_en) == ("Global", "All tenant users")
+    assert (permission.name_en, permission.description_en) == (
+        "Read billing records",
+        "Read-only billing access",
+    )
+    assert '"name_en": "Read billing records"' in permission_updated.content.decode()
+
+    # Then: 目录读取接口返回双语字段。
+    listed = client.get(_api_url(app.app_key, "scopes"))
+    assert listed.status_code == HTTPStatus.OK
+    assert '"name_en": "Global"' in listed.content.decode()
+    assert '"description_en": "All tenant users"' in listed.content.decode()
+
+
 def test_ops1_permission_patch_rejects_deprecated_permission_reactivation() -> None:
     # Given: 模板导入已废弃一个 Permission。
     client = _logged_in_user("ops1-catalog-permission-deprecated")

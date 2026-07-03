@@ -147,7 +147,13 @@ class PermissionGroup(models.Model):
     )
     key: models.CharField[str, str] = models.CharField(max_length=128)
     name: models.CharField[str, str] = models.CharField(max_length=128)
+    name_en: models.CharField[str, str] = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+    )
     description: models.TextField[str, str] = models.TextField(blank=True)
+    description_en: models.TextField[str, str] = models.TextField(blank=True, default="")
     parent: models.ForeignKey[PermissionGroup | None, PermissionGroup | None] = models.ForeignKey(
         "self",
         on_delete=models.CASCADE,
