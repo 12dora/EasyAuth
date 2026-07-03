@@ -1,4 +1,6 @@
 @import "tailwindcss";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
 @import "./layout-shell.css";
 @import "./responsive.css";
 @import "./features/permission-selector.css";
@@ -14,28 +16,23 @@
   --ink-soft: 71 85 105;
   --ink-faint: 148 163 184;
 
-  --hairline: 226 232 240 / 1;
-  --hairline-strong: 203 213 225 / 1;
-  --hairline-soft: 241 245 249 / 1;
+  --hairline: 226 232 240;
+  --hairline-strong: 203 213 225;
+  --hairline-soft: 241 245 249;
 
-  --amber: 37 99 235;
-  --amber-soft: 219 234 254;
+  /* 品牌交互色：导航、焦点、选中态 */
+  --accent: 37 99 235;
+  /* 警示琥珀：待处理、需关注 */
+  --amber: 217 119 6;
   --signal: 220 38 38;
   --bond: 79 70 229;
   --evergreen: 5 150 105;
 
-  --status-draft: 148 163 184;
-  --status-pending: 217 119 6;
-  --status-active: 5 150 105;
-  --status-stop: 220 38 38;
-  --status-archive: 71 85 105;
-
   --ease-out-paper: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-press: cubic-bezier(0.4, 0, 0.2, 1);
 
-  --font-sans: "Geist", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
-  --font-mono: "Geist Mono", "SFMono-Regular", Consolas, "Liberation Mono", ui-monospace, monospace;
-  --font-display: var(--font-sans);
+  --font-sans: "Geist Variable", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+  --font-mono: "Geist Mono Variable", "SFMono-Regular", Consolas, "Liberation Mono", ui-monospace, monospace;
 }
 
 @theme inline {
@@ -45,16 +42,25 @@
   --color-ink: rgb(var(--ink));
   --color-ink-soft: rgb(var(--ink-soft));
   --color-ink-faint: rgb(var(--ink-faint));
-  --color-amber-ink: rgb(var(--amber));
+  --color-accent: rgb(var(--accent));
+  --color-amber: rgb(var(--amber));
   --color-signal: rgb(var(--signal));
   --color-bond: rgb(var(--bond));
   --color-evergreen: rgb(var(--evergreen));
   --color-background: rgb(var(--paper));
   --color-foreground: rgb(var(--ink));
 
+  --text-micro: 10.5px;
+  --text-label: 11px;
+  --text-caption: 12px;
+  --text-body: 13px;
+  --text-title: 26px;
+
+  --tracking-caps: 0.08em;
+  --tracking-caps-wide: 0.14em;
+
   --font-sans: var(--font-sans);
   --font-mono: var(--font-mono);
-  --font-display: var(--font-display);
 }
 
 * {
@@ -115,12 +121,12 @@ table,
 }
 
 ::selection {
-  background: rgb(var(--amber) / 0.2);
+  background: rgb(var(--accent) / 0.2);
   color: rgb(var(--ink));
 }
 
 :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
-  outline: 2px solid rgb(var(--amber) / 0.5);
+  outline: 2px solid rgb(var(--accent) / 0.5);
   outline-offset: 2px;
 }
 
@@ -143,31 +149,11 @@ table,
   background: rgb(var(--ink) / 0.28);
 }
 
-.scrollbar-hide {
-  -ms-overflow-style: none;
-  scrollbar-width: none;
-}
-
-.scrollbar-hide::-webkit-scrollbar {
-  display: none;
-}
-
 .paper-card {
   background: rgb(var(--paper));
   border: 1px solid rgb(var(--hairline));
-  border-radius: 0.5rem;
+  border-radius: 3px;
   box-shadow: 0 1px 2px rgb(0 0 0 / 0.04);
-}
-
-@keyframes fadeUp {
-  from {
-    opacity: 0;
-    transform: translateY(8px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
 }
 
 @keyframes shimmer {
@@ -177,25 +163,6 @@ table,
   100% {
     background-position: 200% 0;
   }
-}
-
-@keyframes treeRowIn {
-  from {
-    opacity: 0;
-    transform: translateY(-4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.animate-fade-up {
-  animation: fadeUp 0.4s var(--ease-out-paper) both;
-}
-
-.animate-tree-row-in {
-  animation: treeRowIn 0.18s var(--ease-out-paper) both;
 }
 
 .animate-shimmer {
@@ -216,8 +183,6 @@ table,
     scroll-behavior: auto !important;
   }
 
-  .animate-fade-up,
-  .animate-tree-row-in,
   .animate-shimmer {
     animation: none;
   }

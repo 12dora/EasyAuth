@@ -52,7 +52,7 @@ export function Dialog({ title, children, footer, onClose, size = "md", eyebrow 
             </div>
             <button
               type="button"
-              className="-mr-1 inline-flex size-8 items-center justify-center rounded-[2px] border border-transparent bg-transparent text-ink-soft transition-colors hover:bg-ink/5 hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-ink/50"
+              className="-mr-1 inline-flex size-8 items-center justify-center rounded-[2px] border border-transparent bg-transparent text-ink-soft transition-colors hover:bg-ink/5 hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent/50"
               onClick={onClose}
               aria-label="关闭弹窗"
             >

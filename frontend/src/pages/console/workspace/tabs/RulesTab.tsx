@@ -8,7 +8,8 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { Fragment, useState } from "react";
-import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../../components/ui/TablePrimitives";
+import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../../../components/ui/TablePrimitives";
+import { EmptyState } from "../../../../components/ui/EmptyState";
 import { TableActionCell, TableRowActionButton } from "../../../../components/ui/TableActions";
 import { TablePagination } from "../../../../components/ui/TablePagination";
 
@@ -77,7 +78,7 @@ export function RulesTab({ appKey }: { appKey: string }) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey }),
   });
   const ruleColumns: ColumnDef<EditableApprovalRule>[] = [
-    { header: "对象", cell: ({ row }) => `${row.original.target_type ?? "-"}:${row.original.target_key ?? "-"}` },
+    { header: "对象", cell: ({ row }) => `${targetTypeLabel(row.original.target_type)}：${row.original.target_key ?? "-"}` },
     { header: "审批人", cell: ({ row }) => safeJoin(row.original.approver_userids) },
     {
       header: "状态",
@@ -143,6 +144,7 @@ export function RulesTab({ appKey }: { appKey: string }) {
           新建
         </Button>
       </div>
+      {rulesQuery.error ? <StatusBanner tone="signal" title="审批规则加载失败" message={(rulesQuery.error as Error).message} /> : null}
       {saveMutation.error ? <StatusBanner tone="signal" title="审批规则保存失败" message={(saveMutation.error as Error).message} /> : null}
       {toggleMutation.error ? <StatusBanner tone="signal" title="审批规则状态更新失败" message={(toggleMutation.error as Error).message} /> : null}
       <TableFrame>
@@ -159,7 +161,9 @@ export function RulesTab({ appKey }: { appKey: string }) {
             ))}
           </TableHead>
           <TableBody>
-            {ruleTable.getRowModel().rows.length > 0 ? (
+            {rulesQuery.isLoading ? (
+              <TableSkeletonRows columns={ruleTable.getAllLeafColumns().length} />
+            ) : ruleTable.getRowModel().rows.length > 0 ? (
               ruleTable.getRowModel().rows.map((row) => (
                 <TableRow key={row.id}>
                   {row.getVisibleCells().map((cell) => (
@@ -173,8 +177,8 @@ export function RulesTab({ appKey }: { appKey: string }) {
               ))
             ) : (
               <TableEmptyRow colSpan={ruleTable.getAllLeafColumns().length}>
-                  {rulesQuery.isLoading ? "加载中" : "暂无审批规则"}
-                </TableEmptyRow>
+                <EmptyState title="暂无审批规则" description="新建规则后，对应权限申请将走指定审批人。" />
+              </TableEmptyRow>
             )}
           </TableBody>
         </TableRoot>
@@ -208,8 +212,8 @@ export function RulesTab({ appKey }: { appKey: string }) {
                   setForm((current) => ({ ...current, target_type: targetType }));
                 }}
               >
-                <option value="authorization_group">authorization_group</option>
-                <option value="permission">permission</option>
+                <option value="authorization_group">授权组（authorization_group）</option>
+                <option value="permission">权限（permission）</option>
               </SelectInput>
             </Field>
             <Field label="目标 Key">
@@ -244,6 +248,16 @@ function splitUserids(value: string): string[] {
     .split(",")
     .map((item) => item.trim())
     .filter(Boolean);
+}
+
+function targetTypeLabel(value: string | undefined): string {
+  if (value === "permission") {
+    return "权限";
+  }
+  if (value === "authorization_group") {
+    return "授权组";
+  }
+  return value ?? "-";
 }
 
 function normalizeTargetType(value: string | undefined): RuleTargetType {

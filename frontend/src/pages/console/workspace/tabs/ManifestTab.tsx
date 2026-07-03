@@ -2,7 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { flexRender, getCoreRowModel, getPaginationRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
 import { Download, Eye, FileUp, UploadCloud } from "lucide-react";
 import { useRef, useState } from "react";
-import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../../components/ui/TablePrimitives";
+import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../../../components/ui/TablePrimitives";
+import { EmptyState } from "../../../../components/ui/EmptyState";
 import { PanelSurface } from "../../../../components/ui/PanelSurface";
 import { TablePagination } from "../../../../components/ui/TablePagination";
 
@@ -11,7 +12,6 @@ import { Button } from "../../../../components/Button";
 import { CodeBlock } from "../../../../components/CodeBlock";
 import { Field, TextArea } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
-import { Toast } from "../../../../components/Toast";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
 
 type ManifestDiffItem = {
@@ -140,11 +140,14 @@ export function ManifestTab({ appKey }: { appKey: string }) {
           确认导入
         </Button>
       </div>
+      {versionsQuery.error ? <StatusBanner tone="signal" title="版本历史加载失败" message={(versionsQuery.error as Error).message} /> : null}
       {previewMutation.error ? <StatusBanner tone="signal" title="Manifest 预览失败" message={(previewMutation.error as Error).message} /> : null}
       {importMutation.error ? <StatusBanner tone="signal" title="Manifest 导入失败" message={(importMutation.error as Error).message} /> : null}
-      {catalogVersion ? <Toast tone="evergreen" message={`当前目录版本：${catalogVersion}`} /> : null}
+      {catalogVersion ? <StatusBanner tone="evergreen" title="导入成功" message={`当前目录版本：${catalogVersion}`} /> : null}
       {preview ? <ManifestDiffView preview={preview} /> : null}
-      <TableFrame>
+      <div className="space-y-3">
+        <h2 className="text-base font-semibold text-ink">版本历史</h2>
+        <TableFrame>
         <TableRoot>
           <TableHead>
             {versionsTable.getHeaderGroups().map((headerGroup) => (
@@ -156,7 +159,9 @@ export function ManifestTab({ appKey }: { appKey: string }) {
             ))}
           </TableHead>
           <TableBody>
-            {versionsTable.getRowModel().rows.length > 0 ? (
+            {versionsQuery.isLoading ? (
+              <TableSkeletonRows columns={versionColumns.length} />
+            ) : versionsTable.getRowModel().rows.length > 0 ? (
               versionsTable.getRowModel().rows.map((row) => (
                 <TableRow key={row.id}>
                   {row.getVisibleCells().map((cell) => (
@@ -166,13 +171,14 @@ export function ManifestTab({ appKey }: { appKey: string }) {
               ))
             ) : (
               <TableEmptyRow colSpan={versionColumns.length}>
-                  {versionsQuery.isLoading ? "加载中" : "暂无版本历史"}
-                </TableEmptyRow>
+                <EmptyState title="暂无版本历史" description="确认导入清单后会在这里记录版本。" />
+              </TableEmptyRow>
             )}
           </TableBody>
         </TableRoot>
-        <TablePagination table={versionsTable} />
-      </TableFrame>
+          <TablePagination table={versionsTable} />
+        </TableFrame>
+      </div>
     </section>
   );
 }

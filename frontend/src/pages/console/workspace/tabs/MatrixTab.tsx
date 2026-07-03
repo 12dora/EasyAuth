@@ -8,7 +8,8 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Plus } from "lucide-react";
 import { Fragment, useEffect, useMemo, useState } from "react";
-import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../../components/ui/TablePrimitives";
+import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../../../components/ui/TablePrimitives";
+import { EmptyState } from "../../../../components/ui/EmptyState";
 import { PanelSurface } from "../../../../components/ui/PanelSurface";
 import { TableActionCell, TableRowActionButton } from "../../../../components/ui/TableActions";
 import { TablePagination } from "../../../../components/ui/TablePagination";
@@ -121,9 +122,9 @@ export function MatrixTab({ appKey }: { appKey: string }) {
     });
   };
   const authorizationGroupColumns: ColumnDef<AuthorizationGroupItem>[] = [
-    { header: "授权组 key", cell: ({ row }) => <code>{row.original.key}</code> },
+    { header: "授权组 Key", cell: ({ row }) => <code>{row.original.key}</code> },
     { header: "名称", accessorKey: "name" },
-    { header: "类型", accessorKey: "kind" },
+    { header: "类型", cell: ({ row }) => (row.original.kind === "role" ? "角色" : row.original.kind === "bundle" ? "权限包" : row.original.kind) },
     {
       header: "状态",
       cell: ({ row }) => (
@@ -156,7 +157,7 @@ export function MatrixTab({ appKey }: { appKey: string }) {
     getPaginationRowModel: getPaginationRowModel(),
   });
   const grantColumns: ColumnDef<AuthorizationGroupGrantItem>[] = [
-    { header: "Grant", cell: ({ row }) => `${row.original.permission} / ${row.original.scope}` },
+    { header: "授权项", cell: ({ row }) => `${row.original.permission} / ${row.original.scope}` },
     {
       header: "管理范围计算方式",
       cell: ({ row }) => {
@@ -232,6 +233,9 @@ export function MatrixTab({ appKey }: { appKey: string }) {
           新建
         </Button>
       </div>
+      {groupsQuery.error ? <StatusBanner tone="signal" title="授权组加载失败" message={(groupsQuery.error as Error).message} /> : null}
+      {permissionsQuery.error ? <StatusBanner tone="signal" title="权限加载失败" message={(permissionsQuery.error as Error).message} /> : null}
+      {scopesQuery.error ? <StatusBanner tone="signal" title="权限范围加载失败" message={(scopesQuery.error as Error).message} /> : null}
       {saveMutation.error ? <StatusBanner tone="signal" title="授权组保存失败" message={(saveMutation.error as Error).message} /> : null}
       <TableFrame>
         <TableRoot>
@@ -247,7 +251,9 @@ export function MatrixTab({ appKey }: { appKey: string }) {
             ))}
           </TableHead>
           <TableBody>
-            {authorizationGroupTable.getRowModel().rows.length > 0 ? (
+            {groupsQuery.isLoading ? (
+              <TableSkeletonRows columns={authorizationGroupTable.getAllLeafColumns().length} />
+            ) : authorizationGroupTable.getRowModel().rows.length > 0 ? (
               authorizationGroupTable.getRowModel().rows.map((row) => (
                 <TableRow key={row.id}>
                   {row.getVisibleCells().map((cell) => (
@@ -261,8 +267,8 @@ export function MatrixTab({ appKey }: { appKey: string }) {
               ))
             ) : (
               <TableEmptyRow colSpan={authorizationGroupTable.getAllLeafColumns().length}>
-                  {groupsQuery.isLoading ? "加载中" : "暂无授权组"}
-                </TableEmptyRow>
+                <EmptyState title="暂无授权组" description="新建授权组后可为其配置权限授权。" />
+              </TableEmptyRow>
             )}
           </TableBody>
         </TableRoot>
@@ -298,16 +304,16 @@ export function MatrixTab({ appKey }: { appKey: string }) {
               </Field>
               <Field label="授权组类型">
                 <SelectInput value={form.kind} onChange={(event) => setForm((current) => ({ ...current, kind: event.currentTarget.value }))}>
-                  <option value="role">role</option>
-                  <option value="bundle">bundle</option>
+                  <option value="role">角色（role）</option>
+                  <option value="bundle">权限包（bundle）</option>
                 </SelectInput>
               </Field>
               <Field label="状态">
                 <div className="flex flex-wrap gap-3">
-                  <Button type="button" variant={form.requestable ? "ghost-danger" : "ghost"} onClick={() => setForm((current) => ({ ...current, requestable: !current.requestable }))}>
+                  <Button type="button" variant="ghost" onClick={() => setForm((current) => ({ ...current, requestable: !current.requestable }))}>
                     {form.requestable ? "设为不可申请" : "设为可申请"}
                   </Button>
-                  <Button type="button" variant={form.is_active ? "ghost-danger" : "ghost"} onClick={() => setForm((current) => ({ ...current, is_active: !current.is_active }))}>
+                  <Button type="button" variant="ghost" onClick={() => setForm((current) => ({ ...current, is_active: !current.is_active }))}>
                     {form.is_active ? "停用" : "启用"}
                   </Button>
                 </div>
@@ -318,14 +324,14 @@ export function MatrixTab({ appKey }: { appKey: string }) {
             </Field>
           </PanelSurface>
           <PanelSurface padding="lg" className="grid items-end gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-            <Field label="Grant Permission">
+            <Field label="授权权限">
               <SelectInput value={grantPermission} onChange={(event) => setGrantPermission(event.currentTarget.value)}>
                 {permissions.map((permission) => (
                   <option key={permission.key} value={permission.key}>{permission.key}</option>
                 ))}
               </SelectInput>
             </Field>
-            <Field label="Grant Scope">
+            <Field label="授权范围">
               <SelectInput value={grantScope} onChange={(event) => setGrantScope(event.currentTarget.value)}>
                 {scopeOptions.map((scope) => (
                   <option key={scope.key} value={scope.key}>{scope.key}</option>
@@ -333,7 +339,7 @@ export function MatrixTab({ appKey }: { appKey: string }) {
               </SelectInput>
             </Field>
             <Button type="button" icon={<Plus size={16} />} onClick={addGrant} disabled={!grantPermission || !grantScope}>
-              添加 Grant
+              添加授权项
             </Button>
           </PanelSurface>
           <TableFrame>
@@ -364,15 +370,15 @@ export function MatrixTab({ appKey }: { appKey: string }) {
                   ))
                 ) : (
                   <TableEmptyRow colSpan={grantTable.getAllLeafColumns().length}>
-                      暂无 Grant
-                    </TableEmptyRow>
+                    暂无授权项，请先在上方添加
+                  </TableEmptyRow>
                 )}
               </TableBody>
             </TableRoot>
             <TablePagination table={grantTable} />
           </TableFrame>
           <PanelSurface className="flex flex-wrap items-center justify-between gap-3 bg-paper-deep">
-            <span className="min-w-0 text-sm text-ink-soft">展开后 grants 预览：{form.grants.map((grant) => `${grant.permission} / ${grant.scope}`).join("，") || "-"}</span>
+            <span className="min-w-0 text-sm text-ink-soft">展开后授权项预览：{form.grants.map((grant) => `${grant.permission} / ${grant.scope}`).join("，") || "-"}</span>
           </PanelSurface>
         </form>
         </Dialog>

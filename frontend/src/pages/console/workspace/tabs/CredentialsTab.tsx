@@ -9,7 +9,8 @@ import {
 import { Fragment } from "react";
 import { Plus } from "lucide-react";
 import { useState } from "react";
-import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../../components/ui/TablePrimitives";
+import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../../../components/ui/TablePrimitives";
+import { EmptyState } from "../../../../components/ui/EmptyState";
 import { TableActionCell, TableRowActionButton } from "../../../../components/ui/TableActions";
 import { TablePagination } from "../../../../components/ui/TablePagination";
 
@@ -85,6 +86,9 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
           新建
         </Button>
       </div>
+      {credentialsQuery.error ? (
+        <StatusBanner tone="signal" title="凭据加载失败" message={(credentialsQuery.error as Error).message} />
+      ) : null}
       {operationError ? (
         <StatusBanner tone="signal" title="凭据操作失败" message={(operationError as Error).message} />
       ) : null}
@@ -102,7 +106,9 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
             ))}
           </TableHead>
           <TableBody>
-            {credentialTable.getRowModel().rows.length > 0 ? (
+            {credentialsQuery.isLoading ? (
+              <TableSkeletonRows columns={credentialColumns.length} />
+            ) : credentialTable.getRowModel().rows.length > 0 ? (
               credentialTable.getRowModel().rows.map((row) => (
                 <TableRow key={row.id}>
                   {row.getVisibleCells().map((cell) => (
@@ -116,8 +122,8 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
               ))
             ) : (
               <TableEmptyRow colSpan={credentialColumns.length}>
-                  {credentialsQuery.isLoading ? "加载中" : "暂无凭据"}
-                </TableEmptyRow>
+                <EmptyState title="暂无凭据" description="新建凭据后，应用即可调用权限查询接口。" />
+              </TableEmptyRow>
             )}
           </TableBody>
         </TableRoot>

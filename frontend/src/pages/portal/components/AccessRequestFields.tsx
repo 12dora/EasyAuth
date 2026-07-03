@@ -88,7 +88,7 @@ function ApproverMultiSelect({
           {visibleOptions.length > 0 ? (
             <div className="flex flex-col gap-1.5">
               {visibleOptions.map((option) => (
-                <label key={option.user_id} className="inline-flex items-center gap-2 rounded-[2px] px-2 py-1.5 text-[13px] text-ink-soft hover:bg-ink/5">
+                <label key={option.user_id} className="inline-flex items-center gap-2 rounded-[2px] px-2 py-1.5 text-body text-ink-soft hover:bg-ink/5">
                   <input
                     type="checkbox"
                     checked={selectedUserIds.includes(option.user_id)}
@@ -102,7 +102,7 @@ function ApproverMultiSelect({
               ))}
             </div>
           ) : (
-            <span className="block px-2 py-1.5 text-[13px] text-ink-faint">
+            <span className="block px-2 py-1.5 text-body text-ink-faint">
               {normalizedSearch ? "没有匹配的审批人" : "输入姓名、用户 ID、邮箱或部门搜索审批人"}
             </span>
           )}

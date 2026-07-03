@@ -13,7 +13,6 @@ import { Dialog } from "./Dialog";
 import { Field, SelectInput, TextArea, TextInput } from "./Field";
 import { SecretDialog } from "./SecretDialog";
 import { StatusBanner } from "./StatusBanner";
-import { Toast } from "./Toast";
 import { EmptyState } from "./ui/EmptyState";
 import { PageState } from "./ui/PageState";
 import { PanelSurface } from "./ui/PanelSurface";
@@ -76,8 +75,8 @@ describe("Badge", () => {
 
     const badge = screen.getByText("启用");
     expect(badge).not.toHaveClass("badge");
-    expect(badge).toHaveClass("rounded-[2px]", "px-1.5", "py-0.5", "font-mono", "text-[10.5px]", "uppercase", "tracking-[0.14em]");
-    expect(badge).toHaveClass("bg-[rgb(var(--evergreen))]/[0.08]", "text-[rgb(var(--evergreen))]");
+    expect(badge).toHaveClass("rounded-[2px]", "px-1.5", "py-0.5", "font-mono", "text-micro", "uppercase", "tracking-caps-wide");
+    expect(badge).toHaveClass("bg-evergreen/8", "text-evergreen");
   });
 });
 
@@ -119,18 +118,6 @@ describe("Dialog", () => {
   });
 });
 
-describe("Toast", () => {
-  test("使用 evergreen 和 signal tone", () => {
-    const { rerender } = render(<Toast message="保存成功" />);
-
-    expect(screen.getByRole("status")).toHaveClass("rounded-[2px]", "border-[rgb(var(--evergreen))]/30", "text-[rgb(var(--evergreen))]");
-
-    rerender(<Toast tone="signal" message="保存失败" />);
-    expect(screen.getByRole("status")).toHaveClass("border-[rgb(var(--signal))]/30", "text-[rgb(var(--signal))]");
-    expect(screen.getByRole("status")).not.toHaveClass("toast");
-  });
-});
-
 describe("Field", () => {
   test("统一 label、hint、error 与表单控件 class", () => {
     render(
@@ -141,8 +128,8 @@ describe("Field", () => {
 
     const input = screen.getByLabelText("应用名称");
     expect(input).not.toHaveClass("control");
-    expect(screen.getByText("应用名称")).toHaveClass("text-[11px]", "uppercase", "tracking-[0.14em]", "text-ink-soft", "font-medium");
-    expect(input).toHaveClass("h-9", "rounded-[2px]", "border-ink/15", "bg-paper-soft", "text-[13px]", "focus:border-[rgb(var(--amber))]");
+    expect(screen.getByText("应用名称")).toHaveClass("text-label", "uppercase", "tracking-caps-wide", "text-ink-soft", "font-medium");
+    expect(input).toHaveClass("h-9", "rounded-[2px]", "border-ink/15", "bg-paper-soft", "text-body", "focus:border-accent");
     expect(input).not.toHaveClass("shadow-sm", "focus:ring-2");
     expect(screen.getByText("展示给用户")).toHaveClass("text-ink-faint");
     expect(screen.getByText("必填")).toHaveClass("text-signal");
@@ -168,7 +155,7 @@ describe("StatusBanner", () => {
     render(<StatusBanner tone="amber" title="需关注" message="配置未完成" />);
 
     const banner = screen.getByText("需关注").closest("div")?.parentElement;
-    expect(banner).toHaveClass("border-[rgb(var(--amber))]/30", "bg-[rgb(var(--amber))]/[0.08]");
+    expect(banner).toHaveClass("border-amber/30", "bg-amber/8");
     expect(banner).not.toHaveClass("status-banner");
   });
 });
@@ -184,7 +171,7 @@ describe("CodeBlock", () => {
     render(<CodeBlock language="json" code={'{"ok":true}'} />);
 
     const codeBlock = screen.getByText("json").parentElement?.parentElement;
-    expect(codeBlock).toHaveClass("rounded-[3px]", "border-[rgb(var(--hairline-strong))]", "bg-ink", "text-paper");
+    expect(codeBlock).toHaveClass("rounded-[3px]", "border-ink/15", "bg-ink", "text-paper");
     expect(codeBlock).not.toHaveClass("code-block");
     await userEvent.click(screen.getByRole("button", { name: "复制" }));
     expect(writeText).toHaveBeenCalledWith('{"ok":true}');
@@ -199,8 +186,8 @@ describe("SecretDialog", () => {
 
     expect(screen.getByText(/明文凭据仅本次展示/)).toHaveClass(
       "rounded-[3px]",
-      "border-[rgb(var(--amber))]/30",
-      "bg-[rgb(var(--amber))]/[0.08]",
+      "border-amber/30",
+      "bg-amber/8",
     );
     expect(screen.getByText(/明文凭据仅本次展示/)).not.toHaveClass("secret-warning");
     expect(screen.getByRole("dialog", { name: "凭据已创建" })).toBeInTheDocument();
@@ -244,7 +231,7 @@ describe("UI primitives", () => {
     const frame = screen.getByTestId("table-frame");
     expect(frame).toHaveClass("paper-card", "overflow-hidden", "rounded-[3px]", "p-0");
     expect(frame.firstElementChild).toHaveClass("overflow-x-auto");
-    expect(container.querySelector("table")).toHaveClass("min-w-full", "border-separate", "border-spacing-0", "text-[13px]");
+    expect(container.querySelector("table")).toHaveClass("min-w-full", "border-separate", "border-spacing-0", "text-body");
     expect(container.querySelector("thead")).toHaveClass("bg-paper-deep/60");
     expect(screen.getByRole("columnheader", { name: "名称" })).toHaveClass(
       "border-b",
@@ -254,9 +241,9 @@ describe("UI primitives", () => {
       "text-left",
       "align-bottom",
       "font-mono",
-      "text-[10.5px]",
+      "text-micro",
       "uppercase",
-      "tracking-[0.14em]",
+      "tracking-caps-wide",
       "text-ink-soft",
       "font-medium",
     );
@@ -265,11 +252,11 @@ describe("UI primitives", () => {
       "border-ink/8",
       "px-3",
       "py-2.5",
-      "text-[13px]",
+      "text-body",
       "text-ink",
       "align-middle",
     );
-    expect(container.querySelector("tr")).toHaveClass("hover:bg-[rgb(var(--amber))]/[0.05]");
+    expect(container.querySelector("tr")).toHaveClass("hover:bg-accent/5");
     expect(container.querySelector(".animate-shimmer")).toHaveClass("bg-paper-deep");
   });
 

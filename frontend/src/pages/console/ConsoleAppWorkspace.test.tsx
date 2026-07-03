@@ -72,8 +72,8 @@ describe("ConsoleAppWorkspace", () => {
     renderWorkspace("/console/apps/demo?tab=catalog");
 
     await screen.findByRole("heading", { name: "权限分组" });
-    expect(screen.getByRole("heading", { name: "Scopes" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Permissions" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "权限范围" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "权限" })).toBeInTheDocument();
     expect(screen.getAllByRole("button", { name: "新建" })).toHaveLength(3);
     await screen.findByText("SELF");
     expect(screen.getByText("团队")).toBeInTheDocument();
@@ -108,7 +108,7 @@ describe("ConsoleAppWorkspace", () => {
     renderWorkspace("/console/apps/demo");
 
     expect(await screen.findByTestId("location")).toHaveTextContent("/console/apps/demo");
-    await user.click(screen.getByRole("button", { name: "审批规则" }));
+    await user.click(screen.getByRole("tab", { name: "审批规则" }));
 
     expect(await screen.findByRole("heading", { name: "审批规则" })).toBeVisible();
     expect(screen.getByTestId("location")).toHaveTextContent("/console/apps/demo?tab=rules");
@@ -144,7 +144,7 @@ describe("ConsoleAppWorkspace", () => {
 
     renderWorkspace("/console/apps/demo");
 
-    await user.click(await screen.findByRole("button", { name: "管理范围" }));
+    await user.click(await screen.findByRole("tab", { name: "管理范围" }));
 
     expect(await screen.findByRole("heading", { name: "管理范围" })).toBeInTheDocument();
     expect(screen.getAllByText("未配置").length).toBeGreaterThan(0);
@@ -273,14 +273,14 @@ describe("ConsoleAppWorkspace", () => {
 
     await screen.findByRole("heading", { name: "授权组管理" });
     await screen.findByText("会计只读");
-    expect(screen.getAllByText("role").length).toBeGreaterThan(0);
+    expect(screen.getAllByText("角色").length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole("button", { name: "编辑" }));
     const dialog = await screen.findByRole("dialog", { name: "编辑授权组" });
     expect(within(dialog).getByText("invoice.read / SELF")).toBeInTheDocument();
-    await user.selectOptions(within(dialog).getByLabelText("Grant Permission"), "invoice.export");
-    await user.selectOptions(within(dialog).getByLabelText("Grant Scope"), "TEAM");
-    await user.click(within(dialog).getByRole("button", { name: "添加 Grant" }));
+    await user.selectOptions(within(dialog).getByLabelText("授权权限"), "invoice.export");
+    await user.selectOptions(within(dialog).getByLabelText("授权范围"), "TEAM");
+    await user.click(within(dialog).getByRole("button", { name: "添加授权项" }));
     await user.click(within(dialog).getByRole("button", { name: "保存" }));
 
     await waitFor(() => {
@@ -498,8 +498,8 @@ describe("ConsoleAppWorkspace", () => {
     await user.type(screen.getByLabelText("Bearer token"), "secret-bearer-token");
     await user.click(screen.getByRole("button", { name: "执行联调" }));
 
-    expect(await screen.findByText("来源：live")).toBeInTheDocument();
-    expect(screen.getByText("快照版本：snap-20260701")).toBeInTheDocument();
+    expect(await screen.findByText("live")).toBeInTheDocument();
+    expect(screen.getAllByText("snap-20260701").length).toBeGreaterThan(0);
     expect(screen.getByRole("columnheader", { name: "授权组" })).toBeInTheDocument();
     expect(screen.getAllByText("finance").length).toBeGreaterThan(0);
     expect(screen.getByRole("columnheader", { name: "授权项" })).toBeInTheDocument();
@@ -551,8 +551,8 @@ describe("ConsoleAppWorkspace", () => {
 
     renderWithClient(<RulesTab appKey="demo" />);
 
-    expect(await screen.findByText("authorization_group:finance")).toBeInTheDocument();
-    expect(screen.getByText("permission:invoice.approve")).toBeInTheDocument();
+    expect(await screen.findByText("授权组：finance")).toBeInTheDocument();
+    expect(screen.getByText("权限：invoice.approve")).toBeInTheDocument();
     expect(screen.getByText("阻塞")).toBeInTheDocument();
 
     expect(screen.getByRole("heading", { name: "审批规则" })).toBeInTheDocument();
@@ -562,9 +562,9 @@ describe("ConsoleAppWorkspace", () => {
     await user.type(within(dialog).getByLabelText("目标 Key"), "invoice.pay");
     await user.type(within(dialog).getByLabelText("审批人 user_id"), "owner");
     await user.click(within(dialog).getByRole("button", { name: "保存" }));
-    expect(await screen.findByText("permission:invoice.pay")).toBeInTheDocument();
+    expect(await screen.findByText("权限：invoice.pay")).toBeInTheDocument();
 
-    const blockedRow = screen.getByText("permission:invoice.approve").closest("tr");
+    const blockedRow = screen.getByText("权限：invoice.approve").closest("tr");
     expect(blockedRow).not.toBeNull();
     await user.click(within(blockedRow as HTMLTableRowElement).getByRole("button", { name: "编辑" }));
     dialog = await screen.findByRole("dialog", { name: "编辑审批规则" });
@@ -573,9 +573,9 @@ describe("ConsoleAppWorkspace", () => {
     await user.clear(within(dialog).getByLabelText("审批人 user_id"));
     await user.type(within(dialog).getByLabelText("审批人 user_id"), "security,owner");
     await user.click(within(dialog).getByRole("button", { name: "保存" }));
-    expect(await screen.findByText("permission:invoice.approve.high")).toBeInTheDocument();
+    expect(await screen.findByText("权限：invoice.approve.high")).toBeInTheDocument();
 
-    const editedRow = screen.getByText("permission:invoice.approve.high").closest("tr");
+    const editedRow = screen.getByText("权限：invoice.approve.high").closest("tr");
     expect(editedRow).not.toBeNull();
     await user.click(within(editedRow as HTMLTableRowElement).getByRole("button", { name: "启用" }));
     await waitFor(() => {

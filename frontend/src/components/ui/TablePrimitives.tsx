@@ -1,6 +1,14 @@
 import type { ComponentPropsWithoutRef } from "react";
 
+import { cn } from "../../lib/cn";
 import { getTableColumnCount } from "./TableState";
+import {
+  TABLE_CELL_CLASS,
+  TABLE_HEAD_CLASS,
+  TABLE_HEADER_CELL_CLASS,
+  TABLE_ROOT_CLASS,
+  TABLE_ROW_CLASS,
+} from "./tableStyles";
 
 type DivProps = ComponentPropsWithoutRef<"div">;
 type TableProps = ComponentPropsWithoutRef<"table">;
@@ -12,7 +20,7 @@ type CellProps = ComponentPropsWithoutRef<"td">;
 
 export function TableFrame({ className, children, ...props }: DivProps) {
   return (
-    <div className={joinClassNames("paper-card overflow-hidden rounded-[3px] p-0", className)} {...props}>
+    <div className={cn("paper-card overflow-hidden rounded-[3px] p-0", className)} {...props}>
       <div className="overflow-x-auto">{children}</div>
     </div>
   );
@@ -20,7 +28,7 @@ export function TableFrame({ className, children, ...props }: DivProps) {
 
 export function TableRoot({ className, children, ...props }: TableProps) {
   return (
-    <table className={joinClassNames("min-w-full border-separate border-spacing-0 text-[13px]", className)} {...props}>
+    <table className={cn(TABLE_ROOT_CLASS, className)} {...props}>
       {children}
     </table>
   );
@@ -28,7 +36,7 @@ export function TableRoot({ className, children, ...props }: TableProps) {
 
 export function TableHead({ className, children, ...props }: SectionProps) {
   return (
-    <thead className={joinClassNames("bg-paper-deep/60", className)} {...props}>
+    <thead className={cn(TABLE_HEAD_CLASS, className)} {...props}>
       {children}
     </thead>
   );
@@ -40,7 +48,7 @@ export function TableBody({ className, children, ...props }: BodyProps) {
 
 export function TableRow({ className, children, ...props }: RowProps) {
   return (
-    <tr className={joinClassNames("group transition-colors hover:bg-[rgb(var(--amber))]/[0.05]", className)} {...props}>
+    <tr className={cn(TABLE_ROW_CLASS, className)} {...props}>
       {children}
     </tr>
   );
@@ -48,13 +56,7 @@ export function TableRow({ className, children, ...props }: RowProps) {
 
 export function TableHeaderCell({ className, children, ...props }: HeaderCellProps) {
   return (
-    <th
-      className={joinClassNames(
-        "border-b border-ink/15 px-3 py-2.5 text-left align-bottom font-mono text-[10.5px] uppercase tracking-[0.14em] text-ink-soft font-medium",
-        className,
-      )}
-      {...props}
-    >
+    <th className={cn(TABLE_HEADER_CELL_CLASS, className)} {...props}>
       {children}
     </th>
   );
@@ -62,7 +64,7 @@ export function TableHeaderCell({ className, children, ...props }: HeaderCellPro
 
 export function TableCell({ className, children, ...props }: CellProps) {
   return (
-    <td className={joinClassNames("border-b border-ink/8 px-3 py-2.5 text-[13px] text-ink align-middle", className)} {...props}>
+    <td className={cn(TABLE_CELL_CLASS, className)} {...props}>
       {children}
     </td>
   );
@@ -79,7 +81,7 @@ export function TableEmptyRow({
 }) {
   return (
     <TableRow className="hover:bg-transparent">
-      <TableCell colSpan={getTableColumnCount(colSpan)} className={joinClassNames("py-10 text-center text-ink-soft", className)}>
+      <TableCell colSpan={getTableColumnCount(colSpan)} className={cn("py-10 text-center text-ink-soft", className)}>
         {children}
       </TableCell>
     </TableRow>
@@ -107,8 +109,4 @@ export function TableSkeletonRows({
       ))}
     </>
   );
-}
-
-function joinClassNames(...classNames: Array<string | false | null | undefined>): string {
-  return classNames.filter(Boolean).join(" ");
 }

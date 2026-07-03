@@ -1,6 +1,8 @@
 import { cloneElement, isValidElement, useId } from "react";
 import type { InputHTMLAttributes, ReactElement, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
 
+import { cn } from "../lib/cn";
+
 interface FieldProps {
   label: string;
   hint?: string;
@@ -9,11 +11,7 @@ interface FieldProps {
 }
 
 const INPUT_CLASSES =
-  "w-full rounded-[2px] border border-ink/15 bg-paper-soft px-2.5 text-[13px] text-ink transition-colors placeholder:text-ink-faint focus:border-[rgb(var(--amber))] focus:outline-none disabled:cursor-not-allowed disabled:opacity-50";
-
-function cn(...classes: Array<string | false | null | undefined>) {
-  return classes.filter(Boolean).join(" ");
-}
+  "w-full rounded-[2px] border border-ink/15 bg-paper-soft px-2.5 text-body text-ink transition-colors placeholder:text-ink-faint focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-50";
 
 export function Field({ label, hint, error, children }: FieldProps) {
   const generatedId = useId();
@@ -30,7 +28,7 @@ export function Field({ label, hint, error, children }: FieldProps) {
 
   return (
     <div className="flex flex-col gap-2">
-      <label className="text-[11px] uppercase tracking-[0.14em] text-ink-soft font-medium" htmlFor={inputId}>
+      <label className="text-label uppercase tracking-caps-wide text-ink-soft font-medium" htmlFor={inputId}>
         {label}
       </label>
       {inputElement}

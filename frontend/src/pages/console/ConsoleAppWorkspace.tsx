@@ -1,13 +1,15 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { useParams, useSearchParams } from "react-router-dom";
 
 import { Button } from "../../components/Button";
+import { ButtonLink } from "../../components/ButtonLink";
 import { Field, SelectInput } from "../../components/Field";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
 import { PanelSurface } from "../../components/ui/PanelSurface";
 import { apiRequest } from "../../lib/api";
+import { cn } from "../../lib/cn";
 import type { JsonObject } from "../../lib/api";
 import type { AppListPayload, AppManagedScopePolicyPayload, EffectiveManagedScopePolicyItem } from "../../lib/domain";
 import { CatalogTab } from "./workspace/tabs/CatalogTab";
@@ -32,10 +34,6 @@ const TABS: Array<{ key: WorkspaceTab; label: string }> = [
   { key: "test", label: "联调" },
   { key: "guide", label: "接入说明" },
 ];
-
-function cn(...classes: Array<string | false | null | undefined>) {
-  return classes.filter(Boolean).join(" ");
-}
 
 export function ConsoleAppWorkspace() {
   const { appKey = "" } = useParams();
@@ -104,12 +102,7 @@ export function ConsoleAppWorkspace() {
         description={app?.description || "应用授权配置、接入凭据和联调入口。"}
         actions={
           <div className="flex flex-col items-stretch gap-2 sm:items-end">
-            <Link
-              className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-[2px] border border-ink/30 bg-transparent px-3.5 text-[13px] font-medium tracking-wide text-ink transition-all duration-150 hover:border-ink/60 hover:bg-ink/[0.04] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[rgb(var(--amber)_/_0.5)] active:[transform:translateY(1px)]"
-              to="/console"
-            >
-              返回应用列表
-            </Link>
+            <ButtonLink to="/console">返回应用列表</ButtonLink>
             {app?.can_manage ? (
               <Button
                 type="button"
@@ -127,10 +120,10 @@ export function ConsoleAppWorkspace() {
       {appQuery.error ? (
         <StatusBanner tone="signal" title="应用加载失败" message={(appQuery.error as Error).message} />
       ) : null}
-      <div className="relative mb-6 flex gap-1 overflow-x-auto border-b border-[rgb(var(--hairline))]">
+      <div className="relative mb-6 flex gap-1 overflow-x-auto border-b border-ink/12" role="tablist" aria-label="应用工作台页签">
         <span
           aria-hidden="true"
-          className="pointer-events-none absolute bottom-0 h-0.5 bg-amber-ink transition-[left,width] duration-200 ease-out"
+          className="pointer-events-none absolute bottom-0 h-0.5 bg-accent transition-[left,width] duration-200 ease-out"
           style={{ left: indicatorStyle.left, width: indicatorStyle.width }}
         />
         {TABS.map((item, index) => (
@@ -139,6 +132,10 @@ export function ConsoleAppWorkspace() {
             ref={(node) => {
               tabButtonRefs.current[index] = node;
             }}
+            role="tab"
+            id={`workspace-tab-${item.key}`}
+            aria-selected={item.key === activeTab}
+            aria-controls="workspace-tabpanel"
             className={cn(
               "relative z-10 h-10 shrink-0 px-3 text-sm font-semibold transition-colors",
               item.key === activeTab
@@ -152,6 +149,7 @@ export function ConsoleAppWorkspace() {
           </button>
         ))}
       </div>
+      <div id="workspace-tabpanel" role="tabpanel" aria-labelledby={`workspace-tab-${activeTab}`}>
       {activeTab === "overview" ? <OverviewTab appKey={appKey} app={app} /> : null}
       {activeTab === "catalog" ? <CatalogTab appKey={appKey} /> : null}
       {activeTab === "matrix" ? <MatrixTab appKey={appKey} /> : null}
@@ -161,6 +159,7 @@ export function ConsoleAppWorkspace() {
       {activeTab === "credentials" ? <CredentialsTab appKey={appKey} /> : null}
       {activeTab === "test" ? <QueryTestTab appKey={appKey} /> : null}
       {activeTab === "guide" ? <GuideTab appKey={appKey} /> : null}
+      </div>
       {app?.can_manage && basicInfoEditing ? (
         <AppBasicInfoDialog
           app={app}
@@ -210,7 +209,7 @@ function ManagedScopeTab({ appKey }: { appKey: string }) {
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 space-y-1">
             <h2 className="text-base font-semibold text-ink">管理范围</h2>
-            <p className="max-w-3xl text-[13px] leading-5 text-ink-soft">
+            <p className="max-w-3xl text-body leading-5 text-ink-soft">
               配置应用默认的 MANAGED_USERS 解析策略。授权组 grant 可以继承这里的默认策略，也可以单独覆盖。
             </p>
           </div>
@@ -246,9 +245,9 @@ function ManagedScopeTab({ appKey }: { appKey: string }) {
             </SelectInput>
           </Field>
           <div className="rounded-[3px] border border-ink/10 bg-paper-soft p-4">
-            <p className="text-[11px] font-medium uppercase tracking-[0.14em] text-ink-soft">当前有效策略</p>
+            <p className="text-label font-medium uppercase tracking-caps-wide text-ink-soft">当前有效策略</p>
             <p className="mt-2 text-sm font-semibold text-ink">{effectiveManagedScopeLabel(effectivePolicy)}</p>
-            <dl className="mt-3 grid gap-2 text-[13px] text-ink-soft">
+            <dl className="mt-3 grid gap-2 text-body text-ink-soft">
               <div className="flex items-center justify-between gap-4">
                 <dt>来源</dt>
                 <dd className="font-mono text-ink">{managedScopeSourceLabel(effectivePolicy?.source)}</dd>

@@ -3,9 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="description" content="EasyAuth 统一权限中心：应用授权配置、权限申请与审批。" />
+    <meta name="theme-color" content="#ffffff" />
+    <link rel="icon" type="image/webp" href="/assets/brand/jiefa_logo.webp" />
     <title>EasyAuth</title>
   </head>
   <body data-easyauth-react-shell="console">
+    <!-- 开发态 CSRF 占位：生产环境由 Django 模板注入真实 token（lib/api.ts 读取此字段） -->
     <input type="hidden" name="csrfmiddlewaretoken" value="dev-csrf-token" />
     <div id="easyauth-root"></div>
     <script type="module" src="/src/main.tsx"></script>

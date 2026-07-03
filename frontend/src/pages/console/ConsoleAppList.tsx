@@ -10,11 +10,12 @@ import { ArrowRight, Plus, RefreshCcw } from "lucide-react";
 import { Fragment, type FormEvent } from "react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../components/ui/TablePrimitives";
+import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../components/ui/TablePrimitives";
 import { TablePagination } from "../../components/ui/TablePagination";
 import { TableActionCell, TableRowActionButton, TableRowActionLink } from "../../components/ui/TableActions";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { PageState } from "../../components/ui/PageState";
+import { MONO_TEXT_CLASS } from "../../components/ui/tableStyles";
 
 import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
@@ -26,8 +27,7 @@ import { apiRequest, itemsFromPayload } from "../../lib/api";
 import type { JsonObject } from "../../lib/api";
 import type { AppListPayload, AppSummary } from "../../lib/domain";
 import { formatDateTime, readinessLabel, readinessTone } from "../../lib/status";
-
-const MONO_TEXT_CLASS = "font-mono text-[13px] leading-5 text-ink-soft";
+import { safeJoin } from "./workspace/utils";
 
 export function ConsoleAppList() {
   const navigate = useNavigate();
@@ -147,16 +147,21 @@ export function ConsoleAppList() {
   return (
     <>
       <PageHeader
-        eyebrow="Console"
+        eyebrow="控制台"
         title="应用列表"
         description="查看可管理应用、配置完整性和接入入口。"
         actions={
-          <Button icon={<RefreshCcw size={16} />} loading={appsQuery.isFetching} onClick={() => void appsQuery.refetch()}>
-            刷新
-          </Button>
+          <>
+            <Button icon={<RefreshCcw size={16} />} loading={appsQuery.isFetching} onClick={() => void appsQuery.refetch()}>
+              刷新
+            </Button>
+            <Button type="button" variant="primary" icon={<Plus size={16} />} onClick={() => setCreateDialogOpen(true)}>
+              新建
+            </Button>
+          </>
         }
       />
-      {appsQuery.error ? (
+      {appsQuery.error && apps.length > 0 ? (
         <StatusBanner tone="signal" title="应用加载失败" message={(appsQuery.error as Error).message} />
       ) : null}
       {appsQuery.error && apps.length === 0 ? (
@@ -172,12 +177,6 @@ export function ConsoleAppList() {
         />
       ) : (
         <section className="space-y-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-base font-semibold text-ink">应用列表</h2>
-            <Button type="button" variant="primary" icon={<Plus size={16} />} onClick={() => setCreateDialogOpen(true)}>
-              新建
-            </Button>
-          </div>
           <TableFrame>
             <TableRoot>
               <TableHead>
@@ -192,7 +191,9 @@ export function ConsoleAppList() {
                 ))}
               </TableHead>
               <TableBody>
-                {table.getRowModel().rows.length > 0 ? (
+                {appsQuery.isLoading ? (
+                  <TableSkeletonRows columns={table.getAllLeafColumns().length} />
+                ) : table.getRowModel().rows.length > 0 ? (
                   table.getRowModel().rows.map((row) => (
                     <TableRow key={row.id}>
                       {row.getVisibleCells().map((cell) => (
@@ -206,10 +207,7 @@ export function ConsoleAppList() {
                   ))
                 ) : (
                   <TableEmptyRow colSpan={table.getAllLeafColumns().length}>
-                    <EmptyState
-                      title={appsQuery.isLoading ? "应用加载中" : "暂无可见应用"}
-                      description={appsQuery.isLoading ? "正在读取控制台应用列表。" : "当前账号暂无可管理或可查看的应用。"}
-                    />
+                    <EmptyState title="暂无可见应用" description="当前账号暂无可管理或可查看的应用。" />
                   </TableEmptyRow>
                 )}
               </TableBody>
@@ -228,10 +226,6 @@ export function ConsoleAppList() {
       ) : null}
     </>
   );
-}
-
-function safeJoin(values: string[] | undefined): string {
-  return values && values.length > 0 ? values.join("、") : "-";
 }
 
 interface AppCreateFormPayload {

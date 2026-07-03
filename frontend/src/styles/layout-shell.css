@@ -142,42 +142,30 @@
   gap: 10px;
 }
 
-.icon-button {
-  display: inline-grid;
-  place-items: center;
-  width: 34px;
-  height: 34px;
-  border: 1px solid transparent;
-  border-radius: 2px;
-  background: transparent;
-  color: rgb(var(--ink-soft));
-  cursor: pointer;
-  transition: background-color 150ms ease-out, border-color 150ms ease-out, color 150ms ease-out, transform 150ms ease-out;
-}
-
-.icon-button:hover:not(:disabled) {
-  border-color: rgba(15, 23, 42, 0.12);
-  background: rgba(15, 23, 42, 0.04);
-  color: rgb(var(--ink));
-}
-
-.icon-button:active:not(:disabled) {
-  transform: translateY(1px);
-}
-
-.topbar-divider {
-  width: 1px;
-  height: 24px;
-  margin: 0 2px;
-  background: rgb(var(--hairline));
-}
-
 .user-menu {
   position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
   min-height: 44px;
+}
+
+.user-menu-trigger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px;
+  margin: -4px;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  transition: background-color 150ms ease-out;
+}
+
+.user-menu-trigger:hover {
+  background: rgba(15, 23, 42, 0.04);
 }
 
 .user-summary {
@@ -282,7 +270,7 @@
   width: 3px;
   min-height: 22px;
   border-radius: 0 2px 2px 0;
-  background: rgb(var(--amber));
+  background: rgb(var(--accent));
   transition: transform 220ms cubic-bezier(0.22, 1, 0.36, 1), height 220ms cubic-bezier(0.22, 1, 0.36, 1), opacity 150ms ease-out;
 }
 
@@ -331,7 +319,7 @@
 
 .nav-list a.active svg,
 .nav-list a:hover svg {
-  color: rgb(var(--amber));
+  color: rgb(var(--accent));
 }
 
 .sidebar-footer {
@@ -389,19 +377,12 @@
   overflow: auto;
 }
 
-.page-header {
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 20px;
-  margin-bottom: 18px;
-}
-
 .eyebrow {
   margin: 0 0 6px;
-  color: rgb(var(--bond));
-  font-size: 12px;
-  font-weight: 800;
+  color: rgb(var(--accent));
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
 }
 
@@ -413,7 +394,7 @@ p {
 
 h1 {
   margin-bottom: 8px;
-  font-size: 28px;
+  font-size: 26px;
   line-height: 1.15;
   letter-spacing: 0;
 }
@@ -421,13 +402,4 @@ h1 {
 .page-description {
   margin-bottom: 0;
   color: rgb(var(--ink-soft));
-}
-
-.page-actions,
-.row-actions,
-.panel-toolbar,
-.inline-form {
-  display: flex;
-  align-items: center;
-  gap: 10px;
 }

@@ -31,7 +31,7 @@ export function SecretDialog({
         </Button>
       }
     >
-      <div className="mb-4 rounded-[3px] border border-[rgb(var(--amber))]/30 bg-[rgb(var(--amber))]/[0.08] px-4 py-3 text-sm leading-6 text-ink">
+      <div className="mb-4 rounded-[3px] border border-amber/30 bg-amber/8 px-4 py-3 text-sm leading-6 text-ink">
         明文凭据仅本次展示。关闭后前端会清除该值，后续只能重新创建或轮换。
       </div>
       <div className="space-y-4">

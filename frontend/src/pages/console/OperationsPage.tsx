@@ -8,10 +8,11 @@ import {
 import { useQuery } from "@tanstack/react-query";
 import { RefreshCcw } from "lucide-react";
 import { useParams } from "react-router-dom";
-import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../components/ui/TablePrimitives";
+import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../components/ui/TablePrimitives";
 import { TablePagination } from "../../components/ui/TablePagination";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { PageState } from "../../components/ui/PageState";
+import { MONO_TEXT_CLASS } from "../../components/ui/tableStyles";
 
 import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
@@ -20,8 +21,6 @@ import { StatusBanner } from "../../components/StatusBanner";
 import { apiRequest, itemsFromPayload } from "../../lib/api";
 import type { OperationRow } from "../../lib/domain";
 import { accessRequestStatusLabel, badgeToneForAccessRequestStatus, formatDateTime } from "../../lib/status";
-
-const MONO_TEXT_CLASS = "font-mono text-[13px] leading-5 text-ink-soft";
 
 const ENDPOINTS: Record<string, { title: string; endpoint: string }> = {
   "access-requests": { title: "申请运营", endpoint: "/console/api/v1/operations/access-requests" },
@@ -49,7 +48,7 @@ export function OperationsPage() {
   return (
     <>
       <PageHeader
-        eyebrow="Operations"
+        eyebrow="运营"
         title={config.title}
         description="系统管理员的授权运营和依赖观测入口。"
         actions={
@@ -58,7 +57,7 @@ export function OperationsPage() {
           </Button>
         }
       />
-      {query.error ? (
+      {query.error && rows.length > 0 ? (
         <StatusBanner tone="signal" title="运营数据加载失败" message={(query.error as Error).message} />
       ) : null}
       {query.error && rows.length === 0 ? (
@@ -87,7 +86,9 @@ export function OperationsPage() {
               ))}
             </TableHead>
             <TableBody>
-              {table.getRowModel().rows.length > 0 ? (
+              {query.isLoading ? (
+                <TableSkeletonRows columns={table.getAllLeafColumns().length} />
+              ) : table.getRowModel().rows.length > 0 ? (
                 table.getRowModel().rows.map((row) => (
                   <TableRow key={row.id}>
                     {row.getVisibleCells().map((cell) => (
@@ -97,10 +98,7 @@ export function OperationsPage() {
                 ))
               ) : (
                 <TableEmptyRow colSpan={table.getAllLeafColumns().length}>
-                  <EmptyState
-                    title={query.isLoading ? "运营数据加载中" : "暂无运营数据"}
-                    description={query.isLoading ? "正在读取当前运营视图。" : "当前筛选下没有可展示的记录。"}
-                  />
+                  <EmptyState title="暂无运营数据" description="当前筛选下没有可展示的记录。" />
                 </TableEmptyRow>
               )}
             </TableBody>

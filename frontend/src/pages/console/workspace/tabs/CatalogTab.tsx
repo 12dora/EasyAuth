@@ -8,7 +8,8 @@ import {
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { Fragment, FormEvent, useMemo, useState } from "react";
-import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../../components/ui/TablePrimitives";
+import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../../../components/ui/TablePrimitives";
+import { EmptyState } from "../../../../components/ui/EmptyState";
 import { TableActionCell, TableRowActionButton } from "../../../../components/ui/TableActions";
 import { TablePagination } from "../../../../components/ui/TablePagination";
 
@@ -152,7 +153,7 @@ export function CatalogTab({ appKey }: { appKey: string }) {
   });
   const groupRows = treeGroups.length > 0 ? treeGroups : groups;
   const groupColumns: ColumnDef<PermissionGroupItem>[] = [
-    { header: "权限分组", cell: ({ row }) => <code>{row.original.key}</code> },
+    { header: "分组 Key", cell: ({ row }) => <code>{row.original.key}</code> },
     { header: "名称", accessorKey: "name" },
     { header: "层级", cell: ({ row }) => row.original.depth ?? "-" },
     { header: "权限数", cell: ({ row }) => row.original.permissions?.length ?? 0 },
@@ -178,7 +179,7 @@ export function CatalogTab({ appKey }: { appKey: string }) {
     getPaginationRowModel: getPaginationRowModel(),
   });
   const scopeColumns: ColumnDef<AppScopeItem>[] = [
-    { header: "Scope", cell: ({ row }) => <code>{row.original.key}</code> },
+    { header: "范围 Key", cell: ({ row }) => <code>{row.original.key}</code> },
     { header: "名称", accessorKey: "name" },
     { header: "排序", accessorKey: "display_order" },
     { header: "状态", cell: ({ row }) => <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>{row.original.is_active ? "启用" : "停用"}</Badge> },
@@ -210,10 +211,10 @@ export function CatalogTab({ appKey }: { appKey: string }) {
     getPaginationRowModel: getPaginationRowModel(),
   });
   const permissionColumns: ColumnDef<PermissionItem>[] = [
-    { header: "Permission", cell: ({ row }) => <code>{row.original.key}</code> },
+    { header: "权限 Key", cell: ({ row }) => <code>{row.original.key}</code> },
     { header: "名称", accessorKey: "name" },
     { header: "分组", cell: ({ row }) => row.original.group_key || "-" },
-    { header: "支持 Scope", cell: ({ row }) => (row.original.supported_scopes ?? []).join("、") || "-" },
+    { header: "支持范围", cell: ({ row }) => (row.original.supported_scopes ?? []).join("、") || "-" },
     { header: "风险级别", cell: ({ row }) => <Badge tone={row.original.risk_level === "high" ? "signal" : "neutral"}>{riskLevelLabel(row.original.risk_level)}</Badge> },
     {
       id: "actions",
@@ -239,6 +240,15 @@ export function CatalogTab({ appKey }: { appKey: string }) {
 
   return (
     <section className="space-y-6">
+      {treeQuery.error || groupsQuery.error ? (
+        <StatusBanner tone="signal" title="权限分组加载失败" message={((treeQuery.error ?? groupsQuery.error) as Error).message} />
+      ) : null}
+      {scopesQuery.error ? (
+        <StatusBanner tone="signal" title="权限范围加载失败" message={(scopesQuery.error as Error).message} />
+      ) : null}
+      {permissionsQuery.error ? (
+        <StatusBanner tone="signal" title="权限加载失败" message={(permissionsQuery.error as Error).message} />
+      ) : null}
       <div className="grid gap-6 xl:grid-cols-2">
         <section className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -265,7 +275,9 @@ export function CatalogTab({ appKey }: { appKey: string }) {
               ))}
             </TableHead>
             <TableBody>
-              {groupTable.getRowModel().rows.length > 0 ? (
+              {treeQuery.isLoading || groupsQuery.isLoading ? (
+                <TableSkeletonRows columns={groupTable.getAllLeafColumns().length} />
+              ) : groupTable.getRowModel().rows.length > 0 ? (
                 groupTable.getRowModel().rows.map((row) => (
                   <TableRow key={row.id}>
                     {row.getVisibleCells().map((cell) => (
@@ -279,8 +291,8 @@ export function CatalogTab({ appKey }: { appKey: string }) {
                 ))
               ) : (
                 <TableEmptyRow colSpan={groupTable.getAllLeafColumns().length}>
-                    {treeQuery.isLoading || groupsQuery.isLoading ? "加载中" : "暂无权限分组"}
-                  </TableEmptyRow>
+                  <EmptyState title="暂无权限分组" description="可通过右上角新建分组来组织权限。" />
+                </TableEmptyRow>
               )}
             </TableBody>
           </TableRoot>
@@ -289,7 +301,7 @@ export function CatalogTab({ appKey }: { appKey: string }) {
         </section>
         <section className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <h2 className="text-base font-semibold text-ink">Scopes</h2>
+            <h2 className="text-base font-semibold text-ink">权限范围</h2>
             <Button type="button" variant="primary" icon={<Plus size={16} />} onClick={() => {
               setScopeForm({ key: "", name: "", description: "", display_order: 0, is_active: true });
               setEditingScopeKey("");
@@ -312,7 +324,9 @@ export function CatalogTab({ appKey }: { appKey: string }) {
               ))}
             </TableHead>
             <TableBody>
-              {scopeTable.getRowModel().rows.length > 0 ? (
+              {scopesQuery.isLoading ? (
+                <TableSkeletonRows columns={scopeTable.getAllLeafColumns().length} />
+              ) : scopeTable.getRowModel().rows.length > 0 ? (
                 scopeTable.getRowModel().rows.map((row) => (
                   <TableRow key={row.id}>
                     {row.getVisibleCells().map((cell) => (
@@ -326,8 +340,8 @@ export function CatalogTab({ appKey }: { appKey: string }) {
                 ))
               ) : (
                 <TableEmptyRow colSpan={scopeTable.getAllLeafColumns().length}>
-                    {scopesQuery.isLoading ? "加载中" : "暂无 scope"}
-                  </TableEmptyRow>
+                  <EmptyState title="暂无权限范围" description="新建权限范围后可在权限上引用。" />
+                </TableEmptyRow>
               )}
             </TableBody>
           </TableRoot>
@@ -338,7 +352,7 @@ export function CatalogTab({ appKey }: { appKey: string }) {
 
       <section className="space-y-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-base font-semibold text-ink">Permissions</h2>
+          <h2 className="text-base font-semibold text-ink">权限</h2>
           <Button type="button" variant="primary" icon={<Plus size={16} />} onClick={() => {
             setPermissionForm(emptyPermissionForm);
             setEditingPermissionKey("");
@@ -361,7 +375,9 @@ export function CatalogTab({ appKey }: { appKey: string }) {
               ))}
             </TableHead>
             <TableBody>
-              {permissionTable.getRowModel().rows.length > 0 ? (
+              {permissionsQuery.isLoading ? (
+                <TableSkeletonRows columns={permissionTable.getAllLeafColumns().length} />
+              ) : permissionTable.getRowModel().rows.length > 0 ? (
                 permissionTable.getRowModel().rows.map((row) => (
                   <TableRow key={row.id}>
                     {row.getVisibleCells().map((cell) => (
@@ -375,8 +391,8 @@ export function CatalogTab({ appKey }: { appKey: string }) {
                 ))
               ) : (
                 <TableEmptyRow colSpan={permissionTable.getAllLeafColumns().length}>
-                    {permissionsQuery.isLoading ? "加载中" : "暂无权限"}
-                  </TableEmptyRow>
+                  <EmptyState title="暂无权限" description="新建权限并归入分组后，即可配置授权组。" />
+                </TableEmptyRow>
               )}
             </TableBody>
           </TableRoot>
@@ -385,14 +401,14 @@ export function CatalogTab({ appKey }: { appKey: string }) {
       </section>
 
       {activeDialog === "scope" ? (
-        <Dialog title={editingScopeKey ? "编辑 Scope" : "新建 Scope"} onClose={() => setActiveDialog(null)} footer={
+        <Dialog title={editingScopeKey ? "编辑权限范围" : "新建权限范围"} onClose={() => setActiveDialog(null)} footer={
           <>
             <Button type="button" onClick={() => setActiveDialog(null)}>取消</Button>
             <Button form="scope-form" type="submit" variant="primary" loading={saveScopeMutation.isPending} disabled={saveScopeMutation.isPending}>保存</Button>
           </>
         }>
           <form id="scope-form" className="grid gap-4" onSubmit={(event) => submit(event, () => saveScopeMutation.mutate())}>
-            <Field label="Scope key">
+            <Field label="范围 Key">
               <TextInput value={scopeForm.key} onChange={(event) => setScopeForm((current) => ({ ...current, key: event.currentTarget.value }))} required />
             </Field>
             <Field label="名称">
@@ -401,7 +417,7 @@ export function CatalogTab({ appKey }: { appKey: string }) {
             <Field label="描述">
               <TextArea value={scopeForm.description} onChange={(event) => setScopeForm((current) => ({ ...current, description: event.currentTarget.value }))} />
             </Field>
-            {saveScopeMutation.error ? <StatusBanner tone="signal" title="Scope 保存失败" message={(saveScopeMutation.error as Error).message} /> : null}
+            {saveScopeMutation.error ? <StatusBanner tone="signal" title="权限范围保存失败" message={(saveScopeMutation.error as Error).message} /> : null}
           </form>
         </Dialog>
       ) : null}
@@ -414,7 +430,7 @@ export function CatalogTab({ appKey }: { appKey: string }) {
           </>
         }>
           <form id="group-form" className="grid gap-4" onSubmit={(event) => submit(event, () => saveGroupMutation.mutate())}>
-            <Field label="分组 key">
+            <Field label="分组 Key">
               <TextInput value={groupForm.key} onChange={(event) => setGroupForm((current) => ({ ...current, key: event.currentTarget.value }))} required />
             </Field>
             <Field label="名称">
@@ -437,14 +453,14 @@ export function CatalogTab({ appKey }: { appKey: string }) {
       ) : null}
 
       {activeDialog === "permission" ? (
-        <Dialog title={editingPermissionKey ? "编辑 Permission" : "新建 Permission"} onClose={() => setActiveDialog(null)} size="lg" footer={
+        <Dialog title={editingPermissionKey ? "编辑权限" : "新建权限"} onClose={() => setActiveDialog(null)} size="lg" footer={
           <>
             <Button type="button" onClick={() => setActiveDialog(null)}>取消</Button>
             <Button form="permission-form" type="submit" variant="primary" loading={savePermissionMutation.isPending} disabled={savePermissionMutation.isPending}>保存</Button>
           </>
         }>
           <form id="permission-form" className="grid gap-4 md:grid-cols-2" onSubmit={(event) => submit(event, () => savePermissionMutation.mutate())}>
-            <Field label="Permission key">
+            <Field label="权限 Key">
               <TextInput value={permissionForm.key} onChange={(event) => setPermissionForm((current) => ({ ...current, key: event.currentTarget.value }))} required />
             </Field>
             <Field label="名称">
@@ -458,19 +474,19 @@ export function CatalogTab({ appKey }: { appKey: string }) {
                 ))}
               </SelectInput>
             </Field>
-            <Field label="支持 Scope" hint="多个 scope 用逗号分隔。">
+            <Field label="支持范围" hint="多个范围 Key 用逗号分隔。">
               <TextInput value={permissionForm.supported_scopes} onChange={(event) => setPermissionForm((current) => ({ ...current, supported_scopes: event.currentTarget.value }))} />
             </Field>
             <Field label="风险级别">
               <SelectInput value={permissionForm.risk_level} onChange={(event) => setPermissionForm((current) => ({ ...current, risk_level: event.currentTarget.value }))}>
-                <option value="standard">standard</option>
-                <option value="high">high</option>
+                <option value="standard">标准</option>
+                <option value="high">高</option>
               </SelectInput>
             </Field>
             <Field label="描述">
               <TextArea value={permissionForm.description} onChange={(event) => setPermissionForm((current) => ({ ...current, description: event.currentTarget.value }))} />
             </Field>
-            {savePermissionMutation.error ? <StatusBanner tone="signal" title="Permission 保存失败" message={(savePermissionMutation.error as Error).message} /> : null}
+            {savePermissionMutation.error ? <StatusBanner tone="signal" title="权限保存失败" message={(savePermissionMutation.error as Error).message} /> : null}
           </form>
         </Dialog>
       ) : null}

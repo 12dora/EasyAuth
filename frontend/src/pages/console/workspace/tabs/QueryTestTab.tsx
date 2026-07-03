@@ -10,7 +10,6 @@ import { Button } from "../../../../components/Button";
 import { CodeBlock } from "../../../../components/CodeBlock";
 import { Field, TextInput } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
-import { Toast } from "../../../../components/Toast";
 import { apiRequest } from "../../../../lib/api";
 import type { ExpandedGrantItem, QueryTestResult } from "../../../../lib/domain";
 
@@ -54,7 +53,7 @@ export function QueryTestTab({ appKey }: { appKey: string }) {
   ];
   const grantColumns: ColumnDef<QueryTestGrant>[] = [
     { header: "授权项", cell: ({ row }) => row.original.permission ?? "-" },
-    { header: "Scope", cell: ({ row }) => row.original.scope ?? "-" },
+    { header: "范围", cell: ({ row }) => row.original.scope ?? "-" },
     { header: "名称", cell: ({ row }) => row.original.name ?? "-" },
     { header: "类型", cell: ({ row }) => row.original.grant_type ?? "-" },
     {
@@ -95,15 +94,18 @@ export function QueryTestTab({ appKey }: { appKey: string }) {
       {testMutation.error ? <StatusBanner tone="signal" title="联调失败" message={(testMutation.error as Error).message} /> : null}
       {result ? (
         <>
-          <Toast tone="evergreen" message={result.allowed ? "权限查询命中授权" : "查询成功，无授权命中"} />
+          <StatusBanner
+            tone={result.allowed ? "evergreen" : "neutral"}
+            title={result.allowed ? "权限查询命中授权" : "查询成功，无授权命中"}
+          />
           <div className="grid gap-3 sm:grid-cols-2">
             <PanelSurface>
-              <span className="text-xs font-semibold text-ink-faint">source</span>
-              <strong className="mt-2 block text-sm font-semibold text-ink">来源：{result.source ?? "-"}</strong>
+              <span className="text-xs font-semibold text-ink-faint">来源</span>
+              <strong className="mt-2 block text-sm font-semibold text-ink">{result.source ?? "-"}</strong>
             </PanelSurface>
             <PanelSurface>
-              <span className="text-xs font-semibold text-ink-faint">snapshot_version</span>
-              <strong className="mt-2 block text-sm font-semibold text-ink">快照版本：{result.snapshot_version ?? result.version ?? "-"}</strong>
+              <span className="text-xs font-semibold text-ink-faint">快照版本</span>
+              <strong className="mt-2 block text-sm font-semibold text-ink">{result.snapshot_version ?? result.version ?? "-"}</strong>
             </PanelSurface>
           </div>
           <TableFrame>

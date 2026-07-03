@@ -1,5 +1,7 @@
 import type { HTMLAttributes, ReactNode } from "react";
 
+import { cn } from "../../lib/cn";
+
 interface PanelSurfaceProps extends HTMLAttributes<HTMLElement> {
   children: ReactNode;
   padding?: "none" | "sm" | "md" | "lg";
@@ -11,10 +13,6 @@ const PADDING_CLASSES: Record<NonNullable<PanelSurfaceProps["padding"]>, string>
   md: "p-4",
   lg: "p-5",
 };
-
-function cn(...classes: Array<string | false | null | undefined>) {
-  return classes.filter(Boolean).join(" ");
-}
 
 export function PanelSurface({ children, className, padding = "md", ...props }: PanelSurfaceProps) {
   return (

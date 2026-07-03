@@ -9,7 +9,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { Fragment, type FormEvent } from "react";
 import { useEffect, useState } from "react";
-import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../../components/ui/TablePrimitives";
+import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../../../components/ui/TablePrimitives";
+import { EmptyState } from "../../../../components/ui/EmptyState";
 import { PanelSurface } from "../../../../components/ui/PanelSurface";
 import { TableActionCell, TableRowActionButton } from "../../../../components/ui/TableActions";
 import { TablePagination } from "../../../../components/ui/TablePagination";
@@ -22,7 +23,8 @@ import { StatusBanner } from "../../../../components/StatusBanner";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
 import type { JsonObject } from "../../../../lib/api";
 import type { AppSummary, ConfigurationIssue, ConfigurationStatus } from "../../../../lib/domain";
-import { readinessLabel, readinessTone } from "../../../../lib/status";
+import { formatDateTime, readinessLabel, readinessTone } from "../../../../lib/status";
+import { safeJoin } from "../utils";
 
 export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary }) {
   const queryClient = useQueryClient();
@@ -62,8 +64,9 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
       void queryClient.invalidateQueries({ queryKey: ["console", "app", appKey, "memberships"] });
     },
   });
+  const canWrite = Boolean(app?.can_manage);
   const membershipColumns = membershipTableColumns({
-    canWrite: true,
+    canWrite,
     onDisable: (membershipId) => disableMembershipMutation.mutate(membershipId),
   });
   const membershipTable = useReactTable({
@@ -85,26 +88,47 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
     getPaginationRowModel: getPaginationRowModel(),
   });
 
+  const issueCount = app?.configuration_summary?.issue_count ?? issues.length;
+
   return (
     <section className="space-y-6">
-      <StatusBanner tone={statusBannerTone} title={`配置${readinessLabel(status)}`} />
+      {status && status !== "ready" ? (
+        <StatusBanner tone={statusBannerTone} title={`配置${readinessLabel(status)}`} />
+      ) : null}
+      {statusQuery.error ? (
+        <StatusBanner tone="signal" title="配置状态加载失败" message={(statusQuery.error as Error).message} />
+      ) : null}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Metric label="角色" value={app?.role_count ?? 0} />
         <Metric label="权限" value={app?.permission_count ?? 0} />
         <Metric label="活跃凭据" value={app?.active_credential_count ?? 0} />
-        <Metric label="配置问题" value={app?.configuration_summary?.issue_count ?? issues.length} />
+        <Metric label="配置问题" value={issueCount} tone={issueCount > 0 ? "signal" : undefined} />
       </div>
       <PanelSurface padding="lg" className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-base font-semibold text-ink">基本信息</h2>
+          <Badge tone={app?.is_active === false ? "neutral" : "evergreen"}>
+            {app?.is_active === false ? "停用" : "启用"}
+          </Badge>
         </div>
+        <dl className="grid gap-x-8 gap-y-3 text-body sm:grid-cols-2">
+          <BasicInfoItem label="应用名称" value={app?.name || "-"} />
+          <BasicInfoItem label="应用 Key" value={<code>{app?.app_key || "-"}</code>} />
+          <BasicInfoItem label="负责人" value={safeJoin(app?.owners)} />
+          <BasicInfoItem label="开发者" value={safeJoin(app?.developers)} />
+          <BasicInfoItem label="更新时间" value={formatDateTime(app?.updated_at)} />
+          <BasicInfoItem label="配置状态" value={`${readinessLabel(status)}`} />
+        </dl>
+        {app?.description ? <p className="max-w-3xl text-body leading-5 text-ink-soft">{app.description}</p> : null}
       </PanelSurface>
       <PanelSurface padding="lg" className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h2 className="text-base font-semibold text-ink">成员</h2>
-          <Button type="button" variant="primary" icon={<Plus size={16} />} onClick={() => setMembershipDialogOpen(true)}>
-            新建
-          </Button>
+          {canWrite ? (
+            <Button type="button" variant="primary" icon={<Plus size={16} />} onClick={() => setMembershipDialogOpen(true)}>
+              新建
+            </Button>
+          ) : null}
         </div>
         {membershipsQuery.error ? (
           <StatusBanner tone="signal" title="成员加载失败" message={(membershipsQuery.error as Error).message} />
@@ -126,7 +150,9 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
               ))}
             </TableHead>
             <TableBody>
-              {membershipTable.getRowModel().rows.length > 0 ? (
+              {membershipsQuery.isLoading ? (
+                <TableSkeletonRows columns={membershipTable.getAllLeafColumns().length} />
+              ) : membershipTable.getRowModel().rows.length > 0 ? (
                 membershipTable.getRowModel().rows.map((row) => (
                   <TableRow key={row.id}>
                     {row.getVisibleCells().map((cell) => (
@@ -140,8 +166,8 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
                 ))
               ) : (
                 <TableEmptyRow colSpan={membershipTable.getAllLeafColumns().length}>
-                    {membershipsQuery.isLoading ? "加载中" : "暂无成员"}
-                  </TableEmptyRow>
+                  <EmptyState title="暂无成员" description="该应用还没有配置负责人或开发者成员。" />
+                </TableEmptyRow>
               )}
             </TableBody>
           </TableRoot>
@@ -156,38 +182,54 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
           onSubmit={(payload) => createMembershipMutation.mutate(payload)}
         />
       ) : null}
-      <TableFrame>
-        <TableRoot>
-          <TableHead>
-            {issuesTable.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <TableHeaderCell key={header.id}>
-                    {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                  </TableHeaderCell>
-                ))}
-              </TableRow>
-            ))}
-          </TableHead>
-          <TableBody>
-            {issuesTable.getRowModel().rows.length > 0 ? (
-              issuesTable.getRowModel().rows.map((row) => (
-                <TableRow key={row.id}>
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+      <PanelSurface padding="lg" className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-base font-semibold text-ink">配置问题</h2>
+        </div>
+        <TableFrame>
+          <TableRoot>
+            <TableHead>
+              {issuesTable.getHeaderGroups().map((headerGroup) => (
+                <TableRow key={headerGroup.id}>
+                  {headerGroup.headers.map((header) => (
+                    <TableHeaderCell key={header.id}>
+                      {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
+                    </TableHeaderCell>
                   ))}
                 </TableRow>
-              ))
-            ) : (
-              <TableEmptyRow colSpan={issuesTable.getAllLeafColumns().length}>
-                  {statusQuery.isLoading ? "加载中" : "暂无配置问题"}
+              ))}
+            </TableHead>
+            <TableBody>
+              {statusQuery.isLoading ? (
+                <TableSkeletonRows columns={issuesTable.getAllLeafColumns().length} />
+              ) : issuesTable.getRowModel().rows.length > 0 ? (
+                issuesTable.getRowModel().rows.map((row) => (
+                  <TableRow key={row.id}>
+                    {row.getVisibleCells().map((cell) => (
+                      <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                    ))}
+                  </TableRow>
+                ))
+              ) : (
+                <TableEmptyRow colSpan={issuesTable.getAllLeafColumns().length}>
+                  <EmptyState title="暂无配置问题" description="当前应用的授权配置未发现异常。" />
                 </TableEmptyRow>
-            )}
-          </TableBody>
-        </TableRoot>
-        <TablePagination table={issuesTable} />
-      </TableFrame>
+              )}
+            </TableBody>
+          </TableRoot>
+          <TablePagination table={issuesTable} />
+        </TableFrame>
+      </PanelSurface>
     </section>
+  );
+}
+
+function BasicInfoItem({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-4 border-b border-ink/8 pb-2">
+      <dt className="shrink-0 text-caption text-ink-faint">{label}</dt>
+      <dd className="m-0 min-w-0 truncate text-right font-medium text-ink">{value}</dd>
+    </div>
   );
 }
 
@@ -312,8 +354,8 @@ function MembershipCreateDialog({
         </Field>
         <Field label="成员角色">
           <SelectInput value={role} onChange={(event) => setRole(event.currentTarget.value as MembershipRole)}>
-            <option value="developer">developer</option>
-            <option value="owner">owner</option>
+            <option value="developer">开发者（developer）</option>
+            <option value="owner">负责人（owner）</option>
           </SelectInput>
         </Field>
         {errorMessage ? <StatusBanner tone="signal" title="新增成员失败" message={errorMessage} /> : null}
@@ -358,10 +400,10 @@ function membershipTableColumns({
 
 function roleLabel(role: string): string {
   if (role === "owner") {
-    return "owner";
+    return "负责人";
   }
   if (role === "developer") {
-    return "developer";
+    return "开发者";
   }
   return role || "-";
 }
@@ -370,11 +412,13 @@ function normalizeStatusBannerTone(tone: ReturnType<typeof readinessTone>) {
   return tone === "faint" || tone === "ink" ? "neutral" : tone;
 }
 
-function Metric({ label, value }: { label: string; value: number }) {
+function Metric({ label, value, tone }: { label: string; value: number; tone?: "signal" }) {
   return (
     <PanelSurface>
       <span className="text-xs font-semibold text-ink-faint">{label}</span>
-      <strong className="mt-2 block text-2xl font-semibold leading-none text-ink">{value}</strong>
+      <strong className={`mt-2 block text-2xl font-semibold leading-none ${tone === "signal" ? "text-signal" : "text-ink"}`}>
+        {value}
+      </strong>
     </PanelSurface>
   );
 }

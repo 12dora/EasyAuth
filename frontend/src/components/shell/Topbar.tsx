@@ -1,5 +1,3 @@
-import { Bell, Globe2 } from "lucide-react";
-
 import type { CurrentUser } from "../../App";
 import { UserSummary } from "./UserSummary";
 
@@ -23,18 +21,7 @@ export function Topbar({ brandLogoUrl, currentUser, mode }: TopbarProps) {
           </span>
         </a>
         <div className="topbar-actions" aria-label="顶部工具">
-          <button className="icon-button" type="button" aria-label="切换语言" title="切换语言">
-            <Globe2 size={17} />
-          </button>
-          <button className="icon-button" type="button" aria-label="通知中心" title="通知中心">
-            <Bell size={17} />
-          </button>
-          {currentUser ? (
-            <>
-              <span className="topbar-divider" aria-hidden="true" />
-              <UserSummary currentUser={currentUser} mode={mode} />
-            </>
-          ) : null}
+          {currentUser ? <UserSummary currentUser={currentUser} mode={mode} /> : null}
         </div>
       </div>
     </header>

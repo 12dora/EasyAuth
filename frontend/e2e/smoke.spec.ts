@@ -68,7 +68,7 @@ for (const viewport of VIEWPORTS) {
     await page.goto("/console/apps/demo");
 
     await expect(page.getByTestId("route-transition")).toHaveAttribute("data-route-pathname", "/console/apps/demo");
-    const manifestTab = page.getByRole("button", { name: /manifest|Manifest|清单/ });
+    const manifestTab = page.getByRole("tab", { name: /manifest|Manifest|清单/ }).or(page.getByRole("button", { name: /manifest|Manifest|清单/ }));
 
     await manifestTab.first().click();
     await expect(page.getByText(/manifest|Manifest|清单|版本|导入|导出/).first()).toBeVisible();

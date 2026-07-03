@@ -2,7 +2,6 @@ import { Send } from "lucide-react";
 
 import { Button } from "../../../components/Button";
 import { StatusBanner } from "../../../components/StatusBanner";
-import { Toast } from "../../../components/Toast";
 import { PanelSurface } from "../../../components/ui/PanelSurface";
 import { useAccessRequestForm } from "../hooks/useAccessRequestForm";
 import { AccessRequestFields } from "./AccessRequestFields";
@@ -61,7 +60,11 @@ export function AccessRequestForm() {
         </Button>
       </div>
       {form.submitErrorMessage ? <StatusBanner tone="signal" title="提交失败" message={form.submitErrorMessage} /> : null}
-      {form.toastMessage ? <Toast tone={form.toastMessage === "申请已提交" ? "evergreen" : "amber"} message={form.toastMessage} /> : null}
+      {form.toastMessage ? (
+        <div className="mt-4" role="status">
+          <StatusBanner tone={form.toastMessage === "申请已提交" ? "evergreen" : "amber"} title={form.toastMessage} />
+        </div>
+      ) : null}
     </PanelSurface>
   );
 }

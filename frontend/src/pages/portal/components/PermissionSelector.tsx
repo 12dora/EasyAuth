@@ -5,10 +5,20 @@ import {
   useReactTable,
   type ColumnDef,
 } from "@tanstack/react-table";
-import { ChevronDown, ChevronLeft, ChevronRight } from "lucide-react";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import type { CSSProperties, MouseEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { EmptyState } from "../../../components/ui/EmptyState";
+import { PaginationBar } from "../../../components/ui/PaginationBar";
+import {
+  MONO_TEXT_CLASS,
+  TABLE_CELL_CLASS,
+  TABLE_HEAD_CLASS,
+  TABLE_HEADER_CELL_CLASS,
+  TABLE_ROOT_CLASS,
+  TABLE_ROW_CLASS,
+} from "../../../components/ui/tableStyles";
+import { cn } from "../../../lib/cn";
 
 import { isPermissionGroupItem } from "../permissionTree";
 import {
@@ -17,8 +27,7 @@ import {
 } from "../hooks/useAccessRequestForm";
 import type { ScopedPermissionGroupItem, ScopedPermissionItem } from "../hooks/useAccessRequestForm";
 
-const MONO_TEXT_CLASS = "font-mono text-[13px] leading-5 text-ink-soft";
-const PERMISSION_TABLE_PAGE_SIZE_OPTIONS = [5, 10, 20, 50] as const;
+const NO_DIRECT_PERMISSION_COPY = "当前应用未返回可直接申请的权限，可仅选择权限组发起申请。";
 
 interface PermissionSelectorProps {
   appKey: string;
@@ -117,7 +126,7 @@ export function PermissionSelector({
       },
       {
         id: "key",
-        header: "权限 key",
+        header: "权限 Key",
         cell: ({ row }) => (
           <code className={MONO_TEXT_CLASS}>
             {row.original.type === "group" ? row.original.group.key : row.original.permission.key}
@@ -163,18 +172,30 @@ export function PermissionSelector({
   }, [showSelectedOnly, table]);
 
   if (!appKey) {
-    return <EmptyState title="选择应用后加载权限目录" description="直接权限可留空，也可在应用目录加载后勾选具体权限。" />;
+    return (
+      <div className="permission-selector__surface">
+        <EmptyState title="选择应用后加载权限目录" description="直接权限可留空，也可在应用目录加载后勾选具体权限。" />
+      </div>
+    );
   }
   if (loading) {
-    return <EmptyState title="权限目录加载中" description="正在读取可申请的直接权限。" />;
+    return (
+      <div className="permission-selector__surface">
+        <EmptyState title="权限目录加载中" description="正在读取可申请的直接权限。" />
+      </div>
+    );
   }
   if (errorMessage) {
-    return <EmptyState title="权限目录加载失败" description={errorMessage} />;
+    return (
+      <div className="permission-selector__surface">
+        <EmptyState title="权限目录加载失败" description={errorMessage} />
+      </div>
+    );
   }
   if (rows.length === 0) {
     return (
       <div className="permission-selector__surface">
-        <EmptyState title="暂无可选直接权限" description="当前应用未返回可直接申请的权限，可仅选择权限组发起申请。" />
+        <EmptyState title="暂无可选直接权限" description={NO_DIRECT_PERMISSION_COPY} />
       </div>
     );
   }
@@ -199,16 +220,16 @@ export function PermissionSelector({
         onClear={() => onClearPermissionKeys(currentPageSelectionKeysFromRows(currentPageRows))}
       />
       <div className="overflow-x-auto">
-        <table aria-label="权限选择" className="min-w-full border-separate border-spacing-0 text-[13px]">
-          <thead className="bg-paper-deep/60">
+        <table aria-label="权限选择" className={TABLE_ROOT_CLASS}>
+          <thead className={TABLE_HEAD_CLASS}>
             {table.getHeaderGroups().map((headerGroup) => (
-              <tr key={headerGroup.id} className="group transition-colors hover:bg-[rgb(var(--amber))]/[0.05]">
+              <tr key={headerGroup.id} className={TABLE_ROW_CLASS}>
                 {headerGroup.headers.map((header) => (
                   <th
                     key={header.id}
                     colSpan={header.colSpan}
-                    className={joinClassNames(
-                      "border-b border-ink/15 px-3 py-2.5 text-left align-bottom font-mono text-[10.5px] font-medium uppercase tracking-[0.14em] text-ink-soft",
+                    className={cn(
+                      TABLE_HEADER_CELL_CLASS,
                       header.column.id === "permission" && "permission-selector__sticky-column permission-selector__sticky-column--header",
                       header.column.id === "scope" && "permission-selector__scope-cell",
                     )}
@@ -224,8 +245,8 @@ export function PermissionSelector({
               visibleRows.map((row) => (
                 <tr
                   key={row.id}
-                  className={joinClassNames(
-                    "group transition-colors hover:bg-[rgb(var(--amber))]/[0.05]",
+                  className={cn(
+                    TABLE_ROW_CLASS,
                     "permission-selector__row",
                     row.original.type === "group" && "permission-selector__row--group bg-paper-deep/60 hover:bg-paper-deep",
                     row.original.type === "group" && row.original.selectionState !== "unchecked" && "permission-selector__row--group-selected",
@@ -238,8 +259,8 @@ export function PermissionSelector({
                   {row.getVisibleCells().map((cell) => (
                     <td
                       key={cell.id}
-                      className={joinClassNames(
-                        "border-b border-ink/8 px-3 py-2.5 align-middle text-[13px] text-ink",
+                      className={cn(
+                        TABLE_CELL_CLASS,
                         cell.column.id === "permission" && "permission-selector__sticky-column",
                         cell.column.id === "scope" && "permission-selector__scope-cell",
                       )}
@@ -251,14 +272,10 @@ export function PermissionSelector({
               ))
             ) : (
               <tr className="group transition-colors hover:bg-transparent">
-                <td colSpan={table.getAllLeafColumns().length} className="border-b border-ink/8 px-3 py-10 text-center text-[13px] text-ink-soft">
+                <td colSpan={table.getAllLeafColumns().length} className={cn(TABLE_CELL_CLASS, "py-10 text-center text-ink-soft")}>
                   <EmptyState
                     title={showSelectedOnly ? "当前没有已选直接权限" : "暂无可选直接权限"}
-                    description={
-                      showSelectedOnly
-                        ? "关闭仅看已选后可继续浏览并选择权限。"
-                        : "当前应用未返回可直接申请的权限，可仅选择权限组发起申请。"
-                    }
+                    description={showSelectedOnly ? "关闭仅看已选后可继续浏览并选择权限。" : NO_DIRECT_PERMISSION_COPY}
                   />
                 </td>
               </tr>
@@ -266,54 +283,22 @@ export function PermissionSelector({
           </tbody>
         </table>
       </div>
-      <div className="flex flex-wrap items-center justify-between gap-3 border-t border-ink/10 bg-paper-deep/30 px-3 py-2.5">
-        <span className="text-[12px] font-medium text-ink-soft">
-          第 {pageStart}-{pageEnd} 条 / 共 {totalRows} 条
-        </span>
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="flex items-center gap-2 text-[12px] font-medium text-ink-soft">
-            每页
-            <select
-              aria-label="每页条目数"
-              className="h-8 w-20 rounded-[3px] border border-[rgb(var(--hairline-strong))] bg-paper px-2 text-[13px] text-ink outline-none transition-colors focus:border-[rgb(var(--amber))] focus:ring-2 focus:ring-[rgb(var(--amber)_/_0.18)]"
-              value={String(pagination.pageSize)}
-              onChange={(event) => {
-                table.setPageIndex(0);
-                table.setPageSize(Number(event.currentTarget.value));
-              }}
-            >
-              {PERMISSION_TABLE_PAGE_SIZE_OPTIONS.map((pageSize) => (
-                <option key={pageSize} value={pageSize}>
-                  {pageSize}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="flex items-center gap-1">
-            <button
-              type="button"
-              aria-label="上一页"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-[3px] border border-[rgb(var(--hairline-strong))] bg-paper text-ink transition-colors hover:border-[rgb(var(--amber))] hover:bg-[rgb(var(--amber))]/[0.08] disabled:cursor-not-allowed disabled:opacity-45"
-              disabled={!table.getCanPreviousPage()}
-              onClick={() => table.previousPage()}
-            >
-              <ChevronLeft size={15} aria-hidden="true" />
-            </button>
-            <span className="min-w-16 text-center font-mono text-[12px] text-ink-soft">
-              {table.getPageCount() === 0 ? 0 : pagination.pageIndex + 1} / {table.getPageCount()}
-            </span>
-            <button
-              type="button"
-              aria-label="下一页"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-[3px] border border-[rgb(var(--hairline-strong))] bg-paper text-ink transition-colors hover:border-[rgb(var(--amber))] hover:bg-[rgb(var(--amber))]/[0.08] disabled:cursor-not-allowed disabled:opacity-45"
-              disabled={!table.getCanNextPage()}
-              onClick={() => table.nextPage()}
-            >
-              <ChevronRight size={15} aria-hidden="true" />
-            </button>
-          </div>
-        </div>
-      </div>
+      <PaginationBar
+        pageStart={pageStart}
+        pageEnd={pageEnd}
+        totalRows={totalRows}
+        pageSize={pagination.pageSize}
+        pageIndex={pagination.pageIndex}
+        pageCount={table.getPageCount()}
+        canPreviousPage={table.getCanPreviousPage()}
+        canNextPage={table.getCanNextPage()}
+        onPageSizeChange={(pageSize) => {
+          table.setPageIndex(0);
+          table.setPageSize(pageSize);
+        }}
+        onPreviousPage={() => table.previousPage()}
+        onNextPage={() => table.nextPage()}
+      />
     </div>
   );
 }
@@ -555,7 +540,7 @@ function ScopeChip({
 
   return (
     <label
-      className={joinClassNames(
+      className={cn(
         "permission-selector__scope-chip",
         checked && "permission-selector__scope-chip--checked",
         mixed && "permission-selector__scope-chip--mixed",
@@ -851,10 +836,6 @@ function permissionSelectionKeysForScope(permission: ScopedPermissionItem, scope
 
 function currentPageGroupKeysFromRows(rows: Array<{ original: PermissionSelectorRow }>): string[] {
   return rows.map((row) => row.original).filter((row) => row.type === "group").map((row) => row.group.key);
-}
-
-function joinClassNames(...classNames: Array<string | false | null | undefined>): string {
-  return classNames.filter(Boolean).join(" ");
 }
 
 function stringListsAreEqual(left: string[], right: string[]): boolean {

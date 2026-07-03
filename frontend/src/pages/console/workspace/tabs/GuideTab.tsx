@@ -1,9 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { flexRender, getCoreRowModel, getPaginationRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
-import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../../components/ui/TablePrimitives";
+import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../../../components/ui/TablePrimitives";
+import { EmptyState } from "../../../../components/ui/EmptyState";
 import { TablePagination } from "../../../../components/ui/TablePagination";
 
 import { CodeBlock } from "../../../../components/CodeBlock";
+import { StatusBanner } from "../../../../components/StatusBanner";
 import { apiRequest } from "../../../../lib/api";
 import type { IntegrationGuide } from "../../../../lib/domain";
 
@@ -30,7 +32,12 @@ export function GuideTab({ appKey }: { appKey: string }) {
 
   return (
     <section className="space-y-6">
-      <TableFrame>
+      {guideQuery.error ? (
+        <StatusBanner tone="signal" title="接入说明加载失败" message={(guideQuery.error as Error).message} />
+      ) : null}
+      <div className="space-y-3">
+        <h2 className="text-base font-semibold text-ink">凭据模式</h2>
+        <TableFrame>
         <TableRoot>
           <TableHead>
             {credentialModeTable.getHeaderGroups().map((headerGroup) => (
@@ -42,7 +49,9 @@ export function GuideTab({ appKey }: { appKey: string }) {
             ))}
           </TableHead>
           <TableBody>
-            {credentialModeTable.getRowModel().rows.length > 0 ? (
+            {guideQuery.isLoading ? (
+              <TableSkeletonRows columns={credentialModeColumns.length} />
+            ) : credentialModeTable.getRowModel().rows.length > 0 ? (
               credentialModeTable.getRowModel().rows.map((row) => (
                 <TableRow key={row.id}>
                   {row.getVisibleCells().map((cell) => (
@@ -52,15 +61,19 @@ export function GuideTab({ appKey }: { appKey: string }) {
               ))
             ) : (
               <TableEmptyRow colSpan={credentialModeColumns.length}>
-                  {guideQuery.isLoading ? "加载中" : "暂无活跃凭据"}
-                </TableEmptyRow>
+                <EmptyState title="暂无活跃凭据" description="先在「凭据」页签创建凭据，再回到这里查看接入方式。" />
+              </TableEmptyRow>
             )}
           </TableBody>
         </TableRoot>
-        <TablePagination table={credentialModeTable} />
-      </TableFrame>
-      <CodeBlock language="curl" code={curl} />
-      <CodeBlock language="typescript" code={ts} />
+          <TablePagination table={credentialModeTable} />
+        </TableFrame>
+      </div>
+      <div className="space-y-3">
+        <h2 className="text-base font-semibold text-ink">权限查询示例</h2>
+        <CodeBlock language="curl" code={curl} />
+        <CodeBlock language="typescript" code={ts} />
+      </div>
     </section>
   );
 }

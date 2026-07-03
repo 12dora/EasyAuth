@@ -1,7 +1,7 @@
-import { AlertCircle, CheckCircle2, Info } from "lucide-react";
 import type { ReactNode } from "react";
 
 import type { BadgeTone } from "../../lib/status";
+import { toneIcon } from "../toneIcon";
 
 interface PageStateProps {
   tone?: BadgeTone;
@@ -15,14 +15,14 @@ const TONE_CLASSES: Record<BadgeTone, string> = {
   neutral: "text-ink-soft",
   faint: "text-ink-faint",
   ink: "text-ink",
-  amber: "text-[rgb(var(--amber))]",
-  evergreen: "text-[rgb(var(--evergreen))]",
-  signal: "text-[rgb(var(--signal))]",
-  bond: "text-[rgb(var(--bond))]",
+  amber: "text-amber",
+  evergreen: "text-evergreen",
+  signal: "text-signal",
+  bond: "text-bond",
 };
 
 export function PageState({ tone = "neutral", title, description, action, iconFrame = true }: PageStateProps) {
-  const Icon = tone === "evergreen" ? CheckCircle2 : tone === "signal" || tone === "amber" ? AlertCircle : Info;
+  const Icon = toneIcon(tone);
   const icon = <Icon size={20} />;
 
   return (

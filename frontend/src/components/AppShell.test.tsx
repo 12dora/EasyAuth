@@ -44,8 +44,8 @@ describe("AppShell", () => {
     expect(screen.getByRole("banner")).toBeInTheDocument();
     expect(screen.getByLabelText("EasyAuth 管理控制台")).toBeVisible();
     expect(screen.getByRole("img", { name: "EasyAuth" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "切换语言" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "通知中心" })).toBeVisible();
+    expect(screen.queryByRole("button", { name: "切换语言" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "通知中心" })).not.toBeInTheDocument();
     expect(screen.getByText("控制台用户")).toBeVisible();
     expect(screen.getByText("EasyAuth Admins")).toBeVisible();
     expect(screen.getByRole("img", { name: "控制台用户头像" })).toHaveAttribute(
@@ -109,7 +109,7 @@ describe("AppShell", () => {
     expect(screen.getByText("统一权限中心")).toBeVisible();
     expect(screen.queryByText("员工门户")).not.toBeInTheDocument();
     expect(screen.getByText("已登出页面")).toBeVisible();
-    expect(screen.queryByLabelText("当前登录用户")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "当前登录用户菜单" })).not.toBeInTheDocument();
     expect(screen.queryByRole("img", { name: /头像/ })).not.toBeInTheDocument();
     expect(screen.queryByRole("form", { name: "登出当前账号" })).not.toBeInTheDocument();
   });
@@ -155,11 +155,15 @@ describe("AppShell", () => {
     );
   });
 
-  test("悬停用户身份区域时展示登出菜单", async () => {
+  test("点击用户身份区域时展示登出菜单", async () => {
     const user = userEvent.setup();
     renderShell("portal", "alice@example.com");
 
-    await user.hover(screen.getByLabelText("当前登录用户"));
+    const trigger = screen.getByRole("button", { name: "当前登录用户菜单" });
+    expect(trigger).toHaveAttribute("aria-haspopup", "menu");
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await user.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
 
     const logoutForm = screen.getByRole("form", { name: "登出当前账号" });
     expect(logoutForm).toHaveAttribute("action", "/auth/logout/");
@@ -190,7 +194,7 @@ describe("AppShell", () => {
       </MemoryRouter>,
     );
 
-    await user.hover(screen.getByLabelText("当前登录用户"));
+    await user.click(screen.getByRole("button", { name: "当前登录用户菜单" }));
 
     expect(screen.getByRole("form", { name: "登出当前账号" })).toHaveAttribute(
       "action",
@@ -227,7 +231,7 @@ describe("AppShell", () => {
     expect(layoutShellCss).toMatch(/\.nav-list a\s*\{[^}]*border-radius: 2px;/s);
     expect(layoutShellCss).toMatch(/\.sidebar-footer a\s*\{[^}]*border-radius: 2px;/s);
     expect(layoutShellCss).not.toMatch(/border-radius:\s*6px/);
-    expect(layoutShellCss).toContain("background: rgb(var(--amber));");
+    expect(layoutShellCss).toContain("background: rgb(var(--accent));");
   });
 
   test("用户菜单浮层使用 2px 圆角、hairline 边框和低阴影", () => {

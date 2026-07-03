@@ -1,5 +1,5 @@
 import { LogOut } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 
 import type { CurrentUser } from "../../App";
 import { readCsrfToken } from "../../lib/api";
@@ -13,37 +13,63 @@ interface UserSummaryProps {
 
 export function UserSummary({ currentUser, mode }: UserSummaryProps) {
   const [menuIsOpen, setMenuIsOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const menuId = useId();
   const userName = firstPresent(currentUser.displayName, mode === "console" ? "控制台用户" : "当前用户");
   const userRole = firstPresent(currentUser.role, "未分组");
   const logoutUrl = localLogoutUrl(currentUser.logoutUrl);
   const avatarLabel = userName.slice(0, 1).toUpperCase();
   const csrfToken = readCsrfToken();
 
+  useEffect(() => {
+    if (!menuIsOpen) {
+      return;
+    }
+
+    function closeOnOutsidePointerDown(event: PointerEvent) {
+      if (!containerRef.current?.contains(event.target as Node)) {
+        setMenuIsOpen(false);
+      }
+    }
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setMenuIsOpen(false);
+      }
+    }
+
+    document.addEventListener("pointerdown", closeOnOutsidePointerDown);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("pointerdown", closeOnOutsidePointerDown);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [menuIsOpen]);
+
   return (
-    <div
-      className="user-menu"
-      aria-label="当前登录用户"
-      onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget)) {
-          setMenuIsOpen(false);
-        }
-      }}
-      onFocus={() => setMenuIsOpen(true)}
-      onMouseEnter={() => setMenuIsOpen(true)}
-      onMouseLeave={() => setMenuIsOpen(false)}
-    >
-      <div className="user-summary">
-        <strong>{userName}</strong>
-        <span>{userRole}</span>
-      </div>
-      {currentUser.avatarUrl ? (
-        <img className="avatar avatar-image" src={currentUser.avatarUrl} alt={`${userName}头像`} />
-      ) : (
-        <span className="avatar" aria-label={`${userName}头像`} role="img">
-          {avatarLabel}
+    <div className="user-menu" ref={containerRef}>
+      <button
+        type="button"
+        className="user-menu-trigger"
+        aria-label="当前登录用户菜单"
+        aria-haspopup="menu"
+        aria-expanded={menuIsOpen}
+        aria-controls={menuId}
+        onClick={() => setMenuIsOpen((isOpen) => !isOpen)}
+      >
+        <span className="user-summary">
+          <strong>{userName}</strong>
+          <span>{userRole}</span>
         </span>
-      )}
-      <div className="user-menu-popover" data-open={menuIsOpen}>
+        {currentUser.avatarUrl ? (
+          <img className="avatar avatar-image" src={currentUser.avatarUrl} alt={`${userName}头像`} />
+        ) : (
+          <span className="avatar" aria-hidden="true">
+            {avatarLabel}
+          </span>
+        )}
+      </button>
+      <div className="user-menu-popover" id={menuId} data-open={menuIsOpen}>
         <form action={logoutUrl} aria-label="登出当前账号" method="post">
           {csrfToken ? <input type="hidden" name="csrfmiddlewaretoken" value={csrfToken} /> : null}
           <button type="submit">

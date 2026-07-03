@@ -7,10 +7,11 @@ import {
 } from "@tanstack/react-table";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "react-router-dom";
-import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../components/ui/TablePrimitives";
+import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../components/ui/TablePrimitives";
 import { TablePagination } from "../../components/ui/TablePagination";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { PageState } from "../../components/ui/PageState";
+import { MONO_TEXT_CLASS } from "../../components/ui/tableStyles";
 
 import { Badge } from "../../components/Badge";
 import { PageHeader } from "../../components/PageHeader";
@@ -24,8 +25,6 @@ import {
   grantTypeLabel,
 } from "../../lib/status";
 import { AccessRequestForm } from "./components/AccessRequestForm";
-
-const MONO_TEXT_CLASS = "font-mono text-[13px] leading-5 text-ink-soft";
 
 type PortalView = "grants" | "request" | "requests" | "expiring";
 
@@ -73,7 +72,7 @@ export function PortalPage() {
 
   return (
     <>
-      <PageHeader eyebrow="Portal" title={viewTitle(view)} />
+      <PageHeader eyebrow="门户" title={viewTitle(view)} />
       {view === "grants" ? <PortalGrantSection endpoint="/portal/api/v1/me/grants" emptyText="暂无当前授权" /> : null}
       {view === "expiring" ? <PortalGrantSection endpoint="/portal/api/v1/me/grants/expiring" emptyText="暂无即将过期授权" /> : null}
       {view === "requests" ? <PortalRequestSection /> : null}
@@ -114,15 +113,19 @@ function PortalGrantSection({ endpoint, emptyText }: { endpoint: string; emptyTe
 
   return (
     <>
-      {query.error ? <StatusBanner tone="signal" title="授权加载失败" message={(query.error as Error).message} /> : null}
+      {query.error && grants.length > 0 ? (
+        <StatusBanner tone="signal" title="授权加载失败" message={(query.error as Error).message} />
+      ) : null}
       {query.error && grants.length === 0 ? (
         <PageState tone="signal" title="授权加载失败" description={(query.error as Error).message} />
       ) : (
         <PortalTable
           table={table}
           columns={columns}
-          emptyTitle={query.isLoading ? "授权加载中" : emptyText}
-          emptyDescription={query.isLoading ? "正在读取当前授权列表。" : "当前视图没有可展示的授权记录。"}
+          ariaLabel="我的授权"
+          isLoading={query.isLoading}
+          emptyTitle={emptyText}
+          emptyDescription="当前视图没有可展示的授权记录。"
         />
       )}
     </>
@@ -160,15 +163,19 @@ function PortalRequestSection() {
 
   return (
     <>
-      {query.error ? <StatusBanner tone="signal" title="申请记录加载失败" message={(query.error as Error).message} /> : null}
+      {query.error && requests.length > 0 ? (
+        <StatusBanner tone="signal" title="申请记录加载失败" message={(query.error as Error).message} />
+      ) : null}
       {query.error && requests.length === 0 ? (
         <PageState tone="signal" title="申请记录加载失败" description={(query.error as Error).message} />
       ) : (
         <PortalTable
           table={table}
           columns={columns}
-          emptyTitle={query.isLoading ? "申请记录加载中" : "暂无申请记录"}
-          emptyDescription={query.isLoading ? "正在读取你的权限申请记录。" : "当前账号还没有提交过权限申请。"}
+          ariaLabel="我的申请"
+          isLoading={query.isLoading}
+          emptyTitle="暂无申请记录"
+          emptyDescription="当前账号还没有提交过权限申请。"
         />
       )}
     </>
@@ -178,17 +185,21 @@ function PortalRequestSection() {
 function PortalTable<T>({
   table,
   columns,
+  ariaLabel,
+  isLoading,
   emptyTitle,
   emptyDescription,
 }: {
   table: ReturnType<typeof useReactTable<T>>;
   columns: ColumnDef<T>[];
+  ariaLabel: string;
+  isLoading: boolean;
   emptyTitle: string;
   emptyDescription: string;
 }) {
   return (
     <TableFrame>
-      <TableRoot>
+      <TableRoot aria-label={ariaLabel}>
         <TableHead>
           {table.getHeaderGroups().map((headerGroup) => (
             <TableRow key={headerGroup.id}>
@@ -201,7 +212,9 @@ function PortalTable<T>({
           ))}
         </TableHead>
         <TableBody>
-          {table.getRowModel().rows.length > 0 ? (
+          {isLoading ? (
+            <TableSkeletonRows columns={columns.length} />
+          ) : table.getRowModel().rows.length > 0 ? (
             table.getRowModel().rows.map((row) => (
               <TableRow key={row.id}>
                 {row.getVisibleCells().map((cell) => (

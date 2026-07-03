@@ -48,7 +48,7 @@
     width: auto;
     height: 2px;
     border-radius: 2px 2px 0 0;
-    background: rgb(var(--amber));
+    background: rgb(var(--accent));
   }
 
   .sidebar-footer {
@@ -60,17 +60,6 @@
     overflow-x: hidden;
     padding: 28px 20px;
   }
-
-  .page-header,
-  .two-column,
-  .form-grid {
-    grid-template-columns: 1fr;
-    display: grid;
-  }
-
-  .metric-grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
 }
 
 @media (max-width: 560px) {
@@ -81,20 +70,5 @@
   .brand-copy span,
   .user-summary {
     display: none;
-  }
-
-  .metric-grid {
-    grid-template-columns: 1fr;
-  }
-
-  .inline-form,
-  .page-actions,
-  .panel-toolbar {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .button {
-    width: 100%;
   }
 }

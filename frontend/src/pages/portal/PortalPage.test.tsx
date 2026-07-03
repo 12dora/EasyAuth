@@ -889,7 +889,7 @@ describe("PortalPage access request form", () => {
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
 
       expect(within(permissionTable).getByRole("columnheader", { name: "权限" })).toBeVisible();
-      expect(within(permissionTable).getByRole("columnheader", { name: "权限 key" })).toBeVisible();
+      expect(within(permissionTable).getByRole("columnheader", { name: "权限 Key" })).toBeVisible();
       expect(within(permissionTable).getByRole("columnheader", { name: "权限范围" })).toBeVisible();
       expect(within(permissionTable).queryByRole("columnheader", { name: "scope" })).not.toBeInTheDocument();
       expect(within(permissionTable).queryByRole("columnheader", { name: "选择" })).not.toBeInTheDocument();

@@ -1,7 +1,12 @@
+import { Settings } from "lucide-react";
+import { useEffect } from "react";
 import { Navigate, Outlet, Route, Routes, useSearchParams } from "react-router-dom";
 
 import { AppShell } from "./components/AppShell";
+import { ButtonLink } from "./components/ButtonLink";
+import { PageHeader } from "./components/PageHeader";
 import { Topbar } from "./components/shell/Topbar";
+import { EmptyState } from "./components/ui/EmptyState";
 import { ConsoleAppList } from "./pages/console/ConsoleAppList";
 import { ConsoleAppWorkspace } from "./pages/console/ConsoleAppWorkspace";
 import { OperationsPage } from "./pages/console/OperationsPage";
@@ -23,6 +28,14 @@ export interface CurrentUser {
 }
 
 export function App({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUser, currentUserId = "", shell }: AppProps) {
+  const isConsoleAdmin = currentUser?.role === "EasyAuth Admins";
+
+  useEffect(() => {
+    if (shell === "console" && !isConsoleAdmin) {
+      window.location.replace("/errors/forbidden/");
+    }
+  }, [shell, isConsoleAdmin]);
+
   if (shell === "portal") {
     return (
       <Routes>
@@ -41,8 +54,7 @@ export function App({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUse
     );
   }
 
-  if (currentUser?.role !== "EasyAuth Admins") {
-    window.location.replace("/errors/forbidden/");
+  if (!isConsoleAdmin) {
     return null;
   }
 
@@ -78,22 +90,14 @@ function LoggedOutPage() {
 
   return (
     <section className="logged-out-panel" aria-labelledby="logged-out-title">
-      <p className="eyebrow">Signed out</p>
+      <p className="eyebrow">EasyAuth</p>
       <h1 id="logged-out-title">已登出</h1>
       <p className="page-description">你已经退出当前 EasyAuth 会话。</p>
       <div className="logged-out-actions">
-        <a
-          className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-[2px] border border-ink bg-ink px-3.5 text-[13px] font-medium tracking-wide text-paper transition-all duration-150 hover:bg-ink/90 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[rgb(var(--amber)_/_0.5)] active:[transform:translateY(1px)]"
-          href={loginHref}
-        >
+        <ButtonLink variant="primary" href={loginHref}>
           重新登录
-        </a>
-        <a
-          className="inline-flex h-9 shrink-0 items-center justify-center gap-2 rounded-[2px] border border-ink/30 bg-transparent px-3.5 text-[13px] font-medium tracking-wide text-ink transition-all duration-150 hover:border-ink/60 hover:bg-ink/[0.04] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[rgb(var(--amber)_/_0.5)] active:[transform:translateY(1px)]"
-          href="/portal/"
-        >
-          返回门户
-        </a>
+        </ButtonLink>
+        <ButtonLink href="/portal/">返回门户</ButtonLink>
       </div>
     </section>
   );
@@ -101,14 +105,13 @@ function LoggedOutPage() {
 
 function SettingsPlaceholder({ title }: { title: string }) {
   return (
-    <section className="stack">
-      <header className="page-header">
-        <div>
-          <p className="eyebrow">Settings</p>
-          <h1>{title}</h1>
-          <p className="page-description">设置入口已预留。</p>
-        </div>
-      </header>
+    <section className="space-y-6">
+      <PageHeader eyebrow="设置" title={title} description="设置入口已预留，后续版本会开放具体配置项。" />
+      <EmptyState
+        icon={<Settings size={18} aria-hidden="true" />}
+        title="暂无可配置项"
+        description="该页面为设置功能预留位，当前版本还没有可调整的配置。"
+      />
     </section>
   );
 }
