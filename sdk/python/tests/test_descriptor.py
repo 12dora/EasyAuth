@@ -93,3 +93,32 @@ def test_descriptor_http_response_enforces_token() -> None:
         required_token="shared-secret",
     )
     assert ok_status == 200
+
+
+def test_descriptor_http_response_supports_token_validator() -> None:
+    seen: list[str | None] = []
+
+    def validator(token: str | None) -> bool:
+        seen.append(token)
+        return token == "db-managed-key"  # noqa: S105 - 测试用假密钥.
+
+    denied_status, _h, _b = descriptor_http_response(
+        _manifest,
+        authorization="Bearer wrong",
+        token_validator=validator,
+    )
+    ok_status, _h2, _b2 = descriptor_http_response(
+        _manifest,
+        authorization="Bearer db-managed-key",
+        token_validator=validator,
+    )
+    missing_status, _h3, _b3 = descriptor_http_response(
+        _manifest,
+        authorization=None,
+        token_validator=validator,
+    )
+
+    assert denied_status == 401
+    assert ok_status == 200
+    assert missing_status == 401
+    assert seen == ["wrong", "db-managed-key", None]

@@ -19,7 +19,12 @@ from easyauth_app_sdk.descriptor import (
     build_descriptor_payload,
     parse_descriptor_payload,
 )
-from easyauth_app_sdk.integration import DescriptorProvider, descriptor_http_response
+from easyauth_app_sdk.integration import (
+    DescriptorProvider,
+    TokenValidator,
+    bearer_token,
+    descriptor_http_response,
+)
 from easyauth_app_sdk.manifest import ManifestValidationError, validate_manifest
 
 __all__ = [
@@ -33,6 +38,8 @@ __all__ = [
     "EasyAuthAppClient",
     "EasyAuthClientError",
     "ManifestValidationError",
+    "TokenValidator",
+    "bearer_token",
     "build_descriptor_payload",
     "descriptor_http_response",
     "parse_descriptor_payload",

@@ -8,7 +8,11 @@ endpoint 的 ``Request`` 注解必须在运行时保持真实类型, 否则 Fast
 from typing import TYPE_CHECKING
 
 from easyauth_app_sdk.descriptor import DESCRIPTOR_WELL_KNOWN_PATH
-from easyauth_app_sdk.integration import DescriptorProvider, descriptor_http_response
+from easyauth_app_sdk.integration import (
+    DescriptorProvider,
+    TokenValidator,
+    descriptor_http_response,
+)
 
 if TYPE_CHECKING:
     from fastapi import APIRouter
@@ -18,11 +22,13 @@ def create_descriptor_router(
     provider: DescriptorProvider,
     *,
     token: "str | None" = None,
+    token_validator: "TokenValidator | None" = None,
     path: str = DESCRIPTOR_WELL_KNOWN_PATH,
 ) -> "APIRouter":
     """创建暴露集成描述符的 FastAPI router。
 
-    provider 返回当前 manifest(dict); token 配置后要求 Bearer 认证。
+    provider 返回当前 manifest(dict); 鉴权二选一: token 为固定共享密钥,
+    token_validator 为动态校验回调(对接集成方自有密钥存储)。
     """
     from fastapi import APIRouter, Request, Response
 
@@ -34,6 +40,7 @@ def create_descriptor_router(
             provider,
             authorization=request.headers.get("authorization"),
             required_token=token,
+            token_validator=token_validator,
         )
         return Response(content=body, status_code=status_code, media_type=headers["Content-Type"])
 
