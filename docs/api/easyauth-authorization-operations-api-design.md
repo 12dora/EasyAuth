@@ -391,6 +391,54 @@ POST /console/api/v1/apps/{app_key}/permission-template-imports/{preview_id}/con
 GET /console/api/v1/apps/{app_key}/permission-template-versions?page=1&page_size=20
 ```
 
+### 双语显示字段
+
+权限目录条目支持中英双语显示文案。`AppScope`、`PermissionGroup`、`Permission`、`AuthorizationGroup` 四类目录对象在中文 `name`/`description` 之外，新增可选英文字段 `name_en`/`description_en`。
+
+Manifest 契约：
+
+- manifest 的 `scopes[]`、`permission_groups[]`、`permissions[]`、`authorization_groups[]` 条目接受可选字段 `name_en`(最长 128)和 `description_en`。
+- 字段可选且无破坏性，`schema_version` 保持 1；不带这两个字段的旧 manifest 仍可导入，落库默认空字符串。
+- 重新导入 manifest 时按 manifest 内容整体覆盖，包括把缺失的双语字段覆盖为空字符串。
+- `GET /console/api/v1/apps/{app_key}/manifest` 导出时仅在字段非空时输出对应键，保证导出内容干净且可直接回放导入。
+
+示例（带双语字段的 manifest 片段）：
+
+```json
+{
+  "schema_version": 1,
+  "scopes": [
+    {
+      "key": "SELF",
+      "name": "本人",
+      "name_en": "Self",
+      "description": "仅限本人数据",
+      "description_en": "Only the requester"
+    }
+  ],
+  "permissions": [
+    {
+      "key": "billing.read",
+      "name": "查看账务",
+      "name_en": "Read billing",
+      "group_key": "billing",
+      "supported_scopes": ["SELF"]
+    }
+  ]
+}
+```
+
+目录 API 返回：
+
+- 控制台目录读取接口（`scopes`、`permission-groups`、`permissions`、`permission-tree`、`authorization-groups`、`role-permission-matrix`）的 scope/分组/权限/授权组条目始终返回 `name_en` 和 `description_en`，未维护时为空字符串。
+- 员工门户申请目录 `GET /portal/api/v1/request-catalog` 的授权组、权限分组、权限和 scope 选项条目同样始终返回这两个字段。
+
+控制台维护入口：
+
+- 控制台目录 CRUD（`POST`/`PATCH` `scopes`、`permission-groups`、`permissions`、`authorization-groups`）接受可选 `name_en`、`description_en` 并落库；PATCH 只覆盖显式提交的字段（授权组 PATCH 为整体替换语义）。
+- Django admin 的 AppScope、Permission、AuthorizationGroup 列表与表单同样可维护双语字段。
+- 面向下游应用的公共权限查询 API 响应形状保持不变，不包含双语字段。
+
 ## 权限分组与权限目录
 
 ### 查询权限树
