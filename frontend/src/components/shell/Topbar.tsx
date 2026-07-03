@@ -29,7 +29,12 @@ export function Topbar({ brandLogoUrl, currentUser, mode }: TopbarProps) {
         </a>
         <div className="topbar-actions" aria-label={t("shell.topbarTools")}>
           <LanguageSwitcher />
-          {currentUser ? <UserSummary currentUser={currentUser} mode={mode} /> : null}
+          {currentUser ? (
+            <>
+              <span className="topbar-divider" aria-hidden="true" />
+              <UserSummary currentUser={currentUser} mode={mode} />
+            </>
+          ) : null}
         </div>
       </div>
     </header>

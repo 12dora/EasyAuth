@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { flexRender, getCoreRowModel, getPaginationRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
-import { Download, Eye, FileUp, UploadCloud } from "lucide-react";
+import { Download, Eye, FileUp, Pencil, RefreshCcw, Save, UploadCloud, X } from "lucide-react";
 import { useRef, useState } from "react";
 import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../../../components/ui/TablePrimitives";
 import { EmptyState } from "../../../../components/ui/EmptyState";
@@ -12,7 +12,9 @@ import { Button } from "../../../../components/Button";
 import { CodeBlock } from "../../../../components/CodeBlock";
 import { Field, TextArea } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
+import { useI18n } from "../../../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
+import type { JsonObject } from "../../../../lib/api";
 
 type ManifestDiffItem = {
   type?: string;
@@ -90,6 +92,12 @@ export function ManifestTab({ appKey }: { appKey: string }) {
 
   return (
     <section className="space-y-6">
+      <CurrentManifestPanel
+        appKey={appKey}
+        onSaved={async () => {
+          await queryClient.invalidateQueries({ queryKey: versionsQueryKey });
+        }}
+      />
       <PanelSurface className="flex flex-wrap items-center gap-2">
         <input
           ref={fileInputRef}
@@ -180,6 +188,130 @@ export function ManifestTab({ appKey }: { appKey: string }) {
         </TableFrame>
       </div>
     </section>
+  );
+}
+
+function CurrentManifestPanel({ appKey, onSaved }: { appKey: string; onSaved: () => Promise<void> }) {
+  const { t } = useI18n();
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [jsonError, setJsonError] = useState("");
+  const [savedVersion, setSavedVersion] = useState<string | null>(null);
+  const manifestQuery = useQuery({
+    queryKey: ["console", "app", appKey, "manifest"],
+    queryFn: () => apiRequest<JsonObject>(`/console/api/v1/apps/${appKey}/manifest`),
+  });
+  const manifestText = manifestQuery.data ? JSON.stringify(manifestQuery.data, null, 2) : "";
+  const saveMutation = useMutation({
+    mutationFn: async () => {
+      const preview = await apiRequest<ManifestPreviewPayload>(
+        `/console/api/v1/apps/${appKey}/permission-template-imports/preview`,
+        { method: "POST", body: { template_format: "json", template: draft } },
+      );
+      if (!preview.preview_id) {
+        throw new Error(t("manifest.current.saveFailedNoPreview"));
+      }
+      return apiRequest<ManifestImportPayload>(
+        `/console/api/v1/apps/${appKey}/permission-template-imports/${preview.preview_id}/confirm`,
+        { method: "POST" },
+      );
+    },
+    onSuccess: async (payload) => {
+      setSavedVersion(String(payload.catalog_version ?? payload.template_version ?? ""));
+      setEditing(false);
+      await manifestQuery.refetch();
+      await onSaved();
+    },
+  });
+
+  const startEdit = () => {
+    if (!manifestQuery.data) {
+      return;
+    }
+    const currentVersion = Number(manifestQuery.data.schema_version ?? 0);
+    // 导入管线要求 schema_version 严格递增, 进入编辑时预先自动 +1。
+    const draftManifest = { ...manifestQuery.data, schema_version: currentVersion + 1 };
+    setDraft(JSON.stringify(draftManifest, null, 2));
+    setJsonError("");
+    setSavedVersion(null);
+    setEditing(true);
+  };
+
+  const save = () => {
+    try {
+      JSON.parse(draft);
+    } catch {
+      setJsonError(t("manifest.current.invalidJson"));
+      return;
+    }
+    setJsonError("");
+    saveMutation.mutate();
+  };
+
+  return (
+    <PanelSurface padding="lg" className="space-y-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div className="space-y-1">
+          <h2 className="text-base font-semibold text-ink">{t("manifest.current.title")}</h2>
+          <p className="max-w-3xl text-body leading-5 text-ink-soft">{t("manifest.current.description")}</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            icon={<RefreshCcw size={15} />}
+            loading={manifestQuery.isFetching}
+            onClick={() => void manifestQuery.refetch()}
+          >
+            {t("manifest.current.refresh")}
+          </Button>
+          {editing ? (
+            <>
+              <Button icon={<X size={15} />} onClick={() => setEditing(false)}>
+                {t("manifest.current.cancel")}
+              </Button>
+              <Button
+                variant="primary"
+                icon={<Save size={15} />}
+                loading={saveMutation.isPending}
+                disabled={saveMutation.isPending}
+                onClick={save}
+              >
+                {t("manifest.current.save")}
+              </Button>
+            </>
+          ) : (
+            <Button icon={<Pencil size={15} />} disabled={!manifestQuery.data} onClick={startEdit}>
+              {t("manifest.current.edit")}
+            </Button>
+          )}
+        </div>
+      </div>
+      {manifestQuery.error ? (
+        <StatusBanner tone="signal" title={t("manifest.current.loadFailed")} message={(manifestQuery.error as Error).message} />
+      ) : null}
+      {jsonError ? <StatusBanner tone="signal" title={jsonError} /> : null}
+      {saveMutation.error ? (
+        <StatusBanner tone="signal" title={t("manifest.current.saveFailed")} message={(saveMutation.error as Error).message} />
+      ) : null}
+      {savedVersion ? (
+        <StatusBanner tone="evergreen" title={t("manifest.current.saveSuccess")} message={`catalog_version: ${savedVersion}`} />
+      ) : null}
+      {editing ? (
+        <>
+          <TextArea
+            aria-label={t("manifest.current.title")}
+            rows={18}
+            className="font-mono text-xs leading-5"
+            value={draft}
+            onChange={(event) => setDraft(event.currentTarget.value)}
+          />
+          <p className="text-body text-ink-soft">{t("manifest.current.saveHint")}</p>
+        </>
+      ) : manifestQuery.data ? (
+        <div className="max-h-96 overflow-y-auto">
+          <CodeBlock language="json" code={manifestText} />
+        </div>
+      ) : null}
+    </PanelSurface>
   );
 }
 

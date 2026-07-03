@@ -17,15 +17,18 @@ import { EmptyState } from "../../components/ui/EmptyState";
 import { PageState } from "../../components/ui/PageState";
 import { MONO_TEXT_CLASS } from "../../components/ui/tableStyles";
 
+import { AppKeyInput } from "../../components/AppKeyInput";
 import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
 import { Dialog } from "../../components/Dialog";
 import { Field, TextArea, TextInput } from "../../components/Field";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
+import { UserMultiSelect } from "../../components/UserSelect";
 import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../lib/api";
 import type { JsonObject } from "../../lib/api";
+import { generateAppKey } from "../../lib/appKey";
 import type { AppListPayload, AppSummary } from "../../lib/domain";
 import { formatDateTime, readinessLabel, readinessTone } from "../../lib/status";
 import { safeJoin } from "./workspace/utils";
@@ -125,18 +128,20 @@ export function ConsoleAppList() {
           >
             {t("common.delete")}
           </TableRowActionButton>
-          {row.original.configuration_status !== "ready" ? (
-            <TableRowActionLink
-              href={`/console/apps/new?app_key=${row.original.app_key}&step=catalog`}
-              icon={<Compass size={15} />}
-              onClick={(event) => {
-                event.preventDefault();
-                void navigate(`/console/apps/new?app_key=${row.original.app_key}&step=catalog`);
-              }}
-            >
-              {t("appList.resumeOnboarding")}
-            </TableRowActionLink>
-          ) : null}
+          {/* 已就绪的行以 invisible 占位保持每行操作按钮列对齐 */}
+          <TableRowActionLink
+            className={row.original.configuration_status === "ready" ? "invisible" : undefined}
+            aria-hidden={row.original.configuration_status === "ready" || undefined}
+            tabIndex={row.original.configuration_status === "ready" ? -1 : undefined}
+            href={`/console/apps/new?app_key=${row.original.app_key}&step=catalog`}
+            icon={<Compass size={15} />}
+            onClick={(event) => {
+              event.preventDefault();
+              void navigate(`/console/apps/new?app_key=${row.original.app_key}&step=catalog`);
+            }}
+          >
+            {t("appList.resumeOnboarding")}
+          </TableRowActionLink>
           <TableRowActionLink
             href={`/console/apps/${row.original.app_key}`}
             icon={<ArrowRight size={15} />}
@@ -268,8 +273,8 @@ function CreateAppDialog({
   const [appKey, setAppKey] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [ownerUserIds, setOwnerUserIds] = useState("");
-  const [developerUserIds, setDeveloperUserIds] = useState("");
+  const [ownerUserIds, setOwnerUserIds] = useState<string[]>([]);
+  const [developerUserIds, setDeveloperUserIds] = useState<string[]>([]);
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -277,8 +282,8 @@ function CreateAppDialog({
       app_key: appKey.trim(),
       name: name.trim(),
       description: description.trim(),
-      owner_user_ids: splitUserIds(ownerUserIds),
-      developer_user_ids: splitUserIds(developerUserIds),
+      owner_user_ids: ownerUserIds,
+      developer_user_ids: developerUserIds,
     });
   };
 
@@ -299,7 +304,7 @@ function CreateAppDialog({
     >
       <form id="create-app-form" className="grid gap-4" onSubmit={submit}>
         <Field label="app_key">
-          <TextInput value={appKey} onChange={(event) => setAppKey(event.currentTarget.value)} required />
+          <AppKeyInput value={appKey} onChange={setAppKey} onGenerate={() => setAppKey(generateAppKey(name))} required />
         </Field>
         <Field label={t("appList.createDialog.name")}>
           <TextInput value={name} onChange={(event) => setName(event.currentTarget.value)} required />
@@ -308,18 +313,10 @@ function CreateAppDialog({
           <TextArea rows={3} value={description} onChange={(event) => setDescription(event.currentTarget.value)} />
         </Field>
         <Field label={t("appList.createDialog.ownerIds")} hint={t("appList.createDialog.userIdsHint")}>
-          <TextInput
-            aria-label="Owner 用户 ID"
-            value={ownerUserIds}
-            onChange={(event) => setOwnerUserIds(event.currentTarget.value)}
-          />
+          <UserMultiSelect aria-label="Owner 用户 ID" value={ownerUserIds} onChange={setOwnerUserIds} />
         </Field>
         <Field label={t("appList.createDialog.developerIds")} hint={t("appList.createDialog.userIdsHint")}>
-          <TextInput
-            aria-label="Developer 用户 ID"
-            value={developerUserIds}
-            onChange={(event) => setDeveloperUserIds(event.currentTarget.value)}
-          />
+          <UserMultiSelect aria-label="Developer 用户 ID" value={developerUserIds} onChange={setDeveloperUserIds} />
         </Field>
         {errorMessage ? <StatusBanner tone="signal" title={t("appList.createDialog.failed")} message={errorMessage} /> : null}
       </form>
@@ -327,9 +324,3 @@ function CreateAppDialog({
   );
 }
 
-function splitUserIds(value: string): string[] {
-  return value
-    .split(/[,\n]/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}

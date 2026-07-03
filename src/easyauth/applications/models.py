@@ -8,6 +8,7 @@ from django.db import models
 from django.db.models import Q
 
 from .approval_rule_rules import approval_rule_clean_errors
+from .integration_settings import IntegrationSettings
 from .oauth_models import OAuthClientBinding
 from .ops_models import (
     AppMembership,
@@ -27,6 +28,7 @@ __all__ = (
     "AuthorizationGroup",
     "AuthorizationGroupAccessPolicy",
     "AuthorizationGroupGrant",
+    "IntegrationSettings",
     "ManagedScopePolicy",
     "OAuthClientBinding",
     "Permission",

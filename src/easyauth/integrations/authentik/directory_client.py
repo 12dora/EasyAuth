@@ -8,8 +8,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
-from django.conf import settings
-
+from easyauth.applications.integration_settings import authentik_runtime_config
 from easyauth.integrations.authentik.directory_payloads import (
     DingTalkDirectoryDepartment,
     DingTalkDirectoryOrgContext,
@@ -74,15 +73,13 @@ class AuthentikDirectoryClient:
 
     @classmethod
     def from_settings(cls) -> AuthentikDirectoryClient:
+        # 生效配置由 integration_settings 解析: 数据库设置优先, 其次环境变量。
+        config = authentik_runtime_config()
         return cls(
-            base_url=str(getattr(settings, "EASYAUTH_AUTHENTIK_BASE_URL", "")).rstrip("/"),
-            api_token=str(getattr(settings, "EASYAUTH_AUTHENTIK_API_TOKEN", "")),
-            source_slug=str(
-                getattr(settings, "EASYAUTH_AUTHENTIK_DINGTALK_SOURCE_SLUG", "dingtalk"),
-            ),
-            timeout_seconds=float(
-                getattr(settings, "EASYAUTH_AUTHENTIK_OIDC_HTTP_TIMEOUT_SECONDS", 5),
-            ),
+            base_url=config.base_url,
+            api_token=config.api_token,
+            source_slug=config.source_slug,
+            timeout_seconds=config.timeout_seconds,
         )
 
     def get_status(self) -> DingTalkDirectoryStatus:

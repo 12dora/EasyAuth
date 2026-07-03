@@ -23,7 +23,10 @@ from easyauth.admin_console.operation_filters import (
     filter_access_requests,
     paginate_queryset,
 )
-from easyauth.admin_console.operations_audit import record_dependency_health_read
+from easyauth.admin_console.operations_audit import (
+    record_dependency_health_check_run,
+    record_dependency_health_read,
+)
 from easyauth.admin_console.operations_payloads import (
     access_request_dingtalk_fields,
     dependency_health_map_payload,
@@ -31,7 +34,11 @@ from easyauth.admin_console.operations_payloads import (
 )
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue
-from easyauth.applications.dependency_health import DependencyHealthService
+from easyauth.applications.dependency_health import (
+    DependencyHealthItem,
+    DependencyHealthService,
+)
+from easyauth.applications.dependency_health_checks import run_dependency_health_checks
 from easyauth.applications.models import App
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.grants.models import AccessGrant
@@ -155,14 +162,37 @@ def operations_dependency_health(request: HttpRequest) -> JsonResponse:
     match require_superuser(request):
         case str() as actor_id:
             record_dependency_health_read(actor_id)
-            items = DependencyHealthService.latest_items()
-            result: list[JsonValue] = []
-            result.extend(health_item(item) for item in items)
-            payload = list_payload(result)
-            payload.update(dependency_health_map_payload(items))
-            return _json_response(payload)
+            return _dependency_health_response(DependencyHealthService.latest_items())
         case JsonResponse() as response:
             return response
+
+
+def operations_dependency_health_check(request: HttpRequest) -> JsonResponse:
+    # 对上游依赖执行真实探测并写入健康快照。
+    match require_superuser(request):
+        case str() as actor_id:
+            pass
+        case JsonResponse() as response:
+            return response
+    if request.method != "POST":
+        return _error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "请求方法无效。",
+            status=HTTPStatus.METHOD_NOT_ALLOWED,
+        )
+    items = run_dependency_health_checks()
+    record_dependency_health_check_run(actor_id)
+    return _dependency_health_response(items)
+
+
+def _dependency_health_response(
+    items: tuple[DependencyHealthItem, ...],
+) -> JsonResponse:
+    result: list[JsonValue] = []
+    result.extend(health_item(item) for item in items)
+    payload = list_payload(result)
+    payload.update(dependency_health_map_payload(items))
+    return _json_response(payload)
 
 
 def _access_request_page(request: HttpRequest) -> Page[AccessRequest]:

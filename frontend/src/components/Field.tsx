@@ -5,6 +5,7 @@ import { cn } from "../lib/cn";
 
 interface FieldProps {
   label: string;
+  labelExtra?: ReactNode;
   hint?: string;
   error?: string;
   children: ReactNode;
@@ -13,7 +14,7 @@ interface FieldProps {
 const INPUT_CLASSES =
   "w-full rounded-[2px] border border-ink/15 bg-paper-soft px-2.5 text-body text-ink transition-colors placeholder:text-ink-faint focus:border-accent focus:outline-none disabled:cursor-not-allowed disabled:opacity-50";
 
-export function Field({ label, hint, error, children }: FieldProps) {
+export function Field({ label, labelExtra, hint, error, children }: FieldProps) {
   const generatedId = useId();
   const inputId = isValidElement<{ id?: string }>(children) && children.props.id ? children.props.id : generatedId;
   const hintId = hint ? `${inputId}-hint` : undefined;
@@ -28,9 +29,12 @@ export function Field({ label, hint, error, children }: FieldProps) {
 
   return (
     <div className="flex flex-col gap-2">
-      <label className="text-label uppercase tracking-caps-wide text-ink-soft font-medium" htmlFor={inputId}>
-        {label}
-      </label>
+      <span className="flex items-center gap-1.5">
+        <label className="text-label uppercase tracking-caps-wide text-ink-soft font-medium" htmlFor={inputId}>
+          {label}
+        </label>
+        {labelExtra}
+      </span>
       {inputElement}
       {hint ? (
         <span className="text-xs leading-5 text-ink-faint" id={hintId}>

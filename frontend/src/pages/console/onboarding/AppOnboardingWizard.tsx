@@ -3,18 +3,22 @@ import { Check, Compass, Eye, FileUp, KeyRound, Play, Plus, RefreshCcw, UploadCl
 import { useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
+import { AppKeyInput } from "../../../components/AppKeyInput";
 import { Badge } from "../../../components/Badge";
 import { Button } from "../../../components/Button";
 import { ButtonLink } from "../../../components/ButtonLink";
 import { CodeBlock } from "../../../components/CodeBlock";
 import { Field, TextArea, TextInput } from "../../../components/Field";
+import { InfoTip } from "../../../components/InfoTip";
 import { PageHeader } from "../../../components/PageHeader";
 import { StatusBanner } from "../../../components/StatusBanner";
+import { UserMultiSelect, UserSearchInput } from "../../../components/UserSelect";
 import { PanelSurface } from "../../../components/ui/PanelSurface";
 import { useI18n } from "../../../i18n/I18nProvider";
 import type { MessageKey } from "../../../i18n/messages";
 import { apiRequest } from "../../../lib/api";
 import type { JsonObject } from "../../../lib/api";
+import { generateAppKey } from "../../../lib/appKey";
 import { cn } from "../../../lib/cn";
 import type { AppListPayload, ConfigurationStatus, QueryTestResult, SecretPayload } from "../../../lib/domain";
 
@@ -189,8 +193,8 @@ function BasicsStep({
   const [appKeyInput, setAppKeyInput] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [ownerUserIds, setOwnerUserIds] = useState("");
-  const [developerUserIds, setDeveloperUserIds] = useState("");
+  const [ownerUserIds, setOwnerUserIds] = useState<string[]>([]);
+  const [developerUserIds, setDeveloperUserIds] = useState<string[]>([]);
   const createMutation = useMutation({
     mutationFn: (payload: JsonObject) =>
       apiRequest<AppListPayload>("/console/api/v1/apps", { method: "POST", body: payload }),
@@ -229,8 +233,8 @@ function BasicsStep({
       name: name.trim(),
       description: description.trim(),
       is_active: true,
-      owner_user_ids: splitUserIds(ownerUserIds),
-      developer_user_ids: splitUserIds(developerUserIds),
+      owner_user_ids: ownerUserIds,
+      developer_user_ids: developerUserIds,
     });
   };
 
@@ -238,7 +242,7 @@ function BasicsStep({
     <StepPanel title={t("wizard.basics.title")} description={t("wizard.basics.description")}>
       <form className="grid max-w-2xl gap-4" onSubmit={submit}>
         <Field label="app_key" hint={t("wizard.basics.appKeyHint")}>
-          <TextInput value={appKeyInput} onChange={(event) => setAppKeyInput(event.currentTarget.value)} required />
+          <AppKeyInput value={appKeyInput} onChange={setAppKeyInput} onGenerate={() => setAppKeyInput(generateAppKey(name))} required />
         </Field>
         <Field label={t("appList.createDialog.name")}>
           <TextInput value={name} onChange={(event) => setName(event.currentTarget.value)} required />
@@ -247,10 +251,10 @@ function BasicsStep({
           <TextArea rows={3} value={description} onChange={(event) => setDescription(event.currentTarget.value)} />
         </Field>
         <Field label={t("appList.createDialog.ownerIds")} hint={t("appList.createDialog.userIdsHint")}>
-          <TextInput value={ownerUserIds} onChange={(event) => setOwnerUserIds(event.currentTarget.value)} />
+          <UserMultiSelect value={ownerUserIds} onChange={setOwnerUserIds} />
         </Field>
         <Field label={t("appList.createDialog.developerIds")} hint={t("appList.createDialog.userIdsHint")}>
-          <TextInput value={developerUserIds} onChange={(event) => setDeveloperUserIds(event.currentTarget.value)} />
+          <UserMultiSelect value={developerUserIds} onChange={setDeveloperUserIds} />
         </Field>
         {createMutation.error ? (
           <StatusBanner tone="signal" title={t("wizard.basics.createFailed")} message={(createMutation.error as Error).message} />
@@ -587,8 +591,8 @@ function VerifyStep({ appKey, onBack, onContinue }: { appKey: string; onBack: ()
   return (
     <StepPanel title={t("wizard.verify.title")} description={t("wizard.verify.description")}>
       <div className="grid max-w-3xl items-end gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-        <Field label={t("wizard.verify.userId")} hint={t("wizard.verify.userIdHint")}>
-          <TextInput value={userId} onChange={(event) => setUserId(event.currentTarget.value)} />
+        <Field label={t("wizard.verify.userId")} labelExtra={<InfoTip text={t("wizard.verify.userIdHint")} />}>
+          <UserSearchInput value={userId} onChange={setUserId} />
         </Field>
         <Field label={t("wizard.verify.token")}>
           <TextInput type="password" value={token} onChange={(event) => setToken(event.currentTarget.value)} autoComplete="off" />
@@ -716,9 +720,3 @@ function changeItem(change: { action?: string; key?: string; parent_key?: string
   };
 }
 
-function splitUserIds(value: string): string[] {
-  return value
-    .split(/[,\n]/)
-    .map((item) => item.trim())
-    .filter(Boolean);
-}

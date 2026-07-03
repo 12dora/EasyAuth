@@ -40,6 +40,7 @@ from easyauth.admin_console.operations_api import (
     operations_access_grants,
     operations_access_requests,
     operations_dependency_health,
+    operations_dependency_health_check,
     operations_emergency_revokes,
 )
 from easyauth.admin_console.operations_retry_api import operations_retry_grant
@@ -61,6 +62,8 @@ from easyauth.admin_console.permissions_api import console_permission_detail, co
 from easyauth.admin_console.query_test_api import console_permission_query_test
 from easyauth.admin_console.roles_api import console_role_detail, console_roles
 from easyauth.admin_console.scopes_api import console_scope_detail, console_scopes
+from easyauth.admin_console.settings_api import console_integration_settings
+from easyauth.admin_console.users_api import console_user_search
 
 app_name = "admin_console"
 
@@ -117,6 +120,17 @@ urlpatterns = [
         "api/v1/operations/dependency-health",
         operations_dependency_health,
         name="operations-dependency-health",
+    ),
+    path(
+        "api/v1/operations/dependency-health/checks",
+        operations_dependency_health_check,
+        name="operations-dependency-health-check",
+    ),
+    path("api/v1/users", console_user_search, name="console-user-search"),
+    path(
+        "api/v1/settings/integrations",
+        console_integration_settings,
+        name="console-integration-settings",
     ),
     path(
         "api/v1/operations/access-requests/<int:request_id>/retry-grant",

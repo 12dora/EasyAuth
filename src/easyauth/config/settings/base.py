@@ -252,7 +252,7 @@ EASYAUTH_AUTHENTIK_DINGTALK_SOURCE_SLUG = os.environ.get(
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
 CELERY_TASK_EAGER_PROPAGATES = True
-CELERY_IMPORTS = ("easyauth.tasks.grants", "easyauth.tasks.authentik")
+CELERY_IMPORTS = ("easyauth.tasks.grants", "easyauth.tasks.authentik", "easyauth.tasks.health")
 CELERY_BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
     "grant-expiration-cleanup": {
         "task": "easyauth.grants.cleanup_expired_grants",
@@ -262,5 +262,10 @@ CELERY_BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
     "dingtalk-directory-sync": {
         "task": "easyauth.authentik.sync_dingtalk_directory",
         "schedule": float(os.environ.get("EASYAUTH_DINGTALK_DIRECTORY_SYNC_SECONDS", "300")),
+    },
+    # 上游依赖健康探测: Authentik 存活/目录 API/钉钉同步链路/Celery worker。
+    "dependency-health-check": {
+        "task": "easyauth.health.run_dependency_health_checks",
+        "schedule": float(os.environ.get("EASYAUTH_DEPENDENCY_HEALTH_CHECK_SECONDS", "300")),
     },
 }

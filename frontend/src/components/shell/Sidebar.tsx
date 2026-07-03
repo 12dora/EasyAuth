@@ -71,16 +71,29 @@ export function Sidebar({ mode }: SidebarProps) {
   }, [location.pathname, mode, navLinks, settingsPath]);
 
   useEffect(() => {
-    const nav = sidebarRef.current;
-    const activeLink = nav?.querySelector<HTMLElement>(`[data-nav-path="${activePath}"]`);
-    if (!nav || !activeLink) {
-      setIndicatorStyle({});
+    const sidebar = sidebarRef.current;
+    if (!sidebar) {
       return;
     }
-    setIndicatorStyle({
-      height: activeLink.offsetHeight,
-      transform: `translateY(${activeLink.offsetTop}px)`,
-    });
+    // 分组导航与底部设置项处于不同 offsetParent, offsetTop 坐标系不一致,
+    // 统一用相对 sidebar 的几何位置计算指示灯位移。
+    const measure = () => {
+      const activeLink = sidebar.querySelector<HTMLElement>(`[data-nav-path="${activePath}"]`);
+      if (!activeLink) {
+        setIndicatorStyle({ opacity: 0 });
+        return;
+      }
+      const sidebarRect = sidebar.getBoundingClientRect();
+      const linkRect = activeLink.getBoundingClientRect();
+      setIndicatorStyle({
+        height: linkRect.height,
+        transform: `translateY(${linkRect.top - sidebarRect.top + sidebar.scrollTop}px)`,
+      });
+    };
+    measure();
+    const resizeObserver = new ResizeObserver(measure);
+    resizeObserver.observe(sidebar);
+    return () => resizeObserver.disconnect();
   }, [activePath, location.pathname]);
 
   return (

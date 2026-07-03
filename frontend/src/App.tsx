@@ -10,6 +10,7 @@ import { EmptyState } from "./components/ui/EmptyState";
 import { useI18n } from "./i18n/I18nProvider";
 import { ConsoleAppList } from "./pages/console/ConsoleAppList";
 import { ConsoleAppWorkspace } from "./pages/console/ConsoleAppWorkspace";
+import { ConsoleSettingsPage } from "./pages/console/ConsoleSettingsPage";
 import { OperationsPage } from "./pages/console/OperationsPage";
 import { AppOnboardingWizard } from "./pages/console/onboarding/AppOnboardingWizard";
 import { PortalPage } from "./pages/portal/PortalPage";
@@ -68,7 +69,7 @@ export function App({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUse
         <Route path="/console/apps/:appKey" element={<ConsoleAppWorkspace />} />
         <Route path="/console/operations/:section" element={<OperationsPage />} />
         <Route path="/console/operations" element={<Navigate to="/console/operations/access-requests" replace />} />
-        <Route path="/console/settings" element={<SettingsPlaceholder mode="console" />} />
+        <Route path="/console/settings" element={<ConsoleSettingsPage />} />
         <Route path="*" element={<Navigate to="/console" replace />} />
       </Route>
     </Routes>

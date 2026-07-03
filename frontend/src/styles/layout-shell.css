@@ -42,7 +42,7 @@
   top: 0;
   z-index: 20;
   border-bottom: 1px solid rgb(var(--hairline));
-  background: rgba(255, 255, 255, 0.96);
+  background: rgba(255, 255, 255, 0.95);
   backdrop-filter: blur(8px);
 }
 
@@ -87,7 +87,7 @@
 }
 
 .brand:hover {
-  opacity: 0.82;
+  opacity: 0.8;
 }
 
 .brand-logo {
@@ -126,7 +126,7 @@
 .brand-copy strong {
   overflow: hidden;
   font-size: 16px;
-  font-weight: 700;
+  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -139,7 +139,14 @@
 .topbar-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
+}
+
+.topbar-divider {
+  width: 1px;
+  height: 28px;
+  margin: 0 4px;
+  background: rgb(var(--hairline));
 }
 
 .user-menu {
@@ -176,9 +183,13 @@
 }
 
 .user-summary strong {
+  overflow: hidden;
+  max-width: 150px;
   font-size: 13px;
-  font-weight: 700;
+  font-weight: 500;
   line-height: 1.2;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .user-summary span {
@@ -190,14 +201,15 @@
 .avatar {
   display: grid;
   place-items: center;
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
   overflow: hidden;
+  border: 1px solid rgb(var(--accent) / 0.2);
   border-radius: 50%;
-  background: rgb(var(--ink));
-  color: #fff;
-  font-size: 13px;
-  font-weight: 700;
+  background: rgb(var(--accent) / 0.08);
+  color: rgb(var(--accent));
+  font-size: 12px;
+  font-weight: 600;
 }
 
 .avatar-image {
@@ -265,6 +277,7 @@
 
 .nav-active-indicator {
   position: absolute;
+  top: 0;
   left: 0;
   z-index: 1;
   width: 3px;

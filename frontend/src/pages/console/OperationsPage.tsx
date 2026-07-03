@@ -5,8 +5,8 @@ import {
   useReactTable,
   type ColumnDef,
 } from "@tanstack/react-table";
-import { useQuery } from "@tanstack/react-query";
-import { RefreshCcw } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Activity, RefreshCcw } from "lucide-react";
 import { useParams } from "react-router-dom";
 import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../components/ui/TablePrimitives";
 import { TablePagination } from "../../components/ui/TablePagination";
@@ -33,11 +33,22 @@ const ENDPOINTS: Record<string, { title: string; endpoint: string }> = {
 
 export function OperationsPage() {
   const { t } = useI18n();
+  const queryClient = useQueryClient();
   const { section = "access-requests" } = useParams();
   const config = ENDPOINTS[section] ?? ENDPOINTS["access-requests"];
   const query = useQuery({
     queryKey: ["console", "operations", section],
     queryFn: () => apiRequest<{ items?: OperationRow[]; data?: OperationRow[] }>(config.endpoint),
+  });
+  const healthCheckMutation = useMutation({
+    mutationFn: () =>
+      apiRequest<{ items?: OperationRow[]; data?: OperationRow[] }>(
+        "/console/api/v1/operations/dependency-health/checks",
+        { method: "POST" },
+      ),
+    onSuccess: (payload) => {
+      queryClient.setQueryData(["console", "operations", "dependency-health"], payload);
+    },
   });
   const rows = itemsFromPayload<OperationRow>(query.data);
   const columns = operationColumns(section, t);
@@ -55,11 +66,30 @@ export function OperationsPage() {
         title={config.title}
         description="系统管理员的授权运营和依赖观测入口。"
         actions={
-          <Button icon={<RefreshCcw size={16} />} loading={query.isFetching} onClick={() => void query.refetch()}>
-            刷新
-          </Button>
+          <>
+            {section === "dependency-health" ? (
+              <Button
+                variant="primary"
+                icon={<Activity size={16} />}
+                loading={healthCheckMutation.isPending}
+                onClick={() => healthCheckMutation.mutate()}
+              >
+                {t("ops.dependencyHealth.runCheck")}
+              </Button>
+            ) : null}
+            <Button icon={<RefreshCcw size={16} />} loading={query.isFetching} onClick={() => void query.refetch()}>
+              刷新
+            </Button>
+          </>
         }
       />
+      {healthCheckMutation.error ? (
+        <StatusBanner
+          tone="signal"
+          title={t("ops.dependencyHealth.runCheckFailed")}
+          message={(healthCheckMutation.error as Error).message}
+        />
+      ) : null}
       {query.error && rows.length > 0 ? (
         <StatusBanner tone="signal" title="运营数据加载失败" message={(query.error as Error).message} />
       ) : null}
@@ -117,7 +147,7 @@ function operationColumns(section: string, t: Translator): ColumnDef<OperationRo
   if (section === "dependency-health") {
     return [
       { header: "组件", cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.component)}</code> },
-      { header: "状态", cell: ({ row }) => <Badge tone={row.original.status === "healthy" ? "evergreen" : "signal"}>{stringValue(row.original.status)}</Badge> },
+      { header: "状态", cell: ({ row }) => <Badge tone={healthTone(stringValue(row.original.status))}>{stringValue(row.original.status)}</Badge> },
       { header: "摘要", cell: ({ row }) => stringValue(row.original.summary) },
       { header: "错误", cell: ({ row }) => stringValue(row.original.error_summary) },
       { header: "检查时间", cell: ({ row }) => formatDateTime(stringValue(row.original.last_checked_at)) },
@@ -144,4 +174,17 @@ function operationColumns(section: string, t: Translator): ColumnDef<OperationRo
 
 function stringValue(value: unknown): string {
   return typeof value === "string" && value !== "" ? value : "-";
+}
+
+function healthTone(status: string): "evergreen" | "amber" | "neutral" | "signal" {
+  if (status === "healthy") {
+    return "evergreen";
+  }
+  if (status === "warning") {
+    return "amber";
+  }
+  if (status === "unknown") {
+    return "neutral";
+  }
+  return "signal";
 }
