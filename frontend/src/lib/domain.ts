@@ -56,7 +56,9 @@ export interface AppMembershipItem {
 export interface AppScopeItem {
   key: string;
   name: string;
+  name_en?: string;
   description?: string;
+  description_en?: string;
   is_active: boolean;
   display_order: number;
 }
@@ -93,7 +95,9 @@ export interface PermissionItem {
   app_key?: string;
   key: string;
   name: string;
+  name_en?: string;
   description?: string;
+  description_en?: string;
   group_key?: string;
   is_active?: boolean;
   is_deprecated?: boolean;
@@ -135,7 +139,9 @@ export interface AuthorizationGroupItem {
   key: string;
   kind: "role" | "bundle" | string;
   name: string;
+  name_en?: string;
   description?: string;
+  description_en?: string;
   requestable: boolean;
   is_active: boolean;
   grants: AuthorizationGroupGrantItem[];
@@ -147,7 +153,9 @@ export interface PermissionGroupItem {
   type: "group";
   key: string;
   name: string;
+  name_en?: string;
   description?: string;
+  description_en?: string;
   depth?: number;
   children?: Array<PermissionGroupItem | PermissionItem>;
   permissions?: PermissionItem[];
@@ -313,7 +321,9 @@ export interface PortalCatalogAuthorizationGroup {
   key: string;
   kind: "role" | "bundle" | string;
   name: string;
+  name_en?: string;
   description?: string;
+  description_en?: string;
   requestable?: boolean;
   requires_approval?: boolean;
 }
@@ -323,7 +333,9 @@ export interface DirectGrantScopeOption {
   permission: string;
   scope: string;
   name?: string;
+  name_en?: string;
   description?: string;
+  description_en?: string;
 }
 
 export interface PortalRequestCatalog {

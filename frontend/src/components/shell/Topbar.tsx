@@ -1,4 +1,6 @@
 import type { CurrentUser } from "../../App";
+import { useI18n } from "../../i18n/I18nProvider";
+import { LanguageSwitcher } from "./LanguageSwitcher";
 import { UserSummary } from "./UserSummary";
 
 interface TopbarProps {
@@ -8,7 +10,12 @@ interface TopbarProps {
 }
 
 export function Topbar({ brandLogoUrl, currentUser, mode }: TopbarProps) {
-  const shellTitle = currentUser ? (mode === "console" ? "管理控制台" : "员工门户") : "统一权限中心";
+  const { t } = useI18n();
+  const shellTitle = currentUser
+    ? mode === "console"
+      ? t("shell.console.title")
+      : t("shell.portal.title")
+    : t("shell.public.title");
 
   return (
     <header className="topbar">
@@ -20,7 +27,8 @@ export function Topbar({ brandLogoUrl, currentUser, mode }: TopbarProps) {
             <span>{shellTitle}</span>
           </span>
         </a>
-        <div className="topbar-actions" aria-label="顶部工具">
+        <div className="topbar-actions" aria-label={t("shell.topbarTools")}>
+          <LanguageSwitcher />
           {currentUser ? <UserSummary currentUser={currentUser} mode={mode} /> : null}
         </div>
       </div>

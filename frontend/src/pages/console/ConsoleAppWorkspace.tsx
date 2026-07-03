@@ -8,6 +8,8 @@ import { Field, SelectInput } from "../../components/Field";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
 import { PanelSurface } from "../../components/ui/PanelSurface";
+import { useI18n } from "../../i18n/I18nProvider";
+import type { MessageKey } from "../../i18n/messages";
 import { apiRequest } from "../../lib/api";
 import { cn } from "../../lib/cn";
 import type { JsonObject } from "../../lib/api";
@@ -23,19 +25,20 @@ import { RulesTab } from "./workspace/tabs/RulesTab";
 
 type WorkspaceTab = "overview" | "catalog" | "matrix" | "managed-scope" | "rules" | "manifest" | "credentials" | "test" | "guide";
 
-const TABS: Array<{ key: WorkspaceTab; label: string }> = [
-  { key: "overview", label: "总览" },
-  { key: "catalog", label: "权限目录" },
-  { key: "matrix", label: "授权组" },
-  { key: "managed-scope", label: "管理范围" },
-  { key: "rules", label: "审批规则" },
-  { key: "manifest", label: "清单" },
-  { key: "credentials", label: "凭据" },
-  { key: "test", label: "联调" },
-  { key: "guide", label: "接入说明" },
+const TABS: Array<{ key: WorkspaceTab; labelKey: MessageKey }> = [
+  { key: "overview", labelKey: "workspace.tab.overview" },
+  { key: "catalog", labelKey: "workspace.tab.catalog" },
+  { key: "matrix", labelKey: "workspace.tab.matrix" },
+  { key: "managed-scope", labelKey: "workspace.tab.managedScope" },
+  { key: "rules", labelKey: "workspace.tab.rules" },
+  { key: "manifest", labelKey: "workspace.tab.manifest" },
+  { key: "credentials", labelKey: "workspace.tab.credentials" },
+  { key: "test", labelKey: "workspace.tab.test" },
+  { key: "guide", labelKey: "workspace.tab.guide" },
 ];
 
 export function ConsoleAppWorkspace() {
+  const { t } = useI18n();
   const { appKey = "" } = useParams();
   const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
@@ -97,12 +100,12 @@ export function ConsoleAppWorkspace() {
   return (
     <>
       <PageHeader
-        eyebrow="控制台工作台"
+        eyebrow={t("workspace.eyebrow")}
         title={app?.name ?? appKey}
-        description={app?.description || "应用授权配置、接入凭据和联调入口。"}
+        description={app?.description || t("workspace.defaultDescription")}
         actions={
           <div className="flex flex-col items-stretch gap-2 sm:items-end">
-            <ButtonLink to="/console">返回应用列表</ButtonLink>
+            <ButtonLink to="/console">{t("workspace.backToList")}</ButtonLink>
             {app?.can_manage ? (
               <Button
                 type="button"
@@ -111,16 +114,16 @@ export function ConsoleAppWorkspace() {
                   setBasicInfoEditing(true);
                 }}
               >
-                编辑
+                {t("workspace.edit")}
               </Button>
             ) : null}
           </div>
         }
       />
       {appQuery.error ? (
-        <StatusBanner tone="signal" title="应用加载失败" message={(appQuery.error as Error).message} />
+        <StatusBanner tone="signal" title={t("workspace.loadFailed")} message={(appQuery.error as Error).message} />
       ) : null}
-      <div className="relative mb-6 flex gap-1 overflow-x-auto border-b border-ink/12" role="tablist" aria-label="应用工作台页签">
+      <div className="relative mb-6 flex gap-1 overflow-x-auto border-b border-ink/12" role="tablist" aria-label={t("workspace.tablist")}>
         <span
           aria-hidden="true"
           className="pointer-events-none absolute bottom-0 h-0.5 bg-accent transition-[left,width] duration-200 ease-out"
@@ -145,7 +148,7 @@ export function ConsoleAppWorkspace() {
             onClick={() => setSearchParams({ tab: item.key })}
             type="button"
           >
-            {item.label}
+            {t(item.labelKey)}
           </button>
         ))}
       </div>

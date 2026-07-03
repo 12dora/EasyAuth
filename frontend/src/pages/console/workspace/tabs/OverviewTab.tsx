@@ -23,10 +23,12 @@ import { StatusBanner } from "../../../../components/StatusBanner";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
 import type { JsonObject } from "../../../../lib/api";
 import type { AppSummary, ConfigurationIssue, ConfigurationStatus } from "../../../../lib/domain";
+import { useI18n } from "../../../../i18n/I18nProvider";
 import { formatDateTime, readinessLabel, readinessTone } from "../../../../lib/status";
 import { safeJoin } from "../utils";
 
 export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary }) {
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const [membershipDialogOpen, setMembershipDialogOpen] = useState(false);
   const statusQuery = useQuery({
@@ -93,7 +95,7 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
   return (
     <section className="space-y-6">
       {status && status !== "ready" ? (
-        <StatusBanner tone={statusBannerTone} title={`配置${readinessLabel(status)}`} />
+        <StatusBanner tone={statusBannerTone} title={`配置${readinessLabel(t, status)}`} />
       ) : null}
       {statusQuery.error ? (
         <StatusBanner tone="signal" title="配置状态加载失败" message={(statusQuery.error as Error).message} />
@@ -117,7 +119,7 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
           <BasicInfoItem label="负责人" value={safeJoin(app?.owners)} />
           <BasicInfoItem label="开发者" value={safeJoin(app?.developers)} />
           <BasicInfoItem label="更新时间" value={formatDateTime(app?.updated_at)} />
-          <BasicInfoItem label="配置状态" value={`${readinessLabel(status)}`} />
+          <BasicInfoItem label="配置状态" value={`${readinessLabel(t, status)}`} />
         </dl>
         {app?.description ? <p className="max-w-3xl text-body leading-5 text-ink-soft">{app.description}</p> : null}
       </PanelSurface>

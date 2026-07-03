@@ -2,6 +2,8 @@ import type { CSSProperties } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 
+import { useI18n } from "../../i18n/I18nProvider";
+import type { MessageKey } from "../../i18n/messages";
 import { ShellNav } from "./ShellNav";
 import type { ShellNavGroup } from "./ShellNav";
 
@@ -9,41 +11,54 @@ interface SidebarProps {
   mode: "console" | "portal";
 }
 
-const consoleGroups: ShellNavGroup[] = [
+interface NavGroupSpec {
+  labelKey: MessageKey;
+  links: Array<{ to: string; labelKey: MessageKey }>;
+}
+
+const CONSOLE_GROUPS: NavGroupSpec[] = [
   {
-    label: "概览",
-    links: [{ to: "/console", label: "应用" }],
+    labelKey: "nav.console.overview",
+    links: [{ to: "/console", labelKey: "nav.console.apps" }],
   },
   {
-    label: "运营",
+    labelKey: "nav.console.operations",
     links: [
-      { to: "/console/operations/access-requests", label: "申请运营" },
-      { to: "/console/operations/access-grants", label: "授权运营" },
-      { to: "/console/operations/dependency-health", label: "依赖健康" },
+      { to: "/console/operations/access-requests", labelKey: "nav.console.accessRequests" },
+      { to: "/console/operations/access-grants", labelKey: "nav.console.accessGrants" },
+      { to: "/console/operations/dependency-health", labelKey: "nav.console.dependencyHealth" },
     ],
   },
 ];
 
-const portalGroups: ShellNavGroup[] = [
+const PORTAL_GROUPS: NavGroupSpec[] = [
   {
-    label: "权限",
-    links: [{ to: "/portal", label: "我的权限" }],
+    labelKey: "nav.portal.permissions",
+    links: [{ to: "/portal", labelKey: "nav.portal.myPermissions" }],
   },
   {
-    label: "申请",
+    labelKey: "nav.portal.request",
     links: [
-      { to: "/portal/request", label: "申请权限" },
-      { to: "/portal/requests", label: "我的申请" },
-      { to: "/portal/expiring", label: "即将过期" },
+      { to: "/portal/request", labelKey: "nav.portal.requestAccess" },
+      { to: "/portal/requests", labelKey: "nav.portal.myRequests" },
+      { to: "/portal/expiring", labelKey: "nav.portal.expiring" },
     ],
   },
 ];
 
 export function Sidebar({ mode }: SidebarProps) {
+  const { t } = useI18n();
   const location = useLocation();
   const sidebarRef = useRef<HTMLElement>(null);
   const [indicatorStyle, setIndicatorStyle] = useState<CSSProperties>({});
-  const groups = mode === "console" ? consoleGroups : portalGroups;
+  const groups = useMemo<ShellNavGroup[]>(
+    () =>
+      (mode === "console" ? CONSOLE_GROUPS : PORTAL_GROUPS).map((group) => ({
+        label: t(group.labelKey),
+        links: group.links.map((link) => ({ to: link.to, label: t(link.labelKey) })),
+      })),
+    [mode, t],
+  );
   const settingsPath = mode === "console" ? "/console/settings" : "/portal/settings";
   const navLinks = useMemo(() => groups.flatMap((group) => group.links), [groups]);
   const activePath = useMemo(() => {
@@ -78,10 +93,10 @@ export function Sidebar({ mode }: SidebarProps) {
         aria-hidden="true"
       />
       <ShellNav groups={groups} />
-      <div className="sidebar-footer" aria-label="侧边栏底部操作">
+      <div className="sidebar-footer" aria-label={t("shell.sidebarFooter")}>
         <hr />
         <NavLink to={settingsPath} data-nav-path={settingsPath}>
-          <span>设置</span>
+          <span>{t("shell.settings")}</span>
         </NavLink>
       </div>
     </aside>

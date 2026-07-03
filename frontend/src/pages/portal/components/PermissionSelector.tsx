@@ -19,6 +19,8 @@ import {
   TABLE_ROW_CLASS,
 } from "../../../components/ui/tableStyles";
 import { cn } from "../../../lib/cn";
+import { localizedName, useI18n } from "../../../i18n/I18nProvider";
+import type { Locale, MessageKey } from "../../../i18n/messages";
 
 import { isPermissionGroupItem } from "../permissionTree";
 import {
@@ -26,8 +28,6 @@ import {
   directGrantSelectionPermissionKey,
 } from "../hooks/useAccessRequestForm";
 import type { ScopedPermissionGroupItem, ScopedPermissionItem } from "../hooks/useAccessRequestForm";
-
-const NO_DIRECT_PERMISSION_COPY = "当前应用未返回可直接申请的权限，可仅选择权限组发起申请。";
 
 interface PermissionSelectorProps {
   appKey: string;
@@ -91,6 +91,7 @@ export function PermissionSelector({
   onCollapseGroups,
   onToggleGroup,
 }: PermissionSelectorProps) {
+  const { locale, t } = useI18n();
   const exitingGroupKeys = useExitingGroupKeys(expandedGroupKeys);
   const enteringGroupKeys = useEnteringGroupKeys(expandedGroupKeys);
   const rows = useMemo(
@@ -106,7 +107,7 @@ export function PermissionSelector({
     () => [
       {
         id: "permission",
-        header: "权限",
+        header: t("selector.column.permission"),
         cell: ({ row }) =>
           row.original.type === "group" ? (
             <PermissionGroupNameCell
@@ -116,17 +117,18 @@ export function PermissionSelector({
               selectedCount={row.original.selectedCount}
               permissionCount={row.original.permissionCount}
               onToggleGroup={onToggleGroup}
+              locale={locale}
             />
           ) : (
             <span className="permission-selector__permission-name" style={depthStyle(row.original.depth)}>
               <span className="permission-selector__leaf-marker" aria-hidden="true" />
-              <span className="permission-selector__permission-label">{row.original.permission.name}</span>
+              <span className="permission-selector__permission-label">{localizedName(locale, row.original.permission)}</span>
             </span>
           ),
       },
       {
         id: "key",
-        header: "权限 Key",
+        header: t("selector.column.key"),
         cell: ({ row }) => (
           <code className={MONO_TEXT_CLASS}>
             {row.original.type === "group" ? row.original.group.key : row.original.permission.key}
@@ -135,7 +137,7 @@ export function PermissionSelector({
       },
       {
         id: "scope",
-        header: "权限范围",
+        header: t("selector.column.scope"),
         cell: ({ row }) =>
           row.original.type === "group" ? (
             <PermissionGroupScopeCell
@@ -143,17 +145,19 @@ export function PermissionSelector({
               scopeOptions={row.original.scopeOptions}
               selectedKeys={selectedKeys}
               onScopeChange={onPermissionGroupScopeChange}
+              locale={locale}
             />
           ) : (
             <PermissionScopeCell
               permission={row.original.permission}
               selectedKeys={selectedKeys}
               onScopeChange={onPermissionScopeChange}
+              locale={locale}
             />
           ),
       },
     ],
-    [onPermissionGroupScopeChange, onPermissionScopeChange, onToggleGroup, selectedKeys],
+    [locale, onPermissionGroupScopeChange, onPermissionScopeChange, onToggleGroup, selectedKeys, t],
   );
   const table = useReactTable({
     data: displayRows,
@@ -174,28 +178,28 @@ export function PermissionSelector({
   if (!appKey) {
     return (
       <div className="permission-selector__surface">
-        <EmptyState title="选择应用后加载权限目录" description="直接权限可留空，也可在应用目录加载后勾选具体权限。" />
+        <EmptyState title={t("selector.selectAppFirst.title")} description={t("selector.selectAppFirst.description")} />
       </div>
     );
   }
   if (loading) {
     return (
       <div className="permission-selector__surface">
-        <EmptyState title="权限目录加载中" description="正在读取可申请的直接权限。" />
+        <EmptyState title={t("selector.loading.title")} description={t("selector.loading.description")} />
       </div>
     );
   }
   if (errorMessage) {
     return (
       <div className="permission-selector__surface">
-        <EmptyState title="权限目录加载失败" description={errorMessage} />
+        <EmptyState title={t("selector.loadFailed.title")} description={errorMessage} />
       </div>
     );
   }
   if (rows.length === 0) {
     return (
       <div className="permission-selector__surface">
-        <EmptyState title="暂无可选直接权限" description={NO_DIRECT_PERMISSION_COPY} />
+        <EmptyState title={t("selector.empty.title")} description={t("selector.empty.description")} />
       </div>
     );
   }
@@ -220,7 +224,7 @@ export function PermissionSelector({
         onClear={() => onClearPermissionKeys(currentPageSelectionKeysFromRows(currentPageRows))}
       />
       <div className="overflow-x-auto">
-        <table aria-label="权限选择" className={TABLE_ROOT_CLASS}>
+        <table aria-label={t("selector.ariaLabel")} className={TABLE_ROOT_CLASS}>
           <thead className={TABLE_HEAD_CLASS}>
             {table.getHeaderGroups().map((headerGroup) => (
               <tr key={headerGroup.id} className={TABLE_ROW_CLASS}>
@@ -274,8 +278,8 @@ export function PermissionSelector({
               <tr className="group transition-colors hover:bg-transparent">
                 <td colSpan={table.getAllLeafColumns().length} className={cn(TABLE_CELL_CLASS, "py-10 text-center text-ink-soft")}>
                   <EmptyState
-                    title={showSelectedOnly ? "当前没有已选直接权限" : "暂无可选直接权限"}
-                    description={showSelectedOnly ? "关闭仅看已选后可继续浏览并选择权限。" : NO_DIRECT_PERMISSION_COPY}
+                    title={showSelectedOnly ? t("selector.emptySelected.title") : t("selector.empty.title")}
+                    description={showSelectedOnly ? t("selector.emptySelected.description") : t("selector.empty.description")}
                   />
                 </td>
               </tr>
@@ -322,6 +326,7 @@ function PermissionSelectorToolbar({
   onSelectScope: (scopeKey: string) => void;
   onClear: () => void;
 }) {
+  const { t } = useI18n();
   const [selectScopeMenuIsOpen, setSelectScopeMenuIsOpen] = useState(false);
   const selectScopeMenuRef = useRef<HTMLDivElement>(null);
 
@@ -355,39 +360,45 @@ function PermissionSelectorToolbar({
     setSelectScopeMenuIsOpen(false);
   }
 
+  const scopeShortcuts: Array<{ scopeKey: string; labelKey: MessageKey }> = [
+    { scopeKey: "SELF", labelKey: "selector.scope.self" },
+    { scopeKey: "MANAGED_USERS", labelKey: "selector.scope.managedUsers" },
+    { scopeKey: "ALL", labelKey: "selector.scope.all" },
+  ];
+
   return (
     <div className="permission-selector__toolbar">
-      <div className="permission-selector__toolbar-stats" aria-label="权限选择状态">
-        <span className="permission-selector__toolbar-stat">已选 {selectedCount} 项</span>
+      <div className="permission-selector__toolbar-stats" aria-label={t("selector.toolbar.status")}>
+        <span className="permission-selector__toolbar-stat">{t("selector.toolbar.selectedCount", { count: selectedCount })}</span>
         <label className="permission-selector__toolbar-toggle">
           <input
             type="checkbox"
             role="switch"
-            aria-label="仅看已选"
+            aria-label={t("selector.toolbar.showSelectedOnly")}
             checked={showSelectedOnly}
             onChange={(event) => onShowSelectedOnlyChange(event.currentTarget.checked)}
           />
           <span aria-hidden="true" className="permission-selector__toolbar-toggle-track">
             <span className="permission-selector__toolbar-toggle-thumb" />
           </span>
-          <span>仅看已选</span>
+          <span>{t("selector.toolbar.showSelectedOnly")}</span>
         </label>
       </div>
       <div className="permission-selector__toolbar-actions">
         <button type="button" className="permission-selector__toolbar-button" onClick={onExpandAll}>
-          展开全部
+          {t("selector.toolbar.expandAll")}
         </button>
         <button type="button" className="permission-selector__toolbar-button" onClick={onCollapseAll}>
-          折叠全部
+          {t("selector.toolbar.collapseAll")}
         </button>
         <div ref={selectScopeMenuRef} className="permission-selector__toolbar-split-button">
           <button type="button" className="permission-selector__toolbar-button" onClick={onSelectAll}>
-            全选
+            {t("selector.toolbar.selectAll")}
           </button>
           <button
             type="button"
             className="permission-selector__toolbar-button"
-            aria-label="展开全选范围选项"
+            aria-label={t("selector.toolbar.selectScopeMenu")}
             aria-haspopup="menu"
             aria-expanded={selectScopeMenuIsOpen}
             onClick={() => setSelectScopeMenuIsOpen((isOpen) => !isOpen)}
@@ -396,20 +407,22 @@ function PermissionSelectorToolbar({
           </button>
           {selectScopeMenuIsOpen ? (
             <div role="menu" className="permission-selector__toolbar-menu">
-              <button type="button" role="menuitem" className="permission-selector__toolbar-menu-item" onClick={() => selectScope("SELF")}>
-                本人
-              </button>
-              <button type="button" role="menuitem" className="permission-selector__toolbar-menu-item" onClick={() => selectScope("MANAGED_USERS")}>
-                管理范围
-              </button>
-              <button type="button" role="menuitem" className="permission-selector__toolbar-menu-item" onClick={() => selectScope("ALL")}>
-                全部
-              </button>
+              {scopeShortcuts.map((shortcut) => (
+                <button
+                  key={shortcut.scopeKey}
+                  type="button"
+                  role="menuitem"
+                  className="permission-selector__toolbar-menu-item"
+                  onClick={() => selectScope(shortcut.scopeKey)}
+                >
+                  {t(shortcut.labelKey)}
+                </button>
+              ))}
             </div>
           ) : null}
         </div>
         <button type="button" className="permission-selector__toolbar-button" onClick={onClear}>
-          清空
+          {t("selector.toolbar.clear")}
         </button>
       </div>
     </div>
@@ -423,6 +436,7 @@ function PermissionGroupNameCell({
   selectedCount,
   permissionCount,
   onToggleGroup,
+  locale,
 }: {
   group: ScopedPermissionGroupItem;
   depth: number;
@@ -430,7 +444,9 @@ function PermissionGroupNameCell({
   selectedCount: number;
   permissionCount: number;
   onToggleGroup: (key: string) => void;
+  locale: Locale;
 }) {
+  const { t } = useI18n();
   return (
     <button
       type="button"
@@ -440,12 +456,12 @@ function PermissionGroupNameCell({
         onToggleGroup(group.key);
       }}
       aria-expanded={isExpanded}
-      aria-label={`${isExpanded ? "收起" : "展开"} ${group.name}`}
+      aria-label={`${isExpanded ? t("selector.group.collapse") : t("selector.group.expand")} ${localizedName(locale, group)}`}
       style={depthStyle(depth)}
     >
       <span className="permission-selector__tree-rail" aria-hidden="true" />
       <ChevronRight size={16} className={isExpanded ? "permission-selector__chevron permission-selector__chevron--expanded" : "permission-selector__chevron"} />
-      <span className="permission-selector__group-name">{group.name}</span>
+      <span className="permission-selector__group-name">{localizedName(locale, group)}</span>
       <span className={selectedCount > 0 ? "permission-selector__group-count permission-selector__group-count--active" : "permission-selector__group-count"}>
         {selectedCount}/{permissionCount}
       </span>
@@ -458,14 +474,17 @@ function PermissionGroupScopeCell({
   scopeOptions,
   selectedKeys,
   onScopeChange,
+  locale,
 }: {
   group: ScopedPermissionGroupItem;
   scopeOptions: ScopeOptionView[];
   selectedKeys: string[];
   onScopeChange: (group: ScopedPermissionGroupItem, scopeKey: string, shouldSelect: boolean) => void;
+  locale: Locale;
 }) {
+  const { t } = useI18n();
   if (scopeOptions.length === 0) {
-    return <span aria-label="权限组无权限范围">-</span>;
+    return <span aria-label={t("selector.group.noScope")}>-</span>;
   }
 
   return (
@@ -476,10 +495,10 @@ function PermissionGroupScopeCell({
         return (
           <ScopeChip
             key={scope.key}
-            label={scope.name}
+            label={localizedName(locale, scope)}
             checked={selectionState === "checked"}
             mixed={selectionState === "indeterminate"}
-            ariaLabel={`选择权限组 ${group.key} ${scope.name}`}
+            ariaLabel={t("selector.selectGroupScope", { groupKey: group.key, scopeName: localizedName(locale, scope) })}
             onChange={() => onScopeChange(group, scope.key, selectionState === "unchecked")}
           />
         );
@@ -492,14 +511,17 @@ function PermissionScopeCell({
   permission,
   selectedKeys,
   onScopeChange,
+  locale,
 }: {
   permission: ScopedPermissionItem;
   selectedKeys: string[];
   onScopeChange: (permission: ScopedPermissionItem, scopeKey: string) => void;
+  locale: Locale;
 }) {
+  const { t } = useI18n();
   const scopes = permission.scopes ?? [];
   if (scopes.length === 0) {
-    return <span aria-label={`${permission.key} 无权限范围`}>-</span>;
+    return <span aria-label={t("selector.permission.noScope", { permissionKey: permission.key })}>-</span>;
   }
 
   return (
@@ -507,9 +529,9 @@ function PermissionScopeCell({
       {scopes.map((scope) => (
         <ScopeChip
           key={scope.key}
-          label={scope.name}
+          label={localizedName(locale, scope)}
           checked={selectedKeys.includes(directGrantSelectionKey(permission.key, scope.key))}
-          ariaLabel={`选择 ${permission.key} ${scope.name}`}
+          ariaLabel={t("selector.selectPermissionScope", { permissionKey: permission.key, scopeName: localizedName(locale, scope) })}
           onChange={() => onScopeChange(permission, scope.key)}
         />
       ))}

@@ -12,13 +12,14 @@ describe("ConsoleAppList", () => {
     document.body.dataset.currentUserRole = "";
   });
 
-  test("管理员看到新建应用入口", async () => {
+  test("管理员看到快速新建和接入向导入口", async () => {
     document.body.dataset.currentUserRole = "EasyAuth Admins";
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => jsonResponse({ items: [] })));
 
     renderList();
 
-    expect(await screen.findByRole("button", { name: "新建" })).toBeVisible();
+    expect(await screen.findByRole("button", { name: "快速新建" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "接入向导" })).toBeVisible();
   });
 
   test("管理员可以在列表行内启停和删除应用", async () => {
@@ -80,7 +81,7 @@ describe("ConsoleAppList", () => {
 
     renderList();
 
-    await user.click(await screen.findByRole("button", { name: "新建" }));
+    await user.click(await screen.findByRole("button", { name: "快速新建" }));
     await user.type(screen.getByLabelText("app_key"), "billing");
     await user.type(screen.getByLabelText("名称"), "Billing");
     await user.type(screen.getByLabelText("描述"), "Billing app");

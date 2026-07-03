@@ -20,7 +20,9 @@ import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
 import { apiRequest, itemsFromPayload } from "../../lib/api";
 import type { OperationRow } from "../../lib/domain";
+import { useI18n } from "../../i18n/I18nProvider";
 import { accessRequestStatusLabel, badgeToneForAccessRequestStatus, formatDateTime } from "../../lib/status";
+import type { Translator } from "../../lib/status";
 
 const ENDPOINTS: Record<string, { title: string; endpoint: string }> = {
   "access-requests": { title: "申请运营", endpoint: "/console/api/v1/operations/access-requests" },
@@ -30,6 +32,7 @@ const ENDPOINTS: Record<string, { title: string; endpoint: string }> = {
 };
 
 export function OperationsPage() {
+  const { t } = useI18n();
   const { section = "access-requests" } = useParams();
   const config = ENDPOINTS[section] ?? ENDPOINTS["access-requests"];
   const query = useQuery({
@@ -37,7 +40,7 @@ export function OperationsPage() {
     queryFn: () => apiRequest<{ items?: OperationRow[]; data?: OperationRow[] }>(config.endpoint),
   });
   const rows = itemsFromPayload<OperationRow>(query.data);
-  const columns = operationColumns(section);
+  const columns = operationColumns(section, t);
   const table = useReactTable({
     data: rows,
     columns,
@@ -110,7 +113,7 @@ export function OperationsPage() {
   );
 }
 
-function operationColumns(section: string): ColumnDef<OperationRow>[] {
+function operationColumns(section: string, t: Translator): ColumnDef<OperationRow>[] {
   if (section === "dependency-health") {
     return [
       { header: "组件", cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.component)}</code> },
@@ -133,7 +136,7 @@ function operationColumns(section: string): ColumnDef<OperationRow>[] {
     { header: "ID", cell: ({ row }) => row.original.id ?? "-" },
     { header: "用户", cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.user_id)}</code> },
     { header: "应用", cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.app_key)}</code> },
-    { header: "状态", cell: ({ row }) => <Badge tone={badgeToneForAccessRequestStatus(stringValue(row.original.status))}>{accessRequestStatusLabel(stringValue(row.original.status))}</Badge> },
+    { header: "状态", cell: ({ row }) => <Badge tone={badgeToneForAccessRequestStatus(stringValue(row.original.status))}>{accessRequestStatusLabel(t, stringValue(row.original.status))}</Badge> },
     { header: "类型", cell: ({ row }) => stringValue(row.original.request_type) },
     { header: "提交时间", cell: ({ row }) => formatDateTime(stringValue(row.original.submitted_at)) },
   ];

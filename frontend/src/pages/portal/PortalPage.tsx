@@ -24,6 +24,7 @@ import {
   formatDateTime,
   grantTypeLabel,
 } from "../../lib/status";
+import { useI18n } from "../../i18n/I18nProvider";
 import { AccessRequestForm } from "./components/AccessRequestForm";
 
 type PortalView = "grants" | "request" | "requests" | "expiring";
@@ -82,6 +83,7 @@ export function PortalPage() {
 }
 
 function PortalGrantSection({ endpoint, emptyText }: { endpoint: string; emptyText: string }) {
+  const { t } = useI18n();
   const query = useQuery({
     queryKey: ["portal", endpoint],
     queryFn: () => apiRequest<{ items?: PortalGrantRow[]; data?: PortalGrantRow[] }>(endpoint),
@@ -100,7 +102,7 @@ function PortalGrantSection({ endpoint, emptyText }: { endpoint: string; emptyTe
     { header: "权限组", cell: ({ row }) => formatGroups(row.original.groups) },
     { id: "expanded_grants", header: "展开授权", cell: ({ row }) => formatExpandedGrants(row.original.grants) },
     { id: "grant_sources", header: "来源", cell: ({ row }) => formatSources(row.original.grants) },
-    { header: "期限", cell: ({ row }) => grantTypeLabel(row.original.grant_type) },
+    { header: "期限", cell: ({ row }) => grantTypeLabel(t, row.original.grant_type) },
     { id: "versions", header: "版本", cell: ({ row }) => formatVersions(row.original) },
     { header: "过期时间", cell: ({ row }) => formatDateTime(row.original.grant_expires_at) },
   ];
@@ -133,6 +135,7 @@ function PortalGrantSection({ endpoint, emptyText }: { endpoint: string; emptyTe
 }
 
 function PortalRequestSection() {
+  const { t } = useI18n();
   const query = useQuery({
     queryKey: ["portal", "requests"],
     queryFn: () => apiRequest<{ items?: PortalRequestRow[]; data?: PortalRequestRow[] }>("/portal/api/v1/me/access-requests"),
@@ -143,14 +146,14 @@ function PortalRequestSection() {
       header: "状态",
       cell: ({ row }) => (
         <Badge tone={badgeToneForAccessRequestStatus(row.original.status)}>
-          {row.original.status_label ?? accessRequestStatusLabel(row.original.status)}
+          {row.original.status_label ?? accessRequestStatusLabel(t, row.original.status)}
         </Badge>
       ),
     },
     { header: "应用", cell: ({ row }) => row.original.app_name ?? row.original.app_key ?? "-" },
     { header: "权限组", cell: ({ row }) => formatGroups(row.original.authorization_groups) },
     { id: "direct_grants", header: "直接授权", cell: ({ row }) => formatDirectGrants(row.original.direct_grants) },
-    { header: "期限", cell: ({ row }) => grantTypeLabel(row.original.grant_type) },
+    { header: "期限", cell: ({ row }) => grantTypeLabel(t, row.original.grant_type) },
     { header: "提交时间", cell: ({ row }) => formatDateTime(row.original.submitted_at) },
     { header: "原因", cell: ({ row }) => row.original.reason ?? "-" },
   ];

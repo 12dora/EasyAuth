@@ -22,7 +22,9 @@ export interface AuthorizationGroupItem {
   key: string;
   kind: "role" | "bundle" | string;
   name: string;
+  name_en?: string;
   description?: string;
+  description_en?: string;
   requestable?: boolean;
   requires_approval?: boolean;
   default_approver_user_ids?: string[];
@@ -44,7 +46,9 @@ type PortalCatalogAppView = PortalCatalogApp & { default_approver_user_ids?: str
 export interface ScopeOption {
   key: string;
   name: string;
+  name_en?: string;
   description?: string;
+  description_en?: string;
 }
 
 export type ScopedPermissionItem = PermissionItem & {

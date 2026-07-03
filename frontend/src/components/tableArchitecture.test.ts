@@ -29,7 +29,7 @@ describe("表格架构", () => {
     expect(content).toMatch(/getRowId/);
     expect(content).toMatch(/flexRender/);
     expect(content).toMatch(/<table\b/);
-    expect(content).toMatch(/aria-label="权限选择"/);
+    expect(content).toMatch(/aria-label=\{t\("selector.ariaLabel"\)\}/);
   });
 
   test("门户权限选择仅看已选是组件内本地展示状态", () => {
@@ -39,7 +39,7 @@ describe("表格架构", () => {
     expect(content).toMatch(/showSelectedOnly/);
     expect(content).toMatch(/filterRowsToSelected/);
     expect(content).toMatch(/role="switch"/);
-    expect(content).toMatch(/aria-label="仅看已选"/);
+    expect(content).toMatch(/aria-label=\{t\("selector.toolbar.showSelectedOnly"\)\}/);
   });
 
   test("门户权限选择工具栏状态只保留已选数量", () => {

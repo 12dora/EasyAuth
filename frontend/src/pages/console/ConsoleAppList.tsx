@@ -6,7 +6,7 @@ import {
   type ColumnDef,
 } from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowRight, Plus, RefreshCcw } from "lucide-react";
+import { ArrowRight, Compass, Plus, RefreshCcw } from "lucide-react";
 import { Fragment, type FormEvent } from "react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -23,6 +23,7 @@ import { Dialog } from "../../components/Dialog";
 import { Field, TextArea, TextInput } from "../../components/Field";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
+import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../lib/api";
 import type { JsonObject } from "../../lib/api";
 import type { AppListPayload, AppSummary } from "../../lib/domain";
@@ -30,6 +31,7 @@ import { formatDateTime, readinessLabel, readinessTone } from "../../lib/status"
 import { safeJoin } from "./workspace/utils";
 
 export function ConsoleAppList() {
+  const { t } = useI18n();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
@@ -70,7 +72,7 @@ export function ConsoleAppList() {
 
   const columns: ColumnDef<AppSummary>[] = [
     {
-      header: "应用",
+      header: t("appList.column.app"),
       cell: ({ row }) => (
         <div className="flex min-w-0 flex-col gap-1">
           <strong>{row.original.name}</strong>
@@ -79,32 +81,32 @@ export function ConsoleAppList() {
       ),
     },
     {
-      header: "负责人",
+      header: t("appList.column.owners"),
       cell: ({ row }) => <span>{safeJoin(row.original.owners)}</span>,
     },
     {
-      header: "配置",
+      header: t("appList.column.configuration"),
       cell: ({ row }) => (
         <Badge tone={readinessTone(row.original.configuration_status)}>
-          {readinessLabel(row.original.configuration_status)}
+          {readinessLabel(t, row.original.configuration_status)}
         </Badge>
       ),
     },
     {
-      header: "状态",
+      header: t("common.status"),
       cell: ({ row }) => (
         <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>
-          {row.original.is_active ? "启用" : "停用"}
+          {row.original.is_active ? t("common.enabled") : t("common.disabled")}
         </Badge>
       ),
     },
     {
-      header: "更新时间",
+      header: t("common.updatedAt"),
       cell: ({ row }) => formatDateTime(row.original.updated_at),
     },
     {
       id: "actions",
-      header: "操作",
+      header: t("common.actions"),
       cell: ({ row }) => (
         <TableActionCell>
           <TableRowActionButton
@@ -113,7 +115,7 @@ export function ConsoleAppList() {
             disabled={updateStatusMutation.isPending}
             onClick={() => updateStatusMutation.mutate({ appKey: row.original.app_key, isActive: !row.original.is_active })}
           >
-            {row.original.is_active ? "停用" : "启用"}
+            {row.original.is_active ? t("common.disable") : t("common.enable")}
           </TableRowActionButton>
           <TableRowActionButton
             type="button"
@@ -121,8 +123,20 @@ export function ConsoleAppList() {
             disabled={deleteMutation.isPending}
             onClick={() => deleteMutation.mutate(row.original.app_key)}
           >
-            删除
+            {t("common.delete")}
           </TableRowActionButton>
+          {row.original.configuration_status !== "ready" ? (
+            <TableRowActionLink
+              href={`/console/apps/new?app_key=${row.original.app_key}&step=catalog`}
+              icon={<Compass size={15} />}
+              onClick={(event) => {
+                event.preventDefault();
+                void navigate(`/console/apps/new?app_key=${row.original.app_key}&step=catalog`);
+              }}
+            >
+              {t("appList.resumeOnboarding")}
+            </TableRowActionLink>
+          ) : null}
           <TableRowActionLink
             href={`/console/apps/${row.original.app_key}`}
             icon={<ArrowRight size={15} />}
@@ -131,7 +145,7 @@ export function ConsoleAppList() {
               void navigate(`/console/apps/${row.original.app_key}`);
             }}
           >
-            进入
+            {t("common.enter")}
           </TableRowActionLink>
         </TableActionCell>
       ),
@@ -147,31 +161,34 @@ export function ConsoleAppList() {
   return (
     <>
       <PageHeader
-        eyebrow="控制台"
-        title="应用列表"
-        description="查看可管理应用、配置完整性和接入入口。"
+        eyebrow={t("appList.eyebrow")}
+        title={t("appList.title")}
+        description={t("appList.description")}
         actions={
           <>
             <Button icon={<RefreshCcw size={16} />} loading={appsQuery.isFetching} onClick={() => void appsQuery.refetch()}>
-              刷新
+              {t("common.refresh")}
             </Button>
-            <Button type="button" variant="primary" icon={<Plus size={16} />} onClick={() => setCreateDialogOpen(true)}>
-              新建
+            <Button type="button" icon={<Plus size={16} />} onClick={() => setCreateDialogOpen(true)}>
+              {t("appList.quickCreate")}
+            </Button>
+            <Button type="button" variant="primary" icon={<Compass size={16} />} onClick={() => void navigate("/console/apps/new")}>
+              {t("appList.onboardingWizard")}
             </Button>
           </>
         }
       />
       {appsQuery.error && apps.length > 0 ? (
-        <StatusBanner tone="signal" title="应用加载失败" message={(appsQuery.error as Error).message} />
+        <StatusBanner tone="signal" title={t("appList.loadFailed")} message={(appsQuery.error as Error).message} />
       ) : null}
       {appsQuery.error && apps.length === 0 ? (
         <PageState
           tone="signal"
-          title="应用加载失败"
+          title={t("appList.loadFailed")}
           description={(appsQuery.error as Error).message}
           action={
             <Button icon={<RefreshCcw size={16} />} loading={appsQuery.isFetching} onClick={() => void appsQuery.refetch()}>
-              重新加载
+              {t("common.retry")}
             </Button>
           }
         />
@@ -207,7 +224,7 @@ export function ConsoleAppList() {
                   ))
                 ) : (
                   <TableEmptyRow colSpan={table.getAllLeafColumns().length}>
-                    <EmptyState title="暂无可见应用" description="当前账号暂无可管理或可查看的应用。" />
+                    <EmptyState title={t("appList.empty.title")} description={t("appList.empty.description")} />
                   </TableEmptyRow>
                 )}
               </TableBody>
@@ -247,6 +264,7 @@ function CreateAppDialog({
   onClose: () => void;
   onSubmit: (payload: AppCreateFormPayload) => void;
 }) {
+  const { t } = useI18n();
   const [appKey, setAppKey] = useState("");
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -266,15 +284,15 @@ function CreateAppDialog({
 
   return (
     <Dialog
-      title="新建应用"
+      title={t("appList.createDialog.title")}
       onClose={onClose}
       footer={
         <>
           <Button type="button" onClick={onClose}>
-            取消
+            {t("common.cancel")}
           </Button>
           <Button form="create-app-form" type="submit" variant="primary" loading={isSubmitting} disabled={isSubmitting}>
-            创建
+            {t("common.create")}
           </Button>
         </>
       }
@@ -283,27 +301,27 @@ function CreateAppDialog({
         <Field label="app_key">
           <TextInput value={appKey} onChange={(event) => setAppKey(event.currentTarget.value)} required />
         </Field>
-        <Field label="名称">
+        <Field label={t("appList.createDialog.name")}>
           <TextInput value={name} onChange={(event) => setName(event.currentTarget.value)} required />
         </Field>
-        <Field label="描述">
+        <Field label={t("appList.createDialog.description")}>
           <TextArea rows={3} value={description} onChange={(event) => setDescription(event.currentTarget.value)} />
         </Field>
-        <Field label="Owner 用户 ID" hint="多个用户用逗号或换行分隔。">
+        <Field label={t("appList.createDialog.ownerIds")} hint={t("appList.createDialog.userIdsHint")}>
           <TextInput
             aria-label="Owner 用户 ID"
             value={ownerUserIds}
             onChange={(event) => setOwnerUserIds(event.currentTarget.value)}
           />
         </Field>
-        <Field label="Developer 用户 ID" hint="多个用户用逗号或换行分隔。">
+        <Field label={t("appList.createDialog.developerIds")} hint={t("appList.createDialog.userIdsHint")}>
           <TextInput
             aria-label="Developer 用户 ID"
             value={developerUserIds}
             onChange={(event) => setDeveloperUserIds(event.currentTarget.value)}
           />
         </Field>
-        {errorMessage ? <StatusBanner tone="signal" title="创建失败" message={errorMessage} /> : null}
+        {errorMessage ? <StatusBanner tone="signal" title={t("appList.createDialog.failed")} message={errorMessage} /> : null}
       </form>
     </Dialog>
   );
