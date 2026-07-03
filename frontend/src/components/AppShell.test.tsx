@@ -6,6 +6,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { describe, expect, test } from "vitest";
 
 import { App } from "../App";
+import { I18nProvider } from "../i18n/I18nProvider";
 import { AppShell } from "./AppShell";
 
 const layoutShellCss = readFileSync(resolve(__dirname, "../styles/layout-shell.css"), "utf8");
@@ -25,15 +26,17 @@ function renderShell(
   };
 
   render(
-    <MemoryRouter initialEntries={[initialEntry ?? (mode === "console" ? "/console" : "/portal")]}>
-      <Routes>
-        <Route element={<AppShell currentUser={currentUser} currentUserId={currentUserId} mode={mode} />}>
-          <Route path={mode === "console" ? "/console" : "/portal"} element={<div>页面内容</div>} />
-          <Route path={mode === "console" ? "/console/settings" : "/portal/settings"} element={<div>设置页面</div>} />
-          <Route path={mode === "console" ? "/console/operations/access-requests" : "/portal/request"} element={<div>申请页面</div>} />
-        </Route>
-      </Routes>
-    </MemoryRouter>,
+    <I18nProvider>
+      <MemoryRouter initialEntries={[initialEntry ?? (mode === "console" ? "/console" : "/portal")]}>
+        <Routes>
+          <Route element={<AppShell currentUser={currentUser} currentUserId={currentUserId} mode={mode} />}>
+            <Route path={mode === "console" ? "/console" : "/portal"} element={<div>页面内容</div>} />
+            <Route path={mode === "console" ? "/console/settings" : "/portal/settings"} element={<div>设置页面</div>} />
+            <Route path={mode === "console" ? "/console/operations/access-requests" : "/portal/request"} element={<div>申请页面</div>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </I18nProvider>,
   );
 }
 
@@ -44,8 +47,8 @@ describe("AppShell", () => {
     expect(screen.getByRole("banner")).toBeInTheDocument();
     expect(screen.getByLabelText("EasyAuth 管理控制台")).toBeVisible();
     expect(screen.getByRole("img", { name: "EasyAuth" })).toBeVisible();
-    expect(screen.queryByRole("button", { name: "切换语言" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "通知中心" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "切换语言" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "通知中心" })).toBeVisible();
     expect(screen.getByText("控制台用户")).toBeVisible();
     expect(screen.getByText("EasyAuth Admins")).toBeVisible();
     expect(screen.getByRole("img", { name: "控制台用户头像" })).toHaveAttribute(
@@ -153,6 +156,26 @@ describe("AppShell", () => {
       "href",
       "/auth/login/?next=%2Fportal%2F",
     );
+  });
+
+  test("语言与通知弹层互斥展开, 语言菜单可切换界面语言", async () => {
+    const user = userEvent.setup();
+    renderShell("console");
+
+    await user.click(screen.getByRole("button", { name: "切换语言" }));
+    expect(screen.getByTestId("topbar-language-menu")).toBeVisible();
+    expect(screen.getByRole("button", { name: "中文" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "English" })).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(screen.getByRole("button", { name: "通知中心" }));
+    expect(screen.queryByTestId("topbar-language-menu")).not.toBeInTheDocument();
+    expect(screen.getByTestId("topbar-notifications-menu")).toBeVisible();
+    expect(screen.getByText("暂无新通知")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "切换语言" }));
+    await user.click(screen.getByRole("button", { name: "English" }));
+    expect(screen.queryByTestId("topbar-language-menu")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Switch language" })).toBeVisible();
   });
 
   test("点击用户身份区域时展示登出菜单", async () => {

@@ -1,5 +1,5 @@
 import { LogOut } from "lucide-react";
-import { useEffect, useId, useRef, useState } from "react";
+import { useId } from "react";
 
 import type { CurrentUser } from "../../App";
 import { readCsrfToken } from "../../lib/api";
@@ -9,11 +9,11 @@ const DEFAULT_LOGOUT_URL = "/auth/logout/";
 interface UserSummaryProps {
   currentUser: CurrentUser;
   mode: "console" | "portal";
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
 }
 
-export function UserSummary({ currentUser, mode }: UserSummaryProps) {
-  const [menuIsOpen, setMenuIsOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
+export function UserSummary({ currentUser, mode, open, onOpenChange }: UserSummaryProps) {
   const menuId = useId();
   const userName = firstPresent(currentUser.displayName, mode === "console" ? "控制台用户" : "当前用户");
   const userRole = firstPresent(currentUser.role, "未分组");
@@ -21,41 +21,16 @@ export function UserSummary({ currentUser, mode }: UserSummaryProps) {
   const avatarLabel = userName.slice(0, 1).toUpperCase();
   const csrfToken = readCsrfToken();
 
-  useEffect(() => {
-    if (!menuIsOpen) {
-      return;
-    }
-
-    function closeOnOutsidePointerDown(event: PointerEvent) {
-      if (!containerRef.current?.contains(event.target as Node)) {
-        setMenuIsOpen(false);
-      }
-    }
-
-    function closeOnEscape(event: KeyboardEvent) {
-      if (event.key === "Escape") {
-        setMenuIsOpen(false);
-      }
-    }
-
-    document.addEventListener("pointerdown", closeOnOutsidePointerDown);
-    document.addEventListener("keydown", closeOnEscape);
-    return () => {
-      document.removeEventListener("pointerdown", closeOnOutsidePointerDown);
-      document.removeEventListener("keydown", closeOnEscape);
-    };
-  }, [menuIsOpen]);
-
   return (
-    <div className="user-menu" ref={containerRef}>
+    <div className="user-menu">
       <button
         type="button"
         className="user-menu-trigger"
         aria-label="当前登录用户菜单"
         aria-haspopup="menu"
-        aria-expanded={menuIsOpen}
+        aria-expanded={open}
         aria-controls={menuId}
-        onClick={() => setMenuIsOpen((isOpen) => !isOpen)}
+        onClick={() => onOpenChange(!open)}
       >
         <span className="user-summary">
           <strong>{userName}</strong>
@@ -69,7 +44,7 @@ export function UserSummary({ currentUser, mode }: UserSummaryProps) {
           </span>
         )}
       </button>
-      <div className="user-menu-popover" id={menuId} data-open={menuIsOpen}>
+      <div className="user-menu-popover" id={menuId} data-open={open}>
         <form action={logoutUrl} aria-label="登出当前账号" method="post">
           {csrfToken ? <input type="hidden" name="csrfmiddlewaretoken" value={csrfToken} /> : null}
           <button type="submit">
