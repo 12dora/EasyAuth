@@ -17,6 +17,7 @@ from easyauth.admin_console.authorization_groups_api import (
     console_authorization_group_detail,
     console_authorization_groups,
 )
+from easyauth.admin_console.auto_onboarding_api import console_app_auto_onboarding
 from easyauth.admin_console.console_app_api import (
     integration_guide_api,
 )
@@ -70,6 +71,11 @@ app_name = "admin_console"
 urlpatterns = [
     path("", views.console_home, name="console-home"),
     path("api/v1/apps", console_apps, name="console-apps"),
+    path(
+        "api/v1/apps/auto-onboarding",
+        console_app_auto_onboarding,
+        name="console-app-auto-onboarding",
+    ),
     path(
         "api/v1/apps/<str:app_key>/configuration-status",
         console_app_configuration_status,

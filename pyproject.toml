@@ -64,6 +64,10 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101", "S603"]
 "src/easyauth/config/settings/test.py" = ["F403"]
+# SDK 是独立发布的零依赖包: 面向集成方的异常信息内联可读, 中文 docstring 以中文句号结尾,
+# 校验入口接受 Any, 可选框架依赖在函数内导入。
+"sdk/**/*.py" = ["TRY003", "EM101", "EM102", "D400", "D415", "S101", "ANN401", "PLC0415"]
+"sdk/**/tests/*.py" = ["INP001", "PLR2004", "S106"]
 
 [tool.basedpyright]
 include = ["src", "tests"]

@@ -74,7 +74,12 @@ export function AppOnboardingWizard() {
       />
       <WizardStepper activeStepIndex={activeStepIndex} appKey={appKey} onNavigate={goToStep} />
       {activeStep === "basics" ? (
-        <BasicsStep app={app} appKey={appKey} onContinue={(key) => goToStep("catalog", key)} />
+        <BasicsStep
+          app={app}
+          appKey={appKey}
+          onContinue={(key) => goToStep("catalog", key)}
+          onAutoOnboarded={(key) => goToStep("authz", key)}
+        />
       ) : null}
       {activeStep === "catalog" ? (
         <CatalogStep appKey={appKey} onBack={() => goToStep("basics")} onContinue={() => goToStep("authz")} />
@@ -183,10 +188,12 @@ function BasicsStep({
   app,
   appKey,
   onContinue,
+  onAutoOnboarded,
 }: {
   app?: AppSummaryLike;
   appKey: string;
   onContinue: (appKey: string) => void;
+  onAutoOnboarded: (appKey: string) => void;
 }) {
   const { t } = useI18n();
   const queryClient = useQueryClient();
@@ -240,6 +247,10 @@ function BasicsStep({
 
   return (
     <StepPanel title={t("wizard.basics.title")} description={t("wizard.basics.description")}>
+      <AutoOnboardPanel onAutoOnboarded={onAutoOnboarded} />
+      <div className="space-y-1 border-t border-ink/10 pt-4">
+        <h3 className="text-sm font-semibold text-ink">{t("wizard.auto.manualTitle")}</h3>
+      </div>
       <form className="grid max-w-2xl gap-4" onSubmit={submit}>
         <Field label="app_key" hint={t("wizard.basics.appKeyHint")}>
           <AppKeyInput value={appKeyInput} onChange={setAppKeyInput} onGenerate={() => setAppKeyInput(generateAppKey(name))} required />
@@ -266,6 +277,101 @@ function BasicsStep({
         </StepFooter>
       </form>
     </StepPanel>
+  );
+}
+
+interface AutoOnboardingResult {
+  app_key: string;
+  app_name: string;
+  created: boolean;
+  already_up_to_date: boolean;
+  template_version: number;
+  catalog_version: number | string;
+}
+
+function AutoOnboardPanel({ onAutoOnboarded }: { onAutoOnboarded: (appKey: string) => void }) {
+  const { t } = useI18n();
+  const queryClient = useQueryClient();
+  const [baseUrl, setBaseUrl] = useState("");
+  const [appKey, setAppKey] = useState("");
+  const [descriptorToken, setDescriptorToken] = useState("");
+  const [result, setResult] = useState<AutoOnboardingResult | null>(null);
+  const onboardMutation = useMutation({
+    mutationFn: () =>
+      apiRequest<AutoOnboardingResult>("/console/api/v1/apps/auto-onboarding", {
+        method: "POST",
+        body: {
+          base_url: baseUrl.trim(),
+          app_key: appKey.trim(),
+          ...(descriptorToken.trim() ? { descriptor_token: descriptorToken.trim() } : {}),
+        },
+      }),
+    onSuccess: (payload) => {
+      setResult(payload);
+      void queryClient.invalidateQueries({ queryKey: ["console", "apps"] });
+      void queryClient.invalidateQueries({ queryKey: ["console", "app", payload.app_key] });
+    },
+  });
+
+  return (
+    <section className="space-y-4 rounded-[3px] border border-accent/25 bg-accent/4 p-4">
+      <div className="space-y-1">
+        <h3 className="text-sm font-semibold text-ink">{t("wizard.auto.title")}</h3>
+        <p className="max-w-3xl text-body leading-5 text-ink-soft">{t("wizard.auto.description")}</p>
+      </div>
+      <div className="grid max-w-3xl items-end gap-4 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)_auto]">
+        <Field label={t("wizard.auto.baseUrl")}>
+          <TextInput
+            value={baseUrl}
+            placeholder="https://downstream.example.com"
+            onChange={(event) => setBaseUrl(event.currentTarget.value)}
+          />
+        </Field>
+        <Field label={t("wizard.auto.appKey")}>
+          <TextInput value={appKey} onChange={(event) => setAppKey(event.currentTarget.value)} />
+        </Field>
+        <Field label={t("wizard.auto.token")}>
+          <TextInput
+            type="password"
+            autoComplete="off"
+            value={descriptorToken}
+            onChange={(event) => setDescriptorToken(event.currentTarget.value)}
+          />
+        </Field>
+        <Button
+          variant="primary"
+          icon={<Compass size={16} />}
+          disabled={!baseUrl.trim() || !appKey.trim() || onboardMutation.isPending}
+          loading={onboardMutation.isPending}
+          onClick={() => onboardMutation.mutate()}
+        >
+          {t("wizard.auto.run")}
+        </Button>
+      </div>
+      {onboardMutation.error ? (
+        <StatusBanner tone="signal" title={t("wizard.auto.failed")} message={(onboardMutation.error as Error).message} />
+      ) : null}
+      {result ? (
+        <div className="space-y-3">
+          <StatusBanner
+            tone="evergreen"
+            title={t("wizard.auto.success")}
+            message={
+              result.already_up_to_date
+                ? t("wizard.auto.upToDate", { appKey: result.app_key, version: result.template_version })
+                : t("wizard.auto.successDetail", {
+                    appKey: result.app_key,
+                    version: result.template_version,
+                    catalogVersion: String(result.catalog_version),
+                  })
+            }
+          />
+          <Button variant="primary" onClick={() => onAutoOnboarded(result.app_key)}>
+            {t("wizard.auto.continue")}
+          </Button>
+        </div>
+      ) : null}
+    </section>
   );
 }
 

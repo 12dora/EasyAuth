@@ -47,6 +47,51 @@ describe("AppOnboardingWizard", () => {
     expect(await screen.findByRole("heading", { name: "导入权限目录 Manifest" })).toBeVisible();
   });
 
+  test("自动接入成功后可直接进入配置检查步骤", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/auto-onboarding" && init?.method === "POST") {
+        return jsonResponse({
+          app_key: "billing",
+          app_name: "Billing",
+          created: true,
+          already_up_to_date: false,
+          template_version: 4,
+          catalog_version: 5,
+        });
+      }
+      if (url === "/console/api/v1/apps/billing" && !init?.method) {
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing" } });
+      }
+      if (url.startsWith("/console/api/v1/apps/billing/configuration-status")) {
+        return jsonResponse({ issues: [] });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWizard("/console/apps/new");
+
+    expect(await screen.findByRole("heading", { name: "注册应用基本信息" })).toBeVisible();
+    await user.type(screen.getByLabelText("下游地址"), "http://localhost:8000");
+    await user.type(screen.getByLabelText("下游 app_key"), "billing");
+    await user.click(screen.getByRole("button", { name: "自动接入" }));
+
+    expect(await screen.findByText("自动接入完成")).toBeVisible();
+    await waitFor(() => {
+      const postCall = fetchMock.mock.calls.find(
+        ([input, init]) => String(input) === "/console/api/v1/apps/auto-onboarding" && init?.method === "POST",
+      );
+      expect(JSON.parse(String(postCall?.[1]?.body))).toEqual({
+        base_url: "http://localhost:8000",
+        app_key: "billing",
+      });
+    });
+    await user.click(screen.getByRole("button", { name: "继续配置检查" }));
+    expect(await screen.findByRole("heading", { name: "确认授权组与审批规则" })).toBeVisible();
+  });
+
   test("manifest 预览并确认导入后允许进入下一步", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
