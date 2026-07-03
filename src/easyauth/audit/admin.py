@@ -58,6 +58,6 @@ class AuditLogAdmin(AuditLogAdminBase):
 
     @override
     def has_delete_permission(self, request: HttpRequest, obj: AuditLog | None = None) -> bool:
-        if obj is not None:
-            return False
-        return super().has_delete_permission(request, obj)
+        # 模型是只追加的; 返回 True 会在列表页暴露必定 500 的批量删除动作。
+        _ = request, obj
+        return False

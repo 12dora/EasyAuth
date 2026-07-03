@@ -24,22 +24,52 @@ class PortalPage:
     total_pages: int
 
 
-def paginate_items(items: tuple[PortalJsonObject, ...], query: QueryDict) -> PortalPage:
-    page = _positive_integer(query.get("page"), default=DEFAULT_PAGE, maximum=None)
-    page_size = _positive_integer(
-        query.get("page_size"),
-        default=DEFAULT_PAGE_SIZE,
-        maximum=MAX_PAGE_SIZE,
+@dataclass(frozen=True, slots=True)
+class PageRequest:
+    page: int
+    page_size: int
+
+    @property
+    def start(self) -> int:
+        return (self.page - 1) * self.page_size
+
+    @property
+    def stop(self) -> int:
+        return self.start + self.page_size
+
+
+def page_request(query: QueryDict) -> PageRequest:
+    return PageRequest(
+        page=_positive_integer(query.get("page"), default=DEFAULT_PAGE, maximum=None),
+        page_size=_positive_integer(
+            query.get("page_size"),
+            default=DEFAULT_PAGE_SIZE,
+            maximum=MAX_PAGE_SIZE,
+        ),
     )
-    start = (page - 1) * page_size
-    stop = start + page_size
-    total_items = len(items)
+
+
+def build_page(
+    items: tuple[PortalJsonObject, ...],
+    *,
+    request: PageRequest,
+    total_items: int,
+) -> PortalPage:
     return PortalPage(
-        items=items[start:stop],
-        page=page,
-        page_size=page_size,
+        items=items,
+        page=request.page,
+        page_size=request.page_size,
         total_items=total_items,
-        total_pages=_total_pages(total_items=total_items, page_size=page_size),
+        total_pages=_total_pages(total_items=total_items, page_size=request.page_size),
+    )
+
+
+def paginate_items(items: tuple[PortalJsonObject, ...], query: QueryDict) -> PortalPage:
+    request = page_request(query)
+    return build_page(
+        items[request.start:request.stop],
+        request=request,
+        total_items=len(items),
     )
 
 

@@ -59,17 +59,17 @@ def test_ops1_apps_api_superuser_lists_all_apps() -> None:
     assert response.json()["items"][1]["is_active"] is False
 
 
-def test_ops1_apps_api_rejects_non_admin_user() -> None:
+def test_ops1_apps_api_allows_non_member_console_user_to_list_apps() -> None:
+    # Given: 已登录但没有任何 App 成员关系的普通用户。
     client = _non_admin_client("ops1-apps-api-non-admin")
+    app = App.objects.create(app_key="ops1-api-non-admin-crm", name="CRM")
 
+    # When: 该用户查询 App 列表。
     response = client.get(APPS_API_URL)
 
-    assert response.status_code == HTTPStatus.FORBIDDEN
-    assert response.json()["error"] == {
-        "code": ErrorCode.PERMISSION_DENIED,
-        "message": "无权访问控制台。",
-        "details": {},
-    }
+    # Then: App 目录对控制台登录用户可见, 详情与写操作仍按成员角色控制。
+    assert response.status_code == HTTPStatus.OK
+    assert app.app_key in response.content.decode()
 
 
 def test_ops1_apps_api_member_lists_all_apps() -> None:
@@ -746,7 +746,8 @@ def _authentik_client(username: str, *, groups: tuple[str, ...] = ()) -> Client:
     client = Client(HTTP_HOST="localhost")
     session = client.session
     session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
-    session[AUTHENTIK_GROUPS_SESSION_KEY] = list(groups or ("EasyAuth Admins",))
+    if groups:
+        session[AUTHENTIK_GROUPS_SESSION_KEY] = list(groups)
     session.save()
     return client
 

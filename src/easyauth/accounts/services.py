@@ -6,7 +6,7 @@ from typing import Final, final
 from django.db import transaction
 
 from easyauth.accounts.models import UserMirror
-from easyauth.accounts.status import is_non_active_status
+from easyauth.accounts.status import UserStatus, is_non_active_status
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.grants.services import GrantService
 from easyauth.integrations.authentik.payloads import (
@@ -47,6 +47,22 @@ class AuthentikSyncService:
                 created=upsert.created,
                 revoked_count=revoked_count,
             )
+
+    @staticmethod
+    def apply_directory_status(user: UserMirror, status: UserStatus) -> AuthentikSyncResult:
+        # 按目录事实回灌用户状态; 离职/停用用户立即撤销 current 授权。
+        with transaction.atomic():
+            locked = UserMirror.objects.select_for_update().get(pk=user.pk)
+            was_non_active = is_non_active_status(locked.status)
+            if locked.status != status:
+                locked.status = status
+                locked.full_clean()
+                locked.save(update_fields=["status", "updated_at"])
+            revoked_count = _revoke_current_grants_for_departed_user(locked)
+            upsert = _UserUpsertResult(user=locked, created=False, was_non_active=was_non_active)
+            if _should_record_departure_event(upsert=upsert, revoked_count=revoked_count):
+                _record_departure_event(locked, revoked_count=revoked_count)
+            return AuthentikSyncResult(user=locked, created=False, revoked_count=revoked_count)
 
 
 def _upsert_user(profile: AuthentikUserProfile) -> _UserUpsertResult:

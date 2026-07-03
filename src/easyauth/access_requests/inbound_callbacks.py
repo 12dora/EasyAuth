@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 type ApprovalCallbackStatus = Literal["approved", "rejected"]
 type ApprovalCallbackErrorKind = Literal[
     "application_error",
+    "approver_rejected",
     "conflict",
     "not_found",
     "validation_error",
@@ -41,18 +42,21 @@ class ApprovalCallbackError(Exception):
         return self.message
 
 
+APPROVER_NOT_AUTHORIZED_MESSAGE = "审批回调操作人不在该申请的审批人列表中。"
+
+
 def apply_approval_callback(
     process_instance_id: str,
     status: str,
-    actor_id: str,
+    approver_user_id: str,
     raw_payload: bytes,
 ) -> AccessRequest:
     _ = raw_payload
     match status:
         case "approved":
-            return _approve_request(process_instance_id, actor_id)
+            return _approve_request(process_instance_id, approver_user_id)
         case "rejected":
-            return _reject_request(process_instance_id)
+            return _reject_request(process_instance_id, approver_user_id)
         case _:
             raise ApprovalCallbackError(
                 kind="validation_error",
@@ -61,14 +65,14 @@ def apply_approval_callback(
             )
 
 
-def _approve_request(process_instance_id: str, actor_id: str) -> AccessRequest:
-    access_request = _mark_approved(process_instance_id)
+def _approve_request(process_instance_id: str, approver_user_id: str) -> AccessRequest:
+    access_request = _mark_approved(process_instance_id, approver_user_id)
     try:
         return AccessRequestService.apply_approved_access_request(
             AccessRequestApplication(
                 request_id=access_request.id,
                 actor_type="dingtalk",
-                actor_id=actor_id,
+                actor_id=approver_user_id,
                 reason="DingTalk approval callback",
             ),
         )
@@ -80,10 +84,18 @@ def _approve_request(process_instance_id: str, actor_id: str) -> AccessRequest:
         ) from exc
 
 
-def _mark_approved(process_instance_id: str) -> AccessRequest:
+def _mark_approved(process_instance_id: str, approver_user_id: str) -> AccessRequest:
+    conflict_status = ""
     with transaction.atomic():
         access_request = _locked_request(process_instance_id)
         if access_request is not None:
+            if not _callback_approver_is_authorized(access_request, approver_user_id):
+                # 审计写在事务外, 避免随异常回滚而丢失。
+                raise _unauthorized_approver_error(
+                    access_request,
+                    process_instance_id,
+                    approver_user_id,
+                )
             match access_request.status:
                 case "submitted":
                     access_request.status = REQUEST_STATUS_APPROVED
@@ -94,21 +106,36 @@ def _mark_approved(process_instance_id: str) -> AccessRequest:
                         access_request=access_request,
                         action="dingtalk_approval_approved",
                         process_instance_id=process_instance_id,
+                        approver_user_id=approver_user_id,
                     )
                     return access_request
                 case "approved" | "grant_applied":
                     return access_request
                 case status:
-                    raise _status_conflict_error(process_instance_id, status)
+                    conflict_status = status
+    if access_request is not None and conflict_status:
+        raise _status_conflict_error(
+            access_request,
+            process_instance_id,
+            conflict_status,
+            approver_user_id=approver_user_id,
+        )
     raise _unknown_process_error(process_instance_id)
 
 
-def _reject_request(process_instance_id: str) -> AccessRequest:
+def _reject_request(process_instance_id: str, approver_user_id: str) -> AccessRequest:
+    conflict_status = ""
     with transaction.atomic():
         access_request = _locked_request(process_instance_id)
         if access_request is not None:
+            if not _callback_approver_is_authorized(access_request, approver_user_id):
+                raise _unauthorized_approver_error(
+                    access_request,
+                    process_instance_id,
+                    approver_user_id,
+                )
             match access_request.status:
-                case "approved" | "grant_applied" | "grant_failed" | "rejected":
+                case "rejected":
                     return access_request
                 case "submitted":
                     access_request.status = REQUEST_STATUS_REJECTED
@@ -118,11 +145,45 @@ def _reject_request(process_instance_id: str) -> AccessRequest:
                         access_request=access_request,
                         action="dingtalk_approval_rejected",
                         process_instance_id=process_instance_id,
+                        approver_user_id=approver_user_id,
                     )
                     return access_request
                 case status:
-                    raise _status_conflict_error(process_instance_id, status)
+                    # 已进入 approved/grant_applied/grant_failed 的申请收到 rejected 回调
+                    # 是真实冲突, 必须显式报错并留审计, 不允许静默 200。
+                    conflict_status = status
+    if access_request is not None and conflict_status:
+        raise _status_conflict_error(
+            access_request,
+            process_instance_id,
+            conflict_status,
+            approver_user_id=approver_user_id,
+        )
     raise _unknown_process_error(process_instance_id)
+
+
+def _callback_approver_is_authorized(
+    access_request: AccessRequest,
+    approver_user_id: str,
+) -> bool:
+    allowed = [user_id for user_id in access_request.approver_user_ids if user_id]
+    return not allowed or approver_user_id in allowed
+
+
+def _unauthorized_approver_error(
+    access_request: AccessRequest,
+    process_instance_id: str,
+    approver_user_id: str,
+) -> ApprovalCallbackError:
+    return ApprovalCallbackError(
+        kind="approver_rejected",
+        message=APPROVER_NOT_AUTHORIZED_MESSAGE,
+        details={
+            "process_instance_id": process_instance_id,
+            "request_id": access_request.id,
+            "approver_user_id": approver_user_id,
+        },
+    )
 
 
 def _locked_request(process_instance_id: str) -> AccessRequest | None:
@@ -147,7 +208,23 @@ def _unknown_process_error(process_instance_id: str) -> ApprovalCallbackError:
     )
 
 
-def _status_conflict_error(process_instance_id: str, status: str) -> ApprovalCallbackError:
+def _status_conflict_error(
+    access_request: AccessRequest,
+    process_instance_id: str,
+    status: str,
+    *,
+    approver_user_id: str,
+) -> ApprovalCallbackError:
+    _record_security_event(
+        event_type="dingtalk_callback_status_conflict",
+        target_id=process_instance_id,
+        metadata={
+            "process_instance_id": process_instance_id,
+            "request_id": access_request.id,
+            "status": status,
+            "approver_user_id": approver_user_id,
+        },
+    )
     return ApprovalCallbackError(
         kind="conflict",
         message="DingTalk 回调状态与申请状态不匹配。",
@@ -160,11 +237,12 @@ def _record_request_event(
     access_request: AccessRequest,
     action: str,
     process_instance_id: str,
+    approver_user_id: str,
 ) -> None:
     _ = AuditService.record(
         AuditRecord(
             actor_type="dingtalk",
-            actor_id=process_instance_id,
+            actor_id=approver_user_id,
             action=action,
             target_type="access_request",
             target_id=str(access_request.id),
@@ -172,6 +250,7 @@ def _record_request_event(
                 "process_instance_id": process_instance_id,
                 "user_id": access_request.user.authentik_user_id,
                 "app_key": access_request.app.app_key,
+                "approver_user_id": approver_user_id,
             },
         ),
     )

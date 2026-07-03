@@ -217,10 +217,16 @@ def _optional_string_tuple_claim(claims: OidcClaimsInput, key: str) -> tuple[str
             return ()
         case str() as claim:
             return (claim,) if claim else ()
-        case tuple() as values:
-            return tuple(value for value in values if value)
-        case list() as values:
-            return tuple(value for value in values if value)
+        case tuple() | list():
+            # 序列里出现非字符串元素说明上游 claim 结构损坏, 必须显式报错,
+            # 静默丢弃会让用户少组/降权且无从排查。
+            items: list[str] = []
+            for item in value:
+                if not isinstance(item, str):
+                    raise OidcSessionError(key, "must be a string sequence")
+                if item:
+                    items.append(item)
+            return tuple(items)
         case _:
             raise OidcSessionError(key, "must be a string sequence")
 

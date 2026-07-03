@@ -95,6 +95,12 @@ class AccessGrant(models.Model):
                 condition=Q(is_current=True),
                 name="grants_access_grant_one_current",
             ),
+            # snapshot_version 以 (user, app, version) 为事实锚点;
+            # 并发 revoke(就地 +1)与新建授权不允许产生两行相同版本号。
+            models.UniqueConstraint(
+                fields=["user", "app", "version"],
+                name="grants_access_grant_version_unique",
+            ),
         ]
         ordering: ClassVar[list[str]] = ["app__app_key", "user__authentik_user_id", "-version"]
 

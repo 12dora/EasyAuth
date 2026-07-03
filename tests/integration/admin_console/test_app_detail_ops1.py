@@ -120,21 +120,27 @@ def test_ops1_console_entry_auto_binds_dev_admin_when_dev_login_is_enabled() -> 
     assert client.session[AUTHENTIK_GROUPS_SESSION_KEY] == ["EasyAuth Admins"]
 
 
-def test_ops1_console_entry_redirects_non_admin_user_to_forbidden_page() -> None:
+def test_ops1_console_entry_serves_shell_for_non_admin_console_user() -> None:
+    # Given: 已登录但没有超管组的普通用户。
     client = _non_admin_client("developer-no-console")
 
+    # When: 打开控制台首页。
     response = client.get("/console/")
 
-    assert response.status_code == HTTPStatus.FOUND
-    assert response.headers["Location"] == "/errors/forbidden/"
+    # Then: 控制台壳对登录用户可用, App 级权限由成员角色控制。
+    assert response.status_code == HTTPStatus.OK
+    assert 'data-easyauth-react-shell="console"' in response.content.decode()
 
 
 @override_settings(DEBUG=True, EASYAUTH_ENABLE_DEV_LOGIN=True)
-def test_ops1_console_entry_upgrades_non_admin_session_in_dev_login_mode() -> None:
-    client = _non_admin_client("developer-no-console-dev")
+def test_ops1_console_entry_binds_dev_login_for_anonymous_session_in_dev_mode() -> None:
+    # Given: 未登录浏览器, 本地开发模式开启 dev login。
+    client = Client(HTTP_HOST="localhost")
 
+    # When: 直接打开控制台首页。
     response = client.get("/console/")
 
+    # Then: 自动绑定 dev-user 超管会话并渲染控制台壳。
     html = response.content.decode()
     assert response.status_code == HTTPStatus.OK
     assert 'data-easyauth-react-shell="console"' in html
@@ -143,14 +149,16 @@ def test_ops1_console_entry_upgrades_non_admin_session_in_dev_login_mode() -> No
     assert client.session[AUTHENTIK_GROUPS_SESSION_KEY] == ["EasyAuth Admins"]
 
 
-def test_ops1_console_app_detail_redirects_non_admin_user_to_forbidden_page() -> None:
+def test_ops1_console_app_detail_hides_app_from_non_member_user() -> None:
+    # Given: 已登录但与该 App 无成员关系的用户。
     client = _non_admin_client("developer-no-console-detail")
     app = App.objects.create(app_key="ops1-no-console", name="No Console")
 
+    # When: 直接访问该 App 的控制台详情页。
     response = client.get(f"/console/apps/{app.app_key}/")
 
-    assert response.status_code == HTTPStatus.FOUND
-    assert response.headers["Location"] == "/errors/forbidden/"
+    # Then: 按不存在处理, 不暴露未授权 App。
+    assert response.status_code == HTTPStatus.NOT_FOUND
 
 
 def test_ops1_console_app_detail_legacy_form_post_is_closed() -> None:

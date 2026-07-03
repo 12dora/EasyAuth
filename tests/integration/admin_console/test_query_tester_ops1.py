@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
 from http import HTTPStatus
 from json import dumps
 from re import escape, findall, search
@@ -8,8 +7,8 @@ from typing import Final, Protocol
 
 import pytest
 from django.contrib.auth.models import User
+from django.core.exceptions import ImproperlyConfigured
 from django.test import Client, override_settings
-from django.utils import timezone
 
 from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode
@@ -204,7 +203,7 @@ def test_ops1_console_query_tester_preserves_submitted_token_bytes() -> None:
 
 
 @override_settings(EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS="60")
-def test_ops1_console_query_tester_uses_default_ttl_for_invalid_configuration() -> None:
+def test_ops1_console_query_tester_fails_fast_for_invalid_ttl_configuration() -> None:
     # Given: 联调 API 命中非法 TTL 配置。
     client = _logged_in_client("owner-ops1-query-invalid-ttl")
     app = _owned_app("ops1-query-invalid-ttl", "owner-ops1-query-invalid-ttl")
@@ -212,20 +211,13 @@ def test_ops1_console_query_tester_uses_default_ttl_for_invalid_configuration() 
     user = UserMirror.objects.create(authentik_user_id="query-invalid-ttl-user")
     _ = AccessGrant.objects.create(user=user, app=app)
 
-    # When: owner 通过 private API 查询该用户。
-    before = timezone.now()
-    response = client.post(
-        _query_test_api_url(app.app_key),
-        data=dumps({"user_id": user.authentik_user_id, "token": issue.plaintext_token}),
-        content_type="application/json",
-    )
-    after = timezone.now()
-
-    # Then: 非法 TTL 退回默认 300 秒。
-    assert response.status_code == HTTPStatus.OK
-    expires_at = datetime.fromisoformat(_json_string(response, "expires_at"))
-    assert before + timedelta(seconds=300) <= expires_at
-    assert expires_at <= after + timedelta(seconds=300)
+    # When / Then: 配置错误必须显式失败, 不允许静默退回默认 TTL。
+    with pytest.raises(ImproperlyConfigured):
+        _ = client.post(
+            _query_test_api_url(app.app_key),
+            data=dumps({"user_id": user.authentik_user_id, "token": issue.plaintext_token}),
+            content_type="application/json",
+        )
 
 
 def test_ops1_console_query_tester_explains_internal_permission_query_error() -> None:

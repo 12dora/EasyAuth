@@ -6,7 +6,10 @@ from typing import TYPE_CHECKING, Protocol
 from celery import shared_task
 
 from easyauth.accounts.services import AuthentikSyncService
-from easyauth.integrations.authentik.directory_client import AuthentikDirectoryClient
+from easyauth.integrations.authentik.directory_client import (
+    AuthentikDirectoryClient,
+    AuthentikDirectoryError,
+)
 from easyauth.integrations.authentik.directory_sync import sync_authentik_dingtalk_directory
 
 if TYPE_CHECKING:
@@ -51,7 +54,15 @@ def sync_authentik_users_from_source(
     )
 
 
-@shared_task(name=DINGTALK_DIRECTORY_SYNC_TASK_NAME)
+@shared_task(
+    name=DINGTALK_DIRECTORY_SYNC_TASK_NAME,
+    autoretry_for=(AuthentikDirectoryError,),
+    retry_backoff=True,
+    retry_backoff_max=600,
+    retry_jitter=True,
+    max_retries=5,
+    acks_late=True,
+)
 def sync_dingtalk_directory_task() -> dict[str, int]:
     result = sync_authentik_dingtalk_directory(AuthentikDirectoryClient.from_settings())
     return {
@@ -59,4 +70,9 @@ def sync_dingtalk_directory_task() -> dict[str, int]:
         "user_count": result.user_count,
         "org_context_count": result.org_context_count,
         "sync_state_count": result.sync_state_count,
+        "pruned_department_count": result.pruned_department_count,
+        "pruned_user_count": result.pruned_user_count,
+        "status_applied_count": result.status_applied_count,
+        "departed_count": result.departed_count,
+        "revoked_count": result.revoked_count,
     }

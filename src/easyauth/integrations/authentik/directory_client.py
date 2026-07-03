@@ -90,11 +90,21 @@ class AuthentikDirectoryClient:
 
     def iter_departments(self) -> Iterator[DingTalkDirectoryDepartment]:
         for page in self._iter_paginated("departments/"):
-            yield from parse_departments(page, source_slug=self.source_slug)
+            try:
+                yield from parse_departments(page, source_slug=self.source_slug)
+            except (TypeError, ValueError) as error:
+                raise AuthentikDirectoryUnavailableError(
+                    DIRECTORY_INVALID_FORMAT_MESSAGE,
+                ) from error
 
     def iter_users(self) -> Iterator[DingTalkDirectoryUser]:
         for page in self._iter_paginated("users/"):
-            yield from parse_users(page, source_slug=self.source_slug)
+            try:
+                yield from parse_users(page, source_slug=self.source_slug)
+            except (TypeError, ValueError) as error:
+                raise AuthentikDirectoryUnavailableError(
+                    DIRECTORY_INVALID_FORMAT_MESSAGE,
+                ) from error
 
     def get_user_org(self, corp_id: str, user_id: str) -> DingTalkDirectoryOrgContext:
         quoted_corp = quote(corp_id, safe="")

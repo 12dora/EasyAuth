@@ -15,13 +15,9 @@ from easyauth.applications.models import (
     MANAGED_SCOPE_POLICY_RESOLVER_DINGTALK_MANAGER_CHAIN,
     MANAGED_SCOPE_POLICY_RESOLVER_DISABLED,
     App,
-    AppMembership,
     ManagedScopePolicy,
 )
-from easyauth.applications.ops_models import (
-    APP_MEMBERSHIP_ROLE_DEVELOPER,
-    APP_MEMBERSHIP_ROLE_OWNER,
-)
+from easyauth.applications.ownership import can_view_app
 from easyauth.integrations.authentik.directory_client import (
     AuthentikDirectoryClient,
     AuthentikDirectoryError,
@@ -133,12 +129,7 @@ def _app_for_actor(actor: ConsoleActor, app_key: str) -> AppLookupResult:
             "应用不存在。",
             status=HTTPStatus.NOT_FOUND,
         )
-    if not AppMembership.objects.filter(
-        app=app,
-        user_id=actor.user_id,
-        role__in=(APP_MEMBERSHIP_ROLE_OWNER, APP_MEMBERSHIP_ROLE_DEVELOPER),
-        is_active=True,
-    ).exists():
+    if not can_view_app(actor, app):
         return error_response(
             ErrorCode.PERMISSION_DENIED,
             "无权限访问该应用。",

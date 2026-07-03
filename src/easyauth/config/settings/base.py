@@ -12,11 +12,27 @@ if TYPE_CHECKING:
 
 BASE_DIR: Final = Path(__file__).resolve().parents[4]
 
-SECRET_KEY = os.environ.get(
-    "DJANGO_SECRET_KEY",
-    "django-insecure-easyauth-local-dev-only",
-)
 DEBUG = os.environ.get("DJANGO_DEBUG", "0") == "1"
+
+MISSING_SETTING_ERROR_TEMPLATE: Final = (
+    "{name} 未配置。生产环境必须显式设置该环境变量; 本地开发请设置 DJANGO_DEBUG=1。"
+)
+
+
+def required_env(name: str, *, dev_default: str) -> str:
+    # 生产环境缺失关键配置必须启动失败, 只有显式 DEBUG 模式才允许开发默认值。
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value
+    if DEBUG:
+        return dev_default
+    raise ImproperlyConfigured(MISSING_SETTING_ERROR_TEMPLATE.format(name=name))
+
+
+SECRET_KEY = required_env(
+    "DJANGO_SECRET_KEY",
+    dev_default="django-insecure-easyauth-local-dev-only",
+)
 ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
 
 INSTALLED_APPS: list[str] = [
@@ -77,11 +93,17 @@ DATABASE_URL_SCHEME_ERROR: Final = "DATABASE_URL 只支持 postgres 或 postgres
 DATABASE_URL_HOST_ERROR: Final = "DATABASE_URL 必须包含 PostgreSQL host。"
 DATABASE_URL_NAME_ERROR: Final = "DATABASE_URL 必须包含 PostgreSQL database name。"
 DATABASE_URL_PORT_ERROR: Final = "DATABASE_URL 包含无效 PostgreSQL port。"
+DATABASE_URL_REQUIRED_ERROR: Final = (
+    "DATABASE_URL 未配置。生产环境不允许静默回退 SQLite; 本地开发请设置 DJANGO_DEBUG=1。"
+)
 
 
 def database_config_from_env(environ: Mapping[str, str]) -> DatabaseSettings:
     database_url = environ.get("DATABASE_URL", "").strip()
     if database_url == "":
+        # 生产路径缺失数据库配置必须启动失败, 否则 IAM 会静默跑在空 SQLite 上。
+        if environ.get("DJANGO_DEBUG", "0") != "1":
+            raise ImproperlyConfigured(DATABASE_URL_REQUIRED_ERROR)
         return {
             "default": {
                 "ENGINE": "django.db.backends.sqlite3",
@@ -124,6 +146,20 @@ LANGUAGE_CODE = "zh-hans"
 TIME_ZONE = "Asia/Shanghai"
 USE_I18N = True
 USE_TZ = True
+
+CSRF_TRUSTED_ORIGINS = [
+    origin.strip()
+    for origin in os.environ.get("DJANGO_CSRF_TRUSTED_ORIGINS", "").split(",")
+    if origin.strip()
+]
+if not DEBUG:
+    # TLS 终止在反向代理; 不设该头会让 is_secure() 恒为 False,
+    # /auth/login/ 的 canonical 比对会陷入 302 死循环。
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
+    SECURE_HSTS_SECONDS = int(os.environ.get("DJANGO_SECURE_HSTS_SECONDS", "3600"))
+    SECURE_CONTENT_TYPE_NOSNIFF = True
 
 STATIC_URL = "static/"
 STATICFILES_DIRS = [BASE_DIR / "src" / "easyauth" / "static"]
@@ -203,11 +239,11 @@ EASYAUTH_CONSOLE_SUPERUSER_IDS = tuple(
 )
 EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS = 300
 EASYAUTH_DINGTALK_CALLBACK_SECRET = os.environ.get("EASYAUTH_DINGTALK_CALLBACK_SECRET", "")
-EASYAUTH_AUTHENTIK_BASE_URL = os.environ.get(
+EASYAUTH_AUTHENTIK_BASE_URL = required_env(
     "EASYAUTH_AUTHENTIK_BASE_URL",
-    "http://localhost:19000",
+    dev_default="http://localhost:19000",
 ).rstrip("/")
-EASYAUTH_AUTHENTIK_API_TOKEN = os.environ.get("EASYAUTH_AUTHENTIK_API_TOKEN", "")
+EASYAUTH_AUTHENTIK_API_TOKEN = required_env("EASYAUTH_AUTHENTIK_API_TOKEN", dev_default="")
 EASYAUTH_AUTHENTIK_DINGTALK_SOURCE_SLUG = os.environ.get(
     "EASYAUTH_AUTHENTIK_DINGTALK_SOURCE_SLUG",
     "dingtalk",
@@ -221,5 +257,10 @@ CELERY_BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
     "grant-expiration-cleanup": {
         "task": "easyauth.grants.cleanup_expired_grants",
         "schedule": float(os.environ.get("EASYAUTH_GRANT_EXPIRATION_CLEANUP_SECONDS", "60")),
+    },
+    # 钉钉目录同步兼离职回收: 把 Authentik 镜像的组织事实回灌 UserMirror 并撤销离职授权。
+    "dingtalk-directory-sync": {
+        "task": "easyauth.authentik.sync_dingtalk_directory",
+        "schedule": float(os.environ.get("EASYAUTH_DINGTALK_DIRECTORY_SYNC_SECONDS", "300")),
     },
 }

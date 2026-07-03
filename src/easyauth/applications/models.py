@@ -43,6 +43,17 @@ if TYPE_CHECKING:
 type JsonValue = None | bool | int | float | str | list[JsonValue] | dict[str, JsonValue]
 
 APP_SCOPE_KEY_PATTERN = re.compile(r"^[A-Z0-9_]+$")
+
+
+def _is_scope_key_list(value: object) -> bool:
+    if not isinstance(value, list):
+        return False
+    scopes = [
+        item
+        for item in value
+        if isinstance(item, str) and APP_SCOPE_KEY_PATTERN.fullmatch(item)
+    ]
+    return len(scopes) == len(value) and len(set(scopes)) == len(scopes)
 AUTHORIZATION_GROUP_KINDS = ("role", "bundle")
 PERMISSION_RISK_LEVELS = ("standard", "high")
 MANAGED_SCOPE_POLICY_TARGET_APP_DEFAULT = "app_default"
@@ -97,6 +108,14 @@ class AppCredential(models.Model):
     credential_type: models.CharField[str, str] = models.CharField(max_length=32)
     name: models.CharField[str, str] = models.CharField(max_length=128)
     token_hash: models.CharField[str, str] = models.CharField(max_length=256)
+    # 令牌的确定性查找键(SHA-256), 认证时先索引定位单行再做 PBKDF2 校验,
+    # 避免对全部 active 凭据线性跑慢哈希被打成 CPU DoS。
+    token_lookup: models.CharField[str, str] = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+        db_index=True,
+    )
     is_active: models.BooleanField[bool, bool] = models.BooleanField(default=True)
     disabled_at: models.DateTimeField[str | date | datetime | None, datetime | None] = (
         models.DateTimeField(blank=True, null=True)
@@ -269,7 +288,13 @@ class Permission(models.Model):
         errors: dict[str, str] = {}
         if self.risk_level not in PERMISSION_RISK_LEVELS:
             errors["risk_level"] = "Permission risk level must be standard or high."
-        if self.is_active and not self.supported_scopes:
+        # supported_scopes 必须是 scope key 列表; 存成字符串或字典会让
+        # `scope_key in supported_scopes` 退化成子串/字典键语义("GLO" in "GLOBAL")。
+        if not _is_scope_key_list(self.supported_scopes):
+            errors["supported_scopes"] = (
+                "Supported scopes must be a list of unique scope keys."
+            )
+        elif self.is_active and not self.supported_scopes:
             errors["supported_scopes"] = "Active permission must support at least one scope."
         if errors:
             raise ValidationError(errors)
@@ -563,6 +588,18 @@ class ApprovalRule(models.Model):
                     )
                 ),
                 name="applications_approval_rule_one_target",
+            ),
+            # 同一目标只允许一条审批规则; 否则清单导入(取最大 id)和审批解析(取最小 id)
+            # 会读写不同的行, 导入成功却路由到已移除的旧审批人。
+            models.UniqueConstraint(
+                fields=["app", "authorization_group"],
+                condition=Q(authorization_group__isnull=False),
+                name="applications_approval_rule_group_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["app", "permission"],
+                condition=Q(permission__isnull=False),
+                name="applications_approval_rule_permission_unique",
             ),
         ]
         ordering: ClassVar[list[str]] = ["app__app_key", "id"]

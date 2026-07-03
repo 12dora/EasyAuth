@@ -5,6 +5,7 @@ from typing import cast
 
 import pytest
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.test import Client
 
 from easyauth.accounts.auth import AUTHENTIK_GROUPS_SESSION_KEY, AUTHENTIK_SESSION_KEY
@@ -29,9 +30,10 @@ def bridge_legacy_client_login_to_authentik_session(
         user, _created = UserMirror.objects.get_or_create(authentik_user_id=username)
         session = self.session
         session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
-        session[AUTHENTIK_GROUPS_SESSION_KEY] = list(
-            _configured_console_superuser_groups(),
-        )
+        if _is_django_superuser(username):
+            session[AUTHENTIK_GROUPS_SESSION_KEY] = list(
+                _configured_console_superuser_groups(),
+            )
         session.save()
         return authenticated
 
@@ -40,7 +42,12 @@ def bridge_legacy_client_login_to_authentik_session(
 
 @pytest.fixture(autouse=True)
 def default_console_group_settings(settings: object) -> None:
-    setattr(settings, "EASYAUTH_CONSOLE_SUPERUSER_GROUPS", ("EasyAuth Admins",))
+    settings.EASYAUTH_CONSOLE_SUPERUSER_GROUPS = ("EasyAuth Admins",)
+
+
+def _is_django_superuser(username: str) -> bool:
+    user_model = get_user_model()
+    return user_model.objects.filter(username=username, is_superuser=True).exists()
 
 
 def _configured_console_superuser_groups() -> tuple[str, ...]:

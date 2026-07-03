@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 from django.test import RequestFactory
 from django.test.utils import override_settings
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
@@ -137,7 +138,7 @@ def test_app_bearer_authentication_rejects_malformed_or_invalid_bearer_token() -
     [
         "Bearer ",
         "Bearer",
-        "bearer token",
+        "Token abc",
     ],
 )
 def test_app_bearer_authentication_rejects_malformed_bearer_headers(
@@ -214,11 +215,44 @@ def test_app_bearer_authentication_rejects_disabled_token_and_disabled_app() -> 
 
 
 @pytest.mark.parametrize("invalid_ttl", [False, True, "60", None, 0, -1])
-def test_permission_query_ttl_seconds_uses_default_for_invalid_values(
+def test_permission_query_ttl_seconds_fails_fast_for_invalid_values(
     invalid_ttl: object,
 ) -> None:
-    with override_settings(EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS=invalid_ttl):
-        assert permission_query_ttl_seconds() == DEFAULT_PERMISSION_QUERY_TTL_SECONDS
+    # 配错 TTL 必须启动失败; 静默回退默认值会悄悄延长撤销窗口。
+    with (
+        override_settings(EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS=invalid_ttl),
+        pytest.raises(ImproperlyConfigured),
+    ):
+        _ = permission_query_ttl_seconds()
+
+
+def test_app_bearer_authentication_accepts_case_insensitive_scheme(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: RFC 7235 认证方案不区分大小写。
+    observed_tokens: list[str] = []
+
+    def record_token(token: str) -> AppPrincipal:
+        observed_tokens.append(token)
+        return AppPrincipal(
+            app_id=1,
+            app_key="case-app",
+            credential_type="static_token",
+            credential_id=1,
+        )
+
+    monkeypatch.setattr(StaticTokenService, "authenticate_for_api", record_token)
+    request = RequestFactory().get(
+        "/api/v1/auth-probe",
+        HTTP_AUTHORIZATION="bearer eat_lower-case-scheme",
+    )
+
+    # When
+    result = AppBearerAuthentication().authenticate(request)
+
+    # Then
+    assert result is not None
+    assert observed_tokens == ["eat_lower-case-scheme"]
 
 
 def test_permission_query_ttl_seconds_uses_default_when_setting_is_missing(

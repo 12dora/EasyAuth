@@ -26,10 +26,9 @@ from easyauth.applications.models import (
     MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS,
     MANAGED_SCOPE_POLICY_TARGET_APP_DEFAULT,
     App,
-    AppMembership,
     ManagedScopePolicy,
 )
-from easyauth.applications.ownership import ConsoleActor
+from easyauth.applications.ownership import ConsoleActor, can_manage_app, can_view_app
 from easyauth.audit.services import AuditRecord, AuditService
 
 type AppApiResult = App | JsonResponse
@@ -147,7 +146,7 @@ def _read_context(request: HttpRequest, app_key: str) -> AppApiResult:
     app = App.objects.filter(app_key=app_key).first()
     if app is None:
         return _error_response(ErrorCode.NOT_FOUND, "App 不存在。", status=HTTPStatus.NOT_FOUND)
-    if not _has_active_app_membership(actor, app):
+    if not can_view_app(actor, app):
         return _error_response(
             ErrorCode.PERMISSION_DENIED,
             "只有 active App owner/developer 可以访问该 App 管理范围策略。",
@@ -166,31 +165,13 @@ def _write_context(request: HttpRequest, app_key: str) -> AppWriteContextResult:
     app = App.objects.filter(app_key=app_key).first()
     if app is None:
         return _error_response(ErrorCode.NOT_FOUND, "App 不存在。", status=HTTPStatus.NOT_FOUND)
-    if not _has_active_owner_membership(actor, app):
+    if not can_manage_app(actor, app):
         return _error_response(
             ErrorCode.PERMISSION_DENIED,
             "只有 active App owner 可以维护该 App 管理范围策略。",
             status=HTTPStatus.FORBIDDEN,
         )
     return app, actor
-
-
-def _has_active_app_membership(actor: ConsoleActor, app: App) -> bool:
-    return AppMembership.objects.filter(
-        app=app,
-        user_id=actor.user_id,
-        role__in=("owner", "developer"),
-        is_active=True,
-    ).exists()
-
-
-def _has_active_owner_membership(actor: ConsoleActor, app: App) -> bool:
-    return AppMembership.objects.filter(
-        app=app,
-        user_id=actor.user_id,
-        role="owner",
-        is_active=True,
-    ).exists()
 
 
 def _policy_payload(app: App) -> ManagedScopePolicyPayload:

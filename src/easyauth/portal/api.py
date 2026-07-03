@@ -15,6 +15,7 @@ from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.responses import error_response as _error_response
 from easyauth.api.responses import json_response as _json_response
+from easyauth.grants.managed_users import ManagedUsersResolutionUnavailableError
 from easyauth.portal.access_request_payloads import (
     AccessRequestPayload,
     AccessRequestTargetError,
@@ -25,8 +26,8 @@ from easyauth.portal.access_request_payloads import (
 from easyauth.portal.api_data import (
     access_request_item,
     access_request_items_for_user,
-    current_grant_items_for_user,
-    expiring_grant_items_for_user,
+    current_grant_page_for_user,
+    expiring_grant_page_for_user,
 )
 from easyauth.portal.pagination import PortalPage, paginate_items
 from easyauth.portal.request_catalog import request_catalog_payload
@@ -40,9 +41,14 @@ MAX_EXPIRING_DAYS = 90
 def portal_grants(request: HttpRequest) -> JsonResponse:
     match _active_user(request):
         case UserMirror() as user:
-            return _page_response(paginate_items(current_grant_items_for_user(user), request.GET))
+            pass
         case JsonResponse() as response:
             return response
+    try:
+        page = current_grant_page_for_user(user, request.GET)
+    except ManagedUsersResolutionUnavailableError as error:
+        return _directory_unavailable_response(error)
+    return _page_response(page)
 
 
 def portal_expiring_grants(request: HttpRequest) -> JsonResponse:
@@ -53,11 +59,22 @@ def portal_expiring_grants(request: HttpRequest) -> JsonResponse:
             return response
     match _parse_days(request):
         case int() as days:
-            return _page_response(
-                paginate_items(expiring_grant_items_for_user(user, days=days), request.GET),
-            )
+            pass
         case JsonResponse() as response:
             return response
+    try:
+        page = expiring_grant_page_for_user(user, request.GET, days=days)
+    except ManagedUsersResolutionUnavailableError as error:
+        return _directory_unavailable_response(error)
+    return _page_response(page)
+
+
+def _directory_unavailable_response(error: ManagedUsersResolutionUnavailableError) -> JsonResponse:
+    return _error_response(
+        ErrorCode.DEPENDENCY_UNAVAILABLE,
+        str(error),
+        status=HTTPStatus.SERVICE_UNAVAILABLE,
+    )
 
 
 def portal_access_requests(request: HttpRequest) -> JsonResponse:

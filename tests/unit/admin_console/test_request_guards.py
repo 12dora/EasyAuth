@@ -39,20 +39,15 @@ def test_require_console_actor_returns_401_when_user_is_not_authenticated() -> N
     }
 
 
-def test_require_console_actor_rejects_active_non_admin_session() -> None:
+def test_require_console_actor_maps_active_authentik_session_to_console_actor() -> None:
     _ = UserMirror.objects.create(authentik_user_id="console-user")
     request = _request_with_session(authentik_user_id="console-user")
     request.user = AnonymousUser()
 
-    response = require_console_actor(request)
+    actor = require_console_actor(request)
 
-    assert isinstance(response, JsonResponse)
-    assert response.status_code == HTTPStatus.FORBIDDEN
-    assert _json_object(response)["error"] == {
-        "code": ErrorCode.PERMISSION_DENIED,
-        "message": "无权访问控制台。",
-        "details": {},
-    }
+    assert isinstance(actor, ConsoleActor)
+    assert actor == ConsoleActor(user_id="console-user", is_superuser=False)
 
 
 @override_settings(EASYAUTH_CONSOLE_SUPERUSER_GROUPS=("easyauth-admins",))

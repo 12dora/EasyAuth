@@ -8,6 +8,8 @@ type JsonValue = None | bool | int | float | str | list[JsonValue] | dict[str, J
 
 INVALID_MANAGED_USERS_FIELD_TYPE = "invalid managed users field type"
 EMPTY_MANAGED_USERS_FIELD = "empty managed users field"
+MISSING_DIRECTORY_IDENTITY_FIELD = "missing directory identity field"
+UNSUPPORTED_DIRECTORY_USER_STATUS = "unsupported directory user status"
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,10 +89,11 @@ def parse_departments(
 
 
 def parse_department(payload: DirectoryJson, *, source_slug: str) -> DingTalkDirectoryDepartment:
+    # 身份键缺失必须报错; 用 "" 兜底会让所有部门坍缩成同一行垃圾镜像。
     return DingTalkDirectoryDepartment(
         source_slug=_string(payload.get("source_slug")) or source_slug,
-        corp_id=_string(payload.get("corp_id")),
-        dept_id=_string(payload.get("dept_id")),
+        corp_id=_required_identity(payload, "corp_id"),
+        dept_id=_required_identity(payload, "dept_id"),
         parent_id=_string(payload.get("parent_id")) or _string(payload.get("parent_dept_id")),
         name=_string(payload.get("name")),
         order=_int(payload.get("order")),
@@ -102,10 +105,12 @@ def parse_users(payload: DirectoryJson, *, source_slug: str) -> tuple[DingTalkDi
 
 
 def parse_user(payload: DirectoryJson, *, source_slug: str) -> DingTalkDirectoryUser:
+    # 身份键缺失必须报错; 字段改名时全量用户被解析成 user_id="" 会坍缩成一行垃圾镜像,
+    # 任务却报出健康的 user_count。
     return DingTalkDirectoryUser(
         source_slug=_string(payload.get("source_slug")) or source_slug,
-        corp_id=_string(payload.get("corp_id")),
-        user_id=_string(payload.get("user_id")),
+        corp_id=_required_identity(payload, "corp_id"),
+        user_id=_required_identity(payload, "user_id"),
         union_id=_string(payload.get("union_id")),
         name=_string(payload.get("name")),
         department_ids=tuple(
@@ -219,6 +224,14 @@ def _required_list(payload: DirectoryJson, key: str) -> list[object]:
     return cast("list[object]", value)
 
 
+def _required_identity(payload: DirectoryJson, key: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or value == "":
+        message = f"{MISSING_DIRECTORY_IDENTITY_FIELD}: {key}"
+        raise ValueError(message)
+    return value
+
+
 def _user_status(payload: DirectoryJson) -> str:
     status = _string(payload.get("status"))
     if status:
@@ -229,4 +242,4 @@ def _user_status(payload: DirectoryJson) -> str:
         return "inactive"
     if payload.get("active") is True:
         return "active"
-    return ""
+    raise ValueError(UNSUPPORTED_DIRECTORY_USER_STATUS)

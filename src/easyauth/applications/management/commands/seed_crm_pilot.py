@@ -6,9 +6,10 @@ from pathlib import Path
 from typing import Final, final, override
 
 from django.core.management.base import BaseCommand
-from django.db import transaction
+from django.db import models, transaction
 
 from easyauth.accounts.models import UserMirror
+from easyauth.applications.catalog_version import bump_catalog_version
 from easyauth.applications.models import (
     App,
     AppCredential,
@@ -63,6 +64,11 @@ def seed_crm_pilot() -> SeedResult:
     permission_by_key = _upsert_manifest_permissions(app, manifest, group_by_key)
     group_models = _upsert_manifest_authorization_groups(app, manifest, permission_by_key)
     _upsert_manifest_approval_rules(app, manifest, group_models)
+    _ = bump_catalog_version(
+        app,
+        actor_id="seed_crm_pilot",
+        reason="seed_crm_pilot_applied",
+    )
     plaintext_token = _ensure_static_token(app)
     _ensure_seed_grant(
         app=app,
@@ -70,6 +76,22 @@ def seed_crm_pilot() -> SeedResult:
         direct_permission=permission_by_key["customer.profile.view"],
     )
     return SeedResult(app=app, plaintext_token=plaintext_token)
+
+
+def _validated_upsert[ModelT: models.Model](
+    model: type[ModelT],
+    lookup: dict[str, object],
+    defaults: dict[str, object],
+) -> ModelT:
+    # seed 数据也必须走 full_clean, 不允许绕过模型校验落库。
+    instance = model.objects.filter(**lookup).first()
+    if instance is None:
+        instance = model(**lookup)
+    for field, value in defaults.items():
+        setattr(instance, field, value)
+    instance.full_clean()
+    instance.save()
+    return instance
 
 
 def _load_manifest() -> dict[str, object]:
@@ -82,14 +104,14 @@ def _upsert_manifest_app(manifest: dict[str, object]) -> App:
     if app_key != CRM_APP_KEY:
         message = "CRM manifest app_key 与 seed 目标不一致。"
         raise ValueError(message)
-    app, _created = App.objects.update_or_create(
-        app_key=app_key,
-        defaults={
+    return _validated_upsert(
+        App,
+        {"app_key": app_key},
+        {
             "name": str(app_payload["name"]),
             "description": str(app_payload.get("description", "")),
         },
     )
-    return app
 
 
 def _ensure_memberships(app: App) -> None:
@@ -108,10 +130,10 @@ def _ensure_memberships(app: App) -> None:
 def _upsert_manifest_scopes(app: App, manifest: dict[str, object]) -> None:
     for payload in _list(manifest["scopes"]):
         scope_payload = _dict(payload)
-        _scope, _created = AppScope.objects.update_or_create(
-            app=app,
-            key=str(scope_payload["key"]),
-            defaults={
+        _ = _validated_upsert(
+            AppScope,
+            {"app": app, "key": str(scope_payload["key"])},
+            {
                 "name": str(scope_payload["name"]),
                 "description": str(scope_payload.get("description", "")),
                 "is_active": bool(scope_payload.get("is_active", True)),
@@ -129,10 +151,10 @@ def _upsert_manifest_permission_groups(
         group_payload = _dict(payload)
         parent_key = str(group_payload.get("parent_key", ""))
         parent = group_by_key.get(parent_key) if parent_key else None
-        group, _created = PermissionGroup.objects.update_or_create(
-            app=app,
-            key=str(group_payload["key"]),
-            defaults={
+        group = _validated_upsert(
+            PermissionGroup,
+            {"app": app, "key": str(group_payload["key"])},
+            {
                 "name": str(group_payload["name"]),
                 "description": str(group_payload.get("description", "")),
                 "parent": parent,
@@ -155,10 +177,10 @@ def _upsert_manifest_permissions(
     }
     for payload in _list(manifest["permissions"]):
         permission_payload = _dict(payload)
-        permission, _created = Permission.objects.update_or_create(
-            app=app,
-            key=str(permission_payload["key"]),
-            defaults={
+        permission = _validated_upsert(
+            Permission,
+            {"app": app, "key": str(permission_payload["key"])},
+            {
                 "name": str(permission_payload["name"]),
                 "description": str(permission_payload.get("description", "")),
                 "group": group_by_key[str(permission_payload.get("group_key", ""))],
@@ -183,10 +205,10 @@ def _upsert_manifest_authorization_groups(
     group_by_key: dict[str, AuthorizationGroup] = {}
     for payload in _list(manifest["authorization_groups"]):
         group_payload = _dict(payload)
-        group, _created = AuthorizationGroup.objects.update_or_create(
-            app=app,
-            key=str(group_payload["key"]),
-            defaults={
+        group = _validated_upsert(
+            AuthorizationGroup,
+            {"app": app, "key": str(group_payload["key"])},
+            {
                 "kind": str(group_payload.get("kind", "role")),
                 "name": str(group_payload["name"]),
                 "description": str(group_payload.get("description", "")),
@@ -197,11 +219,14 @@ def _upsert_manifest_authorization_groups(
         group_by_key[group.key] = group
         for grant_payload in _list(group_payload.get("grants", [])):
             grant = _dict(grant_payload)
-            _link, _created = AuthorizationGroupGrant.objects.update_or_create(
-                authorization_group=group,
-                permission=permission_by_key[str(grant["permission"])],
-                scope_key=str(grant["scope"]),
-                defaults={"is_active": True},
+            _ = _validated_upsert(
+                AuthorizationGroupGrant,
+                {
+                    "authorization_group": group,
+                    "permission": permission_by_key[str(grant["permission"])],
+                    "scope_key": str(grant["scope"]),
+                },
+                {"is_active": True},
             )
     return group_by_key
 
@@ -215,10 +240,10 @@ def _upsert_manifest_approval_rules(
         rule_payload = _dict(payload)
         target_key = str(rule_payload["target_key"])
         group = groups[target_key]
-        _rule, _created = ApprovalRule.objects.update_or_create(
-            app=app,
-            authorization_group=group,
-            defaults={
+        _ = _validated_upsert(
+            ApprovalRule,
+            {"app": app, "authorization_group": group},
+            {
                 "approver_userids": [
                     str(user_id) for user_id in _list(rule_payload["approver_userids"])
                 ],

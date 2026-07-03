@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from http import HTTPStatus
 from typing import Final
@@ -21,7 +22,10 @@ from easyauth.api.serializers import (
 from easyauth.applications.models import App
 from easyauth.applications.services import AppPrincipal
 from easyauth.audit.services import AuditRecord, AuditService
+from easyauth.grants.managed_users import ManagedUsersResolutionUnavailableError
 from easyauth.grants.query import PermissionSnapshot, resolve_user_permissions
+
+logger = logging.getLogger(__name__)
 
 PERMISSION_QUERY_EVENT: Final = "app_permission_queried"
 PERMISSION_QUERY_TARGET_TYPE: Final = "user_permission"
@@ -40,8 +44,18 @@ def query_user_permissions(request: HttpRequest, app_key: str, user_id: str) -> 
     if principal.app_key != app_key:
         return _permission_denied_response()
 
-    app = App.objects.get(id=principal.app_id)
-    snapshot = resolve_user_permissions(user=user_id, app=app)
+    app = App.objects.filter(id=principal.app_id).first()
+    if app is None:
+        # 凭据校验后 App 行被并发删除; 按认证失败处理而非 500。
+        return _authentication_failed_response()
+    try:
+        snapshot = resolve_user_permissions(user=user_id, app=app)
+    except ManagedUsersResolutionUnavailableError as error:
+        # 目录瞬时故障必须显式失败, 下游不能把缺失的 MANAGED_USERS 当成真实撤权。
+        return JsonResponse(
+            build_error_response(ErrorCode.DEPENDENCY_UNAVAILABLE, str(error)),
+            status=HTTPStatus.SERVICE_UNAVAILABLE,
+        )
     expires_at: datetime = _permission_query_expires_at(snapshot)
     payload: PermissionQueryResponseInput = {
         "user_id": snapshot.user_id,
@@ -61,12 +75,15 @@ def query_user_permissions(request: HttpRequest, app_key: str, user_id: str) -> 
     }
     serializer = PermissionQueryResponseSerializer(data=payload)
     if not serializer.is_valid():
+        # 序列化细节只进服务端日志, 不向调用方回显内部字段结构。
+        logger.error(
+            "permission query response serialization failed: app=%s user=%s errors=%s",
+            snapshot.app_key,
+            snapshot.user_id,
+            serializer.errors,
+        )
         return JsonResponse(
-            build_error_response(
-                ErrorCode.INTERNAL_ERROR,
-                "权限查询响应无法序列化。",
-                {"serializer_errors": str(serializer.errors)},
-            ),
+            build_error_response(ErrorCode.INTERNAL_ERROR, "权限查询响应无法序列化。"),
             status=HTTPStatus.INTERNAL_SERVER_ERROR,
         )
 
@@ -94,7 +111,8 @@ def _permission_query_token_from_request(request: HttpRequest) -> str | None:
     scheme, separator, token = raw_header.partition(" ")
     if not separator:
         return None
-    if scheme != _AUTH_SCHEME:
+    # RFC 7235 认证方案不区分大小写。
+    if scheme.lower() != _AUTH_SCHEME.lower():
         return None
     if not token:
         return None

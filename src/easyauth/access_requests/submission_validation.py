@@ -101,13 +101,16 @@ def validate_submission_scope(
 
     match request_type:
         case "grant":
+            _validate_no_current_grant(input_data.user, input_data.app)
             _validate_targets_present(authorization_groups, direct_grants)
             _validate_targets(input_data.app, authorization_groups, direct_grants)
+            _validate_high_risk_duration(authorization_groups, input_data.grant_expires_at)
             _validate_managed_users_approver(input_data, authorization_groups, direct_grants)
         case "change":
             _ = _active_lifecycle_grant(input_data.user, input_data.app)
             _validate_targets_present(authorization_groups, direct_grants)
             _validate_targets(input_data.app, authorization_groups, direct_grants)
+            _validate_high_risk_duration(authorization_groups, input_data.grant_expires_at)
             _validate_managed_users_approver(input_data, authorization_groups, direct_grants)
         case "revoke":
             grant = _active_lifecycle_grant(input_data.user, input_data.app)
@@ -174,6 +177,10 @@ def _validate_expiration_shape(
                 raise AccessRequestSubmissionError(
                     ("Timed requests must include an expiration",),
                 )
+            if grant_expires_at <= timezone.now():
+                raise AccessRequestSubmissionError(
+                    ("Timed requests must expire in the future",),
+                )
 
 
 def _validate_app(app: App) -> None:
@@ -217,6 +224,15 @@ def _contains_managed_users_target(
         is_active=True,
         scope_key=MANAGED_USERS_SCOPE,
     ).exists()
+
+
+def _validate_no_current_grant(user: UserMirror, app: App) -> None:
+    # grant 请求落地时会插入 is_current=True 的新行; 已有 current 授权必须在提交阶段拒绝,
+    # 否则审批通过后才撞 grants_access_grant_one_current 唯一约束, 白白消耗一次审批。
+    if AccessGrant.objects.filter(user=user, app=app, is_current=True).exists():
+        raise AccessRequestSubmissionError(
+            ("current grant already exists, submit a change request instead",),
+        )
 
 
 def _active_lifecycle_grant(user: UserMirror, app: App) -> AccessGrant:

@@ -27,7 +27,7 @@ REQUEST_CATALOG_URL: Final = "/portal/api/v1/request-catalog"
 
 def test_portal_request_catalog_lists_only_requestable_authorization_groups() -> None:
     # Given: active 员工和多种可提交/不可提交授权组。
-    client, user = logged_in_client("portal-catalog-user")
+    client, _user = logged_in_client("portal-catalog-user")
     crm = App.objects.create(app_key="catalog-crm", name="CRM", description="客户系统")
     inactive_app = App.objects.create(app_key="catalog-inactive", name="停用系统", is_active=False)
     requestable_group = AuthorizationGroup.objects.create(
@@ -96,14 +96,8 @@ def test_portal_request_catalog_lists_only_requestable_authorization_groups() ->
             "approver_resolution_status": "default_policy",
         },
     ]
-    assert payload["approver_options"] == [
-        {
-            "user_id": user.authentik_user_id,
-            "name": user.name,
-            "email": user.email,
-            "department": user.department,
-        },
-    ]
+    # 目录不再返回全量在职用户; 无候选审批人时列表为空。
+    assert payload["approver_options"] == []
     body = response.content.decode()
     assert inactive_group.key not in body
     assert not_requestable_group.key not in body
@@ -397,10 +391,9 @@ def test_portal_request_catalog_returns_active_approver_options_and_defaults() -
         permission_item["key"]: permission_item["default_approver_user_ids"]
         for permission_item in payload["ungrouped_permissions"]
     }
+    # 只暴露候选审批人(默认解析出的直属主管/规则审批人), 不含与审批无关的用户。
     assert option_ids == {
-        user.authentik_user_id,
         manager.authentik_user_id,
-        owner.authentik_user_id,
         rule_approver.authentik_user_id,
     }
     assert app_defaults[app.app_key] == [manager.authentik_user_id]

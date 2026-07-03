@@ -44,7 +44,7 @@ def test_apply_approval_callback_rejects_submitted_request_without_creating_gran
     rejected = apply_approval_callback(
         process_instance_id="proc-rejected",
         status="rejected",
-        actor_id="proc-rejected",
+        approver_user_id="manager-001",
         raw_payload=b'{"status":"rejected"}',
     )
 
@@ -55,13 +55,14 @@ def test_apply_approval_callback_rejects_submitted_request_without_creating_gran
     assert rejected.id == access_request.id
     assert access_request.status == REQUEST_STATUS_REJECTED
     assert audit_log.actor_type == "dingtalk"
-    assert audit_log.actor_id == "proc-rejected"
+    assert audit_log.actor_id == "manager-001"
     assert audit_log.target_type == "access_request"
     assert audit_log.target_id == str(access_request.id)
     assert audit_log.metadata == {
         "process_instance_id": "proc-rejected",
         "user_id": "callback-rejected-user",
         "app_key": "callback-rejected-app",
+        "approver_user_id": "manager-001",
     }
     assert AccessGrant.objects.count() == 0
     assert snapshot.grant_version == 0
@@ -74,7 +75,7 @@ def test_apply_approval_callback_returns_not_found_for_unknown_process_with_audi
         _ = apply_approval_callback(
             process_instance_id="proc-unknown",
             status="approved",
-            actor_id="proc-unknown",
+            approver_user_id="manager-001",
             raw_payload=b'{"status":"approved"}',
         )
 
@@ -106,7 +107,7 @@ def test_apply_approval_callback_returns_application_error_when_apply_fails() ->
         _ = apply_approval_callback(
             process_instance_id="proc-apply-error",
             status="approved",
-            actor_id="proc-apply-error",
+            approver_user_id="manager-001",
             raw_payload=b'{"status":"approved"}',
         )
 
@@ -134,7 +135,7 @@ def test_apply_approval_callback_rejects_invalid_status_without_mutating_request
         _ = apply_approval_callback(
             process_instance_id="proc-invalid-status",
             status="cancelled",
-            actor_id="proc-invalid-status",
+            approver_user_id="manager-001",
             raw_payload=b'{"status":"cancelled"}',
         )
 

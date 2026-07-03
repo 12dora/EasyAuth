@@ -21,12 +21,6 @@ def require_console_actor(request: HttpRequest) -> ConsoleActor | JsonResponse:
             "控制台登录已失效。",
             status=HTTPStatus.UNAUTHORIZED,
         )
-    if not actor.is_superuser:
-        return error_response(
-            ErrorCode.PERMISSION_DENIED,
-            "无权访问控制台。",
-            status=HTTPStatus.FORBIDDEN,
-        )
     return actor
 
 

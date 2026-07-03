@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Final
 
 import pytest
@@ -15,10 +16,12 @@ from easyauth.applications.models import (
     Permission,
 )
 from easyauth.audit.models import AuditLog
+from easyauth.grants.managed_users import ManagedUsersResolutionUnavailableError
 from easyauth.grants.models import (
     GRANT_STATUS_EXPIRED,
     GRANT_STATUS_REVOKED,
     GRANT_TYPE_PERMANENT,
+    GRANT_TYPE_TIMED,
     AccessGrant,
     AccessGrantGroup,
     AccessGrantPermission,
@@ -29,6 +32,7 @@ from easyauth.grants.query import (
     ResolvedManagedUsers,
     resolve_user_permissions,
 )
+from easyauth.integrations.authentik.directory_client import AuthentikDirectoryUnavailableError
 from easyauth.integrations.authentik.directory_payloads import DingTalkManagedUsers
 
 pytestmark = pytest.mark.django_db
@@ -236,18 +240,8 @@ def test_resolve_user_permissions_resolves_managed_users_with_effective_policy(
             ),
         ),
     )
-    audit_log = AuditLog.objects.get(event_type="managed_users_resolution_succeeded")
-    assert audit_log.actor_type == "system"
-    assert audit_log.actor_id == "managed_users_resolver"
-    assert audit_log.target_type == "authorization_group_grant"
-    assert audit_log.metadata == {
-        "app_key": app.app_key,
-        "authorization_group_key": group.key,
-        "permission_key": permission.key,
-        "scope": "MANAGED_USERS",
-        "resolver": "dingtalk_manager_chain",
-        "resolved_count": 2,
-    }
+    # 热查询路径的成功解析不再逐次写审计, 避免读接口成为审计表写放大器。
+    assert not AuditLog.objects.filter(event_type="managed_users_resolution_succeeded").exists()
 
 
 def test_resolve_user_permissions_filters_managed_users_grant_without_effective_policy() -> None:
@@ -572,3 +566,123 @@ class _ManagedUsersClient:
             users=(),
             active_authentik_user_ids=self._user_ids,
         )
+
+
+def test_resolve_user_permissions_returns_empty_for_time_expired_active_grant() -> None:
+    # Given: 限时授权已过期, 但 beat 尚未把 status 翻成 expired。
+    user = UserMirror.objects.create(authentik_user_id="user-time-expired")
+    app = App.objects.create(app_key="time-expired-app", name="Time Expired App")
+    _scope(app, "SELF")
+    permission = _permission(app, "invoice.read", scopes=["SELF"])
+    grant = AccessGrant.objects.create(
+        user=user,
+        app=app,
+        grant_type=GRANT_TYPE_TIMED,
+        grant_expires_at=timezone.now() - timedelta(minutes=1),
+    )
+    _ = AccessGrantPermission.objects.create(grant=grant, permission=permission, scope_key="SELF")
+
+    # When: 查询用户权限。
+    snapshot = resolve_user_permissions(user=user, app=app)
+
+    # Then: 查询路径直接按过期时间判定, 不再返回权限。
+    assert snapshot.groups == ()
+    assert snapshot.grants == ()
+
+
+class _UnavailableManagedUsersClient:
+    def get_managed_users(self, corp_id: str, manager_user_id: str) -> DingTalkManagedUsers:
+        _ = corp_id, manager_user_id
+        message = "目录不可用"
+        raise AuthentikDirectoryUnavailableError(message)
+
+
+class _CountingManagedUsersClient(_ManagedUsersClient):
+    def __init__(self, user_ids: tuple[str, ...]) -> None:
+        super().__init__(user_ids)
+        self.call_count = 0
+
+    def get_managed_users(self, corp_id: str, manager_user_id: str) -> DingTalkManagedUsers:
+        self.call_count += 1
+        return super().get_managed_users(corp_id, manager_user_id)
+
+
+def _managed_users_app(
+    app_key: str,
+    user_suffix: str,
+    *,
+    grant_count: int = 1,
+) -> tuple[UserMirror, App]:
+    user = UserMirror.objects.create(
+        authentik_user_id=f"manager-{user_suffix}",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="manager-dt",
+    )
+    app = App.objects.create(app_key=app_key, name="CRM")
+    _ = AppScope.objects.create(app=app, key="MANAGED_USERS", name="管理范围")
+    _ = ManagedScopePolicy.objects.create(
+        app=app,
+        target_type="app_default",
+        target_id=app.id,
+        scope="MANAGED_USERS",
+        resolver="dingtalk_manager_chain",
+    )
+    grant = AccessGrant.objects.create(user=user, app=app)
+    for index in range(grant_count):
+        permission = _permission(app, f"customer.view.{index}", scopes=["MANAGED_USERS"])
+        group = AuthorizationGroup.objects.create(
+            app=app,
+            key=f"team-manager-{index}",
+            kind="role",
+            name=f"主管{index}",
+        )
+        _ = AuthorizationGroupGrant.objects.create(
+            authorization_group=group,
+            permission=permission,
+            scope_key="MANAGED_USERS",
+        )
+        _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
+    return user, app
+
+
+def test_resolve_user_permissions_raises_when_directory_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: 策略有效, 但 Authentik 目录瞬时不可用。
+    user, app = _managed_users_app("crm-managed-unavailable", "unavailable")
+    monkeypatch.setattr(
+        "easyauth.grants.managed_users.AuthentikDirectoryClient.from_settings",
+        lambda: _UnavailableManagedUsersClient(),
+    )
+
+    # When / Then: 查询必须失败, 不允许把缺失的 MANAGED_USERS 当作成功响应下发。
+    with pytest.raises(ManagedUsersResolutionUnavailableError):
+        _ = resolve_user_permissions(user=user, app=app)
+    audit_log = AuditLog.objects.get(event_type="managed_users_resolution_failed")
+    assert audit_log.metadata["error_code"] == "managed_scope_directory_unavailable"
+
+
+MANAGED_GRANT_LINK_COUNT: Final = 3
+
+
+def test_resolve_user_permissions_reuses_directory_result_across_grants(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: 同一用户持有 3 个 MANAGED_USERS 授权链接。
+    user, app = _managed_users_app(
+        "crm-managed-cache",
+        "cache",
+        grant_count=MANAGED_GRANT_LINK_COUNT,
+    )
+    client = _CountingManagedUsersClient(("employee-1",))
+    monkeypatch.setattr(
+        "easyauth.grants.managed_users.AuthentikDirectoryClient.from_settings",
+        lambda: client,
+    )
+
+    # When: 单次权限查询。
+    snapshot = resolve_user_permissions(user=user, app=app)
+
+    # Then: 目录 HTTP 只发一次, 三个 grant 共享同一份解析结果。
+    assert len(snapshot.grants) == MANAGED_GRANT_LINK_COUNT
+    assert client.call_count == 1

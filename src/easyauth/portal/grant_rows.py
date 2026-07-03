@@ -20,6 +20,7 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
 
     from easyauth.accounts.models import UserMirror
+    from easyauth.grants.managed_users import ManagedUsersDirectoryCache
 
 EXPIRING_SOON_DAYS: Final = 14
 EMPTY_LABEL: Final = "-"
@@ -72,10 +73,13 @@ def _grant_rows(
     *,
     current_time: datetime,
 ) -> tuple[PortalGrantRow, ...]:
+    # 整页 grant 共享同一份目录缓存, MANAGED_USERS 解析最多发一次 HTTP。
+    directory_cache: ManagedUsersDirectoryCache = {}
     return tuple(
         _grant_row(
             grant,
             current_time=current_time,
+            directory_cache=directory_cache,
         )
         for grant in grants
     )
@@ -85,8 +89,13 @@ def _grant_row(
     grant: AccessGrant,
     *,
     current_time: datetime,
+    directory_cache: ManagedUsersDirectoryCache,
 ) -> PortalGrantRow:
-    snapshot = resolve_user_permissions(user=grant.user, app=grant.app)
+    snapshot = resolve_user_permissions(
+        user=grant.user,
+        app=grant.app,
+        managed_users_cache=directory_cache,
+    )
     return PortalGrantRow(
         app_name=grant.app.name,
         grant_label=_grant_label(grant.grant_type),

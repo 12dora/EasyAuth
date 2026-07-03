@@ -16,12 +16,16 @@ class DingTalkOrgSummary:
 
 
 def apply_dingtalk_org_context(user: UserMirror, org: object) -> list[str]:
+    if not isinstance(org, dict):
+        # 没有组织上下文时不改写任何字段, 避免用缺失 claim 清空事实数据。
+        return []
     parsed = parse_org_context(org)
     changed_fields: list[str] = []
     changed_fields.extend(_set_if_changed(user, "dingtalk_corp_id", parsed.corp_id))
     changed_fields.extend(_set_if_changed(user, "dingtalk_userid", parsed.user_id))
-    changed_fields.extend(_set_if_changed(user, "department", parsed.primary_department_name))
-    changed_fields.extend(_set_if_changed(user, "manager_userid", parsed.manager_user_id))
+    # 上下文存在时 department/manager 以上游为准, 包括被清空的情况。
+    changed_fields.extend(_apply_field(user, "department", parsed.primary_department_name))
+    changed_fields.extend(_apply_field(user, "manager_userid", parsed.manager_user_id))
     return changed_fields
 
 
@@ -59,6 +63,13 @@ def _manager_user_id(value: object) -> str:
 
 def _set_if_changed(user: UserMirror, field: str, value: str) -> list[str]:
     if value == "" or getattr(user, field) == value:
+        return []
+    setattr(user, field, value)
+    return [field]
+
+
+def _apply_field(user: UserMirror, field: str, value: str) -> list[str]:
+    if getattr(user, field) == value:
         return []
     setattr(user, field, value)
     return [field]

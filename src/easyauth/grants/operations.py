@@ -47,7 +47,14 @@ def current_grant(user: UserMirror, app: App) -> AccessGrant | None:
 
 
 def next_version(user: UserMirror, app: App) -> int:
-    latest = AccessGrant.objects.filter(user=user, app=app).order_by("-version", "-id").first()
+    # 锁定该用户在此 App 的最新授权行, 串行化并发 revoke(就地 +1)与新建授权;
+    # (user, app, version) 唯一约束兜底, 并发冲突显式失败而非产生重复版本号。
+    latest = (
+        AccessGrant.objects.select_for_update()
+        .filter(user=user, app=app)
+        .order_by("-version", "-id")
+        .first()
+    )
     if latest is None:
         return 1
     return latest.version + 1

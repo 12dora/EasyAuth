@@ -66,6 +66,15 @@ def request_catalog_payload(user: UserMirror) -> dict[str, JsonValue]:
         resolver,
         direct_manager_resolution,
     )
+    approver_candidates = _approver_candidates(
+        approver_users,
+        (
+            direct_manager_resolution,
+            *default_approver_by_app_id.values(),
+            *default_approver_by_group_id.values(),
+            *default_approver_by_permission_id.values(),
+        ),
+    )
     return {
         "apps": [
             _catalog_app_item(app, default_approver_by_app_id[app.id])
@@ -99,7 +108,7 @@ def request_catalog_payload(user: UserMirror) -> dict[str, JsonValue]:
             for permission in permissions
             if permission.group is None
         ],
-        "approver_options": [_approver_option(user) for user in approver_users],
+        "approver_options": [_approver_option(user) for user in approver_candidates],
     }
 
 
@@ -298,12 +307,25 @@ def _active_approver_users() -> tuple[UserMirror, ...]:
     )
 
 
+def _approver_candidates(
+    approver_users: tuple[UserMirror, ...],
+    resolutions: tuple[_ApproverResolution, ...],
+) -> tuple[UserMirror, ...]:
+    # 只暴露与本次申请相关的候选审批人(直属主管/规则审批人/App owner),
+    # 不把全公司在职目录发给任意登录员工。
+    candidate_user_ids: set[str] = set()
+    for resolution in resolutions:
+        candidate_user_ids.update(resolution.user_ids)
+    return tuple(
+        user for user in approver_users if user.authentik_user_id in candidate_user_ids
+    )
+
+
 def _approver_option(user: UserMirror) -> dict[str, JsonValue]:
+    # 只返回展示所需的最小字段, 不泄漏邮箱和部门。
     return {
         "user_id": user.authentik_user_id,
         "name": user.name,
-        "email": user.email,
-        "department": user.department,
     }
 
 

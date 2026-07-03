@@ -3,10 +3,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from django.utils import timezone
+
 from easyauth.accounts.models import UserMirror
 from easyauth.accounts.status import parse_user_status
 from easyauth.applications.models import App, AppScope, AuthorizationGroupGrant
-from easyauth.grants.managed_users import MANAGED_USERS_SCOPE, resolve_managed_users
+from easyauth.grants.managed_users import (
+    MANAGED_USERS_SCOPE,
+    ManagedUsersDirectoryCache,
+    resolve_managed_users,
+)
 from easyauth.grants.models import (
     AccessGrant,
     AccessGrantGroup,
@@ -61,7 +67,12 @@ class PermissionSnapshot:
         return tuple(sorted({grant.permission for grant in self.grants}))
 
 
-def resolve_user_permissions(*, user: UserSelector, app: App) -> PermissionSnapshot:
+def resolve_user_permissions(
+    *,
+    user: UserSelector,
+    app: App,
+    managed_users_cache: ManagedUsersDirectoryCache | None = None,
+) -> PermissionSnapshot:
     resolved_user = _resolve_user(user)
     user_id = _user_id(user)
     if resolved_user is None:
@@ -71,7 +82,8 @@ def resolve_user_permissions(*, user: UserSelector, app: App) -> PermissionSnaps
     grant_version = 0 if latest_grant is None else latest_grant.version
     if latest_grant is None or not _grant_has_effective_permissions(resolved_user, latest_grant):
         return _empty_snapshot(user_id=user_id, app=app, grant_version=grant_version)
-    return _grant_snapshot(user_id=user_id, app=app, grant=latest_grant)
+    cache: ManagedUsersDirectoryCache = {} if managed_users_cache is None else managed_users_cache
+    return _grant_snapshot(user_id=user_id, app=app, grant=latest_grant, directory_cache=cache)
 
 
 def _resolve_user(user: UserSelector) -> UserMirror | None:
@@ -106,14 +118,26 @@ def _grant_has_effective_permissions(user: UserMirror, grant: AccessGrant) -> bo
 
     match parse_grant_status(grant.status):
         case "active":
-            return True
+            return not _grant_is_expired(grant)
         case "revoked" | "expired":
             return False
 
 
-def _grant_snapshot(*, user_id: str, app: App, grant: AccessGrant) -> PermissionSnapshot:
+def _grant_is_expired(grant: AccessGrant) -> bool:
+    # 过期判定不依赖 beat 把 status 翻成 expired; 查询时刻直接比对过期时间。
+    expires_at = grant.grant_expires_at
+    return expires_at is not None and expires_at <= timezone.now()
+
+
+def _grant_snapshot(
+    *,
+    user_id: str,
+    app: App,
+    grant: AccessGrant,
+    directory_cache: ManagedUsersDirectoryCache,
+) -> PermissionSnapshot:
     groups = _group_snapshots(grant)
-    grants = _expanded_grants(grant)
+    grants = _expanded_grants(grant, directory_cache)
     return PermissionSnapshot(
         user_id=user_id,
         app_key=app.app_key,
@@ -139,9 +163,16 @@ def _group_snapshots(grant: AccessGrant) -> tuple[GroupSnapshot, ...]:
     )
 
 
-def _expanded_grants(grant: AccessGrant) -> tuple[ExpandedGrant, ...]:
+def _expanded_grants(
+    grant: AccessGrant,
+    directory_cache: ManagedUsersDirectoryCache,
+) -> tuple[ExpandedGrant, ...]:
     scopes = _active_scope_keys(grant.app_id)
-    expanded = _group_grants(grant, scopes) | _direct_grants(grant, scopes)
+    expanded = _group_grants(grant, scopes, directory_cache) | _direct_grants(
+        grant,
+        scopes,
+        directory_cache,
+    )
     return tuple(sorted(expanded, key=_expanded_grant_sort_key))
 
 
@@ -151,7 +182,11 @@ def _active_scope_keys(app_id: int) -> set[str]:
     )
 
 
-def _group_grants(grant: AccessGrant, active_scope_keys: set[str]) -> set[ExpandedGrant]:
+def _group_grants(
+    grant: AccessGrant,
+    active_scope_keys: set[str],
+    directory_cache: ManagedUsersDirectoryCache,
+) -> set[ExpandedGrant]:
     group_ids = AccessGrantGroup.objects.filter(
         grant=grant,
         authorization_group__is_active=True,
@@ -180,6 +215,7 @@ def _group_grants(grant: AccessGrant, active_scope_keys: set[str]) -> set[Expand
                 user=grant.user,
                 app=grant.app,
                 authorization_group_grant=link,
+                directory_cache=directory_cache,
             )
             if resolved is None:
                 continue
@@ -195,7 +231,11 @@ def _group_grants(grant: AccessGrant, active_scope_keys: set[str]) -> set[Expand
     return expanded
 
 
-def _direct_grants(grant: AccessGrant, active_scope_keys: set[str]) -> set[ExpandedGrant]:
+def _direct_grants(
+    grant: AccessGrant,
+    active_scope_keys: set[str],
+    directory_cache: ManagedUsersDirectoryCache,
+) -> set[ExpandedGrant]:
     links = (
         AccessGrantPermission.objects.select_related("permission")
         .filter(
@@ -214,7 +254,11 @@ def _direct_grants(grant: AccessGrant, active_scope_keys: set[str]) -> set[Expan
             continue
         resolved = None
         if link.scope_key == MANAGED_USERS_SCOPE:
-            resolved = resolve_managed_users(user=grant.user, app=grant.app)
+            resolved = resolve_managed_users(
+                user=grant.user,
+                app=grant.app,
+                directory_cache=directory_cache,
+            )
             if resolved is None:
                 continue
         expanded.add(

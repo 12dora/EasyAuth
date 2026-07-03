@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from hashlib import sha256
 from secrets import token_urlsafe
 from typing import TYPE_CHECKING, Final, override
 
@@ -148,9 +149,12 @@ def _authenticate_static_token(plaintext_token: str) -> AppPrincipal:
     if not plaintext_token.startswith(STATIC_APP_CREDENTIAL_PREFIX):
         raise StaticTokenAuthenticationError
 
+    # 先用确定性查找键索引到唯一候选行, 再对单行跑 PBKDF2;
+    # 垃圾令牌只花一次 SHA-256, 不会诱发全表慢哈希扫描。
     credentials = AppCredential.objects.select_related("app").filter(
         credential_type=APP_CREDENTIAL_STATIC_KIND,
         is_active=True,
+        token_lookup=_static_token_lookup(plaintext_token),
     )
     for credential in credentials:
         if _verify_static_token(plaintext_token, credential.token_hash):
@@ -177,6 +181,10 @@ def _hash_static_token(plaintext_token: str) -> str:
     return hasher.encode(plaintext_token, hasher.salt())
 
 
+def _static_token_lookup(plaintext_token: str) -> str:
+    return sha256(plaintext_token.encode("utf-8")).hexdigest()
+
+
 def _verify_static_token(plaintext_token: str, token_hash: str) -> bool:
     try:
         return PBKDF2PasswordHasher().verify(plaintext_token, token_hash)
@@ -196,6 +204,7 @@ def _issue_static_token(
         credential_type=APP_CREDENTIAL_STATIC_KIND,
         name=name,
         token_hash=_hash_static_token(plaintext_token),
+        token_lookup=_static_token_lookup(plaintext_token),
     )
     _record_app_credential_event(credential, audit_context)
     return IssuedStaticToken(credential=credential, plaintext_token=plaintext_token)

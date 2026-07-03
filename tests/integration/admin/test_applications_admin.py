@@ -25,6 +25,7 @@ from easyauth.applications.models import (
     RolePermission,
 )
 from easyauth.applications.services import StaticTokenService
+from easyauth.audit.models import AuditLog
 
 if TYPE_CHECKING:
     from django.http import HttpRequest
@@ -208,3 +209,39 @@ def _request_for_superuser(username: str) -> HttpRequest:
     request = _request()
     request.user = User.objects.create_superuser(username=username, password=ADMIN_LOGIN_VALUE)
     return request
+
+
+def test_permission_admin_change_bumps_catalog_version_and_writes_audit() -> None:
+    # Given: 目录里有一个 active Permission, 下游快照锚定当前 catalog_version。
+    client = _authenticated_admin_client("admin-catalog-bump")
+    app = App.objects.create(app_key="admin-bump-app", name="Bump App")
+    permission = Permission.objects.create(
+        app=app,
+        key="invoice.read",
+        name="Invoice Read",
+        supported_scopes=["GLOBAL"],
+    )
+    original_version = app.catalog_version
+
+    # When: 超管在 /admin/ 停用该 Permission。
+    response = client.post(
+        reverse("admin:applications_permission_change", args=[permission.id]),
+        data={
+            "app": str(app.id),
+            "key": permission.key,
+            "name": permission.name,
+            "description": "",
+            "supported_scopes": '["GLOBAL"]',
+            "risk_level": "standard",
+            "deprecated_reason": "",
+        },
+        follow=True,
+    )
+
+    # Then: catalog_version 递增且写入审计, 下游快照能识别本次撤销。
+    app.refresh_from_db()
+    assert response.status_code == HTTPStatus.OK
+    assert app.catalog_version == original_version + 1
+    audit_log = AuditLog.objects.get(event_type="app_catalog_version_bumped")
+    assert audit_log.metadata["reason"] == "django_admin_updated"
+    assert audit_log.metadata["model"] == "Permission"

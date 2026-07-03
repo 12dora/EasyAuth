@@ -61,7 +61,13 @@ def test_user_app_allows_historical_grants_when_duplicate_is_not_current() -> No
     user = UserMirror.objects.create(authentik_user_id="user-historical-grant")
     app = App.objects.create(app_key="historical-grant-app", name="Historical Grant App")
     _ = AccessGrant.objects.create(user=user, app=app, grant_type="permanent", is_current=True)
-    historical = AccessGrant(user=user, app=app, grant_type="permanent", is_current=False)
+    historical = AccessGrant(
+        user=user,
+        app=app,
+        grant_type="permanent",
+        is_current=False,
+        version=2,
+    )
 
     # When
     historical.full_clean()

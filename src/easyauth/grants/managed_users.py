@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from easyauth.applications.managed_scope_policy import ManagedScopePolicyService
 from easyauth.applications.models import (
@@ -17,10 +17,24 @@ from easyauth.integrations.authentik.directory_client import (
 
 MANAGED_USERS_SCOPE = "MANAGED_USERS"
 MANAGED_USERS_RESOLVER_ACTOR_ID = "managed_users_resolver"
+MANAGED_USERS_DIRECTORY_UNAVAILABLE_MESSAGE: Final = (
+    "MANAGED_USERS 解析依赖的组织目录暂不可用。"
+)
 
 if TYPE_CHECKING:
     from easyauth.accounts.models import UserMirror
     from easyauth.audit.models import JsonValue
+    from easyauth.integrations.authentik.directory_payloads import DingTalkManagedUsers
+
+# 同一次权限查询内按 (corp_id, manager_userid) 复用目录结果, 避免 K 个 grant 触发 K 次 HTTP。
+type ManagedUsersDirectoryCache = dict[tuple[str, str], DingTalkManagedUsers]
+
+
+class ManagedUsersResolutionUnavailableError(RuntimeError):
+    # 组织目录瞬时故障; 必须让本次查询失败, 不得降级成"权限被撤"的成功响应。
+
+    def __init__(self) -> None:
+        super().__init__(MANAGED_USERS_DIRECTORY_UNAVAILABLE_MESSAGE)
 
 
 def resolve_managed_users(
@@ -28,6 +42,7 @@ def resolve_managed_users(
     user: UserMirror,
     app: App,
     authorization_group_grant: AuthorizationGroupGrant | None = None,
+    directory_cache: ManagedUsersDirectoryCache | None = None,
 ) -> ResolvedManagedUsers | None:
     effective_policy = ManagedScopePolicyService.get_effective_policy(
         app=app,
@@ -59,18 +74,17 @@ def resolve_managed_users(
         return None
 
     try:
-        managed_users = AuthentikDirectoryClient.from_settings().get_managed_users(
-            user.dingtalk_corp_id,
-            user.dingtalk_userid,
-        )
-    except AuthentikDirectoryError:
+        managed_users = _managed_users_from_directory(user, directory_cache)
+    except AuthentikDirectoryError as error:
+        # 基础设施瞬时故障不允许静默丢弃 grant: 版本号不变而内容变小会污染下游快照缓存,
+        # EasyTrade 会把这次"缺失"当成真实撤权。必须 fail-fast。
         _record_resolution_failed(
             app=app,
             authorization_group_grant=authorization_group_grant,
             resolver=effective_policy.resolver,
             error_code="managed_scope_directory_unavailable",
         )
-        return None
+        raise ManagedUsersResolutionUnavailableError from error
     if managed_users.stale:
         _record_resolution_failed(
             app=app,
@@ -78,24 +92,34 @@ def resolve_managed_users(
             resolver=effective_policy.resolver,
             error_code="managed_scope_directory_stale",
         )
-        return None
+        raise ManagedUsersResolutionUnavailableError
 
     user_ids = tuple(
         user_id
         for user_id in managed_users.active_authentik_user_ids
         if user_id != user.authentik_user_id
     )
-    _record_resolution_succeeded(
-        app=app,
-        authorization_group_grant=authorization_group_grant,
-        resolver=effective_policy.resolver,
-        resolved_count=len(user_ids),
-    )
     return ResolvedManagedUsers(
         user_ids=user_ids,
         resolver=effective_policy.resolver,
         resolved_at=managed_users.resolved_at,
     )
+
+
+def _managed_users_from_directory(
+    user: UserMirror,
+    directory_cache: ManagedUsersDirectoryCache | None,
+) -> DingTalkManagedUsers:
+    cache_key = (user.dingtalk_corp_id, user.dingtalk_userid)
+    if directory_cache is not None and cache_key in directory_cache:
+        return directory_cache[cache_key]
+    managed_users = AuthentikDirectoryClient.from_settings().get_managed_users(
+        user.dingtalk_corp_id,
+        user.dingtalk_userid,
+    )
+    if directory_cache is not None:
+        directory_cache[cache_key] = managed_users
+    return managed_users
 
 
 def _record_resolution_failed(
@@ -116,31 +140,6 @@ def _record_resolution_failed(
             actor_type="system",
             actor_id=MANAGED_USERS_RESOLVER_ACTOR_ID,
             action="managed_users_resolution_failed",
-            target_type=_resolution_target_type(authorization_group_grant),
-            target_id=_resolution_target_id(app, authorization_group_grant),
-            metadata=metadata,
-        ),
-    )
-
-
-def _record_resolution_succeeded(
-    *,
-    app: App,
-    authorization_group_grant: AuthorizationGroupGrant | None,
-    resolver: str,
-    resolved_count: int,
-) -> None:
-    metadata = _resolution_metadata(
-        app=app,
-        authorization_group_grant=authorization_group_grant,
-        resolver=resolver,
-    )
-    metadata["resolved_count"] = resolved_count
-    _ = AuditService.record(
-        AuditRecord(
-            actor_type="system",
-            actor_id=MANAGED_USERS_RESOLVER_ACTOR_ID,
-            action="managed_users_resolution_succeeded",
             target_type=_resolution_target_type(authorization_group_grant),
             target_id=_resolution_target_id(app, authorization_group_grant),
             metadata=metadata,

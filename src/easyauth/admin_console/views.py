@@ -19,16 +19,14 @@ from easyauth.accounts.dev_login import (
 from easyauth.accounts.logout_state import browser_is_marked_logged_out, logged_out_redirect
 from easyauth.admin_console.identity import actor_from_request
 from easyauth.applications.models import App
-from easyauth.applications.ownership import ConsoleActor
+from easyauth.applications.ownership import ConsoleActor, can_view_app
 from easyauth.frontend_shell import render_react_shell
 
 
 def console_home(request: HttpRequest) -> HttpResponse:
     match _page_actor_from_request(request):
-        case ConsoleActor(is_superuser=True):
-            return render_react_shell(request, surface="console", title="EasyAuth 控制台")
         case ConsoleActor():
-            return _forbidden_redirect()
+            return render_react_shell(request, surface="console", title="EasyAuth 控制台")
         case HttpResponse() as response:
             return response
         case None:
@@ -37,10 +35,8 @@ def console_home(request: HttpRequest) -> HttpResponse:
 
 def console_operations(request: HttpRequest, _path: str = "") -> HttpResponse:
     match _page_actor_from_request(request):
-        case ConsoleActor(is_superuser=True):
-            return render_react_shell(request, surface="console", title="EasyAuth 控制台")
         case ConsoleActor():
-            return _forbidden_redirect()
+            return render_react_shell(request, surface="console", title="EasyAuth 控制台")
         case HttpResponse() as response:
             return response
         case None:
@@ -49,10 +45,8 @@ def console_operations(request: HttpRequest, _path: str = "") -> HttpResponse:
 
 def app_detail(request: HttpRequest, app_key: str) -> HttpResponse:
     match _page_actor_from_request(request):
-        case ConsoleActor(is_superuser=True) as actor:
+        case ConsoleActor() as actor:
             pass
-        case ConsoleActor():
-            return _forbidden_redirect()
         case HttpResponse() as response:
             return response
         case None:
@@ -77,20 +71,20 @@ def app_detail(request: HttpRequest, app_key: str) -> HttpResponse:
 
 def _page_actor_from_request(request: HttpRequest) -> ConsoleActor | HttpResponse | None:
     actor = actor_from_request(request)
-    if isinstance(actor, ConsoleActor) and actor.is_superuser:
+    if actor is not None:
         return actor
     if dev_login_is_enabled():
         try:
             _ = bind_dev_login_session(request)
         except DevLoginConfigurationError as error:
             return HttpResponse(str(error), status=400, content_type="text/plain; charset=utf-8")
-    return actor_from_request(request)
+        return actor_from_request(request)
+    return None
 
 
 def _visible_app(actor: ConsoleActor, app_key: str) -> App:
-    _ = actor
     app = App.objects.filter(app_key=app_key).first()
-    if app is None:
+    if app is None or not can_view_app(actor, app):
         raise Http404
     return app
 

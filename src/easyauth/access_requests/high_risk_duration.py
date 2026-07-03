@@ -13,14 +13,13 @@ if TYPE_CHECKING:
     from easyauth.applications.models import AuthorizationGroup
 
 HIGH_RISK_DURATION_MESSAGE: Final = "high-risk authorization group max duration exceeded"
+HIGH_RISK_PERMANENT_MESSAGE: Final = "high-risk authorization group cannot be granted permanently"
 
 
 def high_risk_duration_error(
     authorization_groups: tuple[AuthorizationGroup, ...],
     requested_expires_at: datetime | None,
 ) -> str:
-    if requested_expires_at is None:
-        return ""
     group_ids = tuple(group.id for group in authorization_groups)
     if not group_ids:
         return ""
@@ -32,6 +31,9 @@ def high_risk_duration_error(
     )
     max_expires_at_base = timezone.now()
     for policy in policies:
+        # 高风险组不允许永久授权, 否则 grant/change 可以绕过期限上限直接转永久。
+        if requested_expires_at is None:
+            return HIGH_RISK_PERMANENT_MESSAGE
         max_days = policy.max_grant_duration_days
         if max_days is None:
             return HIGH_RISK_DURATION_MESSAGE

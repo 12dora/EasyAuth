@@ -128,7 +128,10 @@ def test_dingtalk_callback_rejects_malformed_json_with_payload_audit_event() -> 
 @override_settings(EASYAUTH_DINGTALK_CALLBACK_SECRET=CALLBACK_KEY)
 def test_dingtalk_callback_rejects_missing_process_instance_id_with_standard_error() -> None:
     # Given: DingTalk 回调 body 缺少 process_instance_id。
-    body = json.dumps({"status": "approved"}, separators=(",", ":")).encode()
+    body = json.dumps(
+        {"status": "approved", "approver_user_id": "manager-001"},
+        separators=(",", ":"),
+    ).encode()
 
     # When: DingTalk 使用有效签名请求接口。
     response = _post_callback(body)
@@ -244,12 +247,13 @@ def test_dingtalk_callback_rejected_request_does_not_override_applied_grant() ->
     # When: DingTalk 延迟投递 rejected 回调。
     response = _post_callback(body)
 
-    # Then: 已应用申请和现有授权不被拒绝状态覆盖。
+    # Then: 已应用申请和现有授权不被拒绝状态覆盖, 冲突显式报错并留审计。
     access_request.refresh_from_db()
     grant.refresh_from_db()
-    assert response.status_code == HTTPStatus.OK
+    assert response.status_code == HTTPStatus.CONFLICT
     assert access_request.status == REQUEST_STATUS_GRANT_APPLIED
     assert grant.version == INITIAL_VERSION
+    assert AuditLog.objects.filter(event_type="dingtalk_callback_status_conflict").exists()
 
 
 @override_settings(EASYAUTH_DINGTALK_CALLBACK_SECRET=CALLBACK_KEY)
@@ -275,9 +279,9 @@ def test_dingtalk_callback_rejected_request_does_not_override_approved_request()
     # When: DingTalk 延迟投递 rejected 回调。
     response = _post_callback(body)
 
-    # Then: 已批准申请不被拒绝状态覆盖。
+    # Then: 已批准申请不被拒绝状态覆盖, 冲突显式报错。
     access_request.refresh_from_db()
-    assert response.status_code == HTTPStatus.OK
+    assert response.status_code == HTTPStatus.CONFLICT
     assert access_request.status == REQUEST_STATUS_APPROVED
 
 
@@ -298,9 +302,9 @@ def test_dingtalk_callback_rejected_request_does_not_override_failed_grant() -> 
     # When: DingTalk 延迟投递 rejected 回调。
     response = _post_callback(body)
 
-    # Then: 授权失败终态不被拒绝状态覆盖。
+    # Then: 授权失败终态不被拒绝状态覆盖, 冲突显式报错。
     access_request.refresh_from_db()
-    assert response.status_code == HTTPStatus.OK
+    assert response.status_code == HTTPStatus.CONFLICT
     assert access_request.status == REQUEST_STATUS_GRANT_FAILED
 
 
@@ -386,8 +390,16 @@ def _authorization_group(app: App, key: str) -> AuthorizationGroup:
     return AuthorizationGroup.objects.create(app=app, key=key, kind="role", name=key)
 
 
-def _callback_body(process_instance_id: str, status: str) -> bytes:
-    payload = {"process_instance_id": process_instance_id, "status": status}
+def _callback_body(
+    process_instance_id: str,
+    status: str,
+    approver_user_id: str = "manager-001",
+) -> bytes:
+    payload = {
+        "process_instance_id": process_instance_id,
+        "status": status,
+        "approver_user_id": approver_user_id,
+    }
     return json.dumps(payload, separators=(",", ":")).encode()
 
 
@@ -425,3 +437,52 @@ def _headers(
 
 def _current_timestamp_ms() -> int:
     return int(timezone.now().timestamp() * 1000)
+
+
+
+@override_settings(EASYAUTH_DINGTALK_CALLBACK_SECRET=CALLBACK_KEY)
+def test_dingtalk_callback_rejects_approver_outside_request_approver_list() -> None:
+    # Given: 申请显式限定了审批人列表。
+    access_request = _submitted_grant_request(
+        user_key="dingtalk-approver-check-user",
+        app_key="dingtalk-approver-check-app",
+        role_key="reader",
+        process_instance_id="proc-approver-check",
+    )
+    access_request.approver_user_ids = ["manager-001"]
+    access_request.save(update_fields=["approver_user_ids"])
+    body = _callback_body("proc-approver-check", "approved", approver_user_id="intruder-007")
+
+    # When: 持有共享密钥者以列表外身份投递批准回调。
+    response = _post_callback(body)
+
+    # Then: 回调被拒绝, 申请状态不变, 写入安全审计。
+    access_request.refresh_from_db()
+    assert response.status_code == HTTPStatus.FORBIDDEN
+    assert access_request.status == REQUEST_STATUS_SUBMITTED
+    assert AccessGrant.objects.count() == 0
+    audit_log = AuditLog.objects.get(event_type="dingtalk_callback_approver_rejected")
+    assert audit_log.metadata["approver_user_id"] == "intruder-007"
+
+
+@override_settings(EASYAUTH_DINGTALK_CALLBACK_SECRET=CALLBACK_KEY)
+def test_dingtalk_callback_records_final_approver_in_audit() -> None:
+    # Given: submitted 申请限定审批人 manager-001。
+    access_request = _submitted_grant_request(
+        user_key="dingtalk-final-approver-user",
+        app_key="dingtalk-final-approver-app",
+        role_key="reader",
+        process_instance_id="proc-final-approver",
+    )
+    access_request.approver_user_ids = ["manager-001"]
+    access_request.save(update_fields=["approver_user_ids"])
+    body = _callback_body("proc-final-approver", "approved", approver_user_id="manager-001")
+
+    # When: manager-001 批准该申请。
+    response = _post_callback(body)
+
+    # Then: 审计记录最终审批人。
+    audit_log = AuditLog.objects.get(event_type="dingtalk_approval_approved")
+    assert response.status_code == HTTPStatus.OK
+    assert audit_log.actor_id == "manager-001"
+    assert audit_log.metadata["approver_user_id"] == "manager-001"

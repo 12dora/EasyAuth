@@ -30,6 +30,8 @@ class _DingTalkCallbackPayload(BaseModel):
 
     process_instance_id: str = Field(min_length=1, max_length=128)
     status: Literal["approved", "rejected"]
+    # 实际执行审批操作的人; 审计必须记录最终审批人, 且要与申请的审批人列表核对。
+    approver_user_id: str = Field(min_length=1, max_length=128)
 
 
 @csrf_exempt
@@ -66,10 +68,16 @@ def dingtalk_callback(request: HttpRequest) -> JsonResponse:
         access_request = apply_approval_callback(
             process_instance_id=payload.process_instance_id,
             status=payload.status,
-            actor_id=payload.process_instance_id,
+            approver_user_id=payload.approver_user_id,
             raw_payload=body,
         )
     except ApprovalCallbackError as exc:
+        if exc.kind == "approver_rejected":
+            _record_security_event(
+                event_type="dingtalk_callback_approver_rejected",
+                target_id=payload.process_instance_id,
+                metadata=dict(exc.details),
+            )
         return _callback_error_response(exc)
     return _json_response(_success_payload(access_request))
 
@@ -101,6 +109,13 @@ def _callback_error_response(exc: ApprovalCallbackError) -> JsonResponse:
                 exc.message,
                 exc.details,
                 status=HTTPStatus.CONFLICT,
+            )
+        case "approver_rejected":
+            return _error_response(
+                ErrorCode.PERMISSION_DENIED,
+                exc.message,
+                exc.details,
+                status=HTTPStatus.FORBIDDEN,
             )
         case "application_error" | "validation_error":
             return _error_response(

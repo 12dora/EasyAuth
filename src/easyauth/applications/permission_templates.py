@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from django.db import transaction
 
-from easyauth.applications.models import PermissionTemplateVersion
+from easyauth.applications.models import App, PermissionTemplateVersion
 from easyauth.applications.permission_template_flattening import flatten_template
 from easyauth.applications.permission_template_parsing import (
     TemplateFormat,
@@ -27,9 +25,6 @@ from easyauth.applications.permission_template_types import (
     PermissionTemplatePreview,
     TemplateAction,
 )
-
-if TYPE_CHECKING:
-    from easyauth.applications.models import App
 
 __all__ = [
     "AppManifestInput",
@@ -62,13 +57,16 @@ def apply_permission_template(
     app: App,
     template: AppManifestInput,
 ) -> PermissionTemplateImportResult:
-    _reject_duplicate_template_version(app=app, version=template.schema_version)
+    # 锁住 App 行串行化同一 App 的并发导入; 版本检查和写入在同一把锁内完成,
+    # 消除"两个导入都读到 latest=1 然后交错落库"的 TOCTOU。
+    locked_app = App.objects.select_for_update().get(pk=app.pk)
+    _reject_duplicate_template_version(app=locked_app, version=template.schema_version)
     flattened = flatten_template(template)
-    actions = template_actions(app, flattened)
-    upsert_manifest(app, template)
-    template_version = record_template_version(app, template, actions)
-    record_import_event(app, template, template_version, actions)
-    bump_manifest_catalog_version(app, template, actions)
+    actions = template_actions(locked_app, flattened)
+    upsert_manifest(locked_app, template)
+    template_version = record_template_version(locked_app, template, actions)
+    record_import_event(locked_app, template, template_version, actions)
+    bump_manifest_catalog_version(locked_app, template, actions)
     return PermissionTemplateImportResult(template_version=template_version, actions=actions)
 
 

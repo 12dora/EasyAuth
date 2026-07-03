@@ -63,7 +63,8 @@ def _parse_bearer_header(raw_header: str) -> str | None:
     scheme, separator, token = raw_header.partition(" ")
     if not separator:
         return None
-    if scheme != _AUTH_SCHEME:
+    # RFC 7235 认证方案不区分大小写。
+    if scheme.lower() != _AUTH_SCHEME.lower():
         return None
     if not token:
         return None

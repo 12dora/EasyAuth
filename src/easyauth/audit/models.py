@@ -27,6 +27,12 @@ class AuditLogQuerySet(models.QuerySet["AuditLog"]):
     def delete(self) -> tuple[int, dict[str, int]]:
         raise ValidationError(AUDIT_LOG_DELETE_ERROR)
 
+    def purge_created_before(self, cutoff: datetime) -> int:
+        # 保留期清理是唯一合法的删除口径; 其余路径保持只追加语义。
+        expired = self.filter(created_at__lt=cutoff)
+        deleted_count, _ = models.QuerySet.delete(expired)
+        return deleted_count
+
 
 @final
 class AuditLog(models.Model):

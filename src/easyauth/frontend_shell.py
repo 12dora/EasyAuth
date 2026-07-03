@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, TypeGuard, cast
 
 from django.conf import settings
+from django.core.exceptions import ImproperlyConfigured
 from django.shortcuts import render
 
 from easyauth.accounts.auth import AUTHENTIK_GROUPS_SESSION_KEY, AUTHENTIK_SESSION_KEY
@@ -25,6 +26,12 @@ REACT_SHELL_TEMPLATE: Final = "easyauth/react_shell.html"
 VITE_ENTRY: Final = "src/main.tsx"
 VITE_MANIFEST_PATH: Final = Path("src/easyauth/static/easyauth/frontend/.vite/manifest.json")
 VITE_STATIC_PREFIX: Final = "easyauth/frontend/"
+VITE_MANIFEST_MISSING_ERROR: Final = (
+    "前端 Vite manifest 不存在, 请先执行 pnpm build 生成产物。"
+)
+VITE_MANIFEST_ENTRY_MISSING_ERROR: Final = (
+    "前端 Vite manifest 缺少入口 src/main.tsx, 前端产物不完整。"
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,7 +138,7 @@ def vite_entry_assets() -> ViteEntryAssets:
     manifest = _manifest_payload()
     entry = manifest.get(VITE_ENTRY)
     if not isinstance(entry, dict):
-        return ViteEntryAssets()
+        raise ImproperlyConfigured(VITE_MANIFEST_ENTRY_MISSING_ERROR)
 
     scripts = _entry_scripts(entry)
     stylesheets = _entry_stylesheets(entry)
@@ -139,12 +146,13 @@ def vite_entry_assets() -> ViteEntryAssets:
 
 
 def _manifest_payload() -> dict[str, JsonValue]:
+    # manifest 缺失说明前端产物没有构建; 静默渲染空壳会把构建问题伪装成白屏。
     manifest_path = BASE_DIR / VITE_MANIFEST_PATH
     if not manifest_path.exists():
-        return {}
+        raise ImproperlyConfigured(VITE_MANIFEST_MISSING_ERROR)
     payload = cast("object", loads(manifest_path.read_text(encoding="utf-8")))
     if not _is_json_object(payload):
-        return {}
+        raise ImproperlyConfigured(VITE_MANIFEST_ENTRY_MISSING_ERROR)
     return payload
 
 

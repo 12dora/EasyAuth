@@ -14,6 +14,7 @@ from easyauth.api.permission_query_auth import (
     permission_query_ttl_seconds,
 )
 from easyauth.audit.services import AuditRecord, AuditService
+from easyauth.grants.managed_users import ManagedUsersResolutionUnavailableError
 from easyauth.grants.query import (
     ExpandedGrant,
     GroupSnapshot,
@@ -137,6 +138,12 @@ def _resolve_snapshot_result(
             status_code=HTTPStatus.INTERNAL_SERVER_ERROR,
             code="internal_permission_query_error",
             explanation="权限查询内部错误, 请检查用户、授权、角色和权限配置。",
+        )
+    except ManagedUsersResolutionUnavailableError:
+        return PermissionQueryTestResult(
+            status_code=HTTPStatus.SERVICE_UNAVAILABLE,
+            code="managed_scope_directory_unavailable",
+            explanation="MANAGED_USERS 解析依赖的组织目录暂不可用, 请稍后重试。",
         )
 
     return PermissionQueryTestResult(
