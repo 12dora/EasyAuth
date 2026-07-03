@@ -63,55 +63,64 @@
   --font-mono: var(--font-mono);
 }
 
-* {
-  box-sizing: border-box;
-}
+/*
+ * 浏览器默认样式重置必须放在 @layer base 里, 才能让 Tailwind 的工具类(位于
+ * @layer utilities)按预期覆盖它们。未加 layer 的普通规则优先级高于所有具名
+ * layer, 会导致例如按钮上的 `text-paper` 之类颜色工具类被这里的 `color:
+ * inherit` 静默吃掉(即使工具类选择器优先级更高), 而不是报错或产生任何可见的
+ * 冲突信号, 排查成本很高。
+ */
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
 
-html,
-body {
-  margin: 0;
-  min-width: 320px;
-  background: rgb(var(--paper));
-  color: rgb(var(--ink));
-  font-family: var(--font-sans);
-  font-feature-settings: "ss01", "cv01", "cv02";
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
+  html,
+  body {
+    margin: 0;
+    min-width: 320px;
+    background: rgb(var(--paper));
+    color: rgb(var(--ink));
+    font-family: var(--font-sans);
+    font-feature-settings: "ss01", "cv01", "cv02";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
 
-button,
-input,
-select,
-textarea {
-  font: inherit;
-}
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
 
-input,
-select,
-textarea {
-  background: transparent;
-  color: inherit;
-}
+  input,
+  select,
+  textarea {
+    background: transparent;
+    color: inherit;
+  }
 
-select {
-  background-color: rgb(var(--paper));
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M0 0l5 6 5-6z' fill='%23475569' opacity='0.55'/></svg>");
-  background-repeat: no-repeat;
-  background-position: right 0.65rem center;
-  appearance: none;
-  -webkit-appearance: none;
-  padding-right: 1.65rem;
-}
+  select {
+    background-color: rgb(var(--paper));
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M0 0l5 6 5-6z' fill='%23475569' opacity='0.55'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 0.65rem center;
+    appearance: none;
+    -webkit-appearance: none;
+    padding-right: 1.65rem;
+  }
 
-a {
-  color: inherit;
-  text-decoration: none;
-}
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
 
-code {
-  font-family: var(--font-mono);
-  font-size: 0.86em;
-  color: rgb(var(--ink-soft));
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.86em;
+    color: rgb(var(--ink-soft));
+  }
 }
 
 table,
