@@ -65,18 +65,6 @@ def test_require_console_actor_marks_superuser_from_authentik_group_session() ->
     assert actor == ConsoleActor(user_id="root", is_superuser=True)
 
 
-@override_settings(EASYAUTH_CONSOLE_SUPERUSER_IDS=("legacy-root",))
-def test_require_console_actor_keeps_legacy_superuser_id_compatibility() -> None:
-    _ = UserMirror.objects.create(authentik_user_id="legacy-root")
-    request = _request_with_session(authentik_user_id="legacy-root")
-    request.user = AnonymousUser()
-
-    actor = require_console_actor(request)
-
-    assert isinstance(actor, ConsoleActor)
-    assert actor == ConsoleActor(user_id="legacy-root", is_superuser=True)
-
-
 def test_require_console_actor_clears_session_for_inactive_user_mirror() -> None:
     _ = UserMirror.objects.create(
         authentik_user_id="disabled-user",

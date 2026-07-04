@@ -535,7 +535,7 @@ function AuthzStep({ appKey, onBack, onContinue }: { appKey: string; onBack: () 
     queryFn: () => apiRequest<ConfigurationStatus>(`/console/api/v1/apps/${appKey}/configuration-status`),
     enabled: Boolean(appKey),
   });
-  const issues = statusQuery.data?.issues ?? statusQuery.data?.items ?? [];
+  const issues = statusQuery.data?.items ?? [];
   const blockingCount = issues.filter((issue) => (issue.severity ?? issue.level) === "blocking").length;
 
   return (
@@ -747,7 +747,7 @@ function DoneStep({ appKey, appName }: { appKey: string; appName: string }) {
     queryFn: () => apiRequest<ConfigurationStatus>(`/console/api/v1/apps/${appKey}/configuration-status`),
     enabled: Boolean(appKey),
   });
-  const issues = statusQuery.data?.issues ?? statusQuery.data?.items ?? [];
+  const issues = statusQuery.data?.items ?? [];
   const origin = window.location.origin;
   const endpoint = `${origin}/api/v1/apps/${appKey}/users/{user_id}/permissions`;
   const integrationSnippet = [

@@ -64,7 +64,7 @@ describe("AppOnboardingWizard", () => {
         return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing" } });
       }
       if (url.startsWith("/console/api/v1/apps/billing/configuration-status")) {
-        return jsonResponse({ issues: [] });
+        return jsonResponse({ items: [] });
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });

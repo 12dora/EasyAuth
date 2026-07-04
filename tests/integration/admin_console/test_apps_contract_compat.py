@@ -275,7 +275,7 @@ def test_apps_create_and_patch_errors_use_documented_error_codes() -> None:
     assert _error_code(missing_patch) == ErrorCode.NOT_FOUND
 
 
-def test_configuration_status_includes_items_alias_with_documented_target_fields() -> None:
+def test_configuration_status_reports_documented_target_fields() -> None:
     # Given: owner 可见一个 requestable AuthorizationGroup 缺少 active ApprovalRule 的 App。
     client = _logged_in_user("apps-contract-config-owner")
     app = App.objects.create(app_key="apps-contract-config-crm", name="CRM")
@@ -304,14 +304,12 @@ def test_configuration_status_includes_items_alias_with_documented_target_fields
     # When: owner 查询配置完整性。
     response = client.get(f"{APPS_API_URL}/{app.app_key}/configuration-status")
 
-    # Then: 响应保留旧 issues, 并新增文档契约 items 目标字段。
+    # Then: 响应以文档契约 items 字段返回配置问题及目标信息。
     body = _response_json_object(response)
-    issues = _json_list(body["issues"])
     items = _json_list(body["items"])
     item = _json_object(items[0])
     assert response.status_code == HTTPStatus.OK
     assert body["status"] == "blocking"
-    assert items == issues
     assert item["level"] == "blocking"
     assert item["code"] == "requestable_authorization_group_approval_rule_missing"
     assert item["message"] == "requestable AuthorizationGroup 必须存在 active ApprovalRule。"

@@ -423,7 +423,7 @@ def test_ops1_configuration_status_api_uses_app_readiness_service() -> None:
     assert "active_owner_missing" in body
     assert "active_credential_missing" in body
     readiness_body = cast("dict[str, JsonValue]", response.json())
-    issues = cast("list[dict[str, JsonValue]]", readiness_body["issues"])
+    issues = cast("list[dict[str, JsonValue]]", readiness_body["items"])
     assert {
         (issue["code"], issue["target_type"])
         for issue in issues
@@ -483,7 +483,7 @@ def test_ops1_configuration_status_api_exposes_managed_scope_policy_issue_fields
     assert response.status_code == HTTPStatus.OK
     body = cast("dict[str, JsonValue]", response.json())
     assert body["status"] == "blocking"
-    assert body["issues"] == [
+    assert body["items"] == [
         {
             "code": "managed_scope_policy_disabled",
             "severity": "blocking",
@@ -730,7 +730,7 @@ def test_ops1_configuration_status_api_can_return_ready_status() -> None:
 
     # Then: API 返回 ready 状态且没有风险项。
     assert response.status_code == HTTPStatus.OK
-    assert response.json() == {"app_key": app.app_key, "status": "ready", "issues": [], "items": []}
+    assert response.json() == {"app_key": app.app_key, "status": "ready", "items": []}
 
 
 def _logged_in_superuser(username: str) -> Client:

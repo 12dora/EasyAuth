@@ -41,7 +41,7 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
     queryFn: () => apiRequest<{ items?: MembershipItem[] }>(`/console/api/v1/apps/${appKey}/memberships`),
     enabled: Boolean(appKey),
   });
-  const issues = statusQuery.data?.issues ?? statusQuery.data?.items ?? [];
+  const issues = statusQuery.data?.items ?? [];
   const status = statusQuery.data?.status ?? app?.configuration_status;
   const statusBannerTone = normalizeStatusBannerTone(readinessTone(status));
   const memberships = itemsFromPayload<MembershipItem>(membershipsQuery.data);

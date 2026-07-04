@@ -27,19 +27,16 @@ def actor_from_request(request: HttpRequest) -> ConsoleActor | None:
 
     return ConsoleActor(
         user_id=user.authentik_user_id,
-        is_superuser=_is_console_superuser(request, user.authentik_user_id),
+        is_superuser=_is_console_superuser(request),
     )
 
 
-def _is_console_superuser(request: HttpRequest, authentik_user_id: str) -> bool:
+def _is_console_superuser(request: HttpRequest) -> bool:
     configured_groups = frozenset(
         _string_values(_setting_value("EASYAUTH_CONSOLE_SUPERUSER_GROUPS")),
     )
     session_groups = frozenset(_string_values(request.session.get(AUTHENTIK_GROUPS_SESSION_KEY)))
-    if configured_groups and not configured_groups.isdisjoint(session_groups):
-        return True
-    legacy_ids = frozenset(_string_values(_setting_value("EASYAUTH_CONSOLE_SUPERUSER_IDS")))
-    return authentik_user_id in legacy_ids
+    return bool(configured_groups and not configured_groups.isdisjoint(session_groups))
 
 
 def _clear_console_session(request: HttpRequest) -> None:

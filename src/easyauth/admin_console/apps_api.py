@@ -179,7 +179,6 @@ def console_app_configuration_status(request: HttpRequest, app_key: str) -> Json
             payload: dict[str, JsonValue] = {
                 "app_key": app.app_key,
                 "status": readiness.status,
-                "issues": issues,
                 "items": issues,
             }
             return _json_response(payload)

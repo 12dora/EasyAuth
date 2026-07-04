@@ -232,11 +232,6 @@ EASYAUTH_CONSOLE_SUPERUSER_GROUPS = tuple(
     for group in os.environ.get("EASYAUTH_CONSOLE_SUPERUSER_GROUPS", "EasyAuth Admins").split(",")
     if group.strip()
 )
-EASYAUTH_CONSOLE_SUPERUSER_IDS = tuple(
-    user_id.strip()
-    for user_id in os.environ.get("EASYAUTH_CONSOLE_SUPERUSER_IDS", "").split(",")
-    if user_id.strip()
-)
 EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS = 300
 # WebAuthn(通行密钥)配置: RP ID 必须是"域名"(不含协议与端口), 且浏览器地址栏的 host
 # 必须等于该域名或其子域, 否则 navigator.credentials 直接报 SecurityError。

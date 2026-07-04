@@ -92,7 +92,7 @@ describe("ConsoleAppWorkspace", () => {
         return jsonResponse(appPayload);
       }
       if (url === "/console/api/v1/apps/demo/configuration-status") {
-        return jsonResponse({ status: "ready", issues: [] });
+        return jsonResponse({ status: "ready", items: [] });
       }
       if (url === "/console/api/v1/apps/demo/memberships") {
         return jsonResponse({ items: [] });
@@ -601,7 +601,7 @@ describe("ConsoleAppWorkspace", () => {
         });
       }
       if (url === "/console/api/v1/apps/demo/configuration-status" && !init?.method) {
-        return jsonResponse({ status: "ready", issues: [] });
+        return jsonResponse({ status: "ready", items: [] });
       }
       if (url === "/console/api/v1/apps/demo/memberships" && !init?.method) {
         return jsonResponse({ items: [] });
@@ -653,7 +653,7 @@ describe("ConsoleAppWorkspace", () => {
         return jsonResponse({ app: { ...appPayload.app, can_manage: true } });
       }
       if (url === "/console/api/v1/apps/demo/configuration-status") {
-        return jsonResponse({ status: "ready", issues: [] });
+        return jsonResponse({ status: "ready", items: [] });
       }
       if (url === "/console/api/v1/apps/demo/memberships" && !init?.method) {
         return jsonResponse({

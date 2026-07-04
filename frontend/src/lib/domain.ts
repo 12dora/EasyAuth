@@ -76,7 +76,6 @@ export interface ConfigurationIssue {
 export interface ConfigurationStatus {
   app_key?: string;
   status?: string;
-  issues?: ConfigurationIssue[];
   items?: ConfigurationIssue[];
 }
 
