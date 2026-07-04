@@ -51,9 +51,25 @@ def validate_manifest(manifest: Any) -> dict[str, Any]:
     for section in LIST_SECTIONS:
         if not isinstance(manifest[section], list):
             raise ManifestValidationError(f"{section} 必须是 JSON array")
+    scope_keys = _validate_scopes(manifest["scopes"])
     for index, permission in enumerate(manifest["permissions"]):
-        _validate_permission(permission, index)
+        _validate_permission(permission, index, scope_keys)
     return manifest
+
+
+def _validate_scopes(scopes: list[Any]) -> set[str]:
+    # 与 EasyAuth 导入管线一致: scopes 必须非空, 每个 scope 携带非空 key。
+    if not scopes:
+        raise ManifestValidationError("scopes 必须是非空数组(至少声明一个 scope)")
+    scope_keys: set[str] = set()
+    for index, scope in enumerate(scopes):
+        if not isinstance(scope, dict):
+            raise ManifestValidationError(f"scopes[{index}] 必须是 JSON object")
+        key = scope.get("key")
+        if not isinstance(key, str) or not key:
+            raise ManifestValidationError(f"scopes[{index}].key 必须是非空字符串")
+        scope_keys.add(key)
+    return scope_keys
 
 
 def _validate_app(app: Any) -> None:
@@ -66,7 +82,7 @@ def _validate_app(app: Any) -> None:
         raise ManifestValidationError("app.app_key 必须是非空字符串")
 
 
-def _validate_permission(permission: Any, index: int) -> None:
+def _validate_permission(permission: Any, index: int, scope_keys: set[str]) -> None:
     label = f"permissions[{index}]"
     if not isinstance(permission, dict):
         raise ManifestValidationError(f"{label} 必须是 JSON object")
@@ -82,3 +98,8 @@ def _validate_permission(permission: Any, index: int) -> None:
     supported_scopes = permission.get("supported_scopes")
     if not isinstance(supported_scopes, list) or not supported_scopes:
         raise ManifestValidationError(f"{label}.supported_scopes 必须是非空数组")
+    unknown_scopes = [scope for scope in supported_scopes if scope not in scope_keys]
+    if unknown_scopes:
+        raise ManifestValidationError(
+            f"{label}.supported_scopes 引用了未声明的 scope: {unknown_scopes}"
+        )

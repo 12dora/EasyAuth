@@ -20,8 +20,21 @@ def current_manifest() -> dict:
 app.include_router(create_descriptor_router(current_manifest, token=可选共享密钥))
 ```
 
-- `token` 配置后, EasyAuth 拉取描述符时必须携带 `Authorization: Bearer <token>`;不配置则端点开放(建议仅内网部署时使用)。
+鉴权二选一(均不配置则端点开放, 建议仅内网部署时使用):
+
+- `token`: 固定共享密钥。EasyAuth 拉取描述符时必须携带 `Authorization: Bearer <token>`。
+- `token_validator`: 动态校验回调 `Callable[[str | None], bool]`, 接收从 `Authorization: Bearer` 头解析出的 token(缺失时为 `None`), 返回是否放行。用于对接集成方自有密钥存储或轮换机制:
+
+  ```python
+  app.include_router(
+      create_descriptor_router(current_manifest, token_validator=my_key_store.is_valid)
+  )
+  ```
+
+其它约束:
+
 - manifest 中每个权限必须携带 `name`(中文显示名), 可选 `name_en`;这是权限 i18n 从下游传递给 EasyAuth 的唯一通道, EasyAuth 不做任何硬编码兜底。
+- `validate_manifest` 与 EasyAuth 导入管线口径一致: `scopes` 必须非空, 且每个权限的 `supported_scopes` 必须是已声明 scope 的子集, 避免下游拿到"本地通过但服务端拒绝"的假绿灯。
 
 ## 权限查询
 

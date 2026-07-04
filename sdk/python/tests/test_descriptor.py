@@ -23,8 +23,8 @@ def _manifest() -> dict:
             "description": "演示应用",
             "is_active": True,
         },
-        "scopes": [],
-        "permission_groups": [],
+        "scopes": [{"key": "SELF", "name": "本人"}],
+        "permission_groups": [{"key": "demo.item", "name": "演示对象"}],
         "permissions": [
             {
                 "key": "demo.item.view",
@@ -58,6 +58,24 @@ def test_validate_manifest_rejects_missing_permission_name() -> None:
     manifest["permissions"][0]["name"] = ""
 
     with pytest.raises(ManifestValidationError, match="name"):
+        validate_manifest(manifest)
+
+
+def test_validate_manifest_rejects_empty_scopes() -> None:
+    # 与 EasyAuth 导入管线一致: 空 scopes 必须被 SDK 提前拦截, 而不是通过后被服务端拒绝。
+    manifest = _manifest()
+    manifest["scopes"] = []
+
+    with pytest.raises(ManifestValidationError, match="scopes"):
+        validate_manifest(manifest)
+
+
+def test_validate_manifest_rejects_unknown_supported_scope() -> None:
+    # permission.supported_scopes 必须是已声明 scope 的子集(服务端 parsing 同款交叉校验)。
+    manifest = _manifest()
+    manifest["permissions"][0]["supported_scopes"] = ["UNDECLARED"]
+
+    with pytest.raises(ManifestValidationError, match="未声明的 scope"):
         validate_manifest(manifest)
 
 
