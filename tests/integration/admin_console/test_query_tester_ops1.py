@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from http import HTTPStatus
 from json import dumps
-from re import escape, findall, search
+from re import escape, search
 from typing import Final, Protocol
 
 import pytest
@@ -386,11 +386,6 @@ def _scope(app: App, key: str) -> AppScope:
 
 def _json_string(response: HttpResponseLike, key: str) -> str:
     return _json_field_match(response, key, r'"{key}"\s*:\s*"([^"]*)"')
-
-
-def _json_string_array(response: HttpResponseLike, key: str) -> list[str]:
-    array_content = _json_field_match(response, key, r'"{key}"\s*:\s*\[(.*?)\]')
-    return findall(r'"([^"]*)"', array_content)
 
 
 def _json_bool(response: HttpResponseLike, key: str) -> bool:
