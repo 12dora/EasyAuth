@@ -106,18 +106,19 @@ def test_ops1_console_entry_redirects_unauthenticated_user_to_authentik_login() 
     assert response.headers["Location"] == "/auth/login/?next=/console/%3Ftab%3Droles"
 
 
-@override_settings(DEBUG=True, EASYAUTH_ENABLE_DEV_LOGIN=True)
-def test_ops1_console_entry_auto_binds_dev_admin_when_dev_login_is_enabled() -> None:
+@override_settings(DEBUG=True)
+def test_ops1_console_entry_requires_login_even_in_debug_mode() -> None:
+    # Given: 未登录浏览器; 本地开发免登已移除, DEBUG 模式也不再自动绑定会话。
     client = Client(HTTP_HOST="localhost")
 
+    # When: 直接打开控制台首页。
     response = client.get("/console/")
 
-    html = response.content.decode()
-    assert response.status_code == HTTPStatus.OK
-    assert 'data-easyauth-react-shell="console"' in html
-    assert 'data-current-user-role="EasyAuth Admins"' in html
-    assert client.session[AUTHENTIK_SESSION_KEY] == "dev-user"
-    assert client.session[AUTHENTIK_GROUPS_SESSION_KEY] == ["EasyAuth Admins"]
+    # Then: 匿名访问一律跳转统一登录入口, 不产生任何会话。
+    assert response.status_code == HTTPStatus.FOUND
+    assert response.headers["Location"] == "/auth/login/?next=/console/"
+    assert AUTHENTIK_SESSION_KEY not in client.session
+    assert AUTHENTIK_GROUPS_SESSION_KEY not in client.session
 
 
 def test_ops1_console_entry_serves_shell_for_non_admin_console_user() -> None:
@@ -130,23 +131,6 @@ def test_ops1_console_entry_serves_shell_for_non_admin_console_user() -> None:
     # Then: 控制台壳对登录用户可用, App 级权限由成员角色控制。
     assert response.status_code == HTTPStatus.OK
     assert 'data-easyauth-react-shell="console"' in response.content.decode()
-
-
-@override_settings(DEBUG=True, EASYAUTH_ENABLE_DEV_LOGIN=True)
-def test_ops1_console_entry_binds_dev_login_for_anonymous_session_in_dev_mode() -> None:
-    # Given: 未登录浏览器, 本地开发模式开启 dev login。
-    client = Client(HTTP_HOST="localhost")
-
-    # When: 直接打开控制台首页。
-    response = client.get("/console/")
-
-    # Then: 自动绑定 dev-user 超管会话并渲染控制台壳。
-    html = response.content.decode()
-    assert response.status_code == HTTPStatus.OK
-    assert 'data-easyauth-react-shell="console"' in html
-    assert 'data-current-user-role="EasyAuth Admins"' in html
-    assert client.session[AUTHENTIK_SESSION_KEY] == "dev-user"
-    assert client.session[AUTHENTIK_GROUPS_SESSION_KEY] == ["EasyAuth Admins"]
 
 
 def test_ops1_console_app_detail_hides_app_from_non_member_user() -> None:

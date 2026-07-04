@@ -1,0 +1,388 @@
+{% load static %}
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>二次验证 - EasyAuth</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #ffffff;
+      --bg-deep: #f8fafc;
+      --surface: #ffffff;
+      --ink: #0f172a;
+      --muted: #475569;
+      --faint: #94a3b8;
+      --line: #e2e8f0;
+      --brand: #2563eb;
+      --brand-strong: #1d4ed8;
+      --brand-faint: #eff6ff;
+      --danger: #dc2626;
+      --radius: 6px;
+      --radius-tight: 2px;
+      font-family: "Geist", "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      min-width: 320px;
+      min-height: 100vh;
+      margin: 0;
+      background: var(--bg);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    a { color: inherit; text-decoration: none; }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.96);
+      backdrop-filter: blur(8px);
+    }
+
+    .topbar-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: min(1440px, 100%);
+      height: 56px;
+      margin: 0 auto;
+      padding: 0 20px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      gap: 12px;
+    }
+
+    .brand-logo {
+      display: block;
+      width: auto;
+      height: 36px;
+      flex: 0 0 auto;
+      object-fit: contain;
+    }
+
+    .brand-copy {
+      display: grid;
+      min-width: 0;
+      gap: 2px;
+    }
+
+    .brand-copy strong {
+      overflow: hidden;
+      font-size: 16px;
+      font-weight: 700;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .brand-copy span {
+      color: var(--faint);
+      font-size: 12px;
+    }
+
+    .auth-main {
+      display: grid;
+      align-items: start;
+      justify-items: center;
+      width: min(960px, 100%);
+      min-height: calc(100vh - 56px);
+      margin: 0 auto;
+      padding: 72px 20px;
+    }
+
+    .card {
+      display: grid;
+      gap: 16px;
+      width: min(400px, 100%);
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .card-title {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .card-subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .segments {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+
+    .segment {
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-tight);
+      background: #ffffff;
+      color: var(--muted);
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background-color 150ms ease-out, border-color 150ms ease-out, color 150ms ease-out;
+    }
+
+    .segment.active {
+      border-color: var(--brand);
+      background: var(--brand-faint);
+      color: var(--brand);
+    }
+
+    .panel { display: grid; gap: 14px; }
+    .panel[hidden] { display: none; }
+
+    .code-input {
+      width: 100%;
+      min-height: 44px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-tight);
+      background: #ffffff;
+      color: var(--ink);
+      font-family: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+      font-size: 20px;
+      letter-spacing: 8px;
+      text-align: center;
+    }
+
+    .code-input:focus {
+      border-color: var(--brand);
+      outline: 2px solid rgba(37, 99, 235, 0.35);
+      outline-offset: 1px;
+    }
+
+    .button-primary {
+      width: 100%;
+      min-height: 40px;
+      border: 1px solid var(--brand);
+      border-radius: var(--radius-tight);
+      background: var(--brand);
+      color: #ffffff;
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      transition: background-color 150ms ease-out, border-color 150ms ease-out;
+    }
+
+    .button-primary:hover {
+      border-color: var(--brand-strong);
+      background: var(--brand-strong);
+    }
+
+    .button-primary[disabled] {
+      border-color: var(--line);
+      background: var(--faint);
+      cursor: default;
+    }
+
+    .panel-copy {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .form-error {
+      margin: 0;
+      color: var(--danger);
+      font-size: 13px;
+    }
+
+    .aux-link {
+      color: var(--faint);
+      font-size: 13px;
+    }
+
+    .aux-link:hover { color: var(--muted); }
+
+    @media (max-width: 640px) {
+      .topbar-inner { padding: 0 16px; }
+      .brand-copy span { display: none; }
+      .auth-main { padding: 40px 16px 56px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/portal/" aria-label="EasyAuth 员工门户">
+        <img class="brand-logo" src="{% static 'easyauth/frontend/assets/brand/jiefa_logo.webp' %}" alt="">
+        <span class="brand-copy">
+          <strong>EasyAuth</strong>
+          <span>统一权限与授权门户</span>
+        </span>
+      </a>
+    </div>
+  </header>
+  <main class="auth-main">
+    <section class="card" aria-labelledby="verify-title">
+      <div>
+        <h1 class="card-title" id="verify-title">二次验证</h1>
+      </div>
+      <p class="card-subtitle">请选择一种方式完成验证</p>
+      {% csrf_token %}
+      {% if show_switcher %}
+      <div class="segments" role="tablist">
+        <button class="segment active" type="button" id="segment-totp" data-panel="panel-totp">验证器验证码</button>
+        <button class="segment" type="button" id="segment-passkey" data-panel="panel-passkey">通行密钥</button>
+      </div>
+      {% endif %}
+      {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+      {% if totp_enabled %}
+      <form class="panel" id="panel-totp" method="post" action="/auth/local/verify/totp/">
+        {% csrf_token %}
+        <div>
+          <label class="panel-copy" for="code" style="display: block; margin-bottom: 6px;">输入验证器应用中的 6 位验证码</label>
+          <input class="code-input" id="code" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" autofocus required>
+        </div>
+        <button class="button-primary" type="submit">验证并登录</button>
+      </form>
+      {% endif %}
+      {% if has_passkeys %}
+      <div class="panel" id="panel-passkey" {% if totp_enabled %}hidden{% endif %}>
+        <p class="panel-copy">使用指纹、面容或安全密钥完成验证。</p>
+        <p class="form-error" id="passkey-error" role="alert" hidden></p>
+        <button class="button-primary" type="button" id="passkey-verify">使用通行密钥验证</button>
+      </div>
+      {% endif %}
+      <a class="aux-link" href="/auth/local/">返回重新登录</a>
+    </section>
+  </main>
+  <script>
+    (function () {
+      "use strict";
+
+      function csrfToken() {
+        var input = document.querySelector("[name=csrfmiddlewaretoken]");
+        return input ? input.value : "";
+      }
+
+      function base64urlToBuffer(value) {
+        var padding = "=".repeat((4 - (value.length % 4)) % 4);
+        var raw = atob(value.replace(/-/g, "+").replace(/_/g, "/") + padding);
+        var bytes = new Uint8Array(raw.length);
+        for (var i = 0; i < raw.length; i += 1) bytes[i] = raw.charCodeAt(i);
+        return bytes.buffer;
+      }
+
+      function bufferToBase64url(buffer) {
+        var bytes = new Uint8Array(buffer);
+        var raw = "";
+        for (var i = 0; i < bytes.length; i += 1) raw += String.fromCharCode(bytes[i]);
+        return btoa(raw).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+      }
+
+      var segments = document.querySelectorAll(".segment");
+      segments.forEach(function (segment) {
+        segment.addEventListener("click", function () {
+          segments.forEach(function (other) {
+            other.classList.toggle("active", other === segment);
+          });
+          ["panel-totp", "panel-passkey"].forEach(function (panelId) {
+            var panel = document.getElementById(panelId);
+            if (panel) panel.hidden = panelId !== segment.dataset.panel;
+          });
+        });
+      });
+
+      var verifyButton = document.getElementById("passkey-verify");
+      if (!verifyButton) return;
+      var errorBox = document.getElementById("passkey-error");
+
+      function showError(message) {
+        if (!errorBox) return;
+        errorBox.textContent = message;
+        errorBox.hidden = false;
+      }
+
+      async function postJson(url, body) {
+        var response = await fetch(url, {
+          method: "POST",
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+            "X-CSRFToken": csrfToken()
+          },
+          body: JSON.stringify(body || {})
+        });
+        var payload = await response.json().catch(function () { return {}; });
+        if (!response.ok) {
+          throw new Error(payload.error || "请求失败, 请重试。");
+        }
+        return payload;
+      }
+
+      verifyButton.addEventListener("click", async function () {
+        if (errorBox) errorBox.hidden = true;
+        verifyButton.disabled = true;
+        try {
+          if (!navigator.credentials || !window.PublicKeyCredential) {
+            throw new Error("当前浏览器不支持通行密钥。");
+          }
+          var begin = await postJson("/auth/local/passkey/begin/", {});
+          var options = begin.options;
+          var publicKey = {
+            challenge: base64urlToBuffer(options.challenge),
+            timeout: options.timeout,
+            rpId: options.rpId,
+            userVerification: options.userVerification,
+            allowCredentials: (options.allowCredentials || []).map(function (item) {
+              return {
+                id: base64urlToBuffer(item.id),
+                type: item.type,
+                transports: item.transports || undefined
+              };
+            })
+          };
+          var credential = await navigator.credentials.get({ publicKey: publicKey });
+          var payload = {
+            state_token: begin.state_token,
+            credential: {
+              id: credential.id,
+              rawId: bufferToBase64url(credential.rawId),
+              type: credential.type,
+              clientExtensionResults: credential.getClientExtensionResults(),
+              response: {
+                authenticatorData: bufferToBase64url(credential.response.authenticatorData),
+                clientDataJSON: bufferToBase64url(credential.response.clientDataJSON),
+                signature: bufferToBase64url(credential.response.signature),
+                userHandle: credential.response.userHandle
+                  ? bufferToBase64url(credential.response.userHandle)
+                  : null
+              }
+            }
+          };
+          var complete = await postJson("/auth/local/passkey/complete/", payload);
+          window.location.assign(complete.redirect || "/console/");
+        } catch (error) {
+          showError(error && error.message ? error.message : "通行密钥验证失败, 请重试。");
+        } finally {
+          verifyButton.disabled = false;
+        }
+      });
+    })();
+  </script>
+</body>
+</html>

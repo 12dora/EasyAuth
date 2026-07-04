@@ -37,6 +37,21 @@
   margin-top: 6px;
 }
 
+.logged-out-local-admin {
+  margin: 0;
+  font-size: 13px;
+}
+
+.logged-out-local-admin a {
+  color: rgb(var(--ink-faint));
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.logged-out-local-admin a:hover {
+  color: rgb(var(--ink-soft));
+}
+
 .topbar {
   position: sticky;
   top: 0;
@@ -240,8 +255,8 @@
   top: 100%;
   right: 0;
   z-index: 30;
-  min-width: 132px;
-  padding: 12px 6px 6px;
+  min-width: 190px;
+  padding: 6px;
   border: 1px solid rgb(var(--hairline));
   border-radius: 2px;
   background: rgb(var(--paper-soft));
@@ -262,7 +277,7 @@
   margin: 0;
 }
 
-.user-menu-popover button {
+.user-menu-item {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -275,16 +290,28 @@
   color: rgb(var(--ink-soft));
   font: inherit;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 500;
+  text-align: left;
+  text-decoration: none;
   cursor: pointer;
   transition: background-color 150ms ease-out, color 150ms ease-out;
 }
 
-.user-menu-popover button:hover,
-.user-menu-popover button:focus-visible {
+.user-menu-item:hover,
+.user-menu-item:focus-visible {
   background: rgb(var(--paper-deep));
   color: rgb(var(--ink));
   outline: none;
+}
+
+.user-menu-item-danger {
+  color: rgb(var(--signal));
+}
+
+.user-menu-item-danger:hover,
+.user-menu-item-danger:focus-visible {
+  background: rgb(var(--signal) / 0.08);
+  color: rgb(var(--signal));
 }
 
 .nav-list {

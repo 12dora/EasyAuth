@@ -24,15 +24,14 @@
 
 ## 本地开发登录
 
-开发过程中需要先 mock 上游 Authentik 身份、暂不做真实联调时，可以仅在本地开发环境启用受控入口：
+本地开发免登入口(`/auth/dev-login/`)已移除。开发过程中需要登录态时，统一使用本地超级管理员账号：
 
 ```bash
-DJANGO_DEBUG=1 EASYAUTH_ENABLE_DEV_LOGIN=1 .venv/bin/python manage.py runserver
+DJANGO_DEBUG=1 .venv/bin/python manage.py create_local_admin admin --password admin123
+DJANGO_DEBUG=1 .venv/bin/python manage.py runserver
 ```
 
-启动后访问 `/auth/dev-login/?next=/portal/` 会创建或更新 `dev-user`，写入门户 session，并跳转到 `/portal/`。如果需要指定测试用户，可访问 `/auth/dev-login/?user_id=alice&next=/portal/`。
-
-该入口是本地 mock Authentik 的开发能力，不是生产登录方式。它必须同时满足 `DEBUG=True` 和 `EASYAUTH_ENABLE_DEV_LOGIN=1` 才可用；默认关闭。`next` 只接受站内绝对路径，外部地址会回退到 `/portal/`，避免开放重定向。生产 OIDC 登录仍使用 `/auth/login/` 和 `/auth/callback/`。
+然后访问 `/auth/local/` 用 `admin` / `admin123` 登录。首次登录会强制跳转到 `/auth/local/change-password/` 修改密码，改完后即可正常进入 `/portal/` 与 `/console/`（本地管理员会话按 `EASYAUTH_CONSOLE_SUPERUSER_GROUPS` 绑定，天然是 console 超管）。详见 [本地超级管理员登录指南](guides/local-admin-login.md)。生产 OIDC 登录仍使用 `/auth/login/` 和 `/auth/callback/`。
 
 ## 建议后续文档顺序
 

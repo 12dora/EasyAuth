@@ -1,0 +1,269 @@
+{% load static %}
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>登录 - EasyAuth</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #ffffff;
+      --bg-deep: #f8fafc;
+      --surface: #ffffff;
+      --ink: #0f172a;
+      --muted: #475569;
+      --faint: #94a3b8;
+      --line: #e2e8f0;
+      --brand: #2563eb;
+      --brand-strong: #1d4ed8;
+      --danger: #dc2626;
+      --radius: 6px;
+      --radius-tight: 2px;
+      font-family: "Geist", "Avenir Next", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", system-ui, sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      min-width: 320px;
+      min-height: 100vh;
+      margin: 0;
+      background: var(--bg);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    a { color: inherit; text-decoration: none; }
+
+    .topbar {
+      position: sticky;
+      top: 0;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 255, 255, 0.96);
+      backdrop-filter: blur(8px);
+    }
+
+    .topbar-inner {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      width: min(1440px, 100%);
+      height: 56px;
+      margin: 0 auto;
+      padding: 0 20px;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      min-width: 0;
+      gap: 12px;
+    }
+
+    .brand-logo {
+      display: block;
+      width: auto;
+      height: 36px;
+      flex: 0 0 auto;
+      object-fit: contain;
+    }
+
+    .brand-copy {
+      display: grid;
+      min-width: 0;
+      gap: 2px;
+    }
+
+    .brand-copy strong {
+      overflow: hidden;
+      font-size: 16px;
+      font-weight: 700;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .brand-copy span {
+      color: var(--faint);
+      font-size: 12px;
+    }
+
+    .auth-main {
+      display: grid;
+      align-items: start;
+      justify-items: center;
+      width: min(960px, 100%);
+      min-height: calc(100vh - 56px);
+      margin: 0 auto;
+      padding: 72px 20px;
+    }
+
+    .card {
+      display: grid;
+      gap: 16px;
+      width: min(400px, 100%);
+      padding: 24px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .card-title {
+      margin: 0;
+      font-size: 20px;
+      font-weight: 700;
+    }
+
+    .card-subtitle {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .field { display: grid; gap: 6px; }
+
+    .field label {
+      color: var(--ink);
+      font-size: 13px;
+      font-weight: 600;
+    }
+
+    .field input {
+      min-height: 38px;
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-tight);
+      background: #ffffff;
+      color: var(--ink);
+      font-family: inherit;
+      font-size: 14px;
+    }
+
+    .field input:focus {
+      border-color: var(--brand);
+      outline: 2px solid rgba(37, 99, 235, 0.35);
+      outline-offset: 1px;
+    }
+
+    .button-primary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      min-height: 40px;
+      border: 1px solid var(--brand);
+      border-radius: var(--radius-tight);
+      background: var(--brand);
+      color: #ffffff;
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 700;
+      text-align: center;
+      text-decoration: none;
+      cursor: pointer;
+      transition: background-color 150ms ease-out, border-color 150ms ease-out;
+    }
+
+    .button-primary:hover {
+      border-color: var(--brand-strong);
+      background: var(--brand-strong);
+    }
+
+    .button-secondary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 100%;
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-tight);
+      background: var(--surface);
+      color: var(--ink);
+      font-family: inherit;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background-color 150ms ease-out, border-color 150ms ease-out;
+    }
+
+    .button-secondary:hover {
+      border-color: var(--muted);
+      background: var(--bg-deep);
+    }
+
+    .divider {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      color: var(--faint);
+      font-size: 12px;
+    }
+
+    .divider::before,
+    .divider::after {
+      content: "";
+      flex: 1 1 auto;
+      height: 1px;
+      background: var(--line);
+    }
+
+    .form-error {
+      margin: 0;
+      color: var(--danger);
+      font-size: 13px;
+    }
+
+    .aux {
+      margin: 0;
+      color: var(--faint);
+      font-size: 12px;
+      line-height: 1.6;
+    }
+
+    @media (max-width: 640px) {
+      .topbar-inner { padding: 0 16px; }
+      .brand-copy span { display: none; }
+      .auth-main { padding: 40px 16px 56px; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/portal/" aria-label="EasyAuth 员工门户">
+        <img class="brand-logo" src="{% static 'easyauth/frontend/assets/brand/jiefa_logo.webp' %}" alt="">
+        <span class="brand-copy">
+          <strong>EasyAuth</strong>
+          <span>统一权限与授权门户</span>
+        </span>
+      </a>
+    </div>
+  </header>
+  <main class="auth-main">
+    <section class="card" aria-labelledby="login-title">
+      <div>
+        <h1 class="card-title" id="login-title">登录 EasyAuth</h1>
+      </div>
+      <a class="button-primary" href="/auth/login/?next=/portal/" role="button">使用工作账号登录</a>
+      <div class="divider" aria-hidden="true"><span>或使用本地账号登录</span></div>
+      {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
+      <form method="post" action="/auth/local/" autocomplete="off">
+        {% csrf_token %}
+        <div class="field" style="margin-bottom: 14px;">
+          <label for="username">用户名</label>
+          <input id="username" name="username" type="text" autocomplete="username" required>
+        </div>
+        <div class="field" style="margin-bottom: 18px;">
+          <label for="password">密码</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required>
+        </div>
+        <button class="button-secondary" type="submit">登录</button>
+      </form>
+      <p class="aux">本地密码登录仅面向本地超级管理员(应急通道),其他成员请使用上方工作账号登录。登录后可在「安全设置」中绑定验证器或通行密钥。</p>
+    </section>
+  </main>
+</body>
+</html>

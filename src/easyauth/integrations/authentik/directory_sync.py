@@ -180,11 +180,32 @@ def _upsert_user(payload: DirectoryJson) -> None:
         defaults={
             "union_id": _string(payload.get("union_id")),
             "name": _string(payload.get("name")),
+            "avatar": _string(payload.get("avatar")),
+            "title": _string(payload.get("title")),
             "department_ids": [_string(item) for item in _list(payload.get("department_ids"))],
             "manager_userid": _string(payload.get("manager_userid")),
             "status": _string(payload.get("status")),
         },
     )
+    _backfill_user_mirror_avatar(payload)
+
+
+def _backfill_user_mirror_avatar(payload: DirectoryJson) -> None:
+    avatar = _string(payload.get("avatar"))
+    corp_id = _string(payload.get("corp_id"))
+    user_id = _string(payload.get("user_id"))
+    if avatar == "" or corp_id == "" or user_id == "":
+        return
+    # 只在 avatar_url 为空时回填目录头像, 不覆盖 OIDC 登录写入的值。
+    queryset = UserMirror.objects.filter(
+        dingtalk_corp_id=corp_id,
+        dingtalk_userid=user_id,
+        avatar_url="",
+    )
+    for user in queryset.select_for_update():
+        user.avatar_url = avatar
+        user.full_clean()
+        user.save(update_fields=["avatar_url", "updated_at"])
 
 
 def _upsert_org_context(payload: DirectoryJson) -> None:

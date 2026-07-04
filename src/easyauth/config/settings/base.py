@@ -63,6 +63,7 @@ MIDDLEWARE: list[str] = [
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
     "easyauth.config.middleware.SafeNotFoundMiddleware",
+    "easyauth.config.middleware.LocalAdminForcedPasswordChangeMiddleware",
 ]
 
 ROOT_URLCONF = "easyauth.config.urls"
@@ -226,7 +227,6 @@ EASYAUTH_AUTHENTIK_OIDC_SIGNING_ALGORITHMS = tuple(
 EASYAUTH_AUTHENTIK_OIDC_HTTP_TIMEOUT_SECONDS = float(
     os.environ.get("EASYAUTH_AUTHENTIK_OIDC_HTTP_TIMEOUT_SECONDS", "5"),
 )
-EASYAUTH_ENABLE_DEV_LOGIN = os.environ.get("EASYAUTH_ENABLE_DEV_LOGIN", "0") == "1"
 EASYAUTH_CONSOLE_SUPERUSER_GROUPS = tuple(
     group.strip()
     for group in os.environ.get("EASYAUTH_CONSOLE_SUPERUSER_GROUPS", "EasyAuth Admins").split(",")
@@ -238,6 +238,17 @@ EASYAUTH_CONSOLE_SUPERUSER_IDS = tuple(
     if user_id.strip()
 )
 EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS = 300
+# WebAuthn(通行密钥)配置: RP ID 必须是"域名"(不含协议与端口), 且浏览器地址栏的 host
+# 必须等于该域名或其子域, 否则 navigator.credentials 直接报 SecurityError。
+# 本地开发必须用 http://localhost:8001 访问(127.0.0.1 不属于 RP ID "localhost", 无法使用通行密钥)。
+EASYAUTH_WEBAUTHN_RP_ID = os.environ.get("EASYAUTH_WEBAUTHN_RP_ID", "localhost")
+EASYAUTH_WEBAUTHN_RP_NAME = os.environ.get("EASYAUTH_WEBAUTHN_RP_NAME", "EasyAuth")
+# 允许的 WebAuthn origin(协议+host+端口), 逗号分隔; 必须与浏览器实际访问地址完全一致。
+EASYAUTH_WEBAUTHN_ORIGINS = tuple(
+    origin.strip()
+    for origin in os.environ.get("EASYAUTH_WEBAUTHN_ORIGINS", "http://localhost:8001").split(",")
+    if origin.strip()
+)
 EASYAUTH_DINGTALK_CALLBACK_SECRET = os.environ.get("EASYAUTH_DINGTALK_CALLBACK_SECRET", "")
 EASYAUTH_AUTHENTIK_BASE_URL = required_env(
     "EASYAUTH_AUTHENTIK_BASE_URL",

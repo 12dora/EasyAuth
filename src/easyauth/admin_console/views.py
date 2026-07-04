@@ -11,11 +11,6 @@ from django.http import (
 )
 from django.shortcuts import redirect
 
-from easyauth.accounts.dev_login import (
-    DevLoginConfigurationError,
-    bind_dev_login_session,
-    dev_login_is_enabled,
-)
 from easyauth.accounts.logout_state import browser_is_marked_logged_out, logged_out_redirect
 from easyauth.admin_console.identity import actor_from_request
 from easyauth.applications.models import App
@@ -24,33 +19,22 @@ from easyauth.frontend_shell import render_react_shell
 
 
 def console_home(request: HttpRequest) -> HttpResponse:
-    match _page_actor_from_request(request):
-        case ConsoleActor():
-            return render_react_shell(request, surface="console", title="EasyAuth 控制台")
-        case HttpResponse() as response:
-            return response
-        case None:
-            return _login_redirect(request)
+    # 未登录访问一律回到统一登录入口; 不再提供本地开发免登绑定。
+    if actor_from_request(request) is None:
+        return _login_redirect(request)
+    return render_react_shell(request, surface="console", title="EasyAuth 控制台")
 
 
 def console_operations(request: HttpRequest, _path: str = "") -> HttpResponse:
-    match _page_actor_from_request(request):
-        case ConsoleActor():
-            return render_react_shell(request, surface="console", title="EasyAuth 控制台")
-        case HttpResponse() as response:
-            return response
-        case None:
-            return _login_redirect(request)
+    if actor_from_request(request) is None:
+        return _login_redirect(request)
+    return render_react_shell(request, surface="console", title="EasyAuth 控制台")
 
 
 def app_detail(request: HttpRequest, app_key: str) -> HttpResponse:
-    match _page_actor_from_request(request):
-        case ConsoleActor() as actor:
-            pass
-        case HttpResponse() as response:
-            return response
-        case None:
-            return _login_redirect(request)
+    actor = actor_from_request(request)
+    if actor is None:
+        return _login_redirect(request)
 
     app = _visible_app(actor, app_key)
 
@@ -67,19 +51,6 @@ def app_detail(request: HttpRequest, app_key: str) -> HttpResponse:
         title=f"{app.name} - EasyAuth 控制台",
         initial_app_key=app.app_key,
     )
-
-
-def _page_actor_from_request(request: HttpRequest) -> ConsoleActor | HttpResponse | None:
-    actor = actor_from_request(request)
-    if actor is not None:
-        return actor
-    if dev_login_is_enabled():
-        try:
-            _ = bind_dev_login_session(request)
-        except DevLoginConfigurationError as error:
-            return HttpResponse(str(error), status=400, content_type="text/plain; charset=utf-8")
-        return actor_from_request(request)
-    return None
 
 
 def _visible_app(actor: ConsoleActor, app_key: str) -> App:

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, ClassVar, Final, override
 
+from django.contrib.auth import hashers
 from django.core.exceptions import ValidationError
+from django.core.validators import RegexValidator
 from django.db import models
 
 if TYPE_CHECKING:
@@ -94,6 +96,8 @@ class DingTalkUserMirror(models.Model):
     user_id: models.CharField[str, str] = models.CharField(max_length=128)
     union_id: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
     name: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
+    avatar: models.TextField[str, str] = models.TextField(blank=True, default="")
+    title: models.CharField[str, str] = models.CharField(max_length=128, blank=True, default="")
     department_ids: models.JSONField[list[str], list[str]] = models.JSONField(default=list)
     manager_userid: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
     status: models.CharField[str, str] = models.CharField(max_length=32, blank=True)
@@ -145,6 +149,79 @@ class DingTalkUserOrgContext(models.Model):
     @override
     def __str__(self) -> str:
         return f"{self.source_slug}:{self.corp_id}:{self.user_id}"
+
+
+LOCAL_ADMIN_USERNAME_MAX_LENGTH: Final = 64
+LOCAL_ADMIN_USERNAME_PATTERN: Final = r"^[a-z0-9][a-z0-9_-]*$"
+LOCAL_ADMIN_USERNAME_ERROR: Final = (
+    "用户名只允许小写字母、数字、连字符和下划线, 且以字母或数字开头。"
+)
+
+
+class LocalAdminAccount(models.Model):
+    # 本地超级管理员账号: 不经 Authentik, 用密码 + 二次验证直接登录 console。
+    username: models.CharField[str, str] = models.CharField(
+        max_length=LOCAL_ADMIN_USERNAME_MAX_LENGTH,
+        unique=True,
+        validators=[
+            RegexValidator(LOCAL_ADMIN_USERNAME_PATTERN, LOCAL_ADMIN_USERNAME_ERROR),
+        ],
+    )
+    password_hash: models.CharField[str, str] = models.CharField(max_length=255)
+    # 首次登录/管理员重置后强制修改密码。
+    must_change_password: models.BooleanField[bool, bool] = models.BooleanField(default=True)
+    totp_secret: models.CharField[str, str] = models.CharField(max_length=64, blank=True)
+    totp_enabled: models.BooleanField[bool, bool] = models.BooleanField(default=False)
+    is_active: models.BooleanField[bool, bool] = models.BooleanField(default=True)
+    created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
+        auto_now_add=True,
+    )
+    updated_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        ordering: ClassVar[list[str]] = ["username"]
+
+    @override
+    def __str__(self) -> str:
+        return self.username
+
+    def set_password(self, raw_password: str) -> None:
+        self.password_hash = hashers.make_password(raw_password)
+
+    def check_password(self, raw_password: str) -> bool:
+        return hashers.check_password(raw_password, self.password_hash)
+
+    def has_second_factor(self) -> bool:
+        return self.totp_enabled or self.passkeys.exists()
+
+
+class LocalAdminPasskey(models.Model):
+    # 本地超管的 WebAuthn 通行密钥凭据; credential_id/public_key 均为 base64url 文本。
+    account: models.ForeignKey[LocalAdminAccount, LocalAdminAccount] = models.ForeignKey(
+        LocalAdminAccount,
+        on_delete=models.CASCADE,
+        related_name="passkeys",
+    )
+    credential_id: models.TextField[str, str] = models.TextField(unique=True)
+    public_key: models.TextField[str, str] = models.TextField()
+    sign_count: models.IntegerField[int, int] = models.IntegerField(default=0)
+    transports: models.JSONField[list[str], list[str]] = models.JSONField(default=list)
+    name: models.CharField[str, str] = models.CharField(max_length=100, blank=True)
+    last_used_at: models.DateTimeField[date | datetime | None, datetime | None] = (
+        models.DateTimeField(null=True, blank=True)
+    )
+    created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        ordering: ClassVar[list[str]] = ["created_at", "id"]
+
+    @override
+    def __str__(self) -> str:
+        return f"{self.account.username}:{self.name or self.credential_id[:12]}"
 
 
 class DingTalkDirectorySyncState(models.Model):

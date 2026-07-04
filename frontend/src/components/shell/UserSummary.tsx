@@ -1,7 +1,9 @@
-import { LogOut } from "lucide-react";
+import { LogOut, ShieldCheck } from "lucide-react";
 import { useId } from "react";
+import { Link } from "react-router-dom";
 
 import type { CurrentUser } from "../../App";
+import { useI18n } from "../../i18n/I18nProvider";
 import { readCsrfToken } from "../../lib/api";
 
 const DEFAULT_LOGOUT_URL = "/auth/logout/";
@@ -14,10 +16,12 @@ interface UserSummaryProps {
 }
 
 export function UserSummary({ currentUser, mode, open, onOpenChange }: UserSummaryProps) {
+  const { t } = useI18n();
   const menuId = useId();
   const userName = firstPresent(currentUser.displayName, mode === "console" ? "控制台用户" : "当前用户");
   const userRole = firstPresent(currentUser.role, "未分组");
   const logoutUrl = localLogoutUrl(currentUser.logoutUrl);
+  const securityHref = mode === "console" ? "/console/settings" : "/portal/settings";
   const avatarLabel = userName.slice(0, 1).toUpperCase();
   const csrfToken = readCsrfToken();
 
@@ -26,7 +30,7 @@ export function UserSummary({ currentUser, mode, open, onOpenChange }: UserSumma
       <button
         type="button"
         className="user-menu-trigger"
-        aria-label="当前登录用户菜单"
+        aria-label={t("shell.userMenu")}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={menuId}
@@ -44,12 +48,16 @@ export function UserSummary({ currentUser, mode, open, onOpenChange }: UserSumma
           </span>
         )}
       </button>
-      <div className="user-menu-popover" id={menuId} data-open={open}>
-        <form action={logoutUrl} aria-label="登出当前账号" method="post">
+      <div className="user-menu-popover" id={menuId} data-open={open} role="menu">
+        <Link className="user-menu-item" to={securityHref} role="menuitem">
+          <ShieldCheck size={15} aria-hidden="true" />
+          <span>{t("shell.securitySettings")}</span>
+        </Link>
+        <form action={logoutUrl} aria-label={t("shell.logout")} method="post">
           {csrfToken ? <input type="hidden" name="csrfmiddlewaretoken" value={csrfToken} /> : null}
-          <button type="submit">
-            <LogOut size={15} />
-            <span>登出</span>
+          <button type="submit" className="user-menu-item user-menu-item-danger" role="menuitem">
+            <LogOut size={15} aria-hidden="true" />
+            <span>{t("shell.logout")}</span>
           </button>
         </form>
       </div>

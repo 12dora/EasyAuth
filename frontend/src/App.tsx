@@ -1,6 +1,6 @@
 import { Settings } from "lucide-react";
 import { useEffect } from "react";
-import { Navigate, Outlet, Route, Routes, useSearchParams } from "react-router-dom";
+import { Navigate, Outlet, Route, Routes } from "react-router-dom";
 
 import { AppShell } from "./components/AppShell";
 import { ButtonLink } from "./components/ButtonLink";
@@ -89,9 +89,6 @@ function PublicShell({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", mode }: {
 
 function LoggedOutPage() {
   const { t } = useI18n();
-  const [searchParams] = useSearchParams();
-  const nextPath = localAbsolutePath(searchParams.get("next"));
-  const loginHref = `/auth/login/?${new URLSearchParams({ next: nextPath }).toString()}`;
 
   return (
     <section className="logged-out-panel" aria-labelledby="logged-out-title">
@@ -99,7 +96,7 @@ function LoggedOutPage() {
       <h1 id="logged-out-title">{t("loggedOut.title")}</h1>
       <p className="page-description">{t("loggedOut.description")}</p>
       <div className="logged-out-actions">
-        <ButtonLink variant="primary" href={loginHref}>
+        <ButtonLink variant="primary" href="/auth/local/">
           {t("loggedOut.login")}
         </ButtonLink>
         <ButtonLink href="/portal/">{t("loggedOut.backToPortal")}</ButtonLink>
@@ -127,13 +124,3 @@ function SettingsPlaceholder({ mode }: { mode: "console" | "portal" }) {
   );
 }
 
-function localAbsolutePath(value: string | null): string {
-  if (!value || !value.startsWith("/") || value.startsWith("//") || value.includes("\\")) {
-    return "/portal/";
-  }
-  const parsed = new URL(value, window.location.origin);
-  if (parsed.origin !== window.location.origin) {
-    return "/portal/";
-  }
-  return `${parsed.pathname}${parsed.search}${parsed.hash}`;
-}

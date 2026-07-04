@@ -114,7 +114,7 @@ describe("AppShell", () => {
     expect(screen.getByText("已登出页面")).toBeVisible();
     expect(screen.queryByRole("button", { name: "当前登录用户菜单" })).not.toBeInTheDocument();
     expect(screen.queryByRole("img", { name: /头像/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("form", { name: "登出当前账号" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("form", { name: "退出登录" })).not.toBeInTheDocument();
   });
 
   test("登出页复用共享顶栏并忽略已传入的当前用户", () => {
@@ -137,25 +137,19 @@ describe("AppShell", () => {
     expect(screen.getByText("统一权限中心")).toBeVisible();
     expect(screen.queryByText("员工门户")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "已登出" })).toBeVisible();
-    expect(screen.getByRole("link", { name: "重新登录" })).toHaveAttribute(
-      "href",
-      "/auth/login/?next=%2Fportal%2Frequests",
-    );
+    expect(screen.getByRole("link", { name: "重新登录" })).toHaveAttribute("href", "/auth/local/");
     expect(screen.queryByText("张三")).not.toBeInTheDocument();
     expect(screen.queryByRole("img", { name: "张三头像" })).not.toBeInTheDocument();
   });
 
-  test("登出页拒绝外部 next 登录跳转", () => {
+  test("登出页登录按钮固定指向登录页且忽略外部 next", () => {
     render(
       <MemoryRouter initialEntries={["/auth/logged-out/?next=https://evil.example.test/portal/"]}>
         <App shell="portal" />
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole("link", { name: "重新登录" })).toHaveAttribute(
-      "href",
-      "/auth/login/?next=%2Fportal%2F",
-    );
+    expect(screen.getByRole("link", { name: "重新登录" })).toHaveAttribute("href", "/auth/local/");
   });
 
   test("语言与通知弹层互斥展开, 语言菜单可切换界面语言", async () => {
@@ -188,10 +182,13 @@ describe("AppShell", () => {
     await user.click(trigger);
     expect(trigger).toHaveAttribute("aria-expanded", "true");
 
-    const logoutForm = screen.getByRole("form", { name: "登出当前账号" });
+    const menu = screen.getByRole("menu");
+    expect(within(menu).getByRole("menuitem", { name: "安全设置" })).toHaveAttribute("href", "/portal/settings");
+
+    const logoutForm = screen.getByRole("form", { name: "退出登录" });
     expect(logoutForm).toHaveAttribute("action", "/auth/logout/");
     expect(logoutForm).toHaveAttribute("method", "post");
-    expect(within(logoutForm).getByRole("button", { name: "登出" })).toBeVisible();
+    expect(within(logoutForm).getByRole("menuitem", { name: "退出登录" })).toBeVisible();
   });
 
   test("外部 logoutUrl 不会把登出表单带离 EasyAuth", async () => {
@@ -219,7 +216,7 @@ describe("AppShell", () => {
 
     await user.click(screen.getByRole("button", { name: "当前登录用户菜单" }));
 
-    expect(screen.getByRole("form", { name: "登出当前账号" })).toHaveAttribute(
+    expect(screen.getByRole("form", { name: "退出登录" })).toHaveAttribute(
       "action",
       "/auth/logout/",
     );

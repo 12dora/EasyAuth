@@ -64,6 +64,15 @@ from easyauth.admin_console.query_test_api import console_permission_query_test
 from easyauth.admin_console.roles_api import console_role_detail, console_roles
 from easyauth.admin_console.scopes_api import console_scope_detail, console_scopes
 from easyauth.admin_console.settings_api import console_integration_settings
+from easyauth.admin_console.two_factor_api import (
+    passkey_delete as two_factor_passkey_delete,
+    passkey_register_begin as two_factor_passkey_register_begin,
+    passkey_register_complete as two_factor_passkey_register_complete,
+    totp_begin as two_factor_totp_begin,
+    totp_confirm as two_factor_totp_confirm,
+    totp_disable as two_factor_totp_disable,
+    two_factor_status,
+)
 from easyauth.admin_console.users_api import console_user_search
 
 app_name = "admin_console"
@@ -133,6 +142,41 @@ urlpatterns = [
         name="operations-dependency-health-check",
     ),
     path("api/v1/users", console_user_search, name="console-user-search"),
+    path(
+        "api/v1/security/two-factor",
+        two_factor_status,
+        name="console-two-factor-status",
+    ),
+    path(
+        "api/v1/security/two-factor/totp/begin",
+        two_factor_totp_begin,
+        name="console-two-factor-totp-begin",
+    ),
+    path(
+        "api/v1/security/two-factor/totp/confirm",
+        two_factor_totp_confirm,
+        name="console-two-factor-totp-confirm",
+    ),
+    path(
+        "api/v1/security/two-factor/totp/disable",
+        two_factor_totp_disable,
+        name="console-two-factor-totp-disable",
+    ),
+    path(
+        "api/v1/security/two-factor/passkeys/register/begin",
+        two_factor_passkey_register_begin,
+        name="console-two-factor-passkey-register-begin",
+    ),
+    path(
+        "api/v1/security/two-factor/passkeys/register/complete",
+        two_factor_passkey_register_complete,
+        name="console-two-factor-passkey-register-complete",
+    ),
+    path(
+        "api/v1/security/two-factor/passkeys/<int:passkey_id>",
+        two_factor_passkey_delete,
+        name="console-two-factor-passkey-delete",
+    ),
     path(
         "api/v1/settings/integrations",
         console_integration_settings,
@@ -263,5 +307,7 @@ urlpatterns = [
     ),
     path("operations/", views.console_operations, name="console-operations"),
     path("operations/<path:_path>", views.console_operations, name="console-operations-path"),
+    path("settings", views.console_home, name="console-settings"),
+    path("settings/", views.console_home, name="console-settings-slash"),
     path("apps/<str:app_key>/", views.app_detail, name="app-detail"),
 ]

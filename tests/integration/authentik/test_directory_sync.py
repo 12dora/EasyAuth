@@ -75,6 +75,8 @@ def test_directory_sync_caches_departments_users_and_org_context() -> None:
                 "user_id": "user-1",
                 "union_id": "union-1",
                 "name": "张三",
+                "avatar": "https://static-legacy.dingtalk.com/media/user-1.jpg",
+                "title": "销售经理",
                 "department_ids": ["dept-1"],
                 "manager_userid": "manager-1",
                 "status": "active",
@@ -98,10 +100,10 @@ def test_directory_sync_caches_departments_users_and_org_context() -> None:
     assert result.user_count == 1
     assert result.org_context_count == 1
     assert DingTalkDepartmentMirror.objects.get(corp_id="corp-1", dept_id="dept-1").name == "销售部"
-    assert (
-        DingTalkUserMirror.objects.get(corp_id="corp-1", user_id="user-1").manager_userid
-        == "manager-1"
-    )
+    user_mirror = DingTalkUserMirror.objects.get(corp_id="corp-1", user_id="user-1")
+    assert user_mirror.manager_userid == "manager-1"
+    assert user_mirror.avatar == "https://static-legacy.dingtalk.com/media/user-1.jpg"
+    assert user_mirror.title == "销售经理"
     org_context = DingTalkUserOrgContext.objects.get(corp_id="corp-1", user_id="user-1")
     manager_chain = cast("list[dict[str, JsonValue]]", org_context.manager_chain)
     assert manager_chain[0]["user_id"] == "manager-1"
@@ -126,6 +128,65 @@ def _stub_with_users(users: list[dict[str, object]]) -> _DirectoryClientStub:
             for user in users
         },
     )
+
+
+def test_directory_sync_backfills_empty_user_mirror_avatar_url() -> None:
+    # Given: 已绑定钉钉的用户尚未有头像, 目录侧下发了真实头像 URL。
+    _ = UserMirror.objects.create(
+        authentik_user_id="ak-avatar-1",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-avatar",
+    )
+    client_stub = _stub_with_users(
+        [
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-avatar",
+                "name": "头像用户",
+                "avatar": "https://static-legacy.dingtalk.com/media/user-avatar.jpg",
+                "department_ids": [],
+                "manager_userid": "",
+                "status": "active",
+            },
+        ],
+    )
+
+    # When: 执行目录同步。
+    _ = sync_authentik_dingtalk_directory(client_stub)
+
+    # Then: 空的 avatar_url 被目录头像回填。
+    user = UserMirror.objects.get(authentik_user_id="ak-avatar-1")
+    assert user.avatar_url == "https://static-legacy.dingtalk.com/media/user-avatar.jpg"
+
+
+def test_directory_sync_keeps_existing_user_mirror_avatar_url() -> None:
+    # Given: 用户已有 OIDC 登录写入的头像, 目录侧下发了不同的头像 URL。
+    _ = UserMirror.objects.create(
+        authentik_user_id="ak-avatar-2",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-avatar-kept",
+        avatar_url="https://oidc.example.test/media/original.jpg",
+    )
+    client_stub = _stub_with_users(
+        [
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-avatar-kept",
+                "name": "已有头像用户",
+                "avatar": "https://static-legacy.dingtalk.com/media/directory.jpg",
+                "department_ids": [],
+                "manager_userid": "",
+                "status": "active",
+            },
+        ],
+    )
+
+    # When: 执行目录同步。
+    _ = sync_authentik_dingtalk_directory(client_stub)
+
+    # Then: 目录头像只做空值回填, 不覆盖 OIDC 登录写入的值。
+    user = UserMirror.objects.get(authentik_user_id="ak-avatar-2")
+    assert user.avatar_url == "https://oidc.example.test/media/original.jpg"
 
 
 def test_directory_sync_marks_deleted_directory_user_departed_and_revokes_grants() -> None:

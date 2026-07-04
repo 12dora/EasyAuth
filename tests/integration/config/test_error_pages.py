@@ -44,10 +44,11 @@ def test_debug_not_found_page_does_not_expose_urlconf_details() -> None:
     _assert_safe_not_found_page(response)
 
 
-def test_disabled_dev_login_uses_safe_not_found_page_in_debug_mode() -> None:
+def test_removed_dev_login_route_returns_safe_not_found_page() -> None:
+    # 本地开发免登入口已彻底移除, 即使 DEBUG 模式也只能得到安全 404。
     client = Client()
 
-    with override_settings(DEBUG=True, EASYAUTH_ENABLE_DEV_LOGIN=False):
+    with override_settings(DEBUG=True):
         response = client.get("/auth/dev-login/")
 
     html = response.content.decode()

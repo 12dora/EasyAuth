@@ -11,6 +11,7 @@ import { StatusBanner } from "../../components/StatusBanner";
 import { PanelSurface } from "../../components/ui/PanelSurface";
 import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest } from "../../lib/api";
+import { TwoFactorSection } from "./TwoFactorSection";
 
 interface IntegrationSettingsPayload {
   authentik_base_url_override: string;
@@ -67,7 +68,7 @@ export function ConsoleSettingsPage() {
   };
 
   return (
-    <>
+    <div className="space-y-6">
       <PageHeader
         eyebrow={t("settingsPlaceholder.eyebrow")}
         title={t("settingsPlaceholder.console.title")}
@@ -136,7 +137,8 @@ export function ConsoleSettingsPage() {
           </div>
         </form>
       </PanelSurface>
-    </>
+      <TwoFactorSection />
+    </div>
   );
 }
 

@@ -7,7 +7,7 @@ from typing import Final
 from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
 
 from django.conf import settings as django_settings
-from django.http import Http404, HttpRequest, HttpResponse, HttpResponseRedirect
+from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
 from django.views.decorators.http import require_POST
 
 from easyauth.accounts.auth import (
@@ -24,12 +24,6 @@ from easyauth.accounts.auth import (
     verify_callback_state,
     verify_oidc_claims,
 )
-from easyauth.accounts.dev_login import (
-    DEFAULT_DEV_LOGIN_USER_ID,
-    DevLoginConfigurationError,
-    bind_dev_login_session,
-    dev_login_is_enabled,
-)
 from easyauth.accounts.logout_state import (
     clear_browser_logged_out,
     logged_out_response,
@@ -38,7 +32,6 @@ from easyauth.accounts.logout_state import (
 from easyauth.accounts.oidc_exchange import exchange_authorization_code_for_claims
 
 FIELD_AUTHORIZATION_CODE = "code"
-DEFAULT_DEV_LOGIN_NEXT = "/portal/"
 LOCAL_LOOPBACK_HOSTS: Final = frozenset({"127.0.0.1", "::1", "localhost"})
 REASON_CODE_REQUIRED = "is required"
 SETTING_CLIENT_ID = "EASYAUTH_AUTHENTIK_OIDC_CLIENT_ID"
@@ -54,22 +47,6 @@ SETTING_SIGNING_ALGORITHMS = "EASYAUTH_AUTHENTIK_OIDC_SIGNING_ALGORITHMS"
 SETTING_SCOPES = "EASYAUTH_AUTHENTIK_OIDC_SCOPES"
 SETTING_TOKEN_ENDPOINT = "EASYAUTH_AUTHENTIK_OIDC_TOKEN_ENDPOINT"  # noqa: S105 - 配置键名, 不是密钥值.
 OIDC_ISSUER_PROVIDER_SLUG_SEGMENT_COUNT: Final = 3
-
-
-def dev_login(request: HttpRequest) -> HttpResponseRedirect:
-    if not dev_login_is_enabled():
-        raise Http404
-
-    user_id = request.GET.get("user_id", DEFAULT_DEV_LOGIN_USER_ID).strip()
-    try:
-        _ = bind_dev_login_session(request, user_id=user_id)
-    except DevLoginConfigurationError as error:
-        return HttpResponse(
-            str(error),
-            status=HTTPStatus.BAD_REQUEST,
-            content_type="text/plain",
-        )
-    return HttpResponseRedirect(_safe_dev_login_next(request))
 
 
 def oidc_login(request: HttpRequest) -> HttpResponseRedirect:
@@ -311,25 +288,9 @@ def _float_setting(name: str) -> float:
             raise OidcSessionError(name, "must be a number")
 
 
-def _bool_setting(name: str) -> bool:
-    value: bool | None = getattr(django_settings, name, None)
-    match value:
-        case bool() as bool_value:
-            return bool_value
-        case _:
-            return False
-
-
 def _require_authorization_code(code: str) -> None:
     if code == "":
         raise OidcSessionError(FIELD_AUTHORIZATION_CODE, REASON_CODE_REQUIRED)
-
-
-def _safe_dev_login_next(request: HttpRequest) -> str:
-    next_path = request.GET.get("next", DEFAULT_DEV_LOGIN_NEXT)
-    if _is_local_absolute_path(next_path):
-        return next_path
-    return DEFAULT_DEV_LOGIN_NEXT
 
 
 def _safe_auth_success_next(request: HttpRequest) -> str:
