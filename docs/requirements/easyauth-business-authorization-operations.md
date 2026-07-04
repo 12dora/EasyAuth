@@ -36,7 +36,7 @@ EasyAuth 负责“审批后你在应用里能做什么”。
 | `src/easyauth/api/views.py`、`src/easyauth/api/authentication.py` | 已实现 `GET /api/v1/apps/{app_key}/users/{user_id}/permissions` 和 Bearer app 凭据认证 | 新需求继续复用该查询入口，并通过 `catalog_version` 表达目录配置版本 |
 | `src/easyauth/grants/services.py`、`src/easyauth/grants/query.py` | 已实现授权创建、变更、撤销、过期、权限解析和版本语义 | 新需求只增加人工运营入口、状态可视化和失败恢复流程 |
 | `src/easyauth/accounts/services.py` | 已实现 Authentik 用户同步后对非 active 用户撤权 | 新需求只展示同步健康和撤权结果，不配置 Authentik Source |
-| `src/easyauth/portal/forms.py`、`src/easyauth/portal/views.py`、`src/easyauth/portal/templates/portal/home.html` | 已有员工访问申请表单和申请状态列表 | 新需求扩展为“我的权限、申请、变更、撤销、即将过期”，不替代 Authentik Application Dashboard |
+| `src/easyauth/portal/api.py`、`src/easyauth/portal/views.py`、`frontend/src/pages/portal/` | 员工门户已迁移为 React SPA，提供“我的权限、申请、变更、撤销、即将过期” | 继续在该门户内演进，不替代 Authentik Application Dashboard |
 | 现有 `Permission.key` | 当前是扁平业务权限 key，适合下游应用消费 | 新需求新增 App manifest、scope、权限分组和授权组作为配置层；权限查询响应按授权快照返回有效 permission |
 
 ## 明确不做

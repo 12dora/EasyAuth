@@ -2,7 +2,7 @@
 
 ## 状态
 
-设计稿，等待实现拆分。
+已实现。`MANAGED_USERS` 管理范围授权已落地（`src/easyauth/grants/managed_users.py`、`applications/managed_scope_policy.py`、`admin_console/managed_scope_policy_api.py` 与 `managed_users_preview_api.py`，上游经 `AuthentikDirectoryClient.get_managed_users()` 解析）。约束口径以 [ADR-002：`MANAGED_USERS` 管理范围契约](../decisions/ADR-002-MANAGED_USERS管理范围契约.md) 为准，本文保留为设计背景与推导记录。
 
 ## 日期
 

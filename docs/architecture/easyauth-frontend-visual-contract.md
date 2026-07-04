@@ -164,9 +164,4 @@ rg -n 'tanstack-table|table-scroll|permission-table|matrix-table|DataTable|Crede
 
 扫描说明：旧视觉扫描和旧表格扫描的剩余命中只允许出现在 `frontend/src/components/tableArchitecture.test.ts` 的禁止规则文本中；产品代码不得命中。
 
-本轮构建生成的 Vite 入口资源为：
-
-- `easyauth/frontend/assets/main-Cu5N2CWW.css`
-- `easyauth/frontend/assets/main-wfsOZ_xe.js`
-
-Django 真实页面响应验证记录见 `docs/audits/visual-alignment/2026-07-02/README.md`。
+Vite 入口资源名带内容哈希, 每次构建都会变化, 以 `src/easyauth/static/easyauth/frontend/.vite/manifest.json` 为准, 不在本契约中固定具体文件名。
