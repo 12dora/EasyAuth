@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Final
 from django.db import models
 from django.utils.dateparse import parse_datetime
 
+from easyauth.api.pagination import total_pages
 from easyauth.grants.models import GRANT_STATUS_REVOKED
 
 if TYPE_CHECKING:
@@ -86,13 +87,12 @@ def paginate_queryset[T: models.Model](queryset: QuerySet[T], query: QueryDict) 
     total_items = queryset.count()
     start = (page - 1) * page_size
     stop = start + page_size
-    total_pages = _total_pages(total_items=total_items, page_size=page_size)
     return Page(
         items=tuple(queryset[start:stop]),
         page=page,
         page_size=page_size,
         total_items=total_items,
-        total_pages=total_pages,
+        total_pages=total_pages(total_items=total_items, page_size=page_size),
     )
 
 
@@ -188,9 +188,3 @@ def _boolean_or_none(value: str | None) -> bool | None:
             return None
         case _:
             return None
-
-
-def _total_pages(*, total_items: int, page_size: int) -> int:
-    if total_items == 0:
-        return 0
-    return ((total_items - 1) // page_size) + 1

@@ -14,7 +14,6 @@ from easyauth.admin_console.api_responses import (
 from easyauth.admin_console.operation_filters import paginate_queryset
 from easyauth.admin_console.permission_template_api_data import (
     template_version_item,
-    template_version_pagination_item,
 )
 from easyauth.admin_console.permission_template_handlers import (
     TemplateHandlerError,
@@ -23,6 +22,7 @@ from easyauth.admin_console.permission_template_handlers import (
 )
 from easyauth.admin_console.request_guards import require_console_actor, require_post
 from easyauth.api.errors import ErrorCode
+from easyauth.api.pagination import pagination_item
 from easyauth.applications.models import App, PermissionTemplateVersion
 from easyauth.applications.ownership import ConsoleActor, can_manage_app, can_view_app
 from easyauth.applications.permission_templates import export_manifest
@@ -91,7 +91,7 @@ def permission_template_versions_api(request: HttpRequest, app_key: str) -> Json
             "latest_version": latest.version if latest is not None else None,
             **paginated_list_payload(
                 items=items,
-                pagination=template_version_pagination_item(page),
+                pagination=pagination_item(page),
             ),
         },
     )

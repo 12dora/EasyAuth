@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from easyauth.api.errors import JsonValue
+from easyauth.api.pagination import total_pages
 
 if TYPE_CHECKING:
     from django.http import QueryDict
@@ -60,7 +61,7 @@ def build_page(
         page=request.page,
         page_size=request.page_size,
         total_items=total_items,
-        total_pages=_total_pages(total_items=total_items, page_size=request.page_size),
+        total_pages=total_pages(total_items=total_items, page_size=request.page_size),
     )
 
 
@@ -89,9 +90,3 @@ def _integer_or_none(value: str | None) -> int | None:
         return int(value)
     except ValueError:
         return None
-
-
-def _total_pages(*, total_items: int, page_size: int) -> int:
-    if total_items == 0:
-        return 0
-    return ((total_items - 1) // page_size) + 1

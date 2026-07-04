@@ -17,7 +17,7 @@ if TYPE_CHECKING:
 
     from easyauth.accounts.models import UserMirror
     from easyauth.applications.models import App, AuthorizationGroup
-    from easyauth.grants.services import ScopedDirectGrantInput
+    from easyauth.grants.inputs import ScopedDirectGrantInput
 type GrantType = Literal["permanent", "timed"]
 
 

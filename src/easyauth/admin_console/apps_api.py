@@ -15,10 +15,12 @@ from easyauth.admin_console.api_responses import (
 from easyauth.admin_console.api_responses import (
     json_response as _json_response,
 )
+from easyauth.admin_console.api_responses import method_not_allowed_response
 from easyauth.admin_console.operation_filters import Page, paginate_queryset
 from easyauth.admin_console.permission_template_api_data import template_version_item
 from easyauth.admin_console.request_guards import require_console_actor
 from easyauth.api.errors import ErrorCode, JsonValue
+from easyauth.api.pagination import pagination_item
 from easyauth.applications.configuration import (
     ConfigurationIssue,
     ConfigurationReadiness,
@@ -129,7 +131,7 @@ def console_apps(request: HttpRequest) -> JsonResponse:
     if request.method == "POST":
         return _create_app(request)
     if request.method != "GET":
-        return _method_not_allowed()
+        return method_not_allowed_response()
 
     match require_console_actor(request):
         case ConsoleActor() as actor:
@@ -147,7 +149,7 @@ def console_app_detail(request: HttpRequest, app_key: str) -> JsonResponse | Htt
     if request.method == "DELETE":
         return _delete_app(request, app_key)
     if request.method != "GET":
-        return _method_not_allowed()
+        return method_not_allowed_response()
 
     match require_console_actor(request):
         case ConsoleActor() as actor:
@@ -507,14 +509,6 @@ def _issue_count(readiness: ConfigurationReadiness, severity: str) -> int:
     return sum(1 for issue in readiness.issues if issue.severity == severity)
 
 
-def _method_not_allowed() -> JsonResponse:
-    return _error_response(
-        ErrorCode.VALIDATION_ERROR,
-        "不支持的请求方法。",
-        status=HTTPStatus.METHOD_NOT_ALLOWED,
-    )
-
-
 def _payload_error_response(message: str, error: ValidationError) -> JsonResponse:
     return _error_response(
         ErrorCode.VALIDATION_ERROR,
@@ -531,14 +525,5 @@ def _items_response(
     result: list[JsonValue] = []
     result.extend(items)
     return _json_response(
-        paginated_list_payload(items=result, pagination=_pagination_item(page)),
+        paginated_list_payload(items=result, pagination=pagination_item(page)),
     )
-
-
-def _pagination_item(page: Page[App]) -> dict[str, JsonValue]:
-    return {
-        "page": page.page,
-        "page_size": page.page_size,
-        "total_items": page.total_items,
-        "total_pages": page.total_pages,
-    }

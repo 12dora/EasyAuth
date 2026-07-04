@@ -34,6 +34,7 @@ from easyauth.admin_console.operations_payloads import (
 )
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue
+from easyauth.api.pagination import pagination_item
 from easyauth.applications.dependency_health import (
     DependencyHealthItem,
     DependencyHealthService,
@@ -275,7 +276,7 @@ def _access_request_page_response(page: Page[AccessRequest]) -> JsonResponse:
     result: list[JsonValue] = []
     result.extend(_access_request_item(access_request) for access_request in page.items)
     return _json_response(
-        paginated_list_payload(items=result, pagination=_pagination_item(page)),
+        paginated_list_payload(items=result, pagination=pagination_item(page)),
     )
 
 
@@ -283,14 +284,5 @@ def _access_grant_page_response(page: Page[AccessGrant]) -> JsonResponse:
     result: list[JsonValue] = []
     result.extend(_access_grant_item(access_grant) for access_grant in page.items)
     return _json_response(
-        paginated_list_payload(items=result, pagination=_pagination_item(page)),
+        paginated_list_payload(items=result, pagination=pagination_item(page)),
     )
-
-
-def _pagination_item(page: Page[AccessRequest] | Page[AccessGrant]) -> dict[str, JsonValue]:
-    return {
-        "page": page.page,
-        "page_size": page.page_size,
-        "total_items": page.total_items,
-        "total_pages": page.total_pages,
-    }

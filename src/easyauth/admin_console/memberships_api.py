@@ -14,6 +14,7 @@ from easyauth.admin_console.api_responses import (
 from easyauth.admin_console.api_responses import (
     json_response as _json_response,
 )
+from easyauth.admin_console.api_responses import method_not_allowed_response
 from easyauth.admin_console.request_guards import require_console_actor
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import App, AppMembership
@@ -43,7 +44,7 @@ def console_app_memberships(request: HttpRequest, app_key: str) -> JsonResponse:
     if request.method == "POST":
         return _create_membership(request, app_key)
     if request.method != "GET":
-        return _method_not_allowed()
+        return method_not_allowed_response()
 
     match require_console_actor(request):
         case ConsoleActor() as actor:
@@ -67,7 +68,7 @@ def console_app_membership_detail(
     membership_id: int,
 ) -> JsonResponse:
     if request.method != "PATCH":
-        return _method_not_allowed()
+        return method_not_allowed_response()
     return _update_membership(request, app_key, membership_id)
 
 
@@ -232,14 +233,6 @@ def _record_membership_event(
                 "is_active": membership.is_active,
             },
         ),
-    )
-
-
-def _method_not_allowed() -> JsonResponse:
-    return _error_response(
-        ErrorCode.VALIDATION_ERROR,
-        "不支持的请求方法。",
-        status=HTTPStatus.METHOD_NOT_ALLOWED,
     )
 
 

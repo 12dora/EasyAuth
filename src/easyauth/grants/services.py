@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Literal, final
 from django.db import transaction
 
 from easyauth.grants.expiration import GrantExpirationInput, expire_current_grant
+from easyauth.grants.inputs import ScopedDirectGrantInput
 from easyauth.grants.lifecycle import (
     change_current_grant,
     create_current_grant,
@@ -19,7 +20,7 @@ if TYPE_CHECKING:
     from datetime import datetime
 
     from easyauth.accounts.models import UserMirror
-    from easyauth.applications.models import App, AuthorizationGroup, Permission
+    from easyauth.applications.models import App, AuthorizationGroup
 
 type GrantStatus = Literal["active", "revoked", "expired"]
 type GrantType = Literal["permanent", "timed"]
@@ -30,12 +31,6 @@ __all__ = [
     "GrantService",
     "ScopedDirectGrantInput",
 ]
-
-
-@dataclass(frozen=True, slots=True)
-class ScopedDirectGrantInput:
-    permission: Permission
-    scope_key: str
 
 
 @dataclass(frozen=True, slots=True)

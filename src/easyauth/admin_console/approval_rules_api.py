@@ -13,6 +13,7 @@ from easyauth.admin_console.api_responses import (
 from easyauth.admin_console.api_responses import (
     json_response as _json_response,
 )
+from easyauth.admin_console.api_responses import method_not_allowed_response
 from easyauth.admin_console.approval_rule_handlers import (
     ApprovalRulePatchError,
     patch_approval_rule,
@@ -65,7 +66,7 @@ def console_approval_rules(request: HttpRequest, app_key: str) -> JsonResponse:
                 return _create_rule(request, app, actor)
             case JsonResponse() as response:
                 return response
-    return _method_not_allowed_response()
+    return method_not_allowed_response()
 
 
 def console_approval_rule_detail(
@@ -74,7 +75,7 @@ def console_approval_rule_detail(
     approval_rule_id: int,
 ) -> JsonResponse:
     if request.method != "PATCH":
-        return _method_not_allowed_response()
+        return method_not_allowed_response()
 
     match _write_context(request, app_key):
         case WriteContext(app=app, actor=actor):
@@ -200,12 +201,4 @@ def _validation_error_response(
         message,
         details,
         status=HTTPStatus.BAD_REQUEST,
-    )
-
-
-def _method_not_allowed_response() -> JsonResponse:
-    return _error_response(
-        ErrorCode.VALIDATION_ERROR,
-        "不支持的请求方法。",
-        status=HTTPStatus.METHOD_NOT_ALLOWED,
     )

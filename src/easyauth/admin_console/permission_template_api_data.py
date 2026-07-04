@@ -9,7 +9,6 @@ from django.core.signing import BadSignature, TimestampSigner
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 if TYPE_CHECKING:
-    from easyauth.admin_console.operation_filters import Page
     from easyauth.api.errors import JsonValue
     from easyauth.applications.models import PermissionTemplateVersion
     from easyauth.applications.permission_templates import TemplateAction
@@ -87,17 +86,6 @@ def template_version_item(template_version: PermissionTemplateVersion) -> dict[s
         "status": template_version.status,
         "imported_by": template_version.imported_by,
         "action_count": _template_action_count(template_version),
-    }
-
-
-def template_version_pagination_item(
-    page: Page[PermissionTemplateVersion],
-) -> dict[str, JsonValue]:
-    return {
-        "page": page.page,
-        "page_size": page.page_size,
-        "total_items": page.total_items,
-        "total_pages": page.total_pages,
     }
 
 

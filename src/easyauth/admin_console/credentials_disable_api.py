@@ -12,6 +12,7 @@ from easyauth.admin_console.api_responses import (
 from easyauth.admin_console.api_responses import (
     json_response as _json_response,
 )
+from easyauth.admin_console.api_responses import method_not_allowed_response
 from easyauth.admin_console.credentials import (
     CredentialActor,
     CredentialOperationError,
@@ -49,7 +50,7 @@ def console_credential_disable(
     credential_id: int,
 ) -> JsonResponse:
     if request.method != "POST":
-        return _method_not_allowed_response()
+        return method_not_allowed_response()
 
     match credential_write_context(request, app_key):
         case (App() as app, ConsoleActor() as actor):
@@ -112,14 +113,6 @@ def _disable_payload(request: HttpRequest) -> CredentialDisablePayload | JsonRes
             {"errors": str(error)},
             status=HTTPStatus.BAD_REQUEST,
         )
-
-
-def _method_not_allowed_response() -> JsonResponse:
-    return _error_response(
-        ErrorCode.VALIDATION_ERROR,
-        "不支持的请求方法。",
-        status=HTTPStatus.METHOD_NOT_ALLOWED,
-    )
 
 
 def _not_found_response() -> JsonResponse:

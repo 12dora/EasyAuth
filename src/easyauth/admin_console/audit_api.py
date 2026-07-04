@@ -14,6 +14,7 @@ from easyauth.admin_console.api_responses import (
 from easyauth.admin_console.operation_filters import Page, filter_audit_logs, paginate_queryset
 from easyauth.admin_console.request_guards import require_console_actor
 from easyauth.api.errors import ErrorCode, JsonValue
+from easyauth.api.pagination import pagination_item
 from easyauth.applications.models import App
 from easyauth.applications.ownership import ConsoleActor, can_manage_app
 from easyauth.audit.models import AuditLog
@@ -68,13 +69,4 @@ def _audit_queryset_for_actor(request: HttpRequest, actor: ConsoleActor) -> Audi
 def _page_response(page: Page[AuditLog]) -> JsonResponse:
     result: list[JsonValue] = []
     result.extend(_audit_item(audit_log) for audit_log in page.items)
-    return _json_response({"items": result, "pagination": _pagination_item(page)})
-
-
-def _pagination_item(page: Page[AuditLog]) -> dict[str, JsonValue]:
-    return {
-        "page": page.page,
-        "page_size": page.page_size,
-        "total_items": page.total_items,
-        "total_pages": page.total_pages,
-    }
+    return _json_response({"items": result, "pagination": pagination_item(page)})

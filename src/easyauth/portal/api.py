@@ -13,6 +13,7 @@ from easyauth.access_requests.services import (
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.api.errors import ErrorCode, JsonValue
+from easyauth.api.pagination import pagination_item
 from easyauth.api.responses import error_response as _error_response
 from easyauth.api.responses import json_response as _json_response
 from easyauth.grants.managed_users import ManagedUsersResolutionUnavailableError
@@ -219,17 +220,8 @@ def _json_strings(values: tuple[str, ...]) -> list[JsonValue]:
 def _page_response(page: PortalPage) -> JsonResponse:
     items = _json_objects(page.items)
     return _json_response(
-        {"items": items, "data": items, "pagination": _pagination_item(page)},
+        {"items": items, "data": items, "pagination": pagination_item(page)},
     )
-
-
-def _pagination_item(page: PortalPage) -> dict[str, JsonValue]:
-    return {
-        "page": page.page,
-        "page_size": page.page_size,
-        "total_items": page.total_items,
-        "total_pages": page.total_pages,
-    }
 
 
 def _json_objects(items: tuple[dict[str, JsonValue], ...]) -> list[JsonValue]:
