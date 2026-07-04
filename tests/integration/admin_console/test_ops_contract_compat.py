@@ -206,8 +206,3 @@ def _json_object(value: JsonValue) -> dict[str, JsonValue]:
 def _json_int(value: JsonValue) -> int:
     assert isinstance(value, int), value
     return value
-
-
-def _json_string(value: JsonValue) -> str:
-    assert isinstance(value, str), value
-    return value

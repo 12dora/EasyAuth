@@ -34,7 +34,7 @@ REGISTERED_PUBLIC_KEY_BYTES: Final = b"\x05\x06\x07\x08"
 
 
 @pytest.fixture(autouse=True)
-def _clear_throttle_cache() -> None:
+def _clear_throttle_cache() -> None:  # pyright: ignore[reportUnusedFunction]
     cache.clear()
 
 
