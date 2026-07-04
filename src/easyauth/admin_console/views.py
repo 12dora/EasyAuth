@@ -9,7 +9,6 @@ from django.http import (
     HttpResponseNotAllowed,
     HttpResponseRedirect,
 )
-from django.shortcuts import redirect
 
 from easyauth.accounts.logout_state import browser_is_marked_logged_out, logged_out_redirect
 from easyauth.admin_console.identity import actor_from_request
@@ -64,7 +63,3 @@ def _login_redirect(request: HttpRequest) -> HttpResponseRedirect:
     if browser_is_marked_logged_out(request):
         return logged_out_redirect(request)
     return HttpResponseRedirect(f"/auth/login/?next={quote(request.get_full_path())}")
-
-
-def _forbidden_redirect() -> HttpResponseRedirect:
-    return redirect("/errors/forbidden/")

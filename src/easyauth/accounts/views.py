@@ -174,11 +174,6 @@ def _netloc_with_current_port(hostname: str, current: SplitResult) -> str:
     return f"{hostname}:{current.port}"
 
 
-def _absolute_url_on_same_origin(origin_url: str, path: str) -> str:
-    parsed = urlsplit(origin_url)
-    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
-
-
 def _authentik_logout_url(*, id_token_hint: str) -> str:
     configured_url = _optional_string_setting(SETTING_AUTHENTIK_LOGOUT_URL)
     if configured_url != "":

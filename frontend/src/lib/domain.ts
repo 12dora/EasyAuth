@@ -169,16 +169,6 @@ export interface PermissionTreePayload {
   version?: string;
 }
 
-/** 历史兼容 payload：后续页面应迁移到 AuthorizationGroupItem + scope grants。 */
-export interface MatrixPayload {
-  app_key?: string;
-  roles?: RoleItem[];
-  permissions?: PermissionItem[];
-  assignments?: Array<{ role_key: string; permission_key: string }>;
-  cells?: Array<{ role_id: number; permission_id: number; enabled: boolean }>;
-  version?: string;
-}
-
 export interface ApprovalRuleItem {
   id: number;
   target_type?: string;
