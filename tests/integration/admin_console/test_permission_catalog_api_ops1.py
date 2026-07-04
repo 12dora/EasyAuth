@@ -95,13 +95,15 @@ def test_ops1_developer_reads_role_permission_matrix_for_member_app() -> None:
     # When: developer 读取矩阵。
     response = client.get(_api_url(app.app_key, "role-permission-matrix"))
 
-    # Then: API 返回角色、权限、已勾选关系和版本号。
+    # Then: API 返回角色、权限、已勾选的 key-based 关系和版本号。
     body = response.content.decode()
     assert response.status_code == HTTPStatus.OK
     assert _json_string(body, "version") != ""
     assert "operator" in body
     assert "pipeline.read" in body
-    assert '"enabled": true' in body
+    assert '"assignments": [' in body
+    assert '"role_key": "operator"' in body
+    assert '"permission_key": "pipeline.read"' in body
 
 
 def test_ops1_superuser_reads_authorization_group_grant_managed_scope_policy() -> None:
@@ -240,9 +242,9 @@ def test_ops1_matrix_post_saves_assignment_and_rejects_stale_version() -> None:
     accepted = client.post(
         _api_url(app.app_key, "role-permission-matrix"),
         data=_matrix_payload(
-            version=initial_version,
-            role_id=role.id,
-            permission_id=permission.id,
+            base_version=initial_version,
+            role_key=role.key,
+            permission_key=permission.key,
             enabled=True,
         ),
         content_type="application/json",
@@ -250,9 +252,9 @@ def test_ops1_matrix_post_saves_assignment_and_rejects_stale_version() -> None:
     stale = client.post(
         _api_url(app.app_key, "role-permission-matrix"),
         data=_matrix_payload(
-            version=initial_version,
-            role_id=role.id,
-            permission_id=permission.id,
+            base_version=initial_version,
+            role_key=role.key,
+            permission_key=permission.key,
             enabled=False,
         ),
         content_type="application/json",
@@ -284,9 +286,9 @@ def test_ops1_developer_cannot_create_role_permission_with_matrix_post() -> None
     response = client.post(
         _api_url(app.app_key, "role-permission-matrix"),
         data=_matrix_payload(
-            version=initial_version,
-            role_id=role.id,
-            permission_id=permission.id,
+            base_version=initial_version,
+            role_key=role.key,
+            permission_key=permission.key,
             enabled=True,
         ),
         content_type="application/json",
@@ -316,9 +318,9 @@ def test_ops1_developer_cannot_delete_role_permission_with_matrix_patch() -> Non
     response = client.patch(
         _api_url(app.app_key, "role-permission-matrix"),
         data=_matrix_payload(
-            version=initial_version,
-            role_id=role.id,
-            permission_id=permission.id,
+            base_version=initial_version,
+            role_key=role.key,
+            permission_key=permission.key,
             enabled=False,
         ),
         content_type="application/json",
@@ -350,10 +352,10 @@ def test_ops1_matrix_batch_save_rejects_invalid_assignment_without_partial_write
         _api_url(app.app_key, "role-permission-matrix"),
         data=dumps(
             {
-                "version": initial_version,
-                "assignments": [
-                    {"role_id": role.id, "permission_id": permission.id, "enabled": True},
-                    {"role_id": role.id, "permission_id": other_permission.id, "enabled": True},
+                "base_version": initial_version,
+                "add": [
+                    {"role_key": role.key, "permission_key": permission.key},
+                    {"role_key": role.key, "permission_key": other_permission.key},
                 ],
             },
         ),
@@ -376,18 +378,13 @@ def _api_url(app_key: str, endpoint: str) -> str:
     return f"/console/api/v1/apps/{app_key}/{endpoint}"
 
 
-def _matrix_payload(*, version: str, role_id: int, permission_id: int, enabled: bool) -> str:
-    enabled_value = "true" if enabled else "false"
-    return (
-        '{"version":"'
-        f"{version}"
-        '","assignments":[{"role_id":'
-        f"{role_id}"
-        ',"permission_id":'
-        f"{permission_id}"
-        ',"enabled":'
-        f"{enabled_value}"
-        "}]}"
+def _matrix_payload(*, base_version: str, role_key: str, permission_key: str, enabled: bool) -> str:
+    diff_key = "add" if enabled else "remove"
+    return dumps(
+        {
+            "base_version": base_version,
+            diff_key: [{"role_key": role_key, "permission_key": permission_key}],
+        },
     )
 
 

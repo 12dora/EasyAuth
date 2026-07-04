@@ -77,7 +77,8 @@ def test_ops1_console_app_detail_shows_readiness_matrix_and_approval_prompt() ->
     assert "PIPELINE_GROUP" in body
     assert "operator" in body
     assert "ALLOW_PIPELINE_CREATE" in body
-    assert '"enabled": true' in body
+    assert '"assignments": [' in body
+    assert '"role_key": "operator"' in body
 
 
 def test_ops1_console_owner_can_read_unowned_app_detail() -> None:
@@ -194,9 +195,9 @@ def test_ops1_console_matrix_save_writes_role_permission_and_audit_without_grant
     response = client.post(
         _api_url(app.app_key, "role-permission-matrix"),
         data=_matrix_payload(
-            version=version,
-            role_id=role.id,
-            permission_id=permission.id,
+            base_version=version,
+            role_key=role.key,
+            permission_key=permission.key,
             enabled=True,
         ),
         content_type="application/json",
@@ -211,42 +212,26 @@ def test_ops1_console_matrix_save_writes_role_permission_and_audit_without_grant
     assert AccessGrant.objects.count() == 0
 
 
-@pytest.mark.parametrize("invalid_field", ["role_id", "permission_id"])
+@pytest.mark.parametrize("invalid_field", ["role_key", "permission_key"])
 def test_ops1_console_invalid_matrix_post_returns_controlled_bad_request(
     invalid_field: str,
 ) -> None:
-    # Given: owner 管理一个 App, 但 POST 中的矩阵 ID 被篡改为非数字。
+    # Given: owner 管理一个 App, 但 POST 中的矩阵 key 被置空。
     client = _logged_in_client("owner-ops1-invalid-matrix")
     app = App.objects.create(app_key="ops1-console-invalid-matrix", name="Invalid Matrix")
     _ = AppMembership.objects.create(app=app, user_id="owner-ops1-invalid-matrix", role="owner")
     role = Role.objects.create(app=app, key="auditor", name="Auditor")
     permission = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
-    form_data = {
-        "action": "set_role_permission",
-        "role_id": str(role.id),
-        "permission_id": str(permission.id),
-        "enabled": "on",
-    }
-    form_data[invalid_field] = "not-a-number"
+    assignment = {"role_key": role.key, "permission_key": permission.key}
+    assignment[invalid_field] = ""
 
     initial = client.get(_api_url(app.app_key, "role-permission-matrix"))
     version = _json_string(initial, "version")
 
-    # When: owner 提交非法矩阵 JSON。
+    # When: owner 提交带空 key 的非法矩阵 JSON。
     response = client.post(
         _api_url(app.app_key, "role-permission-matrix"),
-        data=dumps(
-            {
-                "version": version,
-                "assignments": [
-                    {
-                        "role_id": form_data["role_id"],
-                        "permission_id": form_data["permission_id"],
-                        "enabled": True,
-                    },
-                ],
-            },
-        ),
+        data=dumps({"base_version": version, "add": [assignment]}),
         content_type="application/json",
     )
 
@@ -380,13 +365,12 @@ def _api_url(app_key: str, endpoint: str) -> str:
     return f"/console/api/v1/apps/{app_key}/{endpoint}"
 
 
-def _matrix_payload(*, version: str, role_id: int, permission_id: int, enabled: bool) -> str:
+def _matrix_payload(*, base_version: str, role_key: str, permission_key: str, enabled: bool) -> str:
+    diff_key = "add" if enabled else "remove"
     return dumps(
         {
-            "version": version,
-            "assignments": [
-                {"role_id": role_id, "permission_id": permission_id, "enabled": enabled},
-            ],
+            "base_version": base_version,
+            diff_key: [{"role_key": role_key, "permission_key": permission_key}],
         },
     )
 

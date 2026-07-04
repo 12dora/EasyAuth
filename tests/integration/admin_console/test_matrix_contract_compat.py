@@ -26,7 +26,7 @@ pytestmark = pytest.mark.django_db
 LOGIN_VALUE: Final = "console-matrix-contract"
 
 
-def test_matrix_get_keeps_legacy_fields_and_adds_tree_assignments_contract() -> None:
+def test_matrix_get_returns_tree_and_key_based_assignments_contract() -> None:
     # Given: owner 管理一个带权限分组和 RolePermission 的 App。
     client = _logged_in_user("matrix-contract-read")
     app = _member_app("matrix-contract-read", "matrix-contract-read")
@@ -43,13 +43,11 @@ def test_matrix_get_keeps_legacy_fields_and_adds_tree_assignments_contract() -> 
     # When: owner 读取矩阵。
     response = client.get(_api_url(app.app_key))
 
-    # Then: 响应保留旧字段, 并补齐 permission_tree 和 key-based assignments。
+    # Then: 响应以 permission_tree 和 key-based assignments 表达矩阵。
     body = response.content.decode()
     assert response.status_code == HTTPStatus.OK
     assert _json_string(body, "version") != ""
     assert '"permissions": [' in body
-    assert '"cells": [' in body
-    assert '"enabled": true' in body
     assert '"permission_tree": [' in body
     assert f'"key": "{group.key}"' in body
     assert '"assignments": [' in body
@@ -108,14 +106,10 @@ def test_matrix_patch_accepts_key_based_diff_and_rejects_stale_base_version() ->
     assert "CONFLICT" in stale.content.decode()
 
 
-@pytest.mark.parametrize("payload_mode", ["assignments", "add"])
-def test_matrix_patch_rejects_deprecated_permission_even_when_active(
-    payload_mode: str,
-) -> None:
+def test_matrix_patch_rejects_deprecated_permission_even_when_active() -> None:
     # Given: owner 面对一个历史异常状态的 active deprecated Permission。
-    client = _logged_in_user(f"matrix-contract-deprecated-{payload_mode}")
-    app_key = f"matrix-contract-deprecated-{payload_mode}"
-    app = _member_app(app_key, app_key)
+    client = _logged_in_user("matrix-contract-deprecated")
+    app = _member_app("matrix-contract-deprecated", "matrix-contract-deprecated")
     role = Role.objects.create(app=app, key="sales_manager", name="销售经理")
     permission = Permission.objects.create(
         app=app,
@@ -128,11 +122,14 @@ def test_matrix_patch_rejects_deprecated_permission_even_when_active(
     initial = client.get(_api_url(app.app_key))
     initial_version = _json_string(initial.content.decode(), "version")
 
-    # When: owner 尝试通过 id 或 key matrix diff 重新加入已废弃权限。
+    # When: owner 尝试通过 key matrix diff 重新加入已废弃权限。
     response = client.patch(
         _api_url(app.app_key),
         data=dumps(
-            _deprecated_permission_payload(payload_mode, initial_version, role, permission),
+            {
+                "base_version": initial_version,
+                "add": [{"role_key": role.key, "permission_key": permission.key}],
+            },
         ),
         content_type="application/json",
     )
@@ -159,29 +156,6 @@ def _json_string(body: str, key: str) -> str:
     if match is None:
         raise AssertionError(body)
     return match.group(1)
-
-
-def _deprecated_permission_payload(
-    payload_mode: str,
-    initial_version: str,
-    role: Role,
-    permission: Permission,
-) -> dict[str, str | list[dict[str, str | int | bool]]]:
-    match payload_mode:
-        case "assignments":
-            return {
-                "base_version": initial_version,
-                "assignments": [
-                    {"role_id": role.id, "permission_id": permission.id, "enabled": True},
-                ],
-            }
-        case "add":
-            return {
-                "base_version": initial_version,
-                "add": [{"role_key": role.key, "permission_key": permission.key}],
-            }
-        case unreachable:
-            raise AssertionError(unreachable)
 
 
 def _logged_in_user(username: str) -> Client:

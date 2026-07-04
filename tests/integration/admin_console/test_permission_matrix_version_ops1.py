@@ -75,10 +75,9 @@ def test_ops1_matrix_save_rechecks_catalog_version_inside_transaction(
     response = client.post(
         _api_url(app.app_key, "role-permission-matrix"),
         data=_matrix_payload(
-            version=STALE_VERSION,
-            role_id=role.id,
-            permission_id=permission.id,
-            enabled=True,
+            base_version=STALE_VERSION,
+            role_key=role.key,
+            permission_key=permission.key,
         ),
         content_type="application/json",
     )
@@ -153,13 +152,11 @@ def _api_url(app_key: str, endpoint: str) -> str:
     return f"/console/api/v1/apps/{app_key}/{endpoint}"
 
 
-def _matrix_payload(*, version: str, role_id: int, permission_id: int, enabled: bool) -> str:
+def _matrix_payload(*, base_version: str, role_key: str, permission_key: str) -> str:
     return dumps(
         {
-            "version": version,
-            "assignments": [
-                {"role_id": role_id, "permission_id": permission_id, "enabled": enabled},
-            ],
+            "base_version": base_version,
+            "add": [{"role_key": role_key, "permission_key": permission_key}],
         },
     )
 

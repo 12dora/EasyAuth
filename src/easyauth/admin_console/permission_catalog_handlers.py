@@ -11,7 +11,6 @@ from easyauth.admin_console.configuration import (
 )
 from easyauth.admin_console.permission_catalog_data import (
     catalog_version,
-    matrix_objects,
     matrix_objects_by_key,
 )
 from easyauth.applications.models import App, Permission, Role
@@ -68,16 +67,6 @@ def save_permission_matrix(
 
 def _matrix_mutations(app: App, payload: MatrixSavePayload) -> list[tuple[Role, Permission, bool]]:
     mutations: list[tuple[Role, Permission, bool]] = []
-    for assignment in payload.assignments:
-        if objects := matrix_objects(
-            app,
-            role_id=assignment.role_id,
-            permission_id=assignment.permission_id,
-        ):
-            mutations.append((*objects, assignment.enabled))
-            continue
-        message = MATRIX_OBJECTS_ERROR
-        raise MatrixSaveValidationError(message)
     for assignment in payload.add:
         if objects := matrix_objects_by_key(
             app,
@@ -104,7 +93,5 @@ def _matrix_mutations(app: App, payload: MatrixSavePayload) -> list[tuple[Role, 
 def _matrix_base_version(payload: MatrixSavePayload) -> str:
     if payload.base_version is not None:
         return payload.base_version
-    if payload.version is not None:
-        return payload.version
     message = MATRIX_PAYLOAD_ERROR
     raise MatrixSaveValidationError(message)

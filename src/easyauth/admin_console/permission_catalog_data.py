@@ -111,36 +111,9 @@ def matrix_payload(app: App) -> dict[str, JsonValue]:
             for permission in permissions
             if (role.id, permission.id) in enabled_pairs
         ],
-        "cells": [
-            {
-                "role_id": role.id,
-                "permission_id": permission.id,
-                "enabled": (role.id, permission.id) in enabled_pairs,
-            }
-            for permission in permissions
-            for role in roles
-        ],
         "catalog_version": app.catalog_version,
         "version": catalog_version(app),
     }
-
-
-def matrix_objects(
-    app: App,
-    *,
-    role_id: int,
-    permission_id: int,
-) -> tuple[Role, Permission] | None:
-    role = Role.objects.filter(app=app, id=role_id, is_active=True).first()
-    permission = Permission.objects.filter(
-        app=app,
-        id=permission_id,
-        is_active=True,
-        deprecated_at__isnull=True,
-    ).first()
-    if role is None or permission is None:
-        return None
-    return role, permission
 
 
 def matrix_objects_by_key(
