@@ -295,7 +295,9 @@ def test_ops4_apply_approved_change_allows_retargeted_permission_approval_rule()
     rule.save(update_fields=["permission"])
 
     # When: 审批回调应用该 direct Permission 目标。
-    applied_request = AccessRequestService.apply_approved_access_request(_application(access_request))
+    applied_request = AccessRequestService.apply_approved_access_request(
+        _application(access_request)
+    )
 
     # Then: direct Permission 不再因审批规则变更被落库前置拦截。
     grant.refresh_from_db()

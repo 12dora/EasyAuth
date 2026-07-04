@@ -66,11 +66,23 @@ from easyauth.admin_console.scopes_api import console_scope_detail, console_scop
 from easyauth.admin_console.settings_api import console_integration_settings
 from easyauth.admin_console.two_factor_api import (
     passkey_delete as two_factor_passkey_delete,
+)
+from easyauth.admin_console.two_factor_api import (
     passkey_register_begin as two_factor_passkey_register_begin,
+)
+from easyauth.admin_console.two_factor_api import (
     passkey_register_complete as two_factor_passkey_register_complete,
+)
+from easyauth.admin_console.two_factor_api import (
     totp_begin as two_factor_totp_begin,
+)
+from easyauth.admin_console.two_factor_api import (
     totp_confirm as two_factor_totp_confirm,
+)
+from easyauth.admin_console.two_factor_api import (
     totp_disable as two_factor_totp_disable,
+)
+from easyauth.admin_console.two_factor_api import (
     two_factor_status,
 )
 from easyauth.admin_console.users_api import console_user_search

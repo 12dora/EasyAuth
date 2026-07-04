@@ -1,2 +1,0 @@
-[05/Jun/2026 15:02:40] "GET /health/ HTTP/1.1" 200 2
-[05/Jun/2026 15:02:41] "GET /api/v1/apps/s10-manual-app-89fb7f8a/users/s10-manual-user-89fb7f8a/permissions HTTP/1.1" 200 173

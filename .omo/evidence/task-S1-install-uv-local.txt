@@ -1,1 +1,0 @@
-/Users/konata/code/EasyAuth/.venv/bin/python: No module named pip

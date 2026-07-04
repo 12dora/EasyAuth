@@ -46,6 +46,8 @@ testpaths = ["tests"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
+# 自动生成的 Django 迁移不参与风格检查。
+extend-exclude = ["**/migrations/**"]
 
 [tool.ruff.lint]
 select = ["ALL"]
@@ -61,15 +63,18 @@ ignore = [
   "D107",
   "D203",
   "D213",
+  # 项目文档与 docstring 使用中文句号 。 结尾, D400/D415 的英文句点要求为全局误报。
+  "D400",
+  "D415",
   "ISC001",
 ]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**/*.py" = ["S101", "S603"]
 "src/easyauth/config/settings/test.py" = ["F403"]
-# SDK 是独立发布的零依赖包: 面向集成方的异常信息内联可读, 中文 docstring 以中文句号结尾,
+# SDK 是独立发布的零依赖包: 面向集成方的异常信息内联可读,
 # 校验入口接受 Any, 可选框架依赖在函数内导入。
-"sdk/**/*.py" = ["TRY003", "EM101", "EM102", "D400", "D415", "S101", "ANN401", "PLC0415"]
+"sdk/**/*.py" = ["TRY003", "EM101", "EM102", "S101", "ANN401", "PLC0415"]
 "sdk/**/tests/*.py" = ["INP001", "PLR2004", "S106"]
 
 [tool.basedpyright]

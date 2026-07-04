@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-# ruff: noqa: TC002, TC003
 from collections.abc import Sequence
 from typing import ClassVar
 

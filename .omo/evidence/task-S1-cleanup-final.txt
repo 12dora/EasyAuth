@@ -1,6 +1,0 @@
-server_pid=11684
-cleanup_registered=1
-server_ready=1
-health_curl_exit=0
-not_found_curl_exit=0
-port_8765_listening_after_cleanup=0

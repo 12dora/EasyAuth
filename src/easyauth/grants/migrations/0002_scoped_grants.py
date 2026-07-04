@@ -8,7 +8,7 @@ from django.db import migrations, models
 from django.db.migrations.operations.base import Operation
 
 
-def migrate_roles_to_groups(apps, schema_editor) -> None:  # noqa: ANN001, ARG001
+def migrate_roles_to_groups(apps, schema_editor) -> None:
     access_grant_role = apps.get_model("grants", "AccessGrantRole")
     access_grant_group = apps.get_model("grants", "AccessGrantGroup")
     authorization_group = apps.get_model("applications", "AuthorizationGroup")

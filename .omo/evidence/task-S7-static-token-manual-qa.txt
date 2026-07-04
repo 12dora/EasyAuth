@@ -1,27 +1,0 @@
-S7 manual QA
-启动 runserver 127.0.0.1:8767
-RUNSERVER_PID:5728
-
-HTTP channel: curl -i http://127.0.0.1:8767/health/
-  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
-                                 Dload  Upload   Total   Spent    Left  Speed
-  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100     2  100     2    0     0   1451      0 --:--:-- --:--:-- --:--:--  2000
-HTTP/1.1 200 OK
-Date: Fri, 05 Jun 2026 05:30:01 GMT
-Server: WSGIServer/0.2 CPython/3.12.13
-Content-Type: text/plain
-X-Frame-Options: DENY
-Content-Length: 2
-X-Content-Type-Options: nosniff
-Referrer-Policy: same-origin
-Cross-Origin-Opener-Policy: same-origin
-
-ok
-Shell authentication probe
-25 objects imported automatically (use -v 2 for details).
-
-VALID_PASS True
-INVALID_PASS True
-DISABLED_TOKEN_PASS True
-DISABLED_APP_PASS True
-CLEANUP_PORT_8767_CLOSED:True

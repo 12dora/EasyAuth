@@ -1,6 +1,0 @@
-   Building easyauth @ file:///Users/konata/code/EasyAuth
-      Built easyauth @ file:///Users/konata/code/EasyAuth
-Uninstalled 1 package in 0.72ms
-Installed 1 package in 1ms
-......                                                                   [100%]
-6 passed in 0.51s

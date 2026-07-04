@@ -57,7 +57,9 @@ def totp_begin(request: HttpRequest) -> JsonResponse:
     if account is None:
         return _forbidden()
     if account.totp_enabled:
-        return error_response(ErrorCode.CONFLICT, TOTP_ALREADY_ENABLED_MESSAGE, status=HTTPStatus.CONFLICT)
+        return error_response(
+            ErrorCode.CONFLICT, TOTP_ALREADY_ENABLED_MESSAGE, status=HTTPStatus.CONFLICT
+        )
     secret = totp_setup_secret(request) or generate_totp_secret()
     store_totp_setup_secret(request, secret)
     provisioning_uri = totp_provisioning_uri(secret, account.username)
@@ -186,7 +188,9 @@ def _passkey_payload(passkey: LocalAdminPasskey) -> dict[str, JsonValue]:
 
 
 def _forbidden() -> JsonResponse:
-    return error_response(ErrorCode.PERMISSION_DENIED, FORBIDDEN_MESSAGE, status=HTTPStatus.FORBIDDEN)
+    return error_response(
+        ErrorCode.PERMISSION_DENIED, FORBIDDEN_MESSAGE, status=HTTPStatus.FORBIDDEN
+    )
 
 
 def _json_body(request: HttpRequest) -> dict[str, object] | None:

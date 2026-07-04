@@ -1,14 +1,0 @@
-  % Total    % Received % Xferd  Average Speed   Time    Time     Time  Current
-                                 Dload  Upload   Total   Spent    Left  Speed
-  0     0    0     0    0     0      0      0 --:--:-- --:--:-- --:--:--     0100     2  100     2    0     0   1165      0 --:--:-- --:--:-- --:--:--  2000
-HTTP/1.1 200 OK
-Date: Fri, 05 Jun 2026 04:19:52 GMT
-Server: WSGIServer/0.2 CPython/3.12.13
-Content-Type: text/plain
-X-Frame-Options: DENY
-Content-Length: 2
-X-Content-Type-Options: nosniff
-Referrer-Policy: same-origin
-Cross-Origin-Opener-Policy: same-origin
-
-ok

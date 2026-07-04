@@ -240,10 +240,9 @@ def test_ops4_portal_api_hides_inactive_group_and_derived_grants() -> None:
 
 def _requestable_permission(*, app: App, key: str) -> Permission:
     _ = AppScope.objects.get_or_create(app=app, key=DEFAULT_SCOPE_KEY, defaults={"name": "Global"})
-    permission = Permission.objects.create(
+    return Permission.objects.create(
         app=app,
         key=key,
         name=key,
         supported_scopes=[DEFAULT_SCOPE_KEY],
     )
-    return permission
