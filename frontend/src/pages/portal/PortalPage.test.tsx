@@ -1488,7 +1488,7 @@ describe("PortalPage tables", () => {
       const url = String(input);
       if (url === "/portal/api/v1/me/grants") {
         return jsonResponse({
-          items: [
+          data: [
             {
               app_key: "crm",
               app_name: "CRM",
@@ -1530,7 +1530,7 @@ describe("PortalPage tables", () => {
       const url = String(input);
       if (url === "/portal/api/v1/me/access-requests") {
         return jsonResponse({
-          items: [
+          data: [
             {
               id: 9,
               app_key: "crm",

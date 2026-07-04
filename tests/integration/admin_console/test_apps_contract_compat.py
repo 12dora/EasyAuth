@@ -54,7 +54,7 @@ def test_apps_list_includes_documented_contract_fields() -> None:
 
     # Then: 列表项同时保留旧字段并包含文档要求的兼容字段。
     body = _response_json_object(response)
-    items = _json_list(body["items"])
+    items = _json_list(body["data"])
     item = _json_object(items[0])
     assert response.status_code == HTTPStatus.OK
     assert item["app_key"] == app.app_key
@@ -89,7 +89,7 @@ def test_apps_list_supports_documented_filters_and_pagination() -> None:
 
     # Then: API 只返回匹配 App, 且包含文档约定 pagination。
     body = _response_json_object(response)
-    items = _json_list(body["items"])
+    items = _json_list(body["data"])
     assert response.status_code == HTTPStatus.OK
     assert [_json_object(item)["app_key"] for item in items] == [crm.app_key]
     assert body["pagination"] == {

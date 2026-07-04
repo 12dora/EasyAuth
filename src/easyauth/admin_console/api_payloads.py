@@ -9,8 +9,7 @@ if TYPE_CHECKING:
 
 
 def list_payload(items: Sequence[JsonValue]) -> dict[str, JsonValue]:
-    data = list(items)
-    return {"items": data, "data": data}
+    return {"data": list(items)}
 
 
 def paginated_list_payload(
@@ -18,5 +17,4 @@ def paginated_list_payload(
     items: Sequence[JsonValue],
     pagination: dict[str, JsonValue],
 ) -> dict[str, JsonValue]:
-    data = list(items)
-    return {"items": data, "data": data, "pagination": pagination}
+    return {"data": list(items), "pagination": pagination}

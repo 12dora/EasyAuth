@@ -39,12 +39,12 @@ describe("ConsoleAppWorkspace", () => {
       }
       if (url === "/console/api/v1/apps/demo/permission-groups") {
         return jsonResponse({
-          items: [{ id: 10, key: "finance", name: "财务权限", description: "财务域", display_order: 10, is_active: true }],
+          data: [{ id: 10, key: "finance", name: "财务权限", description: "财务域", display_order: 10, is_active: true }],
         });
       }
       if (url === "/console/api/v1/apps/demo/permissions") {
         return jsonResponse({
-          items: [
+          data: [
             {
               id: 20,
               key: "invoice.read",
@@ -59,7 +59,7 @@ describe("ConsoleAppWorkspace", () => {
       }
       if (url === "/console/api/v1/apps/demo/scopes") {
         return jsonResponse({
-          items: [
+          data: [
             { key: "SELF", name: "本人", description: "仅本人数据", is_active: true, display_order: 1 },
             { key: "TEAM", name: "团队", description: "团队数据", is_active: false, display_order: 2 },
           ],
@@ -95,10 +95,10 @@ describe("ConsoleAppWorkspace", () => {
         return jsonResponse({ status: "ready", items: [] });
       }
       if (url === "/console/api/v1/apps/demo/memberships") {
-        return jsonResponse({ items: [] });
+        return jsonResponse({ data: [] });
       }
       if (url === "/console/api/v1/apps/demo/approval-rules") {
-        return jsonResponse({ items: [] });
+        return jsonResponse({ data: [] });
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });
@@ -224,7 +224,7 @@ describe("ConsoleAppWorkspace", () => {
   test("授权组保存 payload 包含 permission 和 scope", async () => {
     const authorizationGroupsPayload = {
       version: "catalog-v1",
-      items: [
+      data: [
         {
           id: 10,
           key: "accountant",
@@ -247,7 +247,7 @@ describe("ConsoleAppWorkspace", () => {
       }
       if (url === "/console/api/v1/apps/demo/permissions") {
         return jsonResponse({
-          items: [
+          data: [
             { id: 20, key: "invoice.read", name: "发票读取", supported_scopes: ["SELF", "TEAM"], risk_level: "standard" },
             { id: 21, key: "invoice.export", name: "发票导出", supported_scopes: ["TEAM"], risk_level: "high" },
           ],
@@ -255,7 +255,7 @@ describe("ConsoleAppWorkspace", () => {
       }
       if (url === "/console/api/v1/apps/demo/scopes") {
         return jsonResponse({
-          items: [
+          data: [
             { key: "SELF", name: "本人", is_active: true, display_order: 1 },
             { key: "TEAM", name: "团队", is_active: true, display_order: 2 },
           ],
@@ -307,7 +307,7 @@ describe("ConsoleAppWorkspace", () => {
         return jsonResponse(appPayload);
       }
       if (url === "/console/api/v1/apps/demo/credentials" && !init?.method) {
-        return jsonResponse({ items: [] });
+        return jsonResponse({ data: [] });
       }
       if (url === "/console/api/v1/apps/demo/credentials/static-tokens" && init?.method === "POST") {
         return jsonResponse({
@@ -342,7 +342,7 @@ describe("ConsoleAppWorkspace", () => {
       }
       if (url === "/console/api/v1/apps/demo/credentials" && !init?.method) {
         return jsonResponse({
-          items: [
+          data: [
             { id: 101, kind: "oauth_client", name: "OAuth Primary", client_id: "oauth-client-1", is_active: true },
             { id: 202, kind: "static_token", name: "Static Primary", is_active: true },
           ],
@@ -414,7 +414,7 @@ describe("ConsoleAppWorkspace", () => {
         });
       }
       if (url === "/console/api/v1/apps/demo/permission-template-versions" && !init?.method) {
-        return jsonResponse({ items: [] });
+        return jsonResponse({ data: [] });
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });
@@ -445,7 +445,7 @@ describe("ConsoleAppWorkspace", () => {
         return jsonResponse({ catalog_version: "v2" });
       }
       if (url === "/console/api/v1/apps/demo/permission-template-versions" && !init?.method) {
-        return jsonResponse({ items: [{ version: "v2", imported_at: "2026-07-01T09:00:00Z" }] });
+        return jsonResponse({ data: [{ version: "v2", imported_at: "2026-07-01T09:00:00Z" }] });
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });
@@ -523,7 +523,7 @@ describe("ConsoleAppWorkspace", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === "/console/api/v1/apps/demo/approval-rules" && !init?.method) {
-        return jsonResponse({ items: rules });
+        return jsonResponse({ data: rules });
       }
       if (url === "/console/api/v1/apps/demo/approval-rules" && init?.method === "POST") {
         rules = [
@@ -604,7 +604,7 @@ describe("ConsoleAppWorkspace", () => {
         return jsonResponse({ status: "ready", items: [] });
       }
       if (url === "/console/api/v1/apps/demo/memberships" && !init?.method) {
-        return jsonResponse({ items: [] });
+        return jsonResponse({ data: [] });
       }
       if (url === "/console/api/v1/apps/demo" && init?.method === "PATCH") {
         return jsonResponse({
@@ -657,7 +657,7 @@ describe("ConsoleAppWorkspace", () => {
       }
       if (url === "/console/api/v1/apps/demo/memberships" && !init?.method) {
         return jsonResponse({
-          items: [
+          data: [
             { id: 11, user_id: "owner-a", role: "owner", is_active: true },
             { id: 22, user_id: "dev-a", role: "developer", is_active: true },
           ],

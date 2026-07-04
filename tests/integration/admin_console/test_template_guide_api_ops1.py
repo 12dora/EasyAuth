@@ -348,7 +348,7 @@ def test_ops1_template_versions_api_returns_latest_first_with_pagination() -> No
     payload = _json_object(response)
     assert response.status_code == HTTPStatus.OK
     assert payload["latest_version"] == latest_version
-    assert payload["items"] == [
+    assert payload["data"] == [
         {
             "version": 2,
             "status": "imported",
@@ -374,7 +374,7 @@ def test_ops1_template_confirm_api_rejects_developer_but_versions_are_readable()
 
     assert confirm.status_code == HTTPStatus.FORBIDDEN
     assert versions.status_code == HTTPStatus.OK
-    assert _json_object(versions)["items"] == []
+    assert _json_object(versions)["data"] == []
     assert PermissionTemplateVersion.objects.filter(app=app).count() == 0
     assert PermissionGroup.objects.filter(app=app).count() == 0
     assert Permission.objects.filter(app=app).count() == 0

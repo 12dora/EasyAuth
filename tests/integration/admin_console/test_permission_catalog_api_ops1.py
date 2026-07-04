@@ -158,7 +158,7 @@ def test_ops1_superuser_reads_authorization_group_grant_managed_scope_policy() -
 
     # Then: 每个 grant 返回自身策略、有效策略、继承来源和健康状态。
     body = _response_json_object(response)
-    group_item = _json_object(_json_list(body["items"])[0])
+    group_item = _json_object(_json_list(body["data"])[0])
     grants = [_json_object(grant) for grant in _json_list(group_item["grants"])]
     direct = next(grant for grant in grants if grant["permission"] == direct_permission.key)
     inherited = next(grant for grant in grants if grant["permission"] == inherited_permission.key)

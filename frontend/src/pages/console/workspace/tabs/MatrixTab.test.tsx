@@ -13,7 +13,7 @@ describe("MatrixTab", () => {
 
   test("展示并保存 MANAGED_USERS grant 的管理范围策略", async () => {
     const authorizationGroupsPayload = {
-      items: [
+      data: [
         {
           id: 10,
           key: "manager",
@@ -55,7 +55,7 @@ describe("MatrixTab", () => {
       }
       if (url === "/console/api/v1/apps/demo/permissions") {
         return jsonResponse({
-          items: [
+          data: [
             { id: 20, key: "order.read", name: "订单读取", supported_scopes: ["MANAGED_USERS"] },
             { id: 21, key: "order.export", name: "订单导出", supported_scopes: ["SELF"] },
           ],
@@ -63,7 +63,7 @@ describe("MatrixTab", () => {
       }
       if (url === "/console/api/v1/apps/demo/scopes") {
         return jsonResponse({
-          items: [
+          data: [
             { key: "MANAGED_USERS", name: "被管理人员", is_active: true, display_order: 1 },
             { key: "SELF", name: "本人", is_active: true, display_order: 2 },
           ],

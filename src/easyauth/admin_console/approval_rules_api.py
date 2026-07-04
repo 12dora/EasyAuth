@@ -57,7 +57,7 @@ def console_approval_rules(request: HttpRequest, app_key: str) -> JsonResponse:
     if request.method == "GET":
         match _read_context(request, app_key):
             case App() as app:
-                return _json_response({"items": approval_rule_items(app)})
+                return _json_response({"data": approval_rule_items(app)})
             case JsonResponse() as response:
                 return response
     if request.method == "POST":

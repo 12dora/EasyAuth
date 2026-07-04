@@ -49,14 +49,14 @@ def test_ops1_apps_api_superuser_lists_all_apps() -> None:
 
     # Then: API 返回全局 App 视图和基础字段。
     assert response.status_code == HTTPStatus.OK
-    assert response.json()["items"][0]["app_key"] == crm.app_key
-    assert response.json()["items"][0]["name"] == "CRM"
-    assert response.json()["items"][0]["description"] == ""
-    assert response.json()["items"][0]["is_active"] is True
-    assert response.json()["items"][1]["app_key"] == erp.app_key
-    assert response.json()["items"][1]["name"] == "ERP"
-    assert response.json()["items"][1]["description"] == ""
-    assert response.json()["items"][1]["is_active"] is False
+    assert response.json()["data"][0]["app_key"] == crm.app_key
+    assert response.json()["data"][0]["name"] == "CRM"
+    assert response.json()["data"][0]["description"] == ""
+    assert response.json()["data"][0]["is_active"] is True
+    assert response.json()["data"][1]["app_key"] == erp.app_key
+    assert response.json()["data"][1]["name"] == "ERP"
+    assert response.json()["data"][1]["description"] == ""
+    assert response.json()["data"][1]["is_active"] is False
 
 
 def test_ops1_apps_api_allows_non_member_console_user_to_list_apps() -> None:
@@ -518,7 +518,7 @@ def test_ops1_memberships_api_lists_app_memberships_for_visible_app() -> None:
 
     # Then: API 返回该 App 的成员关系并暴露 is_active 状态。
     assert response.status_code == HTTPStatus.OK
-    assert response.json()["items"] == [
+    assert response.json()["data"] == [
         {"user_id": "ops1-membership-inactive", "role": "developer", "is_active": False},
         {"user_id": "ops1-membership-owner", "role": "owner", "is_active": True},
         {"user_id": "ops1-memberships-api-developer", "role": "developer", "is_active": True},

@@ -45,7 +45,7 @@ def test_portal_api_accepts_active_user_session_when_session_is_bound() -> None:
 
     # Then
     assert response.status_code == HTTPStatus.OK
-    assert response.json()["items"] == []
+    assert response.json()["data"] == []
 
 
 @pytest.mark.parametrize("authentik_user_id", ["s12-portal-missing-user", "s12-portal-disabled"])

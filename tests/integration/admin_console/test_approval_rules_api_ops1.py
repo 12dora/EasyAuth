@@ -43,7 +43,7 @@ class ApprovalRuleEnvelope(BaseModel):
 class ApprovalRuleListEnvelope(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
 
-    items: list[ApprovalRuleItem]
+    data: list[ApprovalRuleItem]
 
 
 def test_ops1_owner_creates_reads_and_updates_approval_rule() -> None:
@@ -92,7 +92,7 @@ def test_ops1_owner_creates_reads_and_updates_approval_rule() -> None:
         "is_active": True,
     }
     assert listed.status_code == HTTPStatus.OK
-    assert listed_body.items == [created_body.approval_rule]
+    assert listed_body.data == [created_body.approval_rule]
     assert updated.status_code == HTTPStatus.OK
     assert updated_body.approval_rule.model_dump() == {
         "id": rule_id,
@@ -146,7 +146,7 @@ def test_ops1_superuser_manages_approval_rules_without_membership() -> None:
     assert listed.status_code == HTTPStatus.OK
     listed_body = ApprovalRuleListEnvelope.model_validate_json(listed.content)
     updated_body = ApprovalRuleEnvelope.model_validate_json(updated.content)
-    assert listed_body.items[0].role_key == "operator"
+    assert listed_body.data[0].role_key == "operator"
     assert updated.status_code == HTTPStatus.OK
     assert updated_body.approval_rule.is_active is False
 
@@ -182,16 +182,16 @@ def test_ops1_developer_reads_but_cannot_write_approval_rules() -> None:
     )
     listed_body = ApprovalRuleListEnvelope.model_validate_json(listed.content)
     updated = client.patch(
-        _rule_url(app.app_key, listed_body.items[0].id),
+        _rule_url(app.app_key, listed_body.data[0].id),
         data=_patch_payload(approver_value=("manager-003",), is_active=False),
         content_type="application/json",
     )
 
     # Then: developer 可读但不能写, 原规则不被修改。
     assert listed.status_code == HTTPStatus.OK
-    assert [item.model_dump() for item in listed_body.items] == [
+    assert [item.model_dump() for item in listed_body.data] == [
         {
-            "id": listed_body.items[0].id,
+            "id": listed_body.data[0].id,
             "target_type": "authorization_group",
             "target_key": "viewer",
             "role_key": "viewer",
@@ -283,7 +283,7 @@ def test_ops1_owner_manages_permission_approval_rule_with_document_target_fields
     assert created_body.approval_rule.target_type == "permission"
     assert created_body.approval_rule.target_key == "report.read"
     assert created_body.approval_rule.role_key == ""
-    assert listed_body.items[0].target_type == "permission"
+    assert listed_body.data[0].target_type == "permission"
     assert updated_body.approval_rule.approver_value == ["manager-011"]
     assert cross_app.status_code == HTTPStatus.BAD_REQUEST
     assert rule.permission == permission

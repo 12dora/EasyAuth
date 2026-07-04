@@ -23,7 +23,6 @@ export interface AppSummary {
 }
 
 export interface AppListPayload {
-  items?: AppSummary[];
   data?: AppSummary[];
   app?: AppSummary;
   pagination?: Pagination;

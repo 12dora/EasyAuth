@@ -124,7 +124,7 @@ def test_ops2_portal_api_lists_access_requests_for_session_user() -> None:
     body = response.content.decode()
     assert response.status_code == HTTPStatus.OK
     payload = cast("dict[str, object]", response.json())
-    items = cast("list[dict[str, str]]", payload["items"])
+    items = cast("list[dict[str, str]]", payload["data"])
     labels_by_status = {item["status"]: item["status_label"] for item in items}
     assert labels_by_status[REQUEST_STATUS_APPROVED] == "审批已通过, 等待授权落库"
     assert labels_by_status[REQUEST_STATUS_GRANT_APPLIED] == "授权已落库, 权限已生效"

@@ -39,7 +39,7 @@ export function RulesTab({ appKey }: { appKey: string }) {
   const queryKey = ["console", "app", appKey, "approval-rules"];
   const rulesQuery = useQuery({
     queryKey,
-    queryFn: () => apiRequest<{ items?: EditableApprovalRule[] }>(`/console/api/v1/apps/${appKey}/approval-rules`),
+    queryFn: () => apiRequest<{ data?: EditableApprovalRule[] }>(`/console/api/v1/apps/${appKey}/approval-rules`),
   });
   const rules = itemsFromPayload<EditableApprovalRule>(rulesQuery.data);
   const saveMutation = useMutation({

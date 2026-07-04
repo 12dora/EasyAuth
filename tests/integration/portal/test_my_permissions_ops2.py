@@ -144,8 +144,8 @@ def test_ops2_portal_shows_empty_states_when_user_has_no_current_grants() -> Non
     # Then: API 返回空列表, 空状态文案由 React shell 呈现。
     assert grants.status_code == HTTPStatus.OK
     assert expiring.status_code == HTTPStatus.OK
-    assert grants.json()["items"] == []
-    assert expiring.json()["items"] == []
+    assert grants.json()["data"] == []
+    assert expiring.json()["data"] == []
 
 
 def test_ops2_portal_explains_request_status_before_grant_is_effective() -> None:

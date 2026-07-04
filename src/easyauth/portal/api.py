@@ -218,9 +218,8 @@ def _json_strings(values: tuple[str, ...]) -> list[JsonValue]:
 
 
 def _page_response(page: PortalPage) -> JsonResponse:
-    items = _json_objects(page.items)
     return _json_response(
-        {"items": items, "data": items, "pagination": pagination_item(page)},
+        {"data": _json_objects(page.items), "pagination": pagination_item(page)},
     )
 
 

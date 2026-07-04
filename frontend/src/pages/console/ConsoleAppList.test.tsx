@@ -14,7 +14,7 @@ describe("ConsoleAppList", () => {
 
   test("管理员看到快速新建和接入向导入口", async () => {
     document.body.dataset.currentUserRole = "EasyAuth Admins";
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => jsonResponse({ items: [] })));
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => jsonResponse({ data: [] })));
 
     renderList();
 
@@ -28,7 +28,7 @@ describe("ConsoleAppList", () => {
       const url = String(input);
       if (url === "/console/api/v1/apps" && !init?.method) {
         return jsonResponse({
-          items: [
+          data: [
             { id: 1, app_key: "crm", name: "CRM", owners: ["owner-a"], is_active: true, updated_at: "2026-07-01T09:00:00Z" },
             { id: 2, app_key: "billing", name: "Billing", owners: ["owner-b"], is_active: false, updated_at: "2026-07-01T09:00:00Z" },
           ],
@@ -69,7 +69,7 @@ describe("ConsoleAppList", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === "/console/api/v1/apps" && !init?.method) {
-        return jsonResponse({ items: [] });
+        return jsonResponse({ data: [] });
       }
       if (url === "/console/api/v1/apps" && init?.method === "POST") {
         return jsonResponse({ app: { id: 2, app_key: "billing", name: "Billing" } }, 201);

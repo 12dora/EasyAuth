@@ -95,7 +95,7 @@ export async function apiRequest<T = unknown>(
 
 export function itemsFromPayload<T>(payload: unknown): T[] {
   if (isRecord(payload)) {
-    const items = payload.items ?? payload.data;
+    const items = payload.data;
     if (Array.isArray(items)) {
       return items as T[];
     }

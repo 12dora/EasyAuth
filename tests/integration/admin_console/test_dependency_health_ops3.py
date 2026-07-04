@@ -42,7 +42,6 @@ class _HealthComponent(BaseModel):
 class _HealthResponse(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
 
-    items: tuple[_HealthItem, ...]
     data: tuple[_HealthItem, ...]
     health_map: dict[str, _HealthComponent]
     authentik: _HealthComponent
@@ -88,9 +87,8 @@ def test_ops3_console_dependency_health_returns_latest_snapshots_without_secrets
     # Then: API 返回每个依赖的最新快照, 且敏感字段摘要被隐藏。
     body = response.content.decode()
     payload = _HealthResponse.model_validate_json(body)
-    items = {item.component: item for item in payload.items}
+    items = {item.component: item for item in payload.data}
     assert response.status_code == HTTPStatus.OK
-    assert len(payload.data) == len(payload.items)
     assert payload.authentik.status == "healthy"
     assert payload.authentik_directory.status == "unknown"
     assert payload.dingtalk.status == "warning"

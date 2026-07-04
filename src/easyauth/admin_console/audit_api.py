@@ -69,4 +69,4 @@ def _audit_queryset_for_actor(request: HttpRequest, actor: ConsoleActor) -> Audi
 def _page_response(page: Page[AuditLog]) -> JsonResponse:
     result: list[JsonValue] = []
     result.extend(_audit_item(audit_log) for audit_log in page.items)
-    return _json_response({"items": result, "pagination": pagination_item(page)})
+    return _json_response({"data": result, "pagination": pagination_item(page)})

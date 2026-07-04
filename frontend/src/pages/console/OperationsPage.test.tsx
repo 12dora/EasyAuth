@@ -17,7 +17,7 @@ describe("OperationsPage", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       if (String(input) === "/console/api/v1/operations/access-requests") {
         return jsonResponse({
-          items: [
+          data: [
             {
               id: 101,
               user_id: "user-a",

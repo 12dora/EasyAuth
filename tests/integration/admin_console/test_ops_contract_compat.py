@@ -63,7 +63,7 @@ class HttpResponseLike(Protocol):
     content: bytes
 
 
-def test_ops_contract_list_responses_include_data_alias() -> None:
+def test_ops_contract_list_responses_use_canonical_data_key() -> None:
     # Given: 系统管理员面对 App、成员、角色、权限、分组和凭据列表。
     client = _logged_in_superuser("ops-contract-list-admin")
     app = App.objects.create(app_key="ops-contract-list-app", name="Contract App")
@@ -82,11 +82,12 @@ def test_ops_contract_list_responses_include_data_alias() -> None:
         client.get(f"{APPS_API_URL}/{app.app_key}/credentials"),
     ]
 
-    # Then: 每个列表响应都包含文档契约 `data`, 并保留旧 `items` 兼容。
+    # Then: 每个列表响应只使用文档契约 `data`, 不再输出 legacy `items`。
     for response in responses:
         body = _response_json_object(response)
         assert response.status_code == HTTPStatus.OK
-        assert body["data"] == body["items"]
+        assert isinstance(body["data"], list)
+        assert "items" not in body
 
 
 def test_ops_contract_owner_cannot_write_memberships() -> None:

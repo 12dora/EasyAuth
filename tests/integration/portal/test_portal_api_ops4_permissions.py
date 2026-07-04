@@ -139,7 +139,7 @@ def test_ops4_portal_api_lists_access_request_direct_permissions() -> None:
     response = client.get(REQUESTS_API_URL)
 
     # Then: 列表项保留 direct Permission key 与名称。
-    items = json_object(response)["items"]
+    items = json_object(response)["data"]
     assert isinstance(items, list), response.content.decode()
     item = items[0]
     assert isinstance(item, dict), response.content.decode()
@@ -214,7 +214,7 @@ def test_ops4_portal_api_hides_inactive_group_and_derived_grants() -> None:
     response = client.get(GRANTS_API_URL)
 
     # Then: 响应不返回 inactive group, 也不返回 inactive group 派生 grant。
-    items = json_object(response)["items"]
+    items = json_object(response)["data"]
     assert isinstance(items, list), response.content.decode()
     item = items[0]
     assert isinstance(item, dict), response.content.decode()

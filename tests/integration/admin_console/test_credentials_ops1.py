@@ -125,7 +125,7 @@ def test_ops1_credentials_api_owner_lists_without_secret_material() -> None:
     # Then: API 返回凭据元数据, 但不泄漏 token hash、静态 token 明文或 OAuth secret。
     body = response.content.decode()
     assert response.status_code == HTTPStatus.OK
-    assert _json_dict(response)["items"] == [
+    assert _json_dict(response)["data"] == [
         {
             "id": static_issue.credential_id,
             "kind": "static_token",

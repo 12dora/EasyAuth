@@ -33,7 +33,7 @@ class _AccessRequestOperationItem(BaseModel):
 class _AccessRequestsResponse(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
 
-    items: tuple[_AccessRequestOperationItem, ...]
+    data: tuple[_AccessRequestOperationItem, ...]
 
 
 class _DependencyHealthComponent(BaseModel):
@@ -69,11 +69,11 @@ def test_ops3_access_requests_include_dingtalk_process_and_callback_fields() -> 
     # Then: 响应包含 DingTalk process 和 callback 字段, 并保留原有基础字段。
     body = _AccessRequestsResponse.model_validate_json(response.content)
     assert response.status_code == HTTPStatus.OK
-    assert body.items[0].id == access_request.id
-    assert body.items[0].dingtalk_process_instance_id == "proc-ops3-contract"
-    assert body.items[0].dingtalk_callback_path == "/integrations/dingtalk/callback"
-    assert body.items[0].dingtalk_callback_status is None
-    assert body.items[0].dingtalk_callback_received_at is None
+    assert body.data[0].id == access_request.id
+    assert body.data[0].dingtalk_process_instance_id == "proc-ops3-contract"
+    assert body.data[0].dingtalk_callback_path == "/integrations/dingtalk/callback"
+    assert body.data[0].dingtalk_callback_status is None
+    assert body.data[0].dingtalk_callback_received_at is None
 
 
 def test_ops3_dependency_health_read_writes_audit() -> None:

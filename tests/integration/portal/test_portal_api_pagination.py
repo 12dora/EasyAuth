@@ -42,7 +42,6 @@ class _PaginationPayload:
 
 @dataclass(frozen=True, slots=True)
 class _ListPayload:
-    items: tuple[dict[str, JsonValue], ...]
     data: tuple[dict[str, JsonValue], ...]
     pagination: _PaginationPayload
 
@@ -65,8 +64,7 @@ def test_portal_grants_returns_requested_page_for_session_user() -> None:
     # Then: 响应只返回当前员工第二页数据, 并带分页元数据。
     payload = _json_payload(response)
     assert response.status_code == HTTPStatus.OK
-    assert payload.data == payload.items
-    assert [item["app_key"] for item in payload.items] == ["portal-page-grant-3"]
+    assert [item["app_key"] for item in payload.data] == ["portal-page-grant-3"]
     assert payload.pagination == _PaginationPayload(
         page=EXPECTED_PAGE,
         page_size=EXPECTED_PAGE_SIZE,
@@ -92,8 +90,7 @@ def test_portal_expiring_grants_returns_requested_page_after_expiring_filter() -
     # Then: 分页发生在即将过期过滤之后, 不包含远期授权。
     payload = _json_payload(response)
     assert response.status_code == HTTPStatus.OK
-    assert payload.data == payload.items
-    assert [item["app_key"] for item in payload.items] == ["portal-page-expiring-3"]
+    assert [item["app_key"] for item in payload.data] == ["portal-page-expiring-3"]
     assert payload.pagination.total_items == EXPECTED_TOTAL_ITEMS
     assert payload.pagination.total_pages == EXPECTED_TOTAL_PAGES
 
@@ -117,8 +114,7 @@ def test_portal_access_requests_returns_requested_page_for_session_user() -> Non
     # Then: 响应只返回当前员工第二页申请, 并带分页元数据。
     payload = _json_payload(response)
     assert response.status_code == HTTPStatus.OK
-    assert payload.data == payload.items
-    assert [item["id"] for item in payload.items] == [oldest.id]
+    assert [item["id"] for item in payload.data] == [oldest.id]
     assert payload.pagination == _PaginationPayload(
         page=EXPECTED_PAGE,
         page_size=EXPECTED_PAGE_SIZE,
@@ -149,16 +145,9 @@ def _create_grant(
 def _json_payload(response: _JsonResponse) -> _ListPayload:
     raw_payload = response.json()
     return _ListPayload(
-        items=_required_items(raw_payload),
         data=_required_data(raw_payload),
         pagination=_required_pagination(raw_payload),
     )
-
-
-def _required_items(payload: dict[str, JsonValue]) -> tuple[dict[str, JsonValue], ...]:
-    items = payload.get("items")
-    assert isinstance(items, list), payload
-    return _json_dict_items(items, payload)
 
 
 def _required_data(payload: dict[str, JsonValue]) -> tuple[dict[str, JsonValue], ...]:

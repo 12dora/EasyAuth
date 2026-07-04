@@ -111,7 +111,6 @@ describe("itemsFromPayload", () => {
   test("保留 payload 中已有列表引用", () => {
     const items = [{ id: 1 }];
 
-    expect(itemsFromPayload<{ id: number }>({ items })).toBe(items);
     expect(itemsFromPayload<{ id: number }>({ data: items })).toBe(items);
   });
 });

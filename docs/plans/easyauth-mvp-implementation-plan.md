@@ -726,12 +726,12 @@ Django 工程和质量门槛
 - 审批应用阶段补齐目标二次校验：change、revoke、renew 的 Role/Permission 被停用、审批规则被删除或改绑后，申请进入 `grant_failed` 且不变更授权事实。
 - `grant_failed` retry 支持 change、revoke、renew；retry 前 lifecycle 目标已失效时返回语义错误并保持授权事实不变，同时保持 `grant_applied` 重复 retry 幂等。
 - Admin Console 契约补齐：
-  - list 响应兼容 `items` 与 `data`。
+  - list 响应统一使用 `data`（不再输出 legacy `items`）。
   - AppMembership 写入改为 sysadmin-only。
   - 权限模板 preview 支持 `format`/`content`，同时保留旧字段兼容。
   - 通用 credentials disable 支持 static token 与 OAuth client，并记录 reason。
   - catalog 支持 key-based PATCH route。
-  - App list 支持 `page`、`page_size`、`status`、`owner_user_id` 与 `pagination`，并保留 `items`/`data` 兼容。
+  - App list 支持 `page`、`page_size`、`status`、`owner_user_id` 与 `pagination`，列表字段统一为 `data`。
   - App detail 返回负责人、开发者、Role/Permission 数量、active 凭据数量、最新模板版本和配置摘要。
   - ApprovalRule 支持 `target_type`/`target_key`，包括 permission target。
   - operations access-requests 返回 DingTalk process 与 callback 兼容字段。

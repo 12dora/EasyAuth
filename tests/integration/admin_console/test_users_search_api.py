@@ -35,7 +35,7 @@ def test_user_search_matches_name_email_and_id() -> None:
 
     assert response.status_code == HTTPStatus.OK
     payload = cast("dict[str, JsonValue]", response.json())
-    items = cast("list[dict[str, JsonValue]]", payload["items"])
+    items = cast("list[dict[str, JsonValue]]", payload["data"])
     assert [item["user_id"] for item in items] == ["ak_uid_sales_001"]
     assert items[0]["name"] == "销售运行用户"
     assert items[0]["email"] == "sales.runtime@example.com"
@@ -43,7 +43,7 @@ def test_user_search_matches_name_email_and_id() -> None:
 
     response_by_name = client.get(USERS_API_URL, {"q": "运维"})
     payload_by_name = cast("dict[str, JsonValue]", response_by_name.json())
-    items_by_name = cast("list[dict[str, JsonValue]]", payload_by_name["items"])
+    items_by_name = cast("list[dict[str, JsonValue]]", payload_by_name["data"])
     assert [item["user_id"] for item in items_by_name] == ["ak_uid_ops_001"]
 
 
@@ -59,7 +59,7 @@ def test_user_search_excludes_inactive_users() -> None:
 
     assert response.status_code == HTTPStatus.OK
     payload = cast("dict[str, JsonValue]", response.json())
-    assert payload["items"] == []
+    assert payload["data"] == []
 
 
 def test_user_search_requires_console_session() -> None:
