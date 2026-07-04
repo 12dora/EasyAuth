@@ -28,9 +28,8 @@ class ApprovalRuleItem(BaseModel):
     id: int
     target_type: str
     target_key: str
-    role_key: str
     approver_type: str
-    approver_value: list[str]
+    approver_userids: list[str]
     is_active: bool
 
 
@@ -64,7 +63,7 @@ def test_ops1_owner_creates_reads_and_updates_approval_rule() -> None:
         data=_rule_payload(
             target_type="authorization_group",
             target_key=group.key,
-            approver_value=("manager-001",),
+            approver_userids=("manager-001",),
             is_active=True,
         ),
         content_type="application/json",
@@ -74,7 +73,7 @@ def test_ops1_owner_creates_reads_and_updates_approval_rule() -> None:
     rule_id = created_body.approval_rule.id
     updated = client.patch(
         _rule_url(app.app_key, rule_id),
-        data=_patch_payload(approver_value=("manager-002", "manager-003"), is_active=False),
+        data=_patch_payload(approver_userids=("manager-002", "manager-003"), is_active=False),
         content_type="application/json",
     )
 
@@ -86,9 +85,8 @@ def test_ops1_owner_creates_reads_and_updates_approval_rule() -> None:
         "id": rule_id,
         "target_type": "authorization_group",
         "target_key": "auditor",
-        "role_key": "auditor",
         "approver_type": "dingtalk_userids",
-        "approver_value": ["manager-001"],
+        "approver_userids": ["manager-001"],
         "is_active": True,
     }
     assert listed.status_code == HTTPStatus.OK
@@ -98,9 +96,8 @@ def test_ops1_owner_creates_reads_and_updates_approval_rule() -> None:
         "id": rule_id,
         "target_type": "authorization_group",
         "target_key": "auditor",
-        "role_key": "auditor",
         "approver_type": "dingtalk_userids",
-        "approver_value": ["manager-002", "manager-003"],
+        "approver_userids": ["manager-002", "manager-003"],
         "is_active": False,
     }
     rule = ApprovalRule.objects.get(id=rule_id)
@@ -128,7 +125,7 @@ def test_ops1_superuser_manages_approval_rules_without_membership() -> None:
         data=_rule_payload(
             target_type="authorization_group",
             target_key=group.key,
-            approver_value=("manager-010",),
+            approver_userids=("manager-010",),
             is_active=True,
         ),
         content_type="application/json",
@@ -137,7 +134,7 @@ def test_ops1_superuser_manages_approval_rules_without_membership() -> None:
     created_body = ApprovalRuleEnvelope.model_validate_json(created.content)
     updated = client.patch(
         _rule_url(app.app_key, created_body.approval_rule.id),
-        data=_patch_payload(approver_value=("manager-010",), is_active=False),
+        data=_patch_payload(approver_userids=("manager-010",), is_active=False),
         content_type="application/json",
     )
 
@@ -146,7 +143,7 @@ def test_ops1_superuser_manages_approval_rules_without_membership() -> None:
     assert listed.status_code == HTTPStatus.OK
     listed_body = ApprovalRuleListEnvelope.model_validate_json(listed.content)
     updated_body = ApprovalRuleEnvelope.model_validate_json(updated.content)
-    assert listed_body.data[0].role_key == "operator"
+    assert listed_body.data[0].target_key == "operator"
     assert updated.status_code == HTTPStatus.OK
     assert updated_body.approval_rule.is_active is False
 
@@ -175,7 +172,7 @@ def test_ops1_developer_reads_but_cannot_write_approval_rules() -> None:
         data=_rule_payload(
             target_type="authorization_group",
             target_key=group.key,
-            approver_value=("manager-002",),
+            approver_userids=("manager-002",),
             is_active=True,
         ),
         content_type="application/json",
@@ -183,7 +180,7 @@ def test_ops1_developer_reads_but_cannot_write_approval_rules() -> None:
     listed_body = ApprovalRuleListEnvelope.model_validate_json(listed.content)
     updated = client.patch(
         _rule_url(app.app_key, listed_body.data[0].id),
-        data=_patch_payload(approver_value=("manager-003",), is_active=False),
+        data=_patch_payload(approver_userids=("manager-003",), is_active=False),
         content_type="application/json",
     )
 
@@ -194,9 +191,8 @@ def test_ops1_developer_reads_but_cannot_write_approval_rules() -> None:
             "id": listed_body.data[0].id,
             "target_type": "authorization_group",
             "target_key": "viewer",
-            "role_key": "viewer",
             "approver_type": "dingtalk_userids",
-            "approver_value": ["manager-001"],
+            "approver_userids": ["manager-001"],
             "is_active": True,
         },
     ]
@@ -273,7 +269,7 @@ def test_ops1_owner_manages_permission_approval_rule_with_document_target_fields
         content_type="application/json",
     )
 
-    # Then: API 返回 target_type/target_key, 兼容 role_key, 并拒绝非本 App 目标。
+    # Then: API 返回 target_type/target_key, 并拒绝非本 App 目标。
     rule = ApprovalRule.objects.get(id=rule_id)
     assert created.status_code == HTTPStatus.CREATED
     assert listed.status_code == HTTPStatus.OK
@@ -282,9 +278,8 @@ def test_ops1_owner_manages_permission_approval_rule_with_document_target_fields
     updated_body = ApprovalRuleEnvelope.model_validate_json(updated.content)
     assert created_body.approval_rule.target_type == "permission"
     assert created_body.approval_rule.target_key == "report.read"
-    assert created_body.approval_rule.role_key == ""
     assert listed_body.data[0].target_type == "permission"
-    assert updated_body.approval_rule.approver_value == ["manager-011"]
+    assert updated_body.approval_rule.approver_userids == ["manager-011"]
     assert cross_app.status_code == HTTPStatus.BAD_REQUEST
     assert rule.permission == permission
     assert rule.role is None
@@ -323,7 +318,7 @@ def _rule_payload(
     *,
     target_type: str,
     target_key: str,
-    approver_value: tuple[str, ...],
+    approver_userids: tuple[str, ...],
     is_active: bool,
 ) -> str:
     return dumps(
@@ -331,17 +326,17 @@ def _rule_payload(
             "target_type": target_type,
             "target_key": target_key,
             "approver_type": "dingtalk_userids",
-            "approver_value": list(approver_value),
+            "approver_userids": list(approver_userids),
             "is_active": is_active,
         },
     )
 
 
-def _patch_payload(*, approver_value: tuple[str, ...], is_active: bool) -> str:
+def _patch_payload(*, approver_userids: tuple[str, ...], is_active: bool) -> str:
     return dumps(
         {
             "approver_type": "dingtalk_userids",
-            "approver_value": list(approver_value),
+            "approver_userids": list(approver_userids),
             "is_active": is_active,
         },
     )

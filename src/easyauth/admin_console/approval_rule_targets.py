@@ -88,9 +88,7 @@ def approval_rule_item(rule: ApprovalRule) -> dict[str, JsonValue]:
         "id": _approval_rule_id(rule),
         "target_type": target.target_type,
         "target_key": target.target_key,
-        "role_key": _role_key(rule),
         "approver_type": "dingtalk_userids",
-        "approver_value": approver_userids,
         "approver_userids": approver_userids,
         "is_active": rule.is_active,
     }
@@ -107,13 +105,6 @@ def patched_approvers(
 
 def _approval_rule_id(rule: ApprovalRule) -> int:
     return rule.id
-
-
-def _role_key(rule: ApprovalRule) -> str:
-    authorization_group = rule.authorization_group
-    if authorization_group is None:
-        return ""
-    return authorization_group.key
 
 
 def _approver_value(rule: ApprovalRule) -> list[JsonValue]:
