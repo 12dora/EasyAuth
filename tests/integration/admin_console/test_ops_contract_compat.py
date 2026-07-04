@@ -26,37 +26,6 @@ pytestmark = pytest.mark.django_db
 LOGIN_VALUE: Final = "console-contract"
 APPS_API_URL: Final = "/console/api/v1/apps"
 JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
-TEMPLATE_YAML: Final = """
-schema_version: 1
-app:
-  app_key: ops-contract-template-app
-  name: Contract Template App
-  description: ""
-scopes:
-  - key: GLOBAL
-    name: Global
-permission_groups:
-  - key: ROOT
-    name: Root
-permissions:
-  - key: reports.read
-    name: Read reports
-    group_key: ROOT
-    supported_scopes: [GLOBAL]
-    risk_level: standard
-authorization_groups:
-  - key: auditor
-    kind: role
-    name: Auditor
-    requestable: true
-    grants:
-      - permission: reports.read
-        scope: GLOBAL
-approval_rules:
-  - target_type: authorization_group
-    target_key: auditor
-    approver_userids: [manager-001]
-""".strip()
 
 
 class HttpResponseLike(Protocol):
@@ -120,32 +89,6 @@ def test_ops_contract_owner_cannot_write_memberships() -> None:
     assert error["code"] == ErrorCode.PERMISSION_DENIED
     assert AppMembership.objects.filter(user_id="ops-contract-new-member").exists() is False
     assert membership.is_active is True
-
-
-def test_ops_contract_template_preview_accepts_document_fields() -> None:
-    # Given: owner 管理一个待导入权限模板的 App。
-    client = _logged_in_user("ops-contract-template-owner")
-    app = _owned_app("ops-contract-template-app", "ops-contract-template-owner")
-
-    # When: 按文档字段 `format` 和 `content` 提交 preview。
-    preview = client.post(
-        f"{APPS_API_URL}/{app.app_key}/permission-template-imports/preview",
-        data=dumps({"format": "yaml", "content": TEMPLATE_YAML}),
-        content_type="application/json",
-    )
-    preview_id = _json_string(_response_json_object(preview)["preview_id"])
-    confirmed = client.post(
-        f"{APPS_API_URL}/{app.app_key}/permission-template-imports/{preview_id}/confirm",
-        content_type="application/json",
-    )
-
-    # Then: preview 成功, confirm 响应包含文档契约版本字段和兼容对象字段。
-    assert preview.status_code == HTTPStatus.OK
-    assert confirmed.status_code == HTTPStatus.OK
-    body = _response_json_object(confirmed)
-    assert body["template_version"] == 1
-    assert _json_object(body["version"])["version"] == 1
-    assert body["version"] == body["template_version_detail"]
 
 
 def test_ops_contract_oauth_client_can_be_disabled_by_generic_route() -> None:

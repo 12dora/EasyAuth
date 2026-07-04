@@ -3,7 +3,7 @@ from __future__ import annotations
 from http import HTTPStatus
 from typing import TYPE_CHECKING, ClassVar, Final, final, override
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from easyauth.admin_console.permission_template_api_data import (
     CachedTemplatePreview,
@@ -56,12 +56,8 @@ class TemplateHandlerError(Exception):
 class _TemplatePreviewPayload(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
 
-    template_format: str = Field(
-        min_length=1,
-        max_length=16,
-        validation_alias=AliasChoices("template_format", "format"),
-    )
-    template: str = Field(min_length=1, validation_alias=AliasChoices("template", "content"))
+    template_format: str = Field(min_length=1, max_length=16)
+    template: str = Field(min_length=1)
 
 
 def preview_template_import(app: App, body: bytes, imported_by: str) -> dict[str, JsonValue]:
@@ -128,7 +124,6 @@ def confirm_template_import(app: App, preview_id: str, imported_by: str) -> dict
         "catalog_version": app.catalog_version,
         "template_version": result.template_version.version,
         "status": result.template_version.status,
-        "version": version,
         "template_version_detail": version,
         "summary": preview_summary(template.schema_version, result.actions),
         "changes": preview_changes(result.actions),

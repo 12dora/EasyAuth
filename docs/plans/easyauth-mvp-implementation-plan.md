@@ -728,7 +728,7 @@ Django 工程和质量门槛
 - Admin Console 契约补齐：
   - list 响应统一使用 `data`（不再输出 legacy `items`）。
   - AppMembership 写入改为 sysadmin-only。
-  - 权限模板 preview 支持 `format`/`content`，同时保留旧字段兼容。
+  - 权限模板 preview 请求使用 `template_format`/`template`（不再接受 legacy `format`/`content`）。
   - 通用 credentials disable 支持 static token 与 OAuth client，并记录 reason。
   - catalog 支持 key-based PATCH route。
   - App list 支持 `page`、`page_size`、`status`、`owner_user_id` 与 `pagination`，列表字段统一为 `data`。

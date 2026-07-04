@@ -37,7 +37,6 @@ type ManifestPreviewPayload = {
 type ManifestImportPayload = {
   catalog_version?: string | number;
   template_version?: string | number;
-  version?: string | number | { version?: string | number };
 };
 
 type ManifestVersion = {
@@ -85,7 +84,7 @@ export function ManifestTab({ appKey }: { appKey: string }) {
         method: "POST",
       }),
     onSuccess: async (payload) => {
-      setCatalogVersion(String(payload.catalog_version ?? payload.template_version ?? versionLabel(payload.version) ?? ""));
+      setCatalogVersion(String(payload.catalog_version ?? payload.template_version ?? ""));
       await queryClient.invalidateQueries({ queryKey: versionsQueryKey });
     },
   });
@@ -397,14 +396,4 @@ function changeItem(change: { action?: string; key?: string; parent_key?: string
     key: change.key,
     name: change.parent_key,
   };
-}
-
-function versionLabel(version: ManifestImportPayload["version"]): string | number | undefined {
-  if (version === undefined || version === null) {
-    return undefined;
-  }
-  if (typeof version === "object") {
-    return version.version;
-  }
-  return version;
 }

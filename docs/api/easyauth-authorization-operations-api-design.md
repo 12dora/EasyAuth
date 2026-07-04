@@ -323,8 +323,8 @@ POST /console/api/v1/apps/{app_key}/permission-template-imports/preview
 Content-Type: application/json
 
 {
-  "format": "json",
-  "content": "{\"schema_version\":1,\"app\":{\"app_key\":\"crm\",\"name\":\"CRM\"},\"scopes\":[],\"permission_groups\":[],\"permissions\":[],\"authorization_groups\":[],\"approval_rules\":[]}"
+  "template_format": "json",
+  "template": "{\"schema_version\":1,\"app\":{\"app_key\":\"crm\",\"name\":\"CRM\"},\"scopes\":[],\"permission_groups\":[],\"permissions\":[],\"authorization_groups\":[],\"approval_rules\":[]}"
 }
 ```
 
