@@ -120,7 +120,7 @@ def test_ops1_owner_creates_and_updates_permission_with_group() -> None:
             {
                 "key": "billing.read",
                 "name": "Read billing",
-                "group_id": group.id,
+                "group_key": group.key,
                 "supported_scopes": [scope.key],
             },
         ),
@@ -139,7 +139,7 @@ def test_ops1_owner_creates_and_updates_permission_with_group() -> None:
     assert updated.status_code == HTTPStatus.OK
     assert permission.group == group
     assert permission.name == "Read billing records"
-    assert f'"group_id": {group.id}' in updated.content.decode()
+    assert f'"group_key": "{group.key}"' in updated.content.decode()
 
 
 def test_ops1_owner_writes_authorization_group_grant_managed_scope_policy() -> None:
@@ -335,7 +335,7 @@ def test_ops1_catalog_writes_persist_bilingual_display_fields() -> None:
                 "key": "billing.read",
                 "name": "查看账务",
                 "name_en": "Read billing",
-                "group_id": group.id,
+                "group_key": group.key,
                 "supported_scopes": ["GLOBAL"],
             },
         ),
@@ -471,7 +471,7 @@ def test_ops1_permission_group_move_updates_descendant_depths() -> None:
     # When: owner 把包含子节点的分组移动到新的二级父节点下。
     response = client.patch(
         _api_url(app.app_key, "permission-groups"),
-        data=dumps({"id": source.id, "parent_id": target_parent.id}),
+        data=dumps({"id": source.id, "parent_key": target_parent.key}),
         content_type="application/json",
     )
 
@@ -560,7 +560,7 @@ def test_ops1_catalog_write_rejects_cross_app_relationships() -> None:
     # When: owner 创建 Permission 时绑定其他 App 的 PermissionGroup。
     response = client.post(
         _api_url(app.app_key, "permissions"),
-        data=dumps({"key": "other.read", "name": "Other read", "group_id": other_group.id}),
+        data=dumps({"key": "other.read", "name": "Other read", "group_key": other_group.key}),
         content_type="application/json",
     )
 

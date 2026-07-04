@@ -49,9 +49,7 @@ def resolved_parent_reference(
     return resolve_group_reference(
         GroupReferenceInput(
             app_id=app_id,
-            id_value=payload.parent_id,
             key_value=payload.parent_key,
-            id_is_set="parent_id" in payload.model_fields_set,
             key_is_set="parent_key" in payload.model_fields_set,
             missing_message="上级权限分组不属于当前 App。",
         ),

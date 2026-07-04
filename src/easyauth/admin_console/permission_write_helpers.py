@@ -62,9 +62,7 @@ def resolved_group_reference(
     return resolve_group_reference(
         GroupReferenceInput(
             app_id=app_id,
-            id_value=payload.group_id,
             key_value=payload.group_key,
-            id_is_set="group_id" in payload.model_fields_set,
             key_is_set="group_key" in payload.model_fields_set,
             missing_message="权限分组不属于当前 App。",
         ),

@@ -15,7 +15,6 @@ class PermissionGroupCreatePayload(BaseModel):
     name_en: str = Field(default="", max_length=128)
     description: str = ""
     description_en: str = ""
-    parent_id: int | None = Field(default=None, gt=0)
     parent_key: str | None = Field(default=None, min_length=1, max_length=128)
     display_order: int = 0
     is_active: bool = True
@@ -27,7 +26,6 @@ class PermissionGroupUpdatePayload(ResourceIdPayload):
     name_en: str | None = Field(default=None, max_length=128)
     description: str | None = None
     description_en: str | None = None
-    parent_id: int | None = Field(default=None, gt=0)
     parent_key: str | None = Field(default=None, min_length=1, max_length=128)
     display_order: int | None = None
     is_active: bool | None = None
@@ -41,7 +39,6 @@ class PermissionGroupKeyUpdatePayload(BaseModel):
     name_en: str | None = Field(default=None, max_length=128)
     description: str | None = None
     description_en: str | None = None
-    parent_id: int | None = Field(default=None, gt=0)
     parent_key: str | None = Field(default=None, min_length=1, max_length=128)
     display_order: int | None = None
     is_active: bool | None = None

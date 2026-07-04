@@ -148,38 +148,6 @@ def test_permission_patch_deprecated_reason_keeps_permission_inactive_when_is_ac
     assert permission.deprecated_reason == "改用 report.export"
 
 
-@pytest.mark.parametrize(
-    ("endpoint", "payload"),
-    [
-        ("permission-groups", {"key": "CHILD", "name": "Child"}),
-        ("permissions", {"key": "report.read", "name": "Read report"}),
-    ],
-)
-def test_relationship_id_and_key_conflict_is_rejected(
-    endpoint: str,
-    payload: dict[str, str],
-) -> None:
-    # Given: owner 管理两个不同的权限分组。
-    client = _logged_in_user(f"catalog-payload-{endpoint}-conflict-owner")
-    app = _member_app(
-        f"catalog-payload-{endpoint}-conflict",
-        f"catalog-payload-{endpoint}-conflict-owner",
-    )
-    first = PermissionGroup.objects.create(app=app, key="FIRST", name="First")
-    second = PermissionGroup.objects.create(app=app, key="SECOND", name="Second")
-
-    # When: owner 同时提交指向不同分组的关系 id 和 key。
-    response = client.post(
-        f"{APPS_API_URL}/{app.app_key}/{endpoint}",
-        data=dumps(_relationship_conflict_payload(endpoint, payload, first, second)),
-        content_type="application/json",
-    )
-
-    # Then: API 在写入前返回参数错误。
-    assert response.status_code == HTTPStatus.BAD_REQUEST
-    assert ErrorCode.VALIDATION_ERROR in response.content.decode()
-
-
 def test_permission_group_move_rolls_back_when_descendant_depth_fails() -> None:
     # Given: owner 管理一个带子节点的分组, 目标父节点会让子节点超过最大 depth。
     client = _logged_in_user("catalog-payload-rollback-owner")
@@ -218,7 +186,7 @@ def test_permission_group_move_rolls_back_when_descendant_depth_fails() -> None:
     # When: owner 尝试把 source 移到 depth=4 的目标父节点下。
     response = client.patch(
         f"{APPS_API_URL}/{app.app_key}/permission-groups",
-        data=dumps({"id": source.id, "parent_id": target_level_4.id}),
+        data=dumps({"id": source.id, "parent_key": target_level_4.key}),
         content_type="application/json",
     )
 
@@ -231,21 +199,6 @@ def test_permission_group_move_rolls_back_when_descendant_depth_fails() -> None:
     assert source.depth == ROOT_GROUP_DEPTH
     assert child.parent == source
     assert child.depth == CHILD_GROUP_DEPTH
-
-
-def _relationship_conflict_payload(
-    endpoint: str,
-    payload: dict[str, str],
-    first: PermissionGroup,
-    second: PermissionGroup,
-) -> dict[str, str | int]:
-    match endpoint:
-        case "permission-groups":
-            return {**payload, "parent_id": first.id, "parent_key": second.key}
-        case "permissions":
-            return {**payload, "group_id": first.id, "group_key": second.key}
-        case unreachable:
-            raise AssertionError(unreachable)
 
 
 def _member_app(app_key: str, username: str) -> App:
