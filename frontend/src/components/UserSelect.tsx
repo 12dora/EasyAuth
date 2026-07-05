@@ -5,6 +5,7 @@ import type { KeyboardEvent, ReactNode } from "react";
 
 import { useI18n } from "../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../lib/api";
+import type { ListPayload } from "../lib/api";
 import { cn } from "../lib/cn";
 import { TextInput } from "./Field";
 
@@ -29,7 +30,7 @@ function useUserOptions(query: string, enabled: boolean) {
   return useQuery({
     queryKey: ["console", "user-search", debouncedQuery],
     queryFn: () =>
-      apiRequest<{ items?: UserOption[] }>(
+      apiRequest<ListPayload<UserOption>>(
         `/console/api/v1/users?q=${encodeURIComponent(debouncedQuery)}`,
       ),
     enabled,

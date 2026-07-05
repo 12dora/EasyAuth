@@ -266,6 +266,7 @@ def test_directory_client_excludes_inactive_managed_users(
               "source_slug": "dingtalk",
               "corp_id": "corp-1",
               "manager_user_id": "manager-1",
+              "resolved_at": "2026-07-02T12:00:00+08:00",
               "users": [
                 {
                   "source_user_id": "employee-1",
@@ -319,6 +320,7 @@ def test_directory_client_excludes_unbound_managed_users(
               "source_slug": "dingtalk",
               "corp_id": "corp-1",
               "manager_user_id": "manager-1",
+              "resolved_at": "2026-07-02T12:00:00+08:00",
               "users": [
                 {
                   "source_user_id": "employee-1",

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import cast
 
 type DirectoryJson = dict[str, JsonValue]
@@ -10,6 +11,7 @@ INVALID_MANAGED_USERS_FIELD_TYPE = "invalid managed users field type"
 EMPTY_MANAGED_USERS_FIELD = "empty managed users field"
 MISSING_DIRECTORY_IDENTITY_FIELD = "missing directory identity field"
 UNSUPPORTED_DIRECTORY_USER_STATUS = "unsupported directory user status"
+UNSUPPORTED_RESOLVED_AT = "managed users resolved_at must be a timezone-aware ISO datetime"
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,7 +152,7 @@ def parse_managed_users(payload: DirectoryJson, *, source_slug: str) -> DingTalk
         manager_user_id=_required_string(payload, "manager_user_id"),
         resolver=_string(payload.get("resolver")),
         stale=payload.get("stale") is True,
-        resolved_at=_string(payload.get("resolved_at")),
+        resolved_at=_required_aware_datetime_string(payload, "resolved_at"),
         users=parsed_users,
         active_authentik_user_ids=tuple(
             user.authentik_user_id for user in parsed_users if _is_active_linked_user(user)
@@ -226,6 +228,20 @@ def _required_list(payload: DirectoryJson, key: str) -> list[object]:
     if not isinstance(value, list):
         raise TypeError(INVALID_MANAGED_USERS_FIELD_TYPE)
     return cast("list[object]", value)
+
+
+def _required_aware_datetime_string(payload: DirectoryJson, key: str) -> str:
+    # 在数据入口就把 resolved_at 校验为带时区的 ISO datetime, 否则错误会一路透传到
+    # 响应序列化器让整个权限查询 500(并连累无关 grant)。此处抛 ValueError,
+    # 由 get_managed_users 归为目录不可用 -> 503 依赖故障(BF-3)。
+    value = _required_string(payload, key)
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as error:
+        raise ValueError(UNSUPPORTED_RESOLVED_AT) from error
+    if parsed.tzinfo is None:
+        raise ValueError(UNSUPPORTED_RESOLVED_AT)
+    return value
 
 
 def _required_identity(payload: DirectoryJson, key: str) -> str:

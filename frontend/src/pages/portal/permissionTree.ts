@@ -1,5 +1,13 @@
 import type { PermissionGroupItem, PermissionItem } from "../../lib/domain";
 
+/**
+ * 权限-应用作用域判定的唯一口径(正本清源): 未选应用、权限无 app_key(应用无关权限),
+ * 或权限 app_key 命中所选应用时都算匹配。分组与未分组路径共用此规则, 避免可见性漂移。
+ */
+export function permissionMatchesApp(permission: { app_key?: string }, appKey: string): boolean {
+  return !appKey || !permission.app_key || permission.app_key === appKey;
+}
+
 export function collectPermissionKeys(groups: PermissionGroupItem[], ungroupedPermissions: PermissionItem[]): string[] {
   return [...collectPermissions(groups).map((permission) => permission.key), ...ungroupedPermissions.map((permission) => permission.key)];
 }
@@ -8,13 +16,18 @@ export function collectPermissions(groups: PermissionGroupItem[]): PermissionIte
   return groups.flatMap((group) => collectGroupPermissions(group));
 }
 
-export function collectGroupPermissions(group: PermissionGroupItem): PermissionItem[] {
+export function collectGroupPermissions(group: PermissionGroupItem, visited: Set<string> = new Set()): PermissionItem[] {
+  // 环形分组图(A⊂B⊂A)防御: 已访问过的分组直接短路, 避免无限递归 / 栈溢出。
+  if (visited.has(group.key)) {
+    return [];
+  }
+  visited.add(group.key);
   const permissionsByKey = new Map<string, PermissionItem>();
   for (const permission of directPermissionsForGroup(group)) {
     permissionsByKey.set(permission.key, permission);
   }
   for (const childGroup of childGroupsForGroup(group)) {
-    for (const permission of collectGroupPermissions(childGroup)) {
+    for (const permission of collectGroupPermissions(childGroup, visited)) {
       permissionsByKey.set(permission.key, permission);
     }
   }
@@ -36,7 +49,7 @@ export function filterGroupsByApp(groups: PermissionGroupItem[], appKey: string)
       children: (group.children ?? [])
         .map((child) => (isPermissionGroupItem(child) ? filterGroupByApp(child, appKey) : filterPermissionByApp(child, appKey)))
         .filter((child): child is PermissionGroupItem | PermissionItem => Boolean(child)),
-      permissions: (group.permissions ?? []).filter((permission) => !permission.app_key || permission.app_key === appKey),
+      permissions: (group.permissions ?? []).filter((permission) => permissionMatchesApp(permission, appKey)),
     }));
 }
 
@@ -49,15 +62,12 @@ export function filterGroupByApp(group: PermissionGroupItem, appKey: string): Pe
     children: (group.children ?? [])
       .map((child) => (isPermissionGroupItem(child) ? filterGroupByApp(child, appKey) : filterPermissionByApp(child, appKey)))
       .filter((child): child is PermissionGroupItem | PermissionItem => Boolean(child)),
-    permissions: (group.permissions ?? []).filter((permission) => !permission.app_key || permission.app_key === appKey),
+    permissions: (group.permissions ?? []).filter((permission) => permissionMatchesApp(permission, appKey)),
   };
 }
 
 export function filterPermissionByApp(permission: PermissionItem, appKey: string): PermissionItem | null {
-  if (permission.app_key && permission.app_key !== appKey) {
-    return null;
-  }
-  return permission;
+  return permissionMatchesApp(permission, appKey) ? permission : null;
 }
 
 function childGroupsForGroup(group: PermissionGroupItem): PermissionGroupItem[] {

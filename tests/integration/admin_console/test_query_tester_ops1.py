@@ -86,7 +86,7 @@ def test_ops1_console_query_tester_runs_real_permission_query_without_storing_to
     assert audit_log.metadata["grant_count"] == 1
     assert audit_log.metadata["grant_version"] == 1
     assert audit_log.metadata["catalog_version"] == 1
-    assert audit_log.metadata["snapshot_version"] == "1.1"
+    assert audit_log.metadata["snapshot_version"] == "1.1.0"
     assert issue.plaintext_token not in str(audit_log.metadata)
 
 
@@ -113,7 +113,7 @@ def test_ops1_console_query_tester_returns_empty_snapshot_with_versions() -> Non
     assert payload["grants"] == []
     assert payload["grant_version"] == 1
     assert payload["catalog_version"] == 1
-    assert payload["snapshot_version"] == "1.1"
+    assert payload["snapshot_version"] == "1.1.0"
     assert isinstance(payload["expires_at"], str)
 
 

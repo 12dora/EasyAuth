@@ -9,6 +9,7 @@ interface AccessRequestFieldsProps {
   selectedApproverUserIds: string[];
   grantType: AccessGrantType;
   expiresAt: string;
+  expiresAtError: boolean;
   reason: string;
   onApproverToggle: (userId: string) => void;
   onGrantTypeChange: (grantType: AccessGrantType) => void;
@@ -22,12 +23,14 @@ export function AccessRequestFields({
   selectedApproverUserIds,
   grantType,
   expiresAt,
+  expiresAtError,
   reason,
   onApproverToggle,
   onGrantTypeChange,
   onExpiresAtChange,
   onReasonChange,
 }: AccessRequestFieldsProps) {
+  const nowMin = useMemo(nowLocalDatetime, []);
   return (
     <>
       <ApproverMultiSelect
@@ -43,10 +46,11 @@ export function AccessRequestFields({
             <option value="timed">限时</option>
           </SelectInput>
         </Field>
-        <Field label="过期时间">
+        <Field label="过期时间" error={expiresAtError ? "过期时间必须晚于当前时间。" : undefined}>
           <TextInput
             type="datetime-local"
             value={expiresAt}
+            min={nowMin}
             onChange={(event) => onExpiresAtChange(event.currentTarget.value)}
             disabled={grantType !== "timed"}
           />
@@ -57,6 +61,12 @@ export function AccessRequestFields({
       </Field>
     </>
   );
+}
+
+/** datetime-local 的 min: 本地时区当前时刻(YYYY-MM-DDTHH:mm)。仅约束原生选择器, 真正的未来校验在 canSubmit。 */
+function nowLocalDatetime(): string {
+  const now = new Date();
+  return new Date(now.getTime() - now.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 }
 
 function ApproverMultiSelect({
@@ -75,7 +85,7 @@ function ApproverMultiSelect({
   const visibleOptions = useMemo(() => filterApproverOptions(options, selectedUserIds, search), [options, search, selectedUserIds]);
 
   return (
-    <Field label="审批人" hint={appKey ? `已选 ${selectedUserIds.length} 名审批人。` : "请先选择应用后再选择审批人。"}>
+    <Field as="group" label="审批人" hint={appKey ? `已选 ${selectedUserIds.length} 名审批人。` : "请先选择应用后再选择审批人。"}>
       <div className="flex flex-col gap-2">
         <TextInput
           value={search}

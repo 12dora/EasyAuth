@@ -6,7 +6,9 @@ import {
   type ColumnDef,
 } from "@tanstack/react-table";
 import { useQuery } from "@tanstack/react-query";
-import { useLocation } from "react-router-dom";
+import { useLocation, useOutletContext } from "react-router-dom";
+
+import type { AppShellOutletContext } from "../../components/AppShell";
 import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../components/ui/TablePrimitives";
 import { TablePagination } from "../../components/ui/TablePagination";
 import { EmptyState } from "../../components/ui/EmptyState";
@@ -17,6 +19,7 @@ import { Badge } from "../../components/Badge";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
 import { apiRequest, itemsFromPayload } from "../../lib/api";
+import type { ListPayload } from "../../lib/api";
 import type { PortalGrant, PortalRequest } from "../../lib/domain";
 import {
   accessRequestStatusLabel,
@@ -70,6 +73,8 @@ type PortalRequestRow = PortalRequest & {
 export function PortalPage() {
   const location = useLocation();
   const view = portalViewFromPath(location.pathname);
+  const outletContext = useOutletContext<AppShellOutletContext | null>();
+  const currentUserId = outletContext?.currentUserId ?? "";
 
   return (
     <>
@@ -77,7 +82,7 @@ export function PortalPage() {
       {view === "grants" ? <PortalGrantSection endpoint="/portal/api/v1/me/grants" emptyText="暂无当前授权" /> : null}
       {view === "expiring" ? <PortalGrantSection endpoint="/portal/api/v1/me/grants/expiring" emptyText="暂无即将过期授权" /> : null}
       {view === "requests" ? <PortalRequestSection /> : null}
-      {view === "request" ? <AccessRequestForm /> : null}
+      {view === "request" ? <AccessRequestForm currentUserId={currentUserId} /> : null}
     </>
   );
 }
@@ -86,7 +91,7 @@ function PortalGrantSection({ endpoint, emptyText }: { endpoint: string; emptyTe
   const { t } = useI18n();
   const query = useQuery({
     queryKey: ["portal", endpoint],
-    queryFn: () => apiRequest<{ items?: PortalGrantRow[]; data?: PortalGrantRow[] }>(endpoint),
+    queryFn: () => apiRequest<ListPayload<PortalGrantRow>>(endpoint),
   });
   const grants = itemsFromPayload<PortalGrantRow>(query.data);
   const columns: ColumnDef<PortalGrantRow>[] = [
@@ -138,7 +143,7 @@ function PortalRequestSection() {
   const { t } = useI18n();
   const query = useQuery({
     queryKey: ["portal", "requests"],
-    queryFn: () => apiRequest<{ items?: PortalRequestRow[]; data?: PortalRequestRow[] }>("/portal/api/v1/me/access-requests"),
+    queryFn: () => apiRequest<ListPayload<PortalRequestRow>>("/portal/api/v1/me/access-requests"),
   });
   const requests = itemsFromPayload<PortalRequestRow>(query.data);
   const columns: ColumnDef<PortalRequestRow>[] = [

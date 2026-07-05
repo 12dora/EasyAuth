@@ -20,6 +20,7 @@ import { Dialog } from "../../../../components/Dialog";
 import { Field, SelectInput, TextArea, TextInput } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
+import type { ListPayload } from "../../../../lib/api";
 import type { AppScopeItem, AuthorizationGroupGrantItem, AuthorizationGroupItem, ManagedScopePolicyItem, PermissionItem } from "../../../../lib/domain";
 import { buildAuthorizationGroupPayload, grantKey, normalizeGrants } from "../matrix/grantDraft";
 
@@ -46,15 +47,15 @@ export function MatrixTab({ appKey }: { appKey: string }) {
 
   const groupsQuery = useQuery({
     queryKey: groupsQueryKey,
-    queryFn: () => apiRequest<{ items?: AuthorizationGroupItem[] }>(`/console/api/v1/apps/${appKey}/authorization-groups`),
+    queryFn: () => apiRequest<ListPayload<AuthorizationGroupItem>>(`/console/api/v1/apps/${appKey}/authorization-groups`),
   });
   const permissionsQuery = useQuery({
     queryKey: ["console", "app", appKey, "permissions"],
-    queryFn: () => apiRequest<{ items?: PermissionItem[] }>(`/console/api/v1/apps/${appKey}/permissions`),
+    queryFn: () => apiRequest<ListPayload<PermissionItem>>(`/console/api/v1/apps/${appKey}/permissions`),
   });
   const scopesQuery = useQuery({
     queryKey: ["console", "app", appKey, "scopes"],
-    queryFn: () => apiRequest<{ items?: AppScopeItem[] }>(`/console/api/v1/apps/${appKey}/scopes`),
+    queryFn: () => apiRequest<ListPayload<AppScopeItem>>(`/console/api/v1/apps/${appKey}/scopes`),
   });
 
   const authorizationGroups = itemsFromPayload<AuthorizationGroupItem>(groupsQuery.data);
@@ -168,7 +169,7 @@ export function MatrixTab({ appKey }: { appKey: string }) {
           <SelectInput
             aria-label={`${row.original.permission} / ${row.original.scope} 管理范围计算方式`}
             value={managedScopePolicyMode(row.original.managed_scope_policy)}
-            onChange={(event) => updateGrantManagedScopePolicy(form.grants, row.original, event.currentTarget.value, setForm)}
+            onChange={(event) => updateGrantManagedScopePolicy(row.original, event.currentTarget.value, setForm)}
           >
             <option value="inherit">继承应用默认</option>
             <option value="override">按钉钉主管关系</option>
@@ -198,7 +199,7 @@ export function MatrixTab({ appKey }: { appKey: string }) {
           <TableRowActionButton
             type="button"
             variant={row.original.is_active ? "ghost-danger" : "ghost"}
-            onClick={() => updateGrant(form.grants, row.original, !row.original.is_active, setForm)}
+            onClick={() => updateGrant(row.original, !row.original.is_active, setForm)}
           >
             {row.original.is_active ? "停用" : "启用"}
           </TableRowActionButton>
@@ -388,20 +389,19 @@ export function MatrixTab({ appKey }: { appKey: string }) {
 }
 
 function updateGrant(
-  grants: AuthorizationGroupGrantItem[],
   target: AuthorizationGroupGrantItem,
   isActive: boolean,
   setForm: React.Dispatch<React.SetStateAction<AuthorizationGroupForm>>,
 ) {
   const targetKey = grantKey(target.permission, target.scope);
+  // 基于 updater 的 current.grants 计算, 避免批处理时用到过期快照相互覆盖(与 removeGrant 同一口径)。
   setForm((current) => ({
     ...current,
-    grants: grants.map((grant) => (grantKey(grant.permission, grant.scope) === targetKey ? { ...grant, is_active: isActive } : grant)),
+    grants: current.grants.map((grant) => (grantKey(grant.permission, grant.scope) === targetKey ? { ...grant, is_active: isActive } : grant)),
   }));
 }
 
 function updateGrantManagedScopePolicy(
-  grants: AuthorizationGroupGrantItem[],
   target: AuthorizationGroupGrantItem,
   mode: string,
   setForm: React.Dispatch<React.SetStateAction<AuthorizationGroupForm>>,
@@ -409,7 +409,7 @@ function updateGrantManagedScopePolicy(
   const targetKey = grantKey(target.permission, target.scope);
   setForm((current) => ({
     ...current,
-    grants: grants.map((grant) =>
+    grants: current.grants.map((grant) =>
       grantKey(grant.permission, grant.scope) === targetKey
         ? { ...grant, managed_scope_policy: managedScopePolicyFromMode(mode) }
         : grant,

@@ -19,7 +19,7 @@ import { Dialog } from "../../../../components/Dialog";
 import { Field, SelectInput, TextArea, TextInput } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
-import type { JsonObject } from "../../../../lib/api";
+import type { JsonObject, ListPayload } from "../../../../lib/api";
 import type { AppScopeItem, PermissionGroupItem, PermissionItem, PermissionTreePayload } from "../../../../lib/domain";
 import { flattenGroups } from "../utils";
 
@@ -86,15 +86,15 @@ export function CatalogTab({ appKey }: { appKey: string }) {
   });
   const groupsQuery = useQuery({
     queryKey: ["console", "app", appKey, "permission-groups"],
-    queryFn: () => apiRequest<{ items?: PermissionGroupItem[] }>(`/console/api/v1/apps/${appKey}/permission-groups`),
+    queryFn: () => apiRequest<ListPayload<PermissionGroupItem>>(`/console/api/v1/apps/${appKey}/permission-groups`),
   });
   const permissionsQuery = useQuery({
     queryKey: ["console", "app", appKey, "permissions"],
-    queryFn: () => apiRequest<{ items?: PermissionItem[] }>(`/console/api/v1/apps/${appKey}/permissions`),
+    queryFn: () => apiRequest<ListPayload<PermissionItem>>(`/console/api/v1/apps/${appKey}/permissions`),
   });
   const scopesQuery = useQuery({
     queryKey: ["console", "app", appKey, "scopes"],
-    queryFn: () => apiRequest<{ items?: AppScopeItem[] }>(`/console/api/v1/apps/${appKey}/scopes`),
+    queryFn: () => apiRequest<ListPayload<AppScopeItem>>(`/console/api/v1/apps/${appKey}/scopes`),
   });
   const groups = itemsFromPayload<PermissionGroupItem>(groupsQuery.data);
   const treeGroups = useMemo(() => flattenGroups(treeQuery.data?.groups ?? []), [treeQuery.data]);

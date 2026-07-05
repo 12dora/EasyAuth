@@ -9,13 +9,14 @@ from django.contrib.auth.hashers import PBKDF2PasswordHasher
 from django.db import transaction
 from django.utils import timezone
 
-from easyauth.applications.models import App, AppCredential
+from easyauth.applications.models import APP_CREDENTIAL_STATIC_KIND, App, AppCredential
 from easyauth.audit.services import AuditRecord, AuditService
 
 if TYPE_CHECKING:
     from easyauth.audit.models import JsonValue
 
-APP_CREDENTIAL_STATIC_KIND: Final = "static_token"
+# 单一事实源: token 类型常量与其模型不变量一起定义在 applications.models。
+__all__ = ["APP_CREDENTIAL_STATIC_KIND"]
 STATIC_APP_TOKEN_ENTROPY_BYTES: Final = 32
 STATIC_APP_CREDENTIAL_PREFIX: Final = "eat_"
 APP_CREDENTIAL_CREATED_EVENT: Final = "app_credential_created"

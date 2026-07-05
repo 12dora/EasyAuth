@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -145,7 +147,11 @@ def _grant_snapshot(
         grants=grants,
         grant_version=grant.version,
         catalog_version=app.catalog_version,
-        snapshot_version=_snapshot_version(grant.version, app.catalog_version),
+        snapshot_version=_snapshot_version(
+            grant.version,
+            app.catalog_version,
+            _resolved_digest(grants),
+        ),
         grant_expires_at=grant.grant_expires_at,
     )
 
@@ -285,9 +291,27 @@ def _empty_snapshot(*, user_id: str, app: App, grant_version: int) -> Permission
         grants=(),
         grant_version=grant_version,
         catalog_version=app.catalog_version,
-        snapshot_version=_snapshot_version(grant_version, app.catalog_version),
+        snapshot_version=_snapshot_version(grant_version, app.catalog_version, "0"),
     )
 
 
-def _snapshot_version(grant_version: int, catalog_version: int) -> str:
-    return f"{grant_version}.{catalog_version}"
+def _snapshot_version(grant_version: int, catalog_version: int, resolved_digest: str) -> str:
+    # MANAGED_USERS 有效人员集是查询时动态解析的, 不改变 grant/catalog 版本; 把解析身份的
+    # 稳定摘要并入版本, 下属增减才能让下游 etag/缓存失效, 不再服务陈旧集合(BF-2)。
+    return f"{grant_version}.{catalog_version}.{resolved_digest}"
+
+
+def _resolved_digest(grants: tuple[ExpandedGrant, ...]) -> str:
+    resolved_payloads = [
+        {
+            "user_ids": sorted(grant.resolved.user_ids),
+            "resolver": grant.resolved.resolver,
+            "resolved_at": grant.resolved.resolved_at,
+        }
+        for grant in grants
+        if grant.resolved is not None
+    ]
+    if not resolved_payloads:
+        return "0"
+    canonical = json.dumps(resolved_payloads, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]

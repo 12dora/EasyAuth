@@ -14,7 +14,7 @@ import { Field, TextArea } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { useI18n } from "../../../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
-import type { JsonObject } from "../../../../lib/api";
+import type { JsonObject, ListPayload } from "../../../../lib/api";
 
 type ManifestDiffItem = {
   type?: string;

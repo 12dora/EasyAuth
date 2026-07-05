@@ -7,8 +7,8 @@ import { useAccessRequestForm } from "../hooks/useAccessRequestForm";
 import { AccessRequestFields } from "./AccessRequestFields";
 import { RequestTargetPicker } from "./RequestTargetPicker";
 
-export function AccessRequestForm() {
-  const form = useAccessRequestForm();
+export function AccessRequestForm({ currentUserId = "" }: { currentUserId?: string }) {
+  const form = useAccessRequestForm(currentUserId);
 
   return (
     <PanelSurface>
@@ -40,6 +40,7 @@ export function AccessRequestForm() {
           selectedApproverUserIds={form.selectedApproverUserIds}
           grantType={form.grantType}
           expiresAt={form.expiresAt}
+          expiresAtError={form.expiresAtError}
           reason={form.reason}
           onApproverToggle={form.toggleApprover}
           onGrantTypeChange={form.changeGrantType}

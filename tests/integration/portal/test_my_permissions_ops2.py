@@ -97,7 +97,7 @@ def test_ops2_portal_lists_my_current_permissions_for_active_grants() -> None:
     assert "invoice.read" in body
     assert '"grant_version": 3' in body
     assert '"catalog_version": 1' in body
-    assert '"snapshot_version": "3.1"' in body
+    assert '"snapshot_version": "3.1.0"' in body
     assert GRANT_TYPE_PERMANENT in body
     assert "其他用户应用" not in body
     assert "已撤销应用" not in body

@@ -115,7 +115,7 @@ def test_permission_query_returns_groups_grants_versions_expiration_and_audit() 
     ]
     assert payload["grant_version"] == 1
     assert payload["catalog_version"] == ACTIVE_APP_CATALOG_VERSION
-    assert payload["snapshot_version"] == "1.12"
+    assert payload["snapshot_version"] == "1.12.0"
     expires_at = datetime.fromisoformat(str(payload["expires_at"]))
     assert expires_at.tzinfo is not None
     assert before + timedelta(seconds=PERMISSION_QUERY_TTL_SECONDS) <= expires_at
@@ -132,7 +132,7 @@ def test_permission_query_returns_groups_grants_versions_expiration_and_audit() 
         "grant_count": 3,
         "grant_version": 1,
         "catalog_version": ACTIVE_APP_CATALOG_VERSION,
-        "snapshot_version": "1.12",
+        "snapshot_version": "1.12.0",
         "credential_type": "static_token",
         "credential_id": issue.credential_id,
     }
@@ -184,7 +184,7 @@ def test_permission_query_returns_empty_for_unknown_disabled_or_departed_user(
     assert payload["grants"] == []
     assert payload["grant_version"] == expected_version
     assert payload["catalog_version"] == EMPTY_APP_CATALOG_VERSION
-    assert payload["snapshot_version"] == f"{expected_version}.{EMPTY_APP_CATALOG_VERSION}"
+    assert payload["snapshot_version"] == f"{expected_version}.{EMPTY_APP_CATALOG_VERSION}.0"
 
 
 @pytest.mark.parametrize(
@@ -349,6 +349,18 @@ def test_permission_query_throttles_repeated_auth_failures() -> None:
     # Then: 认证失败先返回 401, 累积超过阈值后返回 429(纵深防御限流)。
     assert HTTPStatus.UNAUTHORIZED in statuses
     assert HTTPStatus.TOO_MANY_REQUESTS in statuses
+
+
+def test_permission_query_rejects_non_get_methods() -> None:
+    # Given: 一个合法应用与静态 token。
+    app = App.objects.create(app_key="method-guard-app", name="Method Guard")
+    issue = StaticTokenService.create_token(app=app, name="integration")
+    url = _permission_url(app.app_key, "any-user")
+
+    # When / Then: 非 GET 方法返回 405, 不执行读逻辑。
+    for method in ("post", "put", "delete"):
+        response = getattr(Client(), method)(url, HTTP_AUTHORIZATION=_bearer(issue.plaintext_token))
+        assert response.status_code == HTTPStatus.METHOD_NOT_ALLOWED
 
 
 def _permission_url(app_key: str, user_id: str) -> str:

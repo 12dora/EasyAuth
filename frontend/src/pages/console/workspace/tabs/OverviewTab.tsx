@@ -21,7 +21,7 @@ import { Dialog } from "../../../../components/Dialog";
 import { Field, SelectInput, TextArea, TextInput } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
-import type { JsonObject } from "../../../../lib/api";
+import type { JsonObject, ListPayload } from "../../../../lib/api";
 import type { AppSummary, ConfigurationIssue, ConfigurationStatus } from "../../../../lib/domain";
 import { useI18n } from "../../../../i18n/I18nProvider";
 import { formatDateTime, readinessLabel, readinessTone } from "../../../../lib/status";
@@ -38,7 +38,7 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
   });
   const membershipsQuery = useQuery({
     queryKey: ["console", "app", appKey, "memberships"],
-    queryFn: () => apiRequest<{ items?: MembershipItem[] }>(`/console/api/v1/apps/${appKey}/memberships`),
+    queryFn: () => apiRequest<ListPayload<MembershipItem>>(`/console/api/v1/apps/${appKey}/memberships`),
     enabled: Boolean(appKey),
   });
   const issues = statusQuery.data?.items ?? [];

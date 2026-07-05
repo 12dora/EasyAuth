@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 from http import HTTPStatus
 from json import dumps
-from typing import Final
+from typing import Final, cast
 
 import pytest
 from django.db import connection
@@ -36,14 +36,15 @@ from easyauth.applications.models import (
     Permission,
 )
 from easyauth.grants.models import AccessGrant
-from easyauth.portal.views import request_rows_for_user
+from easyauth.portal.access_request_data import access_request_items_for_user
 from tests.integration.portal.helpers import logged_in_client
 
 pytestmark = pytest.mark.django_db
 
 REQUESTS_API_URL: Final = "/portal/api/v1/me/access-requests"
 EXPECTED_REQUEST_ROW_COUNT: Final = 3
-EXPECTED_REQUEST_ROW_QUERIES: Final = 2
+# 真实 API 路径: 主查询 + 授权组批量 + direct grant 批量, 固定 3 条不随行数增长。
+EXPECTED_REQUEST_ROW_QUERIES: Final = 3
 
 
 def test_s14_portal_api_accepts_only_requestable_authorization_groups() -> None:
@@ -204,7 +205,7 @@ def test_s14_portal_status_list_distinguishes_request_statuses() -> None:
     assert "授权落库失败" in body
 
 
-def test_s14_portal_request_rows_load_role_names_in_bulk() -> None:
+def test_s14_portal_request_items_load_group_names_in_bulk() -> None:
     # Given: 员工有多条申请状态行。
     _client, user = logged_in_client("s14-portal-query-user")
     app = App.objects.create(app_key="s14-portal-query-app", name="CRM")
@@ -220,13 +221,18 @@ def test_s14_portal_request_rows_load_role_names_in_bulk() -> None:
             authorization_group=group,
         )
 
-    # When: 门户构建状态表行。
+    # When: 门户构建申请列表项(真实 API 路径)。
     with CaptureQueriesContext(connection) as captured_queries:
-        rows = request_rows_for_user(user)
+        items = access_request_items_for_user(user)
 
-    # Then: 多行角色名通过固定查询数批量加载。
-    assert len(rows) == EXPECTED_REQUEST_ROW_COUNT
-    assert {row.role_names for row in rows} == {"CRM 管理员"}
+    # Then: 多行授权组名称通过固定查询数批量加载。
+    assert len(items) == EXPECTED_REQUEST_ROW_COUNT
+    group_names = {
+        cast("dict[str, object]", group_item)["name"]
+        for item in items
+        for group_item in cast("list[object]", item["authorization_groups"])
+    }
+    assert group_names == {"CRM 管理员"}
     assert len(captured_queries) == EXPECTED_REQUEST_ROW_QUERIES
 
 

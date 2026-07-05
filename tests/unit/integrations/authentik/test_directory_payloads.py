@@ -2,10 +2,37 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from easyauth.integrations.authentik.directory_payloads import parse_user
+import pytest
+
+from easyauth.integrations.authentik.directory_payloads import parse_managed_users, parse_user
 
 if TYPE_CHECKING:
     from easyauth.integrations.authentik.directory_payloads import DirectoryJson
+
+
+def _managed_users_payload(resolved_at: object) -> dict[str, object]:
+    return {
+        "source_slug": "dingtalk",
+        "corp_id": "corp-1",
+        "manager_user_id": "manager-1",
+        "resolved_at": resolved_at,
+        "users": [],
+    }
+
+
+def test_parse_managed_users_accepts_aware_resolved_at() -> None:
+    parsed = parse_managed_users(
+        _managed_users_payload("2026-07-02T12:00:00+08:00"),
+        source_slug="dingtalk",
+    )
+    assert parsed.resolved_at == "2026-07-02T12:00:00+08:00"
+
+
+@pytest.mark.parametrize("resolved_at", ["", "2026-07-02T12:00:00", "not-a-date"])
+def test_parse_managed_users_rejects_missing_or_naive_resolved_at(resolved_at: str) -> None:
+    # 缺失/naive/非 ISO 的 resolved_at 必须在数据入口就报错(BF-3), 由上层归为目录不可用 -> 503。
+    with pytest.raises(ValueError, match=r"resolved_at|empty"):
+        _ = parse_managed_users(_managed_users_payload(resolved_at), source_slug="dingtalk")
 
 
 def test_parse_user_passes_through_avatar_and_title() -> None:

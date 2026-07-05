@@ -21,6 +21,7 @@ export function UserSummary({ currentUser, mode, open, onOpenChange }: UserSumma
   const userName = firstPresent(currentUser.displayName, mode === "console" ? "控制台用户" : "当前用户");
   const userRole = firstPresent(currentUser.role, "未分组");
   const logoutUrl = localLogoutUrl(currentUser.logoutUrl);
+  const avatarUrl = safeAvatarUrl(currentUser.avatarUrl);
   const securityHref = mode === "console" ? "/console/settings" : "/portal/settings";
   const avatarLabel = userName.slice(0, 1).toUpperCase();
   const csrfToken = readCsrfToken();
@@ -40,8 +41,8 @@ export function UserSummary({ currentUser, mode, open, onOpenChange }: UserSumma
           <strong>{userName}</strong>
           <span>{userRole}</span>
         </span>
-        {currentUser.avatarUrl ? (
-          <img className="avatar avatar-image" src={currentUser.avatarUrl} alt={`${userName}头像`} />
+        {avatarUrl ? (
+          <img className="avatar avatar-image" src={avatarUrl} alt={`${userName}头像`} />
         ) : (
           <span className="avatar" aria-hidden="true">
             {avatarLabel}
@@ -75,6 +76,30 @@ function localLogoutUrl(value: string | undefined): string {
     return normalizedValue;
   }
   return DEFAULT_LOGOUT_URL;
+}
+
+/**
+ * 头像 URL 硬化, 与 localLogoutUrl 保持同一处理口径(正本清源):
+ * 仅接受同源相对路径(以 / 开头, 但非 //、不含反斜杠)或 https 绝对地址;
+ * data:/javascript:/http: 等一律回退为首字母头像(返回 undefined)。
+ */
+function safeAvatarUrl(value: string | undefined): string | undefined {
+  const normalizedValue = value?.trim();
+  if (!normalizedValue) {
+    return undefined;
+  }
+  if (normalizedValue.includes("\\")) {
+    return undefined;
+  }
+  if (normalizedValue.startsWith("/") && !normalizedValue.startsWith("//")) {
+    return normalizedValue;
+  }
+  try {
+    const parsed = new URL(normalizedValue);
+    return parsed.protocol === "https:" ? normalizedValue : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 function firstPresent(...values: Array<string | undefined>): string {

@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { useEffect, useId } from "react";
+import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 
@@ -23,7 +23,8 @@ const SIZE_CLASSES: Record<DialogSize, string> = {
 
 export function Dialog({ title, children, footer, onClose, size = "md", eyebrow }: DialogProps) {
   const titleId = useId();
-  useDialogEffects(onClose);
+  const panelRef = useRef<HTMLDivElement>(null);
+  useDialogEffects(onClose, panelRef);
 
   if (typeof document === "undefined") {
     return null;
@@ -38,6 +39,8 @@ export function Dialog({ title, children, footer, onClose, size = "md", eyebrow 
         onClick={onClose}
       />
       <div
+        ref={panelRef}
+        tabIndex={-1}
         className={`paper-card relative z-10 w-full overflow-hidden rounded-[3px] p-0 ${SIZE_CLASSES[size]}`}
         role="dialog"
         aria-modal="true"
@@ -71,20 +74,62 @@ export function Dialog({ title, children, footer, onClose, size = "md", eyebrow 
   );
 }
 
-function useDialogEffects(onClose: () => void) {
+const FOCUSABLE_SELECTOR =
+  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+function focusableElements(panel: HTMLElement): HTMLElement[] {
+  // 作用域限定在面板内, 背景遮罩按钮天然不在其中, 无需再排除。
+  return Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
+}
+
+function useDialogEffects(onClose: () => void, panelRef: React.RefObject<HTMLDivElement | null>) {
   useEffect(() => {
+    const previouslyFocused = document.activeElement as HTMLElement | null;
+    const panel = panelRef.current;
+    // 打开时把焦点移入弹窗: 首个可聚焦元素, 否则聚焦面板本身(tabIndex=-1)。
+    if (panel) {
+      const focusables = focusableElements(panel);
+      (focusables[0] ?? panel).focus();
+    }
+
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         onClose();
+        return;
+      }
+      if (event.key !== "Tab" || !panelRef.current) {
+        return;
+      }
+      // Tab 焦点陷阱: 仅在面板内循环, 背景遮罩不进入 Tab 序列。
+      const focusables = focusableElements(panelRef.current);
+      if (focusables.length === 0) {
+        event.preventDefault();
+        panelRef.current.focus();
+        return;
+      }
+      const first = focusables[0];
+      const last = focusables[focusables.length - 1];
+      const active = document.activeElement as HTMLElement | null;
+      if (event.shiftKey) {
+        if (active === first || active === panelRef.current || !panelRef.current.contains(active)) {
+          event.preventDefault();
+          last.focus();
+        }
+      } else if (active === last) {
+        event.preventDefault();
+        first.focus();
       }
     };
+
     document.addEventListener("keydown", onKeyDown);
     lockDialogScroll();
     return () => {
       document.removeEventListener("keydown", onKeyDown);
       unlockDialogScroll();
+      // 关闭后把焦点还给打开弹窗前聚焦的元素(通常是触发按钮)。
+      previouslyFocused?.focus?.();
     };
-  }, [onClose]);
+  }, [onClose, panelRef]);
 }
 
 let scrollLockDepth = 0;

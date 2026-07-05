@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, ClassVar, override
+from typing import TYPE_CHECKING, ClassVar, Final, override
 
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -98,6 +98,12 @@ class App(models.Model):
         return self.app_key
 
 
+APP_CREDENTIAL_STATIC_KIND: Final = "static_token"
+TOKEN_LOOKUP_REQUIRED_MESSAGE: Final = (
+    "静态 token 凭据必须写入 token_lookup(sha256), 否则永远认证失败。"  # noqa: S105 - 提示文案.
+)
+
+
 class AppCredential(models.Model):
     if TYPE_CHECKING:
         id: ClassVar[int]
@@ -135,6 +141,14 @@ class AppCredential(models.Model):
     @override
     def __str__(self) -> str:
         return f"{self.app.app_key}:{self.credential_type}:{self.id}"
+
+    @override
+    def clean(self) -> None:
+        super().clean()
+        # 认证强依赖精确匹配 token_lookup=sha256(token); 空值凭据只会静默 401,
+        # 属不可能/无效状态, 建号阶段就必须快速失败(BF-1)。
+        if self.credential_type == APP_CREDENTIAL_STATIC_KIND and not self.token_lookup:
+            raise ValidationError({"token_lookup": TOKEN_LOOKUP_REQUIRED_MESSAGE})
 
 
 AppStaticToken = AppCredential

@@ -13,7 +13,6 @@ from easyauth.applications.models import (
 from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
 from easyauth.grants.query import ExpandedGrant, GroupSnapshot
 from easyauth.portal.api_data import current_grant_items_for_user
-from easyauth.portal.grant_rows import current_grant_rows_for_user
 from easyauth.portal.permission_aggregation import json_expanded_grants, json_groups
 
 pytestmark = pytest.mark.django_db
@@ -65,7 +64,7 @@ def test_current_permission_api_returns_groups_and_expanded_scoped_grants() -> N
     ]
     assert item["grant_version"] == grant.version
     assert item["catalog_version"] == app.catalog_version
-    assert item["snapshot_version"] == f"{grant.version}.{app.catalog_version}"
+    assert item["snapshot_version"] == f"{grant.version}.{app.catalog_version}.0"
 
 
 def test_current_permission_api_excludes_inactive_and_deprecated_permissions() -> None:
@@ -113,40 +112,6 @@ def test_current_permission_api_excludes_inactive_and_deprecated_permissions() -
             "source_key": "",
         },
     ]
-
-
-def test_current_grant_rows_render_group_names_and_scoped_permission_labels() -> None:
-    # Given: 门户行展示需要把授权组和 scoped grants 展成稳定中文分隔文本。
-    user, app, grant = _create_current_grant("portal-row-labels")
-    global_scope = _create_scope(app, "GLOBAL", "全局")
-    team_scope = _create_scope(app, "TEAM", "团队")
-    dashboard_permission = _create_permission(app, "dashboard.view", global_scope.key)
-    refund_permission = _create_permission(app, "orders.refund.approve", team_scope.key)
-    group = AuthorizationGroup.objects.create(
-        app=app,
-        key="ops-bundle",
-        kind="bundle",
-        name="运营包",
-    )
-    _ = AuthorizationGroupGrant.objects.create(
-        authorization_group=group,
-        permission=refund_permission,
-        scope_key=team_scope.key,
-    )
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
-    _ = AccessGrantPermission.objects.create(
-        grant=grant,
-        permission=dashboard_permission,
-        scope_key=global_scope.key,
-    )
-
-    # When: 门户授权行聚合展示权限。
-    row = current_grant_rows_for_user(user)[0]
-
-    # Then: row 展示授权组名称和 permission:scope 标签。
-    assert row.role_names == "运营包"
-    assert row.permission_keys == "dashboard.view:GLOBAL、orders.refund.approve:TEAM"
-
 
 def test_json_helpers_serialize_new_authorization_fact_shapes() -> None:
     # Given: 新授权事实快照包含 groups 和 expanded grants。

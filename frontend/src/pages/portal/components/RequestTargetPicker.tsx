@@ -75,6 +75,7 @@ export function RequestTargetPicker({
         </Field>
       </div>
       <Field
+        as="group"
         label="直接权限"
         hint={appKey ? `已选 ${selectedPermissionKeys.length} 项权限范围，可留空。` : "请先选择应用后再选择直接权限。"}
       >

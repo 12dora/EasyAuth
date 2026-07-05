@@ -242,7 +242,7 @@ def test_permission_query_returns_empty_snake_case_snapshot_without_envelope() -
     assert payload["grants"] == []
     assert payload["grant_version"] == 1
     assert payload["catalog_version"] == 1
-    assert payload["snapshot_version"] == "1.1"
+    assert payload["snapshot_version"] == "1.1.0"
     assert isinstance(payload["expires_at"], str)
     assert "userId" not in payload
     assert "appKey" not in payload

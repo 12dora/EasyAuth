@@ -30,6 +30,7 @@ from easyauth.grants.query import (
     ExpandedGrant,
     GroupSnapshot,
     ResolvedManagedUsers,
+    _resolved_digest,
     resolve_user_permissions,
 )
 from easyauth.integrations.authentik.directory_client import AuthentikDirectoryUnavailableError
@@ -74,7 +75,7 @@ def test_resolve_user_permissions_expands_group_grants_and_sorts_groups_and_gran
     assert snapshot.app_key == "resolve-groups-app"
     assert snapshot.grant_version == 1
     assert snapshot.catalog_version == 1
-    assert snapshot.snapshot_version == "1.1"
+    assert snapshot.snapshot_version == "1.1.0"
     assert snapshot.groups == (
         GroupSnapshot(key="finance", kind="bundle", name="财务"),
         GroupSnapshot(key="sales", kind="role", name="销售"),
@@ -441,7 +442,7 @@ def test_resolve_user_permissions_returns_catalog_and_snapshot_versions_for_empt
     assert snapshot.app_key == "unknown-user-resolve-app"
     assert snapshot.grant_version == 0
     assert snapshot.catalog_version == UNKNOWN_USER_CATALOG_VERSION
-    assert snapshot.snapshot_version == "0.12"
+    assert snapshot.snapshot_version == "0.12.0"
     assert snapshot.groups == ()
     assert snapshot.grants == ()
 
@@ -686,3 +687,27 @@ def test_resolve_user_permissions_reuses_directory_result_across_grants(
     # Then: 目录 HTTP 只发一次, 三个 grant 共享同一份解析结果。
     assert len(snapshot.grants) == MANAGED_GRANT_LINK_COUNT
     assert client.call_count == 1
+
+
+def test_resolved_digest_changes_when_managed_user_set_changes() -> None:
+    def _grant(user_ids: tuple[str, ...]) -> ExpandedGrant:
+        return ExpandedGrant(
+            permission="customer.read",
+            scope="MANAGED_USERS",
+            source_type="direct",
+            source_key="",
+            resolved=ResolvedManagedUsers(
+                user_ids=user_ids,
+                resolver="dingtalk_manager_chain",
+                resolved_at="2026-07-02T12:00:00+08:00",
+            ),
+        )
+
+    base = _resolved_digest((_grant(("u1", "u2")),))
+    # 顺序不同、内容相同 -> 摘要稳定。
+    assert base == _resolved_digest((_grant(("u2", "u1")),))
+    # 下属集合变化 -> 摘要变化(下游 etag/缓存据此失效)。
+    assert base != _resolved_digest((_grant(("u1", "u2", "u3")),))
+    # 无 MANAGED_USERS 解析 -> 固定 "0"。
+    plain = ExpandedGrant(permission="p", scope="SELF", source_type="direct", source_key="")
+    assert _resolved_digest((plain,)) == "0"

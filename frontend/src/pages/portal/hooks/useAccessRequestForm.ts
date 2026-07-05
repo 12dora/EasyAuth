@@ -12,7 +12,7 @@ import type {
   PortalRequestCatalog,
 } from "../../../lib/domain";
 import { queryClient } from "../../../lib/query";
-import { collectPermissionKeys, filterGroupsByApp } from "../permissionTree";
+import { collectPermissionKeys, filterGroupsByApp, permissionMatchesApp } from "../permissionTree";
 
 export type AccessGrantType = "permanent" | "timed";
 
@@ -143,6 +143,7 @@ interface AccessRequestFormResult {
   submitErrorMessage: string;
   toastMessage: string;
   canSubmit: boolean;
+  expiresAtError: boolean;
   isSubmitting: boolean;
   changeAppKey: (nextAppKey: string) => void;
   changeAuthorizationGroupKey: (groupKey: string) => void;
@@ -160,30 +161,37 @@ interface AccessRequestFormResult {
   submit: () => void;
 }
 
-export function useAccessRequestForm(): AccessRequestFormResult {
+export function useAccessRequestForm(currentUserId = ""): AccessRequestFormResult {
   const fields = useAccessRequestFields();
   const catalogQuery = useQuery({
     queryKey: ["portal", "request-catalog"],
     queryFn: () => apiRequest<PortalRequestCatalogView>("/portal/api/v1/request-catalog"),
   });
-  const catalogView = useMemo(() => buildCatalogView(catalogQuery.data, fields.appKey), [fields.appKey, catalogQuery.data]);
+  const catalogView = useMemo(
+    () => buildCatalogView(catalogQuery.data, fields.appKey, currentUserId),
+    [fields.appKey, catalogQuery.data, currentUserId],
+  );
   useDefaultSingleScopes(fields.setSelectedPermissionScopes, catalogView);
-  useDefaultApprovers(fields, catalogView);
+  useDefaultApprovers(fields, catalogView, currentUserId);
   const submitMutation = useAccessRequestSubmitMutation(fields);
   const actions = buildAccessRequestActions(fields, catalogView, () => submitMutation.mutate());
   const hasTarget = Boolean(fields.authorizationGroupKey || fields.selectedPermissionKeys.length > 0);
   const selectedScopesAreComplete = fields.selectedPermissionKeys.every((key) => hasSelectionScope(key));
+  // 限时授权必须选择"未来"的过期时间, 否则后端会视为已过期而白跑一次审批。
+  const expiresAtIsFuture = Boolean(fields.expiresAt) && new Date(fields.expiresAt) > new Date();
+  const expiresAtError = fields.grantType === "timed" && Boolean(fields.expiresAt) && !expiresAtIsFuture;
   const canSubmit = Boolean(
     fields.appKey &&
       hasTarget &&
       selectedScopesAreComplete &&
       fields.selectedApproverUserIds.length > 0 &&
-      fields.reason &&
-      (fields.grantType === "permanent" || fields.expiresAt) &&
+      !fields.selectedApproverUserIds.includes(currentUserId) &&
+      fields.reason.trim().length > 0 &&
+      (fields.grantType === "permanent" || expiresAtIsFuture) &&
       !submitMutation.isPending,
   );
 
-  return buildAccessRequestFormResult(fields, catalogView, catalogQuery.isLoading, catalogQuery.error, submitMutation, canSubmit, actions);
+  return buildAccessRequestFormResult(fields, catalogView, catalogQuery.isLoading, catalogQuery.error, submitMutation, canSubmit, expiresAtError, actions);
 }
 
 function useAccessRequestFields(): AccessRequestFields {
@@ -247,6 +255,7 @@ function buildAccessRequestFormResult(
   catalogError: Error | null,
   submitMutation: UseMutationResult<unknown, Error, void, unknown>,
   canSubmit: boolean,
+  expiresAtError: boolean,
   actions: AccessRequestActions,
 ): AccessRequestFormResult {
   return {
@@ -270,6 +279,7 @@ function buildAccessRequestFormResult(
     submitErrorMessage: submitMutation.error ? submitMutation.error.message : "",
     toastMessage: submitMutation.isSuccess ? "申请已提交" : accessRequestToastMessage(fields, catalogView, catalogIsLoading),
     canSubmit,
+    expiresAtError,
     isSubmitting: submitMutation.isPending,
     changeAppKey: actions.changeAppKey,
     changeAuthorizationGroupKey: actions.changeAuthorizationGroupKey,
@@ -355,17 +365,19 @@ function buildAccessRequestActions(fields: AccessRequestFields, catalogView: Cat
   };
 }
 
-function buildCatalogView(catalog: PortalRequestCatalogView | undefined, appKey: string): CatalogView {
+function buildCatalogView(catalog: PortalRequestCatalogView | undefined, appKey: string, currentUserId: string): CatalogView {
   const permissionGroups = filterGroupsByApp(catalog?.permission_groups ?? [], appKey);
-  const ungroupedPermissions = (catalog?.ungrouped_permissions ?? []).filter(
-    (permission) => !appKey || permission.app_key === appKey,
+  // FF-12: 未分组权限沿用与分组一致的应用作用域判定, 保持应用无关权限在两条路径下同样可见。
+  const ungroupedPermissions = (catalog?.ungrouped_permissions ?? []).filter((permission) =>
+    permissionMatchesApp(permission, appKey),
   );
   const scopesByPermissionKey = buildScopesByPermissionKey(permissionGroups, ungroupedPermissions);
   const permissionsByKey = buildPermissionsByKey(permissionGroups, ungroupedPermissions);
 
   return {
     apps: catalog?.apps ?? [],
-    approverOptions: catalog?.approver_options ?? [],
+    // FF-7: 申请人不得自选为审批人; 前端从候选中剔除自己(服务端仍是权威校验)。
+    approverOptions: (catalog?.approver_options ?? []).filter((option) => option.user_id !== currentUserId),
     authorizationGroups: (catalog?.authorization_groups ?? []).filter((group) => !appKey || group.app_key === appKey),
     permissionGroups,
     ungroupedPermissions,
@@ -384,7 +396,7 @@ function buildAccessRequestPayload(values: AccessRequestPayloadValues): JsonObje
     approver_user_ids: values.selectedApproverUserIds,
     grant_type: values.grantType,
     grant_expires_at: values.grantType === "timed" && values.expiresAt ? new Date(values.expiresAt).toISOString() : null,
-    reason: values.reason,
+    reason: values.reason.trim(),
   };
 }
 
@@ -492,13 +504,18 @@ function nextPermissionScopeCascadeClearSelection(
   return selectedPermissionKeys.filter((selectionKey) => !removableSelectionKeys.has(selectionKey));
 }
 
-function collectScopedGroupPermissions(group: ScopedPermissionGroupItem): ScopedPermissionItem[] {
+function collectScopedGroupPermissions(group: ScopedPermissionGroupItem, visited: Set<string> = new Set()): ScopedPermissionItem[] {
+  // 环形分组图防御: 已访问过的分组短路, 避免无限递归。
+  if (visited.has(group.key)) {
+    return [];
+  }
+  visited.add(group.key);
   const permissionsByKey = new Map<string, ScopedPermissionItem>();
   for (const permission of directPermissionsForGroup(group)) {
     permissionsByKey.set(permission.key, permission);
   }
   for (const childGroup of childGroupsForGroup(group)) {
-    for (const permission of collectScopedGroupPermissions(childGroup)) {
+    for (const permission of collectScopedGroupPermissions(childGroup, visited)) {
       permissionsByKey.set(permission.key, permission);
     }
   }
@@ -510,12 +527,21 @@ function descendantGroupKeys(groups: ScopedPermissionGroupItem[], groupKey: stri
   return group ? collectDescendantGroupKeys(group) : [];
 }
 
-function findPermissionGroup(groups: ScopedPermissionGroupItem[], groupKey: string): ScopedPermissionGroupItem | null {
+function findPermissionGroup(
+  groups: ScopedPermissionGroupItem[],
+  groupKey: string,
+  visited: Set<string> = new Set(),
+): ScopedPermissionGroupItem | null {
   for (const group of groups) {
     if (group.key === groupKey) {
       return group;
     }
-    const childResult = findPermissionGroup(childGroupsForGroup(group), groupKey);
+    // 环形分组图防御: 不重复进入已访问分组。
+    if (visited.has(group.key)) {
+      continue;
+    }
+    visited.add(group.key);
+    const childResult = findPermissionGroup(childGroupsForGroup(group), groupKey, visited);
     if (childResult) {
       return childResult;
     }
@@ -523,9 +549,14 @@ function findPermissionGroup(groups: ScopedPermissionGroupItem[], groupKey: stri
   return null;
 }
 
-function collectDescendantGroupKeys(group: ScopedPermissionGroupItem): string[] {
+function collectDescendantGroupKeys(group: ScopedPermissionGroupItem, visited: Set<string> = new Set()): string[] {
+  // 环形分组图防御: 已访问过的分组短路, 避免无限递归。
+  if (visited.has(group.key)) {
+    return [];
+  }
+  visited.add(group.key);
   const childGroups = childGroupsForGroup(group);
-  return childGroups.flatMap((childGroup) => [childGroup.key, ...collectDescendantGroupKeys(childGroup)]);
+  return childGroups.flatMap((childGroup) => [childGroup.key, ...collectDescendantGroupKeys(childGroup, visited)]);
 }
 
 function useDefaultSingleScopes(
@@ -555,11 +586,11 @@ function useDefaultSingleScopes(
   }, [catalogView.scopesByPermissionKey, catalogView.visiblePermissionKeys, setSelectedPermissionScopes]);
 }
 
-function useDefaultApprovers(fields: AccessRequestFields, catalogView: CatalogView): void {
+function useDefaultApprovers(fields: AccessRequestFields, catalogView: CatalogView, currentUserId: string): void {
   const { appKey, authorizationGroupKey, selectedPermissionKeys, approverSelectionWasEdited, setSelectedApproverUserIds } = fields;
   const defaultApproverUserIds = useMemo(
-    () => buildDefaultApproverUserIds(fields, catalogView),
-    [catalogView, appKey, authorizationGroupKey, selectedPermissionKeys],
+    () => buildDefaultApproverUserIds(fields, catalogView, currentUserId),
+    [catalogView, appKey, authorizationGroupKey, selectedPermissionKeys, currentUserId],
   );
 
   useEffect(() => {
@@ -572,7 +603,7 @@ function useDefaultApprovers(fields: AccessRequestFields, catalogView: CatalogVi
   }, [approverSelectionWasEdited, defaultApproverUserIds, setSelectedApproverUserIds]);
 }
 
-function buildDefaultApproverUserIds(values: AccessRequestPayloadValues, catalogView: CatalogView): string[] {
+function buildDefaultApproverUserIds(values: AccessRequestPayloadValues, catalogView: CatalogView, currentUserId: string): string[] {
   const app = catalogView.apps.find((item) => item.app_key === values.appKey);
   const authorizationGroup = catalogView.authorizationGroups.find((group) => group.key === values.authorizationGroupKey);
   const directGrantPermissionKeys = Array.from(
@@ -583,12 +614,13 @@ function buildDefaultApproverUserIds(values: AccessRequestPayloadValues, catalog
   );
   const targetApprovers = uniqueUserIds([...(authorizationGroup?.default_approver_user_ids ?? []), ...directGrantApprovers]);
   if (targetApprovers.length > 0) {
-    return targetApprovers;
+    // FF-7: 默认审批人同样剔除申请人自己。
+    return targetApprovers.filter((userId) => userId !== currentUserId);
   }
   if (selectedManagedUsersTargetHasMissingDirectManager(values, catalogView)) {
     return [];
   }
-  return uniqueUserIds(app?.default_approver_user_ids ?? []);
+  return uniqueUserIds(app?.default_approver_user_ids ?? []).filter((userId) => userId !== currentUserId);
 }
 
 function accessRequestToastMessage(fields: AccessRequestFields, catalogView: CatalogView, catalogIsLoading: boolean): string {

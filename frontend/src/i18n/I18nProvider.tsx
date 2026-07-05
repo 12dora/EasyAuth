@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { MESSAGES, SUPPORTED_LOCALES, type Locale, type MessageKey } from "./messages";
 
@@ -47,10 +47,14 @@ const I18nContext = createContext<I18nContextValue>({
 export function I18nProvider({ children }: { children: ReactNode }) {
   const [locale, setLocaleState] = useState<Locale>(readStoredLocale);
 
+  // html lang 由 locale 状态单点驱动: 首帧(含从 localStorage 恢复 en)与后续切换都同步。
+  useEffect(() => {
+    document.documentElement.lang = locale;
+  }, [locale]);
+
   const setLocale = useCallback((next: Locale) => {
     setLocaleState(next);
     window.localStorage.setItem(LOCALE_STORAGE_KEY, next);
-    document.documentElement.lang = next;
   }, []);
 
   const value = useMemo<I18nContextValue>(
