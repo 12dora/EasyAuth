@@ -248,13 +248,14 @@ def totp_confirm(request: HttpRequest) -> HttpResponse:
         return HttpResponseRedirect(f"{SECURITY_PATH}?error=totp_confirm")
     secret = totp_setup_secret(request)
     code = _post_value(request, "code")
-    if secret == "" or matched_totp_timestep(secret, code) is None:
+    step = matched_totp_timestep(secret, code) if secret else None
+    if step is None:
         record_login_failure(account.username)
         return HttpResponseRedirect(f"{SECURITY_PATH}?error=totp_confirm")
     account.totp_secret = secret
     account.totp_enabled = True
-    # 新绑定从干净状态开始一次性消费; 后续登录/禁用会消费 timestep 防重放。
-    account.totp_last_timestep = None
+    # 记录确认时的 timestep, 防止刚输入的绑定验证码在首登窗口内被重放消费第二因子。
+    account.totp_last_timestep = step
     account.save(
         update_fields=["totp_secret", "totp_enabled", "totp_last_timestep", "updated_at"],
     )

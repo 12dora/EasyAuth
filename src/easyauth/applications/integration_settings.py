@@ -89,9 +89,9 @@ def authentik_runtime_config() -> AuthentikRuntimeConfig:
     env_api_token = str(getattr(settings, "EASYAUTH_AUTHENTIK_API_TOKEN", "")).strip()
     base_url = (override_base_url or env_base_url).rstrip("/")
     api_token = override_api_token or env_api_token
-    if base_url:
-        # 数据库覆盖与环境变量两条路径都必须校验; 否则 http:// 会让管理 token 明文传输。
-        require_secure_url(base_url, allow_local_http=True)
+    # 注: 这里不对 base_url 抛错(该函数被设置页 GET/健康探测/目录客户端等只读路径调用,
+    # 抛错会让设置页 500 并连累健康快照)。写入边界(model.clean + 设置 API 校验)已挡明文 http;
+    # 实际发送管理 token 的边界(directory_client 请求)会再强制 https, 见 base_url_is_secure。
     return AuthentikRuntimeConfig(
         base_url=base_url,
         api_token=api_token,

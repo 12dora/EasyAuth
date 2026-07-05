@@ -16,6 +16,7 @@ import webauthn
 from django.conf import settings as django_settings
 from django.contrib.auth import hashers
 from django.core.cache import cache
+from django.db.models import Q
 from django.utils import timezone
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 from webauthn.helpers.exceptions import (
@@ -270,11 +271,16 @@ def verify_and_consume_totp(account: LocalAdminAccount, code: str) -> bool:
     step = matched_totp_timestep(account.totp_secret, code)
     if step is None:
         return False
-    last = account.totp_last_timestep
-    if last is not None and step <= last:
+    # 用带条件的原子 UPDATE 前移 timestep, 避免"读-判-写"的 TOCTOU: 两个并发请求只有一个能
+    # 把 totp_last_timestep 推进到 step, 另一个 update 命中 0 行即判为重放。
+    consumed = (
+        LocalAdminAccount.objects.filter(pk=account.pk)
+        .filter(Q(totp_last_timestep__isnull=True) | Q(totp_last_timestep__lt=step))
+        .update(totp_last_timestep=step)
+    )
+    if not consumed:
         return False
     account.totp_last_timestep = step
-    account.save(update_fields=["totp_last_timestep", "updated_at"])
     return True
 
 

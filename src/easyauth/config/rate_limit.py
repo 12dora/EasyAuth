@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from typing import TYPE_CHECKING
 
+from django.conf import settings
 from django.core.cache import cache
 
 if TYPE_CHECKING:
@@ -47,9 +48,14 @@ def consume_once(namespace: str, identity: str, *, ttl_seconds: int) -> bool:
 
 
 def client_ip(request: HttpRequest) -> str:
-    # 反代终止 TLS 时客户端 IP 在 X-Forwarded-For 首跳; 否则回落 REMOTE_ADDR。
-    forwarded = request.headers.get("X-Forwarded-For", "")
-    if forwarded:
-        return forwarded.split(",")[0].strip()
+    # 安全默认: 用 REMOTE_ADDR(直连对端), 不信任客户端可伪造的 X-Forwarded-For,
+    # 否则攻击者轮换 XFF 即可绕过限流并伪造审计 IP。仅当显式配置了可信反代跳数时,
+    # 才从 XFF 右起第 N 跳取真实客户端 IP(N=可信代理层数)。
+    trusted_hops = int(getattr(settings, "EASYAUTH_TRUSTED_PROXY_HOPS", 0))
+    if trusted_hops > 0:
+        forwarded = request.headers.get("X-Forwarded-For", "")
+        parts = [part.strip() for part in forwarded.split(",") if part.strip()]
+        if len(parts) >= trusted_hops:
+            return parts[-trusted_hops]
     remote = request.META.get("REMOTE_ADDR", "")
     return remote if isinstance(remote, str) else ""

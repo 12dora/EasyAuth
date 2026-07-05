@@ -10,6 +10,14 @@ def test_redact_strips_redis_url_credentials() -> None:
     assert "redis://cache:6379/0" in redacted
 
 
+def test_redact_strips_password_containing_unescaped_at_sign() -> None:
+    # 口令中含未转义 @ 时, 必须剥离到 userinfo 的最后一个 @, 不能只截到第一个。
+    redacted = redact_summary("connect to redis://:p@ss@cache:6379/0 failed")
+    assert "p@ss" not in redacted
+    assert "ss@cache" not in redacted
+    assert "redis://cache:6379/0" in redacted
+
+
 def test_redact_strips_amqp_and_https_userinfo() -> None:
     redacted = redact_summary("amqp://user:pw@broker/ and https://tok:sec@api.example/status")
     assert "pw" not in redacted

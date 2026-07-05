@@ -106,7 +106,8 @@ def _item_for_snapshot(
 
 # 从任意 URL 里剥离 userinfo(user:pass@), 覆盖 redis://:pw@host 这类不含 "password"
 # 字面子串的凭据; 以及 Authorization: Bearer <token> 形态。
-_URL_CREDENTIALS_RE: Final = re.compile(r"([a-zA-Z][a-zA-Z0-9+.\-]*://)[^/@\s]*@")
+# 用 [^/\s]*@ 贪婪匹配到 userinfo 的最后一个 @, 覆盖口令中含未转义 @ 的连接串(如 :p@ss@host)。
+_URL_CREDENTIALS_RE: Final = re.compile(r"([a-zA-Z][a-zA-Z0-9+.\-]*://)[^/\s]*@")
 _BEARER_RE: Final = re.compile(r"(?i)(bearer\s+)\S+")
 
 

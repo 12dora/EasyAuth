@@ -394,11 +394,13 @@ def _reported_user_totals(status: DirectoryJson) -> dict[str, int]:
 
 
 def _observed_user_counts(snapshot: _DirectorySnapshot) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for corp_id, _user_id in map(_directory_user_key, snapshot.users):
+    # 必须按去重后的 (corp_id, user_id) 计数: prune/reconcile 用的都是去重集合, 若这里按原始行计数,
+    # 上游重叠/重复分页会虚高观测数, 让"唯一用户已截断"仍满足 observed>=reported 而放行误撤(BS-4)。
+    seen_by_corp: dict[str, set[str]] = {}
+    for corp_id, user_id in map(_directory_user_key, snapshot.users):
         if corp_id:
-            counts[corp_id] = counts.get(corp_id, 0) + 1
-    return counts
+            seen_by_corp.setdefault(corp_id, set()).add(user_id)
+    return {corp_id: len(user_ids) for corp_id, user_ids in seen_by_corp.items()}
 
 
 def _synced_corp_ids(snapshot: _DirectorySnapshot) -> frozenset[str]:

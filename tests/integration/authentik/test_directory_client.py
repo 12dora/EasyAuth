@@ -49,7 +49,7 @@ def test_directory_client_fetches_user_org_context(monkeypatch: pytest.MonkeyPat
     def fake_urlopen(request: Request, *, timeout: float) -> _Response:
         assert timeout == TIMEOUT_SECONDS
         assert request.full_url == (
-            "http://authentik.test/api/v3/sources/oauth/"
+            "https://authentik.test/api/v3/sources/oauth/"
             "dingtalk-directory/dingtalk/users/corp-1/user-1/org/"
         )
         seen_headers.update(dict(request.header_items()))
@@ -72,7 +72,7 @@ def test_directory_client_fetches_user_org_context(monkeypatch: pytest.MonkeyPat
     monkeypatch.setattr("easyauth.integrations.authentik.directory_client.urlopen", fake_urlopen)
 
     context = AuthentikDirectoryClient(
-        base_url="http://authentik.test",
+        base_url="https://authentik.test",
         api_token=TEST_API_TOKEN,
         source_slug="dingtalk",
         timeout_seconds=TIMEOUT_SECONDS,
@@ -129,7 +129,7 @@ def test_directory_client_iterates_paginated_users(monkeypatch: pytest.MonkeyPat
 
     users = tuple(
         AuthentikDirectoryClient(
-            base_url="http://authentik.test",
+            base_url="https://authentik.test",
             api_token=TEST_API_TOKEN,
             source_slug="dingtalk",
             timeout_seconds=TIMEOUT_SECONDS,
@@ -142,9 +142,31 @@ def test_directory_client_iterates_paginated_users(monkeypatch: pytest.MonkeyPat
     assert users[0].status == "active"
     assert users[1].status == "inactive"
     assert seen_urls == [
-        "http://authentik.test/api/v3/sources/oauth/dingtalk-directory/dingtalk/users/?page=1",
-        "http://authentik.test/api/v3/sources/oauth/dingtalk-directory/dingtalk/users/?page=2",
+        "https://authentik.test/api/v3/sources/oauth/dingtalk-directory/dingtalk/users/?page=1",
+        "https://authentik.test/api/v3/sources/oauth/dingtalk-directory/dingtalk/users/?page=2",
     ]
+
+
+def test_directory_client_refuses_plaintext_http_base_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 管理 token 走 Bearer 头; 非本地 http base_url 必须在发起请求前被拒, 不能明文发出 token。
+    called = {"urlopen": False}
+
+    def fake_urlopen(*_args: object, **_kwargs: object) -> _Response:
+        called["urlopen"] = True
+        raise AssertionError
+
+    monkeypatch.setattr("easyauth.integrations.authentik.directory_client.urlopen", fake_urlopen)
+
+    with pytest.raises(AuthentikDirectoryUnavailableError):
+        _ = AuthentikDirectoryClient(
+            base_url="http://authentik.internal",
+            api_token=TEST_API_TOKEN,
+            source_slug="dingtalk",
+            timeout_seconds=TIMEOUT_SECONDS,
+        ).get_status()
+    assert called["urlopen"] is False
 
 
 def test_directory_client_rejects_non_advancing_pagination(
@@ -163,7 +185,7 @@ def test_directory_client_rejects_non_advancing_pagination(
     with pytest.raises(AuthentikDirectoryUnavailableError):
         _ = tuple(
             AuthentikDirectoryClient(
-                base_url="http://authentik.test",
+                base_url="https://authentik.test",
                 api_token=TEST_API_TOKEN,
                 source_slug="dingtalk",
                 timeout_seconds=TIMEOUT_SECONDS,
@@ -175,7 +197,7 @@ def test_directory_client_fetches_managed_users(monkeypatch: pytest.MonkeyPatch)
     def fake_urlopen(request: Request, *, timeout: float) -> _Response:
         assert timeout == TIMEOUT_SECONDS
         assert request.full_url == (
-            "http://authentik.test/api/v3/sources/oauth/dingtalk-directory/dingtalk/"
+            "https://authentik.test/api/v3/sources/oauth/dingtalk-directory/dingtalk/"
             "managed-users/by-manager/corp%2F1/manager%201/"
         )
         body = b"""
@@ -216,7 +238,7 @@ def test_directory_client_fetches_managed_users(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setattr("easyauth.integrations.authentik.directory_client.urlopen", fake_urlopen)
 
     result = AuthentikDirectoryClient(
-        base_url="http://authentik.test",
+        base_url="https://authentik.test",
         api_token=TEST_API_TOKEN,
         source_slug="dingtalk",
         timeout_seconds=TIMEOUT_SECONDS,
@@ -248,7 +270,7 @@ def test_directory_client_rejects_managed_users_missing_fields(
 
     with pytest.raises(AuthentikDirectoryUnavailableError):
         _ = AuthentikDirectoryClient(
-            base_url="http://authentik.test",
+            base_url="https://authentik.test",
             api_token=TEST_API_TOKEN,
             source_slug="dingtalk",
             timeout_seconds=TIMEOUT_SECONDS,
@@ -297,7 +319,7 @@ def test_directory_client_excludes_inactive_managed_users(
     monkeypatch.setattr("easyauth.integrations.authentik.directory_client.urlopen", fake_urlopen)
 
     result = AuthentikDirectoryClient(
-        base_url="http://authentik.test",
+        base_url="https://authentik.test",
         api_token=TEST_API_TOKEN,
         source_slug="dingtalk",
         timeout_seconds=TIMEOUT_SECONDS,
@@ -337,7 +359,7 @@ def test_directory_client_excludes_unbound_managed_users(
     monkeypatch.setattr("easyauth.integrations.authentik.directory_client.urlopen", fake_urlopen)
 
     result = AuthentikDirectoryClient(
-        base_url="http://authentik.test",
+        base_url="https://authentik.test",
         api_token=TEST_API_TOKEN,
         source_slug="dingtalk",
         timeout_seconds=TIMEOUT_SECONDS,
@@ -358,7 +380,7 @@ def test_directory_client_maps_managed_users_404_to_not_found(
 
     with pytest.raises(AuthentikDirectoryNotFoundError):
         _ = AuthentikDirectoryClient(
-            base_url="http://authentik.test",
+            base_url="https://authentik.test",
             api_token=TEST_API_TOKEN,
             source_slug="dingtalk",
             timeout_seconds=TIMEOUT_SECONDS,
@@ -376,7 +398,7 @@ def test_directory_client_rejects_managed_users_invalid_json(
 
     with pytest.raises(AuthentikDirectoryUnavailableError):
         _ = AuthentikDirectoryClient(
-            base_url="http://authentik.test",
+            base_url="https://authentik.test",
             api_token=TEST_API_TOKEN,
             source_slug="dingtalk",
             timeout_seconds=TIMEOUT_SECONDS,
@@ -392,7 +414,7 @@ def test_directory_client_maps_403_to_permission_error(monkeypatch: pytest.Monke
 
     with pytest.raises(AuthentikDirectoryPermissionError):
         _ = AuthentikDirectoryClient(
-            base_url="http://authentik.test",
+            base_url="https://authentik.test",
             api_token=TEST_API_TOKEN,
             source_slug="dingtalk",
             timeout_seconds=TIMEOUT_SECONDS,
@@ -411,7 +433,7 @@ def test_directory_client_maps_network_error_without_leaking_token(
 
     with pytest.raises(AuthentikDirectoryUnavailableError) as error:
         _ = AuthentikDirectoryClient(
-            base_url="http://authentik.test",
+            base_url="https://authentik.test",
             api_token=TEST_API_TOKEN,
             source_slug="dingtalk",
             timeout_seconds=TIMEOUT_SECONDS,

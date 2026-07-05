@@ -584,9 +584,13 @@ def test_totp_enable_and_disable_flow() -> None:
     assert AuditLog.objects.filter(event_type="admin_local_totp_enabled").exists()
 
     # When
+    # 绑定确认会消费当前 timestep, 停用需用下一 timestep 的验证码(模拟绑定后隔一段时间再停用)。
     disable_response = client.post(
         "/auth/local/security/totp/disable/",
-        {"code": pyotp.TOTP(otp_key).now(), "current_password": GOOD_CREDENTIAL},
+        {
+            "code": pyotp.TOTP(otp_key).at(time.time() + 30),
+            "current_password": GOOD_CREDENTIAL,
+        },
     )
 
     # Then

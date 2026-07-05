@@ -265,6 +265,9 @@ EASYAUTH_CONSOLE_SUPERUSER_GROUPS = tuple(
     if group.strip()
 )
 EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS = 300
+# 限流/审计取客户端 IP 时信任的反代层数; 0 表示只用 REMOTE_ADDR(不信任 X-Forwarded-For)。
+# 生产若在 N 层可信反代后, 设为 N, 则从 XFF 右起第 N 跳取真实客户端 IP。
+EASYAUTH_TRUSTED_PROXY_HOPS = int(os.environ.get("EASYAUTH_TRUSTED_PROXY_HOPS", "0"))
 # WebAuthn(通行密钥)配置: RP ID 必须是"域名"(不含协议与端口), 且浏览器地址栏的 host
 # 必须等于该域名或其子域, 否则 navigator.credentials 直接报 SecurityError。
 # 本地开发必须用 http://localhost:8001 访问(127.0.0.1 不属于 RP ID "localhost", 无法使用通行密钥)。

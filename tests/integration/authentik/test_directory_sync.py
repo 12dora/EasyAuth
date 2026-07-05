@@ -440,6 +440,37 @@ def test_directory_sync_refuses_prune_when_response_truncated() -> None:
     assert grant.is_current is True
 
 
+def test_directory_sync_completeness_guard_counts_distinct_users() -> None:
+    # Given: 上游报告 2 个用户, 但响应里是同一个用户的两条重复行(唯一用户其实被截断到 1)。
+    bound_user = UserMirror.objects.create(
+        authentik_user_id="ak-dup-guard",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-still-bound",
+        status="active",
+    )
+    app = App.objects.create(app_key="sync-dup-app", name="Dup Guard App")
+    grant = AccessGrant.objects.create(user=bound_user, app=app)
+    duplicated_user = {
+        "corp_id": "corp-1",
+        "user_id": "user-present",
+        "name": "在职用户",
+        "department_ids": [],
+        "manager_userid": "",
+        "status": "active",
+    }
+    client_stub = _stub_with_users([duplicated_user, dict(duplicated_user)])
+    client_stub.reported_user_count = 2
+
+    # When / Then: 去重后观测=1 < 报告=2, 完整性护栏应拒绝而非放行误撤。
+    with pytest.raises(AuthentikDirectoryUnavailableError):
+        _ = sync_authentik_dingtalk_directory(client_stub)
+
+    bound_user.refresh_from_db()
+    grant.refresh_from_db()
+    assert bound_user.status == "active"
+    assert grant.status != "revoked"
+
+
 def test_directory_sync_isolates_single_user_org_fetch_failure() -> None:
     # Given: 两个用户, 其中一个的 org 上下文持续 404, 另一个正常。
     _ = UserMirror.objects.create(

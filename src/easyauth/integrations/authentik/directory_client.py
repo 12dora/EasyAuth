@@ -9,6 +9,7 @@ from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from easyauth.applications.integration_settings import authentik_runtime_config
+from easyauth.config.net import InsecureUrlError, require_secure_url
 from easyauth.integrations.authentik.directory_payloads import (
     DingTalkDirectoryDepartment,
     DingTalkDirectoryOrgContext,
@@ -35,6 +36,7 @@ DIRECTORY_PERMISSION_MESSAGE = "Authentik 目录 API 权限不足。"
 DIRECTORY_NOT_FOUND_MESSAGE = "Authentik 目录 API 资源不存在。"
 DIRECTORY_PAGINATION_NOT_ADVANCING_MESSAGE = "Authentik 目录 API 分页游标未前进。"
 DIRECTORY_PAGINATION_LIMIT_MESSAGE = "Authentik 目录 API 分页超出最大页数上限。"
+DIRECTORY_INSECURE_BASE_URL_MESSAGE = "Authentik base_url 必须为 https, 拒绝明文传输管理 token。"
 # 分页硬上限: 上游若返回恒定/循环游标, 物化成 tuple 的调用方会挂死到 worker 被杀。
 DIRECTORY_MAX_PAGES: Final = 1000
 
@@ -146,6 +148,12 @@ class AuthentikDirectoryClient:
         raise AuthentikDirectoryUnavailableError(DIRECTORY_PAGINATION_LIMIT_MESSAGE)
 
     def _get_json(self, suffix: str, *, query: dict[str, str] | None = None) -> DirectoryJson:
+        # 发送边界强制 https(仅本地 localhost 允许 http): 管理 token 走 Authorization: Bearer,
+        # base_url 明文会导致 token 明文传输(BS-19)。归为目录不可用, 由健康/同步各自处理。
+        try:
+            require_secure_url(self.base_url, allow_local_http=True)
+        except InsecureUrlError as error:
+            raise AuthentikDirectoryUnavailableError(DIRECTORY_INSECURE_BASE_URL_MESSAGE) from error
         query_string = f"?{urlencode(query)}" if query else ""
         request = Request(  # noqa: S310 - URL 来自本地配置.
             (
