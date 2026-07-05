@@ -450,6 +450,15 @@ function AddPasskeyDialog({
             onChange={(event) => setName(event.currentTarget.value)}
           />
         </Field>
+        <Field label={t("settings.twoFactor.currentPassword")} hint={t("settings.twoFactor.currentPasswordHint")}>
+          <TextInput
+            id="passkey-add-password"
+            type="password"
+            autoComplete="current-password"
+            value={currentPassword}
+            onChange={(event) => setCurrentPassword(event.currentTarget.value)}
+          />
+        </Field>
         {error ? <StatusBanner tone="signal" title={error} /> : null}
       </div>
     </Dialog>
@@ -467,6 +476,7 @@ function RemovePasskeyDialog({
   onClose: () => void;
   onStatus: (next: TwoFactorStatus) => void;
 }) {
+  const [currentPassword, setCurrentPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -477,7 +487,11 @@ function RemovePasskeyDialog({
     setBusy(true);
     setError("");
     try {
-      const next = await apiRequest<TwoFactorStatus>(`${BASE_URL}/passkeys/${passkey.id}`, { method: "DELETE" });
+      // BS-14: 删除通行密钥(移除第二因子)需 step-up 重认证, DELETE 请求体附带 current_password。
+      const next = await apiRequest<TwoFactorStatus>(`${BASE_URL}/passkeys/${passkey.id}`, {
+        method: "DELETE",
+        body: { current_password: currentPassword },
+      });
       onStatus(next);
       onClose();
     } catch (caught) {
@@ -510,6 +524,15 @@ function RemovePasskeyDialog({
             passkey.name || t("settings.twoFactor.passkeyUnnamed"),
           )}
         </p>
+        <Field label={t("settings.twoFactor.currentPassword")} hint={t("settings.twoFactor.currentPasswordHint")}>
+          <TextInput
+            id="passkey-remove-password"
+            type="password"
+            autoComplete="current-password"
+            value={currentPassword}
+            onChange={(event) => setCurrentPassword(event.currentTarget.value)}
+          />
+        </Field>
         {error ? <StatusBanner tone="signal" title={error} /> : null}
       </div>
     </Dialog>

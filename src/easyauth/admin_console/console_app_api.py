@@ -10,6 +10,7 @@ from easyauth.admin_console.api_responses import (
 from easyauth.admin_console.api_responses import (
     json_response as _json_response,
 )
+from easyauth.admin_console.api_responses import method_not_allowed_response
 from easyauth.admin_console.request_guards import require_console_actor
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import App, AppCredential, OAuthClientBinding
@@ -20,6 +21,8 @@ type AppLookupResult = App | JsonResponse
 
 
 def integration_guide_api(request: HttpRequest, app_key: str) -> JsonResponse:
+    if request.method != "GET":
+        return method_not_allowed_response()
     match _scoped_app(request, app_key):
         case App() as app:
             pass

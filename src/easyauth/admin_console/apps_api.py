@@ -165,6 +165,8 @@ def console_app_detail(request: HttpRequest, app_key: str) -> JsonResponse | Htt
 
 
 def console_app_configuration_status(request: HttpRequest, app_key: str) -> JsonResponse:
+    if request.method != "GET":
+        return method_not_allowed_response()
     match require_console_actor(request):
         case ConsoleActor() as actor:
             pass
