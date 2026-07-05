@@ -21,7 +21,7 @@ jobs:
   docker:
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write   # create GitHub Releases on version tags
       packages: write
     steps:
       - name: Checkout
@@ -55,6 +55,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -66,3 +67,32 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
+
+      # On a version tag (vX.Y.Z), publish a GitHub Release that links to the
+      # multi-arch image in GHCR (Packages). No large binaries are attached.
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: EasyAuth ${{ github.ref_name }}
+          generate_release_notes: true
+          body: |
+            ## EasyAuth ${{ github.ref_name }}
+
+            Multi-architecture container image (`linux/amd64` · `linux/arm64`),
+            published to the GitHub Container Registry — see the repository **Packages** tab.
+
+            **Pull:**
+            ```bash
+            docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/easyauth:${{ steps.meta.outputs.version }}
+            # immutable, by digest:
+            docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/easyauth@${{ steps.build.outputs.digest }}
+            ```
+
+            | | |
+            | --- | --- |
+            | Image | `${{ env.REGISTRY }}/${{ github.repository_owner }}/easyauth:${{ steps.meta.outputs.version }}` |
+            | Digest | `${{ steps.build.outputs.digest }}` |
+            | Platforms | `linux/amd64`, `linux/arm64` |
+
+            Configure and run per the [README](https://github.com/${{ github.repository }}#configuration-reference).
