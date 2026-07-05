@@ -1,0 +1,43 @@
+# VCS & CI
+.git
+.github
+
+# Python envs / caches
+.venv
+**/__pycache__
+*.py[cod]
+.pytest_cache
+.ruff_cache
+.basedpyright
+.mypy_cache
+
+# Node
+node_modules
+**/node_modules
+frontend/test-results
+frontend/.playwright
+
+# Local data & secrets (never bake into the image)
+db.sqlite3
+*.sqlite3
+.env
+.env.*
+!.env.example
+
+# Build/report artifacts not needed at runtime
+dist
+htmlcov
+.coverage
+
+# Agent / tooling scratch
+.omo
+.superpowers
+.tools
+.claude
+.DS_Store
+
+# Not copied into the image (keep the build context small)
+tests
+typings
+sdk
+docs
