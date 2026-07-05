@@ -15,12 +15,22 @@ from easyauth.accounts.models import (
 from easyauth.applications.models import App
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import AccessGrant
-from easyauth.integrations.authentik.directory_sync import sync_authentik_dingtalk_directory
+from easyauth.integrations.authentik.directory_client import (
+    DIRECTORY_NOT_FOUND_MESSAGE,
+    AuthentikDirectoryNotFoundError,
+    AuthentikDirectoryUnavailableError,
+)
+from easyauth.integrations.authentik.directory_sync import (
+    UnsupportedDirectoryStatusError,
+    sync_authentik_dingtalk_directory,
+)
 
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
 
 pytestmark = pytest.mark.django_db
+
+_EXPECTED_TWO_USERS = 2
 
 
 @dataclass(slots=True)
@@ -28,8 +38,15 @@ class _DirectoryClientStub:
     departments: list[dict[str, object]] = field(default_factory=list)
     users: list[dict[str, object]] = field(default_factory=list)
     org_contexts: dict[tuple[str, str], dict[str, object]] = field(default_factory=dict)
+    # 上游报告的每 corp 用户总数; 缺省时按实际返回用户数上报 (观测==报告)。
+    reported_user_count: int | None = None
+    # 指定这些 (corp_id, user_id) 的 org 拉取抛错, 用于验证单用户失败被隔离。
+    org_fetch_errors: set[tuple[str, str]] = field(default_factory=set)
 
     def get_status(self) -> dict[str, object]:
+        reported = self.reported_user_count if self.reported_user_count is not None else len(
+            self.users,
+        )
         return {
             "source_slug": "dingtalk",
             "sync": [
@@ -37,7 +54,7 @@ class _DirectoryClientStub:
                     "corp_id": "corp-1",
                     "status": "success",
                     "finished_at": "2026-06-12T01:00:00+00:00",
-                    "counters": {"users": 1, "departments": 1},
+                    "counters": {"users": reported, "departments": len(self.departments)},
                     "error": "",
                 }
             ],
@@ -50,6 +67,8 @@ class _DirectoryClientStub:
         return self.users
 
     def get_user_org(self, corp_id: str, user_id: str) -> dict[str, object]:
+        if (corp_id, user_id) in self.org_fetch_errors:
+            raise AuthentikDirectoryNotFoundError(DIRECTORY_NOT_FOUND_MESSAGE)
         return self.org_contexts[(corp_id, user_id)]
 
 
@@ -332,3 +351,131 @@ def test_directory_sync_clears_manager_and_prunes_missing_rows() -> None:
     assert result.pruned_user_count == 1
     assert not DingTalkDepartmentMirror.objects.filter(dept_id="dept-stale").exists()
     assert not DingTalkUserMirror.objects.filter(user_id="user-stale").exists()
+
+
+def test_directory_sync_isolates_unknown_status_but_still_revokes_departed() -> None:
+    # Given: 一个用户状态无法识别, 另一个用户已删除且持有 current 授权。
+    unknown_user = UserMirror.objects.create(
+        authentik_user_id="ak-unknown-status",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-unknown",
+        status="active",
+    )
+    departed_user = UserMirror.objects.create(
+        authentik_user_id="ak-departed-2",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-departed-2",
+        status="active",
+    )
+    app = App.objects.create(app_key="sync-unknown-app", name="Unknown Status App")
+    grant = AccessGrant.objects.create(user=departed_user, app=app)
+    client_stub = _stub_with_users(
+        [
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-unknown",
+                "name": "冻结用户",
+                "department_ids": [],
+                "manager_userid": "",
+                "status": "suspended",
+            },
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-departed-2",
+                "name": "离职用户",
+                "department_ids": [],
+                "manager_userid": "",
+                "status": "deleted",
+            },
+        ],
+    )
+
+    # When / Then: 已识别的离职用户先被回收, 之后未知状态显式失败。
+    with pytest.raises(UnsupportedDirectoryStatusError):
+        _ = sync_authentik_dingtalk_directory(client_stub)
+
+    unknown_user.refresh_from_db()
+    departed_user.refresh_from_db()
+    grant.refresh_from_db()
+    # 未知状态用户既不改状态也不回收。
+    assert unknown_user.status == "active"
+    # 可识别的离职用户仍然被撤销授权。
+    assert departed_user.status == "departed"
+    assert grant.status == "revoked"
+
+
+def test_directory_sync_refuses_prune_when_response_truncated() -> None:
+    # Given: 上游报告 3 个用户, 但本轮响应只截断返回 1 个, 且仍有绑定用户在职。
+    bound_user = UserMirror.objects.create(
+        authentik_user_id="ak-truncated-1",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-truncated",
+        status="active",
+    )
+    app = App.objects.create(app_key="sync-truncated-app", name="Truncated App")
+    grant = AccessGrant.objects.create(user=bound_user, app=app)
+    client_stub = _stub_with_users(
+        [
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-present",
+                "name": "在职用户",
+                "department_ids": [],
+                "manager_userid": "",
+                "status": "active",
+            },
+        ],
+    )
+    client_stub.reported_user_count = 3
+
+    # When / Then: 完整性护栏发现观测数低于报告总数, 拒绝 prune/回收并触发重试。
+    with pytest.raises(AuthentikDirectoryUnavailableError):
+        _ = sync_authentik_dingtalk_directory(client_stub)
+
+    bound_user.refresh_from_db()
+    grant.refresh_from_db()
+    # 截断响应不得撤销任何在职用户的授权。
+    assert bound_user.status == "active"
+    assert grant.status != "revoked"
+    assert grant.is_current is True
+
+
+def test_directory_sync_isolates_single_user_org_fetch_failure() -> None:
+    # Given: 两个用户, 其中一个的 org 上下文持续 404, 另一个正常。
+    _ = UserMirror.objects.create(
+        authentik_user_id="ak-org-ok",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-org-ok",
+        status="active",
+    )
+    client_stub = _stub_with_users(
+        [
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-org-ok",
+                "name": "正常用户",
+                "department_ids": [],
+                "manager_userid": "",
+                "status": "active",
+            },
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-org-broken",
+                "name": "org 故障用户",
+                "department_ids": [],
+                "manager_userid": "",
+                "status": "active",
+            },
+        ],
+    )
+    client_stub.org_fetch_errors = {("corp-1", "user-org-broken")}
+
+    # When: 执行目录同步。
+    result = sync_authentik_dingtalk_directory(client_stub)
+
+    # Then: 单个用户 org 失败被隔离, 同步整体完成并聚合失败计数。
+    assert result.user_count == _EXPECTED_TWO_USERS
+    assert result.org_context_count == 1
+    assert result.org_fetch_failed_count == 1
+    assert DingTalkUserOrgContext.objects.filter(user_id="user-org-ok").exists()
+    assert not DingTalkUserOrgContext.objects.filter(user_id="user-org-broken").exists()

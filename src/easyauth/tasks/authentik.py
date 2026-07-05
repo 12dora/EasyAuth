@@ -75,4 +75,5 @@ def sync_dingtalk_directory_task() -> dict[str, int]:
         "status_applied_count": result.status_applied_count,
         "departed_count": result.departed_count,
         "revoked_count": result.revoked_count,
+        "org_fetch_failed_count": result.org_fetch_failed_count,
     }

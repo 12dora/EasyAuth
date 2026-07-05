@@ -18,6 +18,10 @@ from easyauth.accounts.models import (
 )
 from easyauth.accounts.org_context import parse_org_context
 from easyauth.accounts.services import AuthentikSyncService
+from easyauth.integrations.authentik.directory_client import (
+    AuthentikDirectoryError,
+    AuthentikDirectoryUnavailableError,
+)
 
 if TYPE_CHECKING:
     from easyauth.accounts.status import UserStatus
@@ -31,6 +35,14 @@ DIRECTORY_STATUS_TO_USER_STATUS: Final[dict[str, str]] = {
     "departed": USER_STATUS_DEPARTED,
 }
 UNSUPPORTED_DIRECTORY_STATUS_ERROR: Final = "钉钉目录用户状态无法识别。"
+DIRECTORY_INCOMPLETE_MESSAGE: Final = "钉钉目录响应被截断, 观测用户数低于上游报告总数。"
+DIRECTORY_ORG_CONTEXT_UNAVAILABLE_MESSAGE: Final = "钉钉目录组织上下文全部拉取失败。"
+
+
+class UnsupportedDirectoryStatusError(AuthentikDirectoryError):
+    # 未知目录状态是数据契约破坏; 归入 AuthentikDirectoryError 让同步任务重试并最终显式失败,
+    # 而不是把一整轮离职回收静默跳过。
+    pass
 
 
 class AuthentikDirectorySyncClient(Protocol):
@@ -54,6 +66,7 @@ class AuthentikDirectorySyncResult:
     status_applied_count: int = 0
     departed_count: int = 0
     revoked_count: int = 0
+    org_fetch_failed_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,6 +76,7 @@ class _DirectorySnapshot:
     departments: tuple[DirectoryJson, ...]
     users: tuple[DirectoryJson, ...]
     org_contexts: dict[tuple[str, str], DirectoryJson]
+    org_fetch_failures: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +107,10 @@ def sync_authentik_dingtalk_directory(
                 _update_user_mirror_summary(org_context)
                 org_context_count += 1
 
+    # 完整性护栏: 在任何 prune/离职回收之前, 确认本轮观测用户数没有相对上游报告总数骤降,
+    # 否则一次分页截断/部分响应会把截断点之后的在职用户全部误判离职。
+    _assert_directory_completeness(snapshot)
+
     # 阶段三: 清理上游已不存在的镜像行, 避免"看似有效"的陈旧目录数据长存。
     pruned_department_count, pruned_user_count = _prune_missing_rows(snapshot)
 
@@ -109,6 +127,7 @@ def sync_authentik_dingtalk_directory(
         status_applied_count=reconciliation.applied_count,
         departed_count=reconciliation.departed_count,
         revoked_count=reconciliation.revoked_count,
+        org_fetch_failed_count=len(snapshot.org_fetch_failures),
     )
 
 
@@ -117,16 +136,28 @@ def _fetch_directory_snapshot(client: AuthentikDirectorySyncClient) -> _Director
     departments = tuple(_mapping(item) for item in _iter_objects(client.iter_departments()))
     users = tuple(_mapping(item) for item in _iter_objects(client.iter_users()))
     org_contexts: dict[tuple[str, str], DirectoryJson] = {}
+    org_fetch_failures: list[tuple[str, str]] = []
+    attempted = 0
     for user_payload in users:
         corp_id, user_id = _directory_user_key(user_payload)
-        if corp_id and user_id:
+        if not (corp_id and user_id):
+            continue
+        attempted += 1
+        try:
             org_contexts[(corp_id, user_id)] = _mapping(client.get_user_org(corp_id, user_id))
+        except AuthentikDirectoryError:
+            # 单个用户的 org 拉取失败不得中止整轮同步; 隔离该用户、聚合失败并继续。
+            org_fetch_failures.append((corp_id, user_id))
+    if attempted and len(org_fetch_failures) == attempted:
+        # 每个用户都失败 = 上游整体故障: 必须触发重试, 而不是落地一份没有主管链的目录。
+        raise AuthentikDirectoryUnavailableError(DIRECTORY_ORG_CONTEXT_UNAVAILABLE_MESSAGE)
     return _DirectorySnapshot(
         source_slug=_string(status.get("source_slug")) or "dingtalk",
         status=status,
         departments=departments,
         users=users,
         org_contexts=org_contexts,
+        org_fetch_failures=tuple(org_fetch_failures),
     )
 
 
@@ -291,10 +322,18 @@ def _reconcile_user_mirror_status(snapshot: _DirectorySnapshot) -> _StatusReconc
     if not corp_ids:
         return _StatusReconciliation(applied_count=0, departed_count=0, revoked_count=0)
 
-    status_by_key = {
-        _directory_user_key(payload): _directory_user_status(payload)
-        for payload in snapshot.users
-    }
+    # 逐用户解析目录状态: 未知状态不再中止整轮回收, 而是隔离该用户并在回收其余人之后显式失败。
+    status_by_key: dict[tuple[str, str], UserStatus] = {}
+    unknown_status_keys: set[tuple[str, str]] = set()
+    unknown_status_samples: list[str] = []
+    for payload in snapshot.users:
+        key = _directory_user_key(payload)
+        try:
+            status_by_key[key] = _directory_user_status(payload)
+        except UnsupportedDirectoryStatusError:
+            unknown_status_keys.add(key)
+            unknown_status_samples.append(f"{key[0]}:{key[1]}={_string(payload.get('status'))!r}")
+
     applied_count = 0
     departed_count = 0
     revoked_count = 0
@@ -303,6 +342,9 @@ def _reconcile_user_mirror_status(snapshot: _DirectorySnapshot) -> _StatusReconc
     )
     for user in bound_users:
         key = (user.dingtalk_corp_id, user.dingtalk_userid)
+        if key in unknown_status_keys:
+            # 状态无法识别的用户本轮跳过: 既不改状态也不按离职回收, 留待补齐映射后重试。
+            continue
         # 目录里已经不存在的绑定用户按离职处理, 与上游硬删除口径一致。
         target_status = status_by_key.get(key, USER_STATUS_DEPARTED)
         result = AuthentikSyncService.apply_directory_status(user, target_status)
@@ -310,11 +352,53 @@ def _reconcile_user_mirror_status(snapshot: _DirectorySnapshot) -> _StatusReconc
         revoked_count += result.revoked_count
         if result.user.status == USER_STATUS_DEPARTED:
             departed_count += 1
+
+    if unknown_status_keys:
+        # 已回收可识别的离职用户后, 未知状态必须显式失败: 不允许返回"看似成功"的空回收。
+        message = f"{UNSUPPORTED_DIRECTORY_STATUS_ERROR}: {', '.join(unknown_status_samples)}"
+        raise UnsupportedDirectoryStatusError(message)
+
     return _StatusReconciliation(
         applied_count=applied_count,
         departed_count=departed_count,
         revoked_count=revoked_count,
     )
+
+
+def _assert_directory_completeness(snapshot: _DirectorySnapshot) -> None:
+    reported_totals = _reported_user_totals(snapshot.status)
+    observed_counts = _observed_user_counts(snapshot)
+    for corp_id in _synced_corp_ids(snapshot):
+        reported = reported_totals.get(corp_id)
+        if reported is None:
+            continue
+        observed = observed_counts.get(corp_id, 0)
+        if observed < reported:
+            message = (
+                f"{DIRECTORY_INCOMPLETE_MESSAGE}: corp={corp_id} "
+                f"observed={observed} reported={reported}"
+            )
+            raise AuthentikDirectoryUnavailableError(message)
+
+
+def _reported_user_totals(status: DirectoryJson) -> dict[str, int]:
+    totals: dict[str, int] = {}
+    for item in _list(status.get("sync")):
+        sync = _mapping(item)
+        corp_id = _string(sync.get("corp_id"))
+        counters = _mapping(sync.get("counters"))
+        users_total = counters.get("users")
+        if corp_id and type(users_total) is int and users_total > 0:
+            totals[corp_id] = users_total
+    return totals
+
+
+def _observed_user_counts(snapshot: _DirectorySnapshot) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for corp_id, _user_id in map(_directory_user_key, snapshot.users):
+        if corp_id:
+            counts[corp_id] = counts.get(corp_id, 0) + 1
+    return counts
 
 
 def _synced_corp_ids(snapshot: _DirectorySnapshot) -> frozenset[str]:
@@ -330,7 +414,7 @@ def _directory_user_status(payload: DirectoryJson) -> UserStatus:
     mapped = DIRECTORY_STATUS_TO_USER_STATUS.get(status_text)
     if mapped is None:
         message = f"{UNSUPPORTED_DIRECTORY_STATUS_ERROR}: {status_text!r}"
-        raise ValueError(message)
+        raise UnsupportedDirectoryStatusError(message)
     return cast("UserStatus", mapped)
 
 

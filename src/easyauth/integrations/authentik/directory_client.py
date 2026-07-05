@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from http import HTTPStatus
 from json import JSONDecodeError, loads
-from typing import TYPE_CHECKING, Self, cast
+from typing import TYPE_CHECKING, Final, Self, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
@@ -33,6 +33,10 @@ DIRECTORY_INVALID_JSON_MESSAGE = "Authentik 目录 API 返回了无效 JSON。"
 DIRECTORY_INVALID_FORMAT_MESSAGE = "Authentik 目录 API 返回格式无效。"
 DIRECTORY_PERMISSION_MESSAGE = "Authentik 目录 API 权限不足。"
 DIRECTORY_NOT_FOUND_MESSAGE = "Authentik 目录 API 资源不存在。"
+DIRECTORY_PAGINATION_NOT_ADVANCING_MESSAGE = "Authentik 目录 API 分页游标未前进。"
+DIRECTORY_PAGINATION_LIMIT_MESSAGE = "Authentik 目录 API 分页超出最大页数上限。"
+# 分页硬上限: 上游若返回恒定/循环游标, 物化成 tuple 的调用方会挂死到 worker 被杀。
+DIRECTORY_MAX_PAGES: Final = 1000
 
 
 class _ReadableResponse:
@@ -126,13 +130,20 @@ class AuthentikDirectoryClient:
 
     def _iter_paginated(self, suffix: str) -> Iterator[DirectoryJson]:
         page = 1
-        while True:
+        for _ in range(DIRECTORY_MAX_PAGES):
             payload = self._get_json(suffix, query={"page": str(page)})
             yield payload
             next_page = _next_page(payload)
             if next_page is None:
                 return
+            # 游标必须严格前进; 恒定/回退的 next 是上游契约破坏, 静默停止会截断目录并
+            # 触发下游"大规模误撤授权", 必须 fail-fast 让任务重试而非落地半份目录。
+            if next_page <= page:
+                raise AuthentikDirectoryUnavailableError(
+                    DIRECTORY_PAGINATION_NOT_ADVANCING_MESSAGE,
+                )
             page = next_page
+        raise AuthentikDirectoryUnavailableError(DIRECTORY_PAGINATION_LIMIT_MESSAGE)
 
     def _get_json(self, suffix: str, *, query: dict[str, str] | None = None) -> DirectoryJson:
         query_string = f"?{urlencode(query)}" if query else ""

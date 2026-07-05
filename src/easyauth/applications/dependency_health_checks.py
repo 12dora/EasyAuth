@@ -133,35 +133,46 @@ def _check_authentik_directory(config: AuthentikRuntimeConfig) -> DependencyChec
 
 
 def _check_dingtalk() -> DependencyCheckResult:
-    state = DingTalkDirectorySyncState.objects.order_by("-last_synced_at").first()
-    if state is None:
+    # 多 corp 部署下必须评估所有同步状态行 (worst-of 汇总): 一个较新的健康 corp
+    # 不能掩盖另一个 corp 的失败或陈旧, 否则 .first() 会漏报真实故障。
+    states = tuple(DingTalkDirectorySyncState.objects.order_by("source_slug", "corp_id"))
+    if not states:
         return DependencyCheckResult(
             dependency=DEPENDENCY_DINGTALK,
             status=DEPENDENCY_HEALTH_STATUS_WARNING,
             summary=DINGTALK_SYNC_MISSING_MESSAGE,
             error_summary="",
         )
-    if state.error:
+
+    now = timezone.now()
+    errored = [state for state in states if state.error]
+    if errored:
+        corps = ", ".join(f"{state.source_slug}:{state.corp_id}" for state in errored)
         return DependencyCheckResult(
             dependency=DEPENDENCY_DINGTALK,
             status=DEPENDENCY_HEALTH_STATUS_UNHEALTHY,
-            summary=f"最近一次钉钉目录同步失败({state.source_slug}:{state.corp_id})。",
-            error_summary=state.error,
+            summary=f"钉钉目录同步存在失败的 corp({corps})。",
+            error_summary="; ".join(state.error for state in errored),
         )
-    synced_at = state.last_synced_at.isoformat()
-    if timezone.now() - state.last_synced_at > DINGTALK_SYNC_STALE_AFTER:
+
+    stale = [state for state in states if now - state.last_synced_at > DINGTALK_SYNC_STALE_AFTER]
+    if stale:
+        corps = ", ".join(
+            f"{state.source_slug}:{state.corp_id}@{state.last_synced_at.isoformat()}"
+            for state in stale
+        )
         return DependencyCheckResult(
             dependency=DEPENDENCY_DINGTALK,
             status=DEPENDENCY_HEALTH_STATUS_WARNING,
-            summary=f"钉钉目录同步结果已过期, 最近成功同步于 {synced_at}。",
+            summary=f"钉钉目录同步结果已过期({corps})。",
             error_summary="",
         )
-    counters = ", ".join(f"{key}={value}" for key, value in sorted(state.counters.items()))
-    detail = f", {counters}" if counters else ""
+
+    oldest = min(state.last_synced_at for state in states)
     return DependencyCheckResult(
         dependency=DEPENDENCY_DINGTALK,
         status=DEPENDENCY_HEALTH_STATUS_HEALTHY,
-        summary=f"钉钉目录同步正常, 最近同步于 {synced_at}{detail}。",
+        summary=f"钉钉目录同步正常, 共 {len(states)} 个 corp, 最早同步于 {oldest.isoformat()}。",
         error_summary="",
     )
 

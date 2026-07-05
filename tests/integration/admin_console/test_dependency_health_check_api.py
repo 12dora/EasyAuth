@@ -27,6 +27,34 @@ pytestmark = pytest.mark.django_db
 CHECK_API_URL: Final = "/console/api/v1/operations/dependency-health/checks"
 
 
+def test_check_dingtalk_reports_unhealthy_when_any_corp_errored() -> None:
+    # Given: 多 corp 部署下, 一个 corp 健康而另一个 corp 同步失败。
+    _ = DingTalkDirectorySyncState.objects.create(
+        source_slug="dingtalk",
+        corp_id="corp-healthy",
+        status="success",
+        counters={"users": 5},
+        finished_at=timezone.now().isoformat(),
+        error="",
+    )
+    _ = DingTalkDirectorySyncState.objects.create(
+        source_slug="dingtalk",
+        corp_id="corp-broken",
+        status="error",
+        counters={},
+        finished_at=timezone.now().isoformat(),
+        error="拉取失败",
+    )
+
+    # When: 评估钉钉目录依赖健康。
+    result = dependency_health_checks._check_dingtalk()  # noqa: SLF001 - 直接测私有汇总逻辑.
+
+    # Then: worst-of 汇总为 unhealthy, 不被较新的健康 corp 掩盖。
+    assert result.status == "unhealthy"
+    assert "corp-broken" in result.summary
+    assert "拉取失败" in result.error_summary
+
+
 def test_dependency_health_check_writes_snapshots(monkeypatch: pytest.MonkeyPatch) -> None:
     # Given: 管理员触发一次真实依赖探测(外部探针在测试中被隔离)。
     client = _logged_in_superuser("health-check-admin")

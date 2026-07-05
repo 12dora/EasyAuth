@@ -147,6 +147,30 @@ def test_directory_client_iterates_paginated_users(monkeypatch: pytest.MonkeyPat
     ]
 
 
+def test_directory_client_rejects_non_advancing_pagination(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: 上游返回恒定的 next 游标, 若不校验前进会无限循环并挂死 worker。
+    def fake_urlopen(request: Request, *, timeout: float) -> _Response:
+        _ = (request, timeout)
+        return _Response(
+            b'{"pagination": {"next": 1}, "results": []}',
+        )
+
+    monkeypatch.setattr("easyauth.integrations.authentik.directory_client.urlopen", fake_urlopen)
+
+    # When / Then: 游标不前进被判为上游契约破坏, 快速失败而非静默截断。
+    with pytest.raises(AuthentikDirectoryUnavailableError):
+        _ = tuple(
+            AuthentikDirectoryClient(
+                base_url="http://authentik.test",
+                api_token=TEST_API_TOKEN,
+                source_slug="dingtalk",
+                timeout_seconds=TIMEOUT_SECONDS,
+            ).iter_users(),
+        )
+
+
 def test_directory_client_fetches_managed_users(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_urlopen(request: Request, *, timeout: float) -> _Response:
         assert timeout == TIMEOUT_SECONDS
