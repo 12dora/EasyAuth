@@ -19,6 +19,12 @@ OIDC_STATE_SESSION_KEY: Final = "easyauth_oidc_state"
 OIDC_NONCE_SESSION_KEY: Final = "easyauth_oidc_nonce"
 OIDC_NEXT_SESSION_KEY: Final = "easyauth_oidc_next"
 OIDC_ID_TOKEN_SESSION_KEY: Final = "easyauth_oidc_id_token"  # noqa: S105 - session key 名称, 不是 token 值.
+# 本地超管会话的专用不可伪造标志: 隔离 OIDC sub 与合成的 local-admin:<user> 命名空间。
+# current_local_admin 必须校验此标志, 防止某个 sub 恰为 local-admin:<username> 的 OIDC 会话被冒认。
+LOCAL_ADMIN_SESSION_FLAG: Final = "easyauth_local_admin"
+LOCAL_ADMIN_RESERVED_SUBJECT_PREFIX: Final = "local-admin:"
+FIELD_SUBJECT: Final = "subject"
+REASON_RESERVED_SUBJECT: Final = "must not use reserved local-admin namespace"
 DEFAULT_AUTH_SUCCESS_NEXT: Final = "/portal/"
 FIELD_AUDIENCE: Final = "audience"
 FIELD_AUTHORIZED_PARTY: Final = "azp"
@@ -139,7 +145,15 @@ def verify_oidc_claims(
     )
 
 
-def bind_oidc_session(request: HttpRequest, claims: VerifiedOidcClaims) -> UserMirror:
+def bind_oidc_session(
+    request: HttpRequest,
+    claims: VerifiedOidcClaims,
+    *,
+    local_admin: bool = False,
+) -> UserMirror:
+    # OIDC 登录路径禁止绑定 local-admin: 命名空间的 subject; 只有本地超管绑定才允许该前缀。
+    if not local_admin and claims.subject.startswith(LOCAL_ADMIN_RESERVED_SUBJECT_PREFIX):
+        raise OidcSessionError(FIELD_SUBJECT, REASON_RESERVED_SUBJECT)
     with transaction.atomic():
         user, created = UserMirror.objects.select_for_update().get_or_create(
             authentik_user_id=claims.subject,
@@ -163,6 +177,10 @@ def bind_oidc_session(request: HttpRequest, claims: VerifiedOidcClaims) -> UserM
         request.session[AUTHENTIK_GROUPS_SESSION_KEY] = list(claims.groups)
     else:
         request.session.pop(AUTHENTIK_GROUPS_SESSION_KEY, None)
+    if local_admin:
+        request.session[LOCAL_ADMIN_SESSION_FLAG] = True
+    else:
+        request.session.pop(LOCAL_ADMIN_SESSION_FLAG, None)
     return user
 
 
@@ -176,6 +194,7 @@ def clear_auth_session(request: HttpRequest) -> None:
     request.session.pop(AUTHENTIK_SESSION_KEY, None)
     request.session.pop(AUTHENTIK_GROUPS_SESSION_KEY, None)
     request.session.pop(OIDC_ID_TOKEN_SESSION_KEY, None)
+    request.session.pop(LOCAL_ADMIN_SESSION_FLAG, None)
 
 
 def exchange_authorization_code_for_claims(

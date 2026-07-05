@@ -8,6 +8,7 @@ from typing import Final
 
 import pyotp
 import pytest
+from django.contrib.sessions.backends.db import SessionStore
 from django.core.cache import cache
 from django.core.management import call_command
 from django.core.management.base import CommandError
@@ -15,7 +16,13 @@ from django.test import Client, RequestFactory
 from webauthn.helpers import bytes_to_base64url
 
 from easyauth.accounts import local_admin
-from easyauth.accounts.auth import AUTHENTIK_GROUPS_SESSION_KEY, AUTHENTIK_SESSION_KEY
+from easyauth.accounts.auth import (
+    AUTHENTIK_GROUPS_SESSION_KEY,
+    AUTHENTIK_SESSION_KEY,
+    OidcSessionError,
+    VerifiedOidcClaims,
+    bind_oidc_session,
+)
 from easyauth.accounts.models import LocalAdminAccount, LocalAdminPasskey, UserMirror
 from easyauth.admin_console.identity import actor_from_request
 from easyauth.audit.models import AuditLog
@@ -579,7 +586,7 @@ def test_totp_enable_and_disable_flow() -> None:
     # When
     disable_response = client.post(
         "/auth/local/security/totp/disable/",
-        {"code": pyotp.TOTP(otp_key).now()},
+        {"code": pyotp.TOTP(otp_key).now(), "current_password": GOOD_CREDENTIAL},
     )
 
     # Then
@@ -613,6 +620,7 @@ def test_passkey_registration_flow(monkeypatch: pytest.MonkeyPatch) -> None:
         {
             "state_token": begin["state_token"],
             "name": "MacBook Touch ID",
+            "current_password": GOOD_CREDENTIAL,
             "credential": {
                 "id": "reg-cred",
                 "rawId": "reg-cred",
@@ -641,7 +649,10 @@ def test_passkey_delete_removes_credential() -> None:
     passkey = _add_passkey(account)
 
     # When
-    response = client.post(f"/auth/local/security/passkey/{passkey.pk}/delete/")
+    response = client.post(
+        f"/auth/local/security/passkey/{passkey.pk}/delete/",
+        {"current_password": GOOD_CREDENTIAL},
+    )
 
     # Then
     assert response.status_code == HTTPStatus.FOUND
@@ -661,11 +672,18 @@ def test_create_local_admin_command_is_idempotent() -> None:
     assert LocalAdminAccount.objects.count() == 1
 
     # When
-    call_command("create_local_admin", USERNAME, "--password", BAD_CREDENTIAL, "--update")
+    call_command("create_local_admin", USERNAME, "--password", NEW_CREDENTIAL, "--update")
 
     # Then
     account.refresh_from_db()
-    assert account.check_password(BAD_CREDENTIAL)
+    assert account.check_password(NEW_CREDENTIAL)
+
+
+def test_create_local_admin_command_rejects_weak_password() -> None:
+    # Given / When / Then: 弱口令(过短)被口令策略拒绝, 不建号。
+    with pytest.raises(CommandError, match="at least 12 characters"):
+        call_command("create_local_admin", USERNAME, "--password", BAD_CREDENTIAL)
+    assert not LocalAdminAccount.objects.filter(username=USERNAME).exists()
 
 
 def test_create_local_admin_command_controls_forced_password_change() -> None:
@@ -691,7 +709,7 @@ def test_create_local_admin_command_controls_forced_password_change() -> None:
     assert not account.must_change_password
 
     # When: 常规 --update 重置密码。
-    call_command("create_local_admin", USERNAME, "--password", BAD_CREDENTIAL, "--update")
+    call_command("create_local_admin", USERNAME, "--password", NEW_CREDENTIAL, "--update")
 
     # Then: 重置后重新要求改密。
     account.refresh_from_db()
@@ -703,3 +721,116 @@ def test_create_local_admin_command_rejects_invalid_username() -> None:
     with pytest.raises(CommandError):
         call_command("create_local_admin", "Bad User!", "--password", GOOD_CREDENTIAL)
     assert not LocalAdminAccount.objects.exists()
+
+
+def test_totp_login_rejects_replayed_code() -> None:
+    # Given: 启用了 TOTP 的账号, 用一个验证码完成首次二次验证。
+    secret = pyotp.random_base32()
+    _ = _create_account(totp_secret=secret)
+    code = pyotp.TOTP(secret).now()
+    first = Client()
+    _ = _login(first)
+    first_verify = first.post("/auth/local/verify/totp/", {"code": code})
+    assert first_verify.status_code == HTTPStatus.FOUND
+    assert first.session[AUTHENTIK_SESSION_KEY] == LOCAL_ADMIN_SUBJECT
+
+    # When: 另一个会话用同一个验证码重放。
+    second = Client()
+    _ = _login(second)
+    replay = second.post("/auth/local/verify/totp/", {"code": code})
+
+    # Then: 一次性消费拒绝重放, 第二个会话未被绑定。
+    assert replay.status_code == HTTPStatus.OK
+    assert AUTHENTIK_SESSION_KEY not in second.session
+
+
+def test_totp_disable_requires_current_password() -> None:
+    # Given: 已登录且启用了 TOTP 的本地管理员。
+    secret = pyotp.random_base32()
+    account = _create_account(totp_secret=secret)
+    client = Client()
+    _ = _login(client)
+    _ = client.post("/auth/local/verify/totp/", {"code": pyotp.TOTP(secret).now()})
+
+    # When: 用错误的当前密码尝试停用 TOTP。
+    response = client.post(
+        "/auth/local/security/totp/disable/",
+        {"code": pyotp.TOTP(secret).now(), "current_password": BAD_CREDENTIAL},
+    )
+
+    # Then: step-up 失败, TOTP 仍启用。
+    assert "error=totp_disable" in response.headers["Location"]
+    account.refresh_from_db()
+    assert account.totp_enabled is True
+
+
+def test_change_password_rejects_weak_new_password() -> None:
+    # Given: 已登录本地管理员。
+    account = _create_account()
+    client = Client()
+    _ = _login(client)
+
+    # When: 新密码过短, 不满足口令策略。
+    response = client.post(
+        CHANGE_PASSWORD_PATH,
+        {
+            "current_password": GOOD_CREDENTIAL,
+            "new_password": "short",
+            "confirm_password": "short",
+        },
+    )
+
+    # Then: 密码不变, 返回错误。
+    assert response.status_code == HTTPStatus.OK
+    account.refresh_from_db()
+    assert account.check_password(GOOD_CREDENTIAL)
+
+
+def test_current_local_admin_requires_session_flag() -> None:
+    # Given: 一个本地管理员账号, 以及一个只有 local-admin: 前缀 subject 但缺少专用标志的会话。
+    _ = _create_account()
+    without_flag = SimpleNamespace(session={AUTHENTIK_SESSION_KEY: LOCAL_ADMIN_SUBJECT})
+    with_flag = SimpleNamespace(
+        session={
+            AUTHENTIK_SESSION_KEY: LOCAL_ADMIN_SUBJECT,
+            local_admin.LOCAL_ADMIN_SESSION_FLAG: True,
+        },
+    )
+
+    # Then: 缺少标志时冒认失败, 带标志时才解析出账号。
+    assert local_admin.current_local_admin(without_flag) is None
+    assert local_admin.current_local_admin(with_flag) is not None
+
+
+def test_bind_oidc_session_rejects_reserved_local_admin_subject() -> None:
+    request = RequestFactory().get("/auth/callback/")
+    request.session = SessionStore()
+
+    # OIDC 登录路径不得绑定 local-admin: 命名空间的 subject。
+    with pytest.raises(OidcSessionError):
+        _ = bind_oidc_session(
+            request,
+            VerifiedOidcClaims(
+                subject="local-admin:admin",
+                name="伪装",
+                email="e@example.com",
+                groups=("EasyAuth Admins",),
+            ),
+        )
+
+
+def test_console_actor_none_when_local_admin_deactivated() -> None:
+    # Given: 本地管理员登录并绑定控制台会话。
+    account = _create_account()
+    client = Client()
+    _ = _login(client)
+    request = RequestFactory().get("/console/")
+    request.session = client.session
+    assert actor_from_request(request) is not None
+
+    # When: 停用该本地管理员账号。
+    account.is_active = False
+    account.save(update_fields=["is_active"])
+
+    # Then: 已有控制台会话立即失效。
+    assert actor_from_request(request) is None

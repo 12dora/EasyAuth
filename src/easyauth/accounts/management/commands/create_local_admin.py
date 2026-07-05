@@ -3,6 +3,7 @@ from __future__ import annotations
 from getpass import getpass
 from typing import TYPE_CHECKING, final, override
 
+from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from django.core.management.base import BaseCommand, CommandError
 
@@ -51,6 +52,12 @@ class Command(BaseCommand):
         existing = LocalAdminAccount.objects.filter(username=username).first()
         if existing is not None and not allow_update:
             raise CommandError(ACCOUNT_EXISTS_ERROR.format(username=username))
+
+        # 建号/重置密码与改密视图共用同一口令策略源(AUTH_PASSWORD_VALIDATORS)。
+        try:
+            validate_password(password)
+        except ValidationError as error:
+            raise CommandError(" ".join(error.messages)) from error
 
         account = existing or LocalAdminAccount(username=username)
         account.set_password(password)

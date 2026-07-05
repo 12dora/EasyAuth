@@ -14,6 +14,7 @@ import qrcode
 import qrcode.image.svg
 import webauthn
 from django.conf import settings as django_settings
+from django.contrib.auth import hashers
 from django.core.cache import cache
 from django.utils import timezone
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
@@ -21,9 +22,18 @@ from webauthn.helpers.exceptions import (
     InvalidAuthenticationResponse,
     InvalidRegistrationResponse,
 )
-from webauthn.helpers.structs import PublicKeyCredentialDescriptor
+from webauthn.helpers.structs import (
+    AuthenticatorSelectionCriteria,
+    PublicKeyCredentialDescriptor,
+    UserVerificationRequirement,
+)
 
-from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY, VerifiedOidcClaims, bind_oidc_session
+from easyauth.accounts.auth import (
+    AUTHENTIK_SESSION_KEY,
+    LOCAL_ADMIN_SESSION_FLAG,
+    VerifiedOidcClaims,
+    bind_oidc_session,
+)
 from easyauth.accounts.models import LocalAdminAccount, LocalAdminPasskey
 from easyauth.audit.services import AuditRecord, AuditService
 
@@ -83,6 +93,10 @@ def local_admin_subject(username: str) -> str:
 
 
 def current_local_admin(request: HttpRequest) -> LocalAdminAccount | None:
+    # 必须同时命中 local-admin: 前缀与专用会话标志: 仅凭前缀匹配会让某个 sub 恰为
+    # local-admin:<username> 的普通 OIDC 会话被冒认为本地超管(BS-10)。
+    if request.session.get(LOCAL_ADMIN_SESSION_FLAG) is not True:
+        return None
     subject = request.session.get(AUTHENTIK_SESSION_KEY)
     if not isinstance(subject, str) or not subject.startswith(LOCAL_ADMIN_SUBJECT_PREFIX):
         return None
@@ -108,6 +122,7 @@ def bind_local_admin_session(
             email=f"{account.username}@local.admin",
             groups=groups,
         ),
+        local_admin=True,
     )
     clear_pending_verification(request)
     reset_login_failures(account.username)
@@ -205,11 +220,62 @@ def generate_totp_secret() -> str:
     return pyotp.random_base32()
 
 
-def verify_totp_code(secret: str, code: str) -> bool:
+# 用与真实账号相同的 hasher 预算一个 dummy 哈希, 让"账号不存在/停用"分支也跑一次常量时间校验,
+# 消除本地管理员用户名可经响应时序枚举的侧信道(BS-15)。
+_DUMMY_PASSWORD_HASH: Final = hashers.make_password("easyauth-timing-equalizer")
+
+
+def run_dummy_password_hash(password: str) -> None:
+    _ = hashers.check_password(password, _DUMMY_PASSWORD_HASH)
+
+
+def matched_totp_timestep(secret: str, code: str) -> int | None:
+    # 返回命中的 timestep(counter), 未命中返回 None; 供一次性消费判定。
     normalized = code.strip().replace(" ", "")
     if secret == "" or len(normalized) != TOTP_CODE_LENGTH or not normalized.isdigit():
+        return None
+    totp = pyotp.TOTP(secret)
+    current_step = totp.timecode(timezone.now())
+    for offset in (-1, 0, 1):
+        step = current_step + offset
+        if compare_digest(totp.generate_otp(step), normalized):
+            return step
+    return None
+
+
+def verify_totp_code(secret: str, code: str) -> bool:
+    # 无状态校验(不消费 timestep): 仅用于对 session 中尚未落库的注册种子做确认。
+    return matched_totp_timestep(secret, code) is not None
+
+
+STEP_UP_OK: Final = "ok"
+STEP_UP_THROTTLED: Final = "throttled"
+STEP_UP_INVALID: Final = "invalid"
+
+
+def check_step_up(account: LocalAdminAccount, password: str) -> str:
+    # 因子变更(禁用 TOTP / 增删 passkey)前的 step-up 重认证, 复用登录节流计数,
+    # 关闭"任意已登录会话即可无限试探并改动第二因子"的会话内提权(BS-14)。
+    if login_is_throttled(account.username):
+        return STEP_UP_THROTTLED
+    if not password or not account.check_password(password):
+        record_login_failure(account.username)
+        return STEP_UP_INVALID
+    return STEP_UP_OK
+
+
+def verify_and_consume_totp(account: LocalAdminAccount, code: str) -> bool:
+    # 一次性消费: 拒绝 <= 已记录 timestep 的验证码, 成功后前移 totp_last_timestep,
+    # 防止窗口内(约 90s)重放满足第二因子(BS-7, RFC 6238 §5.2)。
+    step = matched_totp_timestep(account.totp_secret, code)
+    if step is None:
         return False
-    return pyotp.TOTP(secret).verify(normalized, valid_window=1)
+    last = account.totp_last_timestep
+    if last is not None and step <= last:
+        return False
+    account.totp_last_timestep = step
+    account.save(update_fields=["totp_last_timestep", "updated_at"])
+    return True
 
 
 def totp_provisioning_uri(secret: str, username: str) -> str:
@@ -259,6 +325,7 @@ def passkey_authentication_options(
     options = webauthn.generate_authentication_options(
         rp_id=_webauthn_rp_id(),
         allow_credentials=allow_credentials,
+        user_verification=UserVerificationRequirement.REQUIRED,
     )
     state_token = _store_challenge(request, options.challenge)
     return webauthn.options_to_json(options), state_token
@@ -286,6 +353,7 @@ def verify_passkey_authentication(
             expected_origin=list(_webauthn_origins()),
             credential_public_key=base64url_to_bytes(passkey.public_key),
             credential_current_sign_count=passkey.sign_count,
+            require_user_verification=True,
         )
     except InvalidAuthenticationResponse as error:
         raise PasskeyVerificationError(REASON_VERIFICATION_FAILED) from error
@@ -310,6 +378,9 @@ def passkey_registration_options(
         user_id=local_admin_subject(account.username).encode("utf-8"),
         user_display_name=f"本地管理员 {account.username}",
         exclude_credentials=exclude_credentials,
+        authenticator_selection=AuthenticatorSelectionCriteria(
+            user_verification=UserVerificationRequirement.REQUIRED,
+        ),
     )
     state_token = _store_challenge(request, options.challenge)
     return webauthn.options_to_json(options), state_token
@@ -332,6 +403,7 @@ def register_passkey(
             expected_challenge=challenge,
             expected_rp_id=_webauthn_rp_id(),
             expected_origin=list(_webauthn_origins()),
+            require_user_verification=True,
         )
     except InvalidRegistrationResponse as error:
         raise PasskeyVerificationError(REASON_VERIFICATION_FAILED) from error

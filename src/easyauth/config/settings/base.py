@@ -149,6 +149,25 @@ def _postgres_database_config(database_url: str) -> DatabaseConfig:
 
 DATABASES = database_config_from_env(os.environ)
 
+# 共享缓存后端(Redis): 本地超管登录/改密/TOTP 的暴破节流依赖它; 未配置时 Django 回落到
+# 每进程独立的 LocMemCache, 多 worker 部署下 5 次锁定形同失效。用与 Celery 不同的 DB 索引。
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": os.environ.get("EASYAUTH_CACHE_URL", "redis://localhost:6379/2"),
+    },
+}
+
+# 本地超管口令策略的单一事实源: 改密视图与建号命令都调用 validate_password。
+AUTH_PASSWORD_VALIDATORS: list[dict[str, object]] = [
+    {
+        "NAME": "django.contrib.auth.password_validation.MinimumLengthValidator",
+        "OPTIONS": {"min_length": 12},
+    },
+    {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"},
+    {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"},
+]
+
 LANGUAGE_CODE = "zh-hans"
 TIME_ZONE = "Asia/Shanghai"
 USE_I18N = True

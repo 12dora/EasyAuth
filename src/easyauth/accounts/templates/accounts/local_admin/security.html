@@ -417,6 +417,10 @@
           <form class="actions-row" method="post" action="/auth/local/security/totp/disable/">
             {% csrf_token %}
             <div class="field">
+              <label for="disable-password">当前密码</label>
+              <input id="disable-password" name="current_password" type="password" autocomplete="current-password" required>
+            </div>
+            <div class="field">
               <label for="disable-code">当前验证码</label>
               <input class="code-input" id="disable-code" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required>
             </div>
@@ -460,6 +464,7 @@
               </div>
               <form class="inline-form" method="post" action="/auth/local/security/passkey/{{ passkey.pk }}/delete/">
                 {% csrf_token %}
+                <input class="passkey-delete-password" name="current_password" type="password" autocomplete="current-password" placeholder="当前密码" required>
                 <button class="button-quiet" type="submit">删除</button>
               </form>
             </li>
@@ -468,6 +473,10 @@
           {% endif %}
           <p class="form-error" id="passkey-error" role="alert" hidden></p>
           <div class="actions-row">
+            <div class="field">
+              <label for="passkey-current-password">当前密码</label>
+              <input id="passkey-current-password" name="passkey-current-password" type="password" autocomplete="current-password">
+            </div>
             <div class="field">
               <label for="passkey-name">名称(可选)</label>
               <input id="passkey-name" name="passkey-name" type="text" maxlength="100" placeholder="例如: MacBook Touch ID">
@@ -560,9 +569,11 @@
           };
           var credential = await navigator.credentials.create({ publicKey: publicKey });
           var nameInput = document.getElementById("passkey-name");
+          var passwordInput = document.getElementById("passkey-current-password");
           var payload = {
             state_token: begin.state_token,
             name: nameInput ? nameInput.value : "",
+            current_password: passwordInput ? passwordInput.value : "",
             credential: {
               id: credential.id,
               rawId: bufferToBase64url(credential.rawId),

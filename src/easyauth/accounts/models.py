@@ -175,6 +175,12 @@ class LocalAdminAccount(models.Model):
     # TOTP 种子静态加密落库; 密文比 base32 明文长, 需更大的列宽。
     totp_secret: EncryptedCharField = EncryptedCharField(max_length=255, blank=True)
     totp_enabled: models.BooleanField[bool, bool] = models.BooleanField(default=False)
+    # 最近一次被接受的 TOTP timestep(counter); 拒绝 <= 该值的验证码, 实现一次性消费防重放。
+    totp_last_timestep: models.BigIntegerField[int | None, int | None] = models.BigIntegerField(
+        null=True,
+        blank=True,
+        default=None,
+    )
     is_active: models.BooleanField[bool, bool] = models.BooleanField(default=True)
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,

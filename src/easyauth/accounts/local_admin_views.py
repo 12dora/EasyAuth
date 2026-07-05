@@ -8,6 +8,8 @@ from http import HTTPStatus
 from typing import TYPE_CHECKING, Final
 from urllib.parse import urlsplit
 
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError
 from django.http import Http404, HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import render
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
@@ -16,13 +18,16 @@ from easyauth.accounts.local_admin import (
     SECOND_FACTOR_NONE,
     SECOND_FACTOR_PASSKEY,
     SECOND_FACTOR_TOTP,
+    STEP_UP_OK,
     LocalAdminConfigurationError,
     PasskeyVerificationError,
     bind_local_admin_session,
+    check_step_up,
     clear_totp_setup_secret,
     current_local_admin,
     generate_totp_secret,
     login_is_throttled,
+    matched_totp_timestep,
     passkey_authentication_options,
     passkey_registration_options,
     pending_account,
@@ -37,13 +42,14 @@ from easyauth.accounts.local_admin import (
     record_totp_enabled,
     register_passkey,
     reset_login_failures,
+    run_dummy_password_hash,
     start_pending_verification,
     store_totp_setup_secret,
     totp_provisioning_uri,
     totp_qr_data_uri,
     totp_setup_secret,
+    verify_and_consume_totp,
     verify_passkey_authentication,
-    verify_totp_code,
 )
 from easyauth.accounts.models import LocalAdminAccount
 
@@ -60,13 +66,11 @@ SECURITY_PATH: Final = "/auth/local/security/"
 CHANGE_PASSWORD_PATH: Final = "/auth/local/change-password/"  # noqa: S105 - URL 路径, 不是密码值.
 CONSOLE_PATH: Final = "/console/"
 DEFAULT_CHANGE_PASSWORD_NEXT: Final = "/portal/"  # noqa: S105 - URL 路径, 不是密码值.
-PASSWORD_MIN_LENGTH: Final = 8
 ERROR_INVALID_CREDENTIALS: Final = "用户名或密码错误。"
 ERROR_THROTTLED: Final = "尝试次数过多, 请稍后再试。"
 ERROR_INVALID_TOTP: Final = "验证码不正确, 请重试。"
 ERROR_TOTP_NOT_ENABLED: Final = "该账号未启用验证器验证。"
 ERROR_CURRENT_PASSWORD_WRONG: Final = "当前密码不正确。"  # noqa: S105 - 错误提示文案, 不是密码值.
-ERROR_NEW_PASSWORD_TOO_SHORT: Final = "新密码长度至少 8 位。"  # noqa: S105 - 错误提示文案, 不是密码值.
 ERROR_NEW_PASSWORD_SAME_AS_CURRENT: Final = "新密码不能与当前密码相同。"  # noqa: S105 - 错误提示文案, 不是密码值.
 ERROR_NEW_PASSWORD_MISMATCH: Final = "两次输入的新密码不一致。"  # noqa: S105 - 错误提示文案, 不是密码值.
 SECURITY_NOTICES: Final[dict[str, str]] = {
@@ -78,7 +82,8 @@ SECURITY_NOTICES: Final[dict[str, str]] = {
 }
 SECURITY_ERRORS: Final[dict[str, str]] = {
     "totp_confirm": "验证码不正确, 未能启用验证器。",
-    "totp_disable": "验证码不正确, 未能停用验证器。",
+    "totp_disable": "当前密码或验证码不正确, 未能停用验证器。",
+    "passkey_delete": "当前密码不正确, 未能删除通行密钥。",
 }
 JSON_ERROR_LOGIN_REQUIRED: Final = "login_required"
 JSON_ERROR_BAD_REQUEST: Final = "bad_request"
@@ -95,8 +100,8 @@ def login_page(request: HttpRequest) -> HttpResponse:
     if login_is_throttled(username):
         record_login_failed(username, reason="throttled")
         return _login_error(request, ERROR_THROTTLED)
-    account = LocalAdminAccount.objects.filter(username=username).first()
-    if account is None or not account.is_active or not account.check_password(password):
+    account = _authenticate_local_admin(username, password)
+    if account is None:
         record_login_failure(username)
         record_login_failed(username, reason="invalid_credentials")
         return _login_error(request, ERROR_INVALID_CREDENTIALS)
@@ -125,7 +130,7 @@ def verify_totp(request: HttpRequest) -> HttpResponse:
     if login_is_throttled(account.username):
         return _render_verify(request, account, error=ERROR_THROTTLED)
     code = _post_value(request, "code")
-    if not verify_totp_code(account.totp_secret, code):
+    if not verify_and_consume_totp(account, code):
         record_login_failure(account.username)
         record_second_factor_failed(account.username, method=SECOND_FACTOR_TOTP)
         return _render_verify(request, account, error=ERROR_INVALID_TOTP)
@@ -239,13 +244,21 @@ def totp_begin(request: HttpRequest) -> HttpResponse:
 @require_POST
 def totp_confirm(request: HttpRequest) -> HttpResponse:
     account = _require_local_admin(request)
+    if login_is_throttled(account.username):
+        return HttpResponseRedirect(f"{SECURITY_PATH}?error=totp_confirm")
     secret = totp_setup_secret(request)
     code = _post_value(request, "code")
-    if secret == "" or not verify_totp_code(secret, code):
+    if secret == "" or matched_totp_timestep(secret, code) is None:
+        record_login_failure(account.username)
         return HttpResponseRedirect(f"{SECURITY_PATH}?error=totp_confirm")
     account.totp_secret = secret
     account.totp_enabled = True
-    account.save(update_fields=["totp_secret", "totp_enabled", "updated_at"])
+    # 新绑定从干净状态开始一次性消费; 后续登录/禁用会消费 timestep 防重放。
+    account.totp_last_timestep = None
+    account.save(
+        update_fields=["totp_secret", "totp_enabled", "totp_last_timestep", "updated_at"],
+    )
+    reset_login_failures(account.username)
     clear_totp_setup_secret(request)
     record_totp_enabled(account.username)
     return HttpResponseRedirect(f"{SECURITY_PATH}?notice=totp_enabled")
@@ -254,12 +267,20 @@ def totp_confirm(request: HttpRequest) -> HttpResponse:
 @require_POST
 def totp_disable(request: HttpRequest) -> HttpResponse:
     account = _require_local_admin(request)
+    # 禁用第二因子(降低安全)要求 step-up 重认证 + 对验证码套用登录节流。
+    if check_step_up(account, _post_value(request, "current_password")) != STEP_UP_OK:
+        return HttpResponseRedirect(f"{SECURITY_PATH}?error=totp_disable")
     code = _post_value(request, "code")
-    if not account.totp_enabled or not verify_totp_code(account.totp_secret, code):
+    if not account.totp_enabled or not verify_and_consume_totp(account, code):
+        record_login_failure(account.username)
         return HttpResponseRedirect(f"{SECURITY_PATH}?error=totp_disable")
     account.totp_secret = ""
     account.totp_enabled = False
-    account.save(update_fields=["totp_secret", "totp_enabled", "updated_at"])
+    account.totp_last_timestep = None
+    account.save(
+        update_fields=["totp_secret", "totp_enabled", "totp_last_timestep", "updated_at"],
+    )
+    reset_login_failures(account.username)
     record_totp_disabled(account.username)
     return HttpResponseRedirect(f"{SECURITY_PATH}?notice=totp_disabled")
 
@@ -278,10 +299,16 @@ def passkey_register_complete(request: HttpRequest) -> HttpResponse:
     credential = payload.get("credential") if payload else None
     state_token = payload.get("state_token") if payload else None
     name = payload.get("name") if payload else ""
+    current_password = payload.get("current_password") if payload else ""
     if not isinstance(credential, dict) or not isinstance(state_token, str):
         return _json_error(JSON_ERROR_BAD_REQUEST, status=HTTPStatus.BAD_REQUEST)
     if not isinstance(name, str):
         name = ""
+    # 注册第二因子(改动因子)要求 step-up 重认证。
+    if check_step_up(account, current_password if isinstance(current_password, str) else "") != (
+        STEP_UP_OK
+    ):
+        return _json_error(ERROR_CURRENT_PASSWORD_WRONG, status=HTTPStatus.BAD_REQUEST)
     try:
         passkey = register_passkey(
             request,
@@ -292,6 +319,7 @@ def passkey_register_complete(request: HttpRequest) -> HttpResponse:
         )
     except PasskeyVerificationError as error:
         return _json_error(str(error), status=HTTPStatus.BAD_REQUEST)
+    reset_login_failures(account.username)
     record_passkey_registered(account.username, name=passkey.name)
     return JsonResponse({"redirect": f"{SECURITY_PATH}?notice=passkey_registered"})
 
@@ -299,13 +327,28 @@ def passkey_register_complete(request: HttpRequest) -> HttpResponse:
 @require_POST
 def passkey_delete(request: HttpRequest, passkey_id: int) -> HttpResponse:
     account = _require_local_admin(request)
+    # 移除第二因子(降低安全)要求 step-up 重认证。
+    if check_step_up(account, _post_value(request, "current_password")) != STEP_UP_OK:
+        return HttpResponseRedirect(f"{SECURITY_PATH}?error=passkey_delete")
     passkey = account.passkeys.filter(pk=passkey_id).first()
     if passkey is None:
         raise Http404
     name = passkey.name
     _ = passkey.delete()
+    reset_login_failures(account.username)
     record_passkey_removed(account.username, name=name)
     return HttpResponseRedirect(f"{SECURITY_PATH}?notice=passkey_removed")
+
+
+def _authenticate_local_admin(username: str, password: str) -> LocalAdminAccount | None:
+    account = LocalAdminAccount.objects.filter(username=username).first()
+    if account is None or not account.is_active:
+        # 账号不存在/停用也跑一次常量时间 dummy 哈希, 消除用户名的响应时序侧信道(BS-15)。
+        run_dummy_password_hash(password)
+        return None
+    if not account.check_password(password):
+        return None
+    return account
 
 
 def _require_local_admin(request: HttpRequest) -> LocalAdminAccount:
@@ -371,12 +414,15 @@ def _new_password_error(
     new_password: str,
     confirm_password: str,
 ) -> str:
-    if len(new_password) < PASSWORD_MIN_LENGTH:
-        return ERROR_NEW_PASSWORD_TOO_SHORT
-    if new_password == current_password:
-        return ERROR_NEW_PASSWORD_SAME_AS_CURRENT
     if new_password != confirm_password:
         return ERROR_NEW_PASSWORD_MISMATCH
+    if new_password == current_password:
+        return ERROR_NEW_PASSWORD_SAME_AS_CURRENT
+    # 单一口令策略源: 复用 AUTH_PASSWORD_VALIDATORS(最小长度/常见口令/纯数字)。
+    try:
+        validate_password(new_password)
+    except ValidationError as error:
+        return " ".join(error.messages)
     return ""
 
 

@@ -6,7 +6,8 @@ from typing import TYPE_CHECKING
 from django.conf import settings
 
 from easyauth.accounts.auth import AUTHENTIK_GROUPS_SESSION_KEY, AUTHENTIK_SESSION_KEY
-from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
+from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
+from easyauth.accounts.models import USER_STATUS_ACTIVE, LocalAdminAccount, UserMirror
 from easyauth.applications.ownership import ConsoleActor
 
 if TYPE_CHECKING:
@@ -16,6 +17,13 @@ def actor_from_request(request: HttpRequest) -> ConsoleActor | None:
     authentik_user_id = _session_string(request, AUTHENTIK_SESSION_KEY)
     if authentik_user_id == "":
         return None
+
+    # 本地超管以 is_active 为唯一权威: 停用后已有控制台会话必须立即失效, 不能等自然过期。
+    if authentik_user_id.startswith(LOCAL_ADMIN_SUBJECT_PREFIX):
+        username = authentik_user_id[len(LOCAL_ADMIN_SUBJECT_PREFIX) :]
+        if not LocalAdminAccount.objects.filter(username=username, is_active=True).exists():
+            _clear_console_session(request)
+            return None
 
     user = UserMirror.objects.filter(
         authentik_user_id=authentik_user_id,

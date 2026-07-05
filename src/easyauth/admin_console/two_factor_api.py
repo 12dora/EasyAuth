@@ -11,21 +11,28 @@ from django.http import Http404, HttpRequest, JsonResponse
 from django.views.decorators.http import require_http_methods
 
 from easyauth.accounts.local_admin import (
+    STEP_UP_OK,
+    STEP_UP_THROTTLED,
     PasskeyVerificationError,
+    check_step_up,
     clear_totp_setup_secret,
     current_local_admin,
     generate_totp_secret,
+    login_is_throttled,
+    matched_totp_timestep,
     passkey_registration_options,
+    record_login_failure,
     record_passkey_registered,
     record_passkey_removed,
     record_totp_disabled,
     record_totp_enabled,
     register_passkey,
+    reset_login_failures,
     store_totp_setup_secret,
     totp_provisioning_uri,
     totp_qr_data_uri,
     totp_setup_secret,
-    verify_totp_code,
+    verify_and_consume_totp,
 )
 from easyauth.admin_console.api_responses import error_response, json_response
 from easyauth.api.datetime_json import datetime_value
@@ -40,6 +47,8 @@ INVALID_PAYLOAD_MESSAGE = "请求参数无效。"
 TOTP_ALREADY_ENABLED_MESSAGE = "验证器已启用。"
 TOTP_CONFIRM_INVALID_MESSAGE = "验证码不正确, 未能启用验证器。"
 TOTP_DISABLE_INVALID_MESSAGE = "验证码不正确, 未能停用验证器。"
+STEP_UP_INVALID_MESSAGE = "当前密码不正确。"
+THROTTLED_MESSAGE = "尝试次数过多, 请稍后再试。"
 
 
 @require_http_methods(["GET"])
@@ -77,9 +86,14 @@ def totp_confirm(request: HttpRequest) -> JsonResponse:
     account = current_local_admin(request)
     if account is None:
         return _forbidden()
+    if login_is_throttled(account.username):
+        return error_response(
+            ErrorCode.PERMISSION_DENIED, THROTTLED_MESSAGE, status=HTTPStatus.TOO_MANY_REQUESTS
+        )
     secret = totp_setup_secret(request)
     code = _body_string(request, "code")
-    if secret == "" or not verify_totp_code(secret, code):
+    if secret == "" or matched_totp_timestep(secret, code) is None:
+        record_login_failure(account.username)
         return error_response(
             ErrorCode.VALIDATION_ERROR,
             TOTP_CONFIRM_INVALID_MESSAGE,
@@ -87,7 +101,12 @@ def totp_confirm(request: HttpRequest) -> JsonResponse:
         )
     account.totp_secret = secret
     account.totp_enabled = True
-    account.save(update_fields=["totp_secret", "totp_enabled", "updated_at"])
+    # 新绑定从干净状态开始一次性消费; 后续登录/禁用会消费 timestep 防重放。
+    account.totp_last_timestep = None
+    account.save(
+        update_fields=["totp_secret", "totp_enabled", "totp_last_timestep", "updated_at"],
+    )
+    reset_login_failures(account.username)
     clear_totp_setup_secret(request)
     record_totp_enabled(account.username)
     return json_response(_status_payload(account))
@@ -98,8 +117,21 @@ def totp_disable(request: HttpRequest) -> JsonResponse:
     account = current_local_admin(request)
     if account is None:
         return _forbidden()
+    # 禁用第二因子(降低安全)要求 step-up 重认证 + 对验证码套用登录节流。
+    step_up = check_step_up(account, _body_string(request, "current_password"))
+    if step_up == STEP_UP_THROTTLED:
+        return error_response(
+            ErrorCode.PERMISSION_DENIED, THROTTLED_MESSAGE, status=HTTPStatus.TOO_MANY_REQUESTS
+        )
+    if step_up != STEP_UP_OK:
+        return error_response(
+            ErrorCode.VALIDATION_ERROR,
+            STEP_UP_INVALID_MESSAGE,
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+        )
     code = _body_string(request, "code")
-    if not account.totp_enabled or not verify_totp_code(account.totp_secret, code):
+    if not account.totp_enabled or not verify_and_consume_totp(account, code):
+        record_login_failure(account.username)
         return error_response(
             ErrorCode.VALIDATION_ERROR,
             TOTP_DISABLE_INVALID_MESSAGE,
@@ -107,7 +139,11 @@ def totp_disable(request: HttpRequest) -> JsonResponse:
         )
     account.totp_secret = ""
     account.totp_enabled = False
-    account.save(update_fields=["totp_secret", "totp_enabled", "updated_at"])
+    account.totp_last_timestep = None
+    account.save(
+        update_fields=["totp_secret", "totp_enabled", "totp_last_timestep", "updated_at"],
+    )
+    reset_login_failures(account.username)
     record_totp_disabled(account.username)
     return json_response(_status_payload(account))
 
@@ -130,6 +166,7 @@ def passkey_register_complete(request: HttpRequest) -> JsonResponse:
     credential = payload.get("credential") if payload else None
     state_token = payload.get("state_token") if payload else None
     name = payload.get("name") if payload else ""
+    current_password = payload.get("current_password") if payload else ""
     if not isinstance(credential, dict) or not isinstance(state_token, str):
         return error_response(
             ErrorCode.VALIDATION_ERROR,
@@ -138,6 +175,12 @@ def passkey_register_complete(request: HttpRequest) -> JsonResponse:
         )
     if not isinstance(name, str):
         name = ""
+    step_up_error = _step_up_error(
+        account,
+        current_password if isinstance(current_password, str) else "",
+    )
+    if step_up_error is not None:
+        return step_up_error
     try:
         passkey = register_passkey(
             request,
@@ -152,6 +195,7 @@ def passkey_register_complete(request: HttpRequest) -> JsonResponse:
             str(error),
             status=HTTPStatus.UNPROCESSABLE_ENTITY,
         )
+    reset_login_failures(account.username)
     record_passkey_registered(account.username, name=passkey.name)
     return json_response(_status_payload(account))
 
@@ -161,11 +205,15 @@ def passkey_delete(request: HttpRequest, passkey_id: int) -> JsonResponse:
     account = current_local_admin(request)
     if account is None:
         return _forbidden()
+    step_up_error = _step_up_error(account, _body_string(request, "current_password"))
+    if step_up_error is not None:
+        return step_up_error
     passkey = account.passkeys.filter(pk=passkey_id).first()
     if passkey is None:
         raise Http404
     name = passkey.name
     _ = passkey.delete()
+    reset_login_failures(account.username)
     record_passkey_removed(account.username, name=name)
     return json_response(_status_payload(account))
 
@@ -185,6 +233,22 @@ def _passkey_payload(passkey: LocalAdminPasskey) -> dict[str, JsonValue]:
         "created_at": datetime_value(passkey.created_at),
         "last_used_at": datetime_value(passkey.last_used_at),
     }
+
+
+def _step_up_error(account: LocalAdminAccount, current_password: str) -> JsonResponse | None:
+    # 因子变更前的 step-up 重认证; 返回错误响应或 None(通过)。
+    step_up = check_step_up(account, current_password)
+    if step_up == STEP_UP_THROTTLED:
+        return error_response(
+            ErrorCode.PERMISSION_DENIED, THROTTLED_MESSAGE, status=HTTPStatus.TOO_MANY_REQUESTS
+        )
+    if step_up != STEP_UP_OK:
+        return error_response(
+            ErrorCode.VALIDATION_ERROR,
+            STEP_UP_INVALID_MESSAGE,
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+        )
+    return None
 
 
 def _forbidden() -> JsonResponse:
