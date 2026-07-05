@@ -71,6 +71,53 @@ describe("AppShell", () => {
     expect(within(screen.getByRole("navigation", { name: "主导航" })).getByText("我的权限")).toBeVisible();
   });
 
+  test("危险 scheme 的头像 URL 回退为首字母头像(FS-2)", () => {
+    render(
+      <I18nProvider>
+        <MemoryRouter initialEntries={["/portal"]}>
+          <Routes>
+            <Route
+              element={
+                <AppShell
+                  currentUser={{ avatarUrl: "javascript:alert(1)", displayName: "张三", id: "u1", logoutUrl: "/auth/logout/" }}
+                  mode="portal"
+                />
+              }
+            >
+              <Route path="/portal" element={<div>页面内容</div>} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </I18nProvider>,
+    );
+
+    expect(screen.queryByRole("img", { name: /头像/ })).not.toBeInTheDocument();
+    expect(screen.getByText("张")).toBeVisible();
+  });
+
+  test("同源相对路径头像正常渲染(FS-2)", () => {
+    render(
+      <I18nProvider>
+        <MemoryRouter initialEntries={["/portal"]}>
+          <Routes>
+            <Route
+              element={
+                <AppShell
+                  currentUser={{ avatarUrl: "/media/avatars/alice.png", displayName: "张三", id: "u1", logoutUrl: "/auth/logout/" }}
+                  mode="portal"
+                />
+              }
+            >
+              <Route path="/portal" element={<div>页面内容</div>} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </I18nProvider>,
+    );
+
+    expect(screen.getByRole("img", { name: "张三头像" })).toHaveAttribute("src", "/media/avatars/alice.png");
+  });
+
   test("缺少友好展示名时不会把 authentik subject 显示在顶栏", () => {
     render(
       <MemoryRouter initialEntries={["/portal"]}>

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -133,6 +133,67 @@ describe("MatrixTab", () => {
           },
         ],
       });
+    });
+  });
+  test("同一批次内切换两个授权项状态时不会互相覆盖(FF-15)", async () => {
+    const payload = {
+      data: [
+        {
+          id: 30,
+          key: "team",
+          kind: "role",
+          name: "团队角色",
+          description: "",
+          requestable: true,
+          is_active: true,
+          grants: [
+            { permission: "order.read", scope: "SELF", is_active: true },
+            { permission: "order.export", scope: "SELF", is_active: true },
+          ],
+        },
+      ],
+    };
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/demo/authorization-groups" && !init?.method) {
+        return jsonResponse(payload);
+      }
+      if (url === "/console/api/v1/apps/demo/permissions") {
+        return jsonResponse({ data: [{ id: 40, key: "order.read", name: "读取", supported_scopes: ["SELF"] }, { id: 41, key: "order.export", name: "导出", supported_scopes: ["SELF"] }] });
+      }
+      if (url === "/console/api/v1/apps/demo/scopes") {
+        return jsonResponse({ data: [{ key: "SELF", name: "本人", is_active: true, display_order: 1 }] });
+      }
+      if (url === "/console/api/v1/apps/demo/authorization-groups/team" && init?.method === "PATCH") {
+        return jsonResponse(payload);
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWithClient(<MatrixTab appKey="demo" />);
+
+    await screen.findByText("团队角色");
+    await user.click(screen.getByRole("button", { name: "编辑" }));
+    const dialog = await screen.findByRole("dialog", { name: "编辑授权组" });
+
+    const readRow = within(dialog).getByText("order.read / SELF").closest("tr") as HTMLTableRowElement;
+    const exportRow = within(dialog).getByText("order.export / SELF").closest("tr") as HTMLTableRowElement;
+
+    // 同一批次内(未重渲染前)连续切换两个授权项, 验证第二次不会用过期快照覆盖第一次。
+    act(() => {
+      fireEvent.click(within(readRow).getByRole("button", { name: "停用" }));
+      fireEvent.click(within(exportRow).getByRole("button", { name: "停用" }));
+    });
+
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      const patchCall = findFetchCall(fetchMock, "/console/api/v1/apps/demo/authorization-groups/team", "PATCH");
+      const body = parseJsonBody(patchCall?.[1]) as { grants: Array<{ is_active: boolean }> };
+      expect(body.grants).toHaveLength(2);
+      expect(body.grants.every((grant) => grant.is_active === false)).toBe(true);
     });
   });
 });

@@ -2,10 +2,26 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Outlet, Route, Routes } from "react-router-dom";
 import { describe, expect, test, vi } from "vitest";
 
 import { PortalPage } from "./PortalPage";
+
+function renderPortalPageWithUser(currentUserId: string, initialEntry = "/portal/request") {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+  render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <Routes>
+          <Route element={<Outlet context={{ currentUserId }} />}>
+            <Route path="/portal/request" element={<PortalPage />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
 
 function renderPortalPage(initialEntry = "/portal/request") {
   const client = new QueryClient({
@@ -217,8 +233,9 @@ describe("PortalPage access request form", () => {
 
       await screen.findByRole("option", { name: "CRM (crm)" });
 
+      // 「直接权限」「审批人」为 group 语义字段(FF-10), 其可见标题渲染为带 id 的 <span> 而非 <label>。
       const labels = ["应用", "可申请权限组", "直接权限", "审批人", "授权期限", "过期时间", "申请原因"].map((label) =>
-        screen.getByText(label, { selector: "label" }),
+        screen.getByText(label, { selector: "label, span" }),
       );
 
       for (let index = 0; index < labels.length - 1; index += 1) {
@@ -261,9 +278,50 @@ describe("PortalPage access request form", () => {
       const submitButton = screen.getByRole("button", { name: "提交申请" });
       expect(submitButton).toBeDisabled();
 
-      await user.type(screen.getByLabelText("过期时间"), "2026-07-01T10:30");
+      // FF-5: 过期时间必须晚于当前时刻, 故填入相对当前时间的未来值(避免固定日期随时钟过期)。
+      const future = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+      const futureLocal = new Date(future.getTime() - future.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
+      fireEvent.change(screen.getByLabelText("过期时间"), { target: { value: futureLocal } });
 
       expect(submitButton).toBeEnabled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("FF-7: 申请人自己不出现在审批人候选中且默认审批人剔除自己", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/request-catalog") {
+        return jsonResponse({
+          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["me", "boss"] }],
+          approver_options: [
+            { user_id: "me", name: "我本人" },
+            { user_id: "boss", name: "老板" },
+          ],
+          authorization_groups: [],
+          permission_groups: [],
+          ungrouped_permissions: [],
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPageWithUser("me");
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "CRM (crm)" });
+      await user.selectOptions(screen.getByLabelText("应用"), "crm");
+
+      // 默认审批人来自应用默认列表, 但必须剔除申请人自己(me)。
+      expect(await screen.findByLabelText("选择审批人 boss")).toBeChecked();
+      expect(screen.queryByLabelText("选择审批人 me")).not.toBeInTheDocument();
+
+      // 即使搜索也搜不到自己。
+      await user.type(screen.getByLabelText("搜索审批人"), "我本人");
+      expect(screen.queryByLabelText("选择审批人 me")).not.toBeInTheDocument();
     } finally {
       vi.unstubAllGlobals();
     }

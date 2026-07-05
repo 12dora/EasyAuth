@@ -306,7 +306,7 @@ def test_configuration_status_reports_documented_target_fields() -> None:
 
     # Then: 响应以文档契约 items 字段返回配置问题及目标信息。
     body = _response_json_object(response)
-    items = _json_list(body["items"])
+    items = _json_list(body["data"])
     item = _json_object(items[0])
     assert response.status_code == HTTPStatus.OK
     assert body["status"] == "blocking"

@@ -20,6 +20,8 @@ import { Field, SelectInput, TextInput } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
 import type { ApprovalRuleItem } from "../../../../lib/domain";
+import { useI18n } from "../../../../i18n/I18nProvider";
+import type { Translator } from "../../../../lib/status";
 import { safeJoin } from "../utils";
 
 type RuleTargetType = "authorization_group" | "permission";
@@ -32,6 +34,7 @@ const emptyForm = {
 };
 
 export function RulesTab({ appKey }: { appKey: string }) {
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const [editingRuleId, setEditingRuleId] = useState<number | null>(null);
   const [form, setForm] = useState(emptyForm);
@@ -78,20 +81,20 @@ export function RulesTab({ appKey }: { appKey: string }) {
     onSuccess: () => queryClient.invalidateQueries({ queryKey }),
   });
   const ruleColumns: ColumnDef<EditableApprovalRule>[] = [
-    { header: "对象", cell: ({ row }) => `${targetTypeLabel(row.original.target_type)}：${row.original.target_key ?? "-"}` },
-    { header: "审批人", cell: ({ row }) => safeJoin(row.original.approver_userids) },
+    { header: t("console.rules.column.target"), cell: ({ row }) => `${targetTypeLabel(t, row.original.target_type)}：${row.original.target_key ?? "-"}` },
+    { header: t("console.rules.column.approvers"), cell: ({ row }) => safeJoin(row.original.approver_userids) },
     {
-      header: "状态",
+      header: t("common.status"),
       cell: ({ row }) => (
         <div className="flex flex-wrap gap-2">
-          <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>{row.original.is_active ? "启用" : "停用"}</Badge>
-          {isBlocking(row.original) ? <Badge tone="signal">阻塞</Badge> : null}
+          <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>{row.original.is_active ? t("common.enabled") : t("common.disabled")}</Badge>
+          {isBlocking(row.original) ? <Badge tone="signal">{t("console.rules.blocking")}</Badge> : null}
         </div>
       ),
     },
     {
       id: "actions",
-      header: "操作",
+      header: t("common.actions"),
       cell: ({ row }) => (
         <TableActionCell>
           <TableRowActionButton
@@ -106,7 +109,7 @@ export function RulesTab({ appKey }: { appKey: string }) {
               setDialogOpen(true);
             }}
           >
-            编辑
+            {t("common.edit")}
           </TableRowActionButton>
           <TableRowActionButton
             type="button"
@@ -114,7 +117,7 @@ export function RulesTab({ appKey }: { appKey: string }) {
             onClick={() => toggleMutation.mutate(row.original)}
             disabled={toggleMutation.isPending}
           >
-            {row.original.is_active ? "停用" : "启用"}
+            {row.original.is_active ? t("common.disable") : t("common.enable")}
           </TableRowActionButton>
         </TableActionCell>
       ),
@@ -130,7 +133,7 @@ export function RulesTab({ appKey }: { appKey: string }) {
   return (
     <section className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-base font-semibold text-ink">审批规则</h2>
+        <h2 className="text-base font-semibold text-ink">{t("console.rules.heading")}</h2>
         <Button
           type="button"
           variant="primary"
@@ -141,12 +144,12 @@ export function RulesTab({ appKey }: { appKey: string }) {
             setDialogOpen(true);
           }}
         >
-          新建
+          {t("common.new")}
         </Button>
       </div>
-      {rulesQuery.error ? <StatusBanner tone="signal" title="审批规则加载失败" message={(rulesQuery.error as Error).message} /> : null}
-      {saveMutation.error ? <StatusBanner tone="signal" title="审批规则保存失败" message={(saveMutation.error as Error).message} /> : null}
-      {toggleMutation.error ? <StatusBanner tone="signal" title="审批规则状态更新失败" message={(toggleMutation.error as Error).message} /> : null}
+      {rulesQuery.error ? <StatusBanner tone="signal" title={t("console.rules.loadFailed")} message={(rulesQuery.error as Error).message} /> : null}
+      {saveMutation.error ? <StatusBanner tone="signal" title={t("console.rules.saveFailed")} message={(saveMutation.error as Error).message} /> : null}
+      {toggleMutation.error ? <StatusBanner tone="signal" title={t("console.rules.toggleFailed")} message={(toggleMutation.error as Error).message} /> : null}
       <TableFrame>
         <TableRoot>
           <TableHead>
@@ -177,7 +180,7 @@ export function RulesTab({ appKey }: { appKey: string }) {
               ))
             ) : (
               <TableEmptyRow colSpan={ruleTable.getAllLeafColumns().length}>
-                <EmptyState title="暂无审批规则" description="新建规则后，对应权限申请将走指定审批人。" />
+                <EmptyState title={t("console.rules.empty")} description={t("console.rules.emptyDescription")} />
               </TableEmptyRow>
             )}
           </TableBody>
@@ -185,9 +188,9 @@ export function RulesTab({ appKey }: { appKey: string }) {
         <TablePagination table={ruleTable} />
       </TableFrame>
       {dialogOpen ? (
-        <Dialog title={editingRuleId ? "编辑审批规则" : "新建审批规则"} onClose={() => setDialogOpen(false)} footer={
+        <Dialog title={editingRuleId ? t("console.rules.editTitle") : t("console.rules.createTitle")} onClose={() => setDialogOpen(false)} footer={
           <>
-            <Button type="button" onClick={() => setDialogOpen(false)}>取消</Button>
+            <Button type="button" onClick={() => setDialogOpen(false)}>{t("common.cancel")}</Button>
             <Button
               form="approval-rule-form"
               type="submit"
@@ -195,7 +198,7 @@ export function RulesTab({ appKey }: { appKey: string }) {
               loading={saveMutation.isPending}
               disabled={!form.target_key || !form.approver_userids || saveMutation.isPending}
             >
-              保存
+              {t("common.save")}
             </Button>
           </>
         }>
@@ -203,22 +206,22 @@ export function RulesTab({ appKey }: { appKey: string }) {
             event.preventDefault();
             saveMutation.mutate();
           }}>
-            <Field label="规则目标类型">
+            <Field label={t("console.rules.targetTypeLabel")}>
               <SelectInput
-                aria-label="规则目标类型"
+                aria-label={t("console.rules.targetTypeLabel")}
                 value={form.target_type}
                 onChange={(event) => {
                   const targetType = event.currentTarget.value as RuleTargetType;
                   setForm((current) => ({ ...current, target_type: targetType }));
                 }}
               >
-                <option value="authorization_group">授权组（authorization_group）</option>
-                <option value="permission">权限（permission）</option>
+                <option value="authorization_group">{t("console.rules.targetOption.authorizationGroup")}</option>
+                <option value="permission">{t("console.rules.targetOption.permission")}</option>
               </SelectInput>
             </Field>
-            <Field label="目标 Key">
+            <Field label={t("console.rules.targetKey")}>
               <TextInput
-                aria-label="目标 Key"
+                aria-label={t("console.rules.targetKey")}
                 value={form.target_key}
                 onChange={(event) => {
                   const targetKey = event.currentTarget.value;
@@ -226,9 +229,9 @@ export function RulesTab({ appKey }: { appKey: string }) {
                 }}
               />
             </Field>
-            <Field label="审批人 user_id" hint="多个审批人用英文逗号分隔">
+            <Field label={t("console.rules.approverField")} hint={t("console.rules.approverHint")}>
               <TextInput
-                aria-label="审批人 user_id"
+                aria-label={t("console.rules.approverField")}
                 value={form.approver_userids}
                 onChange={(event) => {
                   const approverUserids = event.currentTarget.value;
@@ -250,12 +253,12 @@ function splitUserids(value: string): string[] {
     .filter(Boolean);
 }
 
-function targetTypeLabel(value: string | undefined): string {
+function targetTypeLabel(t: Translator, value: string | undefined): string {
   if (value === "permission") {
-    return "权限";
+    return t("console.rules.targetType.permission");
   }
   if (value === "authorization_group") {
-    return "授权组";
+    return t("console.rules.targetType.authorizationGroup");
   }
   return value ?? "-";
 }

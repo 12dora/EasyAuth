@@ -23,14 +23,15 @@ import { apiRequest, itemsFromPayload } from "../../lib/api";
 import type { ListPayload } from "../../lib/api";
 import type { OperationRow } from "../../lib/domain";
 import { useI18n } from "../../i18n/I18nProvider";
+import type { MessageKey } from "../../i18n/messages";
 import { accessRequestStatusLabel, badgeToneForAccessRequestStatus, formatDateTime } from "../../lib/status";
 import type { Translator } from "../../lib/status";
 
-const ENDPOINTS: Record<string, { title: string; endpoint: string }> = {
-  "access-requests": { title: "申请运营", endpoint: "/console/api/v1/operations/access-requests" },
-  "access-grants": { title: "授权运营", endpoint: "/console/api/v1/operations/access-grants" },
-  "dependency-health": { title: "依赖健康", endpoint: "/console/api/v1/operations/dependency-health" },
-  audit: { title: "审计日志", endpoint: "/console/api/v1/audit-logs" },
+const ENDPOINTS: Record<string, { titleKey: MessageKey; endpoint: string }> = {
+  "access-requests": { titleKey: "nav.console.accessRequests", endpoint: "/console/api/v1/operations/access-requests" },
+  "access-grants": { titleKey: "nav.console.accessGrants", endpoint: "/console/api/v1/operations/access-grants" },
+  "dependency-health": { titleKey: "nav.console.dependencyHealth", endpoint: "/console/api/v1/operations/dependency-health" },
+  audit: { titleKey: "console.operations.title.audit", endpoint: "/console/api/v1/audit-logs" },
 };
 
 const DEFAULT_PAGE_SIZE = 20;
@@ -89,9 +90,9 @@ export function OperationsPage() {
   return (
     <>
       <PageHeader
-        eyebrow="运营"
-        title={config.title}
-        description="系统管理员的授权运营和依赖观测入口。"
+        eyebrow={t("nav.console.operations")}
+        title={t(config.titleKey)}
+        description={t("console.operations.description")}
         actions={
           <>
             {section === "dependency-health" ? (
@@ -105,7 +106,7 @@ export function OperationsPage() {
               </Button>
             ) : null}
             <Button icon={<RefreshCcw size={16} />} loading={query.isFetching} onClick={() => void query.refetch()}>
-              刷新
+              {t("common.refresh")}
             </Button>
           </>
         }
@@ -118,16 +119,16 @@ export function OperationsPage() {
         />
       ) : null}
       {query.error && rows.length > 0 ? (
-        <StatusBanner tone="signal" title="运营数据加载失败" message={(query.error as Error).message} />
+        <StatusBanner tone="signal" title={t("console.operations.loadFailed")} message={(query.error as Error).message} />
       ) : null}
       {query.error && rows.length === 0 ? (
         <PageState
           tone="signal"
-          title="运营数据加载失败"
+          title={t("console.operations.loadFailed")}
           description={(query.error as Error).message}
           action={
             <Button icon={<RefreshCcw size={16} />} loading={query.isFetching} onClick={() => void query.refetch()}>
-              重新加载
+              {t("common.retry")}
             </Button>
           }
         />
@@ -158,7 +159,7 @@ export function OperationsPage() {
                 ))
               ) : (
                 <TableEmptyRow colSpan={table.getAllLeafColumns().length}>
-                  <EmptyState title="暂无运营数据" description="当前筛选下没有可展示的记录。" />
+                  <EmptyState title={t("console.operations.empty")} description={t("console.operations.emptyDescription")} />
                 </TableEmptyRow>
               )}
             </TableBody>
@@ -173,39 +174,39 @@ export function OperationsPage() {
 function operationColumns(section: string, t: Translator): ColumnDef<OperationRow>[] {
   if (section === "dependency-health") {
     return [
-      { header: "组件", cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.component)}</code> },
-      { header: "状态", cell: ({ row }) => <Badge tone={healthTone(stringValue(row.original.status))}>{stringValue(row.original.status)}</Badge> },
-      { header: "摘要", cell: ({ row }) => stringValue(row.original.summary) },
-      { header: "错误", cell: ({ row }) => stringValue(row.original.error_summary) },
-      { header: "检查时间", cell: ({ row }) => formatDateTime(stringValue(row.original.last_checked_at)) },
+      { header: t("console.operations.column.component"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.component)}</code> },
+      { header: t("common.status"), cell: ({ row }) => <Badge tone={healthTone(stringValue(row.original.status))}>{stringValue(row.original.status)}</Badge> },
+      { header: t("console.operations.column.summary"), cell: ({ row }) => stringValue(row.original.summary) },
+      { header: t("console.operations.column.error"), cell: ({ row }) => stringValue(row.original.error_summary) },
+      { header: t("console.operations.column.checkedAt"), cell: ({ row }) => formatDateTime(stringValue(row.original.last_checked_at)) },
     ];
   }
   if (section === "audit") {
     // 审计行字段对齐后端 audit_api._audit_item; 审计行无 id, 故不展示 ID 列。
     return [
-      { header: "事件", cell: ({ row }) => stringValue(row.original.event_type) },
-      { header: "操作者", cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{auditPair(row.original.actor_type, row.original.actor_id)}</code> },
-      { header: "对象", cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{auditPair(row.original.target_type, row.original.target_id)}</code> },
-      { header: "应用", cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{auditAppKey(row.original)}</code> },
-      { header: "时间", cell: ({ row }) => formatDateTime(stringValue(row.original.created_at)) },
+      { header: t("console.operations.column.event"), cell: ({ row }) => stringValue(row.original.event_type) },
+      { header: t("console.operations.column.actor"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{auditPair(row.original.actor_type, row.original.actor_id)}</code> },
+      { header: t("console.operations.column.target"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{auditPair(row.original.target_type, row.original.target_id)}</code> },
+      { header: t("common.app"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{auditAppKey(row.original)}</code> },
+      { header: t("console.operations.column.time"), cell: ({ row }) => formatDateTime(stringValue(row.original.created_at)) },
     ];
   }
   if (section === "access-grants") {
     return [
-      { header: "用户", cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.user_id)}</code> },
-      { header: "应用", cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.app_key)}</code> },
-      { header: "状态", cell: ({ row }) => <Badge tone={row.original.status === "active" ? "evergreen" : "neutral"}>{stringValue(row.original.status)}</Badge> },
-      { header: "类型", cell: ({ row }) => stringValue(row.original.grant_type) },
-      { header: "过期时间", cell: ({ row }) => formatDateTime(stringValue(row.original.grant_expires_at)) },
+      { header: t("common.user"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.user_id)}</code> },
+      { header: t("common.app"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.app_key)}</code> },
+      { header: t("common.status"), cell: ({ row }) => <Badge tone={row.original.status === "active" ? "evergreen" : "neutral"}>{stringValue(row.original.status)}</Badge> },
+      { header: t("common.type"), cell: ({ row }) => stringValue(row.original.grant_type) },
+      { header: t("console.operations.column.expiresAt"), cell: ({ row }) => formatDateTime(stringValue(row.original.grant_expires_at)) },
     ];
   }
   return [
     { header: "ID", cell: ({ row }) => row.original.id ?? "-" },
-    { header: "用户", cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.user_id)}</code> },
-    { header: "应用", cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.app_key)}</code> },
-    { header: "状态", cell: ({ row }) => <Badge tone={badgeToneForAccessRequestStatus(stringValue(row.original.status))}>{accessRequestStatusLabel(t, stringValue(row.original.status))}</Badge> },
-    { header: "类型", cell: ({ row }) => stringValue(row.original.request_type) },
-    { header: "提交时间", cell: ({ row }) => formatDateTime(stringValue(row.original.submitted_at)) },
+    { header: t("common.user"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.user_id)}</code> },
+    { header: t("common.app"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.app_key)}</code> },
+    { header: t("common.status"), cell: ({ row }) => <Badge tone={badgeToneForAccessRequestStatus(stringValue(row.original.status))}>{accessRequestStatusLabel(t, stringValue(row.original.status))}</Badge> },
+    { header: t("common.type"), cell: ({ row }) => stringValue(row.original.request_type) },
+    { header: t("console.operations.column.submittedAt"), cell: ({ row }) => formatDateTime(stringValue(row.original.submitted_at)) },
   ];
 }
 

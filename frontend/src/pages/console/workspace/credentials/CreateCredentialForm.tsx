@@ -3,6 +3,7 @@ import { useState } from "react";
 
 import { Button } from "../../../../components/Button";
 import { Field, TextInput } from "../../../../components/Field";
+import { useI18n } from "../../../../i18n/I18nProvider";
 
 type CreateCredentialKind = "static-tokens" | "oauth-clients";
 
@@ -12,6 +13,7 @@ interface CreateCredentialFormProps {
 }
 
 export function CreateCredentialForm({ isCreating, onCreateCredential }: CreateCredentialFormProps) {
+  const { t } = useI18n();
   const [name, setName] = useState("");
 
   const createCredential = (kind: CreateCredentialKind) => {
@@ -26,11 +28,11 @@ export function CreateCredentialForm({ isCreating, onCreateCredential }: CreateC
 
   return (
     <div className="grid items-end gap-4 md:grid-cols-[minmax(0,1fr)_auto_auto]">
-      <Field label="凭据名称">
-        <TextInput value={name} onChange={(event) => setName(event.currentTarget.value)} placeholder="主接入凭据" />
+      <Field label={t("wizard.credential.name")}>
+        <TextInput value={name} onChange={(event) => setName(event.currentTarget.value)} placeholder={t("console.credentials.namePlaceholder")} />
       </Field>
       <Button variant="primary" icon={<Plus size={16} />} loading={isCreating} disabled={!name || isCreating} onClick={() => createCredential("static-tokens")}>
-        静态 token
+        {t("console.credentials.staticToken")}
       </Button>
       <Button icon={<KeyRound size={16} />} disabled={!name || isCreating} onClick={() => createCredential("oauth-clients")}>
         OAuth client

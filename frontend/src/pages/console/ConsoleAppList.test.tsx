@@ -26,7 +26,7 @@ describe("ConsoleAppList", () => {
     document.body.dataset.currentUserRole = "EasyAuth Admins";
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
-      if (url === "/console/api/v1/apps" && !init?.method) {
+      if (url.startsWith("/console/api/v1/apps?") && !init?.method) {
         return jsonResponse({
           data: [
             { id: 1, app_key: "crm", name: "CRM", owners: ["owner-a"], is_active: true, updated_at: "2026-07-01T09:00:00Z" },
@@ -68,7 +68,7 @@ describe("ConsoleAppList", () => {
     document.body.dataset.currentUserRole = "EasyAuth Admins";
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
-      if (url === "/console/api/v1/apps" && !init?.method) {
+      if (url.startsWith("/console/api/v1/apps?") && !init?.method) {
         return jsonResponse({ data: [] });
       }
       if (url === "/console/api/v1/apps" && init?.method === "POST") {

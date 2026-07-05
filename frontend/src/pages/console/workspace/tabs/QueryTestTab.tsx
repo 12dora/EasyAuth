@@ -10,6 +10,7 @@ import { Button } from "../../../../components/Button";
 import { CodeBlock } from "../../../../components/CodeBlock";
 import { Field, TextInput } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
+import { useI18n } from "../../../../i18n/I18nProvider";
 import { apiRequest } from "../../../../lib/api";
 import type { ExpandedGrantItem, QueryTestResult } from "../../../../lib/domain";
 
@@ -31,6 +32,7 @@ type StructuredQueryTestResult = QueryTestResult & {
 };
 
 export function QueryTestTab({ appKey }: { appKey: string }) {
+  const { t } = useI18n();
   const [userId, setUserId] = useState("");
   const [token, setToken] = useState("");
   const [result, setResult] = useState<StructuredQueryTestResult | null>(null);
@@ -46,24 +48,24 @@ export function QueryTestTab({ appKey }: { appKey: string }) {
     },
   });
   const groupColumns: ColumnDef<QueryTestGroup>[] = [
-    { header: "授权组", cell: ({ row }) => row.original.key ?? "-" },
-    { header: "名称", cell: ({ row }) => row.original.name ?? "-" },
-    { header: "来源", cell: ({ row }) => row.original.source ?? "-" },
-    { header: "快照版本", cell: ({ row }) => row.original.snapshot_version ?? result?.snapshot_version ?? "-" },
+    { header: t("console.queryTest.column.group"), cell: ({ row }) => row.original.key ?? "-" },
+    { header: t("common.name"), cell: ({ row }) => row.original.name ?? "-" },
+    { header: t("common.source"), cell: ({ row }) => row.original.source ?? "-" },
+    { header: t("wizard.verify.snapshotVersion"), cell: ({ row }) => row.original.snapshot_version ?? result?.snapshot_version ?? "-" },
   ];
   const grantColumns: ColumnDef<QueryTestGrant>[] = [
-    { header: "授权项", cell: ({ row }) => row.original.permission ?? "-" },
-    { header: "范围", cell: ({ row }) => row.original.scope ?? "-" },
-    { header: "名称", cell: ({ row }) => row.original.name ?? "-" },
-    { header: "类型", cell: ({ row }) => row.original.grant_type ?? "-" },
+    { header: t("console.queryTest.column.grant"), cell: ({ row }) => row.original.permission ?? "-" },
+    { header: t("console.queryTest.column.scope"), cell: ({ row }) => row.original.scope ?? "-" },
+    { header: t("common.name"), cell: ({ row }) => row.original.name ?? "-" },
+    { header: t("common.type"), cell: ({ row }) => row.original.grant_type ?? "-" },
     {
-      header: "来源",
+      header: t("common.source"),
       cell: ({ row }) => (row.original.source_key ? `${row.original.source_type ?? "-"}:${row.original.source_key}` : row.original.source_type ?? "-"),
     },
-    { header: "Resolved 用户数", cell: ({ row }) => (row.original.resolved ? row.original.resolved.user_ids.length : "-") },
+    { header: t("console.queryTest.column.resolvedUsers"), cell: ({ row }) => (row.original.resolved ? row.original.resolved.user_ids.length : "-") },
     { header: "Resolver", cell: ({ row }) => row.original.resolved?.resolver ?? "-" },
     { header: "Resolved at", cell: ({ row }) => row.original.resolved?.resolved_at ?? "-" },
-    { header: "快照版本", cell: ({ row }) => row.original.snapshot_version ?? result?.snapshot_version ?? "-" },
+    { header: t("wizard.verify.snapshotVersion"), cell: ({ row }) => row.original.snapshot_version ?? result?.snapshot_version ?? "-" },
   ];
   const groupTable = useReactTable({
     data: result?.groups ?? [],
@@ -81,30 +83,30 @@ export function QueryTestTab({ appKey }: { appKey: string }) {
   return (
     <section className="space-y-6">
       <PanelSurface padding="lg" className="grid items-end gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-        <Field label="用户 ID">
+        <Field label={t("wizard.verify.userId")}>
           <TextInput value={userId} onChange={(event) => setUserId(event.currentTarget.value)} />
         </Field>
         <Field label="Bearer token">
           <TextInput type="password" value={token} onChange={(event) => setToken(event.currentTarget.value)} autoComplete="off" />
         </Field>
         <Button variant="primary" icon={<Play size={16} />} disabled={!userId || !token} onClick={() => testMutation.mutate()}>
-          执行联调
+          {t("wizard.verify.run")}
         </Button>
       </PanelSurface>
-      {testMutation.error ? <StatusBanner tone="signal" title="联调失败" message={(testMutation.error as Error).message} /> : null}
+      {testMutation.error ? <StatusBanner tone="signal" title={t("wizard.verify.failed")} message={(testMutation.error as Error).message} /> : null}
       {result ? (
         <>
           <StatusBanner
             tone={result.allowed ? "evergreen" : "neutral"}
-            title={result.allowed ? "权限查询命中授权" : "查询成功，无授权命中"}
+            title={result.allowed ? t("wizard.verify.hit") : t("wizard.verify.noHit")}
           />
           <div className="grid gap-3 sm:grid-cols-2">
             <PanelSurface>
-              <span className="text-xs font-semibold text-ink-faint">来源</span>
+              <span className="text-xs font-semibold text-ink-faint">{t("common.source")}</span>
               <strong className="mt-2 block text-sm font-semibold text-ink">{result.source ?? "-"}</strong>
             </PanelSurface>
             <PanelSurface>
-              <span className="text-xs font-semibold text-ink-faint">快照版本</span>
+              <span className="text-xs font-semibold text-ink-faint">{t("wizard.verify.snapshotVersion")}</span>
               <strong className="mt-2 block text-sm font-semibold text-ink">{result.snapshot_version ?? result.version ?? "-"}</strong>
             </PanelSurface>
           </div>
@@ -130,7 +132,7 @@ export function QueryTestTab({ appKey }: { appKey: string }) {
                   ))
                 ) : (
                   <TableEmptyRow colSpan={groupColumns.length}>
-                      暂无授权组
+                      {t("console.queryTest.groupsEmpty")}
                     </TableEmptyRow>
                 )}
               </TableBody>
@@ -159,7 +161,7 @@ export function QueryTestTab({ appKey }: { appKey: string }) {
                   ))
                 ) : (
                   <TableEmptyRow colSpan={grantColumns.length}>
-                      暂无授权项
+                      {t("console.queryTest.grantsEmpty")}
                     </TableEmptyRow>
                 )}
               </TableBody>

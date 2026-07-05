@@ -27,6 +27,7 @@ import {
   formatDateTime,
   grantTypeLabel,
 } from "../../lib/status";
+import type { Translator } from "../../lib/status";
 import { useI18n } from "../../i18n/I18nProvider";
 import { AccessRequestForm } from "./components/AccessRequestForm";
 
@@ -71,6 +72,7 @@ type PortalRequestRow = PortalRequest & {
 };
 
 export function PortalPage() {
+  const { t } = useI18n();
   const location = useLocation();
   const view = portalViewFromPath(location.pathname);
   const outletContext = useOutletContext<AppShellOutletContext | null>();
@@ -78,9 +80,9 @@ export function PortalPage() {
 
   return (
     <>
-      <PageHeader eyebrow="门户" title={viewTitle(view)} />
-      {view === "grants" ? <PortalGrantSection endpoint="/portal/api/v1/me/grants" emptyText="暂无当前授权" /> : null}
-      {view === "expiring" ? <PortalGrantSection endpoint="/portal/api/v1/me/grants/expiring" emptyText="暂无即将过期授权" /> : null}
+      <PageHeader eyebrow={t("portal.eyebrow")} title={viewTitle(t, view)} />
+      {view === "grants" ? <PortalGrantSection endpoint="/portal/api/v1/me/grants" emptyText={t("portal.grants.emptyCurrent")} /> : null}
+      {view === "expiring" ? <PortalGrantSection endpoint="/portal/api/v1/me/grants/expiring" emptyText={t("portal.grants.emptyExpiring")} /> : null}
       {view === "requests" ? <PortalRequestSection /> : null}
       {view === "request" ? <AccessRequestForm currentUserId={currentUserId} /> : null}
     </>
@@ -96,7 +98,7 @@ function PortalGrantSection({ endpoint, emptyText }: { endpoint: string; emptyTe
   const grants = itemsFromPayload<PortalGrantRow>(query.data);
   const columns: ColumnDef<PortalGrantRow>[] = [
     {
-      header: "应用",
+      header: t("common.app"),
       cell: ({ row }) => (
         <div className="flex min-w-0 flex-col gap-1">
           <strong>{row.original.app_name ?? row.original.app_key ?? "-"}</strong>
@@ -104,12 +106,12 @@ function PortalGrantSection({ endpoint, emptyText }: { endpoint: string; emptyTe
         </div>
       ),
     },
-    { header: "权限组", cell: ({ row }) => formatGroups(row.original.groups) },
-    { id: "expanded_grants", header: "展开授权", cell: ({ row }) => formatExpandedGrants(row.original.grants) },
-    { id: "grant_sources", header: "来源", cell: ({ row }) => formatSources(row.original.grants) },
-    { header: "期限", cell: ({ row }) => grantTypeLabel(t, row.original.grant_type) },
-    { id: "versions", header: "版本", cell: ({ row }) => formatVersions(row.original) },
-    { header: "过期时间", cell: ({ row }) => formatDateTime(row.original.grant_expires_at) },
+    { header: t("portal.column.groups"), cell: ({ row }) => formatGroups(row.original.groups) },
+    { id: "expanded_grants", header: t("portal.column.expandedGrants"), cell: ({ row }) => formatExpandedGrants(row.original.grants) },
+    { id: "grant_sources", header: t("common.source"), cell: ({ row }) => formatSources(row.original.grants) },
+    { header: t("portal.column.term"), cell: ({ row }) => grantTypeLabel(t, row.original.grant_type) },
+    { id: "versions", header: t("portal.column.versions"), cell: ({ row }) => formatVersions(t, row.original) },
+    { header: t("portal.column.expiresAt"), cell: ({ row }) => formatDateTime(row.original.grant_expires_at) },
   ];
   const table = useReactTable({
     data: grants,
@@ -121,18 +123,18 @@ function PortalGrantSection({ endpoint, emptyText }: { endpoint: string; emptyTe
   return (
     <>
       {query.error && grants.length > 0 ? (
-        <StatusBanner tone="signal" title="授权加载失败" message={(query.error as Error).message} />
+        <StatusBanner tone="signal" title={t("portal.grants.loadFailed")} message={(query.error as Error).message} />
       ) : null}
       {query.error && grants.length === 0 ? (
-        <PageState tone="signal" title="授权加载失败" description={(query.error as Error).message} />
+        <PageState tone="signal" title={t("portal.grants.loadFailed")} description={(query.error as Error).message} />
       ) : (
         <PortalTable
           table={table}
           columns={columns}
-          ariaLabel="我的授权"
+          ariaLabel={t("portal.grants.ariaLabel")}
           isLoading={query.isLoading}
           emptyTitle={emptyText}
-          emptyDescription="当前视图没有可展示的授权记录。"
+          emptyDescription={t("portal.grants.emptyDescription")}
         />
       )}
     </>
@@ -148,19 +150,19 @@ function PortalRequestSection() {
   const requests = itemsFromPayload<PortalRequestRow>(query.data);
   const columns: ColumnDef<PortalRequestRow>[] = [
     {
-      header: "状态",
+      header: t("common.status"),
       cell: ({ row }) => (
         <Badge tone={badgeToneForAccessRequestStatus(row.original.status)}>
           {row.original.status_label ?? accessRequestStatusLabel(t, row.original.status)}
         </Badge>
       ),
     },
-    { header: "应用", cell: ({ row }) => row.original.app_name ?? row.original.app_key ?? "-" },
-    { header: "权限组", cell: ({ row }) => formatGroups(row.original.authorization_groups) },
-    { id: "direct_grants", header: "直接授权", cell: ({ row }) => formatDirectGrants(row.original.direct_grants) },
-    { header: "期限", cell: ({ row }) => grantTypeLabel(t, row.original.grant_type) },
-    { header: "提交时间", cell: ({ row }) => formatDateTime(row.original.submitted_at) },
-    { header: "原因", cell: ({ row }) => row.original.reason ?? "-" },
+    { header: t("common.app"), cell: ({ row }) => row.original.app_name ?? row.original.app_key ?? "-" },
+    { header: t("portal.column.groups"), cell: ({ row }) => formatGroups(row.original.authorization_groups) },
+    { id: "direct_grants", header: t("portal.column.directGrants"), cell: ({ row }) => formatDirectGrants(row.original.direct_grants) },
+    { header: t("portal.column.term"), cell: ({ row }) => grantTypeLabel(t, row.original.grant_type) },
+    { header: t("portal.column.submittedAt"), cell: ({ row }) => formatDateTime(row.original.submitted_at) },
+    { header: t("portal.column.reason"), cell: ({ row }) => row.original.reason ?? "-" },
   ];
   const table = useReactTable({
     data: requests,
@@ -172,18 +174,18 @@ function PortalRequestSection() {
   return (
     <>
       {query.error && requests.length > 0 ? (
-        <StatusBanner tone="signal" title="申请记录加载失败" message={(query.error as Error).message} />
+        <StatusBanner tone="signal" title={t("portal.requests.loadFailed")} message={(query.error as Error).message} />
       ) : null}
       {query.error && requests.length === 0 ? (
-        <PageState tone="signal" title="申请记录加载失败" description={(query.error as Error).message} />
+        <PageState tone="signal" title={t("portal.requests.loadFailed")} description={(query.error as Error).message} />
       ) : (
         <PortalTable
           table={table}
           columns={columns}
-          ariaLabel="我的申请"
+          ariaLabel={t("nav.portal.myRequests")}
           isLoading={query.isLoading}
-          emptyTitle="暂无申请记录"
-          emptyDescription="当前账号还没有提交过权限申请。"
+          emptyTitle={t("portal.requests.empty")}
+          emptyDescription={t("portal.requests.emptyDescription")}
         />
       )}
     </>
@@ -261,16 +263,16 @@ function portalViewFromPath(pathname: string): PortalView {
   return "grants";
 }
 
-function viewTitle(view: PortalView): string {
+function viewTitle(t: Translator, view: PortalView): string {
   switch (view) {
     case "request":
-      return "申请权限";
+      return t("nav.portal.requestAccess");
     case "requests":
-      return "我的申请";
+      return t("nav.portal.myRequests");
     case "expiring":
-      return "即将过期";
+      return t("nav.portal.expiring");
     default:
-      return "我的权限";
+      return t("nav.portal.myPermissions");
   }
 }
 
@@ -295,11 +297,15 @@ function formatSources(grants: PortalExpandedGrant[] | undefined): string {
   return grants.map((grant) => (grant.source_key ? `${grant.source_type ?? "-"}:${grant.source_key}` : grant.source_type ?? "-")).join("、");
 }
 
-function formatVersions(grant: PortalGrantRow): string {
+function formatVersions(t: Translator, grant: PortalGrantRow): string {
   if (grant.grant_version === undefined && grant.catalog_version === undefined && grant.snapshot_version === undefined) {
     return grant.version === undefined ? "-" : String(grant.version);
   }
-  return `授权 ${grant.grant_version ?? "-"} / 目录 ${grant.catalog_version ?? "-"} / 快照 ${grant.snapshot_version ?? "-"}`;
+  return t("portal.grant.versions", {
+    grant: grant.grant_version ?? "-",
+    catalog: grant.catalog_version ?? "-",
+    snapshot: grant.snapshot_version ?? "-",
+  });
 }
 
 function formatDirectGrants(directGrants: PortalRequestDirectGrant[] | undefined): string {

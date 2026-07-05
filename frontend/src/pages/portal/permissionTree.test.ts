@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 
 import type { PermissionGroupItem, PermissionItem } from "../../lib/domain";
-import { collectPermissionKeys, filterGroupsByApp, isPermissionGroupItem } from "./permissionTree";
+import { collectGroupPermissions, collectPermissionKeys, filterGroupsByApp, isPermissionGroupItem, permissionMatchesApp } from "./permissionTree";
 
 const crmOrderRead: PermissionItem = { id: 101, app_key: "crm", key: "orders.read", name: "查看订单" };
 const crmRefundApprove: PermissionItem = {
@@ -124,5 +124,25 @@ describe("portal permission tree helpers", () => {
   test("PermissionGroup 只做目录展示，不进入可提交权限 key", () => {
     expect(collectPermissionKeys([groups[0]], [])).not.toContain("orders");
     expect(collectPermissionKeys([groups[0]], [])).not.toContain("orders.refund");
+  });
+
+  // FF-12: 应用作用域判定的唯一口径, 分组与未分组共用。
+  test("permissionMatchesApp 保留应用无关权限并按 app_key 精确匹配", () => {
+    expect(permissionMatchesApp({ app_key: "" }, "crm")).toBe(true);
+    expect(permissionMatchesApp({}, "crm")).toBe(true);
+    expect(permissionMatchesApp({ app_key: "crm" }, "crm")).toBe(true);
+    expect(permissionMatchesApp({ app_key: "bi" }, "crm")).toBe(false);
+    expect(permissionMatchesApp({ app_key: "bi" }, "")).toBe(true);
+  });
+
+  // FF-13: 环形分组图(A⊂B⊂A)不得导致无限递归。
+  test("collectGroupPermissions 在环形分组图下仍能终止", () => {
+    const appLess: PermissionItem = { id: 999, key: "shared.only", name: "共享权限" };
+    const groupA: PermissionGroupItem = { id: 1, type: "group", key: "a", name: "A", permissions: [appLess], children: [] };
+    const groupB: PermissionGroupItem = { id: 2, type: "group", key: "b", name: "B", permissions: [], children: [groupA] };
+    groupA.children = [groupB];
+
+    const keys = collectGroupPermissions(groupA).map((permission) => permission.key);
+    expect(keys).toEqual(["shared.only"]);
   });
 });

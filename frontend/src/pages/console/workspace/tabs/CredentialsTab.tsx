@@ -22,11 +22,13 @@ import { StatusBanner } from "../../../../components/StatusBanner";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
 import type { ListPayload } from "../../../../lib/api";
 import type { CredentialItem } from "../../../../lib/domain";
+import { useI18n } from "../../../../i18n/I18nProvider";
 import { CreateCredentialForm } from "../credentials/CreateCredentialForm";
 import { useCredentialsActions } from "../credentials/useCredentialsActions";
 import { credentialKindLabel } from "../utils";
 
 export function CredentialsTab({ appKey }: { appKey: string }) {
+  const { t } = useI18n();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const credentialsQuery = useQuery({
     queryKey: ["console", "app", appKey, "credentials"],
@@ -36,21 +38,21 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
   const { createCredential, isCreating, rotateCredential, disableCredential, operationError, secretEntries, closeSecretDialog } =
     useCredentialsActions(appKey);
   const credentialColumns: ColumnDef<CredentialItem>[] = [
-    { header: "名称", accessorKey: "name" },
-    { header: "类型", cell: ({ row }) => credentialKindLabel(row.original.kind) },
+    { header: t("common.name"), accessorKey: "name" },
+    { header: t("common.type"), cell: ({ row }) => credentialKindLabel(row.original.kind) },
     {
       header: "client_id",
       cell: ({ row }) => (row.original.client_id ? <code>{row.original.client_id}</code> : "-"),
     },
     {
-      header: "状态",
+      header: t("common.status"),
       cell: ({ row }) => (
-        <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>{row.original.is_active ? "启用" : "停用"}</Badge>
+        <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>{row.original.is_active ? t("common.enabled") : t("common.disabled")}</Badge>
       ),
     },
     {
       id: "actions",
-      header: "操作",
+      header: t("common.actions"),
       cell: ({ row }) => (
         <TableActionCell>
           {row.original.kind === "static_token" ? (
@@ -58,7 +60,7 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
               type="button"
               onClick={() => rotateCredential(row.original.id)}
             >
-              轮换
+              {t("console.credentials.rotate")}
             </TableRowActionButton>
           ) : null}
           <TableRowActionButton
@@ -66,7 +68,7 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
             variant="ghost-danger"
             onClick={() => disableCredential(row.original)}
           >
-            禁用
+            {t("console.credentials.disable")}
           </TableRowActionButton>
         </TableActionCell>
       ),
@@ -82,16 +84,16 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
   return (
     <section className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-base font-semibold text-ink">凭据</h2>
+        <h2 className="text-base font-semibold text-ink">{t("console.credentials.heading")}</h2>
         <Button type="button" variant="primary" icon={<Plus size={16} />} onClick={() => setCreateDialogOpen(true)}>
-          新建
+          {t("common.new")}
         </Button>
       </div>
       {credentialsQuery.error ? (
-        <StatusBanner tone="signal" title="凭据加载失败" message={(credentialsQuery.error as Error).message} />
+        <StatusBanner tone="signal" title={t("console.credentials.loadFailed")} message={(credentialsQuery.error as Error).message} />
       ) : null}
       {operationError ? (
-        <StatusBanner tone="signal" title="凭据操作失败" message={(operationError as Error).message} />
+        <StatusBanner tone="signal" title={t("console.credentials.operationFailed")} message={(operationError as Error).message} />
       ) : null}
       <TableFrame>
         <TableRoot>
@@ -123,7 +125,7 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
               ))
             ) : (
               <TableEmptyRow colSpan={credentialColumns.length}>
-                <EmptyState title="暂无凭据" description="新建凭据后，应用即可调用权限查询接口。" />
+                <EmptyState title={t("console.credentials.empty")} description={t("console.credentials.emptyDescription")} />
               </TableEmptyRow>
             )}
           </TableBody>
@@ -131,7 +133,7 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
         <TablePagination table={credentialTable} />
       </TableFrame>
       {createDialogOpen ? (
-        <Dialog title="新建凭据" onClose={() => setCreateDialogOpen(false)}>
+        <Dialog title={t("console.credentials.createTitle")} onClose={() => setCreateDialogOpen(false)}>
           <CreateCredentialForm
             isCreating={isCreating}
             onCreateCredential={async (kind, name) => {
@@ -143,7 +145,7 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
       ) : null}
       {secretEntries[0] ? (
         <SecretDialog
-          title="一次性凭据"
+          title={t("console.credentials.secretTitle")}
           primaryLabel={secretEntries[0][0]}
           primaryValue={secretEntries[0][1]}
           secondaryLabel={secretEntries[1]?.[0]}

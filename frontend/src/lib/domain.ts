@@ -75,7 +75,7 @@ export interface ConfigurationIssue {
 export interface ConfigurationStatus {
   app_key?: string;
   status?: string;
-  items?: ConfigurationIssue[];
+  data?: ConfigurationIssue[];
 }
 
 /** 历史兼容类型：新授权模型应优先使用 AuthorizationGroupItem。 */

@@ -22,6 +22,8 @@ import { StatusBanner } from "../../../../components/StatusBanner";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
 import type { ListPayload } from "../../../../lib/api";
 import type { AppScopeItem, AuthorizationGroupGrantItem, AuthorizationGroupItem, ManagedScopePolicyItem, PermissionItem } from "../../../../lib/domain";
+import { useI18n } from "../../../../i18n/I18nProvider";
+import type { Translator } from "../../../../lib/status";
 import { buildAuthorizationGroupPayload, grantKey, normalizeGrants } from "../matrix/grantDraft";
 
 type AuthorizationGroupForm = AuthorizationGroupItem;
@@ -37,6 +39,7 @@ const emptyGroupForm: AuthorizationGroupForm = {
 };
 
 export function MatrixTab({ appKey }: { appKey: string }) {
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const [selectedKey, setSelectedKey] = useState("");
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
@@ -123,21 +126,21 @@ export function MatrixTab({ appKey }: { appKey: string }) {
     });
   };
   const authorizationGroupColumns: ColumnDef<AuthorizationGroupItem>[] = [
-    { header: "授权组 Key", cell: ({ row }) => <code>{row.original.key}</code> },
-    { header: "名称", accessorKey: "name" },
-    { header: "类型", cell: ({ row }) => (row.original.kind === "role" ? "角色" : row.original.kind === "bundle" ? "权限包" : row.original.kind) },
+    { header: t("console.matrix.column.key"), cell: ({ row }) => <code>{row.original.key}</code> },
+    { header: t("common.name"), accessorKey: "name" },
+    { header: t("common.type"), cell: ({ row }) => (row.original.kind === "role" ? t("common.role") : row.original.kind === "bundle" ? t("console.matrix.kindBundle") : row.original.kind) },
     {
-      header: "状态",
+      header: t("common.status"),
       cell: ({ row }) => (
         <div className="flex flex-wrap gap-2">
-          <Badge tone={row.original.requestable ? "evergreen" : "neutral"}>{row.original.requestable ? "可申请" : "不可申请"}</Badge>
-          <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>{row.original.is_active ? "启用" : "停用"}</Badge>
+          <Badge tone={row.original.requestable ? "evergreen" : "neutral"}>{row.original.requestable ? t("console.matrix.requestable") : t("console.matrix.notRequestable")}</Badge>
+          <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>{row.original.is_active ? t("common.enabled") : t("common.disabled")}</Badge>
         </div>
       ),
     },
     {
       id: "actions",
-      header: "操作",
+      header: t("common.actions"),
       cell: ({ row }) => (
         <TableActionCell>
           <TableRowActionButton type="button" onClick={() => {
@@ -145,7 +148,7 @@ export function MatrixTab({ appKey }: { appKey: string }) {
             setForm({ ...row.original, description: row.original.description ?? "", grants: normalizeGrants(row.original.grants ?? []) });
             setGroupDialogOpen(true);
           }}>
-            编辑
+            {t("common.edit")}
           </TableRowActionButton>
         </TableActionCell>
       ),
@@ -158,42 +161,42 @@ export function MatrixTab({ appKey }: { appKey: string }) {
     getPaginationRowModel: getPaginationRowModel(),
   });
   const grantColumns: ColumnDef<AuthorizationGroupGrantItem>[] = [
-    { header: "授权项", cell: ({ row }) => `${row.original.permission} / ${row.original.scope}` },
+    { header: t("console.matrix.grant.column.item"), cell: ({ row }) => `${row.original.permission} / ${row.original.scope}` },
     {
-      header: "管理范围计算方式",
+      header: t("console.matrix.grant.column.managedScope"),
       cell: ({ row }) => {
         if (!isManagedUsersGrant(row.original)) {
           return "-";
         }
         return (
           <SelectInput
-            aria-label={`${row.original.permission} / ${row.original.scope} 管理范围计算方式`}
+            aria-label={t("console.matrix.grant.managedScopeAriaLabel", { permission: row.original.permission, scope: row.original.scope })}
             value={managedScopePolicyMode(row.original.managed_scope_policy)}
             onChange={(event) => updateGrantManagedScopePolicy(row.original, event.currentTarget.value, setForm)}
           >
-            <option value="inherit">继承应用默认</option>
-            <option value="override">按钉钉主管关系</option>
-            <option value="disabled">不启用</option>
+            <option value="inherit">{t("console.matrix.grant.policy.inherit")}</option>
+            <option value="override">{t("console.matrix.grant.policy.override")}</option>
+            <option value="disabled">{t("console.matrix.grant.policy.disabled")}</option>
           </SelectInput>
         );
       },
     },
     {
-      header: "有效策略",
-      cell: ({ row }) => managedScopeEffectivePolicyLabel(row.original),
+      header: t("console.matrix.grant.column.effective"),
+      cell: ({ row }) => managedScopeEffectivePolicyLabel(t, row.original),
     },
     {
-      header: "继承来源",
-      cell: ({ row }) => managedScopeInheritedFromLabel(row.original),
+      header: t("console.matrix.grant.column.inheritedFrom"),
+      cell: ({ row }) => managedScopeInheritedFromLabel(t, row.original),
     },
     {
-      header: "健康状态",
-      cell: ({ row }) => managedScopeHealthLabel(row.original),
+      header: t("console.matrix.grant.column.health"),
+      cell: ({ row }) => managedScopeHealthLabel(t, row.original),
     },
-    { header: "状态", cell: ({ row }) => <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>{row.original.is_active ? "启用" : "停用"}</Badge> },
+    { header: t("common.status"), cell: ({ row }) => <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>{row.original.is_active ? t("common.enabled") : t("common.disabled")}</Badge> },
     {
       id: "actions",
-      header: "操作",
+      header: t("common.actions"),
       cell: ({ row }) => (
         <TableActionCell>
           <TableRowActionButton
@@ -201,10 +204,10 @@ export function MatrixTab({ appKey }: { appKey: string }) {
             variant={row.original.is_active ? "ghost-danger" : "ghost"}
             onClick={() => updateGrant(row.original, !row.original.is_active, setForm)}
           >
-            {row.original.is_active ? "停用" : "启用"}
+            {row.original.is_active ? t("common.disable") : t("common.enable")}
           </TableRowActionButton>
           <TableRowActionButton type="button" variant="ghost-danger" onClick={() => removeGrant(row.original, setForm)}>
-            移除
+            {t("common.remove")}
           </TableRowActionButton>
         </TableActionCell>
       ),
@@ -220,7 +223,7 @@ export function MatrixTab({ appKey }: { appKey: string }) {
   return (
     <section className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-base font-semibold text-ink">授权组管理</h2>
+        <h2 className="text-base font-semibold text-ink">{t("console.matrix.heading")}</h2>
         <Button
           type="button"
           variant="primary"
@@ -231,13 +234,13 @@ export function MatrixTab({ appKey }: { appKey: string }) {
             setGroupDialogOpen(true);
           }}
         >
-          新建
+          {t("common.new")}
         </Button>
       </div>
-      {groupsQuery.error ? <StatusBanner tone="signal" title="授权组加载失败" message={(groupsQuery.error as Error).message} /> : null}
-      {permissionsQuery.error ? <StatusBanner tone="signal" title="权限加载失败" message={(permissionsQuery.error as Error).message} /> : null}
-      {scopesQuery.error ? <StatusBanner tone="signal" title="权限范围加载失败" message={(scopesQuery.error as Error).message} /> : null}
-      {saveMutation.error ? <StatusBanner tone="signal" title="授权组保存失败" message={(saveMutation.error as Error).message} /> : null}
+      {groupsQuery.error ? <StatusBanner tone="signal" title={t("console.matrix.groupsLoadFailed")} message={(groupsQuery.error as Error).message} /> : null}
+      {permissionsQuery.error ? <StatusBanner tone="signal" title={t("console.matrix.permissionsLoadFailed")} message={(permissionsQuery.error as Error).message} /> : null}
+      {scopesQuery.error ? <StatusBanner tone="signal" title={t("console.matrix.scopesLoadFailed")} message={(scopesQuery.error as Error).message} /> : null}
+      {saveMutation.error ? <StatusBanner tone="signal" title={t("console.matrix.saveFailed")} message={(saveMutation.error as Error).message} /> : null}
       <TableFrame>
         <TableRoot>
           <TableHead>
@@ -268,7 +271,7 @@ export function MatrixTab({ appKey }: { appKey: string }) {
               ))
             ) : (
               <TableEmptyRow colSpan={authorizationGroupTable.getAllLeafColumns().length}>
-                <EmptyState title="暂无授权组" description="新建授权组后可为其配置权限授权。" />
+                <EmptyState title={t("console.matrix.groupsEmpty")} description={t("console.matrix.groupsEmptyDescription")} />
               </TableEmptyRow>
             )}
           </TableBody>
@@ -276,9 +279,9 @@ export function MatrixTab({ appKey }: { appKey: string }) {
         <TablePagination table={authorizationGroupTable} />
       </TableFrame>
       {groupDialogOpen ? (
-        <Dialog title={selectedKey ? "编辑授权组" : "新建授权组"} size="xl" onClose={() => setGroupDialogOpen(false)} footer={
+        <Dialog title={selectedKey ? t("console.matrix.editTitle") : t("console.matrix.createTitle")} size="xl" onClose={() => setGroupDialogOpen(false)} footer={
           <>
-            <Button type="button" onClick={() => setGroupDialogOpen(false)}>取消</Button>
+            <Button type="button" onClick={() => setGroupDialogOpen(false)}>{t("common.cancel")}</Button>
             <Button
               form="authorization-group-form"
               type="submit"
@@ -287,7 +290,7 @@ export function MatrixTab({ appKey }: { appKey: string }) {
               disabled={!form.key || !form.name || saveMutation.isPending}
               loading={saveMutation.isPending}
             >
-              保存
+              {t("common.save")}
             </Button>
           </>
         }>
@@ -297,42 +300,42 @@ export function MatrixTab({ appKey }: { appKey: string }) {
         }}>
           <PanelSurface padding="lg" className="space-y-4">
             <div className="grid gap-4 md:grid-cols-2">
-              <Field label="授权组 key">
+              <Field label={t("console.matrix.field.key")}>
                 <TextInput value={form.key} onChange={(event) => setForm((current) => ({ ...current, key: event.currentTarget.value }))} />
               </Field>
-              <Field label="授权组名称">
+              <Field label={t("console.matrix.field.name")}>
                 <TextInput value={form.name} onChange={(event) => setForm((current) => ({ ...current, name: event.currentTarget.value }))} />
               </Field>
-              <Field label="授权组类型">
+              <Field label={t("console.matrix.field.kind")}>
                 <SelectInput value={form.kind} onChange={(event) => setForm((current) => ({ ...current, kind: event.currentTarget.value }))}>
-                  <option value="role">角色（role）</option>
-                  <option value="bundle">权限包（bundle）</option>
+                  <option value="role">{t("console.matrix.kindOption.role")}</option>
+                  <option value="bundle">{t("console.matrix.kindOption.bundle")}</option>
                 </SelectInput>
               </Field>
-              <Field label="状态">
+              <Field label={t("common.status")}>
                 <div className="flex flex-wrap gap-3">
                   <Button type="button" variant="ghost" onClick={() => setForm((current) => ({ ...current, requestable: !current.requestable }))}>
-                    {form.requestable ? "设为不可申请" : "设为可申请"}
+                    {form.requestable ? t("console.matrix.setNotRequestable") : t("console.matrix.setRequestable")}
                   </Button>
                   <Button type="button" variant="ghost" onClick={() => setForm((current) => ({ ...current, is_active: !current.is_active }))}>
-                    {form.is_active ? "停用" : "启用"}
+                    {form.is_active ? t("common.disable") : t("common.enable")}
                   </Button>
                 </div>
               </Field>
             </div>
-            <Field label="描述">
+            <Field label={t("common.description")}>
               <TextArea value={form.description ?? ""} onChange={(event) => setForm((current) => ({ ...current, description: event.currentTarget.value }))} />
             </Field>
           </PanelSurface>
           <PanelSurface padding="lg" className="grid items-end gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
-            <Field label="授权权限">
+            <Field label={t("console.matrix.field.grantPermission")}>
               <SelectInput value={grantPermission} onChange={(event) => setGrantPermission(event.currentTarget.value)}>
                 {permissions.map((permission) => (
                   <option key={permission.key} value={permission.key}>{permission.key}</option>
                 ))}
               </SelectInput>
             </Field>
-            <Field label="授权范围">
+            <Field label={t("console.matrix.field.grantScope")}>
               <SelectInput value={grantScope} onChange={(event) => setGrantScope(event.currentTarget.value)}>
                 {scopeOptions.map((scope) => (
                   <option key={scope.key} value={scope.key}>{scope.key}</option>
@@ -340,7 +343,7 @@ export function MatrixTab({ appKey }: { appKey: string }) {
               </SelectInput>
             </Field>
             <Button type="button" icon={<Plus size={16} />} onClick={addGrant} disabled={!grantPermission || !grantScope}>
-              添加授权项
+              {t("console.matrix.addGrant")}
             </Button>
           </PanelSurface>
           <TableFrame>
@@ -371,7 +374,7 @@ export function MatrixTab({ appKey }: { appKey: string }) {
                   ))
                 ) : (
                   <TableEmptyRow colSpan={grantTable.getAllLeafColumns().length}>
-                    暂无授权项，请先在上方添加
+                    {t("console.matrix.grant.empty")}
                   </TableEmptyRow>
                 )}
               </TableBody>
@@ -379,7 +382,7 @@ export function MatrixTab({ appKey }: { appKey: string }) {
             <TablePagination table={grantTable} />
           </TableFrame>
           <PanelSurface className="flex flex-wrap items-center justify-between gap-3 bg-paper-deep">
-            <span className="min-w-0 text-sm text-ink-soft">展开后授权项预览：{form.grants.map((grant) => `${grant.permission} / ${grant.scope}`).join("，") || "-"}</span>
+            <span className="min-w-0 text-sm text-ink-soft">{t("console.matrix.grantPreview", { value: form.grants.map((grant) => `${grant.permission} / ${grant.scope}`).join("，") || "-" })}</span>
           </PanelSurface>
         </form>
         </Dialog>
@@ -453,46 +456,46 @@ function managedScopePolicyFromMode(mode: string): ManagedScopePolicyItem {
   return inheritManagedScopePolicy();
 }
 
-function managedScopeEffectivePolicyLabel(grant: AuthorizationGroupGrantItem): string {
+function managedScopeEffectivePolicyLabel(t: Translator, grant: AuthorizationGroupGrantItem): string {
   if (!isManagedUsersGrant(grant)) {
     return "-";
   }
   if (grant.effective_managed_scope_policy?.resolver === "dingtalk_manager_chain") {
-    return "按钉钉主管关系";
+    return t("console.matrix.grant.policy.override");
   }
-  return "必须配置管理范围计算方式后才能生效";
+  return t("console.matrix.grant.effective.unconfigured");
 }
 
-function managedScopeInheritedFromLabel(grant: AuthorizationGroupGrantItem): string {
+function managedScopeInheritedFromLabel(t: Translator, grant: AuthorizationGroupGrantItem): string {
   if (!isManagedUsersGrant(grant)) {
     return "-";
   }
   const inheritedFrom = grant.effective_managed_scope_policy?.inherited_from;
   if (inheritedFrom === "app_default") {
-    return "应用默认";
+    return t("console.matrix.grant.inheritedFrom.appDefault");
   }
   if (grant.effective_managed_scope_policy?.source === "authorization_group_grant") {
-    return "Grant 覆盖";
+    return t("console.matrix.grant.inheritedFrom.grantOverride");
   }
   return "-";
 }
 
-function managedScopeHealthLabel(grant: AuthorizationGroupGrantItem): string {
+function managedScopeHealthLabel(t: Translator, grant: AuthorizationGroupGrantItem): string {
   if (!isManagedUsersGrant(grant)) {
     return "-";
   }
   const status = grant.effective_managed_scope_policy?.health_status;
   if (status === "healthy") {
-    return "健康";
+    return t("console.matrix.grant.health.healthy");
   }
   if (status === "warning") {
-    return "警告";
+    return t("console.matrix.grant.health.warning");
   }
   if (status === "blocked") {
-    return "阻断";
+    return t("console.matrix.grant.health.blocked");
   }
   if (status === "disabled") {
-    return "不启用";
+    return t("console.matrix.grant.policy.disabled");
   }
-  return grant.effective_managed_scope_policy?.health_message ?? "未配置";
+  return grant.effective_managed_scope_policy?.health_message ?? t("console.matrix.grant.health.unconfigured");
 }

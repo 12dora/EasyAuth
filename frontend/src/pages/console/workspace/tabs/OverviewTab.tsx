@@ -25,6 +25,7 @@ import type { JsonObject, ListPayload } from "../../../../lib/api";
 import type { AppSummary, ConfigurationIssue, ConfigurationStatus } from "../../../../lib/domain";
 import { useI18n } from "../../../../i18n/I18nProvider";
 import { formatDateTime, readinessLabel, readinessTone } from "../../../../lib/status";
+import type { Translator } from "../../../../lib/status";
 import { safeJoin } from "../utils";
 
 export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary }) {
@@ -41,7 +42,7 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
     queryFn: () => apiRequest<ListPayload<MembershipItem>>(`/console/api/v1/apps/${appKey}/memberships`),
     enabled: Boolean(appKey),
   });
-  const issues = statusQuery.data?.items ?? [];
+  const issues = statusQuery.data?.data ?? [];
   const status = statusQuery.data?.status ?? app?.configuration_status;
   const statusBannerTone = normalizeStatusBannerTone(readinessTone(status));
   const memberships = itemsFromPayload<MembershipItem>(membershipsQuery.data);
@@ -68,6 +69,7 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
   });
   const canWrite = Boolean(app?.can_manage);
   const membershipColumns = membershipTableColumns({
+    t,
     canWrite,
     onDisable: (membershipId) => disableMembershipMutation.mutate(membershipId),
   });
@@ -78,10 +80,10 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
     getPaginationRowModel: getPaginationRowModel(),
   });
   const issueColumns: ColumnDef<ConfigurationIssue>[] = [
-    { header: "级别", cell: ({ row }) => row.original.severity ?? row.original.level ?? "-" },
-    { header: "对象", cell: ({ row }) => row.original.subject ?? row.original.target_id ?? "-" },
-    { header: "说明", cell: ({ row }) => row.original.message ?? "-" },
-    { header: "代码", cell: ({ row }) => <code>{row.original.code ?? "-"}</code> },
+    { header: t("console.overview.issue.severity"), cell: ({ row }) => row.original.severity ?? row.original.level ?? "-" },
+    { header: t("console.overview.issue.subject"), cell: ({ row }) => row.original.subject ?? row.original.target_id ?? "-" },
+    { header: t("console.overview.issue.message"), cell: ({ row }) => row.original.message ?? "-" },
+    { header: t("console.overview.issue.code"), cell: ({ row }) => <code>{row.original.code ?? "-"}</code> },
   ];
   const issuesTable = useReactTable({
     data: issues,
@@ -95,48 +97,48 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
   return (
     <section className="space-y-6">
       {status && status !== "ready" ? (
-        <StatusBanner tone={statusBannerTone} title={`配置${readinessLabel(t, status)}`} />
+        <StatusBanner tone={statusBannerTone} title={t("console.overview.configBanner", { status: readinessLabel(t, status) })} />
       ) : null}
       {statusQuery.error ? (
-        <StatusBanner tone="signal" title="配置状态加载失败" message={(statusQuery.error as Error).message} />
+        <StatusBanner tone="signal" title={t("console.overview.configStatusLoadFailed")} message={(statusQuery.error as Error).message} />
       ) : null}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Metric label="角色" value={app?.role_count ?? 0} />
-        <Metric label="权限" value={app?.permission_count ?? 0} />
-        <Metric label="活跃凭据" value={app?.active_credential_count ?? 0} />
-        <Metric label="配置问题" value={issueCount} tone={issueCount > 0 ? "signal" : undefined} />
+        <Metric label={t("console.overview.metric.role")} value={app?.role_count ?? 0} />
+        <Metric label={t("console.overview.metric.permission")} value={app?.permission_count ?? 0} />
+        <Metric label={t("console.overview.metric.credential")} value={app?.active_credential_count ?? 0} />
+        <Metric label={t("console.overview.issues")} value={issueCount} tone={issueCount > 0 ? "signal" : undefined} />
       </div>
       <PanelSurface padding="lg" className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-base font-semibold text-ink">基本信息</h2>
+          <h2 className="text-base font-semibold text-ink">{t("console.overview.basicInfo")}</h2>
           <Badge tone={app?.is_active === false ? "neutral" : "evergreen"}>
-            {app?.is_active === false ? "停用" : "启用"}
+            {app?.is_active === false ? t("common.disabled") : t("common.enabled")}
           </Badge>
         </div>
         <dl className="grid gap-x-8 gap-y-3 text-body sm:grid-cols-2">
-          <BasicInfoItem label="应用名称" value={app?.name || "-"} />
-          <BasicInfoItem label="应用 Key" value={<code>{app?.app_key || "-"}</code>} />
-          <BasicInfoItem label="负责人" value={safeJoin(app?.owners)} />
-          <BasicInfoItem label="开发者" value={safeJoin(app?.developers)} />
-          <BasicInfoItem label="更新时间" value={formatDateTime(app?.updated_at)} />
-          <BasicInfoItem label="配置状态" value={`${readinessLabel(t, status)}`} />
+          <BasicInfoItem label={t("console.overview.field.appName")} value={app?.name || "-"} />
+          <BasicInfoItem label={t("console.overview.field.appKey")} value={<code>{app?.app_key || "-"}</code>} />
+          <BasicInfoItem label={t("appList.column.owners")} value={safeJoin(app?.owners)} />
+          <BasicInfoItem label={t("console.overview.field.developers")} value={safeJoin(app?.developers)} />
+          <BasicInfoItem label={t("common.updatedAt")} value={formatDateTime(app?.updated_at)} />
+          <BasicInfoItem label={t("console.overview.field.configStatus")} value={`${readinessLabel(t, status)}`} />
         </dl>
         {app?.description ? <p className="max-w-3xl text-body leading-5 text-ink-soft">{app.description}</p> : null}
       </PanelSurface>
       <PanelSurface padding="lg" className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-base font-semibold text-ink">成员</h2>
+          <h2 className="text-base font-semibold text-ink">{t("console.overview.members")}</h2>
           {canWrite ? (
             <Button type="button" variant="primary" icon={<Plus size={16} />} onClick={() => setMembershipDialogOpen(true)}>
-              新建
+              {t("common.new")}
             </Button>
           ) : null}
         </div>
         {membershipsQuery.error ? (
-          <StatusBanner tone="signal" title="成员加载失败" message={(membershipsQuery.error as Error).message} />
+          <StatusBanner tone="signal" title={t("console.overview.membersLoadFailed")} message={(membershipsQuery.error as Error).message} />
         ) : null}
         {disableMembershipMutation.error ? (
-          <StatusBanner tone="signal" title="成员操作失败" message={(disableMembershipMutation.error as Error).message} />
+          <StatusBanner tone="signal" title={t("console.overview.membersOperationFailed")} message={(disableMembershipMutation.error as Error).message} />
         ) : null}
         <TableFrame>
           <TableRoot>
@@ -168,7 +170,7 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
                 ))
               ) : (
                 <TableEmptyRow colSpan={membershipTable.getAllLeafColumns().length}>
-                  <EmptyState title="暂无成员" description="该应用还没有配置负责人或开发者成员。" />
+                  <EmptyState title={t("console.overview.membersEmpty")} description={t("console.overview.membersEmptyDescription")} />
                 </TableEmptyRow>
               )}
             </TableBody>
@@ -186,7 +188,7 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
       ) : null}
       <PanelSurface padding="lg" className="space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-base font-semibold text-ink">配置问题</h2>
+          <h2 className="text-base font-semibold text-ink">{t("console.overview.issues")}</h2>
         </div>
         <TableFrame>
           <TableRoot>
@@ -214,7 +216,7 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
                 ))
               ) : (
                 <TableEmptyRow colSpan={issuesTable.getAllLeafColumns().length}>
-                  <EmptyState title="暂无配置问题" description="当前应用的授权配置未发现异常。" />
+                  <EmptyState title={t("console.overview.issuesEmpty")} description={t("console.overview.issuesEmptyDescription")} />
                 </TableEmptyRow>
               )}
             </TableBody>
@@ -267,6 +269,7 @@ export function AppBasicInfoDialog({
   onClose: () => void;
   onSubmit: (payload: AppPatchPayload) => void;
 }) {
+  const { t } = useI18n();
   const [name, setName] = useState(app?.name ?? "");
   const [description, setDescription] = useState(app?.description ?? "");
 
@@ -285,27 +288,27 @@ export function AppBasicInfoDialog({
 
   return (
     <Dialog
-      title="编辑基本信息"
+      title={t("console.overview.editBasicInfoTitle")}
       onClose={onClose}
       footer={
         <>
           <Button type="button" onClick={onClose}>
-            取消
+            {t("common.cancel")}
           </Button>
           <Button form="app-basic-info-form" type="submit" variant="primary" loading={isSubmitting} disabled={isSubmitting}>
-            保存
+            {t("common.save")}
           </Button>
         </>
       }
     >
       <form id="app-basic-info-form" className="grid gap-4" onSubmit={submit}>
-        <Field label="名称">
+        <Field label={t("common.name")}>
           <TextInput value={name} onChange={(event) => setName(event.currentTarget.value)} required />
         </Field>
-        <Field label="描述">
+        <Field label={t("common.description")}>
           <TextArea rows={3} value={description} onChange={(event) => setDescription(event.currentTarget.value)} />
         </Field>
-        {errorMessage ? <StatusBanner tone="signal" title="保存失败" message={errorMessage} /> : null}
+        {errorMessage ? <StatusBanner tone="signal" title={t("console.overview.saveFailed")} message={errorMessage} /> : null}
       </form>
     </Dialog>
   );
@@ -322,6 +325,7 @@ function MembershipCreateDialog({
   onClose: () => void;
   onSubmit: (payload: MembershipCreatePayload) => void;
 }) {
+  const { t } = useI18n();
   const [userId, setUserId] = useState("");
   const [role, setRole] = useState<MembershipRole>("developer");
 
@@ -337,61 +341,63 @@ function MembershipCreateDialog({
 
   return (
     <Dialog
-      title="新建成员"
+      title={t("console.overview.createMemberTitle")}
       onClose={onClose}
       footer={
         <>
           <Button type="button" onClick={onClose}>
-            取消
+            {t("common.cancel")}
           </Button>
           <Button form="membership-create-form" type="submit" variant="primary" loading={isSubmitting} disabled={isSubmitting}>
-            保存
+            {t("common.save")}
           </Button>
         </>
       }
     >
       <form id="membership-create-form" className="grid gap-4" onSubmit={submit}>
-        <Field label="成员用户 ID">
+        <Field label={t("console.overview.memberUserId")}>
           <TextInput value={userId} onChange={(event) => setUserId(event.currentTarget.value)} required />
         </Field>
-        <Field label="成员角色">
+        <Field label={t("console.overview.memberRole")}>
           <SelectInput value={role} onChange={(event) => setRole(event.currentTarget.value as MembershipRole)}>
-            <option value="developer">开发者（developer）</option>
-            <option value="owner">负责人（owner）</option>
+            <option value="developer">{t("console.overview.roleOption.developer")}</option>
+            <option value="owner">{t("console.overview.roleOption.owner")}</option>
           </SelectInput>
         </Field>
-        {errorMessage ? <StatusBanner tone="signal" title="新增成员失败" message={errorMessage} /> : null}
+        {errorMessage ? <StatusBanner tone="signal" title={t("console.overview.addMemberFailed")} message={errorMessage} /> : null}
       </form>
     </Dialog>
   );
 }
 
 function membershipTableColumns({
+  t,
   canWrite,
   onDisable,
 }: {
+  t: Translator;
   canWrite: boolean;
   onDisable: (membershipId: number) => void;
 }): ColumnDef<MembershipItem>[] {
   return [
-    { header: "用户", cell: ({ row }) => <code>{row.original.user_id}</code> },
-    { header: "角色", cell: ({ row }) => roleLabel(row.original.role) },
+    { header: t("common.user"), cell: ({ row }) => <code>{row.original.user_id}</code> },
+    { header: t("common.role"), cell: ({ row }) => roleLabel(t, row.original.role) },
     {
-      header: "状态",
+      header: t("common.status"),
       cell: ({ row }) => (
         <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>
-          {row.original.is_active ? "启用" : "停用"}
+          {row.original.is_active ? t("common.enabled") : t("common.disabled")}
         </Badge>
       ),
     },
     {
       id: "actions",
-      header: "操作",
+      header: t("common.actions"),
       cell: ({ row }) => (
         <TableActionCell>
           {canWrite && row.original.id && row.original.is_active ? (
             <TableRowActionButton type="button" variant="ghost-danger" onClick={() => onDisable(row.original.id as number)}>
-              停用
+              {t("common.disable")}
             </TableRowActionButton>
           ) : null}
         </TableActionCell>
@@ -400,12 +406,12 @@ function membershipTableColumns({
   ];
 }
 
-function roleLabel(role: string): string {
+function roleLabel(t: Translator, role: string): string {
   if (role === "owner") {
-    return "负责人";
+    return t("console.overview.role.owner");
   }
   if (role === "developer") {
-    return "开发者";
+    return t("console.overview.role.developer");
   }
   return role || "-";
 }

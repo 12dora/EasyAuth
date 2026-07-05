@@ -68,6 +68,23 @@ describe("apiRequest", () => {
     );
   });
 
+  test("非 JSON 错误响应体不回显, 按状态码降级为确定性文案", async () => {
+    const htmlBody = "<html><body>Traceback: secret internal detail at line 42</body></html>";
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(htmlBody, {
+        status: 500,
+        headers: { "Content-Type": "text/html" },
+      }),
+    );
+
+    const rejection = await apiRequest("/console/api/v1/apps").catch((error: unknown) => error);
+    expect(rejection).toMatchObject({ status: 500 });
+    const message = (rejection as Error).message;
+    expect(message).not.toContain("Traceback");
+    expect(message).not.toContain("secret internal detail");
+    expect(message).toContain("500");
+  });
+
   test("解析统一错误结构", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
@@ -112,6 +129,16 @@ describe("itemsFromPayload", () => {
     const items = [{ id: 1 }];
 
     expect(itemsFromPayload<{ id: number }>({ data: items })).toBe(items);
+  });
+
+  test("payload.data 非数组时返回空数组并在开发环境告警(不静默兜底)", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      expect(itemsFromPayload({ data: "oops" })).toEqual([]);
+      expect(warnSpy).toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
 

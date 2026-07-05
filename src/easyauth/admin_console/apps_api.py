@@ -181,7 +181,8 @@ def console_app_configuration_status(request: HttpRequest, app_key: str) -> Json
             payload: dict[str, JsonValue] = {
                 "app_key": app.app_key,
                 "status": readiness.status,
-                "items": issues,
+                # 统一列表键为 canonical data(与 api_payloads.list_payload 一致), 不再用 items。
+                "data": issues,
             }
             return _json_response(payload)
         case JsonResponse() as response:
