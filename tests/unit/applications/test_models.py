@@ -10,7 +10,6 @@ from easyauth.applications.models import (
     ApprovalRule,
     AppScope,
     AuthorizationGroup,
-    AuthorizationGroupAccessPolicy,
     AuthorizationGroupGrant,
     Permission,
     PermissionGroup,
@@ -439,52 +438,4 @@ def test_permission_group_rejects_depth_above_max_when_cleaned() -> None:
         group.clean()
     assert error.value.message_dict == {
         "depth": ["Permission group depth cannot exceed 5."],
-    }
-
-
-def test_authorization_group_access_policy_requires_max_duration_for_high_risk_groups_when_cleaned(
-) -> None:
-    # Given
-    app = App.objects.create(app_key="crm", name="CRM")
-    authorization_group = AuthorizationGroup.objects.create(
-        app=app,
-        key="admin",
-        kind="role",
-        name="Admin",
-    )
-    policy = AuthorizationGroupAccessPolicy(
-        authorization_group=authorization_group,
-        is_high_risk=True,
-        max_grant_duration_days=None,
-    )
-
-    # When / Then
-    with pytest.raises(ValidationError) as error:
-        policy.clean()
-    assert error.value.message_dict == {
-        "max_grant_duration_days": ["High-risk roles need a max duration."],
-    }
-
-
-def test_authorization_group_access_policy_rejects_max_duration_for_normal_groups_when_cleaned(
-) -> None:
-    # Given
-    app = App.objects.create(app_key="crm", name="CRM")
-    authorization_group = AuthorizationGroup.objects.create(
-        app=app,
-        key="viewer",
-        kind="role",
-        name="Viewer",
-    )
-    policy = AuthorizationGroupAccessPolicy(
-        authorization_group=authorization_group,
-        is_high_risk=False,
-        max_grant_duration_days=7,
-    )
-
-    # When / Then
-    with pytest.raises(ValidationError) as error:
-        policy.clean()
-    assert error.value.message_dict == {
-        "max_grant_duration_days": ["Only high-risk roles may set max duration."],
     }

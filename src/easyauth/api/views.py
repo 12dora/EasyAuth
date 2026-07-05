@@ -7,6 +7,7 @@ from typing import Final
 
 from django.http import HttpRequest, JsonResponse
 from django.utils import timezone
+from django.views.decorators.http import require_http_methods
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 
 from easyauth.api.errors import ErrorCode, build_error_response
@@ -41,6 +42,7 @@ _QUERY_RATE_LIMIT: Final = 240
 _QUERY_RATE_WINDOW_SECONDS: Final = 60
 
 
+@require_http_methods(["GET"])
 def query_user_permissions(request: HttpRequest, app_key: str, user_id: str) -> JsonResponse:
     match _authenticate_and_throttle(request):
         case AppPrincipal() as principal:

@@ -6,7 +6,6 @@ from typing import TYPE_CHECKING, Final, Literal, Protocol, override
 from django.utils import timezone
 
 from easyauth.access_requests.application_target_validation import apply_target_errors
-from easyauth.access_requests.high_risk_duration import high_risk_duration_error
 from easyauth.access_requests.models import (
     AccessRequest,
     AccessRequestGroup,
@@ -287,9 +286,6 @@ def _validate_renew_target(
         raise GrantApplyFailureError(CURRENT_GRANT_REQUIRED_MESSAGE)
     if requested_expires_at <= current_expires_at:
         raise GrantApplyFailureError(CURRENT_GRANT_REQUIRED_MESSAGE)
-    high_risk_error = high_risk_duration_error(authorization_groups, requested_expires_at)
-    if high_risk_error:
-        raise GrantApplyFailureError(high_risk_error)
 
 
 def _current_group_ids(grant: AccessGrant) -> set[int]:

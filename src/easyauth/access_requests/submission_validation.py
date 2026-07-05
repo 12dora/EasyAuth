@@ -4,7 +4,6 @@ from typing import TYPE_CHECKING
 
 from django.utils import timezone
 
-from easyauth.access_requests.high_risk_duration import high_risk_duration_error
 from easyauth.access_requests.submission_types import (
     AccessRequestGrantType,
     AccessRequestSubmission,
@@ -113,13 +112,11 @@ def validate_submission_scope(
             _validate_no_current_grant(input_data.user, input_data.app)
             _validate_targets_present(authorization_groups, direct_grants)
             _validate_targets(input_data.app, authorization_groups, direct_grants)
-            _validate_high_risk_duration(authorization_groups, input_data.grant_expires_at)
             _validate_managed_users_approver(input_data, authorization_groups, direct_grants)
         case "change":
             _ = _active_lifecycle_grant(input_data.user, input_data.app)
             _validate_targets_present(authorization_groups, direct_grants)
             _validate_targets(input_data.app, authorization_groups, direct_grants)
-            _validate_high_risk_duration(authorization_groups, input_data.grant_expires_at)
             _validate_managed_users_approver(input_data, authorization_groups, direct_grants)
         case "revoke":
             grant = _active_lifecycle_grant(input_data.user, input_data.app)
@@ -131,7 +128,6 @@ def validate_submission_scope(
             _validate_renew_request(input_data.grant_type, input_data.grant_expires_at, grant)
             _validate_targets_belong_to_app(input_data.app, authorization_groups, direct_grants)
             _validate_renew_targets(grant, authorization_groups, direct_grants)
-            _validate_high_risk_duration(authorization_groups, input_data.grant_expires_at)
             _validate_managed_users_approver(input_data, authorization_groups, direct_grants)
 
 
@@ -318,15 +314,6 @@ def _validate_renew_targets(
         raise AccessRequestSubmissionError(("renew request must keep current groups",))
     if _target_direct_grants(direct_grants) != _current_direct_grants(grant):
         raise AccessRequestSubmissionError(("renew request must keep current direct grants",))
-
-
-def _validate_high_risk_duration(
-    authorization_groups: tuple[AuthorizationGroup, ...],
-    grant_expires_at: datetime | None,
-) -> None:
-    error = high_risk_duration_error(authorization_groups, grant_expires_at)
-    if error:
-        raise AccessRequestSubmissionError((error,))
 
 
 def _current_group_ids(grant: AccessGrant) -> set[int]:

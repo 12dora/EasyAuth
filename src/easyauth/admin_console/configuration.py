@@ -84,12 +84,8 @@ def set_role_permission(input_data: RolePermissionMutation) -> None:
         "permission_key": input_data.permission.key,
         "enabled": input_data.enabled,
     }
-    _record_config_event(
-        action="role_permission_matrix_updated",
-        app=input_data.app,
-        actor=input_data.actor,
-        metadata=metadata,
-    )
+    # 单一规范动作: 只发 role_permission_matrix_changed(与 bump 的 reason 一致),
+    # 不再重复发 role_permission_matrix_updated, 避免按动作计数的分析重复计。
     _record_config_event(
         action="role_permission_matrix_changed",
         app=input_data.app,

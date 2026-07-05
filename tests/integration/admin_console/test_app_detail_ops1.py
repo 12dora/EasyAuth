@@ -206,7 +206,7 @@ def test_ops1_console_matrix_save_writes_role_permission_and_audit_without_grant
     # Then: 保存只写 RolePermission 和审计, 不直接创建 AccessGrant。
     assert response.status_code == HTTPStatus.OK
     assert RolePermission.objects.filter(role=role, permission=permission).exists() is True
-    audit_log = AuditLog.objects.get(event_type="role_permission_matrix_updated")
+    audit_log = AuditLog.objects.get(event_type="role_permission_matrix_changed")
     assert audit_log.actor_id == "owner-ops1-matrix"
     assert audit_log.metadata["app_key"] == app.app_key
     assert AccessGrant.objects.count() == 0

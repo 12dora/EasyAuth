@@ -263,8 +263,11 @@ def test_ops1_matrix_post_saves_assignment_and_rejects_stale_version() -> None:
     # Then: 首次写入 RolePermission 和审计, 旧版本提交返回 409。
     assert accepted.status_code == HTTPStatus.OK
     assert RolePermission.objects.filter(role=role, permission=permission).exists() is True
-    assert AuditLog.objects.filter(event_type="role_permission_matrix_updated").exists() is True
-    assert AuditLog.objects.filter(event_type="role_permission_matrix_changed").exists() is True
+    # 单一规范动作: 只发 role_permission_matrix_changed, 不再重复发 *_updated。
+    assert AuditLog.objects.filter(event_type="role_permission_matrix_updated").exists() is False
+    assert (
+        AuditLog.objects.filter(event_type="role_permission_matrix_changed").count() == 1
+    )
     assert stale.status_code == HTTPStatus.CONFLICT
     assert "CONFLICT" in stale.content.decode()
 
