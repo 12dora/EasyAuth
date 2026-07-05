@@ -25,6 +25,12 @@ from easyauth.grants.models import AccessGrant, AccessGrantGroup
 pytestmark = pytest.mark.django_db
 
 
+def _ensure_active_approver() -> str:
+    # 审批人必须是活跃系统用户且不能是申请人本人; 用固定的第二用户满足该不变量。
+    approver, _ = UserMirror.objects.get_or_create(authentik_user_id="approver-001")
+    return approver.authentik_user_id
+
+
 def test_ops4_submit_renew_request_rejects_high_risk_group_beyond_max_duration() -> None:
     # Given: 员工当前限时授权包含高风险授权组, 策略最多只允许 7 天。
     user = UserMirror.objects.create(authentik_user_id="ops4-renew-high-risk-user")
@@ -107,7 +113,7 @@ def test_ops4_submit_renew_request_accepts_high_risk_group_within_max_duration()
             reason="高风险权限项目延期",
             actor_type="user",
             actor_id=user.authentik_user_id,
-            approver_user_ids=(user.authentik_user_id,),
+            approver_user_ids=(_ensure_active_approver(),),
             request_type=REQUEST_TYPE_RENEW,
         ),
     )

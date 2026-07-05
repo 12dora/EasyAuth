@@ -99,6 +99,7 @@ def test_apply_approval_callback_returns_application_error_when_apply_fails() ->
         app=app,
         request_type=REQUEST_TYPE_CHANGE,
         dingtalk_process_instance_id="proc-apply-error",
+        approver_user_ids=["manager-001"],
     )
     _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
 
@@ -183,6 +184,7 @@ def _submitted_grant_request(
         app=app,
         grant_type=GRANT_TYPE_PERMANENT,
         dingtalk_process_instance_id=process_instance_id,
+        approver_user_ids=["manager-001"],
     )
     _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
     return access_request

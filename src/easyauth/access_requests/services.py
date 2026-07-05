@@ -79,7 +79,10 @@ def _submit_access_request(
         direct_grants=direct_grants,
         approver_user_ids=input_data.approver_user_ids,
     )
-    approver_user_ids = validated_approver_user_ids(input_data.approver_user_ids)
+    approver_user_ids = validated_approver_user_ids(
+        input_data.approver_user_ids,
+        applicant_user_id=input_data.user.authentik_user_id,
+    )
 
     with transaction.atomic():
         access_request = AccessRequest(

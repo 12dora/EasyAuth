@@ -206,6 +206,7 @@ def test_dingtalk_callback_repeated_approved_request_does_not_increment_version(
         app=app,
         request_type=REQUEST_TYPE_CHANGE,
         dingtalk_process_instance_id="proc-repeat",
+        approver_user_ids=["manager-001"],
     )
     _ = AccessRequestGroup.objects.create(
         access_request=access_request,
@@ -241,6 +242,7 @@ def test_dingtalk_callback_rejected_request_does_not_override_applied_grant() ->
         status=REQUEST_STATUS_GRANT_APPLIED,
         applied_at=timezone.now() - timedelta(minutes=1),
         dingtalk_process_instance_id="proc-rejected-applied",
+        approver_user_ids=["manager-001"],
     )
     body = _callback_body("proc-rejected-applied", "rejected")
 
@@ -272,6 +274,7 @@ def test_dingtalk_callback_rejected_request_does_not_override_approved_request()
         status=REQUEST_STATUS_APPROVED,
         approved_at=timezone.now() - timedelta(minutes=1),
         dingtalk_process_instance_id="proc-rejected-approved",
+        approver_user_ids=["manager-001"],
     )
     _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
     body = _callback_body("proc-rejected-approved", "rejected")
@@ -296,6 +299,7 @@ def test_dingtalk_callback_rejected_request_does_not_override_failed_grant() -> 
         status=REQUEST_STATUS_GRANT_FAILED,
         approved_at=timezone.now() - timedelta(minutes=1),
         dingtalk_process_instance_id="proc-rejected-failed",
+        approver_user_ids=["manager-001"],
     )
     body = _callback_body("proc-rejected-failed", "rejected")
 
@@ -331,6 +335,7 @@ def test_dingtalk_callback_rejects_approved_callback_for_conflicting_terminal_st
         app=app,
         status=current_status,
         dingtalk_process_instance_id=process_instance_id,
+        approver_user_ids=["manager-001"],
     )
     body = _callback_body(process_instance_id, "approved")
 
@@ -359,6 +364,7 @@ def test_dingtalk_process_instance_id_is_unique_when_present() -> None:
             user=access_request.user,
             app=access_request.app,
             dingtalk_process_instance_id="proc-unique",
+            approver_user_ids=["manager-001"],
         )
 
 
@@ -381,6 +387,7 @@ def _submitted_grant_request(
         user=user,
         app=app,
         dingtalk_process_instance_id=process_instance_id,
+        approver_user_ids=["manager-001"],
     )
     _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
     return access_request
@@ -486,3 +493,53 @@ def test_dingtalk_callback_records_final_approver_in_audit() -> None:
     assert response.status_code == HTTPStatus.OK
     assert audit_log.actor_id == "manager-001"
     assert audit_log.metadata["approver_user_id"] == "manager-001"
+
+
+@override_settings(EASYAUTH_DINGTALK_CALLBACK_SECRET=CALLBACK_KEY)
+def test_dingtalk_callback_fails_closed_when_approver_list_empty() -> None:
+    # Given: 一条审批人列表为空的申请 (不变量被破坏, 只能经非门户路径产生)。
+    access_request = _submitted_grant_request(
+        user_key="dingtalk-empty-approver-user",
+        app_key="dingtalk-empty-approver-app",
+        role_key="reader",
+        process_instance_id="proc-empty-approver",
+    )
+    access_request.approver_user_ids = []
+    access_request.save(update_fields=["approver_user_ids"])
+    body = _callback_body("proc-empty-approver", "approved", approver_user_id="manager-001")
+
+    # When: 持有共享密钥者投递批准回调。
+    response = _post_callback(body)
+
+    # Then: fail-closed 拒绝, 申请状态不变, 不产生授权。
+    access_request.refresh_from_db()
+    assert response.status_code == HTTPStatus.FORBIDDEN
+    assert access_request.status == REQUEST_STATUS_SUBMITTED
+    assert AccessGrant.objects.count() == 0
+
+
+@override_settings(EASYAUTH_DINGTALK_CALLBACK_SECRET=CALLBACK_KEY)
+def test_dingtalk_callback_rejects_applicant_self_approval() -> None:
+    # Given: 申请人本人恰好也在审批人列表里 (自审自批)。
+    access_request = _submitted_grant_request(
+        user_key="dingtalk-self-approver-user",
+        app_key="dingtalk-self-approver-app",
+        role_key="reader",
+        process_instance_id="proc-self-approver",
+    )
+    access_request.approver_user_ids = ["dingtalk-self-approver-user"]
+    access_request.save(update_fields=["approver_user_ids"])
+    body = _callback_body(
+        "proc-self-approver",
+        "approved",
+        approver_user_id="dingtalk-self-approver-user",
+    )
+
+    # When: 申请人以自己身份投递批准回调。
+    response = _post_callback(body)
+
+    # Then: 回调被拒绝, 申请状态不变, 不产生授权。
+    access_request.refresh_from_db()
+    assert response.status_code == HTTPStatus.FORBIDDEN
+    assert access_request.status == REQUEST_STATUS_SUBMITTED
+    assert AccessGrant.objects.count() == 0

@@ -9,6 +9,7 @@ import pytest
 from django.utils import timezone
 
 from easyauth.access_requests.models import AccessRequest, AccessRequestPermission
+from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import (
     App,
     AppScope,
@@ -32,6 +33,12 @@ REQUESTS_API_URL: Final = "/portal/api/v1/me/access-requests"
 DEFAULT_SCOPE_KEY: Final = "GLOBAL"
 
 
+def _active_approver_user_id() -> str:
+    # 审批人必须是活跃系统用户且不能是申请人本人。
+    approver, _ = UserMirror.objects.get_or_create(authentik_user_id="ops4-permissions-approver")
+    return approver.authentik_user_id
+
+
 def test_ops4_portal_api_submits_grant_request_with_direct_permission_without_rule() -> None:
     # Given: 当前员工还没有授权, 目标 direct Permission 没有配置审批规则。
     client, user = logged_in_client("ops4-grant-direct-permission-user")
@@ -47,7 +54,7 @@ def test_ops4_portal_api_submits_grant_request_with_direct_permission_without_ru
                 "request_type": "grant",
                 "authorization_group_keys": [],
                 "direct_grants": [{"permission": permission.key, "scope": DEFAULT_SCOPE_KEY}],
-                "approver_user_ids": [user.authentik_user_id],
+                "approver_user_ids": [_active_approver_user_id()],
                 "grant_type": "permanent",
                 "grant_expires_at": None,
                 "reason": "申请 direct permission",
@@ -72,7 +79,7 @@ def test_ops4_portal_api_submits_grant_request_with_direct_permission_without_ru
     )
     assert response.status_code == HTTPStatus.CREATED
     assert access_request.request_type == "grant"
-    assert access_request.approver_user_ids == [user.authentik_user_id]
+    assert access_request.approver_user_ids == [_active_approver_user_id()]
     assert permission_keys == (permission.key,)
     assert scope_keys == (DEFAULT_SCOPE_KEY,)
 
@@ -126,7 +133,7 @@ def test_ops4_portal_api_lists_access_request_direct_permissions() -> None:
                 "request_type": "change",
                 "authorization_group_keys": [],
                 "direct_grants": [{"permission": new_permission.key, "scope": DEFAULT_SCOPE_KEY}],
-                "approver_user_ids": [user.authentik_user_id],
+                "approver_user_ids": [_active_approver_user_id()],
                 "grant_type": GRANT_TYPE_TIMED,
                 "grant_expires_at": (timezone.now() + timedelta(days=30)).isoformat(),
                 "reason": "提交 direct permission 申请",

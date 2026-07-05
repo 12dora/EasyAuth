@@ -142,12 +142,13 @@ def test_ops2_portal_api_post_access_request_uses_session_user_and_csrf() -> Non
         key="auditor",
         name="审计员",
     )
+    approver = UserMirror.objects.create(authentik_user_id="ops2-api-submit-approver")
     csrf_token = _extract_csrf_token(client.get(PORTAL_URL).content.decode())
     payload = {
         "app_key": app.app_key,
         "authorization_group_keys": [group.key],
         "direct_grants": [],
-        "approver_user_ids": [user.authentik_user_id],
+        "approver_user_ids": [approver.authentik_user_id],
         "grant_type": GRANT_TYPE_PERMANENT,
         "grant_expires_at": None,
         "reason": "需要查看客户记录",

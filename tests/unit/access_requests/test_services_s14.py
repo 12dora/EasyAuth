@@ -26,6 +26,13 @@ from easyauth.grants.models import AccessGrant
 pytestmark = pytest.mark.django_db
 
 EXPECTED_AUDIT_COUNT: Final = 1
+APPROVER_USER_ID: Final = "s14-approver-001"
+
+
+def _ensure_active_approver() -> str:
+    # 审批人必须是活跃系统用户且不能是申请人本人; 用固定的第二用户满足该不变量。
+    approver, _ = UserMirror.objects.get_or_create(authentik_user_id=APPROVER_USER_ID)
+    return approver.authentik_user_id
 
 
 def _approval_rule(app: App, group: AuthorizationGroup) -> ApprovalRule:
@@ -60,7 +67,7 @@ def test_s14_submit_grant_request_creates_submitted_request_without_creating_gra
             reason="需要处理客户资料",
             actor_type="user",
             actor_id=user.authentik_user_id,
-            approver_user_ids=(user.authentik_user_id,),
+            approver_user_ids=(_ensure_active_approver(),),
         ),
     )
 
@@ -77,7 +84,7 @@ def test_s14_submit_grant_request_creates_submitted_request_without_creating_gra
     assert audit_log.target_type == "access_request"
     assert audit_log.metadata["app_key"] == app.app_key
     assert audit_log.metadata["authorization_group_keys"] == [group.key]
-    assert audit_log.metadata["approver_user_ids"] == [user.authentik_user_id]
+    assert audit_log.metadata["approver_user_ids"] == [APPROVER_USER_ID]
 
 
 def test_s14_submit_grant_request_rejects_group_without_active_approval_rule() -> None:
@@ -296,7 +303,7 @@ def test_s14_submit_timed_grant_request_preserves_requested_expiration() -> None
             reason="临时处理活动客户",
             actor_type="user",
             actor_id=user.authentik_user_id,
-            approver_user_ids=(user.authentik_user_id,),
+            approver_user_ids=(_ensure_active_approver(),),
         ),
     )
 

@@ -166,8 +166,12 @@ def _callback_approver_is_authorized(
     access_request: AccessRequest,
     approver_user_id: str,
 ) -> bool:
+    # 申请人绝不能是审批人: 即使某条历史/非门户路径写入了这样的申请, 回调阶段也必须挡住自审自批。
+    if approver_user_id == access_request.user.authentik_user_id:
+        return False
+    # fail-closed: 审批人列表为空的申请是不变量被破坏的硬错误, 不能放行任何签名回调操作人。
     allowed = [user_id for user_id in access_request.approver_user_ids if user_id]
-    return not allowed or approver_user_id in allowed
+    return bool(allowed) and approver_user_id in allowed
 
 
 def _unauthorized_approver_error(

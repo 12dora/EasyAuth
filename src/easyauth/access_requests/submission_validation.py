@@ -59,10 +59,19 @@ def unique_direct_grants(
     return tuple(grant_by_identity.values())
 
 
-def validated_approver_user_ids(approver_user_ids: Iterable[str]) -> tuple[str, ...]:
+def validated_approver_user_ids(
+    approver_user_ids: Iterable[str],
+    *,
+    applicant_user_id: str,
+) -> tuple[str, ...]:
     user_ids = _unique_non_empty_strings(approver_user_ids)
     if not user_ids:
         raise AccessRequestSubmissionError(("at least one approver is required",))
+
+    # 审批人可由申请人自选是设计, 但绝不能是申请人本人: 自审自批会绕过整条审批链。
+    # 服务端是权威闸门, 前端过滤只是体验, 这里必须快速失败而非静默剔除。
+    if applicant_user_id in user_ids:
+        raise AccessRequestSubmissionError(("approver must not be the applicant",))
 
     active_user_ids = set(
         UserMirror.objects.filter(

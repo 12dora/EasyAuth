@@ -37,6 +37,12 @@ from easyauth.grants.models import (
 from easyauth.grants.services import ScopedDirectGrantInput
 
 pytestmark = pytest.mark.django_db
+
+
+def _ensure_active_approver() -> str:
+    # 审批人必须是活跃系统用户且不能是申请人本人; 用固定的第二用户满足该不变量。
+    approver, _ = UserMirror.objects.get_or_create(authentik_user_id="approver-001")
+    return approver.authentik_user_id
 DEFAULT_SCOPE_KEY: Final = "GLOBAL"
 
 
@@ -111,7 +117,7 @@ def test_ops4_submit_change_request_creates_submitted_lifecycle_request_only() -
             reason="需要处理发票",
             actor_type="user",
             actor_id=user.authentik_user_id,
-            approver_user_ids=(user.authentik_user_id,),
+            approver_user_ids=(_ensure_active_approver(),),
             request_type=REQUEST_TYPE_CHANGE,
         ),
     )
@@ -157,7 +163,7 @@ def test_ops4_submit_change_request_accepts_direct_permission_only_target() -> N
             reason="需要发票写权限",
             actor_type="user",
             actor_id=user.authentik_user_id,
-            approver_user_ids=(user.authentik_user_id,),
+            approver_user_ids=(_ensure_active_approver(),),
             request_type=REQUEST_TYPE_CHANGE,
         ),
     )
@@ -191,7 +197,7 @@ def test_ops4_submit_revoke_request_accepts_empty_target_for_full_revoke() -> No
             reason="不再需要访问",
             actor_type="user",
             actor_id=user.authentik_user_id,
-            approver_user_ids=(user.authentik_user_id,),
+            approver_user_ids=(_ensure_active_approver(),),
             request_type=REQUEST_TYPE_REVOKE,
         ),
     )
@@ -259,7 +265,7 @@ def test_ops4_submit_renew_request_preserves_timed_lifecycle_target() -> None:
             reason="项目延期",
             actor_type="user",
             actor_id=user.authentik_user_id,
-            approver_user_ids=(user.authentik_user_id,),
+            approver_user_ids=(_ensure_active_approver(),),
             request_type=REQUEST_TYPE_RENEW,
         ),
     )
