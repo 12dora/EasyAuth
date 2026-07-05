@@ -261,8 +261,9 @@ def test_auto_onboarding_rejects_private_host_before_fetch(
         return [(2, 1, 6, "", ("127.0.0.1", 0))]
 
     def _fake_urlopen(*_args: object, **_kwargs: object) -> object:
+        # SSRF 防护必须在发起请求前拦截; 若被调用, 用例末尾的断言会失败。
         called["urlopen"] = True
-        raise AssertionError("SSRF 防护必须在发起请求前拦截")
+        return None
 
     monkeypatch.setattr("easyauth.config.net.socket.getaddrinfo", _fake_getaddrinfo)
     monkeypatch.setattr(auto_onboarding_api, "urlopen", _fake_urlopen)

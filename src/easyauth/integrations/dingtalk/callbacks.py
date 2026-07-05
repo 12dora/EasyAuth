@@ -17,12 +17,19 @@ from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.responses import error_response as _error_response
 from easyauth.api.responses import json_response as _json_response
 from easyauth.audit.services import AuditRecord, AuditService
+from easyauth.config.rate_limit import client_ip, rate_limit_exceeded
 from easyauth.integrations.dingtalk.signature import is_valid_callback_signature
 
 if TYPE_CHECKING:
     from django.http import HttpRequest, JsonResponse
 
     from easyauth.access_requests.models import AccessRequest
+
+# 未认证的签名/载荷拒绝会写审计; 按客户端 IP 限流, 防止未认证攻击者膨胀审计表。
+# 注: BS-18 的窗口内重放已由 approve/reject 的状态幂等覆盖; 逐签名 nonce 会把 DingTalk
+# 合法重试(与重放字节一致)一并拒掉, 属回归, 故不引入 nonce。
+PREAUTH_AUDIT_LIMIT = 20
+PREAUTH_AUDIT_WINDOW_SECONDS = 300
 
 
 class _DingTalkCallbackPayload(BaseModel):
@@ -39,7 +46,8 @@ class _DingTalkCallbackPayload(BaseModel):
 def dingtalk_callback(request: HttpRequest) -> JsonResponse:
     body = request.body
     if not _request_signature_is_valid(request, body):
-        _record_security_event(
+        _record_preauth_security_event(
+            request,
             event_type="dingtalk_callback_signature_rejected",
             target_id="unknown",
             metadata={"reason": "invalid_signature"},
@@ -52,7 +60,8 @@ def dingtalk_callback(request: HttpRequest) -> JsonResponse:
     try:
         payload = _DingTalkCallbackPayload.model_validate_json(body)
     except ValidationError as exc:
-        _record_security_event(
+        _record_preauth_security_event(
+            request,
             event_type="dingtalk_callback_payload_rejected",
             target_id="unknown",
             metadata=_payload_rejected_metadata(body, exc),
@@ -132,6 +141,24 @@ def _success_payload(access_request: AccessRequest) -> dict[str, JsonValue]:
         "process_instance_id": access_request.dingtalk_process_instance_id or "",
         "status": access_request.status,
     }
+
+
+def _record_preauth_security_event(
+    request: HttpRequest,
+    *,
+    event_type: str,
+    target_id: str,
+    metadata: dict[str, JsonValue],
+) -> None:
+    # 未认证拒绝的审计写入按客户端 IP 限流; 超限即丢弃, 防止审计表被膨胀淹没真实事件。
+    if rate_limit_exceeded(
+        "dingtalk-callback-audit",
+        client_ip(request),
+        limit=PREAUTH_AUDIT_LIMIT,
+        window_seconds=PREAUTH_AUDIT_WINDOW_SECONDS,
+    ):
+        return
+    _record_security_event(event_type=event_type, target_id=target_id, metadata=metadata)
 
 
 def _record_security_event(

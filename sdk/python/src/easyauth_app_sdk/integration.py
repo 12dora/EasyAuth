@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 import json
 from collections.abc import Callable, Mapping
 from typing import Any, Final
@@ -42,7 +43,9 @@ def descriptor_http_response(
     if token_validator is not None:
         authorized = token_validator(bearer_token(authorization))
     elif required_token:
-        authorized = authorization == f"{BEARER_PREFIX}{required_token}"
+        # 常量时间比较, 避免 == 短路泄露长期共享密钥的长度/前缀时序; 统一走 bearer_token 提取。
+        provided = bearer_token(authorization)
+        authorized = provided is not None and hmac.compare_digest(provided, required_token)
     else:
         authorized = True
     if not authorized:

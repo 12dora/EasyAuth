@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from urllib.parse import urlencode, urlsplit
 
+from django.conf import settings
 from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
 
 from easyauth.frontend_shell import render_public_react_shell
@@ -27,6 +28,8 @@ def mark_browser_logged_out(response: HttpResponse) -> None:
         httponly=True,
         max_age=LOGGED_OUT_COOKIE_MAX_AGE_SECONDS,
         samesite="Lax",
+        # 与生产的 SESSION_COOKIE_SECURE/CSRF_COOKIE_SECURE 口径一致(DEBUG 本地 http 不加 Secure)。
+        secure=not settings.DEBUG,
     )
 
 

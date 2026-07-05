@@ -17,7 +17,8 @@ from easyauth.applications.models import (
     App,
     ManagedScopePolicy,
 )
-from easyauth.applications.ownership import can_view_app
+from easyauth.applications.ownership import can_manage_app
+from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.integrations.authentik.directory_client import (
     AuthentikDirectoryClient,
     AuthentikDirectoryError,
@@ -60,7 +61,7 @@ def console_managed_users_preview(request: HttpRequest, app_key: str) -> JsonRes
     if isinstance(payload, JsonResponse):
         return payload
 
-    return _preview_response(app=app, user_id=payload.user_id)
+    return _preview_response(actor=actor, app=app, user_id=payload.user_id)
 
 
 def _payload_from_request(request: HttpRequest) -> PayloadLookupResult:
@@ -75,7 +76,7 @@ def _payload_from_request(request: HttpRequest) -> PayloadLookupResult:
         )
 
 
-def _preview_response(*, app: App, user_id: str) -> JsonResponse:
+def _preview_response(*, actor: ConsoleActor, app: App, user_id: str) -> JsonResponse:
     policy = _app_default_policy(app)
     if isinstance(policy, JsonResponse):
         return policy
@@ -93,7 +94,22 @@ def _preview_response(*, app: App, user_id: str) -> JsonResponse:
     managed_users = _managed_users_for_user(user)
     if isinstance(managed_users, JsonResponse):
         return managed_users
+    # 每次成功预览都记审计(actor + target), 使"谁向谁汇报"的探测可追溯。
+    _record_preview(actor=actor, app=app, user_id=user_id)
     return json_response(_success_payload(user=user, managed_users=managed_users))
+
+
+def _record_preview(*, actor: ConsoleActor, app: App, user_id: str) -> None:
+    _ = AuditService.record(
+        AuditRecord(
+            actor_type="admin",
+            actor_id=actor.user_id,
+            action="managed_users_preview",
+            target_type="user_permission",
+            target_id=user_id,
+            metadata={"app_key": app.app_key},
+        ),
+    )
 
 
 def _managed_users_for_user(user: UserMirror) -> ManagedUsersLookupResult:
@@ -129,7 +145,8 @@ def _app_for_actor(actor: ConsoleActor, app_key: str) -> AppLookupResult:
             "应用不存在。",
             status=HTTPStatus.NOT_FOUND,
         )
-    if not can_view_app(actor, app):
+    # 预览会返回目标用户的钉钉主管链下属集合, 属组织架构 oracle: 收紧为 owner/superuser。
+    if not can_manage_app(actor, app):
         return error_response(
             ErrorCode.PERMISSION_DENIED,
             "无权限访问该应用。",

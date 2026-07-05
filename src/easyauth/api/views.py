@@ -22,6 +22,7 @@ from easyauth.api.serializers import (
 from easyauth.applications.models import App
 from easyauth.applications.services import AppPrincipal
 from easyauth.audit.services import AuditRecord, AuditService
+from easyauth.config.rate_limit import client_ip, over_limit, rate_limit_exceeded
 from easyauth.grants.managed_users import ManagedUsersResolutionUnavailableError
 from easyauth.grants.query import PermissionSnapshot, resolve_user_permissions
 
@@ -31,11 +32,17 @@ PERMISSION_QUERY_EVENT: Final = "app_permission_queried"
 PERMISSION_QUERY_TARGET_TYPE: Final = "user_permission"
 _AUTHENTICATION_FAILED_MESSAGE: Final = "应用认证凭据无效。"
 _PERMISSION_DENIED_MESSAGE: Final = "应用无权查询该资源。"
+_TOO_MANY_REQUESTS_MESSAGE: Final = "请求过于频繁, 请稍后再试。"
 _AUTH_SCHEME: Final = "Bearer"
+# 认证失败按 IP 限流(纵深防御, token 熵已很高), 单 token 请求速率另按 credential 限流。
+_AUTH_FAIL_LIMIT: Final = 30
+_AUTH_FAIL_WINDOW_SECONDS: Final = 300
+_QUERY_RATE_LIMIT: Final = 240
+_QUERY_RATE_WINDOW_SECONDS: Final = 60
 
 
 def query_user_permissions(request: HttpRequest, app_key: str, user_id: str) -> JsonResponse:
-    match _authenticate_app(request):
+    match _authenticate_and_throttle(request):
         case AppPrincipal() as principal:
             pass
         case JsonResponse() as response:
@@ -89,6 +96,32 @@ def query_user_permissions(request: HttpRequest, app_key: str, user_id: str) -> 
 
     _record_permission_query(principal=principal, snapshot=snapshot)
     return JsonResponse(serializer.data, status=HTTPStatus.OK)
+
+
+def _authenticate_and_throttle(request: HttpRequest) -> AppPrincipal | JsonResponse:
+    # 认证失败按 IP 限流, 认证成功后按 credential 限请求速率(纵深防御)。
+    ip = client_ip(request)
+    if over_limit("perm-query-authfail", ip, limit=_AUTH_FAIL_LIMIT):
+        return _too_many_requests_response()
+    match _authenticate_app(request):
+        case AppPrincipal() as principal:
+            pass
+        case JsonResponse() as response:
+            _ = rate_limit_exceeded(
+                "perm-query-authfail",
+                ip,
+                limit=_AUTH_FAIL_LIMIT,
+                window_seconds=_AUTH_FAIL_WINDOW_SECONDS,
+            )
+            return response
+    if rate_limit_exceeded(
+        "perm-query-rate",
+        principal.credential_id,
+        limit=_QUERY_RATE_LIMIT,
+        window_seconds=_QUERY_RATE_WINDOW_SECONDS,
+    ):
+        return _too_many_requests_response()
+    return principal
 
 
 def _authenticate_app(request: HttpRequest) -> AppPrincipal | JsonResponse:
@@ -161,4 +194,11 @@ def _permission_denied_response() -> JsonResponse:
     return JsonResponse(
         build_error_response(ErrorCode.PERMISSION_DENIED, _PERMISSION_DENIED_MESSAGE),
         status=HTTPStatus.FORBIDDEN,
+    )
+
+
+def _too_many_requests_response() -> JsonResponse:
+    return JsonResponse(
+        build_error_response(ErrorCode.THROTTLED, _TOO_MANY_REQUESTS_MESSAGE),
+        status=HTTPStatus.TOO_MANY_REQUESTS,
     )

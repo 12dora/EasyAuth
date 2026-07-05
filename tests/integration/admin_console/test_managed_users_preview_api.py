@@ -12,6 +12,7 @@ from pydantic import TypeAdapter
 from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import JsonValue
 from easyauth.applications.models import App, AppMembership, ManagedScopePolicy
+from easyauth.audit.models import AuditLog
 from easyauth.integrations.authentik.directory_client import AuthentikDirectoryError
 from easyauth.integrations.authentik.directory_payloads import DingTalkManagedUsers
 
@@ -43,9 +44,9 @@ class DirectoryClientStub:
 def test_managed_users_preview_returns_filtered_directory_users(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Given: developer 管理的 App 已启用钉钉主管链策略, 目标用户已有钉钉绑定。
-    client = _logged_in_client("managed-preview-developer")
-    app = _member_app("managed-preview-success", "managed-preview-developer", role="developer")
+    # Given: owner 管理的 App 已启用钉钉主管链策略, 目标用户已有钉钉绑定。
+    client = _logged_in_client("managed-preview-owner")
+    app = _member_app("managed-preview-success", "managed-preview-owner", role="owner")
     _ = _enabled_policy(app)
     user = UserMirror.objects.create(
         authentik_user_id="managed-preview-manager",
@@ -89,6 +90,12 @@ def test_managed_users_preview_returns_filtered_directory_users(
         },
         "diagnostics": [],
     }
+    # 每次成功预览都写审计(actor + target), 使组织架构探测可追溯。
+    assert AuditLog.objects.filter(
+        event_type="managed_users_preview",
+        actor_id="managed-preview-owner",
+        target_id="managed-preview-manager",
+    ).exists()
 
 
 def test_managed_users_preview_rejects_missing_or_disabled_policy() -> None:
@@ -202,11 +209,18 @@ def test_managed_users_preview_rejects_stale_or_unavailable_directory(
 
 
 def test_managed_users_preview_enforces_app_membership_and_method() -> None:
-    # Given: 目标 App 只允许 active owner/developer 访问。
+    # Given: 预览返回汇报链下属集合(组织架构 oracle), 只允许 owner/superuser 访问。
     owner_client = _logged_in_client("managed-preview-security-owner")
+    developer_client = _logged_in_client("managed-preview-security-developer")
     inactive_member_client = _logged_in_client("managed-preview-security-inactive")
     outsider_client = _logged_in_client("managed-preview-security-outsider")
     app = _member_app("managed-preview-security", "managed-preview-security-owner", role="owner")
+    _ = AppMembership.objects.create(
+        app=app,
+        user_id="managed-preview-security-developer",
+        role="developer",
+        is_active=True,
+    )
     _ = AppMembership.objects.create(
         app=app,
         user_id="managed-preview-security-inactive",
@@ -219,7 +233,12 @@ def test_managed_users_preview_enforces_app_membership_and_method() -> None:
         dingtalk_userid="ding-user",
     )
 
-    # When: inactive 成员、非成员和非 POST 请求分别访问预览 API。
+    # When: active developer、inactive 成员、非成员和非 POST 请求分别访问预览 API。
+    developer_response = developer_client.post(
+        _preview_url(app.app_key),
+        data=dumps({"user_id": user.authentik_user_id}),
+        content_type="application/json",
+    )
     inactive_response = inactive_member_client.post(
         _preview_url(app.app_key),
         data=dumps({"user_id": user.authentik_user_id}),
@@ -237,7 +256,8 @@ def test_managed_users_preview_enforces_app_membership_and_method() -> None:
         content_type="application/json",
     )
 
-    # Then: API 区分权限、方法和不存在 App。
+    # Then: 仅 owner/superuser 放行; active developer 也被拒(BS-9)。
+    assert developer_response.status_code == HTTPStatus.FORBIDDEN
     assert inactive_response.status_code == HTTPStatus.FORBIDDEN
     assert outsider_response.status_code == HTTPStatus.FORBIDDEN
     assert get_response.status_code == HTTPStatus.METHOD_NOT_ALLOWED

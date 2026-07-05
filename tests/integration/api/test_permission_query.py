@@ -338,6 +338,19 @@ def test_permission_query_rejects_missing_invalid_disabled_and_cross_app_tokens(
     _assert_error(cross_app, status_code=HTTPStatus.FORBIDDEN, code=ErrorCode.PERMISSION_DENIED)
 
 
+def test_permission_query_throttles_repeated_auth_failures() -> None:
+    # Given: 无效 token 反复冲击查询端点。
+    url = _permission_url("any-app", "any-user")
+    statuses = [
+        Client().get(url, HTTP_AUTHORIZATION=_bearer("invalid-token")).status_code
+        for _ in range(40)
+    ]
+
+    # Then: 认证失败先返回 401, 累积超过阈值后返回 429(纵深防御限流)。
+    assert HTTPStatus.UNAUTHORIZED in statuses
+    assert HTTPStatus.TOO_MANY_REQUESTS in statuses
+
+
 def _permission_url(app_key: str, user_id: str) -> str:
     return f"/api/v1/apps/{app_key}/users/{user_id}/permissions"
 

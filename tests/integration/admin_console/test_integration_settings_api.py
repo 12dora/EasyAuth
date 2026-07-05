@@ -80,7 +80,8 @@ def test_integration_settings_token_is_encrypted_at_rest() -> None:
         stored = cursor.fetchone()[0]
     assert stored != "ak-plaintext-secret"
     assert "ak-plaintext-secret" not in stored
-    assert IntegrationSettings.load().authentik_api_token == "ak-plaintext-secret"
+    decrypted = IntegrationSettings.load().authentik_api_token
+    assert decrypted == "ak-plaintext-secret"
 
 
 def test_integration_settings_rejects_plaintext_http_base_url() -> None:

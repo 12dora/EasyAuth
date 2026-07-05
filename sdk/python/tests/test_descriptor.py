@@ -112,6 +112,14 @@ def test_descriptor_http_response_enforces_token() -> None:
     )
     assert ok_status == 200
 
+    # 前缀正确但不完整的 token 必须被拒(不因短路而放行)。
+    wrong_status, _h, _b = descriptor_http_response(
+        _manifest,
+        authorization="Bearer shared",
+        required_token="shared-secret",
+    )
+    assert wrong_status == 401
+
 
 def test_descriptor_http_response_supports_token_validator() -> None:
     seen: list[str | None] = []
