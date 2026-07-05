@@ -9,20 +9,30 @@ from easyauth.access_requests.models import (
 )
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import JsonValue
+from easyauth.portal.pagination import PortalPage, build_page, page_request
 from easyauth.portal.status_text import status_label
 
 if TYPE_CHECKING:
+    from django.db.models import QuerySet
+    from django.http import QueryDict
+
     from easyauth.accounts.models import UserMirror
 
 type PortalJsonObject = dict[str, JsonValue]
 
 
-def access_request_items_for_user(user: UserMirror) -> tuple[PortalJsonObject, ...]:
-    access_requests = tuple(
+def _access_requests_queryset(user: UserMirror) -> QuerySet[AccessRequest]:
+    return (
         AccessRequest.objects.select_related("app")
         .filter(user=user)
-        .order_by("-submitted_at", "id"),
+        .order_by("-submitted_at", "id")
     )
+
+
+def _items_for_access_requests(
+    access_requests: tuple[AccessRequest, ...],
+) -> tuple[PortalJsonObject, ...]:
+    # 只按传入(可能已分页)的这批 id 批量 hydrate group/direct grant, 不做全量载入。
     request_ids = tuple(access_request.id for access_request in access_requests)
     group_items = _request_groups_by_request_id(request_ids)
     direct_grant_items = _request_direct_grants_by_request_id(request_ids)
@@ -33,6 +43,23 @@ def access_request_items_for_user(user: UserMirror) -> tuple[PortalJsonObject, .
             direct_grant_items=direct_grant_items.get(access_request.id, ()),
         )
         for access_request in access_requests
+    )
+
+
+def access_request_items_for_user(user: UserMirror) -> tuple[PortalJsonObject, ...]:
+    return _items_for_access_requests(tuple(_access_requests_queryset(user)))
+
+
+def access_request_page_for_user(user: UserMirror, query: QueryDict) -> PortalPage:
+    # 分页下推到 queryset: 先 count + 切片, 再只对当前页 hydrate, 不再全量载入内存(BF-6)。
+    queryset = _access_requests_queryset(user)
+    request = page_request(query)
+    total_items = queryset.count()
+    access_requests = tuple(queryset[request.start : request.stop])
+    return build_page(
+        _items_for_access_requests(access_requests),
+        request=request,
+        total_items=total_items,
     )
 
 

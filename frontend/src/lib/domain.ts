@@ -350,4 +350,12 @@ export interface OperationRow {
   summary?: string;
   error_summary?: string;
   last_checked_at?: string | null;
+  // 审计日志(audit-logs)行字段: 与后端 audit_api._audit_item 序列化器一一对应, 审计行无 id。
+  actor_type?: string;
+  actor_id?: string;
+  event_type?: string;
+  target_type?: string;
+  target_id?: string;
+  metadata?: JsonObject | null;
+  created_at?: string | null;
 }

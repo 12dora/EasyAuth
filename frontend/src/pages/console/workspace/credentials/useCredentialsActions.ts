@@ -22,6 +22,7 @@ interface CredentialsMutations {
 
 interface CredentialsActions {
   createCredential: (kind: CreateCredentialKind, name: string) => Promise<SecretPayload>;
+  isCreating: boolean;
   rotateCredential: (credentialId: number) => void;
   disableCredential: (credential: CredentialItem) => void;
   operationError: Error | null;
@@ -92,6 +93,7 @@ function buildCredentialsActions(
 ): CredentialsActions {
   return {
     createCredential: (kind: CreateCredentialKind, name: string) => mutations.createSecretMutation.mutateAsync({ kind, name }),
+    isCreating: mutations.createSecretMutation.isPending,
     rotateCredential: (credentialId: number) => mutations.rotateMutation.mutate(credentialId),
     disableCredential: (credential: CredentialItem) => mutations.disableMutation.mutate(credential),
     operationError: mutations.createSecretMutation.error ?? mutations.rotateMutation.error ?? mutations.disableMutation.error,

@@ -1,7 +1,6 @@
 import {
   flexRender,
   getCoreRowModel,
-  getPaginationRowModel,
   useReactTable,
   type ColumnDef,
 } from "@tanstack/react-table";
@@ -38,9 +37,11 @@ export function ConsoleAppList() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: 20 });
   const appsQuery = useQuery({
-    queryKey: ["console", "apps"],
-    queryFn: () => apiRequest<AppListPayload>("/console/api/v1/apps"),
+    queryKey: ["console", "apps", pagination.pageIndex, pagination.pageSize],
+    queryFn: () =>
+      apiRequest<AppListPayload>(`/console/api/v1/apps?page=${pagination.pageIndex + 1}&page_size=${pagination.pageSize}`),
   });
   const apps = itemsFromPayload<AppSummary>(appsQuery.data);
   const createMutation = useMutation({
@@ -160,7 +161,10 @@ export function ConsoleAppList() {
     data: apps,
     columns,
     getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
+    manualPagination: true,
+    pageCount: appsQuery.data?.pagination?.total_pages ?? 1,
+    state: { pagination },
+    onPaginationChange: setPagination,
   });
 
   return (

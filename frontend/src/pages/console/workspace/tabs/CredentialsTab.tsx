@@ -20,6 +20,7 @@ import { Dialog } from "../../../../components/Dialog";
 import { SecretDialog } from "../../../../components/SecretDialog";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
+import type { ListPayload } from "../../../../lib/api";
 import type { CredentialItem } from "../../../../lib/domain";
 import { CreateCredentialForm } from "../credentials/CreateCredentialForm";
 import { useCredentialsActions } from "../credentials/useCredentialsActions";
@@ -29,10 +30,10 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const credentialsQuery = useQuery({
     queryKey: ["console", "app", appKey, "credentials"],
-    queryFn: () => apiRequest<{ items?: CredentialItem[] }>(`/console/api/v1/apps/${appKey}/credentials`),
+    queryFn: () => apiRequest<ListPayload<CredentialItem>>(`/console/api/v1/apps/${appKey}/credentials`),
   });
   const credentials = itemsFromPayload<CredentialItem>(credentialsQuery.data);
-  const { createCredential, rotateCredential, disableCredential, operationError, secretEntries, closeSecretDialog } =
+  const { createCredential, isCreating, rotateCredential, disableCredential, operationError, secretEntries, closeSecretDialog } =
     useCredentialsActions(appKey);
   const credentialColumns: ColumnDef<CredentialItem>[] = [
     { header: "名称", accessorKey: "name" },
@@ -132,6 +133,7 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
       {createDialogOpen ? (
         <Dialog title="新建凭据" onClose={() => setCreateDialogOpen(false)}>
           <CreateCredentialForm
+            isCreating={isCreating}
             onCreateCredential={async (kind, name) => {
               await createCredential(kind, name);
               setCreateDialogOpen(false);

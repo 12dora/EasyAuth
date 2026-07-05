@@ -14,6 +14,8 @@ type PortalJsonObject = dict[str, JsonValue]
 DEFAULT_PAGE: Final = 1
 DEFAULT_PAGE_SIZE: Final = 20
 MAX_PAGE_SIZE: Final = 100
+# page 上界: 防止任意大 page 在 DB 分页端点产生巨大 OFFSET。
+MAX_PAGE: Final = 100_000
 
 
 @dataclass(frozen=True, slots=True)
@@ -41,7 +43,7 @@ class PageRequest:
 
 def page_request(query: QueryDict) -> PageRequest:
     return PageRequest(
-        page=_positive_integer(query.get("page"), default=DEFAULT_PAGE, maximum=None),
+        page=_positive_integer(query.get("page"), default=DEFAULT_PAGE, maximum=MAX_PAGE),
         page_size=_positive_integer(
             query.get("page_size"),
             default=DEFAULT_PAGE_SIZE,

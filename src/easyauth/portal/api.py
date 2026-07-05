@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from http import HTTPStatus
+from typing import TYPE_CHECKING
 
 from django.http import HttpRequest, JsonResponse
 from pydantic import ValidationError
@@ -26,12 +27,14 @@ from easyauth.portal.access_request_payloads import (
 )
 from easyauth.portal.api_data import (
     access_request_item,
-    access_request_items_for_user,
+    access_request_page_for_user,
     current_grant_page_for_user,
     expiring_grant_page_for_user,
 )
-from easyauth.portal.pagination import PortalPage, paginate_items
 from easyauth.portal.request_catalog import request_catalog_payload
+
+if TYPE_CHECKING:
+    from easyauth.portal.pagination import PortalPage
 
 type PortalApiResult = UserMirror | JsonResponse
 
@@ -86,7 +89,7 @@ def portal_access_requests(request: HttpRequest) -> JsonResponse:
             return response
     match request.method:
         case "GET":
-            return _page_response(paginate_items(access_request_items_for_user(user), request.GET))
+            return _page_response(access_request_page_for_user(user, request.GET))
         case "POST":
             return _submit_access_request(request, user)
         case _:

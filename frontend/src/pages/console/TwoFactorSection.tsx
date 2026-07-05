@@ -75,15 +75,20 @@ function TotpRow({ t, enabled, onStatus }: { t: Translate; enabled: boolean; onS
   const [beginning, setBeginning] = useState(false);
   const [setup, setSetup] = useState<TotpSetup | null>(null);
   const [disableOpen, setDisableOpen] = useState(false);
+  const [error, setError] = useState("");
 
   const openEnroll = async () => {
     if (beginning) {
       return;
     }
+    setError("");
     setBeginning(true);
     try {
       const data = await apiRequest<TotpSetup>(`${BASE_URL}/totp/begin`, { method: "POST" });
       setSetup(data);
+    } catch (caught) {
+      // FF-3: /totp/begin 失败不再静默丢弃, 把后端错误(中文)显式呈现给用户。
+      setError(caught instanceof ApiError ? caught.message : t("settings.twoFactor.genericError"));
     } finally {
       setBeginning(false);
     }
@@ -106,6 +111,11 @@ function TotpRow({ t, enabled, onStatus }: { t: Translate; enabled: boolean; onS
           {t("settings.twoFactor.enable")}
         </Button>
       )}
+      {error ? (
+        <div className="w-full">
+          <StatusBanner tone="signal" title={error} />
+        </div>
+      ) : null}
       {setup ? (
         <TotpEnrollDialog t={t} setup={setup} onClose={() => setSetup(null)} onStatus={onStatus} />
       ) : null}
@@ -207,6 +217,7 @@ function TotpDisableDialog({
   onStatus: (next: TwoFactorStatus) => void;
 }) {
   const [code, setCode] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -217,9 +228,10 @@ function TotpDisableDialog({
     setBusy(true);
     setError("");
     try {
+      // BS-14: 停用第二因子需 step-up 重认证, 请求体附带 current_password。
       const next = await apiRequest<TwoFactorStatus>(`${BASE_URL}/totp/disable`, {
         method: "POST",
-        body: { code: code.trim() },
+        body: { code: code.trim(), current_password: currentPassword },
       });
       onStatus(next);
       onClose();
@@ -257,6 +269,15 @@ function TotpDisableDialog({
             value={code}
             onChange={(event) => setCode(event.currentTarget.value)}
             className="text-center font-mono tracking-[0.4em]"
+          />
+        </Field>
+        <Field label={t("settings.twoFactor.currentPassword")} hint={t("settings.twoFactor.currentPasswordHint")}>
+          <TextInput
+            id="totp-disable-password"
+            type="password"
+            autoComplete="current-password"
+            value={currentPassword}
+            onChange={(event) => setCurrentPassword(event.currentTarget.value)}
           />
         </Field>
         {error ? <StatusBanner tone="signal" title={error} /> : null}
@@ -355,6 +376,7 @@ function AddPasskeyDialog({
   onStatus: (next: TwoFactorStatus) => void;
 }) {
   const [name, setName] = useState("");
+  const [currentPassword, setCurrentPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -376,12 +398,14 @@ function AddPasskeyDialog({
         setError(t("settings.twoFactor.passkeyCancelled"));
         return;
       }
+      // BS-14: 注册通行密钥(新增第二因子)需 step-up 重认证, 请求体附带 current_password。
       const next = await apiRequest<TwoFactorStatus>(`${BASE_URL}/passkeys/register/complete`, {
         method: "POST",
         body: {
           credential: serializeRegistrationCredential(credential),
           state_token: begin.state_token,
           name: name.trim(),
+          current_password: currentPassword,
         },
       });
       onStatus(next);

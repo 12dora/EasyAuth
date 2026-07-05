@@ -7,6 +7,7 @@ import {
 } from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, RefreshCcw } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
 import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../components/ui/TablePrimitives";
 import { TablePagination } from "../../components/ui/TablePagination";
@@ -19,6 +20,7 @@ import { Button } from "../../components/Button";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
 import { apiRequest, itemsFromPayload } from "../../lib/api";
+import type { ListPayload } from "../../lib/api";
 import type { OperationRow } from "../../lib/domain";
 import { useI18n } from "../../i18n/I18nProvider";
 import { accessRequestStatusLabel, badgeToneForAccessRequestStatus, formatDateTime } from "../../lib/status";
@@ -31,18 +33,34 @@ const ENDPOINTS: Record<string, { title: string; endpoint: string }> = {
   audit: { title: "审计日志", endpoint: "/console/api/v1/audit-logs" },
 };
 
+const DEFAULT_PAGE_SIZE = 20;
+
 export function OperationsPage() {
   const { t } = useI18n();
   const queryClient = useQueryClient();
   const { section = "access-requests" } = useParams();
   const config = ENDPOINTS[section] ?? ENDPOINTS["access-requests"];
+  // 依赖健康返回非分页的 list_payload; 其余分区走后端分页, 需按分区区分表格模式。
+  const isPaginated = section !== "dependency-health";
+  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE });
+
+  // 切换分区时回到第一页, 避免带着上个分区的页码请求。
+  useEffect(() => {
+    setPagination((current) => (current.pageIndex === 0 ? current : { ...current, pageIndex: 0 }));
+  }, [section]);
+
   const query = useQuery({
-    queryKey: ["console", "operations", section],
-    queryFn: () => apiRequest<{ items?: OperationRow[]; data?: OperationRow[] }>(config.endpoint),
+    queryKey: isPaginated
+      ? ["console", "operations", section, pagination.pageIndex, pagination.pageSize]
+      : ["console", "operations", section],
+    queryFn: () =>
+      apiRequest<ListPayload<OperationRow>>(
+        isPaginated ? `${config.endpoint}?page=${pagination.pageIndex + 1}&page_size=${pagination.pageSize}` : config.endpoint,
+      ),
   });
   const healthCheckMutation = useMutation({
     mutationFn: () =>
-      apiRequest<{ items?: OperationRow[]; data?: OperationRow[] }>(
+      apiRequest<ListPayload<OperationRow>>(
         "/console/api/v1/operations/dependency-health/checks",
         { method: "POST" },
       ),
@@ -56,7 +74,16 @@ export function OperationsPage() {
     data: rows,
     columns,
     getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
+    ...(isPaginated
+      ? {
+          manualPagination: true as const,
+          pageCount: query.data?.pagination?.total_pages ?? 1,
+          state: { pagination },
+          onPaginationChange: setPagination,
+        }
+      : {
+          getPaginationRowModel: getPaginationRowModel(),
+        }),
   });
 
   return (
@@ -153,6 +180,16 @@ function operationColumns(section: string, t: Translator): ColumnDef<OperationRo
       { header: "检查时间", cell: ({ row }) => formatDateTime(stringValue(row.original.last_checked_at)) },
     ];
   }
+  if (section === "audit") {
+    // 审计行字段对齐后端 audit_api._audit_item; 审计行无 id, 故不展示 ID 列。
+    return [
+      { header: "事件", cell: ({ row }) => stringValue(row.original.event_type) },
+      { header: "操作者", cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{auditPair(row.original.actor_type, row.original.actor_id)}</code> },
+      { header: "对象", cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{auditPair(row.original.target_type, row.original.target_id)}</code> },
+      { header: "应用", cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{auditAppKey(row.original)}</code> },
+      { header: "时间", cell: ({ row }) => formatDateTime(stringValue(row.original.created_at)) },
+    ];
+  }
   if (section === "access-grants") {
     return [
       { header: "用户", cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.user_id)}</code> },
@@ -174,6 +211,17 @@ function operationColumns(section: string, t: Translator): ColumnDef<OperationRo
 
 function stringValue(value: unknown): string {
   return typeof value === "string" && value !== "" ? value : "-";
+}
+
+function auditPair(type: string | undefined, id: string | undefined): string {
+  const parts = [type, id].filter((part): part is string => typeof part === "string" && part !== "");
+  return parts.length > 0 ? parts.join(":") : "-";
+}
+
+function auditAppKey(row: OperationRow): string {
+  // 非超管审计以 metadata.app_key 做作用域, app_key 不在顶层字段而在 metadata 中。
+  const appKey = row.metadata && typeof row.metadata === "object" ? row.metadata.app_key : undefined;
+  return typeof appKey === "string" && appKey !== "" ? appKey : "-";
 }
 
 function healthTone(status: string): "evergreen" | "amber" | "neutral" | "signal" {

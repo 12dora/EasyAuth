@@ -56,7 +56,7 @@ export function ManifestTab({ appKey }: { appKey: string }) {
   const versionsQueryKey = ["console", "app", appKey, "manifest-versions"];
   const versionsQuery = useQuery({
     queryKey: versionsQueryKey,
-    queryFn: () => apiRequest<{ items?: ManifestVersion[] }>(`/console/api/v1/apps/${appKey}/permission-template-versions`),
+    queryFn: () => apiRequest<ListPayload<ManifestVersion>>(`/console/api/v1/apps/${appKey}/permission-template-versions`),
   });
   const versions = itemsFromPayload<ManifestVersion>(versionsQuery.data);
   const versionColumns: ColumnDef<ManifestVersion>[] = [

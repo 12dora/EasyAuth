@@ -15,7 +15,11 @@ from easyauth.grants.models import (
     AccessGrant,
 )
 from easyauth.grants.query import resolve_user_permissions
-from easyauth.portal.access_request_data import access_request_item, access_request_items_for_user
+from easyauth.portal.access_request_data import (
+    access_request_item,
+    access_request_items_for_user,
+    access_request_page_for_user,
+)
 from easyauth.portal.pagination import PortalPage, build_page, page_request
 from easyauth.portal.permission_aggregation import (
     json_expanded_grants,
@@ -32,6 +36,7 @@ DEFAULT_EXPIRING_DAYS: Final = 14
 __all__: Final = (
     "access_request_item",
     "access_request_items_for_user",
+    "access_request_page_for_user",
     "current_grant_items_for_user",
     "current_grant_page_for_user",
     "expiring_grant_items_for_user",
