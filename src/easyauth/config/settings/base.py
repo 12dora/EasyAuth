@@ -33,6 +33,12 @@ SECRET_KEY = required_env(
     "DJANGO_SECRET_KEY",
     dev_default="django-insecure-easyauth-local-dev-only",
 )
+# 敏感字段(Authentik 管理 token、TOTP 种子)的静态加密密钥; 与 SECRET_KEY 独立,
+# 生产必须显式配置。任意字符串即可, 内部会派生成 Fernet 密钥。
+EASYAUTH_FIELD_ENCRYPTION_KEY = required_env(
+    "EASYAUTH_FIELD_ENCRYPTION_KEY",
+    dev_default="easyauth-insecure-field-encryption-local-dev-only",
+)
 ALLOWED_HOSTS = os.environ.get("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",")
 
 INSTALLED_APPS: list[str] = [
@@ -172,6 +178,13 @@ REST_FRAMEWORK: dict[str, list[str]] = {
 }
 
 OAUTH2_PROVIDER_APPLICATION_MODEL = "oauth2_provider.Application"
+# django-oauth-toolkit 的 AccessToken.token 列明文落库(库契约, 无法在本仓哈希化);
+# 用较短的有效期收窄泄露 token 的可用窗口, client-credentials 客户端可自行重新获取。
+OAUTH2_PROVIDER: dict[str, int] = {
+    "ACCESS_TOKEN_EXPIRE_SECONDS": int(
+        os.environ.get("EASYAUTH_OAUTH_ACCESS_TOKEN_EXPIRE_SECONDS", "3600"),
+    ),
+}
 EASYAUTH_AUTHENTIK_OIDC_ISSUER = os.environ.get(
     "EASYAUTH_AUTHENTIK_OIDC_ISSUER",
     "https://authentik.localhost/application/o/easyauth/",

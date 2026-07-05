@@ -4,8 +4,12 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, ClassVar, Final, override
 
 from django.conf import settings
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
+
+from easyauth.config.crypto import EncryptedCharField
+from easyauth.config.net import InsecureUrlError, require_secure_url
 
 if TYPE_CHECKING:
     from datetime import date, datetime
@@ -27,8 +31,9 @@ class IntegrationSettings(models.Model):
         max_length=512,
         blank=True,
     )
-    authentik_api_token: models.CharField[str, str] = models.CharField(
-        max_length=512,
+    # 高权限管理 token 静态加密落库; 密文比明文长, 需更大的列宽。
+    authentik_api_token: EncryptedCharField = EncryptedCharField(
+        max_length=1024,
         blank=True,
     )
     updated_by: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
@@ -47,6 +52,17 @@ class IntegrationSettings(models.Model):
     @override
     def __str__(self) -> str:
         return f"integration-settings:{self.id}"
+
+    @override
+    def clean(self) -> None:
+        super().clean()
+        base_url = self.authentik_base_url.strip()
+        if base_url:
+            # 管理 token 以 Authorization: Bearer 头发送, base_url 明文 http 会导致 token 明文传输。
+            try:
+                require_secure_url(base_url, allow_local_http=True)
+            except InsecureUrlError as error:
+                raise ValidationError({"authentik_base_url": str(error)}) from error
 
     @classmethod
     def load(cls) -> IntegrationSettings:
@@ -71,10 +87,13 @@ def authentik_runtime_config() -> AuthentikRuntimeConfig:
     override_api_token = row.authentik_api_token.strip() if row is not None else ""
     env_base_url = str(getattr(settings, "EASYAUTH_AUTHENTIK_BASE_URL", "")).strip()
     env_api_token = str(getattr(settings, "EASYAUTH_AUTHENTIK_API_TOKEN", "")).strip()
-    base_url = override_base_url or env_base_url
+    base_url = (override_base_url or env_base_url).rstrip("/")
     api_token = override_api_token or env_api_token
+    if base_url:
+        # 数据库覆盖与环境变量两条路径都必须校验; 否则 http:// 会让管理 token 明文传输。
+        require_secure_url(base_url, allow_local_http=True)
     return AuthentikRuntimeConfig(
-        base_url=base_url.rstrip("/"),
+        base_url=base_url,
         api_token=api_token,
         source_slug=str(
             getattr(settings, "EASYAUTH_AUTHENTIK_DINGTALK_SOURCE_SLUG", "dingtalk"),

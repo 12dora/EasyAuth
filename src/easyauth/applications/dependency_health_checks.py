@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING, Final, Protocol, cast
 from django.utils import timezone
 
 from easyauth.accounts.models import DingTalkDirectorySyncState
-from easyauth.applications.dependency_health import DependencyHealthService
+from easyauth.applications.dependency_health import DependencyHealthService, redact_summary
 from easyauth.applications.health_models import (
     DEPENDENCY_AUTHENTIK,
     DEPENDENCY_AUTHENTIK_DIRECTORY,
@@ -64,11 +64,13 @@ def run_dependency_health_checks() -> tuple[DependencyHealthItem, ...]:
     )
     now = timezone.now()
     for result in results:
+        # 写入边界脱敏: 原始 summary/error_summary 可能内嵌 broker 连接串等凭据,
+        # 必须在落库前剥离, 不能只在展示时用子串黑名单兜底。
         _ = DependencyHealthSnapshot.objects.create(
             dependency=result.dependency,
             status=result.status,
-            summary=result.summary,
-            error_summary=result.error_summary,
+            summary=redact_summary(result.summary),
+            error_summary=redact_summary(result.error_summary),
             checked_at=now,
         )
     return DependencyHealthService.latest_items()

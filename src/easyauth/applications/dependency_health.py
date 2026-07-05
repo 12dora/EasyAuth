@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
@@ -101,6 +102,19 @@ def _item_for_snapshot(
         error_summary=_safe_summary(snapshot.error_summary),
         app_key=None if app is None else app.app_key,
     )
+
+
+# 从任意 URL 里剥离 userinfo(user:pass@), 覆盖 redis://:pw@host 这类不含 "password"
+# 字面子串的凭据; 以及 Authorization: Bearer <token> 形态。
+_URL_CREDENTIALS_RE: Final = re.compile(r"([a-zA-Z][a-zA-Z0-9+.\-]*://)[^/@\s]*@")
+_BEARER_RE: Final = re.compile(r"(?i)(bearer\s+)\S+")
+
+
+def redact_summary(value: str) -> str:
+    # 写入边界脱敏: 结构化剥离 URL 凭据与 Bearer token, 不依赖朴素子串黑名单,
+    # 保证原始异常/连接串里的密钥不会明文落库。
+    redacted = _URL_CREDENTIALS_RE.sub(r"\1", value)
+    return _BEARER_RE.sub(r"\1[已隐藏]", redacted)
 
 
 def _safe_summary(value: str) -> str:

@@ -15,6 +15,7 @@ from easyauth.applications.integration_settings import (
     authentik_runtime_config,
 )
 from easyauth.audit.services import AuditRecord, AuditService
+from easyauth.config.net import InsecureUrlError, require_secure_url
 
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
@@ -33,8 +34,12 @@ class IntegrationSettingsPayload(BaseModel):
     @classmethod
     def validate_base_url(cls, value: str) -> str:
         normalized = value.strip().rstrip("/")
-        if normalized and not normalized.startswith(("http://", "https://")):
-            raise ValueError(AUTHENTIK_BASE_URL_INVALID_MESSAGE)
+        if normalized:
+            # 管理 token 走 Authorization: Bearer, base_url 必须 https(仅本地 localhost 允许 http)。
+            try:
+                require_secure_url(normalized, allow_local_http=True)
+            except InsecureUrlError as error:
+                raise ValueError(AUTHENTIK_BASE_URL_INVALID_MESSAGE) from error
         return normalized
 
     @field_validator("authentik_api_token")

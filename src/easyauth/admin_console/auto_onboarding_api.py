@@ -7,8 +7,10 @@ from http import HTTPStatus
 from json import JSONDecodeError
 from typing import TYPE_CHECKING, ClassVar, Final
 from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
+from django.conf import settings
 from django.db import transaction
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -25,6 +27,12 @@ from easyauth.applications.permission_templates import (
     parse_template_format,
 )
 from easyauth.audit.services import AuditRecord, AuditService
+from easyauth.config.net import (
+    BlockedHostError,
+    InsecureUrlError,
+    assert_public_host,
+    require_secure_url,
+)
 
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
@@ -59,8 +67,11 @@ class AutoOnboardingPayload(BaseModel):
     @classmethod
     def validate_base_url(cls, value: str) -> str:
         normalized = value.strip().rstrip("/")
-        if not normalized.startswith(("http://", "https://")):
-            raise ValueError(BASE_URL_INVALID_MESSAGE)
+        # 强制 https(仅本地开发允许 http://localhost); 明文 http 打内网会泄露 descriptor token。
+        try:
+            require_secure_url(normalized, allow_local_http=settings.DEBUG)
+        except InsecureUrlError as error:
+            raise ValueError(str(error)) from error
         return normalized
 
     @field_validator("app_key")
@@ -193,6 +204,17 @@ def _result(
 
 
 def _fetch_descriptor(base_url: str, descriptor_token: str | None) -> dict[str, JsonValue]:
+    # 取回前在 fetch 边界(而非仅解析边界)校验主机, 关闭 DNS-rebinding 的 TOCTOU 窗口:
+    # 拒绝解析到内网/环回/链路本地(含云元数据)的目标, 防止 SSRF。
+    hostname = urlparse(base_url).hostname or ""
+    try:
+        assert_public_host(hostname, allow_local=settings.DEBUG)
+    except BlockedHostError as error:
+        raise AutoOnboardingError(
+            ErrorCode.SEMANTIC_VALIDATION_ERROR,
+            str(error),
+            HTTPStatus.UNPROCESSABLE_ENTITY,
+        ) from error
     headers = {"Accept": "application/json"}
     if descriptor_token:
         headers["Authorization"] = f"Bearer {descriptor_token}"

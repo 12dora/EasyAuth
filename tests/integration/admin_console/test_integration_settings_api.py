@@ -58,6 +58,47 @@ def test_integration_settings_put_sets_override_and_hides_token() -> None:
     assert row.authentik_api_token == "ak-secret-token"  # noqa: S105 - 测试用假 token.
 
 
+def test_integration_settings_token_is_encrypted_at_rest() -> None:
+    # Given: 管理员保存了 Authentik 管理 token。
+    client = _logged_in_superuser("settings-encrypt-admin")
+    response = client.put(
+        SETTINGS_API_URL,
+        data={
+            "authentik_base_url": "https://auth.jiefakj.com/",
+            "authentik_api_token": "ak-plaintext-secret",
+        },
+        content_type="application/json",
+    )
+    assert response.status_code == HTTPStatus.OK
+
+    # Then: 数据库列里是密文, 而 ORM 读取透明解密回明文。
+    from django.db import connection  # noqa: PLC0415 - 用例内直读原始列.
+
+    table = IntegrationSettings._meta.db_table  # noqa: SLF001 - 读取列名.
+    with connection.cursor() as cursor:
+        cursor.execute(f"SELECT authentik_api_token FROM {table} WHERE id = 1")  # noqa: S608
+        stored = cursor.fetchone()[0]
+    assert stored != "ak-plaintext-secret"
+    assert "ak-plaintext-secret" not in stored
+    assert IntegrationSettings.load().authentik_api_token == "ak-plaintext-secret"
+
+
+def test_integration_settings_rejects_plaintext_http_base_url() -> None:
+    # Given: 管理员尝试把 base_url 配成明文 http 的非本地地址。
+    client = _logged_in_superuser("settings-http-admin")
+
+    # When: 保存该配置。
+    response = client.put(
+        SETTINGS_API_URL,
+        data={"authentik_base_url": "http://auth.internal.example"},
+        content_type="application/json",
+    )
+
+    # Then: 被拒绝, 不落库明文 http, 避免管理 token 明文传输。
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert IntegrationSettings.load().authentik_base_url == ""
+
+
 def test_integration_settings_put_keeps_token_when_omitted() -> None:
     client = _logged_in_superuser("settings-keep-admin")
     row = IntegrationSettings.load()

@@ -119,7 +119,7 @@ def test_auto_onboarding_creates_app_and_imports_manifest(
 
     response = client.post(
         AUTO_ONBOARDING_URL,
-        data={"base_url": "http://downstream.example", "app_key": "demoapp"},
+        data={"base_url": "https://downstream.example", "app_key": "demoapp"},
         content_type="application/json",
     )
 
@@ -146,12 +146,12 @@ def test_auto_onboarding_is_idempotent_for_same_content(
 
     first = client.post(
         AUTO_ONBOARDING_URL,
-        data={"base_url": "http://downstream.example", "app_key": "demoapp"},
+        data={"base_url": "https://downstream.example", "app_key": "demoapp"},
         content_type="application/json",
     )
     second = client.post(
         AUTO_ONBOARDING_URL,
-        data={"base_url": "http://downstream.example", "app_key": "demoapp"},
+        data={"base_url": "https://downstream.example", "app_key": "demoapp"},
         content_type="application/json",
     )
 
@@ -170,7 +170,7 @@ def test_auto_onboarding_rejects_same_version_different_content(
     _patch_descriptor(monkeypatch, _descriptor(_manifest()))
     first = client.post(
         AUTO_ONBOARDING_URL,
-        data={"base_url": "http://downstream.example", "app_key": "demoapp"},
+        data={"base_url": "https://downstream.example", "app_key": "demoapp"},
         content_type="application/json",
     )
     assert first.status_code == HTTPStatus.OK
@@ -181,7 +181,7 @@ def test_auto_onboarding_rejects_same_version_different_content(
     )
     conflict = client.post(
         AUTO_ONBOARDING_URL,
-        data={"base_url": "http://downstream.example", "app_key": "demoapp"},
+        data={"base_url": "https://downstream.example", "app_key": "demoapp"},
         content_type="application/json",
     )
 
@@ -194,7 +194,7 @@ def test_auto_onboarding_imports_new_version(monkeypatch: pytest.MonkeyPatch) ->
     assert (
         client.post(
             AUTO_ONBOARDING_URL,
-            data={"base_url": "http://downstream.example", "app_key": "demoapp"},
+            data={"base_url": "https://downstream.example", "app_key": "demoapp"},
             content_type="application/json",
         ).status_code
         == HTTPStatus.OK
@@ -208,7 +208,7 @@ def test_auto_onboarding_imports_new_version(monkeypatch: pytest.MonkeyPatch) ->
     )
     upgraded = client.post(
         AUTO_ONBOARDING_URL,
-        data={"base_url": "http://downstream.example", "app_key": "demoapp"},
+        data={"base_url": "https://downstream.example", "app_key": "demoapp"},
         content_type="application/json",
     )
 
@@ -225,12 +225,59 @@ def test_auto_onboarding_rejects_app_key_mismatch(monkeypatch: pytest.MonkeyPatc
 
     response = client.post(
         AUTO_ONBOARDING_URL,
-        data={"base_url": "http://downstream.example", "app_key": "otherapp"},
+        data={"base_url": "https://downstream.example", "app_key": "otherapp"},
         content_type="application/json",
     )
 
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
     assert not App.objects.filter(app_key="otherapp").exists()
+
+
+def test_auto_onboarding_rejects_plaintext_http_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Given: 描述符拉取被隔离, 管理员提供明文 http 的非本地 base_url。
+    client = _logged_in_superuser("auto-onboard-http-admin")
+    _patch_descriptor(monkeypatch, _descriptor(_manifest()))
+
+    # When: 触发自动接入。
+    response = client.post(
+        AUTO_ONBOARDING_URL,
+        data={"base_url": "http://downstream.example", "app_key": "demoapp"},
+        content_type="application/json",
+    )
+
+    # Then: 明文 http 在解析阶段即被拒绝, 不发起任何请求。
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert not App.objects.filter(app_key="demoapp").exists()
+
+
+def test_auto_onboarding_rejects_private_host_before_fetch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: base_url 是合法 https, 但主机解析到环回地址 (SSRF 打内网)。
+    client = _logged_in_superuser("auto-onboard-ssrf-admin")
+    called = {"urlopen": False}
+
+    def _fake_getaddrinfo(_host: str, _port: object, *_args: object, **_kwargs: object) -> list:
+        return [(2, 1, 6, "", ("127.0.0.1", 0))]
+
+    def _fake_urlopen(*_args: object, **_kwargs: object) -> object:
+        called["urlopen"] = True
+        raise AssertionError("SSRF 防护必须在发起请求前拦截")
+
+    monkeypatch.setattr("easyauth.config.net.socket.getaddrinfo", _fake_getaddrinfo)
+    monkeypatch.setattr(auto_onboarding_api, "urlopen", _fake_urlopen)
+
+    # When: 触发自动接入。
+    response = client.post(
+        AUTO_ONBOARDING_URL,
+        data={"base_url": "https://metadata.internal.example", "app_key": "demoapp"},
+        content_type="application/json",
+    )
+
+    # Then: 在发起网络请求前就被拦截, urlopen 从未被调用。
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert called["urlopen"] is False
+    assert not App.objects.filter(app_key="demoapp").exists()
 
 
 def test_auto_onboarding_requires_superuser() -> None:
@@ -243,7 +290,7 @@ def test_auto_onboarding_requires_superuser() -> None:
 
     response = client.post(
         AUTO_ONBOARDING_URL,
-        data={"base_url": "http://downstream.example", "app_key": "demoapp"},
+        data={"base_url": "https://downstream.example", "app_key": "demoapp"},
         content_type="application/json",
     )
 
