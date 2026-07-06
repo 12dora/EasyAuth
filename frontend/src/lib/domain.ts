@@ -401,6 +401,59 @@ export interface PortalRequestCatalog {
   snapshot_version?: string;
 }
 
+/** 审批模板: 对齐后端 approval_templates_api._template_item 序列化字段。app_key 为空串表示平台共用模板。 */
+export interface ApprovalTemplateItem {
+  id: number;
+  app_key: string;
+  key: string;
+  name: string;
+  dingtalk_process_code: string;
+  form_schema?: JsonObject;
+  form_mapping?: JsonObject;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface ApprovalTemplateTestResult {
+  instance_id: string;
+  status: string;
+  dingtalk_process_instance_id: string;
+}
+
+/** 审批实例运营行: 对齐后端 approval_instances_api._instance_item 序列化字段。 */
+export interface ApprovalInstanceRow {
+  instance_id: string;
+  app_key: string;
+  template_key: string;
+  biz_key: string;
+  status: "created" | "submitted" | "approved" | "rejected" | "canceled" | "failed" | string;
+  originator_user_id: string;
+  dingtalk_process_instance_id: string;
+  delivery_state: "" | "pending" | "delivered" | "failed" | "skipped" | string;
+  delivery_attempts: number;
+  delivery_last_error: string;
+  last_error: string;
+  created_at: string;
+  completed_at: string | null;
+}
+
+/** 应用 Webhook 配置: secret 明文只在轮换/首次保存的 PUT 响应中出现一次。 */
+export interface WebhookConfigItem {
+  enabled: boolean;
+  secret_configured: boolean;
+  approval_callback_url: string;
+  handover_url: string;
+  onboard_url: string;
+  updated_by?: string;
+  updated_at?: string | null;
+  secret?: string;
+}
+
+export interface WebhookConfigPayload {
+  webhook_config: WebhookConfigItem | null;
+}
+
 export interface OperationRow {
   id?: number;
   user_id?: string;

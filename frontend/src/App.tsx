@@ -8,6 +8,8 @@ import { PageHeader } from "./components/PageHeader";
 import { Topbar } from "./components/shell/Topbar";
 import { EmptyState } from "./components/ui/EmptyState";
 import { useI18n } from "./i18n/I18nProvider";
+import { ApprovalInstancesPage } from "./pages/console/ApprovalInstancesPage";
+import { ApprovalTemplatesPage } from "./pages/console/ApprovalTemplatesPage";
 import { ConsoleAppList } from "./pages/console/ConsoleAppList";
 import { ConsoleAppWorkspace } from "./pages/console/ConsoleAppWorkspace";
 import { ConsoleSettingsPage } from "./pages/console/ConsoleSettingsPage";
@@ -72,6 +74,8 @@ export function App({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUse
         <Route path="/console/apps/:appKey" element={<ConsoleAppWorkspace />} />
         <Route path="/console/teams" element={<ConsoleTeamList />} />
         <Route path="/console/teams/:teamId" element={<ConsoleTeamDetail />} />
+        <Route path="/console/approval-templates" element={<ApprovalTemplatesPage />} />
+        <Route path="/console/operations/approval-instances" element={<ApprovalInstancesPage />} />
         <Route path="/console/operations/:section" element={<OperationsPage />} />
         <Route path="/console/operations" element={<Navigate to="/console/operations/access-requests" replace />} />
         <Route path="/console/settings" element={<ConsoleSettingsPage />} />

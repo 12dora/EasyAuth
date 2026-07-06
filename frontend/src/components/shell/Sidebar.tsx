@@ -29,10 +29,15 @@ const CONSOLE_GROUPS: NavGroupSpec[] = [
     links: [{ to: "/console/teams", labelKey: "nav.console.teams" }],
   },
   {
+    labelKey: "nav.console.approvalCenter",
+    links: [{ to: "/console/approval-templates", labelKey: "nav.console.approvalTemplates" }],
+  },
+  {
     labelKey: "nav.console.operations",
     links: [
       { to: "/console/operations/access-requests", labelKey: "nav.console.accessRequests" },
       { to: "/console/operations/access-grants", labelKey: "nav.console.accessGrants" },
+      { to: "/console/operations/approval-instances", labelKey: "nav.console.approvalInstances" },
       { to: "/console/operations/dependency-health", labelKey: "nav.console.dependencyHealth" },
     ],
   },

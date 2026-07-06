@@ -23,8 +23,9 @@ import { MatrixTab } from "./workspace/tabs/MatrixTab";
 import { AppBasicInfoDialog, type AppPatchPayload, OverviewTab } from "./workspace/tabs/OverviewTab";
 import { QueryTestTab } from "./workspace/tabs/QueryTestTab";
 import { RulesTab } from "./workspace/tabs/RulesTab";
+import { WebhookTab } from "./workspace/tabs/WebhookTab";
 
-type WorkspaceTab = "overview" | "catalog" | "matrix" | "managed-scope" | "rules" | "manifest" | "credentials" | "test" | "guide";
+type WorkspaceTab = "overview" | "catalog" | "matrix" | "managed-scope" | "rules" | "manifest" | "credentials" | "webhook" | "test" | "guide";
 
 const TABS: Array<{ key: WorkspaceTab; labelKey: MessageKey }> = [
   { key: "overview", labelKey: "workspace.tab.overview" },
@@ -34,6 +35,7 @@ const TABS: Array<{ key: WorkspaceTab; labelKey: MessageKey }> = [
   { key: "rules", labelKey: "workspace.tab.rules" },
   { key: "manifest", labelKey: "workspace.tab.manifest" },
   { key: "credentials", labelKey: "workspace.tab.credentials" },
+  { key: "webhook", labelKey: "workspace.tab.webhook" },
   { key: "test", labelKey: "workspace.tab.test" },
   { key: "guide", labelKey: "workspace.tab.guide" },
 ];
@@ -161,6 +163,7 @@ export function ConsoleAppWorkspace() {
       {activeTab === "rules" ? <RulesTab appKey={appKey} /> : null}
       {activeTab === "manifest" ? <ManifestTab appKey={appKey} /> : null}
       {activeTab === "credentials" ? <CredentialsTab appKey={appKey} /> : null}
+      {activeTab === "webhook" ? <WebhookTab appKey={appKey} /> : null}
       {activeTab === "test" ? <QueryTestTab appKey={appKey} /> : null}
       {activeTab === "guide" ? <GuideTab appKey={appKey} /> : null}
       </div>
