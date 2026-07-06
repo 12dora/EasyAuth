@@ -1,0 +1,235 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { afterEach, describe, expect, test, vi } from "vitest";
+
+import { HandoverTaskDetail } from "./HandoverTaskDetail";
+
+const DETAIL_PAYLOAD = {
+  handover_task: {
+    id: 1,
+    kind: "offboard",
+    status: "in_progress",
+    subject: {
+      user_id: "u-1",
+      name: "张三",
+      email: "zhangsan@example.com",
+      department: "销售部",
+      status: "departed",
+    },
+    reason: "离职",
+    created_by: "admin",
+    created_at: "2026-07-01T09:00:00Z",
+    updated_at: "2026-07-01T09:00:00Z",
+    app_actions: [
+      {
+        id: 11,
+        app_key: "easytrade",
+        app_name: "EasyTrade",
+        status: "done",
+        to_user: { user_id: "u-9", name: "王五" },
+        policy: {},
+        preview_payload: {},
+        result_payload: {},
+        attempts: 1,
+        last_error: "",
+      },
+      {
+        id: 12,
+        app_key: "crm",
+        app_name: "CRM",
+        status: "pending",
+        to_user: null,
+        policy: {},
+        preview_payload: {},
+        result_payload: {},
+        attempts: 0,
+        last_error: "",
+      },
+      {
+        id: 13,
+        app_key: "wiki",
+        app_name: "Wiki",
+        status: "failed",
+        to_user: { user_id: "u-9", name: "王五" },
+        policy: {},
+        preview_payload: {},
+        result_payload: {},
+        attempts: 2,
+        last_error: "下游服务超时",
+      },
+    ],
+    team_items: [],
+    transfer_plan: null,
+  },
+};
+
+const GRANT_ITEMS_PAYLOAD = {
+  data: [
+    {
+      id: 21,
+      app_key: "crm",
+      kind: "permission",
+      key: "customer.view",
+      name: "查看客户",
+      scope_key: "GLOBAL",
+      grant_type: "permanent",
+      grant_expires_at: null,
+      selected: true,
+      status: "pending",
+    },
+  ],
+};
+
+function buildFetchMock() {
+  return vi.fn<typeof fetch>(async (input, init) => {
+    const url = String(input);
+    const method = init?.method ?? "GET";
+    if (url === "/console/api/v1/lifecycle/handover-tasks/1/grant-items") {
+      return jsonResponse(GRANT_ITEMS_PAYLOAD);
+    }
+    if (url === "/console/api/v1/lifecycle/handover-tasks/1") {
+      return jsonResponse(DETAIL_PAYLOAD);
+    }
+    if (url === "/console/api/v1/lifecycle/handover-tasks/1/actions/crm/preview" && method === "POST") {
+      return jsonResponse({
+        app_action: {
+          ...DETAIL_PAYLOAD.handover_task.app_actions[1],
+          status: "previewed",
+          preview_payload: { assets: [{ type: "customer", count: 23, label: "个客户" }] },
+        },
+      });
+    }
+    if (url === "/console/api/v1/lifecycle/handover-tasks/1/actions/wiki/preview" && method === "POST") {
+      return jsonResponse({
+        app_action: {
+          ...DETAIL_PAYLOAD.handover_task.app_actions[2],
+          status: "previewed",
+          preview_payload: { assets: [], hook: "skipped" },
+        },
+      });
+    }
+    if (url.startsWith("/console/api/v1/users?q=")) {
+      return jsonResponse({ data: [] });
+    }
+    throw new Error(`Unexpected fetch: ${method} ${url}`);
+  });
+}
+
+describe("HandoverTaskDetail", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  test("工单总览与应用状态卡使用业务语言描述各应用进度", async () => {
+    vi.stubGlobal("fetch", buildFetchMock());
+
+    renderDetail();
+
+    expect(await screen.findByText("离职交接 · 张三")).toBeVisible();
+    // 已交接卡: 一句人话 + 状态徽标。
+    expect(screen.getByText("已交接给 王五")).toBeVisible();
+    // 待交接卡: 空状态文案不带告警语气。
+    expect(screen.getByText("暂未指定接收人，数据保持原状，可稍后处理")).toBeVisible();
+    // 失败卡: 一句人话失败原因 + 重试按钮; 技术细节收进「详情」。
+    expect(screen.getAllByText("下游服务超时").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "重试" })).toBeVisible();
+    expect(screen.getAllByText("详情").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "取消交接单" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "继续交接" })).toBeVisible();
+  });
+
+  test("向导选应用与选接收人: 统一接收人应用到所选应用后保存", async () => {
+    const fetchMock = buildFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderDetail();
+
+    await user.click(await screen.findByRole("button", { name: "继续交接" }));
+    const dialog = await screen.findByRole("dialog");
+    // 第一步只列出待处理(待交接/交接失败)的应用, 已交接的 EasyTrade 不出现。
+    expect(within(dialog).getByText("CRM")).toBeVisible();
+    expect(within(dialog).getByText("Wiki")).toBeVisible();
+    expect(within(dialog).queryByText("EasyTrade")).toBeNull();
+    expect(within(dialog).getByText("已选 2 个应用")).toBeVisible();
+
+    await user.click(within(dialog).getByRole("button", { name: "下一步" }));
+    await user.type(within(dialog).getByRole("combobox", { name: "统一接收人" }), "u-9");
+    await user.click(within(dialog).getByRole("button", { name: "应用到所选应用" }));
+    await user.click(within(dialog).getByRole("button", { name: "下一步" }));
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([input, init]) => String(input) === "/console/api/v1/lifecycle/handover-tasks/1" && init?.method === "PATCH",
+      );
+      expect(JSON.parse(String(patchCall?.[1]?.body))).toEqual({
+        app_actions: [
+          { app_key: "crm", to_user_id: "u-9", release_to_pool: false },
+          { app_key: "wiki", to_user_id: "u-9", release_to_pool: false },
+        ],
+      });
+    });
+    // 保存成功后进入选权限步。
+    expect(await within(dialog).findByText("查看客户")).toBeVisible();
+  });
+
+  test("向导选权限与预览数据: 保存勾选后逐应用生成预览", async () => {
+    const fetchMock = buildFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderDetail();
+
+    await user.click(await screen.findByRole("button", { name: "继续交接" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "下一步" }));
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "下一步" })).toBeEnabled());
+    await user.click(within(dialog).getByRole("button", { name: "下一步" }));
+
+    // 选权限步: 默认全选, 取消勾选后保存。
+    const grantCheckbox = await within(dialog).findByRole("checkbox", { name: /查看客户/ });
+    expect(grantCheckbox).toBeChecked();
+    await user.click(grantCheckbox);
+    await user.click(within(dialog).getByRole("button", { name: "下一步" }));
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([input, init]) =>
+          String(input) === "/console/api/v1/lifecycle/handover-tasks/1/grant-items" && init?.method === "PATCH",
+      );
+      expect(JSON.parse(String(patchCall?.[1]?.body))).toEqual({ items: [{ id: 21, selected: false }] });
+    });
+
+    // 预览数据步: 有数据的应用展示格式化资产, 无钩子的应用提示无需数据交接。
+    expect(await within(dialog).findByText(/23 个客户/)).toBeVisible();
+    expect(await within(dialog).findByText("该应用无需数据交接。")).toBeVisible();
+  });
+});
+
+function renderDetail() {
+  const client = new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+      mutations: { retry: false },
+    },
+  });
+
+  render(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={["/console/lifecycle/handover-tasks/1"]}>
+        <Routes>
+          <Route path="/console/lifecycle/handover-tasks/:taskId" element={<HandoverTaskDetail />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+function jsonResponse(payload: unknown, status = 200) {
+  return new Response(JSON.stringify(payload), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
+}

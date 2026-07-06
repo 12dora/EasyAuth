@@ -16,6 +16,10 @@ import { ConsoleSettingsPage } from "./pages/console/ConsoleSettingsPage";
 import { ConsoleTeamDetail } from "./pages/console/ConsoleTeamDetail";
 import { ConsoleTeamList } from "./pages/console/ConsoleTeamList";
 import { OperationsPage } from "./pages/console/OperationsPage";
+import { ConsolePeopleList } from "./pages/console/lifecycle/ConsolePeopleList";
+import { HandoverTaskDetail } from "./pages/console/lifecycle/HandoverTaskDetail";
+import { HandoverTaskList } from "./pages/console/lifecycle/HandoverTaskList";
+import { OnboardingPage } from "./pages/console/lifecycle/OnboardingPage";
 import { AppOnboardingWizard } from "./pages/console/onboarding/AppOnboardingWizard";
 import { PortalPage } from "./pages/portal/PortalPage";
 
@@ -74,6 +78,10 @@ export function App({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUse
         <Route path="/console/apps/:appKey" element={<ConsoleAppWorkspace />} />
         <Route path="/console/teams" element={<ConsoleTeamList />} />
         <Route path="/console/teams/:teamId" element={<ConsoleTeamDetail />} />
+        <Route path="/console/people" element={<ConsolePeopleList />} />
+        <Route path="/console/lifecycle/handover-tasks" element={<HandoverTaskList />} />
+        <Route path="/console/lifecycle/handover-tasks/:taskId" element={<HandoverTaskDetail />} />
+        <Route path="/console/lifecycle/onboarding" element={<OnboardingPage />} />
         <Route path="/console/approval-templates" element={<ApprovalTemplatesPage />} />
         <Route path="/console/operations/approval-instances" element={<ApprovalInstancesPage />} />
         <Route path="/console/operations/:section" element={<OperationsPage />} />

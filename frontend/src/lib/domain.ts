@@ -454,6 +454,142 @@ export interface WebhookConfigPayload {
   webhook_config: WebhookConfigItem | null;
 }
 
+/** M4 生命周期: 人员列表行, 对齐后端 users_api._person_item 序列化字段。 */
+export interface PersonRow {
+  user_id: string;
+  name: string;
+  email: string;
+  department: string;
+  status: "active" | "disabled" | "departed" | string;
+  department_changed_at: string | null;
+  open_handover_task_id: number | null;
+  open_handover_kind: "offboard" | "transfer" | "";
+}
+
+export interface HandoverUserRef {
+  user_id: string;
+  name: string;
+}
+
+export interface HandoverSubject {
+  user_id: string;
+  name: string;
+  email: string;
+  department: string;
+  status: string;
+}
+
+/** 交接单列表行: 对齐后端 lifecycle_api._task_item。 */
+export interface HandoverTaskRow {
+  id: number;
+  kind: "offboard" | "transfer" | string;
+  status: "pending" | "in_progress" | "completed" | "cancelled" | string;
+  subject: HandoverSubject;
+  reason: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+}
+
+/** 应用交接项: 对齐后端 lifecycle_api._action_item。 */
+export interface HandoverAppActionRow {
+  id: number;
+  app_key: string;
+  app_name: string;
+  status: "pending" | "previewed" | "executing" | "done" | "failed" | "skipped" | string;
+  to_user: HandoverUserRef | null;
+  policy: JsonObject;
+  preview_payload: JsonObject;
+  result_payload: JsonObject;
+  attempts: number;
+  last_error: string;
+}
+
+/** 团队交接项: 对齐后端 lifecycle_api._team_item。 */
+export interface HandoverTeamItemRow {
+  id: number;
+  team_id: number;
+  team_name: string;
+  action: "pending" | "assign_leader" | "deactivate" | string;
+  status: "pending" | "done" | "skipped" | string;
+  to_user: HandoverUserRef | null;
+}
+
+export interface TransferGrantDiffEntry {
+  key: string;
+  selected?: boolean;
+}
+
+export interface TransferGrantDiff {
+  revoke?: TransferGrantDiffEntry[];
+  add?: TransferGrantDiffEntry[];
+  keep?: TransferGrantDiffEntry[];
+}
+
+/** 转岗权限调整方案: 对齐后端 lifecycle_api._plan_item。 */
+export interface TransferPlanItem {
+  template_id: number | null;
+  template_name: string;
+  grant_diff: TransferGrantDiff;
+  confirmed_at: string | null;
+}
+
+export interface HandoverTaskDetailItem extends HandoverTaskRow {
+  app_actions: HandoverAppActionRow[];
+  team_items: HandoverTeamItemRow[];
+  transfer_plan: TransferPlanItem | null;
+}
+
+export interface HandoverTaskPayload {
+  handover_task?: HandoverTaskDetailItem;
+}
+
+/** 交接权限勾选项: 对齐后端 lifecycle_api._grant_item。 */
+export interface HandoverGrantItemRow {
+  id: number;
+  app_key: string;
+  kind: "group" | "permission" | string;
+  key: string;
+  name: string;
+  scope_key: string;
+  grant_type: string;
+  grant_expires_at: string | null;
+  selected: boolean;
+  status: "pending" | "done" | "skipped" | string;
+}
+
+/** 岗位模板项(读取形态): 对齐后端 lifecycle_api._template_item 的 items 元素。 */
+export interface OnboardingTemplateItemRow {
+  id: number;
+  app_key: string;
+  kind: "group" | "permission" | string;
+  key: string;
+  name: string;
+  scope_key: string;
+  grant_type: string;
+  duration_days: number | null;
+}
+
+export interface OnboardingTemplateRow {
+  id: number;
+  name: string;
+  description: string;
+  is_active: boolean;
+  items: OnboardingTemplateItemRow[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface OnboardingTemplatePayload {
+  onboarding_template?: OnboardingTemplateRow;
+}
+
+export interface OnboardResult {
+  user_id: string;
+  template: string;
+  granted_app_count: number;
+}
+
 export interface OperationRow {
   id?: number;
   user_id?: string;

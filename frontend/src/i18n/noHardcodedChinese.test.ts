@@ -30,6 +30,11 @@ const GUARDED_FILES = [
   "pages/console/workspace/tabs/QueryTestTab.tsx",
   "components/SecretDialog.tsx",
   "pages/console/workspace/credentials/CreateCredentialForm.tsx",
+  "pages/console/lifecycle/ConsolePeopleList.tsx",
+  "pages/console/lifecycle/HandoverTaskList.tsx",
+  "pages/console/lifecycle/HandoverTaskDetail.tsx",
+  "pages/console/lifecycle/HandoverWizard.tsx",
+  "pages/console/lifecycle/OnboardingPage.tsx",
 ] as const;
 
 const CJK_IDEOGRAPH = /[一-鿿]/;

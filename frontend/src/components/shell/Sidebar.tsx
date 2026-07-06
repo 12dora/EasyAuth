@@ -26,7 +26,12 @@ const CONSOLE_GROUPS: NavGroupSpec[] = [
   },
   {
     labelKey: "nav.console.organization",
-    links: [{ to: "/console/teams", labelKey: "nav.console.teams" }],
+    links: [
+      { to: "/console/teams", labelKey: "nav.console.teams" },
+      { to: "/console/people", labelKey: "nav.console.people" },
+      { to: "/console/lifecycle/handover-tasks", labelKey: "nav.console.handoverTasks" },
+      { to: "/console/lifecycle/onboarding", labelKey: "nav.console.onboarding" },
+    ],
   },
   {
     labelKey: "nav.console.approvalCenter",
