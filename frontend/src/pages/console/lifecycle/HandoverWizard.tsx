@@ -112,12 +112,13 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
   }, [grantItemsQuery.data]);
 
   const saveReceiversMutation = useMutation({
-    mutationFn: () =>
-      apiRequest(`/console/api/v1/lifecycle/handover-tasks/${task.id}`, {
+    mutationFn: (override?: Record<string, ReceiverDraft>) => {
+      const effective = override ?? receivers;
+      return apiRequest(`/console/api/v1/lifecycle/handover-tasks/${task.id}`, {
         method: "PATCH",
         body: {
           app_actions: selectedApps.map((action) => {
-            const draft = receivers[action.app_key] ?? { toUserId: "", release: false };
+            const draft = effective[action.app_key] ?? { toUserId: "", release: false };
             return {
               app_key: action.app_key,
               to_user_id: draft.release ? null : draft.toUserId.trim() || null,
@@ -125,7 +126,8 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
             };
           }),
         } satisfies JsonObject,
-      }),
+      });
+    },
     onSuccess: () => {
       // 改接收人会使旧预览作废(服务端同样回退状态), 本地预览结果一并重置。
       setPreviewState({});
@@ -216,7 +218,26 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
 
   const goNext = () => {
     if (step === 1) {
-      saveReceiversMutation.mutate(undefined, { onSuccess: () => setStep(2) });
+      // 防漏: 已在「统一接收人」选了人但忘点「应用到所选应用」时, 下一步自动
+      // 把该接收人补到所有还没指定接收人/释放策略的应用上。
+      const unified = unifiedReceiver.trim();
+      let effective = receivers;
+      if (unified) {
+        const merged = { ...receivers };
+        let changed = false;
+        for (const appKey of selectedAppKeys) {
+          const draft = merged[appKey];
+          if (!draft?.release && !draft?.toUserId?.trim()) {
+            merged[appKey] = { toUserId: unified, release: false };
+            changed = true;
+          }
+        }
+        if (changed) {
+          effective = merged;
+          setReceivers(merged);
+        }
+      }
+      saveReceiversMutation.mutate(effective, { onSuccess: () => setStep(2) });
       return;
     }
     if (step === 2) {
