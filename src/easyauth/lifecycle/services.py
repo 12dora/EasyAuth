@@ -85,6 +85,17 @@ class OffboardingStartResult:
     removed_membership_count: int
 
 
+LOCAL_ADMIN_LIFECYCLE_MESSAGE: Final = "系统内置管理员不参与离职/转岗交接。"
+
+
+def _assert_lifecycle_subject(subject: UserMirror) -> None:
+    # break-glass 本地管理员不是员工, 禁止对其建离职/转岗交接单(误操作会禁掉救援入口)。
+    from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
+
+    if subject.authentik_user_id.startswith(LOCAL_ADMIN_SUBJECT_PREFIX):
+        raise HandoverConflictError(LOCAL_ADMIN_LIFECYCLE_MESSAGE)
+
+
 def ensure_handover_task(
     *,
     subject: UserMirror,
@@ -93,6 +104,7 @@ def ensure_handover_task(
     reason: str = "",
 ) -> tuple[HandoverTask, bool]:
     """建单(幂等): 同一当事人已有进行中交接单时直接返回既有单。"""
+    _assert_lifecycle_subject(subject)
     with transaction.atomic():
         existing = (
             HandoverTask.objects.select_for_update()

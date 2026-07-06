@@ -420,3 +420,16 @@ def test_delete_task_only_after_cancelled_and_records_audit() -> None:
     # Then: 单据消失, 审计保留删除痕迹。
     assert not HandoverTask.objects.filter(pk=task.pk).exists()
     assert AuditLog.objects.filter(event_type="handover_task_deleted").exists()
+
+
+def test_local_admin_cannot_be_handover_subject() -> None:
+    # Given: 内置本地管理员的用户镜像。
+    from easyauth.lifecycle.services import HandoverConflictError
+
+    subject = UserMirror.objects.create(authentik_user_id="local-admin:admin")
+
+    # Then: 离职/转岗建单一律拒绝(误操作会禁掉 break-glass 入口)。
+    with pytest.raises(HandoverConflictError):
+        _ = ensure_handover_task(subject=subject, kind=HANDOVER_KIND_TRANSFER, created_by="a")
+    with pytest.raises(HandoverConflictError):
+        _ = start_offboarding(subject, created_by="admin-a")

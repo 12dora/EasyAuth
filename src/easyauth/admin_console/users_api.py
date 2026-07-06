@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Final
 from django.db.models import Q
 from django.http import HttpRequest, JsonResponse
 
+from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.admin_console.api_payloads import list_payload, paginated_list_payload
 from easyauth.admin_console.api_responses import error_response, json_response
@@ -44,7 +45,10 @@ def console_user_search(request: HttpRequest) -> JsonResponse:
     if request.GET.get("page"):
         return _people_page(request)
     query = request.GET.get("q", "").strip()
-    users = UserMirror.objects.filter(status=USER_STATUS_ACTIVE)
+    # 内置本地管理员是 break-glass 系统账号, 不是员工: 不进选人控件(交接接收人/成员等)。
+    users = UserMirror.objects.filter(status=USER_STATUS_ACTIVE).exclude(
+        authentik_user_id__startswith=LOCAL_ADMIN_SUBJECT_PREFIX,
+    )
     if query:
         users = _apply_query_filter(users, query)
     items: list[JsonValue] = [
@@ -54,7 +58,10 @@ def console_user_search(request: HttpRequest) -> JsonResponse:
 
 
 def _people_page(request: HttpRequest) -> JsonResponse:
-    users = UserMirror.objects.all()
+    # 人员列表是员工目录: 内置本地管理员不展示(也就没有员工语义的离职/转岗入口)。
+    users = UserMirror.objects.exclude(
+        authentik_user_id__startswith=LOCAL_ADMIN_SUBJECT_PREFIX,
+    )
     status = request.GET.get("status", "").strip()
     if status:
         users = users.filter(status=status)

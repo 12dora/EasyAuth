@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, ClassVar
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.admin_console.api_responses import (
     error_response,
@@ -494,6 +495,8 @@ def _create_task(request: HttpRequest, actor_id: str) -> JsonResponse:
     subject = UserMirror.objects.filter(authentik_user_id=payload.user_id).first()
     if subject is None:
         return _validation_error("人员不存在。")
+    if subject.authentik_user_id.startswith(LOCAL_ADMIN_SUBJECT_PREFIX):
+        return _validation_error("系统内置管理员不参与离职/转岗交接。")
     if payload.kind == "offboard":
         # 手动离职建单: 在职员工提前交接时不禁号; 已离职人员补单则补齐立即项。
         if subject.status == USER_STATUS_ACTIVE:
@@ -639,10 +642,15 @@ def _task_or_none(task_id: int) -> HandoverTask | None:
 
 
 def _active_user_or_none(user_id: str) -> UserMirror | None:
-    return UserMirror.objects.filter(
-        authentik_user_id=user_id,
-        status=USER_STATUS_ACTIVE,
-    ).first()
+    # 内置本地管理员不是员工, 不能作为交接接收人等生命周期对象。
+    return (
+        UserMirror.objects.filter(
+            authentik_user_id=user_id,
+            status=USER_STATUS_ACTIVE,
+        )
+        .exclude(authentik_user_id__startswith=LOCAL_ADMIN_SUBJECT_PREFIX)
+        .first()
+    )
 
 
 def _task_item(task: HandoverTask) -> JsonObject:
