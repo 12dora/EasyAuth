@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-from hashlib import sha256
 from http import HTTPStatus
 from json import JSONDecodeError
 from typing import TYPE_CHECKING, ClassVar, Final
@@ -19,13 +18,12 @@ from easyauth.admin_console.api_responses import error_response, json_response
 from easyauth.admin_console.authz import require_superuser
 from easyauth.admin_console.permission_template_handlers import CONFLICT_TEMPLATE_CODES
 from easyauth.api.errors import ErrorCode
-from easyauth.applications.models import App, PermissionTemplateVersion
-from easyauth.applications.permission_templates import (
-    PermissionTemplateImportError,
-    apply_permission_template,
-    parse_permission_template,
-    parse_template_format,
+from easyauth.applications.manifest_import import (
+    ManifestVersionConflictError,
+    sync_app_manifest,
 )
+from easyauth.applications.models import App
+from easyauth.applications.permission_templates import PermissionTemplateImportError
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.config.net import (
     BlockedHostError,
@@ -124,37 +122,22 @@ def console_app_auto_onboarding(request: HttpRequest) -> JsonResponse:
 def _auto_onboard(*, payload: AutoOnboardingPayload, actor_id: str) -> dict[str, JsonValue]:
     descriptor = _fetch_descriptor(payload.base_url, payload.descriptor_token)
     manifest = _validated_manifest(descriptor, payload.app_key)
-    # 固定的规范化序列化保证同内容重复接入可以按 content_hash 幂等判定。
-    canonical_template = json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2)
     descriptor_app = descriptor["app"]
     with transaction.atomic():
         app, created = _ensure_app(payload.app_key, descriptor_app)
-        latest = PermissionTemplateVersion.objects.filter(app=app).order_by("-version").first()
-        incoming_version = int(manifest["schema_version"])
-        if latest is not None and incoming_version <= latest.version:
-            if sha256(canonical_template.encode("utf-8")).hexdigest() == latest.content_hash:
-                return _result(
-                    app=app,
-                    created=created,
-                    already_up_to_date=True,
-                    template_version=latest.version,
-                )
+        try:
+            outcome = sync_app_manifest(
+                app=app,
+                manifest=manifest,
+                actor_id=actor_id,
+                downstream_base_url=payload.base_url,
+            )
+        except ManifestVersionConflictError as exc:
             raise AutoOnboardingError(
                 ErrorCode.CONFLICT,
-                (
-                    f"下游 manifest schema_version({incoming_version}) 未超过已导入版本"
-                    f"({latest.version}) 且内容不一致, 请在下游递增版本后重试。"
-                ),
+                str(exc),
                 HTTPStatus.CONFLICT,
-            )
-        try:
-            template = parse_permission_template(
-                app_key=app.app_key,
-                raw_template=canonical_template,
-                template_format=parse_template_format("json"),
-                imported_by=actor_id,
-            )
-            result = apply_permission_template(app=app, template=template)
+            ) from exc
         except PermissionTemplateImportError as exc:
             is_conflict = exc.code in CONFLICT_TEMPLATE_CODES
             raise AutoOnboardingError(
@@ -165,8 +148,8 @@ def _auto_onboard(*, payload: AutoOnboardingPayload, actor_id: str) -> dict[str,
         return _result(
             app=app,
             created=created,
-            already_up_to_date=False,
-            template_version=result.template_version.version,
+            already_up_to_date=outcome.already_up_to_date,
+            template_version=outcome.template_version,
         )
 
 
