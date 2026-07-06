@@ -57,6 +57,8 @@ INSTALLED_APPS: list[str] = [
     "easyauth.access_requests.apps.AccessRequestsConfig",
     "easyauth.grants.apps.GrantsConfig",
     "easyauth.teams.apps.TeamsConfig",
+    "easyauth.webhooks.apps.WebhooksConfig",
+    "easyauth.workflows.apps.WorkflowsConfig",
     "easyauth.portal.apps.PortalConfig",
     "easyauth.admin_console.apps.AdminConsoleConfig",
 ]
@@ -294,7 +296,12 @@ EASYAUTH_AUTHENTIK_DINGTALK_SOURCE_SLUG = os.environ.get(
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
 CELERY_TASK_EAGER_PROPAGATES = True
-CELERY_IMPORTS = ("easyauth.tasks.grants", "easyauth.tasks.authentik", "easyauth.tasks.health")
+CELERY_IMPORTS = (
+    "easyauth.tasks.grants",
+    "easyauth.tasks.authentik",
+    "easyauth.tasks.health",
+    "easyauth.tasks.webhooks",
+)
 CELERY_BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
     "grant-expiration-cleanup": {
         "task": "easyauth.grants.cleanup_expired_grants",

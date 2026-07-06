@@ -3,9 +3,18 @@ from __future__ import annotations
 from django.urls import path
 
 from easyauth.admin_console import views
+from easyauth.admin_console.approval_instances_api import (
+    operations_approval_instance_redeliver,
+    operations_approval_instances,
+)
 from easyauth.admin_console.approval_rules_api import (
     console_approval_rule_detail,
     console_approval_rules,
+)
+from easyauth.admin_console.approval_templates_api import (
+    console_approval_template_detail,
+    console_approval_template_test,
+    console_approval_templates,
 )
 from easyauth.admin_console.apps_api import (
     console_app_configuration_status,
@@ -68,7 +77,10 @@ from easyauth.admin_console.permissions_api import console_permission_detail, co
 from easyauth.admin_console.query_test_api import console_permission_query_test
 from easyauth.admin_console.roles_api import console_role_detail, console_roles
 from easyauth.admin_console.scopes_api import console_scope_detail, console_scopes
-from easyauth.admin_console.settings_api import console_integration_settings
+from easyauth.admin_console.settings_api import (
+    console_dingtalk_connectivity_test,
+    console_integration_settings,
+)
 from easyauth.admin_console.teams_api import (
     console_team_detail,
     console_team_member_detail,
@@ -97,6 +109,10 @@ from easyauth.admin_console.two_factor_api import (
     two_factor_status,
 )
 from easyauth.admin_console.users_api import console_user_search
+from easyauth.admin_console.webhook_config_api import (
+    console_app_webhook_config,
+    console_app_webhook_test,
+)
 
 app_name = "admin_console"
 
@@ -216,6 +232,46 @@ urlpatterns = [
         "api/v1/settings/integrations",
         console_integration_settings,
         name="console-integration-settings",
+    ),
+    path(
+        "api/v1/settings/integrations/dingtalk/test",
+        console_dingtalk_connectivity_test,
+        name="console-dingtalk-connectivity-test",
+    ),
+    path(
+        "api/v1/approval-templates",
+        console_approval_templates,
+        name="console-approval-templates",
+    ),
+    path(
+        "api/v1/approval-templates/<int:template_id>",
+        console_approval_template_detail,
+        name="console-approval-template-detail",
+    ),
+    path(
+        "api/v1/approval-templates/<int:template_id>/test",
+        console_approval_template_test,
+        name="console-approval-template-test",
+    ),
+    path(
+        "api/v1/operations/approval-instances",
+        operations_approval_instances,
+        name="operations-approval-instances",
+    ),
+    path(
+        "api/v1/operations/approval-instances/<str:instance_id>/redeliver",
+        operations_approval_instance_redeliver,
+        name="operations-approval-instance-redeliver",
+    ),
+    path(
+        "api/v1/apps/<str:app_key>/webhook-config",
+        console_app_webhook_config,
+        name="console-app-webhook-config",
+    ),
+    path(
+        "api/v1/apps/<str:app_key>/webhook-config/test",
+        console_app_webhook_test,
+        name="console-app-webhook-test",
     ),
     path(
         "api/v1/operations/access-requests/<int:request_id>/retry-grant",

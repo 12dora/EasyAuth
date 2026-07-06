@@ -28,7 +28,7 @@ from easyauth.admin_console.operations_audit import (
     record_dependency_health_read,
 )
 from easyauth.admin_console.operations_payloads import (
-    access_request_dingtalk_fields,
+    access_request_decision_fields,
     dependency_health_map_payload,
     health_item,
 )
@@ -216,7 +216,7 @@ def _access_request_item(access_request: AccessRequest) -> dict[str, JsonValue]:
         "grant_type": access_request.grant_type,
         "reason": access_request.reason,
         "submitted_at": access_request.submitted_at.isoformat(),
-        **access_request_dingtalk_fields(access_request),
+        **access_request_decision_fields(access_request),
     }
 
 

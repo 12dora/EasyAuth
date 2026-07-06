@@ -1,4 +1,4 @@
-"""EasyAuth 公共权限查询 API 客户端(标准库实现, 零依赖)。"""
+"""EasyAuth 公共 API 客户端(标准库实现, 零依赖)。"""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ class EasyAuthClientError(RuntimeError):
 
 @dataclass(frozen=True)
 class EasyAuthAppClient:
-    """以 app 凭据查询 EasyAuth 授权事实。
+    """以 app 凭据调用 EasyAuth: 权限查询 + 审批中心。
 
     base_url: EasyAuth 服务地址, 例如 ``http://host.docker.internal:8001``。
     token: 静态 app token(``eat_`` 前缀)或 OAuth2 client-credentials 换取的 Bearer token。
@@ -33,14 +33,55 @@ class EasyAuthAppClient:
 
     def query_user_permissions(self, user_id: str) -> dict[str, Any]:
         """查询用户在本应用下的授权快照(groups/grants/版本号)。"""
-        url = (
-            f"{self.base_url.rstrip('/')}/api/v1/apps/{quote(self.app_key, safe='')}"
-            f"/users/{quote(user_id, safe='')}/permissions"
+        url = f"{self._app_base()}/users/{quote(user_id, safe='')}/permissions"
+        return self._request_json(url, method="GET")
+
+    def create_approval(
+        self,
+        *,
+        template_key: str,
+        originator_user_id: str,
+        form: dict[str, str] | None = None,
+        biz_key: str,
+    ) -> dict[str, Any]:
+        """发起一笔钉钉审批; 同 biz_key 幂等, 重复调用返回既有实例。"""
+        url = f"{self._app_base()}/approval-instances"
+        return self._request_json(
+            url,
+            method="POST",
+            body={
+                "template_key": template_key,
+                "originator_user_id": originator_user_id,
+                "form": dict(form) if form else {},
+                "biz_key": biz_key,
+            },
         )
+
+    def get_approval(self, instance_id: str) -> dict[str, Any]:
+        """查询审批实例状态(webhook 之外的轮询兜底)。"""
+        url = f"{self._app_base()}/approval-instances/{quote(instance_id, safe='')}"
+        return self._request_json(url, method="GET")
+
+    def _app_base(self) -> str:
+        return f"{self.base_url.rstrip('/')}/api/v1/apps/{quote(self.app_key, safe='')}"
+
+    def _request_json(
+        self,
+        url: str,
+        *,
+        method: str,
+        body: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        headers = {"Accept": "application/json", "Authorization": f"Bearer {self.token}"}
+        data: bytes | None = None
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+            data = json.dumps(body, ensure_ascii=False).encode("utf-8")
         request = Request(  # noqa: S310 - URL 由集成方配置。
             url,
-            headers={"Accept": "application/json", "Authorization": f"Bearer {self.token}"},
-            method="GET",
+            data=data,
+            headers=headers,
+            method=method,
         )
         try:
             with urlopen(request, timeout=self.timeout_seconds) as response:  # noqa: S310

@@ -129,15 +129,6 @@ class AccessRequest(models.Model):
         str | date | datetime | None,
         datetime | None,
     ] = models.DateTimeField(blank=True, null=True)
-    # 遗留字段(F2): 早期"权限审批走钉钉"方向的残留, 从未被写入过非空值;
-    # 权限审批按产品意图为站内闭环。待 M3 审批中心把钉钉回调改绑 ApprovalInstance
-    # 后, 随迁移一并移除。
-    dingtalk_process_instance_id: models.CharField[str | None, str | None] = models.CharField(
-        max_length=128,
-        unique=True,
-        blank=True,
-        null=True,
-    )
 
     class Meta:
         constraints: ClassVar[list[models.BaseConstraint]] = [

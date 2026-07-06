@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING
 
 from easyauth.api.datetime_json import datetime_value
 from easyauth.applications import health_models
@@ -10,17 +10,20 @@ if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
     from easyauth.applications.dependency_health import DependencyHealthItem
 
-DINGTALK_CALLBACK_PATH: Final = "/integrations/dingtalk/callback"
-
 type JsonObject = dict[str, JsonValue]
 
 
-def access_request_dingtalk_fields(access_request: AccessRequest) -> JsonObject:
+def access_request_decision_fields(access_request: AccessRequest) -> JsonObject:
+    # 站内审批闭环(M2)的决定事实: 权限审批不再与钉钉回调有任何关系(§3.0)。
+    approver_ids: list[JsonValue] = [
+        user_id for user_id in access_request.approver_user_ids if user_id
+    ]
     return {
-        "dingtalk_process_instance_id": access_request.dingtalk_process_instance_id,
-        "dingtalk_callback_path": DINGTALK_CALLBACK_PATH,
-        "dingtalk_callback_status": _callback_status(access_request),
-        "dingtalk_callback_received_at": _callback_received_at(access_request),
+        "approver_user_ids": approver_ids,
+        "decided_by": access_request.decided_by,
+        "decision_actor_type": access_request.decision_actor_type,
+        "decision_comment": access_request.decision_comment,
+        "decided_at": datetime_value(access_request.decided_at),
     }
 
 
@@ -77,15 +80,3 @@ def _dependency_alias_fields(item: DependencyHealthItem) -> JsonObject:
     return aliases.get(item.component, fallback)
 
 
-def _callback_status(access_request: AccessRequest) -> str | None:
-    if access_request.dingtalk_process_instance_id is None:
-        return None
-    if access_request.status == "submitted":
-        return None
-    return access_request.status
-
-
-def _callback_received_at(access_request: AccessRequest) -> str | None:
-    if access_request.approved_at is not None:
-        return access_request.approved_at.isoformat()
-    return datetime_value(access_request.applied_at)

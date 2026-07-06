@@ -24,10 +24,11 @@ class _AccessRequestOperationItem(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True)
 
     id: int
-    dingtalk_process_instance_id: str | None
-    dingtalk_callback_path: str
-    dingtalk_callback_status: str | None
-    dingtalk_callback_received_at: str | None
+    approver_user_ids: tuple[str, ...]
+    decided_by: str
+    decision_actor_type: str
+    decision_comment: str
+    decided_at: str | None
 
 
 class _AccessRequestsResponse(BaseModel):
@@ -51,8 +52,8 @@ class _DependencyHealthResponse(BaseModel):
     celery: _DependencyHealthComponent
 
 
-def test_ops3_access_requests_include_dingtalk_process_and_callback_fields() -> None:
-    # Given: 一条运营申请已绑定 DingTalk 审批实例。
+def test_ops3_access_requests_include_decision_fields() -> None:
+    # Given: 一条待审批的运营申请(站内审批闭环, 与钉钉回调无关)。
     client = _logged_in_superuser("ops3-contract-access-admin")
     user = UserMirror.objects.create(authentik_user_id="ops3-contract-user")
     app = App.objects.create(app_key="ops3-contract-app", name="Contract App")
@@ -60,20 +61,21 @@ def test_ops3_access_requests_include_dingtalk_process_and_callback_fields() -> 
         user=user,
         app=app,
         reason="需要临时权限",
-        dingtalk_process_instance_id="proc-ops3-contract",
+        approver_user_ids=["ops3-contract-approver"],
     )
 
     # When: 系统管理员查询 access-requests 运营列表。
     response = client.get(ACCESS_REQUESTS_API_URL, {"app_key": app.app_key})
 
-    # Then: 响应包含 DingTalk process 和 callback 字段, 并保留原有基础字段。
+    # Then: 响应包含审批决定字段, 并保留原有基础字段。
     body = _AccessRequestsResponse.model_validate_json(response.content)
     assert response.status_code == HTTPStatus.OK
     assert body.data[0].id == access_request.id
-    assert body.data[0].dingtalk_process_instance_id == "proc-ops3-contract"
-    assert body.data[0].dingtalk_callback_path == "/integrations/dingtalk/callback"
-    assert body.data[0].dingtalk_callback_status is None
-    assert body.data[0].dingtalk_callback_received_at is None
+    assert body.data[0].approver_user_ids == ("ops3-contract-approver",)
+    assert body.data[0].decided_by == ""
+    assert body.data[0].decision_actor_type == ""
+    assert body.data[0].decision_comment == ""
+    assert body.data[0].decided_at is None
 
 
 def test_ops3_dependency_health_read_writes_audit() -> None:

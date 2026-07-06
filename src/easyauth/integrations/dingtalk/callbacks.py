@@ -9,36 +9,37 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_POST
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from easyauth.access_requests.inbound_callbacks import (
-    ApprovalCallbackError,
-    apply_approval_callback,
-)
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.responses import error_response as _error_response
 from easyauth.api.responses import json_response as _json_response
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.config.rate_limit import client_ip, rate_limit_exceeded
 from easyauth.integrations.dingtalk.signature import is_valid_callback_signature
+from easyauth.workflows.services import (
+    ApprovalCallbackConflictError,
+    ApprovalInstanceNotFoundError,
+    apply_instance_callback,
+)
 
 if TYPE_CHECKING:
     from django.http import HttpRequest, JsonResponse
 
-    from easyauth.access_requests.models import AccessRequest
+    from easyauth.workflows.models import ApprovalInstance
 
 # 未认证的签名/载荷拒绝会写审计; 按客户端 IP 限流, 防止未认证攻击者膨胀审计表。
-# 注: BS-18 的窗口内重放已由 approve/reject 的状态幂等覆盖; 逐签名 nonce 会把 DingTalk
+# 注: 窗口内重放已由审批实例状态机幂等覆盖; 逐签名 nonce 会把 DingTalk
 # 合法重试(与重放字节一致)一并拒掉, 属回归, 故不引入 nonce。
 PREAUTH_AUDIT_LIMIT = 20
 PREAUTH_AUDIT_WINDOW_SECONDS = 300
 
 
 class _DingTalkCallbackPayload(BaseModel):
+    # 本回调通道专服务下游 APP 的业务审批(ApprovalInstance),
+    # 与 EasyAuth 站内权限审批(AccessRequest)无关(§3.0/§3.2)。
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
 
     process_instance_id: str = Field(min_length=1, max_length=128)
-    status: Literal["approved", "rejected"]
-    # 实际执行审批操作的人; 审计必须记录最终审批人, 且要与申请的审批人列表核对。
-    approver_user_id: str = Field(min_length=1, max_length=128)
+    status: Literal["approved", "rejected", "canceled"]
 
 
 @csrf_exempt
@@ -74,21 +75,39 @@ def dingtalk_callback(request: HttpRequest) -> JsonResponse:
         )
 
     try:
-        access_request = apply_approval_callback(
+        instance = apply_instance_callback(
             process_instance_id=payload.process_instance_id,
             status=payload.status,
-            approver_user_id=payload.approver_user_id,
-            raw_payload=body,
         )
-    except ApprovalCallbackError as exc:
-        if exc.kind == "approver_rejected":
-            _record_security_event(
-                event_type="dingtalk_callback_approver_rejected",
-                target_id=payload.process_instance_id,
-                metadata=dict(exc.details),
-            )
-        return _callback_error_response(exc)
-    return _json_response(_success_payload(access_request))
+    except ApprovalInstanceNotFoundError as exc:
+        _record_security_event(
+            event_type="dingtalk_callback_unknown_process",
+            target_id=payload.process_instance_id,
+            metadata={"process_instance_id": payload.process_instance_id},
+        )
+        return _error_response(
+            ErrorCode.NOT_FOUND,
+            str(exc),
+            {"process_instance_id": payload.process_instance_id},
+            status=HTTPStatus.NOT_FOUND,
+        )
+    except ApprovalCallbackConflictError as exc:
+        _record_security_event(
+            event_type="dingtalk_callback_status_conflict",
+            target_id=payload.process_instance_id,
+            metadata={
+                "process_instance_id": payload.process_instance_id,
+                "instance_id": exc.instance_id,
+                "status": exc.status,
+            },
+        )
+        return _error_response(
+            ErrorCode.SEMANTIC_VALIDATION_ERROR,
+            str(exc),
+            {"process_instance_id": payload.process_instance_id, "status": exc.status},
+            status=HTTPStatus.CONFLICT,
+        )
+    return _json_response(_success_payload(instance))
 
 
 def _request_signature_is_valid(request: HttpRequest, body: bytes) -> bool:
@@ -103,43 +122,11 @@ def _request_signature_is_valid(request: HttpRequest, body: bytes) -> bool:
     )
 
 
-def _callback_error_response(exc: ApprovalCallbackError) -> JsonResponse:
-    match exc.kind:
-        case "not_found":
-            return _error_response(
-                ErrorCode.NOT_FOUND,
-                exc.message,
-                exc.details,
-                status=HTTPStatus.NOT_FOUND,
-            )
-        case "conflict":
-            return _error_response(
-                ErrorCode.SEMANTIC_VALIDATION_ERROR,
-                exc.message,
-                exc.details,
-                status=HTTPStatus.CONFLICT,
-            )
-        case "approver_rejected":
-            return _error_response(
-                ErrorCode.PERMISSION_DENIED,
-                exc.message,
-                exc.details,
-                status=HTTPStatus.FORBIDDEN,
-            )
-        case "application_error" | "validation_error":
-            return _error_response(
-                ErrorCode.SEMANTIC_VALIDATION_ERROR,
-                exc.message,
-                exc.details,
-                status=HTTPStatus.UNPROCESSABLE_ENTITY,
-            )
-
-
-def _success_payload(access_request: AccessRequest) -> dict[str, JsonValue]:
+def _success_payload(instance: ApprovalInstance) -> dict[str, JsonValue]:
     return {
-        "request_id": access_request.id,
-        "process_instance_id": access_request.dingtalk_process_instance_id or "",
-        "status": access_request.status,
+        "instance_id": str(instance.id),
+        "process_instance_id": instance.dingtalk_process_instance_id,
+        "status": instance.status,
     }
 
 

@@ -36,6 +36,19 @@ class IntegrationSettings(models.Model):
         max_length=1024,
         blank=True,
     )
+    # 钉钉企业内部应用凭证(复用 Authentik 登录应用, 钉钉后台追加 OA 审批权限, §7 决策 1)。
+    dingtalk_app_key: models.CharField[str, str] = models.CharField(
+        max_length=128,
+        blank=True,
+    )
+    dingtalk_app_secret: EncryptedCharField = EncryptedCharField(
+        max_length=1024,
+        blank=True,
+    )
+    dingtalk_agent_id: models.CharField[str, str] = models.CharField(
+        max_length=64,
+        blank=True,
+    )
     updated_by: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
     updated_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now=True,
@@ -112,3 +125,30 @@ def _source(*, override: str, env: str) -> str:
     if env:
         return AUTHENTIK_CONFIG_SOURCE_ENV
     return AUTHENTIK_CONFIG_SOURCE_MISSING
+
+
+@dataclass(frozen=True, slots=True)
+class DingTalkRuntimeConfig:
+    app_key: str
+    app_secret: str
+    agent_id: str
+    timeout_seconds: float
+
+    def is_configured(self) -> bool:
+        return bool(self.app_key and self.app_secret)
+
+
+def dingtalk_runtime_config() -> DingTalkRuntimeConfig:
+    # 钉钉出站凭证: 数据库设置优先, 其次环境变量(与 Authentik 配置同一回退口径)。
+    row = IntegrationSettings.objects.filter(pk=INTEGRATION_SETTINGS_SINGLETON_ID).first()
+    override_app_key = row.dingtalk_app_key.strip() if row is not None else ""
+    override_app_secret = row.dingtalk_app_secret.strip() if row is not None else ""
+    override_agent_id = row.dingtalk_agent_id.strip() if row is not None else ""
+    return DingTalkRuntimeConfig(
+        app_key=override_app_key or str(getattr(settings, "EASYAUTH_DINGTALK_APP_KEY", "")).strip(),
+        app_secret=override_app_secret
+        or str(getattr(settings, "EASYAUTH_DINGTALK_APP_SECRET", "")).strip(),
+        agent_id=override_agent_id
+        or str(getattr(settings, "EASYAUTH_DINGTALK_AGENT_ID", "")).strip(),
+        timeout_seconds=float(getattr(settings, "EASYAUTH_DINGTALK_HTTP_TIMEOUT_SECONDS", 5)),
+    )

@@ -1,6 +1,9 @@
 from collections.abc import Callable, Sequence
 from typing import overload
 
+class AsyncResult:
+    id: str
+
 class Celery:
     def __init__(self, main: str) -> None: ...
     def config_from_object(
@@ -16,6 +19,15 @@ class Celery:
         related_name: str = "tasks",
         force: bool = False,
     ) -> None: ...
+    def send_task(
+        self,
+        name: str,
+        args: Sequence[object] | None = None,
+        kwargs: dict[str, object] | None = None,
+        countdown: float | None = None,
+    ) -> AsyncResult: ...
+
+current_app: Celery
 
 @overload
 def shared_task[**P, R](
@@ -27,4 +39,5 @@ def shared_task[**P, R](
 def shared_task[**P, R](
     *,
     name: str | None = None,
+    acks_late: bool = False,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...

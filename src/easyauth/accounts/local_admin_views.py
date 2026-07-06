@@ -423,8 +423,29 @@ def _new_password_error(
     try:
         validate_password(new_password)
     except ValidationError as error:
-        return " ".join(error.messages)
+        return " ".join(_localize_password_errors(error))
     return ""
+
+
+def _localize_password_errors(error: ValidationError) -> list[str]:
+    # Django 5.2 的 MinimumLengthValidator 用 ngettext, 而内置 zh_Hans 目录缺该复数条目,
+    # 会回落英文原文(界面其余文案均为中文)。这里按各校验器的 code 映射到本地中文文案,
+    # 不依赖 Django 翻译目录; 未知 code 才回退到其原始 message。
+    messages: list[str] = []
+    for item in error.error_list:
+        code = getattr(item, "code", "") or ""
+        params = getattr(item, "params", None) or {}
+        if code == "password_too_short":
+            messages.append(f"密码长度至少为 {params.get('min_length', 12)} 位。")
+        elif code == "password_too_common":
+            messages.append("该密码过于常见, 请改用更复杂的密码。")
+        elif code == "password_entirely_numeric":
+            messages.append("密码不能全部为数字。")
+        elif code == "password_too_similar":
+            messages.append("密码与用户名等个人信息过于相似。")
+        else:
+            messages.append(" ".join(item.messages))
+    return messages
 
 
 def _safe_change_password_next(request: HttpRequest) -> str:
