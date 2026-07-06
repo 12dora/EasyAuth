@@ -1,0 +1,104 @@
+# EasyAuth 公网反代部署(iam.jiefakj.com)。
+#
+# 容器化 web + celery worker + celery beat + 一个专用 redis。
+# - worker/beat 是必备项, 不是可选增强: 缺了会静默丢失一整批特性——
+#     · beat 调度的 dingtalk-directory-sync 是离职检出的信号源(目录同步 → 自动建交接单),
+#       没有 beat, 离职/转岗自动化链路根本不会触发;
+#     · grant-expiration-cleanup(限时授权到期回收)、dependency-health-check 也依赖 beat;
+#     · worker 消费 webhook 投递(审批结果 approval.completed)、Authentik 离职禁号等异步任务。
+#   三者共用同一 easyauth-web:local 镜像与 broker(redis db0/1), 一起 up 才是完整部署。
+# - 数据仍用仓库根的 db.sqlite3(挂载进容器), 以保留已注册的 easytrade 应用与静态 token、
+#   Authentik 集成配置、用户等状态 —— 迁到 Postgres 会丢这些, 破坏 EasyTrade↔EasyAuth 联调。
+#   web 与 worker 并发写同一 SQLite: 任务低频(目录同步 5min/授权清理 1min), 写锁竞争可接受,
+#   属开发级部署。
+# - 用 runserver(非 gunicorn): 仓库未装 whitenoise, gunicorn 下 SPA 静态资源不会被服务;
+#   runserver + DEBUG=1 会自动服务 STATICFILES_DIRS。DEBUG=1 也是 SQLite 的前置(settings 禁止
+#   生产用 SQLite)。
+# - 端口发布在 127.0.0.1:8001, 保持 EasyTrade backend 经 host.docker.internal:8001 访问不变,
+#   frpc 也反代到 127.0.0.1:8001。
+
+# web / worker / beat 共用镜像与运行环境; 仅 command(与 web 的 ports)不同。
+x-easyauth-common: &easyauth-common
+  image: easyauth-web:local
+  restart: unless-stopped
+  env_file:
+    - .env.local
+  environment: &easyauth-env
+    # 反代部署 settings: base + SECURE_PROXY_SSL_HEADER(避免 /auth/login/ 302 死循环)。
+    DJANGO_SETTINGS_MODULE: "easyauth.config.settings.deploy"
+    DJANGO_DEBUG: "1"
+    DJANGO_ALLOWED_HOSTS: "iam.jiefakj.com,localhost,127.0.0.1,host.docker.internal"
+    DJANGO_CSRF_TRUSTED_ORIGINS: "https://iam.jiefakj.com"
+    EASYAUTH_CACHE_URL: "redis://redis:6379/2"
+    # Celery broker/result 指向 compose 内的 redis 服务(db0=broker, db1=result);
+    # 默认值是 localhost:6379, 在容器内连不到 redis —— 不覆盖则 web 连 enqueue 都会失败。
+    CELERY_BROKER_URL: "redis://redis:6379/0"
+    CELERY_RESULT_BACKEND: "redis://redis:6379/1"
+    # 容器内 localhost 不是宿主; Authentik 在宿主 :19000(worker 的目录同步/离职禁号也要用)。
+    EASYAUTH_AUTHENTIK_BASE_URL: "http://host.docker.internal:19000"
+    # 公网回调(需在 Authentik easyauth-portal provider 的 redirect URIs 里登记该地址,
+    # 否则 OIDC 单点登录会 redirect_uri 不匹配; 本地超管登录不受影响)。
+    EASYAUTH_AUTHENTIK_OIDC_REDIRECT_URI: "https://iam.jiefakj.com/auth/callback/"
+    # WebAuthn RP ID/Origins 默认是 localhost, 在 iam.jiefakj.com 下注册/验证 passkey 会失败。
+    # (改 RP ID 会使旧 RP 下已注册凭据失效; 当前 accounts_localadminpasskey 为空, 无影响。)
+    EASYAUTH_WEBAUTHN_RP_ID: "iam.jiefakj.com"
+    EASYAUTH_WEBAUTHN_ORIGINS: "https://iam.jiefakj.com"
+  volumes:
+    - ./db.sqlite3:/app/db.sqlite3
+    # 部署 settings 在镜像构建之后新增, 挂载进去省一次重建(重建时 COPY src/ 也会带上它)。
+    - ./src/easyauth/config/settings/deploy.py:/app/src/easyauth/config/settings/deploy.py:ro
+  extra_hosts:
+    # worker 经此访问宿主 Authentik(:19000, 禁号)与 EasyTrade backend(:8000, 交接钩子投递)。
+    - "host.docker.internal:host-gateway"
+  depends_on:
+    - redis
+  networks: [easyauth]
+
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks: [easyauth]
+
+  web:
+    <<: *easyauth-common
+    build:
+      context: .
+    command: ["python", "manage.py", "runserver", "0.0.0.0:8001", "--noreload"]
+    ports:
+      - "127.0.0.1:8001:8001"
+
+  worker:
+    <<: *easyauth-common
+    command:
+      - "celery"
+      - "-A"
+      - "easyauth.config.celery:app"
+      - "worker"
+      - "--loglevel=info"
+      - "--concurrency=2"
+    # 覆盖镜像里 curl :8001 的 web healthcheck(worker 不监听该端口):
+    # 用 celery inspect ping 真实反映 worker 存活 + broker 连通。
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A easyauth.config.celery:app inspect ping -t 5 >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+
+  beat:
+    <<: *easyauth-common
+    command:
+      - "celery"
+      - "-A"
+      - "easyauth.config.celery:app"
+      - "beat"
+      - "--loglevel=info"
+      # schedule 落 /tmp(容器内必可写), 避免 /app 权限问题; 只跑单实例, 不要 scale。
+      - "--schedule=/tmp/celerybeat-schedule"
+    # beat 无 inspect 接口; 进程崩溃会让 command 退出并由 restart 拉起, 无需 healthcheck。
+    healthcheck:
+      disable: true
+
+networks:
+  easyauth:
