@@ -64,6 +64,12 @@ from easyauth.admin_console.query_test_api import console_permission_query_test
 from easyauth.admin_console.roles_api import console_role_detail, console_roles
 from easyauth.admin_console.scopes_api import console_scope_detail, console_scopes
 from easyauth.admin_console.settings_api import console_integration_settings
+from easyauth.admin_console.teams_api import (
+    console_team_detail,
+    console_team_member_detail,
+    console_team_members,
+    console_teams,
+)
 from easyauth.admin_console.two_factor_api import (
     passkey_delete as two_factor_passkey_delete,
 )
@@ -154,6 +160,18 @@ urlpatterns = [
         name="operations-dependency-health-check",
     ),
     path("api/v1/users", console_user_search, name="console-user-search"),
+    path("api/v1/teams", console_teams, name="console-teams"),
+    path("api/v1/teams/<int:team_id>", console_team_detail, name="console-team-detail"),
+    path(
+        "api/v1/teams/<int:team_id>/members",
+        console_team_members,
+        name="console-team-members",
+    ),
+    path(
+        "api/v1/teams/<int:team_id>/members/<int:member_id>",
+        console_team_member_detail,
+        name="console-team-member-detail",
+    ),
     path(
         "api/v1/security/two-factor",
         two_factor_status,

@@ -2,9 +2,14 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final
 
+from django.utils import timezone
+
 from easyauth.applications.managed_scope_policy import ManagedScopePolicyService
 from easyauth.applications.models import (
+    MANAGED_SCOPE_POLICY_ACTIVE_RESOLVERS,
     MANAGED_SCOPE_POLICY_RESOLVER_DINGTALK_MANAGER_CHAIN,
+    MANAGED_SCOPE_POLICY_RESOLVER_EASYAUTH_TEAM,
+    MANAGED_SCOPE_POLICY_RESOLVER_UNION,
     App,
     AuthorizationGroupGrant,
 )
@@ -14,6 +19,7 @@ from easyauth.integrations.authentik.directory_client import (
     AuthentikDirectoryClient,
     AuthentikDirectoryError,
 )
+from easyauth.teams.services import team_managed_user_ids
 
 MANAGED_USERS_SCOPE = "MANAGED_USERS"
 MANAGED_USERS_RESOLVER_ACTOR_ID = "managed_users_resolver"
@@ -56,32 +62,45 @@ def resolve_managed_users(
             error_code="managed_scope_policy_missing",
         )
         return None
-    if effective_policy.resolver != MANAGED_SCOPE_POLICY_RESOLVER_DINGTALK_MANAGER_CHAIN:
+    resolver = effective_policy.resolver
+    if resolver not in MANAGED_SCOPE_POLICY_ACTIVE_RESOLVERS:
         _record_resolution_failed(
             app=app,
             authorization_group_grant=authorization_group_grant,
-            resolver=effective_policy.resolver,
+            resolver=resolver,
             error_code="managed_scope_resolver_unsupported",
         )
         return None
+
+    if resolver == MANAGED_SCOPE_POLICY_RESOLVER_EASYAUTH_TEAM:
+        return team_resolved_managed_users(user, resolver=resolver)
+
+    # dingtalk_manager_chain / union 都需要钉钉主管链。
+    team_resolution = (
+        team_resolved_managed_users(user, resolver=resolver)
+        if resolver == MANAGED_SCOPE_POLICY_RESOLVER_UNION
+        else None
+    )
     if not user.dingtalk_corp_id or not user.dingtalk_userid:
         _record_resolution_failed(
             app=app,
             authorization_group_grant=authorization_group_grant,
-            resolver=effective_policy.resolver,
+            resolver=resolver,
             error_code="managed_scope_user_dingtalk_binding_missing",
         )
-        return None
+        # 绑定缺失是稳定事实(非瞬时故障): union 下团队侧照常返回,
+        # dingtalk_manager_chain 下与既有语义一致地丢弃该 grant 的解析。
+        return team_resolution
 
     try:
         managed_users = _managed_users_from_directory(user, directory_cache)
     except AuthentikDirectoryError as error:
         # 基础设施瞬时故障不允许静默丢弃 grant: 版本号不变而内容变小会污染下游快照缓存,
-        # EasyTrade 会把这次"缺失"当成真实撤权。必须 fail-fast。
+        # EasyTrade 会把这次"缺失"当成真实撤权。必须 fail-fast, union 亦然。
         _record_resolution_failed(
             app=app,
             authorization_group_grant=authorization_group_grant,
-            resolver=effective_policy.resolver,
+            resolver=resolver,
             error_code="managed_scope_directory_unavailable",
         )
         raise ManagedUsersResolutionUnavailableError from error
@@ -89,20 +108,41 @@ def resolve_managed_users(
         _record_resolution_failed(
             app=app,
             authorization_group_grant=authorization_group_grant,
-            resolver=effective_policy.resolver,
+            resolver=resolver,
             error_code="managed_scope_directory_stale",
         )
         raise ManagedUsersResolutionUnavailableError
 
-    user_ids = tuple(
+    chain_user_ids = tuple(
         user_id
         for user_id in managed_users.active_authentik_user_ids
         if user_id != user.authentik_user_id
     )
+    if resolver == MANAGED_SCOPE_POLICY_RESOLVER_DINGTALK_MANAGER_CHAIN:
+        return ResolvedManagedUsers(
+            user_ids=chain_user_ids,
+            resolver=resolver,
+            resolved_at=managed_users.resolved_at,
+        )
+    # union: 钉钉链与团队并集; resolved_at 取目录侧时间(两者中较保守的新鲜度口径)。
+    team_user_ids = team_resolution.user_ids if team_resolution is not None else ()
     return ResolvedManagedUsers(
-        user_ids=user_ids,
-        resolver=effective_policy.resolver,
+        user_ids=tuple(sorted(set(chain_user_ids) | set(team_user_ids))),
+        resolver=resolver,
         resolved_at=managed_users.resolved_at,
+    )
+
+
+def team_resolved_managed_users(
+    user: UserMirror,
+    *,
+    resolver: str = MANAGED_SCOPE_POLICY_RESOLVER_EASYAUTH_TEAM,
+) -> ResolvedManagedUsers:
+    # 本地表查询, 不依赖目录新鲜度, 没有 stale/不可用失败模式。
+    return ResolvedManagedUsers(
+        user_ids=team_managed_user_ids(user),
+        resolver=resolver,
+        resolved_at=timezone.now().isoformat(),
     )
 
 

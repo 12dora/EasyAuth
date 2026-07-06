@@ -14,11 +14,15 @@ from easyauth.applications.managed_scope_policy import ManagedScopePolicyService
 from easyauth.applications.models import (
     MANAGED_SCOPE_POLICY_RESOLVER_DINGTALK_MANAGER_CHAIN,
     MANAGED_SCOPE_POLICY_RESOLVER_DISABLED,
+    MANAGED_SCOPE_POLICY_RESOLVER_EASYAUTH_TEAM,
+    MANAGED_SCOPE_POLICY_RESOLVER_UNION,
     App,
     ManagedScopePolicy,
 )
 from easyauth.applications.ownership import can_manage_app
 from easyauth.audit.services import AuditRecord, AuditService
+from easyauth.grants.managed_users import team_resolved_managed_users
+from easyauth.grants.query_types import ResolvedManagedUsers
 from easyauth.integrations.authentik.directory_client import (
     AuthentikDirectoryClient,
     AuthentikDirectoryError,
@@ -33,6 +37,7 @@ type PayloadLookupResult = _ManagedUsersPreviewPayload | JsonResponse
 type PolicyLookupResult = ManagedScopePolicy | JsonResponse
 type UserLookupResult = UserMirror | JsonResponse
 type ManagedUsersLookupResult = DingTalkManagedUsers | JsonResponse
+type ResolutionResult = ResolvedManagedUsers | JsonResponse
 
 
 class _ManagedUsersPreviewPayload(BaseModel):
@@ -81,22 +86,71 @@ def _preview_response(*, actor: ConsoleActor, app: App, user_id: str) -> JsonRes
     if isinstance(policy, JsonResponse):
         return policy
 
-    if policy.resolver != MANAGED_SCOPE_POLICY_RESOLVER_DINGTALK_MANAGER_CHAIN:
+    user = _target_user(user_id)
+    if isinstance(user, JsonResponse):
+        return user
+
+    resolution = _resolve_for_preview(user=user, resolver=policy.resolver)
+    if isinstance(resolution, JsonResponse):
+        return resolution
+    # 每次成功预览都记审计(actor + target), 使"谁向谁汇报"的探测可追溯。
+    _record_preview(actor=actor, app=app, user_id=user_id)
+    return json_response(_success_payload(resolution))
+
+
+def _resolve_for_preview(*, user: UserMirror, resolver: str) -> ResolutionResult:
+    # 与 grants.managed_users.resolve_managed_users 的运行时语义逐分支对齐,
+    # 差别仅在失败模式以诊断响应而非审计+异常呈现。
+    if resolver == MANAGED_SCOPE_POLICY_RESOLVER_EASYAUTH_TEAM:
+        return team_resolved_managed_users(user)
+
+    if resolver not in {
+        MANAGED_SCOPE_POLICY_RESOLVER_DINGTALK_MANAGER_CHAIN,
+        MANAGED_SCOPE_POLICY_RESOLVER_UNION,
+    }:
         return _bad_request(
             "管理范围解析器暂不支持。",
             "managed_scope_resolver_unsupported",
         )
 
-    user = _target_user(user_id)
-    if isinstance(user, JsonResponse):
-        return user
+    if not user.dingtalk_corp_id or not user.dingtalk_userid:
+        if resolver == MANAGED_SCOPE_POLICY_RESOLVER_UNION:
+            # 绑定缺失是稳定事实: union 下团队侧照常返回, 与运行时一致。
+            return team_resolved_managed_users(user, resolver=resolver)
+        return _bad_request(
+            "用户缺少钉钉组织绑定。",
+            "managed_scope_user_dingtalk_binding_missing",
+        )
 
-    managed_users = _managed_users_for_user(user)
+    managed_users = _managed_users_from_directory(user)
     if isinstance(managed_users, JsonResponse):
         return managed_users
-    # 每次成功预览都记审计(actor + target), 使"谁向谁汇报"的探测可追溯。
-    _record_preview(actor=actor, app=app, user_id=user_id)
-    return json_response(_success_payload(user=user, managed_users=managed_users))
+    return _chain_or_union_resolution(user=user, resolver=resolver, managed_users=managed_users)
+
+
+def _chain_or_union_resolution(
+    *,
+    user: UserMirror,
+    resolver: str,
+    managed_users: DingTalkManagedUsers,
+) -> ResolvedManagedUsers:
+    chain_user_ids = tuple(
+        chain_user_id
+        for chain_user_id in managed_users.active_authentik_user_ids
+        if chain_user_id != user.authentik_user_id
+    )
+    if resolver == MANAGED_SCOPE_POLICY_RESOLVER_DINGTALK_MANAGER_CHAIN:
+        return ResolvedManagedUsers(
+            user_ids=chain_user_ids,
+            resolver=resolver,
+            resolved_at=managed_users.resolved_at,
+        )
+    team_resolution = team_resolved_managed_users(user, resolver=resolver)
+    return ResolvedManagedUsers(
+        user_ids=tuple(sorted(set(chain_user_ids) | set(team_resolution.user_ids))),
+        resolver=resolver,
+        resolved_at=managed_users.resolved_at,
+    )
 
 
 def _record_preview(*, actor: ConsoleActor, app: App, user_id: str) -> None:
@@ -112,13 +166,7 @@ def _record_preview(*, actor: ConsoleActor, app: App, user_id: str) -> None:
     )
 
 
-def _managed_users_for_user(user: UserMirror) -> ManagedUsersLookupResult:
-    if not user.dingtalk_corp_id or not user.dingtalk_userid:
-        return _bad_request(
-            "用户缺少钉钉组织绑定。",
-            "managed_scope_user_dingtalk_binding_missing",
-        )
-
+def _managed_users_from_directory(user: UserMirror) -> ManagedUsersLookupResult:
     try:
         managed_users = AuthentikDirectoryClient.from_settings().get_managed_users(
             user.dingtalk_corp_id,
@@ -145,7 +193,7 @@ def _app_for_actor(actor: ConsoleActor, app_key: str) -> AppLookupResult:
             "应用不存在。",
             status=HTTPStatus.NOT_FOUND,
         )
-    # 预览会返回目标用户的钉钉主管链下属集合, 属组织架构 oracle: 收紧为 owner/superuser。
+    # 预览会返回目标用户的管理范围人员集合, 属组织架构 oracle: 收紧为 owner/superuser。
     if not can_manage_app(actor, app):
         return error_response(
             ErrorCode.PERMISSION_DENIED,
@@ -179,26 +227,12 @@ def _target_user(user_id: str) -> UserLookupResult:
     return user
 
 
-def _success_payload(
-    *,
-    user: UserMirror,
-    managed_users: DingTalkManagedUsers,
-) -> dict[str, JsonValue]:
-    user_ids = [
-        user_id
-        for user_id in managed_users.active_authentik_user_ids
-        if user_id != user.authentik_user_id
-    ]
-    resolved: dict[str, JsonValue] = {
-        "user_ids": cast("list[JsonValue]", user_ids),
-        "resolver": MANAGED_SCOPE_POLICY_RESOLVER_DINGTALK_MANAGER_CHAIN,
-        "resolved_at": managed_users.resolved_at,
-    }
+def _success_payload(resolution: ResolvedManagedUsers) -> dict[str, JsonValue]:
     return {
         "resolved": {
-            "user_ids": resolved["user_ids"],
-            "resolver": resolved["resolver"],
-            "resolved_at": resolved["resolved_at"],
+            "user_ids": cast("list[JsonValue]", list(resolution.user_ids)),
+            "resolver": resolution.resolver,
+            "resolved_at": resolution.resolved_at,
         },
         "diagnostics": [],
     }

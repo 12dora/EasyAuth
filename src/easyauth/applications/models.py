@@ -66,10 +66,20 @@ MANAGED_SCOPE_POLICY_TARGET_TYPES = (
 )
 MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS = "MANAGED_USERS"
 MANAGED_SCOPE_POLICY_RESOLVER_DINGTALK_MANAGER_CHAIN = "dingtalk_manager_chain"
+MANAGED_SCOPE_POLICY_RESOLVER_EASYAUTH_TEAM = "easyauth_team"
+MANAGED_SCOPE_POLICY_RESOLVER_UNION = "union"
 MANAGED_SCOPE_POLICY_RESOLVER_DISABLED = "disabled"
 MANAGED_SCOPE_POLICY_RESOLVERS = (
     MANAGED_SCOPE_POLICY_RESOLVER_DINGTALK_MANAGER_CHAIN,
+    MANAGED_SCOPE_POLICY_RESOLVER_EASYAUTH_TEAM,
+    MANAGED_SCOPE_POLICY_RESOLVER_UNION,
     MANAGED_SCOPE_POLICY_RESOLVER_DISABLED,
+)
+# 有效(非 disabled)的 resolver 集合, 供策略写入口与解析入口共用。
+MANAGED_SCOPE_POLICY_ACTIVE_RESOLVERS = (
+    MANAGED_SCOPE_POLICY_RESOLVER_DINGTALK_MANAGER_CHAIN,
+    MANAGED_SCOPE_POLICY_RESOLVER_EASYAUTH_TEAM,
+    MANAGED_SCOPE_POLICY_RESOLVER_UNION,
 )
 
 
@@ -517,7 +527,8 @@ class ManagedScopePolicy(models.Model):
             errors["scope"] = "Managed scope policy scope must be MANAGED_USERS."
         if self.resolver not in MANAGED_SCOPE_POLICY_RESOLVERS:
             errors["resolver"] = (
-                "Managed scope policy resolver must be dingtalk_manager_chain or disabled."
+                "Managed scope policy resolver must be one of "
+                "dingtalk_manager_chain, easyauth_team, union, disabled."
             )
         if errors:
             raise ValidationError(errors)

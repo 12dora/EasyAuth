@@ -53,7 +53,8 @@ def test_managed_scope_policy_rejects_unsupported_scope_and_resolver_when_cleane
     assert error.value.message_dict == {
         "scope": ["Managed scope policy scope must be MANAGED_USERS."],
         "resolver": [
-            "Managed scope policy resolver must be dingtalk_manager_chain or disabled.",
+            "Managed scope policy resolver must be one of "
+            "dingtalk_manager_chain, easyauth_team, union, disabled.",
         ],
     }
 

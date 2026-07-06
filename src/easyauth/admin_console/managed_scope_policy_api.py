@@ -21,7 +21,7 @@ from easyauth.applications.managed_scope_policy import (
     ManagedScopePolicyService,
 )
 from easyauth.applications.models import (
-    MANAGED_SCOPE_POLICY_RESOLVER_DINGTALK_MANAGER_CHAIN,
+    MANAGED_SCOPE_POLICY_ACTIVE_RESOLVERS,
     MANAGED_SCOPE_POLICY_RESOLVER_DISABLED,
     MANAGED_SCOPE_POLICY_RESOLVERS,
     MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS,
@@ -36,7 +36,9 @@ type AppApiResult = App | JsonResponse
 type AppWriteContextResult = tuple[App, ConsoleActor] | JsonResponse
 type ManagedScopePolicyPayload = dict[str, JsonValue]
 
-INVALID_RESOLVER_MESSAGE: Final = "resolver 必须为 dingtalk_manager_chain 或 disabled。"
+INVALID_RESOLVER_MESSAGE: Final = (
+    "resolver 必须为 dingtalk_manager_chain、easyauth_team、union 或 disabled。"
+)
 
 
 class ManagedScopePolicyValuePayload(BaseModel):
@@ -127,12 +129,14 @@ def _normalized_policy_payload(
             resolver=MANAGED_SCOPE_POLICY_RESOLVER_DISABLED,
             enabled=True,
         )
-    if payload.mode not in {"override", MANAGED_SCOPE_POLICY_RESOLVER_DINGTALK_MANAGER_CHAIN}:
+    if payload.mode not in {"override", payload.resolver}:
         message = "mode 必须为 override 或 disabled。"
         raise ValueError(message)
+    if payload.resolver not in MANAGED_SCOPE_POLICY_ACTIVE_RESOLVERS:
+        raise ValueError(INVALID_RESOLVER_MESSAGE)
     return ManagedScopePolicyValuePayload(
         mode="override",
-        resolver=MANAGED_SCOPE_POLICY_RESOLVER_DINGTALK_MANAGER_CHAIN,
+        resolver=payload.resolver,
         enabled=True,
     )
 

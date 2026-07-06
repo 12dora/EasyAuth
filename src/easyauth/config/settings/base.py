@@ -56,6 +56,7 @@ INSTALLED_APPS: list[str] = [
     "easyauth.audit.apps.AuditConfig",
     "easyauth.access_requests.apps.AccessRequestsConfig",
     "easyauth.grants.apps.GrantsConfig",
+    "easyauth.teams.apps.TeamsConfig",
     "easyauth.portal.apps.PortalConfig",
     "easyauth.admin_console.apps.AdminConsoleConfig",
 ]
