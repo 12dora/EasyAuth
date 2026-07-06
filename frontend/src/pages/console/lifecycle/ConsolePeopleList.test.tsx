@@ -59,8 +59,8 @@ describe("ConsolePeopleList", () => {
     expect(table.getByText("已离职")).toBeVisible();
     // 已离职且有进行中交接单 → 去交接; 在职 → 发起离职交接 / 发起转岗。
     expect(screen.getByRole("link", { name: "去交接" })).toHaveAttribute("href", "/console/lifecycle/handover-tasks/12");
-    expect(screen.getByRole("button", { name: "发起离职交接" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "发起转岗" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "离职交接" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "转岗" })).toBeVisible();
   });
 
   test("发起离职交接: 确认对话框提交后建单并跳转交接单详情", async () => {
@@ -96,7 +96,7 @@ describe("ConsolePeopleList", () => {
 
     renderList();
 
-    await user.click(await screen.findByRole("button", { name: "发起离职交接" }));
+    await user.click(await screen.findByRole("button", { name: "离职交接" }));
     expect(await screen.findByRole("dialog")).toBeVisible();
     await user.type(screen.getByLabelText("备注原因"), "工作交接");
     await user.click(screen.getByRole("button", { name: "创建交接单" }));
