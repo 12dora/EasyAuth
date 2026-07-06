@@ -340,6 +340,12 @@ def refresh_task_status(task: HandoverTask) -> HandoverTask:
         task.status = TASK_STATUS_COMPLETED
         task.save(update_fields=["status", "updated_at"])
         _record_task_event(task, action="handover_task_completed", actor_id=LIFECYCLE_ACTOR_ID)
+        if task.kind == HANDOVER_KIND_TRANSFER:
+            # 模型约定"转岗单确认后清除"部门变更提示: 转岗单完成即代表人事已处理该线索。
+            _ = UserMirror.objects.filter(
+                pk=task.subject_user_id,
+                department_changed_at__isnull=False,
+            ).update(department_changed_at=None)
         return task
     started = any(a.status != ACTION_STATUS_PENDING for a in actions) or any(
         item.status != ITEM_STATUS_PENDING for item in team_items

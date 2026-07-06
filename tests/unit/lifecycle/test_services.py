@@ -333,3 +333,57 @@ def test_open_task_is_unique_per_subject() -> None:
     assert created is False
     assert second.id == first.id
     assert HandoverTask.objects.filter(subject_user=subject).count() == 1
+
+
+def test_transfer_completion_clears_department_changed_flag() -> None:
+    # Given: 被标记"部门已变更"的当事人 + 已确认差异的转岗单, 全部 APP 动作已收尾。
+    from django.utils import timezone
+
+    from easyauth.lifecycle.models import ACTION_STATUS_SKIPPED
+    from easyauth.lifecycle.services import refresh_task_status
+
+    app, group, permission = _app_with_catalog("lc-clear-flag-app")
+    subject = UserMirror.objects.create(
+        authentik_user_id="lc-clear-flag-user",
+        department="新部门",
+        department_changed_at=timezone.now(),
+    )
+    _ = GrantService.create_grant(
+        GrantMutationInput(
+            user=subject,
+            app=app,
+            authorization_groups=(group,),
+            direct_grants=(),
+        ),
+    )
+    task, _created = ensure_handover_task(
+        subject=subject,
+        kind=HANDOVER_KIND_TRANSFER,
+        created_by="admin-a",
+    )
+    template = OnboardingTemplate.objects.create(name="清理标记岗位模板")
+    _ = OnboardingTemplateItem.objects.create(
+        template=template,
+        app=app,
+        authorization_group=group,
+    )
+    plan = build_transfer_grant_diff(task=task, template=template)
+    _ = confirm_transfer_grant_diff(
+        task=task,
+        revoke_keys=[
+            entry["key"]
+            for entry in plan.grant_diff["revoke"]
+            if isinstance(entry, dict) and isinstance(entry.get("key"), str)
+        ],
+        add_keys=[],
+        actor_id="admin-a",
+    )
+    _ = HandoverAppAction.objects.filter(task=task).update(status=ACTION_STATUS_SKIPPED)
+
+    # When: 刷新任务状态到完成。
+    refreshed = refresh_task_status(HandoverTask.objects.get(pk=task.pk))
+
+    # Then: 转岗单完成, "部门已变更"提示被清除。
+    assert refreshed.status == "completed"
+    subject.refresh_from_db()
+    assert subject.department_changed_at is None

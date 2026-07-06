@@ -510,3 +510,76 @@ def test_directory_sync_isolates_single_user_org_fetch_failure() -> None:
     assert result.org_fetch_failed_count == 1
     assert DingTalkUserOrgContext.objects.filter(user_id="user-org-ok").exists()
     assert not DingTalkUserOrgContext.objects.filter(user_id="user-org-broken").exists()
+
+
+def test_first_department_population_does_not_flag_change() -> None:
+    # Given: 镜像还没有部门信息(首次同步补数据, 不是转岗)。
+    _ = UserMirror.objects.create(
+        authentik_user_id="ak-first-dept",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-first",
+    )
+    client_stub = _stub_with_users(
+        [
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-first",
+                "union_id": "union-first",
+                "name": "首同步",
+                "status": "active",
+            }
+        ],
+    )
+    client_stub.org_contexts[("corp-1", "user-first")] = {
+        "corp_id": "corp-1",
+        "user_id": "user-first",
+        "departments": [{"dept_id": "dept-1", "name": "销售部"}],
+        "manager": {},
+        "manager_chain": [],
+        "stale": False,
+    }
+
+    # When: 同步。
+    _ = sync_authentik_dingtalk_directory(client_stub)
+
+    # Then: 部门被补齐, 但不误报"部门已变更"。
+    user = UserMirror.objects.get(authentik_user_id="ak-first-dept")
+    assert user.department == "销售部"
+    assert user.department_changed_at is None
+
+
+def test_real_department_change_sets_flag() -> None:
+    # Given: 镜像已有旧部门。
+    _ = UserMirror.objects.create(
+        authentik_user_id="ak-moved-dept",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-moved",
+        department="市场部",
+    )
+    client_stub = _stub_with_users(
+        [
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-moved",
+                "union_id": "union-moved",
+                "name": "调岗人",
+                "status": "active",
+            }
+        ],
+    )
+    client_stub.org_contexts[("corp-1", "user-moved")] = {
+        "corp_id": "corp-1",
+        "user_id": "user-moved",
+        "departments": [{"dept_id": "dept-2", "name": "销售部"}],
+        "manager": {},
+        "manager_chain": [],
+        "stale": False,
+    }
+
+    # When: 同步检出部门变化。
+    _ = sync_authentik_dingtalk_directory(client_stub)
+
+    # Then: 置位"部门已变更"提示。
+    user = UserMirror.objects.get(authentik_user_id="ak-moved-dept")
+    assert user.department == "销售部"
+    assert user.department_changed_at is not None

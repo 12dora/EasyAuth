@@ -273,12 +273,14 @@ def _update_user_mirror_summary(payload: DirectoryJson) -> None:
     queryset = UserMirror.objects.filter(dingtalk_corp_id=corp_id, dingtalk_userid=user_id)
     for user in queryset.select_for_update():
         update_fields: list[str] = []
+        previous_department = user.department
         for field, value in changed.items():
             if getattr(user, field) != value:
                 setattr(user, field, value)
                 update_fields.append(field)
-        if "department" in update_fields:
+        if "department" in update_fields and previous_department != "":
             # 部门变更只做提示线索(转岗是人事决策, 系统不猜, 不自动建单)。
+            # 首次同步"空 → 有部门"是补数据不是转岗, 不置位, 否则全员误报"部门已变更"。
             user.department_changed_at = timezone.now()
             update_fields.append("department_changed_at")
         if update_fields:
