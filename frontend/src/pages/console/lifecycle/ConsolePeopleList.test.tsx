@@ -14,7 +14,6 @@ const PEOPLE_PAYLOAD = {
       email: "zhangsan@example.com",
       department: "销售部",
       status: "active",
-      department_changed_at: "2026-07-01T00:00:00Z",
       open_handover_task_id: null,
       open_handover_kind: "",
     },
@@ -24,7 +23,6 @@ const PEOPLE_PAYLOAD = {
       email: "lisi@example.com",
       department: "客服部",
       status: "departed",
-      department_changed_at: null,
       open_handover_task_id: 12,
       open_handover_kind: "offboard",
     },
@@ -37,7 +35,7 @@ describe("ConsolePeopleList", () => {
     vi.unstubAllGlobals();
   });
 
-  test("人员列表展示状态徽标、部门已变更提示与行操作", async () => {
+  test("人员列表展示状态徽标与行操作", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(async (input) => {
@@ -54,7 +52,6 @@ describe("ConsolePeopleList", () => {
     expect(await screen.findByText("张三")).toBeVisible();
     const table = within(screen.getByRole("table"));
     expect(table.getByText("在职")).toBeVisible();
-    expect(table.getByText("部门已变更")).toBeVisible();
     expect(table.getByText("李四")).toBeVisible();
     expect(table.getByText("已离职")).toBeVisible();
     // 已离职且有进行中交接单 → 去交接; 在职 → 发起离职交接 / 发起转岗。

@@ -12,7 +12,6 @@ from easyauth.admin_console.api_payloads import list_payload, paginated_list_pay
 from easyauth.admin_console.api_responses import error_response, json_response
 from easyauth.admin_console.operation_filters import paginate_queryset
 from easyauth.admin_console.request_guards import require_console_actor
-from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode
 from easyauth.api.pagination import pagination_item
 from easyauth.lifecycle.models import TASK_OPEN_STATUSES, HandoverTask
@@ -99,7 +98,6 @@ def _user_item(user: UserMirror) -> dict[str, JsonValue]:
 def _person_item(user: UserMirror) -> dict[str, JsonValue]:
     item = _user_item(user)
     item["status"] = user.status
-    item["department_changed_at"] = datetime_value(user.department_changed_at)
     open_task = (
         HandoverTask.objects.filter(
             subject_user=user,

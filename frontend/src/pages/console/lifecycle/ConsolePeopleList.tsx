@@ -223,12 +223,7 @@ function peopleColumns(t: Translator, actions: PeopleRowActions): ColumnDef<Pers
       header: t("people.column.name"),
       cell: ({ row }) => (
         <div className="flex min-w-0 flex-col gap-1">
-          <span className="flex flex-wrap items-center gap-1.5">
-            <strong>{row.original.name || row.original.user_id}</strong>
-            {row.original.department_changed_at && row.original.status === "active" ? (
-              <Badge tone="amber">{t("people.departmentChanged")}</Badge>
-            ) : null}
-          </span>
+          <strong>{row.original.name || row.original.user_id}</strong>
           <code className={MONO_TEXT_CLASS}>{row.original.user_id}</code>
         </div>
       ),

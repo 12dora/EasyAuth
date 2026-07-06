@@ -461,7 +461,6 @@ export interface PersonRow {
   email: string;
   department: string;
   status: "active" | "disabled" | "departed" | string;
-  department_changed_at: string | null;
   open_handover_task_id: number | null;
   open_handover_kind: "offboard" | "transfer" | "";
 }
