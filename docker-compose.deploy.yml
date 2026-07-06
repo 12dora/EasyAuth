@@ -1,12 +1,15 @@
 # EasyAuth 公网反代部署(iam.jiefakj.com)。
 #
-# 容器化 web + celery worker + celery beat + 一个专用 redis。
+# 容器化 web + celery worker + celery beat + dingtalk stream + 一个专用 redis。
 # - worker/beat 是必备项, 不是可选增强: 缺了会静默丢失一整批特性——
 #     · beat 调度的 dingtalk-directory-sync 是离职检出的信号源(目录同步 → 自动建交接单),
 #       没有 beat, 离职/转岗自动化链路根本不会触发;
 #     · grant-expiration-cleanup(限时授权到期回收)、dependency-health-check 也依赖 beat;
 #     · worker 消费 webhook 投递(审批结果 approval.completed)、Authentik 离职禁号等异步任务。
-#   三者共用同一 easyauth-web:local 镜像与 broker(redis db0/1), 一起 up 才是完整部署。
+#   四者共用同一 easyauth-web:local 镜像与 broker(redis db0/1), 一起 up 才是完整部署。
+# - stream 是钉钉 Stream 模式常驻消费进程(WebSocket 出站长连接, 无入站端口):
+#   通讯录入离职/部门变更事件到达后触发目录快速同步(秒级), 审批实例事件实时推进审批状态;
+#   它挂掉不丢事件——钉钉按 ACK 重投 + beat 的 5 分钟目录轮询仍是兜底。
 # - 数据仍用仓库根的 db.sqlite3(挂载进容器), 以保留已注册的 easytrade 应用与静态 token、
 #   Authentik 集成配置、用户等状态 —— 迁到 Postgres 会丢这些, 破坏 EasyTrade↔EasyAuth 联调。
 #   web 与 worker 并发写同一 SQLite: 任务低频(目录同步 5min/授权清理 1min), 写锁竞争可接受,
@@ -97,6 +100,17 @@ services:
       # schedule 落 /tmp(容器内必可写), 避免 /app 权限问题; 只跑单实例, 不要 scale。
       - "--schedule=/tmp/celerybeat-schedule"
     # beat 无 inspect 接口; 进程崩溃会让 command 退出并由 restart 拉起, 无需 healthcheck。
+    healthcheck:
+      disable: true
+
+  stream:
+    <<: *easyauth-common
+    # 钉钉 Stream 消费进程: 事件先落收件箱再 ACK, 处理经 Celery 派发(broker=redis)。
+    # 凭证读 IntegrationSettings(数据库)/环境变量, 未配置时进程快速失败并由 restart 重试,
+    # 便于在控制台补配后自动恢复。只跑单实例, 不要 scale(多实例会重复消费同一事件,
+    # 虽有 event_id 幂等兜底, 但徒增无谓的重复投递)。
+    command: ["python", "manage.py", "run_dingtalk_stream"]
+    # 镜像默认 healthcheck 探测 :8001, stream 不监听端口; 进程退出由 restart 拉起。
     healthcheck:
       disable: true
 

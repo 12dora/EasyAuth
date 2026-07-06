@@ -10,6 +10,7 @@
 6. [ADR-001：业务授权运营边界](decisions/ADR-001-业务授权运营边界.md)
 7. [EasyAuth 员工门户 React 私有 API](api/easyauth-portal-react-api.md)
 8. [EasyAuth 前端视觉契约](architecture/easyauth-frontend-visual-contract.md)
+9. [EasyAuth 钉钉 Stream 事件集成设计](architecture/easyauth-dingtalk-stream-design.md)
 
 ## 文档规则
 

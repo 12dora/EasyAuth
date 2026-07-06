@@ -58,6 +58,7 @@ INSTALLED_APPS: list[str] = [
     "easyauth.grants.apps.GrantsConfig",
     "easyauth.teams.apps.TeamsConfig",
     "easyauth.webhooks.apps.WebhooksConfig",
+    "easyauth.integrations.apps.IntegrationsConfig",
     "easyauth.workflows.apps.WorkflowsConfig",
     "easyauth.lifecycle.apps.LifecycleConfig",
     "easyauth.portal.apps.PortalConfig",
@@ -303,6 +304,7 @@ CELERY_IMPORTS = (
     "easyauth.tasks.health",
     "easyauth.tasks.webhooks",
     "easyauth.tasks.lifecycle",
+    "easyauth.tasks.dingtalk_stream",
 )
 CELERY_BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
     "grant-expiration-cleanup": {

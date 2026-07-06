@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from http import HTTPStatus
-from json import JSONDecodeError, loads
+from json import JSONDecodeError, dumps, loads
 from typing import TYPE_CHECKING, Final, Self, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
@@ -37,6 +37,7 @@ DIRECTORY_NOT_FOUND_MESSAGE = "Authentik 目录 API 资源不存在。"
 DIRECTORY_PAGINATION_NOT_ADVANCING_MESSAGE = "Authentik 目录 API 分页游标未前进。"
 DIRECTORY_PAGINATION_LIMIT_MESSAGE = "Authentik 目录 API 分页超出最大页数上限。"
 DIRECTORY_INSECURE_BASE_URL_MESSAGE = "Authentik base_url 必须为 https, 拒绝明文传输管理 token。"
+DIRECTORY_SYNC_NOT_QUEUED_MESSAGE = "Authentik 目录同步触发失败, 响应未确认排队。"
 # 分页硬上限: 上游若返回恒定/循环游标, 物化成 tuple 的调用方会挂死到 worker 被杀。
 DIRECTORY_MAX_PAGES: Final = 1000
 
@@ -89,7 +90,14 @@ class AuthentikDirectoryClient:
         )
 
     def get_status(self) -> DingTalkDirectoryStatus:
-        return parse_status(self._get_json("status/"), source_slug=self.source_slug)
+        return parse_status(self._request_json("status/"), source_slug=self.source_slug)
+
+    def trigger_sync(self, corp_id: str) -> None:
+        # Stream 事件到达后主动触发 Authentik 拉取钉钉目录, 把入离职生效延迟从
+        # 定时轮询压缩到秒级; 排队确认缺失说明上游契约破坏, 必须显式失败重试。
+        payload = self._request_json("sync/", method="POST", body={"corp_id": corp_id})
+        if payload.get("queued") is not True:
+            raise AuthentikDirectoryUnavailableError(DIRECTORY_SYNC_NOT_QUEUED_MESSAGE)
 
     def iter_departments(self) -> Iterator[DingTalkDirectoryDepartment]:
         for page in self._iter_paginated("departments/"):
@@ -113,7 +121,7 @@ class AuthentikDirectoryClient:
         quoted_corp = quote(corp_id, safe="")
         quoted_user = quote(user_id, safe="")
         return parse_org_context(
-            self._get_json(f"users/{quoted_corp}/{quoted_user}/org/"),
+            self._request_json(f"users/{quoted_corp}/{quoted_user}/org/"),
             source_slug=self.source_slug,
         )
 
@@ -122,7 +130,7 @@ class AuthentikDirectoryClient:
         quoted_manager = quote(manager_user_id, safe="")
         try:
             return parse_managed_users(
-                self._get_json(
+                self._request_json(
                     f"managed-users/by-manager/{quoted_corp}/{quoted_manager}/",
                 ),
                 source_slug=self.source_slug,
@@ -133,7 +141,7 @@ class AuthentikDirectoryClient:
     def _iter_paginated(self, suffix: str) -> Iterator[DirectoryJson]:
         page = 1
         for _ in range(DIRECTORY_MAX_PAGES):
-            payload = self._get_json(suffix, query={"page": str(page)})
+            payload = self._request_json(suffix, query={"page": str(page)})
             yield payload
             next_page = _next_page(payload)
             if next_page is None:
@@ -147,7 +155,14 @@ class AuthentikDirectoryClient:
             page = next_page
         raise AuthentikDirectoryUnavailableError(DIRECTORY_PAGINATION_LIMIT_MESSAGE)
 
-    def _get_json(self, suffix: str, *, query: dict[str, str] | None = None) -> DirectoryJson:
+    def _request_json(
+        self,
+        suffix: str,
+        *,
+        query: dict[str, str] | None = None,
+        method: str = "GET",
+        body: DirectoryJson | None = None,
+    ) -> DirectoryJson:
         # 发送边界强制 https(仅本地 localhost 允许 http): 管理 token 走 Authorization: Bearer,
         # base_url 明文会导致 token 明文传输(BS-19)。归为目录不可用, 由健康/同步各自处理。
         try:
@@ -155,16 +170,22 @@ class AuthentikDirectoryClient:
         except InsecureUrlError as error:
             raise AuthentikDirectoryUnavailableError(DIRECTORY_INSECURE_BASE_URL_MESSAGE) from error
         query_string = f"?{urlencode(query)}" if query else ""
+        headers = {
+            "Accept": "application/json",
+            "Authorization": f"Bearer {self.api_token}",
+        }
+        data: bytes | None = None
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+            data = dumps(body).encode("utf-8")
         request = Request(  # noqa: S310 - URL 来自本地配置.
             (
                 f"{self.base_url}/api/v3/sources/oauth/dingtalk-directory/"
                 f"{self.source_slug}/{suffix}{query_string}"
             ),
-            headers={
-                "Accept": "application/json",
-                "Authorization": f"Bearer {self.api_token}",
-            },
-            method="GET",
+            data=data,
+            headers=headers,
+            method=method,
         )
         raw_body = b""
         try:

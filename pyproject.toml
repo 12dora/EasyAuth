@@ -18,6 +18,7 @@ dependencies = [
   "pyotp>=2.10.0",
   "webauthn>=3.0.0",
   "qrcode>=8.2",
+  "dingtalk-stream>=0.24,<1",
 ]
 
 [project.optional-dependencies]
