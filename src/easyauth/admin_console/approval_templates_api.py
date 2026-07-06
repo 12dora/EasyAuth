@@ -4,6 +4,7 @@ import uuid
 from http import HTTPStatus
 from typing import TYPE_CHECKING, ClassVar, cast
 
+from django.db.models import ProtectedError
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -98,6 +99,8 @@ def console_approval_template_detail(request: HttpRequest, template_id: int) -> 
         return json_response({"approval_template": _template_item(template)})
     if request.method == "PATCH":
         return _patch_template(request, template, actor_id)
+    if request.method == "DELETE":
+        return _delete_template(template, actor_id)
     return method_not_allowed_response()
 
 
@@ -217,6 +220,29 @@ def _patch_template(
     return json_response({"approval_template": _template_item(template)})
 
 
+def _delete_template(template: ApprovalTemplate, actor_id: str) -> JsonResponse:
+    # 删除前先留存标识: delete() 成功后 template.pk 会被置空, 无法再取 id。
+    template_id = template.id
+    template_key = template.key
+    app_key = template.app.app_key if template.app is not None else ""
+    try:
+        _ = template.delete()
+    except ProtectedError:
+        # instances=PROTECT: 已被审批实例引用的模板不能删除, 提示改为停用。
+        return _conflict("该审批模板已被审批实例引用, 不能删除; 可改为停用。")
+    _ = AuditService.record(
+        AuditRecord(
+            actor_type="admin",
+            actor_id=actor_id,
+            action="approval_template_deleted",
+            target_type="approval_template",
+            target_id=str(template_id),
+            metadata={"key": template_key, "app_key": app_key},
+        ),
+    )
+    return json_response({"deleted": True})
+
+
 def _template_item(template: ApprovalTemplate) -> JsonObject:
     return {
         "id": template.id,
@@ -265,3 +291,7 @@ def _validation_error(message: str, details: JsonObject | None = None) -> JsonRe
 
 def _not_found(message: str) -> JsonResponse:
     return error_response(ErrorCode.NOT_FOUND, message, status=HTTPStatus.NOT_FOUND)
+
+
+def _conflict(message: str) -> JsonResponse:
+    return error_response(ErrorCode.SEMANTIC_VALIDATION_ERROR, message, status=HTTPStatus.CONFLICT)

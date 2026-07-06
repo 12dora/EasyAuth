@@ -10,9 +10,11 @@ import { Fragment, type FormEvent } from "react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../components/ui/TablePrimitives";
-import { TableActionCell, TableRowActionLink } from "../../components/ui/TableActions";
+import { TableActionCell, TableRowActionButton, TableRowActionLink } from "../../components/ui/TableActions";
+import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { PageState } from "../../components/ui/PageState";
+import { useToast } from "../../components/ui/Toast";
 
 import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
@@ -33,14 +35,28 @@ export function teamLeadersLabel(leaders: TeamSummary["leaders"] | undefined): s
 
 export function ConsoleTeamList() {
   const { t } = useI18n();
+  const toast = useToast();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<TeamSummary | null>(null);
   const teamsQuery = useQuery({
     queryKey: ["console", "teams"],
     queryFn: () => apiRequest<ListPayload<TeamSummary>>("/console/api/v1/teams"),
   });
   const teams = itemsFromPayload<TeamSummary>(teamsQuery.data);
+  const deleteMutation = useMutation({
+    mutationFn: (team: TeamSummary) =>
+      apiRequest(`/console/api/v1/teams/${team.id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["console", "teams"] });
+      setDeleteTarget(null);
+      toast.success(t("console.teams.deleteSuccess"));
+    },
+    onError: (error: Error) => {
+      toast.error(t("console.teams.deleteFailed"), error.message);
+    },
+  });
   const createMutation = useMutation({
     mutationFn: (payload: TeamCreateFormPayload) =>
       apiRequest<TeamPayload>("/console/api/v1/teams", {
@@ -97,6 +113,9 @@ export function ConsoleTeamList() {
           >
             {t("console.teams.view")}
           </TableRowActionLink>
+          <TableRowActionButton type="button" variant="ghost-danger" onClick={() => setDeleteTarget(row.original)}>
+            {t("common.delete")}
+          </TableRowActionButton>
         </TableActionCell>
       ),
     },
@@ -184,6 +203,16 @@ export function ConsoleTeamList() {
           isSubmitting={createMutation.isPending}
           onClose={() => setCreateDialogOpen(false)}
           onSubmit={(payload) => createMutation.mutate(payload)}
+        />
+      ) : null}
+      {deleteTarget ? (
+        <ConfirmDialog
+          title={t("console.teams.deleteTitle")}
+          message={t("console.teams.deleteMessage", { name: deleteTarget.name })}
+          confirmLabel={t("common.delete")}
+          confirming={deleteMutation.isPending}
+          onConfirm={() => deleteMutation.mutate(deleteTarget)}
+          onClose={() => setDeleteTarget(null)}
         />
       ) : null}
     </>

@@ -15,6 +15,7 @@ import { Field, SelectInput, TextArea, TextInput } from "../../../components/Fie
 import { PageHeader } from "../../../components/PageHeader";
 import { StatusBanner } from "../../../components/StatusBanner";
 import { UserSearchInput } from "../../../components/UserSelect";
+import { ConfirmDialog } from "../../../components/ui/ConfirmDialog";
 import { EmptyState } from "../../../components/ui/EmptyState";
 import { useToast } from "../../../components/ui/Toast";
 import { PageState } from "../../../components/ui/PageState";
@@ -68,9 +69,11 @@ interface TemplateFormPayload {
 
 export function OnboardingPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const queryClient = useQueryClient();
   const [editorState, setEditorState] = useState<{ template: OnboardingTemplateRow | null } | null>(null);
   const [onboardOpen, setOnboardOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<OnboardingTemplateRow | null>(null);
 
   const templatesQuery = useQuery({
     queryKey: TEMPLATES_QUERY_KEY,
@@ -102,13 +105,45 @@ export function OnboardingPage() {
       setEditorState(null);
     },
   });
+  const toggleMutation = useMutation({
+    mutationFn: (template: OnboardingTemplateRow) =>
+      apiRequest(`/console/api/v1/lifecycle/onboarding-templates/${template.id}`, {
+        method: "PATCH",
+        body: { is_active: !template.is_active } satisfies JsonObject,
+      }),
+    onSuccess: (_, template) => {
+      void queryClient.invalidateQueries({ queryKey: TEMPLATES_QUERY_KEY });
+      // template.is_active 是切换前的旧值: 旧值为启用即刚被停用, 反之亦然。
+      toast.success(template.is_active ? t("onboarding.templates.disableSuccess") : t("onboarding.templates.enableSuccess"));
+    },
+    onError: (error: Error) => {
+      toast.error(t("onboarding.templates.toggleFailed"), error.message);
+    },
+  });
+  const deleteMutation = useMutation({
+    mutationFn: (template: OnboardingTemplateRow) =>
+      apiRequest(`/console/api/v1/lifecycle/onboarding-templates/${template.id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: TEMPLATES_QUERY_KEY });
+      setDeleteTarget(null);
+      toast.success(t("onboarding.templates.deleteSuccess"));
+    },
+    onError: (error: Error) => {
+      toast.error(t("onboarding.templates.deleteFailed"), error.message);
+    },
+  });
 
   const openEditor = (template: OnboardingTemplateRow | null) => {
     saveMutation.reset();
     setEditorState({ template });
   };
 
-  const columns = templateColumns(t, openEditor);
+  const columns = templateColumns(t, {
+    onEdit: openEditor,
+    onToggle: (template) => toggleMutation.mutate(template),
+    onDelete: (template) => setDeleteTarget(template),
+    toggling: toggleMutation.isPending,
+  });
   const table = useReactTable({
     data: templates,
     columns,
@@ -202,11 +237,28 @@ export function OnboardingPage() {
         />
       ) : null}
       {onboardOpen ? <OnboardDialog templates={templates.filter((template) => template.is_active)} onClose={() => setOnboardOpen(false)} /> : null}
+      {deleteTarget ? (
+        <ConfirmDialog
+          title={t("onboarding.templates.deleteTitle")}
+          message={t("onboarding.templates.deleteMessage", { name: deleteTarget.name })}
+          confirmLabel={t("common.delete")}
+          confirming={deleteMutation.isPending}
+          onConfirm={() => deleteMutation.mutate(deleteTarget)}
+          onClose={() => setDeleteTarget(null)}
+        />
+      ) : null}
     </>
   );
 }
 
-function templateColumns(t: Translator, onEdit: (template: OnboardingTemplateRow) => void): ColumnDef<OnboardingTemplateRow>[] {
+interface TemplateRowActions {
+  onEdit: (template: OnboardingTemplateRow) => void;
+  onToggle: (template: OnboardingTemplateRow) => void;
+  onDelete: (template: OnboardingTemplateRow) => void;
+  toggling: boolean;
+}
+
+function templateColumns(t: Translator, actions: TemplateRowActions): ColumnDef<OnboardingTemplateRow>[] {
   return [
     {
       header: t("common.name"),
@@ -236,9 +288,17 @@ function templateColumns(t: Translator, onEdit: (template: OnboardingTemplateRow
       id: "actions",
       header: t("common.actions"),
       cell: ({ row }) => (
-        <TableRowActionButton type="button" onClick={() => onEdit(row.original)}>
-          {t("common.edit")}
-        </TableRowActionButton>
+        <>
+          <TableRowActionButton type="button" onClick={() => actions.onEdit(row.original)}>
+            {t("common.edit")}
+          </TableRowActionButton>
+          <TableRowActionButton type="button" disabled={actions.toggling} onClick={() => actions.onToggle(row.original)}>
+            {row.original.is_active ? t("common.disable") : t("common.enable")}
+          </TableRowActionButton>
+          <TableRowActionButton type="button" variant="ghost-danger" onClick={() => actions.onDelete(row.original)}>
+            {t("common.delete")}
+          </TableRowActionButton>
+        </>
       ),
     },
   ];
@@ -270,7 +330,6 @@ function TemplateEditorDialog({
   const { t } = useI18n();
   const [name, setName] = useState(template?.name ?? "");
   const [description, setDescription] = useState(template?.description ?? "");
-  const [isActive, setIsActive] = useState(template?.is_active ?? true);
   const [items, setItems] = useState<TemplateItemDraft[]>(() =>
     (template?.items ?? []).map((item: OnboardingTemplateItemRow) => ({
       app_key: item.app_key,
@@ -289,7 +348,8 @@ function TemplateEditorDialog({
     if (!normalizedName) {
       return;
     }
-    onSubmit({ name: normalizedName, description: description.trim(), is_active: isActive, items });
+    // 启用/停用已移到列表操作列(直接 PATCH); 编辑弹窗只改内容, is_active 原样透传(新建默认启用)。
+    onSubmit({ name: normalizedName, description: description.trim(), is_active: template?.is_active ?? true, items });
   };
 
   return (
@@ -315,10 +375,6 @@ function TemplateEditorDialog({
         <Field label={t("common.description")}>
           <TextArea rows={2} value={description} onChange={(event) => setDescription(event.currentTarget.value)} />
         </Field>
-        <label className="inline-flex items-center gap-2 text-body text-ink">
-          <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.currentTarget.checked)} />
-          <span>{t("onboarding.editor.isActive")}</span>
-        </label>
         <Field label={t("onboarding.editor.items")} as="group">
           <div className="space-y-2">
             {items.length === 0 ? (

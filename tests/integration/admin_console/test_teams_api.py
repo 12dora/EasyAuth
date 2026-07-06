@@ -117,6 +117,25 @@ def test_superuser_deactivates_team() -> None:
     assert team_payload["is_active"] is False
 
 
+def test_superuser_deletes_team_and_cascades_members() -> None:
+    # Given: 一个带成员的团队。
+    client = _logged_in_superuser("teams-delete-admin")
+    team = Team.objects.create(name="删除组")
+    user = UserMirror.objects.create(authentik_user_id="teams-delete-user")
+    member = TeamMember.objects.create(team=team, user=user, role="member")
+
+    # When: 从表格操作列删除团队。
+    response = client.delete(f"/console/api/v1/teams/{team.id}")
+
+    # Then: 团队与成员关系一并移除(CASCADE), 审计留痕。
+    body = _response_json(response)
+    assert response.status_code == HTTPStatus.OK
+    assert body["deleted"] is True
+    assert not Team.objects.filter(id=team.id).exists()
+    assert not TeamMember.objects.filter(id=member.id).exists()
+    assert AuditLog.objects.filter(event_type="team_deleted").exists()
+
+
 def test_team_write_rejects_duplicate_name_member_and_departed_user() -> None:
     # Given
     client = _logged_in_superuser("teams-validation-admin")

@@ -438,6 +438,13 @@ def lifecycle_onboarding_templates(request: HttpRequest) -> JsonResponse:
     return method_not_allowed_response()
 
 
+class OnboardingTemplateStatusPayload(BaseModel):
+    # 列表操作列的启停切换: body 只含 is_active, 用于与「完整模板写入」区分。
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
+
+    is_active: bool
+
+
 def lifecycle_onboarding_template_detail(
     request: HttpRequest,
     template_id: int,
@@ -453,7 +460,18 @@ def lifecycle_onboarding_template_detail(
     if request.method == "GET":
         return json_response({"onboarding_template": _template_item(template)})
     if request.method == "PATCH":
-        return _write_template(request, template=template)
+        # 仅含 is_active 的请求 = 列表操作列的启停切换, 轻量更新不重建模板项; 其余走完整模板写入。
+        try:
+            status = OnboardingTemplateStatusPayload.model_validate_json(request.body)
+        except ValidationError:
+            return _write_template(request, template=template)
+        template.is_active = status.is_active
+        template.save()
+        return json_response({"onboarding_template": _template_item(template)})
+    if request.method == "DELETE":
+        # 硬删除岗位模板: 关联的模板项(items)按 CASCADE 一并清除。
+        _ = template.delete()
+        return json_response({"deleted": True})
     return method_not_allowed_response()
 
 

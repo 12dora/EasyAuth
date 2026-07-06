@@ -4,7 +4,7 @@ import {
   useReactTable,
   type ColumnDef,
 } from "@tanstack/react-table";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, RefreshCcw } from "lucide-react";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
@@ -14,9 +14,10 @@ import { Button } from "../../../components/Button";
 import { SelectInput } from "../../../components/Field";
 import { PageHeader } from "../../../components/PageHeader";
 import { StatusBanner } from "../../../components/StatusBanner";
+import { ConfirmDialog } from "../../../components/ui/ConfirmDialog";
 import { EmptyState } from "../../../components/ui/EmptyState";
 import { PageState } from "../../../components/ui/PageState";
-import { TableActionCell, TableRowActionLink } from "../../../components/ui/TableActions";
+import { TableActionCell, TableRowActionButton, TableRowActionLink } from "../../../components/ui/TableActions";
 import {
   TableBody,
   TableCell,
@@ -28,6 +29,7 @@ import {
   TableRow,
   TableSkeletonRows,
 } from "../../../components/ui/TablePrimitives";
+import { useToast } from "../../../components/ui/Toast";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../../lib/api";
 import type { ListPayload } from "../../../lib/api";
@@ -41,9 +43,12 @@ const TASK_KINDS = ["offboard", "transfer"] as const;
 
 export function HandoverTaskList() {
   const { t } = useI18n();
+  const toast = useToast();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState("");
   const [kindFilter, setKindFilter] = useState("");
+  const [deleteTarget, setDeleteTarget] = useState<HandoverTaskRow | null>(null);
 
   const tasksQuery = useQuery({
     queryKey: ["console", "handover-tasks", statusFilter, kindFilter],
@@ -53,7 +58,23 @@ export function HandoverTaskList() {
       ),
   });
   const tasks = itemsFromPayload<HandoverTaskRow>(tasksQuery.data);
-  const columns = taskColumns(t, (taskId) => void navigate(`/console/lifecycle/handover-tasks/${taskId}`));
+  const deleteMutation = useMutation({
+    mutationFn: (task: HandoverTaskRow) =>
+      apiRequest(`/console/api/v1/lifecycle/handover-tasks/${task.id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["console", "handover-tasks"] });
+      setDeleteTarget(null);
+      toast.success(t("handover.list.deleteSuccess"));
+    },
+    onError: (error: Error) => {
+      toast.error(t("handover.list.deleteFailed"), error.message);
+    },
+  });
+  const columns = taskColumns(
+    t,
+    (taskId) => void navigate(`/console/lifecycle/handover-tasks/${taskId}`),
+    (task) => setDeleteTarget(task),
+  );
   const table = useReactTable({
     data: tasks,
     columns,
@@ -154,11 +175,27 @@ export function HandoverTaskList() {
           </TableRoot>
         </TableFrame>
       )}
+      {deleteTarget ? (
+        <ConfirmDialog
+          title={t("handover.list.deleteTitle")}
+          message={t("handover.list.deleteMessage", {
+            name: deleteTarget.subject.name || deleteTarget.subject.user_id,
+          })}
+          confirmLabel={t("common.delete")}
+          confirming={deleteMutation.isPending}
+          onConfirm={() => deleteMutation.mutate(deleteTarget)}
+          onClose={() => setDeleteTarget(null)}
+        />
+      ) : null}
     </>
   );
 }
 
-function taskColumns(t: Translator, onOpen: (taskId: number) => void): ColumnDef<HandoverTaskRow>[] {
+function taskColumns(
+  t: Translator,
+  onOpen: (taskId: number) => void,
+  onDelete: (task: HandoverTaskRow) => void,
+): ColumnDef<HandoverTaskRow>[] {
   return [
     {
       header: t("handover.list.column.subject"),
@@ -187,16 +224,21 @@ function taskColumns(t: Translator, onOpen: (taskId: number) => void): ColumnDef
       id: "actions",
       header: t("common.actions"),
       cell: ({ row }) => (
-        <TableRowActionLink
-          href={`/console/lifecycle/handover-tasks/${row.original.id}`}
-          icon={<ArrowRight size={15} />}
-          onClick={(event) => {
-            event.preventDefault();
-            onOpen(row.original.id);
-          }}
-        >
-          {t("handover.continue")}
-        </TableRowActionLink>
+        <>
+          <TableRowActionLink
+            href={`/console/lifecycle/handover-tasks/${row.original.id}`}
+            icon={<ArrowRight size={15} />}
+            onClick={(event) => {
+              event.preventDefault();
+              onOpen(row.original.id);
+            }}
+          >
+            {t("handover.continue")}
+          </TableRowActionLink>
+          <TableRowActionButton type="button" variant="ghost-danger" onClick={() => onDelete(row.original)}>
+            {t("common.delete")}
+          </TableRowActionButton>
+        </>
       ),
     },
   ];

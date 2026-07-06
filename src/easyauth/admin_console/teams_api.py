@@ -132,6 +132,8 @@ def console_team_detail(request: HttpRequest, team_id: int) -> JsonResponse:
         return json_response(_team_detail_payload(team))
     if request.method == "PATCH":
         return _patch_team(request, team, actor)
+    if request.method == "DELETE":
+        return _delete_team(team, actor)
     return method_not_allowed_response()
 
 
@@ -260,6 +262,13 @@ def _patch_member(
         action="team_member_role_updated",
     )
     return json_response(_team_detail_payload(team))
+
+
+def _delete_team(team: Team, actor: ConsoleActor) -> JsonResponse:
+    # 硬删除团队: 成员(TeamMember)与交接项(HandoverTeamItem)按 CASCADE 一并清除; 先审计再删除以保留 team 信息。
+    _record_team_event(actor=actor, team=team, action="team_deleted")
+    _ = team.delete()
+    return json_response({"deleted": True})
 
 
 def _remove_member(team: Team, member: TeamMember, actor: ConsoleActor) -> JsonResponse:

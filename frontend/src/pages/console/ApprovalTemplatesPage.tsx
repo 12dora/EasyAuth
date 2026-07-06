@@ -9,8 +9,10 @@ import { Plus, RefreshCcw } from "lucide-react";
 import { Fragment, useState, type FormEvent } from "react";
 import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../components/ui/TablePrimitives";
 import { TableActionCell, TableRowActionButton } from "../../components/ui/TableActions";
+import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { PageState } from "../../components/ui/PageState";
+import { useToast } from "../../components/ui/Toast";
 import { MONO_TEXT_CLASS } from "../../components/ui/tableStyles";
 
 import { Badge } from "../../components/Badge";
@@ -39,14 +41,28 @@ interface TemplateFormPayload {
 
 export function ApprovalTemplatesPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const queryClient = useQueryClient();
   const [editorState, setEditorState] = useState<{ template: ApprovalTemplateItem | null } | null>(null);
   const [testTemplate, setTestTemplate] = useState<ApprovalTemplateItem | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ApprovalTemplateItem | null>(null);
   const templatesQuery = useQuery({
     queryKey: TEMPLATES_QUERY_KEY,
     queryFn: () => apiRequest<ListPayload<ApprovalTemplateItem>>("/console/api/v1/approval-templates"),
   });
   const templates = itemsFromPayload<ApprovalTemplateItem>(templatesQuery.data);
+  const deleteMutation = useMutation({
+    mutationFn: (template: ApprovalTemplateItem) =>
+      apiRequest(`/console/api/v1/approval-templates/${template.id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: TEMPLATES_QUERY_KEY });
+      setDeleteTarget(null);
+      toast.success(t("approvalTemplates.deleteSuccess"));
+    },
+    onError: (error: Error) => {
+      toast.error(t("approvalTemplates.deleteFailed"), error.message);
+    },
+  });
   const saveMutation = useMutation({
     mutationFn: ({ template, payload }: { template: ApprovalTemplateItem | null; payload: TemplateFormPayload }) => {
       if (template) {
@@ -117,6 +133,9 @@ export function ApprovalTemplatesPage() {
           </TableRowActionButton>
           <TableRowActionButton type="button" onClick={() => setTestTemplate(row.original)}>
             {t("approvalTemplates.test.action")}
+          </TableRowActionButton>
+          <TableRowActionButton type="button" variant="ghost-danger" onClick={() => setDeleteTarget(row.original)}>
+            {t("common.delete")}
           </TableRowActionButton>
         </TableActionCell>
       ),
@@ -207,6 +226,16 @@ export function ApprovalTemplatesPage() {
         />
       ) : null}
       {testTemplate ? <TemplateTestDialog template={testTemplate} onClose={() => setTestTemplate(null)} /> : null}
+      {deleteTarget ? (
+        <ConfirmDialog
+          title={t("approvalTemplates.deleteTitle")}
+          message={t("approvalTemplates.deleteMessage", { name: deleteTarget.name })}
+          confirmLabel={t("common.delete")}
+          confirming={deleteMutation.isPending}
+          onConfirm={() => deleteMutation.mutate(deleteTarget)}
+          onClose={() => setDeleteTarget(null)}
+        />
+      ) : null}
     </>
   );
 }
