@@ -114,7 +114,7 @@
 | authorize 报 `invalid_request`，日志 `Invalid grant_type for provider` | provider `grant_types` 为空 | 补 `authorization_code`+`refresh_token` |
 | OIDC「自动发现」404，`curl .well-known` 公网 404 本机 200 | 宝塔/aaPanel 生成的 `location ~ \.well-known{` 未锚定，URI 任意位置含 `.well-known` 都被截走落盘 | 把三个域名 vhost 的该行改成 `location ~ ^/\.well-known/{` 后 reload（2026-07-06 已修；注意机器上可能有两个 nginx master，要 reload 持有 443 的那个）；ACME 根路径验证不受影响 |
 | 配置脚本 404 `default-source-authentication` | blueprint 还没应用完 | 等默认 flow 出现再配置 |
-| 申请页没有默认审批人 | 钉钉应用缺"查询员工直属主管"权限 / 目录未同步 / 审批规则里是占位 userid | 补钉钉权限；触发目录同步；把审批规则换成真实 userid（钉钉 userid 或 `local-admin:<name>`） |
+| 申请页没有默认审批人 | 钉钉后台没维护「直属主管」字段 / Authentik fork 旧版同步取不到主管（user/list 不返回该字段, c0fe568 起用 user/get 补全）/ 目录未同步 / 审批规则里是占位 userid | 后台维护直属主管；升级 fork 并触发目录同步；把审批规则换成真实 userid（钉钉 userid 或 `local-admin:<name>`） |
 | manifest 导入报"无法解析" | EasyAuth 版本落后于下游 manifest 契约（如 lifecycle/webhook 节） | 升级 EasyAuth 后重试（解析器需支持对应 schema） |
 | 本人申请提交不了 | 审批人不能选自己 | 规则里配第二审批人（如 `local-admin:admin`），由管理员代审 |
 | 改完代码公网没变化 | 源码构建进镜像，重启不重建无效 | 重建镜像再 `up -d`（见 docs 部署纪律） |
