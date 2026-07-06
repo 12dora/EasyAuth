@@ -53,6 +53,20 @@ DIRECTORY_EVENT_TYPES: Final[frozenset[str]] = frozenset(
 )
 BPMS_INSTANCE_CHANGE_EVENT_TYPE: Final = "bpms_instance_change"
 
+# 已订阅、需要接住但当前没有本地消费方的事件: 完整落库(收件箱即处置结果),
+# 与"未知类型"区分开——后者说明订阅面和处理面不一致, 值得排查。
+# 角色(label)与企业信息不进目录镜像, 不触发目录刷新;
+# bpms_task_change 是审批节点级事件, 实例级状态仍以 bpms_instance_change 为准。
+RECORD_ONLY_EVENT_TYPES: Final[frozenset[str]] = frozenset(
+    {
+        "org_change",  # 企业信息发生变更
+        "label_user_change",  # 员工角色信息发生变更
+        "label_conf_add",  # 增加角色或角色组
+        "label_conf_del",  # 删除角色或角色组
+        "bpms_task_change",  # 审批任务开始/结束/转交(节点级)
+    },
+)
+
 # 事件风暴合并——窗口内的多个目录事件只排一次刷新任务; 刷新任务开始执行时先清除
 # 标记, 之后到达的事件会再次排队, 保证任何事件都被其后的一次完整同步覆盖。
 REFRESH_PENDING_CACHE_KEY_TEMPLATE: Final = "easyauth:dingtalk:stream:refresh-pending:{corp_id}"
@@ -65,6 +79,7 @@ BPMS_EVENT_MISSING_INSTANCE_MESSAGE: Final = "钉钉审批事件缺少 processIn
 BPMS_EVENT_UNSUPPORTED_CHANGE_MESSAGE: Final = "钉钉审批事件状态组合无法识别。"
 
 SKIP_REASON_UNHANDLED_EVENT_TYPE: Final = "unhandled_event_type"
+SKIP_REASON_RECORDED_NO_CONSUMER: Final = "recorded_no_consumer"
 SKIP_REASON_INSTANCE_NOT_FOUND: Final = "approval_instance_not_found"
 SKIP_REASON_INSTANCE_STARTED: Final = "approval_instance_started"
 
@@ -148,6 +163,11 @@ def dispatch_stream_event(event: DingTalkStreamEvent) -> StreamEventOutcome:
         return _handle_directory_event(event)
     if event.event_type == BPMS_INSTANCE_CHANGE_EVENT_TYPE:
         return _handle_bpms_instance_change(event)
+    if event.event_type in RECORD_ONLY_EVENT_TYPES:
+        return StreamEventOutcome(
+            status=STREAM_EVENT_STATUS_SKIPPED,
+            result={"reason": SKIP_REASON_RECORDED_NO_CONSUMER},
+        )
     # 未纳入处理的事件类型保留在收件箱(status=skipped), 是后续扩展(智能人事、
     # 考勤等)的观测依据, 不算失败。
     return StreamEventOutcome(

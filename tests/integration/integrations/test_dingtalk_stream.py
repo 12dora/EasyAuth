@@ -29,6 +29,7 @@ from easyauth.tasks.dingtalk_stream import (
     REFRESH_COALESCE_SECONDS,
     SKIP_REASON_INSTANCE_NOT_FOUND,
     SKIP_REASON_INSTANCE_STARTED,
+    SKIP_REASON_RECORDED_NO_CONSUMER,
     SKIP_REASON_UNHANDLED_EVENT_TYPE,
     StreamEventContractError,
     process_dingtalk_stream_event_task,
@@ -203,6 +204,25 @@ def test_unhandled_event_type_is_skipped_and_kept(sent_tasks: _SendTaskRecorder)
     event.refresh_from_db()
     assert status == STREAM_EVENT_STATUS_SKIPPED
     assert event.result == {"reason": SKIP_REASON_UNHANDLED_EVENT_TYPE}
+    assert sent_tasks.calls == []
+
+
+@pytest.mark.parametrize(
+    "event_type",
+    ["org_change", "label_user_change", "label_conf_add", "label_conf_del", "bpms_task_change"],
+)
+def test_record_only_event_types_are_caught(
+    sent_tasks: _SendTaskRecorder,
+    event_type: str,
+) -> None:
+    # 已订阅但暂无业务消费方的事件: 明确接住(落库+ACK), 不触发目录刷新。
+    event = _stored_event(f"evt-{event_type}", event_type, data={"TimeStamp": "1751790000000"})
+
+    status = process_dingtalk_stream_event_task(_pk(event))
+
+    event.refresh_from_db()
+    assert status == STREAM_EVENT_STATUS_SKIPPED
+    assert event.result == {"reason": SKIP_REASON_RECORDED_NO_CONSUMER}
     assert sent_tasks.calls == []
 
 

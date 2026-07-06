@@ -49,8 +49,9 @@ ACK 契约(`EasyAuthDingTalkEventHandler`):
 `easyauth.tasks.dingtalk_stream.dispatch_stream_event`:
 
 - **通讯录/部门事件**(`user_add_org`、`user_modify_org`、`user_leave_org`、`user_active_org`、`org_dept_create/modify/remove`) → 防抖合并后触发目录快速刷新(见下节), 事件行记录 `corp_id`、涉及的 `user_ids`、是否真正排队了刷新。
-- **审批事件**(`bpms_instance_change`) → 按 `(type, result)` 映射推进审批状态机: `finish+agree→approved`、`finish+refuse→rejected`、`terminate→canceled`; `start` 只记录(实例是 EasyAuth 自己发起的, 提交状态已落库)。不属于 EasyAuth 的实例(企业内其他流程)标记 `skipped`, 终态冲突按契约错误落 `failed` 并抛出。
-- **其余事件类型** → `skipped` 保留在收件箱。这是后续扩展(智能人事入离职档案、考勤等)的观测依据: 先在收件箱看到真实事件体, 再决定接入方式, 不预先猜测事件契约。
+- **审批实例事件**(`bpms_instance_change`) → 按 `(type, result)` 映射推进审批状态机: `finish+agree→approved`、`finish+refuse→rejected`、`terminate→canceled`; `start` 只记录(实例是 EasyAuth 自己发起的, 提交状态已落库)。不属于 EasyAuth 的实例(企业内其他流程)标记 `skipped`, 终态冲突按契约错误落 `failed` 并抛出。
+- **记录型事件**(`org_change` 企业信息变更、`label_user_change` 员工角色变更、`label_conf_add`/`label_conf_del` 角色或角色组增删、`bpms_task_change` 审批任务节点变更) → 完整落库后标记 `skipped(recorded_no_consumer)`: 已订阅、必须接住, 但当前没有本地消费方——角色与企业信息不进目录镜像, 审批节点级事件的实例状态以 `bpms_instance_change` 为准。
+- **其余事件类型**(含订阅面新增而处理面尚未认识的类型, 如 OA 限时审批变更、审批模板状态变更) → `skipped(unhandled_event_type)` 保留在收件箱。这是后续扩展的观测依据: 先在收件箱看到真实事件体与 eventType, 再决定接入方式, 不预先猜测事件契约。
 
 ### 一线员工口径
 
