@@ -157,8 +157,19 @@ scopes = openid corpid Contact.User.Read
 
 1. 默认 authentication flow 的 Identification stage 包含 DingTalk Source。
 2. 浏览器访问 Authentik 登录页能看到钉钉登录入口。
+3. 入口样式必须是「图标 + 钉钉登录」文字标签：Identification stage
+   `show_source_labels = True`，且**不要**设置 source 的 `promoted = True`
+   （promoted 会渲染成大按钮，业务方已明确否决该样式）。
 
 如果通过 API 或 shell 修改 Identification stage，必须保留已有 Source，不得覆盖其它登录源。
+
+已知坑（2026-07-06）：
+
+1. 全新实例的默认 flows/stages 由 worker 异步应用 blueprint 生成，`/-/health/ready/`
+   就绪不代表 `default-source-authentication` 等 flow 已存在；配置前先轮询
+   `/api/v3/flows/instances/` 确认默认 flow 就绪，否则会 404。
+2. `PATCH /api/v3/stages/identification/<pk>/` 必须同时携带 `user_fields` 与
+   `sources`，只送单字段会触发“no user fields selected”校验 400。
 
 ### 创建或复用 `easyauth_org` Scope Mapping
 
@@ -216,12 +227,17 @@ return {key: value for key, value in claims.items() if value not in (None, "", [
 name = EasyAuth Portal OIDC
 client_id = easyauth-portal
 client_type = confidential
+grant_types 包含 authorization_code 和 refresh_token
 redirect_uris 包含 EASYAUTH_CALLBACK
 redirect_uris 包含 EASYAUTH_LOGGED_OUT_URL，类型为 logout
 property_mappings 包含 openid、profile、email、easyauth_org 和可选 dingtalk
 signing_key 使用非空证书，便于 EasyAuth 通过 JWKS 和 RS256 验签
 invalidation_flow = default-provider-invalidation-flow
 ```
+
+2026.x 起 `grant_types` 通过 API 创建时默认是空列表，语义为全部拒绝。不显式写入
+`authorization_code` 时 authorize 阶段会以 `invalid_request` 失败，服务端日志为
+`Invalid grant_type for provider`（2026-07-06 从零部署踩过）。
 
 若已存在 Provider：
 

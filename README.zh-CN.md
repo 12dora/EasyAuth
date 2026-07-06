@@ -520,6 +520,7 @@ EasyAuth/
 - **架构** —— [`docs/architecture/easyauth-architecture-design.md`](docs/architecture/easyauth-architecture-design.md)
 - **业务授权运营** —— [`docs/architecture/easyauth-authorization-operations-design.md`](docs/architecture/easyauth-authorization-operations-design.md)
 - **公共 API 设计** —— [`docs/api/`](docs/api/)
+- **从零部署实录（三应用全链路）** —— [`docs/guides/zero-to-full-deployment.md`](docs/guides/zero-to-full-deployment.md)
 - **Authentik 配置** —— [自动化（LLM）](docs/guides/authentik-easyauth-automation-setup-llm.md) · [手动（人工）](docs/guides/authentik-easyauth-ui-setup-human.md)
 - **应用接入** —— [接入向导](docs/guides/easyauth-app-onboarding-wizard.md) · [SDK 集成](docs/guides/easyauth-app-sdk-integration.md)
 - **本地管理员登录** —— [`docs/guides/local-admin-login.md`](docs/guides/local-admin-login.md)
