@@ -52,6 +52,7 @@ export function App({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUse
           <Route path="/portal/request" element={<PortalPage />} />
           <Route path="/portal/requests" element={<PortalPage />} />
           <Route path="/portal/expiring" element={<PortalPage />} />
+          <Route path="/portal/approvals" element={<PortalPage />} />
           <Route path="/portal/settings" element={<SettingsPlaceholder mode="portal" />} />
           <Route path="*" element={<Navigate to="/portal" replace />} />
         </Route>

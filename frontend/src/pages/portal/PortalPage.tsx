@@ -30,8 +30,9 @@ import {
 import type { Translator } from "../../lib/status";
 import { useI18n } from "../../i18n/I18nProvider";
 import { AccessRequestForm } from "./components/AccessRequestForm";
+import { PortalApprovalsSection } from "./components/PortalApprovalsSection";
 
-type PortalView = "grants" | "request" | "requests" | "expiring";
+type PortalView = "grants" | "request" | "requests" | "expiring" | "approvals";
 
 interface PortalGrantGroup {
   key?: string;
@@ -85,6 +86,7 @@ export function PortalPage() {
       {view === "expiring" ? <PortalGrantSection endpoint="/portal/api/v1/me/grants/expiring" emptyText={t("portal.grants.emptyExpiring")} /> : null}
       {view === "requests" ? <PortalRequestSection /> : null}
       {view === "request" ? <AccessRequestForm currentUserId={currentUserId} /> : null}
+      {view === "approvals" ? <PortalApprovalsSection /> : null}
     </>
   );
 }
@@ -152,9 +154,21 @@ function PortalRequestSection() {
     {
       header: t("common.status"),
       cell: ({ row }) => (
-        <Badge tone={badgeToneForAccessRequestStatus(row.original.status)}>
-          {row.original.status_label ?? accessRequestStatusLabel(t, row.original.status)}
-        </Badge>
+        <div className="flex min-w-0 flex-col gap-1">
+          <span>
+            <Badge tone={badgeToneForAccessRequestStatus(row.original.status)}>
+              {row.original.status_label ?? accessRequestStatusLabel(t, row.original.status)}
+            </Badge>
+          </span>
+          {row.original.status === "rejected" && row.original.decision_comment ? (
+            <span className="max-w-64 whitespace-normal text-xs leading-4 text-ink-faint">
+              {t("portal.requests.rejectedInfo", {
+                comment: row.original.decision_comment,
+                time: formatDateTime(row.original.decided_at),
+              })}
+            </span>
+          ) : null}
+        </div>
       ),
     },
     { header: t("common.app"), cell: ({ row }) => row.original.app_name ?? row.original.app_key ?? "-" },
@@ -251,6 +265,9 @@ function isMonoPortalColumn(columnId: string): boolean {
 }
 
 function portalViewFromPath(pathname: string): PortalView {
+  if (pathname.endsWith("/approvals")) {
+    return "approvals";
+  }
   if (pathname.endsWith("/request")) {
     return "request";
   }
@@ -271,6 +288,8 @@ function viewTitle(t: Translator, view: PortalView): string {
       return t("nav.portal.myRequests");
     case "expiring":
       return t("nav.portal.expiring");
+    case "approvals":
+      return t("nav.portal.myApprovals");
     default:
       return t("nav.portal.myPermissions");
   }

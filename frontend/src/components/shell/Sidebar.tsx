@@ -1,9 +1,12 @@
+import { useQuery } from "@tanstack/react-query";
 import type { CSSProperties } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 
 import { useI18n } from "../../i18n/I18nProvider";
 import type { MessageKey } from "../../i18n/messages";
+import { apiRequest } from "../../lib/api";
+import type { ListPayload } from "../../lib/api";
 import { ShellNav } from "./ShellNav";
 import type { ShellNavGroup } from "./ShellNav";
 
@@ -48,20 +51,46 @@ const PORTAL_GROUPS: NavGroupSpec[] = [
       { to: "/portal/expiring", labelKey: "nav.portal.expiring" },
     ],
   },
+  {
+    labelKey: "nav.portal.approval",
+    links: [{ to: "/portal/approvals", labelKey: "nav.portal.myApprovals" }],
+  },
 ];
+
+const PORTAL_APPROVALS_PATH = "/portal/approvals";
+
+/** 门户「待我审批」角标: 只取 pagination.total_items, 审批处理后由 ["portal","approvals"] 前缀失效自动刷新。 */
+function usePendingApprovalsBadge(enabled: boolean): string {
+  const query = useQuery({
+    queryKey: ["portal", "approvals", "pending-badge"],
+    queryFn: () => apiRequest<ListPayload<unknown>>("/portal/api/v1/me/approvals?status=pending&page=1&page_size=1"),
+    enabled,
+    staleTime: 30_000,
+  });
+  const totalItems = query.data?.pagination?.total_items ?? 0;
+  if (totalItems <= 0) {
+    return "";
+  }
+  return totalItems > 99 ? "99+" : String(totalItems);
+}
 
 export function Sidebar({ mode }: SidebarProps) {
   const { t } = useI18n();
   const location = useLocation();
   const sidebarRef = useRef<HTMLElement>(null);
   const [indicatorStyle, setIndicatorStyle] = useState<CSSProperties>({});
+  const pendingApprovalsBadge = usePendingApprovalsBadge(mode === "portal");
   const groups = useMemo<ShellNavGroup[]>(
     () =>
       (mode === "console" ? CONSOLE_GROUPS : PORTAL_GROUPS).map((group) => ({
         label: t(group.labelKey),
-        links: group.links.map((link) => ({ to: link.to, label: t(link.labelKey) })),
+        links: group.links.map((link) => ({
+          to: link.to,
+          label: t(link.labelKey),
+          badge: link.to === PORTAL_APPROVALS_PATH ? pendingApprovalsBadge : undefined,
+        })),
       })),
-    [mode, t],
+    [mode, pendingApprovalsBadge, t],
   );
   const settingsPath = mode === "console" ? "/console/settings" : "/portal/settings";
   const navLinks = useMemo(() => groups.flatMap((group) => group.links), [groups]);

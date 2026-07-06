@@ -3,11 +3,13 @@ import { Send } from "lucide-react";
 import { Button } from "../../../components/Button";
 import { StatusBanner } from "../../../components/StatusBanner";
 import { PanelSurface } from "../../../components/ui/PanelSurface";
+import { useI18n } from "../../../i18n/I18nProvider";
 import { useAccessRequestForm } from "../hooks/useAccessRequestForm";
 import { AccessRequestFields } from "./AccessRequestFields";
 import { RequestTargetPicker } from "./RequestTargetPicker";
 
 export function AccessRequestForm({ currentUserId = "" }: { currentUserId?: string }) {
+  const { t } = useI18n();
   const form = useAccessRequestForm(currentUserId);
 
   return (
@@ -48,7 +50,7 @@ export function AccessRequestForm({ currentUserId = "" }: { currentUserId?: stri
           onReasonChange={form.changeReason}
         />
       </div>
-      {form.catalogErrorMessage ? <StatusBanner tone="signal" title="申请目录加载失败" message={form.catalogErrorMessage} /> : null}
+      {form.catalogErrorMessage ? <StatusBanner tone="signal" title={t("portal.request.catalogLoadFailed")} message={form.catalogErrorMessage} /> : null}
       <div className="mt-5 flex flex-wrap items-center justify-end gap-3">
         <Button
           variant="primary"
@@ -57,13 +59,16 @@ export function AccessRequestForm({ currentUserId = "" }: { currentUserId?: stri
           disabled={!form.canSubmit}
           onClick={form.submit}
         >
-          提交申请
+          {t("portal.request.submit")}
         </Button>
       </div>
-      {form.submitErrorMessage ? <StatusBanner tone="signal" title="提交失败" message={form.submitErrorMessage} /> : null}
-      {form.toastMessage ? (
+      {form.submitErrorMessage ? <StatusBanner tone="signal" title={t("portal.request.submitFailed")} message={form.submitErrorMessage} /> : null}
+      {form.toastMessageKey ? (
         <div className="mt-4" role="status">
-          <StatusBanner tone={form.toastMessage === "申请已提交" ? "evergreen" : "amber"} title={form.toastMessage} />
+          <StatusBanner
+            tone={form.toastMessageKey === "portal.request.submitted" ? "evergreen" : "amber"}
+            title={t(form.toastMessageKey)}
+          />
         </div>
       ) : null}
     </PanelSurface>

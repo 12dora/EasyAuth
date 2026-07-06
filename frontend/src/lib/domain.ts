@@ -318,6 +318,36 @@ export interface PortalRequest {
   reason?: string;
   submitted_at?: string;
   grant_expires_at?: string | null;
+  decided_at?: string | null;
+  decision_comment?: string | null;
+}
+
+export interface PortalApprovalApplicant {
+  user_id?: string;
+  name?: string;
+  email?: string;
+  department?: string;
+}
+
+/** 门户「待我审批」条目: 对齐后端 /portal/api/v1/me/approvals 序列化字段。 */
+export interface PortalApprovalItem {
+  id: number;
+  app_key?: string;
+  app_name?: string;
+  request_type?: string;
+  status?: string;
+  status_label?: string;
+  grant_type?: string;
+  grant_expires_at?: string | null;
+  reason?: string;
+  submitted_at?: string;
+  authorization_groups?: PermissionQueryGroupItem[];
+  direct_grants?: PortalDirectGrantItem[];
+  decided_at?: string | null;
+  decision_comment?: string | null;
+  applicant?: PortalApprovalApplicant;
+  approver_user_ids?: string[];
+  decided_by?: string | null;
 }
 
 export interface PortalCatalogApp {

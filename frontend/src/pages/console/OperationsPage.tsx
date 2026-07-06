@@ -7,20 +7,27 @@ import {
 } from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, RefreshCcw } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
+import type { FormEvent } from "react";
 import { useParams } from "react-router-dom";
 import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../components/ui/TablePrimitives";
+import { TableActionCell, TableRowActionButton } from "../../components/ui/TableActions";
 import { TablePagination } from "../../components/ui/TablePagination";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { PageState } from "../../components/ui/PageState";
 import { MONO_TEXT_CLASS } from "../../components/ui/tableStyles";
 
+import { ApprovalDecisionDialog } from "../../components/ApprovalDecisionDialog";
+import type { ApprovalDecisionMode } from "../../components/ApprovalDecisionDialog";
 import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
+import { Dialog } from "../../components/Dialog";
+import { Field } from "../../components/Field";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
-import { apiRequest, itemsFromPayload } from "../../lib/api";
-import type { ListPayload } from "../../lib/api";
+import { UserMultiSelect } from "../../components/UserSelect";
+import { ApiError, apiRequest, itemsFromPayload } from "../../lib/api";
+import type { JsonObject, ListPayload } from "../../lib/api";
 import type { OperationRow } from "../../lib/domain";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { MessageKey } from "../../i18n/messages";
@@ -36,6 +43,20 @@ const ENDPOINTS: Record<string, { titleKey: MessageKey; endpoint: string }> = {
 
 const DEFAULT_PAGE_SIZE = 20;
 
+type AccessRequestActionType = ApprovalDecisionMode | "reassign";
+
+interface AccessRequestAction {
+  type: AccessRequestActionType;
+  row: OperationRow;
+}
+
+type AccessRequestNoticeKey =
+  | "approvals.approved"
+  | "approvals.rejected"
+  | "approvals.conflict"
+  | "console.accessRequests.reassigned"
+  | "";
+
 export function OperationsPage() {
   const { t } = useI18n();
   const queryClient = useQueryClient();
@@ -44,6 +65,8 @@ export function OperationsPage() {
   // 依赖健康返回非分页的 list_payload; 其余分区走后端分页, 需按分区区分表格模式。
   const isPaginated = section !== "dependency-health";
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE });
+  const [pendingAction, setPendingAction] = useState<AccessRequestAction | null>(null);
+  const [noticeKey, setNoticeKey] = useState<AccessRequestNoticeKey>("");
 
   // 切换分区时回到第一页, 避免带着上个分区的页码请求。
   useEffect(() => {
@@ -69,8 +92,58 @@ export function OperationsPage() {
       queryClient.setQueryData(["console", "operations", "dependency-health"], payload);
     },
   });
+
+  const invalidateAccessRequests = () =>
+    queryClient.invalidateQueries({ queryKey: ["console", "operations", "access-requests"] });
+  // 409 = 申请状态已变化(如已被处理): 关弹窗、提示冲突并刷新, 其余错误留在弹窗内展示。
+  const handleAccessRequestActionError = (error: Error) => {
+    if (error instanceof ApiError && error.status === 409) {
+      setPendingAction(null);
+      setNoticeKey("approvals.conflict");
+      void invalidateAccessRequests();
+    }
+  };
+  const decisionMutation = useMutation({
+    mutationFn: ({ type, row, comment }: { type: ApprovalDecisionMode; row: OperationRow; comment: string }) =>
+      apiRequest(`/console/api/v1/operations/access-requests/${row.id}/${type}`, {
+        method: "POST",
+        body: type === "reject" || comment ? { comment } : {},
+      }),
+    onSuccess: (_, variables) => {
+      setPendingAction(null);
+      setNoticeKey(variables.type === "approve" ? "approvals.approved" : "approvals.rejected");
+      void invalidateAccessRequests();
+    },
+    onError: handleAccessRequestActionError,
+  });
+  const reassignMutation = useMutation({
+    mutationFn: ({ row, approverUserIds }: { row: OperationRow; approverUserIds: string[] }) =>
+      apiRequest(`/console/api/v1/operations/access-requests/${row.id}/reassign`, {
+        method: "POST",
+        body: { approver_user_ids: approverUserIds } satisfies JsonObject,
+      }),
+    onSuccess: () => {
+      setPendingAction(null);
+      setNoticeKey("console.accessRequests.reassigned");
+      void invalidateAccessRequests();
+    },
+    onError: handleAccessRequestActionError,
+  });
+  const openAccessRequestAction = (type: AccessRequestActionType, row: OperationRow) => {
+    decisionMutation.reset();
+    reassignMutation.reset();
+    setNoticeKey("");
+    setPendingAction({ type, row });
+  };
+
   const rows = itemsFromPayload<OperationRow>(query.data);
-  const columns = operationColumns(section, t);
+  const columns = operationColumns(
+    section,
+    t,
+    section === "access-requests"
+      ? { disabled: decisionMutation.isPending || reassignMutation.isPending, onAction: openAccessRequestAction }
+      : undefined,
+  );
   const table = useReactTable({
     data: rows,
     columns,
@@ -118,6 +191,11 @@ export function OperationsPage() {
           message={(healthCheckMutation.error as Error).message}
         />
       ) : null}
+      {section === "access-requests" && noticeKey ? (
+        <div role="status">
+          <StatusBanner tone={noticeKey === "approvals.conflict" ? "amber" : "evergreen"} title={t(noticeKey)} />
+        </div>
+      ) : null}
       {query.error && rows.length > 0 ? (
         <StatusBanner tone="signal" title={t("console.operations.loadFailed")} message={(query.error as Error).message} />
       ) : null}
@@ -152,9 +230,13 @@ export function OperationsPage() {
               ) : table.getRowModel().rows.length > 0 ? (
                 table.getRowModel().rows.map((row) => (
                   <TableRow key={row.id}>
-                    {row.getVisibleCells().map((cell) => (
-                      <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                    ))}
+                    {row.getVisibleCells().map((cell) =>
+                      cell.column.id === "actions" ? (
+                        <Fragment key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Fragment>
+                      ) : (
+                        <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
+                      ),
+                    )}
                   </TableRow>
                 ))
               ) : (
@@ -167,11 +249,111 @@ export function OperationsPage() {
           <TablePagination table={table} />
         </TableFrame>
       )}
+      {pendingAction && pendingAction.type !== "reassign" ? (
+        <ApprovalDecisionDialog
+          mode={pendingAction.type}
+          description={t("console.accessRequests.target", {
+            user: stringValue(pendingAction.row.user_id),
+            app: stringValue(pendingAction.row.app_key),
+          })}
+          note={t("console.accessRequests.auditNote")}
+          errorMessage={dialogErrorMessage(decisionMutation.error)}
+          isSubmitting={decisionMutation.isPending}
+          onClose={() => setPendingAction(null)}
+          onSubmit={(comment) => decisionMutation.mutate({ type: pendingAction.type as ApprovalDecisionMode, row: pendingAction.row, comment })}
+        />
+      ) : null}
+      {pendingAction?.type === "reassign" ? (
+        <ReassignApproversDialog
+          description={t("console.accessRequests.target", {
+            user: stringValue(pendingAction.row.user_id),
+            app: stringValue(pendingAction.row.app_key),
+          })}
+          errorMessage={dialogErrorMessage(reassignMutation.error)}
+          isSubmitting={reassignMutation.isPending}
+          onClose={() => setPendingAction(null)}
+          onSubmit={(approverUserIds) => reassignMutation.mutate({ row: pendingAction.row, approverUserIds })}
+        />
+      ) : null}
     </>
   );
 }
 
-function operationColumns(section: string, t: Translator): ColumnDef<OperationRow>[] {
+/** 409 冲突走顶部提示并刷新列表, 不在弹窗内重复展示。 */
+function dialogErrorMessage(error: Error | null): string {
+  if (!error || (error instanceof ApiError && error.status === 409)) {
+    return "";
+  }
+  return error.message;
+}
+
+function ReassignApproversDialog({
+  description,
+  errorMessage,
+  isSubmitting,
+  onClose,
+  onSubmit,
+}: {
+  description: string;
+  errorMessage: string;
+  isSubmitting: boolean;
+  onClose: () => void;
+  onSubmit: (approverUserIds: string[]) => void;
+}) {
+  const { t } = useI18n();
+  const [approverUserIds, setApproverUserIds] = useState<string[]>([]);
+  const [fieldError, setFieldError] = useState("");
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (approverUserIds.length === 0) {
+      setFieldError(t("console.accessRequests.approversRequired"));
+      return;
+    }
+    onSubmit(approverUserIds);
+  };
+
+  return (
+    <Dialog
+      title={t("console.accessRequests.reassignTitle")}
+      onClose={onClose}
+      footer={
+        <>
+          <Button type="button" onClick={onClose}>
+            {t("common.cancel")}
+          </Button>
+          <Button form="reassign-approvers-form" type="submit" variant="primary" loading={isSubmitting} disabled={isSubmitting}>
+            {t("console.accessRequests.reassignConfirm")}
+          </Button>
+        </>
+      }
+    >
+      <form id="reassign-approvers-form" className="grid gap-4" onSubmit={submit}>
+        <p className="text-body leading-5 text-ink-soft">{description}</p>
+        <Field label={t("console.accessRequests.approversField")} error={fieldError}>
+          <UserMultiSelect
+            value={approverUserIds}
+            onChange={(next) => {
+              setApproverUserIds(next);
+              if (fieldError && next.length > 0) {
+                setFieldError("");
+              }
+            }}
+          />
+        </Field>
+        <p className="text-xs leading-5 text-ink-faint">{t("console.accessRequests.reassignNote")}</p>
+        {errorMessage ? <StatusBanner tone="signal" title={t("console.accessRequests.reassignFailed")} message={errorMessage} /> : null}
+      </form>
+    </Dialog>
+  );
+}
+
+interface AccessRequestColumnActions {
+  disabled: boolean;
+  onAction: (type: AccessRequestActionType, row: OperationRow) => void;
+}
+
+function operationColumns(section: string, t: Translator, accessRequestActions?: AccessRequestColumnActions): ColumnDef<OperationRow>[] {
   if (section === "dependency-health") {
     return [
       { header: t("console.operations.column.component"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.component)}</code> },
@@ -200,7 +382,7 @@ function operationColumns(section: string, t: Translator): ColumnDef<OperationRo
       { header: t("console.operations.column.expiresAt"), cell: ({ row }) => formatDateTime(stringValue(row.original.grant_expires_at)) },
     ];
   }
-  return [
+  const accessRequestColumns: ColumnDef<OperationRow>[] = [
     { header: "ID", cell: ({ row }) => row.original.id ?? "-" },
     { header: t("common.user"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.user_id)}</code> },
     { header: t("common.app"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.app_key)}</code> },
@@ -208,6 +390,45 @@ function operationColumns(section: string, t: Translator): ColumnDef<OperationRo
     { header: t("common.type"), cell: ({ row }) => stringValue(row.original.request_type) },
     { header: t("console.operations.column.submittedAt"), cell: ({ row }) => formatDateTime(stringValue(row.original.submitted_at)) },
   ];
+  if (accessRequestActions) {
+    accessRequestColumns.push({
+      id: "actions",
+      header: t("common.actions"),
+      cell: ({ row }) =>
+        // 仅待处理(submitted)的申请可操作; 其余状态只读展示。
+        row.original.status === "submitted" ? (
+          <TableActionCell>
+            <TableRowActionButton
+              type="button"
+              disabled={accessRequestActions.disabled}
+              onClick={() => accessRequestActions.onAction("approve", row.original)}
+            >
+              {t("approvals.approve")}
+            </TableRowActionButton>
+            <TableRowActionButton
+              type="button"
+              variant="ghost-danger"
+              disabled={accessRequestActions.disabled}
+              onClick={() => accessRequestActions.onAction("reject", row.original)}
+            >
+              {t("approvals.reject")}
+            </TableRowActionButton>
+            <TableRowActionButton
+              type="button"
+              disabled={accessRequestActions.disabled}
+              onClick={() => accessRequestActions.onAction("reassign", row.original)}
+            >
+              {t("console.accessRequests.reassign")}
+            </TableRowActionButton>
+          </TableActionCell>
+        ) : (
+          <TableActionCell>
+            <span className="text-caption text-ink-faint">{t("common.none")}</span>
+          </TableActionCell>
+        ),
+    });
+  }
+  return accessRequestColumns;
 }
 
 function stringValue(value: unknown): string {

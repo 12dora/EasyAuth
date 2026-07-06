@@ -1,9 +1,11 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type { ReactElement } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
-import { describe, expect, test } from "vitest";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { App } from "../App";
 import { I18nProvider } from "../i18n/I18nProvider";
@@ -11,6 +13,12 @@ import { AppShell } from "./AppShell";
 
 const layoutShellCss = readFileSync(resolve(__dirname, "../styles/layout-shell.css"), "utf8");
 const responsiveCss = readFileSync(resolve(__dirname, "../styles/responsive.css"), "utf8");
+
+// Sidebar 的门户「待我审批」角标依赖 React Query, 壳层测试统一提供 QueryClient 并静音角标请求。
+function renderWithQueryClient(ui: ReactElement) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+}
 
 function renderShell(
   mode: "console" | "portal" = "console",
@@ -25,7 +33,7 @@ function renderShell(
     role: mode === "console" ? "EasyAuth Admins" : "研发中心",
   };
 
-  render(
+  renderWithQueryClient(
     <I18nProvider>
       <MemoryRouter initialEntries={[initialEntry ?? (mode === "console" ? "/console" : "/portal")]}>
         <Routes>
@@ -41,6 +49,22 @@ function renderShell(
 }
 
 describe("AppShell", () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        new Response(JSON.stringify({ data: [], pagination: { page: 1, page_size: 1, total_items: 0, total_pages: 0 } }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      ),
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
   test("控制台壳层展示 EasyTrade 风格的顶栏、工具区和侧边导航", () => {
     renderShell("console");
 
@@ -72,7 +96,7 @@ describe("AppShell", () => {
   });
 
   test("危险 scheme 的头像 URL 回退为首字母头像(FS-2)", () => {
-    render(
+    renderWithQueryClient(
       <I18nProvider>
         <MemoryRouter initialEntries={["/portal"]}>
           <Routes>
@@ -96,7 +120,7 @@ describe("AppShell", () => {
   });
 
   test("同源相对路径头像正常渲染(FS-2)", () => {
-    render(
+    renderWithQueryClient(
       <I18nProvider>
         <MemoryRouter initialEntries={["/portal"]}>
           <Routes>
@@ -119,7 +143,7 @@ describe("AppShell", () => {
   });
 
   test("缺少友好展示名时不会把 authentik subject 显示在顶栏", () => {
-    render(
+    renderWithQueryClient(
       <MemoryRouter initialEntries={["/portal"]}>
         <Routes>
           <Route
@@ -144,7 +168,7 @@ describe("AppShell", () => {
   });
 
   test("无当前用户时仍展示共享顶栏但隐藏用户身份区域", () => {
-    render(
+    renderWithQueryClient(
       <MemoryRouter initialEntries={["/auth/logged-out/"]}>
         <Routes>
           <Route element={<AppShell mode="portal" />}>
@@ -165,7 +189,7 @@ describe("AppShell", () => {
   });
 
   test("登出页复用共享顶栏并忽略已传入的当前用户", () => {
-    render(
+    renderWithQueryClient(
       <MemoryRouter initialEntries={["/auth/logged-out/?next=/portal/requests"]}>
         <App
           currentUser={{
@@ -190,7 +214,7 @@ describe("AppShell", () => {
   });
 
   test("登出页登录按钮固定指向登录页且忽略外部 next", () => {
-    render(
+    renderWithQueryClient(
       <MemoryRouter initialEntries={["/auth/logged-out/?next=https://evil.example.test/portal/"]}>
         <App shell="portal" />
       </MemoryRouter>,
@@ -240,7 +264,7 @@ describe("AppShell", () => {
 
   test("外部 logoutUrl 不会把登出表单带离 EasyAuth", async () => {
     const user = userEvent.setup();
-    render(
+    renderWithQueryClient(
       <MemoryRouter initialEntries={["/portal"]}>
         <Routes>
           <Route

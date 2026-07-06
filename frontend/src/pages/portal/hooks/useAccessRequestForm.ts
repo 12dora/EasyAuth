@@ -3,6 +3,7 @@ import type { UseMutationResult } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
+import type { MessageKey } from "../../../i18n/messages";
 import { apiRequest } from "../../../lib/api";
 import type { JsonObject } from "../../../lib/api";
 import type {
@@ -141,7 +142,8 @@ interface AccessRequestFormResult {
   catalogIsLoading: boolean;
   catalogErrorMessage: string;
   submitErrorMessage: string;
-  toastMessage: string;
+  /** 提示条文案的 i18n key: 由组件用 t() 渲染, hook 不生产用户可见文案。 */
+  toastMessageKey: MessageKey | "";
   canSubmit: boolean;
   expiresAtError: boolean;
   isSubmitting: boolean;
@@ -277,7 +279,7 @@ function buildAccessRequestFormResult(
     catalogIsLoading,
     catalogErrorMessage: catalogError ? catalogError.message : "",
     submitErrorMessage: submitMutation.error ? submitMutation.error.message : "",
-    toastMessage: submitMutation.isSuccess ? "申请已提交" : accessRequestToastMessage(fields, catalogView, catalogIsLoading),
+    toastMessageKey: submitMutation.isSuccess ? "portal.request.submitted" : accessRequestToastMessageKey(fields, catalogView, catalogIsLoading),
     canSubmit,
     expiresAtError,
     isSubmitting: submitMutation.isPending,
@@ -623,18 +625,18 @@ function buildDefaultApproverUserIds(values: AccessRequestPayloadValues, catalog
   return uniqueUserIds(app?.default_approver_user_ids ?? []).filter((userId) => userId !== currentUserId);
 }
 
-function accessRequestToastMessage(fields: AccessRequestFields, catalogView: CatalogView, catalogIsLoading: boolean): string {
+function accessRequestToastMessageKey(fields: AccessRequestFields, catalogView: CatalogView, catalogIsLoading: boolean): MessageKey | "" {
   if (selectedManagedUsersTargetHasMissingDirectManager(fields, catalogView)) {
-    return "未找到直属上级，请补全审批人";
+    return "portal.request.approverMissing";
   }
-  return noDirectPermissionsToastMessage(fields, catalogView, catalogIsLoading);
+  return noDirectPermissionsToastMessageKey(fields, catalogView, catalogIsLoading);
 }
 
-function noDirectPermissionsToastMessage(fields: AccessRequestFields, catalogView: CatalogView, catalogIsLoading: boolean): string {
+function noDirectPermissionsToastMessageKey(fields: AccessRequestFields, catalogView: CatalogView, catalogIsLoading: boolean): MessageKey | "" {
   if (catalogIsLoading || !fields.appKey || catalogView.visiblePermissionKeys.length > 0) {
     return "";
   }
-  return "当前应用没有可直接申请的权限，可仅按权限组发起申请。";
+  return "portal.request.noDirectPermissions";
 }
 
 function selectedManagedUsersTargetHasMissingDirectManager(values: AccessRequestPayloadValues, catalogView: CatalogView): boolean {
