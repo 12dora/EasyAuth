@@ -14,9 +14,11 @@
 - 钉钉开放平台企业内部应用一个，需要：
   - appKey / appSecret；
   - 登录回调域名登记 `https://<authentik 域名>/source/oauth/callback/dingtalk/`；
-  - 权限：通讯录只读（目录同步）、**查询员工直属主管**（缺了所有用户
-    `manager_userid` 为空，EasyAuth 申请页无法自动解析"直属上级"审批人，
-    只能手动挑人或走审批规则兜底）。
+  - 权限：通讯录只读（目录同步）。
+  - **直属主管不是权限点，是数据**：`manager_userid` 只有在钉钉管理后台
+    （oa.dingtalk.com 通讯录成员编辑，或智能人事花名册）维护过「直属主管」字段
+    时才有值；没维护过则全员为空，EasyAuth 申请页无法自动解析"直属上级"审批人，
+    只能手动挑人或走审批规则兜底。开放平台没有单独叫"查询直属主管"的权限可选。
 
 ## 部署顺序
 
@@ -94,7 +96,7 @@
 | 症状 | 原因 | 处理 |
 | --- | --- | --- |
 | authorize 报 `invalid_request`，日志 `Invalid grant_type for provider` | provider `grant_types` 为空 | 补 `authorization_code`+`refresh_token` |
-| OIDC「自动发现」404，`curl .well-known` 公网 404 本机 200 | 公网反代（ACME 规则）拦截 `.well-known` 路径 | 手工填端点；或修反代只拦 `^/.well-known/acme-challenge/` |
+| OIDC「自动发现」404，`curl .well-known` 公网 404 本机 200 | 宝塔/aaPanel 生成的 `location ~ \.well-known{` 未锚定，URI 任意位置含 `.well-known` 都被截走落盘 | 把三个域名 vhost 的该行改成 `location ~ ^/\.well-known/{` 后 reload（2026-07-06 已修；注意机器上可能有两个 nginx master，要 reload 持有 443 的那个）；ACME 根路径验证不受影响 |
 | 配置脚本 404 `default-source-authentication` | blueprint 还没应用完 | 等默认 flow 出现再配置 |
 | 申请页没有默认审批人 | 钉钉应用缺"查询员工直属主管"权限 / 目录未同步 / 审批规则里是占位 userid | 补钉钉权限；触发目录同步；把审批规则换成真实 userid（钉钉 userid 或 `local-admin:<name>`） |
 | manifest 导入报"无法解析" | EasyAuth 版本落后于下游 manifest 契约（如 lifecycle/webhook 节） | 升级 EasyAuth 后重试（解析器需支持对应 schema） |
