@@ -18,6 +18,7 @@ import { Button } from "../../../../components/Button";
 import { Dialog } from "../../../../components/Dialog";
 import { Field, SelectInput, TextInput } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
+import { useToast } from "../../../../components/ui/Toast";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
 import type { ApprovalRuleItem } from "../../../../lib/domain";
 import { useI18n } from "../../../../i18n/I18nProvider";
@@ -35,6 +36,7 @@ const emptyForm = {
 
 export function RulesTab({ appKey }: { appKey: string }) {
   const { t } = useI18n();
+  const toast = useToast();
   const queryClient = useQueryClient();
   const [editingRuleId, setEditingRuleId] = useState<number | null>(null);
   const [form, setForm] = useState(emptyForm);
@@ -69,6 +71,9 @@ export function RulesTab({ appKey }: { appKey: string }) {
       setDialogOpen(false);
       await queryClient.invalidateQueries({ queryKey });
     },
+    onError: (error: Error) => {
+      toast.error(t("console.rules.saveFailed"), error.message);
+    },
   });
   const toggleMutation = useMutation({
     mutationFn: (rule: EditableApprovalRule) =>
@@ -79,6 +84,9 @@ export function RulesTab({ appKey }: { appKey: string }) {
         },
       }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey }),
+    onError: (error: Error) => {
+      toast.error(t("console.rules.toggleFailed"), error.message);
+    },
   });
   const ruleColumns: ColumnDef<EditableApprovalRule>[] = [
     { header: t("console.rules.column.target"), cell: ({ row }) => `${targetTypeLabel(t, row.original.target_type)}：${row.original.target_key ?? "-"}` },
@@ -148,8 +156,6 @@ export function RulesTab({ appKey }: { appKey: string }) {
         </Button>
       </div>
       {rulesQuery.error ? <StatusBanner tone="signal" title={t("console.rules.loadFailed")} message={(rulesQuery.error as Error).message} /> : null}
-      {saveMutation.error ? <StatusBanner tone="signal" title={t("console.rules.saveFailed")} message={(saveMutation.error as Error).message} /> : null}
-      {toggleMutation.error ? <StatusBanner tone="signal" title={t("console.rules.toggleFailed")} message={(toggleMutation.error as Error).message} /> : null}
       <TableFrame>
         <TableRoot>
           <TableHead>

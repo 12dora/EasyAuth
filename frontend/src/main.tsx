@@ -5,6 +5,7 @@ import { BrowserRouter } from "react-router-dom";
 
 import { App } from "./App";
 import type { CurrentUser } from "./App";
+import { ToastProvider } from "./components/ui/Toast";
 import { I18nProvider } from "./i18n/I18nProvider";
 import { queryClient } from "./lib/query";
 import "./styles/index.css";
@@ -24,9 +25,11 @@ createRoot(rootElement).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <I18nProvider>
-        <BrowserRouter>
-          <App brandLogoUrl={brandLogoUrl} currentUser={currentUser} currentUserId={currentUserId} shell={shell} />
-        </BrowserRouter>
+        <ToastProvider>
+          <BrowserRouter>
+            <App brandLogoUrl={brandLogoUrl} currentUser={currentUser} currentUserId={currentUserId} shell={shell} />
+          </BrowserRouter>
+        </ToastProvider>
       </I18nProvider>
     </QueryClientProvider>
   </StrictMode>,

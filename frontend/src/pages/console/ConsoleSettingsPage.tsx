@@ -9,6 +9,7 @@ import { Field, TextInput } from "../../components/Field";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
 import { PanelSurface } from "../../components/ui/PanelSurface";
+import { useToast } from "../../components/ui/Toast";
 import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest } from "../../lib/api";
 import type { JsonObject } from "../../lib/api";
@@ -37,10 +38,10 @@ const SETTINGS_QUERY_KEY = ["console", "settings", "integrations"];
 
 export function ConsoleSettingsPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const queryClient = useQueryClient();
   const [baseUrl, setBaseUrl] = useState("");
   const [apiToken, setApiToken] = useState("");
-  const [saved, setSaved] = useState(false);
   const settingsQuery = useQuery({
     queryKey: SETTINGS_QUERY_KEY,
     queryFn: () => apiRequest<IntegrationSettingsPayload>("/console/api/v1/settings/integrations"),
@@ -66,13 +67,15 @@ export function ConsoleSettingsPage() {
     onSuccess: (payload) => {
       queryClient.setQueryData(SETTINGS_QUERY_KEY, payload);
       setApiToken("");
-      setSaved(true);
+      toast.success(t("settings.integration.saveSuccess"));
+    },
+    onError: (error: Error) => {
+      toast.error(t("settings.integration.saveFailed"), error.message);
     },
   });
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setSaved(false);
     saveMutation.mutate();
   };
 
@@ -129,10 +132,6 @@ export function ConsoleSettingsPage() {
               onChange={(event) => setApiToken(event.currentTarget.value)}
             />
           </Field>
-          {saveMutation.error ? (
-            <StatusBanner tone="signal" title={t("settings.integration.saveFailed")} message={(saveMutation.error as Error).message} />
-          ) : null}
-          {saved ? <StatusBanner tone="evergreen" title={t("settings.integration.saveSuccess")} /> : null}
           <div className="flex justify-end">
             <Button
               type="submit"
@@ -154,12 +153,11 @@ export function ConsoleSettingsPage() {
 
 function DingtalkIntegrationSection({ settings }: { settings: IntegrationSettingsPayload | undefined }) {
   const { t } = useI18n();
+  const toast = useToast();
   const queryClient = useQueryClient();
   const [appKey, setAppKey] = useState("");
   const [appSecret, setAppSecret] = useState("");
   const [agentId, setAgentId] = useState("");
-  const [saved, setSaved] = useState(false);
-  const [testResult, setTestResult] = useState<DingtalkTestResult | null>(null);
 
   useEffect(() => {
     if (settings) {
@@ -189,7 +187,10 @@ function DingtalkIntegrationSection({ settings }: { settings: IntegrationSetting
     onSuccess: (payload) => {
       queryClient.setQueryData(SETTINGS_QUERY_KEY, payload);
       setAppSecret("");
-      setSaved(true);
+      toast.success(t("settings.integration.saveSuccess"));
+    },
+    onError: (error: Error) => {
+      toast.error(t("settings.integration.saveFailed"), error.message);
     },
   });
   const testMutation = useMutation({
@@ -199,20 +200,24 @@ function DingtalkIntegrationSection({ settings }: { settings: IntegrationSetting
         body: {},
       }),
     onSuccess: (payload) => {
-      setTestResult(payload);
+      // 连接测试的结果本身就是操作反馈: ok 走成功 toast, 否则走失败 toast, 均带后端返回的说明。
+      if (payload.ok) {
+        toast.success(t("settings.dingtalk.testSuccess"), payload.message);
+      } else {
+        toast.error(t("settings.dingtalk.testFailed"), payload.message);
+      }
+    },
+    onError: (error: Error) => {
+      toast.error(t("settings.dingtalk.testFailed"), error.message);
     },
   });
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    setSaved(false);
-    setTestResult(null);
     saveMutation.mutate();
   };
 
   const runTest = () => {
-    setSaved(false);
-    setTestResult(null);
     testMutation.mutate();
   };
 
@@ -254,22 +259,6 @@ function DingtalkIntegrationSection({ settings }: { settings: IntegrationSetting
         <Field label={t("settings.dingtalk.agentId")}>
           <TextInput autoComplete="off" value={agentId} onChange={(event) => setAgentId(event.currentTarget.value)} />
         </Field>
-        {saveMutation.error ? (
-          <StatusBanner tone="signal" title={t("settings.integration.saveFailed")} message={(saveMutation.error as Error).message} />
-        ) : null}
-        {saved ? <StatusBanner tone="evergreen" title={t("settings.integration.saveSuccess")} /> : null}
-        {testMutation.error ? (
-          <StatusBanner tone="signal" title={t("settings.dingtalk.testFailed")} message={(testMutation.error as Error).message} />
-        ) : null}
-        {testResult ? (
-          <div role="status">
-            <StatusBanner
-              tone={testResult.ok ? "evergreen" : "signal"}
-              title={testResult.ok ? t("settings.dingtalk.testSuccess") : t("settings.dingtalk.testFailed")}
-              message={testResult.message}
-            />
-          </div>
-        ) : null}
         <div className="flex flex-wrap justify-end gap-2">
           <Button
             type="button"

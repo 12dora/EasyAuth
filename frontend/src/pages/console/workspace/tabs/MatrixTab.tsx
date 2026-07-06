@@ -19,6 +19,7 @@ import { Button } from "../../../../components/Button";
 import { Dialog } from "../../../../components/Dialog";
 import { Field, SelectInput, TextArea, TextInput } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
+import { useToast } from "../../../../components/ui/Toast";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
 import type { ListPayload } from "../../../../lib/api";
 import type { AppScopeItem, AuthorizationGroupGrantItem, AuthorizationGroupItem, ManagedScopePolicyItem, PermissionItem } from "../../../../lib/domain";
@@ -40,6 +41,7 @@ const emptyGroupForm: AuthorizationGroupForm = {
 
 export function MatrixTab({ appKey }: { appKey: string }) {
   const { t } = useI18n();
+  const toast = useToast();
   const queryClient = useQueryClient();
   const [selectedKey, setSelectedKey] = useState("");
   const [groupDialogOpen, setGroupDialogOpen] = useState(false);
@@ -103,6 +105,9 @@ export function MatrixTab({ appKey }: { appKey: string }) {
       setGroupDialogOpen(false);
       setSelectedKey("");
       setForm(emptyGroupForm);
+    },
+    onError: (error: Error) => {
+      toast.error(t("console.matrix.saveFailed"), error.message);
     },
   });
 
@@ -240,7 +245,6 @@ export function MatrixTab({ appKey }: { appKey: string }) {
       {groupsQuery.error ? <StatusBanner tone="signal" title={t("console.matrix.groupsLoadFailed")} message={(groupsQuery.error as Error).message} /> : null}
       {permissionsQuery.error ? <StatusBanner tone="signal" title={t("console.matrix.permissionsLoadFailed")} message={(permissionsQuery.error as Error).message} /> : null}
       {scopesQuery.error ? <StatusBanner tone="signal" title={t("console.matrix.scopesLoadFailed")} message={(scopesQuery.error as Error).message} /> : null}
-      {saveMutation.error ? <StatusBanner tone="signal" title={t("console.matrix.saveFailed")} message={(saveMutation.error as Error).message} /> : null}
       <TableFrame>
         <TableRoot>
           <TableHead>

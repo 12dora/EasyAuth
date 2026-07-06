@@ -19,6 +19,7 @@ import { Button } from "../../components/Button";
 import { SelectInput, TextInput } from "../../components/Field";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
+import { useToast } from "../../components/ui/Toast";
 import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../lib/api";
 import type { ListPayload } from "../../lib/api";
@@ -34,12 +35,12 @@ const APPROVAL_STATUSES = ["created", "submitted", "approved", "rejected", "canc
 
 export function ApprovalInstancesPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState("");
   const [appKeyInput, setAppKeyInput] = useState("");
   const [appKeyFilter, setAppKeyFilter] = useState("");
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE });
-  const [redelivered, setRedelivered] = useState(false);
 
   // app_key 过滤输入去抖后生效, 避免每次按键都打后端。
   useEffect(() => {
@@ -66,8 +67,11 @@ export function ApprovalInstancesPage() {
         body: {},
       }),
     onSuccess: () => {
-      setRedelivered(true);
+      toast.success(t("approvalInstances.redelivered"));
       void queryClient.invalidateQueries({ queryKey: INSTANCES_QUERY_PREFIX });
+    },
+    onError: (error: Error) => {
+      toast.error(t("approvalInstances.redeliverFailed"), error.message);
     },
   });
 
@@ -75,7 +79,6 @@ export function ApprovalInstancesPage() {
   const columns = instanceColumns(t, {
     disabled: redeliverMutation.isPending,
     onRedeliver: (row) => {
-      setRedelivered(false);
       redeliverMutation.reset();
       redeliverMutation.mutate(row);
     },
@@ -125,14 +128,6 @@ export function ApprovalInstancesPage() {
           onChange={(event) => setAppKeyInput(event.currentTarget.value)}
         />
       </div>
-      {redelivered ? (
-        <div role="status">
-          <StatusBanner tone="evergreen" title={t("approvalInstances.redelivered")} />
-        </div>
-      ) : null}
-      {redeliverMutation.error ? (
-        <StatusBanner tone="signal" title={t("approvalInstances.redeliverFailed")} message={(redeliverMutation.error as Error).message} />
-      ) : null}
       {query.error && rows.length > 0 ? (
         <StatusBanner tone="signal" title={t("console.operations.loadFailed")} message={(query.error as Error).message} />
       ) : null}

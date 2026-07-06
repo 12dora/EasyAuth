@@ -13,6 +13,7 @@ import { StatusBanner } from "../../../components/StatusBanner";
 import { UserSearchInput } from "../../../components/UserSelect";
 import { PageState } from "../../../components/ui/PageState";
 import { PanelSurface } from "../../../components/ui/PanelSurface";
+import { useToast } from "../../../components/ui/Toast";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../../lib/api";
 import type { JsonObject, ListPayload } from "../../../lib/api";
@@ -45,6 +46,7 @@ const ACTIONABLE_STATUSES = new Set(["pending", "previewed", "failed"]);
 
 export function HandoverTaskDetail() {
   const { t } = useI18n();
+  const toast = useToast();
   const { taskId = "" } = useParams();
   const queryClient = useQueryClient();
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -72,6 +74,9 @@ export function HandoverTaskDetail() {
       void queryClient.invalidateQueries({ queryKey: ["console", "handover-tasks"] });
       setCancelConfirmOpen(false);
     },
+    onError: (error: Error) => {
+      toast.error(t("handover.detail.cancelFailed"), error.message);
+    },
   });
 
   const retryMutation = useMutation({
@@ -81,6 +86,9 @@ export function HandoverTaskDetail() {
         body: {},
       }),
     onSuccess: invalidateDetail,
+    onError: (error: Error) => {
+      toast.error(t("handover.card.retryFailed"), error.message);
+    },
   });
 
   const deleteMutation = useMutation({
@@ -91,6 +99,9 @@ export function HandoverTaskDetail() {
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["console", "handover-tasks"] });
       void navigate("/console/lifecycle/handover-tasks");
+    },
+    onError: (error: Error) => {
+      toast.error(t("handover.detail.deleteFailed"), error.message);
     },
   });
 
@@ -194,9 +205,6 @@ export function HandoverTaskDetail() {
           </PanelSurface>
           <PanelSurface padding="lg" className="space-y-4">
             <h2 className="text-base font-semibold text-ink">{t("handover.detail.apps")}</h2>
-            {retryMutation.error ? (
-              <StatusBanner tone="signal" title={t("handover.card.retryFailed")} message={(retryMutation.error as Error).message} />
-            ) : null}
             {task.app_actions.length === 0 ? (
               <p className="text-body leading-5 text-ink-soft">{t("handover.detail.appsEmpty")}</p>
             ) : (
@@ -244,9 +252,6 @@ export function HandoverTaskDetail() {
         >
           <div className="grid gap-3">
             <p className="text-body leading-5 text-ink-soft">{t("handover.detail.deleteMessage", { name: subjectName })}</p>
-            {deleteMutation.error ? (
-              <StatusBanner tone="signal" title={t("handover.detail.deleteFailed")} message={(deleteMutation.error as Error).message} />
-            ) : null}
           </div>
         </Dialog>
       ) : null}
@@ -274,9 +279,6 @@ export function HandoverTaskDetail() {
         >
           <div className="grid gap-3">
             <p className="text-body leading-5 text-ink-soft">{t("handover.detail.cancelMessage", { name: subjectName })}</p>
-            {cancelMutation.error ? (
-              <StatusBanner tone="signal" title={t("handover.detail.cancelFailed")} message={(cancelMutation.error as Error).message} />
-            ) : null}
           </div>
         </Dialog>
       ) : null}
@@ -354,6 +356,7 @@ function TransferGrantSection({
   onChanged: () => void;
 }) {
   const { t } = useI18n();
+  const toast = useToast();
   const plan = task.transfer_plan;
   const [templateId, setTemplateId] = useState(plan?.template_id ? String(plan.template_id) : "");
   const [revokeChecked, setRevokeChecked] = useState<Record<string, boolean>>({});
@@ -393,6 +396,9 @@ function TransferGrantSection({
         body: { template_id: Number(templateId) } satisfies JsonObject,
       }),
     onSuccess: onChanged,
+    onError: (error: Error) => {
+      toast.error(t("handover.transfer.diffFailed"), error.message);
+    },
   });
   const confirmMutation = useMutation({
     mutationFn: () =>
@@ -404,6 +410,9 @@ function TransferGrantSection({
         } satisfies JsonObject,
       }),
     onSuccess: onChanged,
+    onError: (error: Error) => {
+      toast.error(t("handover.transfer.confirmFailed"), error.message);
+    },
   });
 
   const revokeEntries = plan?.grant_diff.revoke ?? [];
@@ -442,9 +451,6 @@ function TransferGrantSection({
           {t("handover.transfer.buildDiff")}
         </Button>
       </div>
-      {buildMutation.error ? (
-        <StatusBanner tone="signal" title={t("handover.transfer.diffFailed")} message={(buildMutation.error as Error).message} />
-      ) : null}
       {plan ? (
         <div className="space-y-4">
           <p className="text-body leading-5 text-ink">
@@ -478,9 +484,6 @@ function TransferGrantSection({
             />
             <DiffGroup title={t("handover.transfer.keep")} entries={keepEntries} nameMap={nameMap} readOnly checked={null} />
           </div>
-          {confirmMutation.error ? (
-            <StatusBanner tone="signal" title={t("handover.transfer.confirmFailed")} message={(confirmMutation.error as Error).message} />
-          ) : null}
           {!confirmed ? (
             <Button type="button" variant="primary" loading={confirmMutation.isPending} onClick={() => confirmMutation.mutate()}>
               {t("handover.transfer.confirm")}
@@ -601,6 +604,7 @@ function TeamAdjustRow({
   canOperate: boolean;
 }) {
   const { t } = useI18n();
+  const toast = useToast();
   const [action, setAction] = useState<"assign_leader" | "deactivate">(
     item.action === "deactivate" ? "deactivate" : "assign_leader",
   );
@@ -615,6 +619,9 @@ function TeamAdjustRow({
         } satisfies JsonObject,
       }),
     onSuccess: onChanged,
+    onError: (error: Error) => {
+      toast.error(t("handover.team.applyFailed"), error.message);
+    },
   });
 
   if (item.status !== "pending") {
@@ -664,9 +671,6 @@ function TeamAdjustRow({
           {t("handover.team.apply")}
         </Button>
       </div>
-      {applyMutation.error ? (
-        <StatusBanner tone="signal" title={t("handover.team.applyFailed")} message={(applyMutation.error as Error).message} />
-      ) : null}
     </li>
   );
 }

@@ -9,6 +9,7 @@ import { Field, TextInput } from "../../../../components/Field";
 import { SecretDialog } from "../../../../components/SecretDialog";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { PanelSurface } from "../../../../components/ui/PanelSurface";
+import { useToast } from "../../../../components/ui/Toast";
 import { useI18n } from "../../../../i18n/I18nProvider";
 import type { MessageKey } from "../../../../i18n/messages";
 import { apiRequest } from "../../../../lib/api";
@@ -31,6 +32,7 @@ interface WebhookTestResult {
 
 export function WebhookTab({ appKey }: { appKey: string }) {
   const { t } = useI18n();
+  const toast = useToast();
   const queryClient = useQueryClient();
   const queryKey = ["console", "app", appKey, "webhook-config"];
   const [enabled, setEnabled] = useState(true);
@@ -39,10 +41,8 @@ export function WebhookTab({ appKey }: { appKey: string }) {
     handover_url: "",
     onboard_url: "",
   });
-  const [saved, setSaved] = useState(false);
   const [rotateConfirmOpen, setRotateConfirmOpen] = useState(false);
   const [oneTimeSecret, setOneTimeSecret] = useState("");
-  const [testResult, setTestResult] = useState<WebhookTestResult | null>(null);
 
   const configQuery = useQuery({
     queryKey,
@@ -83,7 +83,10 @@ export function WebhookTab({ appKey }: { appKey: string }) {
       if (secret) {
         setOneTimeSecret(secret);
       }
-      setSaved(true);
+      toast.success(t("webhook.saveSuccess"));
+    },
+    onError: (error: Error) => {
+      toast.error(t("webhook.saveFailed"), error.message);
     },
   });
   const testMutation = useMutation({
@@ -93,23 +96,19 @@ export function WebhookTab({ appKey }: { appKey: string }) {
         body: { target } satisfies JsonObject,
       }),
     onSuccess: (payload) => {
-      setTestResult(payload);
+      toast.success(t("webhook.testResult", { deliveryId: payload.delivery_id, status: deliveryStateLabel(t, payload.status) }));
+    },
+    onError: (error: Error) => {
+      toast.error(t("webhook.testFailed"), error.message);
     },
   });
 
-  const resetNotices = () => {
-    setSaved(false);
-    setTestResult(null);
-  };
-
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    resetNotices();
     saveMutation.mutate(false);
   };
 
   const requestRotate = () => {
-    resetNotices();
     if (config?.secret_configured) {
       setRotateConfirmOpen(true);
       return;
@@ -118,7 +117,6 @@ export function WebhookTab({ appKey }: { appKey: string }) {
   };
 
   const sendTest = (target: WebhookTarget) => {
-    resetNotices();
     testMutation.reset();
     testMutation.mutate(target);
   };
@@ -179,25 +177,6 @@ export function WebhookTab({ appKey }: { appKey: string }) {
               </div>
             </Field>
           ))}
-          {saveMutation.error ? (
-            <StatusBanner tone="signal" title={t("webhook.saveFailed")} message={(saveMutation.error as Error).message} />
-          ) : null}
-          {saved ? (
-            <div role="status">
-              <StatusBanner tone="evergreen" title={t("webhook.saveSuccess")} />
-            </div>
-          ) : null}
-          {testMutation.error ? (
-            <StatusBanner tone="signal" title={t("webhook.testFailed")} message={(testMutation.error as Error).message} />
-          ) : null}
-          {testResult ? (
-            <div role="status">
-              <StatusBanner
-                tone="evergreen"
-                title={t("webhook.testResult", { deliveryId: testResult.delivery_id, status: deliveryStateLabel(t, testResult.status) })}
-              />
-            </div>
-          ) : null}
           <div className="flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs leading-5 text-ink-faint">
               {config?.updated_at

@@ -23,6 +23,7 @@ import { Dialog } from "../../components/Dialog";
 import { Field, SelectInput, TextArea, TextInput } from "../../components/Field";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
+import { useToast } from "../../components/ui/Toast";
 import { UserSearchInput } from "../../components/UserSelect";
 import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest } from "../../lib/api";
@@ -46,6 +47,7 @@ interface TeamMemberCreatePayload {
 
 export function ConsoleTeamDetail() {
   const { t } = useI18n();
+  const toast = useToast();
   const { teamId = "" } = useParams();
   const queryClient = useQueryClient();
   const [editDialogOpen, setEditDialogOpen] = useState(false);
@@ -89,6 +91,9 @@ export function ConsoleTeamDetail() {
       applyTeamPayload(payload);
       setDisableConfirmOpen(false);
     },
+    onError: (error: Error) => {
+      toast.error(t("console.teams.statusUpdateFailed"), error.message);
+    },
   });
   const addMemberMutation = useMutation({
     mutationFn: (payload: TeamMemberCreatePayload) =>
@@ -108,6 +113,9 @@ export function ConsoleTeamDetail() {
         body: { role },
       }),
     onSuccess: applyTeamPayload,
+    onError: (error: Error) => {
+      toast.error(t("console.teams.memberOperationFailed"), error.message);
+    },
   });
   const removeMemberMutation = useMutation({
     mutationFn: (memberId: number) =>
@@ -117,6 +125,9 @@ export function ConsoleTeamDetail() {
     onSuccess: (payload) => {
       applyTeamPayload(payload);
       setMemberPendingRemoval(null);
+    },
+    onError: (error: Error) => {
+      toast.error(t("console.teams.memberOperationFailed"), error.message);
     },
   });
 
@@ -199,9 +210,6 @@ export function ConsoleTeamDetail() {
               )}
             </div>
           </div>
-          {statusMutation.error && !disableConfirmOpen ? (
-            <StatusBanner tone="signal" title={t("console.teams.statusUpdateFailed")} message={(statusMutation.error as Error).message} />
-          ) : null}
           <dl className="grid gap-x-8 gap-y-3 text-body sm:grid-cols-2">
             <TeamInfoItem label={t("console.teams.column.name")} value={team?.name ?? "-"} />
             <TeamInfoItem
@@ -235,12 +243,6 @@ export function ConsoleTeamDetail() {
               {t("console.teams.addMember")}
             </Button>
           </div>
-          {changeRoleMutation.error ? (
-            <StatusBanner tone="signal" title={t("console.teams.memberOperationFailed")} message={(changeRoleMutation.error as Error).message} />
-          ) : null}
-          {removeMemberMutation.error && !memberPendingRemoval ? (
-            <StatusBanner tone="signal" title={t("console.teams.memberOperationFailed")} message={(removeMemberMutation.error as Error).message} />
-          ) : null}
           <TableFrame>
             <TableRoot>
               <TableHead>
@@ -320,9 +322,6 @@ export function ConsoleTeamDetail() {
         >
           <div className="grid gap-3">
             <p className="text-body leading-5 text-ink-soft">{t("console.teams.disableDialog.message", { name: team.name })}</p>
-            {statusMutation.error ? (
-              <StatusBanner tone="signal" title={t("console.teams.statusUpdateFailed")} message={(statusMutation.error as Error).message} />
-            ) : null}
           </div>
         </Dialog>
       ) : null}
@@ -352,9 +351,6 @@ export function ConsoleTeamDetail() {
             <p className="text-body leading-5 text-ink-soft">
               {t("console.teams.removeMemberConfirm", { name: memberPendingRemoval.name || memberPendingRemoval.user_id })}
             </p>
-            {removeMemberMutation.error ? (
-              <StatusBanner tone="signal" title={t("console.teams.memberOperationFailed")} message={(removeMemberMutation.error as Error).message} />
-            ) : null}
           </div>
         </Dialog>
       ) : null}

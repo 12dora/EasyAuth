@@ -8,7 +8,7 @@ import {
 } from "@tanstack/react-table";
 import { Fragment } from "react";
 import { Plus } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../../../components/ui/TablePrimitives";
 import { EmptyState } from "../../../../components/ui/EmptyState";
 import { TableActionCell, TableRowActionButton } from "../../../../components/ui/TableActions";
@@ -19,6 +19,7 @@ import { Button } from "../../../../components/Button";
 import { Dialog } from "../../../../components/Dialog";
 import { SecretDialog } from "../../../../components/SecretDialog";
 import { StatusBanner } from "../../../../components/StatusBanner";
+import { useToast } from "../../../../components/ui/Toast";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
 import type { ListPayload } from "../../../../lib/api";
 import type { CredentialItem } from "../../../../lib/domain";
@@ -29,6 +30,7 @@ import { credentialKindLabel } from "../utils";
 
 export function CredentialsTab({ appKey }: { appKey: string }) {
   const { t } = useI18n();
+  const toast = useToast();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const credentialsQuery = useQuery({
     queryKey: ["console", "app", appKey, "credentials"],
@@ -37,6 +39,12 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
   const credentials = itemsFromPayload<CredentialItem>(credentialsQuery.data);
   const { createCredential, isCreating, rotateCredential, disableCredential, operationError, secretEntries, closeSecretDialog } =
     useCredentialsActions(appKey);
+  // 创建/轮换/停用等操作失败时以 toast 反馈, 替代原先的页面内联横幅。
+  useEffect(() => {
+    if (operationError) {
+      toast.error(t("console.credentials.operationFailed"), operationError.message);
+    }
+  }, [operationError, toast, t]);
   const credentialColumns: ColumnDef<CredentialItem>[] = [
     { header: t("common.name"), accessorKey: "name" },
     { header: t("common.type"), cell: ({ row }) => credentialKindLabel(row.original.kind) },
@@ -91,9 +99,6 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
       </div>
       {credentialsQuery.error ? (
         <StatusBanner tone="signal" title={t("console.credentials.loadFailed")} message={(credentialsQuery.error as Error).message} />
-      ) : null}
-      {operationError ? (
-        <StatusBanner tone="signal" title={t("console.credentials.operationFailed")} message={(operationError as Error).message} />
       ) : null}
       <TableFrame>
         <TableRoot>

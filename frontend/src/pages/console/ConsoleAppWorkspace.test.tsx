@@ -5,6 +5,7 @@ import { lazy, Suspense, type ReactElement } from "react";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { ToastProvider } from "../../components/ui/Toast";
 import { ManifestTab } from "./workspace/tabs/ManifestTab";
 import { QueryTestTab } from "./workspace/tabs/QueryTestTab";
 import { RulesTab } from "./workspace/tabs/RulesTab";
@@ -795,7 +796,7 @@ function renderWithClient(ui: ReactElement) {
 
   render(
     <QueryClientProvider client={client}>
-      {ui}
+      <ToastProvider>{ui}</ToastProvider>
     </QueryClientProvider>,
   );
 }

@@ -25,6 +25,7 @@ import { Dialog } from "../../components/Dialog";
 import { Field } from "../../components/Field";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
+import { useToast } from "../../components/ui/Toast";
 import { UserMultiSelect } from "../../components/UserSelect";
 import { ApiError, apiRequest, itemsFromPayload } from "../../lib/api";
 import type { JsonObject, ListPayload } from "../../lib/api";
@@ -50,15 +51,9 @@ interface AccessRequestAction {
   row: OperationRow;
 }
 
-type AccessRequestNoticeKey =
-  | "approvals.approved"
-  | "approvals.rejected"
-  | "approvals.conflict"
-  | "console.accessRequests.reassigned"
-  | "";
-
 export function OperationsPage() {
   const { t } = useI18n();
+  const toast = useToast();
   const queryClient = useQueryClient();
   const { section = "access-requests" } = useParams();
   const config = ENDPOINTS[section] ?? ENDPOINTS["access-requests"];
@@ -66,7 +61,6 @@ export function OperationsPage() {
   const isPaginated = section !== "dependency-health";
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE });
   const [pendingAction, setPendingAction] = useState<AccessRequestAction | null>(null);
-  const [noticeKey, setNoticeKey] = useState<AccessRequestNoticeKey>("");
 
   // 切换分区时回到第一页, 避免带着上个分区的页码请求。
   useEffect(() => {
@@ -91,6 +85,9 @@ export function OperationsPage() {
     onSuccess: (payload) => {
       queryClient.setQueryData(["console", "operations", "dependency-health"], payload);
     },
+    onError: (error: Error) => {
+      toast.error(t("ops.dependencyHealth.runCheckFailed"), error.message);
+    },
   });
 
   const invalidateAccessRequests = () =>
@@ -99,7 +96,7 @@ export function OperationsPage() {
   const handleAccessRequestActionError = (error: Error) => {
     if (error instanceof ApiError && error.status === 409) {
       setPendingAction(null);
-      setNoticeKey("approvals.conflict");
+      toast.warning(t("approvals.conflict"));
       void invalidateAccessRequests();
     }
   };
@@ -111,7 +108,7 @@ export function OperationsPage() {
       }),
     onSuccess: (_, variables) => {
       setPendingAction(null);
-      setNoticeKey(variables.type === "approve" ? "approvals.approved" : "approvals.rejected");
+      toast.success(t(variables.type === "approve" ? "approvals.approved" : "approvals.rejected"));
       void invalidateAccessRequests();
     },
     onError: handleAccessRequestActionError,
@@ -124,7 +121,7 @@ export function OperationsPage() {
       }),
     onSuccess: () => {
       setPendingAction(null);
-      setNoticeKey("console.accessRequests.reassigned");
+      toast.success(t("console.accessRequests.reassigned"));
       void invalidateAccessRequests();
     },
     onError: handleAccessRequestActionError,
@@ -132,7 +129,6 @@ export function OperationsPage() {
   const openAccessRequestAction = (type: AccessRequestActionType, row: OperationRow) => {
     decisionMutation.reset();
     reassignMutation.reset();
-    setNoticeKey("");
     setPendingAction({ type, row });
   };
 
@@ -184,18 +180,6 @@ export function OperationsPage() {
           </>
         }
       />
-      {healthCheckMutation.error ? (
-        <StatusBanner
-          tone="signal"
-          title={t("ops.dependencyHealth.runCheckFailed")}
-          message={(healthCheckMutation.error as Error).message}
-        />
-      ) : null}
-      {section === "access-requests" && noticeKey ? (
-        <div role="status">
-          <StatusBanner tone={noticeKey === "approvals.conflict" ? "amber" : "evergreen"} title={t(noticeKey)} />
-        </div>
-      ) : null}
       {query.error && rows.length > 0 ? (
         <StatusBanner tone="signal" title={t("console.operations.loadFailed")} message={(query.error as Error).message} />
       ) : null}

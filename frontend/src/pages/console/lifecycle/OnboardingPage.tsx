@@ -16,6 +16,7 @@ import { PageHeader } from "../../../components/PageHeader";
 import { StatusBanner } from "../../../components/StatusBanner";
 import { UserSearchInput } from "../../../components/UserSelect";
 import { EmptyState } from "../../../components/ui/EmptyState";
+import { useToast } from "../../../components/ui/Toast";
 import { PageState } from "../../../components/ui/PageState";
 import { TableActionCell, TableRowActionButton } from "../../../components/ui/TableActions";
 import {
@@ -506,6 +507,7 @@ function TemplateItemComposer({ onAdd }: { onAdd: (item: TemplateItemDraft) => v
 
 function OnboardDialog({ templates, onClose }: { templates: OnboardingTemplateRow[]; onClose: () => void }) {
   const { t } = useI18n();
+  const toast = useToast();
   const [userId, setUserId] = useState("");
   const [templateId, setTemplateId] = useState("");
   const selectedTemplate = templates.find((template) => String(template.id) === templateId);
@@ -516,8 +518,15 @@ function OnboardDialog({ templates, onClose }: { templates: OnboardingTemplateRo
         method: "POST",
         body: { user_id: userId.trim(), template_id: Number(templateId) } satisfies JsonObject,
       }),
+    // 入职结果即操作反馈: 成功弹 toast 并关闭弹窗, 失败弹 toast 保留弹窗以便修正重试。
+    onSuccess: (payload) => {
+      toast.success(t("onboarding.onboard.success", { count: payload.granted_app_count }));
+      onClose();
+    },
+    onError: (error: Error) => {
+      toast.error(t("onboarding.onboard.failed"), error.message);
+    },
   });
-  const result = onboardMutation.data;
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -580,14 +589,6 @@ function OnboardDialog({ templates, onClose }: { templates: OnboardingTemplateRo
                 ))}
               </ul>
             )}
-          </div>
-        ) : null}
-        {onboardMutation.error ? (
-          <StatusBanner tone="signal" title={t("onboarding.onboard.failed")} message={(onboardMutation.error as Error).message} />
-        ) : null}
-        {result ? (
-          <div role="status">
-            <StatusBanner tone="evergreen" title={t("onboarding.onboard.success", { count: result.granted_app_count })} />
           </div>
         ) : null}
       </form>

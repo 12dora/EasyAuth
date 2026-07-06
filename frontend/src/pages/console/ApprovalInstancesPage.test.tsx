@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { ToastProvider } from "../../components/ui/Toast";
 import { ApprovalInstancesPage } from "./ApprovalInstancesPage";
 
 const LIST_URL = "/console/api/v1/operations/approval-instances?status=&app_key=&page=1&page_size=20";
@@ -173,11 +174,13 @@ function renderPage() {
 
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={["/console/operations/approval-instances"]}>
-        <Routes>
-          <Route path="/console/operations/approval-instances" element={<ApprovalInstancesPage />} />
-        </Routes>
-      </MemoryRouter>
+      <ToastProvider>
+        <MemoryRouter initialEntries={["/console/operations/approval-instances"]}>
+          <Routes>
+            <Route path="/console/operations/approval-instances" element={<ApprovalInstancesPage />} />
+          </Routes>
+        </MemoryRouter>
+      </ToastProvider>
     </QueryClientProvider>,
   );
 }

@@ -12,6 +12,7 @@ import { Button } from "../../../../components/Button";
 import { CodeBlock } from "../../../../components/CodeBlock";
 import { Field, TextArea } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
+import { useToast } from "../../../../components/ui/Toast";
 import { useI18n } from "../../../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
 import type { JsonObject, ListPayload } from "../../../../lib/api";
@@ -48,11 +49,11 @@ type ManifestVersion = {
 };
 
 export function ManifestTab({ appKey }: { appKey: string }) {
+  const toast = useToast();
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [content, setContent] = useState("");
   const [preview, setPreview] = useState<ManifestPreviewPayload | null>(null);
-  const [catalogVersion, setCatalogVersion] = useState<string | null>(null);
   const versionsQueryKey = ["console", "app", appKey, "manifest-versions"];
   const versionsQuery = useQuery({
     queryKey: versionsQueryKey,
@@ -77,6 +78,9 @@ export function ManifestTab({ appKey }: { appKey: string }) {
         body: { template_format: "json", template: content },
       }),
     onSuccess: (payload) => setPreview(payload),
+    onError: (error: Error) => {
+      toast.error("Manifest 预览失败", error.message);
+    },
   });
   const importMutation = useMutation({
     mutationFn: () =>
@@ -84,8 +88,12 @@ export function ManifestTab({ appKey }: { appKey: string }) {
         method: "POST",
       }),
     onSuccess: async (payload) => {
-      setCatalogVersion(String(payload.catalog_version ?? payload.template_version ?? ""));
+      const version = String(payload.catalog_version ?? payload.template_version ?? "");
+      toast.success("导入成功", `当前目录版本：${version}`);
       await queryClient.invalidateQueries({ queryKey: versionsQueryKey });
+    },
+    onError: (error: Error) => {
+      toast.error("Manifest 导入失败", error.message);
     },
   });
 
@@ -148,9 +156,6 @@ export function ManifestTab({ appKey }: { appKey: string }) {
         </Button>
       </div>
       {versionsQuery.error ? <StatusBanner tone="signal" title="版本历史加载失败" message={(versionsQuery.error as Error).message} /> : null}
-      {previewMutation.error ? <StatusBanner tone="signal" title="Manifest 预览失败" message={(previewMutation.error as Error).message} /> : null}
-      {importMutation.error ? <StatusBanner tone="signal" title="Manifest 导入失败" message={(importMutation.error as Error).message} /> : null}
-      {catalogVersion ? <StatusBanner tone="evergreen" title="导入成功" message={`当前目录版本：${catalogVersion}`} /> : null}
       {preview ? <ManifestDiffView preview={preview} /> : null}
       <div className="space-y-3">
         <h2 className="text-base font-semibold text-ink">版本历史</h2>
@@ -192,10 +197,10 @@ export function ManifestTab({ appKey }: { appKey: string }) {
 
 function CurrentManifestPanel({ appKey, onSaved }: { appKey: string; onSaved: () => Promise<void> }) {
   const { t } = useI18n();
+  const toast = useToast();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
   const [jsonError, setJsonError] = useState("");
-  const [savedVersion, setSavedVersion] = useState<string | null>(null);
   const manifestQuery = useQuery({
     queryKey: ["console", "app", appKey, "manifest"],
     queryFn: () => apiRequest<JsonObject>(`/console/api/v1/apps/${appKey}/manifest`),
@@ -216,10 +221,14 @@ function CurrentManifestPanel({ appKey, onSaved }: { appKey: string; onSaved: ()
       );
     },
     onSuccess: async (payload) => {
-      setSavedVersion(String(payload.catalog_version ?? payload.template_version ?? ""));
+      const version = String(payload.catalog_version ?? payload.template_version ?? "");
+      toast.success(t("manifest.current.saveSuccess"), `catalog_version: ${version}`);
       setEditing(false);
       await manifestQuery.refetch();
       await onSaved();
+    },
+    onError: (error: Error) => {
+      toast.error(t("manifest.current.saveFailed"), error.message);
     },
   });
 
@@ -232,7 +241,6 @@ function CurrentManifestPanel({ appKey, onSaved }: { appKey: string; onSaved: ()
     const draftManifest = { ...manifestQuery.data, schema_version: currentVersion + 1 };
     setDraft(JSON.stringify(draftManifest, null, 2));
     setJsonError("");
-    setSavedVersion(null);
     setEditing(true);
   };
 
@@ -288,12 +296,6 @@ function CurrentManifestPanel({ appKey, onSaved }: { appKey: string; onSaved: ()
         <StatusBanner tone="signal" title={t("manifest.current.loadFailed")} message={(manifestQuery.error as Error).message} />
       ) : null}
       {jsonError ? <StatusBanner tone="signal" title={jsonError} /> : null}
-      {saveMutation.error ? (
-        <StatusBanner tone="signal" title={t("manifest.current.saveFailed")} message={(saveMutation.error as Error).message} />
-      ) : null}
-      {savedVersion ? (
-        <StatusBanner tone="evergreen" title={t("manifest.current.saveSuccess")} message={`catalog_version: ${savedVersion}`} />
-      ) : null}
       {editing ? (
         <>
           <TextArea
