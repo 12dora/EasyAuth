@@ -11,6 +11,8 @@ import { useI18n } from "./i18n/I18nProvider";
 import { ConsoleAppList } from "./pages/console/ConsoleAppList";
 import { ConsoleAppWorkspace } from "./pages/console/ConsoleAppWorkspace";
 import { ConsoleSettingsPage } from "./pages/console/ConsoleSettingsPage";
+import { ConsoleTeamDetail } from "./pages/console/ConsoleTeamDetail";
+import { ConsoleTeamList } from "./pages/console/ConsoleTeamList";
 import { OperationsPage } from "./pages/console/OperationsPage";
 import { AppOnboardingWizard } from "./pages/console/onboarding/AppOnboardingWizard";
 import { PortalPage } from "./pages/portal/PortalPage";
@@ -67,6 +69,8 @@ export function App({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUse
         <Route path="/console" element={<ConsoleAppList />} />
         <Route path="/console/apps/new" element={<AppOnboardingWizard />} />
         <Route path="/console/apps/:appKey" element={<ConsoleAppWorkspace />} />
+        <Route path="/console/teams" element={<ConsoleTeamList />} />
+        <Route path="/console/teams/:teamId" element={<ConsoleTeamDetail />} />
         <Route path="/console/operations/:section" element={<OperationsPage />} />
         <Route path="/console/operations" element={<Navigate to="/console/operations/access-requests" replace />} />
         <Route path="/console/settings" element={<ConsoleSettingsPage />} />

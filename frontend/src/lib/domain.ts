@@ -106,12 +106,12 @@ export interface PermissionItem {
 
 export interface ManagedScopePolicyItem {
   mode: "inherit" | "override" | "disabled" | string;
-  resolver?: "dingtalk_manager_chain" | "disabled" | string | null;
+  resolver?: "dingtalk_manager_chain" | "easyauth_team" | "union" | "disabled" | string | null;
   enabled?: boolean;
 }
 
 export interface EffectiveManagedScopePolicyItem {
-  resolver?: "dingtalk_manager_chain" | "disabled" | string | null;
+  resolver?: "dingtalk_manager_chain" | "easyauth_team" | "union" | "disabled" | string | null;
   source?: "app_default" | "authorization_group_grant" | string | null;
   inherited_from?: "app_default" | "authorization_group_grant" | string | null;
   health_status?: "healthy" | "warning" | "blocked" | "disabled" | string | null;
@@ -121,6 +121,41 @@ export interface EffectiveManagedScopePolicyItem {
 export interface AppManagedScopePolicyPayload {
   managed_scope_policy?: ManagedScopePolicyItem | null;
   effective_managed_scope_policy?: EffectiveManagedScopePolicyItem | null;
+}
+
+export interface TeamLeaderRef {
+  user_id: string;
+  name: string;
+}
+
+export interface TeamSummary {
+  id: number;
+  name: string;
+  description?: string;
+  is_active: boolean;
+  leaders: TeamLeaderRef[];
+  member_count: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface TeamMemberItem {
+  id: number;
+  user_id: string;
+  name?: string;
+  email?: string;
+  department?: string;
+  status?: string;
+  role: "leader" | "member" | string;
+  added_at?: string;
+}
+
+export interface TeamDetail extends TeamSummary {
+  members?: TeamMemberItem[];
+}
+
+export interface TeamPayload {
+  team?: TeamDetail;
 }
 
 export interface AuthorizationGroupGrantItem {

@@ -22,6 +22,10 @@ const CONSOLE_GROUPS: NavGroupSpec[] = [
     links: [{ to: "/console", labelKey: "nav.console.apps" }],
   },
   {
+    labelKey: "nav.console.organization",
+    links: [{ to: "/console/teams", labelKey: "nav.console.teams" }],
+  },
+  {
     labelKey: "nav.console.operations",
     links: [
       { to: "/console/operations/access-requests", labelKey: "nav.console.accessRequests" },

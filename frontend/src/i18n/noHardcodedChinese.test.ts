@@ -12,6 +12,9 @@ const SRC_DIR = resolve(CURRENT_DIR, "..");
 const GUARDED_FILES = [
   "pages/portal/PortalPage.tsx",
   "pages/console/OperationsPage.tsx",
+  "pages/console/ConsoleAppWorkspace.tsx",
+  "pages/console/ConsoleTeamList.tsx",
+  "pages/console/ConsoleTeamDetail.tsx",
   "pages/console/workspace/tabs/MatrixTab.tsx",
   "pages/console/workspace/tabs/CatalogTab.tsx",
   "pages/console/workspace/tabs/RulesTab.tsx",

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useParams, useSearchParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 
 import { Button } from "../../components/Button";
 import { ButtonLink } from "../../components/ButtonLink";
@@ -14,6 +14,7 @@ import { apiRequest } from "../../lib/api";
 import { cn } from "../../lib/cn";
 import type { JsonObject } from "../../lib/api";
 import type { AppListPayload, AppManagedScopePolicyPayload, EffectiveManagedScopePolicyItem } from "../../lib/domain";
+import type { Translator } from "../../lib/status";
 import { CatalogTab } from "./workspace/tabs/CatalogTab";
 import { CredentialsTab } from "./workspace/tabs/CredentialsTab";
 import { GuideTab } from "./workspace/tabs/GuideTab";
@@ -176,9 +177,20 @@ export function ConsoleAppWorkspace() {
   );
 }
 
-type ManagedScopeSelection = "unconfigured" | "dingtalk_manager_chain" | "disabled";
+type ManagedScopeSelection = "unconfigured" | "dingtalk_manager_chain" | "easyauth_team" | "union" | "disabled";
+
+const MANAGED_SCOPE_RESOLVERS = ["dingtalk_manager_chain", "easyauth_team", "union"] as const;
+
+const MANAGED_SCOPE_OPTIONS: Array<{ value: ManagedScopeSelection; labelKey: MessageKey }> = [
+  { value: "unconfigured", labelKey: "console.managedScope.option.unconfigured" },
+  { value: "dingtalk_manager_chain", labelKey: "console.managedScope.option.dingtalk" },
+  { value: "easyauth_team", labelKey: "console.managedScope.option.team" },
+  { value: "union", labelKey: "console.managedScope.option.union" },
+  { value: "disabled", labelKey: "console.managedScope.option.disabled" },
+];
 
 function ManagedScopeTab({ appKey }: { appKey: string }) {
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const [selection, setSelection] = useState<ManagedScopeSelection>("unconfigured");
   const queryKey = ["console", "app", appKey, "managed-scope-policy"];
@@ -198,6 +210,7 @@ function ManagedScopeTab({ appKey }: { appKey: string }) {
     },
   });
   const effectivePolicy = policyQuery.data?.effective_managed_scope_policy ?? null;
+  const teamBasedSelection = selection === "easyauth_team" || selection === "union";
 
   useEffect(() => {
     if (!policyQuery.data) {
@@ -211,10 +224,8 @@ function ManagedScopeTab({ appKey }: { appKey: string }) {
       <PanelSurface padding="lg" className="space-y-5">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0 space-y-1">
-            <h2 className="text-base font-semibold text-ink">管理范围</h2>
-            <p className="max-w-3xl text-body leading-5 text-ink-soft">
-              配置应用默认的 MANAGED_USERS 解析策略。授权组 grant 可以继承这里的默认策略，也可以单独覆盖。
-            </p>
+            <h2 className="text-base font-semibold text-ink">{t("console.managedScope.heading")}</h2>
+            <p className="max-w-3xl text-body leading-5 text-ink-soft">{t("console.managedScope.description")}</p>
           </div>
           <Button
             type="button"
@@ -223,41 +234,50 @@ function ManagedScopeTab({ appKey }: { appKey: string }) {
             disabled={saveMutation.isPending || policyQuery.isLoading}
             onClick={() => saveMutation.mutate()}
           >
-            保存策略
+            {t("console.managedScope.save")}
           </Button>
         </div>
         {policyQuery.error ? (
-          <StatusBanner tone="signal" title="管理范围加载失败" message={(policyQuery.error as Error).message} />
+          <StatusBanner tone="signal" title={t("console.managedScope.loadFailed")} message={(policyQuery.error as Error).message} />
         ) : null}
         {saveMutation.error ? (
-          <StatusBanner tone="signal" title="管理范围保存失败" message={(saveMutation.error as Error).message} />
+          <StatusBanner tone="signal" title={t("console.managedScope.saveFailed")} message={(saveMutation.error as Error).message} />
         ) : null}
         <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
-          <Field
-            label="应用默认 MANAGED_USERS 策略"
-            hint="按钉钉主管关系会从上游目录解析当前用户的下属；不启用会阻断继承该默认策略的 MANAGED_USERS grant。"
-          >
-            <SelectInput
-              value={selection}
-              onChange={(event) => setSelection(event.currentTarget.value as ManagedScopeSelection)}
-              disabled={policyQuery.isLoading || saveMutation.isPending}
-            >
-              <option value="unconfigured">未配置</option>
-              <option value="dingtalk_manager_chain">按钉钉主管关系</option>
-              <option value="disabled">不启用</option>
-            </SelectInput>
-          </Field>
+          <div className="space-y-2">
+            <Field label={t("console.managedScope.policyLabel")} hint={t("console.managedScope.policyHint")}>
+              <SelectInput
+                value={selection}
+                onChange={(event) => setSelection(event.currentTarget.value as ManagedScopeSelection)}
+                disabled={policyQuery.isLoading || saveMutation.isPending}
+              >
+                {MANAGED_SCOPE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {t(option.labelKey)}
+                  </option>
+                ))}
+              </SelectInput>
+            </Field>
+            {teamBasedSelection ? (
+              <p className="text-xs leading-5 text-ink-soft">
+                {t("console.managedScope.teamHint")}{" "}
+                <Link className="font-medium text-accent hover:underline" to="/console/teams">
+                  {t("console.managedScope.teamHintLink")}
+                </Link>
+              </p>
+            ) : null}
+          </div>
           <div className="rounded-[3px] border border-ink/10 bg-paper-soft p-4">
-            <p className="text-label font-medium uppercase tracking-caps-wide text-ink-soft">当前有效策略</p>
-            <p className="mt-2 text-sm font-semibold text-ink">{effectiveManagedScopeLabel(effectivePolicy)}</p>
+            <p className="text-label font-medium uppercase tracking-caps-wide text-ink-soft">{t("console.managedScope.effectiveTitle")}</p>
+            <p className="mt-2 text-sm font-semibold text-ink">{effectiveManagedScopeLabel(t, effectivePolicy)}</p>
             <dl className="mt-3 grid gap-2 text-body text-ink-soft">
               <div className="flex items-center justify-between gap-4">
-                <dt>来源</dt>
-                <dd className="font-mono text-ink">{managedScopeSourceLabel(effectivePolicy?.source)}</dd>
+                <dt>{t("console.managedScope.effective.source")}</dt>
+                <dd className="font-mono text-ink">{managedScopeSourceLabel(t, effectivePolicy?.source)}</dd>
               </div>
               <div className="flex items-center justify-between gap-4">
-                <dt>健康状态</dt>
-                <dd className="font-mono text-ink">{managedScopeHealthLabel(effectivePolicy)}</dd>
+                <dt>{t("console.managedScope.effective.health")}</dt>
+                <dd className="font-mono text-ink">{managedScopeHealthLabel(t, effectivePolicy)}</dd>
               </div>
             </dl>
             {effectivePolicy?.health_message ? (
@@ -277,7 +297,11 @@ function payloadForManagedScopeSelection(selection: ManagedScopeSelection): Json
   if (selection === "disabled") {
     return { mode: "disabled", resolver: "disabled", enabled: false };
   }
-  return { mode: "override", resolver: "dingtalk_manager_chain", enabled: true };
+  return { mode: "override", resolver: selection, enabled: true };
+}
+
+function isManagedScopeResolver(value: unknown): value is (typeof MANAGED_SCOPE_RESOLVERS)[number] {
+  return MANAGED_SCOPE_RESOLVERS.includes(value as (typeof MANAGED_SCOPE_RESOLVERS)[number]);
 }
 
 function selectionFromManagedScopePayload(payload: AppManagedScopePolicyPayload): ManagedScopeSelection {
@@ -288,48 +312,46 @@ function selectionFromManagedScopePayload(payload: AppManagedScopePolicyPayload)
   if (policy.mode === "disabled" || policy.resolver === "disabled" || policy.enabled === false) {
     return "disabled";
   }
-  if (policy.resolver === "dingtalk_manager_chain") {
-    return "dingtalk_manager_chain";
+  if (isManagedScopeResolver(policy.resolver)) {
+    return policy.resolver;
   }
   return "unconfigured";
 }
 
-function effectiveManagedScopeLabel(policy: EffectiveManagedScopePolicyItem | null): string {
+const MANAGED_SCOPE_RESOLVER_LABEL_KEYS: Record<string, MessageKey> = {
+  dingtalk_manager_chain: "console.managedScope.option.dingtalk",
+  easyauth_team: "console.managedScope.option.team",
+  union: "console.managedScope.option.union",
+  disabled: "console.managedScope.option.disabled",
+};
+
+function effectiveManagedScopeLabel(t: Translator, policy: EffectiveManagedScopePolicyItem | null): string {
   if (!policy?.resolver) {
-    return "未配置";
+    return t("console.managedScope.option.unconfigured");
   }
-  if (policy.resolver === "disabled") {
-    return "不启用";
-  }
-  if (policy.resolver === "dingtalk_manager_chain") {
-    return "按钉钉主管关系";
-  }
-  return policy.resolver;
+  const labelKey = MANAGED_SCOPE_RESOLVER_LABEL_KEYS[policy.resolver];
+  return labelKey ? t(labelKey) : policy.resolver;
 }
 
-function managedScopeSourceLabel(source: EffectiveManagedScopePolicyItem["source"] | undefined): string {
+function managedScopeSourceLabel(t: Translator, source: EffectiveManagedScopePolicyItem["source"] | undefined): string {
   if (source === "app_default") {
-    return "应用默认";
+    return t("console.managedScope.source.appDefault");
   }
   if (source === "authorization_group_grant") {
-    return "授权组覆盖";
+    return t("console.managedScope.source.grantOverride");
   }
-  return "未配置";
+  return t("console.managedScope.source.unconfigured");
 }
 
-function managedScopeHealthLabel(policy: EffectiveManagedScopePolicyItem | null): string {
+const MANAGED_SCOPE_HEALTH_LABEL_KEYS: Record<string, MessageKey> = {
+  healthy: "console.managedScope.health.healthy",
+  warning: "console.managedScope.health.warning",
+  blocked: "console.managedScope.health.blocked",
+  disabled: "console.managedScope.health.disabled",
+};
+
+function managedScopeHealthLabel(t: Translator, policy: EffectiveManagedScopePolicyItem | null): string {
   const health = policy?.health_status;
-  if (health === "healthy") {
-    return "正常";
-  }
-  if (health === "disabled") {
-    return "不启用";
-  }
-  if (health === "blocked") {
-    return "阻塞";
-  }
-  if (health === "warning") {
-    return "警告";
-  }
-  return "未配置";
+  const labelKey = health ? MANAGED_SCOPE_HEALTH_LABEL_KEYS[health] : undefined;
+  return labelKey ? t(labelKey) : t("console.managedScope.health.unconfigured");
 }

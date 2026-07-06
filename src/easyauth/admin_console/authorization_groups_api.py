@@ -27,7 +27,7 @@ from easyauth.admin_console.permission_catalog_data import (
 )
 from easyauth.applications.catalog_version import bump_catalog_version
 from easyauth.applications.models import (
-    MANAGED_SCOPE_POLICY_RESOLVER_DINGTALK_MANAGER_CHAIN,
+    MANAGED_SCOPE_POLICY_ACTIVE_RESOLVERS,
     MANAGED_SCOPE_POLICY_RESOLVER_DISABLED,
     MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS,
     MANAGED_SCOPE_POLICY_TARGET_AUTHORIZATION_GROUP_GRANT,
@@ -471,7 +471,7 @@ def _normalized_managed_scope_policy_payload(
             resolver=resolver,
             enabled=payload.enabled,
         )
-    if resolver != MANAGED_SCOPE_POLICY_RESOLVER_DINGTALK_MANAGER_CHAIN:
+    if resolver not in MANAGED_SCOPE_POLICY_ACTIVE_RESOLVERS:
         message = "授权组 grant managed_scope_policy resolver 不受支持。"
         raise ValueError(message)
     return ManagedScopePolicyPayload(mode="override", resolver=resolver, enabled=payload.enabled)

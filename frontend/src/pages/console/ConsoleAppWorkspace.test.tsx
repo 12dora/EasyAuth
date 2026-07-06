@@ -148,12 +148,14 @@ describe("ConsoleAppWorkspace", () => {
 
     expect(await screen.findByRole("heading", { name: "管理范围" })).toBeInTheDocument();
     expect(screen.getAllByText("未配置").length).toBeGreaterThan(0);
-    const select = screen.getByLabelText("应用默认 MANAGED_USERS 策略");
-    expect(within(select).getByRole("option", { name: "按钉钉主管关系" })).toBeInTheDocument();
+    const select = screen.getByLabelText("应用默认管理范围计算方式");
+    expect(within(select).getByRole("option", { name: "按钉钉汇报线（自动）" })).toBeInTheDocument();
+    expect(within(select).getByRole("option", { name: "按自定义团队" })).toBeInTheDocument();
+    expect(within(select).getByRole("option", { name: "合并两者" })).toBeInTheDocument();
     expect(within(select).getByRole("option", { name: "不启用" })).toBeInTheDocument();
 
     await user.selectOptions(select, "dingtalk_manager_chain");
-    await user.click(screen.getByRole("button", { name: "保存策略" }));
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
 
     await waitFor(() => {
       const patchCall = findFetchCall(fetchMock, "/console/api/v1/apps/demo/managed-scope-policy", "PATCH");
@@ -165,7 +167,60 @@ describe("ConsoleAppWorkspace", () => {
         },
       });
     });
-    await waitFor(() => expect(screen.getAllByText("按钉钉主管关系").length).toBeGreaterThan(1));
+    await waitFor(() => expect(screen.getAllByText("按钉钉汇报线（自动）").length).toBeGreaterThan(1));
+  });
+
+  test("管理范围 tab 选择按自定义团队时展示团队管理入口并保存 easyauth_team", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/demo") {
+        return jsonResponse({ app: { ...appPayload.app, can_manage: true } });
+      }
+      if (url === "/console/api/v1/apps/demo/managed-scope-policy" && !init?.method) {
+        return jsonResponse({
+          managed_scope_policy: null,
+          effective_managed_scope_policy: null,
+        });
+      }
+      if (url === "/console/api/v1/apps/demo/managed-scope-policy" && init?.method === "PATCH") {
+        return jsonResponse({
+          managed_scope_policy: { mode: "override", resolver: "easyauth_team", enabled: true },
+          effective_managed_scope_policy: {
+            resolver: "easyauth_team",
+            source: "app_default",
+            health_status: "healthy",
+          },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWorkspace("/console/apps/demo?tab=managed-scope");
+
+    const select = await screen.findByLabelText("应用默认管理范围计算方式");
+    await waitFor(() => expect(select).toBeEnabled());
+    expect(screen.queryByRole("link", { name: "前往团队管理" })).not.toBeInTheDocument();
+
+    await user.selectOptions(select, "easyauth_team");
+
+    expect(screen.getByText(/成员在「团队管理」维护/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "前往团队管理" })).toHaveAttribute("href", "/console/teams");
+
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
+
+    await waitFor(() => {
+      const patchCall = findFetchCall(fetchMock, "/console/api/v1/apps/demo/managed-scope-policy", "PATCH");
+      expect(parseJsonBody(patchCall?.[1])).toEqual({
+        managed_scope_policy: {
+          mode: "override",
+          resolver: "easyauth_team",
+          enabled: true,
+        },
+      });
+    });
+    await waitFor(() => expect(screen.getAllByText("按自定义团队").length).toBeGreaterThan(1));
   });
 
   test("管理范围 tab 可保存不启用应用默认策略", async () => {
@@ -202,11 +257,11 @@ describe("ConsoleAppWorkspace", () => {
 
     renderWorkspace("/console/apps/demo?tab=managed-scope");
 
-    const select = await screen.findByLabelText("应用默认 MANAGED_USERS 策略");
+    const select = await screen.findByLabelText("应用默认管理范围计算方式");
     await waitFor(() => expect(select).toHaveValue("dingtalk_manager_chain"));
 
     await user.selectOptions(select, "disabled");
-    await user.click(screen.getByRole("button", { name: "保存策略" }));
+    await user.click(screen.getByRole("button", { name: "保存设置" }));
 
     await waitFor(() => {
       const patchCall = findFetchCall(fetchMock, "/console/api/v1/apps/demo/managed-scope-policy", "PATCH");
