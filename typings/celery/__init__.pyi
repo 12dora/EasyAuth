@@ -40,4 +40,9 @@ def shared_task[**P, R](
     *,
     name: str | None = None,
     acks_late: bool = False,
+    autoretry_for: tuple[type[BaseException], ...] = (),
+    retry_backoff: bool | int = False,
+    retry_backoff_max: int = 600,
+    retry_jitter: bool = True,
+    max_retries: int | None = 3,
 ) -> Callable[[Callable[P, R]], Callable[P, R]]: ...

@@ -44,6 +44,12 @@ class UserMirror(models.Model):
     dingtalk_corp_id: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
     employee_number: models.CharField[str, str] = models.CharField(max_length=64, blank=True)
     manager_userid: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
+    # 目录同步检出部门变更时置位, 供人员列表提示"部门已变更"(转岗线索, 不自动建单);
+    # 转岗单确认后清除。
+    department_changed_at: models.DateTimeField[
+        str | date | datetime | None,
+        datetime | None,
+    ] = models.DateTimeField(blank=True, null=True)
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
     )

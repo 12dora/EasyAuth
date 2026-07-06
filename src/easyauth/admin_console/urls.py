@@ -40,6 +40,18 @@ from easyauth.admin_console.credentials_disable_api import (
     console_credential_disable,
     console_static_token_disable,
 )
+from easyauth.admin_console.lifecycle_api import (
+    lifecycle_action_operation,
+    lifecycle_grant_diff,
+    lifecycle_grant_diff_confirm,
+    lifecycle_grant_items,
+    lifecycle_handover_task_detail,
+    lifecycle_handover_tasks,
+    lifecycle_onboard,
+    lifecycle_onboarding_template_detail,
+    lifecycle_onboarding_templates,
+    lifecycle_team_item_detail,
+)
 from easyauth.admin_console.managed_scope_policy_api import console_managed_scope_policy
 from easyauth.admin_console.managed_users_preview_api import console_managed_users_preview
 from easyauth.admin_console.memberships_api import (
@@ -181,6 +193,52 @@ urlpatterns = [
         name="operations-dependency-health-check",
     ),
     path("api/v1/users", console_user_search, name="console-user-search"),
+    path(
+        "api/v1/lifecycle/handover-tasks",
+        lifecycle_handover_tasks,
+        name="lifecycle-handover-tasks",
+    ),
+    path(
+        "api/v1/lifecycle/handover-tasks/<int:task_id>",
+        lifecycle_handover_task_detail,
+        name="lifecycle-handover-task-detail",
+    ),
+    path(
+        "api/v1/lifecycle/handover-tasks/<int:task_id>/grant-items",
+        lifecycle_grant_items,
+        name="lifecycle-grant-items",
+    ),
+    path(
+        "api/v1/lifecycle/handover-tasks/<int:task_id>/actions/<str:app_key>/<str:operation>",
+        lifecycle_action_operation,
+        name="lifecycle-action-operation",
+    ),
+    path(
+        "api/v1/lifecycle/handover-tasks/<int:task_id>/team-items/<int:item_id>",
+        lifecycle_team_item_detail,
+        name="lifecycle-team-item-detail",
+    ),
+    path(
+        "api/v1/lifecycle/handover-tasks/<int:task_id>/grant-diff",
+        lifecycle_grant_diff,
+        name="lifecycle-grant-diff",
+    ),
+    path(
+        "api/v1/lifecycle/handover-tasks/<int:task_id>/grant-diff/confirm",
+        lifecycle_grant_diff_confirm,
+        name="lifecycle-grant-diff-confirm",
+    ),
+    path(
+        "api/v1/lifecycle/onboarding-templates",
+        lifecycle_onboarding_templates,
+        name="lifecycle-onboarding-templates",
+    ),
+    path(
+        "api/v1/lifecycle/onboarding-templates/<int:template_id>",
+        lifecycle_onboarding_template_detail,
+        name="lifecycle-onboarding-template-detail",
+    ),
+    path("api/v1/lifecycle/onboard", lifecycle_onboard, name="lifecycle-onboard"),
     path("api/v1/teams", console_teams, name="console-teams"),
     path("api/v1/teams/<int:team_id>", console_team_detail, name="console-team-detail"),
     path(

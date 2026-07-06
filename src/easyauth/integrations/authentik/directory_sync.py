@@ -5,6 +5,7 @@ from dataclasses import asdict, dataclass, is_dataclass
 from typing import TYPE_CHECKING, Final, Protocol, cast
 
 from django.db import transaction
+from django.utils import timezone
 
 from easyauth.accounts.models import (
     USER_STATUS_ACTIVE,
@@ -22,6 +23,7 @@ from easyauth.integrations.authentik.directory_client import (
     AuthentikDirectoryError,
     AuthentikDirectoryUnavailableError,
 )
+from easyauth.lifecycle.services import start_offboarding
 
 if TYPE_CHECKING:
     from easyauth.accounts.status import UserStatus
@@ -275,6 +277,10 @@ def _update_user_mirror_summary(payload: DirectoryJson) -> None:
             if getattr(user, field) != value:
                 setattr(user, field, value)
                 update_fields.append(field)
+        if "department" in update_fields:
+            # 部门变更只做提示线索(转岗是人事决策, 系统不猜, 不自动建单)。
+            user.department_changed_at = timezone.now()
+            update_fields.append("department_changed_at")
         if update_fields:
             update_fields.append("updated_at")
             user.full_clean()
@@ -347,11 +353,16 @@ def _reconcile_user_mirror_status(snapshot: _DirectorySnapshot) -> _StatusReconc
             continue
         # 目录里已经不存在的绑定用户按离职处理, 与上游硬删除口径一致。
         target_status = status_by_key.get(key, USER_STATUS_DEPARTED)
+        was_departed = user.status == USER_STATUS_DEPARTED
         result = AuthentikSyncService.apply_directory_status(user, target_status)
         applied_count += 1
         revoked_count += result.revoked_count
         if result.user.status == USER_STATUS_DEPARTED:
             departed_count += 1
+            if not was_departed:
+                # 首次检出离职: 撤权已由 apply_directory_status 完成,
+                # 这里补齐生命周期立即项(自动建交接单+禁号+移出团队, §2.4)。
+                _ = start_offboarding(result.user)
 
     if unknown_status_keys:
         # 已回收可识别的离职用户后, 未知状态必须显式失败: 不允许返回"看似成功"的空回收。
