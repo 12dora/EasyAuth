@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 import pytest
 
 from easyauth.accounts.models import USER_STATUS_DEPARTED, UserMirror
+from easyauth.accounts.services import AuthentikSyncService
 from easyauth.applications.models import (
     App,
     AppScope,
@@ -300,6 +301,23 @@ def test_manual_offboard_task_for_active_user_keeps_account_active() -> None:
     assert task.status == "pending"
     assert subject.status != USER_STATUS_DEPARTED
     assert AccessGrant.objects.filter(user=subject, is_current=True, status="active").exists()
+
+
+def test_offboard_snapshot_survives_prior_revocation() -> None:
+    # Given: 目录同步已按离职回收撤销授权(is_current=False), 之后才建交接单。
+    app, group, _permission = _app_with_catalog("lc-revoked-app")
+    subject = _granted_user("lc-revoked-user", app, group)
+    _ = AuthentikSyncService.apply_directory_status(subject, USER_STATUS_DEPARTED)
+    assert not AccessGrant.objects.filter(user=subject, is_current=True).exists()
+
+    # When: 离职编排建单。
+    result = start_offboarding(subject)
+
+    # Then: 快照基于撤销前的最新授权行, 不为空(§7 决策 12)。
+    items = list(HandoverGrantItem.objects.filter(task=result.task))
+    assert len(items) == 1
+    assert items[0].authorization_group is not None
+    assert items[0].authorization_group.key == "sales"
 
 
 def test_open_task_is_unique_per_subject() -> None:

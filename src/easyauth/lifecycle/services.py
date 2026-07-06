@@ -498,12 +498,7 @@ def onboard_user(
 
 
 def _snapshot_grant_items(task: HandoverTask) -> None:
-    grants = AccessGrant.objects.select_related("app").filter(
-        user=task.subject_user,
-        is_current=True,
-        app__is_active=True,
-    )
-    for grant in grants:
+    for grant in _latest_grants_per_app(task.subject_user):
         group_links = AccessGrantGroup.objects.select_related("authorization_group").filter(
             grant=grant,
         )
@@ -530,14 +525,8 @@ def _snapshot_grant_items(task: HandoverTask) -> None:
 
 
 def _snapshot_app_actions(task: HandoverTask) -> None:
-    # 交接面 = 当事人有 current 授权的 APP, 加上声明了交接钩子的 APP。
-    app_ids = set(
-        AccessGrant.objects.filter(
-            user=task.subject_user,
-            is_current=True,
-            app__is_active=True,
-        ).values_list("app_id", flat=True),
-    )
+    # 交接面 = 当事人有授权痕迹的 APP, 加上声明了交接钩子的 APP。
+    app_ids = {grant.app_id for grant in _latest_grants_per_app(task.subject_user)}
     hook_app_ids = set(
         AppWebhookConfig.objects.filter(enabled=True, app__is_active=True)
         .exclude(handover_url="")
@@ -545,6 +534,21 @@ def _snapshot_app_actions(task: HandoverTask) -> None:
     )
     for app in App.objects.filter(id__in=app_ids | hook_app_ids):
         _ = HandoverAppAction.objects.create(task=task, app=app)
+
+
+def _latest_grants_per_app(subject: UserMirror) -> list[AccessGrant]:
+    # 自动离职单建单时授权已被立即撤销(is_current=False): 快照取每 APP 最新一行
+    # (含刚撤销的), 手动提前建单时最新行即 active current 行, 两种路径同一口径。
+    grants = (
+        AccessGrant.objects.select_related("app")
+        .filter(user=subject, app__is_active=True)
+        .order_by("app_id", "-version", "-id")
+    )
+    latest: dict[int, AccessGrant] = {}
+    for grant in grants:
+        if grant.app_id not in latest:
+            latest[grant.app_id] = grant
+    return list(latest.values())
 
 
 def _snapshot_leader_teams(task: HandoverTask) -> None:
