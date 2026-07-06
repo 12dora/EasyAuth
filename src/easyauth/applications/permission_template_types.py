@@ -85,6 +85,15 @@ class AppManifestApprovalRuleInput:
 
 
 @dataclass(frozen=True, slots=True)
+class AppManifestLifecycleInput:
+    # 下游生命周期交接钩子声明(§5.1): URL 可为绝对地址或以 / 开头的站内路径,
+    # 相对路径在自动接入时用下游 base_url 补全。
+    handover_url: str = ""
+    onboard_url: str = ""
+    capabilities: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
 class AppManifestInput:
     schema_version: int
     source: TemplateSource
@@ -96,6 +105,7 @@ class AppManifestInput:
     permissions: tuple[AppManifestPermissionInput, ...]
     authorization_groups: tuple[AppManifestAuthorizationGroupInput, ...]
     approval_rules: tuple[AppManifestApprovalRuleInput, ...]
+    lifecycle: AppManifestLifecycleInput | None = None
 
 
 PermissionTemplateInput = AppManifestInput

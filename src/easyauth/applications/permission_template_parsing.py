@@ -14,6 +14,7 @@ from easyauth.applications.permission_template_types import (
     AppManifestAuthorizationGroupInput,
     AppManifestGrantInput,
     AppManifestInput,
+    AppManifestLifecycleInput,
     AppManifestPermissionGroupInput,
     AppManifestPermissionInput,
     AppManifestScopeInput,
@@ -102,6 +103,23 @@ class _ApprovalRulePayload(BaseModel):
     is_active: bool = True
 
 
+class _LifecyclePayload(BaseModel):
+    # 下游生命周期交接声明(与 easyauth-app-sdk 描述符契约一致): URL 允许绝对地址
+    # 或以 / 开头的站内路径(自动接入时用下游 base_url 补全)。
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
+
+    handover_url: str | None = Field(default=None, max_length=512)
+    onboard_url: str | None = Field(default=None, max_length=512)
+    capabilities: tuple[str, ...] = ()
+
+
+class _WebhookPayload(BaseModel):
+    # 下游 webhook 验签方式声明; 目前契约只支持 hmac-sha256。
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
+
+    signing: Literal["hmac-sha256"] = "hmac-sha256"
+
+
 class _AppManifestPayload(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
 
@@ -112,6 +130,8 @@ class _AppManifestPayload(BaseModel):
     permissions: tuple[_PermissionPayload, ...] = ()
     authorization_groups: tuple[_AuthorizationGroupPayload, ...] = ()
     approval_rules: tuple[_ApprovalRulePayload, ...] = ()
+    lifecycle: _LifecyclePayload | None = None
+    webhook: _WebhookPayload | None = None
 
 
 def parse_template_format(raw_format: str) -> TemplateFormat:
@@ -360,6 +380,15 @@ def _manifest_input(
                 is_active=approval_rule.is_active,
             )
             for approval_rule in payload.approval_rules
+        ),
+        lifecycle=(
+            AppManifestLifecycleInput(
+                handover_url=payload.lifecycle.handover_url or "",
+                onboard_url=payload.lifecycle.onboard_url or "",
+                capabilities=payload.lifecycle.capabilities,
+            )
+            if payload.lifecycle is not None
+            else None
         ),
     )
 

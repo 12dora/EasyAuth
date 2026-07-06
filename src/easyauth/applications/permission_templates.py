@@ -56,6 +56,7 @@ def apply_permission_template(
     *,
     app: App,
     template: AppManifestInput,
+    downstream_base_url: str | None = None,
 ) -> PermissionTemplateImportResult:
     # 锁住 App 行串行化同一 App 的并发导入; 版本检查和写入在同一把锁内完成,
     # 消除"两个导入都读到 latest=1 然后交错落库"的 TOCTOU。
@@ -67,7 +68,55 @@ def apply_permission_template(
     template_version = record_template_version(locked_app, template, actions)
     record_import_event(locked_app, template, template_version, actions)
     bump_manifest_catalog_version(locked_app, template, actions)
+    _sync_webhook_config_from_manifest(
+        app=locked_app,
+        template=template,
+        downstream_base_url=downstream_base_url,
+    )
     return PermissionTemplateImportResult(template_version=template_version, actions=actions)
+
+
+# webhook 事件 URL 的语义是"接入时从 manifest 读入、控制台可覆盖"(AppWebhookConfig 注释):
+# 只有配置从未被控制台管理员改过(updated_by 为空或 manifest)时才回填, 避免覆盖人工设置。
+_MANIFEST_ACTOR = "manifest"
+
+
+def _sync_webhook_config_from_manifest(
+    *,
+    app: App,
+    template: AppManifestInput,
+    downstream_base_url: str | None,
+) -> None:
+    if template.lifecycle is None:
+        return
+    from easyauth.webhooks.models import AppWebhookConfig
+
+    config, _ = AppWebhookConfig.objects.get_or_create(app=app)
+    if config.updated_by not in ("", _MANIFEST_ACTOR):
+        return
+    updates: list[str] = []
+    for field, raw_url in (
+        ("handover_url", template.lifecycle.handover_url),
+        ("onboard_url", template.lifecycle.onboard_url),
+    ):
+        resolved = _resolve_manifest_url(raw_url, downstream_base_url)
+        if resolved is not None and getattr(config, field) != resolved:
+            setattr(config, field, resolved)
+            updates.append(field)
+    if updates:
+        config.updated_by = _MANIFEST_ACTOR
+        config.save(update_fields=[*updates, "updated_by", "updated_at"])
+
+
+def _resolve_manifest_url(raw_url: str, downstream_base_url: str | None) -> str | None:
+    # 绝对 http(s) URL 原样使用; 以 / 开头的站内路径需要下游 base_url(仅自动接入具备)。
+    if not raw_url:
+        return None
+    if raw_url.startswith(("http://", "https://")):
+        return raw_url
+    if raw_url.startswith("/") and downstream_base_url:
+        return f"{downstream_base_url.rstrip('/')}{raw_url}"
+    return None
 
 
 def _reject_duplicate_template_version(*, app: App, version: int) -> None:
