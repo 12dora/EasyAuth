@@ -25,21 +25,12 @@ import type { ListPayload } from "../../lib/api";
 import type { ApprovalInstanceRow } from "../../lib/domain";
 import type { MessageKey } from "../../i18n/messages";
 import type { BadgeTone, Translator } from "../../lib/status";
-import { formatDateTime } from "../../lib/status";
+import { APPROVAL_STATUS_LABEL_KEYS, approvalStatusLabel, formatDateTime } from "../../lib/status";
 
 const INSTANCES_QUERY_PREFIX = ["console", "operations", "approval-instances"];
 const DEFAULT_PAGE_SIZE = 20;
 
 const APPROVAL_STATUSES = ["created", "submitted", "approved", "rejected", "canceled", "failed"] as const;
-
-const APPROVAL_STATUS_LABEL_KEYS: Record<string, MessageKey> = {
-  created: "approvalInstances.status.created",
-  submitted: "approvalInstances.status.submitted",
-  approved: "approvalInstances.status.approved",
-  rejected: "approvalInstances.status.rejected",
-  canceled: "approvalInstances.status.canceled",
-  failed: "approvalInstances.status.failed",
-};
 
 export function ApprovalInstancesPage() {
   const { t } = useI18n();
@@ -270,10 +261,6 @@ function DeliveryCell({ t, row, actions }: { t: Translator; row: ApprovalInstanc
   }
 }
 
-function approvalStatusLabel(t: Translator, status: string): string {
-  const key = APPROVAL_STATUS_LABEL_KEYS[status];
-  return key ? t(key) : status;
-}
 
 function approvalStatusTone(status: string): BadgeTone {
   switch (status) {

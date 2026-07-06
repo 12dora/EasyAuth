@@ -24,7 +24,7 @@ import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../lib/api";
 import type { JsonObject, ListPayload } from "../../lib/api";
 import type { ApprovalTemplateItem, ApprovalTemplateTestResult } from "../../lib/domain";
-import { formatDateTime } from "../../lib/status";
+import { approvalStatusLabel, formatDateTime } from "../../lib/status";
 
 const TEMPLATES_QUERY_KEY = ["console", "approval-templates"];
 
@@ -469,7 +469,7 @@ function TemplateTestDialog({ template, onClose }: { template: ApprovalTemplateI
               </div>
               <div className="flex items-center justify-between gap-4">
                 <dt>{t("common.status")}</dt>
-                <dd className="font-mono text-ink">{result.status}</dd>
+                <dd className="font-mono text-ink">{approvalStatusLabel(t, result.status)}</dd>
               </div>
             </dl>
           </div>

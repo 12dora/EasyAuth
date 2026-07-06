@@ -31,7 +31,7 @@ import type { JsonObject, ListPayload } from "../../lib/api";
 import type { OperationRow } from "../../lib/domain";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { MessageKey } from "../../i18n/messages";
-import { accessRequestStatusLabel, badgeToneForAccessRequestStatus, formatDateTime } from "../../lib/status";
+import { accessRequestStatusLabel, badgeToneForAccessRequestStatus, formatDateTime, grantStatusLabel, grantTypeLabel, healthStatusLabel } from "../../lib/status";
 import type { Translator } from "../../lib/status";
 
 const ENDPOINTS: Record<string, { titleKey: MessageKey; endpoint: string }> = {
@@ -357,7 +357,7 @@ function operationColumns(section: string, t: Translator, accessRequestActions?:
   if (section === "dependency-health") {
     return [
       { header: t("console.operations.column.component"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.component)}</code> },
-      { header: t("common.status"), cell: ({ row }) => <Badge tone={healthTone(stringValue(row.original.status))}>{stringValue(row.original.status)}</Badge> },
+      { header: t("common.status"), cell: ({ row }) => <Badge tone={healthTone(stringValue(row.original.status))}>{healthStatusLabel(t, stringValue(row.original.status))}</Badge> },
       { header: t("console.operations.column.summary"), cell: ({ row }) => stringValue(row.original.summary) },
       { header: t("console.operations.column.error"), cell: ({ row }) => stringValue(row.original.error_summary) },
       { header: t("console.operations.column.checkedAt"), cell: ({ row }) => formatDateTime(stringValue(row.original.last_checked_at)) },
@@ -377,8 +377,8 @@ function operationColumns(section: string, t: Translator, accessRequestActions?:
     return [
       { header: t("common.user"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.user_id)}</code> },
       { header: t("common.app"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.app_key)}</code> },
-      { header: t("common.status"), cell: ({ row }) => <Badge tone={row.original.status === "active" ? "evergreen" : "neutral"}>{stringValue(row.original.status)}</Badge> },
-      { header: t("common.type"), cell: ({ row }) => stringValue(row.original.grant_type) },
+      { header: t("common.status"), cell: ({ row }) => <Badge tone={row.original.status === "active" ? "evergreen" : "neutral"}>{grantStatusLabel(t, stringValue(row.original.status))}</Badge> },
+      { header: t("common.type"), cell: ({ row }) => grantTypeLabel(t, stringValue(row.original.grant_type)) },
       { header: t("console.operations.column.expiresAt"), cell: ({ row }) => formatDateTime(stringValue(row.original.grant_expires_at)) },
     ];
   }

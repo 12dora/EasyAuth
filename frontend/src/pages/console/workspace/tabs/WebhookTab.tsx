@@ -14,7 +14,7 @@ import type { MessageKey } from "../../../../i18n/messages";
 import { apiRequest } from "../../../../lib/api";
 import type { JsonObject } from "../../../../lib/api";
 import type { WebhookConfigPayload } from "../../../../lib/domain";
-import { formatDateTime } from "../../../../lib/status";
+import { deliveryStateLabel, formatDateTime } from "../../../../lib/status";
 
 type WebhookTarget = "approval_callback_url" | "handover_url" | "onboard_url";
 
@@ -194,7 +194,7 @@ export function WebhookTab({ appKey }: { appKey: string }) {
             <div role="status">
               <StatusBanner
                 tone="evergreen"
-                title={t("webhook.testResult", { deliveryId: testResult.delivery_id, status: testResult.status })}
+                title={t("webhook.testResult", { deliveryId: testResult.delivery_id, status: deliveryStateLabel(t, testResult.status) })}
               />
             </div>
           ) : null}
