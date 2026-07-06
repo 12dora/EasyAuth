@@ -134,6 +134,9 @@ def _access_request_item(
         "submitted_at": access_request.submitted_at.isoformat(),
         "authorization_groups": _json_objects(group_items),
         "direct_grants": _json_objects(direct_grant_items),
+        # 审批决定信息: 申请人可见驳回理由与处理时间。
+        "decided_at": datetime_value(access_request.decided_at),
+        "decision_comment": access_request.decision_comment,
     }
 
 

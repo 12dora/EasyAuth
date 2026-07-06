@@ -58,6 +58,14 @@ GRANT_TYPE_CHOICES: Final[tuple[tuple[str, str], ...]] = (
 )
 GRANT_TYPE_VALUES: Final[tuple[str, ...]] = (GRANT_TYPE_TIMED, GRANT_TYPE_PERMANENT)
 
+# 审批决定的操作者类别: 站内审批人本人, 或控制台管理员代审。
+DECISION_ACTOR_USER: Final = "user"
+DECISION_ACTOR_CONSOLE_ADMIN: Final = "console_admin"
+DECISION_ACTOR_CHOICES: Final[tuple[tuple[str, str], ...]] = (
+    (DECISION_ACTOR_USER, "user"),
+    (DECISION_ACTOR_CONSOLE_ADMIN, "console_admin"),
+)
+
 
 class AccessRequest(models.Model):
     if TYPE_CHECKING:
@@ -108,6 +116,22 @@ class AccessRequest(models.Model):
         str | date | datetime | None,
         datetime | None,
     ] = models.DateTimeField(blank=True, null=True)
+    # 站内审批闭环的决定记录: 谁(decided_by)以什么身份(decision_actor_type)
+    # 在什么时候(decided_at)做了决定, 意见(decision_comment)驳回时必填。
+    decided_by: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
+    decision_actor_type: models.CharField[str, str] = models.CharField(
+        max_length=32,
+        choices=DECISION_ACTOR_CHOICES,
+        blank=True,
+    )
+    decision_comment: models.TextField[str, str] = models.TextField(blank=True)
+    decided_at: models.DateTimeField[
+        str | date | datetime | None,
+        datetime | None,
+    ] = models.DateTimeField(blank=True, null=True)
+    # 遗留字段(F2): 早期"权限审批走钉钉"方向的残留, 从未被写入过非空值;
+    # 权限审批按产品意图为站内闭环。待 M3 审批中心把钉钉回调改绑 ApprovalInstance
+    # 后, 随迁移一并移除。
     dingtalk_process_instance_id: models.CharField[str | None, str | None] = models.CharField(
         max_length=128,
         unique=True,

@@ -44,6 +44,11 @@ from easyauth.admin_console.operations_api import (
     operations_dependency_health_check,
     operations_emergency_revokes,
 )
+from easyauth.admin_console.operations_approvals_api import (
+    operations_approve_access_request,
+    operations_reassign_access_request,
+    operations_reject_access_request,
+)
 from easyauth.admin_console.operations_retry_api import operations_retry_grant
 from easyauth.admin_console.permission_catalog_api import (
     console_permission_tree,
@@ -216,6 +221,21 @@ urlpatterns = [
         "api/v1/operations/access-requests/<int:request_id>/retry-grant",
         operations_retry_grant,
         name="operations-retry-grant",
+    ),
+    path(
+        "api/v1/operations/access-requests/<int:request_id>/approve",
+        operations_approve_access_request,
+        name="operations-approve-access-request",
+    ),
+    path(
+        "api/v1/operations/access-requests/<int:request_id>/reject",
+        operations_reject_access_request,
+        name="operations-reject-access-request",
+    ),
+    path(
+        "api/v1/operations/access-requests/<int:request_id>/reassign",
+        operations_reassign_access_request,
+        name="operations-reassign-access-request",
     ),
     path("api/v1/audit-logs", console_audit_logs, name="console-audit-logs"),
     path(
