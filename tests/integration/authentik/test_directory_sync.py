@@ -548,6 +548,47 @@ def test_first_department_population_does_not_flag_change() -> None:
     assert user.department_changed_at is None
 
 
+def test_multi_department_reorder_does_not_flag_change() -> None:
+    # Given: 多部门员工, 镜像已存(按 dept_id 稳定排序的)首选部门"销售部"。
+    _ = UserMirror.objects.create(
+        authentik_user_id="ak-multi-dept",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-multi",
+        department="销售部",
+    )
+    client_stub = _stub_with_users(
+        [
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-multi",
+                "union_id": "union-multi",
+                "name": "多部门",
+                "status": "active",
+            }
+        ],
+    )
+    # 上游把两个部门顺序颠倒返回(市场部排到前面), 但员工并未转岗——部门集合没变。
+    client_stub.org_contexts[("corp-1", "user-multi")] = {
+        "corp_id": "corp-1",
+        "user_id": "user-multi",
+        "departments": [
+            {"dept_id": "dept-2", "name": "市场部"},
+            {"dept_id": "dept-1", "name": "销售部"},
+        ],
+        "manager": {},
+        "manager_chain": [],
+        "stale": False,
+    }
+
+    # When: 同步。
+    _ = sync_authentik_dingtalk_directory(client_stub)
+
+    # Then: 稳定排序后首选部门仍是 dept-1 的"销售部", 不因乱序误报转岗。
+    user = UserMirror.objects.get(authentik_user_id="ak-multi-dept")
+    assert user.department == "销售部"
+    assert user.department_changed_at is None
+
+
 def test_real_department_change_sets_flag() -> None:
     # Given: 镜像已有旧部门。
     _ = UserMirror.objects.create(
