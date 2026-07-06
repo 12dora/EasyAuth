@@ -34,6 +34,8 @@ interface PermissionSelectorProps {
   groups: ScopedPermissionGroupItem[];
   ungroupedPermissions: ScopedPermissionItem[];
   selectedKeys: string[];
+  /** 所选权限组已覆盖的权限范围: 展示为勾选且禁用, 不参与直接权限提交。 */
+  coveredKeys?: string[];
   expandedGroupKeys: string[];
   loading: boolean;
   errorMessage: string;
@@ -80,6 +82,7 @@ export function PermissionSelector({
   groups,
   ungroupedPermissions,
   selectedKeys,
+  coveredKeys = [],
   expandedGroupKeys,
   loading,
   errorMessage,
@@ -94,9 +97,15 @@ export function PermissionSelector({
   const { locale, t } = useI18n();
   const exitingGroupKeys = useExitingGroupKeys(expandedGroupKeys);
   const enteringGroupKeys = useEnteringGroupKeys(expandedGroupKeys);
+  const coveredKeySet = useMemo(() => new Set(coveredKeys), [coveredKeys]);
+  // 展示态 = 直接勾选 ∪ 权限组覆盖; 提交载荷仍只用直接勾选(selectedKeys)。
+  const displaySelectedKeys = useMemo(
+    () => Array.from(new Set([...selectedKeys, ...coveredKeys])),
+    [coveredKeys, selectedKeys],
+  );
   const rows = useMemo(
-    () => buildPermissionRows(groups, ungroupedPermissions, expandedGroupKeys, enteringGroupKeys, exitingGroupKeys, selectedKeys),
-    [enteringGroupKeys, expandedGroupKeys, exitingGroupKeys, groups, selectedKeys, ungroupedPermissions],
+    () => buildPermissionRows(groups, ungroupedPermissions, expandedGroupKeys, enteringGroupKeys, exitingGroupKeys, displaySelectedKeys),
+    [enteringGroupKeys, expandedGroupKeys, exitingGroupKeys, groups, displaySelectedKeys, ungroupedPermissions],
   );
   const [showSelectedOnly, setShowSelectedOnly] = useState(false);
   const displayRows = useMemo(
@@ -143,21 +152,22 @@ export function PermissionSelector({
             <PermissionGroupScopeCell
               group={row.original.group}
               scopeOptions={row.original.scopeOptions}
-              selectedKeys={selectedKeys}
+              selectedKeys={displaySelectedKeys}
               onScopeChange={onPermissionGroupScopeChange}
               locale={locale}
             />
           ) : (
             <PermissionScopeCell
               permission={row.original.permission}
-              selectedKeys={selectedKeys}
+              selectedKeys={displaySelectedKeys}
+              coveredKeySet={coveredKeySet}
               onScopeChange={onPermissionScopeChange}
               locale={locale}
             />
           ),
       },
     ],
-    [locale, onPermissionGroupScopeChange, onPermissionScopeChange, onToggleGroup, selectedKeys, t],
+    [coveredKeySet, displaySelectedKeys, locale, onPermissionGroupScopeChange, onPermissionScopeChange, onToggleGroup, t],
   );
   const table = useReactTable({
     data: displayRows,
@@ -219,8 +229,8 @@ export function PermissionSelector({
         onShowSelectedOnlyChange={setShowSelectedOnly}
         onExpandAll={() => onExpandGroups(currentPageGroupKeysFromRows(currentPageRows))}
         onCollapseAll={() => onCollapseGroups(currentPageGroupKeysFromRows(currentPageRows))}
-        onSelectAll={() => onSelectPermissionKeys(currentPageSelectionKeysFromRows(currentPageRows))}
-        onSelectScope={(scopeKey) => onSelectPermissionKeys(currentPageSelectionKeysFromRows(currentPageRows, scopeKey))}
+        onSelectAll={() => onSelectPermissionKeys(currentPageSelectionKeysFromRows(currentPageRows).filter((key) => !coveredKeySet.has(key)))}
+        onSelectScope={(scopeKey) => onSelectPermissionKeys(currentPageSelectionKeysFromRows(currentPageRows, scopeKey).filter((key) => !coveredKeySet.has(key)))}
         onClear={() => onClearPermissionKeys(currentPageSelectionKeysFromRows(currentPageRows))}
       />
       <div className="overflow-x-auto">
@@ -510,11 +520,13 @@ function PermissionGroupScopeCell({
 function PermissionScopeCell({
   permission,
   selectedKeys,
+  coveredKeySet,
   onScopeChange,
   locale,
 }: {
   permission: ScopedPermissionItem;
   selectedKeys: string[];
+  coveredKeySet?: Set<string>;
   onScopeChange: (permission: ScopedPermissionItem, scopeKey: string) => void;
   locale: Locale;
 }) {
@@ -526,15 +538,25 @@ function PermissionScopeCell({
 
   return (
     <div className="permission-selector__scope-chip-list permission-selector__scope-chip-list--single-line">
-      {scopes.map((scope) => (
-        <ScopeChip
-          key={scope.key}
-          label={localizedName(locale, scope)}
-          checked={selectedKeys.includes(directGrantSelectionKey(permission.key, scope.key))}
-          ariaLabel={t("selector.selectPermissionScope", { permissionKey: permission.key, scopeName: localizedName(locale, scope) })}
-          onChange={() => onScopeChange(permission, scope.key)}
-        />
-      ))}
+      {scopes.map((scope) => {
+        const selectionKey = directGrantSelectionKey(permission.key, scope.key);
+        const isCovered = coveredKeySet?.has(selectionKey) ?? false;
+        return (
+          <ScopeChip
+            key={scope.key}
+            label={localizedName(locale, scope)}
+            checked={selectedKeys.includes(selectionKey)}
+            disabled={isCovered}
+            title={isCovered ? t("selector.scope.coveredByGroup") : undefined}
+            ariaLabel={
+              isCovered
+                ? `${t("selector.selectPermissionScope", { permissionKey: permission.key, scopeName: localizedName(locale, scope) })} (${t("selector.scope.coveredByGroup")})`
+                : t("selector.selectPermissionScope", { permissionKey: permission.key, scopeName: localizedName(locale, scope) })
+            }
+            onChange={() => onScopeChange(permission, scope.key)}
+          />
+        );
+      })}
     </div>
   );
 }
@@ -543,12 +565,16 @@ function ScopeChip({
   label,
   checked,
   mixed = false,
+  disabled = false,
+  title,
   ariaLabel,
   onChange,
 }: {
   label: string;
   checked: boolean;
   mixed?: boolean;
+  disabled?: boolean;
+  title?: string;
   ariaLabel: string;
   onChange: () => void;
 }) {
@@ -562,16 +588,19 @@ function ScopeChip({
 
   return (
     <label
+      title={title}
       className={cn(
         "permission-selector__scope-chip",
         checked && "permission-selector__scope-chip--checked",
         mixed && "permission-selector__scope-chip--mixed",
+        disabled && "permission-selector__scope-chip--disabled opacity-60 cursor-not-allowed",
       )}
     >
       <input
         ref={checkboxRef}
         type="checkbox"
         checked={checked}
+        disabled={disabled}
         aria-checked={mixed ? "mixed" : checked}
         onChange={onChange}
         aria-label={ariaLabel}

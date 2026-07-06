@@ -48,6 +48,7 @@ def request_catalog_payload(user: UserMirror) -> dict[str, JsonValue]:
         for permission in _request_catalog_permissions()
         if _permission_scope_options(permission, scope_options_by_app_id)
     )
+    grants_by_group_id = _grants_by_group_id(authorization_groups)
     approver_users = _active_approver_users()
     resolver = _ApproverResolver(approver_users)
     direct_manager_resolution = _direct_manager_approver_resolution(user, resolver)
@@ -86,6 +87,7 @@ def request_catalog_payload(user: UserMirror) -> dict[str, JsonValue]:
                 default_approver_by_group_id.get(group.id) or default_approver_by_app_id[
                     group.app_id
                 ],
+                grants_by_group_id.get(group.id, ()),
             )
             for group in authorization_groups
         ],
@@ -157,7 +159,13 @@ def _catalog_app_item(
 def _catalog_authorization_group_item(
     group: AuthorizationGroup,
     approver_resolution: _ApproverResolution,
+    grants: tuple[AuthorizationGroupGrant, ...],
 ) -> dict[str, JsonValue]:
+    # grants 供门户在选中权限组后联动展示该组覆盖的权限范围(展示态, 不参与直接权限提交)。
+    grant_items: list[JsonValue] = [
+        {"permission_key": grant.permission.key, "scope_key": grant.scope_key}
+        for grant in grants
+    ]
     return {
         "id": group.id,
         "app_key": group.app.app_key,
@@ -171,7 +179,28 @@ def _catalog_authorization_group_item(
         "requires_approval": True,
         "default_approver_user_ids": _json_strings(approver_resolution.user_ids),
         "approver_resolution_status": approver_resolution.status,
+        "grants": grant_items,
     }
+
+
+def _grants_by_group_id(
+    groups: tuple[AuthorizationGroup, ...],
+) -> dict[int, tuple[AuthorizationGroupGrant, ...]]:
+    group_ids = tuple(group.id for group in groups)
+    if not group_ids:
+        return {}
+    grants_by_group_id: dict[int, list[AuthorizationGroupGrant]] = {}
+    grant_rows = (
+        AuthorizationGroupGrant.objects.filter(
+            authorization_group_id__in=group_ids,
+            is_active=True,
+        )
+        .select_related("permission")
+        .order_by("authorization_group_id", "permission__key", "scope_key")
+    )
+    for grant in grant_rows:
+        grants_by_group_id.setdefault(grant.authorization_group_id, []).append(grant)
+    return {group_id: tuple(grants) for group_id, grants in grants_by_group_id.items()}
 
 
 def _catalog_permission_groups(

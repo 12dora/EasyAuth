@@ -17,6 +17,11 @@ import { collectPermissionKeys, filterGroupsByApp, permissionMatchesApp } from "
 
 export type AccessGrantType = "permanent" | "timed";
 
+export interface AuthorizationGroupGrantRef {
+  permission_key: string;
+  scope_key: string;
+}
+
 export interface AuthorizationGroupItem {
   id: number;
   app_key: string;
@@ -31,6 +36,7 @@ export interface AuthorizationGroupItem {
   default_approver_user_ids?: string[];
   approver_resolution_status?: string;
   scopes?: ScopeOption[];
+  grants?: AuthorizationGroupGrantRef[];
 }
 
 export interface ApproverOption {
@@ -139,6 +145,8 @@ interface AccessRequestFormResult {
   permissionGroups: ScopedPermissionGroupItem[];
   ungroupedPermissions: ScopedPermissionItem[];
   visiblePermissionKeys: string[];
+  /** 所选权限组覆盖的权限范围(展示态联动勾选用, 不计入直接权限提交)。 */
+  groupCoveredSelectionKeys: string[];
   catalogIsLoading: boolean;
   catalogErrorMessage: string;
   submitErrorMessage: string;
@@ -276,6 +284,7 @@ function buildAccessRequestFormResult(
     permissionGroups: catalogView.permissionGroups,
     ungroupedPermissions: catalogView.ungroupedPermissions,
     visiblePermissionKeys: catalogView.visiblePermissionKeys,
+    groupCoveredSelectionKeys: buildGroupCoveredSelectionKeys(fields, catalogView),
     catalogIsLoading,
     catalogErrorMessage: catalogError ? catalogError.message : "",
     submitErrorMessage: submitMutation.error ? submitMutation.error.message : "",
@@ -299,6 +308,19 @@ function buildAccessRequestFormResult(
     submit: actions.submit,
   };
 }
+
+function buildGroupCoveredSelectionKeys(
+  fields: AccessRequestFields,
+  catalogView: CatalogView,
+): string[] {
+  const group = catalogView.authorizationGroups.find(
+    (item) => item.key === fields.authorizationGroupKey,
+  );
+  return (group?.grants ?? []).map((grant) =>
+    directGrantSelectionKey(grant.permission_key, grant.scope_key),
+  );
+}
+
 
 function buildAccessRequestActions(fields: AccessRequestFields, catalogView: CatalogView, submit: () => void): AccessRequestActions {
   return {

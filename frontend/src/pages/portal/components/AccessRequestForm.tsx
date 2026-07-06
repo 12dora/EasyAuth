@@ -23,6 +23,7 @@ export function AccessRequestForm({ currentUserId = "" }: { currentUserId?: stri
           permissionGroups={form.permissionGroups}
           ungroupedPermissions={form.ungroupedPermissions}
           selectedPermissionKeys={form.selectedPermissionKeys}
+          coveredSelectionKeys={form.groupCoveredSelectionKeys}
           expandedGroupKeys={form.expandedGroupKeys}
           catalogIsLoading={form.catalogIsLoading}
           catalogErrorMessage={form.catalogErrorMessage}

@@ -96,6 +96,7 @@ def test_portal_request_catalog_lists_only_requestable_authorization_groups() ->
             "requires_approval": True,
             "default_approver_user_ids": [],
             "approver_resolution_status": "default_policy",
+            "grants": [],
         },
     ]
     # 目录不再返回全量在职用户; 无候选审批人时列表为空。
@@ -293,10 +294,63 @@ def test_portal_request_catalog_returns_authorization_groups_and_catalog_version
             "requires_approval": True,
             "default_approver_user_ids": [],
             "approver_resolution_status": "default_policy",
+            "grants": [],
         },
     ]
     assert payload["apps"][0]["catalog_version"] == crm.catalog_version
     assert "roles" not in payload
+
+
+def test_portal_request_catalog_includes_authorization_group_grants() -> None:
+    # Given: 可申请授权组包含 active 授权明细(以及一条 inactive 的不应出现)。
+    client, _user = logged_in_client("portal-catalog-group-grants-user")
+    crm = App.objects.create(app_key="catalog-group-grants-crm", name="CRM")
+    _ = AppScope.objects.create(app=crm, key="SELF", name="本人")
+    permission = Permission.objects.create(
+        app=crm,
+        key="order.view",
+        name="查看订单",
+        supported_scopes=["SELF"],
+    )
+    inactive_permission = Permission.objects.create(
+        app=crm,
+        key="order.delete",
+        name="删除订单",
+        supported_scopes=["SELF"],
+    )
+    group = AuthorizationGroup.objects.create(
+        app=crm,
+        key="sales",
+        kind="role",
+        name="销售",
+        requestable=True,
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key="SELF",
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=inactive_permission,
+        scope_key="SELF",
+        is_active=False,
+    )
+    _ = ApprovalRule.objects.create(
+        app=crm,
+        authorization_group=group,
+        approver_userids=["manager-001"],
+    )
+
+    # When: 读取申请目录。
+    response = client.get(REQUEST_CATALOG_URL)
+
+    # Then: 授权组带出 active 授权明细(permission_key + scope_key), 供门户联动展示。
+    payload = json_object(response)
+    assert response.status_code == HTTPStatus.OK
+    assert payload["authorization_groups"][0]["grants"] == [
+        {"permission_key": "order.view", "scope_key": "SELF"},
+    ]
 
 
 def test_portal_request_catalog_includes_direct_grant_scope_options() -> None:
