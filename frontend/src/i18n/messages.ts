@@ -822,6 +822,10 @@ export const zhCN = {
   "handover.detail.cancelMessage": "确定取消「{name}」的交接单？已交接的内容不会回退，未处理的应用数据保持原状。",
   "handover.detail.cancelConfirm": "确认取消",
   "handover.detail.cancelFailed": "交接单取消失败",
+  "handover.detail.deleteTask": "删除交接单",
+  "handover.detail.deleteMessage": "确定删除「{name}」的这张已取消交接单？删除后不可恢复，审计日志会保留删除记录。",
+  "handover.detail.deleteConfirm": "确认删除",
+  "handover.detail.deleteFailed": "交接单删除失败",
 
   "handover.card.doneTo": "已交接给 {name}",
   "handover.card.doneReleased": "已交接，数据已释放到公海",
@@ -1768,6 +1772,10 @@ export const en: Record<MessageKey, string> = {
   "handover.detail.cancelMessage": "Cancel the handover task for \"{name}\"? Completed handovers are not rolled back, and untouched application data stays as is.",
   "handover.detail.cancelConfirm": "Confirm cancel",
   "handover.detail.cancelFailed": "Failed to cancel handover task",
+  "handover.detail.deleteTask": "Delete handover task",
+  "handover.detail.deleteMessage": "Delete this cancelled handover task for \"{name}\"? This cannot be undone; the audit log keeps a deletion record.",
+  "handover.detail.deleteConfirm": "Confirm delete",
+  "handover.detail.deleteFailed": "Failed to delete handover task",
 
   "handover.card.doneTo": "Handed over to {name}",
   "handover.card.doneReleased": "Handed over; data released to the shared pool",

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, RefreshCcw } from "lucide-react";
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { useNavigate, useParams } from "react-router-dom";
 
 import { Badge } from "../../../components/Badge";
 import { Button } from "../../../components/Button";
@@ -49,7 +49,9 @@ export function HandoverTaskDetail() {
   const queryClient = useQueryClient();
   const [wizardOpen, setWizardOpen] = useState(false);
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const detailQueryKey = ["console", "handover-task", taskId];
+  const navigate = useNavigate();
 
   const taskQuery = useQuery({
     queryKey: detailQueryKey,
@@ -79,6 +81,17 @@ export function HandoverTaskDetail() {
         body: {},
       }),
     onSuccess: invalidateDetail,
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: () =>
+      apiRequest(`/console/api/v1/lifecycle/handover-tasks/${taskId}`, {
+        method: "DELETE",
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["console", "handover-tasks"] });
+      void navigate("/console/lifecycle/handover-tasks");
+    },
   });
 
   if (taskQuery.error && !task) {
@@ -131,6 +144,18 @@ export function HandoverTaskDetail() {
                   {t("handover.continue")}
                 </Button>
               </>
+            ) : null}
+            {task?.status === "cancelled" ? (
+              <Button
+                type="button"
+                variant="ghost-danger"
+                onClick={() => {
+                  deleteMutation.reset();
+                  setDeleteConfirmOpen(true);
+                }}
+              >
+                {t("handover.detail.deleteTask")}
+              </Button>
             ) : null}
           </div>
         }
@@ -195,6 +220,36 @@ export function HandoverTaskDetail() {
         </section>
       ) : null}
       {wizardOpen && task ? <HandoverWizard task={task} onClose={() => setWizardOpen(false)} /> : null}
+      {deleteConfirmOpen && task ? (
+        <Dialog
+          title={t("handover.detail.deleteTask")}
+          size="sm"
+          onClose={() => setDeleteConfirmOpen(false)}
+          footer={
+            <>
+              <Button type="button" onClick={() => setDeleteConfirmOpen(false)}>
+                {t("common.cancel")}
+              </Button>
+              <Button
+                type="button"
+                variant="danger"
+                loading={deleteMutation.isPending}
+                disabled={deleteMutation.isPending}
+                onClick={() => deleteMutation.mutate()}
+              >
+                {t("handover.detail.deleteConfirm")}
+              </Button>
+            </>
+          }
+        >
+          <div className="grid gap-3">
+            <p className="text-body leading-5 text-ink-soft">{t("handover.detail.deleteMessage", { name: subjectName })}</p>
+            {deleteMutation.error ? (
+              <StatusBanner tone="signal" title={t("handover.detail.deleteFailed")} message={(deleteMutation.error as Error).message} />
+            ) : null}
+          </div>
+        </Dialog>
+      ) : null}
       {cancelConfirmOpen && task ? (
         <Dialog
           title={t("handover.detail.cancelTask")}

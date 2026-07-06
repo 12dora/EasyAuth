@@ -34,6 +34,7 @@ from easyauth.lifecycle.services import (
     build_transfer_grant_diff,
     cancel_task,
     confirm_transfer_grant_diff,
+    delete_task,
     ensure_handover_task,
     execute_action,
     onboard_user,
@@ -199,6 +200,16 @@ def lifecycle_handover_task_detail(request: HttpRequest, task_id: int) -> JsonRe
         return json_response({"handover_task": _task_detail(task)})
     if request.method == "PATCH":
         return _patch_task(request, task, actor_id)
+    if request.method == "DELETE":
+        try:
+            delete_task(task, actor_id=actor_id)
+        except HandoverConflictError as error:
+            return error_response(
+                ErrorCode.SEMANTIC_VALIDATION_ERROR,
+                str(error),
+                status=HTTPStatus.CONFLICT,
+            )
+        return json_response({"deleted": True})
     return method_not_allowed_response()
 
 

@@ -387,3 +387,36 @@ def test_transfer_completion_clears_department_changed_flag() -> None:
     assert refreshed.status == "completed"
     subject.refresh_from_db()
     assert subject.department_changed_at is None
+
+
+def test_delete_task_only_after_cancelled_and_records_audit() -> None:
+    # Given: 进行中的转岗单。
+    from easyauth.lifecycle.services import HandoverConflictError, cancel_task, delete_task
+
+    app, group, _permission = _app_with_catalog("lc-delete-app")
+    subject = UserMirror.objects.create(authentik_user_id="lc-delete-user")
+    _ = GrantService.create_grant(
+        GrantMutationInput(
+            user=subject,
+            app=app,
+            authorization_groups=(group,),
+            direct_grants=(),
+        ),
+    )
+    task, _created = ensure_handover_task(
+        subject=subject,
+        kind=HANDOVER_KIND_TRANSFER,
+        created_by="admin-a",
+    )
+
+    # Then: 未取消不允许删除。
+    with pytest.raises(HandoverConflictError):
+        delete_task(task, actor_id="admin-a")
+
+    # When: 取消后删除。
+    _ = cancel_task(task, actor_id="admin-a")
+    delete_task(task, actor_id="admin-a")
+
+    # Then: 单据消失, 审计保留删除痕迹。
+    assert not HandoverTask.objects.filter(pk=task.pk).exists()
+    assert AuditLog.objects.filter(event_type="handover_task_deleted").exists()

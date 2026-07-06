@@ -324,6 +324,17 @@ def cancel_task(task: HandoverTask, *, actor_id: str) -> HandoverTask:
     return task
 
 
+TASK_NOT_DELETABLE_MESSAGE: Final = "只有已取消的交接单可以删除; 进行中的请先取消, 已完成的作为交接史料保留。"
+
+
+def delete_task(task: HandoverTask, *, actor_id: str) -> None:
+    # 单据本身允许清理误建/作废的(仅 cancelled); 删除动作先落审计, 保留可追溯痕迹。
+    if task.status != TASK_STATUS_CANCELLED:
+        raise HandoverConflictError(TASK_NOT_DELETABLE_MESSAGE)
+    _record_task_event(task, action="handover_task_deleted", actor_id=actor_id)
+    _ = task.delete()
+
+
 def refresh_task_status(task: HandoverTask) -> HandoverTask:
     # 所有 APP 均 done/skipped 且团队项处理完 → 交接单完成; 有任何进展 → in_progress。
     if task.status not in TASK_OPEN_STATUSES:
