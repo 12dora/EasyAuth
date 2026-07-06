@@ -54,7 +54,37 @@ def validate_manifest(manifest: Any) -> dict[str, Any]:
     scope_keys = _validate_scopes(manifest["scopes"])
     for index, permission in enumerate(manifest["permissions"]):
         _validate_permission(permission, index, scope_keys)
+    if "lifecycle" in manifest:
+        _validate_lifecycle(manifest["lifecycle"])
+    if "webhook" in manifest:
+        _validate_webhook(manifest["webhook"])
     return manifest
+
+
+def _validate_lifecycle(lifecycle: Any) -> None:
+    # 可选顶层节: 声明生命周期(离职/转岗交接)回调端点与能力; 字段均可缺省。
+    if not isinstance(lifecycle, dict):
+        raise ManifestValidationError("lifecycle 必须是 JSON object")
+    for field in ("handover_url", "onboard_url"):
+        value = lifecycle.get(field)
+        if value is not None and not isinstance(value, str):
+            raise ManifestValidationError(f"lifecycle.{field} 必须是字符串或 null")
+    capabilities = lifecycle.get("capabilities")
+    if capabilities is None:
+        return
+    if not isinstance(capabilities, list) or any(
+        not isinstance(capability, str) for capability in capabilities
+    ):
+        raise ManifestValidationError("lifecycle.capabilities 必须是字符串数组")
+
+
+def _validate_webhook(webhook: Any) -> None:
+    # 可选顶层节: 声明 webhook 验签算法; 字段均可缺省。
+    if not isinstance(webhook, dict):
+        raise ManifestValidationError("webhook 必须是 JSON object")
+    signing = webhook.get("signing")
+    if signing is not None and not isinstance(signing, str):
+        raise ManifestValidationError("webhook.signing 必须是字符串")
 
 
 def _validate_scopes(scopes: list[Any]) -> set[str]:

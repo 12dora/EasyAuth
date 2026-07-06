@@ -79,6 +79,50 @@ def test_validate_manifest_rejects_unknown_supported_scope() -> None:
         validate_manifest(manifest)
 
 
+def test_validate_manifest_accepts_lifecycle_and_webhook_sections() -> None:
+    manifest = _manifest()
+    manifest["lifecycle"] = {
+        "handover_url": "/api/v1/easyauth/lifecycle/handover",
+        "onboard_url": None,
+        "capabilities": ["preview", "reassign"],
+    }
+    manifest["webhook"] = {"signing": "hmac-sha256"}
+
+    validated = validate_manifest(manifest)
+
+    assert validated["lifecycle"]["capabilities"] == ["preview", "reassign"]
+    assert validated["webhook"]["signing"] == "hmac-sha256"
+
+
+def test_descriptor_roundtrip_preserves_lifecycle_and_webhook_sections() -> None:
+    # 描述符 build/parse 必须原样携带 lifecycle/webhook 节, EasyAuth 侧据此发现交接端点。
+    manifest = _manifest()
+    manifest["lifecycle"] = {"handover_url": "/hooks/handover", "capabilities": ["preview"]}
+    manifest["webhook"] = {"signing": "hmac-sha256"}
+
+    payload = build_descriptor_payload(manifest=manifest)
+    descriptor = parse_descriptor_payload(payload)
+
+    assert descriptor.manifest["lifecycle"] == manifest["lifecycle"]
+    assert descriptor.manifest["webhook"] == manifest["webhook"]
+
+
+def test_validate_manifest_rejects_bad_lifecycle_and_webhook_types() -> None:
+    manifest = _manifest()
+    manifest["lifecycle"] = {"handover_url": 123}
+    with pytest.raises(ManifestValidationError, match="handover_url"):
+        validate_manifest(manifest)
+
+    manifest["lifecycle"] = {"capabilities": "preview"}
+    with pytest.raises(ManifestValidationError, match="capabilities"):
+        validate_manifest(manifest)
+
+    manifest["lifecycle"] = {"capabilities": ["preview"]}
+    manifest["webhook"] = {"signing": 1}
+    with pytest.raises(ManifestValidationError, match="signing"):
+        validate_manifest(manifest)
+
+
 def test_parse_descriptor_rejects_app_key_mismatch() -> None:
     payload = build_descriptor_payload(manifest=_manifest())
     payload["app"]["app_key"] = "otherapp"

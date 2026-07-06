@@ -1,4 +1,4 @@
-"""FastAPI 集成: 一行挂载描述符端点。
+"""FastAPI 集成: 一行挂载描述符端点与生命周期交接端点。
 
 注意: 本模块刻意不使用 ``from __future__ import annotations`` ——
 endpoint 的 ``Request`` 注解必须在运行时保持真实类型, 否则 FastAPI
@@ -12,6 +12,12 @@ from easyauth_app_sdk.integration import (
     DescriptorProvider,
     TokenValidator,
     descriptor_http_response,
+)
+from easyauth_app_sdk.lifecycle import (
+    DEFAULT_HANDOVER_PATH,
+    HandoverCallback,
+    SecretProvider,
+    lifecycle_http_response,
 )
 
 if TYPE_CHECKING:
@@ -41,6 +47,40 @@ def create_descriptor_router(
             authorization=request.headers.get("authorization"),
             required_token=token,
             token_validator=token_validator,
+        )
+        return Response(content=body, status_code=status_code, media_type=headers["Content-Type"])
+
+    return router
+
+
+def easyauth_lifecycle_router(
+    secret_provider: SecretProvider,
+    on_handover_preview: HandoverCallback,
+    on_handover_execute: HandoverCallback,
+    *,
+    path: str = DEFAULT_HANDOVER_PATH,
+) -> "APIRouter":
+    """创建接收 EasyAuth 生命周期交接 webhook 的 FastAPI router。
+
+    验签/事件分发/异常边界均由 SDK 承担, APP 只需实现两个业务回调:
+    ``on_handover_preview`` 返回 preview 响应体(``{"assets": [...]}``, 不落库),
+    ``on_handover_execute`` 返回 execute 响应体(``{"summary": {...}}``, 按
+    ``payload.task_id`` 幂等)。``secret_provider`` 在每次请求时取密钥,
+    避免 import 期读配置。
+    """
+    from fastapi import APIRouter, Request, Response
+
+    router = APIRouter()
+
+    @router.post(path, include_in_schema=False)
+    async def post_easyauth_lifecycle_handover(request: Request) -> Response:
+        raw_body = await request.body()
+        status_code, headers, body = lifecycle_http_response(
+            secret_provider=secret_provider,
+            headers=dict(request.headers),
+            raw_body=raw_body,
+            on_handover_preview=on_handover_preview,
+            on_handover_execute=on_handover_execute,
         )
         return Response(content=body, status_code=status_code, media_type=headers["Content-Type"])
 
