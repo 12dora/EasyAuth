@@ -8,8 +8,10 @@ INSECURE_URL_MESSAGE = "URL 必须使用 https(仅本地开发允许 http://loca
 BLOCKED_HOST_MESSAGE = "目标主机解析到被禁止的内网/环回/保留地址。"
 UNRESOLVABLE_HOST_MESSAGE = "目标主机无法解析。"
 
-# 仅本地开发允许明文 http 的主机。
-LOCAL_HTTP_HOSTS = frozenset({"localhost", "127.0.0.1", "::1"})
+# 仅本机流量允许明文 http 的主机。host.docker.internal 是 Docker 容器访问宿主的
+# 专用主机名(容器化部署里 worker/stream 经它访问宿主上的 Authentik/EasyTrade),
+# 流量只走本机 docker bridge, 与环回地址同一信任边界。
+LOCAL_HTTP_HOSTS = frozenset({"localhost", "127.0.0.1", "::1", "host.docker.internal"})
 
 
 class InsecureUrlError(ValueError):
