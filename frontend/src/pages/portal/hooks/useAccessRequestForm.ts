@@ -68,7 +68,6 @@ export type ScopedPermissionGroupItem = Omit<PermissionGroupItem, "children" | "
   permissions?: ScopedPermissionItem[];
 };
 
-export const ACCESS_REQUEST_MAX_DIRECT_GRANTS = 50;
 export const ACCESS_REQUEST_MAX_APPROVERS = 20;
 export const ACCESS_REQUEST_MAX_REASON_LENGTH = 1000;
 
@@ -202,7 +201,6 @@ export function useAccessRequestForm(currentUserId = ""): AccessRequestFormResul
       hasTarget &&
       selectedScopesAreComplete &&
       fields.selectedApproverUserIds.length > 0 &&
-      fields.selectedPermissionKeys.length <= ACCESS_REQUEST_MAX_DIRECT_GRANTS &&
       fields.selectedApproverUserIds.length <= ACCESS_REQUEST_MAX_APPROVERS &&
       !fields.selectedApproverUserIds.includes(currentUserId) &&
       !managedUsersTargetHasMissingDirectManager &&
@@ -359,15 +357,14 @@ function groupCoveredSelectionKeySet(groupKey: string, catalogView: CatalogView)
   );
 }
 
-function filterAndLimitDirectGrantSelections(
+function filterDirectGrantSelections(
   selectionKeys: string[],
   groupKey: string,
   catalogView: CatalogView,
 ): string[] {
   const coveredKeySet = groupCoveredSelectionKeySet(groupKey, catalogView);
   return uniqueStrings(selectionKeys)
-    .filter((key) => !coveredKeySet.has(key))
-    .slice(0, ACCESS_REQUEST_MAX_DIRECT_GRANTS);
+    .filter((key) => !coveredKeySet.has(key));
 }
 
 
@@ -391,8 +388,7 @@ function buildAccessRequestActions(fields: AccessRequestFields, catalogView: Cat
       const coveredKeySet = groupCoveredSelectionKeySet(fields.authorizationGroupKey, catalogView);
       fields.setSelectedPermissionKeys((current) =>
         uniqueStrings([...current, ...keys])
-          .filter((key) => !coveredKeySet.has(key))
-          .slice(0, ACCESS_REQUEST_MAX_DIRECT_GRANTS),
+          .filter((key) => !coveredKeySet.has(key)),
       );
     },
     clearPermissionKeys: (keys: string[]) => {
@@ -418,7 +414,7 @@ function buildAccessRequestActions(fields: AccessRequestFields, catalogView: Cat
     changePermissionScope: (permission: ScopedPermissionItem, scopeKey: string) => {
       fields.setSelectedPermissionKeys((current) => {
         const shouldSelect = !selectedScopeKeysForPermission(permission, current).includes(scopeKey);
-        return filterAndLimitDirectGrantSelections(
+        return filterDirectGrantSelections(
           nextPermissionScopeSelection(permission, scopeKey, shouldSelect, current),
           fields.authorizationGroupKey,
           catalogView,
@@ -438,7 +434,7 @@ function buildAccessRequestActions(fields: AccessRequestFields, catalogView: Cat
             ? nextPermissionScopeSelection(permission, scopeKey, true, next)
             : nextPermissionScopeCascadeClearSelection(permission, scopeKey, next);
         }
-        return filterAndLimitDirectGrantSelections(next, fields.authorizationGroupKey, catalogView);
+        return filterDirectGrantSelections(next, fields.authorizationGroupKey, catalogView);
       });
     },
     toggleGroup: (key: string) => {
@@ -496,9 +492,6 @@ function buildAccessRequestPayload(values: AccessRequestPayloadValues, catalogVi
 }
 
 function assertAccessRequestPayloadLimits(values: AccessRequestPayloadValues): void {
-  if (values.selectedPermissionKeys.length > ACCESS_REQUEST_MAX_DIRECT_GRANTS) {
-    throw new Error(`直接权限不能超过 ${ACCESS_REQUEST_MAX_DIRECT_GRANTS} 项`);
-  }
   if (values.selectedApproverUserIds.length > ACCESS_REQUEST_MAX_APPROVERS) {
     throw new Error(`审批人不能超过 ${ACCESS_REQUEST_MAX_APPROVERS} 名`);
   }

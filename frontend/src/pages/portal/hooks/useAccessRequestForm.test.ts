@@ -5,7 +5,6 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import {
   ACCESS_REQUEST_MAX_APPROVERS,
-  ACCESS_REQUEST_MAX_DIRECT_GRANTS,
   ACCESS_REQUEST_MAX_REASON_LENGTH,
   directGrantSelectionKey,
   useAccessRequestForm,
@@ -333,7 +332,7 @@ describe("useAccessRequestForm", () => {
     await waitFor(() => expect(result.current.catalogErrorMessage).toContain("申请目录.apps[0].id 必须为有限数字"));
   });
 
-  test("FF-23: direct、审批人和理由均受服务端同值上限约束", async () => {
+  test("FF-23: 直接权限选择不被静默截断，审批人和理由仍受服务端同值上限约束", async () => {
     const approverOptions = Array.from({ length: ACCESS_REQUEST_MAX_APPROVERS + 1 }, (_, index) => ({
       user_id: `approver-${index}`,
       name: `审批人 ${index}`,
@@ -347,14 +346,14 @@ describe("useAccessRequestForm", () => {
 
     act(() => result.current.changeAppKey("crm"));
     act(() => result.current.selectPermissionKeys(
-      Array.from({ length: ACCESS_REQUEST_MAX_DIRECT_GRANTS + 1 }, (_, index) => directGrantSelectionKey(`permission-${index}`, "SELF")),
+      Array.from({ length: 51 }, (_, index) => directGrantSelectionKey(`permission-${index}`, "SELF")),
     ));
     for (const option of approverOptions) {
       act(() => result.current.toggleApprover(option.user_id));
     }
     act(() => result.current.changeReason("理".repeat(ACCESS_REQUEST_MAX_REASON_LENGTH + 1)));
 
-    expect(result.current.selectedPermissionKeys).toHaveLength(ACCESS_REQUEST_MAX_DIRECT_GRANTS);
+    expect(result.current.selectedPermissionKeys).toHaveLength(51);
     expect(result.current.selectedApproverUserIds).toHaveLength(ACCESS_REQUEST_MAX_APPROVERS);
     expect(result.current.reason).toHaveLength(ACCESS_REQUEST_MAX_REASON_LENGTH);
   });

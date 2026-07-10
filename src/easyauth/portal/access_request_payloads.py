@@ -35,7 +35,7 @@ class AccessRequestPayload(BaseModel):
     app_key: str = Field(min_length=1, max_length=128)
     request_type: RequestType = "grant"
     authorization_group_keys: tuple[RoleKey, ...] = Field(default=(), max_length=20)
-    direct_grants: tuple[DirectGrantPayload, ...] = Field(default=(), max_length=50)
+    direct_grants: tuple[DirectGrantPayload, ...] = Field(default=())
     approver_user_ids: tuple[ApproverUserId, ...] = Field(min_length=1, max_length=20)
     grant_type: GrantType
     grant_expires_at: AwareDatetime | None = None

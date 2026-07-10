@@ -184,6 +184,50 @@ describe("PortalPage access request form", () => {
     }
   });
 
+  test("权限分类包含超过 50 项权限时可完整选择", async () => {
+    const permissions = Array.from({ length: 51 }, (_, index) => ({
+      id: index + 1,
+      app_key: "easytrade",
+      key: `document.record.${index}`,
+      name: `单据权限 ${index + 1}`,
+      scopes: [{ key: "ALL", name: "全部" }],
+    }));
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      if (String(input) === "/portal/api/v1/request-catalog") {
+        return jsonResponse({
+          apps: [{ id: 1, app_key: "easytrade", name: "EasyTrade", default_approver_user_ids: ["manager-001"] }],
+          approver_options: [{ user_id: "manager-001", name: "直属主管" }],
+          authorization_groups: [],
+          permission_groups: [{
+            id: 1,
+            app_key: "easytrade",
+            type: "group",
+            key: "document",
+            name: "单据",
+            permissions,
+          }],
+          ungrouped_permissions: [],
+        });
+      }
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage();
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "EasyTrade (easytrade)" });
+      await user.selectOptions(screen.getByLabelText("应用"), "easytrade");
+      const permissionTable = await screen.findByRole("table", { name: "权限选择" });
+      await user.click(within(permissionTable).getByRole("checkbox", { name: "选择权限组 document 全部" }));
+
+      expect(screen.getByText("已选 51 项")).toBeVisible();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   test("未选择权限组或直接权限时不能提交申请", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);

@@ -86,6 +86,46 @@ def test_ops4_portal_api_submits_grant_request_with_direct_permission_without_ru
     assert scope_keys == (DEFAULT_SCOPE_KEY,)
 
 
+def test_portal_api_submits_all_direct_permissions_without_fixed_count_cap() -> None:
+    # Given: 一个权限分类中的直接权限数量超过旧的 50 项限制。
+    client, user = logged_in_client("portal-many-direct-permissions-user")
+    app = App.objects.create(app_key="portal-many-direct-permissions", name="大量直接权限")
+    permissions = tuple(
+        _requestable_permission(app=app, key=f"document.record.{index}")
+        for index in range(51)
+    )
+
+    # When: 员工一次申请该分类下全部权限。
+    response = client.post(
+        REQUESTS_API_URL,
+        data=dumps(
+            {
+                "app_key": app.app_key,
+                "request_type": "grant",
+                "authorization_group_keys": [],
+                "direct_grants": [
+                    {"permission": permission.key, "scope": DEFAULT_SCOPE_KEY}
+                    for permission in permissions
+                ],
+                "approver_user_ids": [_active_approver_user_id()],
+                "grant_type": "permanent",
+                "grant_expires_at": None,
+                "reason": "申请单据分类全部权限",
+            },
+        ),
+        content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-many-direct-permissions",
+    )
+
+    # Then: 所有选择完整落库。后续权限不得静默截断。
+    access_request = AccessRequest.objects.get(user=user, app=app)
+    assert response.status_code == HTTPStatus.CREATED
+    direct_grant_count = AccessRequestPermission.objects.filter(
+        access_request=access_request,
+    ).count()
+    assert direct_grant_count == len(permissions)
+
+
 def test_ops4_portal_api_rejects_access_request_without_approver() -> None:
     # Given: direct Permission 本身可申请。
     client, user = logged_in_client("ops4-grant-missing-approver-user")
