@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 
 import { useI18n } from "../i18n/I18nProvider";
 import { Button } from "./Button";
@@ -11,11 +11,15 @@ export type ApprovalDecisionMode = "approve" | "reject";
 interface ApprovalDecisionDialogProps {
   mode: ApprovalDecisionMode;
   /** 弹窗正文里对被处理申请的描述(申请人/应用等数据文案)。 */
-  description: string;
+  description: ReactNode;
+  /** 审批前必须核对的完整授权事实。 */
+  details?: ReactNode;
   /** 可选说明行, 如控制台代审的审计提示。 */
   note?: string;
   errorMessage: string;
   isSubmitting: boolean;
+  /** 详情尚未成功加载时保持 false, 禁止基于不完整事实提交。 */
+  canSubmit?: boolean;
   onClose: () => void;
   onSubmit: (comment: string) => void;
 }
@@ -24,9 +28,11 @@ interface ApprovalDecisionDialogProps {
 export function ApprovalDecisionDialog({
   mode,
   description,
+  details,
   note,
   errorMessage,
   isSubmitting,
+  canSubmit = true,
   onClose,
   onSubmit,
 }: ApprovalDecisionDialogProps) {
@@ -50,9 +56,10 @@ export function ApprovalDecisionDialog({
       title={isReject ? t("approvals.rejectTitle") : t("approvals.approveTitle")}
       size="sm"
       onClose={onClose}
+      closeDisabled={isSubmitting}
       footer={
         <>
-          <Button type="button" onClick={onClose}>
+          <Button type="button" disabled={isSubmitting} onClick={onClose}>
             {t("common.cancel")}
           </Button>
           <Button
@@ -60,7 +67,7 @@ export function ApprovalDecisionDialog({
             type="submit"
             variant={isReject ? "danger" : "primary"}
             loading={isSubmitting}
-            disabled={isSubmitting}
+            disabled={isSubmitting || !canSubmit}
           >
             {isReject ? t("approvals.rejectConfirm") : t("approvals.approveConfirm")}
           </Button>
@@ -69,6 +76,7 @@ export function ApprovalDecisionDialog({
     >
       <form id="approval-decision-form" className="grid gap-4" onSubmit={submit}>
         <p className="text-body leading-5 text-ink-soft">{description}</p>
+        {details}
         <Field
           label={t("approvals.comment")}
           hint={isReject ? t("approvals.commentRequiredHint") : t("approvals.commentOptionalHint")}

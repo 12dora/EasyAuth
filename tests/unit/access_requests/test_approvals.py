@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from easyauth.access_requests.application_grants import GrantApplyFailureError
 from easyauth.access_requests.approvals import (
     ApprovalActionError,
     ApprovalDecision,
@@ -31,6 +32,7 @@ from easyauth.grants.models import AccessGrant
 pytestmark = pytest.mark.django_db
 
 APPROVER_ID = "approver-001"
+GRANT_FAILURE_MESSAGE = "外部授权写入失败"
 
 
 def _user_decision(actor_id: str = APPROVER_ID, comment: str = "") -> ApprovalDecision:
@@ -164,6 +166,38 @@ def test_console_admin_decides_without_approver_membership() -> None:
     audit_log = AuditLog.objects.get(event_type="access_request_approved")
     assert audit_log.actor_type == "console_admin"
     assert audit_log.actor_id == "console-admin"
+
+
+def test_approve_reports_committed_decision_when_grant_application_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: 审批决定可提交, 但授权事实写入失败。
+    access_request = _submitted_request("failed-user", "failed-app")
+
+    def fail_grant_application(*_args: object, **_kwargs: object) -> None:
+        raise GrantApplyFailureError(GRANT_FAILURE_MESSAGE)
+
+    monkeypatch.setattr(
+        "easyauth.access_requests.application.apply_grant_fact",
+        fail_grant_application,
+    )
+
+    # When: 审批人同意申请。
+    with pytest.raises(ApprovalActionError) as exc_info:
+        _ = approve_access_request(
+            request_id=access_request.id,
+            decision=_user_decision(comment="同意"),
+        )
+
+    # Then: 错误明确携带“决定已提交”及最新状态, 调用方不得把它当作无副作用失败。
+    access_request.refresh_from_db()
+    assert access_request.status == "grant_failed"
+    assert exc_info.value.kind == "application_error"
+    assert exc_info.value.details == {
+        "request_id": access_request.id,
+        "status": "grant_failed",
+        "decision_committed": True,
+    }
 
 
 def test_reassign_replaces_approvers_with_validation() -> None:

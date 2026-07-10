@@ -12,6 +12,7 @@ interface DialogProps {
   onClose: () => void;
   size?: DialogSize;
   eyebrow?: ReactNode;
+  closeDisabled?: boolean;
 }
 
 const SIZE_CLASSES: Record<DialogSize, string> = {
@@ -21,10 +22,18 @@ const SIZE_CLASSES: Record<DialogSize, string> = {
   xl: "max-w-5xl",
 };
 
-export function Dialog({ title, children, footer, onClose, size = "md", eyebrow }: DialogProps) {
+export function Dialog({
+  title,
+  children,
+  footer,
+  onClose,
+  size = "md",
+  eyebrow,
+  closeDisabled = false,
+}: DialogProps) {
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
-  useDialogEffects(onClose, panelRef);
+  useDialogEffects(onClose, panelRef, closeDisabled);
 
   if (typeof document === "undefined") {
     return null;
@@ -37,6 +46,7 @@ export function Dialog({ title, children, footer, onClose, size = "md", eyebrow 
         aria-label="关闭弹窗遮罩"
         className="fixed inset-0 cursor-default bg-ink/40 backdrop-blur-[2px]"
         onClick={onClose}
+        disabled={closeDisabled}
       />
       <div
         ref={panelRef}
@@ -58,6 +68,7 @@ export function Dialog({ title, children, footer, onClose, size = "md", eyebrow 
               className="-mr-1 inline-flex size-8 items-center justify-center rounded-[2px] border border-transparent bg-transparent text-ink-soft transition-colors hover:bg-ink/5 hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent/50"
               onClick={onClose}
               aria-label="关闭弹窗"
+              disabled={closeDisabled}
             >
               <X size={16} aria-hidden="true" />
             </button>
@@ -82,7 +93,11 @@ function focusableElements(panel: HTMLElement): HTMLElement[] {
   return Array.from(panel.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR));
 }
 
-function useDialogEffects(onClose: () => void, panelRef: React.RefObject<HTMLDivElement | null>) {
+function useDialogEffects(
+  onClose: () => void,
+  panelRef: React.RefObject<HTMLDivElement | null>,
+  closeDisabled: boolean,
+) {
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
     const panel = panelRef.current;
@@ -94,7 +109,9 @@ function useDialogEffects(onClose: () => void, panelRef: React.RefObject<HTMLDiv
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        onClose();
+        if (!closeDisabled) {
+          onClose();
+        }
         return;
       }
       if (event.key !== "Tab" || !panelRef.current) {
@@ -129,7 +146,7 @@ function useDialogEffects(onClose: () => void, panelRef: React.RefObject<HTMLDiv
       // 关闭后把焦点还给打开弹窗前聚焦的元素(通常是触发按钮)。
       previouslyFocused?.focus?.();
     };
-  }, [onClose, panelRef]);
+  }, [closeDisabled, onClose, panelRef]);
 }
 
 let scrollLockDepth = 0;

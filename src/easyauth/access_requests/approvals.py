@@ -216,10 +216,15 @@ def _apply_grant(access_request: AccessRequest, decision: ApprovalDecision) -> A
             ),
         )
     except AccessRequestApplicationError as exc:
+        access_request.refresh_from_db(fields=["status"])
         raise ApprovalActionError(
             kind="application_error",
             message=str(exc),
-            details={"request_id": access_request.id},
+            details={
+                "request_id": access_request.id,
+                "status": access_request.status,
+                "decision_committed": True,
+            },
         ) from exc
 
 

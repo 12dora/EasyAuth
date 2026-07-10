@@ -1,12 +1,13 @@
 import {
   flexRender,
   getCoreRowModel,
-  getPaginationRowModel,
   useReactTable,
   type ColumnDef,
+  type PaginationState,
 } from "@tanstack/react-table";
 import { useQuery } from "@tanstack/react-query";
-import { useLocation, useOutletContext } from "react-router-dom";
+import { useEffect, useState } from "react";
+import { useOutletContext } from "react-router-dom";
 
 import type { AppShellOutletContext } from "../../components/AppShell";
 import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../components/ui/TablePrimitives";
@@ -18,9 +19,7 @@ import { MONO_TEXT_CLASS } from "../../components/ui/tableStyles";
 import { Badge } from "../../components/Badge";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
-import { apiRequest, itemsFromPayload } from "../../lib/api";
-import type { ListPayload } from "../../lib/api";
-import type { PortalGrant, PortalRequest } from "../../lib/domain";
+import { apiRequest } from "../../lib/api";
 import {
   accessRequestStatusLabel,
   badgeToneForAccessRequestStatus,
@@ -31,51 +30,20 @@ import type { Translator } from "../../lib/status";
 import { useI18n } from "../../i18n/I18nProvider";
 import { AccessRequestForm } from "./components/AccessRequestForm";
 import { PortalApprovalsSection } from "./components/PortalApprovalsSection";
+import {
+  parsePortalGrantList,
+  parsePortalRequestList,
+  type PortalGrantRow,
+  type PortalListPayload,
+  type PortalRequestRow,
+} from "./portalListPayload";
 
-type PortalView = "grants" | "request" | "requests" | "expiring" | "approvals";
+export type PortalView = "grants" | "request" | "requests" | "expiring" | "approvals";
 
-interface PortalGrantGroup {
-  key?: string;
-  kind?: string;
-  name?: string;
-}
+const DEFAULT_PAGE_SIZE = 20;
 
-interface PortalExpandedGrant {
-  permission?: string;
-  scope?: string;
-  source_type?: string;
-  source_key?: string;
-}
-
-type PortalGrantRow = PortalGrant & {
-  groups?: PortalGrantGroup[];
-  grants?: PortalExpandedGrant[];
-  grant_version?: number | string;
-  catalog_version?: number | string;
-  snapshot_version?: number | string;
-};
-
-interface PortalRequestGroup {
-  key?: string;
-  kind?: string;
-  name?: string;
-}
-
-interface PortalRequestDirectGrant {
-  permission?: string;
-  permission_name?: string;
-  scope?: string;
-}
-
-type PortalRequestRow = PortalRequest & {
-  authorization_groups?: PortalRequestGroup[];
-  direct_grants?: PortalRequestDirectGrant[];
-};
-
-export function PortalPage() {
+export function PortalPage({ view }: { view: PortalView }) {
   const { t } = useI18n();
-  const location = useLocation();
-  const view = portalViewFromPath(location.pathname);
   const outletContext = useOutletContext<AppShellOutletContext | null>();
   const currentUserId = outletContext?.currentUserId ?? "";
 
@@ -93,11 +61,16 @@ export function PortalPage() {
 
 function PortalGrantSection({ endpoint, emptyText }: { endpoint: string; emptyText: string }) {
   const { t } = useI18n();
+  const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE });
   const query = useQuery({
-    queryKey: ["portal", endpoint],
-    queryFn: () => apiRequest<ListPayload<PortalGrantRow>>(endpoint),
+    queryKey: ["portal", endpoint, pagination.pageIndex, pagination.pageSize],
+    queryFn: async () =>
+      parsePortalGrantList(
+        await apiRequest<unknown>(`${endpoint}?page=${pagination.pageIndex + 1}&page_size=${pagination.pageSize}`),
+      ),
   });
-  const grants = itemsFromPayload<PortalGrantRow>(query.data);
+  const grants = query.data?.data ?? [];
+  useClampPage(query.data, setPagination);
   const columns: ColumnDef<PortalGrantRow>[] = [
     {
       header: t("common.app"),
@@ -119,7 +92,10 @@ function PortalGrantSection({ endpoint, emptyText }: { endpoint: string; emptyTe
     data: grants,
     columns,
     getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
+    manualPagination: true,
+    pageCount: query.data?.pagination.total_pages ?? 0,
+    state: { pagination },
+    onPaginationChange: setPagination,
   });
 
   return (
@@ -137,6 +113,7 @@ function PortalGrantSection({ endpoint, emptyText }: { endpoint: string; emptyTe
           isLoading={query.isLoading}
           emptyTitle={emptyText}
           emptyDescription={t("portal.grants.emptyDescription")}
+          totalRows={query.data?.pagination.total_items ?? 0}
         />
       )}
     </>
@@ -145,11 +122,18 @@ function PortalGrantSection({ endpoint, emptyText }: { endpoint: string; emptyTe
 
 function PortalRequestSection() {
   const { t } = useI18n();
+  const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE });
   const query = useQuery({
-    queryKey: ["portal", "requests"],
-    queryFn: () => apiRequest<ListPayload<PortalRequestRow>>("/portal/api/v1/me/access-requests"),
+    queryKey: ["portal", "requests", pagination.pageIndex, pagination.pageSize],
+    queryFn: async () =>
+      parsePortalRequestList(
+        await apiRequest<unknown>(
+          `/portal/api/v1/me/access-requests?page=${pagination.pageIndex + 1}&page_size=${pagination.pageSize}`,
+        ),
+      ),
   });
-  const requests = itemsFromPayload<PortalRequestRow>(query.data);
+  const requests = query.data?.data ?? [];
+  useClampPage(query.data, setPagination);
   const columns: ColumnDef<PortalRequestRow>[] = [
     {
       header: t("common.status"),
@@ -160,12 +144,9 @@ function PortalRequestSection() {
               {row.original.status_label ?? accessRequestStatusLabel(t, row.original.status)}
             </Badge>
           </span>
-          {row.original.status === "rejected" && row.original.decision_comment ? (
+          {row.original.decision_comment ? (
             <span className="max-w-64 whitespace-normal text-xs leading-4 text-ink-faint">
-              {t("portal.requests.rejectedInfo", {
-                comment: row.original.decision_comment,
-                time: formatDateTime(row.original.decided_at),
-              })}
+              {t("approvals.comment")}：{row.original.decision_comment}（{formatDateTime(row.original.decided_at)}）
             </span>
           ) : null}
         </div>
@@ -175,6 +156,7 @@ function PortalRequestSection() {
     { header: t("portal.column.groups"), cell: ({ row }) => formatGroups(row.original.authorization_groups) },
     { id: "direct_grants", header: t("portal.column.directGrants"), cell: ({ row }) => formatDirectGrants(row.original.direct_grants) },
     { header: t("portal.column.term"), cell: ({ row }) => grantTypeLabel(t, row.original.grant_type) },
+    { header: t("portal.column.expiresAt"), cell: ({ row }) => formatDateTime(row.original.grant_expires_at) },
     { header: t("portal.column.submittedAt"), cell: ({ row }) => formatDateTime(row.original.submitted_at) },
     { header: t("portal.column.reason"), cell: ({ row }) => row.original.reason ?? "-" },
   ];
@@ -182,7 +164,10 @@ function PortalRequestSection() {
     data: requests,
     columns,
     getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
+    manualPagination: true,
+    pageCount: query.data?.pagination.total_pages ?? 0,
+    state: { pagination },
+    onPaginationChange: setPagination,
   });
 
   return (
@@ -200,6 +185,7 @@ function PortalRequestSection() {
           isLoading={query.isLoading}
           emptyTitle={t("portal.requests.empty")}
           emptyDescription={t("portal.requests.emptyDescription")}
+          totalRows={query.data?.pagination.total_items ?? 0}
         />
       )}
     </>
@@ -213,6 +199,7 @@ function PortalTable<T>({
   isLoading,
   emptyTitle,
   emptyDescription,
+  totalRows,
 }: {
   table: ReturnType<typeof useReactTable<T>>;
   columns: ColumnDef<T>[];
@@ -220,6 +207,7 @@ function PortalTable<T>({
   isLoading: boolean;
   emptyTitle: string;
   emptyDescription: string;
+  totalRows: number;
 }) {
   return (
     <TableFrame>
@@ -255,29 +243,13 @@ function PortalTable<T>({
           )}
         </TableBody>
       </TableRoot>
-      <TablePagination table={table} />
+      <TablePagination table={table} totalItems={totalRows} />
     </TableFrame>
   );
 }
 
 function isMonoPortalColumn(columnId: string): boolean {
   return ["expanded_grants", "grant_sources", "versions", "direct_grants"].includes(columnId);
-}
-
-function portalViewFromPath(pathname: string): PortalView {
-  if (pathname.endsWith("/approvals")) {
-    return "approvals";
-  }
-  if (pathname.endsWith("/request")) {
-    return "request";
-  }
-  if (pathname.endsWith("/requests")) {
-    return "requests";
-  }
-  if (pathname.endsWith("/expiring")) {
-    return "expiring";
-  }
-  return "grants";
 }
 
 function viewTitle(t: Translator, view: PortalView): string {
@@ -295,21 +267,34 @@ function viewTitle(t: Translator, view: PortalView): string {
   }
 }
 
-function formatGroups(groups: PortalGrantGroup[] | PortalRequestGroup[] | undefined): string {
+function useClampPage<T>(payload: PortalListPayload<T> | undefined, setPagination: React.Dispatch<React.SetStateAction<PaginationState>>) {
+  const totalPages = payload?.pagination.total_pages;
+  useEffect(() => {
+    if (totalPages === undefined) {
+      return;
+    }
+    const lastPageIndex = Math.max(0, totalPages - 1);
+    setPagination((current) =>
+      current.pageIndex > lastPageIndex ? { ...current, pageIndex: lastPageIndex } : current,
+    );
+  }, [setPagination, totalPages]);
+}
+
+function formatGroups(groups: PortalGrantRow["groups"] | PortalRequestRow["authorization_groups"] | undefined): string {
   if (!groups || groups.length === 0) {
     return "-";
   }
   return groups.map((group) => `${group.name ?? group.key ?? "-"} [${group.kind ?? "-"}]`).join("、");
 }
 
-function formatExpandedGrants(grants: PortalExpandedGrant[] | undefined): string {
+function formatExpandedGrants(grants: PortalGrantRow["grants"] | undefined): string {
   if (!grants || grants.length === 0) {
     return "-";
   }
   return grants.map((grant) => `${grant.permission ?? "-"}:${grant.scope ?? "-"}`).join("、");
 }
 
-function formatSources(grants: PortalExpandedGrant[] | undefined): string {
+function formatSources(grants: PortalGrantRow["grants"] | undefined): string {
   if (!grants || grants.length === 0) {
     return "-";
   }
@@ -327,7 +312,7 @@ function formatVersions(t: Translator, grant: PortalGrantRow): string {
   });
 }
 
-function formatDirectGrants(directGrants: PortalRequestDirectGrant[] | undefined): string {
+function formatDirectGrants(directGrants: PortalRequestRow["direct_grants"] | undefined): string {
   if (!directGrants || directGrants.length === 0) {
     return "-";
   }

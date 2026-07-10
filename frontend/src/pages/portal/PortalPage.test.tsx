@@ -15,7 +15,7 @@ function renderPortalPageWithUser(currentUserId: string, initialEntry = "/portal
       <MemoryRouter initialEntries={[initialEntry]}>
         <Routes>
           <Route element={<Outlet context={{ currentUserId }} />}>
-            <Route path="/portal/request" element={<PortalPage />} />
+            <Route path="/portal/request" element={<PortalPage view="request" />} />
           </Route>
         </Routes>
       </MemoryRouter>
@@ -36,9 +36,10 @@ function renderPortalPage(initialEntry = "/portal/request") {
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[initialEntry]}>
         <Routes>
-          <Route path="/portal/request" element={<PortalPage />} />
-          <Route path="/portal/requests" element={<PortalPage />} />
-          <Route path="/portal" element={<PortalPage />} />
+          <Route path="/portal/request" element={<PortalPage view="request" />} />
+          <Route path="/portal/requests" element={<PortalPage view="requests" />} />
+          <Route path="/portal/expiring" element={<PortalPage view="expiring" />} />
+          <Route path="/portal" element={<PortalPage view="grants" />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
@@ -59,7 +60,7 @@ function renderPortalPageStrict(initialEntry = "/portal/request") {
       <QueryClientProvider client={client}>
         <MemoryRouter initialEntries={[initialEntry]}>
           <Routes>
-            <Route path="/portal/request" element={<PortalPage />} />
+            <Route path="/portal/request" element={<PortalPage view="request" />} />
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>
@@ -1541,13 +1542,13 @@ describe("PortalPage access request form", () => {
 });
 
 describe("PortalPage tables", () => {
-  test("我的权限展示 groups、expanded grants、source 和版本", async () => {
+  test("我的权限使用服务端总数翻页，并展示 groups、expanded grants、source 和版本", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
-      if (url === "/portal/api/v1/me/grants") {
+      if (url === "/portal/api/v1/me/grants?page=1&page_size=20") {
         return jsonResponse({
           data: [
-            {
+            portalGrantRow({
               app_key: "crm",
               app_name: "CRM",
               groups: [{ key: "sales-reader", kind: "role", name: "销售只读" }],
@@ -1558,10 +1559,15 @@ describe("PortalPage tables", () => {
               grant_version: 3,
               catalog_version: 7,
               snapshot_version: "3.7",
-              grant_type: "permanent",
-              grant_expires_at: null,
-            },
+            }),
           ],
+          pagination: { page: 1, page_size: 20, total_items: 21, total_pages: 2 },
+        });
+      }
+      if (url === "/portal/api/v1/me/grants?page=2&page_size=20") {
+        return jsonResponse({
+          data: [portalGrantRow({ app_key: "erp", app_name: "ERP" })],
+          pagination: { page: 2, page_size: 20, total_items: 21, total_pages: 2 },
         });
       }
       throw new Error(`Unexpected fetch: ${url}`);
@@ -1578,30 +1584,132 @@ describe("PortalPage tables", () => {
       expect(screen.getByText(/dashboard\.view:GLOBAL/)).toBeVisible();
       expect(screen.getByText(/direct/)).toBeVisible();
       expect(screen.getByText("授权 3 / 目录 7 / 快照 3.7")).toBeVisible();
+      expect(screen.getByText("第 1-1 条 / 共 21 条")).toBeVisible();
+
+      const nextPage = screen.getByRole("button", { name: "下一页" });
+      expect(nextPage).toBeEnabled();
+      await userEvent.click(nextPage);
+
+      expect(await screen.findByText("ERP")).toBeVisible();
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/portal/api/v1/me/grants?page=2&page_size=20",
+        expect.anything(),
+      );
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  test("/portal/requests 的申请详情展示 authorization groups 和 direct grants", async () => {
+  test("尾斜杠的即将过期视图保持显式 view，并把页大小发送给服务端", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
-      if (url === "/portal/api/v1/me/access-requests") {
+      if (url === "/portal/api/v1/me/grants/expiring?page=1&page_size=20") {
+        return jsonResponse({
+          data: [portalGrantRow({ app_key: "crm", app_name: "即将过期 CRM", grant_type: "timed", grant_expires_at: "2026-07-15T10:00:00Z" })],
+          pagination: { page: 1, page_size: 20, total_items: 25, total_pages: 2 },
+        });
+      }
+      if (url === "/portal/api/v1/me/grants/expiring?page=1&page_size=50") {
+        return jsonResponse({
+          data: [portalGrantRow({ app_key: "crm", app_name: "即将过期 CRM", grant_type: "timed", grant_expires_at: "2026-07-15T10:00:00Z" })],
+          pagination: { page: 1, page_size: 50, total_items: 25, total_pages: 1 },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage("/portal/expiring/");
+
+      expect(await screen.findByText("即将过期 CRM")).toBeVisible();
+      expect(screen.getByRole("heading", { name: "即将过期" })).toBeVisible();
+
+      await userEvent.selectOptions(screen.getByLabelText("每页条目数"), "50");
+
+      await waitFor(() =>
+        expect(fetchMock).toHaveBeenCalledWith(
+          "/portal/api/v1/me/grants/expiring?page=1&page_size=50",
+          expect.anything(),
+        ),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("服务端总页数收缩时把当前页钳制到最后一页", async () => {
+    let firstPageRequests = 0;
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/me/grants?page=1&page_size=20") {
+        firstPageRequests += 1;
+        return jsonResponse({
+          data: [portalGrantRow({ app_name: firstPageRequests === 1 ? "初始第一页" : "收缩后第一页" })],
+          pagination:
+            firstPageRequests === 1
+              ? { page: 1, page_size: 20, total_items: 21, total_pages: 2 }
+              : { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+        });
+      }
+      if (url === "/portal/api/v1/me/grants?page=2&page_size=20") {
+        return jsonResponse({
+          data: [],
+          pagination: { page: 2, page_size: 20, total_items: 1, total_pages: 1 },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage("/portal");
+      expect(await screen.findByText("初始第一页")).toBeVisible();
+
+      const nextPage = screen.getByRole("button", { name: "下一页" });
+      expect(nextPage).toBeEnabled();
+      await userEvent.click(nextPage);
+
+      expect(await screen.findByText("收缩后第一页")).toBeVisible();
+      expect(screen.getByText("1 / 1")).toBeVisible();
+      expect(screen.getByRole("button", { name: "下一页" })).toBeDisabled();
+      expect(firstPageRequests).toBe(2);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("申请历史展示同意意见、限时到期时间，并使用服务端分页", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/me/access-requests?page=1&page_size=20") {
         return jsonResponse({
           data: [
-            {
+            portalRequestRow({
               id: 9,
               app_key: "crm",
               app_name: "CRM",
-              status: "pending",
-              status_label: "待审批",
-              grant_type: "permanent",
+              status: "approved",
+              status_label: "已同意",
+              grant_type: "timed",
+              grant_expires_at: "2026-08-01T10:00:00Z",
               submitted_at: "2026-07-01T10:00:00Z",
               reason: "处理工单",
+              decided_at: "2026-07-02T10:00:00Z",
+              decision_comment: "同意按期开放",
               authorization_groups: [{ key: "sales-reader", kind: "role", name: "销售只读" }],
               direct_grants: [{ permission: "orders.refund.approve", permission_name: "审批退款", scope: "TEAM" }],
-            },
+            }),
           ],
+          pagination: { page: 1, page_size: 20, total_items: 21, total_pages: 2 },
+        });
+      }
+      if (url === "/portal/api/v1/me/access-requests?page=2&page_size=20") {
+        return jsonResponse({
+          data: [portalRequestRow({ id: 21, app_key: "erp", app_name: "ERP", reason: "第二页申请" })],
+          pagination: { page: 2, page_size: 20, total_items: 21, total_pages: 2 },
         });
       }
       throw new Error(`Unexpected fetch: ${url}`);
@@ -1614,11 +1722,112 @@ describe("PortalPage tables", () => {
 
       expect(await screen.findByText("销售只读 [role]")).toBeVisible();
       expect(screen.getByText("审批退款 (orders.refund.approve):TEAM")).toBeVisible();
+      expect(screen.getByText(/审批意见：同意按期开放/)).toBeVisible();
+      expect(screen.getAllByText(/2026/).length).toBeGreaterThanOrEqual(3);
+
+      const nextPage = screen.getByRole("button", { name: "下一页" });
+      expect(nextPage).toBeEnabled();
+      await userEvent.click(nextPage);
+
+      expect(await screen.findByText("ERP")).toBeVisible();
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/portal/api/v1/me/access-requests?page=2&page_size=20",
+        expect.anything(),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test.each([
+    ["缺少 data", {}],
+    ["data 为 null", { data: null, pagination: { page: 1, page_size: 20, total_items: 0, total_pages: 0 } }],
+  ])("授权列表在 200 响应%s时明确报错", async (_caseName, payload) => {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => jsonResponse(payload)));
+
+    try {
+      renderPortalPage("/portal");
+
+      expect(await screen.findByText("授权加载失败")).toBeVisible();
+      expect(screen.getByText("授权列表响应格式无效：data 必须是数组")).toBeVisible();
+      expect(screen.queryByText("暂无当前授权")).not.toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("申请历史在 data 为 null 时明确报错", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse({ data: null, pagination: { page: 1, page_size: 20, total_items: 0, total_pages: 0 } }),
+      ),
+    );
+
+    try {
+      renderPortalPage("/portal/requests");
+
+      expect(await screen.findByText("申请记录加载失败")).toBeVisible();
+      expect(screen.getByText("申请记录列表响应格式无效：data 必须是数组")).toBeVisible();
+      expect(screen.queryByText("暂无申请记录")).not.toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("授权列表行结构错误时明确报错", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () =>
+        jsonResponse({ data: [{}], pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 } }),
+      ),
+    );
+
+    try {
+      renderPortalPage("/portal");
+
+      expect(await screen.findByText("授权加载失败")).toBeVisible();
+      expect(screen.getByText("授权列表 data[0].app_key 必须是字符串")).toBeVisible();
     } finally {
       vi.unstubAllGlobals();
     }
   });
 });
+
+function portalGrantRow(overrides: Record<string, unknown> = {}) {
+  return {
+    app_key: "crm",
+    app_name: "CRM",
+    groups: [],
+    grants: [],
+    grant_version: 1,
+    catalog_version: 1,
+    snapshot_version: "1.1",
+    grant_type: "permanent",
+    grant_expires_at: null,
+    ...overrides,
+  };
+}
+
+function portalRequestRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 1,
+    app_key: "crm",
+    app_name: "CRM",
+    request_type: "grant",
+    status: "pending",
+    status_label: "待审批",
+    grant_type: "permanent",
+    grant_expires_at: null,
+    reason: "申请权限",
+    submitted_at: "2026-07-01T10:00:00Z",
+    authorization_groups: [],
+    direct_grants: [],
+    decided_at: null,
+    decision_comment: "",
+    ...overrides,
+  };
+}
 
 const portalPermissionSelectorCatalog = {
   apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["app-owner"] }],

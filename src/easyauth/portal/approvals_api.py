@@ -17,6 +17,7 @@ from easyauth.access_requests.models import (
     DECISION_ACTOR_USER,
     REQUEST_STATUS_SUBMITTED,
     AccessRequest,
+    AccessRequestGroup,
 )
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
@@ -25,6 +26,7 @@ from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.pagination import pagination_item
 from easyauth.api.responses import error_response as _error_response
 from easyauth.api.responses import json_response as _json_response
+from easyauth.applications.models import AuthorizationGroupGrant
 from easyauth.portal.access_request_data import access_request_item
 from easyauth.portal.pagination import build_page, page_request
 
@@ -151,10 +153,20 @@ def _approval_error_response(error: ApprovalActionError) -> JsonResponse:
                 status=HTTPStatus.UNPROCESSABLE_ENTITY,
             )
         case "application_error":
+            details = dict(error.details)
+            request_id = details.get("request_id")
+            if isinstance(request_id, int):
+                access_request = (
+                    AccessRequest.objects.select_related("user", "app")
+                    .filter(id=request_id)
+                    .first()
+                )
+                if access_request is not None:
+                    details["approval"] = _approval_item(access_request)
             return _error_response(
                 ErrorCode.SEMANTIC_VALIDATION_ERROR,
                 error.message,
-                error.details,
+                details,
                 status=HTTPStatus.UNPROCESSABLE_ENTITY,
             )
 
@@ -201,6 +213,7 @@ def _visible_approval(user: UserMirror, request_id: int) -> AccessRequest | None
 
 def _approval_item(access_request: AccessRequest) -> dict[str, JsonValue]:
     item = access_request_item(access_request)
+    item["authorization_groups"] = _approval_authorization_groups(access_request)
     applicant = access_request.user
     item["applicant"] = {
         "user_id": applicant.authentik_user_id,
@@ -215,6 +228,39 @@ def _approval_item(access_request: AccessRequest) -> dict[str, JsonValue]:
     item["decided_by"] = access_request.decided_by
     item["decided_at"] = datetime_value(access_request.decided_at)
     return item
+
+
+def _approval_authorization_groups(access_request: AccessRequest) -> list[JsonValue]:
+    links = (
+        AccessRequestGroup.objects.select_related("authorization_group")
+        .filter(access_request=access_request)
+        .order_by("authorization_group__key")
+    )
+    groups: list[JsonValue] = []
+    for link in links:
+        group = link.authorization_group
+        grants = (
+            AuthorizationGroupGrant.objects.select_related("permission")
+            .filter(authorization_group=group, is_active=True)
+            .order_by("permission__key", "scope_key")
+        )
+        grant_items: list[JsonValue] = [
+            {
+                "permission": grant.permission.key,
+                "permission_name": grant.permission.name,
+                "scope": grant.scope_key,
+            }
+            for grant in grants
+        ]
+        groups.append(
+            {
+                "key": group.key,
+                "kind": group.kind,
+                "name": group.name,
+                "grants": grant_items,
+            },
+        )
+    return groups
 
 
 def _active_user(request: HttpRequest) -> PortalApiResult:

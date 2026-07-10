@@ -6,7 +6,7 @@ import {
 } from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCcw } from "lucide-react";
-import { Fragment, useState } from "react";
+import { Fragment, useEffect, useState, type ReactNode } from "react";
 
 import { ApprovalDecisionDialog } from "../../../components/ApprovalDecisionDialog";
 import type { ApprovalDecisionMode } from "../../../components/ApprovalDecisionDialog";
@@ -20,10 +20,10 @@ import { EmptyState } from "../../../components/ui/EmptyState";
 import { PageState } from "../../../components/ui/PageState";
 import { MONO_TEXT_CLASS } from "../../../components/ui/tableStyles";
 import { useI18n } from "../../../i18n/I18nProvider";
-import { ApiError, apiRequest, itemsFromPayload } from "../../../lib/api";
-import type { ListPayload } from "../../../lib/api";
+import { ApiError, apiRequest } from "../../../lib/api";
+import type { Pagination } from "../../../lib/api";
 import { cn } from "../../../lib/cn";
-import type { PortalApprovalItem } from "../../../lib/domain";
+import type { PortalApprovalApplicant } from "../../../lib/domain";
 import {
   accessRequestStatusLabel,
   badgeToneForAccessRequestStatus,
@@ -34,11 +34,54 @@ import type { Translator } from "../../../lib/status";
 
 type ApprovalTab = "pending" | "processed";
 
-type ApprovalNoticeKey = "approvals.approved" | "approvals.rejected" | "approvals.conflict" | "";
+type ApprovalNoticeKey =
+  | "approvals.approved"
+  | "approvals.rejected"
+  | "approvals.conflict"
+  | "approvals.grantFailedCommitted"
+  | "";
+
+interface ApprovalGrantFact {
+  permission: string;
+  permission_name: string;
+  scope: string;
+}
+
+interface ApprovalAuthorizationGroup {
+  key: string;
+  kind: string;
+  name: string;
+  grants: ApprovalGrantFact[];
+}
+
+interface PortalApprovalRow {
+  id: number;
+  app_key: string;
+  app_name: string;
+  request_type: string;
+  status: string;
+  status_label: string;
+  grant_type: string;
+  grant_expires_at: string | null;
+  reason: string;
+  submitted_at: string;
+  authorization_groups: ApprovalAuthorizationGroup[];
+  direct_grants: ApprovalGrantFact[];
+  decided_at: string | null;
+  decision_comment: string | null;
+  applicant: Required<PortalApprovalApplicant>;
+  approver_user_ids: string[];
+  decided_by: string | null;
+}
+
+interface ApprovalListPayload {
+  data: PortalApprovalRow[];
+  pagination: Pagination;
+}
 
 interface PendingDecision {
   mode: ApprovalDecisionMode;
-  approval: PortalApprovalItem;
+  approval: PortalApprovalRow;
 }
 
 const DEFAULT_PAGE_SIZE = 20;
@@ -53,10 +96,22 @@ export function PortalApprovalsSection() {
 
   const query = useQuery({
     queryKey: ["portal", "approvals", tab, pagination.pageIndex, pagination.pageSize],
-    queryFn: () =>
-      apiRequest<ListPayload<PortalApprovalItem>>(
-        `/portal/api/v1/me/approvals?status=${tab}&page=${pagination.pageIndex + 1}&page_size=${pagination.pageSize}`,
+    queryFn: async () =>
+      parseApprovalListPayload(
+        await apiRequest<unknown>(
+          `/portal/api/v1/me/approvals?status=${tab}&page=${pagination.pageIndex + 1}&page_size=${pagination.pageSize}`,
+        ),
+        t("portal.approvals.invalidPayload"),
       ),
+  });
+  const detailQuery = useQuery({
+    queryKey: ["portal", "approvals", "detail", pendingDecision?.approval.id],
+    queryFn: async () =>
+      parseApprovalDetailPayload(
+        await apiRequest<unknown>(`/portal/api/v1/me/approvals/${pendingDecision?.approval.id ?? 0}`),
+        t("portal.approvals.invalidPayload"),
+      ),
+    enabled: pendingDecision !== null,
   });
   const decisionMutation = useMutation({
     mutationFn: ({ mode, approval, comment }: PendingDecision & { comment: string }) =>
@@ -70,8 +125,12 @@ export function PortalApprovalsSection() {
       void queryClient.invalidateQueries({ queryKey: ["portal", "approvals"] });
     },
     onError: (error) => {
-      // 409 = 已被其他审批人处理: 关弹窗、提示冲突并刷新列表, 其余错误留在弹窗内展示。
-      if (error instanceof ApiError && error.status === 409) {
+      // 决定已提交但授权失败是复合结果: 不得保留旧待办或允许重复提交。
+      if (decisionWasCommitted(error)) {
+        setPendingDecision(null);
+        setNoticeKey("approvals.grantFailedCommitted");
+        void queryClient.invalidateQueries({ queryKey: ["portal", "approvals"] });
+      } else if (error instanceof ApiError && error.status === 409) {
         setPendingDecision(null);
         setNoticeKey("approvals.conflict");
         void queryClient.invalidateQueries({ queryKey: ["portal", "approvals"] });
@@ -79,8 +138,8 @@ export function PortalApprovalsSection() {
     },
   });
 
-  const approvals = itemsFromPayload<PortalApprovalItem>(query.data);
-  const openDecision = (mode: ApprovalDecisionMode, approval: PortalApprovalItem) => {
+  const approvals = query.data?.data ?? [];
+  const openDecision = (mode: ApprovalDecisionMode, approval: PortalApprovalRow) => {
     decisionMutation.reset();
     setNoticeKey("");
     setPendingDecision({ mode, approval });
@@ -90,14 +149,22 @@ export function PortalApprovalsSection() {
     setPagination((current) => (current.pageIndex === 0 ? current : { ...current, pageIndex: 0 }));
   };
 
+  const totalPages = query.data?.pagination.total_pages ?? 0;
+  const clampedPageIndex = totalPages === 0 ? 0 : Math.min(pagination.pageIndex, totalPages - 1);
+  useEffect(() => {
+    if (pagination.pageIndex !== clampedPageIndex) {
+      setPagination((current) => ({ ...current, pageIndex: clampedPageIndex }));
+    }
+  }, [clampedPageIndex, pagination.pageIndex]);
+
   const columns = approvalColumns(t, tab, decisionMutation.isPending, openDecision);
   const table = useReactTable({
     data: approvals,
     columns,
     getCoreRowModel: getCoreRowModel(),
     manualPagination: true,
-    pageCount: query.data?.pagination?.total_pages ?? 1,
-    state: { pagination },
+    pageCount: totalPages,
+    state: { pagination: { ...pagination, pageIndex: clampedPageIndex } },
     onPaginationChange: setPagination,
   });
 
@@ -129,7 +196,21 @@ export function PortalApprovalsSection() {
       </div>
       {noticeKey ? (
         <div className="mb-4" role="status">
-          <StatusBanner tone={noticeKey === "approvals.conflict" ? "amber" : "evergreen"} title={t(noticeKey)} />
+          <StatusBanner
+            tone={
+              noticeKey === "approvals.conflict"
+                ? "amber"
+                : noticeKey === "approvals.grantFailedCommitted"
+                  ? "signal"
+                  : "evergreen"
+            }
+            title={t(noticeKey)}
+            message={
+              noticeKey === "approvals.grantFailedCommitted"
+                ? t("approvals.grantFailedCommittedDescription")
+                : undefined
+            }
+          />
         </div>
       ) : null}
       {query.error && approvals.length > 0 ? (
@@ -190,7 +271,10 @@ export function PortalApprovalsSection() {
                 )}
               </TableBody>
             </TableRoot>
-            <TablePagination table={table} />
+            <TablePagination
+              table={table}
+              totalItems={query.data?.pagination.total_items ?? approvals.length}
+            />
           </TableFrame>
         )}
       </div>
@@ -204,10 +288,25 @@ export function PortalApprovalsSection() {
               app: pendingDecision.approval.app_name ?? pendingDecision.approval.app_key ?? "-",
             },
           )}
+          details={decisionDetails(
+            t,
+            detailQuery.data?.approval,
+            detailQuery.isLoading,
+            detailQuery.error,
+          )}
           errorMessage={dialogErrorMessage}
           isSubmitting={decisionMutation.isPending}
+          canSubmit={Boolean(detailQuery.data?.approval && approvalFactsAreComplete(detailQuery.data.approval))}
           onClose={() => setPendingDecision(null)}
-          onSubmit={(comment) => decisionMutation.mutate({ ...pendingDecision, comment })}
+          onSubmit={(comment) => {
+            if (detailQuery.data?.approval && approvalFactsAreComplete(detailQuery.data.approval)) {
+              decisionMutation.mutate({
+                mode: pendingDecision.mode,
+                approval: detailQuery.data.approval,
+                comment,
+              });
+            }
+          }}
         />
       ) : null}
     </>
@@ -218,9 +317,9 @@ function approvalColumns(
   t: Translator,
   tab: ApprovalTab,
   actionsDisabled: boolean,
-  onDecision: (mode: ApprovalDecisionMode, approval: PortalApprovalItem) => void,
-): ColumnDef<PortalApprovalItem>[] {
-  const columns: ColumnDef<PortalApprovalItem>[] = [];
+  onDecision: (mode: ApprovalDecisionMode, approval: PortalApprovalRow) => void,
+): ColumnDef<PortalApprovalRow>[] {
+  const columns: ColumnDef<PortalApprovalRow>[] = [];
   if (tab === "processed") {
     columns.push({
       header: t("common.status"),
@@ -252,7 +351,7 @@ function approvalColumns(
         </div>
       ),
     },
-    { header: t("portal.approvals.column.content"), cell: ({ row }) => approvalContentSummary(t, row.original) },
+    { header: t("portal.approvals.column.content"), cell: ({ row }) => approvalContentDetails(t, row.original) },
     {
       header: t("portal.column.term"),
       cell: ({ row }) => (
@@ -296,20 +395,237 @@ function approvalColumns(
   return columns;
 }
 
-function applicantLabel(approval: PortalApprovalItem): string {
+function applicantLabel(approval: PortalApprovalRow): string {
   return approval.applicant?.name || approval.applicant?.email || approval.applicant?.user_id || "-";
 }
 
-/** 申请内容摘要: 授权组名列表 + 直接权限条数, 均为空时显示 "-"。 */
-function approvalContentSummary(t: Translator, approval: PortalApprovalItem): string {
-  const parts: string[] = [];
-  const groups = approval.authorization_groups ?? [];
-  if (groups.length > 0) {
-    parts.push(groups.map((group) => group.name || group.key || "-").join("、"));
+function approvalContentDetails(t: Translator, approval: PortalApprovalRow): ReactNode {
+  const hasTargets = approval.authorization_groups.length > 0 || approval.direct_grants.length > 0;
+  return (
+    <div className="grid min-w-64 gap-2 text-xs leading-5">
+      <strong className="text-ink">{requestTypeLabel(t, approval.request_type)}</strong>
+      {approval.authorization_groups.map((group) => (
+        <div key={`${group.kind}:${group.key}`}>
+          <span className="font-semibold text-ink-soft">
+            {t("portal.column.groups")}: {group.name || group.key} [{group.kind}]
+          </span>
+          {group.grants.length > 0 ? (
+            <ul className="mt-0.5 grid gap-0.5 pl-3 text-ink-faint">
+              {group.grants.map((grant) => (
+                <li key={`${grant.permission}:${grant.scope}`}>{grantLabel(grant)}</li>
+              ))}
+            </ul>
+          ) : (
+            <StatusBanner tone="signal" title={t("portal.approvals.groupWithoutGrants")} />
+          )}
+        </div>
+      ))}
+      {approval.direct_grants.length > 0 ? (
+        <div>
+          <span className="font-semibold text-ink-soft">{t("portal.column.directGrants")}</span>
+          <ul className="mt-0.5 grid gap-0.5 pl-3 text-ink-faint">
+            {approval.direct_grants.map((grant) => (
+              <li key={`${grant.permission}:${grant.scope}`}>{grantLabel(grant)}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+      {!hasTargets && approval.request_type === "revoke" ? (
+        <span className="text-ink-soft">{t("portal.approvals.fullRevoke")}</span>
+      ) : null}
+    </div>
+  );
+}
+
+function decisionDetails(
+  t: Translator,
+  approval: PortalApprovalRow | undefined,
+  isLoading: boolean,
+  error: Error | null,
+): ReactNode {
+  if (isLoading) {
+    return <StatusBanner title={t("common.loading")} />;
   }
-  const directGrants = approval.direct_grants ?? [];
-  if (directGrants.length > 0) {
-    parts.push(t("portal.approvals.summary.directGrants", { count: directGrants.length }));
+  if (error || !approval) {
+    return (
+      <StatusBanner
+        tone="signal"
+        title={t("portal.approvals.detailLoadFailed")}
+        message={error?.message}
+      />
+    );
   }
-  return parts.length > 0 ? parts.join("、") : "-";
+  const factsComplete = approvalFactsAreComplete(approval);
+  return (
+    <section className="grid gap-3 rounded-[3px] border border-ink/12 bg-paper-deep/20 p-3">
+      <strong className="text-sm text-ink">{t("portal.approvals.facts")}</strong>
+      {approvalContentDetails(t, approval)}
+      <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1 text-xs leading-5">
+        <dt className="text-ink-faint">{t("portal.column.term")}</dt>
+        <dd>{grantTypeLabel(t, approval.grant_type)}</dd>
+        {approval.grant_expires_at ? (
+          <>
+            <dt className="text-ink-faint">{t("portal.column.expiresAt")}</dt>
+            <dd>{formatDateTime(approval.grant_expires_at)}</dd>
+          </>
+        ) : null}
+        <dt className="text-ink-faint">{t("portal.column.reason")}</dt>
+        <dd>{approval.reason || "-"}</dd>
+      </dl>
+      {!factsComplete ? (
+        <StatusBanner tone="signal" title={t("portal.approvals.groupWithoutGrants")} />
+      ) : null}
+    </section>
+  );
+}
+
+function approvalFactsAreComplete(approval: PortalApprovalRow): boolean {
+  if (approval.authorization_groups.some((group) => group.grants.length === 0)) {
+    return false;
+  }
+  if (approval.grant_type === "timed" && !approval.grant_expires_at) {
+    return false;
+  }
+  const targetCount =
+    approval.direct_grants.length +
+    approval.authorization_groups.reduce((count, group) => count + group.grants.length, 0);
+  return approval.request_type === "revoke" || targetCount > 0;
+}
+
+function requestTypeLabel(t: Translator, requestType: string): string {
+  switch (requestType) {
+    case "grant":
+      return t("portal.approvals.requestType.grant");
+    case "change":
+      return t("portal.approvals.requestType.change");
+    case "revoke":
+      return t("portal.approvals.requestType.revoke");
+    case "renew":
+      return t("portal.approvals.requestType.renew");
+    default:
+      return requestType;
+  }
+}
+
+function grantLabel(grant: ApprovalGrantFact): string {
+  const name = grant.permission_name || grant.permission;
+  return `${name} (${grant.permission}) · ${grant.scope}`;
+}
+
+function decisionWasCommitted(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    isRecord(error.details) &&
+    error.details.decision_committed === true
+  );
+}
+
+function parseApprovalListPayload(payload: unknown, errorMessage: string): ApprovalListPayload {
+  if (!isRecord(payload) || !Array.isArray(payload.data) || !isPagination(payload.pagination)) {
+    throw new Error(errorMessage);
+  }
+  const expectedTotalPages = Math.ceil(payload.pagination.total_items / payload.pagination.page_size);
+  if (
+    payload.pagination.total_pages !== expectedTotalPages ||
+    payload.data.length > payload.pagination.page_size ||
+    !payload.data.every(isPortalApprovalRow)
+  ) {
+    throw new Error(errorMessage);
+  }
+  return { data: payload.data, pagination: payload.pagination };
+}
+
+function parseApprovalDetailPayload(
+  payload: unknown,
+  errorMessage: string,
+): { approval: PortalApprovalRow } {
+  if (!isRecord(payload) || !isPortalApprovalRow(payload.approval)) {
+    throw new Error(errorMessage);
+  }
+  return { approval: payload.approval };
+}
+
+function isPortalApprovalRow(value: unknown): value is PortalApprovalRow {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const requiredStrings = [
+    value.app_key,
+    value.app_name,
+    value.request_type,
+    value.status,
+    value.status_label,
+    value.grant_type,
+    value.reason,
+    value.submitted_at,
+  ];
+  return (
+    Number.isInteger(value.id) &&
+    typeof value.id === "number" &&
+    value.id > 0 &&
+    requiredStrings.every((item) => typeof item === "string") &&
+    isNullableString(value.grant_expires_at) &&
+    Array.isArray(value.authorization_groups) &&
+    value.authorization_groups.every(isApprovalAuthorizationGroup) &&
+    Array.isArray(value.direct_grants) &&
+    value.direct_grants.every(isApprovalGrantFact) &&
+    isNullableString(value.decided_at) &&
+    isNullableString(value.decision_comment) &&
+    isApprovalApplicant(value.applicant) &&
+    Array.isArray(value.approver_user_ids) &&
+    value.approver_user_ids.every((item) => typeof item === "string") &&
+    isNullableString(value.decided_by)
+  );
+}
+
+function isApprovalAuthorizationGroup(value: unknown): value is ApprovalAuthorizationGroup {
+  return (
+    isRecord(value) &&
+    typeof value.key === "string" &&
+    typeof value.kind === "string" &&
+    typeof value.name === "string" &&
+    Array.isArray(value.grants) &&
+    value.grants.every(isApprovalGrantFact)
+  );
+}
+
+function isApprovalGrantFact(value: unknown): value is ApprovalGrantFact {
+  return (
+    isRecord(value) &&
+    typeof value.permission === "string" &&
+    typeof value.permission_name === "string" &&
+    typeof value.scope === "string"
+  );
+}
+
+function isApprovalApplicant(value: unknown): value is Required<PortalApprovalApplicant> {
+  return (
+    isRecord(value) &&
+    typeof value.user_id === "string" &&
+    typeof value.name === "string" &&
+    typeof value.email === "string" &&
+    typeof value.department === "string"
+  );
+}
+
+function isPagination(value: unknown): value is Pagination {
+  return (
+    isRecord(value) &&
+    isIntegerAtLeast(value.page, 1) &&
+    isIntegerAtLeast(value.page_size, 1) &&
+    isIntegerAtLeast(value.total_items, 0) &&
+    isIntegerAtLeast(value.total_pages, 0)
+  );
+}
+
+function isIntegerAtLeast(value: unknown, minimum: number): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= minimum;
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

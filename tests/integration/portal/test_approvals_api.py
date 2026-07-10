@@ -8,6 +8,7 @@ import pytest
 from django.test import Client
 from pydantic import TypeAdapter
 
+from easyauth.access_requests.application_grants import GrantApplyFailureError
 from easyauth.access_requests.models import (
     GRANT_TYPE_PERMANENT,
     AccessRequest,
@@ -30,6 +31,7 @@ from tests.integration.portal.helpers import logged_in_client
 pytestmark = pytest.mark.django_db
 
 JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+GRANT_FAILURE_MESSAGE: Final = "外部授权写入失败"
 
 
 def test_approver_sees_pending_approvals_and_approves() -> None:
@@ -61,12 +63,66 @@ def test_approver_sees_pending_approvals_and_approves() -> None:
     first = pending_data[0]
     assert isinstance(first, dict)
     assert first["id"] == access_request.id
+    authorization_groups = first["authorization_groups"]
+    assert isinstance(authorization_groups, list)
+    group = authorization_groups[0]
+    assert isinstance(group, dict)
+    assert group["grants"] == [
+        {
+            "permission": "reader.view",
+            "permission_name": "Reader View",
+            "scope": "GLOBAL",
+        },
+    ]
     applicant = _json_dict(detail_body, "approval")["applicant"]
     assert isinstance(applicant, dict)
     assert applicant["user_id"] == "portal-applicant"
     approval = _json_dict(approved_body, "approval")
     assert approval["status"] == "grant_applied"
     assert AccessGrant.objects.filter(is_current=True).count() == 1
+
+
+def test_approve_application_failure_returns_committed_decision_and_latest_approval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: 审批人同意时, 授权事实写入失败。
+    client, approver = logged_in_client("portal-failed-approver")
+    access_request = _submitted_request(
+        "portal-failed-applicant",
+        "portal-failed-app",
+        approver_id=approver.authentik_user_id,
+    )
+
+    def fail_grant_application(*_args: object, **_kwargs: object) -> None:
+        raise GrantApplyFailureError(GRANT_FAILURE_MESSAGE)
+
+    monkeypatch.setattr(
+        "easyauth.access_requests.application.apply_grant_fact",
+        fail_grant_application,
+    )
+
+    # When
+    response = client.post(
+        f"/portal/api/v1/me/approvals/{access_request.id}/approve",
+        data=dumps({"comment": "同意"}),
+        content_type="application/json",
+    )
+
+    # Then: 422 复合结果同时返回已提交语义与最新 grant_failed 事实。
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    body = _json_object(response.content)
+    error = _json_dict(body, "error")
+    details = error["details"]
+    assert isinstance(details, dict)
+    assert details["decision_committed"] is True
+    assert details["status"] == "grant_failed"
+    approval = details["approval"]
+    assert isinstance(approval, dict)
+    assert approval["id"] == access_request.id
+    assert approval["status"] == "grant_failed"
+    assert approval["decision_comment"] == "同意"
+    access_request.refresh_from_db()
+    assert access_request.status == "grant_failed"
 
 
 def test_reject_requires_comment_and_applicant_sees_reason() -> None:

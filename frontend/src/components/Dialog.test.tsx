@@ -50,4 +50,23 @@ describe("Dialog 焦点陷阱(FF-6)", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     expect(document.activeElement).toBe(trigger);
   });
+
+  test("禁止关闭时 Escape、遮罩和关闭按钮均不可关闭", async () => {
+    const user = userEvent.setup();
+    render(
+      <Dialog title="不可关闭" closeDisabled onClose={() => undefined}>
+        <input aria-label="字段" />
+      </Dialog>,
+    );
+
+    const closeButton = screen.getByRole("button", { name: "关闭弹窗" });
+    const overlayButton = screen.getByRole("button", { name: "关闭弹窗遮罩" });
+    expect(closeButton).toBeDisabled();
+    expect(overlayButton).toBeDisabled();
+
+    await user.keyboard("{Escape}");
+    await user.click(closeButton);
+    await user.click(overlayButton);
+    expect(screen.getByRole("dialog", { name: "不可关闭" })).toBeVisible();
+  });
 });

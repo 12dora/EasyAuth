@@ -54,11 +54,11 @@ export function App({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUse
           <Route path="/auth/logged-out/" element={<LoggedOutPage />} />
         </Route>
         <Route element={<AppShell brandLogoUrl={brandLogoUrl} currentUser={currentUser} currentUserId={currentUserId} mode="portal" />}>
-          <Route path="/portal" element={<PortalPage />} />
-          <Route path="/portal/request" element={<PortalPage />} />
-          <Route path="/portal/requests" element={<PortalPage />} />
-          <Route path="/portal/expiring" element={<PortalPage />} />
-          <Route path="/portal/approvals" element={<PortalPage />} />
+          <Route path="/portal" element={<PortalPage view="grants" />} />
+          <Route path="/portal/request" element={<PortalPage view="request" />} />
+          <Route path="/portal/requests" element={<PortalPage view="requests" />} />
+          <Route path="/portal/expiring" element={<PortalPage view="expiring" />} />
+          <Route path="/portal/approvals" element={<PortalPage view="approvals" />} />
           <Route path="/portal/settings" element={<SettingsPlaceholder mode="portal" />} />
           <Route path="*" element={<Navigate to="/portal" replace />} />
         </Route>
@@ -140,4 +140,3 @@ function SettingsPlaceholder({ mode }: { mode: "console" | "portal" }) {
     </section>
   );
 }
-
