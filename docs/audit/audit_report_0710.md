@@ -25,12 +25,46 @@
 
 ### 修复复核（2026-07-10）
 
-本轮已完成全部后端功能问题，以及指定安全问题 BS-02、BS-05 至 BS-15、BS-17。实现按以下四批提交：
+本轮已完成全部前端功能问题、全部后端功能问题，以及指定安全问题 BS-02、BS-05 至 BS-15、BS-17。后端与安全修复按以下四批提交：
 
 - `621b664`：后端领域模型、API、事务、并发、安全边界、迁移与回归测试。
 - `8864547`：对应前端契约、幂等提交、逐项期限、异步状态与两步验证交互。
 - `580814f`：出站 Webhook worker 网络隔离、依赖锁定、镜像摘要、SBOM、构建溯源与签名验证。
 - Authentik `7120fbede1`：钉钉目录权威快照代次、合法空集清理、原子发布与回归测试。
+
+前端功能问题先由 `8d1fb6b`、`d62cc33`、`5157e38`、`d1985e4` 完成 Portal、Onboarding、Console 与生命周期主体，再由以下四批完成独立复核后的剩余边界：
+
+- `ed6a28f`：审批复合终态、生命周期执行边界、Console 深链和集成设置部分更新。
+- `b1bd15f`：审批模板、审批实例与团队详情的请求取消、串行写入和弹窗关闭边界。
+- `31e3ab6`：Workspace 权威快照、Onboarding/Manifest/Connector 异步结果、Matrix resolver 与凭据串行化。
+- `6984d1a`：申请目标不变量、直属主管审批、审批过期终态、交接预览与转岗方案版本栅栏。
+
+| 前端问题 | 状态 | 修复结果 |
+| --- | --- | --- |
+| FF-01 | 已修复 | Portal 三个列表统一使用服务端分页、服务端总数和受控页码，越界页自动收敛。 |
+| FF-02 | 已修复 | 补齐全部 Console 深链及尾斜杠 SPA 壳路由，API 路由优先，`apps/new` 不再落入动态 `app_key`。 |
+| FF-03 | 已修复 | 集成设置改为字段级 `PATCH`，区分缺失、显式清空和非法 `null`，并使用事务与行锁避免并发覆盖。 |
+| FF-04 | 已修复 | Workspace 按 `appKey:tab` 重挂载，旧应用状态、请求结果和一次性明文不再跨应用复用。 |
+| FF-05 | 已修复 | Managed Scope、Webhook、Connector 配置与 mapping 使用显式权威加载状态；错误或畸形 200 响应均禁止写入并提供重试。 |
+| FF-06 | 已修复 | Manifest 与 Onboarding 的预览、确认和文件读取绑定规范化完整内容与请求代次；确认在途禁止修改或离开步骤。 |
+| FF-07 | 已修复 | Onboarding 严格解析配置状态 envelope 和问题行，缺失或错型进入错误态。 |
+| FF-08 | 已修复 | Matrix 完整保留 `inherit`、`override`、`easyauth_team`、`union`、`disabled`，读取后原样保存。 |
+| FF-09 | 已修复 | 前端持续维护直接权限与授权组覆盖集合不相交，提交前断言；后端权威拒绝相同 permission/scope 的重复目标。 |
+| FF-10 | 已修复 | group 按真实 grants、direct 按本次 scope 判断 `MANAGED_USERS`；缺 active 直属主管时前后端均禁止 owner 回退。 |
+| FF-11 | 已修复 | `grant_failed` 与 `grant_expired` 都作为已提交决定处理，关闭旧弹窗、刷新列表并展示准确最终结果。 |
+| FF-12 | 已修复 | 决策前强制获取最新完整授权事实，详情加载或失败时禁止审批；提交在途同步禁用所有关闭通道。 |
+| FF-13 | 已修复 | 交接向导冻结批次并强制先预览后执行；选择变化事务性作废旧预览，失败重试使用独立状态迁移。 |
+| FF-14 | 已修复 | 转岗选择按方案 `revision` 初始化并回显权威已确认选择；生成与确认操作互斥且后端校验版本。 |
+| FF-15 | 已修复 | 通用分页显式接收总数；交接单、Manifest versions 和 Connector runs 均使用标准服务端分页，取消硬截断。 |
+| FF-16 | 已修复 | 成员列表返回稳定 membership ID，前端按真实序列化形状向该 ID 发起停用操作。 |
+| FF-17 | 已修复 | Connector 测试结果绑定 connector、实例和规范化配置指纹；所有启用或启用态改配都要求当前候选测试通过。 |
+| FF-18 | 已修复 | 应用删除要求 name/key 确认；凭据操作按 `kind:id` 串行，一次性明文按队列逐项展示。 |
+| FF-19 | 已修复 | 模板测试使用精确 ID，映射严格校验；重投采用后端 CAS，前端即时写回并按实例禁用。 |
+| FF-20 | 已修复 | 团队、模板和实例请求支持取消与串行写入；pending 弹窗无法关闭，旧响应不能回滚新状态。 |
+| FF-21 | 已修复 | 运营筛选进入 URL，展示失败原因与授权版本，并提供带 reason 的重试授权和紧急撤权主路径。 |
+| FF-22 | 已修复 | Onboarding 异步结果绑定输入代次；OAuth client 必须成功换取 access token 才能完成，完成页按凭据类型生成说明。 |
+| FF-23 | 已修复 | Portal 查询边界严格解析运行时契约，前端落实 50/20/1000 上限，选择键改为结构化二元组。 |
+| FF-24 | 已修复 | Portal 次级路由直接传 view，审批分页使用服务端总数并收敛页码，历史展示意见和具体到期时间。 |
 
 | 问题 | 状态 | 修复结果 |
 | --- | --- | --- |
@@ -73,9 +107,11 @@
 | BS-15 | 已修复 | Webhook delivery 增加 generation、claim token 和 lease，只有当前 claim 可发送和写终态。 |
 | BS-17 | 已修复 | `/health/` 真实上报数据库、broker、beat/worker、关键任务、Stream 进程和 ACK；镜像与 uv/Redis 固定摘要，gunicorn 进入 lock，CI 生成 SBOM/provenance 并用 Cosign 签名后验证。 |
 
-修复后验证结果：Django/Python 全量测试 `1093 passed`；前端 `40` 个测试文件、`249 passed`；前端生产构建、`tsc -b`、`manage.py check`、迁移一致性检查、Dockerfile 检查和 deploy compose 解析均通过。Ruff 从原报告的 23 项降为 5 项，剩余均位于本轮未修改的既有 `teams_api.py` 和 `manifest_sync_views.py`。
+修复后验证结果：Django/Python 全量测试 `1126 passed`；前端 `40` 个测试文件、`278 passed`；前端生产构建、`tsc -b`、`manage.py check`、迁移一致性检查、Ruff、BasedPyright 和 Docker 后端镜像构建均通过。
 
 上线复核结果：Authentik 定向测试 `12 passed`，迁移一致性检查和完整镜像构建通过；部署前备份保存于 `/tmp/authentik-before-generation-20260710.dump`。Authentik worker/server 已重建并通过本机与 `https://auth.jiefakj.com/-/health/live/` 健康检查。真实钉钉同步发布 `generation=1`，状态计数与活动镜像均为 `40` 个部门、`134` 个用户；EasyAuth 严格同步成功消费相同计数，`org_fetch_failed_count=0`，`https://iam.jiefakj.com/health/` 返回 `200`。
+
+前端功能修复上线前的 SQLite 一致性备份保存于 `/tmp/easyauth-before-frontend-20260710-170126.sqlite3`；`lifecycle.0003_transferplan_revision` 已应用。EasyAuth web、worker、Webhook worker、beat 与 Stream 已使用最终镜像重建并保持健康，公网健康端点返回 `200`；Console 深链均进入认证流程而不再返回 `404`，最终静态资源 `assets/main-n4V80FLF.js` 经公网反代返回 `200`，且响应内容包含本轮新增终态与 OAuth 凭据逻辑。
 
 ### 严重级别
 
