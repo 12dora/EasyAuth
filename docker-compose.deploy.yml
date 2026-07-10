@@ -37,6 +37,7 @@ x-easyauth-common: &easyauth-common
     # 默认值是 localhost:6379, 在容器内连不到 redis —— 不覆盖则 web 连 enqueue 都会失败。
     CELERY_BROKER_URL: "redis://redis:6379/0"
     CELERY_RESULT_BACKEND: "redis://redis:6379/1"
+    EASYAUTH_HEALTH_REQUIRE_BACKGROUND: "1"
     # 容器内 localhost 不是宿主; Authentik 在宿主 :19000(worker 的目录同步/离职禁号也要用)。
     EASYAUTH_AUTHENTIK_BASE_URL: "http://host.docker.internal:19000"
     # 公网回调(需在 Authentik easyauth-portal provider 的 redirect URIs 里登记该地址,
@@ -59,7 +60,7 @@ x-easyauth-common: &easyauth-common
 
 services:
   redis:
-    image: redis:7-alpine
+    image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
     restart: unless-stopped
     networks: [easyauth]
 
@@ -84,6 +85,28 @@ services:
     # 用 celery inspect ping 真实反映 worker 存活 + broker 连通。
     healthcheck:
       test: ["CMD-SHELL", "celery -A easyauth.config.celery:app inspect ping -t 5 >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+
+  webhook-worker:
+    <<: *easyauth-common
+    user: root
+    cap_add:
+      - NET_ADMIN
+    command:
+      - "/app/deploy/webhook-worker-entrypoint.sh"
+      - "celery"
+      - "-A"
+      - "easyauth.config.celery:app"
+      - "worker"
+      - "--loglevel=info"
+      - "--concurrency=2"
+      - "--queues=webhooks"
+      - "--hostname=webhooks@%h"
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A easyauth.config.celery:app inspect ping --destination=webhooks@$$(hostname) -t 5 >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
       start_period: 20s

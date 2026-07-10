@@ -22,6 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write   # create GitHub Releases on version tags
+      id-token: write
       packages: write
     steps:
       - name: Checkout
@@ -66,7 +67,24 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          provenance: false
+          provenance: mode=max
+          sbom: true
+
+      - name: 安装 Cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@v3
+
+      - name: 签名并验证镜像
+        if: github.event_name != 'pull_request'
+        env:
+          IMAGE_DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          IMAGE_REF="$(printf '%s/%s' "${REGISTRY}" "${IMAGE_NAME}" | tr '[:upper:]' '[:lower:]')"
+          cosign sign --yes "${IMAGE_REF}@${IMAGE_DIGEST}"
+          cosign verify \
+            --certificate-identity-regexp "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/docker-build.yml@refs/.*" \
+            --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
+            "${IMAGE_REF}@${IMAGE_DIGEST}"
 
       # On a version tag (vX.Y.Z), publish a GitHub Release that links to the
       # multi-arch image in GHCR (Packages). No large binaries are attached.
