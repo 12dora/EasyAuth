@@ -719,10 +719,13 @@ describe("ConsoleAppWorkspace", () => {
       if (url === "/console/api/v1/apps/demo/approval-rules" && !init?.method) {
         return jsonResponse({ data: rules });
       }
+      if (url.startsWith("/console/api/v1/user-options?")) {
+        return jsonResponse({ data: [{ user_id: "local-admin:admin", name: "本地管理员 admin" }] });
+      }
       if (url === "/console/api/v1/apps/demo/approval-rules" && init?.method === "POST") {
         rules = [
           ...rules,
-          { id: 3, target_type: "permission", target_key: "invoice.pay", approver_userids: ["owner"], is_active: true },
+          { id: 3, target_type: "permission", target_key: "invoice.pay", approver_userids: ["local-admin:admin"], is_active: true },
         ];
         return jsonResponse({ id: 3 });
       }
@@ -734,7 +737,7 @@ describe("ConsoleAppWorkspace", () => {
           return jsonResponse({ ok: true });
         }
         rules = rules.map((rule) =>
-          rule.id === 2 ? { ...rule, target_key: "invoice.approve.high", approver_userids: ["security", "owner"] } : rule,
+          rule.id === 2 ? { ...rule, target_key: "invoice.approve.high", approver_userids: ["local-admin:admin"] } : rule,
         );
         return jsonResponse({ ok: true });
       }
@@ -754,7 +757,12 @@ describe("ConsoleAppWorkspace", () => {
     let dialog = await screen.findByRole("dialog", { name: "新建审批规则" });
     await user.selectOptions(within(dialog).getByLabelText("规则目标类型"), "permission");
     await user.type(within(dialog).getByLabelText("目标 Key"), "invoice.pay");
-    await user.type(within(dialog).getByLabelText("审批人 user_id"), "owner");
+    await user.type(within(dialog).getByLabelText("审批人 user_id"), "admin");
+    await user.click(await screen.findByRole("option", { name: /本地管理员 admin/ }));
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/console/api/v1/user-options?q=admin&purpose=approver",
+      expect.objectContaining({ credentials: "include" }),
+    );
     await user.click(within(dialog).getByRole("button", { name: "保存" }));
     expect(await screen.findByText("权限：invoice.pay")).toBeInTheDocument();
 
@@ -764,8 +772,9 @@ describe("ConsoleAppWorkspace", () => {
     dialog = await screen.findByRole("dialog", { name: "编辑审批规则" });
     await user.clear(within(dialog).getByLabelText("目标 Key"));
     await user.type(within(dialog).getByLabelText("目标 Key"), "invoice.approve.high");
-    await user.clear(within(dialog).getByLabelText("审批人 user_id"));
-    await user.type(within(dialog).getByLabelText("审批人 user_id"), "security,owner");
+    await user.click(within(dialog).getByRole("button", { name: "移除 security" }));
+    await user.type(within(dialog).getByLabelText("审批人 user_id"), "admin");
+    await user.click(await screen.findByRole("option", { name: /本地管理员 admin/ }));
     await user.click(within(dialog).getByRole("button", { name: "保存" }));
     expect(await screen.findByText("权限：invoice.approve.high")).toBeInTheDocument();
 

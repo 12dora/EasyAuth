@@ -474,6 +474,42 @@ def test_portal_request_catalog_returns_active_approver_options_and_defaults() -
     assert permission_defaults[permission.key] == [manager.authentik_user_id]
 
 
+def test_portal_request_catalog_uses_local_admin_approval_rule_for_first_request() -> None:
+    # Given: 应用的首条审批规则指定本地超管。它尚未依赖任何员工 owner 或直属主管。
+    client, _user = logged_in_client("portal-catalog-first-request-user")
+    local_admin = UserMirror.objects.create(
+        authentik_user_id="local-admin:admin",
+        name="本地管理员 admin",
+    )
+    app = App.objects.create(app_key="catalog-first-request-app", name="首个审批应用")
+    _ = AppScope.objects.create(app=app, key="GLOBAL", name="全局")
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="initial-access",
+        kind="role",
+        name="初始访问",
+        requestable=True,
+    )
+    _ = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=group,
+        approver_userids=[local_admin.authentik_user_id],
+    )
+
+    # When: 员工读取申请目录。
+    response = client.get(REQUEST_CATALOG_URL)
+
+    # Then: 本地超管出现在候选项。规则将其解析为该申请的默认审批人。
+    payload = json_object(response)
+    groups = payload["authorization_groups"]
+    assert response.status_code == HTTPStatus.OK
+    assert payload["approver_options"] == [
+        {"user_id": local_admin.authentik_user_id, "name": local_admin.name},
+    ]
+    assert isinstance(groups, list)
+    assert groups[0]["default_approver_user_ids"] == [local_admin.authentik_user_id]
+
+
 def test_portal_request_catalog_queries_only_candidate_approvers() -> None:
     # Given: 目录中只有主管、owner 和规则审批人可能成为本次候选人。
     client, user = logged_in_client("portal-catalog-directed-user")

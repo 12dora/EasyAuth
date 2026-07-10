@@ -14,10 +14,12 @@ export interface UserOption {
   name: string;
 }
 
+type UserSearchPurpose = "employee" | "approver";
+
 const OPTION_BASE_CLASS =
   "flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-[2px] px-2.5 py-1.5 text-left transition-colors";
 
-function useUserOptions(query: string, enabled: boolean) {
+function useUserOptions(query: string, enabled: boolean, purpose: UserSearchPurpose) {
   const [debouncedQuery, setDebouncedQuery] = useState(query);
 
   useEffect(() => {
@@ -26,10 +28,10 @@ function useUserOptions(query: string, enabled: boolean) {
   }, [query]);
 
   return useQuery({
-    queryKey: ["console", "user-search", debouncedQuery],
+    queryKey: ["console", "user-search", purpose, debouncedQuery],
     queryFn: () =>
       apiRequest<ListPayload<UserOption>>(
-        `/console/api/v1/user-options?q=${encodeURIComponent(debouncedQuery)}`,
+        `/console/api/v1/user-options?q=${encodeURIComponent(debouncedQuery)}&purpose=${purpose}`,
       ),
     enabled: enabled && debouncedQuery !== "",
     select: (payload) => itemsFromPayload<UserOption>(payload),
@@ -118,7 +120,7 @@ export function UserSearchInput({ id, value, onChange, placeholder, required, ..
   const [open, setOpen] = useState(false);
   const [highlightIndex, setHighlightIndex] = useState(0);
   const containerRef = useCloseOnOutsidePointerDown(() => setOpen(false));
-  const optionsQuery = useUserOptions(value.trim(), open);
+  const optionsQuery = useUserOptions(value.trim(), open, "employee");
   const options = useMemo(() => optionsQuery.data ?? [], [optionsQuery.data]);
 
   useEffect(() => {
@@ -188,16 +190,18 @@ interface UserMultiSelectProps {
   placeholder?: string;
   "aria-label"?: string;
   "aria-describedby"?: string;
+  /** 审批人选择可包含本地紧急管理账号；其他员工选择保持排除。 */
+  searchPurpose?: UserSearchPurpose;
 }
 
 /** 多个用户 ID 选择: 模糊搜索加入, 已选用户以 chip 展示, 也允许回车录入手输 ID。 */
-export function UserMultiSelect({ id, value, onChange, placeholder, ...aria }: UserMultiSelectProps) {
+export function UserMultiSelect({ id, value, onChange, placeholder, searchPurpose = "employee", ...aria }: UserMultiSelectProps) {
   const { t } = useI18n();
   const [inputValue, setInputValue] = useState("");
   const [open, setOpen] = useState(false);
   const [highlightIndex, setHighlightIndex] = useState(0);
   const containerRef = useCloseOnOutsidePointerDown(() => setOpen(false));
-  const optionsQuery = useUserOptions(inputValue.trim(), open);
+  const optionsQuery = useUserOptions(inputValue.trim(), open, searchPurpose);
   const options = useMemo(
     () => (optionsQuery.data ?? []).filter((option) => !value.includes(option.user_id)),
     [optionsQuery.data, value],

@@ -64,6 +64,27 @@ def test_user_search_excludes_inactive_users() -> None:
     assert payload["data"] == []
 
 
+def test_approver_search_includes_active_local_admin() -> None:
+    client = _logged_in_superuser("user-search-approver-admin")
+    local_admin = UserMirror.objects.create(
+        authentik_user_id="local-admin:admin",
+        name="本地管理员 admin",
+    )
+
+    employee_response = client.get(USER_OPTIONS_API_URL, {"q": "admin"})
+    employee_payload = cast("dict[str, JsonValue]", employee_response.json())
+    employee_items = cast("list[dict[str, JsonValue]]", employee_payload["data"])
+
+    response = client.get(USER_OPTIONS_API_URL, {"q": "admin", "purpose": "approver"})
+
+    payload = cast("dict[str, JsonValue]", response.json())
+    items = cast("list[dict[str, JsonValue]]", payload["data"])
+    assert employee_response.status_code == HTTPStatus.OK
+    assert all(item["user_id"] != local_admin.authentik_user_id for item in employee_items)
+    assert response.status_code == HTTPStatus.OK
+    assert any(item["user_id"] == local_admin.authentik_user_id for item in items)
+
+
 def test_user_search_requires_console_session() -> None:
     client = Client(HTTP_HOST="localhost")
 

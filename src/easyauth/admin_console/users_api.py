@@ -28,6 +28,11 @@ if TYPE_CHECKING:
 
 USER_SEARCH_DEFAULT_LIMIT: Final = 10
 USER_SEARCH_MAX_LIMIT: Final = 50
+USER_SEARCH_PURPOSE_EMPLOYEE: Final = "employee"
+USER_SEARCH_PURPOSE_APPROVER: Final = "approver"
+USER_SEARCH_PURPOSES: Final = frozenset(
+    {USER_SEARCH_PURPOSE_EMPLOYEE, USER_SEARCH_PURPOSE_APPROVER},
+)
 
 
 def console_users(request: HttpRequest) -> JsonResponse:
@@ -66,10 +71,18 @@ def console_user_options(request: HttpRequest) -> JsonResponse:
             {"field": "q"},
             status=HTTPStatus.UNPROCESSABLE_ENTITY,
         )
-    # 内置本地管理员是 break-glass 系统账号, 不是员工: 不进选人控件(交接接收人/成员等)。
-    users = UserMirror.objects.filter(status=USER_STATUS_ACTIVE).exclude(
-        authentik_user_id__startswith=LOCAL_ADMIN_SUBJECT_PREFIX,
-    )
+    purpose = request.GET.get("purpose", USER_SEARCH_PURPOSE_EMPLOYEE).strip()
+    if purpose not in USER_SEARCH_PURPOSES:
+        return error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "purpose 仅支持 employee 或 approver。",
+            {"field": "purpose"},
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+        )
+    users = UserMirror.objects.filter(status=USER_STATUS_ACTIVE)
+    if purpose == USER_SEARCH_PURPOSE_EMPLOYEE:
+        # 本地管理员是 break-glass 系统账号。它不进入员工选择控件。交接接收人与成员都在此列。
+        users = users.exclude(authentik_user_id__startswith=LOCAL_ADMIN_SUBJECT_PREFIX)
     users = _apply_query_filter(users, query)
     items: list[JsonValue] = [
         _user_item(user) for user in users.order_by("name", "authentik_user_id")[: _limit(request)]

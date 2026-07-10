@@ -580,6 +580,7 @@ function ReassignApproversDialog({
                 setFieldError("");
               }
             }}
+            searchPurpose="approver"
           />
         </Field>
         <p className="text-xs leading-5 text-ink-faint">{t("console.accessRequests.reassignNote")}</p>

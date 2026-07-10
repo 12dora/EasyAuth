@@ -18,6 +18,7 @@ import { Button } from "../../../../components/Button";
 import { Dialog } from "../../../../components/Dialog";
 import { Field, SelectInput, TextInput } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
+import { UserMultiSelect } from "../../../../components/UserSelect";
 import { useToast } from "../../../../components/ui/Toast";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
 import type { ApprovalRuleItem } from "../../../../lib/domain";
@@ -31,7 +32,7 @@ type EditableApprovalRule = ApprovalRuleItem & { blocking?: boolean; status?: st
 const emptyForm = {
   target_type: "authorization_group" as RuleTargetType,
   target_key: "",
-  approver_userids: "",
+  approverUserIds: [] as string[],
 };
 
 export function RulesTab({ appKey }: { appKey: string }) {
@@ -52,7 +53,7 @@ export function RulesTab({ appKey }: { appKey: string }) {
       const body = {
         target_type: form.target_type,
         target_key: form.target_key,
-        approver_userids: splitUserids(form.approver_userids),
+        approver_userids: form.approverUserIds,
       };
       if (editingRuleId) {
         return apiRequest(`/console/api/v1/apps/${appKey}/approval-rules/${editingRuleId}`, {
@@ -112,7 +113,7 @@ export function RulesTab({ appKey }: { appKey: string }) {
               setForm({
                 target_type: normalizeTargetType(row.original.target_type),
                 target_key: row.original.target_key ?? "",
-                approver_userids: (row.original.approver_userids ?? []).join(","),
+                approverUserIds: row.original.approver_userids ?? [],
               });
               setDialogOpen(true);
             }}
@@ -202,7 +203,7 @@ export function RulesTab({ appKey }: { appKey: string }) {
               type="submit"
               variant="primary"
               loading={saveMutation.isPending}
-              disabled={!form.target_key || !form.approver_userids || saveMutation.isPending}
+              disabled={!form.target_key || form.approverUserIds.length === 0 || saveMutation.isPending}
             >
               {t("common.save")}
             </Button>
@@ -236,13 +237,11 @@ export function RulesTab({ appKey }: { appKey: string }) {
               />
             </Field>
             <Field label={t("console.rules.approverField")} hint={t("console.rules.approverHint")}>
-              <TextInput
+              <UserMultiSelect
                 aria-label={t("console.rules.approverField")}
-                value={form.approver_userids}
-                onChange={(event) => {
-                  const approverUserids = event.currentTarget.value;
-                  setForm((current) => ({ ...current, approver_userids: approverUserids }));
-                }}
+                value={form.approverUserIds}
+                onChange={(approverUserIds) => setForm((current) => ({ ...current, approverUserIds }))}
+                searchPurpose="approver"
               />
             </Field>
           </form>
@@ -250,13 +249,6 @@ export function RulesTab({ appKey }: { appKey: string }) {
       ) : null}
     </section>
   );
-}
-
-function splitUserids(value: string): string[] {
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
 }
 
 function targetTypeLabel(t: Translator, value: string | undefined): string {
