@@ -20,7 +20,7 @@ import { apiRequest } from "../../../lib/api";
 import type { JsonObject } from "../../../lib/api";
 import { generateAppKey } from "../../../lib/appKey";
 import { cn } from "../../../lib/cn";
-import type { AppListPayload, ConfigurationStatus, QueryTestResult, SecretPayload } from "../../../lib/domain";
+import type { AppListPayload, ConfigurationIssue, ConfigurationStatus, QueryTestResult, SecretPayload } from "../../../lib/domain";
 
 type WizardStep = "basics" | "catalog" | "authz" | "credential" | "verify" | "done";
 
@@ -82,13 +82,14 @@ export function AppOnboardingWizard() {
         />
       ) : null}
       {activeStep === "catalog" ? (
-        <CatalogStep appKey={appKey} onBack={() => goToStep("basics")} onContinue={() => goToStep("authz")} />
+        <CatalogStep key={appKey} appKey={appKey} onBack={() => goToStep("basics")} onContinue={() => goToStep("authz")} />
       ) : null}
       {activeStep === "authz" ? (
-        <AuthzStep appKey={appKey} onBack={() => goToStep("catalog")} onContinue={() => goToStep("credential")} />
+        <AuthzStep key={appKey} appKey={appKey} onBack={() => goToStep("catalog")} onContinue={() => goToStep("credential")} />
       ) : null}
       {activeStep === "credential" ? (
         <CredentialStep
+          key={appKey}
           appKey={appKey}
           activeCredentialCount={app?.active_credential_count ?? 0}
           onBack={() => goToStep("authz")}
@@ -96,9 +97,9 @@ export function AppOnboardingWizard() {
         />
       ) : null}
       {activeStep === "verify" ? (
-        <VerifyStep appKey={appKey} onBack={() => goToStep("credential")} onContinue={() => goToStep("done")} />
+        <VerifyStep key={appKey} appKey={appKey} onBack={() => goToStep("credential")} onContinue={() => goToStep("done")} />
       ) : null}
-      {activeStep === "done" ? <DoneStep appKey={appKey} appName={app?.name ?? appKey} /> : null}
+      {activeStep === "done" ? <DoneStep key={appKey} appKey={appKey} appName={app?.name ?? appKey} /> : null}
     </>
   );
 }
@@ -289,6 +290,13 @@ interface AutoOnboardingResult {
   catalog_version: number | string;
 }
 
+interface AutoOnboardingRequest {
+  baseUrl: string;
+  appKey: string;
+  descriptorToken: string;
+  requestId: number;
+}
+
 function AutoOnboardPanel({ onAutoOnboarded }: { onAutoOnboarded: (appKey: string) => void }) {
   const { t } = useI18n();
   const queryClient = useQueryClient();
@@ -296,22 +304,44 @@ function AutoOnboardPanel({ onAutoOnboarded }: { onAutoOnboarded: (appKey: strin
   const [appKey, setAppKey] = useState("");
   const [descriptorToken, setDescriptorToken] = useState("");
   const [result, setResult] = useState<AutoOnboardingResult | null>(null);
+  const requestIdRef = useRef(0);
   const onboardMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (request: AutoOnboardingRequest) =>
       apiRequest<AutoOnboardingResult>("/console/api/v1/apps/auto-onboarding", {
         method: "POST",
         body: {
-          base_url: baseUrl.trim(),
-          app_key: appKey.trim(),
-          ...(descriptorToken.trim() ? { descriptor_token: descriptorToken.trim() } : {}),
+          base_url: request.baseUrl,
+          app_key: request.appKey,
+          ...(request.descriptorToken ? { descriptor_token: request.descriptorToken } : {}),
         },
       }),
-    onSuccess: (payload) => {
+    onSuccess: (payload, request) => {
+      if (request.requestId !== requestIdRef.current) {
+        return;
+      }
       setResult(payload);
+      setDescriptorToken("");
       void queryClient.invalidateQueries({ queryKey: ["console", "apps"] });
       void queryClient.invalidateQueries({ queryKey: ["console", "app", payload.app_key] });
     },
   });
+
+  const invalidateResult = () => {
+    requestIdRef.current += 1;
+    setResult(null);
+  };
+
+  const runAutoOnboarding = () => {
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    setResult(null);
+    onboardMutation.mutate({
+      baseUrl: baseUrl.trim(),
+      appKey: appKey.trim(),
+      descriptorToken: descriptorToken.trim(),
+      requestId,
+    });
+  };
 
   return (
     <section className="space-y-4 rounded-[3px] border border-accent/25 bg-accent/4 p-4">
@@ -324,18 +354,31 @@ function AutoOnboardPanel({ onAutoOnboarded }: { onAutoOnboarded: (appKey: strin
           <TextInput
             value={baseUrl}
             placeholder="https://downstream.example.com"
-            onChange={(event) => setBaseUrl(event.currentTarget.value)}
+            onChange={(event) => {
+              setBaseUrl(event.currentTarget.value);
+              setDescriptorToken("");
+              invalidateResult();
+            }}
           />
         </Field>
         <Field label={t("wizard.auto.appKey")}>
-          <TextInput value={appKey} onChange={(event) => setAppKey(event.currentTarget.value)} />
+          <TextInput
+            value={appKey}
+            onChange={(event) => {
+              setAppKey(event.currentTarget.value);
+              invalidateResult();
+            }}
+          />
         </Field>
         <Field label={t("wizard.auto.token")}>
           <TextInput
             type="password"
             autoComplete="off"
             value={descriptorToken}
-            onChange={(event) => setDescriptorToken(event.currentTarget.value)}
+            onChange={(event) => {
+              setDescriptorToken(event.currentTarget.value);
+              invalidateResult();
+            }}
           />
         </Field>
         <Button
@@ -343,12 +386,12 @@ function AutoOnboardPanel({ onAutoOnboarded }: { onAutoOnboarded: (appKey: strin
           icon={<Compass size={16} />}
           disabled={!baseUrl.trim() || !appKey.trim() || onboardMutation.isPending}
           loading={onboardMutation.isPending}
-          onClick={() => onboardMutation.mutate()}
+          onClick={runAutoOnboarding}
         >
           {t("wizard.auto.run")}
         </Button>
       </div>
-      {onboardMutation.error ? (
+      {onboardMutation.error && onboardMutation.variables?.requestId === requestIdRef.current ? (
         <StatusBanner tone="signal" title={t("wizard.auto.failed")} message={(onboardMutation.error as Error).message} />
       ) : null}
       {result ? (
@@ -393,31 +436,92 @@ type ManifestDiffItem = {
   after?: unknown;
 };
 
+interface ManifestPreviewSnapshot {
+  payload: ManifestPreviewPayload;
+  contentFingerprint: string;
+  requestId: number;
+}
+
+interface ManifestPreviewRequest {
+  content: string;
+  contentFingerprint: string;
+  requestId: number;
+}
+
+interface ManifestImportRequest {
+  previewId: string;
+  contentFingerprint: string;
+  requestId: number;
+}
+
 function CatalogStep({ appKey, onBack, onContinue }: { appKey: string; onBack: () => void; onContinue: () => void }) {
   const { t } = useI18n();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [content, setContent] = useState("");
-  const [preview, setPreview] = useState<ManifestPreviewPayload | null>(null);
+  const [preview, setPreview] = useState<ManifestPreviewSnapshot | null>(null);
   const [importedCatalogVersion, setImportedCatalogVersion] = useState<string | null>(null);
+  const contentRequestIdRef = useRef(0);
+  const fileReadIdRef = useRef(0);
   const previewMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (request: ManifestPreviewRequest) =>
       apiRequest<ManifestPreviewPayload>(`/console/api/v1/apps/${appKey}/permission-template-imports/preview`, {
         method: "POST",
-        body: { template_format: detectTemplateFormat(content), template: content },
+        body: { template_format: detectTemplateFormat(request.content), template: request.content },
       }),
-    onSuccess: (payload) => setPreview(payload),
+    onSuccess: (payload, request) => {
+      if (request.requestId === contentRequestIdRef.current) {
+        setPreview({ payload, contentFingerprint: request.contentFingerprint, requestId: request.requestId });
+      }
+    },
   });
   const importMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (request: ManifestImportRequest) =>
       apiRequest<{ catalog_version?: string | number; template_version?: string | number }>(
-        `/console/api/v1/apps/${appKey}/permission-template-imports/${preview?.preview_id ?? ""}/confirm`,
+        `/console/api/v1/apps/${appKey}/permission-template-imports/${request.previewId}/confirm`,
         { method: "POST" },
       ),
-    onSuccess: (payload) => {
+    onSuccess: (payload, request) => {
+      if (request.requestId !== contentRequestIdRef.current) {
+        return;
+      }
       setImportedCatalogVersion(String(payload.catalog_version ?? payload.template_version ?? ""));
       setPreview(null);
     },
   });
+
+  const invalidateCatalogResult = () => {
+    contentRequestIdRef.current += 1;
+    setPreview(null);
+    setImportedCatalogVersion(null);
+  };
+
+  const updateContent = (nextContent: string) => {
+    fileReadIdRef.current += 1;
+    invalidateCatalogResult();
+    setContent(nextContent);
+  };
+
+  const previewCurrentContent = () => {
+    const requestId = contentRequestIdRef.current + 1;
+    const contentFingerprint = manifestContentFingerprint(content);
+    contentRequestIdRef.current = requestId;
+    setPreview(null);
+    setImportedCatalogVersion(null);
+    previewMutation.mutate({ content, contentFingerprint, requestId });
+  };
+
+  const importCurrentPreview = () => {
+    const previewId = preview?.payload.preview_id;
+    const currentFingerprint = manifestContentFingerprint(content);
+    if (!previewId || preview.contentFingerprint !== currentFingerprint || preview.requestId !== contentRequestIdRef.current) {
+      setPreview(null);
+      return;
+    }
+    importMutation.mutate({ previewId, contentFingerprint: currentFingerprint, requestId: preview.requestId });
+  };
+
+  const previewIsCurrent =
+    preview?.contentFingerprint === manifestContentFingerprint(content) && preview.requestId === contentRequestIdRef.current;
 
   return (
     <StepPanel title={t("wizard.catalog.title")} description={t("wizard.catalog.description")}>
@@ -433,7 +537,14 @@ function CatalogStep({ appKey, onBack, onContinue }: { appKey: string; onBack: (
             if (!file) {
               return;
             }
-            void file.text().then(setContent);
+            const fileReadId = fileReadIdRef.current + 1;
+            fileReadIdRef.current = fileReadId;
+            invalidateCatalogResult();
+            void file.text().then((fileContent) => {
+              if (fileReadId === fileReadIdRef.current) {
+                setContent(fileContent);
+              }
+            });
           }}
         />
         <Button icon={<FileUp size={16} />} onClick={() => fileInputRef.current?.click()}>
@@ -445,7 +556,7 @@ function CatalogStep({ appKey, onBack, onContinue }: { appKey: string; onBack: (
           aria-label={t("wizard.catalog.content")}
           rows={10}
           value={content}
-          onChange={(event) => setContent(event.currentTarget.value)}
+          onChange={(event) => updateContent(event.currentTarget.value)}
         />
       </Field>
       <div className="flex flex-wrap items-center gap-2">
@@ -454,24 +565,24 @@ function CatalogStep({ appKey, onBack, onContinue }: { appKey: string; onBack: (
           icon={<Eye size={16} />}
           disabled={!content || previewMutation.isPending}
           loading={previewMutation.isPending}
-          onClick={() => previewMutation.mutate()}
+          onClick={previewCurrentContent}
         >
           {t("wizard.catalog.preview")}
         </Button>
         <Button
           variant="primary"
           icon={<UploadCloud size={16} />}
-          disabled={!preview?.preview_id || importMutation.isPending}
+          disabled={!previewIsCurrent || !preview?.payload.preview_id || importMutation.isPending}
           loading={importMutation.isPending}
-          onClick={() => importMutation.mutate()}
+          onClick={importCurrentPreview}
         >
           {t("wizard.catalog.confirm")}
         </Button>
       </div>
-      {previewMutation.error ? (
+      {previewMutation.error && previewMutation.variables?.requestId === contentRequestIdRef.current ? (
         <StatusBanner tone="signal" title={t("wizard.catalog.previewFailed")} message={(previewMutation.error as Error).message} />
       ) : null}
-      {importMutation.error ? (
+      {importMutation.error && importMutation.variables?.requestId === contentRequestIdRef.current ? (
         <StatusBanner tone="signal" title={t("wizard.catalog.importFailed")} message={(importMutation.error as Error).message} />
       ) : null}
       {importedCatalogVersion ? (
@@ -481,7 +592,7 @@ function CatalogStep({ appKey, onBack, onContinue }: { appKey: string; onBack: (
           message={t("wizard.catalog.currentCatalogVersion", { version: importedCatalogVersion })}
         />
       ) : null}
-      {preview ? <ManifestDiffSummary preview={preview} /> : null}
+      {previewIsCurrent && preview ? <ManifestDiffSummary preview={preview.payload} /> : null}
       <p className="text-body text-ink-soft">{t("wizard.catalog.skipHint")}</p>
       <StepFooter>
         <Button onClick={onBack}>{t("common.back")}</Button>
@@ -532,7 +643,8 @@ function AuthzStep({ appKey, onBack, onContinue }: { appKey: string; onBack: () 
   const { t } = useI18n();
   const statusQuery = useQuery({
     queryKey: ["console", "app", appKey, "configuration-status"],
-    queryFn: () => apiRequest<ConfigurationStatus>(`/console/api/v1/apps/${appKey}/configuration-status`),
+    queryFn: async () =>
+      parseConfigurationStatus(await apiRequest<unknown>(`/console/api/v1/apps/${appKey}/configuration-status`), appKey),
     enabled: Boolean(appKey),
   });
   const issues = statusQuery.data?.data ?? [];
@@ -614,19 +726,64 @@ function CredentialStep({
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [secret, setSecret] = useState<SecretPayload | null>(null);
-  const createMutation = useMutation({
-    mutationFn: (kind: "static-tokens" | "oauth-clients") =>
-      apiRequest<SecretPayload>(`/console/api/v1/apps/${appKey}/credentials/${kind}`, {
+  const credentialRequestIdRef = useRef(0);
+  const exchangeMutation = useMutation({
+    mutationFn: async (request: { clientId: string; clientSecret: string; requestId: number }) =>
+      parseOAuthAccessToken(await apiRequest<unknown>("/oauth/token", {
         method: "POST",
-        body: { name },
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({
+          grant_type: "client_credentials",
+          client_id: request.clientId,
+          client_secret: request.clientSecret,
+        }),
+      })),
+    onSuccess: (accessToken, request) => {
+      if (request.requestId !== credentialRequestIdRef.current) {
+        return;
+      }
+      setSecret((current) => {
+        if (current?.one_time_secret?.client_id !== request.clientId) {
+          return current;
+        }
+        return {
+          ...current,
+          one_time_secret: { ...current.one_time_secret, access_token: accessToken },
+        };
+      });
+    },
+  });
+  const createMutation = useMutation({
+    mutationFn: (request: { kind: "static-tokens" | "oauth-clients"; name: string; requestId: number }) =>
+      apiRequest<SecretPayload>(`/console/api/v1/apps/${appKey}/credentials/${request.kind}`, {
+        method: "POST",
+        body: { name: request.name },
       }),
-    onSuccess: (payload) => {
+    onSuccess: (payload, request) => {
+      if (request.requestId !== credentialRequestIdRef.current) {
+        return;
+      }
       setSecret(payload);
       setName("");
       void queryClient.invalidateQueries({ queryKey: ["console", "app", appKey] });
+      if (request.kind === "oauth-clients") {
+        const clientId = payload.one_time_secret?.client_id;
+        const clientSecret = payload.one_time_secret?.client_secret;
+        if (clientId && clientSecret) {
+          exchangeMutation.mutate({ clientId, clientSecret, requestId: request.requestId });
+        }
+      }
     },
   });
   const secretEntries = Object.entries(secret?.one_time_secret ?? {}).filter(([key]) => key !== "kind");
+  const credentialPending = createMutation.isPending || exchangeMutation.isPending;
+
+  const createCredential = (kind: "static-tokens" | "oauth-clients") => {
+    const requestId = credentialRequestIdRef.current + 1;
+    credentialRequestIdRef.current = requestId;
+    setSecret(null);
+    createMutation.mutate({ kind, name, requestId });
+  };
 
   return (
     <StepPanel title={t("wizard.credential.title")} description={t("wizard.credential.description")}>
@@ -637,6 +794,7 @@ function CredentialStep({
         <Field label={t("wizard.credential.name")}>
           <TextInput
             value={name}
+            disabled={credentialPending}
             onChange={(event) => setName(event.currentTarget.value)}
             placeholder={t("wizard.credential.namePlaceholder")}
           />
@@ -644,17 +802,21 @@ function CredentialStep({
         <Button
           variant="primary"
           icon={<Plus size={16} />}
-          disabled={!name || createMutation.isPending}
-          onClick={() => createMutation.mutate("static-tokens")}
+          disabled={!name || credentialPending}
+          onClick={() => createCredential("static-tokens")}
         >
           {t("wizard.credential.createStaticToken")}
         </Button>
-        <Button icon={<KeyRound size={16} />} disabled={!name || createMutation.isPending} onClick={() => createMutation.mutate("oauth-clients")}>
+        <Button icon={<KeyRound size={16} />} disabled={!name || credentialPending} onClick={() => createCredential("oauth-clients")}>
           {t("wizard.credential.createOauthClient")}
         </Button>
       </div>
-      {createMutation.error ? (
-        <StatusBanner tone="signal" title={t("wizard.credential.createFailed")} message={(createMutation.error as Error).message} />
+      {createMutation.error || exchangeMutation.error ? (
+        <StatusBanner
+          tone="signal"
+          title={t("wizard.credential.createFailed")}
+          message={((createMutation.error ?? exchangeMutation.error) as Error).message}
+        />
       ) : null}
       {secretEntries.length > 0 ? (
         <div className="space-y-3 rounded-[3px] border border-amber/30 bg-amber/8 p-4">
@@ -667,9 +829,13 @@ function CredentialStep({
       ) : null}
       <p className="text-body text-ink-soft">{t("wizard.credential.skipHint")}</p>
       <StepFooter>
-        <Button onClick={onBack}>{t("common.back")}</Button>
-        <Button onClick={onContinue}>{t("common.skip")}</Button>
-        <Button variant="primary" disabled={secretEntries.length === 0 && activeCredentialCount === 0} onClick={onContinue}>
+        <Button disabled={credentialPending} onClick={onBack}>{t("common.back")}</Button>
+        <Button disabled={credentialPending} onClick={onContinue}>{t("common.skip")}</Button>
+        <Button
+          variant="primary"
+          disabled={credentialPending || (secretEntries.length === 0 && activeCredentialCount === 0)}
+          onClick={onContinue}
+        >
           {t("common.next")}
         </Button>
       </StepFooter>
@@ -682,38 +848,68 @@ function VerifyStep({ appKey, onBack, onContinue }: { appKey: string; onBack: ()
   const [userId, setUserId] = useState("");
   const [token, setToken] = useState("");
   const [result, setResult] = useState<QueryTestResult | null>(null);
+  const requestIdRef = useRef(0);
   const testMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (request: { userId: string; token: string; requestId: number }) =>
       apiRequest<QueryTestResult>(`/console/api/v1/apps/${appKey}/permission-query-tests`, {
         method: "POST",
-        body: { user_id: userId, token },
+        body: { user_id: request.userId, token: request.token },
       }),
-    onSuccess: (payload) => {
+    onSuccess: (payload, request) => {
+      if (request.requestId !== requestIdRef.current) {
+        return;
+      }
       setResult(payload);
       setToken("");
     },
   });
 
+  const invalidateResult = () => {
+    requestIdRef.current += 1;
+    setResult(null);
+  };
+
+  const runVerification = () => {
+    const requestId = requestIdRef.current + 1;
+    requestIdRef.current = requestId;
+    setResult(null);
+    testMutation.mutate({ userId, token, requestId });
+  };
+
   return (
     <StepPanel title={t("wizard.verify.title")} description={t("wizard.verify.description")}>
       <div className="grid max-w-3xl items-end gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
         <Field label={t("wizard.verify.userId")} labelExtra={<InfoTip text={t("wizard.verify.userIdHint")} />}>
-          <UserSearchInput value={userId} onChange={setUserId} />
+          <UserSearchInput
+            value={userId}
+            onChange={(value) => {
+              setUserId(value);
+              invalidateResult();
+            }}
+          />
         </Field>
         <Field label={t("wizard.verify.token")}>
-          <TextInput type="password" value={token} onChange={(event) => setToken(event.currentTarget.value)} autoComplete="off" />
+          <TextInput
+            type="password"
+            value={token}
+            onChange={(event) => {
+              setToken(event.currentTarget.value);
+              invalidateResult();
+            }}
+            autoComplete="off"
+          />
         </Field>
         <Button
           variant="primary"
           icon={<Play size={16} />}
           disabled={!userId || !token || testMutation.isPending}
           loading={testMutation.isPending}
-          onClick={() => testMutation.mutate()}
+          onClick={runVerification}
         >
           {t("wizard.verify.run")}
         </Button>
       </div>
-      {testMutation.error ? (
+      {testMutation.error && testMutation.variables?.requestId === requestIdRef.current ? (
         <StatusBanner tone="signal" title={t("wizard.verify.failed")} message={(testMutation.error as Error).message} />
       ) : null}
       {result ? (
@@ -744,7 +940,8 @@ function DoneStep({ appKey, appName }: { appKey: string; appName: string }) {
   const { t } = useI18n();
   const statusQuery = useQuery({
     queryKey: ["console", "app", appKey, "configuration-status"],
-    queryFn: () => apiRequest<ConfigurationStatus>(`/console/api/v1/apps/${appKey}/configuration-status`),
+    queryFn: async () =>
+      parseConfigurationStatus(await apiRequest<unknown>(`/console/api/v1/apps/${appKey}/configuration-status`), appKey),
     enabled: Boolean(appKey),
   });
   const issues = statusQuery.data?.data ?? [];
@@ -774,6 +971,9 @@ function DoneStep({ appKey, appName }: { appKey: string; appName: string }) {
 
   return (
     <StepPanel title={t("wizard.done.title")} description={t("wizard.done.description")}>
+      {statusQuery.error ? (
+        <StatusBanner tone="signal" title={t("wizard.authz.statusLoadFailed")} message={(statusQuery.error as Error).message} />
+      ) : null}
       {statusQuery.data ? (
         issues.length === 0 ? (
           <StatusBanner tone="evergreen" title={t("wizard.done.configReady")} />
@@ -810,6 +1010,56 @@ function detectTemplateFormat(content: string): "json" | "yaml" {
   return content.trimStart().startsWith("{") ? "json" : "yaml";
 }
 
+function manifestContentFingerprint(content: string): string {
+  const normalized = content.replace(/\r\n?/g, "\n").trim();
+  let hash = 2166136261;
+  for (let index = 0; index < normalized.length; index += 1) {
+    hash ^= normalized.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return `${normalized.length}:${(hash >>> 0).toString(16)}`;
+}
+
+function parseConfigurationStatus(payload: unknown, expectedAppKey: string): ConfigurationStatus {
+  if (
+    !isRecord(payload) ||
+    payload.app_key !== expectedAppKey ||
+    !["blocking", "warning", "ready"].includes(String(payload.status)) ||
+    !Array.isArray(payload.data) ||
+    !payload.data.every(isConfigurationIssue) ||
+    (payload.status === "ready" ? payload.data.length !== 0 : payload.data.length === 0)
+  ) {
+    throw new Error("配置状态响应格式无效。");
+  }
+  return payload as unknown as ConfigurationStatus;
+}
+
+function isConfigurationIssue(value: unknown): value is ConfigurationIssue {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.code === "string" &&
+    ["blocking", "warning", "info"].includes(String(value.severity)) &&
+    value.level === value.severity &&
+    typeof value.message === "string" &&
+    typeof value.subject === "string" &&
+    typeof value.target_type === "string" &&
+    typeof value.target_id === "string"
+  );
+}
+
+function parseOAuthAccessToken(payload: unknown): string {
+  if (!isRecord(payload) || typeof payload.access_token !== "string" || !payload.access_token) {
+    throw new Error("OAuth token 响应格式无效。");
+  }
+  return payload.access_token;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function diffFromChanges(changes: Array<{ action?: string; key?: string; parent_key?: string }>): NonNullable<ManifestPreviewPayload["diff"]> {
   return {
     added: changes.filter((change) => change.action?.startsWith("create")).map(changeItem),
@@ -825,4 +1075,3 @@ function changeItem(change: { action?: string; key?: string; parent_key?: string
     name: change.parent_key,
   };
 }
-

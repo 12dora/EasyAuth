@@ -35,6 +35,12 @@ type ManifestPreviewPayload = {
   preview_id?: string;
 };
 
+type ManifestPreviewBinding = {
+  payload: ManifestPreviewPayload;
+  contentSnapshot: string;
+  generation: number;
+};
+
 type ManifestImportPayload = {
   catalog_version?: string | number;
   template_version?: string | number;
@@ -52,12 +58,21 @@ export function ManifestTab({ appKey }: { appKey: string }) {
   const toast = useToast();
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const contentRef = useRef("");
+  const contentGenerationRef = useRef(0);
+  const previewRequestRef = useRef(0);
+  const fileReadRef = useRef(0);
   const [content, setContent] = useState("");
-  const [preview, setPreview] = useState<ManifestPreviewPayload | null>(null);
-  const versionsQueryKey = ["console", "app", appKey, "manifest-versions"];
+  const [preview, setPreview] = useState<ManifestPreviewBinding | null>(null);
+  const [versionsPagination, setVersionsPagination] = useState({ pageIndex: 0, pageSize: 20 });
+  const versionsQueryPrefix = ["console", "app", appKey, "manifest-versions"] as const;
+  const versionsQueryKey = [...versionsQueryPrefix, versionsPagination.pageIndex, versionsPagination.pageSize];
   const versionsQuery = useQuery({
     queryKey: versionsQueryKey,
-    queryFn: () => apiRequest<ListPayload<ManifestVersion>>(`/console/api/v1/apps/${appKey}/permission-template-versions`),
+    queryFn: () =>
+      apiRequest<ListPayload<ManifestVersion>>(
+        `/console/api/v1/apps/${appKey}/permission-template-versions?page=${versionsPagination.pageIndex + 1}&page_size=${versionsPagination.pageSize}`,
+      ),
   });
   const versions = itemsFromPayload<ManifestVersion>(versionsQuery.data);
   const versionColumns: ColumnDef<ManifestVersion>[] = [
@@ -69,40 +84,72 @@ export function ManifestTab({ appKey }: { appKey: string }) {
     data: versions,
     columns: versionColumns,
     getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
+    manualPagination: true,
+    pageCount: versionsQuery.data?.pagination?.total_pages ?? 1,
+    state: { pagination: versionsPagination },
+    onPaginationChange: setVersionsPagination,
   });
   const previewMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: ({ contentSnapshot }: { contentSnapshot: string; generation: number; requestId: number }) =>
       apiRequest<ManifestPreviewPayload>(`/console/api/v1/apps/${appKey}/permission-template-imports/preview`, {
         method: "POST",
-        body: { template_format: "json", template: content },
+        body: { template_format: "json", template: contentSnapshot },
       }),
-    onSuccess: (payload) => setPreview(payload),
-    onError: (error: Error) => {
+    onSuccess: (payload, variables) => {
+      if (
+        variables.requestId !== previewRequestRef.current ||
+        variables.generation !== contentGenerationRef.current ||
+        variables.contentSnapshot !== manifestContentSnapshot(contentRef.current)
+      ) {
+        return;
+      }
+      setPreview({ payload, contentSnapshot: variables.contentSnapshot, generation: variables.generation });
+    },
+    onError: (error: Error, variables) => {
+      if (variables.requestId !== previewRequestRef.current || variables.generation !== contentGenerationRef.current) {
+        return;
+      }
       toast.error("Manifest 预览失败", error.message);
     },
   });
   const importMutation = useMutation({
-    mutationFn: () =>
-      apiRequest<ManifestImportPayload>(`/console/api/v1/apps/${appKey}/permission-template-imports/${preview?.preview_id ?? ""}/confirm`, {
+    mutationFn: ({ previewId, contentSnapshot, generation }: { previewId: string; contentSnapshot: string; generation: number }) => {
+      if (generation !== contentGenerationRef.current || contentSnapshot !== manifestContentSnapshot(contentRef.current)) {
+        throw new Error("Manifest 内容已变化，请重新预览后再导入。");
+      }
+      return apiRequest<ManifestImportPayload>(`/console/api/v1/apps/${appKey}/permission-template-imports/${previewId}/confirm`, {
         method: "POST",
-      }),
+      });
+    },
     onSuccess: async (payload) => {
       const version = String(payload.catalog_version ?? payload.template_version ?? "");
       toast.success("导入成功", `当前目录版本：${version}`);
-      await queryClient.invalidateQueries({ queryKey: versionsQueryKey });
+      await queryClient.invalidateQueries({ queryKey: versionsQueryPrefix });
     },
     onError: (error: Error) => {
       toast.error("Manifest 导入失败", error.message);
     },
   });
+  const updateContent = (nextContent: string) => {
+    contentRef.current = nextContent;
+    contentGenerationRef.current += 1;
+    previewRequestRef.current += 1;
+    setContent(nextContent);
+    setPreview(null);
+  };
+  const currentPreview =
+    preview &&
+    preview.generation === contentGenerationRef.current &&
+    preview.contentSnapshot === manifestContentSnapshot(content)
+      ? preview
+      : null;
 
   return (
     <section className="space-y-6">
       <CurrentManifestPanel
         appKey={appKey}
         onSaved={async () => {
-          await queryClient.invalidateQueries({ queryKey: versionsQueryKey });
+          await queryClient.invalidateQueries({ queryKey: versionsQueryPrefix });
         }}
       />
       <PanelSurface className="flex flex-wrap items-center gap-2">
@@ -112,15 +159,24 @@ export function ManifestTab({ appKey }: { appKey: string }) {
           accept=".json,.yaml,.yml,application/json,text/yaml,text/plain"
           className="sr-only"
           aria-label="上传 Manifest 文件"
+          disabled={importMutation.isPending}
           onChange={(event) => {
             const file = event.currentTarget.files?.[0];
             if (!file) {
               return;
             }
-            void file.text().then(setContent);
+            const fileReadId = ++fileReadRef.current;
+            previewRequestRef.current += 1;
+            contentGenerationRef.current += 1;
+            setPreview(null);
+            void file.text().then((fileContent) => {
+              if (fileReadId === fileReadRef.current) {
+                updateContent(fileContent);
+              }
+            });
           }}
         />
-        <Button icon={<FileUp size={16} />} onClick={() => fileInputRef.current?.click()}>
+        <Button icon={<FileUp size={16} />} disabled={importMutation.isPending} onClick={() => fileInputRef.current?.click()}>
           上传文件
         </Button>
         <Button
@@ -137,26 +193,50 @@ export function ManifestTab({ appKey }: { appKey: string }) {
           aria-label="Manifest 内容"
           rows={10}
           value={content}
+          disabled={importMutation.isPending}
           onChange={(event) => {
-            setContent(event.currentTarget.value);
+            fileReadRef.current += 1;
+            updateContent(event.currentTarget.value);
           }}
         />
       </Field>
       <div className="flex flex-wrap items-center gap-2">
-        <Button variant="primary" icon={<Eye size={16} />} disabled={!content || previewMutation.isPending} onClick={() => previewMutation.mutate()}>
+        <Button
+          variant="primary"
+          icon={<Eye size={16} />}
+          disabled={!content || previewMutation.isPending}
+          onClick={() => {
+            const requestId = ++previewRequestRef.current;
+            previewMutation.mutate({
+              contentSnapshot: manifestContentSnapshot(contentRef.current),
+              generation: contentGenerationRef.current,
+              requestId,
+            });
+          }}
+        >
           预览差异
         </Button>
         <Button
           variant="primary"
           icon={<UploadCloud size={16} />}
-          disabled={!preview?.preview_id || importMutation.isPending}
-          onClick={() => importMutation.mutate()}
+          disabled={!currentPreview?.payload.preview_id || importMutation.isPending}
+          onClick={() => {
+            const previewId = currentPreview?.payload.preview_id;
+            if (!previewId || !currentPreview) {
+              return;
+            }
+            importMutation.mutate({
+              previewId,
+              contentSnapshot: currentPreview.contentSnapshot,
+              generation: currentPreview.generation,
+            });
+          }}
         >
           确认导入
         </Button>
       </div>
       {versionsQuery.error ? <StatusBanner tone="signal" title="版本历史加载失败" message={(versionsQuery.error as Error).message} /> : null}
-      {preview ? <ManifestDiffView preview={preview} /> : null}
+      {currentPreview ? <ManifestDiffView preview={currentPreview.payload} /> : null}
       <div className="space-y-3">
         <h2 className="text-base font-semibold text-ink">版本历史</h2>
         <TableFrame>
@@ -188,7 +268,7 @@ export function ManifestTab({ appKey }: { appKey: string }) {
             )}
           </TableBody>
         </TableRoot>
-          <TablePagination table={versionsTable} />
+          <TablePagination table={versionsTable} totalItems={versionsQuery.data?.pagination?.total_items ?? 0} />
         </TableFrame>
       </div>
     </section>
@@ -379,7 +459,7 @@ function ManifestDiffTable({ items }: { items: ManifestDiffItem[] }) {
           )}
         </TableBody>
       </TableRoot>
-      <TablePagination table={table} />
+      <TablePagination table={table} totalItems={items.length} />
     </TableFrame>
   );
 }
@@ -398,4 +478,8 @@ function changeItem(change: { action?: string; key?: string; parent_key?: string
     key: change.key,
     name: change.parent_key,
   };
+}
+
+function manifestContentSnapshot(content: string): string {
+  return content.replace(/\r\n?/g, "\n");
 }
