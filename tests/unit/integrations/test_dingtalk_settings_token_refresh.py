@@ -77,7 +77,7 @@ def test_credential_update_invalidates_previous_token(monkeypatch: pytest.Monkey
         "invalidate_access_token",
         invalidate,
     )
-    request = RequestFactory().put(
+    request = RequestFactory().patch(
         "/",
         data=dumps({"dingtalk_app_key": "new-app"}),
         content_type="application/json",

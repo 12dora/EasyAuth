@@ -338,7 +338,7 @@ describe("HandoverTaskDetail", () => {
     await user.click(within(dialog).getByRole("button", { name: "执行交接" }));
 
     await waitFor(() => expect(releaseFirstExecute).toBeDefined());
-    await user.click(within(dialog).getByRole("button", { name: "关闭弹窗" }));
+    expect(within(dialog).getByRole("button", { name: "关闭弹窗" })).toBeDisabled();
     expect(screen.getByRole("dialog")).toBeVisible();
 
     releaseFirstExecute?.();
@@ -346,6 +346,7 @@ describe("HandoverTaskDetail", () => {
     expect(await within(dialog).findByText("等待下游处理")).toBeVisible();
     expect(within(dialog).queryByRole("button", { name: "完成" })).toBeNull();
     expect(within(dialog).getByRole("button", { name: "执行交接" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "上一步" })).toBeDisabled();
 
     await user.click(within(dialog).getByRole("button", { name: "查询状态" }));
 

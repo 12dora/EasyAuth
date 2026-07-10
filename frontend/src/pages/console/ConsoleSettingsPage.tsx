@@ -64,7 +64,7 @@ export function ConsoleSettingsPage() {
         body.authentik_api_token = apiToken.trim();
       }
       return apiRequest<IntegrationSettingsPayload>("/console/api/v1/settings/integrations", {
-        method: "PUT",
+        method: "PATCH",
         body,
       });
     },
@@ -172,7 +172,7 @@ function DingtalkIntegrationSection({ settings }: { settings: IntegrationSetting
 
   const saveMutation = useMutation({
     mutationFn: () => {
-      // PUT 载荷只包含用户改动过的字段: 未动的字段省略(=保持不变), secret 留空同样省略。
+      // PATCH 载荷只包含用户改动过的字段: 未动的字段省略(=保持不变), secret 留空同样省略。
       const body: JsonObject = {};
       if (settings && appKey.trim() !== settings.dingtalk_app_key) {
         body.dingtalk_app_key = appKey.trim();
@@ -184,7 +184,7 @@ function DingtalkIntegrationSection({ settings }: { settings: IntegrationSetting
         body.dingtalk_agent_id = agentId.trim();
       }
       return apiRequest<IntegrationSettingsPayload>("/console/api/v1/settings/integrations", {
-        method: "PUT",
+        method: "PATCH",
         body,
       });
     },

@@ -31,16 +31,15 @@ if TYPE_CHECKING:
 AUTHENTIK_BASE_URL_INVALID_MESSAGE: Final = "authentik_base_url 必须是 http(s) URL 或留空。"
 
 
-class IntegrationSettingsPayload(BaseModel):
+class IntegrationSettingsPatch(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
 
+    # 默认值仅供 Pydantic 构造模型; 字段是否出现在 PATCH 中由 model_fields_set 判定。
     authentik_base_url: str = Field(default="", max_length=512)
-    # None 表示保持现有 token 不变; 空字符串表示清除覆盖值。
-    authentik_api_token: str | None = Field(default=None, max_length=512)
-    dingtalk_app_key: str | None = Field(default=None, max_length=128)
-    # 与 authentik_api_token 同语义: None 保持不变, 空串清除。
-    dingtalk_app_secret: str | None = Field(default=None, max_length=512)
-    dingtalk_agent_id: str | None = Field(default=None, max_length=64)
+    authentik_api_token: str = Field(default="", max_length=512)
+    dingtalk_app_key: str = Field(default="", max_length=128)
+    dingtalk_app_secret: str = Field(default="", max_length=512)
+    dingtalk_agent_id: str = Field(default="", max_length=64)
 
     @field_validator("authentik_base_url")
     @classmethod
@@ -54,11 +53,14 @@ class IntegrationSettingsPayload(BaseModel):
                 raise ValueError(AUTHENTIK_BASE_URL_INVALID_MESSAGE) from error
         return normalized
 
-    @field_validator("authentik_api_token")
+    @field_validator(
+        "authentik_api_token",
+        "dingtalk_app_key",
+        "dingtalk_app_secret",
+        "dingtalk_agent_id",
+    )
     @classmethod
-    def normalize_api_token(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
+    def normalize_string(cls, value: str) -> str:
         return value.strip()
 
 
@@ -70,7 +72,7 @@ def console_integration_settings(request: HttpRequest) -> JsonResponse:
             return response
     if request.method == "GET":
         return _settings_response()
-    if request.method == "PUT":
+    if request.method == "PATCH":
         return _update_settings(request, actor_id=actor_id)
     return error_response(
         ErrorCode.VALIDATION_ERROR,
@@ -81,7 +83,7 @@ def console_integration_settings(request: HttpRequest) -> JsonResponse:
 
 def _update_settings(request: HttpRequest, *, actor_id: str) -> JsonResponse:
     try:
-        payload = IntegrationSettingsPayload.model_validate_json(request.body)
+        payload = IntegrationSettingsPatch.model_validate_json(request.body)
     except ValidationError as exc:
         return error_response(
             ErrorCode.VALIDATION_ERROR,
@@ -93,37 +95,36 @@ def _update_settings(request: HttpRequest, *, actor_id: str) -> JsonResponse:
     if not fields_set:
         return _settings_response()
 
-    previous_dingtalk = dingtalk_runtime_config()
     with transaction.atomic():
         row, _created = IntegrationSettings.objects.select_for_update().get_or_create(
             pk=INTEGRATION_SETTINGS_SINGLETON_ID,
         )
+        # 必须在锁内读取当前生效凭证, 避免并发 PATCH 失效另一个请求之前的陈旧缓存键。
+        previous_dingtalk = dingtalk_runtime_config()
         update_fields: list[str] = []
         if "authentik_base_url" in fields_set:
             row.authentik_base_url = payload.authentik_base_url
             update_fields.append("authentik_base_url")
         api_token_changed = False
-        if "authentik_api_token" in fields_set and payload.authentik_api_token is not None:
+        if "authentik_api_token" in fields_set:
             api_token_changed = payload.authentik_api_token != row.authentik_api_token
             row.authentik_api_token = payload.authentik_api_token
             update_fields.append("authentik_api_token")
         dingtalk_secret_changed = False
         dingtalk_credentials_changed = False
-        if "dingtalk_app_key" in fields_set and payload.dingtalk_app_key is not None:
-            normalized_app_key = payload.dingtalk_app_key.strip()
-            dingtalk_credentials_changed = normalized_app_key != row.dingtalk_app_key
-            row.dingtalk_app_key = normalized_app_key
+        if "dingtalk_app_key" in fields_set:
+            dingtalk_credentials_changed = payload.dingtalk_app_key != row.dingtalk_app_key
+            row.dingtalk_app_key = payload.dingtalk_app_key
             update_fields.append("dingtalk_app_key")
-        if "dingtalk_app_secret" in fields_set and payload.dingtalk_app_secret is not None:
-            normalized_secret = payload.dingtalk_app_secret.strip()
-            dingtalk_secret_changed = normalized_secret != row.dingtalk_app_secret
+        if "dingtalk_app_secret" in fields_set:
+            dingtalk_secret_changed = payload.dingtalk_app_secret != row.dingtalk_app_secret
             dingtalk_credentials_changed = (
                 dingtalk_credentials_changed or dingtalk_secret_changed
             )
-            row.dingtalk_app_secret = normalized_secret
+            row.dingtalk_app_secret = payload.dingtalk_app_secret
             update_fields.append("dingtalk_app_secret")
-        if "dingtalk_agent_id" in fields_set and payload.dingtalk_agent_id is not None:
-            row.dingtalk_agent_id = payload.dingtalk_agent_id.strip()
+        if "dingtalk_agent_id" in fields_set:
+            row.dingtalk_agent_id = payload.dingtalk_agent_id
             update_fields.append("dingtalk_agent_id")
         row.updated_by = actor_id
         row.save(update_fields=[*update_fields, "updated_by", "updated_at"])

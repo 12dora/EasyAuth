@@ -222,6 +222,7 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
   };
 
   const executeStatuses = selectedAppKeys.map((appKey) => executeState[appKey]?.status);
+  const executionStarted = executeStatuses.some((status) => status !== undefined);
   const allExecuted = executeStatuses.length > 0 && executeStatuses.every((status) => status === "done");
   const someExecuteFailed = executeStatuses.some((status) => status === "failed");
   const someExecuteAsyncPending = executeStatuses.some((status) => status === "async_pending");
@@ -291,7 +292,7 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
   };
 
   return (
-    <Dialog title={t("handover.wizard.title")} size="xl" onClose={closeWizard}>
+    <Dialog title={t("handover.wizard.title")} size="xl" onClose={closeWizard} closeDisabled={isExecuting}>
       <div className="space-y-5">
         <WizardStepIndicator step={step} />
         {step === 0 ? (
@@ -530,7 +531,11 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
           </Button>
           <div className="flex flex-wrap items-center gap-2">
             {step > 0 ? (
-              <Button type="button" disabled={isSaving || isExecuting} onClick={() => setStep(step - 1)}>
+              <Button
+                type="button"
+                disabled={isSaving || isExecuting || executionStarted}
+                onClick={() => setStep(step - 1)}
+              >
                 {t("common.back")}
               </Button>
             ) : null}

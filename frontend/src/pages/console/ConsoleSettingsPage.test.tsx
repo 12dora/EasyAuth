@@ -63,6 +63,25 @@ describe("ConsoleSettingsPage", () => {
       expect(requestBody(fetchMock)).toEqual({ authentik_api_token: "new-token" });
     });
   });
+
+  test("清空 Authentik URL 时发送显式空字符串", async () => {
+    const fetchMock = settingsFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderSettings();
+
+    const authentikForm = (await screen.findByLabelText(/Authentik Base URL/)).closest("form");
+    expect(authentikForm).not.toBeNull();
+    const baseUrlInput = within(authentikForm!).getByLabelText(/Authentik Base URL/);
+    await waitFor(() => expect(baseUrlInput).toHaveValue("https://auth.example.com"));
+    await user.clear(baseUrlInput);
+    await user.click(within(authentikForm!).getByRole("button", { name: "保存设置" }));
+
+    await waitFor(() => {
+      expect(requestBody(fetchMock)).toEqual({ authentik_base_url: "" });
+    });
+  });
 });
 
 function renderSettings() {
@@ -87,7 +106,7 @@ function settingsFetchMock() {
     if (url === SETTINGS_URL && (!init?.method || init.method === "GET")) {
       return jsonResponse(SETTINGS);
     }
-    if (url === SETTINGS_URL && init?.method === "PUT") {
+    if (url === SETTINGS_URL && init?.method === "PATCH") {
       return jsonResponse(SETTINGS);
     }
     if (url === TWO_FACTOR_URL && (!init?.method || init.method === "GET")) {
@@ -98,7 +117,9 @@ function settingsFetchMock() {
 }
 
 function requestBody(fetchMock: ReturnType<typeof settingsFetchMock>) {
-  const call = fetchMock.mock.calls.find(([input, init]) => String(input) === SETTINGS_URL && init?.method === "PUT");
+  const call = fetchMock.mock.calls.find(
+    ([input, init]) => String(input) === SETTINGS_URL && init?.method === "PATCH",
+  );
   return JSON.parse(String(call?.[1]?.body));
 }
 

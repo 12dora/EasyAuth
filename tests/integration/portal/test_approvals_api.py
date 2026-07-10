@@ -266,6 +266,41 @@ def test_processed_approvals_count_and_slice_in_database() -> None:
     }
 
 
+def test_processed_approvals_clamp_page_to_last_page() -> None:
+    # Given: 审批人已有两条处理记录, 每页一条。
+    client, approver = logged_in_client("portal-history-clamped-approver")
+    for index in range(2):
+        access_request = _submitted_request(
+            f"portal-history-clamped-applicant-{index}",
+            f"portal-history-clamped-app-{index}",
+            approver_id=approver.authentik_user_id,
+        )
+        response = client.post(
+            f"/portal/api/v1/me/approvals/{access_request.id}/reject",
+            data=dumps({"comment": "分页钳制测试"}),
+            content_type="application/json",
+        )
+        assert response.status_code == HTTPStatus.OK
+
+    # When: 请求远超总页数的页码。
+    response = client.get(
+        "/portal/api/v1/me/approvals?status=processed&page=999&page_size=1",
+    )
+
+    # Then: 服务端返回真实最后一页, 不暴露 page > total_pages 的矛盾信封。
+    assert response.status_code == HTTPStatus.OK
+    body = _json_object(response.content)
+    data = body["data"]
+    assert isinstance(data, list)
+    assert len(data) == 1
+    assert body["pagination"] == {
+        "page": 2,
+        "page_size": 1,
+        "total_items": 2,
+        "total_pages": 2,
+    }
+
+
 def _submitted_request(
     user_key: str,
     app_key: str,

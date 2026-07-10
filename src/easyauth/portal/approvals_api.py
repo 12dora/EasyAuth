@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from http import HTTPStatus
 from typing import TYPE_CHECKING, ClassVar
 
@@ -26,7 +27,7 @@ from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue
-from easyauth.api.pagination import pagination_item
+from easyauth.api.pagination import pagination_item, total_pages
 from easyauth.api.responses import error_response as _error_response
 from easyauth.api.responses import json_response as _json_response
 from easyauth.applications.models import AuthorizationGroupGrant
@@ -201,6 +202,9 @@ def _approval_page(user: UserMirror, request: HttpRequest, *, status: str) -> Po
             .order_by("-decided_at", "id")
         )
     total_items = visible.count()
+    last_page = max(total_pages(total_items=total_items, page_size=page.page_size), 1)
+    if page.page > last_page:
+        page = replace(page, page=last_page)
     page_rows = visible[page.start : page.stop]
     items = tuple(_approval_item(access_request) for access_request in page_rows)
     return build_page(items, request=page, total_items=total_items)

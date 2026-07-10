@@ -85,6 +85,35 @@ interface PendingDecision {
 }
 
 const DEFAULT_PAGE_SIZE = 20;
+const APPROVAL_REQUEST_TYPES = new Set(["grant", "change", "revoke", "renew"]);
+const APPROVAL_STATUSES = new Set([
+  "submitted",
+  "approved",
+  "rejected",
+  "grant_applied",
+  "grant_failed",
+  "grant_expired",
+]);
+const APPROVAL_GRANT_TYPES = new Set(["permanent", "timed"]);
+const APPROVAL_ROW_KEYS = [
+  "id",
+  "app_key",
+  "app_name",
+  "request_type",
+  "status",
+  "status_label",
+  "grant_type",
+  "grant_expires_at",
+  "reason",
+  "submitted_at",
+  "authorization_groups",
+  "direct_grants",
+  "decided_at",
+  "decision_comment",
+  "applicant",
+  "approver_user_ids",
+  "decided_by",
+] as const;
 
 export function PortalApprovalsSection() {
   const { t } = useI18n();
@@ -93,6 +122,7 @@ export function PortalApprovalsSection() {
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE });
   const [pendingDecision, setPendingDecision] = useState<PendingDecision | null>(null);
   const [noticeKey, setNoticeKey] = useState<ApprovalNoticeKey>("");
+  const pendingApprovalId = pendingDecision?.approval.id;
 
   const query = useQuery({
     queryKey: ["portal", "approvals", tab, pagination.pageIndex, pagination.pageSize],
@@ -105,13 +135,14 @@ export function PortalApprovalsSection() {
       ),
   });
   const detailQuery = useQuery({
-    queryKey: ["portal", "approvals", "detail", pendingDecision?.approval.id],
+    queryKey: ["portal", "approvals", "detail", pendingApprovalId],
     queryFn: async () =>
       parseApprovalDetailPayload(
-        await apiRequest<unknown>(`/portal/api/v1/me/approvals/${pendingDecision?.approval.id ?? 0}`),
+        await apiRequest<unknown>(`/portal/api/v1/me/approvals/${pendingApprovalId ?? 0}`),
         t("portal.approvals.invalidPayload"),
+        pendingApprovalId ?? 0,
       ),
-    enabled: pendingDecision !== null,
+    enabled: pendingApprovalId !== undefined,
   });
   const decisionMutation = useMutation({
     mutationFn: ({ mode, approval, comment }: PendingDecision & { comment: string }) =>
@@ -124,9 +155,9 @@ export function PortalApprovalsSection() {
       setNoticeKey(variables.mode === "approve" ? "approvals.approved" : "approvals.rejected");
       void queryClient.invalidateQueries({ queryKey: ["portal", "approvals"] });
     },
-    onError: (error) => {
+    onError: (error, variables) => {
       // 决定已提交但授权失败是复合结果: 不得保留旧待办或允许重复提交。
-      if (decisionWasCommitted(error)) {
+      if (isCommittedGrantFailure(error, variables.approval.id)) {
         setPendingDecision(null);
         setNoticeKey("approvals.grantFailedCommitted");
         void queryClient.invalidateQueries({ queryKey: ["portal", "approvals"] });
@@ -296,10 +327,16 @@ export function PortalApprovalsSection() {
           )}
           errorMessage={dialogErrorMessage}
           isSubmitting={decisionMutation.isPending}
-          canSubmit={Boolean(detailQuery.data?.approval && approvalFactsAreComplete(detailQuery.data.approval))}
+          canSubmit={Boolean(
+            detailQuery.data?.approval &&
+              approvalIsDecidable(detailQuery.data.approval, pendingDecision.approval.id)
+          )}
           onClose={() => setPendingDecision(null)}
           onSubmit={(comment) => {
-            if (detailQuery.data?.approval && approvalFactsAreComplete(detailQuery.data.approval)) {
+            if (
+              detailQuery.data?.approval &&
+              approvalIsDecidable(detailQuery.data.approval, pendingDecision.approval.id)
+            ) {
               decisionMutation.mutate({
                 mode: pendingDecision.mode,
                 approval: detailQuery.data.approval,
@@ -456,6 +493,8 @@ function decisionDetails(
     );
   }
   const factsComplete = approvalFactsAreComplete(approval);
+  const decisionAlreadyCommitted =
+    approval.status !== "submitted" || approval.decided_at !== null || Boolean(approval.decided_by);
   return (
     <section className="grid gap-3 rounded-[3px] border border-ink/12 bg-paper-deep/20 p-3">
       <strong className="text-sm text-ink">{t("portal.approvals.facts")}</strong>
@@ -472,7 +511,9 @@ function decisionDetails(
         <dt className="text-ink-faint">{t("portal.column.reason")}</dt>
         <dd>{approval.reason || "-"}</dd>
       </dl>
-      {!factsComplete ? (
+      {decisionAlreadyCommitted ? (
+        <StatusBanner tone="amber" title={t("approvals.conflict")} />
+      ) : !factsComplete ? (
         <StatusBanner tone="signal" title={t("portal.approvals.groupWithoutGrants")} />
       ) : null}
     </section>
@@ -489,7 +530,17 @@ function approvalFactsAreComplete(approval: PortalApprovalRow): boolean {
   const targetCount =
     approval.direct_grants.length +
     approval.authorization_groups.reduce((count, group) => count + group.grants.length, 0);
-  return approval.request_type === "revoke" || targetCount > 0;
+  return approval.reason.trim().length > 0 && (approval.request_type === "revoke" || targetCount > 0);
+}
+
+function approvalIsDecidable(approval: PortalApprovalRow, expectedId: number): boolean {
+  return (
+    approval.id === expectedId &&
+    approval.status === "submitted" &&
+    approval.decided_at === null &&
+    !approval.decided_by &&
+    approvalFactsAreComplete(approval)
+  );
 }
 
 function requestTypeLabel(t: Translator, requestType: string): string {
@@ -512,21 +563,33 @@ function grantLabel(grant: ApprovalGrantFact): string {
   return `${name} (${grant.permission}) · ${grant.scope}`;
 }
 
-function decisionWasCommitted(error: unknown): boolean {
+function isCommittedGrantFailure(error: unknown, expectedApprovalId: number): boolean {
+  if (!(error instanceof ApiError) || error.status !== 422 || !isRecord(error.details)) {
+    return false;
+  }
+  const approval = error.details.approval;
   return (
-    error instanceof ApiError &&
-    isRecord(error.details) &&
-    error.details.decision_committed === true
+    error.details.decision_committed === true &&
+    error.details.status === "grant_failed" &&
+    isPortalApprovalRow(approval) &&
+    approval.id === expectedApprovalId &&
+    approval.status === "grant_failed"
   );
 }
 
 function parseApprovalListPayload(payload: unknown, errorMessage: string): ApprovalListPayload {
-  if (!isRecord(payload) || !Array.isArray(payload.data) || !isPagination(payload.pagination)) {
+  if (
+    !isRecord(payload) ||
+    !hasExactKeys(payload, ["data", "pagination"]) ||
+    !Array.isArray(payload.data) ||
+    !isPagination(payload.pagination)
+  ) {
     throw new Error(errorMessage);
   }
   const expectedTotalPages = Math.ceil(payload.pagination.total_items / payload.pagination.page_size);
   if (
     payload.pagination.total_pages !== expectedTotalPages ||
+    payload.pagination.page > Math.max(payload.pagination.total_pages, 1) ||
     payload.data.length > payload.pagination.page_size ||
     !payload.data.every(isPortalApprovalRow)
   ) {
@@ -538,15 +601,21 @@ function parseApprovalListPayload(payload: unknown, errorMessage: string): Appro
 function parseApprovalDetailPayload(
   payload: unknown,
   errorMessage: string,
+  expectedApprovalId: number,
 ): { approval: PortalApprovalRow } {
-  if (!isRecord(payload) || !isPortalApprovalRow(payload.approval)) {
+  if (
+    !isRecord(payload) ||
+    !hasExactKeys(payload, ["approval"]) ||
+    !isPortalApprovalRow(payload.approval) ||
+    payload.approval.id !== expectedApprovalId
+  ) {
     throw new Error(errorMessage);
   }
   return { approval: payload.approval };
 }
 
 function isPortalApprovalRow(value: unknown): value is PortalApprovalRow {
-  if (!isRecord(value)) {
+  if (!isRecord(value) || !hasExactKeys(value, APPROVAL_ROW_KEYS)) {
     return false;
   }
   const requiredStrings = [
@@ -563,13 +632,18 @@ function isPortalApprovalRow(value: unknown): value is PortalApprovalRow {
     Number.isInteger(value.id) &&
     typeof value.id === "number" &&
     value.id > 0 &&
-    requiredStrings.every((item) => typeof item === "string") &&
-    isNullableString(value.grant_expires_at) &&
+    requiredStrings.every(isNonEmptyString) &&
+    APPROVAL_REQUEST_TYPES.has(value.request_type as string) &&
+    APPROVAL_STATUSES.has(value.status as string) &&
+    APPROVAL_GRANT_TYPES.has(value.grant_type as string) &&
+    isNullableDateTimeString(value.grant_expires_at) &&
+    (value.grant_type === "timed" ? value.grant_expires_at !== null : value.grant_expires_at === null) &&
+    isDateTimeString(value.submitted_at) &&
     Array.isArray(value.authorization_groups) &&
     value.authorization_groups.every(isApprovalAuthorizationGroup) &&
     Array.isArray(value.direct_grants) &&
     value.direct_grants.every(isApprovalGrantFact) &&
-    isNullableString(value.decided_at) &&
+    isNullableDateTimeString(value.decided_at) &&
     isNullableString(value.decision_comment) &&
     isApprovalApplicant(value.applicant) &&
     Array.isArray(value.approver_user_ids) &&
@@ -581,8 +655,9 @@ function isPortalApprovalRow(value: unknown): value is PortalApprovalRow {
 function isApprovalAuthorizationGroup(value: unknown): value is ApprovalAuthorizationGroup {
   return (
     isRecord(value) &&
-    typeof value.key === "string" &&
-    typeof value.kind === "string" &&
+    hasExactKeys(value, ["key", "kind", "name", "grants"]) &&
+    isNonEmptyString(value.key) &&
+    (value.kind === "role" || value.kind === "bundle") &&
     typeof value.name === "string" &&
     Array.isArray(value.grants) &&
     value.grants.every(isApprovalGrantFact)
@@ -592,16 +667,18 @@ function isApprovalAuthorizationGroup(value: unknown): value is ApprovalAuthoriz
 function isApprovalGrantFact(value: unknown): value is ApprovalGrantFact {
   return (
     isRecord(value) &&
-    typeof value.permission === "string" &&
+    hasExactKeys(value, ["permission", "permission_name", "scope"]) &&
+    isNonEmptyString(value.permission) &&
     typeof value.permission_name === "string" &&
-    typeof value.scope === "string"
+    isNonEmptyString(value.scope)
   );
 }
 
 function isApprovalApplicant(value: unknown): value is Required<PortalApprovalApplicant> {
   return (
     isRecord(value) &&
-    typeof value.user_id === "string" &&
+    hasExactKeys(value, ["user_id", "name", "email", "department"]) &&
+    isNonEmptyString(value.user_id) &&
     typeof value.name === "string" &&
     typeof value.email === "string" &&
     typeof value.department === "string"
@@ -611,6 +688,7 @@ function isApprovalApplicant(value: unknown): value is Required<PortalApprovalAp
 function isPagination(value: unknown): value is Pagination {
   return (
     isRecord(value) &&
+    hasExactKeys(value, ["page", "page_size", "total_items", "total_pages"]) &&
     isIntegerAtLeast(value.page, 1) &&
     isIntegerAtLeast(value.page_size, 1) &&
     isIntegerAtLeast(value.total_items, 0) &&
@@ -624,6 +702,23 @@ function isIntegerAtLeast(value: unknown, minimum: number): value is number {
 
 function isNullableString(value: unknown): value is string | null {
   return value === null || typeof value === "string";
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isDateTimeString(value: unknown): value is string {
+  return typeof value === "string" && value.includes("T") && !Number.isNaN(Date.parse(value));
+}
+
+function isNullableDateTimeString(value: unknown): value is string | null {
+  return value === null || isDateTimeString(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, expectedKeys: readonly string[]): boolean {
+  const keys = Object.keys(value);
+  return keys.length === expectedKeys.length && expectedKeys.every((key) => key in value);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

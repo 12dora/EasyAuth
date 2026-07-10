@@ -4,6 +4,7 @@ from http import HTTPStatus
 
 import pytest
 from django.test import Client
+from django.urls import reverse
 
 from easyauth.accounts.auth import AUTHENTIK_GROUPS_SESSION_KEY, AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
@@ -65,13 +66,25 @@ def test_console_app_detail_serves_react_shell_without_leaking_unowned_app() -> 
     "path",
     [
         "/console/apps/new",
+        "/console/apps/new/",
         "/console/teams",
+        "/console/teams/",
         "/console/teams/7",
         "/console/people",
+        "/console/people/",
         "/console/lifecycle/handover-tasks",
+        "/console/lifecycle/handover-tasks/",
         "/console/lifecycle/handover-tasks/11",
         "/console/lifecycle/onboarding",
+        "/console/lifecycle/onboarding/",
         "/console/approval-templates",
+        "/console/approval-templates/",
+        "/console/operations",
+        "/console/operations/",
+        "/console/operations/access-requests",
+        "/console/operations/approval-instances",
+        "/console/settings",
+        "/console/settings/",
     ],
 )
 def test_console_client_routes_serve_react_shell_for_authenticated_admin(path: str) -> None:
@@ -81,6 +94,48 @@ def test_console_client_routes_serve_react_shell_for_authenticated_admin(path: s
 
     assert response.status_code == HTTPStatus.OK
     assert 'data-easyauth-react-shell="console"' in response.content.decode()
+
+
+def test_console_api_route_takes_priority_over_client_shell_routes() -> None:
+    client = _logged_in_console_user("react-console-api-admin", is_superuser=True)
+
+    response = client.get("/console/api/v1/apps")
+
+    assert response.status_code == HTTPStatus.OK
+    assert response.headers["Content-Type"].startswith("application/json")
+    assert 'data-easyauth-react-shell="console"' not in response.content.decode()
+
+
+def test_console_page_route_names_do_not_shadow_api_route_names() -> None:
+    assert reverse("admin_console:console-teams") == "/console/api/v1/teams"
+    assert reverse("admin_console:console-approval-templates") == (
+        "/console/api/v1/approval-templates"
+    )
+    assert reverse("admin_console:console-teams-page") == "/console/teams"
+    assert reverse("admin_console:console-approval-templates-page") == (
+        "/console/approval-templates"
+    )
+
+
+def test_console_root_without_slash_redirects_to_react_shell() -> None:
+    client = _logged_in_console_user("react-console-root-admin", is_superuser=True)
+
+    response = client.get("/console", follow=True)
+
+    assert response.redirect_chain == [("/console/", HTTPStatus.MOVED_PERMANENTLY)]
+    assert response.status_code == HTTPStatus.OK
+    assert 'data-easyauth-react-shell="console"' in response.content.decode()
+
+
+def test_console_app_new_route_does_not_resolve_as_app_detail() -> None:
+    client = _logged_in_console_user("react-console-new-admin", is_superuser=True)
+    assert not App.objects.filter(app_key="new").exists()
+
+    response = client.get("/console/apps/new")
+
+    assert response.status_code == HTTPStatus.OK
+    assert 'data-easyauth-react-shell="console"' in response.content.decode()
+    assert "data-initial-app-key" not in response.content.decode()
 
 
 def test_console_client_route_redirects_to_login_without_session() -> None:

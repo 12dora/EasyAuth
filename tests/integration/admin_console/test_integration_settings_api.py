@@ -9,6 +9,7 @@ from django.test import Client
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import UserMirror
 from easyauth.applications.integration_settings import IntegrationSettings
+from easyauth.audit.models import AuditLog
 
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
@@ -30,10 +31,10 @@ def test_integration_settings_get_returns_env_fallback() -> None:
     assert payload["authentik_base_url_effective"] == "http://localhost:19000"
 
 
-def test_integration_settings_put_sets_override_and_hides_token() -> None:
-    client = _logged_in_superuser("settings-put-admin")
+def test_integration_settings_patch_sets_override_and_hides_token() -> None:
+    client = _logged_in_superuser("settings-patch-admin")
 
-    response = client.put(
+    response = client.patch(
         SETTINGS_API_URL,
         data={
             "authentik_base_url": "https://auth.jiefakj.com/",
@@ -50,7 +51,7 @@ def test_integration_settings_put_sets_override_and_hides_token() -> None:
     assert payload["authentik_base_url_source"] == "override"
     assert payload["authentik_api_token_configured"] is True
     assert payload["authentik_api_token_source"] == "override"  # noqa: S105 - 配置来源标记, 非凭据.
-    assert payload["updated_by"] == "settings-put-admin"
+    assert payload["updated_by"] == "settings-patch-admin"
     assert "ak-secret-token" not in body
 
     row = IntegrationSettings.objects.get(pk=1)
@@ -61,7 +62,7 @@ def test_integration_settings_put_sets_override_and_hides_token() -> None:
 def test_integration_settings_token_is_encrypted_at_rest() -> None:
     # Given: 管理员保存了 Authentik 管理 token。
     client = _logged_in_superuser("settings-encrypt-admin")
-    response = client.put(
+    response = client.patch(
         SETTINGS_API_URL,
         data={
             "authentik_base_url": "https://auth.jiefakj.com/",
@@ -89,7 +90,7 @@ def test_integration_settings_rejects_plaintext_http_base_url() -> None:
     client = _logged_in_superuser("settings-http-admin")
 
     # When: 保存该配置。
-    response = client.put(
+    response = client.patch(
         SETTINGS_API_URL,
         data={"authentik_base_url": "http://auth.internal.example"},
         content_type="application/json",
@@ -100,13 +101,13 @@ def test_integration_settings_rejects_plaintext_http_base_url() -> None:
     assert IntegrationSettings.load().authentik_base_url == ""
 
 
-def test_integration_settings_put_keeps_token_when_omitted() -> None:
+def test_integration_settings_patch_keeps_token_when_omitted() -> None:
     client = _logged_in_superuser("settings-keep-admin")
     row = IntegrationSettings.load()
     row.authentik_api_token = "existing-token"  # noqa: S105 - 测试用假 token.
     row.save()
 
-    response = client.put(
+    response = client.patch(
         SETTINGS_API_URL,
         data={"authentik_base_url": "https://auth.example.com"},
         content_type="application/json",
@@ -118,14 +119,14 @@ def test_integration_settings_put_keeps_token_when_omitted() -> None:
     assert row.authentik_base_url == "https://auth.example.com"
 
 
-def test_integration_settings_put_keeps_authentik_when_only_dingtalk_fields_are_sent() -> None:
+def test_integration_settings_patch_keeps_authentik_when_only_dingtalk_fields_are_sent() -> None:
     client = _logged_in_superuser("settings-dingtalk-admin")
     row = IntegrationSettings.load()
     row.authentik_base_url = "https://auth.example.com"
     row.authentik_api_token = "existing-token"  # noqa: S105 - 测试用假 token.
     row.save()
 
-    response = client.put(
+    response = client.patch(
         SETTINGS_API_URL,
         data={"dingtalk_app_key": "ding-app", "dingtalk_agent_id": "12345"},
         content_type="application/json",
@@ -139,27 +140,80 @@ def test_integration_settings_put_keeps_authentik_when_only_dingtalk_fields_are_
     assert row.dingtalk_agent_id == "12345"
 
 
-def test_integration_settings_put_can_explicitly_clear_authentik_base_url() -> None:
+def test_integration_settings_patch_can_explicitly_clear_fields() -> None:
     client = _logged_in_superuser("settings-clear-base-url-admin")
     row = IntegrationSettings.load()
     row.authentik_base_url = "https://auth.example.com"
+    row.authentik_api_token = "existing-token"  # noqa: S105 - 测试用假 token.
+    row.dingtalk_app_key = "ding-app"
+    row.dingtalk_app_secret = "ding-secret"  # noqa: S105 - 测试用假 secret.
+    row.dingtalk_agent_id = "12345"
     row.save()
 
-    response = client.put(
+    response = client.patch(
         SETTINGS_API_URL,
-        data={"authentik_base_url": ""},
+        data={
+            "authentik_base_url": "",
+            "authentik_api_token": "",
+            "dingtalk_app_key": "",
+            "dingtalk_app_secret": "",
+            "dingtalk_agent_id": "",
+        },
         content_type="application/json",
     )
 
     assert response.status_code == HTTPStatus.OK
     row.refresh_from_db()
     assert row.authentik_base_url == ""
+    assert row.authentik_api_token == ""
+    assert row.dingtalk_app_key == ""
+    assert row.dingtalk_app_secret == ""
+    assert row.dingtalk_agent_id == ""
 
 
-def test_integration_settings_put_rejects_invalid_url() -> None:
-    client = _logged_in_superuser("settings-invalid-admin")
+def test_integration_settings_patch_rejects_null_instead_of_treating_it_as_omitted() -> None:
+    client = _logged_in_superuser("settings-null-admin")
+
+    response = client.patch(
+        SETTINGS_API_URL,
+        data={"authentik_base_url": None},
+        content_type="application/json",
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+
+
+def test_integration_settings_empty_patch_has_no_write_or_audit_side_effect() -> None:
+    client = _logged_in_superuser("settings-empty-patch-admin")
+    row = IntegrationSettings.load()
+    row.updated_by = "original-admin"
+    row.save()
+
+    response = client.patch(SETTINGS_API_URL, data={}, content_type="application/json")
+
+    assert response.status_code == HTTPStatus.OK
+    row.refresh_from_db()
+    assert row.updated_by == "original-admin"
+    assert AuditLog.objects.filter(event_type="integration_settings_updated").exists() is False
+
+
+def test_integration_settings_put_is_not_supported() -> None:
+    client = _logged_in_superuser("settings-put-admin")
 
     response = client.put(
+        SETTINGS_API_URL,
+        data={"authentik_base_url": "https://auth.example.com"},
+        content_type="application/json",
+    )
+
+    assert response.status_code == HTTPStatus.METHOD_NOT_ALLOWED
+    assert IntegrationSettings.objects.exists() is False
+
+
+def test_integration_settings_patch_rejects_invalid_url() -> None:
+    client = _logged_in_superuser("settings-invalid-admin")
+
+    response = client.patch(
         SETTINGS_API_URL,
         data={"authentik_base_url": "ftp://auth.example.com"},
         content_type="application/json",
