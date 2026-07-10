@@ -133,7 +133,7 @@ describe("useAccessRequestForm", () => {
     expect(result.current.canSubmit).toBe(true);
   });
 
-  test("FF-09: direct 与 authorization group 的覆盖关系不受操作顺序影响", async () => {
+  test("FF-09: direct 与 authorization group 的覆盖关系不受操作顺序影响且提交载荷一致", async () => {
     const catalog = scopedCatalog({
       authorization_groups: [
         {
@@ -146,7 +146,18 @@ describe("useAccessRequestForm", () => {
         },
       ],
     });
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => jsonResponse(catalog)));
+    const submittedPayloads: unknown[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input) === "/portal/api/v1/request-catalog") {
+        return jsonResponse(catalog);
+      }
+      if (String(input) === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
+        submittedPayloads.push(JSON.parse(String(init.body)));
+        return jsonResponse({ access_request: { id: submittedPayloads.length } }, 201);
+      }
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
     const { result } = await renderReadyForm();
 
     act(() => result.current.changeAppKey("crm"));
@@ -157,10 +168,25 @@ describe("useAccessRequestForm", () => {
     act(() => result.current.changeAuthorizationGroupKey("customer-reader"));
     expect(result.current.selectedPermissionKeys).toEqual([]);
 
+    act(() => result.current.changeReason("申请客户查看权限"));
+    await waitFor(() => expect(result.current.canSubmit).toBe(true));
+    act(() => result.current.submit());
+    await waitFor(() => expect(submittedPayloads).toHaveLength(1));
+    await waitFor(() => expect(result.current.authorizationGroupKey).toBe(""));
+
+    act(() => result.current.changeAuthorizationGroupKey("customer-reader"));
+
     act(() => result.current.changePermissionScope(permission, "SELF"));
     expect(result.current.selectedPermissionKeys).toEqual([]);
 
-    act(() => result.current.changeAuthorizationGroupKey(""));
+    act(() => result.current.changeReason("申请客户查看权限"));
+    await waitFor(() => expect(result.current.canSubmit).toBe(true));
+    act(() => result.current.submit());
+    await waitFor(() => expect(submittedPayloads).toHaveLength(2));
+    await waitFor(() => expect(result.current.authorizationGroupKey).toBe(""));
+
+    expect(submittedPayloads[1]).toEqual(submittedPayloads[0]);
+
     act(() => result.current.changePermissionScope(permission, "SELF"));
     expect(result.current.selectedPermissionKeys).toHaveLength(1);
   });
@@ -186,6 +212,11 @@ describe("useAccessRequestForm", () => {
     act(() => result.current.changeAuthorizationGroupKey("managed-reader"));
     await waitFor(() => expect(result.current.selectedApproverUserIds).toEqual([]));
     expect(result.current.toastMessageKey).toBe("portal.request.approverMissing");
+
+    act(() => result.current.toggleApprover("boss"));
+    act(() => result.current.changeReason("查看下级客户"));
+    expect(result.current.selectedApproverUserIds).toEqual(["boss"]);
+    expect(result.current.canSubmit).toBe(false);
   });
 
   test("FF-10: direct 只按本次选中的 MANAGED_USERS 范围判断审批路径", async () => {

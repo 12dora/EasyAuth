@@ -84,7 +84,13 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
   const [unifiedReceiver, setUnifiedReceiver] = useState("");
   const [perAppOpen, setPerAppOpen] = useState(false);
   const [grantSelection, setGrantSelection] = useState<Record<number, boolean>>({});
-  const [previewState, setPreviewState] = useState<Record<string, PreviewState>>({});
+  const [previewState, setPreviewState] = useState<Record<string, PreviewState>>(() =>
+    Object.fromEntries(
+      batchActions
+        .filter((action) => action.status === "previewed" || action.status === "failed")
+        .map((action) => [action.app_key, { status: "done", payload: action.preview_payload } satisfies PreviewState]),
+    ),
+  );
   const [executeState, setExecuteState] = useState<Record<string, ExecuteState>>({});
   const [isExecuting, setIsExecuting] = useState(false);
   const previewStateRef = useRef(previewState);
@@ -117,9 +123,18 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
   }, [grantItemsQuery.data]);
 
   const saveReceiversMutation = useMutation({
-    mutationFn: (override?: Record<string, ReceiverDraft>) => {
+    mutationFn: async (override?: Record<string, ReceiverDraft>) => {
       const effective = override ?? receivers;
-      return apiRequest(`/console/api/v1/lifecycle/handover-tasks/${task.id}`, {
+      const changedAppKeys = selectedApps
+        .filter((action) => {
+          const draft = effective[action.app_key] ?? { toUserId: "", release: false };
+          return (
+            (action.to_user?.user_id ?? "") !== (draft.release ? "" : draft.toUserId.trim()) ||
+            (action.policy?.unowned_strategy === "release_to_pool") !== draft.release
+          );
+        })
+        .map((action) => action.app_key);
+      await apiRequest(`/console/api/v1/lifecycle/handover-tasks/${task.id}`, {
         method: "PATCH",
         body: {
           app_actions: selectedApps.map((action) => {
@@ -132,28 +147,35 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
           }),
         } satisfies JsonObject,
       });
+      return changedAppKeys;
     },
-    onSuccess: () => {
+    onSuccess: (changedAppKeys) => {
       // 改接收人会使旧预览作废(服务端同样回退状态), 本地预览结果一并重置。
-      setPreviewState({});
+      setPreviewState((current) => omitKeys(current, changedAppKeys));
       invalidateDetail();
     },
   });
 
   const saveGrantsMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       const items = grantItems
         .filter((item) => item.status === "pending" && selectedAppKeys.includes(item.app_key))
-        .map((item) => ({ id: item.id, selected: grantSelection[item.id] ?? item.selected }));
+        .map((item) => ({ ...item, nextSelected: grantSelection[item.id] ?? item.selected }))
+        .filter((item) => item.selected !== item.nextSelected);
       if (items.length === 0) {
-        return Promise.resolve(null);
+        return [];
       }
-      return apiRequest(`/console/api/v1/lifecycle/handover-tasks/${task.id}/grant-items`, {
+      await apiRequest(`/console/api/v1/lifecycle/handover-tasks/${task.id}/grant-items`, {
         method: "PATCH",
-        body: { items } satisfies JsonObject,
+        body: { items: items.map((item) => ({ id: item.id, selected: item.nextSelected })) } satisfies JsonObject,
       });
+      return [...new Set(items.map((item) => item.app_key))];
     },
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: grantItemsQueryKey }),
+    onSuccess: (changedAppKeys) => {
+      setPreviewState((current) => omitKeys(current, changedAppKeys));
+      setExecuteState((current) => omitKeys(current, changedAppKeys));
+      void queryClient.invalidateQueries({ queryKey: grantItemsQueryKey });
+    },
   });
 
   const runPreview = async (appKey: string) => {
@@ -207,8 +229,10 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
       }
       setExecuteState((current) => ({ ...current, [appKey]: { status: "running" } }));
       try {
+        const action = selectedApps.find((candidate) => candidate.app_key === appKey);
+        const operation = action?.status === "failed" || executeState[appKey]?.status === "failed" ? "retry" : "execute";
         const payload = await apiRequest<ActionOperationPayload>(
-          `/console/api/v1/lifecycle/handover-tasks/${task.id}/actions/${appKey}/execute`,
+          `/console/api/v1/lifecycle/handover-tasks/${task.id}/actions/${appKey}/${operation}`,
           { method: "POST", body: {} },
         );
         const nextState = executeStateFromAction(payload.app_action, t("handover.wizard.execute.invalidResponse"));
@@ -563,6 +587,14 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
       </div>
     </Dialog>
   );
+}
+
+function omitKeys<T>(source: Record<string, T>, keys: string[]): Record<string, T> {
+  const next = { ...source };
+  for (const key of keys) {
+    delete next[key];
+  }
+  return next;
 }
 
 function WizardStepIndicator({ step }: { step: number }) {

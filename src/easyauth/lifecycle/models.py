@@ -536,6 +536,7 @@ class TransferPlan(models.Model):
         default=dict,
         blank=True,
     )
+    revision: models.PositiveIntegerField[int, int] = models.PositiveIntegerField(default=0)
     confirmed_at: models.DateTimeField[
         str | date | datetime | None,
         datetime | None,

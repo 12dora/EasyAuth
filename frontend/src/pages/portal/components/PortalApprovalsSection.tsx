@@ -6,7 +6,7 @@ import {
 } from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { RefreshCcw } from "lucide-react";
-import { Fragment, useEffect, useState, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, useState, type ReactNode } from "react";
 
 import { ApprovalDecisionDialog } from "../../../components/ApprovalDecisionDialog";
 import type { ApprovalDecisionMode } from "../../../components/ApprovalDecisionDialog";
@@ -39,7 +39,10 @@ type ApprovalNoticeKey =
   | "approvals.rejected"
   | "approvals.conflict"
   | "approvals.grantFailedCommitted"
+  | "status.request.grantExpired"
   | "";
+
+type CommittedGrantStatus = "grant_failed" | "grant_expired";
 
 interface ApprovalGrantFact {
   permission: string;
@@ -122,6 +125,8 @@ export function PortalApprovalsSection() {
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE });
   const [pendingDecision, setPendingDecision] = useState<PendingDecision | null>(null);
   const [noticeKey, setNoticeKey] = useState<ApprovalNoticeKey>("");
+  const [detailRequestVersion, setDetailRequestVersion] = useState(0);
+  const decisionSubmittingRef = useRef(false);
   const pendingApprovalId = pendingDecision?.approval.id;
 
   const query = useQuery({
@@ -135,7 +140,7 @@ export function PortalApprovalsSection() {
       ),
   });
   const detailQuery = useQuery({
-    queryKey: ["portal", "approvals", "detail", pendingApprovalId],
+    queryKey: ["portal", "approvals", "detail", pendingApprovalId, detailRequestVersion],
     queryFn: async () =>
       parseApprovalDetailPayload(
         await apiRequest<unknown>(`/portal/api/v1/me/approvals/${pendingApprovalId ?? 0}`),
@@ -156,10 +161,15 @@ export function PortalApprovalsSection() {
       void queryClient.invalidateQueries({ queryKey: ["portal", "approvals"] });
     },
     onError: (error, variables) => {
-      // 决定已提交但授权失败是复合结果: 不得保留旧待办或允许重复提交。
-      if (isCommittedGrantFailure(error, variables.approval.id)) {
+      // 决定已提交但授权未落地是复合结果: 不得保留旧待办或允许重复提交。
+      const committedStatus = committedGrantStatus(error, variables.approval.id);
+      if (committedStatus) {
         setPendingDecision(null);
-        setNoticeKey("approvals.grantFailedCommitted");
+        setNoticeKey(
+          committedStatus === "grant_failed"
+            ? "approvals.grantFailedCommitted"
+            : "status.request.grantExpired",
+        );
         void queryClient.invalidateQueries({ queryKey: ["portal", "approvals"] });
       } else if (error instanceof ApiError && error.status === 409) {
         setPendingDecision(null);
@@ -167,13 +177,24 @@ export function PortalApprovalsSection() {
         void queryClient.invalidateQueries({ queryKey: ["portal", "approvals"] });
       }
     },
+    onSettled: () => {
+      decisionSubmittingRef.current = false;
+    },
   });
 
   const approvals = query.data?.data ?? [];
   const openDecision = (mode: ApprovalDecisionMode, approval: PortalApprovalRow) => {
+    decisionSubmittingRef.current = false;
     decisionMutation.reset();
     setNoticeKey("");
+    setDetailRequestVersion((current) => current + 1);
     setPendingDecision({ mode, approval });
+  };
+  const closeDecision = () => {
+    if (decisionSubmittingRef.current || decisionMutation.isPending) {
+      return;
+    }
+    setPendingDecision(null);
   };
   const switchTab = (nextTab: ApprovalTab) => {
     setTab(nextTab);
@@ -203,6 +224,8 @@ export function PortalApprovalsSection() {
     decisionMutation.error && !(decisionMutation.error instanceof ApiError && decisionMutation.error.status === 409)
       ? (decisionMutation.error as Error).message
       : "";
+  const decisionApproval =
+    !detailQuery.isFetching && !detailQuery.error ? detailQuery.data?.approval : undefined;
 
   return (
     <>
@@ -231,7 +254,7 @@ export function PortalApprovalsSection() {
             tone={
               noticeKey === "approvals.conflict"
                 ? "amber"
-                : noticeKey === "approvals.grantFailedCommitted"
+                : noticeKey === "approvals.grantFailedCommitted" || noticeKey === "status.request.grantExpired"
                   ? "signal"
                   : "evergreen"
             }
@@ -328,18 +351,19 @@ export function PortalApprovalsSection() {
           errorMessage={dialogErrorMessage}
           isSubmitting={decisionMutation.isPending}
           canSubmit={Boolean(
-            detailQuery.data?.approval &&
-              approvalIsDecidable(detailQuery.data.approval, pendingDecision.approval.id)
+            decisionApproval &&
+              approvalIsDecidable(decisionApproval, pendingDecision.approval.id)
           )}
-          onClose={() => setPendingDecision(null)}
+          onClose={closeDecision}
           onSubmit={(comment) => {
             if (
-              detailQuery.data?.approval &&
-              approvalIsDecidable(detailQuery.data.approval, pendingDecision.approval.id)
+              decisionApproval &&
+              approvalIsDecidable(decisionApproval, pendingDecision.approval.id)
             ) {
+              decisionSubmittingRef.current = true;
               decisionMutation.mutate({
                 mode: pendingDecision.mode,
-                approval: detailQuery.data.approval,
+                approval: decisionApproval,
                 comment,
               });
             }
@@ -563,18 +587,23 @@ function grantLabel(grant: ApprovalGrantFact): string {
   return `${name} (${grant.permission}) · ${grant.scope}`;
 }
 
-function isCommittedGrantFailure(error: unknown, expectedApprovalId: number): boolean {
+function committedGrantStatus(error: unknown, expectedApprovalId: number): CommittedGrantStatus | null {
   if (!(error instanceof ApiError) || error.status !== 422 || !isRecord(error.details)) {
-    return false;
+    return null;
+  }
+  const status = error.details.status;
+  if (status !== "grant_failed" && status !== "grant_expired") {
+    return null;
   }
   const approval = error.details.approval;
   return (
     error.details.decision_committed === true &&
-    error.details.status === "grant_failed" &&
     isPortalApprovalRow(approval) &&
     approval.id === expectedApprovalId &&
-    approval.status === "grant_failed"
-  );
+    approval.status === status
+  )
+    ? status
+    : null;
 }
 
 function parseApprovalListPayload(payload: unknown, errorMessage: string): ApprovalListPayload {

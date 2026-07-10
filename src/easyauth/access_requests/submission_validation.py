@@ -86,18 +86,6 @@ def validated_approver_user_ids(
     return user_ids
 
 
-def ensure_managed_users_requests_have_approver(
-    *,
-    authorization_groups: tuple[AuthorizationGroup, ...],
-    direct_grants: tuple[ScopedAccessRequestGrant, ...],
-    approver_user_ids: Iterable[str],
-) -> None:
-    user_ids = _unique_non_empty_strings(approver_user_ids)
-    if user_ids or not _has_managed_users_target(authorization_groups, direct_grants):
-        return
-    raise AccessRequestSubmissionError((MANAGED_USERS_APPROVER_REQUIRED_MESSAGE,))
-
-
 def validate_submission_scope(
     input_data: AccessRequestSubmission,
     request_type: AccessRequestType,
@@ -142,22 +130,6 @@ def _unique_non_empty_strings(values: Iterable[str]) -> tuple[str, ...]:
         seen.add(normalized)
         result.append(normalized)
     return tuple(result)
-
-
-def _has_managed_users_target(
-    authorization_groups: tuple[AuthorizationGroup, ...],
-    direct_grants: tuple[ScopedAccessRequestGrant, ...],
-) -> bool:
-    if any(grant.scope_key == MANAGED_USERS_SCOPE for grant in direct_grants):
-        return True
-    group_ids = tuple(group.id for group in authorization_groups)
-    if not group_ids:
-        return False
-    return AuthorizationGroupGrant.objects.filter(
-        authorization_group_id__in=group_ids,
-        is_active=True,
-        scope_key=MANAGED_USERS_SCOPE,
-    ).exists()
 
 
 def _validate_user(user: UserMirror) -> None:
@@ -209,11 +181,30 @@ def _validate_managed_users_approver(
     authorization_groups: tuple[AuthorizationGroup, ...],
     direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> None:
-    if _unique_non_empty_strings(input_data.approver_user_ids):
-        return
     if not _contains_managed_users_target(authorization_groups, direct_grants):
         return
+    manager_user_id = _active_direct_manager_user_id(input_data.user)
+    if manager_user_id is not None and _unique_non_empty_strings(
+        input_data.approver_user_ids,
+    ) == (manager_user_id,):
+        return
     raise AccessRequestSubmissionError((MANAGED_USERS_APPROVER_REQUIRED_MESSAGE,))
+
+
+def _active_direct_manager_user_id(user: UserMirror) -> str | None:
+    manager_userid = user.manager_userid.strip()
+    if not manager_userid:
+        return None
+    manager = UserMirror.objects.filter(
+        authentik_user_id=manager_userid,
+        status=USER_STATUS_ACTIVE,
+    ).first()
+    if manager is None:
+        manager = UserMirror.objects.filter(
+            dingtalk_userid=manager_userid,
+            status=USER_STATUS_ACTIVE,
+        ).first()
+    return manager.authentik_user_id if manager is not None else None
 
 
 def _contains_managed_users_target(

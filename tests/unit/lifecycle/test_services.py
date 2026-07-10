@@ -41,7 +41,9 @@ from easyauth.lifecycle.services import (
     execute_action,
     onboard_user,
     poll_async_action,
+    preview_action,
     refresh_task_status,
+    retry_action,
     start_offboarding,
     update_action_receiver,
 )
@@ -228,6 +230,7 @@ def test_execute_action_transfers_selected_grants_and_calls_hook(
     monkeypatch.setattr(lifecycle_services, "signed_hook_post", fake_hook)
 
     # When
+    action = preview_action(action)
     action = execute_action(action)
 
     # Then: 勾选项转授给接收人(未勾选跳过), 钩子按协议收到 execute 载荷, 单据完成。
@@ -238,7 +241,7 @@ def test_execute_action_transfers_selected_grants_and_calls_hook(
     assert not AccessGrantPermission.objects.filter(grant=receiver_grant).exists()
     direct_item.refresh_from_db()
     assert direct_item.status == "skipped"
-    call = hook_calls[0]
+    call = hook_calls[1]
     assert call["event_type"] == "lifecycle.handover.execute"
     assert call["kind"] == "offboard"
     assert call["from_user_id"] == "lc-exec-user"
@@ -275,10 +278,12 @@ def test_execute_action_keeps_accepted_hook_pending(
         *,
         app: App,  # noqa: ARG001
         url: str,  # noqa: ARG001
-        event_type: str,  # noqa: ARG001
+        event_type: str,
         delivery_id: str,  # noqa: ARG001
         payload: dict[str, JsonValue],  # noqa: ARG001
     ) -> HookResponse:
+        if event_type == "lifecycle.handover.preview":
+            return HookResponse(status_code=200, location="", payload={"assets": []})
         return HookResponse(
             status_code=202,
             location=status_url,
@@ -288,6 +293,7 @@ def test_execute_action_keeps_accepted_hook_pending(
     monkeypatch.setattr(lifecycle_services, "signed_hook_post", accepted_hook)
 
     # When
+    action = preview_action(action)
     action = execute_action(action)
 
     # Then: 202 只表示受理, action 保持异步待完成并持久化查询地址。
@@ -322,10 +328,13 @@ def test_poll_async_action_completes_action_and_task(
     )
     status_url = "https://etrade.example.com/api/v1/easyauth/lifecycle/status/2"
 
-    def accepted_hook(**_kwargs: object) -> HookResponse:
+    def accepted_hook(*, event_type: str, **_kwargs: object) -> HookResponse:
+        if event_type == "lifecycle.handover.preview":
+            return HookResponse(status_code=200, location="", payload={"assets": []})
         return HookResponse(status_code=202, location=status_url, payload={"accepted": True})
 
     monkeypatch.setattr(lifecycle_services, "signed_hook_post", accepted_hook)
+    action = preview_action(action)
     pending = execute_action(action)
     assert pending.status == "async_pending"
 
@@ -362,6 +371,7 @@ def test_poll_async_action_rejects_attempts_at_limit_without_calling_hook(
         created_by="admin-a",
     )
     action = HandoverAppAction.objects.get(task=task, app=app)
+    action = preview_action(action)
     action.status = "async_pending"
     action.async_status_url = "https://etrade.example.com/status/limit"
     max_attempts = 10
@@ -402,12 +412,13 @@ def test_execute_action_requires_receiver_or_release_policy() -> None:
         created_by="admin-a",
     )
     action = HandoverAppAction.objects.get(task=task, app=app)
+    action = preview_action(action)
 
     # When / Then: 缓冲是常态, 不允许无接收策略执行。
     with pytest.raises(lifecycle_services.HandoverError):
         _ = execute_action(action)
     action.refresh_from_db()
-    assert action.status == "pending"
+    assert action.status == "previewed"
     task.refresh_from_db()
     assert task.status == "pending"
 
@@ -441,10 +452,12 @@ def test_failed_execution_locks_receiver_and_retry_uses_execution_receiver(
         *,
         app: App,  # noqa: ARG001
         url: str,  # noqa: ARG001
-        event_type: str,  # noqa: ARG001
+        event_type: str,
         delivery_id: str,  # noqa: ARG001
         payload: dict[str, JsonValue],
     ) -> HookResponse:
+        if event_type == "lifecycle.handover.preview":
+            return HookResponse(status_code=200, location="", payload={"assets": []})
         hook_receivers.append(payload["to_user_id"])
         if len(hook_receivers) == 1:
             message = "首次 hook 失败"
@@ -452,6 +465,7 @@ def test_failed_execution_locks_receiver_and_retry_uses_execution_receiver(
         return HookResponse(status_code=200, location="", payload={"ok": True})
 
     monkeypatch.setattr(lifecycle_services, "signed_hook_post", flaky_hook)
+    action = preview_action(action)
     with pytest.raises(lifecycle_services.HookCallError):
         _ = execute_action(action)
     action.refresh_from_db()
@@ -462,7 +476,7 @@ def test_failed_execution_locks_receiver_and_retry_uses_execution_receiver(
     # When / Then: 已开始执行后不能改为 B, 重试仍使用固化的 A。
     with pytest.raises(lifecycle_services.HandoverConflictError):
         _ = update_action_receiver(action=action, to_user=receiver_b, policy={})
-    retried = execute_action(HandoverAppAction.objects.get(pk=action.pk))
+    retried = retry_action(HandoverAppAction.objects.get(pk=action.pk))
     assert retried.status == "done"
     assert hook_receivers == [
         receiver_a.authentik_user_id,
@@ -548,6 +562,7 @@ def test_expired_receiver_grant_is_not_merged_or_revived() -> None:
         to_user=receiver,
         policy={},
     )
+    action = preview_action(action)
 
     # When
     _ = execute_action(action)
@@ -565,7 +580,7 @@ def test_expired_receiver_grant_is_not_merged_or_revived() -> None:
     ) == {"sales"}
 
 
-@pytest.mark.parametrize("status", ["skipped", "executing"])
+@pytest.mark.parametrize("status", ["pending", "failed", "skipped", "executing"])
 def test_execute_action_rejects_non_operable_status(status: str) -> None:
     # Given: action 已跳过或正在执行。
     app, group, _permission = _app_with_catalog(f"lc-action-state-{status}")
@@ -643,6 +658,7 @@ def test_transfer_grant_diff_build_and_confirm() -> None:
         task=task,
         revoke_keys=revoke_keys,
         add_keys=add_keys,
+        plan_revision=plan.revision,
         actor_id="admin-a",
     )
 
@@ -679,6 +695,7 @@ def test_transfer_diff_confirmation_rejects_terminal_task(
             task=HandoverTask.objects.get(pk=task.pk),
             revoke_keys=revoke_keys,
             add_keys=add_keys,
+            plan_revision=plan.revision,
             actor_id="admin-a",
         )
     original_grant.refresh_from_db()
@@ -695,6 +712,7 @@ def test_transfer_diff_confirmation_is_idempotent_for_same_payload() -> None:
         task=task,
         revoke_keys=revoke_keys,
         add_keys=add_keys,
+        plan_revision=plan.revision,
         actor_id="admin-a",
     )
     current = AccessGrant.objects.get(
@@ -710,6 +728,7 @@ def test_transfer_diff_confirmation_is_idempotent_for_same_payload() -> None:
         task=HandoverTask.objects.get(pk=task.pk),
         revoke_keys=list(reversed(revoke_keys)),
         add_keys=list(reversed(add_keys)),
+        plan_revision=plan.revision,
         actor_id="admin-a",
     )
 
@@ -730,6 +749,7 @@ def test_transfer_diff_confirmation_conflicts_for_different_payload() -> None:
         task=task,
         revoke_keys=revoke_keys,
         add_keys=add_keys,
+        plan_revision=plan.revision,
         actor_id="admin-a",
     )
 
@@ -739,6 +759,7 @@ def test_transfer_diff_confirmation_conflicts_for_different_payload() -> None:
             task=HandoverTask.objects.get(pk=task.pk),
             revoke_keys=[],
             add_keys=add_keys,
+            plan_revision=plan.revision,
             actor_id="admin-a",
         )
 
@@ -754,6 +775,7 @@ def test_transfer_diff_confirmation_rejects_unknown_keys() -> None:
             task=task,
             revoke_keys=["unknown-app:group:unknown"],
             add_keys=add_keys,
+            plan_revision=plan.revision,
             actor_id="admin-a",
         )
     original_grant.refresh_from_db()
@@ -817,6 +839,7 @@ def test_transfer_diff_confirmation_rolls_back_all_apps(
             task=task,
             revoke_keys=revoke_keys,
             add_keys=[],
+            plan_revision=plan.revision,
             actor_id="admin-a",
         )
 
@@ -1094,6 +1117,7 @@ def test_transfer_completion_clears_department_changed_flag() -> None:
             if isinstance(entry, dict) and isinstance(entry.get("key"), str)
         ],
         add_keys=[],
+        plan_revision=plan.revision,
         actor_id="admin-a",
     )
     _ = HandoverAppAction.objects.filter(task=task).update(status=ACTION_STATUS_SKIPPED)

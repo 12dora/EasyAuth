@@ -70,6 +70,7 @@ ACTION_NOT_OPERABLE_MESSAGE: Final = "该应用交接动作当前状态不允许
 TASK_KIND_CONFLICT_MESSAGE: Final = "该人员已有其他类型的进行中交接单。"
 TRANSFER_CONFIRMATION_CONFLICT_MESSAGE: Final = "转岗差异已使用其他选择完成确认。"
 TRANSFER_PLAN_STALE_MESSAGE: Final = "授权已在差异生成后发生变化, 请重新生成差异。"
+TRANSFER_PLAN_REVISION_CONFLICT_MESSAGE: Final = "转岗差异方案已更新, 请刷新后重新确认。"
 TRANSFER_TASK_REQUIRED_MESSAGE: Final = "只有转岗单可以处理权限差异。"
 ASYNC_STATUS_URL_REQUIRED_MESSAGE: Final = "异步交接缺少状态查询 URL。"
 ASYNC_POLL_LIMIT_MESSAGE: Final = "异步交接状态查询已达到重试上限。"
@@ -245,6 +246,18 @@ def preview_action(action: HandoverAppAction) -> HandoverAppAction:
 
 
 def execute_action(action: HandoverAppAction) -> HandoverAppAction:
+    return _execute_action(action, allowed_status=ACTION_STATUS_PREVIEWED)
+
+
+def retry_action(action: HandoverAppAction) -> HandoverAppAction:
+    return _execute_action(action, allowed_status=ACTION_STATUS_FAILED)
+
+
+def _execute_action(
+    action: HandoverAppAction,
+    *,
+    allowed_status: str,
+) -> HandoverAppAction:
     """执行单个 APP 的交接: 转授勾选权限(EasyAuth 内部) + 调 APP 钩子交接数据。
 
     幂等以 task_id 为键(APP 侧承诺重复 execute 安全); 失败置 failed 可重试,
@@ -252,10 +265,7 @@ def execute_action(action: HandoverAppAction) -> HandoverAppAction:
     """
     with transaction.atomic():
         action = _locked_action(action.id)
-        _ensure_action_status(
-            action,
-            allowed={ACTION_STATUS_PENDING, ACTION_STATUS_PREVIEWED, ACTION_STATUS_FAILED},
-        )
+        _ensure_action_status(action, allowed={allowed_status})
         _validate_receiver_strategy(action, to_user=action.to_user, policy=action.policy)
         if action.attempts == 0:
             action.execution_to_user = action.to_user
@@ -648,7 +658,8 @@ def build_transfer_grant_diff(
             "add": [_diff_entry(key) for key in add],
             "keep": [_diff_entry(key) for key in keep],
         }
-        plan.save(update_fields=["new_template", "grant_diff", "updated_at"])
+        plan.revision += 1
+        plan.save(update_fields=["new_template", "grant_diff", "revision", "updated_at"])
         return plan
 
 
@@ -657,6 +668,7 @@ def confirm_transfer_grant_diff(
     task: HandoverTask,
     revoke_keys: list[str],
     add_keys: list[str],
+    plan_revision: int,
     actor_id: str,
 ) -> TransferPlan:
     """按管理员勾选执行转岗权限调整(EasyAuth 内部完成, 无需钩子)。"""
@@ -671,6 +683,8 @@ def confirm_transfer_grant_diff(
         plan = (
             TransferPlan.objects.select_for_update().select_related("new_template").get(task=task)
         )
+        if plan.revision != plan_revision:
+            raise HandoverConflictError(TRANSFER_PLAN_REVISION_CONFLICT_MESSAGE)
         if plan.confirmed_at is not None:
             if (
                 plan.confirmed_revoke_keys == canonical_revoke

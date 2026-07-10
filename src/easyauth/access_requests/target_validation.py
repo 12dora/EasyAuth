@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, override
 
-from easyauth.applications.models import ApprovalRule, AppScope
+from easyauth.applications.models import ApprovalRule, AppScope, AuthorizationGroupGrant
 
 if TYPE_CHECKING:
     from easyauth.access_requests.submission_types import ScopedAccessRequestGrant
@@ -27,6 +27,7 @@ def validate_request_targets(
     errors = (
         *authorization_group_target_errors(app, authorization_groups),
         *direct_grant_target_errors(app, direct_grants),
+        *overlapping_target_errors(authorization_groups, direct_grants),
     )
     if errors:
         raise AccessRequestTargetValidationError(errors)
@@ -56,6 +57,32 @@ def direct_grant_target_errors(
             for message in _direct_grant_error_messages(app, grant)
         )
     return tuple(errors)
+
+
+def overlapping_target_errors(
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
+) -> tuple[str, ...]:
+    direct_grant_by_identity = {
+        (grant.permission.id, grant.scope_key): grant for grant in direct_grants
+    }
+    group_ids = tuple(group.id for group in authorization_groups)
+    if not group_ids or not direct_grant_by_identity:
+        return ()
+    group_grant_identities = set(
+        AuthorizationGroupGrant.objects.filter(
+            authorization_group_id__in=group_ids,
+            is_active=True,
+        ).values_list("permission_id", "scope_key"),
+    )
+    return tuple(
+        (
+            f"{grant.permission.key}:{grant.scope_key}: "
+            "Direct grant must not duplicate an active authorization group grant."
+        )
+        for identity, grant in direct_grant_by_identity.items()
+        if identity in group_grant_identities
+    )
 
 
 def _authorization_group_error_messages(app: App, group: AuthorizationGroup) -> tuple[str, ...]:

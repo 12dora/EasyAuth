@@ -30,7 +30,6 @@ from easyauth.access_requests.submission_types import (
     ScopedAccessRequestGrant,
 )
 from easyauth.access_requests.submission_validation import (
-    ensure_managed_users_requests_have_approver,
     unique_authorization_groups,
     unique_direct_grants,
     validate_submission_scope,
@@ -95,11 +94,6 @@ def _submit_access_request(
     if existing is not None:
         return existing
     validate_submission_scope(input_data, parsed_request_type, authorization_groups, direct_grants)
-    ensure_managed_users_requests_have_approver(
-        authorization_groups=authorization_groups,
-        direct_grants=direct_grants,
-        approver_user_ids=submitted_approver_user_ids,
-    )
     approver_user_ids = validated_approver_user_ids(
         submitted_approver_user_ids,
         applicant_user_id=input_data.user.authentik_user_id,

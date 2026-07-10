@@ -51,6 +51,7 @@ from easyauth.lifecycle.services import (
     poll_async_action,
     preview_action,
     refresh_task_status,
+    retry_action,
     skip_action,
     start_offboarding,
     update_action_receiver,
@@ -134,6 +135,7 @@ class GrantDiffConfirmPayload(BaseModel):
 
     revoke_keys: list[str] = Field(default_factory=list)
     add_keys: list[str] = Field(default_factory=list)
+    plan_revision: int = Field(ge=1)
 
 
 class TemplateItemPayload(BaseModel):
@@ -237,7 +239,7 @@ def lifecycle_handover_task_detail(  # noqa: PLR0911 - HTTP 分支在入口显�
     return method_not_allowed_response()
 
 
-def lifecycle_grant_items(  # noqa: C901, PLR0911 - HTTP 校验失败需逐项返回明确响应。
+def lifecycle_grant_items(  # noqa: C901, PLR0911, PLR0912 - HTTP 校验失败需逐项返回明确响应。
     request: HttpRequest,
     task_id: int,
 ) -> JsonResponse:
@@ -288,9 +290,27 @@ def lifecycle_grant_items(  # noqa: C901, PLR0911 - HTTP 校验失败需逐项�
                     "授权快照项不存在或已处理。",
                     status=HTTPStatus.CONFLICT,
                 )
+            changed_app_ids: set[int] = set()
             for item in editable:
-                item.selected = selection[item.id]
+                selected = selection[item.id]
+                if item.selected == selected:
+                    continue
+                item.selected = selected
                 item.save(update_fields=["selected"])
+                changed_app_ids.add(item.app_id)
+            if changed_app_ids:
+                actions = HandoverAppAction.objects.select_for_update().filter(
+                    task=locked_task,
+                    app_id__in=changed_app_ids,
+                    status="previewed",
+                )
+                for action in actions:
+                    action.status = "pending"
+                    action.preview_payload = {}
+                    action.last_error = ""
+                    action.save(
+                        update_fields=["status", "preview_payload", "last_error", "updated_at"],
+                    )
         return lifecycle_grant_items_readback(task)
     return method_not_allowed_response()
 
@@ -344,8 +364,10 @@ def _run_action_operation(
             action = preview_action(action)
         elif operation == "retry" and action.status == "async_pending":
             action = poll_async_action(action)
-        elif operation in {"execute", "retry"}:
+        elif operation == "execute":
             action = execute_action(action)
+        elif operation == "retry":
+            action = retry_action(action)
         elif operation == "skip":
             action = skip_action(action, actor_id=actor_id)
         else:
@@ -475,6 +497,7 @@ def lifecycle_grant_diff_confirm(  # noqa: PLR0911 - HTTP 分支在入口显式�
             task=task,
             revoke_keys=payload.revoke_keys,
             add_keys=payload.add_keys,
+            plan_revision=payload.plan_revision,
             actor_id=actor_id,
         )
     except HandoverConflictError as error:
@@ -862,10 +885,27 @@ def _grant_item(item: HandoverGrantItem) -> JsonObject:
 
 def _plan_item(plan: TransferPlan) -> JsonObject:
     template = plan.new_template
+    grant_diff = dict(plan.grant_diff)
+    if plan.confirmed_at is not None:
+        confirmed_by_name = {
+            "revoke": set(plan.confirmed_revoke_keys),
+            "add": set(plan.confirmed_add_keys),
+        }
+        for name, confirmed_keys in confirmed_by_name.items():
+            entries = grant_diff.get(name)
+            if not isinstance(entries, list):
+                continue
+            serialized: list[JsonValue] = [
+                {**entry, "selected": entry.get("key") in confirmed_keys}
+                for entry in entries
+                if isinstance(entry, dict)
+            ]
+            grant_diff[name] = serialized
     return {
         "template_id": template.id if template is not None else None,
         "template_name": template.name if template is not None else "",
-        "grant_diff": plan.grant_diff,
+        "grant_diff": grant_diff,
+        "revision": plan.revision,
         "confirmed_at": datetime_value(plan.confirmed_at),
     }
 

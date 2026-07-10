@@ -596,6 +596,7 @@ export interface TransferPlanItem {
   template_id: number | null;
   template_name: string;
   grant_diff: TransferGrantDiff;
+  revision: number;
   confirmed_at: string | null;
 }
 

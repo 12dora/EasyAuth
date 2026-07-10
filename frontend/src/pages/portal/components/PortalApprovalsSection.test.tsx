@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
@@ -144,7 +144,7 @@ describe("PortalApprovalsSection", () => {
         return pendingDetailResponse();
       }
       if (url === "/portal/api/v1/me/approvals/42/approve" && init?.method === "POST") {
-        return jsonResponse({ approval: { ...pendingApproval, status: "approved" } });
+        return jsonResponse({ approval: { ...pendingApproval, status: "grant_applied" } });
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });
@@ -233,7 +233,118 @@ describe("PortalApprovalsSection", () => {
     );
   });
 
-  test("授权应用失败的复合结果关闭弹窗、刷新列表并明确提示重试落地", async () => {
+  test("同一审批重开时强制刷新详情，刷新中或失败均不得复用旧 submitted 事实", async () => {
+    let detailCalls = 0;
+    let rejectSecondDetail!: (reason: Error) => void;
+    const secondDetail = new Promise<Response>((_resolve, reject) => {
+      rejectSecondDetail = reject;
+    });
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === PENDING_LIST_URL) {
+        return pendingListResponse();
+      }
+      if (url === PENDING_DETAIL_URL) {
+        detailCalls += 1;
+        return detailCalls === 1 ? pendingDetailResponse() : secondDetail;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderSection(30_000);
+    await user.click(await screen.findByRole("button", { name: "同意" }));
+    let dialog = screen.getByRole("dialog", { name: "同意申请" });
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "确认同意" })).toBeEnabled());
+    await user.click(within(dialog).getByRole("button", { name: "取消" }));
+
+    await user.click(screen.getByRole("button", { name: "同意" }));
+    dialog = screen.getByRole("dialog", { name: "同意申请" });
+    expect(within(dialog).getByRole("button", { name: "确认同意" })).toBeDisabled();
+    expect(detailCalls).toBe(2);
+
+    rejectSecondDetail(new Error("最新详情不可用"));
+    expect(await within(dialog).findByText("申请详情加载失败，当前禁止审批。")).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "确认同意" })).toBeDisabled();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/portal/api/v1/me/approvals/42/approve",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  test.each([
+    {
+      status: "grant_failed",
+      title: "审批已通过，但授权未落地",
+      description: "请联系管理员重试授权落地",
+    },
+    {
+      status: "grant_expired",
+      title: "授权期限已过",
+      description: "",
+    },
+  ])(
+    "决定已提交且进入 $status 时关闭弹窗、刷新列表并展示准确终态",
+    async ({ status, title, description }) => {
+      const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+        const url = String(input);
+        if (url === PENDING_LIST_URL && !init?.method) {
+          return pendingListResponse();
+        }
+        if (url === PENDING_DETAIL_URL && !init?.method) {
+          return pendingDetailResponse();
+        }
+        if (url === "/portal/api/v1/me/approvals/42/approve" && init?.method === "POST") {
+          return jsonResponse(
+            {
+              error: {
+                code: "SEMANTIC_VALIDATION_ERROR",
+                message: "grant apply failed",
+                details: {
+                  decision_committed: true,
+                  status,
+                  approval: {
+                    ...pendingApproval,
+                    status,
+                    decision_comment: "同意",
+                    decided_at: "2026-07-10T08:00:00Z",
+                    decided_by: "me",
+                  },
+                },
+              },
+            },
+            422,
+          );
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      });
+      vi.stubGlobal("fetch", fetchMock);
+      const user = userEvent.setup();
+
+      renderSection();
+      await user.click(await screen.findByRole("button", { name: "同意" }));
+      const dialog = screen.getByRole("dialog", { name: "同意申请" });
+      await waitFor(() => expect(within(dialog).getByRole("button", { name: "确认同意" })).toBeEnabled());
+      await user.click(within(dialog).getByRole("button", { name: "确认同意" }));
+
+      const notice = await screen.findByRole("status");
+      expect(notice).toHaveTextContent(title);
+      if (description) {
+        expect(notice).toHaveTextContent(description);
+      }
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+      await waitFor(() => {
+        expect(fetchMock.mock.calls.filter(([input]) => String(input) === PENDING_LIST_URL).length).toBeGreaterThan(1);
+      });
+    },
+  );
+
+  test("提交事件到 pending 重渲染前同步禁止 Escape 和遮罩关闭", async () => {
+    let resolveApproval!: (response: Response) => void;
+    const approvalResponse = new Promise<Response>((resolve) => {
+      resolveApproval = resolve;
+    });
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === PENDING_LIST_URL && !init?.method) {
@@ -243,20 +354,7 @@ describe("PortalApprovalsSection", () => {
         return pendingDetailResponse();
       }
       if (url === "/portal/api/v1/me/approvals/42/approve" && init?.method === "POST") {
-        return jsonResponse(
-          {
-            error: {
-              code: "SEMANTIC_VALIDATION_ERROR",
-              message: "grant apply failed",
-              details: {
-                decision_committed: true,
-                status: "grant_failed",
-                approval: { ...pendingApproval, status: "grant_failed", decision_comment: "同意" },
-              },
-            },
-          },
-          422,
-        );
+        return approvalResponse;
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });
@@ -267,15 +365,14 @@ describe("PortalApprovalsSection", () => {
     await user.click(await screen.findByRole("button", { name: "同意" }));
     const dialog = screen.getByRole("dialog", { name: "同意申请" });
     await waitFor(() => expect(within(dialog).getByRole("button", { name: "确认同意" })).toBeEnabled());
-    await user.click(within(dialog).getByRole("button", { name: "确认同意" }));
 
-    const notice = await screen.findByRole("status");
-    expect(notice).toHaveTextContent("审批已通过，但授权未落地");
-    expect(notice).toHaveTextContent("请联系管理员重试授权落地");
-    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    await waitFor(() => {
-      expect(fetchMock.mock.calls.filter(([input]) => String(input) === PENDING_LIST_URL).length).toBeGreaterThan(1);
-    });
+    fireEvent.submit(document.getElementById("approval-decision-form")!);
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.click(screen.getByRole("button", { name: "关闭弹窗遮罩" }));
+    expect(dialog).toBeVisible();
+
+    resolveApproval(jsonResponse({ approval: { ...pendingApproval, status: "grant_applied" } }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
   test.each([
@@ -454,10 +551,10 @@ describe("PortalApprovalsSection", () => {
   });
 });
 
-function renderSection() {
+function renderSection(staleTime = 0) {
   const client = new QueryClient({
     defaultOptions: {
-      queries: { retry: false },
+      queries: { retry: false, staleTime },
       mutations: { retry: false },
     },
   });

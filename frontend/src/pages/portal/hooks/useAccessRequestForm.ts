@@ -190,6 +190,10 @@ export function useAccessRequestForm(currentUserId = ""): AccessRequestFormResul
   const actions = buildAccessRequestActions(fields, catalogView, () => submitMutation.mutate());
   const hasTarget = Boolean(fields.authorizationGroupKey || fields.selectedPermissionKeys.length > 0);
   const selectedScopesAreComplete = fields.selectedPermissionKeys.every((key) => hasSelectionScope(key));
+  const managedUsersTargetHasMissingDirectManager = selectedManagedUsersTargetHasMissingDirectManager(
+    fields,
+    catalogView,
+  );
   // 限时授权必须选择"未来"的过期时间, 否则后端会视为已过期而白跑一次审批。
   const expiresAtIsFuture = Boolean(fields.expiresAt) && new Date(fields.expiresAt) > new Date();
   const expiresAtError = fields.grantType === "timed" && Boolean(fields.expiresAt) && !expiresAtIsFuture;
@@ -201,6 +205,7 @@ export function useAccessRequestForm(currentUserId = ""): AccessRequestFormResul
       fields.selectedPermissionKeys.length <= ACCESS_REQUEST_MAX_DIRECT_GRANTS &&
       fields.selectedApproverUserIds.length <= ACCESS_REQUEST_MAX_APPROVERS &&
       !fields.selectedApproverUserIds.includes(currentUserId) &&
+      !managedUsersTargetHasMissingDirectManager &&
       fields.reason.trim().length > 0 &&
       fields.reason.length <= ACCESS_REQUEST_MAX_REASON_LENGTH &&
       (fields.grantType === "permanent" || expiresAtIsFuture) &&

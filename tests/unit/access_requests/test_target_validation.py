@@ -8,9 +8,16 @@ from easyauth.access_requests.target_validation import (
     AccessRequestTargetValidationError,
     authorization_group_target_errors,
     direct_grant_target_errors,
+    overlapping_target_errors,
     validate_request_targets,
 )
-from easyauth.applications.models import App, AppScope, AuthorizationGroup, Permission
+from easyauth.applications.models import (
+    App,
+    AppScope,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
+    Permission,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -113,6 +120,72 @@ def test_direct_grant_target_errors_allows_permission_without_approval_rule() ->
     errors = direct_grant_target_errors(
         app,
         (ScopedAccessRequestGrant(permission=permission, scope_key="SELF"),),
+    )
+
+    assert errors == ()
+
+
+def test_overlapping_target_errors_rejects_same_permission_and_scope() -> None:
+    app = App.objects.create(app_key="target-overlap", name="Target App")
+    _ = AppScope.objects.create(app=app, key="SELF", name="本人")
+    permission = Permission.objects.create(
+        app=app,
+        key="invoice.read",
+        name="Read invoices",
+        supported_scopes=["SELF"],
+    )
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="reader",
+        kind="role",
+        name="Reader",
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key="SELF",
+    )
+
+    errors = overlapping_target_errors(
+        (group,),
+        (ScopedAccessRequestGrant(permission=permission, scope_key="SELF"),),
+    )
+
+    assert errors == (
+        "invoice.read:SELF: Direct grant must not duplicate an active authorization group grant.",
+    )
+
+
+def test_overlapping_target_errors_allows_same_permission_on_different_scope() -> None:
+    app = App.objects.create(app_key="target-distinct-scope", name="Target App")
+    _ = AppScope.objects.create(app=app, key="SELF", name="本人")
+    _ = AppScope.objects.create(app=app, key="MANAGED_USERS", name="下级用户")
+    permission = Permission.objects.create(
+        app=app,
+        key="invoice.read",
+        name="Read invoices",
+        supported_scopes=["SELF", "MANAGED_USERS"],
+    )
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="reader",
+        kind="role",
+        name="Reader",
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key="SELF",
+    )
+
+    errors = overlapping_target_errors(
+        (group,),
+        (
+            ScopedAccessRequestGrant(
+                permission=permission,
+                scope_key="MANAGED_USERS",
+            ),
+        ),
     )
 
     assert errors == ()

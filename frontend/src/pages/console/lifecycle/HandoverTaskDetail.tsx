@@ -423,6 +423,7 @@ function TransferGrantSection({
         body: {
           revoke_keys: Object.keys(revokeChecked).filter((key) => revokeChecked[key]),
           add_keys: Object.keys(addChecked).filter((key) => addChecked[key]),
+          plan_revision: plan?.revision ?? 0,
         } satisfies JsonObject,
       }),
     onSuccess: onChanged,
@@ -461,7 +462,7 @@ function TransferGrantSection({
         </div>
         <Button
           type="button"
-          disabled={!templateId || readOnly}
+          disabled={!templateId || readOnly || confirmMutation.isPending}
           loading={buildMutation.isPending}
           onClick={() => buildMutation.mutate()}
         >
@@ -502,7 +503,13 @@ function TransferGrantSection({
             <DiffGroup title={t("handover.transfer.keep")} entries={keepEntries} nameMap={nameMap} readOnly checked={null} />
           </div>
           {!readOnly ? (
-            <Button type="button" variant="primary" loading={confirmMutation.isPending} onClick={() => confirmMutation.mutate()}>
+            <Button
+              type="button"
+              variant="primary"
+              disabled={buildMutation.isPending}
+              loading={confirmMutation.isPending}
+              onClick={() => confirmMutation.mutate()}
+            >
               {t("handover.transfer.confirm")}
             </Button>
           ) : null}
@@ -520,11 +527,7 @@ function transferPlanVersion(plan: TransferPlanItem | null): string {
   if (!plan) {
     return "none";
   }
-  return JSON.stringify({
-    templateId: plan.template_id,
-    grantDiff: plan.grant_diff,
-    confirmedAt: plan.confirmed_at,
-  });
+  return String(plan.revision);
 }
 
 function DiffGroup({

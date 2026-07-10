@@ -29,6 +29,7 @@ from easyauth.applications.models import (
     Permission,
 )
 from easyauth.grants.models import AccessGrant
+from easyauth.grants.services import GrantMutationExpiredError
 from tests.integration.portal.helpers import logged_in_client
 
 pytestmark = pytest.mark.django_db
@@ -123,9 +124,54 @@ def test_approve_application_failure_returns_committed_decision_and_latest_appro
     assert isinstance(approval, dict)
     assert approval["id"] == access_request.id
     assert approval["status"] == "grant_failed"
+    assert approval["reason"] == "跨部门工单处理"
     assert approval["decision_comment"] == "同意"
+    assert approval["decided_by"] == approver.authentik_user_id
+    assert isinstance(approval["decided_at"], str)
     access_request.refresh_from_db()
     assert access_request.status == "grant_failed"
+
+
+def test_approve_expired_grant_returns_committed_decision_and_latest_approval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: 审批人同意时, 限时授权已经过期。
+    client, approver = logged_in_client("portal-expired-approver")
+    access_request = _submitted_request(
+        "portal-expired-applicant",
+        "portal-expired-app",
+        approver_id=approver.authentik_user_id,
+    )
+
+    def expire_grant_application(*_args: object, **_kwargs: object) -> None:
+        raise GrantMutationExpiredError
+
+    monkeypatch.setattr(
+        "easyauth.access_requests.application.apply_grant_fact",
+        expire_grant_application,
+    )
+
+    # When
+    response = client.post(
+        f"/portal/api/v1/me/approvals/{access_request.id}/approve",
+        data=dumps({"comment": "同意"}),
+        content_type="application/json",
+    )
+
+    # Then: 422 复合结果同时返回已提交语义与最新 grant_expired 事实。
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    details = _json_dict(_json_dict(_json_object(response.content), "error"), "details")
+    assert details["decision_committed"] is True
+    assert details["status"] == "grant_expired"
+    approval = _json_dict(details, "approval")
+    assert approval["id"] == access_request.id
+    assert approval["status"] == "grant_expired"
+    assert approval["reason"] == "跨部门工单处理"
+    assert approval["decision_comment"] == "同意"
+    assert approval["decided_by"] == approver.authentik_user_id
+    assert isinstance(approval["decided_at"], str)
+    access_request.refresh_from_db()
+    assert access_request.status == "grant_expired"
 
 
 def test_reject_requires_comment_and_applicant_sees_reason() -> None:
@@ -331,6 +377,7 @@ def _submitted_request(
         user=user,
         app=app,
         grant_type=GRANT_TYPE_PERMANENT,
+        reason="跨部门工单处理",
         idempotency_key=f"{user_key}-submission",
         payload_digest="a" * 64,
     )

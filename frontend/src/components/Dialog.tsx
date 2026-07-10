@@ -98,6 +98,11 @@ function useDialogEffects(
   panelRef: React.RefObject<HTMLDivElement | null>,
   closeDisabled: boolean,
 ) {
+  const onCloseRef = useRef(onClose);
+  const closeDisabledRef = useRef(closeDisabled);
+  onCloseRef.current = onClose;
+  closeDisabledRef.current = closeDisabled;
+
   useEffect(() => {
     const previouslyFocused = document.activeElement as HTMLElement | null;
     const panel = panelRef.current;
@@ -109,8 +114,8 @@ function useDialogEffects(
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
-        if (!closeDisabled) {
-          onClose();
+        if (!closeDisabledRef.current) {
+          onCloseRef.current();
         }
         return;
       }
@@ -146,7 +151,7 @@ function useDialogEffects(
       // 关闭后把焦点还给打开弹窗前聚焦的元素(通常是触发按钮)。
       previouslyFocused?.focus?.();
     };
-  }, [closeDisabled, onClose, panelRef]);
+  }, [panelRef]);
 }
 
 let scrollLockDepth = 0;

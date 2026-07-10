@@ -30,7 +30,7 @@ const DETAIL_PAYLOAD = {
         status: "done",
         to_user: { user_id: "u-9", name: "王五" },
         policy: {},
-        preview_payload: {},
+        preview_payload: { assets: [], hook: "skipped" },
         result_payload: {},
         attempts: 1,
         last_error: "",
@@ -54,7 +54,7 @@ const DETAIL_PAYLOAD = {
         status: "failed",
         to_user: { user_id: "u-9", name: "王五" },
         policy: {},
-        preview_payload: {},
+        preview_payload: { assets: [], hook: "skipped" },
         result_payload: {},
         attempts: 2,
         last_error: "下游服务超时",
@@ -254,8 +254,8 @@ describe("HandoverTaskDetail", () => {
   test("权限清单加载失败或预览失败时不能进入下一步", async () => {
     const baseFetch = buildFetchMock();
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
-      if (String(input) === "/console/api/v1/lifecycle/handover-tasks/1/actions/wiki/preview") {
-        return jsonResponse({ error: { message: "Wiki 预览失败" } }, 422);
+      if (String(input) === "/console/api/v1/lifecycle/handover-tasks/1/actions/crm/preview") {
+        return jsonResponse({ error: { message: "CRM 预览失败" } }, 422);
       }
       return baseFetch(input, init);
     });
@@ -297,7 +297,7 @@ describe("HandoverTaskDetail", () => {
           },
         });
       }
-      if (url.endsWith("/actions/wiki/execute") && method === "POST") {
+      if (url.endsWith("/actions/wiki/retry") && method === "POST") {
         return jsonResponse({ app_action: { ...DETAIL_PAYLOAD.handover_task.app_actions[2], status: "done" } });
       }
       if (url.endsWith("/actions/crm/retry") && method === "POST") {
@@ -393,6 +393,7 @@ describe("HandoverTaskDetail", () => {
                 add: [],
                 keep: [],
               },
+              revision: 1,
               confirmed_at: null,
             },
             team_items: [

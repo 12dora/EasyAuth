@@ -24,6 +24,7 @@ from easyauth.grants.services import GrantMutationInput, GrantService
 from easyauth.lifecycle import services as lifecycle_services
 from easyauth.lifecycle.models import (
     HandoverAppAction,
+    HandoverGrantItem,
     HandoverTask,
     OnboardingTemplate,
     OnboardingTemplateItem,
@@ -193,6 +194,45 @@ def test_receiver_rejects_handover_subject() -> None:
     assert response.status_code == HTTPStatus.BAD_REQUEST
     assert action.to_user is None
     assert action.policy == {}
+
+
+def test_grant_selection_patch_invalidates_related_preview() -> None:
+    client = _logged_in_superuser("handover-selection-preview-admin")
+    app, group, _permission = _app_with_catalog("handover-selection-preview")
+    subject = UserMirror.objects.create(authentik_user_id="handover-selection-preview-subject")
+    _ = GrantService.create_grant(
+        GrantMutationInput(
+            user=subject,
+            app=app,
+            authorization_groups=(AuthorizationGroupGrantInput(group, None),),
+        ),
+    )
+    receiver = UserMirror.objects.create(authentik_user_id="handover-selection-preview-receiver")
+    task, _created = lifecycle_services.ensure_handover_task(
+        subject=subject,
+        kind="offboard",
+        created_by="handover-selection-preview-admin",
+    )
+    action = update_action_receiver(
+        action=HandoverAppAction.objects.get(task=task, app=app),
+        to_user=receiver,
+        policy={},
+    )
+    action = lifecycle_services.preview_action(action)
+    item = HandoverGrantItem.objects.get(task=task, app=app)
+
+    response = client.patch(
+        f"{TASKS_URL}/{task.id}/grant-items",
+        data=dumps({"items": [{"id": item.id, "selected": False}]}),
+        content_type="application/json",
+    )
+
+    action.refresh_from_db()
+    item.refresh_from_db()
+    assert response.status_code == HTTPStatus.OK
+    assert item.selected is False
+    assert action.status == "pending"
+    assert action.preview_payload == {}
 
 
 def test_receiver_batch_semantic_error_prevents_all_writes() -> None:
@@ -406,7 +446,7 @@ def test_confirmed_transfer_diff_is_idempotent_and_conflicts_on_other_payload() 
         key = entry.get("key")
         assert isinstance(key, str)
         add_keys.append(key)
-    payload = {"revoke_keys": [], "add_keys": add_keys}
+    payload = {"revoke_keys": [], "add_keys": [], "plan_revision": plan.revision}
 
     first_response = client.post(
         f"{TASKS_URL}/{task.id}/grant-diff/confirm",
@@ -421,15 +461,63 @@ def test_confirmed_transfer_diff_is_idempotent_and_conflicts_on_other_payload() 
     )
     conflicting_response = client.post(
         f"{TASKS_URL}/{task.id}/grant-diff/confirm",
-        data=dumps({"revoke_keys": [], "add_keys": []}),
+        data=dumps({"revoke_keys": [], "add_keys": add_keys, "plan_revision": plan.revision}),
         content_type="application/json",
     )
+    detail_response = client.get(f"{TASKS_URL}/{task.id}")
 
     assert build_response.status_code == HTTPStatus.OK
     assert first_response.status_code == HTTPStatus.OK
     assert same_response.status_code == HTTPStatus.OK
+    assert first_response.json()["transfer_plan"]["revision"] == plan.revision
+    assert first_response.json()["transfer_plan"]["grant_diff"]["add"] == [
+        {"key": key, "selected": False} for key in add_keys
+    ]
+    assert detail_response.json()["handover_task"]["transfer_plan"]["grant_diff"]["add"] == [
+        {"key": key, "selected": False} for key in add_keys
+    ]
     assert AccessGrant.objects.filter(user=subject, app=app).count() == grant_count_after_first
     assert conflicting_response.status_code == HTTPStatus.CONFLICT
+
+
+def test_transfer_diff_confirmation_rejects_stale_revision() -> None:
+    client = _logged_in_superuser("handover-stale-plan-admin")
+    app, group, _permission = _app_with_catalog("handover-stale-plan")
+    subject = UserMirror.objects.create(authentik_user_id="handover-stale-plan-subject")
+    _ = GrantService.create_grant(
+        GrantMutationInput(
+            user=subject,
+            app=app,
+            authorization_groups=(AuthorizationGroupGrantInput(group, None),),
+        ),
+    )
+    task, _created = lifecycle_services.ensure_handover_task(
+        subject=subject,
+        kind="transfer",
+        created_by="handover-stale-plan-admin",
+    )
+    template = OnboardingTemplate.objects.create(name="旧方案版本测试模板")
+    _ = OnboardingTemplateItem.objects.create(template=template, app=app, authorization_group=group)
+    first = client.post(
+        f"{TASKS_URL}/{task.id}/grant-diff",
+        data=dumps({"template_id": template.id}),
+        content_type="application/json",
+    ).json()["transfer_plan"]
+    second = client.post(
+        f"{TASKS_URL}/{task.id}/grant-diff",
+        data=dumps({"template_id": template.id}),
+        content_type="application/json",
+    ).json()["transfer_plan"]
+
+    response = client.post(
+        f"{TASKS_URL}/{task.id}/grant-diff/confirm",
+        data=dumps({"revoke_keys": [], "add_keys": [], "plan_revision": first["revision"]}),
+        content_type="application/json",
+    )
+
+    assert second["revision"] == first["revision"] + 1
+    assert response.status_code == HTTPStatus.CONFLICT
+    assert TransferPlan.objects.get(task=task).confirmed_at is None
 
 
 def _logged_in_superuser(username: str) -> Client:
