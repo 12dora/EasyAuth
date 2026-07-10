@@ -176,11 +176,13 @@ export function MatrixTab({ appKey }: { appKey: string }) {
         return (
           <SelectInput
             aria-label={t("console.matrix.grant.managedScopeAriaLabel", { permission: row.original.permission, scope: row.original.scope })}
-            value={managedScopePolicyMode(row.original.managed_scope_policy)}
+            value={managedScopePolicyResolver(row.original.managed_scope_policy)}
             onChange={(event) => updateGrantManagedScopePolicy(row.original, event.currentTarget.value, setForm)}
           >
             <option value="inherit">{t("console.matrix.grant.policy.inherit")}</option>
-            <option value="override">{t("console.matrix.grant.policy.override")}</option>
+            <option value="dingtalk_manager_chain">{t("console.matrix.grant.policy.override")}</option>
+            <option value="easyauth_team">{t("console.managedScope.option.team")}</option>
+            <option value="union">{t("console.managedScope.option.union")}</option>
             <option value="disabled">{t("console.matrix.grant.policy.disabled")}</option>
           </SelectInput>
         );
@@ -280,7 +282,7 @@ export function MatrixTab({ appKey }: { appKey: string }) {
             )}
           </TableBody>
         </TableRoot>
-        <TablePagination table={authorizationGroupTable} />
+        <TablePagination table={authorizationGroupTable} totalItems={authorizationGroups.length} />
       </TableFrame>
       {groupDialogOpen ? (
         <Dialog title={selectedKey ? t("console.matrix.editTitle") : t("console.matrix.createTitle")} size="xl" onClose={() => setGroupDialogOpen(false)} footer={
@@ -383,7 +385,7 @@ export function MatrixTab({ appKey }: { appKey: string }) {
                 )}
               </TableBody>
             </TableRoot>
-            <TablePagination table={grantTable} />
+            <TablePagination table={grantTable} totalItems={form.grants.length} />
           </TableFrame>
           <PanelSurface className="flex flex-wrap items-center justify-between gap-3 bg-paper-deep">
             <span className="min-w-0 text-sm text-ink-soft">{t("console.matrix.grantPreview", { value: form.grants.map((grant) => `${grant.permission} / ${grant.scope}`).join("，") || "-" })}</span>
@@ -443,18 +445,25 @@ function inheritManagedScopePolicy(): ManagedScopePolicyItem {
   return { mode: "inherit", resolver: null, enabled: true };
 }
 
-function managedScopePolicyMode(policy: ManagedScopePolicyItem | undefined): string {
-  if (policy?.mode === "override" || policy?.mode === "disabled") {
-    return policy.mode;
+function managedScopePolicyResolver(policy: ManagedScopePolicyItem | undefined): string {
+  if (policy?.mode === "disabled" || policy?.resolver === "disabled" || policy?.enabled === false) {
+    return "disabled";
+  }
+  const resolver = policy?.resolver;
+  if (resolver === "dingtalk_manager_chain" || resolver === "easyauth_team" || resolver === "union") {
+    return resolver;
   }
   return "inherit";
 }
 
-function managedScopePolicyFromMode(mode: string): ManagedScopePolicyItem {
-  if (mode === "override") {
-    return { mode: "override", resolver: "dingtalk_manager_chain", enabled: true };
+function managedScopePolicyFromMode(resolver: string): ManagedScopePolicyItem {
+  if (resolver === "dingtalk_manager_chain") {
+    return { mode: "override", resolver, enabled: true };
   }
-  if (mode === "disabled") {
+  if (resolver === "easyauth_team" || resolver === "union") {
+    return { mode: resolver, resolver, enabled: true };
+  }
+  if (resolver === "disabled") {
     return { mode: "disabled", resolver: "disabled", enabled: true };
   }
   return inheritManagedScopePolicy();
@@ -464,8 +473,18 @@ function managedScopeEffectivePolicyLabel(t: Translator, grant: AuthorizationGro
   if (!isManagedUsersGrant(grant)) {
     return "-";
   }
-  if (grant.effective_managed_scope_policy?.resolver === "dingtalk_manager_chain") {
+  const resolver = grant.effective_managed_scope_policy?.resolver;
+  if (resolver === "dingtalk_manager_chain") {
     return t("console.matrix.grant.policy.override");
+  }
+  if (resolver === "easyauth_team") {
+    return t("console.managedScope.option.team");
+  }
+  if (resolver === "union") {
+    return t("console.managedScope.option.union");
+  }
+  if (resolver === "disabled") {
+    return t("console.matrix.grant.policy.disabled");
   }
   return t("console.matrix.grant.effective.unconfigured");
 }

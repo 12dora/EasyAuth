@@ -454,6 +454,81 @@ export interface WebhookConfigPayload {
   webhook_config: WebhookConfigItem | null;
 }
 
+/** 出站供给连接器 config_schema 的字段描述(JSON Schema 子集, x-secret 标记加密字段)。 */
+export interface ConnectorSchemaProperty {
+  type?: "string" | "boolean" | "number" | string;
+  title?: string;
+  description?: string;
+  default?: string | number | boolean;
+  enum?: Array<string | number>;
+  "x-secret"?: boolean;
+}
+
+export interface ConnectorConfigSchema {
+  type?: string;
+  properties?: Record<string, ConnectorSchemaProperty>;
+  required?: string[];
+}
+
+export interface ConnectorTypeItem {
+  key: string;
+  display_name: string;
+  config_schema: ConnectorConfigSchema;
+}
+
+/** 连接器实例: config 中 x-secret 字段读接口恒为空串, configured_secrets 标记已配置。 */
+export interface ConnectorInstanceItem {
+  id: number;
+  connector_key: string;
+  display_name: string;
+  enabled: boolean;
+  config: JsonObject;
+  configured_secrets: string[];
+  reconcile_interval_seconds: number;
+  last_reconcile_at: string | null;
+  last_status: "" | "success" | "partial" | "failed" | string;
+  last_error: string;
+  consecutive_failures: number;
+  updated_by: string;
+  updated_at: string;
+}
+
+export interface ConnectorsPayload {
+  connector_types: ConnectorTypeItem[];
+  data: ConnectorInstanceItem[];
+}
+
+export interface ConnectorInstancePayload {
+  connector: ConnectorInstanceItem;
+}
+
+export interface ConnectorTestResult {
+  ok: boolean;
+  message: string;
+}
+
+export interface ConnectorMappingItem {
+  authorization_group_key: string;
+  authorization_group_name: string;
+  external_ref: string;
+  auto_create: boolean;
+}
+
+export interface ConnectorExternalGroupItem {
+  ref: string;
+  name: string;
+}
+
+export interface ConnectorSyncRunItem {
+  id: number;
+  trigger: "periodic" | "event" | "manual" | "offboard" | string;
+  status: "success" | "partial" | "failed" | string;
+  started_at: string;
+  finished_at: string;
+  stats: Record<string, number>;
+  error: string;
+}
+
 /** M4 生命周期: 人员列表行, 对齐后端 users_api._person_item 序列化字段。 */
 export interface PersonRow {
   user_id: string;

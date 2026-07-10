@@ -96,4 +96,30 @@ describe("grantDraft", () => {
       },
     ]);
   });
+
+  test.each([
+    { mode: "override", resolver: "dingtalk_manager_chain", enabled: true },
+    { mode: "easyauth_team", resolver: "easyauth_team", enabled: true },
+    { mode: "union", resolver: "union", enabled: true },
+    { mode: "disabled", resolver: "disabled", enabled: false },
+  ])("读取后直接保存时无损保留 $resolver 策略", (managedScopePolicy) => {
+    const payload = buildAuthorizationGroupPayload({
+      key: "manager",
+      kind: "role",
+      name: "主管",
+      description: "",
+      requestable: true,
+      is_active: true,
+      grants: [
+        {
+          permission: "order.read",
+          scope: "MANAGED_USERS",
+          is_active: true,
+          managed_scope_policy: managedScopePolicy,
+        },
+      ],
+    });
+
+    expect(payload.grants[0]?.managed_scope_policy).toEqual(managedScopePolicy);
+  });
 });

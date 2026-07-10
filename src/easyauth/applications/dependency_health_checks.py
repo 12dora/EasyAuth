@@ -12,6 +12,7 @@ from easyauth.applications.health_models import (
     DEPENDENCY_AUTHENTIK,
     DEPENDENCY_AUTHENTIK_DIRECTORY,
     DEPENDENCY_CELERY,
+    DEPENDENCY_CONNECTORS,
     DEPENDENCY_DINGTALK,
     DEPENDENCY_HEALTH_STATUS_HEALTHY,
     DEPENDENCY_HEALTH_STATUS_UNHEALTHY,
@@ -61,6 +62,7 @@ def run_dependency_health_checks() -> tuple[DependencyHealthItem, ...]:
         _check_authentik_directory(config),
         _check_dingtalk(),
         _check_celery(),
+        _check_connectors(),
     )
     now = timezone.now()
     for result in results:
@@ -175,6 +177,58 @@ def _check_dingtalk() -> DependencyCheckResult:
         dependency=DEPENDENCY_DINGTALK,
         status=DEPENDENCY_HEALTH_STATUS_HEALTHY,
         summary=f"钉钉目录同步正常, 共 {len(states)} 个 corp, 最早同步于 {oldest.isoformat()}。",
+        error_summary="",
+    )
+
+
+def _check_connectors() -> DependencyCheckResult:
+    # 供给连接器不做主动探测(对账任务已在真实调用外部 API), 只汇总实例健康字段:
+    # 连续失败达到阈值判不健康(方案 §3.6), 单次失败先给 warning。
+    # 函数内导入: 避免 applications ← connectors 模块级互赖(connectors 依赖 applications)。
+    from easyauth.connectors.models import (  # noqa: PLC0415
+        SYNC_RUN_STATUS_FAILED,
+        ConnectorInstance,
+    )
+    from easyauth.connectors.services import (  # noqa: PLC0415
+        CONNECTOR_UNHEALTHY_FAILURE_THRESHOLD,
+    )
+
+    instances = tuple(ConnectorInstance.objects.filter(enabled=True).select_related("app"))
+    if not instances:
+        return DependencyCheckResult(
+            dependency=DEPENDENCY_CONNECTORS,
+            status=DEPENDENCY_HEALTH_STATUS_HEALTHY,
+            summary="无启用的供给连接器实例。",
+            error_summary="",
+        )
+    failing = [
+        instance
+        for instance in instances
+        if instance.consecutive_failures >= CONNECTOR_UNHEALTHY_FAILURE_THRESHOLD
+    ]
+    if failing:
+        names = ", ".join(f"{item.app.app_key}:{item.connector_key}" for item in failing)
+        return DependencyCheckResult(
+            dependency=DEPENDENCY_CONNECTORS,
+            status=DEPENDENCY_HEALTH_STATUS_UNHEALTHY,
+            summary=f"连接器实例连续对账失败({names})。",
+            error_summary="; ".join(item.last_error for item in failing if item.last_error),
+        )
+    warning = [
+        instance for instance in instances if instance.last_status == SYNC_RUN_STATUS_FAILED
+    ]
+    if warning:
+        names = ", ".join(f"{item.app.app_key}:{item.connector_key}" for item in warning)
+        return DependencyCheckResult(
+            dependency=DEPENDENCY_CONNECTORS,
+            status=DEPENDENCY_HEALTH_STATUS_WARNING,
+            summary=f"连接器实例最近一轮对账失败({names}), 等待下轮重试。",
+            error_summary="; ".join(item.last_error for item in warning if item.last_error),
+        )
+    return DependencyCheckResult(
+        dependency=DEPENDENCY_CONNECTORS,
+        status=DEPENDENCY_HEALTH_STATUS_HEALTHY,
+        summary=f"{len(instances)} 个连接器实例对账正常。",
         error_summary="",
     )
 

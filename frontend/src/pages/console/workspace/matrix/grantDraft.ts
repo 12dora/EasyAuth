@@ -106,13 +106,11 @@ function grantPayload(grant: AuthorizationGroupGrantDraft): AuthorizationGroupGr
 }
 
 function normalizeManagedScopePolicy(policy: ManagedScopePolicyItem): ManagedScopePolicyItem {
-  if (policy.mode === "disabled") {
-    return { mode: "disabled", resolver: "disabled", enabled: policy.enabled !== false };
-  }
-  if (policy.mode === "override") {
-    return { mode: "override", resolver: "dingtalk_manager_chain", enabled: policy.enabled !== false };
-  }
-  return { mode: "inherit", resolver: null, enabled: policy.enabled !== false };
+  return {
+    mode: policy.mode,
+    ...(policy.resolver !== undefined ? { resolver: policy.resolver } : {}),
+    ...(policy.enabled !== undefined ? { enabled: policy.enabled } : {}),
+  };
 }
 
 function managedScopePolicyPayload(policy: ManagedScopePolicyItem): JsonObject {

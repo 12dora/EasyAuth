@@ -58,6 +58,7 @@ INSTALLED_APPS: list[str] = [
     "easyauth.grants.apps.GrantsConfig",
     "easyauth.teams.apps.TeamsConfig",
     "easyauth.webhooks.apps.WebhooksConfig",
+    "easyauth.connectors.apps.ConnectorsConfig",
     "easyauth.integrations.apps.IntegrationsConfig",
     "easyauth.workflows.apps.WorkflowsConfig",
     "easyauth.lifecycle.apps.LifecycleConfig",
@@ -294,6 +295,16 @@ EASYAUTH_AUTHENTIK_DINGTALK_SOURCE_SLUG = os.environ.get(
     "EASYAUTH_AUTHENTIK_DINGTALK_SOURCE_SLUG",
     "dingtalk",
 )
+# 出站供给连接器注册表(方案 §3.4): 显式 dotted-path, 禁止 entry_points 自动发现;
+# 新增连接器 = 新增实现类 + 此处一行(或环境变量逗号分隔覆盖)。
+EASYAUTH_CONNECTORS = tuple(
+    path.strip()
+    for path in os.environ.get(
+        "EASYAUTH_CONNECTORS",
+        "easyauth.connectors.netbird.connector.NetBirdConnector",
+    ).split(",")
+    if path.strip()
+)
 
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
@@ -305,6 +316,7 @@ CELERY_IMPORTS = (
     "easyauth.tasks.webhooks",
     "easyauth.tasks.lifecycle",
     "easyauth.tasks.dingtalk_stream",
+    "easyauth.tasks.connectors",
 )
 CELERY_BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
     "grant-expiration-cleanup": {
@@ -320,5 +332,15 @@ CELERY_BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
     "dependency-health-check": {
         "task": "easyauth.health.run_dependency_health_checks",
         "schedule": float(os.environ.get("EASYAUTH_DEPENDENCY_HEALTH_CHECK_SECONDS", "300")),
+    },
+    # 连接器周期对账调度器: 扫描到期实例入队(实例各自的 interval 在任务内判定)。
+    "connector-reconcile-scheduler": {
+        "task": "easyauth.connectors.schedule_reconciles",
+        "schedule": float(os.environ.get("EASYAUTH_CONNECTOR_SCHEDULER_SECONDS", "60")),
+    },
+    # 连接器运行记录清理: 每实例保留最近 N 条。
+    "connector-sync-run-prune": {
+        "task": "easyauth.connectors.prune_sync_runs",
+        "schedule": float(os.environ.get("EASYAUTH_CONNECTOR_SYNC_RUN_PRUNE_SECONDS", "86400")),
     },
 }

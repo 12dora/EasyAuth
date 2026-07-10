@@ -16,6 +16,7 @@ import type { JsonObject } from "../../lib/api";
 import type { AppListPayload, AppManagedScopePolicyPayload, EffectiveManagedScopePolicyItem } from "../../lib/domain";
 import type { Translator } from "../../lib/status";
 import { CatalogTab } from "./workspace/tabs/CatalogTab";
+import { ConnectorTab } from "./workspace/tabs/ConnectorTab";
 import { CredentialsTab } from "./workspace/tabs/CredentialsTab";
 import { GuideTab } from "./workspace/tabs/GuideTab";
 import { ManifestTab } from "./workspace/tabs/ManifestTab";
@@ -25,7 +26,7 @@ import { QueryTestTab } from "./workspace/tabs/QueryTestTab";
 import { RulesTab } from "./workspace/tabs/RulesTab";
 import { WebhookTab } from "./workspace/tabs/WebhookTab";
 
-type WorkspaceTab = "overview" | "catalog" | "matrix" | "managed-scope" | "rules" | "manifest" | "credentials" | "webhook" | "test" | "guide";
+type WorkspaceTab = "overview" | "catalog" | "matrix" | "managed-scope" | "rules" | "manifest" | "credentials" | "webhook" | "connector" | "test" | "guide";
 
 const TABS: Array<{ key: WorkspaceTab; labelKey: MessageKey }> = [
   { key: "overview", labelKey: "workspace.tab.overview" },
@@ -36,6 +37,7 @@ const TABS: Array<{ key: WorkspaceTab; labelKey: MessageKey }> = [
   { key: "manifest", labelKey: "workspace.tab.manifest" },
   { key: "credentials", labelKey: "workspace.tab.credentials" },
   { key: "webhook", labelKey: "workspace.tab.webhook" },
+  { key: "connector", labelKey: "workspace.tab.connector" },
   { key: "test", labelKey: "workspace.tab.test" },
   { key: "guide", labelKey: "workspace.tab.guide" },
 ];
@@ -155,7 +157,7 @@ export function ConsoleAppWorkspace() {
           </button>
         ))}
       </div>
-      <div id="workspace-tabpanel" role="tabpanel" aria-labelledby={`workspace-tab-${activeTab}`}>
+      <div key={`${appKey}:${activeTab}`} id="workspace-tabpanel" role="tabpanel" aria-labelledby={`workspace-tab-${activeTab}`}>
       {activeTab === "overview" ? <OverviewTab appKey={appKey} app={app} /> : null}
       {activeTab === "catalog" ? <CatalogTab appKey={appKey} /> : null}
       {activeTab === "matrix" ? <MatrixTab appKey={appKey} /> : null}
@@ -164,6 +166,7 @@ export function ConsoleAppWorkspace() {
       {activeTab === "manifest" ? <ManifestTab appKey={appKey} /> : null}
       {activeTab === "credentials" ? <CredentialsTab appKey={appKey} /> : null}
       {activeTab === "webhook" ? <WebhookTab appKey={appKey} /> : null}
+      {activeTab === "connector" ? <ConnectorTab appKey={appKey} /> : null}
       {activeTab === "test" ? <QueryTestTab appKey={appKey} /> : null}
       {activeTab === "guide" ? <GuideTab appKey={appKey} /> : null}
       </div>
@@ -199,21 +202,28 @@ function ManagedScopeTab({ appKey }: { appKey: string }) {
   const queryKey = ["console", "app", appKey, "managed-scope-policy"];
   const policyQuery = useQuery({
     queryKey,
-    queryFn: () => apiRequest<AppManagedScopePolicyPayload>(`/console/api/v1/apps/${appKey}/managed-scope-policy`),
+    queryFn: async () => validateManagedScopePolicyPayload(
+      await apiRequest<unknown>(`/console/api/v1/apps/${appKey}/managed-scope-policy`),
+      t("console.managedScope.invalidResponse"),
+    ),
     enabled: Boolean(appKey),
   });
   const saveMutation = useMutation({
-    mutationFn: () =>
-      apiRequest<AppManagedScopePolicyPayload>(`/console/api/v1/apps/${appKey}/managed-scope-policy`, {
-        method: "PATCH",
-        body: { managed_scope_policy: payloadForManagedScopeSelection(selection) } satisfies JsonObject,
-      }),
+    mutationFn: async () =>
+      validateManagedScopePolicyPayload(
+        await apiRequest<unknown>(`/console/api/v1/apps/${appKey}/managed-scope-policy`, {
+          method: "PATCH",
+          body: { managed_scope_policy: payloadForManagedScopeSelection(selection) } satisfies JsonObject,
+        }),
+        t("console.managedScope.invalidResponse"),
+      ),
     onSuccess: (payload) => {
       queryClient.setQueryData(queryKey, payload);
     },
   });
   const effectivePolicy = policyQuery.data?.effective_managed_scope_policy ?? null;
   const teamBasedSelection = selection === "easyauth_team" || selection === "union";
+  const hasAuthoritativeSnapshot = policyQuery.isSuccess;
 
   useEffect(() => {
     if (!policyQuery.data) {
@@ -234,19 +244,26 @@ function ManagedScopeTab({ appKey }: { appKey: string }) {
             type="button"
             variant="primary"
             loading={saveMutation.isPending}
-            disabled={saveMutation.isPending || policyQuery.isLoading}
+            disabled={saveMutation.isPending || !hasAuthoritativeSnapshot}
             onClick={() => saveMutation.mutate()}
           >
             {t("console.managedScope.save")}
           </Button>
         </div>
         {policyQuery.error ? (
-          <StatusBanner tone="signal" title={t("console.managedScope.loadFailed")} message={(policyQuery.error as Error).message} />
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="min-w-0 flex-1">
+              <StatusBanner tone="signal" title={t("console.managedScope.loadFailed")} message={(policyQuery.error as Error).message} />
+            </div>
+            <Button type="button" loading={policyQuery.isFetching} onClick={() => void policyQuery.refetch()}>
+              {t("common.retry")}
+            </Button>
+          </div>
         ) : null}
         {saveMutation.error ? (
           <StatusBanner tone="signal" title={t("console.managedScope.saveFailed")} message={(saveMutation.error as Error).message} />
         ) : null}
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
+        {hasAuthoritativeSnapshot ? <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
           <div className="space-y-2">
             <Field label={t("console.managedScope.policyLabel")} hint={t("console.managedScope.policyHint")}>
               <SelectInput
@@ -287,10 +304,52 @@ function ManagedScopeTab({ appKey }: { appKey: string }) {
               <p className="mt-3 text-xs leading-5 text-ink-soft">{effectivePolicy.health_message}</p>
             ) : null}
           </div>
-        </div>
+        </div> : null}
       </PanelSurface>
     </section>
   );
+}
+
+function validateManagedScopePolicyPayload(
+  payload: unknown,
+  invalidResponseMessage: string,
+): AppManagedScopePolicyPayload {
+  if (
+    !isRecord(payload)
+    || !("managed_scope_policy" in payload)
+    || !("effective_managed_scope_policy" in payload)
+    || !isManagedScopePolicySnapshot(payload.managed_scope_policy)
+    || !isEffectiveManagedScopePolicySnapshot(payload.effective_managed_scope_policy)
+  ) {
+    throw new Error(invalidResponseMessage);
+  }
+  return payload as unknown as AppManagedScopePolicyPayload;
+}
+
+function isManagedScopePolicySnapshot(value: unknown): boolean {
+  return value === null || (
+    isRecord(value)
+    && isManagedScopeSnapshotResolver(value.resolver)
+    && typeof value.enabled === "boolean"
+  );
+}
+
+function isEffectiveManagedScopePolicySnapshot(value: unknown): boolean {
+  return value === null || (
+    isRecord(value)
+    && isManagedScopeSnapshotResolver(value.resolver)
+    && typeof value.enabled === "boolean"
+    && typeof value.source === "string"
+    && typeof value.health_status === "string"
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isManagedScopeSnapshotResolver(value: unknown): boolean {
+  return value === "disabled" || isManagedScopeResolver(value);
 }
 
 function payloadForManagedScopeSelection(selection: ManagedScopeSelection): JsonObject | null {

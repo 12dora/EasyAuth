@@ -39,6 +39,7 @@ GRANT_STATUS_VALUES: Final[tuple[str, ...]] = (
 class AccessGrant(models.Model):
     if TYPE_CHECKING:
         id: ClassVar[int]
+        app_id: ClassVar[int]
 
     user: models.ForeignKey[UserMirror, UserMirror] = models.ForeignKey(
         UserMirror,

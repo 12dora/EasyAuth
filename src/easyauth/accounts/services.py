@@ -8,6 +8,7 @@ from django.db import transaction
 from easyauth.accounts.models import UserMirror
 from easyauth.accounts.status import UserStatus, is_non_active_status
 from easyauth.audit.services import AuditRecord, AuditService
+from easyauth.connectors.dispatch import dispatch_user_offboarded
 from easyauth.grants.services import GrantService
 from easyauth.integrations.authentik.payloads import (
     AuthentikPayloadInput,
@@ -42,6 +43,9 @@ class AuthentikSyncService:
             revoked_count = _revoke_current_grants_for_departed_user(upsert.user)
             if _should_record_departure_event(upsert=upsert, revoked_count=revoked_count):
                 _record_departure_event(upsert.user, revoked_count=revoked_count)
+                # 连接器离职快路径(秒级 block); 只在新检出离职时触发,
+                # 避免周期目录同步对既有离职用户反复出站调用。
+                dispatch_user_offboarded(upsert.user)
             return AuthentikSyncResult(
                 user=upsert.user,
                 created=upsert.created,
@@ -62,6 +66,7 @@ class AuthentikSyncService:
             upsert = _UserUpsertResult(user=locked, created=False, was_non_active=was_non_active)
             if _should_record_departure_event(upsert=upsert, revoked_count=revoked_count):
                 _record_departure_event(locked, revoked_count=revoked_count)
+                dispatch_user_offboarded(locked)
             return AuthentikSyncResult(user=locked, created=False, revoked_count=revoked_count)
 
 

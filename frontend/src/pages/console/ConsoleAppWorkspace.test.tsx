@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { lazy, Suspense, type ReactElement } from "react";
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { ToastProvider } from "../../components/ui/Toast";
@@ -115,6 +115,81 @@ describe("ConsoleAppWorkspace", () => {
     expect(screen.getByTestId("location")).toHaveTextContent("/console/apps/demo?tab=rules");
   });
 
+  test("同一 tab 从应用 A 导航到应用 B 时销毁旧应用的本地状态和在途结果", async () => {
+    let resolveOldQuery!: (response: Response) => void;
+    const oldQueryResponse = new Promise<Response>((resolve) => {
+      resolveOldQuery = resolve;
+    });
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/demo") {
+        return jsonResponse(appPayload);
+      }
+      if (url === "/console/api/v1/apps/second") {
+        return jsonResponse({ app: { ...appPayload.app, app_key: "second", name: "Second App" } });
+      }
+      if (url === "/console/api/v1/apps/demo/permission-query-tests" && init?.method === "POST") {
+        return oldQueryResponse;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWorkspace("/console/apps/demo?tab=test");
+
+    const userInput = await screen.findByLabelText("用户 ID");
+    await user.type(userInput, "alice");
+    await user.type(screen.getByLabelText("Bearer token"), "app-a-secret");
+    await user.click(screen.getByRole("button", { name: "执行联调" }));
+    await user.click(screen.getByRole("button", { name: "导航到第二个应用" }));
+
+    expect(await screen.findByRole("heading", { name: "Second App" })).toBeInTheDocument();
+    expect(screen.getByLabelText("用户 ID")).toHaveValue("");
+    expect(screen.getByLabelText("Bearer token")).toHaveValue("");
+
+    resolveOldQuery(jsonResponse({
+      app_key: "demo",
+      user_id: "alice",
+      allowed: true,
+      source: "app-a-result",
+      groups: [],
+      grants: [],
+    }));
+    await waitFor(() => expect(screen.queryByText("app-a-result")).not.toBeInTheDocument());
+  });
+
+  test("管理范围权威快照格式错误时禁止编辑和保存，重试成功后才开放", async () => {
+    let managedScopeReadCount = 0;
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/demo") {
+        return jsonResponse({ app: { ...appPayload.app, can_manage: true } });
+      }
+      if (url === "/console/api/v1/apps/demo/managed-scope-policy" && !init?.method) {
+        managedScopeReadCount += 1;
+        return managedScopeReadCount === 1
+          ? jsonResponse({})
+          : jsonResponse({ managed_scope_policy: null, effective_managed_scope_policy: null });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWorkspace("/console/apps/demo?tab=managed-scope");
+
+    expect(await screen.findByText("管理范围策略响应格式无效。")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存设置" })).toBeDisabled();
+    expect(screen.queryByLabelText("应用默认管理范围计算方式")).not.toBeInTheDocument();
+    expect(findFetchCall(fetchMock, "/console/api/v1/apps/demo/managed-scope-policy", "PATCH")).toBeUndefined();
+
+    await user.click(screen.getByRole("button", { name: "重新加载" }));
+
+    expect(await screen.findByLabelText("应用默认管理范围计算方式")).toHaveValue("unconfigured");
+    expect(screen.getByRole("button", { name: "保存设置" })).toBeEnabled();
+  });
+
   test("管理范围 tab 读取并保存应用默认 MANAGED_USERS 策略", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
@@ -132,6 +207,7 @@ describe("ConsoleAppWorkspace", () => {
           managed_scope_policy: { mode: "override", resolver: "dingtalk_manager_chain", enabled: true },
           effective_managed_scope_policy: {
             resolver: "dingtalk_manager_chain",
+            enabled: true,
             source: "app_default",
             health_status: "healthy",
             health_message: "已启用",
@@ -188,6 +264,7 @@ describe("ConsoleAppWorkspace", () => {
           managed_scope_policy: { mode: "override", resolver: "easyauth_team", enabled: true },
           effective_managed_scope_policy: {
             resolver: "easyauth_team",
+            enabled: true,
             source: "app_default",
             health_status: "healthy",
           },
@@ -235,6 +312,7 @@ describe("ConsoleAppWorkspace", () => {
           managed_scope_policy: { mode: "override", resolver: "dingtalk_manager_chain", enabled: true },
           effective_managed_scope_policy: {
             resolver: "dingtalk_manager_chain",
+            enabled: true,
             source: "app_default",
             health_status: "healthy",
           },
@@ -245,6 +323,7 @@ describe("ConsoleAppWorkspace", () => {
           managed_scope_policy: { mode: "disabled", resolver: "disabled", enabled: false },
           effective_managed_scope_policy: {
             resolver: "disabled",
+            enabled: true,
             source: "app_default",
             health_status: "disabled",
             health_message: "应用默认策略已停用",
@@ -274,7 +353,7 @@ describe("ConsoleAppWorkspace", () => {
         },
       });
     });
-    await waitFor(() => expect(screen.getAllByText("不启用").length).toBeGreaterThan(1));
+    await screen.findByText("应用默认策略已停用");
   });
 
   test("授权组保存 payload 包含 permission 和 scope", async () => {
@@ -769,6 +848,7 @@ function renderWorkspace(initialEntry: string) {
                 <LazyConsoleAppWorkspace />
               </Suspense>
               <LocationProbe />
+              <WorkspaceNavigationProbe />
             </>
           }
         />
@@ -780,6 +860,11 @@ function renderWorkspace(initialEntry: string) {
 function LocationProbe() {
   const location = useLocation();
   return <div data-testid="location">{location.pathname + location.search}</div>;
+}
+
+function WorkspaceNavigationProbe() {
+  const navigate = useNavigate();
+  return <button type="button" onClick={() => navigate("/console/apps/second?tab=test")}>导航到第二个应用</button>;
 }
 
 function renderWithClient(ui: ReactElement) {

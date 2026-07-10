@@ -135,6 +135,96 @@ describe("MatrixTab", () => {
       });
     });
   });
+
+  test("展示团队与并集 resolver，直接保存不会改写策略", async () => {
+    const payload = {
+      data: [
+        {
+          id: 12,
+          key: "team-manager",
+          kind: "role",
+          name: "团队主管",
+          description: "",
+          requestable: true,
+          is_active: true,
+          grants: [
+            {
+              permission: "order.read",
+              scope: "MANAGED_USERS",
+              is_active: true,
+              managed_scope_policy: { mode: "easyauth_team", resolver: "easyauth_team", enabled: true },
+              effective_managed_scope_policy: {
+                resolver: "easyauth_team",
+                enabled: true,
+                source: "authorization_group_grant",
+                inherited_from: null,
+                health_status: "healthy",
+              },
+            },
+            {
+              permission: "order.export",
+              scope: "MANAGED_USERS",
+              is_active: true,
+              managed_scope_policy: { mode: "union", resolver: "union", enabled: true },
+              effective_managed_scope_policy: {
+                resolver: "union",
+                enabled: true,
+                source: "authorization_group_grant",
+                inherited_from: null,
+                health_status: "healthy",
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/demo/authorization-groups" && !init?.method) {
+        return jsonResponse(payload);
+      }
+      if (url === "/console/api/v1/apps/demo/permissions") {
+        return jsonResponse({
+          data: [
+            { id: 20, key: "order.read", name: "订单读取", supported_scopes: ["MANAGED_USERS"] },
+            { id: 21, key: "order.export", name: "订单导出", supported_scopes: ["MANAGED_USERS"] },
+          ],
+        });
+      }
+      if (url === "/console/api/v1/apps/demo/scopes") {
+        return jsonResponse({ data: [{ key: "MANAGED_USERS", name: "被管理人员", is_active: true, display_order: 1 }] });
+      }
+      if (url === "/console/api/v1/apps/demo/authorization-groups/team-manager" && init?.method === "PATCH") {
+        return jsonResponse(payload);
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWithClient(<MatrixTab appKey="demo" />);
+
+    await screen.findByText("团队主管");
+    await user.click(screen.getByRole("button", { name: "编辑" }));
+    const dialog = await screen.findByRole("dialog", { name: "编辑授权组" });
+    const teamRow = within(dialog).getByText("order.read / MANAGED_USERS").closest("tr") as HTMLTableRowElement;
+    const unionRow = within(dialog).getByText("order.export / MANAGED_USERS").closest("tr") as HTMLTableRowElement;
+    expect(within(teamRow).getByLabelText("order.read / MANAGED_USERS 管理范围计算方式")).toHaveValue("easyauth_team");
+    expect(within(teamRow).getAllByText("按自定义团队").length).toBeGreaterThan(0);
+    expect(within(unionRow).getByLabelText("order.export / MANAGED_USERS 管理范围计算方式")).toHaveValue("union");
+    expect(within(unionRow).getAllByText("合并两者").length).toBeGreaterThan(0);
+
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      const patchCall = findFetchCall(fetchMock, "/console/api/v1/apps/demo/authorization-groups/team-manager", "PATCH");
+      const body = parseJsonBody(patchCall?.[1]) as { grants: Array<{ managed_scope_policy: unknown }> };
+      expect(body.grants.map((grant) => grant.managed_scope_policy)).toEqual([
+        { mode: "easyauth_team", resolver: "easyauth_team", enabled: true },
+        { mode: "union", resolver: "union", enabled: true },
+      ]);
+    });
+  });
   test("同一批次内切换两个授权项状态时不会互相覆盖(FF-15)", async () => {
     const payload = {
       data: [

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Literal, final
 
 from django.db import transaction
 
+from easyauth.connectors.dispatch import notify_grant_mutation
 from easyauth.grants.expiration import GrantExpirationInput, expire_current_grant
 from easyauth.grants.inputs import ScopedDirectGrantInput
 from easyauth.grants.lifecycle import (
@@ -47,15 +48,21 @@ class GrantMutationInput:
 
 @final
 class GrantService:
+    # 授权事实变更的唯一收口(F2): 每个方法在事务内经 notify_grant_mutation 显式埋点,
+    # 提交成功后异步触发连接器对账; 连接器失败绝不回滚授权(方案 §3.5)。
     @staticmethod
     def create_grant(input_data: GrantMutationInput) -> AccessGrant:
         with transaction.atomic():
-            return create_current_grant(input_data, action="grant_created")
+            grant = create_current_grant(input_data, action="grant_created")
+            notify_grant_mutation(grant)
+            return grant
 
     @staticmethod
     def change_grant(input_data: GrantMutationInput) -> AccessGrant:
         with transaction.atomic():
-            return change_current_grant(input_data)
+            grant = change_current_grant(input_data)
+            notify_grant_mutation(grant)
+            return grant
 
     @staticmethod
     def revoke_grant(
@@ -67,13 +74,16 @@ class GrantService:
         reason: str = "",
     ) -> AccessGrant | None:
         with transaction.atomic():
-            return revoke_current_grant(
+            grant = revoke_current_grant(
                 user=user,
                 app=app,
                 actor_type=actor_type,
                 actor_id=actor_id,
                 reason=reason,
             )
+            if grant is not None:
+                notify_grant_mutation(grant)
+            return grant
 
     @staticmethod
     def revoke_for_user(
@@ -84,12 +94,15 @@ class GrantService:
         actor_id: str,
     ) -> list[AccessGrant]:
         with transaction.atomic():
-            return revoke_current_grants_for_user(
+            grants = revoke_current_grants_for_user(
                 user=user,
                 reason=reason,
                 actor_type=actor_type,
                 actor_id=actor_id,
             )
+            for grant in grants:
+                notify_grant_mutation(grant)
+            return grants
 
     @staticmethod
     def emergency_revoke_for_user(
@@ -109,4 +122,7 @@ class GrantService:
     @staticmethod
     def expire_grant(input_data: GrantExpirationInput) -> AccessGrant | None:
         with transaction.atomic():
-            return expire_current_grant(input_data)
+            grant = expire_current_grant(input_data)
+            if grant is not None:
+                notify_grant_mutation(grant)
+            return grant

@@ -27,6 +27,15 @@ from easyauth.admin_console.authorization_groups_api import (
     console_authorization_groups,
 )
 from easyauth.admin_console.auto_onboarding_api import console_app_auto_onboarding
+from easyauth.admin_console.connectors_api import (
+    console_app_connector_detail,
+    console_app_connector_external_groups,
+    console_app_connector_mappings,
+    console_app_connector_reconcile,
+    console_app_connector_sync_runs,
+    console_app_connector_test,
+    console_app_connectors,
+)
 from easyauth.admin_console.console_app_api import (
     integration_guide_api,
 )
@@ -322,6 +331,41 @@ urlpatterns = [
         name="operations-approval-instance-redeliver",
     ),
     path(
+        "api/v1/apps/<str:app_key>/connectors",
+        console_app_connectors,
+        name="console-app-connectors",
+    ),
+    path(
+        "api/v1/apps/<str:app_key>/connectors/test",
+        console_app_connector_test,
+        name="console-app-connector-test",
+    ),
+    path(
+        "api/v1/apps/<str:app_key>/connectors/<int:instance_id>",
+        console_app_connector_detail,
+        name="console-app-connector-detail",
+    ),
+    path(
+        "api/v1/apps/<str:app_key>/connectors/<int:instance_id>/external-groups",
+        console_app_connector_external_groups,
+        name="console-app-connector-external-groups",
+    ),
+    path(
+        "api/v1/apps/<str:app_key>/connectors/<int:instance_id>/mappings",
+        console_app_connector_mappings,
+        name="console-app-connector-mappings",
+    ),
+    path(
+        "api/v1/apps/<str:app_key>/connectors/<int:instance_id>/reconcile",
+        console_app_connector_reconcile,
+        name="console-app-connector-reconcile",
+    ),
+    path(
+        "api/v1/apps/<str:app_key>/connectors/<int:instance_id>/sync-runs",
+        console_app_connector_sync_runs,
+        name="console-app-connector-sync-runs",
+    ),
+    path(
         "api/v1/apps/<str:app_key>/webhook-config",
         console_app_webhook_config,
         name="console-app-webhook-config",
@@ -473,5 +517,31 @@ urlpatterns = [
     path("operations/<path:_path>", views.console_operations, name="console-operations-path"),
     path("settings", views.console_home, name="console-settings"),
     path("settings/", views.console_home, name="console-settings-slash"),
+    path("apps/new", views.console_home, name="console-app-new"),
+    path("apps/new/", views.console_home, name="console-app-new-slash"),
+    path("teams", views.console_home, name="console-teams"),
+    path("teams/<path:_path>", views.console_operations, name="console-teams-path"),
+    path("people", views.console_home, name="console-people"),
+    path(
+        "lifecycle/handover-tasks",
+        views.console_home,
+        name="console-handover-tasks",
+    ),
+    path(
+        "lifecycle/handover-tasks/<path:_path>",
+        views.console_operations,
+        name="console-handover-tasks-path",
+    ),
+    path(
+        "lifecycle/onboarding",
+        views.console_home,
+        name="console-lifecycle-onboarding",
+    ),
+    path(
+        "approval-templates",
+        views.console_home,
+        name="console-approval-templates",
+    ),
+    path("apps/<str:app_key>", views.app_detail, name="app-detail-no-slash"),
     path("apps/<str:app_key>/", views.app_detail, name="app-detail"),
 ]

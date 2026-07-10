@@ -15,8 +15,10 @@ if TYPE_CHECKING:
     from django.db.models.expressions import Expression
 
     _CharFieldBase = models.CharField[str, str]
+    _TextFieldBase = models.TextField[str, str]
 else:
     _CharFieldBase = models.CharField
+    _TextFieldBase = models.TextField
 
 FIELD_ENCRYPTION_KEY_MISSING = (
     "EASYAUTH_FIELD_ENCRYPTION_KEY 未配置, 无法加密敏感字段。"
@@ -51,6 +53,27 @@ def decrypt_value(ciphertext: str) -> str:
 class EncryptedCharField(_CharFieldBase):
     # 静态加密的字符串字段: Python 层始终是明文, 数据库列里是 Fernet 密文。
     # max_length 必须能容纳密文(约为明文长度 + ~120 字符的 base64 开销)。
+
+    def from_db_value(
+        self,
+        value: str | None,
+        expression: Expression,
+        connection: BaseDatabaseWrapper,
+    ) -> str | None:
+        _ = (expression, connection)
+        if value is None or value == "":
+            return value
+        return decrypt_value(value)
+
+    def get_prep_value(self, value: object) -> str | None:
+        prepared = super().get_prep_value(value)
+        if prepared is None or prepared == "":
+            return prepared
+        return encrypt_value(prepared)
+
+
+class EncryptedTextField(_TextFieldBase):
+    # EncryptedCharField 的无长度上限变体: 承载体积不定的明文(如连接器配置 JSON)。
 
     def from_db_value(
         self,
