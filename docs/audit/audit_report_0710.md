@@ -23,6 +23,57 @@
 
 本报告按问题簇归并重复根因，共记录：前端功能 24 组、前端安全 5 组、后端功能 25 组、后端安全 17 组、i18n 9 组、动效与无障碍 10 组。一个问题簇可能覆盖多个调用点，数量不应被理解为互相独立的缺陷个数。
 
+### 修复复核（2026-07-10）
+
+本轮已完成全部后端功能问题，以及指定安全问题 BS-02、BS-05 至 BS-15、BS-17。代码按以下三批提交：
+
+- `621b664`：后端领域模型、API、事务、并发、安全边界、迁移与回归测试。
+- `8864547`：对应前端契约、幂等提交、逐项期限、异步状态与两步验证交互。
+- `580814f`：出站 Webhook worker 网络隔离、依赖锁定、镜像摘要、SBOM、构建溯源与签名验证。
+
+| 问题 | 状态 | 修复结果 |
+| --- | --- | --- |
+| BF-01 | 已修复 | 新增事务 outbox、唯一事件键、租约 claim、失败退避和 5 秒周期扫描；安全关键链路不再直接 `on_commit(send_task)`。 |
+| BF-02 | 已修复 | 外部审批改为持久提交状态机、载荷摘要、超时转 `ambiguous` 和显式锁重试；钉钉不提供调用方 correlation 查询参数，因此不确定结果禁止盲目重发，并由持久早到 callback 自动恢复。 |
+| BF-03 | 已修复 | 删除旧 Role 模型、关联、API、迁移路径和兼容字段，统一使用 AuthorizationGroup/Permission。 |
+| BF-04 | 已修复 | 授权唯一写边界重新校验当前时间，过期申请进入 `grant_expired`，不再生成伪 active grant。 |
+| BF-05 | 已修复 | 手工交接只读取当前有效授权；自动离职在撤权前显式快照有效 grant ID。 |
+| BF-06 | 已修复 | 期限下沉到授权组和直接权限成员事实，支持同一 App 内永久、限时和混合期限，不再取最大值。 |
+| BF-07 | 已修复 | 合并前统一按成员级有效期判定，过期授权不再参与合并或被复活。 |
+| BF-08 | 已修复 | 仅同 kind 任务幂等，不同 kind 明确冲突。 |
+| BF-09 | 已修复 | 执行开始后冻结接收策略和接收人，禁止产生内部权限与外部资产分属不同人员的事实。 |
+| BF-10 | 已修复 | 转岗确认增加行锁、版本栅栏、整批事务、同载荷幂等和异载荷冲突。 |
+| BF-11 | 已修复 | 接收人与释放公海严格 XOR，并禁止当事人接收自己的交接。 |
+| BF-12 | 已修复 | 模板替换、批量入职和接收人更新均先完整校验，再在单一事务中提交。 |
+| BF-13 | 已修复 | Lifecycle action 使用闭合状态迁移和行锁；空 action 集合可正确收敛。 |
+| BF-14 | 已修复 | 保存不可变目录快照；Hook 200/202 分流，202 持久化状态 URL 并有界轮询；前端不再把 `async_pending` 误报为完成。 |
+| BF-15 | 已修复 | AccessRequest 强制客户端幂等键和 SHA-256 载荷摘要；同键同载荷返回原单，异载荷返回 409。 |
+| BF-16 | 已修复 | 模板保存和实例创建严格执行 `form_schema` 与 `form_mapping`；前端提供同契约编辑和校验。 |
+| BF-17 | 已修复 | 外部 process ID 非空条件唯一；早到 callback 持久化待匹配，并在实例关联后自动恢复。 |
+| BF-18 | 已修复 | parser、model、readiness 使用一致的 active scope 不变量，Manifest 可正常收缩 scope。 |
+| BF-19 | 已修复 | Manifest 管理字段按权威快照清理，重复 target 拒绝，所有入口统一 canonical hash。 |
+| BF-20 | 已修复 | 自动接入新 App 时在同一事务中把 actor 建为 active owner。 |
+| BF-21 | 已修复（EasyAuth） | 合法空集会执行清理；generation、成功状态和精确计数为强契约，任何畸形响应均在写入前失败。仓库外 Authentik fork 必须同步提供 generation；旧契约会被明确拒绝，不会破坏性写入。 |
+| BF-22 | 已修复（EasyAuth） | 按 source/corp 串行化并持久化 generation fencing，线程交错测试确认旧 active 快照不能覆盖新 departed 事实。 |
+| BF-23 | 已修复 | Connector 使用数据库 generation/dirty/lease 状态机，安全收缩优先，保留 tombstone 和不可变外部身份。 |
+| BF-24 | 已修复 | 审批人规范化为关系表并数据库过滤/count/slice；筛选参数严格解析，非法输入返回 422。 |
+| BF-25 | 已修复 | Authentik 完整分页和严格 envelope；钉钉 token 按凭据指纹缓存并遵从真实 TTL；响应大小和总时限受限。 |
+| BS-02 | 已修复 | Webhook 仅允许 HTTPS/443、公网固定 IP 和 App 精确域名；配置与发送双校验、禁跳转；独立 worker 的 egress 防火墙仅放行 DNS、Redis 和公网 443。 |
+| BS-05 | 已修复 | Webhook、Hook、NetBird、Authentik、DingTalk 客户端均增加 Content-Length/分块上限、总 deadline 和 Celery time limit。 |
+| BS-06 | 已修复 | 正确密码不再提前清零二因子失败计数，只有完整登录成功才清零。 |
+| BS-07 | 已修复 | TOTP begin/confirm 绑定短 TTL 密码 step-up、账号会话版本和一次性 enrollment nonce，并在行锁内原子启用。 |
+| BS-08 | 已修复 | 本地超管会话绑定单调 session version；改密、重置、停用和因子变更撤销其他会话。 |
+| BS-09 | 已修复 | App detail 与 configuration-status 强制对象级可见权限，未授权统一 404。 |
+| BS-10 | 已修复 | 人员分页和独立选人接口均为 superuser-only；选人拒绝空查询并仅返回最小字段。 |
+| BS-11 | 已修复 | Connector reconcile 强制 superuser，并按 actor/instance 去重限速。 |
+| BS-12 | 已修复 | offboard 与 reconcile 进入同一 generation/lease 状态机；非 active 用户永不解封，外部清理前保留 tombstone。 |
+| BS-13 | 已修复 | 保存并探测不可变 account ID，禁止不同 App 重复绑定同一 NetBird account。 |
+| BS-14 | 已修复（EasyAuth） | 破坏性目录同步要求权威 generation、完整计数和单调 fencing，任何不完整快照禁止写入。 |
+| BS-15 | 已修复 | Webhook delivery 增加 generation、claim token 和 lease，只有当前 claim 可发送和写终态。 |
+| BS-17 | 已修复 | `/health/` 真实上报数据库、broker、beat/worker、关键任务、Stream 进程和 ACK；镜像与 uv/Redis 固定摘要，gunicorn 进入 lock，CI 生成 SBOM/provenance 并用 Cosign 签名后验证。 |
+
+修复后验证结果：Django/Python 全量测试 `1093 passed`；前端 `40` 个测试文件、`249 passed`；前端生产构建、`tsc -b`、`manage.py check`、迁移一致性检查、Dockerfile 检查和 deploy compose 解析均通过。Ruff 从原报告的 23 项降为 5 项，剩余均位于本轮未修改的既有 `teams_api.py` 和 `manifest_sync_views.py`。
+
 ### 严重级别
 
 - **Critical**：可造成远程代码/网络边界突破、认证绕过、大范围权限破坏或生产敏感信息暴露，必须阻断上线。
