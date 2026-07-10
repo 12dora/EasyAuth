@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Compass, Eye, FileUp, KeyRound, Play, Plus, RefreshCcw, UploadCloud } from "lucide-react";
-import { useRef, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 
 import { AppKeyInput } from "../../../components/AppKeyInput";
@@ -23,6 +23,12 @@ import { cn } from "../../../lib/cn";
 import type { AppListPayload, ConfigurationIssue, ConfigurationStatus, QueryTestResult, SecretPayload } from "../../../lib/domain";
 
 type WizardStep = "basics" | "catalog" | "authz" | "credential" | "verify" | "done";
+type CreatedCredentialKind = "static_token" | "oauth_client";
+
+interface CredentialProgress {
+  kind: CreatedCredentialKind;
+  ready: boolean;
+}
 
 const WIZARD_STEPS: Array<{ key: WizardStep; labelKey: MessageKey }> = [
   { key: "basics", labelKey: "wizard.step.basics" },
@@ -42,8 +48,14 @@ export function AppOnboardingWizard() {
   const stepIsKnown = WIZARD_STEPS.some((step) => step.key === requestedStep);
   const activeStep: WizardStep = !stepIsKnown || (!appKey && requestedStep !== "basics") ? "basics" : requestedStep;
   const activeStepIndex = WIZARD_STEPS.findIndex((step) => step.key === activeStep);
+  const [catalogImportPending, setCatalogImportPending] = useState(false);
+  const [credentialProgress, setCredentialProgress] = useState<CredentialProgress | null>(null);
+  const oauthCompletionBlocked = credentialProgress?.kind === "oauth_client" && !credentialProgress.ready;
 
   const goToStep = (step: WizardStep, targetAppKey: string = appKey) => {
+    if (catalogImportPending || (step === "done" && oauthCompletionBlocked)) {
+      return;
+    }
     const params = new URLSearchParams();
     if (targetAppKey) {
       params.set("app_key", targetAppKey);
@@ -67,12 +79,28 @@ export function AppOnboardingWizard() {
         description={t("wizard.description")}
         actions={
           <div className="flex flex-col items-stretch gap-2 sm:items-end">
-            <ButtonLink to="/console">{t("wizard.backToList")}</ButtonLink>
-            {appKey ? <ButtonLink to={`/console/apps/${appKey}`}>{t("wizard.openWorkspace")}</ButtonLink> : null}
+            {catalogImportPending ? (
+              <Button disabled>{t("wizard.backToList")}</Button>
+            ) : (
+              <ButtonLink to="/console">{t("wizard.backToList")}</ButtonLink>
+            )}
+            {appKey ? (
+              catalogImportPending ? (
+                <Button disabled>{t("wizard.openWorkspace")}</Button>
+              ) : (
+                <ButtonLink to={`/console/apps/${appKey}`}>{t("wizard.openWorkspace")}</ButtonLink>
+              )
+            ) : null}
           </div>
         }
       />
-      <WizardStepper activeStepIndex={activeStepIndex} appKey={appKey} onNavigate={goToStep} />
+      <WizardStepper
+        activeStepIndex={activeStepIndex}
+        appKey={appKey}
+        navigationLocked={catalogImportPending}
+        doneBlocked={oauthCompletionBlocked}
+        onNavigate={goToStep}
+      />
       {activeStep === "basics" ? (
         <BasicsStep
           app={app}
@@ -82,7 +110,13 @@ export function AppOnboardingWizard() {
         />
       ) : null}
       {activeStep === "catalog" ? (
-        <CatalogStep key={appKey} appKey={appKey} onBack={() => goToStep("basics")} onContinue={() => goToStep("authz")} />
+        <CatalogStep
+          key={appKey}
+          appKey={appKey}
+          onBack={() => goToStep("basics")}
+          onContinue={() => goToStep("authz")}
+          onImportPendingChange={setCatalogImportPending}
+        />
       ) : null}
       {activeStep === "authz" ? (
         <AuthzStep key={appKey} appKey={appKey} onBack={() => goToStep("catalog")} onContinue={() => goToStep("credential")} />
@@ -92,6 +126,7 @@ export function AppOnboardingWizard() {
           key={appKey}
           appKey={appKey}
           activeCredentialCount={app?.active_credential_count ?? 0}
+          onProgressChange={setCredentialProgress}
           onBack={() => goToStep("authz")}
           onContinue={() => goToStep("verify")}
         />
@@ -99,7 +134,14 @@ export function AppOnboardingWizard() {
       {activeStep === "verify" ? (
         <VerifyStep key={appKey} appKey={appKey} onBack={() => goToStep("credential")} onContinue={() => goToStep("done")} />
       ) : null}
-      {activeStep === "done" ? <DoneStep key={appKey} appKey={appKey} appName={app?.name ?? appKey} /> : null}
+      {activeStep === "done" ? (
+        <DoneStep
+          key={appKey}
+          appKey={appKey}
+          appName={app?.name ?? appKey}
+          credentialKind={credentialProgress?.ready ? credentialProgress.kind : null}
+        />
+      ) : null}
     </>
   );
 }
@@ -107,10 +149,14 @@ export function AppOnboardingWizard() {
 function WizardStepper({
   activeStepIndex,
   appKey,
+  navigationLocked,
+  doneBlocked,
   onNavigate,
 }: {
   activeStepIndex: number;
   appKey: string;
+  navigationLocked: boolean;
+  doneBlocked: boolean;
   onNavigate: (step: WizardStep) => void;
 }) {
   const { t } = useI18n();
@@ -120,7 +166,10 @@ function WizardStepper({
       {WIZARD_STEPS.map((step, index) => {
         const isActive = index === activeStepIndex;
         const isDone = index < activeStepIndex;
-        const isReachable = index === 0 || Boolean(appKey);
+        const isReachable =
+          (index === 0 || Boolean(appKey)) &&
+          !navigationLocked &&
+          !(step.key === "done" && doneBlocked);
         const stateLabel = isActive
           ? t("wizard.stepState.current")
           : isDone
@@ -454,7 +503,17 @@ interface ManifestImportRequest {
   requestId: number;
 }
 
-function CatalogStep({ appKey, onBack, onContinue }: { appKey: string; onBack: () => void; onContinue: () => void }) {
+function CatalogStep({
+  appKey,
+  onBack,
+  onContinue,
+  onImportPendingChange,
+}: {
+  appKey: string;
+  onBack: () => void;
+  onContinue: () => void;
+  onImportPendingChange: (pending: boolean) => void;
+}) {
   const { t } = useI18n();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [content, setContent] = useState("");
@@ -475,19 +534,45 @@ function CatalogStep({ appKey, onBack, onContinue }: { appKey: string; onBack: (
     },
   });
   const importMutation = useMutation({
-    mutationFn: (request: ManifestImportRequest) =>
-      apiRequest<{ catalog_version?: string | number; template_version?: string | number }>(
-        `/console/api/v1/apps/${appKey}/permission-template-imports/${request.previewId}/confirm`,
-        { method: "POST" },
+    mutationFn: async (request: ManifestImportRequest) =>
+      parseManifestImportResult(
+        await apiRequest<unknown>(
+          `/console/api/v1/apps/${appKey}/permission-template-imports/${request.previewId}/confirm`,
+          { method: "POST" },
+        ),
       ),
     onSuccess: (payload, request) => {
-      if (request.requestId !== contentRequestIdRef.current) {
+      if (
+        request.requestId !== contentRequestIdRef.current ||
+        request.contentFingerprint !== manifestContentFingerprint(content)
+      ) {
         return;
       }
-      setImportedCatalogVersion(String(payload.catalog_version ?? payload.template_version ?? ""));
+      setImportedCatalogVersion(String(payload.catalog_version ?? payload.template_version));
       setPreview(null);
     },
   });
+  const importPending = importMutation.isPending;
+
+  useEffect(() => {
+    onImportPendingChange(importPending);
+    if (!importPending) {
+      return;
+    }
+    const preventUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", preventUnload);
+    return () => window.removeEventListener("beforeunload", preventUnload);
+  }, [importPending, onImportPendingChange]);
+
+  useEffect(
+    () => () => {
+      onImportPendingChange(false);
+    },
+    [onImportPendingChange],
+  );
 
   const invalidateCatalogResult = () => {
     contentRequestIdRef.current += 1;
@@ -517,6 +602,7 @@ function CatalogStep({ appKey, onBack, onContinue }: { appKey: string; onBack: (
       setPreview(null);
       return;
     }
+    onImportPendingChange(true);
     importMutation.mutate({ previewId, contentFingerprint: currentFingerprint, requestId: preview.requestId });
   };
 
@@ -532,6 +618,7 @@ function CatalogStep({ appKey, onBack, onContinue }: { appKey: string; onBack: (
           accept=".json,.yaml,.yml,application/json,text/yaml,text/plain"
           className="sr-only"
           aria-label={t("wizard.catalog.uploadAria")}
+          disabled={importPending}
           onChange={(event) => {
             const file = event.currentTarget.files?.[0];
             if (!file) {
@@ -547,7 +634,7 @@ function CatalogStep({ appKey, onBack, onContinue }: { appKey: string; onBack: (
             });
           }}
         />
-        <Button icon={<FileUp size={16} />} onClick={() => fileInputRef.current?.click()}>
+        <Button disabled={importPending} icon={<FileUp size={16} />} onClick={() => fileInputRef.current?.click()}>
           {t("wizard.catalog.uploadFile")}
         </Button>
       </div>
@@ -556,6 +643,7 @@ function CatalogStep({ appKey, onBack, onContinue }: { appKey: string; onBack: (
           aria-label={t("wizard.catalog.content")}
           rows={10}
           value={content}
+          disabled={importPending}
           onChange={(event) => updateContent(event.currentTarget.value)}
         />
       </Field>
@@ -563,7 +651,7 @@ function CatalogStep({ appKey, onBack, onContinue }: { appKey: string; onBack: (
         <Button
           variant="primary"
           icon={<Eye size={16} />}
-          disabled={!content || previewMutation.isPending}
+          disabled={!content || previewMutation.isPending || importPending}
           loading={previewMutation.isPending}
           onClick={previewCurrentContent}
         >
@@ -572,7 +660,7 @@ function CatalogStep({ appKey, onBack, onContinue }: { appKey: string; onBack: (
         <Button
           variant="primary"
           icon={<UploadCloud size={16} />}
-          disabled={!previewIsCurrent || !preview?.payload.preview_id || importMutation.isPending}
+          disabled={!previewIsCurrent || !preview?.payload.preview_id || importPending}
           loading={importMutation.isPending}
           onClick={importCurrentPreview}
         >
@@ -595,9 +683,9 @@ function CatalogStep({ appKey, onBack, onContinue }: { appKey: string; onBack: (
       {previewIsCurrent && preview ? <ManifestDiffSummary preview={preview.payload} /> : null}
       <p className="text-body text-ink-soft">{t("wizard.catalog.skipHint")}</p>
       <StepFooter>
-        <Button onClick={onBack}>{t("common.back")}</Button>
-        <Button onClick={onContinue}>{t("common.skip")}</Button>
-        <Button variant="primary" disabled={!importedCatalogVersion} onClick={onContinue}>
+        <Button disabled={importPending} onClick={onBack}>{t("common.back")}</Button>
+        <Button disabled={importPending} onClick={onContinue}>{t("common.skip")}</Button>
+        <Button variant="primary" disabled={importPending || !importedCatalogVersion} onClick={onContinue}>
           {t("common.next")}
         </Button>
       </StepFooter>
@@ -714,11 +802,13 @@ function AuthzStep({ appKey, onBack, onContinue }: { appKey: string; onBack: () 
 function CredentialStep({
   appKey,
   activeCredentialCount,
+  onProgressChange,
   onBack,
   onContinue,
 }: {
   appKey: string;
   activeCredentialCount: number;
+  onProgressChange: (progress: CredentialProgress | null) => void;
   onBack: () => void;
   onContinue: () => void;
 }) {
@@ -751,14 +841,18 @@ function CredentialStep({
           one_time_secret: { ...current.one_time_secret, access_token: accessToken },
         };
       });
+      onProgressChange({ kind: "oauth_client", ready: true });
     },
   });
   const createMutation = useMutation({
-    mutationFn: (request: { kind: "static-tokens" | "oauth-clients"; name: string; requestId: number }) =>
-      apiRequest<SecretPayload>(`/console/api/v1/apps/${appKey}/credentials/${request.kind}`, {
-        method: "POST",
-        body: { name: request.name },
-      }),
+    mutationFn: async (request: { kind: "static-tokens" | "oauth-clients"; name: string; requestId: number }) =>
+      parseCredentialSecretPayload(
+        await apiRequest<unknown>(`/console/api/v1/apps/${appKey}/credentials/${request.kind}`, {
+          method: "POST",
+          body: { name: request.name },
+        }),
+        request.kind,
+      ),
     onSuccess: (payload, request) => {
       if (request.requestId !== credentialRequestIdRef.current) {
         return;
@@ -766,22 +860,37 @@ function CredentialStep({
       setSecret(payload);
       setName("");
       void queryClient.invalidateQueries({ queryKey: ["console", "app", appKey] });
-      if (request.kind === "oauth-clients") {
+      if (payload.credential?.kind === "oauth_client") {
         const clientId = payload.one_time_secret?.client_id;
         const clientSecret = payload.one_time_secret?.client_secret;
-        if (clientId && clientSecret) {
-          exchangeMutation.mutate({ clientId, clientSecret, requestId: request.requestId });
-        }
+        exchangeMutation.mutate({ clientId, clientSecret, requestId: request.requestId });
+      } else {
+        onProgressChange({ kind: "static_token", ready: true });
+      }
+    },
+    onError: (_error, request) => {
+      if (request.requestId === credentialRequestIdRef.current) {
+        onProgressChange(null);
       }
     },
   });
   const secretEntries = Object.entries(secret?.one_time_secret ?? {}).filter(([key]) => key !== "kind");
   const credentialPending = createMutation.isPending || exchangeMutation.isPending;
+  const oauthExchangeIncomplete =
+    secret?.credential?.kind === "oauth_client" &&
+    typeof secret.one_time_secret?.access_token !== "string";
+  const continuationBlocked = credentialPending || oauthExchangeIncomplete;
 
   const createCredential = (kind: "static-tokens" | "oauth-clients") => {
     const requestId = credentialRequestIdRef.current + 1;
     credentialRequestIdRef.current = requestId;
+    createMutation.reset();
+    exchangeMutation.reset();
     setSecret(null);
+    onProgressChange({
+      kind: kind === "static-tokens" ? "static_token" : "oauth_client",
+      ready: false,
+    });
     createMutation.mutate({ kind, name, requestId });
   };
 
@@ -811,11 +920,17 @@ function CredentialStep({
           {t("wizard.credential.createOauthClient")}
         </Button>
       </div>
-      {createMutation.error || exchangeMutation.error ? (
+      {createMutation.error ? (
         <StatusBanner
           tone="signal"
           title={t("wizard.credential.createFailed")}
-          message={((createMutation.error ?? exchangeMutation.error) as Error).message}
+          message={(createMutation.error as Error).message}
+        />
+      ) : exchangeMutation.error ? (
+        <StatusBanner
+          tone="signal"
+          title={t("wizard.credential.exchangeFailed")}
+          message={(exchangeMutation.error as Error).message}
         />
       ) : null}
       {secretEntries.length > 0 ? (
@@ -830,10 +945,10 @@ function CredentialStep({
       <p className="text-body text-ink-soft">{t("wizard.credential.skipHint")}</p>
       <StepFooter>
         <Button disabled={credentialPending} onClick={onBack}>{t("common.back")}</Button>
-        <Button disabled={credentialPending} onClick={onContinue}>{t("common.skip")}</Button>
+        <Button disabled={continuationBlocked} onClick={onContinue}>{t("common.skip")}</Button>
         <Button
           variant="primary"
-          disabled={credentialPending || (secretEntries.length === 0 && activeCredentialCount === 0)}
+          disabled={continuationBlocked || (secretEntries.length === 0 && activeCredentialCount === 0)}
           onClick={onContinue}
         >
           {t("common.next")}
@@ -936,7 +1051,15 @@ function VerifyStep({ appKey, onBack, onContinue }: { appKey: string; onBack: ()
   );
 }
 
-function DoneStep({ appKey, appName }: { appKey: string; appName: string }) {
+function DoneStep({
+  appKey,
+  appName,
+  credentialKind,
+}: {
+  appKey: string;
+  appName: string;
+  credentialKind: CreatedCredentialKind | null;
+}) {
   const { t } = useI18n();
   const statusQuery = useQuery({
     queryKey: ["console", "app", appKey, "configuration-status"],
@@ -947,15 +1070,22 @@ function DoneStep({ appKey, appName }: { appKey: string; appName: string }) {
   const issues = statusQuery.data?.data ?? [];
   const origin = window.location.origin;
   const endpoint = `${origin}/api/v1/apps/${appKey}/users/{user_id}/permissions`;
+  const tokenPlaceholder =
+    credentialKind === "oauth_client"
+      ? "<access_token>"
+      : credentialKind === "static_token"
+        ? "<app_token>"
+        : "<bearer_token>";
+  const tokenEnvironmentVariable = credentialKind === "oauth_client" ? "$ACCESS_TOKEN" : "$APP_TOKEN";
   const integrationSnippet = [
     `# ${appName}`,
     `EASYAUTH_BASE_URL=${origin}`,
     `EASYAUTH_APP_KEY=${appKey}`,
     "",
     `GET ${endpoint}`,
-    "Authorization: Bearer <app_token>",
+    `Authorization: Bearer ${tokenPlaceholder}`,
   ].join("\n");
-  const curlSnippet = `curl -H "Authorization: Bearer $APP_TOKEN" "${endpoint}"`;
+  const curlSnippet = `curl -H "Authorization: Bearer ${tokenEnvironmentVariable}" "${endpoint}"`;
 
   if (!appKey) {
     return (
@@ -985,7 +1115,15 @@ function DoneStep({ appKey, appName }: { appKey: string; appName: string }) {
         <h3 className="text-sm font-semibold text-ink">{t("wizard.done.integrationTitle")}</h3>
         <CodeBlock language="env" code={integrationSnippet} />
         <CodeBlock language="curl" code={curlSnippet} />
-        <p className="text-body text-ink-soft">{t("wizard.done.integrationHint")}</p>
+        <p className="text-body text-ink-soft">
+          {t(
+            credentialKind === "oauth_client"
+              ? "wizard.done.integrationHint.oauth"
+              : credentialKind === "static_token"
+                ? "wizard.done.integrationHint.static"
+                : "wizard.done.integrationHint.existing",
+          )}
+        </p>
       </div>
       <StepFooter>
         <ButtonLink to={`/console/apps/${appKey}?tab=guide`}>{t("wizard.done.guideLink")}</ButtonLink>
@@ -1054,6 +1192,54 @@ function parseOAuthAccessToken(payload: unknown): string {
     throw new Error("OAuth token 响应格式无效。");
   }
   return payload.access_token;
+}
+
+function parseManifestImportResult(
+  payload: unknown,
+): { catalog_version?: string | number; template_version?: string | number } {
+  if (!isRecord(payload)) {
+    throw new Error("Manifest 导入响应格式无效。");
+  }
+  const version = payload.catalog_version ?? payload.template_version;
+  if (
+    (typeof version !== "string" && typeof version !== "number") ||
+    String(version).length === 0
+  ) {
+    throw new Error("Manifest 导入响应格式无效。");
+  }
+  return typeof payload.catalog_version === "string" || typeof payload.catalog_version === "number"
+    ? { catalog_version: payload.catalog_version }
+    : { template_version: payload.template_version as string | number };
+}
+
+function parseCredentialSecretPayload(
+  payload: unknown,
+  requestedKind: "static-tokens" | "oauth-clients",
+): SecretPayload & { credential: NonNullable<SecretPayload["credential"]>; one_time_secret: Record<string, string> } {
+  const expectedKind = requestedKind === "static-tokens" ? "static_token" : "oauth_client";
+  if (
+    !isRecord(payload) ||
+    !isRecord(payload.credential) ||
+    payload.credential.kind !== expectedKind ||
+    !isRecord(payload.one_time_secret) ||
+    payload.one_time_secret.kind !== expectedKind
+  ) {
+    throw new Error("凭据创建响应格式无效。");
+  }
+  if (
+    expectedKind === "static_token"
+      ? typeof payload.one_time_secret.app_token !== "string" || !payload.one_time_secret.app_token
+      : typeof payload.one_time_secret.client_id !== "string" ||
+        !payload.one_time_secret.client_id ||
+        typeof payload.one_time_secret.client_secret !== "string" ||
+        !payload.one_time_secret.client_secret
+  ) {
+    throw new Error("凭据创建响应格式无效。");
+  }
+  return payload as unknown as SecretPayload & {
+    credential: NonNullable<SecretPayload["credential"]>;
+    one_time_secret: Record<string, string>;
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

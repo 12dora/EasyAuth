@@ -46,6 +46,7 @@ interface MappingDraft {
 }
 
 interface ConnectorMappingsPayload extends ListPayload<ConnectorMappingItem> {
+  data: ConnectorMappingItem[];
   revision: string;
 }
 
@@ -310,7 +311,8 @@ export function ConnectorTab({ appKey }: { appKey: string }) {
     enabledDraft && (!instance || !instance.enabled || configChanged);
   const saveBlockedByTest =
     testRequired && testedFingerprint !== candidateFingerprint;
-  const authoritativeConfigLoaded = connectorsQuery.isSuccess;
+  const authoritativeConfigLoaded =
+    connectorsQuery.isSuccess && !connectorsQuery.error;
   const candidateLoaded = !instance || draftInstanceId === instance.id;
   const canOperate =
     authoritativeConfigLoaded &&
@@ -393,6 +395,7 @@ export function ConnectorTab({ appKey }: { appKey: string }) {
               value={selectionValue}
               disabled={
                 connectorsQuery.isLoading ||
+                Boolean(connectorsQuery.error) ||
                 testMutation.isPending ||
                 saveMutation.isPending
               }
@@ -448,6 +451,7 @@ export function ConnectorTab({ appKey }: { appKey: string }) {
                 onChange={updateConfigDraft}
                 configuredSecrets={instance?.configured_secrets ?? []}
                 disabled={
+                  !authoritativeConfigLoaded ||
                   !candidateLoaded ||
                   saveMutation.isPending ||
                   testMutation.isPending
@@ -462,7 +466,11 @@ export function ConnectorTab({ appKey }: { appKey: string }) {
                   min={60}
                   max={86400}
                   value={intervalDraft}
-                  disabled={!candidateLoaded || saveMutation.isPending}
+                  disabled={
+                    !authoritativeConfigLoaded ||
+                    !candidateLoaded ||
+                    saveMutation.isPending
+                  }
                   onChange={(event) =>
                     setIntervalDraft(event.currentTarget.value)
                   }
@@ -472,7 +480,11 @@ export function ConnectorTab({ appKey }: { appKey: string }) {
                 <input
                   type="checkbox"
                   checked={enabledDraft}
-                  disabled={!candidateLoaded || saveMutation.isPending}
+                  disabled={
+                    !authoritativeConfigLoaded ||
+                    !candidateLoaded ||
+                    saveMutation.isPending
+                  }
                   onChange={(event) =>
                     setEnabledDraft(event.currentTarget.checked)
                   }
@@ -619,17 +631,21 @@ function MappingsPanel({
 
   const groupsQuery = useQuery({
     queryKey: ["console", "app", appKey, "authorization-groups"],
-    queryFn: () =>
-      apiRequest<ListPayload<AuthorizationGroupItem>>(
-        `/console/api/v1/apps/${appKey}/authorization-groups`,
+    queryFn: async () =>
+      parseAuthorizationGroupsPayload(
+        await apiRequest<unknown>(
+          `/console/api/v1/apps/${appKey}/authorization-groups`,
+        ),
       ),
     enabled: Boolean(appKey),
   });
   const mappingsQuery = useQuery({
     queryKey: mappingsQueryKey,
-    queryFn: () =>
-      apiRequest<ConnectorMappingsPayload>(
-        `/console/api/v1/apps/${appKey}/connectors/${instance.id}/mappings`,
+    queryFn: async () =>
+      parseConnectorMappingsPayload(
+        await apiRequest<unknown>(
+          `/console/api/v1/apps/${appKey}/connectors/${instance.id}/mappings`,
+        ),
       ),
   });
   const externalGroupsQuery = useQuery({
@@ -652,12 +668,17 @@ function MappingsPanel({
   );
   const externalGroups = externalGroupsQuery.data?.data ?? [];
   const datalistId = `connector-external-groups-${instance.id}`;
+  const authoritativeMappingsLoaded =
+    mappingsQuery.isSuccess &&
+    !mappingsQuery.error &&
+    groupsQuery.isSuccess &&
+    !groupsQuery.error;
 
   useEffect(() => {
     if (!mappingsQuery.data) {
       return;
     }
-    const mappings = mappingsQuery.data.data ?? [];
+    const mappings = mappingsQuery.data.data;
     setDrafts(
       Object.fromEntries(
         mappings.map((mapping) => [
@@ -724,11 +745,7 @@ function MappingsPanel({
           variant="primary"
           icon={<Save size={15} />}
           loading={saveMutation.isPending}
-          disabled={
-            saveMutation.isPending ||
-            !mappingsQuery.isSuccess ||
-            !groupsQuery.isSuccess
-          }
+          disabled={saveMutation.isPending || !authoritativeMappingsLoaded}
           onClick={() => saveMutation.mutate()}
         >
           {t("common.save")}
@@ -814,6 +831,7 @@ function MappingsPanel({
                           "console.connector.mappingsRefPlaceholder",
                         )}
                         value={draft.external_ref}
+                        disabled={!authoritativeMappingsLoaded}
                         onChange={(event) =>
                           setDraft(group.key, {
                             external_ref: event.currentTarget.value,
@@ -826,7 +844,10 @@ function MappingsPanel({
                         <input
                           type="checkbox"
                           checked={draft.auto_create}
-                          disabled={draft.external_ref.trim() === ""}
+                          disabled={
+                            !authoritativeMappingsLoaded ||
+                            draft.external_ref.trim() === ""
+                          }
                           onChange={(event) =>
                             setDraft(group.key, {
                               auto_create: event.currentTarget.checked,
@@ -847,6 +868,58 @@ function MappingsPanel({
       </TableFrame>
     </PanelSurface>
   );
+}
+
+function parseAuthorizationGroupsPayload(
+  payload: unknown,
+): ListPayload<AuthorizationGroupItem> {
+  if (!isRecord(payload) || !Array.isArray(payload.data)) {
+    throw new Error("授权组响应格式无效。");
+  }
+  if (
+    !payload.data.every(
+      (row) =>
+        isRecord(row) &&
+        typeof row.key === "string" &&
+        row.key.length > 0 &&
+        typeof row.name === "string" &&
+        typeof row.is_active === "boolean",
+    )
+  ) {
+    throw new Error("授权组响应格式无效。");
+  }
+  return payload as unknown as ListPayload<AuthorizationGroupItem>;
+}
+
+function parseConnectorMappingsPayload(
+  payload: unknown,
+): ConnectorMappingsPayload {
+  if (
+    !isRecord(payload) ||
+    typeof payload.revision !== "string" ||
+    payload.revision.length === 0 ||
+    !Array.isArray(payload.data)
+  ) {
+    throw new Error("连接器映射响应格式无效。");
+  }
+  if (
+    !payload.data.every(
+      (row) =>
+        isRecord(row) &&
+        typeof row.authorization_group_key === "string" &&
+        row.authorization_group_key.length > 0 &&
+        typeof row.authorization_group_name === "string" &&
+        typeof row.external_ref === "string" &&
+        typeof row.auto_create === "boolean",
+    )
+  ) {
+    throw new Error("连接器映射响应格式无效。");
+  }
+  return payload as unknown as ConnectorMappingsPayload;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function SyncRunsPanel({

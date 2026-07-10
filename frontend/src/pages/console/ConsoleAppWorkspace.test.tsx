@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { lazy, Suspense, type ReactElement } from "react";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
@@ -148,15 +148,18 @@ describe("ConsoleAppWorkspace", () => {
     expect(screen.getByLabelText("用户 ID")).toHaveValue("");
     expect(screen.getByLabelText("Bearer token")).toHaveValue("");
 
-    resolveOldQuery(jsonResponse({
-      app_key: "demo",
-      user_id: "alice",
-      allowed: true,
-      source: "app-a-result",
-      groups: [],
-      grants: [],
-    }));
-    await waitFor(() => expect(screen.queryByText("app-a-result")).not.toBeInTheDocument());
+    await act(async () => {
+      resolveOldQuery(jsonResponse({
+        app_key: "demo",
+        user_id: "alice",
+        allowed: true,
+        source: "app-a-result",
+        groups: [],
+        grants: [],
+      }));
+      await oldQueryResponse;
+    });
+    expect(screen.queryByText("app-a-result")).not.toBeInTheDocument();
   });
 
   test("管理范围权威快照格式错误时禁止编辑和保存，重试成功后才开放", async () => {
@@ -183,6 +186,62 @@ describe("ConsoleAppWorkspace", () => {
     expect(screen.getByRole("button", { name: "保存设置" })).toBeDisabled();
     expect(screen.queryByLabelText("应用默认管理范围计算方式")).not.toBeInTheDocument();
     expect(findFetchCall(fetchMock, "/console/api/v1/apps/demo/managed-scope-policy", "PATCH")).toBeUndefined();
+
+    await user.click(screen.getByRole("button", { name: "重新加载" }));
+
+    expect(await screen.findByLabelText("应用默认管理范围计算方式")).toHaveValue("unconfigured");
+    expect(screen.getByRole("button", { name: "保存设置" })).toBeEnabled();
+  });
+
+  test("管理范围重新挂载时等待最新权威读取，读取失败后保持关闭直到重试成功", async () => {
+    let rejectReload!: (reason: Error) => void;
+    const reloadResponse = new Promise<Response>((_resolve, reject) => {
+      rejectReload = reject;
+    });
+    let managedScopeReadCount = 0;
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/demo") {
+        return jsonResponse({ app: { ...appPayload.app, can_manage: true } });
+      }
+      if (url === "/console/api/v1/apps/demo/managed-scope-policy" && !init?.method) {
+        managedScopeReadCount += 1;
+        if (managedScopeReadCount === 1) {
+          return jsonResponse({
+            managed_scope_policy: { mode: "override", resolver: "dingtalk_manager_chain", enabled: true },
+            effective_managed_scope_policy: {
+              resolver: "dingtalk_manager_chain",
+              enabled: true,
+              source: "app_default",
+              health_status: "healthy",
+            },
+          });
+        }
+        if (managedScopeReadCount === 2) {
+          return reloadResponse;
+        }
+        return jsonResponse({ managed_scope_policy: null, effective_managed_scope_policy: null });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWorkspace("/console/apps/demo?tab=managed-scope");
+
+    expect(await screen.findByLabelText("应用默认管理范围计算方式")).toHaveValue("dingtalk_manager_chain");
+    await user.click(screen.getByRole("tab", { name: "联调" }));
+    await user.click(screen.getByRole("tab", { name: "管理范围" }));
+    await waitFor(() => expect(managedScopeReadCount).toBe(2));
+
+    expect(screen.getByRole("button", { name: "保存设置" })).toBeDisabled();
+    expect(screen.queryByLabelText("应用默认管理范围计算方式")).not.toBeInTheDocument();
+
+    rejectReload(new Error("重新读取失败"));
+
+    expect(await screen.findByText("重新读取失败")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "保存设置" })).toBeDisabled();
+    expect(screen.queryByLabelText("应用默认管理范围计算方式")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "重新加载" }));
 
@@ -548,8 +607,8 @@ describe("ConsoleAppWorkspace", () => {
           },
         });
       }
-      if (url === "/console/api/v1/apps/demo/permission-template-versions" && !init?.method) {
-        return jsonResponse({ data: [] });
+      if (url === "/console/api/v1/apps/demo/permission-template-versions?page=1&page_size=20" && !init?.method) {
+        return versionsResponse();
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });
@@ -579,8 +638,8 @@ describe("ConsoleAppWorkspace", () => {
       if (url === "/console/api/v1/apps/demo/permission-template-imports/preview-1/confirm" && init?.method === "POST") {
         return jsonResponse({ catalog_version: "v2" });
       }
-      if (url === "/console/api/v1/apps/demo/permission-template-versions" && !init?.method) {
-        return jsonResponse({ data: [{ version: "v2", imported_at: "2026-07-01T09:00:00Z" }] });
+      if (url === "/console/api/v1/apps/demo/permission-template-versions?page=1&page_size=20" && !init?.method) {
+        return versionsResponse([{ version: "v2", imported_at: "2026-07-01T09:00:00Z" }], 1);
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });
@@ -892,6 +951,13 @@ function findFetchCall(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>, url: s
 
 function parseJsonBody(init: RequestInit | undefined) {
   return JSON.parse(String(init?.body));
+}
+
+function versionsResponse(data: unknown[] = [], totalItems = data.length) {
+  return jsonResponse({
+    data,
+    pagination: { page: 1, page_size: 20, total_items: totalItems, total_pages: totalItems === 0 ? 0 : 1 },
+  });
 }
 
 function jsonResponse(payload: unknown) {

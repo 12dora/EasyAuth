@@ -98,6 +98,7 @@ describe("grantDraft", () => {
   });
 
   test.each([
+    { mode: "inherit", resolver: "", enabled: false },
     { mode: "override", resolver: "dingtalk_manager_chain", enabled: true },
     { mode: "easyauth_team", resolver: "easyauth_team", enabled: true },
     { mode: "union", resolver: "union", enabled: true },

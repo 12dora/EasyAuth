@@ -446,6 +446,9 @@ function inheritManagedScopePolicy(): ManagedScopePolicyItem {
 }
 
 function managedScopePolicyResolver(policy: ManagedScopePolicyItem | undefined): string {
+  if (policy?.mode === "inherit") {
+    return "inherit";
+  }
   if (policy?.mode === "disabled" || policy?.resolver === "disabled" || policy?.enabled === false) {
     return "disabled";
   }

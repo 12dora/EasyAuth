@@ -66,8 +66,8 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
           {row.original.kind === "static_token" ? (
             <TableRowActionButton
               type="button"
-              disabled={isCredentialPending(row.original.id)}
-              onClick={() => rotateCredential(row.original.id)}
+              disabled={isCredentialPending(row.original)}
+              onClick={() => rotateCredential(row.original)}
             >
               {t("console.credentials.rotate")}
             </TableRowActionButton>
@@ -75,7 +75,7 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
           <TableRowActionButton
             type="button"
             variant="ghost-danger"
-            disabled={isCredentialPending(row.original.id)}
+            disabled={isCredentialPending(row.original)}
             onClick={() => disableCredential(row.original)}
           >
             {t("console.credentials.disable")}

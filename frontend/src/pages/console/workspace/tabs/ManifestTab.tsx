@@ -37,7 +37,7 @@ type ManifestPreviewPayload = {
 
 type ManifestPreviewBinding = {
   payload: ManifestPreviewPayload;
-  contentSnapshot: string;
+  contentFingerprint: string;
   generation: number;
 };
 
@@ -90,7 +90,7 @@ export function ManifestTab({ appKey }: { appKey: string }) {
     onPaginationChange: setVersionsPagination,
   });
   const previewMutation = useMutation({
-    mutationFn: ({ contentSnapshot }: { contentSnapshot: string; generation: number; requestId: number }) =>
+    mutationFn: ({ contentSnapshot }: { contentSnapshot: string; contentFingerprint: string; generation: number; requestId: number }) =>
       apiRequest<ManifestPreviewPayload>(`/console/api/v1/apps/${appKey}/permission-template-imports/preview`, {
         method: "POST",
         body: { template_format: "json", template: contentSnapshot },
@@ -99,11 +99,11 @@ export function ManifestTab({ appKey }: { appKey: string }) {
       if (
         variables.requestId !== previewRequestRef.current ||
         variables.generation !== contentGenerationRef.current ||
-        variables.contentSnapshot !== manifestContentSnapshot(contentRef.current)
+        variables.contentFingerprint !== manifestContentFingerprint(contentRef.current)
       ) {
         return;
       }
-      setPreview({ payload, contentSnapshot: variables.contentSnapshot, generation: variables.generation });
+      setPreview({ payload, contentFingerprint: variables.contentFingerprint, generation: variables.generation });
     },
     onError: (error: Error, variables) => {
       if (variables.requestId !== previewRequestRef.current || variables.generation !== contentGenerationRef.current) {
@@ -113,8 +113,8 @@ export function ManifestTab({ appKey }: { appKey: string }) {
     },
   });
   const importMutation = useMutation({
-    mutationFn: ({ previewId, contentSnapshot, generation }: { previewId: string; contentSnapshot: string; generation: number }) => {
-      if (generation !== contentGenerationRef.current || contentSnapshot !== manifestContentSnapshot(contentRef.current)) {
+    mutationFn: ({ previewId, contentFingerprint, generation }: { previewId: string; contentFingerprint: string; generation: number }) => {
+      if (generation !== contentGenerationRef.current || contentFingerprint !== manifestContentFingerprint(contentRef.current)) {
         throw new Error("Manifest 内容已变化，请重新预览后再导入。");
       }
       return apiRequest<ManifestImportPayload>(`/console/api/v1/apps/${appKey}/permission-template-imports/${previewId}/confirm`, {
@@ -140,7 +140,7 @@ export function ManifestTab({ appKey }: { appKey: string }) {
   const currentPreview =
     preview &&
     preview.generation === contentGenerationRef.current &&
-    preview.contentSnapshot === manifestContentSnapshot(content)
+    preview.contentFingerprint === manifestContentFingerprint(content)
       ? preview
       : null;
 
@@ -207,8 +207,10 @@ export function ManifestTab({ appKey }: { appKey: string }) {
           disabled={!content || previewMutation.isPending}
           onClick={() => {
             const requestId = ++previewRequestRef.current;
+            const contentSnapshot = contentRef.current;
             previewMutation.mutate({
-              contentSnapshot: manifestContentSnapshot(contentRef.current),
+              contentSnapshot,
+              contentFingerprint: manifestContentFingerprint(contentSnapshot),
               generation: contentGenerationRef.current,
               requestId,
             });
@@ -227,7 +229,7 @@ export function ManifestTab({ appKey }: { appKey: string }) {
             }
             importMutation.mutate({
               previewId,
-              contentSnapshot: currentPreview.contentSnapshot,
+              contentFingerprint: currentPreview.contentFingerprint,
               generation: currentPreview.generation,
             });
           }}
@@ -280,6 +282,7 @@ function CurrentManifestPanel({ appKey, onSaved }: { appKey: string; onSaved: ()
   const toast = useToast();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState("");
+  const draftRef = useRef("");
   const [jsonError, setJsonError] = useState("");
   const manifestQuery = useQuery({
     queryKey: ["console", "app", appKey, "manifest"],
@@ -287,13 +290,16 @@ function CurrentManifestPanel({ appKey, onSaved }: { appKey: string; onSaved: ()
   });
   const manifestText = manifestQuery.data ? JSON.stringify(manifestQuery.data, null, 2) : "";
   const saveMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async ({ draftSnapshot, draftFingerprint }: { draftSnapshot: string; draftFingerprint: string }) => {
       const preview = await apiRequest<ManifestPreviewPayload>(
         `/console/api/v1/apps/${appKey}/permission-template-imports/preview`,
-        { method: "POST", body: { template_format: "json", template: draft } },
+        { method: "POST", body: { template_format: "json", template: draftSnapshot } },
       );
       if (!preview.preview_id) {
         throw new Error(t("manifest.current.saveFailedNoPreview"));
+      }
+      if (draftFingerprint !== manifestContentFingerprint(draftRef.current)) {
+        throw new Error("Manifest 内容已变化，请重新保存。");
       }
       return apiRequest<ManifestImportPayload>(
         `/console/api/v1/apps/${appKey}/permission-template-imports/${preview.preview_id}/confirm`,
@@ -319,7 +325,9 @@ function CurrentManifestPanel({ appKey, onSaved }: { appKey: string; onSaved: ()
     const currentVersion = Number(manifestQuery.data.schema_version ?? 0);
     // 导入管线要求 schema_version 严格递增, 进入编辑时预先自动 +1。
     const draftManifest = { ...manifestQuery.data, schema_version: currentVersion + 1 };
-    setDraft(JSON.stringify(draftManifest, null, 2));
+    const nextDraft = JSON.stringify(draftManifest, null, 2);
+    draftRef.current = nextDraft;
+    setDraft(nextDraft);
     setJsonError("");
     setEditing(true);
   };
@@ -332,7 +340,7 @@ function CurrentManifestPanel({ appKey, onSaved }: { appKey: string; onSaved: ()
       return;
     }
     setJsonError("");
-    saveMutation.mutate();
+    saveMutation.mutate({ draftSnapshot: draft, draftFingerprint: manifestContentFingerprint(draft) });
   };
 
   return (
@@ -352,7 +360,7 @@ function CurrentManifestPanel({ appKey, onSaved }: { appKey: string; onSaved: ()
           </Button>
           {editing ? (
             <>
-              <Button icon={<X size={15} />} onClick={() => setEditing(false)}>
+              <Button icon={<X size={15} />} disabled={saveMutation.isPending} onClick={() => setEditing(false)}>
                 {t("manifest.current.cancel")}
               </Button>
               <Button
@@ -383,7 +391,11 @@ function CurrentManifestPanel({ appKey, onSaved }: { appKey: string; onSaved: ()
             rows={18}
             className="font-mono text-xs leading-5"
             value={draft}
-            onChange={(event) => setDraft(event.currentTarget.value)}
+            disabled={saveMutation.isPending}
+            onChange={(event) => {
+              draftRef.current = event.currentTarget.value;
+              setDraft(event.currentTarget.value);
+            }}
           />
           <p className="text-body text-ink-soft">{t("manifest.current.saveHint")}</p>
         </>
@@ -480,6 +492,7 @@ function changeItem(change: { action?: string; key?: string; parent_key?: string
   };
 }
 
-function manifestContentSnapshot(content: string): string {
-  return content.replace(/\r\n?/g, "\n");
+function manifestContentFingerprint(content: string): string {
+  // 保留规范化后的完整内容作为同步身份，避免非加密短哈希碰撞后确认错误预览。
+  return content.replace(/\r\n?/g, "\n").trim();
 }

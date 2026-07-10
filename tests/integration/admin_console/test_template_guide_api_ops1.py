@@ -348,6 +348,12 @@ def test_ops1_template_versions_api_returns_latest_first_with_pagination() -> No
     payload = _json_object(response)
     assert response.status_code == HTTPStatus.OK
     assert payload["latest_version"] == latest_version
+    assert payload["pagination"] == {
+        "page": 1,
+        "page_size": 1,
+        "total_items": 2,
+        "total_pages": 2,
+    }
     assert payload["data"] == [
         {
             "version": 2,
@@ -356,6 +362,21 @@ def test_ops1_template_versions_api_returns_latest_first_with_pagination() -> No
             "action_count": 0,
         },
     ]
+
+    second_page = developer_client.get(
+        f"/console/api/v1/apps/{app.app_key}/permission-template-versions",
+        {"page": "2", "page_size": "1"},
+    )
+
+    second_payload = _json_object(second_page)
+    assert second_page.status_code == HTTPStatus.OK
+    assert second_payload["pagination"] == {
+        "page": 2,
+        "page_size": 1,
+        "total_items": 2,
+        "total_pages": 2,
+    }
+    assert [item["version"] for item in second_payload["data"]] == [1]
 
 
 def test_ops1_template_confirm_api_rejects_developer_but_versions_are_readable() -> None:

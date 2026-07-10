@@ -14,7 +14,7 @@ import { useI18n } from "../../../../i18n/I18nProvider";
 import type { MessageKey } from "../../../../i18n/messages";
 import { apiRequest } from "../../../../lib/api";
 import type { JsonObject } from "../../../../lib/api";
-import type { WebhookConfigPayload } from "../../../../lib/domain";
+import type { WebhookConfigItem, WebhookConfigPayload } from "../../../../lib/domain";
 import { deliveryStateLabel, formatDateTime } from "../../../../lib/status";
 
 type WebhookTarget = "approval_callback_url" | "handover_url" | "onboard_url";
@@ -29,6 +29,12 @@ interface WebhookTestResult {
   delivery_id: string;
   status: string;
 }
+
+type WebhookConfigState =
+  | { status: "loading" }
+  | { status: "error"; error: Error }
+  | { status: "unconfigured" }
+  | { status: "configured"; config: WebhookConfigItem };
 
 export function WebhookTab({ appKey }: { appKey: string }) {
   const { t } = useI18n();
@@ -52,26 +58,39 @@ export function WebhookTab({ appKey }: { appKey: string }) {
     },
     enabled: Boolean(appKey),
   });
-  const config = configQuery.data?.webhook_config ?? null;
-  const canWrite = configQuery.isSuccess && !configQuery.error;
+  const configState: WebhookConfigState = (() => {
+    if (configQuery.error) {
+      return { status: "error", error: configQuery.error as Error };
+    }
+    if (configQuery.isLoading || !configQuery.data) {
+      return { status: "loading" };
+    }
+    if (configQuery.data.webhook_config === null) {
+      return { status: "unconfigured" };
+    }
+    return { status: "configured", config: configQuery.data.webhook_config };
+  })();
+  const config = configState.status === "configured" ? configState.config : null;
+  const canWrite = configState.status === "configured" || configState.status === "unconfigured";
 
   useEffect(() => {
-    if (config) {
-      setEnabled(config.enabled);
-      setUrls({
-        approval_callback_url: config.approval_callback_url,
-        handover_url: config.handover_url,
-        onboard_url: config.onboard_url,
-      });
+    if (!canWrite) {
+      return;
     }
-  }, [config]);
+    setEnabled(config?.enabled ?? true);
+    setUrls({
+      approval_callback_url: config?.approval_callback_url ?? "",
+      handover_url: config?.handover_url ?? "",
+      onboard_url: config?.onboard_url ?? "",
+    });
+  }, [canWrite, config]);
 
   const saveMutation = useMutation({
-    mutationFn: (rotateSecret: boolean) => {
+    mutationFn: async (rotateSecret: boolean) => {
       if (!canWrite) {
         throw new Error(t("webhook.loadFailed"));
       }
-      return apiRequest<WebhookConfigPayload>(`/console/api/v1/apps/${appKey}/webhook-config`, {
+      const payload = await apiRequest<unknown>(`/console/api/v1/apps/${appKey}/webhook-config`, {
         method: "PUT",
         body: {
           enabled,
@@ -81,6 +100,11 @@ export function WebhookTab({ appKey }: { appKey: string }) {
           rotate_secret: rotateSecret,
         } satisfies JsonObject,
       });
+      const parsed = parseWebhookConfigPayload(payload, t("webhook.saveFailed"));
+      if (parsed.webhook_config === null) {
+        throw new Error(t("webhook.saveFailed"));
+      }
+      return parsed;
     },
     onSuccess: (payload) => {
       const secret = payload.webhook_config?.secret ?? "";
@@ -145,14 +169,19 @@ export function WebhookTab({ appKey }: { appKey: string }) {
           </div>
           <div className="flex items-center gap-2">
             <span className="text-label font-medium uppercase tracking-caps-wide text-ink-soft">{t("webhook.secretLabel")}</span>
-            <Badge tone={config?.secret_configured ? "evergreen" : "amber"}>
-              {config?.secret_configured ? t("webhook.secretConfigured") : t("webhook.secretMissing")}
-            </Badge>
+            {configState.status === "loading" ? <Badge>{t("common.loading")}</Badge> : null}
+            {configState.status === "error" ? <Badge tone="signal">{t("webhook.loadFailed")}</Badge> : null}
+            {configState.status === "unconfigured" ? <Badge tone="amber">{t("webhook.secretMissing")}</Badge> : null}
+            {configState.status === "configured" ? (
+              <Badge tone={configState.config.secret_configured ? "evergreen" : "amber"}>
+                {configState.config.secret_configured ? t("webhook.secretConfigured") : t("webhook.secretMissing")}
+              </Badge>
+            ) : null}
           </div>
         </div>
-        {configQuery.error ? (
+        {configState.status === "error" ? (
           <div className="space-y-3">
-            <StatusBanner tone="signal" title={t("webhook.loadFailed")} message={(configQuery.error as Error).message} />
+            <StatusBanner tone="signal" title={t("webhook.loadFailed")} message={configState.error.message} />
             <Button
               type="button"
               icon={<RefreshCcw size={15} />}
@@ -163,7 +192,7 @@ export function WebhookTab({ appKey }: { appKey: string }) {
             </Button>
           </div>
         ) : null}
-        {!configQuery.isLoading && !configQuery.error && config === null ? (
+        {configState.status === "unconfigured" ? (
           <StatusBanner tone="amber" title={t("webhook.notConfigured")} />
         ) : null}
         <form className="grid max-w-3xl gap-4" onSubmit={submit}>
@@ -294,6 +323,7 @@ function parseWebhookConfigPayload(payload: unknown, errorMessage: string): Webh
     typeof config.approval_callback_url !== "string" ||
     typeof config.handover_url !== "string" ||
     typeof config.onboard_url !== "string" ||
+    (config.secret !== undefined && typeof config.secret !== "string") ||
     (config.updated_by !== undefined && typeof config.updated_by !== "string") ||
     (config.updated_at !== undefined && config.updated_at !== null && typeof config.updated_at !== "string")
   ) {

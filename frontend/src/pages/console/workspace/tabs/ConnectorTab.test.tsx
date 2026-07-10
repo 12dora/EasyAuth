@@ -99,6 +99,69 @@ describe("ConnectorTab", () => {
     );
   });
 
+  test("已启用实例修改配置后旧测试结果立即失效", async () => {
+    installConnectorFetch({
+      instances: [{ ...instances[0], enabled: true }],
+    });
+    const user = userEvent.setup();
+    renderWithClient(<ConnectorTab appKey="demo" />);
+
+    const endpoint = await screen.findByLabelText("Endpoint A *");
+    const formPanel = screen
+      .getByRole("heading", { name: "出站供给连接器" })
+      .closest("section");
+    expect(formPanel).not.toBeNull();
+    const save = within(formPanel as HTMLElement).getByRole("button", {
+      name: "保存",
+    });
+    const testConnection = within(formPanel as HTMLElement).getByRole(
+      "button",
+      { name: "测试连接" },
+    );
+
+    await waitFor(() => expect(save).toBeEnabled());
+    await user.clear(endpoint);
+    await user.type(endpoint, "https://changed.example.com");
+    expect(save).toBeDisabled();
+
+    await user.click(testConnection);
+    await waitFor(() => expect(save).toBeEnabled());
+
+    await user.type(endpoint, "/next");
+    expect(save).toBeDisabled();
+  });
+
+  test("连接测试结果不能跨 connector key 复用", async () => {
+    installConnectorFetch();
+    const user = userEvent.setup();
+    renderWithClient(<ConnectorTab appKey="demo" />);
+
+    await waitFor(() =>
+      expect(screen.getByLabelText("连接器类型")).toHaveValue("instance:11"),
+    );
+    const formPanel = screen
+      .getByRole("heading", { name: "出站供给连接器" })
+      .closest("section");
+    expect(formPanel).not.toBeNull();
+    const panel = formPanel as HTMLElement;
+    const save = within(panel).getByRole("button", { name: "保存" });
+
+    await user.click(
+      within(panel).getByRole("checkbox", { name: "启用连接器" }),
+    );
+    await user.click(within(panel).getByRole("button", { name: "测试连接" }));
+    await waitFor(() => expect(save).toBeEnabled());
+
+    await user.selectOptions(
+      within(panel).getByLabelText("连接器类型"),
+      "instance:22",
+    );
+    await user.click(
+      within(panel).getByRole("checkbox", { name: "启用连接器" }),
+    );
+    expect(save).toBeDisabled();
+  });
+
   test("mapping 权威读取失败时禁止整表保存并可重试", async () => {
     installConnectorFetch({ instances: [instances[0]], mappingsFail: true });
     const user = userEvent.setup();
@@ -120,6 +183,93 @@ describe("ConnectorTab", () => {
     await user.click(
       within(panel as HTMLElement).getByRole("button", { name: "重新加载" }),
     );
+  });
+
+  test("mapping 缓存后的重新读取失败也必须 fail closed", async () => {
+    const failureState = { mappings: false };
+    installConnectorFetch({
+      instances: [instances[0]],
+      mappingsFail: () => failureState.mappings,
+    });
+    const client = renderWithClient(<ConnectorTab appKey="demo" />);
+
+    const heading = await screen.findByRole("heading", { name: "授权组映射" });
+    const panel = heading.closest("section");
+    expect(panel).not.toBeNull();
+    const save = within(panel as HTMLElement).getByRole("button", {
+      name: "保存",
+    });
+    await waitFor(() => expect(save).toBeEnabled());
+
+    failureState.mappings = true;
+    await client.refetchQueries({
+      queryKey: [
+        "console",
+        "app",
+        "demo",
+        "connector-mappings",
+        instances[0].id,
+      ],
+      exact: true,
+    });
+
+    expect(
+      await within(panel as HTMLElement).findByText("连接器配置加载失败"),
+    ).toBeInTheDocument();
+    expect(save).toBeDisabled();
+    expect(
+      within(panel as HTMLElement).getByRole("combobox", { name: "外部组" }),
+    ).toBeDisabled();
+  });
+
+  test("mapping 的畸形 200 响应不会清空已加载草稿", async () => {
+    const responseState = {
+      mappings: {
+        data: [
+          {
+            authorization_group_key: "vpn",
+            authorization_group_name: "VPN",
+            external_ref: "external-vpn",
+            auto_create: true,
+          },
+        ],
+        revision: "a".repeat(64),
+      } as unknown,
+    };
+    installConnectorFetch({ mappingsPayload: () => responseState.mappings });
+    const client = renderWithClient(<ConnectorTab appKey="demo" />);
+
+    const input = await screen.findByRole("combobox", { name: "外部组" });
+    expect(input).toHaveValue("external-vpn");
+
+    responseState.mappings = { revision: "b".repeat(64) };
+    await client.refetchQueries({
+      queryKey: [
+        "console",
+        "app",
+        "demo",
+        "connector-mappings",
+        instances[0].id,
+      ],
+      exact: true,
+    });
+
+    expect(await screen.findByText("连接器配置加载失败")).toBeVisible();
+    expect(input).toHaveValue("external-vpn");
+    expect(input).toBeDisabled();
+  });
+
+  test("authorization-groups 的错型行进入错误态并禁止保存", async () => {
+    installConnectorFetch({
+      instances: [instances[0]],
+      groupsPayload: { data: [{ key: "vpn", name: "VPN", is_active: "yes" }] },
+    });
+    renderWithClient(<ConnectorTab appKey="demo" />);
+
+    const panel = (await screen.findByRole("heading", { name: "授权组映射" })).closest("section");
+    expect(panel).not.toBeNull();
+    expect(await within(panel as HTMLElement).findByText("连接器配置加载失败")).toBeVisible();
+    expect(within(panel as HTMLElement).getByRole("button", { name: "保存" })).toBeDisabled();
   });
 
   test("运行历史使用服务端总数并可访问第二页", async () => {
@@ -147,9 +297,15 @@ describe("ConnectorTab", () => {
 function installConnectorFetch({
   instances: configuredInstances = instances,
   mappingsFail = false,
+  mappingsPayload = { data: [], revision: "a".repeat(64) },
+  groupsPayload = {
+    data: [{ key: "vpn", name: "VPN", is_active: true }],
+  },
 }: {
   instances?: typeof instances;
-  mappingsFail?: boolean;
+  mappingsFail?: boolean | (() => boolean);
+  mappingsPayload?: unknown | (() => unknown);
+  groupsPayload?: unknown;
 } = {}) {
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     const url = String(input);
@@ -166,20 +322,24 @@ function installConnectorFetch({
       return jsonResponse({ ok: true, message: "ok" });
     }
     if (url === "/console/api/v1/apps/demo/authorization-groups") {
-      return jsonResponse({
-        data: [{ key: "vpn", name: "VPN", is_active: true }],
-      });
+      return jsonResponse(groupsPayload);
     }
     if (url.endsWith("/external-groups")) {
       return jsonResponse({ data: [] });
     }
     if (url.endsWith("/mappings")) {
-      return mappingsFail
+      const shouldFail =
+        typeof mappingsFail === "function" ? mappingsFail() : mappingsFail;
+      return shouldFail
         ? jsonResponse(
             { code: "internal_error", message: "mapping read failed" },
             500,
           )
-        : jsonResponse({ data: [], revision: "a".repeat(64) });
+        : jsonResponse(
+            typeof mappingsPayload === "function"
+              ? mappingsPayload()
+              : mappingsPayload,
+          );
     }
     if (url.includes("/sync-runs?")) {
       const page =
@@ -247,6 +407,7 @@ function renderWithClient(ui: ReactElement) {
       <ToastProvider>{ui}</ToastProvider>
     </QueryClientProvider>,
   );
+  return client;
 }
 
 function jsonResponse(payload: unknown, status = 200) {

@@ -128,6 +128,45 @@ describe("AppOnboardingWizard", () => {
     expect(screen.getByRole("button", { name: "下一步" })).toBeEnabled();
   });
 
+  test("manifest 确认导入在途时锁定内容与离开入口并在完成后绑定结果", async () => {
+    const confirmResponse = deferred<Response>();
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/billing" && !init?.method) {
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing" } });
+      }
+      if (url.endsWith("/permission-template-imports/preview") && init?.method === "POST") {
+        return jsonResponse({ preview_id: "pv-locked", changes: [] });
+      }
+      if (url.endsWith("/permission-template-imports/pv-locked/confirm") && init?.method === "POST") {
+        return confirmResponse.promise;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWizard("/console/apps/new?app_key=billing&step=catalog");
+    const content = await screen.findByLabelText("Manifest 内容");
+    await user.click(content);
+    await user.paste("{}");
+    await user.click(screen.getByRole("button", { name: "预览差异" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "确认导入" })).toBeEnabled());
+    await user.click(screen.getByRole("button", { name: "确认导入" }));
+
+    expect(content).toBeDisabled();
+    expect(screen.getByRole("button", { name: "上传文件" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "上一步" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "跳过此步" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "返回应用列表" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /完成 - 未开始/ })).toBeDisabled();
+
+    confirmResponse.resolve(jsonResponse({ catalog_version: 7 }));
+    expect(await screen.findByText("当前目录版本：7")).toBeVisible();
+    expect(content).toBeEnabled();
+    expect(screen.getByRole("button", { name: "下一步" })).toBeEnabled();
+  });
+
   test("编辑 manifest 后立即废弃预览和已导入版本", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
@@ -194,6 +233,33 @@ describe("AppOnboardingWizard", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "预览差异" })).toBeEnabled());
     expect(screen.queryByText("create_permission:old")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "确认导入" })).toBeDisabled();
+  });
+
+  test("后选择的 manifest 文件先读完时不会被旧文件覆盖", async () => {
+    const firstRead = deferred<string>();
+    const secondRead = deferred<string>();
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      if (String(input) === "/console/api/v1/apps/billing") {
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing" } });
+      }
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    const firstFile = new File(["first"], "first.json", { type: "application/json" });
+    const secondFile = new File(["second"], "second.json", { type: "application/json" });
+    Object.defineProperty(firstFile, "text", { value: () => firstRead.promise });
+    Object.defineProperty(secondFile, "text", { value: () => secondRead.promise });
+
+    renderWizard("/console/apps/new?app_key=billing&step=catalog");
+    const fileInput = await screen.findByLabelText("上传 Manifest 文件");
+    await user.upload(fileInput, firstFile);
+    await user.upload(fileInput, secondFile);
+    secondRead.resolve('{"source":"second"}');
+    await waitFor(() => expect(screen.getByLabelText("Manifest 内容")).toHaveValue('{"source":"second"}'));
+    firstRead.resolve('{"source":"first"}');
+
+    await waitFor(() => expect(screen.getByLabelText("Manifest 内容")).toHaveValue('{"source":"second"}'));
   });
 
   test("畸形 configuration-status 信封进入错误态而不是显示配置就绪", async () => {
@@ -281,6 +347,139 @@ describe("AppOnboardingWizard", () => {
     const tokenCall = fetchMock.mock.calls.find(([input]) => String(input) === "/oauth/token");
     expect(tokenCall?.[1]?.headers).toEqual({ "Content-Type": "application/x-www-form-urlencoded" });
     expect(String(tokenCall?.[1]?.body)).toBe("grant_type=client_credentials&client_id=client-1&client_secret=secret-1");
+  });
+
+  test("创建静态 token 时不会调用 OAuth token endpoint", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/billing" && !init?.method) {
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", active_credential_count: 0 } });
+      }
+      if (url.endsWith("/credentials/static-tokens") && init?.method === "POST") {
+        return jsonResponse({
+          credential: { id: 12, kind: "static_token", name: "Static integration" },
+          one_time_secret: { kind: "static_token", app_token: "static-1" },
+        }, 201);
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWizard("/console/apps/new?app_key=billing&step=credential");
+    await user.type(await screen.findByLabelText("凭据名称"), "Static integration");
+    await user.click(screen.getByRole("button", { name: "创建静态 token" }));
+
+    expect(await screen.findByText("static-1")).toBeVisible();
+    expect(fetchMock.mock.calls.some(([input]) => String(input) === "/oauth/token")).toBe(false);
+  });
+
+  test("创建接口返回错配 credential kind 时快速失败", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/billing" && !init?.method) {
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", active_credential_count: 0 } });
+      }
+      if (url.endsWith("/credentials/oauth-clients") && init?.method === "POST") {
+        return jsonResponse({
+          credential: { id: 13, kind: "static_token", name: "Broken OAuth" },
+          one_time_secret: { kind: "static_token", app_token: "wrong-kind" },
+        }, 201);
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWizard("/console/apps/new?app_key=billing&step=credential");
+    await user.type(await screen.findByLabelText("凭据名称"), "Broken OAuth");
+    await user.click(screen.getByRole("button", { name: "创建 OAuth client" }));
+
+    expect(await screen.findByText("凭据创建响应格式无效。")).toBeVisible();
+    expect(screen.queryByText("wrong-kind")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "下一步" })).toBeDisabled();
+    expect(fetchMock.mock.calls.some(([input]) => String(input) === "/oauth/token")).toBe(false);
+  });
+
+  test("OAuth 换取失败时禁止完成且新建静态凭据会清除旧错误", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/billing" && !init?.method) {
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", active_credential_count: 0 } });
+      }
+      if (url.endsWith("/credentials/oauth-clients") && init?.method === "POST") {
+        return jsonResponse({
+          credential: { id: 21, kind: "oauth_client", name: "Broken exchange" },
+          one_time_secret: { kind: "oauth_client", client_id: "client-broken", client_secret: "secret-broken" },
+        }, 201);
+      }
+      if (url === "/oauth/token" && init?.method === "POST") {
+        return jsonResponse({ code: "invalid_client", message: "客户端凭据无效" }, 401);
+      }
+      if (url.endsWith("/credentials/static-tokens") && init?.method === "POST") {
+        return jsonResponse({
+          credential: { id: 22, kind: "static_token", name: "Static replacement" },
+          one_time_secret: { kind: "static_token", app_token: "static-replacement" },
+        }, 201);
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWizard("/console/apps/new?app_key=billing&step=credential");
+    const name = await screen.findByLabelText("凭据名称");
+    await user.type(name, "Broken exchange");
+    await user.click(screen.getByRole("button", { name: "创建 OAuth client" }));
+
+    expect(await screen.findByText("OAuth access token 换取失败")).toBeVisible();
+    expect(screen.getByRole("button", { name: "下一步" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "跳过此步" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /完成 - 未开始/ })).toBeDisabled();
+
+    await user.type(name, "Static replacement");
+    await user.click(screen.getByRole("button", { name: "创建静态 token" }));
+    expect(await screen.findByText("static-replacement")).toBeVisible();
+    expect(screen.queryByText("OAuth access token 换取失败")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "下一步" })).toBeEnabled();
+  });
+
+  test("OAuth 接入完成页使用 access_token 口径", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/billing" && !init?.method) {
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", active_credential_count: 0 } });
+      }
+      if (url.endsWith("/credentials/oauth-clients") && init?.method === "POST") {
+        return jsonResponse({
+          credential: { id: 23, kind: "oauth_client", name: "OAuth production" },
+          one_time_secret: { kind: "oauth_client", client_id: "client-23", client_secret: "secret-23" },
+        }, 201);
+      }
+      if (url === "/oauth/token" && init?.method === "POST") {
+        return jsonResponse({ access_token: "access-23" });
+      }
+      if (url.endsWith("/configuration-status")) {
+        return jsonResponse({ app_key: "billing", status: "ready", data: [] });
+      }
+      if (url.startsWith("/console/api/v1/user-options?")) {
+        return jsonResponse({ data: [] });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWizard("/console/apps/new?app_key=billing&step=credential");
+    await user.type(await screen.findByLabelText("凭据名称"), "OAuth production");
+    await user.click(screen.getByRole("button", { name: "创建 OAuth client" }));
+    expect(await screen.findByText("access-23")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "下一步" }));
+    await user.click(await screen.findByRole("button", { name: "跳过此步" }));
+
+    expect(await screen.findByText(/Authorization: Bearer <access_token>/)).toBeVisible();
+    expect(screen.getByText(/\$ACCESS_TOKEN/)).toBeVisible();
+    expect(screen.getByText(/过期后请用 client_id 与 client_secret 重新换取/)).toBeVisible();
   });
 
   test("联调输入变化后旧响应不会覆盖结果或清除新 token", async () => {

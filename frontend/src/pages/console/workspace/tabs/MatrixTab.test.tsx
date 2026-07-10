@@ -29,8 +29,8 @@ describe("MatrixTab", () => {
               is_active: true,
               managed_scope_policy: {
                 mode: "inherit",
-                resolver: null,
-                enabled: true,
+                resolver: "",
+                enabled: false,
               },
               effective_managed_scope_policy: {
                 resolver: "dingtalk_manager_chain",
@@ -136,7 +136,7 @@ describe("MatrixTab", () => {
     });
   });
 
-  test("展示团队与并集 resolver，直接保存不会改写策略", async () => {
+  test("展示全部管理范围模式，直接保存不会改写策略", async () => {
     const payload = {
       data: [
         {
@@ -174,6 +174,39 @@ describe("MatrixTab", () => {
                 health_status: "healthy",
               },
             },
+            {
+              permission: "order.approve",
+              scope: "MANAGED_USERS",
+              is_active: true,
+              managed_scope_policy: { mode: "inherit", resolver: "", enabled: false },
+              effective_managed_scope_policy: {
+                resolver: "dingtalk_manager_chain",
+                enabled: true,
+                source: "app_default",
+                inherited_from: "app_default",
+                health_status: "healthy",
+              },
+            },
+            {
+              permission: "order.manage",
+              scope: "MANAGED_USERS",
+              is_active: true,
+              managed_scope_policy: { mode: "override", resolver: "dingtalk_manager_chain", enabled: true },
+              effective_managed_scope_policy: {
+                resolver: "dingtalk_manager_chain",
+                enabled: true,
+                source: "authorization_group_grant",
+                inherited_from: null,
+                health_status: "healthy",
+              },
+            },
+            {
+              permission: "order.disable",
+              scope: "MANAGED_USERS",
+              is_active: true,
+              managed_scope_policy: { mode: "disabled", resolver: "disabled", enabled: true },
+              effective_managed_scope_policy: null,
+            },
           ],
         },
       ],
@@ -188,6 +221,9 @@ describe("MatrixTab", () => {
           data: [
             { id: 20, key: "order.read", name: "订单读取", supported_scopes: ["MANAGED_USERS"] },
             { id: 21, key: "order.export", name: "订单导出", supported_scopes: ["MANAGED_USERS"] },
+            { id: 22, key: "order.approve", name: "订单审批", supported_scopes: ["MANAGED_USERS"] },
+            { id: 23, key: "order.manage", name: "订单管理", supported_scopes: ["MANAGED_USERS"] },
+            { id: 24, key: "order.disable", name: "订单禁用", supported_scopes: ["MANAGED_USERS"] },
           ],
         });
       }
@@ -209,10 +245,16 @@ describe("MatrixTab", () => {
     const dialog = await screen.findByRole("dialog", { name: "编辑授权组" });
     const teamRow = within(dialog).getByText("order.read / MANAGED_USERS").closest("tr") as HTMLTableRowElement;
     const unionRow = within(dialog).getByText("order.export / MANAGED_USERS").closest("tr") as HTMLTableRowElement;
+    const inheritRow = within(dialog).getByText("order.approve / MANAGED_USERS").closest("tr") as HTMLTableRowElement;
+    const overrideRow = within(dialog).getByText("order.manage / MANAGED_USERS").closest("tr") as HTMLTableRowElement;
+    const disabledRow = within(dialog).getByText("order.disable / MANAGED_USERS").closest("tr") as HTMLTableRowElement;
     expect(within(teamRow).getByLabelText("order.read / MANAGED_USERS 管理范围计算方式")).toHaveValue("easyauth_team");
     expect(within(teamRow).getAllByText("按自定义团队").length).toBeGreaterThan(0);
     expect(within(unionRow).getByLabelText("order.export / MANAGED_USERS 管理范围计算方式")).toHaveValue("union");
     expect(within(unionRow).getAllByText("合并两者").length).toBeGreaterThan(0);
+    expect(within(inheritRow).getByLabelText("order.approve / MANAGED_USERS 管理范围计算方式")).toHaveValue("inherit");
+    expect(within(overrideRow).getByLabelText("order.manage / MANAGED_USERS 管理范围计算方式")).toHaveValue("dingtalk_manager_chain");
+    expect(within(disabledRow).getByLabelText("order.disable / MANAGED_USERS 管理范围计算方式")).toHaveValue("disabled");
 
     await user.click(within(dialog).getByRole("button", { name: "保存" }));
 
@@ -222,6 +264,9 @@ describe("MatrixTab", () => {
       expect(body.grants.map((grant) => grant.managed_scope_policy)).toEqual([
         { mode: "easyauth_team", resolver: "easyauth_team", enabled: true },
         { mode: "union", resolver: "union", enabled: true },
+        { mode: "inherit", resolver: "", enabled: false },
+        { mode: "override", resolver: "dingtalk_manager_chain", enabled: true },
+        { mode: "disabled", resolver: "disabled", enabled: true },
       ]);
     });
   });

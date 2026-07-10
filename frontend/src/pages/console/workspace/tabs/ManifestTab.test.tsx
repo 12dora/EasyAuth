@@ -165,6 +165,54 @@ describe("ManifestTab", () => {
     expect(screen.getByLabelText("Manifest 内容")).toHaveValue("manifest-b");
   });
 
+  test("当前 Manifest 保存期间锁定输入并使用点击保存时的内容", async () => {
+    const previewResponse = deferred<Response>();
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url.includes("/permission-template-versions?")) {
+        return versionsResponse();
+      }
+      if (url === "/console/api/v1/apps/demo/manifest") {
+        return jsonResponse({ schema_version: 1 });
+      }
+      if (url.endsWith("/permission-template-imports/preview") && init?.method === "POST") {
+        return previewResponse.promise;
+      }
+      if (url.endsWith("/permission-template-imports/current-preview/confirm") && init?.method === "POST") {
+        return jsonResponse({ catalog_version: "v2" });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWithClient(<ManifestTab appKey="demo" />);
+
+    await user.click(await screen.findByRole("button", { name: "编辑" }));
+    const draft = screen.getByLabelText("当前 Manifest");
+    await user.clear(draft);
+    await user.click(draft);
+    await user.paste('{"schema_version":2}');
+    await user.click(screen.getByRole("button", { name: "保存为新版本" }));
+
+    expect(draft).toBeDisabled();
+    expect(screen.getByRole("button", { name: "取消编辑" })).toBeDisabled();
+    const previewCall = fetchMock.mock.calls.find(([input]) => String(input).endsWith("/permission-template-imports/preview"));
+    expect(JSON.parse(String(previewCall?.[1]?.body))).toEqual({
+      template_format: "json",
+      template: '{"schema_version":2}',
+    });
+
+    await act(async () => {
+      previewResponse.resolve(jsonResponse({ preview_id: "current-preview", diff: {} }));
+      await previewResponse.promise;
+    });
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([input]) => String(input).endsWith("/current-preview/confirm"))).toBe(true);
+    });
+  });
+
   test("版本历史使用服务端分页参数和总数", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);

@@ -43,10 +43,11 @@ describe("CredentialsTab(FF-4)", () => {
     expect(postCalls).toHaveLength(1);
   });
 
-  test("同一凭据的轮换和禁用串行执行，且每个轮换明文都不会被覆盖", async () => {
+  test("同类型同 ID 的轮换和禁用串行执行，不同类型同 ID 互不阻塞，且轮换明文不会被覆盖", async () => {
     const rotateUrl7 = "/console/api/v1/apps/demo/credentials/static-tokens/7/rotate";
     const rotateUrl8 = "/console/api/v1/apps/demo/credentials/static-tokens/8/rotate";
     const disableUrl7 = "/console/api/v1/apps/demo/credentials/static-tokens/7/disable";
+    const disableOauthUrl7 = "/console/api/v1/apps/demo/credentials/oauth-clients/7/disable";
     let resolveRotate7!: (response: Response) => void;
     let resolveRotate8!: (response: Response) => void;
     const rotate7Response = new Promise<Response>((resolve) => {
@@ -61,6 +62,7 @@ describe("CredentialsTab(FF-4)", () => {
         return jsonResponse({
           data: [
             { id: 7, kind: "static_token", name: "生产凭据", is_active: true },
+            { id: 7, kind: "oauth_client", name: "生产 OAuth", is_active: true, client_id: "client-7" },
             { id: 8, kind: "static_token", name: "备用凭据", is_active: true },
           ],
         });
@@ -70,6 +72,9 @@ describe("CredentialsTab(FF-4)", () => {
       }
       if (url === rotateUrl8 && init?.method === "POST") {
         return rotate8Response;
+      }
+      if (url === disableOauthUrl7 && init?.method === "POST") {
+        return jsonResponse({ ok: true });
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });
@@ -93,12 +98,18 @@ describe("CredentialsTab(FF-4)", () => {
     });
     await user.click(within(pendingRow7!).getByRole("button", { name: "轮换" }));
     await user.click(within(pendingRow7!).getByRole("button", { name: "禁用" }));
+    const oauthRow7 = screen.getByText("生产 OAuth").closest("tr");
+    expect(oauthRow7).not.toBeNull();
+    const disableOauth7 = within(oauthRow7 as HTMLTableRowElement).getByRole("button", { name: "禁用" });
+    expect(disableOauth7).toBeEnabled();
+    await user.click(disableOauth7);
     const currentRow8 = screen.getByText("备用凭据").closest("tr");
     expect(currentRow8).not.toBeNull();
     await user.click(within(currentRow8 as HTMLTableRowElement).getByRole("button", { name: "轮换" }));
 
     expect(fetchMock.mock.calls.filter(([input]) => String(input) === rotateUrl7)).toHaveLength(1);
     expect(fetchMock.mock.calls.filter(([input]) => String(input) === disableUrl7)).toHaveLength(0);
+    expect(fetchMock.mock.calls.filter(([input]) => String(input) === disableOauthUrl7)).toHaveLength(1);
 
     resolveRotate7(jsonResponse({ one_time_secret: { kind: "static_token", app_token: "token-7-once" } }));
     expect(await screen.findByText("token-7-once")).toBeVisible();

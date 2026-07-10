@@ -16,16 +16,16 @@ interface CreateCredentialInput {
 
 interface CredentialsMutations {
   createSecretMutation: UseMutationResult<SecretPayload, Error, CreateCredentialInput>;
-  rotateMutation: UseMutationResult<SecretPayload, Error, number>;
+  rotateMutation: UseMutationResult<SecretPayload, Error, CredentialItem>;
   disableMutation: UseMutationResult<unknown, Error, CredentialItem>;
 }
 
 interface CredentialsActions {
   createCredential: (kind: CreateCredentialKind, name: string) => Promise<SecretPayload>;
   isCreating: boolean;
-  rotateCredential: (credentialId: number) => void;
+  rotateCredential: (credential: CredentialItem) => void;
   disableCredential: (credential: CredentialItem) => void;
-  isCredentialPending: (credentialId: number) => boolean;
+  isCredentialPending: (credential: CredentialItem) => boolean;
   operationError: Error | null;
   secretEntries: [string, string][];
   closeSecretDialog: () => void;
@@ -33,8 +33,8 @@ interface CredentialsActions {
 
 export function useCredentialsActions(appKey: string): CredentialsActions {
   const [secrets, setSecrets] = useState<SecretPayload[]>([]);
-  const [, setPendingCredentialIds] = useState<Set<number>>(() => new Set());
-  const pendingCredentialIdsRef = useRef<Set<number>>(new Set());
+  const [, setPendingCredentialKeys] = useState<Set<string>>(() => new Set());
+  const pendingCredentialKeysRef = useRef<Set<string>>(new Set());
   const credentialsQueryKey = ["console", "app", appKey, "credentials"];
 
   const invalidateCredentials = () => {
@@ -44,29 +44,30 @@ export function useCredentialsActions(appKey: string): CredentialsActions {
   const enqueueSecret = (secret: SecretPayload) => {
     setSecrets((current) => [...current, secret]);
   };
-  const finishCredentialOperation = (credentialId: number) => {
-    const next = new Set(pendingCredentialIdsRef.current);
-    next.delete(credentialId);
-    pendingCredentialIdsRef.current = next;
-    setPendingCredentialIds(next);
+  const finishCredentialOperation = (credential: CredentialItem) => {
+    const next = new Set(pendingCredentialKeysRef.current);
+    next.delete(credentialOperationKey(credential));
+    pendingCredentialKeysRef.current = next;
+    setPendingCredentialKeys(next);
   };
   const mutations = useCredentialMutations(appKey, enqueueSecret, invalidateCredentials, finishCredentialOperation);
 
-  const beginCredentialOperation = (credentialId: number): boolean => {
-    if (pendingCredentialIdsRef.current.has(credentialId)) {
+  const beginCredentialOperation = (credential: CredentialItem): boolean => {
+    const operationKey = credentialOperationKey(credential);
+    if (pendingCredentialKeysRef.current.has(operationKey)) {
       return false;
     }
-    const next = new Set(pendingCredentialIdsRef.current);
-    next.add(credentialId);
-    pendingCredentialIdsRef.current = next;
-    setPendingCredentialIds(next);
+    const next = new Set(pendingCredentialKeysRef.current);
+    next.add(operationKey);
+    pendingCredentialKeysRef.current = next;
+    setPendingCredentialKeys(next);
     return true;
   };
 
   return buildCredentialsActions(
     secrets,
     setSecrets,
-    (credentialId) => pendingCredentialIdsRef.current.has(credentialId),
+    (credential) => pendingCredentialKeysRef.current.has(credentialOperationKey(credential)),
     beginCredentialOperation,
     mutations,
   );
@@ -76,7 +77,7 @@ function useCredentialMutations(
   appKey: string,
   enqueueSecret: (secret: SecretPayload) => void,
   invalidateCredentials: () => void,
-  finishCredentialOperation: (credentialId: number) => void,
+  finishCredentialOperation: (credential: CredentialItem) => void,
 ): CredentialsMutations {
   const createSecretMutation = useMutation({
     mutationFn: ({ kind, name }: CreateCredentialInput) =>
@@ -91,8 +92,8 @@ function useCredentialMutations(
   });
 
   const rotateMutation = useMutation({
-    mutationFn: (credentialId: number) =>
-      apiRequest<SecretPayload>(`/console/api/v1/apps/${appKey}/credentials/static-tokens/${credentialId}/rotate`, {
+    mutationFn: (credential: CredentialItem) =>
+      apiRequest<SecretPayload>(`/console/api/v1/apps/${appKey}/credentials/static-tokens/${credential.id}/rotate`, {
         method: "POST",
         body: {},
       }),
@@ -100,7 +101,7 @@ function useCredentialMutations(
       enqueueSecret(payload);
       invalidateCredentials();
     },
-    onSettled: (_payload, _error, credentialId) => finishCredentialOperation(credentialId),
+    onSettled: (_payload, _error, credential) => finishCredentialOperation(credential),
   });
 
   const disableMutation = useMutation({
@@ -112,7 +113,7 @@ function useCredentialMutations(
       });
     },
     onSuccess: invalidateCredentials,
-    onSettled: (_payload, _error, credential) => finishCredentialOperation(credential.id),
+    onSettled: (_payload, _error, credential) => finishCredentialOperation(credential),
   });
 
   return { createSecretMutation, rotateMutation, disableMutation };
@@ -121,21 +122,21 @@ function useCredentialMutations(
 function buildCredentialsActions(
   secrets: SecretPayload[],
   setSecrets: React.Dispatch<React.SetStateAction<SecretPayload[]>>,
-  isCredentialPending: (credentialId: number) => boolean,
-  beginCredentialOperation: (credentialId: number) => boolean,
+  isCredentialPending: (credential: CredentialItem) => boolean,
+  beginCredentialOperation: (credential: CredentialItem) => boolean,
   mutations: CredentialsMutations,
 ): CredentialsActions {
   const secret = secrets[0];
   return {
     createCredential: (kind: CreateCredentialKind, name: string) => mutations.createSecretMutation.mutateAsync({ kind, name }),
     isCreating: mutations.createSecretMutation.isPending,
-    rotateCredential: (credentialId: number) => {
-      if (beginCredentialOperation(credentialId)) {
-        mutations.rotateMutation.mutate(credentialId);
+    rotateCredential: (credential: CredentialItem) => {
+      if (beginCredentialOperation(credential)) {
+        mutations.rotateMutation.mutate(credential);
       }
     },
     disableCredential: (credential: CredentialItem) => {
-      if (beginCredentialOperation(credential.id)) {
+      if (beginCredentialOperation(credential)) {
         mutations.disableMutation.mutate(credential);
       }
     },
@@ -148,4 +149,8 @@ function buildCredentialsActions(
       mutations.rotateMutation.reset();
     },
   };
+}
+
+function credentialOperationKey(credential: CredentialItem): string {
+  return `${credential.kind}:${credential.id}`;
 }

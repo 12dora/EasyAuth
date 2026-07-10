@@ -184,6 +184,7 @@ export function ConsoleAppWorkspace() {
 }
 
 type ManagedScopeSelection = "unconfigured" | "dingtalk_manager_chain" | "easyauth_team" | "union" | "disabled";
+type ManagedScopeLoadState = "loading" | "error" | "unconfigured" | "configured";
 
 const MANAGED_SCOPE_RESOLVERS = ["dingtalk_manager_chain", "easyauth_team", "union"] as const;
 
@@ -223,7 +224,14 @@ function ManagedScopeTab({ appKey }: { appKey: string }) {
   });
   const effectivePolicy = policyQuery.data?.effective_managed_scope_policy ?? null;
   const teamBasedSelection = selection === "easyauth_team" || selection === "union";
-  const hasAuthoritativeSnapshot = policyQuery.isSuccess;
+  const loadState: ManagedScopeLoadState = policyQuery.isFetching || policyQuery.isPending
+    ? "loading"
+    : policyQuery.isError
+      ? "error"
+      : policyQuery.data?.managed_scope_policy
+        ? "configured"
+        : "unconfigured";
+  const hasAuthoritativeSnapshot = loadState === "configured" || loadState === "unconfigured";
 
   useEffect(() => {
     if (!policyQuery.data) {
@@ -250,7 +258,7 @@ function ManagedScopeTab({ appKey }: { appKey: string }) {
             {t("console.managedScope.save")}
           </Button>
         </div>
-        {policyQuery.error ? (
+        {loadState === "error" ? (
           <div className="flex flex-wrap items-center gap-3">
             <div className="min-w-0 flex-1">
               <StatusBanner tone="signal" title={t("console.managedScope.loadFailed")} message={(policyQuery.error as Error).message} />

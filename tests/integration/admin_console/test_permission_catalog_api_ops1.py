@@ -135,6 +135,56 @@ def test_ops1_superuser_reads_authorization_group_grant_managed_scope_policy() -
     )
 
 
+@pytest.mark.parametrize(
+    ("resolver", "expected_mode"),
+    [
+        ("dingtalk_manager_chain", "override"),
+        ("easyauth_team", "easyauth_team"),
+        ("union", "union"),
+        ("disabled", "disabled"),
+    ],
+)
+def test_ops1_authorization_group_catalog_preserves_grant_resolver(
+    resolver: str,
+    expected_mode: str,
+) -> None:
+    client = _logged_in_superuser(f"ops1-catalog-resolver-{resolver}")
+    app = App.objects.create(
+        app_key=f"ops1-catalog-resolver-{resolver}",
+        name=f"Resolver {resolver}",
+    )
+    scope = AppScope.objects.create(app=app, key="MANAGED_USERS", name="Managed users")
+    permission = Permission.objects.create(
+        app=app,
+        key="order.read",
+        name="Read orders",
+        supported_scopes=[scope.key],
+    )
+    group = AuthorizationGroup.objects.create(app=app, key="manager", kind="role", name="Manager")
+    grant = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key=scope.key,
+    )
+    _ = ManagedScopePolicy.objects.create(
+        app=app,
+        target_type="authorization_group_grant",
+        target_id=grant.id,
+        scope=scope.key,
+        resolver=resolver,
+    )
+
+    response = client.get(_api_url(app.app_key, "authorization-groups"))
+
+    body = _response_json_object(response)
+    group_item = _json_object(_json_list(body["data"])[0])
+    grant_item = _json_object(_json_list(group_item["grants"])[0])
+    policy_item = _json_object(grant_item["managed_scope_policy"])
+    assert response.status_code == HTTPStatus.OK
+    assert policy_item["mode"] == expected_mode
+    assert policy_item["resolver"] == resolver
+
+
 def test_ops1_inactive_member_cannot_read_permission_catalog() -> None:
     client = _logged_in_user("ops1-catalog-inactive")
     app = App.objects.create(app_key="ops1-catalog-inactive", name="Inactive")
