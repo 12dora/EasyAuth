@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 import pytest
-from django.core.cache import cache
+from django.utils import timezone
 
 from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import App, AuthorizationGroup
@@ -15,11 +17,17 @@ from easyauth.connectors.models import (
     ConnectorSyncRun,
 )
 from easyauth.connectors.services import (
-    RECONCILE_LOCK_CACHE_KEY_TEMPLATE,
+    _claim_generation,
+    _finish_generation,
     build_desired_state,
+    mark_reconcile_dirty,
     reconcile_instance,
 )
-from easyauth.grants.services import GrantMutationInput, GrantService
+from easyauth.grants.services import (
+    AuthorizationGroupGrantInput,
+    GrantMutationInput,
+    GrantService,
+)
 from tests.unit.connectors.fakes import FakeConnector
 
 if TYPE_CHECKING:
@@ -48,7 +56,10 @@ def _grant(user: UserMirror, app: App, groups: tuple[AuthorizationGroup, ...]) -
         GrantMutationInput(
             user=user,
             app=app,
-            authorization_groups=groups,
+            authorization_groups=tuple(
+                AuthorizationGroupGrantInput(authorization_group=group, expires_at=None)
+                for group in groups
+            ),
             actor_type="user",
             actor_id="tester",
         ),
@@ -182,13 +193,74 @@ def test_reconcile_skips_disabled_instance_and_unknown_connector() -> None:
     assert "未在 EASYAUTH_CONNECTORS 注册" in run.error
 
 
-def test_reconcile_skips_when_instance_lock_held() -> None:
-    # Given: 另一进程持有实例锁。
+def test_reconcile_keeps_dirty_when_token_lease_is_held() -> None:
+    # Given: 另一 worker 持有带 owner token 的数据库租约。
     app, _mapped, _unmapped = _app_with_groups("conn-lock")
-    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
-    lock_key = RECONCILE_LOCK_CACHE_KEY_TEMPLATE.format(instance_id=instance.id)
-    assert cache.add(lock_key, "1", timeout=60)
+    instance = ConnectorInstance.objects.create(
+        app=app,
+        connector_key="fake",
+        enabled=True,
+        reconcile_lease_token=UUID("54e3c48d-20d4-4996-bc71-8d32123f8944"),
+        reconcile_lease_expires_at=timezone.now() + timedelta(minutes=1),
+    )
 
-    # When / Then
+    # When / Then: 请求不丢失, generation/dirty 持久保留。
     assert reconcile_instance(instance.id, trigger=SYNC_TRIGGER_MANUAL) is None
     assert FakeConnector.last_desired is None
+    instance.refresh_from_db()
+    assert instance.reconcile_generation == 1
+    assert instance.reconcile_dirty is True
+
+
+def test_compare_release_does_not_delete_new_owner_lease() -> None:
+    app, _mapped, _unmapped = _app_with_groups("conn-owner-token")
+    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+    assert mark_reconcile_dirty(instance.id, trigger=SYNC_TRIGGER_MANUAL)
+    old_claim = _claim_generation(instance.id)
+    assert old_claim is not None
+    new_token = UUID("91be004d-e1f4-4781-a08e-f6e3006685ee")
+    _ = ConnectorInstance.objects.filter(id=instance.id).update(
+        reconcile_lease_token=new_token,
+        reconcile_lease_expires_at=timezone.now() + timedelta(minutes=1),
+    )
+
+    released = _finish_generation(old_claim, report=ReconcileReport())
+
+    assert released is False
+    instance.refresh_from_db()
+    assert instance.reconcile_lease_token == new_token
+    assert instance.reconciled_generation == 0
+
+
+def test_non_active_user_is_never_projected_for_unblock() -> None:
+    app, mapped, _unmapped = _app_with_groups("conn-departed")
+    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+    _ = ConnectorMapping.objects.create(
+        instance=instance,
+        authorization_group=mapped,
+        external_ref="immutable-group-id",
+    )
+    user = UserMirror.objects.create(authentik_user_id="conn-departed-u1", status="departed")
+    _grant(user, app, (mapped,))
+
+    desired = build_desired_state(instance)
+
+    assert desired.user_groups == {}
+    assert desired.managed_group_refs == frozenset({"immutable-group-id"})
+
+
+def test_duplicate_external_account_across_apps_fails_second_reconcile() -> None:
+    first_app, _mapped, _unmapped = _app_with_groups("conn-account-a")
+    second_app, _mapped2, _unmapped2 = _app_with_groups("conn-account-b")
+    first = ConnectorInstance.objects.create(app=first_app, connector_key="fake", enabled=True)
+    second = ConnectorInstance.objects.create(app=second_app, connector_key="fake", enabled=True)
+    FakeConnector.external_account = "immutable-account-id"
+
+    first_run = reconcile_instance(first.id, trigger=SYNC_TRIGGER_MANUAL)
+    second_run = reconcile_instance(second.id, trigger=SYNC_TRIGGER_MANUAL)
+
+    assert first_run is not None
+    assert first_run.status == "success"
+    assert second_run is not None
+    assert second_run.status == "failed"
+    assert "已绑定" in second_run.error

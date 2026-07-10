@@ -6,13 +6,14 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Final, cast, final, override
 
 from asgiref.sync import sync_to_async
-from celery import current_app
 from dingtalk_stream import AckMessage, Credential, DingTalkStreamClient, EventHandler
 from django.db import transaction
 
 from easyauth.applications.integration_settings import dingtalk_runtime_config
+from easyauth.config.runtime_health import STREAM_ACK_HEARTBEAT, mark_heartbeat
 from easyauth.integrations.dingtalk.api_client import DingTalkNotConfiguredError
 from easyauth.integrations.models import DingTalkStreamEvent
+from easyauth.outbox.services import enqueue_task
 from easyauth.tasks.dingtalk_stream import PROCESS_STREAM_EVENT_TASK_NAME
 
 if TYPE_CHECKING:
@@ -64,10 +65,12 @@ def record_stream_event(
             },
         )
         event_pk = cast("int", event.pk)
-        if created:
-            transaction.on_commit(
-                lambda: current_app.send_task(PROCESS_STREAM_EVENT_TASK_NAME, args=[event_pk]),
-            )
+        # 重投也执行幂等写入: 可修补历史上业务行已存在但消息发布失败的缺口。
+        _ = enqueue_task(
+            event_key=f"dingtalk-stream:{event_id}",
+            task_name=PROCESS_STREAM_EVENT_TASK_NAME,
+            args=[event_pk],
+        )
     return StreamEventReceipt(event_pk=event_pk, created=created)
 
 
@@ -110,6 +113,7 @@ class EasyAuthDingTalkEventHandler(EventHandler):
             corp_id,
             receipt.created,
         )
+        await sync_to_async(mark_heartbeat)(STREAM_ACK_HEARTBEAT)
         return AckMessage.STATUS_OK, ACK_OK_MESSAGE if receipt.created else ACK_DUPLICATE_MESSAGE
 
 

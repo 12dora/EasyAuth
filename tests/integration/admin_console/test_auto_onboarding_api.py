@@ -9,7 +9,14 @@ from django.test import Client
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import UserMirror
 from easyauth.admin_console import auto_onboarding_api
-from easyauth.applications.models import App, Permission, PermissionTemplateVersion
+from easyauth.applications.configuration import configuration_readiness_for_app
+from easyauth.applications.models import (
+    App,
+    AppMembership,
+    Permission,
+    PermissionTemplateVersion,
+)
+from easyauth.applications.ops_models import APP_MEMBERSHIP_ROLE_OWNER
 
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
@@ -136,6 +143,14 @@ def test_auto_onboarding_creates_app_and_imports_manifest(
     assert permission.name == "查看演示对象"
     assert permission.name_en == "View Demo Item"
     assert PermissionTemplateVersion.objects.filter(app=app, version=1).exists()
+    assert AppMembership.objects.filter(
+        app=app,
+        user_id="auto-onboard-admin",
+        role=APP_MEMBERSHIP_ROLE_OWNER,
+        is_active=True,
+    ).exists()
+    readiness = configuration_readiness_for_app(app)
+    assert "active_owner_missing" not in {issue.code for issue in readiness.issues}
 
 
 def test_auto_onboarding_is_idempotent_for_same_content(

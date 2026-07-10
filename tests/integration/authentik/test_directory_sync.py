@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from datetime import timedelta
+from threading import Event
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from django.utils import timezone
 
 from easyauth.accounts.models import (
     DingTalkDepartmentMirror,
@@ -12,9 +16,9 @@ from easyauth.accounts.models import (
     DingTalkUserOrgContext,
     UserMirror,
 )
-from easyauth.applications.models import App
+from easyauth.applications.models import App, AppScope, AuthorizationGroup, Permission
 from easyauth.audit.models import AuditLog
-from easyauth.grants.models import AccessGrant
+from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
 from easyauth.integrations.authentik.directory_client import (
     DIRECTORY_NOT_FOUND_MESSAGE,
     AuthentikDirectoryNotFoundError,
@@ -24,6 +28,7 @@ from easyauth.integrations.authentik.directory_sync import (
     UnsupportedDirectoryStatusError,
     sync_authentik_dingtalk_directory,
 )
+from easyauth.lifecycle.models import HandoverAppAction
 
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
@@ -31,6 +36,9 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.django_db
 
 _EXPECTED_TWO_USERS = 2
+_FINAL_STATUS_CALL = 2
+_NEWER_GENERATION = 2
+_CONCURRENT_WAIT_TIMEOUT_MESSAGE = "并发测试等待新 generation 提交超时。"
 
 
 @dataclass(slots=True)
@@ -40,10 +48,18 @@ class _DirectoryClientStub:
     org_contexts: dict[tuple[str, str], dict[str, object]] = field(default_factory=dict)
     # 上游报告的每 corp 用户总数; 缺省时按实际返回用户数上报 (观测==报告)。
     reported_user_count: int | None = None
+    generation: int = 1
+    status_script: list[dict[str, object]] = field(default_factory=list)
     # 指定这些 (corp_id, user_id) 的 org 拉取抛错, 用于验证单用户失败被隔离。
     org_fetch_errors: set[tuple[str, str]] = field(default_factory=set)
 
     def get_status(self) -> dict[str, object]:
+        if self.status_script:
+            return (
+                self.status_script.pop(0)
+                if len(self.status_script) > 1
+                else self.status_script[0]
+            )
         reported = self.reported_user_count if self.reported_user_count is not None else len(
             self.users,
         )
@@ -52,6 +68,7 @@ class _DirectoryClientStub:
             "sync": [
                 {
                     "corp_id": "corp-1",
+                    "generation": self.generation,
                     "status": "success",
                     "finished_at": "2026-06-12T01:00:00+00:00",
                     "counters": {"users": reported, "departments": len(self.departments)},
@@ -70,6 +87,31 @@ class _DirectoryClientStub:
         if (corp_id, user_id) in self.org_fetch_errors:
             raise AuthentikDirectoryNotFoundError(DIRECTORY_NOT_FOUND_MESSAGE)
         return self.org_contexts[(corp_id, user_id)]
+
+
+@dataclass(slots=True)
+class _BlockingFinalStatusClient:
+    delegate: _DirectoryClientStub
+    final_status_started: Event
+    allow_final_status: Event
+    status_call_count: int = 0
+
+    def get_status(self) -> dict[str, object]:
+        self.status_call_count += 1
+        if self.status_call_count == _FINAL_STATUS_CALL:
+            self.final_status_started.set()
+            if not self.allow_final_status.wait(timeout=5):
+                raise AssertionError(_CONCURRENT_WAIT_TIMEOUT_MESSAGE)
+        return self.delegate.get_status()
+
+    def iter_departments(self) -> list[dict[str, object]]:
+        return self.delegate.iter_departments()
+
+    def iter_users(self) -> list[dict[str, object]]:
+        return self.delegate.iter_users()
+
+    def get_user_org(self, corp_id: str, user_id: str) -> dict[str, object]:
+        return self.delegate.get_user_org(corp_id, user_id)
 
 
 def test_directory_sync_caches_departments_users_and_org_context() -> None:
@@ -218,6 +260,13 @@ def test_directory_sync_marks_deleted_directory_user_departed_and_revokes_grants
     )
     app = App.objects.create(app_key="sync-departed-app", name="Departed App")
     grant = AccessGrant.objects.create(user=user, app=app)
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="active-membership",
+        kind="role",
+        name="有效授权组",
+    )
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
     client_stub = _stub_with_users(
         [
             {
@@ -246,6 +295,59 @@ def test_directory_sync_marks_deleted_directory_user_departed_and_revokes_grants
         event_type="user_departure_detected",
         target_id="ak-departed-1",
     ).exists()
+    assert HandoverAppAction.objects.filter(app=app).exists()
+
+
+def test_directory_sync_excludes_grant_when_all_memberships_expired() -> None:
+    # Given: 父授权仍是 active/current, 但 group 与 direct membership 都已过期。
+    user = UserMirror.objects.create(
+        authentik_user_id="ak-expired-memberships",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-expired-memberships",
+        status="active",
+    )
+    app = App.objects.create(app_key="sync-expired-memberships-app", name="Expired Memberships")
+    scope = AppScope.objects.create(app=app, key="GLOBAL", name="全局")
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="expired-group",
+        kind="role",
+        name="已过期授权组",
+    )
+    permission = Permission.objects.create(
+        app=app,
+        key="expired.permission",
+        name="已过期权限",
+        supported_scopes=[scope.key],
+    )
+    grant = AccessGrant.objects.create(user=user, app=app)
+    expired_at = timezone.now() - timedelta(seconds=1)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        expires_at=expired_at,
+    )
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=permission,
+        scope_key=scope.key,
+        expires_at=expired_at,
+    )
+    client_stub = _stub_with_users(
+        [
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-expired-memberships",
+                "status": "deleted",
+            },
+        ],
+    )
+
+    _ = sync_authentik_dingtalk_directory(client_stub)
+
+    grant.refresh_from_db()
+    assert grant.status == "revoked"
+    assert not HandoverAppAction.objects.filter(app=app).exists()
 
 
 def test_directory_sync_departs_bound_user_missing_from_directory() -> None:
@@ -277,12 +379,20 @@ def test_directory_sync_departs_bound_user_missing_from_directory() -> None:
     assert user.status == "departed"
 
 
-def test_directory_sync_does_not_depart_users_when_corp_response_is_empty() -> None:
-    # Given: 绑定用户存在, 但上游返回空用户列表(疑似故障)。
+def test_directory_sync_applies_authoritative_empty_user_snapshot() -> None:
+    # Given: success status 明确声明 generation 与 users=0, 表示合法权威空集。
     user = UserMirror.objects.create(
         authentik_user_id="ak-guard-1",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="user-guard",
+        status="active",
+    )
+    app = App.objects.create(app_key="sync-empty-app", name="Empty Snapshot App")
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = DingTalkUserMirror.objects.create(
+        source_slug="dingtalk",
+        corp_id="corp-1",
+        user_id="user-guard",
         status="active",
     )
     client_stub = _stub_with_users([])
@@ -290,10 +400,14 @@ def test_directory_sync_does_not_depart_users_when_corp_response_is_empty() -> N
     # When: 执行目录同步。
     result = sync_authentik_dingtalk_directory(client_stub)
 
-    # Then: 空响应不触发任何离职回收。
+    # Then: 合法空集会清理最后一名目录用户并执行离职撤权。
     user.refresh_from_db()
-    assert user.status == "active"
-    assert result.status_applied_count == 0
+    grant.refresh_from_db()
+    assert user.status == "departed"
+    assert grant.status == "revoked"
+    assert result.status_applied_count == 1
+    assert result.pruned_user_count == 1
+    assert not DingTalkUserMirror.objects.filter(corp_id="corp-1").exists()
 
 
 def test_directory_sync_clears_manager_and_prunes_missing_rows() -> None:
@@ -353,7 +467,7 @@ def test_directory_sync_clears_manager_and_prunes_missing_rows() -> None:
     assert not DingTalkUserMirror.objects.filter(user_id="user-stale").exists()
 
 
-def test_directory_sync_isolates_unknown_status_but_still_revokes_departed() -> None:
+def test_directory_sync_rejects_unknown_status_before_any_write() -> None:
     # Given: 一个用户状态无法识别, 另一个用户已删除且持有 current 授权。
     unknown_user = UserMirror.objects.create(
         authentik_user_id="ak-unknown-status",
@@ -390,7 +504,7 @@ def test_directory_sync_isolates_unknown_status_but_still_revokes_departed() -> 
         ],
     )
 
-    # When / Then: 已识别的离职用户先被回收, 之后未知状态显式失败。
+    # When / Then: 任一状态违反契约时整份快照在写入前失败。
     with pytest.raises(UnsupportedDirectoryStatusError):
         _ = sync_authentik_dingtalk_directory(client_stub)
 
@@ -399,9 +513,10 @@ def test_directory_sync_isolates_unknown_status_but_still_revokes_departed() -> 
     grant.refresh_from_db()
     # 未知状态用户既不改状态也不回收。
     assert unknown_user.status == "active"
-    # 可识别的离职用户仍然被撤销授权。
-    assert departed_user.status == "departed"
-    assert grant.status == "revoked"
+    # 同一快照中的离职用户也不能在契约失败后产生部分写入。
+    assert departed_user.status == "active"
+    assert grant.status != "revoked"
+    assert not DingTalkUserMirror.objects.exists()
 
 
 def test_directory_sync_refuses_prune_when_response_truncated() -> None:
@@ -624,3 +739,159 @@ def test_real_department_change_sets_flag() -> None:
     user = UserMirror.objects.get(authentik_user_id="ak-moved-dept")
     assert user.department == "销售部"
     assert user.department_changed_at is not None
+
+
+def _authority_status(
+    *,
+    generation: object = 1,
+    users: object = 0,
+    departments: object = 0,
+    status: object = "success",
+) -> dict[str, object]:
+    return {
+        "source_slug": "dingtalk",
+        "sync": [
+            {
+                "corp_id": "corp-1",
+                "generation": generation,
+                "status": status,
+                "finished_at": "2026-07-10T01:00:00+00:00",
+                "counters": {"users": users, "departments": departments},
+                "error": "",
+            },
+        ],
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("generation", True),
+        ("generation", -1),
+        ("users", True),
+        ("users", -1),
+        ("departments", None),
+        ("status", "running"),
+    ],
+)
+def test_directory_sync_rejects_malformed_authority_before_writes(
+    field: str,
+    value: object,
+) -> None:
+    kwargs = {field: value}
+    client = _DirectoryClientStub(status_script=[_authority_status(**kwargs)])
+
+    with pytest.raises(AuthentikDirectoryUnavailableError):
+        _ = sync_authentik_dingtalk_directory(client)
+
+    assert not DingTalkDirectorySyncState.objects.exists()
+    assert not DingTalkDepartmentMirror.objects.exists()
+    assert not DingTalkUserMirror.objects.exists()
+
+
+def test_directory_sync_rejects_missing_generation_before_writes() -> None:
+    payload = _authority_status()
+    sync_entry = cast("dict[str, object]", cast("list[object]", payload["sync"])[0])
+    del sync_entry["generation"]
+    client = _DirectoryClientStub(status_script=[payload])
+
+    with pytest.raises(AuthentikDirectoryUnavailableError):
+        _ = sync_authentik_dingtalk_directory(client)
+
+    assert not DingTalkDirectorySyncState.objects.exists()
+
+
+def test_directory_sync_requires_exact_user_and_department_counts() -> None:
+    user: dict[str, object] = {
+        "corp_id": "corp-1",
+        "user_id": "user-extra",
+        "status": "active",
+    }
+    client = _DirectoryClientStub(
+        users=[user],
+        org_contexts={},
+        status_script=[_authority_status(users=0)],
+    )
+
+    with pytest.raises(AuthentikDirectoryUnavailableError):
+        _ = sync_authentik_dingtalk_directory(client)
+
+    assert not DingTalkDirectorySyncState.objects.exists()
+    assert not DingTalkUserMirror.objects.exists()
+
+
+def test_directory_sync_rejects_generation_change_during_fetch() -> None:
+    client = _DirectoryClientStub(
+        status_script=[
+            _authority_status(generation=1),
+            _authority_status(generation=2),
+        ],
+    )
+
+    with pytest.raises(AuthentikDirectoryUnavailableError):
+        _ = sync_authentik_dingtalk_directory(client)
+
+    assert not DingTalkDirectorySyncState.objects.exists()
+
+
+@pytest.mark.django_db(transaction=True)
+def test_concurrent_older_generation_cannot_reactivate_user() -> None:
+    user = UserMirror.objects.create(
+        authentik_user_id="ak-generation-fence",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-fenced",
+        status="active",
+    )
+    older = _stub_with_users(
+        [{"corp_id": "corp-1", "user_id": "user-fenced", "status": "active"}],
+    )
+    older.generation = 1
+    final_status_started = Event()
+    allow_final_status = Event()
+    blocked_older = _BlockingFinalStatusClient(
+        delegate=older,
+        final_status_started=final_status_started,
+        allow_final_status=allow_final_status,
+    )
+    newer = _stub_with_users(
+        [{"corp_id": "corp-1", "user_id": "user-fenced", "status": "deleted"}],
+    )
+    newer.generation = _NEWER_GENERATION
+
+    # 旧任务先抓到 active 列表并停在最终 status 确认; 新任务随后提交 departed generation。
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        old_future = executor.submit(sync_authentik_dingtalk_directory, blocked_older)
+        assert final_status_started.wait(timeout=5)
+        _ = sync_authentik_dingtalk_directory(newer)
+        allow_final_status.set()
+        with pytest.raises(AuthentikDirectoryUnavailableError):
+            _ = old_future.result()
+
+    user.refresh_from_db()
+    state = DingTalkDirectorySyncState.objects.get(corp_id="corp-1")
+    assert user.status == "departed"
+    assert state.generation == _NEWER_GENERATION
+
+
+def test_directory_sync_treats_equal_generation_as_idempotent_noop() -> None:
+    user = UserMirror.objects.create(
+        authentik_user_id="ak-generation-equal",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-equal",
+        status="active",
+    )
+    initial = _stub_with_users(
+        [{"corp_id": "corp-1", "user_id": "user-equal", "status": "active"}],
+    )
+    initial.generation = 3
+    _ = sync_authentik_dingtalk_directory(initial)
+
+    conflicting = _stub_with_users(
+        [{"corp_id": "corp-1", "user_id": "user-equal", "status": "deleted"}],
+    )
+    conflicting.generation = 3
+    result = sync_authentik_dingtalk_directory(conflicting)
+
+    user.refresh_from_db()
+    assert result.status_applied_count == 0
+    assert user.status == "active"

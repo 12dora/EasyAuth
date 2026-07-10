@@ -20,7 +20,6 @@ from easyauth.api.errors import ErrorCode
 from easyauth.applications.models import App, ApprovalRule, AuthorizationGroup, Permission
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import (
-    GRANT_TYPE_PERMANENT,
     AccessGrant,
     AccessGrantGroup,
     AccessGrantPermission,
@@ -42,6 +41,8 @@ def test_retry_grant_requires_authenticated_admin_without_mutating_state() -> No
         app=app,
         status=REQUEST_STATUS_GRANT_FAILED,
         reason="授权写入失败",
+        idempotency_key="retry-anonymous-user",
+        payload_digest="a" * 64,
     )
 
     # When: 未登录访问者提交 retry-grant。
@@ -70,6 +71,8 @@ def test_retry_grant_requires_superuser_without_mutating_state() -> None:
         app=app,
         status=REQUEST_STATUS_GRANT_FAILED,
         reason="授权写入失败",
+        idempotency_key="retry-non-superuser",
+        payload_digest="b" * 64,
     )
 
     # When: 普通用户提交 retry-grant。
@@ -110,14 +113,20 @@ def test_retry_failed_change_rejects_deleted_group_approval_rule() -> None:
         authorization_group=target_group,
         approver_userids=["manager-001"],
     )
-    grant = AccessGrant.objects.create(user=target_user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=current_group)
+    grant = AccessGrant.objects.create(user=target_user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=current_group,
+        expires_at=None,
+    )
     access_request = AccessRequest.objects.create(
         user=target_user,
         app=app,
         request_type=REQUEST_TYPE_CHANGE,
         status=REQUEST_STATUS_GRANT_FAILED,
         reason="变更授权写入失败",
+        idempotency_key="retry-deleted-group-rule",
+        payload_digest="c" * 64,
     )
     _ = AccessRequestGroup.objects.create(
         access_request=access_request,
@@ -167,14 +176,20 @@ def test_retry_failed_change_rejects_retargeted_permission_approval_rule() -> No
         permission=target_permission,
         approver_userids=["manager-001"],
     )
-    grant = AccessGrant.objects.create(user=target_user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-    _ = AccessGrantPermission.objects.create(grant=grant, permission=current_permission)
+    grant = AccessGrant.objects.create(user=target_user, app=app)
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=current_permission,
+        expires_at=None,
+    )
     access_request = AccessRequest.objects.create(
         user=target_user,
         app=app,
         request_type=REQUEST_TYPE_CHANGE,
         status=REQUEST_STATUS_GRANT_FAILED,
         reason="变更授权写入失败",
+        idempotency_key="retry-retargeted-permission-rule",
+        payload_digest="d" * 64,
     )
     _ = AccessRequestPermission.objects.create(
         access_request=access_request,

@@ -7,9 +7,13 @@ from django.db.models import Q
 
 from easyauth.applications.models import App
 from easyauth.config.crypto import EncryptedCharField
+from easyauth.config.net import parse_https_url
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
     from datetime import date, datetime
+
+    from django.db.models.base import ModelBase
 
     from easyauth.applications.ops_models import JsonValue
 
@@ -52,6 +56,8 @@ class AppWebhookConfig(models.Model):
     )
     handover_url: models.CharField[str, str] = models.CharField(max_length=512, blank=True)
     onboard_url: models.CharField[str, str] = models.CharField(max_length=512, blank=True)
+    # 精确域名 allowlist 由三类 URL 自动生成, 调用方不能另行扩大范围。
+    allowed_hosts: models.JSONField[list[str], list[str]] = models.JSONField(default=list)
     updated_by: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
@@ -66,6 +72,34 @@ class AppWebhookConfig(models.Model):
     @override
     def __str__(self) -> str:
         return f"webhook-config:{self.app.app_key}"
+
+    @override
+    def save(
+        self,
+        *,
+        force_insert: bool | tuple[ModelBase, ...] = False,
+        force_update: bool = False,
+        using: str | None = None,
+        update_fields: Iterable[str] | None = None,
+    ) -> None:
+        hosts: set[str] = set()
+        for url in (
+            self.approval_callback_url,
+            self.handover_url,
+            self.onboard_url,
+        ):
+            if url:
+                hosts.add(parse_https_url(url).hostname)
+        self.allowed_hosts = sorted(hosts)
+        effective_update_fields = (
+            None if update_fields is None else {*update_fields, "allowed_hosts"}
+        )
+        super().save(
+            force_insert=force_insert,
+            force_update=force_update,
+            using=using,
+            update_fields=effective_update_fields,
+        )
 
 
 class WebhookDelivery(models.Model):
@@ -91,6 +125,12 @@ class WebhookDelivery(models.Model):
         default=DELIVERY_STATUS_PENDING,
     )
     attempts: models.PositiveIntegerField[int, int] = models.PositiveIntegerField(default=0)
+    generation: models.PositiveIntegerField[int, int] = models.PositiveIntegerField(default=1)
+    claim_token: models.CharField[str, str] = models.CharField(max_length=32, blank=True)
+    lease_expires_at: models.DateTimeField[
+        str | date | datetime | None,
+        datetime | None,
+    ] = models.DateTimeField(null=True, blank=True)
     last_error: models.TextField[str, str] = models.TextField(blank=True)
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
@@ -104,6 +144,10 @@ class WebhookDelivery(models.Model):
             models.CheckConstraint(
                 condition=Q(status__in=DELIVERY_STATUS_VALUES),
                 name="webhooks_delivery_status_supported",
+            ),
+            models.CheckConstraint(
+                condition=Q(generation__gte=1),
+                name="webhooks_delivery_generation_positive",
             ),
         ]
         ordering: ClassVar[list[str]] = ["-created_at", "-id"]

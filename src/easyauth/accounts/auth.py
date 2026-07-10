@@ -22,6 +22,7 @@ OIDC_ID_TOKEN_SESSION_KEY: Final = "easyauth_oidc_id_token"  # noqa: S105 - sess
 # 本地超管会话的专用不可伪造标志: 隔离 OIDC sub 与合成的 local-admin:<user> 命名空间。
 # current_local_admin 必须校验此标志, 防止某个 sub 恰为 local-admin:<username> 的 OIDC 会话被冒认。
 LOCAL_ADMIN_SESSION_FLAG: Final = "easyauth_local_admin"
+LOCAL_ADMIN_SESSION_VERSION_KEY: Final = "easyauth_local_admin_session_version"
 LOCAL_ADMIN_RESERVED_SUBJECT_PREFIX: Final = "local-admin:"
 FIELD_SUBJECT: Final = "subject"
 REASON_RESERVED_SUBJECT: Final = "must not use reserved local-admin namespace"
@@ -195,6 +196,7 @@ def clear_auth_session(request: HttpRequest) -> None:
     request.session.pop(AUTHENTIK_GROUPS_SESSION_KEY, None)
     request.session.pop(OIDC_ID_TOKEN_SESSION_KEY, None)
     request.session.pop(LOCAL_ADMIN_SESSION_FLAG, None)
+    request.session.pop(LOCAL_ADMIN_SESSION_VERSION_KEY, None)
 
 
 def exchange_authorization_code_for_claims(

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
 from django.db.models import Q
 from django.http import HttpRequest, JsonResponse
@@ -10,8 +10,12 @@ from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.admin_console.api_payloads import list_payload, paginated_list_payload
 from easyauth.admin_console.api_responses import error_response, json_response
-from easyauth.admin_console.operation_filters import paginate_queryset
-from easyauth.admin_console.request_guards import require_console_actor
+from easyauth.admin_console.authz import require_superuser
+from easyauth.admin_console.operation_filters import (
+    OperationFilterValidationError,
+    operation_filter_error_response,
+    paginate_queryset,
+)
 from easyauth.api.errors import ErrorCode
 from easyauth.api.pagination import pagination_item
 from easyauth.lifecycle.models import TASK_OPEN_STATUSES, HandoverTask
@@ -20,36 +24,53 @@ if TYPE_CHECKING:
     from django.db.models import QuerySet
 
     from easyauth.api.errors import JsonValue
+    from easyauth.api.pagination import Pagination
 
 USER_SEARCH_DEFAULT_LIMIT: Final = 10
 USER_SEARCH_MAX_LIMIT: Final = 50
 
 
-def console_user_search(request: HttpRequest) -> JsonResponse:
-    # 两种形态共用一个端点:
-    # 1) 选人控件检索(默认): 按姓名/邮箱/Authentik 用户 ID/工号模糊检索活跃用户, limit 截断;
-    # 2) 人员列表(带 page 参数): 全状态分页, 支持 status 筛选与"部门已变更"提示(M4)。
+def console_users(request: HttpRequest) -> JsonResponse:
     if request.method != "GET":
         return error_response(
             ErrorCode.VALIDATION_ERROR,
             "请求方法无效。",
             status=HTTPStatus.METHOD_NOT_ALLOWED,
         )
-    match require_console_actor(request):
+    match require_superuser(request):
+        case JsonResponse() as response:
+            return response
+        case _:
+            pass
+    return _people_page(request)
+
+
+def console_user_options(request: HttpRequest) -> JsonResponse:
+    if request.method != "GET":
+        return error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "请求方法无效。",
+            status=HTTPStatus.METHOD_NOT_ALLOWED,
+        )
+    match require_superuser(request):
         case JsonResponse() as response:
             return response
         case _:
             pass
 
-    if request.GET.get("page"):
-        return _people_page(request)
     query = request.GET.get("q", "").strip()
+    if query == "":
+        return error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "q 不得为空。",
+            {"field": "q"},
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+        )
     # 内置本地管理员是 break-glass 系统账号, 不是员工: 不进选人控件(交接接收人/成员等)。
     users = UserMirror.objects.filter(status=USER_STATUS_ACTIVE).exclude(
         authentik_user_id__startswith=LOCAL_ADMIN_SUBJECT_PREFIX,
     )
-    if query:
-        users = _apply_query_filter(users, query)
+    users = _apply_query_filter(users, query)
     items: list[JsonValue] = [
         _user_item(user) for user in users.order_by("name", "authentik_user_id")[: _limit(request)]
     ]
@@ -67,10 +88,16 @@ def _people_page(request: HttpRequest) -> JsonResponse:
     query = request.GET.get("q", "").strip()
     if query:
         users = _apply_query_filter(users, query)
-    page = paginate_queryset(users.order_by("name", "authentik_user_id"), request.GET)
+    try:
+        page = paginate_queryset(users.order_by("name", "authentik_user_id"), request.GET)
+    except OperationFilterValidationError as exc:
+        return operation_filter_error_response(exc)
     items: list[JsonValue] = [_person_item(user) for user in page.items]
     return json_response(
-        paginated_list_payload(items=items, pagination=pagination_item(page)),
+        paginated_list_payload(
+            items=items,
+            pagination=pagination_item(cast("Pagination", cast("object", page))),
+        ),
     )
 
 
@@ -90,13 +117,15 @@ def _user_item(user: UserMirror) -> dict[str, JsonValue]:
     return {
         "user_id": user.authentik_user_id,
         "name": user.name,
-        "email": user.email,
-        "department": user.department,
     }
 
 
 def _person_item(user: UserMirror) -> dict[str, JsonValue]:
-    item = _user_item(user)
+    item: dict[str, JsonValue] = {
+        **_user_item(user),
+        "email": user.email,
+        "department": user.department,
+    }
     item["status"] = user.status
     open_task = (
         HandoverTask.objects.filter(

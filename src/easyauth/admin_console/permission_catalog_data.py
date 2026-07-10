@@ -17,8 +17,6 @@ from easyauth.applications.models import (
     ManagedScopePolicy,
     Permission,
     PermissionGroup,
-    Role,
-    RolePermission,
 )
 
 if TYPE_CHECKING:
@@ -56,15 +54,6 @@ def permission_groups_payload(app: App) -> dict[str, JsonValue]:
     }
 
 
-def roles_payload(app: App) -> dict[str, JsonValue]:
-    return {
-        "app_key": app.app_key,
-        **list_payload([role_item(role) for role in active_roles(app)]),
-        "catalog_version": app.catalog_version,
-        "version": catalog_version(app),
-    }
-
-
 def scopes_payload(app: App) -> dict[str, JsonValue]:
     return {
         "app_key": app.app_key,
@@ -93,57 +82,12 @@ def permissions_payload(app: App) -> dict[str, JsonValue]:
     }
 
 
-def matrix_payload(app: App) -> dict[str, JsonValue]:
-    roles = active_roles(app)
-    permissions = active_permissions(app)
-    enabled_pairs = _enabled_pairs(roles, permissions)
-    return {
-        "app_key": app.app_key,
-        "roles": [role_item(role) for role in roles],
-        "permissions": [permission_item(permission) for permission in permissions],
-        "permission_tree": permission_tree_payload(app)["groups"],
-        "assignments": [
-            {
-                "role_key": role.key,
-                "permission_key": permission.key,
-            }
-            for role in roles
-            for permission in permissions
-            if (role.id, permission.id) in enabled_pairs
-        ],
-        "catalog_version": app.catalog_version,
-        "version": catalog_version(app),
-    }
-
-
-def matrix_objects_by_key(
-    app: App,
-    *,
-    role_key: str,
-    permission_key: str,
-) -> tuple[Role, Permission] | None:
-    role = Role.objects.filter(app=app, key=role_key, is_active=True).first()
-    permission = Permission.objects.filter(
-        app=app,
-        key=permission_key,
-        is_active=True,
-        deprecated_at__isnull=True,
-    ).first()
-    if role is None or permission is None:
-        return None
-    return role, permission
-
-
 def active_groups(app: App) -> tuple[PermissionGroup, ...]:
     return tuple(
         PermissionGroup.objects.filter(app=app, is_active=True)
         .select_related("parent")
         .order_by("depth", "display_order", "key"),
     )
-
-
-def active_roles(app: App) -> tuple[Role, ...]:
-    return tuple(Role.objects.filter(app=app, is_active=True).order_by("key"))
 
 
 def active_scopes(app: App) -> tuple[AppScope, ...]:
@@ -186,17 +130,6 @@ def group_item(group: PermissionGroup) -> dict[str, JsonValue]:
         "depth": group.depth,
         "display_order": group.display_order,
         "is_active": group.is_active,
-    }
-
-
-def role_item(role: Role) -> dict[str, JsonValue]:
-    return {
-        "id": role.id,
-        "key": role.key,
-        "name": role.name,
-        "description": role.description,
-        "requestable": role.requestable,
-        "is_active": role.is_active,
     }
 
 
@@ -375,16 +308,3 @@ def _permissions_by_group(app: App) -> dict[int | None, list[Permission]]:
         group_id = None if group is None else group.id
         permissions_by_group.setdefault(group_id, []).append(permission)
     return permissions_by_group
-
-
-def _enabled_pairs(
-    roles: tuple[Role, ...],
-    permissions: tuple[Permission, ...],
-) -> set[tuple[int, int]]:
-    return {
-        (link.role_id, link.permission_id)
-        for link in RolePermission.objects.filter(
-            role_id__in=[role.id for role in roles],
-            permission_id__in=[permission.id for permission in permissions],
-        )
-    }

@@ -79,6 +79,11 @@ class BaseConnector(ABC):
     @abstractmethod
     def reconcile(self, instance: ConnectorInstance, desired: DesiredState) -> ReconcileReport: ...
 
+    def external_account_id(self, config: dict[str, JsonValue]) -> str:
+        """探测外部租户的不可变 ID; 不具备租户概念的连接器返回空串。"""
+        _ = config
+        return ""
+
     def validate_config(self, config: dict[str, JsonValue]) -> list[str]:
         """返回配置问题列表(空表 = 通过); 子类可追加连接器特有校验。"""
         return validate_config_against_schema(self.config_schema, config)

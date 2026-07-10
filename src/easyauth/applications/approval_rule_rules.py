@@ -13,7 +13,6 @@ class _ApprovalTarget(Protocol):
 
 class _ApprovalRule(Protocol):
     app: _BoundApp
-    role: _ApprovalTarget | None
     authorization_group: _ApprovalTarget | None
     permission: _ApprovalTarget | None
     approver_userids: object
@@ -32,8 +31,6 @@ def approval_rule_clean_errors(rule: object) -> dict[str, str]:
         message = "Approval rule must target exactly one authorization group or permission."
         errors["authorization_group"] = message
         errors["permission"] = message
-    if typed_rule.role is not None:
-        errors["role"] = "Role is no longer a supported approval rule target."
     if authorization_group is not None and authorization_group.app != typed_rule.app:
         errors["authorization_group"] = (
             "Authorization group must belong to the approval rule app."

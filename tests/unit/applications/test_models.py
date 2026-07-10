@@ -13,8 +13,6 @@ from easyauth.applications.models import (
     AuthorizationGroupGrant,
     Permission,
     PermissionGroup,
-    Role,
-    RolePermission,
 )
 
 pytestmark = pytest.mark.django_db
@@ -40,31 +38,6 @@ def test_app_key_is_unique_when_duplicate_app_is_cleaned() -> None:
     # When / Then
     with pytest.raises(ValidationError):
         duplicate.full_clean()
-
-
-def test_role_key_is_unique_within_same_app_when_duplicate_role_is_cleaned() -> None:
-    # Given
-    app = App.objects.create(app_key="crm", name="CRM")
-    _ = Role.objects.create(app=app, key="admin", name="Admin")
-    duplicate = Role(app=app, key="admin", name="Admin duplicate")
-
-    # When / Then
-    with pytest.raises(ValidationError):
-        duplicate.full_clean()
-
-
-def test_role_key_can_repeat_across_apps_when_role_is_cleaned() -> None:
-    # Given
-    crm = App.objects.create(app_key="crm", name="CRM")
-    erp = App.objects.create(app_key="erp", name="ERP")
-    _ = Role.objects.create(app=crm, key="admin", name="Admin")
-    cross_app_role = Role(app=erp, key="admin", name="Admin")
-
-    # When
-    cross_app_role.full_clean()
-
-    # Then
-    assert cross_app_role.key == "admin"
 
 
 def test_permission_key_is_unique_within_same_app_when_duplicate_permission_is_cleaned() -> None:
@@ -201,19 +174,6 @@ def test_active_permission_rejects_empty_supported_scopes_when_cleaned() -> None
     assert error.value.message_dict == {
         "supported_scopes": ["Active permission must support at least one scope."],
     }
-
-
-def test_role_permission_rejects_cross_app_links_when_cleaned() -> None:
-    # Given
-    crm = App.objects.create(app_key="crm", name="CRM")
-    erp = App.objects.create(app_key="erp", name="ERP")
-    role = Role.objects.create(app=crm, key="admin", name="Admin")
-    permission = Permission.objects.create(app=erp, key="invoice.read", name="Read invoices")
-    role_permission = RolePermission(role=role, permission=permission)
-
-    # When / Then
-    with pytest.raises(ValidationError):
-        role_permission.full_clean()
 
 
 def test_approval_rule_requires_exactly_one_target_when_cleaned() -> None:

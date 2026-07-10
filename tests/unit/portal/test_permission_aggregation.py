@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+import re
+from datetime import timedelta
+
 import pytest
+from django.utils import timezone
 
 from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import (
@@ -64,7 +68,10 @@ def test_current_permission_api_returns_groups_and_expanded_scoped_grants() -> N
     ]
     assert item["grant_version"] == grant.version
     assert item["catalog_version"] == app.catalog_version
-    assert item["snapshot_version"] == f"{grant.version}.{app.catalog_version}.0"
+    assert re.fullmatch(
+        rf"{grant.version}\.{app.catalog_version}\.[0-9a-f]{{16}}",
+        item["snapshot_version"],
+    )
 
 
 def test_current_permission_api_excludes_inactive_and_deprecated_permissions() -> None:
@@ -113,21 +120,56 @@ def test_current_permission_api_excludes_inactive_and_deprecated_permissions() -
         },
     ]
 
+
+def test_current_permission_api_reports_mixed_membership_lifecycles_without_promotion() -> None:
+    # Given: 同一 App 的授权组永久有效, direct permission 单独限时。
+    user, app, grant = _create_current_grant("portal-mixed-lifecycle")
+    scope = _create_scope(app, "GLOBAL", "全局")
+    permission = _create_permission(app, "invoice.read", scope.key)
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="reader",
+        kind="role",
+        name="读者",
+    )
+    expires_at = timezone.now() + timedelta(days=7)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        expires_at=None,
+    )
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=permission,
+        scope_key=scope.key,
+        expires_at=expires_at,
+    )
+
+    # When: 门户读取授权生命周期摘要。
+    item = current_grant_items_for_user(user)[0]
+
+    # Then: 不把限时项提升为永久, 也不把永久项压成限时。
+    assert item["grant_type"] == "mixed"
+    assert item["grant_expires_at"] == expires_at.isoformat()
+
+
 def test_json_helpers_serialize_new_authorization_fact_shapes() -> None:
     # Given: 新授权事实快照包含 groups 和 expanded grants。
-    groups = (GroupSnapshot(key="sales-reader", kind="role", name="销售只读"),)
+    groups = (GroupSnapshot(key="sales-reader", kind="role", name="销售只读", expires_at=None),)
     grants = (
         ExpandedGrant(
             permission="orders.read",
             scope="SELF",
             source_type="group",
             source_key="sales-reader",
+            expires_at=None,
         ),
         ExpandedGrant(
             permission="dashboard.view",
             scope="GLOBAL",
             source_type="direct",
             source_key="",
+            expires_at=None,
         ),
     )
 

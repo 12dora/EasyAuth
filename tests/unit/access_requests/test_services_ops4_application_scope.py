@@ -16,7 +16,7 @@ from easyauth.access_requests.models import (
     REQUEST_TYPE_RENEW,
     REQUEST_TYPE_REVOKE,
     AccessRequest,
-    AccessRequestRole,
+    AccessRequestGroup,
 )
 from easyauth.access_requests.services import (
     AccessRequestApplication,
@@ -24,9 +24,9 @@ from easyauth.access_requests.services import (
     AccessRequestService,
 )
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App, Role
+from easyauth.applications.models import App, AuthorizationGroup
 from easyauth.audit.models import AuditLog
-from easyauth.grants.models import GRANT_STATUS_ACTIVE, AccessGrant, AccessGrantRole
+from easyauth.grants.models import GRANT_STATUS_ACTIVE, AccessGrant, AccessGrantGroup
 
 pytestmark = pytest.mark.django_db
 
@@ -88,34 +88,46 @@ def _approved_request_for_type(
     app: App,
     request_type: str,
 ) -> AccessRequest:
-    role = Role.objects.create(app=app, key=f"{request_type}-role", name="Role")
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key=f"{request_type}-group",
+        kind="role",
+        name="Authorization group",
+    )
     match request_type:
         case "grant" | "change":
             access_request = _approved_request(user=user, app=app, request_type=request_type)
-            _ = AccessRequestRole.objects.create(access_request=access_request, role=role)
+            _ = AccessRequestGroup.objects.create(
+                access_request=access_request,
+                authorization_group=group,
+            )
             if request_type == REQUEST_TYPE_CHANGE:
                 _ = AccessGrant.objects.create(
                     user=user,
                     app=app,
-                    grant_type=GRANT_TYPE_PERMANENT,
                 )
             return access_request
         case "revoke":
             grant = AccessGrant.objects.create(
                 user=user,
                 app=app,
-                grant_type=GRANT_TYPE_PERMANENT,
             )
-            _ = AccessGrantRole.objects.create(grant=grant, role=role)
+            _ = AccessGrantGroup.objects.create(
+                grant=grant,
+                authorization_group=group,
+                expires_at=None,
+            )
             return _approved_request(user=user, app=app, request_type=request_type)
         case "renew":
             grant = AccessGrant.objects.create(
                 user=user,
                 app=app,
-                grant_type=GRANT_TYPE_TIMED,
-                grant_expires_at=timezone.now() + timedelta(days=3),
             )
-            _ = AccessGrantRole.objects.create(grant=grant, role=role)
+            _ = AccessGrantGroup.objects.create(
+                grant=grant,
+                authorization_group=group,
+                expires_at=timezone.now() + timedelta(days=3),
+            )
             access_request = _approved_request(
                 user=user,
                 app=app,
@@ -123,7 +135,10 @@ def _approved_request_for_type(
                 grant_type=GRANT_TYPE_TIMED,
                 grant_expires_at=timezone.now() + timedelta(days=10),
             )
-            _ = AccessRequestRole.objects.create(access_request=access_request, role=role)
+            _ = AccessRequestGroup.objects.create(
+                access_request=access_request,
+                authorization_group=group,
+            )
             return access_request
         case unsupported:
             raise AssertionError(unsupported)
@@ -145,6 +160,8 @@ def _approved_request(
         grant_type=grant_type,
         grant_expires_at=grant_expires_at,
         reason="审批已通过",
+        idempotency_key=f"{app.app_key}-approved-{request_type}",
+        payload_digest="1" * 64,
         approved_at=timezone.now(),
     )
 

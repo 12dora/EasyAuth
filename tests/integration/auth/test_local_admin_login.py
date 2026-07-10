@@ -235,6 +235,26 @@ def test_verify_totp_full_flow() -> None:
     _assert_session_bound(client)
 
 
+def test_totp_failures_keep_accumulating_after_password_is_resubmitted() -> None:
+    otp_key = pyotp.random_base32()
+    _ = _create_account(totp_secret=otp_key)
+    client = Client()
+    _ = _login(client)
+
+    for _ in range(4):
+        response = client.post("/auth/local/verify/totp/", {"code": "000000"})
+        assert response.status_code == HTTPStatus.OK
+
+    # 正确口令只进入二次验证, 不能在完整登录前清空累计失败次数。
+    relogin = _login(client)
+    assert relogin.headers["Location"] == "/auth/local/verify/"
+    fifth = client.post("/auth/local/verify/totp/", {"code": "000000"})
+    assert fifth.status_code == HTTPStatus.OK
+    blocked = _login(client)
+    assert blocked.status_code == HTTPStatus.OK
+    assert "尝试次数过多" in blocked.content.decode()
+
+
 def test_passkey_begin_returns_options_and_stores_challenge() -> None:
     # Given
     account = _create_account()
@@ -501,7 +521,7 @@ def test_change_password_rejects_wrong_current_password() -> None:
 @pytest.mark.parametrize(
     ("new_password", "confirm_password", "message"),
     [
-        ("short", "short", "新密码长度至少 8 位"),
+        ("short", "short", "新密码长度至少 12 位"),
         (GOOD_CREDENTIAL, GOOD_CREDENTIAL, "新密码不能与当前密码相同"),
         (NEW_CREDENTIAL, NEW_CREDENTIAL + "-typo", "两次输入的新密码不一致"),
     ],
@@ -562,13 +582,20 @@ def test_totp_enable_and_disable_flow() -> None:
     _ = _login(client)
 
     # When
-    begin_response = client.post("/auth/local/security/totp/begin/")
+    begin_response = client.post(
+        "/auth/local/security/totp/begin/",
+        {"current_password": GOOD_CREDENTIAL},
+    )
     setup_page = client.get("/auth/local/security/")
     otp_key = client.session[local_admin.TOTP_SETUP_SESSION_KEY]["secret"]
-    wrong_confirm = client.post("/auth/local/security/totp/confirm/", {"code": "000000"})
+    enrollment_nonce = client.session[local_admin.TOTP_SETUP_SESSION_KEY]["nonce"]
+    wrong_confirm = client.post(
+        "/auth/local/security/totp/confirm/",
+        {"code": "000000", "enrollment_nonce": enrollment_nonce},
+    )
     confirm_response = client.post(
         "/auth/local/security/totp/confirm/",
-        {"code": pyotp.TOTP(otp_key).now()},
+        {"code": pyotp.TOTP(otp_key).now(), "enrollment_nonce": enrollment_nonce},
     )
 
     # Then
@@ -599,6 +626,54 @@ def test_totp_enable_and_disable_flow() -> None:
     assert not account.totp_enabled
     assert account.totp_secret == ""
     assert AuditLog.objects.filter(event_type="admin_local_totp_disabled").exists()
+
+
+def test_totp_begin_requires_password_step_up() -> None:
+    _ = _create_account()
+    client = Client()
+    _ = _login(client)
+
+    response = client.post(
+        "/auth/local/security/totp/begin/",
+        {"current_password": BAD_CREDENTIAL},
+    )
+
+    assert response.headers["Location"] == "/auth/local/security/?error=totp_begin"
+    assert local_admin.TOTP_SETUP_SESSION_KEY not in client.session
+
+
+def test_password_change_revokes_other_local_admin_sessions() -> None:
+    _ = _create_account()
+    current = Client()
+    other = Client()
+    _ = _login(current)
+    _ = _login(other)
+
+    changed = current.post(
+        CHANGE_PASSWORD_PATH,
+        {
+            "current_password": GOOD_CREDENTIAL,
+            "new_password": NEW_CREDENTIAL,
+            "confirm_password": NEW_CREDENTIAL,
+        },
+    )
+
+    assert changed.status_code == HTTPStatus.FOUND
+    assert current.get("/auth/local/security/").status_code == HTTPStatus.OK
+    assert other.get("/auth/local/security/").status_code == HTTPStatus.NOT_FOUND
+
+
+def test_reactivating_account_does_not_revive_sessions_from_before_deactivation() -> None:
+    account = _create_account()
+    client = Client()
+    _ = _login(client)
+
+    account.is_active = False
+    account.save(update_fields=["is_active", "updated_at"])
+    account.is_active = True
+    account.save(update_fields=["is_active", "updated_at"])
+
+    assert client.get("/auth/local/security/").status_code == HTTPStatus.NOT_FOUND
 
 
 def test_passkey_registration_flow(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -792,12 +867,13 @@ def test_change_password_rejects_weak_new_password() -> None:
 
 def test_current_local_admin_requires_session_flag() -> None:
     # Given: 一个本地管理员账号, 以及一个只有 local-admin: 前缀 subject 但缺少专用标志的会话。
-    _ = _create_account()
+    account = _create_account()
     without_flag = SimpleNamespace(session={AUTHENTIK_SESSION_KEY: LOCAL_ADMIN_SUBJECT})
     with_flag = SimpleNamespace(
         session={
             AUTHENTIK_SESSION_KEY: LOCAL_ADMIN_SUBJECT,
             local_admin.LOCAL_ADMIN_SESSION_FLAG: True,
+            local_admin.LOCAL_ADMIN_SESSION_VERSION_KEY: account.session_version,
         },
     )
 

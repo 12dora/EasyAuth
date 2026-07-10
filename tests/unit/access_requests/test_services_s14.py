@@ -67,6 +67,7 @@ def test_s14_submit_grant_request_creates_submitted_request_without_creating_gra
             reason="需要处理客户资料",
             actor_type="user",
             actor_id=user.authentik_user_id,
+            idempotency_key="s14-submit-grant-request",
             approver_user_ids=(_ensure_active_approver(),),
         ),
     )
@@ -111,6 +112,7 @@ def test_s14_submit_grant_request_rejects_group_without_active_approval_rule() -
                 reason="需要审计客户资料",
                 actor_type="user",
                 actor_id=user.authentik_user_id,
+                idempotency_key="s14-reject-missing-approval-rule",
             ),
         )
 
@@ -145,6 +147,7 @@ def test_s14_submit_grant_request_rejects_group_from_another_app() -> None:
                 reason="跨应用角色不应提交",
                 actor_type="user",
                 actor_id=user.authentik_user_id,
+                idempotency_key="s14-reject-cross-app-group",
             ),
         )
 
@@ -177,6 +180,7 @@ def test_s14_submit_grant_request_rejects_non_requestable_group() -> None:
                 reason="不可申请角色不应提交",
                 actor_type="user",
                 actor_id=user.authentik_user_id,
+                idempotency_key="s14-reject-non-requestable-group",
             ),
         )
 
@@ -209,6 +213,7 @@ def test_s14_submit_grant_request_rejects_inactive_group() -> None:
                 reason="停用角色不应提交",
                 actor_type="user",
                 actor_id=user.authentik_user_id,
+                idempotency_key="s14-reject-inactive-group",
             ),
         )
 
@@ -240,6 +245,7 @@ def test_s14_submit_permanent_grant_request_rejects_expiration() -> None:
                 reason="永久授权不应带过期时间",
                 actor_type="user",
                 actor_id=user.authentik_user_id,
+                idempotency_key="s14-reject-permanent-expiration",
             ),
         )
 
@@ -271,6 +277,7 @@ def test_s14_submit_timed_grant_request_requires_expiration() -> None:
                 reason="限时授权必须带过期时间",
                 actor_type="user",
                 actor_id=user.authentik_user_id,
+                idempotency_key="s14-reject-timed-without-expiration",
             ),
         )
 
@@ -303,6 +310,7 @@ def test_s14_submit_timed_grant_request_preserves_requested_expiration() -> None
             reason="临时处理活动客户",
             actor_type="user",
             actor_id=user.authentik_user_id,
+            idempotency_key="s14-submit-timed-grant-request",
             approver_user_ids=(_ensure_active_approver(),),
         ),
     )

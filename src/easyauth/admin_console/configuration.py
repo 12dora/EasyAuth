@@ -11,8 +11,6 @@ from easyauth.applications.models import (
     ApprovalRule,
     AuthorizationGroup,
     Permission,
-    Role,
-    RolePermission,
 )
 from easyauth.audit.services import AuditRecord, AuditService
 
@@ -20,15 +18,6 @@ from easyauth.audit.services import AuditRecord, AuditService
 @dataclass(frozen=True, slots=True)
 class ConsoleMutationActor:
     actor_id: str
-
-
-@dataclass(frozen=True, slots=True)
-class RolePermissionMutation:
-    app: App
-    role: Role
-    permission: Permission
-    enabled: bool
-    actor: ConsoleMutationActor
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,66 +48,6 @@ class ConsoleConfigurationError(Exception):
     @override
     def __str__(self) -> str:
         return self.code
-
-
-@transaction.atomic
-def set_role_permission(input_data: RolePermissionMutation) -> None:
-    if input_data.role.app_id != input_data.app.id:
-        raise ConsoleConfigurationError(code="role_app_mismatch")
-    if input_data.permission.app_id != input_data.app.id:
-        raise ConsoleConfigurationError(code="permission_app_mismatch")
-
-    link = RolePermission.objects.filter(
-        role=input_data.role,
-        permission=input_data.permission,
-    ).first()
-    if input_data.enabled and link is None:
-        link = RolePermission(role=input_data.role, permission=input_data.permission)
-        link.full_clean()
-        link.save()
-    if not input_data.enabled and link is not None:
-        _ = link.delete()
-
-    metadata: dict[str, str | bool | int] = {
-        "role_key": input_data.role.key,
-        "permission_key": input_data.permission.key,
-        "enabled": input_data.enabled,
-    }
-    # 单一规范动作: 只发 role_permission_matrix_changed(与 bump 的 reason 一致),
-    # 不再重复发 role_permission_matrix_updated, 避免按动作计数的分析重复计。
-    _record_config_event(
-        action="role_permission_matrix_changed",
-        app=input_data.app,
-        actor=input_data.actor,
-        metadata=metadata,
-    )
-    bump_catalog_version(
-        input_data.app,
-        actor_id=input_data.actor.actor_id,
-        reason="role_permission_matrix_changed",
-        metadata=metadata,
-    )
-
-
-@transaction.atomic
-def create_role(
-    *,
-    app: App,
-    key: str,
-    name: str,
-    requestable: bool,
-    actor: ConsoleMutationActor,
-) -> Role:
-    role = Role(app=app, key=key, name=name, requestable=requestable)
-    role.full_clean()
-    role.save()
-    _record_config_event(
-        action="role_created",
-        app=app,
-        actor=actor,
-        metadata={"role_key": role.key, "requestable": role.requestable},
-    )
-    return role
 
 
 @transaction.atomic
@@ -187,7 +116,6 @@ def update_approval_rule(input_data: ApprovalRuleMutation) -> ApprovalRule:
     if input_data.permission is not None and input_data.permission.app_id != input_data.app.id:
         raise ConsoleConfigurationError(code="permission_app_mismatch")
 
-    input_data.rule.role = None
     input_data.rule.authorization_group = input_data.authorization_group
     input_data.rule.permission = input_data.permission
     input_data.rule.approver_userids = list(input_data.approver_userids)
@@ -195,7 +123,6 @@ def update_approval_rule(input_data: ApprovalRuleMutation) -> ApprovalRule:
     input_data.rule.full_clean()
     input_data.rule.save(
         update_fields=[
-            "role",
             "authorization_group",
             "permission",
             "approver_userids",
@@ -239,7 +166,6 @@ def _approval_rule_metadata(
         metadata["target_type"] = "authorization_group"
         metadata["target_key"] = authorization_group.key
         metadata["authorization_group_key"] = authorization_group.key
-        metadata["role_key"] = authorization_group.key
     if permission is not None:
         metadata["target_type"] = "permission"
         metadata["target_key"] = permission.key

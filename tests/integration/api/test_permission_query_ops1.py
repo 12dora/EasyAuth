@@ -18,7 +18,6 @@ from easyauth.applications.models import (
 )
 from easyauth.applications.services import StaticTokenService
 from easyauth.grants.models import (
-    GRANT_TYPE_PERMANENT,
     AccessGrant,
     AccessGrantGroup,
     AccessGrantPermission,
@@ -79,12 +78,17 @@ def test_permission_query_excludes_deprecated_permissions_and_permission_group_k
         permission=deprecated_group,
         scope_key="SELF",
     )
-    grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        expires_at=None,
+    )
     _ = AccessGrantPermission.objects.create(
         grant=grant,
         permission=deprecated_direct,
         scope_key="SELF",
+        expires_at=None,
     )
 
     # When: 应用查询该用户权限。
@@ -165,23 +169,34 @@ def test_permission_query_excludes_inactive_groups_group_grants_permissions_and_
         permission=inactive_scope_permission,
         scope_key="INACTIVE",
     )
-    grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=active_group)
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=inactive_group)
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=active_group,
+        expires_at=None,
+    )
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=inactive_group,
+        expires_at=None,
+    )
     _ = AccessGrantPermission.objects.create(
         grant=grant,
         permission=direct_permission,
         scope_key="SELF",
+        expires_at=None,
     )
     _ = AccessGrantPermission.objects.create(
         grant=grant,
         permission=inactive_permission,
         scope_key="SELF",
+        expires_at=None,
     )
     _ = AccessGrantPermission.objects.create(
         grant=grant,
         permission=inactive_scope_permission,
         scope_key="INACTIVE",
+        expires_at=None,
     )
 
     # When: 应用查询该用户权限。
@@ -215,7 +230,7 @@ def test_permission_query_returns_empty_snake_case_snapshot_without_envelope() -
     user = UserMirror.objects.create(authentik_user_id="user-api-empty-grants")
     app = App.objects.create(app_key="empty-grants-api-app", name="Empty Grants API App")
     issue = StaticTokenService.create_token(app=app, name="integration")
-    _ = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
+    _ = AccessGrant.objects.create(user=user, app=app)
 
     # When: 应用查询该用户权限。
     response = Client().get(

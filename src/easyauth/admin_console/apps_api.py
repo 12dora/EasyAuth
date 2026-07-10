@@ -16,7 +16,12 @@ from easyauth.admin_console.api_responses import (
     json_response as _json_response,
 )
 from easyauth.admin_console.api_responses import method_not_allowed_response
-from easyauth.admin_console.operation_filters import Page, paginate_queryset
+from easyauth.admin_console.operation_filters import (
+    OperationFilterValidationError,
+    Page,
+    operation_filter_error_response,
+    paginate_queryset,
+)
 from easyauth.admin_console.permission_template_api_data import template_version_item
 from easyauth.admin_console.request_guards import require_console_actor
 from easyauth.api.errors import ErrorCode, JsonValue
@@ -30,14 +35,15 @@ from easyauth.applications.models import (
     App,
     AppCredential,
     AppMembership,
+    AuthorizationGroup,
     OAuthClientBinding,
     Permission,
     PermissionTemplateVersion,
-    Role,
 )
 from easyauth.applications.ownership import (
     ConsoleActor,
     can_manage_app,
+    can_view_app,
 )
 from easyauth.audit.services import AuditRecord, AuditService
 
@@ -139,7 +145,10 @@ def console_apps(request: HttpRequest) -> JsonResponse:
         case JsonResponse() as response:
             return response
 
-    page = paginate_queryset(_filter_apps(_visible_apps_queryset(actor), request), request.GET)
+    try:
+        page = paginate_queryset(_filter_apps(_visible_apps_queryset(actor), request), request.GET)
+    except OperationFilterValidationError as exc:
+        return operation_filter_error_response(exc)
     return _items_response(tuple(_app_item(app) for app in page.items), page)
 
 
@@ -329,9 +338,8 @@ def _delete_app(request: HttpRequest, app_key: str) -> JsonResponse | HttpRespon
 
 
 def _visible_app(actor: ConsoleActor, app_key: str) -> VisibleAppResult:
-    _ = actor
     app = App.objects.filter(app_key=app_key).first()
-    if app is None:
+    if app is None or not can_view_app(actor, app):
         return _error_response(
             ErrorCode.NOT_FOUND,
             "应用不存在。",
@@ -419,7 +427,7 @@ def _app_detail_item(actor: ConsoleActor, app: App) -> dict[str, JsonValue]:
     item = _app_item(app)
     item["can_manage"] = can_manage_app(actor, app)
     item["developers"] = _app_member_ids(app, "developer")
-    item["role_count"] = Role.objects.filter(app=app).count()
+    item["authorization_group_count"] = AuthorizationGroup.objects.filter(app=app).count()
     item["permission_count"] = Permission.objects.filter(app=app).count()
     item["active_credential_count"] = _active_credential_count(app)
     item["latest_template_version"] = _latest_template_version_item(app)

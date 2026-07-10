@@ -33,6 +33,7 @@ def test_permission_query_view_serializes_managed_users(
                 scope="MANAGED_USERS",
                 source_type="group",
                 source_key="team-manager",
+                expires_at=None,
                 resolved=ResolvedManagedUsers(
                     user_ids=("bob", "carol"),
                     resolver="dingtalk_manager_chain",

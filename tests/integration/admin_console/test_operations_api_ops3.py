@@ -19,7 +19,7 @@ from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import App, ApprovalRule, AuthorizationGroup
 from easyauth.audit.models import AuditLog
-from easyauth.grants.models import GRANT_STATUS_REVOKED, GRANT_TYPE_PERMANENT, AccessGrant
+from easyauth.grants.models import GRANT_STATUS_REVOKED, AccessGrant
 
 if TYPE_CHECKING:
     from django.conf import LazySettings
@@ -50,6 +50,8 @@ def test_ops3_console_operations_api_filters_access_requests_and_grants() -> Non
         app=crm,
         status=REQUEST_STATUS_GRANT_FAILED,
         reason="CRM 授权失败",
+        idempotency_key="ops3-crm-failed",
+        payload_digest="a" * 64,
     )
     _ = AuditLog.objects.create(
         actor_type="admin",
@@ -64,12 +66,13 @@ def test_ops3_console_operations_api_filters_access_requests_and_grants() -> Non
         app=erp,
         status=REQUEST_STATUS_SUBMITTED,
         reason="ERP 等待审批",
+        idempotency_key="ops3-erp-submitted",
+        payload_digest="b" * 64,
     )
-    _ = AccessGrant.objects.create(user=user, app=crm, grant_type=GRANT_TYPE_PERMANENT)
+    _ = AccessGrant.objects.create(user=user, app=crm)
     _ = AccessGrant.objects.create(
         user=user,
         app=erp,
-        grant_type=GRANT_TYPE_PERMANENT,
         status=GRANT_STATUS_REVOKED,
         is_current=False,
     )
@@ -106,6 +109,8 @@ def test_ops3_access_request_failure_reason_uses_latest_failure_event() -> None:
         app=app,
         status=REQUEST_STATUS_GRANT_FAILED,
         reason="申请原因",
+        idempotency_key="ops3-failure-reason-request",
+        payload_digest="c" * 64,
     )
     for error in ("旧失败原因", "最新失败原因"):
         _ = AuditLog.objects.create(
@@ -138,6 +143,8 @@ def test_ops3_access_request_failure_reason_fails_on_invalid_contract(
         app=app,
         status=REQUEST_STATUS_GRANT_FAILED,
         reason="申请原因",
+        idempotency_key="ops3-invalid-failure-reason-request",
+        payload_digest="d" * 64,
     )
     if metadata:
         _ = AuditLog.objects.create(
@@ -170,7 +177,6 @@ def test_ops3_console_emergency_revoke_requires_superuser_reason_and_csrf() -> N
     grant = AccessGrant.objects.create(
         user=target_user,
         app=app,
-        grant_type=GRANT_TYPE_PERMANENT,
     )
     csrf_token = _extract_csrf_token(
         admin_client.get(f"/console/apps/{app.app_key}/").content.decode(),
@@ -217,7 +223,7 @@ def test_ops3_console_emergency_revoke_rejects_empty_reason() -> None:
     client = _logged_in_superuser("ops3-empty-reason-admin")
     target_user = UserMirror.objects.create(authentik_user_id="ops3-empty-reason-target")
     app = App.objects.create(app_key="ops3-empty-reason-app", name="Emergency CRM")
-    _ = AccessGrant.objects.create(user=target_user, app=app, grant_type=GRANT_TYPE_PERMANENT)
+    _ = AccessGrant.objects.create(user=target_user, app=app)
 
     # When: 管理员提交空原因。
     response = client.post(
@@ -254,6 +260,8 @@ def test_ops3_console_retry_grant_failed_applies_once_without_reincrementing_ver
         app=app,
         status=REQUEST_STATUS_GRANT_FAILED,
         reason="首次授权落库失败",
+        idempotency_key="ops3-retry-request",
+        payload_digest="e" * 64,
     )
     _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
 

@@ -11,7 +11,11 @@ from easyauth.admin_console.api_responses import (
     method_not_allowed_response,
 )
 from easyauth.admin_console.authz import require_superuser
-from easyauth.admin_console.operation_filters import paginate_queryset
+from easyauth.admin_console.operation_filters import (
+    OperationFilterValidationError,
+    operation_filter_error_response,
+    paginate_queryset,
+)
 from easyauth.api.errors import ErrorCode
 from easyauth.api.pagination import pagination_item
 from easyauth.audit.services import AuditRecord, AuditService
@@ -37,7 +41,10 @@ def operations_approval_instances(request: HttpRequest) -> JsonResponse:
             return response
     if request.method != "GET":
         return method_not_allowed_response()
-    page = paginate_queryset(_filtered_instances(request), request.GET)
+    try:
+        page = paginate_queryset(_filtered_instances(request), request.GET)
+    except OperationFilterValidationError as exc:
+        return operation_filter_error_response(exc)
     items: list[JsonValue] = [_instance_item(instance) for instance in page.items]
     return json_response({"data": items, "pagination": pagination_item(page)})
 

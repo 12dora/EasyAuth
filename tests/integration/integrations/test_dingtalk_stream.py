@@ -23,6 +23,7 @@ from easyauth.integrations.models import (
     STREAM_EVENT_STATUS_SKIPPED,
     DingTalkStreamEvent,
 )
+from easyauth.outbox.models import OutboxEvent
 from easyauth.tasks import dingtalk_stream as tasks_module
 from easyauth.tasks.dingtalk_stream import (
     DIRECTORY_REFRESH_TASK_NAME,
@@ -65,12 +66,23 @@ class _SendTaskRecorder:
         self.calls.append((name, tuple(args or ()), countdown))
         return object()
 
+    def enqueue_task(
+        self,
+        *,
+        event_key: str,
+        task_name: str,
+        args: Sequence[object] = (),
+        kwargs: dict[str, object] | None = None,
+        countdown: float = 0,
+    ) -> object:
+        _ = (event_key, kwargs)
+        self.calls.append((task_name, tuple(args), countdown or None))
+        return object()
 
 @pytest.fixture
 def sent_tasks(monkeypatch: pytest.MonkeyPatch) -> _SendTaskRecorder:
     recorder = _SendTaskRecorder()
-    monkeypatch.setattr(stream_module, "current_app", recorder)
-    monkeypatch.setattr(tasks_module, "current_app", recorder)
+    monkeypatch.setattr(tasks_module, "enqueue_task", recorder.enqueue_task)
     return recorder
 
 
@@ -102,7 +114,10 @@ def test_record_stream_event_persists_and_enqueues_once(
     assert second.created is False
     assert first.event_pk == second.event_pk == _pk(event)
     assert event.born_at is not None
-    assert sent_tasks.calls == [("easyauth.dingtalk_stream.process_event", (_pk(event),), None)]
+    outbox_event = OutboxEvent.objects.get(event_key="dingtalk-stream:evt-1")
+    assert outbox_event.task_name == "easyauth.dingtalk_stream.process_event"
+    assert outbox_event.args == [_pk(event)]
+    assert sent_tasks.calls == []
 
 
 def test_record_stream_event_rejects_missing_identity(sent_tasks: _SendTaskRecorder) -> None:
@@ -360,4 +375,6 @@ def _submitted_instance(app_key: str, process_instance_id: str) -> ApprovalInsta
         originator_user=originator,
         dingtalk_process_instance_id=process_instance_id,
         status=APPROVAL_STATUS_SUBMITTED,
+        submission_state="submitted",
+        payload_hash="0" * 64,
     )

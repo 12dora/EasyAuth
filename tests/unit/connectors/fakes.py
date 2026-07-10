@@ -37,6 +37,7 @@ class FakeConnector(BaseConnector):
     probe_ok: ClassVar[bool] = True
     offboarded_user_ids: ClassVar[list[str]] = []
     offboard_handled: ClassVar[bool] = True
+    external_account: ClassVar[str] = ""
 
     @classmethod
     def reset(cls) -> None:
@@ -46,6 +47,7 @@ class FakeConnector(BaseConnector):
         cls.probe_ok = True
         cls.offboarded_user_ids = []
         cls.offboard_handled = True
+        cls.external_account = ""
 
     @override
     def test_connection(self, config: dict[str, JsonValue]) -> ConnectorProbe:
@@ -56,6 +58,11 @@ class FakeConnector(BaseConnector):
     def list_external_groups(self, config: dict[str, JsonValue]) -> list[ExternalGroup]:
         _ = config
         return [ExternalGroup(ref="fake-group", name="Fake Group")]
+
+    @override
+    def external_account_id(self, config: dict[str, JsonValue]) -> str:
+        _ = config
+        return type(self).external_account
 
     @override
     def reconcile(self, instance: ConnectorInstance, desired: DesiredState) -> ReconcileReport:

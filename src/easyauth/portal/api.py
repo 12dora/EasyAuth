@@ -7,6 +7,8 @@ from django.http import HttpRequest, JsonResponse
 from pydantic import ValidationError
 
 from easyauth.access_requests.services import (
+    IDEMPOTENCY_KEY_MAX_LENGTH,
+    AccessRequestIdempotencyConflictError,
     AccessRequestService,
     AccessRequestSubmission,
     AccessRequestSubmissionError,
@@ -117,6 +119,11 @@ def portal_request_catalog(request: HttpRequest) -> JsonResponse:
 
 
 def _submit_access_request(request: HttpRequest, user: UserMirror) -> JsonResponse:
+    match _idempotency_key(request):
+        case str() as idempotency_key:
+            pass
+        case JsonResponse() as response:
+            return response
     try:
         payload = AccessRequestPayload.model_validate_json(request.body)
         app = app_for_key(payload.app_key)
@@ -138,6 +145,7 @@ def _submit_access_request(request: HttpRequest, user: UserMirror) -> JsonRespon
                 reason=payload.reason,
                 actor_type="user",
                 actor_id=user.authentik_user_id,
+                idempotency_key=idempotency_key,
             ),
         )
     except ValidationError as exc:
@@ -154,9 +162,28 @@ def _submit_access_request(request: HttpRequest, user: UserMirror) -> JsonRespon
             _semantic_error_details(exc),
             status=HTTPStatus.UNPROCESSABLE_ENTITY,
         )
+    except AccessRequestIdempotencyConflictError as exc:
+        return _error_response(
+            ErrorCode.SEMANTIC_VALIDATION_ERROR,
+            str(exc),
+            {"idempotency_key": idempotency_key},
+            status=HTTPStatus.CONFLICT,
+        )
     return _json_response(
         {"access_request": access_request_item(access_request)},
         status=HTTPStatus.CREATED,
+    )
+
+
+def _idempotency_key(request: HttpRequest) -> str | JsonResponse:
+    value = request.headers.get("Idempotency-Key", "")
+    if value and value == value.strip() and len(value) <= IDEMPOTENCY_KEY_MAX_LENGTH:
+        return value
+    return _error_response(
+        ErrorCode.VALIDATION_ERROR,
+        "Idempotency-Key 必须为非空且不超过 128 个字符。",
+        {"idempotency_key": value},
+        status=HTTPStatus.UNPROCESSABLE_ENTITY,
     )
 
 

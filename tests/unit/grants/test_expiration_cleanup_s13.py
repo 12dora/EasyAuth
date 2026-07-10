@@ -7,15 +7,15 @@ import pytest
 from django.utils import timezone
 
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App
+from easyauth.applications.models import App, AppScope, AuthorizationGroup, Permission
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import (
     GRANT_STATUS_ACTIVE,
     GRANT_STATUS_EXPIRED,
     GRANT_STATUS_REVOKED,
-    GRANT_TYPE_PERMANENT,
-    GRANT_TYPE_TIMED,
     AccessGrant,
+    AccessGrantGroup,
+    AccessGrantPermission,
 )
 from easyauth.grants.services import GrantExpirationInput, GrantService
 from easyauth.tasks.grants import GRANT_EXPIRATION_REASON, cleanup_expired_grants
@@ -23,113 +23,104 @@ from easyauth.tasks.grants import GRANT_EXPIRATION_REASON, cleanup_expired_grant
 pytestmark = pytest.mark.django_db
 
 INITIAL_VERSION: Final = 1
-EXPIRED_VERSION: Final = 2
-EXPECTED_EXPIRED_GRANTS: Final = 2
+PARTIALLY_EXPIRED_VERSION: Final = 2
+FULLY_EXPIRED_VERSION: Final = 3
+EXPECTED_EXPIRATION_LOGS: Final = 2
+DEFAULT_SCOPE_KEY: Final = "GLOBAL"
 
 
-def test_s13_cleanup_expired_grants_expires_only_due_current_active_timed_grants_once() -> None:
-    # Given: 当前有到期、未到期、永久、以及已经撤销的授权。
+def _scoped_permission(app: App, *, key: str, name: str) -> Permission:
+    _ = AppScope.objects.get_or_create(
+        app=app,
+        key=DEFAULT_SCOPE_KEY,
+        defaults={"name": "Global"},
+    )
+    return Permission.objects.create(
+        app=app,
+        key=key,
+        name=name,
+        supported_scopes=[DEFAULT_SCOPE_KEY],
+    )
+
+
+def test_s13_cleanup_expired_memberships_keeps_parent_until_last_membership_expires() -> None:
+    # Given: 当前授权包含一个已到期组链接和一个未来到期权限链接。
     now = timezone.now()
-    due_user = UserMirror.objects.create(authentik_user_id="s13-cleanup-due-user")
-    second_due_user = UserMirror.objects.create(authentik_user_id="s13-cleanup-second-due-user")
-    future_user = UserMirror.objects.create(authentik_user_id="s13-cleanup-future-user")
-    permanent_user = UserMirror.objects.create(authentik_user_id="s13-cleanup-permanent-user")
-    revoked_user = UserMirror.objects.create(authentik_user_id="s13-cleanup-revoked-user")
-    due_app = App.objects.create(app_key="s13-cleanup-due-app", name="S13 Cleanup Due")
-    second_due_app = App.objects.create(
-        app_key="s13-cleanup-second-due-app",
-        name="S13 Cleanup Second Due",
+    final_cutoff = now + timedelta(minutes=10)
+    user = UserMirror.objects.create(authentik_user_id="s13-cleanup-staged-user")
+    app = App.objects.create(app_key="s13-cleanup-staged-app", name="S13 Cleanup Staged")
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="operator",
+        kind="role",
+        name="Operator",
     )
-    future_app = App.objects.create(app_key="s13-cleanup-future-app", name="S13 Cleanup Future")
-    permanent_app = App.objects.create(
-        app_key="s13-cleanup-permanent-app",
-        name="S13 Cleanup Permanent",
+    permission = _scoped_permission(app, key="invoice.read", name="Read invoices")
+    grant = AccessGrant.objects.create(user=user, app=app)
+    due_group_link = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        expires_at=now,
     )
-    revoked_app = App.objects.create(
-        app_key="s13-cleanup-revoked-app",
-        name="S13 Cleanup Revoked",
-    )
-    due_grant = AccessGrant.objects.create(
-        user=due_user,
-        app=due_app,
-        grant_type=GRANT_TYPE_TIMED,
-        grant_expires_at=now - timedelta(seconds=1),
-    )
-    second_due_grant = AccessGrant.objects.create(
-        user=second_due_user,
-        app=second_due_app,
-        grant_type=GRANT_TYPE_TIMED,
-        grant_expires_at=now,
-    )
-    future_grant = AccessGrant.objects.create(
-        user=future_user,
-        app=future_app,
-        grant_type=GRANT_TYPE_TIMED,
-        grant_expires_at=now + timedelta(minutes=1),
-    )
-    permanent_grant = AccessGrant.objects.create(
-        user=permanent_user,
-        app=permanent_app,
-        grant_type=GRANT_TYPE_PERMANENT,
-    )
-    revoked_grant = AccessGrant.objects.create(
-        user=revoked_user,
-        app=revoked_app,
-        grant_type=GRANT_TYPE_TIMED,
-        grant_expires_at=now - timedelta(minutes=1),
-        status=GRANT_STATUS_REVOKED,
-        is_current=False,
+    future_permission_link = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=permission,
+        scope_key=DEFAULT_SCOPE_KEY,
+        expires_at=final_cutoff,
     )
 
-    # When: 定时清理重复运行两次。
-    first = cleanup_expired_grants(now=now)
-    repeated = cleanup_expired_grants(now=now)
+    # When: 先清理部分到期链接并重复执行, 再清理最后一个到期链接并重复执行。
+    partial = cleanup_expired_grants(now=now)
+    repeated_partial = cleanup_expired_grants(now=now)
 
-    # Then: 只有到期的当前 active timed grants 被过期, 且重复执行保持幂等。
-    due_grant.refresh_from_db()
-    second_due_grant.refresh_from_db()
-    future_grant.refresh_from_db()
-    permanent_grant.refresh_from_db()
-    revoked_grant.refresh_from_db()
-    assert first.expired_count == EXPECTED_EXPIRED_GRANTS
-    assert [grant.app.app_key for grant in first.expired_grants] == [
-        "s13-cleanup-due-app",
-        "s13-cleanup-second-due-app",
+    grant.refresh_from_db()
+    assert partial.expired_count == 1
+    assert [item.id for item in partial.expired_grants] == [grant.id]
+    assert repeated_partial.expired_count == 0
+    assert not AccessGrantGroup.objects.filter(id=due_group_link.id).exists()
+    assert AccessGrantPermission.objects.filter(id=future_permission_link.id).exists()
+    assert grant.status == GRANT_STATUS_ACTIVE
+    assert grant.is_current is True
+    assert grant.version == PARTIALLY_EXPIRED_VERSION
+
+    final = cleanup_expired_grants(now=final_cutoff)
+    repeated_final = cleanup_expired_grants(now=final_cutoff)
+
+    # Then: 只有到期链接被删除; 最后一个链接到期时父授权才退出当前 active 状态。
+    grant.refresh_from_db()
+    assert final.expired_count == 1
+    assert [item.id for item in final.expired_grants] == [grant.id]
+    assert repeated_final.expired_count == 0
+    assert not AccessGrantPermission.objects.filter(id=future_permission_link.id).exists()
+    assert grant.status == GRANT_STATUS_EXPIRED
+    assert grant.is_current is False
+    assert grant.version == FULLY_EXPIRED_VERSION
+    audit_logs = AuditLog.objects.filter(event_type="grant_expired").order_by("created_at", "id")
+    assert audit_logs.count() == EXPECTED_EXPIRATION_LOGS
+    assert [audit_log.metadata["version"] for audit_log in audit_logs] == [
+        PARTIALLY_EXPIRED_VERSION,
+        FULLY_EXPIRED_VERSION,
     ]
-    assert repeated.expired_count == 0
-    assert due_grant.status == GRANT_STATUS_EXPIRED
-    assert second_due_grant.status == GRANT_STATUS_EXPIRED
-    assert due_grant.version == EXPIRED_VERSION
-    assert second_due_grant.version == EXPIRED_VERSION
-    assert due_grant.is_current is False
-    assert second_due_grant.is_current is False
-    assert future_grant.status == GRANT_STATUS_ACTIVE
-    assert permanent_grant.status == GRANT_STATUS_ACTIVE
-    assert revoked_grant.status == GRANT_STATUS_REVOKED
-    assert future_grant.version == INITIAL_VERSION
-    assert permanent_grant.version == INITIAL_VERSION
-    assert revoked_grant.version == INITIAL_VERSION
-    audit_logs = AuditLog.objects.filter(event_type="grant_expired")
-    assert audit_logs.count() == EXPECTED_EXPIRED_GRANTS
     for audit_log in audit_logs:
         assert audit_log.actor_type == "system"
         assert audit_log.actor_id == "grant-expiration-cleanup"
         assert audit_log.metadata["reason"] == GRANT_EXPIRATION_REASON
-        assert audit_log.metadata["version"] == EXPIRED_VERSION
 
 
-def test_s13_cleanup_expired_grants_skips_candidate_consumed_by_concurrent_revoke(
+def test_s13_cleanup_expired_memberships_skips_candidate_consumed_by_concurrent_revoke(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Given: 清理任务选中到期 grant 后, 另一个撤权路径先消费了该 grant。
+    # Given: 清理任务选中含到期链接的 grant 后, 另一个撤权路径先消费了该 grant。
     now = timezone.now()
     user = UserMirror.objects.create(authentik_user_id="s13-cleanup-concurrent-user")
     app = App.objects.create(app_key="s13-cleanup-concurrent-app", name="S13 Concurrent")
-    grant = AccessGrant.objects.create(
-        user=user,
-        app=app,
-        grant_type=GRANT_TYPE_TIMED,
-        grant_expires_at=now - timedelta(seconds=1),
+    permission = _scoped_permission(app, key="invoice.read", name="Read invoices")
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=permission,
+        scope_key=DEFAULT_SCOPE_KEY,
+        expires_at=now - timedelta(seconds=1),
     )
     original_expire_grant = GrantService.expire_grant
 
@@ -151,43 +142,46 @@ def test_s13_cleanup_expired_grants_skips_candidate_consumed_by_concurrent_revok
     grant.refresh_from_db()
     assert result.expired_count == 0
     assert grant.status == GRANT_STATUS_REVOKED
-    assert grant.version == EXPIRED_VERSION
+    assert grant.is_current is False
+    assert grant.version == PARTIALLY_EXPIRED_VERSION
     assert AuditLog.objects.filter(event_type="grant_expired").count() == 0
 
 
-def test_s13_cleanup_expired_grants_skips_candidate_extended_before_lock(
+def test_s13_cleanup_expired_memberships_skips_candidate_extended_before_lock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Given: 清理任务选中到期 grant 后, 授权在写入锁内复核前被延长。
+    # Given: 清理任务选中含到期链接的 grant 后, 链接在写入锁内复核前被延长。
     now = timezone.now()
+    extended_until = now + timedelta(minutes=10)
     user = UserMirror.objects.create(authentik_user_id="s13-cleanup-extended-user")
     app = App.objects.create(app_key="s13-cleanup-extended-app", name="S13 Extended")
-    grant = AccessGrant.objects.create(
-        user=user,
-        app=app,
-        grant_type=GRANT_TYPE_TIMED,
-        grant_expires_at=now - timedelta(seconds=1),
+    permission = _scoped_permission(app, key="invoice.read", name="Read invoices")
+    grant = AccessGrant.objects.create(user=user, app=app)
+    link = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=permission,
+        scope_key=DEFAULT_SCOPE_KEY,
+        expires_at=now - timedelta(seconds=1),
     )
     original_expire_grant = GrantService.expire_grant
 
     def extend_before_expire(input_data: GrantExpirationInput) -> AccessGrant | None:
-        _ = AccessGrant.objects.filter(
-            user=input_data.user,
-            app=input_data.app,
-            is_current=True,
-        ).update(
-            grant_expires_at=now + timedelta(minutes=10),
-        )
+        _ = AccessGrantPermission.objects.filter(id=link.id).update(expires_at=extended_until)
         return original_expire_grant(input_data)
 
     monkeypatch.setattr(GrantService, "expire_grant", staticmethod(extend_before_expire))
 
-    # When: 清理任务处理这个已被延长到未来的候选 grant。
+    # When: 清理任务处理这个已延长到未来的候选 grant, 并在同一截止时间重复执行。
     result = cleanup_expired_grants(now=now)
+    repeated = cleanup_expired_grants(now=now)
 
-    # Then: 清理任务跳过该候选, 不写过期审计也不改变授权版本。
+    # Then: 两次清理都跳过该候选, 不删除链接、不写过期审计也不改变授权版本。
     grant.refresh_from_db()
+    link.refresh_from_db()
     assert result.expired_count == 0
+    assert repeated.expired_count == 0
     assert grant.status == GRANT_STATUS_ACTIVE
+    assert grant.is_current is True
     assert grant.version == INITIAL_VERSION
+    assert link.expires_at == extended_until
     assert AuditLog.objects.filter(event_type="grant_expired").count() == 0

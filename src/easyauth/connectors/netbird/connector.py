@@ -16,7 +16,6 @@ from easyauth.connectors.netbird.client import (
     USER_ROLE_USER,
     NetBirdApiError,
     NetBirdClient,
-    NetBirdGroup,
     NetBirdUser,
 )
 
@@ -109,13 +108,17 @@ class NetBirdConnector(BaseConnector):
 
     @override
     def list_external_groups(self, config: dict[str, JsonValue]) -> list[ExternalGroup]:
-        # external_ref 语义 = NetBird 组名(实例间稳定、人类可读); 组 ID 仅对账内部使用。
+        # ref 必须使用 NetBird 不可变组 ID; 名称只用于控制台展示。
         client = _client_from_config(config)
         return [
-            ExternalGroup(ref=group.name, name=group.name)
+            ExternalGroup(ref=group.group_id, name=group.name)
             for group in client.list_groups()
-            if group.name
+            if group.group_id and group.name
         ]
+
+    @override
+    def external_account_id(self, config: dict[str, JsonValue]) -> str:
+        return _client_from_config(config).get_account_id()
 
     @override
     def reconcile(self, instance: ConnectorInstance, desired: DesiredState) -> ReconcileReport:
@@ -127,28 +130,20 @@ class NetBirdConnector(BaseConnector):
         block_users_without_grant = config.get("block_users_without_grant", True) is not False
         budget = _ApiBudget(MAX_API_CALLS_PER_RUN)
         stats: dict[str, int] = {}
+        object_errors: list[str] = []
         ungranted_user_ids: list[str] = []
         try:
-            group_id_by_name = _ensure_groups(client, budget, desired, stats)
-            managed_group_ids = frozenset(
-                group_id_by_name[name]
-                for name in desired.managed_group_refs
-                if name in group_id_by_name
-            )
+            budget.charge()
+            actual_group_ids = frozenset(group.group_id for group in client.list_groups())
+            managed_group_ids = desired.managed_group_refs & actual_group_ids
+            missing_group_ids = desired.managed_group_refs - actual_group_ids
+            if missing_group_ids:
+                stats["groups_missing"] = len(missing_group_ids)
             budget.charge()
             actual_users = {
                 user.user_id: user for user in client.list_users() if not user.is_service_user
             }
-            _apply_desired_users(
-                client,
-                budget,
-                desired,
-                stats,
-                group_id_by_name=group_id_by_name,
-                managed_group_ids=managed_group_ids,
-                actual_users=actual_users,
-                precreate_users=precreate_users,
-            )
+            # 安全收缩独占第一阶段预算: 先撤组/封禁, 再执行任何创建、加组或解封。
             ungranted_user_ids = _handle_ungranted_users(
                 client,
                 budget,
@@ -157,6 +152,27 @@ class NetBirdConnector(BaseConnector):
                 managed_group_ids=managed_group_ids,
                 actual_users=actual_users,
                 block_users_without_grant=block_users_without_grant,
+                object_errors=object_errors,
+            )
+            _shrink_desired_users(
+                client,
+                budget,
+                desired,
+                stats,
+                managed_group_ids=managed_group_ids,
+                actual_users=actual_users,
+                object_errors=object_errors,
+            )
+            _expand_desired_users(
+                client,
+                budget,
+                instance,
+                desired,
+                stats,
+                managed_group_ids=managed_group_ids,
+                actual_users=actual_users,
+                precreate_users=precreate_users,
+                object_errors=object_errors,
             )
         except _ApiBudgetExceededError:
             return ReconcileReport(
@@ -166,6 +182,14 @@ class NetBirdConnector(BaseConnector):
                 error=API_BUDGET_EXHAUSTED_MESSAGE,
             )
         stats["api_calls"] = budget.used
+        if object_errors:
+            stats["object_errors"] = len(object_errors)
+            return ReconcileReport(
+                status=RECONCILE_STATUS_PARTIAL,
+                stats=stats,
+                ungranted_user_ids=tuple(ungranted_user_ids),
+                error="; ".join(object_errors),
+            )
         return ReconcileReport(
             status=RECONCILE_STATUS_SUCCESS,
             stats=stats,
@@ -206,101 +230,109 @@ def _client_from_config(config: dict[str, JsonValue]) -> NetBirdClient:
     )
 
 
-def _ensure_groups(
+def _expand_desired_users(  # noqa: C901, PLR0913 - 完整对账上下文。
     client: NetBirdClient,
     budget: _ApiBudget,
-    desired: DesiredState,
-    stats: dict[str, int],
-) -> dict[str, str]:
-    budget.charge()
-    group_id_by_name: dict[str, str] = {}
-    for group in client.list_groups():
-        _ = group_id_by_name.setdefault(group.name, group.group_id)
-    for name in sorted(desired.managed_group_refs):
-        if name in group_id_by_name:
-            continue
-        if name not in desired.auto_create_group_refs:
-            # 未开 auto_create 且外部缺组: 跳过该组(映射页可见), 不静默创建。
-            _bump(stats, "groups_missing")
-            continue
-        budget.charge()
-        created: NetBirdGroup = client.create_group(name=name)
-        group_id_by_name[name] = created.group_id
-        _bump(stats, "groups_created")
-    return group_id_by_name
-
-
-def _apply_desired_users(  # noqa: PLR0913 - 对账循环的完整上下文, 拆包装反而失真。
-    client: NetBirdClient,
-    budget: _ApiBudget,
+    instance: ConnectorInstance,
     desired: DesiredState,
     stats: dict[str, int],
     *,
-    group_id_by_name: dict[str, str],
     managed_group_ids: frozenset[str],
     actual_users: dict[str, NetBirdUser],
     precreate_users: bool,
+    object_errors: list[str],
 ) -> None:
     for user_id in sorted(desired.user_groups):
-        want_group_ids = frozenset(
-            group_id_by_name[name]
-            for name in desired.user_groups[user_id]
-            if name in group_id_by_name
-        )
+        want_group_ids = desired.user_groups[user_id] & managed_group_ids
         current = actual_users.get(user_id)
         if current is None:
             if not precreate_users:
                 # 等员工首次登录被收养后, 下一轮对账收敛。
                 _bump(stats, "users_skipped")
                 continue
+            if not _expansion_allowed(instance, user_id):
+                _bump(stats, "users_fenced")
+                continue
             profile = desired.profiles[user_id]
             budget.charge()
-            client.create_user(
-                user_id=user_id,
-                name=profile.name,
-                email=profile.email,
-                auto_group_ids=sorted(want_group_ids),
-            )
+            try:
+                client.create_user(
+                    user_id=user_id,
+                    name=profile.name,
+                    email=profile.email,
+                    auto_group_ids=sorted(want_group_ids),
+                )
+            except NetBirdApiError as error:
+                object_errors.append(f"用户 {user_id} 创建失败: {error}")
+                continue
             _bump(stats, "users_precreated")
             continue
-        _reconcile_existing_user(
-            client,
-            budget,
-            stats,
-            current=current,
-            want_group_ids=want_group_ids,
-            managed_group_ids=managed_group_ids,
-        )
+        if current.role != USER_ROLE_USER:
+            _bump(stats, "users_exempt")
+            continue
+        managed_current = current.auto_group_ids & managed_group_ids
+        additions = want_group_ids - managed_current
+        if not additions and not current.is_blocked:
+            continue
+        if not _expansion_allowed(instance, user_id):
+            _bump(stats, "users_fenced")
+            continue
+        budget.charge()
+        try:
+            client.update_user(
+                user_id=current.user_id,
+                role=current.role,
+                auto_group_ids=sorted(current.auto_group_ids | additions),
+                is_blocked=False,
+            )
+        except NetBirdApiError as error:
+            object_errors.append(f"用户 {user_id} 扩权失败: {error}")
+            continue
+        _bump(stats, "groups_added", len(additions))
+        if current.is_blocked:
+            _bump(stats, "users_unblocked")
 
 
-def _reconcile_existing_user(  # noqa: PLR0913 - 对账循环的完整上下文, 拆包装反而失真。
+def _shrink_desired_users(  # noqa: PLR0913
     client: NetBirdClient,
     budget: _ApiBudget,
+    desired: DesiredState,
     stats: dict[str, int],
     *,
-    current: NetBirdUser,
-    want_group_ids: frozenset[str],
     managed_group_ids: frozenset[str],
+    actual_users: dict[str, NetBirdUser],
+    object_errors: list[str],
 ) -> None:
-    if current.role != USER_ROLE_USER:
-        # 护栏: owner/admin 人工账号不纳入管理。
-        _bump(stats, "users_exempt")
-        return
-    managed_current = current.auto_group_ids & managed_group_ids
-    if managed_current == want_group_ids and not current.is_blocked:
-        return
-    next_group_ids = (current.auto_group_ids - managed_group_ids) | want_group_ids
-    budget.charge()
-    client.update_user(
-        user_id=current.user_id,
-        role=current.role,
-        auto_group_ids=sorted(next_group_ids),
-        is_blocked=False,
-    )
-    _bump(stats, "groups_added", len(want_group_ids - managed_current))
-    _bump(stats, "groups_removed", len(managed_current - want_group_ids))
-    if current.is_blocked:
-        _bump(stats, "users_unblocked")
+    for user_id in sorted(desired.user_groups):
+        current = actual_users.get(user_id)
+        if current is None or current.role != USER_ROLE_USER:
+            continue
+        want_group_ids = desired.user_groups[user_id] & managed_group_ids
+        removals = (current.auto_group_ids & managed_group_ids) - want_group_ids
+        if not removals:
+            continue
+        budget.charge()
+        try:
+            client.update_user(
+                user_id=current.user_id,
+                role=current.role,
+                auto_group_ids=sorted(current.auto_group_ids - removals),
+                is_blocked=current.is_blocked,
+            )
+        except NetBirdApiError as error:
+            object_errors.append(f"用户 {user_id} 收缩失败: {error}")
+            continue
+        current = NetBirdUser(
+            user_id=current.user_id,
+            name=current.name,
+            email=current.email,
+            role=current.role,
+            is_blocked=current.is_blocked,
+            is_service_user=current.is_service_user,
+            auto_group_ids=current.auto_group_ids - removals,
+        )
+        actual_users[user_id] = current
+        _bump(stats, "groups_removed", len(removals))
 
 
 def _handle_ungranted_users(  # noqa: PLR0913 - 对账循环的完整上下文, 拆包装反而失真。
@@ -312,6 +344,7 @@ def _handle_ungranted_users(  # noqa: PLR0913 - 对账循环的完整上下文, 
     managed_group_ids: frozenset[str],
     actual_users: dict[str, NetBirdUser],
     block_users_without_grant: bool,
+    object_errors: list[str],
 ) -> list[str]:
     ungranted_user_ids: list[str] = []
     for user_id in sorted(actual_users):
@@ -327,16 +360,27 @@ def _handle_ungranted_users(  # noqa: PLR0913 - 对账循环的完整上下文, 
         if not managed_current and not should_block:
             continue
         budget.charge()
-        client.update_user(
-            user_id=current.user_id,
-            role=current.role,
-            auto_group_ids=sorted(current.auto_group_ids - managed_group_ids),
-            is_blocked=current.is_blocked or block_users_without_grant,
-        )
+        try:
+            client.update_user(
+                user_id=current.user_id,
+                role=current.role,
+                auto_group_ids=sorted(current.auto_group_ids - managed_group_ids),
+                is_blocked=current.is_blocked or block_users_without_grant,
+            )
+        except NetBirdApiError as error:
+            object_errors.append(f"用户 {user_id} 撤权失败: {error}")
+            continue
         _bump(stats, "groups_removed", len(managed_current))
         if should_block:
             _bump(stats, "users_blocked")
     return ungranted_user_ids
+
+
+def _expansion_allowed(instance: ConnectorInstance, user_id: str) -> bool:
+    # 局部导入避免框架加载连接器注册表时形成循环依赖。
+    from easyauth.connectors.services import expansion_allowed  # noqa: PLC0415
+
+    return expansion_allowed(instance, user_id=user_id)
 
 
 def _bump(stats: dict[str, int], key: str, amount: int = 1) -> None:

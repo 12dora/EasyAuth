@@ -59,6 +59,7 @@ def test_delete_blocked_when_template_referenced_by_instance() -> None:
         template=template,
         biz_key="biz-1",
         originator_user=originator,
+        payload_hash="0" * 64,
     )
 
     # When: 尝试删除。

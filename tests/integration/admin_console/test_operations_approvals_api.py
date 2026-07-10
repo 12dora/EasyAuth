@@ -9,9 +9,11 @@ from django.contrib.auth.models import User
 from django.test import Client
 from pydantic import TypeAdapter
 
+from easyauth.access_requests.approvals import access_request_approver_user_ids
 from easyauth.access_requests.models import (
     GRANT_TYPE_PERMANENT,
     AccessRequest,
+    AccessRequestApprover,
     AccessRequestGroup,
 )
 from easyauth.accounts.models import UserMirror
@@ -104,7 +106,7 @@ def test_admin_reassigns_approvers() -> None:
     # Then
     access_request.refresh_from_db()
     assert response.status_code == HTTPStatus.OK
-    assert access_request.approver_user_ids == ["ops-new-approver"]
+    assert access_request_approver_user_ids(access_request) == ["ops-new-approver"]
     assert AuditLog.objects.filter(event_type="access_request_reassigned").exists()
 
 
@@ -151,7 +153,13 @@ def _submitted_request(user_key: str, app_key: str) -> AccessRequest:
         user=user,
         app=app,
         grant_type=GRANT_TYPE_PERMANENT,
-        approver_user_ids=["vacationing-approver"],
+        idempotency_key=f"{user_key}-submission",
+        payload_digest="a" * 64,
+    )
+    approver = UserMirror.objects.create(authentik_user_id="vacationing-approver")
+    _ = AccessRequestApprover.objects.create(
+        access_request=access_request,
+        approver=approver,
     )
     _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
     return access_request

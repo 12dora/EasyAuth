@@ -23,7 +23,12 @@ from easyauth.applications.models import (
 )
 from easyauth.applications.services import APP_CREDENTIAL_TYPE_STATIC_TOKEN, StaticTokenService
 from easyauth.grants.models import AccessGrant
-from easyauth.grants.services import GrantMutationInput, GrantService, ScopedDirectGrantInput
+from easyauth.grants.services import (
+    AuthorizationGroupGrantInput,
+    GrantMutationInput,
+    GrantService,
+    ScopedDirectGrantInput,
+)
 
 CRM_APP_KEY: Final = "crm"
 CRM_CREDENTIAL_NAME: Final = "CRM pilot static credential"
@@ -284,9 +289,18 @@ def _ensure_seed_grant(
         GrantMutationInput(
             user=user,
             app=app,
-            authorization_groups=(authorization_group,),
+            authorization_groups=(
+                AuthorizationGroupGrantInput(
+                    authorization_group=authorization_group,
+                    expires_at=None,
+                ),
+            ),
             direct_grants=(
-                ScopedDirectGrantInput(permission=direct_permission, scope_key="SELF"),
+                ScopedDirectGrantInput(
+                    permission=direct_permission,
+                    scope_key="SELF",
+                    expires_at=None,
+                ),
             ),
             actor_type="system",
             actor_id="seed_crm_pilot",

@@ -3,20 +3,23 @@ from __future__ import annotations
 from http import HTTPStatus
 from typing import TYPE_CHECKING, ClassVar
 
+from django.db import models
+from django.db.models import Prefetch
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from easyauth.access_requests.approvals import (
     ApprovalActionError,
     ApprovalDecision,
+    access_request_approver_user_ids,
     approve_access_request,
-    approver_is_authorized,
     reject_access_request,
 )
 from easyauth.access_requests.models import (
     DECISION_ACTOR_USER,
     REQUEST_STATUS_SUBMITTED,
     AccessRequest,
+    AccessRequestApprover,
     AccessRequestGroup,
 )
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
@@ -37,6 +40,12 @@ type PortalApiResult = UserMirror | JsonResponse
 
 APPROVAL_STATUS_PENDING = "pending"
 APPROVAL_STATUS_PROCESSED = "processed"
+
+APPROVER_PREFETCH = Prefetch(
+    "approver_assignments",
+    queryset=AccessRequestApprover.objects.select_related("approver"),
+    to_attr="loaded_approver_assignments",
+)
 
 
 class _ApprovalDecisionPayload(BaseModel):
@@ -172,43 +181,43 @@ def _approval_error_response(error: ApprovalActionError) -> JsonResponse:
 
 
 def _approval_page(user: UserMirror, request: HttpRequest, *, status: str) -> PortalPage:
-    # approver_user_ids 是 JSON 数组且部署库为 SQLite(不支持 __contains):
-    # 待办集按 submitted 全集在 Python 侧过滤成员资格; 待办体量与在途申请数同阶, 可控。
+    page = page_request(request.GET)
     if status == APPROVAL_STATUS_PENDING:
-        candidates = (
+        visible = (
             AccessRequest.objects.select_related("user", "app")
-            .filter(status=REQUEST_STATUS_SUBMITTED)
+            .prefetch_related(APPROVER_PREFETCH)
+            .filter(
+                status=REQUEST_STATUS_SUBMITTED,
+                approver_assignments__approver=user,
+            )
+            .distinct()
             .order_by("submitted_at", "id")
         )
-        visible = [
-            access_request
-            for access_request in candidates
-            if approver_is_authorized(access_request, user.authentik_user_id)
-        ]
     else:
-        visible = list(
+        visible = (
             AccessRequest.objects.select_related("user", "app")
+            .prefetch_related(APPROVER_PREFETCH)
             .filter(decided_by=user.authentik_user_id)
-            .order_by("-decided_at", "id"),
+            .order_by("-decided_at", "id")
         )
-    page = page_request(request.GET)
-    items = tuple(
-        _approval_item(access_request) for access_request in visible[page.start : page.stop]
-    )
-    return build_page(items, request=page, total_items=len(visible))
+    total_items = visible.count()
+    page_rows = visible[page.start : page.stop]
+    items = tuple(_approval_item(access_request) for access_request in page_rows)
+    return build_page(items, request=page, total_items=total_items)
 
 
 def _visible_approval(user: UserMirror, request_id: int) -> AccessRequest | None:
-    access_request = (
-        AccessRequest.objects.select_related("user", "app").filter(id=request_id).first()
+    return (
+        AccessRequest.objects.select_related("user", "app")
+        .prefetch_related(APPROVER_PREFETCH)
+        .filter(id=request_id)
+        .filter(
+            models.Q(approver_assignments__approver=user)
+            | models.Q(decided_by=user.authentik_user_id),
+        )
+        .distinct()
+        .first()
     )
-    if access_request is None:
-        return None
-    if approver_is_authorized(access_request, user.authentik_user_id):
-        return access_request
-    if access_request.decided_by == user.authentik_user_id:
-        return access_request
-    return None
 
 
 def _approval_item(access_request: AccessRequest) -> dict[str, JsonValue]:
@@ -221,9 +230,8 @@ def _approval_item(access_request: AccessRequest) -> dict[str, JsonValue]:
         "email": applicant.email,
         "department": applicant.department,
     }
-    approver_ids: list[JsonValue] = [
-        user_id for user_id in access_request.approver_user_ids if user_id
-    ]
+    approver_ids: list[JsonValue] = []
+    approver_ids.extend(access_request_approver_user_ids(access_request))
     item["approver_user_ids"] = approver_ids
     item["decided_by"] = access_request.decided_by
     item["decided_at"] = datetime_value(access_request.decided_at)

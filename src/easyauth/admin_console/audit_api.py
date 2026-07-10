@@ -11,7 +11,13 @@ from easyauth.admin_console.api_responses import (
 from easyauth.admin_console.api_responses import (
     json_response as _json_response,
 )
-from easyauth.admin_console.operation_filters import Page, filter_audit_logs, paginate_queryset
+from easyauth.admin_console.operation_filters import (
+    OperationFilterValidationError,
+    Page,
+    filter_audit_logs,
+    operation_filter_error_response,
+    paginate_queryset,
+)
 from easyauth.admin_console.request_guards import require_console_actor
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.pagination import pagination_item
@@ -35,8 +41,11 @@ def console_audit_logs(request: HttpRequest) -> JsonResponse:
         case queryset:
             pass
 
-    queryset = filter_audit_logs(queryset, request.GET)
-    return _page_response(paginate_queryset(queryset, request.GET))
+    try:
+        queryset = filter_audit_logs(queryset, request.GET)
+        return _page_response(paginate_queryset(queryset, request.GET))
+    except OperationFilterValidationError as exc:
+        return operation_filter_error_response(exc)
 
 
 def _audit_item(audit_log: AuditLog) -> dict[str, JsonValue]:

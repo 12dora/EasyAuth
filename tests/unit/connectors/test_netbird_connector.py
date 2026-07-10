@@ -19,6 +19,9 @@ from easyauth.connectors.netbird.connector import NetBirdConnector
 if TYPE_CHECKING:
     from easyauth.applications.ops_models import JsonValue
 
+PERMANENT_CREATE_ERROR = "permanent create error"
+PERMANENT_UPDATE_ERROR = "permanent update error"
+
 
 @dataclass(slots=True)
 class _FakeNetBirdClient:
@@ -28,6 +31,8 @@ class _FakeNetBirdClient:
     updated_users: list[dict[str, object]] = field(default_factory=list)
     created_groups: list[str] = field(default_factory=list)
     fail_with: str = ""
+    fail_create_user_ids: set[str] = field(default_factory=set)
+    fail_update_user_ids: set[str] = field(default_factory=set)
 
     def list_users(self) -> list[NetBirdUser]:
         if self.fail_with:
@@ -53,6 +58,8 @@ class _FakeNetBirdClient:
         email: str,
         auto_group_ids: list[str],
     ) -> None:
+        if user_id in self.fail_create_user_ids:
+            raise NetBirdApiError(PERMANENT_CREATE_ERROR, status_code=400)
         self.created_users.append(
             {"user_id": user_id, "name": name, "email": email, "auto_group_ids": auto_group_ids},
         )
@@ -74,6 +81,8 @@ class _FakeNetBirdClient:
         auto_group_ids: list[str],
         is_blocked: bool,
     ) -> None:
+        if user_id in self.fail_update_user_ids:
+            raise NetBirdApiError(PERMANENT_UPDATE_ERROR, status_code=400)
         self.updated_users.append(
             {
                 "user_id": user_id,
@@ -144,6 +153,7 @@ def fake_client(monkeypatch: pytest.MonkeyPatch) -> _FakeNetBirdClient:
         return client
 
     monkeypatch.setattr(connector_module, "_client_from_config", client_from_config)
+    monkeypatch.setattr(connector_module, "_expansion_allowed", lambda *_args: True)
     return client
 
 
@@ -153,8 +163,8 @@ def test_reconcile_precreates_missing_user_with_mapped_groups(
     # Given: 外部组已存在, 用户尚未在 NetBird 出现。
     fake_client.groups = [NetBirdGroup(group_id="g1", name="vpn-users")]
     desired = _desired(
-        {"u-1": frozenset({"vpn-users"})},
-        managed=frozenset({"vpn-users"}),
+        {"u-1": frozenset({"g1"})},
+        managed=frozenset({"g1"}),
     )
 
     # When
@@ -176,7 +186,7 @@ def test_reconcile_precreates_missing_user_with_mapped_groups(
 def test_reconcile_skips_precreate_when_disabled(fake_client: _FakeNetBirdClient) -> None:
     # Given
     fake_client.groups = [NetBirdGroup(group_id="g1", name="vpn-users")]
-    desired = _desired({"u-1": frozenset({"vpn-users"})}, managed=frozenset({"vpn-users"}))
+    desired = _desired({"u-1": frozenset({"g1"})}, managed=frozenset({"g1"}))
 
     # When
     report = NetBirdConnector().reconcile(_instance({"precreate_users": False}), desired)
@@ -202,8 +212,8 @@ def test_reconcile_adopts_existing_user_and_preserves_unmanaged_groups(
         ),
     }
     desired = _desired(
-        {"u-1": frozenset({"vpn-users"})},
-        managed=frozenset({"vpn-users", "vpn-dev"}),
+        {"u-1": frozenset({"g1"})},
+        managed=frozenset({"g1", "g2"}),
     )
 
     # When
@@ -211,6 +221,12 @@ def test_reconcile_adopts_existing_user_and_preserves_unmanaged_groups(
 
     # Then: 只动映射管理的组(g9 保留), 解除 block。
     assert fake_client.updated_users == [
+        {
+            "user_id": "u-1",
+            "role": "user",
+            "auto_group_ids": ["g9"],
+            "is_blocked": True,
+        },
         {
             "user_id": "u-1",
             "role": "user",
@@ -229,7 +245,7 @@ def test_reconcile_converged_state_makes_no_writes(fake_client: _FakeNetBirdClie
     fake_client.users = {
         "u-1": _netbird_user("u-1", auto_group_ids=frozenset({"g1"})),
     }
-    desired = _desired({"u-1": frozenset({"vpn-users"})}, managed=frozenset({"vpn-users"}))
+    desired = _desired({"u-1": frozenset({"g1"})}, managed=frozenset({"g1"}))
 
     # When
     report = NetBirdConnector().reconcile(_instance(), desired)
@@ -248,7 +264,7 @@ def test_reconcile_blocks_ungranted_user_and_strips_managed_groups(
     fake_client.users = {
         "u-2": _netbird_user("u-2", auto_group_ids=frozenset({"g1", "g9"})),
     }
-    desired = _desired({}, managed=frozenset({"vpn-users"}))
+    desired = _desired({}, managed=frozenset({"g1"}))
 
     # When
     report = NetBirdConnector().reconcile(_instance(), desired)
@@ -273,7 +289,7 @@ def test_reconcile_respects_block_opt_out(fake_client: _FakeNetBirdClient) -> No
         "u-2": _netbird_user("u-2", auto_group_ids=frozenset({"g1"})),
         "u-3": _netbird_user("u-3", auto_group_ids=frozenset({"g9"})),
     }
-    desired = _desired({}, managed=frozenset({"vpn-users"}))
+    desired = _desired({}, managed=frozenset({"g1"}))
 
     # When
     report = NetBirdConnector().reconcile(
@@ -305,7 +321,7 @@ def test_reconcile_never_touches_service_users_owners_or_admins(
         "ops": _netbird_user("ops", role="admin", auto_group_ids=frozenset({"g1"})),
     }
     # admin 同时出现在 desired 中也不触碰(护栏优先)。
-    desired = _desired({"ops": frozenset({"vpn-users"})}, managed=frozenset({"vpn-users"}))
+    desired = _desired({"ops": frozenset({"g1"})}, managed=frozenset({"g1"}))
 
     # When
     report = NetBirdConnector().reconcile(_instance(), desired)
@@ -317,24 +333,24 @@ def test_reconcile_never_touches_service_users_owners_or_admins(
     assert report.ungranted_user_ids == ()
 
 
-def test_reconcile_auto_creates_mapped_groups_only_when_allowed(
+def test_reconcile_reports_missing_immutable_group_ids(
     fake_client: _FakeNetBirdClient,
 ) -> None:
-    # Given: vpn-users 允许自动建组, vpn-dev 不允许且外部缺失。
+    # Given: 映射只保存不可变 ID; 外部缺失时不得按名称静默重建身份。
     desired = _desired(
-        {"u-1": frozenset({"vpn-users", "vpn-dev"})},
-        managed=frozenset({"vpn-users", "vpn-dev"}),
-        auto_create=frozenset({"vpn-users"}),
+        {"u-1": frozenset({"g1", "g2"})},
+        managed=frozenset({"g1", "g2"}),
+        auto_create=frozenset({"g1"}),
     )
 
     # When
     report = NetBirdConnector().reconcile(_instance(), desired)
 
-    # Then: 只创建允许的组; 缺失组计入 groups_missing, 用户仍按可用组预创建。
-    assert fake_client.created_groups == ["vpn-users"]
-    assert report.stats["groups_created"] == 1
-    assert report.stats["groups_missing"] == 1
-    assert fake_client.created_users[0]["auto_group_ids"] == ["gid-vpn-users"]
+    # Then: 不猜测可变名称, 不创建替代组; 缺失身份留作显式修复。
+    assert fake_client.created_groups == []
+    expected_missing = 2
+    assert report.stats["groups_missing"] == expected_missing
+    assert fake_client.created_users[0]["auto_group_ids"] == []
 
 
 def test_reconcile_stops_at_api_budget_and_reports_partial(
@@ -345,8 +361,8 @@ def test_reconcile_stops_at_api_budget_and_reports_partial(
     monkeypatch.setattr(connector_module, "MAX_API_CALLS_PER_RUN", 2)
     fake_client.groups = [NetBirdGroup(group_id="g1", name="vpn-users")]
     desired = _desired(
-        {"u-1": frozenset({"vpn-users"}), "u-2": frozenset({"vpn-users"})},
-        managed=frozenset({"vpn-users"}),
+        {"u-1": frozenset({"g1"}), "u-2": frozenset({"g1"})},
+        managed=frozenset({"g1"}),
     )
 
     # When
@@ -356,6 +372,57 @@ def test_reconcile_stops_at_api_budget_and_reports_partial(
     assert report.status == "partial"
     assert fake_client.created_users == []
     assert "上限" in report.error
+
+
+def test_api_budget_is_reserved_for_safety_shrink_first(
+    fake_client: _FakeNetBirdClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 两次 list 后只剩一次写预算, 必须先用于无授权用户撤权而不是创建用户。
+    monkeypatch.setattr(connector_module, "MAX_API_CALLS_PER_RUN", 3)
+    fake_client.groups = [NetBirdGroup(group_id="g1", name="vpn-users")]
+    fake_client.users = {
+        "revoke-me": _netbird_user("revoke-me", auto_group_ids=frozenset({"g1"})),
+    }
+    desired = _desired(
+        {"create-later": frozenset({"g1"})},
+        managed=frozenset({"g1"}),
+    )
+
+    report = NetBirdConnector().reconcile(_instance(), desired)
+
+    assert report.status == "partial"
+    assert fake_client.updated_users[0]["user_id"] == "revoke-me"
+    assert fake_client.updated_users[0]["is_blocked"] is True
+    assert fake_client.created_users == []
+
+
+def test_permanent_provisioning_error_does_not_block_revokes(
+    fake_client: _FakeNetBirdClient,
+) -> None:
+    fake_client.groups = [NetBirdGroup(group_id="g1", name="vpn-users")]
+    fake_client.users = {
+        "revoke-me": _netbird_user("revoke-me", auto_group_ids=frozenset({"g1"})),
+    }
+    fake_client.fail_create_user_ids = {"create-fails"}
+    desired = _desired(
+        {"create-fails": frozenset({"g1"})},
+        managed=frozenset({"g1"}),
+    )
+
+    report = NetBirdConnector().reconcile(_instance(), desired)
+
+    assert report.status == "partial"
+    assert fake_client.updated_users == [
+        {
+            "user_id": "revoke-me",
+            "role": "user",
+            "auto_group_ids": [],
+            "is_blocked": True,
+        }
+    ]
+    assert report.stats["users_blocked"] == 1
+    assert report.stats["object_errors"] == 1
 
 
 def test_on_user_offboarded_blocks_only_regular_users(
@@ -398,6 +465,16 @@ def test_test_connection_reports_probe_result(fake_client: _FakeNetBirdClient) -
     failed_probe = connector.test_connection({"api_url": "https://nb", "api_token": "t"})
     assert failed_probe.ok is False
     assert "401" in failed_probe.message
+
+
+def test_external_groups_use_immutable_ids(fake_client: _FakeNetBirdClient) -> None:
+    fake_client.groups = [NetBirdGroup(group_id="immutable-g1", name="VPN Users")]
+
+    groups = NetBirdConnector().list_external_groups(
+        {"api_url": "https://nb", "api_token": "t"}
+    )
+
+    assert [(group.ref, group.name) for group in groups] == [("immutable-g1", "VPN Users")]
 
 
 def test_validate_config_rejects_plain_http_and_unknown_fields() -> None:

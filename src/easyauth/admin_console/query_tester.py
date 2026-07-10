@@ -184,10 +184,14 @@ def _success_explanation(snapshot: PermissionSnapshot) -> str:
 
 def _expires_at(snapshot: PermissionSnapshot) -> datetime:
     ttl_expires_at = timezone.now() + timedelta(seconds=permission_query_ttl_seconds())
-    grant_expires_at = snapshot.grant_expires_at
-    if grant_expires_at is None:
+    membership_expirations = [
+        item.expires_at
+        for item in (*snapshot.groups, *snapshot.grants)
+        if item.expires_at is not None
+    ]
+    if not membership_expirations:
         return ttl_expires_at
-    return min(ttl_expires_at, grant_expires_at)
+    return min(ttl_expires_at, *membership_expirations)
 
 
 def _record_query_test(

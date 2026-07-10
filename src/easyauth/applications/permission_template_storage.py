@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from hashlib import sha256
 from typing import Any
 
 from django.utils import timezone
 
 from easyauth.applications.catalog_version import bump_catalog_version
+from easyauth.applications.manifest_hashing import canonical_manifest_hash_from_template
 from easyauth.applications.models import (
     App,
     ApprovalRule,
@@ -72,7 +72,7 @@ def record_template_version(
         app=app,
         version=template.schema_version,
         source=template.source,
-        content_hash=sha256(template.raw_template.encode("utf-8")).hexdigest(),
+        content_hash=canonical_manifest_hash_from_template(template.raw_template),
         raw_template=template.raw_template,
         import_summary={
             "manifest_schema_version": template.schema_version,
@@ -504,12 +504,10 @@ def _upsert_approval_rules(
         rule = existing.get(key) or ApprovalRule(app=app)
         if spec.target_type == "authorization_group":
             rule.authorization_group = authorization_group_by_key[spec.target_key]
-            rule.role = None
             rule.permission = None
         else:
             rule.authorization_group = None
             rule.permission = permission_by_key[spec.target_key]
-            rule.role = None
         rule.approver_userids = list(spec.approver_userids)
         rule.is_active = spec.is_active
         rule.full_clean()

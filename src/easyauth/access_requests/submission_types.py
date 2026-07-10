@@ -26,6 +26,15 @@ class AccessRequestSubmissionError(Exception):
 
 
 @dataclass(frozen=True, slots=True)
+class AccessRequestIdempotencyConflictError(Exception):
+    message: str = "idempotency key was already used with a different payload"
+
+    @override
+    def __str__(self) -> str:
+        return self.message
+
+
+@dataclass(frozen=True, slots=True)
 class ScopedAccessRequestGrant:
     permission: Permission
     scope_key: str
@@ -40,6 +49,7 @@ class AccessRequestSubmission:
     reason: str
     actor_type: str
     actor_id: str
+    idempotency_key: str
     approver_user_ids: Iterable[str] = ()
     request_type: AccessRequestType = REQUEST_TYPE_GRANT
     authorization_groups: Iterable[AuthorizationGroup] = ()

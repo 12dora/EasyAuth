@@ -13,8 +13,6 @@ from easyauth.applications.models import (
     AuthorizationGroup,
     AuthorizationGroupGrant,
     Permission,
-    Role,
-    RolePermission,
 )
 
 if TYPE_CHECKING:
@@ -23,9 +21,6 @@ if TYPE_CHECKING:
     from django.http import HttpRequest
 
     class AppAdminBase(admin.ModelAdmin[App]):
-        pass
-
-    class RoleAdminBase(admin.ModelAdmin[Role]):
         pass
 
     class AppScopeAdminBase(admin.ModelAdmin[AppScope]):
@@ -40,9 +35,6 @@ if TYPE_CHECKING:
     class PermissionAdminBase(admin.ModelAdmin[Permission]):
         pass
 
-    class RolePermissionAdminBase(admin.ModelAdmin[RolePermission]):
-        pass
-
     class ApprovalRuleAdminBase(admin.ModelAdmin[ApprovalRule]):
         pass
 
@@ -52,9 +44,6 @@ if TYPE_CHECKING:
 else:
 
     class AppAdminBase(admin.ModelAdmin):
-        pass
-
-    class RoleAdminBase(admin.ModelAdmin):
         pass
 
     class AppScopeAdminBase(admin.ModelAdmin):
@@ -67,9 +56,6 @@ else:
         pass
 
     class PermissionAdminBase(admin.ModelAdmin):
-        pass
-
-    class RolePermissionAdminBase(admin.ModelAdmin):
         pass
 
     class ApprovalRuleAdminBase(admin.ModelAdmin):
@@ -159,42 +145,6 @@ class AppAdmin(CatalogVersionAdminMixin, AppAdminBase):
         return obj
 
 
-@admin.register(Role)
-@final
-class RoleAdmin(CatalogVersionAdminMixin, RoleAdminBase):
-    list_display = (
-        "app",
-        "key",
-        "name",
-        "is_active",
-        "requestable",
-        "approval_rule_status",
-    )
-    search_fields = ("app__app_key", "key", "name")
-    list_filter = ("app", "is_active", "requestable")
-    readonly_fields = ("created_at", "updated_at")
-
-    @admin.display(description="审批规则状态")
-    def approval_rule_status(self, obj: Role) -> str:
-        if not obj.requestable:
-            return "不可申请"
-        authorization_group = AuthorizationGroup.objects.filter(
-            app=obj.app,
-            key=obj.key,
-            kind="role",
-            is_active=True,
-        ).first()
-        if (
-            authorization_group is not None
-            and ApprovalRule.objects.filter(
-                authorization_group=authorization_group,
-                is_active=True,
-            ).exists()
-        ):
-            return "有效"
-        return "缺少有效审批规则"
-
-
 @admin.register(AppScope)
 @final
 class AppScopeAdmin(CatalogVersionAdminMixin, AppScopeAdminBase):
@@ -271,27 +221,18 @@ class AuthorizationGroupGrantAdmin(CatalogVersionAdminMixin, AuthorizationGroupG
         return obj.authorization_group.app
 
 
-@admin.register(RolePermission)
-@final
-class RolePermissionAdmin(CatalogVersionAdminMixin, RolePermissionAdminBase):
-    list_display = ("role", "permission", "created_at")
-    search_fields = ("role__app__app_key", "role__key", "permission__key")
-    list_filter = ("role__app",)
-    readonly_fields = ("created_at",)
-
-    @override
-    def catalog_app(self, obj: object) -> App:
-        if not isinstance(obj, RolePermission):
-            message = f"无法从 {type(obj).__name__} 解析所属 App。"
-            raise TypeError(message)
-        return obj.role.app
-
-
 @admin.register(ApprovalRule)
 @final
 class ApprovalRuleAdmin(CatalogVersionAdminMixin, ApprovalRuleAdminBase):
-    list_display = ("app", "role", "permission", "is_active", "created_at", "updated_at")
-    search_fields = ("app__app_key", "role__key", "permission__key")
+    list_display = (
+        "app",
+        "authorization_group",
+        "permission",
+        "is_active",
+        "created_at",
+        "updated_at",
+    )
+    search_fields = ("app__app_key", "authorization_group__key", "permission__key")
     list_filter = ("app", "is_active")
     readonly_fields = ("created_at", "updated_at")
 

@@ -25,6 +25,7 @@ def test_query_test_success_payload_serializes_resolved_managed_users() -> None:
                 scope="MANAGED_USERS",
                 source_type="group",
                 source_key="team-manager",
+                expires_at=None,
                 resolved=ResolvedManagedUsers(
                     user_ids=("bob",),
                     resolver="dingtalk_manager_chain",

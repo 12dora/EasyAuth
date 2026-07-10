@@ -4,10 +4,11 @@ from dataclasses import dataclass
 from http import HTTPStatus
 from typing import ClassVar, override
 
+from django.db.models import Prefetch
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from easyauth.access_requests.models import AccessRequest
+from easyauth.access_requests.models import AccessRequest, AccessRequestApprover
 from easyauth.accounts.models import UserMirror
 from easyauth.admin_console.api_payloads import list_payload, paginated_list_payload
 from easyauth.admin_console.api_responses import (
@@ -18,9 +19,11 @@ from easyauth.admin_console.api_responses import (
 )
 from easyauth.admin_console.authz import require_superuser
 from easyauth.admin_console.operation_filters import (
+    OperationFilterValidationError,
     Page,
     filter_access_grants,
     filter_access_requests,
+    operation_filter_error_response,
     paginate_queryset,
 )
 from easyauth.admin_console.operations_audit import (
@@ -81,6 +84,8 @@ def operations_access_requests(request: HttpRequest) -> JsonResponse:
         case str():
             try:
                 return _access_request_page_response(_access_request_page(request))
+            except OperationFilterValidationError as exc:
+                return operation_filter_error_response(exc)
             except AccessRequestFailureReasonContractError as exc:
                 return _error_response(
                     ErrorCode.INTERNAL_ERROR,
@@ -95,7 +100,10 @@ def operations_access_requests(request: HttpRequest) -> JsonResponse:
 def operations_access_grants(request: HttpRequest) -> JsonResponse:
     match require_superuser(request):
         case str():
-            return _access_grant_page_response(_access_grant_page(request))
+            try:
+                return _access_grant_page_response(_access_grant_page(request))
+            except OperationFilterValidationError as exc:
+                return operation_filter_error_response(exc)
         case JsonResponse() as response:
             return response
 
@@ -212,12 +220,25 @@ def _dependency_health_response(
 
 
 def _access_request_page(request: HttpRequest) -> Page[AccessRequest]:
-    queryset = AccessRequest.objects.select_related("user", "app").all()
+    approver_prefetch = Prefetch(
+        "approver_assignments",
+        queryset=AccessRequestApprover.objects.select_related("approver"),
+        to_attr="loaded_approver_assignments",
+    )
+    queryset = (
+        AccessRequest.objects.select_related("user", "app")
+        .prefetch_related(approver_prefetch)
+        .all()
+    )
     return paginate_queryset(filter_access_requests(queryset, request.GET), request.GET)
 
 
 def _access_grant_page(request: HttpRequest) -> Page[AccessGrant]:
-    queryset = AccessGrant.objects.select_related("user", "app").all()
+    queryset = (
+        AccessGrant.objects.select_related("user", "app")
+        .prefetch_related("grant_groups__authorization_group", "grant_permissions__permission")
+        .all()
+    )
     return paginate_queryset(filter_access_grants(queryset, request.GET), request.GET)
 
 
@@ -250,11 +271,41 @@ def _access_grant_item(access_grant: AccessGrant) -> dict[str, JsonValue]:
         "user_id": access_grant.user.authentik_user_id,
         "app_key": access_grant.app.app_key,
         "status": access_grant.status,
-        "grant_type": access_grant.grant_type,
         "version": access_grant.version,
         "is_current": access_grant.is_current,
-        "grant_expires_at": datetime_value(access_grant.grant_expires_at),
+        "authorization_groups": _access_grant_groups(access_grant),
+        "direct_grants": _access_grant_permissions(access_grant),
     }
+
+
+def _access_grant_groups(access_grant: AccessGrant) -> list[JsonValue]:
+    items: list[JsonValue] = []
+    for link in access_grant.grant_groups.all():
+        group = link.authorization_group
+        items.append(
+            {
+                "key": group.key,
+                "kind": group.kind,
+                "name": group.name,
+                "expires_at": datetime_value(link.expires_at),
+            },
+        )
+    return items
+
+
+def _access_grant_permissions(access_grant: AccessGrant) -> list[JsonValue]:
+    items: list[JsonValue] = []
+    for link in access_grant.grant_permissions.all():
+        permission = link.permission
+        items.append(
+            {
+                "permission": permission.key,
+                "permission_name": permission.name,
+                "scope": link.scope_key,
+                "expires_at": datetime_value(link.expires_at),
+            },
+        )
+    return items
 
 
 def _user_for_id(user_id: str) -> UserMirror:

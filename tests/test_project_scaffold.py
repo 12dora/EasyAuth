@@ -38,6 +38,11 @@ def test_celery_beat_schedules_grant_expiration_cleanup() -> None:
     assert "easyauth.tasks.grants" in project_settings.CELERY_IMPORTS
 
 
+def test_webhook_delivery_uses_isolated_queue() -> None:
+    route = project_settings.CELERY_TASK_ROUTES["easyauth.webhooks.deliver"]
+    assert route["queue"] == "webhooks"
+
+
 def test_health_endpoint_is_routed_when_project_urls_are_configured() -> None:
     # Given: 项目 URL 配置注册了 health 路由。
     # When: 反解 health 视图名。

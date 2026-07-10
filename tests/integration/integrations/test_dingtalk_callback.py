@@ -20,6 +20,7 @@ from easyauth.workflows.models import (
     APPROVAL_STATUS_SUBMITTED,
     ApprovalInstance,
     ApprovalTemplate,
+    PendingApprovalCallback,
 )
 
 if TYPE_CHECKING:
@@ -134,6 +135,10 @@ def test_callback_unknown_process_returns_not_found_with_audit() -> None:
 
     # Then
     assert response.status_code == HTTPStatus.NOT_FOUND
+    assert PendingApprovalCallback.objects.filter(
+        process_instance_id="proc-unknown",
+        state="pending",
+    ).exists()
     audit_log = AuditLog.objects.get(event_type="dingtalk_callback_unknown_process")
     assert audit_log.target_id == "proc-unknown"
 
@@ -173,6 +178,8 @@ def _submitted_instance(app_key: str, process_instance_id: str) -> ApprovalInsta
         originator_user=originator,
         dingtalk_process_instance_id=process_instance_id,
         status=APPROVAL_STATUS_SUBMITTED,
+        submission_state="submitted",
+        payload_hash="0" * 64,
     )
 
 

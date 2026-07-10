@@ -44,6 +44,7 @@ def test_s14_submit_grant_request_rejects_inactive_app_without_writes() -> None:
                 reason="停用应用不应提交",
                 actor_type="user",
                 actor_id=user.authentik_user_id,
+                idempotency_key="s14-reject-inactive-app",
             ),
         )
 
@@ -69,6 +70,7 @@ def test_s14_submit_grant_request_rejects_empty_targets_without_writes() -> None
                 reason="未选择角色不应提交",
                 actor_type="user",
                 actor_id=user.authentik_user_id,
+                idempotency_key="s14-reject-empty-targets",
             ),
         )
 
@@ -100,6 +102,7 @@ def test_s14_submit_grant_request_deduplicates_repeated_groups() -> None:
             reason="重复角色应去重",
             actor_type="user",
             actor_id=user.authentik_user_id,
+            idempotency_key="s14-deduplicate-repeated-groups",
             approver_user_ids=(_ensure_active_approver(),),
         ),
     )
@@ -133,6 +136,7 @@ def test_s14_submit_grant_request_rejects_applicant_as_approver_without_writes()
                 reason="自审自批不应通过",
                 actor_type="user",
                 actor_id=user.authentik_user_id,
+                idempotency_key="s14-reject-applicant-as-approver",
                 approver_user_ids=(user.authentik_user_id,),
             ),
         )

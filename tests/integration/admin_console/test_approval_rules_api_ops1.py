@@ -102,7 +102,6 @@ def test_ops1_owner_creates_reads_and_updates_approval_rule() -> None:
     }
     rule = ApprovalRule.objects.get(id=rule_id)
     assert rule.authorization_group == group
-    assert rule.role is None
     assert rule.approver_userids == ["manager-002", "manager-003"]
     assert rule.is_active is False
 
@@ -282,7 +281,6 @@ def test_ops1_owner_manages_permission_approval_rule_with_document_target_fields
     assert updated_body.approval_rule.approver_userids == ["manager-011"]
     assert cross_app.status_code == HTTPStatus.BAD_REQUEST
     assert rule.permission == permission
-    assert rule.role is None
     assert rule.approver_userids == ["manager-011"]
 
 

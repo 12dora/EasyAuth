@@ -11,7 +11,11 @@ from easyauth.admin_console.api_responses import (
 from easyauth.admin_console.api_responses import (
     json_response as _json_response,
 )
-from easyauth.admin_console.operation_filters import paginate_queryset
+from easyauth.admin_console.operation_filters import (
+    OperationFilterValidationError,
+    operation_filter_error_response,
+    paginate_queryset,
+)
 from easyauth.admin_console.permission_template_api_data import (
     template_version_item,
 )
@@ -79,10 +83,13 @@ def permission_template_versions_api(request: HttpRequest, app_key: str) -> Json
             "请求方法无效。",
             status=HTTPStatus.METHOD_NOT_ALLOWED,
         )
-    page = paginate_queryset(
-        PermissionTemplateVersion.objects.filter(app=app).order_by("-version"),
-        request.GET,
-    )
+    try:
+        page = paginate_queryset(
+            PermissionTemplateVersion.objects.filter(app=app).order_by("-version"),
+            request.GET,
+        )
+    except OperationFilterValidationError as exc:
+        return operation_filter_error_response(exc)
     latest = PermissionTemplateVersion.objects.filter(app=app).order_by("-version").first()
     items = [template_version_item(template_version) for template_version in page.items]
     return _json_response(

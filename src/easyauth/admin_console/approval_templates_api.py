@@ -4,6 +4,7 @@ import uuid
 from http import HTTPStatus
 from typing import TYPE_CHECKING, ClassVar, cast
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db.models import ProtectedError
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -181,7 +182,7 @@ def _create_template(request: HttpRequest, actor_id: str) -> JsonResponse:
             return _not_found("应用不存在。")
     if ApprovalTemplate.objects.filter(app=app, key=payload.key).exists():
         return _validation_error("同一作用域下模板 key 已存在。")
-    template = ApprovalTemplate.objects.create(
+    template = ApprovalTemplate(
         app=app,
         key=payload.key,
         name=payload.name,
@@ -190,6 +191,11 @@ def _create_template(request: HttpRequest, actor_id: str) -> JsonResponse:
         form_mapping=cast("dict[str, JsonValue]", dict(payload.form_mapping)),
         is_active=payload.is_active,
     )
+    try:
+        template.full_clean()
+    except DjangoValidationError as exc:
+        return _validation_error("审批模板表单契约无效。", {"errors": str(exc)})
+    template.save()
     _record_template_event(actor_id=actor_id, template=template, action="approval_template_created")
     return json_response(
         {"approval_template": _template_item(template)},
@@ -216,6 +222,10 @@ def _patch_template(
         template.form_mapping = cast("dict[str, JsonValue]", dict(payload.form_mapping))
     if payload.is_active is not None:
         template.is_active = payload.is_active
+    try:
+        template.full_clean()
+    except DjangoValidationError as exc:
+        return _validation_error("审批模板表单契约无效。", {"errors": str(exc)})
     template.save()
     _record_template_event(actor_id=actor_id, template=template, action="approval_template_updated")
     return json_response({"approval_template": _template_item(template)})

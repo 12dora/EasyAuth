@@ -46,6 +46,7 @@ def test_create_rejects_non_string_form_mapping_value() -> None:
                 "key": "expense",
                 "name": "费用审批",
                 "dingtalk_process_code": "PROC-EXPENSE",
+                "form_schema": {"amount": {"type": "string", "required": False}},
                 "form_mapping": {"amount": 123},
             },
         ),
@@ -64,6 +65,7 @@ def test_patch_rejects_non_string_form_mapping_value() -> None:
         key="expense-patch",
         name="费用审批",
         dingtalk_process_code="PROC-EXPENSE",
+        form_schema={"amount": {"type": "string", "required": False}},
         form_mapping={"amount": "金额"},
     )
 
@@ -78,6 +80,49 @@ def test_patch_rejects_non_string_form_mapping_value() -> None:
     assert response.status_code == HTTPStatus.BAD_REQUEST
     template.refresh_from_db()
     assert template.form_mapping == {"amount": "金额"}
+
+
+def test_create_rejects_invalid_form_schema_contract() -> None:
+    client = _logged_in_superuser("approval-template-schema-admin")
+
+    response = client.post(
+        "/console/api/v1/approval-templates",
+        data=dumps(
+            {
+                "key": "invalid-schema",
+                "name": "非法 schema",
+                "dingtalk_process_code": "PROC-INVALID",
+                "form_schema": {
+                    "amount": {"type": "decimal", "required": "yes"},
+                },
+            },
+        ),
+        content_type="application/json",
+    )
+
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+    assert not ApprovalTemplate.objects.filter(key="invalid-schema").exists()
+
+
+def test_create_rejects_mapping_field_not_declared_in_schema() -> None:
+    client = _logged_in_superuser("approval-template-mapping-schema-admin")
+
+    response = client.post(
+        "/console/api/v1/approval-templates",
+        data=dumps(
+            {
+                "key": "invalid-mapping-schema",
+                "name": "非法 mapping",
+                "dingtalk_process_code": "PROC-INVALID",
+                "form_schema": {},
+                "form_mapping": {"amount": "金额"},
+            },
+        ),
+        content_type="application/json",
+    )
+
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+    assert not ApprovalTemplate.objects.filter(key="invalid-mapping-schema").exists()
 
 
 def test_platform_template_test_uses_exact_template_id(

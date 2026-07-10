@@ -5,16 +5,22 @@ from typing import TYPE_CHECKING
 
 from django.utils import timezone
 
-from easyauth.grants.models import GRANT_STATUS_EXPIRED, AccessGrant
+from easyauth.grants.models import (
+    GRANT_STATUS_EXPIRED,
+    AccessGrant,
+    AccessGrantGroup,
+    AccessGrantPermission,
+)
 from easyauth.grants.operations import (
     current_grant,
-    parse_grant_type,
     parse_status,
     record_grant_event,
 )
 
 if TYPE_CHECKING:
     from datetime import datetime
+
+    from django.db.models import QuerySet
 
     from easyauth.accounts.models import UserMirror
     from easyauth.applications.models import App
@@ -32,9 +38,14 @@ class GrantExpirationInput:
 
 def expire_current_grant(input_data: GrantExpirationInput) -> AccessGrant | None:
     grant = current_grant(input_data.user, input_data.app)
+    cutoff = (
+        timezone.now()
+        if input_data.expires_at_or_before is None
+        else input_data.expires_at_or_before
+    )
     if grant is None or not can_expire(
         grant,
-        expires_at_or_before=input_data.expires_at_or_before,
+        expires_at_or_before=cutoff,
     ):
         return None
 
@@ -43,6 +54,7 @@ def expire_current_grant(input_data: GrantExpirationInput) -> AccessGrant | None
         actor_type=input_data.actor_type,
         actor_id=input_data.actor_id,
         reason=input_data.reason,
+        expires_at_or_before=cutoff,
     )
     return grant
 
@@ -58,13 +70,8 @@ def can_expire(
         case "revoked" | "expired":
             return False
 
-    match parse_grant_type(grant.grant_type):
-        case "timed":
-            cutoff = timezone.now() if expires_at_or_before is None else expires_at_or_before
-            grant_expires_at = grant.grant_expires_at
-            return grant_expires_at is not None and grant_expires_at <= cutoff
-        case "permanent":
-            return False
+    cutoff = timezone.now() if expires_at_or_before is None else expires_at_or_before
+    return _due_groups(grant, cutoff).exists() or _due_permissions(grant, cutoff).exists()
 
 
 def expire_grant(
@@ -73,10 +80,15 @@ def expire_grant(
     actor_type: str,
     actor_id: str,
     reason: str = "",
+    expires_at_or_before: datetime | None = None,
 ) -> None:
-    grant.status = GRANT_STATUS_EXPIRED
-    grant.is_current = False
+    cutoff = timezone.now() if expires_at_or_before is None else expires_at_or_before
+    _ = _due_groups(grant, cutoff).delete()
+    _ = _due_permissions(grant, cutoff).delete()
     grant.version += 1
+    if not _has_memberships(grant):
+        grant.status = GRANT_STATUS_EXPIRED
+        grant.is_current = False
     grant.full_clean()
     grant.save(update_fields=["status", "is_current", "version", "updated_at"])
     record_grant_event(
@@ -85,4 +97,26 @@ def expire_grant(
         actor_type=actor_type,
         actor_id=actor_id,
         reason=reason,
+    )
+
+
+def _due_groups(grant: AccessGrant, cutoff: datetime) -> QuerySet[AccessGrantGroup]:
+    return AccessGrantGroup.objects.filter(
+        grant=grant,
+        expires_at__isnull=False,
+        expires_at__lte=cutoff,
+    )
+
+
+def _due_permissions(grant: AccessGrant, cutoff: datetime) -> QuerySet[AccessGrantPermission]:
+    return AccessGrantPermission.objects.filter(
+        grant=grant,
+        expires_at__isnull=False,
+        expires_at__lte=cutoff,
+    )
+
+
+def _has_memberships(grant: AccessGrant) -> bool:
+    return AccessGrantGroup.objects.filter(grant=grant).exists() or (
+        AccessGrantPermission.objects.filter(grant=grant).exists()
     )

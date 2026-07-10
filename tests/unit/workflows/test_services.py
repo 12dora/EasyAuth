@@ -1,19 +1,36 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
+from django.db import IntegrityError, transaction
+from django.utils import timezone
 
 from easyauth.accounts.models import USER_STATUS_DEPARTED, UserMirror
 from easyauth.applications.models import App
 from easyauth.audit.models import AuditLog
-from easyauth.integrations.dingtalk.api_client import DingTalkApiUnavailableError
+from easyauth.integrations.dingtalk.api_client import (
+    DingTalkApiRequestError,
+    DingTalkApiUnavailableError,
+)
+from easyauth.outbox.models import OutboxEvent
+from easyauth.webhooks.models import AppWebhookConfig, WebhookDelivery
 from easyauth.workflows.models import (
+    APPROVAL_STATUS_APPROVED,
     APPROVAL_STATUS_FAILED,
     APPROVAL_STATUS_SUBMITTED,
+    CALLBACK_STATE_APPLIED,
+    CALLBACK_STATE_PENDING,
+    SUBMISSION_STATE_AMBIGUOUS,
+    SUBMISSION_STATE_FAILED,
     ApprovalInstance,
     ApprovalTemplate,
+    PendingApprovalCallback,
 )
 from easyauth.workflows.services import (
     ApprovalCreateError,
+    ApprovalInstanceNotFoundError,
+    apply_instance_callback,
     create_approval_instance,
 )
 
@@ -51,6 +68,12 @@ class _UnavailableDingTalkClient:
         raise DingTalkApiUnavailableError(message)
 
 
+class _RejectedDingTalkClient:
+    def create_process_instance(self, **_kwargs: object) -> str:
+        message = "钉钉拒绝创建审批。"
+        raise DingTalkApiRequestError(message, status_code=400)
+
+
 def _app_with_template(app_key: str) -> tuple[App, ApprovalTemplate]:
     app = App.objects.create(app_key=app_key, name=app_key)
     template = ApprovalTemplate.objects.create(
@@ -58,6 +81,10 @@ def _app_with_template(app_key: str) -> tuple[App, ApprovalTemplate]:
         key="expense",
         name="费用审批",
         dingtalk_process_code="PROC-EXPENSE",
+        form_schema={
+            "amount": {"type": "string", "required": False},
+            "备注": {"type": "string", "required": False},
+        },
         form_mapping={"amount": "金额"},
     )
     return app, template
@@ -141,7 +168,7 @@ def test_create_approval_instance_is_idempotent_per_biz_key(
     assert ApprovalInstance.objects.filter(app=app).count() == 1
 
 
-def test_create_approval_instance_marks_failed_when_dingtalk_unavailable(
+def test_create_approval_instance_marks_ambiguous_when_dingtalk_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given
@@ -152,7 +179,7 @@ def test_create_approval_instance_marks_failed_when_dingtalk_unavailable(
         lambda: _UnavailableDingTalkClient(),
     )
 
-    # When / Then: 钉钉不可用时实例落 failed 并保留错误, 调用方收到明确错误。
+    # When / Then: 网络失败无法判断远端是否创建, 必须落 ambiguous 并禁止盲目重试。
     with pytest.raises(ApprovalCreateError) as exc_info:
         _ = create_approval_instance(
             app=app,
@@ -164,8 +191,256 @@ def test_create_approval_instance_marks_failed_when_dingtalk_unavailable(
         )
     instance = ApprovalInstance.objects.get(app=app, biz_key="order-fail")
     assert exc_info.value.kind == "dependency_unavailable"
-    assert instance.status == APPROVAL_STATUS_FAILED
+    assert instance.status != APPROVAL_STATUS_FAILED
+    assert instance.submission_state == SUBMISSION_STATE_AMBIGUOUS
     assert instance.last_error != ""
+
+
+def test_failed_submission_requires_explicit_locked_retry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _template = _app_with_template("wf-explicit-retry")
+    _ = _originator("wf-explicit-retry-user")
+    monkeypatch.setattr(
+        "easyauth.workflows.services.DingTalkApiClient.from_settings",
+        lambda: _RejectedDingTalkClient(),
+    )
+    with pytest.raises(ApprovalCreateError):
+        _ = create_approval_instance(
+            app=app,
+            template_key="expense",
+            originator_user_id="wf-explicit-retry-user",
+            form={},
+            biz_key="retry-1",
+            actor_id=app.app_key,
+        )
+    failed = ApprovalInstance.objects.get(app=app)
+    assert failed.submission_state == SUBMISSION_STATE_FAILED
+
+    with pytest.raises(ApprovalCreateError) as retry_required:
+        _ = create_approval_instance(
+            app=app,
+            template_key="expense",
+            originator_user_id="wf-explicit-retry-user",
+            form={},
+            biz_key="retry-1",
+            actor_id=app.app_key,
+        )
+    assert retry_required.value.kind == "conflict"
+
+    fake = _FakeDingTalkClient()
+    monkeypatch.setattr(
+        "easyauth.workflows.services.DingTalkApiClient.from_settings",
+        lambda: fake,
+    )
+    retried, created = create_approval_instance(
+        app=app,
+        template_key="expense",
+        originator_user_id="wf-explicit-retry-user",
+        form={},
+        biz_key="retry-1",
+        actor_id=app.app_key,
+        retry_failed=True,
+    )
+    assert created is False
+    assert retried.status == APPROVAL_STATUS_SUBMITTED
+    assert len(fake.created) == 1
+
+
+def test_idempotency_key_rejects_different_originator_or_form(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _template = _app_with_template("wf-payload-hash")
+    _ = _originator("wf-payload-user-a")
+    _ = _originator("wf-payload-user-b")
+    fake = _FakeDingTalkClient()
+    monkeypatch.setattr(
+        "easyauth.workflows.services.DingTalkApiClient.from_settings",
+        lambda: fake,
+    )
+    _ = create_approval_instance(
+        app=app,
+        template_key="expense",
+        originator_user_id="wf-payload-user-a",
+        form={"amount": "100"},
+        biz_key="same-key",
+        actor_id=app.app_key,
+    )
+
+    for originator_user_id, form in (
+        ("wf-payload-user-b", {"amount": "100"}),
+        ("wf-payload-user-a", {"amount": "200"}),
+    ):
+        with pytest.raises(ApprovalCreateError) as exc_info:
+            _ = create_approval_instance(
+                app=app,
+                template_key="expense",
+                originator_user_id=originator_user_id,
+                form=form,
+                biz_key="same-key",
+                actor_id=app.app_key,
+            )
+        assert exc_info.value.kind == "conflict"
+    assert len(fake.created) == 1
+
+
+def test_form_schema_rejects_missing_wrong_type_and_unknown_field(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, template = _app_with_template("wf-form-schema")
+    template.form_schema = {
+        "amount": {"type": "integer", "required": True},
+        "urgent": {"type": "boolean", "required": False},
+    }
+    template.save(update_fields=["form_schema", "updated_at"])
+    _ = _originator("wf-form-schema-user")
+    fake = _FakeDingTalkClient()
+    monkeypatch.setattr(
+        "easyauth.workflows.services.DingTalkApiClient.from_settings",
+        lambda: fake,
+    )
+    invalid_forms = ({}, {"amount": "100"}, {"amount": 100, "unknown": True})
+    for index, form in enumerate(invalid_forms):
+        with pytest.raises(ApprovalCreateError) as exc_info:
+            _ = create_approval_instance(
+                app=app,
+                template_key="expense",
+                originator_user_id="wf-form-schema-user",
+                form=form,
+                biz_key=f"invalid-{index}",
+                actor_id=app.app_key,
+            )
+        assert exc_info.value.kind == "validation_error"
+    assert fake.created == []
+
+
+def test_early_callback_is_persisted_and_applied_after_process_id_save(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _template = _app_with_template("wf-early-callback")
+    _ = _originator("wf-early-callback-user")
+    with pytest.raises(ApprovalInstanceNotFoundError):
+        _ = apply_instance_callback(process_instance_id="proc-early", status="approved")
+    pending = PendingApprovalCallback.objects.get(process_instance_id="proc-early")
+    assert pending.state == CALLBACK_STATE_PENDING
+
+    class _EarlyCallbackClient:
+        def create_process_instance(self, **_kwargs: object) -> str:
+            return "proc-early"
+
+    monkeypatch.setattr(
+        "easyauth.workflows.services.DingTalkApiClient.from_settings",
+        lambda: _EarlyCallbackClient(),
+    )
+    instance, _created = create_approval_instance(
+        app=app,
+        template_key="expense",
+        originator_user_id="wf-early-callback-user",
+        form={},
+        biz_key="early-1",
+        actor_id=app.app_key,
+    )
+    pending.refresh_from_db()
+    assert instance.status == APPROVAL_STATUS_APPROVED
+    assert pending.state == CALLBACK_STATE_APPLIED
+    assert pending.instance == instance
+
+
+def test_completion_and_unique_delivery_event_are_repaired_idempotently() -> None:
+    app, template = _app_with_template("wf-completion-outbox")
+    originator = _originator("wf-completion-user")
+    _ = AppWebhookConfig.objects.create(
+        app=app,
+        secret="whsec_test",  # noqa: S106 - 测试专用 Webhook 密钥。
+        approval_callback_url="https://app.example.com/hook",
+    )
+    instance = ApprovalInstance.objects.create(
+        app=app,
+        template=template,
+        biz_key="completion-1",
+        originator_user=originator,
+        dingtalk_process_instance_id="proc-completion-1",
+        status=APPROVAL_STATUS_SUBMITTED,
+        submission_state="submitted",
+        payload_hash="1" * 64,
+    )
+
+    _ = apply_instance_callback(process_instance_id="proc-completion-1", status="approved")
+    _ = apply_instance_callback(process_instance_id="proc-completion-1", status="approved")
+
+    instance.refresh_from_db()
+    assert instance.completion_delivery_id is not None
+    delivery = WebhookDelivery.objects.get(id=instance.completion_delivery_id)
+    assert WebhookDelivery.objects.filter(app=app).count() == 1
+    assert OutboxEvent.objects.filter(
+        event_key=f"webhook-delivery:{delivery.delivery_id}:{delivery.generation}",
+    ).count() == 1
+
+
+def test_stale_submitting_command_recovers_to_ambiguous(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, _template = _app_with_template("wf-stale-submission")
+    _ = _originator("wf-stale-submission-user")
+    fake = _FakeDingTalkClient()
+    monkeypatch.setattr(
+        "easyauth.workflows.services.DingTalkApiClient.from_settings",
+        lambda: fake,
+    )
+    instance, _created = create_approval_instance(
+        app=app,
+        template_key="expense",
+        originator_user_id="wf-stale-submission-user",
+        form={},
+        biz_key="stale-1",
+        actor_id=app.app_key,
+    )
+    _ = ApprovalInstance.objects.filter(id=instance.id).update(
+        dingtalk_process_instance_id="",
+        status="created",
+        submission_state="submitting",
+        submission_deadline_at=timezone.now() - timedelta(seconds=1),
+    )
+
+    with pytest.raises(ApprovalCreateError) as exc_info:
+        _ = create_approval_instance(
+            app=app,
+            template_key="expense",
+            originator_user_id="wf-stale-submission-user",
+            form={},
+            biz_key="stale-1",
+            actor_id=app.app_key,
+        )
+    instance.refresh_from_db()
+    assert exc_info.value.kind == "conflict"
+    assert instance.submission_state == SUBMISSION_STATE_AMBIGUOUS
+
+
+def test_nonempty_process_instance_id_is_unique() -> None:
+    app, template = _app_with_template("wf-process-id-unique")
+    originator = _originator("wf-process-id-unique-user")
+    _ = ApprovalInstance.objects.create(
+        app=app,
+        template=template,
+        biz_key="unique-1",
+        originator_user=originator,
+        dingtalk_process_instance_id="proc-unique",
+        status=APPROVAL_STATUS_SUBMITTED,
+        submission_state="submitted",
+        payload_hash="1" * 64,
+    )
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        _ = ApprovalInstance.objects.create(
+            app=app,
+            template=template,
+            biz_key="unique-2",
+            originator_user=originator,
+            dingtalk_process_instance_id="proc-unique",
+            status=APPROVAL_STATUS_SUBMITTED,
+            submission_state="submitted",
+            payload_hash="2" * 64,
+        )
 
 
 def test_create_approval_instance_validates_template_and_originator() -> None:

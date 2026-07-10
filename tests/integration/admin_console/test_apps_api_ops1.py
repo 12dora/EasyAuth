@@ -228,7 +228,7 @@ def test_ops1_apps_api_create_rejects_invalid_app_key_and_blank_name() -> None:
     assert App.objects.filter(app_key="ops1-api-create-blank-name").exists() is False
 
 
-def test_ops1_app_detail_api_allows_read_without_membership() -> None:
+def test_ops1_app_detail_api_hides_app_without_membership() -> None:
     # Given: owner 只拥有 CRM App, 不属于 ERP App。
     client = _logged_in_user("ops1-app-detail-api-owner")
     crm = App.objects.create(app_key="ops1-api-detail-crm", name="CRM")
@@ -239,13 +239,25 @@ def test_ops1_app_detail_api_allows_read_without_membership() -> None:
     allowed = client.get(f"{APPS_API_URL}/{crm.app_key}")
     denied = client.get(f"{APPS_API_URL}/{erp.app_key}")
 
-    # Then: 所属 App 和未授权 App 都可读取, 但未授权 App 不可管理。
+    # Then: 所属 App 可读取, 未授权 App 统一按不存在处理。
     assert allowed.status_code == HTTPStatus.OK
     assert allowed.json()["app"]["app_key"] == crm.app_key
     assert allowed.json()["app"]["can_manage"] is True
-    assert denied.status_code == HTTPStatus.OK
-    assert denied.json()["app"]["app_key"] == erp.app_key
-    assert denied.json()["app"]["can_manage"] is False
+    assert denied.status_code == HTTPStatus.NOT_FOUND
+    assert denied.json()["error"]["code"] == ErrorCode.NOT_FOUND
+
+
+def test_ops1_configuration_status_api_hides_app_without_membership() -> None:
+    # Given: 普通用户与目标 App 无成员关系。
+    client = _logged_in_user("ops1-app-config-api-non-member")
+    app = App.objects.create(app_key="ops1-api-config-hidden", name="Hidden ERP")
+
+    # When: 用户直接查询该 App 的配置状态。
+    response = client.get(f"{APPS_API_URL}/{app.app_key}/configuration-status")
+
+    # Then: API 统一按不存在处理, 不暴露配置问题。
+    assert response.status_code == HTTPStatus.NOT_FOUND
+    assert response.json()["error"]["code"] == ErrorCode.NOT_FOUND
 
 
 def test_ops1_apps_api_owner_patches_name_and_description() -> None:

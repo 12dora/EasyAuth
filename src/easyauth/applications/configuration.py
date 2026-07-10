@@ -11,6 +11,7 @@ from easyauth.applications.models import (
     AppCredential,
     AppMembership,
     ApprovalRule,
+    AppScope,
     AuthorizationGroup,
     AuthorizationGroupGrant,
     ManagedScopePolicy,
@@ -120,15 +121,29 @@ def _authorization_group_grant_issues(app: App) -> list[ConfigurationIssue]:
         authorization_group__app=app,
         is_active=True,
     ).select_related("authorization_group", "permission")
-    return [
-        _blocking_issue(
-            code="authorization_group_grant_target_inactive",
-            message="AuthorizationGroupGrant 不能指向 inactive 授权组或 Permission。",
-            subject=_authorization_group_grant_subject(grant),
-        )
-        for grant in grants.order_by("authorization_group__key", "permission__key", "scope_key")
-        if not grant.authorization_group.is_active or not grant.permission.is_active
-    ]
+    active_scope_keys = set(
+        AppScope.objects.filter(app=app, is_active=True).values_list("key", flat=True),
+    )
+    issues: list[ConfigurationIssue] = []
+    for grant in grants.order_by("authorization_group__key", "permission__key", "scope_key"):
+        subject = _authorization_group_grant_subject(grant)
+        if not grant.authorization_group.is_active or not grant.permission.is_active:
+            issues.append(
+                _blocking_issue(
+                    code="authorization_group_grant_target_inactive",
+                    message="AuthorizationGroupGrant 不能指向 inactive 授权组或 Permission。",
+                    subject=subject,
+                ),
+            )
+        if grant.scope_key not in active_scope_keys:
+            issues.append(
+                _blocking_issue(
+                    code="authorization_group_grant_scope_inactive",
+                    message="active AuthorizationGroupGrant 必须引用 active AppScope。",
+                    subject=subject,
+                ),
+            )
+    return issues
 
 
 def _authorization_group_grant_subject(grant: AuthorizationGroupGrant) -> str:

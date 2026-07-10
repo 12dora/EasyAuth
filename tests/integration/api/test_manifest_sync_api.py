@@ -14,6 +14,8 @@ from easyauth.webhooks.models import AppWebhookConfig
 pytestmark = pytest.mark.django_db
 
 _URL: Final = "/api/v1/apps/{app_key}/manifest-sync"
+HTTPS_PORT: Final = 443
+UPGRADED_MANIFEST_VERSION: Final = 2
 
 
 def _app_with_token(app_key: str) -> tuple[App, str]:
@@ -54,8 +56,16 @@ def _post(client: Client, app_key: str, token: str, body: dict) -> object:
     )
 
 
-def test_manifest_sync_applies_new_version_and_autofills_webhook() -> None:
+def test_manifest_sync_applies_new_version_and_autofills_webhook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # Given: 已注册应用与静态 token。
+    monkeypatch.setattr(
+        "easyauth.config.net.resolve_public_addresses",
+        lambda _hostname, *, port, **_kwargs: (
+            ("93.184.216.34",) if port == HTTPS_PORT else ()
+        ),
+    )
     app, token = _app_with_token("sync-crm")
 
     # When: 下游推送 manifest(带 base_url 供相对路径补全)。
@@ -92,7 +102,8 @@ def test_manifest_sync_same_content_is_idempotent() -> None:
 def test_manifest_sync_conflicts_without_version_bump() -> None:
     app, token = _app_with_token("sync-conflict")
     client = Client()
-    assert _post(client, app.app_key, token, {"manifest": _manifest(app.app_key, 1)}).status_code == HTTPStatus.OK
+    initial = _post(client, app.app_key, token, {"manifest": _manifest(app.app_key, 1)})
+    assert initial.status_code == HTTPStatus.OK
 
     # 内容变了但版本没递增 -> 409, 提示下游递增版本。
     changed = _post(
@@ -108,9 +119,10 @@ def test_manifest_sync_conflicts_without_version_bump() -> None:
 def test_manifest_sync_version_bump_applies_new_modules() -> None:
     app, token = _app_with_token("sync-bump")
     client = Client()
-    assert _post(client, app.app_key, token, {"manifest": _manifest(app.app_key, 1)}).status_code == HTTPStatus.OK
+    initial = _post(client, app.app_key, token, {"manifest": _manifest(app.app_key, 1)})
+    assert initial.status_code == HTTPStatus.OK
 
-    manifest = _manifest(app.app_key, 2)
+    manifest = _manifest(app.app_key, UPGRADED_MANIFEST_VERSION)
     manifest["permissions"].append(
         {
             "key": "order.export",
@@ -122,11 +134,51 @@ def test_manifest_sync_version_bump_applies_new_modules() -> None:
     response = _post(client, app.app_key, token, {"manifest": manifest})
 
     assert response.status_code == HTTPStatus.OK
-    assert response.json()["template_version"] == 2
+    assert response.json()["template_version"] == UPGRADED_MANIFEST_VERSION
+
+
+def test_manifest_sync_clears_manifest_managed_lifecycle_urls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "easyauth.config.net.resolve_public_addresses",
+        lambda _hostname, *, port, **_kwargs: (
+            ("93.184.216.34",) if port == HTTPS_PORT else ()
+        ),
+    )
+    app, token = _app_with_token("sync-lifecycle-snapshot")
+    client = Client()
+    assert (
+        _post(
+            client,
+            app.app_key,
+            token,
+            {
+                "manifest": _manifest(app.app_key, 1),
+                "base_url": "https://etrade.example.com",
+            },
+        ).status_code
+        == HTTPStatus.OK
+    )
+
+    manifest_without_lifecycle = _manifest(app.app_key, UPGRADED_MANIFEST_VERSION)
+    del manifest_without_lifecycle["lifecycle"]
+    response = _post(
+        client,
+        app.app_key,
+        token,
+        {"manifest": manifest_without_lifecycle},
+    )
+
+    assert response.status_code == HTTPStatus.OK
+    config = AppWebhookConfig.objects.get(app=app)
+    assert config.handover_url == ""
+    assert config.onboard_url == ""
+    assert config.updated_by == "manifest"
 
 
 def test_manifest_sync_rejects_wrong_app_key() -> None:
-    app, token = _app_with_token("sync-owner")
+    _app, token = _app_with_token("sync-owner")
     other, _ = _app_with_token("sync-other")
 
     response = _post(Client(), other.app_key, token, {"manifest": _manifest(other.app_key, 1)})

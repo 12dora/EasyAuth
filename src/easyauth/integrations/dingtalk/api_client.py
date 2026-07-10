@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import hashlib
+import math
 from dataclasses import dataclass
 from http import HTTPStatus
 from json import JSONDecodeError, dumps, loads
+from time import monotonic
 from typing import TYPE_CHECKING, Final, Self, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -17,10 +20,12 @@ if TYPE_CHECKING:
 
 # 直接使用钉钉新版 v1.0 API(§7 决策 2), 不接旧 topapi。
 DINGTALK_API_BASE_URL: Final = "https://api.dingtalk.com"
-ACCESS_TOKEN_CACHE_KEY: Final = "easyauth:dingtalk:access-token"  # noqa: S105 - 缓存键名.
+ACCESS_TOKEN_CACHE_KEY_PREFIX: Final = "easyauth:dingtalk:access-token"  # noqa: S105
 # token 提前于钉钉返回的有效期刷新, 避免边界过期。
 ACCESS_TOKEN_EXPIRY_MARGIN_SECONDS: Final = 120
 DINGTALK_NOT_CONFIGURED_MESSAGE: Final = "钉钉集成凭证未配置。"
+MAX_JSON_RESPONSE_BYTES: Final = 1024 * 1024
+MAX_ERROR_RESPONSE_BYTES: Final = 4096
 
 type DingTalkJson = dict[str, object]
 
@@ -35,7 +40,7 @@ class _ReadableResponse:
         traceback: TracebackType | None,
     ) -> None: ...
 
-    def read(self) -> bytes: ...
+    def read(self, _amount: int = -1) -> bytes: ...
 
 
 class DingTalkApiError(RuntimeError):
@@ -84,8 +89,14 @@ class DingTalkApiClient:
             timeout_seconds=config.timeout_seconds,
         )
 
-    def get_access_token(self) -> str:
-        cached = cast("object", cache.get(ACCESS_TOKEN_CACHE_KEY))
+    def get_access_token(
+        self,
+        *,
+        force_refresh: bool = False,
+        _deadline: float | None = None,
+    ) -> str:
+        cache_key = _access_token_cache_key(self._app_key, self._app_secret)
+        cached = None if force_refresh else cast("object", cache.get(cache_key))
         if isinstance(cached, str) and cached:
             return cached
         payload = self._request_json(
@@ -93,18 +104,27 @@ class DingTalkApiClient:
             "/v1.0/oauth2/accessToken",
             body={"appKey": self._app_key, "appSecret": self._app_secret},
             authenticated=False,
+            _deadline=_deadline,
         )
         token = payload.get("accessToken")
         expire_in = payload.get("expireIn")
         if not isinstance(token, str) or not token:
             message = "钉钉 accessToken 响应缺少 token。"
             raise DingTalkApiRequestError(message)
-        ttl = 3600
-        if isinstance(expire_in, (int, float)):
-            expire_seconds = int(expire_in)
-            if expire_seconds > ACCESS_TOKEN_EXPIRY_MARGIN_SECONDS:
-                ttl = expire_seconds - ACCESS_TOKEN_EXPIRY_MARGIN_SECONDS
-        cache.set(ACCESS_TOKEN_CACHE_KEY, token, timeout=ttl)
+        if (
+            not isinstance(expire_in, (int, float))
+            or isinstance(expire_in, bool)
+            or not math.isfinite(expire_in)
+            or expire_in <= 0
+        ):
+            message = "钉钉 accessToken 响应缺少有效 expireIn。"
+            raise DingTalkApiRequestError(message)
+        expire_seconds = int(expire_in)
+        if expire_seconds <= 0:
+            message = "钉钉 accessToken 响应缺少有效 expireIn。"
+            raise DingTalkApiRequestError(message)
+        ttl = max(1, expire_seconds - ACCESS_TOKEN_EXPIRY_MARGIN_SECONDS)
+        cache.set(cache_key, token, timeout=ttl)
         return token
 
     def create_process_instance(
@@ -154,21 +174,25 @@ class DingTalkApiClient:
         body: DingTalkJson | None = None,
         query: dict[str, str] | None = None,
         authenticated: bool = True,
+        _deadline: float | None = None,
     ) -> DingTalkJson:
+        deadline = monotonic() + self._timeout_seconds if _deadline is None else _deadline
         url = f"{DINGTALK_API_BASE_URL}{path}"
         if query:
             url = f"{url}?{urlencode(query)}"
         headers = {"Content-Type": "application/json"}
         if authenticated:
-            headers["x-acs-dingtalk-access-token"] = self.get_access_token()
+            headers["x-acs-dingtalk-access-token"] = self.get_access_token(_deadline=deadline)
         data = dumps(body).encode("utf-8") if body is not None else None
         request = Request(url, data=data, headers=headers, method=method)  # noqa: S310 - 常量 https 基址。
         try:
+            remaining = _remaining_seconds(deadline)
             with cast(
                 "_ReadableResponse",
-                urlopen(request, timeout=self._timeout_seconds),  # noqa: S310
+                urlopen(request, timeout=remaining),  # noqa: S310
             ) as response:
-                raw = response.read()
+                raw = response.read(MAX_JSON_RESPONSE_BYTES + 1)
+            _ = _remaining_seconds(deadline)
         except HTTPError as error:
             detail = _error_detail(error)
             message = f"钉钉 API 请求失败(HTTP {error.code}): {detail}"
@@ -176,6 +200,9 @@ class DingTalkApiClient:
         except (URLError, TimeoutError) as error:
             message = "钉钉 API 暂不可用。"
             raise DingTalkApiUnavailableError(message) from error
+        if len(raw) > MAX_JSON_RESPONSE_BYTES:
+            message = "钉钉 API 响应超过大小限制。"
+            raise DingTalkApiRequestError(message)
         try:
             parsed = cast("object", loads(raw.decode("utf-8")))
         except (JSONDecodeError, UnicodeDecodeError) as error:
@@ -189,10 +216,27 @@ class DingTalkApiClient:
 
 def _error_detail(error: HTTPError) -> str:
     try:
-        raw = error.read().decode("utf-8")
+        raw = error.read(MAX_ERROR_RESPONSE_BYTES + 1).decode("utf-8")
     except (OSError, UnicodeDecodeError):
         return ""
     if error.code in {HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN}:
         # 凭证类错误的响应体可能包含敏感回显, 只保留状态码。
         return ""
     return raw[:500]
+
+
+def invalidate_access_token(*, app_key: str, app_secret: str) -> None:
+    if app_key and app_secret:
+        _ = cache.delete(_access_token_cache_key(app_key, app_secret))
+
+
+def _access_token_cache_key(app_key: str, app_secret: str) -> str:
+    fingerprint = hashlib.sha256(f"{app_key}\0{app_secret}".encode()).hexdigest()
+    return f"{ACCESS_TOKEN_CACHE_KEY_PREFIX}:{fingerprint}"
+
+
+def _remaining_seconds(deadline: float) -> float:
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        raise TimeoutError
+    return remaining

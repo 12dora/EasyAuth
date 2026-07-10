@@ -8,7 +8,7 @@ from django.db import models
 from django.db.models import Q
 
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App, Permission, Role
+from easyauth.applications.models import App, AuthorizationGroup, Permission
 
 if TYPE_CHECKING:
     from datetime import date, datetime
@@ -51,15 +51,6 @@ class AccessGrant(models.Model):
         on_delete=models.CASCADE,
         related_name="access_grants",
     )
-    grant_type: models.CharField[str, str] = models.CharField(
-        max_length=16,
-        choices=GRANT_TYPE_CHOICES,
-        default=GRANT_TYPE_PERMANENT,
-    )
-    grant_expires_at: models.DateTimeField[
-        str | date | datetime | None,
-        datetime | None,
-    ] = models.DateTimeField(blank=True, null=True)
     status: models.CharField[str, str] = models.CharField(
         max_length=16,
         choices=GRANT_STATUS_CHOICES,
@@ -77,19 +68,8 @@ class AccessGrant(models.Model):
     class Meta:
         constraints: ClassVar[list[models.BaseConstraint]] = [
             models.CheckConstraint(
-                condition=Q(grant_type__in=GRANT_TYPE_VALUES),
-                name="grants_access_grant_type_supported",
-            ),
-            models.CheckConstraint(
                 condition=Q(status__in=GRANT_STATUS_VALUES),
                 name="grants_access_grant_status_supported",
-            ),
-            models.CheckConstraint(
-                condition=(
-                    Q(grant_type=GRANT_TYPE_TIMED, grant_expires_at__isnull=False)
-                    | Q(grant_type=GRANT_TYPE_PERMANENT, grant_expires_at__isnull=True)
-                ),
-                name="grants_access_grant_expiration_shape",
             ),
             models.UniqueConstraint(
                 fields=["user", "app"],
@@ -109,56 +89,6 @@ class AccessGrant(models.Model):
     def __str__(self) -> str:
         return f"{self.user.authentik_user_id}:{self.app.app_key}:v{self.version}"
 
-    @override
-    def clean(self) -> None:
-        super().clean()
-        errors: dict[str, str] = {}
-        if self.grant_type == GRANT_TYPE_TIMED and self.grant_expires_at is None:
-            errors["grant_expires_at"] = "Timed grants must include an expiration."
-        if self.grant_type == GRANT_TYPE_PERMANENT and self.grant_expires_at is not None:
-            errors["grant_expires_at"] = "Permanent grants must not include an expiration."
-        if errors:
-            raise ValidationError(errors)
-
-
-class AccessGrantRole(models.Model):
-    if TYPE_CHECKING:
-        grant_id: ClassVar[int]
-        role_id: ClassVar[int]
-
-    grant: models.ForeignKey[AccessGrant, AccessGrant] = models.ForeignKey(
-        AccessGrant,
-        on_delete=models.CASCADE,
-        related_name="grant_roles",
-    )
-    role: models.ForeignKey[Role, Role] = models.ForeignKey(
-        Role,
-        on_delete=models.CASCADE,
-        related_name="access_grant_roles",
-    )
-    created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
-        auto_now_add=True,
-    )
-
-    class Meta:
-        constraints: ClassVar[list[models.BaseConstraint]] = [
-            models.UniqueConstraint(
-                fields=["grant", "role"],
-                name="grants_access_grant_role_unique",
-            ),
-        ]
-        ordering: ClassVar[list[str]] = ["grant_id", "role__key"]
-
-    @override
-    def __str__(self) -> str:
-        return f"{self.grant} -> {self.role}"
-
-    @override
-    def clean(self) -> None:
-        super().clean()
-        if self.role.app != self.grant.app:
-            raise ValidationError({"role": "Role must belong to the access grant app."})
-
 
 class AccessGrantGroup(models.Model):
     if TYPE_CHECKING:
@@ -170,11 +100,17 @@ class AccessGrantGroup(models.Model):
         on_delete=models.CASCADE,
         related_name="grant_groups",
     )
-    authorization_group: models.ForeignKey = models.ForeignKey(
-        "applications.AuthorizationGroup",
-        on_delete=models.CASCADE,
-        related_name="access_grant_groups",
+    authorization_group: models.ForeignKey[AuthorizationGroup, AuthorizationGroup] = (
+        models.ForeignKey(
+            AuthorizationGroup,
+            on_delete=models.CASCADE,
+            related_name="access_grant_groups",
+        )
     )
+    expires_at: models.DateTimeField[
+        str | date | datetime | None,
+        datetime | None,
+    ] = models.DateTimeField(blank=True, null=True, db_index=True)
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
     )
@@ -218,6 +154,10 @@ class AccessGrantPermission(models.Model):
     )
     scope_key: models.CharField[str, str] = models.CharField(max_length=64, default="GLOBAL")
     source_note: models.TextField[str, str] = models.TextField(blank=True, default="")
+    expires_at: models.DateTimeField[
+        str | date | datetime | None,
+        datetime | None,
+    ] = models.DateTimeField(blank=True, null=True, db_index=True)
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
     )

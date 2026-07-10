@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from easyauth.grants.models import GRANT_STATUS_ACTIVE, GRANT_STATUS_REVOKED, AccessGrant
 from easyauth.grants.operations import (
@@ -13,12 +13,10 @@ from easyauth.grants.operations import (
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
-    from datetime import datetime
 
     from easyauth.accounts.models import UserMirror
-    from easyauth.applications.models import App, AuthorizationGroup
-    from easyauth.grants.inputs import ScopedDirectGrantInput
-type GrantType = Literal["permanent", "timed"]
+    from easyauth.applications.models import App
+    from easyauth.grants.inputs import AuthorizationGroupGrantInput, ScopedDirectGrantInput
 
 
 class GrantMutationData(Protocol):
@@ -29,13 +27,7 @@ class GrantMutationData(Protocol):
     def app(self) -> App: ...
 
     @property
-    def grant_type(self) -> GrantType: ...
-
-    @property
-    def grant_expires_at(self) -> datetime | None: ...
-
-    @property
-    def authorization_groups(self) -> Iterable[AuthorizationGroup]: ...
+    def authorization_groups(self) -> Iterable[AuthorizationGroupGrantInput]: ...
 
     @property
     def direct_grants(self) -> Iterable[ScopedDirectGrantInput]: ...
@@ -51,8 +43,6 @@ def create_current_grant(input_data: GrantMutationData, *, action: str) -> Acces
     grant = AccessGrant(
         user=input_data.user,
         app=input_data.app,
-        grant_type=input_data.grant_type,
-        grant_expires_at=input_data.grant_expires_at,
         status=GRANT_STATUS_ACTIVE,
         is_current=True,
         version=next_version(input_data.user, input_data.app),
@@ -74,16 +64,12 @@ def change_current_grant(input_data: GrantMutationData) -> AccessGrant:
     if grant is None:
         return create_current_grant(input_data, action="grant_changed")
 
-    grant.grant_type = input_data.grant_type
-    grant.grant_expires_at = input_data.grant_expires_at
     grant.status = GRANT_STATUS_ACTIVE
     grant.is_current = True
     grant.version += 1
     grant.full_clean()
     grant.save(
         update_fields=[
-            "grant_type",
-            "grant_expires_at",
             "status",
             "is_current",
             "version",

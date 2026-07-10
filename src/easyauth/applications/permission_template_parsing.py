@@ -192,6 +192,7 @@ def _validate_manifest_payload(*, app_key: str, payload: _AppManifestPayload) ->
         _raise_manifest_error("app_manifest_app_key_mismatch", payload.app.app_key)
 
     scope_keys = _unique_keys("scope", [scope.key for scope in payload.scopes])
+    active_scope_keys = {scope.key for scope in payload.scopes if scope.is_active}
     group_keys = _unique_keys(
         "permission_group",
         [group.key for group in payload.permission_groups],
@@ -212,6 +213,7 @@ def _validate_manifest_payload(*, app_key: str, payload: _AppManifestPayload) ->
     _validate_authorization_group_references(
         payload=payload,
         scope_keys=scope_keys,
+        active_scope_keys=active_scope_keys,
         permission_keys=permission_keys,
         permission_scope_map=permission_scope_map,
     )
@@ -248,6 +250,7 @@ def _validate_authorization_group_references(
     *,
     payload: _AppManifestPayload,
     scope_keys: set[str],
+    active_scope_keys: set[str],
     permission_keys: set[str],
     permission_scope_map: dict[str, set[str]],
 ) -> None:
@@ -258,7 +261,9 @@ def _validate_authorization_group_references(
                 _raise_manifest_error("app_manifest_unknown_permission", grant.permission)
             if grant.scope not in scope_keys:
                 _raise_manifest_error("app_manifest_unknown_scope", grant.scope)
-            if grant.scope not in permission_scope_map[grant.permission]:
+            if grant.is_active and grant.scope not in active_scope_keys:
+                _raise_manifest_error("app_manifest_grant_scope_inactive", grant.scope)
+            if grant.is_active and grant.scope not in permission_scope_map[grant.permission]:
                 _raise_manifest_error("app_manifest_grant_scope_unsupported", grant.scope)
             grant_key = (grant.permission, grant.scope)
             if grant_key in seen_grants:
@@ -275,7 +280,15 @@ def _validate_approval_rule_references(
     permission_keys: set[str],
     authorization_group_keys: set[str],
 ) -> None:
+    seen_targets: set[tuple[str, str]] = set()
     for approval_rule in payload.approval_rules:
+        target = (approval_rule.target_type, approval_rule.target_key)
+        if target in seen_targets:
+            _raise_manifest_error(
+                "app_manifest_duplicate_key",
+                f"approval_rule:{approval_rule.target_type}:{approval_rule.target_key}",
+            )
+        seen_targets.add(target)
         if approval_rule.target_type == "authorization_group":
             if approval_rule.target_key not in authorization_group_keys:
                 _raise_manifest_error(

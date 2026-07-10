@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-from typing import final, override
+import threading
+from typing import Final, final, override
 
 from django.core.management.base import BaseCommand, CommandError
 
+from easyauth.config.runtime_health import STREAM_PROCESS_HEARTBEAT, mark_heartbeat
 from easyauth.integrations.dingtalk.api_client import DingTalkNotConfiguredError
 from easyauth.integrations.dingtalk.stream import build_stream_client
+
+STREAM_HEARTBEAT_INTERVAL_SECONDS: Final = 15.0
 
 
 @final
@@ -23,4 +27,22 @@ class Command(BaseCommand):
             # 凭证未配置时快速失败: 常驻进程静默空转比崩溃更难发现。
             raise CommandError(str(error)) from error
         self.stdout.write("钉钉 Stream 消费进程启动, 等待事件推送……")
-        client.start_forever()
+        stop = threading.Event()
+        heartbeat = threading.Thread(
+            target=_heartbeat_loop,
+            args=(stop,),
+            name="easyauth-stream-heartbeat",
+            daemon=True,
+        )
+        heartbeat.start()
+        try:
+            client.start_forever()
+        finally:
+            stop.set()
+            heartbeat.join(timeout=STREAM_HEARTBEAT_INTERVAL_SECONDS)
+
+
+def _heartbeat_loop(stop: threading.Event) -> None:
+    while not stop.is_set():
+        mark_heartbeat(STREAM_PROCESS_HEARTBEAT)
+        _ = stop.wait(STREAM_HEARTBEAT_INTERVAL_SECONDS)

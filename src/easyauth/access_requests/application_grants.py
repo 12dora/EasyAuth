@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Literal, Protocol, override
+from typing import TYPE_CHECKING, Final, Protocol, override
 
+from django.db.models import Q
 from django.utils import timezone
 
 from easyauth.access_requests.application_target_validation import apply_target_errors
@@ -15,7 +16,13 @@ from easyauth.access_requests.submission_types import ScopedAccessRequestGrant
 from easyauth.access_requests.submission_validation import validated_request_type
 from easyauth.grants.models import AccessGrantGroup, AccessGrantPermission
 from easyauth.grants.operations import current_grant
-from easyauth.grants.services import GrantMutationInput, GrantService, ScopedDirectGrantInput
+from easyauth.grants.services import (
+    AuthorizationGroupGrantInput,
+    GrantMutationExpiredError,
+    GrantMutationInput,
+    GrantService,
+    ScopedDirectGrantInput,
+)
 
 if TYPE_CHECKING:
     from datetime import datetime
@@ -23,8 +30,6 @@ if TYPE_CHECKING:
     from easyauth.access_requests.submission_types import AccessRequestType
     from easyauth.applications.models import AuthorizationGroup
     from easyauth.grants.models import AccessGrant
-
-type ApplicationGrantType = Literal["permanent", "timed"]
 
 CURRENT_GRANT_REQUIRED_MESSAGE: Final = "current active grant is required"
 TARGET_CONFIGURATION_REQUIRED_MESSAGE: Final = "target configuration is no longer valid"
@@ -41,7 +46,6 @@ class GrantApplyFailureError(Exception):
 
 @dataclass(frozen=True, slots=True)
 class _GrantLifecycle:
-    grant_type: ApplicationGrantType
     grant_expires_at: datetime | None
 
 
@@ -64,6 +68,12 @@ def apply_grant_fact(
     authorization_groups = _selected_authorization_groups(access_request)
     direct_grants = _selected_direct_grants(access_request)
     request_type = validated_request_type(access_request.request_type)
+    if (
+        request_type != "revoke"
+        and access_request.grant_expires_at is not None
+        and access_request.grant_expires_at <= timezone.now()
+    ):
+        raise GrantMutationExpiredError
     if apply_target_errors(access_request.app, request_type, authorization_groups, direct_grants):
         raise GrantApplyFailureError(TARGET_CONFIGURATION_REQUIRED_MESSAGE)
     return _apply_validated_grant_request(
@@ -183,12 +193,12 @@ def _apply_revoke_request(
     if authorization_groups or direct_grants:
         _validate_revoke_target(current, authorization_groups, direct_grants)
         return GrantService.change_grant(
-            _grant_mutation_input(
+            _current_membership_mutation_input(
                 access_request,
                 input_data,
                 authorization_groups,
                 direct_grants,
-                _current_grant_lifecycle(access_request),
+                current,
             ),
         )
     revoked = GrantService.revoke_grant(
@@ -220,16 +230,7 @@ def _request_grant_mutation_input(
 
 def _request_grant_lifecycle(access_request: AccessRequest) -> _GrantLifecycle:
     return _GrantLifecycle(
-        grant_type=_grant_type(access_request.grant_type),
         grant_expires_at=access_request.grant_expires_at,
-    )
-
-
-def _current_grant_lifecycle(access_request: AccessRequest) -> _GrantLifecycle:
-    grant = _active_current_grant(access_request)
-    return _GrantLifecycle(
-        grant_type=_grant_type(grant.grant_type),
-        grant_expires_at=grant.grant_expires_at,
     )
 
 
@@ -242,16 +243,9 @@ def _active_current_grant(access_request: AccessRequest) -> AccessGrant:
             pass
         case _:
             raise GrantApplyFailureError(CURRENT_GRANT_REQUIRED_MESSAGE)
-    match grant.grant_type:
-        case "permanent":
-            return grant
-        case "timed":
-            expires_at = grant.grant_expires_at
-            if expires_at is None or expires_at <= timezone.now():
-                raise GrantApplyFailureError(CURRENT_GRANT_REQUIRED_MESSAGE)
-            return grant
-        case _:
-            raise GrantApplyFailureError(CURRENT_GRANT_REQUIRED_MESSAGE)
+    if not _grant_has_effective_membership(grant):
+        raise GrantApplyFailureError(CURRENT_GRANT_REQUIRED_MESSAGE)
+    return grant
 
 
 def _validate_revoke_target(
@@ -281,16 +275,19 @@ def _validate_renew_target(
         raise GrantApplyFailureError(CURRENT_GRANT_REQUIRED_MESSAGE)
     if _target_direct_grants(direct_grants) != _current_direct_grants(current):
         raise GrantApplyFailureError(CURRENT_GRANT_REQUIRED_MESSAGE)
-    current_expires_at = current.grant_expires_at
-    if current_expires_at is None or requested_expires_at is None:
+    current_expirations = _current_membership_expirations(current)
+    if not current_expirations or requested_expires_at is None:
         raise GrantApplyFailureError(CURRENT_GRANT_REQUIRED_MESSAGE)
-    if requested_expires_at <= current_expires_at:
+    if any(expires_at is None for expires_at in current_expirations):
+        raise GrantApplyFailureError(CURRENT_GRANT_REQUIRED_MESSAGE)
+    if any(requested_expires_at <= expires_at for expires_at in current_expirations if expires_at):
         raise GrantApplyFailureError(CURRENT_GRANT_REQUIRED_MESSAGE)
 
 
 def _current_group_ids(grant: AccessGrant) -> set[int]:
+    effective = Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now())
     return set(
-        AccessGrantGroup.objects.filter(grant=grant).values_list(
+        AccessGrantGroup.objects.filter(effective, grant=grant).values_list(
             "authorization_group_id",
             flat=True,
         ),
@@ -298,8 +295,9 @@ def _current_group_ids(grant: AccessGrant) -> set[int]:
 
 
 def _current_direct_grants(grant: AccessGrant) -> set[tuple[int, str]]:
+    effective = Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now())
     return set(
-        AccessGrantPermission.objects.filter(grant=grant).values_list(
+        AccessGrantPermission.objects.filter(effective, grant=grant).values_list(
             "permission_id",
             "scope_key",
         ),
@@ -322,19 +320,83 @@ def _grant_mutation_input(
     return GrantMutationInput(
         user=access_request.user,
         app=access_request.app,
-        grant_type=lifecycle.grant_type,
-        grant_expires_at=lifecycle.grant_expires_at,
-        authorization_groups=authorization_groups,
+        authorization_groups=tuple(
+            AuthorizationGroupGrantInput(
+                authorization_group=authorization_group,
+                expires_at=lifecycle.grant_expires_at,
+            )
+            for authorization_group in authorization_groups
+        ),
         direct_grants=tuple(
             ScopedDirectGrantInput(
                 permission=direct_grant.permission,
                 scope_key=direct_grant.scope_key,
+                expires_at=lifecycle.grant_expires_at,
             )
             for direct_grant in direct_grants
         ),
         actor_type=input_data.actor_type,
         actor_id=input_data.actor_id,
     )
+
+
+def _current_membership_mutation_input(
+    access_request: AccessRequest,
+    input_data: _GrantApplicationInput,
+    authorization_groups: tuple[AuthorizationGroup, ...],
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
+    current: AccessGrant,
+) -> GrantMutationInput:
+    group_expirations = dict(
+        AccessGrantGroup.objects.filter(grant=current).values_list(
+            "authorization_group_id",
+            "expires_at",
+        ),
+    )
+    direct_expirations = {
+        (permission_id, scope_key): expires_at
+        for permission_id, scope_key, expires_at in AccessGrantPermission.objects.filter(
+            grant=current,
+        ).values_list("permission_id", "scope_key", "expires_at")
+    }
+    return GrantMutationInput(
+        user=access_request.user,
+        app=access_request.app,
+        authorization_groups=tuple(
+            AuthorizationGroupGrantInput(group, group_expirations[group.id])
+            for group in authorization_groups
+        ),
+        direct_grants=tuple(
+            ScopedDirectGrantInput(
+                direct_grant.permission,
+                direct_grant.scope_key,
+                direct_expirations[(direct_grant.permission.id, direct_grant.scope_key)],
+            )
+            for direct_grant in direct_grants
+        ),
+        actor_type=input_data.actor_type,
+        actor_id=input_data.actor_id,
+    )
+
+
+def _grant_has_effective_membership(grant: AccessGrant) -> bool:
+    effective = Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now())
+    return AccessGrantGroup.objects.filter(effective, grant=grant).exists() or (
+        AccessGrantPermission.objects.filter(effective, grant=grant).exists()
+    )
+
+
+def _current_membership_expirations(grant: AccessGrant) -> tuple[datetime | None, ...]:
+    effective = Q(expires_at__isnull=True) | Q(expires_at__gt=timezone.now())
+    group_expirations = AccessGrantGroup.objects.filter(effective, grant=grant).values_list(
+        "expires_at",
+        flat=True,
+    )
+    direct_expirations = AccessGrantPermission.objects.filter(effective, grant=grant).values_list(
+        "expires_at",
+        flat=True,
+    )
+    return (*group_expirations, *direct_expirations)
 
 
 def _selected_authorization_groups(access_request: AccessRequest) -> tuple[AuthorizationGroup, ...]:
@@ -353,14 +415,3 @@ def _selected_direct_grants(access_request: AccessRequest) -> tuple[ScopedAccess
             access_request=access_request,
         )
     )
-
-
-def _grant_type(value: str) -> ApplicationGrantType:
-    match value:
-        case "permanent":
-            return "permanent"
-        case "timed":
-            return "timed"
-        case unsupported:
-            message = f"unsupported grant type: {unsupported}"
-            raise GrantApplyFailureError(message)

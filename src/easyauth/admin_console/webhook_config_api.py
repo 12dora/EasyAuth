@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import secrets
 from http import HTTPStatus
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, Final
 
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -17,6 +17,11 @@ from easyauth.api.errors import ErrorCode
 from easyauth.applications.models import App
 from easyauth.applications.ownership import ConsoleActor, can_manage_app
 from easyauth.audit.services import AuditRecord, AuditService
+from easyauth.config.net import (
+    BlockedHostError,
+    InvalidWebhookUrlError,
+    validate_public_https_url,
+)
 from easyauth.webhooks.delivery import WebhookNotConfiguredError, enqueue_delivery
 from easyauth.webhooks.models import WEBHOOK_EVENT_TEST, AppWebhookConfig
 
@@ -25,6 +30,7 @@ if TYPE_CHECKING:
 
 type JsonObject = dict[str, "JsonValue"]
 type AppContextResult = tuple[App, "ConsoleActor"] | JsonResponse
+WEBHOOK_CONFIG_DNS_TIMEOUT_SECONDS: Final = 5.0
 
 
 class WebhookConfigPayload(BaseModel):
@@ -112,6 +118,19 @@ def _update_config(request: HttpRequest, app: App, actor: ConsoleActor) -> JsonR
         payload = WebhookConfigPayload.model_validate_json(request.body)
     except ValidationError as exc:
         return _validation_error("webhook 配置参数无效。", {"errors": str(exc)})
+    try:
+        for url in (
+            payload.approval_callback_url,
+            payload.handover_url,
+            payload.onboard_url,
+        ):
+            if url:
+                _ = validate_public_https_url(
+                    url,
+                    dns_timeout_seconds=WEBHOOK_CONFIG_DNS_TIMEOUT_SECONDS,
+                )
+    except (BlockedHostError, InvalidWebhookUrlError) as exc:
+        return _validation_error(str(exc))
     config, _created = AppWebhookConfig.objects.get_or_create(app=app)
     config.enabled = payload.enabled
     config.approval_callback_url = payload.approval_callback_url

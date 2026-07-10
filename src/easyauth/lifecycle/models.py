@@ -47,6 +47,7 @@ TASK_OPEN_STATUSES: Final[tuple[str, ...]] = (TASK_STATUS_PENDING, TASK_STATUS_I
 ACTION_STATUS_PENDING: Final = "pending"
 ACTION_STATUS_PREVIEWED: Final = "previewed"
 ACTION_STATUS_EXECUTING: Final = "executing"
+ACTION_STATUS_ASYNC_PENDING: Final = "async_pending"
 ACTION_STATUS_DONE: Final = "done"
 ACTION_STATUS_FAILED: Final = "failed"
 ACTION_STATUS_SKIPPED: Final = "skipped"
@@ -54,6 +55,7 @@ ACTION_STATUS_CHOICES: Final[tuple[tuple[str, str], ...]] = (
     (ACTION_STATUS_PENDING, "pending"),
     (ACTION_STATUS_PREVIEWED, "previewed"),
     (ACTION_STATUS_EXECUTING, "executing"),
+    (ACTION_STATUS_ASYNC_PENDING, "async_pending"),
     (ACTION_STATUS_DONE, "done"),
     (ACTION_STATUS_FAILED, "failed"),
     (ACTION_STATUS_SKIPPED, "skipped"),
@@ -62,6 +64,7 @@ ACTION_STATUS_VALUES: Final[tuple[str, ...]] = (
     ACTION_STATUS_PENDING,
     ACTION_STATUS_PREVIEWED,
     ACTION_STATUS_EXECUTING,
+    ACTION_STATUS_ASYNC_PENDING,
     ACTION_STATUS_DONE,
     ACTION_STATUS_FAILED,
     ACTION_STATUS_SKIPPED,
@@ -157,6 +160,8 @@ class HandoverAppAction(models.Model):
         id: ClassVar[int]
         task_id: ClassVar[int]
         app_id: ClassVar[int]
+        to_user_id: ClassVar[int | None]
+        execution_to_user_id: ClassVar[int | None]
 
     task: models.ForeignKey[HandoverTask, HandoverTask] = models.ForeignKey(
         HandoverTask,
@@ -165,8 +170,13 @@ class HandoverAppAction(models.Model):
     )
     app: models.ForeignKey[App, App] = models.ForeignKey(
         App,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="handover_actions",
+    )
+    app_key_snapshot: models.CharField[str, str] = models.CharField(max_length=64, default="")
+    app_name_snapshot: models.CharField[str, str] = models.CharField(max_length=128, default="")
+    app_catalog_version_snapshot: models.PositiveIntegerField[int, int] = (
+        models.PositiveIntegerField(default=0)
     )
     to_user: models.ForeignKey[UserMirror | None, UserMirror | None] = models.ForeignKey(
         UserMirror,
@@ -192,6 +202,24 @@ class HandoverAppAction(models.Model):
         dict[str, JsonValue],
         dict[str, JsonValue],
     ] = models.JSONField(default=dict, blank=True)
+    execution_to_user: models.ForeignKey[
+        UserMirror | None,
+        UserMirror | None,
+    ] = models.ForeignKey(
+        UserMirror,
+        on_delete=models.PROTECT,
+        related_name="handover_executions",
+        blank=True,
+        null=True,
+    )
+    execution_policy: models.JSONField[
+        dict[str, JsonValue],
+        dict[str, JsonValue],
+    ] = models.JSONField(default=dict, blank=True)
+    async_status_url: models.URLField[str, str] = models.URLField(max_length=2048, blank=True)
+    async_poll_attempts: models.PositiveIntegerField[int, int] = models.PositiveIntegerField(
+        default=0,
+    )
     attempts: models.PositiveIntegerField[int, int] = models.PositiveIntegerField(default=0)
     last_error: models.TextField[str, str] = models.TextField(blank=True)
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
@@ -218,6 +246,16 @@ class HandoverAppAction(models.Model):
     def __str__(self) -> str:
         return f"{self.task_id}:{self.app.app_key}:{self.status}"
 
+    @override
+    def save(self, *args: object, **kwargs: object) -> None:
+        if not self.app_key_snapshot:
+            self.app_key_snapshot = self.app.app_key
+        if not self.app_name_snapshot:
+            self.app_name_snapshot = self.app.name
+        if not self.app_catalog_version_snapshot:
+            self.app_catalog_version_snapshot = self.app.catalog_version
+        super().save(*args, **kwargs)
+
 
 class HandoverGrantItem(models.Model):
     # 建单时对当事人现有授权(current 行, 含刚被撤销的)做快照;
@@ -234,27 +272,41 @@ class HandoverGrantItem(models.Model):
     )
     app: models.ForeignKey[App, App] = models.ForeignKey(
         App,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="handover_grant_items",
+    )
+    app_key_snapshot: models.CharField[str, str] = models.CharField(max_length=64, default="")
+    app_name_snapshot: models.CharField[str, str] = models.CharField(max_length=128, default="")
+    app_catalog_version_snapshot: models.PositiveIntegerField[int, int] = (
+        models.PositiveIntegerField(default=0)
     )
     authorization_group: models.ForeignKey[
         AuthorizationGroup | None,
         AuthorizationGroup | None,
     ] = models.ForeignKey(
         AuthorizationGroup,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         related_name="handover_grant_items",
         blank=True,
         null=True,
     )
     permission: models.ForeignKey[Permission | None, Permission | None] = models.ForeignKey(
         Permission,
-        on_delete=models.CASCADE,
+        on_delete=models.SET_NULL,
         related_name="handover_grant_items",
         blank=True,
         null=True,
     )
     scope_key: models.CharField[str, str] = models.CharField(max_length=64, blank=True)
+    target_kind_snapshot: models.CharField[str, str] = models.CharField(max_length=16, default="")
+    target_key_snapshot: models.CharField[str, str] = models.CharField(max_length=128, default="")
+    target_name_snapshot: models.CharField[str, str] = models.CharField(max_length=128, default="")
+    source_grant_id: models.PositiveBigIntegerField[int, int] = models.PositiveBigIntegerField(
+        default=0,
+    )
+    source_grant_version: models.PositiveIntegerField[int, int] = models.PositiveIntegerField(
+        default=0,
+    )
     grant_type: models.CharField[str, str] = models.CharField(max_length=16, blank=True)
     grant_expires_at: models.DateTimeField[
         str | date | datetime | None,
@@ -276,12 +328,8 @@ class HandoverGrantItem(models.Model):
                 condition=Q(status__in=ITEM_STATUS_VALUES),
                 name="lifecycle_grant_item_status_supported",
             ),
-            # 快照条目必须指向授权组或(权限+范围)其一。
             models.CheckConstraint(
-                condition=(
-                    Q(authorization_group__isnull=False, permission__isnull=True)
-                    | Q(authorization_group__isnull=True, permission__isnull=False)
-                ),
+                condition=Q(target_kind_snapshot__in=("group", "permission")),
                 name="lifecycle_grant_item_target_shape",
             ),
         ]
@@ -294,11 +342,9 @@ class HandoverGrantItem(models.Model):
     @override
     def clean(self) -> None:
         super().clean()
-        has_group = self.authorization_group is not None
-        has_permission = self.permission is not None
-        if has_group == has_permission:
+        if self.target_kind_snapshot not in {"group", "permission"}:
             raise ValidationError(
-                {"authorization_group": "Grant item must target a group or a permission."},
+                {"target_kind_snapshot": "Grant item target kind is invalid."},
             )
 
 
@@ -432,6 +478,13 @@ class OnboardingTemplateItem(models.Model):
                 ),
                 name="lifecycle_template_item_target_shape",
             ),
+            models.CheckConstraint(
+                condition=(
+                    Q(grant_type="permanent", duration_days__isnull=True)
+                    | Q(grant_type="timed", duration_days__isnull=False)
+                ),
+                name="lifecycle_template_item_expiration_shape",
+            ),
         ]
         ordering: ClassVar[list[str]] = ["template_id", "app__app_key", "id"]
 
@@ -450,6 +503,12 @@ class OnboardingTemplateItem(models.Model):
             )
         if self.grant_type == "timed" and not self.duration_days:
             raise ValidationError({"duration_days": "Timed template items need duration_days."})
+        if self.grant_type == "permanent" and self.duration_days is not None:
+            raise ValidationError(
+                {"duration_days": "Permanent template items cannot include duration_days."},
+            )
+        if self.grant_type not in {"permanent", "timed"}:
+            raise ValidationError({"grant_type": "Template item grant type is invalid."})
 
 
 class TransferPlan(models.Model):
@@ -481,6 +540,14 @@ class TransferPlan(models.Model):
         str | date | datetime | None,
         datetime | None,
     ] = models.DateTimeField(blank=True, null=True)
+    confirmed_revoke_keys: models.JSONField[list[str], list[str]] = models.JSONField(
+        default=list,
+        blank=True,
+    )
+    confirmed_add_keys: models.JSONField[list[str], list[str]] = models.JSONField(
+        default=list,
+        blank=True,
+    )
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
     )

@@ -10,7 +10,6 @@ from easyauth.applications.models import App, AppScope, Permission
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import (
     GRANT_STATUS_REVOKED,
-    GRANT_TYPE_PERMANENT,
     AccessGrant,
     AccessGrantPermission,
 )
@@ -42,8 +41,8 @@ def test_s13_emergency_revoke_for_user_revokes_current_grants_without_adding_per
     erp = App.objects.create(app_key="s13-emergency-erp", name="S13 Emergency ERP")
     crm_permission = _scoped_permission(crm, key="invoice.read", name="Read invoices")
     erp_permission = _scoped_permission(erp, key="order.read", name="Read orders")
-    crm_grant = AccessGrant.objects.create(user=user, app=crm, grant_type=GRANT_TYPE_PERMANENT)
-    erp_grant = AccessGrant.objects.create(user=user, app=erp, grant_type=GRANT_TYPE_PERMANENT)
+    crm_grant = AccessGrant.objects.create(user=user, app=crm)
+    erp_grant = AccessGrant.objects.create(user=user, app=erp)
     _ = AccessGrantPermission.objects.create(
         grant=crm_grant,
         permission=crm_permission,
@@ -100,7 +99,7 @@ def test_s13_admin_console_emergency_revoke_uses_grant_write_boundary() -> None:
     user = UserMirror.objects.create(authentik_user_id="s13-admin-emergency-user")
     app = App.objects.create(app_key="s13-admin-emergency-app", name="S13 Admin Emergency")
     permission = _scoped_permission(app, key="invoice.read", name="Read invoices")
-    grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
+    grant = AccessGrant.objects.create(user=user, app=app)
     _ = AccessGrantPermission.objects.create(
         grant=grant,
         permission=permission,

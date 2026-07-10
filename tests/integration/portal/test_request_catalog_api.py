@@ -4,7 +4,9 @@ from http import HTTPStatus
 from typing import Final
 
 import pytest
+from django.db import connection
 from django.test import Client
+from django.test.utils import CaptureQueriesContext
 
 from easyauth.accounts.models import USER_STATUS_DISABLED, UserMirror
 from easyauth.applications.models import (
@@ -470,6 +472,61 @@ def test_portal_request_catalog_returns_active_approver_options_and_defaults() -
     assert app_defaults[orphan_app.app_key] == [manager.authentik_user_id]
     assert group_defaults[group.key] == [rule_approver.authentik_user_id]
     assert permission_defaults[permission.key] == [manager.authentik_user_id]
+
+
+def test_portal_request_catalog_queries_only_candidate_approvers() -> None:
+    # Given: 目录中只有主管、owner 和规则审批人可能成为本次候选人。
+    client, user = logged_in_client("portal-catalog-directed-user")
+    user.manager_userid = "directed-manager-dt"
+    user.save(update_fields=["manager_userid"])
+    manager = UserMirror.objects.create(
+        authentik_user_id="portal-catalog-directed-manager",
+        dingtalk_userid="directed-manager-dt",
+    )
+    owner = UserMirror.objects.create(authentik_user_id="portal-catalog-directed-owner")
+    rule_approver = UserMirror.objects.create(
+        authentik_user_id="portal-catalog-directed-rule",
+    )
+    unrelated = UserMirror.objects.create(
+        authentik_user_id="portal-catalog-directed-unrelated",
+    )
+    app = App.objects.create(app_key="catalog-directed-app", name="定向查询 App")
+    _ = AppMembership.objects.create(app=app, user_id=owner.authentik_user_id, role="owner")
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="directed-group",
+        kind="role",
+        name="定向授权组",
+    )
+    _ = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=group,
+        approver_userids=[rule_approver.authentik_user_id],
+    )
+
+    # When
+    with CaptureQueriesContext(connection) as captured:
+        response = client.get(REQUEST_CATALOG_URL)
+
+    # Then: UserMirror 候选查询带定向 ID 条件, 无关在职用户不会被加载或暴露。
+    payload = json_object(response)
+    candidate_queries = [
+        query["sql"]
+        for query in captured.captured_queries
+        if "accounts_usermirror" in query["sql"]
+        and rule_approver.authentik_user_id in query["sql"]
+    ]
+    assert response.status_code == HTTPStatus.OK
+    assert len(candidate_queries) == 1
+    candidate_query = candidate_queries[0]
+    assert manager.dingtalk_userid in candidate_query
+    assert owner.authentik_user_id in candidate_query
+    assert unrelated.authentik_user_id not in candidate_query
+    assert unrelated.authentik_user_id not in response.content.decode()
+    assert {option["user_id"] for option in payload["approver_options"]} == {
+        manager.authentik_user_id,
+        rule_approver.authentik_user_id,
+    }
 
 
 def test_portal_request_catalog_uses_direct_manager_for_managed_users_targets() -> None:

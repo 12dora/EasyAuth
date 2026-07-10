@@ -17,7 +17,6 @@ from easyauth.applications.models import (
     OAuthClientBinding,
     Permission,
     PermissionGroup,
-    Role,
 )
 from easyauth.audit.models import AuditLog
 
@@ -33,12 +32,11 @@ class HttpResponseLike(Protocol):
 
 
 def test_ops_contract_list_responses_use_canonical_data_key() -> None:
-    # Given: 系统管理员面对 App、成员、角色、权限、分组和凭据列表。
+    # Given: 系统管理员面对 App、成员、权限、分组和凭据列表。
     client = _logged_in_superuser("ops-contract-list-admin")
     app = App.objects.create(app_key="ops-contract-list-app", name="Contract App")
     _ = AppMembership.objects.create(app=app, user_id="ops-contract-member", role="owner")
     _ = PermissionGroup.objects.create(app=app, key="ROOT", name="Root")
-    _ = Role.objects.create(app=app, key="auditor", name="Auditor")
     _ = Permission.objects.create(app=app, key="reports.read", name="Read reports")
 
     # When: 调用文档定义为列表响应的 admin_console API。
@@ -46,7 +44,6 @@ def test_ops_contract_list_responses_use_canonical_data_key() -> None:
         client.get(APPS_API_URL),
         client.get(f"{APPS_API_URL}/{app.app_key}/memberships"),
         client.get(f"{APPS_API_URL}/{app.app_key}/permission-groups"),
-        client.get(f"{APPS_API_URL}/{app.app_key}/roles"),
         client.get(f"{APPS_API_URL}/{app.app_key}/permissions"),
         client.get(f"{APPS_API_URL}/{app.app_key}/credentials"),
     ]
@@ -125,7 +122,6 @@ def test_ops_contract_oauth_client_can_be_disabled_by_generic_route() -> None:
     ("endpoint", "lookup_key", "payload", "model"),
     [
         ("permission-groups", "ROOT", {"name": "Root Updated"}, PermissionGroup),
-        ("roles", "auditor", {"description": "Updated"}, Role),
         ("permissions", "reports.read", {"name": "Read Reports Updated"}, Permission),
     ],
 )
@@ -133,7 +129,7 @@ def test_ops_contract_catalog_patch_accepts_key_route(
     endpoint: str,
     lookup_key: str,
     payload: dict[str, str],
-    model: type[PermissionGroup | Role | Permission],
+    model: type[PermissionGroup | Permission],
 ) -> None:
     # Given: owner 管理已有 catalog 资源。
     client = _logged_in_user(f"ops-contract-{endpoint}-owner")
@@ -158,8 +154,6 @@ def _seed_catalog_resource(*, app: App, endpoint: str, key: str) -> None:
     match endpoint:
         case "permission-groups":
             _ = PermissionGroup.objects.create(app=app, key=key, name=key)
-        case "roles":
-            _ = Role.objects.create(app=app, key=key, name=key)
         case "permissions":
             scope = AppScope.objects.create(app=app, key="GLOBAL", name="Global")
             _ = Permission.objects.create(

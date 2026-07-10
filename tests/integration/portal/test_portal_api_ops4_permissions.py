@@ -8,6 +8,7 @@ from typing import Final
 import pytest
 from django.utils import timezone
 
+from easyauth.access_requests.approvals import access_request_approver_user_ids
 from easyauth.access_requests.models import AccessRequest, AccessRequestPermission
 from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import (
@@ -61,6 +62,7 @@ def test_ops4_portal_api_submits_grant_request_with_direct_permission_without_ru
             },
         ),
         content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-test-idempotency",
     )
 
     # Then: API 创建 grant 申请并保留 permission 目标。
@@ -79,7 +81,7 @@ def test_ops4_portal_api_submits_grant_request_with_direct_permission_without_ru
     )
     assert response.status_code == HTTPStatus.CREATED
     assert access_request.request_type == "grant"
-    assert access_request.approver_user_ids == [_active_approver_user_id()]
+    assert access_request_approver_user_ids(access_request) == [_active_approver_user_id()]
     assert permission_keys == (permission.key,)
     assert scope_keys == (DEFAULT_SCOPE_KEY,)
 
@@ -106,11 +108,88 @@ def test_ops4_portal_api_rejects_access_request_without_approver() -> None:
             },
         ),
         content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-test-idempotency",
     )
 
     # Then: API 拒绝提交, 不创建申请。
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
     assert AccessRequest.objects.filter(user=user, app=app).exists() is False
+
+
+def test_portal_access_request_requires_valid_idempotency_key() -> None:
+    client, user = logged_in_client("portal-idempotency-required-user")
+    app = App.objects.create(app_key="portal-idempotency-required", name="幂等校验")
+    permission = _requestable_permission(app=app, key="invoice.read")
+    payload = _direct_request_payload(app, permission)
+
+    missing = client.post(
+        REQUESTS_API_URL,
+        data=dumps(payload),
+        content_type="application/json",
+    )
+    invalid = client.post(
+        REQUESTS_API_URL,
+        data=dumps(payload),
+        content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY=" invalid ",
+    )
+
+    assert missing.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert invalid.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert AccessRequest.objects.filter(user=user).exists() is False
+
+
+def test_portal_access_request_replays_same_payload_with_original_id() -> None:
+    client, user = logged_in_client("portal-idempotency-replay-user")
+    app = App.objects.create(app_key="portal-idempotency-replay", name="幂等重放")
+    permission = _requestable_permission(app=app, key="invoice.read")
+    payload = _direct_request_payload(app, permission)
+
+    first = client.post(
+        REQUESTS_API_URL,
+        data=dumps(payload),
+        content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-replay-key",
+    )
+    replay = client.post(
+        REQUESTS_API_URL,
+        data=dumps(payload),
+        content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-replay-key",
+    )
+
+    first_item = json_object(first)["access_request"]
+    replay_item = json_object(replay)["access_request"]
+    assert isinstance(first_item, dict)
+    assert isinstance(replay_item, dict)
+    assert first.status_code == HTTPStatus.CREATED
+    assert replay.status_code == HTTPStatus.CREATED
+    assert replay_item["id"] == first_item["id"]
+    assert AccessRequest.objects.filter(user=user).count() == 1
+
+
+def test_portal_access_request_rejects_idempotency_key_payload_conflict() -> None:
+    client, user = logged_in_client("portal-idempotency-conflict-user")
+    app = App.objects.create(app_key="portal-idempotency-conflict", name="幂等冲突")
+    permission = _requestable_permission(app=app, key="invoice.read")
+    payload = _direct_request_payload(app, permission)
+
+    first = client.post(
+        REQUESTS_API_URL,
+        data=dumps(payload),
+        content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-conflict-key",
+    )
+    conflict = client.post(
+        REQUESTS_API_URL,
+        data=dumps({**payload, "reason": "不同申请事实"}),
+        content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-conflict-key",
+    )
+
+    assert first.status_code == HTTPStatus.CREATED
+    assert conflict.status_code == HTTPStatus.CONFLICT
+    assert AccessRequest.objects.filter(user=user).count() == 1
 
 
 def test_ops4_portal_api_lists_access_request_direct_permissions() -> None:
@@ -140,6 +219,7 @@ def test_ops4_portal_api_lists_access_request_direct_permissions() -> None:
             },
         ),
         content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-test-idempotency",
     )
 
     # When: 员工查询自己的申请列表。
@@ -253,3 +333,16 @@ def _requestable_permission(*, app: App, key: str) -> Permission:
         name=key,
         supported_scopes=[DEFAULT_SCOPE_KEY],
     )
+
+
+def _direct_request_payload(app: App, permission: Permission) -> dict[str, object]:
+    return {
+        "app_key": app.app_key,
+        "request_type": "grant",
+        "authorization_group_keys": [],
+        "direct_grants": [{"permission": permission.key, "scope": DEFAULT_SCOPE_KEY}],
+        "approver_user_ids": [_active_approver_user_id()],
+        "grant_type": "permanent",
+        "grant_expires_at": None,
+        "reason": "申请 direct permission",
+    }

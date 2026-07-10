@@ -14,15 +14,20 @@ from oauth2_provider.models import AccessToken, Application
 
 from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode
-from easyauth.applications.models import App, Permission, Role, RolePermission
+from easyauth.applications.models import (
+    App,
+    AppScope,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
+    Permission,
+)
 from easyauth.applications.oauth import OAuthClientIssue, OAuthClientService
 from easyauth.applications.services import StaticTokenService
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import (
-    GRANT_TYPE_PERMANENT,
     AccessGrant,
+    AccessGrantGroup,
     AccessGrantPermission,
-    AccessGrantRole,
 )
 
 pytestmark = pytest.mark.django_db
@@ -93,18 +98,56 @@ def test_permission_query_returns_identical_json_for_static_and_oauth_credential
     app = App.objects.create(app_key="crm-oauth-equivalent", name="CRM OAuth Equivalent")
     static_issue = StaticTokenService.create_token(app=app, name="static integration")
     oauth_issue = _create_bound_oauth_client(app=app, name="CRM OAuth client")
-    admin = Role.objects.create(app=app, key="admin", name="Admin")
-    auditor = Role.objects.create(app=app, key="auditor", name="Auditor")
-    approve = Permission.objects.create(app=app, key="invoice.approve", name="Approve invoices")
-    read = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
-    write = Permission.objects.create(app=app, key="invoice.write", name="Write invoices")
-    _ = RolePermission.objects.create(role=admin, permission=write)
-    _ = RolePermission.objects.create(role=auditor, permission=read)
-    _ = RolePermission.objects.create(role=auditor, permission=write)
-    grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-    _ = AccessGrantRole.objects.create(grant=grant, role=auditor)
-    _ = AccessGrantRole.objects.create(grant=grant, role=admin)
-    _ = AccessGrantPermission.objects.create(grant=grant, permission=approve)
+    _ = AppScope.objects.create(app=app, key="GLOBAL", name="全局")
+    admin = AuthorizationGroup.objects.create(
+        app=app,
+        key="admin",
+        kind="role",
+        name="管理员",
+    )
+    auditor = AuthorizationGroup.objects.create(
+        app=app,
+        key="auditor",
+        kind="role",
+        name="审计员",
+    )
+    approve = Permission.objects.create(
+        app=app,
+        key="invoice.approve",
+        name="Approve invoices",
+        supported_scopes=["GLOBAL"],
+    )
+    read = Permission.objects.create(
+        app=app,
+        key="invoice.read",
+        name="Read invoices",
+        supported_scopes=["GLOBAL"],
+    )
+    write = Permission.objects.create(
+        app=app,
+        key="invoice.write",
+        name="Write invoices",
+        supported_scopes=["GLOBAL"],
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=admin,
+        permission=write,
+        scope_key="GLOBAL",
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=auditor,
+        permission=read,
+        scope_key="GLOBAL",
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=auditor,
+        permission=write,
+        scope_key="GLOBAL",
+    )
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=auditor)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=admin)
+    _ = AccessGrantPermission.objects.create(grant=grant, permission=approve, expires_at=None)
     oauth_access_token = _request_oauth_access_token(oauth_issue)
 
     # When: 静态 token 与 OAuth access token 分别查询同一用户权限。
@@ -121,6 +164,37 @@ def test_permission_query_returns_identical_json_for_static_and_oauth_credential
     assert static_response.status_code == HTTPStatus.OK
     assert oauth_response.status_code == HTTPStatus.OK
     assert _response_body(oauth_response) == _response_body(static_response)
+    payload = static_response.json()
+    assert payload["groups"] == [
+        {"key": "admin", "kind": "role", "name": "管理员"},
+        {"key": "auditor", "kind": "role", "name": "审计员"},
+    ]
+    assert payload["grants"] == [
+        {
+            "permission": "invoice.approve",
+            "scope": "GLOBAL",
+            "source_type": "direct",
+            "source_key": "",
+        },
+        {
+            "permission": "invoice.read",
+            "scope": "GLOBAL",
+            "source_type": "group",
+            "source_key": "auditor",
+        },
+        {
+            "permission": "invoice.write",
+            "scope": "GLOBAL",
+            "source_type": "group",
+            "source_key": "admin",
+        },
+        {
+            "permission": "invoice.write",
+            "scope": "GLOBAL",
+            "source_type": "group",
+            "source_key": "auditor",
+        },
+    ]
     audit_logs = list(AuditLog.objects.filter(event_type="app_permission_queried").order_by("id"))
     assert len(audit_logs) == EXPECTED_PERMISSION_QUERY_AUDIT_LOGS
     assert audit_logs[0].metadata["credential_type"] == "static_token"
@@ -130,8 +204,7 @@ def test_permission_query_returns_identical_json_for_static_and_oauth_credential
     assert oauth_access_token not in str(audit_logs[1].metadata)
 
 
-def test_permission_query_returns_easyauth_errors_for_invalid_unbound_and_disabled_oauth_tokens(
-) -> None:
+def test_permission_query_rejects_invalid_unbound_and_disabled_oauth_tokens() -> None:
     # Given: 存在无效 token、未绑定 EasyAuth App 的 OAuth token、绑定禁用 App 的 OAuth token。
     app = App.objects.create(app_key="crm-oauth-errors", name="CRM OAuth Errors")
     disabled_app = App.objects.create(

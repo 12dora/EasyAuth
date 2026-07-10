@@ -20,7 +20,6 @@ from easyauth.applications.models import (
     AuthorizationGroup,
     AuthorizationGroupGrant,
     Permission,
-    Role,
 )
 from easyauth.applications.services import StaticTokenService
 from easyauth.audit.models import AuditLog
@@ -58,7 +57,11 @@ def test_ops1_console_query_tester_runs_real_permission_query_without_storing_to
         scope_key="SELF",
     )
     grant = AccessGrant.objects.create(user=user, app=app)
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        expires_at=None,
+    )
 
     # When: owner 通过 private API 粘贴 token 并查询测试用户。
     response = client.post(
@@ -86,7 +89,8 @@ def test_ops1_console_query_tester_runs_real_permission_query_without_storing_to
     assert audit_log.metadata["grant_count"] == 1
     assert audit_log.metadata["grant_version"] == 1
     assert audit_log.metadata["catalog_version"] == 1
-    assert audit_log.metadata["snapshot_version"] == "1.1.0"
+    assert audit_log.metadata["snapshot_version"] == payload["snapshot_version"]
+    assert str(payload["snapshot_version"]).startswith("1.1.")
     assert issue.plaintext_token not in str(audit_log.metadata)
 
 
@@ -247,7 +251,6 @@ def test_ops1_console_integration_guide_contains_current_app_examples() -> None:
     # Given: 应用负责人需要读取 App 接入说明。
     client = _logged_in_client("owner-ops1-guide")
     app = _owned_app("ops1-guide", "owner-ops1-guide")
-    _ = Role.objects.create(app=app, key="operator", name="Operator")
     _ = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
 
     # When: React shell 使用 private API 读取接入说明和权限目录。
@@ -296,7 +299,11 @@ def test_ops1_console_query_test_api_allows_owner_and_developer(
         scope_key="SELF",
     )
     grant = AccessGrant.objects.create(user=user, app=app)
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        expires_at=None,
+    )
 
     # When: 成员通过 private console API 发起联调。
     response = client.post(

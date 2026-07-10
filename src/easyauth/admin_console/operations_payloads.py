@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from easyauth.access_requests.approvals import access_request_approver_user_ids
 from easyauth.api.datetime_json import datetime_value
 from easyauth.applications import health_models
 
@@ -15,9 +16,8 @@ type JsonObject = dict[str, JsonValue]
 
 def access_request_decision_fields(access_request: AccessRequest) -> JsonObject:
     # 站内审批闭环(M2)的决定事实: 权限审批不再与钉钉回调有任何关系(§3.0)。
-    approver_ids: list[JsonValue] = [
-        user_id for user_id in access_request.approver_user_ids if user_id
-    ]
+    approver_ids: list[JsonValue] = []
+    approver_ids.extend(access_request_approver_user_ids(access_request))
     return {
         "approver_user_ids": approver_ids,
         "decided_by": access_request.decided_by,
@@ -78,5 +78,3 @@ def _dependency_alias_fields(item: DependencyHealthItem) -> JsonObject:
     }
     fallback: JsonObject = {}
     return aliases.get(item.component, fallback)
-
-

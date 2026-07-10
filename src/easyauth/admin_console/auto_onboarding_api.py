@@ -22,7 +22,8 @@ from easyauth.applications.manifest_import import (
     ManifestVersionConflictError,
     sync_app_manifest,
 )
-from easyauth.applications.models import App
+from easyauth.applications.models import App, AppMembership
+from easyauth.applications.ops_models import APP_MEMBERSHIP_ROLE_OWNER
 from easyauth.applications.permission_templates import PermissionTemplateImportError
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.config.net import (
@@ -124,7 +125,7 @@ def _auto_onboard(*, payload: AutoOnboardingPayload, actor_id: str) -> dict[str,
     manifest = _validated_manifest(descriptor, payload.app_key)
     descriptor_app = descriptor["app"]
     with transaction.atomic():
-        app, created = _ensure_app(payload.app_key, descriptor_app)
+        app, created = _ensure_app(payload.app_key, descriptor_app, actor_id=actor_id)
         try:
             outcome = sync_app_manifest(
                 app=app,
@@ -153,7 +154,12 @@ def _auto_onboard(*, payload: AutoOnboardingPayload, actor_id: str) -> dict[str,
         )
 
 
-def _ensure_app(app_key: str, descriptor_app: dict[str, JsonValue]) -> tuple[App, bool]:
+def _ensure_app(
+    app_key: str,
+    descriptor_app: dict[str, JsonValue],
+    *,
+    actor_id: str,
+) -> tuple[App, bool]:
     app = App.objects.filter(app_key=app_key).first()
     if app is not None:
         return app, False
@@ -165,6 +171,14 @@ def _ensure_app(app_key: str, descriptor_app: dict[str, JsonValue]) -> tuple[App
     )
     app.full_clean()
     app.save()
+    owner = AppMembership(
+        app=app,
+        user_id=actor_id,
+        role=APP_MEMBERSHIP_ROLE_OWNER,
+        is_active=True,
+    )
+    owner.full_clean()
+    owner.save()
     return app, True
 
 

@@ -16,6 +16,7 @@ from easyauth.workflows.models import ApprovalInstance
 from easyauth.workflows.services import (
     ApprovalCreateError,
     create_approval_instance,
+    recover_stale_submission,
 )
 
 if TYPE_CHECKING:
@@ -40,8 +41,9 @@ class _ApprovalCreatePayload(BaseModel):
 
     template_key: str = Field(min_length=1, max_length=64)
     originator_user_id: str = Field(min_length=1, max_length=128)
-    form: dict[str, str] = Field(default_factory=dict)
+    form: dict[str, JsonValue] = Field(default_factory=dict)
     biz_key: str = Field(min_length=1, max_length=128)
+    retry: bool = False
 
 
 @csrf_exempt
@@ -70,6 +72,7 @@ def app_approval_instances(request: HttpRequest, app_key: str) -> JsonResponse:
             form=dict(payload.form),
             biz_key=payload.biz_key,
             actor_id=app.app_key,
+            retry_failed=payload.retry,
         )
     except ApprovalCreateError as exc:
         return _create_error_response(exc)
@@ -101,6 +104,7 @@ def app_approval_instance_detail(
     )
     if instance is None:
         return _error(ErrorCode.NOT_FOUND, "审批实例不存在。", HTTPStatus.NOT_FOUND)
+    instance = recover_stale_submission(instance)
     return JsonResponse(_instance_payload(instance))
 
 
@@ -110,6 +114,8 @@ def _instance_payload(instance: ApprovalInstance) -> dict[str, JsonValue]:
         "template_key": instance.template.key,
         "biz_key": instance.biz_key,
         "status": instance.status,
+        "submission_state": instance.submission_state,
+        "provider_correlation_key": str(instance.provider_correlation_key),
         "originator_user_id": instance.originator_user.authentik_user_id,
         "created_at": instance.created_at.isoformat(),
         "completed_at": (

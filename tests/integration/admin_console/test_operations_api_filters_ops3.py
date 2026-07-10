@@ -24,10 +24,9 @@ from easyauth.applications.services import StaticTokenService
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import (
     GRANT_STATUS_REVOKED,
-    GRANT_TYPE_PERMANENT,
-    GRANT_TYPE_TIMED,
     AccessGrant,
     AccessGrantGroup,
+    AccessGrantPermission,
 )
 
 pytestmark = pytest.mark.django_db
@@ -54,12 +53,16 @@ def test_ops3_access_requests_supports_time_range_and_pagination() -> None:
         app=app,
         status=REQUEST_STATUS_SUBMITTED,
         reason="旧申请",
+        idempotency_key="ops3-old-request",
+        payload_digest="a" * 64,
     )
     new_request = AccessRequest.objects.create(
         user=user,
         app=app,
         status=REQUEST_STATUS_SUBMITTED,
         reason="新申请",
+        idempotency_key="ops3-new-request",
+        payload_digest="b" * 64,
     )
     now = timezone.now()
     _ = AccessRequest.objects.filter(id=old_request.id).update(submitted_at=now - timedelta(days=3))
@@ -90,25 +93,45 @@ def test_ops3_access_grants_supports_version_current_revoked_and_expiration_filt
     client = _logged_in_superuser("ops3-grant-filter-admin")
     user = UserMirror.objects.create(authentik_user_id="ops3-grant-filter-user")
     app = App.objects.create(app_key="ops3-grant-filter-app", name="CRM")
+    _ = AppScope.objects.create(app=app, key="GLOBAL", name="全局")
+    permission = Permission.objects.create(
+        app=app,
+        key="ops3-grant-filter.read",
+        name="读取",
+        supported_scopes=["GLOBAL"],
+    )
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="ops3-grant-filter-group",
+        kind="role",
+        name="筛选组",
+    )
     soon = timezone.now() + timedelta(days=1)
     later = timezone.now() + timedelta(days=10)
-    _ = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
+    _ = AccessGrant.objects.create(user=user, app=app)
     revoked = AccessGrant.objects.create(
         user=user,
         app=app,
-        grant_type=GRANT_TYPE_TIMED,
-        grant_expires_at=soon,
         status=GRANT_STATUS_REVOKED,
         is_current=False,
         version=2,
     )
+    _ = AccessGrantGroup.objects.create(
+        grant=revoked,
+        authorization_group=group,
+        expires_at=soon,
+    )
     other_user = UserMirror.objects.create(authentik_user_id="ops3-grant-filter-other")
-    _ = AccessGrant.objects.create(
+    other_grant = AccessGrant.objects.create(
         user=other_user,
         app=app,
-        grant_type=GRANT_TYPE_TIMED,
-        grant_expires_at=later,
         version=2,
+    )
+    _ = AccessGrantPermission.objects.create(
+        grant=other_grant,
+        permission=permission,
+        scope_key="GLOBAL",
+        expires_at=later,
     )
 
     # When: 管理员组合 version、current、revoked 和 expires_before 过滤授权。
@@ -130,6 +153,18 @@ def test_ops3_access_grants_supports_version_current_revoked_and_expiration_filt
     assert str(revoked.id) in body
     assert "ops3-grant-filter-other" not in body
     assert _json_int(response, "total_items") == 1
+    item = response.json()["data"][0]
+    assert "grant_type" not in item
+    assert "grant_expires_at" not in item
+    assert item["authorization_groups"] == [
+        {
+            "key": group.key,
+            "kind": group.kind,
+            "name": group.name,
+            "expires_at": soon.isoformat(),
+        },
+    ]
+    assert item["direct_grants"] == []
 
 
 def test_ops3_audit_logs_supports_target_time_range_and_pagination() -> None:
@@ -172,6 +207,39 @@ def test_ops3_audit_logs_supports_target_time_range_and_pagination() -> None:
     assert _json_int(response, "total_items") == 1
 
 
+@pytest.mark.parametrize(
+    ("url", "parameters", "field"),
+    [
+        (ACCESS_REQUESTS_API_URL, {"created_from": "not-a-datetime"}, "created_from"),
+        (ACCESS_REQUESTS_API_URL, {"page": "0"}, "page"),
+        (ACCESS_REQUESTS_API_URL, {"page_size": "101"}, "page_size"),
+        (ACCESS_GRANTS_API_URL, {"version": "two"}, "version"),
+        (ACCESS_GRANTS_API_URL, {"version": "0"}, "version"),
+        (ACCESS_GRANTS_API_URL, {"current": "yes"}, "current"),
+        (ACCESS_GRANTS_API_URL, {"revoked": "1"}, "revoked"),
+        (AUDIT_LOGS_API_URL, {"created_to": "2026-99-99"}, "created_to"),
+    ],
+)
+def test_ops3_rejects_invalid_filter_values(
+    url: str,
+    parameters: dict[str, str],
+    field: str,
+) -> None:
+    # Given: 管理员提交会导致过滤条件被忽略或分页回退的非法值。
+    client = _logged_in_superuser(f"ops3-invalid-{field}-{parameters[field]}")
+
+    # When
+    response = client.get(url, parameters)
+
+    # Then: 请求失败关闭, 不得按未过滤全集返回成功。
+    payload = response.json()
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert payload["error"]["details"] == {
+        "field": field,
+        "value": parameters[field],
+    }
+
+
 def test_ops3_emergency_revoke_removes_public_permission_query_result() -> None:
     # Given: 应用 token 可查询用户当前授权权限。
     admin_client = _logged_in_superuser("ops3-public-revoke-admin")
@@ -194,7 +262,6 @@ def test_ops3_emergency_revoke_removes_public_permission_query_result() -> None:
     grant = AccessGrant.objects.create(
         user=target_user,
         app=app,
-        grant_type=GRANT_TYPE_PERMANENT,
     )
     _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
 

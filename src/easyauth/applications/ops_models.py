@@ -49,7 +49,6 @@ __all__ = (
     "DependencyHealthSnapshot",
     "PermissionGroup",
     "PermissionTemplateVersion",
-    "RoleAccessPolicy",
 )
 
 if TYPE_CHECKING:
@@ -86,12 +85,6 @@ type JsonValue = None | bool | int | float | str | list[JsonValue] | dict[str, J
 class _BoundApp(Protocol):
     id: int
     app_key: str
-
-
-class _BoundRole(Protocol):
-    id: int
-    app_id: int
-    key: str
 
 
 class AppMembership(models.Model):
@@ -234,34 +227,6 @@ class PermissionTemplateVersion(models.Model):
     @override
     def __str__(self) -> str:
         return f"{self.app.app_key}:v{self.version}"
-
-
-class RoleAccessPolicy(models.Model):
-    if TYPE_CHECKING:
-        id: ClassVar[int]
-        role_id: ClassVar[int]
-
-    role: models.ForeignKey[_BoundRole, _BoundRole] = models.ForeignKey(
-        "applications.Role",
-        on_delete=models.CASCADE,
-        related_name="access_policies",
-    )
-    created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
-        auto_now_add=True,
-    )
-    updated_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
-        auto_now=True,
-    )
-
-    class Meta:
-        constraints: ClassVar[list[models.BaseConstraint]] = [
-            models.UniqueConstraint(fields=["role"], name="applications_role_access_policy_unique"),
-        ]
-        ordering: ClassVar[list[str]] = ["role__app__app_key", "role__key"]
-
-    @override
-    def __str__(self) -> str:
-        return f"{self.role}:access-policy"
 
 
 class AuthorizationGroupAccessPolicy(models.Model):

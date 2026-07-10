@@ -61,6 +61,8 @@ class Command(BaseCommand):
 
         account = existing or LocalAdminAccount(username=username)
         account.set_password(password)
+        if existing is not None:
+            account.session_version += 1
         # 新建与重置密码默认都要求下次登录改密, 除非显式加 --no-force-password-change。
         account.must_change_password = force_password_change
         try:

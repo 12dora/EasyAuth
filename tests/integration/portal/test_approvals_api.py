@@ -5,13 +5,16 @@ from json import dumps
 from typing import Final
 
 import pytest
+from django.db import connection
 from django.test import Client
+from django.test.utils import CaptureQueriesContext
 from pydantic import TypeAdapter
 
 from easyauth.access_requests.application_grants import GrantApplyFailureError
 from easyauth.access_requests.models import (
     GRANT_TYPE_PERMANENT,
     AccessRequest,
+    AccessRequestApprover,
     AccessRequestGroup,
 )
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
@@ -217,6 +220,52 @@ def test_processed_filter_returns_my_decisions() -> None:
     assert first["decided_by"] == approver.authentik_user_id
 
 
+def test_processed_approvals_count_and_slice_in_database() -> None:
+    # Given: 审批人已有两条处理记录, 只读取第一页一条。
+    client, approver = logged_in_client("portal-history-paged-approver")
+    first_request = _submitted_request(
+        "portal-history-paged-applicant-1",
+        "portal-history-paged-app-1",
+        approver_id=approver.authentik_user_id,
+    )
+    second_request = _submitted_request(
+        "portal-history-paged-applicant-2",
+        "portal-history-paged-app-2",
+        approver_id=approver.authentik_user_id,
+    )
+    for access_request in (first_request, second_request):
+        response = client.post(
+            f"/portal/api/v1/me/approvals/{access_request.id}/reject",
+            data=dumps({"comment": "分页测试"}),
+            content_type="application/json",
+        )
+        assert response.status_code == HTTPStatus.OK
+
+    # When
+    with CaptureQueriesContext(connection) as captured:
+        response = client.get(
+            "/portal/api/v1/me/approvals?status=processed&page=1&page_size=1",
+        )
+
+    # Then: 主查询使用 COUNT 和 LIMIT, 不再先把全部处理记录加载进 Python。
+    access_request_queries = [
+        query["sql"]
+        for query in captured.captured_queries
+        if "access_requests_accessrequest" in query["sql"]
+        and approver.authentik_user_id in query["sql"]
+    ]
+    assert response.status_code == HTTPStatus.OK
+    assert any("COUNT(" in query for query in access_request_queries)
+    assert any("LIMIT 1" in query for query in access_request_queries)
+    body = _json_object(response.content)
+    assert body["pagination"] == {
+        "page": 1,
+        "page_size": 1,
+        "total_items": 2,
+        "total_pages": 2,
+    }
+
+
 def _submitted_request(
     user_key: str,
     app_key: str,
@@ -247,7 +296,13 @@ def _submitted_request(
         user=user,
         app=app,
         grant_type=GRANT_TYPE_PERMANENT,
-        approver_user_ids=[approver_id],
+        idempotency_key=f"{user_key}-submission",
+        payload_digest="a" * 64,
+    )
+    approver, _created = UserMirror.objects.get_or_create(authentik_user_id=approver_id)
+    _ = AccessRequestApprover.objects.create(
+        access_request=access_request,
+        approver=approver,
     )
     _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
     return access_request

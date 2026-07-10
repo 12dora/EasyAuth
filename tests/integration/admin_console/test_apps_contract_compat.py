@@ -21,7 +21,6 @@ from easyauth.applications.models import (
     AuthorizationGroupGrant,
     Permission,
     PermissionTemplateVersion,
-    Role,
 )
 from easyauth.applications.services import StaticTokenService
 
@@ -101,7 +100,7 @@ def test_apps_list_supports_documented_filters_and_pagination() -> None:
 
 
 def test_app_detail_includes_documented_summary_fields() -> None:
-    # Given: owner 可见一个含成员、Role、Permission、授权组、active 凭据和模板版本的 App。
+    # Given: owner 可见一个含成员、Permission、授权组、active 凭据和模板版本的 App。
     client = _logged_in_user("apps-contract-detail-owner")
     app = App.objects.create(app_key="apps-contract-detail-crm", name="CRM")
     _ = AppMembership.objects.create(app=app, user_id="apps-contract-detail-owner", role="owner")
@@ -117,8 +116,6 @@ def test_app_detail_includes_documented_summary_fields() -> None:
         is_active=False,
     )
     _ = AppScope.objects.create(app=app, key="GLOBAL", name="全局")
-    _ = Role.objects.create(app=app, key="sales", name="Sales")
-    _ = Role.objects.create(app=app, key="finance", name="Finance")
     read_permission = Permission.objects.create(
         app=app,
         key="deal.read",
@@ -166,7 +163,7 @@ def test_app_detail_includes_documented_summary_fields() -> None:
     assert active_token.credential_id != inactive_token.credential_id
     assert item["owners"] == ["apps-contract-detail-owner"]
     assert item["developers"] == ["apps-contract-detail-developer"]
-    assert item["role_count"] == EXPECTED_DETAIL_COUNT
+    assert item["authorization_group_count"] == EXPECTED_DETAIL_COUNT
     assert item["permission_count"] == EXPECTED_DETAIL_COUNT
     assert item["active_credential_count"] == 1
     assert item["latest_template_version"] == {
@@ -381,7 +378,7 @@ def _expected_detail_fields() -> set[str]:
         "updated_at",
         "can_manage",
         "developers",
-        "role_count",
+        "authorization_group_count",
         "permission_count",
         "active_credential_count",
         "latest_template_version",

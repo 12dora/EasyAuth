@@ -6,6 +6,7 @@ from easyauth.access_requests.application_grants import GrantApplyFailureError
 from easyauth.access_requests.approvals import (
     ApprovalActionError,
     ApprovalDecision,
+    access_request_approver_user_ids,
     approve_access_request,
     reassign_access_request,
     reject_access_request,
@@ -15,6 +16,7 @@ from easyauth.access_requests.models import (
     REQUEST_STATUS_GRANT_APPLIED,
     REQUEST_STATUS_REJECTED,
     AccessRequest,
+    AccessRequestApprover,
     AccessRequestGroup,
 )
 from easyauth.accounts.models import USER_STATUS_DEPARTED, UserMirror
@@ -46,7 +48,6 @@ def _admin_decision(comment: str = "") -> ApprovalDecision:
 def test_designated_approver_approves_and_grant_is_applied() -> None:
     # Given: submitted 申请, 审批人为 approver-001。
     access_request = _submitted_request("approve-user", "approve-app")
-    _ = UserMirror.objects.create(authentik_user_id=APPROVER_ID)
 
     # When: 指定审批人同意。
     result = approve_access_request(
@@ -92,8 +93,10 @@ def test_non_approver_cannot_decide() -> None:
 def test_applicant_cannot_self_approve_even_if_listed() -> None:
     # Given: 不变量被破坏的申请(申请人混入审批人列表)。
     access_request = _submitted_request("self-approve-user", "self-approve-app")
-    access_request.approver_user_ids = ["self-approve-user", APPROVER_ID]
-    access_request.save(update_fields=["approver_user_ids"])
+    _ = AccessRequestApprover.objects.create(
+        access_request=access_request,
+        approver=access_request.user,
+    )
 
     # When / Then
     with pytest.raises(ApprovalActionError) as exc_info:
@@ -229,7 +232,7 @@ def test_reassign_replaces_approvers_with_validation() -> None:
         )
 
     # Then: 去重去空、审计包含新旧列表。
-    assert reassigned.approver_user_ids == ["new-approver"]
+    assert access_request_approver_user_ids(reassigned) == ["new-approver"]
     assert departed_error.value.kind == "validation_error"
     assert applicant_error.value.kind == "validation_error"
     audit_log = AuditLog.objects.get(event_type="access_request_reassigned")
@@ -287,7 +290,14 @@ def _submitted_request(
         user=user,
         app=app,
         grant_type=GRANT_TYPE_PERMANENT,
-        approver_user_ids=approvers if approvers is not None else [APPROVER_ID],
+        idempotency_key=f"{user_key}-submission",
+        payload_digest="b" * 64,
     )
+    for approver_id in approvers if approvers is not None else [APPROVER_ID]:
+        approver, _created = UserMirror.objects.get_or_create(authentik_user_id=approver_id)
+        _ = AccessRequestApprover.objects.create(
+            access_request=access_request,
+            approver=approver,
+        )
     _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
     return access_request

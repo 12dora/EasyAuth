@@ -188,6 +188,11 @@ def test_owner_can_read_status_but_not_write() -> None:
         content_type="application/json",
     )
     assert test_response.status_code == HTTPStatus.FORBIDDEN
+    reconcile_response = client.post(
+        f"{_connectors_url('conn-owner')}/{instance.id}/reconcile",
+        content_type="application/json",
+    )
+    assert reconcile_response.status_code == HTTPStatus.FORBIDDEN
 
 
 def test_non_member_cannot_read() -> None:
@@ -274,6 +279,17 @@ def test_mappings_round_trip() -> None:
     assert stale_response.status_code == HTTPStatus.CONFLICT
     assert ConnectorMapping.objects.filter(instance=instance).count() == 1
 
+    # 正确 revision 删除映射时先保留 tombstone, 供下一轮清理旧外部组。
+    removed_response = client.put(
+        url,
+        data={"revision": updated_revision, "mappings": []},
+        content_type="application/json",
+    )
+    assert removed_response.status_code == HTTPStatus.OK
+    tombstone = ConnectorMapping.objects.get(instance=instance)
+    assert tombstone.tombstoned is True
+    assert tombstone.authorization_group is None
+
 
 def test_mappings_replace_requires_authoritative_revision() -> None:
     app = App.objects.create(app_key="conn-map-revision", name="X")
@@ -309,18 +325,16 @@ def test_test_endpoint_uses_candidate_config() -> None:
 
 
 def test_manual_reconcile_requires_enabled_instance(monkeypatch: pytest.MonkeyPatch) -> None:
-    # Given: send_task 不受 eager 模式约束, 拦截入队并断言参数。
+    # Given: 拦截持久 generation 请求并断言参数。
     from easyauth.admin_console import connectors_api as api_module  # noqa: PLC0415
 
     sent: list[tuple[str, tuple[object, ...]]] = []
 
-    class _Recorder:
-        @staticmethod
-        def send_task(name: str, args: list[object]) -> object:
-            sent.append((name, tuple(args)))
-            return object()
+    def request(instance_id: int, *, trigger: str, countdown: int) -> bool:
+        sent.append((trigger, (instance_id, countdown)))
+        return True
 
-    monkeypatch.setattr(api_module, "current_app", _Recorder())
+    monkeypatch.setattr(api_module, "request_instance_reconcile", request)
     app = App.objects.create(app_key="conn-manual", name="X")
     instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=False)
     client = _logged_in_superuser("conn-manual-admin")
@@ -336,7 +350,12 @@ def test_manual_reconcile_requires_enabled_instance(monkeypatch: pytest.MonkeyPa
     instance.save(update_fields=["enabled", "updated_at"])
     accepted_response = client.post(url, content_type="application/json")
     assert accepted_response.status_code == HTTPStatus.ACCEPTED
-    assert sent == [("easyauth.connectors.reconcile_instance", (instance.id, "manual"))]
+    assert sent == [("manual", (instance.id, 0))]
+
+    # 同 actor/instance 的重复点击在窗口内限速, 不再推进 generation。
+    throttled = client.post(url, content_type="application/json")
+    assert throttled.status_code == HTTPStatus.TOO_MANY_REQUESTS
+    assert len(sent) == 1
 
 
 def test_external_groups_lists_connector_data() -> None:
@@ -406,15 +425,48 @@ def test_duplicate_connector_type_conflicts() -> None:
     assert response.status_code == HTTPStatus.CONFLICT
 
 
-def test_delete_instance() -> None:
+def test_duplicate_external_account_across_apps_conflicts() -> None:
+    _ = App.objects.create(app_key="conn-account-one", name="One")
+    _ = App.objects.create(app_key="conn-account-two", name="Two")
+    client = _logged_in_superuser("conn-account-admin")
+    FakeConnector.external_account = "immutable-account-id"
+    payload = {
+        "connector_key": "fake",
+        "config": {"endpoint": "https://fake.example.com"},
+    }
+
+    first = client.post(
+        _connectors_url("conn-account-one"),
+        data=payload,
+        content_type="application/json",
+    )
+    second = client.post(
+        _connectors_url("conn-account-two"),
+        data=payload,
+        content_type="application/json",
+    )
+
+    assert first.status_code == HTTPStatus.CREATED
+    assert second.status_code == HTTPStatus.CONFLICT
+
+
+def test_delete_instance_keeps_tombstone_until_external_cleanup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # Given
     app = App.objects.create(app_key="conn-del", name="X")
     instance = ConnectorInstance.objects.create(app=app, connector_key="fake")
     client = _logged_in_superuser("conn-del-admin")
+    from easyauth.admin_console import connectors_api as api_module  # noqa: PLC0415
+
+    monkeypatch.setattr(api_module, "request_instance_reconcile", lambda *_args, **_kwargs: True)
 
     # When
     response = client.delete(f"{_connectors_url('conn-del')}/{instance.id}")
 
     # Then
     assert response.status_code == HTTPStatus.NO_CONTENT
-    assert ConnectorInstance.objects.count() == 0
+    instance.refresh_from_db()
+    assert instance.tombstoned is True
+    assert instance.enabled is False
+    assert client.get(_connectors_url("conn-del")).json()["data"] == []

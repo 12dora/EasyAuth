@@ -70,13 +70,9 @@ def query_user_permissions(request: HttpRequest, app_key: str, user_id: str) -> 
         "user_id": snapshot.user_id,
         "app_key": snapshot.app_key,
         "groups": [
-            {"key": group.key, "kind": group.kind, "name": group.name}
-            for group in snapshot.groups
+            {"key": group.key, "kind": group.kind, "name": group.name} for group in snapshot.groups
         ],
-        "grants": [
-            expanded_grant_payload(grant)
-            for grant in snapshot.grants
-        ],
+        "grants": [expanded_grant_payload(grant) for grant in snapshot.grants],
         "grant_version": snapshot.grant_version,
         "catalog_version": snapshot.catalog_version,
         "snapshot_version": snapshot.snapshot_version,
@@ -156,10 +152,14 @@ def _permission_query_token_from_request(request: HttpRequest) -> str | None:
 
 def _permission_query_expires_at(snapshot: PermissionSnapshot) -> datetime:
     ttl_expires_at = timezone.now() + timedelta(seconds=permission_query_ttl_seconds())
-    grant_expires_at = snapshot.grant_expires_at
-    if grant_expires_at is None:
+    membership_expirations = [
+        item.expires_at
+        for item in (*snapshot.groups, *snapshot.grants)
+        if item.expires_at is not None
+    ]
+    if not membership_expirations:
         return ttl_expires_at
-    return min(ttl_expires_at, grant_expires_at)
+    return min(ttl_expires_at, *membership_expirations)
 
 
 def _record_permission_query(*, principal: AppPrincipal, snapshot: PermissionSnapshot) -> None:

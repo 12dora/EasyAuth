@@ -10,6 +10,7 @@ from easyauth.access_requests.models import (
     GRANT_TYPE_TIMED,
     REQUEST_STATUS_APPROVED,
     REQUEST_STATUS_GRANT_APPLIED,
+    REQUEST_STATUS_GRANT_EXPIRED,
     REQUEST_STATUS_GRANT_FAILED,
     REQUEST_TYPE_CHANGE,
     REQUEST_TYPE_RENEW,
@@ -45,7 +46,7 @@ pytestmark = pytest.mark.django_db
 INITIAL_VERSION, APPLIED_VERSION = 1, 2
 
 
-def test_ops4_apply_approved_change_request_replaces_grant_roles_and_version() -> None:
+def test_ops4_apply_approved_change_request_replaces_grant_groups_and_version() -> None:
     # Given: 审批已通过的 change 申请指向新的授权组集合。
     user = UserMirror.objects.create(authentik_user_id="ops4-apply-change-user")
     app = App.objects.create(app_key="ops4-apply-change-app", name="OPS4 Apply Change")
@@ -62,8 +63,12 @@ def test_ops4_apply_approved_change_request_replaces_grant_roles_and_version() -
         authorization_group=new_group,
         approver_userids=["manager-001"],
     )
-    grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=old_group)
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=old_group,
+        expires_at=None,
+    )
     access_request = _approved_request(user=user, app=app, request_type=REQUEST_TYPE_CHANGE)
     _ = AccessRequestGroup.objects.create(
         access_request=access_request,
@@ -85,13 +90,16 @@ def test_ops4_apply_approved_change_request_replaces_grant_roles_and_version() -
     assert applied.status == REQUEST_STATUS_GRANT_APPLIED
     assert grant.version == APPLIED_VERSION
     assert snapshot.grant_version == APPLIED_VERSION
-    assert snapshot.groups == (GroupSnapshot(key="writer", kind="role", name="Writer"),)
+    assert snapshot.groups == (
+        GroupSnapshot(key="writer", kind="role", name="Writer", expires_at=None),
+    )
     assert snapshot.grants == (
         ExpandedGrant(
             permission="invoice.write",
             scope="GLOBAL",
             source_type="group",
             source_key="writer",
+            expires_at=None,
         ),
     )
     assert AuditLog.objects.filter(event_type="grant_changed").count() == 1
@@ -102,8 +110,12 @@ def test_ops4_apply_approved_full_revoke_request_revokes_grant_and_query_is_empt
     user = UserMirror.objects.create(authentik_user_id="ops4-apply-revoke-user")
     app = App.objects.create(app_key="ops4-apply-revoke-app", name="OPS4 Apply Revoke")
     group = _authorization_group(app, key="reader", name="Reader")
-    grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        expires_at=None,
+    )
     access_request = _approved_request(user=user, app=app, request_type=REQUEST_TYPE_REVOKE)
 
     # When: 审批回调应用撤销申请。
@@ -148,14 +160,17 @@ def test_ops4_apply_partial_revoke_reduces_roles_and_preserves_expiration() -> N
         approver_userids=["manager-001"],
     )
     current_expires_at = timezone.now() + timedelta(days=3)
-    grant = AccessGrant.objects.create(
-        user=user,
-        app=app,
-        grant_type=GRANT_TYPE_TIMED,
-        grant_expires_at=current_expires_at,
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=keep_group,
+        expires_at=current_expires_at,
     )
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=keep_group)
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=remove_group)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=remove_group,
+        expires_at=current_expires_at,
+    )
     access_request = _approved_request(
         user=user,
         app=app,
@@ -182,10 +197,25 @@ def test_ops4_apply_partial_revoke_reduces_roles_and_preserves_expiration() -> N
     snapshot = resolve_user_permissions(user=user, app=app)
     assert grant.status == GRANT_STATUS_ACTIVE
     assert grant.version == APPLIED_VERSION
-    assert grant.grant_expires_at == current_expires_at
+    assert (
+        AccessGrantGroup.objects.get(
+            grant=grant,
+            authorization_group=keep_group,
+        ).expires_at
+        == current_expires_at
+    )
     assert snapshot.grant_version == APPLIED_VERSION
-    assert snapshot.groups == (GroupSnapshot(key="viewer", kind="role", name="Viewer"),)
-    assert snapshot.grants == (ExpandedGrant("invoice.view", "GLOBAL", "group", "viewer"),)
+    assert snapshot.groups == (
+        GroupSnapshot(
+            key="viewer",
+            kind="role",
+            name="Viewer",
+            expires_at=current_expires_at,
+        ),
+    )
+    assert snapshot.grants == (
+        ExpandedGrant("invoice.view", "GLOBAL", "group", "viewer", current_expires_at),
+    )
 
 
 def test_ops4_apply_approved_renew_request_extends_expiration_and_version() -> None:
@@ -200,13 +230,12 @@ def test_ops4_apply_approved_renew_request_extends_expiration_and_version() -> N
     )
     current_expires_at = timezone.now() + timedelta(days=3)
     renewed_expires_at = timezone.now() + timedelta(days=10)
-    grant = AccessGrant.objects.create(
-        user=user,
-        app=app,
-        grant_type=GRANT_TYPE_TIMED,
-        grant_expires_at=current_expires_at,
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        expires_at=current_expires_at,
     )
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
     access_request = _approved_request(
         user=user,
         app=app,
@@ -230,9 +259,22 @@ def test_ops4_apply_approved_renew_request_extends_expiration_and_version() -> N
     snapshot = resolve_user_permissions(user=user, app=app)
     assert grant.status == GRANT_STATUS_ACTIVE
     assert grant.version == APPLIED_VERSION
-    assert grant.grant_expires_at == renewed_expires_at
+    assert (
+        AccessGrantGroup.objects.get(
+            grant=grant,
+            authorization_group=group,
+        ).expires_at
+        == renewed_expires_at
+    )
     assert snapshot.grant_version == APPLIED_VERSION
-    assert snapshot.grant_expires_at == renewed_expires_at
+    assert snapshot.groups == (
+        GroupSnapshot(
+            key="reader",
+            kind="role",
+            name="Reader",
+            expires_at=renewed_expires_at,
+        ),
+    )
 
 
 def test_ops4_apply_approved_request_returns_applied_callback_without_reincrementing() -> None:
@@ -245,7 +287,12 @@ def test_ops4_apply_approved_request_returns_applied_callback_without_reincremen
         authorization_group=group,
         approver_userids=["manager-001"],
     )
-    grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        expires_at=None,
+    )
     access_request = _approved_request(user=user, app=app, request_type=REQUEST_TYPE_CHANGE)
     _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
     application = AccessRequestApplication(
@@ -266,6 +313,64 @@ def test_ops4_apply_approved_request_returns_applied_callback_without_reincremen
     assert access_request.status == REQUEST_STATUS_GRANT_APPLIED
     assert AuditLog.objects.filter(event_type="grant_changed").count() == 1
     assert AuditLog.objects.filter(event_type="access_request_grant_applied").count() == 1
+
+
+@pytest.mark.parametrize("request_type", [REQUEST_TYPE_CHANGE, REQUEST_TYPE_RENEW])
+def test_ops4_apply_expired_timed_request_preserves_current_grant(request_type: str) -> None:
+    # Given: 已通过的限时 change/renew 申请在授权应用前已经到期。
+    user = UserMirror.objects.create(
+        authentik_user_id=f"ops4-expired-{request_type}-user",
+    )
+    app = App.objects.create(
+        app_key=f"ops4-expired-{request_type}-app",
+        name=f"OPS4 Expired {request_type.title()}",
+    )
+    group = _authorization_group(app, key="reader", name="Reader")
+    _ = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=group,
+        approver_userids=["manager-001"],
+    )
+    current_expires_at = timezone.now() + timedelta(days=3)
+    grant = AccessGrant.objects.create(user=user, app=app)
+    grant_group = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        expires_at=current_expires_at,
+    )
+    access_request = _approved_request(
+        user=user,
+        app=app,
+        request_type=request_type,
+        grant_type=GRANT_TYPE_TIMED,
+        grant_expires_at=timezone.now() - timedelta(minutes=1),
+    )
+    _ = AccessRequestGroup.objects.create(
+        access_request=access_request,
+        authorization_group=group,
+    )
+    grant_before = AccessGrant.objects.filter(pk=grant.pk).values().get()
+    grant_group_before = AccessGrantGroup.objects.filter(pk=grant_group.pk).values().get()
+
+    # When: 审批回调尝试应用已到期的申请。
+    with pytest.raises(AccessRequestApplicationError):
+        _ = AccessRequestService.apply_approved_access_request(
+            AccessRequestApplication(
+                request_id=access_request.id,
+                actor_type="approval",
+                actor_id="dingtalk-callback",
+            ),
+        )
+
+    # Then: 旧授权事实完全不变, 申请标记为到期且只记录对应审计。
+    access_request.refresh_from_db()
+    assert AccessGrant.objects.filter(pk=grant.pk).values().get() == grant_before
+    assert AccessGrantGroup.objects.filter(pk=grant_group.pk).values().get() == grant_group_before
+    assert access_request.status == REQUEST_STATUS_GRANT_EXPIRED
+    assert access_request.applied_at is None
+    assert list(AuditLog.objects.values_list("event_type", flat=True)) == [
+        "grant_expired_before_apply",
+    ]
 
 
 def test_ops4_apply_approved_change_request_without_current_grant_marks_failed() -> None:
@@ -308,8 +413,12 @@ def test_ops4_apply_approved_request_marks_grant_failed_when_grant_service_fails
     )
     old_group = _authorization_group(app, key="reader", name="Reader")
     bad_group = _authorization_group(other_app, key="writer", name="Writer")
-    grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=old_group)
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=old_group,
+        expires_at=None,
+    )
     access_request = _approved_request(user=user, app=app, request_type=REQUEST_TYPE_CHANGE)
     _ = AccessRequestGroup.objects.create(
         access_request=access_request,
@@ -371,5 +480,7 @@ def _approved_request(
         grant_type=grant_type,
         grant_expires_at=grant_expires_at,
         reason="审批已通过",
+        idempotency_key=f"ops4-approved-{user.authentik_user_id}-{request_type}",
+        payload_digest="0" * 64,
         approved_at=timezone.now(),
     )

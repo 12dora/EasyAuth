@@ -82,7 +82,6 @@ from easyauth.admin_console.operations_approvals_api import (
 from easyauth.admin_console.operations_retry_api import operations_retry_grant
 from easyauth.admin_console.permission_catalog_api import (
     console_permission_tree,
-    console_role_permission_matrix,
 )
 from easyauth.admin_console.permission_groups_api import (
     console_permission_group_detail,
@@ -96,7 +95,6 @@ from easyauth.admin_console.permission_template_api import (
 )
 from easyauth.admin_console.permissions_api import console_permission_detail, console_permissions
 from easyauth.admin_console.query_test_api import console_permission_query_test
-from easyauth.admin_console.roles_api import console_role_detail, console_roles
 from easyauth.admin_console.scopes_api import console_scope_detail, console_scopes
 from easyauth.admin_console.settings_api import (
     console_dingtalk_connectivity_test,
@@ -129,7 +127,7 @@ from easyauth.admin_console.two_factor_api import (
 from easyauth.admin_console.two_factor_api import (
     two_factor_status,
 )
-from easyauth.admin_console.users_api import console_user_search
+from easyauth.admin_console.users_api import console_user_options, console_users
 from easyauth.admin_console.webhook_config_api import (
     console_app_webhook_config,
     console_app_webhook_test,
@@ -201,7 +199,8 @@ urlpatterns = [
         operations_dependency_health_check,
         name="operations-dependency-health-check",
     ),
-    path("api/v1/users", console_user_search, name="console-user-search"),
+    path("api/v1/users", console_users, name="console-users"),
+    path("api/v1/user-options", console_user_options, name="console-user-options"),
     path(
         "api/v1/lifecycle/handover-tasks",
         lifecycle_handover_tasks,
@@ -431,12 +430,6 @@ urlpatterns = [
         console_permission_group_detail,
         name="console-permission-group-detail",
     ),
-    path("api/v1/apps/<str:app_key>/roles", console_roles, name="console-roles"),
-    path(
-        "api/v1/apps/<str:app_key>/roles/<str:role_key>",
-        console_role_detail,
-        name="console-role-detail",
-    ),
     path("api/v1/apps/<str:app_key>/scopes", console_scopes, name="console-scopes"),
     path(
         "api/v1/apps/<str:app_key>/scopes/<str:scope_key>",
@@ -462,11 +455,6 @@ urlpatterns = [
         "api/v1/apps/<str:app_key>/permissions/<str:permission_key>",
         console_permission_detail,
         name="console-permission-detail",
-    ),
-    path(
-        "api/v1/apps/<str:app_key>/role-permission-matrix",
-        console_role_permission_matrix,
-        name="console-role-permission-matrix",
     ),
     path(
         "api/v1/apps/<str:app_key>/approval-rules",

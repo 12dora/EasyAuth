@@ -9,7 +9,6 @@ from easyauth.applications.models import App
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import (
     GRANT_STATUS_REVOKED,
-    GRANT_TYPE_PERMANENT,
     AccessGrant,
 )
 from easyauth.grants.services import GrantService
@@ -27,7 +26,6 @@ def test_s10_pin_revoke_grant_revokes_active_current_grant_and_records_audit() -
     grant = AccessGrant.objects.create(
         user=user,
         app=app,
-        grant_type=GRANT_TYPE_PERMANENT,
         version=INITIAL_VERSION,
     )
 

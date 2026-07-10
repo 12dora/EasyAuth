@@ -4,9 +4,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from celery import shared_task
+from django.db.models import Q
 from django.utils import timezone
 
-from easyauth.grants.models import GRANT_STATUS_ACTIVE, GRANT_TYPE_TIMED, AccessGrant
+from easyauth.grants.models import GRANT_STATUS_ACTIVE, AccessGrant
 from easyauth.grants.services import GrantExpirationInput, GrantService
 
 if TYPE_CHECKING:
@@ -30,11 +31,11 @@ def cleanup_expired_grants(*, now: datetime | None = None) -> ExpiredGrantCleanu
     candidates = (
         AccessGrant.objects.select_related("user", "app")
         .filter(
-            grant_type=GRANT_TYPE_TIMED,
-            grant_expires_at__lte=cutoff,
+            Q(grant_groups__expires_at__lte=cutoff) | Q(grant_permissions__expires_at__lte=cutoff),
             is_current=True,
             status=GRANT_STATUS_ACTIVE,
         )
+        .distinct()
         .order_by("app__app_key", "user__authentik_user_id", "id")
     )
     expired: list[AccessGrant] = []

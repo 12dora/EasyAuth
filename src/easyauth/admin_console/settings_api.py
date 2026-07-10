@@ -22,6 +22,7 @@ from easyauth.config.net import InsecureUrlError, require_secure_url
 from easyauth.integrations.dingtalk.api_client import (
     DingTalkApiClient,
     DingTalkApiError,
+    invalidate_access_token,
 )
 
 if TYPE_CHECKING:
@@ -92,6 +93,7 @@ def _update_settings(request: HttpRequest, *, actor_id: str) -> JsonResponse:
     if not fields_set:
         return _settings_response()
 
+    previous_dingtalk = dingtalk_runtime_config()
     with transaction.atomic():
         row, _created = IntegrationSettings.objects.select_for_update().get_or_create(
             pk=INTEGRATION_SETTINGS_SINGLETON_ID,
@@ -106,12 +108,19 @@ def _update_settings(request: HttpRequest, *, actor_id: str) -> JsonResponse:
             row.authentik_api_token = payload.authentik_api_token
             update_fields.append("authentik_api_token")
         dingtalk_secret_changed = False
+        dingtalk_credentials_changed = False
         if "dingtalk_app_key" in fields_set and payload.dingtalk_app_key is not None:
-            row.dingtalk_app_key = payload.dingtalk_app_key.strip()
+            normalized_app_key = payload.dingtalk_app_key.strip()
+            dingtalk_credentials_changed = normalized_app_key != row.dingtalk_app_key
+            row.dingtalk_app_key = normalized_app_key
             update_fields.append("dingtalk_app_key")
         if "dingtalk_app_secret" in fields_set and payload.dingtalk_app_secret is not None:
-            dingtalk_secret_changed = payload.dingtalk_app_secret != row.dingtalk_app_secret
-            row.dingtalk_app_secret = payload.dingtalk_app_secret.strip()
+            normalized_secret = payload.dingtalk_app_secret.strip()
+            dingtalk_secret_changed = normalized_secret != row.dingtalk_app_secret
+            dingtalk_credentials_changed = (
+                dingtalk_credentials_changed or dingtalk_secret_changed
+            )
+            row.dingtalk_app_secret = normalized_secret
             update_fields.append("dingtalk_app_secret")
         if "dingtalk_agent_id" in fields_set and payload.dingtalk_agent_id is not None:
             row.dingtalk_agent_id = payload.dingtalk_agent_id.strip()
@@ -124,6 +133,13 @@ def _update_settings(request: HttpRequest, *, actor_id: str) -> JsonResponse:
             api_token_changed=api_token_changed,
             dingtalk_secret_changed=dingtalk_secret_changed,
         )
+        if dingtalk_credentials_changed:
+            transaction.on_commit(
+                lambda: invalidate_access_token(
+                    app_key=previous_dingtalk.app_key,
+                    app_secret=previous_dingtalk.app_secret,
+                ),
+            )
     return _settings_response()
 
 
@@ -141,7 +157,7 @@ def console_dingtalk_connectivity_test(request: HttpRequest) -> JsonResponse:
             status=HTTPStatus.METHOD_NOT_ALLOWED,
         )
     try:
-        _ = DingTalkApiClient.from_settings().get_access_token()
+        _ = DingTalkApiClient.from_settings().get_access_token(force_refresh=True)
     except DingTalkApiError as error:
         _record_dingtalk_test(actor_id=actor_id, ok=False, error=str(error))
         return json_response({"ok": False, "message": str(error)})

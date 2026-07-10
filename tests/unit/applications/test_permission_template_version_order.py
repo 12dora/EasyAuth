@@ -57,7 +57,7 @@ def _pipeline_template(
         schema_version=version,
         source="paste",
         imported_by="owner-001",
-        raw_template="pipeline-template",
+        raw_template="{}",
         app=AppManifestAppInput(
             app_key="ops1-template-version-lower",
             name="Version Lower",

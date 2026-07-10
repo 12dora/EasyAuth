@@ -44,6 +44,7 @@ def _template_and_originator(app: App) -> None:
         key="expense",
         name="费用审批",
         dingtalk_process_code="PROC-EXPENSE",
+        form_schema={"amount": {"type": "string", "required": False}},
     )
     _ = UserMirror.objects.create(
         authentik_user_id="api-originator",
@@ -92,6 +93,41 @@ def test_app_creates_approval_instance_idempotently(
     assert second.status_code == HTTPStatus.OK
     assert first_body["instance_id"] == second_body["instance_id"]
     assert first_body["status"] == "submitted"
+    assert first_body["submission_state"] == "submitted"
+    assert ApprovalInstance.objects.filter(app=app).count() == 1
+
+
+def test_app_rejects_same_biz_key_with_different_payload(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, token = _app_with_token("api-approval-conflict")
+    _template_and_originator(app)
+    monkeypatch.setattr(
+        "easyauth.workflows.services.DingTalkApiClient.from_settings",
+        lambda: _FakeDingTalkClient(),
+    )
+    client = Client()
+    url = f"/api/v1/apps/{app.app_key}/approval-instances"
+    base = {
+        "template_key": "expense",
+        "originator_user_id": "api-originator",
+        "biz_key": "same-key",
+    }
+    first = client.post(
+        url,
+        data=dumps({**base, "form": {"amount": "100"}}),
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+    conflict = client.post(
+        url,
+        data=dumps({**base, "form": {"amount": "200"}}),
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+
+    assert first.status_code == HTTPStatus.CREATED
+    assert conflict.status_code == HTTPStatus.CONFLICT
     assert ApprovalInstance.objects.filter(app=app).count() == 1
 
 

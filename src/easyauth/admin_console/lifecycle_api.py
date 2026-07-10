@@ -3,6 +3,7 @@ from __future__ import annotations
 from http import HTTPStatus
 from typing import TYPE_CHECKING, ClassVar, cast
 
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -16,7 +17,11 @@ from easyauth.admin_console.api_responses import (
     method_not_allowed_response,
 )
 from easyauth.admin_console.authz import require_superuser
-from easyauth.admin_console.operation_filters import paginate_queryset
+from easyauth.admin_console.operation_filters import (
+    OperationFilterValidationError,
+    operation_filter_error_response,
+    paginate_queryset,
+)
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode
 from easyauth.api.pagination import pagination_item
@@ -43,6 +48,7 @@ from easyauth.lifecycle.services import (
     ensure_handover_task,
     execute_action,
     onboard_user,
+    poll_async_action,
     preview_action,
     refresh_task_status,
     skip_action,
@@ -186,7 +192,10 @@ def lifecycle_handover_tasks(request: HttpRequest) -> JsonResponse:
         kind = request.GET.get("kind", "").strip()
         if kind in HANDOVER_KIND_VALUES:
             queryset = queryset.filter(kind=kind)
-        page = paginate_queryset(queryset, request.GET)
+        try:
+            page = paginate_queryset(queryset, request.GET)
+        except OperationFilterValidationError as exc:
+            return operation_filter_error_response(exc)
         items: list[JsonValue] = [_task_item(task) for task in page.items]
         return json_response(
             paginated_list_payload(
@@ -199,7 +208,10 @@ def lifecycle_handover_tasks(request: HttpRequest) -> JsonResponse:
     return method_not_allowed_response()
 
 
-def lifecycle_handover_task_detail(request: HttpRequest, task_id: int) -> JsonResponse:
+def lifecycle_handover_task_detail(  # noqa: PLR0911 - HTTP 分支在入口显式返回。
+    request: HttpRequest,
+    task_id: int,
+) -> JsonResponse:
     match require_superuser(request):
         case str() as actor_id:
             pass
@@ -225,7 +237,10 @@ def lifecycle_handover_task_detail(request: HttpRequest, task_id: int) -> JsonRe
     return method_not_allowed_response()
 
 
-def lifecycle_grant_items(request: HttpRequest, task_id: int) -> JsonResponse:
+def lifecycle_grant_items(  # noqa: C901, PLR0911 - HTTP 校验失败需逐项返回明确响应。
+    request: HttpRequest,
+    task_id: int,
+) -> JsonResponse:
     match require_superuser(request):
         case str():
             pass
@@ -250,14 +265,32 @@ def lifecycle_grant_items(request: HttpRequest, task_id: int) -> JsonResponse:
         except ValidationError as exc:
             return _validation_error("勾选参数无效。", {"errors": str(exc)})
         selection = {entry.id: entry.selected for entry in payload.items}
-        editable = HandoverGrantItem.objects.filter(
-            task=task,
-            id__in=selection.keys(),
-            status="pending",
-        )
-        for item in editable:
-            item.selected = selection[item.id]
-            item.save(update_fields=["selected"])
+        if len(selection) != len(payload.items):
+            return _validation_error("同一授权快照项不能重复提交。")
+        with transaction.atomic():
+            locked_task = HandoverTask.objects.select_for_update().get(pk=task.id)
+            if locked_task.status not in {"pending", "in_progress"}:
+                return error_response(
+                    ErrorCode.SEMANTIC_VALIDATION_ERROR,
+                    "交接单不在进行中状态。",
+                    status=HTTPStatus.CONFLICT,
+                )
+            editable = list(
+                HandoverGrantItem.objects.select_for_update().filter(
+                    task=locked_task,
+                    id__in=selection,
+                    status="pending",
+                ),
+            )
+            if len(editable) != len(selection):
+                return error_response(
+                    ErrorCode.SEMANTIC_VALIDATION_ERROR,
+                    "授权快照项不存在或已处理。",
+                    status=HTTPStatus.CONFLICT,
+                )
+            for item in editable:
+                item.selected = selection[item.id]
+                item.save(update_fields=["selected"])
         return lifecycle_grant_items_readback(task)
     return method_not_allowed_response()
 
@@ -309,6 +342,8 @@ def _run_action_operation(
     try:
         if operation == "preview":
             action = preview_action(action)
+        elif operation == "retry" and action.status == "async_pending":
+            action = poll_async_action(action)
         elif operation in {"execute", "retry"}:
             action = execute_action(action)
         elif operation == "skip":
@@ -385,7 +420,10 @@ def _apply_team_item_request(
     return json_response({"team_item": _team_item(item)})
 
 
-def lifecycle_grant_diff(request: HttpRequest, task_id: int) -> JsonResponse:
+def lifecycle_grant_diff(  # noqa: PLR0911 - HTTP 分支在入口显式返回。
+    request: HttpRequest,
+    task_id: int,
+) -> JsonResponse:
     match require_superuser(request):
         case str():
             pass
@@ -403,11 +441,21 @@ def lifecycle_grant_diff(request: HttpRequest, task_id: int) -> JsonResponse:
     template = OnboardingTemplate.objects.filter(id=payload.template_id, is_active=True).first()
     if template is None:
         return _not_found("岗位模板不存在或未启用。")
-    plan = build_transfer_grant_diff(task=task, template=template)
+    try:
+        plan = build_transfer_grant_diff(task=task, template=template)
+    except HandoverConflictError as error:
+        return error_response(
+            ErrorCode.SEMANTIC_VALIDATION_ERROR,
+            str(error),
+            status=HTTPStatus.CONFLICT,
+        )
     return json_response({"transfer_plan": _plan_item(plan)})
 
 
-def lifecycle_grant_diff_confirm(request: HttpRequest, task_id: int) -> JsonResponse:
+def lifecycle_grant_diff_confirm(  # noqa: PLR0911 - HTTP 分支在入口显式返回。
+    request: HttpRequest,
+    task_id: int,
+) -> JsonResponse:
     match require_superuser(request):
         case str() as actor_id:
             pass
@@ -428,6 +476,12 @@ def lifecycle_grant_diff_confirm(request: HttpRequest, task_id: int) -> JsonResp
             revoke_keys=payload.revoke_keys,
             add_keys=payload.add_keys,
             actor_id=actor_id,
+        )
+    except HandoverConflictError as error:
+        return error_response(
+            ErrorCode.SEMANTIC_VALIDATION_ERROR,
+            str(error),
+            status=HTTPStatus.CONFLICT,
         )
     except HandoverError as error:
         return _validation_error(str(error))
@@ -456,7 +510,7 @@ class OnboardingTemplateStatusPayload(BaseModel):
     is_active: bool
 
 
-def lifecycle_onboarding_template_detail(
+def lifecycle_onboarding_template_detail(  # noqa: PLR0911 - HTTP 分支在入口显式返回。
     request: HttpRequest,
     template_id: int,
 ) -> JsonResponse:
@@ -588,11 +642,7 @@ def _patch_receiver_batch(
             if missing_apps:
                 return _validation_error(f"交接单中不存在应用 {sorted(missing_apps)[0]}。")
 
-            receiver_ids = {
-                entry.to_user_id
-                for entry in entries
-                if entry.to_user_id
-            }
+            receiver_ids = {entry.to_user_id for entry in entries if entry.to_user_id}
             receivers = {
                 user.authentik_user_id: user
                 for user in UserMirror.objects.filter(
@@ -605,9 +655,7 @@ def _patch_receiver_batch(
 
             for app_key, entry in entries_by_app.items():
                 policy: JsonObject = (
-                    {"unowned_strategy": "release_to_pool"}
-                    if entry.release_to_pool
-                    else {}
+                    {"unowned_strategy": "release_to_pool"} if entry.release_to_pool else {}
                 )
                 _ = update_action_receiver(
                     action=actions_by_app[app_key],
@@ -620,6 +668,8 @@ def _patch_receiver_batch(
             str(error),
             status=HTTPStatus.CONFLICT,
         )
+    except HandoverError as error:
+        return _validation_error(str(error))
     refreshed_task = _task_or_none(task.id) or task
     return json_response({"handover_task": _task_detail(refreshed_task)})
 
@@ -644,23 +694,28 @@ def _write_template(
         item = _resolve_template_item(entry)
         if isinstance(item, JsonResponse):
             return item
+        try:
+            item.full_clean(exclude={"template"})
+        except DjangoValidationError as exc:
+            return _validation_error("模板项参数无效。", {"errors": str(exc)})
         resolved_items.append(item)
-    if template is None:
-        template = OnboardingTemplate.objects.create(
-            name=payload.name,
-            description=payload.description,
-            is_active=payload.is_active,
-        )
-    else:
-        template.name = payload.name
-        template.description = payload.description
-        template.is_active = payload.is_active
-        template.save()
-        _ = OnboardingTemplateItem.objects.filter(template=template).delete()
-    for item in resolved_items:
-        item.template = template
-        item.full_clean()
-        item.save()
+    with transaction.atomic():
+        if template is None:
+            template = OnboardingTemplate.objects.create(
+                name=payload.name,
+                description=payload.description,
+                is_active=payload.is_active,
+            )
+        else:
+            template = OnboardingTemplate.objects.select_for_update().get(pk=template.id)
+            template.name = payload.name
+            template.description = payload.description
+            template.is_active = payload.is_active
+            template.save()
+            _ = OnboardingTemplateItem.objects.filter(template=template).delete()
+        for item in resolved_items:
+            item.template = template
+            item.save()
     return json_response({"onboarding_template": _template_item(template)})
 
 
@@ -668,6 +723,8 @@ def _resolve_template_item(entry: TemplateItemPayload) -> OnboardingTemplateItem
     app = App.objects.filter(app_key=entry.app_key, is_active=True).first()
     if app is None:
         return _validation_error(f"应用 {entry.app_key} 不存在或未启用。")
+    if bool(entry.authorization_group_key) == bool(entry.permission_key):
+        return _validation_error("模板项必须且只能指定授权组或权限之一。")
     group = None
     permission = None
     if entry.authorization_group_key:
@@ -752,8 +809,9 @@ def _action_item(action: HandoverAppAction) -> JsonObject:
     to_user = action.to_user
     return {
         "id": action.id,
-        "app_key": action.app.app_key,
-        "app_name": action.app.name,
+        "app_key": action.app_key_snapshot,
+        "app_name": action.app_name_snapshot,
+        "app_catalog_version": action.app_catalog_version_snapshot,
         "status": action.status,
         "to_user": (
             {"user_id": to_user.authentik_user_id, "name": to_user.name}
@@ -763,6 +821,8 @@ def _action_item(action: HandoverAppAction) -> JsonObject:
         "policy": action.policy,
         "preview_payload": action.preview_payload,
         "result_payload": action.result_payload,
+        "async_status_url": action.async_status_url,
+        "async_poll_attempts": action.async_poll_attempts,
         "attempts": action.attempts,
         "last_error": action.last_error,
     }
@@ -785,21 +845,13 @@ def _team_item(entry: HandoverTeamItem) -> JsonObject:
 
 
 def _grant_item(item: HandoverGrantItem) -> JsonObject:
-    if item.authorization_group is not None:
-        kind = "group"
-        key = item.authorization_group.key
-        name = item.authorization_group.name
-    else:
-        permission = item.permission
-        kind = "permission"
-        key = permission.key if permission is not None else ""
-        name = permission.name if permission is not None else ""
     return {
         "id": item.id,
-        "app_key": item.app.app_key,
-        "kind": kind,
-        "key": key,
-        "name": name,
+        "app_key": item.app_key_snapshot,
+        "app_catalog_version": item.app_catalog_version_snapshot,
+        "kind": item.target_kind_snapshot,
+        "key": item.target_key_snapshot,
+        "name": item.target_name_snapshot,
         "scope_key": item.scope_key,
         "grant_type": item.grant_type,
         "grant_expires_at": datetime_value(item.grant_expires_at),

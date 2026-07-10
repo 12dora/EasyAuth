@@ -11,12 +11,12 @@ from easyauth.accounts.models import (
     UserMirror,
 )
 from easyauth.accounts.services import AuthentikSyncService
-from easyauth.applications.models import App
+from easyauth.applications.models import App, AuthorizationGroup
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import (
     GRANT_STATUS_REVOKED,
-    GRANT_TYPE_PERMANENT,
     AccessGrant,
+    AccessGrantGroup,
 )
 from easyauth.tasks.authentik import StaticAuthentikPayloadSource, sync_authentik_users_from_source
 
@@ -118,10 +118,13 @@ def test_s10_first_time_active_sync_without_grants_does_not_record_departure_eve
     assert result.created is True
     assert result.revoked_count == NO_REVOKED_GRANTS
     assert user.status == USER_STATUS_ACTIVE
-    assert AuditLog.objects.filter(
-        event_type="user_departure_detected",
-        target_id=user_id,
-    ).count() == 0
+    assert (
+        AuditLog.objects.filter(
+            event_type="user_departure_detected",
+            target_id=user_id,
+        ).count()
+        == 0
+    )
 
 
 def test_s10_first_time_disabled_sync_without_grants_records_departure_once() -> None:
@@ -160,7 +163,7 @@ def test_s10_false_is_active_sync_disables_user_and_revokes_current_grant() -> N
     # Given
     user = UserMirror.objects.create(authentik_user_id="s10-sync-disabled")
     app = App.objects.create(app_key="s10-sync-disabled-app", name="S10 Sync Disabled App")
-    grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
+    grant = _permanent_grant(user, app)
     payload: AuthentikPayloadInput = {
         "user": {"uid": user.authentik_user_id},
         "is_active": False,
@@ -216,8 +219,8 @@ def test_s10_departed_sync_revokes_all_active_grants_and_is_idempotent() -> None
     user = UserMirror.objects.create(authentik_user_id="s10-sync-departed")
     crm = App.objects.create(app_key="s10-sync-crm", name="S10 Sync CRM")
     erp = App.objects.create(app_key="s10-sync-erp", name="S10 Sync ERP")
-    crm_grant = AccessGrant.objects.create(user=user, app=crm, grant_type=GRANT_TYPE_PERMANENT)
-    erp_grant = AccessGrant.objects.create(user=user, app=erp, grant_type=GRANT_TYPE_PERMANENT)
+    crm_grant = _permanent_grant(user, crm)
+    erp_grant = _permanent_grant(user, erp)
     payload: AuthentikPayloadInput = {
         "user": {
             "uid": user.authentik_user_id,
@@ -257,11 +260,7 @@ def test_s10_scheduled_sync_entry_processes_multiple_payloads_from_static_source
     # Given
     disabled_user = UserMirror.objects.create(authentik_user_id="s10-task-disabled")
     app = App.objects.create(app_key="s10-task-app", name="S10 Task App")
-    grant = AccessGrant.objects.create(
-        user=disabled_user,
-        app=app,
-        grant_type=GRANT_TYPE_PERMANENT,
-    )
+    grant = _permanent_grant(disabled_user, app)
     source = StaticAuthentikPayloadSource(
         payloads=(
             {
@@ -287,3 +286,19 @@ def test_s10_scheduled_sync_entry_processes_multiple_payloads_from_static_source
     assert active_user.status == USER_STATUS_ACTIVE
     assert disabled_user.status == USER_STATUS_DISABLED
     assert grant.status == GRANT_STATUS_REVOKED
+
+
+def _permanent_grant(user: UserMirror, app: App) -> AccessGrant:
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="member",
+        kind="role",
+        name="成员",
+    )
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        expires_at=None,
+    )
+    return grant

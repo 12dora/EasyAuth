@@ -60,10 +60,12 @@ def test_ops4_apply_approved_lifecycle_request_rejects_deleted_group_approval_ru
     grant = AccessGrant.objects.create(
         user=user,
         app=app,
-        grant_type=_grant_type(request_type),
-        grant_expires_at=_grant_expires_at(request_type, current_expires_at),
     )
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=keep_group)
+    grant_group = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=keep_group,
+        expires_at=_grant_expires_at(request_type, current_expires_at),
+    )
     _add_revoke_group_target(request_type, grant=grant, authorization_group=remove_group)
     access_request = _approved_request(
         user=user,
@@ -84,6 +86,7 @@ def test_ops4_apply_approved_lifecycle_request_rejects_deleted_group_approval_ru
 
     # Then: 当前授权事实不变, 申请进入 grant_failed。
     grant.refresh_from_db()
+    grant_group.refresh_from_db()
     access_request.refresh_from_db()
     group_keys = tuple(
         AccessGrantGroup.objects.filter(grant=grant)
@@ -91,7 +94,7 @@ def test_ops4_apply_approved_lifecycle_request_rejects_deleted_group_approval_ru
         .values_list("authorization_group__key", flat=True),
     )
     assert group_keys == _expected_group_keys(request_type)
-    assert grant.grant_expires_at == _grant_expires_at(request_type, current_expires_at)
+    assert grant_group.expires_at == _grant_expires_at(request_type, current_expires_at)
     assert grant.version == 1
     assert access_request.status == REQUEST_STATUS_GRANT_FAILED
     assert access_request.applied_at is None
@@ -121,13 +124,12 @@ def test_ops4_apply_approved_lifecycle_request_rejects_inactive_direct_permissio
     grant = AccessGrant.objects.create(
         user=user,
         app=app,
-        grant_type=_grant_type(request_type),
-        grant_expires_at=_grant_expires_at(request_type, current_expires_at),
     )
-    _ = AccessGrantPermission.objects.create(
+    grant_permission = AccessGrantPermission.objects.create(
         grant=grant,
         permission=keep_permission,
         scope_key="GLOBAL",
+        expires_at=_grant_expires_at(request_type, current_expires_at),
     )
     _add_revoke_permission_target(request_type, grant=grant, permission=remove_permission)
     access_request = _approved_request(
@@ -151,6 +153,7 @@ def test_ops4_apply_approved_lifecycle_request_rejects_inactive_direct_permissio
 
     # Then: 当前授权事实不变, 申请进入 grant_failed。
     grant.refresh_from_db()
+    grant_permission.refresh_from_db()
     access_request.refresh_from_db()
     permission_targets = tuple(
         AccessGrantPermission.objects.filter(grant=grant)
@@ -158,7 +161,7 @@ def test_ops4_apply_approved_lifecycle_request_rejects_inactive_direct_permissio
         .values_list("permission__key", "scope_key"),
     )
     assert permission_targets == _expected_permission_targets(request_type)
-    assert grant.grant_expires_at == _grant_expires_at(request_type, current_expires_at)
+    assert grant_permission.expires_at == _grant_expires_at(request_type, current_expires_at)
     assert grant.version == 1
     assert access_request.status == REQUEST_STATUS_GRANT_FAILED
     assert access_request.applied_at is None
@@ -181,6 +184,8 @@ def _approved_request(
         grant_type=grant_type,
         grant_expires_at=grant_expires_at,
         reason="审批已通过",
+        idempotency_key=f"{app.app_key}-approved-{request_type}",
+        payload_digest="0" * 64,
         approved_at=timezone.now(),
     )
 
@@ -220,6 +225,7 @@ def _add_revoke_group_target(
             _ = AccessGrantGroup.objects.create(
                 grant=grant,
                 authorization_group=authorization_group,
+                expires_at=None,
             )
 
 
@@ -237,6 +243,7 @@ def _add_revoke_permission_target(
                 grant=grant,
                 permission=permission,
                 scope_key="GLOBAL",
+                expires_at=None,
             )
 
 

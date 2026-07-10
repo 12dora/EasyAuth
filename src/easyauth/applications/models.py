@@ -15,7 +15,6 @@ from .ops_models import (
     AuthorizationGroupAccessPolicy,
     PermissionGroup,
     PermissionTemplateVersion,
-    RoleAccessPolicy,
 )
 
 __all__ = (
@@ -34,9 +33,6 @@ __all__ = (
     "Permission",
     "PermissionGroup",
     "PermissionTemplateVersion",
-    "Role",
-    "RoleAccessPolicy",
-    "RolePermission",
 )
 
 if TYPE_CHECKING:
@@ -217,42 +213,6 @@ class AppScope(models.Model):
                     ),
                 },
             )
-
-
-class Role(models.Model):
-    if TYPE_CHECKING:
-        id: ClassVar[int]
-        app_id: ClassVar[int]
-
-    app: models.ForeignKey[App, App] = models.ForeignKey(
-        App,
-        on_delete=models.CASCADE,
-        related_name="roles",
-    )
-    key: models.CharField[str, str] = models.CharField(max_length=64)
-    name: models.CharField[str, str] = models.CharField(max_length=128)
-    description: models.TextField[str, str] = models.TextField(blank=True)
-    is_active: models.BooleanField[bool, bool] = models.BooleanField(default=True)
-    requestable: models.BooleanField[bool, bool] = models.BooleanField(default=True)
-    created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
-        auto_now_add=True,
-    )
-    updated_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
-        auto_now=True,
-    )
-
-    class Meta:
-        constraints: ClassVar[list[models.BaseConstraint]] = [
-            models.UniqueConstraint(
-                fields=["app", "key"],
-                name="applications_role_app_key_unique",
-            ),
-        ]
-        ordering: ClassVar[list[str]] = ["app__app_key", "key"]
-
-    @override
-    def __str__(self) -> str:
-        return f"{self.app.app_key}:{self.key}"
 
 
 class Permission(models.Model):
@@ -443,9 +403,16 @@ class AuthorizationGroupGrant(models.Model):
         app_id = self.authorization_group.app_id
         if self.permission.app_id != app_id:
             errors["permission"] = "Permission must belong to the authorization group app."
-        elif not AppScope.objects.filter(app_id=app_id, key=self.scope_key).exists():
+        scope_is_active = (
+            AppScope.objects.filter(app_id=app_id, key=self.scope_key)
+            .values_list("is_active", flat=True)
+            .first()
+        )
+        if scope_is_active is None:
             errors["scope_key"] = "Scope key must reference an app scope."
-        elif self.scope_key not in self.permission.supported_scopes:
+        elif self.is_active and not scope_is_active:
+            errors["scope_key"] = "Active grant must reference an active app scope."
+        elif self.is_active and self.scope_key not in self.permission.supported_scopes:
             errors["scope_key"] = "Scope key must be supported by the permission."
         if errors:
             raise ValidationError(errors)
@@ -534,47 +501,6 @@ class ManagedScopePolicy(models.Model):
             raise ValidationError(errors)
 
 
-class RolePermission(models.Model):
-    if TYPE_CHECKING:
-        role_id: ClassVar[int]
-        permission_id: ClassVar[int]
-
-    role: models.ForeignKey[Role, Role] = models.ForeignKey(
-        Role,
-        on_delete=models.CASCADE,
-        related_name="role_permissions",
-    )
-    permission: models.ForeignKey[Permission, Permission] = models.ForeignKey(
-        Permission,
-        on_delete=models.CASCADE,
-        related_name="role_permissions",
-    )
-    created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
-        auto_now_add=True,
-    )
-
-    class Meta:
-        constraints: ClassVar[list[models.BaseConstraint]] = [
-            models.UniqueConstraint(
-                fields=["role", "permission"],
-                name="applications_role_permission_unique",
-            ),
-        ]
-        ordering: ClassVar[list[str]] = ["role__app__app_key", "role__key", "permission__key"]
-
-    @override
-    def __str__(self) -> str:
-        return f"{self.role} -> {self.permission}"
-
-    @override
-    def clean(self) -> None:
-        super().clean()
-        if self.role.app != self.permission.app:
-            raise ValidationError(
-                {"permission": "Role and permission must belong to the same app."},
-            )
-
-
 class ApprovalRule(models.Model):
     if TYPE_CHECKING:
         id: ClassVar[int]
@@ -583,13 +509,6 @@ class ApprovalRule(models.Model):
         App,
         on_delete=models.CASCADE,
         related_name="approval_rules",
-    )
-    role: models.ForeignKey[Role | None, Role | None] = models.ForeignKey(
-        Role,
-        on_delete=models.CASCADE,
-        related_name="approval_rules",
-        blank=True,
-        null=True,
     )
     authorization_group: models.ForeignKey[
         AuthorizationGroup | None,
@@ -622,12 +541,10 @@ class ApprovalRule(models.Model):
             models.CheckConstraint(
                 condition=(
                     Q(
-                        role__isnull=True,
                         authorization_group__isnull=False,
                         permission__isnull=True,
                     )
                     | Q(
-                        role__isnull=True,
                         authorization_group__isnull=True,
                         permission__isnull=False,
                     )

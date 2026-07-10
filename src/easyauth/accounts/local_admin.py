@@ -16,6 +16,7 @@ import webauthn
 from django.conf import settings as django_settings
 from django.contrib.auth import hashers
 from django.core.cache import cache
+from django.db import transaction
 from django.db.models import Q
 from django.utils import timezone
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
@@ -32,6 +33,7 @@ from webauthn.helpers.structs import (
 from easyauth.accounts.auth import (
     AUTHENTIK_SESSION_KEY,
     LOCAL_ADMIN_SESSION_FLAG,
+    LOCAL_ADMIN_SESSION_VERSION_KEY,
     VerifiedOidcClaims,
     bind_oidc_session,
 )
@@ -102,7 +104,13 @@ def current_local_admin(request: HttpRequest) -> LocalAdminAccount | None:
     if not isinstance(subject, str) or not subject.startswith(LOCAL_ADMIN_SUBJECT_PREFIX):
         return None
     username = subject[len(LOCAL_ADMIN_SUBJECT_PREFIX) :]
-    return LocalAdminAccount.objects.filter(username=username, is_active=True).first()
+    account = LocalAdminAccount.objects.filter(username=username, is_active=True).first()
+    if account is None:
+        return None
+    session_version = request.session.get(LOCAL_ADMIN_SESSION_VERSION_KEY)
+    if session_version != account.session_version:
+        return None
+    return account
 
 
 def bind_local_admin_session(
@@ -125,6 +133,7 @@ def bind_local_admin_session(
         ),
         local_admin=True,
     )
+    request.session[LOCAL_ADMIN_SESSION_VERSION_KEY] = account.session_version
     clear_pending_verification(request)
     reset_login_failures(account.username)
     _record_event(
@@ -296,23 +305,66 @@ def totp_qr_data_uri(provisioning_uri: str) -> str:
     return f"data:image/svg+xml;base64,{encoded}"
 
 
-def store_totp_setup_secret(request: HttpRequest, secret: str) -> None:
-    request.session[TOTP_SETUP_SESSION_KEY] = {"secret": secret, "issued_at": time.time()}
+def store_totp_setup_secret(
+    request: HttpRequest,
+    account: LocalAdminAccount,
+    secret: str,
+) -> str:
+    nonce = token_urlsafe(32)
+    request.session[TOTP_SETUP_SESSION_KEY] = {
+        "account_id": account.pk,
+        "issued_at": time.time(),
+        "nonce": nonce,
+        "secret": secret,
+        "session_version": account.session_version,
+    }
+    return nonce
 
 
-def totp_setup_secret(request: HttpRequest) -> str:
+def totp_setup_secret(
+    request: HttpRequest,
+    account: LocalAdminAccount,
+    *,
+    nonce: str | None = None,
+) -> str:
     payload = request.session.get(TOTP_SETUP_SESSION_KEY)
     if not isinstance(payload, dict):
         return ""
     secret = payload.get("secret")
     issued_at = payload.get("issued_at")
-    if not isinstance(secret, str) or not isinstance(issued_at, (int, float)):
+    stored_nonce = payload.get("nonce")
+    if (
+        not isinstance(secret, str)
+        or not isinstance(issued_at, (int, float))
+        or not isinstance(stored_nonce, str)
+        or payload.get("account_id") != account.pk
+        or payload.get("session_version") != account.session_version
+        or (nonce is not None and not compare_digest(stored_nonce, nonce))
+    ):
         clear_totp_setup_secret(request)
         return ""
     if time.time() - float(issued_at) > TOTP_SETUP_TTL_SECONDS:
         clear_totp_setup_secret(request)
         return ""
     return secret
+
+
+def totp_setup_nonce(request: HttpRequest, account: LocalAdminAccount) -> str:
+    if totp_setup_secret(request, account) == "":
+        return ""
+    payload = request.session.get(TOTP_SETUP_SESSION_KEY)
+    return str(payload["nonce"]) if isinstance(payload, dict) else ""
+
+
+def rotate_local_admin_session(request: HttpRequest, account: LocalAdminAccount) -> None:
+    """递增账号会话版本, 同时让当前已完成 step-up 的会话继续有效。"""
+    with transaction.atomic():
+        locked = LocalAdminAccount.objects.select_for_update().get(pk=account.pk)
+        locked.session_version += 1
+        locked.save(update_fields=["session_version", "updated_at"])
+    account.session_version = locked.session_version
+    request.session.cycle_key()
+    request.session[LOCAL_ADMIN_SESSION_VERSION_KEY] = locked.session_version
 
 
 def clear_totp_setup_secret(request: HttpRequest) -> None:

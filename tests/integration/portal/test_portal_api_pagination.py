@@ -10,8 +10,8 @@ from django.utils import timezone
 
 from easyauth.access_requests.models import AccessRequest
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App
-from easyauth.grants.models import GRANT_TYPE_PERMANENT, GRANT_TYPE_TIMED, AccessGrant
+from easyauth.applications.models import App, AppScope, Permission
+from easyauth.grants.models import AccessGrant, AccessGrantPermission
 from tests.integration.portal.helpers import logged_in_client
 
 if TYPE_CHECKING:
@@ -99,11 +99,35 @@ def test_portal_access_requests_returns_requested_page_for_session_user() -> Non
     # Given: 当前员工有三条申请, 另一个员工也有申请。
     client, user = logged_in_client("portal-page-requests-user")
     app = App.objects.create(app_key="portal-page-requests-app", name="Portal Requests")
-    oldest = AccessRequest.objects.create(user=user, app=app, reason="第二页申请")
-    _ = AccessRequest.objects.create(user=user, app=app, reason="第一页申请 2")
-    _ = AccessRequest.objects.create(user=user, app=app, reason="第一页申请")
+    oldest = AccessRequest.objects.create(
+        user=user,
+        app=app,
+        reason="第二页申请",
+        idempotency_key="portal-page-request-oldest",
+        payload_digest="a" * 64,
+    )
+    _ = AccessRequest.objects.create(
+        user=user,
+        app=app,
+        reason="第一页申请 2",
+        idempotency_key="portal-page-request-middle",
+        payload_digest="b" * 64,
+    )
+    _ = AccessRequest.objects.create(
+        user=user,
+        app=app,
+        reason="第一页申请",
+        idempotency_key="portal-page-request-newest",
+        payload_digest="c" * 64,
+    )
     other_user = UserMirror.objects.create(authentik_user_id="portal-page-requests-other")
-    _ = AccessRequest.objects.create(user=other_user, app=app, reason="不应泄露")
+    _ = AccessRequest.objects.create(
+        user=other_user,
+        app=app,
+        reason="不应泄露",
+        idempotency_key="portal-page-request-other",
+        payload_digest="d" * 64,
+    )
 
     # When: 员工请求第二页申请。
     response = client.get(
@@ -130,16 +154,26 @@ def _create_grant(
     expires_in_days: int | None = None,
 ) -> AccessGrant:
     app = App.objects.create(app_key=app_key, name=app_key)
-    return AccessGrant.objects.create(
-        user=user,
-        app=app,
-        grant_type=GRANT_TYPE_TIMED if expires_in_days is not None else GRANT_TYPE_PERMANENT,
-        grant_expires_at=(
-            timezone.now() + timedelta(days=expires_in_days)
-            if expires_in_days is not None
-            else None
-        ),
+    expires_at = (
+        timezone.now() + timedelta(days=expires_in_days)
+        if expires_in_days is not None
+        else None
     )
+    grant = AccessGrant.objects.create(user=user, app=app)
+    scope = AppScope.objects.create(app=app, key="GLOBAL", name="全局")
+    permission = Permission.objects.create(
+        app=app,
+        key="portal.fixture",
+        name="门户测试权限",
+        supported_scopes=[scope.key],
+    )
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=permission,
+        scope_key=scope.key,
+        expires_at=expires_at,
+    )
+    return grant
 
 
 def _json_payload(response: _JsonResponse) -> _ListPayload:

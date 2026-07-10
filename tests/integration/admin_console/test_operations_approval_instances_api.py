@@ -52,6 +52,8 @@ def test_redeliver_uses_atomic_failed_to_pending_transition() -> None:
         biz_key="ops-redeliver-biz",
         originator_user=originator,
         status="approved",
+        submission_state="submitted",
+        payload_hash="0" * 64,
         completion_delivery=delivery,
     )
     url = f"/console/api/v1/operations/approval-instances/{instance.id}/redeliver"

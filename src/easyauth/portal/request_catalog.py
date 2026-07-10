@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, cast
 
+from django.db.models import Q
+
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.applications.models import (
     App,
@@ -49,7 +51,9 @@ def request_catalog_payload(user: UserMirror) -> dict[str, JsonValue]:
         if _permission_scope_options(permission, scope_options_by_app_id)
     )
     grants_by_group_id = _grants_by_group_id(authorization_groups)
-    approver_users = _active_approver_users()
+    approver_users = _active_approver_users(
+        _approver_lookup_ids(apps, authorization_groups, permissions, user),
+    )
     resolver = _ApproverResolver(approver_users)
     direct_manager_resolution = _direct_manager_approver_resolution(user, resolver)
     default_approver_by_app_id = _app_default_approver_by_app_id(
@@ -342,10 +346,50 @@ def _permission_supports_scope(permission: Permission, scope_key: str) -> bool:
     return isinstance(supported_scopes, list) and scope_key in supported_scopes
 
 
-def _active_approver_users() -> tuple[UserMirror, ...]:
+def _active_approver_users(lookup_ids: set[str]) -> tuple[UserMirror, ...]:
+    if not lookup_ids:
+        return ()
     return tuple(
-        UserMirror.objects.filter(status=USER_STATUS_ACTIVE).order_by("authentik_user_id"),
+        UserMirror.objects.filter(status=USER_STATUS_ACTIVE)
+        .filter(
+            Q(authentik_user_id__in=lookup_ids) | Q(dingtalk_userid__in=lookup_ids),
+        )
+        .order_by("authentik_user_id"),
     )
+
+
+def _approver_lookup_ids(
+    apps: tuple[App, ...],
+    groups: tuple[AuthorizationGroup, ...],
+    permissions: tuple[Permission, ...],
+    user: UserMirror,
+) -> set[str]:
+    lookup_ids: set[str] = {user.manager_userid} if user.manager_userid else set()
+    lookup_ids.update(
+        cast(
+            "Iterable[str]",
+            AppMembership.objects.filter(
+                app_id__in=(app.id for app in apps),
+                role="owner",
+                is_active=True,
+            ).values_list("user_id", flat=True),
+        ),
+    )
+    rule_approver_rows = ApprovalRule.objects.filter(
+        Q(authorization_group_id__in=(group.id for group in groups))
+        | Q(permission_id__in=(permission.id for permission in permissions)),
+        is_active=True,
+    ).values_list("approver_userids", flat=True)
+    for raw_user_ids in cast("Iterable[object]", rule_approver_rows):
+        if not isinstance(raw_user_ids, list):
+            continue
+        lookup_ids.update(
+            raw_user_id
+            for raw_user_id in cast("list[object]", raw_user_ids)
+            if isinstance(raw_user_id, str)
+        )
+    lookup_ids.discard("")
+    return lookup_ids
 
 
 def _approver_candidates(

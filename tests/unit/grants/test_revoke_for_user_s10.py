@@ -10,7 +10,6 @@ from easyauth.audit.models import AuditLog
 from easyauth.grants.models import (
     GRANT_STATUS_EXPIRED,
     GRANT_STATUS_REVOKED,
-    GRANT_TYPE_PERMANENT,
     AccessGrant,
 )
 from easyauth.grants.services import GrantService
@@ -29,8 +28,8 @@ def test_s10_revoke_for_user_revokes_all_current_active_grants_once() -> None:
     user = UserMirror.objects.create(authentik_user_id="s10-revoke-user")
     crm = App.objects.create(app_key="s10-revoke-crm", name="S10 Revoke CRM")
     erp = App.objects.create(app_key="s10-revoke-erp", name="S10 Revoke ERP")
-    crm_grant = AccessGrant.objects.create(user=user, app=crm, grant_type=GRANT_TYPE_PERMANENT)
-    erp_grant = AccessGrant.objects.create(user=user, app=erp, grant_type=GRANT_TYPE_PERMANENT)
+    crm_grant = AccessGrant.objects.create(user=user, app=crm)
+    erp_grant = AccessGrant.objects.create(user=user, app=erp)
 
     # When
     first = GrantService.revoke_for_user(
@@ -75,13 +74,11 @@ def test_s10_revoke_for_user_ignores_non_current_and_inactive_grants() -> None:
     current_grant = AccessGrant.objects.create(
         user=user,
         app=current_app,
-        grant_type=GRANT_TYPE_PERMANENT,
         version=INITIAL_VERSION,
     )
     inactive_grant = AccessGrant.objects.create(
         user=user,
         app=inactive_app,
-        grant_type=GRANT_TYPE_PERMANENT,
         status=GRANT_STATUS_EXPIRED,
         is_current=False,
         version=HISTORICAL_VERSION,

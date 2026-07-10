@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from json import JSONDecodeError, dumps, loads
-from typing import TYPE_CHECKING, Final, Self, cast
+from time import monotonic
+from typing import TYPE_CHECKING, Final, Protocol, Self, cast
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -16,6 +17,14 @@ if TYPE_CHECKING:
 # NetBird 管理 API 的全部调用点收敛在本模块(方案 §8: API 随版本漂移时只改这里);
 # 端点契约以 fork 锁定的基线 tag 为准(姊妹篇 §1/§4), 预创建用户依赖 fork 补丁。
 DEFAULT_TIMEOUT_SECONDS: Final = 10.0
+DEFAULT_TOTAL_TIMEOUT_SECONDS: Final = 30.0
+MAX_RESPONSE_BYTES: Final = 1024 * 1024
+RESPONSE_READ_CHUNK_BYTES: Final = 64 * 1024
+MAX_TRANSIENT_IDEMPOTENT_ATTEMPTS: Final = 3
+TOTAL_TIMEOUT_MESSAGE: Final = "NetBird API 请求超过总时限。"
+READ_TOTAL_TIMEOUT_MESSAGE: Final = "NetBird API 响应读取超过总时限。"
+INVALID_CONTENT_LENGTH_MESSAGE: Final = "NetBird API Content-Length 无效。"
+RESPONSE_TOO_LARGE_MESSAGE: Final = "NetBird API 响应体超过大小上限。"
 
 USER_ROLE_USER: Final = "user"
 USER_ROLE_ADMIN: Final = "admin"
@@ -28,7 +37,13 @@ class NetBirdApiError(ConnectorError):
         self.status_code: int | None = status_code
 
 
-class _ReadableResponse:
+class _Headers(Protocol):
+    def get(self, name: str) -> str | None: ...
+
+
+class _ReadableResponse(Protocol):
+    headers: _Headers
+
     def __enter__(self) -> Self: ...
 
     def __exit__(
@@ -38,7 +53,7 @@ class _ReadableResponse:
         traceback: TracebackType | None,
     ) -> None: ...
 
-    def read(self) -> bytes: ...
+    def read(self, _amount: int = -1) -> bytes: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,10 +80,12 @@ class NetBirdClient:
         api_url: str,
         api_token: str,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+        total_timeout_seconds: float = DEFAULT_TOTAL_TIMEOUT_SECONDS,
     ) -> None:
         self._base_url: str = api_url.rstrip("/")
         self._api_token: str = api_token
         self._timeout_seconds: float = timeout_seconds
+        self._total_timeout_seconds: float = total_timeout_seconds
 
     def list_users(self) -> list[NetBirdUser]:
         payload = self._request("GET", "/api/users")
@@ -76,6 +93,21 @@ class NetBirdClient:
             message = "NetBird /api/users 响应必须是 JSON 数组。"
             raise NetBirdApiError(message)
         return [_parse_user(item) for item in payload if isinstance(item, dict)]
+
+    def get_account_id(self) -> str:
+        payload = self._request("GET", "/api/accounts")
+        if not isinstance(payload, list) or len(payload) != 1:
+            message = "NetBird /api/accounts 必须返回唯一账户。"
+            raise NetBirdApiError(message)
+        account = payload[0]
+        if not isinstance(account, dict):
+            message = "NetBird /api/accounts 响应账户必须是 JSON 对象。"
+            raise NetBirdApiError(message)
+        account_id = _string_value(account, "id")
+        if not account_id:
+            message = "NetBird /api/accounts 响应缺少不可变账户 ID。"
+            raise NetBirdApiError(message)
+        return account_id
 
     def create_user(
         self,
@@ -144,18 +176,33 @@ class NetBirdClient:
         if data is not None:
             headers["Content-Type"] = "application/json"
         request = Request(url, data=data, headers=headers, method=method)  # noqa: S310 - URL 来自控制台超管配置。
-        try:
-            with cast(
-                "_ReadableResponse",
-                urlopen(request, timeout=self._timeout_seconds),  # noqa: S310
-            ) as response:
-                raw = response.read()
-        except HTTPError as error:
-            message = f"NetBird API {method} {path} 返回 HTTP {error.code}。"
-            raise NetBirdApiError(message, status_code=error.code) from error
-        except (URLError, TimeoutError) as error:
-            message = f"NetBird API 不可达: {error}"
-            raise NetBirdApiError(message) from error
+        deadline = monotonic() + self._total_timeout_seconds
+        max_attempts = (
+            MAX_TRANSIENT_IDEMPOTENT_ATTEMPTS if method in {"GET", "PUT"} else 1
+        )
+        raw = b""
+        for attempt in range(max_attempts):
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise NetBirdApiError(TOTAL_TIMEOUT_MESSAGE)
+            try:
+                with cast(
+                    "_ReadableResponse",
+                    urlopen(  # noqa: S310
+                        request,
+                        timeout=min(self._timeout_seconds, remaining),
+                    ),
+                ) as response:
+                    raw = _read_bounded(response, deadline=deadline)
+                break
+            except HTTPError as error:
+                message = f"NetBird API {method} {path} 返回 HTTP {error.code}。"
+                raise NetBirdApiError(message, status_code=error.code) from error
+            except (URLError, TimeoutError) as error:
+                if attempt + 1 < max_attempts and monotonic() < deadline:
+                    continue
+                message = f"NetBird API 不可达: {error}"
+                raise NetBirdApiError(message) from error
         if not raw:
             return None
         try:
@@ -163,6 +210,31 @@ class NetBirdClient:
         except (JSONDecodeError, UnicodeDecodeError) as error:
             message = f"NetBird API {method} {path} 响应不是有效 JSON。"
             raise NetBirdApiError(message) from error
+
+
+def _read_bounded(response: _ReadableResponse, *, deadline: float) -> bytes:
+    headers = response.headers
+    content_length_value = headers.get("Content-Length")
+    if content_length_value is not None:
+        try:
+            content_length = int(content_length_value)
+        except (TypeError, ValueError) as error:
+            raise NetBirdApiError(INVALID_CONTENT_LENGTH_MESSAGE) from error
+        if content_length < 0 or content_length > MAX_RESPONSE_BYTES:
+            raise NetBirdApiError(RESPONSE_TOO_LARGE_MESSAGE)
+    chunks: list[bytes] = []
+    total = 0
+    while True:
+        if monotonic() >= deadline:
+            raise NetBirdApiError(READ_TOTAL_TIMEOUT_MESSAGE)
+        chunk = response.read(min(RESPONSE_READ_CHUNK_BYTES, MAX_RESPONSE_BYTES + 1 - total))
+        if not chunk:
+            break
+        total += len(chunk)
+        if total > MAX_RESPONSE_BYTES:
+            raise NetBirdApiError(RESPONSE_TOO_LARGE_MESSAGE)
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def _parse_user(item: dict[str, JsonValue]) -> NetBirdUser:

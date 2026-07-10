@@ -8,7 +8,7 @@ from django.db import models
 from django.db.models import Q
 
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App, Permission, Role
+from easyauth.applications.models import App, AuthorizationGroup, Permission
 
 if TYPE_CHECKING:
     from datetime import date, datetime
@@ -35,12 +35,14 @@ REQUEST_STATUS_APPROVED: Final = "approved"
 REQUEST_STATUS_REJECTED: Final = "rejected"
 REQUEST_STATUS_GRANT_APPLIED: Final = "grant_applied"
 REQUEST_STATUS_GRANT_FAILED: Final = "grant_failed"
+REQUEST_STATUS_GRANT_EXPIRED: Final = "grant_expired"
 REQUEST_STATUS_CHOICES: Final[tuple[tuple[str, str], ...]] = (
     (REQUEST_STATUS_SUBMITTED, "submitted"),
     (REQUEST_STATUS_APPROVED, "approved"),
     (REQUEST_STATUS_REJECTED, "rejected"),
     (REQUEST_STATUS_GRANT_APPLIED, "grant_applied"),
     (REQUEST_STATUS_GRANT_FAILED, "grant_failed"),
+    (REQUEST_STATUS_GRANT_EXPIRED, "grant_expired"),
 )
 REQUEST_STATUS_VALUES: Final[tuple[str, ...]] = (
     REQUEST_STATUS_SUBMITTED,
@@ -48,6 +50,7 @@ REQUEST_STATUS_VALUES: Final[tuple[str, ...]] = (
     REQUEST_STATUS_REJECTED,
     REQUEST_STATUS_GRANT_APPLIED,
     REQUEST_STATUS_GRANT_FAILED,
+    REQUEST_STATUS_GRANT_EXPIRED,
 )
 
 GRANT_TYPE_TIMED: Final = "timed"
@@ -65,11 +68,14 @@ DECISION_ACTOR_CHOICES: Final[tuple[tuple[str, str], ...]] = (
     (DECISION_ACTOR_USER, "user"),
     (DECISION_ACTOR_CONSOLE_ADMIN, "console_admin"),
 )
+PAYLOAD_DIGEST_LENGTH: Final = 64
 
 
 class AccessRequest(models.Model):
     if TYPE_CHECKING:
         id: ClassVar[int]
+        app_id: ClassVar[int]
+        loaded_approver_assignments: list[AccessRequestApprover]
 
     user: models.ForeignKey[UserMirror, UserMirror] = models.ForeignKey(
         UserMirror,
@@ -101,10 +107,8 @@ class AccessRequest(models.Model):
         datetime | None,
     ] = models.DateTimeField(blank=True, null=True)
     reason: models.TextField[str, str] = models.TextField(blank=True)
-    approver_user_ids: models.JSONField[list[str], list[str]] = models.JSONField(
-        blank=True,
-        default=list,
-    )
+    idempotency_key: models.CharField[str, str] = models.CharField(max_length=128)
+    payload_digest: models.CharField[str, str] = models.CharField(max_length=64, editable=False)
     submitted_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
     )
@@ -147,6 +151,10 @@ class AccessRequest(models.Model):
                 ),
                 name="access_requests_grant_expiration_shape",
             ),
+            models.UniqueConstraint(
+                fields=["user", "idempotency_key"],
+                name="access_requests_user_idempotency_key_unique",
+            ),
         ]
         ordering: ClassVar[list[str]] = ["-submitted_at", "id"]
 
@@ -166,23 +174,30 @@ class AccessRequest(models.Model):
             errors["applied_at"] = "Grant-applied access requests must include applied_at."
         if self.status != REQUEST_STATUS_GRANT_APPLIED and self.applied_at is not None:
             errors["applied_at"] = "Only grant-applied access requests may include applied_at."
+        if not self.idempotency_key or self.idempotency_key != self.idempotency_key.strip():
+            errors["idempotency_key"] = "A non-empty opaque idempotency key is required."
+        if len(self.payload_digest) != PAYLOAD_DIGEST_LENGTH or any(
+            character not in "0123456789abcdef" for character in self.payload_digest
+        ):
+            errors["payload_digest"] = "Payload digest must be a lowercase SHA-256 digest."
         if errors:
             raise ValidationError(errors)
 
 
-class AccessRequestRole(models.Model):
+class AccessRequestApprover(models.Model):
     if TYPE_CHECKING:
         access_request_id: ClassVar[int]
+        approver_id: ClassVar[int]
 
     access_request: models.ForeignKey[AccessRequest, AccessRequest] = models.ForeignKey(
         AccessRequest,
         on_delete=models.CASCADE,
-        related_name="target_roles",
+        related_name="approver_assignments",
     )
-    role: models.ForeignKey[Role, Role] = models.ForeignKey(
-        Role,
-        on_delete=models.CASCADE,
-        related_name="access_request_roles",
+    approver: models.ForeignKey[UserMirror, UserMirror] = models.ForeignKey(
+        UserMirror,
+        on_delete=models.PROTECT,
+        related_name="approval_assignments",
     )
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
@@ -191,21 +206,15 @@ class AccessRequestRole(models.Model):
     class Meta:
         constraints: ClassVar[list[models.BaseConstraint]] = [
             models.UniqueConstraint(
-                fields=["access_request", "role"],
-                name="access_requests_request_role_unique",
+                fields=["access_request", "approver"],
+                name="access_requests_request_approver_unique",
             ),
         ]
-        ordering: ClassVar[list[str]] = ["access_request_id", "role__key"]
+        ordering: ClassVar[list[str]] = ["access_request_id", "approver__authentik_user_id"]
 
     @override
     def __str__(self) -> str:
-        return f"{self.access_request} -> {self.role}"
-
-    @override
-    def clean(self) -> None:
-        super().clean()
-        if self.role.app != self.access_request.app:
-            raise ValidationError({"role": "Role must belong to the access request app."})
+        return f"{self.access_request} -> {self.approver.authentik_user_id}"
 
 
 class AccessRequestGroup(models.Model):
@@ -218,10 +227,12 @@ class AccessRequestGroup(models.Model):
         on_delete=models.CASCADE,
         related_name="target_groups",
     )
-    authorization_group = models.ForeignKey(
-        "applications.AuthorizationGroup",
-        on_delete=models.CASCADE,
-        related_name="access_request_groups",
+    authorization_group: models.ForeignKey[AuthorizationGroup, AuthorizationGroup] = (
+        models.ForeignKey(
+            AuthorizationGroup,
+            on_delete=models.CASCADE,
+            related_name="access_request_groups",
+        )
     )
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,

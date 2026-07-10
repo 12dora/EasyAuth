@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import datetime, timedelta
 from http import HTTPStatus
 from typing import Final
@@ -97,7 +98,7 @@ def test_ops2_portal_lists_my_current_permissions_for_active_grants() -> None:
     assert "invoice.read" in body
     assert '"grant_version": 3' in body
     assert '"catalog_version": 1' in body
-    assert '"snapshot_version": "3.1.0"' in body
+    assert re.search(r'"snapshot_version": "3\.1\.[0-9a-f]{16}"', body)
     assert GRANT_TYPE_PERMANENT in body
     assert "其他用户应用" not in body
     assert "已撤销应用" not in body
@@ -152,9 +153,27 @@ def test_ops2_portal_explains_request_status_before_grant_is_effective() -> None
     # Given: 当前登录员工已有审批通过、授权生效和授权失败申请。
     client, user = logged_in_client("ops2-status-guide-user")
     app = App.objects.create(app_key="ops2-status-guide-app", name="CRM")
-    _ = AccessRequest.objects.create(user=user, app=app, status=REQUEST_STATUS_APPROVED)
-    _ = AccessRequest.objects.create(user=user, app=app, status=REQUEST_STATUS_GRANT_APPLIED)
-    _ = AccessRequest.objects.create(user=user, app=app, status=REQUEST_STATUS_GRANT_FAILED)
+    _ = AccessRequest.objects.create(
+        user=user,
+        app=app,
+        status=REQUEST_STATUS_APPROVED,
+        idempotency_key="ops2-status-approved",
+        payload_digest="a" * 64,
+    )
+    _ = AccessRequest.objects.create(
+        user=user,
+        app=app,
+        status=REQUEST_STATUS_GRANT_APPLIED,
+        idempotency_key="ops2-status-applied",
+        payload_digest="b" * 64,
+    )
+    _ = AccessRequest.objects.create(
+        user=user,
+        app=app,
+        status=REQUEST_STATUS_GRANT_FAILED,
+        idempotency_key="ops2-status-failed",
+        payload_digest="c" * 64,
+    )
 
     # When: 员工读取申请状态 API。
     response = client.get(REQUESTS_API_URL)
@@ -178,9 +197,9 @@ def _create_grant(
     grant = AccessGrant.objects.create(
         user=user,
         app=app,
-        grant_type=GRANT_TYPE_PERMANENT,
         version=version,
     )
+    _create_direct_grant_fact(grant=grant)
     return app, grant
 
 
@@ -192,12 +211,8 @@ def _create_timed_grant(
     expires_at: datetime,
 ) -> tuple[App, AccessGrant]:
     app = App.objects.create(app_key=app_key, name=app_name)
-    grant = AccessGrant.objects.create(
-        user=user,
-        app=app,
-        grant_type=GRANT_TYPE_TIMED,
-        grant_expires_at=expires_at,
-    )
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _create_direct_grant_fact(grant=grant, expires_at=expires_at)
     return app, grant
 
 
@@ -211,13 +226,33 @@ def _create_revoked_grant(
     grant = AccessGrant.objects.create(
         user=user,
         app=app,
-        grant_type=GRANT_TYPE_PERMANENT,
         status=GRANT_STATUS_REVOKED,
         is_current=False,
     )
+    _create_direct_grant_fact(grant=grant)
     return app, grant
 
 
 def _create_other_user_grant(*, app_name: str) -> None:
     other_user = UserMirror.objects.create(authentik_user_id="ops2-other-user")
     _ = _create_grant(user=other_user, app_key="ops2-other-app", app_name=app_name)
+
+
+def _create_direct_grant_fact(
+    *,
+    grant: AccessGrant,
+    expires_at: datetime | None = None,
+) -> None:
+    scope = AppScope.objects.create(app=grant.app, key="GLOBAL", name="全局")
+    permission = Permission.objects.create(
+        app=grant.app,
+        key="portal.fixture",
+        name="门户测试权限",
+        supported_scopes=[scope.key],
+    )
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=permission,
+        scope_key=scope.key,
+        expires_at=expires_at,
+    )

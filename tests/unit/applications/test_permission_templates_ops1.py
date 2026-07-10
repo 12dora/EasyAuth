@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from json import dumps
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import pytest
 from pydantic import TypeAdapter
 
 from easyauth.api.errors import JsonValue
+from easyauth.applications.manifest_import import sync_app_manifest
 from easyauth.applications.models import (
     App,
     ApprovalRule,
@@ -125,6 +126,12 @@ approval_rules:
             lambda manifest: manifest["approval_rules"][0].update({"target_key": "missing"}),
             "app_manifest_unknown_approval_target",
         ),
+        (
+            lambda manifest: manifest["approval_rules"].append(
+                dict(manifest["approval_rules"][0]),
+            ),
+            "app_manifest_duplicate_key",
+        ),
     ],
 )
 def test_ops1_app_manifest_rejects_invalid_references(
@@ -207,10 +214,30 @@ def test_ops1_app_manifest_import_writes_catalog_and_bumps_version() -> None:
     assert grant.permission == permission
     assert grant.scope_key == "SELF"
     assert rule.authorization_group == auth_group
-    assert rule.role is None
     assert result.template_version.version == 1
     assert result.template_version.import_summary["manifest_schema_version"] == 1
     assert AuditLog.objects.filter(event_type="app_manifest_imported").exists()
+
+
+def test_manifest_hash_is_canonical_across_manual_and_sync_entries() -> None:
+    app = App.objects.create(app_key=APP_KEY, name="Ops1")
+    payload = _manifest_payload()
+    manual_template = parse_permission_template(
+        app_key=APP_KEY,
+        raw_template=dumps(payload, ensure_ascii=False, indent=4),
+        template_format="json",
+        imported_by="owner-001",
+    )
+    _ = apply_permission_template(app=app, template=manual_template)
+
+    outcome = sync_app_manifest(
+        app=app,
+        manifest=cast("dict[str, JsonValue]", payload),
+        actor_id="owner-001",
+    )
+
+    assert outcome.already_up_to_date is True
+    assert PermissionTemplateVersion.objects.filter(app=app).count() == 1
 
 
 def test_ops1_app_manifest_import_deactivates_missing_objects_without_hard_delete() -> None:

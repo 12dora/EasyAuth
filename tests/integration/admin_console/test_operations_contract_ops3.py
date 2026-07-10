@@ -7,7 +7,7 @@ import pytest
 from django.test import Client
 from pydantic import BaseModel, ConfigDict
 
-from easyauth.access_requests.models import AccessRequest
+from easyauth.access_requests.models import AccessRequest, AccessRequestApprover
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import App
@@ -61,7 +61,13 @@ def test_ops3_access_requests_include_decision_fields() -> None:
         user=user,
         app=app,
         reason="需要临时权限",
-        approver_user_ids=["ops3-contract-approver"],
+        idempotency_key="ops3-contract-request",
+        payload_digest="a" * 64,
+    )
+    approver = UserMirror.objects.create(authentik_user_id="ops3-contract-approver")
+    _ = AccessRequestApprover.objects.create(
+        access_request=access_request,
+        approver=approver,
     )
 
     # When: 系统管理员查询 access-requests 运营列表。

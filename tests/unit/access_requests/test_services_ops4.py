@@ -22,6 +22,7 @@ from easyauth.access_requests.services import (
     AccessRequestSubmission,
     AccessRequestSubmissionError,
 )
+from easyauth.access_requests.submission_types import ScopedAccessRequestGrant
 from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import App, ApprovalRule, AppScope, AuthorizationGroup, Permission
 from easyauth.audit.models import AuditLog
@@ -31,10 +32,6 @@ from easyauth.grants.models import (
     AccessGrantGroup,
     AccessGrantPermission,
 )
-from easyauth.grants.models import (
-    GRANT_TYPE_TIMED as GRANT_RECORD_TYPE_TIMED,
-)
-from easyauth.grants.services import ScopedDirectGrantInput
 
 pytestmark = pytest.mark.django_db
 
@@ -43,6 +40,8 @@ def _ensure_active_approver() -> str:
     # 审批人必须是活跃系统用户且不能是申请人本人; 用固定的第二用户满足该不变量。
     approver, _ = UserMirror.objects.get_or_create(authentik_user_id="approver-001")
     return approver.authentik_user_id
+
+
 DEFAULT_SCOPE_KEY: Final = "GLOBAL"
 
 
@@ -88,6 +87,7 @@ def test_ops4_submit_change_request_requires_current_active_grant() -> None:
                 reason="需要变更为写权限",
                 actor_type="user",
                 actor_id=user.authentik_user_id,
+                idempotency_key="ops4-change-no-grant",
                 request_type=REQUEST_TYPE_CHANGE,
             ),
         )
@@ -103,8 +103,12 @@ def test_ops4_submit_change_request_creates_submitted_lifecycle_request_only() -
     app = App.objects.create(app_key="ops4-change-app", name="OPS4 Change")
     old_group = _authorization_group(app, key="reader", name="Reader")
     new_group = _requestable_group(app, key="writer", name="Writer")
-    grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=old_group)
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=old_group,
+        expires_at=None,
+    )
 
     # When: 员工提交授权组变更申请。
     access_request = AccessRequestService.submit_access_request(
@@ -117,6 +121,7 @@ def test_ops4_submit_change_request_creates_submitted_lifecycle_request_only() -
             reason="需要处理发票",
             actor_type="user",
             actor_id=user.authentik_user_id,
+            idempotency_key="ops4-change-group-target",
             approver_user_ids=(_ensure_active_approver(),),
             request_type=REQUEST_TYPE_CHANGE,
         ),
@@ -140,11 +145,12 @@ def test_ops4_submit_change_request_accepts_direct_permission_only_target() -> N
     app = App.objects.create(app_key="ops4-change-permission-app", name="OPS4 Change Permission")
     old_permission = _scoped_permission(app, key="invoice.read", name="Invoice Read")
     new_permission = _scoped_permission(app, key="invoice.write", name="Invoice Write")
-    grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
+    grant = AccessGrant.objects.create(user=user, app=app)
     _ = AccessGrantPermission.objects.create(
         grant=grant,
         permission=old_permission,
         scope_key=DEFAULT_SCOPE_KEY,
+        expires_at=None,
     )
     _ = ApprovalRule.objects.create(
         app=app,
@@ -157,12 +163,13 @@ def test_ops4_submit_change_request_accepts_direct_permission_only_target() -> N
         AccessRequestSubmission(
             user=user,
             app=app,
-            direct_grants=(ScopedDirectGrantInput(new_permission, DEFAULT_SCOPE_KEY),),
+            direct_grants=(ScopedAccessRequestGrant(new_permission, DEFAULT_SCOPE_KEY),),
             grant_type=GRANT_TYPE_PERMANENT,
             grant_expires_at=None,
             reason="需要发票写权限",
             actor_type="user",
             actor_id=user.authentik_user_id,
+            idempotency_key="ops4-change-direct-permission",
             approver_user_ids=(_ensure_active_approver(),),
             request_type=REQUEST_TYPE_CHANGE,
         ),
@@ -184,8 +191,12 @@ def test_ops4_submit_revoke_request_accepts_empty_target_for_full_revoke() -> No
     user = UserMirror.objects.create(authentik_user_id="ops4-revoke-empty-user")
     app = App.objects.create(app_key="ops4-revoke-empty-app", name="OPS4 Revoke Empty")
     group = _requestable_group(app, key="reader", name="Reader")
-    grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        expires_at=None,
+    )
 
     # When: 员工提交空目标撤销申请。
     access_request = AccessRequestService.submit_access_request(
@@ -197,6 +208,7 @@ def test_ops4_submit_revoke_request_accepts_empty_target_for_full_revoke() -> No
             reason="不再需要访问",
             actor_type="user",
             actor_id=user.authentik_user_id,
+            idempotency_key="ops4-revoke-empty-target",
             approver_user_ids=(_ensure_active_approver(),),
             request_type=REQUEST_TYPE_REVOKE,
         ),
@@ -216,8 +228,12 @@ def test_ops4_submit_revoke_request_rejects_group_outside_current_grant() -> Non
     app = App.objects.create(app_key="ops4-revoke-superset-app", name="OPS4 Revoke Superset")
     current_group = _authorization_group(app, key="reader", name="Reader")
     outside_group = _requestable_group(app, key="admin", name="Admin")
-    grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=current_group)
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=current_group,
+        expires_at=None,
+    )
 
     # When / Then: 撤销申请不能把当前授权外的授权组放入目标集合。
     with pytest.raises(AccessRequestSubmissionError) as exc_info:
@@ -231,6 +247,7 @@ def test_ops4_submit_revoke_request_rejects_group_outside_current_grant() -> Non
                 reason="撤销不能扩大权限",
                 actor_type="user",
                 actor_id=user.authentik_user_id,
+                idempotency_key="ops4-revoke-outside-group",
                 request_type=REQUEST_TYPE_REVOKE,
             ),
         )
@@ -245,13 +262,13 @@ def test_ops4_submit_renew_request_preserves_timed_lifecycle_target() -> None:
     app = App.objects.create(app_key="ops4-renew-app", name="OPS4 Renew")
     group = _requestable_group(app, key="reader", name="Reader")
     now = timezone.now()
-    grant = AccessGrant.objects.create(
-        user=user,
-        app=app,
-        grant_type=GRANT_RECORD_TYPE_TIMED,
-        grant_expires_at=now + timedelta(days=3),
+    grant = AccessGrant.objects.create(user=user, app=app)
+    current_expires_at = now + timedelta(days=3)
+    grant_group = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        expires_at=current_expires_at,
     )
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
     renewed_until = now + timedelta(days=10)
 
     # When: 员工提交续期申请。
@@ -265,27 +282,29 @@ def test_ops4_submit_renew_request_preserves_timed_lifecycle_target() -> None:
             reason="项目延期",
             actor_type="user",
             actor_id=user.authentik_user_id,
+            idempotency_key="ops4-renew-timed",
             approver_user_ids=(_ensure_active_approver(),),
             request_type=REQUEST_TYPE_RENEW,
         ),
     )
 
     # Then: 续期申请保留新期限, 当前授权等待审批后再变更。
-    grant.refresh_from_db()
+    grant_group.refresh_from_db()
     assert access_request.request_type == REQUEST_TYPE_RENEW
     assert access_request.grant_expires_at == renewed_until
-    assert grant.grant_expires_at == now + timedelta(days=3)
+    assert grant_group.expires_at == current_expires_at
 
 
 def test_ops4_submit_renew_request_rejects_permanent_conversion() -> None:
     # Given: 员工已有未过期的限时授权。
     user = UserMirror.objects.create(authentik_user_id="ops4-renew-permanent-user")
     app = App.objects.create(app_key="ops4-renew-permanent-app", name="OPS4 Renew Permanent")
-    grant = AccessGrant.objects.create(
-        user=user,
-        app=app,
-        grant_type=GRANT_RECORD_TYPE_TIMED,
-        grant_expires_at=timezone.now() + timedelta(days=3),
+    group = _authorization_group(app, key="reader", name="Reader")
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        expires_at=timezone.now() + timedelta(days=3),
     )
 
     # When / Then: 续期不能把限时授权转换成永久授权。
@@ -294,11 +313,13 @@ def test_ops4_submit_renew_request_rejects_permanent_conversion() -> None:
             AccessRequestSubmission(
                 user=user,
                 app=app,
+                authorization_groups=(group,),
                 grant_type=GRANT_TYPE_PERMANENT,
                 grant_expires_at=None,
                 reason="希望转永久",
                 actor_type="user",
                 actor_id=user.authentik_user_id,
+                idempotency_key="ops4-renew-permanent-conversion",
                 request_type=REQUEST_TYPE_RENEW,
             ),
         )
@@ -316,7 +337,6 @@ def test_ops4_submit_lifecycle_request_rejects_revoked_current_grant() -> None:
     _ = AccessGrant.objects.create(
         user=user,
         app=app,
-        grant_type=GRANT_TYPE_PERMANENT,
         status=GRANT_STATUS_REVOKED,
         is_current=False,
     )
@@ -333,6 +353,7 @@ def test_ops4_submit_lifecycle_request_rejects_revoked_current_grant() -> None:
                 reason="已撤销授权不能变更",
                 actor_type="user",
                 actor_id=user.authentik_user_id,
+                idempotency_key="ops4-change-revoked-grant",
                 request_type=REQUEST_TYPE_CHANGE,
             ),
         )

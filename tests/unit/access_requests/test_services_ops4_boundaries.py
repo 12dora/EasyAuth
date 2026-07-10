@@ -29,8 +29,12 @@ def test_ops4_revoke_request_rejects_non_reducing_role_target() -> None:
     user = UserMirror.objects.create(authentik_user_id="ops4-revoke-equal-user")
     app = App.objects.create(app_key="ops4-revoke-equal-app", name="OPS4 Revoke Equal")
     group = AuthorizationGroup.objects.create(app=app, key="reader", kind="role", name="Reader")
-    grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        expires_at=None,
+    )
 
     # When / Then: 撤销申请目标完全等于当前授权组集合时被拒绝。
     with pytest.raises(AccessRequestSubmissionError) as exc_info:
@@ -44,6 +48,7 @@ def test_ops4_revoke_request_rejects_non_reducing_role_target() -> None:
                 reason="没有减少权限",
                 actor_type="user",
                 actor_id=user.authentik_user_id,
+                idempotency_key="ops4-revoke-non-reducing",
                 request_type=REQUEST_TYPE_REVOKE,
             ),
         )
@@ -58,14 +63,18 @@ def test_ops4_renew_request_rejects_changed_role_target() -> None:
     app = App.objects.create(app_key="ops4-renew-changed-app", name="OPS4 Renew Changed")
     reader = AuthorizationGroup.objects.create(app=app, key="reader", kind="role", name="Reader")
     writer = AuthorizationGroup.objects.create(app=app, key="writer", kind="role", name="Writer")
-    grant = AccessGrant.objects.create(
-        user=user,
-        app=app,
-        grant_type=GRANT_TYPE_TIMED,
-        grant_expires_at=timezone.now() + timedelta(days=3),
+    grant = AccessGrant.objects.create(user=user, app=app)
+    current_expires_at = timezone.now() + timedelta(days=3)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=reader,
+        expires_at=current_expires_at,
     )
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=reader)
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=writer)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=writer,
+        expires_at=current_expires_at,
+    )
 
     # When / Then: 续期申请不能借机改变授权组集合。
     with pytest.raises(AccessRequestSubmissionError) as exc_info:
@@ -79,6 +88,7 @@ def test_ops4_renew_request_rejects_changed_role_target() -> None:
                 reason="续期不能减角色",
                 actor_type="user",
                 actor_id=user.authentik_user_id,
+                idempotency_key="ops4-renew-changed-role",
                 request_type=REQUEST_TYPE_RENEW,
             ),
         )

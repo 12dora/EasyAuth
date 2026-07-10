@@ -18,6 +18,7 @@ from easyauth.access_requests.models import (
     REQUEST_STATUS_REJECTED,
     REQUEST_STATUS_SUBMITTED,
     AccessRequest,
+    AccessRequestApprover,
 )
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.audit.services import AuditRecord, AuditService
@@ -142,10 +143,16 @@ def reassign_access_request(
                 details={"request_id": request_id, "status": access_request.status},
             )
         normalized = _validated_reassign_approvers(access_request, approver_user_ids)
-        previous = [user_id for user_id in access_request.approver_user_ids if user_id]
-        access_request.approver_user_ids = list(normalized)
-        access_request.full_clean()
-        access_request.save(update_fields=["approver_user_ids"])
+        previous = access_request_approver_user_ids(access_request)
+        _ = AccessRequestApprover.objects.filter(access_request=access_request).delete()
+        approvers = UserMirror.objects.in_bulk(normalized, field_name="authentik_user_id")
+        _ = AccessRequestApprover.objects.bulk_create(
+            AccessRequestApprover(
+                access_request=access_request,
+                approver=approvers[user_id],
+            )
+            for user_id in normalized
+        )
         _ = AuditService.record(
             AuditRecord(
                 actor_type=DECISION_ACTOR_CONSOLE_ADMIN,
@@ -168,9 +175,24 @@ def approver_is_authorized(access_request: AccessRequest, approver_user_id: str)
     # 申请人绝不能是审批人: 即使某条历史/非门户路径写入了这样的申请, 也必须挡住自审自批。
     if approver_user_id == access_request.user.authentik_user_id:
         return False
-    # fail-closed: 审批人列表为空的申请是不变量被破坏的硬错误, 不能放行任何操作人。
-    allowed = [user_id for user_id in access_request.approver_user_ids if user_id]
-    return bool(allowed) and approver_user_id in allowed
+    return AccessRequestApprover.objects.filter(
+        access_request=access_request,
+        approver__authentik_user_id=approver_user_id,
+    ).exists()
+
+
+def access_request_approver_user_ids(access_request: AccessRequest) -> list[str]:
+    assignments = getattr(access_request, "loaded_approver_assignments", None)
+    if assignments is None:
+        assignments = list(
+            AccessRequestApprover.objects.select_related("approver").filter(
+                access_request=access_request,
+            ),
+        )
+    return [
+        assignment.approver.authentik_user_id
+        for assignment in assignments
+    ]
 
 
 def _ensure_decision_allowed(

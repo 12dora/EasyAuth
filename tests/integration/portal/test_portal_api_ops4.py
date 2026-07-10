@@ -9,18 +9,14 @@ import pytest
 from django.utils import timezone
 
 from easyauth.access_requests.models import (
+    GRANT_TYPE_TIMED,
     AccessRequest,
     AccessRequestGroup,
     AccessRequestPermission,
 )
 from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import App, ApprovalRule, AppScope, AuthorizationGroup, Permission
-from easyauth.grants.models import (
-    GRANT_TYPE_TIMED,
-    AccessGrant,
-    AccessGrantGroup,
-    AccessGrantPermission,
-)
+from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
 from tests.integration.portal.helpers import logged_in_client
 from tests.integration.portal.json_helpers import json_object
 
@@ -40,14 +36,18 @@ def test_ops4_portal_api_submits_lifecycle_request_for_session_user(
     keep_group = _requestable_group(app=app, key="viewer")
     old_group = _requestable_group(app=app, key="operator")
     new_group = _requestable_group(app=app, key="auditor")
-    current_grant = AccessGrant.objects.create(
-        user=user,
-        app=app,
-        grant_type=GRANT_TYPE_TIMED,
-        grant_expires_at=timezone.now() + timedelta(days=7),
+    current_expires_at = timezone.now() + timedelta(days=7)
+    current_grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=current_grant,
+        authorization_group=keep_group,
+        expires_at=current_expires_at,
     )
-    _ = AccessGrantGroup.objects.create(grant=current_grant, authorization_group=keep_group)
-    _ = AccessGrantGroup.objects.create(grant=current_grant, authorization_group=old_group)
+    _ = AccessGrantGroup.objects.create(
+        grant=current_grant,
+        authorization_group=old_group,
+        expires_at=current_expires_at,
+    )
     expected_group_keys = _group_keys_for_lifecycle(
         request_type=request_type,
         keep_group=keep_group,
@@ -65,6 +65,7 @@ def test_ops4_portal_api_submits_lifecycle_request_for_session_user(
         REQUESTS_API_URL,
         data=dumps(payload),
         content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-test-idempotency",
     )
 
     # Then: API 只为当前 session 用户创建对应生命周期申请, 不直接改写当前授权。
@@ -102,6 +103,7 @@ def test_ops4_portal_api_rejects_lifecycle_requester_spoofing() -> None:
             },
         ),
         content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-test-idempotency",
     )
 
     # Then: API 拒绝请求体伪造 requester, 且不创建申请。
@@ -132,6 +134,7 @@ def test_ops4_portal_api_rejects_lifecycle_request_for_other_user_grant(
             ),
         ),
         content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-test-idempotency",
     )
 
     # Then: API 要求生命周期申请依赖当前员工自己的当前授权。
@@ -161,6 +164,7 @@ def test_ops4_portal_api_rejects_lifecycle_extra_fields() -> None:
             },
         ),
         content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-test-idempotency",
     )
 
     # Then: API 保持严格请求体边界, 不接受 extra fields。
@@ -181,12 +185,13 @@ def test_ops4_portal_api_accepts_empty_group_keys_for_full_revoke() -> None:
         REQUESTS_API_URL,
         data=dumps(
             _lifecycle_payload(
-                    app_key=app.app_key,
-                    request_type="revoke",
-                    authorization_group_keys=(),
-                ),
+                app_key=app.app_key,
+                request_type="revoke",
+                authorization_group_keys=(),
+            ),
         ),
         content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-test-idempotency",
     )
 
     # Then: API 创建全量撤销申请, 但不直接改写当前授权事实。
@@ -222,6 +227,7 @@ def test_ops4_portal_api_submits_lifecycle_request_with_permission_keys() -> Non
             ),
         ),
         content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-test-idempotency",
     )
 
     # Then: API 创建 direct Permission 目标申请, 不要求角色目标。

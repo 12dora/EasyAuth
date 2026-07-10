@@ -11,6 +11,7 @@ from django.test import Client
 from django.utils import timezone
 
 from easyauth.access_requests.models import (
+    GRANT_TYPE_TIMED,
     REQUEST_STATUS_GRANT_APPLIED,
     REQUEST_STATUS_GRANT_FAILED,
     REQUEST_TYPE_CHANGE,
@@ -25,8 +26,6 @@ from easyauth.applications.models import App, ApprovalRule, AuthorizationGroup
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import (
     GRANT_STATUS_ACTIVE,
-    GRANT_TYPE_PERMANENT,
-    GRANT_TYPE_TIMED,
     AccessGrant,
     AccessGrantGroup,
 )
@@ -51,11 +50,12 @@ def test_retry_grant_rejects_existing_current_grant_without_mutating_state() -> 
         app=app,
         status=REQUEST_STATUS_GRANT_FAILED,
         reason="授权写入超时",
+        idempotency_key="retry-current-grant",
+        payload_digest="a" * 64,
     )
     existing_grant = AccessGrant.objects.create(
         user=target_user,
         app=app,
-        grant_type=GRANT_TYPE_PERMANENT,
         status=GRANT_STATUS_ACTIVE,
         version=EXISTING_GRANT_VERSION,
     )
@@ -96,16 +96,21 @@ def test_retry_failed_change_applies_original_lifecycle_with_current_grant() -> 
     grant = AccessGrant.objects.create(
         user=target_user,
         app=app,
-        grant_type=GRANT_TYPE_PERMANENT,
         version=EXISTING_GRANT_VERSION,
     )
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=old_group)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=old_group,
+        expires_at=None,
+    )
     access_request = AccessRequest.objects.create(
         user=target_user,
         app=app,
         request_type=REQUEST_TYPE_CHANGE,
         status=REQUEST_STATUS_GRANT_FAILED,
         reason="变更授权写入失败",
+        idempotency_key="retry-failed-change",
+        payload_digest="b" * 64,
     )
     _ = AccessRequestGroup.objects.create(
         access_request=access_request,
@@ -170,17 +175,26 @@ def test_retry_failed_revoke_applies_original_lifecycle_with_current_grant() -> 
     grant = AccessGrant.objects.create(
         user=target_user,
         app=app,
-        grant_type=GRANT_TYPE_PERMANENT,
         version=EXISTING_GRANT_VERSION,
     )
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=keep_group)
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=remove_group)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=keep_group,
+        expires_at=None,
+    )
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=remove_group,
+        expires_at=None,
+    )
     access_request = AccessRequest.objects.create(
         user=target_user,
         app=app,
         request_type=REQUEST_TYPE_REVOKE,
         status=REQUEST_STATUS_GRANT_FAILED,
         reason="撤权授权写入失败",
+        idempotency_key="retry-failed-revoke",
+        payload_digest="c" * 64,
     )
     _ = AccessRequestGroup.objects.create(
         access_request=access_request,
@@ -235,11 +249,13 @@ def test_retry_failed_renew_applies_original_lifecycle_with_current_grant() -> N
     grant = AccessGrant.objects.create(
         user=target_user,
         app=app,
-        grant_type=GRANT_TYPE_TIMED,
-        grant_expires_at=current_expires_at,
         version=EXISTING_GRANT_VERSION,
     )
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        expires_at=current_expires_at,
+    )
     access_request = AccessRequest.objects.create(
         user=target_user,
         app=app,
@@ -248,6 +264,8 @@ def test_retry_failed_renew_applies_original_lifecycle_with_current_grant() -> N
         grant_type=GRANT_TYPE_TIMED,
         grant_expires_at=renewed_expires_at,
         reason="续期授权写入失败",
+        idempotency_key="retry-failed-renew",
+        payload_digest="d" * 64,
     )
     _ = AccessRequestGroup.objects.create(
         access_request=access_request,
@@ -269,13 +287,17 @@ def test_retry_failed_renew_applies_original_lifecycle_with_current_grant() -> N
     # Then: API 延长当前授权期限, 重复提交不会再次递增。
     grant.refresh_from_db()
     access_request.refresh_from_db()
+    renewed_grant_group = AccessGrantGroup.objects.get(
+        grant=grant,
+        authorization_group=group,
+    )
     assert response.status_code == HTTPStatus.OK
     assert repeated.status_code == HTTPStatus.OK
     assert response.json()["request_id"] == access_request.id
     assert response.json()["status"] == REQUEST_STATUS_GRANT_APPLIED
     assert repeated.json()["request_id"] == access_request.id
     assert repeated.json()["version"] == EXISTING_GRANT_VERSION + 1
-    assert grant.grant_expires_at == renewed_expires_at
+    assert renewed_grant_group.expires_at == renewed_expires_at
     assert grant.version == EXISTING_GRANT_VERSION + 1
     assert access_request.status == REQUEST_STATUS_GRANT_APPLIED
 

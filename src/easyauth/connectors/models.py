@@ -10,6 +10,7 @@ from easyauth.applications.models import App, AuthorizationGroup
 from easyauth.config.crypto import EncryptedTextField
 
 if TYPE_CHECKING:
+    import uuid
     from datetime import date, datetime
 
     from easyauth.applications.ops_models import JsonValue
@@ -76,6 +77,37 @@ class ConnectorInstance(models.Model):
     consecutive_failures: models.PositiveIntegerField[int, int] = models.PositiveIntegerField(
         default=0,
     )
+    external_account_id: models.CharField[str, str] = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+    )
+    reconcile_generation: models.PositiveBigIntegerField[int, int] = (
+        models.PositiveBigIntegerField(default=0)
+    )
+    reconciled_generation: models.PositiveBigIntegerField[int, int] = (
+        models.PositiveBigIntegerField(default=0)
+    )
+    reconcile_dirty: models.BooleanField[bool, bool] = models.BooleanField(default=False)
+    reconcile_pending_trigger: models.CharField[str, str] = models.CharField(
+        max_length=16,
+        choices=SYNC_TRIGGER_CHOICES,
+        default=SYNC_TRIGGER_PERIODIC,
+    )
+    reconcile_worker_queued: models.BooleanField[bool, bool] = models.BooleanField(default=False)
+    reconcile_worker_queued_at: models.DateTimeField[
+        str | date | datetime | None,
+        datetime | None,
+    ] = models.DateTimeField(blank=True, null=True)
+    reconcile_lease_token: models.UUIDField[uuid.UUID | None, uuid.UUID | None] = models.UUIDField(
+        blank=True,
+        null=True,
+    )
+    reconcile_lease_expires_at: models.DateTimeField[
+        str | date | datetime | None,
+        datetime | None,
+    ] = models.DateTimeField(blank=True, null=True)
+    tombstoned: models.BooleanField[bool, bool] = models.BooleanField(default=False)
     updated_by: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
@@ -89,6 +121,11 @@ class ConnectorInstance(models.Model):
             models.UniqueConstraint(
                 fields=["app", "connector_key"],
                 name="connectors_instance_app_connector_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["connector_key", "external_account_id"],
+                condition=~Q(external_account_id=""),
+                name="connectors_instance_external_account_unique",
             ),
         ]
         ordering: ClassVar[list[str]] = ["app__app_key", "connector_key"]
@@ -116,22 +153,29 @@ class ConnectorMapping(models.Model):
     if TYPE_CHECKING:
         id: ClassVar[int]
         instance_id: ClassVar[int]
-        authorization_group_id: ClassVar[int]
+        authorization_group_id: ClassVar[int | None]
 
     instance: models.ForeignKey[ConnectorInstance, ConnectorInstance] = models.ForeignKey(
         ConnectorInstance,
         on_delete=models.CASCADE,
         related_name="mappings",
     )
-    authorization_group: models.ForeignKey[AuthorizationGroup, AuthorizationGroup] = (
+    authorization_group: models.ForeignKey[
+        AuthorizationGroup | None,
+        AuthorizationGroup | None,
+    ] = (
         models.ForeignKey(
             AuthorizationGroup,
-            on_delete=models.CASCADE,
+            on_delete=models.SET_NULL,
             related_name="connector_mappings",
+            blank=True,
+            null=True,
         )
     )
     external_ref: models.CharField[str, str] = models.CharField(max_length=255)
+    external_name: models.CharField[str, str] = models.CharField(max_length=255, blank=True)
     auto_create: models.BooleanField[bool, bool] = models.BooleanField(default=False)
+    tombstoned: models.BooleanField[bool, bool] = models.BooleanField(default=False)
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
     )
@@ -143,6 +187,7 @@ class ConnectorMapping(models.Model):
         constraints: ClassVar[list[models.BaseConstraint]] = [
             models.UniqueConstraint(
                 fields=["instance", "authorization_group"],
+                condition=Q(tombstoned=False, authorization_group__isnull=False),
                 name="connectors_mapping_instance_group_unique",
             ),
         ]
@@ -150,7 +195,8 @@ class ConnectorMapping(models.Model):
 
     @override
     def __str__(self) -> str:
-        return f"{self.instance}:{self.authorization_group.key}->{self.external_ref}"
+        group_key = self.authorization_group.key if self.authorization_group else "tombstone"
+        return f"{self.instance}:{group_key}->{self.external_ref}"
 
 
 class ConnectorSyncRun(models.Model):

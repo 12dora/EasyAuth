@@ -37,7 +37,7 @@ def test_ops4_apply_approved_request_rejects_disabled_user_without_mutating_gran
     )
     app = App.objects.create(app_key="ops4-apply-disabled-app", name="OPS4 Disabled")
     group = _authorization_group(app, key="reader", name="Reader")
-    grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
+    grant = AccessGrant.objects.create(user=user, app=app)
     access_request = _approved_request(user=user, app=app, request_type=REQUEST_TYPE_CHANGE)
     _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
 
@@ -62,7 +62,7 @@ def test_ops4_apply_approved_request_rejects_inactive_app_without_mutating_grant
         is_active=False,
     )
     group = _authorization_group(app, key="reader", name="Reader")
-    grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
+    grant = AccessGrant.objects.create(user=user, app=app)
     access_request = _approved_request(user=user, app=app, request_type=REQUEST_TYPE_CHANGE)
     _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
 
@@ -89,8 +89,12 @@ def test_ops4_apply_stale_partial_revoke_rejects_non_current_target() -> None:
         authorization_group=old_group,
         approver_userids=["manager-001"],
     )
-    grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=new_group)
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=new_group,
+        expires_at=None,
+    )
     access_request = _approved_request(user=user, app=app, request_type=REQUEST_TYPE_REVOKE)
     _ = AccessRequestGroup.objects.create(
         access_request=access_request,
@@ -127,13 +131,12 @@ def test_ops4_apply_stale_renew_rejects_changed_membership() -> None:
         approver_userids=["manager-001"],
     )
     current_expires_at = timezone.now() + timedelta(days=3)
-    grant = AccessGrant.objects.create(
-        user=user,
-        app=app,
-        grant_type=GRANT_TYPE_TIMED,
-        grant_expires_at=current_expires_at,
+    grant = AccessGrant.objects.create(user=user, app=app)
+    grant_group = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=new_group,
+        expires_at=current_expires_at,
     )
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=new_group)
     access_request = _approved_request(
         user=user,
         app=app,
@@ -152,6 +155,7 @@ def test_ops4_apply_stale_renew_rejects_changed_membership() -> None:
 
     # Then: 授权成员和期限都保持当前事实。
     grant.refresh_from_db()
+    grant_group.refresh_from_db()
     access_request.refresh_from_db()
     group_keys = tuple(
         AccessGrantGroup.objects.filter(grant=grant).values_list(
@@ -160,7 +164,7 @@ def test_ops4_apply_stale_renew_rejects_changed_membership() -> None:
         ),
     )
     assert group_keys == ("new",)
-    assert grant.grant_expires_at == current_expires_at
+    assert grant_group.expires_at == current_expires_at
     assert grant.version == 1
     assert access_request.status == REQUEST_STATUS_GRANT_FAILED
 
@@ -180,6 +184,8 @@ def _approved_request(
         status=REQUEST_STATUS_APPROVED,
         grant_type=grant_type,
         grant_expires_at=grant_expires_at,
+        idempotency_key=f"{app.app_key}:{request_type}:approved",
+        payload_digest="a" * 64,
         reason="审批已通过",
         approved_at=timezone.now(),
     )

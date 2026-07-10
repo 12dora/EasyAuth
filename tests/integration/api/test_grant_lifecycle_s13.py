@@ -14,8 +14,6 @@ from easyauth.admin_console.grants import emergency_revoke_for_user
 from easyauth.applications.models import App, Permission
 from easyauth.applications.services import StaticTokenService
 from easyauth.grants.models import (
-    GRANT_TYPE_PERMANENT,
-    GRANT_TYPE_TIMED,
     AccessGrant,
     AccessGrantPermission,
 )
@@ -38,13 +36,12 @@ def test_s13_permission_query_returns_empty_after_expiration_cleanup() -> None:
     app = App.objects.create(app_key="s13-api-expired-app", name="S13 API Expired App")
     issue = StaticTokenService.create_token(app=app, name="S13 API integration")
     permission = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
-    grant = AccessGrant.objects.create(
-        user=user,
-        app=app,
-        grant_type=GRANT_TYPE_TIMED,
-        grant_expires_at=now - timedelta(seconds=1),
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=permission,
+        expires_at=now - timedelta(seconds=1),
     )
-    _ = AccessGrantPermission.objects.create(grant=grant, permission=permission)
 
     # When: 定时清理运行后, 应用再次查询该用户权限。
     result = cleanup_expired_grants(now=now)
@@ -67,12 +64,12 @@ def test_s13_permission_query_returns_empty_after_emergency_revoke() -> None:
     app = App.objects.create(app_key="s13-api-revoked-app", name="S13 API Revoked App")
     issue = StaticTokenService.create_token(app=app, name="S13 revoke integration")
     permission = Permission.objects.create(app=app, key="order.read", name="Read orders")
-    grant = AccessGrant.objects.create(
-        user=user,
-        app=app,
-        grant_type=GRANT_TYPE_PERMANENT,
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=permission,
+        expires_at=None,
     )
-    _ = AccessGrantPermission.objects.create(grant=grant, permission=permission)
 
     # When: 管理员执行紧急撤权后, 应用再次查询该用户权限。
     result = emergency_revoke_for_user(

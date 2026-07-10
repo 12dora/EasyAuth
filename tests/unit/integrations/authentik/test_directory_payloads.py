@@ -4,7 +4,12 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from easyauth.integrations.authentik.directory_payloads import parse_managed_users, parse_user
+from easyauth.integrations.authentik.directory_payloads import (
+    parse_departments,
+    parse_managed_users,
+    parse_user,
+    parse_users,
+)
 
 if TYPE_CHECKING:
     from easyauth.integrations.authentik.directory_payloads import DirectoryJson
@@ -71,3 +76,19 @@ def test_parse_user_defaults_missing_avatar_and_title_to_empty_string() -> None:
     # Then: 缺失字段兜底为空字符串。
     assert user.avatar == ""
     assert user.title == ""
+
+
+@pytest.mark.parametrize("payload", [{}, {"results": None}, {"results": {}}])
+def test_directory_collection_rejects_missing_or_wrong_results(payload: DirectoryJson) -> None:
+    with pytest.raises(TypeError, match="results"):
+        _ = parse_departments(payload, source_slug="dingtalk")
+
+
+def test_directory_collection_accepts_explicit_empty_results() -> None:
+    assert parse_departments({"results": []}, source_slug="dingtalk") == ()
+    assert parse_users({"results": []}, source_slug="dingtalk") == ()
+
+
+def test_directory_collection_rejects_non_object_item() -> None:
+    with pytest.raises(ValueError, match="identity"):
+        _ = parse_users({"results": ["not-an-object"]}, source_slug="dingtalk")

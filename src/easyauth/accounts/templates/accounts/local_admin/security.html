@@ -434,6 +434,7 @@
           </div>
           <form class="actions-row" method="post" action="/auth/local/security/totp/confirm/">
             {% csrf_token %}
+            <input name="enrollment_nonce" type="hidden" value="{{ setup_nonce }}">
             <div class="field">
               <label for="confirm-code">验证码</label>
               <input class="code-input" id="confirm-code" name="code" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required>
@@ -444,6 +445,10 @@
           <p class="card-copy">绑定验证器应用后, 登录需要输入动态验证码, 可有效防止密码泄露带来的风险。</p>
           <form method="post" action="/auth/local/security/totp/begin/">
             {% csrf_token %}
+            <div class="field">
+              <label for="totp-begin-password">当前密码</label>
+              <input id="totp-begin-password" name="current_password" type="password" autocomplete="current-password" required>
+            </div>
             <button class="button-primary" type="submit">开始绑定验证器</button>
           </form>
           {% endif %}

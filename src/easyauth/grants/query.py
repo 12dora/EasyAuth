@@ -5,6 +5,7 @@ import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from django.db.models import Q
 from django.utils import timezone
 
 from easyauth.accounts.models import UserMirror
@@ -34,6 +35,7 @@ class GroupSnapshot:
     key: str
     kind: str
     name: str
+    expires_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +44,7 @@ class ExpandedGrant:
     scope: str
     source_type: str
     source_key: str
+    expires_at: datetime | None
     resolved: ResolvedManagedUsers | None = None
 
 
@@ -54,20 +57,6 @@ class PermissionSnapshot:
     grant_version: int
     catalog_version: int
     snapshot_version: str
-    grant_expires_at: datetime | None = None
-
-    @property
-    def version(self) -> int:
-        return self.grant_version
-
-    @property
-    def roles(self) -> tuple[str, ...]:
-        return tuple(group.key for group in self.groups)
-
-    @property
-    def permissions(self) -> tuple[str, ...]:
-        return tuple(sorted({grant.permission for grant in self.grants}))
-
 
 def resolve_user_permissions(
     *,
@@ -85,7 +74,13 @@ def resolve_user_permissions(
     if latest_grant is None or not _grant_has_effective_permissions(resolved_user, latest_grant):
         return _empty_snapshot(user_id=user_id, app=app, grant_version=grant_version)
     cache: ManagedUsersDirectoryCache = {} if managed_users_cache is None else managed_users_cache
-    return _grant_snapshot(user_id=user_id, app=app, grant=latest_grant, directory_cache=cache)
+    return _grant_snapshot(
+        user_id=user_id,
+        app=app,
+        grant=latest_grant,
+        directory_cache=cache,
+        now=timezone.now(),
+    )
 
 
 def _resolve_user(user: UserSelector) -> UserMirror | None:
@@ -120,15 +115,9 @@ def _grant_has_effective_permissions(user: UserMirror, grant: AccessGrant) -> bo
 
     match parse_grant_status(grant.status):
         case "active":
-            return not _grant_is_expired(grant)
+            return True
         case "revoked" | "expired":
             return False
-
-
-def _grant_is_expired(grant: AccessGrant) -> bool:
-    # 过期判定不依赖 beat 把 status 翻成 expired; 查询时刻直接比对过期时间。
-    expires_at = grant.grant_expires_at
-    return expires_at is not None and expires_at <= timezone.now()
 
 
 def _grant_snapshot(
@@ -137,9 +126,10 @@ def _grant_snapshot(
     app: App,
     grant: AccessGrant,
     directory_cache: ManagedUsersDirectoryCache,
+    now: datetime,
 ) -> PermissionSnapshot:
-    groups = _group_snapshots(grant)
-    grants = _expanded_grants(grant, directory_cache)
+    groups = _group_snapshots(grant, now)
+    grants = _expanded_grants(grant, directory_cache, now)
     return PermissionSnapshot(
         user_id=user_id,
         app_key=app.app_key,
@@ -150,21 +140,25 @@ def _grant_snapshot(
         snapshot_version=_snapshot_version(
             grant.version,
             app.catalog_version,
-            _resolved_digest(grants),
+            _resolved_digest(grants, groups),
         ),
-        grant_expires_at=grant.grant_expires_at,
     )
 
 
-def _group_snapshots(grant: AccessGrant) -> tuple[GroupSnapshot, ...]:
+def _group_snapshots(grant: AccessGrant, now: datetime) -> tuple[GroupSnapshot, ...]:
     return tuple(
         GroupSnapshot(
             key=link.authorization_group.key,
             kind=link.authorization_group.kind,
             name=link.authorization_group.name,
+            expires_at=link.expires_at,
         )
         for link in AccessGrantGroup.objects.select_related("authorization_group")
-        .filter(grant=grant, authorization_group__is_active=True)
+        .filter(
+            Q(expires_at__isnull=True) | Q(expires_at__gt=now),
+            grant=grant,
+            authorization_group__is_active=True,
+        )
         .order_by("authorization_group__key")
     )
 
@@ -172,12 +166,14 @@ def _group_snapshots(grant: AccessGrant) -> tuple[GroupSnapshot, ...]:
 def _expanded_grants(
     grant: AccessGrant,
     directory_cache: ManagedUsersDirectoryCache,
+    now: datetime,
 ) -> tuple[ExpandedGrant, ...]:
     scopes = _active_scope_keys(grant.app_id)
-    expanded = _group_grants(grant, scopes, directory_cache) | _direct_grants(
+    expanded = _group_grants(grant, scopes, directory_cache, now) | _direct_grants(
         grant,
         scopes,
         directory_cache,
+        now,
     )
     return tuple(sorted(expanded, key=_expanded_grant_sort_key))
 
@@ -192,15 +188,19 @@ def _group_grants(
     grant: AccessGrant,
     active_scope_keys: set[str],
     directory_cache: ManagedUsersDirectoryCache,
+    now: datetime,
 ) -> set[ExpandedGrant]:
-    group_ids = AccessGrantGroup.objects.filter(
-        grant=grant,
-        authorization_group__is_active=True,
-    ).values_list("authorization_group_id", flat=True)
+    group_expirations = dict(
+        AccessGrantGroup.objects.filter(
+            Q(expires_at__isnull=True) | Q(expires_at__gt=now),
+            grant=grant,
+            authorization_group__is_active=True,
+        ).values_list("authorization_group_id", "expires_at"),
+    )
     links = (
         AuthorizationGroupGrant.objects.select_related("authorization_group", "permission")
         .filter(
-            authorization_group_id__in=group_ids,
+            authorization_group_id__in=group_expirations,
             authorization_group__is_active=True,
             is_active=True,
             permission__is_active=True,
@@ -231,6 +231,7 @@ def _group_grants(
                 scope=link.scope_key,
                 source_type="group",
                 source_key=link.authorization_group.key,
+                expires_at=group_expirations[link.authorization_group_id],
                 resolved=resolved,
             ),
         )
@@ -241,10 +242,12 @@ def _direct_grants(
     grant: AccessGrant,
     active_scope_keys: set[str],
     directory_cache: ManagedUsersDirectoryCache,
+    now: datetime,
 ) -> set[ExpandedGrant]:
     links = (
         AccessGrantPermission.objects.select_related("permission")
         .filter(
+            Q(expires_at__isnull=True) | Q(expires_at__gt=now),
             grant=grant,
             permission__is_active=True,
             permission__deprecated_at__isnull=True,
@@ -273,6 +276,7 @@ def _direct_grants(
                 scope=link.scope_key,
                 source_type="direct",
                 source_key="",
+                expires_at=link.expires_at,
                 resolved=resolved,
             ),
         )
@@ -301,17 +305,34 @@ def _snapshot_version(grant_version: int, catalog_version: int, resolved_digest:
     return f"{grant_version}.{catalog_version}.{resolved_digest}"
 
 
-def _resolved_digest(grants: tuple[ExpandedGrant, ...]) -> str:
-    resolved_payloads = [
+def _resolved_digest(
+    grants: tuple[ExpandedGrant, ...],
+    groups: tuple[GroupSnapshot, ...] = (),
+) -> str:
+    fact_payloads: list[dict[str, object]] = [
         {
-            "user_ids": sorted(grant.resolved.user_ids),
-            "resolver": grant.resolved.resolver,
-            "resolved_at": grant.resolved.resolved_at,
+            "expires_at": None if group.expires_at is None else group.expires_at.isoformat(),
+            "key": group.key,
+            "kind": group.kind,
+            "name": group.name,
+            "type": "group",
+        }
+        for group in groups
+    ]
+    fact_payloads.extend(
+        {
+            "expires_at": None if grant.expires_at is None else grant.expires_at.isoformat(),
+            "permission": grant.permission,
+            "scope": grant.scope,
+            "source_key": grant.source_key,
+            "source_type": grant.source_type,
+            "user_ids": sorted(grant.resolved.user_ids) if grant.resolved is not None else [],
+            "resolver": grant.resolved.resolver if grant.resolved is not None else None,
+            "resolved_at": grant.resolved.resolved_at if grant.resolved is not None else None,
         }
         for grant in grants
-        if grant.resolved is not None
-    ]
-    if not resolved_payloads:
+    )
+    if not fact_payloads:
         return "0"
-    canonical = json.dumps(resolved_payloads, sort_keys=True, separators=(",", ":"))
+    canonical = json.dumps(fact_payloads, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]

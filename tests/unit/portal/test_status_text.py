@@ -13,6 +13,7 @@ from easyauth.portal.status_text import status_label, status_tone
         ("grant_applied", "授权已落库, 权限已生效", "success"),
         ("rejected", "已拒绝", "danger"),
         ("grant_failed", "授权落库失败", "danger"),
+        ("grant_expired", "授权期限已过, 未应用", "danger"),
         ("unexpected", "未知", "secondary"),
     ],
 )

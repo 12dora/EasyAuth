@@ -1,13 +1,18 @@
-"""App manifest 同步的共享入口: 自动接入(控制台拉取)与下游主动推送复用同一套
-版本单调递增 + content_hash 幂等语义, 避免两处冲突判定逻辑漂移。"""
+"""App manifest 同步的共享入口。
+
+自动接入(控制台拉取)与下游主动推送复用同一套版本单调递增 + content_hash
+幂等语义, 避免两处冲突判定逻辑漂移。
+"""
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
-from hashlib import sha256
 from typing import TYPE_CHECKING
 
+from easyauth.applications.manifest_hashing import (
+    canonical_manifest_hash,
+    canonical_manifest_template,
+)
 from easyauth.applications.models import PermissionTemplateVersion
 from easyauth.applications.permission_templates import (
     apply_permission_template,
@@ -38,11 +43,6 @@ class ManifestSyncOutcome:
     template_version: int
 
 
-def canonical_manifest_template(manifest: dict[str, JsonValue]) -> str:
-    # 固定的规范化序列化保证同内容重复接入可以按 content_hash 幂等判定。
-    return json.dumps(manifest, ensure_ascii=False, sort_keys=True, indent=2)
-
-
 def sync_app_manifest(
     *,
     app: App,
@@ -60,7 +60,7 @@ def sync_app_manifest(
     latest = PermissionTemplateVersion.objects.filter(app=app).order_by("-version").first()
     incoming_version = int(manifest["schema_version"])  # 调用方已校验为 >=1 的 int
     if latest is not None and incoming_version <= latest.version:
-        if sha256(canonical_template.encode("utf-8")).hexdigest() == latest.content_hash:
+        if canonical_manifest_hash(manifest) == latest.content_hash:
             return ManifestSyncOutcome(
                 already_up_to_date=True,
                 template_version=latest.version,

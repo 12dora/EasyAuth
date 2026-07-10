@@ -8,13 +8,14 @@ from easyauth.access_requests.models import (
     AccessRequest,
     AccessRequestGroup,
     AccessRequestPermission,
-    AccessRequestRole,
 )
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App, AppScope, AuthorizationGroup, Permission, Role
+from easyauth.applications.models import App, AppScope, AuthorizationGroup, Permission
 from easyauth.grants.models import AccessGrant
 
 pytestmark = pytest.mark.django_db
+
+VALID_PAYLOAD_DIGEST = "a" * 64
 
 
 @pytest.mark.parametrize("request_type", ["grant", "change", "revoke", "renew"])
@@ -24,7 +25,13 @@ def test_request_type_accepts_supported_values_when_access_request_is_cleaned(
     # Given
     user = UserMirror.objects.create(authentik_user_id=f"user-{request_type}")
     app = App.objects.create(app_key=f"app-{request_type}", name=f"App {request_type}")
-    access_request = AccessRequest(user=user, app=app, request_type=request_type)
+    access_request = AccessRequest(
+        user=user,
+        app=app,
+        request_type=request_type,
+        idempotency_key=f"request-type-{request_type}",
+        payload_digest=VALID_PAYLOAD_DIGEST,
+    )
 
     # When
     access_request.full_clean()
@@ -37,7 +44,13 @@ def test_request_type_rejects_unknown_value_when_access_request_is_cleaned() -> 
     # Given
     user = UserMirror.objects.create(authentik_user_id="user-unknown-request")
     app = App.objects.create(app_key="unknown-request-app", name="Unknown Request App")
-    access_request = AccessRequest(user=user, app=app, request_type="unknown")
+    access_request = AccessRequest(
+        user=user,
+        app=app,
+        request_type="unknown",
+        idempotency_key="request-type-unknown",
+        payload_digest=VALID_PAYLOAD_DIGEST,
+    )
 
     # When / Then
     with pytest.raises(ValidationError):
@@ -58,6 +71,8 @@ def test_status_accepts_supported_values_when_access_request_is_cleaned(status: 
         app=app,
         status=status,
         applied_at=applied_at_by_status.get(status),
+        idempotency_key=f"request-status-{status}",
+        payload_digest=VALID_PAYLOAD_DIGEST,
     )
 
     # When
@@ -71,7 +86,13 @@ def test_status_rejects_unknown_value_when_access_request_is_cleaned() -> None:
     # Given
     user = UserMirror.objects.create(authentik_user_id="user-unknown-status")
     app = App.objects.create(app_key="unknown-status-app", name="Unknown Status App")
-    access_request = AccessRequest(user=user, app=app, status="unknown")
+    access_request = AccessRequest(
+        user=user,
+        app=app,
+        status="unknown",
+        idempotency_key="request-status-unknown",
+        payload_digest=VALID_PAYLOAD_DIGEST,
+    )
 
     # When / Then
     with pytest.raises(ValidationError):
@@ -84,7 +105,13 @@ def test_approved_request_does_not_create_grant_when_saved() -> None:
     app = App.objects.create(app_key="approved-app", name="Approved App")
 
     # When
-    _ = AccessRequest.objects.create(user=user, app=app, status="approved")
+    _ = AccessRequest.objects.create(
+        user=user,
+        app=app,
+        status="approved",
+        idempotency_key="approved-without-grant",
+        payload_digest=VALID_PAYLOAD_DIGEST,
+    )
 
     # Then
     assert AccessGrant.objects.count() == 0
@@ -99,6 +126,8 @@ def test_approved_request_rejects_applied_timestamp_when_cleaned() -> None:
         app=app,
         status="approved",
         applied_at=timezone.now(),
+        idempotency_key="approved-with-applied-at",
+        payload_digest=VALID_PAYLOAD_DIGEST,
     )
 
     # When / Then
@@ -113,25 +142,17 @@ def test_grant_applied_request_requires_applied_timestamp_when_cleaned() -> None
         app_key="grant-applied-no-timestamp-app",
         name="Grant Applied App",
     )
-    access_request = AccessRequest(user=user, app=app, status="grant_applied")
+    access_request = AccessRequest(
+        user=user,
+        app=app,
+        status="grant_applied",
+        idempotency_key="grant-applied-without-timestamp",
+        payload_digest=VALID_PAYLOAD_DIGEST,
+    )
 
     # When / Then
     with pytest.raises(ValidationError):
         access_request.full_clean()
-
-
-def test_access_request_role_rejects_cross_app_role_when_cleaned() -> None:
-    # Given
-    crm = App.objects.create(app_key="crm-request-role", name="CRM")
-    erp = App.objects.create(app_key="erp-request-role", name="ERP")
-    user = UserMirror.objects.create(authentik_user_id="user-request-role")
-    access_request = AccessRequest.objects.create(user=user, app=crm)
-    role = Role.objects.create(app=erp, key="admin", name="Admin")
-    request_role = AccessRequestRole(access_request=access_request, role=role)
-
-    # When / Then
-    with pytest.raises(ValidationError):
-        request_role.full_clean()
 
 
 def test_access_request_group_rejects_cross_app_authorization_group_when_cleaned() -> None:
@@ -139,7 +160,12 @@ def test_access_request_group_rejects_cross_app_authorization_group_when_cleaned
     crm = App.objects.create(app_key="crm-request-group", name="CRM")
     erp = App.objects.create(app_key="erp-request-group", name="ERP")
     user = UserMirror.objects.create(authentik_user_id="user-request-group")
-    access_request = AccessRequest.objects.create(user=user, app=crm)
+    access_request = AccessRequest.objects.create(
+        user=user,
+        app=crm,
+        idempotency_key="cross-app-group",
+        payload_digest=VALID_PAYLOAD_DIGEST,
+    )
     authorization_group = AuthorizationGroup.objects.create(
         app=erp,
         key="admin",
@@ -161,7 +187,12 @@ def test_access_request_permission_rejects_cross_app_permission_when_cleaned() -
     crm = App.objects.create(app_key="crm-request-permission", name="CRM")
     erp = App.objects.create(app_key="erp-request-permission", name="ERP")
     user = UserMirror.objects.create(authentik_user_id="user-request-permission")
-    access_request = AccessRequest.objects.create(user=user, app=crm)
+    access_request = AccessRequest.objects.create(
+        user=user,
+        app=crm,
+        idempotency_key="cross-app-permission",
+        payload_digest=VALID_PAYLOAD_DIGEST,
+    )
     permission = Permission.objects.create(app=erp, key="invoice.read", name="Read invoices")
     request_permission = AccessRequestPermission(
         access_request=access_request, permission=permission
@@ -178,7 +209,12 @@ def test_access_request_permission_allows_same_permission_on_distinct_scopes_whe
     _ = AppScope.objects.create(app=app, key="GLOBAL", name="Global")
     _ = AppScope.objects.create(app=app, key="REGION_CN", name="Region CN")
     user = UserMirror.objects.create(authentik_user_id="user-request-permission-scopes")
-    access_request = AccessRequest.objects.create(user=user, app=app)
+    access_request = AccessRequest.objects.create(
+        user=user,
+        app=app,
+        idempotency_key="distinct-scopes",
+        payload_digest=VALID_PAYLOAD_DIGEST,
+    )
     permission = Permission.objects.create(
         app=app,
         key="invoice.read",
@@ -215,10 +251,13 @@ def test_access_request_permission_rejects_unsupported_scope_when_cleaned() -> N
     app = App.objects.create(app_key="crm-request-permission-unsupported-scope", name="CRM")
     _ = AppScope.objects.create(app=app, key="GLOBAL", name="Global")
     _ = AppScope.objects.create(app=app, key="REGION_CN", name="Region CN")
-    user = UserMirror.objects.create(
-        authentik_user_id="user-request-permission-unsupported-scope"
+    user = UserMirror.objects.create(authentik_user_id="user-request-permission-unsupported-scope")
+    access_request = AccessRequest.objects.create(
+        user=user,
+        app=app,
+        idempotency_key="unsupported-scope",
+        payload_digest=VALID_PAYLOAD_DIGEST,
     )
-    access_request = AccessRequest.objects.create(user=user, app=app)
     permission = Permission.objects.create(
         app=app,
         key="invoice.read",
@@ -243,7 +282,12 @@ def test_access_request_permission_rejects_missing_scope_when_cleaned() -> None:
     # Given
     app = App.objects.create(app_key="crm-request-permission-missing-scope", name="CRM")
     user = UserMirror.objects.create(authentik_user_id="user-request-permission-missing-scope")
-    access_request = AccessRequest.objects.create(user=user, app=app)
+    access_request = AccessRequest.objects.create(
+        user=user,
+        app=app,
+        idempotency_key="missing-scope",
+        payload_digest=VALID_PAYLOAD_DIGEST,
+    )
     permission = Permission.objects.create(
         app=app,
         key="invoice.read",

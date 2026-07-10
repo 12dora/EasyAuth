@@ -55,13 +55,19 @@ class _RefreshClientStub:
 
 
 def _status_entry(
-    status: str, finished_at: str, *, users: int = 1, error: str = ""
+    status: str,
+    finished_at: str,
+    *,
+    generation: int = 1,
+    users: int = 1,
+    error: str = "",
 ) -> dict[str, object]:
     return {
         "corp_id": "corp-1",
+        "generation": generation,
         "status": status,
         "finished_at": finished_at,
-        "counters": {"users": users},
+        "counters": {"users": users, "departments": 1},
         "error": error,
     }
 
@@ -83,7 +89,7 @@ def test_refresh_waits_for_new_sync_then_mirrors_directory() -> None:
         status_script=[
             _status_entry("success", _BASELINE_FINISHED_AT),
             _status_entry("running", _BASELINE_FINISHED_AT),
-            _status_entry("success", _FRESH_FINISHED_AT),
+            _status_entry("success", _FRESH_FINISHED_AT, generation=2),
         ],
         users=[
             {

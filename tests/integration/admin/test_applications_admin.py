@@ -13,7 +13,6 @@ from django.urls import reverse
 from easyauth.applications.admin import (
     AppCredentialAdmin,
     ApprovalRuleAdmin,
-    RoleAdmin,
 )
 from easyauth.applications.models import (
     App,
@@ -21,8 +20,6 @@ from easyauth.applications.models import (
     ApprovalRule,
     AuthorizationGroup,
     Permission,
-    Role,
-    RolePermission,
 )
 from easyauth.applications.services import StaticTokenService
 from easyauth.audit.models import AuditLog
@@ -38,9 +35,7 @@ ADMIN_LOGIN_VALUE: Final = "admin-surface-login"
 def test_application_models_are_registered_in_admin() -> None:
     # Given / When / Then
     assert django_admin.site.is_registered(App) is True
-    assert django_admin.site.is_registered(Role) is True
     assert django_admin.site.is_registered(Permission) is True
-    assert django_admin.site.is_registered(RolePermission) is True
     assert django_admin.site.is_registered(ApprovalRule) is True
     assert django_admin.site.is_registered(AppCredential) is True
 
@@ -158,40 +153,6 @@ def test_approval_rule_admin_rejects_authorization_group_from_another_app() -> N
     # Then
     assert form.is_valid() is False
     assert "Authorization group must belong to the approval rule app." in str(form.errors)
-
-
-def test_role_admin_marks_requestable_role_without_active_rule_as_invalid() -> None:
-    # Given
-    app = App.objects.create(app_key="crm-requestable-admin", name="CRM Requestable Admin")
-    requestable_role = Role.objects.create(
-        app=app,
-        key="admin",
-        name="Admin",
-        requestable=True,
-    )
-    authorization_group = AuthorizationGroup.objects.create(
-        app=app,
-        key=requestable_role.key,
-        kind="role",
-        name=requestable_role.name,
-    )
-    role_admin = RoleAdmin(Role, AdminSite())
-
-    # When
-    status_without_rule = role_admin.approval_rule_status(requestable_role)
-    _ = ApprovalRule.objects.create(
-        app=app,
-        authorization_group=authorization_group,
-        approver_userids=["manager-001"],
-    )
-    status_with_rule = role_admin.approval_rule_status(requestable_role)
-    requestable_role.requestable = False
-    status_not_requestable = role_admin.approval_rule_status(requestable_role)
-
-    # Then
-    assert status_without_rule == "缺少有效审批规则"
-    assert status_with_rule == "有效"
-    assert status_not_requestable == "不可申请"
 
 
 def _request() -> HttpRequest:

@@ -1,43 +1,45 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Final
 
 from celery import shared_task
-from django.core.cache import cache
 from django.utils import timezone
 
 from easyauth.accounts.models import UserMirror
-from easyauth.connectors.base import ConnectorError, ReconcileReport
 from easyauth.connectors.dispatch import (
     OFFBOARD_TASK_NAME,
     RECONCILE_TASK_NAME,
-    reconcile_pending_cache_key,
     request_instance_reconcile,
 )
 from easyauth.connectors.models import (
-    SYNC_RUN_STATUS_FAILED,
-    SYNC_RUN_STATUS_SUCCESS,
     SYNC_TRIGGER_OFFBOARD,
     SYNC_TRIGGER_PERIODIC,
     ConnectorInstance,
     ConnectorSyncRun,
 )
-from easyauth.connectors.registry import get_connector
-from easyauth.connectors.services import reconcile_instance, record_sync_run
+from easyauth.connectors.services import (
+    RECONCILE_QUEUE_CLAIM_TIMEOUT_SECONDS,
+    reconcile_instance,
+)
 
 SCHEDULE_RECONCILES_TASK_NAME: Final = "easyauth.connectors.schedule_reconciles"
 PRUNE_SYNC_RUNS_TASK_NAME: Final = "easyauth.connectors.prune_sync_runs"
 
 # 每实例保留的运行记录条数(方案 §3.3: 保留最近 N 条)。
 SYNC_RUN_RETENTION_PER_INSTANCE: Final = 200
+RECONCILE_TASK_SOFT_TIME_LIMIT_SECONDS: Final = 840
+RECONCILE_TASK_TIME_LIMIT_SECONDS: Final = 900
 
 
-@shared_task(name=RECONCILE_TASK_NAME, acks_late=True)
-def reconcile_connector_instance_task(instance_id: int, trigger: str) -> str:
-    # 先清除去抖 pending 标记再对账: 此后到达的事件会重新排队, 不会被本轮已经
-    # 开始构建的 desired state 错过(对齐钉钉 Stream 合流模式)。
-    _ = cache.delete(reconcile_pending_cache_key(instance_id))
-    run = reconcile_instance(instance_id, trigger=trigger)
+@shared_task(
+    name=RECONCILE_TASK_NAME,
+    acks_late=True,
+    soft_time_limit=RECONCILE_TASK_SOFT_TIME_LIMIT_SECONDS,
+    time_limit=RECONCILE_TASK_TIME_LIMIT_SECONDS,
+)  # pyright: ignore[reportCallIssue, reportUntypedFunctionDecorator]
+def reconcile_connector_instance_task(instance_id: int) -> str:
+    run = reconcile_instance(instance_id)
     if run is None:
         return "skipped"
     return run.status
@@ -50,6 +52,24 @@ def schedule_connector_reconciles_task() -> int:
     now = timezone.now()
     queued = 0
     for instance in ConnectorInstance.objects.filter(enabled=True):
+        lease_active = (
+            instance.reconcile_lease_token is not None
+            and instance.reconcile_lease_expires_at is not None
+            and instance.reconcile_lease_expires_at > now
+        )
+        queue_stale = (
+            instance.reconcile_worker_queued_at is None
+            or instance.reconcile_worker_queued_at
+            <= now - timedelta(seconds=RECONCILE_QUEUE_CLAIM_TIMEOUT_SECONDS)
+        )
+        if instance.reconcile_dirty:
+            if not lease_active and queue_stale and request_instance_reconcile(
+                instance.id,
+                trigger=SYNC_TRIGGER_PERIODIC,
+                countdown=0,
+            ):
+                queued += 1
+            continue
         last = instance.last_reconcile_at
         interval = instance.reconcile_interval_seconds
         if last is not None and (now - last).total_seconds() < interval:
@@ -77,39 +97,15 @@ def prune_connector_sync_runs_task() -> int:
 
 @shared_task(name=OFFBOARD_TASK_NAME, acks_late=True)
 def offboard_user_task(authentik_user_id: str) -> int:
-    """离职快路径: 对全部启用实例执行 on_user_offboarded; 未实现的连接器回退为对账。"""
+    """离职与普通对账共用 generation/lease 状态机, 禁止旁路写外部系统。"""
     user = UserMirror.objects.filter(authentik_user_id=authentik_user_id).first()
     if user is None:
         return 0
-    handled = 0
-    for instance in ConnectorInstance.objects.filter(enabled=True).select_related("app"):
-        connector = get_connector(instance.connector_key)
-        if connector is None:
-            continue
-        started_at = timezone.now()
-        try:
-            if not connector.on_user_offboarded(instance, user):
-                _ = request_instance_reconcile(instance.id, trigger=SYNC_TRIGGER_OFFBOARD)
-                continue
-        except ConnectorError as error:
-            # 快路径失败不重试(周期对账兜底), 但要在运行审计里留痕。
-            _ = record_sync_run(
-                instance,
-                trigger=SYNC_TRIGGER_OFFBOARD,
-                started_at=started_at,
-                report=ReconcileReport(status=SYNC_RUN_STATUS_FAILED, error=str(error)),
-                update_health=False,
-            )
-            continue
-        _ = record_sync_run(
-            instance,
+    instances = list(ConnectorInstance.objects.filter(enabled=True).only("id"))
+    for instance in instances:
+        _ = request_instance_reconcile(
+            instance.id,
             trigger=SYNC_TRIGGER_OFFBOARD,
-            started_at=started_at,
-            report=ReconcileReport(
-                status=SYNC_RUN_STATUS_SUCCESS,
-                stats={"offboarded_users": 1},
-            ),
-            update_health=False,
+            countdown=0,
         )
-        handled += 1
-    return handled
+    return len(instances)

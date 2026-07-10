@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Literal
-
-from django.core.exceptions import ValidationError
+from typing import TYPE_CHECKING
 
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.grants.models import (
-    GRANT_TYPE_PERMANENT,
-    GRANT_TYPE_TIMED,
     AccessGrant,
     AccessGrantGroup,
     AccessGrantPermission,
@@ -18,31 +14,17 @@ if TYPE_CHECKING:
     from collections.abc import Iterable
 
     from easyauth.accounts.models import UserMirror
-    from easyauth.applications.models import App, AuthorizationGroup
-    from easyauth.grants.inputs import ScopedDirectGrantInput
-
-type GrantType = Literal["permanent", "timed"]
+    from easyauth.applications.models import App
+    from easyauth.grants.inputs import AuthorizationGroupGrantInput, ScopedDirectGrantInput
 
 
 def parse_status(status: str) -> GrantStatus:
     return parse_grant_status(status)
 
 
-def parse_grant_type(grant_type: str) -> GrantType:
-    match grant_type:
-        case "permanent":
-            return GRANT_TYPE_PERMANENT
-        case "timed":
-            return GRANT_TYPE_TIMED
-        case unsupported:
-            raise ValidationError({"grant_type": f"Unsupported grant type: {unsupported}"})
-
-
 def current_grant(user: UserMirror, app: App) -> AccessGrant | None:
     return (
-        AccessGrant.objects.select_for_update()
-        .filter(user=user, app=app, is_current=True)
-        .first()
+        AccessGrant.objects.select_for_update().filter(user=user, app=app, is_current=True).first()
     )
 
 
@@ -62,15 +44,18 @@ def next_version(user: UserMirror, app: App) -> int:
 
 def replace_memberships(
     grant: AccessGrant,
-    authorization_groups: Iterable[AuthorizationGroup],
+    authorization_groups: Iterable[AuthorizationGroupGrantInput],
     direct_grants: Iterable[ScopedDirectGrantInput],
 ) -> None:
     _ = AccessGrantGroup.objects.filter(grant=grant).delete()
     _ = AccessGrantPermission.objects.filter(grant=grant).delete()
 
-    groups_by_id = {group.id: group for group in authorization_groups}
-    for group in groups_by_id.values():
-        link = AccessGrantGroup(grant=grant, authorization_group=group)
+    for item in authorization_groups:
+        link = AccessGrantGroup(
+            grant=grant,
+            authorization_group=item.authorization_group,
+            expires_at=item.expires_at,
+        )
         link.full_clean()
         link.save()
 
@@ -83,6 +68,7 @@ def replace_memberships(
             grant=grant,
             permission=direct_grant.permission,
             scope_key=direct_grant.scope_key,
+            expires_at=direct_grant.expires_at,
         )
         link.full_clean()
         link.save()

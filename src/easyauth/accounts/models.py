@@ -10,7 +10,10 @@ from django.db import models
 from easyauth.config.crypto import EncryptedCharField
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
     from datetime import date, datetime
+
+    from django.db.models.base import ModelBase
 
     from easyauth.applications.ops_models import JsonValue
 
@@ -178,6 +181,10 @@ class LocalAdminAccount(models.Model):
     password_hash: models.CharField[str, str] = models.CharField(max_length=255)
     # 首次登录/管理员重置后强制修改密码。
     must_change_password: models.BooleanField[bool, bool] = models.BooleanField(default=True)
+    # 会话绑定的单调版本。改密、停用账号或变更第二因子时递增, 使其他已签发会话失效。
+    session_version: models.PositiveBigIntegerField[int, int] = models.PositiveBigIntegerField(
+        default=1,
+    )
     # TOTP 种子静态加密落库; 密文比 base32 明文长, 需更大的列宽。
     totp_secret: EncryptedCharField = EncryptedCharField(max_length=255, blank=True)
     totp_enabled: models.BooleanField[bool, bool] = models.BooleanField(default=False)
@@ -201,6 +208,32 @@ class LocalAdminAccount(models.Model):
     @override
     def __str__(self) -> str:
         return self.username
+
+    @override
+    def save(
+        self,
+        *,
+        force_insert: bool | tuple[ModelBase, ...] = False,
+        force_update: bool = False,
+        using: str | None = None,
+        update_fields: Iterable[str] | None = None,
+    ) -> None:
+        effective_update_fields = None if update_fields is None else set(update_fields)
+        if not self._state.adding:
+            previous = LocalAdminAccount.objects.filter(pk=self.pk).values(
+                "is_active",
+                "session_version",
+            ).first()
+            if previous is not None and previous["is_active"] != self.is_active:
+                self.session_version = int(previous["session_version"]) + 1
+                if effective_update_fields is not None:
+                    effective_update_fields.add("session_version")
+        super().save(
+            force_insert=force_insert,
+            force_update=force_update,
+            using=using,
+            update_fields=effective_update_fields,
+        )
 
     def set_password(self, raw_password: str) -> None:
         self.password_hash = hashers.make_password(raw_password)
@@ -242,6 +275,9 @@ class LocalAdminPasskey(models.Model):
 class DingTalkDirectorySyncState(models.Model):
     source_slug: models.CharField[str, str] = models.CharField(max_length=128)
     corp_id: models.CharField[str, str] = models.CharField(max_length=128)
+    # 上游目录的单调快照代次。-1 仅表示本地尚未应用过任何权威快照;
+    # 实际同步响应必须携带非负 generation。
+    generation: models.BigIntegerField[int, int] = models.BigIntegerField(default=-1)
     status: models.CharField[str, str] = models.CharField(max_length=32, blank=True)
     counters: models.JSONField[dict[str, JsonValue], dict[str, JsonValue]] = models.JSONField(
         default=dict,

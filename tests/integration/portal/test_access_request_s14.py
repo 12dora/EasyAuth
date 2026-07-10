@@ -75,6 +75,7 @@ def test_s14_portal_api_accepts_only_requestable_authorization_groups() -> None:
             reason="需要管理员权限",
         ),
         content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-internal-group-rejected",
     )
     rejected = client.post(
         REQUESTS_API_URL,
@@ -86,6 +87,7 @@ def test_s14_portal_api_accepts_only_requestable_authorization_groups() -> None:
             reason="尝试申请内部维护",
         ),
         content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-test-idempotency",
     )
 
     # Then: API 只创建合规授权组申请。
@@ -121,6 +123,7 @@ def test_s14_portal_submit_creates_request_through_service_without_creating_gran
             reason="需要查看客户变更记录",
         ),
         content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-test-idempotency",
     )
 
     # Then: 门户 API 返回 submitted 状态, 数据只经过申请服务落库, 不直接授权。
@@ -128,8 +131,7 @@ def test_s14_portal_submit_creates_request_through_service_without_creating_gran
     assert response.status_code == HTTPStatus.CREATED
     assert access_request.status == REQUEST_STATUS_SUBMITTED
     assert (
-        AccessRequestGroup.objects.get(access_request=access_request).authorization_group
-        == group
+        AccessRequestGroup.objects.get(access_request=access_request).authorization_group == group
     )
     assert access_request.reason == "需要查看客户变更记录"
     assert AccessGrant.objects.count() == 0
@@ -160,6 +162,7 @@ def test_s14_portal_rejects_non_requestable_authorization_group() -> None:
             reason="测试非法配置",
         ),
         content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-test-idempotency",
     )
 
     # Then: 门户 API 拒绝提交, 且没有绕过服务创建申请或授权。
@@ -187,6 +190,8 @@ def test_s14_portal_status_list_distinguishes_request_statuses() -> None:
             app=app,
             status=status,
             applied_at=timezone.now() if status == REQUEST_STATUS_GRANT_APPLIED else None,
+            idempotency_key=f"s14-status-{status}",
+            payload_digest="a" * 64,
         )
         _ = AccessRequestGroup.objects.create(
             access_request=access_request,
@@ -215,6 +220,8 @@ def test_s14_portal_request_items_load_group_names_in_bulk() -> None:
             user=user,
             app=app,
             reason=f"批量查询 {index}",
+            idempotency_key=f"s14-bulk-query-{index}",
+            payload_digest="b" * 64,
         )
         _ = AccessRequestGroup.objects.create(
             access_request=access_request,
@@ -257,6 +264,7 @@ def test_s14_portal_timed_request_requires_expiration() -> None:
             reason="临时处理客户资料",
         ),
         content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-test-idempotency",
     )
 
     # Then: API 提示生命周期校验错误。
@@ -287,6 +295,7 @@ def test_s14_portal_timed_request_creates_request_with_expiration() -> None:
             reason="临时处理客户资料",
         ),
         content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-test-idempotency",
     )
 
     # Then: 申请保留限时生命周期和到期时间。
@@ -319,6 +328,7 @@ def test_s14_submission_validation_requires_approver_for_managed_users_target() 
                 reason="查看下属客户",
                 actor_type="user",
                 actor_id=user.authentik_user_id,
+                idempotency_key="s14-managed-users-missing-approver",
                 approver_user_ids=(),
                 direct_grants=(
                     ScopedAccessRequestGrant(
@@ -329,9 +339,7 @@ def test_s14_submission_validation_requires_approver_for_managed_users_target() 
             ),
         )
 
-    assert exc_info.value.messages == (
-        "MANAGED_USERS requests require a direct manager approver.",
-    )
+    assert exc_info.value.messages == ("MANAGED_USERS requests require a direct manager approver.",)
     assert AccessRequest.objects.count() == 0
 
 

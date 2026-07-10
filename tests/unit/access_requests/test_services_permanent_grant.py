@@ -48,6 +48,7 @@ def test_submit_grant_request_allows_permanent_for_any_group() -> None:
             reason="申请永久授权",
             actor_type="user",
             actor_id=user.authentik_user_id,
+            idempotency_key="permanent-grant-success",
             approver_user_ids=(approver.authentik_user_id,),
             request_type=REQUEST_TYPE_GRANT,
         ),
@@ -77,6 +78,7 @@ def test_submit_grant_request_rejects_when_current_grant_exists() -> None:
                 reason="重复申请",
                 actor_type="user",
                 actor_id=user.authentik_user_id,
+                idempotency_key="permanent-grant-current-exists",
                 request_type=REQUEST_TYPE_GRANT,
             ),
         )

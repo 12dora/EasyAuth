@@ -7,6 +7,7 @@ import json
 from http import HTTPStatus
 from typing import TYPE_CHECKING
 
+from django.db import transaction
 from django.http import Http404, HttpRequest, JsonResponse
 from django.views.decorators.http import require_http_methods
 
@@ -28,18 +29,20 @@ from easyauth.accounts.local_admin import (
     record_totp_enabled,
     register_passkey,
     reset_login_failures,
+    rotate_local_admin_session,
     store_totp_setup_secret,
     totp_provisioning_uri,
     totp_qr_data_uri,
     totp_setup_secret,
     verify_and_consume_totp,
 )
+from easyauth.accounts.models import LocalAdminAccount
 from easyauth.admin_console.api_responses import error_response, json_response
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode
 
 if TYPE_CHECKING:
-    from easyauth.accounts.models import LocalAdminAccount, LocalAdminPasskey
+    from easyauth.accounts.models import LocalAdminPasskey
     from easyauth.api.errors import JsonValue
 
 FORBIDDEN_MESSAGE = "两步验证仅适用于本地管理员账号。"
@@ -69,14 +72,18 @@ def totp_begin(request: HttpRequest) -> JsonResponse:
         return error_response(
             ErrorCode.CONFLICT, TOTP_ALREADY_ENABLED_MESSAGE, status=HTTPStatus.CONFLICT
         )
-    secret = totp_setup_secret(request) or generate_totp_secret()
-    store_totp_setup_secret(request, secret)
+    step_up_error = _step_up_error(account, _body_string(request, "current_password"))
+    if step_up_error is not None:
+        return step_up_error
+    secret = generate_totp_secret()
+    enrollment_nonce = store_totp_setup_secret(request, account, secret)
     provisioning_uri = totp_provisioning_uri(secret, account.username)
     return json_response(
         {
             "secret": secret,
             "otpauth_uri": provisioning_uri,
             "qr_svg": totp_qr_data_uri(provisioning_uri),
+            "enrollment_nonce": enrollment_nonce,
         },
     )
 
@@ -90,7 +97,11 @@ def totp_confirm(request: HttpRequest) -> JsonResponse:
         return error_response(
             ErrorCode.PERMISSION_DENIED, THROTTLED_MESSAGE, status=HTTPStatus.TOO_MANY_REQUESTS
         )
-    secret = totp_setup_secret(request)
+    secret = totp_setup_secret(
+        request,
+        account,
+        nonce=_body_string(request, "enrollment_nonce"),
+    )
     code = _body_string(request, "code")
     step = matched_totp_timestep(secret, code) if secret else None
     if step is None:
@@ -100,13 +111,23 @@ def totp_confirm(request: HttpRequest) -> JsonResponse:
             TOTP_CONFIRM_INVALID_MESSAGE,
             status=HTTPStatus.UNPROCESSABLE_ENTITY,
         )
-    account.totp_secret = secret
-    account.totp_enabled = True
-    # 记录确认时的 timestep, 防止刚输入的绑定验证码在首登窗口内被重放消费第二因子。
-    account.totp_last_timestep = step
-    account.save(
-        update_fields=["totp_secret", "totp_enabled", "totp_last_timestep", "updated_at"],
-    )
+    with transaction.atomic():
+        locked = LocalAdminAccount.objects.select_for_update().get(pk=account.pk)
+        if locked.totp_enabled or locked.session_version != account.session_version:
+            clear_totp_setup_secret(request)
+            return error_response(
+                ErrorCode.CONFLICT,
+                TOTP_ALREADY_ENABLED_MESSAGE,
+                status=HTTPStatus.CONFLICT,
+            )
+        locked.totp_secret = secret
+        locked.totp_enabled = True
+        locked.totp_last_timestep = step
+        locked.save(
+            update_fields=["totp_secret", "totp_enabled", "totp_last_timestep", "updated_at"],
+        )
+    account.refresh_from_db()
+    rotate_local_admin_session(request, account)
     reset_login_failures(account.username)
     clear_totp_setup_secret(request)
     record_totp_enabled(account.username)
@@ -144,6 +165,7 @@ def totp_disable(request: HttpRequest) -> JsonResponse:
     account.save(
         update_fields=["totp_secret", "totp_enabled", "totp_last_timestep", "updated_at"],
     )
+    rotate_local_admin_session(request, account)
     reset_login_failures(account.username)
     record_totp_disabled(account.username)
     return json_response(_status_payload(account))
@@ -198,6 +220,7 @@ def passkey_register_complete(request: HttpRequest) -> JsonResponse:
         )
     reset_login_failures(account.username)
     record_passkey_registered(account.username, name=passkey.name)
+    rotate_local_admin_session(request, account)
     return json_response(_status_payload(account))
 
 
@@ -214,6 +237,7 @@ def passkey_delete(request: HttpRequest, passkey_id: int) -> JsonResponse:
         raise Http404
     name = passkey.name
     _ = passkey.delete()
+    rotate_local_admin_session(request, account)
     reset_login_failures(account.username)
     record_passkey_removed(account.username, name=name)
     return json_response(_status_payload(account))

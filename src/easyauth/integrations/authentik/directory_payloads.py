@@ -12,6 +12,7 @@ EMPTY_MANAGED_USERS_FIELD = "empty managed users field"
 MISSING_DIRECTORY_IDENTITY_FIELD = "missing directory identity field"
 UNSUPPORTED_DIRECTORY_USER_STATUS = "unsupported directory user status"
 UNSUPPORTED_RESOLVED_AT = "managed users resolved_at must be a timezone-aware ISO datetime"
+INVALID_DIRECTORY_COLLECTION = "directory response results must be a list"
 
 
 @dataclass(frozen=True, slots=True)
@@ -180,15 +181,11 @@ def _is_active_linked_user(user: DingTalkManagedUser) -> bool:
 
 
 def _items(payload: DirectoryJson) -> tuple[DirectoryJson, ...]:
-    if isinstance(payload.get("results"), list):
-        return tuple(_safe_mapping(item) for item in _list(payload.get("results")))
-    if isinstance(payload.get("items"), list):
-        return tuple(_safe_mapping(item) for item in _list(payload.get("items")))
-    if isinstance(payload.get("departments"), list):
-        return tuple(_safe_mapping(item) for item in _list(payload.get("departments")))
-    if isinstance(payload.get("users"), list):
-        return tuple(_safe_mapping(item) for item in _list(payload.get("users")))
-    return ()
+    results = payload.get("results")
+    if not isinstance(results, list):
+        # 缺失/错型集合与权威空集不是一回事; 只有显式 results=[] 才表示本页为空。
+        raise TypeError(INVALID_DIRECTORY_COLLECTION)
+    return tuple(_safe_mapping(item) for item in results)
 
 
 def _safe_mapping(value: object) -> DirectoryJson:

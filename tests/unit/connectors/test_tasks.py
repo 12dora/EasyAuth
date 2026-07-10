@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 from typing import TYPE_CHECKING
+from uuid import UUID
 
 import pytest
 from django.utils import timezone
@@ -52,15 +53,28 @@ class _SendTaskRecorder:
         self.calls.append((name, tuple(args or ())))
         return object()
 
+    def enqueue_task(
+        self,
+        *,
+        event_key: str,
+        task_name: str,
+        args: list[object] | tuple[object, ...] = (),
+        kwargs: dict[str, object] | None = None,
+        countdown: float = 0,
+    ) -> object:
+        _ = (event_key, kwargs, countdown)
+        self.calls.append((task_name, tuple(args)))
+        return object()
+
 
 @pytest.fixture
 def sent_tasks(monkeypatch: pytest.MonkeyPatch) -> _SendTaskRecorder:
     recorder = _SendTaskRecorder()
-    monkeypatch.setattr(dispatch_module, "current_app", recorder)
+    monkeypatch.setattr(dispatch_module, "enqueue_task", recorder.enqueue_task)
     return recorder
 
 
-def test_offboard_task_records_run_when_connector_handles(
+def test_offboard_task_uses_same_serial_worker_as_reconcile(
     sent_tasks: _SendTaskRecorder,
 ) -> None:
     # Given
@@ -71,54 +85,41 @@ def test_offboard_task_records_run_when_connector_handles(
     # When
     handled = offboard_user_task(user.authentik_user_id)
 
-    # Then: 连接器处理成功 → 落 offboard 运行记录、不回退对账; 健康字段不受影响。
+    # Then: 只推进持久 generation 并投递统一 worker, 不再旁路写外部系统。
     assert handled == 1
-    assert FakeConnector.offboarded_user_ids == [user.authentik_user_id]
-    run = ConnectorSyncRun.objects.get(instance=instance)
-    assert run.trigger == SYNC_TRIGGER_OFFBOARD
-    assert run.status == "success"
-    assert sent_tasks.calls == []
+    assert FakeConnector.offboarded_user_ids == []
+    assert not ConnectorSyncRun.objects.filter(instance=instance).exists()
+    assert sent_tasks.calls == [
+        ("easyauth.connectors.reconcile_instance", (instance.id,)),
+    ]
     instance.refresh_from_db()
-    assert instance.last_reconcile_at is None
+    assert instance.reconcile_generation == 1
+    assert instance.reconcile_dirty is True
+    assert instance.reconcile_pending_trigger == SYNC_TRIGGER_OFFBOARD
 
 
-def test_offboard_task_falls_back_to_reconcile_when_unhandled(
+def test_offboard_during_active_lease_keeps_dirty_without_duplicate_worker(
     sent_tasks: _SendTaskRecorder,
 ) -> None:
     # Given: 连接器未实现快路径。
     app = App.objects.create(app_key="conn-task-fb", name="X")
     instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
     user = UserMirror.objects.create(authentik_user_id="conn-task-fb-u1")
-    FakeConnector.offboard_handled = False
+    instance.reconcile_lease_token = UUID("b93264e2-69b3-4594-aa49-41af8cf3e32d")
+    instance.reconcile_lease_expires_at = timezone.now() + timedelta(minutes=1)
+    instance.save(
+        update_fields=["reconcile_lease_token", "reconcile_lease_expires_at", "updated_at"]
+    )
 
     # When
     handled = offboard_user_task(user.authentik_user_id)
 
     # Then: 回退为触发一次对账。
-    assert handled == 0
-    assert sent_tasks.calls == [
-        ("easyauth.connectors.reconcile_instance", (instance.id, SYNC_TRIGGER_OFFBOARD)),
-    ]
-
-
-def test_offboard_task_records_failure_without_retry(sent_tasks: _SendTaskRecorder) -> None:
-    # Given
-    app = App.objects.create(app_key="conn-task-err", name="X")
-    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
-    user = UserMirror.objects.create(authentik_user_id="conn-task-err-u1")
-    FakeConnector.next_error_message = "外部不可达"
-
-    # When
-    handled = offboard_user_task(user.authentik_user_id)
-
-    # Then: 失败留痕(周期对账兜底), 不影响健康计数。
-    assert handled == 0
-    run = ConnectorSyncRun.objects.get(instance=instance)
-    assert run.status == "failed"
-    assert run.error == "外部不可达"
+    assert handled == 1
     assert sent_tasks.calls == []
     instance.refresh_from_db()
-    assert instance.consecutive_failures == 0
+    assert instance.reconcile_dirty is True
+    assert instance.reconcile_pending_trigger == SYNC_TRIGGER_OFFBOARD
 
 
 def test_scheduler_enqueues_due_instances_only(sent_tasks: _SendTaskRecorder) -> None:
@@ -144,15 +145,40 @@ def test_scheduler_enqueues_due_instances_only(sent_tasks: _SendTaskRecorder) ->
     # Then
     assert queued == 1
     assert sent_tasks.calls == [
-        ("easyauth.connectors.reconcile_instance", (due.id, "periodic")),
+        ("easyauth.connectors.reconcile_instance", (due.id,)),
     ]
 
     # 到期判定以实例自身 interval 为准。
     due.last_reconcile_at = timezone.now() - timedelta(seconds=due.reconcile_interval_seconds + 1)
     due.save(update_fields=["last_reconcile_at", "updated_at"])
     sent_tasks.calls.clear()
-    # pending 标记仍在(任务未真正执行), 不会重复排队。
+    # worker_queued 持久标记仍在(任务未真正执行), 不会重复投递; generation 仍推进。
     assert schedule_connector_reconciles_task() == 0
+
+
+def test_scheduler_recovers_stale_broker_queue_independent_of_interval(
+    sent_tasks: _SendTaskRecorder,
+) -> None:
+    now = timezone.now()
+    app = App.objects.create(app_key="conn-task-recover", name="X")
+    instance = ConnectorInstance.objects.create(
+        app=app,
+        connector_key="fake",
+        enabled=True,
+        last_reconcile_at=now,
+        reconcile_interval_seconds=86400,
+        reconcile_generation=1,
+        reconcile_dirty=True,
+        reconcile_worker_queued=True,
+        reconcile_worker_queued_at=now - timedelta(minutes=11),
+    )
+
+    queued = schedule_connector_reconciles_task()
+
+    assert queued == 1
+    assert sent_tasks.calls == [
+        ("easyauth.connectors.reconcile_instance", (instance.id,)),
+    ]
 
 
 def test_prune_keeps_recent_runs_per_instance(monkeypatch: pytest.MonkeyPatch) -> None:

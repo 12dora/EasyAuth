@@ -58,6 +58,7 @@ INSTALLED_APPS: list[str] = [
     "easyauth.grants.apps.GrantsConfig",
     "easyauth.teams.apps.TeamsConfig",
     "easyauth.webhooks.apps.WebhooksConfig",
+    "easyauth.outbox.apps.OutboxConfig",
     "easyauth.connectors.apps.ConnectorsConfig",
     "easyauth.integrations.apps.IntegrationsConfig",
     "easyauth.workflows.apps.WorkflowsConfig",
@@ -309,6 +310,9 @@ EASYAUTH_CONNECTORS = tuple(
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
 CELERY_TASK_EAGER_PROPAGATES = True
+CELERY_TASK_ROUTES = {
+    "easyauth.webhooks.deliver": {"queue": "webhooks"},
+}
 CELERY_IMPORTS = (
     "easyauth.tasks.grants",
     "easyauth.tasks.authentik",
@@ -317,8 +321,13 @@ CELERY_IMPORTS = (
     "easyauth.tasks.lifecycle",
     "easyauth.tasks.dingtalk_stream",
     "easyauth.tasks.connectors",
+    "easyauth.tasks.outbox",
 )
 CELERY_BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
+    "runtime-heartbeat": {
+        "task": "easyauth.health.runtime_heartbeat",
+        "schedule": float(os.environ.get("EASYAUTH_RUNTIME_HEARTBEAT_SECONDS", "20")),
+    },
     "grant-expiration-cleanup": {
         "task": "easyauth.grants.cleanup_expired_grants",
         "schedule": float(os.environ.get("EASYAUTH_GRANT_EXPIRATION_CLEANUP_SECONDS", "60")),
@@ -343,4 +352,25 @@ CELERY_BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
         "task": "easyauth.connectors.prune_sync_runs",
         "schedule": float(os.environ.get("EASYAUTH_CONNECTOR_SYNC_RUN_PRUNE_SECONDS", "86400")),
     },
+    # 事务 outbox 扫描器: 恢复 broker 发布失败及 lease 超时的安全关键任务。
+    "outbox-dispatch": {
+        "task": "easyauth.outbox.dispatch_pending",
+        "schedule": float(os.environ.get("EASYAUTH_OUTBOX_DISPATCH_SECONDS", "5")),
+    },
 }
+
+EASYAUTH_HEALTH_REQUIRE_BACKGROUND = (
+    os.environ.get("EASYAUTH_HEALTH_REQUIRE_BACKGROUND", "0") == "1"
+)
+EASYAUTH_HEALTH_BEAT_MAX_AGE_SECONDS = float(
+    os.environ.get("EASYAUTH_HEALTH_BEAT_MAX_AGE_SECONDS", "60"),
+)
+EASYAUTH_HEALTH_STREAM_MAX_AGE_SECONDS = float(
+    os.environ.get("EASYAUTH_HEALTH_STREAM_MAX_AGE_SECONDS", "60"),
+)
+EASYAUTH_HEALTH_GRANT_CLEANUP_MAX_AGE_SECONDS = float(
+    os.environ.get("EASYAUTH_HEALTH_GRANT_CLEANUP_MAX_AGE_SECONDS", "180"),
+)
+EASYAUTH_HEALTH_DIRECTORY_SYNC_MAX_AGE_SECONDS = float(
+    os.environ.get("EASYAUTH_HEALTH_DIRECTORY_SYNC_MAX_AGE_SECONDS", "900"),
+)

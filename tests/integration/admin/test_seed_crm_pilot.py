@@ -117,6 +117,7 @@ def test_seed_crm_pilot_token_can_query_seeded_grant_through_api() -> None:
         grant=grant,
         permission__key="customer.profile.view",
         scope_key="SELF",
+        expires_at__isnull=True,
     ).exists()
 
     # When

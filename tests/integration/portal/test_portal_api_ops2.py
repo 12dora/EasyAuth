@@ -12,7 +12,6 @@ from django.utils import timezone
 
 from easyauth.access_requests.models import (
     GRANT_TYPE_PERMANENT,
-    GRANT_TYPE_TIMED,
     REQUEST_STATUS_APPROVED,
     REQUEST_STATUS_GRANT_APPLIED,
     AccessRequest,
@@ -104,6 +103,8 @@ def test_ops2_portal_api_lists_access_requests_for_session_user() -> None:
         app=app,
         status=REQUEST_STATUS_APPROVED,
         reason="审批原因",
+        idempotency_key="ops2-approved-request",
+        payload_digest="a" * 64,
     )
     applied = AccessRequest.objects.create(
         user=user,
@@ -111,11 +112,19 @@ def test_ops2_portal_api_lists_access_requests_for_session_user() -> None:
         status=REQUEST_STATUS_GRANT_APPLIED,
         applied_at=timezone.now(),
         reason="已落库",
+        idempotency_key="ops2-applied-request",
+        payload_digest="b" * 64,
     )
     _ = AccessRequestGroup.objects.create(access_request=approved, authorization_group=group)
     _ = AccessRequestGroup.objects.create(access_request=applied, authorization_group=group)
     other_user = UserMirror.objects.create(authentik_user_id="ops2-api-request-other")
-    _ = AccessRequest.objects.create(user=other_user, app=app, reason="不应泄露")
+    _ = AccessRequest.objects.create(
+        user=other_user,
+        app=app,
+        reason="不应泄露",
+        idempotency_key="ops2-other-user-request",
+        payload_digest="c" * 64,
+    )
 
     # When: 员工读取自己的申请 API。
     response = client.get(REQUESTS_API_URL)
@@ -159,11 +168,13 @@ def test_ops2_portal_api_post_access_request_uses_session_user_and_csrf() -> Non
         REQUESTS_API_URL,
         data=dumps(payload),
         content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-test-idempotency",
     )
     accepted = client.post(
         REQUESTS_API_URL,
         data=dumps(payload),
         content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-test-idempotency",
         HTTP_X_CSRFTOKEN=csrf_token,
     )
 
@@ -172,8 +183,7 @@ def test_ops2_portal_api_post_access_request_uses_session_user_and_csrf() -> Non
     assert missing_token.status_code == HTTPStatus.FORBIDDEN
     assert accepted.status_code == HTTPStatus.CREATED
     assert (
-        AccessRequestGroup.objects.get(access_request=access_request).authorization_group
-        == group
+        AccessRequestGroup.objects.get(access_request=access_request).authorization_group == group
     )
     assert access_request.reason == "需要查看客户记录"
     assert AccessGrant.objects.count() == 0
@@ -236,6 +246,7 @@ def test_ops2_portal_api_rejects_missing_session_and_requester_spoofing() -> Non
             },
         ),
         content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-test-idempotency",
     )
 
     # Then: API 使用 session 边界, 不接受请求体伪造 requester。
@@ -288,19 +299,20 @@ def _create_grant_with_role_permission(
         permission=permission,
         scope_key="GLOBAL",
     )
-    grant = AccessGrant.objects.create(
-        user=user,
-        app=app,
-        grant_type=GRANT_TYPE_PERMANENT if expires_in_days is None else GRANT_TYPE_TIMED,
-        grant_expires_at=(
-            None if expires_in_days is None else timezone.now() + timedelta(days=expires_in_days)
-        ),
+    expires_at = (
+        None if expires_in_days is None else timezone.now() + timedelta(days=expires_in_days)
     )
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        expires_at=expires_at,
+    )
     _ = AccessGrantPermission.objects.create(
         grant=grant,
         permission=permission,
         scope_key="GLOBAL",
+        expires_at=expires_at,
     )
     return app
 

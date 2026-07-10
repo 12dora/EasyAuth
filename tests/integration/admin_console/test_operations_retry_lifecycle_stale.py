@@ -12,6 +12,8 @@ from django.utils import timezone
 from pydantic import BaseModel, ConfigDict
 
 from easyauth.access_requests.models import (
+    GRANT_TYPE_PERMANENT,
+    GRANT_TYPE_TIMED,
     REQUEST_STATUS_GRANT_FAILED,
     REQUEST_TYPE_RENEW,
     REQUEST_TYPE_REVOKE,
@@ -24,8 +26,6 @@ from easyauth.applications.models import App, ApprovalRule, AuthorizationGroup
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import (
     GRANT_STATUS_ACTIVE,
-    GRANT_TYPE_PERMANENT,
-    GRANT_TYPE_TIMED,
     AccessGrant,
     AccessGrantGroup,
 )
@@ -67,11 +67,13 @@ def test_retry_failed_renew_rejects_inactive_group_target_without_mutating_grant
     grant = AccessGrant.objects.create(
         user=target_user,
         app=app,
-        grant_type=GRANT_TYPE_TIMED,
-        grant_expires_at=current_expires_at,
         version=EXISTING_GRANT_VERSION,
     )
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
+    grant_group = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        expires_at=current_expires_at,
+    )
     access_request = AccessRequest.objects.create(
         user=target_user,
         app=app,
@@ -80,6 +82,8 @@ def test_retry_failed_renew_rejects_inactive_group_target_without_mutating_grant
         grant_type=GRANT_TYPE_TIMED,
         grant_expires_at=timezone.now() + timedelta(days=10),
         reason="续期授权写入失败",
+        idempotency_key="retry-renew-inactive-group",
+        payload_digest="a" * 64,
     )
     _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
     group.is_active = False
@@ -102,7 +106,8 @@ def test_retry_failed_renew_rejects_inactive_group_target_without_mutating_grant
     assert body.error.details["error"] == TARGET_CONFIGURATION_ERROR
     assert grant.status == GRANT_STATUS_ACTIVE
     assert grant.version == EXISTING_GRANT_VERSION
-    assert grant.grant_expires_at == current_expires_at
+    grant_group.refresh_from_db()
+    assert grant_group.expires_at == current_expires_at
     assert access_request.status == REQUEST_STATUS_GRANT_FAILED
     assert access_request.applied_at is None
     assert AuditLog.objects.count() == 0
@@ -133,17 +138,27 @@ def test_retry_failed_revoke_rejects_inactive_retained_group_without_mutating_gr
     grant = AccessGrant.objects.create(
         user=target_user,
         app=app,
-        grant_type=GRANT_TYPE_PERMANENT,
         version=EXISTING_GRANT_VERSION,
     )
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=keep_group)
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=remove_group)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=keep_group,
+        expires_at=None,
+    )
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=remove_group,
+        expires_at=None,
+    )
     access_request = AccessRequest.objects.create(
         user=target_user,
         app=app,
         request_type=REQUEST_TYPE_REVOKE,
         status=REQUEST_STATUS_GRANT_FAILED,
+        grant_type=GRANT_TYPE_PERMANENT,
         reason="撤权授权写入失败",
+        idempotency_key="retry-revoke-inactive-group",
+        payload_digest="b" * 64,
     )
     _ = AccessRequestGroup.objects.create(
         access_request=access_request,

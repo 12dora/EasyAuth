@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from http import HTTPStatus
+from typing import TYPE_CHECKING, Final, override
 
 from django.db import models
 from django.utils.dateparse import parse_datetime
 
+from easyauth.admin_console.api_responses import error_response
+from easyauth.api.errors import ErrorCode
 from easyauth.api.pagination import total_pages
 from easyauth.grants.models import GRANT_STATUS_REVOKED
 
 if TYPE_CHECKING:
     from django.db.models import QuerySet
-    from django.http import QueryDict
+    from django.http import JsonResponse, QueryDict
 
     from easyauth.access_requests.models import AccessRequest
     from easyauth.audit.models import AuditLog
@@ -20,6 +23,28 @@ if TYPE_CHECKING:
 DEFAULT_PAGE: Final = 1
 DEFAULT_PAGE_SIZE: Final = 20
 MAX_PAGE_SIZE: Final = 100
+MAX_PAGE: Final = 100_000
+MAX_POSITIVE_INTEGER: Final = 2_147_483_647
+
+
+@dataclass(frozen=True, slots=True)
+class OperationFilterValidationError(ValueError):
+    key: str
+    value: str
+    message: str
+
+    @override
+    def __str__(self) -> str:
+        return self.message
+
+
+def operation_filter_error_response(error: OperationFilterValidationError) -> JsonResponse:
+    return error_response(
+        ErrorCode.VALIDATION_ERROR,
+        error.message,
+        {"field": error.key, "value": error.value},
+        status=HTTPStatus.UNPROCESSABLE_ENTITY,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,12 +84,7 @@ def filter_access_grants(
     queryset = _filter_datetime(queryset, query, key="created_to", lookup="created_at__lte")
     queryset = _filter_datetime(queryset, query, key="updated_from", lookup="updated_at__gte")
     queryset = _filter_datetime(queryset, query, key="updated_to", lookup="updated_at__lte")
-    queryset = _filter_datetime(
-        queryset,
-        query,
-        key="expires_before",
-        lookup="grant_expires_at__lte",
-    )
+    queryset = _filter_item_expiration(queryset, query)
     return _filter_revoked(queryset, query)
 
 
@@ -78,9 +98,15 @@ def filter_audit_logs(queryset: QuerySet[AuditLog], query: QueryDict) -> QuerySe
 
 
 def paginate_queryset[T: models.Model](queryset: QuerySet[T], query: QueryDict) -> Page[T]:
-    page = _positive_integer(query.get("page"), default=DEFAULT_PAGE, maximum=None)
+    page = _positive_integer(
+        query.get("page"),
+        key="page",
+        default=DEFAULT_PAGE,
+        maximum=MAX_PAGE,
+    )
     page_size = _positive_integer(
         query.get("page_size"),
+        key="page_size",
         default=DEFAULT_PAGE_SIZE,
         maximum=MAX_PAGE_SIZE,
     )
@@ -116,9 +142,15 @@ def _filter_integer[T: models.Model](
     key: str,
     lookup: str,
 ) -> QuerySet[T]:
-    value = _integer_or_none(query.get(key))
+    value = _integer_or_none(query.get(key), key=key)
     if value is None:
         return queryset
+    if value < 1 or value > MAX_POSITIVE_INTEGER:
+        raise OperationFilterValidationError(
+            key=key,
+            value=str(value),
+            message=f"{key} 必须为 1 至 {MAX_POSITIVE_INTEGER} 之间的整数。",
+        )
     return queryset.filter(**{lookup: value})
 
 
@@ -129,7 +161,7 @@ def _filter_boolean[T: models.Model](
     key: str,
     lookup: str,
 ) -> QuerySet[T]:
-    value = _boolean_or_none(query.get(key))
+    value = _boolean_or_none(query.get(key), key=key)
     if value is None:
         return queryset
     return queryset.filter(**{lookup: value})
@@ -147,12 +179,16 @@ def _filter_datetime[T: models.Model](
         return queryset
     value = parse_datetime(raw_value)
     if value is None:
-        return queryset
+        raise OperationFilterValidationError(
+            key=key,
+            value=raw_value,
+            message=f"{key} 必须为 ISO 8601 datetime。",
+        )
     return queryset.filter(**{lookup: value})
 
 
 def _filter_revoked(queryset: QuerySet[AccessGrant], query: QueryDict) -> QuerySet[AccessGrant]:
-    value = _boolean_or_none(query.get("revoked"))
+    value = _boolean_or_none(query.get("revoked"), key="revoked")
     if value is None:
         return queryset
     if value:
@@ -160,31 +196,75 @@ def _filter_revoked(queryset: QuerySet[AccessGrant], query: QueryDict) -> QueryS
     return queryset.exclude(status=GRANT_STATUS_REVOKED)
 
 
-def _positive_integer(value: str | None, *, default: int, maximum: int | None) -> int:
-    parsed_value = _integer_or_none(value)
-    if parsed_value is None or parsed_value < 1:
+def _filter_item_expiration(
+    queryset: QuerySet[AccessGrant],
+    query: QueryDict,
+) -> QuerySet[AccessGrant]:
+    raw_value = query.get("expires_before", "")
+    if raw_value == "":
+        return queryset
+    value = parse_datetime(raw_value)
+    if value is None:
+        raise OperationFilterValidationError(
+            key="expires_before",
+            value=raw_value,
+            message="expires_before 必须为 ISO 8601 datetime。",
+        )
+    return queryset.filter(
+        models.Q(grant_groups__expires_at__lte=value)
+        | models.Q(grant_permissions__expires_at__lte=value),
+    ).distinct()
+
+
+def _positive_integer(
+    value: str | None,
+    *,
+    key: str,
+    default: int,
+    maximum: int | None,
+) -> int:
+    parsed_value = _integer_or_none(value, key=key)
+    if parsed_value is None:
         return default
+    if parsed_value < 1:
+        raise OperationFilterValidationError(
+            key=key,
+            value=value or "",
+            message=f"{key} 必须为正整数。",
+        )
     if maximum is not None and parsed_value > maximum:
-        return maximum
+        raise OperationFilterValidationError(
+            key=key,
+            value=value or "",
+            message=f"{key} 不得大于 {maximum}。",
+        )
     return parsed_value
 
 
-def _integer_or_none(value: str | None) -> int | None:
+def _integer_or_none(value: str | None, *, key: str) -> int | None:
     if value is None or value == "":
         return None
     try:
         return int(value)
-    except ValueError:
-        return None
+    except ValueError as exc:
+        raise OperationFilterValidationError(
+            key=key,
+            value=value,
+            message=f"{key} 必须为整数。",
+        ) from exc
 
 
-def _boolean_or_none(value: str | None) -> bool | None:
+def _boolean_or_none(value: str | None, *, key: str) -> bool | None:
     match value:
-        case "true" | "1" | "yes":
+        case "true":
             return True
-        case "false" | "0" | "no":
+        case "false":
             return False
         case None | "":
             return None
         case _:
-            return None
+            raise OperationFilterValidationError(
+                key=key,
+                value=value,
+                message=f"{key} 必须为 true 或 false。",
+            )

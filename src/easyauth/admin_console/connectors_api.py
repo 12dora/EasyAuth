@@ -5,8 +5,8 @@ import json
 from http import HTTPStatus
 from typing import TYPE_CHECKING, ClassVar, Final, cast
 
-from celery import current_app
-from django.db import transaction
+from django.core.cache import cache
+from django.db import IntegrityError, transaction
 from django.http import HttpRequest, HttpResponse, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -16,7 +16,11 @@ from easyauth.admin_console.api_responses import (
     json_response,
     method_not_allowed_response,
 )
-from easyauth.admin_console.operation_filters import paginate_queryset
+from easyauth.admin_console.operation_filters import (
+    OperationFilterValidationError,
+    operation_filter_error_response,
+    paginate_queryset,
+)
 from easyauth.admin_console.request_guards import require_console_actor
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.pagination import pagination_item
@@ -24,7 +28,7 @@ from easyauth.applications.models import App, AuthorizationGroup
 from easyauth.applications.ownership import ConsoleActor, can_manage_app
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.connectors.base import BaseConnector, ConnectorError, secret_field_names
-from easyauth.connectors.dispatch import RECONCILE_TASK_NAME
+from easyauth.connectors.dispatch import request_instance_reconcile
 from easyauth.connectors.models import (
     SYNC_TRIGGER_MANUAL,
     ConnectorInstance,
@@ -45,11 +49,16 @@ APP_NOT_FOUND_MESSAGE: Final = "应用不存在。"
 INSTANCE_NOT_FOUND_MESSAGE: Final = "连接器实例不存在。"
 CONNECTOR_TYPE_UNKNOWN_MESSAGE: Final = "连接器类型未注册。"
 CONNECTOR_EXISTS_MESSAGE: Final = "该应用已配置此类型的连接器。"
+EXTERNAL_ACCOUNT_CONFLICT_MESSAGE: Final = "该外部账户已绑定到另一个 EasyAuth App。"
+EXTERNAL_ACCOUNT_CHANGED_MESSAGE: Final = "连接器不可重新绑定到另一个外部账户。"
 MAPPINGS_CHANGED_MESSAGE: Final = "授权组映射已被其他请求更新, 请重新加载后再保存。"
 SUPERUSER_REQUIRED_MESSAGE: Final = "只有系统管理员可以维护连接器配置。"
 MANAGE_REQUIRED_MESSAGE: Final = "只有 active App owner 可以查看连接器状态。"
 INSTANCE_DISABLED_MESSAGE: Final = "连接器实例未启用, 无法触发对账。"
 AUTHORIZATION_GROUP_UNKNOWN_TEMPLATE: Final = "授权组 {key} 不存在或不属于该应用。"
+RECONCILE_THROTTLED_MESSAGE: Final = "手动对账请求过于频繁, 请稍后再试。"
+TOMBSTONE_MAPPING_SERIALIZE_ERROR: Final = "tombstone mapping cannot be serialized"
+MANUAL_RECONCILE_RATE_SECONDS: Final = 10
 
 MIN_RECONCILE_INTERVAL_SECONDS: Final = 60
 MAX_RECONCILE_INTERVAL_SECONDS: Final = 86400
@@ -114,7 +123,9 @@ def console_app_connectors(request: HttpRequest, app_key: str) -> JsonResponse:
         case JsonResponse() as response:
             return response
     if request.method == "GET":
-        instances = ConnectorInstance.objects.filter(app=app).order_by("connector_key")
+        instances = ConnectorInstance.objects.filter(app=app, tombstoned=False).order_by(
+            "connector_key"
+        )
         payload: JsonObject = {
             "connector_types": [_connector_type_item(item) for item in _connector_types()],
             "data": [_instance_item(instance) for instance in instances],
@@ -241,9 +252,11 @@ def console_app_connector_mappings(
             return response
     if request.method == "GET":
         mappings = list(
-            ConnectorMapping.objects.filter(instance=instance).select_related(
-                "authorization_group",
-            )
+            ConnectorMapping.objects.filter(
+                instance=instance,
+                tombstoned=False,
+                authorization_group__isnull=False,
+            ).select_related("authorization_group")
         )
         items: list[JsonValue] = [_mapping_item(mapping) for mapping in mappings]
         payload = list_payload(items)
@@ -268,17 +281,30 @@ def console_app_connector_reconcile(
             return response
     if request.method != "POST":
         return method_not_allowed_response()
+    if response := _superuser_required(actor):
+        return response
     if not instance.enabled:
         return _validation_error(INSTANCE_DISABLED_MESSAGE)
-    # 手动触发绕过去抖直接入队(任务开始时会自行清理 pending 标记), 按钮永远即刻生效。
-    _ = current_app.send_task(RECONCILE_TASK_NAME, args=[instance.id, SYNC_TRIGGER_MANUAL])
+    actor_hash = hashlib.sha256(actor.user_id.encode()).hexdigest()
+    rate_key = f"easyauth:connectors:manual:{instance.id}:{actor_hash}"
+    if not cache.add(rate_key, "1", timeout=MANUAL_RECONCILE_RATE_SECONDS):
+        return error_response(
+            ErrorCode.PERMISSION_DENIED,
+            RECONCILE_THROTTLED_MESSAGE,
+            status=HTTPStatus.TOO_MANY_REQUESTS,
+        )
+    queued = request_instance_reconcile(
+        instance.id,
+        trigger=SYNC_TRIGGER_MANUAL,
+        countdown=0,
+    )
     _record_event(
         instance.app,
         actor,
         "connector_reconcile_requested",
         {"connector_key": instance.connector_key, "instance_id": instance.id},
     )
-    return json_response({"queued": True}, status=HTTPStatus.ACCEPTED)
+    return json_response({"queued": queued}, status=HTTPStatus.ACCEPTED)
 
 
 def console_app_connector_sync_runs(
@@ -293,10 +319,13 @@ def console_app_connector_sync_runs(
             return response
     if request.method != "GET":
         return method_not_allowed_response()
-    page = paginate_queryset(
-        ConnectorSyncRun.objects.filter(instance=instance),
-        request.GET,
-    )
+    try:
+        page = paginate_queryset(
+            ConnectorSyncRun.objects.filter(instance=instance),
+            request.GET,
+        )
+    except OperationFilterValidationError as exc:
+        return operation_filter_error_response(exc)
     items: list[JsonValue] = [_sync_run_item(run) for run in page.items]
     return json_response(
         paginated_list_payload(
@@ -306,7 +335,11 @@ def console_app_connector_sync_runs(
     )
 
 
-def _create_instance(request: HttpRequest, app: App, actor: ConsoleActor) -> JsonResponse:
+def _create_instance(  # noqa: PLR0911
+    request: HttpRequest,
+    app: App,
+    actor: ConsoleActor,
+) -> JsonResponse:
     if response := _superuser_required(actor):
         return response
     try:
@@ -326,26 +359,42 @@ def _create_instance(request: HttpRequest, app: App, actor: ConsoleActor) -> Jso
     problems = connector.validate_config(config)
     if problems:
         return _config_problems_response(problems)
+    try:
+        external_account_id = connector.external_account_id(config)
+    except ConnectorError as error:
+        return error_response(
+            ErrorCode.VALIDATION_ERROR,
+            str(error),
+            status=HTTPStatus.BAD_GATEWAY,
+        )
     instance = ConnectorInstance(
         app=app,
         connector_key=payload.connector_key,
         enabled=payload.enabled,
         reconcile_interval_seconds=payload.reconcile_interval_seconds,
         updated_by=actor.user_id,
+        external_account_id=external_account_id,
     )
     instance.set_config(config)
-    with transaction.atomic():
-        instance.save()
-        _record_event(
-            app,
-            actor,
-            "connector_instance_created",
-            _instance_audit_metadata(instance),
+    try:
+        with transaction.atomic():
+            instance.save()
+            _record_event(
+                app,
+                actor,
+                "connector_instance_created",
+                _instance_audit_metadata(instance),
+            )
+    except IntegrityError:
+        return error_response(
+            ErrorCode.CONFLICT,
+            EXTERNAL_ACCOUNT_CONFLICT_MESSAGE,
+            status=HTTPStatus.CONFLICT,
         )
     return json_response({"connector": _instance_item(instance)}, status=HTTPStatus.CREATED)
 
 
-def _update_instance(
+def _update_instance(  # noqa: PLR0911
     request: HttpRequest,
     instance: ConnectorInstance,
     actor: ConsoleActor,
@@ -362,19 +411,41 @@ def _update_instance(
         problems = connector.validate_config(config)
         if problems:
             return _config_problems_response(problems)
+        try:
+            external_account_id = connector.external_account_id(config)
+        except ConnectorError as error:
+            return error_response(
+                ErrorCode.VALIDATION_ERROR,
+                str(error),
+                status=HTTPStatus.BAD_GATEWAY,
+            )
+        if instance.external_account_id and instance.external_account_id != external_account_id:
+            return error_response(
+                ErrorCode.CONFLICT,
+                EXTERNAL_ACCOUNT_CHANGED_MESSAGE,
+                status=HTTPStatus.CONFLICT,
+            )
+        instance.external_account_id = external_account_id
         instance.set_config(config)
     if payload.enabled is not None:
         instance.enabled = payload.enabled
     if payload.reconcile_interval_seconds is not None:
         instance.reconcile_interval_seconds = payload.reconcile_interval_seconds
     instance.updated_by = actor.user_id
-    with transaction.atomic():
-        instance.save()
-        _record_event(
-            instance.app,
-            actor,
-            "connector_instance_updated",
-            _instance_audit_metadata(instance),
+    try:
+        with transaction.atomic():
+            instance.save()
+            _record_event(
+                instance.app,
+                actor,
+                "connector_instance_updated",
+                _instance_audit_metadata(instance),
+            )
+    except IntegrityError:
+        return error_response(
+            ErrorCode.CONFLICT,
+            EXTERNAL_ACCOUNT_CONFLICT_MESSAGE,
+            status=HTTPStatus.CONFLICT,
         )
     return json_response({"connector": _instance_item(instance)})
 
@@ -383,11 +454,14 @@ def _delete_instance(instance: ConnectorInstance, actor: ConsoleActor) -> HttpRe
     metadata = _instance_audit_metadata(instance)
     with transaction.atomic():
         _record_event(instance.app, actor, "connector_instance_deleted", metadata)
-        _ = instance.delete()
+        instance.tombstoned = True
+        instance.enabled = False
+        instance.save(update_fields=["tombstoned", "enabled", "updated_at"])
+    _ = request_instance_reconcile(instance.id, trigger=SYNC_TRIGGER_MANUAL, countdown=0)
     return HttpResponse(status=HTTPStatus.NO_CONTENT)
 
 
-def _replace_mappings(
+def _replace_mappings(  # noqa: C901
     request: HttpRequest,
     instance: ConnectorInstance,
     actor: ConsoleActor,
@@ -425,16 +499,46 @@ def _replace_mappings(
                 MAPPINGS_CHANGED_MESSAGE,
                 status=HTTPStatus.CONFLICT,
             )
-        _ = ConnectorMapping.objects.filter(instance=instance).delete()
-        _ = ConnectorMapping.objects.bulk_create(
-            ConnectorMapping(
-                instance=instance,
-                authorization_group=group,
-                external_ref=entry.external_ref,
-                auto_create=entry.auto_create,
+        current_by_group_id = {
+            mapping.authorization_group_id: mapping
+            for mapping in current_mappings
+            if mapping.authorization_group is not None and not mapping.tombstoned
+        }
+        next_group_ids = {group.id for group, _entry in resolved}
+        tombstones: list[ConnectorMapping] = []
+        creates: list[ConnectorMapping] = []
+        for group, entry in resolved:
+            existing = current_by_group_id.get(group.id)
+            if existing is not None and existing.external_ref == entry.external_ref:
+                existing.auto_create = entry.auto_create
+                existing.external_name = existing.external_name or entry.external_ref
+                existing.save(update_fields=["auto_create", "external_name", "updated_at"])
+                continue
+            if existing is not None:
+                existing.authorization_group = None
+                existing.tombstoned = True
+                tombstones.append(existing)
+            creates.append(
+                ConnectorMapping(
+                    instance=instance,
+                    authorization_group=group,
+                    external_ref=entry.external_ref,
+                    external_name=entry.external_ref,
+                    auto_create=entry.auto_create,
+                )
             )
-            for group, entry in resolved
-        )
+        for group_id, existing in current_by_group_id.items():
+            if group_id in next_group_ids:
+                continue
+            existing.authorization_group = None
+            existing.tombstoned = True
+            tombstones.append(existing)
+        if tombstones:
+            _ = ConnectorMapping.objects.bulk_update(
+                tombstones,
+                ["authorization_group", "tombstoned", "updated_at"],
+            )
+        _ = ConnectorMapping.objects.bulk_create(creates)
         _record_event(
             instance.app,
             actor,
@@ -445,10 +549,14 @@ def _replace_mappings(
                 "mapping_count": len(resolved),
             },
         )
+    if instance.enabled:
+        _ = request_instance_reconcile(instance.id, trigger=SYNC_TRIGGER_MANUAL, countdown=0)
     mappings = list(
-        ConnectorMapping.objects.filter(instance=instance).select_related(
-            "authorization_group",
-        )
+        ConnectorMapping.objects.filter(
+            instance=instance,
+            tombstoned=False,
+            authorization_group__isnull=False,
+        ).select_related("authorization_group")
     )
     items: list[JsonValue] = [_mapping_item(mapping) for mapping in mappings]
     response_payload = list_payload(items)
@@ -493,12 +601,15 @@ def _instance_item(instance: ConnectorInstance) -> JsonObject:
         "last_status": instance.last_status,
         "last_error": instance.last_error,
         "consecutive_failures": instance.consecutive_failures,
+        "external_account_id": instance.external_account_id,
         "updated_by": instance.updated_by,
         "updated_at": instance.updated_at.isoformat(),
     }
 
 
 def _mapping_item(mapping: ConnectorMapping) -> JsonObject:
+    if mapping.authorization_group is None:
+        raise ValueError(TOMBSTONE_MAPPING_SERIALIZE_ERROR)
     return {
         "authorization_group_key": mapping.authorization_group.key,
         "authorization_group_name": mapping.authorization_group.name,
@@ -515,6 +626,7 @@ def _mapping_revision(mappings: list[ConnectorMapping]) -> str:
             "auto_create": mapping.auto_create,
         }
         for mapping in mappings
+        if mapping.authorization_group is not None and not mapping.tombstoned
     ]
     serialized = json.dumps(canonical, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode()).hexdigest()
@@ -620,9 +732,11 @@ def _instance_context(
             pass
         case JsonResponse() as response:
             return response
-    instance = (
-        ConnectorInstance.objects.select_related("app").filter(app=app, id=instance_id).first()
-    )
+    instance = ConnectorInstance.objects.select_related("app").filter(
+        app=app,
+        id=instance_id,
+        tombstoned=False,
+    ).first()
     if instance is None:
         return error_response(
             ErrorCode.NOT_FOUND,

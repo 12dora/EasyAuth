@@ -13,16 +13,19 @@ from easyauth.access_requests.application_grants import (
 )
 from easyauth.access_requests.models import (
     REQUEST_STATUS_GRANT_APPLIED,
+    REQUEST_STATUS_GRANT_EXPIRED,
     REQUEST_STATUS_GRANT_FAILED,
     AccessRequest,
 )
 from easyauth.audit.services import AuditRecord, AuditService
+from easyauth.grants.services import GrantMutationExpiredError
 
 if TYPE_CHECKING:
     from easyauth.audit.models import JsonValue
     from easyauth.grants.models import AccessGrant
 
 APPLY_FAILED_MESSAGE: Final = "grant apply failed"
+APPLY_EXPIRED_MESSAGE: Final = "grant expired before apply"
 REQUEST_NOT_FOUND_MESSAGE: Final = "access request is not found"
 
 
@@ -59,6 +62,9 @@ def apply_approved_access_request(input_data: AccessRequestApplication) -> Acces
             _mark_grant_applied(access_request)
             _record_applied_event(access_request, input_data, grant)
             return access_request
+    except GrantMutationExpiredError as exc:
+        _mark_grant_expired(input_data, error=str(exc))
+        raise AccessRequestApplicationError(APPLY_EXPIRED_MESSAGE) from exc
     except (DjangoValidationError, IntegrityError, GrantApplyFailureError) as exc:
         _mark_grant_failed(input_data, error=str(exc))
         raise AccessRequestApplicationError(APPLY_FAILED_MESSAGE) from exc
@@ -119,6 +125,29 @@ def _mark_grant_failed(
                 actor_type=input_data.actor_type,
                 actor_id=input_data.actor_id,
                 action="grant_apply_failed",
+                target_type="access_request",
+                target_id=str(access_request.id),
+                metadata=_request_metadata(access_request, error=error),
+            ),
+        )
+
+
+def _mark_grant_expired(
+    input_data: AccessRequestApplication,
+    *,
+    error: str,
+) -> None:
+    with transaction.atomic():
+        access_request = _approved_access_request(input_data.request_id)
+        access_request.status = REQUEST_STATUS_GRANT_EXPIRED
+        access_request.applied_at = None
+        access_request.full_clean()
+        access_request.save(update_fields=["status"])
+        _ = AuditService.record(
+            AuditRecord(
+                actor_type=input_data.actor_type,
+                actor_id=input_data.actor_id,
+                action="grant_expired_before_apply",
                 target_type="access_request",
                 target_id=str(access_request.id),
                 metadata=_request_metadata(access_request, error=error),

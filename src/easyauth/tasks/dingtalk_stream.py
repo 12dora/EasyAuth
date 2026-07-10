@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final
 
-from celery import current_app, shared_task
+from celery import shared_task
 from django.core.cache import cache
+from django.db import transaction
 from django.utils import timezone
 
 from easyauth.integrations.authentik.directory_client import (
@@ -19,6 +20,7 @@ from easyauth.integrations.models import (
     STREAM_EVENT_STATUS_SKIPPED,
     DingTalkStreamEvent,
 )
+from easyauth.outbox.services import enqueue_task
 from easyauth.workflows.models import (
     APPROVAL_STATUS_APPROVED,
     APPROVAL_STATUS_CANCELED,
@@ -105,12 +107,13 @@ def refresh_pending_cache_key(corp_id: str) -> str:
     return REFRESH_PENDING_CACHE_KEY_TEMPLATE.format(corp_id=corp_id)
 
 
-def request_directory_refresh(corp_id: str) -> bool:
+def request_directory_refresh(corp_id: str, *, source_event_id: str) -> bool:
     """请求一次防抖合并的目录刷新; 返回是否真正排队了新任务。"""
     if not cache.add(refresh_pending_cache_key(corp_id), "1", timeout=REFRESH_PENDING_TTL_SECONDS):
         return False
-    _ = current_app.send_task(
-        DIRECTORY_REFRESH_TASK_NAME,
+    _ = enqueue_task(
+        event_key=f"dingtalk-directory-refresh:{corp_id}:{source_event_id}",
+        task_name=DIRECTORY_REFRESH_TASK_NAME,
         args=[corp_id],
         countdown=REFRESH_COALESCE_SECONDS,
     )
@@ -145,17 +148,22 @@ def refresh_dingtalk_directory_task(corp_id: str) -> dict[str, int]:
 
 @shared_task(name=PROCESS_STREAM_EVENT_TASK_NAME, acks_late=True)
 def process_dingtalk_stream_event_task(event_pk: int) -> str:
-    event = DingTalkStreamEvent.objects.get(pk=event_pk)
-    if event.status != STREAM_EVENT_STATUS_RECEIVED:
-        # 重复投递/重放的幂等出口: 已处理事件不再产生任何副作用。
-        return event.status
-    try:
-        outcome = dispatch_stream_event(event)
-    except (StreamEventContractError, ApprovalCallbackConflictError) as error:
-        _finalize_event(event, status=STREAM_EVENT_STATUS_FAILED, error=str(error))
-        raise
-    _finalize_event(event, status=outcome.status, result=outcome.result)
-    return outcome.status
+    dispatch_error: StreamEventContractError | ApprovalCallbackConflictError | None = None
+    with transaction.atomic():
+        event = DingTalkStreamEvent.objects.select_for_update().get(pk=event_pk)
+        if event.status != STREAM_EVENT_STATUS_RECEIVED:
+            # 重复投递/重放的幂等出口: 已处理事件不再产生任何副作用。
+            return event.status
+        try:
+            outcome = dispatch_stream_event(event)
+        except (StreamEventContractError, ApprovalCallbackConflictError) as error:
+            _finalize_event(event, status=STREAM_EVENT_STATUS_FAILED, error=str(error))
+            dispatch_error = error
+        else:
+            _finalize_event(event, status=outcome.status, result=outcome.result)
+    if dispatch_error is not None:
+        raise dispatch_error
+    return event.status
 
 
 def dispatch_stream_event(event: DingTalkStreamEvent) -> StreamEventOutcome:
@@ -187,7 +195,7 @@ def _handle_directory_event(event: DingTalkStreamEvent) -> StreamEventOutcome:
     )
     if not corp_id:
         raise StreamEventContractError(DIRECTORY_EVENT_MISSING_CORP_MESSAGE)
-    refresh_queued = request_directory_refresh(corp_id)
+    refresh_queued = request_directory_refresh(corp_id, source_event_id=event.event_id)
     result: dict[str, JsonValue] = {
         "corp_id": corp_id,
         "refresh_queued": refresh_queued,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from django.db.models import Q
 from django.utils import timezone
 
 from easyauth.access_requests.submission_types import (
@@ -249,15 +250,8 @@ def _active_lifecycle_grant(user: UserMirror, app: App) -> AccessGrant:
     ).first()
     if grant is None:
         raise AccessRequestSubmissionError(("active grant is required",))
-    match grant.grant_type:
-        case "timed":
-            expires_at = grant.grant_expires_at
-            if expires_at is None or expires_at <= timezone.now():
-                raise AccessRequestSubmissionError(("active grant is required",))
-        case "permanent":
-            pass
-        case _:
-            raise AccessRequestSubmissionError(("active grant is required",))
+    if not _grant_has_effective_membership(grant):
+        raise AccessRequestSubmissionError(("active grant is required",))
     return grant
 
 
@@ -266,20 +260,20 @@ def _validate_renew_request(
     grant_expires_at: datetime | None,
     grant: AccessGrant,
 ) -> None:
-    match grant.grant_type:
-        case "timed":
-            pass
-        case "permanent":
-            raise AccessRequestSubmissionError(("renew requires a timed grant",))
-        case _:
-            raise AccessRequestSubmissionError(("renew requires a timed grant",))
-
     match grant_type:
         case "timed":
-            current_expiration = grant.grant_expires_at
-            if grant_expires_at is None or current_expiration is None:
+            current_expirations = _current_membership_expirations(grant)
+            if (
+                grant_expires_at is None
+                or not current_expirations
+                or any(expiration is None for expiration in current_expirations)
+            ):
                 raise AccessRequestSubmissionError(("renew requires a timed grant expiration",))
-            if grant_expires_at <= current_expiration:
+            if any(
+                grant_expires_at <= expiration
+                for expiration in current_expirations
+                if expiration is not None
+            ):
                 raise AccessRequestSubmissionError(("renew expiration must extend current grant",))
         case "permanent":
             raise AccessRequestSubmissionError(("renew requires a timed grant",))
@@ -338,6 +332,26 @@ def _target_direct_grants(
     direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> set[tuple[int, str]]:
     return {(grant.permission.id, grant.scope_key) for grant in direct_grants}
+
+
+def _grant_has_effective_membership(grant: AccessGrant) -> bool:
+    now = timezone.now()
+    effective = Q(expires_at__isnull=True) | Q(expires_at__gt=now)
+    return AccessGrantGroup.objects.filter(effective, grant=grant).exists() or (
+        AccessGrantPermission.objects.filter(effective, grant=grant).exists()
+    )
+
+
+def _current_membership_expirations(grant: AccessGrant) -> tuple[datetime | None, ...]:
+    group_expirations = AccessGrantGroup.objects.filter(grant=grant).values_list(
+        "expires_at",
+        flat=True,
+    )
+    direct_expirations = AccessGrantPermission.objects.filter(grant=grant).values_list(
+        "expires_at",
+        flat=True,
+    )
+    return (*group_expirations, *direct_expirations)
 
 
 def _validate_targets_belong_to_app(

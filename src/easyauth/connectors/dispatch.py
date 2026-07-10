@@ -2,11 +2,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final
 
-from celery import current_app
-from django.core.cache import cache
 from django.db import transaction
 
 from easyauth.connectors.models import SYNC_TRIGGER_EVENT, ConnectorInstance
+from easyauth.connectors.services import mark_reconcile_dirty
+from easyauth.outbox.services import enqueue_task
 
 if TYPE_CHECKING:
     from easyauth.accounts.models import UserMirror
@@ -15,26 +15,14 @@ if TYPE_CHECKING:
 RECONCILE_TASK_NAME: Final = "easyauth.connectors.reconcile_instance"
 OFFBOARD_TASK_NAME: Final = "easyauth.connectors.offboard_user"
 
-# 事件风暴合并(复用钉钉 Stream 的合流模式): 去抖窗口内的多次 grant 变更只排一次
-# 对账; 任务开始执行时先清除标记, 之后到达的事件会再次排队, 保证任何事件都被其后
-# 的一次完整对账覆盖。丢失事件不影响最终一致(周期对账兜底, 方案 §2 原则 2)。
-RECONCILE_PENDING_CACHE_KEY_TEMPLATE: Final = "easyauth:connectors:reconcile-pending:{instance_id}"
 RECONCILE_COALESCE_SECONDS: Final = 5
-# pending 标记必须有限期: 若任务在执行前丢失(broker 故障), 标记过期后事件恢复排队。
-RECONCILE_PENDING_TTL_SECONDS: Final = 600
-
-
-def reconcile_pending_cache_key(instance_id: int) -> str:
-    return RECONCILE_PENDING_CACHE_KEY_TEMPLATE.format(instance_id=instance_id)
 
 
 def notify_grant_mutation(grant: AccessGrant) -> None:
-    """GrantService 事务内的唯一挂点(F2): 提交成功后才分发, 失败不阻塞授权事务。"""
+    """GrantService 事务内的唯一挂点(F2): 授权事实与分发事件一同提交。"""
     app_id = grant.app_id
     user_id = grant.user.authentik_user_id
-    transaction.on_commit(
-        lambda: dispatch_grant_event(app_id=app_id, user_id=user_id, action="grant_mutated"),
-    )
+    dispatch_grant_event(app_id=app_id, user_id=user_id, action="grant_mutated")
 
 
 def dispatch_grant_event(*, app_id: int, user_id: str, action: str) -> None:
@@ -50,30 +38,27 @@ def request_instance_reconcile(
     trigger: str,
     countdown: int = RECONCILE_COALESCE_SECONDS,
 ) -> bool:
-    """请求一次防抖合并的实例对账; 返回是否真正排队了新任务。"""
-    if not cache.add(
-        reconcile_pending_cache_key(instance_id),
-        "1",
-        timeout=RECONCILE_PENDING_TTL_SECONDS,
-    ):
-        return False
-    _ = current_app.send_task(
-        RECONCILE_TASK_NAME,
-        args=[instance_id, trigger],
-        countdown=countdown,
-    )
+    """持久推进 generation, 并在没有活跃 worker 时投递唯一任务。"""
+    with transaction.atomic():
+        if not mark_reconcile_dirty(instance_id, trigger=trigger):
+            return False
+        instance = ConnectorInstance.objects.only("reconcile_generation").get(id=instance_id)
+        _ = enqueue_task(
+            event_key=f"connector-reconcile:{instance_id}:{instance.reconcile_generation}",
+            task_name=RECONCILE_TASK_NAME,
+            args=[instance_id],
+            countdown=countdown,
+        )
     return True
 
 
 def dispatch_user_offboarded(user: UserMirror) -> None:
-    """离职快路径(方案 §3.5): 事务提交后对全部启用实例异步执行 on_user_offboarded。"""
+    """离职快路径(方案 §3.5): 与离职事实同事务持久化异步任务。"""
     user_id = user.authentik_user_id
-    transaction.on_commit(
-        lambda: _send_offboard_task(user_id),
-    )
-
-
-def _send_offboard_task(user_id: str) -> None:
     if not ConnectorInstance.objects.filter(enabled=True).exists():
         return
-    _ = current_app.send_task(OFFBOARD_TASK_NAME, args=[user_id])
+    _ = enqueue_task(
+        event_key=f"connector-offboard:{user.id}:{user.updated_at.isoformat()}",
+        task_name=OFFBOARD_TASK_NAME,
+        args=[user_id],
+    )

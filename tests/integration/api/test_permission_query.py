@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from http import HTTPStatus
+from re import fullmatch
 from typing import Final, Protocol
 
 import pytest
@@ -24,8 +25,6 @@ from easyauth.audit.models import AuditLog
 from easyauth.grants.models import (
     GRANT_STATUS_EXPIRED,
     GRANT_STATUS_REVOKED,
-    GRANT_TYPE_PERMANENT,
-    GRANT_TYPE_TIMED,
     AccessGrant,
     AccessGrantGroup,
     AccessGrantPermission,
@@ -71,10 +70,23 @@ def test_permission_query_returns_groups_grants_versions_expiration_and_audit() 
         permission=approve,
         scope_key="TEAM",
     )
-    grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=sales)
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=finance)
-    _ = AccessGrantPermission.objects.create(grant=grant, permission=approve, scope_key="TEAM")
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=sales,
+        expires_at=None,
+    )
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=finance,
+        expires_at=None,
+    )
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=approve,
+        scope_key="TEAM",
+        expires_at=None,
+    )
 
     # When: 应用通过静态 Bearer token 查询该用户权限。
     before = timezone.now()
@@ -115,7 +127,8 @@ def test_permission_query_returns_groups_grants_versions_expiration_and_audit() 
     ]
     assert payload["grant_version"] == 1
     assert payload["catalog_version"] == ACTIVE_APP_CATALOG_VERSION
-    assert payload["snapshot_version"] == "1.12.0"
+    snapshot_version = str(payload["snapshot_version"])
+    assert fullmatch(r"1\.12\.[0-9a-f]{16}", snapshot_version) is not None
     expires_at = datetime.fromisoformat(str(payload["expires_at"]))
     assert expires_at.tzinfo is not None
     assert before + timedelta(seconds=PERMISSION_QUERY_TTL_SECONDS) <= expires_at
@@ -132,7 +145,7 @@ def test_permission_query_returns_groups_grants_versions_expiration_and_audit() 
         "grant_count": 3,
         "grant_version": 1,
         "catalog_version": ACTIVE_APP_CATALOG_VERSION,
-        "snapshot_version": "1.12.0",
+        "snapshot_version": snapshot_version,
         "credential_type": "static_token",
         "credential_id": issue.credential_id,
     }
@@ -162,12 +175,13 @@ def test_permission_query_returns_empty_for_unknown_disabled_or_departed_user(
     issue = StaticTokenService.create_token(app=app, name="integration")
     if status is not None:
         user = UserMirror.objects.create(authentik_user_id=user_id, status=status)
-        grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
+        grant = AccessGrant.objects.create(user=user, app=app)
         permission = _permission(app, "invoice.read", scopes=["SELF"])
         _ = AccessGrantPermission.objects.create(
             grant=grant,
             permission=permission,
             scope_key="SELF",
+            expires_at=None,
         )
 
     # When: 应用查询该 user_id 的权限。
@@ -207,13 +221,17 @@ def test_permission_query_returns_empty_for_revoked_or_expired_grant(
     grant = AccessGrant.objects.create(
         user=user,
         app=app,
-        grant_type=GRANT_TYPE_PERMANENT,
         status=grant_status,
         is_current=False,
         version=expected_version,
     )
     permission = _permission(app, "invoice.read", scopes=["SELF"])
-    _ = AccessGrantPermission.objects.create(grant=grant, permission=permission, scope_key="SELF")
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=permission,
+        scope_key="SELF",
+        expires_at=None,
+    )
 
     # When: 应用查询该用户权限。
     response = Client().get(
@@ -230,21 +248,33 @@ def test_permission_query_returns_empty_for_revoked_or_expired_grant(
 
 
 @override_settings(EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS=PERMISSION_QUERY_TTL_SECONDS)
-def test_permission_query_uses_earlier_timed_grant_expiration_when_before_ttl() -> None:
-    # Given: 当前有效 timed grant 比默认缓存 TTL 更早过期。
+def test_permission_query_uses_earliest_membership_expiration_when_before_ttl() -> None:
+    # Given: 当前有效组成员关系和直接授权都早于默认缓存 TTL 到期。
     user = UserMirror.objects.create(authentik_user_id="user-api-timed")
     app = App.objects.create(app_key="timed-api-app", name="Timed API App")
     _scope(app, "SELF")
     issue = StaticTokenService.create_token(app=app, name="integration")
-    permission = _permission(app, "invoice.read", scopes=["SELF"])
-    grant_expires_at = timezone.now() + timedelta(seconds=30)
-    grant = AccessGrant.objects.create(
-        user=user,
+    group = AuthorizationGroup.objects.create(
         app=app,
-        grant_type=GRANT_TYPE_TIMED,
-        grant_expires_at=grant_expires_at,
+        key="operator",
+        kind="role",
+        name="Operator",
     )
-    _ = AccessGrantPermission.objects.create(grant=grant, permission=permission, scope_key="SELF")
+    permission = _permission(app, "invoice.read", scopes=["SELF"])
+    group_expires_at = timezone.now() + timedelta(seconds=20)
+    direct_expires_at = timezone.now() + timedelta(seconds=30)
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        expires_at=group_expires_at,
+    )
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=permission,
+        scope_key="SELF",
+        expires_at=direct_expires_at,
+    )
 
     # When: 应用查询该用户权限。
     response = Client().get(
@@ -252,10 +282,10 @@ def test_permission_query_uses_earlier_timed_grant_expiration_when_before_ttl() 
         HTTP_AUTHORIZATION=_bearer(issue.plaintext_token),
     )
 
-    # Then: expires_at 使用 grant_expires_at, 而不是默认 TTL。
+    # Then: expires_at 使用所有有效 membership 的最早期限, 而不是默认 TTL。
     assert response.status_code == HTTPStatus.OK
     payload = response.json()
-    assert datetime.fromisoformat(str(payload["expires_at"])) == grant_expires_at
+    assert datetime.fromisoformat(str(payload["expires_at"])) == group_expires_at
 
 
 @pytest.mark.parametrize("ttl_setting", [0, -1, "60", True, False, None])

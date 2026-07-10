@@ -46,8 +46,12 @@ def test_ops4_apply_approved_change_rejects_stale_authorization_group_target(
         authorization_group=target_group,
         approver_userids=["manager-001"],
     )
-    grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=current_group)
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=current_group,
+        expires_at=None,
+    )
     access_request = _approved_request(user=user, app=app)
     _ = AccessRequestGroup.objects.create(
         access_request=access_request,
@@ -89,11 +93,12 @@ def test_ops4_apply_approved_change_rejects_stale_permission_target() -> None:
         permission=target_permission,
         approver_userids=["manager-001"],
     )
-    grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
+    grant = AccessGrant.objects.create(user=user, app=app)
     _ = AccessGrantPermission.objects.create(
         grant=grant,
         permission=current_permission,
         scope_key="GLOBAL",
+        expires_at=None,
     )
     access_request = _approved_request(user=user, app=app)
     _ = AccessRequestPermission.objects.create(
@@ -196,8 +201,12 @@ def test_ops4_apply_approved_change_rejects_stale_authorization_group_approval_r
         authorization_group=target_group,
         approver_userids=["manager-001"],
     )
-    grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=current_group)
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=current_group,
+        expires_at=None,
+    )
     access_request = _approved_request(user=user, app=app)
     _ = AccessRequestGroup.objects.create(
         access_request=access_request,
@@ -236,8 +245,12 @@ def test_ops4_apply_approved_change_rejects_deleted_authorization_group_approval
         authorization_group=target_group,
         approver_userids=["manager-001"],
     )
-    grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
-    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=current_group)
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=current_group,
+        expires_at=None,
+    )
     access_request = _approved_request(user=user, app=app)
     _ = AccessRequestGroup.objects.create(
         access_request=access_request,
@@ -279,11 +292,12 @@ def test_ops4_apply_approved_change_allows_retargeted_permission_approval_rule()
         permission=target_permission,
         approver_userids=["manager-001"],
     )
-    grant = AccessGrant.objects.create(user=user, app=app, grant_type=GRANT_TYPE_PERMANENT)
+    grant = AccessGrant.objects.create(user=user, app=app)
     _ = AccessGrantPermission.objects.create(
         grant=grant,
         permission=current_permission,
         scope_key="GLOBAL",
+        expires_at=None,
     )
     access_request = _approved_request(user=user, app=app)
     _ = AccessRequestPermission.objects.create(
@@ -325,6 +339,8 @@ def _approved_request(
         status=REQUEST_STATUS_APPROVED,
         grant_type=GRANT_TYPE_PERMANENT,
         grant_expires_at=None,
+        idempotency_key=f"{app.app_key}:{request_type}:approved",
+        payload_digest="a" * 64,
         reason="审批已通过",
         approved_at=timezone.now(),
     )

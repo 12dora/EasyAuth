@@ -10,6 +10,7 @@ from urllib.parse import urlsplit
 
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
+from django.db import transaction
 from django.http import Http404, HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import render
 from django.views.decorators.http import require_GET, require_http_methods, require_POST
@@ -42,11 +43,13 @@ from easyauth.accounts.local_admin import (
     record_totp_enabled,
     register_passkey,
     reset_login_failures,
+    rotate_local_admin_session,
     run_dummy_password_hash,
     start_pending_verification,
     store_totp_setup_secret,
     totp_provisioning_uri,
     totp_qr_data_uri,
+    totp_setup_nonce,
     totp_setup_secret,
     verify_and_consume_totp,
     verify_passkey_authentication,
@@ -82,6 +85,7 @@ SECURITY_NOTICES: Final[dict[str, str]] = {
 }
 SECURITY_ERRORS: Final[dict[str, str]] = {
     "totp_confirm": "验证码不正确, 未能启用验证器。",
+    "totp_begin": "当前密码不正确, 未开始绑定验证器。",
     "totp_disable": "当前密码或验证码不正确, 未能停用验证器。",
     "passkey_delete": "当前密码不正确, 未能删除通行密钥。",
 }
@@ -105,7 +109,6 @@ def login_page(request: HttpRequest) -> HttpResponse:
         record_login_failure(username)
         record_login_failed(username, reason="invalid_credentials")
         return _login_error(request, ERROR_INVALID_CREDENTIALS)
-    reset_login_failures(username)
     if not account.has_second_factor():
         return _bind_and_redirect(request, account, second_factor=SECOND_FACTOR_NONE)
     start_pending_verification(request, account)
@@ -204,6 +207,7 @@ def change_password_page(request: HttpRequest) -> HttpResponse:
     account.set_password(new_password)
     account.must_change_password = False
     account.save(update_fields=["password_hash", "must_change_password", "updated_at"])
+    rotate_local_admin_session(request, account)
     reset_login_failures(account.username)
     record_password_changed(account.username)
     return HttpResponseRedirect(next_path)
@@ -212,7 +216,8 @@ def change_password_page(request: HttpRequest) -> HttpResponse:
 @require_GET
 def security_page(request: HttpRequest) -> HttpResponse:
     account = _require_local_admin(request)
-    setup_secret = totp_setup_secret(request)
+    setup_secret = totp_setup_secret(request, account)
+    setup_nonce = totp_setup_nonce(request, account)
     setup_qr = ""
     setup_uri = ""
     if setup_secret and not account.totp_enabled:
@@ -227,6 +232,7 @@ def security_page(request: HttpRequest) -> HttpResponse:
             "setup_secret": setup_secret if not account.totp_enabled else "",
             "setup_qr": setup_qr,
             "setup_uri": setup_uri,
+            "setup_nonce": setup_nonce,
             "notice": SECURITY_NOTICES.get(request.GET.get("notice", ""), ""),
             "error": SECURITY_ERRORS.get(request.GET.get("error", ""), ""),
         },
@@ -236,8 +242,10 @@ def security_page(request: HttpRequest) -> HttpResponse:
 @require_POST
 def totp_begin(request: HttpRequest) -> HttpResponse:
     account = _require_local_admin(request)
+    if check_step_up(account, _post_value(request, "current_password")) != STEP_UP_OK:
+        return HttpResponseRedirect(f"{SECURITY_PATH}?error=totp_begin")
     if not account.totp_enabled:
-        store_totp_setup_secret(request, generate_totp_secret())
+        _ = store_totp_setup_secret(request, account, generate_totp_secret())
     return HttpResponseRedirect(SECURITY_PATH)
 
 
@@ -246,19 +254,26 @@ def totp_confirm(request: HttpRequest) -> HttpResponse:
     account = _require_local_admin(request)
     if login_is_throttled(account.username):
         return HttpResponseRedirect(f"{SECURITY_PATH}?error=totp_confirm")
-    secret = totp_setup_secret(request)
+    nonce = _post_value(request, "enrollment_nonce")
+    secret = totp_setup_secret(request, account, nonce=nonce)
     code = _post_value(request, "code")
     step = matched_totp_timestep(secret, code) if secret else None
     if step is None:
         record_login_failure(account.username)
         return HttpResponseRedirect(f"{SECURITY_PATH}?error=totp_confirm")
-    account.totp_secret = secret
-    account.totp_enabled = True
-    # 记录确认时的 timestep, 防止刚输入的绑定验证码在首登窗口内被重放消费第二因子。
-    account.totp_last_timestep = step
-    account.save(
-        update_fields=["totp_secret", "totp_enabled", "totp_last_timestep", "updated_at"],
-    )
+    with transaction.atomic():
+        locked = LocalAdminAccount.objects.select_for_update().get(pk=account.pk)
+        if locked.totp_enabled or locked.session_version != account.session_version:
+            clear_totp_setup_secret(request)
+            return HttpResponseRedirect(f"{SECURITY_PATH}?error=totp_confirm")
+        locked.totp_secret = secret
+        locked.totp_enabled = True
+        # 记录确认时的 timestep, 防止刚输入的绑定验证码在首登窗口内被重放消费第二因子。
+        locked.totp_last_timestep = step
+        locked.save(
+            update_fields=["totp_secret", "totp_enabled", "totp_last_timestep", "updated_at"],
+        )
+    rotate_local_admin_session(request, account)
     reset_login_failures(account.username)
     clear_totp_setup_secret(request)
     record_totp_enabled(account.username)
@@ -281,6 +296,7 @@ def totp_disable(request: HttpRequest) -> HttpResponse:
     account.save(
         update_fields=["totp_secret", "totp_enabled", "totp_last_timestep", "updated_at"],
     )
+    rotate_local_admin_session(request, account)
     reset_login_failures(account.username)
     record_totp_disabled(account.username)
     return HttpResponseRedirect(f"{SECURITY_PATH}?notice=totp_disabled")
@@ -322,6 +338,7 @@ def passkey_register_complete(request: HttpRequest) -> HttpResponse:
         return _json_error(str(error), status=HTTPStatus.BAD_REQUEST)
     reset_login_failures(account.username)
     record_passkey_registered(account.username, name=passkey.name)
+    rotate_local_admin_session(request, account)
     return JsonResponse({"redirect": f"{SECURITY_PATH}?notice=passkey_registered"})
 
 
@@ -336,6 +353,7 @@ def passkey_delete(request: HttpRequest, passkey_id: int) -> HttpResponse:
         raise Http404
     name = passkey.name
     _ = passkey.delete()
+    rotate_local_admin_session(request, account)
     reset_login_failures(account.username)
     record_passkey_removed(account.username, name=name)
     return HttpResponseRedirect(f"{SECURITY_PATH}?notice=passkey_removed")
