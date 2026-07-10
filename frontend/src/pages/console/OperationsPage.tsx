@@ -31,6 +31,7 @@ import { UserMultiSelect } from "../../components/UserSelect";
 import { ApiError, apiRequest, itemsFromPayload } from "../../lib/api";
 import type { JsonObject, ListPayload } from "../../lib/api";
 import type { OperationRow as DomainOperationRow } from "../../lib/domain";
+import type { OperationAuthorizationGroup, OperationDirectGrant } from "../../lib/domain";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { MessageKey } from "../../i18n/messages";
 import { accessRequestStatusLabel, badgeToneForAccessRequestStatus, formatDateTime, grantStatusLabel, grantTypeLabel, healthStatusLabel } from "../../lib/status";
@@ -628,7 +629,14 @@ function operationColumns(
       { header: t("common.user"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.user_id)}</code> },
       { header: t("common.app"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.app_key)}</code> },
       { header: t("common.status"), cell: ({ row }) => <Badge tone={row.original.status === "active" ? "evergreen" : "neutral"}>{grantStatusLabel(t, stringValue(row.original.status))}</Badge> },
-      { header: t("common.type"), cell: ({ row }) => grantTypeLabel(t, stringValue(row.original.grant_type)) },
+      {
+        header: t("console.operations.column.authorizationGroups"),
+        cell: ({ row }) => operationAuthorizationGroupSummary(t, row.original.authorization_groups),
+      },
+      {
+        header: t("console.operations.column.directGrants"),
+        cell: ({ row }) => operationDirectGrantSummary(t, row.original.direct_grants),
+      },
       {
         header: t("console.operations.column.version"),
         cell: ({ row }) => <code className={MONO_TEXT_CLASS}>v{numberValue(row.original.version)}</code>,
@@ -637,7 +645,6 @@ function operationColumns(
         header: t("console.operations.column.isCurrent"),
         cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{booleanValue(row.original.is_current)}</code>,
       },
-      { header: t("console.operations.column.expiresAt"), cell: ({ row }) => formatDateTime(stringValue(row.original.grant_expires_at)) },
     ];
     if (accessGrantActions) {
       accessGrantColumns.push({
@@ -740,6 +747,56 @@ function numberValue(value: unknown): string {
 
 function booleanValue(value: unknown): string {
   return typeof value === "boolean" ? String(value) : "-";
+}
+
+function operationAuthorizationGroupSummary(
+  t: Translator,
+  value: OperationAuthorizationGroup[] | undefined,
+): string {
+  if (!Array.isArray(value)) {
+    throw new Error(t("console.operations.contract.authorizationGroups"));
+  }
+  if (value.length === 0) {
+    return t("common.none");
+  }
+  return value.map((group, index) => {
+    const key = requiredContractString(t, group.key, `authorization_groups[${index}].key`);
+    const name = requiredContractString(t, group.name, `authorization_groups[${index}].name`);
+    return `${name || key} (${operationItemTerm(t, group.expires_at, `authorization_groups[${index}].expires_at`)})`;
+  }).join("；");
+}
+
+function operationDirectGrantSummary(
+  t: Translator,
+  value: OperationDirectGrant[] | undefined,
+): string {
+  if (!Array.isArray(value)) {
+    throw new Error(t("console.operations.contract.directGrants"));
+  }
+  if (value.length === 0) {
+    return t("common.none");
+  }
+  return value.map((grant, index) => {
+    const permission = requiredContractString(t, grant.permission, `direct_grants[${index}].permission`);
+    const name = requiredContractString(t, grant.permission_name, `direct_grants[${index}].permission_name`);
+    const scope = requiredContractString(t, grant.scope, `direct_grants[${index}].scope`);
+    const term = operationItemTerm(t, grant.expires_at, `direct_grants[${index}].expires_at`);
+    return `${name || permission} [${scope}] (${term})`;
+  }).join("；");
+}
+
+function operationItemTerm(t: Translator, value: unknown, field: string): string {
+  if (value === null) {
+    return grantTypeLabel(t, "permanent");
+  }
+  return formatDateTime(requiredContractString(t, value, field));
+}
+
+function requiredContractString(t: Translator, value: unknown, field: string): string {
+  if (typeof value !== "string" || value === "") {
+    throw new Error(t("console.operations.contract.requiredString", { field }));
+  }
+  return value;
 }
 
 function paginationFromSearchParams(searchParams: URLSearchParams): PaginationState {

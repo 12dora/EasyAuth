@@ -303,7 +303,7 @@ function formatSources(grants: PortalGrantRow["grants"] | undefined): string {
 
 function formatVersions(t: Translator, grant: PortalGrantRow): string {
   if (grant.grant_version === undefined && grant.catalog_version === undefined && grant.snapshot_version === undefined) {
-    return grant.version === undefined ? "-" : String(grant.version);
+    return "-";
   }
   return t("portal.grant.versions", {
     grant: grant.grant_version ?? "-",

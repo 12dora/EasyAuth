@@ -248,6 +248,41 @@ describe("useAccessRequestForm", () => {
     expect(JSON.parse(String(requestInit?.body))).toMatchObject({
       direct_grants: [{ permission: permissionKey, scope: scopeKey }],
     });
+    expect(new Headers(requestInit?.headers).get("Idempotency-Key")).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  test("BF-15: 网络失败后重试复用同一 Idempotency-Key", async () => {
+    const requestHeaders: string[] = [];
+    let submitAttempts = 0;
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input) === "/portal/api/v1/request-catalog") {
+        return jsonResponse(scopedCatalog());
+      }
+      if (String(input) === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
+        requestHeaders.push(new Headers(init.headers).get("Idempotency-Key") ?? "");
+        submitAttempts += 1;
+        if (submitAttempts === 1) {
+          throw new TypeError("network interrupted");
+        }
+        return jsonResponse({ access_request: { id: 42 } });
+      }
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = await renderReadyForm();
+
+    act(() => result.current.changeAppKey("crm"));
+    act(() => result.current.changeAuthorizationGroupKey("reader"));
+    act(() => result.current.changeReason("幂等重试"));
+    await waitFor(() => expect(result.current.canSubmit).toBe(true));
+    act(() => result.current.submit());
+    await waitFor(() => expect(result.current.submitErrorMessage).toContain("network interrupted"));
+    act(() => result.current.submit());
+    await waitFor(() => expect(result.current.toastMessageKey).toBe("portal.request.submitted"));
+
+    expect(requestHeaders).toHaveLength(2);
+    expect(requestHeaders[0]).toMatch(/^[0-9a-f-]{36}$/);
+    expect(requestHeaders[1]).toBe(requestHeaders[0]);
   });
 
   test("FF-23: catalog 成功响应缺少数组契约时进入明确错误态", async () => {

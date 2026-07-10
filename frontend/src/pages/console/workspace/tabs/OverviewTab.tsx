@@ -104,7 +104,10 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
         <StatusBanner tone="signal" title={t("console.overview.configStatusLoadFailed")} message={(statusQuery.error as Error).message} />
       ) : null}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-        <Metric label={t("console.overview.metric.role")} value={app?.role_count ?? 0} />
+        <Metric
+          label={t("console.overview.metric.authorizationGroup")}
+          value={app?.authorization_group_count ?? 0}
+        />
         <Metric label={t("console.overview.metric.permission")} value={app?.permission_count ?? 0} />
         <Metric label={t("console.overview.metric.credential")} value={app?.active_credential_count ?? 0} />
         <Metric label={t("console.overview.issues")} value={issueCount} tone={issueCount > 0 ? "signal" : undefined} />

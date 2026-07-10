@@ -218,10 +218,20 @@ describe("OperationsPage", () => {
             user_id: "risk-user",
             app_key: "crm",
             status: "active",
-            grant_type: "permanent",
             version: 3,
             is_current: true,
-            grant_expires_at: null,
+            authorization_groups: [{
+              key: "auditor",
+              kind: "role",
+              name: "审计员",
+              expires_at: null,
+            }],
+            direct_grants: [{
+              permission: "invoice.export",
+              permission_name: "导出发票",
+              scope: "GLOBAL",
+              expires_at: "2026-08-01T10:00:00Z",
+            }],
           }],
           pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
         });
@@ -238,6 +248,10 @@ describe("OperationsPage", () => {
 
     expect(await screen.findByText("v3")).toBeInTheDocument();
     expect(screen.getByRole("columnheader", { name: "当前版本" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "授权组期限" })).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "直接权限期限" })).toBeInTheDocument();
+    expect(screen.getByText("审计员 (长期)")).toBeInTheDocument();
+    expect(screen.getByText(/导出发票 \[GLOBAL\].*2026/)).toBeInTheDocument();
     expect(screen.getByText("true")).toBeInTheDocument();
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(

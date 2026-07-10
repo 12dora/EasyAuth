@@ -13,7 +13,7 @@ const TEMPLATES = [
     key: "leave",
     name: "请假审批",
     dingtalk_process_code: "PROC-LEAVE",
-    form_schema: {},
+    form_schema: { reason: { type: "string", required: true } },
     form_mapping: { reason: "TextField-1" },
     is_active: true,
     created_at: "2026-07-01T09:00:00Z",
@@ -57,7 +57,7 @@ describe("ApprovalTemplatesPage", () => {
     expect(screen.getAllByRole("button", { name: "发起测试审批" })).toHaveLength(2);
   });
 
-  test("新建模板时 form_mapping 仅接受字符串到字符串的 JSON 对象", async () => {
+  test("新建模板严格校验 form_schema 和 form_mapping 契约", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === "/console/api/v1/approval-templates" && !init?.method) {
@@ -78,20 +78,52 @@ describe("ApprovalTemplatesPage", () => {
     await user.type(within(dialog).getByLabelText("模板 Key"), "leave");
     await user.type(within(dialog).getByLabelText("名称"), "请假审批");
     await user.type(within(dialog).getByLabelText("钉钉流程码（process_code）"), "PROC-LEAVE");
+    const schemaInput = within(dialog).getByLabelText("表单结构（form_schema，JSON）");
     const mappingInput = within(dialog).getByLabelText("表单映射（form_mapping，JSON）");
+    for (const invalidSchema of [
+      "not-json",
+      '{"reason": "string"}',
+      '{"reason": {}}',
+      '{"reason": {"type": "text"}}',
+      '{"reason": {"type": "string", "required": "yes"}}',
+      '{"reason": {"type": "string", "label": "原因"}}',
+      '{" ": {"type": "string"}}',
+    ]) {
+      await user.clear(schemaInput);
+      await user.click(schemaInput);
+      await user.paste(invalidSchema);
+      await user.click(within(dialog).getByRole("button", { name: "保存" }));
+
+      expect(await within(dialog).findByText("form_schema 不符合字段契约，请检查字段名、type 和 required。")).toBeVisible();
+      expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+    }
+
+    const validSchema = {
+      reason: { type: "string", required: true },
+      days: { type: "integer" },
+      amount: { type: "number" },
+      urgent: { type: "boolean" },
+    };
+    await user.clear(schemaInput);
+    await user.click(schemaInput);
+    await user.paste(JSON.stringify(validSchema));
     for (const invalidMapping of [
       "not-json",
       '{"reason": 1}',
       '{"reason": null}',
       '{"reason": {"field": "TextField-1"}}',
       '{"reason": ["TextField-1"]}',
+      '{"reason": " "}',
+      '{"undeclared": "TextField-2"}',
     ]) {
       await user.clear(mappingInput);
       await user.click(mappingInput);
       await user.paste(invalidMapping);
       await user.click(within(dialog).getByRole("button", { name: "保存" }));
 
-      expect(await within(dialog).findByText("不是合法的 JSON 对象，请检查后重试。")).toBeVisible();
+      expect(
+        await within(dialog).findByText("form_mapping 必须只引用 form_schema 字段，且控件名必须为非空字符串。"),
+      ).toBeVisible();
       expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
     }
 
@@ -109,11 +141,55 @@ describe("ApprovalTemplatesPage", () => {
         key: "leave",
         name: "请假审批",
         dingtalk_process_code: "PROC-LEAVE",
+        form_schema: validSchema,
         form_mapping: { reason: "TextField-1" },
         is_active: true,
       });
     });
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "新建审批模板" })).not.toBeInTheDocument());
+  });
+
+  test("编辑模板时展示并 PATCH 提交 form_schema", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/approval-templates" && !init?.method) {
+        return jsonResponse({ data: [TEMPLATES[0]] });
+      }
+      if (url === "/console/api/v1/approval-templates/1" && init?.method === "PATCH") {
+        return jsonResponse({ approval_template: TEMPLATES[0] });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "编辑" }));
+    const dialog = await screen.findByRole("dialog", { name: "编辑审批模板" });
+    const schemaInput = within(dialog).getByLabelText("表单结构（form_schema，JSON）");
+    expect(schemaInput).toHaveValue(JSON.stringify(TEMPLATES[0].form_schema, null, 2));
+
+    await user.clear(schemaInput);
+    await user.click(schemaInput);
+    await user.paste('{"reason":{"type":"string","required":true},"days":{"type":"integer"}}');
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      const patchCall = fetchMock.mock.calls.find(
+        ([input, init]) => String(input) === "/console/api/v1/approval-templates/1" && init?.method === "PATCH",
+      );
+      expect(JSON.parse(String(patchCall?.[1]?.body))).toEqual({
+        name: "请假审批",
+        dingtalk_process_code: "PROC-LEAVE",
+        form_schema: {
+          reason: { type: "string", required: true },
+          days: { type: "integer" },
+        },
+        form_mapping: { reason: "TextField-1" },
+        is_active: true,
+      });
+    });
   });
 
   test("平台共用模板发起测试审批需填 app_key, 成功后展示钉钉实例号", async () => {
@@ -122,7 +198,7 @@ describe("ApprovalTemplatesPage", () => {
       if (url === "/console/api/v1/approval-templates" && !init?.method) {
         return jsonResponse({ data: [TEMPLATES[0]] });
       }
-      if (url.startsWith("/console/api/v1/users")) {
+      if (url.startsWith("/console/api/v1/user-options")) {
         return jsonResponse({ data: [] });
       }
       if (url === "/console/api/v1/approval-templates/1/test" && init?.method === "POST") {
@@ -173,7 +249,7 @@ describe("ApprovalTemplatesPage", () => {
       if (url === "/console/api/v1/approval-templates" && !init?.method) {
         return jsonResponse({ data: sameKeyTemplates });
       }
-      if (url.startsWith("/console/api/v1/users")) {
+      if (url.startsWith("/console/api/v1/user-options")) {
         return jsonResponse({ data: [] });
       }
       if (url === "/console/api/v1/approval-templates/2/test" && init?.method === "POST") {

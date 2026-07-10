@@ -107,7 +107,7 @@ export function QueryTestTab({ appKey }: { appKey: string }) {
             </PanelSurface>
             <PanelSurface>
               <span className="text-xs font-semibold text-ink-faint">{t("wizard.verify.snapshotVersion")}</span>
-              <strong className="mt-2 block text-sm font-semibold text-ink">{result.snapshot_version ?? result.version ?? "-"}</strong>
+              <strong className="mt-2 block text-sm font-semibold text-ink">{result.snapshot_version ?? "-"}</strong>
             </PanelSurface>
           </div>
           <TableFrame>

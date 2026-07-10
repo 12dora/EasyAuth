@@ -59,6 +59,20 @@ const DETAIL_PAYLOAD = {
         attempts: 2,
         last_error: "下游服务超时",
       },
+      {
+        id: 14,
+        app_key: "docs",
+        app_name: "文档中心",
+        status: "async_pending",
+        to_user: { user_id: "u-9", name: "王五" },
+        policy: {},
+        preview_payload: {},
+        result_payload: {},
+        async_status_url: "https://docs.example.com/handover/status/14",
+        async_poll_attempts: 2,
+        attempts: 1,
+        last_error: "",
+      },
     ],
     team_items: [],
     transfer_plan: null,
@@ -110,7 +124,17 @@ function buildFetchMock() {
         },
       });
     }
-    if (url.startsWith("/console/api/v1/users?q=")) {
+    if (url === "/console/api/v1/lifecycle/handover-tasks/1/actions/docs/retry" && method === "POST") {
+      return jsonResponse({
+        app_action: {
+          ...DETAIL_PAYLOAD.handover_task.app_actions[3],
+          status: "done",
+          async_status_url: "",
+          async_poll_attempts: 3,
+        },
+      });
+    }
+    if (url.startsWith("/console/api/v1/user-options?q=")) {
       return jsonResponse({ data: [] });
     }
     throw new Error(`Unexpected fetch: ${method} ${url}`);
@@ -135,9 +159,29 @@ describe("HandoverTaskDetail", () => {
     // 失败卡: 一句人话失败原因 + 重试按钮; 技术细节收进「详情」。
     expect(screen.getAllByText("下游服务超时").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "重试" })).toBeVisible();
+    expect(screen.getByText("等待下游处理")).toHaveClass("text-amber");
+    expect(screen.getByText("下游系统正在处理，可查询最新状态")).toBeVisible();
+    expect(screen.getByRole("button", { name: "查询状态" })).toBeVisible();
     expect(screen.getAllByText("详情").length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: "取消交接单" })).toBeVisible();
     expect(screen.getByRole("button", { name: "继续交接" })).toBeVisible();
+  });
+
+  test("异步处理中可通过现有重试端点查询最新状态", async () => {
+    const fetchMock = buildFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderDetail();
+
+    await user.click(await screen.findByRole("button", { name: "查询状态" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/console/api/v1/lifecycle/handover-tasks/1/actions/docs/retry",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
   });
 
   test("向导选应用与选接收人: 统一接收人应用到所选应用后保存", async () => {
@@ -231,7 +275,7 @@ describe("HandoverTaskDetail", () => {
     expect(within(dialog).getByRole("button", { name: "下一步" })).toBeDisabled();
   });
 
-  test("执行期间拒绝关闭，详情刷新后仍保留冻结批次并稳定完成", async () => {
+  test("执行期间拒绝关闭，异步受理后查询状态才标记完成", async () => {
     const baseFetch = buildFetchMock();
     let releaseFirstExecute: (() => void) | undefined;
     let executionStarted = false;
@@ -244,10 +288,27 @@ describe("HandoverTaskDetail", () => {
           releaseFirstExecute = resolve;
         });
         executionStarted = true;
-        return jsonResponse({ app_action: { ...DETAIL_PAYLOAD.handover_task.app_actions[1], status: "done" } });
+        return jsonResponse({
+          app_action: {
+            ...DETAIL_PAYLOAD.handover_task.app_actions[1],
+            status: "async_pending",
+            async_status_url: "https://crm.example.com/handover/status/12",
+            async_poll_attempts: 0,
+          },
+        });
       }
       if (url.endsWith("/actions/wiki/execute") && method === "POST") {
         return jsonResponse({ app_action: { ...DETAIL_PAYLOAD.handover_task.app_actions[2], status: "done" } });
+      }
+      if (url.endsWith("/actions/crm/retry") && method === "POST") {
+        return jsonResponse({
+          app_action: {
+            ...DETAIL_PAYLOAD.handover_task.app_actions[1],
+            status: "done",
+            async_status_url: "",
+            async_poll_attempts: 1,
+          },
+        });
       }
       if (url === "/console/api/v1/lifecycle/handover-tasks/1" && method === "GET" && executionStarted) {
         detailReadAfterExecute += 1;
@@ -282,7 +343,30 @@ describe("HandoverTaskDetail", () => {
 
     releaseFirstExecute?.();
     await waitFor(() => expect(detailReadAfterExecute).toBeGreaterThan(0));
+    expect(await within(dialog).findByText("等待下游处理")).toBeVisible();
+    expect(within(dialog).queryByRole("button", { name: "完成" })).toBeNull();
+    expect(within(dialog).getByRole("button", { name: "执行交接" })).toBeDisabled();
+
+    await user.click(within(dialog).getByRole("button", { name: "查询状态" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/console/api/v1/lifecycle/handover-tasks/1/actions/crm/retry",
+        expect.objectContaining({ method: "POST", body: "{}" }),
+      );
+    });
     expect(await within(dialog).findByRole("button", { name: "完成" })).toBeVisible();
+    expect(within(dialog).queryByRole("button", { name: "查询状态" })).toBeNull();
+    expect(
+      fetchMock.mock.calls.filter(
+        ([input, init]) => String(input).endsWith("/actions/crm/execute") && init?.method === "POST",
+      ),
+    ).toHaveLength(1);
+    expect(
+      fetchMock.mock.calls.filter(
+        ([input, init]) => String(input).endsWith("/actions/crm/retry") && init?.method === "POST",
+      ),
+    ).toHaveLength(1);
   });
 
   test("已取消转岗单的方案与待处理团队均为只读", async () => {

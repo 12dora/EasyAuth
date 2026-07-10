@@ -28,6 +28,7 @@ interface TwoFactorStatus {
 }
 
 interface TotpSetup {
+  enrollment_nonce: string;
   secret: string;
   otpauth_uri: string;
   qr_svg: string;
@@ -74,18 +75,23 @@ export function TwoFactorSection() {
 function TotpRow({ t, enabled, onStatus }: { t: Translate; enabled: boolean; onStatus: (next: TwoFactorStatus) => void }) {
   const [beginning, setBeginning] = useState(false);
   const [setup, setSetup] = useState<TotpSetup | null>(null);
+  const [beginOpen, setBeginOpen] = useState(false);
   const [disableOpen, setDisableOpen] = useState(false);
   const [error, setError] = useState("");
 
-  const openEnroll = async () => {
+  const openEnroll = async (currentPassword: string) => {
     if (beginning) {
       return;
     }
     setError("");
     setBeginning(true);
     try {
-      const data = await apiRequest<TotpSetup>(`${BASE_URL}/totp/begin`, { method: "POST" });
+      const data = await apiRequest<TotpSetup>(`${BASE_URL}/totp/begin`, {
+        method: "POST",
+        body: { current_password: currentPassword },
+      });
       setSetup(data);
+      setBeginOpen(false);
     } catch (caught) {
       // FF-3: /totp/begin 失败不再静默丢弃, 把后端错误(中文)显式呈现给用户。
       setError(caught instanceof ApiError ? caught.message : t("settings.twoFactor.genericError"));
@@ -107,11 +113,11 @@ function TotpRow({ t, enabled, onStatus }: { t: Translate; enabled: boolean; onS
           {t("settings.twoFactor.disable")}
         </Button>
       ) : (
-        <Button variant="ghost" loading={beginning} onClick={() => void openEnroll()} data-test-id="totp-enable-btn">
+        <Button variant="ghost" loading={beginning} onClick={() => setBeginOpen(true)} data-test-id="totp-enable-btn">
           {t("settings.twoFactor.enable")}
         </Button>
       )}
-      {error ? (
+      {error && !beginOpen ? (
         <div className="w-full">
           <StatusBanner tone="signal" title={error} />
         </div>
@@ -119,10 +125,73 @@ function TotpRow({ t, enabled, onStatus }: { t: Translate; enabled: boolean; onS
       {setup ? (
         <TotpEnrollDialog t={t} setup={setup} onClose={() => setSetup(null)} onStatus={onStatus} />
       ) : null}
+      {beginOpen ? (
+        <TotpBeginDialog
+          t={t}
+          busy={beginning}
+          error={error}
+          onClose={() => setBeginOpen(false)}
+          onConfirm={openEnroll}
+        />
+      ) : null}
       {disableOpen ? (
         <TotpDisableDialog t={t} onClose={() => setDisableOpen(false)} onStatus={onStatus} />
       ) : null}
     </div>
+  );
+}
+
+function TotpBeginDialog({
+  t,
+  busy,
+  error,
+  onClose,
+  onConfirm,
+}: {
+  t: Translate;
+  busy: boolean;
+  error: string;
+  onClose: () => void;
+  onConfirm: (currentPassword: string) => Promise<void>;
+}) {
+  const [currentPassword, setCurrentPassword] = useState("");
+  return (
+    <Dialog
+      title={t("settings.twoFactor.enableTitle")}
+      onClose={onClose}
+      size="sm"
+      footer={
+        <>
+          <Button variant="ghost" onClick={onClose} disabled={busy}>
+            {t("settings.twoFactor.cancel")}
+          </Button>
+          <Button
+            variant="primary"
+            loading={busy}
+            onClick={() => void onConfirm(currentPassword)}
+            data-test-id="totp-begin-confirm"
+          >
+            {t("settings.twoFactor.confirmEnable")}
+          </Button>
+        </>
+      }
+    >
+      <div className="flex flex-col gap-4">
+        <Field
+          label={t("settings.twoFactor.currentPassword")}
+          hint={t("settings.twoFactor.currentPasswordHint")}
+        >
+          <TextInput
+            id="totp-begin-password"
+            type="password"
+            autoComplete="current-password"
+            value={currentPassword}
+            onChange={(event) => setCurrentPassword(event.currentTarget.value)}
+          />
+        </Field>
+        {error ? <StatusBanner tone="signal" title={error} /> : null}
+      </div>
+    </Dialog>
   );
 }
 
@@ -150,7 +219,7 @@ function TotpEnrollDialog({
     try {
       const next = await apiRequest<TwoFactorStatus>(`${BASE_URL}/totp/confirm`, {
         method: "POST",
-        body: { code: code.trim() },
+        body: { code: code.trim(), enrollment_nonce: setup.enrollment_nonce },
       });
       onStatus(next);
       onClose();

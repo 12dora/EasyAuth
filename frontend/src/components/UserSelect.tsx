@@ -12,8 +12,6 @@ import { TextInput } from "./Field";
 export interface UserOption {
   user_id: string;
   name: string;
-  email: string;
-  department: string;
 }
 
 const OPTION_BASE_CLASS =
@@ -31,9 +29,9 @@ function useUserOptions(query: string, enabled: boolean) {
     queryKey: ["console", "user-search", debouncedQuery],
     queryFn: () =>
       apiRequest<ListPayload<UserOption>>(
-        `/console/api/v1/users?q=${encodeURIComponent(debouncedQuery)}`,
+        `/console/api/v1/user-options?q=${encodeURIComponent(debouncedQuery)}`,
       ),
-    enabled,
+    enabled: enabled && debouncedQuery !== "",
     select: (payload) => itemsFromPayload<UserOption>(payload),
     placeholderData: (previous) => previous,
   });
@@ -97,8 +95,6 @@ function OptionList({
           <span className="text-body font-medium">{option.name || option.user_id}</span>
           <span className="flex flex-wrap items-center gap-x-2 text-xs text-ink-faint">
             <code>{option.user_id}</code>
-            {option.email ? <span>{option.email}</span> : null}
-            {option.department ? <span>{option.department}</span> : null}
           </span>
         </button>
       ))}

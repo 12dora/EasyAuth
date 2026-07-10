@@ -316,12 +316,14 @@ function AppActionCard({
         <Badge tone={handoverActionStatusTone(action.status)}>{handoverActionStatusLabel(t, action.status)}</Badge>
       </div>
       <p className="text-body leading-5 text-ink-soft">{handoverActionSummary(t, action)}</p>
-      {action.status === "failed" ? (
+      {action.status === "failed" || action.status === "async_pending" ? (
         <div className="flex flex-wrap items-center gap-2">
-          {action.last_error ? <span className="text-caption leading-5 text-signal">{action.last_error}</span> : null}
+          {action.status === "failed" && action.last_error ? (
+            <span className="text-caption leading-5 text-signal">{action.last_error}</span>
+          ) : null}
           {canRetry ? (
             <Button size="sm" type="button" loading={retryPending} onClick={onRetry}>
-              {t("handover.card.retry")}
+              {t(action.status === "async_pending" ? "handover.card.checkStatus" : "handover.card.retry")}
             </Button>
           ) : null}
         </div>

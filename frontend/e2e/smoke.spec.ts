@@ -218,7 +218,7 @@ async function mockConsoleApp(page: Page) {
           name: "Demo App",
           description: "Demo console app",
           can_manage: true,
-          role_count: 1,
+          authorization_group_count: 1,
           permission_count: 2,
           active_credential_count: 1,
         },

@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 
 import { MESSAGES } from "../i18n/messages";
 import type { Locale, MessageKey } from "../i18n/messages";
-import { accessRequestStatusLabel, badgeToneForAccessRequestStatus } from "./status";
+import { accessRequestStatusLabel, badgeToneForAccessRequestStatus, grantTypeLabel } from "./status";
 
 function translatorFor(locale: Locale) {
   return (key: MessageKey) => MESSAGES[locale][key];
@@ -14,6 +14,7 @@ describe("accessRequestStatusLabel", () => {
     expect(accessRequestStatusLabel(t, "approved")).toBe("已批准");
     expect(accessRequestStatusLabel(t, "grant_applied")).toBe("已授权");
     expect(accessRequestStatusLabel(t, "grant_failed")).toBe("授权失败");
+    expect(accessRequestStatusLabel(t, "grant_expired")).toBe("授权期限已过");
   });
 
   test("英文语言下输出英文文案", () => {
@@ -26,7 +27,14 @@ describe("accessRequestStatusLabel", () => {
 describe("badgeToneForAccessRequestStatus", () => {
   test("失败状态使用 signal, 生效状态使用 evergreen", () => {
     expect(badgeToneForAccessRequestStatus("grant_failed")).toBe("signal");
+    expect(badgeToneForAccessRequestStatus("grant_expired")).toBe("signal");
     expect(badgeToneForAccessRequestStatus("rejected")).toBe("signal");
     expect(badgeToneForAccessRequestStatus("grant_applied")).toBe("evergreen");
+  });
+});
+
+describe("grantTypeLabel", () => {
+  test("逐项期限混合时显示明确文案", () => {
+    expect(grantTypeLabel(translatorFor("zh-CN"), "mixed")).toBe("混合期限");
   });
 });

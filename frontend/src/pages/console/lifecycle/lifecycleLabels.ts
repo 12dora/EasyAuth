@@ -68,6 +68,7 @@ const ACTION_STATUS_KEYS: Record<string, MessageKey> = {
   pending: "handover.actionStatus.pending",
   previewed: "handover.actionStatus.previewed",
   executing: "handover.actionStatus.executing",
+  async_pending: "handover.actionStatus.asyncPending",
   done: "handover.actionStatus.done",
   failed: "handover.actionStatus.failed",
   skipped: "handover.actionStatus.skipped",
@@ -85,6 +86,7 @@ export function handoverActionStatusTone(status: string): BadgeTone {
     case "failed":
       return "signal";
     case "executing":
+    case "async_pending":
       return "amber";
     case "previewed":
       return "bond";
@@ -113,6 +115,8 @@ export function handoverActionSummary(t: Translator, action: HandoverAppActionRo
       return t("handover.card.failed");
     case "executing":
       return t("handover.card.executing");
+    case "async_pending":
+      return t("handover.card.asyncPending");
     case "skipped":
       return t("handover.card.skipped");
     case "previewed":

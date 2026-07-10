@@ -44,8 +44,12 @@ interface PreviewState {
 }
 
 interface ExecuteState {
-  status: "running" | "done" | "failed";
+  status: "running" | "async_pending" | "done" | "failed";
   error?: string;
+}
+
+interface ActionOperationPayload {
+  app_action?: HandoverAppActionRow;
 }
 
 interface HandoverWizardProps {
@@ -198,16 +202,17 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
     }
     setIsExecuting(true);
     for (const appKey of selectedAppKeys) {
-      if (executeState[appKey]?.status === "done") {
+      if (["async_pending", "done"].includes(executeState[appKey]?.status ?? "")) {
         continue;
       }
       setExecuteState((current) => ({ ...current, [appKey]: { status: "running" } }));
       try {
-        await apiRequest(`/console/api/v1/lifecycle/handover-tasks/${task.id}/actions/${appKey}/execute`, {
-          method: "POST",
-          body: {},
-        });
-        setExecuteState((current) => ({ ...current, [appKey]: { status: "done" } }));
+        const payload = await apiRequest<ActionOperationPayload>(
+          `/console/api/v1/lifecycle/handover-tasks/${task.id}/actions/${appKey}/execute`,
+          { method: "POST", body: {} },
+        );
+        const nextState = executeStateFromAction(payload.app_action, t("handover.wizard.execute.invalidResponse"));
+        setExecuteState((current) => ({ ...current, [appKey]: nextState }));
       } catch (error) {
         setExecuteState((current) => ({ ...current, [appKey]: { status: "failed", error: (error as Error).message } }));
       }
@@ -219,6 +224,7 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
   const executeStatuses = selectedAppKeys.map((appKey) => executeState[appKey]?.status);
   const allExecuted = executeStatuses.length > 0 && executeStatuses.every((status) => status === "done");
   const someExecuteFailed = executeStatuses.some((status) => status === "failed");
+  const someExecuteAsyncPending = executeStatuses.some((status) => status === "async_pending");
   const allPreviewed =
     selectedAppKeys.length > 0 && selectedAppKeys.every((appKey) => previewState[appKey]?.status === "done");
 
@@ -483,11 +489,18 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
                       setIsExecuting(true);
                       setExecuteState((current) => ({ ...current, [action.app_key]: { status: "running" } }));
                       try {
-                        await apiRequest(
+                        const payload = await apiRequest<ActionOperationPayload>(
                           `/console/api/v1/lifecycle/handover-tasks/${task.id}/actions/${action.app_key}/retry`,
                           { method: "POST", body: {} },
                         );
-                        setExecuteState((current) => ({ ...current, [action.app_key]: { status: "done" } }));
+                        const nextState = executeStateFromAction(
+                          payload.app_action,
+                          t("handover.wizard.execute.invalidResponse"),
+                        );
+                        setExecuteState((current) => ({
+                          ...current,
+                          [action.app_key]: nextState,
+                        }));
                       } catch (error) {
                         setExecuteState((current) => ({
                           ...current,
@@ -534,7 +547,7 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
                 type="button"
                 variant="primary"
                 loading={isExecuting}
-                disabled={isExecuting || selectedApps.length === 0 || !allPreviewed}
+                disabled={isExecuting || someExecuteAsyncPending || selectedApps.length === 0 || !allPreviewed}
                 onClick={() => void runExecute()}
               >
                 {t("handover.wizard.execute.run")}
@@ -711,6 +724,13 @@ function ExecuteSummaryRow({
         <strong className="text-body text-ink">{action.app_name || action.app_key}</strong>
         {state?.status === "running" ? (
           <Badge tone="amber">{t("handover.actionStatus.executing")}</Badge>
+        ) : state?.status === "async_pending" ? (
+          <span className="inline-flex items-center gap-1.5">
+            <Badge tone="amber">{t("handover.actionStatus.asyncPending")}</Badge>
+            <Button size="sm" type="button" disabled={disabled} onClick={onRetry}>
+              {t("handover.card.checkStatus")}
+            </Button>
+          </span>
         ) : state?.status === "done" ? (
           <Badge tone="evergreen">{t("handover.actionStatus.done")}</Badge>
         ) : state?.status === "failed" ? (
@@ -734,4 +754,11 @@ function ExecuteSummaryRow({
       ) : null}
     </li>
   );
+}
+
+function executeStateFromAction(action: HandoverAppActionRow | undefined, invalidResponseMessage: string): ExecuteState {
+  if (action?.status === "done" || action?.status === "async_pending") {
+    return { status: action.status };
+  }
+  throw new Error(invalidResponseMessage);
 }

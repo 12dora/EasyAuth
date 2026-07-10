@@ -11,7 +11,7 @@ export interface AppSummary {
   configuration_status?: string;
   updated_at?: string;
   can_manage?: boolean;
-  role_count?: number;
+  authorization_group_count?: number;
   permission_count?: number;
   active_credential_count?: number;
   configuration_summary?: {
@@ -262,12 +262,6 @@ export interface PermissionQueryResult {
 
 export interface QueryTestResult extends PermissionQueryResult {
   allowed?: boolean;
-  /** 历史兼容字段：公共查询主契约已切到 groups。 */
-  roles?: string[];
-  /** 历史兼容字段：公共查询主契约已切到 grants。 */
-  permissions?: string[];
-  /** 历史兼容字段：公共查询主契约已切到 grant_version/catalog_version/snapshot_version。 */
-  version?: string;
   status_code?: number;
   code?: string;
   explanation?: string;
@@ -281,14 +275,6 @@ export interface PortalGrant {
   grant_version?: number;
   catalog_version?: number;
   snapshot_version?: string;
-  /** 历史兼容字段：门户展示应迁移到 groups。 */
-  roles?: string[];
-  /** 历史兼容字段：门户展示应迁移到 groups。 */
-  role_names?: string[];
-  /** 历史兼容字段：门户展示应迁移到 grants。 */
-  permissions?: string[];
-  /** 历史兼容字段：门户展示应迁移到 grant_version/catalog_version/snapshot_version。 */
-  version?: number | string;
   grant_type?: string;
   grant_expires_at?: string | null;
 }
@@ -305,12 +291,6 @@ export interface PortalRequest {
   app_name?: string;
   authorization_groups?: PermissionQueryGroupItem[];
   direct_grants?: PortalDirectGrantItem[];
-  /** 历史兼容字段：申请目标应迁移到 authorization_groups。 */
-  roles?: string[];
-  /** 历史兼容字段：申请目标应迁移到 authorization_groups。 */
-  role_names?: string[];
-  /** 历史兼容字段：申请目标应迁移到 direct_grants。 */
-  permissions?: string[];
   status?: string;
   status_label?: string;
   request_type?: string;
@@ -401,6 +381,15 @@ export interface PortalRequestCatalog {
   snapshot_version?: string;
 }
 
+export type ApprovalFormFieldType = "string" | "integer" | "number" | "boolean";
+
+export interface ApprovalFormFieldDefinition {
+  type: ApprovalFormFieldType;
+  required?: boolean;
+}
+
+export type ApprovalFormSchema = Record<string, ApprovalFormFieldDefinition>;
+
 /** 审批模板: 对齐后端 approval_templates_api._template_item 序列化字段。app_key 为空串表示平台共用模板。 */
 export interface ApprovalTemplateItem {
   id: number;
@@ -408,8 +397,8 @@ export interface ApprovalTemplateItem {
   key: string;
   name: string;
   dingtalk_process_code: string;
-  form_schema?: JsonObject;
-  form_mapping?: JsonObject;
+  form_schema: ApprovalFormSchema;
+  form_mapping: Record<string, string>;
   is_active: boolean;
   created_at?: string;
   updated_at?: string;
@@ -570,11 +559,13 @@ export interface HandoverAppActionRow {
   id: number;
   app_key: string;
   app_name: string;
-  status: "pending" | "previewed" | "executing" | "done" | "failed" | "skipped" | string;
+  status: "pending" | "previewed" | "executing" | "async_pending" | "done" | "failed" | "skipped" | string;
   to_user: HandoverUserRef | null;
   policy: JsonObject;
   preview_payload: JsonObject;
   result_payload: JsonObject;
+  async_status_url: string;
+  async_poll_attempts: number;
   attempts: number;
   last_error: string;
 }
@@ -670,10 +661,10 @@ export interface OperationRow {
   app_key?: string;
   status?: string;
   request_type?: string;
-  grant_type?: string;
   reason?: string;
   submitted_at?: string;
-  grant_expires_at?: string | null;
+  authorization_groups?: OperationAuthorizationGroup[];
+  direct_grants?: OperationDirectGrant[];
   component?: string;
   summary?: string;
   error_summary?: string;
@@ -686,4 +677,18 @@ export interface OperationRow {
   target_id?: string;
   metadata?: JsonObject | null;
   created_at?: string | null;
+}
+
+export interface OperationAuthorizationGroup {
+  key: string;
+  kind: string;
+  name: string;
+  expires_at: string | null;
+}
+
+export interface OperationDirectGrant {
+  permission: string;
+  permission_name: string;
+  scope: string;
+  expires_at: string | null;
 }

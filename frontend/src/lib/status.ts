@@ -11,6 +11,7 @@ const REQUEST_STATUS_KEYS: Record<string, MessageKey> = {
   rejected: "status.request.rejected",
   grant_applied: "status.request.grantApplied",
   grant_failed: "status.request.grantFailed",
+  grant_expired: "status.request.grantExpired",
 };
 
 export function accessRequestStatusLabel(t: Translator, status: string | null | undefined): string {
@@ -31,6 +32,7 @@ export function badgeToneForAccessRequestStatus(status: string | null | undefine
       return "amber";
     case "rejected":
     case "grant_failed":
+    case "grant_expired":
       return "signal";
     default:
       return "neutral";
@@ -137,6 +139,8 @@ export function grantTypeLabel(t: Translator, grantType: string | null | undefin
       return t("status.grantType.permanent");
     case "timed":
       return t("status.grantType.timed");
+    case "mixed":
+      return t("status.grantType.mixed");
     default:
       return grantType ?? "-";
   }

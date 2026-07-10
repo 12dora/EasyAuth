@@ -1,6 +1,6 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { UseMutationResult } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 import type { MessageKey } from "../../../i18n/messages";
@@ -250,13 +250,25 @@ function useAccessRequestSubmitMutation(
   fields: AccessRequestFields,
   catalogView: CatalogView,
 ): UseMutationResult<unknown, Error, void, unknown> {
+  const pendingSubmission = useRef<{ payload: string; idempotencyKey: string } | null>(null);
   return useMutation({
-    mutationFn: () =>
-      apiRequest("/portal/api/v1/me/access-requests", {
+    mutationFn: () => {
+      const payload = buildAccessRequestPayload(fields, catalogView);
+      const serializedPayload = JSON.stringify(payload);
+      if (pendingSubmission.current?.payload !== serializedPayload) {
+        pendingSubmission.current = {
+          payload: serializedPayload,
+          idempotencyKey: crypto.randomUUID(),
+        };
+      }
+      return apiRequest("/portal/api/v1/me/access-requests", {
         method: "POST",
-        body: buildAccessRequestPayload(fields, catalogView),
-      }),
+        headers: { "Idempotency-Key": pendingSubmission.current.idempotencyKey },
+        body: payload,
+      });
+    },
     onSuccess: () => {
+      pendingSubmission.current = null;
       fields.setAuthorizationGroupKey("");
       fields.setSelectedPermissionKeys([]);
       fields.setSelectedPermissionScopes({});

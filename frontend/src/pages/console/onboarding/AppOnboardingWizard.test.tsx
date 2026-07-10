@@ -290,7 +290,7 @@ describe("AppOnboardingWizard", () => {
       if (url === "/console/api/v1/apps/billing" && !init?.method) {
         return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing" } });
       }
-      if (url.startsWith("/console/api/v1/users?")) {
+      if (url.startsWith("/console/api/v1/user-options?")) {
         return jsonResponse({ data: [] });
       }
       if (url.endsWith("/permission-query-tests") && init?.method === "POST") {

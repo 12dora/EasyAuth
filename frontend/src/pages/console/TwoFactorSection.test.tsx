@@ -31,9 +31,15 @@ describe("TwoFactorSection", () => {
 
     const enableButton = await screen.findByRole("button", { name: "启用" });
     await user.click(enableButton);
+    await user.type(screen.getByLabelText("当前登录密码"), "s3cret-pw");
+    await user.click(screen.getByRole("button", { name: "确认启用" }));
 
     await waitFor(() => expect(screen.getByText("当前会话已失效, 请重新登录")).toBeVisible());
     expect(enableButton).not.toBeDisabled();
+    const beginCall = fetchMock.mock.calls.find(
+      ([input, init]) => String(input) === `${BASE_URL}/totp/begin` && init?.method === "POST",
+    );
+    expect(JSON.parse(String(beginCall?.[1]?.body))).toEqual({ current_password: "s3cret-pw" });
   });
 
   test("BS-14: 停用 TOTP 请求体携带 current_password", async () => {

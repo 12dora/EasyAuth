@@ -25,7 +25,12 @@ import { UserSearchInput } from "../../components/UserSelect";
 import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../lib/api";
 import type { JsonObject, ListPayload } from "../../lib/api";
-import type { ApprovalTemplateItem, ApprovalTemplateTestResult } from "../../lib/domain";
+import type {
+  ApprovalFormFieldType,
+  ApprovalFormSchema,
+  ApprovalTemplateItem,
+  ApprovalTemplateTestResult,
+} from "../../lib/domain";
 import { approvalStatusLabel, formatDateTime } from "../../lib/status";
 
 const TEMPLATES_QUERY_KEY = ["console", "approval-templates"];
@@ -35,6 +40,7 @@ interface TemplateFormPayload {
   key: string;
   name: string;
   dingtalk_process_code: string;
+  form_schema: ApprovalFormSchema;
   form_mapping: Record<string, string>;
   is_active: boolean;
 }
@@ -72,6 +78,7 @@ export function ApprovalTemplatesPage() {
           body: {
             name: payload.name,
             dingtalk_process_code: payload.dingtalk_process_code,
+            form_schema: payload.form_schema as unknown as JsonObject,
             form_mapping: payload.form_mapping,
             is_active: payload.is_active,
           } satisfies JsonObject,
@@ -79,7 +86,10 @@ export function ApprovalTemplatesPage() {
       }
       return apiRequest("/console/api/v1/approval-templates", {
         method: "POST",
-        body: { ...payload } satisfies JsonObject,
+        body: {
+          ...payload,
+          form_schema: payload.form_schema as unknown as JsonObject,
+        } satisfies JsonObject,
       });
     },
     onSuccess: () => {
@@ -257,16 +267,58 @@ function parseJsonObject(text: string): JsonObject | null {
   return null;
 }
 
-/** 校验文本为字符串到字符串的 JSON 映射(空文本视为 {}); 失败返回 null。 */
-function parseStringMapping(text: string): Record<string, string> | null {
+const APPROVAL_FORM_FIELD_TYPES: ReadonlySet<ApprovalFormFieldType> = new Set([
+  "string",
+  "integer",
+  "number",
+  "boolean",
+]);
+
+/** 校验审批表单 schema 契约(空文本视为 {}); 失败返回 null。 */
+function parseFormSchema(text: string): ApprovalFormSchema | null {
   const parsed = parseJsonObject(text);
-  if (parsed === null || !Object.values(parsed).every((value) => typeof value === "string")) {
+  if (parsed === null) {
     return null;
   }
-  return parsed as Record<string, string>;
+  for (const [fieldName, definitionValue] of Object.entries(parsed)) {
+    if (fieldName.trim() === "" || typeof definitionValue !== "object" || definitionValue === null || Array.isArray(definitionValue)) {
+      return null;
+    }
+    const definition = definitionValue as Record<string, unknown>;
+    if (
+      Object.keys(definition).some((key) => key !== "type" && key !== "required") ||
+      typeof definition.type !== "string" ||
+      !APPROVAL_FORM_FIELD_TYPES.has(definition.type as ApprovalFormFieldType) ||
+      (definition.required !== undefined && typeof definition.required !== "boolean")
+    ) {
+      return null;
+    }
+  }
+  return parsed as unknown as ApprovalFormSchema;
 }
 
-function formatJsonObject(value: JsonObject | undefined): string {
+/** 校验 mapping 严格引用 schema 字段且控件名非空(空文本视为 {}); 失败返回 null。 */
+function parseStringMapping(text: string, schema: ApprovalFormSchema): Record<string, string> | null {
+  const parsed = parseJsonObject(text);
+  if (parsed === null) {
+    return null;
+  }
+  const entries = Object.entries(parsed);
+  if (
+    !entries.every(
+      ([fieldName, componentName]) =>
+        fieldName.trim() !== "" &&
+        Object.hasOwn(schema, fieldName) &&
+        typeof componentName === "string" &&
+        componentName.trim() !== "",
+    )
+  ) {
+    return null;
+  }
+  return Object.fromEntries(entries.map(([fieldName, componentName]) => [fieldName, (componentName as string).trim()]));
+}
+
+function formatJsonObject(value: object | undefined): string {
   if (!value || Object.keys(value).length === 0) {
     return "";
   }
@@ -291,15 +343,23 @@ function TemplateEditorDialog({
   const [key, setKey] = useState(template?.key ?? "");
   const [name, setName] = useState(template?.name ?? "");
   const [processCode, setProcessCode] = useState(template?.dingtalk_process_code ?? "");
+  const [formSchemaText, setFormSchemaText] = useState(formatJsonObject(template?.form_schema));
   const [formMappingText, setFormMappingText] = useState(formatJsonObject(template?.form_mapping));
   const [isActive, setIsActive] = useState(template?.is_active ?? true);
+  const [schemaError, setSchemaError] = useState("");
   const [mappingError, setMappingError] = useState("");
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const formMapping = parseStringMapping(formMappingText);
+    const formSchema = parseFormSchema(formSchemaText);
+    if (formSchema === null) {
+      setSchemaError(t("approvalTemplates.invalidFormSchema"));
+      return;
+    }
+    setSchemaError("");
+    const formMapping = parseStringMapping(formMappingText, formSchema);
     if (formMapping === null) {
-      setMappingError(t("approvalTemplates.invalidJson"));
+      setMappingError(t("approvalTemplates.invalidFormMapping"));
       return;
     }
     setMappingError("");
@@ -308,6 +368,7 @@ function TemplateEditorDialog({
       key: key.trim(),
       name: name.trim(),
       dingtalk_process_code: processCode.trim(),
+      form_schema: formSchema,
       form_mapping: formMapping,
       is_active: isActive,
     });
@@ -356,6 +417,23 @@ function TemplateEditorDialog({
             required
             autoComplete="off"
             onChange={(event) => setProcessCode(event.currentTarget.value)}
+          />
+        </Field>
+        <Field label={t("approvalTemplates.field.formSchema")} hint={t("approvalTemplates.field.formSchemaHint")} error={schemaError}>
+          <TextArea
+            rows={8}
+            spellCheck={false}
+            className="font-mono text-caption"
+            value={formSchemaText}
+            onChange={(event) => {
+              setFormSchemaText(event.currentTarget.value);
+              if (schemaError) {
+                setSchemaError("");
+              }
+              if (mappingError) {
+                setMappingError("");
+              }
+            }}
           />
         </Field>
         <Field label={t("approvalTemplates.field.formMapping")} hint={t("approvalTemplates.field.formMappingHint")} error={mappingError}>
