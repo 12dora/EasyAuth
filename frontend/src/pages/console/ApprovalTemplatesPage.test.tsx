@@ -281,6 +281,90 @@ describe("ApprovalTemplatesPage", () => {
     });
     expect(fetchMock.mock.calls.some(([input]) => String(input) === "/console/api/v1/approval-templates/1/test")).toBe(false);
   });
+
+  test("保存期间不可关闭编辑弹窗，完成后才关闭", async () => {
+    const createRequest = deferred<Response>();
+    const fetchMock = vi.fn<typeof fetch>((input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/approval-templates" && !init?.method) {
+        return Promise.resolve(jsonResponse({ data: [] }));
+      }
+      if (url === "/console/api/v1/approval-templates" && init?.method === "POST") {
+        return createRequest.promise;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "新建模板" }));
+    const dialog = await screen.findByRole("dialog", { name: "新建审批模板" });
+    await user.type(within(dialog).getByLabelText("模板 Key"), "expense");
+    await user.type(within(dialog).getByLabelText("名称"), "费用审批");
+    await user.type(within(dialog).getByLabelText("钉钉流程码（process_code）"), "PROC-EXPENSE");
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(true));
+    expect(within(dialog).getByRole("button", { name: "保存" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "取消" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "关闭弹窗" })).toBeDisabled();
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog", { name: "新建审批模板" })).toBeVisible();
+
+    createRequest.resolve(
+      jsonResponse({ approval_template: { ...TEMPLATES[0], id: 9, key: "expense", name: "费用审批" } }, 201),
+    );
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "新建审批模板" })).not.toBeInTheDocument());
+  });
+
+  test("保存响应取消旧列表请求并立即更新缓存，旧响应不会回滚页面", async () => {
+    const staleListRequest = deferred<Response>();
+    const staleSignals: AbortSignal[] = [];
+    const updatedTemplate = { ...TEMPLATES[0], name: "新版请假审批", updated_at: "2026-07-10T09:00:00Z" };
+    let listRequestCount = 0;
+    const fetchMock = vi.fn<typeof fetch>((input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/approval-templates" && !init?.method) {
+        listRequestCount += 1;
+        if (listRequestCount === 1) {
+          return Promise.resolve(jsonResponse({ data: [TEMPLATES[0]] }));
+        }
+        if (listRequestCount === 2) {
+          if (init?.signal) {
+            staleSignals.push(init.signal);
+          }
+          return staleListRequest.promise;
+        }
+        return Promise.resolve(jsonResponse({ data: [updatedTemplate] }));
+      }
+      if (url === "/console/api/v1/approval-templates/1" && init?.method === "PATCH") {
+        return Promise.resolve(jsonResponse({ approval_template: updatedTemplate }));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderPage();
+
+    expect(await screen.findByText("请假审批")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "刷新" }));
+    await waitFor(() => expect(listRequestCount).toBe(2));
+    await user.click(screen.getByRole("button", { name: "编辑" }));
+    const dialog = await screen.findByRole("dialog", { name: "编辑审批模板" });
+    const nameInput = within(dialog).getByLabelText("名称");
+    await user.clear(nameInput);
+    await user.type(nameInput, updatedTemplate.name);
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    expect(await screen.findByText(updatedTemplate.name)).toBeVisible();
+    expect(staleSignals[0]?.aborted).toBe(true);
+    staleListRequest.resolve(jsonResponse({ data: [TEMPLATES[0]] }));
+    await waitFor(() => expect(screen.getByText(updatedTemplate.name)).toBeVisible());
+    expect(screen.queryByText("请假审批")).not.toBeInTheDocument();
+  });
 });
 
 function renderPage() {
@@ -305,4 +389,12 @@ function jsonResponse(payload: unknown, status = 200) {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+  return { promise, resolve };
 }

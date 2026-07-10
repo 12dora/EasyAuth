@@ -293,7 +293,11 @@ export function ConsoleTeamDetail() {
           team={team}
           errorMessage={saveInfoMutation.error ? (saveInfoMutation.error as Error).message : ""}
           isSubmitting={saveInfoMutation.isPending}
-          onClose={() => setEditDialogOpen(false)}
+          onClose={() => {
+            if (!saveInfoMutation.isPending) {
+              setEditDialogOpen(false);
+            }
+          }}
           onSubmit={(payload) => saveInfoMutation.mutate(payload)}
         />
       ) : null}
@@ -301,7 +305,11 @@ export function ConsoleTeamDetail() {
         <TeamMemberCreateDialog
           errorMessage={addMemberMutation.error ? (addMemberMutation.error as Error).message : ""}
           isSubmitting={addMemberMutation.isPending}
-          onClose={() => setAddMemberDialogOpen(false)}
+          onClose={() => {
+            if (!addMemberMutation.isPending) {
+              setAddMemberDialogOpen(false);
+            }
+          }}
           onSubmit={(payload) => addMemberMutation.mutate(payload)}
         />
       ) : null}
@@ -309,10 +317,15 @@ export function ConsoleTeamDetail() {
         <Dialog
           title={t("console.teams.disableDialog.title")}
           size="sm"
-          onClose={() => setDisableConfirmOpen(false)}
+          onClose={() => {
+            if (!statusMutation.isPending) {
+              setDisableConfirmOpen(false);
+            }
+          }}
+          closeDisabled={statusMutation.isPending}
           footer={
             <>
-              <Button type="button" onClick={() => setDisableConfirmOpen(false)}>
+              <Button type="button" onClick={() => setDisableConfirmOpen(false)} disabled={statusMutation.isPending}>
                 {t("common.cancel")}
               </Button>
               <Button
@@ -336,10 +349,15 @@ export function ConsoleTeamDetail() {
         <Dialog
           title={t("console.teams.removeMemberTitle")}
           size="sm"
-          onClose={() => setMemberPendingRemoval(null)}
+          onClose={() => {
+            if (!removeMemberMutation.isPending) {
+              setMemberPendingRemoval(null);
+            }
+          }}
+          closeDisabled={removeMemberMutation.isPending}
           footer={
             <>
-              <Button type="button" onClick={() => setMemberPendingRemoval(null)}>
+              <Button type="button" onClick={() => setMemberPendingRemoval(null)} disabled={removeMemberMutation.isPending}>
                 {t("common.cancel")}
               </Button>
               <Button
@@ -468,9 +486,10 @@ function TeamInfoDialog({
     <Dialog
       title={t("console.teams.editTitle")}
       onClose={onClose}
+      closeDisabled={isSubmitting}
       footer={
         <>
-          <Button type="button" onClick={onClose}>
+          <Button type="button" onClick={onClose} disabled={isSubmitting}>
             {t("common.cancel")}
           </Button>
           <Button form="team-info-form" type="submit" variant="primary" loading={isSubmitting} disabled={isSubmitting}>
@@ -520,9 +539,10 @@ function TeamMemberCreateDialog({
     <Dialog
       title={t("console.teams.addMember")}
       onClose={onClose}
+      closeDisabled={isSubmitting}
       footer={
         <>
-          <Button type="button" onClick={onClose}>
+          <Button type="button" onClick={onClose} disabled={isSubmitting}>
             {t("common.cancel")}
           </Button>
           <Button form="team-member-create-form" type="submit" variant="primary" loading={isSubmitting} disabled={isSubmitting}>

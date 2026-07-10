@@ -110,6 +110,38 @@ describe("ConsoleTeamDetail", () => {
     expect(await screen.findByRole("heading", { name: "新团队名" })).toBeVisible();
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑团队信息" })).not.toBeInTheDocument());
   });
+
+  test("保存团队期间不可关闭弹窗", async () => {
+    const saveRequest = deferred<Response>();
+    const fetchMock = vi.fn<typeof fetch>((input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/teams/7" && !init?.method) {
+        return Promise.resolve(jsonResponse(INITIAL_TEAM));
+      }
+      if (url === "/console/api/v1/teams/7" && init?.method === "PATCH") {
+        return saveRequest.promise;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderDetail();
+
+    expect(await screen.findByRole("heading", { name: "旧团队" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "编辑" }));
+    const dialog = await screen.findByRole("dialog", { name: "编辑团队信息" });
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(patchCalls(fetchMock)).toHaveLength(1));
+    expect(within(dialog).getByRole("button", { name: "保存" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "取消" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "关闭弹窗" })).toBeDisabled();
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog", { name: "编辑团队信息" })).toBeVisible();
+
+    saveRequest.resolve(jsonResponse(teamPayload({ name: "旧团队" })));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "编辑团队信息" })).not.toBeInTheDocument());
+  });
 });
 
 function renderDetail(): QueryClient {

@@ -34,6 +34,11 @@ import type {
 import { approvalStatusLabel, formatDateTime } from "../../lib/status";
 
 const TEMPLATES_QUERY_KEY = ["console", "approval-templates"];
+const TEMPLATE_MUTATION_SCOPE = { id: "console-approval-templates" };
+
+interface ApprovalTemplatePayload {
+  approval_template: ApprovalTemplateItem;
+}
 
 interface TemplateFormPayload {
   app_key: string;
@@ -54,26 +59,51 @@ export function ApprovalTemplatesPage() {
   const [deleteTarget, setDeleteTarget] = useState<ApprovalTemplateItem | null>(null);
   const templatesQuery = useQuery({
     queryKey: TEMPLATES_QUERY_KEY,
-    queryFn: () => apiRequest<ListPayload<ApprovalTemplateItem>>("/console/api/v1/approval-templates"),
+    queryFn: ({ signal }) =>
+      apiRequest<ListPayload<ApprovalTemplateItem>>("/console/api/v1/approval-templates", { signal }),
   });
   const templates = itemsFromPayload<ApprovalTemplateItem>(templatesQuery.data);
+  const applyTemplatePayload = async (payload: ApprovalTemplatePayload) => {
+    await queryClient.cancelQueries({ queryKey: TEMPLATES_QUERY_KEY, exact: true });
+    queryClient.setQueryData<ListPayload<ApprovalTemplateItem>>(TEMPLATES_QUERY_KEY, (current) => {
+      const currentItems = current?.data ?? [];
+      const existingIndex = currentItems.findIndex((item) => item.id === payload.approval_template.id);
+      return {
+        ...current,
+        data:
+          existingIndex === -1
+            ? [...currentItems, payload.approval_template]
+            : currentItems.map((item) =>
+                item.id === payload.approval_template.id ? payload.approval_template : item,
+              ),
+      };
+    });
+    void queryClient.invalidateQueries({ queryKey: TEMPLATES_QUERY_KEY, exact: true });
+  };
   const deleteMutation = useMutation({
+    scope: TEMPLATE_MUTATION_SCOPE,
     mutationFn: (template: ApprovalTemplateItem) =>
       apiRequest(`/console/api/v1/approval-templates/${template.id}`, { method: "DELETE" }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: TEMPLATES_QUERY_KEY });
+    onSuccess: async (_payload, template) => {
+      await queryClient.cancelQueries({ queryKey: TEMPLATES_QUERY_KEY, exact: true });
+      queryClient.setQueryData<ListPayload<ApprovalTemplateItem>>(TEMPLATES_QUERY_KEY, (current) => ({
+        ...current,
+        data: current?.data?.filter((item) => item.id !== template.id) ?? [],
+      }));
       setDeleteTarget(null);
       toast.success(t("approvalTemplates.deleteSuccess"));
+      void queryClient.invalidateQueries({ queryKey: TEMPLATES_QUERY_KEY, exact: true });
     },
     onError: (error: Error) => {
       toast.error(t("approvalTemplates.deleteFailed"), error.message);
     },
   });
   const saveMutation = useMutation({
+    scope: TEMPLATE_MUTATION_SCOPE,
     mutationFn: ({ template, payload }: { template: ApprovalTemplateItem | null; payload: TemplateFormPayload }) => {
       if (template) {
         // PATCH 契约不接受 app_key/key(作用域与标识创建后不可改), 只提交可变字段。
-        return apiRequest(`/console/api/v1/approval-templates/${template.id}`, {
+        return apiRequest<ApprovalTemplatePayload>(`/console/api/v1/approval-templates/${template.id}`, {
           method: "PATCH",
           body: {
             name: payload.name,
@@ -84,7 +114,7 @@ export function ApprovalTemplatesPage() {
           } satisfies JsonObject,
         });
       }
-      return apiRequest("/console/api/v1/approval-templates", {
+      return apiRequest<ApprovalTemplatePayload>("/console/api/v1/approval-templates", {
         method: "POST",
         body: {
           ...payload,
@@ -92,8 +122,8 @@ export function ApprovalTemplatesPage() {
         } satisfies JsonObject,
       });
     },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: TEMPLATES_QUERY_KEY });
+    onSuccess: async (payload) => {
+      await applyTemplatePayload(payload);
       setEditorState(null);
     },
   });
@@ -231,7 +261,11 @@ export function ApprovalTemplatesPage() {
           template={editorState.template}
           errorMessage={saveMutation.error ? (saveMutation.error as Error).message : ""}
           isSubmitting={saveMutation.isPending}
-          onClose={() => setEditorState(null)}
+          onClose={() => {
+            if (!saveMutation.isPending) {
+              setEditorState(null);
+            }
+          }}
           onSubmit={(payload) => saveMutation.mutate({ template: editorState.template, payload })}
         />
       ) : null}
@@ -243,7 +277,11 @@ export function ApprovalTemplatesPage() {
           confirmLabel={t("common.delete")}
           confirming={deleteMutation.isPending}
           onConfirm={() => deleteMutation.mutate(deleteTarget)}
-          onClose={() => setDeleteTarget(null)}
+          onClose={() => {
+            if (!deleteMutation.isPending) {
+              setDeleteTarget(null);
+            }
+          }}
         />
       ) : null}
     </>
@@ -379,9 +417,10 @@ function TemplateEditorDialog({
       title={template ? t("approvalTemplates.editTitle") : t("approvalTemplates.createTitle")}
       size="lg"
       onClose={onClose}
+      closeDisabled={isSubmitting}
       footer={
         <>
-          <Button type="button" onClick={onClose}>
+          <Button type="button" onClick={onClose} disabled={isSubmitting}>
             {t("common.cancel")}
           </Button>
           <Button form="approval-template-form" type="submit" variant="primary" loading={isSubmitting} disabled={isSubmitting}>
@@ -509,9 +548,10 @@ function TemplateTestDialog({ template, onClose }: { template: ApprovalTemplateI
       title={t("approvalTemplates.test.action")}
       eyebrow={<code>{template.key}</code>}
       onClose={onClose}
+      closeDisabled={testMutation.isPending}
       footer={
         <>
-          <Button type="button" onClick={onClose}>
+          <Button type="button" onClick={onClose} disabled={testMutation.isPending}>
             {t("common.close")}
           </Button>
           <Button

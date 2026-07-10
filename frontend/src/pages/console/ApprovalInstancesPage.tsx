@@ -61,9 +61,10 @@ export function ApprovalInstancesPage() {
 
   const query = useQuery({
     queryKey: [...INSTANCES_QUERY_PREFIX, statusFilter, appKeyFilter, pagination.pageIndex, pagination.pageSize],
-    queryFn: () =>
+    queryFn: ({ signal }) =>
       apiRequest<ListPayload<ApprovalInstanceRow>>(
         `/console/api/v1/operations/approval-instances?status=${encodeURIComponent(statusFilter)}&app_key=${encodeURIComponent(appKeyFilter)}&page=${pagination.pageIndex + 1}&page_size=${pagination.pageSize}`,
+        { signal },
       ),
   });
   const redeliverMutation = useMutation({
@@ -72,7 +73,8 @@ export function ApprovalInstancesPage() {
         method: "POST",
         body: {},
       }),
-    onSuccess: (payload) => {
+    onSuccess: async (payload) => {
+      await queryClient.cancelQueries({ queryKey: INSTANCES_QUERY_PREFIX });
       queryClient.setQueriesData<ListPayload<ApprovalInstanceRow>>(
         { queryKey: INSTANCES_QUERY_PREFIX },
         (current) =>
