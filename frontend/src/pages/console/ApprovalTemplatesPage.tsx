@@ -35,7 +35,7 @@ interface TemplateFormPayload {
   key: string;
   name: string;
   dingtalk_process_code: string;
-  form_mapping: JsonObject;
+  form_mapping: Record<string, string>;
   is_active: boolean;
 }
 
@@ -257,6 +257,15 @@ function parseJsonObject(text: string): JsonObject | null {
   return null;
 }
 
+/** 校验文本为字符串到字符串的 JSON 映射(空文本视为 {}); 失败返回 null。 */
+function parseStringMapping(text: string): Record<string, string> | null {
+  const parsed = parseJsonObject(text);
+  if (parsed === null || !Object.values(parsed).every((value) => typeof value === "string")) {
+    return null;
+  }
+  return parsed as Record<string, string>;
+}
+
 function formatJsonObject(value: JsonObject | undefined): string {
   if (!value || Object.keys(value).length === 0) {
     return "";
@@ -288,7 +297,7 @@ function TemplateEditorDialog({
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const formMapping = parseJsonObject(formMappingText);
+    const formMapping = parseStringMapping(formMappingText);
     if (formMapping === null) {
       setMappingError(t("approvalTemplates.invalidJson"));
       return;

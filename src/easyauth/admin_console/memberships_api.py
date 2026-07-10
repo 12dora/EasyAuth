@@ -103,7 +103,7 @@ def _create_membership(request: HttpRequest, app_key: str) -> JsonResponse:
     except IntegrityError:
         return _membership_conflict_response()
     return _json_response(
-        {"membership": _membership_item(membership, include_id=True)},
+        {"membership": _membership_item(membership)},
         status=HTTPStatus.CREATED,
     )
 
@@ -140,7 +140,7 @@ def _update_membership(request: HttpRequest, app_key: str, membership_id: int) -
             _record_membership_event(app, actor, "console_app_membership_updated", membership)
     except IntegrityError:
         return _membership_conflict_response()
-    return _json_response({"membership": _membership_item(membership, include_id=True)})
+    return _json_response({"membership": _membership_item(membership)})
 
 
 def _apply_membership_patch(
@@ -193,17 +193,13 @@ def _manageable_app(request: HttpRequest, app_key: str) -> ManageableAppResult:
 
 def _membership_item(
     membership: AppMembership,
-    *,
-    include_id: bool = False,
 ) -> dict[str, JsonValue]:
-    item: dict[str, JsonValue] = {
+    return {
+        "id": membership.id,
         "user_id": membership.user_id,
         "role": membership.role,
         "is_active": membership.is_active,
     }
-    if include_id:
-        item["id"] = membership.id
-    return item
 
 
 def _items_response(items: tuple[dict[str, JsonValue], ...]) -> JsonResponse:

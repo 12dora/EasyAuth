@@ -50,8 +50,8 @@ def test_console_app_detail_serves_react_shell_without_leaking_unowned_app() -> 
     _ = AppMembership.objects.create(app=owned_app, user_id="react-console-owner", role="owner")
 
     # When: 打开已拥有 App 和未拥有 App 的 React 页面。
-    owned_response = client.get(f"/console/apps/{owned_app.app_key}/")
-    unowned_response = client.get(f"/console/apps/{unowned_app.app_key}/")
+    owned_response = client.get(f"/console/apps/{owned_app.app_key}")
+    unowned_response = client.get(f"/console/apps/{unowned_app.app_key}")
 
     # Then: 已授权页面返回 React 壳, 未授权 App 仍不暴露。
     html = owned_response.content.decode()
@@ -59,6 +59,35 @@ def test_console_app_detail_serves_react_shell_without_leaking_unowned_app() -> 
     assert 'data-easyauth-react-shell="console"' in html
     assert f'data-initial-app-key="{owned_app.app_key}"' in html
     assert unowned_response.status_code == HTTPStatus.NOT_FOUND
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/console/apps/new",
+        "/console/teams",
+        "/console/teams/7",
+        "/console/people",
+        "/console/lifecycle/handover-tasks",
+        "/console/lifecycle/handover-tasks/11",
+        "/console/lifecycle/onboarding",
+        "/console/approval-templates",
+    ],
+)
+def test_console_client_routes_serve_react_shell_for_authenticated_admin(path: str) -> None:
+    client = _logged_in_console_user("react-console-route-admin", is_superuser=True)
+
+    response = client.get(path)
+
+    assert response.status_code == HTTPStatus.OK
+    assert 'data-easyauth-react-shell="console"' in response.content.decode()
+
+
+def test_console_client_route_redirects_to_login_without_session() -> None:
+    response = Client().get("/console/teams")
+
+    assert response.status_code == HTTPStatus.FOUND
+    assert response.headers["Location"].startswith("/auth/login/")
 
 
 def test_portal_serves_react_shell_for_active_session_user() -> None:

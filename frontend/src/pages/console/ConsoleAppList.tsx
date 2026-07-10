@@ -24,6 +24,7 @@ import { Field, TextArea, TextInput } from "../../components/Field";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
 import { UserMultiSelect } from "../../components/UserSelect";
+import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../lib/api";
 import type { JsonObject } from "../../lib/api";
@@ -37,6 +38,7 @@ export function ConsoleAppList() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<AppSummary | null>(null);
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: 20 });
   const appsQuery = useQuery({
     queryKey: ["console", "apps", pagination.pageIndex, pagination.pageSize],
@@ -67,11 +69,14 @@ export function ConsoleAppList() {
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["console", "apps"] }),
   });
   const deleteMutation = useMutation({
-    mutationFn: (appKey: string) =>
-      apiRequest(`/console/api/v1/apps/${appKey}`, {
+    mutationFn: (app: AppSummary) =>
+      apiRequest(`/console/api/v1/apps/${app.app_key}`, {
         method: "DELETE",
       }),
-    onSuccess: () => void queryClient.invalidateQueries({ queryKey: ["console", "apps"] }),
+    onSuccess: () => {
+      setDeleteTarget(null);
+      void queryClient.invalidateQueries({ queryKey: ["console", "apps"] });
+    },
   });
 
   const columns: ColumnDef<AppSummary>[] = [
@@ -125,7 +130,7 @@ export function ConsoleAppList() {
             type="button"
             variant="ghost-danger"
             disabled={deleteMutation.isPending}
-            onClick={() => deleteMutation.mutate(row.original.app_key)}
+            onClick={() => setDeleteTarget(row.original)}
           >
             {t("common.delete")}
           </TableRowActionButton>
@@ -238,7 +243,7 @@ export function ConsoleAppList() {
                 )}
               </TableBody>
             </TableRoot>
-            <TablePagination table={table} />
+            <TablePagination table={table} totalItems={appsQuery.data?.pagination?.total_items ?? apps.length} />
           </TableFrame>
         </section>
       )}
@@ -248,6 +253,16 @@ export function ConsoleAppList() {
           isSubmitting={createMutation.isPending}
           onClose={() => setCreateDialogOpen(false)}
           onSubmit={(payload) => createMutation.mutate(payload)}
+        />
+      ) : null}
+      {deleteTarget ? (
+        <ConfirmDialog
+          title={`${t("common.delete")} ${deleteTarget.name}`}
+          message={`${t("console.overview.field.appName")}: ${deleteTarget.name}; ${t("console.overview.field.appKey")}: ${deleteTarget.app_key}`}
+          confirmLabel={t("common.delete")}
+          confirming={deleteMutation.isPending}
+          onConfirm={() => deleteMutation.mutate(deleteTarget)}
+          onClose={() => setDeleteTarget(null)}
         />
       ) : null}
     </>
@@ -327,4 +342,3 @@ function CreateAppDialog({
     </Dialog>
   );
 }
-

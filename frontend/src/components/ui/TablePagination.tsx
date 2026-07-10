@@ -6,20 +6,20 @@ export { DEFAULT_TABLE_PAGE_SIZE, TABLE_PAGE_SIZE_OPTIONS } from "./PaginationBa
 
 interface TablePaginationProps<T> {
   table: Table<T>;
+  totalItems: number;
 }
 
-export function TablePagination<T>({ table }: TablePaginationProps<T>) {
+export function TablePagination<T>({ table, totalItems }: TablePaginationProps<T>) {
   const pagination = table.getState().pagination;
-  const totalRows = table.getPrePaginationRowModel().rows.length;
   const currentRows = table.getRowModel().rows.length;
-  const pageStart = totalRows === 0 ? 0 : pagination.pageIndex * pagination.pageSize + 1;
-  const pageEnd = totalRows === 0 ? 0 : pageStart + currentRows - 1;
+  const pageStart = totalItems === 0 || currentRows === 0 ? 0 : pagination.pageIndex * pagination.pageSize + 1;
+  const pageEnd = pageStart === 0 ? 0 : Math.min(totalItems, pageStart + currentRows - 1);
 
   return (
     <PaginationBar
       pageStart={pageStart}
       pageEnd={pageEnd}
-      totalRows={totalRows}
+      totalRows={totalItems}
       pageSize={pagination.pageSize}
       pageIndex={pagination.pageIndex}
       pageCount={table.getPageCount()}

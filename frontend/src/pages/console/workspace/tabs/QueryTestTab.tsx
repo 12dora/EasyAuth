@@ -137,7 +137,7 @@ export function QueryTestTab({ appKey }: { appKey: string }) {
                 )}
               </TableBody>
             </TableRoot>
-            <TablePagination table={groupTable} />
+            <TablePagination table={groupTable} totalItems={result.groups?.length ?? 0} />
           </TableFrame>
           <TableFrame>
             <TableRoot>
@@ -166,7 +166,7 @@ export function QueryTestTab({ appKey }: { appKey: string }) {
                 )}
               </TableBody>
             </TableRoot>
-            <TablePagination table={grantTable} />
+            <TablePagination table={grantTable} totalItems={result.grants?.length ?? 0} />
           </TableFrame>
           <CodeBlock language="json" code={JSON.stringify(result, null, 2)} />
         </>

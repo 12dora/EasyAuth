@@ -3,6 +3,7 @@ from __future__ import annotations
 from http import HTTPStatus
 from typing import TYPE_CHECKING, ClassVar, Final
 
+from django.db import transaction
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -11,6 +12,7 @@ from easyauth.admin_console.authz import require_superuser
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode
 from easyauth.applications.integration_settings import (
+    INTEGRATION_SETTINGS_SINGLETON_ID,
     IntegrationSettings,
     authentik_runtime_config,
     dingtalk_runtime_config,
@@ -86,28 +88,42 @@ def _update_settings(request: HttpRequest, *, actor_id: str) -> JsonResponse:
             {"errors": str(exc)},
             status=HTTPStatus.UNPROCESSABLE_ENTITY,
         )
-    row = IntegrationSettings.load()
-    row.authentik_base_url = payload.authentik_base_url
-    api_token_changed = False
-    if payload.authentik_api_token is not None:
-        api_token_changed = payload.authentik_api_token != row.authentik_api_token
-        row.authentik_api_token = payload.authentik_api_token
-    dingtalk_secret_changed = False
-    if payload.dingtalk_app_key is not None:
-        row.dingtalk_app_key = payload.dingtalk_app_key.strip()
-    if payload.dingtalk_app_secret is not None:
-        dingtalk_secret_changed = payload.dingtalk_app_secret != row.dingtalk_app_secret
-        row.dingtalk_app_secret = payload.dingtalk_app_secret.strip()
-    if payload.dingtalk_agent_id is not None:
-        row.dingtalk_agent_id = payload.dingtalk_agent_id.strip()
-    row.updated_by = actor_id
-    row.save()
-    _record_settings_update(
-        actor_id=actor_id,
-        base_url=payload.authentik_base_url,
-        api_token_changed=api_token_changed,
-        dingtalk_secret_changed=dingtalk_secret_changed,
-    )
+    fields_set = payload.model_fields_set
+    if not fields_set:
+        return _settings_response()
+
+    with transaction.atomic():
+        row, _created = IntegrationSettings.objects.select_for_update().get_or_create(
+            pk=INTEGRATION_SETTINGS_SINGLETON_ID,
+        )
+        update_fields: list[str] = []
+        if "authentik_base_url" in fields_set:
+            row.authentik_base_url = payload.authentik_base_url
+            update_fields.append("authentik_base_url")
+        api_token_changed = False
+        if "authentik_api_token" in fields_set and payload.authentik_api_token is not None:
+            api_token_changed = payload.authentik_api_token != row.authentik_api_token
+            row.authentik_api_token = payload.authentik_api_token
+            update_fields.append("authentik_api_token")
+        dingtalk_secret_changed = False
+        if "dingtalk_app_key" in fields_set and payload.dingtalk_app_key is not None:
+            row.dingtalk_app_key = payload.dingtalk_app_key.strip()
+            update_fields.append("dingtalk_app_key")
+        if "dingtalk_app_secret" in fields_set and payload.dingtalk_app_secret is not None:
+            dingtalk_secret_changed = payload.dingtalk_app_secret != row.dingtalk_app_secret
+            row.dingtalk_app_secret = payload.dingtalk_app_secret.strip()
+            update_fields.append("dingtalk_app_secret")
+        if "dingtalk_agent_id" in fields_set and payload.dingtalk_agent_id is not None:
+            row.dingtalk_agent_id = payload.dingtalk_agent_id.strip()
+            update_fields.append("dingtalk_agent_id")
+        row.updated_by = actor_id
+        row.save(update_fields=[*update_fields, "updated_by", "updated_at"])
+        _record_settings_update(
+            actor_id=actor_id,
+            base_url=row.authentik_base_url,
+            api_token_changed=api_token_changed,
+            dingtalk_secret_changed=dingtalk_secret_changed,
+        )
     return _settings_response()
 
 

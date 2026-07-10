@@ -15,7 +15,7 @@ from easyauth.admin_console.operation_filters import paginate_queryset
 from easyauth.api.errors import ErrorCode
 from easyauth.api.pagination import pagination_item
 from easyauth.audit.services import AuditRecord, AuditService
-from easyauth.webhooks.delivery import redeliver
+from easyauth.webhooks.delivery import WebhookRedeliveryConflictError, redeliver
 from easyauth.workflows.models import (
     APPROVAL_STATUS_VALUES,
     ApprovalInstance,
@@ -70,7 +70,14 @@ def operations_approval_instance_redeliver(
             "该实例没有可重投的结果投递。",
             status=HTTPStatus.BAD_REQUEST,
         )
-    _ = redeliver(instance.completion_delivery)
+    try:
+        _ = redeliver(instance.completion_delivery)
+    except WebhookRedeliveryConflictError as exc:
+        return error_response(
+            ErrorCode.SEMANTIC_VALIDATION_ERROR,
+            str(exc),
+            status=HTTPStatus.CONFLICT,
+        )
     _ = AuditService.record(
         AuditRecord(
             actor_type="admin",

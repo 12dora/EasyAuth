@@ -191,7 +191,7 @@ export function RulesTab({ appKey }: { appKey: string }) {
             )}
           </TableBody>
         </TableRoot>
-        <TablePagination table={ruleTable} />
+        <TablePagination table={ruleTable} totalItems={rules.length} />
       </TableFrame>
       {dialogOpen ? (
         <Dialog title={editingRuleId ? t("console.rules.editTitle") : t("console.rules.createTitle")} onClose={() => setDialogOpen(false)} footer={

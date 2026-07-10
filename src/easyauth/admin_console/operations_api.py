@@ -41,6 +41,7 @@ from easyauth.applications.dependency_health import (
 )
 from easyauth.applications.dependency_health_checks import run_dependency_health_checks
 from easyauth.applications.models import App
+from easyauth.audit.models import AuditLog
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.grants.models import AccessGrant
 from easyauth.grants.services import GrantService
@@ -49,6 +50,7 @@ type ConsoleApiResult = str | JsonResponse
 
 USER_NOT_FOUND_MESSAGE = "用户不存在。"
 APP_NOT_FOUND_MESSAGE = "应用不存在。"
+FAILURE_REASON_CONTRACT_MESSAGE = "授权失败原因事实缺失或无效。"
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +61,11 @@ class ConsoleOperationsSemanticError(Exception):
     @override
     def __str__(self) -> str:
         return self.message
+
+
+@dataclass(frozen=True, slots=True)
+class AccessRequestFailureReasonContractError(Exception):
+    request_id: int
 
 
 class _EmergencyRevokePayload(BaseModel):
@@ -72,7 +79,15 @@ class _EmergencyRevokePayload(BaseModel):
 def operations_access_requests(request: HttpRequest) -> JsonResponse:
     match require_superuser(request):
         case str():
-            return _access_request_page_response(_access_request_page(request))
+            try:
+                return _access_request_page_response(_access_request_page(request))
+            except AccessRequestFailureReasonContractError as exc:
+                return _error_response(
+                    ErrorCode.INTERNAL_ERROR,
+                    FAILURE_REASON_CONTRACT_MESSAGE,
+                    {"request_id": exc.request_id},
+                    status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                )
         case JsonResponse() as response:
             return response
 
@@ -206,8 +221,11 @@ def _access_grant_page(request: HttpRequest) -> Page[AccessGrant]:
     return paginate_queryset(filter_access_grants(queryset, request.GET), request.GET)
 
 
-def _access_request_item(access_request: AccessRequest) -> dict[str, JsonValue]:
-    return {
+def _access_request_item(
+    access_request: AccessRequest,
+    failure_reasons: dict[int, str],
+) -> dict[str, JsonValue]:
+    item: dict[str, JsonValue] = {
         "id": access_request.id,
         "user_id": access_request.user.authentik_user_id,
         "app_key": access_request.app.app_key,
@@ -218,6 +236,12 @@ def _access_request_item(access_request: AccessRequest) -> dict[str, JsonValue]:
         "submitted_at": access_request.submitted_at.isoformat(),
         **access_request_decision_fields(access_request),
     }
+    if access_request.status == "grant_failed":
+        try:
+            item["failure_reason"] = failure_reasons[access_request.id]
+        except KeyError as exc:
+            raise AccessRequestFailureReasonContractError(access_request.id) from exc
+    return item
 
 
 def _access_grant_item(access_grant: AccessGrant) -> dict[str, JsonValue]:
@@ -273,11 +297,45 @@ def _record_emergency_revoke(
 
 
 def _access_request_page_response(page: Page[AccessRequest]) -> JsonResponse:
+    failure_reasons = _access_request_failure_reasons(page.items)
     result: list[JsonValue] = []
-    result.extend(_access_request_item(access_request) for access_request in page.items)
+    result.extend(
+        _access_request_item(access_request, failure_reasons)
+        for access_request in page.items
+    )
     return _json_response(
         paginated_list_payload(items=result, pagination=pagination_item(page)),
     )
+
+
+def _access_request_failure_reasons(
+    access_requests: tuple[AccessRequest, ...],
+) -> dict[int, str]:
+    failed_request_ids = {
+        access_request.id
+        for access_request in access_requests
+        if access_request.status == "grant_failed"
+    }
+    if not failed_request_ids:
+        return {}
+    latest_events: dict[int, AuditLog] = {}
+    events = AuditLog.objects.filter(
+        event_type="grant_apply_failed",
+        target_type="access_request",
+        target_id__in=[str(request_id) for request_id in failed_request_ids],
+    ).order_by("-created_at", "-id")
+    for event in events:
+        request_id = int(event.target_id)
+        if request_id not in latest_events:
+            latest_events[request_id] = event
+    reasons: dict[int, str] = {}
+    for request_id in failed_request_ids:
+        event = latest_events.get(request_id)
+        error = event.metadata.get("error") if event is not None else None
+        if not isinstance(error, str) or error.strip() == "":
+            raise AccessRequestFailureReasonContractError(request_id)
+        reasons[request_id] = error
+    return reasons
 
 
 def _access_grant_page_response(page: Page[AccessGrant]) -> JsonResponse:

@@ -4,12 +4,13 @@ import {
   getPaginationRowModel,
   useReactTable,
   type ColumnDef,
+  type PaginationState,
 } from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, RefreshCcw } from "lucide-react";
-import { Fragment, useEffect, useState } from "react";
-import type { FormEvent } from "react";
-import { useParams } from "react-router-dom";
+import { Fragment, useCallback, useState } from "react";
+import type { FormEvent, ReactNode } from "react";
+import { useParams, useSearchParams } from "react-router-dom";
 import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../components/ui/TablePrimitives";
 import { TableActionCell, TableRowActionButton } from "../../components/ui/TableActions";
 import { TablePagination } from "../../components/ui/TablePagination";
@@ -22,14 +23,14 @@ import type { ApprovalDecisionMode } from "../../components/ApprovalDecisionDial
 import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
 import { Dialog } from "../../components/Dialog";
-import { Field } from "../../components/Field";
+import { Field, SelectInput, TextArea, TextInput } from "../../components/Field";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
 import { useToast } from "../../components/ui/Toast";
 import { UserMultiSelect } from "../../components/UserSelect";
 import { ApiError, apiRequest, itemsFromPayload } from "../../lib/api";
 import type { JsonObject, ListPayload } from "../../lib/api";
-import type { OperationRow } from "../../lib/domain";
+import type { OperationRow as DomainOperationRow } from "../../lib/domain";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { MessageKey } from "../../i18n/messages";
 import { accessRequestStatusLabel, badgeToneForAccessRequestStatus, formatDateTime, grantStatusLabel, grantTypeLabel, healthStatusLabel } from "../../lib/status";
@@ -44,36 +45,61 @@ const ENDPOINTS: Record<string, { titleKey: MessageKey; endpoint: string }> = {
 
 const DEFAULT_PAGE_SIZE = 20;
 
-type AccessRequestActionType = ApprovalDecisionMode | "reassign";
+type OperationRow = DomainOperationRow & {
+  version?: number;
+  is_current?: boolean;
+  failure_reason?: string;
+};
+
+type AccessRequestActionType = ApprovalDecisionMode | "reassign" | "retry-grant";
 
 interface AccessRequestAction {
   type: AccessRequestActionType;
   row: OperationRow;
 }
 
+const ACCESS_REQUEST_STATUSES = ["submitted", "approved", "rejected", "grant_applied", "grant_failed"] as const;
+const ACCESS_GRANT_STATUSES = ["active", "revoked", "expired"] as const;
+
 export function OperationsPage() {
   const { t } = useI18n();
   const toast = useToast();
   const queryClient = useQueryClient();
   const { section = "access-requests" } = useParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const config = ENDPOINTS[section] ?? ENDPOINTS["access-requests"];
   // 依赖健康返回非分页的 list_payload; 其余分区走后端分页, 需按分区区分表格模式。
   const isPaginated = section !== "dependency-health";
-  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE });
+  const pagination = paginationFromSearchParams(searchParams);
   const [pendingAction, setPendingAction] = useState<AccessRequestAction | null>(null);
+  const [pendingEmergencyRevoke, setPendingEmergencyRevoke] = useState<OperationRow | null>(null);
+  const queryString = isPaginated ? operationQueryString(section, searchParams, pagination) : "";
 
-  // 切换分区时回到第一页, 避免带着上个分区的页码请求。
-  useEffect(() => {
-    setPagination((current) => (current.pageIndex === 0 ? current : { ...current, pageIndex: 0 }));
-  }, [section]);
+  const updateSearchParam = (key: string, value: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (value === "") {
+      next.delete(key);
+    } else {
+      next.set(key, value);
+    }
+    next.set("page", "1");
+    setSearchParams(next);
+  };
+  const updatePagination = (updater: PaginationState | ((current: PaginationState) => PaginationState)) => {
+    const nextPagination = typeof updater === "function" ? updater(pagination) : updater;
+    const next = new URLSearchParams(searchParams);
+    next.set("page", String(nextPagination.pageIndex + 1));
+    next.set("page_size", String(nextPagination.pageSize));
+    setSearchParams(next);
+  };
 
   const query = useQuery({
     queryKey: isPaginated
-      ? ["console", "operations", section, pagination.pageIndex, pagination.pageSize]
+      ? ["console", "operations", section, queryString]
       : ["console", "operations", section],
     queryFn: () =>
       apiRequest<ListPayload<OperationRow>>(
-        isPaginated ? `${config.endpoint}?page=${pagination.pageIndex + 1}&page_size=${pagination.pageSize}` : config.endpoint,
+        isPaginated ? `${config.endpoint}?${queryString}` : config.endpoint,
       ),
   });
   const healthCheckMutation = useMutation({
@@ -126,10 +152,43 @@ export function OperationsPage() {
     },
     onError: handleAccessRequestActionError,
   });
+  const retryGrantMutation = useMutation({
+    mutationFn: ({ row, reason }: { row: OperationRow; reason: string }) =>
+      apiRequest(`/console/api/v1/operations/access-requests/${row.id}/retry-grant`, {
+        method: "POST",
+        body: { reason } satisfies JsonObject,
+      }),
+    onSuccess: () => {
+      setPendingAction(null);
+      toast.success(t("console.operations.retryGrantSuccess"));
+      void invalidateAccessRequests();
+    },
+  });
+  const emergencyRevokeMutation = useMutation({
+    mutationFn: ({ row, reason }: { row: OperationRow; reason: string }) =>
+      apiRequest("/console/api/v1/operations/emergency-revokes", {
+        method: "POST",
+        body: {
+          user_id: requiredString(row.user_id),
+          app_key: requiredString(row.app_key),
+          reason,
+        } satisfies JsonObject,
+      }),
+    onSuccess: () => {
+      setPendingEmergencyRevoke(null);
+      toast.success(t("console.operations.emergencyRevokeSuccess"));
+      void queryClient.invalidateQueries({ queryKey: ["console", "operations", "access-grants"] });
+    },
+  });
   const openAccessRequestAction = (type: AccessRequestActionType, row: OperationRow) => {
     decisionMutation.reset();
     reassignMutation.reset();
+    retryGrantMutation.reset();
     setPendingAction({ type, row });
+  };
+  const openEmergencyRevoke = (row: OperationRow) => {
+    emergencyRevokeMutation.reset();
+    setPendingEmergencyRevoke(row);
   };
 
   const rows = itemsFromPayload<OperationRow>(query.data);
@@ -137,7 +196,13 @@ export function OperationsPage() {
     section,
     t,
     section === "access-requests"
-      ? { disabled: decisionMutation.isPending || reassignMutation.isPending, onAction: openAccessRequestAction }
+      ? {
+          disabled: decisionMutation.isPending || reassignMutation.isPending || retryGrantMutation.isPending,
+          onAction: openAccessRequestAction,
+        }
+      : undefined,
+    section === "access-grants"
+      ? { disabled: emergencyRevokeMutation.isPending, onEmergencyRevoke: openEmergencyRevoke }
       : undefined,
   );
   const table = useReactTable({
@@ -149,7 +214,7 @@ export function OperationsPage() {
           manualPagination: true as const,
           pageCount: query.data?.pagination?.total_pages ?? 1,
           state: { pagination },
-          onPaginationChange: setPagination,
+          onPaginationChange: updatePagination,
         }
       : {
           getPaginationRowModel: getPaginationRowModel(),
@@ -180,6 +245,13 @@ export function OperationsPage() {
           </>
         }
       />
+      {isPaginated ? (
+        <OperationFilters
+          section={section}
+          searchParams={searchParams}
+          onChange={updateSearchParam}
+        />
+      ) : null}
       {query.error && rows.length > 0 ? (
         <StatusBanner tone="signal" title={t("console.operations.loadFailed")} message={(query.error as Error).message} />
       ) : null}
@@ -230,10 +302,10 @@ export function OperationsPage() {
               )}
             </TableBody>
           </TableRoot>
-          <TablePagination table={table} />
+          <TablePagination table={table} totalItems={query.data?.pagination?.total_items ?? rows.length} />
         </TableFrame>
       )}
-      {pendingAction && pendingAction.type !== "reassign" ? (
+      {pendingAction && (pendingAction.type === "approve" || pendingAction.type === "reject") ? (
         <ApprovalDecisionDialog
           mode={pendingAction.type}
           description={t("console.accessRequests.target", {
@@ -259,6 +331,36 @@ export function OperationsPage() {
           onSubmit={(approverUserIds) => reassignMutation.mutate({ row: pendingAction.row, approverUserIds })}
         />
       ) : null}
+      {pendingAction?.type === "retry-grant" ? (
+        <ReasonActionDialog
+          title={t("console.operations.retryGrant")}
+          description={t("console.operations.retryGrantDescription", {
+            user: stringValue(pendingAction.row.user_id),
+            app: stringValue(pendingAction.row.app_key),
+          })}
+          confirmLabel={t("console.operations.retryGrant")}
+          errorTitle={t("console.operations.retryGrantFailed")}
+          errorMessage={dialogErrorMessage(retryGrantMutation.error)}
+          isSubmitting={retryGrantMutation.isPending}
+          onClose={() => setPendingAction(null)}
+          onSubmit={(reason) => retryGrantMutation.mutate({ row: pendingAction.row, reason })}
+        />
+      ) : null}
+      {pendingEmergencyRevoke ? (
+        <ReasonActionDialog
+          title={t("console.operations.emergencyRevoke")}
+          description={t("console.operations.emergencyRevokeDescription", {
+            user: stringValue(pendingEmergencyRevoke.user_id),
+            app: stringValue(pendingEmergencyRevoke.app_key),
+          })}
+          confirmLabel={t("console.operations.emergencyRevoke")}
+          errorTitle={t("console.operations.emergencyRevokeFailed")}
+          errorMessage={dialogErrorMessage(emergencyRevokeMutation.error)}
+          isSubmitting={emergencyRevokeMutation.isPending}
+          onClose={() => setPendingEmergencyRevoke(null)}
+          onSubmit={(reason) => emergencyRevokeMutation.mutate({ row: pendingEmergencyRevoke, reason })}
+        />
+      ) : null}
     </>
   );
 }
@@ -269,6 +371,160 @@ function dialogErrorMessage(error: Error | null): string {
     return "";
   }
   return error.message;
+}
+
+function OperationFilters({
+  section,
+  searchParams,
+  onChange,
+}: {
+  section: string;
+  searchParams: URLSearchParams;
+  onChange: (key: string, value: string) => void;
+}) {
+  const { t } = useI18n();
+  const userFilterKey = section === "audit" ? "actor_id" : "user_id";
+  const statuses = section === "access-requests" ? ACCESS_REQUEST_STATUSES : section === "access-grants" ? ACCESS_GRANT_STATUSES : [];
+
+  return (
+    <div className="mb-4 grid gap-2 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+      <TextInput
+        aria-label="app_key"
+        placeholder="app_key"
+        autoComplete="off"
+        value={searchParams.get("app_key") ?? ""}
+        onChange={(event) => onChange("app_key", event.currentTarget.value)}
+      />
+      <TextInput
+        aria-label={userFilterKey}
+        placeholder={userFilterKey}
+        autoComplete="off"
+        value={searchParams.get(userFilterKey) ?? ""}
+        onChange={(event) => onChange(userFilterKey, event.currentTarget.value)}
+      />
+      {statuses.length > 0 ? (
+        <SelectInput
+          aria-label="status"
+          value={searchParams.get("status") ?? ""}
+          onChange={(event) => onChange("status", event.currentTarget.value)}
+        >
+          <option value="">{t("approvalInstances.filter.allStatuses")}</option>
+          {statuses.map((status) => (
+            <option key={status} value={status}>
+              {section === "access-requests" ? accessRequestStatusLabel(t, status) : grantStatusLabel(t, status)}
+            </option>
+          ))}
+        </SelectInput>
+      ) : null}
+      <TextInput
+        type="datetime-local"
+        aria-label="created_from"
+        value={searchParams.get("created_from") ?? ""}
+        onChange={(event) => onChange("created_from", event.currentTarget.value)}
+      />
+      <TextInput
+        type="datetime-local"
+        aria-label="created_to"
+        value={searchParams.get("created_to") ?? ""}
+        onChange={(event) => onChange("created_to", event.currentTarget.value)}
+      />
+      {section === "access-grants" ? (
+        <>
+          <TextInput
+            type="number"
+            min={1}
+            aria-label="version"
+            placeholder="version"
+            value={searchParams.get("version") ?? ""}
+            onChange={(event) => onChange("version", event.currentTarget.value)}
+          />
+          <SelectInput
+            aria-label="current"
+            value={searchParams.get("current") ?? ""}
+            onChange={(event) => onChange("current", event.currentTarget.value)}
+          >
+            <option value="">{t("console.operations.filter.allCurrentStates")}</option>
+            <option value="true">{t("console.operations.filter.currentOnly")}</option>
+            <option value="false">{t("console.operations.filter.historyOnly")}</option>
+          </SelectInput>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function ReasonActionDialog({
+  title,
+  description,
+  confirmLabel,
+  errorTitle,
+  errorMessage,
+  isSubmitting,
+  onClose,
+  onSubmit,
+}: {
+  title: string;
+  description: ReactNode;
+  confirmLabel: string;
+  errorTitle: string;
+  errorMessage: string;
+  isSubmitting: boolean;
+  onClose: () => void;
+  onSubmit: (reason: string) => void;
+}) {
+  const { t } = useI18n();
+  const [reason, setReason] = useState("");
+  const [fieldError, setFieldError] = useState("");
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const normalizedReason = reason.trim();
+    if (normalizedReason === "") {
+      setFieldError(t("console.operations.reasonRequired"));
+      return;
+    }
+    onSubmit(normalizedReason);
+  };
+  const close = useCallback(() => {
+    if (!isSubmitting) {
+      onClose();
+    }
+  }, [isSubmitting, onClose]);
+
+  return (
+    <Dialog
+      title={title}
+      onClose={close}
+      footer={
+        <>
+          <Button type="button" onClick={close} disabled={isSubmitting}>
+            {t("common.cancel")}
+          </Button>
+          <Button form="operation-reason-form" type="submit" variant="primary" loading={isSubmitting} disabled={isSubmitting}>
+            {confirmLabel}
+          </Button>
+        </>
+      }
+    >
+      <form id="operation-reason-form" className="grid gap-4" onSubmit={submit}>
+        <p className="text-body leading-5 text-ink-soft">{description}</p>
+        <Field label={t("portal.column.reason")} error={fieldError}>
+          <TextArea
+            value={reason}
+            maxLength={1000}
+            disabled={isSubmitting}
+            onChange={(event) => {
+              setReason(event.currentTarget.value);
+              if (fieldError && event.currentTarget.value.trim() !== "") {
+                setFieldError("");
+              }
+            }}
+          />
+        </Field>
+        {errorMessage ? <StatusBanner tone="signal" title={errorTitle} message={errorMessage} /> : null}
+      </form>
+    </Dialog>
+  );
 }
 
 function ReassignApproversDialog({
@@ -337,7 +593,17 @@ interface AccessRequestColumnActions {
   onAction: (type: AccessRequestActionType, row: OperationRow) => void;
 }
 
-function operationColumns(section: string, t: Translator, accessRequestActions?: AccessRequestColumnActions): ColumnDef<OperationRow>[] {
+interface AccessGrantColumnActions {
+  disabled: boolean;
+  onEmergencyRevoke: (row: OperationRow) => void;
+}
+
+function operationColumns(
+  section: string,
+  t: Translator,
+  accessRequestActions?: AccessRequestColumnActions,
+  accessGrantActions?: AccessGrantColumnActions,
+): ColumnDef<OperationRow>[] {
   if (section === "dependency-health") {
     return [
       { header: t("console.operations.column.component"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.component)}</code> },
@@ -358,13 +624,44 @@ function operationColumns(section: string, t: Translator, accessRequestActions?:
     ];
   }
   if (section === "access-grants") {
-    return [
+    const accessGrantColumns: ColumnDef<OperationRow>[] = [
       { header: t("common.user"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.user_id)}</code> },
       { header: t("common.app"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.app_key)}</code> },
       { header: t("common.status"), cell: ({ row }) => <Badge tone={row.original.status === "active" ? "evergreen" : "neutral"}>{grantStatusLabel(t, stringValue(row.original.status))}</Badge> },
       { header: t("common.type"), cell: ({ row }) => grantTypeLabel(t, stringValue(row.original.grant_type)) },
+      {
+        header: t("console.operations.column.version"),
+        cell: ({ row }) => <code className={MONO_TEXT_CLASS}>v{numberValue(row.original.version)}</code>,
+      },
+      {
+        header: t("console.operations.column.isCurrent"),
+        cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{booleanValue(row.original.is_current)}</code>,
+      },
       { header: t("console.operations.column.expiresAt"), cell: ({ row }) => formatDateTime(stringValue(row.original.grant_expires_at)) },
     ];
+    if (accessGrantActions) {
+      accessGrantColumns.push({
+        id: "actions",
+        header: t("common.actions"),
+        cell: ({ row }) => (
+          <TableActionCell>
+            {row.original.status === "active" && row.original.is_current === true ? (
+              <TableRowActionButton
+                type="button"
+                variant="ghost-danger"
+                disabled={accessGrantActions.disabled}
+                onClick={() => accessGrantActions.onEmergencyRevoke(row.original)}
+              >
+                {t("console.operations.emergencyRevoke")}
+              </TableRowActionButton>
+            ) : (
+              <span className="text-caption text-ink-faint">{t("common.none")}</span>
+            )}
+          </TableActionCell>
+        ),
+      });
+    }
+    return accessGrantColumns;
   }
   const accessRequestColumns: ColumnDef<OperationRow>[] = [
     { header: "ID", cell: ({ row }) => row.original.id ?? "-" },
@@ -372,6 +669,7 @@ function operationColumns(section: string, t: Translator, accessRequestActions?:
     { header: t("common.app"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.app_key)}</code> },
     { header: t("common.status"), cell: ({ row }) => <Badge tone={badgeToneForAccessRequestStatus(stringValue(row.original.status))}>{accessRequestStatusLabel(t, stringValue(row.original.status))}</Badge> },
     { header: t("common.type"), cell: ({ row }) => stringValue(row.original.request_type) },
+    { header: t("console.operations.column.failureReason"), cell: ({ row }) => stringValue(row.original.failure_reason) },
     { header: t("console.operations.column.submittedAt"), cell: ({ row }) => formatDateTime(stringValue(row.original.submitted_at)) },
   ];
   if (accessRequestActions) {
@@ -379,7 +677,7 @@ function operationColumns(section: string, t: Translator, accessRequestActions?:
       id: "actions",
       header: t("common.actions"),
       cell: ({ row }) =>
-        // 仅待处理(submitted)的申请可操作; 其余状态只读展示。
+        // 待处理申请走审批动作; 授权失败申请走显式重试, 其余状态只读。
         row.original.status === "submitted" ? (
           <TableActionCell>
             <TableRowActionButton
@@ -405,6 +703,16 @@ function operationColumns(section: string, t: Translator, accessRequestActions?:
               {t("console.accessRequests.reassign")}
             </TableRowActionButton>
           </TableActionCell>
+        ) : row.original.status === "grant_failed" ? (
+          <TableActionCell>
+            <TableRowActionButton
+              type="button"
+              disabled={accessRequestActions.disabled}
+              onClick={() => accessRequestActions.onAction("retry-grant", row.original)}
+            >
+              {t("console.operations.retryGrant")}
+            </TableRowActionButton>
+          </TableActionCell>
         ) : (
           <TableActionCell>
             <span className="text-caption text-ink-faint">{t("common.none")}</span>
@@ -417,6 +725,59 @@ function operationColumns(section: string, t: Translator, accessRequestActions?:
 
 function stringValue(value: unknown): string {
   return typeof value === "string" && value !== "" ? value : "-";
+}
+
+function requiredString(value: unknown): string {
+  if (typeof value !== "string" || value === "") {
+    throw new Error("Operation row is missing a required string field.");
+  }
+  return value;
+}
+
+function numberValue(value: unknown): string {
+  return typeof value === "number" && Number.isInteger(value) ? String(value) : "-";
+}
+
+function booleanValue(value: unknown): string {
+  return typeof value === "boolean" ? String(value) : "-";
+}
+
+function paginationFromSearchParams(searchParams: URLSearchParams): PaginationState {
+  return {
+    pageIndex: positiveInteger(searchParams.get("page"), 1) - 1,
+    pageSize: positiveInteger(searchParams.get("page_size"), DEFAULT_PAGE_SIZE),
+  };
+}
+
+function positiveInteger(value: string | null, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function operationQueryString(
+  section: string,
+  searchParams: URLSearchParams,
+  pagination: PaginationState,
+): string {
+  const query = new URLSearchParams({
+    page: String(pagination.pageIndex + 1),
+    page_size: String(pagination.pageSize),
+  });
+  const filterKeys =
+    section === "access-requests"
+      ? ["app_key", "user_id", "status", "created_from", "created_to"]
+      : section === "access-grants"
+        ? ["app_key", "user_id", "status", "created_from", "created_to", "version", "current"]
+        : section === "audit"
+          ? ["app_key", "actor_id", "created_from", "created_to"]
+          : [];
+  for (const key of filterKeys) {
+    const value = searchParams.get(key);
+    if (value) {
+      query.set(key, value);
+    }
+  }
+  return query.toString();
 }
 
 function auditPair(type: string | undefined, id: string | undefined): string {

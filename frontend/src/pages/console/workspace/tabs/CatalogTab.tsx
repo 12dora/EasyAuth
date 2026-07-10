@@ -299,7 +299,7 @@ export function CatalogTab({ appKey }: { appKey: string }) {
               )}
             </TableBody>
           </TableRoot>
-          <TablePagination table={groupTable} />
+          <TablePagination table={groupTable} totalItems={groupRows.length} />
           </TableFrame>
         </section>
         <section className="space-y-3">
@@ -348,7 +348,7 @@ export function CatalogTab({ appKey }: { appKey: string }) {
               )}
             </TableBody>
           </TableRoot>
-          <TablePagination table={scopeTable} />
+          <TablePagination table={scopeTable} totalItems={scopes.length} />
           </TableFrame>
         </section>
       </div>
@@ -399,7 +399,7 @@ export function CatalogTab({ appKey }: { appKey: string }) {
               )}
             </TableBody>
           </TableRoot>
-          <TablePagination table={permissionTable} />
+          <TablePagination table={permissionTable} totalItems={permissions.length} />
         </TableFrame>
       </section>
 

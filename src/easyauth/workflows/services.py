@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Literal, override
+from typing import TYPE_CHECKING, Final, Literal, cast, override
 
 from django.db import IntegrityError, transaction
 from django.utils import timezone
@@ -42,6 +42,7 @@ TEMPLATE_NOT_FOUND_MESSAGE: Final = "审批模板不存在或未启用。"
 ORIGINATOR_INVALID_MESSAGE: Final = "发起人不存在、已停用或缺少钉钉绑定。"
 INSTANCE_STATUS_CONFLICT_MESSAGE: Final = "回调状态与审批实例状态不匹配。"
 INSTANCE_NOT_FOUND_MESSAGE: Final = "审批实例不存在。"
+FORM_MAPPING_INVALID_MESSAGE: Final = "审批模板 form_mapping 必须是字符串到字符串的映射。"
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,9 +78,14 @@ def create_approval_instance(  # noqa: PLR0913 - 发起审批的完整业务事�
     form: dict[str, str],
     biz_key: str,
     actor_id: str,
+    selected_template: ApprovalTemplate | None = None,
 ) -> tuple[ApprovalInstance, bool]:
     """发起一笔钉钉审批; 同 biz_key 幂等返回既有实例。返回 (instance, created)。"""
-    template = _active_template(app, template_key)
+    template = (
+        _active_template(app, template_key)
+        if selected_template is None
+        else _selected_active_template(app, template_key, selected_template)
+    )
     originator = _valid_originator(originator_user_id)
     form_components = _mapped_form_components(template, form)
 
@@ -217,6 +223,20 @@ def _active_template(app: App, template_key: str) -> ApprovalTemplate:
     return template
 
 
+def _selected_active_template(
+    app: App,
+    template_key: str,
+    template: ApprovalTemplate,
+) -> ApprovalTemplate:
+    if (
+        not template.is_active
+        or template.key != template_key
+        or (template.app_id is not None and template.app_id != app.id)
+    ):
+        raise ApprovalCreateError(kind="template_not_found", message=TEMPLATE_NOT_FOUND_MESSAGE)
+    return template
+
+
 def _valid_originator(originator_user_id: str) -> UserMirror:
     originator = UserMirror.objects.filter(
         authentik_user_id=originator_user_id,
@@ -232,12 +252,25 @@ def _mapped_form_components(
     template: ApprovalTemplate,
     form: dict[str, str],
 ) -> tuple[DingTalkFormComponent, ...]:
+    mapping = _string_mapping(template.form_mapping)
     components: list[DingTalkFormComponent] = []
     for field_name, value in form.items():
-        mapped = template.form_mapping.get(field_name)
-        component_name = mapped if isinstance(mapped, str) and mapped else field_name
+        mapped = mapping.get(field_name)
+        component_name = mapped if mapped else field_name
         components.append(DingTalkFormComponent(name=component_name, value=value))
     return tuple(components)
+
+
+def _string_mapping(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise ApprovalCreateError(kind="validation_error", message=FORM_MAPPING_INVALID_MESSAGE)
+    untyped_mapping = cast("dict[object, object]", value)
+    if any(
+        not isinstance(field_name, str) or not isinstance(component_name, str)
+        for field_name, component_name in untyped_mapping.items()
+    ):
+        raise ApprovalCreateError(kind="validation_error", message=FORM_MAPPING_INVALID_MESSAGE)
+    return cast("dict[str, str]", untyped_mapping)
 
 
 def _record_instance_event(

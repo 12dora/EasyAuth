@@ -42,7 +42,7 @@ class ApprovalTemplatePayload(BaseModel):
     name: str = Field(min_length=1, max_length=128)
     dingtalk_process_code: str = Field(min_length=1, max_length=128)
     form_schema: dict[str, object] = Field(default_factory=dict)
-    form_mapping: dict[str, object] = Field(default_factory=dict)
+    form_mapping: dict[str, str] = Field(default_factory=dict)
     is_active: bool = True
 
 
@@ -56,7 +56,7 @@ class ApprovalTemplatePatchPayload(BaseModel):
     name: str | None = Field(default=None, min_length=1, max_length=128)
     dingtalk_process_code: str | None = Field(default=None, min_length=1, max_length=128)
     form_schema: dict[str, object] | None = None
-    form_mapping: dict[str, object] | None = None
+    form_mapping: dict[str, str] | None = None
     is_active: bool | None = None
 
 
@@ -142,6 +142,7 @@ def _run_template_test(
             form=dict(payload.form),
             biz_key=f"console-test-{actor_id}-{template.id}-{uuid.uuid4().hex[:8]}",
             actor_id=f"console:{actor_id}",
+            selected_template=template,
         )
     except ApprovalCreateError as exc:
         return _validation_error(str(exc))

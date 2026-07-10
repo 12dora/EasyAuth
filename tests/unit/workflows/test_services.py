@@ -242,3 +242,73 @@ def test_platform_template_is_shared_across_apps(monkeypatch: pytest.MonkeyPatch
     assert created is True
     assert instance.template.app is None
     assert instance.app.app_key == "wf-platform-app"
+
+
+def test_selected_platform_template_is_not_replaced_by_app_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: 同 key 同时存在平台模板和 APP 专属模板。
+    app = App.objects.create(app_key="wf-selected-platform", name="Selected Platform")
+    platform_template = ApprovalTemplate.objects.create(
+        app=None,
+        key="same-key",
+        name="平台模板",
+        dingtalk_process_code="PROC-PLATFORM",
+    )
+    _ = ApprovalTemplate.objects.create(
+        app=app,
+        key="same-key",
+        name="APP 模板",
+        dingtalk_process_code="PROC-APP",
+    )
+    _ = _originator("wf-selected-platform-user")
+    fake = _FakeDingTalkClient()
+    monkeypatch.setattr(
+        "easyauth.workflows.services.DingTalkApiClient.from_settings",
+        lambda: fake,
+    )
+
+    # When: 控制台明确指定平台模板发起测试。
+    instance, created = create_approval_instance(
+        app=app,
+        template_key=platform_template.key,
+        originator_user_id="wf-selected-platform-user",
+        form={},
+        biz_key="selected-platform",
+        actor_id="console:test-admin",
+        selected_template=platform_template,
+    )
+
+    # Then: 使用精确指定的平台模板, 不按 key 重新解析为 APP 模板。
+    assert created is True
+    assert instance.template_id == platform_template.id
+    assert fake.created[0]["process_code"] == "PROC-PLATFORM"
+
+
+def test_create_approval_instance_rejects_non_string_form_mapping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: 数据库中存在旧的非法映射值。
+    app, template = _app_with_template("wf-invalid-mapping")
+    template.form_mapping = {"amount": 1}
+    template.save(update_fields=["form_mapping", "updated_at"])
+    _ = _originator("wf-invalid-mapping-user")
+    fake = _FakeDingTalkClient()
+    monkeypatch.setattr(
+        "easyauth.workflows.services.DingTalkApiClient.from_settings",
+        lambda: fake,
+    )
+
+    # When / Then: 运行时快速失败, 不静默退回原字段名。
+    with pytest.raises(ApprovalCreateError) as exc_info:
+        _ = create_approval_instance(
+            app=app,
+            template_key=template.key,
+            originator_user_id="wf-invalid-mapping-user",
+            form={"amount": "100"},
+            biz_key="invalid-mapping",
+            actor_id=app.app_key,
+        )
+    assert exc_info.value.kind == "validation_error"
+    assert fake.created == []
+    assert ApprovalInstance.objects.filter(app=app).count() == 0

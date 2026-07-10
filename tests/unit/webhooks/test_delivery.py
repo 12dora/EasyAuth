@@ -13,6 +13,7 @@ from easyauth.webhooks import delivery as delivery_module
 from easyauth.webhooks.delivery import (
     WebhookDeliveryAttemptError,
     WebhookNotConfiguredError,
+    WebhookRedeliveryConflictError,
     attempt_delivery,
     enqueue_delivery,
     mark_delivery_exhausted,
@@ -158,6 +159,33 @@ def test_redeliver_resets_counters() -> None:
     assert result.status == "pending"
     assert result.attempts == 0
     assert result.last_error == ""
+
+
+def test_redeliver_atomically_rejects_a_second_request() -> None:
+    # Given: 两个请求都读到了同一条 failed 投递。
+    app = _configured_app("wh-redeliver-race-app")
+    delivery = WebhookDelivery.objects.create(
+        app=app,
+        delivery_id="d-redeliver-race-1",
+        event_type="webhook.test",
+        target_url="https://app.example.com/hook",
+        payload={},
+        status="failed",
+        attempts=5,
+        last_error="HTTP 500",
+    )
+    stale_delivery = WebhookDelivery.objects.get(id=delivery.id)
+
+    # When: 第一个请求推进成功, 第二个请求仍携带旧的 failed 对象重投。
+    _ = redeliver(delivery)
+    with pytest.raises(WebhookRedeliveryConflictError):
+        _ = redeliver(stale_delivery)
+
+    # Then: 数据库只保留第一次推进后的状态。
+    stale_delivery.refresh_from_db()
+    assert stale_delivery.status == "pending"
+    assert stale_delivery.attempts == 0
+    assert stale_delivery.last_error == ""
 
 
 def test_attempt_delivery_is_idempotent_for_delivered_rows() -> None:

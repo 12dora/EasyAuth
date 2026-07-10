@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { OperationsPage } from "./OperationsPage";
@@ -116,9 +116,154 @@ describe("OperationsPage", () => {
       expect(screen.getByText("user-b")).toBeInTheDocument();
     });
   });
+
+  test("筛选由 URL 承载并传给运营 API(FF-21)", async () => {
+    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.startsWith("/console/api/v1/operations/access-requests?")) {
+        return jsonResponse({ data: [], pagination: { page: 1, page_size: 20, total_items: 0, total_pages: 1 } });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderOperationsPage(
+      "access-requests",
+      "?app_key=crm&user_id=user-a&status=grant_failed&created_from=2026-07-01T08%3A30&created_to=2026-07-10T18%3A00",
+    );
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/console/api/v1/operations/access-requests?page=1&page_size=20&app_key=crm&user_id=user-a&status=grant_failed&created_from=2026-07-01T08%3A30&created_to=2026-07-10T18%3A00",
+        expect.objectContaining({ credentials: "include" }),
+      );
+    });
+    expect(screen.getByLabelText("status")).toHaveValue("grant_failed");
+
+    await user.clear(screen.getByLabelText("app_key"));
+    await user.type(screen.getByLabelText("app_key"), "erp");
+
+    await waitFor(() => {
+      expect(screen.getByTestId("location-search")).toHaveTextContent("app_key=erp");
+      expect(screen.getByTestId("location-search")).toHaveTextContent("page=1");
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        expect.stringContaining("app_key=erp"),
+        expect.objectContaining({ credentials: "include" }),
+      );
+    });
+  });
+
+  test("展示失败原因并通过带原因确认框重试授权(FF-21)", async () => {
+    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/operations/access-requests?page=1&page_size=20") {
+        return jsonResponse({
+          data: [{
+            id: 88,
+            user_id: "failed-user",
+            app_key: "crm",
+            status: "grant_failed",
+            request_type: "grant",
+            failure_reason: "目录写入失败",
+            submitted_at: "2026-07-02T00:00:00Z",
+          }],
+          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+        });
+      }
+      if (url === "/console/api/v1/operations/access-requests/88/retry-grant" && init?.method === "POST") {
+        return jsonResponse({ request_id: 88, grant_id: 9, version: 1, status: "grant_applied" });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderOperationsPage();
+
+    expect(await screen.findByText("目录写入失败")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "重试授权" }));
+    const dialog = screen.getByRole("dialog", { name: "重试授权" });
+    await user.click(within(dialog).getByRole("button", { name: "重试授权" }));
+    expect(within(dialog).getByText("请填写操作原因")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      "/console/api/v1/operations/access-requests/88/retry-grant",
+      expect.anything(),
+    );
+
+    await user.type(within(dialog).getByRole("textbox", { name: "原因" }), "修复目录后重试");
+    await user.click(within(dialog).getByRole("button", { name: "重试授权" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/console/api/v1/operations/access-requests/88/retry-grant",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ reason: "修复目录后重试" }),
+        }),
+      );
+    });
+  });
+
+  test("授权列表展示版本状态并通过带原因确认框紧急撤权(FF-21)", async () => {
+    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith("/console/api/v1/operations/access-grants?")) {
+        return jsonResponse({
+          data: [{
+            id: 7,
+            user_id: "risk-user",
+            app_key: "crm",
+            status: "active",
+            grant_type: "permanent",
+            version: 3,
+            is_current: true,
+            grant_expires_at: null,
+          }],
+          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+        });
+      }
+      if (url === "/console/api/v1/operations/emergency-revokes" && init?.method === "POST") {
+        return jsonResponse({ status: "accepted", revoked_count: 1, user_id: "risk-user", app_key: "crm" });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderOperationsPage("access-grants", "?version=3&current=true");
+
+    expect(await screen.findByText("v3")).toBeInTheDocument();
+    expect(screen.getByRole("columnheader", { name: "当前版本" })).toBeInTheDocument();
+    expect(screen.getByText("true")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/console/api/v1/operations/access-grants?page=1&page_size=20&version=3&current=true",
+        expect.objectContaining({ credentials: "include" }),
+      );
+    });
+
+    await user.click(screen.getByRole("button", { name: "紧急撤权" }));
+    const dialog = screen.getByRole("dialog", { name: "紧急撤权" });
+    await user.type(within(dialog).getByRole("textbox", { name: "原因" }), "发现账号泄露");
+    await user.click(within(dialog).getByRole("button", { name: "紧急撤权" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/console/api/v1/operations/emergency-revokes",
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ user_id: "risk-user", app_key: "crm", reason: "发现账号泄露" }),
+        }),
+      );
+    });
+  });
 });
 
-function renderOperationsPage(section = "access-requests") {
+function renderOperationsPage(section = "access-requests", search = "") {
   const client = new QueryClient({
     defaultOptions: {
       queries: { retry: false },
@@ -127,13 +272,19 @@ function renderOperationsPage(section = "access-requests") {
 
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[`/console/operations/${section}`]}>
+      <MemoryRouter initialEntries={[`/console/operations/${section}${search}`]}>
+        <LocationSearch />
         <Routes>
           <Route path="/console/operations/:section" element={<OperationsPage />} />
         </Routes>
       </MemoryRouter>
     </QueryClientProvider>,
   );
+}
+
+function LocationSearch() {
+  const location = useLocation();
+  return <span data-testid="location-search">{location.search}</span>;
 }
 
 function jsonResponse(payload: unknown, status = 200) {

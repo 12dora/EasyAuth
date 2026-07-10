@@ -6,7 +6,7 @@ import {
 } from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, RefreshCcw } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../components/ui/TablePrimitives";
 import { TableRowActionButton } from "../../components/ui/TableActions";
 import { TablePagination } from "../../components/ui/TablePagination";
@@ -33,6 +33,10 @@ const DEFAULT_PAGE_SIZE = 20;
 
 const APPROVAL_STATUSES = ["created", "submitted", "approved", "rejected", "canceled", "failed"] as const;
 
+interface RedeliverPayload {
+  approval_instance: ApprovalInstanceRow;
+}
+
 export function ApprovalInstancesPage() {
   const { t } = useI18n();
   const toast = useToast();
@@ -41,6 +45,8 @@ export function ApprovalInstancesPage() {
   const [appKeyInput, setAppKeyInput] = useState("");
   const [appKeyFilter, setAppKeyFilter] = useState("");
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE });
+  const [redeliveringInstanceIds, setRedeliveringInstanceIds] = useState<ReadonlySet<string>>(new Set());
+  const redeliveringInstanceIdsRef = useRef(new Set<string>());
 
   // app_key 过滤输入去抖后生效, 避免每次按键都打后端。
   useEffect(() => {
@@ -62,24 +68,44 @@ export function ApprovalInstancesPage() {
   });
   const redeliverMutation = useMutation({
     mutationFn: (row: ApprovalInstanceRow) =>
-      apiRequest(`/console/api/v1/operations/approval-instances/${row.instance_id}/redeliver`, {
+      apiRequest<RedeliverPayload>(`/console/api/v1/operations/approval-instances/${row.instance_id}/redeliver`, {
         method: "POST",
         body: {},
       }),
-    onSuccess: () => {
+    onSuccess: (payload) => {
+      queryClient.setQueriesData<ListPayload<ApprovalInstanceRow>>(
+        { queryKey: INSTANCES_QUERY_PREFIX },
+        (current) =>
+          current?.data
+            ? {
+                ...current,
+                data: current.data.map((row) =>
+                  row.instance_id === payload.approval_instance.instance_id ? payload.approval_instance : row,
+                ),
+              }
+            : current,
+      );
       toast.success(t("approvalInstances.redelivered"));
       void queryClient.invalidateQueries({ queryKey: INSTANCES_QUERY_PREFIX });
     },
     onError: (error: Error) => {
       toast.error(t("approvalInstances.redeliverFailed"), error.message);
     },
+    onSettled: (_data, _error, row) => {
+      redeliveringInstanceIdsRef.current.delete(row.instance_id);
+      setRedeliveringInstanceIds(new Set(redeliveringInstanceIdsRef.current));
+    },
   });
 
   const rows = itemsFromPayload<ApprovalInstanceRow>(query.data);
   const columns = instanceColumns(t, {
-    disabled: redeliverMutation.isPending,
+    isDisabled: (row) => redeliveringInstanceIds.has(row.instance_id),
     onRedeliver: (row) => {
-      redeliverMutation.reset();
+      if (redeliveringInstanceIdsRef.current.has(row.instance_id)) {
+        return;
+      }
+      redeliveringInstanceIdsRef.current.add(row.instance_id);
+      setRedeliveringInstanceIds(new Set(redeliveringInstanceIdsRef.current));
       redeliverMutation.mutate(row);
     },
   });
@@ -174,7 +200,7 @@ export function ApprovalInstancesPage() {
               )}
             </TableBody>
           </TableRoot>
-          <TablePagination table={table} />
+          <TablePagination table={table} totalItems={query.data?.pagination?.total_items ?? rows.length} />
         </TableFrame>
       )}
     </>
@@ -182,7 +208,7 @@ export function ApprovalInstancesPage() {
 }
 
 interface RedeliverActions {
-  disabled: boolean;
+  isDisabled: (row: ApprovalInstanceRow) => boolean;
   onRedeliver: (row: ApprovalInstanceRow) => void;
 }
 
@@ -242,7 +268,7 @@ function DeliveryCell({ t, row, actions }: { t: Translator; row: ApprovalInstanc
           <span title={row.delivery_last_error || undefined}>
             <Badge tone="signal">{t("approvalInstances.delivery.failed")}</Badge>
           </span>
-          <TableRowActionButton type="button" disabled={actions.disabled} onClick={() => actions.onRedeliver(row)}>
+          <TableRowActionButton type="button" disabled={actions.isDisabled(row)} onClick={() => actions.onRedeliver(row)}>
             {t("approvalInstances.redeliver")}
           </TableRowActionButton>
         </span>

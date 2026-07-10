@@ -118,6 +118,44 @@ def test_integration_settings_put_keeps_token_when_omitted() -> None:
     assert row.authentik_base_url == "https://auth.example.com"
 
 
+def test_integration_settings_put_keeps_authentik_when_only_dingtalk_fields_are_sent() -> None:
+    client = _logged_in_superuser("settings-dingtalk-admin")
+    row = IntegrationSettings.load()
+    row.authentik_base_url = "https://auth.example.com"
+    row.authentik_api_token = "existing-token"  # noqa: S105 - 测试用假 token.
+    row.save()
+
+    response = client.put(
+        SETTINGS_API_URL,
+        data={"dingtalk_app_key": "ding-app", "dingtalk_agent_id": "12345"},
+        content_type="application/json",
+    )
+
+    assert response.status_code == HTTPStatus.OK
+    row.refresh_from_db()
+    assert row.authentik_base_url == "https://auth.example.com"
+    assert row.authentik_api_token == "existing-token"  # noqa: S105 - 测试用假 token.
+    assert row.dingtalk_app_key == "ding-app"
+    assert row.dingtalk_agent_id == "12345"
+
+
+def test_integration_settings_put_can_explicitly_clear_authentik_base_url() -> None:
+    client = _logged_in_superuser("settings-clear-base-url-admin")
+    row = IntegrationSettings.load()
+    row.authentik_base_url = "https://auth.example.com"
+    row.save()
+
+    response = client.put(
+        SETTINGS_API_URL,
+        data={"authentik_base_url": ""},
+        content_type="application/json",
+    )
+
+    assert response.status_code == HTTPStatus.OK
+    row.refresh_from_db()
+    assert row.authentik_base_url == ""
+
+
 def test_integration_settings_put_rejects_invalid_url() -> None:
     client = _logged_in_superuser("settings-invalid-admin")
 

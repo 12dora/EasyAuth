@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -41,6 +41,73 @@ describe("CredentialsTab(FF-4)", () => {
       ([input, init]) => String(input) === createUrl && init?.method === "POST",
     );
     expect(postCalls).toHaveLength(1);
+  });
+
+  test("同一凭据的轮换和禁用串行执行，且每个轮换明文都不会被覆盖", async () => {
+    const rotateUrl7 = "/console/api/v1/apps/demo/credentials/static-tokens/7/rotate";
+    const rotateUrl8 = "/console/api/v1/apps/demo/credentials/static-tokens/8/rotate";
+    const disableUrl7 = "/console/api/v1/apps/demo/credentials/static-tokens/7/disable";
+    let resolveRotate7!: (response: Response) => void;
+    let resolveRotate8!: (response: Response) => void;
+    const rotate7Response = new Promise<Response>((resolve) => {
+      resolveRotate7 = resolve;
+    });
+    const rotate8Response = new Promise<Response>((resolve) => {
+      resolveRotate8 = resolve;
+    });
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/demo/credentials" && !init?.method) {
+        return jsonResponse({
+          data: [
+            { id: 7, kind: "static_token", name: "生产凭据", is_active: true },
+            { id: 8, kind: "static_token", name: "备用凭据", is_active: true },
+          ],
+        });
+      }
+      if (url === rotateUrl7 && init?.method === "POST") {
+        return rotate7Response;
+      }
+      if (url === rotateUrl8 && init?.method === "POST") {
+        return rotate8Response;
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWithClient(<CredentialsTab appKey="demo" />);
+
+    const row7 = (await screen.findByText("生产凭据")).closest("tr");
+    expect(row7).not.toBeNull();
+    const rotate7 = within(row7 as HTMLTableRowElement).getByRole("button", { name: "轮换" });
+
+    await user.click(rotate7);
+    expect(fetchMock.mock.calls.filter(([input]) => String(input) === rotateUrl7)).toHaveLength(1);
+    let pendingRow7: HTMLTableRowElement | null = null;
+    await waitFor(() => {
+      pendingRow7 = screen.getByText("生产凭据").closest("tr");
+      expect(pendingRow7).not.toBeNull();
+      expect(within(pendingRow7 as HTMLTableRowElement).getByRole("button", { name: "轮换" })).toBeDisabled();
+      expect(within(pendingRow7 as HTMLTableRowElement).getByRole("button", { name: "禁用" })).toBeDisabled();
+    });
+    await user.click(within(pendingRow7!).getByRole("button", { name: "轮换" }));
+    await user.click(within(pendingRow7!).getByRole("button", { name: "禁用" }));
+    const currentRow8 = screen.getByText("备用凭据").closest("tr");
+    expect(currentRow8).not.toBeNull();
+    await user.click(within(currentRow8 as HTMLTableRowElement).getByRole("button", { name: "轮换" }));
+
+    expect(fetchMock.mock.calls.filter(([input]) => String(input) === rotateUrl7)).toHaveLength(1);
+    expect(fetchMock.mock.calls.filter(([input]) => String(input) === disableUrl7)).toHaveLength(0);
+
+    resolveRotate7(jsonResponse({ one_time_secret: { kind: "static_token", app_token: "token-7-once" } }));
+    expect(await screen.findByText("token-7-once")).toBeVisible();
+    resolveRotate8(jsonResponse({ one_time_secret: { kind: "static_token", app_token: "token-8-once" } }));
+    await waitFor(() => expect(fetchMock.mock.calls.filter(([input]) => String(input) === rotateUrl8)).toHaveLength(1));
+
+    await user.click(screen.getByRole("button", { name: "关闭" }));
+    expect(await screen.findByText("token-8-once")).toBeVisible();
+    expect(screen.queryByText("token-7-once")).not.toBeInTheDocument();
   });
 });
 

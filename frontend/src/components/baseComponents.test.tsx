@@ -278,6 +278,12 @@ describe("UI primitives", () => {
     expect(screen.getByText("item-5")).toBeInTheDocument();
     expect(screen.queryByText("item-6")).not.toBeInTheDocument();
   });
+
+  test("TablePagination 在服务端分页第二页使用总条目数", () => {
+    render(<ManualPaginatedFixture />);
+
+    expect(screen.getByText("第 21-21 条 / 共 21 条")).toBeInTheDocument();
+  });
 });
 
 function PaginatedFixture() {
@@ -313,9 +319,22 @@ function PaginatedFixture() {
           ))}
         </TableBody>
       </TableRoot>
-      <TablePagination table={table} />
+      <TablePagination table={table} totalItems={paginatedData.length} />
     </TableFrame>
   );
+}
+
+function ManualPaginatedFixture() {
+  const table = useReactTable({
+    data: [{ name: "item-21" }],
+    columns: paginatedColumns,
+    getCoreRowModel: getCoreRowModel(),
+    manualPagination: true,
+    pageCount: 2,
+    initialState: { pagination: { pageIndex: 1, pageSize: 20 } },
+  });
+
+  return <TablePagination table={table} totalItems={21} />;
 }
 
 type PaginatedRow = { name: string };

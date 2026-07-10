@@ -38,6 +38,7 @@ DELIVERY_RETRY_DELAYS_SECONDS: Final[tuple[int, ...]] = (60, 300, 1800, 7200, 21
 DELIVERY_TIMEOUT_SECONDS: Final = 10.0
 WEBHOOK_NOT_CONFIGURED_MESSAGE: Final = "该应用未配置可用的 webhook。"
 WEBHOOK_DELIVERY_TASK_NAME: Final = "easyauth.webhooks.deliver"
+WEBHOOK_REDELIVERY_CONFLICT_MESSAGE: Final = "该投递已不处于失败状态, 不能重复重投。"
 
 
 class _ReadableResponse:
@@ -64,6 +65,11 @@ class WebhookDeliveryAttemptError(RuntimeError):
     def __init__(self, message: str, *, attempts: int) -> None:
         super().__init__(message)
         self.attempts = attempts
+
+
+class WebhookRedeliveryConflictError(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__(WEBHOOK_REDELIVERY_CONFLICT_MESSAGE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,12 +157,21 @@ def mark_delivery_exhausted(delivery_id: int) -> None:
 
 
 def redeliver(delivery: WebhookDelivery) -> WebhookDelivery:
-    # 手动重投: 重置状态与计数, 重新走完整重试计划。
-    delivery.status = DELIVERY_STATUS_PENDING
-    delivery.attempts = 0
-    delivery.last_error = ""
-    delivery.save(update_fields=["status", "attempts", "last_error", "updated_at"])
-    _schedule_delivery(delivery.id)
+    # 条件更新是 failed → pending 的原子状态迁移; 同一失败行的并发重投只有一个能成功。
+    with transaction.atomic():
+        updated = WebhookDelivery.objects.filter(
+            id=delivery.id,
+            status=DELIVERY_STATUS_FAILED,
+        ).update(
+            status=DELIVERY_STATUS_PENDING,
+            attempts=0,
+            last_error="",
+            updated_at=timezone.now(),
+        )
+        if updated != 1:
+            raise WebhookRedeliveryConflictError
+        delivery.refresh_from_db()
+        _schedule_delivery(delivery.id)
     return delivery
 
 

@@ -500,13 +500,13 @@ def test_ops1_memberships_api_lists_app_memberships_for_visible_app() -> None:
     # Given: developer 可见 CRM App, App 内存在 owner、developer 和停用成员关系。
     client = _logged_in_user("ops1-memberships-api-developer")
     app = App.objects.create(app_key="ops1-api-membership-crm", name="CRM")
-    _ = AppMembership.objects.create(app=app, user_id="ops1-membership-owner", role="owner")
-    _ = AppMembership.objects.create(
+    owner = AppMembership.objects.create(app=app, user_id="ops1-membership-owner", role="owner")
+    developer = AppMembership.objects.create(
         app=app,
         user_id="ops1-memberships-api-developer",
         role="developer",
     )
-    _ = AppMembership.objects.create(
+    inactive = AppMembership.objects.create(
         app=app,
         user_id="ops1-membership-inactive",
         role="developer",
@@ -516,12 +516,27 @@ def test_ops1_memberships_api_lists_app_memberships_for_visible_app() -> None:
     # When: developer 查询该 App 的成员关系。
     response = client.get(f"{APPS_API_URL}/{app.app_key}/memberships")
 
-    # Then: API 返回该 App 的成员关系并暴露 is_active 状态。
+    # Then: API 返回可供行操作使用的稳定 membership ID 和 is_active 状态。
     assert response.status_code == HTTPStatus.OK
     assert response.json()["data"] == [
-        {"user_id": "ops1-membership-inactive", "role": "developer", "is_active": False},
-        {"user_id": "ops1-membership-owner", "role": "owner", "is_active": True},
-        {"user_id": "ops1-memberships-api-developer", "role": "developer", "is_active": True},
+        {
+            "id": inactive.id,
+            "user_id": "ops1-membership-inactive",
+            "role": "developer",
+            "is_active": False,
+        },
+        {
+            "id": owner.id,
+            "user_id": "ops1-membership-owner",
+            "role": "owner",
+            "is_active": True,
+        },
+        {
+            "id": developer.id,
+            "user_id": "ops1-memberships-api-developer",
+            "role": "developer",
+            "is_active": True,
+        },
     ]
 
 

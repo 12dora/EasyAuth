@@ -93,17 +93,29 @@ describe("ApprovalInstancesPage", () => {
     expect(within(failedRow as HTMLTableRowElement).getByRole("button", { name: "重新投递" })).toBeVisible();
   });
 
-  test("点击重新投递触发 redeliver POST 并刷新列表", async () => {
+  test("重投按实例防重复, 成功后立即按响应更新对应行并刷新列表", async () => {
+    const anotherFailedInstance = {
+      ...INSTANCES[1],
+      instance_id: "ai-4",
+      biz_key: "REQ-4",
+    };
+    const redeliverResponse = deferred<Response>();
+    const refreshedList = deferred<Response>();
+    let listRequestCount = 0;
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === LIST_URL) {
-        return jsonResponse({
-          data: INSTANCES,
-          pagination: { page: 1, page_size: 20, total_items: 3, total_pages: 1 },
-        });
+        listRequestCount += 1;
+        if (listRequestCount === 1) {
+          return jsonResponse({
+            data: [...INSTANCES, anotherFailedInstance],
+            pagination: { page: 1, page_size: 20, total_items: 4, total_pages: 1 },
+          });
+        }
+        return refreshedList.promise;
       }
       if (url === "/console/api/v1/operations/approval-instances/ai-2/redeliver" && init?.method === "POST") {
-        return jsonResponse({ approval_instance: { ...INSTANCES[1], delivery_state: "pending" } });
+        return redeliverResponse.promise;
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });
@@ -112,20 +124,50 @@ describe("ApprovalInstancesPage", () => {
 
     renderPage();
 
-    await user.click(await screen.findByRole("button", { name: "重新投递" }));
+    const targetRow = (await screen.findByText("REQ-2")).closest("tr") as HTMLTableRowElement;
+    const targetButton = within(targetRow).getByRole("button", { name: "重新投递" });
+
+    await user.click(targetButton);
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/console/api/v1/operations/approval-instances/ai-2/redeliver",
-        expect.objectContaining({ method: "POST" }),
-      );
+      const currentTargetRow = screen.getByText("REQ-2").closest("tr") as HTMLTableRowElement;
+      expect(within(currentTargetRow).getByRole("button", { name: "重新投递" })).toBeDisabled();
     });
-    expect(await screen.findByText("已重新投递")).toBeVisible();
-    // invalidate 后重新拉取列表: 初始 GET + redeliver 后的 GET。
+    expect(
+      within(screen.getByText("REQ-4").closest("tr") as HTMLTableRowElement).getByRole("button", { name: "重新投递" }),
+    ).toBeEnabled();
+    await user.click(
+      within(screen.getByText("REQ-2").closest("tr") as HTMLTableRowElement).getByRole("button", { name: "重新投递" }),
+    );
+
     await waitFor(() => {
-      const listCalls = fetchMock.mock.calls.filter(([input]) => String(input) === LIST_URL);
-      expect(listCalls.length).toBeGreaterThanOrEqual(2);
+      const redeliverCalls = fetchMock.mock.calls.filter(
+        ([input]) => String(input) === "/console/api/v1/operations/approval-instances/ai-2/redeliver",
+      );
+      expect(redeliverCalls).toHaveLength(1);
     });
+
+    redeliverResponse.resolve(
+      jsonResponse({ approval_instance: { ...INSTANCES[1], delivery_state: "pending", delivery_last_error: "" } }),
+    );
+
+    expect(await screen.findByText("已重新投递")).toBeVisible();
+    const updatedTargetRow = screen.getByText("REQ-2").closest("tr") as HTMLTableRowElement;
+    const updatedOtherRow = screen.getByText("REQ-4").closest("tr") as HTMLTableRowElement;
+    expect(within(updatedTargetRow).getByText("待投递")).toBeVisible();
+    expect(within(updatedTargetRow).queryByRole("button", { name: "重新投递" })).not.toBeInTheDocument();
+    expect(within(updatedOtherRow).getByRole("button", { name: "重新投递" })).toBeEnabled();
+
+    // 刷新请求尚未返回时行状态已更新, 同时仍会触发后台刷新。
+    await waitFor(() => {
+      expect(listRequestCount).toBe(2);
+    });
+    refreshedList.resolve(
+      jsonResponse({
+        data: [{ ...INSTANCES[1], delivery_state: "pending", delivery_last_error: "" }],
+        pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+      }),
+    );
   });
 
   test("状态与 app_key 过滤会带参数重新请求", async () => {
@@ -190,4 +232,12 @@ function jsonResponse(payload: unknown, status = 200) {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((resolvePromise) => {
+    resolve = resolvePromise;
+  });
+  return { promise, resolve };
 }

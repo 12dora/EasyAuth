@@ -76,6 +76,7 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
   const membershipTable = useReactTable({
     data: memberships,
     columns: membershipColumns,
+    getRowId: (membership) => String(membership.id),
     getCoreRowModel: getCoreRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
   });
@@ -175,7 +176,7 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
               )}
             </TableBody>
           </TableRoot>
-          <TablePagination table={membershipTable} />
+          <TablePagination table={membershipTable} totalItems={memberships.length} />
         </TableFrame>
       </PanelSurface>
       {membershipDialogOpen ? (
@@ -221,7 +222,7 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
               )}
             </TableBody>
           </TableRoot>
-          <TablePagination table={issuesTable} />
+          <TablePagination table={issuesTable} totalItems={issues.length} />
         </TableFrame>
       </PanelSurface>
     </section>
@@ -248,7 +249,7 @@ interface MembershipCreatePayload {
 }
 
 interface MembershipItem {
-  id?: number;
+  id: number;
   user_id: string;
   role: MembershipRole | string;
   is_active?: boolean;
@@ -395,8 +396,8 @@ function membershipTableColumns({
       header: t("common.actions"),
       cell: ({ row }) => (
         <TableActionCell>
-          {canWrite && row.original.id && row.original.is_active ? (
-            <TableRowActionButton type="button" variant="ghost-danger" onClick={() => onDisable(row.original.id as number)}>
+          {canWrite && row.original.is_active ? (
+            <TableRowActionButton type="button" variant="ghost-danger" onClick={() => onDisable(row.original.id)}>
               {t("common.disable")}
             </TableRowActionButton>
           ) : null}

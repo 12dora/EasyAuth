@@ -45,11 +45,19 @@ def test_ops3_console_operations_api_filters_access_requests_and_grants() -> Non
     user = UserMirror.objects.create(authentik_user_id="ops3-operations-user")
     crm = App.objects.create(app_key="ops3-operations-crm", name="CRM")
     erp = App.objects.create(app_key="ops3-operations-erp", name="ERP")
-    _ = AccessRequest.objects.create(
+    failed_request = AccessRequest.objects.create(
         user=user,
         app=crm,
         status=REQUEST_STATUS_GRANT_FAILED,
         reason="CRM 授权失败",
+    )
+    _ = AuditLog.objects.create(
+        actor_type="admin",
+        actor_id="ops3-operations-admin",
+        event_type="grant_apply_failed",
+        target_type="access_request",
+        target_id=str(failed_request.id),
+        metadata={"error": "目录写入失败"},
     )
     _ = AccessRequest.objects.create(
         user=user,
@@ -82,9 +90,75 @@ def test_ops3_console_operations_api_filters_access_requests_and_grants() -> Non
     assert requests_response.status_code == HTTPStatus.OK
     assert grants_response.status_code == HTTPStatus.OK
     assert "CRM 授权失败" in requests_body
+    assert "目录写入失败" in requests_body
     assert "ERP 等待审批" not in requests_body
     assert crm.app_key in grants_body
     assert erp.app_key not in grants_body
+
+
+def test_ops3_access_request_failure_reason_uses_latest_failure_event() -> None:
+    # Given: 同一失败申请存在多次只追加的失败审计事实。
+    client = _logged_in_superuser("ops3-failure-reason-admin")
+    user = UserMirror.objects.create(authentik_user_id="ops3-failure-reason-user")
+    app = App.objects.create(app_key="ops3-failure-reason-app", name="Failure App")
+    access_request = AccessRequest.objects.create(
+        user=user,
+        app=app,
+        status=REQUEST_STATUS_GRANT_FAILED,
+        reason="申请原因",
+    )
+    for error in ("旧失败原因", "最新失败原因"):
+        _ = AuditLog.objects.create(
+            actor_type="admin",
+            actor_id="ops3-failure-reason-admin",
+            event_type="grant_apply_failed",
+            target_type="access_request",
+            target_id=str(access_request.id),
+            metadata={"error": error},
+        )
+
+    # When: 管理员查询失败申请。
+    response = client.get(ACCESS_REQUESTS_API_URL, {"status": REQUEST_STATUS_GRANT_FAILED})
+
+    # Then: 列表只暴露最新权威失败事实。
+    assert response.status_code == HTTPStatus.OK
+    assert response.json()["data"][0]["failure_reason"] == "最新失败原因"
+
+
+@pytest.mark.parametrize("metadata", [{}, {"error": ""}, {"error": 42}])
+def test_ops3_access_request_failure_reason_fails_on_invalid_contract(
+    metadata: dict[str, object],
+) -> None:
+    # Given: 失败申请缺少合法的失败原因事实。
+    client = _logged_in_superuser("ops3-invalid-failure-reason-admin")
+    user = UserMirror.objects.create(authentik_user_id="ops3-invalid-failure-reason-user")
+    app = App.objects.create(app_key="ops3-invalid-failure-reason-app", name="Failure App")
+    access_request = AccessRequest.objects.create(
+        user=user,
+        app=app,
+        status=REQUEST_STATUS_GRANT_FAILED,
+        reason="申请原因",
+    )
+    if metadata:
+        _ = AuditLog.objects.create(
+            actor_type="admin",
+            actor_id="ops3-invalid-failure-reason-admin",
+            event_type="grant_apply_failed",
+            target_type="access_request",
+            target_id=str(access_request.id),
+            metadata=metadata,
+        )
+
+    # When: 管理员读取运营列表。
+    response = client.get(ACCESS_REQUESTS_API_URL, {"status": REQUEST_STATUS_GRANT_FAILED})
+
+    # Then: API 明确报告契约错误, 不伪造原因或静默省略字段。
+    assert response.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
+    assert response.json()["error"] == {
+        "code": "INTERNAL_ERROR",
+        "message": "授权失败原因事实缺失或无效。",
+        "details": {"request_id": access_request.id},
+    }
 
 
 def test_ops3_console_emergency_revoke_requires_superuser_reason_and_csrf() -> None:

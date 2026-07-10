@@ -66,7 +66,7 @@ export function GuideTab({ appKey }: { appKey: string }) {
             )}
           </TableBody>
         </TableRoot>
-          <TablePagination table={credentialModeTable} />
+          <TablePagination table={credentialModeTable} totalItems={guideQuery.data?.credential_modes?.length ?? 0} />
         </TableFrame>
       </div>
       <div className="space-y-3">

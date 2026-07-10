@@ -55,40 +55,44 @@ export function ConsoleTeamDetail() {
   const [disableConfirmOpen, setDisableConfirmOpen] = useState(false);
   const [memberPendingRemoval, setMemberPendingRemoval] = useState<TeamMemberItem | null>(null);
   const detailQueryKey = ["console", "teams", teamId];
+  const mutationScope = { id: `console-team:${teamId}` };
 
   const teamQuery = useQuery({
     queryKey: detailQueryKey,
-    queryFn: () => apiRequest<TeamPayload>(`/console/api/v1/teams/${teamId}`),
+    queryFn: ({ signal }) => apiRequest<TeamPayload>(`/console/api/v1/teams/${teamId}`, { signal }),
     enabled: Boolean(teamId),
   });
   const team = teamQuery.data?.team;
   const members = team?.members ?? [];
 
   // 团队接口的每个变更都会回传最新 team, 直接写入详情缓存并失效列表, 避免多余的详情重取。
-  const applyTeamPayload = (payload: TeamPayload) => {
+  const applyTeamPayload = async (payload: TeamPayload) => {
+    await queryClient.cancelQueries({ queryKey: detailQueryKey, exact: true });
     queryClient.setQueryData(detailQueryKey, payload);
     void queryClient.invalidateQueries({ queryKey: ["console", "teams"], exact: true });
   };
 
   const saveInfoMutation = useMutation({
+    scope: mutationScope,
     mutationFn: (payload: TeamInfoFormPayload) =>
       apiRequest<TeamPayload>(`/console/api/v1/teams/${teamId}`, {
         method: "PATCH",
         body: { ...payload } satisfies JsonObject,
       }),
-    onSuccess: (payload) => {
-      applyTeamPayload(payload);
+    onSuccess: async (payload) => {
+      await applyTeamPayload(payload);
       setEditDialogOpen(false);
     },
   });
   const statusMutation = useMutation({
+    scope: mutationScope,
     mutationFn: (isActive: boolean) =>
       apiRequest<TeamPayload>(`/console/api/v1/teams/${teamId}`, {
         method: "PATCH",
         body: { is_active: isActive },
       }),
-    onSuccess: (payload) => {
-      applyTeamPayload(payload);
+    onSuccess: async (payload) => {
+      await applyTeamPayload(payload);
       setDisableConfirmOpen(false);
     },
     onError: (error: Error) => {
@@ -96,17 +100,19 @@ export function ConsoleTeamDetail() {
     },
   });
   const addMemberMutation = useMutation({
+    scope: mutationScope,
     mutationFn: (payload: TeamMemberCreatePayload) =>
       apiRequest<TeamPayload>(`/console/api/v1/teams/${teamId}/members`, {
         method: "POST",
         body: { ...payload } satisfies JsonObject,
       }),
-    onSuccess: (payload) => {
-      applyTeamPayload(payload);
+    onSuccess: async (payload) => {
+      await applyTeamPayload(payload);
       setAddMemberDialogOpen(false);
     },
   });
   const changeRoleMutation = useMutation({
+    scope: mutationScope,
     mutationFn: ({ memberId, role }: { memberId: number; role: TeamMemberRole }) =>
       apiRequest<TeamPayload>(`/console/api/v1/teams/${teamId}/members/${memberId}`, {
         method: "PATCH",
@@ -118,12 +124,13 @@ export function ConsoleTeamDetail() {
     },
   });
   const removeMemberMutation = useMutation({
+    scope: mutationScope,
     mutationFn: (memberId: number) =>
       apiRequest<TeamPayload>(`/console/api/v1/teams/${teamId}/members/${memberId}`, {
         method: "DELETE",
       }),
-    onSuccess: (payload) => {
-      applyTeamPayload(payload);
+    onSuccess: async (payload) => {
+      await applyTeamPayload(payload);
       setMemberPendingRemoval(null);
     },
     onError: (error: Error) => {

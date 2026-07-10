@@ -37,7 +37,7 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
     queryFn: () => apiRequest<ListPayload<CredentialItem>>(`/console/api/v1/apps/${appKey}/credentials`),
   });
   const credentials = itemsFromPayload<CredentialItem>(credentialsQuery.data);
-  const { createCredential, isCreating, rotateCredential, disableCredential, operationError, secretEntries, closeSecretDialog } =
+  const { createCredential, isCreating, rotateCredential, disableCredential, isCredentialPending, operationError, secretEntries, closeSecretDialog } =
     useCredentialsActions(appKey);
   // 创建/轮换/停用等操作失败时以 toast 反馈, 替代原先的页面内联横幅。
   useEffect(() => {
@@ -66,6 +66,7 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
           {row.original.kind === "static_token" ? (
             <TableRowActionButton
               type="button"
+              disabled={isCredentialPending(row.original.id)}
               onClick={() => rotateCredential(row.original.id)}
             >
               {t("console.credentials.rotate")}
@@ -74,6 +75,7 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
           <TableRowActionButton
             type="button"
             variant="ghost-danger"
+            disabled={isCredentialPending(row.original.id)}
             onClick={() => disableCredential(row.original)}
           >
             {t("console.credentials.disable")}
@@ -135,7 +137,7 @@ export function CredentialsTab({ appKey }: { appKey: string }) {
             )}
           </TableBody>
         </TableRoot>
-        <TablePagination table={credentialTable} />
+        <TablePagination table={credentialTable} totalItems={credentials.length} />
       </TableFrame>
       {createDialogOpen ? (
         <Dialog title={t("console.credentials.createTitle")} onClose={() => setCreateDialogOpen(false)}>

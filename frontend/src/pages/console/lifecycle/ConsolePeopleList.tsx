@@ -196,7 +196,7 @@ export function ConsolePeopleList() {
               )}
             </TableBody>
           </TableRoot>
-          <TablePagination table={table} />
+          <TablePagination table={table} totalItems={peopleQuery.data?.pagination?.total_items ?? people.length} />
         </TableFrame>
       )}
       {startTarget ? (

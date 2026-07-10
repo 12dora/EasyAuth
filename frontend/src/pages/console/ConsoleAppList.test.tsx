@@ -22,7 +22,7 @@ describe("ConsoleAppList", () => {
     expect(screen.getByRole("button", { name: "接入向导" })).toBeVisible();
   });
 
-  test("管理员可以在列表行内启停和删除应用", async () => {
+  test("管理员可以在列表行内启停，并在核对应用名称和 Key 后删除", async () => {
     document.body.dataset.currentUserRole = "EasyAuth Admins";
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
@@ -56,6 +56,11 @@ describe("ConsoleAppList", () => {
     await user.click(within(crmRow).getByRole("button", { name: "停用" }));
     await user.click(within(billingRow).getByRole("button", { name: "启用" }));
     await user.click(within(crmRow).getByRole("button", { name: "删除" }));
+
+    const deleteDialog = await screen.findByRole("dialog", { name: "删除 CRM" });
+    expect(within(deleteDialog).getByText("应用名称: CRM; 应用 Key: crm")).toBeVisible();
+    expect(findFetchCall(fetchMock, "/console/api/v1/apps/crm", "DELETE")).toBeUndefined();
+    await user.click(within(deleteDialog).getByRole("button", { name: "删除" }));
 
     await waitFor(() => {
       expect(parseJsonBody(findFetchCall(fetchMock, "/console/api/v1/apps/crm", "PATCH")?.[1])).toEqual({ is_active: false });

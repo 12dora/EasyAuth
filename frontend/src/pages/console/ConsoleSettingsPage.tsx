@@ -55,15 +55,19 @@ export function ConsoleSettingsPage() {
   }, [settings]);
 
   const saveMutation = useMutation({
-    mutationFn: () =>
-      apiRequest<IntegrationSettingsPayload>("/console/api/v1/settings/integrations", {
+    mutationFn: () => {
+      const body: JsonObject = {};
+      if (settings && baseUrl.trim() !== settings.authentik_base_url_override) {
+        body.authentik_base_url = baseUrl.trim();
+      }
+      if (apiToken.trim() !== "") {
+        body.authentik_api_token = apiToken.trim();
+      }
+      return apiRequest<IntegrationSettingsPayload>("/console/api/v1/settings/integrations", {
         method: "PUT",
-        body: {
-          authentik_base_url: baseUrl.trim(),
-          // 留空表示保持现有 token 不变。
-          ...(apiToken.trim() === "" ? {} : { authentik_api_token: apiToken.trim() }),
-        },
-      }),
+        body,
+      });
+    },
     onSuccess: (payload) => {
       queryClient.setQueryData(SETTINGS_QUERY_KEY, payload);
       setApiToken("");

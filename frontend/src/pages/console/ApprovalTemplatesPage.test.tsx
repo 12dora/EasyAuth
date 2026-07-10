@@ -57,7 +57,7 @@ describe("ApprovalTemplatesPage", () => {
     expect(screen.getAllByRole("button", { name: "发起测试审批" })).toHaveLength(2);
   });
 
-  test("新建模板时 form_mapping 非法 JSON 给行内错误, 合法后提交 POST", async () => {
+  test("新建模板时 form_mapping 仅接受字符串到字符串的 JSON 对象", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === "/console/api/v1/approval-templates" && !init?.method) {
@@ -79,11 +79,21 @@ describe("ApprovalTemplatesPage", () => {
     await user.type(within(dialog).getByLabelText("名称"), "请假审批");
     await user.type(within(dialog).getByLabelText("钉钉流程码（process_code）"), "PROC-LEAVE");
     const mappingInput = within(dialog).getByLabelText("表单映射（form_mapping，JSON）");
-    await user.type(mappingInput, "not-json");
-    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+    for (const invalidMapping of [
+      "not-json",
+      '{"reason": 1}',
+      '{"reason": null}',
+      '{"reason": {"field": "TextField-1"}}',
+      '{"reason": ["TextField-1"]}',
+    ]) {
+      await user.clear(mappingInput);
+      await user.click(mappingInput);
+      await user.paste(invalidMapping);
+      await user.click(within(dialog).getByRole("button", { name: "保存" }));
 
-    expect(await within(dialog).findByText("不是合法的 JSON 对象，请检查后重试。")).toBeVisible();
-    expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+      expect(await within(dialog).findByText("不是合法的 JSON 对象，请检查后重试。")).toBeVisible();
+      expect(fetchMock.mock.calls.some(([, init]) => init?.method === "POST")).toBe(false);
+    }
 
     await user.clear(mappingInput);
     await user.click(mappingInput);
@@ -151,6 +161,49 @@ describe("ApprovalTemplatesPage", () => {
     });
     expect(await within(dialog).findByText("测试审批已发起")).toBeVisible();
     expect(within(dialog).getByText("PROC-INST-100")).toBeVisible();
+  });
+
+  test("同 key 模板发起测试时请求所选模板的精确 ID", async () => {
+    const sameKeyTemplates = [
+      TEMPLATES[0],
+      { ...TEMPLATES[1], key: TEMPLATES[0].key },
+    ];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/approval-templates" && !init?.method) {
+        return jsonResponse({ data: sameKeyTemplates });
+      }
+      if (url.startsWith("/console/api/v1/users")) {
+        return jsonResponse({ data: [] });
+      }
+      if (url === "/console/api/v1/approval-templates/2/test" && init?.method === "POST") {
+        return jsonResponse({
+          instance_id: "ai-200",
+          status: "submitted",
+          dingtalk_process_instance_id: "PROC-INST-200",
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderPage();
+
+    const targetRow = (await screen.findByText("采购审批")).closest("tr");
+    expect(targetRow).not.toBeNull();
+    await user.click(within(targetRow!).getByRole("button", { name: "发起测试审批" }));
+    const dialog = await screen.findByRole("dialog", { name: "发起测试审批" });
+    await user.type(within(dialog).getByRole("combobox"), "emp-2");
+    await user.click(within(dialog).getByRole("button", { name: "发起测试" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/console/api/v1/approval-templates/2/test",
+        expect.objectContaining({ method: "POST" }),
+      );
+    });
+    expect(fetchMock.mock.calls.some(([input]) => String(input) === "/console/api/v1/approval-templates/1/test")).toBe(false);
   });
 });
 

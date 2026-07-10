@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { KeyRound, Save, Send } from "lucide-react";
+import { KeyRound, RefreshCcw, Save, Send } from "lucide-react";
 import { useEffect, useState, type FormEvent } from "react";
 
 import { Badge } from "../../../../components/Badge";
@@ -46,10 +46,14 @@ export function WebhookTab({ appKey }: { appKey: string }) {
 
   const configQuery = useQuery({
     queryKey,
-    queryFn: () => apiRequest<WebhookConfigPayload>(`/console/api/v1/apps/${appKey}/webhook-config`),
+    queryFn: async () => {
+      const payload = await apiRequest<unknown>(`/console/api/v1/apps/${appKey}/webhook-config`);
+      return parseWebhookConfigPayload(payload, t("webhook.loadFailed"));
+    },
     enabled: Boolean(appKey),
   });
   const config = configQuery.data?.webhook_config ?? null;
+  const canWrite = configQuery.isSuccess && !configQuery.error;
 
   useEffect(() => {
     if (config) {
@@ -63,8 +67,11 @@ export function WebhookTab({ appKey }: { appKey: string }) {
   }, [config]);
 
   const saveMutation = useMutation({
-    mutationFn: (rotateSecret: boolean) =>
-      apiRequest<WebhookConfigPayload>(`/console/api/v1/apps/${appKey}/webhook-config`, {
+    mutationFn: (rotateSecret: boolean) => {
+      if (!canWrite) {
+        throw new Error(t("webhook.loadFailed"));
+      }
+      return apiRequest<WebhookConfigPayload>(`/console/api/v1/apps/${appKey}/webhook-config`, {
         method: "PUT",
         body: {
           enabled,
@@ -73,7 +80,8 @@ export function WebhookTab({ appKey }: { appKey: string }) {
           onboard_url: urls.onboard_url.trim(),
           rotate_secret: rotateSecret,
         } satisfies JsonObject,
-      }),
+      });
+    },
     onSuccess: (payload) => {
       const secret = payload.webhook_config?.secret ?? "";
       // 明文 secret 只在本次响应出现一次: 不进查询缓存, 只放进一次性弹窗状态。
@@ -105,10 +113,16 @@ export function WebhookTab({ appKey }: { appKey: string }) {
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!canWrite) {
+      return;
+    }
     saveMutation.mutate(false);
   };
 
   const requestRotate = () => {
+    if (!canWrite) {
+      return;
+    }
     if (config?.secret_configured) {
       setRotateConfirmOpen(true);
       return;
@@ -137,14 +151,29 @@ export function WebhookTab({ appKey }: { appKey: string }) {
           </div>
         </div>
         {configQuery.error ? (
-          <StatusBanner tone="signal" title={t("webhook.loadFailed")} message={(configQuery.error as Error).message} />
+          <div className="space-y-3">
+            <StatusBanner tone="signal" title={t("webhook.loadFailed")} message={(configQuery.error as Error).message} />
+            <Button
+              type="button"
+              icon={<RefreshCcw size={15} />}
+              loading={configQuery.isFetching}
+              onClick={() => void configQuery.refetch()}
+            >
+              {t("common.retry")}
+            </Button>
+          </div>
         ) : null}
         {!configQuery.isLoading && !configQuery.error && config === null ? (
           <StatusBanner tone="amber" title={t("webhook.notConfigured")} />
         ) : null}
         <form className="grid max-w-3xl gap-4" onSubmit={submit}>
           <label className="inline-flex items-center gap-2 text-body text-ink">
-            <input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.currentTarget.checked)} />
+            <input
+              type="checkbox"
+              checked={enabled}
+              disabled={!canWrite || saveMutation.isPending}
+              onChange={(event) => setEnabled(event.currentTarget.checked)}
+            />
             <span>{t("webhook.enabled")}</span>
           </label>
           {TARGET_FIELDS.map(({ target, labelKey }) => (
@@ -157,6 +186,7 @@ export function WebhookTab({ appKey }: { appKey: string }) {
                   aria-label={t(labelKey)}
                   className="font-mono"
                   value={urls[target]}
+                  disabled={!canWrite || saveMutation.isPending}
                   onChange={(event) => {
                     const next = event.currentTarget.value;
                     setUrls((current) => ({ ...current, [target]: next }));
@@ -188,7 +218,7 @@ export function WebhookTab({ appKey }: { appKey: string }) {
                 type="button"
                 icon={<KeyRound size={15} />}
                 loading={saveMutation.isPending}
-                disabled={saveMutation.isPending || configQuery.isLoading}
+                disabled={saveMutation.isPending || !canWrite}
                 onClick={requestRotate}
               >
                 {t("webhook.rotate")}
@@ -198,7 +228,7 @@ export function WebhookTab({ appKey }: { appKey: string }) {
                 variant="primary"
                 icon={<Save size={15} />}
                 loading={saveMutation.isPending}
-                disabled={saveMutation.isPending || configQuery.isLoading}
+                disabled={saveMutation.isPending || !canWrite}
               >
                 {t("common.save")}
               </Button>
@@ -220,8 +250,11 @@ export function WebhookTab({ appKey }: { appKey: string }) {
                 type="button"
                 variant="danger"
                 loading={saveMutation.isPending}
-                disabled={saveMutation.isPending}
+                disabled={saveMutation.isPending || !canWrite}
                 onClick={() => {
+                  if (!canWrite) {
+                    return;
+                  }
                   setRotateConfirmOpen(false);
                   saveMutation.mutate(true);
                 }}
@@ -244,4 +277,31 @@ export function WebhookTab({ appKey }: { appKey: string }) {
       ) : null}
     </section>
   );
+}
+
+function parseWebhookConfigPayload(payload: unknown, errorMessage: string): WebhookConfigPayload {
+  if (!isRecord(payload) || !("webhook_config" in payload)) {
+    throw new Error(errorMessage);
+  }
+  const config = payload.webhook_config;
+  if (config === null) {
+    return { webhook_config: null };
+  }
+  if (
+    !isRecord(config) ||
+    typeof config.enabled !== "boolean" ||
+    typeof config.secret_configured !== "boolean" ||
+    typeof config.approval_callback_url !== "string" ||
+    typeof config.handover_url !== "string" ||
+    typeof config.onboard_url !== "string" ||
+    (config.updated_by !== undefined && typeof config.updated_by !== "string") ||
+    (config.updated_at !== undefined && config.updated_at !== null && typeof config.updated_at !== "string")
+  ) {
+    throw new Error(errorMessage);
+  }
+  return { webhook_config: config as unknown as WebhookConfigPayload["webhook_config"] };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
