@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, RefreshCcw } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 
 import { Badge } from "../../../components/Badge";
@@ -221,7 +221,9 @@ export function HandoverTaskDetail() {
               </ul>
             )}
           </PanelSurface>
-          {task.kind === "transfer" ? <TransferGrantSection task={task} taskId={taskId} onChanged={invalidateDetail} /> : null}
+          {task.kind === "transfer" ? (
+            <TransferGrantSection task={task} taskId={taskId} onChanged={invalidateDetail} canOperate={isOpenTask} />
+          ) : null}
           {task.kind === "transfer" || task.team_items.length > 0 ? (
             <TeamAdjustSection task={task} taskId={taskId} onChanged={invalidateDetail} canOperate={isOpenTask} />
           ) : null}
@@ -350,17 +352,25 @@ function TransferGrantSection({
   task,
   taskId,
   onChanged,
+  canOperate,
 }: {
   task: HandoverTaskDetailItem;
   taskId: string;
   onChanged: () => void;
+  canOperate: boolean;
 }) {
   const { t } = useI18n();
   const toast = useToast();
   const plan = task.transfer_plan;
   const [templateId, setTemplateId] = useState(plan?.template_id ? String(plan.template_id) : "");
-  const [revokeChecked, setRevokeChecked] = useState<Record<string, boolean>>({});
-  const [addChecked, setAddChecked] = useState<Record<string, boolean>>({});
+  const planVersion = transferPlanVersion(plan);
+  const initializedPlanVersion = useRef(planVersion);
+  const [revokeChecked, setRevokeChecked] = useState<Record<string, boolean>>(() =>
+    selectionFromEntries(plan?.grant_diff.revoke ?? []),
+  );
+  const [addChecked, setAddChecked] = useState<Record<string, boolean>>(() =>
+    selectionFromEntries(plan?.grant_diff.add ?? []),
+  );
 
   const templatesQuery = useQuery({
     queryKey: ["console", "onboarding-templates"],
@@ -383,11 +393,15 @@ function TransferGrantSection({
     }
   }
 
-  // 方案重建后按服务端 selected 重置勾选。
+  // 同一方案的详情 refetch 不覆盖本地 dirty 选择；仅方案内容实际变化时重新初始化。
   useEffect(() => {
-    setRevokeChecked(Object.fromEntries((plan?.grant_diff.revoke ?? []).map((entry) => [entry.key, entry.selected !== false])));
-    setAddChecked(Object.fromEntries((plan?.grant_diff.add ?? []).map((entry) => [entry.key, entry.selected !== false])));
-  }, [plan]);
+    if (initializedPlanVersion.current === planVersion) {
+      return;
+    }
+    initializedPlanVersion.current = planVersion;
+    setRevokeChecked(selectionFromEntries(plan?.grant_diff.revoke ?? []));
+    setAddChecked(selectionFromEntries(plan?.grant_diff.add ?? []));
+  }, [plan, planVersion]);
 
   const buildMutation = useMutation({
     mutationFn: () =>
@@ -419,6 +433,7 @@ function TransferGrantSection({
   const addEntries = plan?.grant_diff.add ?? [];
   const keepEntries = plan?.grant_diff.keep ?? [];
   const confirmed = Boolean(plan?.confirmed_at);
+  const readOnly = confirmed || !canOperate;
 
   return (
     <PanelSurface padding="lg" className="space-y-4">
@@ -432,7 +447,7 @@ function TransferGrantSection({
       <div className="flex flex-wrap items-end gap-2">
         <div className="w-64">
           <Field label={t("handover.transfer.template")}>
-            <SelectInput value={templateId} disabled={confirmed} onChange={(event) => setTemplateId(event.currentTarget.value)}>
+            <SelectInput value={templateId} disabled={readOnly} onChange={(event) => setTemplateId(event.currentTarget.value)}>
               <option value="">{t("handover.transfer.templatePlaceholder")}</option>
               {templates.map((template) => (
                 <option key={template.id} value={String(template.id)}>
@@ -444,7 +459,7 @@ function TransferGrantSection({
         </div>
         <Button
           type="button"
-          disabled={!templateId || confirmed}
+          disabled={!templateId || readOnly}
           loading={buildMutation.isPending}
           onClick={() => buildMutation.mutate()}
         >
@@ -470,7 +485,7 @@ function TransferGrantSection({
               title={t("handover.transfer.revoke")}
               entries={revokeEntries}
               nameMap={nameMap}
-              readOnly={confirmed}
+              readOnly={readOnly}
               checked={revokeChecked}
               onToggle={(key, value) => setRevokeChecked((current) => ({ ...current, [key]: value }))}
             />
@@ -478,13 +493,13 @@ function TransferGrantSection({
               title={t("handover.transfer.add")}
               entries={addEntries}
               nameMap={nameMap}
-              readOnly={confirmed}
+              readOnly={readOnly}
               checked={addChecked}
               onToggle={(key, value) => setAddChecked((current) => ({ ...current, [key]: value }))}
             />
             <DiffGroup title={t("handover.transfer.keep")} entries={keepEntries} nameMap={nameMap} readOnly checked={null} />
           </div>
-          {!confirmed ? (
+          {!readOnly ? (
             <Button type="button" variant="primary" loading={confirmMutation.isPending} onClick={() => confirmMutation.mutate()}>
               {t("handover.transfer.confirm")}
             </Button>
@@ -493,6 +508,21 @@ function TransferGrantSection({
       ) : null}
     </PanelSurface>
   );
+}
+
+function selectionFromEntries(entries: TransferGrantDiffEntry[]): Record<string, boolean> {
+  return Object.fromEntries(entries.map((entry) => [entry.key, entry.selected !== false]));
+}
+
+function transferPlanVersion(plan: TransferPlanItem | null): string {
+  if (!plan) {
+    return "none";
+  }
+  return JSON.stringify({
+    templateId: plan.template_id,
+    grantDiff: plan.grant_diff,
+    confirmedAt: plan.confirmed_at,
+  });
 }
 
 function DiffGroup({
@@ -655,11 +685,15 @@ function TeamAdjustRow({
         </SelectInput>
         {action === "assign_leader" ? (
           <div className="min-w-56 flex-1">
-            <UserSearchInput
-              value={successorId}
-              aria-label={`${item.team_name} ${t("handover.team.successor")}`}
-              onChange={setSuccessorId}
-            />
+            {canOperate ? (
+              <UserSearchInput
+                value={successorId}
+                aria-label={`${item.team_name} ${t("handover.team.successor")}`}
+                onChange={setSuccessorId}
+              />
+            ) : (
+              <span className="text-body text-ink-soft">{successorId || "-"}</span>
+            )}
           </div>
         ) : null}
         <Button

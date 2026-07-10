@@ -18,6 +18,7 @@ import { ConfirmDialog } from "../../../components/ui/ConfirmDialog";
 import { EmptyState } from "../../../components/ui/EmptyState";
 import { PageState } from "../../../components/ui/PageState";
 import { TableActionCell, TableRowActionButton, TableRowActionLink } from "../../../components/ui/TableActions";
+import { DEFAULT_TABLE_PAGE_SIZE, TablePagination } from "../../../components/ui/TablePagination";
 import {
   TableBody,
   TableCell,
@@ -48,13 +49,14 @@ export function HandoverTaskList() {
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState("");
   const [kindFilter, setKindFilter] = useState("");
+  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: DEFAULT_TABLE_PAGE_SIZE });
   const [deleteTarget, setDeleteTarget] = useState<HandoverTaskRow | null>(null);
 
   const tasksQuery = useQuery({
-    queryKey: ["console", "handover-tasks", statusFilter, kindFilter],
+    queryKey: ["console", "handover-tasks", statusFilter, kindFilter, pagination.pageIndex, pagination.pageSize],
     queryFn: () =>
       apiRequest<ListPayload<HandoverTaskRow>>(
-        `/console/api/v1/lifecycle/handover-tasks?status=${encodeURIComponent(statusFilter)}&kind=${encodeURIComponent(kindFilter)}`,
+        `/console/api/v1/lifecycle/handover-tasks?status=${encodeURIComponent(statusFilter)}&kind=${encodeURIComponent(kindFilter)}&page=${pagination.pageIndex + 1}&page_size=${pagination.pageSize}`,
       ),
   });
   const tasks = itemsFromPayload<HandoverTaskRow>(tasksQuery.data);
@@ -79,6 +81,10 @@ export function HandoverTaskList() {
     data: tasks,
     columns,
     getCoreRowModel: getCoreRowModel(),
+    manualPagination: true,
+    pageCount: tasksQuery.data?.pagination?.total_pages ?? 0,
+    state: { pagination },
+    onPaginationChange: setPagination,
   });
 
   return (
@@ -98,7 +104,10 @@ export function HandoverTaskList() {
           aria-label={t("handover.list.filter.status")}
           className="w-44"
           value={statusFilter}
-          onChange={(event) => setStatusFilter(event.currentTarget.value)}
+          onChange={(event) => {
+            setStatusFilter(event.currentTarget.value);
+            setPagination((current) => ({ ...current, pageIndex: 0 }));
+          }}
         >
           <option value="">{t("handover.list.filter.allStatuses")}</option>
           {TASK_STATUSES.map((status) => (
@@ -111,7 +120,10 @@ export function HandoverTaskList() {
           aria-label={t("handover.list.filter.kind")}
           className="w-44"
           value={kindFilter}
-          onChange={(event) => setKindFilter(event.currentTarget.value)}
+          onChange={(event) => {
+            setKindFilter(event.currentTarget.value);
+            setPagination((current) => ({ ...current, pageIndex: 0 }));
+          }}
         >
           <option value="">{t("handover.list.filter.allKinds")}</option>
           {TASK_KINDS.map((kind) => (
@@ -173,6 +185,7 @@ export function HandoverTaskList() {
               )}
             </TableBody>
           </TableRoot>
+          <TablePagination table={table} totalItems={tasksQuery.data?.pagination?.total_items ?? 0} />
         </TableFrame>
       )}
       {deleteTarget ? (

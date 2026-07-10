@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
@@ -156,7 +156,7 @@ describe("HandoverTaskDetail", () => {
     expect(within(dialog).getByText("已选 2 个应用")).toBeVisible();
 
     await user.click(within(dialog).getByRole("button", { name: "下一步" }));
-    await user.type(within(dialog).getByRole("combobox", { name: "统一接收人" }), "u-9");
+    fireEvent.change(within(dialog).getByRole("combobox", { name: "统一接收人" }), { target: { value: "u-9" } });
     await user.click(within(dialog).getByRole("button", { name: "应用到所选应用" }));
     await user.click(within(dialog).getByRole("button", { name: "下一步" }));
 
@@ -205,6 +205,135 @@ describe("HandoverTaskDetail", () => {
     // 预览数据步: 有数据的应用展示格式化资产, 无钩子的应用提示无需数据交接。
     expect(await within(dialog).findByText(/23 个客户/)).toBeVisible();
     expect(await within(dialog).findByText("该应用无需数据交接。")).toBeVisible();
+  });
+
+  test("权限清单加载失败或预览失败时不能进入下一步", async () => {
+    const baseFetch = buildFetchMock();
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input) === "/console/api/v1/lifecycle/handover-tasks/1/actions/wiki/preview") {
+        return jsonResponse({ error: { message: "Wiki 预览失败" } }, 422);
+      }
+      return baseFetch(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderDetail();
+
+    await user.click(await screen.findByRole("button", { name: "继续交接" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "下一步" }));
+    await user.click(within(dialog).getByRole("button", { name: "下一步" }));
+    expect(await within(dialog).findByText("查看客户")).toBeVisible();
+    await user.click(within(dialog).getByRole("button", { name: "下一步" }));
+
+    expect(await within(dialog).findByRole("button", { name: "重新预览" })).toBeVisible();
+    expect(within(dialog).getByRole("button", { name: "下一步" })).toBeDisabled();
+  });
+
+  test("执行期间拒绝关闭，详情刷新后仍保留冻结批次并稳定完成", async () => {
+    const baseFetch = buildFetchMock();
+    let releaseFirstExecute: (() => void) | undefined;
+    let executionStarted = false;
+    let detailReadAfterExecute = 0;
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/actions/crm/execute") && method === "POST") {
+        await new Promise<void>((resolve) => {
+          releaseFirstExecute = resolve;
+        });
+        executionStarted = true;
+        return jsonResponse({ app_action: { ...DETAIL_PAYLOAD.handover_task.app_actions[1], status: "done" } });
+      }
+      if (url.endsWith("/actions/wiki/execute") && method === "POST") {
+        return jsonResponse({ app_action: { ...DETAIL_PAYLOAD.handover_task.app_actions[2], status: "done" } });
+      }
+      if (url === "/console/api/v1/lifecycle/handover-tasks/1" && method === "GET" && executionStarted) {
+        detailReadAfterExecute += 1;
+        return jsonResponse({
+          handover_task: {
+            ...DETAIL_PAYLOAD.handover_task,
+            status: "completed",
+            app_actions: DETAIL_PAYLOAD.handover_task.app_actions.map((action) => ({ ...action, status: "done" })),
+          },
+        });
+      }
+      return baseFetch(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderDetail();
+
+    await user.click(await screen.findByRole("button", { name: "继续交接" }));
+    const dialog = await screen.findByRole("dialog");
+    await user.click(within(dialog).getByRole("button", { name: "下一步" }));
+    await user.click(within(dialog).getByRole("button", { name: "下一步" }));
+    expect(await within(dialog).findByText("查看客户")).toBeVisible();
+    await user.click(within(dialog).getByRole("button", { name: "下一步" }));
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "下一步" })).toBeEnabled());
+    await user.click(within(dialog).getByRole("button", { name: "下一步" }));
+    await user.click(within(dialog).getByRole("button", { name: "执行交接" }));
+
+    await waitFor(() => expect(releaseFirstExecute).toBeDefined());
+    await user.click(within(dialog).getByRole("button", { name: "关闭弹窗" }));
+    expect(screen.getByRole("dialog")).toBeVisible();
+
+    releaseFirstExecute?.();
+    await waitFor(() => expect(detailReadAfterExecute).toBeGreaterThan(0));
+    expect(await within(dialog).findByRole("button", { name: "完成" })).toBeVisible();
+  });
+
+  test("已取消转岗单的方案与待处理团队均为只读", async () => {
+    const baseFetch = buildFetchMock();
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/lifecycle/onboarding-templates") {
+        return jsonResponse({
+          data: [{ id: 8, name: "销售岗位", description: "", is_active: true, items: [] }],
+        });
+      }
+      if (url === "/console/api/v1/lifecycle/handover-tasks/1") {
+        return jsonResponse({
+          handover_task: {
+            ...DETAIL_PAYLOAD.handover_task,
+            kind: "transfer",
+            status: "cancelled",
+            transfer_plan: {
+              template_id: 8,
+              template_name: "销售岗位",
+              grant_diff: {
+                revoke: [{ key: "crm:permission:customer.view:GLOBAL", selected: true }],
+                add: [],
+                keep: [],
+              },
+              confirmed_at: null,
+            },
+            team_items: [
+              {
+                id: 31,
+                team_id: 3,
+                team_name: "销售一组",
+                action: "pending",
+                to_user: null,
+                status: "pending",
+              },
+            ],
+          },
+        });
+      }
+      return baseFetch(input, init);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderDetail();
+
+    expect(await screen.findByRole("combobox", { name: "岗位模板" })).toBeDisabled();
+    expect(screen.getByRole("checkbox", { name: /customer.view/ })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "确认调整" })).toBeNull();
+    expect(screen.getByRole("combobox", { name: "销售一组 操作" })).toBeDisabled();
+    expect(screen.queryByRole("combobox", { name: "销售一组 接任负责人" })).toBeNull();
   });
 });
 

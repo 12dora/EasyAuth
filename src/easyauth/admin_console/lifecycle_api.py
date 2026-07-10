@@ -1,21 +1,25 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, cast
 
+from django.db import transaction
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
+from easyauth.admin_console.api_payloads import paginated_list_payload
 from easyauth.admin_console.api_responses import (
     error_response,
     json_response,
     method_not_allowed_response,
 )
 from easyauth.admin_console.authz import require_superuser
+from easyauth.admin_console.operation_filters import paginate_queryset
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode
+from easyauth.api.pagination import pagination_item
 from easyauth.applications.models import App, AuthorizationGroup, Permission
 from easyauth.lifecycle.models import (
     HANDOVER_KIND_VALUES,
@@ -49,6 +53,7 @@ from easyauth.webhooks.hooks import HookCallError
 
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
+    from easyauth.api.pagination import Pagination
 
 type JsonObject = dict[str, "JsonValue"]
 
@@ -181,8 +186,14 @@ def lifecycle_handover_tasks(request: HttpRequest) -> JsonResponse:
         kind = request.GET.get("kind", "").strip()
         if kind in HANDOVER_KIND_VALUES:
             queryset = queryset.filter(kind=kind)
-        items: list[JsonValue] = [_task_item(task) for task in queryset[:200]]
-        return json_response({"data": items})
+        page = paginate_queryset(queryset, request.GET)
+        items: list[JsonValue] = [_task_item(task) for task in page.items]
+        return json_response(
+            paginated_list_payload(
+                items=items,
+                pagination=pagination_item(cast("Pagination", cast("object", page))),
+            ),
+        )
     if request.method == "POST":
         return _create_task(request, actor_id)
     return method_not_allowed_response()
@@ -553,37 +564,64 @@ def _patch_task(request: HttpRequest, task: HandoverTask, actor_id: str) -> Json
                 status=HTTPStatus.CONFLICT,
             )
         return json_response({"handover_task": _task_detail(task)})
-    for entry in payload.app_actions:
-        if response := _apply_receiver_entry(task, entry):
-            return response
-    return json_response({"handover_task": _task_detail(_task_or_none(task.id) or task)})
+    return _patch_receiver_batch(task, payload.app_actions)
 
 
-def _apply_receiver_entry(task: HandoverTask, entry: ActionReceiverPayload) -> JsonResponse | None:
-    action = (
-        HandoverAppAction.objects.select_related("task", "app")
-        .filter(task=task, app__app_key=entry.app_key)
-        .first()
-    )
-    if action is None:
-        return _validation_error(f"交接单中不存在应用 {entry.app_key}。")
-    to_user = None
-    if entry.to_user_id:
-        to_user = _active_user_or_none(entry.to_user_id)
-        if to_user is None:
-            return _validation_error("接收人不存在或已停用。")
-    policy: JsonObject = (
-        {"unowned_strategy": "release_to_pool"} if entry.release_to_pool else {}
-    )
+def _patch_receiver_batch(
+    task: HandoverTask,
+    entries: list[ActionReceiverPayload],
+) -> JsonResponse:
     try:
-        _ = update_action_receiver(action=action, to_user=to_user, policy=policy)
+        with transaction.atomic():
+            locked_task = HandoverTask.objects.select_for_update().get(id=task.id)
+            entries_by_app = {entry.app_key: entry for entry in entries}
+            if len(entries_by_app) != len(entries):
+                return _validation_error("同一应用不能重复指定接收人。")
+
+            actions = tuple(
+                HandoverAppAction.objects.select_for_update()
+                .select_related("task", "app")
+                .filter(task=locked_task, app__app_key__in=entries_by_app)
+            )
+            actions_by_app = {action.app.app_key: action for action in actions}
+            missing_apps = entries_by_app.keys() - actions_by_app.keys()
+            if missing_apps:
+                return _validation_error(f"交接单中不存在应用 {sorted(missing_apps)[0]}。")
+
+            receiver_ids = {
+                entry.to_user_id
+                for entry in entries
+                if entry.to_user_id
+            }
+            receivers = {
+                user.authentik_user_id: user
+                for user in UserMirror.objects.filter(
+                    authentik_user_id__in=receiver_ids,
+                    status=USER_STATUS_ACTIVE,
+                )
+            }
+            if receiver_ids - receivers.keys():
+                return _validation_error("接收人不存在或已停用。")
+
+            for app_key, entry in entries_by_app.items():
+                policy: JsonObject = (
+                    {"unowned_strategy": "release_to_pool"}
+                    if entry.release_to_pool
+                    else {}
+                )
+                _ = update_action_receiver(
+                    action=actions_by_app[app_key],
+                    to_user=receivers.get(entry.to_user_id or ""),
+                    policy=policy,
+                )
     except HandoverConflictError as error:
         return error_response(
             ErrorCode.SEMANTIC_VALIDATION_ERROR,
             str(error),
             status=HTTPStatus.CONFLICT,
         )
-    return None
+    refreshed_task = _task_or_none(task.id) or task
+    return json_response({"handover_task": _task_detail(refreshed_task)})
 
 
 def _write_template(

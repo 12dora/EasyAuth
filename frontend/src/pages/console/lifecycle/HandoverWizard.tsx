@@ -59,15 +59,16 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
   const queryClient = useQueryClient();
   const detailQueryKey = ["console", "handover-task", String(task.id)];
   const grantItemsQueryKey = ["console", "handover-task", String(task.id), "grant-items"];
-  const actionable = task.app_actions.filter((action) => ACTIONABLE_STATUSES.has(action.status));
+  // 本次向导批次在打开时冻结；执行成功后的详情 refetch 不得让应用集合中途缩水。
+  const [batchActions] = useState(() => task.app_actions.filter((action) => ACTIONABLE_STATUSES.has(action.status)));
 
   const [step, setStep] = useState(0);
   const [selected, setSelected] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(actionable.map((action) => [action.app_key, true])),
+    Object.fromEntries(batchActions.map((action) => [action.app_key, true])),
   );
   const [receivers, setReceivers] = useState<Record<string, ReceiverDraft>>(() =>
     Object.fromEntries(
-      actionable.map((action) => [
+      batchActions.map((action) => [
         action.app_key,
         {
           toUserId: action.to_user?.user_id ?? "",
@@ -85,7 +86,7 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
   const previewStateRef = useRef(previewState);
   previewStateRef.current = previewState;
 
-  const selectedApps = actionable.filter((action) => selected[action.app_key]);
+  const selectedApps = batchActions.filter((action) => selected[action.app_key]);
   const selectedAppKeys = selectedApps.map((action) => action.app_key);
 
   const invalidateDetail = () => void queryClient.invalidateQueries({ queryKey: detailQueryKey });
@@ -192,6 +193,9 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
   }, [step]);
 
   const runExecute = async () => {
+    if (isExecuting || !allPreviewed) {
+      return;
+    }
     setIsExecuting(true);
     for (const appKey of selectedAppKeys) {
       if (executeState[appKey]?.status === "done") {
@@ -215,6 +219,8 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
   const executeStatuses = selectedAppKeys.map((appKey) => executeState[appKey]?.status);
   const allExecuted = executeStatuses.length > 0 && executeStatuses.every((status) => status === "done");
   const someExecuteFailed = executeStatuses.some((status) => status === "failed");
+  const allPreviewed =
+    selectedAppKeys.length > 0 && selectedAppKeys.every((appKey) => previewState[appKey]?.status === "done");
 
   const goNext = () => {
     if (step === 1) {
@@ -241,7 +247,13 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
       return;
     }
     if (step === 2) {
+      if (grantItemsQuery.isLoading || grantItemsQuery.error) {
+        return;
+      }
       saveGrantsMutation.mutate(undefined, { onSuccess: () => setStep(3) });
+      return;
+    }
+    if (step === 3 && !allPreviewed) {
       return;
     }
     setStep((current) => Math.min(current + 1, WIZARD_STEP_KEYS.length - 1));
@@ -260,20 +272,30 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
   };
 
   const isSaving = saveReceiversMutation.isPending || saveGrantsMutation.isPending;
-  const nextDisabled = (step === 0 && selectedApps.length === 0) || isSaving || isExecuting;
+  const nextDisabled =
+    (step === 0 && selectedApps.length === 0) ||
+    (step === 2 && (grantItemsQuery.isLoading || Boolean(grantItemsQuery.error))) ||
+    (step === 3 && !allPreviewed) ||
+    isSaving ||
+    isExecuting;
+  const closeWizard = () => {
+    if (!isExecuting) {
+      onClose();
+    }
+  };
 
   return (
-    <Dialog title={t("handover.wizard.title")} size="xl" onClose={onClose}>
+    <Dialog title={t("handover.wizard.title")} size="xl" onClose={closeWizard}>
       <div className="space-y-5">
         <WizardStepIndicator step={step} />
         {step === 0 ? (
           <StepSection hint={t("handover.wizard.apps.hint")}>
-            {actionable.length === 0 ? (
+            {batchActions.length === 0 ? (
               <p className="text-body leading-5 text-ink-soft">{t("handover.wizard.apps.empty")}</p>
             ) : (
               <>
                 <ul className="grid gap-2">
-                  {actionable.map((action) => (
+                  {batchActions.map((action) => (
                     <li key={action.app_key}>
                       <label className="flex items-center gap-2.5 rounded-[3px] border border-ink/12 bg-paper-soft px-3 py-2.5 text-body text-ink">
                         <input
@@ -504,7 +526,7 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
                 {t("common.next")}
               </Button>
             ) : allExecuted ? (
-              <Button type="button" variant="primary" onClick={onClose}>
+              <Button type="button" variant="primary" onClick={closeWizard}>
                 {t("common.done")}
               </Button>
             ) : (
@@ -512,7 +534,7 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
                 type="button"
                 variant="primary"
                 loading={isExecuting}
-                disabled={isExecuting || selectedApps.length === 0}
+                disabled={isExecuting || selectedApps.length === 0 || !allPreviewed}
                 onClick={() => void runExecute()}
               >
                 {t("handover.wizard.execute.run")}
