@@ -25,11 +25,12 @@
 
 ### 修复复核（2026-07-10）
 
-本轮已完成全部后端功能问题，以及指定安全问题 BS-02、BS-05 至 BS-15、BS-17。代码按以下三批提交：
+本轮已完成全部后端功能问题，以及指定安全问题 BS-02、BS-05 至 BS-15、BS-17。实现按以下四批提交：
 
 - `621b664`：后端领域模型、API、事务、并发、安全边界、迁移与回归测试。
 - `8864547`：对应前端契约、幂等提交、逐项期限、异步状态与两步验证交互。
 - `580814f`：出站 Webhook worker 网络隔离、依赖锁定、镜像摘要、SBOM、构建溯源与签名验证。
+- Authentik `7120fbede1`：钉钉目录权威快照代次、合法空集清理、原子发布与回归测试。
 
 | 问题 | 状态 | 修复结果 |
 | --- | --- | --- |
@@ -53,8 +54,8 @@
 | BF-18 | 已修复 | parser、model、readiness 使用一致的 active scope 不变量，Manifest 可正常收缩 scope。 |
 | BF-19 | 已修复 | Manifest 管理字段按权威快照清理，重复 target 拒绝，所有入口统一 canonical hash。 |
 | BF-20 | 已修复 | 自动接入新 App 时在同一事务中把 actor 建为 active owner。 |
-| BF-21 | 已修复（EasyAuth） | 合法空集会执行清理；generation、成功状态和精确计数为强契约，任何畸形响应均在写入前失败。仓库外 Authentik fork 必须同步提供 generation；旧契约会被明确拒绝，不会破坏性写入。 |
-| BF-22 | 已修复（EasyAuth） | 按 source/corp 串行化并持久化 generation fencing，线程交错测试确认旧 active 快照不能覆盖新 departed 事实。 |
+| BF-21 | 已修复 | EasyAuth 将 generation、成功状态和精确计数作为强契约；Authentik 合法空快照会软删除旧用户和非根部门，并在同一事务内发布镜像、精确计数和新代次。畸形响应会在破坏性写入前失败。 |
+| BF-22 | 已修复 | EasyAuth 按 source/corp 串行化并持久化 generation fencing；Authentik 在镜像事务提交时单调递增 generation，失败保留上一代。线程交错和连续成功同步测试确认旧 active 快照不能覆盖新 departed 事实。 |
 | BF-23 | 已修复 | Connector 使用数据库 generation/dirty/lease 状态机，安全收缩优先，保留 tombstone 和不可变外部身份。 |
 | BF-24 | 已修复 | 审批人规范化为关系表并数据库过滤/count/slice；筛选参数严格解析，非法输入返回 422。 |
 | BF-25 | 已修复 | Authentik 完整分页和严格 envelope；钉钉 token 按凭据指纹缓存并遵从真实 TTL；响应大小和总时限受限。 |
@@ -68,11 +69,13 @@
 | BS-11 | 已修复 | Connector reconcile 强制 superuser，并按 actor/instance 去重限速。 |
 | BS-12 | 已修复 | offboard 与 reconcile 进入同一 generation/lease 状态机；非 active 用户永不解封，外部清理前保留 tombstone。 |
 | BS-13 | 已修复 | 保存并探测不可变 account ID，禁止不同 App 重复绑定同一 NetBird account。 |
-| BS-14 | 已修复（EasyAuth） | 破坏性目录同步要求权威 generation、完整计数和单调 fencing，任何不完整快照禁止写入。 |
+| BS-14 | 已修复 | Authentik 原子发布权威 generation 与精确计数；EasyAuth 要求完整分页、成功状态、起止代次一致和单调 fencing，任何半成品或不完整快照禁止写入。 |
 | BS-15 | 已修复 | Webhook delivery 增加 generation、claim token 和 lease，只有当前 claim 可发送和写终态。 |
 | BS-17 | 已修复 | `/health/` 真实上报数据库、broker、beat/worker、关键任务、Stream 进程和 ACK；镜像与 uv/Redis 固定摘要，gunicorn 进入 lock，CI 生成 SBOM/provenance 并用 Cosign 签名后验证。 |
 
 修复后验证结果：Django/Python 全量测试 `1093 passed`；前端 `40` 个测试文件、`249 passed`；前端生产构建、`tsc -b`、`manage.py check`、迁移一致性检查、Dockerfile 检查和 deploy compose 解析均通过。Ruff 从原报告的 23 项降为 5 项，剩余均位于本轮未修改的既有 `teams_api.py` 和 `manifest_sync_views.py`。
+
+上线复核结果：Authentik 定向测试 `12 passed`，迁移一致性检查和完整镜像构建通过；部署前备份保存于 `/tmp/authentik-before-generation-20260710.dump`。Authentik worker/server 已重建并通过本机与 `https://auth.jiefakj.com/-/health/live/` 健康检查。真实钉钉同步发布 `generation=1`，状态计数与活动镜像均为 `40` 个部门、`134` 个用户；EasyAuth 严格同步成功消费相同计数，`org_fetch_failed_count=0`，`https://iam.jiefakj.com/health/` 返回 `200`。
 
 ### 严重级别
 
