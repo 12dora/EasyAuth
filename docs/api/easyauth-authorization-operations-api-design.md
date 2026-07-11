@@ -2,11 +2,21 @@
 
 ## 状态
 
-设计草案，等待评审。
+**部分内容已过时。** 当前实现与接入以以下文档为准：
+
+- 下游公共 API：[`easyauth-public-api.md`](./easyauth-public-api.md)
+- 控制台私有 API 目录：[`easyauth-console-api.md`](./easyauth-console-api.md)
+- 员工门户私有 API：[`easyauth-portal-react-api.md`](./easyauth-portal-react-api.md)
+
+主要过时点：
+
+- 历史 `roles` 模型已收敛为 **`authorization_groups`**
+- 公共审批列表/模板、门户撤回、控制台 webhook 投递等接口已落地，以新文档与代码为准
+- 本文保留为 OPS 阶段设计背景与字段讨论参考，**不得**单独作为接入契约
 
 ## 日期
 
-2026-06-06
+2026-06-06（设计草案）；2026-07-11 标记 supersede 说明。
 
 ## 范围
 

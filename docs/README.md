@@ -6,11 +6,13 @@
 2. [EasyAuth MVP 实施计划](plans/easyauth-mvp-implementation-plan.md)
 3. [EasyAuth 业务授权运营增强需求方案](requirements/easyauth-business-authorization-operations.md)
 4. [EasyAuth 业务授权运营增强架构设计](architecture/easyauth-authorization-operations-design.md)
-5. [EasyAuth 业务授权运营页面 API 设计](api/easyauth-authorization-operations-api-design.md)
-6. [ADR-001：业务授权运营边界](decisions/ADR-001-业务授权运营边界.md)
+5. [EasyAuth 公共 API（下游应用契约）](api/easyauth-public-api.md)
+6. [EasyAuth 管理控制台私有 API 目录](api/easyauth-console-api.md)
 7. [EasyAuth 员工门户 React 私有 API](api/easyauth-portal-react-api.md)
-8. [EasyAuth 前端视觉契约](architecture/easyauth-frontend-visual-contract.md)
-9. [EasyAuth 钉钉 Stream 事件集成设计](architecture/easyauth-dingtalk-stream-design.md)
+8. [EasyAuth 业务授权运营页面 API 设计（部分过时，仅作背景）](api/easyauth-authorization-operations-api-design.md)
+9. [ADR-001：业务授权运营边界](decisions/ADR-001-业务授权运营边界.md)
+10. [EasyAuth 前端视觉契约](architecture/easyauth-frontend-visual-contract.md)
+11. [EasyAuth 钉钉 Stream 事件集成设计](architecture/easyauth-dingtalk-stream-design.md)
 
 ## 文档规则
 
