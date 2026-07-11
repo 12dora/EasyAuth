@@ -6,7 +6,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 
@@ -34,6 +34,47 @@ class EasyAuthAppClient:
     def query_user_permissions(self, user_id: str) -> dict[str, Any]:
         """查询用户在本应用下的授权快照(groups/grants/版本号)。"""
         url = f"{self._app_base()}/users/{quote(user_id, safe='')}/permissions"
+        return self._request_json(url, method="GET")
+
+    def sync_manifest(
+        self,
+        manifest: dict[str, Any],
+        *,
+        base_url: str | None = None,
+    ) -> dict[str, Any]:
+        """推送权限 manifest 到 EasyAuth(版本单调 + content_hash 幂等)。"""
+        url = f"{self._app_base()}/manifest-sync"
+        body: dict[str, Any] = {"manifest": dict(manifest)}
+        if base_url is not None:
+            body["base_url"] = base_url
+        return self._request_json(url, method="POST", body=body)
+
+    def list_approval_templates(self) -> dict[str, Any]:
+        """列出本应用可用的活跃审批模板(含平台共用模板)。"""
+        url = f"{self._app_base()}/approval-templates"
+        return self._request_json(url, method="GET")
+
+    def list_approvals(
+        self,
+        *,
+        status: str | None = None,
+        biz_key: str | None = None,
+        template_key: str | None = None,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict[str, Any]:
+        """分页列出本应用审批实例。"""
+        params: dict[str, str] = {
+            "page": str(page),
+            "page_size": str(page_size),
+        }
+        if status is not None:
+            params["status"] = status
+        if biz_key is not None:
+            params["biz_key"] = biz_key
+        if template_key is not None:
+            params["template_key"] = template_key
+        url = f"{self._app_base()}/approval-instances?{urlencode(params)}"
         return self._request_json(url, method="GET")
 
     def create_approval(

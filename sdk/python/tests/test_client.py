@@ -96,3 +96,55 @@ def test_query_raises_client_error_on_non_dict_json(monkeypatch: pytest.MonkeyPa
 
     with pytest.raises(EasyAuthClientError, match="格式无效"):
         _client().query_user_permissions("u")
+
+
+def test_sync_manifest_posts_body_and_optional_base_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_urlopen(request: Any, timeout: float) -> _FakeResponse:  # noqa: ARG001
+        captured["url"] = request.full_url
+        captured["method"] = request.get_method()
+        captured["body"] = json.loads(request.data.decode("utf-8"))
+        return _FakeResponse(json.dumps({"status": "applied", "version": 2}).encode("utf-8"))
+
+    monkeypatch.setattr(client_module, "urlopen", fake_urlopen)
+
+    result = _client().sync_manifest(
+        {"schema_version": 1, "app": {"app_key": "my app"}},
+        base_url="https://app.example.com",
+    )
+
+    assert result == {"status": "applied", "version": 2}
+    assert captured["url"] == "http://easyauth:8001/api/v1/apps/my%20app/manifest-sync"
+    assert captured["method"] == "POST"
+    assert captured["body"] == {
+        "manifest": {"schema_version": 1, "app": {"app_key": "my app"}},
+        "base_url": "https://app.example.com",
+    }
+
+
+def test_list_approval_templates_and_list_approvals(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[str] = []
+
+    def fake_urlopen(request: Any, timeout: float) -> _FakeResponse:  # noqa: ARG001
+        captured.append(request.full_url)
+        if request.full_url.endswith("/approval-templates"):
+            return _FakeResponse(json.dumps({"data": [{"key": "expense"}]}).encode("utf-8"))
+        return _FakeResponse(
+            json.dumps({"data": [], "pagination": {"page": 1, "page_size": 20}}).encode("utf-8")
+        )
+
+    monkeypatch.setattr(client_module, "urlopen", fake_urlopen)
+
+    templates = _client().list_approval_templates()
+    approvals = _client().list_approvals(
+        status="submitted", biz_key="order-1", page=2, page_size=10
+    )
+
+    assert templates == {"data": [{"key": "expense"}]}
+    assert approvals["pagination"]["page"] == 1
+    assert captured[0] == "http://easyauth:8001/api/v1/apps/my%20app/approval-templates"
+    assert "status=submitted" in captured[1]
+    assert "biz_key=order-1" in captured[1]
+    assert "page=2" in captured[1]
+    assert "page_size=10" in captured[1]
