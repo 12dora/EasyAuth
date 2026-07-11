@@ -36,6 +36,7 @@ REQUEST_STATUS_REJECTED: Final = "rejected"
 REQUEST_STATUS_GRANT_APPLIED: Final = "grant_applied"
 REQUEST_STATUS_GRANT_FAILED: Final = "grant_failed"
 REQUEST_STATUS_GRANT_EXPIRED: Final = "grant_expired"
+REQUEST_STATUS_WITHDRAWN: Final = "withdrawn"
 REQUEST_STATUS_CHOICES: Final[tuple[tuple[str, str], ...]] = (
     (REQUEST_STATUS_SUBMITTED, "submitted"),
     (REQUEST_STATUS_APPROVED, "approved"),
@@ -43,6 +44,7 @@ REQUEST_STATUS_CHOICES: Final[tuple[tuple[str, str], ...]] = (
     (REQUEST_STATUS_GRANT_APPLIED, "grant_applied"),
     (REQUEST_STATUS_GRANT_FAILED, "grant_failed"),
     (REQUEST_STATUS_GRANT_EXPIRED, "grant_expired"),
+    (REQUEST_STATUS_WITHDRAWN, "withdrawn"),
 )
 REQUEST_STATUS_VALUES: Final[tuple[str, ...]] = (
     REQUEST_STATUS_SUBMITTED,
@@ -51,6 +53,7 @@ REQUEST_STATUS_VALUES: Final[tuple[str, ...]] = (
     REQUEST_STATUS_GRANT_APPLIED,
     REQUEST_STATUS_GRANT_FAILED,
     REQUEST_STATUS_GRANT_EXPIRED,
+    REQUEST_STATUS_WITHDRAWN,
 )
 
 GRANT_TYPE_TIMED: Final = "timed"

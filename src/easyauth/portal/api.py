@@ -6,6 +6,10 @@ from typing import TYPE_CHECKING
 from django.http import HttpRequest, JsonResponse
 from pydantic import ValidationError
 
+from easyauth.access_requests.approvals import (
+    ApprovalActionError,
+    withdraw_access_request,
+)
 from easyauth.access_requests.services import (
     IDEMPOTENCY_KEY_MAX_LENGTH,
     AccessRequestIdempotencyConflictError,
@@ -116,6 +120,53 @@ def portal_request_catalog(request: HttpRequest) -> JsonResponse:
         )
 
     return _json_response(request_catalog_payload(user))
+
+
+def portal_access_request_withdraw(request: HttpRequest, request_id: int) -> JsonResponse:
+    """申请人撤回本人的待审批申请。"""
+    match _active_user(request):
+        case UserMirror() as user:
+            pass
+        case JsonResponse() as response:
+            return response
+    if request.method != "POST":
+        return _error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "请求方法无效。",
+            status=HTTPStatus.METHOD_NOT_ALLOWED,
+        )
+    try:
+        access_request = withdraw_access_request(
+            request_id=request_id,
+            actor_user_id=user.authentik_user_id,
+        )
+    except ApprovalActionError as exc:
+        return _withdraw_error_response(exc)
+    return _json_response({"access_request": access_request_item(access_request)})
+
+
+def _withdraw_error_response(error: ApprovalActionError) -> JsonResponse:
+    match error.kind:
+        case "not_found" | "not_owner":
+            return _error_response(
+                ErrorCode.NOT_FOUND,
+                "申请不存在或无权撤回。",
+                status=HTTPStatus.NOT_FOUND,
+            )
+        case "conflict":
+            return _error_response(
+                ErrorCode.SEMANTIC_VALIDATION_ERROR,
+                error.message,
+                error.details,
+                status=HTTPStatus.CONFLICT,
+            )
+        case _:
+            return _error_response(
+                ErrorCode.VALIDATION_ERROR,
+                error.message,
+                error.details,
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            )
 
 
 def _submit_access_request(request: HttpRequest, user: UserMirror) -> JsonResponse:
@@ -230,7 +281,9 @@ def _parse_days(request: HttpRequest) -> int | JsonResponse:
     return days
 
 
-def _semantic_error_details(exc: AccessRequestTargetError | AccessRequestSubmissionError) -> dict[
+def _semantic_error_details(
+    exc: AccessRequestTargetError | AccessRequestSubmissionError,
+) -> dict[
     str,
     JsonValue,
 ]:

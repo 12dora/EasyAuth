@@ -3,6 +3,7 @@ from __future__ import annotations
 from django.urls import path
 
 from easyauth.portal.api import (
+    portal_access_request_withdraw,
     portal_access_requests,
     portal_expiring_grants,
     portal_grants,
@@ -23,6 +24,11 @@ urlpatterns = [
         "api/v1/me/access-requests",
         portal_access_requests,
         name="portal-api-access-requests",
+    ),
+    path(
+        "api/v1/me/access-requests/<int:request_id>/withdraw",
+        portal_access_request_withdraw,
+        name="portal-api-access-request-withdraw",
     ),
     path("api/v1/me/approvals", portal_approvals, name="portal-api-approvals"),
     path(

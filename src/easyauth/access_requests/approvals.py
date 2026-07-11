@@ -17,6 +17,7 @@ from easyauth.access_requests.models import (
     REQUEST_STATUS_APPROVED,
     REQUEST_STATUS_REJECTED,
     REQUEST_STATUS_SUBMITTED,
+    REQUEST_STATUS_WITHDRAWN,
     AccessRequest,
     AccessRequestApprover,
 )
@@ -32,6 +33,7 @@ type ApprovalActionErrorKind = Literal[
     "conflict",
     "not_approver",
     "not_found",
+    "not_owner",
     "validation_error",
 ]
 
@@ -43,6 +45,7 @@ REASSIGN_ONLY_SUBMITTED_MESSAGE = "只有待审批的申请可以改派审批人
 REASSIGN_APPROVERS_REQUIRED_MESSAGE = "改派后的审批人列表不能为空。"
 REASSIGN_APPLICANT_FORBIDDEN_MESSAGE = "申请人不能被指定为审批人。"
 REASSIGN_APPROVER_INVALID_MESSAGE = "审批人必须是在职人员。"
+WITHDRAW_ONLY_SUBMITTED_MESSAGE = "只有待审批的申请可以撤回。"
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +131,47 @@ def reject_access_request(*, request_id: int, decision: ApprovalDecision) -> Acc
     return access_request
 
 
+def withdraw_access_request(*, request_id: int, actor_user_id: str) -> AccessRequest:
+    """申请人撤回待审批申请; 已撤回幂等返回。"""
+    with transaction.atomic():
+        access_request = _locked_request(request_id)
+        if access_request.user.authentik_user_id != actor_user_id:
+            # 对非所有者统一按 not_found 处理, 避免泄露他人申请是否存在。
+            raise ApprovalActionError(
+                kind="not_found",
+                message=REQUEST_NOT_FOUND_MESSAGE,
+                details={"request_id": request_id},
+            )
+        match access_request.status:
+            case status if status == REQUEST_STATUS_SUBMITTED:
+                access_request.status = REQUEST_STATUS_WITHDRAWN
+                access_request.full_clean()
+                access_request.save(update_fields=["status"])
+                _ = AuditService.record(
+                    AuditRecord(
+                        actor_type=DECISION_ACTOR_USER,
+                        actor_id=actor_user_id,
+                        action="access_request_withdrawn",
+                        target_type="access_request",
+                        target_id=str(access_request.id),
+                        metadata={
+                            "user_id": access_request.user.authentik_user_id,
+                            "app_key": access_request.app.app_key,
+                        },
+                    ),
+                )
+            case status if status == REQUEST_STATUS_WITHDRAWN:
+                # 重复撤回幂等: 不重复记审计。
+                pass
+            case status:
+                raise ApprovalActionError(
+                    kind="conflict",
+                    message=WITHDRAW_ONLY_SUBMITTED_MESSAGE,
+                    details={"request_id": request_id, "status": status},
+                )
+    return access_request
+
+
 def reassign_access_request(
     *,
     request_id: int,
@@ -189,10 +233,7 @@ def access_request_approver_user_ids(access_request: AccessRequest) -> list[str]
                 access_request=access_request,
             ),
         )
-    return [
-        assignment.approver.authentik_user_id
-        for assignment in assignments
-    ]
+    return [assignment.approver.authentik_user_id for assignment in assignments]
 
 
 def _ensure_decision_allowed(
