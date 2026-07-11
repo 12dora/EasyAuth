@@ -50,6 +50,7 @@ class ShellUser:
     user_id: str
     display_name: str
     role: str
+    is_superuser: bool = False
     avatar_url: str = ""
 
 
@@ -126,10 +127,12 @@ def shell_user_from_session(request: HttpRequest) -> ShellUser | None:
 
 
 def shell_user_from_user(request: HttpRequest, user: UserMirror) -> ShellUser:
+    is_superuser = _is_console_superuser(request)
     return ShellUser(
         user_id=user.authentik_user_id,
         display_name=_display_name(user),
-        role=_role_label(request),
+        role=_role_label(request, is_superuser=is_superuser),
+        is_superuser=is_superuser,
         avatar_url=user.avatar_url,
     )
 
@@ -198,16 +201,22 @@ def _display_name(user: UserMirror) -> str:
     return "当前用户"
 
 
-def _role_label(request: HttpRequest) -> str:
+def _is_console_superuser(request: HttpRequest) -> bool:
     groups = _session_string_list(request, AUTHENTIK_GROUPS_SESSION_KEY)
     configured_admin_groups = _string_values(
         getattr(settings, "EASYAUTH_CONSOLE_SUPERUSER_GROUPS", ()),
     )
-    if configured_admin_groups and not set(groups).isdisjoint(configured_admin_groups):
+    return bool(configured_admin_groups) and not set(groups).isdisjoint(configured_admin_groups)
+
+
+def _role_label(request: HttpRequest, *, is_superuser: bool) -> str:
+    # role 仅作展示; 门禁以 is_superuser / 后端 membership 为准。
+    if is_superuser:
         return "EasyAuth Admins"
+    groups = _session_string_list(request, AUTHENTIK_GROUPS_SESSION_KEY)
     if groups:
         return "、".join(groups[:2])
-    return "未分组"
+    return "Member"
 
 
 def _session_string(request: HttpRequest, key: str) -> str:

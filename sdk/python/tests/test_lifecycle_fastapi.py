@@ -94,3 +94,23 @@ def test_router_answers_webhook_test() -> None:
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
+
+
+def test_router_rejects_oversized_unsigned_body() -> None:
+    api = FastAPI()
+    api.include_router(
+        easyauth_lifecycle_router(
+            lambda: SECRET,
+            lambda _event: {"assets": []},
+            lambda _event: {"summary": {}},
+            max_body_bytes=32,
+        )
+    )
+    body = b"x" * 64
+    response = TestClient(api).post(
+        DEFAULT_HANDOVER_PATH,
+        content=body,
+        headers={"Content-Type": "application/json"},
+    )
+    assert response.status_code == 413
+    assert response.json()["error"]["code"] == "request_body_too_large"

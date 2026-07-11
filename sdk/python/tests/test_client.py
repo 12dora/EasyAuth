@@ -13,6 +13,9 @@ from easyauth_app_sdk import client as client_module
 class _FakeResponse:
     def __init__(self, body: bytes) -> None:
         self._body = body
+        self._offset = 0
+        self.headers: dict[str, str] = {}
+        self.status = 200
 
     def __enter__(self) -> Self:
         return self
@@ -20,12 +23,23 @@ class _FakeResponse:
     def __exit__(self, *_args: object) -> None:
         return None
 
-    def read(self) -> bytes:
-        return self._body
+    def read(self, amount: int = -1) -> bytes:
+        if amount is None or amount < 0:
+            chunk = self._body[self._offset :]
+            self._offset = len(self._body)
+            return chunk
+        chunk = self._body[self._offset : self._offset + amount]
+        self._offset += len(chunk)
+        return chunk
 
 
 def _client() -> EasyAuthAppClient:
-    return EasyAuthAppClient(base_url="http://easyauth:8001/", app_key="my app", token="eat_x")
+    return EasyAuthAppClient(
+        base_url="http://easyauth:8001/",
+        app_key="my app",
+        token="eat_x",
+        allow_insecure_http=True,
+    )
 
 
 def test_query_returns_dict_payload_and_encodes_url(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -96,6 +110,44 @@ def test_query_raises_client_error_on_non_dict_json(monkeypatch: pytest.MonkeyPa
 
     with pytest.raises(EasyAuthClientError, match="格式无效"):
         _client().query_user_permissions("u")
+
+
+def test_rejects_insecure_http_by_default() -> None:
+    client = EasyAuthAppClient(base_url="http://evil.example.com", app_key="app", token="eat_x")
+    with pytest.raises(EasyAuthClientError, match="https"):
+        client.query_user_permissions("u")
+
+
+def test_rejects_redirect_responses(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_urlopen(request: Any, timeout: float) -> _FakeResponse:  # noqa: ARG001
+        raise HTTPError(
+            request.full_url,
+            302,
+            "Found",
+            {"Location": "https://evil.example.com/"},  # type: ignore[arg-type]
+            io.BytesIO(b""),
+        )
+
+    monkeypatch.setattr(client_module, "urlopen", fake_urlopen)
+    with pytest.raises(EasyAuthClientError, match="重定向"):
+        _client().query_user_permissions("u")
+
+
+def test_rejects_oversized_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_urlopen(request: Any, timeout: float) -> _FakeResponse:  # noqa: ARG001
+        response = _FakeResponse(b"x" * 20)
+        return response
+
+    monkeypatch.setattr(client_module, "urlopen", fake_urlopen)
+    client = EasyAuthAppClient(
+        base_url="http://easyauth:8001",
+        app_key="app",
+        token="eat_x",
+        allow_insecure_http=True,
+        max_response_bytes=10,
+    )
+    with pytest.raises(EasyAuthClientError, match="大小上限"):
+        client.query_user_permissions("u")
 
 
 def test_sync_manifest_posts_body_and_optional_base_url(monkeypatch: pytest.MonkeyPatch) -> None:

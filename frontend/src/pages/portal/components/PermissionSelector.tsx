@@ -46,6 +46,7 @@ interface PermissionSelectorProps {
   onExpandGroups: (groupKeys: string[]) => void;
   onCollapseGroups: (groupKeys: string[]) => void;
   onToggleGroup: (key: string) => void;
+  disabled?: boolean;
 }
 
 type PermissionSelectorRow =
@@ -77,6 +78,13 @@ type ScopeOptionView = NonNullable<ScopedPermissionItem["scopes"]>[number];
 
 const EXIT_ANIMATION_MS = 160;
 
+function motionDurationMs(fullMs: number): number {
+  if (typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    return 0;
+  }
+  return fullMs;
+}
+
 export function PermissionSelector({
   appKey,
   groups,
@@ -93,6 +101,7 @@ export function PermissionSelector({
   onExpandGroups,
   onCollapseGroups,
   onToggleGroup,
+  disabled = false,
 }: PermissionSelectorProps) {
   const { locale, t } = useI18n();
   const exitingGroupKeys = useExitingGroupKeys(expandedGroupKeys);
@@ -267,8 +276,12 @@ export function PermissionSelector({
                     row.original.type === "permission" && row.original.isSelected && "permission-selector__row--selected",
                     row.original.isEntering && "permission-selector__row--entering",
                     row.original.isExiting && "permission-selector__row--exiting",
+                    disabled && "pointer-events-none opacity-60",
                   )}
-                  onClick={groupRowClickHandler(row.original, onToggleGroup)}
+                  aria-hidden={row.original.isExiting || undefined}
+                  // 退出动画开始即移出可访问树, 避免读屏/Tab 仍命中。
+                  {...(row.original.isExiting || disabled ? ({ inert: "" } as object) : {})}
+                  onClick={disabled ? undefined : groupRowClickHandler(row.original, onToggleGroup)}
                 >
                   {row.getVisibleCells().map((cell) => (
                     <td
@@ -742,7 +755,7 @@ function useEnteringGroupKeys(expandedGroupKeys: string[]): string[] {
         const next = current.filter((key) => !addedGroupKeys.includes(key));
         return stringListsAreEqual(current, next) ? current : next;
       });
-    }, EXIT_ANIMATION_MS);
+    }, motionDurationMs(EXIT_ANIMATION_MS));
     return () => window.clearTimeout(timeoutId);
   }, [expandedGroupKeys]);
 
@@ -755,11 +768,21 @@ function useEnteringGroupKeys(expandedGroupKeys: string[]): string[] {
 function useExitingGroupKeys(expandedGroupKeys: string[]): string[] {
   const previousExpandedGroupKeys = useRef(expandedGroupKeys);
   const timeoutIdsByKey = useRef(new Map<string, number>());
+  const generationByKey = useRef(new Map<string, number>());
   const [exitingGroupKeys, setExitingGroupKeys] = useState<string[]>([]);
 
   useEffect(() => {
     const removedGroupKeys = previousExpandedGroupKeys.current.filter((key) => !expandedGroupKeys.includes(key));
     previousExpandedGroupKeys.current = expandedGroupKeys;
+    // 重新展开时取消对应退出 generation/timer, 避免旧 timer 提前结束新动画。
+    for (const key of expandedGroupKeys) {
+      const existingTimer = timeoutIdsByKey.current.get(key);
+      if (existingTimer !== undefined) {
+        window.clearTimeout(existingTimer);
+        timeoutIdsByKey.current.delete(key);
+      }
+      generationByKey.current.set(key, (generationByKey.current.get(key) ?? 0) + 1);
+    }
     if (removedGroupKeys.length === 0) {
       setExitingGroupKeys((current) => {
         const next = current.filter((key) => !expandedGroupKeys.includes(key));
@@ -773,16 +796,22 @@ function useExitingGroupKeys(expandedGroupKeys: string[]): string[] {
       return stringListsAreEqual(current, next) ? current : next;
     });
     for (const removedGroupKey of removedGroupKeys) {
-      if (timeoutIdsByKey.current.has(removedGroupKey)) {
-        continue;
+      const generation = (generationByKey.current.get(removedGroupKey) ?? 0) + 1;
+      generationByKey.current.set(removedGroupKey, generation);
+      const existingTimer = timeoutIdsByKey.current.get(removedGroupKey);
+      if (existingTimer !== undefined) {
+        window.clearTimeout(existingTimer);
       }
       const timeoutId = window.setTimeout(() => {
         timeoutIdsByKey.current.delete(removedGroupKey);
+        if (generationByKey.current.get(removedGroupKey) !== generation) {
+          return;
+        }
         setExitingGroupKeys((current) => {
           const next = current.filter((key) => key !== removedGroupKey);
           return stringListsAreEqual(current, next) ? current : next;
         });
-      }, EXIT_ANIMATION_MS);
+      }, motionDurationMs(EXIT_ANIMATION_MS));
       timeoutIdsByKey.current.set(removedGroupKey, timeoutId);
     }
   }, [expandedGroupKeys]);

@@ -18,8 +18,11 @@ interface UserSummaryProps {
 export function UserSummary({ currentUser, mode, open, onOpenChange }: UserSummaryProps) {
   const { t } = useI18n();
   const menuId = useId();
-  const userName = firstPresent(currentUser.displayName, mode === "console" ? "控制台用户" : "当前用户");
-  const userRole = firstPresent(currentUser.role, "未分组");
+  const userName = firstPresent(
+    currentUser.displayName,
+    mode === "console" ? t("shell.user.consoleFallback") : t("shell.user.portalFallback"),
+  );
+  const userRole = firstPresent(currentUser.role, t("shell.user.ungrouped"));
   const logoutUrl = localLogoutUrl(currentUser.logoutUrl);
   const avatarUrl = safeAvatarUrl(currentUser.avatarUrl);
   const securityHref = mode === "console" ? "/console/settings" : "/portal/settings";
@@ -34,7 +37,7 @@ export function UserSummary({ currentUser, mode, open, onOpenChange }: UserSumma
         aria-label={t("shell.userMenu")}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-controls={menuId}
+        aria-controls={open ? menuId : undefined}
         onClick={() => onOpenChange(!open)}
       >
         <span className="user-summary">
@@ -42,26 +45,28 @@ export function UserSummary({ currentUser, mode, open, onOpenChange }: UserSumma
           <span>{userRole}</span>
         </span>
         {avatarUrl ? (
-          <img className="avatar avatar-image" src={avatarUrl} alt={`${userName}头像`} />
+          <img className="avatar avatar-image" src={avatarUrl} alt={t("shell.user.avatarAlt", { name: userName })} />
         ) : (
           <span className="avatar" aria-hidden="true">
             {avatarLabel}
           </span>
         )}
       </button>
-      <div className="user-menu-popover" id={menuId} data-open={open} role="menu">
-        <Link className="user-menu-item" to={securityHref} role="menuitem">
-          <ShieldCheck size={15} aria-hidden="true" />
-          <span>{t("shell.securitySettings")}</span>
-        </Link>
-        <form action={logoutUrl} aria-label={t("shell.logout")} method="post">
-          {csrfToken ? <input type="hidden" name="csrfmiddlewaretoken" value={csrfToken} /> : null}
-          <button type="submit" className="user-menu-item user-menu-item-danger" role="menuitem">
-            <LogOut size={15} aria-hidden="true" />
-            <span>{t("shell.logout")}</span>
-          </button>
-        </form>
-      </div>
+      {open ? (
+        <div className="user-menu-popover topbar-popover" id={menuId} data-open="true" role="menu">
+          <Link className="user-menu-item" to={securityHref} role="menuitem" onClick={() => onOpenChange(false)}>
+            <ShieldCheck size={15} aria-hidden="true" />
+            <span>{t("shell.securitySettings")}</span>
+          </Link>
+          <form action={logoutUrl} aria-label={t("shell.logout")} method="post">
+            {csrfToken ? <input type="hidden" name="csrfmiddlewaretoken" value={csrfToken} /> : null}
+            <button type="submit" className="user-menu-item user-menu-item-danger" role="menuitem">
+              <LogOut size={15} aria-hidden="true" />
+              <span>{t("shell.logout")}</span>
+            </button>
+          </form>
+        </div>
+      ) : null}
     </div>
   );
 }

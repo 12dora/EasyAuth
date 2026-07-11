@@ -25,7 +25,9 @@ export interface AuthorizationGroupSavePayload extends JsonObject {
   key: string;
   kind: string;
   name: string;
+  name_en: string;
   description: string;
+  description_en: string;
   requestable: boolean;
   is_active: boolean;
   grants: AuthorizationGroupGrantPayload[];
@@ -58,7 +60,9 @@ export function buildAuthorizationGroupPayload(group: AuthorizationGroupItem): A
     key: group.key,
     kind: group.kind,
     name: group.name,
+    name_en: group.name_en ?? "",
     description: group.description ?? "",
+    description_en: group.description_en ?? "",
     requestable: group.requestable,
     is_active: group.is_active,
     grants: normalizeGrants(group.grants).map(grantPayload),

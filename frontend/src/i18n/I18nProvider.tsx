@@ -11,6 +11,7 @@ interface I18nContextValue {
   locale: Locale;
   setLocale: (locale: Locale) => void;
   t: (key: MessageKey, vars?: MessageVars) => string;
+  formatDateTime: (value: string | null | undefined) => string;
 }
 
 function translate(locale: Locale, key: MessageKey, vars?: MessageVars): string {
@@ -42,6 +43,7 @@ const I18nContext = createContext<I18nContextValue>({
     throw new Error("setLocale 只能在 I18nProvider 内调用。");
   },
   t: (key, vars) => translate(DEFAULT_LOCALE, key, vars),
+  formatDateTime: (value) => formatDateTimeValue(value, DEFAULT_LOCALE),
 });
 
 export function I18nProvider({ children }: { children: ReactNode }) {
@@ -62,6 +64,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
       locale,
       setLocale,
       t: (key, vars) => translate(locale, key, vars),
+      formatDateTime: (value) => formatDateTimeValue(value, locale),
     }),
     [locale, setLocale],
   );
@@ -77,6 +80,23 @@ export function useI18n(): I18nContextValue {
  * 目录数据（权限/权限组/范围/授权组）的双语显示：
  * en 且英文字段非空时用英文，否则回落中文主字段。
  */
+function formatDateTimeValue(value: string | null | undefined, locale: Locale): string {
+  if (!value) {
+    return "-";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return new Intl.DateTimeFormat(locale, {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(date);
+}
+
 export function localizedField(locale: Locale, zhValue: string | null | undefined, enValue: string | null | undefined): string {
   if (locale === "en" && enValue) {
     return enValue;

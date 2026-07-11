@@ -253,7 +253,25 @@ function useAccessRequestSubmitMutation(
   fields: AccessRequestFields,
   catalogView: CatalogView,
 ): UseMutationResult<unknown, Error, void, unknown> {
-  const pendingSubmission = useRef<{ payload: string; idempotencyKey: string } | null>(null);
+  const pendingSubmission = useRef<{
+    payload: string;
+    idempotencyKey: string;
+    draftRevision: number;
+  } | null>(null);
+  const draftRevision = useRef(0);
+  // 草稿每次编辑推进 revision; 提交成功时仅当 revision 未变才 reset, 避免清空用户新草稿。
+  useEffect(() => {
+    draftRevision.current += 1;
+  }, [
+    fields.appKey,
+    fields.authorizationGroupKey,
+    fields.selectedPermissionKeys,
+    fields.selectedPermissionScopes,
+    fields.selectedApproverUserIds,
+    fields.grantType,
+    fields.expiresAt,
+    fields.reason,
+  ]);
   return useMutation({
     mutationFn: () => {
       const payload = buildAccessRequestPayload(fields, catalogView);
@@ -262,6 +280,7 @@ function useAccessRequestSubmitMutation(
         pendingSubmission.current = {
           payload: serializedPayload,
           idempotencyKey: crypto.randomUUID(),
+          draftRevision: draftRevision.current,
         };
       }
       return apiRequest("/portal/api/v1/me/access-requests", {
@@ -271,12 +290,16 @@ function useAccessRequestSubmitMutation(
       });
     },
     onSuccess: () => {
+      const submittedRevision = pendingSubmission.current?.draftRevision;
       pendingSubmission.current = null;
-      fields.setAuthorizationGroupKey("");
-      fields.setSelectedPermissionKeys([]);
-      fields.setSelectedPermissionScopes({});
-      fields.setApproverSelectionWasEdited(false);
-      fields.setReason("");
+      // 仅当提交期间草稿未变时清空目标与理由, 避免旧成功响应抹掉新编辑。
+      if (submittedRevision === draftRevision.current) {
+        fields.setAuthorizationGroupKey("");
+        fields.setSelectedPermissionKeys([]);
+        fields.setSelectedPermissionScopes({});
+        fields.setApproverSelectionWasEdited(false);
+        fields.setReason("");
+      }
       void queryClient.invalidateQueries({ queryKey: ["portal", "requests"] });
     },
   });

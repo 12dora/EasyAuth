@@ -15,9 +15,13 @@ from easyauth_app_sdk.integration import (
 )
 from easyauth_app_sdk.lifecycle import (
     DEFAULT_HANDOVER_PATH,
+    DEFAULT_MAX_BODY_BYTES,
+    BodyTooLargeError,
     HandoverCallback,
     SecretProvider,
+    body_too_large_response,
     lifecycle_http_response,
+    read_bounded_body,
 )
 
 if TYPE_CHECKING:
@@ -59,6 +63,7 @@ def easyauth_lifecycle_router(
     on_handover_execute: HandoverCallback,
     *,
     path: str = DEFAULT_HANDOVER_PATH,
+    max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
 ) -> "APIRouter":
     """创建接收 EasyAuth 生命周期交接 webhook 的 FastAPI router。
 
@@ -67,6 +72,8 @@ def easyauth_lifecycle_router(
     ``on_handover_execute`` 返回 execute 响应体(``{"summary": {...}}``, 按
     ``payload.task_id`` 幂等)。``secret_provider`` 在每次请求时取密钥,
     避免 import 期读配置。
+
+    在验签前先按 ``max_body_bytes`` 有界读取请求体, 超限返回 413。
     """
     from fastapi import APIRouter, Request, Response
 
@@ -74,7 +81,11 @@ def easyauth_lifecycle_router(
 
     @router.post(path, include_in_schema=False)
     async def post_easyauth_lifecycle_handover(request: Request) -> Response:
-        raw_body = await request.body()
+        try:
+            raw_body = await read_bounded_body(request, max_body_bytes=max_body_bytes)
+        except BodyTooLargeError:
+            status_code, headers, body = body_too_large_response(max_body_bytes)
+            return Response(content=body, status_code=status_code, media_type=headers["Content-Type"])
         status_code, headers, body = lifecycle_http_response(
             secret_provider=secret_provider,
             headers=dict(request.headers),

@@ -12,9 +12,11 @@ export function AccessRequestForm({ currentUserId = "" }: { currentUserId?: stri
   const { t } = useI18n();
   const form = useAccessRequestForm(currentUserId);
 
+  const fieldsDisabled = form.isSubmitting;
+
   return (
     <PanelSurface>
-      <div className="flex flex-col gap-5">
+      <div className="flex flex-col gap-5" aria-busy={form.isSubmitting || undefined}>
         <RequestTargetPicker
           appKey={form.appKey}
           apps={form.apps}
@@ -27,6 +29,7 @@ export function AccessRequestForm({ currentUserId = "" }: { currentUserId?: stri
           expandedGroupKeys={form.expandedGroupKeys}
           catalogIsLoading={form.catalogIsLoading}
           catalogErrorMessage={form.catalogErrorMessage}
+          disabled={fieldsDisabled}
           onAppKeyChange={form.changeAppKey}
           onAuthorizationGroupKeyChange={form.changeAuthorizationGroupKey}
           onPermissionScopeChange={form.changePermissionScope}
@@ -45,6 +48,7 @@ export function AccessRequestForm({ currentUserId = "" }: { currentUserId?: stri
           expiresAt={form.expiresAt}
           expiresAtError={form.expiresAtError}
           reason={form.reason}
+          disabled={fieldsDisabled}
           onApproverToggle={form.toggleApprover}
           onGrantTypeChange={form.changeGrantType}
           onExpiresAtChange={form.changeExpiresAt}
@@ -57,7 +61,7 @@ export function AccessRequestForm({ currentUserId = "" }: { currentUserId?: stri
           variant="primary"
           icon={<Send size={16} />}
           loading={form.isSubmitting}
-          disabled={!form.canSubmit}
+          disabled={!form.canSubmit || form.isSubmitting}
           onClick={form.submit}
         >
           {t("portal.request.submit")}

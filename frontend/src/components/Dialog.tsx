@@ -3,6 +3,8 @@ import { useEffect, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 
+import { useI18n } from "../i18n/I18nProvider";
+
 type DialogSize = "sm" | "md" | "lg" | "xl";
 
 interface DialogProps {
@@ -31,6 +33,7 @@ export function Dialog({
   eyebrow,
   closeDisabled = false,
 }: DialogProps) {
+  const { t } = useI18n();
   const titleId = useId();
   const panelRef = useRef<HTMLDivElement>(null);
   useDialogEffects(onClose, panelRef, closeDisabled);
@@ -43,7 +46,7 @@ export function Dialog({
     <div className="fixed inset-0 z-[1000] flex items-start justify-center overflow-y-auto px-4 py-10" role="presentation">
       <button
         type="button"
-        aria-label="关闭弹窗遮罩"
+        aria-label={t("dialog.closeBackdrop")}
         className="fixed inset-0 cursor-default bg-ink/40 backdrop-blur-[2px]"
         onClick={onClose}
         disabled={closeDisabled}
@@ -67,7 +70,7 @@ export function Dialog({
               type="button"
               className="-mr-1 inline-flex size-8 items-center justify-center rounded-[2px] border border-transparent bg-transparent text-ink-soft transition-colors hover:bg-ink/5 hover:text-ink focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent/50"
               onClick={onClose}
-              aria-label="关闭弹窗"
+              aria-label={t("dialog.close")}
               disabled={closeDisabled}
             >
               <X size={16} aria-hidden="true" />
