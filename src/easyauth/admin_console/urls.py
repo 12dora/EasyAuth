@@ -132,6 +132,10 @@ from easyauth.admin_console.webhook_config_api import (
     console_app_webhook_config,
     console_app_webhook_test,
 )
+from easyauth.admin_console.webhook_deliveries_api import (
+    console_app_webhook_deliveries,
+    console_app_webhook_delivery_redeliver,
+)
 
 app_name = "admin_console"
 
@@ -373,6 +377,16 @@ urlpatterns = [
         "api/v1/apps/<str:app_key>/webhook-config/test",
         console_app_webhook_test,
         name="console-app-webhook-test",
+    ),
+    path(
+        "api/v1/apps/<str:app_key>/webhook-deliveries",
+        console_app_webhook_deliveries,
+        name="console-app-webhook-deliveries",
+    ),
+    path(
+        "api/v1/apps/<str:app_key>/webhook-deliveries/<int:delivery_pk>/redeliver",
+        console_app_webhook_delivery_redeliver,
+        name="console-app-webhook-delivery-redeliver",
     ),
     path(
         "api/v1/operations/access-requests/<int:request_id>/retry-grant",
