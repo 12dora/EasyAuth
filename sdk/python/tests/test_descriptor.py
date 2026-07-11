@@ -123,6 +123,40 @@ def test_validate_manifest_rejects_bad_lifecycle_and_webhook_types() -> None:
         validate_manifest(manifest)
 
 
+def test_validate_manifest_rejects_duplicate_keys_and_unknown_grants() -> None:
+    manifest = _manifest()
+    manifest["scopes"].append({"key": "SELF", "name": "重复"})
+    with pytest.raises(ManifestValidationError, match="重复 key"):
+        validate_manifest(manifest)
+
+    manifest = _manifest()
+    manifest["authorization_groups"] = [
+        {
+            "key": "reader",
+            "kind": "role",
+            "name": "只读",
+            "grants": [
+                {"permission": "demo.item.view", "scope": "SELF"},
+                {"permission": "demo.item.view", "scope": "SELF"},
+            ],
+        }
+    ]
+    with pytest.raises(ManifestValidationError, match="重复 grant"):
+        validate_manifest(manifest)
+
+    manifest = _manifest()
+    manifest["authorization_groups"] = [
+        {
+            "key": "reader",
+            "kind": "bundle",
+            "name": "只读",
+            "grants": [{"permission": "missing.perm", "scope": "SELF"}],
+        }
+    ]
+    with pytest.raises(ManifestValidationError, match="未知权限"):
+        validate_manifest(manifest)
+
+
 def test_parse_descriptor_rejects_app_key_mismatch() -> None:
     payload = build_descriptor_payload(manifest=_manifest())
     payload["app"]["app_key"] = "otherapp"
