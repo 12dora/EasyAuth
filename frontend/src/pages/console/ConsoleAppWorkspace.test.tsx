@@ -483,7 +483,9 @@ describe("ConsoleAppWorkspace", () => {
         key: "accountant",
         kind: "role",
         name: "会计只读",
+        name_en: "",
         description: "财务只读角色",
+        description_en: "",
         requestable: true,
         is_active: true,
         grants: [

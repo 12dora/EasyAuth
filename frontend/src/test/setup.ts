@@ -12,6 +12,23 @@ if (typeof globalThis.ResizeObserver === "undefined") {
   globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
 }
 
+// jsdom 不实现 matchMedia; PermissionSelector 动画时长依赖 prefers-reduced-motion。
+if (typeof window !== "undefined" && typeof window.matchMedia !== "function") {
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    value: (query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: () => undefined,
+      removeListener: () => undefined,
+      addEventListener: () => undefined,
+      removeEventListener: () => undefined,
+      dispatchEvent: () => false,
+    }),
+  });
+}
+
 // jsdom 在 about:blank 下不提供 localStorage; I18nProvider 的语言持久化依赖它。
 if (typeof window !== "undefined" && !window.localStorage) {
   const store = new Map<string, string>();

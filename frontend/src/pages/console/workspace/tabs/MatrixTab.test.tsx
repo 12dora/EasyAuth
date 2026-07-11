@@ -112,7 +112,9 @@ describe("MatrixTab", () => {
         key: "manager",
         kind: "role",
         name: "主管",
+        name_en: "",
         description: "管理范围角色",
+        description_en: "",
         requestable: true,
         is_active: true,
         grants: [
