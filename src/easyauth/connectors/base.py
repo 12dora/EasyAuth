@@ -16,6 +16,7 @@ if TYPE_CHECKING:
 
 RECONCILE_STATUS_SUCCESS = "success"
 RECONCILE_STATUS_PARTIAL = "partial"
+RECONCILE_STATUS_FAILED = "failed"
 
 
 class ConnectorError(RuntimeError):

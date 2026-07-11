@@ -346,11 +346,14 @@ def test_reconcile_reports_missing_immutable_group_ids(
     # When
     report = NetBirdConnector().reconcile(_instance(), desired)
 
-    # Then: 不猜测可变名称, 不创建替代组; 缺失身份留作显式修复。
+    # Then: 缺组整轮失败关闭, 不得创建用户/组或假成功。
     assert fake_client.created_groups == []
+    assert fake_client.created_users == []
+    assert fake_client.updated_users == []
     expected_missing = 2
+    assert report.status == "failed"
     assert report.stats["groups_missing"] == expected_missing
-    assert fake_client.created_users[0]["auto_group_ids"] == []
+    assert "不可变组 ID" in report.error
 
 
 def test_reconcile_stops_at_api_budget_and_reports_partial(

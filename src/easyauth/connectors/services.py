@@ -42,27 +42,35 @@ CONNECTOR_UNHEALTHY_FAILURE_THRESHOLD: Final = 3
 
 
 def build_desired_state(instance: ConnectorInstance) -> DesiredState:
-    """构建只包含 active 用户的投影, 并保留待清理外部身份的管理范围。"""
+    """构建只包含有效成员的投影, 并与权限查询共用 active 组与期限口径。"""
+    now = timezone.now()
     mappings = tuple(
         ConnectorMapping.objects.filter(instance=instance).select_related("authorization_group"),
     )
+    # 仅 active 且未 tombstone 的映射参与扩权; tombstone/缺组映射仍进入 managed 以便收缩清理。
     active_mappings = tuple(
         mapping
         for mapping in mappings
-        if not mapping.tombstoned and mapping.authorization_group is not None
+        if (
+            not mapping.tombstoned
+            and mapping.authorization_group is not None
+            and mapping.authorization_group.is_active
+        )
     )
     external_ref_by_group_id = {
         mapping.authorization_group_id: mapping.external_ref for mapping in active_mappings
     }
     membership_rows = (
         AccessGrantGroup.objects.filter(
+            Q(expires_at__isnull=True) | Q(expires_at__gt=now),
             grant__app_id=instance.app_id,
             grant__is_current=True,
             grant__status=GRANT_STATUS_ACTIVE,
             grant__user__status=USER_STATUS_ACTIVE,
             authorization_group_id__in=external_ref_by_group_id,
+            authorization_group__is_active=True,
         )
-        .select_related("grant__user")
+        .select_related("grant__user", "authorization_group")
         .order_by("id")
     )
     user_group_refs: dict[str, set[str]] = {}
@@ -81,9 +89,8 @@ def build_desired_state(instance: ConnectorInstance) -> DesiredState:
         user_groups={user_id: frozenset(refs) for user_id, refs in user_group_refs.items()},
         profiles=profiles,
         managed_group_refs=frozenset(mapping.external_ref for mapping in mappings),
-        auto_create_group_refs=frozenset(
-            mapping.external_ref for mapping in active_mappings if mapping.auto_create
-        ),
+        # external_ref 是不可变外部组 ID, 不支持按名称自动创建; 字段保留为空以消除死配置假成功。
+        auto_create_group_refs=frozenset(),
     )
 
 

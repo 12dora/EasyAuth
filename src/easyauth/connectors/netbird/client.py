@@ -92,7 +92,9 @@ class NetBirdClient:
         if not isinstance(payload, list):
             message = "NetBird /api/users 响应必须是 JSON 数组。"
             raise NetBirdApiError(message)
-        return [_parse_user(item) for item in payload if isinstance(item, dict)]
+        users = [_parse_user(item) for item in payload]
+        _assert_unique_ids([user.user_id for user in users], label="users")
+        return users
 
     def get_account_id(self) -> str:
         payload = self._request("GET", "/api/accounts")
@@ -103,10 +105,7 @@ class NetBirdClient:
         if not isinstance(account, dict):
             message = "NetBird /api/accounts 响应账户必须是 JSON 对象。"
             raise NetBirdApiError(message)
-        account_id = _string_value(account, "id")
-        if not account_id:
-            message = "NetBird /api/accounts 响应缺少不可变账户 ID。"
-            raise NetBirdApiError(message)
+        account_id = _required_string(account, "id", label="accounts")
         return account_id
 
     def create_user(
@@ -151,14 +150,9 @@ class NetBirdClient:
         if not isinstance(payload, list):
             message = "NetBird /api/groups 响应必须是 JSON 数组。"
             raise NetBirdApiError(message)
-        return [_parse_group(item) for item in payload if isinstance(item, dict)]
-
-    def create_group(self, *, name: str) -> NetBirdGroup:
-        payload = self._request("POST", "/api/groups", body={"name": name})
-        if not isinstance(payload, dict):
-            message = "NetBird 创建组响应必须是 JSON 对象。"
-            raise NetBirdApiError(message)
-        return _parse_group(payload)
+        groups = [_parse_group(item) for item in payload]
+        _assert_unique_ids([group.group_id for group in groups], label="groups")
+        return groups
 
     def _request(
         self,
@@ -237,28 +231,78 @@ def _read_bounded(response: _ReadableResponse, *, deadline: float) -> bytes:
     return b"".join(chunks)
 
 
-def _parse_user(item: dict[str, JsonValue]) -> NetBirdUser:
+_KNOWN_USER_ROLES: Final = frozenset({USER_ROLE_USER, USER_ROLE_ADMIN, USER_ROLE_OWNER})
+
+
+def _parse_user(item: JsonValue) -> NetBirdUser:
+    if not isinstance(item, dict):
+        message = "NetBird /api/users 数组元素必须是 JSON 对象。"
+        raise NetBirdApiError(message)
+    user_id = _required_string(item, "id", label="users")
+    role = _required_string(item, "role", label="users")
+    if role not in _KNOWN_USER_ROLES:
+        message = f"NetBird /api/users 返回未知 role: {role}。"
+        raise NetBirdApiError(message)
+    is_blocked = _required_bool(item, "is_blocked", label="users")
+    is_service_user = _required_bool(item, "is_service_user", label="users")
     return NetBirdUser(
-        user_id=_string_value(item, "id"),
-        name=_string_value(item, "name"),
-        email=_string_value(item, "email"),
-        role=_string_value(item, "role"),
-        is_blocked=item.get("is_blocked") is True,
-        is_service_user=item.get("is_service_user") is True,
-        auto_group_ids=_string_set(item.get("auto_groups")),
+        user_id=user_id,
+        name=_optional_string(item, "name"),
+        email=_optional_string(item, "email"),
+        role=role,
+        is_blocked=is_blocked,
+        is_service_user=is_service_user,
+        auto_group_ids=_required_string_set(item.get("auto_groups"), label="users.auto_groups"),
     )
 
 
-def _string_set(value: JsonValue | None) -> frozenset[str]:
-    if not isinstance(value, list):
-        return frozenset()
-    return frozenset(entry for entry in value if isinstance(entry, str))
+def _parse_group(item: JsonValue) -> NetBirdGroup:
+    if not isinstance(item, dict):
+        message = "NetBird /api/groups 数组元素必须是 JSON 对象。"
+        raise NetBirdApiError(message)
+    return NetBirdGroup(
+        group_id=_required_string(item, "id", label="groups"),
+        name=_required_string(item, "name", label="groups"),
+    )
 
 
-def _parse_group(item: dict[str, JsonValue]) -> NetBirdGroup:
-    return NetBirdGroup(group_id=_string_value(item, "id"), name=_string_value(item, "name"))
+def _required_string(item: dict[str, JsonValue], key: str, *, label: str) -> str:
+    value = item.get(key)
+    if not isinstance(value, str) or not value:
+        message = f"NetBird /api/{label} 元素缺少有效字段 {key}。"
+        raise NetBirdApiError(message)
+    return value
 
 
-def _string_value(item: dict[str, JsonValue], key: str) -> str:
+def _optional_string(item: dict[str, JsonValue], key: str) -> str:
     value = item.get(key)
     return value if isinstance(value, str) else ""
+
+
+def _required_bool(item: dict[str, JsonValue], key: str, *, label: str) -> bool:
+    value = item.get(key)
+    if not isinstance(value, bool):
+        message = f"NetBird /api/{label} 元素字段 {key} 必须是布尔值。"
+        raise NetBirdApiError(message)
+    return value
+
+
+def _required_string_set(value: JsonValue | None, *, label: str) -> frozenset[str]:
+    if value is None:
+        return frozenset()
+    if not isinstance(value, list):
+        message = f"NetBird {label} 必须是字符串数组。"
+        raise NetBirdApiError(message)
+    result: set[str] = set()
+    for entry in value:
+        if not isinstance(entry, str) or not entry:
+            message = f"NetBird {label} 只能包含非空字符串。"
+            raise NetBirdApiError(message)
+        result.add(entry)
+    return frozenset(result)
+
+
+def _assert_unique_ids(ids: list[str], *, label: str) -> None:
+    if len(ids) != len(set(ids)):
+        message = f"NetBird /api/{label} 响应包含重复 ID。"
+        raise NetBirdApiError(message)

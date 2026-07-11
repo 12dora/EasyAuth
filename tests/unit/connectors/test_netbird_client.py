@@ -46,6 +46,37 @@ def test_get_account_id_requires_one_immutable_id(monkeypatch: pytest.MonkeyPatc
     assert _client().get_account_id() == "account-1"
 
 
+def test_list_users_rejects_non_object_elements(monkeypatch: pytest.MonkeyPatch) -> None:
+    response = _Response([b'[{"id":"u1","role":"user","is_blocked":false,"is_service_user":false},1]'])
+    monkeypatch.setattr(client_module, "urlopen", lambda *_args, **_kwargs: response)
+
+    with pytest.raises(NetBirdApiError, match="JSON 对象"):
+        _client().list_users()
+
+
+def test_list_users_rejects_unknown_role_and_duplicate_ids(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    response = _Response(
+        [
+            b'[{"id":"u1","role":"root","is_blocked":false,"is_service_user":false}]',
+        ]
+    )
+    monkeypatch.setattr(client_module, "urlopen", lambda *_args, **_kwargs: response)
+    with pytest.raises(NetBirdApiError, match="未知 role"):
+        _client().list_users()
+
+    dup = _Response(
+        [
+            b'[{"id":"u1","role":"user","is_blocked":false,"is_service_user":false},'
+            b'{"id":"u1","role":"user","is_blocked":false,"is_service_user":false}]',
+        ]
+    )
+    monkeypatch.setattr(client_module, "urlopen", lambda *_args, **_kwargs: dup)
+    with pytest.raises(NetBirdApiError, match="重复 ID"):
+        _client().list_users()
+
+
 def test_rejects_oversized_content_length_before_read(monkeypatch: pytest.MonkeyPatch) -> None:
     response = _Response([], content_length=str(MAX_RESPONSE_BYTES + 1))
     monkeypatch.setattr(client_module, "urlopen", lambda *_args, **_kwargs: response)

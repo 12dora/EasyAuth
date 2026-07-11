@@ -95,7 +95,54 @@ def test_build_desired_state_projects_only_mapped_groups() -> None:
     assert dict(desired.user_groups) == {"conn-desired-u1": frozenset({"netbird-vpn-users"})}
     assert desired.profiles["conn-desired-u1"].email == "granted@example.com"
     assert desired.managed_group_refs == frozenset({"netbird-vpn-users"})
-    assert desired.auto_create_group_refs == frozenset({"netbird-vpn-users"})
+    # external_ref 为不可变组 ID, auto_create 不再进入 desired(避免假成功)。
+    assert desired.auto_create_group_refs == frozenset()
+
+
+def test_build_desired_state_excludes_inactive_group_and_expired_membership() -> None:
+    # Given: 停用授权组 + 已过期成员不得进入 VPN desired。
+    from easyauth.grants.models import AccessGrantGroup
+
+    app, mapped, _unmapped = _app_with_groups("conn-effective")
+    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+    _ = ConnectorMapping.objects.create(
+        instance=instance,
+        authorization_group=mapped,
+        external_ref="netbird-vpn-users",
+        auto_create=True,
+    )
+    active_user = UserMirror.objects.create(authentik_user_id="conn-eff-active")
+    expired_user = UserMirror.objects.create(authentik_user_id="conn-eff-expired")
+    inactive_group_user = UserMirror.objects.create(authentik_user_id="conn-eff-inactive")
+    _grant(active_user, app, (mapped,))
+    _grant(expired_user, app, (mapped,))
+    expired_membership = AccessGrantGroup.objects.get(
+        grant__user=expired_user,
+        authorization_group=mapped,
+    )
+    expired_membership.expires_at = timezone.now() - timedelta(hours=1)
+    expired_membership.save(update_fields=["expires_at"])
+
+    inactive_group = AuthorizationGroup.objects.create(
+        app=app,
+        key="vpn-off",
+        kind="bundle",
+        name="Off",
+        is_active=False,
+    )
+    _ = ConnectorMapping.objects.create(
+        instance=instance,
+        authorization_group=inactive_group,
+        external_ref="netbird-vpn-off",
+    )
+    _grant(inactive_group_user, app, (inactive_group,))
+
+    desired = build_desired_state(instance)
+
+    assert dict(desired.user_groups) == {"conn-eff-active": frozenset({"netbird-vpn-users"})}
+    assert "conn-eff-expired" not in desired.user_groups
+    assert "conn-eff-inactive" not in desired.user_groups
+    assert desired.auto_create_group_refs == frozenset()
 
 
 def test_reconcile_records_run_and_passes_desired_state() -> None:

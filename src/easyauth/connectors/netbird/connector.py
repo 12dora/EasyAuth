@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, ClassVar, Final, final, override
 
 from easyauth.config.net import InsecureUrlError, require_secure_url
 from easyauth.connectors.base import (
+    RECONCILE_STATUS_FAILED,
     RECONCILE_STATUS_PARTIAL,
     RECONCILE_STATUS_SUCCESS,
     BaseConnector,
@@ -30,6 +31,9 @@ API_BUDGET_EXHAUSTED_MESSAGE: Final = (
     f"单轮对账 API 调用达到上限({MAX_API_CALLS_PER_RUN} 次), 本轮提前结束, 下一轮继续收敛。"
 )
 API_URL_INSECURE_MESSAGE: Final = "api_url 必须使用 https(仅本地开发允许 http://localhost)。"
+MISSING_MANAGED_GROUPS_MESSAGE: Final = (
+    "映射的 NetBird 组不存在(external_ref 为不可变组 ID, 不支持自动创建): {refs}。"
+)
 
 
 class _ApiBudgetExceededError(Exception):
@@ -138,7 +142,15 @@ class NetBirdConnector(BaseConnector):
             managed_group_ids = desired.managed_group_refs & actual_group_ids
             missing_group_ids = desired.managed_group_refs - actual_group_ids
             if missing_group_ids:
+                # external_ref 是不可变组 ID; 缺组时不得假成功或静默扩权, 整轮失败关闭。
                 stats["groups_missing"] = len(missing_group_ids)
+                return ReconcileReport(
+                    status=RECONCILE_STATUS_FAILED,
+                    stats=stats,
+                    error=MISSING_MANAGED_GROUPS_MESSAGE.format(
+                        refs=", ".join(sorted(missing_group_ids)),
+                    ),
+                )
             budget.charge()
             actual_users = {
                 user.user_id: user for user in client.list_users() if not user.is_service_user

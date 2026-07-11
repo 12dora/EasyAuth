@@ -30,6 +30,9 @@ _AUTH_FAIL_LIMIT: Final = 30
 _AUTH_FAIL_WINDOW_SECONDS: Final = 300
 _CREATE_RATE_LIMIT: Final = 60
 _CREATE_RATE_WINDOW_SECONDS: Final = 60
+_QUERY_RATE_LIMIT: Final = 120
+_QUERY_RATE_WINDOW_SECONDS: Final = 60
+_RETRY_AFTER_HEADER: Final = "Retry-After"
 
 
 class _ApprovalCreatePayload(BaseModel):
@@ -51,10 +54,17 @@ def app_approval_instances(request: HttpRequest, app_key: str) -> JsonResponse:
     if request.method != "POST":
         return _error(ErrorCode.VALIDATION_ERROR, "请求方法无效。", HTTPStatus.METHOD_NOT_ALLOWED)
     match _authenticated_app(request, app_key):
-        case App() as app:
+        case (App() as app, credential_id):
             pass
         case JsonResponse() as response:
             return response
+    if response := _rate_limited(
+        "approval-create-rate",
+        credential_id,
+        limit=_CREATE_RATE_LIMIT,
+        window_seconds=_CREATE_RATE_WINDOW_SECONDS,
+    ):
+        return response
     try:
         payload = _ApprovalCreatePayload.model_validate_json(request.body)
     except ValidationError as exc:
@@ -89,10 +99,17 @@ def app_approval_instance_detail(
     if request.method != "GET":
         return _error(ErrorCode.VALIDATION_ERROR, "请求方法无效。", HTTPStatus.METHOD_NOT_ALLOWED)
     match _authenticated_app(request, app_key):
-        case App() as app:
+        case (App() as app, credential_id):
             pass
         case JsonResponse() as response:
             return response
+    if response := _rate_limited(
+        "approval-query-rate",
+        credential_id,
+        limit=_QUERY_RATE_LIMIT,
+        window_seconds=_QUERY_RATE_WINDOW_SECONDS,
+    ):
+        return response
     instance = (
         ApprovalInstance.objects.select_related(
             "template",
@@ -144,11 +161,14 @@ def _create_error_response(exc: ApprovalCreateError) -> JsonResponse:
             )
 
 
-def _authenticated_app(request: HttpRequest, app_key: str) -> App | JsonResponse:
-    # 与权限查询同一凭证体系: 认证失败按 IP 限流, 成功后按 app 限发起速率。
+def _authenticated_app(
+    request: HttpRequest,
+    app_key: str,
+) -> tuple[App, str | int] | JsonResponse:
+    # 认证与操作限流分离: 此处只做凭据校验与 auth-fail 限流, create/query 各自独立桶。
     ip = client_ip(request)
     if over_limit("approval-authfail", ip, limit=_AUTH_FAIL_LIMIT):
-        return _error(ErrorCode.THROTTLED, _TOO_MANY_REQUESTS_MESSAGE, HTTPStatus.TOO_MANY_REQUESTS)
+        return _throttled(_AUTH_FAIL_WINDOW_SECONDS)
     token = _bearer_token(request)
     if token is None:
         return _auth_failed(ip)
@@ -161,16 +181,12 @@ def _authenticated_app(request: HttpRequest, app_key: str) -> App | JsonResponse
     return _authorized_app(principal, app_key)
 
 
-def _authorized_app(principal: AppPrincipal, app_key: str) -> App | JsonResponse:
+def _authorized_app(
+    principal: AppPrincipal,
+    app_key: str,
+) -> tuple[App, str | int] | JsonResponse:
     if principal.app_key != app_key:
         return _error(ErrorCode.PERMISSION_DENIED, _PERMISSION_DENIED_MESSAGE, HTTPStatus.FORBIDDEN)
-    if rate_limit_exceeded(
-        "approval-create-rate",
-        principal.credential_id,
-        limit=_CREATE_RATE_LIMIT,
-        window_seconds=_CREATE_RATE_WINDOW_SECONDS,
-    ):
-        return _error(ErrorCode.THROTTLED, _TOO_MANY_REQUESTS_MESSAGE, HTTPStatus.TOO_MANY_REQUESTS)
     app = App.objects.filter(id=principal.app_id, is_active=True).first()
     if app is None:
         return _error(
@@ -178,7 +194,29 @@ def _authorized_app(principal: AppPrincipal, app_key: str) -> App | JsonResponse
             _AUTHENTICATION_FAILED_MESSAGE,
             HTTPStatus.UNAUTHORIZED,
         )
-    return app
+    return app, principal.credential_id
+
+
+def _rate_limited(
+    namespace: str,
+    identity: str | int,
+    *,
+    limit: int,
+    window_seconds: int,
+) -> JsonResponse | None:
+    if rate_limit_exceeded(namespace, identity, limit=limit, window_seconds=window_seconds):
+        return _throttled(window_seconds)
+    return None
+
+
+def _throttled(retry_after_seconds: int) -> JsonResponse:
+    response = _error(
+        ErrorCode.THROTTLED,
+        _TOO_MANY_REQUESTS_MESSAGE,
+        HTTPStatus.TOO_MANY_REQUESTS,
+    )
+    response[_RETRY_AFTER_HEADER] = str(retry_after_seconds)
+    return response
 
 
 def _auth_failed(ip: str) -> JsonResponse:
