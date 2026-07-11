@@ -1,4 +1,5 @@
 import { Field, SelectInput } from "../../../components/Field";
+import { useI18n, localizedField } from "../../../i18n/I18nProvider";
 import type { PortalCatalogApp } from "../../../lib/domain";
 import type { AuthorizationGroupItem, ScopedPermissionGroupItem, ScopedPermissionItem } from "../hooks/useAccessRequestForm";
 import { PermissionSelector } from "./PermissionSelector";
@@ -15,6 +16,7 @@ interface RequestTargetPickerProps {
   expandedGroupKeys: string[];
   catalogIsLoading: boolean;
   catalogErrorMessage: string;
+  disabled?: boolean;
   onAppKeyChange: (appKey: string) => void;
   onAuthorizationGroupKeyChange: (groupKey: string) => void;
   onPermissionScopeChange: (permission: ScopedPermissionItem, scopeKey: string) => void;
@@ -38,6 +40,7 @@ export function RequestTargetPicker({
   expandedGroupKeys,
   catalogIsLoading,
   catalogErrorMessage,
+  disabled = false,
   onAppKeyChange,
   onAuthorizationGroupKeyChange,
   onPermissionScopeChange,
@@ -48,12 +51,17 @@ export function RequestTargetPicker({
   onCollapseGroups,
   onToggleGroup,
 }: RequestTargetPickerProps) {
+  const { t, locale } = useI18n();
   return (
     <>
       <div className="grid gap-4 md:grid-cols-2">
-        <Field label="应用">
-          <SelectInput value={appKey} onChange={(event) => onAppKeyChange(event.currentTarget.value)}>
-            <option value="">选择应用</option>
+        <Field label={t("portal.request.app")}>
+          <SelectInput
+            value={appKey}
+            disabled={disabled}
+            onChange={(event) => onAppKeyChange(event.currentTarget.value)}
+          >
+            <option value="">{t("portal.request.appPlaceholder")}</option>
             {apps.map((app) => (
               <option key={app.app_key} value={app.app_key}>
                 {app.name} ({app.app_key})
@@ -61,16 +69,16 @@ export function RequestTargetPicker({
             ))}
           </SelectInput>
         </Field>
-        <Field label="可申请权限组">
+        <Field label={t("portal.request.authorizationGroup")}>
           <SelectInput
             value={authorizationGroupKey}
             onChange={(event) => onAuthorizationGroupKeyChange(event.currentTarget.value)}
-            disabled={!appKey}
+            disabled={disabled || !appKey}
           >
-            <option value="">不选择权限组</option>
+            <option value="">{t("portal.request.authorizationGroupNone")}</option>
             {authorizationGroups.map((group) => (
               <option key={`${group.app_key}:${group.key}`} value={group.key}>
-                {group.name} [{group.kind}] ({group.key})
+                {localizedField(locale, group.name, group.name_en)} [{group.kind}] ({group.key})
               </option>
             ))}
           </SelectInput>
@@ -78,8 +86,12 @@ export function RequestTargetPicker({
       </div>
       <Field
         as="group"
-        label="直接权限"
-        hint={appKey ? `已选 ${selectedPermissionKeys.length} 项权限范围，可留空。` : "请先选择应用后再选择直接权限。"}
+        label={t("portal.request.directPermissions")}
+        hint={
+          appKey
+            ? t("portal.request.directPermissionsSelected", { count: selectedPermissionKeys.length })
+            : t("portal.request.directPermissionsNeedApp")
+        }
       >
         <PermissionSelector
           appKey={appKey}
@@ -90,6 +102,7 @@ export function RequestTargetPicker({
           expandedGroupKeys={expandedGroupKeys}
           loading={catalogIsLoading}
           errorMessage={catalogErrorMessage}
+          disabled={disabled}
           onPermissionScopeChange={onPermissionScopeChange}
           onPermissionGroupScopeChange={onPermissionGroupScopeChange}
           onSelectPermissionKeys={onSelectPermissionKeys}

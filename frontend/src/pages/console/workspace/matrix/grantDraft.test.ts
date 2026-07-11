@@ -35,7 +35,9 @@ describe("grantDraft", () => {
       key: "accountant",
       kind: "role",
       name: "会计",
+      name_en: "",
       description: "财务角色",
+      description_en: "",
       requestable: true,
       is_active: true,
       grants: [
@@ -43,6 +45,23 @@ describe("grantDraft", () => {
         { permission: "invoice.export", scope: "TEAM", is_active: true },
       ],
     });
+  });
+
+  test("构造授权组保存 payload 时完整 round-trip 双语字段", () => {
+    const payload = buildAuthorizationGroupPayload({
+      key: "accountant",
+      kind: "role",
+      name: "会计",
+      name_en: "Accountant",
+      description: "财务角色",
+      description_en: "Finance role",
+      requestable: true,
+      is_active: true,
+      grants: [],
+    });
+
+    expect(payload.name_en).toBe("Accountant");
+    expect(payload.description_en).toBe("Finance role");
   });
 
   test("构造授权组保存 payload 时保留管理范围策略字段", () => {

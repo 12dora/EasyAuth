@@ -75,7 +75,7 @@ describe("AppShell", () => {
     expect(screen.getByRole("button", { name: "通知中心" })).toBeVisible();
     expect(screen.getByText("控制台用户")).toBeVisible();
     expect(screen.getByText("EasyAuth Admins")).toBeVisible();
-    expect(screen.getByRole("img", { name: "控制台用户头像" })).toHaveAttribute(
+    expect(screen.getByRole("img", { name: "控制台用户 的头像" })).toHaveAttribute(
       "src",
       "https://authentik.example.test/media/avatars/alice.png",
     );
@@ -139,7 +139,7 @@ describe("AppShell", () => {
       </I18nProvider>,
     );
 
-    expect(screen.getByRole("img", { name: "张三头像" })).toHaveAttribute("src", "/media/avatars/alice.png");
+    expect(screen.getByRole("img", { name: "张三 的头像" })).toHaveAttribute("src", "/media/avatars/alice.png");
   });
 
   test("缺少友好展示名时不会把 authentik subject 显示在顶栏", () => {
@@ -210,7 +210,7 @@ describe("AppShell", () => {
     expect(screen.getByRole("heading", { name: "已登出" })).toBeVisible();
     expect(screen.getByRole("link", { name: "重新登录" })).toHaveAttribute("href", "/auth/local/");
     expect(screen.queryByText("张三")).not.toBeInTheDocument();
-    expect(screen.queryByRole("img", { name: "张三头像" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "张三 的头像" })).not.toBeInTheDocument();
   });
 
   test("登出页登录按钮固定指向登录页且忽略外部 next", () => {

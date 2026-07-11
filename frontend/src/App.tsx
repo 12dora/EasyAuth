@@ -36,16 +36,21 @@ export interface CurrentUser {
   id: string;
   logoutUrl?: string;
   role?: string;
+  /** 权威超管能力; 不得用本地化 role 展示字符串做门禁。 */
+  isSuperuser?: boolean;
 }
 
 export function App({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUser, currentUserId = "", shell }: AppProps) {
-  const isConsoleAdmin = currentUser?.role === "EasyAuth Admins";
+  // Console shell 已由后端登录门控; owner/developer 委派管理不得被前端 role 硬编码拦死。
+  // 超管专属动作(创建应用等)仍由 API is_superuser 强制; 前端用 isSuperuser 做能力展示。
+  const canAccessConsole = Boolean(currentUser?.id);
+  const isSuperuser = currentUser?.isSuperuser === true;
 
   useEffect(() => {
-    if (shell === "console" && !isConsoleAdmin) {
+    if (shell === "console" && !canAccessConsole) {
       window.location.replace("/errors/forbidden/");
     }
-  }, [shell, isConsoleAdmin]);
+  }, [shell, canAccessConsole]);
 
   if (shell === "portal") {
     return (
@@ -66,7 +71,7 @@ export function App({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUse
     );
   }
 
-  if (!isConsoleAdmin) {
+  if (!canAccessConsole) {
     return null;
   }
 
@@ -74,7 +79,8 @@ export function App({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUse
     <Routes>
       <Route element={<AppShell brandLogoUrl={brandLogoUrl} currentUser={currentUser} currentUserId={currentUserId} mode="console" />}>
         <Route path="/console" element={<ConsoleAppList />} />
-        <Route path="/console/apps/new" element={<AppOnboardingWizard />} />
+        {/* 创建应用仅超管; 非超管深链回应用列表, API 仍为最终权威。 */}
+        <Route path="/console/apps/new" element={isSuperuser ? <AppOnboardingWizard /> : <Navigate to="/console" replace />} />
         <Route path="/console/apps/:appKey" element={<ConsoleAppWorkspace />} />
         <Route path="/console/teams" element={<ConsoleTeamList />} />
         <Route path="/console/teams/:teamId" element={<ConsoleTeamDetail />} />

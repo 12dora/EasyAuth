@@ -190,9 +190,17 @@ table,
   *::before,
   *::after {
     scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
   }
 
-  .animate-shimmer {
-    animation: none;
+  .animate-shimmer,
+  .topbar-popover,
+  .user-menu-popover,
+  .permission-selector__row--entering,
+  .permission-selector__row--exiting {
+    animation: none !important;
+    transition: none !important;
   }
 }

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 
 import { Field, SelectInput, TextArea, TextInput } from "../../../components/Field";
+import { useI18n } from "../../../i18n/I18nProvider";
 import type { AccessGrantType, ApproverOption } from "../hooks/useAccessRequestForm";
 
 interface AccessRequestFieldsProps {
@@ -11,6 +12,7 @@ interface AccessRequestFieldsProps {
   expiresAt: string;
   expiresAtError: boolean;
   reason: string;
+  disabled?: boolean;
   onApproverToggle: (userId: string) => void;
   onGrantTypeChange: (grantType: AccessGrantType) => void;
   onExpiresAtChange: (expiresAt: string) => void;
@@ -25,11 +27,13 @@ export function AccessRequestFields({
   expiresAt,
   expiresAtError,
   reason,
+  disabled = false,
   onApproverToggle,
   onGrantTypeChange,
   onExpiresAtChange,
   onReasonChange,
 }: AccessRequestFieldsProps) {
+  const { t } = useI18n();
   const nowMin = useMemo(nowLocalDatetime, []);
   return (
     <>
@@ -37,27 +41,37 @@ export function AccessRequestFields({
         appKey={appKey}
         options={approverOptions}
         selectedUserIds={selectedApproverUserIds}
+        disabled={disabled}
         onToggle={onApproverToggle}
       />
       <div className="grid gap-4 md:grid-cols-2">
-        <Field label="授权期限">
-          <SelectInput value={grantType} onChange={(event) => onGrantTypeChange(event.currentTarget.value as AccessGrantType)}>
-            <option value="permanent">长期</option>
-            <option value="timed">限时</option>
+        <Field label={t("portal.request.grantType")}>
+          <SelectInput
+            value={grantType}
+            disabled={disabled}
+            onChange={(event) => onGrantTypeChange(event.currentTarget.value as AccessGrantType)}
+          >
+            <option value="permanent">{t("status.grantType.permanent")}</option>
+            <option value="timed">{t("status.grantType.timed")}</option>
           </SelectInput>
         </Field>
-        <Field label="过期时间" error={expiresAtError ? "过期时间必须晚于当前时间。" : undefined}>
+        <Field label={t("portal.request.expiresAt")} error={expiresAtError ? t("portal.request.expiresAtInvalid") : undefined}>
           <TextInput
             type="datetime-local"
             value={expiresAt}
             min={nowMin}
             onChange={(event) => onExpiresAtChange(event.currentTarget.value)}
-            disabled={grantType !== "timed"}
+            disabled={disabled || grantType !== "timed"}
           />
         </Field>
       </div>
-      <Field label="申请原因">
-        <TextArea rows={4} value={reason} onChange={(event) => onReasonChange(event.currentTarget.value)} />
+      <Field label={t("portal.request.reason")}>
+        <TextArea
+          rows={4}
+          value={reason}
+          disabled={disabled}
+          onChange={(event) => onReasonChange(event.currentTarget.value)}
+        />
       </Field>
     </>
   );
@@ -73,26 +87,34 @@ function ApproverMultiSelect({
   appKey,
   options,
   selectedUserIds,
+  disabled = false,
   onToggle,
 }: {
   appKey: string;
   options: ApproverOption[];
   selectedUserIds: string[];
+  disabled?: boolean;
   onToggle: (userId: string) => void;
 }) {
+  const { t } = useI18n();
   const [search, setSearch] = useState("");
   const normalizedSearch = search.trim();
   const visibleOptions = useMemo(() => filterApproverOptions(options, selectedUserIds, search), [options, search, selectedUserIds]);
+  const controlsDisabled = disabled || !appKey;
 
   return (
-    <Field as="group" label="审批人" hint={appKey ? `已选 ${selectedUserIds.length} 名审批人。` : "请先选择应用后再选择审批人。"}>
+    <Field
+      as="group"
+      label={t("portal.request.approvers")}
+      hint={appKey ? t("portal.request.approversSelected", { count: selectedUserIds.length }) : t("portal.request.approversNeedApp")}
+    >
       <div className="flex flex-col gap-2">
         <TextInput
           value={search}
           onChange={(event) => setSearch(event.currentTarget.value)}
-          placeholder="搜索审批人"
-          aria-label="搜索审批人"
-          disabled={!appKey}
+          placeholder={t("portal.request.approverSearchPlaceholder")}
+          aria-label={t("portal.request.approverSearchPlaceholder")}
+          disabled={controlsDisabled}
         />
         <div className="max-h-40 overflow-auto rounded-[2px] border border-ink/15 bg-paper-soft p-2">
           {visibleOptions.length > 0 ? (
@@ -103,17 +125,17 @@ function ApproverMultiSelect({
                     type="checkbox"
                     checked={selectedUserIds.includes(option.user_id)}
                     onChange={() => onToggle(option.user_id)}
-                    disabled={!appKey}
-                    aria-label={`选择审批人 ${option.user_id}`}
+                    disabled={controlsDisabled}
+                    aria-label={t("portal.request.approverSelect", { userId: option.user_id })}
                   />
-                  <span className="text-ink">{approverOptionLabel(option)}</span>
+                  <span className="text-ink">{approverOptionLabel(option, t("portal.request.approverUnnamed"))}</span>
                   {option.department ? <span className="text-ink-faint">· {option.department}</span> : null}
                 </label>
               ))}
             </div>
           ) : (
             <span className="block px-2 py-1.5 text-body text-ink-faint">
-              {normalizedSearch ? "没有匹配的审批人" : "输入姓名、用户 ID、邮箱或部门搜索审批人"}
+              {normalizedSearch ? t("portal.request.approverNoMatch") : t("portal.request.approverSearchHint")}
             </span>
           )}
         </div>
@@ -138,13 +160,15 @@ function filterApproverOptions(options: ApproverOption[], selectedUserIds: strin
   });
 }
 
-function approverOptionLabel(option: ApproverOption): string {
-  return option.name ?? option.display_name ?? option.label ?? "未命名审批人";
+function approverOptionLabel(option: ApproverOption, fallback: string): string {
+  return option.name ?? option.display_name ?? option.label ?? fallback;
 }
 
 function approverSearchText(option: ApproverOption): string {
   return [
-    approverOptionLabel(option),
+    option.name,
+    option.display_name,
+    option.label,
     option.user_id,
     option.email,
     option.department,
