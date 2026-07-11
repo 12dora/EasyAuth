@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from http import HTTPStatus
 from json import dumps
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, ClassVar, Final, Protocol
 
 import pytest
 from django.test import Client
@@ -28,8 +28,11 @@ class HttpResponseLike(Protocol):
 
 
 class _FakeDingTalkClient:
+    _seq: ClassVar[int] = 0
+
     def create_process_instance(self, **_kwargs: object) -> str:
-        return "proc-api-1"
+        type(self)._seq += 1
+        return f"proc-api-{type(self)._seq}"
 
 
 def _app_with_token(app_key: str) -> tuple[App, str]:
@@ -209,3 +212,151 @@ def test_create_rejects_unknown_template_and_bad_token() -> None:
     assert unknown_template.status_code == HTTPStatus.NOT_FOUND
     assert bad_token.status_code == HTTPStatus.UNAUTHORIZED
     assert ApprovalInstance.objects.count() == 0
+
+
+def test_list_approval_instances_filters_and_scopes_to_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: 两个应用各有实例; 列表只暴露本应用, 且支持 status/biz_key 过滤。
+    app_a, token_a = _app_with_token("api-list-app-a")
+    app_b, token_b = _app_with_token("api-list-app-b")
+    _template_and_originator(app_a)
+    _ = ApprovalTemplate.objects.create(
+        app=app_b,
+        key="expense",
+        name="费用审批",
+        dingtalk_process_code="PROC-B",
+        form_schema={},
+    )
+    monkeypatch.setattr(
+        "easyauth.workflows.services.DingTalkApiClient.from_settings",
+        lambda: _FakeDingTalkClient(),
+    )
+    client = Client()
+    for biz_key in ("list-1", "list-2"):
+        created = client.post(
+            f"/api/v1/apps/{app_a.app_key}/approval-instances",
+            data=dumps(
+                {
+                    "template_key": "expense",
+                    "originator_user_id": "api-originator",
+                    "form": {},
+                    "biz_key": biz_key,
+                },
+            ),
+            content_type="application/json",
+            HTTP_AUTHORIZATION=f"Bearer {token_a}",
+        )
+        assert created.status_code == HTTPStatus.CREATED
+    other = client.post(
+        f"/api/v1/apps/{app_b.app_key}/approval-instances",
+        data=dumps(
+            {
+                "template_key": "expense",
+                "originator_user_id": "api-originator",
+                "form": {},
+                "biz_key": "other-biz",
+            },
+        ),
+        content_type="application/json",
+        HTTP_AUTHORIZATION=f"Bearer {token_b}",
+    )
+    assert other.status_code == HTTPStatus.CREATED
+
+    # When
+    listed = client.get(
+        f"/api/v1/apps/{app_a.app_key}/approval-instances",
+        HTTP_AUTHORIZATION=f"Bearer {token_a}",
+    )
+    filtered = client.get(
+        f"/api/v1/apps/{app_a.app_key}/approval-instances",
+        data={"biz_key": "list-1", "status": "submitted", "template_key": "expense"},
+        HTTP_AUTHORIZATION=f"Bearer {token_a}",
+    )
+    mismatched = client.get(
+        f"/api/v1/apps/{app_a.app_key}/approval-instances",
+        HTTP_AUTHORIZATION=f"Bearer {token_b}",
+    )
+    unauthenticated = client.get(f"/api/v1/apps/{app_a.app_key}/approval-instances")
+
+    # Then
+    body = listed.json()
+    assert listed.status_code == HTTPStatus.OK
+    assert isinstance(body["data"], list)
+    assert len(body["data"]) == 2
+    assert body["pagination"]["total_items"] == 2
+    biz_keys = {item["biz_key"] for item in body["data"]}
+    assert biz_keys == {"list-1", "list-2"}
+    assert "other-biz" not in biz_keys
+    filtered_body = filtered.json()
+    assert filtered.status_code == HTTPStatus.OK
+    assert len(filtered_body["data"]) == 1
+    assert filtered_body["data"][0]["biz_key"] == "list-1"
+    assert mismatched.status_code == HTTPStatus.FORBIDDEN
+    assert unauthenticated.status_code == HTTPStatus.UNAUTHORIZED
+
+
+def test_list_approval_templates_returns_active_app_and_platform_only() -> None:
+    # Given: 本应用活跃/停用模板 + 平台模板 + 其他应用模板。
+    app, token = _app_with_token("api-templates-app")
+    other, _other_token = _app_with_token("api-templates-other")
+    _ = ApprovalTemplate.objects.create(
+        app=app,
+        key="expense",
+        name="费用审批",
+        dingtalk_process_code="PROC-EXPENSE-SECRET",
+        form_schema={"amount": {"type": "string", "required": True}},
+        form_mapping={"amount": "金额"},
+        is_active=True,
+    )
+    _ = ApprovalTemplate.objects.create(
+        app=app,
+        key="inactive",
+        name="已停用",
+        dingtalk_process_code="PROC-INACTIVE",
+        is_active=False,
+    )
+    _ = ApprovalTemplate.objects.create(
+        app=None,
+        key="platform-leave",
+        name="平台请假",
+        dingtalk_process_code="PROC-PLATFORM",
+        form_schema={"days": {"type": "integer", "required": True}},
+        is_active=True,
+    )
+    _ = ApprovalTemplate.objects.create(
+        app=other,
+        key="other-only",
+        name="他应用模板",
+        dingtalk_process_code="PROC-OTHER",
+        is_active=True,
+    )
+    client = Client()
+
+    # When
+    ok = client.get(
+        f"/api/v1/apps/{app.app_key}/approval-templates",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+    bad = client.get(
+        f"/api/v1/apps/{app.app_key}/approval-templates",
+        HTTP_AUTHORIZATION="Bearer eat_invalid",
+    )
+    mismatch = client.get(
+        f"/api/v1/apps/{other.app_key}/approval-templates",
+        HTTP_AUTHORIZATION=f"Bearer {token}",
+    )
+
+    # Then: 只返回本应用 + 平台活跃模板; 不泄露 process_code / form_mapping。
+    assert ok.status_code == HTTPStatus.OK
+    body = ok.json()
+    keys = {item["key"] for item in body["data"]}
+    assert keys == {"expense", "platform-leave"}
+    for item in body["data"]:
+        assert set(item) == {"key", "name", "form_schema", "is_active"}
+        assert "dingtalk_process_code" not in item
+        assert "form_mapping" not in item
+    expense = next(item for item in body["data"] if item["key"] == "expense")
+    assert expense["form_schema"] == {"amount": {"type": "string", "required": True}}
+    assert bad.status_code == HTTPStatus.UNAUTHORIZED
+    assert mismatch.status_code == HTTPStatus.FORBIDDEN

@@ -1,18 +1,21 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from http import HTTPStatus
 from typing import TYPE_CHECKING, ClassVar, Final
 
+from django.db.models import Q
 from django.http import HttpRequest, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 
 from easyauth.api.errors import ErrorCode, JsonValue, build_error_response
+from easyauth.api.pagination import pagination_item, total_pages
 from easyauth.api.permission_query_auth import authenticate_permission_query_token
 from easyauth.applications.models import App
 from easyauth.config.rate_limit import client_ip, over_limit, rate_limit_exceeded
-from easyauth.workflows.models import ApprovalInstance
+from easyauth.workflows.models import ApprovalInstance, ApprovalTemplate
 from easyauth.workflows.services import (
     ApprovalCreateError,
     create_approval_instance,
@@ -20,6 +23,9 @@ from easyauth.workflows.services import (
 )
 
 if TYPE_CHECKING:
+    from django.db.models import QuerySet
+    from django.http import QueryDict
+
     from easyauth.applications.services import AppPrincipal
 
 _AUTH_SCHEME: Final = "Bearer"
@@ -30,6 +36,10 @@ _AUTH_FAIL_LIMIT: Final = 30
 _AUTH_FAIL_WINDOW_SECONDS: Final = 300
 _CREATE_RATE_LIMIT: Final = 60
 _CREATE_RATE_WINDOW_SECONDS: Final = 60
+_DEFAULT_PAGE: Final = 1
+_DEFAULT_PAGE_SIZE: Final = 20
+_MAX_PAGE: Final = 100_000
+_MAX_PAGE_SIZE: Final = 100
 
 
 class _ApprovalCreatePayload(BaseModel):
@@ -46,10 +56,85 @@ class _ApprovalCreatePayload(BaseModel):
     retry: bool = False
 
 
+@dataclass(frozen=True, slots=True)
+class _PageRequest:
+    page: int
+    page_size: int
+
+    @property
+    def start(self) -> int:
+        return (self.page - 1) * self.page_size
+
+    @property
+    def stop(self) -> int:
+        return self.start + self.page_size
+
+
 @csrf_exempt
 def app_approval_instances(request: HttpRequest, app_key: str) -> JsonResponse:
-    if request.method != "POST":
+    """下游应用审批实例集合: GET 列表 / POST 创建。"""
+    match request.method:
+        case "GET":
+            return _list_approval_instances(request, app_key)
+        case "POST":
+            return _create_approval_instance(request, app_key)
+        case _:
+            return _error(
+                ErrorCode.VALIDATION_ERROR,
+                "请求方法无效。",
+                HTTPStatus.METHOD_NOT_ALLOWED,
+            )
+
+
+@csrf_exempt
+def app_approval_instance_detail(
+    request: HttpRequest,
+    app_key: str,
+    instance_id: str,
+) -> JsonResponse:
+    """下游应用查询自身审批实例详情。"""
+    if request.method != "GET":
         return _error(ErrorCode.VALIDATION_ERROR, "请求方法无效。", HTTPStatus.METHOD_NOT_ALLOWED)
+    match _authenticated_app(request, app_key):
+        case App() as app:
+            pass
+        case JsonResponse() as response:
+            return response
+    instance = (
+        ApprovalInstance.objects.select_related(
+            "template",
+            "originator_user",
+            "completion_delivery",
+        )
+        .filter(app=app, id=instance_id)
+        .first()
+    )
+    if instance is None:
+        return _error(ErrorCode.NOT_FOUND, "审批实例不存在。", HTTPStatus.NOT_FOUND)
+    instance = recover_stale_submission(instance)
+    return JsonResponse(_instance_payload(instance))
+
+
+@csrf_exempt
+def app_approval_templates(request: HttpRequest, app_key: str) -> JsonResponse:
+    """列出本应用可用的活跃审批模板(含平台共用模板)。"""
+    if request.method != "GET":
+        return _error(ErrorCode.VALIDATION_ERROR, "请求方法无效。", HTTPStatus.METHOD_NOT_ALLOWED)
+    match _authenticated_app(request, app_key):
+        case App() as app:
+            pass
+        case JsonResponse() as response:
+            return response
+    templates = (
+        ApprovalTemplate.objects.filter(is_active=True)
+        .filter(Q(app=app) | Q(app__isnull=True))
+        .order_by("key", "id")
+    )
+    items: list[JsonValue] = [_template_payload(template) for template in templates]
+    return JsonResponse({"data": items})
+
+
+def _create_approval_instance(request: HttpRequest, app_key: str) -> JsonResponse:
     match _authenticated_app(request, app_key):
         case App() as app:
             pass
@@ -80,32 +165,88 @@ def app_approval_instances(request: HttpRequest, app_key: str) -> JsonResponse:
     return JsonResponse(_instance_payload(instance), status=status)
 
 
-@csrf_exempt
-def app_approval_instance_detail(
-    request: HttpRequest,
-    app_key: str,
-    instance_id: str,
-) -> JsonResponse:
-    if request.method != "GET":
-        return _error(ErrorCode.VALIDATION_ERROR, "请求方法无效。", HTTPStatus.METHOD_NOT_ALLOWED)
+def _list_approval_instances(request: HttpRequest, app_key: str) -> JsonResponse:
     match _authenticated_app(request, app_key):
         case App() as app:
             pass
         case JsonResponse() as response:
             return response
-    instance = (
+    page = _page_request(request.GET)
+    queryset = _filtered_instances(app, request.GET)
+    total_items = queryset.count()
+    rows = queryset[page.start : page.stop]
+    items: list[JsonValue] = [
+        _instance_payload(recover_stale_submission(instance)) for instance in rows
+    ]
+    return JsonResponse(
+        {
+            "data": items,
+            "pagination": pagination_item(
+                _PaginationView(
+                    page=page.page,
+                    page_size=page.page_size,
+                    total_items=total_items,
+                    total_pages=total_pages(
+                        total_items=total_items,
+                        page_size=page.page_size,
+                    ),
+                ),
+            ),
+        },
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _PaginationView:
+    page: int
+    page_size: int
+    total_items: int
+    total_pages: int
+
+
+def _filtered_instances(app: App, query: QueryDict) -> QuerySet[ApprovalInstance]:
+    queryset = (
         ApprovalInstance.objects.select_related(
             "template",
             "originator_user",
             "completion_delivery",
         )
-        .filter(app=app, id=instance_id)
-        .first()
+        .filter(app=app)
+        .order_by("-created_at", "id")
     )
-    if instance is None:
-        return _error(ErrorCode.NOT_FOUND, "审批实例不存在。", HTTPStatus.NOT_FOUND)
-    instance = recover_stale_submission(instance)
-    return JsonResponse(_instance_payload(instance))
+    status = query.get("status", "").strip()
+    if status:
+        queryset = queryset.filter(status=status)
+    biz_key = query.get("biz_key", "").strip()
+    if biz_key:
+        queryset = queryset.filter(biz_key=biz_key)
+    template_key = query.get("template_key", "").strip()
+    if template_key:
+        queryset = queryset.filter(template__key=template_key)
+    return queryset
+
+
+def _page_request(query: QueryDict) -> _PageRequest:
+    return _PageRequest(
+        page=_positive_integer(query.get("page"), default=_DEFAULT_PAGE, maximum=_MAX_PAGE),
+        page_size=_positive_integer(
+            query.get("page_size"),
+            default=_DEFAULT_PAGE_SIZE,
+            maximum=_MAX_PAGE_SIZE,
+        ),
+    )
+
+
+def _positive_integer(value: str | None, *, default: int, maximum: int) -> int:
+    if value is None or value == "":
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        return default
+    if parsed < 1:
+        return default
+    return min(parsed, maximum)
 
 
 def _instance_payload(instance: ApprovalInstance) -> dict[str, JsonValue]:
@@ -121,6 +262,16 @@ def _instance_payload(instance: ApprovalInstance) -> dict[str, JsonValue]:
         "completed_at": (
             instance.completed_at.isoformat() if instance.completed_at is not None else None
         ),
+    }
+
+
+def _template_payload(template: ApprovalTemplate) -> dict[str, JsonValue]:
+    # 故意不暴露 dingtalk_process_code / form_mapping: 属于 provider 侧映射密钥。
+    return {
+        "key": template.key,
+        "name": template.name,
+        "form_schema": dict(template.form_schema),
+        "is_active": template.is_active,
     }
 
 

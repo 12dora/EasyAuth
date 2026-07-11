@@ -5,6 +5,7 @@ from django.urls import path
 from easyauth.api.approval_views import (
     app_approval_instance_detail,
     app_approval_instances,
+    app_approval_templates,
 )
 from easyauth.api.manifest_sync_views import app_manifest_sync
 from easyauth.api.views import query_user_permissions
@@ -29,5 +30,10 @@ urlpatterns = [
         "apps/<str:app_key>/approval-instances/<str:instance_id>",
         app_approval_instance_detail,
         name="app-approval-instance-detail",
+    ),
+    path(
+        "apps/<str:app_key>/approval-templates",
+        app_approval_templates,
+        name="app-approval-templates",
     ),
 ]
