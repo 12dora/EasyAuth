@@ -51,7 +51,7 @@ def test_parse_user_passes_through_profile_and_contact_fields() -> None:
         "title": "销售经理",
         "email": "zhang@example.com",
         "mobile": "13800000001",
-        "employee_number": "E0001",
+        "job_number": "E0001",
         "department_ids": ["dept-1"],
         "manager_userid": "manager-1",
         "status": "active",

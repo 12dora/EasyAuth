@@ -125,7 +125,9 @@ def parse_user(payload: DirectoryJson, *, source_slug: str) -> DingTalkDirectory
         title=_string(payload.get("title")),
         email=_string(payload.get("email")),
         mobile=_string(payload.get("mobile")),
-        employee_number=_string(payload.get("employee_number")),
+        # Authentik 钉钉目录 serializer 的真实字段名是 job_number; employee_number
+        # 只是 EasyAuth 内部统一模型字段, 不接受同名上游别名以免掩盖契约漂移。
+        employee_number=_string(payload.get("job_number")),
         department_ids=tuple(
             _string(item)
             for item in (_list(payload.get("department_ids")) or _list(payload.get("dept_id_list")))

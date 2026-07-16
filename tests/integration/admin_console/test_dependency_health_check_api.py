@@ -58,12 +58,16 @@ def test_check_dingtalk_reports_unhealthy_when_any_corp_errored() -> None:
 
 @override_settings(EASYAUTH_DIRECTORY_STALE_AFTER_SECONDS=600)
 def test_check_dingtalk_uses_shared_directory_stale_threshold() -> None:
-    _ = DingTalkDirectorySyncState.objects.create(
+    state = DingTalkDirectorySyncState.objects.create(
         source_slug="dingtalk",
         corp_id="corp-stale",
         generation=1,
         status="success",
-        finished_at=(timezone.now() - timedelta(seconds=601)).isoformat(),
+        # 即使 Authentik 时钟漂移到未来, 本地最后成功落库时间过期仍须告警。
+        finished_at=(timezone.now() + timedelta(days=1)).isoformat(),
+    )
+    DingTalkDirectorySyncState.objects.filter(pk=state.pk).update(
+        last_synced_at=timezone.now() - timedelta(seconds=601),
     )
 
     result = dependency_health_checks._check_dingtalk()  # noqa: SLF001

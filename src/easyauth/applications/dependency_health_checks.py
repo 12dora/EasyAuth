@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Final, Protocol, cast
 
 from django.utils import timezone
 
-from easyauth.accounts.directory_snapshot import is_sync_state_stale, sync_state_snapshot_at
+from easyauth.accounts.directory_snapshot import is_sync_state_stale, sync_state_freshness_at
 from easyauth.accounts.models import DingTalkDirectorySyncState
 from easyauth.applications.dependency_health import DependencyHealthService, redact_summary
 from easyauth.applications.health_models import (
@@ -169,7 +169,7 @@ def _check_dingtalk() -> DependencyCheckResult:
     stale = [state for state in states if is_sync_state_stale(state, now=now)]
     if stale:
         corps = ", ".join(
-            f"{state.source_slug}:{state.corp_id}@{sync_state_snapshot_at(state).isoformat()}"
+            f"{state.source_slug}:{state.corp_id}@{sync_state_freshness_at(state).isoformat()}"
             for state in stale
         )
         return DependencyCheckResult(
@@ -179,7 +179,7 @@ def _check_dingtalk() -> DependencyCheckResult:
             error_summary="",
         )
 
-    oldest = min(sync_state_snapshot_at(state) for state in states)
+    oldest = min(sync_state_freshness_at(state) for state in states)
     return DependencyCheckResult(
         dependency=DEPENDENCY_DINGTALK,
         status=DEPENDENCY_HEALTH_STATUS_HEALTHY,

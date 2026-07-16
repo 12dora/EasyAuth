@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from http import HTTPStatus
 from json import loads
 from pathlib import Path
@@ -101,7 +102,8 @@ def _seed_contract_directory(*, with_manager_row: bool = True) -> None:
         generation=7,
         status="success",
         counters={"users": 3 if with_manager_row else 2, "departments": 3},
-        finished_at="2099-01-01T00:00:00+00:00",
+        # 上游快照时间只作展示; freshness 使用本地 auto_now 的 last_synced_at。
+        finished_at="2020-01-01T00:00:00+00:00",
     )
     if with_manager_row:
         _ = DingTalkUserMirror.objects.create(
@@ -356,12 +358,15 @@ def test_directory_snapshot_reports_multi_corp_stale_missing_and_error(
     app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
     _enable_directory(app)
     _auth(monkeypatch, app)
-    _ = DingTalkDirectorySyncState.objects.create(
+    stale_state = DingTalkDirectorySyncState.objects.create(
         source_slug=_SOURCE,
         corp_id="corp-stale",
         generation=3,
         status="success",
         finished_at="2000-01-01T00:00:00+00:00",
+    )
+    DingTalkDirectorySyncState.objects.filter(pk=stale_state.pk).update(
+        last_synced_at=timezone.now() - timedelta(seconds=601),
     )
     _ = DingTalkDirectorySyncState.objects.create(
         source_slug=_SOURCE,
@@ -369,7 +374,7 @@ def test_directory_snapshot_reports_multi_corp_stale_missing_and_error(
         generation=4,
         status="error",
         error="上游失败",
-        finished_at="2099-01-01T00:00:00+00:00",
+        finished_at="2020-01-01T00:00:00+00:00",
     )
     _ = DingTalkUserMirror.objects.create(
         source_slug=_SOURCE,

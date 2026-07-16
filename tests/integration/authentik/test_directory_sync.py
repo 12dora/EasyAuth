@@ -16,6 +16,7 @@ from easyauth.accounts.models import (
     DingTalkUserOrgContext,
     UserMirror,
 )
+from easyauth.api.directory_payloads import build_user_list_items
 from easyauth.applications.models import App, AppScope, AuthorizationGroup, Permission
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
@@ -24,6 +25,7 @@ from easyauth.integrations.authentik.directory_client import (
     AuthentikDirectoryNotFoundError,
     AuthentikDirectoryUnavailableError,
 )
+from easyauth.integrations.authentik.directory_payloads import parse_user
 from easyauth.integrations.authentik.directory_sync import (
     UnsupportedDirectoryStatusError,
     sync_authentik_dingtalk_directory,
@@ -44,7 +46,7 @@ _CONCURRENT_WAIT_TIMEOUT_MESSAGE = "并发测试等待新 generation 提交超�
 @dataclass(slots=True)
 class _DirectoryClientStub:
     departments: list[dict[str, object]] = field(default_factory=list)
-    users: list[dict[str, object]] = field(default_factory=list)
+    users: list[object] = field(default_factory=list)
     org_contexts: dict[tuple[str, str], dict[str, object]] = field(default_factory=dict)
     # 上游报告的每 corp 用户总数; 缺省时按实际返回用户数上报 (观测==报告)。
     reported_user_count: int | None = None
@@ -82,7 +84,7 @@ class _DirectoryClientStub:
     def iter_departments(self) -> list[dict[str, object]]:
         return self.departments
 
-    def iter_users(self) -> list[dict[str, object]]:
+    def iter_users(self) -> list[object]:
         return self.users
 
     def get_user_org(self, corp_id: str, user_id: str) -> dict[str, object]:
@@ -252,19 +254,31 @@ def test_directory_sync_keeps_existing_user_mirror_avatar_url() -> None:
     assert user.avatar_url == "https://oidc.example.test/media/original.jpg"
 
 
-def test_directory_sync_persists_directory_contacts_without_user_mirror() -> None:
-    client_stub = _stub_with_users(
-        [
-            {
+def test_directory_job_number_reaches_mirror_and_public_api_without_user_mirror() -> None:
+    parsed_user = parse_user(
+        {
+            "corp_id": "corp-1",
+            "user_id": "never-sso-user",
+            "name": "未登录员工",
+            "email": "never-sso@example.com",
+            "mobile": "13800000009",
+            "job_number": "E0009",
+            "status": "active",
+        },
+        source_slug="dingtalk",
+    )
+    client_stub = _DirectoryClientStub(
+        users=[parsed_user],
+        org_contexts={
+            ("corp-1", "never-sso-user"): {
                 "corp_id": "corp-1",
                 "user_id": "never-sso-user",
-                "name": "未登录员工",
-                "email": "never-sso@example.com",
-                "mobile": "13800000009",
-                "employee_number": "E0009",
-                "status": "active",
+                "departments": [],
+                "manager": {},
+                "manager_chain": [],
+                "stale": False,
             },
-        ],
+        },
     )
 
     _ = sync_authentik_dingtalk_directory(client_stub)
@@ -276,6 +290,9 @@ def test_directory_sync_persists_directory_contacts_without_user_mirror() -> Non
     assert mirror.last_seen_generation == 1
     assert mirror.is_tombstone is False
     assert not UserMirror.objects.filter(dingtalk_userid="never-sso-user").exists()
+    api_item = cast("dict[str, JsonValue]", build_user_list_items([mirror])[0])
+    assert api_item["employee_number"] == "E0009"
+    assert api_item["user_id"] is None
 
 
 def test_directory_tombstone_retains_contacts_and_reappearance_clears_it() -> None:
@@ -304,18 +321,30 @@ def test_directory_tombstone_retains_contacts_and_reappearance_clears_it() -> No
     assert tombstone.employee_number == "E0008"
     assert tombstone.last_seen_generation == 1
 
-    returning_snapshot = _stub_with_users(
-        [
-            {
+    returning_user = parse_user(
+        {
+            "corp_id": "corp-1",
+            "user_id": "returning-user",
+            "name": "重新出现员工",
+            "email": "new-returning@example.com",
+            "mobile": "13800000007",
+            "job_number": "E0008",
+            "status": "active",
+        },
+        source_slug="dingtalk",
+    )
+    returning_snapshot = _DirectoryClientStub(
+        users=[returning_user],
+        org_contexts={
+            ("corp-1", "returning-user"): {
                 "corp_id": "corp-1",
                 "user_id": "returning-user",
-                "name": "重新出现员工",
-                "email": "new-returning@example.com",
-                "mobile": "13800000007",
-                "employee_number": "E0008",
-                "status": "active",
+                "departments": [],
+                "manager": {},
+                "manager_chain": [],
+                "stale": False,
             },
-        ],
+        },
     )
     returning_snapshot.generation = 3
 

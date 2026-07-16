@@ -101,6 +101,7 @@ def test_directory_client_iterates_paginated_users(monkeypatch: pytest.MonkeyPat
                       "user_id": "user-1",
                       "dept_id_list": ["dept-1"],
                       "manager_user_id": "manager-1",
+                      "job_number": "E0001",
                       "active": true,
                       "is_deleted": false
                     }
@@ -139,6 +140,7 @@ def test_directory_client_iterates_paginated_users(monkeypatch: pytest.MonkeyPat
     assert [user.user_id for user in users] == ["user-1", "user-2"]
     assert users[0].department_ids == ("dept-1",)
     assert users[0].manager_userid == "manager-1"
+    assert users[0].employee_number == "E0001"
     assert users[0].status == "active"
     assert users[1].status == "inactive"
     assert seen_urls == [
