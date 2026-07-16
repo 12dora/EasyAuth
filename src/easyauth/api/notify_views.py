@@ -394,6 +394,7 @@ def _accept_error_response(
 ) -> JsonResponse:
     error_code = {
         "conflict": ErrorCode.CONFLICT.value,
+        "dependency_unavailable": ErrorCode.DEPENDENCY_UNAVAILABLE.value,
         "throttled": ErrorCode.THROTTLED.value,
         "validation_error": ErrorCode.VALIDATION_ERROR.value,
     }.get(exc.kind, ErrorCode.VALIDATION_ERROR.value)
@@ -412,6 +413,12 @@ def _accept_error_response(
         case "throttled":
             retry_after = exc.retry_after_seconds or _seconds_until_next_day_fallback()
             return _too_many_requests_response(retry_after, message=exc.message)
+        case "dependency_unavailable":
+            return error_response(
+                ErrorCode.DEPENDENCY_UNAVAILABLE,
+                exc.message,
+                status=HTTPStatus.SERVICE_UNAVAILABLE,
+            )
         case "validation_error":
             details: dict[str, JsonValue] = {}
             if exc.field:

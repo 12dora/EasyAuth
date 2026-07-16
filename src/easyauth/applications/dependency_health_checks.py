@@ -20,11 +20,12 @@ from easyauth.applications.health_models import (
     DEPENDENCY_HEALTH_STATUS_WARNING,
     DependencyHealthSnapshot,
 )
-from easyauth.applications.integration_settings import (
-    authentik_runtime_config,
-    dingtalk_runtime_config,
+from easyauth.applications.integration_settings import authentik_runtime_config
+from easyauth.applications.models import (
+    CAPABILITY_NOTIFY,
+    AppCapability,
+    AppNotificationChannel,
 )
-from easyauth.applications.models import CAPABILITY_NOTIFY, AppCapability
 from easyauth.integrations.authentik.directory_client import (
     AuthentikDirectoryClient,
     AuthentikDirectoryError,
@@ -188,39 +189,44 @@ def _check_dingtalk() -> DependencyCheckResult:
 
 
 def _check_dingtalk_notify() -> DependencyCheckResult:
-    # 「能力开了、凭据没配」是静默失败高发区(第 3 篇 §8): 投递侧会 pending+退避等待
-    # 配置补齐, 若无健康亮红, 运维无从察觉。无 app 开通通知能力时凭据缺失不构成风险。
-    enabled_count = AppCapability.objects.filter(
-        capability=CAPABILITY_NOTIFY,
-        enabled=True,
-    ).count()
-    config = dingtalk_runtime_config()
-    missing: list[str] = []
-    if not config.is_configured():
-        missing.append("钉钉开放平台应用凭证")
-    if not config.agent_id:
-        missing.append("agent_id")
+    enabled_apps = dict(
+        AppCapability.objects.filter(
+            capability=CAPABILITY_NOTIFY,
+            enabled=True,
+            app__is_active=True,
+        ).values_list("app_id", "app__app_key"),
+    )
+    if not enabled_apps:
+        return DependencyCheckResult(
+            dependency=DEPENDENCY_DINGTALK_NOTIFY,
+            status=DEPENDENCY_HEALTH_STATUS_HEALTHY,
+            summary="当前无 active 应用开通通知能力。",
+            error_summary="",
+        )
+    configured_app_ids = set(
+        AppNotificationChannel.objects.filter(
+            app_id__in=enabled_apps,
+            is_active=True,
+        )
+        .exclude(dingtalk_app_key="")
+        .exclude(dingtalk_app_secret="")
+        .exclude(agent_id="")
+        .values_list("app_id", flat=True),
+    )
+    missing = [
+        app_key for app_id, app_key in enabled_apps.items() if app_id not in configured_app_ids
+    ]
     if not missing:
         return DependencyCheckResult(
             dependency=DEPENDENCY_DINGTALK_NOTIFY,
             status=DEPENDENCY_HEALTH_STATUS_HEALTHY,
-            summary=f"钉钉工作通知配置完整, {enabled_count} 个应用已开通通知能力。",
-            error_summary="",
-        )
-    detail = "、".join(missing)
-    if enabled_count == 0:
-        return DependencyCheckResult(
-            dependency=DEPENDENCY_DINGTALK_NOTIFY,
-            status=DEPENDENCY_HEALTH_STATUS_WARNING,
-            summary=f"钉钉工作通知未配置({detail}), 当前无应用开通通知能力。",
+            summary=f"{len(enabled_apps)} 个通知应用均已配置 active 专属通道。",
             error_summary="",
         )
     return DependencyCheckResult(
         dependency=DEPENDENCY_DINGTALK_NOTIFY,
         status=DEPENDENCY_HEALTH_STATUS_UNHEALTHY,
-        summary=(
-            f"通知凭据缺失({detail}), 但已有 {enabled_count} 个应用开通通知能力, 投递将持续退避。"
-        ),
+        summary=f"通知应用缺少 active 完整通道: {', '.join(sorted(missing))}。",
         error_summary="",
     )
 

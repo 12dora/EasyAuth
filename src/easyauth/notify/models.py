@@ -7,7 +7,7 @@ from django.db import models
 from django.db.models import Q
 
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App
+from easyauth.applications.models import App, AppNotificationChannel
 
 if TYPE_CHECKING:
     from datetime import date, datetime
@@ -96,6 +96,16 @@ class NotifyMessage(models.Model):
         App,
         on_delete=models.CASCADE,
         related_name="notify_messages",
+    )
+    channel: models.ForeignKey[
+        AppNotificationChannel | None,
+        AppNotificationChannel | None,
+    ] = models.ForeignKey(
+        AppNotificationChannel,
+        on_delete=models.PROTECT,
+        related_name="notify_messages",
+        null=True,
+        blank=True,
     )
     template: models.CharField[str, str] = models.CharField(
         max_length=16,

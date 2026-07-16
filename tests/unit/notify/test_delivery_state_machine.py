@@ -6,7 +6,7 @@ import pytest
 from django.utils import timezone
 
 from easyauth.accounts.models import DingTalkUserMirror, UserMirror
-from easyauth.applications.models import App
+from easyauth.applications.models import App, AppNotificationChannel
 from easyauth.integrations.dingtalk.api_client import (
     DingTalkApiRequestError,
     DingTalkApiUnavailableError,
@@ -83,7 +83,7 @@ def _patch_dingtalk(
     else:
         client.send_work_notification.return_value = "task-1"
 
-    def fake_client_and_agent() -> tuple[MagicMock, int]:
+    def fake_client_and_agent(_channel: object) -> tuple[MagicMock, int]:
         return client, 1001
 
     monkeypatch.setattr(
@@ -112,6 +112,40 @@ def test_deliver_all_success_completed(monkeypatch: pytest.MonkeyPatch) -> None:
         message=message,
         status=NOTIFY_RECIPIENT_STATUS_SENT,
     ).count() == 2  # noqa: PLR2004
+
+
+def test_delivery_uses_channel_frozen_at_accept_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    app = App.objects.create(app_key="notify-frozen-channel", name="Frozen")
+    original = app.notification_channels.get(is_active=True)
+    _seed_user(authentik="frozen-user", dingtalk="frozen-dt")
+    message = _accept(app, ["frozen-user"])
+    original.is_active = False
+    original.save(update_fields=["is_active", "updated_at"])
+    _ = AppNotificationChannel.objects.create(
+        app=app,
+        name="轮换后通道",
+        dingtalk_app_key="new-key",
+        dingtalk_app_secret="new-secret",  # noqa: S106 - 测试专用固定值。
+        agent_id="2002",
+        version=2,
+    )
+    used_channels: list[int] = []
+    client = MagicMock()
+    client.send_work_notification.return_value = "frozen-task"
+
+    def client_for_channel(channel: AppNotificationChannel) -> tuple[MagicMock, int]:
+        used_channels.append(channel.id)
+        return client, int(channel.agent_id)
+
+    monkeypatch.setattr(
+        "easyauth.notify.services._dingtalk_client_and_agent",
+        client_for_channel,
+    )
+    deliver_message(str(message.id), 1)
+
+    message.refresh_from_db()
+    assert message.channel_id == original.id
+    assert used_channels == [original.id]
 
 
 def test_deliver_partial_batch_failure(monkeypatch: pytest.MonkeyPatch) -> None:

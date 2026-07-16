@@ -71,7 +71,7 @@ def test_concurrent_claim_only_one_wins(monkeypatch: pytest.MonkeyPatch) -> None
     client = MagicMock()
     monkeypatch.setattr(
         "easyauth.notify.services._dingtalk_client_and_agent",
-        lambda: (client, 1),
+        lambda _channel: (client, 1),
     )
 
     deliver_message(str(message.id), 2)
@@ -104,7 +104,7 @@ def test_expired_lease_can_be_taken_over(monkeypatch: pytest.MonkeyPatch) -> Non
     client.send_work_notification.return_value = "task-takeover"
     monkeypatch.setattr(
         "easyauth.notify.services._dingtalk_client_and_agent",
-        lambda: (client, 1),
+        lambda _channel: (client, 1),
     )
 
     deliver_message(str(message.id), 2)

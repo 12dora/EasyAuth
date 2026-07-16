@@ -72,6 +72,10 @@ from easyauth.admin_console.memberships_api import (
     console_app_membership_detail,
     console_app_memberships,
 )
+from easyauth.admin_console.notification_channel_api import (
+    console_app_notification_channel,
+    console_app_notification_channel_test,
+)
 from easyauth.admin_console.operations_api import (
     operations_access_grants,
     operations_access_requests,
@@ -186,6 +190,16 @@ urlpatterns = [
         "api/v1/apps/<str:app_key>/capabilities/<str:capability>",
         console_app_capability_detail,
         name="console-app-capability-detail",
+    ),
+    path(
+        "api/v1/apps/<str:app_key>/notification-channel",
+        console_app_notification_channel,
+        name="console-app-notification-channel",
+    ),
+    path(
+        "api/v1/apps/<str:app_key>/notification-channel/test",
+        console_app_notification_channel_test,
+        name="console-app-notification-channel-test",
     ),
     path(
         "api/v1/apps/<str:app_key>/managed-users-preview",

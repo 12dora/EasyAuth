@@ -7,6 +7,8 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 
+from easyauth.config.crypto import EncryptedCharField
+
 from .approval_rule_rules import approval_rule_clean_errors
 from .credential_capabilities import (
     CAPABILITY_DIRECTORY,
@@ -32,6 +34,7 @@ __all__ = (
     "AppCapability",
     "AppCredential",
     "AppMembership",
+    "AppNotificationChannel",
     "AppScope",
     "AppStaticToken",
     "ApprovalRule",
@@ -164,6 +167,61 @@ class AppCapability(models.Model):
     @override
     def __str__(self) -> str:
         return f"{self.app.app_key}:{self.capability}"
+
+
+class AppNotificationChannel(models.Model):
+    if TYPE_CHECKING:
+        id: ClassVar[int]
+        app_id: ClassVar[int]
+
+    app: models.ForeignKey[App, App] = models.ForeignKey(
+        App,
+        on_delete=models.CASCADE,
+        related_name="notification_channels",
+    )
+    name: models.CharField[str, str] = models.CharField(max_length=128)
+    dingtalk_app_key: models.CharField[str, str] = models.CharField(max_length=128)
+    dingtalk_app_secret: EncryptedCharField = EncryptedCharField(max_length=1024)
+    agent_id: models.CharField[str, str] = models.CharField(max_length=64)
+    version: models.PositiveIntegerField[int, int] = models.PositiveIntegerField()
+    is_active: models.BooleanField[bool, bool] = models.BooleanField(default=True)
+    created_by: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
+    created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
+        auto_now_add=True,
+    )
+    updated_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["app", "version"],
+                name="applications_notify_channel_app_version_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["app"],
+                condition=Q(is_active=True),
+                name="applications_notify_channel_one_active",
+            ),
+        ]
+        ordering: ClassVar[list[str]] = ["app__app_key", "-version"]
+
+    @override
+    def __str__(self) -> str:
+        return f"{self.app.app_key}:{self.version}"
+
+    @override
+    def clean(self) -> None:
+        super().clean()
+        errors: dict[str, str] = {}
+        for field_name in ("name", "dingtalk_app_key", "dingtalk_app_secret", "agent_id"):
+            if not str(getattr(self, field_name)).strip():
+                errors[field_name] = "通知通道字段不能为空。"
+        if not isinstance(self.version, int) or isinstance(self.version, bool) or self.version < 1:
+            errors["version"] = "通知通道版本必须大于零。"
+        if errors:
+            raise ValidationError(errors)
 
 
 APP_CREDENTIAL_STATIC_KIND: Final = "static_token"

@@ -17,8 +17,7 @@ from django.utils import timezone
 
 from easyauth.accounts.models import DingTalkUserMirror, UserMirror
 from easyauth.applications.capabilities import app_capability_config
-from easyauth.applications.integration_settings import dingtalk_runtime_config
-from easyauth.applications.models import CAPABILITY_NOTIFY
+from easyauth.applications.models import CAPABILITY_NOTIFY, AppNotificationChannel
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.integrations.dingtalk.api_client import (
     DingTalkApiClient,
@@ -62,6 +61,7 @@ if TYPE_CHECKING:
 
 type NotifyAcceptErrorKind = Literal[
     "conflict",
+    "dependency_unavailable",
     "throttled",
     "validation_error",
 ]
@@ -129,6 +129,7 @@ BIZ_TAG_TOO_LONG_MESSAGE: Final = "biz_tag 不得超过 64 字符。"
 MSG_TOO_LARGE_MESSAGE: Final = "组装后的钉钉 msg JSON 超过 2048 字节上限。"
 RAW_REF_TOO_LONG_MESSAGE: Final = "收件人引用不得超过 200 字符。"
 DINGTALK_AGENT_MISSING_MESSAGE: Final = "钉钉工作通知 agent_id 未配置。"
+NOTIFY_CHANNEL_MISSING_MESSAGE: Final = "应用未配置可用的钉钉通知通道。"
 
 
 @dataclass(frozen=True, slots=True)
@@ -327,12 +328,20 @@ def accept_notify_message(  # noqa: PLR0913 - 受理入口完整业务事实。
                 recipient_rejected=_accept_time_rejected_count(existing),
             )
 
+    channel = _active_notification_channel(app.id)
+    if channel is None:
+        raise NotifyAcceptError(
+            kind="dependency_unavailable",
+            message=NOTIFY_CHANNEL_MISSING_MESSAGE,
+        )
+
     try:
         with transaction.atomic():
             # 日配额: 事务内先查后写(第 2 篇 §3.2)。
             _assert_daily_quota(app_id=app.id, additional=len(resolved))
             message = _create_message_with_recipients(
                 app=app,
+                channel=channel,
                 normalized=normalized,
                 payload_hash=payload_hash,
                 resolved=resolved,
@@ -387,7 +396,7 @@ def deliver_message(message_id: str, generation: int) -> None:
 
     network_interrupted = False
     try:
-        client, agent_id = _dingtalk_client_and_agent()
+        client, agent_id = _dingtalk_client_and_agent(message.channel)
     except (DingTalkNotConfiguredError, ValueError) as error:
         # 配置缺失视为可恢复: 保持 pending, 走常规退避; 健康探测补齐后自动恢复(第 3 篇 §8)。
         network_interrupted = True
@@ -466,23 +475,25 @@ def reconcile_send_results() -> int:
 
     now = timezone.now()
     window_start = now - timedelta(hours=NOTIFY_RECONCILE_WINDOW_HOURS)
-    _reconcile_stale_sent(now=now, window_start=window_start)
 
-    task_ids = _sent_task_ids_in_window(window_start)
-    if not task_ids:
-        return 0
-
-    try:
-        client, agent_id = _dingtalk_client_and_agent()
-    except (DingTalkNotConfiguredError, ValueError):
+    channel_tasks = _sent_channel_tasks_in_window(window_start)
+    if not channel_tasks:
         return 0
 
     processed = 0
     affected_message_ids: set[UUID] = set()
-    for task_id in task_ids:
+    for channel_id, task_id in channel_tasks:
+        channel = AppNotificationChannel.objects.filter(id=channel_id).first()
+        if channel is None:
+            continue
+        try:
+            client, agent_id = _dingtalk_client_and_agent(channel)
+        except (DingTalkNotConfiguredError, ValueError):
+            continue
         mids = _reconcile_one_task(
             client=client,
             agent_id=agent_id,
+            channel_id=channel_id,
             task_id=task_id,
             now=now,
         )
@@ -499,57 +510,26 @@ def reconcile_send_results() -> int:
     return processed
 
 
-def _reconcile_stale_sent(*, now: datetime, window_start: datetime) -> None:
-    # 超 24h 仍 sent → 乐观 delivered(第 3 篇 §5)。
-    stale_ids = list(
-        NotifyRecipient.objects.filter(
-            status=NOTIFY_RECIPIENT_STATUS_SENT,
-        )
-        .filter(Q(sent_at__isnull=True) | Q(sent_at__lte=window_start))
-        .values_list("id", flat=True)[:NOTIFY_PRUNE_BATCH_SIZE],
-    )
-    if not stale_ids:
-        return
-    _ = NotifyRecipient.objects.filter(id__in=stale_ids).update(
-        status=NOTIFY_RECIPIENT_STATUS_DELIVERED,
-        delivered_at=now,
-        updated_at=now,
-    )
-    stale_message_ids = cast(
-        "list[object]",
-        list(
-            NotifyRecipient.objects.filter(id__in=stale_ids)
-            .values_list("message_id", flat=True)
-            .distinct(),
-        ),
-    )
-    for mid_raw in stale_message_ids:
-        if not isinstance(mid_raw, uuid.UUID):
-            continue
-        msg = NotifyMessage.objects.filter(id=mid_raw).first()
-        if msg is not None:
-            _refresh_message_counts(msg)
-            _maybe_rewrite_aggregate_after_reconcile(msg)
-
-
-def _sent_task_ids_in_window(window_start: datetime) -> list[str]:
-    # dict.fromkeys 保序去重: 避免 distinct+slice 在部分后端上仍带重复 task_id。
-    raw_task_ids = (
+def _sent_channel_tasks_in_window(window_start: datetime) -> list[tuple[int, str]]:
+    raw_tasks = (
         NotifyRecipient.objects.filter(
             status=NOTIFY_RECIPIENT_STATUS_SENT,
             sent_at__gt=window_start,
+            message__channel_id__isnull=False,
         )
         .exclude(dingtalk_task_id="")
-        .order_by("dingtalk_task_id")
-        .values_list("dingtalk_task_id", flat=True)
+        .order_by("message__channel_id", "dingtalk_task_id")
+        .values_list("message__channel_id", "dingtalk_task_id")
     )
-    return list(dict.fromkeys(raw_task_ids))[:NOTIFY_RECONCILE_TASK_LIMIT]
+    typed = cast("list[tuple[int, str]]", list(raw_tasks))
+    return list(dict.fromkeys(typed))[:NOTIFY_RECONCILE_TASK_LIMIT]
 
 
 def _reconcile_one_task(
     *,
     client: DingTalkApiClient,
     agent_id: str | int,
+    channel_id: int,
     task_id: str,
     now: datetime,
 ) -> set[UUID]:
@@ -564,7 +544,12 @@ def _reconcile_one_task(
         send_result = client.get_send_result(agent_id=agent_id, task_id=task_id)
     except (DingTalkApiRequestError, DingTalkApiUnavailableError):
         return set()
-    return _apply_send_result(task_id=task_id, send_result=send_result, now=now)
+    return _apply_send_result(
+        channel_id=channel_id,
+        task_id=task_id,
+        send_result=send_result,
+        now=now,
+    )
 
 
 def prune_messages() -> int:
@@ -901,6 +886,7 @@ def _seconds_until_next_shanghai_day() -> int:
 def _create_message_with_recipients(  # noqa: PLR0913 - 落库字段全集。
     *,
     app: App,
+    channel: AppNotificationChannel,
     normalized: _NormalizedInput,
     payload_hash: str,
     resolved: list[ResolvedRecipient],
@@ -918,6 +904,7 @@ def _create_message_with_recipients(  # noqa: PLR0913 - 落库字段全集。
 
     message = NotifyMessage.objects.create(
         app=app,
+        channel=channel,
         template=normalized.template,
         title=normalized.title,
         content=normalized.content,
@@ -1010,11 +997,22 @@ def _is_retryable_request_error(error: DingTalkApiRequestError) -> bool:
     return True
 
 
-def _dingtalk_client_and_agent() -> tuple[DingTalkApiClient, str | int]:
-    config = dingtalk_runtime_config()
-    if not config.is_configured():
+def _active_notification_channel(app_id: int) -> AppNotificationChannel | None:
+    return (
+        AppNotificationChannel.objects.filter(app_id=app_id, is_active=True)
+        .exclude(dingtalk_app_key="")
+        .exclude(dingtalk_app_secret="")
+        .exclude(agent_id="")
+        .first()
+    )
+
+
+def _dingtalk_client_and_agent(
+    channel: AppNotificationChannel | None,
+) -> tuple[DingTalkApiClient, str | int]:
+    if channel is None or not channel.dingtalk_app_key.strip() or not channel.dingtalk_app_secret:
         raise DingTalkNotConfiguredError
-    agent_id = config.agent_id.strip()
+    agent_id = channel.agent_id.strip()
     if not agent_id:
         raise ValueError(DINGTALK_AGENT_MISSING_MESSAGE)
     # agent_id 优先 int, 否则原样字符串。
@@ -1022,7 +1020,15 @@ def _dingtalk_client_and_agent() -> tuple[DingTalkApiClient, str | int]:
         agent: str | int = int(agent_id)
     except ValueError:
         agent = agent_id
-    return DingTalkApiClient.from_settings(), agent
+    timeout_seconds = float(getattr(settings, "EASYAUTH_DINGTALK_HTTP_TIMEOUT_SECONDS", 5))
+    return (
+        DingTalkApiClient(
+            app_key=channel.dingtalk_app_key,
+            app_secret=channel.dingtalk_app_secret,
+            timeout_seconds=timeout_seconds,
+        ),
+        agent,
+    )
 
 
 def _mark_chunk_sent(chunk: Sequence[NotifyRecipient], *, task_id: str) -> None:
@@ -1258,6 +1264,7 @@ def _record_delivery_terminal(message: NotifyMessage, *, exhausted: bool) -> Non
 
 def _apply_send_result(
     *,
+    channel_id: int,
     task_id: str,
     send_result: dict[str, object],
     now: datetime,
@@ -1272,6 +1279,7 @@ def _apply_send_result(
     qs = NotifyRecipient.objects.filter(
         dingtalk_task_id=task_id,
         status=NOTIFY_RECIPIENT_STATUS_SENT,
+        message__channel_id=channel_id,
     )
     recipients = list(qs)
     affected: set[UUID] = set()
