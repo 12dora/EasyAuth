@@ -228,6 +228,9 @@ grant_type=client_credentials&client_id={client_id}&client_secret={client_secret
 静态 app token 与 OAuth2 access token 使用同一公共 API 协议；每条凭据可独立获授
 `directory` / `notify` capability，因此不同凭据的可调用能力可以不同。完整契约见
 [`docs/architecture/easyauth-architecture-design.md`](docs/architecture/easyauth-architecture-design.md)。
+生产下游必须分别创建权限查询、目录同步、通知发送三条 credential，并使用三个
+`EasyAuthAppClient` 实例和三个不同 token：权限查询凭据不授予平台 capability，目录凭据
+仅授予 `directory`，通知凭据仅授予 `notify`。
 
 目录用户、部门和主管条目返回带 `source_slug` / `corp_id` 的 opaque
 `user_ref` / `department_ref`；下游必须原样保存并用于详情、过滤与通知，不要自行

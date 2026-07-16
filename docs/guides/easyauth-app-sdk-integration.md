@@ -9,7 +9,8 @@ SDK 位于仓库 `sdk/python`(包名 `easyauth-app-sdk`,零运行时依赖,FastA
 - **端点保护(可选)**: 下游配置共享密钥后,描述符端点要求 `Authorization: Bearer <token>`;EasyAuth 自动接入表单可填写该 token。
 - **目录数据新鲜度**: 镜像同步的目标周期是 300s，但故障时可以滞后更久。
   消费方必须以 `directory_snapshot.authoritative` / `stale` / `complete` 判定可信性，
-  不得根据调度周期推断快照权威。
+  不得根据调度周期推断快照权威；`snapshots[]` 每个
+  `(source_slug, corp_id)` 作用域一项，不是每个 `corp_id` 一项。
 
 ## 下游集成步骤(FastAPI 示例)
 
@@ -65,8 +66,9 @@ SDK `0.3.0` 提供用户目录、钉钉工作通知与结构化错误语义。
   OAuth client credential。任一层缺失都返回 `403 PERMISSION_DENIED`。
 - manifest 顶层可声明 `"capabilities": ["directory", "notify"]` 供控制台展示需求，
   但 **声明 ≠ App 开通 ≠ 凭据授权**，导入不会自动翻转任何开关。
-- 建议把权限查询、`directory`、`notify` 拆分为三条凭据；通知凭据不应同时
-  承载常规权限查询，以限制泄漏后的爆炸半径。
+- 必须把权限查询、`directory`、`notify` 拆分为三条凭据和三个 client 实例，
+  不得复用 token；权限查询凭据不授予平台 capability，目录凭据仅授予 `directory`，
+  通知凭据仅授予 `notify`。
 - 兼容升级迁移 `applications/0025_credential_capabilities.py` 会把当时已开启的
   App capabilities 回填给该 App **全部 active 静态凭据和 OAuth 凭据**，
   以避免升级瞬间打断既有调用。只有迁移后新建凭据默认为空 capability 集。
@@ -92,8 +94,10 @@ department_ref = user["departments"][0]["department_ref"]
 ```
 
 裸 Authentik `user_id`、旧 `dt:<钉钉userid>` 和原始部门 ID 仅作唯一匹配兼容；
-跨企业歧义时目录 API 返回 `409`，畸形 scoped ref 返回 `422`。通知受理不会因单个
-legacy ref 歧义而整体失败，而会把该收件人记为 `USER_AMBIGUOUS`。
+跨企业歧义时 directory endpoint 返回 `409`，畸形 scoped ref 返回 `422`。notify
+请求体合法时，畸形/未知/legacy 歧义/scope mismatch 不会把整个 POST 变成 409/422，
+而是在 202 后成为逐收件人 `USER_NOT_FOUND` / `USER_AMBIGUOUS` /
+`USER_SCOPE_MISMATCH`。
 
 ### 推荐链路: 先查目录再通知
 
@@ -106,7 +110,12 @@ from easyauth_app_sdk import (
     EasyAuthAppClient,
 )
 
-# 两条凭据必须分开，且只授予各自所需 capability。
+# 三条凭据必须分开，且只授予各自所需 capability。
+permission_client = EasyAuthAppClient(
+    base_url,
+    app_key,
+    token=os.environ["EASYAUTH_PERMISSION_TOKEN"],  # 不授予 directory / notify
+)
 directory_client = EasyAuthAppClient(
     base_url,
     app_key,
@@ -153,6 +162,9 @@ second = directory_client.search_directory_users(
 )
 ```
 
+三个 client 必须使用三个不同 token。目录/通知方法的 `user_ref`、`department_id`、
+`manager_id` 和 `recipients` 都传服务端返回的 opaque ref，不构造 legacy `dt:`。
+
 部门和主管过滤也传 scoped ref：
 
 ```python
@@ -179,6 +191,10 @@ reports = directory_client.search_directory_users(
 
 - `send_notification` 为 **异步受理**: `202`/`accepted=true` 仅表示已落库并排程,
   不代表钉钉已送达。
+- `recipients` 为 1~500 个非空字符串，每项最多 4096 字符；该上限完整覆盖目录返回的
+  最大 v1 canonical ref。EasyAuth 将 `raw_ref` 原样持久化和回显，不截断。
+- 解析成功后按 `(source_slug, corp_id, dingtalk_user_id)` 去重；同 userid 位于不同
+  source/corp 时仍是不同身份。缺少完整 scope 的历史 legacy 行使用独立兼容约束。
 - `sent` 是可依赖的最低保证。`delivered` 仅表示钉钉明确的 send-result 回执
   将用户归类进 read/unread 名单，不表示已读、审批知悉或法务送达。
   无明确名单归类时保持 `sent`，超过 24 小时也不会乐观推断为 `delivered`。
@@ -196,8 +212,8 @@ reports = directory_client.search_directory_users(
 | 情形 | 处理 |
 |---|---|
 | `404` | 用户不存在或没有主管；按 `details.reason` 做业务分支，不重试 |
-| `409` | 幂等键载荷冲突、目录快照变化或 legacy ref 歧义；修正请求、改传 scoped ref 或从首页重拉，不原样重试 |
-| `422` | 永久参数错误或畸形 scoped ref；修复载荷，不重试 |
+| `409` | 幂等键载荷冲突、目录快照变化，或 directory endpoint 的 legacy ref 歧义；修正请求、改传 scoped ref 或从首页重拉，不原样重试 |
+| `422` | 永久请求体错误，或 directory endpoint 的畸形 scoped ref；notify 内单个无效 ref 见逐收件人状态，不重试 |
 | `429` | `retryable=true`；必须遵守 `retry_after` / `retry_after_seconds` |
 | `401` / `403` | 凭据、App capability 或 credential capability 配置问题；停止重试并告警 |
 | `5xx` | `retryable=true`；在幂等边界内指数退避 |

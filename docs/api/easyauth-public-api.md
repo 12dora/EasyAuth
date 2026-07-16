@@ -316,8 +316,9 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
 
 `user_id` 仍是 Authentik 用户标识（可空），`dingtalk_user_id` 仍是原始钉钉 userid。
 旧的裸 `user_id`、`dt:<钉钉userid>` 和原始 `department_id` 只作兼容输入：
-仅当它们在全部目录作用域中唯一匹配时才解析。多个作用域匹配返回
-`409 CONFLICT`，`details.reason` 为 `ambiguous_user_ref` 或
+仅当它们在全部目录作用域中唯一匹配时才解析。这些 directory endpoints 对多个
+作用域匹配返回 `409 CONFLICT`，
+`details.reason` 为 `ambiguous_user_ref` 或
 `ambiguous_department_ref`，并返回 `candidate_refs`；畸形 scoped ref 返回
 `422 VALIDATION_ERROR`，`details.reason="invalid_directory_ref"`。
 
@@ -428,12 +429,13 @@ EasyAuth 保留其身份与联系字段，设置 `status: "departed"`、`active:
 
 所有目录成功响应都含 `directory_snapshot`：
 
-- `snapshots` 按 `source_slug` / `corp_id` 稳定排序，一个企业一项；
-- `generation` 是该企业上游快照世代，`status` 是同步状态；
+- `snapshots` 按 `source_slug` / `corp_id` 稳定排序，每个
+  `(source_slug, corp_id)` 作用域一项；同一 `corp_id` 在不同目录源中是不同条目；
+- `generation` 是该 source/corp 作用域的上游快照世代，`status` 是同步状态；
 - `snapshot_at` 是上游报告的快照时间，不参与新鲜度计算；
   `snapshot_at_status` 取 `valid` / `missing` / `invalid` / `future`；
-- 单企业 `stale` 以 EasyAuth 本地成功事务提交时间判定，而不信任上游时钟；
-- 顶层 `complete` 表示所有已知企业都有成功且非负的 generation；
+- 单个 source/corp 条目的 `stale` 以 EasyAuth 本地成功事务提交时间判定，而不信任上游时钟；
+- 顶层 `complete` 表示所有已知 source/corp 作用域都有成功且非负的 generation；
   顶层 `stale` 表示任一快照过期或缺失；
   `authoritative` 仅在 `complete && !stale` 时为 `true`。
 
@@ -542,13 +544,13 @@ App owner 配置独立的、版本化钉钉通知通道；未配置时返回
 `(directory_source_slug, corp_id)`，只允许向该作用域内的 active 员工投递；
 作用域失效时依赖健康为 unhealthy，worker 会拒绝越界收件人。
 
-**异步受理语义**：`POST` 成功仅代表 EasyAuth 已落库并排程投递；真正的逐人成败通过 `GET` 状态查询。收件人应传目录返回的 opaque `user_ref` 并原样保存/回传。旧裸 `user_id` / `dt:<钉钉userid>` 仅在全局唯一匹配时兼容；歧义、畸形、非 active 或与通道作用域不一致的收件人不阻塞整体受理，而是分别记为终态 `failed`。
+**异步受理语义**：`POST` 成功仅代表 EasyAuth 已落库并排程投递；真正的逐人成败通过 `GET` 状态查询。收件人应传目录返回的 opaque `user_ref` 并原样保存/回传。旧裸 `user_id` / `dt:<钉钉userid>` 仅在全局唯一匹配时兼容。在 capability、通道和请求体结构均有效时，畸形 scoped ref、未知 ref、legacy 歧义、非 active 或与通道作用域不一致都不会把整个请求变成 HTTP 409/422；消息仍以 202 受理，对应收件人分别成为终态 `failed`。
 
 ### `POST /api/v1/apps/{app_key}/notify/messages`
 
 | 字段 | 必填 | 约束 |
 | --- | --- | --- |
-| `recipients` | 是 | 1~500 个用户引用；按解析后的钉钉 userid 合并去重 |
+| `recipients` | 是 | 1~500 个非空用户引用，每个 ≤4096 字符；解析成功后按 `(source_slug, corp_id, dingtalk_user_id)` 合并去重 |
 | `template` | 是 | `text` / `markdown` / `action_card` |
 | `title` | markdown、action_card 必填 | ≤100 字符；text 忽略 |
 | `content` | 是 | 组装后的钉钉 msg JSON ≤ **2048 字节（UTF-8）**，超限 `422` |
@@ -582,7 +584,7 @@ App owner 配置独立的、版本化钉钉通知通道；未配置时返回
 | 新受理 | **202** | `accepted: true`；仅表示 EasyAuth 已落库并排程，不表示已调用钉钉或已发送 |
 | `dedup_key` 命中且载荷一致 | **200** | `accepted: false`，`message_id` 为首次受理 ID |
 | `dedup_key` 命中但载荷不同 | **409 CONFLICT** | — |
-| 参数问题 | **422 VALIDATION_ERROR** | `details.field` 指明字段 |
+| 参数问题 | **422 VALIDATION_ERROR** | 请求体级校验失败，整条请求不落部分消息/收件人；`details.field` 指明字段，包括 recipients 非 1~500 个非空字符串或任一引用超过 4096 字符 |
 | 速率/配额超限 | **429 THROTTLED** + `Retry-After` | 日配额的 Retry-After 到次日零点（Asia/Shanghai） |
 | 凭据无效 | **401 AUTHENTICATION_FAILED** | 凭据问题，不应持续重试 |
 | App / credential 未开通 `notify` | **403 PERMISSION_DENIED** | capability 配置问题，不应持续重试 |
@@ -601,6 +603,8 @@ App owner 配置独立的、版本化钉钉通知通道；未配置时返回
 - `recipient_total`：解析合并后的收件人数（含受理时即失败者）
 - `recipient_rejected`：受理时即判终态失败的收件人数（解析失败、引用歧义、
   非 active 或不属于冻结通道作用域）
+- 目录返回的 v1 canonical `user_ref` 最大长度可被 4096 字符上限完整覆盖；EasyAuth
+  将每个输入引用作为 `raw_ref` 原样持久化和回显，不截断 opaque ref。
 
 ### `GET /api/v1/apps/{app_key}/notify/messages/{message_id}`
 
@@ -657,7 +661,12 @@ send-result 回执把该 userid 分类进 `read_user_id_list` 或 `unread_user_i
 `DINGTALK_REJECTED`、`DINGTALK_DUPLICATE`、`DINGTALK_DAILY_LIMIT`、`EXHAUSTED`。
 其中 legacy 引用多企业歧义在通知 API 中是逐收件人的 `USER_AMBIGUOUS`，而不是
 把整个 POST 变成 HTTP 409；`USER_SCOPE_MISMATCH` 表示收件人不属于消息冻结通道的
-目录作用域。
+目录作用域；畸形 scoped ref 与未知 ref 均为 `USER_NOT_FOUND`。
+
+已解析的 canonical 收件人身份以
+`(message, source_slug, corp_id, dingtalk_user_id)` 唯一；不同 source/corp 下相同原始
+userid 不会互相合并。仅对缺少完整 source/corp 的历史 legacy 行保留独立的
+`(message, dingtalk_user_id)` 兼容唯一约束。
 
 **状态时效：** `sent → delivered/failed` 依赖回执对账（约 60s 周期，
 钉钉 send-result 查询窗口为 24h）。对账尽力而为；回执没有明确的
