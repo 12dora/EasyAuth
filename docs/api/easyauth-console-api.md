@@ -34,6 +34,10 @@
 | GET | `/apps/{app_key}/configuration-status` | 配置完整度 |
 | GET | `/apps/{app_key}/integration-guide` | 接入指南 |
 | GET | `/apps/{app_key}/manifest` | 导出 manifest |
+| GET | `/apps/{app_key}/capabilities` | 查看 App 平台能力状态与 manifest 声明 |
+| GET/PUT | `/apps/{app_key}/capabilities/{capability}` | **超纡**：开通/关闭 `directory` 或 `notify` |
+| GET/PUT | `/apps/{app_key}/notification-channel` | 可见成员读；**owner** 维护每 App 版本化钉钉通知通道 |
+| POST | `/apps/{app_key}/notification-channel/test` | **owner**：测试当前 active 通道连通性 |
 | GET/PUT | `/apps/{app_key}/managed-scope-policy` | MANAGED_USERS 策略 |
 | GET | `/apps/{app_key}/managed-users-preview` | 管理范围预览 |
 | POST | `/apps/{app_key}/permission-query-tests` | 权限查询联调 |
@@ -47,10 +51,14 @@
 | GET/POST | `/apps/{app_key}/memberships` | 成员管理 |
 | PATCH/DELETE | `/apps/{app_key}/memberships/{membership_id}` | 成员变更 |
 | GET | `/apps/{app_key}/credentials` | 凭据列表（无 secret） |
-| POST | `/apps/{app_key}/credentials/static-tokens` | 创建静态 token（明文一次性） |
+| POST | `/apps/{app_key}/credentials/static-tokens` | 创建静态 token（明文一次性），可同时授予 credential capabilities |
 | POST | `…/static-tokens/{id}/rotate` | 轮换 |
 | POST | `…/static-tokens/{id}/disable` 或 `…/credentials/{type}/{id}/disable` | 停用 |
-| POST | `/apps/{app_key}/credentials/oauth-clients` | 创建 OAuth client |
+| POST | `/apps/{app_key}/credentials/oauth-clients` | 创建 OAuth client，可同时授予 credential capabilities |
+| PUT | `/apps/{app_key}/credentials/{credential_type}/{credential_id}/capabilities` | **owner**：替换单凭据的 `directory` / `notify` 授权集 |
+
+App capability 与 credential capability 必须同时开启；manifest 声明只供展示，
+不会自动开通 App 能力或授权凭据。
 
 ---
 
@@ -170,6 +178,11 @@
 | POST | `/settings/integrations/dingtalk/test` | 钉钉连通测试 |
 | GET | `/security/two-factor` | 二因素状态 |
 | POST | `/security/two-factor/totp/*`、`passkeys/*` | TOTP / Passkey |
+
+全局 `/settings/integrations` 中的钉钉 agent 配置只用于旧配置迁移、审批等仍属全局的能力；
+`notify` 业务 App 必须在自己的 workspace 配置 `notification-channel`。
+首次创建必须提供 secret；后续 PUT 可省略 secret 以复用已有密文。
+响应不回显 secret，连通性失败不返回钉钉底层错误原文。
 
 ---
 

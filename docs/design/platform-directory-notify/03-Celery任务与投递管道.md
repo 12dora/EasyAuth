@@ -94,7 +94,8 @@ def deliver_message_task(message_id: str, generation: int) -> None: ...
    → 写入新 claim_token, lease=now+45s, attempts+=1, status=sending
    抢不到 → 直接返回(另一执行体在跑, 或已终态)
 2. 取 recipients WHERE status IN (pending, throttled) LIMIT 500, 按 100/批分组
-3. 逐批调 send_work_notification(agent_id, userid_list, msg):
+3. 从消息冻结的 `AppNotificationChannel` 构造 client，逐批调
+   send_work_notification(agent_id, userid_list, msg):
    - 成功(拿到 task_id) → 该批 recipients: status=sent, dingtalk_task_id, sent_at
    - 钉钉频控类错误(errcode 清单见第 4 篇 §4) → 该批 recipients: status=throttled
    - 参数/权限类终态错误 → 该批 recipients: status=failed, error_code=DINGTALK_REJECTED,
@@ -158,22 +159,26 @@ NOTIFY_THROTTLE_RETRY_SECONDS: Final = 120                   # 命中钉钉 QPM/
      · invalid_user_id_list / failed_user_id_list → failed(DINGTALK_REJECTED)
      · forbidden_list: code 143106 → failed(DINGTALK_DUPLICATE);
                        code 143105 → failed(DINGTALK_DAILY_LIMIT)
-     · read_user_id_list / unread_user_id_list 及未出现在失败名单者
+     · 明确出现在 read_user_id_list / unread_user_id_list
        → delivered, delivered_at=now
+     · 未出现在任何明确名单
+       → 保持 sent，不做送达推断
 3. 刷新受影响消息的聚合计数; 若消息因此从 completed 变为 partially_failed, 同步改写
 ```
 
 - **分批 ≤100 是回执能力的前提**：官方规定接收人超过 100 的任务不支持
   getsendresult（第 4 篇 §2.2）；§3 的 100/批切分正好保证每个 task_id 都可查。
 - 官方窗口：发送结果只保留 **24h**、发送进度 **7 天**——对账扫描只看
-  `sent_at > now()-24h`；`sent_at` 超过 24h 仍未取得回执的收件人直接置
-  `delivered`（乐观收敛：静默丢弃名单只会在 24h 窗口内出现，超窗未见失败即视为送达）。
+  `sent_at > now()-24h`。`sent_at` 超过 24h 仍无明确回执时继续保持 `sent`；
+  不得因查询窗口结束而乐观收敛为 `delivered`。
 - 该任务是**尽力而为的增强**：它挂掉不影响主投递链路，消费方看到的最低保证是
   `sent`（钉钉已受理）。此弱依赖关系写进契约的状态语义（契约 §N4）。
 - **API 月配额提示**：标准版（免费版）钉钉组织全部服务端 API 共 5000 次/月且
   工作通知计入（第 4 篇 §4.2）；对账使每条消息的调用数 ×3（send + progress +
   result）。提供 `EASYAUTH_NOTIFY_RECONCILE_ENABLED`（默认 True）开关——若组织
-  为标准版且量级吃紧，可关闭对账，状态停留在 sent，语义降级已写入契约。
+  为标准版且量级吃紧，可关闭对账，状态停留在 `sent`。
+  `sent` 是最低可靠保证；`delivered` 只表示钉钉明确 read/unread 回执分类，
+  不表示已读、审批知悉或法务送达。
 
 ## 6. 保留期清理（`prune_messages`）
 
@@ -199,7 +204,7 @@ NOTIFY_THROTTLE_RETRY_SECONDS: Final = 120                   # 命中钉钉 QPM/
   的分组计数就是投递大盘（console 运维页直接查询展示；无需引入新指标系统）。
 - **告警**（两条,均走现有日志/健康通道）：
   1. `notify_delivery_exhausted` 审计事件伴随 `logger.error`——按现有日志告警管道消费；
-  2. 依赖健康：在 `easyauth.health.run_dependency_health_checks`（beat 300s）中追加
-     钉钉工作通知配置探测（`dingtalk_runtime_config().is_configured()` 且 agent_id 非空），
-     配置缺失在健康快照中亮红，防止「能力开了、凭据没配」的静默失败。
+  2. 依赖健康：按 App 检查 active `AppNotificationChannel`、密钥与 agent_id；
+     不使用全局 `IntegrationSettings` 判定 notify App 可用性。配置缺失在健康快照中亮红，
+     且 POST 受理返回 dependency unavailable。
 - 失败样本自带上下文：`error_code` + 钉钉 errmsg + `raw_ref`，排障不需要翻日志。

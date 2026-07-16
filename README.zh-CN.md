@@ -69,7 +69,8 @@ EasyAuth 是**单公司、自托管**的**授权**服务。它不替代身份提
 - 🧑‍💼 **员工自助门户** —— 申请角色/权限、选择有效期，查看「我的权限 / 我的申请 / 即将过期」。
 - 🧰 **运营控制台** —— 建模应用、角色、权限、权限分组、审批规则、授权范围、凭据，并可现场联调查询。
 - 🧩 **一天接入** —— 6 步接入向导，配合零依赖 SDK，从描述符端点自动注册应用并导入权限目录。
-- 🪪 **两种凭据，同一结果** —— 静态 app token 与 OAuth2 client credentials 得到**完全一致**的授权结果。
+- 🪪 **两种凭据，同一协议** —— 静态 app token 与 OAuth2 client credentials
+  都调用同一公共 API；`directory` / `notify` 能力按具体凭据独立授予。
 - 🔁 **生命周期自动化** —— Authentik 同步在离职时撤权；Celery 清理限时授权；每个安全敏感动作写入 append-only 审计日志。
 - 🌏 **双语界面** —— 每个页面都提供**简体中文**与**English**，可运行时切换。
 
@@ -224,7 +225,8 @@ Content-Type: application/x-www-form-urlencoded
 grant_type=client_credentials&client_id={client_id}&client_secret={client_secret}
 ```
 
-静态 app token 与 OAuth2 access token 仅在*认证方式*上不同，得到的**授权结果一致**。完整契约见
+静态 app token 与 OAuth2 access token 使用同一公共 API 协议；每条凭据可独立获授
+`directory` / `notify` capability，因此不同凭据的可调用能力可以不同。完整契约见
 [`docs/architecture/easyauth-architecture-design.md`](docs/architecture/easyauth-architecture-design.md)。
 
 ---
@@ -544,6 +546,7 @@ EasyAuth/
 
 - 授权记录只能由 `GrantService` 写入；DingTalk 审批从不直接授予权限，紧急撤权只能*减少*访问。
 - app token 与 OAuth secret 以 hash 存储、绝不明文记录；一条凭据只绑定一个应用，路径 `app_key` 必须与凭据所属应用一致。
+- `directory` / `notify` 必须同时通过 App 层开通与单凭据授权；manifest 声明不会自动开通任一层。
 - 所有外部输入（DingTalk 回调、Authentik payload、门户/控制台表单、应用请求）都在边界处校验，之后才能影响授权决策。
 - 审计日志 append-only。发现漏洞？请私下向维护者披露，而非公开 issue。
 

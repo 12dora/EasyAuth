@@ -22,6 +22,8 @@ SDK 位于仓库 `sdk/python`(包名 `easyauth-app-sdk`,零运行时依赖,FastA
 
 3. `current_manifest_provider` 返回当前权限 manifest;契约变更时递增 schema_version(EasyTrade 用 `EASYAUTH_MANIFEST_SCHEMA_VERSION` 环境变量承载)。
 4. 权限查询可复用 SDK 客户端 `EasyAuthAppClient(base_url, app_key, token).query_user_permissions(user_id)`,也可沿用自有客户端。
+   `base_url` 生产环境默认必须使用 HTTPS；只有本地开发可显式设置
+   `allow_insecure_http=True`。
 
 非 FastAPI 框架用 `descriptor_http_response()` 纯函数内核自行封装路由。
 
@@ -52,15 +54,23 @@ SDK 位于仓库 `sdk/python`(包名 `easyauth-app-sdk`,零运行时依赖,FastA
 
 ## 用户目录与钉钉通知
 
-SDK `0.2.0` 起,`EasyAuthAppClient` 提供用户目录查询与钉钉工作通知两个平台能力。
+SDK `0.3.0` 提供用户目录、钉钉工作通知与结构化错误语义。
 
 ### 能力开关前置条件
 
-- 两能力默认关闭,须由 **EasyAuth 超管** 在控制台为该 app 开通
-  (`AppCapability.enabled`);manifest 顶层可申明 `"capabilities": ["directory", "notify"]`
-  供控制台展示「该 app 请求了哪些平台能力」,但 **申明 ≠ 开通**,导入不会自动翻转开关。
-- 未开通时目录/通知 API 返回 `403 PERMISSION_DENIED`(message 分别为
-  「应用未开通目录能力。」/「应用未开通通知能力。」);接入前先确认超管已开启。
+- 两能力默认关闭，必须同时满足两层条件：**EasyAuth 超管**为该 App 开通
+  `AppCapability.enabled`，**App owner**再将对应 capability 授予具体静态 token 或
+  OAuth client credential。任一层缺失都返回 `403 PERMISSION_DENIED`。
+- manifest 顶层可声明 `"capabilities": ["directory", "notify"]` 供控制台展示需求，
+  但 **声明 ≠ App 开通 ≠ 凭据授权**，导入不会自动翻转任何开关。
+- 建议把权限查询、`directory`、`notify` 拆分为三条凭据；通知凭据不应同时
+  承载常规权限查询，以限制泄漏后的爆炸半径。
+- 下游必须在后端根据业务事件和权限规则计算收件人；不得提供「前端传任意
+  `userRef` 即调用 `send_notification`」的透传接口。`notify` 凭据能通知任意 active 员工，
+  即使该员工没有下游 App 权限。
+- `notify` App 还需由 App owner 在该 App workspace 配置独立、版本化的钉钉通知通道；
+  通知受理后会冻结当时的通道版本。首次配置必须填 secret，更新其他字段时
+  可省略 secret 并安全复用已有密文；控制台不回显 secret，连通性失败也不暴露钉钉底层错误原文。
 
 ### `dt:` 引用兜底惯用法
 
@@ -105,6 +115,22 @@ receipt = client.send_notification(
 message_id = receipt["message_id"]
 ```
 
+目录条目返回 `email`、`mobile`、`employee_number`、`status` 与 `active`。
+所有目录成功响应都带 `directory_snapshot`；只有其 `authoritative=true` 时，
+消费方才可根据完整快照收敛离职/停用状态。分页拉取时应将首页
+`directory_snapshot.snapshot_id` 传给后续页的 `snapshot_id`；遇到 `409`
+就从第一页重新拉取。SDK 不自动循环或重试：
+
+```python
+first = client.search_directory_users(page=1, page_size=200)
+snapshot_id = first["directory_snapshot"]["snapshot_id"]
+second = client.search_directory_users(
+    page=2,
+    page_size=200,
+    snapshot_id=snapshot_id,
+)
+```
+
 ### `dedup_key` 取值建议
 
 - app 内 **永久幂等键**(非时间窗口): 相同 key + 相同载荷 → 返回同一 `message_id` 且
@@ -117,8 +143,26 @@ message_id = receipt["message_id"]
 
 - `send_notification` 为 **异步受理**: `202`/`accepted=true` 仅表示已落库并排程,
   不代表钉钉已送达。
+- `sent` 是可依赖的最低保证。`delivered` 仅表示钉钉明确的 send-result 回执
+  将用户归类进 read/unread 名单，不表示已读、审批知悉或法务送达。
+  无明确名单归类时保持 `sent`，超过 24 小时也不会乐观推断为 `delivered`。
 - **事件性通知不必轮询**;失败靠 EasyAuth 控制台通知大盘与审计兜底。
 - 确需核对时用 `get_notification(message_id)` 查逐收件人明细,但不要对每条消息做 tight loop。
+
+### SDK `0.3.0` 错误处理
+
+`EasyAuthClientError` 暴露 `status_code`、`error_code`、`details`、`retry_after`、
+`retry_after_seconds`、`retryable` 和 `transport_error`。SDK **不自动重试**；业务层可按下表决定：
+
+| 情形 | 处理 |
+|---|---|
+| `404` | 用户不存在或没有主管；按 `details.reason` 做业务分支，不重试 |
+| `409` | 幂等键载荷冲突或目录快照变化；修正请求或从首页重拉，不原样重试 |
+| `422` | 永久参数错误；修复载荷，不重试 |
+| `429` | `retryable=true`；必须遵守 `retry_after` / `retry_after_seconds` |
+| `401` / `403` | 凭据、App capability 或 credential capability 配置问题；停止重试并告警 |
+| `5xx` | `retryable=true`；在幂等边界内指数退避 |
+| 网络/超时 | `transport_error=true`、`retryable=true`；在幂等边界内重试 |
 
 ### 其它方法一览
 
@@ -135,4 +179,3 @@ message_id = receipt["message_id"]
 ## 参考实现
 
 EasyTrade: `backend/vendor/easyauth-app-sdk`(vendored 副本,来源见 `VENDORED.md`)、`backend/app/api/v1/easyauth_descriptor.py`(挂载)、`backend/app/domain/authz/permission_display.py`(权限双语命名事实源)。
-

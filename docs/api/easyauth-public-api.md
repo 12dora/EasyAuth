@@ -42,6 +42,11 @@ grant_type=client_credentials&client_id=...&client_secret=...
 URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `403 PERMISSION_DENIED`。  
 应用必须处于 active；凭据无效返回 `401 AUTHENTICATION_FAILED`。
 
+`directory` 与 `notify` 还有双层授权门：超管先为 App 开通对应平台能力，
+再由 App owner 把能力授予调用所用的具体凭据。任一层缺失都返回
+`403 PERMISSION_DENIED`。manifest 顶层 `capabilities` 只表示应用声明需求，
+不会自动开通 App 能力，也不会自动授权任何凭据。
+
 ## 统一错误结构
 
 ```json
@@ -292,11 +297,18 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
 
 ## 5. 用户目录
 
-数据来源为 EasyAuth 内的钉钉目录镜像（约每 300s 从 Authentik 同步）。应用须由超管开通 `directory` 能力，否则返回 `403 PERMISSION_DENIED`（文案：「应用未开通目录能力。」）。所有目录端点返回 `Cache-Control: private, max-age=60`。
+数据来源为 EasyAuth 内的钉钉目录镜像（约每 300s 从 Authentik 同步）。
+应用的 `directory` 平台能力和当前凭据的 `directory` 能力必须同时开启，
+否则返回 `403 PERMISSION_DENIED`（文案：「应用未开通目录能力。」）。
+所有目录端点返回 `Cache-Control: private, max-age=60`。
 
 用户引用约定：`user_id` = Authentik 用户标识（可空，未 SSO 登录过的员工为 `null`）；`dingtalk_user_id` 恒非空。路径 `{user_ref}` / 参数 `manager_id` 接受裸 `user_id` 或 `dt:<钉钉userid>` 前缀。
 
-**不返回** email、手机号、工号、unionId、corp_id、完整主管链。
+目录条目返回 `email`、`mobile`、`employee_number`、`status` 和保留的
+`active`。这些字段是员工敏感信息，仅能用于已批准的应用内选人、单据和身份映射；
+不得写入日志、不得下发到不需要该数据的前端，也不得作为新的认证或授权事实。
+用户条目不返回 `unionId`、`corp_id` 和完整主管链；
+`corp_id` 只出现在 `directory_snapshot.snapshots[]` 作为多企业快照边界。
 
 ### `GET /api/v1/apps/{app_key}/directory/users`
 
@@ -307,8 +319,14 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
 | `q` | 对 `name` / `title` / `dingtalk_user_id` 大小写不敏感子串匹配；空串等同省略 |
 | `department_id` | 该部门**直接成员**（不含子部门） |
 | `manager_id` | 用户引用，过滤其**直接下属** |
-| `include_inactive` | `"true"` 时含禁用/离职，默认仅 active |
+| `include_inactive` | `"true"` 时包含 `disabled` / `departed` 以及从最新权威快照消失后保留的 tombstone；默认仅 `active` |
+| `snapshot_id` | 可选的分页快照固定值；第一页省略，后续页应传回首页 `directory_snapshot.snapshot_id` |
 | `page` / `page_size` | 默认 1/20；`page_size` 上限 **200** |
+
+当请求传入的 `snapshot_id` 已不是当前快照，或快照在本次查询期间发生变化，
+返回 `409 CONFLICT`，`details.reason` 为 `snapshot_mismatch` 或 `snapshot_changed`，
+并附 `expected_snapshot_id` 与 `actual_snapshot_id`。消费方应从第一页重新读取，
+不得把两个快照的页混合。
 
 排序：`name` 升序，再 `dingtalk_user_id` 升序。
 
@@ -320,9 +338,13 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
     {
       "user_id": "f7c31a09e5b24f8d9a1c",
       "dingtalk_user_id": "user0123",
-      "name": "王小明",
+      "name": "李小明",
       "avatar_url": "https://static-legacy.dingtalk.com/media/xxx.jpg",
       "title": "后端工程师",
+      "email": "xiaoming@example.com",
+      "mobile": "13800000000",
+      "employee_number": "ET-00123",
+      "status": "active",
       "departments": [
         {"department_id": "460001", "name": "研发部"}
       ],
@@ -331,9 +353,13 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
     {
       "user_id": null,
       "dingtalk_user_id": "user0456",
-      "name": "李新人",
+      "name": "王新人",
       "avatar_url": "",
       "title": "测试工程师",
+      "email": "",
+      "mobile": "",
+      "employee_number": "ET-00456",
+      "status": "active",
       "departments": [
         {"department_id": "460001", "name": "研发部"},
         {"department_id": "470001", "name": "质量委员会"}
@@ -341,15 +367,58 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
       "active": true
     }
   ],
-  "pagination": {"page": 1, "page_size": 20, "total_items": 2, "total_pages": 1}
+  "pagination": {"page": 1, "page_size": 20, "total_items": 2, "total_pages": 1},
+  "directory_snapshot": {
+    "snapshot_id": "8f4b7c...",
+    "snapshots": [
+      {
+        "source_slug": "dingtalk",
+        "corp_id": "ding-corp-a",
+        "generation": 42,
+        "status": "success",
+        "snapshot_at": "2026-07-16T10:00:00+08:00",
+        "snapshot_at_status": "valid",
+        "stale": false
+      }
+    ],
+    "stale": false,
+    "complete": true,
+    "authoritative": true
+  }
 }
 ```
 
+`status` 取 `active` / `disabled` / `departed`；`active` 等价于 `status == "active"`，
+保留以便现有消费方使用布尔判断。从上游权威快照消失的员工不会被物理删除：
+EasyAuth 保留其身份与联系字段，设置 `status: "departed"`、`active: false`，
+并清空部门与主管关系。
+
+### 目录快照元数据
+
+所有目录成功响应都含 `directory_snapshot`：
+
+- `snapshots` 按 `source_slug` / `corp_id` 稳定排序，一个企业一项；
+- `generation` 是该企业上游快照世代，`status` 是同步状态；
+- `snapshot_at` 是上游报告的快照时间，不参与新鲜度计算；
+  `snapshot_at_status` 取 `valid` / `missing` / `invalid` / `future`；
+- 单企业 `stale` 以 EasyAuth 本地成功事务提交时间判定，而不信任上游时钟；
+- 顶层 `complete` 表示所有已知企业都有成功且非负的 generation；
+  顶层 `stale` 表示任一快照过期或缺失；
+  `authoritative` 仅在 `complete && !stale` 时为 `true`。
+
+只有 `directory_snapshot.authoritative == true` 时，消费方才可将本次全量目录快照
+用于离职/停用收敛；否则必须保留本地用户状态，不得把「本次未出现」
+解释为离职。
+
 ### `GET /api/v1/apps/{app_key}/directory/users/{user_ref}`
 
-详情：D1 条目字段 + `manager`（直接主管摘要；无主管时为 `null`）。引用不存在 → `404 NOT_FOUND`。
+详情：D1 条目字段 + `manager`（直接主管摘要；无主管时为 `null`）。
+根对象同时含上文定义的 `directory_snapshot`（下例省略该通用块）。
+引用不存在 → `404 NOT_FOUND`。
 
-若用户曾登录（有 `user_id`）但已从钉钉目录移除：返回 `active: false`、`departments: []`、`manager: null`。
+若用户已从权威目录消失，保留 tombstone 并返回 `status: "departed"`、
+`active: false`、`departments: []`、`manager: null`。已 SSO 用户可用裸 `user_id`
+查询；未 SSO 用户仍可用 `dt:` 引用查询。
 
 ```json
 {
@@ -358,6 +427,10 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
   "name": "王小明",
   "avatar_url": "https://…",
   "title": "后端工程师",
+  "email": "xiaoming@example.com",
+  "mobile": "13800000000",
+  "employee_number": "ET-00123",
+  "status": "active",
   "departments": [{"department_id": "460001", "name": "研发部"}],
   "active": true,
   "manager": {
@@ -365,6 +438,10 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
     "dingtalk_user_id": "manager8836",
     "name": "张主管",
     "title": "研发经理",
+    "email": "manager@example.com",
+    "mobile": "13900000000",
+    "employee_number": "ET-00008",
+    "status": "active",
     "active": true
   }
 }
@@ -417,7 +494,12 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
 
 ## 6. 通知
 
-底层通道为钉钉工作通知 `asyncsend_v2`。应用须由超管开通 `notify` 能力，否则返回 `403 PERMISSION_DENIED`（文案：「应用未开通通知能力。」）。
+底层通道为钉钉工作通知 `asyncsend_v2`。应用的 `notify` 平台能力和当前
+凭据的 `notify` 能力必须同时开启，否则返回 `403 PERMISSION_DENIED`
+（文案：「应用未开通通知能力。」）。该 App 还必须在自己的 workspace 由
+App owner 配置独立的、版本化钉钉通知通道；未配置时返回
+`503 DEPENDENCY_UNAVAILABLE`。每条通知在受理时冻结通道版本，后续替换活动通道
+不会改写已受理消息的发送身份。
 
 **异步受理语义**：`POST` 成功仅代表 EasyAuth 已落库并排程投递；真正的逐人成败通过 `GET` 状态查询。收件人引用与目录一致：裸 `user_id` 或 `dt:<钉钉userid>`。仅允许通知 active 目录用户；解析失败的收件人不阻塞整体受理，直接记为终态 `failed`。
 
@@ -453,11 +535,14 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
 
 | 情形 | HTTP | 说明 |
 | --- | --- | --- |
-| 新受理 | **202** | `accepted: true` |
+| 新受理 | **202** | `accepted: true`；仅表示 EasyAuth 已落库并排程，不表示已调用钉钉或已发送 |
 | `dedup_key` 命中且载荷一致 | **200** | `accepted: false`，`message_id` 为首次受理 ID |
 | `dedup_key` 命中但载荷不同 | **409 CONFLICT** | — |
 | 参数问题 | **422 VALIDATION_ERROR** | `details.field` 指明字段 |
 | 速率/配额超限 | **429 THROTTLED** + `Retry-After` | 日配额的 Retry-After 到次日零点（Asia/Shanghai） |
+| 凭据无效 | **401 AUTHENTICATION_FAILED** | 凭据问题，不应持续重试 |
+| App / credential 未开通 `notify` | **403 PERMISSION_DENIED** | capability 配置问题，不应持续重试 |
+| App 通知通道未配置 | **503 DEPENDENCY_UNAVAILABLE** | 运维配置问题；通道就绪前重试不会成功 |
 
 ```json
 {
@@ -518,10 +603,15 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
 **消息聚合 `status`：** `pending` / `sending` / `completed`（全部 sent 或 delivered）/ `partially_failed` / `failed`。
 
 **收件人 `status`：** `pending` / `throttled` / `sent`（钉钉已受理，≠送达）/ `delivered` / `failed`。
+其中 `sent` 是消费方可依赖的最低保证。`delivered` 仅表示钉钉明确的
+send-result 回执把该 userid 分类进 `read_user_id_list` 或 `unread_user_id_list`；
+它不表示已读，不得作为审批知悉、法务送达或其他合规事实。
 
 **`error_code` 枚举：** `USER_NOT_FOUND`、`NO_DINGTALK_ID`、`USER_INACTIVE`、`DINGTALK_REJECTED`、`DINGTALK_DUPLICATE`、`DINGTALK_DAILY_LIMIT`、`EXHAUSTED`。
 
-**状态时效：** `sent → delivered/failed` 依赖回执对账（约 60s 周期、24h 窗口）；对账尽力而为，`sent` 是可依赖的最低保证。
+**状态时效：** `sent → delivered/failed` 依赖回执对账（约 60s 周期，
+钉钉 send-result 查询窗口为 24h）。对账尽力而为；回执没有明确的
+read/unread/失败名单归类时保持 `sent`，超过 24h 后也不推断为 `delivered`。
 
 ### 限流（通知）
 
@@ -561,3 +651,15 @@ Python `EasyAuthAppClient`：
 | `list_approvals` | GET approval-instances |
 | `get_approval` | GET approval-instances/{id} |
 | `list_approval_templates` | GET approval-templates |
+| `search_directory_users` | GET directory/users |
+| `get_directory_user` | GET directory/users/{user_ref} |
+| `get_directory_user_manager` | GET directory/users/{user_ref}/manager |
+| `list_directory_user_subordinates` | GET directory/users/{user_ref}/subordinates |
+| `list_directory_departments` | GET directory/departments |
+| `send_notification` | POST notify/messages |
+| `get_notification` | GET notify/messages/{message_id} |
+
+SDK `0.3.0` 的 `EasyAuthClientError` 结构化暴露 `status_code`、`error_code`、
+`details`、`retry_after`、`retry_after_seconds`、`retryable` 和 `transport_error`。
+SDK 不自动重试；调用方应仅在 `retryable == true` 时按业务幂等边界重试，
+其中 `429` 须遵守 `Retry-After`。
