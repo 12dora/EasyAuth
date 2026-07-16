@@ -9,7 +9,12 @@ import pytest
 from django.test import Client
 
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
-from easyauth.accounts.models import UserMirror
+from easyauth.accounts.models import (
+    DingTalkDepartmentMirror,
+    DingTalkDirectorySyncState,
+    DingTalkUserMirror,
+    UserMirror,
+)
 from easyauth.applications.models import App, AppMembership, AppNotificationChannel
 from easyauth.audit.models import AuditLog
 from easyauth.integrations.dingtalk.api_client import DingTalkApiError
@@ -27,6 +32,11 @@ def _client(user_id: str) -> Client:
 
 
 def _app() -> App:
+    _ = DingTalkDirectorySyncState.objects.get_or_create(
+        source_slug="dingtalk",
+        corp_id="corp-easytrade",
+        defaults={"status": "success"},
+    )
     app = App.objects.create(app_key="notify-channel-api", name="Notify Channel")
     _ = AppMembership.objects.create(app=app, user_id="channel-owner", role="owner")
     _ = AppMembership.objects.create(app=app, user_id="channel-developer", role="developer")
@@ -38,13 +48,19 @@ def _url(app: App, suffix: str = "") -> str:
     return f"{base}/{suffix}" if suffix else base
 
 
-def _payload(*, secret: str | None, agent_id: str = "1001") -> dict[str, str]:
+def _payload(
+    *,
+    secret: str | None,
+    agent_id: str = "1001",
+    source_slug: str = "dingtalk",
+    corp_id: str = "corp-easytrade",
+) -> dict[str, str]:
     payload = {
         "name": "EasyTrade 钉钉应用",
         "dingtalk_app_key": "easytrade-key",
         "agent_id": agent_id,
-        "directory_source_slug": "dingtalk",
-        "corp_id": "corp-easytrade",
+        "directory_source_slug": source_slug,
+        "corp_id": corp_id,
     }
     if secret is not None:
         payload["dingtalk_app_secret"] = secret
@@ -79,6 +95,9 @@ def test_owner_versions_channel_without_exposing_or_auditing_secret() -> None:
     assert payload["app_secret_configured"] is True
     assert payload["directory_source_slug"] == "dingtalk"
     assert payload["corp_id"] == "corp-easytrade"
+    assert decoded["available_directory_scopes"] == [
+        {"directory_source_slug": "dingtalk", "corp_id": "corp-easytrade"},
+    ]
     assert first_secret not in body
     assert second_secret not in body
     channels = list(AppNotificationChannel.objects.filter(app=app).order_by("version"))
@@ -165,6 +184,75 @@ def test_validation_error_does_not_echo_secret_input() -> None:
     assert response.status_code == HTTPStatus.BAD_REQUEST
     assert secret_marker not in body
     assert loads(body)["error"]["details"]["fields"] == ["dingtalk_app_secret"]
+
+
+def test_nonexistent_directory_scope_is_rejected_without_rotating_channel() -> None:
+    app = _app()
+    owner = _client("channel-owner")
+    created = owner.put(
+        _url(app),
+        data=dumps(_payload(secret="existing-secret")),  # noqa: S106
+        content_type="application/json",
+    )
+    rejected = owner.put(
+        _url(app),
+        data=dumps(
+            _payload(
+                secret=None,
+                source_slug="typo-source",
+                corp_id="typo-corp",
+            ),
+        ),
+        content_type="application/json",
+    )
+
+    assert created.status_code == HTTPStatus.CREATED
+    assert rejected.status_code == HTTPStatus.BAD_REQUEST
+    assert loads(rejected.content)["error"]["details"]["fields"] == [
+        "directory_source_slug",
+        "corp_id",
+    ]
+    channels = list(AppNotificationChannel.objects.filter(app=app))
+    assert len(channels) == 1
+    assert channels[0].is_active is True
+
+
+def test_mirror_only_scopes_are_accepted_and_listed_in_stable_order() -> None:
+    app = _app()
+    owner = _client("channel-owner")
+    _ = DingTalkUserMirror.objects.create(
+        source_slug="a-source",
+        corp_id="user-corp",
+        user_id="user-1",
+        status="active",
+    )
+    _ = DingTalkDepartmentMirror.objects.create(
+        source_slug="z-source",
+        corp_id="department-corp",
+        dept_id="dept-1",
+        name="Department",
+    )
+
+    created = owner.put(
+        _url(app),
+        data=dumps(
+            _payload(
+                secret="mirror-only-secret",  # noqa: S106
+                source_slug="a-source",
+                corp_id="user-corp",
+            ),
+        ),
+        content_type="application/json",
+    )
+    listed = owner.get(_url(app))
+
+    assert created.status_code == HTTPStatus.CREATED
+    decoded = cast("dict[str, object]", loads(listed.content))
+    assert decoded["available_directory_scopes"] == [
+        {"directory_source_slug": "a-source", "corp_id": "user-corp"},
+        {"directory_source_slug": "dingtalk", "corp_id": "corp-easytrade"},
+        {"directory_source_slug": "z-source", "corp_id": "department-corp"},
+    ]
 
 
 def test_owner_connectivity_test_uses_active_channel() -> None:

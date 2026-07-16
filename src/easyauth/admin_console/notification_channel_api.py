@@ -9,6 +9,7 @@ from django.db.models import Max
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from easyauth.accounts.directory_snapshot import directory_scope_keys
 from easyauth.admin_console.api_responses import (
     error_response,
     json_response,
@@ -41,6 +42,10 @@ class NotificationChannelSecretRequiredError(Exception):
     pass
 
 
+class NotificationChannelDirectoryScopeError(Exception):
+    pass
+
+
 def console_app_notification_channel(request: HttpRequest, app_key: str) -> JsonResponse:
     match _read_context(request, app_key):
         case (App() as app, ConsoleActor() as actor):
@@ -49,7 +54,12 @@ def console_app_notification_channel(request: HttpRequest, app_key: str) -> Json
             return response
     if request.method == "GET":
         channel = _active_channel(app)
-        return json_response({"notification_channel": _channel_payload(channel)})
+        return json_response(
+            {
+                "notification_channel": _channel_payload(channel),
+                "available_directory_scopes": _available_directory_scope_payload(),
+            },
+        )
     if request.method == "PUT":
         return _update_channel(request, app=app, actor=actor)
     return method_not_allowed_response()
@@ -74,6 +84,13 @@ def _update_channel(request: HttpRequest, *, app: App, actor: ConsoleActor) -> J
             ErrorCode.VALIDATION_ERROR,
             "首次创建通知通道必须提供 dingtalk_app_secret。",
             {"field": "dingtalk_app_secret"},
+            status=HTTPStatus.BAD_REQUEST,
+        )
+    except NotificationChannelDirectoryScopeError:
+        return error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "通知通道目录作用域不存在。",
+            {"fields": ["directory_source_slug", "corp_id"]},
             status=HTTPStatus.BAD_REQUEST,
         )
     return json_response(
@@ -133,6 +150,8 @@ def _replace_channel(
     payload: NotificationChannelPayload,
 ) -> AppNotificationChannel:
     _ = App.objects.select_for_update().get(id=app.id)
+    if (payload.directory_source_slug, payload.corp_id) not in set(directory_scope_keys()):
+        raise NotificationChannelDirectoryScopeError
     previous = AppNotificationChannel.objects.filter(app=app, is_active=True).first()
     app_secret = payload.dingtalk_app_secret or (
         previous.dingtalk_app_secret if previous is not None else ""
@@ -198,6 +217,13 @@ def _channel_payload(channel: AppNotificationChannel | None) -> dict[str, JsonVa
         "created_by": channel.created_by,
         "created_at": channel.created_at.isoformat(),
     }
+
+
+def _available_directory_scope_payload() -> list[JsonValue]:
+    return [
+        {"directory_source_slug": source_slug, "corp_id": corp_id}
+        for source_slug, corp_id in directory_scope_keys()
+    ]
 
 
 def _read_context(request: HttpRequest, app_key: str) -> tuple[App, ConsoleActor] | JsonResponse:

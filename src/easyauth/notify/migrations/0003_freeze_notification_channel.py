@@ -50,15 +50,23 @@ class _IntegrationSettingsModel(Protocol):
 
 
 def _unique_directory_scope(apps: Apps) -> tuple[str, str] | None:
-    sync_state = cast(
-        "type[_HistoricalModel]",
-        cast("object", apps.get_model("accounts", "DingTalkDirectorySyncState")),
-    )
-    scopes = cast(
-        "list[tuple[str, str]]",
-        list(sync_state.objects.values_list("source_slug", "corp_id")),
-    )
-    unique_scopes = sorted(set(scopes))
+    scopes: set[tuple[str, str]] = set()
+    for model_name in (
+        "DingTalkDirectorySyncState",
+        "DingTalkUserMirror",
+        "DingTalkDepartmentMirror",
+    ):
+        model = cast(
+            "type[_HistoricalModel]",
+            cast("object", apps.get_model("accounts", model_name)),
+        )
+        scopes.update(
+            cast(
+                "list[tuple[str, str]]",
+                list(model.objects.values_list("source_slug", "corp_id")),
+            ),
+        )
+    unique_scopes = sorted(scopes)
     return unique_scopes[0] if len(unique_scopes) == 1 else None
 
 

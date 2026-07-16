@@ -5,7 +5,11 @@ from typing import TYPE_CHECKING, Final, Protocol, cast
 
 from django.utils import timezone
 
-from easyauth.accounts.directory_snapshot import is_sync_state_stale, sync_state_freshness_at
+from easyauth.accounts.directory_snapshot import (
+    directory_scope_keys,
+    is_sync_state_stale,
+    sync_state_freshness_at,
+)
 from easyauth.accounts.models import DingTalkDirectorySyncState
 from easyauth.applications.dependency_health import DependencyHealthService, redact_summary
 from easyauth.applications.health_models import (
@@ -207,32 +211,53 @@ def check_dingtalk_notify() -> DependencyCheckResult:
             summary="当前无 active 应用开通通知能力。",
             error_summary="",
         )
-    configured_app_ids = set(
-        AppNotificationChannel.objects.filter(
-            app_id__in=enabled_apps,
-            is_active=True,
-        )
-        .exclude(dingtalk_app_key="")
-        .exclude(dingtalk_app_secret="")
-        .exclude(agent_id="")
-        .exclude(directory_source_slug="")
-        .exclude(corp_id="")
-        .values_list("app_id", flat=True),
+    configured_channels = cast(
+        "list[tuple[int, str, str]]",
+        list(
+            AppNotificationChannel.objects.filter(
+                app_id__in=enabled_apps,
+                is_active=True,
+            )
+            .exclude(dingtalk_app_key="")
+            .exclude(dingtalk_app_secret="")
+            .exclude(agent_id="")
+            .exclude(directory_source_slug="")
+            .exclude(corp_id="")
+            .values_list("app_id", "directory_source_slug", "corp_id"),
+        ),
     )
+    available_scopes = set(directory_scope_keys())
+    invalid_channels = [
+        (app_id, source_slug, corp_id)
+        for app_id, source_slug, corp_id in configured_channels
+        if (source_slug, corp_id) not in available_scopes
+    ]
+    configured_app_ids = {app_id for app_id, _source, _corp in configured_channels}
     missing = [
         app_key for app_id, app_key in enabled_apps.items() if app_id not in configured_app_ids
     ]
-    if not missing:
+    if not missing and not invalid_channels:
         return DependencyCheckResult(
             dependency=DEPENDENCY_DINGTALK_NOTIFY,
             status=DEPENDENCY_HEALTH_STATUS_HEALTHY,
             summary=f"{len(enabled_apps)} 个通知应用均已配置 active 专属通道。",
             error_summary="",
         )
+    problems: list[str] = []
+    if missing:
+        problems.append(f"通知应用缺少 active 完整通道: {', '.join(sorted(missing))}")
+    if invalid_channels:
+        invalid = ", ".join(
+            sorted(
+                f"{enabled_apps[app_id]}({source_slug}:{corp_id})"
+                for app_id, source_slug, corp_id in invalid_channels
+            ),
+        )
+        problems.append(f"通知应用通道目录作用域不存在: {invalid}")
     return DependencyCheckResult(
         dependency=DEPENDENCY_DINGTALK_NOTIFY,
         status=DEPENDENCY_HEALTH_STATUS_UNHEALTHY,
-        summary=f"通知应用缺少 active 完整通道: {', '.join(sorted(missing))}。",
+        summary="; ".join(problems) + "。",
         error_summary="",
     )
 

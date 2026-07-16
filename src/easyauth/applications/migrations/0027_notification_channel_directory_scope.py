@@ -18,11 +18,30 @@ class _HistoricalQuery(Protocol):
     def values_list(self, *fields: str, flat: bool = False) -> Self: ...
     def update(self, **kwargs: object) -> int: ...
     def exists(self) -> bool: ...
-    def delete(self) -> tuple[int, dict[str, int]]: ...
 
 
 class _HistoricalModel(Protocol):
     objects: ClassVar[_HistoricalQuery]
+
+
+def _directory_scopes(apps: Apps) -> list[tuple[str, str]]:
+    scopes: set[tuple[str, str]] = set()
+    for model_name in (
+        "DingTalkDirectorySyncState",
+        "DingTalkUserMirror",
+        "DingTalkDepartmentMirror",
+    ):
+        model = cast(
+            "type[_HistoricalModel]",
+            cast("object", apps.get_model("accounts", model_name)),
+        )
+        scopes.update(
+            cast(
+                "list[tuple[str, str]]",
+                list(model.objects.values_list("source_slug", "corp_id")),
+            ),
+        )
+    return sorted(scopes)
 
 
 def scope_notification_channels(
@@ -33,15 +52,7 @@ def scope_notification_channels(
         "type[_HistoricalModel]",
         cast("object", apps.get_model("applications", "AppNotificationChannel")),
     )
-    sync_state = cast(
-        "type[_HistoricalModel]",
-        cast("object", apps.get_model("accounts", "DingTalkDirectorySyncState")),
-    )
-    scopes = cast(
-        "list[tuple[str, str]]",
-        list(sync_state.objects.values_list("source_slug", "corp_id")),
-    )
-    unique_scopes = sorted(set(scopes))
+    unique_scopes = _directory_scopes(apps)
     if len(unique_scopes) == 1:
         source_slug, corp_id = unique_scopes[0]
         _ = channel.objects.update(
@@ -49,12 +60,10 @@ def scope_notification_channels(
             corp_id=corp_id,
         )
         return
-    migration_channels = channel.objects.filter(created_by="migration")
-    _ = migration_channels.delete()
     if channel.objects.exists():
         message = (
-            "通知通道目录作用域迁移被阻断: 目录 source/corp 不唯一, "
-            "且存在无法安全推断作用域的非迁移通道。"
+            "通知通道目录作用域迁移被阻断: 正式目录快照中的 source/corp 不唯一, "
+            "无法安全推断已有通道作用域。"
         )
         raise NotificationChannelScopeMigrationError(message)
 

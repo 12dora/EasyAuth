@@ -53,6 +53,7 @@ class _AppModel(Protocol):
 
 class _CreateOnlyManager(Protocol):
     def create(self, **kwargs: object) -> object: ...
+    def filter(self, **kwargs: object) -> _HistoricalQuery: ...
 
 
 class _CreateOnlyModel(Protocol):
@@ -91,7 +92,12 @@ class _RecipientModel(Protocol):
 pytestmark = pytest.mark.django_db(transaction=True)
 
 _BEFORE_TARGETS = [
+    ("accounts", "0013_directory_user_contact_tombstones"),
     ("applications", "0025_credential_capabilities"),
+    ("notify", "0002_notifymessage_deeplink_title"),
+]
+_AT_0026_TARGETS = [
+    ("applications", "0026_app_notification_channel"),
     ("notify", "0002_notifymessage_deeplink_title"),
 ]
 _AFTER_TARGETS = [
@@ -169,6 +175,29 @@ def _seed_directory_scope(
         corp_id=corp_id,
         status="success",
     )
+
+
+def _seed_mirror_only_scope(
+    executor: MigrationExecutor,
+    *,
+    model_name: str,
+    source_slug: str = "dingtalk",
+    corp_id: str = "mirror-only-corp",
+) -> None:
+    apps = executor.loader.project_state(_BEFORE_TARGETS).apps
+    mirror_model = cast(
+        "type[_CreateOnlyModel]",
+        cast("object", apps.get_model("accounts", model_name)),
+    )
+    common: dict[str, object] = {
+        "source_slug": source_slug,
+        "corp_id": corp_id,
+    }
+    if model_name == "DingTalkUserMirror":
+        common.update(user_id="mirror-user", status="active")
+    else:
+        common.update(dept_id="mirror-dept", name="Mirror Department")
+    _ = mirror_model.objects.create(**common)
 
 
 def test_migrations_copy_db_override_and_backfill_existing_message() -> None:
@@ -332,10 +361,21 @@ def test_message_backfill_blocks_safely_when_no_complete_channel_exists() -> Non
     _ = failed_message_model.objects.all().delete()
 
 
-def test_multi_scope_default_channel_is_left_unconfigured_when_no_history_exists() -> None:
+@pytest.mark.parametrize(
+    "mirror_model_name",
+    ["DingTalkUserMirror", "DingTalkDepartmentMirror"],
+)
+def test_scope_migration_fails_without_deleting_default_channel_for_mirror_only_corp(
+    mirror_model_name: str,
+) -> None:
     before = _migrate(_BEFORE_TARGETS)
-    _seed_directory_scope(before, source_slug="dingtalk-a", corp_id="corp-a")
-    _seed_directory_scope(before, source_slug="dingtalk-b", corp_id="corp-b")
+    _seed_directory_scope(before, source_slug="dingtalk", corp_id="corp-a")
+    _seed_mirror_only_scope(
+        before,
+        model_name=mirror_model_name,
+        source_slug="dingtalk",
+        corp_id="corp-b",
+    )
     apps = before.loader.project_state(_BEFORE_TARGETS).apps
     app_model = cast(
         "type[_AppModel]",
@@ -358,11 +398,119 @@ def test_multi_scope_default_channel_is_left_unconfigured_when_no_history_exists
         dingtalk_agent_id="1001",
     )
 
-    after = _migrate(_AFTER_TARGETS)
+    executor = MigrationExecutor(connection)
+    with pytest.raises(RuntimeError, match="正式目录快照中的 source/corp 不唯一"):
+        _ = executor.migrate(_AFTER_TARGETS)
 
-    migrated_apps = after.loader.project_state(_AFTER_TARGETS).apps
+    failed = MigrationExecutor(connection)
+    migrated_apps = failed.loader.project_state(_AT_0026_TARGETS).apps
     channel_model = cast(
         "type[_ChannelModel]",
         cast("object", migrated_apps.get_model("applications", "AppNotificationChannel")),
     )
-    assert channel_model.objects.filter(app_id=app.id).exists() is False
+    channel = channel_model.objects.get(app_id=app.id)
+    assert channel.created_by == "migration"
+    assert channel.dingtalk_app_secret == "db-secret"  # noqa: S105
+
+    mirror_model = cast(
+        "type[_CreateOnlyModel]",
+        cast("object", migrated_apps.get_model("accounts", mirror_model_name)),
+    )
+    _ = mirror_model.objects.filter(corp_id="corp-b").delete()
+
+
+def test_history_channel_inference_rejects_mirror_only_second_scope() -> None:
+    before = _migrate(_BEFORE_TARGETS)
+    _seed_directory_scope(before, source_slug="dingtalk", corp_id="corp-a")
+    _seed_mirror_only_scope(
+        before,
+        model_name="DingTalkUserMirror",
+        source_slug="dingtalk",
+        corp_id="corp-b",
+    )
+    _app_id, _message_id = _seed_legacy_message(
+        before,
+        app_key="migration-history-multi-scope",
+        capability_enabled=False,
+    )
+
+    with override_settings(
+        EASYAUTH_DINGTALK_APP_KEY="env-key",
+        EASYAUTH_DINGTALK_APP_SECRET="env-secret",  # noqa: S106
+        EASYAUTH_DINGTALK_AGENT_ID="1001",
+    ):
+        executor = MigrationExecutor(connection)
+        with pytest.raises(RuntimeError, match="缺少 active 完整通知通道"):
+            _ = executor.migrate(_AFTER_TARGETS)
+
+    failed = MigrationExecutor(connection)
+    failed_apps = failed.loader.project_state(
+        [
+            ("applications", "0027_notification_channel_directory_scope"),
+            ("notify", "0002_notifymessage_deeplink_title"),
+        ],
+    ).apps
+    message_model = cast(
+        "type[_MessageModel]",
+        cast("object", failed_apps.get_model("notify", "NotifyMessage")),
+    )
+    _ = message_model.objects.all().delete()
+    mirror_model = cast(
+        "type[_CreateOnlyModel]",
+        cast("object", failed_apps.get_model("accounts", "DingTalkUserMirror")),
+    )
+    _ = mirror_model.objects.filter(corp_id="corp-b").delete()
+
+
+def test_adjacent_reverse_to_0026_preserves_migration_created_channel() -> None:
+    before = _migrate(_BEFORE_TARGETS)
+    _seed_directory_scope(before)
+    apps = before.loader.project_state(_BEFORE_TARGETS).apps
+    app_model = cast(
+        "type[_AppModel]",
+        cast("object", apps.get_model("applications", "App")),
+    )
+    capability_model = cast(
+        "type[_CreateOnlyModel]",
+        cast("object", apps.get_model("applications", "AppCapability")),
+    )
+    integration_settings = cast(
+        "type[_CreateOnlyModel]",
+        cast("object", apps.get_model("applications", "IntegrationSettings")),
+    )
+    app = app_model.objects.create(app_key="migration-adjacent-reverse", name="Reverse")
+    _ = capability_model.objects.create(app_id=app.id, capability="notify", enabled=True)
+    _ = integration_settings.objects.create(
+        id=1,
+        dingtalk_app_key="reverse-key",
+        dingtalk_app_secret="reverse-secret",  # noqa: S106
+        dingtalk_agent_id="7007",
+    )
+
+    at_0027 = _migrate(
+        [
+            ("applications", "0027_notification_channel_directory_scope"),
+            ("notify", "0002_notifymessage_deeplink_title"),
+        ],
+    )
+    scoped_apps = at_0027.loader.project_state(
+        [("applications", "0027_notification_channel_directory_scope")],
+    ).apps
+    scoped_channel_model = cast(
+        "type[_ChannelModel]",
+        cast("object", scoped_apps.get_model("applications", "AppNotificationChannel")),
+    )
+    scoped_channel = scoped_channel_model.objects.get(app_id=app.id)
+    assert scoped_channel.corp_id == "migration-corp"
+
+    at_0026 = _migrate(_AT_0026_TARGETS)
+    reversed_apps = at_0026.loader.project_state(_AT_0026_TARGETS).apps
+    reversed_channel_model = cast(
+        "type[_ChannelModel]",
+        cast("object", reversed_apps.get_model("applications", "AppNotificationChannel")),
+    )
+    reversed_channel = reversed_channel_model.objects.get(app_id=app.id)
+    assert reversed_channel.created_by == "migration"
+    assert reversed_channel.dingtalk_app_key == "reverse-key"
+    assert reversed_channel.dingtalk_app_secret == "reverse-secret"  # noqa: S105
+    assert reversed_channel.agent_id == "7007"

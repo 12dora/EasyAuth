@@ -18,6 +18,39 @@ if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
 
 
+def directory_scope_keys() -> tuple[tuple[str, str], ...]:
+    """返回正式目录快照可见的 source/corp 作用域并集。"""
+    keys = set(
+        cast(
+            "list[tuple[str, str]]",
+            list(
+                DingTalkDirectorySyncState.objects.values_list(
+                    "source_slug",
+                    "corp_id",
+                ).distinct(),
+            ),
+        ),
+    )
+    keys.update(
+        cast(
+            "list[tuple[str, str]]",
+            list(DingTalkUserMirror.objects.values_list("source_slug", "corp_id").distinct()),
+        ),
+    )
+    keys.update(
+        cast(
+            "list[tuple[str, str]]",
+            list(
+                DingTalkDepartmentMirror.objects.values_list(
+                    "source_slug",
+                    "corp_id",
+                ).distinct(),
+            ),
+        ),
+    )
+    return tuple(sorted(keys))
+
+
 def directory_stale_after() -> timedelta:
     seconds = cast("int", settings.EASYAUTH_DIRECTORY_STALE_AFTER_SECONDS)
     return timedelta(seconds=seconds)
@@ -65,24 +98,7 @@ def build_directory_snapshot(*, now: datetime | None = None) -> dict[str, JsonVa
         (state.source_slug, state.corp_id): state
         for state in DingTalkDirectorySyncState.objects.order_by("source_slug", "corp_id")
     }
-    mirror_keys = set(
-        cast(
-            "list[tuple[str, str]]",
-            list(DingTalkUserMirror.objects.values_list("source_slug", "corp_id").distinct()),
-        ),
-    )
-    mirror_keys.update(
-        cast(
-            "list[tuple[str, str]]",
-            list(
-                DingTalkDepartmentMirror.objects.values_list(
-                    "source_slug",
-                    "corp_id",
-                ).distinct(),
-            ),
-        ),
-    )
-    keys = sorted(set(states) | mirror_keys)
+    keys = directory_scope_keys()
     snapshots: list[JsonValue] = []
     identity_rows: list[list[JsonValue]] = []
     for source_slug, corp_id in keys:

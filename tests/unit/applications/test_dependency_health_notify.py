@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from easyauth.accounts.models import DingTalkDirectorySyncState
 from easyauth.applications import dependency_health_checks
 from easyauth.applications.health_models import (
     DEPENDENCY_DINGTALK_NOTIFY,
@@ -25,6 +26,11 @@ def _make_app_with_notify(*, app_key: str, enabled: bool) -> App:
 
 
 def _create_channel(app: App) -> AppNotificationChannel:
+    _ = DingTalkDirectorySyncState.objects.get_or_create(
+        source_slug="dingtalk",
+        corp_id="health-corp",
+        defaults={"status": "success"},
+    )
     return AppNotificationChannel.objects.create(
         app=app,
         name="健康检查通道",
@@ -75,6 +81,21 @@ def test_one_missing_channel_cannot_be_hidden_by_another_app() -> None:
 
     assert result.status == DEPENDENCY_HEALTH_STATUS_UNHEALTHY
     assert "not-configured" in result.summary
+
+
+def test_channel_with_scope_absent_from_directory_snapshot_is_unhealthy() -> None:
+    app = _make_app_with_notify(app_key="invalid-scope", enabled=True)
+    _ = _create_channel(app)
+    _ = DingTalkDirectorySyncState.objects.filter(
+        source_slug="dingtalk",
+        corp_id="health-corp",
+    ).delete()
+
+    result = dependency_health_checks.check_dingtalk_notify()
+
+    assert result.status == DEPENDENCY_HEALTH_STATUS_UNHEALTHY
+    assert "目录作用域不存在" in result.summary
+    assert "invalid-scope(dingtalk:health-corp)" in result.summary
 
 
 def test_notify_check_included_in_full_run() -> None:
