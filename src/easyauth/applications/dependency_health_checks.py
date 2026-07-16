@@ -14,12 +14,17 @@ from easyauth.applications.health_models import (
     DEPENDENCY_CELERY,
     DEPENDENCY_CONNECTORS,
     DEPENDENCY_DINGTALK,
+    DEPENDENCY_DINGTALK_NOTIFY,
     DEPENDENCY_HEALTH_STATUS_HEALTHY,
     DEPENDENCY_HEALTH_STATUS_UNHEALTHY,
     DEPENDENCY_HEALTH_STATUS_WARNING,
     DependencyHealthSnapshot,
 )
-from easyauth.applications.integration_settings import authentik_runtime_config
+from easyauth.applications.integration_settings import (
+    authentik_runtime_config,
+    dingtalk_runtime_config,
+)
+from easyauth.applications.models import CAPABILITY_NOTIFY, AppCapability
 from easyauth.integrations.authentik.directory_client import (
     AuthentikDirectoryClient,
     AuthentikDirectoryError,
@@ -61,6 +66,7 @@ def run_dependency_health_checks() -> tuple[DependencyHealthItem, ...]:
         _check_authentik(config),
         _check_authentik_directory(config),
         _check_dingtalk(),
+        _check_dingtalk_notify(),
         _check_celery(),
         _check_connectors(),
     )
@@ -177,6 +183,44 @@ def _check_dingtalk() -> DependencyCheckResult:
         dependency=DEPENDENCY_DINGTALK,
         status=DEPENDENCY_HEALTH_STATUS_HEALTHY,
         summary=f"钉钉目录同步正常, 共 {len(states)} 个 corp, 最早同步于 {oldest.isoformat()}。",
+        error_summary="",
+    )
+
+
+def _check_dingtalk_notify() -> DependencyCheckResult:
+    # 「能力开了、凭据没配」是静默失败高发区(第 3 篇 §8): 投递侧会 pending+退避等待
+    # 配置补齐, 若无健康亮红, 运维无从察觉。无 app 开通通知能力时凭据缺失不构成风险。
+    enabled_count = AppCapability.objects.filter(
+        capability=CAPABILITY_NOTIFY,
+        enabled=True,
+    ).count()
+    config = dingtalk_runtime_config()
+    missing: list[str] = []
+    if not config.is_configured():
+        missing.append("钉钉开放平台应用凭证")
+    if not config.agent_id:
+        missing.append("agent_id")
+    if not missing:
+        return DependencyCheckResult(
+            dependency=DEPENDENCY_DINGTALK_NOTIFY,
+            status=DEPENDENCY_HEALTH_STATUS_HEALTHY,
+            summary=f"钉钉工作通知配置完整, {enabled_count} 个应用已开通通知能力。",
+            error_summary="",
+        )
+    detail = "、".join(missing)
+    if enabled_count == 0:
+        return DependencyCheckResult(
+            dependency=DEPENDENCY_DINGTALK_NOTIFY,
+            status=DEPENDENCY_HEALTH_STATUS_WARNING,
+            summary=f"钉钉工作通知未配置({detail}), 当前无应用开通通知能力。",
+            error_summary="",
+        )
+    return DependencyCheckResult(
+        dependency=DEPENDENCY_DINGTALK_NOTIFY,
+        status=DEPENDENCY_HEALTH_STATUS_UNHEALTHY,
+        summary=(
+            f"通知凭据缺失({detail}), 但已有 {enabled_count} 个应用开通通知能力, 投递将持续退避。"
+        ),
         error_summary="",
     )
 
