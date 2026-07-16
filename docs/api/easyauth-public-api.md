@@ -603,8 +603,9 @@ App owner 配置独立的、版本化钉钉通知通道；未配置时返回
 - `recipient_total`：解析合并后的收件人数（含受理时即失败者）
 - `recipient_rejected`：受理时即判终态失败的收件人数（解析失败、引用歧义、
   非 active 或不属于冻结通道作用域）
-- 目录返回的 v1 canonical `user_ref` 最大长度可被 4096 字符上限完整覆盖；EasyAuth
-  将每个输入引用作为 `raw_ref` 原样持久化和回显，不截断 opaque ref。
+- 目录返回的 v1 canonical `user_ref` 最大长度可被 4096 字符上限完整覆盖。每个
+  去重后保留的收件人行保存其首个输入 `raw_ref`，原样持久化和回显且不截断；
+  被合并的重复引用不另建行。
 
 ### `GET /api/v1/apps/{app_key}/notify/messages/{message_id}`
 

@@ -192,7 +192,8 @@ reports = directory_client.search_directory_users(
 - `send_notification` 为 **异步受理**: `202`/`accepted=true` 仅表示已落库并排程,
   不代表钉钉已送达。
 - `recipients` 为 1~500 个非空字符串，每项最多 4096 字符；该上限完整覆盖目录返回的
-  最大 v1 canonical ref。EasyAuth 将 `raw_ref` 原样持久化和回显，不截断。
+  最大 v1 canonical ref。每个去重后保留的收件人行以首个输入为 `raw_ref`，原样
+  持久化和回显且不截断；被合并的重复引用不另建行。
 - 解析成功后按 `(source_slug, corp_id, dingtalk_user_id)` 去重；同 userid 位于不同
   source/corp 时仍是不同身份。缺少完整 scope 的历史 legacy 行使用独立兼容约束。
 - `sent` 是可依赖的最低保证。`delivered` 仅表示钉钉明确的 send-result 回执
