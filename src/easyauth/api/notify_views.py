@@ -7,6 +7,7 @@ from uuid import UUID
 
 from django.conf import settings
 from django.http import HttpRequest, JsonResponse
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_http_methods
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 
@@ -47,6 +48,8 @@ _NOTIFY_ACCEPTED_ACTION: Final = "app_notify_accepted"
 _NOTIFY_REJECTED_ACTION: Final = "app_notify_rejected"
 
 
+# Bearer 鉴权的服务端到服务端接口, 无浏览器会话, 豁免 CSRF(对齐 approval_views 的 POST 端点)。
+@csrf_exempt
 @require_http_methods(["POST"])
 def notify_messages_create(request: HttpRequest, app_key: str) -> JsonResponse:
     match _authenticate_notify_capability(request, app_key):

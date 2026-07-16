@@ -8,7 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 from django.core.cache import cache
-from django.test import RequestFactory
+from django.test import Client, RequestFactory
 from django.utils import timezone
 
 from easyauth.accounts.models import DingTalkUserMirror, UserMirror
@@ -348,3 +348,28 @@ def test_pipeline_accept_to_deliver(monkeypatch: pytest.MonkeyPatch) -> None:
     assert detail["status"] == "completed"
     assert detail["recipients"][0]["status"] == "sent"
     assert detail["recipient_sent"] == 1
+
+
+def test_post_through_middleware_is_csrf_exempt(monkeypatch: pytest.MonkeyPatch) -> None:
+    # RequestFactory 直调视图不经过 CsrfViewMiddleware, G1 冒烟曾因缺 @csrf_exempt
+    # 在真实请求路径上 403; 此用例走完整中间件栈 + URL 路由防回归。
+    cache.clear()
+    app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
+    _enable_notify(app)
+    _auth(monkeypatch, app)
+    _seed_user(authentik="f7c31a09e5b24f8d9a1c", dingtalk="user0123")
+    _ = DingTalkUserMirror.objects.create(
+        source_slug=_SOURCE,
+        corp_id=_CORP,
+        user_id="manager8836",
+        name="张主管",
+        status="active",
+    )
+    client = Client(enforce_csrf_checks=True)
+    response = client.post(
+        f"/api/v1/apps/{_APP_KEY}/notify/messages",
+        data=dumps(_load_sample("message_create_request.json")),
+        content_type="application/json",
+        HTTP_AUTHORIZATION=_AUTH_HEADER,
+    )
+    assert response.status_code == HTTPStatus.ACCEPTED
