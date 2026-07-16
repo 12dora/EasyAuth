@@ -29,7 +29,10 @@ from easyauth.api.errors import ErrorCode, JsonValue, build_error_response
 from easyauth.api.pagination import Pagination, pagination_item, total_pages
 from easyauth.api.permission_query_auth import authenticate_permission_query_token
 from easyauth.api.responses import json_response
-from easyauth.applications.capabilities import app_capability_enabled
+from easyauth.applications.capabilities import (
+    app_capability_enabled,
+    credential_capability_enabled,
+)
 from easyauth.applications.models import CAPABILITY_DIRECTORY, App
 from easyauth.applications.services import AppPrincipal
 from easyauth.audit.services import AuditRecord, AuditService
@@ -274,7 +277,10 @@ def _authenticate_capability_and_throttle(
     app = App.objects.filter(id=principal.app_id).first()
     if app is None:
         return _authentication_failed_response()
-    if not app_capability_enabled(app.id, CAPABILITY_DIRECTORY):
+    if not app_capability_enabled(
+        app.id,
+        CAPABILITY_DIRECTORY,
+    ) or not credential_capability_enabled(principal, CAPABILITY_DIRECTORY):
         return _permission_denied_response(_DIRECTORY_CAPABILITY_DENIED_MESSAGE)
     return principal
 

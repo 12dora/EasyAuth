@@ -56,6 +56,7 @@ def _principal(app: App) -> AppPrincipal:
         app_key=app.app_key,
         credential_type="static_token",
         credential_id=101,
+        capabilities=frozenset({CAPABILITY_DIRECTORY}),
     )
 
 
@@ -501,6 +502,33 @@ def test_directory_capability_disabled_returns_explicit_403(
     payload = loads(response.content)
     assert payload["error"]["code"] == "PERMISSION_DENIED"
     assert payload["error"]["message"] == "应用未开通目录能力。"
+
+
+def test_directory_credential_capability_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
+    _enable_directory(app)
+    principal = AppPrincipal(
+        app_id=app.id,
+        app_key=app.app_key,
+        credential_type="static_token",
+        credential_id=102,
+    )
+
+    def authenticate(_token: str) -> AppPrincipal:
+        return principal
+
+    monkeypatch.setattr(
+        "easyauth.api.directory_views.authenticate_permission_query_token",
+        authenticate,
+    )
+    request = RequestFactory().get("/", HTTP_AUTHORIZATION=_AUTH_HEADER)
+
+    response = directory_users(request, _APP_KEY)
+
+    assert response.status_code == HTTPStatus.FORBIDDEN
+    assert loads(response.content)["error"]["code"] == "PERMISSION_DENIED"
 
 
 def test_directory_rate_limit_returns_429_with_retry_after(
