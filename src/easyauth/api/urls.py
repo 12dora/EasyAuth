@@ -15,6 +15,7 @@ from easyauth.api.directory_views import (
     directory_users,
 )
 from easyauth.api.manifest_sync_views import app_manifest_sync
+from easyauth.api.notify_views import notify_message_detail, notify_messages_create
 from easyauth.api.views import query_user_permissions
 
 urlpatterns = [
@@ -67,5 +68,15 @@ urlpatterns = [
         "apps/<str:app_key>/directory/departments",
         directory_departments,
         name="app-directory-departments",
+    ),
+    path(
+        "apps/<str:app_key>/notify/messages",
+        notify_messages_create,
+        name="app-notify-messages-create",
+    ),
+    path(
+        "apps/<str:app_key>/notify/messages/<str:message_id>",
+        notify_message_detail,
+        name="app-notify-message-detail",
     ),
 ]

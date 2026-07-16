@@ -415,6 +415,127 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
 
 ---
 
+## 6. 通知
+
+底层通道为钉钉工作通知 `asyncsend_v2`。应用须由超管开通 `notify` 能力，否则返回 `403 PERMISSION_DENIED`（文案：「应用未开通通知能力。」）。
+
+**异步受理语义**：`POST` 成功仅代表 EasyAuth 已落库并排程投递；真正的逐人成败通过 `GET` 状态查询。收件人引用与目录一致：裸 `user_id` 或 `dt:<钉钉userid>`。仅允许通知 active 目录用户；解析失败的收件人不阻塞整体受理，直接记为终态 `failed`。
+
+### `POST /api/v1/apps/{app_key}/notify/messages`
+
+| 字段 | 必填 | 约束 |
+| --- | --- | --- |
+| `recipients` | 是 | 1~500 个用户引用；按解析后的钉钉 userid 合并去重 |
+| `template` | 是 | `text` / `markdown` / `action_card` |
+| `title` | markdown、action_card 必填 | ≤100 字符；text 忽略 |
+| `content` | 是 | 组装后的钉钉 msg JSON ≤ **2048 字节（UTF-8）**，超限 `422` |
+| `deeplink_url` | action_card 必填 | ≤500 字符；`https://` 或 `dingtalk://dingtalkclient/page/link?...`（内嵌 url 仍须 https） |
+| `deeplink_title` | 否 | action_card 按钮文案，≤20 字符，默认「查看详情」 |
+| `dedup_key` | 否 | ≤128 字符；app 内**永久**幂等键 |
+| `biz_tag` | 否 | ≤64 字符，业务分类标签 |
+
+**请求示例：**
+
+```json
+{
+  "recipients": ["f7c31a09e5b24f8d9a1c", "dt:manager8836"],
+  "template": "action_card",
+  "title": "任务逾期升级",
+  "content": "### 任务已逾期 3 天\n**接口联调排期**\n负责人: 王小明",
+  "deeplink_url": "https://eproject.jiefakj.com/zh-CN/tasks/123",
+  "deeplink_title": "查看任务",
+  "dedup_key": "overdue-escalate:123:2026-07-16",
+  "biz_tag": "overdue_escalation"
+}
+```
+
+**响应：**
+
+| 情形 | HTTP | 说明 |
+| --- | --- | --- |
+| 新受理 | **202** | `accepted: true` |
+| `dedup_key` 命中且载荷一致 | **200** | `accepted: false`，`message_id` 为首次受理 ID |
+| `dedup_key` 命中但载荷不同 | **409 CONFLICT** | — |
+| 参数问题 | **422 VALIDATION_ERROR** | `details.field` 指明字段 |
+| 速率/配额超限 | **429 THROTTLED** + `Retry-After` | 日配额的 Retry-After 到次日零点（Asia/Shanghai） |
+
+```json
+{
+  "message_id": "0d9f5c1e-7a42-4b8e-9c3d-2f1a6b8e4d70",
+  "accepted": true,
+  "status": "pending",
+  "recipient_total": 2,
+  "recipient_rejected": 0
+}
+```
+
+- `recipient_total`：解析合并后的收件人数（含受理时即失败者）
+- `recipient_rejected`：受理时即判终态失败的收件人数（解析失败/非 active）
+
+### `GET /api/v1/apps/{app_key}/notify/messages/{message_id}`
+
+投递状态查询。`message_id` 不存在或属于其它 app → `404 NOT_FOUND`。
+
+**成功响应（200）：**
+
+```json
+{
+  "message_id": "0d9f5c1e-7a42-4b8e-9c3d-2f1a6b8e4d70",
+  "status": "partially_failed",
+  "template": "action_card",
+  "biz_tag": "overdue_escalation",
+  "dedup_key": "overdue-escalate:123:2026-07-16",
+  "created_at": "2026-07-16T10:00:00+08:00",
+  "completed_at": "2026-07-16T10:03:12+08:00",
+  "recipient_total": 2,
+  "recipient_sent": 1,
+  "recipient_failed": 1,
+  "recipients": [
+    {
+      "raw_ref": "f7c31a09e5b24f8d9a1c",
+      "user_id": "f7c31a09e5b24f8d9a1c",
+      "dingtalk_user_id": "user0123",
+      "status": "delivered",
+      "error_code": "",
+      "error": "",
+      "sent_at": "2026-07-16T10:00:04+08:00",
+      "delivered_at": "2026-07-16T10:01:00+08:00"
+    },
+    {
+      "raw_ref": "dt:formeruser01",
+      "user_id": null,
+      "dingtalk_user_id": "formeruser01",
+      "status": "failed",
+      "error_code": "USER_INACTIVE",
+      "error": "目录状态为 departed, 拒绝投递。",
+      "sent_at": null,
+      "delivered_at": null
+    }
+  ]
+}
+```
+
+**消息聚合 `status`：** `pending` / `sending` / `completed`（全部 sent 或 delivered）/ `partially_failed` / `failed`。
+
+**收件人 `status`：** `pending` / `throttled` / `sent`（钉钉已受理，≠送达）/ `delivered` / `failed`。
+
+**`error_code` 枚举：** `USER_NOT_FOUND`、`NO_DINGTALK_ID`、`USER_INACTIVE`、`DINGTALK_REJECTED`、`DINGTALK_DUPLICATE`、`DINGTALK_DAILY_LIMIT`、`EXHAUSTED`。
+
+**状态时效：** `sent → delivered/failed` 依赖回执对账（约 60s 周期、24h 窗口）；对账尽力而为，`sent` 是可依赖的最低保证。
+
+### 限流（通知）
+
+| 项 | 默认 |
+| --- | --- |
+| POST 速率 | 60 次 / 60s（按 app，多凭据共享） |
+| 每日收件人配额 | 5000 收件人·次 / 自然日（Asia/Shanghai） |
+| GET 状态查询 | 240 次 / 60s（按凭据） |
+| 认证失败 | 每 IP 30 次 / 300s |
+
+超限返回 `429 THROTTLED`，带 `Retry-After` 头。
+
+---
+
 ## 7. Webhook（EasyAuth → 下游）
 
 审批完成等事件通过应用 webhook 配置投递，签名头包括：

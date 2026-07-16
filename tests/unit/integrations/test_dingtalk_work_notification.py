@@ -170,7 +170,8 @@ def test_send_work_notification_oapi_business_error(
             userid_list=["u1"],
             msg={"msgtype": "text", "text": {"content": "x"}},
         )
-    assert exc.value.status_code == TEST_OAPI_ERRCODE
+    assert exc.value.errcode == TEST_OAPI_ERRCODE
+    assert exc.value.status_code is None
 
 
 def test_get_send_progress_and_result(monkeypatch: pytest.MonkeyPatch) -> None:

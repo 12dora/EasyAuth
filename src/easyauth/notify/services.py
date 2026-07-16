@@ -2,27 +2,48 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
+import uuid
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import TYPE_CHECKING, Final, Literal, override
+from typing import TYPE_CHECKING, Final, Literal, cast, override
 from urllib.parse import parse_qs, urlparse
 from zoneinfo import ZoneInfo
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
+from django.db.models import Count, F, Q
 from django.utils import timezone
 
 from easyauth.accounts.models import DingTalkUserMirror, UserMirror
 from easyauth.applications.capabilities import app_capability_config
+from easyauth.applications.integration_settings import dingtalk_runtime_config
 from easyauth.applications.models import CAPABILITY_NOTIFY
+from easyauth.audit.services import AuditRecord, AuditService
+from easyauth.integrations.dingtalk.api_client import (
+    DingTalkApiClient,
+    DingTalkApiRequestError,
+    DingTalkApiUnavailableError,
+    DingTalkNotConfiguredError,
+)
 from easyauth.notify.models import (
+    NOTIFY_ERROR_DINGTALK_DAILY_LIMIT,
+    NOTIFY_ERROR_DINGTALK_DUPLICATE,
+    NOTIFY_ERROR_DINGTALK_REJECTED,
+    NOTIFY_ERROR_EXHAUSTED,
     NOTIFY_ERROR_NO_DINGTALK_ID,
     NOTIFY_ERROR_USER_INACTIVE,
     NOTIFY_ERROR_USER_NOT_FOUND,
+    NOTIFY_MESSAGE_STATUS_COMPLETED,
     NOTIFY_MESSAGE_STATUS_FAILED,
+    NOTIFY_MESSAGE_STATUS_PARTIALLY_FAILED,
     NOTIFY_MESSAGE_STATUS_PENDING,
+    NOTIFY_MESSAGE_STATUS_SENDING,
+    NOTIFY_RECIPIENT_STATUS_DELIVERED,
     NOTIFY_RECIPIENT_STATUS_FAILED,
     NOTIFY_RECIPIENT_STATUS_PENDING,
+    NOTIFY_RECIPIENT_STATUS_SENT,
+    NOTIFY_RECIPIENT_STATUS_THROTTLED,
     NOTIFY_TEMPLATE_ACTION_CARD,
     NOTIFY_TEMPLATE_MARKDOWN,
     NOTIFY_TEMPLATE_TEXT,
@@ -35,6 +56,7 @@ from easyauth.outbox.services import enqueue_task
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from datetime import datetime
+    from uuid import UUID
 
     from easyauth.applications.models import App
 
@@ -44,8 +66,12 @@ type NotifyAcceptErrorKind = Literal[
     "validation_error",
 ]
 
+logger = logging.getLogger(__name__)
+
 DINGTALK_REF_PREFIX: Final = "dt:"
 NOTIFY_DELIVERY_TASK_NAME: Final = "easyauth.notify.deliver_message"
+NOTIFY_RECONCILE_TASK_NAME: Final = "easyauth.notify.reconcile_send_results"
+NOTIFY_PRUNE_TASK_NAME: Final = "easyauth.notify.prune_messages"
 NOTIFY_MSG_MAX_BYTES: Final = 2048
 NOTIFY_MAX_RECIPIENTS: Final = 500
 NOTIFY_MIN_RECIPIENTS: Final = 1
@@ -61,6 +87,30 @@ SHANGHAI_TZ: Final = ZoneInfo("Asia/Shanghai")
 HTTPS_PREFIX: Final = "https://"
 DINGTALK_LINK_PREFIX: Final = "dingtalk://dingtalkclient/page/link?"
 DINGTALK_USER_STATUS_ACTIVE: Final = "active"
+
+# 投递管道常量(第 3 篇 §1/§3/§4/§5/§6)
+NOTIFY_RETRY_DELAYS_SECONDS: Final[tuple[int, ...]] = (60, 300, 1800, 7200)
+NOTIFY_THROTTLE_RETRY_SECONDS: Final = 120
+NOTIFY_MAX_CHUNKS_PER_RUN: Final = 5
+NOTIFY_BATCH_SIZE: Final = 100
+NOTIFY_LEASE_SECONDS: Final = 45
+NOTIFY_ERROR_MAX_CHARS: Final = 500
+NOTIFY_RECONCILE_WINDOW_HOURS: Final = 24
+NOTIFY_RECONCILE_TASK_LIMIT: Final = 50
+NOTIFY_PRUNE_BATCH_SIZE: Final = 500
+DEFAULT_RETENTION_DAYS: Final = 180
+DINGTALK_PROGRESS_DONE: Final = 2
+# 调用级频控 errcode(第 4 篇 §4): QPS 90018, QPM 人次 143103/143104。
+DINGTALK_THROTTLE_ERRCODES: Final[frozenset[int]] = frozenset({90018, 143103, 143104})
+# 受理期解析失败集合: 幂等重放时 recipient_rejected 只计这些(契约 §N2)。
+ACCEPT_TIME_ERROR_CODES: Final[frozenset[str]] = frozenset(
+    {
+        NOTIFY_ERROR_USER_NOT_FOUND,
+        NOTIFY_ERROR_NO_DINGTALK_ID,
+        NOTIFY_ERROR_USER_INACTIVE,
+    },
+)
+MAX_DELIVERY_ATTEMPTS: Final = len(NOTIFY_RETRY_DELAYS_SECONDS) + 1
 
 IDEMPOTENCY_PAYLOAD_CONFLICT_MESSAGE: Final = "同一 dedup_key 已使用不同的通知载荷。"
 DAILY_QUOTA_EXCEEDED_MESSAGE: Final = "通知每日收件人配额已用尽。"
@@ -78,6 +128,7 @@ DEDUP_KEY_TOO_LONG_MESSAGE: Final = "dedup_key 不得超过 128 字符。"
 BIZ_TAG_TOO_LONG_MESSAGE: Final = "biz_tag 不得超过 64 字符。"
 MSG_TOO_LARGE_MESSAGE: Final = "组装后的钉钉 msg JSON 超过 2048 字节上限。"
 RAW_REF_TOO_LONG_MESSAGE: Final = "收件人引用不得超过 200 字符。"
+DINGTALK_AGENT_MISSING_MESSAGE: Final = "钉钉工作通知 agent_id 未配置。"
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,12 +201,13 @@ def dingtalk_msg_utf8_size(msg: dict[str, object]) -> int:
     return len(raw)
 
 
-def compute_payload_hash(
+def compute_payload_hash(  # noqa: PLR0913 - 幂等 hash 规范化字段全集(契约 §N2)。
     *,
     template: str,
     title: str,
     content: str,
     deeplink_url: str,
+    deeplink_title: str,
     recipients: Sequence[str],
 ) -> str:
     canonical = json.dumps(
@@ -164,6 +216,7 @@ def compute_payload_hash(
             "title": title,
             "content": content,
             "deeplink_url": deeplink_url,
+            "deeplink_title": deeplink_title,
             "recipients": sorted(recipients),
         },
         ensure_ascii=False,
@@ -252,6 +305,7 @@ def accept_notify_message(  # noqa: PLR0913 - 受理入口完整业务事实。
         title=normalized.title,
         content=normalized.content,
         deeplink_url=normalized.deeplink_url,
+        deeplink_title=normalized.deeplink_title,
         recipients=list(recipients),
     )
 
@@ -266,15 +320,11 @@ def accept_notify_message(  # noqa: PLR0913 - 受理入口完整业务事实。
                     kind="conflict",
                     message=IDEMPOTENCY_PAYLOAD_CONFLICT_MESSAGE,
                 )
-            rejected = NotifyRecipient.objects.filter(
-                message=existing,
-                status=NOTIFY_RECIPIENT_STATUS_FAILED,
-            ).count()
             return AcceptNotifyResult(
                 message=existing,
                 accepted=False,
                 recipient_total=existing.recipient_total,
-                recipient_rejected=rejected,
+                recipient_rejected=_accept_time_rejected_count(existing),
             )
 
     try:
@@ -299,15 +349,11 @@ def accept_notify_message(  # noqa: PLR0913 - 受理入口完整业务事实。
                 kind="conflict",
                 message=IDEMPOTENCY_PAYLOAD_CONFLICT_MESSAGE,
             ) from None
-        rejected = NotifyRecipient.objects.filter(
-            message=winner,
-            status=NOTIFY_RECIPIENT_STATUS_FAILED,
-        ).count()
         return AcceptNotifyResult(
             message=winner,
             accepted=False,
             recipient_total=winner.recipient_total,
-            recipient_rejected=rejected,
+            recipient_rejected=_accept_time_rejected_count(winner),
         )
 
     rejected = sum(1 for item in resolved if item.status == NOTIFY_RECIPIENT_STATUS_FAILED)
@@ -317,6 +363,243 @@ def accept_notify_message(  # noqa: PLR0913 - 受理入口完整业务事实。
         recipient_total=len(resolved),
         recipient_rejected=rejected,
     )
+
+
+def deliver_message(message_id: str, generation: int) -> None:
+    """单条消息一轮投递: 抢租约 → 分批调钉钉 → 推进状态 → 排程下一轮或收敛。"""
+    claimed = _claim_message(message_id)
+    if claimed is None:
+        return
+    message = claimed.message
+    claim_token = claimed.claim_token
+
+    open_recipients = list(
+        NotifyRecipient.objects.filter(
+            message_id=message.id,
+            status__in=(NOTIFY_RECIPIENT_STATUS_PENDING, NOTIFY_RECIPIENT_STATUS_THROTTLED),
+        )
+        .order_by("id")
+        .all()[: NOTIFY_BATCH_SIZE * NOTIFY_MAX_CHUNKS_PER_RUN],
+    )
+    if not open_recipients:
+        _refresh_and_maybe_finalize(message, claim_token=claim_token)
+        return
+
+    network_interrupted = False
+    try:
+        client, agent_id = _dingtalk_client_and_agent()
+    except (DingTalkNotConfiguredError, ValueError) as error:
+        # 配置缺失视为可恢复: 保持 pending, 走常规退避; 健康探测补齐后自动恢复(第 3 篇 §8)。
+        network_interrupted = True
+        _ = NotifyMessage.objects.filter(id=message.id, claim_token=claim_token).update(
+            last_error=str(error)[:NOTIFY_ERROR_MAX_CHARS],
+        )
+        _schedule_or_finalize(
+            message,
+            claim_token=claim_token,
+            generation=generation,
+            network_interrupted=True,
+        )
+        return
+
+    msg = build_dingtalk_msg(
+        template=message.template,
+        title=message.title,
+        content=message.content,
+        deeplink_url=message.deeplink_url,
+        deeplink_title=message.deeplink_title or DEFAULT_DEEPLINK_TITLE,
+    )
+    chunks = [
+        open_recipients[i : i + NOTIFY_BATCH_SIZE]
+        for i in range(0, len(open_recipients), NOTIFY_BATCH_SIZE)
+    ]
+    for chunk in chunks:
+        userids = [row.dingtalk_userid for row in chunk if row.dingtalk_userid]
+        if not userids:
+            continue
+        try:
+            task_id = client.send_work_notification(
+                agent_id=agent_id,
+                userid_list=userids,
+                msg=msg,
+            )
+        except DingTalkApiUnavailableError as error:
+            network_interrupted = True
+            _ = NotifyMessage.objects.filter(id=message.id, claim_token=claim_token).update(
+                last_error=str(error)[:NOTIFY_ERROR_MAX_CHARS],
+            )
+            break
+        except DingTalkApiRequestError as error:
+            if error.errcode is not None and error.errcode in DINGTALK_THROTTLE_ERRCODES:
+                _mark_chunk_throttled(chunk, error=str(error)[:NOTIFY_ERROR_MAX_CHARS])
+                continue
+            if _is_retryable_request_error(error):
+                # 钉钉 5xx / 无业务 errcode 的 HTTP 层故障: 保持原状态, 常规退避(第 3 篇 §4)。
+                network_interrupted = True
+                _ = NotifyMessage.objects.filter(id=message.id, claim_token=claim_token).update(
+                    last_error=str(error)[:NOTIFY_ERROR_MAX_CHARS],
+                )
+                break
+            _fail_open_recipients(
+                chunk,
+                error_code=NOTIFY_ERROR_DINGTALK_REJECTED,
+                error=str(error)[:NOTIFY_ERROR_MAX_CHARS],
+            )
+            continue
+        _mark_chunk_sent(chunk, task_id=task_id)
+
+    message.refresh_from_db()
+    _refresh_message_counts(message)
+    message.refresh_from_db()
+    _schedule_or_finalize(
+        message,
+        claim_token=claim_token,
+        generation=generation,
+        network_interrupted=network_interrupted,
+    )
+
+
+def reconcile_send_results() -> int:
+    """对 sent 收件人按 task_id 查钉钉回执, 升级 delivered/failed。返回处理的 task 数。"""
+    if not getattr(settings, "EASYAUTH_NOTIFY_RECONCILE_ENABLED", True):
+        return 0
+
+    now = timezone.now()
+    window_start = now - timedelta(hours=NOTIFY_RECONCILE_WINDOW_HOURS)
+    _reconcile_stale_sent(now=now, window_start=window_start)
+
+    task_ids = _sent_task_ids_in_window(window_start)
+    if not task_ids:
+        return 0
+
+    try:
+        client, agent_id = _dingtalk_client_and_agent()
+    except (DingTalkNotConfiguredError, ValueError):
+        return 0
+
+    processed = 0
+    affected_message_ids: set[UUID] = set()
+    for task_id in task_ids:
+        mids = _reconcile_one_task(
+            client=client,
+            agent_id=agent_id,
+            task_id=task_id,
+            now=now,
+        )
+        if not mids:
+            continue
+        affected_message_ids.update(mids)
+        processed += 1
+
+    for mid in affected_message_ids:
+        msg = NotifyMessage.objects.filter(id=mid).first()
+        if msg is not None:
+            _refresh_message_counts(msg)
+            _maybe_rewrite_aggregate_after_reconcile(msg)
+    return processed
+
+
+def _reconcile_stale_sent(*, now: datetime, window_start: datetime) -> None:
+    # 超 24h 仍 sent → 乐观 delivered(第 3 篇 §5)。
+    stale_ids = list(
+        NotifyRecipient.objects.filter(
+            status=NOTIFY_RECIPIENT_STATUS_SENT,
+        )
+        .filter(Q(sent_at__isnull=True) | Q(sent_at__lte=window_start))
+        .values_list("id", flat=True)[:NOTIFY_PRUNE_BATCH_SIZE],
+    )
+    if not stale_ids:
+        return
+    _ = NotifyRecipient.objects.filter(id__in=stale_ids).update(
+        status=NOTIFY_RECIPIENT_STATUS_DELIVERED,
+        delivered_at=now,
+        updated_at=now,
+    )
+    stale_message_ids = cast(
+        "list[object]",
+        list(
+            NotifyRecipient.objects.filter(id__in=stale_ids)
+            .values_list("message_id", flat=True)
+            .distinct(),
+        ),
+    )
+    for mid_raw in stale_message_ids:
+        if not isinstance(mid_raw, uuid.UUID):
+            continue
+        msg = NotifyMessage.objects.filter(id=mid_raw).first()
+        if msg is not None:
+            _refresh_message_counts(msg)
+            _maybe_rewrite_aggregate_after_reconcile(msg)
+
+
+def _sent_task_ids_in_window(window_start: datetime) -> list[str]:
+    # dict.fromkeys 保序去重: 避免 distinct+slice 在部分后端上仍带重复 task_id。
+    raw_task_ids = (
+        NotifyRecipient.objects.filter(
+            status=NOTIFY_RECIPIENT_STATUS_SENT,
+            sent_at__gt=window_start,
+        )
+        .exclude(dingtalk_task_id="")
+        .order_by("dingtalk_task_id")
+        .values_list("dingtalk_task_id", flat=True)
+    )
+    return list(dict.fromkeys(raw_task_ids))[:NOTIFY_RECONCILE_TASK_LIMIT]
+
+
+def _reconcile_one_task(
+    *,
+    client: DingTalkApiClient,
+    agent_id: str | int,
+    task_id: str,
+    now: datetime,
+) -> set[UUID]:
+    try:
+        progress = client.get_send_progress(agent_id=agent_id, task_id=task_id)
+    except (DingTalkApiRequestError, DingTalkApiUnavailableError):
+        return set()
+    status_raw = progress.get("status")
+    if not isinstance(status_raw, (int, float)) or int(status_raw) != DINGTALK_PROGRESS_DONE:
+        return set()
+    try:
+        send_result = client.get_send_result(agent_id=agent_id, task_id=task_id)
+    except (DingTalkApiRequestError, DingTalkApiUnavailableError):
+        return set()
+    return _apply_send_result(task_id=task_id, send_result=send_result, now=now)
+
+
+def prune_messages() -> int:
+    """按保留期分批删除历史消息(级联收件人)。返回删除的消息行数。"""
+    retention_days = getattr(settings, "EASYAUTH_NOTIFY_RETENTION_DAYS", DEFAULT_RETENTION_DAYS)
+    if (
+        not isinstance(retention_days, int)
+        or isinstance(retention_days, bool)
+        or retention_days < 1
+    ):
+        retention_days = DEFAULT_RETENTION_DAYS
+    cutoff = timezone.now() - timedelta(days=retention_days)
+    deleted_messages = 0
+    while True:
+        batch_ids = list(
+            NotifyMessage.objects.filter(created_at__lt=cutoff)
+            .order_by("created_at")
+            .values_list("id", flat=True)[:NOTIFY_PRUNE_BATCH_SIZE],
+        )
+        if not batch_ids:
+            break
+        deleted, _ = NotifyMessage.objects.filter(id__in=batch_ids).delete()
+        # delete() 计数含级联 recipients; 消息数按 batch 计。
+        deleted_messages += len(batch_ids)
+        if deleted == 0:
+            break
+    return deleted_messages
+
+
+def _accept_time_rejected_count(message: NotifyMessage) -> int:
+    return NotifyRecipient.objects.filter(
+        message=message,
+        status=NOTIFY_RECIPIENT_STATUS_FAILED,
+        error_code__in=ACCEPT_TIME_ERROR_CODES,
+    ).count()
 
 
 @dataclass(frozen=True, slots=True)
@@ -639,6 +922,7 @@ def _create_message_with_recipients(  # noqa: PLR0913 - 落库字段全集。
         title=normalized.title,
         content=normalized.content,
         deeplink_url=normalized.deeplink_url,
+        deeplink_title=normalized.deeplink_title,
         dedup_key=normalized.dedup_key,
         payload_hash=payload_hash,
         biz_tag=normalized.biz_tag,
@@ -672,3 +956,438 @@ def _create_message_with_recipients(  # noqa: PLR0913 - 落库字段全集。
             args=[str(message.id), 1],
         )
     return message
+
+
+@dataclass(frozen=True, slots=True)
+class _ClaimedMessage:
+    message: NotifyMessage
+    claim_token: str
+
+
+def _claim_message(message_id: str) -> _ClaimedMessage | None:
+    now = timezone.now()
+    claim_token = uuid.uuid4().hex
+    try:
+        message_uuid = uuid.UUID(str(message_id))
+    except ValueError:
+        return None
+    updated = (
+        NotifyMessage.objects.filter(
+            id=message_uuid,
+            status__in=(NOTIFY_MESSAGE_STATUS_PENDING, NOTIFY_MESSAGE_STATUS_SENDING),
+        )
+        .filter(
+            Q(claim_token="")
+            | Q(lease_expires_at__isnull=True)
+            | Q(lease_expires_at__lte=now),
+        )
+        .update(
+            status=NOTIFY_MESSAGE_STATUS_SENDING,
+            attempts=F("attempts") + 1,
+            claim_token=claim_token,
+            lease_expires_at=now + timedelta(seconds=NOTIFY_LEASE_SECONDS),
+            updated_at=now,
+        )
+    )
+    if updated != 1:
+        return None
+    message = NotifyMessage.objects.filter(id=message_uuid).first()
+    if message is None:
+        return None
+    return _ClaimedMessage(message=message, claim_token=claim_token)
+
+
+def _is_retryable_request_error(error: DingTalkApiRequestError) -> bool:
+    """常规失败可退避: 钉钉 5xx、或无 oapi 业务 errcode 的瞬时响应问题。
+
+    业务 errcode(非频控)与明确 HTTP 4xx 为终态, 不重试。
+    """
+    if error.errcode is not None:
+        return False
+    if error.status_code is not None:
+        return error.status_code >= 500  # noqa: PLR2004 - HTTP 5xx 阈值。
+    # 无 status_code/errcode: 多为响应体解析/大小限制等瞬时故障, 走退避。
+    return True
+
+
+def _dingtalk_client_and_agent() -> tuple[DingTalkApiClient, str | int]:
+    config = dingtalk_runtime_config()
+    if not config.is_configured():
+        raise DingTalkNotConfiguredError
+    agent_id = config.agent_id.strip()
+    if not agent_id:
+        raise ValueError(DINGTALK_AGENT_MISSING_MESSAGE)
+    # agent_id 优先 int, 否则原样字符串。
+    try:
+        agent: str | int = int(agent_id)
+    except ValueError:
+        agent = agent_id
+    return DingTalkApiClient.from_settings(), agent
+
+
+def _mark_chunk_sent(chunk: Sequence[NotifyRecipient], *, task_id: str) -> None:
+    now = timezone.now()
+    ids = [row.id for row in chunk]
+    _ = NotifyRecipient.objects.filter(
+        id__in=ids,
+        status__in=(NOTIFY_RECIPIENT_STATUS_PENDING, NOTIFY_RECIPIENT_STATUS_THROTTLED),
+    ).update(
+        status=NOTIFY_RECIPIENT_STATUS_SENT,
+        dingtalk_task_id=task_id,
+        sent_at=now,
+        error_code="",
+        error="",
+        updated_at=now,
+    )
+
+
+def _mark_chunk_throttled(chunk: Sequence[NotifyRecipient], *, error: str) -> None:
+    now = timezone.now()
+    ids = [row.id for row in chunk]
+    _ = NotifyRecipient.objects.filter(
+        id__in=ids,
+        status__in=(NOTIFY_RECIPIENT_STATUS_PENDING, NOTIFY_RECIPIENT_STATUS_THROTTLED),
+    ).update(
+        status=NOTIFY_RECIPIENT_STATUS_THROTTLED,
+        error=error,
+        updated_at=now,
+    )
+
+
+def _fail_open_recipients(
+    chunk: Sequence[NotifyRecipient],
+    *,
+    error_code: str,
+    error: str,
+) -> None:
+    now = timezone.now()
+    ids = [row.id for row in chunk]
+    _ = NotifyRecipient.objects.filter(
+        id__in=ids,
+        status__in=(NOTIFY_RECIPIENT_STATUS_PENDING, NOTIFY_RECIPIENT_STATUS_THROTTLED),
+    ).update(
+        status=NOTIFY_RECIPIENT_STATUS_FAILED,
+        error_code=error_code,
+        error=error,
+        updated_at=now,
+    )
+
+
+def _refresh_message_counts(message: NotifyMessage) -> None:
+    rows = cast(
+        "list[dict[str, object]]",
+        list(
+            NotifyRecipient.objects.filter(message_id=message.id)
+            .values("status")
+            .annotate(count=Count("id")),
+        ),
+    )
+    by_status: dict[str, int] = {}
+    for row in rows:
+        status_raw = row.get("status")
+        count_raw = row.get("count")
+        if isinstance(status_raw, str) and isinstance(count_raw, int) and not isinstance(
+            count_raw,
+            bool,
+        ):
+            by_status[status_raw] = count_raw
+    sent = by_status.get(NOTIFY_RECIPIENT_STATUS_SENT, 0) + by_status.get(
+        NOTIFY_RECIPIENT_STATUS_DELIVERED,
+        0,
+    )
+    failed = by_status.get(NOTIFY_RECIPIENT_STATUS_FAILED, 0)
+    _ = NotifyMessage.objects.filter(id=message.id).update(
+        recipient_sent=sent,
+        recipient_failed=failed,
+        updated_at=timezone.now(),
+    )
+
+
+def _open_recipient_counts(message_id: UUID) -> tuple[int, int]:
+    pending = NotifyRecipient.objects.filter(
+        message_id=message_id,
+        status=NOTIFY_RECIPIENT_STATUS_PENDING,
+    ).count()
+    throttled = NotifyRecipient.objects.filter(
+        message_id=message_id,
+        status=NOTIFY_RECIPIENT_STATUS_THROTTLED,
+    ).count()
+    return pending, throttled
+
+
+def _schedule_or_finalize(
+    message: NotifyMessage,
+    *,
+    claim_token: str,
+    generation: int,
+    network_interrupted: bool,
+) -> None:
+    pending, throttled = _open_recipient_counts(message.id)
+    open_count = pending + throttled
+    if open_count == 0:
+        _finalize_message(message, claim_token=claim_token)
+        return
+    if message.attempts >= MAX_DELIVERY_ATTEMPTS:
+        _exhaust_open_recipients(message.id)
+        _finalize_message(message, claim_token=claim_token, exhausted=True)
+        return
+
+    if network_interrupted:
+        countdown = _retry_delay_seconds(message.attempts)
+    elif pending > 0:
+        # 批上限未处理完: 立即继续; 否则常规退避已在 network 分支。
+        countdown = 0
+    else:
+        countdown = NOTIFY_THROTTLE_RETRY_SECONDS
+
+    next_generation = generation + 1
+    with transaction.atomic():
+        released = NotifyMessage.objects.filter(
+            id=message.id,
+            claim_token=claim_token,
+            status=NOTIFY_MESSAGE_STATUS_SENDING,
+        ).update(
+            claim_token="",
+            lease_expires_at=None,
+            updated_at=timezone.now(),
+        )
+        if released != 1:
+            return
+        _ = enqueue_task(
+            event_key=f"notify-delivery:{message.id}:{next_generation}",
+            task_name=NOTIFY_DELIVERY_TASK_NAME,
+            args=[str(message.id), next_generation],
+            countdown=countdown,
+        )
+
+
+def _retry_delay_seconds(attempts: int) -> int:
+    index = min(max(attempts - 1, 0), len(NOTIFY_RETRY_DELAYS_SECONDS) - 1)
+    return NOTIFY_RETRY_DELAYS_SECONDS[index]
+
+
+def _exhaust_open_recipients(message_id: UUID) -> None:
+    now = timezone.now()
+    _ = NotifyRecipient.objects.filter(
+        message_id=message_id,
+        status__in=(NOTIFY_RECIPIENT_STATUS_PENDING, NOTIFY_RECIPIENT_STATUS_THROTTLED),
+    ).update(
+        status=NOTIFY_RECIPIENT_STATUS_FAILED,
+        error_code=NOTIFY_ERROR_EXHAUSTED,
+        error="投递重试耗尽。",
+        updated_at=now,
+    )
+
+
+def _refresh_and_maybe_finalize(message: NotifyMessage, *, claim_token: str) -> None:
+    _refresh_message_counts(message)
+    message.refresh_from_db()
+    pending, throttled = _open_recipient_counts(message.id)
+    if pending + throttled == 0:
+        _finalize_message(message, claim_token=claim_token)
+        return
+    # 无 open 可处理但仍有 open(不应发生): 释放 claim 等待下次。
+    _ = NotifyMessage.objects.filter(id=message.id, claim_token=claim_token).update(
+        claim_token="",
+        lease_expires_at=None,
+        updated_at=timezone.now(),
+    )
+
+
+def _finalize_message(
+    message: NotifyMessage,
+    *,
+    claim_token: str,
+    exhausted: bool = False,
+) -> None:
+    _refresh_message_counts(message)
+    message.refresh_from_db()
+    failed = message.recipient_failed
+    total = message.recipient_total
+    if failed <= 0:
+        status = NOTIFY_MESSAGE_STATUS_COMPLETED
+    elif failed >= total:
+        status = NOTIFY_MESSAGE_STATUS_FAILED
+    else:
+        status = NOTIFY_MESSAGE_STATUS_PARTIALLY_FAILED
+    now = timezone.now()
+    updated = NotifyMessage.objects.filter(
+        id=message.id,
+        claim_token=claim_token,
+    ).update(
+        status=status,
+        completed_at=now,
+        claim_token="",
+        lease_expires_at=None,
+        updated_at=now,
+    )
+    if updated != 1:
+        return
+    message.refresh_from_db()
+    _record_delivery_terminal(message, exhausted=exhausted)
+
+
+def _record_delivery_terminal(message: NotifyMessage, *, exhausted: bool) -> None:
+    action = "notify_delivery_exhausted" if exhausted else "notify_delivered"
+    if exhausted:
+        logger.error(
+            "notify_delivery_exhausted message_id=%s app_id=%s attempts=%s failed=%s total=%s",
+            message.id,
+            message.app_id,
+            message.attempts,
+            message.recipient_failed,
+            message.recipient_total,
+        )
+    _ = AuditService.record(
+        AuditRecord(
+            actor_type="system",
+            actor_id="notify_delivery",
+            action=action,
+            target_type="notify_message",
+            target_id=str(message.id),
+            metadata={
+                "status": message.status,
+                "recipient_sent": message.recipient_sent,
+                "recipient_failed": message.recipient_failed,
+                "recipient_total": message.recipient_total,
+                "attempts": message.attempts,
+            },
+        ),
+    )
+
+
+def _apply_send_result(
+    *,
+    task_id: str,
+    send_result: dict[str, object],
+    now: datetime,
+) -> set[UUID]:
+    rejected_userids = _string_id_set(send_result.get("invalid_user_id_list")) | _string_id_set(
+        send_result.get("failed_user_id_list"),
+    )
+    forbidden_by_code = _forbidden_userid_codes(send_result)
+    for userid in _string_id_set(send_result.get("forbidden_user_id_list")):
+        _ = forbidden_by_code.setdefault(userid, NOTIFY_ERROR_DINGTALK_REJECTED)
+
+    qs = NotifyRecipient.objects.filter(
+        dingtalk_task_id=task_id,
+        status=NOTIFY_RECIPIENT_STATUS_SENT,
+    )
+    recipients = list(qs)
+    affected: set[UUID] = set()
+    for row in recipients:
+        affected.add(row.message_id)
+        userid = row.dingtalk_userid
+        if userid in rejected_userids:
+            row.status = NOTIFY_RECIPIENT_STATUS_FAILED
+            row.error_code = NOTIFY_ERROR_DINGTALK_REJECTED
+            row.error = "钉钉回执: 无效用户或发送失败。"
+            row.updated_at = now
+            row.save(
+                update_fields=["status", "error_code", "error", "updated_at"],
+            )
+            continue
+        if userid in forbidden_by_code:
+            code = forbidden_by_code[userid]
+            row.status = NOTIFY_RECIPIENT_STATUS_FAILED
+            row.error_code = code
+            if code == NOTIFY_ERROR_DINGTALK_DUPLICATE:
+                row.error = "钉钉回执: 相同内容同人一天已发送。"
+            elif code == NOTIFY_ERROR_DINGTALK_DAILY_LIMIT:
+                row.error = "钉钉回执: 单应用对单人日上限。"
+            else:
+                row.error = "钉钉回执: 被流控过滤。"
+            row.updated_at = now
+            row.save(
+                update_fields=["status", "error_code", "error", "updated_at"],
+            )
+            continue
+        row.status = NOTIFY_RECIPIENT_STATUS_DELIVERED
+        row.delivered_at = now
+        row.error_code = ""
+        row.error = ""
+        row.updated_at = now
+        row.save(
+            update_fields=["status", "delivered_at", "error_code", "error", "updated_at"],
+        )
+    return affected
+
+
+def _string_id_set(raw: object) -> set[str]:
+    if not isinstance(raw, list):
+        return set()
+    result: set[str] = set()
+    for item in cast("list[object]", raw):
+        if isinstance(item, str) and item:
+            result.add(item)
+        elif isinstance(item, (int, float)) and not isinstance(item, bool):
+            result.add(str(int(item)))
+    return result
+
+
+def _forbidden_userid_codes(send_result: dict[str, object]) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    raw = send_result.get("forbidden_list")
+    if not isinstance(raw, list):
+        return mapping
+    for item_raw in cast("list[object]", raw):
+        if not isinstance(item_raw, dict):
+            continue
+        item = cast("dict[str, object]", item_raw)
+        userid_raw = item.get("userid")
+        if not isinstance(userid_raw, str) or not userid_raw:
+            continue
+        code_int = _parse_forbidden_code(item.get("code"))
+        if code_int == 143106:  # noqa: PLR2004 - 钉钉官方流控码。
+            mapping[userid_raw] = NOTIFY_ERROR_DINGTALK_DUPLICATE
+        elif code_int == 143105:  # noqa: PLR2004 - 钉钉官方流控码。
+            mapping[userid_raw] = NOTIFY_ERROR_DINGTALK_DAILY_LIMIT
+        else:
+            mapping[userid_raw] = NOTIFY_ERROR_DINGTALK_REJECTED
+    return mapping
+
+
+def _parse_forbidden_code(code_raw: object) -> int | None:
+    if isinstance(code_raw, bool):
+        return None
+    if isinstance(code_raw, (int, float)):
+        return int(code_raw)
+    if isinstance(code_raw, str) and code_raw.isdigit():
+        return int(code_raw)
+    return None
+
+
+def _maybe_rewrite_aggregate_after_reconcile(message: NotifyMessage) -> None:
+    """对账可能把 sent 改为 failed, 需把 completed 降为 partially_failed/failed。"""
+    message.refresh_from_db()
+    pending, throttled = _open_recipient_counts(message.id)
+    if pending + throttled > 0:
+        return
+    still_sent = NotifyRecipient.objects.filter(
+        message_id=message.id,
+        status=NOTIFY_RECIPIENT_STATUS_SENT,
+    ).exists()
+    if still_sent:
+        return
+    failed = message.recipient_failed
+    total = message.recipient_total
+    if failed <= 0:
+        new_status = NOTIFY_MESSAGE_STATUS_COMPLETED
+    elif failed >= total:
+        new_status = NOTIFY_MESSAGE_STATUS_FAILED
+    else:
+        new_status = NOTIFY_MESSAGE_STATUS_PARTIALLY_FAILED
+    if message.status == new_status:
+        return
+    now = timezone.now()
+    updates: dict[str, object] = {
+        "status": new_status,
+        "updated_at": now,
+    }
+    if message.completed_at is None and new_status in {
+        NOTIFY_MESSAGE_STATUS_COMPLETED,
+        NOTIFY_MESSAGE_STATUS_PARTIALLY_FAILED,
+        NOTIFY_MESSAGE_STATUS_FAILED,
+    }:
+        updates["completed_at"] = now
+    _ = NotifyMessage.objects.filter(id=message.id).update(**updates)

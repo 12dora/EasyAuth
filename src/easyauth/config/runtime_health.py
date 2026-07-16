@@ -13,6 +13,7 @@ STREAM_PROCESS_HEARTBEAT: Final = "stream_process"
 STREAM_ACK_HEARTBEAT: Final = "stream_ack"
 GRANT_CLEANUP_SUCCESS: Final = "grant_cleanup_success"
 DIRECTORY_SYNC_SUCCESS: Final = "directory_sync_success"
+NOTIFY_DELIVERY_SUCCESS: Final = "notify_delivery_success"
 
 
 @dataclass(frozen=True, slots=True)

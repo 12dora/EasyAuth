@@ -67,9 +67,18 @@ class DingTalkApiUnavailableError(DingTalkApiError):
 
 
 class DingTalkApiRequestError(DingTalkApiError):
-    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        errcode: int | None = None,
+    ) -> None:
         super().__init__(message)
+        # HTTP 层状态码(urlopen HTTPError); 与 oapi 业务 errcode 分离。
         self.status_code: int | None = status_code
+        # 旧版 oapi 响应体 errcode(如 90018/143103); HTTP 失败时为 None。
+        self.errcode: int | None = errcode
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,7 +296,7 @@ class DingTalkApiClient:
             errmsg = payload.get("errmsg")
             detail = errmsg if isinstance(errmsg, str) and errmsg else f"errcode={int(errcode)}"
             message = f"钉钉 oapi 业务错误: {detail}"
-            raise DingTalkApiRequestError(message, status_code=int(errcode))
+            raise DingTalkApiRequestError(message, errcode=int(errcode))
         return payload
 
     def _execute_json_request(

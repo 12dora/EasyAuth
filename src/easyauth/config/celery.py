@@ -8,6 +8,7 @@ from celery.signals import task_success
 from easyauth.config.runtime_health import (
     DIRECTORY_SYNC_SUCCESS,
     GRANT_CLEANUP_SUCCESS,
+    NOTIFY_DELIVERY_SUCCESS,
     mark_heartbeat,
 )
 
@@ -23,6 +24,7 @@ app.autodiscover_tasks()
 _SUCCESS_HEARTBEATS = {
     "easyauth.authentik.sync_dingtalk_directory": DIRECTORY_SYNC_SUCCESS,
     "easyauth.grants.cleanup_expired_grants": GRANT_CLEANUP_SUCCESS,
+    "easyauth.notify.deliver_message": NOTIFY_DELIVERY_SUCCESS,
 }
 
 

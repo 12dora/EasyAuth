@@ -396,6 +396,33 @@ def test_directory_removed_from_dingtalk_still_detailable(
     assert payload["manager"] is None
 
 
+def test_directory_removed_dt_ref_still_detailable_via_user_mirror(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """dt: 引用已从钉钉目录移除的用户: 经 UserMirror 兜底返回 200 active:false。"""
+    app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
+    _enable_directory(app)
+    _auth(monkeypatch, app)
+    _ = UserMirror.objects.create(
+        authentik_user_id="ak-removed-dt",
+        name="历史用户 DT",
+        dingtalk_corp_id=_CORP_ID,
+        dingtalk_userid="gone-via-dt",
+        status="departed",
+    )
+    request = RequestFactory().get("/", HTTP_AUTHORIZATION=_AUTH_HEADER)
+
+    response = directory_user_detail(request, _APP_KEY, "dt:gone-via-dt")
+
+    assert response.status_code == HTTPStatus.OK
+    payload = loads(response.content)
+    assert payload["user_id"] == "ak-removed-dt"
+    assert payload["dingtalk_user_id"] == "gone-via-dt"
+    assert payload["active"] is False
+    assert payload["departments"] == []
+    assert payload["manager"] is None
+
+
 def test_directory_users_filter_by_department_and_manager(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

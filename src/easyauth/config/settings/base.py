@@ -313,6 +313,7 @@ CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://localho
 CELERY_TASK_EAGER_PROPAGATES = True
 CELERY_TASK_ROUTES = {
     "easyauth.webhooks.deliver": {"queue": "webhooks"},
+    "easyauth.notify.deliver_message": {"queue": "notify"},
 }
 CELERY_IMPORTS = (
     "easyauth.tasks.grants",
@@ -323,6 +324,7 @@ CELERY_IMPORTS = (
     "easyauth.tasks.dingtalk_stream",
     "easyauth.tasks.connectors",
     "easyauth.tasks.outbox",
+    "easyauth.tasks.notify",
 )
 CELERY_BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
     "runtime-heartbeat": {
@@ -358,7 +360,37 @@ CELERY_BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
         "task": "easyauth.outbox.dispatch_pending",
         "schedule": float(os.environ.get("EASYAUTH_OUTBOX_DISPATCH_SECONDS", "5")),
     },
+    # 通知回执对账: sent → delivered/failed(第 3 篇 §5)。
+    "notify-reconcile-send-results": {
+        "task": "easyauth.notify.reconcile_send_results",
+        "schedule": float(os.environ.get("EASYAUTH_NOTIFY_RECONCILE_SECONDS", "60")),
+    },
+    # 通知历史清理: 默认 180 天保留(第 3 篇 §6)。
+    "notify-prune-messages": {
+        "task": "easyauth.notify.prune_messages",
+        "schedule": float(os.environ.get("EASYAUTH_NOTIFY_PRUNE_SECONDS", "86400")),
+    },
 }
+
+# 通知管道默认值(第 2 篇 §1、第 3 篇 §4/§5/§6)。
+EASYAUTH_NOTIFY_DEFAULT_DAILY_RECIPIENT_QUOTA = int(
+    os.environ.get("EASYAUTH_NOTIFY_DEFAULT_DAILY_RECIPIENT_QUOTA", "5000"),
+)
+EASYAUTH_NOTIFY_DEFAULT_RATE_PER_MINUTE = int(
+    os.environ.get("EASYAUTH_NOTIFY_DEFAULT_RATE_PER_MINUTE", "60"),
+)
+EASYAUTH_NOTIFY_RECONCILE_SECONDS = float(
+    os.environ.get("EASYAUTH_NOTIFY_RECONCILE_SECONDS", "60"),
+)
+EASYAUTH_NOTIFY_PRUNE_SECONDS = float(
+    os.environ.get("EASYAUTH_NOTIFY_PRUNE_SECONDS", "86400"),
+)
+EASYAUTH_NOTIFY_RETENTION_DAYS = int(
+    os.environ.get("EASYAUTH_NOTIFY_RETENTION_DAYS", "180"),
+)
+EASYAUTH_NOTIFY_RECONCILE_ENABLED = (
+    os.environ.get("EASYAUTH_NOTIFY_RECONCILE_ENABLED", "1") == "1"
+)
 
 EASYAUTH_HEALTH_REQUIRE_BACKGROUND = (
     os.environ.get("EASYAUTH_HEALTH_REQUIRE_BACKGROUND", "0") == "1"

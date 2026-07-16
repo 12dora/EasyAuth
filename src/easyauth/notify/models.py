@@ -104,6 +104,12 @@ class NotifyMessage(models.Model):
     title: models.CharField[str, str] = models.CharField(max_length=100, blank=True)
     content: models.TextField[str, str] = models.TextField()
     deeplink_url: models.CharField[str, str] = models.CharField(max_length=512, blank=True)
+    # action_card 按钮文案; 空串表示投递时回落默认「查看详情」(契约 §N2)。
+    deeplink_title: models.CharField[str, str] = models.CharField(
+        max_length=20,
+        blank=True,
+        default="",
+    )
     # APP 内幂等键: 同 (app, dedup_key) 只受理一次, 永久有效。
     dedup_key: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
     # 规范化载荷 sha256; dedup_key 命中但 hash 不同 → 409 CONFLICT。
