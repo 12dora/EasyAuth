@@ -63,6 +63,7 @@ INSTALLED_APPS: list[str] = [
     "easyauth.integrations.apps.IntegrationsConfig",
     "easyauth.workflows.apps.WorkflowsConfig",
     "easyauth.lifecycle.apps.LifecycleConfig",
+    "easyauth.notify.apps.NotifyConfig",
     "easyauth.portal.apps.PortalConfig",
     "easyauth.admin_console.apps.AdminConsoleConfig",
 ]

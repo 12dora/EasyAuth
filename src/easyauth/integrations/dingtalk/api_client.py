@@ -16,16 +16,26 @@ from django.core.cache import cache
 from easyauth.applications.integration_settings import dingtalk_runtime_config
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
     from types import TracebackType
 
-# 直接使用钉钉新版 v1.0 API(§7 决策 2), 不接旧 topapi。
+# 默认走钉钉新版 v1.0 API(api.dingtalk.com); 审批等能力均有新版。
+# 例外: 工作通知仅有旧版 oapi topapi(asyncsend_v2 / getsendprogress / getsendresult),
+# 官方无 api.dingtalk.com 新版替代——见 docs/design/platform-directory-notify/
+# 04-钉钉工作通知调研结论.md §1。oapi 例外范围仅限本文件三个工作通知方法。
 DINGTALK_API_BASE_URL: Final = "https://api.dingtalk.com"
+DINGTALK_OAPI_BASE_URL: Final = "https://oapi.dingtalk.com"
 ACCESS_TOKEN_CACHE_KEY_PREFIX: Final = "easyauth:dingtalk:access-token"  # noqa: S105
 # token 提前于钉钉返回的有效期刷新, 避免边界过期。
 ACCESS_TOKEN_EXPIRY_MARGIN_SECONDS: Final = 120
 DINGTALK_NOT_CONFIGURED_MESSAGE: Final = "钉钉集成凭证未配置。"
 MAX_JSON_RESPONSE_BYTES: Final = 1024 * 1024
 MAX_ERROR_RESPONSE_BYTES: Final = 4096
+OAPI_ASYNC_SEND_PATH: Final = "/topapi/message/corpconversation/asyncsend_v2"
+OAPI_GET_SEND_PROGRESS_PATH: Final = "/topapi/message/corpconversation/getsendprogress"
+OAPI_GET_SEND_RESULT_PATH: Final = "/topapi/message/corpconversation/getsendresult"
+# 官方 userid_list 上限, 同时保住 getsendresult 回执能力(第 4 篇 §1.1 / §2.2)。
+WORK_NOTIFICATION_MAX_USERIDS: Final = 100
 
 type DingTalkJson = dict[str, object]
 
@@ -166,6 +176,63 @@ class DingTalkApiClient:
             raise DingTalkApiRequestError(message)
         return cast("DingTalkJson", result)
 
+    def send_work_notification(
+        self,
+        *,
+        agent_id: int | str,
+        userid_list: Sequence[str],
+        msg: DingTalkJson,
+    ) -> str:
+        """发送工作通知(旧版 oapi asyncsend_v2)。返回 task_id 字符串。
+
+        oapi 例外说明见模块顶部注释与第 4 篇 §1。
+        """
+        if not userid_list:
+            message = "工作通知 userid_list 不能为空。"
+            raise DingTalkApiRequestError(message)
+        if len(userid_list) > WORK_NOTIFICATION_MAX_USERIDS:
+            message = (
+                f"工作通知 userid_list 不得超过 {WORK_NOTIFICATION_MAX_USERIDS} 个。"
+            )
+            raise DingTalkApiRequestError(message)
+        payload = self._request_oapi_json(
+            OAPI_ASYNC_SEND_PATH,
+            body={
+                "agent_id": agent_id,
+                "userid_list": ",".join(userid_list),
+                "msg": msg,
+            },
+        )
+        task_id = payload.get("task_id")
+        if isinstance(task_id, bool) or not isinstance(task_id, (int, str)):
+            message = "钉钉工作通知响应缺少 task_id。"
+            raise DingTalkApiRequestError(message)
+        return str(task_id)
+
+    def get_send_progress(self, *, agent_id: int | str, task_id: int | str) -> DingTalkJson:
+        """查询工作通知发送进度(旧版 oapi getsendprogress)。"""
+        payload = self._request_oapi_json(
+            OAPI_GET_SEND_PROGRESS_PATH,
+            body={"agent_id": agent_id, "task_id": task_id},
+        )
+        progress = payload.get("progress")
+        if not isinstance(progress, dict):
+            message = "钉钉发送进度响应缺少 progress。"
+            raise DingTalkApiRequestError(message)
+        return cast("DingTalkJson", progress)
+
+    def get_send_result(self, *, agent_id: int | str, task_id: int | str) -> DingTalkJson:
+        """查询工作通知发送结果(旧版 oapi getsendresult)。"""
+        payload = self._request_oapi_json(
+            OAPI_GET_SEND_RESULT_PATH,
+            body={"agent_id": agent_id, "task_id": task_id},
+        )
+        send_result = payload.get("send_result")
+        if not isinstance(send_result, dict):
+            message = "钉钉发送结果响应缺少 send_result。"
+            raise DingTalkApiRequestError(message)
+        return cast("DingTalkJson", send_result)
+
     def _request_json(
         self,
         method: str,
@@ -183,6 +250,55 @@ class DingTalkApiClient:
         headers = {"Content-Type": "application/json"}
         if authenticated:
             headers["x-acs-dingtalk-access-token"] = self.get_access_token(_deadline=deadline)
+        return self._execute_json_request(
+            method,
+            url,
+            headers=headers,
+            body=body,
+            deadline=deadline,
+        )
+
+    def _request_oapi_json(
+        self,
+        path: str,
+        *,
+        body: DingTalkJson,
+        _deadline: float | None = None,
+    ) -> DingTalkJson:
+        # 旧版 oapi: access_token 走查询参数(第 4 篇 §1), 不走 x-acs 头。
+        deadline = monotonic() + self._timeout_seconds if _deadline is None else _deadline
+        token = self.get_access_token(_deadline=deadline)
+        url = f"{DINGTALK_OAPI_BASE_URL}{path}?{urlencode({'access_token': token})}"
+        headers = {"Content-Type": "application/json"}
+        payload = self._execute_json_request(
+            "POST",
+            url,
+            headers=headers,
+            body=body,
+            deadline=deadline,
+        )
+        errcode = payload.get("errcode")
+        if errcode is None:
+            return payload
+        if isinstance(errcode, bool) or not isinstance(errcode, (int, float)):
+            message = "钉钉 oapi 响应 errcode 非法。"
+            raise DingTalkApiRequestError(message)
+        if int(errcode) != 0:
+            errmsg = payload.get("errmsg")
+            detail = errmsg if isinstance(errmsg, str) and errmsg else f"errcode={int(errcode)}"
+            message = f"钉钉 oapi 业务错误: {detail}"
+            raise DingTalkApiRequestError(message, status_code=int(errcode))
+        return payload
+
+    def _execute_json_request(
+        self,
+        method: str,
+        url: str,
+        *,
+        headers: dict[str, str],
+        body: DingTalkJson | None,
+        deadline: float,
+    ) -> DingTalkJson:
         data = dumps(body).encode("utf-8") if body is not None else None
         request = Request(url, data=data, headers=headers, method=method)  # noqa: S310 - 常量 https 基址。
         try:
