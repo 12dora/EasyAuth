@@ -32,7 +32,7 @@ _HTTP_SERVER_ERROR_MAX: Final = 600
 NOTIFY_TEMPLATE_TEXT: Final = "text"
 NOTIFY_TEMPLATE_MARKDOWN: Final = "markdown"
 NOTIFY_TEMPLATE_ACTION_CARD: Final = "action_card"
-# 钉钉 userid 引用前缀: "dt:<dingtalk_user_id>"。
+# Legacy-only/deprecated 输入识别前缀。新接入不得据此构造 ref, 必须消费目录返回的 opaque ref。
 DINGTALK_REF_PREFIX: Final = "dt:"
 
 
@@ -176,6 +176,8 @@ class EasyAuthAppClient:
     ) -> dict[str, Any]:
         """搜索/分页拉取用户目录。GET {app_base}/directory/users。
 
+        department_id 参数应传目录条目返回的 opaque department_ref;
+        manager_id 参数应传目录条目返回的 opaque user_ref, 不得自行构造。
         首屏省略 snapshot_id, 后续页传首屏 directory_snapshot.snapshot_id 以固定快照;
         快照变化时服务端返回 409 CONFLICT, 客户端不会自动重试。
         """
@@ -199,7 +201,8 @@ class EasyAuthAppClient:
     def get_directory_user(self, user_ref: str) -> dict[str, Any]:
         """用户详情(含主管摘要)。
 
-        user_ref 为 user_id 或 "dt:<钉钉userid>"。
+        user_ref 必须消费目录响应返回的 opaque user_ref 并原样回传。
+        裸 user_id / "dt:<id>" 仅为 legacy-only/deprecated 兼容输入, 不得新构造。
         GET {app_base}/directory/users/{user_ref}
         """
         url = f"{self._app_base()}/directory/users/{quote(user_ref, safe='')}"
@@ -208,6 +211,7 @@ class EasyAuthAppClient:
     def get_directory_user_manager(self, user_ref: str) -> dict[str, Any]:
         """直接主管。
 
+        user_ref 使用目录响应返回的 opaque user_ref, 不得自行构造。
         GET {app_base}/directory/users/{user_ref}/manager
         无主管时服务端返回 404 NOT_FOUND(见契约 §D3)。
         """
@@ -215,7 +219,11 @@ class EasyAuthAppClient:
         return self._request_json(url, method="GET")
 
     def list_directory_user_subordinates(self, user_ref: str) -> dict[str, Any]:
-        """直接下属(不分页, 全量)。GET {app_base}/directory/users/{user_ref}/subordinates"""
+        """直接下属(不分页, 全量)。
+
+        user_ref 使用目录响应返回的 opaque user_ref, 不得自行构造。
+        GET {app_base}/directory/users/{user_ref}/subordinates
+        """
         url = f"{self._app_base()}/directory/users/{quote(user_ref, safe='')}/subordinates"
         return self._request_json(url, method="GET")
 
@@ -227,7 +235,8 @@ class EasyAuthAppClient:
         """部门列表。
 
         parent_id 省略 → 全量扁平列表(客户端自建树);
-        传入 → 该部门直接子部门。GET {app_base}/directory/departments
+        传入 → 使用目录响应返回的 opaque department_ref 查询该部门直接子部门, 不得自行构造。
+        GET {app_base}/directory/departments
         """
         if parent_id is not None:
             query = urlencode({"parent_id": parent_id})
@@ -252,8 +261,10 @@ class EasyAuthAppClient:
     ) -> dict[str, Any]:
         """发送钉钉工作通知(异步受理)。POST {app_base}/notify/messages。
 
-        recipients 元素为 user_id 或 "dt:<钉钉userid>"; template 取
-        "text" | "markdown" | "action_card"。返回 {"message_id", "accepted", ...}。
+        recipients 元素必须使用目录响应返回并由业务后端保存的 opaque user_ref。
+        裸 user_id / "dt:<id>" 仅为 legacy-only/deprecated 兼容输入, 不得新构造。
+        template 取 "text" | "markdown" | "action_card"。
+        返回 {"message_id", "accepted", ...}。
         幂等: 相同 dedup_key 重复调用返回同一 message_id 且 accepted=False。
         deeplink_title 为 action_card 按钮文案; 省略时服务端缺省为「查看详情」。
         """
