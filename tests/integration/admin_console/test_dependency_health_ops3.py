@@ -47,6 +47,7 @@ class _HealthResponse(BaseModel):
     authentik: _HealthComponent
     authentik_directory: _HealthComponent
     dingtalk: _HealthComponent
+    dingtalk_notify: _HealthComponent
     celery: _HealthComponent
 
 
@@ -92,6 +93,7 @@ def test_ops3_console_dependency_health_returns_latest_snapshots_without_secrets
     assert payload.authentik.status == "healthy"
     assert payload.authentik_directory.status == "unknown"
     assert payload.dingtalk.status == "warning"
+    assert payload.dingtalk_notify.status == "unknown"
     assert payload.celery.status == "healthy"
     assert items["authentik"].status == "healthy"
     assert items["authentik"].summary == "最近同步成功"
