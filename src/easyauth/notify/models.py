@@ -68,6 +68,11 @@ NOTIFY_RECIPIENT_STATUS_VALUES: Final[tuple[str, ...]] = (
     NOTIFY_RECIPIENT_STATUS_FAILED,
     NOTIFY_RECIPIENT_STATUS_THROTTLED,
 )
+# scoped user_ref v1 的三个目录字段各允许 128 个 Unicode 字符。按每字符最多
+# 4 UTF-8 bytes、无 padding base64url 计算, 每段最多 683 字符, 加 dt:v1 与分隔符
+# 共 2057 字符。4096 完整覆盖 v1, 并为后续引用版本保留约一倍的协议余量。
+NOTIFY_SCOPED_REF_V1_MAX_CHARS: Final = 2057
+NOTIFY_RAW_REF_MAX_CHARS: Final = 4096
 
 # ---- error_code 枚举(契约 §N4) ----
 NOTIFY_ERROR_USER_NOT_FOUND: Final = "USER_NOT_FOUND"
@@ -206,8 +211,8 @@ class NotifyRecipient(models.Model):
         on_delete=models.CASCADE,
         related_name="recipients",
     )
-    # 调用方原始引用(原样回显): "authentik-uid" 或 "dt:钉钉userid"
-    raw_ref: models.CharField[str, str] = models.CharField(max_length=200)
+    # 调用方 opaque 原始引用(原样回显): Authentik sub、legacy dt 或 canonical scoped dt ref。
+    raw_ref: models.CharField[str, str] = models.CharField(max_length=NOTIFY_RAW_REF_MAX_CHARS)
     # 解析结果: 绑定的 UserMirror(可空: dt: 引用可能没有登录过的镜像行)
     user: models.ForeignKey[UserMirror | None, UserMirror | None] = models.ForeignKey(
         UserMirror,
@@ -258,9 +263,26 @@ class NotifyRecipient(models.Model):
     class Meta:
         constraints: ClassVar[list[models.BaseConstraint]] = [
             models.UniqueConstraint(
+                fields=[
+                    "message",
+                    "dingtalk_source_slug",
+                    "dingtalk_corp_id",
+                    "dingtalk_userid",
+                ],
+                condition=(
+                    ~Q(dingtalk_userid="")
+                    & ~Q(dingtalk_source_slug="")
+                    & ~Q(dingtalk_corp_id="")
+                ),
+                name="notify_recipient_scoped_target_unique",
+            ),
+            models.UniqueConstraint(
                 fields=["message", "dingtalk_userid"],
-                condition=~Q(dingtalk_userid=""),
-                name="notify_recipient_target_unique",
+                condition=(
+                    ~Q(dingtalk_userid="")
+                    & (Q(dingtalk_source_slug="") | Q(dingtalk_corp_id=""))
+                ),
+                name="notify_recipient_legacy_target_unique",
             ),
             models.CheckConstraint(
                 condition=Q(status__in=NOTIFY_RECIPIENT_STATUS_VALUES),

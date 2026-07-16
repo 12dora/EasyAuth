@@ -45,6 +45,7 @@ from easyauth.notify.models import (
     NOTIFY_MESSAGE_STATUS_PARTIALLY_FAILED,
     NOTIFY_MESSAGE_STATUS_PENDING,
     NOTIFY_MESSAGE_STATUS_SENDING,
+    NOTIFY_RAW_REF_MAX_CHARS,
     NOTIFY_RECIPIENT_STATUS_DELIVERED,
     NOTIFY_RECIPIENT_STATUS_FAILED,
     NOTIFY_RECIPIENT_STATUS_PENDING,
@@ -85,7 +86,6 @@ NOTIFY_DEEPLINK_URL_MAX_CHARS: Final = 500
 NOTIFY_DEEPLINK_TITLE_MAX_CHARS: Final = 20
 NOTIFY_DEDUP_KEY_MAX_CHARS: Final = 128
 NOTIFY_BIZ_TAG_MAX_CHARS: Final = 64
-NOTIFY_RAW_REF_MAX_CHARS: Final = 200
 DEFAULT_DEEPLINK_TITLE: Final = "查看详情"
 DEFAULT_DAILY_RECIPIENT_QUOTA: Final = 5000
 SHANGHAI_TZ: Final = ZoneInfo("Asia/Shanghai")
@@ -134,7 +134,7 @@ DEEPLINK_TITLE_TOO_LONG_MESSAGE: Final = "deeplink_title 不得超过 20 字符�
 DEDUP_KEY_TOO_LONG_MESSAGE: Final = "dedup_key 不得超过 128 字符。"
 BIZ_TAG_TOO_LONG_MESSAGE: Final = "biz_tag 不得超过 64 字符。"
 MSG_TOO_LARGE_MESSAGE: Final = "组装后的钉钉 msg JSON 超过 2048 字节上限。"
-RAW_REF_TOO_LONG_MESSAGE: Final = "收件人引用不得超过 200 字符。"
+RAW_REF_TOO_LONG_MESSAGE: Final = f"收件人引用不得超过 {NOTIFY_RAW_REF_MAX_CHARS} 字符。"
 DINGTALK_AGENT_MISSING_MESSAGE: Final = "钉钉工作通知 agent_id 未配置。"
 NOTIFY_CHANNEL_MISSING_MESSAGE: Final = "应用未配置可用的钉钉通知通道。"
 
@@ -237,7 +237,7 @@ def compute_payload_hash(  # noqa: PLR0913 - 幂等 hash 规范化字段全集(�
 
 
 def resolve_recipients(raw_refs: Sequence[str]) -> list[ResolvedRecipient]:
-    """解析并按钉钉 userid 合并去重; 解析失败不阻塞, 直接成为 failed 候选。"""
+    """解析并按目录作用域 + userid 去重; 解析失败不阻塞, 直接成为 failed 候选。"""
     if not (NOTIFY_MIN_RECIPIENTS <= len(raw_refs) <= NOTIFY_MAX_RECIPIENTS):
         raise NotifyAcceptError(
             kind="validation_error",

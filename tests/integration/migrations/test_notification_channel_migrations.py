@@ -102,7 +102,7 @@ _AT_0026_TARGETS = [
 ]
 _AFTER_TARGETS = [
     ("applications", "0027_notification_channel_directory_scope"),
-    ("notify", "0004_notify_recipient_reconcile_cursor"),
+    ("notify", "0005_scoped_recipient_identity"),
 ]
 
 

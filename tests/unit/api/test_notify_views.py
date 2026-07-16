@@ -25,6 +25,7 @@ from easyauth.notify.models import (
     CREDENTIAL_TYPE_STATIC_TOKEN,
     NOTIFY_ERROR_USER_INACTIVE,
     NOTIFY_MESSAGE_STATUS_PARTIALLY_FAILED,
+    NOTIFY_RAW_REF_MAX_CHARS,
     NOTIFY_RECIPIENT_STATUS_DELIVERED,
     NOTIFY_RECIPIENT_STATUS_FAILED,
     NOTIFY_TEMPLATE_ACTION_CARD,
@@ -314,6 +315,33 @@ def test_invalid_recipients_type_audits_rejected(monkeypatch: pytest.MonkeyPatch
     meta = rejected.get().metadata
     assert meta["error_code"] == "VALIDATION_ERROR"
     assert meta["recipient_count"] == 0
+
+
+def test_raw_ref_over_storage_limit_returns_422_without_partial_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache.clear()
+    app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
+    _enable_notify(app)
+    _auth(monkeypatch, app)
+    body = {
+        "recipients": ["x" * (NOTIFY_RAW_REF_MAX_CHARS + 1)],
+        "template": "text",
+        "content": "too long recipient",
+    }
+
+    response = notify_messages_create(_post(body), _APP_KEY)
+
+    payload = loads(response.content)
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert payload["error"]["code"] == "VALIDATION_ERROR"
+    assert payload["error"]["details"]["field"] == "recipients"
+    assert str(NOTIFY_RAW_REF_MAX_CHARS) in payload["error"]["message"]
+    assert NotifyMessage.objects.filter(app=app).exists() is False
+    assert NotifyRecipient.objects.exists() is False
+    rejected = AuditLog.objects.get(event_type="app_notify_rejected")
+    assert rejected.metadata["error_code"] == "VALIDATION_ERROR"
+    assert rejected.metadata["recipient_count"] == 1
 
 
 def test_error_code_enum_accept_time(monkeypatch: pytest.MonkeyPatch) -> None:
