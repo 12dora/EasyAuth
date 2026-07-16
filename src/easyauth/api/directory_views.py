@@ -12,6 +12,13 @@ from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 
+from easyauth.accounts.directory_references import (
+    AmbiguousDirectoryReferenceError,
+    InvalidDirectoryReferenceError,
+    resolve_department_scope,
+    resolve_directory_user,
+    resolve_user_mirror,
+)
 from easyauth.accounts.directory_snapshot import build_directory_snapshot
 from easyauth.accounts.models import DingTalkDepartmentMirror, DingTalkUserMirror, UserMirror
 from easyauth.api.directory_payloads import (
@@ -20,10 +27,7 @@ from easyauth.api.directory_payloads import (
     build_user_detail,
     build_user_list_items,
     department_item,
-    parse_user_ref,
     removed_directory_user_item,
-    resolve_dingtalk_user,
-    resolve_user_mirror,
 )
 from easyauth.api.errors import ErrorCode, JsonValue, build_error_response
 from easyauth.api.pagination import Pagination, pagination_item, total_pages
@@ -116,7 +120,10 @@ def directory_users(request: HttpRequest, app_key: str) -> JsonResponse:
         )
 
     page = _page_request(request, max_page_size=_MAX_USERS_PAGE_SIZE)
-    queryset = _filtered_users(request)
+    try:
+        queryset = _filtered_users(request)
+    except (AmbiguousDirectoryReferenceError, InvalidDirectoryReferenceError) as error:
+        return _reference_error_response(error)
     total_items = queryset.count()
     rows = list(queryset[page.start : page.stop])
     data_items: list[JsonValue] = build_user_list_items(rows)
@@ -164,7 +171,10 @@ def directory_user_detail(request: HttpRequest, app_key: str, user_ref: str) -> 
         case JsonResponse() as response:
             return response
 
-    detail = _resolve_user_detail(user_ref)
+    try:
+        detail = _resolve_user_detail(user_ref)
+    except (AmbiguousDirectoryReferenceError, InvalidDirectoryReferenceError) as error:
+        return _reference_error_response(error)
     if detail is None:
         return _not_found_response(_USER_NOT_FOUND_MESSAGE, reason="user_not_found")
     _record_directory_audit(
@@ -185,7 +195,10 @@ def directory_user_manager(request: HttpRequest, app_key: str, user_ref: str) ->
         case JsonResponse() as response:
             return response
 
-    subject = _resolve_subject(user_ref)
+    try:
+        subject = _resolve_subject(user_ref)
+    except (AmbiguousDirectoryReferenceError, InvalidDirectoryReferenceError) as error:
+        return _reference_error_response(error)
     if subject is None:
         return _not_found_response(_USER_NOT_FOUND_MESSAGE, reason="user_not_found")
     manager = _resolve_manager(subject)
@@ -214,18 +227,23 @@ def directory_user_subordinates(
         case JsonResponse() as response:
             return response
 
-    subject = _resolve_subject(user_ref)
+    try:
+        subject = _resolve_subject(user_ref)
+    except (AmbiguousDirectoryReferenceError, InvalidDirectoryReferenceError) as error:
+        return _reference_error_response(error)
     if subject is None:
         return _not_found_response(_USER_NOT_FOUND_MESSAGE, reason="user_not_found")
     manager_dingtalk_id = _subject_dingtalk_user_id(subject)
-    if not manager_dingtalk_id:
+    if not manager_dingtalk_id or subject.dingtalk_user is None:
         items: list[JsonValue] = []
     else:
         rows = list(
             DingTalkUserMirror.objects.filter(
+                source_slug=subject.dingtalk_user.source_slug,
+                corp_id=subject.dingtalk_user.corp_id,
                 manager_userid=manager_dingtalk_id,
                 status=DINGTALK_STATUS_ACTIVE,
-            ).order_by("name", "user_id"),
+            ).order_by("name", "source_slug", "corp_id", "user_id"),
         )
         items = build_user_list_items(rows)
     payload: dict[str, JsonValue] = {"data": items}
@@ -247,9 +265,30 @@ def directory_departments(request: HttpRequest, app_key: str) -> JsonResponse:
         case JsonResponse() as response:
             return response
 
-    queryset = DingTalkDepartmentMirror.objects.order_by("order", "dept_id")
+    queryset = DingTalkDepartmentMirror.objects.order_by(
+        "order",
+        "source_slug",
+        "corp_id",
+        "dept_id",
+    )
     if "parent_id" in request.GET:
-        queryset = queryset.filter(parent_id=request.GET.get("parent_id", ""))
+        parent_ref = request.GET.get("parent_id", "")
+        if parent_ref == "":
+            queryset = queryset.filter(parent_id="")
+        else:
+            try:
+                scope = resolve_department_scope(parent_ref)
+            except (AmbiguousDirectoryReferenceError, InvalidDirectoryReferenceError) as error:
+                return _reference_error_response(error)
+            if scope is None:
+                queryset = DingTalkDepartmentMirror.objects.none()
+            else:
+                source_slug, corp_id, parent_id = scope
+                queryset = queryset.filter(
+                    source_slug=source_slug,
+                    corp_id=corp_id,
+                    parent_id=parent_id,
+                )
     rows = list(queryset)
     department_items: list[JsonValue] = [department_item(row) for row in rows]
     payload: dict[str, JsonValue] = {"data": department_items}
@@ -349,14 +388,25 @@ def _filtered_users(request: HttpRequest) -> QuerySet[DingTalkUserMirror]:
         )
     department_id = request.GET.get("department_id", "").strip()
     if department_id:
-        queryset = _filter_by_department(queryset, department_id)
+        department_scope = resolve_department_scope(department_id)
+        if department_scope is None:
+            return DingTalkUserMirror.objects.none()
+        source_slug, corp_id, resolved_department_id = department_scope
+        queryset = _filter_by_department(
+            queryset.filter(source_slug=source_slug, corp_id=corp_id),
+            resolved_department_id,
+        )
     manager_id = request.GET.get("manager_id", "").strip()
     if manager_id:
-        manager_dingtalk_id = _resolve_manager_filter_id(manager_id)
-        if manager_dingtalk_id is None:
+        manager = resolve_directory_user(manager_id)
+        if manager is None:
             return DingTalkUserMirror.objects.none()
-        queryset = queryset.filter(manager_userid=manager_dingtalk_id)
-    return queryset.order_by("name", "user_id")
+        queryset = queryset.filter(
+            source_slug=manager.source_slug,
+            corp_id=manager.corp_id,
+            manager_userid=manager.user_id,
+        )
+    return queryset.order_by("name", "source_slug", "corp_id", "user_id")
 
 
 def _filter_by_department(
@@ -370,21 +420,8 @@ def _filter_by_department(
     return queryset.filter(department_ids__icontains=f'"{department_id}"')
 
 
-def _resolve_manager_filter_id(manager_id: str) -> str | None:
-    kind, identifier = parse_user_ref(manager_id)
-    if not identifier:
-        return None
-    if kind == "dingtalk":
-        exists = DingTalkUserMirror.objects.filter(user_id=identifier).exists()
-        return identifier if exists else None
-    user = UserMirror.objects.filter(authentik_user_id=identifier).first()
-    if user is None or not user.dingtalk_userid:
-        return None
-    return user.dingtalk_userid
-
-
 def _resolve_user_detail(user_ref: str) -> dict[str, JsonValue] | None:
-    dingtalk_user = resolve_dingtalk_user(user_ref)
+    dingtalk_user = resolve_directory_user(user_ref)
     if dingtalk_user is not None:
         return build_user_detail(dingtalk_user)
     # 边界: 曾登录但钉钉目录已无此人 → 详情仍可查(与 D3/D4 subject 解析口径一致,
@@ -402,7 +439,7 @@ class _Subject:
 
 
 def _resolve_subject(user_ref: str) -> _Subject | None:
-    dingtalk_user = resolve_dingtalk_user(user_ref)
+    dingtalk_user = resolve_directory_user(user_ref)
     if dingtalk_user is not None:
         return _Subject(dingtalk_user=dingtalk_user, user_mirror=None)
     user = resolve_user_mirror(user_ref)
@@ -426,6 +463,7 @@ def _resolve_manager(subject: _Subject) -> DingTalkUserMirror | None:
             return None
         return (
             DingTalkUserMirror.objects.filter(
+                source_slug=subject.dingtalk_user.source_slug,
                 corp_id=subject.dingtalk_user.corp_id,
                 user_id=manager_userid,
             )
@@ -437,14 +475,13 @@ def _resolve_manager(subject: _Subject) -> DingTalkUserMirror | None:
     manager_userid = (subject.user_mirror.manager_userid or "").strip()
     if not manager_userid:
         return None
-    return (
+    rows = list(
         DingTalkUserMirror.objects.filter(
             corp_id=subject.user_mirror.dingtalk_corp_id,
             user_id=manager_userid,
-        )
-        .order_by("source_slug")
-        .first()
+        ).order_by("source_slug", "corp_id", "user_id")[:2],
     )
+    return rows[0] if len(rows) == 1 else None
 
 
 def _page_request(request: HttpRequest, *, max_page_size: int) -> _PageRequest:
@@ -646,6 +683,32 @@ def _snapshot_conflict_response(
             },
         ),
         status=HTTPStatus.CONFLICT,
+    )
+
+
+def _reference_error_response(
+    error: AmbiguousDirectoryReferenceError | InvalidDirectoryReferenceError,
+) -> JsonResponse:
+    if isinstance(error, AmbiguousDirectoryReferenceError):
+        return json_response(
+            build_error_response(
+                ErrorCode.CONFLICT,
+                "目录引用在多个企业作用域中存在, 请使用 scoped ref。",
+                {
+                    "reason": f"ambiguous_{error.reference_type}_ref",
+                    "reference": error.reference,
+                    "candidate_refs": list(error.candidate_refs),
+                },
+            ),
+            status=HTTPStatus.CONFLICT,
+        )
+    return json_response(
+        build_error_response(
+            ErrorCode.VALIDATION_ERROR,
+            str(error),
+            {"reason": "invalid_directory_ref"},
+        ),
+        status=HTTPStatus.UNPROCESSABLE_ENTITY,
     )
 
 

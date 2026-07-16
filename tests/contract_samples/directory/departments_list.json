@@ -1,7 +1,7 @@
 {
   "data": [
-    {"department_id": "1", "parent_id": "", "name": "杰发科技", "order": 0},
-    {"department_id": "460001", "parent_id": "1", "name": "研发部", "order": 10}
+    {"department_id": "1", "source_slug": "dingtalk", "corp_id": "corp-demo", "department_ref": "dept:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:MQ", "parent_id": "", "name": "杰发科技", "order": 0},
+    {"department_id": "460001", "source_slug": "dingtalk", "corp_id": "corp-demo", "department_ref": "dept:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:NDYwMDAx", "parent_id": "1", "name": "研发部", "order": 10}
   ],
   "directory_snapshot": {
     "snapshot_id": "e92bef9aeb348717720aca57826f92586038472b630f5a0b3e403d93cbbd61ac",

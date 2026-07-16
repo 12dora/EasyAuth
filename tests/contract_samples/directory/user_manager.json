@@ -1,6 +1,9 @@
 {
   "user_id": null,
   "dingtalk_user_id": "manager8836",
+  "source_slug": "dingtalk",
+  "corp_id": "corp-demo",
+  "user_ref": "dt:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:bWFuYWdlcjg4MzY",
   "name": "张主管",
   "avatar_url": "",
   "title": "研发经理",
@@ -9,7 +12,7 @@
   "employee_number": "E0001",
   "status": "active",
   "departments": [
-    {"department_id": "460001", "name": "研发部"}
+    {"department_id": "460001", "source_slug": "dingtalk", "corp_id": "corp-demo", "department_ref": "dept:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:NDYwMDAx", "name": "研发部"}
   ],
   "active": true,
   "directory_snapshot": {

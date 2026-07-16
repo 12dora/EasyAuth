@@ -11,6 +11,10 @@ from django.core.cache import cache
 from django.test import RequestFactory
 from django.utils import timezone
 
+from easyauth.accounts.directory_references import (
+    build_department_ref,
+    build_dingtalk_user_ref,
+)
 from easyauth.accounts.models import (
     DingTalkDepartmentMirror,
     DingTalkDirectorySyncState,
@@ -36,6 +40,7 @@ _SOURCE = "dingtalk"
 _APP_KEY = "easyproject"
 _AUTH_HEADER = "Bearer eat_directory_test"
 _CACHE_CONTROL = "private, max-age=60"
+_EXPECTED_AMBIGUITY_CANDIDATES = 2
 
 
 def _load_sample(name: str) -> dict[str, Any]:
@@ -635,6 +640,188 @@ def test_directory_users_filter_by_department_and_manager(
         "user0456",
     }
     assert [item["dingtalk_user_id"] for item in q_payload["data"]] == ["user0123"]
+
+
+def test_multi_corp_scoped_refs_prevent_cross_corp_user_and_relationship_mix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
+    _enable_directory(app)
+    _auth(monkeypatch, app)
+    for corp_id, suffix in (("corp-a", "甲"), ("corp-b", "乙")):
+        _ = DingTalkDepartmentMirror.objects.create(
+            source_slug=_SOURCE,
+            corp_id=corp_id,
+            dept_id="shared-dept",
+            name=f"共享部门{suffix}",
+        )
+        _ = DingTalkUserMirror.objects.create(
+            source_slug=_SOURCE,
+            corp_id=corp_id,
+            user_id="shared-manager",
+            name=f"主管{suffix}",
+            department_ids=["shared-dept"],
+            status="active",
+        )
+        _ = DingTalkUserMirror.objects.create(
+            source_slug=_SOURCE,
+            corp_id=corp_id,
+            user_id="shared-user",
+            name="相同姓名",
+            department_ids=["shared-dept"],
+            manager_userid="shared-manager",
+            status="active",
+        )
+    _ = DingTalkUserMirror.objects.create(
+        source_slug=_SOURCE,
+        corp_id="corp-a",
+        user_id="unique-user",
+        name="旧引用唯一用户",
+        status="active",
+    )
+    user_a_ref = build_dingtalk_user_ref(
+        source_slug=_SOURCE,
+        corp_id="corp-a",
+        user_id="shared-user",
+    )
+    manager_a_ref = build_dingtalk_user_ref(
+        source_slug=_SOURCE,
+        corp_id="corp-a",
+        user_id="shared-manager",
+    )
+    dept_a_ref = build_department_ref(
+        source_slug=_SOURCE,
+        corp_id="corp-a",
+        department_id="shared-dept",
+    )
+
+    ambiguous_detail = directory_user_detail(
+        RequestFactory().get("/", HTTP_AUTHORIZATION=_AUTH_HEADER),
+        _APP_KEY,
+        "dt:shared-user",
+    )
+    scoped_detail = directory_user_detail(
+        RequestFactory().get("/", HTTP_AUTHORIZATION=_AUTH_HEADER),
+        _APP_KEY,
+        user_a_ref,
+    )
+    scoped_manager = directory_user_manager(
+        RequestFactory().get("/", HTTP_AUTHORIZATION=_AUTH_HEADER),
+        _APP_KEY,
+        user_a_ref,
+    )
+    scoped_subordinates = directory_user_subordinates(
+        RequestFactory().get("/", HTTP_AUTHORIZATION=_AUTH_HEADER),
+        _APP_KEY,
+        manager_a_ref,
+    )
+    ambiguous_department = directory_users(
+        RequestFactory().get(
+            "/",
+            {"department_id": "shared-dept"},
+            HTTP_AUTHORIZATION=_AUTH_HEADER,
+        ),
+        _APP_KEY,
+    )
+    scoped_department = directory_users(
+        RequestFactory().get(
+            "/",
+            {"department_id": dept_a_ref},
+            HTTP_AUTHORIZATION=_AUTH_HEADER,
+        ),
+        _APP_KEY,
+    )
+    ambiguous_manager = directory_users(
+        RequestFactory().get(
+            "/",
+            {"manager_id": "dt:shared-manager"},
+            HTTP_AUTHORIZATION=_AUTH_HEADER,
+        ),
+        _APP_KEY,
+    )
+    scoped_manager_filter = directory_users(
+        RequestFactory().get(
+            "/",
+            {"manager_id": manager_a_ref},
+            HTTP_AUTHORIZATION=_AUTH_HEADER,
+        ),
+        _APP_KEY,
+    )
+    legacy_unique = directory_user_detail(
+        RequestFactory().get("/", HTTP_AUTHORIZATION=_AUTH_HEADER),
+        _APP_KEY,
+        "dt:unique-user",
+    )
+    malformed_scoped = directory_user_detail(
+        RequestFactory().get("/", HTTP_AUTHORIZATION=_AUTH_HEADER),
+        _APP_KEY,
+        "dt:v1:not-enough-parts",
+    )
+
+    assert ambiguous_detail.status_code == HTTPStatus.CONFLICT
+    ambiguity = loads(ambiguous_detail.content)["error"]
+    assert ambiguity["details"]["reason"] == "ambiguous_user_ref"
+    assert len(ambiguity["details"]["candidate_refs"]) == _EXPECTED_AMBIGUITY_CANDIDATES
+    assert loads(scoped_detail.content)["corp_id"] == "corp-a"
+    assert loads(scoped_detail.content)["user_ref"] == user_a_ref
+    assert loads(scoped_manager.content)["corp_id"] == "corp-a"
+    assert {item["corp_id"] for item in loads(scoped_subordinates.content)["data"]} == {
+        "corp-a",
+    }
+    assert ambiguous_department.status_code == HTTPStatus.CONFLICT
+    assert loads(ambiguous_department.content)["error"]["details"]["reason"] == (
+        "ambiguous_department_ref"
+    )
+    assert {item["corp_id"] for item in loads(scoped_department.content)["data"]} == {
+        "corp-a",
+    }
+    assert ambiguous_manager.status_code == HTTPStatus.CONFLICT
+    assert {item["corp_id"] for item in loads(scoped_manager_filter.content)["data"]} == {
+        "corp-a",
+    }
+    assert legacy_unique.status_code == HTTPStatus.OK
+    assert loads(legacy_unique.content)["corp_id"] == "corp-a"
+    assert malformed_scoped.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert loads(malformed_scoped.content)["error"]["details"]["reason"] == (
+        "invalid_directory_ref"
+    )
+
+
+def test_multi_corp_user_pagination_has_scope_stable_tail_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
+    _enable_directory(app)
+    _auth(monkeypatch, app)
+    for corp_id in ("corp-b", "corp-a"):
+        _ = DingTalkUserMirror.objects.create(
+            source_slug=_SOURCE,
+            corp_id=corp_id,
+            user_id="same-user-id",
+            name="相同姓名",
+            status="active",
+        )
+
+    response = directory_users(
+        RequestFactory().get(
+            "/",
+            {"page_size": "1"},
+            HTTP_AUTHORIZATION=_AUTH_HEADER,
+        ),
+        _APP_KEY,
+    )
+    snapshot_id = loads(response.content)["directory_snapshot"]["snapshot_id"]
+    second = directory_users(
+        RequestFactory().get(
+            "/",
+            {"page": "2", "page_size": "1", "snapshot_id": snapshot_id},
+            HTTP_AUTHORIZATION=_AUTH_HEADER,
+        ),
+        _APP_KEY,
+    )
+
+    assert loads(response.content)["data"][0]["corp_id"] == "corp-a"
+    assert loads(second.content)["data"][0]["corp_id"] == "corp-b"
 
 
 def test_directory_list_audit_stays_in_cache_within_hour(

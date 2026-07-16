@@ -3,6 +3,9 @@
     {
       "user_id": null,
       "dingtalk_user_id": "user0456",
+      "source_slug": "dingtalk",
+      "corp_id": "corp-demo",
+      "user_ref": "dt:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:dXNlcjA0NTY",
       "name": "李新人",
       "avatar_url": "",
       "title": "测试工程师",
@@ -11,14 +14,17 @@
       "employee_number": "E0003",
       "status": "active",
       "departments": [
-        {"department_id": "460001", "name": "研发部"},
-        {"department_id": "470001", "name": "质量委员会"}
+        {"department_id": "460001", "source_slug": "dingtalk", "corp_id": "corp-demo", "department_ref": "dept:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:NDYwMDAx", "name": "研发部"},
+        {"department_id": "470001", "source_slug": "dingtalk", "corp_id": "corp-demo", "department_ref": "dept:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:NDcwMDAx", "name": "质量委员会"}
       ],
       "active": true
     },
     {
       "user_id": "f7c31a09e5b24f8d9a1c",
       "dingtalk_user_id": "user0123",
+      "source_slug": "dingtalk",
+      "corp_id": "corp-demo",
+      "user_ref": "dt:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:dXNlcjAxMjM",
       "name": "王小明",
       "avatar_url": "https://static-legacy.dingtalk.com/media/xxx.jpg",
       "title": "后端工程师",
@@ -27,7 +33,7 @@
       "employee_number": "E0002",
       "status": "active",
       "departments": [
-        {"department_id": "460001", "name": "研发部"}
+        {"department_id": "460001", "source_slug": "dingtalk", "corp_id": "corp-demo", "department_ref": "dept:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:NDYwMDAx", "name": "研发部"}
       ],
       "active": true
     }
