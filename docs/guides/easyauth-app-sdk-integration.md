@@ -7,7 +7,9 @@ SDK 位于仓库 `sdk/python`(包名 `easyauth-app-sdk`,零运行时依赖,FastA
 - **集成描述符**: 下游在 `GET /.well-known/easyauth-app.json` 返回 `{descriptor_version, app{app_key,name,description}, manifest, sdk}`;`manifest` 即 EasyAuth App manifest(schema_version 单调递增)。
 - **权限双语显示名**: manifest 每个权限必须携带 `name`(中文),可选 `name_en`;这是权限 i18n 从下游传递给 EasyAuth 的唯一通道,EasyAuth 门户/控制台按用户语言展示,不做硬编码兜底。
 - **端点保护(可选)**: 下游配置共享密钥后,描述符端点要求 `Authorization: Bearer <token>`;EasyAuth 自动接入表单可填写该 token。
-- **目录数据滞后**: 用户目录来自钉钉镜像同步,滞后上游最多一个同步周期(300s),不保证实时。
+- **目录数据新鲜度**: 镜像同步的目标周期是 300s，但故障时可以滞后更久。
+  消费方必须以 `directory_snapshot.authoritative` / `stale` / `complete` 判定可信性，
+  不得根据调度周期推断快照权威。
 
 ## 下游集成步骤(FastAPI 示例)
 
@@ -65,6 +67,11 @@ SDK `0.3.0` 提供用户目录、钉钉工作通知与结构化错误语义。
   但 **声明 ≠ App 开通 ≠ 凭据授权**，导入不会自动翻转任何开关。
 - 建议把权限查询、`directory`、`notify` 拆分为三条凭据；通知凭据不应同时
   承载常规权限查询，以限制泄漏后的爆炸半径。
+- 兼容升级迁移 `applications/0025_credential_capabilities.py` 会把当时已开启的
+  App capabilities 回填给该 App **全部 active 静态凭据和 OAuth 凭据**，
+  以避免升级瞬间打断既有调用。只有迁移后新建凭据默认为空 capability 集。
+  上线后超管与 App owner 必须立即审计回填结果，拆分权限/directory/notify 凭据，
+  并撤销旧 permission token 上多余的 `directory` / `notify` grant。
 - 下游必须在后端根据业务事件和权限规则计算收件人；不得提供「前端传任意
   `userRef` 即调用 `send_notification`」的透传接口。`notify` 凭据能通知任意 active 员工，
   即使该员工没有下游 App 权限。
@@ -87,23 +94,36 @@ ref = user["user_id"] or f"{DINGTALK_REF_PREFIX}{user['dingtalk_user_id']}"
 ### 推荐链路: 先查目录再通知
 
 ```python
+import os
+from datetime import date
+
 from easyauth_app_sdk import (
     DINGTALK_REF_PREFIX,
     NOTIFY_TEMPLATE_ACTION_CARD,
     EasyAuthAppClient,
 )
 
-client = EasyAuthAppClient(base_url, app_key, token=os.environ["EASYAUTH_APP_TOKEN"])
+# 两条凭据必须分开，且只授予各自所需 capability。
+directory_client = EasyAuthAppClient(
+    base_url,
+    app_key,
+    token=os.environ["EASYAUTH_DIRECTORY_TOKEN"],  # 仅 directory
+)
+notify_client = EasyAuthAppClient(
+    base_url,
+    app_key,
+    token=os.environ["EASYAUTH_NOTIFY_TOKEN"],  # 仅 notify
+)
 
 # ① 选人器: 按关键字搜活跃用户(下游自行做 ≥300ms 防抖与 60s 缓存)
-result = client.search_directory_users(q="王", page_size=50)
+result = directory_client.search_directory_users(q="王", page_size=50)
 for user in result["data"]:
     print(user["dingtalk_user_id"], user["name"], user["title"], user["user_id"])
 
 # ② 逾期升级: 找到负责人的主管并发 action_card 提醒
-manager = client.get_directory_user_manager(assignee_user_id)
+manager = directory_client.get_directory_user_manager(assignee_user_id)
 manager_ref = manager["user_id"] or f"{DINGTALK_REF_PREFIX}{manager['dingtalk_user_id']}"
-receipt = client.send_notification(
+receipt = notify_client.send_notification(
     recipients=[manager_ref],
     template=NOTIFY_TEMPLATE_ACTION_CARD,
     title="任务逾期升级",
@@ -122,9 +142,9 @@ message_id = receipt["message_id"]
 就从第一页重新拉取。SDK 不自动循环或重试：
 
 ```python
-first = client.search_directory_users(page=1, page_size=200)
+first = directory_client.search_directory_users(page=1, page_size=200)
 snapshot_id = first["directory_snapshot"]["snapshot_id"]
-second = client.search_directory_users(
+second = directory_client.search_directory_users(
     page=2,
     page_size=200,
     snapshot_id=snapshot_id,

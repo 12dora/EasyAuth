@@ -34,8 +34,9 @@
 | GET | `/apps/{app_key}/configuration-status` | 配置完整度 |
 | GET | `/apps/{app_key}/integration-guide` | 接入指南 |
 | GET | `/apps/{app_key}/manifest` | 导出 manifest |
-| GET | `/apps/{app_key}/capabilities` | 查看 App 平台能力状态与 manifest 声明 |
-| GET/PUT | `/apps/{app_key}/capabilities/{capability}` | **超纡**：开通/关闭 `directory` 或 `notify` |
+| GET | `/apps/{app_key}/capabilities` | active owner/developer/超管可读；返回各能力 `enabled`、`config` 和顶层 `can_manage` |
+| GET | `/apps/{app_key}/capabilities/{capability}` | active owner/developer/超管可读；返回单能力配置和 `can_manage` |
+| PUT | `/apps/{app_key}/capabilities/{capability}` | **仅超管**：开通/关闭 `directory` 或 `notify` 并维护 `config` |
 | GET/PUT | `/apps/{app_key}/notification-channel` | 可见成员读；**owner** 维护每 App 版本化钉钉通知通道 |
 | POST | `/apps/{app_key}/notification-channel/test` | **owner**：测试当前 active 通道连通性 |
 | GET/PUT | `/apps/{app_key}/managed-scope-policy` | MANAGED_USERS 策略 |
@@ -59,6 +60,9 @@
 
 App capability 与 credential capability 必须同时开启；manifest 声明只供展示，
 不会自动开通 App 能力或授权凭据。
+`/capabilities` GET 响应不返回 manifest 声明；列表根对象是
+`{"capabilities": [...], "can_manage": bool}`，条目包含 `capability`、`enabled`、`config`
+和更新审计字段。`can_manage` 仅对超管为 `true`。
 
 ---
 

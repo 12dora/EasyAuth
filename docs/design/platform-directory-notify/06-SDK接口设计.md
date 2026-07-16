@@ -94,20 +94,30 @@ def get_notification(self, message_id: str) -> dict[str, Any]:
 ## 2. 用例代码（EasyProject 的三个典型消费点）
 
 ```python
+import os
+from datetime import date
+
 from easyauth_app_sdk import EasyAuthAppClient
 
-client = EasyAuthAppClient(
-    "https://iam.jiefakj.com", "easyproject", token=os.environ["EASYAUTH_APP_TOKEN"],
+directory_client = EasyAuthAppClient(
+    "https://iam.jiefakj.com",
+    "easyproject",
+    token=os.environ["EASYAUTH_DIRECTORY_TOKEN"],  # 仅 directory
+)
+notify_client = EasyAuthAppClient(
+    "https://iam.jiefakj.com",
+    "easyproject",
+    token=os.environ["EASYAUTH_NOTIFY_TOKEN"],  # 仅 notify
 )
 
 # ① 选人器: 按关键字搜活跃用户(下游自行做防抖与 60s 缓存)
-result = client.search_directory_users(q="王", page_size=50)
+result = directory_client.search_directory_users(q="王", page_size=50)
 for user in result["data"]:
     print(user["dingtalk_user_id"], user["name"], user["title"], user["user_id"])
 
 # ② 逾期升级: 找到负责人的主管并发 action_card 提醒
-manager = client.get_directory_user_manager(assignee_user_id)
-receipt = client.send_notification(
+manager = directory_client.get_directory_user_manager(assignee_user_id)
+receipt = notify_client.send_notification(
     recipients=[manager["user_id"] or f"dt:{manager['dingtalk_user_id']}"],
     template="action_card",
     title="任务逾期升级",
@@ -119,7 +129,7 @@ receipt = client.send_notification(
 message_id = receipt["message_id"]
 
 # ③ 稍后核对投递状态
-status = client.get_notification(message_id)
+status = notify_client.get_notification(message_id)
 for item in status["recipients"]:
     if item["status"] == "failed":
         logger.warning("通知未达 %s: %s", item["raw_ref"], item["error_code"])
@@ -127,6 +137,7 @@ for item in status["recipients"]:
 
 要点示范（会写进集成指南）：主管可能从未登录过 EasyAuth（`user_id` 为 null），
 消费方引用人时统一用 `user["user_id"] or f"dt:{user['dingtalk_user_id']}"` 兜底。
+directory 与 notify 必须使用独立凭据，每条凭据只授予该链路所需 capability。
 
 ## 3. 版本号与错误策略
 
@@ -171,4 +182,5 @@ for item in status["recipients"]:
   能力开关前置条件（找超管开通）、`dt:` 引用兜底惯用法、dedup_key 取值建议、
   「先查目录拿 dingtalk_user_id 再通知」的推荐链路、投递状态轮询的克制建议
   （事件性通知不必轮询，失败靠 console 大盘兜底）。
-- `## 契约` 节补一条：**目录数据滞后上游最多一个同步周期（300s），不保证实时**。
+- `## 契约` 节补充：目标同步周期是 300s，故障时可以滞后更久；
+  消费方必须以 `directory_snapshot.authoritative` / `stale` / `complete` 为准。

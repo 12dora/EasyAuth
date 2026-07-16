@@ -47,6 +47,11 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
 `403 PERMISSION_DENIED`。manifest 顶层 `capabilities` 只表示应用声明需求，
 不会自动开通 App 能力，也不会自动授权任何凭据。
 
+凭据 capability 上线的兼容迁移会把当时已开启的 App capabilities
+回填给该 App 全部 active 静态/OAuth 凭据；只有迁移后新建凭据默认为空集。
+升级后必须审计回填结果，将权限查询、目录与通知拆分为最小权限凭据，
+并撤销旧 permission token 上多余的 `directory` / `notify`。
+
 ## 统一错误结构
 
 ```json
@@ -297,7 +302,8 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
 
 ## 5. 用户目录
 
-数据来源为 EasyAuth 内的钉钉目录镜像（约每 300s 从 Authentik 同步）。
+数据来源为 EasyAuth 内的钉钉目录镜像，目标同步周期为 300s，
+但故障时可以滞后更久；必须以 `directory_snapshot` 的权威性元数据判定可信性。
 应用的 `directory` 平台能力和当前凭据的 `directory` 能力必须同时开启，
 否则返回 `403 PERMISSION_DENIED`（文案：「应用未开通目录能力。」）。
 所有目录端点返回 `Cache-Control: private, max-age=60`。
@@ -305,7 +311,7 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
 用户引用约定：`user_id` = Authentik 用户标识（可空，未 SSO 登录过的员工为 `null`）；`dingtalk_user_id` 恒非空。路径 `{user_ref}` / 参数 `manager_id` 接受裸 `user_id` 或 `dt:<钉钉userid>` 前缀。
 
 目录条目返回 `email`、`mobile`、`employee_number`、`status` 和保留的
-`active`。这些字段是员工敏感信息，仅能用于已批准的应用内选人、单据和身份映射；
+`active`。这些字段是员工敏感信息，仅能用于已批准的应用内选人、单据和业务资料关联；
 不得写入日志、不得下发到不需要该数据的前端，也不得作为新的认证或授权事实。
 用户条目不返回 `unionId`、`corp_id` 和完整主管链；
 `corp_id` 只出现在 `directory_snapshot.snapshots[]` 作为多企业快照边界。

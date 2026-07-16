@@ -72,7 +72,8 @@
 
 ## §D 公共用户目录 API
 
-数据来源：EasyAuth 内的钉钉目录镜像（每 300s 从 Authentik 同步）。
+数据来源：EasyAuth 内的钉钉目录镜像，目标同步周期为 300s，
+但故障时可以滞后更久。
 所有目录端点返回 `Cache-Control: private, max-age=60` 和多企业
 `directory_snapshot`。新鲜度以 EasyAuth 本地成功事务提交时间判定；
 消费方不得只根据固定 300s 假设快照权威。
