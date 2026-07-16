@@ -245,6 +245,8 @@ export interface AppNotificationChannel {
   dingtalk_app_key: string;
   app_secret_configured: boolean;
   agent_id: string;
+  directory_source_slug: string;
+  corp_id: string;
   version: number;
   is_active: boolean;
   created_by?: string;

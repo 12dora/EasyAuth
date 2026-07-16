@@ -25,12 +25,16 @@ interface ChannelFormState {
   name: string;
   dingtalkAppKey: string;
   agentId: string;
+  directorySourceSlug: string;
+  corpId: string;
 }
 
 const EMPTY_CHANNEL_FORM: ChannelFormState = {
   name: "",
   dingtalkAppKey: "",
   agentId: "",
+  directorySourceSlug: "",
+  corpId: "",
 };
 
 type ChannelLoadState = "loading" | "error" | "unconfigured" | "configured";
@@ -194,6 +198,8 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
       name: current?.name ?? "",
       dingtalkAppKey: current?.dingtalk_app_key ?? "",
       agentId: current?.agent_id ?? "",
+      directorySourceSlug: current?.directory_source_slug ?? "",
+      corpId: current?.corp_id ?? "",
     });
   }, [channelQuery.data]);
 
@@ -212,6 +218,8 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
             dingtalk_app_key: form.dingtalkAppKey.trim(),
             dingtalk_app_secret: secret,
             agent_id: form.agentId.trim(),
+            directory_source_slug: form.directorySourceSlug.trim(),
+            corp_id: form.corpId.trim(),
           } satisfies JsonObject,
         }),
         t("console.integration.channelInvalidResponse"),
@@ -254,6 +262,8 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
     form.name.trim()
     && form.dingtalkAppKey.trim()
     && form.agentId.trim()
+    && form.directorySourceSlug.trim()
+    && form.corpId.trim()
     && (channel?.app_secret_configured || hasSecretInput),
   );
 
@@ -295,6 +305,16 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
       {loadState === "unconfigured" ? (
         <StatusBanner tone="amber" title={t("console.integration.channelNotConfigured")} message={t("console.integration.channelEmptyDescription")} />
       ) : null}
+      {loadState === "configured" ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 border border-bond/25 bg-bond/5 px-3 py-2">
+          <span className="text-label font-semibold uppercase tracking-caps-wide text-bond">
+            {t("console.integration.directoryScope")}
+          </span>
+          <code className="text-xs text-ink">
+            {channel?.directory_source_slug} / {channel?.corp_id}
+          </code>
+        </div>
+      ) : null}
       <form className="grid gap-4" onSubmit={submit} aria-busy={channelQuery.isLoading}>
         <div className="grid gap-4 md:grid-cols-2">
           <Field label={t("console.integration.channelName")}>
@@ -327,6 +347,30 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
               onChange={(event) => {
                 const dingtalkAppKey = event.currentTarget.value;
                 setForm((current) => ({ ...current, dingtalkAppKey }));
+              }}
+            />
+          </Field>
+          <Field label={t("console.integration.directorySourceSlug")} hint={t("console.integration.directorySourceSlugHint")}>
+            <TextInput
+              className="font-mono"
+              autoComplete="off"
+              value={form.directorySourceSlug}
+              disabled={!canWriteChannel || saveMutation.isPending}
+              onChange={(event) => {
+                const directorySourceSlug = event.currentTarget.value;
+                setForm((current) => ({ ...current, directorySourceSlug }));
+              }}
+            />
+          </Field>
+          <Field label={t("console.integration.corpId")} hint={t("console.integration.corpIdHint")}>
+            <TextInput
+              className="font-mono"
+              autoComplete="off"
+              value={form.corpId}
+              disabled={!canWriteChannel || saveMutation.isPending}
+              onChange={(event) => {
+                const corpId = event.currentTarget.value;
+                setForm((current) => ({ ...current, corpId }));
               }}
             />
           </Field>
@@ -393,6 +437,8 @@ function parseNotificationChannelPayload(value: unknown, errorMessage: string): 
     || typeof channel.dingtalk_app_key !== "string"
     || typeof channel.app_secret_configured !== "boolean"
     || typeof channel.agent_id !== "string"
+    || typeof channel.directory_source_slug !== "string"
+    || typeof channel.corp_id !== "string"
     || typeof channel.version !== "number"
     || typeof channel.is_active !== "boolean"
   ) {
@@ -405,6 +451,8 @@ function parseNotificationChannelPayload(value: unknown, errorMessage: string): 
       dingtalk_app_key: channel.dingtalk_app_key,
       app_secret_configured: channel.app_secret_configured,
       agent_id: channel.agent_id,
+      directory_source_slug: channel.directory_source_slug,
+      corp_id: channel.corp_id,
       version: channel.version,
       is_active: channel.is_active,
       created_by: typeof channel.created_by === "string" ? channel.created_by : undefined,

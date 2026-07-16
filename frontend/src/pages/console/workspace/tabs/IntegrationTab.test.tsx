@@ -39,6 +39,8 @@ describe("IntegrationTab", () => {
             dingtalk_app_secret: "must-never-render",
             app_secret_configured: true,
             agent_id: "9001",
+            directory_source_slug: "authentik-main",
+            corp_id: "corp-001",
             version: 1,
             is_active: true,
           },
@@ -52,6 +54,8 @@ describe("IntegrationTab", () => {
             dingtalk_app_key: "ding-app-key",
             app_secret_configured: true,
             agent_id: "9001",
+            directory_source_slug: "authentik-secondary",
+            corp_id: "corp-002",
             version: 2,
             is_active: true,
           },
@@ -84,6 +88,11 @@ describe("IntegrationTab", () => {
     expect(document.body).not.toHaveTextContent("must-never-render");
     expect(JSON.stringify(client.getQueryData(["console", "app", "demo", "notification-channel"]))).not.toContain("must-never-render");
     expect(screen.getByLabelText("钉钉 App Secret")).toHaveValue("");
+    expect(screen.getByText("authentik-main / corp-001")).toBeVisible();
+    await user.clear(screen.getByLabelText("目录 Source Slug"));
+    await user.type(screen.getByLabelText("目录 Source Slug"), "authentik-secondary");
+    await user.clear(screen.getByLabelText("企业 Corp ID"));
+    await user.type(screen.getByLabelText("企业 Corp ID"), "corp-002");
     await user.click(screen.getByRole("button", { name: "保存新版本" }));
     await waitFor(() => expect(findCall(fetchMock, CHANNEL_URL, "PUT")).toBeDefined());
     expect(JSON.parse(String(findCall(fetchMock, CHANNEL_URL, "PUT")?.[1]?.body))).toEqual({
@@ -91,6 +100,8 @@ describe("IntegrationTab", () => {
       dingtalk_app_key: "ding-app-key",
       dingtalk_app_secret: "",
       agent_id: "9001",
+      directory_source_slug: "authentik-secondary",
+      corp_id: "corp-002",
     });
     await user.click(screen.getByRole("button", { name: "测试连通性" }));
     await waitFor(() => expect(findCall(fetchMock, `${CHANNEL_URL}/test`, "POST")).toBeDefined());
@@ -158,6 +169,8 @@ describe("IntegrationTab", () => {
     await user.type(nameInput, "EasyTrade 通知");
     await user.type(screen.getByLabelText("Agent ID"), "9001");
     await user.type(screen.getByLabelText("钉钉 App Key"), "ding-app-key");
+    await user.type(screen.getByLabelText("目录 Source Slug"), "authentik-main");
+    await user.type(screen.getByLabelText("企业 Corp ID"), "corp-001");
     expect(screen.getByRole("button", { name: "保存新版本" })).toBeDisabled();
     const secretInput = screen.getByLabelText("钉钉 App Secret");
     await user.type(secretInput, "one-time-secret");
@@ -171,6 +184,8 @@ describe("IntegrationTab", () => {
       dingtalk_app_key: "ding-app-key",
       dingtalk_app_secret: "one-time-secret",
       agent_id: "9001",
+      directory_source_slug: "authentik-main",
+      corp_id: "corp-001",
     });
     await waitFor(() => expect(secretInput).toHaveValue(""));
   });
@@ -267,6 +282,8 @@ function channelPayload(version: number) {
     dingtalk_app_key: "ding-app-key",
     app_secret_configured: true,
     agent_id: "9001",
+    directory_source_slug: "authentik-main",
+    corp_id: "corp-001",
     version,
     is_active: true,
   };
