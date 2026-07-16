@@ -184,6 +184,8 @@ class AppNotificationChannel(models.Model):
     dingtalk_app_key: models.CharField[str, str] = models.CharField(max_length=128)
     dingtalk_app_secret: EncryptedCharField = EncryptedCharField(max_length=1024)
     agent_id: models.CharField[str, str] = models.CharField(max_length=64)
+    directory_source_slug: models.CharField[str, str] = models.CharField(max_length=128)
+    corp_id: models.CharField[str, str] = models.CharField(max_length=128)
     version: models.PositiveIntegerField[int, int] = models.PositiveIntegerField()
     is_active: models.BooleanField[bool, bool] = models.BooleanField(default=True)
     created_by: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
@@ -221,6 +223,8 @@ class AppNotificationChannel(models.Model):
             "dingtalk_app_key": self.dingtalk_app_key,
             "dingtalk_app_secret": self.dingtalk_app_secret,
             "agent_id": self.agent_id,
+            "directory_source_slug": self.directory_source_slug,
+            "corp_id": self.corp_id,
         }
         for field_name, value in required_values.items():
             if not value.strip():

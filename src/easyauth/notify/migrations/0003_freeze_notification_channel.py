@@ -4,6 +4,7 @@ from collections.abc import Iterator, Sequence
 from typing import ClassVar, Protocol, Self, cast
 
 from django.apps.registry import Apps
+from django.conf import settings
 from django.db import migrations, models
 from django.db.backends.base.schema import BaseDatabaseSchemaEditor
 from django.db.migrations.operations.base import Operation
@@ -22,10 +23,43 @@ class _HistoricalQuery(Protocol):
     def distinct(self) -> Self: ...
     def update(self, **kwargs: object) -> int: ...
     def exists(self) -> bool: ...
+    def delete(self) -> tuple[int, dict[str, int]]: ...
+    def create(self, **kwargs: object) -> object: ...
 
 
 class _HistoricalModel(Protocol):
     objects: ClassVar[_HistoricalQuery]
+
+
+class _IntegrationSettingsRow(Protocol):
+    dingtalk_app_key: str
+    dingtalk_app_secret: str
+    dingtalk_agent_id: str
+
+
+class _IntegrationSettingsQuery(_HistoricalQuery, Protocol):
+    def first(self) -> _IntegrationSettingsRow | None: ...
+
+
+class _IntegrationSettingsManager(Protocol):
+    def filter(self, **kwargs: object) -> _IntegrationSettingsQuery: ...
+
+
+class _IntegrationSettingsModel(Protocol):
+    objects: ClassVar[_IntegrationSettingsManager]
+
+
+def _unique_directory_scope(apps: Apps) -> tuple[str, str] | None:
+    sync_state = cast(
+        "type[_HistoricalModel]",
+        cast("object", apps.get_model("accounts", "DingTalkDirectorySyncState")),
+    )
+    scopes = cast(
+        "list[tuple[str, str]]",
+        list(sync_state.objects.values_list("source_slug", "corp_id")),
+    )
+    unique_scopes = sorted(set(scopes))
+    return unique_scopes[0] if len(unique_scopes) == 1 else None
 
 
 def backfill_message_channels(
@@ -50,6 +84,16 @@ def backfill_message_channels(
     )
     if not app_ids:
         return
+    integration_settings = cast(
+        "type[_IntegrationSettingsModel]",
+        cast("object", apps.get_model("applications", "IntegrationSettings")),
+    )
+    _ensure_history_app_channels(
+        channel=channel,
+        integration_settings=integration_settings,
+        app_ids=app_ids,
+        directory_scope=_unique_directory_scope(apps),
+    )
     channel_pairs = cast(
         "list[tuple[int, int]]",
         list(
@@ -60,6 +104,8 @@ def backfill_message_channels(
             .exclude(dingtalk_app_key="")
             .exclude(dingtalk_app_secret="")
             .exclude(agent_id="")
+            .exclude(directory_source_slug="")
+            .exclude(corp_id="")
             .values_list("app_id", "id"),
         ),
     )
@@ -86,9 +132,90 @@ def backfill_message_channels(
         raise NotificationChannelMigrationError(error_message)
 
 
+def _ensure_history_app_channels(
+    *,
+    channel: type[_HistoricalModel],
+    integration_settings: type[_IntegrationSettingsModel],
+    app_ids: list[int],
+    directory_scope: tuple[str, str] | None,
+) -> None:
+    configured_app_ids = cast(
+        "set[int]",
+        set(
+            channel.objects.filter(app_id__in=app_ids, is_active=True)
+            .exclude(dingtalk_app_key="")
+            .exclude(dingtalk_app_secret="")
+            .exclude(agent_id="")
+            .exclude(directory_source_slug="")
+            .exclude(corp_id="")
+            .values_list("app_id", flat=True),
+        ),
+    )
+    missing_app_ids = sorted(set(app_ids) - configured_app_ids)
+    if not missing_app_ids:
+        return
+    settings_row = integration_settings.objects.filter(pk=1).first()
+    override_app_key = settings_row.dingtalk_app_key.strip() if settings_row is not None else ""
+    override_app_secret = (
+        settings_row.dingtalk_app_secret.strip() if settings_row is not None else ""
+    )
+    override_agent_id = settings_row.dingtalk_agent_id.strip() if settings_row is not None else ""
+    app_key = override_app_key or str(getattr(settings, "EASYAUTH_DINGTALK_APP_KEY", "")).strip()
+    app_secret = (
+        override_app_secret
+        or str(
+            getattr(settings, "EASYAUTH_DINGTALK_APP_SECRET", ""),
+        ).strip()
+    )
+    agent_id = (
+        override_agent_id
+        or str(
+            getattr(settings, "EASYAUTH_DINGTALK_AGENT_ID", ""),
+        ).strip()
+    )
+    if not app_key or not app_secret or not agent_id or directory_scope is None:
+        return
+    directory_source_slug, corp_id = directory_scope
+    for app_id in missing_app_ids:
+        _ = channel.objects.create(
+            app_id=app_id,
+            name="迁移自历史通知消息全局配置",
+            dingtalk_app_key=app_key,
+            dingtalk_app_secret=app_secret,
+            agent_id=agent_id,
+            version=1,
+            is_active=True,
+            created_by="migration-notify-history",
+            directory_source_slug=directory_source_slug,
+            corp_id=corp_id,
+        )
+
+
+def reverse_message_channel_backfill(
+    apps: Apps,
+    _schema_editor: BaseDatabaseSchemaEditor,
+) -> None:
+    channel = cast(
+        "type[_HistoricalModel]",
+        cast("object", apps.get_model("applications", "AppNotificationChannel")),
+    )
+    message = cast(
+        "type[_HistoricalModel]",
+        cast("object", apps.get_model("notify", "NotifyMessage")),
+    )
+    migration_channels = channel.objects.filter(created_by="migration-notify-history")
+    channel_ids = cast(
+        "list[int]",
+        list(migration_channels.values_list("id", flat=True)),
+    )
+    if channel_ids:
+        _ = message.objects.filter(channel_id__in=channel_ids).update(channel_id=None)
+        _ = migration_channels.delete()
+
+
 class Migration(migrations.Migration):
     dependencies: ClassVar[Sequence[tuple[str, str]]] = [
-        ("applications", "0026_app_notification_channel"),
+        ("applications", "0027_notification_channel_directory_scope"),
         ("notify", "0002_notifymessage_deeplink_title"),
     ]
 
@@ -104,7 +231,7 @@ class Migration(migrations.Migration):
                 to="applications.appnotificationchannel",
             ),
         ),
-        migrations.RunPython(backfill_message_channels, migrations.RunPython.noop),
+        migrations.RunPython(backfill_message_channels, reverse_message_channel_backfill),
         migrations.AlterField(
             model_name="notifymessage",
             name="channel",

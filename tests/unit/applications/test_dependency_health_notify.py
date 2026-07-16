@@ -31,6 +31,8 @@ def _create_channel(app: App) -> AppNotificationChannel:
         dingtalk_app_key="key",
         dingtalk_app_secret="secret",  # noqa: S106 - 测试专用固定值。
         agent_id="123",
+        directory_source_slug="dingtalk",
+        corp_id="health-corp",
         version=1,
     )
 

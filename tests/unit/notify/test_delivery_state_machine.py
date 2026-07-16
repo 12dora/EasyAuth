@@ -127,6 +127,8 @@ def test_delivery_uses_channel_frozen_at_accept_time(monkeypatch: pytest.MonkeyP
         dingtalk_app_key="new-key",
         dingtalk_app_secret="new-secret",  # noqa: S106 - 测试专用固定值。
         agent_id="2002",
+        directory_source_slug=original.directory_source_slug,
+        corp_id=original.corp_id,
         version=2,
     )
     used_channels: list[int] = []

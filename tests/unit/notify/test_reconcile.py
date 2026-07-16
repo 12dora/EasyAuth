@@ -5,6 +5,8 @@ from typing import final
 
 import pytest
 from django.conf import settings
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from easyauth.applications.models import App, AppNotificationChannel
@@ -22,7 +24,11 @@ from easyauth.notify.models import (
     NotifyMessage,
     NotifyRecipient,
 )
-from easyauth.notify.services import reconcile_send_results
+from easyauth.notify.services import (
+    NOTIFY_RECONCILE_WINDOW_HOURS,
+    reconcile_send_results,
+    select_reconcile_tasks,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -42,6 +48,23 @@ class _FakeDingTalkClient:
     def get_send_result(self, *, agent_id: str | int, task_id: str) -> dict[str, object]:
         _ = (agent_id, task_id)
         return self.result
+
+
+@final
+class _FairnessDingTalkClient:
+    def __init__(self) -> None:
+        self.task_ids: list[str] = []
+
+    def get_send_progress(self, *, agent_id: str | int, task_id: str) -> dict[str, object]:
+        _ = agent_id
+        self.task_ids.append(task_id)
+        return {"status": 2}
+
+    def get_send_result(self, *, agent_id: str | int, task_id: str) -> dict[str, object]:
+        _ = agent_id
+        if task_id == "task-050":
+            return {"invalid_user_id_list": ["user-050"]}
+        return {}
 
 
 def _message_with_sent(
@@ -174,6 +197,89 @@ def test_reconcile_unclassified_recipient_remains_sent(
 
     assert reconcile_send_results() == 0
     assert NotifyRecipient.objects.get(message=message).status == NOTIFY_RECIPIENT_STATUS_SENT
+
+
+def test_reconcile_fairly_rotates_beyond_first_fifty_tasks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = App.objects.create(app_key="notify-reconcile-fairness", name="Fairness")
+    channel = AppNotificationChannel.objects.get(app=app, is_active=True)
+    now = timezone.now()
+    for index in range(51):
+        message = NotifyMessage.objects.create(
+            app=app,
+            channel=channel,
+            template=NOTIFY_TEMPLATE_TEXT,
+            content=f"message-{index:03d}",
+            payload_hash=f"{index:064d}",
+            status=NOTIFY_MESSAGE_STATUS_SENDING,
+            recipient_total=1,
+            recipient_sent=1,
+            requested_credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
+            requested_credential_id=1,
+        )
+        _ = NotifyRecipient.objects.create(
+            message=message,
+            raw_ref=f"dt:user-{index:03d}",
+            dingtalk_userid=f"user-{index:03d}",
+            status=NOTIFY_RECIPIENT_STATUS_SENT,
+            dingtalk_task_id=f"task-{index:03d}",
+            sent_at=now,
+        )
+
+    window_start = now - timedelta(hours=NOTIFY_RECONCILE_WINDOW_HOURS)
+    with CaptureQueriesContext(connection) as queries:
+        selected = select_reconcile_tasks(window_start)
+    assert len(queries) == 1
+    assert len(selected) == 50  # noqa: PLR2004
+    assert (channel.id, "task-050") not in selected
+
+    client = _FairnessDingTalkClient()
+
+    def client_for_channel(
+        _channel: AppNotificationChannel,
+    ) -> tuple[_FairnessDingTalkClient, int]:
+        return client, 1001
+
+    monkeypatch.setattr(
+        "easyauth.notify.services._dingtalk_client_and_agent",
+        client_for_channel,
+    )
+    assert reconcile_send_results() == 0
+    assert "task-050" not in client.task_ids
+    assert NotifyRecipient.objects.filter(last_reconciled_at__isnull=False).count() == 50  # noqa: PLR2004
+
+    client.task_ids.clear()
+    assert reconcile_send_results() == 1
+    assert client.task_ids[0] == "task-050"
+    failed = NotifyRecipient.objects.get(dingtalk_task_id="task-050")
+    assert failed.status == NOTIFY_RECIPIENT_STATUS_FAILED
+
+
+def test_partial_failure_with_remaining_sent_updates_aggregate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    message = _message_with_sent(
+        app_key="notify-partial-with-sent",
+        userids=["failed-user", "still-sent-user"],
+        task_id="task-partial-with-sent",
+    )
+    _ = _patch_reconcile_client(
+        monkeypatch,
+        progress={"status": 2},
+        result={"invalid_user_id_list": ["failed-user"]},
+    )
+
+    assert reconcile_send_results() == 1
+    message.refresh_from_db()
+    assert message.status == NOTIFY_MESSAGE_STATUS_PARTIALLY_FAILED
+    assert (
+        NotifyRecipient.objects.get(
+            message=message,
+            dingtalk_userid="still-sent-user",
+        ).status
+        == NOTIFY_RECIPIENT_STATUS_SENT
+    )
 
 
 def test_same_task_id_from_different_channels_does_not_cross_update(

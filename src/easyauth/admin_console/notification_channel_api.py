@@ -33,6 +33,8 @@ class NotificationChannelPayload(BaseModel):
     dingtalk_app_key: str = Field(min_length=1, max_length=128)
     dingtalk_app_secret: str | None = Field(default=None, max_length=512)
     agent_id: str = Field(min_length=1, max_length=64)
+    directory_source_slug: str = Field(min_length=1, max_length=128)
+    corp_id: str = Field(min_length=1, max_length=128)
 
 
 class NotificationChannelSecretRequiredError(Exception):
@@ -147,6 +149,8 @@ def _replace_channel(
         dingtalk_app_key=payload.dingtalk_app_key,
         dingtalk_app_secret=app_secret,
         agent_id=payload.agent_id,
+        directory_source_slug=payload.directory_source_slug,
+        corp_id=payload.corp_id,
         version=max_version + 1,
         is_active=True,
         created_by=actor.user_id,
@@ -165,6 +169,8 @@ def _replace_channel(
                 "name": channel.name,
                 "version": channel.version,
                 "agent_id": channel.agent_id,
+                "directory_source_slug": channel.directory_source_slug,
+                "corp_id": channel.corp_id,
                 "secret_reused": not bool(payload.dingtalk_app_secret),
             },
         ),
@@ -185,6 +191,8 @@ def _channel_payload(channel: AppNotificationChannel | None) -> dict[str, JsonVa
         "dingtalk_app_key": channel.dingtalk_app_key,
         "app_secret_configured": bool(channel.dingtalk_app_secret),
         "agent_id": channel.agent_id,
+        "directory_source_slug": channel.directory_source_slug,
+        "corp_id": channel.corp_id,
         "version": channel.version,
         "is_active": channel.is_active,
         "created_by": channel.created_by,

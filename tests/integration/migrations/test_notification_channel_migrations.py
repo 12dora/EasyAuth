@@ -17,6 +17,7 @@ class _HistoricalQuery(Protocol):
     def __iter__(self) -> Iterator[object]: ...
     def values_list(self, *fields: str, flat: bool = False) -> Self: ...
     def delete(self) -> tuple[int, dict[str, int]]: ...
+    def exists(self) -> bool: ...
 
 
 class _AppRow(Protocol):
@@ -33,6 +34,9 @@ class _ChannelRow(Protocol):
     dingtalk_app_key: str
     dingtalk_app_secret: str
     agent_id: str
+    directory_source_slug: str
+    corp_id: str
+    created_by: str
 
 
 class _RecipientRow(Protocol):
@@ -68,6 +72,7 @@ class _MessageModel(Protocol):
 
 class _ChannelManager(Protocol):
     def get(self, **kwargs: object) -> _ChannelRow: ...
+    def filter(self, **kwargs: object) -> _HistoricalQuery: ...
 
 
 class _ChannelModel(Protocol):
@@ -90,8 +95,8 @@ _BEFORE_TARGETS = [
     ("notify", "0002_notifymessage_deeplink_title"),
 ]
 _AFTER_TARGETS = [
-    ("applications", "0026_app_notification_channel"),
-    ("notify", "0003_freeze_notification_channel"),
+    ("applications", "0027_notification_channel_directory_scope"),
+    ("notify", "0004_notify_recipient_reconcile_cursor"),
 ]
 
 
@@ -115,6 +120,7 @@ def _seed_legacy_message(
     *,
     app_key: str,
     status: str = "pending",
+    capability_enabled: bool = True,
 ) -> tuple[int, str]:
     apps = executor.loader.project_state(_BEFORE_TARGETS).apps
     app_model = cast(
@@ -130,7 +136,11 @@ def _seed_legacy_message(
         cast("object", apps.get_model("notify", "NotifyMessage")),
     )
     app = app_model.objects.create(app_key=app_key, name=app_key)
-    _ = capability_model.objects.create(app_id=app.id, capability="notify", enabled=True)
+    _ = capability_model.objects.create(
+        app_id=app.id,
+        capability="notify",
+        enabled=capability_enabled,
+    )
     message = message_model.objects.create(
         app_id=app.id,
         template="text",
@@ -143,8 +153,27 @@ def _seed_legacy_message(
     return app.id, str(message.id)
 
 
+def _seed_directory_scope(
+    executor: MigrationExecutor,
+    *,
+    source_slug: str = "dingtalk",
+    corp_id: str = "migration-corp",
+) -> None:
+    apps = executor.loader.project_state(_BEFORE_TARGETS).apps
+    sync_state_model = cast(
+        "type[_CreateOnlyModel]",
+        cast("object", apps.get_model("accounts", "DingTalkDirectorySyncState")),
+    )
+    _ = sync_state_model.objects.create(
+        source_slug=source_slug,
+        corp_id=corp_id,
+        status="success",
+    )
+
+
 def test_migrations_copy_db_override_and_backfill_existing_message() -> None:
     before = _migrate(_BEFORE_TARGETS)
+    _seed_directory_scope(before)
     app_id, message_id = _seed_legacy_message(before, app_key="migration-db-channel")
     apps = before.loader.project_state(_BEFORE_TARGETS).apps
     integration_settings = cast(
@@ -179,12 +208,28 @@ def test_migrations_copy_db_override_and_backfill_existing_message() -> None:
     assert channel.dingtalk_app_key == "db-key"
     assert channel.dingtalk_app_secret == "db-secret"  # noqa: S105
     assert channel.agent_id == "1001"
+    assert channel.directory_source_slug == "dingtalk"
+    assert channel.corp_id == "migration-corp"
     assert message.channel_id == channel.id
+
+    reversed_executor = _migrate(_BEFORE_TARGETS)
+    reversed_apps = reversed_executor.loader.project_state(_BEFORE_TARGETS).apps
+    reversed_message_model = cast(
+        "type[_MessageModel]",
+        cast("object", reversed_apps.get_model("notify", "NotifyMessage")),
+    )
+    assert reversed_message_model.objects.get(id=message_id).id == message.id
+    _ = _migrate(_AFTER_TARGETS)
 
 
 def test_migrations_use_environment_fallback_for_all_legacy_messages() -> None:
     before = _migrate(_BEFORE_TARGETS)
-    app_id, pending_id = _seed_legacy_message(before, app_key="migration-env-channel")
+    _seed_directory_scope(before)
+    app_id, pending_id = _seed_legacy_message(
+        before,
+        app_key="migration-env-channel",
+        capability_enabled=False,
+    )
     apps = before.loader.project_state(_BEFORE_TARGETS).apps
     message_model = cast(
         "type[_MessageModel]",
@@ -242,6 +287,9 @@ def test_migrations_use_environment_fallback_for_all_legacy_messages() -> None:
     assert channel.dingtalk_app_key == "env-key"
     assert channel.dingtalk_app_secret == "env-secret"  # noqa: S105
     assert channel.agent_id == "3003"
+    assert channel.created_by == "migration-notify-history"
+    assert channel.directory_source_slug == "dingtalk"
+    assert channel.corp_id == "migration-corp"
     assert channel_ids == {channel.id}
     assert migrated_recipient_model.objects.get(message_id=sending.id).status == "sent"
     with pytest.raises(IntegrityError), transaction.atomic():
@@ -258,6 +306,7 @@ def test_migrations_use_environment_fallback_for_all_legacy_messages() -> None:
 
 def test_message_backfill_blocks_safely_when_no_complete_channel_exists() -> None:
     before = _migrate(_BEFORE_TARGETS)
+    _seed_directory_scope(before)
     _app_id, _message_id = _seed_legacy_message(before, app_key="migration-missing-channel")
     secret_marker = "migration-secret-must-not-leak"  # noqa: S105
 
@@ -281,3 +330,39 @@ def test_message_backfill_blocks_safely_when_no_complete_channel_exists() -> Non
         cast("object", failed_apps.get_model("notify", "NotifyMessage")),
     )
     _ = failed_message_model.objects.all().delete()
+
+
+def test_multi_scope_default_channel_is_left_unconfigured_when_no_history_exists() -> None:
+    before = _migrate(_BEFORE_TARGETS)
+    _seed_directory_scope(before, source_slug="dingtalk-a", corp_id="corp-a")
+    _seed_directory_scope(before, source_slug="dingtalk-b", corp_id="corp-b")
+    apps = before.loader.project_state(_BEFORE_TARGETS).apps
+    app_model = cast(
+        "type[_AppModel]",
+        cast("object", apps.get_model("applications", "App")),
+    )
+    capability_model = cast(
+        "type[_CreateOnlyModel]",
+        cast("object", apps.get_model("applications", "AppCapability")),
+    )
+    integration_settings = cast(
+        "type[_CreateOnlyModel]",
+        cast("object", apps.get_model("applications", "IntegrationSettings")),
+    )
+    app = app_model.objects.create(app_key="migration-multi-scope", name="Multi Scope")
+    _ = capability_model.objects.create(app_id=app.id, capability="notify", enabled=True)
+    _ = integration_settings.objects.create(
+        id=1,
+        dingtalk_app_key="db-key",
+        dingtalk_app_secret="db-secret",  # noqa: S106
+        dingtalk_agent_id="1001",
+    )
+
+    after = _migrate(_AFTER_TARGETS)
+
+    migrated_apps = after.loader.project_state(_AFTER_TARGETS).apps
+    channel_model = cast(
+        "type[_ChannelModel]",
+        cast("object", migrated_apps.get_model("applications", "AppNotificationChannel")),
+    )
+    assert channel_model.objects.filter(app_id=app.id).exists() is False

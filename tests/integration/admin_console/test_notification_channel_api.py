@@ -43,6 +43,8 @@ def _payload(*, secret: str | None, agent_id: str = "1001") -> dict[str, str]:
         "name": "EasyTrade 钉钉应用",
         "dingtalk_app_key": "easytrade-key",
         "agent_id": agent_id,
+        "directory_source_slug": "dingtalk",
+        "corp_id": "corp-easytrade",
     }
     if secret is not None:
         payload["dingtalk_app_secret"] = secret
@@ -75,6 +77,8 @@ def test_owner_versions_channel_without_exposing_or_auditing_secret() -> None:
     assert payload["version"] == 2  # noqa: PLR2004
     assert payload["agent_id"] == "1002"
     assert payload["app_secret_configured"] is True
+    assert payload["directory_source_slug"] == "dingtalk"
+    assert payload["corp_id"] == "corp-easytrade"
     assert first_secret not in body
     assert second_secret not in body
     channels = list(AppNotificationChannel.objects.filter(app=app).order_by("version"))

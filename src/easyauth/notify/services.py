@@ -4,7 +4,7 @@ import hashlib
 import json
 import logging
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import TYPE_CHECKING, Final, Literal, cast, override
 from urllib.parse import parse_qs, urlparse
@@ -12,12 +12,17 @@ from zoneinfo import ZoneInfo
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
-from django.db.models import Count, F, Q
+from django.db.models import Count, F, Max, Q
 from django.utils import timezone
 
-from easyauth.accounts.models import DingTalkUserMirror, UserMirror
+from easyauth.accounts.directory_references import (
+    AmbiguousDirectoryReferenceError,
+    InvalidDirectoryReferenceError,
+    resolve_directory_user,
+)
+from easyauth.accounts.models import UserMirror
 from easyauth.applications.capabilities import app_capability_config
-from easyauth.applications.models import CAPABILITY_NOTIFY, AppNotificationChannel
+from easyauth.applications.models import CAPABILITY_NOTIFY, App, AppNotificationChannel
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.integrations.dingtalk.api_client import (
     DingTalkApiClient,
@@ -31,8 +36,10 @@ from easyauth.notify.models import (
     NOTIFY_ERROR_DINGTALK_REJECTED,
     NOTIFY_ERROR_EXHAUSTED,
     NOTIFY_ERROR_NO_DINGTALK_ID,
+    NOTIFY_ERROR_USER_AMBIGUOUS,
     NOTIFY_ERROR_USER_INACTIVE,
     NOTIFY_ERROR_USER_NOT_FOUND,
+    NOTIFY_ERROR_USER_SCOPE_MISMATCH,
     NOTIFY_MESSAGE_STATUS_COMPLETED,
     NOTIFY_MESSAGE_STATUS_FAILED,
     NOTIFY_MESSAGE_STATUS_PARTIALLY_FAILED,
@@ -56,8 +63,6 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from datetime import datetime
     from uuid import UUID
-
-    from easyauth.applications.models import App
 
 type NotifyAcceptErrorKind = Literal[
     "conflict",
@@ -108,6 +113,8 @@ ACCEPT_TIME_ERROR_CODES: Final[frozenset[str]] = frozenset(
         NOTIFY_ERROR_USER_NOT_FOUND,
         NOTIFY_ERROR_NO_DINGTALK_ID,
         NOTIFY_ERROR_USER_INACTIVE,
+        NOTIFY_ERROR_USER_AMBIGUOUS,
+        NOTIFY_ERROR_USER_SCOPE_MISMATCH,
     },
 )
 MAX_DELIVERY_ATTEMPTS: Final = len(NOTIFY_RETRY_DELAYS_SECONDS) + 1
@@ -157,6 +164,7 @@ class ResolvedRecipient:
     raw_ref: str
     user: UserMirror | None
     dingtalk_corp_id: str
+    dingtalk_source_slug: str
     dingtalk_userid: str
     status: str
     error_code: str
@@ -251,13 +259,18 @@ def resolve_recipients(raw_refs: Sequence[str]) -> list[ResolvedRecipient]:
             )
 
     resolved: list[ResolvedRecipient] = []
-    seen_dingtalk_userids: set[str] = set()
+    seen_directory_users: set[tuple[str, str, str]] = set()
     for raw_ref in raw_refs:
         item = _resolve_one_recipient(raw_ref)
-        if item.dingtalk_userid and item.dingtalk_userid in seen_dingtalk_userids:
+        directory_key = (
+            item.dingtalk_source_slug,
+            item.dingtalk_corp_id,
+            item.dingtalk_userid,
+        )
+        if item.dingtalk_userid and directory_key in seen_directory_users:
             continue
         if item.dingtalk_userid:
-            seen_dingtalk_userids.add(item.dingtalk_userid)
+            seen_directory_users.add(directory_key)
         resolved.append(item)
     return resolved
 
@@ -334,13 +347,15 @@ def accept_notify_message(  # noqa: PLR0913 - 受理入口完整业务事实。
             kind="dependency_unavailable",
             message=NOTIFY_CHANNEL_MISSING_MESSAGE,
         )
+    resolved = _enforce_channel_scope(channel, resolved)
 
     try:
         with transaction.atomic():
+            locked_app = App.objects.select_for_update().get(id=app.id)
             # 日配额: 事务内先查后写(第 2 篇 §3.2)。
-            _assert_daily_quota(app_id=app.id, additional=len(resolved))
+            _assert_daily_quota(app_id=locked_app.id, additional=len(resolved))
             message = _create_message_with_recipients(
-                app=app,
+                app=locked_app,
                 channel=channel,
                 normalized=normalized,
                 payload_hash=payload_hash,
@@ -476,7 +491,7 @@ def reconcile_send_results() -> int:
     now = timezone.now()
     window_start = now - timedelta(hours=NOTIFY_RECONCILE_WINDOW_HOURS)
 
-    channel_tasks = _sent_channel_tasks_in_window(window_start)
+    channel_tasks = select_reconcile_tasks(window_start)
     if not channel_tasks:
         return 0
 
@@ -485,10 +500,12 @@ def reconcile_send_results() -> int:
     for channel_id, task_id in channel_tasks:
         channel = AppNotificationChannel.objects.filter(id=channel_id).first()
         if channel is None:
+            _mark_task_reconciled(channel_id=channel_id, task_id=task_id, checked_at=now)
             continue
         try:
             client, agent_id = _dingtalk_client_and_agent(channel)
         except (DingTalkNotConfiguredError, ValueError):
+            _mark_task_reconciled(channel_id=channel_id, task_id=task_id, checked_at=now)
             continue
         mids = _reconcile_one_task(
             client=client,
@@ -497,6 +514,7 @@ def reconcile_send_results() -> int:
             task_id=task_id,
             now=now,
         )
+        _mark_task_reconciled(channel_id=channel_id, task_id=task_id, checked_at=now)
         if not mids:
             continue
         affected_message_ids.update(mids)
@@ -510,19 +528,37 @@ def reconcile_send_results() -> int:
     return processed
 
 
-def _sent_channel_tasks_in_window(window_start: datetime) -> list[tuple[int, str]]:
-    raw_tasks = (
+def select_reconcile_tasks(window_start: datetime) -> list[tuple[int, str]]:
+    raw_tasks = list(
         NotifyRecipient.objects.filter(
             status=NOTIFY_RECIPIENT_STATUS_SENT,
             sent_at__gt=window_start,
             message__channel_id__isnull=False,
         )
         .exclude(dingtalk_task_id="")
-        .order_by("message__channel_id", "dingtalk_task_id")
-        .values_list("message__channel_id", "dingtalk_task_id")
+        .values("message__channel_id", "dingtalk_task_id")
+        .annotate(last_checked_at=Max("last_reconciled_at"))
+        .order_by(
+            F("last_checked_at").asc(nulls_first=True),
+            "message__channel_id",
+            "dingtalk_task_id",
+        )[:NOTIFY_RECONCILE_TASK_LIMIT],
     )
-    typed = cast("list[tuple[int, str]]", list(raw_tasks))
-    return list(dict.fromkeys(typed))[:NOTIFY_RECONCILE_TASK_LIMIT]
+    typed = cast("list[dict[str, object]]", raw_tasks)
+    tasks: list[tuple[int, str]] = []
+    for row in typed:
+        channel_id = row.get("message__channel_id")
+        task_id = row.get("dingtalk_task_id")
+        if isinstance(channel_id, int) and isinstance(task_id, str):
+            tasks.append((channel_id, task_id))
+    return tasks
+
+
+def _mark_task_reconciled(*, channel_id: int, task_id: str, checked_at: datetime) -> None:
+    _ = NotifyRecipient.objects.filter(
+        message__channel_id=channel_id,
+        dingtalk_task_id=task_id,
+    ).update(last_reconciled_at=checked_at, updated_at=checked_at)
 
 
 def _reconcile_one_task(
@@ -735,56 +771,38 @@ def _is_valid_deeplink_url(url: str) -> bool:
 
 
 def _resolve_one_recipient(raw_ref: str) -> ResolvedRecipient:
-    if raw_ref.startswith(DINGTALK_REF_PREFIX):
-        dingtalk_userid = raw_ref[len(DINGTALK_REF_PREFIX) :]
-        if not dingtalk_userid:
-            return _failed_recipient(
-                raw_ref=raw_ref,
-                error_code=NOTIFY_ERROR_USER_NOT_FOUND,
-                error="dt: 引用缺少钉钉 userid。",
-            )
-        return _resolve_by_dingtalk_userid(raw_ref=raw_ref, dingtalk_userid=dingtalk_userid)
-
-    user = UserMirror.objects.filter(authentik_user_id=raw_ref).first()
-    if user is None:
+    preferred_user = (
+        None
+        if raw_ref.startswith(DINGTALK_REF_PREFIX)
+        else UserMirror.objects.filter(authentik_user_id=raw_ref).first()
+    )
+    if preferred_user is not None and not preferred_user.dingtalk_userid:
         return _failed_recipient(
             raw_ref=raw_ref,
-            error_code=NOTIFY_ERROR_USER_NOT_FOUND,
-            error="用户引用无法解析到目录用户。",
-        )
-    if not user.dingtalk_userid:
-        return _failed_recipient(
-            raw_ref=raw_ref,
-            user=user,
+            user=preferred_user,
             error_code=NOTIFY_ERROR_NO_DINGTALK_ID,
             error="用户存在但无钉钉绑定。",
         )
-    return _resolve_by_dingtalk_userid(
-        raw_ref=raw_ref,
-        dingtalk_userid=user.dingtalk_userid,
-        preferred_user=user,
-        preferred_corp_id=user.dingtalk_corp_id,
-    )
-
-
-def _resolve_by_dingtalk_userid(
-    *,
-    raw_ref: str,
-    dingtalk_userid: str,
-    preferred_user: UserMirror | None = None,
-    preferred_corp_id: str = "",
-) -> ResolvedRecipient:
-    mirror_qs = DingTalkUserMirror.objects.filter(user_id=dingtalk_userid)
-    if preferred_corp_id:
-        mirror = mirror_qs.filter(corp_id=preferred_corp_id).first() or mirror_qs.first()
-    else:
-        mirror = mirror_qs.first()
+    try:
+        mirror = resolve_directory_user(raw_ref)
+    except AmbiguousDirectoryReferenceError:
+        return _failed_recipient(
+            raw_ref=raw_ref,
+            user=preferred_user,
+            error_code=NOTIFY_ERROR_USER_AMBIGUOUS,
+            error="用户引用匹配多个企业目录用户, 必须使用 scoped 引用。",
+        )
+    except InvalidDirectoryReferenceError:
+        return _failed_recipient(
+            raw_ref=raw_ref,
+            user=preferred_user,
+            error_code=NOTIFY_ERROR_USER_NOT_FOUND,
+            error="用户引用格式无效。",
+        )
     if mirror is None:
         return _failed_recipient(
             raw_ref=raw_ref,
             user=preferred_user,
-            dingtalk_corp_id=preferred_corp_id,
-            dingtalk_userid=dingtalk_userid,
             error_code=NOTIFY_ERROR_USER_NOT_FOUND,
             error="用户引用无法解析到目录用户。",
         )
@@ -793,6 +811,7 @@ def _resolve_by_dingtalk_userid(
         return _failed_recipient(
             raw_ref=raw_ref,
             user=preferred_user or _lookup_user_mirror(mirror.corp_id, mirror.user_id),
+            dingtalk_source_slug=mirror.source_slug,
             dingtalk_corp_id=mirror.corp_id,
             dingtalk_userid=mirror.user_id,
             error_code=NOTIFY_ERROR_USER_INACTIVE,
@@ -802,12 +821,39 @@ def _resolve_by_dingtalk_userid(
     return ResolvedRecipient(
         raw_ref=raw_ref,
         user=user,
+        dingtalk_source_slug=mirror.source_slug,
         dingtalk_corp_id=mirror.corp_id,
         dingtalk_userid=mirror.user_id,
         status=NOTIFY_RECIPIENT_STATUS_PENDING,
         error_code="",
         error="",
     )
+
+
+def _enforce_channel_scope(
+    channel: AppNotificationChannel,
+    recipients: list[ResolvedRecipient],
+) -> list[ResolvedRecipient]:
+    scoped: list[ResolvedRecipient] = []
+    for recipient in recipients:
+        if recipient.status != NOTIFY_RECIPIENT_STATUS_PENDING:
+            scoped.append(recipient)
+            continue
+        if (
+            recipient.dingtalk_source_slug == channel.directory_source_slug
+            and recipient.dingtalk_corp_id == channel.corp_id
+        ):
+            scoped.append(recipient)
+            continue
+        scoped.append(
+            replace(
+                recipient,
+                status=NOTIFY_RECIPIENT_STATUS_FAILED,
+                error_code=NOTIFY_ERROR_USER_SCOPE_MISMATCH,
+                error="收件人不属于应用通知通道绑定的企业目录作用域。",
+            ),
+        )
+    return scoped
 
 
 def _lookup_user_mirror(corp_id: str, dingtalk_userid: str) -> UserMirror | None:
@@ -823,12 +869,14 @@ def _failed_recipient(  # noqa: PLR0913 - 失败收件人字段全集。
     error_code: str,
     error: str,
     user: UserMirror | None = None,
+    dingtalk_source_slug: str = "",
     dingtalk_corp_id: str = "",
     dingtalk_userid: str = "",
 ) -> ResolvedRecipient:
     return ResolvedRecipient(
         raw_ref=raw_ref,
         user=user,
+        dingtalk_source_slug=dingtalk_source_slug,
         dingtalk_corp_id=dingtalk_corp_id,
         dingtalk_userid=dingtalk_userid,
         status=NOTIFY_RECIPIENT_STATUS_FAILED,
@@ -928,6 +976,7 @@ def _create_message_with_recipients(  # noqa: PLR0913 - 落库字段全集。
                 raw_ref=item.raw_ref,
                 user=item.user,
                 dingtalk_corp_id=item.dingtalk_corp_id,
+                dingtalk_source_slug=item.dingtalk_source_slug,
                 dingtalk_userid=item.dingtalk_userid,
                 status=item.status,
                 error_code=item.error_code,
@@ -1001,6 +1050,8 @@ def _active_notification_channel(app_id: int) -> AppNotificationChannel | None:
         .exclude(dingtalk_app_key="")
         .exclude(dingtalk_app_secret="")
         .exclude(agent_id="")
+        .exclude(directory_source_slug="")
+        .exclude(corp_id="")
         .first()
     )
 
@@ -1379,12 +1430,6 @@ def _maybe_rewrite_aggregate_after_reconcile(message: NotifyMessage) -> None:
     message.refresh_from_db()
     pending, throttled = _open_recipient_counts(message.id)
     if pending + throttled > 0:
-        return
-    still_sent = NotifyRecipient.objects.filter(
-        message_id=message.id,
-        status=NOTIFY_RECIPIENT_STATUS_SENT,
-    ).exists()
-    if still_sent:
         return
     failed = message.recipient_failed
     total = message.recipient_total

@@ -63,6 +63,8 @@ def _channel(app: App) -> AppNotificationChannel:
         dingtalk_app_key="api-test-key",
         dingtalk_app_secret="api-test-secret",  # noqa: S106 - 测试专用固定值。
         agent_id="1001",
+        directory_source_slug=_SOURCE,
+        corp_id=_CORP,
         version=1,
     )
 

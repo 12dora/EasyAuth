@@ -73,6 +73,8 @@ NOTIFY_RECIPIENT_STATUS_VALUES: Final[tuple[str, ...]] = (
 NOTIFY_ERROR_USER_NOT_FOUND: Final = "USER_NOT_FOUND"
 NOTIFY_ERROR_NO_DINGTALK_ID: Final = "NO_DINGTALK_ID"
 NOTIFY_ERROR_USER_INACTIVE: Final = "USER_INACTIVE"
+NOTIFY_ERROR_USER_AMBIGUOUS: Final = "USER_AMBIGUOUS"
+NOTIFY_ERROR_USER_SCOPE_MISMATCH: Final = "USER_SCOPE_MISMATCH"
 NOTIFY_ERROR_DINGTALK_REJECTED: Final = "DINGTALK_REJECTED"
 NOTIFY_ERROR_DINGTALK_DUPLICATE: Final = "DINGTALK_DUPLICATE"
 NOTIFY_ERROR_DINGTALK_DAILY_LIMIT: Final = "DINGTALK_DAILY_LIMIT"
@@ -215,6 +217,11 @@ class NotifyRecipient(models.Model):
         related_name="notify_recipients",
     )
     dingtalk_corp_id: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
+    dingtalk_source_slug: models.CharField[str, str] = models.CharField(
+        max_length=128,
+        blank=True,
+        default="",
+    )
     dingtalk_userid: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
     status: models.CharField[str, str] = models.CharField(
         max_length=16,
@@ -237,6 +244,10 @@ class NotifyRecipient(models.Model):
         str | date | datetime | None,
         datetime | None,
     ] = models.DateTimeField(null=True, blank=True)
+    last_reconciled_at: models.DateTimeField[
+        str | date | datetime | None,
+        datetime | None,
+    ] = models.DateTimeField(null=True, blank=True, db_index=True)
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
     )

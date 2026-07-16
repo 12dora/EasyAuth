@@ -215,6 +215,8 @@ def check_dingtalk_notify() -> DependencyCheckResult:
         .exclude(dingtalk_app_key="")
         .exclude(dingtalk_app_secret="")
         .exclude(agent_id="")
+        .exclude(directory_source_slug="")
+        .exclude(corp_id="")
         .values_list("app_id", flat=True),
     )
     missing = [
