@@ -85,7 +85,11 @@ def easyauth_lifecycle_router(
             raw_body = await read_bounded_body(request, max_body_bytes=max_body_bytes)
         except BodyTooLargeError:
             status_code, headers, body = body_too_large_response(max_body_bytes)
-            return Response(content=body, status_code=status_code, media_type=headers["Content-Type"])
+            return Response(
+                content=body,
+                status_code=status_code,
+                media_type=headers["Content-Type"],
+            )
         status_code, headers, body = lifecycle_http_response(
             secret_provider=secret_provider,
             headers=dict(request.headers),

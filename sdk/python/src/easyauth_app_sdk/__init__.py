@@ -11,7 +11,14 @@
    纯函数内核 + 可选 FastAPI 路由封装(``easyauth_lifecycle_router``)。
 """
 
-from easyauth_app_sdk.client import EasyAuthAppClient, EasyAuthClientError
+from easyauth_app_sdk.client import (
+    DINGTALK_REF_PREFIX,
+    NOTIFY_TEMPLATE_ACTION_CARD,
+    NOTIFY_TEMPLATE_MARKDOWN,
+    NOTIFY_TEMPLATE_TEXT,
+    EasyAuthAppClient,
+    EasyAuthClientError,
+)
 from easyauth_app_sdk.descriptor import (
     DESCRIPTOR_VERSION,
     DESCRIPTOR_WELL_KNOWN_PATH,
@@ -49,8 +56,12 @@ __all__ = [
     "DEFAULT_HANDOVER_PATH",
     "DESCRIPTOR_VERSION",
     "DESCRIPTOR_WELL_KNOWN_PATH",
+    "DINGTALK_REF_PREFIX",
     "HANDOVER_EXECUTE_EVENT",
     "HANDOVER_PREVIEW_EVENT",
+    "NOTIFY_TEMPLATE_ACTION_CARD",
+    "NOTIFY_TEMPLATE_MARKDOWN",
+    "NOTIFY_TEMPLATE_TEXT",
     "SDK_NAME",
     "SDK_VERSION",
     "WEBHOOK_TEST_EVENT",

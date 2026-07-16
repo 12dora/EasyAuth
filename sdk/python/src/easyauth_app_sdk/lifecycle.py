@@ -55,7 +55,9 @@ def _error_response(status_code: int, code: str, message: str) -> tuple[int, dic
     return _json_response(status_code, {"error": {"code": code, "message": message}})
 
 
-def body_too_large_response(max_body_bytes: int = DEFAULT_MAX_BODY_BYTES) -> tuple[int, dict[str, str], bytes]:
+def body_too_large_response(
+    max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
+) -> tuple[int, dict[str, str], bytes]:
     return _error_response(
         413,
         BODY_TOO_LARGE_CODE,
@@ -63,7 +65,11 @@ def body_too_large_response(max_body_bytes: int = DEFAULT_MAX_BODY_BYTES) -> tup
     )
 
 
-async def read_bounded_body(request: _RequestLike, *, max_body_bytes: int = DEFAULT_MAX_BODY_BYTES) -> bytes:
+async def read_bounded_body(
+    request: _RequestLike,
+    *,
+    max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
+) -> bytes:
     """在验签前有界读取请求体: 先看 Content-Length, 再流式 N+1 截断。"""
     content_length = request.headers.get("content-length")
     if content_length is not None:

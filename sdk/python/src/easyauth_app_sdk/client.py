@@ -3,14 +3,16 @@
 from __future__ import annotations
 
 import json
-import socket
 from dataclasses import dataclass
-from http.client import HTTPResponse
 from time import monotonic
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlparse
 from urllib.request import Request, urlopen
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+    from http.client import HTTPResponse
 
 DEFAULT_TIMEOUT_SECONDS: Final = 5.0
 DEFAULT_TOTAL_TIMEOUT_SECONDS: Final = 15.0
@@ -20,6 +22,15 @@ RESPONSE_TOO_LARGE_MESSAGE: Final = "EasyAuth 响应体超过大小上限。"
 READ_TOTAL_TIMEOUT_MESSAGE: Final = "EasyAuth 响应读取超过总时限。"
 REDIRECT_FORBIDDEN_MESSAGE: Final = "EasyAuth 客户端默认禁止跟随重定向。"
 HTTPS_REQUIRED_MESSAGE: Final = "生产环境 EasyAuth base_url 必须使用 https。"
+_HTTP_REDIRECT_MIN: Final = 300
+_HTTP_REDIRECT_MAX: Final = 400
+
+# 通知模板取值(send_notification.template)。
+NOTIFY_TEMPLATE_TEXT: Final = "text"
+NOTIFY_TEMPLATE_MARKDOWN: Final = "markdown"
+NOTIFY_TEMPLATE_ACTION_CARD: Final = "action_card"
+# 钉钉 userid 引用前缀: "dt:<dingtalk_user_id>"。
+DINGTALK_REF_PREFIX: Final = "dt:"
 
 
 class EasyAuthClientError(RuntimeError):
@@ -119,6 +130,123 @@ class EasyAuthAppClient:
         url = f"{self._app_base()}/approval-instances/{quote(instance_id, safe='')}"
         return self._request_json(url, method="GET")
 
+    # ---- directory ----
+
+    def search_directory_users(  # noqa: PLR0913 - 查询参数与契约 §D1 一一对应
+        self,
+        *,
+        q: str | None = None,
+        department_id: str | None = None,
+        manager_id: str | None = None,
+        include_inactive: bool = False,
+        page: int = 1,
+        page_size: int = 20,
+    ) -> dict[str, Any]:
+        """搜索/分页拉取用户目录。GET {app_base}/directory/users。
+
+        返回 {"data": [...], "pagination": {...}}, 字段契约见公共 API 文档 §5。
+        """
+        params: dict[str, str] = {
+            "page": str(page),
+            "page_size": str(page_size),
+        }
+        if q is not None:
+            params["q"] = q
+        if department_id is not None:
+            params["department_id"] = department_id
+        if manager_id is not None:
+            params["manager_id"] = manager_id
+        if include_inactive:
+            params["include_inactive"] = "true"
+        url = f"{self._app_base()}/directory/users?{urlencode(params)}"
+        return self._request_json(url, method="GET")
+
+    def get_directory_user(self, user_ref: str) -> dict[str, Any]:
+        """用户详情(含主管摘要)。
+
+        user_ref 为 user_id 或 "dt:<钉钉userid>"。
+        GET {app_base}/directory/users/{user_ref}
+        """
+        url = f"{self._app_base()}/directory/users/{quote(user_ref, safe='')}"
+        return self._request_json(url, method="GET")
+
+    def get_directory_user_manager(self, user_ref: str) -> dict[str, Any]:
+        """直接主管。
+
+        GET {app_base}/directory/users/{user_ref}/manager
+        无主管时服务端返回 404 NOT_FOUND(见契约 §D3)。
+        """
+        url = f"{self._app_base()}/directory/users/{quote(user_ref, safe='')}/manager"
+        return self._request_json(url, method="GET")
+
+    def list_directory_user_subordinates(self, user_ref: str) -> dict[str, Any]:
+        """直接下属(不分页, 全量)。GET {app_base}/directory/users/{user_ref}/subordinates"""
+        url = (
+            f"{self._app_base()}/directory/users/{quote(user_ref, safe='')}/subordinates"
+        )
+        return self._request_json(url, method="GET")
+
+    def list_directory_departments(
+        self,
+        *,
+        parent_id: str | None = None,
+    ) -> dict[str, Any]:
+        """部门列表。
+
+        parent_id 省略 → 全量扁平列表(客户端自建树);
+        传入 → 该部门直接子部门。GET {app_base}/directory/departments
+        """
+        if parent_id is not None:
+            query = urlencode({"parent_id": parent_id})
+            url = f"{self._app_base()}/directory/departments?{query}"
+        else:
+            url = f"{self._app_base()}/directory/departments"
+        return self._request_json(url, method="GET")
+
+    # ---- notify ----
+
+    def send_notification(  # noqa: PLR0913 - 请求体字段与契约 §N2 一一对应
+        self,
+        *,
+        recipients: Sequence[str],
+        template: str,
+        content: str,
+        title: str | None = None,
+        deeplink_url: str | None = None,
+        deeplink_title: str | None = None,
+        dedup_key: str | None = None,
+        biz_tag: str | None = None,
+    ) -> dict[str, Any]:
+        """发送钉钉工作通知(异步受理)。POST {app_base}/notify/messages。
+
+        recipients 元素为 user_id 或 "dt:<钉钉userid>"; template 取
+        "text" | "markdown" | "action_card"。返回 {"message_id", "accepted", ...}。
+        幂等: 相同 dedup_key 重复调用返回同一 message_id 且 accepted=False。
+        deeplink_title 为 action_card 按钮文案; 省略时服务端缺省为「查看详情」。
+        """
+        url = f"{self._app_base()}/notify/messages"
+        body: dict[str, Any] = {
+            "recipients": list(recipients),
+            "template": template,
+            "content": content,
+        }
+        if title is not None:
+            body["title"] = title
+        if deeplink_url is not None:
+            body["deeplink_url"] = deeplink_url
+        if deeplink_title is not None:
+            body["deeplink_title"] = deeplink_title
+        if dedup_key is not None:
+            body["dedup_key"] = dedup_key
+        if biz_tag is not None:
+            body["biz_tag"] = biz_tag
+        return self._request_json(url, method="POST", body=body)
+
+    def get_notification(self, message_id: str) -> dict[str, Any]:
+        """查询通知投递状态(含逐收件人明细)。GET {app_base}/notify/messages/{message_id}"""
+        url = f"{self._app_base()}/notify/messages/{quote(message_id, safe='')}"
+        return self._request_json(url, method="GET")
+
     def _app_base(self) -> str:
         return f"{self.base_url.rstrip('/')}/api/v1/apps/{quote(self.app_key, safe='')}"
 
@@ -148,21 +276,28 @@ class EasyAuthAppClient:
                 request,
                 timeout=min(self.timeout_seconds, max(deadline - monotonic(), 0.001)),
             ) as response:
-                if 300 <= getattr(response, "status", 0) < 400:
-                    raise EasyAuthClientError(REDIRECT_FORBIDDEN_MESSAGE, status_code=response.status)
+                status = getattr(response, "status", 0)
+                if _HTTP_REDIRECT_MIN <= status < _HTTP_REDIRECT_MAX:
+                    raise EasyAuthClientError(
+                        REDIRECT_FORBIDDEN_MESSAGE,
+                        status_code=response.status,
+                    )
                 raw_body = _read_bounded(
                     response,
                     deadline=deadline,
                     max_bytes=self.max_response_bytes,
                 )
         except HTTPError as error:
-            if 300 <= error.code < 400:
-                raise EasyAuthClientError(REDIRECT_FORBIDDEN_MESSAGE, status_code=error.code) from error
+            if _HTTP_REDIRECT_MIN <= error.code < _HTTP_REDIRECT_MAX:
+                raise EasyAuthClientError(
+                    REDIRECT_FORBIDDEN_MESSAGE,
+                    status_code=error.code,
+                ) from error
             detail = _read_error_body(error, max_bytes=min(500, self.max_response_bytes))
             raise EasyAuthClientError(
                 f"EasyAuth 返回 HTTP {error.code}: {detail}", status_code=error.code
             ) from error
-        except (URLError, TimeoutError, OSError, socket.timeout) as error:
+        except (URLError, TimeoutError, OSError) as error:
             raise EasyAuthClientError(f"无法连接 EasyAuth: {error}") from error
         try:
             payload = json.loads(raw_body.decode("utf-8"))

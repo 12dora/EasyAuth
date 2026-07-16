@@ -94,6 +94,43 @@ def test_validate_manifest_accepts_lifecycle_and_webhook_sections() -> None:
     assert validated["webhook"]["signing"] == "hmac-sha256"
 
 
+def test_validate_manifest_accepts_top_level_platform_capabilities() -> None:
+    manifest = _manifest()
+    manifest["capabilities"] = ["directory", "notify"]
+
+    validated = validate_manifest(manifest)
+
+    assert validated["capabilities"] == ["directory", "notify"]
+
+
+def test_validate_manifest_rejects_capabilities_not_array() -> None:
+    manifest = _manifest()
+    manifest["capabilities"] = "directory"
+    with pytest.raises(ManifestValidationError, match="capabilities 必须是字符串数组"):
+        validate_manifest(manifest)
+
+
+def test_validate_manifest_rejects_capabilities_empty_string() -> None:
+    manifest = _manifest()
+    manifest["capabilities"] = ["directory", ""]
+    with pytest.raises(ManifestValidationError, match="非空字符串"):
+        validate_manifest(manifest)
+
+
+def test_validate_manifest_rejects_capabilities_outside_whitelist() -> None:
+    manifest = _manifest()
+    manifest["capabilities"] = ["directory", "future_capability"]
+    with pytest.raises(ManifestValidationError, match="取值必须是"):
+        validate_manifest(manifest)
+
+
+def test_validate_manifest_rejects_capabilities_duplicates() -> None:
+    manifest = _manifest()
+    manifest["capabilities"] = ["directory", "notify", "directory"]
+    with pytest.raises(ManifestValidationError, match="重复值"):
+        validate_manifest(manifest)
+
+
 def test_descriptor_roundtrip_preserves_lifecycle_and_webhook_sections() -> None:
     # 描述符 build/parse 必须原样携带 lifecycle/webhook 节, EasyAuth 侧据此发现交接端点。
     manifest = _manifest()

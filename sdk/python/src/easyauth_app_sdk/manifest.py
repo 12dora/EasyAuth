@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
+
 class ManifestValidationError(ValueError):
     """manifest 结构不满足 EasyAuth 契约。"""
 
@@ -33,13 +34,16 @@ ALLOWED_AUTH_GROUP_KINDS = frozenset({"role", "bundle"})
 ALLOWED_APPROVAL_TARGET_TYPES = frozenset({"authorization_group", "permission"})
 ALLOWED_RISK_LEVELS = frozenset({"standard", "high"})
 ALLOWED_WEBHOOK_SIGNING = frozenset({"hmac-sha256"})
+# 顶层 capabilities 节: 平台能力申明(申明 ≠ 开通)。
+ALLOWED_PLATFORM_CAPABILITIES = frozenset({"directory", "notify"})
+OPTIONAL_TOP_SECTIONS = frozenset({"lifecycle", "webhook", "capabilities"})
 
 
 def validate_manifest(manifest: Any) -> dict[str, Any]:
     """校验 manifest 结构并原样返回; 不满足契约时抛 ManifestValidationError。"""
     if not isinstance(manifest, dict):
         raise ManifestValidationError("manifest 必须是 JSON object")
-    unknown_top = sorted(set(manifest) - set(REQUIRED_SECTIONS) - {"lifecycle", "webhook"})
+    unknown_top = sorted(set(manifest) - set(REQUIRED_SECTIONS) - OPTIONAL_TOP_SECTIONS)
     if unknown_top:
         raise ManifestValidationError(f"manifest 含未知顶层字段: {unknown_top}")
     missing = [section for section in REQUIRED_SECTIONS if section not in manifest]
@@ -74,7 +78,27 @@ def validate_manifest(manifest: Any) -> dict[str, Any]:
         _validate_lifecycle(manifest["lifecycle"])
     if "webhook" in manifest:
         _validate_webhook(manifest["webhook"])
+    if "capabilities" in manifest:
+        _validate_capabilities(manifest["capabilities"])
     return manifest
+
+
+def _validate_capabilities(capabilities: Any) -> None:
+    """校验顶层 capabilities 节: 非空字符串、白名单、去重。"""
+    if not isinstance(capabilities, list):
+        raise ManifestValidationError("capabilities 必须是字符串数组")
+    seen: set[str] = set()
+    for index, item in enumerate(capabilities):
+        label = f"capabilities[{index}]"
+        if not isinstance(item, str) or not item:
+            raise ManifestValidationError(f"{label} 必须是非空字符串")
+        if item not in ALLOWED_PLATFORM_CAPABILITIES:
+            raise ManifestValidationError(
+                f"{label} 取值必须是 {sorted(ALLOWED_PLATFORM_CAPABILITIES)} 之一",
+            )
+        if item in seen:
+            raise ManifestValidationError(f"capabilities 存在重复值: {item}")
+        seen.add(item)
 
 
 def _validate_lifecycle(lifecycle: Any) -> None:
@@ -163,7 +187,7 @@ def _validate_app(app: Any) -> None:
         raise ManifestValidationError("app.app_key 必须是非空字符串")
 
 
-def _validate_permissions(
+def _validate_permissions(  # noqa: C901, PLR0912 - 字段校验分支与契约字段一一对应
     permissions: list[Any],
     scope_keys: set[str],
     group_keys: set[str],
@@ -181,7 +205,9 @@ def _validate_permissions(
         permission_keys.add(key)
         name = permission.get("name")
         if not isinstance(name, str) or not name:
-            raise ManifestValidationError(f"{label}.name 必须是非空字符串(权限显示名由下游提供)")
+            raise ManifestValidationError(
+                f"{label}.name 必须是非空字符串(权限显示名由下游提供)",
+            )
         name_en = permission.get("name_en")
         if name_en is not None and (not isinstance(name_en, str) or not name_en):
             raise ManifestValidationError(f"{label}.name_en 存在时必须是非空字符串")
@@ -190,7 +216,9 @@ def _validate_permissions(
             if not isinstance(group_key, str) or not group_key:
                 raise ManifestValidationError(f"{label}.group_key 必须是非空字符串")
             if group_keys and group_key not in group_keys:
-                raise ManifestValidationError(f"{label}.group_key 引用了未知组: {group_key}")
+                raise ManifestValidationError(
+                    f"{label}.group_key 引用了未知组: {group_key}",
+                )
         supported_scopes = permission.get("supported_scopes")
         if not isinstance(supported_scopes, list) or not supported_scopes:
             raise ManifestValidationError(f"{label}.supported_scopes 必须是非空数组")
@@ -209,7 +237,7 @@ def _validate_permissions(
     return permission_keys
 
 
-def _validate_authorization_groups(
+def _validate_authorization_groups(  # noqa: C901, PLR0912 - 字段校验分支与契约字段一一对应
     groups: list[Any],
     permission_keys: set[str],
     scope_keys: set[str],
@@ -241,7 +269,9 @@ def _validate_authorization_groups(
             permission = grant.get("permission")
             scope = grant.get("scope")
             if not isinstance(permission, str) or not permission:
-                raise ManifestValidationError(f"{grant_label}.permission 必须是非空字符串")
+                raise ManifestValidationError(
+                    f"{grant_label}.permission 必须是非空字符串",
+                )
             if not isinstance(scope, str) or not scope:
                 raise ManifestValidationError(f"{grant_label}.scope 必须是非空字符串")
             if permission_keys and permission not in permission_keys:
@@ -249,7 +279,9 @@ def _validate_authorization_groups(
                     f"{grant_label}.permission 引用了未知权限: {permission}",
                 )
             if scope not in scope_keys:
-                raise ManifestValidationError(f"{grant_label}.scope 引用了未知 scope: {scope}")
+                raise ManifestValidationError(
+                    f"{grant_label}.scope 引用了未知 scope: {scope}",
+                )
             grant_key = (permission, scope)
             if grant_key in seen_grants:
                 raise ManifestValidationError(
@@ -280,7 +312,9 @@ def _validate_approval_rules(
             raise ManifestValidationError(f"{label}.target_key 必须是非空字符串")
         target = (str(target_type), target_key)
         if target in seen_targets:
-            raise ManifestValidationError(f"approval_rules 存在重复 target: {target_type}/{target_key}")
+            raise ManifestValidationError(
+                f"approval_rules 存在重复 target: {target_type}/{target_key}",
+            )
         seen_targets.add(target)
         if target_type == "permission" and permission_keys and target_key not in permission_keys:
             raise ManifestValidationError(f"{label}.target_key 引用了未知权限: {target_key}")

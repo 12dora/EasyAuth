@@ -10,7 +10,7 @@ from easyauth_app_sdk.manifest import validate_manifest
 DESCRIPTOR_WELL_KNOWN_PATH: Final = "/.well-known/easyauth-app.json"
 DESCRIPTOR_VERSION: Final = 1
 SDK_NAME: Final = "easyauth-app-sdk-python"
-SDK_VERSION: Final = "0.1.0"
+SDK_VERSION: Final = "0.2.0"
 
 
 class DescriptorError(ValueError):
