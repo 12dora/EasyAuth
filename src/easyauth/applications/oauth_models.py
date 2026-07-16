@@ -6,6 +6,8 @@ from django.core.exceptions import ValidationError
 from django.db import models
 from oauth2_provider.models import Application
 
+from easyauth.applications.credential_capabilities import validate_credential_capabilities
+
 if TYPE_CHECKING:
     from datetime import date, datetime
 
@@ -37,6 +39,11 @@ class OAuthClientBinding(models.Model):
         default=OAUTH_CLIENT_CREDENTIAL_KIND,
     )
     name: models.CharField[str, str] = models.CharField(max_length=128)
+    capabilities: models.JSONField[list[str], list[str]] = models.JSONField(
+        default=list,
+        blank=True,
+        validators=[validate_credential_capabilities],
+    )
     is_active: models.BooleanField[bool, bool] = models.BooleanField(default=True)
     disabled_at: models.DateTimeField[str | date | datetime | None, datetime | None] = (
         models.DateTimeField(blank=True, null=True)

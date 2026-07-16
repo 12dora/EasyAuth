@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import ClassVar
+from typing import ClassVar, Literal
 
 from django.http import HttpRequest, JsonResponse
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from easyauth.admin_console.api_payloads import list_payload
 from easyauth.admin_console.api_responses import (
@@ -20,6 +20,7 @@ from easyauth.admin_console.credentials import (
     create_oauth_client_for_console,
     create_static_token_for_console,
     rotate_static_token_for_console,
+    update_credential_capabilities_for_console,
 )
 from easyauth.admin_console.credentials_api_payloads import (
     credential_items,
@@ -39,6 +40,24 @@ class CredentialCreatePayload(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
 
     name: str = Field(min_length=1, max_length=128)
+    capabilities: list[Literal["directory", "notify"]] = Field(default_factory=list)
+
+    @field_validator("capabilities")
+    @classmethod
+    def capabilities_must_be_unique(
+        cls,
+        value: list[Literal["directory", "notify"]],
+    ) -> list[Literal["directory", "notify"]]:
+        if len(value) != len(set(value)):
+            message = "凭据 capabilities 不得重复。"
+            raise ValueError(message)
+        return value
+
+
+class CredentialCapabilitiesPayload(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
+
+    capabilities: list[Literal["directory", "notify"]]
 
 
 def console_credentials(request: HttpRequest, app_key: str) -> JsonResponse:
@@ -74,6 +93,7 @@ def console_static_token_create(request: HttpRequest, app_key: str) -> JsonRespo
         app=app,
         name=payload.name,
         actor=CredentialActor(actor_id=actor.user_id),
+        capabilities=list(payload.capabilities),
     )
     credential = AppCredential.objects.get(id=one_time_secret.credential_id)
     return _json_response(
@@ -131,6 +151,7 @@ def console_oauth_client_create(request: HttpRequest, app_key: str) -> JsonRespo
         app=app,
         name=payload.name,
         actor=CredentialActor(actor_id=actor.user_id),
+        capabilities=list(payload.capabilities),
     )
     binding = OAuthClientBinding.objects.select_related("oauth_application").get(
         id=one_time_secret.credential_id,
@@ -139,6 +160,52 @@ def console_oauth_client_create(request: HttpRequest, app_key: str) -> JsonRespo
         credential_secret_payload(oauth_client_item(binding), one_time_secret),
         status=HTTPStatus.CREATED,
     )
+
+
+def console_credential_capabilities(
+    request: HttpRequest,
+    app_key: str,
+    credential_type: str,
+    credential_id: int,
+) -> JsonResponse:
+    if request.method not in {"PUT", "PATCH"}:
+        return method_not_allowed_response()
+    match credential_write_context(request, app_key):
+        case (App() as app, ConsoleActor() as actor):
+            pass
+        case JsonResponse() as response:
+            return response
+    try:
+        payload = CredentialCapabilitiesPayload.model_validate_json(request.body)
+    except ValidationError as error:
+        return _error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "凭据 capabilities 参数无效。",
+            {"errors": str(error)},
+            status=HTTPStatus.BAD_REQUEST,
+        )
+    if len(payload.capabilities) != len(set(payload.capabilities)):
+        return _error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "凭据 capabilities 不得重复。",
+            status=HTTPStatus.BAD_REQUEST,
+        )
+    try:
+        credential = update_credential_capabilities_for_console(
+            app=app,
+            credential_type=credential_type,
+            credential_id=credential_id,
+            capabilities=sorted(payload.capabilities),
+            actor=CredentialActor(actor_id=actor.user_id),
+        )
+    except CredentialOperationError:
+        return _not_found_response()
+    item = (
+        static_credential_item(credential)
+        if isinstance(credential, AppCredential)
+        else oauth_client_item(credential)
+    )
+    return _json_response({"credential": item})
 
 
 def _create_payload(request: HttpRequest) -> CredentialCreatePayload | JsonResponse:

@@ -8,6 +8,12 @@ from django.db import models
 from django.db.models import Q
 
 from .approval_rule_rules import approval_rule_clean_errors
+from .credential_capabilities import (
+    CAPABILITY_DIRECTORY,
+    CAPABILITY_NOTIFY,
+    CAPABILITY_VALUES,
+    validate_credential_capabilities,
+)
 from .integration_settings import IntegrationSettings
 from .oauth_models import OAuthClientBinding
 from .ops_models import (
@@ -21,6 +27,7 @@ __all__ = (
     "CAPABILITY_CHOICES",
     "CAPABILITY_DIRECTORY",
     "CAPABILITY_NOTIFY",
+    "CAPABILITY_VALUES",
     "App",
     "AppCapability",
     "AppCredential",
@@ -83,14 +90,9 @@ MANAGED_SCOPE_POLICY_ACTIVE_RESOLVERS = (
 )
 
 # App 维度平台能力(目录/通知); 默认关闭, 由超管在 console 显式开通。
-CAPABILITY_DIRECTORY: Final = "directory"
-CAPABILITY_NOTIFY: Final = "notify"
 CAPABILITY_CHOICES: Final[tuple[tuple[str, str], ...]] = (
     (CAPABILITY_DIRECTORY, "directory"),
     (CAPABILITY_NOTIFY, "notify"),
-)
-CAPABILITY_VALUES: Final[frozenset[str]] = frozenset(
-    (CAPABILITY_DIRECTORY, CAPABILITY_NOTIFY),
 )
 
 
@@ -181,6 +183,11 @@ class AppCredential(models.Model):
     )
     credential_type: models.CharField[str, str] = models.CharField(max_length=32)
     name: models.CharField[str, str] = models.CharField(max_length=128)
+    capabilities: models.JSONField[list[str], list[str]] = models.JSONField(
+        default=list,
+        blank=True,
+        validators=[validate_credential_capabilities],
+    )
     token_hash: models.CharField[str, str] = models.CharField(max_length=256)
     # 令牌的确定性查找键(SHA-256), 认证时先索引定位单行再做 PBKDF2 校验,
     # 避免对全部 active 凭据线性跑慢哈希被打成 CPU DoS。

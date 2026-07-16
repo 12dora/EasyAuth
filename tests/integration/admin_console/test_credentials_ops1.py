@@ -131,6 +131,7 @@ def test_ops1_credentials_api_owner_lists_without_secret_material() -> None:
             "kind": "static_token",
             "name": "primary integration",
             "is_active": True,
+            "capabilities": [],
         },
         {
             "id": _json_int(oauth_credential["id"]),
@@ -138,6 +139,7 @@ def test_ops1_credentials_api_owner_lists_without_secret_material() -> None:
             "name": "oauth integration",
             "is_active": True,
             "client_id": _json_string(oauth_secret["client_id"]),
+            "capabilities": [],
         },
     ]
     assert static_issue.plaintext_token not in body
@@ -184,6 +186,7 @@ def test_ops1_credentials_api_creates_static_token_with_one_time_plaintext() -> 
         "kind": "static_token",
         "name": "api token",
         "is_active": True,
+        "capabilities": [],
     }
     assert plaintext_token.startswith("eat_")
     assert plaintext_token not in credential.token_hash
@@ -349,6 +352,7 @@ def test_ops1_credentials_api_disables_static_token() -> None:
         "kind": "static_token",
         "name": "disable token",
         "is_active": False,
+        "capabilities": [],
     }
     assert credential.is_active is False
 
@@ -397,6 +401,97 @@ def test_ops1_credentials_api_developer_write_is_forbidden() -> None:
     # Then: API 拒绝写操作且不创建凭据。
     assert response.status_code == HTTPStatus.FORBIDDEN
     assert _json_object(_json_dict(response)["error"])["code"] == ErrorCode.PERMISSION_DENIED
+    assert AppCredential.objects.filter(app=app).exists() is False
+
+
+def test_credential_capabilities_create_rotate_and_owner_update() -> None:
+    client = _logged_in_client("owner-credential-capabilities")
+    app = _owned_app("credential-capabilities", "owner-credential-capabilities")
+    created = client.post(
+        _credentials_api_url(app.app_key, "static-tokens"),
+        data=dumps({"name": "notify token", "capabilities": ["notify"]}),
+        content_type="application/json",
+    )
+    created_item = _json_object(_json_dict(created)["credential"])
+    credential_id = _json_int(created_item["id"])
+    assert created.status_code == HTTPStatus.CREATED
+    assert created_item["capabilities"] == ["notify"]
+
+    rotated = client.post(
+        _credentials_api_url(app.app_key, f"static-tokens/{credential_id}/rotate"),
+        content_type="application/json",
+    )
+    rotated_item = _json_object(_json_dict(rotated)["credential"])
+    assert rotated.status_code == HTTPStatus.CREATED
+    assert rotated_item["capabilities"] == ["notify"]
+
+    updated = client.patch(
+        _credentials_api_url(
+            app.app_key,
+            f"static-tokens/{credential_id}/capabilities",
+        ),
+        data=dumps({"capabilities": ["notify", "directory"]}),
+        content_type="application/json",
+    )
+    assert updated.status_code == HTTPStatus.OK
+    assert _json_object(_json_dict(updated)["credential"])["capabilities"] == [
+        "directory",
+        "notify",
+    ]
+    audit = AuditLog.objects.filter(
+        event_type="console_credential_capabilities_updated",
+    ).get()
+    assert audit.metadata["capabilities"] == ["directory", "notify"]
+
+
+def test_oauth_capabilities_update_is_owner_only() -> None:
+    owner = _logged_in_client("owner-oauth-capabilities")
+    developer = _logged_in_client("developer-oauth-capabilities")
+    app = _owned_app("oauth-capabilities", "owner-oauth-capabilities")
+    _ = AppMembership.objects.create(
+        app=app,
+        user_id="developer-oauth-capabilities",
+        role="developer",
+    )
+    created = owner.post(
+        _credentials_api_url(app.app_key, "oauth-clients"),
+        data=dumps({"name": "directory client", "capabilities": ["directory"]}),
+        content_type="application/json",
+    )
+    credential_id = _json_int(_json_object(_json_dict(created)["credential"])["id"])
+    url = _credentials_api_url(app.app_key, f"oauth-clients/{credential_id}/capabilities")
+    denied = developer.put(
+        url,
+        data=dumps({"capabilities": ["notify"]}),
+        content_type="application/json",
+    )
+    assert denied.status_code == HTTPStatus.FORBIDDEN
+    updated = owner.put(
+        url,
+        data=dumps({"capabilities": ["notify"]}),
+        content_type="application/json",
+    )
+    assert updated.status_code == HTTPStatus.OK
+    assert _json_object(_json_dict(updated)["credential"])["capabilities"] == ["notify"]
+
+
+@pytest.mark.parametrize(
+    "capabilities",
+    [["unknown"], ["notify", "notify"]],
+    ids=["unknown", "duplicate"],
+)
+def test_credential_capabilities_reject_invalid_values(capabilities: list[str]) -> None:
+    client = _logged_in_client(f"owner-invalid-capabilities-{len(capabilities)}")
+    app = _owned_app(
+        f"invalid-capabilities-{len(capabilities)}",
+        f"owner-invalid-capabilities-{len(capabilities)}",
+    )
+    response = client.post(
+        _credentials_api_url(app.app_key, "static-tokens"),
+        data=dumps({"name": "invalid", "capabilities": capabilities}),
+        content_type="application/json",
+    )
+    assert response.status_code == HTTPStatus.BAD_REQUEST
     assert AppCredential.objects.filter(app=app).exists() is False
 
 

@@ -7,7 +7,13 @@ from easyauth.applications.models import AppCapability, JsonValue
 __all__ = (
     "app_capability_config",
     "app_capability_enabled",
+    "credential_capability_enabled",
 )
+
+
+def credential_capability_enabled(principal: object, capability: str) -> bool:
+    capabilities = getattr(principal, "capabilities", frozenset())
+    return isinstance(capabilities, (set, frozenset)) and capability in capabilities
 
 
 def app_capability_enabled(app_id: int, capability: str) -> bool:

@@ -51,6 +51,7 @@ class CredentialEvent:
     credential_type: str
     credential_id: int
     reason: str = ""
+    capabilities: list[str] | None = None
 
 
 def create_static_token_for_console(
@@ -58,8 +59,13 @@ def create_static_token_for_console(
     app: App,
     name: str,
     actor: CredentialActor,
+    capabilities: list[str] | None = None,
 ) -> OneTimeSecret:
-    issue = StaticTokenService.create_token(app=app, name=name)
+    issue = StaticTokenService.create_token(
+        app=app,
+        name=name,
+        capabilities=capabilities or [],
+    )
     _record_credential_event(
         CredentialEvent(
             app=app,
@@ -151,8 +157,13 @@ def create_oauth_client_for_console(
     app: App,
     name: str,
     actor: CredentialActor,
+    capabilities: list[str] | None = None,
 ) -> OneTimeSecret:
-    issue = OAuthClientService.create_client(app=app, name=name)
+    issue = OAuthClientService.create_client(
+        app=app,
+        name=name,
+        capabilities=capabilities or [],
+    )
     _record_credential_event(
         CredentialEvent(
             app=app,
@@ -170,6 +181,43 @@ def create_oauth_client_for_console(
         secondary_label="client_secret",
         secondary_value=issue.client_secret,
     )
+
+
+def update_credential_capabilities_for_console(
+    *,
+    app: App,
+    credential_type: str,
+    credential_id: int,
+    capabilities: list[str],
+    actor: CredentialActor,
+) -> AppCredential | OAuthClientBinding:
+    match credential_type:
+        case "static-tokens":
+            credential: AppCredential | OAuthClientBinding = _static_credential_for_app(
+                app=app,
+                credential_id=credential_id,
+            )
+        case "oauth-clients":
+            credential = _oauth_client_for_app(app=app, credential_id=credential_id)
+        case _:
+            raise CredentialOperationError(
+                code="credential_not_found",
+                credential_id=credential_id,
+            )
+    credential.capabilities = capabilities
+    credential.full_clean()
+    credential.save(update_fields=["capabilities", "updated_at"])
+    _record_credential_event(
+        CredentialEvent(
+            app=app,
+            actor=actor,
+            action="console_credential_capabilities_updated",
+            credential_type=credential.credential_type,
+            credential_id=credential_id,
+            capabilities=capabilities,
+        ),
+    )
+    return credential
 
 
 def _static_credential_for_app(*, app: App, credential_id: int) -> AppCredential:
@@ -191,13 +239,15 @@ def _oauth_client_for_app(*, app: App, credential_id: int) -> OAuthClientBinding
 
 
 def _record_credential_event(event: CredentialEvent) -> None:
-    metadata: dict[str, str | int] = {
+    metadata: dict[str, str | int | list[str]] = {
         "app_key": event.app.app_key,
         "credential_type": event.credential_type,
         "credential_id": event.credential_id,
     }
     if event.reason:
         metadata["reason"] = event.reason
+    if event.capabilities is not None:
+        metadata["capabilities"] = event.capabilities
     _ = AuditService.record(
         AuditRecord(
             actor_type="user",

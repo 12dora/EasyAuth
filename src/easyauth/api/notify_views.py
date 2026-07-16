@@ -15,7 +15,11 @@ from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.permission_query_auth import authenticate_permission_query_token
 from easyauth.api.responses import error_response, json_response
-from easyauth.applications.capabilities import app_capability_config, app_capability_enabled
+from easyauth.applications.capabilities import (
+    app_capability_config,
+    app_capability_enabled,
+    credential_capability_enabled,
+)
 from easyauth.applications.models import CAPABILITY_NOTIFY, App
 from easyauth.applications.services import AppPrincipal
 from easyauth.audit.services import AuditRecord, AuditService
@@ -223,7 +227,10 @@ def _authenticate_notify_capability(
             _AUTHENTICATION_FAILED_MESSAGE,
             status=HTTPStatus.UNAUTHORIZED,
         )
-    if not app_capability_enabled(app.id, CAPABILITY_NOTIFY):
+    if not app_capability_enabled(app.id, CAPABILITY_NOTIFY) or not credential_capability_enabled(
+        principal,
+        CAPABILITY_NOTIFY,
+    ):
         _record_notify_rejected(
             principal=principal,
             error_code=ErrorCode.PERMISSION_DENIED.value,

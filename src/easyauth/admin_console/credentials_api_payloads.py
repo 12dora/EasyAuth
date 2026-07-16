@@ -32,6 +32,7 @@ def static_credential_item(credential: AppCredential) -> dict[str, JsonValue]:
         "kind": "static_token",
         "name": credential.name,
         "is_active": credential.is_active,
+        "capabilities": credential.capabilities,
     }
 
 
@@ -42,6 +43,7 @@ def oauth_client_item(binding: OAuthClientBinding) -> dict[str, JsonValue]:
         "name": binding.name,
         "is_active": binding.is_active,
         "client_id": binding.oauth_application.client_id,
+        "capabilities": binding.capabilities,
     }
 
 

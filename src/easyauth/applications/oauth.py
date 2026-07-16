@@ -9,6 +9,7 @@ from django.utils import timezone
 from oauth2_provider.generators import generate_client_secret
 from oauth2_provider.models import AccessToken, Application
 
+from easyauth.applications.credential_capabilities import normalize_credential_capabilities
 from easyauth.applications.oauth_models import OAUTH_CLIENT_CREDENTIAL_KIND, OAuthClientBinding
 from easyauth.applications.services import AppPrincipal
 from easyauth.audit.services import AuditRecord, AuditService
@@ -52,7 +53,12 @@ class _AppIdentity(Protocol):
 class OAuthClientService:
     @staticmethod
     @transaction.atomic
-    def create_client(*, app: App, name: str) -> OAuthClientIssue:
+    def create_client(
+        *,
+        app: App,
+        name: str,
+        capabilities: object = (),
+    ) -> OAuthClientIssue:
         plaintext_secret = generate_client_secret()
         oauth_application = Application(
             name=name,
@@ -67,6 +73,7 @@ class OAuthClientService:
             oauth_application=oauth_application,
             credential_type=APP_CREDENTIAL_TYPE_OAUTH_CLIENT,
             name=name,
+            capabilities=normalize_credential_capabilities(list(capabilities)),
         )
         binding.full_clean()
         binding.save()
@@ -109,6 +116,7 @@ def _authenticate_oauth_access_token(plaintext_token: str) -> AppPrincipal:
         app_key=binding.app.app_key,
         credential_type=binding.credential_type,
         credential_id=_binding_id(binding),
+        capabilities=frozenset(binding.capabilities),
     )
 
 

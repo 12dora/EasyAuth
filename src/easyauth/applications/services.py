@@ -9,6 +9,7 @@ from django.contrib.auth.hashers import PBKDF2PasswordHasher
 from django.db import transaction
 from django.utils import timezone
 
+from easyauth.applications.credential_capabilities import normalize_credential_capabilities
 from easyauth.applications.models import APP_CREDENTIAL_STATIC_KIND, App, AppCredential
 from easyauth.audit.services import AuditRecord, AuditService
 
@@ -29,6 +30,7 @@ class AppPrincipal:
     app_key: str
     credential_type: str
     credential_id: int
+    capabilities: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,10 +70,15 @@ class _StaticTokenAuditContext:
 class AppCredentialService:
     @staticmethod
     @transaction.atomic
-    def create_static_token(app: App, name: str = "") -> IssuedStaticToken:
+    def create_static_token(
+        app: App,
+        name: str = "",
+        capabilities: object = (),
+    ) -> IssuedStaticToken:
         return _issue_static_token(
             app=app,
             name=name,
+            capabilities=capabilities,
             audit_context=_StaticTokenAuditContext(APP_CREDENTIAL_CREATED_EVENT),
         )
 
@@ -81,11 +88,13 @@ class AppCredentialService:
         app: App,
         name: str = "",
         previous_credential_id: int | None = None,
+        capabilities: object = (),
     ) -> IssuedStaticToken:
         credential_name = name if name else "rotated static token"
         return _issue_static_token(
             app=app,
             name=credential_name,
+            capabilities=capabilities,
             audit_context=_StaticTokenAuditContext(
                 APP_CREDENTIAL_ROTATED_EVENT,
                 previous_credential_id,
@@ -110,8 +119,17 @@ class AppCredentialService:
 
 class StaticTokenService:
     @staticmethod
-    def create_token(*, app: App, name: str) -> StaticTokenIssue:
-        issued_token = AppCredentialService.create_static_token(app=app, name=name)
+    def create_token(
+        *,
+        app: App,
+        name: str,
+        capabilities: object = (),
+    ) -> StaticTokenIssue:
+        issued_token = AppCredentialService.create_static_token(
+            app=app,
+            name=name,
+            capabilities=capabilities,
+        )
         return StaticTokenIssue(
             credential_id=_model_id(issued_token.credential),
             plaintext_token=issued_token.plaintext_token,
@@ -124,6 +142,7 @@ class StaticTokenService:
             app=credential.app,
             name=credential.name,
             previous_credential_id=credential_id,
+            capabilities=credential.capabilities,
         )
         return StaticTokenIssue(
             credential_id=_model_id(issued_token.credential),
@@ -166,6 +185,7 @@ def _authenticate_static_token(plaintext_token: str) -> AppPrincipal:
                 app_key=credential.app.app_key,
                 credential_type=credential.credential_type,
                 credential_id=_model_id(credential),
+                capabilities=frozenset(credential.capabilities),
             )
 
     raise StaticTokenAuthenticationError
@@ -197,6 +217,7 @@ def _issue_static_token(
     *,
     app: App,
     name: str,
+    capabilities: object,
     audit_context: _StaticTokenAuditContext,
 ) -> IssuedStaticToken:
     plaintext_token = _generate_static_token()
@@ -204,6 +225,7 @@ def _issue_static_token(
         app=app,
         credential_type=APP_CREDENTIAL_STATIC_KIND,
         name=name,
+        capabilities=normalize_credential_capabilities(list(capabilities)),
         token_hash=_hash_static_token(plaintext_token),
         token_lookup=_static_token_lookup(plaintext_token),
     )

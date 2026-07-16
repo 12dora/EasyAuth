@@ -44,6 +44,7 @@ from easyauth.admin_console.console_app_api import (
     integration_guide_api,
 )
 from easyauth.admin_console.credentials_api import (
+    console_credential_capabilities,
     console_credentials,
     console_oauth_client_create,
     console_static_token_create,
@@ -518,6 +519,11 @@ urlpatterns = [
         "api/v1/apps/<str:app_key>/credentials/<str:credential_type>/<int:credential_id>/disable",
         console_credential_disable,
         name="console-credential-disable",
+    ),
+    path(
+        "api/v1/apps/<str:app_key>/credentials/<str:credential_type>/<int:credential_id>/capabilities",
+        console_credential_capabilities,
+        name="console-credential-capabilities",
     ),
     path(
         "api/v1/apps/<str:app_key>/credentials/static-tokens/<int:credential_id>/disable",
