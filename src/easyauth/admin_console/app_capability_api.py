@@ -12,6 +12,7 @@ from easyauth.admin_console.api_responses import (
     method_not_allowed_response,
 )
 from easyauth.admin_console.authz import require_superuser
+from easyauth.admin_console.request_guards import require_console_actor
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import (
     CAPABILITY_CHOICES,
@@ -19,6 +20,7 @@ from easyauth.applications.models import (
     App,
     AppCapability,
 )
+from easyauth.applications.ownership import ConsoleActor, can_view_app
 from easyauth.audit.services import AuditRecord, AuditService
 
 type CapabilityPayload = dict[str, JsonValue]
@@ -37,17 +39,17 @@ class CapabilityUpdatePayload(BaseModel):
 
 def console_app_capabilities(request: HttpRequest, app_key: str) -> JsonResponse:
     # GET: 列出该 app 全部已知平台能力(含未建行的默认关闭态)。
-    match require_superuser(request):
-        case str():
+    match _read_context(request, app_key):
+        case (App() as app, ConsoleActor() as actor):
             pass
         case JsonResponse() as response:
             return response
     if request.method != "GET":
         return method_not_allowed_response()
-    app = App.objects.filter(app_key=app_key).first()
-    if app is None:
-        return error_response(ErrorCode.NOT_FOUND, "应用不存在。", status=HTTPStatus.NOT_FOUND)
-    payload: CapabilityPayload = {"capabilities": _capability_list(app)}
+    payload: CapabilityPayload = {
+        "capabilities": _capability_list(app),
+        "can_manage": actor.is_superuser,
+    }
     return json_response(payload)
 
 
@@ -56,28 +58,47 @@ def console_app_capability_detail(
     app_key: str,
     capability: str,
 ) -> JsonResponse:
-    # PUT: 超管开关/改配置; 仅 enabled 翻转时写审计。
+    if request.method == "GET":
+        return _get_capability(request, app_key=app_key, capability=capability)
+    if request.method == "PUT":
+        return _put_capability_for_superuser(request, app_key=app_key, capability=capability)
+    return method_not_allowed_response()
+
+
+def _get_capability(request: HttpRequest, *, app_key: str, capability: str) -> JsonResponse:
+    match _read_context(request, app_key):
+        case (App() as app, ConsoleActor() as actor):
+            pass
+        case JsonResponse() as response:
+            return response
+    if capability not in CAPABILITY_VALUES:
+        return _unknown_capability_response()
+    row = AppCapability.objects.filter(app=app, capability=capability).first()
+    payload: CapabilityPayload = {
+        "capability": _capability_item(capability, row),
+        "can_manage": actor.is_superuser,
+    }
+    return json_response(payload)
+
+
+def _put_capability_for_superuser(
+    request: HttpRequest,
+    *,
+    app_key: str,
+    capability: str,
+) -> JsonResponse:
+    # PUT: 只有系统超管可开关/改配置; 普通 App owner/developer 只读。
     match require_superuser(request):
         case str() as actor_id:
             pass
         case JsonResponse() as response:
             return response
     if capability not in CAPABILITY_VALUES:
-        return error_response(
-            ErrorCode.VALIDATION_ERROR,
-            UNKNOWN_CAPABILITY_MESSAGE,
-            status=HTTPStatus.BAD_REQUEST,
-        )
+        return _unknown_capability_response()
     app = App.objects.filter(app_key=app_key).first()
     if app is None:
         return error_response(ErrorCode.NOT_FOUND, "应用不存在。", status=HTTPStatus.NOT_FOUND)
-    if request.method == "GET":
-        row = AppCapability.objects.filter(app=app, capability=capability).first()
-        payload: CapabilityPayload = {"capability": _capability_item(capability, row)}
-        return json_response(payload)
-    if request.method == "PUT":
-        return _put_capability(request, app=app, capability=capability, actor_id=actor_id)
-    return method_not_allowed_response()
+    return _put_capability(request, app=app, capability=capability, actor_id=actor_id)
 
 
 def _put_capability(
@@ -117,6 +138,7 @@ def _put_capability(
         )
     response_payload: CapabilityPayload = {
         "capability": _capability_item(capability, row),
+        "can_manage": True,
     }
     return json_response(response_payload)
 
@@ -174,4 +196,30 @@ def _record_capability_toggle(
                 "updated_by": actor_id,
             },
         ),
+    )
+
+
+def _read_context(request: HttpRequest, app_key: str) -> tuple[App, ConsoleActor] | JsonResponse:
+    match require_console_actor(request):
+        case ConsoleActor() as actor:
+            pass
+        case JsonResponse() as response:
+            return response
+    app = App.objects.filter(app_key=app_key).first()
+    if app is None:
+        return error_response(ErrorCode.NOT_FOUND, "应用不存在。", status=HTTPStatus.NOT_FOUND)
+    if not can_view_app(actor, app):
+        return error_response(
+            ErrorCode.PERMISSION_DENIED,
+            "只有 active App owner/developer 可以查看能力配置。",
+            status=HTTPStatus.FORBIDDEN,
+        )
+    return app, actor
+
+
+def _unknown_capability_response() -> JsonResponse:
+    return error_response(
+        ErrorCode.VALIDATION_ERROR,
+        UNKNOWN_CAPABILITY_MESSAGE,
+        status=HTTPStatus.BAD_REQUEST,
     )

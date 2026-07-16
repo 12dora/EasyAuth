@@ -964,9 +964,7 @@ def _claim_message(message_id: str) -> _ClaimedMessage | None:
             status__in=(NOTIFY_MESSAGE_STATUS_PENDING, NOTIFY_MESSAGE_STATUS_SENDING),
         )
         .filter(
-            Q(claim_token="")
-            | Q(lease_expires_at__isnull=True)
-            | Q(lease_expires_at__lte=now),
+            Q(claim_token="") | Q(lease_expires_at__isnull=True) | Q(lease_expires_at__lte=now),
         )
         .update(
             status=NOTIFY_MESSAGE_STATUS_SENDING,
@@ -1008,9 +1006,9 @@ def _active_notification_channel(app_id: int) -> AppNotificationChannel | None:
 
 
 def _dingtalk_client_and_agent(
-    channel: AppNotificationChannel | None,
+    channel: AppNotificationChannel,
 ) -> tuple[DingTalkApiClient, str | int]:
-    if channel is None or not channel.dingtalk_app_key.strip() or not channel.dingtalk_app_secret:
+    if not channel.dingtalk_app_key.strip() or not channel.dingtalk_app_secret:
         raise DingTalkNotConfiguredError
     agent_id = channel.agent_id.strip()
     if not agent_id:
@@ -1092,9 +1090,13 @@ def _refresh_message_counts(message: NotifyMessage) -> None:
     for row in rows:
         status_raw = row.get("status")
         count_raw = row.get("count")
-        if isinstance(status_raw, str) and isinstance(count_raw, int) and not isinstance(
-            count_raw,
-            bool,
+        if (
+            isinstance(status_raw, str)
+            and isinstance(count_raw, int)
+            and not isinstance(
+                count_raw,
+                bool,
+            )
         ):
             by_status[status_raw] = count_raw
     sent = by_status.get(NOTIFY_RECIPIENT_STATUS_SENT, 0) + by_status.get(
@@ -1273,6 +1275,9 @@ def _apply_send_result(
         send_result.get("failed_user_id_list"),
     )
     forbidden_by_code = _forbidden_userid_codes(send_result)
+    delivered_userids = _string_id_set(send_result.get("read_user_id_list")) | _string_id_set(
+        send_result.get("unread_user_id_list"),
+    )
     for userid in _string_id_set(send_result.get("forbidden_user_id_list")):
         _ = forbidden_by_code.setdefault(userid, NOTIFY_ERROR_DINGTALK_REJECTED)
 
@@ -1284,9 +1289,9 @@ def _apply_send_result(
     recipients = list(qs)
     affected: set[UUID] = set()
     for row in recipients:
-        affected.add(row.message_id)
         userid = row.dingtalk_userid
         if userid in rejected_userids:
+            affected.add(row.message_id)
             row.status = NOTIFY_RECIPIENT_STATUS_FAILED
             row.error_code = NOTIFY_ERROR_DINGTALK_REJECTED
             row.error = "钉钉回执: 无效用户或发送失败。"
@@ -1296,6 +1301,7 @@ def _apply_send_result(
             )
             continue
         if userid in forbidden_by_code:
+            affected.add(row.message_id)
             code = forbidden_by_code[userid]
             row.status = NOTIFY_RECIPIENT_STATUS_FAILED
             row.error_code = code
@@ -1310,6 +1316,9 @@ def _apply_send_result(
                 update_fields=["status", "error_code", "error", "updated_at"],
             )
             continue
+        if userid not in delivered_userids:
+            continue
+        affected.add(row.message_id)
         row.status = NOTIFY_RECIPIENT_STATUS_DELIVERED
         row.delivered_at = now
         row.error_code = ""

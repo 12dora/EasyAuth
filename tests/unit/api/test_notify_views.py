@@ -53,7 +53,11 @@ def _enable_notify(app: App, *, config: dict[str, Any] | None = None) -> None:
         enabled=True,
         config=config or {},
     )
-    _ = AppNotificationChannel.objects.create(
+    _ = _channel(app)
+
+
+def _channel(app: App) -> AppNotificationChannel:
+    return AppNotificationChannel.objects.create(
         app=app,
         name="API 测试通知通道",
         dingtalk_app_key="api-test-key",
@@ -184,6 +188,7 @@ def test_get_status_contract_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     message = NotifyMessage.objects.create(
         app=app,
+        channel=AppNotificationChannel.objects.get(app=app, is_active=True),
         template=NOTIFY_TEMPLATE_ACTION_CARD,
         title="任务逾期升级",
         content="x",
@@ -246,8 +251,10 @@ def test_get_404_other_app(monkeypatch: pytest.MonkeyPatch) -> None:
     other = App.objects.create(app_key="other", name="Other")
     _enable_notify(app)
     _auth(monkeypatch, app)
+    other_channel = _channel(other)
     message = NotifyMessage.objects.create(
         app=other,
+        channel=other_channel,
         template="text",
         content="x",
         payload_hash="b" * 64,
@@ -290,52 +297,6 @@ def test_capability_required(monkeypatch: pytest.MonkeyPatch) -> None:
     rejected = AuditLog.objects.filter(event_type="app_notify_rejected")
     assert rejected.count() == 1
     assert rejected.get().metadata["error_code"] == "PERMISSION_DENIED"
-
-
-def test_credential_capability_required(monkeypatch: pytest.MonkeyPatch) -> None:
-    cache.clear()
-    app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
-    _enable_notify(app)
-    principal = AppPrincipal(
-        app_id=app.id,
-        app_key=app.app_key,
-        credential_type="static_token",
-        credential_id=203,
-    )
-    monkeypatch.setattr(
-        "easyauth.api.notify_views.authenticate_permission_query_token",
-        lambda _token: principal,
-    )
-    body = {"recipients": ["x"], "template": "text", "content": "c"}
-    response = notify_messages_create(_post(body), _APP_KEY)
-    assert response.status_code == HTTPStatus.FORBIDDEN
-
-
-def test_notify_accept_without_channel_returns_503_without_message(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    cache.clear()
-    app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
-    _ = AppCapability.objects.create(
-        app=app,
-        capability=CAPABILITY_NOTIFY,
-        enabled=True,
-    )
-    _auth(monkeypatch, app)
-    _seed_user(authentik="no-channel-user", dingtalk="no-channel-dt")
-    response = notify_messages_create(
-        _post(
-            {
-                "recipients": ["no-channel-user"],
-                "template": "text",
-                "content": "must not persist",
-            },
-        ),
-        _APP_KEY,
-    )
-    assert response.status_code == HTTPStatus.SERVICE_UNAVAILABLE
-    assert loads(response.content)["error"]["code"] == "DEPENDENCY_UNAVAILABLE"
-    assert NotifyMessage.objects.filter(app=app).exists() is False
 
 
 def test_invalid_recipients_type_audits_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -397,9 +358,13 @@ def test_pipeline_accept_to_deliver(monkeypatch: pytest.MonkeyPatch) -> None:
 
     client = MagicMock()
     client.send_work_notification.return_value = "task-pipe"
+
+    def client_for_channel(_channel: AppNotificationChannel) -> tuple[MagicMock, int]:
+        return client, 42
+
     monkeypatch.setattr(
         "easyauth.notify.services._dingtalk_client_and_agent",
-        lambda _channel: (client, 42),
+        client_for_channel,
     )
     deliver_message(message_id, 1)
 

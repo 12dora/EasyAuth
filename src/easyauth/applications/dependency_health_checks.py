@@ -67,7 +67,7 @@ def run_dependency_health_checks() -> tuple[DependencyHealthItem, ...]:
         _check_authentik(config),
         _check_authentik_directory(config),
         _check_dingtalk(),
-        _check_dingtalk_notify(),
+        check_dingtalk_notify(),
         _check_celery(),
         _check_connectors(),
     )
@@ -188,14 +188,18 @@ def _check_dingtalk() -> DependencyCheckResult:
     )
 
 
-def _check_dingtalk_notify() -> DependencyCheckResult:
-    enabled_apps = dict(
-        AppCapability.objects.filter(
-            capability=CAPABILITY_NOTIFY,
-            enabled=True,
-            app__is_active=True,
-        ).values_list("app_id", "app__app_key"),
+def check_dingtalk_notify() -> DependencyCheckResult:
+    enabled_rows = cast(
+        "list[tuple[int, str]]",
+        list(
+            AppCapability.objects.filter(
+                capability=CAPABILITY_NOTIFY,
+                enabled=True,
+                app__is_active=True,
+            ).values_list("app_id", "app__app_key"),
+        ),
     )
+    enabled_apps = dict(enabled_rows)
     if not enabled_apps:
         return DependencyCheckResult(
             dependency=DEPENDENCY_DINGTALK_NOTIFY,

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import ClassVar
+from typing import ClassVar, cast
 
 from django.conf import settings
 from django.db import transaction
@@ -31,8 +31,12 @@ class NotificationChannelPayload(BaseModel):
 
     name: str = Field(min_length=1, max_length=128)
     dingtalk_app_key: str = Field(min_length=1, max_length=128)
-    dingtalk_app_secret: str = Field(min_length=1, max_length=512)
+    dingtalk_app_secret: str | None = Field(default=None, max_length=512)
     agent_id: str = Field(min_length=1, max_length=64)
+
+
+class NotificationChannelSecretRequiredError(Exception):
+    pass
 
 
 def console_app_notification_channel(request: HttpRequest, app_key: str) -> JsonResponse:
@@ -44,8 +48,12 @@ def console_app_notification_channel(request: HttpRequest, app_key: str) -> Json
     if request.method == "GET":
         channel = _active_channel(app)
         return json_response({"notification_channel": _channel_payload(channel)})
-    if request.method != "PUT":
-        return method_not_allowed_response()
+    if request.method == "PUT":
+        return _update_channel(request, app=app, actor=actor)
+    return method_not_allowed_response()
+
+
+def _update_channel(request: HttpRequest, *, app: App, actor: ConsoleActor) -> JsonResponse:
     if not can_manage_app(actor, app):
         return _write_denied()
     try:
@@ -54,10 +62,18 @@ def console_app_notification_channel(request: HttpRequest, app_key: str) -> Json
         return error_response(
             ErrorCode.VALIDATION_ERROR,
             "通知通道参数无效。",
-            {"errors": str(error)},
+            _validation_details(error),
             status=HTTPStatus.BAD_REQUEST,
         )
-    channel = _replace_channel(app=app, actor=actor, payload=payload)
+    try:
+        channel = _replace_channel(app=app, actor=actor, payload=payload)
+    except NotificationChannelSecretRequiredError:
+        return error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "首次创建通知通道必须提供 dingtalk_app_secret。",
+            {"field": "dingtalk_app_secret"},
+            status=HTTPStatus.BAD_REQUEST,
+        )
     return json_response(
         {"notification_channel": _channel_payload(channel)},
         status=HTTPStatus.CREATED,
@@ -88,11 +104,10 @@ def console_app_notification_channel_test(request: HttpRequest, app_key: str) ->
     )
     try:
         _ = client.get_access_token(force_refresh=True)
-    except DingTalkApiError as error:
+    except DingTalkApiError:
         return error_response(
             ErrorCode.DEPENDENCY_UNAVAILABLE,
             "钉钉通知通道连通性测试失败。",
-            {"error": str(error)},
             status=HTTPStatus.SERVICE_UNAVAILABLE,
         )
     _ = AuditService.record(
@@ -116,6 +131,12 @@ def _replace_channel(
     payload: NotificationChannelPayload,
 ) -> AppNotificationChannel:
     _ = App.objects.select_for_update().get(id=app.id)
+    previous = AppNotificationChannel.objects.filter(app=app, is_active=True).first()
+    app_secret = payload.dingtalk_app_secret or (
+        previous.dingtalk_app_secret if previous is not None else ""
+    )
+    if not app_secret:
+        raise NotificationChannelSecretRequiredError
     max_version = (
         AppNotificationChannel.objects.filter(app=app).aggregate(value=Max("version"))["value"] or 0
     )
@@ -124,7 +145,7 @@ def _replace_channel(
         app=app,
         name=payload.name,
         dingtalk_app_key=payload.dingtalk_app_key,
-        dingtalk_app_secret=payload.dingtalk_app_secret,
+        dingtalk_app_secret=app_secret,
         agent_id=payload.agent_id,
         version=max_version + 1,
         is_active=True,
@@ -144,6 +165,7 @@ def _replace_channel(
                 "name": channel.name,
                 "version": channel.version,
                 "agent_id": channel.agent_id,
+                "secret_reused": not bool(payload.dingtalk_app_secret),
             },
         ),
     )
@@ -198,3 +220,25 @@ def _write_denied() -> JsonResponse:
         "只有 App owner 可以维护通知通道。",
         status=HTTPStatus.FORBIDDEN,
     )
+
+
+def _validation_details(error: ValidationError) -> dict[str, JsonValue]:
+    raw_errors = cast(
+        "list[dict[str, object]]",
+        error.errors(
+            include_url=False,
+            include_context=False,
+            include_input=False,
+        ),
+    )
+    fields: list[str] = []
+    for item in raw_errors:
+        location = item.get("loc")
+        if not isinstance(location, tuple):
+            continue
+        typed_location = cast("tuple[str | int, ...]", location)
+        field = ".".join(str(component) for component in typed_location)
+        if field and field not in fields:
+            fields.append(field)
+    field_values = cast("list[JsonValue]", fields.copy())
+    return {"fields": field_values}

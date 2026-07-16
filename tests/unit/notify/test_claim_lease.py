@@ -7,7 +7,7 @@ import pytest
 from django.utils import timezone
 
 from easyauth.accounts.models import DingTalkUserMirror, UserMirror
-from easyauth.applications.models import App
+from easyauth.applications.models import App, AppNotificationChannel
 from easyauth.notify.models import (
     CREDENTIAL_TYPE_STATIC_TOKEN,
     NOTIFY_MESSAGE_STATUS_PENDING,
@@ -69,9 +69,13 @@ def test_concurrent_claim_only_one_wins(monkeypatch: pytest.MonkeyPatch) -> None
     )
 
     client = MagicMock()
+
+    def client_for_channel(_channel: AppNotificationChannel) -> tuple[MagicMock, int]:
+        return client, 1
+
     monkeypatch.setattr(
         "easyauth.notify.services._dingtalk_client_and_agent",
-        lambda _channel: (client, 1),
+        client_for_channel,
     )
 
     deliver_message(str(message.id), 2)
@@ -102,9 +106,13 @@ def test_expired_lease_can_be_taken_over(monkeypatch: pytest.MonkeyPatch) -> Non
 
     client = MagicMock()
     client.send_work_notification.return_value = "task-takeover"
+
+    def client_for_channel(_channel: AppNotificationChannel) -> tuple[MagicMock, int]:
+        return client, 1
+
     monkeypatch.setattr(
         "easyauth.notify.services._dingtalk_client_and_agent",
-        lambda _channel: (client, 1),
+        client_for_channel,
     )
 
     deliver_message(str(message.id), 2)

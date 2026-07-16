@@ -97,15 +97,10 @@ class NotifyMessage(models.Model):
         on_delete=models.CASCADE,
         related_name="notify_messages",
     )
-    channel: models.ForeignKey[
-        AppNotificationChannel | None,
-        AppNotificationChannel | None,
-    ] = models.ForeignKey(
+    channel: models.ForeignKey[AppNotificationChannel, AppNotificationChannel] = models.ForeignKey(
         AppNotificationChannel,
         on_delete=models.PROTECT,
         related_name="notify_messages",
-        null=True,
-        blank=True,
     )
     template: models.CharField[str, str] = models.CharField(
         max_length=16,

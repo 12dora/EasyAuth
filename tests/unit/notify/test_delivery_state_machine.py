@@ -83,7 +83,7 @@ def _patch_dingtalk(
     else:
         client.send_work_notification.return_value = "task-1"
 
-    def fake_client_and_agent(_channel: object) -> tuple[MagicMock, int]:
+    def fake_client_and_agent(_channel: AppNotificationChannel) -> tuple[MagicMock, int]:
         return client, 1001
 
     monkeypatch.setattr(
@@ -116,7 +116,7 @@ def test_deliver_all_success_completed(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_delivery_uses_channel_frozen_at_accept_time(monkeypatch: pytest.MonkeyPatch) -> None:
     app = App.objects.create(app_key="notify-frozen-channel", name="Frozen")
-    original = app.notification_channels.get(is_active=True)
+    original = AppNotificationChannel.objects.get(app=app, is_active=True)
     _seed_user(authentik="frozen-user", dingtalk="frozen-dt")
     message = _accept(app, ["frozen-user"])
     original.is_active = False
@@ -144,7 +144,7 @@ def test_delivery_uses_channel_frozen_at_accept_time(monkeypatch: pytest.MonkeyP
     deliver_message(str(message.id), 1)
 
     message.refresh_from_db()
-    assert message.channel_id == original.id
+    assert message.channel.id == original.id
     assert used_channels == [original.id]
 
 

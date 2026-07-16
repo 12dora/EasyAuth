@@ -39,7 +39,7 @@ def test_all_notify_apps_have_active_channels_is_healthy() -> None:
     app = _make_app_with_notify(app_key="health-notify-app", enabled=True)
     _ = _create_channel(app)
 
-    result = dependency_health_checks._check_dingtalk_notify()  # noqa: SLF001
+    result = dependency_health_checks.check_dingtalk_notify()
 
     assert result.dependency == DEPENDENCY_DINGTALK_NOTIFY
     assert result.status == DEPENDENCY_HEALTH_STATUS_HEALTHY
@@ -49,7 +49,7 @@ def test_all_notify_apps_have_active_channels_is_healthy() -> None:
 def test_enabled_app_without_active_channel_is_unhealthy() -> None:
     _ = _make_app_with_notify(app_key="missing-channel", enabled=True)
 
-    result = dependency_health_checks._check_dingtalk_notify()  # noqa: SLF001
+    result = dependency_health_checks.check_dingtalk_notify()
 
     assert result.status == DEPENDENCY_HEALTH_STATUS_UNHEALTHY
     assert "missing-channel" in result.summary
@@ -58,7 +58,7 @@ def test_enabled_app_without_active_channel_is_unhealthy() -> None:
 def test_no_enabled_notify_app_is_healthy() -> None:
     _ = _make_app_with_notify(app_key="notify-disabled", enabled=False)
 
-    result = dependency_health_checks._check_dingtalk_notify()  # noqa: SLF001
+    result = dependency_health_checks.check_dingtalk_notify()
 
     assert result.status == DEPENDENCY_HEALTH_STATUS_HEALTHY
     assert "无 active 应用" in result.summary
@@ -69,7 +69,7 @@ def test_one_missing_channel_cannot_be_hidden_by_another_app() -> None:
     _ = _create_channel(configured)
     _ = _make_app_with_notify(app_key="not-configured", enabled=True)
 
-    result = dependency_health_checks._check_dingtalk_notify()  # noqa: SLF001
+    result = dependency_health_checks.check_dingtalk_notify()
 
     assert result.status == DEPENDENCY_HEALTH_STATUS_UNHEALTHY
     assert "not-configured" in result.summary

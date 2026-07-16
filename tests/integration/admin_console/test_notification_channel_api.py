@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from http import HTTPStatus
 from json import dumps, loads
+from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -11,6 +12,7 @@ from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import App, AppMembership, AppNotificationChannel
 from easyauth.audit.models import AuditLog
+from easyauth.integrations.dingtalk.api_client import DingTalkApiError
 
 pytestmark = pytest.mark.django_db
 
@@ -36,13 +38,15 @@ def _url(app: App, suffix: str = "") -> str:
     return f"{base}/{suffix}" if suffix else base
 
 
-def _payload(*, secret: str, agent_id: str = "1001") -> dict[str, str]:
-    return {
+def _payload(*, secret: str | None, agent_id: str = "1001") -> dict[str, str]:
+    payload = {
         "name": "EasyTrade 钉钉应用",
         "dingtalk_app_key": "easytrade-key",
-        "dingtalk_app_secret": secret,
         "agent_id": agent_id,
     }
+    if secret is not None:
+        payload["dingtalk_app_secret"] = secret
+    return payload
 
 
 def test_owner_versions_channel_without_exposing_or_auditing_secret() -> None:
@@ -66,7 +70,8 @@ def test_owner_versions_channel_without_exposing_or_auditing_secret() -> None:
     assert first.status_code == HTTPStatus.CREATED
     assert second.status_code == HTTPStatus.CREATED
     body = listed.content.decode()
-    payload = loads(body)["notification_channel"]
+    decoded = cast("dict[str, object]", loads(body))
+    payload = cast("dict[str, object]", decoded["notification_channel"])
     assert payload["version"] == 2  # noqa: PLR2004
     assert payload["agent_id"] == "1002"
     assert payload["app_secret_configured"] is True
@@ -102,6 +107,62 @@ def test_developer_can_read_but_cannot_write_or_test_channel() -> None:
     assert denied_test.status_code == HTTPStatus.FORBIDDEN
 
 
+def test_first_create_requires_secret_and_update_can_reuse_it() -> None:
+    app = _app()
+    owner = _client("channel-owner")
+    missing = owner.put(
+        _url(app),
+        data=dumps(_payload(secret=None)),
+        content_type="application/json",
+    )
+    assert missing.status_code == HTTPStatus.BAD_REQUEST
+    assert AppNotificationChannel.objects.filter(app=app).exists() is False
+
+    original_secret = "reuse-channel-secret"  # noqa: S105 - 测试专用固定值。
+    created = owner.put(
+        _url(app),
+        data=dumps(_payload(secret=original_secret)),
+        content_type="application/json",
+    )
+    omitted = owner.put(
+        _url(app),
+        data=dumps(_payload(secret=None, agent_id="2002")),
+        content_type="application/json",
+    )
+    blank_payload = _payload(secret="", agent_id="2003")
+    blank = owner.put(
+        _url(app),
+        data=dumps(blank_payload),
+        content_type="application/json",
+    )
+
+    assert created.status_code == HTTPStatus.CREATED
+    assert omitted.status_code == HTTPStatus.CREATED
+    assert blank.status_code == HTTPStatus.CREATED
+    channels = list(AppNotificationChannel.objects.filter(app=app).order_by("version"))
+    assert [row.dingtalk_app_secret for row in channels] == [original_secret] * 3
+    assert [row.agent_id for row in channels] == ["1001", "2002", "2003"]
+
+
+def test_validation_error_does_not_echo_secret_input() -> None:
+    app = _app()
+    owner = _client("channel-owner")
+    secret_marker = "secret-must-not-echo"  # noqa: S105 - 测试专用固定值。
+    payload = cast("dict[str, object]", cast("object", _payload(secret=None)))
+    payload["dingtalk_app_secret"] = {"unexpected": secret_marker}
+
+    response = owner.put(
+        _url(app),
+        data=dumps(payload),
+        content_type="application/json",
+    )
+
+    body = response.content.decode()
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+    assert secret_marker not in body
+    assert loads(body)["error"]["details"]["fields"] == ["dingtalk_app_secret"]
+
+
 def test_owner_connectivity_test_uses_active_channel() -> None:
     app = _app()
     owner = _client("channel-owner")
@@ -118,3 +179,28 @@ def test_owner_connectivity_test_uses_active_channel() -> None:
     assert response.status_code == HTTPStatus.OK
     assert loads(response.content) == {"ok": True, "version": 1}
     get_access_token.assert_called_once_with(force_refresh=True)
+
+
+def test_connectivity_error_does_not_echo_upstream_body() -> None:
+    app = _app()
+    owner = _client("channel-owner")
+    secret = "connectivity-hidden-secret"  # noqa: S105 - 测试专用固定值。
+    _ = owner.put(
+        _url(app),
+        data=dumps(_payload(secret=secret)),
+        content_type="application/json",
+    )
+    upstream_marker = f"upstream rejected appSecret={secret}"
+    with patch(
+        "easyauth.admin_console.notification_channel_api.DingTalkApiClient.get_access_token",
+        side_effect=DingTalkApiError(upstream_marker),
+    ):
+        response = owner.post(_url(app, "test"), content_type="application/json")
+
+    body = response.content.decode()
+    assert response.status_code == HTTPStatus.SERVICE_UNAVAILABLE
+    assert upstream_marker not in body
+    assert secret not in body
+    for audit in AuditLog.objects.all():
+        assert upstream_marker not in str(audit.metadata)
+        assert secret not in str(audit.metadata)

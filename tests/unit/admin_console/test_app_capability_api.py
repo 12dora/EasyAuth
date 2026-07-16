@@ -22,6 +22,7 @@ from easyauth.applications.models import (
     CAPABILITY_NOTIFY,
     App,
     AppCapability,
+    AppMembership,
 )
 from easyauth.audit.models import AuditLog
 
@@ -42,6 +43,7 @@ def test_list_capabilities_defaults_to_disabled() -> None:
 
     assert response.status_code == HTTPStatus.OK
     body = _json_object(response)
+    assert body["can_manage"] is True
     assert body["capabilities"] == [
         {
             "capability": CAPABILITY_DIRECTORY,
@@ -77,6 +79,7 @@ def test_put_enables_capability_and_writes_audit() -> None:
     assert response.status_code == HTTPStatus.OK
     body = _json_object(response)
     item = cast("JsonObject", body["capability"])
+    assert body["can_manage"] is True
     assert item["capability"] == CAPABILITY_NOTIFY
     assert item["enabled"] is True
     assert item["config"] == {"daily_recipient_quota": 2000}
@@ -146,7 +149,7 @@ def test_put_without_enabled_change_skips_toggle_audit() -> None:
 
 
 @override_settings(EASYAUTH_CONSOLE_SUPERUSER_GROUPS=("easyauth-admins",))
-def test_non_superuser_is_forbidden() -> None:
+def test_non_member_is_forbidden() -> None:
     app = App.objects.create(app_key="cap-api-deny", name="Cap API")
     request = _console_request(
         "GET",
@@ -161,9 +164,55 @@ def test_non_superuser_is_forbidden() -> None:
     body = _json_object(response)
     assert body["error"] == {
         "code": ErrorCode.PERMISSION_DENIED,
-        "message": "只有系统管理员可以执行该操作。",
+        "message": "只有 active App owner/developer 可以查看能力配置。",
         "details": {},
     }
+
+
+@pytest.mark.parametrize("role", ["owner", "developer"])
+@override_settings(EASYAUTH_CONSOLE_SUPERUSER_GROUPS=("easyauth-admins",))
+def test_owner_and_developer_can_read_but_cannot_manage(role: str) -> None:
+    user_id = f"cap-{role}"
+    app = App.objects.create(app_key=f"cap-api-{role}", name="Cap API")
+    _ = AppMembership.objects.create(app=app, user_id=user_id, role=role)
+    list_request = _console_request(
+        "GET",
+        f"/console/api/v1/apps/{app.app_key}/capabilities",
+        user_id=user_id,
+        groups=("developers",),
+    )
+    detail_request = _console_request(
+        "GET",
+        f"/console/api/v1/apps/{app.app_key}/capabilities/{CAPABILITY_NOTIFY}",
+        user_id=user_id,
+        groups=("developers",),
+    )
+    put_request = _console_request(
+        "PUT",
+        f"/console/api/v1/apps/{app.app_key}/capabilities/{CAPABILITY_NOTIFY}",
+        body={"enabled": True},
+        user_id=user_id,
+        groups=("developers",),
+    )
+
+    list_response = console_app_capabilities(list_request, app.app_key)
+    detail_response = console_app_capability_detail(
+        detail_request,
+        app.app_key,
+        CAPABILITY_NOTIFY,
+    )
+    put_response = console_app_capability_detail(
+        put_request,
+        app.app_key,
+        CAPABILITY_NOTIFY,
+    )
+
+    assert list_response.status_code == HTTPStatus.OK
+    assert _json_object(list_response)["can_manage"] is False
+    assert detail_response.status_code == HTTPStatus.OK
+    assert _json_object(detail_response)["can_manage"] is False
+    assert put_response.status_code == HTTPStatus.FORBIDDEN
+    assert AppCapability.objects.filter(app=app).exists() is False
 
 
 @override_settings(EASYAUTH_CONSOLE_SUPERUSER_GROUPS=("easyauth-admins",))

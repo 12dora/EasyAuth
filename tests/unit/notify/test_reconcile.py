@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from unittest.mock import MagicMock
+from typing import final
 
 import pytest
+from django.conf import settings
 from django.utils import timezone
 
 from easyauth.applications.models import App, AppNotificationChannel
@@ -26,6 +27,23 @@ from easyauth.notify.services import reconcile_send_results
 pytestmark = pytest.mark.django_db
 
 
+@final
+class _FakeDingTalkClient:
+    def __init__(self, *, progress: dict[str, object], result: dict[str, object]) -> None:
+        self.progress = progress
+        self.result = result
+        self.progress_calls = 0
+
+    def get_send_progress(self, *, agent_id: str | int, task_id: str) -> dict[str, object]:
+        _ = (agent_id, task_id)
+        self.progress_calls += 1
+        return self.progress
+
+    def get_send_result(self, *, agent_id: str | int, task_id: str) -> dict[str, object]:
+        _ = (agent_id, task_id)
+        return self.result
+
+
 def _message_with_sent(
     *,
     app_key: str,
@@ -37,7 +55,7 @@ def _message_with_sent(
     now = sent_at if sent_at is not None else timezone.now()
     message = NotifyMessage.objects.create(
         app=app,
-        channel=app.notification_channels.get(is_active=True),
+        channel=AppNotificationChannel.objects.get(app=app, is_active=True),
         template=NOTIFY_TEMPLATE_TEXT,
         content="c",
         payload_hash="h" * 64,
@@ -65,15 +83,14 @@ def _patch_reconcile_client(
     *,
     progress: dict[str, object],
     result: dict[str, object],
-) -> None:
-    client = MagicMock()
-    client.get_send_progress.return_value = progress
-    client.get_send_result.return_value = result
+) -> _FakeDingTalkClient:
+    client = _FakeDingTalkClient(progress=progress, result=result)
 
-    def fake(_channel: object) -> tuple[MagicMock, int]:
+    def fake(_channel: object) -> tuple[_FakeDingTalkClient, int]:
         return client, 1001
 
     monkeypatch.setattr("easyauth.notify.services._dingtalk_client_and_agent", fake)
+    return client
 
 
 def test_reconcile_maps_four_list_types(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -82,7 +99,7 @@ def test_reconcile_maps_four_list_types(monkeypatch: pytest.MonkeyPatch) -> None
         userids=["ok1", "bad1", "dup1", "limit1"],
         task_id="task-map",
     )
-    _patch_reconcile_client(
+    _ = _patch_reconcile_client(
         monkeypatch,
         progress={"status": 2, "progress_in_percent": 100},
         result={
@@ -100,10 +117,7 @@ def test_reconcile_maps_four_list_types(monkeypatch: pytest.MonkeyPatch) -> None
     processed = reconcile_send_results()
     assert processed == 1
 
-    by_uid = {
-        row.dingtalk_userid: row
-        for row in NotifyRecipient.objects.filter(message=message)
-    }
+    by_uid = {row.dingtalk_userid: row for row in NotifyRecipient.objects.filter(message=message)}
     assert by_uid["ok1"].status == NOTIFY_RECIPIENT_STATUS_DELIVERED
     assert by_uid["bad1"].status == NOTIFY_RECIPIENT_STATUS_FAILED
     assert by_uid["bad1"].error_code == NOTIFY_ERROR_DINGTALK_REJECTED
@@ -122,7 +136,7 @@ def test_reconcile_skips_incomplete_progress(monkeypatch: pytest.MonkeyPatch) ->
         userids=["u1"],
         task_id="task-skip",
     )
-    _patch_reconcile_client(
+    _ = _patch_reconcile_client(
         monkeypatch,
         progress={"status": 1, "progress_in_percent": 50},
         result={},
@@ -132,6 +146,34 @@ def test_reconcile_skips_incomplete_progress(monkeypatch: pytest.MonkeyPatch) ->
     assert processed == 0
     row = NotifyRecipient.objects.get(message=message)
     assert row.status == NOTIFY_RECIPIENT_STATUS_SENT
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {},
+        {"read_user_id_list": "not-a-list", "unread_user_id_list": None},
+        {"read_user_id_list": [], "unread_user_id_list": []},
+    ],
+    ids=["empty", "malformed", "unclassified"],
+)
+def test_reconcile_unclassified_recipient_remains_sent(
+    monkeypatch: pytest.MonkeyPatch,
+    result: dict[str, object],
+) -> None:
+    message = _message_with_sent(
+        app_key=f"notify-rc-unclassified-{len(result)}",
+        userids=["not-classified"],
+        task_id=f"task-unclassified-{len(result)}",
+    )
+    _ = _patch_reconcile_client(
+        monkeypatch,
+        progress={"status": 2, "progress_in_percent": 100},
+        result=result,
+    )
+
+    assert reconcile_send_results() == 0
+    assert NotifyRecipient.objects.get(message=message).status == NOTIFY_RECIPIENT_STATUS_SENT
 
 
 def test_same_task_id_from_different_channels_does_not_cross_update(
@@ -147,14 +189,16 @@ def test_same_task_id_from_different_channels_does_not_cross_update(
         userids=["second-user"],
         task_id="shared-task-id",
     )
-    first_client = MagicMock()
-    first_client.get_send_progress.return_value = {"status": 2}
-    first_client.get_send_result.return_value = {"invalid_user_id_list": ["first-user"]}
-    second_client = MagicMock()
-    second_client.get_send_progress.return_value = {"status": 1}
+    first_client = _FakeDingTalkClient(
+        progress={"status": 2},
+        result={"invalid_user_id_list": ["first-user"]},
+    )
+    second_client = _FakeDingTalkClient(progress={"status": 1}, result={})
 
-    def client_for_channel(channel: AppNotificationChannel) -> tuple[MagicMock, int]:
-        if channel.id == first.channel_id:
+    def client_for_channel(
+        channel: AppNotificationChannel,
+    ) -> tuple[_FakeDingTalkClient, int]:
+        if channel.id == first.channel.id:
             return first_client, 1001
         return second_client, 1001
 
@@ -178,9 +222,9 @@ def test_reconcile_stale_sent_remains_sent_without_receipt(
         sent_at=stale,
     )
     # 不应调用钉钉(无窗口内 task)。
-    client = MagicMock()
+    client = _FakeDingTalkClient(progress={"status": 2}, result={})
 
-    def fake(_channel: object) -> tuple[MagicMock, int]:
+    def fake(_channel: object) -> tuple[_FakeDingTalkClient, int]:
         return client, 1001
 
     monkeypatch.setattr("easyauth.notify.services._dingtalk_client_and_agent", fake)
@@ -191,11 +235,11 @@ def test_reconcile_stale_sent_remains_sent_without_receipt(
     assert row.status == NOTIFY_RECIPIENT_STATUS_SENT
     message.refresh_from_db()
     assert message.status == NOTIFY_MESSAGE_STATUS_SENDING
-    client.get_send_progress.assert_not_called()
+    assert client.progress_calls == 0
 
 
-def test_reconcile_disabled(settings: pytest.SettingsWrapper) -> None:
-    settings.EASYAUTH_NOTIFY_RECONCILE_ENABLED = False
+def test_reconcile_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(settings, "EASYAUTH_NOTIFY_RECONCILE_ENABLED", False)
     _ = _message_with_sent(
         app_key="notify-rc-off",
         userids=["u1"],

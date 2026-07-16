@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import TYPE_CHECKING, ClassVar, Final, override
+from typing import TYPE_CHECKING, ClassVar, Final, cast, override
 
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -60,12 +60,13 @@ APP_SCOPE_KEY_PATTERN = re.compile(r"^[A-Z0-9_]+$")
 def _is_scope_key_list(value: object) -> bool:
     if not isinstance(value, list):
         return False
+    items = cast("list[object]", value)
     scopes = [
         item
-        for item in value
+        for item in items
         if isinstance(item, str) and APP_SCOPE_KEY_PATTERN.fullmatch(item)
     ]
-    return len(scopes) == len(value) and len(set(scopes)) == len(scopes)
+    return len(scopes) == len(items) and len(set(scopes)) == len(scopes)
 AUTHORIZATION_GROUP_KINDS = ("role", "bundle")
 PERMISSION_RISK_LEVELS = ("standard", "high")
 MANAGED_SCOPE_POLICY_TARGET_APP_DEFAULT = "app_default"
@@ -215,10 +216,16 @@ class AppNotificationChannel(models.Model):
     def clean(self) -> None:
         super().clean()
         errors: dict[str, str] = {}
-        for field_name in ("name", "dingtalk_app_key", "dingtalk_app_secret", "agent_id"):
-            if not str(getattr(self, field_name)).strip():
+        required_values = {
+            "name": self.name,
+            "dingtalk_app_key": self.dingtalk_app_key,
+            "dingtalk_app_secret": self.dingtalk_app_secret,
+            "agent_id": self.agent_id,
+        }
+        for field_name, value in required_values.items():
+            if not value.strip():
                 errors[field_name] = "通知通道字段不能为空。"
-        if not isinstance(self.version, int) or isinstance(self.version, bool) or self.version < 1:
+        if self.version < 1:
             errors["version"] = "通知通道版本必须大于零。"
         if errors:
             raise ValidationError(errors)
@@ -537,10 +544,19 @@ class AuthorizationGroupGrant(models.Model):
             errors["scope_key"] = "Scope key must reference an app scope."
         elif self.is_active and not scope_is_active:
             errors["scope_key"] = "Active grant must reference an active app scope."
-        elif self.is_active and self.scope_key not in self.permission.supported_scopes:
+        elif self.is_active and not _scope_key_is_supported(
+            self.permission.supported_scopes,
+            self.scope_key,
+        ):
             errors["scope_key"] = "Scope key must be supported by the permission."
         if errors:
             raise ValidationError(errors)
+
+
+def _scope_key_is_supported(value: JsonValue, scope_key: str) -> bool:
+    if not _is_scope_key_list(value):
+        return False
+    return scope_key in cast("list[str]", value)
 
 
 class ManagedScopePolicy(models.Model):

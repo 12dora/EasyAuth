@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, cast
 
 import pytest
 from django.db.models.signals import post_save
@@ -9,6 +9,11 @@ from easyauth.applications.models import App, AppNotificationChannel
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+
+class _Signal(Protocol):
+    def connect(self, receiver: object, *, sender: object, weak: bool = True) -> None: ...
+    def disconnect(self, receiver: object, *, sender: object) -> bool | None: ...
 
 
 @pytest.fixture(autouse=True)
@@ -29,8 +34,9 @@ def notification_channel_for_apps(db: None) -> Iterator[None]:
             created_by="pytest",
         )
 
-    post_save.connect(create_channel, sender=App, weak=False)
+    signal = cast("_Signal", cast("object", post_save))
+    signal.connect(create_channel, sender=App, weak=False)
     try:
         yield
     finally:
-        post_save.disconnect(create_channel, sender=App)
+        _ = signal.disconnect(create_channel, sender=App)
