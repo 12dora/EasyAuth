@@ -10,7 +10,12 @@ from django.core.cache import cache
 from django.test import RequestFactory
 from django.utils import timezone
 
-from easyauth.accounts.models import DingTalkDepartmentMirror, DingTalkUserMirror, UserMirror
+from easyauth.accounts.models import (
+    DingTalkDepartmentMirror,
+    DingTalkDirectorySyncState,
+    DingTalkUserMirror,
+    UserMirror,
+)
 from easyauth.api.directory_views import (
     directory_departments,
     directory_user_detail,
@@ -90,6 +95,14 @@ def _seed_departments() -> None:
 
 def _seed_contract_directory(*, with_manager_row: bool = True) -> None:
     _seed_departments()
+    _ = DingTalkDirectorySyncState.objects.create(
+        source_slug=_SOURCE,
+        corp_id=_CORP_ID,
+        generation=7,
+        status="success",
+        counters={"users": 3 if with_manager_row else 2, "departments": 3},
+        finished_at="2099-01-01T00:00:00+00:00",
+    )
     if with_manager_row:
         _ = DingTalkUserMirror.objects.create(
             source_slug=_SOURCE,
@@ -98,6 +111,9 @@ def _seed_contract_directory(*, with_manager_row: bool = True) -> None:
             name="张主管",
             avatar="",
             title="研发经理",
+            email="manager@example.com",
+            mobile="13800000001",
+            employee_number="E0001",
             department_ids=["460001"],
             manager_userid="",
             status="active",
@@ -109,6 +125,9 @@ def _seed_contract_directory(*, with_manager_row: bool = True) -> None:
         name="王小明",
         avatar="https://static-legacy.dingtalk.com/media/xxx.jpg",
         title="后端工程师",
+        email="wang@example.com",
+        mobile="13800000002",
+        employee_number="E0002",
         department_ids=["460001"],
         manager_userid="manager8836",
         status="active",
@@ -120,6 +139,9 @@ def _seed_contract_directory(*, with_manager_row: bool = True) -> None:
         name="李新人",
         avatar="",
         title="测试工程师",
+        email="li@example.com",
+        mobile="13800000003",
+        employee_number="E0003",
         department_ids=["470001", "460001"],
         manager_userid="manager8836",
         status="active",
@@ -207,9 +229,7 @@ def test_directory_users_include_null_user_id_entry(
 
     payload = loads(response.content)
     null_by_id = {
-        item["dingtalk_user_id"]: item
-        for item in payload["data"]
-        if item["user_id"] is None
+        item["dingtalk_user_id"]: item for item in payload["data"] if item["user_id"] is None
     }
     assert "user0456" in null_by_id
     assert null_by_id["user0456"]["name"] == "李新人"
@@ -228,8 +248,12 @@ def test_directory_users_include_inactive(
         corp_id=_CORP_ID,
         user_id="departed01",
         name="已离职",
+        email="departed@example.com",
+        mobile="13800000004",
+        employee_number="E0004",
         department_ids=[],
         status="departed",
+        is_tombstone=True,
     )
     default_request = RequestFactory().get("/", HTTP_AUTHORIZATION=_AUTH_HEADER)
     include_request = RequestFactory().get(
@@ -243,12 +267,133 @@ def test_directory_users_include_inactive(
 
     assert all(item["active"] for item in default_payload["data"])
     departed = [
-        item
-        for item in include_payload["data"]
-        if item["dingtalk_user_id"] == "departed01"
+        item for item in include_payload["data"] if item["dingtalk_user_id"] == "departed01"
     ]
     assert len(departed) == 1
     assert departed[0]["active"] is False
+    assert departed[0]["status"] == "departed"
+    assert departed[0]["user_id"] is None
+    assert departed[0]["email"] == "departed@example.com"
+    assert departed[0]["mobile"] == "13800000004"
+    assert departed[0]["employee_number"] == "E0004"
+
+
+def test_directory_users_snapshot_pin_accepts_current_and_rejects_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
+    _enable_directory(app)
+    _auth(monkeypatch, app)
+    _seed_contract_directory()
+    first = directory_users(
+        RequestFactory().get("/", HTTP_AUTHORIZATION=_AUTH_HEADER),
+        _APP_KEY,
+    )
+    snapshot_id = loads(first.content)["directory_snapshot"]["snapshot_id"]
+    pinned = directory_users(
+        RequestFactory().get(
+            "/",
+            {"page": "2", "snapshot_id": snapshot_id},
+            HTTP_AUTHORIZATION=_AUTH_HEADER,
+        ),
+        _APP_KEY,
+    )
+    drifted = directory_users(
+        RequestFactory().get(
+            "/",
+            {"page": "2", "snapshot_id": "older-generation"},
+            HTTP_AUTHORIZATION=_AUTH_HEADER,
+        ),
+        _APP_KEY,
+    )
+
+    assert pinned.status_code == HTTPStatus.OK
+    assert loads(pinned.content)["directory_snapshot"]["snapshot_id"] == snapshot_id
+    assert drifted.status_code == HTTPStatus.CONFLICT
+    error = loads(drifted.content)["error"]
+    assert error["code"] == "CONFLICT"
+    assert error["details"] == {
+        "reason": "snapshot_mismatch",
+        "expected_snapshot_id": "older-generation",
+        "actual_snapshot_id": snapshot_id,
+    }
+
+
+def test_directory_users_rejects_generation_change_during_query(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
+    _enable_directory(app)
+    _auth(monkeypatch, app)
+    _seed_contract_directory()
+    snapshots = iter(
+        [
+            {"snapshot_id": "generation-7"},
+            {"snapshot_id": "generation-8"},
+        ],
+    )
+    monkeypatch.setattr(
+        "easyauth.api.directory_views.build_directory_snapshot",
+        lambda: next(snapshots),
+    )
+
+    response = directory_users(
+        RequestFactory().get("/", HTTP_AUTHORIZATION=_AUTH_HEADER),
+        _APP_KEY,
+    )
+
+    assert response.status_code == HTTPStatus.CONFLICT
+    assert loads(response.content)["error"]["details"] == {
+        "reason": "snapshot_changed",
+        "expected_snapshot_id": "generation-7",
+        "actual_snapshot_id": "generation-8",
+    }
+
+
+def test_directory_snapshot_reports_multi_corp_stale_missing_and_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
+    _enable_directory(app)
+    _auth(monkeypatch, app)
+    _ = DingTalkDirectorySyncState.objects.create(
+        source_slug=_SOURCE,
+        corp_id="corp-stale",
+        generation=3,
+        status="success",
+        finished_at="2000-01-01T00:00:00+00:00",
+    )
+    _ = DingTalkDirectorySyncState.objects.create(
+        source_slug=_SOURCE,
+        corp_id="corp-error",
+        generation=4,
+        status="error",
+        error="上游失败",
+        finished_at="2099-01-01T00:00:00+00:00",
+    )
+    _ = DingTalkUserMirror.objects.create(
+        source_slug=_SOURCE,
+        corp_id="corp-missing",
+        user_id="orphan-user",
+        status="disabled",
+    )
+
+    response = directory_departments(
+        RequestFactory().get("/", HTTP_AUTHORIZATION=_AUTH_HEADER),
+        _APP_KEY,
+    )
+
+    assert response.status_code == HTTPStatus.OK
+    snapshot = loads(response.content)["directory_snapshot"]
+    by_corp = {item["corp_id"]: item for item in snapshot["snapshots"]}
+    assert by_corp["corp-stale"]["stale"] is True
+    assert by_corp["corp-error"]["status"] == "error"
+    assert by_corp["corp-error"]["stale"] is True
+    assert by_corp["corp-missing"]["status"] == "missing"
+    assert by_corp["corp-missing"]["generation"] == -1
+    assert snapshot["stale"] is True
+    assert snapshot["complete"] is False
+    assert snapshot["authoritative"] is False
 
 
 def test_directory_user_manager_matches_contract_and_reason_codes(
@@ -308,6 +453,7 @@ def test_directory_departments_matches_contract_sample(
     sample_ids = {item["department_id"] for item in sample["data"]}
     filtered = {
         "data": [item for item in payload["data"] if item["department_id"] in sample_ids],
+        "directory_snapshot": payload["directory_snapshot"],
     }
     assert filtered == sample
 

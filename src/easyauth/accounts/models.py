@@ -115,9 +115,27 @@ class DingTalkUserMirror(models.Model):
     name: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
     avatar: models.TextField[str, str] = models.TextField(blank=True, default="")
     title: models.CharField[str, str] = models.CharField(max_length=128, blank=True, default="")
+    email: models.EmailField[str, str] = models.EmailField(blank=True, default="")
+    mobile: models.CharField[str, str] = models.CharField(max_length=64, blank=True, default="")
+    employee_number: models.CharField[str, str] = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+    )
     department_ids: models.JSONField[list[str], list[str]] = models.JSONField(default=list)
     manager_userid: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
-    status: models.CharField[str, str] = models.CharField(max_length=32, blank=True)
+    status: models.CharField[str, str] = models.CharField(
+        max_length=16,
+        choices=USER_STATUS_CHOICES,
+        default=USER_STATUS_ACTIVE,
+    )
+    # 上游权威快照中消失的员工不能物理删除: 保留身份与联系方式, 供下游识别离职。
+    is_tombstone: models.BooleanField[bool, bool] = models.BooleanField(default=False)
+    last_seen_generation: models.BigIntegerField[int, int] = models.BigIntegerField(default=-1)
+    departed_at: models.DateTimeField[
+        str | date | datetime | None,
+        datetime | None,
+    ] = models.DateTimeField(blank=True, null=True)
     last_synced_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now=True,
     )
@@ -232,10 +250,14 @@ class LocalAdminAccount(models.Model):
     ) -> None:
         effective_update_fields = None if update_fields is None else set(update_fields)
         if not self._state.adding:
-            previous = LocalAdminAccount.objects.filter(pk=self.pk).values(
-                "is_active",
-                "session_version",
-            ).first()
+            previous = (
+                LocalAdminAccount.objects.filter(pk=self.pk)
+                .values(
+                    "is_active",
+                    "session_version",
+                )
+                .first()
+            )
             if previous is not None and previous["is_active"] != self.is_active:
                 self.session_version = int(previous["session_version"]) + 1
                 if effective_update_fields is not None:

@@ -12,6 +12,7 @@ from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 
+from easyauth.accounts.directory_snapshot import build_directory_snapshot
 from easyauth.accounts.models import DingTalkDepartmentMirror, DingTalkUserMirror, UserMirror
 from easyauth.api.directory_payloads import (
     DINGTALK_STATUS_ACTIVE,
@@ -43,6 +44,7 @@ _DIRECTORY_CAPABILITY_DENIED_MESSAGE: Final = "应用未开通目录能力。"
 _TOO_MANY_REQUESTS_MESSAGE: Final = "请求过于频繁, 请稍后再试。"
 _USER_NOT_FOUND_MESSAGE: Final = "用户不存在。"
 _NO_MANAGER_MESSAGE: Final = "用户没有直接主管。"
+_SNAPSHOT_CONFLICT_MESSAGE: Final = "目录快照已变化, 请从第一页重新读取。"
 _AUTH_SCHEME: Final = "Bearer"
 _AUTH_FAIL_LIMIT: Final = 30
 _AUTH_FAIL_WINDOW_SECONDS: Final = 300
@@ -100,6 +102,16 @@ def directory_users(request: HttpRequest, app_key: str) -> JsonResponse:
         case JsonResponse() as response:
             return response
 
+    snapshot_before = build_directory_snapshot()
+    requested_snapshot_id = request.GET.get("snapshot_id", "").strip()
+    current_snapshot_id = cast("str", snapshot_before["snapshot_id"])
+    if requested_snapshot_id and requested_snapshot_id != current_snapshot_id:
+        return _snapshot_conflict_response(
+            reason="snapshot_mismatch",
+            expected_snapshot_id=requested_snapshot_id,
+            actual_snapshot_id=current_snapshot_id,
+        )
+
     page = _page_request(request, max_page_size=_MAX_USERS_PAGE_SIZE)
     queryset = _filtered_users(request)
     total_items = queryset.count()
@@ -123,6 +135,14 @@ def directory_users(request: HttpRequest, app_key: str) -> JsonResponse:
         "data": data_items,
         "pagination": pagination,
     }
+    snapshot_after = build_directory_snapshot()
+    final_snapshot_id = cast("str", snapshot_after["snapshot_id"])
+    if final_snapshot_id != current_snapshot_id:
+        return _snapshot_conflict_response(
+            reason="snapshot_changed",
+            expected_snapshot_id=current_snapshot_id,
+            actual_snapshot_id=final_snapshot_id,
+        )
     _record_directory_audit(
         principal=principal,
         endpoint="users",
@@ -130,7 +150,7 @@ def directory_users(request: HttpRequest, app_key: str) -> JsonResponse:
         q_present=bool(request.GET.get("q", "").strip()),
         aggregated=True,
     )
-    return _directory_response(payload)
+    return _directory_response(payload, directory_snapshot=snapshot_after)
 
 
 @require_http_methods(["GET"])
@@ -319,9 +339,7 @@ def _filtered_users(request: HttpRequest) -> QuerySet[DingTalkUserMirror]:
     query = request.GET.get("q", "").strip()
     if query:
         queryset = queryset.filter(
-            Q(name__icontains=query)
-            | Q(title__icontains=query)
-            | Q(user_id__icontains=query),
+            Q(name__icontains=query) | Q(title__icontains=query) | Q(user_id__icontains=query),
         )
     department_id = request.GET.get("department_id", "").strip()
     if department_id:
@@ -569,7 +587,12 @@ def _flush_aggregated_list_audit(
     )
 
 
-def _directory_response(payload: dict[str, JsonValue]) -> JsonResponse:
+def _directory_response(
+    payload: dict[str, JsonValue],
+    *,
+    directory_snapshot: dict[str, JsonValue] | None = None,
+) -> JsonResponse:
+    payload["directory_snapshot"] = directory_snapshot or build_directory_snapshot()
     response = json_response(payload, status=HTTPStatus.OK)
     response[_CACHE_CONTROL_HEADER] = _CACHE_CONTROL_VALUE
     return response
@@ -597,6 +620,26 @@ def _not_found_response(message: str, *, reason: str) -> JsonResponse:
             {"reason": reason},
         ),
         status=HTTPStatus.NOT_FOUND,
+    )
+
+
+def _snapshot_conflict_response(
+    *,
+    reason: str,
+    expected_snapshot_id: str,
+    actual_snapshot_id: str,
+) -> JsonResponse:
+    return json_response(
+        build_error_response(
+            ErrorCode.CONFLICT,
+            _SNAPSHOT_CONFLICT_MESSAGE,
+            {
+                "reason": reason,
+                "expected_snapshot_id": expected_snapshot_id,
+                "actual_snapshot_id": actual_snapshot_id,
+            },
+        ),
+        status=HTTPStatus.CONFLICT,
     )
 
 

@@ -56,12 +56,14 @@ class _DirectoryClientStub:
     def get_status(self) -> dict[str, object]:
         if self.status_script:
             return (
-                self.status_script.pop(0)
-                if len(self.status_script) > 1
-                else self.status_script[0]
+                self.status_script.pop(0) if len(self.status_script) > 1 else self.status_script[0]
             )
-        reported = self.reported_user_count if self.reported_user_count is not None else len(
-            self.users,
+        reported = (
+            self.reported_user_count
+            if self.reported_user_count is not None
+            else len(
+                self.users,
+            )
         )
         return {
             "source_slug": "dingtalk",
@@ -250,6 +252,83 @@ def test_directory_sync_keeps_existing_user_mirror_avatar_url() -> None:
     assert user.avatar_url == "https://oidc.example.test/media/original.jpg"
 
 
+def test_directory_sync_persists_directory_contacts_without_user_mirror() -> None:
+    client_stub = _stub_with_users(
+        [
+            {
+                "corp_id": "corp-1",
+                "user_id": "never-sso-user",
+                "name": "未登录员工",
+                "email": "never-sso@example.com",
+                "mobile": "13800000009",
+                "employee_number": "E0009",
+                "status": "active",
+            },
+        ],
+    )
+
+    _ = sync_authentik_dingtalk_directory(client_stub)
+
+    mirror = DingTalkUserMirror.objects.get(user_id="never-sso-user")
+    assert mirror.email == "never-sso@example.com"
+    assert mirror.mobile == "13800000009"
+    assert mirror.employee_number == "E0009"
+    assert mirror.last_seen_generation == 1
+    assert mirror.is_tombstone is False
+    assert not UserMirror.objects.filter(dingtalk_userid="never-sso-user").exists()
+
+
+def test_directory_tombstone_retains_contacts_and_reappearance_clears_it() -> None:
+    _ = DingTalkUserMirror.objects.create(
+        source_slug="dingtalk",
+        corp_id="corp-1",
+        user_id="returning-user",
+        name="暂时消失员工",
+        email="returning@example.com",
+        mobile="13800000008",
+        employee_number="E0008",
+        status="active",
+        last_seen_generation=1,
+    )
+    missing_snapshot = _stub_with_users([])
+    missing_snapshot.generation = 2
+
+    _ = sync_authentik_dingtalk_directory(missing_snapshot)
+
+    tombstone = DingTalkUserMirror.objects.get(user_id="returning-user")
+    assert tombstone.status == "departed"
+    assert tombstone.is_tombstone is True
+    assert tombstone.departed_at is not None
+    assert tombstone.email == "returning@example.com"
+    assert tombstone.mobile == "13800000008"
+    assert tombstone.employee_number == "E0008"
+    assert tombstone.last_seen_generation == 1
+
+    returning_snapshot = _stub_with_users(
+        [
+            {
+                "corp_id": "corp-1",
+                "user_id": "returning-user",
+                "name": "重新出现员工",
+                "email": "new-returning@example.com",
+                "mobile": "13800000007",
+                "employee_number": "E0008",
+                "status": "active",
+            },
+        ],
+    )
+    returning_snapshot.generation = 3
+
+    _ = sync_authentik_dingtalk_directory(returning_snapshot)
+
+    active = DingTalkUserMirror.objects.get(user_id="returning-user")
+    assert active.status == "active"
+    assert active.is_tombstone is False
+    assert active.departed_at is None
+    assert active.last_seen_generation == returning_snapshot.generation
+    assert active.email == "new-returning@example.com"
+
+
 def test_directory_sync_marks_deleted_directory_user_departed_and_revokes_grants() -> None:
     # Given: 已绑定钉钉的 active 用户持有 current 授权, 上游目录标记该用户已删除。
     user = UserMirror.objects.create(
@@ -296,6 +375,34 @@ def test_directory_sync_marks_deleted_directory_user_departed_and_revokes_grants
         target_id="ak-departed-1",
     ).exists()
     assert HandoverAppAction.objects.filter(app=app).exists()
+
+
+def test_directory_sync_normalizes_inactive_user_to_disabled() -> None:
+    _ = UserMirror.objects.create(
+        authentik_user_id="ak-disabled-1",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-disabled",
+        status="active",
+    )
+    client_stub = _stub_with_users(
+        [
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-disabled",
+                "name": "停用用户",
+                "status": "inactive",
+            },
+        ],
+    )
+
+    _ = sync_authentik_dingtalk_directory(client_stub)
+
+    directory_user = DingTalkUserMirror.objects.get(user_id="user-disabled")
+    user = UserMirror.objects.get(authentik_user_id="ak-disabled-1")
+    assert directory_user.status == "disabled"
+    assert directory_user.is_tombstone is False
+    assert directory_user.departed_at is None
+    assert user.status == "disabled"
 
 
 def test_directory_sync_excludes_grant_when_all_memberships_expired() -> None:
@@ -400,14 +507,17 @@ def test_directory_sync_applies_authoritative_empty_user_snapshot() -> None:
     # When: 执行目录同步。
     result = sync_authentik_dingtalk_directory(client_stub)
 
-    # Then: 合法空集会清理最后一名目录用户并执行离职撤权。
+    # Then: 合法空集会把最后一名目录用户转成 tombstone, 并执行离职撤权。
     user.refresh_from_db()
     grant.refresh_from_db()
     assert user.status == "departed"
     assert grant.status == "revoked"
     assert result.status_applied_count == 1
-    assert result.pruned_user_count == 1
-    assert not DingTalkUserMirror.objects.filter(corp_id="corp-1").exists()
+    assert result.tombstoned_user_count == 1
+    tombstone = DingTalkUserMirror.objects.get(corp_id="corp-1", user_id="user-guard")
+    assert tombstone.status == "departed"
+    assert tombstone.is_tombstone is True
+    assert tombstone.departed_at is not None
 
 
 def test_directory_sync_clears_manager_and_prunes_missing_rows() -> None:
@@ -457,14 +567,16 @@ def test_directory_sync_clears_manager_and_prunes_missing_rows() -> None:
     # When: 执行目录同步。
     result = sync_authentik_dingtalk_directory(client_stub)
 
-    # Then: 主管与部门被清空, 上游不存在的镜像行被删除。
+    # Then: 主管与部门被清空, 上游不存在的镜像行转为 departed tombstone。
     user.refresh_from_db()
     assert user.manager_userid == ""
     assert user.department == ""
     assert result.pruned_department_count == 1
-    assert result.pruned_user_count == 1
+    assert result.tombstoned_user_count == 1
     assert not DingTalkDepartmentMirror.objects.filter(dept_id="dept-stale").exists()
-    assert not DingTalkUserMirror.objects.filter(user_id="user-stale").exists()
+    tombstone = DingTalkUserMirror.objects.get(user_id="user-stale")
+    assert tombstone.status == "departed"
+    assert tombstone.is_tombstone is True
 
 
 def test_directory_sync_rejects_unknown_status_before_any_write() -> None:

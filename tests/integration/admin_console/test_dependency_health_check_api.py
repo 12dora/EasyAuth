@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Final, cast
 
 import pytest
-from django.test import Client
+from django.test import Client, override_settings
 from django.utils import timezone
 
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
@@ -53,6 +54,22 @@ def test_check_dingtalk_reports_unhealthy_when_any_corp_errored() -> None:
     assert result.status == "unhealthy"
     assert "corp-broken" in result.summary
     assert "拉取失败" in result.error_summary
+
+
+@override_settings(EASYAUTH_DIRECTORY_STALE_AFTER_SECONDS=600)
+def test_check_dingtalk_uses_shared_directory_stale_threshold() -> None:
+    _ = DingTalkDirectorySyncState.objects.create(
+        source_slug="dingtalk",
+        corp_id="corp-stale",
+        generation=1,
+        status="success",
+        finished_at=(timezone.now() - timedelta(seconds=601)).isoformat(),
+    )
+
+    result = dependency_health_checks._check_dingtalk()  # noqa: SLF001
+
+    assert result.status == "warning"
+    assert "已过期" in result.summary
 
 
 def test_dependency_health_check_writes_snapshots(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -40,8 +40,8 @@ def test_parse_managed_users_rejects_missing_or_naive_resolved_at(resolved_at: s
         _ = parse_managed_users(_managed_users_payload(resolved_at), source_slug="dingtalk")
 
 
-def test_parse_user_passes_through_avatar_and_title() -> None:
-    # Given: 上游目录用户携带头像与职位字段。
+def test_parse_user_passes_through_profile_and_contact_fields() -> None:
+    # Given: 上游目录用户携带展示与联系方式字段。
     payload: DirectoryJson = {
         "corp_id": "corp-1",
         "user_id": "user-1",
@@ -49,6 +49,9 @@ def test_parse_user_passes_through_avatar_and_title() -> None:
         "name": "张三",
         "avatar": "https://static-legacy.dingtalk.com/media/user-1.jpg",
         "title": "销售经理",
+        "email": "zhang@example.com",
+        "mobile": "13800000001",
+        "employee_number": "E0001",
         "department_ids": ["dept-1"],
         "manager_userid": "manager-1",
         "status": "active",
@@ -57,9 +60,12 @@ def test_parse_user_passes_through_avatar_and_title() -> None:
     # When: 解析目录用户。
     user = parse_user(payload, source_slug="dingtalk")
 
-    # Then: avatar 与 title 原样透传。
+    # Then: 字段原样透传, 不从 UserMirror 或其他来源伪造。
     assert user.avatar == "https://static-legacy.dingtalk.com/media/user-1.jpg"
     assert user.title == "销售经理"
+    assert user.email == "zhang@example.com"
+    assert user.mobile == "13800000001"
+    assert user.employee_number == "E0001"
 
 
 def test_parse_user_defaults_missing_avatar_and_title_to_empty_string() -> None:
@@ -76,6 +82,9 @@ def test_parse_user_defaults_missing_avatar_and_title_to_empty_string() -> None:
     # Then: 缺失字段兜底为空字符串。
     assert user.avatar == ""
     assert user.title == ""
+    assert user.email == ""
+    assert user.mobile == ""
+    assert user.employee_number == ""
 
 
 @pytest.mark.parametrize("payload", [{}, {"results": None}, {"results": {}}])

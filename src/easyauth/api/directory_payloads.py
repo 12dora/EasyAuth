@@ -41,6 +41,10 @@ def user_list_item(
         "name": dingtalk_user.name,
         "avatar_url": dingtalk_user.avatar or "",
         "title": dingtalk_user.title or "",
+        "email": dingtalk_user.email,
+        "mobile": dingtalk_user.mobile,
+        "employee_number": dingtalk_user.employee_number,
+        "status": dingtalk_user.status,
         "departments": departments,
         "active": is_directory_active(dingtalk_user.status),
     }
@@ -56,6 +60,10 @@ def manager_summary_item(
         "dingtalk_user_id": dingtalk_user.user_id,
         "name": dingtalk_user.name,
         "title": dingtalk_user.title or "",
+        "email": dingtalk_user.email,
+        "mobile": dingtalk_user.mobile,
+        "employee_number": dingtalk_user.employee_number,
+        "status": dingtalk_user.status,
         "active": is_directory_active(dingtalk_user.status),
     }
 
@@ -69,6 +77,10 @@ def removed_directory_user_item(user: UserMirror) -> dict[str, JsonValue]:
         "name": user.name,
         "avatar_url": user.avatar_url or "",
         "title": "",
+        "email": user.email,
+        "mobile": "",
+        "employee_number": user.employee_number,
+        "status": "departed",
         "departments": empty_departments,
         "active": False,
         "manager": None,

@@ -73,7 +73,7 @@ class AuthentikDirectorySyncResult:
     org_context_count: int
     sync_state_count: int
     pruned_department_count: int = 0
-    pruned_user_count: int = 0
+    tombstoned_user_count: int = 0
     status_applied_count: int = 0
     departed_count: int = 0
     revoked_count: int = 0
@@ -130,14 +130,20 @@ def sync_authentik_dingtalk_directory(
             _upsert_department(department)
         org_context_count = 0
         for user_payload in writable_snapshot.users:
-            _upsert_user(user_payload)
+            corp_id = _string(user_payload.get("corp_id"))
+            _upsert_user(
+                user_payload,
+                generation=writable_snapshot.contracts[corp_id].generation,
+            )
             org_context = writable_snapshot.org_contexts.get(_directory_user_key(user_payload))
             if org_context is not None:
                 _upsert_org_context(org_context)
                 _update_user_mirror_summary(org_context)
                 org_context_count += 1
 
-        pruned_department_count, pruned_user_count = _prune_missing_rows(writable_snapshot)
+        pruned_department_count, tombstoned_user_count = _reconcile_missing_rows(
+            writable_snapshot,
+        )
         reconciliation = _reconcile_user_mirror_status(writable_snapshot)
         _apply_sync_states(writable_snapshot, locked_states)
 
@@ -147,7 +153,7 @@ def sync_authentik_dingtalk_directory(
             org_context_count=org_context_count,
             sync_state_count=len(writable_corp_ids),
             pruned_department_count=pruned_department_count,
-            pruned_user_count=pruned_user_count,
+            tombstoned_user_count=tombstoned_user_count,
             status_applied_count=reconciliation.applied_count,
             departed_count=reconciliation.departed_count,
             revoked_count=reconciliation.revoked_count,
@@ -230,12 +236,7 @@ def _status_contract(
             raise AuthentikDirectoryUnavailableError(DIRECTORY_CONTRACT_MESSAGE)
         users = counters.get("users")
         departments = counters.get("departments")
-        if (
-            type(users) is not int
-            or users < 0
-            or type(departments) is not int
-            or departments < 0
-        ):
+        if type(users) is not int or users < 0 or type(departments) is not int or departments < 0:
             raise AuthentikDirectoryUnavailableError(DIRECTORY_CONTRACT_MESSAGE)
         contracts[corp_id] = _CorpSnapshotContract(
             generation=generation,
@@ -363,9 +364,7 @@ def _snapshot_for_corps(
         org_contexts={
             key: value for key, value in snapshot.org_contexts.items() if key[0] in corp_ids
         },
-        org_fetch_failures=tuple(
-            key for key in snapshot.org_fetch_failures if key[0] in corp_ids
-        ),
+        org_fetch_failures=tuple(key for key in snapshot.org_fetch_failures if key[0] in corp_ids),
     )
 
 
@@ -408,20 +407,39 @@ def _upsert_department(payload: DirectoryJson) -> None:
     )
 
 
-def _upsert_user(payload: DirectoryJson) -> None:
+def _upsert_user(payload: DirectoryJson, *, generation: int) -> None:
     source_slug = _string(payload.get("source_slug")) or "dingtalk"
+    corp_id = _string(payload.get("corp_id"))
+    user_id = _string(payload.get("user_id"))
+    status = _directory_user_status(payload)
+    existing_departed_at = (
+        DingTalkUserMirror.objects.filter(
+            source_slug=source_slug,
+            corp_id=corp_id,
+            user_id=user_id,
+        )
+        .values_list("departed_at", flat=True)
+        .first()
+    )
+    departed_at = existing_departed_at or timezone.now() if status == USER_STATUS_DEPARTED else None
     _ = DingTalkUserMirror.objects.update_or_create(
         source_slug=source_slug,
-        corp_id=_string(payload.get("corp_id")),
-        user_id=_string(payload.get("user_id")),
+        corp_id=corp_id,
+        user_id=user_id,
         defaults={
             "union_id": _string(payload.get("union_id")),
             "name": _string(payload.get("name")),
             "avatar": _string(payload.get("avatar")),
             "title": _string(payload.get("title")),
+            "email": _string(payload.get("email")),
+            "mobile": _string(payload.get("mobile")),
+            "employee_number": _string(payload.get("employee_number")),
             "department_ids": [_string(item) for item in _list(payload.get("department_ids"))],
             "manager_userid": _string(payload.get("manager_userid")),
-            "status": _string(payload.get("status")),
+            "status": status,
+            "is_tombstone": False,
+            "last_seen_generation": generation,
+            "departed_at": departed_at,
         },
     )
     _backfill_user_mirror_avatar(payload)
@@ -493,7 +511,7 @@ def _update_user_mirror_summary(payload: DirectoryJson) -> None:
             user.save(update_fields=update_fields)
 
 
-def _prune_missing_rows(snapshot: _DirectorySnapshot) -> tuple[int, int]:
+def _reconcile_missing_rows(snapshot: _DirectorySnapshot) -> tuple[int, int]:
     corp_ids = _synced_corp_ids(snapshot)
     if not corp_ids:
         return (0, 0)
@@ -513,20 +531,35 @@ def _prune_missing_rows(snapshot: _DirectorySnapshot) -> tuple[int, int]:
             _ = department.delete()
             pruned_departments += 1
 
-    pruned_users = 0
+    tombstoned_users = 0
     for user in DingTalkUserMirror.objects.filter(
         source_slug=snapshot.source_slug,
         corp_id__in=corp_ids,
     ):
         if (user.corp_id, user.user_id) not in seen_users:
-            _ = user.delete()
+            if not user.is_tombstone or user.status != USER_STATUS_DEPARTED:
+                user.status = USER_STATUS_DEPARTED
+                user.is_tombstone = True
+                user.departed_at = user.departed_at or timezone.now()
+                user.department_ids = []
+                user.manager_userid = ""
+                user.save(
+                    update_fields=[
+                        "status",
+                        "is_tombstone",
+                        "departed_at",
+                        "department_ids",
+                        "manager_userid",
+                        "last_synced_at",
+                    ],
+                )
+                tombstoned_users += 1
             _ = DingTalkUserOrgContext.objects.filter(
                 source_slug=snapshot.source_slug,
                 corp_id=user.corp_id,
                 user_id=user.user_id,
             ).delete()
-            pruned_users += 1
-    return (pruned_departments, pruned_users)
+    return (pruned_departments, tombstoned_users)
 
 
 def _reconcile_user_mirror_status(snapshot: _DirectorySnapshot) -> _StatusReconciliation:

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
 from typing import TYPE_CHECKING, Final, Protocol, cast
 
 from django.utils import timezone
 
+from easyauth.accounts.directory_snapshot import is_sync_state_stale, sync_state_snapshot_at
 from easyauth.accounts.models import DingTalkDirectorySyncState
 from easyauth.applications.dependency_health import DependencyHealthService, redact_summary
 from easyauth.applications.health_models import (
@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from easyauth.applications.dependency_health import DependencyHealthItem
     from easyauth.applications.integration_settings import AuthentikRuntimeConfig
 
+
 class _CeleryControl(Protocol):
     def ping(self, timeout: float = ...) -> list[dict[str, object]] | None: ...
 
@@ -45,7 +46,6 @@ class _CeleryApp(Protocol):
 
 
 CELERY_PING_TIMEOUT_SECONDS: Final = 1.0
-DINGTALK_SYNC_STALE_AFTER: Final = timedelta(hours=1)
 DIRECTORY_TOKEN_MISSING_MESSAGE: Final = "未配置 Authentik API token, 无法访问目录 API。"  # noqa: S105 - 提示文案, 非凭据.
 DINGTALK_SYNC_MISSING_MESSAGE: Final = "尚未执行钉钉目录同步, 无法评估钉钉数据链路。"
 CELERY_NO_WORKER_MESSAGE: Final = "无在线 Celery worker 响应 ping。"
@@ -155,20 +155,20 @@ def _check_dingtalk() -> DependencyCheckResult:
         )
 
     now = timezone.now()
-    errored = [state for state in states if state.error]
+    errored = [state for state in states if state.error or state.status != "success"]
     if errored:
         corps = ", ".join(f"{state.source_slug}:{state.corp_id}" for state in errored)
         return DependencyCheckResult(
             dependency=DEPENDENCY_DINGTALK,
             status=DEPENDENCY_HEALTH_STATUS_UNHEALTHY,
             summary=f"钉钉目录同步存在失败的 corp({corps})。",
-            error_summary="; ".join(state.error for state in errored),
+            error_summary="; ".join(state.error or state.status for state in errored),
         )
 
-    stale = [state for state in states if now - state.last_synced_at > DINGTALK_SYNC_STALE_AFTER]
+    stale = [state for state in states if is_sync_state_stale(state, now=now)]
     if stale:
         corps = ", ".join(
-            f"{state.source_slug}:{state.corp_id}@{state.last_synced_at.isoformat()}"
+            f"{state.source_slug}:{state.corp_id}@{sync_state_snapshot_at(state).isoformat()}"
             for state in stale
         )
         return DependencyCheckResult(
@@ -178,7 +178,7 @@ def _check_dingtalk() -> DependencyCheckResult:
             error_summary="",
         )
 
-    oldest = min(state.last_synced_at for state in states)
+    oldest = min(sync_state_snapshot_at(state) for state in states)
     return DependencyCheckResult(
         dependency=DEPENDENCY_DINGTALK,
         status=DEPENDENCY_HEALTH_STATUS_HEALTHY,
@@ -258,9 +258,7 @@ def _check_connectors() -> DependencyCheckResult:
             summary=f"连接器实例连续对账失败({names})。",
             error_summary="; ".join(item.last_error for item in failing if item.last_error),
         )
-    warning = [
-        instance for instance in instances if instance.last_status == SYNC_RUN_STATUS_FAILED
-    ]
+    warning = [instance for instance in instances if instance.last_status == SYNC_RUN_STATUS_FAILED]
     if warning:
         names = ", ".join(f"{item.app.app_key}:{item.connector_key}" for item in warning)
         return DependencyCheckResult(

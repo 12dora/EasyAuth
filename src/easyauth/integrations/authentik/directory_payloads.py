@@ -40,6 +40,9 @@ class DingTalkDirectoryUser:
     name: str
     avatar: str
     title: str
+    email: str
+    mobile: str
+    employee_number: str
     department_ids: tuple[str, ...]
     manager_userid: str
     status: str
@@ -120,6 +123,9 @@ def parse_user(payload: DirectoryJson, *, source_slug: str) -> DingTalkDirectory
         name=_string(payload.get("name")),
         avatar=_string(payload.get("avatar")),
         title=_string(payload.get("title")),
+        email=_string(payload.get("email")),
+        mobile=_string(payload.get("mobile")),
+        employee_number=_string(payload.get("employee_number")),
         department_ids=tuple(
             _string(item)
             for item in (_list(payload.get("department_ids")) or _list(payload.get("dept_id_list")))

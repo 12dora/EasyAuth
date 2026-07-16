@@ -4,8 +4,28 @@
   "name": "张主管",
   "avatar_url": "",
   "title": "研发经理",
+  "email": "manager@example.com",
+  "mobile": "13800000001",
+  "employee_number": "E0001",
+  "status": "active",
   "departments": [
     {"department_id": "460001", "name": "研发部"}
   ],
-  "active": true
+  "active": true,
+  "directory_snapshot": {
+    "snapshot_id": "77039530a0a15482d20b4beed35d6197ed01adb1c96462f64226bf56b12874b7",
+    "snapshots": [
+      {
+        "source_slug": "dingtalk",
+        "corp_id": "corp-demo",
+        "generation": 7,
+        "status": "success",
+        "snapshot_at": "2099-01-01T00:00:00+00:00",
+        "stale": false
+      }
+    ],
+    "stale": false,
+    "complete": true,
+    "authoritative": true
+  }
 }

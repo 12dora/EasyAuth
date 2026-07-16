@@ -297,6 +297,10 @@ EASYAUTH_AUTHENTIK_DINGTALK_SOURCE_SLUG = os.environ.get(
     "EASYAUTH_AUTHENTIK_DINGTALK_SOURCE_SLUG",
     "dingtalk",
 )
+# 公共目录快照与运维健康检查共用同一个陈旧阈值。
+EASYAUTH_DIRECTORY_STALE_AFTER_SECONDS = int(
+    os.environ.get("EASYAUTH_DIRECTORY_STALE_AFTER_SECONDS", "600"),
+)
 # 出站供给连接器注册表(方案 §3.4): 显式 dotted-path, 禁止 entry_points 自动发现;
 # 新增连接器 = 新增实现类 + 此处一行(或环境变量逗号分隔覆盖)。
 EASYAUTH_CONNECTORS = tuple(

@@ -142,7 +142,7 @@ def refresh_dingtalk_directory_task(corp_id: str) -> dict[str, int]:
         "status_applied_count": result.status_applied_count,
         "departed_count": result.departed_count,
         "revoked_count": result.revoked_count,
-        "pruned_user_count": result.pruned_user_count,
+        "tombstoned_user_count": result.tombstoned_user_count,
     }
 
 
