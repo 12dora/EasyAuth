@@ -86,9 +86,12 @@ manifest 可选顶层节(结构由 `validate_manifest` 校验, 描述符 build/p
 ```python
 from easyauth_app_sdk import EasyAuthAppClient
 
-client = EasyAuthAppClient(base_url="http://easyauth:8001", app_key="myapp", token="eat_...")
+client = EasyAuthAppClient(base_url="https://iam.example.com", app_key="myapp", token="eat_...")
 snapshot = client.query_user_permissions("ak_uid_xxx")
 ```
+
+SDK 默认要求 `base_url` 使用 HTTPS。仅本地开发需要连接 HTTP 服务时，才应显式设置
+`allow_insecure_http=True`；生产环境不得开启该选项。
 
 ## 企业目录
 
