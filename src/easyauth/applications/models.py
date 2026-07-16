@@ -18,7 +18,11 @@ from .ops_models import (
 )
 
 __all__ = (
+    "CAPABILITY_CHOICES",
+    "CAPABILITY_DIRECTORY",
+    "CAPABILITY_NOTIFY",
     "App",
+    "AppCapability",
     "AppCredential",
     "AppMembership",
     "AppScope",
@@ -78,6 +82,17 @@ MANAGED_SCOPE_POLICY_ACTIVE_RESOLVERS = (
     MANAGED_SCOPE_POLICY_RESOLVER_UNION,
 )
 
+# App 维度平台能力(目录/通知); 默认关闭, 由超管在 console 显式开通。
+CAPABILITY_DIRECTORY: Final = "directory"
+CAPABILITY_NOTIFY: Final = "notify"
+CAPABILITY_CHOICES: Final[tuple[tuple[str, str], ...]] = (
+    (CAPABILITY_DIRECTORY, "directory"),
+    (CAPABILITY_NOTIFY, "notify"),
+)
+CAPABILITY_VALUES: Final[frozenset[str]] = frozenset(
+    (CAPABILITY_DIRECTORY, CAPABILITY_NOTIFY),
+)
+
 
 class App(models.Model):
     if TYPE_CHECKING:
@@ -102,6 +117,51 @@ class App(models.Model):
     @override
     def __str__(self) -> str:
         return self.app_key
+
+
+class AppCapability(models.Model):
+    # App 维度的平台能力开关(目录/通知)。manifest 只能"申明"能力,
+    # 开通必须由超管在 console 显式执行(申明 ≠ 授予)。
+    if TYPE_CHECKING:
+        id: ClassVar[int]
+        app_id: ClassVar[int]
+
+    app: models.ForeignKey[App, App] = models.ForeignKey(
+        App,
+        on_delete=models.CASCADE,
+        related_name="platform_capabilities",
+    )
+    capability: models.CharField[str, str] = models.CharField(
+        max_length=32,
+        choices=CAPABILITY_CHOICES,
+    )
+    enabled: models.BooleanField[bool, bool] = models.BooleanField(default=False)
+    # 能力级配置。notify: {"daily_recipient_quota": 5000, "rate_per_minute": 60};
+    # directory: 预留(如未来的字段分级)。空 dict 表示全部取默认值。
+    config: models.JSONField[dict[str, JsonValue], dict[str, JsonValue]] = models.JSONField(
+        default=dict,
+        blank=True,
+    )
+    updated_by: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
+    created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
+        auto_now_add=True,
+    )
+    updated_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["app", "capability"],
+                name="applications_app_capability_unique",
+            ),
+        ]
+        ordering: ClassVar[list[str]] = ["app__app_key", "capability"]
+
+    @override
+    def __str__(self) -> str:
+        return f"{self.app.app_key}:{self.capability}"
 
 
 APP_CREDENTIAL_STATIC_KIND: Final = "static_token"

@@ -62,6 +62,12 @@ class UserMirror(models.Model):
 
     class Meta:
         ordering: ClassVar[list[str]] = ["authentik_user_id"]
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["dingtalk_corp_id", "dingtalk_userid"],
+                name="accounts_user_dingtalk_idx",
+            ),
+        ]
 
     @override
     def __str__(self) -> str:
@@ -121,6 +127,12 @@ class DingTalkUserMirror(models.Model):
             models.UniqueConstraint(
                 fields=["source_slug", "corp_id", "user_id"],
                 name="accounts_dingtalk_user_unique",
+            ),
+        ]
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["source_slug", "corp_id", "manager_userid"],
+                name="accounts_dt_user_manager_idx",
             ),
         ]
         ordering: ClassVar[list[str]] = ["source_slug", "corp_id", "user_id"]

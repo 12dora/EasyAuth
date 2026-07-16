@@ -106,6 +106,8 @@ class AppManifestInput:
     authorization_groups: tuple[AppManifestAuthorizationGroupInput, ...]
     approval_rules: tuple[AppManifestApprovalRuleInput, ...]
     lifecycle: AppManifestLifecycleInput | None = None
+    # 平台能力申明(directory/notify); 仅记录意图, 不自动开通 AppCapability。
+    capabilities: tuple[str, ...] = ()
 
 
 PermissionTemplateInput = AppManifestInput

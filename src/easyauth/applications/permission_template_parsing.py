@@ -1,10 +1,12 @@
 from __future__ import annotations
 
-from typing import ClassVar, Literal
+import logging
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, cast
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from yaml import YAMLError, safe_load
 
+from easyauth.applications.models import CAPABILITY_VALUES
 from easyauth.applications.permission_template_flattening import (
     PERMISSION_TEMPLATE_MAX_RAW_LENGTH,
 )
@@ -21,7 +23,15 @@ from easyauth.applications.permission_template_types import (
     PermissionTemplateImportError,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Sequence
+
 type TemplateFormat = Literal["json", "yaml"]
+
+logger = logging.getLogger(__name__)
+
+# 顶层 capabilities 节: 平台能力申明白名单; 未知值仅告警不拒绝(向前兼容新 SDK)。
+_PLATFORM_CAPABILITY_EMPTY_MESSAGE: Final = "capabilities 元素必须是非空字符串。"
 
 
 class _AppPayload(BaseModel):
@@ -132,6 +142,34 @@ class _AppManifestPayload(BaseModel):
     approval_rules: tuple[_ApprovalRulePayload, ...] = ()
     lifecycle: _LifecyclePayload | None = None
     webhook: _WebhookPayload | None = None
+    # 可选顶层节: 平台能力申明(directory/notify); 申明 ≠ 开通。
+    capabilities: tuple[str, ...] = ()
+
+    @field_validator("capabilities", mode="before")
+    @classmethod
+    def normalize_capabilities(cls, value: object) -> list[str]:
+        if value is None:
+            return []
+        if not isinstance(value, (list, tuple)):
+            message = "capabilities 必须是字符串数组。"
+            raise TypeError(message)
+        raw_items = cast("Sequence[object]", value)
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in raw_items:
+            if not isinstance(item, str) or not item.strip():
+                raise ValueError(_PLATFORM_CAPABILITY_EMPTY_MESSAGE)
+            capability = item.strip()
+            if capability in seen:
+                continue
+            seen.add(capability)
+            if capability not in CAPABILITY_VALUES:
+                logger.warning(
+                    "manifest capabilities 含未知平台能力值, 已记录但不拒绝: %s",
+                    capability,
+                )
+            normalized.append(capability)
+        return normalized
 
 
 def parse_template_format(raw_format: str) -> TemplateFormat:
@@ -403,6 +441,7 @@ def _manifest_input(
             if payload.lifecycle is not None
             else None
         ),
+        capabilities=payload.capabilities,
     )
 
 

@@ -3,6 +3,10 @@ from __future__ import annotations
 from django.urls import path
 
 from easyauth.admin_console import views
+from easyauth.admin_console.app_capability_api import (
+    console_app_capabilities,
+    console_app_capability_detail,
+)
 from easyauth.admin_console.approval_instances_api import (
     operations_approval_instance_redeliver,
     operations_approval_instances,
@@ -171,6 +175,16 @@ urlpatterns = [
         "api/v1/apps/<str:app_key>/managed-scope-policy",
         console_managed_scope_policy,
         name="console-managed-scope-policy",
+    ),
+    path(
+        "api/v1/apps/<str:app_key>/capabilities",
+        console_app_capabilities,
+        name="console-app-capabilities",
+    ),
+    path(
+        "api/v1/apps/<str:app_key>/capabilities/<str:capability>",
+        console_app_capability_detail,
+        name="console-app-capability-detail",
     ),
     path(
         "api/v1/apps/<str:app_key>/managed-users-preview",
