@@ -575,6 +575,7 @@ def test_directory_removed_from_dingtalk_still_detailable(
     assert response.status_code == HTTPStatus.OK
     payload = loads(response.content)
     assert payload["user_id"] == "ak-removed"
+    assert payload["user_ref"] == "ak-removed"
     assert payload["active"] is False
     assert payload["departments"] == []
     assert payload["manager"] is None

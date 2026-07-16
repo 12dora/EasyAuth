@@ -70,7 +70,7 @@ def parse_user_ref(user_ref: str) -> ParsedUserReference:
 
 
 def parse_department_ref(reference: str) -> ParsedDepartmentReference:
-    if not reference.startswith(DEPT_PREFIX):
+    if not reference.startswith(f"{DEPT_PREFIX}{SCOPED_REF_VERSION}:"):
         return ParsedDepartmentReference(department_id=reference)
     remainder = reference.removeprefix(DEPT_PREFIX)
     source_slug, corp_id, department_id = _parse_scoped_ref(

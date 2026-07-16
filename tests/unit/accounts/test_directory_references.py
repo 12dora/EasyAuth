@@ -5,6 +5,7 @@ import pytest
 from easyauth.accounts.directory_references import (
     InvalidDirectoryReferenceError,
     build_dingtalk_user_ref,
+    parse_department_ref,
     parse_user_ref,
 )
 
@@ -36,3 +37,10 @@ def test_scoped_user_ref_round_trips_reserved_and_unicode_components() -> None:
 def test_scoped_user_ref_rejects_malformed_encoding(reference: str) -> None:
     with pytest.raises(InvalidDirectoryReferenceError):
         _ = parse_user_ref(reference)
+
+
+def test_legacy_department_id_starting_with_dept_prefix_remains_valid() -> None:
+    parsed = parse_department_ref("dept:legacy-id")
+
+    assert parsed.scoped is False
+    assert parsed.department_id == "dept:legacy-id"

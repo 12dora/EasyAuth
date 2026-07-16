@@ -81,7 +81,8 @@ def removed_directory_user_item(user: UserMirror) -> dict[str, JsonValue]:
         "dingtalk_user_id": user.dingtalk_userid,
         "source_slug": "",
         "corp_id": user.dingtalk_corp_id,
-        "user_ref": f"dt:{user.dingtalk_userid}",
+        # 历史 UserMirror 没有 source_slug; 使用全局唯一 Authentik sub, 不能生成可能歧义的 dt ref。
+        "user_ref": user.authentik_user_id,
         "name": user.name,
         "avatar_url": user.avatar_url or "",
         "title": "",
