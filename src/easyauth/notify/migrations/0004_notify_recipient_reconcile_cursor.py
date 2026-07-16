@@ -11,7 +11,7 @@ class Migration(migrations.Migration):
     ]
 
     operations: ClassVar[Sequence[Operation]] = [
-        # 0003 的原子事务先完成历史消息回填并提交。将 NOT NULL 放到下一迁移，
+        # 0003 的原子事务先完成历史消息回填并提交。将 NOT NULL 放到下一迁移,
         # 避免 PostgreSQL 在同一事务仍有 FK pending trigger events 时 ALTER TABLE。
         migrations.AlterField(
             model_name="notifymessage",
