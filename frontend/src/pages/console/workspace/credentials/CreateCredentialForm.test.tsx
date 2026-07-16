@@ -22,7 +22,7 @@ describe("CreateCredentialForm(FF-4)", () => {
     await user.type(screen.getByLabelText("凭据名称"), "主凭据");
     await user.click(screen.getByRole("button", { name: /静态 token/ }));
     expect(onCreateCredential).toHaveBeenCalledTimes(1);
-    expect(onCreateCredential).toHaveBeenCalledWith("static-tokens", "主凭据");
+    expect(onCreateCredential).toHaveBeenCalledWith("static-tokens", "主凭据", []);
 
     // 父级把 isCreating 置真后, 再次点击不产生第二次创建。
     rerender(<CreateCredentialForm isCreating onCreateCredential={onCreateCredential} />);

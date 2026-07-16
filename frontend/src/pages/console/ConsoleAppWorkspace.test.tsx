@@ -500,7 +500,7 @@ describe("ConsoleAppWorkspace", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === "/console/api/v1/apps/demo") {
-        return jsonResponse(appPayload);
+        return jsonResponse({ app: { ...appPayload.app, can_manage: true } });
       }
       if (url === "/console/api/v1/apps/demo/credentials" && !init?.method) {
         return jsonResponse({ data: [] });
@@ -518,7 +518,7 @@ describe("ConsoleAppWorkspace", () => {
     renderWorkspace("/console/apps/demo?tab=credentials");
 
     expect(await screen.findByRole("heading", { name: "凭据" })).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "新建" }));
+    await user.click(await screen.findByRole("button", { name: "新建" }));
     const dialog = await screen.findByRole("dialog", { name: "新建凭据" });
     await user.type(within(dialog).getByLabelText("凭据名称"), "primary token");
     await user.click(within(dialog).getByRole("button", { name: "静态 token" }));
@@ -534,7 +534,7 @@ describe("ConsoleAppWorkspace", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === "/console/api/v1/apps/demo") {
-        return jsonResponse(appPayload);
+        return jsonResponse({ app: { ...appPayload.app, can_manage: true } });
       }
       if (url === "/console/api/v1/apps/demo/credentials" && !init?.method) {
         return jsonResponse({

@@ -30,6 +30,7 @@ const GUARDED_FILES = [
   "pages/console/workspace/tabs/CatalogTab.tsx",
   "pages/console/workspace/tabs/RulesTab.tsx",
   "pages/console/workspace/tabs/CredentialsTab.tsx",
+  "pages/console/workspace/tabs/IntegrationTab.tsx",
   "pages/console/workspace/tabs/OverviewTab.tsx",
   "pages/console/workspace/tabs/QueryTestTab.tsx",
   "components/SecretDialog.tsx",

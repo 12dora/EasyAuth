@@ -216,6 +216,43 @@ export interface CredentialItem {
   name: string;
   is_active?: boolean;
   client_id?: string;
+  capabilities?: AppCapabilityKey[];
+}
+
+export type AppCapabilityKey = "directory" | "notify";
+
+export interface AppCapabilityItem {
+  capability: AppCapabilityKey;
+  enabled: boolean;
+  config: JsonObject;
+  updated_by?: string;
+  updated_at?: string | null;
+  created_at?: string | null;
+}
+
+export interface AppCapabilitiesPayload {
+  capabilities: AppCapabilityItem[];
+  can_manage: boolean;
+}
+
+export interface AppCapabilityPayload {
+  capability: AppCapabilityItem;
+}
+
+export interface AppNotificationChannel {
+  id: number;
+  name: string;
+  dingtalk_app_key: string;
+  app_secret_configured: boolean;
+  agent_id: string;
+  version: number;
+  is_active: boolean;
+  created_by?: string;
+  created_at?: string;
+}
+
+export interface AppNotificationChannelPayload {
+  notification_channel: AppNotificationChannel | null;
 }
 
 export interface SecretPayload {

@@ -19,6 +19,7 @@ import { CatalogTab } from "./workspace/tabs/CatalogTab";
 import { ConnectorTab } from "./workspace/tabs/ConnectorTab";
 import { CredentialsTab } from "./workspace/tabs/CredentialsTab";
 import { GuideTab } from "./workspace/tabs/GuideTab";
+import { IntegrationTab } from "./workspace/tabs/IntegrationTab";
 import { ManifestTab } from "./workspace/tabs/ManifestTab";
 import { MatrixTab } from "./workspace/tabs/MatrixTab";
 import { AppBasicInfoDialog, type AppPatchPayload, OverviewTab } from "./workspace/tabs/OverviewTab";
@@ -26,7 +27,7 @@ import { QueryTestTab } from "./workspace/tabs/QueryTestTab";
 import { RulesTab } from "./workspace/tabs/RulesTab";
 import { WebhookTab } from "./workspace/tabs/WebhookTab";
 
-type WorkspaceTab = "overview" | "catalog" | "matrix" | "managed-scope" | "rules" | "manifest" | "credentials" | "webhook" | "connector" | "test" | "guide";
+type WorkspaceTab = "overview" | "catalog" | "matrix" | "managed-scope" | "rules" | "manifest" | "credentials" | "integration" | "webhook" | "connector" | "test" | "guide";
 
 const TABS: Array<{ key: WorkspaceTab; labelKey: MessageKey }> = [
   { key: "overview", labelKey: "workspace.tab.overview" },
@@ -36,6 +37,7 @@ const TABS: Array<{ key: WorkspaceTab; labelKey: MessageKey }> = [
   { key: "rules", labelKey: "workspace.tab.rules" },
   { key: "manifest", labelKey: "workspace.tab.manifest" },
   { key: "credentials", labelKey: "workspace.tab.credentials" },
+  { key: "integration", labelKey: "workspace.tab.integration" },
   { key: "webhook", labelKey: "workspace.tab.webhook" },
   { key: "connector", labelKey: "workspace.tab.connector" },
   { key: "test", labelKey: "workspace.tab.test" },
@@ -164,7 +166,8 @@ export function ConsoleAppWorkspace() {
       {activeTab === "managed-scope" ? <ManagedScopeTab appKey={appKey} /> : null}
       {activeTab === "rules" ? <RulesTab appKey={appKey} /> : null}
       {activeTab === "manifest" ? <ManifestTab appKey={appKey} /> : null}
-      {activeTab === "credentials" ? <CredentialsTab appKey={appKey} /> : null}
+      {activeTab === "credentials" ? <CredentialsTab appKey={appKey} canManage={Boolean(app?.can_manage)} /> : null}
+      {activeTab === "integration" ? <IntegrationTab appKey={appKey} canManage={Boolean(app?.can_manage)} /> : null}
       {activeTab === "webhook" ? <WebhookTab appKey={appKey} /> : null}
       {activeTab === "connector" ? <ConnectorTab appKey={appKey} /> : null}
       {activeTab === "test" ? <QueryTestTab appKey={appKey} /> : null}

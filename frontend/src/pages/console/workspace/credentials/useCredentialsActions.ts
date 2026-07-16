@@ -5,6 +5,7 @@ import { useRef, useState } from "react";
 import { apiRequest } from "../../../../lib/api";
 import { credentialDisablePathSegment } from "../../../../lib/credentials";
 import type { CredentialItem, SecretPayload } from "../../../../lib/domain";
+import type { AppCapabilityKey } from "../../../../lib/domain";
 import { queryClient } from "../../../../lib/query";
 
 type CreateCredentialKind = "static-tokens" | "oauth-clients";
@@ -12,6 +13,7 @@ type CreateCredentialKind = "static-tokens" | "oauth-clients";
 interface CreateCredentialInput {
   kind: CreateCredentialKind;
   name: string;
+  capabilities: AppCapabilityKey[];
 }
 
 interface CredentialsMutations {
@@ -21,7 +23,7 @@ interface CredentialsMutations {
 }
 
 interface CredentialsActions {
-  createCredential: (kind: CreateCredentialKind, name: string) => Promise<SecretPayload>;
+  createCredential: (kind: CreateCredentialKind, name: string, capabilities: AppCapabilityKey[]) => Promise<SecretPayload>;
   isCreating: boolean;
   rotateCredential: (credential: CredentialItem) => void;
   disableCredential: (credential: CredentialItem) => void;
@@ -80,10 +82,10 @@ function useCredentialMutations(
   finishCredentialOperation: (credential: CredentialItem) => void,
 ): CredentialsMutations {
   const createSecretMutation = useMutation({
-    mutationFn: ({ kind, name }: CreateCredentialInput) =>
+    mutationFn: ({ kind, name, capabilities }: CreateCredentialInput) =>
       apiRequest<SecretPayload>(`/console/api/v1/apps/${appKey}/credentials/${kind}`, {
         method: "POST",
-        body: { name },
+        body: { name, capabilities },
       }),
     onSuccess: (payload) => {
       enqueueSecret(payload);
@@ -128,7 +130,8 @@ function buildCredentialsActions(
 ): CredentialsActions {
   const secret = secrets[0];
   return {
-    createCredential: (kind: CreateCredentialKind, name: string) => mutations.createSecretMutation.mutateAsync({ kind, name }),
+    createCredential: (kind: CreateCredentialKind, name: string, capabilities: AppCapabilityKey[]) =>
+      mutations.createSecretMutation.mutateAsync({ kind, name, capabilities }),
     isCreating: mutations.createSecretMutation.isPending,
     rotateCredential: (credential: CredentialItem) => {
       if (beginCredentialOperation(credential)) {

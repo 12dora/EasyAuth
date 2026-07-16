@@ -27,7 +27,7 @@ describe("CredentialsTab(FF-4)", () => {
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
 
-    renderWithClient(<CredentialsTab appKey="demo" />);
+    renderWithClient(<CredentialsTab appKey="demo" canManage />);
 
     await user.click(await screen.findByRole("button", { name: "新建" }));
     await user.type(screen.getByLabelText("凭据名称"), "生产凭据");
@@ -81,7 +81,7 @@ describe("CredentialsTab(FF-4)", () => {
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
 
-    renderWithClient(<CredentialsTab appKey="demo" />);
+    renderWithClient(<CredentialsTab appKey="demo" canManage />);
 
     const row7 = (await screen.findByText("生产凭据")).closest("tr");
     expect(row7).not.toBeNull();
@@ -120,6 +120,71 @@ describe("CredentialsTab(FF-4)", () => {
     expect(await screen.findByText("token-8-once")).toBeVisible();
     expect(screen.queryByText("token-7-once")).not.toBeInTheDocument();
   });
+
+  test("创建默认最小权限凭据并通过真实 owner 端点更新 capabilities", async () => {
+    const createUrl = "/console/api/v1/apps/demo/credentials/static-tokens";
+    const capabilityUrl = "/console/api/v1/apps/demo/credentials/static-tokens/7/capabilities";
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/demo/credentials" && !init?.method) {
+        return jsonResponse({
+          data: [{ id: 7, kind: "static_token", name: "生产凭据", is_active: true, capabilities: [] }],
+        });
+      }
+      if (url === createUrl && init?.method === "POST") {
+        return jsonResponse({ one_time_secret: { kind: "static_token", app_token: "once" } }, 201);
+      }
+      if (url === capabilityUrl && init?.method === "PUT") {
+        return jsonResponse({
+          credential: { id: 7, kind: "static_token", name: "生产凭据", is_active: true, capabilities: ["notify"] },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWithClient(<CredentialsTab appKey="demo" canManage />);
+
+    await waitFor(() => expect(screen.getByText("仅权限查询")).toBeVisible());
+    await user.click(screen.getByRole("button", { name: "新建" }));
+    await user.type(screen.getByLabelText("凭据名称"), "目录同步凭据");
+    await user.click(screen.getByRole("checkbox", { name: "directory" }));
+    await user.click(screen.getByRole("button", { name: "静态 token" }));
+    await waitFor(() => expect(findFetchCall(fetchMock, createUrl, "POST")).toBeDefined());
+    expect(JSON.parse(String(findFetchCall(fetchMock, createUrl, "POST")?.[1]?.body))).toEqual({
+      name: "目录同步凭据",
+      capabilities: ["directory"],
+    });
+    await user.click(screen.getByRole("button", { name: "关闭" }));
+
+    await user.click(screen.getByRole("button", { name: "编辑能力" }));
+    await user.click(screen.getByRole("checkbox", { name: "notify" }));
+    await user.click(screen.getByRole("button", { name: "保存能力" }));
+    await waitFor(() => expect(findFetchCall(fetchMock, capabilityUrl, "PUT")).toBeDefined());
+    expect(JSON.parse(String(findFetchCall(fetchMock, capabilityUrl, "PUT")?.[1]?.body))).toEqual({ capabilities: ["notify"] });
+  });
+
+  test("developer 只能查看凭据能力且不能创建或修改凭据", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/demo/credentials" && !init?.method) {
+        return jsonResponse({
+          data: [{ id: 7, kind: "static_token", name: "通知凭据", is_active: true, capabilities: ["notify"] }],
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWithClient(<CredentialsTab appKey="demo" canManage={false} />);
+
+    await waitFor(() => expect(screen.getByText("notify")).toBeVisible());
+    expect(screen.queryByRole("button", { name: "新建" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "编辑能力" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "禁用" })).not.toBeInTheDocument();
+    expect(fetchMock.mock.calls).toHaveLength(1);
+  });
 });
 
 function renderWithClient(ui: ReactElement) {
@@ -137,4 +202,8 @@ function jsonResponse(payload: unknown, status = 200) {
     status,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+function findFetchCall(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>, url: string, method: string) {
+  return fetchMock.mock.calls.find(([input, init]) => String(input) === url && init?.method === method);
 }
