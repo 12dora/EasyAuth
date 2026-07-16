@@ -151,9 +151,10 @@ NOTIFY_THROTTLE_RETRY_SECONDS: Final = 120                   # 命中钉钉 QPM/
 
 ```
 每 60s:
-1. SELECT DISTINCT dingtalk_task_id FROM notify_recipient
-   WHERE status='sent' AND sent_at > now()-24h LIMIT 50
-2. 对每个 task_id: getsendprogress(agent_id, task_id)
+1. 按 `(channel_id, dingtalk_task_id)` 聚合 `sent_at > now()-24h` 的收件人，
+   取每组 `MAX(last_reconciled_at)`，按 null-first、最久未对账、channel/task 稳定排序，
+   LIMIT 50 个唯一 pair
+2. 对每个 `(channel, task_id)`: getsendprogress(agent_id, task_id)
    - status != 2(处理完毕) → 跳过, 下轮再查
    - 已完成 → getsendresult, 按名单归类该 task_id 下的 sent recipients:
      · invalid_user_id_list / failed_user_id_list → failed(DINGTALK_REJECTED)
@@ -163,7 +164,10 @@ NOTIFY_THROTTLE_RETRY_SECONDS: Final = 120                   # 命中钉钉 QPM/
        → delivered, delivered_at=now
      · 未出现在任何明确名单
        → 保持 sent，不做送达推断
-3. 刷新受影响消息的聚合计数; 若消息因此从 completed 变为 partially_failed, 同步改写
+3. 无论 API 失败、配置失败、未处理完或没有明确名单分类，都把该 pair 所有匹配行的
+   `last_reconciled_at` 更新为本轮时间；未分类收件人保持 `sent`
+4. 刷新受影响消息的聚合计数；failed 与剩余 sent 并存时同步改写为
+   `partially_failed`
 ```
 
 - **分批 ≤100 是回执能力的前提**：官方规定接收人超过 100 的任务不支持
@@ -179,6 +183,8 @@ NOTIFY_THROTTLE_RETRY_SECONDS: Final = 120                   # 命中钉钉 QPM/
   为标准版且量级吃紧，可关闭对账，状态停留在 `sent`。
   `sent` 是最低可靠保证；`delivered` 只表示钉钉明确 read/unread 回执分类，
   不表示已读、审批知悉或法务送达。
+- 持久化游标与 scope-aware pair 保证多通道公平轮转：单个高频 task 即使不断产生
+  未分类结果，也不会永久占满每轮 50 个名额；worker 重启后公平顺序仍保留。
 
 ## 6. 保留期清理（`prune_messages`）
 

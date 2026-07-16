@@ -76,20 +76,24 @@ SDK `0.3.0` 提供用户目录、钉钉工作通知与结构化错误语义。
   `userRef` 即调用 `send_notification`」的透传接口。`notify` 凭据能通知任意 active 员工，
   即使该员工没有下游 App 权限。
 - `notify` App 还需由 App owner 在该 App workspace 配置独立、版本化的钉钉通知通道；
+  通道必须从控制台返回的权威目录作用域列表选择 `directory_source_slug` / `corp_id`，
   通知受理后会冻结当时的通道版本。首次配置必须填 secret，更新其他字段时
   可省略 secret 并安全复用已有密文；控制台不回显 secret，连通性失败也不暴露钉钉底层错误原文。
 
-### `dt:` 引用兜底惯用法
+### 目录引用必须 opaque 传递
 
-目录全量含未登录过 EasyAuth 的员工,其 `user_id` 可为 `null`,但 `dingtalk_user_id` 恒存在。
-引用人时统一用:
+用户、部门和主管条目分别返回 `source_slug`、`corp_id`、`user_ref` / `department_ref`。
+这些 ref 已包含目录源和企业作用域；下游必须原样保存并用于详情、主管、通知和过滤，
+不得自行拼接、解析或从 `dingtalk_user_id` / `department_id` 重建：
 
 ```python
-ref = user["user_id"] or f"{DINGTALK_REF_PREFIX}{user['dingtalk_user_id']}"
-# 等价于 user["user_id"] or f"dt:{user['dingtalk_user_id']}"
+user_ref = user["user_ref"]
+department_ref = user["departments"][0]["department_ref"]
 ```
 
-目录详情、主管、下属、通知收件人均接受 `user_id` 或 `dt:<钉钉userid>` 两种引用。
+裸 Authentik `user_id`、旧 `dt:<钉钉userid>` 和原始部门 ID 仅作唯一匹配兼容；
+跨企业歧义时目录 API 返回 `409`，畸形 scoped ref 返回 `422`。通知受理不会因单个
+legacy ref 歧义而整体失败，而会把该收件人记为 `USER_AMBIGUOUS`。
 
 ### 推荐链路: 先查目录再通知
 
@@ -98,7 +102,6 @@ import os
 from datetime import date
 
 from easyauth_app_sdk import (
-    DINGTALK_REF_PREFIX,
     NOTIFY_TEMPLATE_ACTION_CARD,
     EasyAuthAppClient,
 )
@@ -118,13 +121,12 @@ notify_client = EasyAuthAppClient(
 # ① 选人器: 按关键字搜活跃用户(下游自行做 ≥300ms 防抖与 60s 缓存)
 result = directory_client.search_directory_users(q="王", page_size=50)
 for user in result["data"]:
-    print(user["dingtalk_user_id"], user["name"], user["title"], user["user_id"])
+    print(user["user_ref"], user["name"], user["title"], user["user_id"])
 
 # ② 逾期升级: 找到负责人的主管并发 action_card 提醒
-manager = directory_client.get_directory_user_manager(assignee_user_id)
-manager_ref = manager["user_id"] or f"{DINGTALK_REF_PREFIX}{manager['dingtalk_user_id']}"
+manager = directory_client.get_directory_user_manager(assignee_user_ref)
 receipt = notify_client.send_notification(
-    recipients=[manager_ref],
+    recipients=[manager["user_ref"]],
     template=NOTIFY_TEMPLATE_ACTION_CARD,
     title="任务逾期升级",
     content=f"### 任务已逾期 3 天\n**{task.title}**\n负责人: {assignee_name}",
@@ -151,6 +153,20 @@ second = directory_client.search_directory_users(
 )
 ```
 
+部门和主管过滤也传 scoped ref：
+
+```python
+members = directory_client.search_directory_users(
+    department_id=department["department_ref"],
+)
+reports = directory_client.search_directory_users(
+    manager_id=manager["user_ref"],
+)
+```
+
+目录稳定排序会把 `source_slug` / `corp_id` 纳入次级键；消费方仍必须用
+`snapshot_id` 固定分页，不要依赖跨快照行序。
+
 ### `dedup_key` 取值建议
 
 - app 内 **永久幂等键**(非时间窗口): 相同 key + 相同载荷 → 返回同一 `message_id` 且
@@ -166,6 +182,9 @@ second = directory_client.search_directory_users(
 - `sent` 是可依赖的最低保证。`delivered` 仅表示钉钉明确的 send-result 回执
   将用户归类进 read/unread 名单，不表示已读、审批知悉或法务送达。
   无明确名单归类时保持 `sent`，超过 24 小时也不会乐观推断为 `delivered`。
+- EasyAuth 持久化 `last_reconciled_at`，每轮公平轮转最多 50 个唯一
+  `(channel, task_id)`；即使回执未分类也推进游标并保持 `sent`。部分收件人失败而
+  其余仍为 `sent` 时，消息聚合状态是 `partially_failed`。
 - **事件性通知不必轮询**;失败靠 EasyAuth 控制台通知大盘与审计兜底。
 - 确需核对时用 `get_notification(message_id)` 查逐收件人明细,但不要对每条消息做 tight loop。
 
@@ -177,8 +196,8 @@ second = directory_client.search_directory_users(
 | 情形 | 处理 |
 |---|---|
 | `404` | 用户不存在或没有主管；按 `details.reason` 做业务分支，不重试 |
-| `409` | 幂等键载荷冲突或目录快照变化；修正请求或从首页重拉，不原样重试 |
-| `422` | 永久参数错误；修复载荷，不重试 |
+| `409` | 幂等键载荷冲突、目录快照变化或 legacy ref 歧义；修正请求、改传 scoped ref 或从首页重拉，不原样重试 |
+| `422` | 永久参数错误或畸形 scoped ref；修复载荷，不重试 |
 | `429` | `retryable=true`；必须遵守 `retry_after` / `retry_after_seconds` |
 | `401` / `403` | 凭据、App capability 或 credential capability 配置问题；停止重试并告警 |
 | `5xx` | `retryable=true`；在幂等边界内指数退避 |

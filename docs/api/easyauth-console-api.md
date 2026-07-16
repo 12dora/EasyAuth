@@ -37,7 +37,7 @@
 | GET | `/apps/{app_key}/capabilities` | active owner/developer/超管可读；返回各能力 `enabled`、`config` 和顶层 `can_manage` |
 | GET | `/apps/{app_key}/capabilities/{capability}` | active owner/developer/超管可读；返回单能力配置和 `can_manage` |
 | PUT | `/apps/{app_key}/capabilities/{capability}` | **仅超管**：开通/关闭 `directory` 或 `notify` 并维护 `config` |
-| GET/PUT | `/apps/{app_key}/notification-channel` | 可见成员读；**owner** 维护每 App 版本化钉钉通知通道 |
+| GET/PUT | `/apps/{app_key}/notification-channel` | 可见成员读；**owner** 从权威目录作用域中选择并维护每 App 版本化钉钉通知通道 |
 | POST | `/apps/{app_key}/notification-channel/test` | **owner**：测试当前 active 通道连通性 |
 | GET/PUT | `/apps/{app_key}/managed-scope-policy` | MANAGED_USERS 策略 |
 | GET | `/apps/{app_key}/managed-users-preview` | 管理范围预览 |
@@ -185,6 +185,12 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 
 全局 `/settings/integrations` 中的钉钉 agent 配置只用于旧配置迁移、审批等仍属全局的能力；
 `notify` 业务 App 必须在自己的 workspace 配置 `notification-channel`。
+每个版本同时绑定 `directory_source_slug` 和 `corp_id`。GET 返回
+`notification_channel` 及 `available_directory_scopes`；后者是当前目录同步状态、
+用户镜像和部门镜像中作用域的排序并集，也是 owner 可保存值的权威列表。
+PUT 必须提交其中一组作用域；控制台使用受校验的下拉框，不接受自由文本。
+若历史 active 通道的作用域已不在列表中，页面显示不可选的修复态与错误提示，
+owner 选择有效作用域并保存新版本后恢复；此时依赖健康为 unhealthy，越界发送会被拒绝。
 首次创建必须提供 secret；后续 PUT 可省略 secret 以复用已有密文。
 响应不回显 secret，连通性失败不返回钉钉底层错误原文。
 

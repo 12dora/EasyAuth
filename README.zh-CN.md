@@ -229,6 +229,12 @@ grant_type=client_credentials&client_id={client_id}&client_secret={client_secret
 `directory` / `notify` capability，因此不同凭据的可调用能力可以不同。完整契约见
 [`docs/architecture/easyauth-architecture-design.md`](docs/architecture/easyauth-architecture-design.md)。
 
+目录用户、部门和主管条目返回带 `source_slug` / `corp_id` 的 opaque
+`user_ref` / `department_ref`；下游必须原样保存并用于详情、过滤与通知，不要自行
+构造 `dt:` 或只按原始钉钉 ID 关联。每个 App 的通知通道还必须绑定控制台权威列表中的
+一个目录作用域，避免跨企业投递。平台能力就绪并不表示 EasyTrade 已完成消费端切换；
+仍需单独迁移、授权凭据并验收。
+
 ---
 
 ## 快速开始（本地开发）

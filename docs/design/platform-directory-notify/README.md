@@ -23,8 +23,9 @@
 
 1. **路径偏离草案**：`/api/v1/apps/{app_key}/directory/*` 与 `.../notify/*`——沿用
    现有公共 API「路径 app_key 必须等于凭据 app_key」的鉴权不变量；
-2. **`user_id` = `authentik_user_id`**（与权限 API 一致），但全量目录含未登录员工
-   → `user_id` 可空、`dingtalk_user_id` 恒存在、全契约统一接受 `dt:` 前缀引用；
+2. **目录引用是 opaque scoped ref**：用户/部门条目返回 source/corp 与
+   `user_ref` / `department_ref`，下游原样保存回传；`user_id` 可空，旧裸 ID / `dt:`
+   只作跨企业唯一匹配兼容；
 3. **两能力默认关闭**：超管开通 App capability，App owner 再授予单个
    credential，两层必须同时通过；manifest 顶层 `capabilities` 只表示请求，
    **声明 ≠ App 开通 ≠ 凭据授权**；
@@ -36,11 +37,12 @@
 6. **通知管道**：新建 `easyauth.notify` app，复用 outbox 入队，照抄 webhooks 的
    claim/lease/attempts/死信骨架；webhooks transport 不可插拔，不改造；
 7. **钉钉侧走旧版 asyncsend_v2**（官方无新版替代）；每个 App 在自己的
-   workspace 配置独立、版本化通知通道（app_key/app_secret/agent_id），
-   消息受理时冻结通道版本，不复用全局通知身份；
+   workspace 从权威目录作用域列表配置独立、版本化通知通道
+   （app_key/app_secret/agent_id + source/corp），消息受理时冻结通道版本；
 8. **批 100 人/次**（官方 userid_list 上限）；`202` 仅表示已受理，
    `sent` 是最低可靠保证；`delivered` 只来自明确 read/unread 回执，
-   不表示已读或合规送达；无明确名单时保持 `sent`，不做 24h 乐观收敛；
+   不表示已读或合规送达；无明确名单时保持 `sent` 并推进持久化公平游标，
+   不做 24h 乐观收敛；
 9. **`dedup_key` 永久幂等**（DB 唯一约束 + payload_hash 冲突 409），对齐审批
    biz_key 语义；钉钉「相同内容同人一天 1 次」的服务端去重兜底崩溃重发；
 10. **SDK 零依赖不变**，当前版本 0.3.0，结构化暴露 error code/details/

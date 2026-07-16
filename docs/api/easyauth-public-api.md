@@ -308,13 +308,24 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
 否则返回 `403 PERMISSION_DENIED`（文案：「应用未开通目录能力。」）。
 所有目录端点返回 `Cache-Control: private, max-age=60`。
 
-用户引用约定：`user_id` = Authentik 用户标识（可空，未 SSO 登录过的员工为 `null`）；`dingtalk_user_id` 恒非空。路径 `{user_ref}` / 参数 `manager_id` 接受裸 `user_id` 或 `dt:<钉钉userid>` 前缀。
+用户条目同时返回 `source_slug`、`corp_id` 和 `user_ref`；部门条目同时
+返回 `source_slug`、`corp_id` 和 `department_ref`。`user_ref` / `department_ref`
+是包含目录源与企业作用域的 opaque 引用：下游必须原样保存和回传，
+不得自行拼接、解码或假设内部格式。详情、主管、下属、目录过滤和通知
+收件人都应使用返回的 ref。
+
+`user_id` 仍是 Authentik 用户标识（可空），`dingtalk_user_id` 仍是原始钉钉 userid。
+旧的裸 `user_id`、`dt:<钉钉userid>` 和原始 `department_id` 只作兼容输入：
+仅当它们在全部目录作用域中唯一匹配时才解析。多个作用域匹配返回
+`409 CONFLICT`，`details.reason` 为 `ambiguous_user_ref` 或
+`ambiguous_department_ref`，并返回 `candidate_refs`；畸形 scoped ref 返回
+`422 VALIDATION_ERROR`，`details.reason="invalid_directory_ref"`。
 
 目录条目返回 `email`、`mobile`、`employee_number`、`status` 和保留的
 `active`。这些字段是员工敏感信息，仅能用于已批准的应用内选人、单据和业务资料关联；
 不得写入日志、不得下发到不需要该数据的前端，也不得作为新的认证或授权事实。
-用户条目不返回 `unionId`、`corp_id` 和完整主管链；
-`corp_id` 只出现在 `directory_snapshot.snapshots[]` 作为多企业快照边界。
+用户条目不返回 `unionId` 和完整主管链。`source_slug` / `corp_id`
+是必要的多企业作用域元数据，不得作为认证或业务授权事实。
 
 ### `GET /api/v1/apps/{app_key}/directory/users`
 
@@ -323,8 +334,8 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
 | 参数 | 说明 |
 | --- | --- |
 | `q` | 对 `name` / `title` / `dingtalk_user_id` 大小写不敏感子串匹配；空串等同省略 |
-| `department_id` | 该部门**直接成员**（不含子部门） |
-| `manager_id` | 用户引用，过滤其**直接下属** |
+| `department_id` | 传目录条目返回的 `department_ref`，过滤该作用域内的**直接成员**（不含子部门） |
+| `manager_id` | 传主管的 `user_ref`，过滤同一作用域内的**直接下属** |
 | `include_inactive` | `"true"` 时包含 `disabled` / `departed` 以及从最新权威快照消失后保留的 tombstone；默认仅 `active` |
 | `snapshot_id` | 可选的分页快照固定值；第一页省略，后续页应传回首页 `directory_snapshot.snapshot_id` |
 | `page` / `page_size` | 默认 1/20；`page_size` 上限 **200** |
@@ -334,7 +345,7 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
 并附 `expected_snapshot_id` 与 `actual_snapshot_id`。消费方应从第一页重新读取，
 不得把两个快照的页混合。
 
-排序：`name` 升序，再 `dingtalk_user_id` 升序。
+稳定排序：`name`、`source_slug`、`corp_id`、`dingtalk_user_id` 依次升序。
 
 **成功响应（200）：**
 
@@ -344,6 +355,9 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
     {
       "user_id": "f7c31a09e5b24f8d9a1c",
       "dingtalk_user_id": "user0123",
+      "source_slug": "dingtalk",
+      "corp_id": "corp-demo",
+      "user_ref": "dt:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:dXNlcjAxMjM",
       "name": "李小明",
       "avatar_url": "https://static-legacy.dingtalk.com/media/xxx.jpg",
       "title": "后端工程师",
@@ -352,13 +366,22 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
       "employee_number": "ET-00123",
       "status": "active",
       "departments": [
-        {"department_id": "460001", "name": "研发部"}
+        {
+          "department_id": "460001",
+          "source_slug": "dingtalk",
+          "corp_id": "corp-demo",
+          "department_ref": "dept:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:NDYwMDAx",
+          "name": "研发部"
+        }
       ],
       "active": true
     },
     {
       "user_id": null,
       "dingtalk_user_id": "user0456",
+      "source_slug": "dingtalk",
+      "corp_id": "corp-demo",
+      "user_ref": "dt:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:dXNlcjA0NTY",
       "name": "王新人",
       "avatar_url": "",
       "title": "测试工程师",
@@ -367,8 +390,8 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
       "employee_number": "ET-00456",
       "status": "active",
       "departments": [
-        {"department_id": "460001", "name": "研发部"},
-        {"department_id": "470001", "name": "质量委员会"}
+        {"department_id": "460001", "source_slug": "dingtalk", "corp_id": "corp-demo", "department_ref": "dept:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:NDYwMDAx", "name": "研发部"},
+        {"department_id": "470001", "source_slug": "dingtalk", "corp_id": "corp-demo", "department_ref": "dept:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:NDcwMDAx", "name": "质量委员会"}
       ],
       "active": true
     }
@@ -379,7 +402,7 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
     "snapshots": [
       {
         "source_slug": "dingtalk",
-        "corp_id": "ding-corp-a",
+        "corp_id": "corp-demo",
         "generation": 42,
         "status": "success",
         "snapshot_at": "2026-07-16T10:00:00+08:00",
@@ -398,6 +421,8 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
 保留以便现有消费方使用布尔判断。从上游权威快照消失的员工不会被物理删除：
 EasyAuth 保留其身份与联系字段，设置 `status: "departed"`、`active: false`，
 并清空部门与主管关系。
+每个用户和所属部门都带自己的 `source_slug` / `corp_id` 和 canonical ref；
+原始 `dingtalk_user_id` / `department_id` 可在不同企业重复，不能单独作为跨企业键。
 
 ### 目录快照元数据
 
@@ -424,12 +449,16 @@ EasyAuth 保留其身份与联系字段，设置 `status: "departed"`、`active:
 
 若用户已从权威目录消失，保留 tombstone 并返回 `status: "departed"`、
 `active: false`、`departments: []`、`manager: null`。已 SSO 用户可用裸 `user_id`
-查询；未 SSO 用户仍可用 `dt:` 引用查询。
+查询。仅剩历史 `UserMirror` 且无法确定目录源时，`source_slug` 为空串且
+`user_ref` 回落为全局唯一的 Authentik `user_id`，不伪造 scoped `dt:` 引用。
 
 ```json
 {
   "user_id": "f7c31a09e5b24f8d9a1c",
   "dingtalk_user_id": "user0123",
+  "source_slug": "dingtalk",
+  "corp_id": "corp-demo",
+  "user_ref": "dt:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:dXNlcjAxMjM",
   "name": "王小明",
   "avatar_url": "https://…",
   "title": "后端工程师",
@@ -437,11 +466,14 @@ EasyAuth 保留其身份与联系字段，设置 `status: "departed"`、`active:
   "mobile": "13800000000",
   "employee_number": "ET-00123",
   "status": "active",
-  "departments": [{"department_id": "460001", "name": "研发部"}],
+  "departments": [{"department_id": "460001", "source_slug": "dingtalk", "corp_id": "corp-demo", "department_ref": "dept:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:NDYwMDAx", "name": "研发部"}],
   "active": true,
   "manager": {
     "user_id": null,
     "dingtalk_user_id": "manager8836",
+    "source_slug": "dingtalk",
+    "corp_id": "corp-demo",
+    "user_ref": "dt:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:bWFuYWdlcjg4MzY",
     "name": "张主管",
     "title": "研发经理",
     "email": "manager@example.com",
@@ -474,18 +506,19 @@ EasyAuth 保留其身份与联系字段，设置 `status: "departed"`、`active:
 
 | 参数 | 说明 |
 | --- | --- |
-| `parent_id` | 可选。省略 → 全量扁平列表；传入 → 该部门的直接子部门 |
+| `parent_id` | 可选。省略 → 全量扁平列表；空串 → 所有作用域的根部门；传某条返回的 `department_ref` → 该作用域内的直接子部门 |
 
 ```json
 {
   "data": [
-    {"department_id": "1", "parent_id": "", "name": "杰发科技", "order": 0},
-    {"department_id": "460001", "parent_id": "1", "name": "研发部", "order": 10}
+    {"department_id": "1", "source_slug": "dingtalk", "corp_id": "corp-demo", "department_ref": "dept:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:MQ", "parent_id": "", "name": "杰发科技", "order": 0},
+    {"department_id": "460001", "source_slug": "dingtalk", "corp_id": "corp-demo", "department_ref": "dept:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:NDYwMDAx", "parent_id": "1", "name": "研发部", "order": 10}
   ]
 }
 ```
 
-根部门 `parent_id` 为空串；排序 `order` 升序再 `department_id` 升序；`parent_id` 不存在 → `200` 空 `data`。
+根部门 `parent_id` 为空串；稳定排序为 `order`、`source_slug`、`corp_id`、
+`department_id` 依次升序；`parent_id` 不存在 → `200` 空 `data`。
 
 ### 目录限流
 
@@ -505,9 +538,11 @@ EasyAuth 保留其身份与联系字段，设置 `status: "departed"`、`active:
 （文案：「应用未开通通知能力。」）。该 App 还必须在自己的 workspace 由
 App owner 配置独立的、版本化钉钉通知通道；未配置时返回
 `503 DEPENDENCY_UNAVAILABLE`。每条通知在受理时冻结通道版本，后续替换活动通道
-不会改写已受理消息的发送身份。
+不会改写已受理消息的发送身份。每个通道还绑定一个权威目录作用域
+`(directory_source_slug, corp_id)`，只允许向该作用域内的 active 员工投递；
+作用域失效时依赖健康为 unhealthy，worker 会拒绝越界收件人。
 
-**异步受理语义**：`POST` 成功仅代表 EasyAuth 已落库并排程投递；真正的逐人成败通过 `GET` 状态查询。收件人引用与目录一致：裸 `user_id` 或 `dt:<钉钉userid>`。仅允许通知 active 目录用户；解析失败的收件人不阻塞整体受理，直接记为终态 `failed`。
+**异步受理语义**：`POST` 成功仅代表 EasyAuth 已落库并排程投递；真正的逐人成败通过 `GET` 状态查询。收件人应传目录返回的 opaque `user_ref` 并原样保存/回传。旧裸 `user_id` / `dt:<钉钉userid>` 仅在全局唯一匹配时兼容；歧义、畸形、非 active 或与通道作用域不一致的收件人不阻塞整体受理，而是分别记为终态 `failed`。
 
 ### `POST /api/v1/apps/{app_key}/notify/messages`
 
@@ -526,7 +561,10 @@ App owner 配置独立的、版本化钉钉通知通道；未配置时返回
 
 ```json
 {
-  "recipients": ["f7c31a09e5b24f8d9a1c", "dt:manager8836"],
+  "recipients": [
+    "dt:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:dXNlcjAxMjM",
+    "dt:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:bWFuYWdlcjg4MzY"
+  ],
   "template": "action_card",
   "title": "任务逾期升级",
   "content": "### 任务已逾期 3 天\n**接口联调排期**\n负责人: 王小明",
@@ -561,7 +599,8 @@ App owner 配置独立的、版本化钉钉通知通道；未配置时返回
 ```
 
 - `recipient_total`：解析合并后的收件人数（含受理时即失败者）
-- `recipient_rejected`：受理时即判终态失败的收件人数（解析失败/非 active）
+- `recipient_rejected`：受理时即判终态失败的收件人数（解析失败、引用歧义、
+  非 active 或不属于冻结通道作用域）
 
 ### `GET /api/v1/apps/{app_key}/notify/messages/{message_id}`
 
@@ -583,7 +622,7 @@ App owner 配置独立的、版本化钉钉通知通道；未配置时返回
   "recipient_failed": 1,
   "recipients": [
     {
-      "raw_ref": "f7c31a09e5b24f8d9a1c",
+      "raw_ref": "dt:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:dXNlcjAxMjM",
       "user_id": "f7c31a09e5b24f8d9a1c",
       "dingtalk_user_id": "user0123",
       "status": "delivered",
@@ -593,7 +632,7 @@ App owner 配置独立的、版本化钉钉通知通道；未配置时返回
       "delivered_at": "2026-07-16T10:01:00+08:00"
     },
     {
-      "raw_ref": "dt:formeruser01",
+      "raw_ref": "dt:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:Zm9ybWVydXNlcjAx",
       "user_id": null,
       "dingtalk_user_id": "formeruser01",
       "status": "failed",
@@ -613,11 +652,19 @@ App owner 配置独立的、版本化钉钉通知通道；未配置时返回
 send-result 回执把该 userid 分类进 `read_user_id_list` 或 `unread_user_id_list`；
 它不表示已读，不得作为审批知悉、法务送达或其他合规事实。
 
-**`error_code` 枚举：** `USER_NOT_FOUND`、`NO_DINGTALK_ID`、`USER_INACTIVE`、`DINGTALK_REJECTED`、`DINGTALK_DUPLICATE`、`DINGTALK_DAILY_LIMIT`、`EXHAUSTED`。
+**`error_code` 枚举：** `USER_NOT_FOUND`、`USER_AMBIGUOUS`、
+`USER_SCOPE_MISMATCH`、`NO_DINGTALK_ID`、`USER_INACTIVE`、
+`DINGTALK_REJECTED`、`DINGTALK_DUPLICATE`、`DINGTALK_DAILY_LIMIT`、`EXHAUSTED`。
+其中 legacy 引用多企业歧义在通知 API 中是逐收件人的 `USER_AMBIGUOUS`，而不是
+把整个 POST 变成 HTTP 409；`USER_SCOPE_MISMATCH` 表示收件人不属于消息冻结通道的
+目录作用域。
 
 **状态时效：** `sent → delivered/failed` 依赖回执对账（约 60s 周期，
 钉钉 send-result 查询窗口为 24h）。对账尽力而为；回执没有明确的
-read/unread/失败名单归类时保持 `sent`，超过 24h 后也不推断为 `delivered`。
+read/unread/失败名单归类时保持 `sent`，但仍持久化推进 `last_reconciled_at`；
+超过 24h 后也不推断为 `delivered`。调度每轮按最久未对账优先，公平轮转最多
+50 个唯一 `(channel, task_id)`；某批出现 failed 且仍有 sent 时，消息聚合状态为
+`partially_failed`。
 
 ### 限流（通知）
 
@@ -629,6 +676,8 @@ read/unread/失败名单归类时保持 `sent`，超过 24h 后也不推断为 `
 | 认证失败 | 每 IP 30 次 / 300s |
 
 超限返回 `429 THROTTLED`，带 `Retry-After` 头。
+每日配额在受理事务内按 App 行锁串行执行「计数 + 写入」，并发请求不能越过同一
+App 的日上限。
 
 ---
 
