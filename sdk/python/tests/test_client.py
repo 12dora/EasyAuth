@@ -44,6 +44,14 @@ def _client() -> EasyAuthAppClient:
     )
 
 
+def _assert_http_error_closed(error: EasyAuthClientError) -> None:
+    cause = error.__cause__
+    assert isinstance(cause, HTTPError)
+    assert cause.closed is True
+    if cause.fp is not None:
+        assert cause.fp.closed is True
+
+
 def test_client_error_keeps_legacy_message_and_status_code() -> None:
     error = EasyAuthClientError("legacy message", status_code=418)
 
@@ -130,6 +138,7 @@ def test_query_parses_unified_error_and_retry_after(monkeypatch: pytest.MonkeyPa
     assert error.retry_after_seconds == 120
     assert error.retryable is True
     assert error.transport_error is False
+    _assert_http_error_closed(error)
 
 
 @pytest.mark.parametrize(
@@ -265,6 +274,7 @@ def test_rejects_redirect_responses(monkeypatch: pytest.MonkeyPatch) -> None:
     assert excinfo.value.status_code == 302
     assert excinfo.value.retryable is False
     assert excinfo.value.transport_error is False
+    _assert_http_error_closed(excinfo.value)
 
 
 def test_default_opener_does_not_forward_authorization_on_redirect() -> None:
@@ -308,6 +318,38 @@ def test_default_opener_does_not_forward_authorization_on_redirect() -> None:
 
     assert excinfo.value.status_code == 302
     assert redirected_authorizations == []
+    _assert_http_error_closed(excinfo.value)
+
+
+def test_oversized_http_error_body_is_truncated_and_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    error_body = io.BytesIO(b"x" * 100)
+
+    def fake_urlopen(request: Any, timeout: float) -> _FakeResponse:  # noqa: ARG001
+        raise HTTPError(
+            request.full_url,
+            503,
+            "Service Unavailable",
+            {},  # type: ignore[arg-type]
+            error_body,
+        )
+
+    monkeypatch.setattr(client_module, "urlopen", fake_urlopen)
+    client = EasyAuthAppClient(
+        base_url="http://easyauth:8001",
+        app_key="app",
+        token="eat_x",
+        allow_insecure_http=True,
+        max_response_bytes=10,
+    )
+
+    with pytest.raises(EasyAuthClientError, match=r"x{10}") as excinfo:
+        client.query_user_permissions("u")
+
+    assert excinfo.value.retryable is True
+    assert error_body.closed is True
+    _assert_http_error_closed(excinfo.value)
 
 
 def test_rejects_oversized_response(monkeypatch: pytest.MonkeyPatch) -> None:

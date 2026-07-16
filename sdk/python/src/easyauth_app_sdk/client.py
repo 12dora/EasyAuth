@@ -317,26 +317,30 @@ class EasyAuthAppClient:
                     max_bytes=self.max_response_bytes,
                 )
         except HTTPError as error:
-            if _HTTP_REDIRECT_MIN <= error.code < _HTTP_REDIRECT_MAX:
+            try:
+                if _HTTP_REDIRECT_MIN <= error.code < _HTTP_REDIRECT_MAX:
+                    raise EasyAuthClientError(
+                        REDIRECT_FORBIDDEN_MESSAGE,
+                        status_code=error.code,
+                    ) from error
+                raw_error = _read_error_body(error, max_bytes=self.max_response_bytes)
+                error_code, error_message, details = _parse_error_body(raw_error)
+                retry_after = _header_value(error.headers, "Retry-After")
                 raise EasyAuthClientError(
-                    REDIRECT_FORBIDDEN_MESSAGE,
+                    f"EasyAuth 返回 HTTP {error.code}: {error_message or raw_error[:500]}",
                     status_code=error.code,
+                    error_code=error_code,
+                    details=details,
+                    retry_after=retry_after,
+                    retry_after_seconds=_parse_retry_after_seconds(retry_after),
+                    retryable=(
+                        error.code == _HTTP_TOO_MANY_REQUESTS
+                        or _HTTP_SERVER_ERROR_MIN <= error.code < _HTTP_SERVER_ERROR_MAX
+                    ),
                 ) from error
-            raw_error = _read_error_body(error, max_bytes=self.max_response_bytes)
-            error_code, error_message, details = _parse_error_body(raw_error)
-            retry_after = _header_value(error.headers, "Retry-After")
-            raise EasyAuthClientError(
-                f"EasyAuth 返回 HTTP {error.code}: {error_message or raw_error[:500]}",
-                status_code=error.code,
-                error_code=error_code,
-                details=details,
-                retry_after=retry_after,
-                retry_after_seconds=_parse_retry_after_seconds(retry_after),
-                retryable=(
-                    error.code == _HTTP_TOO_MANY_REQUESTS
-                    or _HTTP_SERVER_ERROR_MIN <= error.code < _HTTP_SERVER_ERROR_MAX
-                ),
-            ) from error
+            finally:
+                # 异常链会保留 HTTPError; 必须主动关闭其底层 fp/socket。
+                error.close()
         except (URLError, TimeoutError, OSError) as error:
             raise EasyAuthClientError(
                 f"无法连接 EasyAuth: {error}",
