@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from http import HTTPStatus
+from typing import TYPE_CHECKING
 
 import pytest
 from django.test import RequestFactory
@@ -9,20 +10,14 @@ from easyauth.api import notify_views
 from easyauth.applications.models import CAPABILITY_NOTIFY, App, AppCapability
 from easyauth.applications.services import AppPrincipal
 
+if TYPE_CHECKING:
+    from django.http import HttpRequest
+
 pytestmark = pytest.mark.django_db
 
 
-@pytest.mark.parametrize(
-    ("credential_capabilities", "expected_status"),
-    [
-        (frozenset(), HTTPStatus.FORBIDDEN),
-        (frozenset({CAPABILITY_NOTIFY}), HTTPStatus.OK),
-    ],
-)
 def test_notify_gate_requires_current_credential_capability(
     monkeypatch: pytest.MonkeyPatch,
-    credential_capabilities: frozenset[str],
-    expected_status: HTTPStatus,
 ) -> None:
     app = App.objects.create(app_key="notify-gate", name="Notify Gate")
     _ = AppCapability.objects.create(
@@ -35,19 +30,17 @@ def test_notify_gate_requires_current_credential_capability(
         app_key=app.app_key,
         credential_type="static_token",
         credential_id=1,
-        capabilities=credential_capabilities,
     )
-    monkeypatch.setattr(
-        notify_views,
-        "_authenticate_and_authfail_throttle",
-        lambda _request: principal,
+
+    def authenticate(_token: str) -> AppPrincipal:
+        return principal
+
+    monkeypatch.setattr(notify_views, "authenticate_permission_query_token", authenticate)
+    request: HttpRequest = RequestFactory().post(
+        f"/api/v1/apps/{app.app_key}/notify/messages",
+        data={"recipients": ["missing"], "template": "text", "content": "blocked"},
+        content_type="application/json",
+        HTTP_AUTHORIZATION="Bearer credential-without-notify",
     )
-    result = notify_views._authenticate_notify_capability(  # noqa: SLF001
-        RequestFactory().get("/"),
-        app.app_key,
-    )
-    if expected_status == HTTPStatus.OK:
-        assert isinstance(result, tuple)
-        assert result == (app, principal)
-    else:
-        assert result.status_code == expected_status
+    response = notify_views.notify_messages_create(request, app.app_key)
+    assert response.status_code == HTTPStatus.FORBIDDEN

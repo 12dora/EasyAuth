@@ -15,6 +15,8 @@ from easyauth.applications.services import AppPrincipal
 from easyauth.audit.services import AuditRecord, AuditService
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from easyauth.applications.models import App
     from easyauth.audit.models import JsonValue
 
@@ -57,7 +59,7 @@ class OAuthClientService:
         *,
         app: App,
         name: str,
-        capabilities: object = (),
+        capabilities: Sequence[str] = (),
     ) -> OAuthClientIssue:
         plaintext_secret = generate_client_secret()
         oauth_application = Application(
@@ -73,7 +75,7 @@ class OAuthClientService:
             oauth_application=oauth_application,
             credential_type=APP_CREDENTIAL_TYPE_OAUTH_CLIENT,
             name=name,
-            capabilities=normalize_credential_capabilities(list(capabilities)),
+            capabilities=normalize_credential_capabilities(capabilities),
         )
         binding.full_clean()
         binding.save()

@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, override
+from typing import TYPE_CHECKING, Literal, override
 
 from django.utils import timezone
 
+from easyauth.applications.credential_capabilities import normalize_credential_capabilities
 from easyauth.applications.models import App, AppCredential
 from easyauth.applications.oauth import OAuthClientService
 from easyauth.applications.oauth_models import OAuthClientBinding
@@ -14,6 +15,9 @@ from easyauth.applications.services import (
     StaticTokenService,
 )
 from easyauth.audit.services import AuditRecord, AuditService
+
+if TYPE_CHECKING:
+    from easyauth.audit.models import JsonValue
 
 type OneTimeSecretKind = Literal["static_token", "oauth_client"]
 
@@ -61,10 +65,11 @@ def create_static_token_for_console(
     actor: CredentialActor,
     capabilities: list[str] | None = None,
 ) -> OneTimeSecret:
+    normalized_capabilities = normalize_credential_capabilities(capabilities or [])
     issue = StaticTokenService.create_token(
         app=app,
         name=name,
-        capabilities=capabilities or [],
+        capabilities=normalized_capabilities,
     )
     _record_credential_event(
         CredentialEvent(
@@ -73,6 +78,7 @@ def create_static_token_for_console(
             action="console_static_token_created",
             credential_type=APP_CREDENTIAL_STATIC_KIND,
             credential_id=issue.credential_id,
+            capabilities=normalized_capabilities,
         ),
     )
     return OneTimeSecret(
@@ -159,10 +165,11 @@ def create_oauth_client_for_console(
     actor: CredentialActor,
     capabilities: list[str] | None = None,
 ) -> OneTimeSecret:
+    normalized_capabilities = normalize_credential_capabilities(capabilities or [])
     issue = OAuthClientService.create_client(
         app=app,
         name=name,
-        capabilities=capabilities or [],
+        capabilities=normalized_capabilities,
     )
     _record_credential_event(
         CredentialEvent(
@@ -171,6 +178,7 @@ def create_oauth_client_for_console(
             action="console_oauth_client_created",
             credential_type="oauth_client",
             credential_id=issue.binding_id,
+            capabilities=normalized_capabilities,
         ),
     )
     return OneTimeSecret(
@@ -239,7 +247,7 @@ def _oauth_client_for_app(*, app: App, credential_id: int) -> OAuthClientBinding
 
 
 def _record_credential_event(event: CredentialEvent) -> None:
-    metadata: dict[str, str | int | list[str]] = {
+    metadata: dict[str, JsonValue] = {
         "app_key": event.app.app_key,
         "credential_type": event.credential_type,
         "credential_id": event.credential_id,
@@ -247,7 +255,8 @@ def _record_credential_event(event: CredentialEvent) -> None:
     if event.reason:
         metadata["reason"] = event.reason
     if event.capabilities is not None:
-        metadata["capabilities"] = event.capabilities
+        capabilities: list[JsonValue] = list(event.capabilities)
+        metadata["capabilities"] = capabilities
     _ = AuditService.record(
         AuditRecord(
             actor_type="user",

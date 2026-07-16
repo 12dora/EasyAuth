@@ -14,6 +14,8 @@ from easyauth.applications.models import APP_CREDENTIAL_STATIC_KIND, App, AppCre
 from easyauth.audit.services import AuditRecord, AuditService
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from easyauth.audit.models import JsonValue
 
 # 单一事实源: token 类型常量与其模型不变量一起定义在 applications.models。
@@ -73,7 +75,7 @@ class AppCredentialService:
     def create_static_token(
         app: App,
         name: str = "",
-        capabilities: object = (),
+        capabilities: Sequence[str] = (),
     ) -> IssuedStaticToken:
         return _issue_static_token(
             app=app,
@@ -88,7 +90,7 @@ class AppCredentialService:
         app: App,
         name: str = "",
         previous_credential_id: int | None = None,
-        capabilities: object = (),
+        capabilities: Sequence[str] = (),
     ) -> IssuedStaticToken:
         credential_name = name if name else "rotated static token"
         return _issue_static_token(
@@ -123,7 +125,7 @@ class StaticTokenService:
         *,
         app: App,
         name: str,
-        capabilities: object = (),
+        capabilities: Sequence[str] = (),
     ) -> StaticTokenIssue:
         issued_token = AppCredentialService.create_static_token(
             app=app,
@@ -217,7 +219,7 @@ def _issue_static_token(
     *,
     app: App,
     name: str,
-    capabilities: object,
+    capabilities: Sequence[str],
     audit_context: _StaticTokenAuditContext,
 ) -> IssuedStaticToken:
     plaintext_token = _generate_static_token()
@@ -225,7 +227,7 @@ def _issue_static_token(
         app=app,
         credential_type=APP_CREDENTIAL_STATIC_KIND,
         name=name,
-        capabilities=normalize_credential_capabilities(list(capabilities)),
+        capabilities=normalize_credential_capabilities(capabilities),
         token_hash=_hash_static_token(plaintext_token),
         token_lookup=_static_token_lookup(plaintext_token),
     )

@@ -47,6 +47,8 @@ def test_ops1_console_static_token_create_displays_plaintext_only_once() -> None
     assert plaintext_token not in credential.token_hash
     for audit_log in AuditLog.objects.all():
         assert plaintext_token not in str(audit_log.metadata)
+    console_audit = AuditLog.objects.get(event_type="console_static_token_created")
+    assert console_audit.metadata["capabilities"] == []
     followup = client.get(_credentials_api_url(app.app_key))
     assert plaintext_token not in followup.content.decode()
 
@@ -100,6 +102,8 @@ def test_ops1_console_oauth_client_secret_is_one_time_and_not_visible_to_develop
     assert client_secret not in owner_client.get(_credentials_api_url(app.app_key)).content.decode()
     for audit_log in AuditLog.objects.all():
         assert client_secret not in str(audit_log.metadata)
+    console_audit = AuditLog.objects.get(event_type="console_oauth_client_created")
+    assert console_audit.metadata["capabilities"] == []
     assert AppCredential.objects.filter(app=app, name="developer attempt").exists() is False
 
 
@@ -416,6 +420,8 @@ def test_credential_capabilities_create_rotate_and_owner_update() -> None:
     credential_id = _json_int(created_item["id"])
     assert created.status_code == HTTPStatus.CREATED
     assert created_item["capabilities"] == ["notify"]
+    create_audit = AuditLog.objects.get(event_type="console_static_token_created")
+    assert create_audit.metadata["capabilities"] == ["notify"]
 
     rotated = client.post(
         _credentials_api_url(app.app_key, f"static-tokens/{credential_id}/rotate"),
@@ -459,6 +465,8 @@ def test_oauth_capabilities_update_is_owner_only() -> None:
         content_type="application/json",
     )
     credential_id = _json_int(_json_object(_json_dict(created)["credential"])["id"])
+    create_audit = AuditLog.objects.get(event_type="console_oauth_client_created")
+    assert create_audit.metadata["capabilities"] == ["directory"]
     url = _credentials_api_url(app.app_key, f"oauth-clients/{credential_id}/capabilities")
     denied = developer.put(
         url,

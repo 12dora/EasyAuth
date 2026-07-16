@@ -27,23 +27,25 @@ def credential_items(app: App) -> list[JsonValue]:
 
 
 def static_credential_item(credential: AppCredential) -> dict[str, JsonValue]:
+    capabilities: list[JsonValue] = list(credential.capabilities)
     return {
         "id": credential.id,
         "kind": "static_token",
         "name": credential.name,
         "is_active": credential.is_active,
-        "capabilities": credential.capabilities,
+        "capabilities": capabilities,
     }
 
 
 def oauth_client_item(binding: OAuthClientBinding) -> dict[str, JsonValue]:
+    capabilities: list[JsonValue] = list(binding.capabilities)
     return {
         "id": binding.id,
         "kind": "oauth_client",
         "name": binding.name,
         "is_active": binding.is_active,
         "client_id": binding.oauth_application.client_id,
-        "capabilities": binding.capabilities,
+        "capabilities": capabilities,
     }
 
 
