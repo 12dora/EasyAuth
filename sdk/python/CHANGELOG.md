@@ -10,6 +10,8 @@
 - `EasyAuthClientError` 新增结构化字段：`error_code`、`details`、`retry_after`、
   `retry_after_seconds`、`retryable`、`transport_error`，并解析公共 API 统一错误 JSON 与
   `Retry-After`。
+- `search_directory_users` 新增可选 `snapshot_id`，支持后续分页固定首屏目录快照；快照变化的
+  `409 CONFLICT` 通过结构化错误交由调用方从第一页重新开始。
 
 ### Changed
 

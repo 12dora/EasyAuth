@@ -170,12 +170,14 @@ class EasyAuthAppClient:
         department_id: str | None = None,
         manager_id: str | None = None,
         include_inactive: bool = False,
+        snapshot_id: str | None = None,
         page: int = 1,
         page_size: int = 20,
     ) -> dict[str, Any]:
         """搜索/分页拉取用户目录。GET {app_base}/directory/users。
 
-        返回 {"data": [...], "pagination": {...}}, 字段契约见公共 API 文档 §5。
+        首屏省略 snapshot_id, 后续页传首屏 directory_snapshot.snapshot_id 以固定快照;
+        快照变化时服务端返回 409 CONFLICT, 客户端不会自动重试。
         """
         params: dict[str, str] = {
             "page": str(page),
@@ -189,6 +191,8 @@ class EasyAuthAppClient:
             params["manager_id"] = manager_id
         if include_inactive:
             params["include_inactive"] = "true"
+        if snapshot_id:
+            params["snapshot_id"] = snapshot_id
         url = f"{self._app_base()}/directory/users?{urlencode(params)}"
         return self._request_json(url, method="GET")
 

@@ -2,17 +2,21 @@
 
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 from typing import Any, Self
+from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlparse
 
+import pytest
 from easyauth_app_sdk import (
     DINGTALK_REF_PREFIX,
     NOTIFY_TEMPLATE_ACTION_CARD,
     NOTIFY_TEMPLATE_MARKDOWN,
     NOTIFY_TEMPLATE_TEXT,
     EasyAuthAppClient,
+    EasyAuthClientError,
 )
 from easyauth_app_sdk import client as client_module
 
@@ -93,6 +97,7 @@ def test_search_directory_users_url_and_query(monkeypatch: Any) -> None:
         department_id="460001",
         manager_id="dt:manager8836",
         include_inactive=True,
+        snapshot_id=sample["directory_snapshot"]["snapshot_id"],
         page=2,
         page_size=50,
     )
@@ -106,6 +111,7 @@ def test_search_directory_users_url_and_query(monkeypatch: Any) -> None:
     assert query["department_id"] == ["460001"]
     assert query["manager_id"] == ["dt:manager8836"]
     assert query["include_inactive"] == ["true"]
+    assert query["snapshot_id"] == [sample["directory_snapshot"]["snapshot_id"]]
     assert query["page"] == ["2"]
     assert query["page_size"] == ["50"]
     assert captured["method"] == "GET"
@@ -120,9 +126,64 @@ def test_search_directory_users_omits_include_inactive_when_false(monkeypatch: A
     _assert_bearer(captured)
     query = parse_qs(urlparse(captured["url"]).query)
     assert "include_inactive" not in query
+    assert "snapshot_id" not in query
     assert "q" not in query
     assert query["page"] == ["1"]
     assert query["page_size"] == ["20"]
+
+
+def test_search_directory_users_omits_empty_snapshot_id(monkeypatch: Any) -> None:
+    sample = _load_sample("directory/users_list.json")
+    captured = _stub_json(monkeypatch, sample)
+
+    _ = _client().search_directory_users(snapshot_id="")
+
+    assert "snapshot_id" not in parse_qs(urlparse(captured["url"]).query)
+
+
+def test_search_directory_users_snapshot_conflict_is_structured_and_not_retried(
+    monkeypatch: Any,
+) -> None:
+    calls = 0
+    payload = {
+        "error": {
+            "code": "CONFLICT",
+            "message": "目录快照已变化, 请从第一页重新开始。",
+            "details": {
+                "expected_snapshot_id": "snapshot-old",
+                "actual_snapshot_id": "snapshot-new",
+            },
+        },
+    }
+
+    def fake_urlopen(request: Any, timeout: float) -> _FakeResponse:  # noqa: ARG001
+        nonlocal calls
+        calls += 1
+        raise HTTPError(
+            request.full_url,
+            409,
+            "Conflict",
+            {},  # type: ignore[arg-type]
+            io.BytesIO(json.dumps(payload).encode("utf-8")),
+        )
+
+    monkeypatch.setattr(client_module, "urlopen", fake_urlopen)
+
+    with pytest.raises(EasyAuthClientError) as excinfo:
+        _client().search_directory_users(page=2, snapshot_id="snapshot-old")
+
+    error = excinfo.value
+    assert calls == 1
+    assert error.status_code == 409
+    assert error.error_code == "CONFLICT"
+    assert error.details == {
+        "expected_snapshot_id": "snapshot-old",
+        "actual_snapshot_id": "snapshot-new",
+    }
+    assert error.retryable is False
+    assert error.transport_error is False
+    assert isinstance(error.__cause__, HTTPError)
+    assert error.__cause__.closed is True
 
 
 def test_get_directory_user_encodes_ref(monkeypatch: Any) -> None:
