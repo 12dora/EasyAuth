@@ -5,6 +5,7 @@ import json
 import pytest
 from easyauth_app_sdk import (
     DESCRIPTOR_VERSION,
+    SDK_VERSION,
     DescriptorError,
     ManifestValidationError,
     build_descriptor_payload,
@@ -46,6 +47,7 @@ def test_build_and_parse_descriptor_roundtrip() -> None:
     payload = build_descriptor_payload(manifest=_manifest())
 
     assert payload["descriptor_version"] == DESCRIPTOR_VERSION
+    assert payload["sdk"]["version"] == SDK_VERSION == "0.3.0"
     assert payload["app"]["app_key"] == "demoapp"
 
     descriptor = parse_descriptor_payload(payload)
@@ -117,18 +119,33 @@ def test_validate_manifest_rejects_capabilities_empty_string() -> None:
         validate_manifest(manifest)
 
 
-def test_validate_manifest_rejects_capabilities_outside_whitelist() -> None:
+def test_validate_manifest_rejects_capability_non_string_and_whitespace() -> None:
+    for invalid in (None, 1, "   "):
+        manifest = _manifest()
+        manifest["capabilities"] = ["directory", invalid]
+        with pytest.raises(ManifestValidationError, match="非空字符串"):
+            validate_manifest(manifest)
+
+
+def test_validate_manifest_accepts_future_capability_without_mutating_manifest() -> None:
     manifest = _manifest()
-    manifest["capabilities"] = ["directory", "future_capability"]
-    with pytest.raises(ManifestValidationError, match="取值必须是"):
-        validate_manifest(manifest)
+    manifest["capabilities"] = [" directory ", "future_capability", "directory"]
+
+    validated = validate_manifest(manifest)
+
+    assert validated is manifest
+    assert validated["capabilities"] == [
+        " directory ",
+        "future_capability",
+        "directory",
+    ]
 
 
-def test_validate_manifest_rejects_capabilities_duplicates() -> None:
+def test_validate_manifest_accepts_duplicate_capabilities_like_server() -> None:
     manifest = _manifest()
     manifest["capabilities"] = ["directory", "notify", "directory"]
-    with pytest.raises(ManifestValidationError, match="重复值"):
-        validate_manifest(manifest)
+
+    assert validate_manifest(manifest) is manifest
 
 
 def test_descriptor_roundtrip_preserves_lifecycle_and_webhook_sections() -> None:

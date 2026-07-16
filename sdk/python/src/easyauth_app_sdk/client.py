@@ -8,7 +8,7 @@ from time import monotonic
 from typing import TYPE_CHECKING, Any, Final
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode, urlparse
-from urllib.request import Request, urlopen
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -24,6 +24,9 @@ REDIRECT_FORBIDDEN_MESSAGE: Final = "EasyAuth 客户端默认禁止跟随重定�
 HTTPS_REQUIRED_MESSAGE: Final = "生产环境 EasyAuth base_url 必须使用 https。"
 _HTTP_REDIRECT_MIN: Final = 300
 _HTTP_REDIRECT_MAX: Final = 400
+_HTTP_TOO_MANY_REQUESTS: Final = 429
+_HTTP_SERVER_ERROR_MIN: Final = 500
+_HTTP_SERVER_ERROR_MAX: Final = 600
 
 # 通知模板取值(send_notification.template)。
 NOTIFY_TEMPLATE_TEXT: Final = "text"
@@ -36,9 +39,37 @@ DINGTALK_REF_PREFIX: Final = "dt:"
 class EasyAuthClientError(RuntimeError):
     """EasyAuth API 调用失败。"""
 
-    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+    def __init__(  # noqa: PLR0913 - 字段与公共错误语义一一对应。
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        error_code: str | None = None,
+        details: dict[str, Any] | None = None,
+        retry_after: str | None = None,
+        retry_after_seconds: int | None = None,
+        retryable: bool = False,
+        transport_error: bool = False,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
+        self.error_code = error_code
+        self.details = dict(details) if details is not None else {}
+        self.retry_after = retry_after
+        self.retry_after_seconds = retry_after_seconds
+        self.retryable = retryable
+        self.transport_error = transport_error
+
+
+class _RejectRedirectHandler(HTTPRedirectHandler):
+    """拒绝所有重定向, 避免 Bearer Authorization 被自动转发。"""
+
+    def redirect_request(self, *_args: Any, **_kwargs: Any) -> None:
+        return None
+
+
+# urllib.request.urlopen 默认自动跟随 3xx; SDK 的 app token 权限面较大, 必须显式关闭。
+urlopen = build_opener(_RejectRedirectHandler()).open
 
 
 @dataclass(frozen=True)
@@ -181,9 +212,7 @@ class EasyAuthAppClient:
 
     def list_directory_user_subordinates(self, user_ref: str) -> dict[str, Any]:
         """直接下属(不分页, 全量)。GET {app_base}/directory/users/{user_ref}/subordinates"""
-        url = (
-            f"{self._app_base()}/directory/users/{quote(user_ref, safe='')}/subordinates"
-        )
+        url = f"{self._app_base()}/directory/users/{quote(user_ref, safe='')}/subordinates"
         return self._request_json(url, method="GET")
 
     def list_directory_departments(
@@ -272,7 +301,7 @@ class EasyAuthAppClient:
         deadline = monotonic() + self.total_timeout_seconds
         try:
             # 带 Bearer 的请求默认不跟随重定向, 避免跨 origin 泄露 Authorization。
-            with urlopen(  # noqa: S310
+            with urlopen(
                 request,
                 timeout=min(self.timeout_seconds, max(deadline - monotonic(), 0.001)),
             ) as response:
@@ -293,12 +322,27 @@ class EasyAuthAppClient:
                     REDIRECT_FORBIDDEN_MESSAGE,
                     status_code=error.code,
                 ) from error
-            detail = _read_error_body(error, max_bytes=min(500, self.max_response_bytes))
+            raw_error = _read_error_body(error, max_bytes=self.max_response_bytes)
+            error_code, error_message, details = _parse_error_body(raw_error)
+            retry_after = _header_value(error.headers, "Retry-After")
             raise EasyAuthClientError(
-                f"EasyAuth 返回 HTTP {error.code}: {detail}", status_code=error.code
+                f"EasyAuth 返回 HTTP {error.code}: {error_message or raw_error[:500]}",
+                status_code=error.code,
+                error_code=error_code,
+                details=details,
+                retry_after=retry_after,
+                retry_after_seconds=_parse_retry_after_seconds(retry_after),
+                retryable=(
+                    error.code == _HTTP_TOO_MANY_REQUESTS
+                    or _HTTP_SERVER_ERROR_MIN <= error.code < _HTTP_SERVER_ERROR_MAX
+                ),
             ) from error
         except (URLError, TimeoutError, OSError) as error:
-            raise EasyAuthClientError(f"无法连接 EasyAuth: {error}") from error
+            raise EasyAuthClientError(
+                f"无法连接 EasyAuth: {error}",
+                retryable=True,
+                transport_error=True,
+            ) from error
         try:
             payload = json.loads(raw_body.decode("utf-8"))
         except (json.JSONDecodeError, UnicodeDecodeError) as error:
@@ -334,7 +378,11 @@ def _read_bounded(response: HTTPResponse, *, deadline: float, max_bytes: int) ->
     total = 0
     while True:
         if monotonic() >= deadline:
-            raise EasyAuthClientError(READ_TOTAL_TIMEOUT_MESSAGE)
+            raise EasyAuthClientError(
+                READ_TOTAL_TIMEOUT_MESSAGE,
+                retryable=True,
+                transport_error=True,
+            )
         chunk = response.read(min(RESPONSE_READ_CHUNK_BYTES, max_bytes + 1 - total))
         if not chunk:
             break
@@ -353,3 +401,40 @@ def _read_error_body(error: HTTPError, *, max_bytes: int) -> str:
     if len(raw) > max_bytes:
         raw = raw[:max_bytes]
     return raw.decode("utf-8", errors="replace")
+
+
+def _parse_error_body(raw_body: str) -> tuple[str | None, str, dict[str, Any]]:
+    """解析公共 API 统一错误结构; 非统一响应保留旧的文本回退。"""
+    try:
+        payload = json.loads(raw_body)
+    except json.JSONDecodeError:
+        return None, "", {}
+    if not isinstance(payload, dict):
+        return None, "", {}
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return None, "", {}
+    error_code = error.get("code")
+    message = error.get("message")
+    details = error.get("details")
+    return (
+        error_code if isinstance(error_code, str) else None,
+        message if isinstance(message, str) else "",
+        dict(details) if isinstance(details, dict) else {},
+    )
+
+
+def _header_value(headers: Any, name: str) -> str | None:
+    if headers is None:
+        return None
+    value = headers.get(name)
+    if value is None:
+        return None
+    return str(value).strip() or None
+
+
+def _parse_retry_after_seconds(retry_after: str | None) -> int | None:
+    if retry_after is None or not retry_after.isascii() or not retry_after.isdecimal():
+        return None
+    seconds = int(retry_after)
+    return seconds if seconds >= 0 else None

@@ -3,6 +3,25 @@
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.3.0] - 2026-07-16
+
+### Added
+
+- `EasyAuthClientError` 新增结构化字段：`error_code`、`details`、`retry_after`、
+  `retry_after_seconds`、`retryable`、`transport_error`，并解析公共 API 统一错误 JSON 与
+  `Retry-After`。
+
+### Changed
+
+- 网络错误、`429` 与 `5xx` 标记为可重试；`401`、`403`、`404`、`409`、`422` 标记为不可重试。
+- manifest 顶层 `capabilities` 校验与服务端前向兼容语义对齐：按 trim/去重后的值校验，接受
+  未知非空字符串，同时保持 `validate_manifest` 原样返回传入对象。
+- README 补充企业目录、通知异步状态语义、可靠性边界及结构化错误处理示例。
+
+### Security
+
+- 改用拒绝所有 3xx 的 urllib opener，避免自动重定向将 Bearer `Authorization` 转发到其他地址。
+
 ## [0.2.0] - 2026-07-16
 
 ### Added

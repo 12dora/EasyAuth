@@ -84,21 +84,20 @@ def validate_manifest(manifest: Any) -> dict[str, Any]:
 
 
 def _validate_capabilities(capabilities: Any) -> None:
-    """校验顶层 capabilities 节: 非空字符串、白名单、去重。"""
+    """校验顶层 capabilities 节, 并与服务端保持前向兼容。"""
     if not isinstance(capabilities, list):
         raise ManifestValidationError("capabilities 必须是字符串数组")
     seen: set[str] = set()
     for index, item in enumerate(capabilities):
         label = f"capabilities[{index}]"
-        if not isinstance(item, str) or not item:
+        if not isinstance(item, str) or not item.strip():
             raise ManifestValidationError(f"{label} 必须是非空字符串")
-        if item not in ALLOWED_PLATFORM_CAPABILITIES:
-            raise ManifestValidationError(
-                f"{label} 取值必须是 {sorted(ALLOWED_PLATFORM_CAPABILITIES)} 之一",
-            )
-        if item in seen:
-            raise ManifestValidationError(f"capabilities 存在重复值: {item}")
-        seen.add(item)
+        # 服务端会 trim、去重并接受未来新增能力。SDK 只做等价校验, 不改写传入对象,
+        # 避免旧版 SDK 因服务端扩码产生 CI 假红。
+        normalized = item.strip()
+        if normalized in seen:
+            continue
+        seen.add(normalized)
 
 
 def _validate_lifecycle(lifecycle: Any) -> None:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 from typing import Any, Self
 from urllib.error import HTTPError, URLError
 
@@ -42,6 +44,17 @@ def _client() -> EasyAuthAppClient:
     )
 
 
+def test_client_error_keeps_legacy_message_and_status_code() -> None:
+    error = EasyAuthClientError("legacy message", status_code=418)
+
+    assert str(error) == "legacy message"
+    assert error.status_code == 418
+    assert error.error_code is None
+    assert error.details == {}
+    assert error.retryable is False
+    assert error.transport_error is False
+
+
 def test_query_returns_dict_payload_and_encodes_url(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, str] = {}
 
@@ -77,7 +90,102 @@ def test_query_raises_client_error_with_status_on_http_error(
     with pytest.raises(EasyAuthClientError) as excinfo:
         _client().query_user_permissions("u")
     assert excinfo.value.status_code == 403
+    assert excinfo.value.error_code is None
+    assert excinfo.value.details == {}
+    assert excinfo.value.retry_after is None
+    assert excinfo.value.retry_after_seconds is None
+    assert excinfo.value.retryable is False
+    assert excinfo.value.transport_error is False
     assert "403" in str(excinfo.value)
+
+
+def test_query_parses_unified_error_and_retry_after(monkeypatch: pytest.MonkeyPatch) -> None:
+    payload = {
+        "error": {
+            "code": "THROTTLED",
+            "message": "请求过于频繁。",
+            "details": {"limit": 60},
+        },
+    }
+
+    def fake_urlopen(request: Any, timeout: float) -> _FakeResponse:  # noqa: ARG001
+        raise HTTPError(
+            request.full_url,
+            429,
+            "Too Many Requests",
+            {"Retry-After": "120"},  # type: ignore[arg-type]
+            io.BytesIO(json.dumps(payload).encode("utf-8")),
+        )
+
+    monkeypatch.setattr(client_module, "urlopen", fake_urlopen)
+
+    with pytest.raises(EasyAuthClientError, match="请求过于频繁") as excinfo:
+        _client().query_user_permissions("u")
+
+    error = excinfo.value
+    assert error.status_code == 429
+    assert error.error_code == "THROTTLED"
+    assert error.details == {"limit": 60}
+    assert error.retry_after == "120"
+    assert error.retry_after_seconds == 120
+    assert error.retryable is True
+    assert error.transport_error is False
+
+
+@pytest.mark.parametrize(
+    ("status_code", "retryable"),
+    [
+        (401, False),
+        (403, False),
+        (404, False),
+        (409, False),
+        (422, False),
+        (500, True),
+        (503, True),
+    ],
+)
+def test_http_error_retryability_by_status(
+    monkeypatch: pytest.MonkeyPatch,
+    status_code: int,
+    retryable: bool,  # noqa: FBT001 - 参数值由 pytest 参数表驱动。
+) -> None:
+    def fake_urlopen(request: Any, timeout: float) -> _FakeResponse:  # noqa: ARG001
+        raise HTTPError(
+            request.full_url,
+            status_code,
+            "error",
+            {},  # type: ignore[arg-type]
+            io.BytesIO(b'{"error":{"code":"TEST","message":"failed","details":{}}}'),
+        )
+
+    monkeypatch.setattr(client_module, "urlopen", fake_urlopen)
+
+    with pytest.raises(EasyAuthClientError) as excinfo:
+        _client().query_user_permissions("u")
+
+    assert excinfo.value.retryable is retryable
+    assert excinfo.value.transport_error is False
+
+
+def test_retry_after_keeps_non_integer_header_without_guessing_seconds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_urlopen(request: Any, timeout: float) -> _FakeResponse:  # noqa: ARG001
+        raise HTTPError(
+            request.full_url,
+            429,
+            "Too Many Requests",
+            {"Retry-After": "Wed, 21 Oct 2030 07:28:00 GMT"},  # type: ignore[arg-type]
+            io.BytesIO(b""),
+        )
+
+    monkeypatch.setattr(client_module, "urlopen", fake_urlopen)
+
+    with pytest.raises(EasyAuthClientError) as excinfo:
+        _client().query_user_permissions("u")
+
+    assert excinfo.value.retry_after == "Wed, 21 Oct 2030 07:28:00 GMT"
+    assert excinfo.value.retry_after_seconds is None
 
 
 def test_query_raises_client_error_on_connection_failure(
@@ -88,8 +196,31 @@ def test_query_raises_client_error_on_connection_failure(
 
     monkeypatch.setattr(client_module, "urlopen", fake_urlopen)
 
-    with pytest.raises(EasyAuthClientError, match="无法连接"):
+    with pytest.raises(EasyAuthClientError, match="无法连接") as excinfo:
         _client().query_user_permissions("u")
+    assert excinfo.value.status_code is None
+    assert excinfo.value.error_code is None
+    assert excinfo.value.details == {}
+    assert excinfo.value.retryable is True
+    assert excinfo.value.transport_error is True
+
+
+def test_response_read_total_timeout_is_retryable_transport_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = iter((0.0, 0.0, 16.0))
+
+    def fake_urlopen(request: Any, timeout: float) -> _FakeResponse:  # noqa: ARG001
+        return _FakeResponse(b"{}")
+
+    monkeypatch.setattr(client_module, "urlopen", fake_urlopen)
+    monkeypatch.setattr(client_module, "monotonic", lambda: next(clock))
+
+    with pytest.raises(EasyAuthClientError, match="总时限") as excinfo:
+        _client().query_user_permissions("u")
+
+    assert excinfo.value.retryable is True
+    assert excinfo.value.transport_error is True
 
 
 def test_query_raises_client_error_on_invalid_json(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -129,14 +260,59 @@ def test_rejects_redirect_responses(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     monkeypatch.setattr(client_module, "urlopen", fake_urlopen)
-    with pytest.raises(EasyAuthClientError, match="重定向"):
+    with pytest.raises(EasyAuthClientError, match="重定向") as excinfo:
         _client().query_user_permissions("u")
+    assert excinfo.value.status_code == 302
+    assert excinfo.value.retryable is False
+    assert excinfo.value.transport_error is False
+
+
+def test_default_opener_does_not_forward_authorization_on_redirect() -> None:
+    redirected_authorizations: list[str | None] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if self.path == "/redirected":
+                redirected_authorizations.append(self.headers.get("Authorization"))
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b"{}")
+                return
+            self.send_response(302)
+            self.send_header(
+                "Location",
+                f"http://127.0.0.1:{self.server.server_port}/redirected",
+            )
+            self.end_headers()
+
+        def log_message(self, _format: str, *args: object) -> None:  # noqa: ARG002
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        client = EasyAuthAppClient(
+            base_url=f"http://127.0.0.1:{server.server_port}",
+            app_key="app",
+            token="high-privilege-token",
+            allow_insecure_http=True,
+        )
+        with pytest.raises(EasyAuthClientError, match="重定向") as excinfo:
+            client.query_user_permissions("u")
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=2)
+
+    assert excinfo.value.status_code == 302
+    assert redirected_authorizations == []
 
 
 def test_rejects_oversized_response(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_urlopen(request: Any, timeout: float) -> _FakeResponse:  # noqa: ARG001
-        response = _FakeResponse(b"x" * 20)
-        return response
+        return _FakeResponse(b"x" * 20)
 
     monkeypatch.setattr(client_module, "urlopen", fake_urlopen)
     client = EasyAuthAppClient(

@@ -5,7 +5,7 @@
 1. 集成描述符: 下游应用在 ``/.well-known/easyauth-app.json`` 暴露应用元数据与权限 manifest,
    EasyAuth 控制台凭 ``下游地址 + app_key`` 即可自动完成注册与目录导入。
 2. 描述符 HTTP 端点: 纯函数内核 + 可选 FastAPI 路由封装。
-3. API 客户端: 以 app 凭据调用 EasyAuth 权限查询与审批中心(create/get_approval)。
+3. API 客户端: 以 app 凭据调用 EasyAuth 权限、审批、企业目录与钉钉通知 API。
 4. webhook 验签: 校验 EasyAuth 反向推送(审批结果/交接事件)的签名与时间戳。
 5. 生命周期交接端点: 接收离职/转岗数据交接的 preview/execute 同步回调,
    纯函数内核 + 可选 FastAPI 路由封装(``easyauth_lifecycle_router``)。
