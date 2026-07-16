@@ -150,10 +150,13 @@ message = client.get_notification(accepted["message_id"])
 
 `send_notification` 的 HTTP `202` 只表示 EasyAuth 已受理，绝不表示钉钉已发送或用户已收到。
 下游应持久化 `dedup_key`、EasyAuth `message_id` 与本地业务事件，并根据查询结果维护自己的
-`queued → accepted → sent → delivered / failed` 状态。`sent` 是最低可靠保证；当钉钉回执没有
-通过 `read_user_id_list`、`unread_user_id_list`、`invalid_user_id_list` 或
-`failed_user_id_list` 明确归类收件人时，状态保持 `sent`，即使超过 24 小时也不会自动改为
-`delivered`。`delivered` 不能解释为用户已读、审批已知悉或合规/法务送达事实。
+`queued → accepted → sent → delivered / failed` 状态。`sent` 是最低可靠保证；只有命中明确的
+成功或失败回执名单时才推进状态。当前主要成功名单包括 `read_user_id_list`、
+`unread_user_id_list`；主要失败名单包括 `invalid_user_id_list`、`failed_user_id_list`、
+`forbidden_user_id_list` 以及结构化 `forbidden_list`（重复、日上限或其他拒绝）。未命中任何
+明确成功或失败名单时保持 `sent`，即使超过 24 小时也不会自动改为 `delivered`。这些字段只是
+当前主要回执，不应作为未来字段的穷举；`delivered` 也不能解释为用户已读、审批已知悉或合规/
+法务送达事实。
 
 ## 结构化错误
 
