@@ -19,6 +19,13 @@ for address in ${REDIS_ADDRESSES}; do
   iptables -A OUTPUT -p tcp -d "${address}" --dport 6379 -j ACCEPT
 done
 
+# Docker Desktop(macOS/Windows) 的内嵌 DNS 把外部域名解析进其内部 NAT 段 198.18.0.0/15,
+# 该段在 Linux 生产环境属基准测试保留地址、必须整段拒绝。仅当部署方显式声明运行在
+# Docker Desktop 上时放行该段的 443, 否则 worker 的全部对外 HTTPS 都会被 REJECT。
+if [ "${EGRESS_ALLOW_DOCKER_DESKTOP_NAT:-0}" = "1" ]; then
+  iptables -A OUTPUT -d 198.18.0.0/15 -p tcp --dport 443 -j ACCEPT
+fi
+
 for network in \
   0.0.0.0/8 10.0.0.0/8 100.64.0.0/10 127.0.0.0/8 169.254.0.0/16 \
   172.16.0.0/12 192.0.0.0/24 192.0.2.0/24 192.168.0.0/16 \

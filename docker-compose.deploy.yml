@@ -97,6 +97,11 @@ services:
     user: root
     cap_add:
       - NET_ADMIN
+    environment:
+      <<: *easyauth-env
+      # 本机是 Docker Desktop(macOS): 外部域名被解析进 198.18.0.0/15 NAT 段,
+      # 不放行则 worker 全部对外 HTTPS 被防火墙 REJECT。Linux 生产部署勿设。
+      EGRESS_ALLOW_DOCKER_DESKTOP_NAT: "1"
     command:
       - "/app/deploy/webhook-worker-entrypoint.sh"
       - "celery"
@@ -122,6 +127,10 @@ services:
     user: root
     cap_add:
       - NET_ADMIN
+    environment:
+      <<: *easyauth-env
+      # 同 webhook-worker: Docker Desktop NAT 段放行, Linux 生产勿设。
+      EGRESS_ALLOW_DOCKER_DESKTOP_NAT: "1"
     command:
       - "/app/deploy/webhook-worker-entrypoint.sh"
       - "celery"
