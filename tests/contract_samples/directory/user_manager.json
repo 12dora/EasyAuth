@@ -1,0 +1,11 @@
+{
+  "user_id": null,
+  "dingtalk_user_id": "manager8836",
+  "name": "张主管",
+  "avatar_url": "",
+  "title": "研发经理",
+  "departments": [
+    {"department_id": "460001", "name": "研发部"}
+  ],
+  "active": true
+}

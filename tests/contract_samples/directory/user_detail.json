@@ -1,0 +1,16 @@
+{
+  "user_id": "f7c31a09e5b24f8d9a1c",
+  "dingtalk_user_id": "user0123",
+  "name": "王小明",
+  "avatar_url": "https://static-legacy.dingtalk.com/media/xxx.jpg",
+  "title": "后端工程师",
+  "departments": [{"department_id": "460001", "name": "研发部"}],
+  "active": true,
+  "manager": {
+    "user_id": null,
+    "dingtalk_user_id": "manager8836",
+    "name": "张主管",
+    "title": "研发经理",
+    "active": true
+  }
+}

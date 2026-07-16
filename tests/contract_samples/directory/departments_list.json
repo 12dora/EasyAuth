@@ -1,0 +1,6 @@
+{
+  "data": [
+    {"department_id": "1", "parent_id": "", "name": "杰发科技", "order": 0},
+    {"department_id": "460001", "parent_id": "1", "name": "研发部", "order": 10}
+  ]
+}

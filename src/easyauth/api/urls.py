@@ -7,6 +7,13 @@ from easyauth.api.approval_views import (
     app_approval_instances,
     app_approval_templates,
 )
+from easyauth.api.directory_views import (
+    directory_departments,
+    directory_user_detail,
+    directory_user_manager,
+    directory_user_subordinates,
+    directory_users,
+)
 from easyauth.api.manifest_sync_views import app_manifest_sync
 from easyauth.api.views import query_user_permissions
 
@@ -35,5 +42,30 @@ urlpatterns = [
         "apps/<str:app_key>/approval-templates",
         app_approval_templates,
         name="app-approval-templates",
+    ),
+    path(
+        "apps/<str:app_key>/directory/users",
+        directory_users,
+        name="app-directory-users",
+    ),
+    path(
+        "apps/<str:app_key>/directory/users/<str:user_ref>/manager",
+        directory_user_manager,
+        name="app-directory-user-manager",
+    ),
+    path(
+        "apps/<str:app_key>/directory/users/<str:user_ref>/subordinates",
+        directory_user_subordinates,
+        name="app-directory-user-subordinates",
+    ),
+    path(
+        "apps/<str:app_key>/directory/users/<str:user_ref>",
+        directory_user_detail,
+        name="app-directory-user-detail",
+    ),
+    path(
+        "apps/<str:app_key>/directory/departments",
+        directory_departments,
+        name="app-directory-departments",
     ),
 ]

@@ -1,0 +1,28 @@
+{
+  "data": [
+    {
+      "user_id": null,
+      "dingtalk_user_id": "user0456",
+      "name": "李新人",
+      "avatar_url": "",
+      "title": "测试工程师",
+      "departments": [
+        {"department_id": "460001", "name": "研发部"},
+        {"department_id": "470001", "name": "质量委员会"}
+      ],
+      "active": true
+    },
+    {
+      "user_id": "f7c31a09e5b24f8d9a1c",
+      "dingtalk_user_id": "user0123",
+      "name": "王小明",
+      "avatar_url": "https://static-legacy.dingtalk.com/media/xxx.jpg",
+      "title": "后端工程师",
+      "departments": [
+        {"department_id": "460001", "name": "研发部"}
+      ],
+      "active": true
+    }
+  ],
+  "pagination": {"page": 1, "page_size": 20, "total_items": 2, "total_pages": 1}
+}

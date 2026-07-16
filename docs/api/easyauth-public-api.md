@@ -290,7 +290,132 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
 
 ---
 
-## 5. Webhook（EasyAuth → 下游）
+## 5. 用户目录
+
+数据来源为 EasyAuth 内的钉钉目录镜像（约每 300s 从 Authentik 同步）。应用须由超管开通 `directory` 能力，否则返回 `403 PERMISSION_DENIED`（文案：「应用未开通目录能力。」）。所有目录端点返回 `Cache-Control: private, max-age=60`。
+
+用户引用约定：`user_id` = Authentik 用户标识（可空，未 SSO 登录过的员工为 `null`）；`dingtalk_user_id` 恒非空。路径 `{user_ref}` / 参数 `manager_id` 接受裸 `user_id` 或 `dt:<钉钉userid>` 前缀。
+
+**不返回** email、手机号、工号、unionId、corp_id、完整主管链。
+
+### `GET /api/v1/apps/{app_key}/directory/users`
+
+搜索/分页列表。查询参数（全部可选，AND）：
+
+| 参数 | 说明 |
+| --- | --- |
+| `q` | 对 `name` / `title` / `dingtalk_user_id` 大小写不敏感子串匹配；空串等同省略 |
+| `department_id` | 该部门**直接成员**（不含子部门） |
+| `manager_id` | 用户引用，过滤其**直接下属** |
+| `include_inactive` | `"true"` 时含禁用/离职，默认仅 active |
+| `page` / `page_size` | 默认 1/20；`page_size` 上限 **200** |
+
+排序：`name` 升序，再 `dingtalk_user_id` 升序。
+
+**成功响应（200）：**
+
+```json
+{
+  "data": [
+    {
+      "user_id": "f7c31a09e5b24f8d9a1c",
+      "dingtalk_user_id": "user0123",
+      "name": "王小明",
+      "avatar_url": "https://static-legacy.dingtalk.com/media/xxx.jpg",
+      "title": "后端工程师",
+      "departments": [
+        {"department_id": "460001", "name": "研发部"}
+      ],
+      "active": true
+    },
+    {
+      "user_id": null,
+      "dingtalk_user_id": "user0456",
+      "name": "李新人",
+      "avatar_url": "",
+      "title": "测试工程师",
+      "departments": [
+        {"department_id": "460001", "name": "研发部"},
+        {"department_id": "470001", "name": "质量委员会"}
+      ],
+      "active": true
+    }
+  ],
+  "pagination": {"page": 1, "page_size": 20, "total_items": 2, "total_pages": 1}
+}
+```
+
+### `GET /api/v1/apps/{app_key}/directory/users/{user_ref}`
+
+详情：D1 条目字段 + `manager`（直接主管摘要；无主管时为 `null`）。引用不存在 → `404 NOT_FOUND`。
+
+若用户曾登录（有 `user_id`）但已从钉钉目录移除：返回 `active: false`、`departments: []`、`manager: null`。
+
+```json
+{
+  "user_id": "f7c31a09e5b24f8d9a1c",
+  "dingtalk_user_id": "user0123",
+  "name": "王小明",
+  "avatar_url": "https://…",
+  "title": "后端工程师",
+  "departments": [{"department_id": "460001", "name": "研发部"}],
+  "active": true,
+  "manager": {
+    "user_id": null,
+    "dingtalk_user_id": "manager8836",
+    "name": "张主管",
+    "title": "研发经理",
+    "active": true
+  }
+}
+```
+
+### `GET /api/v1/apps/{app_key}/directory/users/{user_ref}/manager`
+
+直接主管，响应为完整 D1 条目形状（含 `departments` 与 `avatar_url`）。
+
+| 情形 | 响应 |
+| --- | --- |
+| `user_ref` 不存在 | `404 NOT_FOUND`，`details: {"reason": "user_not_found"}` |
+| 用户存在但无主管 | `404 NOT_FOUND`，`details: {"reason": "no_manager"}` |
+
+### `GET /api/v1/apps/{app_key}/directory/users/{user_ref}/subordinates`
+
+仅直接下属（一层）、仅 active、全量不分页。排序同列表。`user_ref` 不存在 → `404`（`reason: "user_not_found"`）；存在但无下属 → `200` 空 `data`。
+
+```json
+{"data": []}
+```
+
+### `GET /api/v1/apps/{app_key}/directory/departments`
+
+| 参数 | 说明 |
+| --- | --- |
+| `parent_id` | 可选。省略 → 全量扁平列表；传入 → 该部门的直接子部门 |
+
+```json
+{
+  "data": [
+    {"department_id": "1", "parent_id": "", "name": "杰发科技", "order": 0},
+    {"department_id": "460001", "parent_id": "1", "name": "研发部", "order": 10}
+  ]
+}
+```
+
+根部门 `parent_id` 为空串；排序 `order` 升序再 `department_id` 升序；`parent_id` 不存在 → `200` 空 `data`。
+
+### 目录限流
+
+| 项 | 值 |
+| --- | --- |
+| 每凭据速率 | 240 次 / 60s（全部目录端点共享） |
+| 认证失败 | 每 IP 30 次 / 300s |
+
+超限返回 `429 THROTTLED`，带 `Retry-After` 头。
+
+---
+
+## 7. Webhook（EasyAuth → 下游）
 
 审批完成等事件通过应用 webhook 配置投递，签名头包括：
 
@@ -303,7 +428,7 @@ URL 中的 `{app_key}` **必须**与 token 所属应用一致；否则返回 `40
 
 ---
 
-## 6. SDK 对应方法
+## 8. SDK 对应方法
 
 Python `EasyAuthAppClient`：
 
