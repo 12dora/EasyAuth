@@ -1,7 +1,8 @@
 #!/bin/sh
 set -eu
 
-# Webhook worker 使用独立队列与出站防火墙。先放行运行所需的 DNS/Redis，
+# Webhook/Notify worker 使用独立队列与出站防火墙（webhooks 与 notify 两个队列
+# 的 worker 共用本入口）。先放行运行所需的 DNS/Redis，
 # 再拒绝所有特殊地址，业务请求只能访问公网 TCP/443。
 iptables -F OUTPUT
 iptables -A OUTPUT -o lo -j ACCEPT

@@ -5,8 +5,10 @@
 #     · beat 调度的 dingtalk-directory-sync 是离职检出的信号源(目录同步 → 自动建交接单),
 #       没有 beat, 离职/转岗自动化链路根本不会触发;
 #     · grant-expiration-cleanup(限时授权到期回收)、dependency-health-check 也依赖 beat;
-#     · worker 消费 webhook 投递(审批结果 approval.completed)、Authentik 离职禁号等异步任务。
-#   四者共用同一 easyauth-web:local 镜像与 broker(redis db0/1), 一起 up 才是完整部署。
+#     · worker 消费 webhook 投递(审批结果 approval.completed)、Authentik 离职禁号等异步任务;
+#     · notify-worker 消费 notify 队列(钉钉工作通知投递, deliver_message), beat 调度的
+#       notify-reconcile(60s 对账升级 sent→delivered)/notify-prune(日清理) 走默认队列由 worker 消费。
+#   五者共用同一 easyauth-web:local 镜像与 broker(redis db0/1), 一起 up 才是完整部署。
 # - stream 是钉钉 Stream 模式常驻消费进程(WebSocket 出站长连接, 无入站端口):
 #   通讯录入离职/部门变更事件到达后触发目录快速同步(秒级), 审批实例事件实时推进审批状态;
 #   它挂掉不丢事件——钉钉按 ACK 重投 + beat 的 5 分钟目录轮询仍是兜底。
@@ -107,6 +109,31 @@ services:
       - "--hostname=webhooks@%h"
     healthcheck:
       test: ["CMD-SHELL", "celery -A easyauth.config.celery:app inspect ping --destination=webhooks@$$(hostname) -t 5 >/dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      start_period: 20s
+      retries: 3
+
+  # notify 队列专属 worker(钉钉工作通知投递)。出站特征与 webhook-worker 相同
+  # (业务面只出公网 443: oapi.dingtalk.com; 另需 redis broker/cache), 复用同一防火墙入口脚本。
+  # 与 webhooks 队列同机部署(第 7 篇 §3 发布前检查单)。
+  notify-worker:
+    <<: *easyauth-common
+    user: root
+    cap_add:
+      - NET_ADMIN
+    command:
+      - "/app/deploy/webhook-worker-entrypoint.sh"
+      - "celery"
+      - "-A"
+      - "easyauth.config.celery:app"
+      - "worker"
+      - "--loglevel=info"
+      - "--concurrency=2"
+      - "--queues=notify"
+      - "--hostname=notify@%h"
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A easyauth.config.celery:app inspect ping --destination=notify@$$(hostname) -t 5 >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
       start_period: 20s
