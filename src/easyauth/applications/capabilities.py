@@ -12,7 +12,7 @@ __all__ = (
 
 
 def credential_capability_enabled(principal: object, capability: str) -> bool:
-    capabilities = getattr(principal, "capabilities", frozenset())
+    capabilities = getattr(principal, "capabilities", frozenset[str]())
     return isinstance(capabilities, (set, frozenset)) and capability in capabilities
 
 

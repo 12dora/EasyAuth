@@ -361,6 +361,37 @@ def test_message_backfill_blocks_safely_when_no_complete_channel_exists() -> Non
     _ = failed_message_model.objects.all().delete()
 
 
+def test_history_channel_inference_fails_safely_without_directory_scope() -> None:
+    before = _migrate(_BEFORE_TARGETS)
+    _app_id, _message_id = _seed_legacy_message(
+        before,
+        app_key="migration-history-zero-scope",
+        capability_enabled=False,
+    )
+
+    with override_settings(
+        EASYAUTH_DINGTALK_APP_KEY="env-key",
+        EASYAUTH_DINGTALK_APP_SECRET="env-secret",  # noqa: S106
+        EASYAUTH_DINGTALK_AGENT_ID="1001",
+    ):
+        executor = MigrationExecutor(connection)
+        with pytest.raises(RuntimeError, match="缺少 active 完整通知通道"):
+            _ = executor.migrate(_AFTER_TARGETS)
+
+    failed = MigrationExecutor(connection)
+    failed_apps = failed.loader.project_state(
+        [
+            ("applications", "0027_notification_channel_directory_scope"),
+            ("notify", "0002_notifymessage_deeplink_title"),
+        ],
+    ).apps
+    message_model = cast(
+        "type[_MessageModel]",
+        cast("object", failed_apps.get_model("notify", "NotifyMessage")),
+    )
+    _ = message_model.objects.all().delete()
+
+
 @pytest.mark.parametrize(
     "mirror_model_name",
     ["DingTalkUserMirror", "DingTalkDepartmentMirror"],

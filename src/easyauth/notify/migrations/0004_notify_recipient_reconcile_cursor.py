@@ -11,6 +11,17 @@ class Migration(migrations.Migration):
     ]
 
     operations: ClassVar[Sequence[Operation]] = [
+        # 0003 的原子事务先完成历史消息回填并提交。将 NOT NULL 放到下一迁移，
+        # 避免 PostgreSQL 在同一事务仍有 FK pending trigger events 时 ALTER TABLE。
+        migrations.AlterField(
+            model_name="notifymessage",
+            name="channel",
+            field=models.ForeignKey(
+                on_delete=models.deletion.PROTECT,
+                related_name="notify_messages",
+                to="applications.appnotificationchannel",
+            ),
+        ),
         migrations.AddField(
             model_name="notifyrecipient",
             name="dingtalk_source_slug",

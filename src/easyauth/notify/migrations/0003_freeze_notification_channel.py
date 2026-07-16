@@ -240,13 +240,4 @@ class Migration(migrations.Migration):
             ),
         ),
         migrations.RunPython(backfill_message_channels, reverse_message_channel_backfill),
-        migrations.AlterField(
-            model_name="notifymessage",
-            name="channel",
-            field=models.ForeignKey(
-                on_delete=models.deletion.PROTECT,
-                related_name="notify_messages",
-                to="applications.appnotificationchannel",
-            ),
-        ),
     ]
