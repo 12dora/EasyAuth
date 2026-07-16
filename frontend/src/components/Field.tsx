@@ -1,4 +1,4 @@
-import { cloneElement, isValidElement, useId } from "react";
+import { cloneElement, forwardRef, isValidElement, useId } from "react";
 import type { InputHTMLAttributes, ReactElement, ReactNode, SelectHTMLAttributes, TextareaHTMLAttributes } from "react";
 
 import { cn } from "../lib/cn";
@@ -71,9 +71,12 @@ export function Field({ label, labelExtra, hint, error, as = "input", children }
   );
 }
 
-export function TextInput({ className, ...props }: InputHTMLAttributes<HTMLInputElement>) {
-  return <input className={cn(INPUT_CLASSES, "h-9", className)} {...props} />;
-}
+export const TextInput = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputElement>>(function TextInput(
+  { className, ...props },
+  ref,
+) {
+  return <input ref={ref} className={cn(INPUT_CLASSES, "h-9", className)} {...props} />;
+});
 
 export function TextArea({ className, ...props }: TextareaHTMLAttributes<HTMLTextAreaElement>) {
   return <textarea className={cn(INPUT_CLASSES, "min-h-24 py-2 leading-5", className)} {...props} />;

@@ -1,6 +1,6 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { BellRing, Network, PlugZap, ShieldCheck } from "lucide-react";
+import { BellRing, Network, PlugZap, RefreshCcw, ShieldCheck } from "lucide-react";
 
 import { Badge } from "../../../../components/Badge";
 import { Button } from "../../../../components/Button";
@@ -24,16 +24,16 @@ const CAPABILITY_KEYS: AppCapabilityKey[] = ["directory", "notify"];
 interface ChannelFormState {
   name: string;
   dingtalkAppKey: string;
-  dingtalkAppSecret: string;
   agentId: string;
 }
 
 const EMPTY_CHANNEL_FORM: ChannelFormState = {
   name: "",
   dingtalkAppKey: "",
-  dingtalkAppSecret: "",
   agentId: "",
 };
+
+type ChannelLoadState = "loading" | "error" | "unconfigured" | "configured";
 
 export function IntegrationTab({ appKey, canManage }: { appKey: string; canManage: boolean }) {
   const { t } = useI18n();
@@ -166,11 +166,24 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
   const queryClient = useQueryClient();
   const queryKey = ["console", "app", appKey, "notification-channel"];
   const [form, setForm] = useState<ChannelFormState>(EMPTY_CHANNEL_FORM);
+  const [hasSecretInput, setHasSecretInput] = useState(false);
+  const secretInputRef = useRef<HTMLInputElement>(null);
   const channelQuery = useQuery({
     queryKey,
-    queryFn: () => apiRequest<AppNotificationChannelPayload>(`/console/api/v1/apps/${appKey}/notification-channel`),
+    queryFn: async () => parseNotificationChannelPayload(
+      await apiRequest<unknown>(`/console/api/v1/apps/${appKey}/notification-channel`),
+      t("console.integration.channelInvalidResponse"),
+    ),
   });
   const channel = channelQuery.data?.notification_channel ?? null;
+  const loadState: ChannelLoadState = channelQuery.isLoading
+    ? "loading"
+    : channelQuery.isError
+      ? "error"
+      : channel
+        ? "configured"
+        : "unconfigured";
+  const canWriteChannel = canManage && (loadState === "configured" || loadState === "unconfigured");
 
   useEffect(() => {
     if (!channelQuery.data) {
@@ -180,29 +193,42 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
     setForm({
       name: current?.name ?? "",
       dingtalkAppKey: current?.dingtalk_app_key ?? "",
-      dingtalkAppSecret: "",
       agentId: current?.agent_id ?? "",
     });
   }, [channelQuery.data]);
 
   const saveMutation = useMutation({
-    mutationFn: () =>
-      apiRequest<AppNotificationChannelPayload>(`/console/api/v1/apps/${appKey}/notification-channel`, {
-        method: "PUT",
-        body: {
-          name: form.name.trim(),
-          dingtalk_app_key: form.dingtalkAppKey.trim(),
-          dingtalk_app_secret: form.dingtalkAppSecret,
-          agent_id: form.agentId.trim(),
-        } satisfies JsonObject,
-      }),
+    mutationFn: async () => {
+      const secret = secretInputRef.current?.value ?? "";
+      if (secretInputRef.current) {
+        secretInputRef.current.value = "";
+      }
+      setHasSecretInput(false);
+      return parseNotificationChannelPayload(
+        await apiRequest<unknown>(`/console/api/v1/apps/${appKey}/notification-channel`, {
+          method: "PUT",
+          body: {
+            name: form.name.trim(),
+            dingtalk_app_key: form.dingtalkAppKey.trim(),
+            dingtalk_app_secret: secret,
+            agent_id: form.agentId.trim(),
+          } satisfies JsonObject,
+        }),
+        t("console.integration.channelInvalidResponse"),
+      );
+    },
     onSuccess: (payload) => {
       queryClient.setQueryData(queryKey, payload);
-      setForm((current) => ({ ...current, dingtalkAppSecret: "" }));
       toast.success(t("console.integration.channelSaveSuccess"));
     },
     onError: (error: Error) => {
       toast.error(t("console.integration.channelSaveFailed"), error.message);
+    },
+    onSettled: () => {
+      if (secretInputRef.current) {
+        secretInputRef.current.value = "";
+      }
+      setHasSecretInput(false);
     },
   });
   const testMutation = useMutation({
@@ -220,7 +246,7 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
   });
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (canManage) {
+    if (canWriteChannel) {
       saveMutation.mutate();
     }
   };
@@ -228,7 +254,7 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
     form.name.trim()
     && form.dingtalkAppKey.trim()
     && form.agentId.trim()
-    && (channel?.app_secret_configured || form.dingtalkAppSecret),
+    && (channel?.app_secret_configured || hasSecretInput),
   );
 
   return (
@@ -242,22 +268,31 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
           <p className="max-w-3xl text-body leading-5 text-ink-soft">{t("console.integration.channelDescription")}</p>
         </div>
         <div className="flex items-center gap-2">
-          {channel ? <Badge tone="neutral">v{channel.version}</Badge> : null}
-          <Badge tone={channel?.app_secret_configured ? "evergreen" : "amber"}>
-            {channel?.app_secret_configured
-              ? t("console.integration.secretConfigured")
-              : t("console.integration.channelNotConfigured")}
-          </Badge>
+          {loadState === "configured" ? <Badge tone="neutral">v{channel?.version}</Badge> : null}
+          {loadState === "loading" ? <Badge>{t("common.loading")}</Badge> : null}
+          {loadState === "error" ? <Badge tone="signal">{t("console.integration.channelLoadFailed")}</Badge> : null}
+          {loadState === "unconfigured" ? <Badge tone="amber">{t("console.integration.channelNotConfigured")}</Badge> : null}
+          {loadState === "configured" ? (
+            <Badge tone={channel?.app_secret_configured ? "evergreen" : "amber"}>
+              {channel?.app_secret_configured ? t("console.integration.secretConfigured") : t("console.integration.secretMissing")}
+            </Badge>
+          ) : null}
         </div>
       </div>
-      {channelQuery.error ? (
-        <StatusBanner
-          tone="signal"
-          title={t("console.integration.channelLoadFailed")}
-          message={(channelQuery.error as Error).message}
-        />
+      {loadState === "loading" ? <StatusBanner title={t("console.integration.channelLoading")} /> : null}
+      {loadState === "error" ? (
+        <div className="space-y-3">
+          <StatusBanner
+            tone="signal"
+            title={t("console.integration.channelLoadFailed")}
+            message={(channelQuery.error as Error).message}
+          />
+          <Button type="button" icon={<RefreshCcw size={15} />} loading={channelQuery.isFetching} onClick={() => void channelQuery.refetch()}>
+            {t("common.retry")}
+          </Button>
+        </div>
       ) : null}
-      {!channelQuery.isLoading && !channelQuery.error && !channel ? (
+      {loadState === "unconfigured" ? (
         <StatusBanner tone="amber" title={t("console.integration.channelNotConfigured")} message={t("console.integration.channelEmptyDescription")} />
       ) : null}
       <form className="grid gap-4" onSubmit={submit} aria-busy={channelQuery.isLoading}>
@@ -265,16 +300,22 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
           <Field label={t("console.integration.channelName")}>
             <TextInput
               value={form.name}
-              disabled={!canManage || channelQuery.isLoading || saveMutation.isPending}
-              onChange={(event) => setForm((current) => ({ ...current, name: event.currentTarget.value }))}
+              disabled={!canWriteChannel || saveMutation.isPending}
+              onChange={(event) => {
+                const name = event.currentTarget.value;
+                setForm((current) => ({ ...current, name }));
+              }}
             />
           </Field>
           <Field label={t("console.integration.agentId")} hint={t("console.integration.agentIdHint")}>
             <TextInput
               className="font-mono"
               value={form.agentId}
-              disabled={!canManage || channelQuery.isLoading || saveMutation.isPending}
-              onChange={(event) => setForm((current) => ({ ...current, agentId: event.currentTarget.value }))}
+              disabled={!canWriteChannel || saveMutation.isPending}
+              onChange={(event) => {
+                const agentId = event.currentTarget.value;
+                setForm((current) => ({ ...current, agentId }));
+              }}
             />
           </Field>
           <Field label={t("console.integration.dingtalkAppKey")}>
@@ -282,8 +323,11 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
               className="font-mono"
               autoComplete="off"
               value={form.dingtalkAppKey}
-              disabled={!canManage || channelQuery.isLoading || saveMutation.isPending}
-              onChange={(event) => setForm((current) => ({ ...current, dingtalkAppKey: event.currentTarget.value }))}
+              disabled={!canWriteChannel || saveMutation.isPending}
+              onChange={(event) => {
+                const dingtalkAppKey = event.currentTarget.value;
+                setForm((current) => ({ ...current, dingtalkAppKey }));
+              }}
             />
           </Field>
           <Field
@@ -291,12 +335,12 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
             hint={channel?.app_secret_configured ? t("console.integration.secretPreserveHint") : t("console.integration.secretRequiredHint")}
           >
             <TextInput
+              ref={secretInputRef}
               type="password"
               autoComplete="new-password"
-              value={form.dingtalkAppSecret}
               placeholder={channel?.app_secret_configured ? t("console.integration.secretConfiguredPlaceholder") : ""}
-              disabled={!canManage || channelQuery.isLoading || saveMutation.isPending}
-              onChange={(event) => setForm((current) => ({ ...current, dingtalkAppSecret: event.currentTarget.value }))}
+              disabled={!canWriteChannel || saveMutation.isPending}
+              onChange={(event) => setHasSecretInput(Boolean(event.currentTarget.value))}
             />
           </Field>
         </div>
@@ -306,7 +350,7 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
             <Button
               type="button"
               loading={testMutation.isPending}
-              disabled={!canManage || !channel || saveMutation.isPending}
+              disabled={!canWriteChannel || !channel || saveMutation.isPending}
               onClick={() => testMutation.mutate()}
             >
               {t("console.integration.testConnectivity")}
@@ -315,7 +359,7 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
               type="submit"
               variant="primary"
               loading={saveMutation.isPending}
-              disabled={!canManage || !formComplete || channelQuery.isLoading}
+              disabled={!canWriteChannel || !formComplete}
             >
               {t("console.integration.saveNewVersion")}
             </Button>
@@ -332,4 +376,43 @@ function capabilityFromPayload(payload: AppCapabilitiesPayload | undefined, key:
     enabled: false,
     config: {},
   };
+}
+
+function parseNotificationChannelPayload(value: unknown, errorMessage: string): AppNotificationChannelPayload {
+  if (!isRecord(value) || !("notification_channel" in value)) {
+    throw new Error(errorMessage);
+  }
+  const channel = value.notification_channel;
+  if (channel === null) {
+    return { notification_channel: null };
+  }
+  if (
+    !isRecord(channel)
+    || typeof channel.id !== "number"
+    || typeof channel.name !== "string"
+    || typeof channel.dingtalk_app_key !== "string"
+    || typeof channel.app_secret_configured !== "boolean"
+    || typeof channel.agent_id !== "string"
+    || typeof channel.version !== "number"
+    || typeof channel.is_active !== "boolean"
+  ) {
+    throw new Error(errorMessage);
+  }
+  return {
+    notification_channel: {
+      id: channel.id,
+      name: channel.name,
+      dingtalk_app_key: channel.dingtalk_app_key,
+      app_secret_configured: channel.app_secret_configured,
+      agent_id: channel.agent_id,
+      version: channel.version,
+      is_active: channel.is_active,
+      created_by: typeof channel.created_by === "string" ? channel.created_by : undefined,
+      created_at: typeof channel.created_at === "string" ? channel.created_at : undefined,
+    },
+  };
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }

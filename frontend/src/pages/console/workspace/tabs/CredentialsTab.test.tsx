@@ -124,11 +124,15 @@ describe("CredentialsTab(FF-4)", () => {
   test("创建默认最小权限凭据并通过真实 owner 端点更新 capabilities", async () => {
     const createUrl = "/console/api/v1/apps/demo/credentials/static-tokens";
     const capabilityUrl = "/console/api/v1/apps/demo/credentials/static-tokens/7/capabilities";
+    const oauthCapabilityUrl = "/console/api/v1/apps/demo/credentials/oauth-clients/8/capabilities";
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === "/console/api/v1/apps/demo/credentials" && !init?.method) {
         return jsonResponse({
-          data: [{ id: 7, kind: "static_token", name: "生产凭据", is_active: true, capabilities: [] }],
+          data: [
+            { id: 7, kind: "static_token", name: "生产凭据", is_active: true, capabilities: [] },
+            { id: 8, kind: "oauth_client", name: "通知 OAuth", is_active: true, capabilities: ["notify"] },
+          ],
         });
       }
       if (url === createUrl && init?.method === "POST") {
@@ -137,6 +141,11 @@ describe("CredentialsTab(FF-4)", () => {
       if (url === capabilityUrl && init?.method === "PUT") {
         return jsonResponse({
           credential: { id: 7, kind: "static_token", name: "生产凭据", is_active: true, capabilities: ["notify"] },
+        });
+      }
+      if (url === oauthCapabilityUrl && init?.method === "PUT") {
+        return jsonResponse({
+          credential: { id: 8, kind: "oauth_client", name: "通知 OAuth", is_active: true, capabilities: ["directory"] },
         });
       }
       throw new Error(`Unexpected fetch: ${url}`);
@@ -158,11 +167,22 @@ describe("CredentialsTab(FF-4)", () => {
     });
     await user.click(screen.getByRole("button", { name: "关闭" }));
 
-    await user.click(screen.getByRole("button", { name: "编辑能力" }));
+    const staticRow = screen.getByText("生产凭据").closest("tr");
+    expect(staticRow).not.toBeNull();
+    await user.click(within(staticRow as HTMLTableRowElement).getByRole("button", { name: "编辑能力" }));
     await user.click(screen.getByRole("checkbox", { name: "notify" }));
     await user.click(screen.getByRole("button", { name: "保存能力" }));
     await waitFor(() => expect(findFetchCall(fetchMock, capabilityUrl, "PUT")).toBeDefined());
     expect(JSON.parse(String(findFetchCall(fetchMock, capabilityUrl, "PUT")?.[1]?.body))).toEqual({ capabilities: ["notify"] });
+
+    const oauthRow = screen.getByText("通知 OAuth").closest("tr");
+    expect(oauthRow).not.toBeNull();
+    await user.click(within(oauthRow as HTMLTableRowElement).getByRole("button", { name: "编辑能力" }));
+    await user.click(screen.getByRole("checkbox", { name: "notify" }));
+    await user.click(screen.getByRole("checkbox", { name: "directory" }));
+    await user.click(screen.getByRole("button", { name: "保存能力" }));
+    await waitFor(() => expect(findFetchCall(fetchMock, oauthCapabilityUrl, "PUT")).toBeDefined());
+    expect(JSON.parse(String(findFetchCall(fetchMock, oauthCapabilityUrl, "PUT")?.[1]?.body))).toEqual({ capabilities: ["directory"] });
   });
 
   test("developer 只能查看凭据能力且不能创建或修改凭据", async () => {
