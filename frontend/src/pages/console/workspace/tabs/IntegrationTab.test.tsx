@@ -44,6 +44,7 @@ describe("IntegrationTab", () => {
             version: 1,
             is_active: true,
           },
+          available_directory_scopes: availableScopes(),
         });
       }
       if (url === CHANNEL_URL && init?.method === "PUT") {
@@ -87,12 +88,12 @@ describe("IntegrationTab", () => {
     expect(screen.queryByDisplayValue("must-never-render")).not.toBeInTheDocument();
     expect(document.body).not.toHaveTextContent("must-never-render");
     expect(JSON.stringify(client.getQueryData(["console", "app", "demo", "notification-channel"]))).not.toContain("must-never-render");
+    expect(client.getQueryData(["console", "app", "demo", "notification-channel"])).toMatchObject({
+      available_directory_scopes: availableScopes(),
+    });
     expect(screen.getByLabelText("钉钉 App Secret")).toHaveValue("");
-    expect(screen.getByText("authentik-main / corp-001")).toBeVisible();
-    await user.clear(screen.getByLabelText("目录 Source Slug"));
-    await user.type(screen.getByLabelText("目录 Source Slug"), "authentik-secondary");
-    await user.clear(screen.getByLabelText("企业 Corp ID"));
-    await user.type(screen.getByLabelText("企业 Corp ID"), "corp-002");
+    expect(screen.getByText("authentik-main / corp-001", { selector: "code" })).toBeVisible();
+    await user.selectOptions(screen.getByLabelText("企业目录作用域"), JSON.stringify(["authentik-secondary", "corp-002"]));
     await user.click(screen.getByRole("button", { name: "保存新版本" }));
     await waitFor(() => expect(findCall(fetchMock, CHANNEL_URL, "PUT")).toBeDefined());
     expect(JSON.parse(String(findCall(fetchMock, CHANNEL_URL, "PUT")?.[1]?.body))).toEqual({
@@ -120,7 +121,7 @@ describe("IntegrationTab", () => {
         });
       }
       if (url === CHANNEL_URL && !init?.method) {
-        return jsonResponse({ notification_channel: null });
+        return jsonResponse({ notification_channel: null, available_directory_scopes: availableScopes() });
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });
@@ -132,6 +133,7 @@ describe("IntegrationTab", () => {
     expect(screen.getByRole("switch", { name: "切换 directory 平台能力" })).toBeDisabled();
     await waitFor(() => expect(screen.getByText("未配置", { selector: "strong" })).toBeVisible());
     expect(screen.getByLabelText("通道名称")).toBeEnabled();
+    expect(screen.getByLabelText("企业目录作用域")).toBeEnabled();
     expect(screen.getByRole("button", { name: "保存新版本" })).toBeDisabled();
     expect(fetchMock.mock.calls.every(([, init]) => !init?.method)).toBe(true);
   });
@@ -142,6 +144,7 @@ describe("IntegrationTab", () => {
     renderWithClient(<IntegrationTab appKey="demo" canManage={false} />);
 
     await waitFor(() => expect(screen.getByLabelText("通道名称")).toBeDisabled());
+    expect(screen.getByLabelText("企业目录作用域")).toBeDisabled();
     expect(screen.getByRole("button", { name: "保存新版本" })).toBeDisabled();
   });
 
@@ -152,7 +155,7 @@ describe("IntegrationTab", () => {
         return jsonResponse(capabilitiesPayload(false));
       }
       if (url === CHANNEL_URL && !init?.method) {
-        return jsonResponse({ notification_channel: null });
+        return jsonResponse({ notification_channel: null, available_directory_scopes: availableScopes() });
       }
       if (url === CHANNEL_URL && init?.method === "PUT") {
         return jsonResponse({ notification_channel: channelPayload(1) }, 201);
@@ -169,8 +172,7 @@ describe("IntegrationTab", () => {
     await user.type(nameInput, "EasyTrade 通知");
     await user.type(screen.getByLabelText("Agent ID"), "9001");
     await user.type(screen.getByLabelText("钉钉 App Key"), "ding-app-key");
-    await user.type(screen.getByLabelText("目录 Source Slug"), "authentik-main");
-    await user.type(screen.getByLabelText("企业 Corp ID"), "corp-001");
+    await user.selectOptions(screen.getByLabelText("企业目录作用域"), JSON.stringify(["authentik-main", "corp-001"]));
     expect(screen.getByRole("button", { name: "保存新版本" })).toBeDisabled();
     const secretInput = screen.getByLabelText("钉钉 App Secret");
     await user.type(secretInput, "one-time-secret");
@@ -225,7 +227,7 @@ describe("IntegrationTab", () => {
         return jsonResponse(capabilitiesPayload(false));
       }
       if (url === CHANNEL_URL && !init?.method) {
-        return jsonResponse({ notification_channel: channelPayload(1) });
+        return jsonResponse({ notification_channel: channelPayload(1), available_directory_scopes: availableScopes() });
       }
       if (url === CHANNEL_URL && init?.method === "PUT") {
         return jsonResponse({ error: { code: "validation_error", message: "save rejected" } }, 422);
@@ -247,6 +249,69 @@ describe("IntegrationTab", () => {
     expect(secretInput).toHaveValue("");
     await user.click(screen.getByRole("button", { name: "测试连通性" }));
     expect(await screen.findByText("通知通道连通性测试失败")).toBeVisible();
+  });
+
+  test("当前 scope 已消失时告警且不能提交，owner 选择有效 scope 后可修复", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === CAPABILITIES_URL && !init?.method) {
+        return jsonResponse(capabilitiesPayload(false));
+      }
+      if (url === CHANNEL_URL && !init?.method) {
+        return jsonResponse({
+          notification_channel: channelPayload(1),
+          available_directory_scopes: [{ directory_source_slug: "authentik-secondary", corp_id: "corp-002" }],
+        });
+      }
+      if (url === CHANNEL_URL && init?.method === "PUT") {
+        return jsonResponse({
+          notification_channel: {
+            ...channelPayload(2),
+            directory_source_slug: "authentik-secondary",
+            corp_id: "corp-002",
+          },
+        }, 201);
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWithClient(<IntegrationTab appKey="demo" canManage />);
+
+    expect(await screen.findByText("当前企业目录作用域已失效")).toBeVisible();
+    const scopeSelect = screen.getByLabelText("企业目录作用域");
+    expect(scopeSelect).toHaveValue(JSON.stringify(["authentik-main", "corp-001"]));
+    expect(screen.getByRole("button", { name: "保存新版本" })).toBeDisabled();
+    await user.selectOptions(scopeSelect, JSON.stringify(["authentik-secondary", "corp-002"]));
+    expect(screen.getByRole("button", { name: "保存新版本" })).toBeEnabled();
+    await user.click(screen.getByRole("button", { name: "保存新版本" }));
+    await waitFor(() => expect(findCall(fetchMock, CHANNEL_URL, "PUT")).toBeDefined());
+    expect(JSON.parse(String(findCall(fetchMock, CHANNEL_URL, "PUT")?.[1]?.body))).toMatchObject({
+      directory_source_slug: "authentik-secondary",
+      corp_id: "corp-002",
+    });
+  });
+
+  test("available scope 为空时明确阻止 owner 创建通道", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === CAPABILITIES_URL && !init?.method) {
+        return jsonResponse(capabilitiesPayload(false));
+      }
+      if (url === CHANNEL_URL && !init?.method) {
+        return jsonResponse({ notification_channel: null, available_directory_scopes: [] });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderWithClient(<IntegrationTab appKey="demo" canManage />);
+
+    expect(await screen.findByText("暂无可用企业目录作用域")).toBeVisible();
+    expect(screen.getByLabelText("企业目录作用域")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "保存新版本" })).toBeDisabled();
+    expect(fetchMock.mock.calls.every(([, init]) => !init?.method)).toBe(true);
   });
 });
 
@@ -289,6 +354,13 @@ function channelPayload(version: number) {
   };
 }
 
+function availableScopes() {
+  return [
+    { directory_source_slug: "authentik-main", corp_id: "corp-001" },
+    { directory_source_slug: "authentik-secondary", corp_id: "corp-002" },
+  ];
+}
+
 function readOnlyFetch() {
   return vi.fn<typeof fetch>(async (input, init) => {
     const url = String(input);
@@ -296,7 +368,7 @@ function readOnlyFetch() {
       return jsonResponse(capabilitiesPayload(false));
     }
     if (url === CHANNEL_URL && !init?.method) {
-      return jsonResponse({ notification_channel: channelPayload(1) });
+      return jsonResponse({ notification_channel: channelPayload(1), available_directory_scopes: availableScopes() });
     }
     throw new Error(`Unexpected fetch: ${url}`);
   });

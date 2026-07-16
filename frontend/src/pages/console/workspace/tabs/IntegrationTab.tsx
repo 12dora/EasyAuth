@@ -4,7 +4,7 @@ import { BellRing, Network, PlugZap, RefreshCcw, ShieldCheck } from "lucide-reac
 
 import { Badge } from "../../../../components/Badge";
 import { Button } from "../../../../components/Button";
-import { Field, TextInput } from "../../../../components/Field";
+import { Field, SelectInput, TextInput } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { PanelSurface } from "../../../../components/ui/PanelSurface";
 import { useToast } from "../../../../components/ui/Toast";
@@ -17,6 +17,7 @@ import type {
   AppCapabilityKey,
   AppCapabilityPayload,
   AppNotificationChannelPayload,
+  DirectoryScopeItem,
 } from "../../../../lib/domain";
 
 const CAPABILITY_KEYS: AppCapabilityKey[] = ["directory", "notify"];
@@ -180,6 +181,7 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
     ),
   });
   const channel = channelQuery.data?.notification_channel ?? null;
+  const availableDirectoryScopes = channelQuery.data?.available_directory_scopes ?? [];
   const loadState: ChannelLoadState = channelQuery.isLoading
     ? "loading"
     : channelQuery.isError
@@ -188,6 +190,11 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
         ? "configured"
         : "unconfigured";
   const canWriteChannel = canManage && (loadState === "configured" || loadState === "unconfigured");
+  const selectedScopeIsAvailable = availableDirectoryScopes.some((scope) => scopeMatchesForm(scope, form));
+  const currentScopeIsAvailable = channel
+    ? availableDirectoryScopes.some((scope) => scopeMatchesChannel(scope, channel))
+    : true;
+  const noAvailableScopes = !channelQuery.isLoading && !channelQuery.isError && availableDirectoryScopes.length === 0;
 
   useEffect(() => {
     if (!channelQuery.data) {
@@ -210,7 +217,7 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
         secretInputRef.current.value = "";
       }
       setHasSecretInput(false);
-      return parseNotificationChannelPayload(
+      const payload = parseNotificationChannelPayload(
         await apiRequest<unknown>(`/console/api/v1/apps/${appKey}/notification-channel`, {
           method: "PUT",
           body: {
@@ -223,10 +230,15 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
           } satisfies JsonObject,
         }),
         t("console.integration.channelInvalidResponse"),
+        false,
       );
+      return payload.notification_channel;
     },
-    onSuccess: (payload) => {
-      queryClient.setQueryData(queryKey, payload);
+    onSuccess: (notificationChannel) => {
+      queryClient.setQueryData<AppNotificationChannelPayload>(queryKey, (current) => ({
+        notification_channel: notificationChannel,
+        available_directory_scopes: current?.available_directory_scopes ?? [],
+      }));
       toast.success(t("console.integration.channelSaveSuccess"));
     },
     onError: (error: Error) => {
@@ -262,8 +274,7 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
     form.name.trim()
     && form.dingtalkAppKey.trim()
     && form.agentId.trim()
-    && form.directorySourceSlug.trim()
-    && form.corpId.trim()
+    && selectedScopeIsAvailable
     && (channel?.app_secret_configured || hasSecretInput),
   );
 
@@ -306,14 +317,28 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
         <StatusBanner tone="amber" title={t("console.integration.channelNotConfigured")} message={t("console.integration.channelEmptyDescription")} />
       ) : null}
       {loadState === "configured" ? (
-        <div className="flex flex-wrap items-center justify-between gap-2 border border-bond/25 bg-bond/5 px-3 py-2">
-          <span className="text-label font-semibold uppercase tracking-caps-wide text-bond">
+        <div className={`flex flex-wrap items-center justify-between gap-2 border px-3 py-2 ${currentScopeIsAvailable ? "border-bond/25 bg-bond/5" : "border-signal/30 bg-signal/8"}`}>
+          <span className={`text-label font-semibold uppercase tracking-caps-wide ${currentScopeIsAvailable ? "text-bond" : "text-signal"}`}>
             {t("console.integration.directoryScope")}
           </span>
           <code className="text-xs text-ink">
             {channel?.directory_source_slug} / {channel?.corp_id}
           </code>
         </div>
+      ) : null}
+      {loadState === "configured" && !currentScopeIsAvailable ? (
+        <StatusBanner
+          tone="signal"
+          title={t("console.integration.currentScopeUnavailable")}
+          message={t("console.integration.currentScopeUnavailableDescription")}
+        />
+      ) : null}
+      {noAvailableScopes ? (
+        <StatusBanner
+          tone="amber"
+          title={t("console.integration.noAvailableScopes")}
+          message={t("console.integration.noAvailableScopesDescription")}
+        />
       ) : null}
       <form className="grid gap-4" onSubmit={submit} aria-busy={channelQuery.isLoading}>
         <div className="grid gap-4 md:grid-cols-2">
@@ -350,29 +375,39 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
               }}
             />
           </Field>
-          <Field label={t("console.integration.directorySourceSlug")} hint={t("console.integration.directorySourceSlugHint")}>
-            <TextInput
+          <Field label={t("console.integration.directoryScopeSelect")} hint={t("console.integration.directoryScopeSelectHint")}>
+            <SelectInput
               className="font-mono"
-              autoComplete="off"
-              value={form.directorySourceSlug}
-              disabled={!canWriteChannel || saveMutation.isPending}
+              value={scopeKey(form.directorySourceSlug, form.corpId)}
+              disabled={!canWriteChannel || noAvailableScopes || saveMutation.isPending}
               onChange={(event) => {
-                const directorySourceSlug = event.currentTarget.value;
-                setForm((current) => ({ ...current, directorySourceSlug }));
+                const selected = availableDirectoryScopes.find((scope) => scopeKey(scope.directory_source_slug, scope.corp_id) === event.currentTarget.value);
+                if (!selected) {
+                  setForm((current) => ({ ...current, directorySourceSlug: "", corpId: "" }));
+                  return;
+                }
+                setForm((current) => ({
+                  ...current,
+                  directorySourceSlug: selected.directory_source_slug,
+                  corpId: selected.corp_id,
+                }));
               }}
-            />
-          </Field>
-          <Field label={t("console.integration.corpId")} hint={t("console.integration.corpIdHint")}>
-            <TextInput
-              className="font-mono"
-              autoComplete="off"
-              value={form.corpId}
-              disabled={!canWriteChannel || saveMutation.isPending}
-              onChange={(event) => {
-                const corpId = event.currentTarget.value;
-                setForm((current) => ({ ...current, corpId }));
-              }}
-            />
+            >
+              <option value="">{t("console.integration.directoryScopePlaceholder")}</option>
+              {channel && !currentScopeIsAvailable ? (
+                <option value={scopeKey(channel.directory_source_slug, channel.corp_id)} disabled>
+                  {t("console.integration.directoryScopeUnavailableOption", {
+                    source: channel.directory_source_slug,
+                    corp: channel.corp_id,
+                  })}
+                </option>
+              ) : null}
+              {availableDirectoryScopes.map((scope) => (
+                <option key={scopeKey(scope.directory_source_slug, scope.corp_id)} value={scopeKey(scope.directory_source_slug, scope.corp_id)}>
+                  {scope.directory_source_slug} / {scope.corp_id}
+                </option>
+              ))}
+            </SelectInput>
           </Field>
           <Field
             label={t("console.integration.dingtalkAppSecret")}
@@ -422,13 +457,18 @@ function capabilityFromPayload(payload: AppCapabilitiesPayload | undefined, key:
   };
 }
 
-function parseNotificationChannelPayload(value: unknown, errorMessage: string): AppNotificationChannelPayload {
+function parseNotificationChannelPayload(
+  value: unknown,
+  errorMessage: string,
+  requireAvailableScopes = true,
+): AppNotificationChannelPayload {
   if (!isRecord(value) || !("notification_channel" in value)) {
     throw new Error(errorMessage);
   }
+  const availableDirectoryScopes = parseDirectoryScopes(value.available_directory_scopes, errorMessage, requireAvailableScopes);
   const channel = value.notification_channel;
   if (channel === null) {
-    return { notification_channel: null };
+    return { notification_channel: null, available_directory_scopes: availableDirectoryScopes };
   }
   if (
     !isRecord(channel)
@@ -458,7 +498,38 @@ function parseNotificationChannelPayload(value: unknown, errorMessage: string): 
       created_by: typeof channel.created_by === "string" ? channel.created_by : undefined,
       created_at: typeof channel.created_at === "string" ? channel.created_at : undefined,
     },
+    available_directory_scopes: availableDirectoryScopes,
   };
+}
+
+function parseDirectoryScopes(value: unknown, errorMessage: string, required: boolean): DirectoryScopeItem[] {
+  if (value === undefined && !required) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(errorMessage);
+  }
+  return value.map((scope) => {
+    if (!isRecord(scope) || typeof scope.directory_source_slug !== "string" || typeof scope.corp_id !== "string") {
+      throw new Error(errorMessage);
+    }
+    return {
+      directory_source_slug: scope.directory_source_slug,
+      corp_id: scope.corp_id,
+    };
+  });
+}
+
+function scopeKey(directorySourceSlug: string, corpId: string): string {
+  return JSON.stringify([directorySourceSlug, corpId]);
+}
+
+function scopeMatchesForm(scope: DirectoryScopeItem, form: ChannelFormState): boolean {
+  return scope.directory_source_slug === form.directorySourceSlug && scope.corp_id === form.corpId;
+}
+
+function scopeMatchesChannel(scope: DirectoryScopeItem, channel: NonNullable<AppNotificationChannelPayload["notification_channel"]>): boolean {
+  return scope.directory_source_slug === channel.directory_source_slug && scope.corp_id === channel.corp_id;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

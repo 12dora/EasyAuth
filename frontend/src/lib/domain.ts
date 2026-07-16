@@ -253,8 +253,14 @@ export interface AppNotificationChannel {
   created_at?: string;
 }
 
+export interface DirectoryScopeItem {
+  directory_source_slug: string;
+  corp_id: string;
+}
+
 export interface AppNotificationChannelPayload {
   notification_channel: AppNotificationChannel | null;
+  available_directory_scopes: DirectoryScopeItem[];
 }
 
 export interface SecretPayload {
