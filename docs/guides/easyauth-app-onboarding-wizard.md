@@ -26,7 +26,7 @@
 | 5 联调验证 | 用刚签发的凭据发起真实公共权限查询 | `POST .../permission-query-tests` |
 | 6 完成 | 输出下游接入参数(base URL、app_key、查询端点、curl 示例) | `GET .../configuration-status` |
 
-向导对任何企业应用通用:接入新应用只需要下游按 manifest 契约(见 `docs/api/easyauth-authorization-operations-api-design.md` 的 App Manifest 章节)导出权限目录,不需要在 EasyAuth 侧为单个应用写专用代码。
+向导对任何企业应用通用:接入新应用只需要下游按 [`easyauth-app-sdk` 下游集成指南](easyauth-app-sdk-integration.md) 中的 manifest 契约导出权限目录,不需要在 EasyAuth 侧为单个应用写专用代码。
 
 状态以 URL 参数承载(`app_key` + `step`),刷新或中断后可从任意步骤续接;缺少 `app_key` 时除第一步外自动回落到第一步。
 

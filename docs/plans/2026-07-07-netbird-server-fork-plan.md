@@ -4,7 +4,7 @@
 > 状态：设计稿（未开始实施）
 > 范围：**仅 NetBird management 服务端**。硬约束：客户端（desktop/mobile/CLI）与 dashboard 保持官方原版，不做任何改动。
 > 源码：`/Users/konata/code/netbird`（浅克隆，main@`47352e6e`，2026-07-06，v0.75.0-rc.5 之后）
-> 姊妹篇：`EasyAuth/docs/plans/2026-07-07-netbird-connector-framework-plan.md`（消费本 fork 能力的 EasyAuth 连接器）
+> 配套现状：消费本 fork 能力的 EasyAuth NetBird 连接器已在 `src/easyauth/connectors/netbird/` 实现。
 
 ---
 

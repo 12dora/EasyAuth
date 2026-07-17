@@ -438,7 +438,7 @@ grant_type=client_credentials&client_id={client_id}&client_secret={client_secret
 
 ### 管理控制台私有 API
 
-管理控制台可以新增私有 API，但不能把它们当作下游应用接入契约。详细设计见 `docs/api/easyauth-authorization-operations-api-design.md`。
+管理控制台可以新增私有 API，但不能把它们当作下游应用接入契约。当前接口目录见 `docs/api/easyauth-console-api.md`，员工门户私有接口见 `docs/api/easyauth-portal-react-api.md`。
 
 管理端 API 规则：
 
@@ -516,16 +516,7 @@ flowchart LR
 - 系统管理员可以处理全局失败恢复、紧急撤权、审计和应用负责人归属。
 - 权限模板只改变目录和展示，授权事实仍由 RolePermission、AccessRequest、审批结果和 `GrantService` 共同产生。
 
-详细设计见 `docs/architecture/easyauth-authorization-operations-design.md`。
-
-阶段关系：
-
-- `OPS-1` 交付配置完整性、权限模板、矩阵、凭据运营、联调测试和接入说明。
-- `OPS-2` 交付员工“我的权限、我的申请、即将过期”视图。
-- `OPS-3` 交付运营看板、失败恢复、紧急撤权、依赖健康和审计筛选。
-- `OPS-4` 交付变更、撤销和续期申请。
-
-每个运营增强阶段的目标、交付物、验收标准、约束和验证方式以 `docs/requirements/easyauth-business-authorization-operations.md` 和 `docs/architecture/easyauth-authorization-operations-design.md` 为准。
+当前实现的管理端、员工端和下游公共接口分别以 `docs/api/easyauth-console-api.md`、`docs/api/easyauth-portal-react-api.md` 和 `docs/api/easyauth-public-api.md` 为准。
 
 ## 核心流程
 
@@ -768,25 +759,9 @@ MVP 早期可以优先使用 Django Admin 完成试点配置，但需要保证�
 - 内部应用接入成本应该低，不能要求不同应用选择不同版本。
 - 新字段通过可选字段添加，避免破坏已连接应用。
 
-## 阶段路线图
+## 演进约束
 
-MVP 实施阶段以 `docs/plans/easyauth-mvp-implementation-plan.md` 为准：
-
-1. `MVP-1`：基础建设，建立工程、质量门槛和核心模型。
-2. `MVP-2`：第一条可用授权查询 API，稳定 app 凭据、`AppPrincipal` 和公共权限查询契约。
-3. `MVP-3`：身份、审批和后端运营能力，完成 Authentik 同步、DingTalk mock 回调、授权落库、过期清理和紧急撤权。
-4. `MVP-4`：前端和试点接入包，通过员工门户和试点接入文档完成端到端冒烟。
-
-业务授权运营增强阶段以 `docs/requirements/easyauth-business-authorization-operations.md` 和 `docs/architecture/easyauth-authorization-operations-design.md` 为准：
-
-1. `OPS-1`：配置完整性与接入联调。
-2. `OPS-2`：员工授权门户增强。
-3. `OPS-3`：运营看板与失败恢复。
-4. `OPS-4`：变更、撤销和续期申请。
-
-总约束：
-
-- 先稳定 `MVP-2` 公共权限查询 API，再扩展依赖该契约的页面和运营能力。
+- 公共权限查询 API 是下游稳定契约，扩展页面和运营能力不得破坏其字段语义。
 - 任何阶段都不能让 Authentik、DingTalk 或权限模板成为授权事实来源。
 - 任何阶段都不能绕过 `GrantService` 写入最终授权事实。
 - 任何阶段都不能破坏 `/api/v1/apps/{app_key}/users/{user_id}/permissions` 的既有字段语义。

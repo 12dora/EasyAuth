@@ -180,8 +180,7 @@ token；每条凭据只授予该链路所需 capability。
     `manifest.py:42`）加入 `capabilities`，新增 `_validate_capabilities`
     （trim 后非空、重复值按归一化值校验，但不改写输入对象）；
   - 服务端：`applications/permission_template_parsing.py` 的解析器同步接受该节
-    （容忍未知能力值仅告警不拒绝，为老服务端兼容新 SDK 留余地——服务端先发布
-    则无此问题，见第 7 篇发布顺序）。
+    （容忍未知能力值仅告警不拒绝，为老服务端兼容新 SDK 留余地）。
 - **语义（重要）**：申明 ≠ 开通。manifest 同步只把申明记录下来供 console 展示
   「该 app 请求了哪些平台能力」。超管手工开通 `AppCapability`，
   App owner 手工授权单 credential；因此 manifest 导入对两层**都不产生授权副作用**。

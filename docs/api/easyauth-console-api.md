@@ -196,7 +196,4 @@ owner 选择有效作用域并保存新版本后恢复；此时依赖健康为 u
 
 ---
 
-## 与历史文档的关系
-
-- 授权对象模型为 **`authorization_groups`**，不是 `roles`
-- 更细的字段级设计草稿见 [`easyauth-authorization-operations-api-design.md`](./easyauth-authorization-operations-api-design.md)；**以本文件与实现代码为准**
+授权对象模型为 **`authorization_groups`**，不是 `roles`。
