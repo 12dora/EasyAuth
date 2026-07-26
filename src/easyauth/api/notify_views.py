@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from http import HTTPStatus
-from typing import Final, cast
+from typing import Final, TypedDict, cast
 from uuid import UUID
 
 from django.conf import settings
@@ -24,12 +24,9 @@ from easyauth.applications.models import CAPABILITY_NOTIFY, App
 from easyauth.applications.services import AppPrincipal
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.config.rate_limit import client_ip, over_limit, rate_limit_exceeded
+from easyauth.notify.acceptance import accept_notify_message
+from easyauth.notify.contracts import DEFAULT_DEEPLINK_TITLE, NotifyAcceptError
 from easyauth.notify.models import NotifyMessage, NotifyRecipient
-from easyauth.notify.services import (
-    DEFAULT_DEEPLINK_TITLE,
-    NotifyAcceptError,
-    accept_notify_message,
-)
 
 _AUTHENTICATION_FAILED_MESSAGE: Final = "应用认证凭据无效。"
 _PERMISSION_DENIED_MESSAGE: Final = "应用无权查询该资源。"
@@ -55,7 +52,7 @@ _NOTIFY_REJECTED_ACTION: Final = "app_notify_rejected"
 # Bearer 鉴权的服务端到服务端接口, 无浏览器会话, 豁免 CSRF(对齐 approval_views 的 POST 端点)。
 @csrf_exempt
 @require_http_methods(["POST"])
-def notify_messages_create(request: HttpRequest, app_key: str) -> JsonResponse:
+def notify_messages_create(request: HttpRequest, app_key: str) -> JsonResponse:  # noqa: PLR0911
     match _authenticate_notify_capability(request, app_key):
         case (App() as app, AppPrincipal() as principal):
             pass
@@ -74,18 +71,27 @@ def notify_messages_create(request: HttpRequest, app_key: str) -> JsonResponse:
     body = _json_object_body(request)
     if isinstance(body, JsonResponse):
         return body
+    parsed_payload = _notify_create_payload(body)
+    if isinstance(parsed_payload, JsonResponse):
+        _record_notify_rejected(
+            principal=principal,
+            error_code=ErrorCode.VALIDATION_ERROR.value,
+            recipient_count=_recipient_count_from_body(body),
+        )
+        return parsed_payload
+    create_payload: NotifyCreatePayload = parsed_payload
 
     try:
         result = accept_notify_message(
             app=app,
-            recipients=_as_string_list(body.get("recipients")),
-            template=_as_str(body.get("template")),
-            title=_as_str(body.get("title")),
-            content=_as_str(body.get("content")),
-            deeplink_url=_as_str(body.get("deeplink_url")),
-            deeplink_title=_as_str(body.get("deeplink_title")) or DEFAULT_DEEPLINK_TITLE,
-            dedup_key=_as_str(body.get("dedup_key")),
-            biz_tag=_as_str(body.get("biz_tag")),
+            recipients=create_payload["recipients"],
+            template=create_payload["template"],
+            title=create_payload["title"],
+            content=create_payload["content"],
+            deeplink_url=create_payload["deeplink_url"],
+            deeplink_title=create_payload["deeplink_title"],
+            dedup_key=create_payload["dedup_key"],
+            biz_tag=create_payload["biz_tag"],
             requested_credential_type=principal.credential_type,
             requested_credential_id=principal.credential_id,
         )
@@ -121,14 +127,14 @@ def notify_messages_create(request: HttpRequest, app_key: str) -> JsonResponse:
         ),
     )
     status = HTTPStatus.ACCEPTED if result.accepted else HTTPStatus.OK
-    payload: dict[str, JsonValue] = {
+    response_payload: dict[str, JsonValue] = {
         "message_id": str(result.message.id),
         "accepted": result.accepted,
         "status": result.message.status,
         "recipient_total": result.recipient_total,
         "recipient_rejected": result.recipient_rejected,
     }
-    return json_response(payload, status=status)
+    return json_response(response_payload, status=status)
 
 
 @require_http_methods(["GET"])
@@ -334,14 +340,90 @@ def _json_object_body(request: HttpRequest) -> dict[str, object] | JsonResponse:
     return cast("dict[str, object]", parsed)
 
 
-def _as_str(value: object) -> str:
+class NotifyCreatePayload(TypedDict):
+    recipients: list[str]
+    template: str
+    title: str
+    content: str
+    deeplink_url: str
+    deeplink_title: str
+    dedup_key: str
+    biz_tag: str
+
+
+def _notify_create_payload(body: dict[str, object]) -> NotifyCreatePayload | JsonResponse:
+    allowed_fields = {
+        "recipients",
+        "template",
+        "title",
+        "content",
+        "deeplink_url",
+        "deeplink_title",
+        "dedup_key",
+        "biz_tag",
+    }
+    unknown_fields = sorted(set(body) - allowed_fields)
+    if unknown_fields:
+        return _validation_error(
+            "请求字段不受支持。",
+            "body",
+            {"fields": cast("JsonValue", unknown_fields)},
+        )
+    try:
+        recipients = _as_string_list(body.get("recipients"))
+    except TypeError:
+        return _validation_error("recipients 必须为 1~500 个用户引用。", "recipients")
+    payload: NotifyCreatePayload = {
+        "recipients": recipients,
+        "template": "",
+        "title": "",
+        "content": "",
+        "deeplink_url": "",
+        "deeplink_title": DEFAULT_DEEPLINK_TITLE,
+        "dedup_key": "",
+        "biz_tag": "",
+    }
+    for field_name in (
+        "template",
+        "title",
+        "content",
+        "deeplink_url",
+        "deeplink_title",
+        "dedup_key",
+        "biz_tag",
+    ):
+        parsed = _optional_string_field(body, field_name)
+        if isinstance(parsed, JsonResponse):
+            return parsed
+        payload[field_name] = parsed or (
+            DEFAULT_DEEPLINK_TITLE if field_name == "deeplink_title" else ""
+        )
+    return payload
+
+
+def _optional_string_field(body: dict[str, object], field_name: str) -> str | JsonResponse:
+    value = body.get(field_name)
     if value is None:
         return ""
     if isinstance(value, str):
         return value
-    if isinstance(value, (int, float, bool)):
-        return str(value)
-    return ""
+    return _validation_error(f"{field_name} 必须为字符串。", field_name)
+
+
+def _validation_error(
+    message: str,
+    field: str,
+    extra_details: dict[str, JsonValue] | None = None,
+) -> JsonResponse:
+    details: dict[str, JsonValue] = {"field": field}
+    if extra_details is not None:
+        details.update(extra_details)
+    return error_response(
+        ErrorCode.VALIDATION_ERROR,
+        message,
+        details,
+        status=HTTPStatus.UNPROCESSABLE_ENTITY,
+    )
 
 
 def _as_string_list(value: object) -> list[str]:

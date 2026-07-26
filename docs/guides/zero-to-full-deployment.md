@@ -51,8 +51,9 @@
    token、client secret 与 Authentik provider 一致。部署级覆盖（容器内地址、公网回调、
    WebAuthn RP）都在 `docker-compose.deploy.yml` 里，通常不用改。
 4. `docker compose -f docker-compose.deploy.yml up -d`（web/worker/beat/stream/redis 全套）。
-5. 本地管理员登录 `/auth/local/` → `/console/settings` 填钉钉 AppKey/AppSecret →
-   「测试连通性」应显示"钉钉凭证有效"。stream 容器随后能连上钉钉 WebSocket。
+5. 本地管理员登录 `/auth/local/` → `/auth/local/security/` 绑定 TOTP 或通行密钥 →
+   `/console/settings` 填钉钉 AppKey/AppSecret →「测试连通性」应显示"钉钉凭证有效"。
+   stream 容器随后能连上钉钉 WebSocket。
 6. 目录同步依赖 Authentik 侧钉钉目录，而 Authentik 的目录同步需要 corp_id——
    **首次钉钉登录之后才有**。着急可手动触发：
    `POST /api/v3/sources/oauth/dingtalk-directory/dingtalk/sync/ {"corp_id": ...}`，

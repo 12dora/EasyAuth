@@ -61,7 +61,7 @@ class TeamMember(models.Model):
     )
     user: models.ForeignKey[UserMirror, UserMirror] = models.ForeignKey(
         UserMirror,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="team_memberships",
     )
     role: models.CharField[str, str] = models.CharField(

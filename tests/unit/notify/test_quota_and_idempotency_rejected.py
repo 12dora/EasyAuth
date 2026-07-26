@@ -5,6 +5,8 @@ from django.utils import timezone
 
 from easyauth.accounts.models import DingTalkUserMirror, UserMirror
 from easyauth.applications.models import CAPABILITY_NOTIFY, App, AppCapability
+from easyauth.notify.acceptance import accept_notify_message
+from easyauth.notify.contracts import NotifyAcceptError
 from easyauth.notify.models import (
     CREDENTIAL_TYPE_STATIC_TOKEN,
     NOTIFY_ERROR_DINGTALK_REJECTED,
@@ -14,9 +16,8 @@ from easyauth.notify.models import (
     NOTIFY_TEMPLATE_TEXT,
     NotifyRecipient,
 )
-from easyauth.notify.services import NotifyAcceptError, accept_notify_message
 
-pytestmark = pytest.mark.django_db
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("notification_channel_for_apps")]
 
 CORP_ID = "corp-quota"
 SOURCE = "dingtalk-quota"
@@ -32,6 +33,7 @@ def _seed(authentik: str, dingtalk: str) -> None:
     )
     _ = UserMirror.objects.create(
         authentik_user_id=authentik,
+        dingtalk_source_slug=SOURCE,
         dingtalk_userid=dingtalk,
         dingtalk_corp_id=CORP_ID,
     )

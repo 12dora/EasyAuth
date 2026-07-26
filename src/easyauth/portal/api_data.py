@@ -15,7 +15,6 @@ from easyauth.grants.models import (
 from easyauth.grants.query import PermissionSnapshot, resolve_user_permissions
 from easyauth.portal.access_request_data import (
     access_request_item,
-    access_request_items_for_user,
     access_request_page_for_user,
 )
 from easyauth.portal.pagination import PortalPage, build_page, page_request
@@ -33,11 +32,9 @@ if TYPE_CHECKING:
 DEFAULT_EXPIRING_DAYS: Final = 14
 __all__: Final = (
     "access_request_item",
-    "access_request_items_for_user",
     "access_request_page_for_user",
     "current_grant_items_for_user",
     "current_grant_page_for_user",
-    "expiring_grant_items_for_user",
     "expiring_grant_page_for_user",
 )
 
@@ -47,16 +44,6 @@ type PortalJsonObject = dict[str, JsonValue]
 def current_grant_items_for_user(user: UserMirror) -> tuple[PortalJsonObject, ...]:
     current_time = timezone.now()
     grants = tuple(_current_visible_grants(user=user, current_time=current_time))
-    return _grant_items(grants)
-
-
-def expiring_grant_items_for_user(
-    user: UserMirror,
-    *,
-    days: int = DEFAULT_EXPIRING_DAYS,
-) -> tuple[PortalJsonObject, ...]:
-    current_time = timezone.now()
-    grants = tuple(_expiring_visible_grants(user=user, current_time=current_time, days=days))
     return _grant_items(grants)
 
 
@@ -151,6 +138,8 @@ def _grant_item(
     )
     grant_type, grant_expires_at = _grant_lifecycle_summary(snapshot)
     return {
+        "grant_id": grant.id,
+        "grant_revision": grant.version,
         "app_key": grant.app.app_key,
         "app_name": grant.app.name,
         "groups": json_groups(snapshot.groups),

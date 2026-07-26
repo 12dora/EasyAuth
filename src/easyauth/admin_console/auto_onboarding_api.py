@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Mapping
 from http import HTTPStatus
 from json import JSONDecodeError
-from typing import TYPE_CHECKING, ClassVar, Final
+from typing import TYPE_CHECKING, ClassVar, Final, Protocol, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -43,11 +44,14 @@ DESCRIPTOR_MAX_BYTES: Final = 5 * 1024 * 1024
 DESCRIPTOR_FETCH_TIMEOUT_SECONDS: Final = 10.0
 APP_KEY_PATTERN: Final = re.compile(r"^[a-z0-9][a-z0-9_-]{1,63}$")
 
-BASE_URL_INVALID_MESSAGE: Final = "base_url 必须是 http(s) URL。"
 APP_KEY_INVALID_MESSAGE: Final = "app_key 格式无效。"
 
 
 class AutoOnboardingError(Exception):
+    code: ErrorCode
+    message: str
+    status: HTTPStatus
+
     def __init__(self, code: ErrorCode, message: str, status: HTTPStatus) -> None:
         super().__init__(message)
         self.code = code
@@ -68,7 +72,7 @@ class AutoOnboardingPayload(BaseModel):
         normalized = value.strip().rstrip("/")
         # 强制 https(仅本地开发允许 http://localhost); 明文 http 打内网会泄露 descriptor token。
         try:
-            require_secure_url(normalized, allow_local_http=settings.DEBUG)
+            require_secure_url(normalized, allow_local_http=_settings_debug())
         except InsecureUrlError as error:
             raise ValueError(str(error)) from error
         return normalized
@@ -123,7 +127,7 @@ def console_app_auto_onboarding(request: HttpRequest) -> JsonResponse:
 def _auto_onboard(*, payload: AutoOnboardingPayload, actor_id: str) -> dict[str, JsonValue]:
     descriptor = _fetch_descriptor(payload.base_url, payload.descriptor_token)
     manifest = _validated_manifest(descriptor, payload.app_key)
-    descriptor_app = descriptor["app"]
+    descriptor_app = _required_object(descriptor, "app")
     with transaction.atomic():
         app, created = _ensure_app(payload.app_key, descriptor_app, actor_id=actor_id)
         try:
@@ -205,7 +209,7 @@ def _fetch_descriptor(base_url: str, descriptor_token: str | None) -> dict[str, 
     # 拒绝解析到内网/环回/链路本地(含云元数据)的目标, 防止 SSRF。
     hostname = urlparse(base_url).hostname or ""
     try:
-        assert_public_host(hostname, allow_local=settings.DEBUG)
+        assert_public_host(hostname, allow_local=_settings_debug())
     except BlockedHostError as error:
         raise AutoOnboardingError(
             ErrorCode.SEMANTIC_VALIDATION_ERROR,
@@ -221,8 +225,9 @@ def _fetch_descriptor(base_url: str, descriptor_token: str | None) -> dict[str, 
         method="GET",
     )
     try:
-        with urlopen(request, timeout=DESCRIPTOR_FETCH_TIMEOUT_SECONDS) as response:  # noqa: S310
-            raw_body = response.read(DESCRIPTOR_MAX_BYTES + 1)
+        with urlopen(request, timeout=DESCRIPTOR_FETCH_TIMEOUT_SECONDS) as response:  # noqa: S310  # pyright: ignore[reportAny]
+            reader: _ReadableResponse = response  # pyright: ignore[reportAny]
+            raw_body = reader.read(DESCRIPTOR_MAX_BYTES + 1)
     except HTTPError as error:
         status = (
             HTTPStatus.UNAUTHORIZED
@@ -247,20 +252,21 @@ def _fetch_descriptor(base_url: str, descriptor_token: str | None) -> dict[str, 
             HTTPStatus.UNPROCESSABLE_ENTITY,
         )
     try:
-        parsed = json.loads(raw_body.decode("utf-8"))
+        parsed: object = json.loads(raw_body.decode("utf-8"))  # pyright: ignore[reportAny]
     except (JSONDecodeError, UnicodeDecodeError) as error:
         raise AutoOnboardingError(
             ErrorCode.SEMANTIC_VALIDATION_ERROR,
             "集成描述符不是有效 JSON。",
             HTTPStatus.UNPROCESSABLE_ENTITY,
         ) from error
-    if not isinstance(parsed, dict):
+    descriptor = _json_object(parsed)
+    if descriptor is None:
         raise AutoOnboardingError(
             ErrorCode.SEMANTIC_VALIDATION_ERROR,
             "集成描述符必须是 JSON object。",
             HTTPStatus.UNPROCESSABLE_ENTITY,
         )
-    return parsed
+    return descriptor
 
 
 def _validated_manifest(
@@ -273,22 +279,22 @@ def _validated_manifest(
             f"不支持的 descriptor_version: {descriptor.get('descriptor_version')!r}。",
             HTTPStatus.UNPROCESSABLE_ENTITY,
         )
-    descriptor_app = descriptor.get("app")
-    if not isinstance(descriptor_app, dict) or descriptor_app.get("app_key") != expected_app_key:
+    descriptor_app = _json_object(descriptor.get("app"))
+    if descriptor_app is None or descriptor_app.get("app_key") != expected_app_key:
         raise AutoOnboardingError(
             ErrorCode.SEMANTIC_VALIDATION_ERROR,
             "描述符 app_key 与请求不一致。",
             HTTPStatus.UNPROCESSABLE_ENTITY,
         )
-    manifest = descriptor.get("manifest")
-    if not isinstance(manifest, dict):
+    manifest = _json_object(descriptor.get("manifest"))
+    if manifest is None:
         raise AutoOnboardingError(
             ErrorCode.SEMANTIC_VALIDATION_ERROR,
             "描述符缺少 manifest。",
             HTTPStatus.UNPROCESSABLE_ENTITY,
         )
-    manifest_app = manifest.get("app")
-    if not isinstance(manifest_app, dict) or manifest_app.get("app_key") != expected_app_key:
+    manifest_app = _json_object(manifest.get("app"))
+    if manifest_app is None or manifest_app.get("app_key") != expected_app_key:
         raise AutoOnboardingError(
             ErrorCode.SEMANTIC_VALIDATION_ERROR,
             "manifest.app.app_key 与请求不一致。",
@@ -325,3 +331,48 @@ def _record_auto_onboarding(*, actor_id: str, result: dict[str, JsonValue]) -> N
             },
         ),
     )
+
+
+class _ReadableResponse(Protocol):
+    def read(self, amt: int = -1) -> bytes: ...
+
+
+def _settings_debug() -> bool:
+    value: object = getattr(settings, "DEBUG", False)
+    return value is True
+
+
+def _required_object(payload: Mapping[str, JsonValue], key: str) -> dict[str, JsonValue]:
+    value = _json_object(payload.get(key))
+    if value is None:
+        message = f"{key} 必须是 JSON object。"
+        raise AutoOnboardingError(
+            ErrorCode.SEMANTIC_VALIDATION_ERROR,
+            message,
+            HTTPStatus.UNPROCESSABLE_ENTITY,
+        )
+    return value
+
+
+def _json_object(value: object) -> dict[str, JsonValue] | None:
+    if not isinstance(value, Mapping):
+        return None
+    mapping = cast("Mapping[object, object]", value)
+    result: dict[str, JsonValue] = {}
+    for key, item in mapping.items():
+        if not isinstance(key, str) or not _is_json_value(item):
+            return None
+        result[key] = cast("JsonValue", item)
+    return result
+
+
+def _is_json_value(value: object) -> bool:
+    if value is None or isinstance(value, str | int | float | bool):
+        return True
+    if isinstance(value, list):
+        items = cast("list[object]", value)
+        return all(_is_json_value(item) for item in items)
+    if isinstance(value, Mapping):
+        mapping = cast("Mapping[object, object]", value)
+        return all(isinstance(key, str) and _is_json_value(item) for key, item in mapping.items())
+    return False

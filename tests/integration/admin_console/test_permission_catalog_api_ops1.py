@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Final, Protocol
+from typing import TYPE_CHECKING, Final, Protocol, cast
 
 import pytest
-from django.test import Client
+from django.db import connection
+from django.test import Client, RequestFactory
+from django.test.utils import CaptureQueriesContext
 from pydantic import TypeAdapter
 
-from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
-from easyauth.accounts.models import UserMirror
+from easyauth.admin_console.authorization_groups_api import console_authorization_groups
+from easyauth.admin_console.permission_catalog_data import authorization_groups_payload
 from easyauth.api.errors import JsonValue
 from easyauth.applications.models import (
     App,
@@ -20,13 +22,22 @@ from easyauth.applications.models import (
     Permission,
     PermissionGroup,
 )
+from tests.integration.admin_console.auth_helpers import (
+    authenticate_console_admin,
+    authenticate_console_user,
+)
 
 if TYPE_CHECKING:
     from django.conf import LazySettings
+    from django.http import HttpRequest
 
 pytestmark = pytest.mark.django_db
 
 JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+AUTHORIZATION_GROUP_QUERY_COUNT_GROUPS: Final = 3
+AUTHORIZATION_GROUP_PAYLOAD_MAX_QUERIES: Final = 8
+AUTHORIZATION_GROUP_LARGE_DIRECTORY_SIZE: Final = 105
+AUTHORIZATION_GROUP_PAGE_SIZE_UNDER_TEST: Final = 50
 
 
 @pytest.fixture(autouse=True)
@@ -35,7 +46,8 @@ def _console_superuser_groups(settings: LazySettings) -> None:  # pyright: ignor
 
 
 class HttpResponseLike(Protocol):
-    content: bytes
+    @property
+    def content(self) -> bytes: ...
 
 
 def test_ops1_owner_reads_permission_tree_catalog_for_owned_app() -> None:
@@ -106,14 +118,13 @@ def test_ops1_superuser_reads_authorization_group_grant_managed_scope_policy() -
     _ = ManagedScopePolicy.objects.create(
         app=app,
         target_type="app_default",
-        target_id=app.id,
         scope="MANAGED_USERS",
         resolver="dingtalk_manager_chain",
     )
     _ = ManagedScopePolicy.objects.create(
         app=app,
         target_type="authorization_group_grant",
-        target_id=direct_grant.id,
+        authorization_group_grant=direct_grant,
         scope="MANAGED_USERS",
         resolver="disabled",
         enabled=True,
@@ -121,7 +132,7 @@ def test_ops1_superuser_reads_authorization_group_grant_managed_scope_policy() -
 
     response = client.get(_api_url(app.app_key, "authorization-groups"))
 
-    body = _response_json_object(response)
+    body = _response_json_object(cast("HttpResponseLike", cast("object", response)))
     group_item = _json_object(_json_list(body["data"])[0])
     grants = [_json_object(grant) for grant in _json_list(group_item["grants"])]
     direct = next(grant for grant in grants if grant["permission"] == direct_permission.key)
@@ -133,6 +144,135 @@ def test_ops1_superuser_reads_authorization_group_grant_managed_scope_policy() -
     assert _json_object(inherited["effective_managed_scope_policy"])["resolver"] == (
         "dingtalk_manager_chain"
     )
+
+
+def test_authorization_group_payload_uses_prefetched_grants_and_policies() -> None:
+    app = App.objects.create(app_key="ops1-catalog-query-count", name="Catalog Query Count")
+    scope = AppScope.objects.create(app=app, key="MANAGED_USERS", name="Managed users")
+    default_policy = ManagedScopePolicy.objects.create(
+        app=app,
+        target_type="app_default",
+        scope=scope.key,
+        resolver="dingtalk_manager_chain",
+    )
+    _ = default_policy
+    for group_index in range(3):
+        group = AuthorizationGroup.objects.create(
+            app=app,
+            key=f"group-{group_index}",
+            kind="role",
+            name=f"Group {group_index}",
+        )
+        for permission_index in range(3):
+            permission = Permission.objects.create(
+                app=app,
+                key=f"permission.{group_index}.{permission_index}",
+                name=f"Permission {group_index}.{permission_index}",
+                supported_scopes=[scope.key],
+            )
+            grant = AuthorizationGroupGrant.objects.create(
+                authorization_group=group,
+                permission=permission,
+                scope_key=scope.key,
+            )
+            if permission_index == 0:
+                _ = ManagedScopePolicy.objects.create(
+                    app=app,
+                    target_type="authorization_group_grant",
+                    authorization_group_grant=grant,
+                    scope=scope.key,
+                    resolver="disabled",
+                    enabled=True,
+                )
+
+    with CaptureQueriesContext(connection) as queries:
+        payload = authorization_groups_payload(app)
+
+    assert len(cast("list[JsonValue]", payload["data"])) == AUTHORIZATION_GROUP_QUERY_COUNT_GROUPS
+    assert len(queries) <= AUTHORIZATION_GROUP_PAYLOAD_MAX_QUERIES
+
+
+def test_authorization_group_api_uses_bounded_pagination_and_query_count() -> None:
+    app = App.objects.create(app_key="ops1-catalog-large-authz", name="Large Authz")
+    scope = AppScope.objects.create(app=app, key="SELF", name="Self")
+    permission = Permission.objects.create(
+        app=app,
+        key="large.read",
+        name="Large Read",
+        supported_scopes=[scope.key],
+    )
+    groups = [
+        AuthorizationGroup(
+            app=app,
+            key=f"group-{index:03d}",
+            kind="role",
+            name=f"Group {index:03d}",
+            is_active=index % 2 == 0,
+        )
+        for index in range(AUTHORIZATION_GROUP_LARGE_DIRECTORY_SIZE)
+    ]
+    created_groups = AuthorizationGroup.objects.bulk_create(groups)
+    _ = AuthorizationGroupGrant.objects.bulk_create(
+        AuthorizationGroupGrant(
+            authorization_group=group,
+            permission=permission,
+            scope_key=scope.key,
+        )
+        for group in created_groups
+    )
+
+    request = _superuser_request(
+        "ops1-catalog-large-authz-admin",
+        query={
+            "include_inactive": "true",
+            "page": "2",
+            "page_size": str(AUTHORIZATION_GROUP_PAGE_SIZE_UNDER_TEST),
+        },
+    )
+
+    with CaptureQueriesContext(connection) as queries:
+        response = console_authorization_groups(
+            request,
+            app.app_key,
+        )
+
+    body = _response_json_object(cast("HttpResponseLike", cast("object", response)))
+    pagination = _json_object(body["pagination"])
+    data = _json_list(body["data"])
+    assert response.status_code == HTTPStatus.OK
+    assert len(data) == AUTHORIZATION_GROUP_PAGE_SIZE_UNDER_TEST
+    assert pagination == {
+        "page": 2,
+        "page_size": AUTHORIZATION_GROUP_PAGE_SIZE_UNDER_TEST,
+        "total_items": AUTHORIZATION_GROUP_LARGE_DIRECTORY_SIZE,
+        "total_pages": 3,
+    }
+    assert len(queries) <= AUTHORIZATION_GROUP_PAYLOAD_MAX_QUERIES
+
+
+def test_authorization_group_api_preserves_status_filter_under_pagination() -> None:
+    app = App.objects.create(app_key="ops1-catalog-status-filter", name="Status Filter")
+    _ = AuthorizationGroup.objects.create(app=app, key="active", kind="role", name="Active")
+    _ = AuthorizationGroup.objects.create(
+        app=app,
+        key="inactive",
+        kind="role",
+        name="Inactive",
+        is_active=False,
+    )
+
+    response = console_authorization_groups(
+        _superuser_request(
+            "ops1-catalog-status-filter-admin",
+            query={"status": "inactive", "include_inactive": "false"},
+        ),
+        app.app_key,
+    )
+
+    body = _response_json_object(cast("HttpResponseLike", cast("object", response)))
+    assert response.status_code == HTTPStatus.OK
+    assert [_json_object(item)["key"] for item in _json_list(body["data"])] == ["inactive"]
+    assert _json_object(body["pagination"])["total_items"] == 1
 
 
 @pytest.mark.parametrize(
@@ -169,7 +309,7 @@ def test_ops1_authorization_group_catalog_preserves_grant_resolver(
     _ = ManagedScopePolicy.objects.create(
         app=app,
         target_type="authorization_group_grant",
-        target_id=grant.id,
+        authorization_group_grant=grant,
         scope=scope.key,
         resolver=resolver,
     )
@@ -239,19 +379,18 @@ def _json_list(value: JsonValue) -> list[JsonValue]:
 
 
 def _logged_in_user(username: str) -> Client:
-    user, _created = UserMirror.objects.get_or_create(authentik_user_id=username)
     client = Client(HTTP_HOST="localhost")
-    session = client.session
-    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
-    session.save()
-    return client
+    return authenticate_console_user(client, username)
 
 
 def _logged_in_superuser(username: str) -> Client:
-    user, _created = UserMirror.objects.get_or_create(authentik_user_id=username)
     client = Client(HTTP_HOST="localhost")
-    session = client.session
-    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
-    session["easyauth_authentik_groups"] = ["easyauth-admins"]
-    session.save()
+    _ = authenticate_console_admin(client, username)
     return client
+
+
+def _superuser_request(username: str, *, query: dict[str, str]) -> HttpRequest:
+    client = _logged_in_superuser(username)
+    request = RequestFactory().get("/console/api/v1/apps/example/authorization-groups", data=query)
+    request.session = client.session
+    return request

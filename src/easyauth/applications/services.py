@@ -42,12 +42,6 @@ class IssuedStaticToken:
 
 
 @dataclass(frozen=True, slots=True)
-class StaticTokenIssue:
-    credential_id: int
-    plaintext_token: str
-
-
-@dataclass(frozen=True, slots=True)
 class StaticTokenAuthenticationError(Exception):
     @override
     def __str__(self) -> str:
@@ -118,49 +112,26 @@ class AppCredentialService:
         except (StaticTokenAuthenticationError, StaticTokenAppDisabledError):
             return None
 
-
-class StaticTokenService:
     @staticmethod
-    def create_token(
-        *,
-        app: App,
-        name: str,
-        capabilities: Sequence[str] = (),
-    ) -> StaticTokenIssue:
-        issued_token = AppCredentialService.create_static_token(
-            app=app,
-            name=name,
-            capabilities=capabilities,
-        )
-        return StaticTokenIssue(
-            credential_id=_model_id(issued_token.credential),
-            plaintext_token=issued_token.plaintext_token,
-        )
-
-    @staticmethod
-    def rotate_token(*, credential_id: int) -> StaticTokenIssue:
-        credential = AppCredential.objects.select_related("app").get(id=credential_id)
-        issued_token = AppCredentialService.rotate_static_token(
-            app=credential.app,
-            name=credential.name,
-            previous_credential_id=credential_id,
-            capabilities=credential.capabilities,
-        )
-        return StaticTokenIssue(
-            credential_id=_model_id(issued_token.credential),
-            plaintext_token=issued_token.plaintext_token,
-        )
-
-    @staticmethod
-    def authenticate(plaintext_token: str) -> AppPrincipal:
+    def authenticate_static_token_or_raise(plaintext_token: str) -> AppPrincipal:
         try:
             return _authenticate_static_token(plaintext_token)
         except StaticTokenAppDisabledError as error:
             raise StaticTokenAuthenticationError from error
 
     @staticmethod
-    def authenticate_for_api(plaintext_token: str) -> AppPrincipal:
+    def authenticate_static_token_for_api(plaintext_token: str) -> AppPrincipal:
         return _authenticate_static_token(plaintext_token)
+
+    @staticmethod
+    def rotate_static_token_by_id(credential_id: int) -> IssuedStaticToken:
+        credential = AppCredential.objects.select_related("app").get(id=credential_id)
+        return AppCredentialService.rotate_static_token(
+            app=credential.app,
+            name=credential.name,
+            previous_credential_id=credential_id,
+            capabilities=credential.capabilities,
+        )
 
 
 def _generate_static_token() -> str:
@@ -222,9 +193,12 @@ def _issue_static_token(
     capabilities: Sequence[str],
     audit_context: _StaticTokenAuditContext,
 ) -> IssuedStaticToken:
+    locked_app = App.objects.select_for_update().get(id=app.id)
+    if not locked_app.is_active:
+        raise StaticTokenAppDisabledError(app_id=_model_id(locked_app))
     plaintext_token = _generate_static_token()
     credential = AppCredential.objects.create(
-        app=app,
+        app=locked_app,
         credential_type=APP_CREDENTIAL_STATIC_KIND,
         name=name,
         capabilities=normalize_credential_capabilities(capabilities),

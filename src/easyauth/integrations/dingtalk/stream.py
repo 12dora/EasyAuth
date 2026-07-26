@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from hashlib import sha256
+from json import dumps
 from typing import TYPE_CHECKING, Final, cast, final, override
 
 from asgiref.sync import sync_to_async
@@ -10,11 +12,11 @@ from dingtalk_stream import AckMessage, Credential, DingTalkStreamClient, EventH
 from django.db import transaction
 
 from easyauth.applications.integration_settings import dingtalk_runtime_config
+from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.config.runtime_health import STREAM_ACK_HEARTBEAT, mark_heartbeat
 from easyauth.integrations.dingtalk.api_client import DingTalkNotConfiguredError
 from easyauth.integrations.models import DingTalkStreamEvent
 from easyauth.outbox.services import enqueue_task
-from easyauth.tasks.dingtalk_stream import PROCESS_STREAM_EVENT_TASK_NAME
 
 if TYPE_CHECKING:
     from dingtalk_stream import EventMessage
@@ -24,14 +26,22 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 STREAM_EVENT_MISSING_IDENTITY_MESSAGE: Final = "钉钉 Stream 事件缺少 event_id 或 event_type。"
+STREAM_EVENT_CONFLICT_MESSAGE: Final = "钉钉 Stream 事件 event_id 与已收事件冲突。"
 ACK_OK_MESSAGE: Final = "OK"
 ACK_DUPLICATE_MESSAGE: Final = "duplicate"
 ACK_PERSIST_FAILED_MESSAGE: Final = "event persist failed"
+AUDIT_ACTION_STREAM_EVENT_CONFLICT: Final = "dingtalk_stream_event_conflict"
+PROCESS_STREAM_EVENT_TASK_NAME: Final = "easyauth.dingtalk_stream.process_event"
 
 
 class StreamEventIdentityError(ValueError):
     def __init__(self) -> None:
         super().__init__(STREAM_EVENT_MISSING_IDENTITY_MESSAGE)
+
+
+class StreamEventConflictError(ValueError):
+    def __init__(self) -> None:
+        super().__init__(STREAM_EVENT_CONFLICT_MESSAGE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,12 +58,15 @@ def record_stream_event(
     born_time_ms: int | None,
     data: dict[str, JsonValue],
 ) -> StreamEventReceipt:
-    """把 Stream 事件写入收件箱并(仅首次)排队处理任务; 以 event_id 幂等。"""
+    """把 Stream 事件写入收件箱并排队处理任务; 以 event_id + 业务指纹幂等。"""
     if not event_id or not event_type:
         raise StreamEventIdentityError
     born_at = (
         datetime.fromtimestamp(born_time_ms / 1000, tz=UTC) if born_time_ms is not None else None
     )
+    data_sha256 = canonical_stream_data_sha256(data)
+    conflict_metadata: dict[str, JsonValue] | None = None
+    conflict_event_id = ""
     with transaction.atomic():
         event, created = DingTalkStreamEvent.objects.get_or_create(
             event_id=event_id,
@@ -62,16 +75,90 @@ def record_stream_event(
                 "corp_id": corp_id,
                 "born_at": born_at,
                 "data": data,
+                "data_sha256": data_sha256,
             },
         )
         event_pk = cast("int", event.pk)
-        # 重投也执行幂等写入: 可修补历史上业务行已存在但消息发布失败的缺口。
-        _ = enqueue_task(
-            event_key=f"dingtalk-stream:{event_id}",
-            task_name=PROCESS_STREAM_EVENT_TASK_NAME,
-            args=[event_pk],
-        )
+        if not created:
+            conflict_metadata = _stream_event_conflict_metadata(
+                event,
+                event_type=event_type,
+                corp_id=corp_id,
+                born_at=born_at,
+                data_sha256=data_sha256,
+            )
+            if conflict_metadata is not None:
+                conflict_event_id = event.event_id
+            else:
+                # 重投也执行幂等写入: 可修补历史上业务行已存在但消息发布失败的缺口。
+                _ = enqueue_task(
+                    event_key=f"dingtalk-stream:{event_id}",
+                    task_name=PROCESS_STREAM_EVENT_TASK_NAME,
+                    args=[event_pk],
+                )
+        else:
+            _ = enqueue_task(
+                event_key=f"dingtalk-stream:{event_id}",
+                task_name=PROCESS_STREAM_EVENT_TASK_NAME,
+                args=[event_pk],
+            )
+    if conflict_metadata is not None:
+        return _raise_stream_event_conflict(conflict_event_id, conflict_metadata)
     return StreamEventReceipt(event_pk=event_pk, created=created)
+
+
+def canonical_stream_data_sha256(data: dict[str, JsonValue]) -> str:
+    canonical = dumps(data, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _stream_event_conflict_metadata(
+    event: DingTalkStreamEvent,
+    *,
+    event_type: str,
+    corp_id: str,
+    born_at: datetime | None,
+    data_sha256: str,
+) -> dict[str, JsonValue] | None:
+    stored_hash = event.data_sha256 or canonical_stream_data_sha256(event.data)
+    if not event.data_sha256:
+        event.data_sha256 = stored_hash
+        event.save(update_fields=["data_sha256", "updated_at"])
+    same_identity = (
+        event.event_type == event_type
+        and event.corp_id == corp_id
+        and event.born_at == born_at
+        and stored_hash == data_sha256
+    )
+    if same_identity:
+        return None
+    return {
+        "stored_event_type": event.event_type,
+        "incoming_event_type": event_type,
+        "stored_corp_id": event.corp_id,
+        "incoming_corp_id": corp_id,
+        "stored_born_at": event.born_at.isoformat() if event.born_at else "",
+        "incoming_born_at": born_at.isoformat() if born_at else "",
+        "stored_data_sha256": stored_hash,
+        "incoming_data_sha256": data_sha256,
+    }
+
+
+def _raise_stream_event_conflict(
+    event_id: str,
+    metadata: dict[str, JsonValue],
+) -> StreamEventReceipt:
+    _ = AuditService.record(
+        AuditRecord(
+            actor_type="system",
+            actor_id="dingtalk_stream",
+            action=AUDIT_ACTION_STREAM_EVENT_CONFLICT,
+            target_type="dingtalk_stream_event",
+            target_id=event_id,
+            metadata=metadata,
+        )
+    )
+    raise StreamEventConflictError
 
 
 @final

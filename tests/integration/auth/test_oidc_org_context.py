@@ -22,6 +22,7 @@ def test_bind_oidc_session_updates_dingtalk_org_context() -> None:
         groups=("EasyAuth Admins",),
         dingtalk_org={
             "name": "钉钉张三",
+            "source_slug": "dingtalk",
             "corp_id": "ding-corp",
             "user_id": "ding-user",
             "departments": [{"name": "销售部"}],
@@ -36,10 +37,13 @@ def test_bind_oidc_session_updates_dingtalk_org_context() -> None:
 
     user = bind_oidc_session(request, claims)
 
+    assert user.dingtalk_source_slug == "dingtalk"
     assert user.dingtalk_corp_id == "ding-corp"
     assert user.dingtalk_userid == "ding-user"
     assert user.name == "张三"
     assert user.department == "销售部"
     assert user.manager_userid == "ding-manager"
-    assert request.session["easyauth_authentik_groups"] == ["EasyAuth Admins"]
-    assert UserMirror.objects.get(authentik_user_id="ak-user").dingtalk_corp_id == "ding-corp"
+    assert "easyauth_authentik_groups" not in request.session
+    stored = UserMirror.objects.get(authentik_user_id="ak-user")
+    assert stored.dingtalk_source_slug == "dingtalk"
+    assert stored.dingtalk_corp_id == "ding-corp"

@@ -69,11 +69,11 @@ SDK `0.3.0` 提供用户目录、钉钉工作通知与结构化错误语义。
 - 必须把权限查询、`directory`、`notify` 拆分为三条凭据和三个 client 实例，
   不得复用 token；权限查询凭据不授予平台 capability，目录凭据仅授予 `directory`，
   通知凭据仅授予 `notify`。
-- 兼容升级迁移 `applications/0025_credential_capabilities.py` 会把当时已开启的
-  App capabilities 回填给该 App **全部 active 静态凭据和 OAuth 凭据**，
-  以避免升级瞬间打断既有调用。只有迁移后新建凭据默认为空 capability 集。
-  上线后超管与 App owner 必须立即审计回填结果，拆分权限/directory/notify 凭据，
-  并撤销旧 permission token 上多余的 `directory` / `notify` grant。
+- 升级迁移 `applications/0025_credential_capabilities.py` 采用 fail-fast
+  前置条件：升级前不得存在“已启用 App capability 且该 App 仍有 active
+  静态凭据或 OAuth 凭据”的旧状态。迁移不会自动授权任何 credential capability；
+  App owner 必须对每条 credential 显式授予所需 capability，并拆分
+  权限/directory/notify 凭据。
 - 下游必须在后端根据业务事件和权限规则计算收件人；不得提供「前端传任意
   `userRef` 即调用 `send_notification`」的透传接口。`notify` 凭据能通知任意 active 员工，
   即使该员工没有下游 App 权限。
@@ -93,11 +93,10 @@ user_ref = user["user_ref"]
 department_ref = user["departments"][0]["department_ref"]
 ```
 
-裸 Authentik `user_id`、旧 `dt:<钉钉userid>` 和原始部门 ID 仅作唯一匹配兼容；
-跨企业歧义时 directory endpoint 返回 `409`，畸形 scoped ref 返回 `422`。notify
-请求体合法时，畸形/未知/legacy 歧义/scope mismatch 不会把整个 POST 变成 409/422，
-而是在 202 后成为逐收件人 `USER_NOT_FOUND` / `USER_AMBIGUOUS` /
-`USER_SCOPE_MISMATCH`。
+裸 Authentik `user_id`、未作用域 `dt:<钉钉userid>` 和原始部门 ID 不再是目录引用。
+directory endpoint 遇到畸形或未作用域 ref 返回 `422`。notify 请求体合法时，
+畸形、未知或 scope mismatch 不会把整个 POST 变成 409/422，而是在 202 后成为
+逐收件人 `USER_NOT_FOUND` / `USER_SCOPE_MISMATCH`。
 
 ### 推荐链路: 先查目录再通知
 
@@ -163,7 +162,7 @@ second = directory_client.search_directory_users(
 ```
 
 三个 client 必须使用三个不同 token。目录/通知方法的 `user_ref`、`department_id`、
-`manager_id` 和 `recipients` 都传服务端返回的 opaque ref，不构造 legacy `dt:`。
+`manager_id` 和 `recipients` 都传服务端返回的 opaque ref，不自行构造 `dt:`。
 
 部门和主管过滤也传 scoped ref：
 
@@ -195,7 +194,7 @@ reports = directory_client.search_directory_users(
   最大 v1 canonical ref。每个去重后保留的收件人行以首个输入为 `raw_ref`，原样
   持久化和回显且不截断；被合并的重复引用不另建行。
 - 解析成功后按 `(source_slug, corp_id, dingtalk_user_id)` 去重；同 userid 位于不同
-  source/corp 时仍是不同身份。缺少完整 scope 的历史 legacy 行使用独立兼容约束。
+  source/corp 时仍是不同身份。不再保留缺少完整 scope 的旧形态兼容约束。
 - `sent` 是可依赖的最低保证。`delivered` 仅表示钉钉明确的 send-result 回执
   将用户归类进 read/unread 名单，不表示已读、审批知悉或法务送达。
   无明确名单归类时保持 `sent`，超过 24 小时也不会乐观推断为 `delivered`。
@@ -213,7 +212,7 @@ reports = directory_client.search_directory_users(
 | 情形 | 处理 |
 |---|---|
 | `404` | 用户不存在或没有主管；按 `details.reason` 做业务分支，不重试 |
-| `409` | 幂等键载荷冲突、目录快照变化，或 directory endpoint 的 legacy ref 歧义；修正请求、改传 scoped ref 或从首页重拉，不原样重试 |
+| `409` | 幂等键载荷冲突或目录快照变化；修正请求或从首页重拉，不原样重试 |
 | `422` | 永久请求体错误，或 directory endpoint 的畸形 scoped ref；notify 内单个无效 ref 见逐收件人状态，不重试 |
 | `429` | `retryable=true`；必须遵守 `retry_after` / `retry_after_seconds` |
 | `401` / `403` | 凭据、App capability 或 credential capability 配置问题；停止重试并告警 |

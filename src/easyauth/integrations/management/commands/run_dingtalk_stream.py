@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import threading
 from typing import Final, final, override
 
@@ -10,6 +11,7 @@ from easyauth.integrations.dingtalk.api_client import DingTalkNotConfiguredError
 from easyauth.integrations.dingtalk.stream import build_stream_client
 
 STREAM_HEARTBEAT_INTERVAL_SECONDS: Final = 15.0
+LOGGER = logging.getLogger(__name__)
 
 
 @final
@@ -29,7 +31,7 @@ class Command(BaseCommand):
         self.stdout.write("钉钉 Stream 消费进程启动, 等待事件推送……")
         stop = threading.Event()
         heartbeat = threading.Thread(
-            target=_heartbeat_loop,
+            target=heartbeat_loop,
             args=(stop,),
             name="easyauth-stream-heartbeat",
             daemon=True,
@@ -42,7 +44,10 @@ class Command(BaseCommand):
             heartbeat.join(timeout=STREAM_HEARTBEAT_INTERVAL_SECONDS)
 
 
-def _heartbeat_loop(stop: threading.Event) -> None:
+def heartbeat_loop(stop: threading.Event) -> None:
     while not stop.is_set():
-        mark_heartbeat(STREAM_PROCESS_HEARTBEAT)
+        try:
+            mark_heartbeat(STREAM_PROCESS_HEARTBEAT)
+        except Exception:
+            LOGGER.exception("钉钉 Stream 心跳写入失败, 将在下一轮继续尝试")
         _ = stop.wait(STREAM_HEARTBEAT_INTERVAL_SECONDS)

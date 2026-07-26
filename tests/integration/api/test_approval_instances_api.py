@@ -9,7 +9,7 @@ from django.test import Client
 
 from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import App
-from easyauth.applications.services import StaticTokenService
+from easyauth.applications.services import AppCredentialService
 from easyauth.workflows.models import ApprovalInstance, ApprovalTemplate
 
 if TYPE_CHECKING:
@@ -18,6 +18,7 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.django_db
 
 FORM_VALUE: Final = "1000"
+EXPECTED_APPROVAL_INSTANCE_COUNT: Final = 2
 
 
 class HttpResponseLike(Protocol):
@@ -28,16 +29,16 @@ class HttpResponseLike(Protocol):
 
 
 class _FakeDingTalkClient:
-    _seq: ClassVar[int] = 0
+    seq: ClassVar[int] = 0
 
     def create_process_instance(self, **_kwargs: object) -> str:
-        type(self)._seq += 1
-        return f"proc-api-{type(self)._seq}"
+        type(self).seq += 1
+        return f"proc-api-{type(self).seq}"
 
 
 def _app_with_token(app_key: str) -> tuple[App, str]:
     app = App.objects.create(app_key=app_key, name=app_key)
-    issue = StaticTokenService.create_token(app=app, name="integration")
+    issue = AppCredentialService.create_static_token(app=app, name="integration")
     return app, issue.plaintext_token
 
 
@@ -51,6 +52,8 @@ def _template_and_originator(app: App) -> None:
     )
     _ = UserMirror.objects.create(
         authentik_user_id="api-originator",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="api-corp",
         dingtalk_userid="api-originator-dt",
     )
 
@@ -183,6 +186,8 @@ def test_create_rejects_unknown_template_and_bad_token() -> None:
     app, token = _app_with_token("api-invalid-app")
     _ = UserMirror.objects.create(
         authentik_user_id="api-invalid-originator",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="api-corp",
         dingtalk_userid="api-invalid-dt",
     )
     client = Client()
@@ -283,8 +288,8 @@ def test_list_approval_instances_filters_and_scopes_to_app(
     body = listed.json()
     assert listed.status_code == HTTPStatus.OK
     assert isinstance(body["data"], list)
-    assert len(body["data"]) == 2
-    assert body["pagination"]["total_items"] == 2
+    assert len(body["data"]) == EXPECTED_APPROVAL_INSTANCE_COUNT
+    assert body["pagination"]["total_items"] == EXPECTED_APPROVAL_INSTANCE_COUNT
     biz_keys = {item["biz_key"] for item in body["data"]}
     assert biz_keys == {"list-1", "list-2"}
     assert "other-biz" not in biz_keys

@@ -86,9 +86,6 @@ NOTIFY_ERROR_DINGTALK_DAILY_LIMIT: Final = "DINGTALK_DAILY_LIMIT"
 NOTIFY_ERROR_EXHAUSTED: Final = "EXHAUSTED"
 
 CREDENTIAL_TYPE_STATIC_TOKEN: Final = "static_token"  # noqa: S105 - 凭据类型枚举, 非密钥。
-CREDENTIAL_TYPE_OAUTH_CLIENT: Final = "oauth_client"
-
-
 class NotifyMessage(models.Model):
     # 一次 POST /notify/messages 调用 = 一行。公开 message_id 即 UUID 主键。
     if TYPE_CHECKING:
@@ -183,6 +180,41 @@ class NotifyMessage(models.Model):
                 condition=Q(status__in=NOTIFY_MESSAGE_STATUS_VALUES),
                 name="notify_message_status_supported",
             ),
+            models.CheckConstraint(
+                condition=Q(recipient_sent__lte=models.F("recipient_total"))
+                & Q(recipient_failed__lte=models.F("recipient_total"))
+                & Q(recipient_sent__lte=models.F("recipient_total") - models.F("recipient_failed")),
+                name="notify_message_counts_within_total",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(claim_token="", lease_expires_at__isnull=True)
+                    | (~Q(claim_token="") & Q(lease_expires_at__isnull=False))
+                ),
+                name="notify_message_claim_lease_pair",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        status__in=(
+                            NOTIFY_MESSAGE_STATUS_COMPLETED,
+                            NOTIFY_MESSAGE_STATUS_PARTIALLY_FAILED,
+                            NOTIFY_MESSAGE_STATUS_FAILED,
+                        ),
+                        completed_at__isnull=False,
+                        claim_token="",
+                        lease_expires_at__isnull=True,
+                    )
+                    | Q(
+                        status__in=(
+                            NOTIFY_MESSAGE_STATUS_PENDING,
+                            NOTIFY_MESSAGE_STATUS_SENDING,
+                        ),
+                        completed_at__isnull=True,
+                    )
+                ),
+                name="notify_message_terminal_shape",
+            ),
         ]
         indexes: ClassVar[list[models.Index]] = [
             models.Index(fields=["app", "status"], name="notify_msg_app_status_idx"),
@@ -211,9 +243,9 @@ class NotifyRecipient(models.Model):
         on_delete=models.CASCADE,
         related_name="recipients",
     )
-    # 调用方 opaque 原始引用(原样回显): Authentik sub、legacy dt 或 canonical scoped dt ref。
+    # 调用方 opaque 原始引用(原样回显): Authentik sub 或 canonical scoped dt ref。
     raw_ref: models.CharField[str, str] = models.CharField(max_length=NOTIFY_RAW_REF_MAX_CHARS)
-    # 解析结果: 绑定的 UserMirror(可空: dt: 引用可能没有登录过的镜像行)
+    # 解析结果: 绑定的 UserMirror(可空: scoped dt 引用可能没有登录过的镜像行)
     user: models.ForeignKey[UserMirror | None, UserMirror | None] = models.ForeignKey(
         UserMirror,
         on_delete=models.PROTECT,
@@ -276,17 +308,26 @@ class NotifyRecipient(models.Model):
                 ),
                 name="notify_recipient_scoped_target_unique",
             ),
-            models.UniqueConstraint(
-                fields=["message", "dingtalk_userid"],
-                condition=(
-                    ~Q(dingtalk_userid="")
-                    & (Q(dingtalk_source_slug="") | Q(dingtalk_corp_id=""))
-                ),
-                name="notify_recipient_legacy_target_unique",
-            ),
             models.CheckConstraint(
                 condition=Q(status__in=NOTIFY_RECIPIENT_STATUS_VALUES),
                 name="notify_recipient_status_supported",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(status=NOTIFY_RECIPIENT_STATUS_DELIVERED, delivered_at__isnull=False)
+                    | ~Q(status=NOTIFY_RECIPIENT_STATUS_DELIVERED)
+                ),
+                name="notify_recipient_delivered_shape",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    ~Q(status=NOTIFY_RECIPIENT_STATUS_FAILED)
+                    | (
+                        Q(status=NOTIFY_RECIPIENT_STATUS_FAILED)
+                        & ~Q(error_code="")
+                    )
+                ),
+                name="notify_recipient_failed_error_code_shape",
             ),
         ]
         indexes: ClassVar[list[models.Index]] = [

@@ -22,6 +22,7 @@ def logged_out_redirect(request: HttpRequest) -> HttpResponseRedirect:
 
 
 def mark_browser_logged_out(response: HttpResponse) -> None:
+    debug: object = getattr(settings, "DEBUG", False)
     response.set_cookie(
         LOGGED_OUT_COOKIE_NAME,
         "1",
@@ -29,7 +30,7 @@ def mark_browser_logged_out(response: HttpResponse) -> None:
         max_age=LOGGED_OUT_COOKIE_MAX_AGE_SECONDS,
         samesite="Lax",
         # 与生产的 SESSION_COOKIE_SECURE/CSRF_COOKIE_SECURE 口径一致(DEBUG 本地 http 不加 Secure)。
-        secure=not settings.DEBUG,
+        secure=debug is not True,
     )
 
 

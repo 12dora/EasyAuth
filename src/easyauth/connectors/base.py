@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, ClassVar
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
+    from collections.abc import Iterable, Mapping
 
     from easyauth.accounts.models import UserMirror
     from easyauth.applications.ops_models import JsonValue
@@ -34,6 +34,12 @@ class ExternalGroup:
     # ref 是映射表 external_ref 使用的稳定标识(NetBird 取组名), name 用于展示。
     ref: str
     name: str
+
+
+@dataclass(frozen=True, slots=True)
+class ExternalGroupPage:
+    groups: tuple[ExternalGroup, ...]
+    cursor: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,6 +82,12 @@ class BaseConnector(ABC):
 
     @abstractmethod
     def list_external_groups(self, config: dict[str, JsonValue]) -> list[ExternalGroup]: ...
+
+    @abstractmethod
+    def iter_external_group_pages(
+        self,
+        config: dict[str, JsonValue],
+    ) -> Iterable[ExternalGroupPage]: ...
 
     @abstractmethod
     def reconcile(self, instance: ConnectorInstance, desired: DesiredState) -> ReconcileReport: ...

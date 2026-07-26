@@ -20,18 +20,18 @@ from easyauth.connectors.models import (
 )
 from easyauth.connectors.services import (
     RECONCILE_QUEUE_CLAIM_TIMEOUT_SECONDS,
+    RECONCILE_TASK_SOFT_TIME_LIMIT_SECONDS,
+    RECONCILE_TASK_TIME_LIMIT_SECONDS,
     reconcile_instance,
+    refresh_external_groups,
 )
 
 SCHEDULE_RECONCILES_TASK_NAME: Final = "easyauth.connectors.schedule_reconciles"
 PRUNE_SYNC_RUNS_TASK_NAME: Final = "easyauth.connectors.prune_sync_runs"
+REFRESH_EXTERNAL_GROUPS_TASK_NAME: Final = "easyauth.connectors.refresh_external_groups"
 
 # 每实例保留的运行记录条数(方案 §3.3: 保留最近 N 条)。
 SYNC_RUN_RETENTION_PER_INSTANCE: Final = 200
-RECONCILE_TASK_SOFT_TIME_LIMIT_SECONDS: Final = 840
-RECONCILE_TASK_TIME_LIMIT_SECONDS: Final = 900
-
-
 @shared_task(
     name=RECONCILE_TASK_NAME,
     acks_late=True,
@@ -43,6 +43,23 @@ def reconcile_connector_instance_task(instance_id: int) -> str:
     if run is None:
         return "skipped"
     return run.status
+
+
+@shared_task(name=REFRESH_EXTERNAL_GROUPS_TASK_NAME, acks_late=True)
+def refresh_connector_external_groups_task(instance_id: int) -> dict[str, int | str]:
+    result = refresh_external_groups(instance_id)
+    instance = (
+        ConnectorInstance.objects.filter(id=instance_id)
+        .only("external_groups_refresh_status", "external_groups_refresh_cursor")
+        .first()
+    )
+    return {
+        "active_count": result.active_count,
+        "deactivated_count": result.deactivated_count,
+        "refreshed_at": result.refreshed_at.isoformat(),
+        "status": "" if instance is None else instance.external_groups_refresh_status,
+        "cursor": "" if instance is None else instance.external_groups_refresh_cursor,
+    }
 
 
 @shared_task(name=SCHEDULE_RECONCILES_TASK_NAME)

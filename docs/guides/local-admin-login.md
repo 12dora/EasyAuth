@@ -1,8 +1,9 @@
 # 本地超级管理员登录(/auth/local/)
 
 不依赖 Authentik 的兜底登录通道:密码 + 二次验证(TOTP 验证器 / 通行密钥),
-验证通过后以 `local-admin:<username>` 为 subject 绑定会话,groups 取
-`EASYAUTH_CONSOLE_SUPERUSER_GROUPS`,因此直接是 console 超管。
+验证通过后以 `local-admin:<username>` 为 subject 绑定会话。控制台请求期必须通过本地管理员
+专用 session 标志、账号 `session_version` 和至少一种二次因子校验；校验通过后才是
+console 超管。
 
 ## 入口
 
@@ -44,12 +45,13 @@ DJANGO_DEBUG=1 .venv/bin/python manage.py create_local_admin admin --password ad
 
 ## 绑定二次验证
 
-1. 用密码登录(账号还没有任何二次验证方式时直接进入 console)。
-2. 打开 `/auth/local/security/`:
+1. 用密码登录。账号还没有任何二次验证方式时会直接进入 `/auth/local/security/`，此时不能形成
+   控制台 actor。
+2. 在 `/auth/local/security/` 绑定至少一种方式:
    - TOTP:「开始绑定验证器」→ 用验证器应用扫码(或手动输入密钥)→ 回填 6 位验证码确认启用。
      停用需再输入一次当前有效验证码。
    - 通行密钥:填写名称(可选)→「注册通行密钥」→ 完成浏览器指纹/面容/安全密钥流程。
-3. 绑定任一方式后,下次登录密码通过后会进入二次验证页;两种方式都绑定时可切换。
+3. 绑定任一方式后即可访问控制台；下次登录密码通过后会进入二次验证页。两种方式都绑定时可切换。
 
 ## WebAuthn / RP ID 注意事项
 
@@ -59,9 +61,15 @@ DJANGO_DEBUG=1 .venv/bin/python manage.py create_local_admin admin --password ad
   - `EASYAUTH_WEBAUTHN_ORIGINS`(默认 `http://localhost:8001`,逗号分隔):必须与浏览器地址栏完全一致。
 - **浏览器必须用 `http://localhost:8001` 访问**;`127.0.0.1` 不属于 RP ID `localhost`,
   通行密钥注册/验证会直接失败(TOTP 不受影响)。
+- 通行密钥认证完成时会在数据库事务中锁定对应凭据,用锁内最新 `sign_count` 完成 WebAuthn
+  校验并写回新计数。数据库约束拒绝负数计数,避免并发认证把计数回退。
 
 ## 安全与审计
 
+- 本地管理员改密、停用/启用账号、启停 TOTP、增删通行密钥等会话敏感操作会推进
+  `session_version`;旧会话访问 `/console/` 或控制台 API 会被统一清理并视为登录失效。
+- 没有 TOTP 且没有通行密钥的本地管理员会话只能访问安全设置和改密/登出链路,不能访问控制台
+  页面或控制台 API。
 - 登录失败按用户名节流(5 次 / 5 分钟,含二次验证失败与改密时当前密码错误)。
 - 审计事件(append-only,actor_type=`local_admin`):`admin_local_login_succeeded` /
   `admin_local_login_failed` / `admin_local_second_factor_failed` / `admin_local_totp_enabled` /

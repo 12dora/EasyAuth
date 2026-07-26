@@ -9,6 +9,7 @@ from django.test import Client
 
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import USER_STATUS_DISABLED, UserMirror
+from tests.integration.admin_console.auth_helpers import authenticate_console_admin
 
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
@@ -153,7 +154,6 @@ def _logged_in_console_user(username: str) -> Client:
     client = Client(HTTP_HOST="localhost")
     session = client.session
     session[AUTHENTIK_SESSION_KEY] = username
-    session["easyauth_authentik_groups"] = []
     session.save()
     return client
 
@@ -161,5 +161,5 @@ def _logged_in_console_user(username: str) -> Client:
 def _logged_in_superuser(username: str) -> Client:
     _ = User.objects.create_superuser(username=username, password=LOGIN_VALUE)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    authenticate_console_admin(client, username)
     return client

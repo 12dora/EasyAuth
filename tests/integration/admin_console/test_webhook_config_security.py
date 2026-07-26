@@ -13,6 +13,7 @@ from easyauth.applications.models import App, AppMembership
 from easyauth.config import net
 from easyauth.config.net import ValidatedHttpsUrl
 from easyauth.webhooks.models import AppWebhookConfig
+from tests.integration.admin_console.auth_helpers import authenticate_console_admin
 
 pytestmark = pytest.mark.django_db
 
@@ -94,7 +95,7 @@ def _owner_client_and_app(suffix: str) -> tuple[Client, App]:
     username = f"{suffix}-owner"
     _ = User.objects.create_user(username=username, password=LOGIN_PASSWORD)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_PASSWORD) is True
+    authenticate_console_admin(client, username)
     app = App.objects.create(app_key=f"{suffix}-app", name=suffix)
     _ = AppMembership.objects.create(app=app, user_id=username, role="owner")
     return client, app

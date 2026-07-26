@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final, final
+from typing import Final, cast, final
 
 from django.db import transaction
 
@@ -56,7 +56,7 @@ class AuthentikSyncService:
     def apply_directory_status(user: UserMirror, status: UserStatus) -> AuthentikSyncResult:
         # 按目录事实回灌用户状态; 离职/停用用户立即撤销 current 授权。
         with transaction.atomic():
-            locked = UserMirror.objects.select_for_update().get(pk=user.pk)
+            locked = UserMirror.objects.select_for_update().get(pk=cast("int", user.pk))
             was_non_active = is_non_active_status(locked.status)
             if locked.status != status:
                 locked.status = status
@@ -78,6 +78,7 @@ def _upsert_user(profile: AuthentikUserProfile) -> _UserUpsertResult:
             "email": profile.email,
             "department": profile.department,
             "status": profile.status,
+            "dingtalk_source_slug": profile.dingtalk_source_slug,
             "dingtalk_corp_id": profile.dingtalk_corp_id,
             "dingtalk_userid": profile.dingtalk_userid,
             "dingtalk_union_id": profile.dingtalk_union_id,
@@ -93,6 +94,7 @@ def _upsert_user(profile: AuthentikUserProfile) -> _UserUpsertResult:
     user.email = profile.email
     user.department = profile.department
     user.status = profile.status
+    user.dingtalk_source_slug = profile.dingtalk_source_slug
     user.dingtalk_corp_id = profile.dingtalk_corp_id
     user.dingtalk_userid = profile.dingtalk_userid
     user.dingtalk_union_id = profile.dingtalk_union_id
@@ -105,6 +107,7 @@ def _upsert_user(profile: AuthentikUserProfile) -> _UserUpsertResult:
             "email",
             "department",
             "status",
+            "dingtalk_source_slug",
             "dingtalk_corp_id",
             "dingtalk_userid",
             "dingtalk_union_id",

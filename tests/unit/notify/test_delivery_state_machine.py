@@ -3,6 +3,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock
 
 import pytest
+from django.db import IntegrityError
 from django.utils import timezone
 
 from easyauth.accounts.models import DingTalkUserMirror, UserMirror
@@ -11,6 +12,9 @@ from easyauth.integrations.dingtalk.api_client import (
     DingTalkApiRequestError,
     DingTalkApiUnavailableError,
 )
+from easyauth.notify.acceptance import accept_notify_message
+from easyauth.notify.contracts import MAX_DELIVERY_ATTEMPTS, NOTIFY_THROTTLE_RETRY_SECONDS
+from easyauth.notify.delivery import deliver_message
 from easyauth.notify.models import (
     CREDENTIAL_TYPE_STATIC_TOKEN,
     NOTIFY_ERROR_DINGTALK_REJECTED,
@@ -28,15 +32,9 @@ from easyauth.notify.models import (
     NotifyMessage,
     NotifyRecipient,
 )
-from easyauth.notify.services import (
-    MAX_DELIVERY_ATTEMPTS,
-    NOTIFY_THROTTLE_RETRY_SECONDS,
-    accept_notify_message,
-    deliver_message,
-)
 from easyauth.outbox.models import OutboxEvent
 
-pytestmark = pytest.mark.django_db
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("notification_channel_for_apps")]
 
 CORP_ID = "corp-delivery"
 SOURCE = "dingtalk-primary"
@@ -52,6 +50,7 @@ def _seed_user(*, authentik: str, dingtalk: str) -> None:
     )
     _ = UserMirror.objects.create(
         authentik_user_id=authentik,
+        dingtalk_source_slug=SOURCE,
         dingtalk_userid=dingtalk,
         dingtalk_corp_id=CORP_ID,
     )
@@ -87,10 +86,29 @@ def _patch_dingtalk(
         return client, 1001
 
     monkeypatch.setattr(
-        "easyauth.notify.services._dingtalk_client_and_agent",
+        "easyauth.notify.channel_config.dingtalk_client_and_agent",
         fake_client_and_agent,
     )
     return client
+
+
+def test_notify_message_rejects_terminal_status_without_completed_at() -> None:
+    app = App.objects.create(app_key="notify-terminal-db", name="Terminal DB")
+    channel = AppNotificationChannel.objects.get(app=app, is_active=True)
+
+    with pytest.raises(IntegrityError):
+        _ = NotifyMessage.objects.create(
+            app=app,
+            channel=channel,
+            template=NOTIFY_TEMPLATE_TEXT,
+            content="x",
+            payload_hash="a" * 64,
+            status=NOTIFY_MESSAGE_STATUS_COMPLETED,
+            recipient_total=1,
+            recipient_sent=1,
+            requested_credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
+            requested_credential_id=1,
+        )
 
 
 def test_deliver_all_success_completed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -140,7 +158,7 @@ def test_delivery_uses_channel_frozen_at_accept_time(monkeypatch: pytest.MonkeyP
         return client, int(channel.agent_id)
 
     monkeypatch.setattr(
-        "easyauth.notify.services._dingtalk_client_and_agent",
+        "easyauth.notify.channel_config.dingtalk_client_and_agent",
         client_for_channel,
     )
     deliver_message(str(message.id), 1)

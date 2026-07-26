@@ -21,7 +21,7 @@
       "delivered_at": "2026-07-16T10:01:00+08:00"
     },
     {
-      "raw_ref": "dt:formeruser01",
+      "raw_ref": "dt:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:Zm9ybWVydXNlcjAx",
       "user_id": null,
       "dingtalk_user_id": "formeruser01",
       "status": "failed",

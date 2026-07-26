@@ -14,13 +14,13 @@ from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode
 from easyauth.applications.models import (
     App,
+    AppCredential,
     AppScope,
-    AppStaticToken,
     AuthorizationGroup,
     AuthorizationGroupGrant,
     Permission,
 )
-from easyauth.applications.services import StaticTokenService
+from easyauth.applications.services import AppCredentialService
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import (
     GRANT_STATUS_EXPIRED,
@@ -55,7 +55,7 @@ def test_permission_query_returns_groups_grants_versions_expiration_and_audit() 
     )
     _scope(app, "SELF")
     _scope(app, "TEAM")
-    issue = StaticTokenService.create_token(app=app, name="CRM integration")
+    issue = AppCredentialService.create_static_token(app=app, name="CRM integration")
     sales = AuthorizationGroup.objects.create(app=app, key="sales", kind="role", name="销售")
     finance = AuthorizationGroup.objects.create(app=app, key="finance", kind="bundle", name="财务")
     approve = _permission(app, "invoice.approve", scopes=["TEAM"])
@@ -147,7 +147,7 @@ def test_permission_query_returns_groups_grants_versions_expiration_and_audit() 
         "catalog_version": ACTIVE_APP_CATALOG_VERSION,
         "snapshot_version": snapshot_version,
         "credential_type": "static_token",
-        "credential_id": issue.credential_id,
+        "credential_id": issue.credential.id,
     }
     assert issue.plaintext_token not in str(audit_log.metadata)
 
@@ -172,7 +172,7 @@ def test_permission_query_returns_empty_for_unknown_disabled_or_departed_user(
         catalog_version=EMPTY_APP_CATALOG_VERSION,
     )
     _scope(app, "SELF")
-    issue = StaticTokenService.create_token(app=app, name="integration")
+    issue = AppCredentialService.create_static_token(app=app, name="integration")
     if status is not None:
         user = UserMirror.objects.create(authentik_user_id=user_id, status=status)
         grant = AccessGrant.objects.create(user=user, app=app)
@@ -217,7 +217,7 @@ def test_permission_query_returns_empty_for_revoked_or_expired_grant(
     user = UserMirror.objects.create(authentik_user_id=user_id)
     app = App.objects.create(app_key=f"{user_id}-app", name=f"{user_id} App")
     _scope(app, "SELF")
-    issue = StaticTokenService.create_token(app=app, name="integration")
+    issue = AppCredentialService.create_static_token(app=app, name="integration")
     grant = AccessGrant.objects.create(
         user=user,
         app=app,
@@ -253,7 +253,7 @@ def test_permission_query_uses_earliest_membership_expiration_when_before_ttl() 
     user = UserMirror.objects.create(authentik_user_id="user-api-timed")
     app = App.objects.create(app_key="timed-api-app", name="Timed API App")
     _scope(app, "SELF")
-    issue = StaticTokenService.create_token(app=app, name="integration")
+    issue = AppCredentialService.create_static_token(app=app, name="integration")
     group = AuthorizationGroup.objects.create(
         app=app,
         key="operator",
@@ -293,7 +293,7 @@ def test_permission_query_fails_fast_for_invalid_ttl_configuration(ttl_setting: 
     # Given: 权限查询 TTL 配置为非法值。
     user = UserMirror.objects.create(authentik_user_id="user-api-invalid-ttl")
     app = App.objects.create(app_key="invalid-ttl-api-app", name="Invalid TTL API App")
-    issue = StaticTokenService.create_token(app=app, name="integration")
+    issue = AppCredentialService.create_static_token(app=app, name="integration")
 
     # When / Then: 配置错误必须显式失败, 不允许静默退回默认 TTL 延长撤销窗口。
     with (
@@ -310,7 +310,7 @@ def test_permission_query_uses_default_ttl_when_no_override_is_configured() -> N
     # Given: 权限查询 TTL 使用项目默认配置。
     user = UserMirror.objects.create(authentik_user_id="user-api-default-ttl")
     app = App.objects.create(app_key="default-ttl-api-app", name="Default TTL API App")
-    issue = StaticTokenService.create_token(app=app, name="integration")
+    issue = AppCredentialService.create_static_token(app=app, name="integration")
 
     # When: 应用查询该用户权限。
     before = timezone.now()
@@ -330,11 +330,15 @@ def test_permission_query_uses_default_ttl_when_no_override_is_configured() -> N
 def test_permission_query_rejects_missing_invalid_disabled_and_cross_app_tokens() -> None:
     # Given: 存在有效 token、无效 token、禁用 token、禁用应用 token 和跨应用路径。
     app = App.objects.create(app_key="crm-api-errors", name="CRM API Errors")
-    disabled_app = App.objects.create(app_key="disabled-api", name="Disabled API", is_active=False)
-    issue = StaticTokenService.create_token(app=app, name="integration")
-    disabled_issue = StaticTokenService.create_token(app=app, name="disabled")
-    disabled_app_issue = StaticTokenService.create_token(app=disabled_app, name="disabled-app")
-    _ = AppStaticToken.objects.filter(id=disabled_issue.credential_id).update(is_active=False)
+    disabled_app = App.objects.create(app_key="disabled-api", name="Disabled API")
+    issue = AppCredentialService.create_static_token(app=app, name="integration")
+    disabled_issue = AppCredentialService.create_static_token(app=app, name="disabled")
+    disabled_app_issue = AppCredentialService.create_static_token(
+        app=disabled_app,
+        name="disabled-app",
+    )
+    _ = AppCredential.objects.filter(id=disabled_issue.credential.id).update(is_active=False)
+    _ = App.objects.filter(id=disabled_app.id).update(is_active=False)
 
     # When: 各种无权访问请求命中权限查询接口。
     missing = Client().get(_permission_url(app.app_key, "user-api-errors"))
@@ -384,7 +388,7 @@ def test_permission_query_throttles_repeated_auth_failures() -> None:
 def test_permission_query_rejects_non_get_methods() -> None:
     # Given: 一个合法应用与静态 token。
     app = App.objects.create(app_key="method-guard-app", name="Method Guard")
-    issue = StaticTokenService.create_token(app=app, name="integration")
+    issue = AppCredentialService.create_static_token(app=app, name="integration")
     url = _permission_url(app.app_key, "any-user")
 
     # When / Then: 非 GET 方法返回 405, 不执行读逻辑。

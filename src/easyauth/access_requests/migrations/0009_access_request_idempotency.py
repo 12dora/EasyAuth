@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, Protocol, cast
 
 from django.db import migrations, models
 
@@ -12,13 +12,41 @@ if TYPE_CHECKING:
     from django.db.migrations.operations.base import Operation
 
 
-def delete_pre_idempotency_requests(
+class _MigrationQuerySet(Protocol):
+    def order_by(self, *field_names: str) -> _MigrationQuerySet: ...
+
+    def count(self) -> int: ...
+
+    def values_list(self, field_name: str, *, flat: bool = False) -> Sequence[int]: ...
+
+
+class _MigrationManager(Protocol):
+    def all(self) -> _MigrationQuerySet: ...
+
+
+class _HistoricalAccessRequest(Protocol):
+    objects: _MigrationManager
+
+
+def assert_no_pre_idempotency_requests(
     apps: Apps,
     schema_editor: BaseDatabaseSchemaEditor,
 ) -> None:
     _ = schema_editor
-    AccessRequest = apps.get_model("access_requests", "AccessRequest")
-    AccessRequest.objects.all().delete()
+    access_request = cast(
+        "_HistoricalAccessRequest",
+        apps.get_model("access_requests", "AccessRequest"),
+    )
+    queryset = access_request.objects.all().order_by("id")
+    count = queryset.count()
+    if count:
+        sample_ids = list(queryset.values_list("id", flat=True)[:5])
+        message = (
+            "EA-AUD-023 迁移被阻断: access_requests.0009 不能为已有申请静默生成 "
+            "idempotency_key 和 payload_digest, 已拒绝删除历史申请。"
+            f" count={count}, sample_ids={sample_ids}。请先导出并按新申请幂等契约显式重建。"
+        )
+        raise RuntimeError(message)
 
 
 class Migration(migrations.Migration):
@@ -27,7 +55,7 @@ class Migration(migrations.Migration):
     ]
 
     operations: ClassVar[Sequence[Operation]] = [
-        migrations.RunPython(delete_pre_idempotency_requests, migrations.RunPython.noop),
+        migrations.RunPython(assert_no_pre_idempotency_requests, migrations.RunPython.noop),
         migrations.AddField(
             model_name="accessrequest",
             name="idempotency_key",

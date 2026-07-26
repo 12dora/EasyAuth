@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, ClassVar, Final, cast
 from django.core.cache import cache
 from django.db import IntegrityError, transaction
 from django.http import HttpRequest, HttpResponse, JsonResponse
+from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from easyauth.admin_console.api_payloads import list_payload, paginated_list_payload
@@ -31,11 +32,15 @@ from easyauth.connectors.base import BaseConnector, ConnectorError, secret_field
 from easyauth.connectors.dispatch import request_instance_reconcile
 from easyauth.connectors.models import (
     SYNC_TRIGGER_MANUAL,
+    ConnectorConfigError,
+    ConnectorExternalGroup,
     ConnectorInstance,
     ConnectorMapping,
     ConnectorSyncRun,
 )
 from easyauth.connectors.registry import available_connectors, get_connector
+from easyauth.outbox.services import enqueue_task
+from easyauth.tasks.connectors import REFRESH_EXTERNAL_GROUPS_TASK_NAME
 
 if TYPE_CHECKING:
     from easyauth.api.pagination import Pagination
@@ -56,6 +61,7 @@ SUPERUSER_REQUIRED_MESSAGE: Final = "只有系统管理员可以维护连接器�
 MANAGE_REQUIRED_MESSAGE: Final = "只有 active App owner 可以查看连接器状态。"
 INSTANCE_DISABLED_MESSAGE: Final = "连接器实例未启用, 无法触发对账。"
 AUTHORIZATION_GROUP_UNKNOWN_TEMPLATE: Final = "授权组 {key} 不存在或不属于该应用。"
+AUTHORIZATION_GROUP_DUPLICATE_TEMPLATE: Final = "授权组 {key} 在映射中重复。"
 RECONCILE_THROTTLED_MESSAGE: Final = "手动对账请求过于频繁, 请稍后再试。"
 TOMBSTONE_MAPPING_SERIALIZE_ERROR: Final = "tombstone mapping cannot be serialized"
 MANUAL_RECONCILE_RATE_SECONDS: Final = 10
@@ -211,7 +217,7 @@ def _resolve_test_candidate(
     return connector, payload.connector_key, config
 
 
-def console_app_connector_external_groups(
+def console_app_connector_external_groups(  # noqa: PLR0911 - HTTP 权限与方法分支显式返回。
     request: HttpRequest,
     app_key: str,
     instance_id: int,
@@ -221,23 +227,42 @@ def console_app_connector_external_groups(
             pass
         case JsonResponse() as response:
             return response
+    if request.method == "POST":
+        if response := _superuser_required(actor):
+            return response
+        _ = enqueue_task(
+            event_key=f"connector-external-groups-refresh:{instance.id}:{instance.updated_at.isoformat()}",
+            task_name=REFRESH_EXTERNAL_GROUPS_TASK_NAME,
+            args=[instance.id],
+            countdown=0,
+        )
+        _record_event(
+            instance.app,
+            actor,
+            "connector_external_groups_refresh_requested",
+            {"connector_key": instance.connector_key, "instance_id": instance.id},
+        )
+        return json_response({"queued": True}, status=HTTPStatus.ACCEPTED)
     if request.method != "GET":
         return method_not_allowed_response()
     if response := _superuser_required(actor):
         return response
-    connector = get_connector(instance.connector_key)
-    if connector is None:
-        return _validation_error(CONNECTOR_TYPE_UNKNOWN_MESSAGE)
     try:
-        groups = connector.list_external_groups(instance.config)
-    except ConnectorError as error:
-        return error_response(
-            ErrorCode.VALIDATION_ERROR,
-            str(error),
-            status=HTTPStatus.BAD_GATEWAY,
+        page = paginate_queryset(
+            ConnectorExternalGroup.objects.filter(
+                instance=instance,
+                is_active=True,
+            ).order_by("external_name", "external_ref"),
+            request.GET,
         )
-    items: list[JsonValue] = [{"ref": group.ref, "name": group.name} for group in groups]
-    return json_response(list_payload(items))
+    except OperationFilterValidationError as exc:
+        return operation_filter_error_response(exc)
+    items: list[JsonValue] = [
+        {"ref": group.external_ref, "name": group.external_name} for group in page.items
+    ]
+    return json_response(
+        paginated_list_payload(items=items, pagination=pagination_item(page)),
+    )
 
 
 def console_app_connector_mappings(
@@ -483,7 +508,10 @@ def _replace_mappings(  # noqa: C901
                 AUTHORIZATION_GROUP_UNKNOWN_TEMPLATE.format(key=entry.authorization_group_key),
             )
         if entry.authorization_group_key in seen_keys:
-            continue
+            return _validation_error(
+                AUTHORIZATION_GROUP_DUPLICATE_TEMPLATE.format(key=entry.authorization_group_key),
+                {"authorization_group_key": entry.authorization_group_key},
+            )
         seen_keys.add(entry.authorization_group_key)
         resolved.append((group, entry))
     with transaction.atomic():
@@ -581,7 +609,12 @@ def _instance_item(instance: ConnectorInstance) -> JsonObject:
     secrets: frozenset[str] = (
         secret_field_names(connector.config_schema) if connector else frozenset()
     )
-    config = instance.config
+    config_error: ConnectorConfigError | None = None
+    try:
+        config = instance.config
+    except ConnectorConfigError as error:
+        config_error = error
+        config = {}
     redacted: JsonObject = {
         key: ("" if key in secrets else value) for key, value in config.items()
     }
@@ -593,6 +626,11 @@ def _instance_item(instance: ConnectorInstance) -> JsonObject:
         "display_name": connector.display_name if connector else instance.connector_key,
         "enabled": instance.enabled,
         "config": redacted,
+        "config_error": (
+            {"kind": config_error.kind, "message": str(config_error)}
+            if config_error is not None
+            else None
+        ),
         "configured_secrets": configured_secrets,
         "reconcile_interval_seconds": instance.reconcile_interval_seconds,
         "last_reconcile_at": (
@@ -602,8 +640,54 @@ def _instance_item(instance: ConnectorInstance) -> JsonObject:
         "last_error": instance.last_error,
         "consecutive_failures": instance.consecutive_failures,
         "external_account_id": instance.external_account_id,
+        "external_groups_refresh": {
+            "status": instance.external_groups_refresh_status,
+            "cursor": instance.external_groups_refresh_cursor,
+            "refreshed_at": (
+                instance.external_groups_refreshed_at.isoformat()
+                if instance.external_groups_refreshed_at
+                else None
+            ),
+        },
+        "reconcile_state": _reconcile_state_item(instance),
         "updated_by": instance.updated_by,
         "updated_at": instance.updated_at.isoformat(),
+    }
+
+
+def _reconcile_state_item(instance: ConnectorInstance) -> JsonObject:
+    now = timezone.now()
+    lease_active = (
+        instance.reconcile_lease_token is not None
+        and instance.reconcile_lease_expires_at is not None
+        and instance.reconcile_lease_expires_at > now
+    )
+    if lease_active:
+        status = "running"
+    elif instance.reconcile_worker_queued:
+        status = "queued"
+    elif instance.reconcile_dirty:
+        status = "dirty"
+    else:
+        status = "idle"
+    return {
+        "status": status,
+        "generation": instance.reconcile_generation,
+        "reconciled_generation": instance.reconciled_generation,
+        "dirty": instance.reconcile_dirty,
+        "pending_trigger": instance.reconcile_pending_trigger,
+        "worker_queued": instance.reconcile_worker_queued,
+        "worker_queued_at": (
+            instance.reconcile_worker_queued_at.isoformat()
+            if instance.reconcile_worker_queued_at
+            else None
+        ),
+        "lease_active": lease_active,
+        "lease_expires_at": (
+            instance.reconcile_lease_expires_at.isoformat()
+            if instance.reconcile_lease_expires_at
+            else None
+        ),
     }
 
 

@@ -72,9 +72,9 @@ def test_authenticate_static_token_returns_none_when_app_is_disabled() -> None:
     app = App.objects.create(
         app_key="crm-token-disabled-app",
         name="CRM Token Disabled App",
-        is_active=False,
     )
     issued_token = AppCredentialService.create_static_token(app)
+    _ = App.objects.filter(id=app.id).update(is_active=False)
 
     # When
     principal = AppCredentialService.authenticate_static_token(issued_token.plaintext_token)

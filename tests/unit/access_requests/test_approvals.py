@@ -18,6 +18,7 @@ from easyauth.access_requests.models import (
     AccessRequest,
     AccessRequestApprover,
     AccessRequestGroup,
+    AccessRequestGroupGrantSnapshot,
 )
 from easyauth.accounts.models import USER_STATUS_DEPARTED, UserMirror
 from easyauth.applications.models import (
@@ -300,4 +301,14 @@ def _submitted_request(
             approver=approver,
         )
     _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
+    _ = AccessRequestGroupGrantSnapshot.objects.create(
+        access_request=access_request,
+        authorization_group_id_snapshot=group.id,
+        authorization_group_key=group.key,
+        authorization_group_kind=group.kind,
+        authorization_group_name=group.name,
+        permission_key=permission.key,
+        permission_name=permission.name,
+        scope_key=scope.key,
+    )
     return access_request

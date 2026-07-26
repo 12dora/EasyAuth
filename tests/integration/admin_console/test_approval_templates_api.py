@@ -11,6 +11,7 @@ from django.test import Client
 from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import App
 from easyauth.workflows.models import ApprovalInstance, ApprovalTemplate
+from tests.integration.admin_console.auth_helpers import authenticate_console_admin
 
 pytestmark = pytest.mark.django_db
 
@@ -144,6 +145,8 @@ def test_platform_template_test_uses_exact_template_id(
     )
     _ = UserMirror.objects.create(
         authentik_user_id="approval-template-originator",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="approval-template-corp",
         dingtalk_userid="approval-template-originator-dt",
     )
     fake = _FakeDingTalkClient()
@@ -175,5 +178,5 @@ def test_platform_template_test_uses_exact_template_id(
 def _logged_in_superuser(username: str) -> Client:
     _ = User.objects.create_superuser(username=username, password=LOGIN_VALUE)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    authenticate_console_admin(client, username)
     return client

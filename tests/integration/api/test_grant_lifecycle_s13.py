@@ -11,8 +11,8 @@ from django.utils import timezone
 
 from easyauth.accounts.models import UserMirror
 from easyauth.admin_console.grants import emergency_revoke_for_user
-from easyauth.applications.models import App, Permission
-from easyauth.applications.services import StaticTokenService
+from easyauth.applications.models import App, AppScope, Permission
+from easyauth.applications.services import AppCredentialService
 from easyauth.grants.models import (
     AccessGrant,
     AccessGrantPermission,
@@ -34,7 +34,8 @@ def test_s13_permission_query_returns_empty_after_expiration_cleanup() -> None:
     now = timezone.now()
     user = UserMirror.objects.create(authentik_user_id="s13-api-expired-user")
     app = App.objects.create(app_key="s13-api-expired-app", name="S13 API Expired App")
-    issue = StaticTokenService.create_token(app=app, name="S13 API integration")
+    issue = AppCredentialService.create_static_token(app=app, name="S13 API integration")
+    _ = AppScope.objects.create(app=app, key="GLOBAL", name="全局")
     permission = Permission.objects.create(app=app, key="invoice.read", name="Read invoices")
     grant = AccessGrant.objects.create(user=user, app=app)
     _ = AccessGrantPermission.objects.create(
@@ -62,7 +63,8 @@ def test_s13_permission_query_returns_empty_after_emergency_revoke() -> None:
     # Given: 应用 token 可查询一个 active permanent grant。
     user = UserMirror.objects.create(authentik_user_id="s13-api-revoked-user")
     app = App.objects.create(app_key="s13-api-revoked-app", name="S13 API Revoked App")
-    issue = StaticTokenService.create_token(app=app, name="S13 revoke integration")
+    issue = AppCredentialService.create_static_token(app=app, name="S13 revoke integration")
+    _ = AppScope.objects.create(app=app, key="GLOBAL", name="全局")
     permission = Permission.objects.create(app=app, key="order.read", name="Read orders")
     grant = AccessGrant.objects.create(user=user, app=app)
     _ = AccessGrantPermission.objects.create(

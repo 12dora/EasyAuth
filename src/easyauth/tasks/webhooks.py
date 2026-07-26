@@ -7,10 +7,12 @@ from celery import shared_task
 from easyauth.webhooks.delivery import (
     DELIVERY_RETRY_DELAYS_SECONDS,
     WEBHOOK_DELIVERY_TASK_NAME,
+    WEBHOOK_DELIVERY_WATCHDOG_TASK_NAME,
     WebhookDeliveryAttemptError,
     WebhookNotConfiguredError,
     attempt_delivery,
     mark_delivery_exhausted,
+    recover_expired_delivery_leases,
 )
 
 MAX_DELIVERY_ATTEMPTS: Final = len(DELIVERY_RETRY_DELAYS_SECONDS)
@@ -34,3 +36,9 @@ def deliver_webhook_task(delivery_id: int, generation: int) -> str:
     except WebhookDeliveryAttemptError as error:
         return "failed" if error.attempts >= MAX_DELIVERY_ATTEMPTS else "retry_scheduled"
     return delivery.status
+
+
+@shared_task(name=WEBHOOK_DELIVERY_WATCHDOG_TASK_NAME)
+def recover_expired_webhook_leases_task() -> dict[str, int]:
+    recovered = recover_expired_delivery_leases()
+    return {"recovered": recovered}

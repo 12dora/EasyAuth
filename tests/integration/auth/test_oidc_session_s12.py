@@ -8,7 +8,7 @@ import pytest
 from django.test import Client, override_settings
 
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY, OIDC_ID_TOKEN_SESSION_KEY
-from easyauth.accounts.models import UserMirror
+from easyauth.accounts.models import USER_STATUS_DISABLED, UserMirror
 
 if TYPE_CHECKING:
     from django.http import HttpRequest
@@ -198,6 +198,30 @@ def test_s12_callback_binds_session_to_user_mirror_when_claims_are_valid(
     EASYAUTH_AUTHENTIK_OIDC_CLIENT_SECRET=CLIENT_SECRET,
     EASYAUTH_AUTHENTIK_OIDC_REDIRECT_URI=REDIRECT_URI,
 )
+def test_s12_callback_rejects_inactive_local_user_without_session_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = Client()
+    _ = UserMirror.objects.create(
+        authentik_user_id=OIDC_SUBJECT,
+        name="已停用用户",
+        status=USER_STATUS_DISABLED,
+    )
+    _seed_oidc_attempt(client)
+    _patch_claim_exchange(monkeypatch, _valid_claims())
+
+    response = client.get(f"/auth/callback/?code={OIDC_CODE}&state={OIDC_STATE}")
+
+    assert response.status_code == HTTPStatus.FORBIDDEN
+    assert SESSION_KEY not in client.session
+
+
+@override_settings(
+    EASYAUTH_AUTHENTIK_OIDC_ISSUER=AUTHENTIK_ISSUER,
+    EASYAUTH_AUTHENTIK_OIDC_CLIENT_ID=CLIENT_ID,
+    EASYAUTH_AUTHENTIK_OIDC_CLIENT_SECRET=CLIENT_SECRET,
+    EASYAUTH_AUTHENTIK_OIDC_REDIRECT_URI=REDIRECT_URI,
+)
 def test_s12_callback_redirects_to_saved_next_and_pops_it(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -222,7 +246,7 @@ def test_s12_callback_redirects_to_saved_next_and_pops_it(
     EASYAUTH_AUTHENTIK_OIDC_CLIENT_SECRET=CLIENT_SECRET,
     EASYAUTH_AUTHENTIK_OIDC_REDIRECT_URI=REDIRECT_URI,
 )
-def test_s12_callback_stores_authentik_groups_in_session(
+def test_s12_callback_does_not_store_authentik_groups_in_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = Client()
@@ -235,7 +259,7 @@ def test_s12_callback_stores_authentik_groups_in_session(
     response = client.get(f"/auth/callback/?code={OIDC_CODE}&state={OIDC_STATE}")
 
     assert response.status_code == HTTPStatus.FOUND
-    assert client.session["easyauth_authentik_groups"] == ["EasyAuth Admins", "开发者"]
+    assert "easyauth_authentik_groups" not in client.session
 
 
 @override_settings(
@@ -358,7 +382,6 @@ def test_s12_logout_clears_local_session_and_redirects_to_authentik_logout_flow(
     client = Client()
     session = client.session
     session[SESSION_KEY] = OIDC_SUBJECT
-    session["easyauth_authentik_groups"] = ["EasyAuth Admins"]
     session["unrelated_session_value"] = "must-be-flushed"
     session.save()
 
@@ -372,7 +395,6 @@ def test_s12_logout_clears_local_session_and_redirects_to_authentik_logout_flow(
     )
     assert parse_qs(parsed.query) == {}
     assert SESSION_KEY not in client.session
-    assert "easyauth_authentik_groups" not in client.session
     assert "unrelated_session_value" not in client.session
 
 

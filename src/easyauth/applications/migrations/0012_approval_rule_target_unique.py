@@ -1,12 +1,42 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING, ClassVar, Protocol, cast
+
 from django.db import migrations, models
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator, Sequence
 
-def dedupe_approval_rules(apps, schema_editor):
-    """同一目标保留最新一行(最大 id, 即最近一次导入写入的行), 删除其余重复规则。"""
-    approval_rule = apps.get_model("applications", "ApprovalRule")
-    keep_ids: dict[tuple[str, int, int | None, int | None], int] = {}
+    from django.db.backends.base.schema import BaseDatabaseSchemaEditor
+    from django.db.migrations.operations.base import Operation
+    from django.db.migrations.state import StateApps
+
+
+class _MigrationQuerySet(Protocol):
+    def __iter__(self) -> Iterator[tuple[int, int, int | None, int | None]]: ...
+
+    def order_by(self, *field_names: str) -> _MigrationQuerySet: ...
+
+
+class _MigrationManager(Protocol):
+    def values_list(self, *field_names: str) -> _MigrationQuerySet: ...
+
+
+class _HistoricalApprovalRule(Protocol):
+    objects: _MigrationManager
+
+
+def assert_no_duplicate_approval_rules(
+    apps: StateApps,
+    schema_editor: BaseDatabaseSchemaEditor,
+) -> None:
+    _ = schema_editor
+    approval_rule = cast(
+        "_HistoricalApprovalRule",
+        apps.get_model("applications", "ApprovalRule"),
+    )
+    seen: set[tuple[str, int, int | None, int | None]] = set()
+    duplicate_ids: list[int] = []
     for rule_id, app_id, group_id, permission_id in approval_rule.objects.values_list(
         "id",
         "app_id",
@@ -19,24 +49,25 @@ def dedupe_approval_rules(apps, schema_editor):
             key = ("permission", app_id, None, permission_id)
         else:
             continue
-        keep_ids[key] = rule_id
-    kept = set(keep_ids.values())
-    duplicate_ids = [
-        rule_id
-        for rule_id in approval_rule.objects.values_list("id", flat=True)
-        if rule_id not in kept
-    ]
+        if key in seen:
+            duplicate_ids.append(rule_id)
+        seen.add(key)
     if duplicate_ids:
-        approval_rule.objects.filter(id__in=duplicate_ids).delete()
+        message = (
+            "EA-AUD-023 迁移被阻断: applications.0012 不能按最大 id 保留并静默删除重复审批规则。"
+            f" count={len(duplicate_ids)}, sample_ids={duplicate_ids[:5]}。"
+            "请先显式合并重复目标的审批规则。"
+        )
+        raise RuntimeError(message)
 
 
 class Migration(migrations.Migration):
-    dependencies = [
+    dependencies: ClassVar[Sequence[tuple[str, str]]] = [
         ("applications", "0011_app_credential_token_lookup"),
     ]
 
-    operations = [
-        migrations.RunPython(dedupe_approval_rules, migrations.RunPython.noop),
+    operations: ClassVar[Sequence[Operation]] = [
+        migrations.RunPython(assert_no_duplicate_approval_rules, migrations.RunPython.noop),
         migrations.AddConstraint(
             model_name="approvalrule",
             constraint=models.UniqueConstraint(

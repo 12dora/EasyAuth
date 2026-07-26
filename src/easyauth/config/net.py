@@ -1,25 +1,58 @@
 from __future__ import annotations
 
 import ipaddress
-import queue
+import json
 import socket
+import subprocess
+import sys
 import threading
+import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
-from urllib.parse import urlparse, urlsplit
+from typing import TYPE_CHECKING, Final, Protocol, Self, cast
+from urllib.parse import quote, urlparse, urlsplit
 
 if TYPE_CHECKING:
-    from collections.abc import Collection
+    from collections.abc import Callable, Collection, Mapping
+    from types import TracebackType
 
 INSECURE_URL_MESSAGE = "URL 必须使用 https(仅本地开发允许 http://localhost)。"
 BLOCKED_HOST_MESSAGE = "目标主机解析到被禁止的内网/环回/保留地址。"
 UNRESOLVABLE_HOST_MESSAGE = "目标主机无法解析。"
 DNS_RESOLUTION_TIMEOUT_MESSAGE = "目标主机解析超时。"
+DNS_RESOLVER_QUEUE_FULL_MESSAGE = "DNS resolver 队列已满。"
+HTTP_RESPONSE_TOO_LARGE_MESSAGE = "外部 HTTP 响应超过允许的大小。"
+HTTP_RESPONSE_DEADLINE_MESSAGE = "外部 HTTP 响应读取超过总时限。"
+HTTP_INVALID_CONTENT_LENGTH_MESSAGE = "外部 HTTP 响应的 Content-Length 无效。"
 INVALID_WEBHOOK_URL_MESSAGE = (
     "Webhook URL 必须是 https:// 公网地址, 且不得包含用户信息、片段或非 443 端口。"
 )
 WEBHOOK_HOST_NOT_ALLOWED_MESSAGE = "Webhook URL 的域名不在该应用的允许列表中。"
 CONTROL_CHARACTER_LIMIT: Final = 0x20
+IPV6_VERSION: Final = 6
+DNS_RESOLVER_MAX_IN_FLIGHT: Final = 32
+HTTP_READ_CHUNK_BYTES: Final = 64 * 1024
+DNS_RESOLVER_TERMINATE_GRACE_SECONDS: Final = 0.2
+DNS_RESOLVER_OUTPUT_MAX_BYTES: Final = 64 * 1024
+DNS_RESOLVER_SCRIPT: Final = r"""
+import json
+import socket
+import sys
+
+try:
+    hostname = sys.argv[1]
+    port = int(sys.argv[2])
+    infos = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    addresses = []
+    for info in infos[:256]:
+        raw_ip = info[4][0]
+        if isinstance(raw_ip, str) and raw_ip not in addresses:
+            addresses.append(raw_ip)
+    print(json.dumps({"ok": addresses}, separators=(",", ":")), flush=True)
+except socket.gaierror:
+    print(json.dumps({"gaierror": True}, separators=(",", ":")), flush=True)
+except Exception:
+    print(json.dumps({"error": True}, separators=(",", ":")), flush=True)
+"""
 
 # 仅本机流量允许明文 http 的主机。host.docker.internal 是 Docker 容器访问宿主的
 # 专用主机名(容器化部署里 worker/stream 经它访问宿主上的 Authentik/EasyTrade),
@@ -40,6 +73,40 @@ class BlockedHostError(ValueError):
 class InvalidWebhookUrlError(ValueError):
     def __init__(self, message: str = INVALID_WEBHOOK_URL_MESSAGE) -> None:
         super().__init__(message)
+
+
+class HttpResponseReadError(RuntimeError):
+    pass
+
+
+class HttpResponseTooLargeError(HttpResponseReadError):
+    def __init__(self) -> None:
+        super().__init__(HTTP_RESPONSE_TOO_LARGE_MESSAGE)
+
+
+class HttpResponseDeadlineExceededError(HttpResponseReadError):
+    def __init__(self) -> None:
+        super().__init__(HTTP_RESPONSE_DEADLINE_MESSAGE)
+
+
+class InvalidContentLengthError(HttpResponseReadError):
+    def __init__(self) -> None:
+        super().__init__(HTTP_INVALID_CONTENT_LENGTH_MESSAGE)
+
+
+class HeaderReadableResponse(Protocol):
+    def __enter__(self) -> Self: ...
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None: ...
+
+    def read(self, amount: int = -1) -> bytes: ...
+
+    def getheader(self, name: str) -> str | None: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +162,8 @@ def normalize_hostname(hostname: str) -> str:
 type SocketAddress = tuple[str, int] | tuple[str, int, int, int] | tuple[int, bytes]
 type AddressInfo = tuple[socket.AddressFamily, socket.SocketKind, int, str, SocketAddress]
 
+_DNS_RESOLVER_CAPACITY = threading.BoundedSemaphore(DNS_RESOLVER_MAX_IN_FLIGHT)
+
 
 def resolve_public_addresses(
     hostname: str,
@@ -134,26 +203,85 @@ def _resolve_addresses(
         except socket.gaierror as error:
             raise BlockedHostError(UNRESOLVABLE_HOST_MESSAGE) from error
 
-    results: queue.Queue[tuple[AddressInfo, ...] | Exception] = queue.Queue(maxsize=1)
-
-    def resolve() -> None:
-        try:
-            result = tuple(socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM))
-        except Exception as error:  # noqa: BLE001 - 跨线程原样传回解析异常。
-            results.put(error)
-        else:
-            results.put(result)
-
-    threading.Thread(target=resolve, daemon=True, name="webhook-dns-resolver").start()
+    if not _DNS_RESOLVER_CAPACITY.acquire(blocking=False):
+        raise BlockedHostError(DNS_RESOLVER_QUEUE_FULL_MESSAGE)
     try:
-        result = results.get(timeout=timeout_seconds)
-    except queue.Empty as error:
+        return _resolve_addresses_subprocess(
+            hostname=hostname,
+            port=port,
+            timeout_seconds=timeout_seconds,
+        )
+    finally:
+        _DNS_RESOLVER_CAPACITY.release()
+
+
+def _resolve_addresses_subprocess(
+    *,
+    hostname: str,
+    port: int,
+    timeout_seconds: float,
+) -> tuple[AddressInfo, ...]:
+    process = subprocess.Popen(  # noqa: S603 - 固定解释器和脚本, 主机名只作为 argv 传入.
+        [sys.executable, "-I", "-c", DNS_RESOLVER_SCRIPT, hostname, str(port)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        env={},
+        close_fds=True,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as error:
+        _terminate_resolver_subprocess(process)
         raise BlockedHostError(DNS_RESOLUTION_TIMEOUT_MESSAGE) from error
-    if isinstance(result, Exception):
-        if isinstance(result, socket.gaierror):
-            raise BlockedHostError(UNRESOLVABLE_HOST_MESSAGE) from result
-        raise result
-    return result
+    if len(stdout) > DNS_RESOLVER_OUTPUT_MAX_BYTES or len(stderr) > DNS_RESOLVER_OUTPUT_MAX_BYTES:
+        raise BlockedHostError(UNRESOLVABLE_HOST_MESSAGE)
+    if process.returncode != 0:
+        raise BlockedHostError(UNRESOLVABLE_HOST_MESSAGE)
+    return _parse_resolver_output(stdout)
+
+
+def _terminate_resolver_subprocess(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is None:
+        process.terminate()
+    try:
+        _ = process.wait(timeout=DNS_RESOLVER_TERMINATE_GRACE_SECONDS)
+    except subprocess.TimeoutExpired:
+        if process.poll() is None:
+            process.kill()
+        _ = process.wait(timeout=DNS_RESOLVER_TERMINATE_GRACE_SECONDS)
+
+
+def _parse_resolver_output(stdout: bytes) -> tuple[AddressInfo, ...]:
+    try:
+        payload = cast("object", json.loads(stdout.decode("utf-8")))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise BlockedHostError(UNRESOLVABLE_HOST_MESSAGE) from error
+    if not isinstance(payload, dict):
+        raise BlockedHostError(UNRESOLVABLE_HOST_MESSAGE)
+    payload_mapping = cast("Mapping[str, object]", payload)
+    if payload_mapping.get("gaierror") is True:
+        raise BlockedHostError(UNRESOLVABLE_HOST_MESSAGE)
+    if payload_mapping.get("error") is True:
+        raise BlockedHostError(UNRESOLVABLE_HOST_MESSAGE)
+    addresses = payload_mapping.get("ok")
+    if not isinstance(addresses, list):
+        raise BlockedHostError(UNRESOLVABLE_HOST_MESSAGE)
+    addr_infos: list[AddressInfo] = []
+    for raw_ip in cast("list[object]", addresses):
+        if not isinstance(raw_ip, str):
+            raise BlockedHostError(UNRESOLVABLE_HOST_MESSAGE)
+        addr_infos.append(_address_info_for_ip(raw_ip))
+    return tuple(addr_infos)
+
+
+def _address_info_for_ip(raw_ip: str) -> AddressInfo:
+    ip = ipaddress.ip_address(raw_ip)
+    family = socket.AF_INET6 if ip.version == IPV6_VERSION else socket.AF_INET
+    socket_address: SocketAddress = (
+        (raw_ip, 0, 0, 0) if family == socket.AF_INET6 else (raw_ip, 0)
+    )
+    return (family, socket.SOCK_STREAM, 0, "", socket_address)
 
 
 def validate_public_https_url(
@@ -213,11 +341,89 @@ def parse_https_url(
         normalized_allowed_hosts = {normalize_hostname(host) for host in allowed_hosts}
         if hostname not in normalized_allowed_hosts:
             raise InvalidWebhookUrlError(WEBHOOK_HOST_NOT_ALLOWED_MESSAGE)
-    path = parsed.path or "/"
-    request_target = f"{path}?{parsed.query}" if parsed.query else path
+    path = _request_target_path(parsed.path or "/")
+    query = _request_target_query(parsed.query)
+    request_target = f"{path}?{query}" if query else path
     return ValidatedHttpsUrl(
         hostname=hostname,
         port=443,
         request_target=request_target,
         addresses=(),
     )
+
+
+def _request_target_path(path: str) -> str:
+    return quote(path, safe="/!$&'()*+,;=:@%~-._")
+
+
+def _request_target_query(query: str) -> str:
+    return quote(query, safe="/?!$&'()*+,;=:@%~-._")
+
+
+def read_urlopen_body_bounded(
+    response: HeaderReadableResponse,
+    *,
+    started_at: float,
+    total_timeout_seconds: float,
+    max_response_bytes: int,
+    monotonic: Callable[[], float] = time.monotonic,
+) -> bytes:
+    content_length = response.getheader("Content-Length")
+    if content_length is not None:
+        try:
+            declared_length = int(content_length)
+        except ValueError as error:
+            raise InvalidContentLengthError from error
+        if declared_length < 0:
+            raise InvalidContentLengthError
+        if declared_length > max_response_bytes:
+            raise HttpResponseTooLargeError
+
+    chunks: list[bytes] = []
+    observed = 0
+    while True:
+        remaining = _remaining_response_deadline_seconds(
+            started_at=started_at,
+            total_timeout_seconds=total_timeout_seconds,
+            monotonic=monotonic,
+        )
+        _set_response_socket_timeout(response, remaining)
+        chunk = response.read(min(HTTP_READ_CHUNK_BYTES, max_response_bytes + 1 - observed))
+        _ = _remaining_response_deadline_seconds(
+            started_at=started_at,
+            total_timeout_seconds=total_timeout_seconds,
+            monotonic=monotonic,
+        )
+        if not chunk:
+            return b"".join(chunks)
+        observed += len(chunk)
+        if observed > max_response_bytes:
+            raise HttpResponseTooLargeError
+        chunks.append(chunk)
+
+
+def _remaining_response_deadline_seconds(
+    *,
+    started_at: float,
+    total_timeout_seconds: float,
+    monotonic: Callable[[], float],
+) -> float:
+    remaining = total_timeout_seconds - (monotonic() - started_at)
+    if remaining <= 0:
+        raise HttpResponseDeadlineExceededError
+    return remaining
+
+
+def _set_response_socket_timeout(response: object, timeout_seconds: float) -> None:
+    socket_candidate = _response_socket_candidate(response)
+    if isinstance(socket_candidate, socket.socket):
+        socket_candidate.settimeout(timeout_seconds)
+
+
+def _response_socket_candidate(response: object) -> object | None:
+    current: object | None = response
+    for attribute in ("fp", "raw", "_sock"):
+        current = getattr(current, attribute, None)
+        if current is None:
+            return None
+    return current

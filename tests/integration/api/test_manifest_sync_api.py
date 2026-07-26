@@ -8,7 +8,7 @@ import pytest
 from django.test import Client
 
 from easyauth.applications.models import App, PermissionTemplateVersion
-from easyauth.applications.services import StaticTokenService
+from easyauth.applications.services import AppCredentialService
 from easyauth.webhooks.models import AppWebhookConfig
 
 pytestmark = pytest.mark.django_db
@@ -20,7 +20,7 @@ UPGRADED_MANIFEST_VERSION: Final = 2
 
 def _app_with_token(app_key: str) -> tuple[App, str]:
     app = App.objects.create(app_key=app_key, name=app_key)
-    issue = StaticTokenService.create_token(app=app, name="integration")
+    issue = AppCredentialService.create_static_token(app=app, name="integration")
     return app, issue.plaintext_token
 
 

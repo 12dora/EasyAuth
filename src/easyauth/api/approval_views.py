@@ -20,6 +20,7 @@ from easyauth.workflows.services import (
     ApprovalCreateError,
     create_approval_instance,
     recover_stale_submission,
+    recover_stale_submissions,
 )
 
 if TYPE_CHECKING:
@@ -205,10 +206,8 @@ def _list_approval_instances(request: HttpRequest, app_key: str) -> JsonResponse
     page = _page_request(request.GET)
     queryset = _filtered_instances(app, request.GET)
     total_items = queryset.count()
-    rows = queryset[page.start : page.stop]
-    items: list[JsonValue] = [
-        _instance_payload(recover_stale_submission(instance)) for instance in rows
-    ]
+    rows = recover_stale_submissions(tuple(queryset[page.start : page.stop]))
+    items: list[JsonValue] = [_instance_payload(instance) for instance in rows]
     return JsonResponse(
         {
             "data": items,

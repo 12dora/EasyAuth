@@ -139,12 +139,66 @@ def _check_authentik_directory(config: AuthentikRuntimeConfig) -> DependencyChec
             summary="目录 API 探测失败。",
             error_summary=str(error),
         )
+    if error_summary := _directory_status_contract_error(
+        status,
+        expected_source=config.source_slug,
+    ):
+        return DependencyCheckResult(
+            dependency=DEPENDENCY_AUTHENTIK_DIRECTORY,
+            status=DEPENDENCY_HEALTH_STATUS_UNHEALTHY,
+            summary="目录 API 状态响应缺少必需同步事实。",
+            error_summary=error_summary,
+        )
     return DependencyCheckResult(
         dependency=DEPENDENCY_AUTHENTIK_DIRECTORY,
         status=DEPENDENCY_HEALTH_STATUS_HEALTHY,
         summary=f"目录 API 可用, 源 {status.source_slug} 同步记录 {len(status.sync)} 条。",
         error_summary="",
     )
+
+
+def _directory_status_contract_error(  # noqa: PLR0911 - 按字段返回首个明确契约错误。
+    status: object,
+    *,
+    expected_source: str,
+) -> str:
+    source_slug = getattr(status, "source_slug", None)
+    sync = getattr(status, "sync", None)
+    if source_slug != expected_source:
+        return "source_slug 与运行配置不一致。"
+    if not isinstance(sync, tuple) or not sync:
+        return "sync 必须为非空列表。"
+    seen_corps: set[str] = set()
+    sync_items = cast("tuple[object, ...]", sync)
+    for raw_item in sync_items:
+        if not isinstance(raw_item, dict):
+            return "sync 条目必须为对象。"
+        item = cast("dict[str, object]", raw_item)
+        corp_id = item.get("corp_id")
+        generation = item.get("generation")
+        counters = item.get("counters")
+        if not isinstance(corp_id, str) or not corp_id or corp_id in seen_corps:
+            return "sync 条目 corp_id 缺失或重复。"
+        if item.get("status") != "success":
+            return "sync 条目状态不是 success。"
+        if isinstance(generation, bool) or not isinstance(generation, int) or generation < 0:
+            return "sync 条目 generation 无效。"
+        if not isinstance(counters, dict):
+            return "sync 条目 counters 缺失。"
+        counters_map = cast("dict[str, object]", counters)
+        users = counters_map.get("users")
+        departments = counters_map.get("departments")
+        if (
+            isinstance(users, bool)
+            or not isinstance(users, int)
+            or users < 0
+            or isinstance(departments, bool)
+            or not isinstance(departments, int)
+            or departments < 0
+        ):
+            return "sync 条目 counters 无效。"
+        seen_corps.add(corp_id)
+    return ""
 
 
 def _check_dingtalk() -> DependencyCheckResult:
@@ -268,6 +322,7 @@ def _check_connectors() -> DependencyCheckResult:
     # 函数内导入: 避免 applications ← connectors 模块级互赖(connectors 依赖 applications)。
     from easyauth.connectors.models import (  # noqa: PLC0415
         SYNC_RUN_STATUS_FAILED,
+        ConnectorConfigError,
         ConnectorInstance,
     )
     from easyauth.connectors.services import (  # noqa: PLC0415
@@ -281,6 +336,22 @@ def _check_connectors() -> DependencyCheckResult:
             status=DEPENDENCY_HEALTH_STATUS_HEALTHY,
             summary="无启用的供给连接器实例。",
             error_summary="",
+        )
+    config_errors: list[tuple[ConnectorInstance, ConnectorConfigError]] = []
+    for instance in instances:
+        try:
+            _ = instance.config
+        except ConnectorConfigError as error:
+            config_errors.append((instance, error))
+    if config_errors:
+        names = ", ".join(
+            f"{item.app.app_key}:{item.connector_key}" for item, _error in config_errors
+        )
+        return DependencyCheckResult(
+            dependency=DEPENDENCY_CONNECTORS,
+            status=DEPENDENCY_HEALTH_STATUS_UNHEALTHY,
+            summary=f"连接器实例配置损坏({names})。",
+            error_summary="; ".join(str(error) for _item, error in config_errors),
         )
     failing = [
         instance

@@ -7,19 +7,32 @@ from typing import TYPE_CHECKING, Final
 
 import pytest
 from django.test import Client, override_settings
+from django.utils import timezone
 
 from easyauth.access_requests.models import (
+    DECISION_ACTOR_CONSOLE_ADMIN,
     REQUEST_STATUS_GRANT_APPLIED,
     REQUEST_STATUS_GRANT_FAILED,
     REQUEST_STATUS_SUBMITTED,
     AccessRequest,
     AccessRequestGroup,
+    AccessRequestGroupGrantSnapshot,
 )
-from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App, ApprovalRule, AuthorizationGroup
+from easyauth.applications.models import (
+    App,
+    ApprovalRule,
+    AppScope,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
+    Permission,
+)
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import GRANT_STATUS_REVOKED, AccessGrant
+from tests.integration.admin_console.auth_helpers import (
+    authenticate_console_admin,
+    authenticate_console_user,
+)
 
 if TYPE_CHECKING:
     from django.conf import LazySettings
@@ -52,6 +65,10 @@ def test_ops3_console_operations_api_filters_access_requests_and_grants() -> Non
         reason="CRM 授权失败",
         idempotency_key="ops3-crm-failed",
         payload_digest="a" * 64,
+        approved_at=timezone.now(),
+        decided_at=timezone.now(),
+        decided_by="ops3-operations-admin",
+        decision_actor_type=DECISION_ACTOR_CONSOLE_ADMIN,
     )
     _ = AuditLog.objects.create(
         actor_type="admin",
@@ -111,6 +128,10 @@ def test_ops3_access_request_failure_reason_uses_latest_failure_event() -> None:
         reason="申请原因",
         idempotency_key="ops3-failure-reason-request",
         payload_digest="c" * 64,
+        approved_at=timezone.now(),
+        decided_at=timezone.now(),
+        decided_by="ops3-failure-reason-admin",
+        decision_actor_type=DECISION_ACTOR_CONSOLE_ADMIN,
     )
     for error in ("旧失败原因", "最新失败原因"):
         _ = AuditLog.objects.create(
@@ -145,6 +166,10 @@ def test_ops3_access_request_failure_reason_fails_on_invalid_contract(
         reason="申请原因",
         idempotency_key="ops3-invalid-failure-reason-request",
         payload_digest="d" * 64,
+        approved_at=timezone.now(),
+        decided_at=timezone.now(),
+        decided_by="ops3-invalid-failure-reason-admin",
+        decision_actor_type=DECISION_ACTOR_CONSOLE_ADMIN,
     )
     if metadata:
         _ = AuditLog.objects.create(
@@ -218,6 +243,30 @@ def test_ops3_console_emergency_revoke_requires_superuser_reason_and_csrf() -> N
     assert emergency_audit.metadata["app_key"] == app.app_key
 
 
+def test_ops3_console_emergency_revoke_rejects_when_no_active_grant() -> None:
+    client = _logged_in_superuser("ops3-no-grant-admin")
+    target_user = UserMirror.objects.create(authentik_user_id="ops3-no-grant-target")
+    app = App.objects.create(app_key="ops3-no-grant-app", name="Emergency CRM")
+
+    response = client.post(
+        EMERGENCY_REVOKES_API_URL,
+        data=dumps(
+            {
+                "user_id": target_user.authentik_user_id,
+                "app_key": app.app_key,
+                "reason": "安全事件应急",
+            },
+        ),
+        content_type="application/json",
+    )
+
+    body = response.json()
+    assert response.status_code == HTTPStatus.CONFLICT
+    assert body["error"]["code"] == "CONFLICT"
+    assert body["error"]["details"]["reason"] == "active_grant_not_found"
+    assert AuditLog.objects.count() == 0
+
+
 def test_ops3_console_emergency_revoke_rejects_empty_reason() -> None:
     # Given: 系统管理员准备提交缺少原因的紧急撤权请求。
     client = _logged_in_superuser("ops3-empty-reason-admin")
@@ -262,8 +311,13 @@ def test_ops3_console_retry_grant_failed_applies_once_without_reincrementing_ver
         reason="首次授权落库失败",
         idempotency_key="ops3-retry-request",
         payload_digest="e" * 64,
+        approved_at=timezone.now(),
+        decided_at=timezone.now(),
+        decided_by="ops3-retry-admin",
+        decision_actor_type=DECISION_ACTOR_CONSOLE_ADMIN,
     )
     _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
+    _attach_group_snapshot(access_request, group)
 
     # When: 管理员执行重试, 随后对已处理申请重复重试。
     first = client.post(
@@ -371,30 +425,38 @@ def _logged_in_superuser(
     *,
     enforce_csrf_checks: bool = False,
 ) -> Client:
-    return _authentik_client(
-        username,
-        enforce_csrf_checks=enforce_csrf_checks,
-        groups=("easyauth-admins",),
-    )
+    client = Client(HTTP_HOST="localhost", enforce_csrf_checks=enforce_csrf_checks)
+    return authenticate_console_admin(client, username, groups=("easyauth-admins",))
 
 
 def _logged_in_user(username: str) -> Client:
-    return _authentik_client(username)
+    client = Client(HTTP_HOST="localhost")
+    return authenticate_console_user(client, username)
 
 
-def _authentik_client(
-    username: str,
-    *,
-    enforce_csrf_checks: bool = False,
-    groups: tuple[str, ...] = (),
-) -> Client:
-    user, _created = UserMirror.objects.get_or_create(authentik_user_id=username)
-    client = Client(HTTP_HOST="localhost", enforce_csrf_checks=enforce_csrf_checks)
-    session = client.session
-    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
-    session["easyauth_authentik_groups"] = list(groups or ("EasyAuth Admins",))
-    session.save()
-    return client
+def _attach_group_snapshot(access_request: AccessRequest, group: AuthorizationGroup) -> None:
+    scope = AppScope.objects.create(app=access_request.app, key="GLOBAL", name="Global")
+    permission = Permission.objects.create(
+        app=access_request.app,
+        key=f"{group.key}.read",
+        name=f"{group.name} Read",
+        supported_scopes=[scope.key],
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key=scope.key,
+    )
+    _ = AccessRequestGroupGrantSnapshot.objects.create(
+        access_request=access_request,
+        authorization_group_id_snapshot=group.id,
+        authorization_group_key=group.key,
+        authorization_group_kind=group.kind,
+        authorization_group_name=group.name,
+        permission_key=permission.key,
+        permission_name=permission.name,
+        scope_key=scope.key,
+    )
 
 
 def _extract_csrf_token(html: str) -> str:

@@ -8,8 +8,7 @@ from typing import Final, Protocol
 import pytest
 from django.test import Client, override_settings
 
-from easyauth.accounts.auth import AUTHENTIK_GROUPS_SESSION_KEY, AUTHENTIK_SESSION_KEY
-from easyauth.accounts.models import UserMirror
+from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.applications.models import (
     App,
     AppMembership,
@@ -21,6 +20,10 @@ from easyauth.applications.models import (
     PermissionTemplateVersion,
 )
 from easyauth.audit.models import AuditLog
+from tests.integration.admin_console.auth_helpers import (
+    authenticate_console_admin,
+    authenticate_console_user,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -110,7 +113,6 @@ def test_ops1_console_entry_requires_login_even_in_debug_mode() -> None:
     assert response.status_code == HTTPStatus.FOUND
     assert response.headers["Location"] == "/auth/login/?next=/console/"
     assert AUTHENTIK_SESSION_KEY not in client.session
-    assert AUTHENTIK_GROUPS_SESSION_KEY not in client.session
 
 
 def test_ops1_console_entry_serves_shell_for_non_admin_console_user() -> None:
@@ -225,22 +227,13 @@ def _logged_in_client(username: str, *, enforce_csrf_checks: bool = False) -> Cl
 
 
 def _login_client(*, username: str, enforce_csrf_checks: bool) -> Client:
-    user, _created = UserMirror.objects.get_or_create(authentik_user_id=username)
     client = Client(HTTP_HOST="localhost", enforce_csrf_checks=enforce_csrf_checks)
-    session = client.session
-    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
-    session[AUTHENTIK_GROUPS_SESSION_KEY] = ["EasyAuth Admins"]
-    session.save()
-    return client
+    return authenticate_console_admin(client, username)
 
 
 def _non_admin_client(username: str) -> Client:
-    user, _created = UserMirror.objects.get_or_create(authentik_user_id=username)
     client = Client(HTTP_HOST="localhost")
-    session = client.session
-    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
-    session.save()
-    return client
+    return authenticate_console_user(client, username)
 
 
 def _api_url(app_key: str, endpoint: str) -> str:

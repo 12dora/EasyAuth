@@ -9,6 +9,7 @@ import pytest
 from django.utils import timezone
 
 from easyauth.access_requests.models import (
+    DECISION_ACTOR_USER,
     REQUEST_STATUS_APPROVED,
     REQUEST_STATUS_GRANT_APPLIED,
     REQUEST_STATUS_GRANT_FAILED,
@@ -153,19 +154,29 @@ def test_ops2_portal_explains_request_status_before_grant_is_effective() -> None
     # Given: 当前登录员工已有审批通过、授权生效和授权失败申请。
     client, user = logged_in_client("ops2-status-guide-user")
     app = App.objects.create(app_key="ops2-status-guide-app", name="CRM")
+    approved_at = timezone.now()
     _ = AccessRequest.objects.create(
         user=user,
         app=app,
         status=REQUEST_STATUS_APPROVED,
         idempotency_key="ops2-status-approved",
         payload_digest="a" * 64,
+        approved_at=approved_at,
+        decided_at=approved_at,
+        decided_by="approver",
+        decision_actor_type=DECISION_ACTOR_USER,
     )
     _ = AccessRequest.objects.create(
         user=user,
         app=app,
         status=REQUEST_STATUS_GRANT_APPLIED,
+        approved_at=approved_at,
         idempotency_key="ops2-status-applied",
         payload_digest="b" * 64,
+        decided_at=approved_at,
+        decided_by="approver",
+        decision_actor_type=DECISION_ACTOR_USER,
+        applied_at=timezone.now(),
     )
     _ = AccessRequest.objects.create(
         user=user,
@@ -173,6 +184,10 @@ def test_ops2_portal_explains_request_status_before_grant_is_effective() -> None
         status=REQUEST_STATUS_GRANT_FAILED,
         idempotency_key="ops2-status-failed",
         payload_digest="c" * 64,
+        approved_at=approved_at,
+        decided_at=approved_at,
+        decided_by="approver",
+        decision_actor_type=DECISION_ACTOR_USER,
     )
 
     # When: 员工读取申请状态 API。

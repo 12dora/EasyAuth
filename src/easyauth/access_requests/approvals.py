@@ -20,6 +20,7 @@ from easyauth.access_requests.models import (
     REQUEST_STATUS_WITHDRAWN,
     AccessRequest,
     AccessRequestApprover,
+    AccessRequestGroupGrantSnapshot,
 )
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.audit.services import AuditRecord, AuditService
@@ -29,6 +30,7 @@ if TYPE_CHECKING:
 
 type ApprovalActionErrorKind = Literal[
     "application_error",
+    "application_conflict",
     "comment_required",
     "conflict",
     "not_approver",
@@ -280,6 +282,28 @@ def _apply_grant(access_request: AccessRequest, decision: ApprovalDecision) -> A
         )
     except AccessRequestApplicationError as exc:
         access_request.refresh_from_db(fields=["status"])
+        if exc.kind == "base_revision_conflict":
+            raise ApprovalActionError(
+                kind="application_conflict",
+                message="基础授权已变化, 请重新提交申请。",
+                details={
+                    "request_id": access_request.id,
+                    "status": access_request.status,
+                    "reason": "base_grant_revision_conflict",
+                    "decision_committed": True,
+                },
+            ) from exc
+        if exc.kind == "request_expired":
+            raise ApprovalActionError(
+                kind="application_conflict",
+                message="申请已过期, 请重新提交申请。",
+                details={
+                    "request_id": access_request.id,
+                    "status": access_request.status,
+                    "reason": "request_expired",
+                    "decision_committed": True,
+                },
+            ) from exc
         raise ApprovalActionError(
             kind="application_error",
             message=str(exc),
@@ -369,6 +393,24 @@ def _record_decision_event(
                 "app_key": access_request.app.app_key,
                 "decided_by": decision.actor_id,
                 "comment": access_request.decision_comment,
+                "authorization_group_grants": _group_grant_snapshot_items(access_request),
             },
         ),
     )
+
+
+def _group_grant_snapshot_items(access_request: AccessRequest) -> list[JsonValue]:
+    return [
+        {
+            "authorization_group_id_snapshot": snapshot.authorization_group_id_snapshot,
+            "authorization_group_key": snapshot.authorization_group_key,
+            "authorization_group_kind": snapshot.authorization_group_kind,
+            "authorization_group_name": snapshot.authorization_group_name,
+            "permission": snapshot.permission_key,
+            "permission_name": snapshot.permission_name,
+            "scope": snapshot.scope_key,
+        }
+        for snapshot in AccessRequestGroupGrantSnapshot.objects.filter(
+            access_request=access_request,
+        ).order_by("authorization_group_id_snapshot", "permission_key", "scope_key")
+    ]

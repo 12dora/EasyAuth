@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, cast
 from uuid import UUID
 
 import pytest
@@ -10,16 +10,26 @@ from django.utils import timezone
 from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import App
 from easyauth.connectors import dispatch as dispatch_module
+from easyauth.connectors.base import ExternalGroup, ExternalGroupPage
 from easyauth.connectors.models import (
     SYNC_TRIGGER_MANUAL,
     SYNC_TRIGGER_OFFBOARD,
+    ConnectorExternalGroup,
     ConnectorInstance,
     ConnectorSyncRun,
+)
+from easyauth.connectors.services import (
+    EXTERNAL_GROUP_REFRESH_STATUS_SUCCESS,
+    RECONCILE_LEASE_GRACE_SECONDS,
+    RECONCILE_QUEUE_CLAIM_TIMEOUT_SECONDS,
+    RECONCILE_TASK_SOFT_TIME_LIMIT_SECONDS,
+    RECONCILE_TASK_TIME_LIMIT_SECONDS,
 )
 from easyauth.tasks import connectors as tasks_module
 from easyauth.tasks.connectors import (
     offboard_user_task,
     prune_connector_sync_runs_task,
+    refresh_connector_external_groups_task,
     schedule_connector_reconciles_task,
 )
 from tests.unit.connectors.fakes import FakeConnector
@@ -30,6 +40,12 @@ if TYPE_CHECKING:
 pytestmark = pytest.mark.django_db
 
 FAKE_CONNECTOR_PATH = "tests.unit.connectors.fakes.FakeConnector"
+EXPECTED_REFRESHED_EXTERNAL_GROUPS = 2
+
+
+class _TimedTask(Protocol):
+    soft_time_limit: int
+    time_limit: int
 
 
 @pytest.fixture(autouse=True)
@@ -96,6 +112,68 @@ def test_offboard_task_uses_same_serial_worker_as_reconcile(
     assert instance.reconcile_generation == 1
     assert instance.reconcile_dirty is True
     assert instance.reconcile_pending_trigger == SYNC_TRIGGER_OFFBOARD
+
+
+def test_reconcile_task_limits_and_lease_share_one_configuration_source() -> None:
+    task = cast("_TimedTask", tasks_module.reconcile_connector_instance_task)
+    assert task.soft_time_limit == RECONCILE_TASK_SOFT_TIME_LIMIT_SECONDS
+    assert task.time_limit == RECONCILE_TASK_TIME_LIMIT_SECONDS
+    assert (
+        RECONCILE_QUEUE_CLAIM_TIMEOUT_SECONDS
+        == RECONCILE_TASK_TIME_LIMIT_SECONDS + RECONCILE_LEASE_GRACE_SECONDS
+    )
+
+
+def test_refresh_external_groups_task_writes_local_snapshot() -> None:
+    app = App.objects.create(app_key="conn-task-ext-groups", name="X")
+    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+    old_seen_at = timezone.now() - timedelta(days=1)
+    _ = ConnectorExternalGroup.objects.create(
+        instance=instance,
+        external_ref="stale-group",
+        external_name="Stale Group",
+        is_active=True,
+        last_seen_at=old_seen_at,
+    )
+    FakeConnector.external_group_pages = (
+        ExternalGroupPage(
+            groups=(ExternalGroup(ref="fake-group-a", name="Fake Group A"),),
+            cursor="page-1",
+        ),
+        ExternalGroupPage(
+            groups=(ExternalGroup(ref="fake-group-b", name="Fake Group B"),),
+            cursor="page-2",
+        ),
+    )
+
+    result = refresh_connector_external_groups_task(instance.id)
+
+    assert result["active_count"] == EXPECTED_REFRESHED_EXTERNAL_GROUPS
+    assert result["deactivated_count"] == 1
+    assert result["status"] == EXTERNAL_GROUP_REFRESH_STATUS_SUCCESS
+    assert result["cursor"] == "page-2"
+    assert ConnectorExternalGroup.objects.filter(
+        instance=instance,
+        external_ref="fake-group-a",
+        external_name="Fake Group A",
+        is_active=True,
+    ).exists()
+    assert ConnectorExternalGroup.objects.filter(
+        instance=instance,
+        external_ref="fake-group-b",
+        external_name="Fake Group B",
+        is_active=True,
+    ).exists()
+    stale_group = ConnectorExternalGroup.objects.get(
+        instance=instance,
+        external_ref="stale-group",
+    )
+    assert stale_group.is_active is False
+    instance.refresh_from_db()
+    assert instance.external_groups_refresh_status == EXTERNAL_GROUP_REFRESH_STATUS_SUCCESS
+    assert instance.external_groups_refresh_cursor == "page-2"
+    assert instance.external_groups_refreshed_at is not None
+    assert FakeConnector.list_external_groups_calls == 1
 
 
 def test_offboard_during_active_lease_keeps_dirty_without_duplicate_worker(
@@ -170,7 +248,8 @@ def test_scheduler_recovers_stale_broker_queue_independent_of_interval(
         reconcile_generation=1,
         reconcile_dirty=True,
         reconcile_worker_queued=True,
-        reconcile_worker_queued_at=now - timedelta(minutes=11),
+        reconcile_worker_queued_at=now
+        - timedelta(seconds=RECONCILE_QUEUE_CLAIM_TIMEOUT_SECONDS + 1),
     )
 
     queued = schedule_connector_reconciles_task()

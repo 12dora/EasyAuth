@@ -24,6 +24,22 @@ def test_database_config_uses_sqlite_when_database_url_is_missing_in_debug(
     assert default_database["NAME"] == base.BASE_DIR / "db.sqlite3"
 
 
+def test_database_config_uses_explicit_sqlite_path_in_debug() -> None:
+    # Given: Playwright 等真实本地测试需要隔离 SQLite 文件。
+    environ = {
+        "DJANGO_DEBUG": "1",
+        "EASYAUTH_SQLITE_PATH": "/tmp/easyauth-playwright.sqlite3",  # noqa: S108
+    }
+
+    # When: 生成 Django 数据库配置。
+    database_config = base.database_config_from_env(environ)
+
+    # Then: 仅 DEBUG SQLite 路径受显式变量控制。
+    default_database = database_config["default"]
+    assert default_database["ENGINE"] == "django.db.backends.sqlite3"
+    assert default_database["NAME"] == base.Path("/tmp/easyauth-playwright.sqlite3")  # noqa: S108
+
+
 def test_database_config_fails_fast_when_database_url_is_missing_in_production() -> None:
     # Given: 生产路径(非 DEBUG)缺失 DATABASE_URL。
     environ: dict[str, str] = {}

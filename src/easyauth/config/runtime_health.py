@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, cast
 
 from django.core.cache import cache
 
@@ -43,6 +43,6 @@ def mark_heartbeat(name: str) -> None:
 
 
 def read_heartbeat(name: str, *, max_age_seconds: float) -> Heartbeat:
-    value = cache.get(f"{HEARTBEAT_CACHE_PREFIX}{name}")
+    value = cast("object", cache.get(f"{HEARTBEAT_CACHE_PREFIX}{name}"))
     recorded_at = float(value) if isinstance(value, int | float) else None
     return Heartbeat(name=name, recorded_at=recorded_at, max_age_seconds=max_age_seconds)

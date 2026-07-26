@@ -22,7 +22,7 @@ from easyauth.applications.models import (
     Permission,
 )
 from easyauth.applications.oauth import OAuthClientIssue, OAuthClientService
-from easyauth.applications.services import StaticTokenService
+from easyauth.applications.services import AppCredentialService
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import (
     AccessGrant,
@@ -96,7 +96,7 @@ def test_permission_query_returns_identical_json_for_static_and_oauth_credential
     monkeypatch.setattr(django_timezone, "now", _fixed_now)
     user = UserMirror.objects.create(authentik_user_id="user-oauth-equivalent")
     app = App.objects.create(app_key="crm-oauth-equivalent", name="CRM OAuth Equivalent")
-    static_issue = StaticTokenService.create_token(app=app, name="static integration")
+    static_issue = AppCredentialService.create_static_token(app=app, name="static integration")
     oauth_issue = _create_bound_oauth_client(app=app, name="CRM OAuth client")
     _ = AppScope.objects.create(app=app, key="GLOBAL", name="全局")
     admin = AuthorizationGroup.objects.create(

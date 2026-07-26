@@ -10,7 +10,7 @@ from django.contrib.sessions.middleware import SessionMiddleware
 from django.http import JsonResponse
 from django.test import RequestFactory, override_settings
 
-from easyauth.accounts.auth import AUTHENTIK_GROUPS_SESSION_KEY, AUTHENTIK_SESSION_KEY
+from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import USER_STATUS_DISABLED, UserMirror
 from easyauth.admin_console.request_guards import require_console_actor, require_post
 from easyauth.api.errors import ErrorCode, JsonValue
@@ -51,18 +51,33 @@ def test_require_console_actor_maps_active_authentik_session_to_console_actor() 
 
 
 @override_settings(EASYAUTH_CONSOLE_SUPERUSER_GROUPS=("easyauth-admins",))
-def test_require_console_actor_marks_superuser_from_authentik_group_session() -> None:
+def test_require_console_actor_marks_superuser_from_authentik_authority(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _ = UserMirror.objects.create(authentik_user_id="root")
-    request = _request_with_session(
-        authentik_user_id="root",
-        groups=("developers", "easyauth-admins"),
-    )
+    _patch_authentik_groups(monkeypatch, ("developers", "easyauth-admins"))
+    request = _request_with_session(authentik_user_id="root")
     request.user = AnonymousUser()
 
     actor = require_console_actor(request)
 
     assert isinstance(actor, ConsoleActor)
     assert actor == ConsoleActor(user_id="root", is_superuser=True)
+
+
+@override_settings(EASYAUTH_CONSOLE_SUPERUSER_GROUPS=("easyauth-admins",))
+def test_require_console_actor_revokes_superuser_when_authentik_removes_group(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _ = UserMirror.objects.create(authentik_user_id="root")
+    _patch_authentik_groups(monkeypatch, ())
+    request = _request_with_session(authentik_user_id="root")
+    request.user = AnonymousUser()
+
+    actor = require_console_actor(request)
+
+    assert isinstance(actor, ConsoleActor)
+    assert actor == ConsoleActor(user_id="root", is_superuser=False)
 
 
 def test_require_console_actor_clears_session_for_inactive_user_mirror() -> None:
@@ -109,7 +124,6 @@ def _json_object(response: HttpResponse) -> JsonObject:
 def _request_with_session(
     *,
     authentik_user_id: str = "",
-    groups: tuple[str, ...] = (),
 ) -> HttpRequest:
     request = RequestFactory().get("/console/apps")
     middleware = SessionMiddleware(lambda _request: JsonResponse({}))
@@ -117,6 +131,19 @@ def _request_with_session(
     request.session.save()
     if authentik_user_id:
         request.session[AUTHENTIK_SESSION_KEY] = authentik_user_id
-    if groups:
-        request.session[AUTHENTIK_GROUPS_SESSION_KEY] = list(groups)
     return request
+
+
+def _patch_authentik_groups(
+    monkeypatch: pytest.MonkeyPatch,
+    groups: tuple[str, ...],
+) -> None:
+    class FakeAuthentikClient:
+        def user_group_names_by_uid(self, authentik_user_uid: str) -> tuple[str, ...]:
+            assert authentik_user_uid == "root"
+            return groups
+
+    monkeypatch.setattr(
+        "easyauth.admin_console.identity.AuthentikAdminClient.from_settings",
+        lambda: FakeAuthentikClient(),
+    )

@@ -4,7 +4,7 @@ from datetime import timedelta
 from http import HTTPStatus
 from json import loads
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from django.core.cache import cache
@@ -21,6 +21,7 @@ from easyauth.accounts.models import (
     DingTalkUserMirror,
     UserMirror,
 )
+from easyauth.api.directory_payloads import build_user_list_items
 from easyauth.api.directory_views import (
     directory_departments,
     directory_user_detail,
@@ -30,7 +31,11 @@ from easyauth.api.directory_views import (
 )
 from easyauth.applications.models import CAPABILITY_DIRECTORY, App, AppCapability
 from easyauth.applications.services import AppPrincipal
-from easyauth.audit.models import AuditLog
+from easyauth.audit.directory_audit import flush_directory_audit_buckets
+from easyauth.audit.models import AuditLog, DirectoryAuditBucket
+
+if TYPE_CHECKING:
+    from easyauth.api.errors import JsonValue
 
 pytestmark = pytest.mark.django_db
 
@@ -41,6 +46,7 @@ _APP_KEY = "easyproject"
 _AUTH_HEADER = "Bearer eat_directory_test"
 _CACHE_CONTROL = "private, max-age=60"
 _EXPECTED_AMBIGUITY_CANDIDATES = 2
+_DIRECTORY_AUDIT_EXPECTED_CALLS = 2
 
 
 def _load_sample(name: str) -> dict[str, Any]:
@@ -157,6 +163,7 @@ def _seed_contract_directory(*, with_manager_row: bool = True) -> None:
     _ = UserMirror.objects.create(
         authentik_user_id="f7c31a09e5b24f8d9a1c",
         name="王小明",
+        dingtalk_source_slug=_SOURCE,
         dingtalk_corp_id=_CORP_ID,
         dingtalk_userid="user0123",
         status="active",
@@ -207,7 +214,7 @@ def test_directory_user_detail_matches_contract_sample(
     assert loads(response.content) == _load_sample("user_detail.json")
 
 
-def test_directory_user_detail_accepts_dt_prefix(
+def test_directory_user_detail_accepts_scoped_dingtalk_ref(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
@@ -216,12 +223,55 @@ def test_directory_user_detail_accepts_dt_prefix(
     _seed_contract_directory()
     request = RequestFactory().get("/", HTTP_AUTHORIZATION=_AUTH_HEADER)
 
-    response = directory_user_detail(request, _APP_KEY, "dt:user0123")
+    response = directory_user_detail(
+        request,
+        _APP_KEY,
+        build_dingtalk_user_ref(source_slug=_SOURCE, corp_id=_CORP_ID, user_id="user0123"),
+    )
 
     assert response.status_code == HTTPStatus.OK
     payload = loads(response.content)
     assert payload["dingtalk_user_id"] == "user0123"
     assert payload["user_id"] == "f7c31a09e5b24f8d9a1c"
+
+
+def test_directory_user_payload_authentik_id_is_scoped_by_source() -> None:
+    source_a_user = DingTalkUserMirror.objects.create(
+        source_slug="source-a",
+        corp_id="shared-corp",
+        user_id="shared-user",
+        name="A 用户",
+        status="active",
+    )
+    source_b_user = DingTalkUserMirror.objects.create(
+        source_slug="source-b",
+        corp_id="shared-corp",
+        user_id="shared-user",
+        name="B 用户",
+        status="active",
+    )
+    _ = UserMirror.objects.create(
+        authentik_user_id="auth-source-a",
+        dingtalk_source_slug="source-a",
+        dingtalk_corp_id="shared-corp",
+        dingtalk_userid="shared-user",
+    )
+    _ = UserMirror.objects.create(
+        authentik_user_id="auth-source-b",
+        dingtalk_source_slug="source-b",
+        dingtalk_corp_id="shared-corp",
+        dingtalk_userid="shared-user",
+    )
+
+    items = cast(
+        "list[dict[str, JsonValue]]",
+        build_user_list_items([source_a_user, source_b_user]),
+    )
+
+    assert {item["source_slug"]: item["user_id"] for item in items} == {
+        "source-a": "auth-source-a",
+        "source-b": "auth-source-b",
+    }
 
 
 def test_directory_users_include_null_user_id_entry(
@@ -418,9 +468,21 @@ def test_directory_user_manager_matches_contract_and_reason_codes(
     missing_request = RequestFactory().get("/", HTTP_AUTHORIZATION=_AUTH_HEADER)
     no_manager_request = RequestFactory().get("/", HTTP_AUTHORIZATION=_AUTH_HEADER)
 
-    ok = directory_user_manager(ok_request, _APP_KEY, "dt:user0123")
-    missing = directory_user_manager(missing_request, _APP_KEY, "dt:no-such-user")
-    no_manager = directory_user_manager(no_manager_request, _APP_KEY, "dt:manager8836")
+    ok = directory_user_manager(
+        ok_request,
+        _APP_KEY,
+        build_dingtalk_user_ref(source_slug=_SOURCE, corp_id=_CORP_ID, user_id="user0123"),
+    )
+    missing = directory_user_manager(
+        missing_request,
+        _APP_KEY,
+        build_dingtalk_user_ref(source_slug=_SOURCE, corp_id=_CORP_ID, user_id="no-such-user"),
+    )
+    no_manager = directory_user_manager(
+        no_manager_request,
+        _APP_KEY,
+        build_dingtalk_user_ref(source_slug=_SOURCE, corp_id=_CORP_ID, user_id="manager8836"),
+    )
 
     assert ok.status_code == HTTPStatus.OK
     assert loads(ok.content) == _load_sample("user_manager.json")
@@ -428,6 +490,47 @@ def test_directory_user_manager_matches_contract_and_reason_codes(
     assert loads(missing.content)["error"]["details"]["reason"] == "user_not_found"
     assert no_manager.status_code == HTTPStatus.NOT_FOUND
     assert loads(no_manager.content)["error"]["details"]["reason"] == "no_manager"
+
+
+def test_directory_user_manager_for_authentik_ref_uses_user_mirror_source_scope(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
+    _enable_directory(app)
+    _auth(monkeypatch, app)
+    _ = DingTalkUserMirror.objects.create(
+        source_slug="source-a",
+        corp_id="shared-corp",
+        user_id="shared-manager",
+        name="A 主管",
+        status="active",
+    )
+    _ = DingTalkUserMirror.objects.create(
+        source_slug="source-b",
+        corp_id="shared-corp",
+        user_id="shared-manager",
+        name="B 主管",
+        status="active",
+    )
+    _ = UserMirror.objects.create(
+        authentik_user_id="auth-source-a-subject",
+        dingtalk_source_slug="source-a",
+        dingtalk_corp_id="shared-corp",
+        dingtalk_userid="missing-directory-subject",
+        manager_userid="shared-manager",
+    )
+
+    response = directory_user_manager(
+        RequestFactory().get("/", HTTP_AUTHORIZATION=_AUTH_HEADER),
+        _APP_KEY,
+        "auth-source-a-subject",
+    )
+
+    assert response.status_code == HTTPStatus.OK
+    payload = loads(response.content)
+    assert payload["source_slug"] == "source-a"
+    assert payload["dingtalk_user_id"] == "shared-manager"
+    assert payload["name"] == "A 主管"
 
 
 def test_directory_user_subordinates_matches_contract_sample(
@@ -439,7 +542,11 @@ def test_directory_user_subordinates_matches_contract_sample(
     _seed_contract_directory()
     request = RequestFactory().get("/", HTTP_AUTHORIZATION=_AUTH_HEADER)
 
-    response = directory_user_subordinates(request, _APP_KEY, "dt:manager8836")
+    response = directory_user_subordinates(
+        request,
+        _APP_KEY,
+        build_dingtalk_user_ref(source_slug=_SOURCE, corp_id=_CORP_ID, user_id="manager8836"),
+    )
 
     assert response.status_code == HTTPStatus.OK
     assert loads(response.content) == _load_sample("user_subordinates.json")
@@ -478,12 +585,24 @@ def test_directory_departments_parent_id_filter(
     _seed_contract_directory()
     request = RequestFactory().get(
         "/",
-        {"parent_id": "1"},
+        {
+            "parent_id": build_department_ref(
+                source_slug=_SOURCE,
+                corp_id=_CORP_ID,
+                department_id="1",
+            ),
+        },
         HTTP_AUTHORIZATION=_AUTH_HEADER,
     )
     missing_parent = RequestFactory().get(
         "/",
-        {"parent_id": "no-such"},
+        {
+            "parent_id": build_department_ref(
+                source_slug=_SOURCE,
+                corp_id=_CORP_ID,
+                department_id="no-such",
+            ),
+        },
         HTTP_AUTHORIZATION=_AUTH_HEADER,
     )
 
@@ -564,6 +683,7 @@ def test_directory_removed_from_dingtalk_still_detailable(
     _ = UserMirror.objects.create(
         authentik_user_id="ak-removed",
         name="历史用户",
+        dingtalk_source_slug=_SOURCE,
         dingtalk_corp_id=_CORP_ID,
         dingtalk_userid="gone-user",
         status="departed",
@@ -581,23 +701,24 @@ def test_directory_removed_from_dingtalk_still_detailable(
     assert payload["manager"] is None
 
 
-def test_directory_removed_dt_ref_still_detailable_via_user_mirror(
+def test_directory_removed_dingtalk_user_is_detailable_via_authentik_ref(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """dt: 引用已从钉钉目录移除的用户: 经 UserMirror 兜底返回 200 active:false。"""
+    """已从钉钉目录移除的用户只能经 Authentik 镜像引用返回 200 active:false。"""
     app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
     _enable_directory(app)
     _auth(monkeypatch, app)
     _ = UserMirror.objects.create(
         authentik_user_id="ak-removed-dt",
         name="历史用户 DT",
+        dingtalk_source_slug=_SOURCE,
         dingtalk_corp_id=_CORP_ID,
         dingtalk_userid="gone-via-dt",
         status="departed",
     )
     request = RequestFactory().get("/", HTTP_AUTHORIZATION=_AUTH_HEADER)
 
-    response = directory_user_detail(request, _APP_KEY, "dt:gone-via-dt")
+    response = directory_user_detail(request, _APP_KEY, "ak-removed-dt")
 
     assert response.status_code == HTTPStatus.OK
     payload = loads(response.content)
@@ -617,12 +738,24 @@ def test_directory_users_filter_by_department_and_manager(
     _seed_contract_directory()
     by_dept = RequestFactory().get(
         "/",
-        {"department_id": "470001"},
+        {
+            "department_id": build_department_ref(
+                source_slug=_SOURCE,
+                corp_id=_CORP_ID,
+                department_id="470001",
+            ),
+        },
         HTTP_AUTHORIZATION=_AUTH_HEADER,
     )
     by_manager = RequestFactory().get(
         "/",
-        {"manager_id": "dt:manager8836"},
+        {
+            "manager_id": build_dingtalk_user_ref(
+                source_slug=_SOURCE,
+                corp_id=_CORP_ID,
+                user_id="manager8836",
+            ),
+        },
         HTTP_AUTHORIZATION=_AUTH_HEADER,
     )
     by_q = RequestFactory().get(
@@ -696,7 +829,7 @@ def test_multi_corp_scoped_refs_prevent_cross_corp_user_and_relationship_mix(
         department_id="shared-dept",
     )
 
-    ambiguous_detail = directory_user_detail(
+    unscoped_detail = directory_user_detail(
         RequestFactory().get("/", HTTP_AUTHORIZATION=_AUTH_HEADER),
         _APP_KEY,
         "dt:shared-user",
@@ -716,7 +849,7 @@ def test_multi_corp_scoped_refs_prevent_cross_corp_user_and_relationship_mix(
         _APP_KEY,
         manager_a_ref,
     )
-    ambiguous_department = directory_users(
+    unscoped_department = directory_users(
         RequestFactory().get(
             "/",
             {"department_id": "shared-dept"},
@@ -732,7 +865,7 @@ def test_multi_corp_scoped_refs_prevent_cross_corp_user_and_relationship_mix(
         ),
         _APP_KEY,
     )
-    ambiguous_manager = directory_users(
+    unscoped_manager = directory_users(
         RequestFactory().get(
             "/",
             {"manager_id": "dt:shared-manager"},
@@ -748,7 +881,7 @@ def test_multi_corp_scoped_refs_prevent_cross_corp_user_and_relationship_mix(
         ),
         _APP_KEY,
     )
-    legacy_unique = directory_user_detail(
+    unscoped_unique = directory_user_detail(
         RequestFactory().get("/", HTTP_AUTHORIZATION=_AUTH_HEADER),
         _APP_KEY,
         "dt:unique-user",
@@ -759,29 +892,26 @@ def test_multi_corp_scoped_refs_prevent_cross_corp_user_and_relationship_mix(
         "dt:v1:not-enough-parts",
     )
 
-    assert ambiguous_detail.status_code == HTTPStatus.CONFLICT
-    ambiguity = loads(ambiguous_detail.content)["error"]
-    assert ambiguity["details"]["reason"] == "ambiguous_user_ref"
-    assert len(ambiguity["details"]["candidate_refs"]) == _EXPECTED_AMBIGUITY_CANDIDATES
+    assert unscoped_detail.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert loads(unscoped_detail.content)["error"]["details"]["reason"] == "invalid_directory_ref"
     assert loads(scoped_detail.content)["corp_id"] == "corp-a"
     assert loads(scoped_detail.content)["user_ref"] == user_a_ref
     assert loads(scoped_manager.content)["corp_id"] == "corp-a"
     assert {item["corp_id"] for item in loads(scoped_subordinates.content)["data"]} == {
         "corp-a",
     }
-    assert ambiguous_department.status_code == HTTPStatus.CONFLICT
-    assert loads(ambiguous_department.content)["error"]["details"]["reason"] == (
-        "ambiguous_department_ref"
+    assert unscoped_department.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert loads(unscoped_department.content)["error"]["details"]["reason"] == (
+        "invalid_directory_ref"
     )
     assert {item["corp_id"] for item in loads(scoped_department.content)["data"]} == {
         "corp-a",
     }
-    assert ambiguous_manager.status_code == HTTPStatus.CONFLICT
+    assert unscoped_manager.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
     assert {item["corp_id"] for item in loads(scoped_manager_filter.content)["data"]} == {
         "corp-a",
     }
-    assert legacy_unique.status_code == HTTPStatus.OK
-    assert loads(legacy_unique.content)["corp_id"] == "corp-a"
+    assert unscoped_unique.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
     assert malformed_scoped.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
     assert loads(malformed_scoped.content)["error"]["details"]["reason"] == (
         "invalid_directory_ref"
@@ -825,7 +955,7 @@ def test_multi_corp_user_pagination_has_scope_stable_tail_key(
     assert loads(second.content)["data"][0]["corp_id"] == "corp-b"
 
 
-def test_directory_list_audit_stays_in_cache_within_hour(
+def test_directory_list_audit_uses_database_bucket_within_hour(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
@@ -837,11 +967,13 @@ def test_directory_list_audit_stays_in_cache_within_hour(
     _ = directory_users(request, _APP_KEY)
     _ = directory_users(request, _APP_KEY)
 
-    # 小时内仅 cache 累计, 不写 AuditLog(AuditLog 只追加, 翻转时再落库)。
+    bucket = DirectoryAuditBucket.objects.get(app_key=_APP_KEY, endpoint="users")
+    assert bucket.call_count == _DIRECTORY_AUDIT_EXPECTED_CALLS
+    assert bucket.flushed_at is None
     assert AuditLog.objects.filter(event_type="app_directory_queried").count() == 0
 
 
-def test_directory_list_audit_flushes_call_count_on_hour_flip(
+def test_directory_list_audit_flushes_closed_hour_bucket(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
@@ -856,7 +988,7 @@ def test_directory_list_audit_flushes_call_count_on_hour_flip(
     def _fake_now() -> timezone.datetime:
         return clock["now"]
 
-    monkeypatch.setattr("easyauth.api.directory_views.timezone.now", _fake_now)
+    monkeypatch.setattr("easyauth.audit.directory_audit.timezone.now", _fake_now)
 
     calls_in_first_hour = 2
     for _ in range(calls_in_first_hour):
@@ -864,9 +996,10 @@ def test_directory_list_audit_flushes_call_count_on_hour_flip(
     assert AuditLog.objects.filter(event_type="app_directory_queried").count() == 0
 
     clock["now"] = second_hour
-    _ = directory_users(request, _APP_KEY)
+    result = flush_directory_audit_buckets(batch_size=10)
 
     audits = AuditLog.objects.filter(event_type="app_directory_queried")
+    assert result.flushed_count == 1
     assert audits.count() == 1
     metadata = audits.get().metadata
     assert metadata["endpoint"] == "users"

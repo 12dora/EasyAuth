@@ -3,12 +3,12 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from easyauth.api.errors import JsonValue
+    from easyauth.api.serializers import PermissionQueryGrantPayload
     from easyauth.grants.query import ExpandedGrant
 
 
-def expanded_grant_payload(grant: ExpandedGrant) -> dict[str, JsonValue]:
-    payload: dict[str, JsonValue] = {
+def expanded_grant_payload(grant: ExpandedGrant) -> PermissionQueryGrantPayload:
+    payload: PermissionQueryGrantPayload = {
         "permission": grant.permission,
         "scope": grant.scope,
         "source_type": grant.source_type,

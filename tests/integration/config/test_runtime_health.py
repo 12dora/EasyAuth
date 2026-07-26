@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from http import HTTPStatus
+from typing import TYPE_CHECKING, cast
 
 import pytest
 from django.core.cache import cache
@@ -15,10 +16,17 @@ from easyauth.config.runtime_health import (
     mark_heartbeat,
 )
 
+if TYPE_CHECKING:
+    from django.http import HttpRequest
+
 
 @pytest.fixture(autouse=True)
 def _clear_health_cache() -> None:  # pyright: ignore[reportUnusedFunction]
     cache.clear()
+
+
+def _admin_actor(_request: HttpRequest) -> str:
+    return "admin"
 
 
 @pytest.mark.django_db
@@ -30,7 +38,9 @@ def test_strict_health_requires_background_heartbeats(
     monkeypatch.setattr(urls, "_broker_ready", lambda: True)
     monkeypatch.setattr(settings, "EASYAUTH_HEALTH_REQUIRE_BACKGROUND", True)
 
-    response = Client().get("/health/")
+    monkeypatch.setattr(urls, "require_superuser", _admin_actor)
+
+    response = Client().get("/health/readiness/")
 
     assert response.status_code == HTTPStatus.SERVICE_UNAVAILABLE
     assert response.json()["checks"][BEAT_WORKER_HEARTBEAT]["healthy"] is False
@@ -52,10 +62,30 @@ def test_strict_health_reports_real_runtime_components(
     ):
         mark_heartbeat(heartbeat)
 
+    monkeypatch.setattr(urls, "require_superuser", _admin_actor)
+
+    response = Client().get("/health/readiness/")
+
+    assert response.status_code == HTTPStatus.OK
+    payload = cast("dict[str, object]", response.json())
+    assert payload["status"] == "ok"
+    checks = cast("dict[str, object]", payload["checks"])
+    database = cast("dict[str, object]", checks["database"])
+    broker = cast("dict[str, object]", checks["broker"])
+    assert database["healthy"] is True
+    assert broker["healthy"] is True
+
+
+@pytest.mark.django_db
+def test_anonymous_health_only_reports_fixed_liveness() -> None:
     response = Client().get("/health/")
 
     assert response.status_code == HTTPStatus.OK
-    payload = response.json()
-    assert payload["status"] == "ok"
-    assert payload["checks"]["database"]["healthy"] is True
-    assert payload["checks"]["broker"]["healthy"] is True
+    assert response.json() == {"status": "ok"}
+
+
+@pytest.mark.django_db
+def test_readiness_requires_authorized_admin() -> None:
+    response = Client().get("/health/readiness/")
+
+    assert response.status_code == HTTPStatus.UNAUTHORIZED

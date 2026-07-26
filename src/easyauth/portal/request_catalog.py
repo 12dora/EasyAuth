@@ -41,6 +41,15 @@ class _PermissionCatalogContext:
     default_approver_by_permission_id: dict[int, _ApproverResolution]
 
 
+type _DingTalkBindingKey = tuple[str, str, str]
+
+
+@dataclass(frozen=True, slots=True)
+class _ApproverLookup:
+    authentik_user_ids: set[str]
+    direct_manager_key: _DingTalkBindingKey | None
+
+
 def request_catalog_payload(user: UserMirror) -> dict[str, JsonValue]:
     apps = tuple(App.objects.filter(is_active=True).order_by("app_key"))
     scope_options_by_app_id = _scope_options_by_app_id(tuple(app.id for app in apps))
@@ -51,9 +60,8 @@ def request_catalog_payload(user: UserMirror) -> dict[str, JsonValue]:
         if _permission_scope_options(permission, scope_options_by_app_id)
     )
     grants_by_group_id = _grants_by_group_id(authorization_groups)
-    approver_users = _active_approver_users(
-        _approver_lookup_ids(apps, authorization_groups, permissions, user),
-    )
+    approver_lookup = _approver_lookup(apps, authorization_groups, permissions, user)
+    approver_users = _active_approver_users(approver_lookup)
     resolver = _ApproverResolver(approver_users)
     direct_manager_resolution = _direct_manager_approver_resolution(user, resolver)
     default_approver_by_app_id = _app_default_approver_by_app_id(
@@ -346,26 +354,31 @@ def _permission_supports_scope(permission: Permission, scope_key: str) -> bool:
     return isinstance(supported_scopes, list) and scope_key in supported_scopes
 
 
-def _active_approver_users(lookup_ids: set[str]) -> tuple[UserMirror, ...]:
-    if not lookup_ids:
+def _active_approver_users(lookup: _ApproverLookup) -> tuple[UserMirror, ...]:
+    if not lookup.authentik_user_ids and lookup.direct_manager_key is None:
         return ()
+    query = Q(authentik_user_id__in=lookup.authentik_user_ids)
+    if lookup.direct_manager_key is not None:
+        source_slug, corp_id, manager_userid = lookup.direct_manager_key
+        query |= Q(
+            dingtalk_source_slug=source_slug,
+            dingtalk_corp_id=corp_id,
+            dingtalk_userid=manager_userid,
+        )
     return tuple(
         UserMirror.objects.filter(status=USER_STATUS_ACTIVE)
-        .filter(
-            Q(authentik_user_id__in=lookup_ids) | Q(dingtalk_userid__in=lookup_ids),
-        )
+        .filter(query)
         .order_by("authentik_user_id"),
     )
 
 
-def _approver_lookup_ids(
+def _approver_lookup(
     apps: tuple[App, ...],
     groups: tuple[AuthorizationGroup, ...],
     permissions: tuple[Permission, ...],
     user: UserMirror,
-) -> set[str]:
-    lookup_ids: set[str] = {user.manager_userid} if user.manager_userid else set()
-    lookup_ids.update(
+) -> _ApproverLookup:
+    authentik_user_ids = set(
         cast(
             "Iterable[str]",
             AppMembership.objects.filter(
@@ -383,13 +396,25 @@ def _approver_lookup_ids(
     for raw_user_ids in cast("Iterable[object]", rule_approver_rows):
         if not isinstance(raw_user_ids, list):
             continue
-        lookup_ids.update(
+        authentik_user_ids.update(
             raw_user_id
             for raw_user_id in cast("list[object]", raw_user_ids)
             if isinstance(raw_user_id, str)
         )
-    lookup_ids.discard("")
-    return lookup_ids
+    authentik_user_ids.discard("")
+    return _ApproverLookup(
+        authentik_user_ids=authentik_user_ids,
+        direct_manager_key=_direct_manager_key(user),
+    )
+
+
+def _direct_manager_key(user: UserMirror) -> _DingTalkBindingKey | None:
+    manager_userid = user.manager_userid.strip()
+    if not manager_userid:
+        return None
+    if not user.dingtalk_source_slug or not user.dingtalk_corp_id:
+        return None
+    return (user.dingtalk_source_slug, user.dingtalk_corp_id, manager_userid)
 
 
 def _approver_candidates(
@@ -421,7 +446,7 @@ def _app_default_approver_by_app_id(
 ) -> dict[int, _ApproverResolution]:
     app_ids = tuple(app.id for app in apps)
     owner_user_ids_by_app_id = _owner_user_ids_by_app_id(app_ids)
-    manager_user_ids = resolver.resolve((user.manager_userid,))
+    manager_user_ids = resolver.resolve_direct_manager(user)
     return {
         app.id: _ApproverResolution(
             user_ids=manager_user_ids
@@ -436,7 +461,7 @@ def _direct_manager_approver_resolution(
     user: UserMirror,
     resolver: _ApproverResolver,
 ) -> _ApproverResolution:
-    manager_user_ids = resolver.resolve((user.manager_userid,))
+    manager_user_ids = resolver.resolve_direct_manager(user)
     if manager_user_ids:
         return _ApproverResolution(
             user_ids=manager_user_ids,
@@ -543,10 +568,12 @@ class _ApproverResolver:
         self._user_id_by_authentik_user_id: dict[str, str] = {
             user.authentik_user_id: user.authentik_user_id for user in users
         }
-        self._user_id_by_dingtalk_userid: dict[str, str] = {
-            user.dingtalk_userid: user.authentik_user_id
+        self._user_id_by_dingtalk_key: dict[_DingTalkBindingKey, str] = {
+            (user.dingtalk_source_slug, user.dingtalk_corp_id, user.dingtalk_userid): (
+                user.authentik_user_id
+            )
             for user in users
-            if user.dingtalk_userid
+            if user.dingtalk_source_slug and user.dingtalk_corp_id and user.dingtalk_userid
         }
 
     def resolve(self, raw_user_ids: object) -> tuple[str, ...]:
@@ -557,14 +584,19 @@ class _ApproverResolver:
         for raw_user_id in cast("list[object] | tuple[object, ...]", raw_user_ids):
             if not isinstance(raw_user_id, str):
                 continue
-            user_id = self._user_id_by_authentik_user_id.get(
-                raw_user_id,
-            ) or self._user_id_by_dingtalk_userid.get(raw_user_id)
+            user_id = self._user_id_by_authentik_user_id.get(raw_user_id)
             if user_id is None or user_id in seen:
                 continue
             seen.add(user_id)
             resolved_user_ids.append(user_id)
         return tuple(resolved_user_ids)
+
+    def resolve_direct_manager(self, user: UserMirror) -> tuple[str, ...]:
+        key = _direct_manager_key(user)
+        if key is None:
+            return ()
+        user_id = self._user_id_by_dingtalk_key.get(key)
+        return () if user_id is None else (user_id,)
 
 
 def _json_strings(values: tuple[str, ...]) -> list[JsonValue]:

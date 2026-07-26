@@ -18,6 +18,7 @@ from easyauth.accounts.auth import (
     OIDC_STATE_SESSION_KEY,
     OidcClientConfig,
     OidcSessionError,
+    OidcUserInactiveError,
     bind_oidc_session,
     build_authorization_url,
     clear_oidc_login_attempt,
@@ -92,6 +93,9 @@ def oidc_callback(request: HttpRequest) -> HttpResponse:
             expected_nonce=_session_string(request, OIDC_NONCE_SESSION_KEY),
         )
         _ = bind_oidc_session(request, verified)
+    except OidcUserInactiveError as error:
+        clear_oidc_login_attempt(request)
+        return HttpResponse(str(error), status=HTTPStatus.FORBIDDEN, content_type="text/plain")
     except OidcSessionError as error:
         # 只清理本次登录尝试的 state/nonce; 不清已有登录会话,
         # 否则跨站 GET /auth/callback/ 可以把受害者强制登出。
@@ -214,10 +218,10 @@ def _with_logout_query(endpoint: str, *, id_token_hint: str) -> str:
     parsed = urlsplit(endpoint)
     query_params = dict(parse_qsl(parsed.query, keep_blank_values=True))
     if id_token_hint != "":
-        query_params.setdefault("id_token_hint", id_token_hint)
+        _ = query_params.setdefault("id_token_hint", id_token_hint)
         post_logout_redirect_uri = _optional_string_setting(SETTING_POST_LOGOUT_REDIRECT_URI)
         if post_logout_redirect_uri != "":
-            query_params.setdefault("post_logout_redirect_uri", post_logout_redirect_uri)
+            _ = query_params.setdefault("post_logout_redirect_uri", post_logout_redirect_uri)
     if not query_params:
         return endpoint
     query = urlencode(query_params)

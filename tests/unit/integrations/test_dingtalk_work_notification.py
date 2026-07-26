@@ -185,7 +185,9 @@ def test_get_send_progress_and_result(monkeypatch: pytest.MonkeyPatch) -> None:
             ),
             _Response(
                 b'{"errcode":0,"send_result":{"read_user_id_list":["u1"],'
-                b'"failed_user_id_list":[]}}',
+                b'"unread_user_id_list":[],"invalid_user_id_list":[],'
+                b'"failed_user_id_list":[],"forbidden_user_id_list":[],'
+                b'"forbidden_list":[]}}',
             ),
         ],
         capture=captured,
@@ -195,8 +197,8 @@ def test_get_send_progress_and_result(monkeypatch: pytest.MonkeyPatch) -> None:
     progress = client.get_send_progress(agent_id=9, task_id="42")
     result = client.get_send_result(agent_id=9, task_id="42")
 
-    assert progress["status"] == PROGRESS_STATUS_DONE
-    assert result["read_user_id_list"] == ["u1"]
+    assert progress.status == PROGRESS_STATUS_DONE
+    assert result.read_user_ids == frozenset({"u1"})
     assert len(captured) == EXPECTED_PROGRESS_AND_RESULT_CALLS
     assert captured[0].full_url.startswith(
         f"{DINGTALK_OAPI_BASE_URL}/topapi/message/corpconversation/getsendprogress",
@@ -204,6 +206,19 @@ def test_get_send_progress_and_result(monkeypatch: pytest.MonkeyPatch) -> None:
     assert captured[1].full_url.startswith(
         f"{DINGTALK_OAPI_BASE_URL}/topapi/message/corpconversation/getsendresult",
     )
+
+
+def test_get_send_result_rejects_missing_receipt_lists(monkeypatch: pytest.MonkeyPatch) -> None:
+    _seed_token_cache(monkeypatch)
+    _patch_urlopen(
+        monkeypatch,
+        responses=[
+            _Response(b'{"errcode":0,"send_result":{"read_user_id_list":["u1"]}}'),
+        ],
+    )
+
+    with pytest.raises(DingTalkApiRequestError, match="invalid_user_id_list"):
+        _ = _client().get_send_result(agent_id=9, task_id="42")
 
 
 def test_oapi_network_error_maps_to_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:

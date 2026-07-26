@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import json
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 from urllib.parse import urlsplit
 
 from django.contrib.auth.password_validation import validate_password
@@ -54,9 +54,12 @@ from easyauth.accounts.local_admin import (
     verify_and_consume_totp,
     verify_passkey_authentication,
 )
-from easyauth.accounts.models import LocalAdminAccount
+from easyauth.accounts.models import LocalAdminAccount, LocalAdminPasskey
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
+    from django.db.models import QuerySet
     from django.http import HttpRequest
 
 LOGIN_TEMPLATE: Final = "accounts/local_admin/login.html"
@@ -160,7 +163,12 @@ def passkey_complete(request: HttpRequest) -> HttpResponse:
     if not isinstance(credential, dict) or not isinstance(state_token, str):
         return _json_error(JSON_ERROR_BAD_REQUEST, status=HTTPStatus.BAD_REQUEST)
     try:
-        verify_passkey_authentication(request, account, credential, state_token=state_token)
+        verify_passkey_authentication(
+            request,
+            account,
+            cast("Mapping[str, object]", credential),
+            state_token=state_token,
+        )
     except PasskeyVerificationError as error:
         record_login_failure(account.username)
         record_second_factor_failed(account.username, method=SECOND_FACTOR_PASSKEY)
@@ -228,7 +236,7 @@ def security_page(request: HttpRequest) -> HttpResponse:
         SECURITY_TEMPLATE,
         {
             "account": account,
-            "passkeys": list(account.passkeys.all()),
+            "passkeys": list(_passkeys_for_account(account)),
             "setup_secret": setup_secret if not account.totp_enabled else "",
             "setup_qr": setup_qr,
             "setup_uri": setup_uri,
@@ -262,7 +270,7 @@ def totp_confirm(request: HttpRequest) -> HttpResponse:
         record_login_failure(account.username)
         return HttpResponseRedirect(f"{SECURITY_PATH}?error=totp_confirm")
     with transaction.atomic():
-        locked = LocalAdminAccount.objects.select_for_update().get(pk=account.pk)
+        locked = LocalAdminAccount.objects.select_for_update().get(pk=_account_pk(account))
         if locked.totp_enabled or locked.session_version != account.session_version:
             clear_totp_setup_secret(request)
             return HttpResponseRedirect(f"{SECURITY_PATH}?error=totp_confirm")
@@ -330,7 +338,7 @@ def passkey_register_complete(request: HttpRequest) -> HttpResponse:
         passkey = register_passkey(
             request,
             account,
-            credential,
+            cast("Mapping[str, object]", credential),
             state_token=state_token,
             name=name.strip(),
         )
@@ -348,7 +356,7 @@ def passkey_delete(request: HttpRequest, passkey_id: int) -> HttpResponse:
     # 移除第二因子(降低安全)要求 step-up 重认证。
     if check_step_up(account, _post_value(request, "current_password")) != STEP_UP_OK:
         return HttpResponseRedirect(f"{SECURITY_PATH}?error=passkey_delete")
-    passkey = account.passkeys.filter(pk=passkey_id).first()
+    passkey = _passkeys_for_account(account).filter(pk=passkey_id).first()
     if passkey is None:
         raise Http404
     name = passkey.name
@@ -391,11 +399,13 @@ def _bind_and_redirect(
             status=HTTPStatus.BAD_REQUEST,
             content_type="text/plain",
         )
+    if second_factor == SECOND_FACTOR_NONE:
+        return HttpResponseRedirect(SECURITY_PATH)
     return HttpResponseRedirect(CONSOLE_PATH)
 
 
 def _render_verify(request: HttpRequest, account: LocalAdminAccount, *, error: str) -> HttpResponse:
-    has_passkeys = account.passkeys.exists()
+    has_passkeys = _passkeys_for_account(account).exists()
     return render(
         request,
         VERIFY_TEMPLATE,
@@ -452,7 +462,7 @@ def _localize_password_errors(error: ValidationError) -> list[str]:
     messages: list[str] = []
     for item in error.error_list:
         code = getattr(item, "code", "") or ""
-        params = getattr(item, "params", None) or {}
+        params = cast("Mapping[str, object]", getattr(item, "params", None) or {})
         if code == "password_too_short":
             messages.append(f"密码长度至少为 {params.get('min_length', 12)} 位。")
         elif code == "password_too_common":
@@ -489,19 +499,29 @@ def _login_error(request: HttpRequest, message: str) -> HttpResponse:
 
 
 def _post_value(request: HttpRequest, key: str) -> str:
-    value = request.POST.get(key, "")
-    return value if isinstance(value, str) else ""
+    return request.POST.get(key, "")
 
 
 def _json_body(request: HttpRequest) -> dict[str, object] | None:
     try:
-        payload = json.loads(request.body)
+        payload = cast("object", json.loads(request.body))
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
     if not isinstance(payload, dict):
         return None
-    return payload
+    return cast("dict[str, object]", payload)
 
 
 def _json_error(code: str, *, status: HTTPStatus) -> JsonResponse:
     return JsonResponse({"error": code}, status=status)
+
+
+def _passkeys_for_account(account: LocalAdminAccount) -> QuerySet[LocalAdminPasskey]:
+    return account.passkeys.all()
+
+
+def _account_pk(account: LocalAdminAccount) -> int:
+    pk = cast("object", account.pk)
+    if not isinstance(pk, int):
+        raise Http404
+    return pk

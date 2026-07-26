@@ -17,6 +17,8 @@ from easyauth.api.permission_query_auth import (
 )
 from easyauth.api.permission_query_payloads import expanded_grant_payload
 from easyauth.api.serializers import (
+    PermissionQueryGrantPayload,
+    PermissionQueryGroupPayload,
     PermissionQueryResponseInput,
     PermissionQueryResponseSerializer,
 )
@@ -66,13 +68,17 @@ def query_user_permissions(request: HttpRequest, app_key: str, user_id: str) -> 
             status=HTTPStatus.SERVICE_UNAVAILABLE,
         )
     expires_at: datetime = _permission_query_expires_at(snapshot)
+    groups: list[PermissionQueryGroupPayload] = [
+        {"key": group.key, "kind": group.kind, "name": group.name} for group in snapshot.groups
+    ]
+    grants: list[PermissionQueryGrantPayload] = [
+        expanded_grant_payload(grant) for grant in snapshot.grants
+    ]
     payload: PermissionQueryResponseInput = {
         "user_id": snapshot.user_id,
         "app_key": snapshot.app_key,
-        "groups": [
-            {"key": group.key, "kind": group.kind, "name": group.name} for group in snapshot.groups
-        ],
-        "grants": [expanded_grant_payload(grant) for grant in snapshot.grants],
+        "groups": groups,
+        "grants": grants,
         "grant_version": snapshot.grant_version,
         "catalog_version": snapshot.catalog_version,
         "snapshot_version": snapshot.snapshot_version,

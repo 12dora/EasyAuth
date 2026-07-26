@@ -30,11 +30,15 @@ class ManifestVersionConflictError(Exception):
 
     def __init__(self, incoming_version: int, latest_version: int) -> None:
         super().__init__(
-            f"下游 manifest schema_version({incoming_version}) 未超过已导入版本"
-            f"({latest_version}) 且内容不一致, 请在下游递增版本后重试。",
+            "".join(
+                (
+                    f"下游 manifest schema_version({incoming_version}) 未超过已导入版本 ",
+                    f"({latest_version}) 且内容不一致, 请在下游递增版本后重试。",
+                ),
+            ),
         )
-        self.incoming_version = incoming_version
-        self.latest_version = latest_version
+        self.incoming_version: int = incoming_version
+        self.latest_version: int = latest_version
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,7 +62,11 @@ def sync_app_manifest(
     """
     canonical_template = canonical_manifest_template(manifest)
     latest = PermissionTemplateVersion.objects.filter(app=app).order_by("-version").first()
-    incoming_version = int(manifest["schema_version"])  # 调用方已校验为 >=1 的 int
+    raw_schema_version = manifest["schema_version"]
+    if not isinstance(raw_schema_version, int) or isinstance(raw_schema_version, bool):
+        msg = "App manifest schema_version 必须是整数。"
+        raise TypeError(msg)
+    incoming_version = raw_schema_version
     if latest is not None and incoming_version <= latest.version:
         if canonical_manifest_hash(manifest) == latest.content_hash:
             return ManifestSyncOutcome(

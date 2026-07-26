@@ -10,6 +10,7 @@ from __future__ import annotations
 from http import HTTPStatus
 from typing import TYPE_CHECKING, ClassVar, Final
 
+from django.conf import settings
 from django.db import transaction
 from django.http import HttpRequest, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
@@ -57,17 +58,16 @@ class _ManifestSyncPayload(BaseModel):
         normalized = value.strip().rstrip("/")
         if not normalized:
             return None
-        from django.conf import settings
-
         try:
-            require_secure_url(normalized, allow_local_http=settings.DEBUG)
+            debug: object = getattr(settings, "DEBUG", False)
+            require_secure_url(normalized, allow_local_http=debug is True)
         except InsecureUrlError as error:
             raise ValueError(str(error)) from error
         return normalized
 
 
 @csrf_exempt
-def app_manifest_sync(request: HttpRequest, app_key: str) -> JsonResponse:
+def app_manifest_sync(request: HttpRequest, app_key: str) -> JsonResponse:  # noqa: PLR0911
     if request.method != "POST":
         return _error(ErrorCode.VALIDATION_ERROR, "请求方法无效。", HTTPStatus.METHOD_NOT_ALLOWED)
     match _authenticated_app(request, app_key):
@@ -110,7 +110,11 @@ def app_manifest_sync(request: HttpRequest, app_key: str) -> JsonResponse:
             HTTPStatus.UNPROCESSABLE_ENTITY,
         )
     app.refresh_from_db()
-    _record_manifest_sync(app=app, outcome_up_to_date=outcome.already_up_to_date, version=outcome.template_version)
+    _record_manifest_sync(
+        app=app,
+        outcome_up_to_date=outcome.already_up_to_date,
+        version=outcome.template_version,
+    )
     return JsonResponse(
         {
             "app_key": app.app_key,
@@ -130,7 +134,11 @@ def _validate_manifest_shape(manifest: dict[str, JsonValue], app_key: str) -> Js
             HTTPStatus.UNPROCESSABLE_ENTITY,
         )
     schema_version = manifest.get("schema_version")
-    if not isinstance(schema_version, int) or isinstance(schema_version, bool) or schema_version < 1:
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version < 1
+    ):
         return _error(
             ErrorCode.SEMANTIC_VALIDATION_ERROR,
             "manifest.schema_version 必须是 >=1 的整数。",

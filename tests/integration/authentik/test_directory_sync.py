@@ -45,6 +45,7 @@ _CONCURRENT_WAIT_TIMEOUT_MESSAGE = "并发测试等待新 generation 提交超�
 
 @dataclass(slots=True)
 class _DirectoryClientStub:
+    source_slug: str = "dingtalk"
     departments: list[dict[str, object]] = field(default_factory=list)
     users: list[object] = field(default_factory=list)
     org_contexts: dict[tuple[str, str], dict[str, object]] = field(default_factory=dict)
@@ -68,7 +69,7 @@ class _DirectoryClientStub:
             )
         )
         return {
-            "source_slug": "dingtalk",
+            "source_slug": self.source_slug,
             "sync": [
                 {
                     "corp_id": "corp-1",
@@ -82,15 +83,22 @@ class _DirectoryClientStub:
         }
 
     def iter_departments(self) -> list[dict[str, object]]:
-        return self.departments
+        return [_with_source_slug(item, self.source_slug) for item in self.departments]
 
     def iter_users(self) -> list[object]:
-        return self.users
+        return [
+            _with_source_slug(item, self.source_slug) if isinstance(item, dict) else item
+            for item in self.users
+        ]
 
     def get_user_org(self, corp_id: str, user_id: str) -> dict[str, object]:
         if (corp_id, user_id) in self.org_fetch_errors:
             raise AuthentikDirectoryNotFoundError(DIRECTORY_NOT_FOUND_MESSAGE)
-        return self.org_contexts[(corp_id, user_id)]
+        return _with_source_slug(self.org_contexts[(corp_id, user_id)], self.source_slug)
+
+
+def _with_source_slug(item: dict[str, object], source_slug: str) -> dict[str, object]:
+    return {"source_slug": source_slug, **item}
 
 
 @dataclass(slots=True)
@@ -121,6 +129,7 @@ class _BlockingFinalStatusClient:
 def test_directory_sync_caches_departments_users_and_org_context() -> None:
     _ = UserMirror.objects.create(
         authentik_user_id="ak-user-1",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="user-1",
     )
@@ -199,6 +208,7 @@ def test_directory_sync_backfills_empty_user_mirror_avatar_url() -> None:
     # Given: 已绑定钉钉的用户尚未有头像, 目录侧下发了真实头像 URL。
     _ = UserMirror.objects.create(
         authentik_user_id="ak-avatar-1",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="user-avatar",
     )
@@ -224,10 +234,61 @@ def test_directory_sync_backfills_empty_user_mirror_avatar_url() -> None:
     assert user.avatar_url == "https://static-legacy.dingtalk.com/media/user-avatar.jpg"
 
 
+def test_directory_sync_user_mirror_updates_are_scoped_by_source() -> None:
+    _ = UserMirror.objects.create(
+        authentik_user_id="ak-source-a",
+        dingtalk_source_slug="source-a",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="shared-user",
+    )
+    _ = UserMirror.objects.create(
+        authentik_user_id="ak-source-b",
+        dingtalk_source_slug="source-b",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="shared-user",
+    )
+    client_stub = _DirectoryClientStub(
+        source_slug="source-b",
+        users=[
+            {
+                "source_slug": "source-b",
+                "corp_id": "corp-1",
+                "user_id": "shared-user",
+                "name": "同 ID 用户",
+                "avatar": "https://static-legacy.dingtalk.com/media/source-b.jpg",
+                "department_ids": [],
+                "manager_userid": "source-b-manager",
+                "status": "active",
+            },
+        ],
+        org_contexts={
+            ("corp-1", "shared-user"): {
+                "source_slug": "source-b",
+                "corp_id": "corp-1",
+                "user_id": "shared-user",
+                "departments": [{"dept_id": "dept-b", "name": "B 部门"}],
+                "manager": {"user_id": "source-b-manager"},
+                "manager_chain": [],
+                "stale": False,
+            },
+        },
+    )
+
+    _ = sync_authentik_dingtalk_directory(client_stub)
+
+    source_a = UserMirror.objects.get(authentik_user_id="ak-source-a")
+    source_b = UserMirror.objects.get(authentik_user_id="ak-source-b")
+    assert source_a.avatar_url == ""
+    assert source_a.manager_userid == ""
+    assert source_b.avatar_url == "https://static-legacy.dingtalk.com/media/source-b.jpg"
+    assert source_b.manager_userid == "source-b-manager"
+
+
 def test_directory_sync_keeps_existing_user_mirror_avatar_url() -> None:
     # Given: 用户已有 OIDC 登录写入的头像, 目录侧下发了不同的头像 URL。
     _ = UserMirror.objects.create(
         authentik_user_id="ak-avatar-2",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="user-avatar-kept",
         avatar_url="https://oidc.example.test/media/original.jpg",
@@ -362,6 +423,7 @@ def test_directory_sync_marks_deleted_directory_user_departed_and_revokes_grants
     # Given: 已绑定钉钉的 active 用户持有 current 授权, 上游目录标记该用户已删除。
     user = UserMirror.objects.create(
         authentik_user_id="ak-departed-1",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="user-departed",
         status="active",
@@ -409,6 +471,7 @@ def test_directory_sync_marks_deleted_directory_user_departed_and_revokes_grants
 def test_directory_sync_normalizes_inactive_user_to_disabled() -> None:
     _ = UserMirror.objects.create(
         authentik_user_id="ak-disabled-1",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="user-disabled",
         status="active",
@@ -438,6 +501,7 @@ def test_directory_sync_excludes_grant_when_all_memberships_expired() -> None:
     # Given: 父授权仍是 active/current, 但 group 与 direct membership 都已过期。
     user = UserMirror.objects.create(
         authentik_user_id="ak-expired-memberships",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="user-expired-memberships",
         status="active",
@@ -490,6 +554,7 @@ def test_directory_sync_departs_bound_user_missing_from_directory() -> None:
     # Given: 用户绑定 corp-1, 但上游目录响应中已完全没有该用户。
     user = UserMirror.objects.create(
         authentik_user_id="ak-missing-1",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="user-missing",
         status="active",
@@ -519,6 +584,7 @@ def test_directory_sync_applies_authoritative_empty_user_snapshot() -> None:
     # Given: success status 明确声明 generation 与 users=0, 表示合法权威空集。
     user = UserMirror.objects.create(
         authentik_user_id="ak-guard-1",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="user-guard",
         status="active",
@@ -553,6 +619,7 @@ def test_directory_sync_clears_manager_and_prunes_missing_rows() -> None:
     # Given: 镜像里有旧部门/旧用户/旧主管, 上游已经删除部门并清空主管。
     user = UserMirror.objects.create(
         authentik_user_id="ak-clear-1",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="user-clear",
         department="旧部门",
@@ -612,12 +679,14 @@ def test_directory_sync_rejects_unknown_status_before_any_write() -> None:
     # Given: 一个用户状态无法识别, 另一个用户已删除且持有 current 授权。
     unknown_user = UserMirror.objects.create(
         authentik_user_id="ak-unknown-status",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="user-unknown",
         status="active",
     )
     departed_user = UserMirror.objects.create(
         authentik_user_id="ak-departed-2",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="user-departed-2",
         status="active",
@@ -664,6 +733,7 @@ def test_directory_sync_refuses_prune_when_response_truncated() -> None:
     # Given: 上游报告 3 个用户, 但本轮响应只截断返回 1 个, 且仍有绑定用户在职。
     bound_user = UserMirror.objects.create(
         authentik_user_id="ak-truncated-1",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="user-truncated",
         status="active",
@@ -700,6 +770,7 @@ def test_directory_sync_completeness_guard_counts_distinct_users() -> None:
     # Given: 上游报告 2 个用户, 但响应里是同一个用户的两条重复行(唯一用户其实被截断到 1)。
     bound_user = UserMirror.objects.create(
         authentik_user_id="ak-dup-guard",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="user-still-bound",
         status="active",
@@ -727,10 +798,11 @@ def test_directory_sync_completeness_guard_counts_distinct_users() -> None:
     assert grant.status != "revoked"
 
 
-def test_directory_sync_isolates_single_user_org_fetch_failure() -> None:
+def test_directory_sync_rejects_partial_org_failure_without_generation_advance() -> None:
     # Given: 两个用户, 其中一个的 org 上下文持续 404, 另一个正常。
     _ = UserMirror.objects.create(
         authentik_user_id="ak-org-ok",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="user-org-ok",
         status="active",
@@ -757,14 +829,12 @@ def test_directory_sync_isolates_single_user_org_fetch_failure() -> None:
     )
     client_stub.org_fetch_errors = {("corp-1", "user-org-broken")}
 
-    # When: 执行目录同步。
-    result = sync_authentik_dingtalk_directory(client_stub)
+    # When / Then: 任一用户 org 失败都会使整代失败, 不提交部分目录或推进 generation。
+    with pytest.raises(AuthentikDirectoryUnavailableError):
+        _ = sync_authentik_dingtalk_directory(client_stub)
 
-    # Then: 单个用户 org 失败被隔离, 同步整体完成并聚合失败计数。
-    assert result.user_count == _EXPECTED_TWO_USERS
-    assert result.org_context_count == 1
-    assert result.org_fetch_failed_count == 1
-    assert DingTalkUserOrgContext.objects.filter(user_id="user-org-ok").exists()
+    assert not DingTalkDirectorySyncState.objects.filter(corp_id="corp-1").exists()
+    assert not DingTalkUserOrgContext.objects.filter(user_id="user-org-ok").exists()
     assert not DingTalkUserOrgContext.objects.filter(user_id="user-org-broken").exists()
 
 
@@ -772,6 +842,7 @@ def test_first_department_population_does_not_flag_change() -> None:
     # Given: 镜像还没有部门信息(首次同步补数据, 不是转岗)。
     _ = UserMirror.objects.create(
         authentik_user_id="ak-first-dept",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="user-first",
     )
@@ -808,6 +879,7 @@ def test_multi_department_reorder_does_not_flag_change() -> None:
     # Given: 多部门员工, 镜像已存(按 dept_id 稳定排序的)首选部门"销售部"。
     _ = UserMirror.objects.create(
         authentik_user_id="ak-multi-dept",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="user-multi",
         department="销售部",
@@ -849,6 +921,7 @@ def test_real_department_change_sets_flag() -> None:
     # Given: 镜像已有旧部门。
     _ = UserMirror.objects.create(
         authentik_user_id="ak-moved-dept",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="user-moved",
         department="市场部",
@@ -979,6 +1052,7 @@ def test_directory_sync_rejects_generation_change_during_fetch() -> None:
 def test_concurrent_older_generation_cannot_reactivate_user() -> None:
     user = UserMirror.objects.create(
         authentik_user_id="ak-generation-fence",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="user-fenced",
         status="active",
@@ -1017,6 +1091,7 @@ def test_concurrent_older_generation_cannot_reactivate_user() -> None:
 def test_directory_sync_treats_equal_generation_as_idempotent_noop() -> None:
     user = UserMirror.objects.create(
         authentik_user_id="ak-generation-equal",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="user-equal",
         status="active",

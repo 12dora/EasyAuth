@@ -50,11 +50,22 @@ def direct_grant_target_errors(
     app: App,
     direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> tuple[str, ...]:
+    active_scope_keys = frozenset(
+        AppScope.objects.filter(
+            app_id=app.id,
+            key__in=tuple({grant.scope_key for grant in direct_grants}),
+            is_active=True,
+        ).values_list("key", flat=True),
+    )
     errors: list[str] = []
     for grant in direct_grants:
         errors.extend(
             f"{grant.permission.key}:{grant.scope_key}: {message}"
-            for message in _direct_grant_error_messages(app, grant)
+            for message in _direct_grant_error_messages(
+                app,
+                grant,
+                active_scope_keys=active_scope_keys,
+            )
         )
     return tuple(errors)
 
@@ -107,21 +118,24 @@ def _authorization_group_error_messages(app: App, group: AuthorizationGroup) -> 
 def _direct_grant_error_messages(
     app: App,
     direct_grant: ScopedAccessRequestGrant,
+    *,
+    active_scope_keys: frozenset[str],
 ) -> tuple[str, ...]:
     permission = direct_grant.permission
     errors: list[str] = []
+    raw_supported_scopes = permission.supported_scopes
+    supported_scope_values = raw_supported_scopes if isinstance(raw_supported_scopes, list) else []
+    supported_scopes = {
+        item for item in supported_scope_values if isinstance(item, str)
+    }
     if permission.app_id != app.id:
         errors.append("Permission must belong to the access request app.")
     if not permission.is_active:
         errors.append("Permission must be active.")
     if permission.deprecated_at is not None:
         errors.append("Permission must not be deprecated.")
-    if direct_grant.scope_key not in permission.supported_scopes:
+    if direct_grant.scope_key not in supported_scopes:
         errors.append("Scope must be supported by the permission.")
-    if not AppScope.objects.filter(
-        app_id=app.id,
-        key=direct_grant.scope_key,
-        is_active=True,
-    ).exists():
+    if direct_grant.scope_key not in active_scope_keys:
         errors.append("Scope must belong to the access request app and be active.")
     return tuple(errors)

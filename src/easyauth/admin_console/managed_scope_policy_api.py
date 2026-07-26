@@ -97,7 +97,6 @@ def _patch_policy(request: HttpRequest, app: App, actor: ConsoleActor) -> JsonRe
             _ = ManagedScopePolicy.objects.filter(
                 app=app,
                 target_type=MANAGED_SCOPE_POLICY_TARGET_APP_DEFAULT,
-                target_id=app.id,
                 scope=MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS,
             ).delete()
             _record_managed_scope_policy_updated(app=app, actor=actor, resolver="deleted")
@@ -105,7 +104,6 @@ def _patch_policy(request: HttpRequest, app: App, actor: ConsoleActor) -> JsonRe
             _policy, _created = ManagedScopePolicy.objects.update_or_create(
                 app=app,
                 target_type=MANAGED_SCOPE_POLICY_TARGET_APP_DEFAULT,
-                target_id=app.id,
                 scope=MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS,
                 defaults={
                     "resolver": normalized.resolver,

@@ -86,7 +86,7 @@ def _create_permission_group(request: HttpRequest, app_key: str) -> JsonResponse
             metadata={"permission_group_key": group.key},
         ),
     )
-    bump_catalog_version(
+    _ = bump_catalog_version(
         app,
         actor_id=actor.user_id,
         reason="permission_group_created",
@@ -171,7 +171,7 @@ def _update_permission_group(
             metadata={"permission_group_key": group.key},
         ),
     )
-    bump_catalog_version(
+    _ = bump_catalog_version(
         app,
         actor_id=actor.user_id,
         reason="permission_group_updated",

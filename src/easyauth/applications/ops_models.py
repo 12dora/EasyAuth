@@ -11,6 +11,7 @@ from .health_models import (
     DEPENDENCY_AUTHENTIK,
     DEPENDENCY_AUTHENTIK_DIRECTORY,
     DEPENDENCY_CELERY,
+    DEPENDENCY_CONNECTORS,
     DEPENDENCY_DINGTALK,
     DEPENDENCY_DINGTALK_NOTIFY,
     DEPENDENCY_HEALTH_STATUS_HEALTHY,
@@ -32,6 +33,7 @@ __all__ = (
     "DEPENDENCY_AUTHENTIK",
     "DEPENDENCY_AUTHENTIK_DIRECTORY",
     "DEPENDENCY_CELERY",
+    "DEPENDENCY_CONNECTORS",
     "DEPENDENCY_DINGTALK",
     "DEPENDENCY_DINGTALK_NOTIFY",
     "DEPENDENCY_HEALTH_STATUS_HEALTHY",
@@ -89,6 +91,11 @@ class _BoundApp(Protocol):
     app_key: str
 
 
+class _BoundAuthorizationGroup(Protocol):
+    id: int
+    key: str
+
+
 class AppMembership(models.Model):
     if TYPE_CHECKING:
         id: ClassVar[int]
@@ -133,6 +140,7 @@ class PermissionGroup(models.Model):
     if TYPE_CHECKING:
         id: ClassVar[int]
         app_id: ClassVar[int]
+        parent_id: ClassVar[int | None]
 
     app: models.ForeignKey[_BoundApp, _BoundApp] = models.ForeignKey(
         "applications.App",
@@ -236,7 +244,10 @@ class AuthorizationGroupAccessPolicy(models.Model):
         id: ClassVar[int]
         authorization_group_id: ClassVar[int]
 
-    authorization_group = models.ForeignKey(
+    authorization_group: models.ForeignKey[
+        _BoundAuthorizationGroup,
+        _BoundAuthorizationGroup,
+    ] = models.ForeignKey(
         "applications.AuthorizationGroup",
         on_delete=models.CASCADE,
         related_name="access_policies",

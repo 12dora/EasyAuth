@@ -69,6 +69,9 @@ CALLBACK_STATE_CHOICES: Final[tuple[tuple[str, str], ...]] = (
     (CALLBACK_STATE_APPLIED, "applied"),
     (CALLBACK_STATE_CONFLICT, "conflict"),
 )
+CALLBACK_STATE_VALUES: Final[tuple[str, ...]] = tuple(
+    value for value, _label in CALLBACK_STATE_CHOICES
+)
 
 FORM_FIELD_TYPES: Final[tuple[str, ...]] = ("string", "integer", "number", "boolean")
 
@@ -292,6 +295,38 @@ class PendingApprovalCallback(models.Model):
     )
 
     class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.CheckConstraint(
+                condition=Q(status__in=APPROVAL_TERMINAL_STATUSES),
+                name="workflows_callback_status_terminal",
+            ),
+            models.CheckConstraint(
+                condition=Q(state__in=CALLBACK_STATE_VALUES),
+                name="workflows_callback_state_supported",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        state=CALLBACK_STATE_PENDING,
+                        instance__isnull=True,
+                        applied_at__isnull=True,
+                        last_error="",
+                    )
+                    | Q(
+                        state=CALLBACK_STATE_APPLIED,
+                        instance__isnull=False,
+                        applied_at__isnull=False,
+                        last_error="",
+                    )
+                    | Q(
+                        state=CALLBACK_STATE_CONFLICT,
+                        applied_at__isnull=True,
+                        last_error__gt="",
+                    )
+                ),
+                name="workflows_callback_state_shape",
+            ),
+        ]
         ordering: ClassVar[list[str]] = ["received_at"]
 
     @override

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from http import HTTPStatus
 from json import dumps
-from typing import TYPE_CHECKING, Final
+from typing import Final, Protocol
 
 import pytest
 from django.contrib.auth.models import User
@@ -21,19 +21,20 @@ from easyauth.applications.models import (
 from easyauth.grants.inputs import AuthorizationGroupGrantInput
 from easyauth.grants.models import AccessGrant
 from easyauth.grants.services import GrantMutationInput, GrantService
-from easyauth.lifecycle import services as lifecycle_services
+from easyauth.lifecycle import handover as handover_services
+from easyauth.lifecycle import offboarding as offboarding_services
+from easyauth.lifecycle.errors import HandoverConflictError
+from easyauth.lifecycle.handover import update_action_receiver
 from easyauth.lifecycle.models import (
     HandoverAppAction,
     HandoverGrantItem,
     HandoverTask,
     OnboardingTemplate,
-    OnboardingTemplateItem,
+    OnboardingTemplateRevision,
+    OnboardingTemplateRevisionItem,
     TransferPlan,
 )
-from easyauth.lifecycle.services import HandoverConflictError, update_action_receiver
-
-if TYPE_CHECKING:
-    from easyauth.grants.inputs import ScopedDirectGrantInput
+from tests.integration.admin_console.auth_helpers import authenticate_console_admin
 
 pytestmark = pytest.mark.django_db
 
@@ -44,6 +45,10 @@ CONCURRENT_CONFLICT_MESSAGE: Final = "并发状态冲突。"
 SECOND_TEMPLATE_SAVE_ERROR: Final = "第二个模板项写入失败"
 SECOND_GRANT_WRITE_ERROR: Final = "第二个应用授权失败"
 JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+
+
+class HttpResponseLike(Protocol):
+    content: bytes
 
 
 def test_handover_task_list_uses_standard_server_pagination() -> None:
@@ -66,6 +71,43 @@ def test_handover_task_list_uses_standard_server_pagination() -> None:
         "total_items": 3,
         "total_pages": 3,
     }
+
+
+def test_handover_task_list_exposes_delete_allowed_action_only_for_cancelled() -> None:
+    client = _logged_in_superuser("handover-actions-admin")
+    for status in ("pending", "in_progress", "completed", "cancelled"):
+        subject = UserMirror.objects.create(authentik_user_id=f"handover-actions-{status}")
+        _ = HandoverTask.objects.create(kind="offboard", subject_user=subject, status=status)
+
+    response = client.get(TASKS_URL, {"page_size": "20"})
+
+    body = JSON_VALUE_ADAPTER.validate_json(response.content)
+    assert isinstance(body, dict)
+    data = body["data"]
+    assert isinstance(data, list)
+    actions_by_status = {
+        str(item["status"]): item["allowed_actions"]
+        for item in data
+        if isinstance(item, dict)
+    }
+    assert actions_by_status["pending"] == []
+    assert actions_by_status["in_progress"] == []
+    assert actions_by_status["completed"] == []
+    assert actions_by_status["cancelled"] == ["delete"]
+
+
+@pytest.mark.parametrize("query", [{"status": "typo"}, {"kind": "unknown"}])
+def test_handover_task_list_rejects_unknown_filters(query: dict[str, str]) -> None:
+    client = _logged_in_superuser("handover-filter-invalid-admin")
+
+    response = client.get(TASKS_URL, query)
+
+    body = JSON_VALUE_ADAPTER.validate_json(response.content)
+    assert isinstance(body, dict)
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    error = body["error"]
+    assert isinstance(error, dict)
+    assert error["details"] == {"field": next(iter(query)), "value": next(iter(query.values()))}
 
 
 def test_receiver_batch_rolls_back_all_updates_when_one_write_fails(
@@ -208,7 +250,7 @@ def test_grant_selection_patch_invalidates_related_preview() -> None:
         ),
     )
     receiver = UserMirror.objects.create(authentik_user_id="handover-selection-preview-receiver")
-    task, _created = lifecycle_services.ensure_handover_task(
+    task, _created = offboarding_services.ensure_handover_task(
         subject=subject,
         kind="offboard",
         created_by="handover-selection-preview-admin",
@@ -218,7 +260,7 @@ def test_grant_selection_patch_invalidates_related_preview() -> None:
         to_user=receiver,
         policy={},
     )
-    action = lifecycle_services.preview_action(action)
+    action = handover_services.preview_action(action)
     item = HandoverGrantItem.objects.get(task=task, app=app)
 
     response = client.patch(
@@ -286,17 +328,18 @@ def test_template_replacement_rolls_back_when_second_item_save_fails(
         name="原岗位模板",
         description="原模板说明",
     )
-    old_item = OnboardingTemplateItem.objects.create(
-        template=template,
+    revision = _template_revision(template)
+    old_item = OnboardingTemplateRevisionItem.objects.create(
+        revision=revision,
         app=old_app,
         permission=old_permission,
         scope_key="GLOBAL",
     )
-    real_save = OnboardingTemplateItem.save
+    real_save = OnboardingTemplateRevisionItem.save
     save_count = 0
 
     def fail_second_item_save(
-        item: OnboardingTemplateItem,
+        item: OnboardingTemplateRevisionItem,
         *args: object,
         **kwargs: object,
     ) -> None:
@@ -306,7 +349,7 @@ def test_template_replacement_rolls_back_when_second_item_save_fails(
             raise RuntimeError(SECOND_TEMPLATE_SAVE_ERROR)
         real_save(item, *args, **kwargs)
 
-    monkeypatch.setattr(OnboardingTemplateItem, "save", fail_second_item_save)
+    monkeypatch.setattr(OnboardingTemplateRevisionItem, "save", fail_second_item_save)
 
     response = client.patch(
         f"/console/api/v1/lifecycle/onboarding-templates/{template.id}",
@@ -333,7 +376,7 @@ def test_template_replacement_rolls_back_when_second_item_save_fails(
     )
 
     template.refresh_from_db()
-    stored_items = list(OnboardingTemplateItem.objects.filter(template=template))
+    stored_items = list(OnboardingTemplateRevisionItem.objects.filter(revision=revision))
     assert response.status_code == HTTPStatus.INTERNAL_SERVER_ERROR
     assert template.name == "原岗位模板"
     assert template.description == "原模板说明"
@@ -347,41 +390,29 @@ def test_onboard_multiple_apps_rolls_back_when_second_grant_fails(
     first_app, first_group, _first_permission = _app_with_catalog("handover-onboard-a")
     second_app, second_group, _second_permission = _app_with_catalog("handover-onboard-b")
     template = OnboardingTemplate.objects.create(name="多应用入职模板")
-    _ = OnboardingTemplateItem.objects.create(
-        template=template,
+    revision = _template_revision(template)
+    _ = OnboardingTemplateRevisionItem.objects.create(
+        revision=revision,
         app=first_app,
         authorization_group=first_group,
     )
-    _ = OnboardingTemplateItem.objects.create(
-        template=template,
+    _ = OnboardingTemplateRevisionItem.objects.create(
+        revision=revision,
         app=second_app,
         authorization_group=second_group,
     )
     newcomer = UserMirror.objects.create(authentik_user_id="handover-onboard-newcomer")
-    real_merge = lifecycle_services._merge_into_current_grant  # pyright: ignore[reportPrivateUsage]  # noqa: SLF001
+    real_create_grant = GrantService.create_grant
     merge_count = 0
 
-    def fail_second_grant(
-        *,
-        user: UserMirror,
-        app: App,
-        groups: list[AuthorizationGroupGrantInput],
-        direct_grants: list[ScopedDirectGrantInput],
-        actor_id: str,
-    ) -> AccessGrant:
+    def fail_second_grant(input_data: GrantMutationInput) -> AccessGrant:
         nonlocal merge_count
         merge_count += 1
         if merge_count == SECOND_UPDATE_CALL:
             raise RuntimeError(SECOND_GRANT_WRITE_ERROR)
-        return real_merge(
-            user=user,
-            app=app,
-            groups=groups,
-            direct_grants=direct_grants,
-            actor_id=actor_id,
-        )
+        return real_create_grant(input_data)
 
-    monkeypatch.setattr(lifecycle_services, "_merge_into_current_grant", fail_second_grant)
+    monkeypatch.setattr(GrantService, "create_grant", fail_second_grant)
 
     response = client.post(
         "/console/api/v1/lifecycle/onboard",
@@ -415,19 +446,20 @@ def test_confirmed_transfer_diff_is_idempotent_and_conflicts_on_other_payload() 
             authorization_groups=(AuthorizationGroupGrantInput(group, None),),
         ),
     )
-    task, _created = lifecycle_services.ensure_handover_task(
+    task, _created = offboarding_services.ensure_handover_task(
         subject=subject,
         kind="transfer",
         created_by="handover-confirm-diff-admin",
     )
     template = OnboardingTemplate.objects.create(name="差异确认模板")
-    _ = OnboardingTemplateItem.objects.create(
-        template=template,
+    revision = _template_revision(template)
+    _ = OnboardingTemplateRevisionItem.objects.create(
+        revision=revision,
         app=app,
         authorization_group=group,
     )
-    _ = OnboardingTemplateItem.objects.create(
-        template=template,
+    _ = OnboardingTemplateRevisionItem.objects.create(
+        revision=revision,
         app=app,
         permission=added_permission,
         scope_key="GLOBAL",
@@ -446,7 +478,12 @@ def test_confirmed_transfer_diff_is_idempotent_and_conflicts_on_other_payload() 
         key = entry.get("key")
         assert isinstance(key, str)
         add_keys.append(key)
-    payload = {"revoke_keys": [], "add_keys": [], "plan_revision": plan.revision}
+    no_keys: list[JsonValue] = []
+    payload: dict[str, JsonValue] = {
+        "revoke_keys": no_keys,
+        "add_keys": no_keys,
+        "plan_revision": plan.revision,
+    }
 
     first_response = client.post(
         f"{TASKS_URL}/{task.id}/grant-diff/confirm",
@@ -469,12 +506,17 @@ def test_confirmed_transfer_diff_is_idempotent_and_conflicts_on_other_payload() 
     assert build_response.status_code == HTTPStatus.OK
     assert first_response.status_code == HTTPStatus.OK
     assert same_response.status_code == HTTPStatus.OK
-    assert first_response.json()["transfer_plan"]["revision"] == plan.revision
-    assert first_response.json()["transfer_plan"]["grant_diff"]["add"] == [
-        {"key": key, "selected": False} for key in add_keys
+    response_plan = _object_field(_response_json(first_response), "transfer_plan")
+    detail_task = _object_field(_response_json(detail_response), "handover_task")
+    detail_plan = _object_field(detail_task, "transfer_plan")
+    assert _int_field(response_plan, "revision") == plan.revision
+    response_add_diff = _list_field(_object_field(response_plan, "grant_diff"), "add")
+    detail_add_diff = _list_field(_object_field(detail_plan, "grant_diff"), "add")
+    assert _diff_selection_rows(response_add_diff) == [
+        (key, "订单查看", False) for key in add_keys
     ]
-    assert detail_response.json()["handover_task"]["transfer_plan"]["grant_diff"]["add"] == [
-        {"key": key, "selected": False} for key in add_keys
+    assert _diff_selection_rows(detail_add_diff) == [
+        (key, "订单查看", False) for key in add_keys
     ]
     assert AccessGrant.objects.filter(user=subject, app=app).count() == grant_count_after_first
     assert conflicting_response.status_code == HTTPStatus.CONFLICT
@@ -491,31 +533,44 @@ def test_transfer_diff_confirmation_rejects_stale_revision() -> None:
             authorization_groups=(AuthorizationGroupGrantInput(group, None),),
         ),
     )
-    task, _created = lifecycle_services.ensure_handover_task(
+    task, _created = offboarding_services.ensure_handover_task(
         subject=subject,
         kind="transfer",
         created_by="handover-stale-plan-admin",
     )
     template = OnboardingTemplate.objects.create(name="旧方案版本测试模板")
-    _ = OnboardingTemplateItem.objects.create(template=template, app=app, authorization_group=group)
-    first = client.post(
+    revision = _template_revision(template)
+    _ = OnboardingTemplateRevisionItem.objects.create(
+        revision=revision,
+        app=app,
+        authorization_group=group,
+    )
+    first_response = client.post(
         f"{TASKS_URL}/{task.id}/grant-diff",
         data=dumps({"template_id": template.id}),
         content_type="application/json",
-    ).json()["transfer_plan"]
-    second = client.post(
+    )
+    first = _object_field(_response_json(first_response), "transfer_plan")
+    second_response = client.post(
         f"{TASKS_URL}/{task.id}/grant-diff",
         data=dumps({"template_id": template.id}),
         content_type="application/json",
-    ).json()["transfer_plan"]
+    )
+    second = _object_field(_response_json(second_response), "transfer_plan")
 
     response = client.post(
         f"{TASKS_URL}/{task.id}/grant-diff/confirm",
-        data=dumps({"revoke_keys": [], "add_keys": [], "plan_revision": first["revision"]}),
+        data=dumps(
+            {
+                "revoke_keys": [],
+                "add_keys": [],
+                "plan_revision": _int_field(first, "revision"),
+            },
+        ),
         content_type="application/json",
     )
 
-    assert second["revision"] == first["revision"] + 1
+    assert _int_field(second, "revision") == _int_field(first, "revision") + 1
     assert response.status_code == HTTPStatus.CONFLICT
     assert TransferPlan.objects.get(task=task).confirmed_at is None
 
@@ -523,7 +578,7 @@ def test_transfer_diff_confirmation_rejects_stale_revision() -> None:
 def _logged_in_superuser(username: str) -> Client:
     _ = User.objects.create_superuser(username=username, password=LOGIN_VALUE)
     client = Client(HTTP_HOST="localhost", raise_request_exception=False)
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    _ = authenticate_console_admin(client, username)
     return client
 
 
@@ -548,3 +603,54 @@ def _app_with_catalog(app_key: str) -> tuple[App, AuthorizationGroup, Permission
         scope_key=scope.key,
     )
     return app, group, permission
+
+
+def _template_revision(template: OnboardingTemplate) -> OnboardingTemplateRevision:
+    revision = OnboardingTemplateRevision.objects.create(
+        template=template,
+        revision=1,
+        name_snapshot=template.name,
+        description_snapshot=template.description,
+        is_active=template.is_active,
+    )
+    template.current_revision = revision
+    template.save(update_fields=["current_revision", "updated_at"])
+    return revision
+
+
+def _response_json(response: HttpResponseLike) -> dict[str, JsonValue]:
+    parsed = JSON_VALUE_ADAPTER.validate_json(response.content)
+    assert isinstance(parsed, dict), response.content.decode()
+    return parsed
+
+
+def _object_field(source: dict[str, JsonValue], field: str) -> dict[str, JsonValue]:
+    value = source[field]
+    assert isinstance(value, dict)
+    return value
+
+
+def _list_field(source: dict[str, JsonValue], field: str) -> list[JsonValue]:
+    value = source[field]
+    assert isinstance(value, list)
+    return value
+
+
+def _int_field(source: dict[str, JsonValue], field: str) -> int:
+    value = source[field]
+    assert isinstance(value, int)
+    return value
+
+
+def _diff_selection_rows(entries: list[JsonValue]) -> list[tuple[str, str, bool]]:
+    rows: list[tuple[str, str, bool]] = []
+    for entry in entries:
+        assert isinstance(entry, dict)
+        key = entry["key"]
+        name = entry["name"]
+        selected = entry["selected"]
+        assert isinstance(key, str)
+        assert isinstance(name, str)
+        assert isinstance(selected, bool)
+        rows.append((key, name, selected))
+    return rows

@@ -3,7 +3,7 @@ from __future__ import annotations
 import base64
 import hashlib
 from functools import lru_cache
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast, override
 
 from cryptography.fernet import Fernet, InvalidToken
 from django.conf import settings
@@ -65,10 +65,16 @@ class EncryptedCharField(_CharFieldBase):
             return value
         return decrypt_value(value)
 
+    @override
     def get_prep_value(self, value: object) -> str | None:
-        prepared = super().get_prep_value(value)
-        if prepared is None or prepared == "":
-            return prepared
+        prepared = cast("object", super().get_prep_value(value))
+        if prepared is None:
+            return None
+        if prepared == "":
+            return ""
+        if not isinstance(prepared, str):
+            msg = "EncryptedCharField 只能保存字符串值。"
+            raise TypeError(msg)
         return encrypt_value(prepared)
 
 
@@ -86,8 +92,14 @@ class EncryptedTextField(_TextFieldBase):
             return value
         return decrypt_value(value)
 
+    @override
     def get_prep_value(self, value: object) -> str | None:
-        prepared = super().get_prep_value(value)
-        if prepared is None or prepared == "":
-            return prepared
+        prepared = cast("object", super().get_prep_value(value))
+        if prepared is None:
+            return None
+        if prepared == "":
+            return ""
+        if not isinstance(prepared, str):
+            msg = "EncryptedTextField 只能保存字符串值。"
+            raise TypeError(msg)
         return encrypt_value(prepared)

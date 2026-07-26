@@ -5,6 +5,7 @@ import pytest
 from easyauth.accounts.models import DingTalkDirectorySyncState
 from easyauth.applications import dependency_health_checks
 from easyauth.applications.health_models import (
+    DEPENDENCY_CONNECTORS,
     DEPENDENCY_DINGTALK_NOTIFY,
     DEPENDENCY_HEALTH_STATUS_HEALTHY,
     DEPENDENCY_HEALTH_STATUS_UNHEALTHY,
@@ -15,6 +16,7 @@ from easyauth.applications.models import (
     AppCapability,
     AppNotificationChannel,
 )
+from easyauth.connectors.models import ConnectorInstance
 
 pytestmark = pytest.mark.django_db
 
@@ -103,3 +105,17 @@ def test_notify_check_included_in_full_run() -> None:
     _ = _create_channel(app)
     snapshots = dependency_health_checks.run_dependency_health_checks()
     assert any(item.component == DEPENDENCY_DINGTALK_NOTIFY for item in snapshots)
+
+
+def test_connector_health_reports_corrupted_config() -> None:
+    app = App.objects.create(app_key="health-corrupt-connector", name="Health Connector")
+    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+    instance.config_encrypted = '{"broken"'
+    instance.save(update_fields=["config_encrypted"])
+
+    snapshots = dependency_health_checks.run_dependency_health_checks()
+    connector = next(item for item in snapshots if item.component == DEPENDENCY_CONNECTORS)
+
+    assert connector.status == DEPENDENCY_HEALTH_STATUS_UNHEALTHY
+    assert "配置损坏" in connector.summary
+    assert "连接器配置不是合法 JSON" in connector.error_summary

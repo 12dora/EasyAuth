@@ -3,8 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, ClassVar, Literal, override
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
+from easyauth.access_requests.submission_types import ScopedAccessRequestGrant
 from easyauth.applications.models import App, AuthorizationGroup, Permission
 
 if TYPE_CHECKING:
@@ -20,6 +21,10 @@ type RequestType = Literal["grant", "change", "revoke", "renew"]
 APP_NOT_REQUESTABLE_MESSAGE = "应用当前不可申请。"
 ROLE_NOT_REQUESTABLE_MESSAGE = "角色当前不可申请。"
 PERMISSION_NOT_REQUESTABLE_MESSAGE = "权限当前不可申请。"
+GRANT_BASE_FORBIDDEN_MESSAGE = "grant 申请不能包含 base_grant_id 或 base_grant_revision"
+LIFECYCLE_BASE_REQUIRED_MESSAGE = (
+    "change/revoke/renew 申请必须包含 base_grant_id 和 base_grant_revision"
+)
 
 
 class DirectGrantPayload(BaseModel):
@@ -34,12 +39,27 @@ class AccessRequestPayload(BaseModel):
 
     app_key: str = Field(min_length=1, max_length=128)
     request_type: RequestType = "grant"
+    base_grant_id: int | None = Field(default=None, ge=1)
+    base_grant_revision: int | None = Field(default=None, ge=1)
     authorization_group_keys: tuple[RoleKey, ...] = Field(default=(), max_length=20)
-    direct_grants: tuple[DirectGrantPayload, ...] = Field(default=())
+    direct_grants: tuple[DirectGrantPayload, ...] = ()
     approver_user_ids: tuple[ApproverUserId, ...] = Field(min_length=1, max_length=20)
     grant_type: GrantType
     grant_expires_at: AwareDatetime | None = None
     reason: str = Field(min_length=1, max_length=1000)
+
+    @model_validator(mode="after")
+    def validate_base_grant_shape(self) -> AccessRequestPayload:
+        has_base = self.base_grant_id is not None and self.base_grant_revision is not None
+        if self.request_type == "grant":
+            if self.base_grant_id is not None or self.base_grant_revision is not None:
+                message = GRANT_BASE_FORBIDDEN_MESSAGE
+                raise ValueError(message)
+            return self
+        if not has_base:
+            message = LIFECYCLE_BASE_REQUIRED_MESSAGE
+            raise ValueError(message)
+        return self
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,12 +77,6 @@ def app_for_key(app_key: str) -> App:
     if app is None:
         raise AccessRequestTargetError(APP_NOT_REQUESTABLE_MESSAGE, {"app_key": app_key})
     return app
-
-
-@dataclass(frozen=True, slots=True)
-class DirectGrantTarget:
-    permission: Permission
-    scope_key: str
 
 
 def authorization_groups_for_keys(
@@ -87,7 +101,7 @@ def direct_grants_for_payloads(
     *,
     app: App,
     direct_grants: tuple[DirectGrantPayload, ...],
-) -> tuple[DirectGrantTarget, ...]:
+) -> tuple[ScopedAccessRequestGrant, ...]:
     permission_keys = tuple(grant.permission for grant in direct_grants)
     permission_by_key = {
         permission.key: permission
@@ -100,7 +114,7 @@ def direct_grants_for_payloads(
             {"permission_keys": _json_strings(missing_permission_keys)},
         )
     return tuple(
-        DirectGrantTarget(
+        ScopedAccessRequestGrant(
             permission=permission_by_key[direct_grant.permission],
             scope_key=direct_grant.scope,
         )

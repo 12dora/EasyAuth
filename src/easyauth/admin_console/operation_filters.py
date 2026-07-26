@@ -7,10 +7,11 @@ from typing import TYPE_CHECKING, Final, override
 from django.db import models
 from django.utils.dateparse import parse_datetime
 
+from easyauth.access_requests.models import REQUEST_STATUS_VALUES, REQUEST_TYPE_VALUES
 from easyauth.admin_console.api_responses import error_response
 from easyauth.api.errors import ErrorCode
 from easyauth.api.pagination import total_pages
-from easyauth.grants.models import GRANT_STATUS_REVOKED
+from easyauth.grants.models import GRANT_STATUS_REVOKED, GRANT_STATUS_VALUES
 
 if TYPE_CHECKING:
     from django.db.models import QuerySet
@@ -61,9 +62,21 @@ def filter_access_requests(
     query: QueryDict,
 ) -> QuerySet[AccessRequest]:
     queryset = _filter_text(queryset, query, key="app_key", lookup="app__app_key")
-    queryset = _filter_text(queryset, query, key="status", lookup="status")
+    queryset = _filter_enum(
+        queryset,
+        query,
+        key="status",
+        lookup="status",
+        allowed=REQUEST_STATUS_VALUES,
+    )
     queryset = _filter_text(queryset, query, key="user_id", lookup="user__authentik_user_id")
-    queryset = _filter_text(queryset, query, key="request_type", lookup="request_type")
+    queryset = _filter_enum(
+        queryset,
+        query,
+        key="request_type",
+        lookup="request_type",
+        allowed=REQUEST_TYPE_VALUES,
+    )
     queryset = _filter_datetime(queryset, query, key="created_from", lookup="submitted_at__gte")
     queryset = _filter_datetime(queryset, query, key="created_to", lookup="submitted_at__lte")
     queryset = _filter_datetime(queryset, query, key="applied_from", lookup="applied_at__gte")
@@ -76,7 +89,13 @@ def filter_access_grants(
     query: QueryDict,
 ) -> QuerySet[AccessGrant]:
     queryset = _filter_text(queryset, query, key="app_key", lookup="app__app_key")
-    queryset = _filter_text(queryset, query, key="status", lookup="status")
+    queryset = _filter_enum(
+        queryset,
+        query,
+        key="status",
+        lookup="status",
+        allowed=GRANT_STATUS_VALUES,
+    )
     queryset = _filter_text(queryset, query, key="user_id", lookup="user__authentik_user_id")
     queryset = _filter_integer(queryset, query, key="version", lookup="version")
     queryset = _filter_boolean(queryset, query, key="current", lookup="is_current")
@@ -132,6 +151,26 @@ def _filter_text[T: models.Model](
     value = query.get(key, "")
     if value == "":
         return queryset
+    return queryset.filter(**{lookup: value})
+
+
+def _filter_enum[T: models.Model](
+    queryset: QuerySet[T],
+    query: QueryDict,
+    *,
+    key: str,
+    lookup: str,
+    allowed: tuple[str, ...],
+) -> QuerySet[T]:
+    value = query.get(key, "")
+    if value == "":
+        return queryset
+    if value not in allowed:
+        raise OperationFilterValidationError(
+            key=key,
+            value=value,
+            message=f"{key} 必须为以下值之一: {', '.join(allowed)}。",
+        )
     return queryset.filter(**{lookup: value})
 
 

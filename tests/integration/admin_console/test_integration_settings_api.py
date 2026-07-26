@@ -6,10 +6,12 @@ from typing import TYPE_CHECKING, Final, cast
 import pytest
 from django.test import Client
 
-from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
-from easyauth.accounts.models import UserMirror
 from easyauth.applications.integration_settings import IntegrationSettings
 from easyauth.audit.models import AuditLog
+from tests.integration.admin_console.auth_helpers import (
+    authenticate_console_admin,
+    authenticate_console_user,
+)
 
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
@@ -223,12 +225,8 @@ def test_integration_settings_patch_rejects_invalid_url() -> None:
 
 
 def test_integration_settings_requires_superuser() -> None:
-    _ = UserMirror.objects.create(authentik_user_id="settings-normal-user")
     client = Client(HTTP_HOST="localhost")
-    session = client.session
-    session[AUTHENTIK_SESSION_KEY] = "settings-normal-user"
-    session["easyauth_authentik_groups"] = ["Employees"]
-    session.save()
+    authenticate_console_user(client, "settings-normal-user")
 
     response = client.get(SETTINGS_API_URL)
 
@@ -236,10 +234,5 @@ def test_integration_settings_requires_superuser() -> None:
 
 
 def _logged_in_superuser(username: str) -> Client:
-    _ = UserMirror.objects.create(authentik_user_id=username)
     client = Client(HTTP_HOST="localhost")
-    session = client.session
-    session[AUTHENTIK_SESSION_KEY] = username
-    session["easyauth_authentik_groups"] = ["EasyAuth Admins"]
-    session.save()
-    return client
+    return authenticate_console_admin(client, username)

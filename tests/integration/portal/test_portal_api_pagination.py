@@ -147,6 +147,28 @@ def test_portal_access_requests_returns_requested_page_for_session_user() -> Non
     )
 
 
+@pytest.mark.parametrize(
+    ("url", "query", "message"),
+    [
+        (GRANTS_API_URL, {"page": "abc"}, "page 必须为整数。"),
+        (EXPIRING_API_URL, {"page_size": "101"}, "page_size 不得大于 100。"),
+        (REQUESTS_API_URL, {"page": "0"}, "page 必须为正整数。"),
+    ],
+)
+def test_portal_lists_reject_invalid_pagination(
+    url: str,
+    query: dict[str, str],
+    message: str,
+) -> None:
+    client, _user = logged_in_client("portal-page-invalid-user")
+
+    response = client.get(url, query)
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    body = response.json()
+    assert body["error"]["message"] == message
+
+
 def _create_grant(
     *,
     user: UserMirror,

@@ -1,15 +1,22 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from http import HTTPStatus
 from json import JSONDecodeError, dumps, loads
-from typing import TYPE_CHECKING, Final, Self, cast
+from typing import TYPE_CHECKING, Final, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
 from easyauth.applications.integration_settings import authentik_runtime_config
-from easyauth.config.net import InsecureUrlError, require_secure_url
+from easyauth.config.net import (
+    HeaderReadableResponse,
+    HttpResponseReadError,
+    InsecureUrlError,
+    read_urlopen_body_bounded,
+    require_secure_url,
+)
 from easyauth.integrations.authentik.directory_payloads import (
     DingTalkDirectoryDepartment,
     DingTalkDirectoryOrgContext,
@@ -27,7 +34,6 @@ from easyauth.integrations.authentik.directory_payloads import (
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
-    from types import TracebackType
 
 DIRECTORY_UNAVAILABLE_MESSAGE = "Authentik 目录 API 暂不可用。"
 DIRECTORY_INVALID_JSON_MESSAGE = "Authentik 目录 API 返回了无效 JSON。"
@@ -40,19 +46,7 @@ DIRECTORY_INSECURE_BASE_URL_MESSAGE = "Authentik base_url 必须为 https, 拒�
 DIRECTORY_SYNC_NOT_QUEUED_MESSAGE = "Authentik 目录同步触发失败, 响应未确认排队。"
 # 分页硬上限: 上游若返回恒定/循环游标, 物化成 tuple 的调用方会挂死到 worker 被杀。
 DIRECTORY_MAX_PAGES: Final = 1000
-
-
-class _ReadableResponse:
-    def __enter__(self) -> Self: ...
-
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None: ...
-
-    def read(self) -> bytes: ...
+DIRECTORY_MAX_RESPONSE_BYTES: Final = 1024 * 1024
 
 
 class AuthentikDirectoryError(RuntimeError):
@@ -188,16 +182,23 @@ class AuthentikDirectoryClient:
             method=method,
         )
         raw_body = b""
+        started_at = time.monotonic()
         try:
             response_context = cast(
-                "_ReadableResponse",
+                "HeaderReadableResponse",
                 urlopen(request, timeout=self.timeout_seconds),  # noqa: S310 - URL 来自本地配置.
             )
             with response_context as response:
-                raw_body = response.read()
+                raw_body = read_urlopen_body_bounded(
+                    response,
+                    started_at=started_at,
+                    total_timeout_seconds=self.timeout_seconds,
+                    max_response_bytes=DIRECTORY_MAX_RESPONSE_BYTES,
+                    monotonic=time.monotonic,
+                )
         except HTTPError as error:
             _raise_http_error(error)
-        except URLError as error:
+        except (HttpResponseReadError, OSError, TimeoutError, URLError) as error:
             raise AuthentikDirectoryUnavailableError(DIRECTORY_UNAVAILABLE_MESSAGE) from error
 
         try:

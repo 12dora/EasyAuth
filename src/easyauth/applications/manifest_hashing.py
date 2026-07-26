@@ -25,7 +25,7 @@ def canonical_manifest_hash(manifest: dict[str, JsonValue]) -> str:
 
 
 def canonical_manifest_hash_from_template(raw_template: str) -> str:
-    manifest = safe_load(raw_template)
+    manifest = cast("object", safe_load(raw_template))
     if not isinstance(manifest, dict):
         msg = "App manifest 顶层必须是对象。"
         raise TypeError(msg)

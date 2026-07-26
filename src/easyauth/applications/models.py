@@ -36,7 +36,6 @@ __all__ = (
     "AppMembership",
     "AppNotificationChannel",
     "AppScope",
-    "AppStaticToken",
     "ApprovalRule",
     "AuthorizationGroup",
     "AuthorizationGroupAccessPolicy",
@@ -293,9 +292,6 @@ class AppCredential(models.Model):
             raise ValidationError({"token_lookup": TOKEN_LOOKUP_REQUIRED_MESSAGE})
 
 
-AppStaticToken = AppCredential
-
-
 class AppScope(models.Model):
     if TYPE_CHECKING:
         id: ClassVar[int]
@@ -355,6 +351,7 @@ class Permission(models.Model):
     if TYPE_CHECKING:
         id: ClassVar[int]
         app_id: ClassVar[int]
+        group_id: ClassVar[int | None]
 
     app: models.ForeignKey[App, App] = models.ForeignKey(
         App,
@@ -574,7 +571,16 @@ class ManagedScopePolicy(models.Model):
         related_name="managed_scope_policies",
     )
     target_type: models.CharField[str, str] = models.CharField(max_length=64)
-    target_id: models.PositiveBigIntegerField[int, int] = models.PositiveBigIntegerField()
+    authorization_group_grant: models.ForeignKey[
+        AuthorizationGroupGrant | None,
+        AuthorizationGroupGrant | None,
+    ] = models.ForeignKey(
+        AuthorizationGroupGrant,
+        on_delete=models.CASCADE,
+        related_name="managed_scope_policies",
+        blank=True,
+        null=True,
+    )
     scope: models.CharField[str, str] = models.CharField(max_length=64)
     resolver: models.CharField[str, str] = models.CharField(max_length=64)
     enabled: models.BooleanField[bool, bool] = models.BooleanField(default=True)
@@ -588,12 +594,33 @@ class ManagedScopePolicy(models.Model):
     class Meta:
         constraints: ClassVar[list[models.BaseConstraint]] = [
             models.UniqueConstraint(
-                fields=["app", "target_type", "target_id", "scope"],
-                name="applications_managed_scope_policy_target_unique",
+                fields=["app", "target_type", "scope"],
+                condition=Q(target_type=MANAGED_SCOPE_POLICY_TARGET_APP_DEFAULT),
+                name="applications_managed_scope_policy_app_default_unique",
+            ),
+            models.UniqueConstraint(
+                fields=["authorization_group_grant", "scope"],
+                condition=Q(
+                    target_type=MANAGED_SCOPE_POLICY_TARGET_AUTHORIZATION_GROUP_GRANT,
+                ),
+                name="applications_managed_scope_policy_grant_unique",
             ),
             models.CheckConstraint(
                 condition=Q(target_type__in=MANAGED_SCOPE_POLICY_TARGET_TYPES),
                 name="applications_managed_scope_policy_target_type_supported",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        target_type=MANAGED_SCOPE_POLICY_TARGET_APP_DEFAULT,
+                        authorization_group_grant__isnull=True,
+                    )
+                    | Q(
+                        target_type=MANAGED_SCOPE_POLICY_TARGET_AUTHORIZATION_GROUP_GRANT,
+                        authorization_group_grant__isnull=False,
+                    )
+                ),
+                name="applications_managed_scope_policy_target_shape",
             ),
             models.CheckConstraint(
                 condition=Q(scope=MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS),
@@ -607,13 +634,22 @@ class ManagedScopePolicy(models.Model):
         ordering: ClassVar[list[str]] = [
             "app__app_key",
             "target_type",
-            "target_id",
+            "authorization_group_grant_id",
             "scope",
         ]
 
     @override
     def __str__(self) -> str:
         return f"{self.app.app_key}:{self.target_type}:{self.target_id}:{self.scope}"
+
+    @property
+    def target_id(self) -> int:
+        if self.target_type == MANAGED_SCOPE_POLICY_TARGET_APP_DEFAULT:
+            return self.app_id
+        grant = self.authorization_group_grant
+        if grant is None:
+            return 0
+        return cast("int", grant.pk)
 
     @override
     def clean(self) -> None:
@@ -625,14 +661,18 @@ class ManagedScopePolicy(models.Model):
                 "or authorization_group_grant."
             )
         elif self.target_type == MANAGED_SCOPE_POLICY_TARGET_APP_DEFAULT:
-            if self.target_id != self.app_id:
-                errors["target_id"] = "App default policy target must be the app id."
+            if self.authorization_group_grant is not None:
+                errors["authorization_group_grant"] = (
+                    "App default policy must not reference an authorization group grant."
+                )
         else:
-            grant = AuthorizationGroupGrant.objects.filter(id=self.target_id).first()
+            grant = self.authorization_group_grant
             if grant is None:
-                errors["target_id"] = "Authorization group grant target must exist."
+                errors["authorization_group_grant"] = (
+                    "Authorization group grant target must exist."
+                )
             elif grant.authorization_group.app_id != self.app_id:
-                errors["target_id"] = (
+                errors["authorization_group_grant"] = (
                     "Authorization group grant target must belong to the same app."
                 )
         if self.scope != MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS:
@@ -649,6 +689,8 @@ class ManagedScopePolicy(models.Model):
 class ApprovalRule(models.Model):
     if TYPE_CHECKING:
         id: ClassVar[int]
+        authorization_group_id: ClassVar[int | None]
+        permission_id: ClassVar[int | None]
 
     app: models.ForeignKey[App, App] = models.ForeignKey(
         App,

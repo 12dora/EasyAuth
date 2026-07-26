@@ -29,21 +29,11 @@
   opaque `department_ref`。消费方必须原样保存和回传，不得拼接、解码或依赖内部格式。
   路径 `{user_ref}`、`manager_id`、通知 `recipients[]`、`department_id` / `parent_id`
   过滤都应传对应条目返回的 ref。
-- 旧引用仅作兼容输入：
-
-| 形式 | 含义 | 示例 |
-|---|---|---|
-| 裸字符串 | `user_id`（authentik_user_id） | `"f7c31a09e5..."` |
-| `dt:` 前缀 | 钉钉 userid（`dingtalk_user_id`） | `"dt:manager8836"` |
-| 原始部门 ID | 钉钉部门 ID | `"460001"` |
-
-- legacy 引用只在全部目录作用域中唯一匹配时解析；多作用域匹配返回
-  `409 CONFLICT`（`details.reason=ambiguous_user_ref|ambiguous_department_ref`，并附
-  `candidate_refs`）。在 directory endpoints 中，畸形 scoped ref 返回
-  `422 VALIDATION_ERROR`（`details.reason=invalid_directory_ref`）。notify POST 的
-  收件人解析是异步受理的一部分：请求体结构合法时，畸形/未知 ref 为逐收件人
-  `failed(USER_NOT_FOUND)`，legacy 歧义为 `failed(USER_AMBIGUOUS)`，不以 HTTP
-  409/422 拒绝整条消息。
+- 不接受旧裸 `user_id`、未作用域 `dt:<钉钉userid>` 或原始部门 ID 作为目录引用。
+  在 directory endpoints 中，畸形或未作用域 ref 返回 `422 VALIDATION_ERROR`
+  （`details.reason=invalid_directory_ref`）。notify POST 的收件人解析是异步受理的一部分：
+  请求体结构合法时，畸形、未作用域或未知 ref 为逐收件人
+  `failed(USER_NOT_FOUND)`，不以 HTTP 409/422 拒绝整条消息。
 
 ### 0.3 错误结构与错误码
 
@@ -59,7 +49,7 @@
 | `PERMISSION_DENIED` | 403 | app_key 不匹配 / 应用禁用 / App 能力未开通 / credential 能力未授权 |
 | `VALIDATION_ERROR` | 422 | 参数缺失/格式错/超长（含 directory endpoint 的畸形 scoped ref、msg 2048 字节超限） |
 | `NOT_FOUND` | 404 | 用户/消息不存在或不属于本 app |
-| `CONFLICT` | 409 | dedup_key 载荷冲突、目录快照变化或 legacy 目录 ref 跨企业歧义 |
+| `CONFLICT` | 409 | dedup_key 载荷冲突或目录快照变化 |
 | `THROTTLED` | 429（带 `Retry-After` 头） | 速率/每日配额超限 |
 | `DEPENDENCY_UNAVAILABLE` | 503 | 通知 App 未配置可用通道；目录端点是纯本地镜像查询 |
 | `INTERNAL_ERROR` | 500 | 服务端错误 |
@@ -463,7 +453,7 @@ POST 成功仅代表 EasyAuth 已落库并排程投递；投递结果通过 N4 �
 | 值 | 含义 | 消费方建议动作 |
 |---|---|---|
 | `USER_NOT_FOUND` | scoped ref 畸形或引用无法解析到目录用户 | 检查引用来源，刷新目录缓存 |
-| `USER_AMBIGUOUS` | legacy 引用在多个企业作用域匹配 | 刷新目录并改传返回的 scoped `user_ref` |
+| `USER_AMBIGUOUS` | 保留错误码，不再由当前目录引用解析产生 | 排查是否有旧数据或外部系统仍在发送非权威引用 |
 | `USER_SCOPE_MISMATCH` | 用户不属于消息冻结通道的目录作用域 | 修正通道或收件人业务规则，不重试 |
 | `NO_DINGTALK_ID` | 用户存在但无钉钉绑定（罕见） | 无法钉钉触达，走业务兜底 |
 | `USER_INACTIVE` | 用户已禁用/离职 | 更新本地成员状态 |
@@ -472,9 +462,9 @@ POST 成功仅代表 EasyAuth 已落库并排程投递；投递结果通过 N4 �
 | `DINGTALK_DAILY_LIMIT` | 钉钉单应用对单人 500 条/日超限 | 检查是否有通知风暴 bug |
 | `EXHAUSTED` | EasyAuth 重试耗尽 | 平台侧会告警；业务可换 dedup_key 重发 |
 
-canonical 收件人行以 `(message, source_slug, corp_id, dingtalk_user_id)` 唯一；仅对
-缺少完整 source/corp 的历史 legacy 行保留独立的 `(message, dingtalk_user_id)`
-兼容唯一约束。合法 notify 请求中的畸形/未知/歧义/scope mismatch 都通过 202 后的
+canonical 收件人行以 `(message, source_slug, corp_id, dingtalk_user_id)` 唯一；不再对
+缺少完整 source/corp 的旧形态行保留独立兼容唯一约束。合法 notify 请求中的
+畸形、未知或 scope mismatch 都通过 202 后的
 逐收件人错误表达，而不是 directory endpoints 的 HTTP 409/422 语义。
 
 **状态时效**：`sent → delivered/failed` 的升级依赖回执对账任务（60s 周期，
@@ -494,7 +484,7 @@ send-result 查询窗口 24h）；对账属尽力而为，`sent` 是消费方可
 |---|---|---|---|
 | D-1 | `GET /api/v1/directory/...` | `GET /api/v1/apps/{app_key}/directory/...` | 全部现有公共端点都以 `apps/{app_key}` 开头并强制「路径 app_key = 凭据 app_key」，目录/通知沿用同一鉴权不变量 |
 | D-2 | 列表响应 `{items, total}` | `{data, pagination{page,page_size,total_items,total_pages}}` | 对齐既有审批列表分页结构，SDK/下游只需一套分页解析 |
-| D-3 | `user_id` 恒存在 | `user_id` 可为 `null`；返回 opaque scoped `user_ref`，旧 `dt:` 仅兼容 | `UserMirror` 仅在首次 SSO 登录时创建，且原始钉钉 userid 可跨企业重复；canonical ref 同时解决未登录与作用域消歧 |
+| D-3 | `user_id` 恒存在 | `user_id` 可为 `null`；返回 opaque scoped `user_ref`，不接受未作用域 `dt:` | `UserMirror` 仅在首次 SSO 登录时创建，且原始钉钉 userid 可跨企业重复；canonical ref 同时解决未登录与作用域消歧 |
 | D-4 | `department_id`、`manager_id` 过滤语义未定义 | 部门=直接成员（不递归）；manager=直接下属；新增 `include_inactive` | 契约必须可实现、语义无歧义 |
 | D-5 | `departments?parent_id=` 返回"列表/树" | 只返回扁平列表（全量或直接子部门），树由消费方构建 | 避免嵌套树的深分页/局部更新歧义；部门量级小，扁平全量最简单 |
 | D-6 | 隐含服务端拼音搜索 | 拼音检索为消费方职责，服务端仅子串匹配；`page_size` 上限放宽到 200 支持全量缓存 | 镜像数据源无拼音字段；自建拼音索引引入依赖与多音字错配，不值 |

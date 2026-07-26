@@ -6,8 +6,9 @@ from __future__ import annotations
 import base64
 import io
 import time
+from collections.abc import Iterable, Mapping
 from secrets import compare_digest, token_urlsafe
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
 import pyotp
 import qrcode
@@ -41,8 +42,6 @@ from easyauth.accounts.models import LocalAdminAccount, LocalAdminPasskey
 from easyauth.audit.services import AuditRecord, AuditService
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping
-
     from django.http import HttpRequest
 
     from easyauth.accounts.models import UserMirror
@@ -146,14 +145,14 @@ def bind_local_admin_session(
 
 def start_pending_verification(request: HttpRequest, account: LocalAdminAccount) -> None:
     request.session[PENDING_SESSION_KEY] = {
-        "account_id": account.pk,
+        "account_id": account.id,
         "issued_at": time.time(),
     }
 
 
 def pending_account(request: HttpRequest) -> LocalAdminAccount | None:
-    payload = request.session.get(PENDING_SESSION_KEY)
-    if not isinstance(payload, dict):
+    payload = _session_mapping(request.session.get(PENDING_SESSION_KEY))
+    if payload is None:
         return None
     account_id = payload.get("account_id")
     issued_at = payload.get("issued_at")
@@ -176,7 +175,7 @@ def clear_pending_verification(request: HttpRequest) -> None:
 
 
 def login_is_throttled(username: str) -> bool:
-    count = cache.get(_throttle_cache_key(username), 0)
+    count: object = cache.get(_throttle_cache_key(username), 0)  # pyright: ignore[reportAny]
     return isinstance(count, int) and count >= LOGIN_FAILURE_LIMIT
 
 
@@ -191,7 +190,7 @@ def record_login_failure(username: str) -> None:
 
 
 def reset_login_failures(username: str) -> None:
-    cache.delete(_throttle_cache_key(username))
+    _ = cache.delete(_throttle_cache_key(username))
 
 
 def record_login_failed(username: str, *, reason: str) -> None:
@@ -236,7 +235,7 @@ _DUMMY_PASSWORD_HASH: Final = hashers.make_password("easyauth-timing-equalizer")
 
 
 def run_dummy_password_hash(password: str) -> None:
-    _ = hashers.check_password(password, _DUMMY_PASSWORD_HASH)
+    _ = hashers.check_password(password, _DUMMY_PASSWORD_HASH)  # pyright: ignore[reportUnknownMemberType]
 
 
 def matched_totp_timestep(secret: str, code: str) -> int | None:
@@ -283,7 +282,7 @@ def verify_and_consume_totp(account: LocalAdminAccount, code: str) -> bool:
     # 用带条件的原子 UPDATE 前移 timestep, 避免"读-判-写"的 TOCTOU: 两个并发请求只有一个能
     # 把 totp_last_timestep 推进到 step, 另一个 update 命中 0 行即判为重放。
     consumed = (
-        LocalAdminAccount.objects.filter(pk=account.pk)
+        LocalAdminAccount.objects.filter(pk=account.id)
         .filter(Q(totp_last_timestep__isnull=True) | Q(totp_last_timestep__lt=step))
         .update(totp_last_timestep=step)
     )
@@ -294,7 +293,10 @@ def verify_and_consume_totp(account: LocalAdminAccount, code: str) -> bool:
 
 
 def totp_provisioning_uri(secret: str, username: str) -> str:
-    return pyotp.TOTP(secret).provisioning_uri(name=username, issuer_name=_webauthn_rp_name())
+    return pyotp.TOTP(secret).provisioning_uri(  # pyright: ignore[reportUnknownMemberType]
+        name=username,
+        issuer_name=_webauthn_rp_name(),
+    )
 
 
 def totp_qr_data_uri(provisioning_uri: str) -> str:
@@ -312,7 +314,7 @@ def store_totp_setup_secret(
 ) -> str:
     nonce = token_urlsafe(32)
     request.session[TOTP_SETUP_SESSION_KEY] = {
-        "account_id": account.pk,
+        "account_id": account.id,
         "issued_at": time.time(),
         "nonce": nonce,
         "secret": secret,
@@ -327,8 +329,8 @@ def totp_setup_secret(
     *,
     nonce: str | None = None,
 ) -> str:
-    payload = request.session.get(TOTP_SETUP_SESSION_KEY)
-    if not isinstance(payload, dict):
+    payload = _session_mapping(request.session.get(TOTP_SETUP_SESSION_KEY))
+    if payload is None:
         return ""
     secret = payload.get("secret")
     issued_at = payload.get("issued_at")
@@ -337,7 +339,7 @@ def totp_setup_secret(
         not isinstance(secret, str)
         or not isinstance(issued_at, (int, float))
         or not isinstance(stored_nonce, str)
-        or payload.get("account_id") != account.pk
+        or payload.get("account_id") != account.id
         or payload.get("session_version") != account.session_version
         or (nonce is not None and not compare_digest(stored_nonce, nonce))
     ):
@@ -352,14 +354,15 @@ def totp_setup_secret(
 def totp_setup_nonce(request: HttpRequest, account: LocalAdminAccount) -> str:
     if totp_setup_secret(request, account) == "":
         return ""
-    payload = request.session.get(TOTP_SETUP_SESSION_KEY)
-    return str(payload["nonce"]) if isinstance(payload, dict) else ""
+    payload = _session_mapping(request.session.get(TOTP_SETUP_SESSION_KEY))
+    nonce = payload.get("nonce") if payload is not None else None
+    return nonce if isinstance(nonce, str) else ""
 
 
 def rotate_local_admin_session(request: HttpRequest, account: LocalAdminAccount) -> None:
     """递增账号会话版本, 同时让当前已完成 step-up 的会话继续有效。"""
     with transaction.atomic():
-        locked = LocalAdminAccount.objects.select_for_update().get(pk=account.pk)
+        locked = LocalAdminAccount.objects.select_for_update().get(pk=account.id)
         locked.session_version += 1
         locked.save(update_fields=["session_version", "updated_at"])
     account.session_version = locked.session_version
@@ -400,24 +403,29 @@ def verify_passkey_authentication(
     if challenge is None:
         raise PasskeyVerificationError(REASON_CHALLENGE_MISSING)
     credential_id = _credential_id_from_payload(credential)
-    passkey = account.passkeys.filter(credential_id=credential_id).first()
-    if passkey is None:
-        raise PasskeyVerificationError(REASON_CREDENTIAL_UNKNOWN)
-    try:
-        verified = webauthn.verify_authentication_response(
-            credential=dict(credential),
-            expected_challenge=challenge,
-            expected_rp_id=_webauthn_rp_id(),
-            expected_origin=list(_webauthn_origins()),
-            credential_public_key=base64url_to_bytes(passkey.public_key),
-            credential_current_sign_count=passkey.sign_count,
-            require_user_verification=True,
+    with transaction.atomic():
+        passkey = (
+            LocalAdminPasskey.objects.select_for_update()
+            .filter(account=account, credential_id=credential_id)
+            .first()
         )
-    except InvalidAuthenticationResponse as error:
-        raise PasskeyVerificationError(REASON_VERIFICATION_FAILED) from error
-    passkey.sign_count = verified.new_sign_count
-    passkey.last_used_at = timezone.now()
-    passkey.save(update_fields=["sign_count", "last_used_at"])
+        if passkey is None:
+            raise PasskeyVerificationError(REASON_CREDENTIAL_UNKNOWN)
+        try:
+            verified = webauthn.verify_authentication_response(
+                credential=_plain_payload(credential),
+                expected_challenge=challenge,
+                expected_rp_id=_webauthn_rp_id(),
+                expected_origin=list(_webauthn_origins()),
+                credential_public_key=base64url_to_bytes(passkey.public_key),
+                credential_current_sign_count=passkey.sign_count,
+                require_user_verification=True,
+            )
+        except InvalidAuthenticationResponse as error:
+            raise PasskeyVerificationError(REASON_VERIFICATION_FAILED) from error
+        passkey.sign_count = verified.new_sign_count
+        passkey.last_used_at = timezone.now()
+        passkey.save(update_fields=["sign_count", "last_used_at"])
 
 
 def passkey_registration_options(
@@ -457,7 +465,7 @@ def register_passkey(
         raise PasskeyVerificationError(REASON_CHALLENGE_MISSING)
     try:
         verified = webauthn.verify_registration_response(
-            credential=dict(credential),
+            credential=_plain_payload(credential),
             expected_challenge=challenge,
             expected_rp_id=_webauthn_rp_id(),
             expected_origin=list(_webauthn_origins()),
@@ -486,13 +494,14 @@ def _credential_id_from_payload(credential: Mapping[str, object]) -> str:
 
 
 def _transports_from_payload(credential: Mapping[str, object]) -> list[str]:
-    response = credential.get("response")
-    if not isinstance(response, dict):
+    response = _object_mapping(credential.get("response"))
+    if response is None:
         return []
     transports = response.get("transports")
     if not isinstance(transports, list):
         return []
-    return [item for item in transports if isinstance(item, str)]
+    items = cast("list[object]", transports)
+    return [item for item in items if isinstance(item, str)]
 
 
 def _store_challenge(request: HttpRequest, challenge: bytes) -> str:
@@ -506,8 +515,9 @@ def _store_challenge(request: HttpRequest, challenge: bytes) -> str:
 
 
 def _pop_challenge(request: HttpRequest, state_token: str) -> bytes | None:
-    payload = request.session.pop(CHALLENGE_SESSION_KEY, None)
-    if not isinstance(payload, dict):
+    raw_payload: object = request.session.pop(CHALLENGE_SESSION_KEY, None)  # pyright: ignore[reportAny]
+    payload = _session_mapping(raw_payload)
+    if payload is None:
         return None
     challenge = payload.get("challenge")
     stored_token = payload.get("state_token")
@@ -553,7 +563,8 @@ def _console_superuser_groups() -> tuple[str, ...]:
         case str() as text:
             return tuple(item.strip() for item in text.split(",") if item.strip())
         case tuple() | list():
-            return tuple(item for item in value if isinstance(item, str) and item)
+            items = cast("Iterable[object]", value)
+            return tuple(item for item in items if isinstance(item, str) and item)
         case _:
             return ()
 
@@ -574,7 +585,25 @@ def _webauthn_origins() -> tuple[str, ...]:
         case str() as text:
             origins = tuple(item.strip() for item in text.split(",") if item.strip())
         case tuple() | list():
-            origins = tuple(item for item in value if isinstance(item, str) and item)
+            items = cast("Iterable[object]", value)
+            origins = tuple(item for item in items if isinstance(item, str) and item)
         case _:
             origins = ()
     return origins if origins else ("http://localhost:8001",)
+
+
+def _session_mapping(value: object) -> Mapping[str, object] | None:
+    return _object_mapping(value)
+
+
+def _object_mapping(value: object) -> Mapping[str, object] | None:
+    if not isinstance(value, Mapping):
+        return None
+    mapping = cast("Mapping[object, object]", value)
+    if not all(isinstance(key, str) for key in mapping):
+        return None
+    return cast("Mapping[str, object]", mapping)
+
+
+def _plain_payload(value: Mapping[str, object]) -> dict[str, object]:
+    return dict(value.items())

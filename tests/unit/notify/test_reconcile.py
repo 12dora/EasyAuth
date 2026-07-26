@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import final
+from typing import Final, final
 
 import pytest
 from django.conf import settings
@@ -10,6 +10,8 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from easyauth.applications.models import App, AppNotificationChannel
+from easyauth.integrations.dingtalk.api_client import DingTalkApiUnavailableError
+from easyauth.notify.contracts import NOTIFY_RECONCILE_WINDOW_HOURS
 from easyauth.notify.models import (
     CREDENTIAL_TYPE_STATIC_TOKEN,
     NOTIFY_ERROR_DINGTALK_DAILY_LIMIT,
@@ -24,13 +26,11 @@ from easyauth.notify.models import (
     NotifyMessage,
     NotifyRecipient,
 )
-from easyauth.notify.services import (
-    NOTIFY_RECONCILE_WINDOW_HOURS,
-    reconcile_send_results,
-    select_reconcile_tasks,
-)
+from easyauth.notify.reconciliation import reconcile_send_results, select_reconcile_tasks
 
-pytestmark = pytest.mark.django_db
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("notification_channel_for_apps")]
+RECONCILE_DEPENDENCY_DOWN_MESSAGE: Final = "钉钉不可用"
+UNEXPECTED_RESULT_CALL_MESSAGE: Final = "progress 失败后不应查询结果"
 
 
 @final
@@ -63,8 +63,8 @@ class _FairnessDingTalkClient:
     def get_send_result(self, *, agent_id: str | int, task_id: str) -> dict[str, object]:
         _ = agent_id
         if task_id == "task-050":
-            return {"invalid_user_id_list": ["user-050"]}
-        return {}
+            return _receipt_result(invalid_user_id_list=["user-050"])
+        return _receipt_result()
 
 
 def _message_with_sent(
@@ -101,6 +101,19 @@ def _message_with_sent(
     return message
 
 
+def _receipt_result(**overrides: object) -> dict[str, object]:
+    result: dict[str, object] = {
+        "invalid_user_id_list": [],
+        "failed_user_id_list": [],
+        "forbidden_user_id_list": [],
+        "forbidden_list": [],
+        "read_user_id_list": [],
+        "unread_user_id_list": [],
+    }
+    result.update(overrides)
+    return result
+
+
 def _patch_reconcile_client(
     monkeypatch: pytest.MonkeyPatch,
     *,
@@ -112,7 +125,7 @@ def _patch_reconcile_client(
     def fake(_channel: object) -> tuple[_FakeDingTalkClient, int]:
         return client, 1001
 
-    monkeypatch.setattr("easyauth.notify.services._dingtalk_client_and_agent", fake)
+    monkeypatch.setattr("easyauth.notify.channel_config.dingtalk_client_and_agent", fake)
     return client
 
 
@@ -126,6 +139,7 @@ def test_reconcile_maps_four_list_types(monkeypatch: pytest.MonkeyPatch) -> None
         monkeypatch,
         progress={"status": 2, "progress_in_percent": 100},
         result={
+            **_receipt_result(),
             "invalid_user_id_list": ["bad1"],
             "failed_user_id_list": [],
             "forbidden_list": [
@@ -162,7 +176,7 @@ def test_reconcile_skips_incomplete_progress(monkeypatch: pytest.MonkeyPatch) ->
     _ = _patch_reconcile_client(
         monkeypatch,
         progress={"status": 1, "progress_in_percent": 50},
-        result={},
+        result=_receipt_result(),
     )
 
     processed = reconcile_send_results()
@@ -174,11 +188,9 @@ def test_reconcile_skips_incomplete_progress(monkeypatch: pytest.MonkeyPatch) ->
 @pytest.mark.parametrize(
     "result",
     [
-        {},
-        {"read_user_id_list": "not-a-list", "unread_user_id_list": None},
-        {"read_user_id_list": [], "unread_user_id_list": []},
+        _receipt_result(),
     ],
-    ids=["empty", "malformed", "unclassified"],
+    ids=["unclassified"],
 )
 def test_reconcile_unclassified_recipient_remains_sent(
     monkeypatch: pytest.MonkeyPatch,
@@ -197,6 +209,37 @@ def test_reconcile_unclassified_recipient_remains_sent(
 
     assert reconcile_send_results() == 0
     assert NotifyRecipient.objects.get(message=message).status == NOTIFY_RECIPIENT_STATUS_SENT
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        {},
+        {"read_user_id_list": "not-a-list", "unread_user_id_list": None},
+        {"read_user_id_list": [], "unread_user_id_list": []},
+    ],
+    ids=["empty", "malformed", "partial-shape"],
+)
+def test_reconcile_contract_failure_is_not_marked_reconciled(
+    monkeypatch: pytest.MonkeyPatch,
+    result: dict[str, object],
+) -> None:
+    message = _message_with_sent(
+        app_key=f"notify-rc-contract-{len(result)}",
+        userids=["not-classified"],
+        task_id=f"task-contract-{len(result)}",
+    )
+    _ = _patch_reconcile_client(
+        monkeypatch,
+        progress={"status": 2, "progress_in_percent": 100},
+        result=result,
+    )
+
+    assert reconcile_send_results() == 0
+    row = NotifyRecipient.objects.get(message=message)
+    assert row.status == NOTIFY_RECIPIENT_STATUS_SENT
+    assert row.last_reconciled_at is None
+    assert row.error
 
 
 def test_reconcile_fairly_rotates_beyond_first_fifty_tasks(
@@ -242,7 +285,7 @@ def test_reconcile_fairly_rotates_beyond_first_fifty_tasks(
         return client, 1001
 
     monkeypatch.setattr(
-        "easyauth.notify.services._dingtalk_client_and_agent",
+        "easyauth.notify.channel_config.dingtalk_client_and_agent",
         client_for_channel,
     )
     assert reconcile_send_results() == 0
@@ -267,7 +310,7 @@ def test_partial_failure_with_remaining_sent_updates_aggregate(
     _ = _patch_reconcile_client(
         monkeypatch,
         progress={"status": 2},
-        result={"invalid_user_id_list": ["failed-user"]},
+        result=_receipt_result(invalid_user_id_list=["failed-user"]),
     )
 
     assert reconcile_send_results() == 1
@@ -297,9 +340,9 @@ def test_same_task_id_from_different_channels_does_not_cross_update(
     )
     first_client = _FakeDingTalkClient(
         progress={"status": 2},
-        result={"invalid_user_id_list": ["first-user"]},
+        result=_receipt_result(invalid_user_id_list=["first-user"]),
     )
-    second_client = _FakeDingTalkClient(progress={"status": 1}, result={})
+    second_client = _FakeDingTalkClient(progress={"status": 1}, result=_receipt_result())
 
     def client_for_channel(
         channel: AppNotificationChannel,
@@ -309,7 +352,7 @@ def test_same_task_id_from_different_channels_does_not_cross_update(
         return second_client, 1001
 
     monkeypatch.setattr(
-        "easyauth.notify.services._dingtalk_client_and_agent",
+        "easyauth.notify.channel_config.dingtalk_client_and_agent",
         client_for_channel,
     )
     assert reconcile_send_results() == 1
@@ -333,7 +376,7 @@ def test_reconcile_stale_sent_remains_sent_without_receipt(
     def fake(_channel: object) -> tuple[_FakeDingTalkClient, int]:
         return client, 1001
 
-    monkeypatch.setattr("easyauth.notify.services._dingtalk_client_and_agent", fake)
+    monkeypatch.setattr("easyauth.notify.channel_config.dingtalk_client_and_agent", fake)
 
     _ = reconcile_send_results()
 
@@ -352,3 +395,32 @@ def test_reconcile_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
         task_id="task-off",
     )
     assert reconcile_send_results() == 0
+
+
+def test_reconcile_dependency_failure_is_not_marked_reconciled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    message = _message_with_sent(
+        app_key="notify-rc-dependency-failed",
+        userids=["u1"],
+        task_id="task-dependency-failed",
+    )
+
+    class BrokenClient:
+        def get_send_progress(self, *, agent_id: str | int, task_id: str) -> dict[str, object]:
+            _ = (agent_id, task_id)
+            raise DingTalkApiUnavailableError(RECONCILE_DEPENDENCY_DOWN_MESSAGE)
+
+        def get_send_result(self, *, agent_id: str | int, task_id: str) -> dict[str, object]:
+            _ = (agent_id, task_id)
+            raise AssertionError(UNEXPECTED_RESULT_CALL_MESSAGE)
+
+    def fake(_channel: object) -> tuple[BrokenClient, int]:
+        return BrokenClient(), 1001
+
+    monkeypatch.setattr("easyauth.notify.channel_config.dingtalk_client_and_agent", fake)
+
+    assert reconcile_send_results() == 0
+    row = NotifyRecipient.objects.get(message=message)
+    assert row.last_reconciled_at is None
+    assert row.error == RECONCILE_DEPENDENCY_DOWN_MESSAGE

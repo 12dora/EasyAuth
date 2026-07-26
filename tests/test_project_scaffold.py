@@ -5,8 +5,12 @@ from django.urls import reverse
 
 from easyauth.config.settings import test as project_settings
 from easyauth.tasks.grants import GRANT_EXPIRATION_TASK_NAME
+from easyauth.tasks.health import DATA_RETENTION_CLEANUP_TASK_NAME
+from easyauth.webhooks.delivery import WEBHOOK_DELIVERY_WATCHDOG_TASK_NAME
 
 GRANT_EXPIRATION_CLEANUP_INTERVAL_SECONDS = 60
+WEBHOOK_WATCHDOG_INTERVAL_SECONDS = 15
+DATA_RETENTION_CLEANUP_INTERVAL_SECONDS = 86400
 
 
 def test_project_settings_include_core_apps_when_loaded() -> None:
@@ -41,6 +45,21 @@ def test_celery_beat_schedules_grant_expiration_cleanup() -> None:
 def test_webhook_delivery_uses_isolated_queue() -> None:
     route = project_settings.CELERY_TASK_ROUTES["easyauth.webhooks.deliver"]
     assert route["queue"] == "webhooks"
+
+
+def test_webhook_watchdog_is_scheduled_on_webhook_queue() -> None:
+    route = project_settings.CELERY_TASK_ROUTES[WEBHOOK_DELIVERY_WATCHDOG_TASK_NAME]
+    schedule = project_settings.CELERY_BEAT_SCHEDULE["webhook-delivery-lease-recovery"]
+    assert route["queue"] == "webhooks"
+    assert schedule["task"] == WEBHOOK_DELIVERY_WATCHDOG_TASK_NAME
+    assert schedule["schedule"] == WEBHOOK_WATCHDOG_INTERVAL_SECONDS
+
+
+def test_data_retention_cleanup_is_scheduled() -> None:
+    schedule = project_settings.CELERY_BEAT_SCHEDULE["data-retention-cleanup"]
+    assert schedule["task"] == DATA_RETENTION_CLEANUP_TASK_NAME
+    assert schedule["schedule"] == DATA_RETENTION_CLEANUP_INTERVAL_SECONDS
+    assert "easyauth.tasks.health" in project_settings.CELERY_IMPORTS
 
 
 def test_health_endpoint_is_routed_when_project_urls_are_configured() -> None:

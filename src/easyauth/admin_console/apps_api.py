@@ -30,6 +30,7 @@ from easyauth.applications.configuration import (
     ConfigurationIssue,
     ConfigurationReadiness,
     configuration_readiness_for_app,
+    configuration_readiness_statuses_for_apps,
 )
 from easyauth.applications.models import (
     App,
@@ -42,6 +43,7 @@ from easyauth.applications.models import (
 )
 from easyauth.applications.ownership import (
     ConsoleActor,
+    apps_visible_to_actor_queryset,
     can_manage_app,
     can_view_app,
 )
@@ -149,7 +151,11 @@ def console_apps(request: HttpRequest) -> JsonResponse:
         page = paginate_queryset(_filter_apps(_visible_apps_queryset(actor), request), request.GET)
     except OperationFilterValidationError as exc:
         return operation_filter_error_response(exc)
-    return _items_response(tuple(_app_item(app) for app in page.items), page)
+    readiness_statuses = configuration_readiness_statuses_for_apps(page.items)
+    return _items_response(
+        tuple(_app_item(actor, app, readiness_statuses.get(app.id)) for app in page.items),
+        page,
+    )
 
 
 def console_app_detail(request: HttpRequest, app_key: str) -> JsonResponse | HttpResponse:
@@ -409,8 +415,14 @@ def _record_app_event(
     )
 
 
-def _app_item(app: App) -> dict[str, JsonValue]:
-    readiness = configuration_readiness_for_app(app)
+def _app_item(
+    actor: ConsoleActor,
+    app: App,
+    readiness_status: str | None = None,
+) -> dict[str, JsonValue]:
+    if readiness_status is None:
+        readiness_status = configuration_readiness_for_app(app).status
+    capabilities = _app_capabilities(actor, app)
     return {
         "id": app.id,
         "app_key": app.app_key,
@@ -418,14 +430,15 @@ def _app_item(app: App) -> dict[str, JsonValue]:
         "description": app.description,
         "is_active": app.is_active,
         "owners": _app_owner_ids(app),
-        "configuration_status": readiness.status,
+        "configuration_status": readiness_status,
         "updated_at": app.updated_at.isoformat(),
+        "can_manage": capabilities["can_edit_basic_info"],
+        "capabilities": capabilities,
     }
 
 
 def _app_detail_item(actor: ConsoleActor, app: App) -> dict[str, JsonValue]:
-    item = _app_item(app)
-    item["can_manage"] = can_manage_app(actor, app)
+    item = _app_item(actor, app)
     item["developers"] = _app_member_ids(app, "developer")
     item["authorization_group_count"] = AuthorizationGroup.objects.filter(app=app).count()
     item["permission_count"] = Permission.objects.filter(app=app).count()
@@ -435,6 +448,21 @@ def _app_detail_item(actor: ConsoleActor, app: App) -> dict[str, JsonValue]:
         configuration_readiness_for_app(app),
     )
     return item
+
+
+def _app_capabilities(actor: ConsoleActor, app: App) -> dict[str, JsonValue]:
+    can_manage = can_manage_app(actor, app)
+    return {
+        "can_view": can_view_app(actor, app),
+        "can_edit_basic_info": can_manage,
+        "can_toggle_active": actor.is_superuser,
+        "can_delete": actor.is_superuser,
+        "can_manage_memberships": actor.is_superuser,
+        "can_manage_catalog": can_manage,
+        "can_manage_credentials": can_manage,
+        "can_manage_connectors": actor.is_superuser,
+        "can_manage_platform_capabilities": actor.is_superuser,
+    }
 
 
 def _configuration_issue_item(issue: ConfigurationIssue) -> dict[str, JsonValue]:
@@ -463,8 +491,7 @@ def _app_member_ids(app: App, role: str) -> list[JsonValue]:
 
 
 def _visible_apps_queryset(actor: ConsoleActor) -> QuerySet[App]:
-    _ = actor
-    return App.objects.order_by("app_key")
+    return apps_visible_to_actor_queryset(actor)
 
 
 def _filter_apps(queryset: QuerySet[App], request: HttpRequest) -> QuerySet[App]:
@@ -488,7 +515,11 @@ def _filter_app_status(queryset: QuerySet[App], status: str) -> QuerySet[App]:
         case "":
             return queryset
         case _:
-            return queryset
+            raise OperationFilterValidationError(
+                key="status",
+                value=status,
+                message="status 必须为 active 或 inactive。",
+            )
 
 
 def _active_credential_count(app: App) -> int:

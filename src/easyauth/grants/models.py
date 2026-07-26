@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar, Final, override
+from typing import TYPE_CHECKING, ClassVar, Final, cast, override
 
-from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App, AuthorizationGroup, Permission
+from easyauth.applications.models import App, AppScope, AuthorizationGroup, Permission
 
 if TYPE_CHECKING:
     from datetime import date, datetime
@@ -39,11 +38,12 @@ GRANT_STATUS_VALUES: Final[tuple[str, ...]] = (
 class AccessGrant(models.Model):
     if TYPE_CHECKING:
         id: ClassVar[int]
+        user_id: ClassVar[int]
         app_id: ClassVar[int]
 
     user: models.ForeignKey[UserMirror, UserMirror] = models.ForeignKey(
         UserMirror,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="access_grants",
     )
     app: models.ForeignKey[App, App] = models.ForeignKey(
@@ -182,11 +182,14 @@ class AccessGrantPermission(models.Model):
         if self.permission.app_id != self.grant.app_id:
             errors["permission"] = "Permission must belong to the access grant app."
 
-        app_scope = apps.get_model("applications", "AppScope")
-        if not app_scope.objects.filter(app_id=self.grant.app_id, key=self.scope_key).exists():
+        scope_exists = AppScope.objects.filter(
+            app_id=self.grant.app_id,
+            key=self.scope_key,
+        ).exists()
+        if not scope_exists:
             errors["scope_key"] = "Scope must belong to the access grant app."
 
-        supported_scopes = self.permission.supported_scopes
+        supported_scopes = cast("list[str]", self.permission.supported_scopes)
         if self.scope_key not in supported_scopes:
             errors["scope_key"] = "Scope must be supported by the permission."
 

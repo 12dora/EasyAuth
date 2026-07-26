@@ -7,6 +7,7 @@ import pytest
 from django.utils import timezone
 
 from easyauth.access_requests.models import (
+    DECISION_ACTOR_USER,
     GRANT_TYPE_PERMANENT,
     GRANT_TYPE_TIMED,
     REQUEST_STATUS_APPROVED,
@@ -96,16 +97,16 @@ def _approved_request_for_type(
     )
     match request_type:
         case "grant" | "change":
-            access_request = _approved_request(user=user, app=app, request_type=request_type)
-            _ = AccessRequestGroup.objects.create(
-                access_request=access_request,
-                authorization_group=group,
-            )
             if request_type == REQUEST_TYPE_CHANGE:
                 _ = AccessGrant.objects.create(
                     user=user,
                     app=app,
                 )
+            access_request = _approved_request(user=user, app=app, request_type=request_type)
+            _ = AccessRequestGroup.objects.create(
+                access_request=access_request,
+                authorization_group=group,
+            )
             return access_request
         case "revoke":
             grant = AccessGrant.objects.create(
@@ -152,6 +153,10 @@ def _approved_request(
     grant_type: str = GRANT_TYPE_PERMANENT,
     grant_expires_at: datetime | None = None,
 ) -> AccessRequest:
+    base_grant = None
+    if request_type != REQUEST_TYPE_GRANT:
+        base_grant = AccessGrant.objects.get(user=user, app=app, is_current=True)
+    decided_at = timezone.now()
     return AccessRequest.objects.create(
         user=user,
         app=app,
@@ -162,7 +167,12 @@ def _approved_request(
         reason="审批已通过",
         idempotency_key=f"{app.app_key}-approved-{request_type}",
         payload_digest="1" * 64,
-        approved_at=timezone.now(),
+        base_grant=base_grant,
+        base_grant_revision=base_grant.version if base_grant is not None else None,
+        approved_at=decided_at,
+        decided_at=decided_at,
+        decided_by="approver",
+        decision_actor_type=DECISION_ACTOR_USER,
     )
 
 

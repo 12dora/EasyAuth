@@ -9,10 +9,17 @@ if TYPE_CHECKING:
 class Pagination(Protocol):
     """任意具备标准分页字段的对象 (Page[T], PortalPage 等)。"""
 
-    page: int
-    page_size: int
-    total_items: int
-    total_pages: int
+    @property
+    def page(self) -> int: ...
+
+    @property
+    def page_size(self) -> int: ...
+
+    @property
+    def total_items(self) -> int: ...
+
+    @property
+    def total_pages(self) -> int: ...
 
 
 def pagination_item(page: Pagination) -> dict[str, JsonValue]:

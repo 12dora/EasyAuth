@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar, Final, override
+from typing import TYPE_CHECKING, ClassVar, Final, cast, override
 
-from django.apps import apps
 from django.core.exceptions import ValidationError
 from django.db import models
 from django.db.models import Q
 
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App, AuthorizationGroup, Permission
+from easyauth.applications.models import App, AppScope, AuthorizationGroup, Permission
+from easyauth.grants.models import AccessGrant
 
 if TYPE_CHECKING:
     from datetime import date, datetime
@@ -35,6 +35,7 @@ REQUEST_STATUS_APPROVED: Final = "approved"
 REQUEST_STATUS_REJECTED: Final = "rejected"
 REQUEST_STATUS_GRANT_APPLIED: Final = "grant_applied"
 REQUEST_STATUS_GRANT_FAILED: Final = "grant_failed"
+REQUEST_STATUS_GRANT_CONFLICT: Final = "grant_conflict"
 REQUEST_STATUS_GRANT_EXPIRED: Final = "grant_expired"
 REQUEST_STATUS_WITHDRAWN: Final = "withdrawn"
 REQUEST_STATUS_CHOICES: Final[tuple[tuple[str, str], ...]] = (
@@ -43,6 +44,7 @@ REQUEST_STATUS_CHOICES: Final[tuple[tuple[str, str], ...]] = (
     (REQUEST_STATUS_REJECTED, "rejected"),
     (REQUEST_STATUS_GRANT_APPLIED, "grant_applied"),
     (REQUEST_STATUS_GRANT_FAILED, "grant_failed"),
+    (REQUEST_STATUS_GRANT_CONFLICT, "grant_conflict"),
     (REQUEST_STATUS_GRANT_EXPIRED, "grant_expired"),
     (REQUEST_STATUS_WITHDRAWN, "withdrawn"),
 )
@@ -52,6 +54,7 @@ REQUEST_STATUS_VALUES: Final[tuple[str, ...]] = (
     REQUEST_STATUS_REJECTED,
     REQUEST_STATUS_GRANT_APPLIED,
     REQUEST_STATUS_GRANT_FAILED,
+    REQUEST_STATUS_GRANT_CONFLICT,
     REQUEST_STATUS_GRANT_EXPIRED,
     REQUEST_STATUS_WITHDRAWN,
 )
@@ -77,12 +80,14 @@ PAYLOAD_DIGEST_LENGTH: Final = 64
 class AccessRequest(models.Model):
     if TYPE_CHECKING:
         id: ClassVar[int]
+        user_id: ClassVar[int]
         app_id: ClassVar[int]
-        loaded_approver_assignments: list[AccessRequestApprover]
+        base_grant_id: ClassVar[int | None]
+        loaded_approver_assignments: ClassVar[list[AccessRequestApprover]]
 
     user: models.ForeignKey[UserMirror, UserMirror] = models.ForeignKey(
         UserMirror,
-        on_delete=models.CASCADE,
+        on_delete=models.PROTECT,
         related_name="access_requests",
     )
     app: models.ForeignKey[App, App] = models.ForeignKey(
@@ -112,6 +117,16 @@ class AccessRequest(models.Model):
     reason: models.TextField[str, str] = models.TextField(blank=True)
     idempotency_key: models.CharField[str, str] = models.CharField(max_length=128)
     payload_digest: models.CharField[str, str] = models.CharField(max_length=64, editable=False)
+    base_grant: models.ForeignKey[AccessGrant | None, AccessGrant | None] = models.ForeignKey(
+        AccessGrant,
+        on_delete=models.PROTECT,
+        related_name="access_requests",
+        blank=True,
+        null=True,
+    )
+    base_grant_revision: models.PositiveIntegerField[int | None, int | None] = (
+        models.PositiveIntegerField(blank=True, null=True)
+    )
     submitted_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
     )
@@ -154,6 +169,97 @@ class AccessRequest(models.Model):
                 ),
                 name="access_requests_grant_expiration_shape",
             ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        request_type=REQUEST_TYPE_GRANT,
+                        base_grant__isnull=True,
+                        base_grant_revision__isnull=True,
+                    )
+                    | Q(
+                        request_type__in=(
+                            REQUEST_TYPE_CHANGE,
+                            REQUEST_TYPE_REVOKE,
+                            REQUEST_TYPE_RENEW,
+                        ),
+                        base_grant__isnull=False,
+                        base_grant_revision__isnull=False,
+                    )
+                ),
+                name="access_requests_base_grant_shape",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        status=REQUEST_STATUS_SUBMITTED,
+                        approved_at__isnull=True,
+                        applied_at__isnull=True,
+                        decided_by="",
+                        decision_actor_type="",
+                        decision_comment="",
+                        decided_at__isnull=True,
+                    )
+                    | Q(
+                        status=REQUEST_STATUS_APPROVED,
+                        approved_at__isnull=False,
+                        applied_at__isnull=True,
+                        decided_by__gt="",
+                        decision_actor_type__in=(
+                            DECISION_ACTOR_USER,
+                            DECISION_ACTOR_CONSOLE_ADMIN,
+                        ),
+                        decided_at__isnull=False,
+                    )
+                    | Q(
+                        status=REQUEST_STATUS_REJECTED,
+                        approved_at__isnull=True,
+                        applied_at__isnull=True,
+                        decided_by__gt="",
+                        decision_actor_type__in=(
+                            DECISION_ACTOR_USER,
+                            DECISION_ACTOR_CONSOLE_ADMIN,
+                        ),
+                        decision_comment__gt="",
+                        decided_at__isnull=False,
+                    )
+                    | Q(
+                        status=REQUEST_STATUS_GRANT_APPLIED,
+                        approved_at__isnull=False,
+                        applied_at__isnull=False,
+                        decided_by__gt="",
+                        decision_actor_type__in=(
+                            DECISION_ACTOR_USER,
+                            DECISION_ACTOR_CONSOLE_ADMIN,
+                        ),
+                        decided_at__isnull=False,
+                    )
+                    | Q(
+                        status__in=(
+                            REQUEST_STATUS_GRANT_FAILED,
+                            REQUEST_STATUS_GRANT_CONFLICT,
+                            REQUEST_STATUS_GRANT_EXPIRED,
+                        ),
+                        approved_at__isnull=False,
+                        applied_at__isnull=True,
+                        decided_by__gt="",
+                        decision_actor_type__in=(
+                            DECISION_ACTOR_USER,
+                            DECISION_ACTOR_CONSOLE_ADMIN,
+                        ),
+                        decided_at__isnull=False,
+                    )
+                    | Q(
+                        status=REQUEST_STATUS_WITHDRAWN,
+                        approved_at__isnull=True,
+                        applied_at__isnull=True,
+                        decided_by="",
+                        decision_actor_type="",
+                        decision_comment="",
+                        decided_at__isnull=True,
+                    )
+                ),
+                name="access_requests_status_field_shape",
+            ),
             models.UniqueConstraint(
                 fields=["user", "idempotency_key"],
                 name="access_requests_user_idempotency_key_unique",
@@ -166,7 +272,7 @@ class AccessRequest(models.Model):
         return f"{self.user.authentik_user_id}:{self.app.app_key}:{self.request_type}"
 
     @override
-    def clean(self) -> None:
+    def clean(self) -> None:  # noqa: C901, PLR0912
         super().clean()
         errors: dict[str, str] = {}
         if self.grant_type == GRANT_TYPE_TIMED and self.grant_expires_at is None:
@@ -177,6 +283,39 @@ class AccessRequest(models.Model):
             errors["applied_at"] = "Grant-applied access requests must include applied_at."
         if self.status != REQUEST_STATUS_GRANT_APPLIED and self.applied_at is not None:
             errors["applied_at"] = "Only grant-applied access requests may include applied_at."
+        if self.request_type == REQUEST_TYPE_GRANT:
+            if self.base_grant_id is not None or self.base_grant_revision is not None:
+                errors["base_grant"] = "Grant requests must not include a base grant."
+        elif self.base_grant_id is None or self.base_grant_revision is None:
+            errors["base_grant"] = "Lifecycle access requests must include a base grant revision."
+        if (
+            self.base_grant_id is not None
+            and self.base_grant is not None
+            and (self.base_grant.user_id != self.user_id or self.base_grant.app_id != self.app_id)
+        ):
+            errors["base_grant"] = "Base grant must belong to the request user and app."
+        if self.status == REQUEST_STATUS_APPROVED and self.approved_at is None:
+            errors["approved_at"] = "Approved access requests must include approved_at."
+        if self.status in {
+            REQUEST_STATUS_APPROVED,
+            REQUEST_STATUS_REJECTED,
+            REQUEST_STATUS_GRANT_APPLIED,
+            REQUEST_STATUS_GRANT_FAILED,
+            REQUEST_STATUS_GRANT_CONFLICT,
+            REQUEST_STATUS_GRANT_EXPIRED,
+        }:
+            if self.decided_at is None:
+                errors["decided_at"] = "Decided access requests must include decided_at."
+            if not self.decided_by:
+                errors["decided_by"] = "Decided access requests must include decided_by."
+            if self.decision_actor_type not in {DECISION_ACTOR_USER, DECISION_ACTOR_CONSOLE_ADMIN}:
+                errors["decision_actor_type"] = (
+                    "Decided access requests must include decision_actor_type."
+                )
+        elif self.decided_at is not None or self.decided_by or self.decision_actor_type:
+            errors["decided_at"] = "Undecided access requests must not include decision fields."
+        if self.status == REQUEST_STATUS_REJECTED and not self.decision_comment:
+            errors["decision_comment"] = "Rejected access requests must include decision_comment."
         if not self.idempotency_key or self.idempotency_key != self.idempotency_key.strip():
             errors["idempotency_key"] = "A non-empty opaque idempotency key is required."
         if len(self.payload_digest) != PAYLOAD_DIGEST_LENGTH or any(
@@ -267,6 +406,55 @@ class AccessRequestGroup(models.Model):
             )
 
 
+class AccessRequestGroupGrantSnapshot(models.Model):
+    if TYPE_CHECKING:
+        access_request_id: ClassVar[int]
+
+    access_request: models.ForeignKey[AccessRequest, AccessRequest] = models.ForeignKey(
+        AccessRequest,
+        on_delete=models.CASCADE,
+        related_name="group_grant_snapshots",
+    )
+    authorization_group_id_snapshot: models.PositiveBigIntegerField[int, int] = (
+        models.PositiveBigIntegerField()
+    )
+    authorization_group_key: models.CharField[str, str] = models.CharField(max_length=128)
+    authorization_group_kind: models.CharField[str, str] = models.CharField(max_length=32)
+    authorization_group_name: models.CharField[str, str] = models.CharField(max_length=255)
+    permission_key: models.CharField[str, str] = models.CharField(max_length=128)
+    permission_name: models.CharField[str, str] = models.CharField(max_length=255)
+    scope_key: models.CharField[str, str] = models.CharField(max_length=128)
+    created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=[
+                    "access_request",
+                    "authorization_group_id_snapshot",
+                    "permission_key",
+                    "scope_key",
+                ],
+                name="access_requests_group_grant_snapshot_unique",
+            ),
+        ]
+        ordering: ClassVar[list[str]] = [
+            "access_request_id",
+            "authorization_group_id_snapshot",
+            "permission_key",
+            "scope_key",
+        ]
+
+    @override
+    def __str__(self) -> str:
+        return (
+            f"{self.access_request} -> "
+            f"{self.authorization_group_key}:{self.permission_key}:{self.scope_key}"
+        )
+
+
 class AccessRequestPermission(models.Model):
     access_request: models.ForeignKey[AccessRequest, AccessRequest] = models.ForeignKey(
         AccessRequest,
@@ -303,11 +491,10 @@ class AccessRequestPermission(models.Model):
         if self.permission.app_id != self.access_request.app_id:
             errors["permission"] = "Permission must belong to the access request app."
 
-        supported_scopes = self.permission.supported_scopes
+        supported_scopes = cast("list[str]", self.permission.supported_scopes)
         if self.scope_key not in supported_scopes:
             errors["scope_key"] = "Scope key must be supported by the permission."
 
-        AppScope = apps.get_model("applications", "AppScope")
         scope_exists = AppScope.objects.filter(
             app_id=self.access_request.app_id,
             key=self.scope_key,

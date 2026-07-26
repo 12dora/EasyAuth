@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from django.db.models import Q
 from django.utils import timezone
@@ -28,6 +28,7 @@ if TYPE_CHECKING:
     from datetime import datetime
 
 type UserSelector = UserMirror | str
+type GroupExpirationRows = list[tuple[int, datetime | None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,13 +191,17 @@ def _group_grants(
     directory_cache: ManagedUsersDirectoryCache,
     now: datetime,
 ) -> set[ExpandedGrant]:
-    group_expirations = dict(
-        AccessGrantGroup.objects.filter(
-            Q(expires_at__isnull=True) | Q(expires_at__gt=now),
-            grant=grant,
-            authorization_group__is_active=True,
-        ).values_list("authorization_group_id", "expires_at"),
+    group_expiration_rows = cast(
+        "GroupExpirationRows",
+        list(
+            AccessGrantGroup.objects.filter(
+                Q(expires_at__isnull=True) | Q(expires_at__gt=now),
+                grant=grant,
+                authorization_group__is_active=True,
+            ).values_list("authorization_group_id", "expires_at"),
+        ),
     )
+    group_expirations = dict(group_expiration_rows)
     links = (
         AuthorizationGroupGrant.objects.select_related("authorization_group", "permission")
         .filter(
@@ -212,7 +217,7 @@ def _group_grants(
     for link in links:
         if not (
             link.scope_key in active_scope_keys
-            and link.scope_key in link.permission.supported_scopes
+            and link.scope_key in _supported_scope_keys(link.permission.supported_scopes)
         ):
             continue
         resolved = None
@@ -258,7 +263,7 @@ def _direct_grants(
     for link in links:
         if not (
             link.scope_key in active_scope_keys
-            and link.scope_key in link.permission.supported_scopes
+            and link.scope_key in _supported_scope_keys(link.permission.supported_scopes)
         ):
             continue
         resolved = None
@@ -281,6 +286,13 @@ def _direct_grants(
             ),
         )
     return expanded
+
+
+def _supported_scope_keys(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    items = cast("list[object]", value)
+    return [scope for scope in items if isinstance(scope, str)]
 
 
 def _expanded_grant_sort_key(grant: ExpandedGrant) -> tuple[str, str, str, str]:

@@ -4,19 +4,16 @@ from urllib.parse import quote
 
 import pytest
 
+from easyauth.notify.contracts import NOTIFY_MSG_MAX_BYTES, NotifyAcceptError
+from easyauth.notify.messages import (
+    build_dingtalk_msg,
+    dingtalk_msg_utf8_size,
+    normalize_and_validate,
+)
 from easyauth.notify.models import (
     NOTIFY_TEMPLATE_ACTION_CARD,
     NOTIFY_TEMPLATE_MARKDOWN,
     NOTIFY_TEMPLATE_TEXT,
-)
-from easyauth.notify.services import (
-    NOTIFY_MSG_MAX_BYTES,
-    NotifyAcceptError,
-    build_dingtalk_msg,
-    dingtalk_msg_utf8_size,
-)
-from easyauth.notify.services import (
-    _normalize_and_validate as normalize_and_validate,
 )
 
 pytestmark = pytest.mark.django_db

@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol
 
 from celery import current_app
 from django.db import connection, transaction
@@ -18,18 +18,26 @@ from easyauth.outbox.models import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Sequence
     from datetime import datetime
 
     from easyauth.applications.ops_models import JsonValue
 
 OUTBOX_EVENT_CONFLICT_MESSAGE: Final = "同一 outbox event_key 已绑定不同任务载荷。"
-OUTBOX_DEFAULT_BATCH_SIZE: Final = 100
-OUTBOX_LEASE_SECONDS: Final = 60
-OUTBOX_RETRY_BASE_SECONDS: Final = 5
-OUTBOX_RETRY_MAX_SECONDS: Final = 300
+OUTBOX_DEFAULT_BATCH_SIZE: Final[int] = 100
+OUTBOX_LEASE_SECONDS: Final[int] = 60
+OUTBOX_RETRY_BASE_SECONDS: Final[int] = 5
+OUTBOX_RETRY_MAX_SECONDS: Final[int] = 300
 
-type SendTask = Callable[..., object]
+
+class SendTask(Protocol):
+    def __call__(
+        self,
+        name: str,
+        *,
+        args: Sequence[object] | None = None,
+        kwargs: dict[str, object] | None = None,
+    ) -> object: ...
 
 
 class OutboxEventConflictError(RuntimeError):
@@ -88,8 +96,10 @@ def dispatch_pending_events(
     published = 0
     failed = 0
     for event in events:
+        task_args: list[object] = list(event.args)
+        task_kwargs: dict[str, object] = dict(event.kwargs)
         try:
-            _ = sender(event.task_name, args=event.args, kwargs=event.kwargs)
+            _ = sender(event.task_name, args=task_args, kwargs=task_kwargs)
         except Exception as error:  # noqa: BLE001 - broker 错误必须持久化后由 scanner 重试。
             _mark_publish_failed(event, error=error, now=dispatch_time)
             failed += 1
@@ -122,7 +132,7 @@ def _claim_events(*, batch_size: int, lease_seconds: int, now: datetime) -> list
             event.last_error = ""
             event.updated_at = now
         if events:
-            OutboxEvent.objects.bulk_update(
+            _ = OutboxEvent.objects.bulk_update(
                 events,
                 fields=(
                     "status",
@@ -151,8 +161,9 @@ def _mark_published(event: OutboxEvent, *, now: datetime) -> None:
 
 
 def _mark_publish_failed(event: OutboxEvent, *, error: Exception, now: datetime) -> None:
-    retry_seconds = min(
-        OUTBOX_RETRY_BASE_SECONDS * (2 ** max(event.attempts - 1, 0)),
+    retry_delay_multiplier = 1 << max(event.attempts - 1, 0)
+    retry_seconds: int = min(
+        OUTBOX_RETRY_BASE_SECONDS * retry_delay_multiplier,
         OUTBOX_RETRY_MAX_SECONDS,
     )
     _ = OutboxEvent.objects.filter(

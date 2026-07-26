@@ -21,6 +21,8 @@
 
 统一错误：`{ "error": { "code", "message", "details" } }`。  
 列表通用：`{ "data": [...], "pagination": { page, page_size, total_items, total_pages } }`。
+分页、状态和枚举筛选只有省略或空值时使用默认语义；出现非法值必须返回
+`422 VALIDATION_ERROR`，不得静默忽略、截断或返回不可信空列表。
 
 ---
 
@@ -43,6 +45,29 @@
 | GET | `/apps/{app_key}/managed-users-preview` | 管理范围预览 |
 | POST | `/apps/{app_key}/permission-query-tests` | 权限查询联调 |
 
+应用列表和详情项返回同一份细粒度能力事实：
+
+```json
+{
+  "can_manage": true,
+  "capabilities": {
+    "can_view": true,
+    "can_edit_basic_info": true,
+    "can_toggle_active": true,
+    "can_delete": true,
+    "can_manage_memberships": true,
+    "can_manage_catalog": true,
+    "can_manage_credentials": true,
+    "can_manage_connectors": true,
+    "can_manage_platform_capabilities": true
+  }
+}
+```
+
+前端导航、路由和按钮只能消费这些布尔能力；不得用本地 role 文案、页面位置或历史
+`can_manage` 粗粒度字段自行推断。`can_manage` 仅作为 `can_edit_basic_info` 的旧字段别名保留在
+同一响应内，新增前端代码必须读取 `capabilities`。
+
 ---
 
 ## 成员与凭据
@@ -63,6 +88,16 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 `/capabilities` GET 响应不返回 manifest 声明；列表根对象是
 `{"capabilities": [...], "can_manage": bool}`，条目包含 `capability`、`enabled`、`config`
 和更新审计字段。`can_manage` 仅对超管为 `true`。
+
+写操作成功后前端必须失效以下派生查询：
+
+| 写操作 | 必须失效 |
+| --- | --- |
+| 应用基本信息、启停、删除 | 应用列表、应用详情、配置完整度、能力查询 |
+| 成员创建/停用 | 成员列表、应用列表、应用详情、配置完整度、能力查询 |
+| 权限、scope、权限分组、授权组、MANAGED_USERS 策略 | 对应目录列表、权限树、应用列表、应用详情、配置完整度、能力查询、门户申请目录 |
+| 凭据创建、轮换、停用、credential capability 修改 | 凭据列表、应用列表、应用详情、配置完整度、能力查询 |
+| App capability、通知通道、连接器配置或映射 | 对应局部查询、应用列表、应用详情、配置完整度、能力查询 |
 
 ---
 

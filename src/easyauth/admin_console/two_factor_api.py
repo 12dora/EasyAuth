@@ -4,8 +4,9 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping
 from http import HTTPStatus
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from django.db import transaction
 from django.http import Http404, HttpRequest, JsonResponse
@@ -112,7 +113,7 @@ def totp_confirm(request: HttpRequest) -> JsonResponse:
             status=HTTPStatus.UNPROCESSABLE_ENTITY,
         )
     with transaction.atomic():
-        locked = LocalAdminAccount.objects.select_for_update().get(pk=account.pk)
+        locked = LocalAdminAccount.objects.select_for_update().get(pk=account.id)
         if locked.totp_enabled or locked.session_version != account.session_version:
             clear_totp_setup_secret(request)
             return error_response(
@@ -190,7 +191,8 @@ def passkey_register_complete(request: HttpRequest) -> JsonResponse:
     state_token = payload.get("state_token") if payload else None
     name = payload.get("name") if payload else ""
     current_password = payload.get("current_password") if payload else ""
-    if not isinstance(credential, dict) or not isinstance(state_token, str):
+    credential_payload = _json_mapping(credential)
+    if credential_payload is None or not isinstance(state_token, str):
         return error_response(
             ErrorCode.VALIDATION_ERROR,
             INVALID_PAYLOAD_MESSAGE,
@@ -208,7 +210,7 @@ def passkey_register_complete(request: HttpRequest) -> JsonResponse:
         passkey = register_passkey(
             request,
             account,
-            credential,
+            credential_payload,
             state_token=state_token,
             name=name.strip(),
         )
@@ -253,7 +255,7 @@ def _status_payload(account: LocalAdminAccount) -> dict[str, JsonValue]:
 
 def _passkey_payload(passkey: LocalAdminPasskey) -> dict[str, JsonValue]:
     return {
-        "id": passkey.pk,
+        "id": passkey.id,
         "name": passkey.name,
         "created_at": datetime_value(passkey.created_at),
         "last_used_at": datetime_value(passkey.last_used_at),
@@ -284,12 +286,10 @@ def _forbidden() -> JsonResponse:
 
 def _json_body(request: HttpRequest) -> dict[str, object] | None:
     try:
-        payload = json.loads(request.body)
+        payload: object = json.loads(request.body)  # pyright: ignore[reportAny]
     except (json.JSONDecodeError, UnicodeDecodeError):
         return None
-    if not isinstance(payload, dict):
-        return None
-    return payload
+    return _json_mapping(payload)
 
 
 def _body_string(request: HttpRequest, key: str) -> str:
@@ -298,3 +298,15 @@ def _body_string(request: HttpRequest, key: str) -> str:
         return ""
     value = payload.get(key)
     return value if isinstance(value, str) else ""
+
+
+def _json_mapping(value: object) -> dict[str, object] | None:
+    if not isinstance(value, Mapping):
+        return None
+    mapping = cast("Mapping[object, object]", value)
+    result: dict[str, object] = {}
+    for key, item in mapping.items():
+        if not isinstance(key, str):
+            return None
+        result[key] = item
+    return result

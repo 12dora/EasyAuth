@@ -8,7 +8,6 @@ from django.contrib import admin as django_admin
 from django.contrib.admin.sites import AdminSite
 from django.contrib.auth.models import User
 from django.test import Client, RequestFactory
-from django.urls import reverse
 
 from easyauth.applications.admin import (
     AppCredentialAdmin,
@@ -21,8 +20,7 @@ from easyauth.applications.models import (
     AuthorizationGroup,
     Permission,
 )
-from easyauth.applications.services import StaticTokenService
-from easyauth.audit.models import AuditLog
+from easyauth.applications.services import AppCredentialService
 
 if TYPE_CHECKING:
     from django.http import HttpRequest
@@ -40,56 +38,15 @@ def test_application_models_are_registered_in_admin() -> None:
     assert django_admin.site.is_registered(AppCredential) is True
 
 
-def test_admin_index_is_reachable_for_superuser() -> None:
-    # Given
-    client = _authenticated_admin_client("admin-surface")
+def test_admin_route_is_not_registered() -> None:
+    # Given: Django staff/superuser session 不再形成产品特权入口。
+    client = Client(HTTP_HOST="localhost")
 
     # When
     response = client.get("/admin/")
 
-    # Then
-    assert response.status_code == HTTPStatus.OK
-
-
-def test_app_admin_changelist_page_is_reachable_for_superuser() -> None:
-    # Given
-    client = _authenticated_admin_client("admin-app-page")
-
-    # When
-    response = client.get(reverse("admin:applications_app_changelist"))
-
-    # Then
-    assert response.status_code == HTTPStatus.OK
-
-
-def test_approval_rule_admin_add_page_is_reachable_for_superuser() -> None:
-    # Given
-    client = _authenticated_admin_client("admin-approval-rule-page")
-
-    # When
-    response = client.get(reverse("admin:applications_approvalrule_add"))
-
-    # Then
-    assert response.status_code == HTTPStatus.OK
-
-
-def test_app_credential_admin_view_page_does_not_disclose_token_or_allow_save() -> None:
-    # Given
-    client = _authenticated_admin_client("admin-credential-view")
-    app = App.objects.create(app_key="crm-credential-page", name="CRM Credential Page")
-    issue = StaticTokenService.create_token(app=app, name="CRM integration")
-    credential = AppCredential.objects.get(id=issue.credential_id)
-
-    # When
-    response = client.get(
-        reverse("admin:applications_appcredential_change", args=[credential.id]),
-    )
-
-    # Then
-    assert response.status_code == HTTPStatus.OK
-    assert b"token_hash" not in response.content
-    assert issue.plaintext_token.encode() not in response.content
-    assert b'name="_save"' not in response.content
+    # Then: 平行 `/admin/` 特权面不可达。
+    assert response.status_code == HTTPStatus.NOT_FOUND
 
 
 def test_app_credential_admin_hides_token_hash_from_list_and_form() -> None:
@@ -112,8 +69,8 @@ def test_app_credential_admin_does_not_allow_direct_existing_credential_mutation
     # Given
     request = _request_for_superuser("credential-admin-viewer")
     app = App.objects.create(app_key="crm-credential-admin", name="CRM Credential Admin")
-    issue = StaticTokenService.create_token(app=app, name="CRM integration")
-    credential = AppCredential.objects.get(id=issue.credential_id)
+    issue = AppCredentialService.create_static_token(app=app, name="CRM integration")
+    credential = AppCredential.objects.get(id=issue.credential.id)
     credential_admin = AppCredentialAdmin(AppCredential, AdminSite())
 
     # When
@@ -159,50 +116,7 @@ def _request() -> HttpRequest:
     return RequestFactory().get("/admin/")
 
 
-def _authenticated_admin_client(username: str) -> Client:
-    _ = User.objects.create_superuser(username=username, password=ADMIN_LOGIN_VALUE)
-    client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=ADMIN_LOGIN_VALUE) is True
-    return client
-
-
 def _request_for_superuser(username: str) -> HttpRequest:
     request = _request()
     request.user = User.objects.create_superuser(username=username, password=ADMIN_LOGIN_VALUE)
     return request
-
-
-def test_permission_admin_change_bumps_catalog_version_and_writes_audit() -> None:
-    # Given: 目录里有一个 active Permission, 下游快照锚定当前 catalog_version。
-    client = _authenticated_admin_client("admin-catalog-bump")
-    app = App.objects.create(app_key="admin-bump-app", name="Bump App")
-    permission = Permission.objects.create(
-        app=app,
-        key="invoice.read",
-        name="Invoice Read",
-        supported_scopes=["GLOBAL"],
-    )
-    original_version = app.catalog_version
-
-    # When: 超管在 /admin/ 停用该 Permission。
-    response = client.post(
-        reverse("admin:applications_permission_change", args=[permission.id]),
-        data={
-            "app": str(app.id),
-            "key": permission.key,
-            "name": permission.name,
-            "description": "",
-            "supported_scopes": '["GLOBAL"]',
-            "risk_level": "standard",
-            "deprecated_reason": "",
-        },
-        follow=True,
-    )
-
-    # Then: catalog_version 递增且写入审计, 下游快照能识别本次撤销。
-    app.refresh_from_db()
-    assert response.status_code == HTTPStatus.OK
-    assert app.catalog_version == original_version + 1
-    audit_log = AuditLog.objects.get(event_type="app_catalog_version_bumped")
-    assert audit_log.metadata["reason"] == "django_admin_updated"
-    assert audit_log.metadata["model"] == "Permission"

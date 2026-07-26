@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+from importlib import import_module
+
 import pytest
 from django.core.exceptions import ValidationError
+from django.db import DatabaseError, IntegrityError, connection
 from django.utils import timezone
 
 from easyauth.access_requests.models import (
+    DECISION_ACTOR_USER,
     AccessRequest,
     AccessRequestGroup,
     AccessRequestPermission,
@@ -31,6 +35,7 @@ def test_request_type_accepts_supported_values_when_access_request_is_cleaned(
         request_type=request_type,
         idempotency_key=f"request-type-{request_type}",
         payload_digest=VALID_PAYLOAD_DIGEST,
+        **_base_grant_fields(user, app, request_type),
     )
 
     # When
@@ -57,9 +62,87 @@ def test_request_type_rejects_unknown_value_when_access_request_is_cleaned() -> 
         access_request.full_clean()
 
 
+@pytest.mark.django_db(transaction=True)
+def test_access_request_group_migration_scan_blocks_existing_bad_rows() -> None:
+    # Given
+    migration = import_module(
+        "easyauth.access_requests.migrations.0014_access_request_relationship_triggers",
+    )
+    crm = App.objects.create(app_key="crm-request-group-scan", name="CRM")
+    erp = App.objects.create(app_key="erp-request-group-scan", name="ERP")
+    user = UserMirror.objects.create(authentik_user_id="user-request-group-scan")
+    access_request = AccessRequest.objects.create(
+        user=user,
+        app=crm,
+        idempotency_key="request-group-scan",
+        payload_digest=VALID_PAYLOAD_DIGEST,
+    )
+    group = AuthorizationGroup.objects.create(app=erp, key="admin-scan", kind="role", name="Admin")
+
+    with connection.schema_editor() as schema_editor:
+        migration.drop_triggers(None, schema_editor)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO access_requests_accessrequestgroup
+                    (access_request_id, authorization_group_id, created_at)
+                VALUES (%s, %s, CURRENT_TIMESTAMP)
+                """,
+                [access_request.id, group.id],
+            )
+
+        # When / Then
+        with (
+            connection.schema_editor() as schema_editor,
+            pytest.raises(migration.AccessRequestRelationshipMigrationError, match="count=1"),
+        ):
+            migration.assert_existing_relationships(None, schema_editor)
+    finally:
+        AccessRequestGroup.objects.filter(
+            access_request=access_request,
+            authorization_group=group,
+        ).delete()
+        with connection.schema_editor() as schema_editor:
+            migration.install_triggers(None, schema_editor)
+
+
+def test_access_request_group_raw_cross_app_write_is_rejected_by_database() -> None:
+    # Given
+    crm = App.objects.create(app_key="crm-request-group-raw", name="CRM")
+    erp = App.objects.create(app_key="erp-request-group-raw", name="ERP")
+    user = UserMirror.objects.create(authentik_user_id="user-request-group-raw")
+    access_request = AccessRequest.objects.create(
+        user=user,
+        app=crm,
+        idempotency_key="request-group-raw",
+        payload_digest=VALID_PAYLOAD_DIGEST,
+    )
+    group = AuthorizationGroup.objects.create(app=erp, key="admin-raw", kind="role", name="Admin")
+
+    # When / Then
+    with pytest.raises(DatabaseError), connection.cursor() as cursor:
+        cursor.execute(
+            """
+                INSERT INTO access_requests_accessrequestgroup
+                    (access_request_id, authorization_group_id, created_at)
+                VALUES (%s, %s, CURRENT_TIMESTAMP)
+                """,
+            [access_request.id, group.id],
+        )
+
+
 @pytest.mark.parametrize(
     "status",
-    ["submitted", "approved", "rejected", "grant_applied", "grant_failed"],
+    [
+        "submitted",
+        "approved",
+        "rejected",
+        "grant_applied",
+        "grant_failed",
+        "grant_conflict",
+        "grant_expired",
+    ],
 )
 def test_status_accepts_supported_values_when_access_request_is_cleaned(status: str) -> None:
     # Given
@@ -73,6 +156,7 @@ def test_status_accepts_supported_values_when_access_request_is_cleaned(status: 
         applied_at=applied_at_by_status.get(status),
         idempotency_key=f"request-status-{status}",
         payload_digest=VALID_PAYLOAD_DIGEST,
+        **_decision_fields(status),
     )
 
     # When
@@ -111,6 +195,10 @@ def test_approved_request_does_not_create_grant_when_saved() -> None:
         status="approved",
         idempotency_key="approved-without-grant",
         payload_digest=VALID_PAYLOAD_DIGEST,
+        approved_at=timezone.now(),
+        decided_at=timezone.now(),
+        decided_by="approver",
+        decision_actor_type=DECISION_ACTOR_USER,
     )
 
     # Then
@@ -182,6 +270,32 @@ def test_access_request_group_rejects_cross_app_authorization_group_when_cleaned
         request_group.full_clean()
 
 
+def test_access_request_group_cross_app_is_rejected_by_database() -> None:
+    # Given
+    crm = App.objects.create(app_key="crm-request-group-db", name="CRM")
+    erp = App.objects.create(app_key="erp-request-group-db", name="ERP")
+    user = UserMirror.objects.create(authentik_user_id="user-request-group-db")
+    access_request = AccessRequest.objects.create(
+        user=user,
+        app=crm,
+        idempotency_key="cross-app-group-db",
+        payload_digest=VALID_PAYLOAD_DIGEST,
+    )
+    authorization_group = AuthorizationGroup.objects.create(
+        app=erp,
+        key="admin-db",
+        kind="role",
+        name="Admin",
+    )
+
+    # When / Then
+    with pytest.raises(IntegrityError):
+        _ = AccessRequestGroup.objects.create(
+            access_request=access_request,
+            authorization_group=authorization_group,
+        )
+
+
 def test_access_request_permission_rejects_cross_app_permission_when_cleaned() -> None:
     # Given
     crm = App.objects.create(app_key="crm-request-permission", name="CRM")
@@ -201,6 +315,34 @@ def test_access_request_permission_rejects_cross_app_permission_when_cleaned() -
     # When / Then
     with pytest.raises(ValidationError):
         request_permission.full_clean()
+
+
+def test_access_request_permission_cross_app_is_rejected_by_database() -> None:
+    # Given
+    crm = App.objects.create(app_key="crm-request-permission-db", name="CRM")
+    erp = App.objects.create(app_key="erp-request-permission-db", name="ERP")
+    _ = AppScope.objects.create(app=crm, key="GLOBAL", name="Global")
+    user = UserMirror.objects.create(authentik_user_id="user-request-permission-db")
+    access_request = AccessRequest.objects.create(
+        user=user,
+        app=crm,
+        idempotency_key="cross-app-permission-db",
+        payload_digest=VALID_PAYLOAD_DIGEST,
+    )
+    permission = Permission.objects.create(
+        app=erp,
+        key="invoice.read.db",
+        name="Read invoices",
+        supported_scopes=["GLOBAL"],
+    )
+
+    # When / Then
+    with pytest.raises(IntegrityError):
+        _ = AccessRequestPermission.objects.create(
+            access_request=access_request,
+            permission=permission,
+            scope_key="GLOBAL",
+        )
 
 
 def test_access_request_permission_allows_same_permission_on_distinct_scopes_when_saved() -> None:
@@ -306,3 +448,26 @@ def test_access_request_permission_rejects_missing_scope_when_cleaned() -> None:
     assert error.value.message_dict == {
         "scope_key": ["Scope key must reference an app scope."],
     }
+
+
+def _base_grant_fields(user: UserMirror, app: App, request_type: str) -> dict[str, object]:
+    if request_type == "grant":
+        return {}
+    grant = AccessGrant.objects.create(user=user, app=app)
+    return {"base_grant": grant, "base_grant_revision": grant.version}
+
+
+def _decision_fields(status: str) -> dict[str, object]:
+    if status == "submitted":
+        return {}
+    decided_at = timezone.now()
+    fields: dict[str, object] = {
+        "decided_at": decided_at,
+        "decided_by": "approver",
+        "decision_actor_type": DECISION_ACTOR_USER,
+    }
+    if status in {"approved", "grant_applied", "grant_failed", "grant_conflict", "grant_expired"}:
+        fields["approved_at"] = decided_at
+    if status == "rejected":
+        fields["decision_comment"] = "不同意"
+    return fields

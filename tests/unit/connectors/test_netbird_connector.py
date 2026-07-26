@@ -23,6 +23,30 @@ PERMANENT_CREATE_ERROR = "permanent create error"
 PERMANENT_UPDATE_ERROR = "permanent update error"
 
 
+def _allow_expansion(_instance: ConnectorInstance, _user_id: str) -> bool:
+    return True
+
+
+def _allow_external_write(
+    _instance: ConnectorInstance,
+    _user_id: str,
+    *,
+    require_active_user: bool,
+) -> bool:
+    _ = require_active_user
+    return True
+
+
+def _deny_external_write(
+    _instance: ConnectorInstance,
+    _user_id: str,
+    *,
+    require_active_user: bool,
+) -> bool:
+    _ = require_active_user
+    return False
+
+
 @dataclass(slots=True)
 class _FakeNetBirdClient:
     users: dict[str, NetBirdUser] = field(default_factory=dict)
@@ -43,6 +67,11 @@ class _FakeNetBirdClient:
         if self.fail_with:
             raise NetBirdApiError(self.fail_with)
         return list(self.groups)
+
+    def iter_group_pages(self) -> list[list[NetBirdGroup]]:
+        if self.fail_with:
+            raise NetBirdApiError(self.fail_with)
+        return [list(self.groups)]
 
     def create_group(self, *, name: str) -> NetBirdGroup:
         group = NetBirdGroup(group_id=f"gid-{name}", name=name)
@@ -153,7 +182,8 @@ def fake_client(monkeypatch: pytest.MonkeyPatch) -> _FakeNetBirdClient:
         return client
 
     monkeypatch.setattr(connector_module, "_client_from_config", client_from_config)
-    monkeypatch.setattr(connector_module, "_expansion_allowed", lambda *_args: True)
+    monkeypatch.setattr(connector_module, "_expansion_allowed", _allow_expansion)
+    monkeypatch.setattr(connector_module, "_external_write_allowed", _allow_external_write)
     return client
 
 
@@ -239,6 +269,29 @@ def test_reconcile_adopts_existing_user_and_preserves_unmanaged_groups(
     assert report.stats["users_unblocked"] == 1
 
 
+def test_lost_lease_stops_group_shrink_before_external_write(
+    fake_client: _FakeNetBirdClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        connector_module,
+        "_external_write_allowed",
+        _deny_external_write,
+    )
+    fake_client.groups = [NetBirdGroup(group_id="g1", name="vpn-users")]
+    fake_client.users = {
+        "u-1": _netbird_user("u-1", auto_group_ids=frozenset({"g1"})),
+    }
+    desired = _desired({"u-1": frozenset()}, managed=frozenset({"g1"}))
+
+    report = NetBirdConnector().reconcile(_instance(), desired)
+
+    assert fake_client.updated_users == []
+    assert report.stats["users_fenced"] == 1
+    assert report.status == "failed"
+    assert "fence" in report.error
+
+
 def test_reconcile_converged_state_makes_no_writes(fake_client: _FakeNetBirdClient) -> None:
     # Given: 用户组与期望完全一致。
     fake_client.groups = [NetBirdGroup(group_id="g1", name="vpn-users")]
@@ -280,6 +333,28 @@ def test_reconcile_blocks_ungranted_user_and_strips_managed_groups(
     ]
     assert report.stats["users_blocked"] == 1
     assert report.ungranted_user_ids == ("u-2",)
+
+
+def test_lost_lease_stops_ungranted_user_block_before_external_write(
+    fake_client: _FakeNetBirdClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        connector_module,
+        "_external_write_allowed",
+        _deny_external_write,
+    )
+    fake_client.groups = [NetBirdGroup(group_id="g1", name="vpn-users")]
+    fake_client.users = {
+        "u-2": _netbird_user("u-2", auto_group_ids=frozenset({"g1"})),
+    }
+
+    report = NetBirdConnector().reconcile(_instance(), _desired({}, managed=frozenset({"g1"})))
+
+    assert fake_client.updated_users == []
+    assert report.stats["users_fenced"] == 1
+    assert report.status == "failed"
+    assert "fence" in report.error
 
 
 def test_reconcile_respects_block_opt_out(fake_client: _FakeNetBirdClient) -> None:
@@ -454,6 +529,26 @@ def test_on_user_offboarded_blocks_only_regular_users(
     fake_client.updated_users.clear()
     assert connector.on_user_offboarded(_instance(), UserMirror(authentik_user_id="boss"))
     assert connector.on_user_offboarded(_instance(), UserMirror(authentik_user_id="ghost"))
+    assert fake_client.updated_users == []
+
+
+def test_on_user_offboarded_stops_when_fence_is_lost(
+    fake_client: _FakeNetBirdClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        connector_module,
+        "_external_write_allowed",
+        _deny_external_write,
+    )
+    fake_client.users = {"u-1": _netbird_user("u-1")}
+
+    handled = NetBirdConnector().on_user_offboarded(
+        _instance(),
+        UserMirror(authentik_user_id="u-1"),
+    )
+
+    assert handled is False
     assert fake_client.updated_users == []
 
 

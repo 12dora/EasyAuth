@@ -113,7 +113,7 @@ def _resolve_for_preview(*, user: UserMirror, resolver: str) -> ResolutionResult
             "managed_scope_resolver_unsupported",
         )
 
-    if not user.dingtalk_corp_id or not user.dingtalk_userid:
+    if not user.dingtalk_source_slug or not user.dingtalk_corp_id or not user.dingtalk_userid:
         if resolver == MANAGED_SCOPE_POLICY_RESOLVER_UNION:
             # 绑定缺失是稳定事实: union 下团队侧照常返回, 与运行时一致。
             return team_resolved_managed_users(user, resolver=resolver)
@@ -173,12 +173,12 @@ def _managed_users_from_directory(user: UserMirror) -> ManagedUsersLookupResult:
             user.dingtalk_userid,
         )
     except AuthentikDirectoryError:
-        return _bad_request(
+        return _dependency_unavailable(
             "钉钉目录暂不可用。",
             "managed_scope_directory_unavailable",
         )
     if managed_users.stale:
-        return _bad_request(
+        return _dependency_unavailable(
             "钉钉目录数据已过期。",
             "managed_scope_directory_stale",
         )
@@ -244,4 +244,13 @@ def _bad_request(message: str, error_code: str) -> JsonResponse:
         message,
         {"diagnostics": [{"error_code": error_code}]},
         status=HTTPStatus.BAD_REQUEST,
+    )
+
+
+def _dependency_unavailable(message: str, error_code: str) -> JsonResponse:
+    return error_response(
+        ErrorCode.DEPENDENCY_UNAVAILABLE,
+        message,
+        {"diagnostics": [{"error_code": error_code}]},
+        status=HTTPStatus.SERVICE_UNAVAILABLE,
     )

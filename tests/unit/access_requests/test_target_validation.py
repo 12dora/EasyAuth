@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from easyauth.access_requests.submission_types import ScopedAccessRequestGrant
@@ -123,6 +125,26 @@ def test_direct_grant_target_errors_allows_permission_without_approval_rule() ->
     )
 
     assert errors == ()
+
+
+def test_direct_grant_target_errors_prefetches_scope_validation() -> None:
+    app = App.objects.create(app_key="target-direct-grant-batch", name="Target App")
+    grants: list[ScopedAccessRequestGrant] = []
+    for index in range(3):
+        scope = AppScope.objects.create(app=app, key=f"SCOPE_{index}", name=f"范围 {index}")
+        permission = Permission.objects.create(
+            app=app,
+            key=f"invoice.{index}",
+            name=f"Permission {index}",
+            supported_scopes=[scope.key],
+        )
+        grants.append(ScopedAccessRequestGrant(permission=permission, scope_key=scope.key))
+
+    with CaptureQueriesContext(connection) as queries:
+        errors = direct_grant_target_errors(app, tuple(grants))
+
+    assert errors == ()
+    assert len(queries) == 1
 
 
 def test_overlapping_target_errors_rejects_same_permission_and_scope() -> None:

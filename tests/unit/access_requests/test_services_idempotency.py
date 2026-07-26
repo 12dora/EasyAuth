@@ -19,6 +19,7 @@ from easyauth.applications.models import (
     ApprovalRule,
     AppScope,
     AuthorizationGroup,
+    AuthorizationGroupGrant,
     Permission,
 )
 from easyauth.audit.models import AuditLog
@@ -227,6 +228,26 @@ def _submission_catalog(
             supported_scopes=["GLOBAL"],
         ),
     )
+    group_permissions = (
+        Permission.objects.create(
+            app=app,
+            key="group.permission.a",
+            name="权限组权限 A",
+            supported_scopes=["GLOBAL"],
+        ),
+        Permission.objects.create(
+            app=app,
+            key="group.permission.b",
+            name="权限组权限 B",
+            supported_scopes=["GLOBAL"],
+        ),
+    )
+    for group, permission in zip(groups, group_permissions, strict=True):
+        _ = AuthorizationGroupGrant.objects.create(
+            authorization_group=group,
+            permission=permission,
+            scope_key="GLOBAL",
+        )
     return (
         user,
         app,

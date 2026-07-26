@@ -6,18 +6,26 @@ import pytest
 from django.test import Client
 from django.urls import reverse
 
-from easyauth.accounts.auth import AUTHENTIK_GROUPS_SESSION_KEY, AUTHENTIK_SESSION_KEY
+from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.applications.models import App, AppMembership
 
 pytestmark = pytest.mark.django_db
 
+_AUTHENTIK_GROUPS_BY_UID: dict[str, tuple[str, ...]] = {}
 
-def test_console_home_serves_react_shell_for_authenticated_admin() -> None:
+
+def test_console_home_serves_react_shell_for_authenticated_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # Given: 系统管理员已登录控制台。
+    _mock_authentik_current_groups(
+        monkeypatch,
+        "react-console-admin",
+        ("EasyAuth Admins",),
+    )
     client = _logged_in_console_user(
         "react-console-admin",
-        is_superuser=True,
         name="控制台用户",
         avatar_url="https://authentik.example.test/media/avatars/admin.png",
     )
@@ -87,8 +95,16 @@ def test_console_app_detail_serves_react_shell_without_leaking_unowned_app() -> 
         "/console/settings/",
     ],
 )
-def test_console_client_routes_serve_react_shell_for_authenticated_admin(path: str) -> None:
-    client = _logged_in_console_user("react-console-route-admin", is_superuser=True)
+def test_console_client_routes_serve_react_shell_for_authenticated_admin(
+    path: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_authentik_current_groups(
+        monkeypatch,
+        "react-console-route-admin",
+        ("EasyAuth Admins",),
+    )
+    client = _logged_in_console_user("react-console-route-admin")
 
     response = client.get(path)
 
@@ -96,8 +112,15 @@ def test_console_client_routes_serve_react_shell_for_authenticated_admin(path: s
     assert 'data-easyauth-react-shell="console"' in response.content.decode()
 
 
-def test_console_api_route_takes_priority_over_client_shell_routes() -> None:
-    client = _logged_in_console_user("react-console-api-admin", is_superuser=True)
+def test_console_api_route_takes_priority_over_client_shell_routes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_authentik_current_groups(
+        monkeypatch,
+        "react-console-api-admin",
+        ("EasyAuth Admins",),
+    )
+    client = _logged_in_console_user("react-console-api-admin")
 
     response = client.get("/console/api/v1/apps")
 
@@ -117,8 +140,15 @@ def test_console_page_route_names_do_not_shadow_api_route_names() -> None:
     )
 
 
-def test_console_root_without_slash_redirects_to_react_shell() -> None:
-    client = _logged_in_console_user("react-console-root-admin", is_superuser=True)
+def test_console_root_without_slash_redirects_to_react_shell(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_authentik_current_groups(
+        monkeypatch,
+        "react-console-root-admin",
+        ("EasyAuth Admins",),
+    )
+    client = _logged_in_console_user("react-console-root-admin")
 
     response = client.get("/console", follow=True)
 
@@ -127,8 +157,15 @@ def test_console_root_without_slash_redirects_to_react_shell() -> None:
     assert 'data-easyauth-react-shell="console"' in response.content.decode()
 
 
-def test_console_app_new_route_does_not_resolve_as_app_detail() -> None:
-    client = _logged_in_console_user("react-console-new-admin", is_superuser=True)
+def test_console_app_new_route_does_not_resolve_as_app_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _mock_authentik_current_groups(
+        monkeypatch,
+        "react-console-new-admin",
+        ("EasyAuth Admins",),
+    )
+    client = _logged_in_console_user("react-console-new-admin")
     assert not App.objects.filter(app_key="new").exists()
 
     response = client.get("/console/apps/new")
@@ -156,7 +193,6 @@ def test_portal_serves_react_shell_for_active_session_user() -> None:
     )
     session = client.session
     session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
-    session[AUTHENTIK_GROUPS_SESSION_KEY] = ["研发中心"]
     session.save()
 
     # When: 打开员工门户。
@@ -169,7 +205,7 @@ def test_portal_serves_react_shell_for_active_session_user() -> None:
     assert 'data-easyauth-react-shell="portal"' in html
     assert 'data-current-user-id="react-portal-user"' in html
     assert 'data-current-user-display-name="门户用户"' in html
-    assert 'data-current-user-role="研发中心"' in html
+    assert 'data-current-user-role="Member"' in html
     assert (
         'data-current-user-avatar-url="https://authentik.example.test/media/avatars/portal.png"'
         in html
@@ -276,7 +312,6 @@ def _logged_in_console_user(
     username: str,
     *,
     avatar_url: str = "",
-    is_superuser: bool = False,
     name: str = "",
 ) -> Client:
     user, _created = UserMirror.objects.get_or_create(
@@ -290,7 +325,23 @@ def _logged_in_console_user(
     client = Client(HTTP_HOST="localhost")
     session = client.session
     session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
-    if is_superuser:
-        session[AUTHENTIK_GROUPS_SESSION_KEY] = ["EasyAuth Admins"]
     session.save()
     return client
+
+
+class _FakeAuthentikAuthority:
+    def user_group_names_by_uid(self, authentik_user_uid: str) -> tuple[str, ...]:
+        return _AUTHENTIK_GROUPS_BY_UID.get(authentik_user_uid, ())
+
+
+def _mock_authentik_current_groups(
+    monkeypatch: pytest.MonkeyPatch,
+    authentik_user_uid: str,
+    groups: tuple[str, ...],
+) -> None:
+    _AUTHENTIK_GROUPS_BY_UID.clear()
+    _AUTHENTIK_GROUPS_BY_UID[authentik_user_uid] = groups
+    monkeypatch.setattr(
+        "easyauth.admin_console.identity.AuthentikAdminClient.from_settings",
+        lambda: _FakeAuthentikAuthority(),
+    )

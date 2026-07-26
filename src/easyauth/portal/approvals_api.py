@@ -22,6 +22,7 @@ from easyauth.access_requests.models import (
     AccessRequest,
     AccessRequestApprover,
     AccessRequestGroup,
+    AccessRequestGroupGrantSnapshot,
 )
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
@@ -30,7 +31,6 @@ from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.pagination import pagination_item, total_pages
 from easyauth.api.responses import error_response as _error_response
 from easyauth.api.responses import json_response as _json_response
-from easyauth.applications.models import AuthorizationGroupGrant
 from easyauth.portal.access_request_data import access_request_item
 from easyauth.portal.pagination import build_page, page_request
 
@@ -148,9 +148,9 @@ def _approval_error_response(error: ApprovalActionError) -> JsonResponse:
                 error.message,
                 status=HTTPStatus.FORBIDDEN,
             )
-        case "conflict":
+        case "conflict" | "application_conflict":
             return _error_response(
-                ErrorCode.SEMANTIC_VALIDATION_ERROR,
+                ErrorCode.CONFLICT,
                 error.message,
                 error.details,
                 status=HTTPStatus.CONFLICT,
@@ -177,6 +177,13 @@ def _approval_error_response(error: ApprovalActionError) -> JsonResponse:
                 ErrorCode.SEMANTIC_VALIDATION_ERROR,
                 error.message,
                 details,
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            )
+        case _:
+            return _error_response(
+                ErrorCode.VALIDATION_ERROR,
+                error.message,
+                error.details,
                 status=HTTPStatus.UNPROCESSABLE_ENTITY,
             )
 
@@ -243,36 +250,56 @@ def _approval_item(access_request: AccessRequest) -> dict[str, JsonValue]:
 
 
 def _approval_authorization_groups(access_request: AccessRequest) -> list[JsonValue]:
-    links = (
+    snapshot_items = list(
+        AccessRequestGroupGrantSnapshot.objects.filter(
+            access_request=access_request,
+        ).order_by("authorization_group_key", "permission_key", "scope_key"),
+    )
+    if snapshot_items:
+        return _snapshot_authorization_groups(snapshot_items)
+
+    group_items: dict[str, dict[str, JsonValue]] = {}
+    for link in (
         AccessRequestGroup.objects.select_related("authorization_group")
         .filter(access_request=access_request)
         .order_by("authorization_group__key")
-    )
-    groups: list[JsonValue] = []
-    for link in links:
+    ):
         group = link.authorization_group
-        grants = (
-            AuthorizationGroupGrant.objects.select_related("permission")
-            .filter(authorization_group=group, is_active=True)
-            .order_by("permission__key", "scope_key")
-        )
-        grant_items: list[JsonValue] = [
+        group_items[group.key] = {
+            "key": group.key,
+            "kind": group.kind,
+            "name": group.name,
+            "grants": [],
+        }
+    return list(group_items.values())
+
+
+def _snapshot_authorization_groups(
+    snapshots: list[AccessRequestGroupGrantSnapshot],
+) -> list[JsonValue]:
+    group_items: dict[str, dict[str, JsonValue]] = {}
+    for snapshot in snapshots:
+        item = group_items.setdefault(
+            snapshot.authorization_group_key,
             {
-                "permission": grant.permission.key,
-                "permission_name": grant.permission.name,
-                "scope": grant.scope_key,
-            }
-            for grant in grants
-        ]
-        groups.append(
-            {
-                "key": group.key,
-                "kind": group.kind,
-                "name": group.name,
-                "grants": grant_items,
+                "key": snapshot.authorization_group_key,
+                "kind": snapshot.authorization_group_kind,
+                "name": snapshot.authorization_group_name,
+                "grants": [],
             },
         )
-    return groups
+        grants = item["grants"]
+        if not isinstance(grants, list):
+            message = "approval group grants shape is invalid"
+            raise TypeError(message)
+        grants.append(
+            {
+                "permission": snapshot.permission_key,
+                "permission_name": snapshot.permission_name,
+                "scope": snapshot.scope_key,
+            },
+        )
+    return list(group_items.values())
 
 
 def _active_user(request: HttpRequest) -> PortalApiResult:

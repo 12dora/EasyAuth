@@ -66,8 +66,9 @@ def test_notify_accept_without_channel_returns_503_without_message(
     )
     _ = UserMirror.objects.create(
         authentik_user_id="notify-authentik-user",
-        dingtalk_userid="notify-user",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="notify-corp",
+        dingtalk_userid="notify-user",
     )
     principal = AppPrincipal(
         app_id=app.id,

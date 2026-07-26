@@ -93,6 +93,8 @@ def _app_with_template(app_key: str) -> tuple[App, ApprovalTemplate]:
 def _originator(user_id: str) -> UserMirror:
     return UserMirror.objects.create(
         authentik_user_id=user_id,
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="workflow-corp",
         dingtalk_userid=f"{user_id}-dt",
     )
 
@@ -346,6 +348,37 @@ def test_early_callback_is_persisted_and_applied_after_process_id_save(
     assert pending.instance == instance
 
 
+def test_database_rejects_pending_callback_state_without_required_shape() -> None:
+    app, template = _app_with_template("wf-callback-shape")
+    originator = _originator("wf-callback-shape-user")
+    instance = ApprovalInstance.objects.create(
+        app=app,
+        template=template,
+        biz_key="callback-shape-1",
+        originator_user=originator,
+        dingtalk_process_instance_id="proc-callback-shape",
+        status=APPROVAL_STATUS_SUBMITTED,
+        submission_state="submitted",
+        payload_hash="1" * 64,
+    )
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        _ = PendingApprovalCallback.objects.create(
+            process_instance_id="proc-callback-shape-bad-applied",
+            status=APPROVAL_STATUS_APPROVED,
+            state=CALLBACK_STATE_APPLIED,
+            instance=instance,
+        )
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        _ = PendingApprovalCallback.objects.create(
+            process_instance_id="proc-callback-shape-bad-pending",
+            status=APPROVAL_STATUS_APPROVED,
+            state=CALLBACK_STATE_PENDING,
+            instance=instance,
+        )
+
+
 def test_completion_and_unique_delivery_event_are_repaired_idempotently() -> None:
     app, template = _app_with_template("wf-completion-outbox")
     originator = _originator("wf-completion-user")
@@ -449,6 +482,8 @@ def test_create_approval_instance_validates_template_and_originator() -> None:
     _ = UserMirror.objects.create(authentik_user_id="wf-no-dingtalk")
     _ = UserMirror.objects.create(
         authentik_user_id="wf-departed",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="workflow-corp",
         dingtalk_userid="wf-departed-dt",
         status=USER_STATUS_DEPARTED,
     )

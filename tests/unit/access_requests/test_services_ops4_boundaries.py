@@ -49,6 +49,8 @@ def test_ops4_revoke_request_rejects_non_reducing_role_target() -> None:
                 actor_type="user",
                 actor_id=user.authentik_user_id,
                 idempotency_key="ops4-revoke-non-reducing",
+                base_grant_id=grant.id,
+                base_grant_revision=grant.version,
                 request_type=REQUEST_TYPE_REVOKE,
             ),
         )
@@ -89,6 +91,8 @@ def test_ops4_renew_request_rejects_changed_role_target() -> None:
                 actor_type="user",
                 actor_id=user.authentik_user_id,
                 idempotency_key="ops4-renew-changed-role",
+                base_grant_id=grant.id,
+                base_grant_revision=grant.version,
                 request_type=REQUEST_TYPE_RENEW,
             ),
         )

@@ -1,9 +1,15 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, cast
+
+from django.db.models import Prefetch, QuerySet
 
 from easyauth.admin_console.api_payloads import list_payload
-from easyauth.applications.managed_scope_policy import ManagedScopePolicyService
+from easyauth.applications.managed_scope_policy import (
+    EffectiveManagedScopePolicy,
+    ManagedScopePolicyService,
+)
 from easyauth.applications.models import (
     MANAGED_SCOPE_POLICY_RESOLVER_DINGTALK_MANAGER_CHAIN,
     MANAGED_SCOPE_POLICY_RESOLVER_DISABLED,
@@ -63,14 +69,37 @@ def scopes_payload(app: App) -> dict[str, JsonValue]:
     }
 
 
-def authorization_groups_payload(app: App) -> dict[str, JsonValue]:
-    groups = [authorization_group_item(group) for group in active_authorization_groups(app)]
-    return {
+def authorization_groups_payload(
+    app: App,
+    *,
+    include_inactive: bool = False,
+    status: str = "",
+) -> dict[str, JsonValue]:
+    groups = active_authorization_groups(app, include_inactive=include_inactive, status=status)
+    return authorization_groups_page_payload(app, groups=groups)
+
+
+def authorization_groups_page_payload(
+    app: App,
+    *,
+    groups: tuple[AuthorizationGroup, ...],
+    pagination: dict[str, JsonValue] | None = None,
+) -> dict[str, JsonValue]:
+    policy_context = _managed_scope_policy_context(app, groups)
+    payload: dict[str, JsonValue] = {
         "app_key": app.app_key,
-        **list_payload(groups),
+        **list_payload(
+            [
+                authorization_group_item(group, policy_context=policy_context)
+                for group in groups
+            ],
+        ),
         "catalog_version": app.catalog_version,
         "version": catalog_version(app),
     }
+    if pagination is not None:
+        payload["pagination"] = pagination
+    return payload
 
 
 def permissions_payload(app: App) -> dict[str, JsonValue]:
@@ -94,11 +123,46 @@ def active_scopes(app: App) -> tuple[AppScope, ...]:
     return tuple(AppScope.objects.filter(app=app).order_by("display_order", "key"))
 
 
-def active_authorization_groups(app: App) -> tuple[AuthorizationGroup, ...]:
+def active_authorization_groups(
+    app: App,
+    *,
+    include_inactive: bool = False,
+    status: str = "",
+) -> tuple[AuthorizationGroup, ...]:
     return tuple(
-        AuthorizationGroup.objects.filter(app=app, is_active=True)
-        .prefetch_related("grants__permission")
-        .order_by("kind", "key"),
+        active_authorization_groups_queryset(
+            app,
+            include_inactive=include_inactive,
+            status=status,
+        )
+    )
+
+
+def active_authorization_groups_queryset(
+    app: App,
+    *,
+    include_inactive: bool = False,
+    status: str = "",
+) -> QuerySet[AuthorizationGroup]:
+    grants = AuthorizationGroupGrant.objects.select_related("permission").order_by(
+        "permission__key",
+        "scope_key",
+    )
+    queryset = AuthorizationGroup.objects.filter(app=app)
+    match status:
+        case "active":
+            queryset = queryset.filter(is_active=True)
+        case "inactive":
+            queryset = queryset.filter(is_active=False)
+        case "":
+            if not include_inactive:
+                queryset = queryset.filter(is_active=True)
+        case _:
+            queryset = queryset.none()
+    return (
+        queryset.select_related("app")
+        .prefetch_related(Prefetch("grants", queryset=grants, to_attr="_prefetched_grants"))
+        .order_by("kind", "key")
     )
 
 
@@ -146,7 +210,20 @@ def scope_item(scope: AppScope) -> dict[str, JsonValue]:
     }
 
 
-def authorization_group_item(group: AuthorizationGroup) -> dict[str, JsonValue]:
+def authorization_group_item(
+    group: AuthorizationGroup,
+    *,
+    policy_context: _ManagedScopePolicyContext | None = None,
+) -> dict[str, JsonValue]:
+    grants = tuple(
+        getattr(
+            group,
+            "_prefetched_grants",
+            AuthorizationGroupGrant.objects.filter(authorization_group=group)
+            .select_related("permission")
+            .order_by("permission__key", "scope_key"),
+        ),
+    )
     return {
         "id": group.id,
         "app_key": group.app.app_key,
@@ -159,28 +236,79 @@ def authorization_group_item(group: AuthorizationGroup) -> dict[str, JsonValue]:
         "requestable": group.requestable,
         "is_active": group.is_active,
         "grants": [
-            authorization_group_grant_item(grant)
-            for grant in AuthorizationGroupGrant.objects.filter(authorization_group=group)
-            .select_related("permission")
-            .order_by("permission__key", "scope_key")
+            authorization_group_grant_item(grant, policy_context=policy_context)
+            for grant in grants
         ],
     }
 
 
-def authorization_group_grant_item(grant: AuthorizationGroupGrant) -> dict[str, JsonValue]:
+def authorization_group_grant_item(
+    grant: AuthorizationGroupGrant,
+    *,
+    policy_context: _ManagedScopePolicyContext | None = None,
+) -> dict[str, JsonValue]:
     return {
         "permission": grant.permission.key,
         "scope": grant.scope_key,
         "is_active": grant.is_active,
-        "managed_scope_policy": _grant_managed_scope_policy_item(grant),
-        "effective_managed_scope_policy": _effective_managed_scope_policy_item(grant),
+        "managed_scope_policy": _grant_managed_scope_policy_item(
+            grant,
+            policy_context=policy_context,
+        ),
+        "effective_managed_scope_policy": _effective_managed_scope_policy_item(
+            grant,
+            policy_context=policy_context,
+        ),
     }
 
 
-def _grant_managed_scope_policy_item(grant: AuthorizationGroupGrant) -> dict[str, JsonValue]:
-    override = ManagedScopePolicyService.get_grant_override_policy(
-        app=grant.authorization_group.app,
-        grant=grant,
+@dataclass(frozen=True, slots=True)
+class _ManagedScopePolicyContext:
+    app_default: ManagedScopePolicy | None
+    overrides_by_grant_id: dict[int, ManagedScopePolicy]
+
+
+def _managed_scope_policy_context(
+    app: App,
+    groups: tuple[AuthorizationGroup, ...],
+) -> _ManagedScopePolicyContext:
+    grant_ids: list[int] = []
+    for group in groups:
+        grants = cast(
+            "tuple[object, ...]",
+            getattr(group, "_prefetched_grants", ()),
+        )
+        grant_ids.extend(
+            grant.id for grant in grants if isinstance(grant, AuthorizationGroupGrant)
+        )
+    app_default = ManagedScopePolicyService.get_app_default_policy(app=app)
+    overrides_by_grant_id: dict[int, ManagedScopePolicy] = {}
+    for policy in ManagedScopePolicy.objects.select_related("app").filter(
+            app=app,
+            target_type=MANAGED_SCOPE_POLICY_TARGET_AUTHORIZATION_GROUP_GRANT,
+            authorization_group_grant_id__in=grant_ids,
+    ):
+        grant_id = cast("int | None", getattr(policy, "authorization_group_grant_id", None))
+        if grant_id is not None:
+            overrides_by_grant_id[grant_id] = policy
+    return _ManagedScopePolicyContext(
+        app_default=app_default,
+        overrides_by_grant_id=overrides_by_grant_id,
+    )
+
+
+def _grant_managed_scope_policy_item(
+    grant: AuthorizationGroupGrant,
+    *,
+    policy_context: _ManagedScopePolicyContext | None = None,
+) -> dict[str, JsonValue]:
+    override = (
+        policy_context.overrides_by_grant_id.get(grant.id)
+        if policy_context is not None
+        else ManagedScopePolicyService.get_grant_override_policy(
+            app=grant.authorization_group.app,
+            grant=grant,
+        )
     )
     if override is not None:
         return {
@@ -191,8 +319,12 @@ def _grant_managed_scope_policy_item(grant: AuthorizationGroupGrant) -> dict[str
             "health_status": _managed_scope_policy_health(override),
             "health_message": _managed_scope_policy_health_message(override),
         }
-    app_default = ManagedScopePolicyService.get_app_default_policy(
-        app=grant.authorization_group.app,
+    app_default = (
+        policy_context.app_default
+        if policy_context is not None
+        else ManagedScopePolicyService.get_app_default_policy(
+            app=grant.authorization_group.app,
+        )
     )
     if app_default is not None:
         return {
@@ -215,11 +347,39 @@ def _grant_managed_scope_policy_item(grant: AuthorizationGroupGrant) -> dict[str
 
 def _effective_managed_scope_policy_item(
     grant: AuthorizationGroupGrant,
+    *,
+    policy_context: _ManagedScopePolicyContext | None = None,
 ) -> dict[str, JsonValue] | None:
-    effective = ManagedScopePolicyService.get_effective_policy(
-        app=grant.authorization_group.app,
-        grant=grant,
-    )
+    if policy_context is None:
+        effective = ManagedScopePolicyService.get_effective_policy(
+            app=grant.authorization_group.app,
+            grant=grant,
+        )
+    else:
+        override = policy_context.overrides_by_grant_id.get(grant.id)
+        app_default = policy_context.app_default
+        if override is not None:
+            if _managed_scope_policy_disabled(override):
+                effective = None
+            else:
+                effective = EffectiveManagedScopePolicy(
+                    policy=override,
+                    resolver=override.resolver,
+                    source=MANAGED_SCOPE_POLICY_TARGET_AUTHORIZATION_GROUP_GRANT,
+                    inherited_from=None,
+                )
+        elif app_default is not None:
+            if _managed_scope_policy_disabled(app_default):
+                effective = None
+            else:
+                effective = EffectiveManagedScopePolicy(
+                    policy=app_default,
+                    resolver=app_default.resolver,
+                    source=MANAGED_SCOPE_POLICY_TARGET_APP_DEFAULT,
+                    inherited_from=MANAGED_SCOPE_POLICY_TARGET_APP_DEFAULT,
+                )
+        else:
+            effective = None
     if effective is None:
         return None
     return {
@@ -254,6 +414,10 @@ def _managed_scope_policy_health_message(policy: ManagedScopePolicy) -> str:
     if policy.scope != MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS:
         return "管理范围策略 scope 无效。"
     return "管理范围策略已配置。"
+
+
+def _managed_scope_policy_disabled(policy: ManagedScopePolicy) -> bool:
+    return not policy.enabled or policy.resolver == MANAGED_SCOPE_POLICY_RESOLVER_DISABLED
 
 
 def permission_item(permission: Permission) -> dict[str, JsonValue]:

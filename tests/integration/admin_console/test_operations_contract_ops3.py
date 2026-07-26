@@ -8,10 +8,10 @@ from django.test import Client
 from pydantic import BaseModel, ConfigDict
 
 from easyauth.access_requests.models import AccessRequest, AccessRequestApprover
-from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import App
 from easyauth.audit.models import AuditLog
+from tests.integration.admin_console.auth_helpers import authenticate_console_admin
 
 pytestmark = pytest.mark.django_db
 
@@ -105,10 +105,5 @@ def test_ops3_dependency_health_read_writes_audit() -> None:
 
 
 def _logged_in_superuser(username: str) -> Client:
-    _ = UserMirror.objects.create(authentik_user_id=username)
     client = Client(HTTP_HOST="localhost")
-    session = client.session
-    session[AUTHENTIK_SESSION_KEY] = username
-    session["easyauth_authentik_groups"] = ["EasyAuth Admins"]
-    session.save()
-    return client
+    return authenticate_console_admin(client, username)

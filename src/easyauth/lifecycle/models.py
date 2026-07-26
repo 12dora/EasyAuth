@@ -25,6 +25,12 @@ HANDOVER_KIND_VALUES: Final[tuple[str, ...]] = (
     HANDOVER_KIND_OFFBOARD,
     HANDOVER_KIND_TRANSFER,
 )
+ONBOARDING_TEMPLATE_REVISION_IMMUTABLE_MESSAGE: Final = (
+    "OnboardingTemplateRevision is immutable."
+)
+ONBOARDING_TEMPLATE_REVISION_ITEM_IMMUTABLE_MESSAGE: Final = (
+    "OnboardingTemplateRevisionItem is immutable."
+)
 
 TASK_STATUS_PENDING: Final = "pending"
 TASK_STATUS_IN_PROGRESS: Final = "in_progress"
@@ -198,6 +204,9 @@ class HandoverAppAction(models.Model):
         dict[str, JsonValue],
         dict[str, JsonValue],
     ] = models.JSONField(default=dict, blank=True)
+    preview_generation: models.PositiveBigIntegerField[int, int] = (
+        models.PositiveBigIntegerField(default=0)
+    )
     result_payload: models.JSONField[
         dict[str, JsonValue],
         dict[str, JsonValue],
@@ -418,6 +427,16 @@ class OnboardingTemplate(models.Model):
     updated_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now=True,
     )
+    current_revision: models.ForeignKey[
+        OnboardingTemplateRevision | None,
+        OnboardingTemplateRevision | None,
+    ] = models.ForeignKey(
+        "OnboardingTemplateRevision",
+        on_delete=models.PROTECT,
+        related_name="+",
+        blank=True,
+        null=True,
+    )
 
     class Meta:
         ordering: ClassVar[list[str]] = ["name"]
@@ -427,14 +446,60 @@ class OnboardingTemplate(models.Model):
         return self.name
 
 
-class OnboardingTemplateItem(models.Model):
+class OnboardingTemplateRevision(models.Model):
+    # 模板修订: 编辑岗位模板只产生新修订; 已被转岗计划绑定的修订保持不可变。
     if TYPE_CHECKING:
         id: ClassVar[int]
         template_id: ClassVar[int]
-        app_id: ClassVar[int]
 
     template: models.ForeignKey[OnboardingTemplate, OnboardingTemplate] = models.ForeignKey(
         OnboardingTemplate,
+        on_delete=models.CASCADE,
+        related_name="revisions",
+    )
+    revision: models.PositiveIntegerField[int, int] = models.PositiveIntegerField()
+    name_snapshot: models.CharField[str, str] = models.CharField(max_length=128)
+    description_snapshot: models.TextField[str, str] = models.TextField(blank=True)
+    is_active: models.BooleanField[bool, bool] = models.BooleanField(default=True)
+    created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["template", "revision"],
+                name="lifecycle_template_revision_unique",
+            ),
+        ]
+        ordering: ClassVar[list[str]] = ["template_id", "-revision"]
+
+    @override
+    def __str__(self) -> str:
+        return f"{self.template_id}:r{self.revision}"
+
+    @override
+    def save(self, *args: object, **kwargs: object) -> None:
+        if not self._state.adding:
+            raise ValidationError(ONBOARDING_TEMPLATE_REVISION_IMMUTABLE_MESSAGE)
+        super().save(*args, **kwargs)
+
+    @override
+    def delete(self, *args: object, **kwargs: object) -> tuple[int, dict[str, int]]:
+        raise ValidationError(ONBOARDING_TEMPLATE_REVISION_IMMUTABLE_MESSAGE)
+
+
+class OnboardingTemplateRevisionItem(models.Model):
+    if TYPE_CHECKING:
+        id: ClassVar[int]
+        revision_id: ClassVar[int]
+        app_id: ClassVar[int]
+
+    revision: models.ForeignKey[
+        OnboardingTemplateRevision,
+        OnboardingTemplateRevision,
+    ] = models.ForeignKey(
+        OnboardingTemplateRevision,
         on_delete=models.CASCADE,
         related_name="items",
     )
@@ -476,21 +541,31 @@ class OnboardingTemplateItem(models.Model):
                     Q(authorization_group__isnull=False, permission__isnull=True)
                     | Q(authorization_group__isnull=True, permission__isnull=False)
                 ),
-                name="lifecycle_template_item_target_shape",
+                name="lifecycle_template_revision_item_target_shape",
             ),
             models.CheckConstraint(
                 condition=(
                     Q(grant_type="permanent", duration_days__isnull=True)
                     | Q(grant_type="timed", duration_days__isnull=False)
                 ),
-                name="lifecycle_template_item_expiration_shape",
+                name="lifecycle_template_revision_item_expiration_shape",
             ),
         ]
-        ordering: ClassVar[list[str]] = ["template_id", "app__app_key", "id"]
+        ordering: ClassVar[list[str]] = ["revision_id", "app__app_key", "id"]
 
     @override
     def __str__(self) -> str:
-        return f"{self.template_id}:{self.app.app_key}:{self.id}"
+        return f"{self.revision_id}:{self.app.app_key}:{self.id}"
+
+    @override
+    def save(self, *args: object, **kwargs: object) -> None:
+        if not self._state.adding:
+            raise ValidationError(ONBOARDING_TEMPLATE_REVISION_ITEM_IMMUTABLE_MESSAGE)
+        super().save(*args, **kwargs)
+
+    @override
+    def delete(self, *args: object, **kwargs: object) -> tuple[int, dict[str, int]]:
+        raise ValidationError(ONBOARDING_TEMPLATE_REVISION_ITEM_IMMUTABLE_MESSAGE)
 
     @override
     def clean(self) -> None:
@@ -516,6 +591,7 @@ class TransferPlan(models.Model):
     if TYPE_CHECKING:
         id: ClassVar[int]
         task_id: ClassVar[int]
+        new_template_revision_id: ClassVar[int | None]
 
     task: models.OneToOneField[HandoverTask, HandoverTask] = models.OneToOneField(
         HandoverTask,
@@ -527,6 +603,16 @@ class TransferPlan(models.Model):
         OnboardingTemplate | None,
     ] = models.ForeignKey(
         OnboardingTemplate,
+        on_delete=models.PROTECT,
+        related_name="transfer_plans",
+        blank=True,
+        null=True,
+    )
+    new_template_revision: models.ForeignKey[
+        OnboardingTemplateRevision | None,
+        OnboardingTemplateRevision | None,
+    ] = models.ForeignKey(
+        OnboardingTemplateRevision,
         on_delete=models.PROTECT,
         related_name="transfer_plans",
         blank=True,

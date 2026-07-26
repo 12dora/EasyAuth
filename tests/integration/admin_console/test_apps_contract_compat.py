@@ -22,7 +22,11 @@ from easyauth.applications.models import (
     Permission,
     PermissionTemplateVersion,
 )
-from easyauth.applications.services import StaticTokenService
+from easyauth.applications.services import AppCredentialService
+from tests.integration.admin_console.auth_helpers import (
+    authenticate_console_admin,
+    authenticate_console_user,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -61,6 +65,7 @@ def test_apps_list_includes_documented_contract_fields() -> None:
     assert item["id"] == app.id
     assert item["owners"] == ["apps-contract-owner"]
     assert item["configuration_status"] == "blocking"
+    assert _json_object(item["capabilities"])["can_toggle_active"] is True
     assert isinstance(item["updated_at"], str)
     assert datetime.fromisoformat(item["updated_at"])
 
@@ -97,6 +102,62 @@ def test_apps_list_supports_documented_filters_and_pagination() -> None:
         "total_items": 1,
         "total_pages": 1,
     }
+
+
+def test_apps_list_rejects_unknown_status_filter() -> None:
+    client = _logged_in_superuser("apps-contract-list-invalid-status-admin")
+
+    response = client.get(APPS_API_URL, {"status": "typo"})
+
+    body = _response_json_object(response)
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    error = _json_object(body["error"])
+    assert error["details"] == {"field": "status", "value": "typo"}
+
+
+def test_authorization_groups_list_supports_inactive_status_filter() -> None:
+    client = _logged_in_superuser("apps-contract-authz-groups-admin")
+    app = App.objects.create(app_key="apps-contract-authz-groups", name="CRM")
+    active = AuthorizationGroup.objects.create(
+        app=app,
+        key="active-role",
+        kind="role",
+        name="Active",
+    )
+    inactive = AuthorizationGroup.objects.create(
+        app=app,
+        key="inactive-role",
+        kind="role",
+        name="Inactive",
+        is_active=False,
+    )
+
+    default_response = client.get(f"{APPS_API_URL}/{app.app_key}/authorization-groups")
+    include_response = client.get(
+        f"{APPS_API_URL}/{app.app_key}/authorization-groups",
+        {"include_inactive": "true"},
+    )
+    inactive_response = client.get(
+        f"{APPS_API_URL}/{app.app_key}/authorization-groups",
+        {"status": "inactive"},
+    )
+    invalid_response = client.get(
+        f"{APPS_API_URL}/{app.app_key}/authorization-groups",
+        {"status": "not-real"},
+    )
+
+    default_keys = _authorization_group_keys(default_response)
+    include_keys = _authorization_group_keys(include_response)
+    inactive_keys = _authorization_group_keys(inactive_response)
+    assert default_keys == [active.key]
+    assert include_keys == [active.key, inactive.key]
+    assert inactive_keys == [inactive.key]
+    assert invalid_response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+
+
+def _authorization_group_keys(response: HttpResponseLike) -> list[str]:
+    body = _response_json_object(response)
+    return [str(_json_object(item)["key"]) for item in _json_list(body["data"])]
 
 
 def test_app_detail_includes_documented_summary_fields() -> None:
@@ -140,9 +201,9 @@ def test_app_detail_includes_documented_summary_fields() -> None:
         permission=write_permission,
         scope_key="GLOBAL",
     )
-    active_token = StaticTokenService.create_token(app=app, name="active")
-    inactive_token = StaticTokenService.create_token(app=app, name="inactive")
-    _ = AppCredential.objects.filter(id=inactive_token.credential_id).update(is_active=False)
+    active_token = AppCredentialService.create_static_token(app=app, name="active")
+    inactive_token = AppCredentialService.create_static_token(app=app, name="inactive")
+    _ = AppCredential.objects.filter(id=inactive_token.credential.id).update(is_active=False)
     _ = PermissionTemplateVersion.objects.create(
         app=app,
         version=2,
@@ -160,7 +221,7 @@ def test_app_detail_includes_documented_summary_fields() -> None:
     body = _response_json_object(response)
     item = _json_object(body["app"])
     assert response.status_code == HTTPStatus.OK
-    assert active_token.credential_id != inactive_token.credential_id
+    assert active_token.credential.id != inactive_token.credential.id
     assert item["owners"] == ["apps-contract-detail-owner"]
     assert item["developers"] == ["apps-contract-detail-developer"]
     assert item["authorization_group_count"] == EXPECTED_DETAIL_COUNT
@@ -296,7 +357,7 @@ def test_configuration_status_reports_documented_target_fields() -> None:
         permission=permission,
         scope_key="GLOBAL",
     )
-    _ = StaticTokenService.create_token(app=app, name="token")
+    _ = AppCredentialService.create_static_token(app=app, name="token")
 
     # When: owner 查询配置完整性。
     response = client.get(f"{APPS_API_URL}/{app.app_key}/configuration-status")
@@ -317,14 +378,14 @@ def test_configuration_status_reports_documented_target_fields() -> None:
 def _logged_in_superuser(username: str) -> Client:
     _ = User.objects.create_superuser(username=username, password=LOGIN_VALUE)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    authenticate_console_admin(client, username)
     return client
 
 
 def _logged_in_user(username: str) -> Client:
     _ = User.objects.create_user(username=username, password=LOGIN_VALUE)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    authenticate_console_user(client, username)
     return client
 
 
@@ -377,6 +438,7 @@ def _expected_detail_fields() -> set[str]:
         "configuration_status",
         "updated_at",
         "can_manage",
+        "capabilities",
         "developers",
         "authorization_group_count",
         "permission_count",

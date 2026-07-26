@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from easyauth.access_requests.models import GRANT_TYPE_PERMANENT, AccessRequest, AccessRequestGroup
+from easyauth.access_requests.models import (
+    GRANT_TYPE_PERMANENT,
+    AccessRequest,
+    AccessRequestApprover,
+    AccessRequestGroup,
+)
 from easyauth.access_requests.services import (
     AccessRequestService,
     AccessRequestSubmission,
@@ -93,6 +98,18 @@ def test_s14_submit_grant_request_deduplicates_repeated_groups() -> None:
     user = UserMirror.objects.create(authentik_user_id="s14-service-duplicate-role-user")
     app = App.objects.create(app_key="s14-service-duplicate-role", name="S14 Duplicate Role")
     group = AuthorizationGroup.objects.create(app=app, key="admin", kind="role", name="CRM 管理员")
+    scope = AppScope.objects.create(app=app, key="GLOBAL", name="全局")
+    permission = Permission.objects.create(
+        app=app,
+        key="crm.admin",
+        name="CRM 管理",
+        supported_scopes=[scope.key],
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key=scope.key,
+    )
     _ = ApprovalRule.objects.create(
         app=app,
         authorization_group=group,
@@ -119,6 +136,39 @@ def test_s14_submit_grant_request_deduplicates_repeated_groups() -> None:
     assert AccessRequestGroup.objects.filter(access_request=access_request).count() == 1
     audit_log = AuditLog.objects.get(event_type="access_request_submitted")
     assert audit_log.metadata["authorization_group_keys"] == [group.key]
+
+
+def test_submit_rejects_authorization_group_without_active_grants_without_writes() -> None:
+    user = UserMirror.objects.create(authentik_user_id="s14-empty-group-grants-user")
+    approver = UserMirror.objects.create(authentik_user_id="s14-empty-group-grants-approver")
+    app = App.objects.create(app_key="s14-empty-group-grants-app", name="空授权组")
+    group = AuthorizationGroup.objects.create(app=app, key="empty", kind="role", name="空组")
+    _ = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=group,
+        approver_userids=[approver.authentik_user_id],
+    )
+
+    with pytest.raises(AccessRequestSubmissionError) as exc_info:
+        _ = AccessRequestService.submit_grant_request(
+            AccessRequestSubmission(
+                user=user,
+                app=app,
+                authorization_groups=(group,),
+                grant_type=GRANT_TYPE_PERMANENT,
+                grant_expires_at=None,
+                reason="空授权组不应提交",
+                actor_type="user",
+                actor_id=user.authentik_user_id,
+                idempotency_key="s14-empty-group-grants",
+                approver_user_ids=(approver.authentik_user_id,),
+            ),
+        )
+
+    assert "authorization group has no active grants: empty" in str(exc_info.value)
+    assert AccessRequest.objects.count() == 0
+    assert AccessRequestGroup.objects.count() == 0
+    assert AuditLog.objects.count() == 0
 
 
 def test_s14_submit_grant_request_rejects_applicant_as_approver_without_writes() -> None:
@@ -184,7 +234,7 @@ def test_submit_rejects_direct_grant_covered_by_authorization_group() -> None:
     )
 
     with pytest.raises(AccessRequestSubmissionError) as exc_info:
-        AccessRequestService.submit_grant_request(
+        _ = AccessRequestService.submit_grant_request(
             AccessRequestSubmission(
                 user=user,
                 app=app,
@@ -210,11 +260,16 @@ def test_submit_rejects_direct_grant_covered_by_authorization_group() -> None:
 def test_managed_users_requires_resolved_direct_manager_as_approver() -> None:
     manager = UserMirror.objects.create(
         authentik_user_id="managed-manager",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="corp-managed",
         dingtalk_userid="managed-manager-dingtalk",
     )
     owner = UserMirror.objects.create(authentik_user_id="managed-owner")
     user = UserMirror.objects.create(
         authentik_user_id="managed-user",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="corp-managed",
+        dingtalk_userid="managed-user-dingtalk",
         manager_userid=manager.dingtalk_userid,
     )
     app = App.objects.create(app_key="managed-approver-app", name="直属主管校验")
@@ -227,7 +282,7 @@ def test_managed_users_requires_resolved_direct_manager_as_approver() -> None:
     )
 
     with pytest.raises(AccessRequestSubmissionError) as exc_info:
-        AccessRequestService.submit_grant_request(
+        _ = AccessRequestService.submit_grant_request(
             AccessRequestSubmission(
                 user=user,
                 app=app,
@@ -273,4 +328,55 @@ def test_managed_users_requires_resolved_direct_manager_as_approver() -> None:
         ),
     )
 
-    assert access_request.approver_assignments.get().approver == manager
+    assert AccessRequestApprover.objects.get(access_request=access_request).approver == manager
+
+
+def test_managed_users_manager_fallback_rejects_cross_source_dingtalk_userid() -> None:
+    manager = UserMirror.objects.create(
+        authentik_user_id="managed-cross-source-manager",
+        dingtalk_source_slug="source-b",
+        dingtalk_corp_id="corp-managed",
+        dingtalk_userid="shared-manager-dingtalk",
+    )
+    user = UserMirror.objects.create(
+        authentik_user_id="managed-cross-source-user",
+        dingtalk_source_slug="source-a",
+        dingtalk_corp_id="corp-managed",
+        dingtalk_userid="managed-cross-source-user-dingtalk",
+        manager_userid=manager.dingtalk_userid,
+    )
+    app = App.objects.create(app_key="managed-cross-source-app", name="跨来源主管校验")
+    _ = AppScope.objects.create(app=app, key="MANAGED_USERS", name="下级用户")
+    permission = Permission.objects.create(
+        app=app,
+        key="customer.read",
+        name="查看客户",
+        supported_scopes=["MANAGED_USERS"],
+    )
+
+    with pytest.raises(AccessRequestSubmissionError) as exc_info:
+        _ = AccessRequestService.submit_grant_request(
+            AccessRequestSubmission(
+                user=user,
+                app=app,
+                direct_grants=(
+                    ScopedAccessRequestGrant(
+                        permission=permission,
+                        scope_key="MANAGED_USERS",
+                    ),
+                ),
+                grant_type=GRANT_TYPE_PERMANENT,
+                grant_expires_at=None,
+                reason="跨 source 主管不能审批",
+                actor_type="user",
+                actor_id=user.authentik_user_id,
+                idempotency_key="reject-cross-source-manager-approver",
+                approver_user_ids=(manager.authentik_user_id,),
+            ),
+        )
+
+    assert exc_info.value.messages == (
+        "MANAGED_USERS requests require a direct manager approver.",
+    )
+    assert AccessRequest.objects.count() == 0
+    assert AuditLog.objects.count() == 0

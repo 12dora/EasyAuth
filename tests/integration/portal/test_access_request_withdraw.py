@@ -4,8 +4,10 @@ from http import HTTPStatus
 from typing import Final
 
 import pytest
+from django.utils import timezone
 
 from easyauth.access_requests.models import (
+    DECISION_ACTOR_USER,
     GRANT_TYPE_PERMANENT,
     REQUEST_STATUS_APPROVED,
     REQUEST_STATUS_SUBMITTED,
@@ -67,6 +69,7 @@ def test_withdraw_rejects_non_owner_and_terminal_status() -> None:
         idempotency_key="withdraw-owned",
         payload_digest="b" * 64,
     )
+    decided_at = timezone.now()
     decided = AccessRequest.objects.create(
         user=other,
         app=app,
@@ -75,6 +78,10 @@ def test_withdraw_rejects_non_owner_and_terminal_status() -> None:
         reason="already decided",
         idempotency_key="withdraw-decided",
         payload_digest="c" * 64,
+        approved_at=decided_at,
+        decided_at=decided_at,
+        decided_by="approver",
+        decision_actor_type=DECISION_ACTOR_USER,
     )
     approver = UserMirror.objects.create(
         authentik_user_id="portal-withdraw-approver",

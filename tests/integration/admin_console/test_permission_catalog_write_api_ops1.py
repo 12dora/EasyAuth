@@ -21,6 +21,7 @@ from easyauth.applications.models import (
     PermissionGroup,
 )
 from easyauth.audit.models import AuditLog
+from tests.integration.admin_console.auth_helpers import authenticate_console_user
 
 pytestmark = pytest.mark.django_db
 
@@ -143,7 +144,7 @@ def test_ops1_owner_writes_authorization_group_grant_managed_scope_policy() -> N
     policy = ManagedScopePolicy.objects.get(
         app=app,
         target_type="authorization_group_grant",
-        target_id=grant.id,
+        authorization_group_grant=grant,
         scope="MANAGED_USERS",
     )
     assert policy.resolver == "dingtalk_manager_chain"
@@ -200,7 +201,7 @@ def test_ops1_owner_writes_authorization_group_grant_managed_scope_policy() -> N
     assert ManagedScopePolicy.objects.filter(
         app=app,
         target_type="authorization_group_grant",
-        target_id=grant.id,
+        authorization_group_grant=grant,
         scope="MANAGED_USERS",
     ).exists() is False
     policy_audits = list(
@@ -254,7 +255,7 @@ def test_ops1_owner_writes_authorization_group_grant_managed_scope_policy() -> N
     assert ManagedScopePolicy.objects.filter(
         app=app,
         target_type="authorization_group_grant",
-        target_id=grant.id,
+        authorization_group_grant=grant,
         scope="MANAGED_USERS",
     ).exists() is False
 
@@ -550,12 +551,4 @@ def _seed_resource(*, app: App, endpoint: str, key: str) -> None:
 def _logged_in_user(username: str) -> Client:
     _ = User.objects.create_user(username=username, password=LOGIN_VALUE)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
-    return client
-
-
-def _logged_in_superuser(username: str) -> Client:
-    _ = User.objects.create_superuser(username=username, password=LOGIN_VALUE)
-    client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
-    return client
+    return authenticate_console_user(client, username)

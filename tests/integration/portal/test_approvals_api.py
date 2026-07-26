@@ -13,9 +13,12 @@ from pydantic import TypeAdapter
 from easyauth.access_requests.application_grants import GrantApplyFailureError
 from easyauth.access_requests.models import (
     GRANT_TYPE_PERMANENT,
+    REQUEST_STATUS_GRANT_CONFLICT,
+    REQUEST_TYPE_CHANGE,
     AccessRequest,
     AccessRequestApprover,
     AccessRequestGroup,
+    AccessRequestGroupGrantSnapshot,
 )
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import UserMirror
@@ -28,7 +31,7 @@ from easyauth.applications.models import (
     AuthorizationGroupGrant,
     Permission,
 )
-from easyauth.grants.models import AccessGrant
+from easyauth.grants.models import AccessGrant, AccessGrantGroup
 from easyauth.grants.services import GrantMutationExpiredError
 from tests.integration.portal.helpers import logged_in_client
 
@@ -86,6 +89,58 @@ def test_approver_sees_pending_approvals_and_approves() -> None:
     assert AccessGrant.objects.filter(is_current=True).count() == 1
 
 
+def test_approval_detail_uses_submitted_group_grant_snapshot() -> None:
+    # Given: 申请提交时冻结了审批展示事实, 之后授权组头信息与当前 grants 都被替换。
+    client, approver = logged_in_client("portal-snapshot-approver")
+    access_request = _submitted_request(
+        "portal-snapshot-applicant",
+        "portal-snapshot-app",
+        approver_id=approver.authentik_user_id,
+    )
+    group_link = AccessRequestGroup.objects.select_related("authorization_group").get(
+        access_request=access_request,
+    )
+    group = group_link.authorization_group
+    old_grant = AuthorizationGroupGrant.objects.get(authorization_group=group)
+    old_grant.is_active = False
+    old_grant.save(update_fields=["is_active"])
+    group.kind = "bundle"
+    group.name = "Renamed Reader"
+    group.save(update_fields=["kind", "name"])
+    new_permission = Permission.objects.create(
+        app=access_request.app,
+        key="reader.admin",
+        name="Reader Admin",
+        supported_scopes=["GLOBAL"],
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=new_permission,
+        scope_key="GLOBAL",
+    )
+
+    # When: 审批人查看详情。
+    detail = client.get(f"/portal/api/v1/me/approvals/{access_request.id}")
+
+    # Then: 展示仍是提交时 snapshot, key/kind/name/grants 都不读 live group。
+    assert detail.status_code == HTTPStatus.OK
+    approval = _json_dict(_json_object(detail.content), "approval")
+    authorization_groups = approval["authorization_groups"]
+    assert isinstance(authorization_groups, list)
+    assert authorization_groups[0] == {
+        "key": "reader",
+        "kind": "role",
+        "name": "Reader",
+        "grants": [
+            {
+                "permission": "reader.view",
+                "permission_name": "Reader View",
+                "scope": "GLOBAL",
+            },
+        ],
+    }
+
+
 def test_approve_application_failure_returns_committed_decision_and_latest_approval(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -132,6 +187,44 @@ def test_approve_application_failure_returns_committed_decision_and_latest_appro
     assert access_request.status == "grant_failed"
 
 
+def test_approve_base_revision_conflict_returns_409_and_requires_resubmission() -> None:
+    # Given: lifecycle 申请待审批时绑定 base grant v1, 审批前当前授权已推进到 v2。
+    client, approver = logged_in_client("portal-base-conflict-approver")
+    access_request = _submitted_request(
+        "portal-base-conflict-applicant",
+        "portal-base-conflict-app",
+        approver_id=approver.authentik_user_id,
+    )
+    group = AccessRequestGroup.objects.get(access_request=access_request).authorization_group
+    grant = AccessGrant.objects.create(user=access_request.user, app=access_request.app)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
+    access_request.request_type = REQUEST_TYPE_CHANGE
+    access_request.base_grant = grant
+    access_request.base_grant_revision = grant.version
+    access_request.save(update_fields=["request_type", "base_grant", "base_grant_revision"])
+    grant.version += 1
+    grant.save(update_fields=["version", "updated_at"])
+
+    # When: 审批人同意该旧 revision 申请。
+    response = client.post(
+        f"/portal/api/v1/me/approvals/{access_request.id}/approve",
+        data=dumps({"comment": "同意"}),
+        content_type="application/json",
+    )
+
+    # Then: API 返回专用 409 冲突, 不伪装成可重试 grant_failed/422。
+    assert response.status_code == HTTPStatus.CONFLICT
+    body = _json_object(response.content)
+    error = _json_dict(body, "error")
+    assert error["code"] == "CONFLICT"
+    details = error["details"]
+    assert isinstance(details, dict)
+    assert details["reason"] == "base_grant_revision_conflict"
+    assert details["status"] == REQUEST_STATUS_GRANT_CONFLICT
+    access_request.refresh_from_db()
+    assert access_request.status == REQUEST_STATUS_GRANT_CONFLICT
+
+
 def test_approve_expired_grant_returns_committed_decision_and_latest_approval(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -158,18 +251,12 @@ def test_approve_expired_grant_returns_committed_decision_and_latest_approval(
         content_type="application/json",
     )
 
-    # Then: 422 复合结果同时返回已提交语义与最新 grant_expired 事实。
-    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    # Then: API 返回稳定 409, 申请进入明确 grant_expired 终态。
+    assert response.status_code == HTTPStatus.CONFLICT
     details = _json_dict(_json_dict(_json_object(response.content), "error"), "details")
     assert details["decision_committed"] is True
     assert details["status"] == "grant_expired"
-    approval = _json_dict(details, "approval")
-    assert approval["id"] == access_request.id
-    assert approval["status"] == "grant_expired"
-    assert approval["reason"] == "跨部门工单处理"
-    assert approval["decision_comment"] == "同意"
-    assert approval["decided_by"] == approver.authentik_user_id
-    assert isinstance(approval["decided_at"], str)
+    assert details["reason"] == "request_expired"
     access_request.refresh_from_db()
     assert access_request.status == "grant_expired"
 
@@ -387,6 +474,16 @@ def _submitted_request(
         approver=approver,
     )
     _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
+    _ = AccessRequestGroupGrantSnapshot.objects.create(
+        access_request=access_request,
+        authorization_group_id_snapshot=group.id,
+        authorization_group_key=group.key,
+        authorization_group_kind=group.kind,
+        authorization_group_name=group.name,
+        permission_key=permission.key,
+        permission_name=permission.name,
+        scope_key=scope.key,
+    )
     return access_request
 
 

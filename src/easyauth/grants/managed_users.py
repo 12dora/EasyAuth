@@ -33,7 +33,7 @@ if TYPE_CHECKING:
     from easyauth.integrations.authentik.directory_payloads import DingTalkManagedUsers
 
 # 同一次权限查询内按 (corp_id, manager_userid) 复用目录结果, 避免 K 个 grant 触发 K 次 HTTP。
-type ManagedUsersDirectoryCache = dict[tuple[str, str], DingTalkManagedUsers]
+type ManagedUsersDirectoryCache = dict[tuple[str, str, str], DingTalkManagedUsers]
 
 
 class ManagedUsersResolutionUnavailableError(RuntimeError):
@@ -81,7 +81,7 @@ def resolve_managed_users(
         if resolver == MANAGED_SCOPE_POLICY_RESOLVER_UNION
         else None
     )
-    if not user.dingtalk_corp_id or not user.dingtalk_userid:
+    if not user.dingtalk_source_slug or not user.dingtalk_corp_id or not user.dingtalk_userid:
         _record_resolution_failed(
             app=app,
             authorization_group_grant=authorization_group_grant,
@@ -150,7 +150,7 @@ def _managed_users_from_directory(
     user: UserMirror,
     directory_cache: ManagedUsersDirectoryCache | None,
 ) -> DingTalkManagedUsers:
-    cache_key = (user.dingtalk_corp_id, user.dingtalk_userid)
+    cache_key = (user.dingtalk_source_slug, user.dingtalk_corp_id, user.dingtalk_userid)
     if directory_cache is not None and cache_key in directory_cache:
         return directory_cache[cache_key]
     managed_users = AuthentikDirectoryClient.from_settings().get_managed_users(

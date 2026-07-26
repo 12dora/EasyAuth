@@ -403,17 +403,31 @@ def test_portal_request_catalog_includes_direct_grant_scope_options() -> None:
 def test_portal_request_catalog_returns_active_approver_options_and_defaults() -> None:
     # Given: 当前员工有直属主管, App 有 owner, 目标也可有审批规则审批人。
     client, user = logged_in_client("portal-catalog-approver-user")
+    user.dingtalk_source_slug = "dingtalk"
+    user.dingtalk_corp_id = "portal-corp"
+    user.dingtalk_userid = "portal-catalog-approver-dt"
     user.manager_userid = "manager-dt"
-    user.save(update_fields=["manager_userid"])
+    user.save(
+        update_fields=[
+            "dingtalk_source_slug",
+            "dingtalk_corp_id",
+            "dingtalk_userid",
+            "manager_userid",
+        ],
+    )
     manager = UserMirror.objects.create(
         authentik_user_id="portal-catalog-manager",
         name="主管",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="portal-corp",
         dingtalk_userid="manager-dt",
     )
     owner = UserMirror.objects.create(authentik_user_id="portal-catalog-owner", name="Owner")
     rule_approver = UserMirror.objects.create(
         authentik_user_id="portal-catalog-rule-approver",
         name="规则审批人",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="portal-corp",
         dingtalk_userid="rule-dt",
     )
     _ = UserMirror.objects.create(
@@ -441,7 +455,7 @@ def test_portal_request_catalog_returns_active_approver_options_and_defaults() -
     _ = ApprovalRule.objects.create(
         app=app,
         authorization_group=group,
-        approver_userids=["rule-dt"],
+        approver_userids=[rule_approver.authentik_user_id],
     )
 
     # When: 读取申请目录。
@@ -513,10 +527,22 @@ def test_portal_request_catalog_uses_local_admin_approval_rule_for_first_request
 def test_portal_request_catalog_queries_only_candidate_approvers() -> None:
     # Given: 目录中只有主管、owner 和规则审批人可能成为本次候选人。
     client, user = logged_in_client("portal-catalog-directed-user")
+    user.dingtalk_source_slug = "dingtalk"
+    user.dingtalk_corp_id = "portal-directed-corp"
+    user.dingtalk_userid = "directed-user-dt"
     user.manager_userid = "directed-manager-dt"
-    user.save(update_fields=["manager_userid"])
+    user.save(
+        update_fields=[
+            "dingtalk_source_slug",
+            "dingtalk_corp_id",
+            "dingtalk_userid",
+            "manager_userid",
+        ],
+    )
     manager = UserMirror.objects.create(
         authentik_user_id="portal-catalog-directed-manager",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="portal-directed-corp",
         dingtalk_userid="directed-manager-dt",
     )
     owner = UserMirror.objects.create(authentik_user_id="portal-catalog-directed-owner")
@@ -565,14 +591,83 @@ def test_portal_request_catalog_queries_only_candidate_approvers() -> None:
     }
 
 
+def test_portal_request_catalog_direct_manager_does_not_cross_source() -> None:
+    client, user = logged_in_client("portal-catalog-cross-source-user")
+    user.dingtalk_source_slug = "source-a"
+    user.dingtalk_corp_id = "shared-corp"
+    user.dingtalk_userid = "source-a-user-dt"
+    user.manager_userid = "shared-manager-dt"
+    user.save(
+        update_fields=[
+            "dingtalk_source_slug",
+            "dingtalk_corp_id",
+            "dingtalk_userid",
+            "manager_userid",
+        ],
+    )
+    cross_source_manager = UserMirror.objects.create(
+        authentik_user_id="portal-catalog-source-b-manager",
+        name="错误来源主管",
+        dingtalk_source_slug="source-b",
+        dingtalk_corp_id="shared-corp",
+        dingtalk_userid="shared-manager-dt",
+    )
+    owner = UserMirror.objects.create(
+        authentik_user_id="portal-catalog-cross-source-owner",
+        name="Owner",
+    )
+    app = App.objects.create(app_key="catalog-cross-source-app", name="跨来源 App")
+    _ = AppMembership.objects.create(app=app, user_id=owner.authentik_user_id, role="owner")
+    _ = AppScope.objects.create(app=app, key="GLOBAL", name="全局")
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="cross-source-group",
+        kind="role",
+        name="跨来源授权组",
+        requestable=True,
+    )
+    permission = Permission.objects.create(
+        app=app,
+        key="cross-source.permission",
+        name="跨来源权限",
+        supported_scopes=["GLOBAL"],
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key="GLOBAL",
+    )
+
+    response = client.get(REQUEST_CATALOG_URL)
+
+    payload = json_object(response)
+    assert response.status_code == HTTPStatus.OK
+    option_ids = {option["user_id"] for option in payload["approver_options"]}
+    assert cross_source_manager.authentik_user_id not in option_ids
+    assert owner.authentik_user_id in option_ids
+    assert payload["apps"][0]["default_approver_user_ids"] == [owner.authentik_user_id]
+
+
 def test_portal_request_catalog_uses_direct_manager_for_managed_users_targets() -> None:
     # Given: 员工有 active 直属主管, 可申请授权组和 direct Permission 都包含 MANAGED_USERS。
     client, user = logged_in_client("portal-catalog-managed-user")
+    user.dingtalk_source_slug = "dingtalk"
+    user.dingtalk_corp_id = "portal-managed-corp"
+    user.dingtalk_userid = "managed-user-dt"
     user.manager_userid = "managed-manager-dt"
-    user.save(update_fields=["manager_userid"])
+    user.save(
+        update_fields=[
+            "dingtalk_source_slug",
+            "dingtalk_corp_id",
+            "dingtalk_userid",
+            "manager_userid",
+        ],
+    )
     manager = UserMirror.objects.create(
         authentik_user_id="portal-catalog-managed-manager",
         name="直属主管",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="portal-managed-corp",
         dingtalk_userid="managed-manager-dt",
     )
     owner = UserMirror.objects.create(authentik_user_id="portal-catalog-managed-owner")

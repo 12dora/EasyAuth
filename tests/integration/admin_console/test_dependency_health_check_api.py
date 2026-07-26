@@ -8,8 +8,7 @@ import pytest
 from django.test import Client, override_settings
 from django.utils import timezone
 
-from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
-from easyauth.accounts.models import DingTalkDirectorySyncState, UserMirror
+from easyauth.accounts.models import DingTalkDirectorySyncState
 from easyauth.applications import dependency_health_checks
 from easyauth.applications.health_models import DependencyHealthSnapshot
 from easyauth.applications.integration_settings import IntegrationSettings
@@ -19,6 +18,10 @@ from easyauth.integrations.authentik.directory_client import (
 )
 from easyauth.integrations.authentik.directory_payloads import DingTalkDirectoryStatus
 from easyauth.integrations.authentik.liveness import AuthentikLivenessResult
+from tests.integration.admin_console.auth_helpers import (
+    authenticate_console_admin,
+    authenticate_console_user,
+)
 
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
@@ -114,12 +117,15 @@ def test_dependency_health_check_writes_snapshots(monkeypatch: pytest.MonkeyPatc
     payload = cast("dict[str, JsonValue]", response.json())
     health_map = cast("dict[str, dict[str, JsonValue]]", payload["health_map"])
     assert health_map["authentik"]["status"] == "healthy"
+    assert health_map["authentik_directory"]["status"] == "healthy"
     assert health_map["dingtalk"]["status"] == "healthy"
     assert health_map["celery"]["status"] == "healthy"
+    assert health_map["connectors"]["status"] == "healthy"
     assert DependencyHealthSnapshot.objects.filter(dependency="authentik").count() == 1
     assert DependencyHealthSnapshot.objects.filter(dependency="dingtalk").count() == 1
     assert DependencyHealthSnapshot.objects.filter(dependency="celery").count() == 1
     assert DependencyHealthSnapshot.objects.filter(dependency="authentik_directory").count() == 1
+    assert DependencyHealthSnapshot.objects.filter(dependency="connectors").count() == 1
 
 
 def test_dependency_health_check_records_authentik_failure(
@@ -160,6 +166,26 @@ def test_dependency_health_check_records_authentik_failure(
     assert "无法连接" in snapshot.error_summary
 
 
+def test_dependency_health_check_marks_empty_directory_status_unhealthy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_row = IntegrationSettings.load()
+    settings_row.authentik_api_token = "test-token"  # noqa: S105 - 测试用假 token.
+    settings_row.save()
+    monkeypatch.setattr(
+        AuthentikDirectoryClient,
+        "get_status",
+        lambda _self: DingTalkDirectoryStatus(source_slug="dingtalk", sync=()),
+    )
+
+    result = dependency_health_checks._check_authentik_directory(  # noqa: SLF001
+        dependency_health_checks.authentik_runtime_config(),
+    )
+
+    assert result.status == "unhealthy"
+    assert "sync 必须为非空列表" in result.error_summary
+
+
 def test_dependency_health_check_rejects_get() -> None:
     client = _logged_in_superuser("health-check-method-admin")
 
@@ -169,12 +195,8 @@ def test_dependency_health_check_rejects_get() -> None:
 
 
 def test_dependency_health_check_requires_superuser() -> None:
-    _ = UserMirror.objects.create(authentik_user_id="health-check-normal-user")
     client = Client(HTTP_HOST="localhost")
-    session = client.session
-    session[AUTHENTIK_SESSION_KEY] = "health-check-normal-user"
-    session["easyauth_authentik_groups"] = ["Employees"]
-    session.save()
+    authenticate_console_user(client, "health-check-normal-user")
 
     response = client.post(CHECK_API_URL)
 
@@ -182,7 +204,17 @@ def test_dependency_health_check_requires_superuser() -> None:
 
 
 def _return_directory_status(_self: AuthentikDirectoryClient) -> DingTalkDirectoryStatus:
-    return DingTalkDirectoryStatus(source_slug="dingtalk", sync=())
+    return DingTalkDirectoryStatus(
+        source_slug="dingtalk",
+        sync=(
+            {
+                "corp_id": "corp-1",
+                "generation": 1,
+                "status": "success",
+                "counters": {"users": 12, "departments": 3},
+            },
+        ),
+    )
 
 
 def _raise_directory_unavailable(_self: AuthentikDirectoryClient) -> DingTalkDirectoryStatus:
@@ -191,10 +223,5 @@ def _raise_directory_unavailable(_self: AuthentikDirectoryClient) -> DingTalkDir
 
 
 def _logged_in_superuser(username: str) -> Client:
-    _ = UserMirror.objects.create(authentik_user_id=username)
     client = Client(HTTP_HOST="localhost")
-    session = client.session
-    session[AUTHENTIK_SESSION_KEY] = username
-    session["easyauth_authentik_groups"] = ["EasyAuth Admins"]
-    session.save()
-    return client
+    return authenticate_console_admin(client, username)

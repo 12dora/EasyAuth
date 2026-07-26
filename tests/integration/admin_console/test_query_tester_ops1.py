@@ -14,16 +14,17 @@ from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode
 from easyauth.applications.models import (
     App,
+    AppCredential,
     AppMembership,
     AppScope,
-    AppStaticToken,
     AuthorizationGroup,
     AuthorizationGroupGrant,
     Permission,
 )
-from easyauth.applications.services import StaticTokenService
+from easyauth.applications.services import AppCredentialService
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import AccessGrant, AccessGrantGroup
+from tests.integration.admin_console.auth_helpers import authenticate_console_user
 
 pytestmark = pytest.mark.django_db
 
@@ -42,7 +43,7 @@ def test_ops1_console_query_tester_runs_real_permission_query_without_storing_to
     client = _logged_in_client("owner-ops1-query-success")
     app = _owned_app("ops1-query-success", "owner-ops1-query-success")
     _scope(app, "SELF")
-    issue = StaticTokenService.create_token(app=app, name="query tester")
+    issue = AppCredentialService.create_static_token(app=app, name="query tester")
     user = UserMirror.objects.create(authentik_user_id="query-user")
     group = AuthorizationGroup.objects.create(app=app, key="auditor", kind="role", name="Auditor")
     permission = Permission.objects.create(
@@ -98,7 +99,7 @@ def test_ops1_console_query_tester_returns_empty_snapshot_with_versions() -> Non
     # Given: App 有静态 token, 测试用户存在但没有任何授权组或直授权限。
     client = _logged_in_client("owner-ops1-query-empty")
     app = _owned_app("ops1-query-empty", "owner-ops1-query-empty")
-    issue = StaticTokenService.create_token(app=app, name="query tester")
+    issue = AppCredentialService.create_static_token(app=app, name="query tester")
     user = UserMirror.objects.create(authentik_user_id="query-empty-user")
     _ = AccessGrant.objects.create(user=user, app=app)
 
@@ -126,7 +127,7 @@ def test_ops1_console_query_tester_explains_401_403_and_422_errors() -> None:
     client = _logged_in_client("owner-ops1-query-errors")
     app = _owned_app("ops1-query-errors", "owner-ops1-query-errors")
     other_app = App.objects.create(app_key="ops1-query-other", name="Other")
-    other_issue = StaticTokenService.create_token(app=other_app, name="other token")
+    other_issue = AppCredentialService.create_static_token(app=other_app, name="other token")
 
     # When: 分别通过 private API 提交空用户、无效 token、跨 App token。
     missing_user = client.post(
@@ -158,16 +159,19 @@ def test_ops1_console_query_tester_rejects_disabled_token_and_disabled_app() -> 
     # Given: owner 有目标 App, 同时存在禁用 token 和禁用 App 的 token。
     client = _logged_in_client("owner-ops1-query-disabled")
     app = _owned_app("ops1-query-disabled", "owner-ops1-query-disabled")
-    disabled_token_issue = StaticTokenService.create_token(app=app, name="disabled token")
-    _ = AppStaticToken.objects.filter(id=disabled_token_issue.credential_id).update(
+    disabled_token_issue = AppCredentialService.create_static_token(app=app, name="disabled token")
+    _ = AppCredential.objects.filter(id=disabled_token_issue.credential.id).update(
         is_active=False,
     )
     disabled_app = App.objects.create(
         app_key="ops1-query-disabled-app",
         name="Disabled App",
-        is_active=False,
     )
-    disabled_app_issue = StaticTokenService.create_token(app=disabled_app, name="disabled app")
+    disabled_app_issue = AppCredentialService.create_static_token(
+        app=disabled_app,
+        name="disabled app",
+    )
+    _ = App.objects.filter(id=disabled_app.id).update(is_active=False)
 
     # When: 联调 API 分别提交禁用 token 和禁用 App token。
     disabled_token = client.post(
@@ -192,7 +196,7 @@ def test_ops1_console_query_tester_preserves_submitted_token_bytes() -> None:
     # Given: owner 有目标 App 和有效 token。
     client = _logged_in_client("owner-ops1-query-token-bytes")
     app = _owned_app("ops1-query-token-bytes", "owner-ops1-query-token-bytes")
-    issue = StaticTokenService.create_token(app=app, name="query tester")
+    issue = AppCredentialService.create_static_token(app=app, name="query tester")
 
     # When: 联调 API 提交末尾带空格的 token。
     response = client.post(
@@ -211,7 +215,7 @@ def test_ops1_console_query_tester_fails_fast_for_invalid_ttl_configuration() ->
     # Given: 联调 API 命中非法 TTL 配置。
     client = _logged_in_client("owner-ops1-query-invalid-ttl")
     app = _owned_app("ops1-query-invalid-ttl", "owner-ops1-query-invalid-ttl")
-    issue = StaticTokenService.create_token(app=app, name="query tester")
+    issue = AppCredentialService.create_static_token(app=app, name="query tester")
     user = UserMirror.objects.create(authentik_user_id="query-invalid-ttl-user")
     _ = AccessGrant.objects.create(user=user, app=app)
 
@@ -228,7 +232,7 @@ def test_ops1_console_query_tester_explains_internal_permission_query_error() ->
     # Given: App token 有效, 但测试用户数据状态异常会触发权限查询内部校验失败。
     client = _logged_in_client("owner-ops1-query-internal-error")
     app = _owned_app("ops1-query-internal-error", "owner-ops1-query-internal-error")
-    issue = StaticTokenService.create_token(app=app, name="query tester")
+    issue = AppCredentialService.create_static_token(app=app, name="query tester")
     user = UserMirror.objects.create(authentik_user_id="query-broken-user", status="unsupported")
     _ = AccessGrant.objects.create(user=user, app=app)
 
@@ -279,7 +283,7 @@ def test_ops1_console_query_test_api_allows_owner_and_developer(
     client = _logged_in_client(username)
     app = _member_app(f"ops1-query-api-{membership_role}", username, membership_role)
     _scope(app, "SELF")
-    issue = StaticTokenService.create_token(app=app, name="query api")
+    issue = AppCredentialService.create_static_token(app=app, name="query api")
     user = UserMirror.objects.create(authentik_user_id=f"query-api-user-{membership_role}")
     group = AuthorizationGroup.objects.create(
         app=app,
@@ -415,5 +419,5 @@ def _owned_app(app_key: str, owner_user_id: str) -> App:
 def _logged_in_client(username: str) -> Client:
     _ = User.objects.create_user(username=username, password=LOGIN_VALUE)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    authenticate_console_user(client, username)
     return client

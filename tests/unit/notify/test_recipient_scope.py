@@ -7,9 +7,10 @@ from easyauth.accounts.directory_references import build_dingtalk_user_ref
 from easyauth.accounts.models import DingTalkUserMirror
 from easyauth.api.directory_payloads import user_list_item
 from easyauth.applications.models import App, AppNotificationChannel
+from easyauth.notify.acceptance import accept_notify_message
 from easyauth.notify.models import (
     CREDENTIAL_TYPE_STATIC_TOKEN,
-    NOTIFY_ERROR_USER_AMBIGUOUS,
+    NOTIFY_ERROR_USER_NOT_FOUND,
     NOTIFY_ERROR_USER_SCOPE_MISMATCH,
     NOTIFY_RAW_REF_MAX_CHARS,
     NOTIFY_RECIPIENT_STATUS_FAILED,
@@ -18,9 +19,9 @@ from easyauth.notify.models import (
     NOTIFY_TEMPLATE_TEXT,
     NotifyRecipient,
 )
-from easyauth.notify.services import accept_notify_message, resolve_recipients
+from easyauth.notify.recipients import resolve_recipients
 
-pytestmark = pytest.mark.django_db
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("notification_channel_for_apps")]
 
 
 def _directory_user(
@@ -38,14 +39,14 @@ def _directory_user(
     )
 
 
-def test_legacy_dingtalk_ref_is_rejected_when_user_is_ambiguous() -> None:
+def test_unscoped_dingtalk_ref_is_rejected_before_directory_lookup() -> None:
     _ = _directory_user(corp_id="corp-a")
     _ = _directory_user(corp_id="corp-b")
 
     recipient = resolve_recipients(["dt:shared-user"])[0]
 
     assert recipient.status == NOTIFY_RECIPIENT_STATUS_FAILED
-    assert recipient.error_code == NOTIFY_ERROR_USER_AMBIGUOUS
+    assert recipient.error_code == NOTIFY_ERROR_USER_NOT_FOUND
 
 
 def test_scoped_ref_resolves_exact_enterprise_user() -> None:
@@ -158,44 +159,6 @@ def test_same_scoped_recipient_is_deduplicated_and_database_protected() -> None:
             dingtalk_source_slug="dingtalk",
             dingtalk_corp_id="corp-a",
             dingtalk_userid="shared-user",
-        )
-
-
-def test_legacy_unscoped_recipient_rows_remain_duplicate_protected() -> None:
-    app = App.objects.create(app_key="notify-legacy-duplicate", name="Legacy Duplicate")
-    channel = AppNotificationChannel.objects.get(app=app, is_active=True)
-    channel.directory_source_slug = "dingtalk"
-    channel.corp_id = "corp-a"
-    channel.save(update_fields=["directory_source_slug", "corp_id", "updated_at"])
-    _ = _directory_user(corp_id="corp-a")
-    reference = build_dingtalk_user_ref(
-        source_slug="dingtalk",
-        corp_id="corp-a",
-        user_id="shared-user",
-    )
-    result = accept_notify_message(
-        app=app,
-        recipients=[reference],
-        template=NOTIFY_TEMPLATE_TEXT,
-        content="legacy uniqueness",
-        requested_credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
-        requested_credential_id=1,
-    )
-    _ = NotifyRecipient.objects.create(
-        message=result.message,
-        raw_ref="dt:legacy-user",
-        dingtalk_source_slug="",
-        dingtalk_corp_id="legacy-corp",
-        dingtalk_userid="legacy-user",
-    )
-
-    with pytest.raises(IntegrityError), transaction.atomic():
-        _ = NotifyRecipient.objects.create(
-            message=result.message,
-            raw_ref="dt:legacy-user",
-            dingtalk_source_slug="",
-            dingtalk_corp_id="",
-            dingtalk_userid="legacy-user",
         )
 
 

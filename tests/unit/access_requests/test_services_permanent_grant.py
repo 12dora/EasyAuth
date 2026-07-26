@@ -14,7 +14,14 @@ from easyauth.access_requests.services import (
     AccessRequestSubmissionError,
 )
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App, ApprovalRule, AuthorizationGroup
+from easyauth.applications.models import (
+    App,
+    ApprovalRule,
+    AppScope,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
+    Permission,
+)
 from easyauth.grants.models import AccessGrant
 
 pytestmark = pytest.mark.django_db
@@ -26,6 +33,22 @@ def _group_with_rule(app: App) -> AuthorizationGroup:
         app=app,
         authorization_group=group,
         approver_userids=["manager-001"],
+    )
+    scope, _created = AppScope.objects.get_or_create(
+        app=app,
+        key="GLOBAL",
+        defaults={"name": "Global"},
+    )
+    permission = Permission.objects.create(
+        app=app,
+        key="admin.permission",
+        name="Admin Permission",
+        supported_scopes=[scope.key],
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key=scope.key,
     )
     return group
 

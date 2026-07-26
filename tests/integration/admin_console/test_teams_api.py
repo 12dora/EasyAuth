@@ -13,6 +13,10 @@ from easyauth.accounts.models import USER_STATUS_DEPARTED, UserMirror
 from easyauth.api.errors import JsonValue
 from easyauth.audit.models import AuditLog
 from easyauth.teams.models import Team, TeamMember
+from tests.integration.admin_console.auth_helpers import (
+    authenticate_console_admin,
+    authenticate_console_user,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -195,14 +199,14 @@ def test_non_superuser_cannot_access_teams() -> None:
 def _logged_in_superuser(username: str) -> Client:
     _ = User.objects.create_superuser(username=username, password=LOGIN_VALUE)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    authenticate_console_admin(client, username)
     return client
 
 
 def _logged_in_user(username: str) -> Client:
     _ = User.objects.create_user(username=username, password=LOGIN_VALUE)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    authenticate_console_user(client, username)
     return client
 
 

@@ -10,9 +10,11 @@ import pytest
 from django.contrib.auth.models import User
 from django.test import Client
 from django.utils import timezone
+from pydantic import TypeAdapter
 
 from easyauth.access_requests.models import REQUEST_STATUS_SUBMITTED, AccessRequest
 from easyauth.accounts.models import UserMirror
+from easyauth.api.errors import JsonValue
 from easyauth.applications.models import (
     App,
     AppScope,
@@ -20,7 +22,7 @@ from easyauth.applications.models import (
     AuthorizationGroupGrant,
     Permission,
 )
-from easyauth.applications.services import StaticTokenService
+from easyauth.applications.services import AppCredentialService
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import (
     GRANT_STATUS_REVOKED,
@@ -28,6 +30,7 @@ from easyauth.grants.models import (
     AccessGrantGroup,
     AccessGrantPermission,
 )
+from tests.integration.admin_console.auth_helpers import authenticate_console_admin
 
 pytestmark = pytest.mark.django_db
 
@@ -36,6 +39,7 @@ ACCESS_REQUESTS_API_URL: Final = "/console/api/v1/operations/access-requests"
 ACCESS_GRANTS_API_URL: Final = "/console/api/v1/operations/access-grants"
 EMERGENCY_REVOKES_API_URL: Final = "/console/api/v1/operations/emergency-revokes"
 AUDIT_LOGS_API_URL: Final = "/console/api/v1/audit-logs"
+JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 
 
 class HttpResponseLike(Protocol):
@@ -153,7 +157,7 @@ def test_ops3_access_grants_supports_version_current_revoked_and_expiration_filt
     assert str(revoked.id) in body
     assert "ops3-grant-filter-other" not in body
     assert _json_int(response, "total_items") == 1
-    item = response.json()["data"][0]
+    item = _json_object(_json_list(_response_json(response)["data"])[0])
     assert "grant_type" not in item
     assert "grant_expires_at" not in item
     assert item["authorization_groups"] == [
@@ -165,6 +169,29 @@ def test_ops3_access_grants_supports_version_current_revoked_and_expiration_filt
         },
     ]
     assert item["direct_grants"] == []
+
+
+@pytest.mark.parametrize(
+    ("url", "query", "field"),
+    [
+        (ACCESS_REQUESTS_API_URL, {"status": "typo"}, "status"),
+        (ACCESS_REQUESTS_API_URL, {"request_type": "typo"}, "request_type"),
+        (ACCESS_GRANTS_API_URL, {"status": "typo"}, "status"),
+    ],
+)
+def test_ops3_operations_reject_unknown_enum_filters(
+    url: str,
+    query: dict[str, str],
+    field: str,
+) -> None:
+    client = _logged_in_superuser("ops3-invalid-enum-admin")
+
+    response = client.get(url, query)
+
+    body = _response_json(response)
+    error = _json_object(body["error"])
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert error["details"] == {"field": field, "value": "typo"}
 
 
 def test_ops3_audit_logs_supports_target_time_range_and_pagination() -> None:
@@ -232,9 +259,10 @@ def test_ops3_rejects_invalid_filter_values(
     response = client.get(url, parameters)
 
     # Then: 请求失败关闭, 不得按未过滤全集返回成功。
-    payload = response.json()
+    payload = _response_json(response)
+    error = _json_object(payload["error"])
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
-    assert payload["error"]["details"] == {
+    assert error["details"] == {
         "field": field,
         "value": parameters[field],
     }
@@ -246,7 +274,7 @@ def test_ops3_emergency_revoke_removes_public_permission_query_result() -> None:
     target_user = UserMirror.objects.create(authentik_user_id="ops3-public-revoke-target")
     app = App.objects.create(app_key="ops3-public-revoke-app", name="Emergency CRM")
     _ = AppScope.objects.create(app=app, key="SELF", name="Self")
-    issue = StaticTokenService.create_token(app=app, name="CRM integration")
+    issue = AppCredentialService.create_static_token(app=app, name="CRM integration")
     permission = Permission.objects.create(
         app=app,
         key="invoice.read",
@@ -294,8 +322,24 @@ def test_ops3_emergency_revoke_removes_public_permission_query_result() -> None:
 def _logged_in_superuser(username: str) -> Client:
     _ = User.objects.create_superuser(username=username, password=LOGIN_VALUE)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    _ = authenticate_console_admin(client, username)
     return client
+
+
+def _response_json(response: HttpResponseLike) -> dict[str, JsonValue]:
+    parsed = JSON_VALUE_ADAPTER.validate_json(response.content)
+    assert isinstance(parsed, dict), response.content.decode()
+    return parsed
+
+
+def _json_object(value: JsonValue) -> dict[str, JsonValue]:
+    assert isinstance(value, dict)
+    return value
+
+
+def _json_list(value: JsonValue) -> list[JsonValue]:
+    assert isinstance(value, list)
+    return value
 
 
 def _json_int(response: HttpResponseLike, key: str) -> int:

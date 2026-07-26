@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from importlib import import_module
 from pathlib import Path
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.db import DatabaseError, IntegrityError, connection
 
 from easyauth.applications.models import (
     App,
@@ -136,6 +138,100 @@ def test_authorization_group_grant_rejects_cross_app_permission_when_cleaned() -
     assert error.value.message_dict == {
         "permission": ["Permission must belong to the authorization group app."],
     }
+
+
+def test_authorization_group_grant_cross_app_permission_is_rejected_by_database() -> None:
+    # Given
+    crm = App.objects.create(app_key="crm-db", name="CRM")
+    erp = App.objects.create(app_key="erp-db", name="ERP")
+    _ = AppScope.objects.create(app=crm, key="GLOBAL", name="Global")
+    group = AuthorizationGroup.objects.create(app=crm, key="ADMIN", kind="role", name="Admin")
+    permission = Permission.objects.create(
+        app=erp,
+        key="invoice.read.db",
+        name="Read invoices",
+        supported_scopes=["GLOBAL"],
+    )
+
+    # When / Then
+    with pytest.raises(IntegrityError):
+        _ = AuthorizationGroupGrant.objects.create(
+            authorization_group=group,
+            permission=permission,
+            scope_key="GLOBAL",
+        )
+
+
+@pytest.mark.django_db(transaction=True)
+def test_authorization_group_grant_migration_scan_blocks_existing_bad_rows() -> None:
+    # Given
+    migration = import_module(
+        "easyauth.applications.migrations.0029_managed_scope_policy_relationship_triggers",
+    )
+    crm = App.objects.create(app_key="crm-auth-grant-scan", name="CRM")
+    erp = App.objects.create(app_key="erp-auth-grant-scan", name="ERP")
+    _ = AppScope.objects.create(app=crm, key="GLOBAL", name="Global")
+    group = AuthorizationGroup.objects.create(app=crm, key="ADMIN-SCAN", kind="role", name="Admin")
+    permission = Permission.objects.create(
+        app=erp,
+        key="invoice.scan",
+        name="Invoice Scan",
+        supported_scopes=["GLOBAL"],
+    )
+
+    with connection.schema_editor() as schema_editor:
+        migration.drop_triggers(None, schema_editor)
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO applications_authorizationgroupgrant
+                    (authorization_group_id, permission_id, scope_key, is_active,
+                     created_at, updated_at)
+                VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                [group.id, permission.id, "GLOBAL", True],
+            )
+
+        # When / Then
+        with (
+            connection.schema_editor() as schema_editor,
+            pytest.raises(migration.ApplicationRelationshipMigrationError, match="count=1"),
+        ):
+            migration.assert_existing_relationships(None, schema_editor)
+    finally:
+        AuthorizationGroupGrant.objects.filter(
+            authorization_group=group,
+            permission=permission,
+        ).delete()
+        with connection.schema_editor() as schema_editor:
+            migration.install_triggers(None, schema_editor)
+
+
+def test_authorization_group_grant_raw_cross_app_write_is_rejected_by_database() -> None:
+    # Given
+    crm = App.objects.create(app_key="crm-auth-grant-raw", name="CRM")
+    erp = App.objects.create(app_key="erp-auth-grant-raw", name="ERP")
+    _ = AppScope.objects.create(app=crm, key="GLOBAL", name="Global")
+    group = AuthorizationGroup.objects.create(app=crm, key="ADMIN-RAW", kind="role", name="Admin")
+    permission = Permission.objects.create(
+        app=erp,
+        key="invoice.raw",
+        name="Invoice Raw",
+        supported_scopes=["GLOBAL"],
+    )
+
+    # When / Then
+    with pytest.raises(DatabaseError), connection.cursor() as cursor:
+        cursor.execute(
+            """
+                INSERT INTO applications_authorizationgroupgrant
+                    (authorization_group_id, permission_id, scope_key, is_active,
+                     created_at, updated_at)
+                VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+            [group.id, permission.id, "GLOBAL", True],
+        )
 
 
 def test_authorization_group_grant_rejects_unsupported_scope_when_cleaned() -> None:

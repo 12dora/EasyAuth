@@ -9,6 +9,7 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class DingTalkOrgSummary:
+    source_slug: str = ""
     corp_id: str = ""
     user_id: str = ""
     primary_department_name: str = ""
@@ -19,8 +20,10 @@ def apply_dingtalk_org_context(user: UserMirror, org: object) -> list[str]:
     if not isinstance(org, dict):
         # 没有组织上下文时不改写任何字段, 避免用缺失 claim 清空事实数据。
         return []
-    parsed = parse_org_context(org)
+    org_mapping = cast("dict[str, object]", org)
+    parsed = parse_org_context(org_mapping)
     changed_fields: list[str] = []
+    changed_fields.extend(_set_if_changed(user, "dingtalk_source_slug", parsed.source_slug))
     changed_fields.extend(_set_if_changed(user, "dingtalk_corp_id", parsed.corp_id))
     changed_fields.extend(_set_if_changed(user, "dingtalk_userid", parsed.user_id))
     # 上下文存在时 department/manager 以上游为准, 包括被清空的情况。
@@ -34,6 +37,7 @@ def parse_org_context(org: object) -> DingTalkOrgSummary:
         return DingTalkOrgSummary()
     org_mapping = cast("dict[str, object]", org)
     return DingTalkOrgSummary(
+        source_slug=_string(org_mapping.get("source_slug")),
         corp_id=_string(org_mapping.get("corp_id")),
         user_id=_string(org_mapping.get("user_id")),
         primary_department_name=_primary_department_name(org_mapping.get("departments")),

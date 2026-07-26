@@ -61,6 +61,11 @@ class AuthentikAdminUserNotFoundError(AuthentikAdminError):
         super().__init__(USER_NOT_FOUND_MESSAGE)
 
 
+class AuthentikAdminPaginationLimitError(AuthentikAdminError):
+    def __init__(self) -> None:
+        super().__init__(PAGINATION_LIMIT_MESSAGE)
+
+
 @dataclass(frozen=True, slots=True)
 class AccountDisableResult:
     user_pk: int
@@ -116,6 +121,17 @@ class AuthentikAdminClient:
             revoked_session_count=revoked,
         )
 
+    def user_group_names_by_uid(self, authentik_user_uid: str) -> tuple[str, ...]:
+        """按 uid(OIDC sub)读取 Authentik 当前权威组名。"""
+        deadline = self._monotonic() + _TOTAL_OPERATION_SECONDS
+        user_pk = self._find_user_pk_by_uid(authentik_user_uid, deadline=deadline)
+        payload = self._request_json(
+            "GET",
+            f"/api/v3/core/users/{user_pk}/",
+            deadline=deadline,
+        )
+        return _user_group_names(payload)
+
     def _find_user_pk_by_uid(self, uid: str, *, deadline: float) -> int:
         # uid 是只读散列, core users API 不支持按它过滤; 离职是低频操作,
         # 分页拉取后本地匹配, 避免为此给 fork 加自定义端点。
@@ -149,6 +165,8 @@ class AuthentikAdminClient:
             if page == total_pages:
                 break
             page += 1
+        else:
+            raise AuthentikAdminPaginationLimitError
         raise AuthentikAdminUserNotFoundError
 
     def _revoke_sessions(self, user_pk: int, *, deadline: float) -> int:
@@ -182,7 +200,7 @@ class AuthentikAdminClient:
                 break
             page = next_page
         else:
-            raise AuthentikAdminError(PAGINATION_LIMIT_MESSAGE)
+            raise AuthentikAdminPaginationLimitError
 
         for session_uuid in session_uuids:
             _ = self._request_json(
@@ -293,3 +311,23 @@ def _session_page(payload: AdminJson, *, expected_page: int) -> tuple[list[Admin
     ):
         raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
     return entries, next_page
+
+
+def _user_group_names(payload: AdminJson) -> tuple[str, ...]:
+    groups = payload.get("groups")
+    if not isinstance(groups, list):
+        raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
+    names: list[str] = []
+    for item in cast("list[object]", groups):
+        if isinstance(item, str):
+            if item:
+                names.append(item)
+            continue
+        if isinstance(item, dict):
+            entry = cast("AdminJson", item)
+            name = entry.get("name")
+            if isinstance(name, str) and name:
+                names.append(name)
+                continue
+        raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
+    return tuple(sorted(set(names)))

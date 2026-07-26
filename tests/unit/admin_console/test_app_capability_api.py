@@ -10,8 +10,9 @@ from django.contrib.sessions.middleware import SessionMiddleware
 from django.http import JsonResponse
 from django.test import RequestFactory, override_settings
 
-from easyauth.accounts.auth import AUTHENTIK_GROUPS_SESSION_KEY, AUTHENTIK_SESSION_KEY
+from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import UserMirror
+from easyauth.admin_console import identity
 from easyauth.admin_console.app_capability_api import (
     console_app_capabilities,
     console_app_capability_detail,
@@ -32,6 +33,13 @@ if TYPE_CHECKING:
 type JsonObject = dict[str, JsonValue]
 
 pytestmark = pytest.mark.django_db
+
+_AUTHORITY_GROUPS_BY_UID: dict[str, tuple[str, ...]] = {}
+
+
+class _FakeAuthentikAuthority:
+    def user_group_names_by_uid(self, authentik_user_uid: str) -> tuple[str, ...]:
+        return _AUTHORITY_GROUPS_BY_UID.get(authentik_user_uid, ())
 
 
 @override_settings(EASYAUTH_CONSOLE_SUPERUSER_GROUPS=("easyauth-admins",))
@@ -271,8 +279,9 @@ def _console_request(
         raise AssertionError(message)
     middleware = SessionMiddleware(lambda _request: JsonResponse({}))
     middleware.process_request(request)
+    _AUTHORITY_GROUPS_BY_UID[user_id] = groups
+    identity.AuthentikAdminClient.from_settings = lambda: _FakeAuthentikAuthority()  # type: ignore[method-assign]
     request.session[AUTHENTIK_SESSION_KEY] = user_id
-    request.session[AUTHENTIK_GROUPS_SESSION_KEY] = list(groups)
     request.session.save()
     request.user = AnonymousUser()
     return request

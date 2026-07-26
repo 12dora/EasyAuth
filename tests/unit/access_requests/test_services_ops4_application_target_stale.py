@@ -6,6 +6,7 @@ import pytest
 from django.utils import timezone
 
 from easyauth.access_requests.models import (
+    DECISION_ACTOR_USER,
     GRANT_TYPE_PERMANENT,
     REQUEST_STATUS_APPROVED,
     REQUEST_STATUS_GRANT_APPLIED,
@@ -332,6 +333,10 @@ def _approved_request(
     app: App,
     request_type: str = REQUEST_TYPE_CHANGE,
 ) -> AccessRequest:
+    base_grant = None
+    if request_type != REQUEST_TYPE_GRANT:
+        base_grant = AccessGrant.objects.get(user=user, app=app, is_current=True)
+    decided_at = timezone.now()
     return AccessRequest.objects.create(
         user=user,
         app=app,
@@ -342,7 +347,12 @@ def _approved_request(
         idempotency_key=f"{app.app_key}:{request_type}:approved",
         payload_digest="a" * 64,
         reason="审批已通过",
-        approved_at=timezone.now(),
+        base_grant=base_grant,
+        base_grant_revision=base_grant.version if base_grant is not None else None,
+        approved_at=decided_at,
+        decided_at=decided_at,
+        decided_by="approver",
+        decision_actor_type=DECISION_ACTOR_USER,
     )
 
 

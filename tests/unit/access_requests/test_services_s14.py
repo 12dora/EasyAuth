@@ -19,7 +19,14 @@ from easyauth.access_requests.services import (
     AccessRequestSubmissionError,
 )
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App, ApprovalRule, AuthorizationGroup
+from easyauth.applications.models import (
+    App,
+    ApprovalRule,
+    AppScope,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
+    Permission,
+)
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import AccessGrant
 
@@ -43,6 +50,25 @@ def _approval_rule(app: App, group: AuthorizationGroup) -> ApprovalRule:
     )
 
 
+def _active_group_grant(app: App, group: AuthorizationGroup, *, key: str) -> None:
+    scope, _created = AppScope.objects.get_or_create(
+        app=app,
+        key="GLOBAL",
+        defaults={"name": "全局"},
+    )
+    permission = Permission.objects.create(
+        app=app,
+        key=key,
+        name=key,
+        supported_scopes=[scope.key],
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key=scope.key,
+    )
+
+
 def test_s14_submit_grant_request_creates_submitted_request_without_creating_grant() -> None:
     # Given: 一个员工选择了可申请授权组。
     user = UserMirror.objects.create(authentik_user_id="s14-service-user")
@@ -55,6 +81,7 @@ def test_s14_submit_grant_request_creates_submitted_request_without_creating_gra
         requestable=True,
     )
     _ = _approval_rule(app, group)
+    _active_group_grant(app, group, key="crm.admin")
 
     # When: 员工提交授权申请。
     access_request = AccessRequestService.submit_grant_request(
@@ -297,6 +324,7 @@ def test_s14_submit_timed_grant_request_preserves_requested_expiration() -> None
         requestable=True,
     )
     _ = _approval_rule(app, group)
+    _active_group_grant(app, group, key="crm.operator")
     grant_expires_at = timezone.now() + timedelta(days=7)
 
     # When: 员工提交限时申请。

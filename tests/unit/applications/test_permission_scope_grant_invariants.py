@@ -25,7 +25,7 @@ from easyauth.applications.permission_templates import (
     apply_permission_template,
     parse_permission_template,
 )
-from easyauth.applications.services import StaticTokenService
+from easyauth.applications.services import AppCredentialService
 
 pytestmark = pytest.mark.django_db
 
@@ -121,7 +121,7 @@ def test_readiness_blocks_active_grant_for_inactive_scope() -> None:
         authorization_group=group,
         approver_userids=["manager-001"],
     )
-    _ = StaticTokenService.create_token(app=app, name="readiness token")
+    _ = AppCredentialService.create_static_token(app=app, name="readiness token")
     scope.is_active = False
     scope.save(update_fields=["is_active", "updated_at"])
 

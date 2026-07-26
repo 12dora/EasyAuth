@@ -13,10 +13,10 @@ from easyauth.applications.oauth import (
 )
 from easyauth.applications.services import (
     APP_CREDENTIAL_TYPE_STATIC_TOKEN,
+    AppCredentialService,
     AppPrincipal,
     StaticTokenAppDisabledError,
     StaticTokenAuthenticationError,
-    StaticTokenService,
 )
 
 if TYPE_CHECKING:
@@ -41,7 +41,7 @@ class AppBearerAuthentication(BaseAuthentication):
                 raise AuthenticationFailed(_INVALID_CREDENTIAL_MESSAGE)
 
         try:
-            principal = StaticTokenService.authenticate_for_api(token)
+            principal = AppCredentialService.authenticate_static_token_for_api(token)
         except StaticTokenAppDisabledError as error:
             raise PermissionDenied(_DISABLED_APP_MESSAGE) from error
         except StaticTokenAuthenticationError:

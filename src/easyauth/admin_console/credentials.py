@@ -12,7 +12,7 @@ from easyauth.applications.oauth_models import OAuthClientBinding
 from easyauth.applications.services import (
     APP_CREDENTIAL_STATIC_KIND,
     AppCredentialService,
-    StaticTokenService,
+    StaticTokenAppDisabledError,
 )
 from easyauth.audit.services import AuditRecord, AuditService
 
@@ -66,24 +66,27 @@ def create_static_token_for_console(
     capabilities: list[str] | None = None,
 ) -> OneTimeSecret:
     normalized_capabilities = normalize_credential_capabilities(capabilities or [])
-    issue = StaticTokenService.create_token(
-        app=app,
-        name=name,
-        capabilities=normalized_capabilities,
-    )
+    try:
+        issue = AppCredentialService.create_static_token(
+            app=app,
+            name=name,
+            capabilities=normalized_capabilities,
+        )
+    except StaticTokenAppDisabledError as exc:
+        raise CredentialOperationError(code="app_disabled", credential_id=exc.app_id) from exc
     _record_credential_event(
         CredentialEvent(
             app=app,
             actor=actor,
             action="console_static_token_created",
             credential_type=APP_CREDENTIAL_STATIC_KIND,
-            credential_id=issue.credential_id,
+            credential_id=issue.credential.id,
             capabilities=normalized_capabilities,
         ),
     )
     return OneTimeSecret(
         kind="static_token",
-        credential_id=issue.credential_id,
+        credential_id=issue.credential.id,
         label="app_token",
         value=issue.plaintext_token,
     )
@@ -96,19 +99,22 @@ def rotate_static_token_for_console(
     actor: CredentialActor,
 ) -> OneTimeSecret:
     _ = _static_credential_for_app(app=app, credential_id=credential_id)
-    issue = StaticTokenService.rotate_token(credential_id=credential_id)
+    try:
+        issue = AppCredentialService.rotate_static_token_by_id(credential_id)
+    except StaticTokenAppDisabledError as exc:
+        raise CredentialOperationError(code="app_disabled", credential_id=exc.app_id) from exc
     _record_credential_event(
         CredentialEvent(
             app=app,
             actor=actor,
             action="console_static_token_rotated",
             credential_type=APP_CREDENTIAL_STATIC_KIND,
-            credential_id=issue.credential_id,
+            credential_id=issue.credential.id,
         ),
     )
     return OneTimeSecret(
         kind="static_token",
-        credential_id=issue.credential_id,
+        credential_id=issue.credential.id,
         label="app_token",
         value=issue.plaintext_token,
     )

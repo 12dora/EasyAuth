@@ -33,11 +33,12 @@ class _RefreshClientStub:
     departments: list[dict[str, object]] = field(default_factory=list)
     org_contexts: dict[tuple[str, str], dict[str, object]] = field(default_factory=dict)
     triggered_corp_ids: list[str] = field(default_factory=list)
+    source_slug: str = "dingtalk"
 
     def get_status(self) -> DingTalkDirectoryStatus:
         entry = self.status_script.pop(0) if len(self.status_script) > 1 else self.status_script[0]
         return DingTalkDirectoryStatus(
-            source_slug="dingtalk",
+            source_slug=self.source_slug,
             sync=(cast("DirectoryJson", entry),),
         )
 
@@ -45,13 +46,17 @@ class _RefreshClientStub:
         self.triggered_corp_ids.append(corp_id)
 
     def iter_departments(self) -> list[dict[str, object]]:
-        return self.departments
+        return [_with_source_slug(item, self.source_slug) for item in self.departments]
 
     def iter_users(self) -> list[dict[str, object]]:
-        return self.users
+        return [_with_source_slug(item, self.source_slug) for item in self.users]
 
     def get_user_org(self, corp_id: str, user_id: str) -> dict[str, object]:
-        return self.org_contexts[(corp_id, user_id)]
+        return _with_source_slug(self.org_contexts[(corp_id, user_id)], self.source_slug)
+
+
+def _with_source_slug(item: dict[str, object], source_slug: str) -> dict[str, object]:
+    return {"source_slug": source_slug, **item}
 
 
 def _status_entry(

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from django.http import HttpRequest, JsonResponse
 from django.utils import timezone
 
@@ -19,6 +21,9 @@ from easyauth.admin_console.permission_payloads import (
     PermissionUpdatePayload,
 )
 from easyauth.applications.models import Permission, PermissionGroup
+
+if TYPE_CHECKING:
+    from easyauth.api.errors import JsonValue
 
 
 def permission_update_payload(
@@ -144,8 +149,8 @@ def _apply_permission_state_fields(
         permission.risk_level = payload.risk_level
 
 
-def _normalized_scopes(scopes: list[str]) -> list[str]:
-    normalized: list[str] = []
+def _normalized_scopes(scopes: list[str]) -> list[JsonValue]:
+    normalized: list[JsonValue] = []
     seen: set[str] = set()
     for scope in scopes:
         key = scope.strip()

@@ -51,26 +51,6 @@ class ConsoleConfigurationError(Exception):
 
 
 @transaction.atomic
-def create_permission(
-    *,
-    app: App,
-    key: str,
-    name: str,
-    actor: ConsoleMutationActor,
-) -> Permission:
-    permission = Permission(app=app, key=key, name=name)
-    permission.full_clean()
-    permission.save()
-    _record_config_event(
-        action="permission_created",
-        app=app,
-        actor=actor,
-        metadata={"permission_key": permission.key},
-    )
-    return permission
-
-
-@transaction.atomic
 def create_approval_rule(input_data: ApprovalRuleCreateMutation) -> ApprovalRule:
     rule = ApprovalRule(
         app=input_data.app,
@@ -91,7 +71,7 @@ def create_approval_rule(input_data: ApprovalRuleCreateMutation) -> ApprovalRule
             approver_count=len(input_data.approver_userids),
         ),
     )
-    bump_catalog_version(
+    _ = bump_catalog_version(
         input_data.app,
         actor_id=input_data.actor.actor_id,
         reason="approval_rule_created",
@@ -140,7 +120,7 @@ def update_approval_rule(input_data: ApprovalRuleMutation) -> ApprovalRule:
             is_active=input_data.is_active,
         ),
     )
-    bump_catalog_version(
+    _ = bump_catalog_version(
         input_data.app,
         actor_id=input_data.actor.actor_id,
         reason="approval_rule_updated",

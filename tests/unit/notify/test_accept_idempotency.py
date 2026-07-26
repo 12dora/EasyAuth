@@ -4,6 +4,8 @@ import pytest
 
 from easyauth.accounts.models import DingTalkUserMirror, UserMirror
 from easyauth.applications.models import App
+from easyauth.notify.acceptance import accept_notify_message
+from easyauth.notify.contracts import NotifyAcceptError
 from easyauth.notify.models import (
     CREDENTIAL_TYPE_STATIC_TOKEN,
     NOTIFY_MESSAGE_STATUS_FAILED,
@@ -13,13 +15,13 @@ from easyauth.notify.models import (
     NotifyMessage,
     NotifyRecipient,
 )
-from easyauth.notify.services import NotifyAcceptError, accept_notify_message
 from easyauth.outbox.models import OutboxEvent
 
-pytestmark = pytest.mark.django_db
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("notification_channel_for_apps")]
 
 CORP_ID = "corp-accept"
 SOURCE = "dingtalk-primary"
+MIXED_RECIPIENT_TOTAL = 2
 
 
 def _seed_active_user(*, authentik: str, dingtalk: str) -> None:
@@ -32,6 +34,7 @@ def _seed_active_user(*, authentik: str, dingtalk: str) -> None:
     )
     _ = UserMirror.objects.create(
         authentik_user_id=authentik,
+        dingtalk_source_slug=SOURCE,
         dingtalk_userid=dingtalk,
         dingtalk_corp_id=CORP_ID,
     )
@@ -43,6 +46,7 @@ def _accept(
     recipients: list[str],
     content: str = "hello",
     dedup_key: str = "",
+    biz_tag: str = "",
 ) -> object:
     return accept_notify_message(
         app=app,
@@ -50,6 +54,7 @@ def _accept(
         template=NOTIFY_TEMPLATE_TEXT,
         content=content,
         dedup_key=dedup_key,
+        biz_tag=biz_tag,
         requested_credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
         requested_credential_id=1,
     )
@@ -120,6 +125,30 @@ def test_accept_conflict_when_dedup_key_payload_differs() -> None:
     assert NotifyMessage.objects.filter(app=app).count() == 1
 
 
+def test_accept_conflict_when_only_biz_tag_differs() -> None:
+    app = App.objects.create(app_key="notify-accept-biz-tag", name="Notify Biz Tag")
+    _seed_active_user(authentik="u-biz", dingtalk="dt-biz")
+
+    _ = _accept(
+        app,
+        recipients=["u-biz"],
+        content="body",
+        dedup_key="event:biz",
+        biz_tag="audit",
+    )
+
+    with pytest.raises(NotifyAcceptError) as exc:
+        _ = _accept(
+            app,
+            recipients=["u-biz"],
+            content="body",
+            dedup_key="event:biz",
+            biz_tag="security",
+        )
+    assert exc.value.kind == "conflict"
+    assert NotifyMessage.objects.filter(app=app).count() == 1
+
+
 def test_accept_empty_dedup_key_always_creates() -> None:
     app = App.objects.create(app_key="notify-accept-empty-dedup", name="Notify Empty")
     _seed_active_user(authentik="u4", dingtalk="dt-u4")
@@ -149,6 +178,22 @@ def test_accept_all_recipients_failed_enters_failed_without_outbox() -> None:
     ).exists()
     recipient = NotifyRecipient.objects.get(message=result.message)
     assert recipient.status == NOTIFY_RECIPIENT_STATUS_FAILED
+
+
+def test_accept_mixed_recipients_persists_rejected_summary_immediately() -> None:
+    app = App.objects.create(app_key="notify-accept-mixed-fail", name="Notify Mixed Fail")
+    _seed_active_user(authentik="u-mixed", dingtalk="dt-mixed")
+
+    result = _accept(app, recipients=["u-mixed", "dt:nobody-here"], content="x")
+
+    result.message.refresh_from_db()
+    assert result.message.status == NOTIFY_MESSAGE_STATUS_PENDING
+    assert result.message.recipient_total == MIXED_RECIPIENT_TOTAL
+    assert result.message.recipient_failed == 1
+    assert NotifyRecipient.objects.filter(
+        message=result.message,
+        status=NOTIFY_RECIPIENT_STATUS_FAILED,
+    ).count() == 1
 
 
 def _patch_dedup_precheck_miss(monkeypatch: pytest.MonkeyPatch) -> None:

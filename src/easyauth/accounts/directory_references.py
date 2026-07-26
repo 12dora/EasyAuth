@@ -13,6 +13,8 @@ SCOPED_REF_VERSION: Final = "v1"
 SCOPED_REF_PART_COUNT: Final = 4
 USER_IDENTIFIER_MISSING_MESSAGE: Final = "用户引用缺少标识符。"
 DEPARTMENT_IDENTIFIER_MISSING_MESSAGE: Final = "部门引用缺少标识符。"
+UNSCOPED_DINGTALK_USER_REF_MESSAGE: Final = "钉钉用户引用必须使用 scoped dt:v1 引用。"
+UNSCOPED_DEPARTMENT_REF_MESSAGE: Final = "部门引用必须使用 scoped dept:v1 引用。"
 SCOPED_COMPONENTS_MISSING_MESSAGE: Final = "scoped directory reference components must be non-empty"
 ReferenceKind = Literal["authentik", "dingtalk"]
 
@@ -58,7 +60,7 @@ def parse_user_ref(user_ref: str) -> ParsedUserReference:
         return ParsedUserReference(kind="authentik", identifier=user_ref)
     remainder = user_ref.removeprefix(DT_PREFIX)
     if not remainder.startswith(f"{SCOPED_REF_VERSION}:"):
-        return ParsedUserReference(kind="dingtalk", identifier=remainder)
+        raise InvalidDirectoryReferenceError(UNSCOPED_DINGTALK_USER_REF_MESSAGE)
     source_slug, corp_id, user_id = _parse_scoped_ref(remainder, reference_type="user")
     return ParsedUserReference(
         kind="dingtalk",
@@ -71,7 +73,7 @@ def parse_user_ref(user_ref: str) -> ParsedUserReference:
 
 def parse_department_ref(reference: str) -> ParsedDepartmentReference:
     if not reference.startswith(f"{DEPT_PREFIX}{SCOPED_REF_VERSION}:"):
-        return ParsedDepartmentReference(department_id=reference)
+        raise InvalidDirectoryReferenceError(UNSCOPED_DEPARTMENT_REF_MESSAGE)
     remainder = reference.removeprefix(DEPT_PREFIX)
     source_slug, corp_id, department_id = _parse_scoped_ref(
         remainder,
@@ -95,6 +97,7 @@ def resolve_directory_user(user_ref: str) -> DingTalkUserMirror | None:
             return None
         rows = list(
             DingTalkUserMirror.objects.filter(
+                source_slug=user.dingtalk_source_slug,
                 corp_id=user.dingtalk_corp_id,
                 user_id=user.dingtalk_userid,
             ).order_by("source_slug", "corp_id", "user_id")[:2],
@@ -157,34 +160,8 @@ def resolve_user_mirror(user_ref: str) -> UserMirror | None:
         raise InvalidDirectoryReferenceError(USER_IDENTIFIER_MISSING_MESSAGE)
     if parsed.kind == "authentik":
         return UserMirror.objects.filter(authentik_user_id=parsed.identifier).first()
-    if parsed.scoped:
-        # 新同步策略保留目录 tombstone, scoped ref 不应绕开 source scope 回退到 UserMirror。
-        return None
-    rows = list(
-        UserMirror.objects.filter(dingtalk_userid=parsed.identifier).order_by(
-            "dingtalk_corp_id",
-            "authentik_user_id",
-        )[:2],
-    )
-    if len(rows) > 1:
-        candidate_refs = tuple(
-            build_dingtalk_user_ref(
-                source_slug=mirror.source_slug,
-                corp_id=mirror.corp_id,
-                user_id=mirror.user_id,
-            )
-            for row in rows
-            for mirror in DingTalkUserMirror.objects.filter(
-                corp_id=row.dingtalk_corp_id,
-                user_id=row.dingtalk_userid,
-            ).order_by("source_slug")[:1]
-        )
-        raise AmbiguousDirectoryReferenceError(
-            reference=user_ref,
-            candidate_refs=candidate_refs,
-            reference_type="user",
-        )
-    return rows[0] if rows else None
+    # 新同步策略保留目录 tombstone, scoped ref 不应绕开 source scope 回退到 UserMirror。
+    return None
 
 
 def _unique_user_or_raise(

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import hashlib
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from django.conf import settings
 from django.core.cache import cache
@@ -29,16 +29,19 @@ def rate_limit_exceeded(
     if cache.add(key, 1, window_seconds):
         return limit < 1
     try:
-        count = cache.incr(key)
+        count = cast("object", cache.incr(key))
     except ValueError:
         cache.set(key, 1, window_seconds)
         return limit < 1
+    if not isinstance(count, int):
+        msg = "限流缓存计数必须是整数。"
+        raise TypeError(msg)
     return count > limit
 
 
 def over_limit(namespace: str, identity: str | int, *, limit: int) -> bool:
     # 只读判定当前计数是否已达阈值(不增量), 用于在实际计费/放行前先挡住。
-    count = cache.get(_key(namespace, identity), 0)
+    count = cast("object", cache.get(_key(namespace, identity), 0))
     return isinstance(count, int) and count >= limit
 
 
@@ -57,5 +60,5 @@ def client_ip(request: HttpRequest) -> str:
         parts = [part.strip() for part in forwarded.split(",") if part.strip()]
         if len(parts) >= trusted_hops:
             return parts[-trusted_hops]
-    remote = request.META.get("REMOTE_ADDR", "")
+    remote = cast("object", request.META.get("REMOTE_ADDR", ""))
     return remote if isinstance(remote, str) else ""

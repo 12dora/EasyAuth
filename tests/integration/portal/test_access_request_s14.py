@@ -11,6 +11,7 @@ from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
 from easyauth.access_requests.models import (
+    DECISION_ACTOR_USER,
     GRANT_TYPE_PERMANENT,
     GRANT_TYPE_TIMED,
     REQUEST_STATUS_APPROVED,
@@ -33,6 +34,7 @@ from easyauth.applications.models import (
     ApprovalRule,
     AppScope,
     AuthorizationGroup,
+    AuthorizationGroupGrant,
     Permission,
 )
 from easyauth.grants.models import AccessGrant
@@ -192,6 +194,7 @@ def test_s14_portal_status_list_distinguishes_request_statuses() -> None:
             applied_at=timezone.now() if status == REQUEST_STATUS_GRANT_APPLIED else None,
             idempotency_key=f"s14-status-{status}",
             payload_digest="a" * 64,
+            **_decision_fields(status),
         )
         _ = AccessRequestGroup.objects.create(
             access_request=access_request,
@@ -319,7 +322,7 @@ def test_s14_submission_validation_requires_approver_for_managed_users_target() 
 
     # When / Then: 没有审批人时 submission_validation 返回 MANAGED_USERS 专用错误。
     with pytest.raises(AccessRequestSubmissionError) as exc_info:
-        AccessRequestService.submit_access_request(
+        _ = AccessRequestService.submit_access_request(
             AccessRequestSubmission(
                 user=user,
                 app=app,
@@ -380,4 +383,40 @@ def _requestable_group_with_rule(*, app: App, key: str, name: str) -> Authorizat
         authorization_group=group,
         approver_userids=["manager-001"],
     )
+    scope, _created = AppScope.objects.get_or_create(
+        app=app,
+        key="GLOBAL",
+        defaults={"name": "全局"},
+    )
+    permission = Permission.objects.create(
+        app=app,
+        key=f"{key}.permission",
+        name=f"{name}权限",
+        supported_scopes=[scope.key],
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key=scope.key,
+    )
     return group
+
+
+def _decision_fields(status: str) -> dict[str, object]:
+    if status == REQUEST_STATUS_SUBMITTED:
+        return {}
+    decided_at = timezone.now()
+    fields: dict[str, object] = {
+        "decided_at": decided_at,
+        "decided_by": "approver",
+        "decision_actor_type": DECISION_ACTOR_USER,
+    }
+    if status in {
+        REQUEST_STATUS_APPROVED,
+        REQUEST_STATUS_GRANT_APPLIED,
+        REQUEST_STATUS_GRANT_FAILED,
+    }:
+        fields["approved_at"] = decided_at
+    if status == REQUEST_STATUS_REJECTED:
+        fields["decision_comment"] = "不同意"
+    return fields

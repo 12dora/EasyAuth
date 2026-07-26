@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.utils import timezone
 
 from easyauth.outbox.models import (
@@ -172,3 +172,20 @@ def test_dispatch_does_not_reclaim_active_lease_or_future_event() -> None:
     result = dispatch_pending_events(now=now, send_task=lambda *_args, **_kwargs: object())
 
     assert result.claimed == 0
+
+
+def test_database_rejects_outbox_state_without_required_shape() -> None:
+    with pytest.raises(IntegrityError), transaction.atomic():
+        _ = OutboxEvent.objects.create(
+            event_key="test:bad-published",
+            task_name="task.bad",
+            status=OUTBOX_STATUS_PUBLISHED,
+        )
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        _ = OutboxEvent.objects.create(
+            event_key="test:bad-flight",
+            task_name="task.bad",
+            status=OUTBOX_STATUS_IN_FLIGHT,
+            lease_expires_at=timezone.now() + timedelta(seconds=60),
+        )

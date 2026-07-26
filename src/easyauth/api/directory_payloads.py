@@ -170,31 +170,38 @@ def load_authentik_ids_by_dingtalk(
     if not pairs:
         return {}
     query = Q()
-    for _source_slug, corp_id, dingtalk_userid in pairs:
-        query |= Q(dingtalk_corp_id=corp_id, dingtalk_userid=dingtalk_userid)
+    for source_slug, corp_id, dingtalk_userid in pairs:
+        query |= Q(
+            dingtalk_source_slug=source_slug,
+            dingtalk_corp_id=corp_id,
+            dingtalk_userid=dingtalk_userid,
+        )
     rows = cast(
-        "list[tuple[str, str, str]]",
+        "list[tuple[str, str, str, str]]",
         list(
             UserMirror.objects.filter(query).values_list(
+                "dingtalk_source_slug",
                 "dingtalk_corp_id",
                 "dingtalk_userid",
                 "authentik_user_id",
             ),
         ),
     )
-    ids_by_corp_user: dict[tuple[str, str], str] = {}
-    duplicates: set[tuple[str, str]] = set()
-    for corp_id, dingtalk_userid, authentik_user_id in rows:
-        key = (corp_id, dingtalk_userid)
-        if key in ids_by_corp_user:
+    ids_by_binding: dict[tuple[str, str, str], str] = {}
+    duplicates: set[tuple[str, str, str]] = set()
+    for source_slug, corp_id, dingtalk_userid, authentik_user_id in rows:
+        key = (source_slug, corp_id, dingtalk_userid)
+        if key in ids_by_binding:
             duplicates.add(key)
         else:
-            ids_by_corp_user[key] = authentik_user_id
+            ids_by_binding[key] = authentik_user_id
     return {
-        (source_slug, corp_id, dingtalk_userid): ids_by_corp_user[(corp_id, dingtalk_userid)]
+        (source_slug, corp_id, dingtalk_userid): ids_by_binding[
+            (source_slug, corp_id, dingtalk_userid)
+        ]
         for source_slug, corp_id, dingtalk_userid in pairs
-        if (corp_id, dingtalk_userid) in ids_by_corp_user
-        and (corp_id, dingtalk_userid) not in duplicates
+        if (source_slug, corp_id, dingtalk_userid) in ids_by_binding
+        and (source_slug, corp_id, dingtalk_userid) not in duplicates
     }
 
 

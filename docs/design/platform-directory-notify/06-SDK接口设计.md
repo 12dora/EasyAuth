@@ -75,7 +75,7 @@ def send_notification(
     """发送钉钉工作通知(异步受理)。POST {app_base}/notify/messages。
 
     recipients 元素为目录条目返回的 opaque user_ref（每项服务端上限 4096 字符）;
-    legacy 引用仅为 deprecated 兼容输入，不得新构造。template 取
+    不接受未作用域旧引用。template 取
     "text" | "markdown" | "action_card"。返回 {"message_id", "accepted", ...}。
     幂等: 相同 dedup_key 重复调用返回同一 message_id 且 accepted=False。
     """
@@ -95,7 +95,7 @@ def get_notification(self, message_id: str) -> dict[str, Any]:
   遇到 `409 CONFLICT` 由消费方从首页重拉，SDK 不自动重试；
 - 模板常量随手可用：在 `client.py` 顶部导出
   `NOTIFY_TEMPLATE_TEXT / NOTIFY_TEMPLATE_MARKDOWN / NOTIFY_TEMPLATE_ACTION_CARD`。
-  旧 `DINGTALK_REF_PREFIX` 仅保留兼容；新代码不得据此构造引用。
+  不导出 `DINGTALK_REF_PREFIX`；下游必须消费目录返回的 opaque ref。
 - 用户、部门、主管响应都带 `source_slug` / `corp_id` 与 canonical ref。SDK 原样透传；
   下游不得解析或重建 ref，并应将其用于详情、主管、过滤与通知。
 
@@ -150,10 +150,10 @@ for item in status["recipients"]:
 ```
 
 要点示范（会写进集成指南）：主管可能从未登录过 EasyAuth（`user_id` 为 null），
-但 `user_ref` 始终是服务端给出的可回传引用。legacy 裸 ID / `dt:` 只在全局唯一时
-兼容；directory endpoint 的歧义为 409、畸形 scoped ref 为 422。notify 请求体合法时，
-畸形/未知/歧义/scope mismatch 分别成为逐收件人 `USER_NOT_FOUND`、
-`USER_AMBIGUOUS`、`USER_SCOPE_MISMATCH`，POST 仍为 202。
+但 `user_ref` 始终是服务端给出的可回传引用。裸 ID / 未作用域 `dt:` 不再接受；
+directory endpoint 的畸形 ref 为 422。notify 请求体合法时，畸形、未知或
+scope mismatch 分别成为逐收件人 `USER_NOT_FOUND`、`USER_SCOPE_MISMATCH`，
+POST 仍为 202。
 权限查询、directory 与 notify 必须使用三条独立凭据和三个 client 实例，不得复用
 token；每条凭据只授予该链路所需 capability。
 
@@ -162,8 +162,8 @@ token；每条凭据只授予该链路所需 capability。
 - `0.2.0` 引入 directory/notify 方法与 manifest `capabilities`；
   `0.3.0` 引入结构化错误语义和 HTTPS 默认约束。版本同时写入
   `sdk/python/pyproject.toml` 与 `descriptor.py` 的 `SDK_VERSION`。
-- 错误处理矩阵：directory endpoints 的 legacy ref 歧义为 `409`、畸形 scoped ref
-  为 `422`。notify 请求体合法时，畸形/未知/歧义/scope mismatch 由 202 后的逐收件人
+- 错误处理矩阵：directory endpoints 的畸形或未作用域 ref 为 `422`。
+  notify 请求体合法时，畸形、未知或 scope mismatch 由 202 后的逐收件人
   error code 表达；只有 recipients 数量/空值/单项 >4096 等请求体校验才返回 `422`；
   `429` 按 Retry-After 重试；`401` / `403` 视为凭据或 capability 配置问题；
   `5xx` 与网络错误标记 `retryable=true`。

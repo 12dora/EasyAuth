@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING
 
 from django.utils import timezone
 
@@ -27,6 +27,9 @@ from easyauth.applications.permission_template_types import (
     TemplateAction,
 )
 from easyauth.audit.services import AuditRecord, AuditService
+
+if TYPE_CHECKING:
+    from easyauth.applications.models import JsonValue
 
 PERMISSION_TEMPLATE_IMPORTED_EVENT = "app_manifest_imported"
 
@@ -121,7 +124,7 @@ def bump_manifest_catalog_version(
     )
 
 
-def export_manifest(app: App) -> dict[str, Any]:
+def export_manifest(app: App) -> dict[str, JsonValue]:
     return {
         "schema_version": _latest_manifest_schema_version(app),
         "app": {
@@ -153,7 +156,7 @@ def export_manifest(app: App) -> dict[str, Any]:
                     name_en=group.name_en,
                     description_en=group.description_en,
                 ),
-                "parent_key": group.parent.key if group.parent_id else "",
+                "parent_key": _group_parent_key(group),
                 "display_order": group.display_order,
                 "is_active": group.is_active,
             }
@@ -170,7 +173,7 @@ def export_manifest(app: App) -> dict[str, Any]:
                     name_en=permission.name_en,
                     description_en=permission.description_en,
                 ),
-                "group_key": permission.group.key if permission.group_id else "",
+                "group_key": _permission_group_key(permission),
                 "supported_scopes": permission.supported_scopes,
                 "risk_level": permission.risk_level,
                 "is_active": permission.is_active,
@@ -320,7 +323,7 @@ def _approval_rule_actions(app: App, manifest: AppManifestInput) -> list[Templat
     actions.extend(
         TemplateAction("deactivate_approval_rule", key)
         for key, current in sorted(existing.items())
-        if key not in incoming and current is not None and current.is_active
+        if key not in incoming and current.is_active
     )
     return actions
 
@@ -598,7 +601,7 @@ def _bilingual_export_fields(*, name_en: str, description_en: str) -> dict[str, 
     return fields
 
 
-def _export_authorization_group(group: AuthorizationGroup) -> dict[str, Any]:
+def _export_authorization_group(group: AuthorizationGroup) -> dict[str, JsonValue]:
     return {
         "key": group.key,
         "kind": group.kind,
@@ -613,7 +616,9 @@ def _export_authorization_group(group: AuthorizationGroup) -> dict[str, Any]:
                 "scope": grant.scope_key,
                 "is_active": grant.is_active,
             }
-            for grant in group.grants.select_related("permission").order_by(
+            for grant in AuthorizationGroupGrant.objects.filter(authorization_group=group)
+            .select_related("permission")
+            .order_by(
                 "permission__key",
                 "scope_key",
             )
@@ -621,18 +626,24 @@ def _export_authorization_group(group: AuthorizationGroup) -> dict[str, Any]:
     }
 
 
-def _export_approval_rule(rule: ApprovalRule) -> dict[str, Any] | None:
+def _export_approval_rule(rule: ApprovalRule) -> dict[str, JsonValue] | None:
     if rule.authorization_group_id:
+        authorization_group = rule.authorization_group
+        if authorization_group is None:
+            return None
         return {
             "target_type": "authorization_group",
-            "target_key": rule.authorization_group.key,
+            "target_key": authorization_group.key,
             "approver_userids": rule.approver_userids,
             "is_active": rule.is_active,
         }
     if rule.permission_id:
+        permission = rule.permission
+        if permission is None:
+            return None
         return {
             "target_type": "permission",
-            "target_key": rule.permission.key,
+            "target_key": permission.key,
             "approver_userids": rule.approver_userids,
             "is_active": rule.is_active,
         }
@@ -640,9 +651,12 @@ def _export_approval_rule(rule: ApprovalRule) -> dict[str, Any] | None:
 
 
 def _grant_set(group: AuthorizationGroup) -> set[tuple[str, str, bool]]:
+    grants = AuthorizationGroupGrant.objects.filter(authorization_group=group).select_related(
+        "permission",
+    )
     return {
         (grant.permission.key, grant.scope_key, grant.is_active)
-        for grant in group.grants.select_related("permission")
+        for grant in grants
     }
 
 
@@ -652,9 +666,15 @@ def _incoming_grant_set(group: AppManifestAuthorizationGroupInput) -> set[tuple[
 
 def _approval_rule_key(rule: ApprovalRule) -> str:
     if rule.authorization_group_id:
-        return f"authorization_group:{rule.authorization_group.key}"
+        authorization_group = rule.authorization_group
+        if authorization_group is None:
+            return f"unknown:{rule.id}"
+        return f"authorization_group:{authorization_group.key}"
     if rule.permission_id:
-        return f"permission:{rule.permission.key}"
+        permission = rule.permission
+        if permission is None:
+            return f"unknown:{rule.id}"
+        return f"permission:{permission.key}"
     return f"unknown:{rule.id}"
 
 
@@ -663,8 +683,10 @@ def _approval_rule_input_key(rule: AppManifestApprovalRuleInput) -> str:
 
 
 def _group_parent_key(group: PermissionGroup) -> str:
-    return group.parent.key if group.parent_id else ""
+    parent = group.parent
+    return parent.key if parent is not None else ""
 
 
 def _permission_group_key(permission: Permission) -> str:
-    return permission.group.key if permission.group_id else ""
+    group = permission.group
+    return group.key if group is not None else ""

@@ -11,6 +11,7 @@ from easyauth.connectors.base import (
     ConnectorProbe,
     DesiredState,
     ExternalGroup,
+    ExternalGroupPage,
     ReconcileReport,
 )
 from easyauth.connectors.netbird.client import (
@@ -34,10 +35,15 @@ API_URL_INSECURE_MESSAGE: Final = "api_url 必须使用 https(仅本地开发允
 MISSING_MANAGED_GROUPS_MESSAGE: Final = (
     "映射的 NetBird 组不存在(external_ref 为不可变组 ID, 不支持自动创建): {refs}。"
 )
+FENCE_LOST_MESSAGE: Final = "连接器对账失去租约或 generation fence, 本轮已停止外部写入。"
 
 
 class _ApiBudgetExceededError(Exception):
     """内部信号: 本轮 API 预算耗尽, 对账提前收口为 partial。"""
+
+
+class _FenceLostError(Exception):
+    """内部信号: worker 已失去外部写入 fence, 必须终止本轮。"""
 
 
 @final
@@ -121,6 +127,24 @@ class NetBirdConnector(BaseConnector):
         ]
 
     @override
+    def iter_external_group_pages(
+        self,
+        config: dict[str, JsonValue],
+    ) -> tuple[ExternalGroupPage, ...]:
+        client = _client_from_config(config)
+        return tuple(
+            ExternalGroupPage(
+                groups=tuple(
+                    ExternalGroup(ref=group.group_id, name=group.name)
+                    for group in page
+                    if group.group_id and group.name
+                ),
+                cursor=str(index),
+            )
+            for index, page in enumerate(client.iter_group_pages(), start=1)
+        )
+
+    @override
     def external_account_id(self, config: dict[str, JsonValue]) -> str:
         return _client_from_config(config).get_account_id()
 
@@ -159,6 +183,7 @@ class NetBirdConnector(BaseConnector):
             ungranted_user_ids = _handle_ungranted_users(
                 client,
                 budget,
+                instance,
                 desired,
                 stats,
                 managed_group_ids=managed_group_ids,
@@ -169,6 +194,7 @@ class NetBirdConnector(BaseConnector):
             _shrink_desired_users(
                 client,
                 budget,
+                instance,
                 desired,
                 stats,
                 managed_group_ids=managed_group_ids,
@@ -192,6 +218,13 @@ class NetBirdConnector(BaseConnector):
                 stats=dict(stats),
                 ungranted_user_ids=tuple(ungranted_user_ids),
                 error=API_BUDGET_EXHAUSTED_MESSAGE,
+            )
+        except _FenceLostError:
+            return ReconcileReport(
+                status=RECONCILE_STATUS_FAILED,
+                stats=dict(stats),
+                ungranted_user_ids=tuple(ungranted_user_ids),
+                error=FENCE_LOST_MESSAGE,
             )
         stats["api_calls"] = budget.used
         if object_errors:
@@ -224,6 +257,8 @@ class NetBirdConnector(BaseConnector):
         if target is None or target.role != USER_ROLE_USER or target.is_blocked:
             # 不存在/已封禁无事可做; owner/admin 是护栏豁免账号, 同样不触碰。
             return True
+        if not _external_write_allowed(instance, target.user_id, require_active_user=False):
+            return False
         client.update_user(
             user_id=target.user_id,
             role=target.role,
@@ -308,6 +343,7 @@ def _expand_desired_users(  # noqa: C901, PLR0913 - 完整对账上下文。
 def _shrink_desired_users(  # noqa: PLR0913
     client: NetBirdClient,
     budget: _ApiBudget,
+    instance: ConnectorInstance,
     desired: DesiredState,
     stats: dict[str, int],
     *,
@@ -323,6 +359,9 @@ def _shrink_desired_users(  # noqa: PLR0913
         removals = (current.auto_group_ids & managed_group_ids) - want_group_ids
         if not removals:
             continue
+        if not _external_write_allowed(instance, user_id, require_active_user=False):
+            _bump(stats, "users_fenced")
+            raise _FenceLostError
         budget.charge()
         try:
             client.update_user(
@@ -350,6 +389,7 @@ def _shrink_desired_users(  # noqa: PLR0913
 def _handle_ungranted_users(  # noqa: PLR0913 - 对账循环的完整上下文, 拆包装反而失真。
     client: NetBirdClient,
     budget: _ApiBudget,
+    instance: ConnectorInstance,
     desired: DesiredState,
     stats: dict[str, int],
     *,
@@ -371,6 +411,9 @@ def _handle_ungranted_users(  # noqa: PLR0913 - 对账循环的完整上下文, 
         should_block = block_users_without_grant and not current.is_blocked
         if not managed_current and not should_block:
             continue
+        if not _external_write_allowed(instance, user_id, require_active_user=False):
+            _bump(stats, "users_fenced")
+            raise _FenceLostError
         budget.charge()
         try:
             client.update_user(
@@ -393,6 +436,22 @@ def _expansion_allowed(instance: ConnectorInstance, user_id: str) -> bool:
     from easyauth.connectors.services import expansion_allowed  # noqa: PLC0415
 
     return expansion_allowed(instance, user_id=user_id)
+
+
+def _external_write_allowed(
+    instance: ConnectorInstance,
+    user_id: str,
+    *,
+    require_active_user: bool,
+) -> bool:
+    # 局部导入避免框架加载连接器注册表时形成循环依赖。
+    from easyauth.connectors.services import external_write_allowed  # noqa: PLC0415
+
+    return external_write_allowed(
+        instance,
+        user_id=user_id,
+        require_active_user=require_active_user,
+    )
 
 
 def _bump(stats: dict[str, int], key: str, amount: int = 1) -> None:

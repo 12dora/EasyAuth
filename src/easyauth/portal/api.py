@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from http import HTTPStatus
 from typing import TYPE_CHECKING
 
@@ -48,6 +49,14 @@ MIN_EXPIRING_DAYS = 1
 MAX_EXPIRING_DAYS = 90
 
 
+@dataclass(frozen=True, slots=True)
+class _PaginationAdapter:
+    page: int
+    page_size: int
+    total_items: int
+    total_pages: int
+
+
 def portal_grants(request: HttpRequest) -> JsonResponse:
     match _active_user(request):
         case UserMirror() as user:
@@ -58,6 +67,8 @@ def portal_grants(request: HttpRequest) -> JsonResponse:
         page = current_grant_page_for_user(user, request.GET)
     except ManagedUsersResolutionUnavailableError as error:
         return _directory_unavailable_response(error)
+    except ValueError as error:
+        return _query_validation_response(str(error))
     return _page_response(page)
 
 
@@ -76,6 +87,8 @@ def portal_expiring_grants(request: HttpRequest) -> JsonResponse:
         page = expiring_grant_page_for_user(user, request.GET, days=days)
     except ManagedUsersResolutionUnavailableError as error:
         return _directory_unavailable_response(error)
+    except ValueError as error:
+        return _query_validation_response(str(error))
     return _page_response(page)
 
 
@@ -87,6 +100,14 @@ def _directory_unavailable_response(error: ManagedUsersResolutionUnavailableErro
     )
 
 
+def _query_validation_response(message: str) -> JsonResponse:
+    return _error_response(
+        ErrorCode.VALIDATION_ERROR,
+        message,
+        status=HTTPStatus.UNPROCESSABLE_ENTITY,
+    )
+
+
 def portal_access_requests(request: HttpRequest) -> JsonResponse:
     match _active_user(request):
         case UserMirror() as user:
@@ -95,7 +116,10 @@ def portal_access_requests(request: HttpRequest) -> JsonResponse:
             return response
     match request.method:
         case "GET":
-            return _page_response(access_request_page_for_user(user, request.GET))
+            try:
+                return _page_response(access_request_page_for_user(user, request.GET))
+            except ValueError as error:
+                return _query_validation_response(str(error))
         case "POST":
             return _submit_access_request(request, user)
         case _:
@@ -191,6 +215,8 @@ def _submit_access_request(request: HttpRequest, user: UserMirror) -> JsonRespon
                 direct_grants=direct_grants,
                 approver_user_ids=payload.approver_user_ids,
                 request_type=payload.request_type,
+                base_grant_id=payload.base_grant_id,
+                base_grant_revision=payload.base_grant_revision,
                 grant_type=payload.grant_type,
                 grant_expires_at=payload.grant_expires_at,
                 reason=payload.reason,
@@ -302,7 +328,16 @@ def _json_strings(values: tuple[str, ...]) -> list[JsonValue]:
 
 def _page_response(page: PortalPage) -> JsonResponse:
     return _json_response(
-        {"data": _json_objects(page.items), "pagination": pagination_item(page)},
+        {"data": _json_objects(page.items), "pagination": pagination_item(_pagination(page))},
+    )
+
+
+def _pagination(page: PortalPage) -> _PaginationAdapter:
+    return _PaginationAdapter(
+        page=page.page,
+        page_size=page.page_size,
+        total_items=page.total_items,
+        total_pages=page.total_pages,
     )
 
 

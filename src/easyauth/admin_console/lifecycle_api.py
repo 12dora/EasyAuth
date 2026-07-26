@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, ClassVar, cast
 
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
+from django.db.models import Prefetch
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -26,6 +27,19 @@ from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode
 from easyauth.api.pagination import pagination_item
 from easyauth.applications.models import App, AuthorizationGroup, Permission
+from easyauth.lifecycle.core import refresh_task_status
+from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
+from easyauth.lifecycle.handover import (
+    apply_team_item,
+    cancel_task,
+    delete_task,
+    execute_action,
+    poll_async_action,
+    preview_action,
+    retry_action,
+    skip_action,
+    update_action_receiver,
+)
 from easyauth.lifecycle.models import (
     HANDOVER_KIND_VALUES,
     TASK_STATUS_VALUES,
@@ -34,35 +48,26 @@ from easyauth.lifecycle.models import (
     HandoverTask,
     HandoverTeamItem,
     OnboardingTemplate,
-    OnboardingTemplateItem,
+    OnboardingTemplateRevision,
+    OnboardingTemplateRevisionItem,
     TransferPlan,
 )
-from easyauth.lifecycle.services import (
-    HandoverConflictError,
-    HandoverError,
-    apply_team_item,
-    build_transfer_grant_diff,
-    cancel_task,
-    confirm_transfer_grant_diff,
-    delete_task,
-    ensure_handover_task,
-    execute_action,
-    onboard_user,
-    poll_async_action,
-    preview_action,
-    refresh_task_status,
-    retry_action,
-    skip_action,
-    start_offboarding,
-    update_action_receiver,
-)
+from easyauth.lifecycle.offboarding import ensure_handover_task, start_offboarding
+from easyauth.lifecycle.onboarding import onboard_user
+from easyauth.lifecycle.transfer import build_transfer_grant_diff, confirm_transfer_grant_diff
 from easyauth.webhooks.hooks import HookCallError
 
 if TYPE_CHECKING:
+    from django.db.models import QuerySet
+
     from easyauth.api.errors import JsonValue
     from easyauth.api.pagination import Pagination
 
 type JsonObject = dict[str, "JsonValue"]
+
+ONBOARDING_TEMPLATE_DELETE_BLOCKED_MESSAGE = (
+    "岗位模板包含不可变修订, 不支持删除; 请改为停用。"
+)
 
 
 class HandoverTaskCreatePayload(BaseModel):
@@ -188,12 +193,10 @@ def lifecycle_handover_tasks(request: HttpRequest) -> JsonResponse:
             "-created_at",
             "-id",
         )
-        status = request.GET.get("status", "").strip()
-        if status in TASK_STATUS_VALUES:
-            queryset = queryset.filter(status=status)
-        kind = request.GET.get("kind", "").strip()
-        if kind in HANDOVER_KIND_VALUES:
-            queryset = queryset.filter(kind=kind)
+        filtered_queryset = _filter_handover_tasks(queryset, request)
+        if isinstance(filtered_queryset, JsonResponse):
+            return filtered_queryset
+        queryset = filtered_queryset
         try:
             page = paginate_queryset(queryset, request.GET)
         except OperationFilterValidationError as exc:
@@ -208,6 +211,35 @@ def lifecycle_handover_tasks(request: HttpRequest) -> JsonResponse:
     if request.method == "POST":
         return _create_task(request, actor_id)
     return method_not_allowed_response()
+
+
+def _filter_handover_tasks(
+    queryset: QuerySet[HandoverTask],
+    request: HttpRequest,
+) -> QuerySet[HandoverTask] | JsonResponse:
+    status = request.GET.get("status", "").strip()
+    if status in TASK_STATUS_VALUES:
+        queryset = queryset.filter(status=status)
+    elif status:
+        return operation_filter_error_response(
+            OperationFilterValidationError(
+                key="status",
+                value=status,
+                message="status 必须为 pending、in_progress、completed 或 cancelled。",
+            ),
+        )
+    kind = request.GET.get("kind", "").strip()
+    if kind in HANDOVER_KIND_VALUES:
+        return queryset.filter(kind=kind)
+    if kind:
+        return operation_filter_error_response(
+            OperationFilterValidationError(
+                key="kind",
+                value=kind,
+                message="kind 必须为 offboard 或 transfer。",
+            ),
+        )
+    return queryset
 
 
 def lifecycle_handover_task_detail(  # noqa: PLR0911 - HTTP 分支在入口显式返回。
@@ -518,7 +550,17 @@ def lifecycle_onboarding_templates(request: HttpRequest) -> JsonResponse:
         case JsonResponse() as response:
             return response
     if request.method == "GET":
-        templates = OnboardingTemplate.objects.order_by("name")
+        templates = OnboardingTemplate.objects.select_related("current_revision").prefetch_related(
+            Prefetch(
+                "current_revision__items",
+                queryset=OnboardingTemplateRevisionItem.objects.select_related(
+                    "app",
+                    "authorization_group",
+                    "permission",
+                ).order_by("app__app_key", "id"),
+                to_attr="_prefetched_items",
+            ),
+        ).order_by("name")
         items: list[JsonValue] = [_template_item(t) for t in templates]
         return json_response({"data": items})
     if request.method == "POST":
@@ -553,13 +595,21 @@ def lifecycle_onboarding_template_detail(  # noqa: PLR0911 - HTTP 分支在入�
             status = OnboardingTemplateStatusPayload.model_validate_json(request.body)
         except ValidationError:
             return _write_template(request, template=template)
-        template.is_active = status.is_active
-        template.save()
+        with transaction.atomic():
+            template = (
+                OnboardingTemplate.objects.select_for_update()
+                .select_related("current_revision")
+                .get(pk=template.id)
+            )
+            template.is_active = status.is_active
+            template.save(update_fields=["is_active", "updated_at"])
         return json_response({"onboarding_template": _template_item(template)})
     if request.method == "DELETE":
-        # 硬删除岗位模板: 关联的模板项(items)按 CASCADE 一并清除。
-        _ = template.delete()
-        return json_response({"deleted": True})
+        return error_response(
+            ErrorCode.SEMANTIC_VALIDATION_ERROR,
+            ONBOARDING_TEMPLATE_DELETE_BLOCKED_MESSAGE,
+            status=HTTPStatus.CONFLICT,
+        )
     return method_not_allowed_response()
 
 
@@ -712,13 +762,13 @@ def _write_template(
         .exists()
     ):
         return _validation_error("同名模板已存在。")
-    resolved_items: list[OnboardingTemplateItem] = []
+    resolved_items: list[OnboardingTemplateRevisionItem] = []
     for entry in payload.items:
         item = _resolve_template_item(entry)
         if isinstance(item, JsonResponse):
             return item
         try:
-            item.full_clean(exclude={"template"})
+            item.full_clean(exclude={"revision"})
         except DjangoValidationError as exc:
             return _validation_error("模板项参数无效。", {"errors": str(exc)})
         resolved_items.append(item)
@@ -735,14 +785,27 @@ def _write_template(
             template.description = payload.description
             template.is_active = payload.is_active
             template.save()
-            _ = OnboardingTemplateItem.objects.filter(template=template).delete()
+        next_revision = (
+            OnboardingTemplateRevision.objects.filter(template=template).count() + 1
+        )
+        revision = OnboardingTemplateRevision.objects.create(
+            template=template,
+            revision=next_revision,
+            name_snapshot=payload.name,
+            description_snapshot=payload.description,
+            is_active=payload.is_active,
+        )
         for item in resolved_items:
-            item.template = template
+            item.revision = revision
             item.save()
+        template.current_revision = revision
+        template.save(update_fields=["current_revision", "updated_at"])
     return json_response({"onboarding_template": _template_item(template)})
 
 
-def _resolve_template_item(entry: TemplateItemPayload) -> OnboardingTemplateItem | JsonResponse:
+def _resolve_template_item(
+    entry: TemplateItemPayload,
+) -> OnboardingTemplateRevisionItem | JsonResponse:
     app = App.objects.filter(app_key=entry.app_key, is_active=True).first()
     if app is None:
         return _validation_error(f"应用 {entry.app_key} 不存在或未启用。")
@@ -763,7 +826,7 @@ def _resolve_template_item(entry: TemplateItemPayload) -> OnboardingTemplateItem
             return _validation_error(f"权限 {entry.permission_key} 不存在。")
     else:
         return _validation_error("模板项必须指定授权组或权限。")
-    return OnboardingTemplateItem(
+    return OnboardingTemplateRevisionItem(
         app=app,
         authorization_group=group,
         permission=permission,
@@ -795,6 +858,7 @@ def _task_item(task: HandoverTask) -> JsonObject:
         "id": task.id,
         "kind": task.kind,
         "status": task.status,
+        "allowed_actions": _task_allowed_actions(task),
         "subject": {
             "user_id": subject.authentik_user_id,
             "name": subject.name,
@@ -807,6 +871,13 @@ def _task_item(task: HandoverTask) -> JsonObject:
         "created_at": task.created_at.isoformat(),
         "updated_at": task.updated_at.isoformat(),
     }
+
+
+def _task_allowed_actions(task: HandoverTask) -> list[JsonValue]:
+    actions: list[JsonValue] = []
+    if task.status == "cancelled":
+        actions.append("delete")
+    return actions
 
 
 def _task_detail(task: HandoverTask) -> JsonObject:
@@ -823,7 +894,11 @@ def _task_detail(task: HandoverTask) -> JsonObject:
     ]
     item["app_actions"] = actions
     item["team_items"] = team_items
-    plan = TransferPlan.objects.select_related("new_template").filter(task=task).first()
+    plan = (
+        TransferPlan.objects.select_related("new_template", "new_template_revision")
+        .filter(task=task)
+        .first()
+    )
     item["transfer_plan"] = _plan_item(plan) if plan is not None else None
     return item
 
@@ -885,6 +960,7 @@ def _grant_item(item: HandoverGrantItem) -> JsonObject:
 
 def _plan_item(plan: TransferPlan) -> JsonObject:
     template = plan.new_template
+    template_revision = plan.new_template_revision
     grant_diff = dict(plan.grant_diff)
     if plan.confirmed_at is not None:
         confirmed_by_name = {
@@ -904,6 +980,8 @@ def _plan_item(plan: TransferPlan) -> JsonObject:
     return {
         "template_id": template.id if template is not None else None,
         "template_name": template.name if template is not None else "",
+        "template_revision_id": template_revision.id if template_revision is not None else None,
+        "template_revision": template_revision.revision if template_revision is not None else None,
         "grant_diff": grant_diff,
         "revision": plan.revision,
         "confirmed_at": datetime_value(plan.confirmed_at),
@@ -912,11 +990,21 @@ def _plan_item(plan: TransferPlan) -> JsonObject:
 
 def _template_item(template: OnboardingTemplate) -> JsonObject:
     items: list[JsonValue] = []
-    template_items = OnboardingTemplateItem.objects.select_related(
-        "app",
-        "authorization_group",
-        "permission",
-    ).filter(template=template)
+    revision = template.current_revision
+    if revision is None:
+        template_items: tuple[OnboardingTemplateRevisionItem, ...] = ()
+    else:
+        template_items = tuple(
+            getattr(
+                revision,
+                "_prefetched_items",
+                OnboardingTemplateRevisionItem.objects.select_related(
+                    "app",
+                    "authorization_group",
+                    "permission",
+                ).filter(revision=revision),
+            ),
+        )
     for item in template_items:
         if item.authorization_group is not None:
             kind = "group"
@@ -944,6 +1032,8 @@ def _template_item(template: OnboardingTemplate) -> JsonObject:
         "name": template.name,
         "description": template.description,
         "is_active": template.is_active,
+        "current_revision_id": revision.id if revision is not None else None,
+        "current_revision": revision.revision if revision is not None else None,
         "items": items,
         "created_at": template.created_at.isoformat(),
         "updated_at": template.updated_at.isoformat(),

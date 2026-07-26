@@ -1,20 +1,23 @@
 from __future__ import annotations
 
+import threading
 from base64 import urlsafe_b64encode
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from email.message import Message
 from http import HTTPStatus
 from json import dumps
-from typing import TYPE_CHECKING, Final, Self
+from typing import TYPE_CHECKING, Final, Self, override
 from urllib.error import HTTPError, URLError
 from urllib.parse import parse_qs
 
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
+from django.contrib.sessions.backends.signed_cookies import SessionStore
 from django.test import Client, RequestFactory, override_settings
 
+from easyauth.accounts import oidc_exchange
 from easyauth.accounts.auth import (
     AUTHENTIK_SESSION_KEY,
     OIDC_ID_TOKEN_SESSION_KEY,
@@ -26,6 +29,8 @@ from easyauth.accounts.oidc_exchange import exchange_authorization_code_for_clai
 if TYPE_CHECKING:
     from types import TracebackType
     from urllib.request import Request
+
+    from django.http import HttpRequest
 
 pytestmark = pytest.mark.django_db
 
@@ -43,10 +48,22 @@ OIDC_STATE: Final = "s12-state"
 OIDC_NONCE: Final = "s12-nonce"
 OIDC_CODE: Final = "s12-code"
 OIDC_SUBJECT: Final = "s12-authentik-user"
+EXPECTED_ROTATED_JWKS_CALLS: Final = 2
+EXPECTED_CONCURRENT_JWKS_CALLS: Final = 1
+EXPIRED_CACHE_TIME: Final = 2_000.0
+FRESH_CACHE_TIME: Final = 1_000.0
+
+
+@pytest.fixture(autouse=True)
+def _clear_jwks_cache_between_tests() -> None:  # pyright: ignore[reportUnusedFunction]
+    oidc_exchange.clear_jwks_cache()
+
 
 @dataclass(frozen=True, slots=True)
 class FakeResponse:
     payload: object
+    content_length: str | None = None
+    consumed: bool = False
 
     def __enter__(self) -> Self:
         return self
@@ -59,10 +76,18 @@ class FakeResponse:
     ) -> None:
         return None
 
-    def read(self) -> bytes:
+    def read(self, _amount: int = -1) -> bytes:
+        if self.consumed:
+            return b""
+        object.__setattr__(self, "consumed", True)
         if isinstance(self.payload, bytes):
             return self.payload
         return dumps(self.payload).encode("utf-8")
+
+    def getheader(self, name: str) -> str | None:
+        if name == "Content-Length":
+            return self.content_length
+        return None
 
 
 def test_exchange_rejects_empty_client_secret_before_token_endpoint(
@@ -88,6 +113,47 @@ def test_exchange_rejects_empty_client_secret_before_token_endpoint(
         )
     assert error.value.field == "code_exchange"
     assert token_endpoint_called is False
+
+
+def test_exchange_rejects_oversized_token_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_urlopen(_request: Request, *, timeout: float) -> FakeResponse:
+        _ = timeout
+        return FakeResponse({}, content_length=str(64 * 1024 + 1))
+
+    monkeypatch.setattr("easyauth.accounts.oidc_exchange.urlopen", fake_urlopen)
+
+    with pytest.raises(OidcSessionError) as error:
+        _ = exchange_authorization_code_for_claims(
+            _exchange_request(),
+            OIDC_CODE,
+            _oidc_config(),
+        )
+    assert error.value.field == "code_exchange"
+
+
+def test_exchange_normalizes_body_read_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BrokenResponse(FakeResponse):
+        @override
+        def read(self, _amount: int = -1) -> bytes:
+            raise TimeoutError
+
+    def fake_urlopen(_request: Request, *, timeout: float) -> BrokenResponse:
+        _ = timeout
+        return BrokenResponse({})
+
+    monkeypatch.setattr("easyauth.accounts.oidc_exchange.urlopen", fake_urlopen)
+
+    with pytest.raises(OidcSessionError) as error:
+        _ = exchange_authorization_code_for_claims(
+            _exchange_request(),
+            OIDC_CODE,
+            _oidc_config(),
+        )
+    assert error.value.reason == "request failed"
 
 
 @override_settings(
@@ -175,6 +241,7 @@ def test_s12_callback_rejects_token_endpoint_failure_without_session_write(
         "jwk_not_rsa",
         "jwk_missing_modulus",
         "jwk_missing_exponent",
+        "jwk_invalid_exponent",
     ],
 )
 @override_settings(
@@ -250,11 +317,204 @@ def test_s12_callback_rejects_id_token_with_wrong_jwks_signature(
     assert NONCE_SESSION_KEY not in client.session
 
 
+def test_exchange_reuses_cached_jwks_for_same_issuer_and_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    oidc_exchange.clear_jwks_cache()
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    id_token = _signed_id_token(private_key, nonce=OIDC_NONCE)
+    jwk = _public_jwk(private_key.public_key())
+    jwks_calls = 0
+
+    def fake_urlopen(request: Request, *, timeout: float) -> FakeResponse:
+        _ = timeout
+        nonlocal jwks_calls
+        if request.full_url == TOKEN_ENDPOINT:
+            return FakeResponse({"id_token": id_token})
+        if request.full_url == JWKS_URL:
+            jwks_calls += 1
+            return FakeResponse({"keys": [jwk]})
+        raise AssertionError(request.full_url)
+
+    monkeypatch.setattr("easyauth.accounts.oidc_exchange.urlopen", fake_urlopen)
+
+    _ = exchange_authorization_code_for_claims(_exchange_request(), OIDC_CODE, _oidc_config())
+    _ = exchange_authorization_code_for_claims(_exchange_request(), OIDC_CODE, _oidc_config())
+
+    assert jwks_calls == 1
+
+
+def test_exchange_refreshes_jwks_once_when_kid_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    oidc_exchange.clear_jwks_cache()
+    first_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    rotated_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    first_token = _signed_id_token(first_key, nonce=OIDC_NONCE, kid="kid-1")
+    rotated_token = _signed_id_token(rotated_key, nonce=OIDC_NONCE, kid="kid-2")
+    token_responses = iter((first_token, rotated_token))
+    jwks_responses = iter(
+        (
+            _public_jwk(first_key.public_key(), kid="kid-1"),
+            _public_jwk(rotated_key.public_key(), kid="kid-2"),
+        ),
+    )
+    jwks_calls = 0
+
+    def fake_urlopen(request: Request, *, timeout: float) -> FakeResponse:
+        _ = timeout
+        nonlocal jwks_calls
+        if request.full_url == TOKEN_ENDPOINT:
+            return FakeResponse({"id_token": next(token_responses)})
+        if request.full_url == JWKS_URL:
+            jwks_calls += 1
+            return FakeResponse({"keys": [next(jwks_responses)]})
+        raise AssertionError(request.full_url)
+
+    monkeypatch.setattr("easyauth.accounts.oidc_exchange.urlopen", fake_urlopen)
+
+    _ = exchange_authorization_code_for_claims(_exchange_request(), OIDC_CODE, _oidc_config())
+    _ = exchange_authorization_code_for_claims(_exchange_request(), OIDC_CODE, _oidc_config())
+
+    assert jwks_calls == EXPECTED_ROTATED_JWKS_CALLS
+
+
+@override_settings(EASYAUTH_AUTHENTIK_OIDC_JWKS_CACHE_TTL_SECONDS=1)
+def test_exchange_refreshes_jwks_after_ttl_expires(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    oidc_exchange.clear_jwks_cache()
+    current_time = [FRESH_CACHE_TIME]
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    id_token = _signed_id_token(private_key, nonce=OIDC_NONCE)
+    jwk = _public_jwk(private_key.public_key())
+    jwks_calls = 0
+
+    def fake_urlopen(request: Request, *, timeout: float) -> FakeResponse:
+        _ = timeout
+        nonlocal jwks_calls
+        if request.full_url == TOKEN_ENDPOINT:
+            return FakeResponse({"id_token": id_token})
+        if request.full_url == JWKS_URL:
+            jwks_calls += 1
+            return FakeResponse({"keys": [jwk]})
+        raise AssertionError(request.full_url)
+
+    monkeypatch.setattr("easyauth.accounts.oidc_exchange.time.monotonic", lambda: current_time[0])
+    monkeypatch.setattr("easyauth.accounts.oidc_exchange.urlopen", fake_urlopen)
+
+    _ = exchange_authorization_code_for_claims(_exchange_request(), OIDC_CODE, _oidc_config())
+    current_time[0] = EXPIRED_CACHE_TIME
+    _ = exchange_authorization_code_for_claims(_exchange_request(), OIDC_CODE, _oidc_config())
+
+    assert jwks_calls == EXPECTED_ROTATED_JWKS_CALLS
+
+
+@override_settings(EASYAUTH_AUTHENTIK_OIDC_JWKS_CACHE_TTL_SECONDS=1)
+def test_exchange_rejects_expired_jwks_when_refresh_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    oidc_exchange.clear_jwks_cache()
+    current_time = [FRESH_CACHE_TIME]
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    id_token = _signed_id_token(private_key, nonce=OIDC_NONCE)
+    jwk = _public_jwk(private_key.public_key())
+    jwks_calls = 0
+
+    def fake_urlopen(request: Request, *, timeout: float) -> FakeResponse:
+        _ = timeout
+        nonlocal jwks_calls
+        if request.full_url == TOKEN_ENDPOINT:
+            return FakeResponse({"id_token": id_token})
+        if request.full_url == JWKS_URL:
+            jwks_calls += 1
+            if jwks_calls > 1:
+                message = "jwks unavailable"
+                raise URLError(message)
+            return FakeResponse({"keys": [jwk]})
+        raise AssertionError(request.full_url)
+
+    monkeypatch.setattr("easyauth.accounts.oidc_exchange.time.monotonic", lambda: current_time[0])
+    monkeypatch.setattr("easyauth.accounts.oidc_exchange.urlopen", fake_urlopen)
+
+    _ = exchange_authorization_code_for_claims(_exchange_request(), OIDC_CODE, _oidc_config())
+    current_time[0] = EXPIRED_CACHE_TIME
+
+    with pytest.raises(OidcSessionError) as error:
+        _ = exchange_authorization_code_for_claims(_exchange_request(), OIDC_CODE, _oidc_config())
+
+    assert error.value.reason == "request failed"
+    assert jwks_calls == EXPECTED_ROTATED_JWKS_CALLS
+
+
+@override_settings(EASYAUTH_AUTHENTIK_OIDC_JWKS_CACHE_TTL_SECONDS=1)
+def test_exchange_single_flight_refreshes_expired_jwks_once_for_concurrent_logins(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    oidc_exchange.clear_jwks_cache()
+    current_time = [FRESH_CACHE_TIME]
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    id_token = _signed_id_token(private_key, nonce=OIDC_NONCE)
+    jwk = _public_jwk(private_key.public_key())
+    jwks_calls = 0
+    refresh_started = threading.Event()
+    release_refresh = threading.Event()
+
+    def fake_urlopen(request: Request, *, timeout: float) -> FakeResponse:
+        _ = timeout
+        nonlocal jwks_calls
+        if request.full_url == TOKEN_ENDPOINT:
+            return FakeResponse({"id_token": id_token})
+        if request.full_url == JWKS_URL:
+            jwks_calls += 1
+            if jwks_calls > 1:
+                refresh_started.set()
+                _ = release_refresh.wait(timeout=2)
+            return FakeResponse({"keys": [jwk]})
+        raise AssertionError(request.full_url)
+
+    monkeypatch.setattr("easyauth.accounts.oidc_exchange.time.monotonic", lambda: current_time[0])
+    monkeypatch.setattr("easyauth.accounts.oidc_exchange.urlopen", fake_urlopen)
+
+    _ = exchange_authorization_code_for_claims(_exchange_request(), OIDC_CODE, _oidc_config())
+    current_time[0] = EXPIRED_CACHE_TIME
+
+    errors: list[BaseException] = []
+
+    def login() -> None:
+        try:
+            _ = exchange_authorization_code_for_claims(
+                _exchange_request(),
+                OIDC_CODE,
+                _oidc_config(),
+            )
+        except BaseException as error:  # noqa: BLE001 - 跨线程收集测试失败。
+            errors.append(error)
+
+    first = threading.Thread(target=login)
+    second = threading.Thread(target=login)
+    first.start()
+    second.start()
+    _ = refresh_started.wait(timeout=2)
+    release_refresh.set()
+    first.join(timeout=2)
+    second.join(timeout=2)
+
+    assert errors == []
+    assert jwks_calls - 1 == EXPECTED_CONCURRENT_JWKS_CALLS
+
+
 def _seed_oidc_attempt(client: Client) -> None:
     session = client.session
     session[STATE_SESSION_KEY] = OIDC_STATE
     session[NONCE_SESSION_KEY] = OIDC_NONCE
     session.save()
+
+
+def _exchange_request() -> HttpRequest:
+    request = RequestFactory().get("/auth/callback/")
+    request.session = SessionStore()
+    return request
 
 
 def _oidc_config(*, client_secret: str = CLIENT_SECRET) -> OidcClientConfig:
@@ -277,6 +537,7 @@ def _signed_id_token(
     *,
     nonce: str,
     algorithm: str = "RS256",
+    kid: str = "s12-kid",
 ) -> str:
     now = datetime.now(UTC)
     return jwt.encode(
@@ -292,7 +553,7 @@ def _signed_id_token(
         },
         private_key,
         algorithm=algorithm,
-        headers={"kid": "s12-kid"},
+        headers={"kid": kid},
     )
 
 
@@ -330,6 +591,10 @@ def _failing_jwk(failure_kind: str, public_key: rsa.RSAPublicKey) -> dict[str, s
             return _public_jwk(public_key, include_modulus=False)
         case "jwk_missing_exponent":
             return _public_jwk(public_key, include_exponent=False)
+        case "jwk_invalid_exponent":
+            jwk = _public_jwk(public_key)
+            jwk["e"] = _base64url_uint(1)
+            return jwk
         case _:
             raise AssertionError(failure_kind)
 

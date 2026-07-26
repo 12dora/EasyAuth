@@ -9,12 +9,14 @@ from django.contrib.auth.models import User
 from django.test import Client
 from pydantic import TypeAdapter
 
+from easyauth.access_requests.application import AccessRequestApplicationError
 from easyauth.access_requests.approvals import access_request_approver_user_ids
 from easyauth.access_requests.models import (
     GRANT_TYPE_PERMANENT,
     AccessRequest,
     AccessRequestApprover,
     AccessRequestGroup,
+    AccessRequestGroupGrantSnapshot,
 )
 from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import JsonValue
@@ -28,11 +30,16 @@ from easyauth.applications.models import (
 )
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import AccessGrant
+from tests.integration.admin_console.auth_helpers import (
+    authenticate_console_admin,
+    authenticate_console_user,
+)
 
 pytestmark = pytest.mark.django_db
 
 LOGIN_VALUE: Final = "console-operations-approvals"
 JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+GRANT_APPLY_FAILED_MESSAGE: Final = "授权落库失败"
 
 
 class HttpResponseLike(Protocol):
@@ -110,6 +117,40 @@ def test_admin_reassigns_approvers() -> None:
     assert AuditLog.objects.filter(event_type="access_request_reassigned").exists()
 
 
+def test_admin_approve_returns_application_error_with_latest_request_snapshot(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _logged_in_superuser("ops-approve-application-error-admin")
+    access_request = _submitted_request("ops-approve-application-error-user", "ops-approve-error")
+
+    def fail_apply(*_args: object, **_kwargs: object) -> AccessRequest:
+        raise AccessRequestApplicationError(GRANT_APPLY_FAILED_MESSAGE)
+
+    monkeypatch.setattr(
+        "easyauth.access_requests.approvals.apply_approved_access_request",
+        fail_apply,
+    )
+
+    response = client.post(
+        f"/console/api/v1/operations/access-requests/{access_request.id}/approve",
+        data=dumps({"comment": "代审"}),
+        content_type="application/json",
+    )
+
+    body = _response_json(response)
+    error = body["error"]
+    assert isinstance(error, dict), body
+    details = error["details"]
+    assert isinstance(details, dict), body
+    approval = details["approval"]
+    assert isinstance(approval, dict), body
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert error["code"] == "SEMANTIC_VALIDATION_ERROR"
+    assert details["decision_committed"] is True
+    assert approval["id"] == access_request.id
+    assert approval["status"] == "approved"
+
+
 def test_non_superuser_cannot_operate() -> None:
     # Given: 普通控制台用户。
     client = _logged_in_user("ops-plain-user")
@@ -162,20 +203,30 @@ def _submitted_request(user_key: str, app_key: str) -> AccessRequest:
         approver=approver,
     )
     _ = AccessRequestGroup.objects.create(access_request=access_request, authorization_group=group)
+    _ = AccessRequestGroupGrantSnapshot.objects.create(
+        access_request=access_request,
+        authorization_group_id_snapshot=group.id,
+        authorization_group_key=group.key,
+        authorization_group_kind=group.kind,
+        authorization_group_name=group.name,
+        permission_key=permission.key,
+        permission_name=permission.name,
+        scope_key=scope.key,
+    )
     return access_request
 
 
 def _logged_in_superuser(username: str) -> Client:
     _ = User.objects.create_superuser(username=username, password=LOGIN_VALUE)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    authenticate_console_admin(client, username)
     return client
 
 
 def _logged_in_user(username: str) -> Client:
     _ = User.objects.create_user(username=username, password=LOGIN_VALUE)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    authenticate_console_user(client, username)
     return client
 
 

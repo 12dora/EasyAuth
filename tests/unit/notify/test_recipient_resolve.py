@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import pytest
 
+from easyauth.accounts.directory_references import build_dingtalk_user_ref
 from easyauth.accounts.models import DingTalkUserMirror, UserMirror
+from easyauth.notify.contracts import NotifyAcceptError
 from easyauth.notify.models import (
     NOTIFY_ERROR_NO_DINGTALK_ID,
     NOTIFY_ERROR_USER_INACTIVE,
@@ -10,7 +12,7 @@ from easyauth.notify.models import (
     NOTIFY_RECIPIENT_STATUS_FAILED,
     NOTIFY_RECIPIENT_STATUS_PENDING,
 )
-from easyauth.notify.services import NotifyAcceptError, resolve_recipients
+from easyauth.notify.recipients import resolve_recipients
 
 pytestmark = pytest.mark.django_db
 
@@ -23,9 +25,10 @@ def _dt_user(
     user_id: str,
     status: str = "active",
     corp_id: str = CORP_ID,
+    source_slug: str = SOURCE,
 ) -> DingTalkUserMirror:
     return DingTalkUserMirror.objects.create(
-        source_slug=SOURCE,
+        source_slug=source_slug,
         corp_id=corp_id,
         user_id=user_id,
         name=user_id,
@@ -38,9 +41,11 @@ def _user_mirror(
     authentik_user_id: str,
     dingtalk_userid: str = "",
     corp_id: str = CORP_ID,
+    source_slug: str = SOURCE,
 ) -> UserMirror:
     return UserMirror.objects.create(
         authentik_user_id=authentik_user_id,
+        dingtalk_source_slug=source_slug if dingtalk_userid else "",
         dingtalk_userid=dingtalk_userid,
         dingtalk_corp_id=corp_id if dingtalk_userid else "",
         name=authentik_user_id,
@@ -65,26 +70,44 @@ def test_resolve_bare_user_id_active() -> None:
 
 def test_resolve_dt_prefix_without_login() -> None:
     _ = _dt_user(user_id="dt-newbie")
+    ref = build_dingtalk_user_ref(source_slug=SOURCE, corp_id=CORP_ID, user_id="dt-newbie")
 
-    resolved = resolve_recipients(["dt:dt-newbie"])
+    resolved = resolve_recipients([ref])
 
     assert len(resolved) == 1
     item = resolved[0]
-    assert item.raw_ref == "dt:dt-newbie"
+    assert item.raw_ref == ref
     assert item.dingtalk_userid == "dt-newbie"
     assert item.user is None
     assert item.status == NOTIFY_RECIPIENT_STATUS_PENDING
 
 
-def test_resolve_merges_same_person_by_dingtalk_userid() -> None:
+def test_resolve_merges_same_person_by_scoped_dingtalk_user_ref() -> None:
     _ = _dt_user(user_id="dt-bob")
     _ = _user_mirror(authentik_user_id="auth-bob", dingtalk_userid="dt-bob")
+    ref = build_dingtalk_user_ref(source_slug=SOURCE, corp_id=CORP_ID, user_id="dt-bob")
 
-    resolved = resolve_recipients(["auth-bob", "dt:dt-bob", "auth-bob"])
+    resolved = resolve_recipients(["auth-bob", ref, "auth-bob"])
 
     assert len(resolved) == 1
     assert resolved[0].raw_ref == "auth-bob"
     assert resolved[0].dingtalk_userid == "dt-bob"
+
+
+def test_resolve_authentik_binding_uses_dingtalk_source_scope() -> None:
+    _ = _dt_user(user_id="dt-shared", source_slug="source-a")
+    _ = _dt_user(user_id="dt-shared", source_slug="source-b")
+    _ = _user_mirror(
+        authentik_user_id="auth-source-b",
+        dingtalk_userid="dt-shared",
+        source_slug="source-b",
+    )
+
+    resolved = resolve_recipients(["auth-source-b"])
+
+    assert len(resolved) == 1
+    assert resolved[0].dingtalk_source_slug == "source-b"
+    assert resolved[0].dingtalk_userid == "dt-shared"
 
 
 def test_resolve_unknown_ref_is_failed_not_blocking() -> None:
@@ -120,8 +143,9 @@ def test_resolve_departed_user_is_inactive() -> None:
 
 def test_resolve_dt_prefix_inactive() -> None:
     _ = _dt_user(user_id="dt-disabled", status="disabled")
+    ref = build_dingtalk_user_ref(source_slug=SOURCE, corp_id=CORP_ID, user_id="dt-disabled")
 
-    resolved = resolve_recipients(["dt:dt-disabled"])
+    resolved = resolve_recipients([ref])
 
     assert resolved[0].error_code == NOTIFY_ERROR_USER_INACTIVE
     assert resolved[0].dingtalk_userid == "dt-disabled"

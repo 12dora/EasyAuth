@@ -80,6 +80,7 @@ def test_sync_payload_updates_dingtalk_fields() -> None:
                     "department": "旧部门",
                     "status": "active",
                     "dingtalk": {
+                        "source_slug": "dingtalk",
                         "corp_id": "corp-1",
                         "user_id": "user-1",
                         "union_id": "union-1",
@@ -94,6 +95,7 @@ def test_sync_payload_updates_dingtalk_fields() -> None:
         },
     )
 
+    assert result.user.dingtalk_source_slug == "dingtalk"
     assert result.user.dingtalk_corp_id == "corp-1"
     assert result.user.dingtalk_userid == "user-1"
     assert result.user.dingtalk_union_id == "union-1"

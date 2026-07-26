@@ -3,7 +3,7 @@ name = "easyauth"
 version = "0.1.0"
 description = "Internal authorization service baseline."
 readme = "docs/README.md"
-requires-python = ">=3.12,<3.15"
+requires-python = ">=3.12,<3.13"
 dependencies = [
   "celery[redis]>=5.5,<5.6",
   "cryptography>=44,<50",
@@ -81,7 +81,14 @@ ignore = [
 "sdk/**/tests/*.py" = ["INP001", "PLR2004", "S106"]
 
 [tool.basedpyright]
-include = ["src", "tests"]
+# BasedPyright 是生产运行时代码门禁；测试代码由 pytest 与 Ruff 负责。
+include = ["src/easyauth"]
+# Django 迁移由 SQLite/PG 迁移回放和漂移检查负责。deploy.py 属于用户明确排除的
+# EA-AUD-001 整改范围；除这两个边界外，生产运行时代码全部进入类型门禁。
+exclude = [
+  "src/easyauth/**/migrations/**",
+  "src/easyauth/config/settings/deploy.py",
+]
 pythonVersion = "3.12"
 typeCheckingMode = "all"
 reportMissingTypeStubs = "none"

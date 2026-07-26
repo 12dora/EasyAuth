@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from django.db.models import Q
 from django.utils import timezone
 
 from easyauth.access_requests.submission_types import (
@@ -18,8 +17,11 @@ from easyauth.access_requests.target_validation import (
 )
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.applications.models import AuthorizationGroupGrant
-from easyauth.grants.models import GRANT_STATUS_ACTIVE as GRANT_RECORD_STATUS_ACTIVE
-from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
+from easyauth.grants.effective_snapshot import (
+    EffectiveGrantSnapshot,
+    current_effective_grant_snapshot,
+)
+from easyauth.grants.models import AccessGrant
 
 MANAGED_USERS_SCOPE = "MANAGED_USERS"
 MANAGED_USERS_APPROVER_REQUIRED_MESSAGE = (
@@ -91,6 +93,8 @@ def validate_submission_scope(
     request_type: AccessRequestType,
     authorization_groups: tuple[AuthorizationGroup, ...],
     direct_grants: tuple[ScopedAccessRequestGrant, ...],
+    *,
+    lock_base_grant: bool = False,
 ) -> None:
     _validate_user(input_data.user)
     _validate_expiration_shape(input_data.grant_type, input_data.grant_expires_at)
@@ -98,25 +102,26 @@ def validate_submission_scope(
 
     match request_type:
         case "grant":
+            _validate_no_base_grant(input_data)
             _validate_no_current_grant(input_data.user, input_data.app)
             _validate_targets_present(authorization_groups, direct_grants)
             _validate_targets(input_data.app, authorization_groups, direct_grants)
             _validate_managed_users_approver(input_data, authorization_groups, direct_grants)
         case "change":
-            _ = _active_lifecycle_grant(input_data.user, input_data.app)
+            _ = base_lifecycle_grant_snapshot(input_data, for_update=lock_base_grant)
             _validate_targets_present(authorization_groups, direct_grants)
             _validate_targets(input_data.app, authorization_groups, direct_grants)
             _validate_managed_users_approver(input_data, authorization_groups, direct_grants)
         case "revoke":
-            grant = _active_lifecycle_grant(input_data.user, input_data.app)
+            snapshot = base_lifecycle_grant_snapshot(input_data, for_update=lock_base_grant)
             _validate_targets_belong_to_app(input_data.app, authorization_groups, direct_grants)
-            _validate_revoke_subset(grant, authorization_groups, direct_grants)
+            _validate_revoke_subset(snapshot, authorization_groups, direct_grants)
             _validate_managed_users_approver(input_data, authorization_groups, direct_grants)
         case "renew":
-            grant = _active_lifecycle_grant(input_data.user, input_data.app)
-            _validate_renew_request(input_data.grant_type, input_data.grant_expires_at, grant)
+            snapshot = base_lifecycle_grant_snapshot(input_data, for_update=lock_base_grant)
+            _validate_renew_request(input_data.grant_type, input_data.grant_expires_at, snapshot)
             _validate_targets_belong_to_app(input_data.app, authorization_groups, direct_grants)
-            _validate_renew_targets(grant, authorization_groups, direct_grants)
+            _validate_renew_targets(snapshot, authorization_groups, direct_grants)
             _validate_managed_users_approver(input_data, authorization_groups, direct_grants)
 
 
@@ -199,8 +204,10 @@ def _active_direct_manager_user_id(user: UserMirror) -> str | None:
         authentik_user_id=manager_userid,
         status=USER_STATUS_ACTIVE,
     ).first()
-    if manager is None:
+    if manager is None and user.dingtalk_source_slug and user.dingtalk_corp_id:
         manager = UserMirror.objects.filter(
+            dingtalk_source_slug=user.dingtalk_source_slug,
+            dingtalk_corp_id=user.dingtalk_corp_id,
             dingtalk_userid=manager_userid,
             status=USER_STATUS_ACTIVE,
         ).first()
@@ -232,28 +239,43 @@ def _validate_no_current_grant(user: UserMirror, app: App) -> None:
         )
 
 
-def _active_lifecycle_grant(user: UserMirror, app: App) -> AccessGrant:
-    grant = AccessGrant.objects.filter(
-        user=user,
-        app=app,
-        is_current=True,
-        status=GRANT_RECORD_STATUS_ACTIVE,
-    ).first()
-    if grant is None:
+def _validate_no_base_grant(input_data: AccessRequestSubmission) -> None:
+    if input_data.base_grant_id is not None or input_data.base_grant_revision is not None:
+        raise AccessRequestSubmissionError(("grant request must not include a base grant",))
+
+
+def base_lifecycle_grant_snapshot(
+    input_data: AccessRequestSubmission,
+    *,
+    for_update: bool = False,
+) -> EffectiveGrantSnapshot:
+    if input_data.base_grant_id is None or input_data.base_grant_revision is None:
+        raise AccessRequestSubmissionError(("base grant revision is required",))
+    snapshot = current_effective_grant_snapshot(
+        user=input_data.user,
+        app=input_data.app,
+        for_update=for_update,
+    )
+    if snapshot is None:
         raise AccessRequestSubmissionError(("active grant is required",))
-    if not _grant_has_effective_membership(grant):
+    if not snapshot.has_membership():
         raise AccessRequestSubmissionError(("active grant is required",))
-    return grant
+    if (
+        snapshot.grant.id != input_data.base_grant_id
+        or snapshot.grant.version != input_data.base_grant_revision
+    ):
+        raise AccessRequestSubmissionError(("base grant revision conflict",))
+    return snapshot
 
 
 def _validate_renew_request(
     grant_type: AccessRequestGrantType,
     grant_expires_at: datetime | None,
-    grant: AccessGrant,
+    snapshot: EffectiveGrantSnapshot,
 ) -> None:
     match grant_type:
         case "timed":
-            current_expirations = _current_membership_expirations(grant)
+            current_expirations = snapshot.membership_expirations
             if (
                 grant_expires_at is None
                 or not current_expirations
@@ -271,16 +293,16 @@ def _validate_renew_request(
 
 
 def _validate_revoke_subset(
-    grant: AccessGrant,
+    snapshot: EffectiveGrantSnapshot,
     authorization_groups: tuple[AuthorizationGroup, ...],
     direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> None:
-    current_group_ids = _current_group_ids(grant)
+    current_group_ids = set(snapshot.group_ids)
     target_group_ids = {group.id for group in authorization_groups}
     if not target_group_ids.issubset(current_group_ids):
         raise AccessRequestSubmissionError(("target groups must be subset of current grant",))
 
-    current_direct_grants = _current_direct_grants(grant)
+    current_direct_grants = set(snapshot.direct_grants)
     target_direct_grants = _target_direct_grants(direct_grants)
     if not target_direct_grants.issubset(current_direct_grants):
         raise AccessRequestSubmissionError(
@@ -291,58 +313,20 @@ def _validate_revoke_subset(
 
 
 def _validate_renew_targets(
-    grant: AccessGrant,
+    snapshot: EffectiveGrantSnapshot,
     authorization_groups: tuple[AuthorizationGroup, ...],
     direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> None:
-    if {group.id for group in authorization_groups} != _current_group_ids(grant):
+    if {group.id for group in authorization_groups} != set(snapshot.group_ids):
         raise AccessRequestSubmissionError(("renew request must keep current groups",))
-    if _target_direct_grants(direct_grants) != _current_direct_grants(grant):
+    if _target_direct_grants(direct_grants) != set(snapshot.direct_grants):
         raise AccessRequestSubmissionError(("renew request must keep current direct grants",))
-
-
-def _current_group_ids(grant: AccessGrant) -> set[int]:
-    return set(
-        AccessGrantGroup.objects.filter(grant=grant).values_list(
-            "authorization_group_id",
-            flat=True,
-        ),
-    )
-
-
-def _current_direct_grants(grant: AccessGrant) -> set[tuple[int, str]]:
-    return set(
-        AccessGrantPermission.objects.filter(grant=grant).values_list(
-            "permission_id",
-            "scope_key",
-        ),
-    )
 
 
 def _target_direct_grants(
     direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> set[tuple[int, str]]:
     return {(grant.permission.id, grant.scope_key) for grant in direct_grants}
-
-
-def _grant_has_effective_membership(grant: AccessGrant) -> bool:
-    now = timezone.now()
-    effective = Q(expires_at__isnull=True) | Q(expires_at__gt=now)
-    return AccessGrantGroup.objects.filter(effective, grant=grant).exists() or (
-        AccessGrantPermission.objects.filter(effective, grant=grant).exists()
-    )
-
-
-def _current_membership_expirations(grant: AccessGrant) -> tuple[datetime | None, ...]:
-    group_expirations = AccessGrantGroup.objects.filter(grant=grant).values_list(
-        "expires_at",
-        flat=True,
-    )
-    direct_expirations = AccessGrantPermission.objects.filter(grant=grant).values_list(
-        "expires_at",
-        flat=True,
-    )
-    return (*group_expirations, *direct_expirations)
 
 
 def _validate_targets_belong_to_app(

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, override
+from typing import TYPE_CHECKING, Final, cast, override
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
 from django.db import transaction
@@ -14,7 +14,6 @@ if TYPE_CHECKING:
     from django.http import HttpRequest
 
 AUTHENTIK_SESSION_KEY: Final = "easyauth_authentik_user_id"
-AUTHENTIK_GROUPS_SESSION_KEY: Final = "easyauth_authentik_groups"
 OIDC_STATE_SESSION_KEY: Final = "easyauth_oidc_state"
 OIDC_NONCE_SESSION_KEY: Final = "easyauth_oidc_nonce"
 OIDC_NEXT_SESSION_KEY: Final = "easyauth_oidc_next"
@@ -43,6 +42,7 @@ REASON_LOGIN_NONCE_MISMATCH: Final = "does not match login attempt"
 REASON_LOGIN_STATE_MISMATCH: Final = "does not match login attempt"
 REASON_LOGIN_STATE_MISSING: Final = "login state is missing"
 REASON_CODE_EXCHANGE_UNIMPLEMENTED: Final = "is not implemented"
+REASON_LOCAL_USER_INACTIVE: Final = "local user is not active"
 
 type OidcClaimValue = (
     None | bool | int | float | str | tuple[str, ...] | list[str] | dict[str, object]
@@ -82,6 +82,11 @@ class OidcSessionError(ValueError):
     @override
     def __str__(self) -> str:
         return f"Invalid OIDC {self.field}: {self.reason}"
+
+
+class OidcUserInactiveError(OidcSessionError):
+    def __init__(self) -> None:
+        super().__init__(FIELD_SUBJECT, REASON_LOCAL_USER_INACTIVE)
 
 
 def build_authorization_url(
@@ -166,6 +171,8 @@ def bind_oidc_session(
             },
         )
         if not created:
+            if user.status != USER_STATUS_ACTIVE:
+                raise OidcUserInactiveError
             _update_existing_user_profile(user, claims)
         changed_fields = apply_dingtalk_org_context(user, claims.dingtalk_org)
         if changed_fields:
@@ -174,14 +181,11 @@ def bind_oidc_session(
             user.save(update_fields=changed_fields)
     request.session.cycle_key()
     request.session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
-    if claims.groups:
-        request.session[AUTHENTIK_GROUPS_SESSION_KEY] = list(claims.groups)
-    else:
-        request.session.pop(AUTHENTIK_GROUPS_SESSION_KEY, None)
     if local_admin:
         request.session[LOCAL_ADMIN_SESSION_FLAG] = True
     else:
         request.session.pop(LOCAL_ADMIN_SESSION_FLAG, None)
+        request.session.pop(LOCAL_ADMIN_SESSION_VERSION_KEY, None)
     return user
 
 
@@ -193,7 +197,6 @@ def clear_oidc_login_attempt(request: HttpRequest) -> None:
 
 def clear_auth_session(request: HttpRequest) -> None:
     request.session.pop(AUTHENTIK_SESSION_KEY, None)
-    request.session.pop(AUTHENTIK_GROUPS_SESSION_KEY, None)
     request.session.pop(OIDC_ID_TOKEN_SESSION_KEY, None)
     request.session.pop(LOCAL_ADMIN_SESSION_FLAG, None)
     request.session.pop(LOCAL_ADMIN_SESSION_VERSION_KEY, None)
@@ -232,24 +235,29 @@ def _optional_string_claim(claims: OidcClaimsInput, key: str) -> str:
 
 
 def _optional_string_tuple_claim(claims: OidcClaimsInput, key: str) -> tuple[str, ...]:
-    value = claims.get(key)
-    match value:
-        case None:
-            return ()
-        case str() as claim:
-            return (claim,) if claim else ()
-        case tuple() | list():
-            # 序列里出现非字符串元素说明上游 claim 结构损坏, 必须显式报错,
-            # 静默丢弃会让用户少组/降权且无从排查。
-            items: list[str] = []
-            for item in value:
-                if not isinstance(item, str):
-                    raise OidcSessionError(key, "must be a string sequence")
-                if item:
-                    items.append(item)
-            return tuple(items)
-        case _:
+    value: object = claims.get(key)
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        return (value,) if value else ()
+    if isinstance(value, tuple | list):
+        return _string_tuple_claim(value, key)
+    raise OidcSessionError(key, "must be a string sequence")
+
+
+def _string_tuple_claim(value: object, key: str) -> tuple[str, ...]:
+    if not isinstance(value, tuple | list):
+        raise OidcSessionError(key, "must be a string sequence")
+    # 序列里出现非字符串元素说明上游 claim 结构损坏, 必须显式报错,
+    # 静默丢弃会让用户少组/降权且无从排查。
+    sequence = cast("tuple[object, ...] | list[object]", value)
+    items: list[str] = []
+    for item in sequence:
+        if not isinstance(item, str):
             raise OidcSessionError(key, "must be a string sequence")
+        if item:
+            items.append(item)
+    return tuple(items)
 
 
 def _audience_values(claims: OidcClaimsInput) -> frozenset[str]:

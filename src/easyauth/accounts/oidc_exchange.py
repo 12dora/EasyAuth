@@ -1,16 +1,20 @@
 from __future__ import annotations
 
+import threading
+import time
 from base64 import urlsafe_b64decode
+from binascii import Error as BinasciiError
 from dataclasses import dataclass
 from ipaddress import ip_address
 from json import JSONDecodeError, loads
-from typing import TYPE_CHECKING, Final, Protocol, Self, cast
+from typing import TYPE_CHECKING, Final, cast
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode, urlsplit
 from urllib.request import Request, urlopen
 
 import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
+from django.conf import settings
 from jwt import InvalidTokenError
 
 from easyauth.accounts.auth import (
@@ -21,10 +25,14 @@ from easyauth.accounts.auth import (
     OidcClientConfig,
     OidcSessionError,
 )
+from easyauth.config.net import (
+    HeaderReadableResponse,
+    HttpResponseReadError,
+    read_urlopen_body_bounded,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
-    from types import TracebackType
 
     from django.http import HttpRequest
 
@@ -39,14 +47,17 @@ HEADER_ACCEPT: Final = "application/json"
 HEADER_FORM: Final = "application/x-www-form-urlencoded"
 REASON_CLIENT_SECRET_REQUIRED: Final = "client secret is not configured"  # noqa: S105 - 错误说明, 不是密钥值.
 REASON_HTTP_FAILED: Final = "request failed"
-REASON_ID_TOKEN_REQUIRED: Final = "id token is required"  # noqa: S105 - 错误说明, 不是密钥值.
 REASON_INVALID_JSON: Final = "response is not valid JSON"
 REASON_JWKS_KEY_MISSING: Final = "matching signing key is missing"
 REASON_JWT_INVALID: Final = "id token is invalid"
 REASON_ENDPOINT_HTTPS_REQUIRED: Final = "endpoint must use HTTPS"
 REASON_RSA_KEY_REQUIRED: Final = "RSA signing key is required"
 REASON_UNSUPPORTED_ALGORITHM: Final = "signing algorithm is not allowed"
+REASON_JWK_INVALID: Final = "JWK is invalid"
 LOCAL_HTTP_OIDC_HOSTS: Final[frozenset[str]] = frozenset({"host.docker.internal", "localhost"})
+OIDC_TOKEN_RESPONSE_MAX_BYTES: Final = 64 * 1024
+OIDC_JWKS_RESPONSE_MAX_BYTES: Final = 256 * 1024
+DEFAULT_JWKS_CACHE_TTL_SECONDS: Final = 300
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,17 +66,25 @@ class _JwtHeader:
     key_id: str
 
 
-class _ReadableResponse(Protocol):
-    def __enter__(self) -> Self: ...
+@dataclass(frozen=True, slots=True)
+class _JwksCacheKey:
+    issuer: str
+    jwks_url: str
 
-    def __exit__(
-        self,
-        exc_type: type[BaseException] | None,
-        exc: BaseException | None,
-        traceback: TracebackType | None,
-    ) -> None: ...
 
-    def read(self) -> bytes: ...
+@dataclass(frozen=True, slots=True)
+class _JwksCacheEntry:
+    jwks: JsonObject
+    expires_at: float
+
+
+_JWKS_CACHE: dict[_JwksCacheKey, _JwksCacheEntry] = {}
+_JWKS_CACHE_LOCK = threading.RLock()
+
+
+def clear_jwks_cache() -> None:
+    with _JWKS_CACHE_LOCK:
+        _JWKS_CACHE.clear()
 
 
 def exchange_authorization_code_for_claims(
@@ -99,23 +118,39 @@ def _post_token_request(code: str, config: OidcClientConfig) -> JsonObject:
         headers={"Accept": HEADER_ACCEPT, "Content-Type": HEADER_FORM},
         method="POST",
     )
-    return _request_json(request, timeout_seconds=config.http_timeout_seconds)
+    return _request_json(
+        request,
+        timeout_seconds=config.http_timeout_seconds,
+        max_response_bytes=OIDC_TOKEN_RESPONSE_MAX_BYTES,
+    )
 
 
-def _request_json(request: Request, *, timeout_seconds: float) -> JsonObject:
+def _request_json(
+    request: Request,
+    *,
+    timeout_seconds: float,
+    max_response_bytes: int,
+) -> JsonObject:
+    started_at = time.monotonic()
     try:
         response_context = cast(
-            "_ReadableResponse",
+            "HeaderReadableResponse",
             urlopen(  # noqa: S310 - URL 已在构造 Request 前限制为 HTTPS.
                 request,
                 timeout=timeout_seconds,
             ),
         )
         with response_context as response:
-            raw_body = response.read()
+            raw_body = read_urlopen_body_bounded(
+                response,
+                started_at=started_at,
+                total_timeout_seconds=timeout_seconds,
+                max_response_bytes=max_response_bytes,
+                monotonic=time.monotonic,
+            )
     except HTTPError as error:
         raise OidcSessionError(FIELD_CODE_EXCHANGE, REASON_HTTP_FAILED) from error
-    except URLError as error:
+    except (HttpResponseReadError, OSError, TimeoutError, URLError) as error:
         raise OidcSessionError(FIELD_CODE_EXCHANGE, REASON_HTTP_FAILED) from error
     return _parse_json_object(raw_body)
 
@@ -126,6 +161,7 @@ def _verify_id_token(id_token: str, config: OidcClientConfig) -> OidcClaimsInput
         raise OidcSessionError(FIELD_JWT_HEADER, REASON_UNSUPPORTED_ALGORITHM)
 
     public_key = _jwks_public_key(
+        issuer=config.issuer,
         jwks_url=config.jwks_url,
         key_id=header.key_id,
         algorithm=header.algorithm,
@@ -158,13 +194,79 @@ def _jwt_header(id_token: str) -> _JwtHeader:
 
 def _jwks_public_key(
     *,
+    issuer: str,
     jwks_url: str,
     key_id: str,
     algorithm: str,
     timeout_seconds: float,
 ) -> rsa.RSAPublicKey:
+    cache_key = _JwksCacheKey(issuer=issuer, jwks_url=jwks_url)
+    now = time.monotonic()
+    jwks = _cached_jwks(cache_key, now=now)
+    if jwks is not None:
+        public_key = _public_key_from_jwks(jwks, key_id=key_id, algorithm=algorithm)
+        if public_key is not None:
+            return public_key
+    jwks = _refresh_jwks_singleflight(
+        cache_key,
+        timeout_seconds=timeout_seconds,
+        key_id=key_id,
+        algorithm=algorithm,
+        now=now,
+    )
+    public_key = _public_key_from_jwks(jwks, key_id=key_id, algorithm=algorithm)
+    if public_key is not None:
+        return public_key
+    raise OidcSessionError(FIELD_JWKS, REASON_JWKS_KEY_MISSING)
+
+
+def _cached_jwks(cache_key: _JwksCacheKey, *, now: float) -> JsonObject | None:
+    with _JWKS_CACHE_LOCK:
+        entry = _JWKS_CACHE.get(cache_key)
+        if entry is None or entry.expires_at <= now:
+            return None
+        return entry.jwks
+
+
+def _refresh_jwks_singleflight(
+    cache_key: _JwksCacheKey,
+    *,
+    timeout_seconds: float,
+    key_id: str,
+    algorithm: str,
+    now: float,
+) -> JsonObject:
+    with _JWKS_CACHE_LOCK:
+        entry = _JWKS_CACHE.get(cache_key)
+        if entry is not None and entry.expires_at > now and _public_key_from_jwks(
+            entry.jwks,
+            key_id=key_id,
+            algorithm=algorithm,
+        ) is not None:
+            return entry.jwks
+        jwks = _fetch_jwks(cache_key.jwks_url, timeout_seconds=timeout_seconds)
+        _JWKS_CACHE[cache_key] = _JwksCacheEntry(
+            jwks=jwks,
+            expires_at=time.monotonic() + _jwks_cache_ttl_seconds(),
+        )
+        return jwks
+
+
+def _fetch_jwks(jwks_url: str, *, timeout_seconds: float) -> JsonObject:
     request = oidc_endpoint_request(jwks_url, headers={"Accept": HEADER_ACCEPT})
-    jwks = _request_json(request, timeout_seconds=timeout_seconds)
+    return _request_json(
+        request,
+        timeout_seconds=timeout_seconds,
+        max_response_bytes=OIDC_JWKS_RESPONSE_MAX_BYTES,
+    )
+
+
+def _public_key_from_jwks(
+    jwks: JsonObject,
+    *,
+    key_id: str,
+    algorithm: str,
+) -> rsa.RSAPublicKey | None:
     keys = jwks.get("keys")
     match keys:
         case list() as jwk_values:
@@ -174,7 +276,7 @@ def _jwks_public_key(
                     return _rsa_public_key(jwk)
         case _:
             pass
-    raise OidcSessionError(FIELD_JWKS, REASON_JWKS_KEY_MISSING)
+    return None
 
 
 def _jwk_matches(jwk: JsonObject, *, key_id: str, algorithm: str) -> bool:
@@ -189,9 +291,23 @@ def _jwk_matches(jwk: JsonObject, *, key_id: str, algorithm: str) -> bool:
 def _rsa_public_key(jwk: JsonObject) -> rsa.RSAPublicKey:
     if jwk.get("kty") != "RSA":
         raise OidcSessionError(FIELD_JWKS, REASON_RSA_KEY_REQUIRED)
-    modulus = _base64url_uint(_required_json_string(jwk, "n"))
-    exponent = _base64url_uint(_required_json_string(jwk, "e"))
-    return rsa.RSAPublicNumbers(exponent, modulus).public_key()
+    try:
+        modulus = _base64url_uint(_required_json_string(jwk, "n"))
+        exponent = _base64url_uint(_required_json_string(jwk, "e"))
+        return rsa.RSAPublicNumbers(exponent, modulus).public_key()
+    except (BinasciiError, TypeError, UnicodeError, ValueError) as error:
+        raise OidcSessionError(FIELD_JWKS, REASON_JWK_INVALID) from error
+
+
+def _jwks_cache_ttl_seconds() -> int:
+    value = getattr(
+        settings,
+        "EASYAUTH_AUTHENTIK_OIDC_JWKS_CACHE_TTL_SECONDS",
+        DEFAULT_JWKS_CACHE_TTL_SECONDS,
+    )
+    if type(value) is not int or value <= 0:
+        return DEFAULT_JWKS_CACHE_TTL_SECONDS
+    return value
 
 
 def _json_claims(decoded: JsonValue) -> OidcClaimsInput:

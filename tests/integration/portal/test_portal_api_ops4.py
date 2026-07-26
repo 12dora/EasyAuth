@@ -15,7 +15,14 @@ from easyauth.access_requests.models import (
     AccessRequestPermission,
 )
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App, ApprovalRule, AppScope, AuthorizationGroup, Permission
+from easyauth.applications.models import (
+    App,
+    ApprovalRule,
+    AppScope,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
+    Permission,
+)
 from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
 from tests.integration.portal.helpers import logged_in_client
 from tests.integration.portal.json_helpers import json_object
@@ -69,13 +76,13 @@ def test_ops4_portal_api_submits_lifecycle_request_for_session_user(
     )
 
     # Then: API 只为当前 session 用户创建对应生命周期申请, 不直接改写当前授权。
+    assert response.status_code == HTTPStatus.CREATED, response.content.decode()
     access_request = AccessRequest.objects.get(user=user, app=app)
     group_keys = tuple(
         AccessRequestGroup.objects.filter(access_request=access_request)
         .order_by("authorization_group__key")
         .values_list("authorization_group__key", flat=True),
     )
-    assert response.status_code == HTTPStatus.CREATED
     assert access_request.request_type == request_type
     assert group_keys == tuple(sorted(expected_group_keys))
     assert AccessGrant.objects.get(id=current_grant.id).is_current is True
@@ -139,6 +146,55 @@ def test_ops4_portal_api_rejects_lifecycle_request_for_other_user_grant(
 
     # Then: API 要求生命周期申请依赖当前员工自己的当前授权。
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert AccessRequest.objects.count() == 0
+
+
+def test_ops4_portal_api_rejects_lifecycle_request_missing_base_grant() -> None:
+    client, user = logged_in_client("ops4-lifecycle-missing-base-user")
+    app = App.objects.create(app_key="ops4-lifecycle-missing-base", name="OPS4 Missing Base")
+    group = _requestable_group(app=app, key="viewer")
+    grant = AccessGrant.objects.create(user=user, app=app)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
+    payload = _lifecycle_payload(
+        app_key=app.app_key,
+        request_type="change",
+        authorization_group_keys=(group.key,),
+    )
+    del payload["base_grant_id"]
+
+    response = client.post(
+        REQUESTS_API_URL,
+        data=dumps(payload),
+        content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-test-idempotency",
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert AccessRequest.objects.count() == 0
+
+
+def test_ops4_portal_api_rejects_lifecycle_request_stale_base_revision() -> None:
+    client, user = logged_in_client("ops4-lifecycle-stale-base-user")
+    app = App.objects.create(app_key="ops4-lifecycle-stale-base", name="OPS4 Stale Base")
+    group = _requestable_group(app=app, key="viewer")
+    grant = AccessGrant.objects.create(user=user, app=app, version=2)
+    _ = AccessGrantGroup.objects.create(grant=grant, authorization_group=group)
+    payload = _lifecycle_payload(
+        app_key=app.app_key,
+        request_type="change",
+        authorization_group_keys=(group.key,),
+    )
+    payload["base_grant_revision"] = 1
+
+    response = client.post(
+        REQUESTS_API_URL,
+        data=dumps(payload),
+        content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="portal-test-idempotency",
+    )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert "base grant revision conflict" in response.content.decode()
     assert AccessRequest.objects.count() == 0
 
 
@@ -255,6 +311,19 @@ def test_ops4_portal_api_submits_lifecycle_request_with_permission_keys() -> Non
 
 
 def _requestable_group(*, app: App, key: str) -> AuthorizationGroup:
+    scope, _created_scope = AppScope.objects.get_or_create(
+        app=app,
+        key=DEFAULT_SCOPE_KEY,
+        defaults={"name": "Global"},
+    )
+    permission, _created_permission = Permission.objects.get_or_create(
+        app=app,
+        key=f"{key}.access",
+        defaults={
+            "name": f"{key} access",
+            "supported_scopes": [scope.key],
+        },
+    )
     group = AuthorizationGroup.objects.create(
         app=app,
         key=key,
@@ -266,6 +335,11 @@ def _requestable_group(*, app: App, key: str) -> AuthorizationGroup:
         app=app,
         authorization_group=group,
         approver_userids=["manager-001"],
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key=scope.key,
     )
     return group
 
@@ -292,10 +366,13 @@ def _lifecycle_payload(
     request_type: str,
     authorization_group_keys: tuple[str, ...],
     direct_grants: tuple[tuple[str, str], ...] = (),
-) -> dict[str, str | list[str] | list[dict[str, str]] | None]:
+) -> dict[str, int | str | list[str] | list[dict[str, str]] | None]:
+    base_grant = AccessGrant.objects.get(app__app_key=app_key, is_current=True)
     return {
         "app_key": app_key,
         "request_type": request_type,
+        "base_grant_id": base_grant.id,
+        "base_grant_revision": base_grant.version,
         "authorization_group_keys": list(authorization_group_keys),
         "direct_grants": [
             {"permission": permission_key, "scope": scope_key}

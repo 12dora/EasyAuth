@@ -114,11 +114,25 @@ def _migrate(targets: list[tuple[str, str]]) -> MigrationExecutor:
 
 @pytest.fixture(autouse=True)
 def restore_latest_migrations() -> Iterator[None]:
+    _restore_latest_schema()
     try:
         yield
     finally:
-        executor = MigrationExecutor(connection)
-        _ = executor.migrate(_AFTER_TARGETS)
+        _restore_latest_schema()
+
+
+def _leaf_nodes(executor: MigrationExecutor) -> list[tuple[str, str]]:
+    return cast(
+        "list[tuple[str, str]]",
+        executor.loader.graph.leaf_nodes(),  # pyright: ignore[reportAny]
+    )
+
+
+def _restore_latest_schema() -> None:
+    connection.close()
+    executor = MigrationExecutor(connection)
+    _ = executor.migrate(_leaf_nodes(executor))
+    connection.close()
 
 
 def _seed_legacy_message(

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import NotRequired, TypedDict, cast, override
@@ -11,14 +11,6 @@ type PermissionQueryObject = Mapping[
     str,
     PermissionQueryScalar | list[str] | PermissionQueryResolvedObject,
 ]
-type PermissionQueryResponseInputValue = PermissionQueryScalar | list[PermissionQueryObject]
-type PermissionQueryResponseInput = Mapping[str, PermissionQueryResponseInputValue]
-type SerializerErrors = dict[str, list[str]]
-
-_REQUIRED_ERROR = "required"
-_INVALID_ERROR = "invalid"
-
-
 class PermissionQueryGroupPayload(TypedDict):
     key: str
     kind: str
@@ -48,6 +40,19 @@ class PermissionQueryResponsePayload(TypedDict):
     catalog_version: int
     snapshot_version: str
     expires_at: str
+
+
+type PermissionQueryResponseInputValue = (
+    PermissionQueryScalar
+    | Sequence[PermissionQueryObject]
+    | Sequence[PermissionQueryGroupPayload]
+    | Sequence[PermissionQueryGrantPayload]
+)
+type PermissionQueryResponseInput = Mapping[str, PermissionQueryResponseInputValue]
+type SerializerErrors = dict[str, list[str]]
+
+_REQUIRED_ERROR = "required"
+_INVALID_ERROR = "invalid"
 
 
 @dataclass(frozen=True, slots=True)
@@ -166,6 +171,8 @@ def _read_string(payload: PermissionQueryResponseInput, key: str) -> str | None:
             return value
         case bool() | int() | list() | None:
             return None
+        case _:
+            return None
 
 
 def _read_integer(payload: PermissionQueryResponseInput, key: str) -> int | None:
@@ -175,6 +182,8 @@ def _read_integer(payload: PermissionQueryResponseInput, key: str) -> int | None
         case int() as value:
             return value
         case str() | list() | None:
+            return None
+        case _:
             return None
 
 
@@ -192,6 +201,8 @@ def _read_groups(
                 groups.append(group)
             return groups
         case str() | bool() | int() | None:
+            return None
+        case _:
             return None
 
 
@@ -221,6 +232,8 @@ def _read_grants(
                 grants.append(grant)
             return grants
         case str() | bool() | int() | None:
+            return None
+        case _:
             return None
 
 

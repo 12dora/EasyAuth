@@ -25,6 +25,9 @@ EasyTrade 需要让部门经理查看和管理下级人员数据。主管关系�
 - `MANAGED_USERS` 成员使用 Authentik 用户 ID，不使用 DingTalk ID、手机号、邮箱或工号作为授权主键。
 - `MANAGED_USERS` 不包含当前用户本人。
 - 管理范围按 App 和 `AuthorizationGroupGrant` 配置；`AuthorizationGroupGrant` 可继承 App 默认策略，也可单独覆盖。
+- App 默认策略只绑定 App；授权组 grant 覆盖策略必须用真实外键绑定
+  `AuthorizationGroupGrant`。持久化层不得再使用裸 `target_id` 模拟多态关系；
+  API 如需展示 `target_id`，只能从真实 App 或 grant 外键派生。
 - 没有有效策略时，相关 grant 不生效，且健康检查必须报错。
 - 第一版 resolver key 为 `dingtalk_manager_chain`，控制台文案为“按钉钉主管关系”。
 - EasyAuth 公共权限查询响应扩展 `resolved.user_ids`，下游应用保存本地快照后再过滤业务数据。
@@ -98,3 +101,5 @@ EasyTrade 需要让部门经理查看和管理下级人员数据。主管关系�
 - EasyTrade 需要改造权限快照、scope resolver 和 owner 查询过滤。
 - 原 EasyTrade 本地 `MANAGED` 的 region、segment 算法必须废弃，不能作为失败回退。
 - 后续 Microsoft Entra 支持应复用组织源抽象，不改变 `MANAGED_USERS` 下游契约。
+- 迁移到真实外键前必须只读扫描孤儿策略和跨 App 策略。发现坏数据时迁移失败并给出行数与样本
+  主键，由显式修复流程处理；不得在迁移中静默删除、默认继承或把策略重绑到“最可能”的 grant。

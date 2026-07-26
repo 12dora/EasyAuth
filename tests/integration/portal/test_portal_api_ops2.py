@@ -11,6 +11,7 @@ from django.test import Client
 from django.utils import timezone
 
 from easyauth.access_requests.models import (
+    DECISION_ACTOR_USER,
     GRANT_TYPE_PERMANENT,
     REQUEST_STATUS_APPROVED,
     REQUEST_STATUS_GRANT_APPLIED,
@@ -98,6 +99,7 @@ def test_ops2_portal_api_lists_access_requests_for_session_user() -> None:
         key="auditor",
         name="审计员",
     )
+    decided_at = timezone.now()
     approved = AccessRequest.objects.create(
         user=user,
         app=app,
@@ -105,6 +107,10 @@ def test_ops2_portal_api_lists_access_requests_for_session_user() -> None:
         reason="审批原因",
         idempotency_key="ops2-approved-request",
         payload_digest="a" * 64,
+        approved_at=decided_at,
+        decided_at=decided_at,
+        decided_by="approver",
+        decision_actor_type=DECISION_ACTOR_USER,
     )
     applied = AccessRequest.objects.create(
         user=user,
@@ -114,6 +120,10 @@ def test_ops2_portal_api_lists_access_requests_for_session_user() -> None:
         reason="已落库",
         idempotency_key="ops2-applied-request",
         payload_digest="b" * 64,
+        approved_at=decided_at,
+        decided_at=decided_at,
+        decided_by="approver",
+        decision_actor_type=DECISION_ACTOR_USER,
     )
     _ = AccessRequestGroup.objects.create(access_request=approved, authorization_group=group)
     _ = AccessRequestGroup.objects.create(access_request=applied, authorization_group=group)
@@ -329,6 +339,22 @@ def _requestable_group_with_rule(*, app: App, key: str, name: str) -> Authorizat
         app=app,
         authorization_group=group,
         approver_userids=["manager-001"],
+    )
+    scope, _created = AppScope.objects.get_or_create(
+        app=app,
+        key="GLOBAL",
+        defaults={"name": "全局"},
+    )
+    permission = Permission.objects.create(
+        app=app,
+        key=f"{key}.permission",
+        name=f"{name}权限",
+        supported_scopes=[scope.key],
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key=scope.key,
     )
     return group
 

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import threading
 from http import HTTPStatus
-from typing import TYPE_CHECKING, ClassVar, Self
+from typing import TYPE_CHECKING, ClassVar, Self, override
 
 import pytest
 
@@ -12,6 +12,7 @@ from easyauth.webhooks.transport import (
     WebhookDeadlineExceededError,
     WebhookRequestPolicy,
     WebhookResponseTooLargeError,
+    WebhookTransportError,
     post_webhook,
 )
 
@@ -28,11 +29,11 @@ class _FakeSocket:
 
 
 class _FakeResponse:
-    status = HTTPStatus.OK
+    status: HTTPStatus = HTTPStatus.OK
 
     def __init__(self, chunks: list[bytes], *, content_length: str | None = None) -> None:
-        self._chunks = iter(chunks)
-        self._content_length = content_length
+        self._chunks: Iterator[bytes] = iter(chunks)
+        self._content_length: str | None = content_length
 
     def read1(self, _size: int) -> bytes:
         return next(self._chunks, b"")
@@ -47,12 +48,12 @@ class _FakeResponse:
 
 
 class _FakeConnection:
-    response = _FakeResponse([b"{}"])
+    response: ClassVar[_FakeResponse] = _FakeResponse([b"{}"])
     instances: ClassVar[list[Self]] = []
 
     def __init__(self, **kwargs: object) -> None:
-        self.kwargs = kwargs
-        self.sock = _FakeSocket()
+        self.kwargs: dict[str, object] = kwargs
+        self.sock: _FakeSocket = _FakeSocket()
         self.request_args: tuple[object, ...] = ()
         self.__class__.instances.append(self)
 
@@ -67,7 +68,7 @@ class _FakeConnection:
 
 
 @pytest.fixture(autouse=True)
-def _transport_fakes(monkeypatch: pytest.MonkeyPatch) -> None:
+def _transport_fakes(monkeypatch: pytest.MonkeyPatch) -> None:  # pyright: ignore[reportUnusedFunction]
     _FakeConnection.instances.clear()
     _FakeConnection.response = _FakeResponse([b"{}"])
 
@@ -136,7 +137,7 @@ def test_post_webhook_enforces_total_deadline_during_body_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monotonic_values: Iterator[float] = iter((0.0, 0.1, 0.2, 6.0))
-    monkeypatch.setattr(transport.time, "monotonic", lambda: next(monotonic_values))
+    monkeypatch.setattr(transport.time, "monotonic", lambda: next(monotonic_values))  # pyright: ignore[reportPrivateLocalImportUsage]
 
     with pytest.raises(WebhookDeadlineExceededError):
         _ = post_webhook(
@@ -154,10 +155,12 @@ def test_post_webhook_enforces_total_deadline_while_waiting_for_headers(
     release_headers = threading.Event()
 
     class BlockingConnection(_FakeConnection):
+        @override
         def getresponse(self) -> _FakeResponse:
             _ = release_headers.wait(timeout=1)
             raise OSError
 
+        @override
         def close(self) -> None:
             release_headers.set()
 
@@ -174,4 +177,26 @@ def test_post_webhook_enforces_total_deadline_while_waiting_for_headers(
                 total_timeout_seconds=0.01,
                 max_response_bytes=16,
             ),
+        )
+
+
+def test_post_webhook_wraps_request_target_unicode_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class EncodingFailureConnection(_FakeConnection):
+        @override
+        def request(self, *_args: object, **_kwargs: object) -> None:
+            encoding = "ascii"
+            reason = "ordinal not in range"
+            raise UnicodeEncodeError(encoding, "回调", 0, 1, reason)
+
+    monkeypatch.setattr(transport, "_PinnedHttpsConnection", EncodingFailureConnection)
+
+    with pytest.raises(WebhookTransportError):
+        _ = post_webhook(
+            url="https://hooks.example.com/回调",
+            allowed_hosts=("hooks.example.com",),
+            body=b"{}",
+            headers={},
+            policy=_policy(),
         )

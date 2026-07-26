@@ -238,7 +238,8 @@ grant_type=client_credentials&client_id={client_id}&client_secret={client_secret
 
 **前置依赖**
 
-- Python **3.12**、[`uv`](https://docs.astral.sh/uv/)（或普通 `.venv`）、Node ≥ 20 + `pnpm`，
+- Python **3.12**、[`uv`](https://docs.astral.sh/uv/)（或普通 `.venv`）、Node **22.21.1**
+  （见 `.node-version`，最低不得低于 Vite 要求的 20.19.0 或 22.12.0）+ `pnpm`，
   以及 Docker（用于 PostgreSQL/Redis——开发可选，见下）。
 
 ```bash
@@ -269,7 +270,8 @@ DJANGO_DEBUG=1 .venv/bin/python manage.py runserver 0.0.0.0:8001
 - 员工门户：`/portal/`
 - 运营控制台：`/console/`
 - 本地管理员登录：`/auth/local/`
-- 健康探针：`/health/`
+- 匿名存活探针：`/health/`
+- 授权 readiness 详情：`/health/readiness/`
 
 > 修改后端代码、模板或前端构建产物后，必须**重启**开发服务，并用真实 HTTP 响应验证——
 > 仅构建成功不算完成（见 [`AGENTS.md`](./AGENTS.md)）。
@@ -282,8 +284,11 @@ EasyAuth 有**两条**登录路径：
 
 ### 1. 工作账号（生产路径）—— Authentik OIDC
 
-`/auth/login/` → Authentik（→ DingTalk）→ `/auth/callback/`。当用户 OIDC `groups` claim 与
-`EASYAUTH_CONSOLE_SUPERUSER_GROUPS`（默认 `EasyAuth Admins`）有交集时，即成为**控制台超级管理员**。
+`/auth/login/` → Authentik（→ DingTalk）→ `/auth/callback/`。OIDC callback 只绑定当前
+`sub` 对应的 active `UserMirror`；后续控制台请求必须通过 Authentik admin API 读取该用户
+当前组，并与 `EASYAUTH_CONSOLE_SUPERUSER_GROUPS`（默认 `EasyAuth Admins`）求交集判断
+**控制台超级管理员**。无法取得上游当前组时失败关闭，不信任登录时的 `groups` claim 或
+session 快照。
 详见 [接入 Authentik](#接入-authentik)。
 
 ### 2. 本地超级管理员（应急通道）—— 密码 + 二次验证
@@ -295,7 +300,7 @@ EasyAuth 有**两条**登录路径：
 | **默认开发用户名** | `admin` |
 | **默认开发密码** | `admin123` |
 | 登录页 | `/auth/local/` |
-| 二次验证 | `/auth/local/verify/`（TOTP 验证器或通行密钥；未绑定前可跳过） |
+| 二次验证 | `/auth/local/verify/`（TOTP 验证器或通行密钥；未绑定时必须先进入安全设置绑定） |
 | 强制改密 | `/auth/local/change-password/`（新建/重置后首次登录） |
 | 安全设置（2FA、改密） | `/auth/local/security/` |
 | 创建 / 重置 | `.venv/bin/python manage.py create_local_admin <用户名> --password <密码> [--update]` |
@@ -304,6 +309,8 @@ EasyAuth 有**两条**登录路径：
 
 - 新建账号默认带 **must-change-password** 标记：首次登录后所有页面都会跳转到改密页，直到设置新密码（≥ 8 位）；
   加 `--no-force-password-change` 可跳过。
+- 本地超级管理员不能长期单因素：账号没有 TOTP 或通行密钥时，密码验证后只进入 `/auth/local/security/`
+  绑定二次因子；控制台 actor 必须在请求期确认至少一种二次因子已存在。
 - 改密要求：当前密码正确、≥ 8 位、与当前密码不同、两次一致。
 - 登录按用户名节流（5 次 / 5 分钟，含二次验证失败与改密时当前密码错误）。
 - 通行密钥（WebAuthn）开发时必须用 `http://localhost:8001` 访问——`127.0.0.1` 不属于 RP-ID `localhost` 会失败（TOTP 不受影响）。
@@ -364,14 +371,15 @@ pnpm install && pnpm --filter @easyauth/frontend build   # 输出到 src/easyaut
 .venv/bin/python manage.py create_local_admin admin --password "<强密码>"   # 应急账号
 ```
 
-**4. 用 WSGI/ASGI 服务器运行：**
+**4. 用 WSGI 服务器运行：**
 
 ```bash
-# WSGI
 .venv/bin/gunicorn easyauth.config.wsgi:application --bind 0.0.0.0:8001 --workers 4
-# 或 ASGI
-.venv/bin/uvicorn easyauth.config.asgi:application --host 0.0.0.0 --port 8001
 ```
+
+仓库当前运行依赖只声明并锁定 Gunicorn；`easyauth.config.asgi:application` 保留给未来需要
+ASGI worker 时使用，但在加入 Uvicorn 或等价 ASGI 服务器依赖并通过启动探测前，不作为可执行
+部署命令。
 
 **5. 运行后台任务：**
 
@@ -403,11 +411,13 @@ pnpm install && pnpm --filter @easyauth/frontend build   # 输出到 src/easyaut
 - 前端：React 19 + Vite，构建到 `src/easyauth/static/easyauth/frontend`。
 - 数据存储：PostgreSQL 16 + Redis 7（见 docker-compose.yml）。需要 Celery worker + beat。
 - 身份上游是 Authentik（OIDC）；DingTalk 提供审批。EasyAuth 是授权事实来源。
-  管理员权限 = OIDC `groups` ∩ EASYAUTH_CONSOLE_SUPERUSER_GROUPS。
+  管理员权限 = 请求期 Authentik 当前组 ∩ `EASYAUTH_CONSOLE_SUPERUSER_GROUPS`；上游不可用
+  或当前组不再匹配时旧 session 立即失去高权限。
 
 阶段 1 — 数据存储
 - 启动 Postgres + Redis：`EASYAUTH_POSTGRES_PASSWORD=<生成> docker compose up -d postgres redis`。
-- 确认两者 healthy 再继续。
+- 用 `docker compose ps` 确认两者进入 `healthy` 后再继续；Compose healthcheck 会分别执行
+  PostgreSQL `pg_isready` 和 Redis `redis-cli ping`。
 
 阶段 2 — 环境变量（export 或写入 secrets 文件，绝不提交密钥）
 - 为 DJANGO_SECRET_KEY 和 EASYAUTH_FIELD_ENCRYPTION_KEY 生成强随机值。
@@ -441,7 +451,9 @@ pnpm install && pnpm --filter @easyauth/frontend build   # 输出到 src/easyaut
 - 运行该指南中的验收探测（OIDC discovery、JWKS、/auth/login/ 跳转、end-session）。不要把密钥打印到日志。
 
 阶段 7 — 验证
-- `curl -fsS https://<域名>/health/` 返回 200。
+- `curl -fsS https://<域名>/health/` 返回 `{"status":"ok"}` 和 200。
+- 使用已授权的控制台管理员 session 访问 `/health/readiness/`，确认 PostgreSQL、Redis/broker
+  和后台心跳详情健康；匿名请求不得返回组件名或时序。
 - `curl -I https://<域名>/auth/login/?next=/console/` 跳转到 Authentik authorize，
   带 client_id=easyauth-portal 与预期 scopes。
 - 用属于 "EasyAuth Admins" 的 Authentik 用户登录，确认 /console/ 管理动作可用。

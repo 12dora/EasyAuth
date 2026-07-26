@@ -67,7 +67,7 @@ def test_ops1_inactive_membership_does_not_grant_scoped_console_access() -> None
     assert can_manage is False
 
 
-def test_ops1_regular_actor_lists_all_apps_without_membership() -> None:
+def test_ops1_regular_actor_lists_no_apps_without_membership() -> None:
     # Given: 普通控制台用户没有任何 AppMembership。
     crm = App.objects.create(app_key="ops1-visible-all-crm", name="CRM")
     erp = App.objects.create(app_key="ops1-visible-all-erp", name="ERP")
@@ -78,8 +78,8 @@ def test_ops1_regular_actor_lists_all_apps_without_membership() -> None:
     crm_can_view = can_view_app(actor, crm)
     erp_can_view = can_view_app(actor, erp)
 
-    # Then: 所有 App 都展示, 但 scoped 工作台数据仍按成员关系控制。
-    assert visible_app_keys == ["ops1-visible-all-crm", "ops1-visible-all-erp"]
+    # Then: 普通控制台用户不能枚举未参与的 App 基础目录。
+    assert visible_app_keys == []
     assert crm_can_view is False
     assert erp_can_view is False
 

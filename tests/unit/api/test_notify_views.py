@@ -11,6 +11,7 @@ from django.core.cache import cache
 from django.test import Client, RequestFactory
 from django.utils import timezone
 
+from easyauth.accounts.directory_references import build_dingtalk_user_ref
 from easyauth.accounts.models import DingTalkUserMirror, UserMirror
 from easyauth.api.notify_views import notify_message_detail, notify_messages_create
 from easyauth.applications.models import (
@@ -21,6 +22,7 @@ from easyauth.applications.models import (
 )
 from easyauth.applications.services import AppPrincipal
 from easyauth.audit.models import AuditLog
+from easyauth.notify.delivery import deliver_message
 from easyauth.notify.models import (
     CREDENTIAL_TYPE_STATIC_TOKEN,
     NOTIFY_ERROR_USER_INACTIVE,
@@ -32,7 +34,6 @@ from easyauth.notify.models import (
     NotifyMessage,
     NotifyRecipient,
 )
-from easyauth.notify.services import deliver_message
 
 pytestmark = pytest.mark.django_db
 
@@ -96,6 +97,7 @@ def _seed_user(*, authentik: str, dingtalk: str, status: str = "active") -> None
     if authentik:
         _ = UserMirror.objects.create(
             authentik_user_id=authentik,
+            dingtalk_source_slug=_SOURCE,
             dingtalk_userid=dingtalk,
             dingtalk_corp_id=_CORP,
             name=dingtalk,
@@ -117,7 +119,7 @@ def test_post_202_new_accept(monkeypatch: pytest.MonkeyPatch) -> None:
     _enable_notify(app)
     _auth(monkeypatch, app)
     _seed_user(authentik="f7c31a09e5b24f8d9a1c", dingtalk="user0123")
-    # manager 仅需钉钉镜像(dt: 引用, 可无 UserMirror)。
+    # manager 仅需钉钉镜像(scoped dt 引用, 可无 UserMirror)。
     _ = DingTalkUserMirror.objects.create(
         source_slug=_SOURCE,
         corp_id=_CORP,
@@ -186,6 +188,7 @@ def test_get_status_contract_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     _auth(monkeypatch, app)
     user = UserMirror.objects.create(
         authentik_user_id="f7c31a09e5b24f8d9a1c",
+        dingtalk_source_slug=_SOURCE,
         dingtalk_userid="user0123",
         dingtalk_corp_id=_CORP,
     )
@@ -219,7 +222,11 @@ def test_get_status_contract_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     _ = NotifyRecipient.objects.create(
         message=message,
-        raw_ref="dt:formeruser01",
+        raw_ref=build_dingtalk_user_ref(
+            source_slug=_SOURCE,
+            corp_id=_CORP,
+            user_id="formeruser01",
+        ),
         dingtalk_userid="formeruser01",
         status=NOTIFY_RECIPIENT_STATUS_FAILED,
         error_code=NOTIFY_ERROR_USER_INACTIVE,
@@ -317,6 +324,24 @@ def test_invalid_recipients_type_audits_rejected(monkeypatch: pytest.MonkeyPatch
     assert meta["recipient_count"] == 0
 
 
+def test_invalid_string_field_type_returns_422_without_string_coercion(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cache.clear()
+    app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
+    _enable_notify(app)
+    _auth(monkeypatch, app)
+    body = {"recipients": ["u1"], "template": "text", "content": True}
+
+    response = notify_messages_create(_post(body), _APP_KEY)
+
+    payload = loads(response.content)
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert payload["error"]["code"] == "VALIDATION_ERROR"
+    assert payload["error"]["details"]["field"] == "content"
+    assert NotifyMessage.objects.filter(app=app).exists() is False
+
+
 def test_raw_ref_over_storage_limit_returns_422_without_partial_rows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -357,7 +382,11 @@ def test_error_code_enum_accept_time(monkeypatch: pytest.MonkeyPatch) -> None:
     _seed_user(authentik="inactive-ak", dingtalk="inactive-dt", status="departed")
 
     body = {
-        "recipients": ["missing-user", "no-dt", "dt:inactive-dt"],
+        "recipients": [
+            "missing-user",
+            "no-dt",
+            build_dingtalk_user_ref(source_slug=_SOURCE, corp_id=_CORP, user_id="inactive-dt"),
+        ],
         "template": "text",
         "content": "errs",
     }
@@ -393,7 +422,7 @@ def test_pipeline_accept_to_deliver(monkeypatch: pytest.MonkeyPatch) -> None:
         return client, 42
 
     monkeypatch.setattr(
-        "easyauth.notify.services._dingtalk_client_and_agent",
+        "easyauth.notify.channel_config.dingtalk_client_and_agent",
         client_for_channel,
     )
     deliver_message(message_id, 1)

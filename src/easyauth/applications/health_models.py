@@ -100,6 +100,10 @@ class DependencyHealthSnapshot(models.Model):
                 fields=["dependency", "-checked_at", "-id"],
                 name="app_dep_health_latest_idx",
             ),
+            models.Index(
+                fields=["checked_at", "id"],
+                name="app_dep_health_retention_idx",
+            ),
         ]
         ordering: ClassVar[list[str]] = ["dependency", "-checked_at", "-id"]
 

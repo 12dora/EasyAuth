@@ -32,6 +32,9 @@
 }
 ```
 
+`page` 与 `page_size` 只有省略或空值时使用默认值；出现非整数、非正数或超过上限的值必须返回
+`422 VALIDATION_ERROR`。前端不得把畸形 2xx 列表信封转换为空列表。
+
 查询参数：`page`（默认 1）、`page_size`（默认 20，最大 100）。
 
 ---
@@ -41,6 +44,10 @@
 当前登录员工的有效授权列表（分页）。
 
 目录解析不可用时返回 `503 DEPENDENCY_UNAVAILABLE`。
+
+单条授权会返回 `grant_id` 与 `grant_revision`。门户发起 `change`、`revoke`、`renew`
+时必须把这两个值原样作为 `base_grant_id` 与 `base_grant_revision` 提交，用来固定申请基于的
+授权修订。
 
 ---
 
@@ -69,6 +76,8 @@
   "app_key": "crm",
   "app_name": "CRM",
   "request_type": "grant",
+  "base_grant_id": null,
+  "base_grant_revision": null,
   "status": "submitted",
   "status_label": "等待审批",
   "grant_type": "permanent",
@@ -86,7 +95,9 @@
 }
 ```
 
-**状态枚举：** `submitted` / `approved` / `rejected` / `grant_applied` / `grant_failed` / `grant_expired` / `withdrawn`。
+**状态枚举：** `submitted` / `approved` / `rejected` / `grant_applied` / `grant_failed` / `grant_conflict` / `grant_expired` / `withdrawn`。
+
+`grant_conflict` 表示生命周期申请基于的基础授权修订已经变化。该状态不是可重试落库失败，前端必须提示申请人重新提交申请。
 
 ---
 
@@ -107,6 +118,8 @@
   ],
   "approver_user_ids": ["ak-manager-1"],
   "request_type": "grant",
+  "base_grant_id": null,
+  "base_grant_revision": null,
   "grant_type": "timed",
   "grant_expires_at": "2026-12-31T00:00:00+00:00",
   "reason": "项目需要"
@@ -117,7 +130,10 @@
 
 - 目标使用 **`authorization_groups`（授权组）**，不是历史文档中的 `roles`
 - `request_type`：`grant` / `change` / `revoke` / `renew`
+- `grant` 申请必须让 `base_grant_id` 与 `base_grant_revision` 为 `null` 或省略；`change`、`revoke`、`renew` 必须填写当前授权列表返回的 `grant_id` 与 `grant_revision`
 - `grant_type`：`permanent` 或 `timed`（timed 必须带 `grant_expires_at`）
+- `change`、`revoke`、`renew` 的基础授权主键与修订会进入幂等摘要；审批落地时若该授权修订已变化，申请进入 `grant_conflict`，不会改用最新授权事实
+- 提交时会冻结授权组展开后的权限与 scope 快照，并记录提交时的 `authorization_group_id_snapshot` 作为稳定历史值；审批列表、审批详情、审计元数据和授权落地前置事实必须使用同一份快照，后续授权组配置变化不会改变已提交申请的展示或执行事实
 
 **成功：** `201`，`{ "access_request": { … } }`  
 **冲突：** 同一幂等键不同 payload → `409`  
@@ -166,7 +182,7 @@
 
 审批条目在 access_request 基础上额外包含：
 
-- `authorization_groups`（含 grants 明细）
+- `authorization_groups`（含提交时冻结的 grants 明细）
 - `applicant`：`{ user_id, name, email, department }`
 - `approver_user_ids`
 - `decided_by` / `decided_at`
@@ -190,6 +206,25 @@
 ```
 
 非审批人 → `403`；已处理冲突 → `409`；授权落库失败 → `422`（可能带 `decision_committed`）。
+
+如果审批决定已提交，但授权落地发现基础授权修订变化或申请已过期，接口返回 `409 CONFLICT`，错误明细带：
+
+```json
+{
+  "error": {
+    "code": "CONFLICT",
+    "message": "基础授权已变化, 请重新提交申请。",
+    "details": {
+      "reason": "base_grant_revision_conflict",
+      "decision_committed": true,
+      "status": "grant_conflict",
+      "request_id": 1
+    }
+  }
+}
+```
+
+`details.reason` 取值为 `base_grant_revision_conflict` 或 `request_expired` 时，前端必须刷新审批列表并提示重新提交申请。该类冲突不得当作 `grant_failed` 重试。
 
 ---
 

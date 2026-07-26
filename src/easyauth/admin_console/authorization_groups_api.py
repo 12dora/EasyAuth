@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import TYPE_CHECKING, ClassVar
+from typing import ClassVar
 
 from django.db import transaction
 from django.http import HttpRequest, JsonResponse
@@ -12,6 +12,7 @@ from easyauth.admin_console.catalog_write_common import (
     CatalogEvent,
     CatalogWriteContext,
     conflict_response,
+    error_response,
     json_response,
     method_not_allowed_response,
     parse_payload,
@@ -20,11 +21,19 @@ from easyauth.admin_console.catalog_write_common import (
     semantic_response,
     write_context,
 )
-from easyauth.admin_console.permission_catalog_api import read_context_response
-from easyauth.admin_console.permission_catalog_data import (
-    authorization_group_item,
-    authorization_groups_payload,
+from easyauth.admin_console.operation_filters import (
+    OperationFilterValidationError,
+    operation_filter_error_response,
+    paginate_queryset,
 )
+from easyauth.admin_console.permission_catalog_data import (
+    active_authorization_groups_queryset,
+    authorization_group_item,
+    authorization_groups_page_payload,
+)
+from easyauth.admin_console.request_guards import require_console_actor
+from easyauth.api.errors import ErrorCode
+from easyauth.api.pagination import pagination_item
 from easyauth.applications.catalog_version import bump_catalog_version
 from easyauth.applications.models import (
     MANAGED_SCOPE_POLICY_ACTIVE_RESOLVERS,
@@ -38,9 +47,7 @@ from easyauth.applications.models import (
     ManagedScopePolicy,
     Permission,
 )
-
-if TYPE_CHECKING:
-    from easyauth.applications.ownership import ConsoleActor
+from easyauth.applications.ownership import ConsoleActor, can_view_app
 
 type AuthorizationGroupUpdateInputs = tuple[
     App,
@@ -62,6 +69,12 @@ class ResolvedAuthorizationGroupGrant:
     scope_key: str
     is_active: bool
     managed_scope_policy: ManagedScopePolicyPayload | None
+
+
+@dataclass(frozen=True, slots=True)
+class AuthorizationGroupQueryOptions:
+    include_inactive: bool
+    status: str
 
 
 class ManagedScopePolicyPayload(BaseModel):
@@ -97,10 +110,76 @@ class AuthorizationGroupPayload(BaseModel):
 
 def console_authorization_groups(request: HttpRequest, app_key: str) -> JsonResponse:
     if request.method == "GET":
-        return read_context_response(request, app_key, authorization_groups_payload)
+        return _read_authorization_groups(request, app_key)
     if request.method == "POST":
         return _create_authorization_group(request, app_key)
     return method_not_allowed_response()
+
+
+def _read_authorization_groups(request: HttpRequest, app_key: str) -> JsonResponse:
+    match require_console_actor(request):
+        case ConsoleActor() as actor:
+            pass
+        case JsonResponse() as response:
+            return response
+    app = App.objects.filter(app_key=app_key).first()
+    if app is None:
+        return error_response(ErrorCode.NOT_FOUND, "App 不存在。", status=HTTPStatus.NOT_FOUND)
+    if not can_view_app(actor, app):
+        return error_response(
+            ErrorCode.PERMISSION_DENIED,
+            "只有 active App owner/developer 可以访问该 App 权限目录。",
+            status=HTTPStatus.FORBIDDEN,
+        )
+    match _authorization_group_query_options(request):
+        case AuthorizationGroupQueryOptions() as options:
+            try:
+                page = paginate_queryset(
+                    active_authorization_groups_queryset(
+                        app,
+                        include_inactive=options.include_inactive,
+                        status=options.status,
+                    ),
+                    request.GET,
+                )
+            except OperationFilterValidationError as exc:
+                return operation_filter_error_response(exc)
+            return json_response(
+                authorization_groups_page_payload(
+                    app,
+                    groups=page.items,
+                    pagination=pagination_item(page),
+                )
+            )
+        case JsonResponse() as response:
+            return response
+
+
+def _authorization_group_query_options(
+    request: HttpRequest,
+) -> AuthorizationGroupQueryOptions | JsonResponse:
+    status = request.GET.get("status", "").strip()
+    if status not in {"", "active", "inactive"}:
+        return error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "status 必须为 active 或 inactive。",
+            {"status": status},
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+        )
+    include_inactive_value = request.GET.get("include_inactive", "").strip()
+    match include_inactive_value:
+        case "" | "false":
+            include_inactive = False
+        case "true":
+            include_inactive = True
+        case _:
+            return error_response(
+                ErrorCode.VALIDATION_ERROR,
+                "include_inactive 必须为 true 或 false。",
+                {"include_inactive": include_inactive_value},
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            )
+    return AuthorizationGroupQueryOptions(include_inactive=include_inactive, status=status)
 
 
 def console_authorization_group_detail(
@@ -380,7 +459,7 @@ def _replace_grant_managed_scope_policy(
     policy, _created = ManagedScopePolicy.objects.get_or_create(
         app=group.app,
         target_type=MANAGED_SCOPE_POLICY_TARGET_AUTHORIZATION_GROUP_GRANT,
-        target_id=grant.id,
+        authorization_group_grant=grant,
         scope=MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS,
         defaults={
             "resolver": normalized.resolver,
@@ -404,7 +483,7 @@ def _delete_grant_managed_scope_policy(
     deleted_count, _deleted_by_model = ManagedScopePolicy.objects.filter(
         app=group.app,
         target_type=MANAGED_SCOPE_POLICY_TARGET_AUTHORIZATION_GROUP_GRANT,
-        target_id=grant.id,
+        authorization_group_grant=grant,
         scope=MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS,
     ).delete()
     return deleted_count > 0

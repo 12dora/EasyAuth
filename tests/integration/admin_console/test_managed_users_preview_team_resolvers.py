@@ -14,6 +14,7 @@ from easyauth.api.errors import JsonValue
 from easyauth.applications.models import App, AppMembership, ManagedScopePolicy
 from easyauth.integrations.authentik.directory_payloads import DingTalkManagedUsers
 from easyauth.teams.models import Team, TeamMember
+from tests.integration.admin_console.auth_helpers import authenticate_console_admin
 
 pytestmark = pytest.mark.django_db
 
@@ -80,6 +81,7 @@ def test_preview_union_resolver_merges_directory_and_team(
     _ = _policy(app, "union")
     leader = UserMirror.objects.create(
         authentik_user_id="preview-union-leader",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="ding-corp",
         dingtalk_userid="ding-union-leader",
     )
@@ -146,7 +148,6 @@ def _policy(app: App, resolver: str) -> ManagedScopePolicy:
     return ManagedScopePolicy.objects.create(
         app=app,
         target_type="app_default",
-        target_id=app.id,
         scope="MANAGED_USERS",
         resolver=resolver,
     )
@@ -155,7 +156,7 @@ def _policy(app: App, resolver: str) -> ManagedScopePolicy:
 def _logged_in_client(username: str) -> Client:
     _ = User.objects.create_user(username=username, password=LOGIN_VALUE)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    authenticate_console_admin(client, username)
     return client
 
 

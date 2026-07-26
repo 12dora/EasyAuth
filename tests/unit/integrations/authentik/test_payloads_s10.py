@@ -43,6 +43,7 @@ def test_s10_parse_payload_maps_dingtalk_summary_fields() -> None:
             "attributes": {
                 "department": "旧部门",
                 "dingtalk": {
+                    "source_slug": "dingtalk",
                     "corp_id": "corp-1",
                     "user_id": "user-1",
                     "union_id": "union-1",
@@ -64,6 +65,7 @@ def test_s10_parse_payload_maps_dingtalk_summary_fields() -> None:
     profile = parse_authentik_payload(payload)
 
     assert profile.name == "钉钉张三"
+    assert profile.dingtalk_source_slug == "dingtalk"
     assert profile.dingtalk_corp_id == "corp-1"
     assert profile.dingtalk_userid == "user-1"
     assert profile.dingtalk_union_id == "union-1"

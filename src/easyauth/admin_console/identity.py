@@ -4,11 +4,19 @@ from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 from django.conf import settings
+from django.db import DatabaseError
 
-from easyauth.accounts.auth import AUTHENTIK_GROUPS_SESSION_KEY, AUTHENTIK_SESSION_KEY
-from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
-from easyauth.accounts.models import USER_STATUS_ACTIVE, LocalAdminAccount, UserMirror
+from easyauth.accounts.auth import (
+    AUTHENTIK_SESSION_KEY,
+    clear_auth_session,
+)
+from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX, current_local_admin
+from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.applications.ownership import ConsoleActor
+from easyauth.integrations.authentik.admin_client import (
+    AuthentikAdminClient,
+    AuthentikAdminError,
+)
 
 if TYPE_CHECKING:
     from django.http import HttpRequest
@@ -18,38 +26,67 @@ def actor_from_request(request: HttpRequest) -> ConsoleActor | None:
     if authentik_user_id == "":
         return None
 
-    # 本地超管以 is_active 为唯一权威: 停用后已有控制台会话必须立即失效, 不能等自然过期。
     if authentik_user_id.startswith(LOCAL_ADMIN_SUBJECT_PREFIX):
-        username = authentik_user_id[len(LOCAL_ADMIN_SUBJECT_PREFIX) :]
-        if not LocalAdminAccount.objects.filter(username=username, is_active=True).exists():
-            _clear_console_session(request)
-            return None
+        return _local_admin_actor(request, authentik_user_id)
+    return _oidc_actor(request, authentik_user_id)
 
-    user = UserMirror.objects.filter(
-        authentik_user_id=authentik_user_id,
-        status=USER_STATUS_ACTIVE,
-    ).first()
+
+def _local_admin_actor(request: HttpRequest, authentik_user_id: str) -> ConsoleActor | None:
+    try:
+        account = current_local_admin(request)
+    except DatabaseError:
+        return None
+    if account is None:
+        _clear_console_session(request)
+        return None
+    if not account.has_second_factor():
+        return None
+    user = _active_user(authentik_user_id)
     if user is None:
         _clear_console_session(request)
         return None
+    return ConsoleActor(user_id=user.authentik_user_id, is_superuser=True)
 
+
+def _oidc_actor(request: HttpRequest, authentik_user_id: str) -> ConsoleActor | None:
+    user = _active_user(authentik_user_id)
+    if user is None:
+        _clear_console_session(request)
+        return None
     return ConsoleActor(
         user_id=user.authentik_user_id,
-        is_superuser=_is_console_superuser(request),
+        is_superuser=_is_console_superuser(request, user),
     )
 
 
-def _is_console_superuser(request: HttpRequest) -> bool:
+def _active_user(authentik_user_id: str) -> UserMirror | None:
+    try:
+        return UserMirror.objects.filter(
+            authentik_user_id=authentik_user_id,
+            status=USER_STATUS_ACTIVE,
+        ).first()
+    except DatabaseError:
+        return None
+
+
+def _is_console_superuser(request: HttpRequest, user: UserMirror) -> bool:
+    del request
+    try:
+        authority_groups = frozenset(
+            _string_values(AuthentikAdminClient.from_settings().user_group_names_by_uid(
+                user.authentik_user_id,
+            )),
+        )
+    except AuthentikAdminError:
+        return False
     configured_groups = frozenset(
         _string_values(_setting_value("EASYAUTH_CONSOLE_SUPERUSER_GROUPS")),
     )
-    session_groups = frozenset(_string_values(request.session.get(AUTHENTIK_GROUPS_SESSION_KEY)))
-    return bool(configured_groups and not configured_groups.isdisjoint(session_groups))
+    return bool(configured_groups and not configured_groups.isdisjoint(authority_groups))
 
 
 def _clear_console_session(request: HttpRequest) -> None:
-    request.session.pop(AUTHENTIK_SESSION_KEY, None)
-    request.session.pop(AUTHENTIK_GROUPS_SESSION_KEY, None)
+    clear_auth_session(request)
 
 
 def _session_string(request: HttpRequest, key: str) -> str:

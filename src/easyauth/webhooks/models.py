@@ -119,6 +119,15 @@ class WebhookDelivery(models.Model):
     payload: models.JSONField[dict[str, JsonValue], dict[str, JsonValue]] = models.JSONField(
         default=dict,
     )
+    payload_sha256: models.CharField[str, str] = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+    )
+    payload_minimized_at: models.DateTimeField[
+        str | date | datetime | None,
+        datetime | None,
+    ] = models.DateTimeField(null=True, blank=True)
     status: models.CharField[str, str] = models.CharField(
         max_length=16,
         choices=DELIVERY_STATUS_CHOICES,
@@ -148,6 +157,36 @@ class WebhookDelivery(models.Model):
             models.CheckConstraint(
                 condition=Q(generation__gte=1),
                 name="webhooks_delivery_generation_positive",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(status=DELIVERY_STATUS_PENDING, claim_token="", lease_expires_at__isnull=True)
+                    | (
+                        Q(status=DELIVERY_STATUS_PENDING)
+                        & ~Q(claim_token="")
+                        & Q(lease_expires_at__isnull=False)
+                    )
+                    | (
+                        ~Q(status=DELIVERY_STATUS_PENDING)
+                        & Q(claim_token="")
+                        & Q(lease_expires_at__isnull=True)
+                    )
+                ),
+                name="webhooks_delivery_lease_shape_valid",
+            ),
+        ]
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["status", "lease_expires_at"],
+                name="webhooks_delivery_lease_idx",
+            ),
+            models.Index(
+                fields=["app", "status", "-created_at", "-id"],
+                name="webhook_deliv_app_stat_idx",
+            ),
+            models.Index(
+                fields=["status", "payload_minimized_at", "updated_at", "id"],
+                name="webhook_deliv_retention_idx",
             ),
         ]
         ordering: ClassVar[list[str]] = ["-created_at", "-id"]

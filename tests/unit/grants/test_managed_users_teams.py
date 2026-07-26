@@ -28,7 +28,6 @@ def _app_with_policy(app_key: str, resolver: str) -> App:
     _ = ManagedScopePolicy.objects.create(
         app=app,
         target_type="app_default",
-        target_id=app.id,
         scope="MANAGED_USERS",
         resolver=resolver,
     )
@@ -121,6 +120,7 @@ def test_union_resolver_merges_chain_and_team_members(
     # Given: 钉钉链下属与手工团队成员部分重叠。
     leader = UserMirror.objects.create(
         authentik_user_id="union-leader",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="union-leader-dt",
     )
@@ -172,6 +172,7 @@ def test_union_resolver_fails_fast_when_directory_unavailable(
     # Given: union 策略, 钉钉目录瞬时不可用。
     leader = UserMirror.objects.create(
         authentik_user_id="union-unavailable-leader",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="union-unavailable-dt",
     )

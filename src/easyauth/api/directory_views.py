@@ -2,13 +2,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Final, TypedDict, cast
+from typing import TYPE_CHECKING, Final, cast
 
-from django.core.cache import cache
 from django.db import connection
 from django.db.models import Q
 from django.http import HttpRequest, JsonResponse
-from django.utils import timezone
 from django.views.decorators.http import require_http_methods
 from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 
@@ -39,6 +37,11 @@ from easyauth.applications.capabilities import (
 )
 from easyauth.applications.models import CAPABILITY_DIRECTORY, App
 from easyauth.applications.services import AppPrincipal
+from easyauth.audit.directory_audit import (
+    DIRECTORY_AUDIT_ACTION,
+    DIRECTORY_AUDIT_TARGET_TYPE,
+    record_directory_audit_bucket,
+)
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.config.rate_limit import client_ip, over_limit, rate_limit_exceeded
 
@@ -64,19 +67,8 @@ _DEFAULT_PAGE: Final = 1
 _DEFAULT_PAGE_SIZE: Final = 20
 _MAX_PAGE: Final = 100_000
 _MAX_USERS_PAGE_SIZE: Final = 200
-_DIRECTORY_AUDIT_ACTION: Final = "app_directory_queried"
-_DIRECTORY_AUDIT_TARGET_TYPE: Final = "directory"
-_LIST_AUDIT_TTL_SECONDS: Final = 3700
 _AUTH_FAIL_NAMESPACE: Final = "directory-authfail"
 _RATE_NAMESPACE: Final = "directory-rate"
-
-
-class _ListAuditState(TypedDict):
-    hour_bucket: str
-    call_count: int
-    q_present: bool
-    result_count: int
-    credential_id: str | int
 
 
 @dataclass(frozen=True, slots=True)
@@ -477,6 +469,7 @@ def _resolve_manager(subject: _Subject) -> DingTalkUserMirror | None:
         return None
     rows = list(
         DingTalkUserMirror.objects.filter(
+            source_slug=subject.user_mirror.dingtalk_source_slug,
             corp_id=subject.user_mirror.dingtalk_corp_id,
             user_id=manager_userid,
         ).order_by("source_slug", "corp_id", "user_id")[:2],
@@ -531,8 +524,8 @@ def _record_directory_audit(
         AuditRecord(
             actor_type="app",
             actor_id=principal.app_key,
-            action=_DIRECTORY_AUDIT_ACTION,
-            target_type=_DIRECTORY_AUDIT_TARGET_TYPE,
+            action=DIRECTORY_AUDIT_ACTION,
+            target_type=DIRECTORY_AUDIT_TARGET_TYPE,
             target_id=principal.app_key,
             metadata={
                 "endpoint": endpoint,
@@ -551,82 +544,12 @@ def _record_aggregated_list_audit(
     result_count: int,
     q_present: bool,
 ) -> None:
-    # list 搜索类按 app x 端点 x 小时聚合: 小时内只做 cache 计数,
-    # 小时翻转时把上一小时累计 call_count 落库一条(AuditLog 只追加不可更新)。
-    hour_bucket = timezone.now().strftime("%Y%m%d%H")
-    state_key = f"easyauth:directory-audit:{principal.app_key}:{endpoint}"
-    raw_state = cast("object | None", cache.get(state_key))
-    state = _as_audit_state(raw_state)
-    if state is not None and state["hour_bucket"] != hour_bucket:
-        _flush_aggregated_list_audit(principal=principal, endpoint=endpoint, state=state)
-        state = None
-    if state is None:
-        next_state: _ListAuditState = {
-            "hour_bucket": hour_bucket,
-            "call_count": 1,
-            "q_present": q_present,
-            "result_count": result_count,
-            "credential_id": principal.credential_id,
-        }
-        cache.set(state_key, next_state, _LIST_AUDIT_TTL_SECONDS)
-        return
-    next_state = {
-        "hour_bucket": hour_bucket,
-        "call_count": state["call_count"] + 1,
-        "q_present": state["q_present"] or q_present,
-        "result_count": result_count,
-        "credential_id": principal.credential_id,
-    }
-    cache.set(state_key, next_state, _LIST_AUDIT_TTL_SECONDS)
-
-
-def _as_audit_state(raw: object | None) -> _ListAuditState | None:
-    if not isinstance(raw, dict):
-        return None
-    mapping = cast("dict[str, object]", raw)
-    hour_bucket = mapping.get("hour_bucket")
-    call_count = mapping.get("call_count")
-    if not isinstance(hour_bucket, str) or not isinstance(call_count, int):
-        return None
-    q_present_raw = mapping.get("q_present", False)
-    result_count_raw = mapping.get("result_count", 0)
-    credential_id_raw = mapping.get("credential_id", "")
-    result_count = result_count_raw if isinstance(result_count_raw, int) else 0
-    if isinstance(credential_id_raw, (str, int)):
-        credential_id: str | int = credential_id_raw
-    else:
-        credential_id = ""
-    return {
-        "hour_bucket": hour_bucket,
-        "call_count": call_count,
-        "q_present": bool(q_present_raw),
-        "result_count": result_count,
-        "credential_id": credential_id,
-    }
-
-
-def _flush_aggregated_list_audit(
-    *,
-    principal: AppPrincipal,
-    endpoint: str,
-    state: _ListAuditState,
-) -> None:
-    _ = AuditService.record(
-        AuditRecord(
-            actor_type="app",
-            actor_id=principal.app_key,
-            action=_DIRECTORY_AUDIT_ACTION,
-            target_type=_DIRECTORY_AUDIT_TARGET_TYPE,
-            target_id=principal.app_key,
-            metadata={
-                "endpoint": endpoint,
-                "q_present": state["q_present"],
-                "result_count": state["result_count"],
-                "credential_id": state["credential_id"],
-                "call_count": state["call_count"],
-                "hour_bucket": state["hour_bucket"],
-            },
-        ),
+    record_directory_audit_bucket(
+        app_key=principal.app_key,
+        endpoint=endpoint,
+        result_count=result_count,
+        q_present=q_present,
+        credential_id=principal.credential_id,
     )
 
 

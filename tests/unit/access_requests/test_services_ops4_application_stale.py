@@ -6,9 +6,11 @@ import pytest
 from django.utils import timezone
 
 from easyauth.access_requests.models import (
+    DECISION_ACTOR_USER,
     GRANT_TYPE_PERMANENT,
     GRANT_TYPE_TIMED,
     REQUEST_STATUS_APPROVED,
+    REQUEST_STATUS_GRANT_CONFLICT,
     REQUEST_STATUS_GRANT_FAILED,
     REQUEST_TYPE_CHANGE,
     REQUEST_TYPE_RENEW,
@@ -116,7 +118,7 @@ def test_ops4_apply_stale_partial_revoke_rejects_non_current_target() -> None:
     )
     assert group_keys == ("new",)
     assert grant.version == 1
-    assert access_request.status == REQUEST_STATUS_GRANT_FAILED
+    assert access_request.status == REQUEST_STATUS_GRANT_CONFLICT
 
 
 def test_ops4_apply_stale_renew_rejects_changed_membership() -> None:
@@ -166,7 +168,7 @@ def test_ops4_apply_stale_renew_rejects_changed_membership() -> None:
     assert group_keys == ("new",)
     assert grant_group.expires_at == current_expires_at
     assert grant.version == 1
-    assert access_request.status == REQUEST_STATUS_GRANT_FAILED
+    assert access_request.status == REQUEST_STATUS_GRANT_CONFLICT
 
 
 def _approved_request(
@@ -177,6 +179,8 @@ def _approved_request(
     grant_type: str = GRANT_TYPE_PERMANENT,
     grant_expires_at: datetime | None = None,
 ) -> AccessRequest:
+    base_grant = AccessGrant.objects.get(user=user, app=app, is_current=True)
+    decided_at = timezone.now()
     return AccessRequest.objects.create(
         user=user,
         app=app,
@@ -187,7 +191,12 @@ def _approved_request(
         idempotency_key=f"{app.app_key}:{request_type}:approved",
         payload_digest="a" * 64,
         reason="审批已通过",
-        approved_at=timezone.now(),
+        base_grant=base_grant,
+        base_grant_revision=base_grant.version,
+        approved_at=decided_at,
+        decided_at=decided_at,
+        decided_by="approver",
+        decision_actor_type=DECISION_ACTOR_USER,
     )
 
 

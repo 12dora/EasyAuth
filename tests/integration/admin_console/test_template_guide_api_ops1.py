@@ -22,7 +22,8 @@ from easyauth.applications.models import (
     PermissionTemplateVersion,
 )
 from easyauth.applications.oauth import OAuthClientService
-from easyauth.applications.services import StaticTokenService
+from easyauth.applications.services import AppCredentialService
+from tests.integration.admin_console.auth_helpers import authenticate_console_user
 
 pytestmark = pytest.mark.django_db
 
@@ -404,7 +405,7 @@ def test_ops1_template_confirm_api_rejects_developer_but_versions_are_readable()
 def test_ops1_manifest_export_api_returns_replayable_current_state_without_secrets() -> None:
     client = _logged_in_client("ops1-manifest-api-export-owner")
     app = _member_app("ops1-manifest-api-export", "ops1-manifest-api-export-owner", "owner")
-    static_issue = StaticTokenService.create_token(app=app, name="static integration")
+    static_issue = AppCredentialService.create_static_token(app=app, name="static integration")
     oauth_issue = OAuthClientService.create_client(app=app, name="oauth integration")
     _confirm_manifest(client, app)
 
@@ -499,7 +500,7 @@ def test_ops1_manifest_import_export_roundtrips_bilingual_fields() -> None:
 def test_ops1_integration_guide_api_returns_credential_summary_without_secrets() -> None:
     client = _logged_in_client("ops1-guide-api-owner")
     app = _member_app("ops1-guide-api", "ops1-guide-api-owner", "owner")
-    static_issue = StaticTokenService.create_token(app=app, name="static integration")
+    static_issue = AppCredentialService.create_static_token(app=app, name="static integration")
     oauth_issue = OAuthClientService.create_client(app=app, name="oauth integration")
 
     response = client.get(f"/console/api/v1/apps/{app.app_key}/integration-guide")
@@ -538,7 +539,7 @@ def _member_app(app_key: str, user_id: str, role: str) -> App:
 def _logged_in_client(username: str) -> Client:
     _ = User.objects.create_user(username=username, password=LOGIN_VALUE)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    authenticate_console_user(client, username)
     return client
 
 

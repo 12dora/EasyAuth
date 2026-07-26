@@ -42,6 +42,7 @@ class AuthentikAttributes(TypedDict, total=False):
 
 
 class AuthentikDingTalkAttributes(TypedDict, total=False):
+    source_slug: str
     corp_id: str
     user_id: str
     union_id: str
@@ -51,6 +52,7 @@ class AuthentikDingTalkAttributes(TypedDict, total=False):
 
 
 class AuthentikDingTalkOrgAttributes(TypedDict, total=False):
+    source_slug: str
     department: str
     manager_userid: str
     name: str
@@ -81,6 +83,7 @@ class AuthentikUserProfile:
     email: str
     department: str
     status: UserStatus
+    dingtalk_source_slug: str = ""
     dingtalk_corp_id: str = ""
     dingtalk_userid: str = ""
     dingtalk_union_id: str = ""
@@ -106,6 +109,7 @@ def parse_authentik_payload(payload: AuthentikPayloadInput) -> AuthentikUserProf
             _first_attribute_string(user_attributes, context_attributes, "department"),
         ),
         status=status,
+        dingtalk_source_slug=dingtalk.get("source_slug", dingtalk_org.get("source_slug", "")),
         dingtalk_corp_id=dingtalk.get("corp_id", ""),
         dingtalk_userid=dingtalk.get("user_id", ""),
         dingtalk_union_id=dingtalk.get("union_id", ""),
@@ -266,7 +270,15 @@ def _parse_dingtalk(
     match value:
         case dict() as attributes:
             parsed: AuthentikDingTalkAttributes = {}
-            for field in ("corp_id", "user_id", "union_id", "job_number", "name", "nick"):
+            for field in (
+                "source_slug",
+                "corp_id",
+                "user_id",
+                "union_id",
+                "job_number",
+                "name",
+                "nick",
+            ):
                 if field in attributes:
                     parsed[field] = _required_string(attributes[field], f"{field_name}.{field}")
             return parsed
@@ -282,6 +294,7 @@ def _parse_dingtalk_org(
         case dict() as attributes:
             org_attributes = cast("dict[str, AuthentikPayloadValue]", attributes)
             return {
+                "source_slug": _optional_mapping_string(org_attributes, "source_slug"),
                 "department": _first_department_name(org_attributes.get("departments")),
                 "manager_userid": _manager_user_id(org_attributes.get("manager")),
                 "name": _optional_mapping_string(org_attributes, "name"),

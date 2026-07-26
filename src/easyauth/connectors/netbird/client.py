@@ -25,6 +25,11 @@ TOTAL_TIMEOUT_MESSAGE: Final = "NetBird API 请求超过总时限。"
 READ_TOTAL_TIMEOUT_MESSAGE: Final = "NetBird API 响应读取超过总时限。"
 INVALID_CONTENT_LENGTH_MESSAGE: Final = "NetBird API Content-Length 无效。"
 RESPONSE_TOO_LARGE_MESSAGE: Final = "NetBird API 响应体超过大小上限。"
+GROUP_PAGE_SIZE: Final = 100
+MAX_GROUP_PAGES: Final = 100
+GROUP_PAGINATION_CONTRACT_MESSAGE: Final = (
+    f"NetBird /api/groups 必须支持 page/page_size 分页, 超过 {MAX_GROUP_PAGES} 页仍未结束。"
+)
 
 USER_ROLE_USER: Final = "user"
 USER_ROLE_ADMIN: Final = "admin"
@@ -105,8 +110,7 @@ class NetBirdClient:
         if not isinstance(account, dict):
             message = "NetBird /api/accounts 响应账户必须是 JSON 对象。"
             raise NetBirdApiError(message)
-        account_id = _required_string(account, "id", label="accounts")
-        return account_id
+        return _required_string(account, "id", label="accounts")
 
     def create_user(
         self,
@@ -153,6 +157,31 @@ class NetBirdClient:
         groups = [_parse_group(item) for item in payload]
         _assert_unique_ids([group.group_id for group in groups], label="groups")
         return groups
+
+    def iter_group_pages(self) -> list[list[NetBirdGroup]]:
+        pages: list[list[NetBirdGroup]] = []
+        seen_ids: set[str] = set()
+        for page_number in range(1, MAX_GROUP_PAGES + 1):
+            payload = self._request(
+                "GET",
+                f"/api/groups?page={page_number}&page_size={GROUP_PAGE_SIZE}",
+            )
+            if not isinstance(payload, list):
+                message = "NetBird /api/groups 响应必须是 JSON 数组。"
+                raise NetBirdApiError(message)
+            groups = [_parse_group(item) for item in payload]
+            ids = [group.group_id for group in groups]
+            _assert_unique_ids(ids, label="groups")
+            duplicate_ids = seen_ids & set(ids)
+            if duplicate_ids:
+                duplicate_id_list = ", ".join(sorted(duplicate_ids))
+                message = f"NetBird /api/groups 分页响应包含跨页重复 ID: {duplicate_id_list}。"
+                raise NetBirdApiError(message)
+            seen_ids.update(ids)
+            pages.append(groups)
+            if len(groups) < GROUP_PAGE_SIZE:
+                return pages
+        raise NetBirdApiError(GROUP_PAGINATION_CONTRACT_MESSAGE)
 
     def _request(
         self,

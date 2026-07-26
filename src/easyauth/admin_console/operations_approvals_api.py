@@ -136,10 +136,22 @@ def _approval_error_response(error: ApprovalActionError) -> JsonResponse:
                 status=HTTPStatus.CONFLICT,
             )
         case _:
+            details = dict(error.details)
+            request_id = details.get("request_id")
+            if isinstance(request_id, int):
+                access_request = (
+                    AccessRequest.objects.select_related("user", "app")
+                    .filter(id=request_id)
+                    .first()
+                )
+                if access_request is not None:
+                    details["approval"] = _request_item(access_request)
             return _error_response(
-                ErrorCode.VALIDATION_ERROR,
+                ErrorCode.SEMANTIC_VALIDATION_ERROR
+                if error.kind == "application_error"
+                else ErrorCode.VALIDATION_ERROR,
                 error.message,
-                error.details,
+                details,
                 status=HTTPStatus.UNPROCESSABLE_ENTITY,
             )
 

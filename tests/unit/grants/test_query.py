@@ -345,6 +345,7 @@ def test_resolve_user_permissions_resolves_managed_users_with_effective_policy(
     # Given: 用户持有 MANAGED_USERS 授权组, App 配置了有效管理范围策略。
     user = UserMirror.objects.create(
         authentik_user_id="manager-ak",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="manager-dt",
     )
@@ -360,7 +361,6 @@ def test_resolve_user_permissions_resolves_managed_users_with_effective_policy(
     _ = ManagedScopePolicy.objects.create(
         app=app,
         target_type="app_default",
-        target_id=app.id,
         scope="MANAGED_USERS",
         resolver="dingtalk_manager_chain",
     )
@@ -401,6 +401,7 @@ def test_resolve_user_permissions_filters_managed_users_grant_without_effective_
     # Given: 用户持有 MANAGED_USERS 授权组, 但 App 没有有效策略。
     user = UserMirror.objects.create(
         authentik_user_id="manager-no-policy",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="manager-dt",
     )
@@ -445,6 +446,7 @@ def test_resolve_user_permissions_keeps_managed_users_grant_when_resolved_users_
     # Given: 策略有效, 但下级列表为空。
     user = UserMirror.objects.create(
         authentik_user_id="manager-empty",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="manager-dt",
     )
@@ -460,7 +462,6 @@ def test_resolve_user_permissions_keeps_managed_users_grant_when_resolved_users_
     _ = ManagedScopePolicy.objects.create(
         app=app,
         target_type="app_default",
-        target_id=app.id,
         scope="MANAGED_USERS",
         resolver="dingtalk_manager_chain",
     )
@@ -851,6 +852,7 @@ def _managed_users_app(
 ) -> tuple[UserMirror, App]:
     user = UserMirror.objects.create(
         authentik_user_id=f"manager-{user_suffix}",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="corp-1",
         dingtalk_userid="manager-dt",
     )
@@ -859,7 +861,6 @@ def _managed_users_app(
     _ = ManagedScopePolicy.objects.create(
         app=app,
         target_type="app_default",
-        target_id=app.id,
         scope="MANAGED_USERS",
         resolver="dingtalk_manager_chain",
     )

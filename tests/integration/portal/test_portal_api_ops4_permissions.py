@@ -250,6 +250,8 @@ def test_ops4_portal_api_lists_access_request_direct_permissions() -> None:
             {
                 "app_key": app.app_key,
                 "request_type": "change",
+                "base_grant_id": current_grant.id,
+                "base_grant_revision": current_grant.version,
                 "authorization_group_keys": [],
                 "direct_grants": [{"permission": new_permission.key, "scope": DEFAULT_SCOPE_KEY}],
                 "approver_user_ids": [_active_approver_user_id()],

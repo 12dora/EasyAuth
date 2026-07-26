@@ -15,6 +15,7 @@ from easyauth.applications.models import App, AppMembership, ManagedScopePolicy
 from easyauth.audit.models import AuditLog
 from easyauth.integrations.authentik.directory_client import AuthentikDirectoryError
 from easyauth.integrations.authentik.directory_payloads import DingTalkManagedUsers
+from tests.integration.admin_console.auth_helpers import authenticate_console_user
 
 pytestmark = pytest.mark.django_db
 
@@ -50,6 +51,7 @@ def test_managed_users_preview_returns_filtered_directory_users(
     _ = _enabled_policy(app)
     user = UserMirror.objects.create(
         authentik_user_id="managed-preview-manager",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="ding-corp",
         dingtalk_userid="ding-manager",
     )
@@ -114,6 +116,7 @@ def test_managed_users_preview_rejects_missing_or_disabled_policy() -> None:
     _ = _enabled_policy(disabled_policy_app, enabled=False)
     user = UserMirror.objects.create(
         authentik_user_id="managed-preview-policy-user",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="ding-corp",
         dingtalk_userid="ding-user",
     )
@@ -178,6 +181,7 @@ def test_managed_users_preview_rejects_stale_or_unavailable_directory(
     _ = _enabled_policy(app)
     user = UserMirror.objects.create(
         authentik_user_id=f"managed-preview-directory-user-{expected_error_code}",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="ding-corp",
         dingtalk_userid="ding-manager",
     )
@@ -203,8 +207,13 @@ def test_managed_users_preview_rejects_stale_or_unavailable_directory(
         content_type="application/json",
     )
 
-    # Then: API 返回 400, diagnostics 带目录错误码。
-    assert response.status_code == HTTPStatus.BAD_REQUEST
+    # Then: API 返回依赖故障, diagnostics 保留目录错误码, 不伪装成客户端参数错误。
+    assert response.status_code == HTTPStatus.SERVICE_UNAVAILABLE
+    error_payload = JSON_VALUE_ADAPTER.validate_json(response.content)
+    assert isinstance(error_payload, dict), response.content.decode()
+    error = error_payload["error"]
+    assert isinstance(error, dict), error_payload
+    assert error["code"] == "DEPENDENCY_UNAVAILABLE"
     assert _diagnostic_error_code(response) == expected_error_code
 
 
@@ -229,6 +238,7 @@ def test_managed_users_preview_enforces_app_membership_and_method() -> None:
     )
     user = UserMirror.objects.create(
         authentik_user_id="managed-preview-security-user",
+        dingtalk_source_slug="dingtalk",
         dingtalk_corp_id="ding-corp",
         dingtalk_userid="ding-user",
     )
@@ -278,7 +288,6 @@ def _enabled_policy(app: App, *, enabled: bool = True) -> ManagedScopePolicy:
     return ManagedScopePolicy.objects.create(
         app=app,
         target_type="app_default",
-        target_id=app.id,
         scope="MANAGED_USERS",
         resolver="dingtalk_manager_chain",
         enabled=enabled,
@@ -306,8 +315,7 @@ def _managed_users(
 def _logged_in_client(username: str) -> Client:
     _ = User.objects.create_user(username=username, password=LOGIN_VALUE)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
-    return client
+    return authenticate_console_user(client, username)
 
 
 def _diagnostic_error_code(response: HttpResponseLike) -> str:

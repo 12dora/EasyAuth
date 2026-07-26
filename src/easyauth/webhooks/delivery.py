@@ -8,7 +8,7 @@ from json import dumps
 from typing import TYPE_CHECKING, Final
 
 from django.db import transaction
-from django.db.models import F, Q
+from django.db.models import F
 from django.utils import timezone
 
 from easyauth.audit.services import AuditRecord, AuditService
@@ -56,7 +56,12 @@ DELIVERY_REQUEST_POLICY: Final = WebhookRequestPolicy(
 WEBHOOK_NOT_CONFIGURED_MESSAGE: Final = "该应用未配置可用的 webhook。"
 WEBHOOK_ENDPOINT_REJECTED_MESSAGE: Final = "Webhook 目标地址未通过安全校验。"
 WEBHOOK_DELIVERY_TASK_NAME: Final = "easyauth.webhooks.deliver"
+WEBHOOK_DELIVERY_WATCHDOG_TASK_NAME: Final = "easyauth.webhooks.recover_expired_leases"
 WEBHOOK_REDELIVERY_CONFLICT_MESSAGE: Final = "该投递已不处于失败状态, 不能重复重投。"
+WEBHOOK_UNEXPECTED_ERROR_PREFIX: Final = "非预期异常"
+WEBHOOK_RECOVERY_ERROR: Final = "投递租约过期, 已创建恢复尝试。"
+WEBHOOK_RECOVERY_BATCH_SIZE: Final = 100
+WEBHOOK_PAYLOAD_MINIMIZED_MESSAGE: Final = "该投递原文已超过保留窗口并被最小化, 不能重投。"
 
 
 class WebhookNotConfiguredError(RuntimeError):
@@ -78,8 +83,8 @@ class WebhookDeliveryAttemptError(RuntimeError):
 
 
 class WebhookRedeliveryConflictError(RuntimeError):
-    def __init__(self) -> None:
-        super().__init__(WEBHOOK_REDELIVERY_CONFLICT_MESSAGE)
+    def __init__(self, message: str = WEBHOOK_REDELIVERY_CONFLICT_MESSAGE) -> None:
+        super().__init__(message)
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,21 +132,21 @@ def attempt_delivery(delivery_id: int, generation: int) -> WebhookDelivery:
     delivery, claim_token = _claim_delivery(delivery_id, generation)
     if claim_token is None:
         return delivery
-    endpoint = resolve_endpoint(delivery.app, url=delivery.target_url)
-    body = dumps(delivery.payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
-    timestamp = str(int(timezone.now().timestamp()))
-    headers = {
-        "Content-Type": "application/json",
-        EVENT_HEADER: delivery.event_type,
-        DELIVERY_HEADER: delivery.delivery_id,
-        TIMESTAMP_HEADER: timestamp,
-        SIGNATURE_HEADER: sign_webhook_body(
-            secret=endpoint.config.secret,
-            timestamp=timestamp,
-            body=body,
-        ),
-    }
     try:
+        endpoint = resolve_endpoint(delivery.app, url=delivery.target_url)
+        body = dumps(delivery.payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        timestamp = str(int(timezone.now().timestamp()))
+        headers = {
+            "Content-Type": "application/json",
+            EVENT_HEADER: delivery.event_type,
+            DELIVERY_HEADER: delivery.delivery_id,
+            TIMESTAMP_HEADER: timestamp,
+            SIGNATURE_HEADER: sign_webhook_body(
+                secret=endpoint.config.secret,
+                timestamp=timestamp,
+                body=body,
+            ),
+        }
         response = post_webhook(
             url=endpoint.url,
             allowed_hosts=endpoint.allowed_hosts,
@@ -149,10 +154,21 @@ def attempt_delivery(delivery_id: int, generation: int) -> WebhookDelivery:
             headers=headers,
             policy=DELIVERY_REQUEST_POLICY,
         )
+    except WebhookNotConfiguredError:
+        raise
     except WebhookTransportError as error:
         if not _mark_attempt_failed(delivery, claim_token, str(error)):
             return _current_delivery(delivery_id)
         message = "webhook 投递失败: 目标不可达。"
+        raise WebhookDeliveryAttemptError(message, attempts=delivery.attempts) from error
+    except Exception as error:
+        if not _mark_attempt_failed(
+            delivery,
+            claim_token,
+            f"{WEBHOOK_UNEXPECTED_ERROR_PREFIX}: {type(error).__name__}: {error}",
+        ):
+            return _current_delivery(delivery_id)
+        message = "webhook 投递失败: 非预期异常已记录并等待恢复。"
         raise WebhookDeliveryAttemptError(message, attempts=delivery.attempts) from error
     if not HTTPStatus.OK <= response.status_code < HTTPStatus.MULTIPLE_CHOICES:
         error = f"HTTP {response.status_code}"
@@ -197,10 +213,13 @@ def mark_delivery_exhausted(delivery_id: int, generation: int) -> None:
 
 def redeliver(delivery: WebhookDelivery) -> WebhookDelivery:
     # 条件更新是 failed → pending 的原子状态迁移; 同一失败行的并发重投只有一个能成功。
+    if delivery.payload_minimized_at is not None:
+        raise WebhookRedeliveryConflictError(WEBHOOK_PAYLOAD_MINIMIZED_MESSAGE)
     with transaction.atomic():
         updated = WebhookDelivery.objects.filter(
             id=delivery.id,
             status=DELIVERY_STATUS_FAILED,
+            payload_minimized_at__isnull=True,
         ).update(
             status=DELIVERY_STATUS_PENDING,
             attempts=0,
@@ -215,6 +234,47 @@ def redeliver(delivery: WebhookDelivery) -> WebhookDelivery:
         delivery.refresh_from_db()
         _schedule_delivery(delivery)
     return delivery
+
+
+def recover_expired_delivery_leases(
+    *,
+    batch_size: int = WEBHOOK_RECOVERY_BATCH_SIZE,
+) -> int:
+    """扫描过期租约并推进 generation, 由新任务显式接管。"""
+    if batch_size <= 0:
+        return 0
+    now = timezone.now()
+    with transaction.atomic():
+        deliveries = list(
+            WebhookDelivery.objects.select_for_update()
+            .filter(
+                status=DELIVERY_STATUS_PENDING,
+                claim_token__gt="",
+                lease_expires_at__lte=now,
+            )
+            .order_by("lease_expires_at", "id")[:batch_size],
+        )
+        for delivery in deliveries:
+            delivery.generation += 1
+            delivery.claim_token = ""
+            delivery.lease_expires_at = None
+            delivery.last_error = WEBHOOK_RECOVERY_ERROR
+            delivery.updated_at = now
+        if deliveries:
+            _ = WebhookDelivery.objects.bulk_update(
+                deliveries,
+                fields=(
+                    "generation",
+                    "claim_token",
+                    "lease_expires_at",
+                    "last_error",
+                    "updated_at",
+                ),
+            )
+            for delivery in deliveries:
+                _schedule_delivery(delivery)
+                _record_delivery_event(delivery, action="webhook_delivery_recovery_scheduled")
+    return len(deliveries)
 
 
 def _schedule_delivery(delivery: WebhookDelivery) -> None:
@@ -233,11 +293,8 @@ def _claim_delivery(delivery_id: int, generation: int) -> tuple[WebhookDelivery,
             id=delivery_id,
             status=DELIVERY_STATUS_PENDING,
             generation=generation,
-        )
-        .filter(
-            Q(claim_token="")
-            | Q(lease_expires_at__isnull=True)
-            | Q(lease_expires_at__lte=now),
+            claim_token="",
+            lease_expires_at__isnull=True,
         )
         .update(
             attempts=F("attempts") + 1,

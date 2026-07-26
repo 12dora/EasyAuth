@@ -14,6 +14,7 @@ from easyauth.applications.models import App
 from easyauth.audit.models import AuditLog
 from easyauth.webhooks.models import WebhookDelivery
 from easyauth.workflows.models import ApprovalInstance, ApprovalTemplate
+from tests.integration.admin_console.auth_helpers import authenticate_console_admin
 
 pytestmark = pytest.mark.django_db
 
@@ -82,7 +83,7 @@ def test_redeliver_uses_atomic_failed_to_pending_transition() -> None:
 def _logged_in_superuser(username: str) -> Client:
     _ = User.objects.create_superuser(username=username, password=LOGIN_VALUE)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    authenticate_console_admin(client, username)
     return client
 
 

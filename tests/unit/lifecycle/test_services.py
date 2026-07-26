@@ -4,6 +4,8 @@ from datetime import timedelta
 from typing import TYPE_CHECKING
 
 import pytest
+from django.core.exceptions import ValidationError
+from django.db import DatabaseError, transaction
 from django.utils import timezone
 
 from easyauth.accounts.models import USER_STATUS_DEPARTED, UserMirror
@@ -19,7 +21,18 @@ from easyauth.audit.models import AuditLog
 from easyauth.grants.inputs import AuthorizationGroupGrantInput, ScopedDirectGrantInput
 from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
 from easyauth.grants.services import GrantMutationInput, GrantService
-from easyauth.lifecycle import services as lifecycle_services
+from easyauth.lifecycle import handover as lifecycle_services
+from easyauth.lifecycle.core import refresh_task_status
+from easyauth.lifecycle.errors import HandoverConflictError
+from easyauth.lifecycle.handover import (
+    cancel_task,
+    delete_task,
+    execute_action,
+    poll_async_action,
+    preview_action,
+    retry_action,
+    update_action_receiver,
+)
 from easyauth.lifecycle.models import (
     ACTION_STATUS_SKIPPED,
     HANDOVER_KIND_TRANSFER,
@@ -28,25 +41,13 @@ from easyauth.lifecycle.models import (
     HandoverTask,
     HandoverTeamItem,
     OnboardingTemplate,
-    OnboardingTemplateItem,
+    OnboardingTemplateRevision,
+    OnboardingTemplateRevisionItem,
     TransferPlan,
 )
-from easyauth.lifecycle.services import (
-    HandoverConflictError,
-    build_transfer_grant_diff,
-    cancel_task,
-    confirm_transfer_grant_diff,
-    delete_task,
-    ensure_handover_task,
-    execute_action,
-    onboard_user,
-    poll_async_action,
-    preview_action,
-    refresh_task_status,
-    retry_action,
-    start_offboarding,
-    update_action_receiver,
-)
+from easyauth.lifecycle.offboarding import ensure_handover_task, start_offboarding
+from easyauth.lifecycle.onboarding import onboard_user
+from easyauth.lifecycle.transfer import build_transfer_grant_diff, confirm_transfer_grant_diff
 from easyauth.outbox.models import OutboxEvent
 from easyauth.teams.models import Team, TeamMember
 from easyauth.webhooks.hooks import HookResponse
@@ -114,13 +115,14 @@ def _transfer_plan_with_replacement(
         ),
     )
     template = OnboardingTemplate.objects.create(name=f"{prefix}-template")
-    _ = OnboardingTemplateItem.objects.create(
-        template=template,
+    revision = _template_revision(template)
+    _ = OnboardingTemplateRevisionItem.objects.create(
+        revision=revision,
         app=app,
         authorization_group=group,
     )
-    _ = OnboardingTemplateItem.objects.create(
-        template=template,
+    _ = OnboardingTemplateRevisionItem.objects.create(
+        revision=revision,
         app=app,
         permission=new_permission,
         scope_key="GLOBAL",
@@ -133,15 +135,36 @@ def _transfer_plan_with_replacement(
     return task, build_transfer_grant_diff(task=task, template=template), grant
 
 
+def _template_revision(
+    template: OnboardingTemplate,
+    *,
+    is_active: bool | None = None,
+) -> OnboardingTemplateRevision:
+    next_revision = OnboardingTemplateRevision.objects.filter(template=template).count() + 1
+    revision = OnboardingTemplateRevision.objects.create(
+        template=template,
+        revision=next_revision,
+        name_snapshot=template.name,
+        description_snapshot=template.description,
+        is_active=template.is_active if is_active is None else is_active,
+    )
+    template.current_revision = revision
+    template.save(update_fields=["current_revision", "updated_at"])
+    return revision
+
+
 def _plan_diff_keys(plan: TransferPlan, name: str) -> list[str]:
     entries = plan.grant_diff.get(name)
     if not isinstance(entries, list):
         return []
-    return [
-        entry["key"]
-        for entry in entries
-        if isinstance(entry, dict) and isinstance(entry.get("key"), str)
-    ]
+    keys: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        key = entry.get("key")
+        if isinstance(key, str):
+            keys.append(key)
+    return keys
 
 
 def test_start_offboarding_creates_task_snapshot_and_removes_teams() -> None:
@@ -248,6 +271,42 @@ def test_execute_action_transfers_selected_grants_and_calls_hook(
     assert call["to_user_id"] == "lc-exec-receiver"
     task.refresh_from_db()
     assert task.status == "completed"
+
+
+def test_preview_action_rejects_stale_hook_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: 预览 hook 请求发出后, 另一个预览/改接收人事务已经推进 generation。
+    app, group, _permission = _app_with_catalog("lc-preview-stale-app")
+    subject = _granted_user("lc-preview-stale-user", app, group)
+    _ = AppWebhookConfig.objects.create(
+        app=app,
+        secret="whsec-preview-stale",  # noqa: S106 - 测试用密钥。
+        handover_url="https://etrade.example.com/api/v1/easyauth/lifecycle/handover",
+    )
+    task, _created = ensure_handover_task(
+        subject=subject,
+        kind="offboard",
+        created_by="admin-a",
+    )
+    action = HandoverAppAction.objects.get(task=task, app=app)
+    action_generation_after_concurrent_update = 2
+
+    def stale_hook(**_kwargs: object) -> HookResponse:
+        stale_action = HandoverAppAction.objects.get(pk=action.pk)
+        stale_action.preview_generation += 1
+        stale_action.preview_payload = {"assets": ["newer"]}
+        stale_action.save(update_fields=["preview_generation", "preview_payload", "updated_at"])
+        return HookResponse(status_code=200, location="", payload={"assets": ["old"]})
+
+    monkeypatch.setattr(lifecycle_services, "signed_hook_post", stale_hook)
+
+    # When / Then: 旧 hook 响应不得覆盖新 generation 的预览结果。
+    with pytest.raises(HandoverConflictError):
+        _ = preview_action(action)
+    action.refresh_from_db()
+    assert action.preview_payload == {"assets": ["newer"]}
+    assert action.preview_generation == action_generation_after_concurrent_update
 
 
 def test_execute_action_keeps_accepted_hook_pending(
@@ -625,13 +684,14 @@ def test_transfer_grant_diff_build_and_confirm() -> None:
         ),
     )
     template = OnboardingTemplate.objects.create(name="新岗位模板")
-    _ = OnboardingTemplateItem.objects.create(
-        template=template,
+    revision = _template_revision(template)
+    _ = OnboardingTemplateRevisionItem.objects.create(
+        revision=revision,
         app=app,
         authorization_group=group,
     )
-    _ = OnboardingTemplateItem.objects.create(
-        template=template,
+    _ = OnboardingTemplateRevisionItem.objects.create(
+        revision=revision,
         app=app,
         permission=extra_permission,
         scope_key="GLOBAL",
@@ -783,6 +843,123 @@ def test_transfer_diff_confirmation_rejects_unknown_keys() -> None:
     assert TransferPlan.objects.get(pk=plan.pk).confirmed_at is None
 
 
+def test_transfer_diff_confirmation_uses_bound_template_revision_after_template_edit() -> None:
+    # Given: 差异方案绑定第 1 版模板, 其中要求新增 order.view。
+    task, plan, _original_grant = _transfer_plan_with_replacement("lc-diff-frozen-revision")
+    template = plan.new_template
+    assert template is not None
+    bound_revision = plan.new_template_revision
+    assert bound_revision is not None
+    add_keys = _plan_diff_keys(plan, "add")
+    assert add_keys == ["lc-diff-frozen-revision-app:permission:order.view:GLOBAL"]
+
+    # And: 模板随后编辑为第 2 版, 当前模板不再包含 order.view。
+    current_revision = _template_revision(template)
+    app = App.objects.get(app_key="lc-diff-frozen-revision-app")
+    _ = OnboardingTemplateRevisionItem.objects.create(
+        revision=current_revision,
+        app=app,
+        authorization_group=AuthorizationGroup.objects.get(app=app, key="sales"),
+    )
+
+    # When: 管理员确认旧方案中的 add key。
+    confirmed = confirm_transfer_grant_diff(
+        task=task,
+        revoke_keys=[],
+        add_keys=add_keys,
+        plan_revision=plan.revision,
+        actor_id="admin-a",
+    )
+
+    # Then: 确认按绑定的第 1 版执行, 不重读当前第 2 版模板。
+    assert confirmed.confirmed_at is not None
+    assert confirmed.new_template_revision_id == bound_revision.id
+    grant = AccessGrant.objects.get(
+        user=task.subject_user,
+        app__app_key="lc-diff-frozen-revision-app",
+        is_current=True,
+    )
+    assert AccessGrantPermission.objects.filter(
+        grant=grant,
+        permission__key="order.view",
+        scope_key="GLOBAL",
+    ).exists()
+
+
+def test_template_revision_instance_update_and_delete_are_rejected() -> None:
+    # Given: 已创建的模板修订与修订项。
+    app, group, _permission = _app_with_catalog("lc-revision-model-immutable")
+    template = OnboardingTemplate.objects.create(name="模型不可变模板")
+    revision = _template_revision(template)
+    item = OnboardingTemplateRevisionItem.objects.create(
+        revision=revision,
+        app=app,
+        authorization_group=group,
+    )
+
+    # When / Then: 实例级更新和删除均快速失败。
+    revision.name_snapshot = "被篡改"
+    with pytest.raises(ValidationError):
+        revision.save(update_fields=["name_snapshot"])
+    with pytest.raises(ValidationError):
+        _ = revision.delete()
+    item.scope_key = "GLOBAL"
+    with pytest.raises(ValidationError):
+        item.save(update_fields=["scope_key"])
+    with pytest.raises(ValidationError):
+        _ = item.delete()
+
+
+def test_template_revision_queryset_mutation_is_rejected_by_database() -> None:
+    # Given: 已写入数据库的模板修订与修订项。
+    app, group, _permission = _app_with_catalog("lc-revision-db-immutable")
+    template = OnboardingTemplate.objects.create(name="数据库不可变模板")
+    revision = _template_revision(template)
+    item = OnboardingTemplateRevisionItem.objects.create(
+        revision=revision,
+        app=app,
+        authorization_group=group,
+    )
+
+    # When / Then: 绕过模型方法的直接 UPDATE/DELETE 也被数据库触发器拒绝。
+    with pytest.raises(DatabaseError), transaction.atomic():
+        _ = OnboardingTemplateRevision.objects.filter(id=revision.id).update(
+            name_snapshot="被篡改",
+        )
+    with pytest.raises(DatabaseError), transaction.atomic():
+        _ = OnboardingTemplateRevisionItem.objects.filter(id=item.id).update(
+            scope_key="GLOBAL",
+        )
+    with pytest.raises(DatabaseError), transaction.atomic():
+        _ = OnboardingTemplateRevisionItem.objects.filter(id=item.id).delete()
+    assert OnboardingTemplateRevisionItem.objects.filter(id=item.id).exists()
+    with pytest.raises(DatabaseError), transaction.atomic():
+        _ = OnboardingTemplateRevision.objects.filter(id=revision.id).delete()
+    assert OnboardingTemplateRevision.objects.filter(id=revision.id).exists()
+
+
+def test_transfer_diff_confirmation_rejects_legacy_unfrozen_add_entry() -> None:
+    # Given: 旧格式方案只有 key, 缺少执行新增授权所需的冻结字段。
+    task, plan, original_grant = _transfer_plan_with_replacement("lc-diff-legacy-frozen")
+    add_keys = _plan_diff_keys(plan, "add")
+    assert add_keys == ["lc-diff-legacy-frozen-app:permission:order.view:GLOBAL"]
+    plan.grant_diff = {"revoke": [], "add": [{"key": add_keys[0]}], "keep": []}
+    plan.save(update_fields=["grant_diff", "updated_at"])
+
+    # When / Then: 确认必须失败, 不能回读当前模板推断缺失事实。
+    with pytest.raises(lifecycle_services.HandoverError, match="app_key"):
+        _ = confirm_transfer_grant_diff(
+            task=task,
+            revoke_keys=[],
+            add_keys=add_keys,
+            plan_revision=plan.revision,
+            actor_id="admin-a",
+        )
+    original_grant.refresh_from_db()
+    assert original_grant.is_current is True
+    assert TransferPlan.objects.get(pk=plan.pk).confirmed_at is None
+
+
 def test_transfer_diff_confirmation_rolls_back_all_apps(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -804,6 +981,7 @@ def test_transfer_diff_confirmation_rolls_back_all_apps(
         created_by="admin-a",
     )
     template = OnboardingTemplate.objects.create(name="lc-atomic-empty-template")
+    _ = _template_revision(template)
     plan = build_transfer_grant_diff(task=task, template=template)
     revoke_keys = _plan_diff_keys(plan, "revoke")
     original_revoke = GrantService.revoke_grant
@@ -859,13 +1037,14 @@ def test_onboard_user_creates_grants_from_template() -> None:
     # Given: 岗位模板含 group 与直接权限。
     app, group, permission = _app_with_catalog("lc-onboard-app")
     template = OnboardingTemplate.objects.create(name="销售岗模板")
-    _ = OnboardingTemplateItem.objects.create(
-        template=template,
+    revision = _template_revision(template)
+    _ = OnboardingTemplateRevisionItem.objects.create(
+        revision=revision,
         app=app,
         authorization_group=group,
     )
-    _ = OnboardingTemplateItem.objects.create(
-        template=template,
+    _ = OnboardingTemplateRevisionItem.objects.create(
+        revision=revision,
         app=app,
         permission=permission,
         scope_key="GLOBAL",
@@ -893,22 +1072,23 @@ def test_onboard_user_preserves_each_membership_expiration() -> None:
         name="长期岗位",
     )
     template = OnboardingTemplate.objects.create(name="逐项期限模板")
-    _ = OnboardingTemplateItem.objects.create(
-        template=template,
+    revision = _template_revision(template)
+    _ = OnboardingTemplateRevisionItem.objects.create(
+        revision=revision,
         app=app,
         authorization_group=short_group,
         grant_type="timed",
         duration_days=30,
     )
-    _ = OnboardingTemplateItem.objects.create(
-        template=template,
+    _ = OnboardingTemplateRevisionItem.objects.create(
+        revision=revision,
         app=app,
         authorization_group=long_group,
         grant_type="timed",
         duration_days=365,
     )
-    _ = OnboardingTemplateItem.objects.create(
-        template=template,
+    _ = OnboardingTemplateRevisionItem.objects.create(
+        revision=revision,
         app=app,
         permission=permanent_permission,
         scope_key="GLOBAL",
@@ -1103,8 +1283,9 @@ def test_transfer_completion_clears_department_changed_flag() -> None:
         created_by="admin-a",
     )
     template = OnboardingTemplate.objects.create(name="清理标记岗位模板")
-    _ = OnboardingTemplateItem.objects.create(
-        template=template,
+    revision = _template_revision(template)
+    _ = OnboardingTemplateRevisionItem.objects.create(
+        revision=revision,
         app=app,
         authorization_group=group,
     )

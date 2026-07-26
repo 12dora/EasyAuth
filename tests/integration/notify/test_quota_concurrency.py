@@ -13,8 +13,9 @@ from easyauth.applications.models import (
     AppCapability,
     AppNotificationChannel,
 )
+from easyauth.notify.acceptance import accept_notify_message
+from easyauth.notify.contracts import NotifyAcceptError
 from easyauth.notify.models import CREDENTIAL_TYPE_STATIC_TOKEN, NOTIFY_TEMPLATE_TEXT
-from easyauth.notify.services import NotifyAcceptError, accept_notify_message
 
 pytestmark = [
     pytest.mark.django_db(transaction=True),
@@ -54,8 +55,9 @@ def test_daily_quota_is_atomic_across_concurrent_accepts() -> None:
         )
         _ = UserMirror.objects.create(
             authentik_user_id=f"quota-auth-{index}",
-            dingtalk_userid=userid,
+            dingtalk_source_slug="dingtalk",
             dingtalk_corp_id="quota-corp",
+            dingtalk_userid=userid,
         )
 
     barrier = Barrier(2)

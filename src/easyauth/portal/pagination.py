@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, override
 
 from easyauth.api.errors import JsonValue
 from easyauth.api.pagination import total_pages
@@ -16,6 +16,26 @@ DEFAULT_PAGE_SIZE: Final = 20
 MAX_PAGE_SIZE: Final = 100
 # page 上界: 防止任意大 page 在 DB 分页端点产生巨大 OFFSET。
 MAX_PAGE: Final = 100_000
+ERROR_POSITIVE_INTEGER: Final = "positive_integer"
+ERROR_MAXIMUM: Final = "maximum"
+ERROR_INTEGER: Final = "integer"
+
+
+@dataclass(frozen=True, slots=True)
+class PortalPaginationValidationError(ValueError):
+    key: str
+    kind: str
+    maximum: int | None = None
+
+    @override
+    def __str__(self) -> str:
+        match self.kind:
+            case "positive_integer":
+                return f"{self.key} 必须为正整数。"
+            case "maximum":
+                return f"{self.key} 不得大于 {self.maximum}。"
+            case _:
+                return f"{self.key} 必须为整数。"
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,9 +63,15 @@ class PageRequest:
 
 def page_request(query: QueryDict) -> PageRequest:
     return PageRequest(
-        page=_positive_integer(query.get("page"), default=DEFAULT_PAGE, maximum=MAX_PAGE),
+        page=_positive_integer(
+            query.get("page"),
+            key="page",
+            default=DEFAULT_PAGE,
+            maximum=MAX_PAGE,
+        ),
         page_size=_positive_integer(
             query.get("page_size"),
+            key="page_size",
             default=DEFAULT_PAGE_SIZE,
             maximum=MAX_PAGE_SIZE,
         ),
@@ -67,28 +93,25 @@ def build_page(
     )
 
 
-def paginate_items(items: tuple[PortalJsonObject, ...], query: QueryDict) -> PortalPage:
-    request = page_request(query)
-    return build_page(
-        items[request.start:request.stop],
-        request=request,
-        total_items=len(items),
-    )
-
-
-def _positive_integer(value: str | None, *, default: int, maximum: int | None) -> int:
-    parsed_value = _integer_or_none(value)
-    if parsed_value is None or parsed_value < 1:
+def _positive_integer(value: str | None, *, key: str, default: int, maximum: int | None) -> int:
+    parsed_value = _integer_or_none(value, key=key)
+    if parsed_value is None:
         return default
+    if parsed_value < 1:
+        raise PortalPaginationValidationError(key=key, kind=ERROR_POSITIVE_INTEGER)
     if maximum is not None and parsed_value > maximum:
-        return maximum
+        raise PortalPaginationValidationError(
+            key=key,
+            kind=ERROR_MAXIMUM,
+            maximum=maximum,
+        )
     return parsed_value
 
 
-def _integer_or_none(value: str | None) -> int | None:
+def _integer_or_none(value: str | None, *, key: str) -> int | None:
     if value is None or value == "":
         return None
     try:
         return int(value)
-    except ValueError:
-        return None
+    except ValueError as exc:
+        raise PortalPaginationValidationError(key=key, kind=ERROR_INTEGER) from exc

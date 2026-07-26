@@ -7,6 +7,7 @@ from easyauth.connectors.base import (
     ConnectorError,
     ConnectorProbe,
     ExternalGroup,
+    ExternalGroupPage,
     ReconcileReport,
 )
 
@@ -38,6 +39,10 @@ class FakeConnector(BaseConnector):
     offboarded_user_ids: ClassVar[list[str]] = []
     offboard_handled: ClassVar[bool] = True
     external_account: ClassVar[str] = ""
+    list_external_groups_calls: ClassVar[int] = 0
+    external_group_pages: ClassVar[tuple[ExternalGroupPage, ...]] = (
+        ExternalGroupPage(groups=(ExternalGroup(ref="fake-group", name="Fake Group"),)),
+    )
 
     @classmethod
     def reset(cls) -> None:
@@ -48,6 +53,10 @@ class FakeConnector(BaseConnector):
         cls.offboarded_user_ids = []
         cls.offboard_handled = True
         cls.external_account = ""
+        cls.list_external_groups_calls = 0
+        cls.external_group_pages = (
+            ExternalGroupPage(groups=(ExternalGroup(ref="fake-group", name="Fake Group"),)),
+        )
 
     @override
     def test_connection(self, config: dict[str, JsonValue]) -> ConnectorProbe:
@@ -57,7 +66,17 @@ class FakeConnector(BaseConnector):
     @override
     def list_external_groups(self, config: dict[str, JsonValue]) -> list[ExternalGroup]:
         _ = config
+        type(self).list_external_groups_calls += 1
         return [ExternalGroup(ref="fake-group", name="Fake Group")]
+
+    @override
+    def iter_external_group_pages(
+        self,
+        config: dict[str, JsonValue],
+    ) -> tuple[ExternalGroupPage, ...]:
+        _ = config
+        type(self).list_external_groups_calls += 1
+        return type(self).external_group_pages
 
     @override
     def external_account_id(self, config: dict[str, JsonValue]) -> str:

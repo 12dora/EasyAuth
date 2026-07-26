@@ -4,6 +4,7 @@ from typing import Literal
 
 import pytest
 from django.core.exceptions import ValidationError
+from django.db import IntegrityError
 
 from easyauth.applications.managed_scope_policy import ManagedScopePolicyService
 from easyauth.applications.models import (
@@ -24,7 +25,6 @@ def test_managed_scope_policy_accepts_app_default_target_when_cleaned() -> None:
     policy = ManagedScopePolicy(
         app=app,
         target_type="app_default",
-        target_id=app.id,
         scope="MANAGED_USERS",
         resolver="dingtalk_manager_chain",
     )
@@ -42,7 +42,6 @@ def test_managed_scope_policy_rejects_unsupported_scope_and_resolver_when_cleane
     policy = ManagedScopePolicy(
         app=app,
         target_type="app_default",
-        target_id=app.id,
         scope="TEAM",
         resolver="static",
     )
@@ -67,7 +66,7 @@ def test_managed_scope_policy_rejects_cross_app_grant_target_when_cleaned() -> N
     policy = ManagedScopePolicy(
         app=crm,
         target_type="authorization_group_grant",
-        target_id=grant.id,
+        authorization_group_grant=grant,
         scope="MANAGED_USERS",
         resolver="dingtalk_manager_chain",
     )
@@ -76,8 +75,27 @@ def test_managed_scope_policy_rejects_cross_app_grant_target_when_cleaned() -> N
     with pytest.raises(ValidationError) as error:
         policy.clean()
     assert error.value.message_dict == {
-        "target_id": ["Authorization group grant target must belong to the same app."],
+        "authorization_group_grant": [
+            "Authorization group grant target must belong to the same app.",
+        ],
     }
+
+
+def test_managed_scope_policy_cross_app_grant_target_is_rejected_by_database() -> None:
+    # Given
+    crm = App.objects.create(app_key="crm-db", name="CRM")
+    erp = App.objects.create(app_key="erp-db", name="ERP")
+    grant = _grant(erp)
+
+    # When / Then
+    with pytest.raises(IntegrityError):
+        _ = ManagedScopePolicy.objects.create(
+            app=crm,
+            target_type="authorization_group_grant",
+            authorization_group_grant=grant,
+            scope="MANAGED_USERS",
+            resolver="dingtalk_manager_chain",
+        )
 
 
 def test_effective_policy_uses_app_default_for_app_scope() -> None:
@@ -86,7 +104,6 @@ def test_effective_policy_uses_app_default_for_app_scope() -> None:
     policy = ManagedScopePolicy.objects.create(
         app=app,
         target_type="app_default",
-        target_id=app.id,
         scope="MANAGED_USERS",
         resolver="dingtalk_manager_chain",
     )
@@ -109,7 +126,6 @@ def test_effective_policy_inherits_app_default_when_grant_has_no_override() -> N
     policy = ManagedScopePolicy.objects.create(
         app=app,
         target_type="app_default",
-        target_id=app.id,
         scope="MANAGED_USERS",
         resolver="dingtalk_manager_chain",
     )
@@ -131,14 +147,13 @@ def test_effective_policy_prefers_grant_override_over_app_default() -> None:
     _ = ManagedScopePolicy.objects.create(
         app=app,
         target_type="app_default",
-        target_id=app.id,
         scope="MANAGED_USERS",
         resolver="dingtalk_manager_chain",
     )
     override = ManagedScopePolicy.objects.create(
         app=app,
         target_type="authorization_group_grant",
-        target_id=grant.id,
+        authorization_group_grant=grant,
         scope="MANAGED_USERS",
         resolver="dingtalk_manager_chain",
     )
@@ -169,7 +184,6 @@ def test_effective_policy_ignores_disabled_app_default_policy(
     _ = ManagedScopePolicy.objects.create(
         app=app,
         target_type="app_default",
-        target_id=app.id,
         scope="MANAGED_USERS",
         resolver=resolver,
         enabled=enabled,
@@ -199,14 +213,13 @@ def test_disabled_grant_override_blocks_app_default_inheritance(
     _ = ManagedScopePolicy.objects.create(
         app=app,
         target_type="app_default",
-        target_id=app.id,
         scope="MANAGED_USERS",
         resolver="dingtalk_manager_chain",
     )
     _ = ManagedScopePolicy.objects.create(
         app=app,
         target_type="authorization_group_grant",
-        target_id=grant.id,
+        authorization_group_grant=grant,
         scope="MANAGED_USERS",
         resolver=resolver,
         enabled=enabled,

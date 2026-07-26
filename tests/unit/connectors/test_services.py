@@ -17,12 +17,14 @@ from easyauth.connectors.models import (
     ConnectorSyncRun,
 )
 from easyauth.connectors.services import (
-    _claim_generation,
-    _finish_generation,
+    _claim_generation,  # pyright: ignore[reportPrivateUsage]
+    _finish_generation,  # pyright: ignore[reportPrivateUsage]
     build_desired_state,
+    external_write_allowed,
     mark_reconcile_dirty,
     reconcile_instance,
 )
+from easyauth.grants.models import AccessGrantGroup
 from easyauth.grants.services import (
     AuthorizationGroupGrantInput,
     GrantMutationInput,
@@ -101,8 +103,6 @@ def test_build_desired_state_projects_only_mapped_groups() -> None:
 
 def test_build_desired_state_excludes_inactive_group_and_expired_membership() -> None:
     # Given: 停用授权组 + 已过期成员不得进入 VPN desired。
-    from easyauth.grants.models import AccessGrantGroup
-
     app, mapped, _unmapped = _app_with_groups("conn-effective")
     instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
     _ = ConnectorMapping.objects.create(
@@ -277,6 +277,80 @@ def test_compare_release_does_not_delete_new_owner_lease() -> None:
     instance.refresh_from_db()
     assert instance.reconcile_lease_token == new_token
     assert instance.reconciled_generation == 0
+
+
+def test_finish_requires_current_generation_and_unexpired_lease() -> None:
+    app, _mapped, _unmapped = _app_with_groups("conn-finish-fence")
+    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+    assert mark_reconcile_dirty(instance.id, trigger=SYNC_TRIGGER_MANUAL)
+    claim = _claim_generation(instance.id)
+    assert claim is not None
+
+    _ = ConnectorInstance.objects.filter(id=instance.id).update(
+        reconcile_lease_expires_at=timezone.now() - timedelta(seconds=1),
+    )
+
+    assert not _finish_generation(claim, report=ReconcileReport())
+    instance.refresh_from_db()
+    assert instance.reconciled_generation == 0
+    assert instance.reconcile_dirty is True
+    assert instance.reconcile_lease_token == claim.reconcile_lease_token
+
+
+def test_finish_releases_owned_live_lease_when_generation_advanced() -> None:
+    app, _mapped, _unmapped = _app_with_groups("conn-finish-next-generation")
+    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+    assert mark_reconcile_dirty(instance.id, trigger=SYNC_TRIGGER_MANUAL)
+    claim = _claim_generation(instance.id)
+    assert claim is not None
+    next_generation = claim.reconcile_generation + 1
+
+    assert not mark_reconcile_dirty(instance.id, trigger=SYNC_TRIGGER_MANUAL)
+
+    assert _finish_generation(claim, report=ReconcileReport()) is True
+    instance.refresh_from_db()
+    assert instance.reconcile_generation == next_generation
+    assert instance.reconciled_generation == 0
+    assert instance.reconcile_dirty is True
+    assert instance.reconcile_lease_token is None
+
+    next_claim = _claim_generation(instance.id)
+    assert next_claim is not None
+    assert next_claim.reconcile_generation == next_generation
+    assert next_claim.reconcile_lease_token != claim.reconcile_lease_token
+
+
+def test_failed_generation_releases_lease_without_advancing_and_marks_dirty() -> None:
+    app, _mapped, _unmapped = _app_with_groups("conn-finish-failed")
+    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+    assert mark_reconcile_dirty(instance.id, trigger=SYNC_TRIGGER_MANUAL)
+    claim = _claim_generation(instance.id)
+    assert claim is not None
+
+    assert not _finish_generation(claim, report=ReconcileReport(status="failed"))
+
+    instance.refresh_from_db()
+    assert instance.reconciled_generation == 0
+    assert instance.reconcile_dirty is True
+    assert instance.reconcile_lease_token is None
+
+
+def test_external_write_requires_current_generation_token_and_clean_dirty_state() -> None:
+    app, _mapped, _unmapped = _app_with_groups("conn-write-fence")
+    user = UserMirror.objects.create(authentik_user_id="conn-write-fence-u1")
+    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+    assert mark_reconcile_dirty(instance.id, trigger=SYNC_TRIGGER_MANUAL)
+    claim = _claim_generation(instance.id)
+    assert claim is not None
+
+    assert external_write_allowed(claim, user_id=user.authentik_user_id, require_active_user=True)
+
+    _ = ConnectorInstance.objects.filter(id=instance.id).update(reconcile_dirty=True)
+    assert not external_write_allowed(
+        claim,
+        user_id=user.authentik_user_id,
+        require_active_user=True,
+    )
 
 
 def test_non_active_user_is_never_projected_for_unblock() -> None:

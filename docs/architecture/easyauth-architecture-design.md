@@ -171,14 +171,16 @@ tests/
 
 ### AccessRequest
 
-表示员工发起的 grant、change 或 revoke 申请。
+表示员工发起的 `grant`、`change`、`revoke` 或 `renew` 申请。
 
 关键字段：
 
 - `id`
 - `requester_user_id`
 - `app_id`
-- `request_type`: `grant`、`change`、`revoke`
+- `request_type`: `grant`、`change`、`revoke`、`renew`
+- `base_grant_id`: `grant` 申请为空；`change`、`revoke`、`renew` 必须绑定被申请人当前授权主键
+- `base_grant_revision`: `grant` 申请为空；生命周期申请必须绑定提交时的 `AccessGrant.version`
 - `status`
 - `requested_roles`
 - `requested_permissions`
@@ -454,7 +456,7 @@ grant_type=client_credentials&client_id={client_id}&client_secret={client_secret
 
 ```text
 PermissionQueryService.resolve(app_principal, app_key, authentik_user_id) -> PermissionQueryResult
-AccessRequestService.submit(requester, app, target_roles, target_permissions, lifetime, reason) -> AccessRequest
+AccessRequestService.submit(requester, app, request_type, base_grant_revision, target_roles, target_permissions, lifetime, reason) -> AccessRequest
 DingTalkApprovalGateway.create_instance(access_request) -> DingTalkProcessRef
 DingTalkCallbackService.handle(payload, headers) -> CallbackResult
 GrantService.apply_approved_request(access_request) -> AccessGrant
@@ -552,6 +554,7 @@ sequenceDiagram
 
 - `dingtalk_process_instance_id` 必须唯一。
 - 回调处理必须在数据库事务中锁定对应 `AccessRequest`。
+- `change`、`revoke`、`renew` 的基础授权主键和修订必须进入幂等摘要；缺少修订或修订不一致时显式失败。
 - 重复批准回调只能返回已处理结果，不能再次递增授权版本。
 - 重复拒绝回调不能覆盖已经 `grant_applied` 的请求。
 - 未知 process instance、签名失败和 payload 结构异常必须记录安全相关日志。
@@ -608,14 +611,17 @@ Celery beat 定期扫描 `grant_lifetime_type=timed` 且 `grant_expires_at <= no
 
 1. 锁定 `AccessRequest`。
 2. 确认请求状态是 `approved` 且尚未 `grant_applied`。
-3. 锁定或创建 `AccessGrant(user_id, app_id)`。
-4. 替换目标角色和直接权限集合。
-5. 应用 grant 生命周期字段。
-6. 递增 version。
-7. 写入审计事件。
-8. 将请求状态更新为 `grant_applied`。
+3. `grant` 申请创建新的当前 `AccessGrant`；`change`、`revoke`、`renew` 锁定申请冻结的 `base_grant_id`。
+4. 对生命周期申请比较 `base_grant_revision` 与当前 `AccessGrant.version`，不一致时进入 `grant_conflict`，接口返回 `409 CONFLICT` 并要求重新提交申请；该状态不得进入 `grant_failed` 重试通道，也不得读取最新授权事实重试。
+5. 使用提交时冻结的授权组展开快照校验审批展示、审计元数据和落地前置事实，已过期成员不属于当前有效成员集合。
+6. 替换、续期或撤销冻结目标集合。
+7. 递增 version。
+8. 写入审计事件。
+9. 将请求状态更新为 `grant_applied`。
 
-如果第 3 到第 7 步失败，请求状态应进入 `grant_failed`，并写入 `grant_apply_failed`。失败不得静默吞掉。
+如果第 3 到第 7 步出现普通落库失败，请求状态应进入 `grant_failed`，并写入 `grant_apply_failed`。如果基础授权修订冲突，请求状态进入 `grant_conflict` 并写入 `grant_apply_conflict`；如果授权在落地前过期，请求状态进入 `grant_expired`。这些失败不得静默吞掉。
+
+授权申请提交时必须持久化不可变的授权组展开快照，至少包含提交时的 `authorization_group_id_snapshot` 稳定历史值、授权组 key、kind、名称、permission key、permission 名称和 scope。审批列表、审批详情、审批决定审计和授权落地前置校验都读取这份快照；提交后的 `AuthorizationGroupGrant` 配置变更只能影响新申请，不能改变既有申请的展示事实或执行事实。
 
 ## 安全设计
 

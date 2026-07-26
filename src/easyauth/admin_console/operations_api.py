@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import ClassVar, override
+from typing import TYPE_CHECKING, ClassVar, Protocol, cast, override
 
 from django.db.models import Prefetch
 from django.http import HttpRequest, JsonResponse
@@ -49,11 +49,27 @@ from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.grants.models import AccessGrant
 from easyauth.grants.services import GrantService
 
-type ConsoleApiResult = str | JsonResponse
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from datetime import datetime
+
+    from easyauth.applications.models import AuthorizationGroup, Permission
 
 USER_NOT_FOUND_MESSAGE = "用户不存在。"
 APP_NOT_FOUND_MESSAGE = "应用不存在。"
 FAILURE_REASON_CONTRACT_MESSAGE = "授权失败原因事实缺失或无效。"
+ACTIVE_GRANT_NOT_FOUND_MESSAGE = "当前有效授权不存在, 紧急撤权未执行。"
+
+
+class _GrantGroupLink(Protocol):
+    authorization_group: AuthorizationGroup
+    expires_at: datetime | None
+
+
+class _GrantPermissionLink(Protocol):
+    permission: Permission
+    scope_key: str
+    expires_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,10 +147,10 @@ def operations_emergency_revokes(request: HttpRequest) -> JsonResponse:
         )
     except ConsoleOperationsSemanticError as exc:
         return _error_response(
-            ErrorCode.SEMANTIC_VALIDATION_ERROR,
+            ErrorCode.CONFLICT,
             str(exc),
             exc.details,
-            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            status=HTTPStatus.CONFLICT,
         )
     _record_emergency_revoke(
         actor_id=actor_id,
@@ -167,7 +183,16 @@ def _execute_emergency_revoke(
         actor_id=actor_id,
         reason=payload.reason,
     )
-    revoked_count = 0 if revoked_grant is None else 1
+    if revoked_grant is None:
+        raise ConsoleOperationsSemanticError(
+            ACTIVE_GRANT_NOT_FOUND_MESSAGE,
+            {
+                "reason": "active_grant_not_found",
+                "user_id": payload.user_id,
+                "app_key": payload.app_key,
+            },
+        )
+    revoked_count = 1
     return _EmergencyRevokeResult(payload=payload, revoked_count=revoked_count)
 
 
@@ -280,7 +305,10 @@ def _access_grant_item(access_grant: AccessGrant) -> dict[str, JsonValue]:
 
 def _access_grant_groups(access_grant: AccessGrant) -> list[JsonValue]:
     items: list[JsonValue] = []
-    for link in access_grant.grant_groups.all():
+    for link in cast(
+        "Iterable[_GrantGroupLink]",
+        access_grant.grant_groups.all(),  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+    ):
         group = link.authorization_group
         items.append(
             {
@@ -295,7 +323,10 @@ def _access_grant_groups(access_grant: AccessGrant) -> list[JsonValue]:
 
 def _access_grant_permissions(access_grant: AccessGrant) -> list[JsonValue]:
     items: list[JsonValue] = []
-    for link in access_grant.grant_permissions.all():
+    for link in cast(
+        "Iterable[_GrantPermissionLink]",
+        access_grant.grant_permissions.all(),  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+    ):
         permission = link.permission
         items.append(
             {

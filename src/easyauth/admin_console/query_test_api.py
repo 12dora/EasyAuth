@@ -114,7 +114,23 @@ def _success_payload(
         {"key": group.key, "kind": group.kind, "name": group.name}
         for group in result.groups
     ]
-    grants: list[JsonValue] = [expanded_grant_payload(grant) for grant in result.grants]
+    grants: list[JsonValue] = []
+    for grant in result.grants:
+        grant_payload = expanded_grant_payload(grant)
+        item: dict[str, JsonValue] = {
+            "permission": grant_payload["permission"],
+            "scope": grant_payload["scope"],
+            "source_type": grant_payload["source_type"],
+            "source_key": grant_payload["source_key"],
+        }
+        resolved = grant_payload.get("resolved")
+        if resolved is not None:
+            item["resolved"] = {
+                "user_ids": list(resolved["user_ids"]),
+                "resolver": resolved["resolver"],
+                "resolved_at": resolved["resolved_at"],
+            }
+        grants.append(item)
     return {
         "app_key": app.app_key,
         "user_id": user_id,

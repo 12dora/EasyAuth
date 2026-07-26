@@ -5,10 +5,10 @@ from json import dumps
 from typing import TYPE_CHECKING, Final, cast
 
 import pytest
+from django.db import connection
 from django.test import Client
+from django.test.utils import CaptureQueriesContext
 
-from easyauth.accounts.auth import AUTHENTIK_GROUPS_SESSION_KEY, AUTHENTIK_SESSION_KEY
-from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import (
     App,
@@ -21,8 +21,12 @@ from easyauth.applications.models import (
     Permission,
     PermissionGroup,
 )
-from easyauth.applications.services import StaticTokenService
+from easyauth.applications.services import AppCredentialService
 from easyauth.audit.models import AuditLog
+from tests.integration.admin_console.auth_helpers import (
+    authenticate_console_admin,
+    authenticate_console_user,
+)
 
 if TYPE_CHECKING:
     from django.conf import LazySettings
@@ -31,6 +35,7 @@ pytestmark = pytest.mark.django_db
 
 LOGIN_VALUE: Final = "console-ops1-api"
 APPS_API_URL: Final = "/console/api/v1/apps"
+APP_LIST_READINESS_MAX_QUERIES: Final = 25
 
 
 @pytest.fixture(autouse=True)
@@ -59,7 +64,7 @@ def test_ops1_apps_api_superuser_lists_all_apps() -> None:
     assert response.json()["data"][1]["is_active"] is False
 
 
-def test_ops1_apps_api_allows_non_member_console_user_to_list_apps() -> None:
+def test_ops1_apps_api_hides_apps_from_non_member_console_user() -> None:
     # Given: 已登录但没有任何 App 成员关系的普通用户。
     client = _non_admin_client("ops1-apps-api-non-admin")
     app = App.objects.create(app_key="ops1-api-non-admin-crm", name="CRM")
@@ -67,12 +72,13 @@ def test_ops1_apps_api_allows_non_member_console_user_to_list_apps() -> None:
     # When: 该用户查询 App 列表。
     response = client.get(APPS_API_URL)
 
-    # Then: App 目录对控制台登录用户可见, 详情与写操作仍按成员角色控制。
+    # Then: 普通控制台用户只能看到自己参与的 App, 不能枚举组织级 App 目录。
     assert response.status_code == HTTPStatus.OK
-    assert app.app_key in response.content.decode()
+    assert app.app_key not in response.content.decode()
+    assert response.json()["data"] == []
 
 
-def test_ops1_apps_api_member_lists_all_apps() -> None:
+def test_ops1_apps_api_member_lists_only_own_apps() -> None:
     # Given: developer 只属于 CRM App, 另一个 ERP App 不属于该用户。
     client = _logged_in_user("ops1-apps-api-developer")
     crm = App.objects.create(app_key="ops1-api-member-crm", name="CRM")
@@ -86,11 +92,55 @@ def test_ops1_apps_api_member_lists_all_apps() -> None:
     # When: developer 查询 App 列表。
     response = client.get(APPS_API_URL)
 
-    # Then: API 返回所有 App, 不再按成员关系隐藏。
+    # Then: API 仅返回成员关系覆盖的 App。
     body = response.content.decode()
     assert response.status_code == HTTPStatus.OK
     assert crm.app_key in body
-    assert erp.app_key in body
+    assert erp.app_key not in body
+
+
+def test_ops1_apps_api_batches_list_readiness_statuses() -> None:
+    client = _logged_in_superuser("ops1-apps-readiness-batch-admin")
+    for index in range(5):
+        app = App.objects.create(app_key=f"ops1-readiness-batch-{index}", name=f"App {index}")
+        _ = AppMembership.objects.create(app=app, user_id=f"owner-{index}", role="owner")
+        scope = AppScope.objects.create(app=app, key="GLOBAL", name="Global")
+        permission = Permission.objects.create(
+            app=app,
+            key="invoice.read",
+            name="Read invoices",
+            supported_scopes=[scope.key],
+        )
+        group = AuthorizationGroup.objects.create(
+            app=app,
+            key="auditor",
+            kind="role",
+            name="Auditor",
+            requestable=True,
+        )
+        _ = AuthorizationGroupGrant.objects.create(
+            authorization_group=group,
+            permission=permission,
+            scope_key=scope.key,
+        )
+        _ = ApprovalRule.objects.create(
+            app=app,
+            authorization_group=group,
+            approver_userids=["manager-001"],
+        )
+        _ = AppCredentialService.create_static_token(app=app, name=f"token-{index}")
+
+    with CaptureQueriesContext(connection) as queries:
+        response = client.get(APPS_API_URL, {"page_size": "5"})
+
+    assert response.status_code == HTTPStatus.OK
+    statuses = [
+        item["configuration_status"]
+        for item in cast("list[dict[str, JsonValue]]", response.json()["data"])
+        if str(item["app_key"]).startswith("ops1-readiness-batch-")
+    ]
+    assert statuses == ["ready"] * 5
+    assert len(queries) <= APP_LIST_READINESS_MAX_QUERIES
 
 
 def test_ops1_apps_api_superuser_creates_app_with_memberships_and_audit() -> None:
@@ -478,11 +528,11 @@ def test_ops1_configuration_status_api_exposes_managed_scope_policy_issue_fields
         authorization_group=authorization_group,
         approver_userids=["manager-001"],
     )
-    _ = StaticTokenService.create_token(app=app, name="token")
+    _ = AppCredentialService.create_static_token(app=app, name="token")
     _ = ManagedScopePolicy.objects.create(
         app=app,
         target_type="authorization_group_grant",
-        target_id=grant.id,
+        authorization_group_grant=grant,
         scope="MANAGED_USERS",
         resolver="dingtalk_manager_chain",
         enabled=False,
@@ -750,7 +800,7 @@ def test_ops1_configuration_status_api_can_return_ready_status() -> None:
         authorization_group=authorization_group,
         approver_userids=["manager-001"],
     )
-    _ = StaticTokenService.create_token(app=app, name="token")
+    _ = AppCredentialService.create_static_token(app=app, name="token")
 
     # When: owner 查询配置状态。
     response = client.get(f"{APPS_API_URL}/{app.app_key}/configuration-status")
@@ -761,28 +811,15 @@ def test_ops1_configuration_status_api_can_return_ready_status() -> None:
 
 
 def _logged_in_superuser(username: str) -> Client:
-    return _authentik_client(username, groups=("easyauth-admins",))
+    client = Client(HTTP_HOST="localhost")
+    return authenticate_console_admin(client, username, groups=("easyauth-admins",))
 
 
 def _logged_in_user(username: str) -> Client:
-    return _authentik_client(username)
-
-
-def _authentik_client(username: str, *, groups: tuple[str, ...] = ()) -> Client:
-    user, _created = UserMirror.objects.get_or_create(authentik_user_id=username)
     client = Client(HTTP_HOST="localhost")
-    session = client.session
-    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
-    if groups:
-        session[AUTHENTIK_GROUPS_SESSION_KEY] = list(groups)
-    session.save()
-    return client
+    return authenticate_console_user(client, username)
 
 
 def _non_admin_client(username: str) -> Client:
-    user, _created = UserMirror.objects.get_or_create(authentik_user_id=username)
     client = Client(HTTP_HOST="localhost")
-    session = client.session
-    session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
-    session.save()
-    return client
+    return authenticate_console_user(client, username)

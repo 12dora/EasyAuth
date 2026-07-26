@@ -1,17 +1,16 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
 from dataclasses import dataclass
 from json import loads
 from pathlib import Path
 from typing import TYPE_CHECKING, Final, Literal, TypeGuard, cast
 
-from django.conf import settings
 from django.core.exceptions import ImproperlyConfigured
 from django.shortcuts import render
 
-from easyauth.accounts.auth import AUTHENTIK_GROUPS_SESSION_KEY, AUTHENTIK_SESSION_KEY
+from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
+from easyauth.admin_console.identity import actor_from_request
 from easyauth.config.settings.base import BASE_DIR
 
 if TYPE_CHECKING:
@@ -131,7 +130,7 @@ def shell_user_from_user(request: HttpRequest, user: UserMirror) -> ShellUser:
     return ShellUser(
         user_id=user.authentik_user_id,
         display_name=_display_name(user),
-        role=_role_label(request, is_superuser=is_superuser),
+        role=_role_label(is_superuser=is_superuser),
         is_superuser=is_superuser,
         avatar_url=user.avatar_url,
     )
@@ -202,20 +201,14 @@ def _display_name(user: UserMirror) -> str:
 
 
 def _is_console_superuser(request: HttpRequest) -> bool:
-    groups = _session_string_list(request, AUTHENTIK_GROUPS_SESSION_KEY)
-    configured_admin_groups = _string_values(
-        getattr(settings, "EASYAUTH_CONSOLE_SUPERUSER_GROUPS", ()),
-    )
-    return bool(configured_admin_groups) and not set(groups).isdisjoint(configured_admin_groups)
+    actor = actor_from_request(request)
+    return actor.is_superuser if actor is not None else False
 
 
-def _role_label(request: HttpRequest, *, is_superuser: bool) -> str:
+def _role_label(*, is_superuser: bool) -> str:
     # role 仅作展示; 门禁以 is_superuser / 后端 membership 为准。
     if is_superuser:
         return "EasyAuth Admins"
-    groups = _session_string_list(request, AUTHENTIK_GROUPS_SESSION_KEY)
-    if groups:
-        return "、".join(groups[:2])
     return "Member"
 
 
@@ -225,20 +218,3 @@ def _session_string(request: HttpRequest, key: str) -> str:
             return value
         case _:
             return ""
-
-
-def _session_string_list(request: HttpRequest, key: str) -> tuple[str, ...]:
-    value = request.session.get(key)
-    if isinstance(value, str):
-        return tuple(part for part in value.split() if part)
-    if isinstance(value, Sequence):
-        return tuple(item for item in value if isinstance(item, str) and item)
-    return ()
-
-
-def _string_values(value: object) -> tuple[str, ...]:
-    if isinstance(value, str):
-        return tuple(part for part in value.split() if part)
-    if isinstance(value, Sequence):
-        return tuple(item for item in value if isinstance(item, str) and item)
-    return ()

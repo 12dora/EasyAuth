@@ -19,7 +19,7 @@ from easyauth.applications.models import (
     Permission,
     PermissionGroup,
 )
-from easyauth.applications.services import StaticTokenService
+from easyauth.applications.services import AppCredentialService
 
 pytestmark = pytest.mark.django_db
 
@@ -96,14 +96,13 @@ def test_ops1_configuration_readiness_blocks_disabled_managed_scope_policy() -> 
     _ = ManagedScopePolicy.objects.create(
         app=app,
         target_type="app_default",
-        target_id=app.id,
         scope="MANAGED_USERS",
         resolver="dingtalk_manager_chain",
     )
     _ = ManagedScopePolicy.objects.create(
         app=app,
         target_type="authorization_group_grant",
-        target_id=grant.id,
+        authorization_group_grant=grant,
         scope="MANAGED_USERS",
         resolver="dingtalk_manager_chain",
         enabled=False,
@@ -157,7 +156,7 @@ def test_ops1_configuration_readiness_warns_when_permission_supported_scopes_mis
         authorization_group=auth_group,
         approver_userids=["manager-001"],
     )
-    _ = StaticTokenService.create_token(app=app, name="OPS1 token")
+    _ = AppCredentialService.create_static_token(app=app, name="OPS1 token")
 
     # When: 应用负责人查看配置完整性。
     readiness = configuration_readiness_for_app(app)
@@ -236,7 +235,7 @@ def _ready_catalog(
             authorization_group=authorization_group,
             approver_userids=["manager-001"],
         )
-    _ = StaticTokenService.create_token(app=app, name="OPS1 token")
+    _ = AppCredentialService.create_static_token(app=app, name="OPS1 token")
     return permission_group
 
 
@@ -268,5 +267,5 @@ def _ready_managed_scope_catalog(app: App) -> AuthorizationGroupGrant:
         authorization_group=authorization_group,
         approver_userids=["manager-001"],
     )
-    _ = StaticTokenService.create_token(app=app, name="OPS1 token")
+    _ = AppCredentialService.create_static_token(app=app, name="OPS1 token")
     return grant

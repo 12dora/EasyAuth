@@ -5,6 +5,7 @@ from typing import Final, Literal
 from easyauth.access_requests.models import (
     REQUEST_STATUS_APPROVED,
     REQUEST_STATUS_GRANT_APPLIED,
+    REQUEST_STATUS_GRANT_CONFLICT,
     REQUEST_STATUS_GRANT_EXPIRED,
     REQUEST_STATUS_GRANT_FAILED,
     REQUEST_STATUS_REJECTED,
@@ -20,6 +21,7 @@ _STATUS_LABELS: Final[dict[str, str]] = {
     REQUEST_STATUS_GRANT_APPLIED: "授权已落库, 权限已生效",
     REQUEST_STATUS_REJECTED: "已拒绝",
     REQUEST_STATUS_GRANT_FAILED: "授权落库失败",
+    REQUEST_STATUS_GRANT_CONFLICT: "基础授权已变化, 请重新提交",
     REQUEST_STATUS_GRANT_EXPIRED: "授权期限已过, 未应用",
     REQUEST_STATUS_WITHDRAWN: "已撤回",
 }
@@ -30,6 +32,7 @@ _STATUS_TONES: Final[dict[str, StatusTone]] = {
     REQUEST_STATUS_GRANT_APPLIED: "success",
     REQUEST_STATUS_REJECTED: "danger",
     REQUEST_STATUS_GRANT_FAILED: "danger",
+    REQUEST_STATUS_GRANT_CONFLICT: "danger",
     REQUEST_STATUS_GRANT_EXPIRED: "danger",
     REQUEST_STATUS_WITHDRAWN: "secondary",
 }

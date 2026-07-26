@@ -27,6 +27,7 @@ PARTIALLY_EXPIRED_VERSION: Final = 2
 FULLY_EXPIRED_VERSION: Final = 3
 EXPECTED_EXPIRATION_LOGS: Final = 2
 DEFAULT_SCOPE_KEY: Final = "GLOBAL"
+EXPIRATION_BATCH_SIZE_UNDER_TEST: Final = 2
 
 
 def _scoped_permission(app: App, *, key: str, name: str) -> Permission:
@@ -145,6 +146,29 @@ def test_s13_cleanup_expired_memberships_skips_candidate_consumed_by_concurrent_
     assert grant.is_current is False
     assert grant.version == PARTIALLY_EXPIRED_VERSION
     assert AuditLog.objects.filter(event_type="grant_expired").count() == 0
+
+
+def test_cleanup_expired_grants_respects_batch_size() -> None:
+    now = timezone.now()
+    app = App.objects.create(app_key="s13-cleanup-batch-app", name="S13 Batch")
+    permission = _scoped_permission(app, key="invoice.read", name="Read invoices")
+    for index in range(EXPIRATION_BATCH_SIZE_UNDER_TEST + 1):
+        user = UserMirror.objects.create(authentik_user_id=f"s13-cleanup-batch-user-{index}")
+        grant = AccessGrant.objects.create(user=user, app=app)
+        _ = AccessGrantPermission.objects.create(
+            grant=grant,
+            permission=permission,
+            scope_key=DEFAULT_SCOPE_KEY,
+            expires_at=now - timedelta(seconds=1),
+        )
+
+    result = cleanup_expired_grants(
+        now=now,
+        batch_size=EXPIRATION_BATCH_SIZE_UNDER_TEST,
+    )
+
+    assert result.expired_count == EXPIRATION_BATCH_SIZE_UNDER_TEST
+    assert AccessGrant.objects.filter(status=GRANT_STATUS_ACTIVE).count() == 1
 
 
 def test_s13_cleanup_expired_memberships_skips_candidate_extended_before_lock(

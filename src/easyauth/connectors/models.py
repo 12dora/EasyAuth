@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from json import JSONDecodeError
 from typing import TYPE_CHECKING, ClassVar, Final, cast, override
 
 from django.db import models
@@ -47,6 +48,14 @@ SYNC_RUN_STATUS_VALUES: Final[tuple[str, ...]] = (
 )
 
 DEFAULT_RECONCILE_INTERVAL_SECONDS: Final = 300
+CONNECTOR_CONFIG_MALFORMED_JSON: Final = "malformed_json"
+CONNECTOR_CONFIG_NOT_OBJECT: Final = "not_object"
+
+
+class ConnectorConfigError(ValueError):
+    def __init__(self, *, kind: str, message: str) -> None:
+        super().__init__(message)
+        self.kind: str = kind
 
 
 class ConnectorInstance(models.Model):
@@ -77,6 +86,20 @@ class ConnectorInstance(models.Model):
     consecutive_failures: models.PositiveIntegerField[int, int] = models.PositiveIntegerField(
         default=0,
     )
+    external_groups_refresh_status: models.CharField[str, str] = models.CharField(
+        max_length=16,
+        blank=True,
+        default="",
+    )
+    external_groups_refresh_cursor: models.CharField[str, str] = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+    )
+    external_groups_refreshed_at: models.DateTimeField[
+        str | date | datetime | None,
+        datetime | None,
+    ] = models.DateTimeField(blank=True, null=True)
     external_account_id: models.CharField[str, str] = models.CharField(
         max_length=255,
         blank=True,
@@ -127,6 +150,20 @@ class ConnectorInstance(models.Model):
                 condition=~Q(external_account_id=""),
                 name="connectors_instance_external_account_unique",
             ),
+            models.CheckConstraint(
+                condition=Q(reconciled_generation__lte=models.F("reconcile_generation")),
+                name="connectors_instance_generation_order",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(reconcile_lease_token__isnull=True, reconcile_lease_expires_at__isnull=True)
+                    | Q(
+                        reconcile_lease_token__isnull=False,
+                        reconcile_lease_expires_at__isnull=False,
+                    )
+                ),
+                name="connectors_instance_lease_pair",
+            ),
         ]
         ordering: ClassVar[list[str]] = ["app__app_key", "connector_key"]
 
@@ -138,9 +175,18 @@ class ConnectorInstance(models.Model):
     def config(self) -> dict[str, JsonValue]:
         if not self.config_encrypted:
             return {}
-        parsed = cast("object", json.loads(self.config_encrypted))
+        try:
+            parsed = cast("object", json.loads(self.config_encrypted))
+        except JSONDecodeError as exc:
+            raise ConnectorConfigError(
+                kind=CONNECTOR_CONFIG_MALFORMED_JSON,
+                message="连接器配置不是合法 JSON。",
+            ) from exc
         if not isinstance(parsed, dict):
-            return {}
+            raise ConnectorConfigError(
+                kind=CONNECTOR_CONFIG_NOT_OBJECT,
+                message="连接器配置必须是 JSON object。",
+            )
         return cast("dict[str, JsonValue]", parsed)
 
     def set_config(self, config: dict[str, JsonValue]) -> None:
@@ -197,6 +243,47 @@ class ConnectorMapping(models.Model):
     def __str__(self) -> str:
         group_key = self.authorization_group.key if self.authorization_group else "tombstone"
         return f"{self.instance}:{group_key}->{self.external_ref}"
+
+
+class ConnectorExternalGroup(models.Model):
+    if TYPE_CHECKING:
+        id: ClassVar[int]
+        instance_id: ClassVar[int]
+
+    instance: models.ForeignKey[ConnectorInstance, ConnectorInstance] = models.ForeignKey(
+        ConnectorInstance,
+        on_delete=models.CASCADE,
+        related_name="external_groups",
+    )
+    external_ref: models.CharField[str, str] = models.CharField(max_length=255)
+    external_name: models.CharField[str, str] = models.CharField(max_length=255)
+    is_active: models.BooleanField[bool, bool] = models.BooleanField(default=True)
+    first_seen_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
+        auto_now_add=True,
+    )
+    last_seen_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField()
+    updated_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["instance", "external_ref"],
+                name="connectors_external_group_unique",
+            ),
+        ]
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["instance", "is_active", "external_name", "external_ref"],
+                name="connectors_ext_group_list_idx",
+            ),
+        ]
+        ordering: ClassVar[list[str]] = ["instance_id", "external_name", "external_ref"]
+
+    @override
+    def __str__(self) -> str:
+        return f"{self.instance}:{self.external_ref}"
 
 
 class ConnectorSyncRun(models.Model):

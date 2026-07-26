@@ -12,6 +12,7 @@ from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import JsonValue
 from easyauth.applications.models import App
 from easyauth.workflows.models import ApprovalInstance, ApprovalTemplate
+from tests.integration.admin_console.auth_helpers import authenticate_console_admin
 
 pytestmark = pytest.mark.django_db
 
@@ -73,7 +74,7 @@ def test_delete_blocked_when_template_referenced_by_instance() -> None:
 def _logged_in_superuser(username: str) -> Client:
     _ = User.objects.create_superuser(username=username, password=LOGIN_VALUE)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    authenticate_console_admin(client, username)
     return client
 
 

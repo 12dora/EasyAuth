@@ -11,6 +11,7 @@
 7. [EasyAuth 前端视觉契约](architecture/easyauth-frontend-visual-contract.md)
 8. [ADR-001：业务授权运营边界](decisions/ADR-001-业务授权运营边界.md)
 9. [ADR-002：`MANAGED_USERS` 管理范围契约](decisions/ADR-002-MANAGED_USERS管理范围契约.md)
+10. [历史破坏性迁移基线](operations/historical-migration-baseline.md)
 
 ## 待实施设计
 

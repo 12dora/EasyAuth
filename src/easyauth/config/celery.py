@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING, cast
 
 from celery import Celery
 from celery.signals import task_success
@@ -11,6 +12,9 @@ from easyauth.config.runtime_health import (
     NOTIFY_DELIVERY_SUCCESS,
     mark_heartbeat,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 DJANGO_SETTINGS_MODULE = os.environ.setdefault(
     "DJANGO_SETTINGS_MODULE",
@@ -28,9 +32,12 @@ _SUCCESS_HEARTBEATS = {
 }
 
 
-@task_success.connect
 def _record_critical_task_success(sender: object | None = None, **_kwargs: object) -> None:
     task_name = getattr(sender, "name", "")
     heartbeat = _SUCCESS_HEARTBEATS.get(task_name)
     if heartbeat is not None:
         mark_heartbeat(heartbeat)
+
+
+_connect_task_success = cast("Callable[[Callable[..., object]], object]", task_success.connect)
+_ = _connect_task_success(_record_critical_task_success)

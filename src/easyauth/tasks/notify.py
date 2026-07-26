@@ -4,14 +4,14 @@ from typing import Final
 
 from celery import shared_task
 
-from easyauth.notify.services import (
+from easyauth.notify.contracts import (
     NOTIFY_DELIVERY_TASK_NAME,
     NOTIFY_PRUNE_TASK_NAME,
     NOTIFY_RECONCILE_TASK_NAME,
-    deliver_message,
-    prune_messages,
-    reconcile_send_results,
 )
+from easyauth.notify.delivery import deliver_message
+from easyauth.notify.reconciliation import reconcile_send_results
+from easyauth.notify.retention import prune_messages
 
 # 单轮最多 5 批 x 钉钉 ~5s 超时 + 余量(第 3 篇 §1)。
 _DELIVER_SOFT_TIME_LIMIT: Final = 25

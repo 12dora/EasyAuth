@@ -4,6 +4,10 @@ import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
+from django.db.models import F, Window
+from django.db.models.functions import RowNumber
+
+from easyauth.applications.health_models import DEPENDENCY_CONNECTORS
 from easyauth.applications.ops_models import (
     DEPENDENCY_AUTHENTIK,
     DEPENDENCY_AUTHENTIK_DIRECTORY,
@@ -23,6 +27,7 @@ CORE_DEPENDENCIES: Final[tuple[str, ...]] = (
     DEPENDENCY_DINGTALK,
     DEPENDENCY_DINGTALK_NOTIFY,
     DEPENDENCY_CELERY,
+    DEPENDENCY_CONNECTORS,
 )
 UNKNOWN_HEALTH_SUMMARY: Final = "尚未记录健康快照"
 SENSITIVE_SUMMARY: Final = "[已隐藏敏感摘要]"
@@ -63,15 +68,19 @@ class DependencyHealthItem:
 class DependencyHealthService:
     @staticmethod
     def latest_items() -> tuple[DependencyHealthItem, ...]:
-        latest_by_dependency: dict[str, DependencyHealthSnapshot] = {}
-        snapshots = DependencyHealthSnapshot.objects.select_related("app").order_by(
-            "dependency",
-            "-checked_at",
-            "-id",
+        snapshots = (
+            DependencyHealthSnapshot.objects.select_related("app")
+            .filter(dependency__in=CORE_DEPENDENCIES)
+            .annotate(
+                dependency_row_number=Window(
+                    expression=RowNumber(),
+                    partition_by=[F("dependency")],
+                    order_by=[F("checked_at").desc(), F("id").desc()],
+                ),
+            )
+            .filter(dependency_row_number=1)
         )
-        for snapshot in snapshots:
-            if snapshot.dependency not in latest_by_dependency:
-                latest_by_dependency[snapshot.dependency] = snapshot
+        latest_by_dependency = {snapshot.dependency: snapshot for snapshot in snapshots}
         return tuple(
             _item_for_snapshot(
                 dependency=dependency,

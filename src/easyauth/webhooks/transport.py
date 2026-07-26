@@ -169,7 +169,7 @@ def _request_webhook(
         )
     except TimeoutError as error:
         raise WebhookDeadlineExceededError from error
-    except (HTTPException, OSError) as error:
+    except (HTTPException, OSError, UnicodeError) as error:
         if deadline_reached.is_set():
             raise WebhookDeadlineExceededError from error
         raise WebhookTransportError(str(error)) from error

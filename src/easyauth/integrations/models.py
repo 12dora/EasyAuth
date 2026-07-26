@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, ClassVar, Final, override
 
 from django.db import models
+from django.db.models import Q
 
 if TYPE_CHECKING:
     from datetime import date, datetime
@@ -20,6 +21,9 @@ STREAM_EVENT_STATUS_CHOICES: Final[tuple[tuple[str, str], ...]] = (
     (STREAM_EVENT_STATUS_PROCESSED, "processed"),
     (STREAM_EVENT_STATUS_SKIPPED, "skipped"),
     (STREAM_EVENT_STATUS_FAILED, "failed"),
+)
+STREAM_EVENT_STATUS_VALUES: Final[tuple[str, ...]] = tuple(
+    value for value, _label in STREAM_EVENT_STATUS_CHOICES
 )
 
 
@@ -40,6 +44,15 @@ class DingTalkStreamEvent(models.Model):
         default=dict,
         blank=True,
     )
+    data_sha256: models.CharField[str, str] = models.CharField(
+        max_length=64,
+        blank=True,
+        default="",
+    )
+    data_minimized_at: models.DateTimeField[
+        str | date | datetime | None,
+        datetime | None,
+    ] = models.DateTimeField(null=True, blank=True)
     status: models.CharField[str, str] = models.CharField(
         max_length=16,
         choices=STREAM_EVENT_STATUS_CHOICES,
@@ -62,6 +75,45 @@ class DingTalkStreamEvent(models.Model):
     )
 
     class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.CheckConstraint(
+                condition=Q(status__in=STREAM_EVENT_STATUS_VALUES),
+                name="integrations_stream_status_supported",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        status=STREAM_EVENT_STATUS_RECEIVED,
+                        processed_at__isnull=True,
+                        error="",
+                    )
+                    | Q(
+                        status__in=(
+                            STREAM_EVENT_STATUS_PROCESSED,
+                            STREAM_EVENT_STATUS_SKIPPED,
+                        ),
+                        processed_at__isnull=False,
+                        error="",
+                    )
+                    | Q(
+                        status=STREAM_EVENT_STATUS_FAILED,
+                        processed_at__isnull=False,
+                        error__gt="",
+                    )
+                ),
+                name="integrations_stream_state_shape",
+            ),
+        ]
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["status", "data_minimized_at", "processed_at", "id"],
+                name="integr_stream_retention_idx",
+            ),
+            models.Index(
+                fields=["event_type", "-created_at", "-id"],
+                name="integr_stream_event_type_idx",
+            ),
+        ]
         ordering: ClassVar[list[str]] = ["-created_at"]
 
     @override

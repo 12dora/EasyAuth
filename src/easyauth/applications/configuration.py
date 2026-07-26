@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final, Literal
+from typing import TYPE_CHECKING, Final, Literal, cast
+
+from django.db.models import Count, Model, Q, QuerySet
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 from easyauth.applications.managed_scope_policy import ManagedScopePolicyService
 from easyauth.applications.models import (
     MANAGED_SCOPE_POLICY_RESOLVER_DISABLED,
     MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS,
+    MANAGED_SCOPE_POLICY_TARGET_APP_DEFAULT,
+    MANAGED_SCOPE_POLICY_TARGET_AUTHORIZATION_GROUP_GRANT,
     App,
     AppCredential,
     AppMembership,
@@ -46,6 +53,188 @@ class ConfigurationReadiness:
 def configuration_readiness_for_app(app: App) -> ConfigurationReadiness:
     issues = tuple(_blocking_issues(app)) + tuple(_warning_issues(app))
     return ConfigurationReadiness(status=_readiness_status(issues), issues=issues)
+
+
+def configuration_readiness_statuses_for_apps(
+    apps: Iterable[App],
+) -> dict[int, ConfigurationReadinessStatus]:
+    app_items = tuple(apps)
+    app_ids = tuple(app.id for app in app_items)
+    if not app_ids:
+        return {}
+    blocking_ids: set[int] = {app.id for app in app_items if not app.is_active}
+    warning_ids: set[int] = set()
+
+    active_permission_counts = _counts_by_app(
+        Permission.objects.filter(
+            app_id__in=app_ids,
+            is_active=True,
+            deprecated_at__isnull=True,
+        ),
+    )
+    active_group_counts = _counts_by_app(
+        AuthorizationGroup.objects.filter(app_id__in=app_ids, is_active=True),
+    )
+    active_owner_counts = _counts_by_app(
+        AppMembership.objects.filter(app_id__in=app_ids, role="owner", is_active=True),
+    )
+    active_static_credential_counts = _counts_by_app(
+        AppCredential.objects.filter(
+            app_id__in=app_ids,
+            credential_type=APP_CREDENTIAL_STATIC_KIND,
+            is_active=True,
+        ),
+    )
+    active_oauth_counts = _counts_by_app(
+        OAuthClientBinding.objects.filter(app_id__in=app_ids, is_active=True),
+    )
+    for app_id in app_ids:
+        if active_permission_counts.get(app_id, 0) == 0:
+            blocking_ids.add(app_id)
+        if active_group_counts.get(app_id, 0) == 0:
+            blocking_ids.add(app_id)
+        if active_owner_counts.get(app_id, 0) == 0:
+            blocking_ids.add(app_id)
+        if (
+            active_static_credential_counts.get(app_id, 0) == 0
+            and active_oauth_counts.get(app_id, 0) == 0
+        ):
+            blocking_ids.add(app_id)
+
+    blocking_ids.update(_requestable_group_missing_rule_app_ids(app_ids))
+    blocking_ids.update(_invalid_active_grant_app_ids(app_ids))
+    blocking_ids.update(_managed_scope_blocking_app_ids(app_ids))
+    warning_ids.update(_permission_warning_app_ids(app_ids))
+
+    return {
+        app_id: _summary_status(app_id, blocking_ids=blocking_ids, warning_ids=warning_ids)
+        for app_id in app_ids
+    }
+
+
+def _counts_by_app(queryset: QuerySet[Model]) -> dict[int, int]:
+    rows = cast(
+        "Iterable[dict[str, int]]",
+        queryset.values("app_id").annotate(total=Count("id")),
+    )
+    return {int(row["app_id"]): int(row["total"]) for row in rows}
+
+
+def _requestable_group_missing_rule_app_ids(app_ids: tuple[int, ...]) -> set[int]:
+    active_rule_group_ids = set(
+        ApprovalRule.objects.filter(
+            app_id__in=app_ids,
+            authorization_group_id__isnull=False,
+            is_active=True,
+        ).values_list("authorization_group_id", flat=True),
+    )
+    return set(
+        AuthorizationGroup.objects.filter(
+            app_id__in=app_ids,
+            is_active=True,
+            requestable=True,
+        )
+        .exclude(id__in=active_rule_group_ids)
+        .values_list("app_id", flat=True),
+    )
+
+
+def _invalid_active_grant_app_ids(app_ids: tuple[int, ...]) -> set[int]:
+    active_scope_keys_by_app: dict[int, set[str]] = {}
+    scope_rows = cast(
+        "Iterable[tuple[int, str]]",
+        AppScope.objects.filter(
+            app_id__in=app_ids,
+            is_active=True,
+        ).values_list("app_id", "key"),
+    )
+    for app_id, key in scope_rows:
+        active_scope_keys_by_app.setdefault(app_id, set()).add(key)
+    invalid_ids: set[int] = set(
+        AuthorizationGroupGrant.objects.filter(
+            authorization_group__app_id__in=app_ids,
+            is_active=True,
+        )
+        .filter(Q(authorization_group__is_active=False) | Q(permission__is_active=False))
+        .values_list("authorization_group__app_id", flat=True),
+    )
+    grant_scope_rows = cast(
+        "Iterable[tuple[int, str]]",
+        AuthorizationGroupGrant.objects.filter(
+            authorization_group__app_id__in=app_ids,
+            is_active=True,
+        ).values_list("authorization_group__app_id", "scope_key"),
+    )
+    for app_id, scope_key in grant_scope_rows:
+        if scope_key not in active_scope_keys_by_app.get(app_id, set()):
+            invalid_ids.add(app_id)
+    return invalid_ids
+
+
+def _managed_scope_blocking_app_ids(app_ids: tuple[int, ...]) -> set[int]:
+    app_defaults = {
+        policy.app_id: policy
+        for policy in ManagedScopePolicy.objects.filter(
+            app_id__in=app_ids,
+            target_type=MANAGED_SCOPE_POLICY_TARGET_APP_DEFAULT,
+        )
+    }
+    overrides_by_grant_id: dict[int, ManagedScopePolicy] = {}
+    for policy in ManagedScopePolicy.objects.filter(
+            app_id__in=app_ids,
+            target_type=MANAGED_SCOPE_POLICY_TARGET_AUTHORIZATION_GROUP_GRANT,
+    ):
+        grant_id = cast("int | None", getattr(policy, "authorization_group_grant_id", None))
+        if grant_id is not None:
+            overrides_by_grant_id[grant_id] = policy
+    blocking_ids: set[int] = set()
+    grants = cast(
+        "Iterable[tuple[int, int]]",
+        AuthorizationGroupGrant.objects.filter(
+            authorization_group__app_id__in=app_ids,
+            is_active=True,
+            scope_key=MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS,
+        ).values_list("id", "authorization_group__app_id"),
+    )
+    for grant_id, app_id in grants:
+        override = overrides_by_grant_id.get(grant_id)
+        if override is not None:
+            if _managed_scope_policy_disabled(override):
+                blocking_ids.add(app_id)
+            continue
+        app_default = app_defaults.get(app_id)
+        if app_default is None or _managed_scope_policy_disabled(app_default):
+            blocking_ids.add(app_id)
+    return blocking_ids
+
+
+def _permission_warning_app_ids(app_ids: tuple[int, ...]) -> set[int]:
+    warning_ids: set[int] = set()
+    permissions = Permission.objects.filter(
+        app_id__in=app_ids,
+        is_active=True,
+        deprecated_at__isnull=True,
+    ).select_related("group")
+    for permission in permissions:
+        if not permission.supported_scopes:
+            warning_ids.add(permission.app_id)
+        group = permission.group
+        if group is not None and not group.is_active:
+            warning_ids.add(permission.app_id)
+    return warning_ids
+
+
+def _summary_status(
+    app_id: int,
+    *,
+    blocking_ids: set[int],
+    warning_ids: set[int],
+) -> ConfigurationReadinessStatus:
+    if app_id in blocking_ids:
+        return CONFIGURATION_STATUS_BLOCKING
+    if app_id in warning_ids:
+        return CONFIGURATION_STATUS_WARNING
+    return CONFIGURATION_STATUS_READY
 
 
 def _blocking_issues(app: App) -> list[ConfigurationIssue]:

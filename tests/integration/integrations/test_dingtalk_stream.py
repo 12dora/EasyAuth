@@ -6,15 +6,20 @@ from typing import TYPE_CHECKING, cast
 
 import pytest
 from dingtalk_stream import AckMessage, EventMessage
+from django.db import IntegrityError, transaction
+from django.utils import timezone
 
 from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import App
+from easyauth.audit.models import AuditLog
 from easyauth.integrations.dingtalk import stream as stream_module
 from easyauth.integrations.dingtalk.api_client import DingTalkNotConfiguredError
 from easyauth.integrations.dingtalk.stream import (
+    STREAM_EVENT_CONFLICT_MESSAGE,
     EasyAuthDingTalkEventHandler,
     StreamEventIdentityError,
     build_stream_client,
+    canonical_stream_data_sha256,
     record_stream_event,
 )
 from easyauth.integrations.models import (
@@ -115,9 +120,69 @@ def test_record_stream_event_persists_and_enqueues_once(
     assert first.event_pk == second.event_pk == _pk(event)
     assert event.born_at is not None
     outbox_event = OutboxEvent.objects.get(event_key="dingtalk-stream:evt-1")
+    outbox_args = cast("list[object]", outbox_event.args)
     assert outbox_event.task_name == "easyauth.dingtalk_stream.process_event"
-    assert outbox_event.args == [_pk(event)]
+    assert outbox_args == [_pk(event)]
     assert sent_tasks.calls == []
+
+
+def test_record_stream_event_detects_duplicate_after_raw_minimized(
+    django_capture_on_commit_callbacks: DjangoCaptureOnCommitCallbacks,
+) -> None:
+    # Given: 原始 data 已被 retention 最小化, 仅保留 canonical hash。
+    with django_capture_on_commit_callbacks(execute=True):
+        first = record_stream_event(
+            event_id="evt-minimized-retry",
+            event_type="user_leave_org",
+            corp_id="corp-1",
+            born_time_ms=1751790000000,
+            data={"z": 1, "a": ["u-1"]},
+        )
+    event = DingTalkStreamEvent.objects.get(pk=first.event_pk)
+    expected_hash = event.data_sha256
+    event.data = {}
+    event.data_minimized_at = timezone.now()
+    event.save(update_fields=["data", "data_minimized_at", "updated_at"])
+
+    # When: 钉钉重投同一事件, 字段顺序不同但 canonical data 相同。
+    with django_capture_on_commit_callbacks(execute=True):
+        second = record_stream_event(
+            event_id="evt-minimized-retry",
+            event_type="user_leave_org",
+            corp_id="corp-1",
+            born_time_ms=1751790000000,
+            data={"a": ["u-1"], "z": 1},
+        )
+
+    # Then: 仍判定 duplicate, 不依赖 raw data。
+    assert second.created is False
+    assert second.event_pk == first.event_pk
+    assert expected_hash == canonical_stream_data_sha256({"a": ["u-1"], "z": 1})
+    assert DingTalkStreamEvent.objects.get(pk=first.event_pk).data_sha256 == expected_hash
+
+
+def test_record_stream_event_conflict_fails_and_audits() -> None:
+    _ = record_stream_event(
+        event_id="evt-conflict",
+        event_type="user_leave_org",
+        corp_id="corp-1",
+        born_time_ms=1751790000000,
+        data={"userId": ["u-1"]},
+    )
+
+    with pytest.raises(ValueError, match=STREAM_EVENT_CONFLICT_MESSAGE):
+        _ = record_stream_event(
+            event_id="evt-conflict",
+            event_type="user_add_org",
+            corp_id="corp-1",
+            born_time_ms=1751790000000,
+            data={"userId": ["u-1"]},
+        )
+
+    audit = AuditLog.objects.get(event_type="dingtalk_stream_event_conflict")
+    assert audit.target_id == "evt-conflict"
+    assert audit.metadata["stored_event_type"] == "user_leave_org"
+    assert audit.metadata["incoming_event_type"] == "user_add_org"
 
 
 def test_record_stream_event_rejects_missing_identity(sent_tasks: _SendTaskRecorder) -> None:
@@ -131,6 +196,22 @@ def test_record_stream_event_rejects_missing_identity(sent_tasks: _SendTaskRecor
         )
     assert not DingTalkStreamEvent.objects.exists()
     assert sent_tasks.calls == []
+
+
+def test_database_rejects_stream_state_without_required_shape() -> None:
+    with pytest.raises(IntegrityError), transaction.atomic():
+        _ = DingTalkStreamEvent.objects.create(
+            event_id="evt-bad-processed",
+            event_type="user_leave_org",
+            status=STREAM_EVENT_STATUS_PROCESSED,
+        )
+
+    with pytest.raises(IntegrityError), transaction.atomic():
+        _ = DingTalkStreamEvent.objects.create(
+            event_id="evt-bad-failed",
+            event_type="user_leave_org",
+            status=STREAM_EVENT_STATUS_FAILED,
+        )
 
 
 def test_build_stream_client_fails_fast_without_credentials() -> None:
@@ -166,6 +247,29 @@ def test_handler_nacks_when_persist_fails(monkeypatch: pytest.MonkeyPatch) -> No
     # When/Then: 返回系统异常让钉钉重投, 事件不会被 ACK 丢失。
     code, _text = asyncio.run(handler.process(_event_message("evt-broken", "user_add_org")))
     assert code == AckMessage.STATUS_SYSTEM_EXCEPTION
+
+
+@pytest.mark.django_db(transaction=True)
+def test_handler_nacks_conflicting_duplicate() -> None:
+    _ = record_stream_event(
+        event_id="evt-handler-conflict",
+        event_type="user_add_org",
+        corp_id="corp-1",
+        born_time_ms=1751790000000,
+        data={"corpId": "corp-1"},
+    )
+    handler = EasyAuthDingTalkEventHandler()
+
+    code, text = asyncio.run(
+        handler.process(_event_message("evt-handler-conflict", "user_leave_org"))
+    )
+
+    assert code == AckMessage.STATUS_SYSTEM_EXCEPTION
+    assert text == "event persist failed"
+    assert AuditLog.objects.filter(
+        event_type="dingtalk_stream_event_conflict",
+        target_id="evt-handler-conflict",
+    ).exists()
 
 
 def test_directory_event_queues_coalesced_refresh(sent_tasks: _SendTaskRecorder) -> None:
@@ -204,7 +308,8 @@ def test_processed_event_replay_has_no_side_effects(sent_tasks: _SendTaskRecorde
     # Given: 已处理完成的事件(任务重复投递场景)。
     event = _stored_event("evt-replay", "user_leave_org", data={"userId": ["u-1"]})
     event.status = STREAM_EVENT_STATUS_PROCESSED
-    event.save(update_fields=["status"])
+    event.processed_at = timezone.now()
+    event.save(update_fields=["status", "processed_at"])
 
     # When/Then: 幂等出口直接返回, 不再触发目录刷新。
     assert process_dingtalk_stream_event_task(_pk(event)) == STREAM_EVENT_STATUS_PROCESSED
@@ -366,6 +471,8 @@ def _submitted_instance(app_key: str, process_instance_id: str) -> ApprovalInsta
     )
     originator = UserMirror.objects.create(
         authentik_user_id=f"{app_key}-originator",
+        dingtalk_source_slug="default",
+        dingtalk_corp_id="corp-1",
         dingtalk_userid=f"{app_key}-dt",
     )
     return ApprovalInstance.objects.create(
@@ -378,3 +485,20 @@ def _submitted_instance(app_key: str, process_instance_id: str) -> ApprovalInsta
         submission_state="submitted",
         payload_hash="0" * 64,
     )
+
+
+def test_submitted_instance_fixture_keeps_complete_dingtalk_binding() -> None:
+    instance = _submitted_instance("stream-binding-complete", "proc-binding-complete")
+
+    originator = instance.originator_user
+    assert originator.dingtalk_source_slug == "default"
+    assert originator.dingtalk_corp_id == "corp-1"
+    assert originator.dingtalk_userid == "stream-binding-complete-dt"
+
+
+def test_dingtalk_user_partial_binding_remains_invalid() -> None:
+    with pytest.raises(IntegrityError), transaction.atomic():
+        _ = UserMirror.objects.create(
+            authentik_user_id="stream-binding-partial",
+            dingtalk_userid="stream-binding-partial-dt",
+        )

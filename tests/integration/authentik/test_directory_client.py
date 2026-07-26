@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from email.message import Message
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Self, override
 from urllib.error import HTTPError, URLError
 
 import pytest
@@ -23,10 +23,10 @@ TIMEOUT_SECONDS = 3
 
 
 class _Response:
-    _body: bytes
-
-    def __init__(self, body: bytes) -> None:
-        self._body = body
+    def __init__(self, body: bytes, *, content_length: str | None = None) -> None:
+        self._body: bytes = body
+        self._content_length: str | None = content_length
+        self._consumed: bool = False
 
     def __enter__(self) -> Self:
         return self
@@ -39,8 +39,16 @@ class _Response:
     ) -> None:
         return None
 
-    def read(self) -> bytes:
+    def read(self, _amount: int = -1) -> bytes:
+        if self._consumed:
+            return b""
+        self._consumed = True
         return self._body
+
+    def getheader(self, name: str) -> str | None:
+        if name == "Content-Length":
+            return self._content_length
+        return None
 
 
 def test_directory_client_fetches_user_org_context(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -193,6 +201,47 @@ def test_directory_client_rejects_non_advancing_pagination(
                 timeout_seconds=TIMEOUT_SECONDS,
             ).iter_users(),
         )
+
+
+def test_directory_client_rejects_oversized_response_before_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_urlopen(_request: Request, *, timeout: float) -> _Response:
+        _ = timeout
+        return _Response(b"{}", content_length=str(1024 * 1024 + 1))
+
+    monkeypatch.setattr("easyauth.integrations.authentik.directory_client.urlopen", fake_urlopen)
+
+    with pytest.raises(AuthentikDirectoryUnavailableError):
+        _ = AuthentikDirectoryClient(
+            base_url="https://authentik.test",
+            api_token=TEST_API_TOKEN,
+            source_slug="dingtalk",
+            timeout_seconds=TIMEOUT_SECONDS,
+        ).get_status()
+
+
+def test_directory_client_normalizes_body_read_os_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class BrokenResponse(_Response):
+        @override
+        def read(self, _amount: int = -1) -> bytes:
+            raise TimeoutError
+
+    def fake_urlopen(_request: Request, *, timeout: float) -> BrokenResponse:
+        _ = timeout
+        return BrokenResponse(b"")
+
+    monkeypatch.setattr("easyauth.integrations.authentik.directory_client.urlopen", fake_urlopen)
+
+    with pytest.raises(AuthentikDirectoryUnavailableError):
+        _ = AuthentikDirectoryClient(
+            base_url="https://authentik.test",
+            api_token=TEST_API_TOKEN,
+            source_slug="dingtalk",
+            timeout_seconds=TIMEOUT_SECONDS,
+        ).get_status()
 
 
 def test_directory_client_fetches_managed_users(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -12,6 +12,7 @@ from pydantic import TypeAdapter
 from easyauth.api.errors import JsonValue
 from easyauth.applications.models import App, AppMembership, ManagedScopePolicy
 from easyauth.audit.models import AuditLog
+from tests.integration.admin_console.auth_helpers import authenticate_console_user
 
 pytestmark = pytest.mark.django_db
 
@@ -67,7 +68,6 @@ def test_owner_patches_and_reads_app_default_managed_scope_policy() -> None:
     policy = ManagedScopePolicy.objects.get(
         app=app,
         target_type="app_default",
-        target_id=app.id,
         scope="MANAGED_USERS",
     )
     expected = {
@@ -113,7 +113,6 @@ def test_owner_disables_app_default_managed_scope_policy() -> None:
     _ = ManagedScopePolicy.objects.create(
         app=app,
         target_type="app_default",
-        target_id=app.id,
         scope="MANAGED_USERS",
         resolver="dingtalk_manager_chain",
         enabled=True,
@@ -136,7 +135,7 @@ def test_owner_disables_app_default_managed_scope_policy() -> None:
 
     # Then: 策略被保存为 disabled, 控制台响应明确展示不启用状态。
     body = _response_json(response)
-    policy = ManagedScopePolicy.objects.get(app=app, target_type="app_default", target_id=app.id)
+    policy = ManagedScopePolicy.objects.get(app=app, target_type="app_default")
     assert response.status_code == HTTPStatus.OK
     assert body["managed_scope_policy"] == {
         "id": policy.id,
@@ -165,7 +164,6 @@ def test_owner_deletes_app_default_managed_scope_policy() -> None:
     _ = ManagedScopePolicy.objects.create(
         app=app,
         target_type="app_default",
-        target_id=app.id,
         scope="MANAGED_USERS",
         resolver="dingtalk_manager_chain",
         enabled=True,
@@ -222,7 +220,6 @@ def test_non_member_cannot_read_app_default_managed_scope_policy() -> None:
     _ = ManagedScopePolicy.objects.create(
         app=app,
         target_type="app_default",
-        target_id=app.id,
         scope="MANAGED_USERS",
         resolver="dingtalk_manager_chain",
     )
@@ -280,8 +277,7 @@ def _member_app(app_key: str, username: str, *, role: str) -> App:
 def _logged_in_user(username: str) -> Client:
     _ = User.objects.create_user(username=username, password=LOGIN_VALUE)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
-    return client
+    return authenticate_console_user(client, username)
 
 
 def _policy_url(app_key: str) -> str:

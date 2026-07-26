@@ -13,7 +13,7 @@
       --surface: #ffffff;
       --ink: #0f172a;
       --muted: #475569;
-      --faint: #94a3b8;
+      --faint: #64748b;
       --line: #e2e8f0;
       --brand: #0f172a;
       --brand-strong: #1e293b;
@@ -31,7 +31,7 @@
 
     body {
       min-width: 320px;
-      min-height: 100vh;
+      min-height: 100dvh;
       margin: 0;
       background: var(--bg);
       -webkit-font-smoothing: antialiased;
@@ -210,7 +210,7 @@
 
     .field input:focus {
       border-color: var(--brand);
-      outline: 2px solid rgba(15, 23, 42, 0.25);
+      outline: 2px solid #2563eb;
       outline-offset: 1px;
     }
 
@@ -237,6 +237,11 @@
     .button-primary:hover {
       border-color: var(--brand-strong);
       background: var(--brand-strong);
+    }
+
+    .button-primary:focus-visible {
+      outline: 2px solid #2563eb;
+      outline-offset: 2px;
     }
 
     .button-primary[disabled] {

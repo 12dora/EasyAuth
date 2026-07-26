@@ -78,6 +78,9 @@ def _assert_safe_not_found_page(response: _TestResponse) -> None:
     assert "页面没有找到" in html
     assert 'href="/auth/login/?next=/portal/"' in html
     assert 'href="/portal/"' in html
+    assert "--faint: #64748b" in html
+    assert "min-height: calc(100dvh - 57px)" in html
+    assert "outline: 2px solid var(--brand)" in html
     assert "Using the URLconf defined in" not in html
     assert "tried these URL patterns" not in html
     assert "The current path" not in html

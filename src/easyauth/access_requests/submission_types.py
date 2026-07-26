@@ -50,6 +50,8 @@ class AccessRequestSubmission:
     actor_type: str
     actor_id: str
     idempotency_key: str
+    base_grant_id: int | None = None
+    base_grant_revision: int | None = None
     approver_user_ids: Iterable[str] = ()
     request_type: AccessRequestType = REQUEST_TYPE_GRANT
     authorization_groups: Iterable[AuthorizationGroup] = ()

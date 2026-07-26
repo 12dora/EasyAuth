@@ -30,7 +30,7 @@ from easyauth.integrations.authentik.directory_client import (
     AuthentikDirectoryError,
     AuthentikDirectoryUnavailableError,
 )
-from easyauth.lifecycle.services import start_offboarding
+from easyauth.lifecycle.offboarding import start_offboarding
 
 if TYPE_CHECKING:
     from easyauth.accounts.status import UserStatus
@@ -44,7 +44,7 @@ DIRECTORY_STATUS_TO_USER_STATUS: Final[dict[str, str]] = {
     "departed": USER_STATUS_DEPARTED,
 }
 UNSUPPORTED_DIRECTORY_STATUS_ERROR: Final = "钉钉目录用户状态无法识别。"
-DIRECTORY_ORG_CONTEXT_UNAVAILABLE_MESSAGE: Final = "钉钉目录组织上下文全部拉取失败。"
+DIRECTORY_ORG_CONTEXT_UNAVAILABLE_MESSAGE: Final = "钉钉目录组织上下文拉取失败。"
 DIRECTORY_CONTRACT_MESSAGE: Final = "钉钉目录响应不满足权威快照契约。"
 DIRECTORY_GENERATION_CHANGED_MESSAGE: Final = "钉钉目录 generation 在快照拉取期间发生变化。"
 DIRECTORY_STALE_GENERATION_MESSAGE: Final = "钉钉目录旧 generation 已被 fencing 拒绝。"
@@ -187,8 +187,8 @@ def _fetch_directory_snapshot(client: AuthentikDirectorySyncClient) -> _Director
         except AuthentikDirectoryError:
             # 单个用户的 org 拉取失败不得中止整轮同步; 隔离该用户、聚合失败并继续。
             org_fetch_failures.append((corp_id, user_id))
-    if attempted and len(org_fetch_failures) == attempted:
-        # 每个用户都失败 = 上游整体故障: 必须触发重试, 而不是落地一份没有主管链的目录。
+    if org_fetch_failures:
+        # 组织上下文是主管链和管理范围解析的必需事实; 任何用户缺失都不得推进整代 generation。
         raise AuthentikDirectoryUnavailableError(DIRECTORY_ORG_CONTEXT_UNAVAILABLE_MESSAGE)
     final_status = _mapping(client.get_status())
     final_source_slug, final_contracts = _status_contract(final_status)
@@ -393,8 +393,15 @@ def _apply_sync_states(
         )
 
 
+def _directory_source_slug(payload: DirectoryJson) -> str:
+    source_slug = _string(payload.get("source_slug"))
+    if source_slug == "":
+        raise AuthentikDirectoryUnavailableError(DIRECTORY_CONTRACT_MESSAGE)
+    return source_slug
+
+
 def _upsert_department(payload: DirectoryJson) -> None:
-    source_slug = _string(payload.get("source_slug")) or "dingtalk"
+    source_slug = _directory_source_slug(payload)
     _ = DingTalkDepartmentMirror.objects.update_or_create(
         source_slug=source_slug,
         corp_id=_string(payload.get("corp_id")),
@@ -408,7 +415,7 @@ def _upsert_department(payload: DirectoryJson) -> None:
 
 
 def _upsert_user(payload: DirectoryJson, *, generation: int) -> None:
-    source_slug = _string(payload.get("source_slug")) or "dingtalk"
+    source_slug = _directory_source_slug(payload)
     corp_id = _string(payload.get("corp_id"))
     user_id = _string(payload.get("user_id"))
     status = _directory_user_status(payload)
@@ -447,12 +454,14 @@ def _upsert_user(payload: DirectoryJson, *, generation: int) -> None:
 
 def _backfill_user_mirror_avatar(payload: DirectoryJson) -> None:
     avatar = _string(payload.get("avatar"))
+    source_slug = _directory_source_slug(payload)
     corp_id = _string(payload.get("corp_id"))
     user_id = _string(payload.get("user_id"))
-    if avatar == "" or corp_id == "" or user_id == "":
+    if avatar == "" or source_slug == "" or corp_id == "" or user_id == "":
         return
     # 只在 avatar_url 为空时回填目录头像, 不覆盖 OIDC 登录写入的值。
     queryset = UserMirror.objects.filter(
+        dingtalk_source_slug=source_slug,
         dingtalk_corp_id=corp_id,
         dingtalk_userid=user_id,
         avatar_url="",
@@ -464,7 +473,7 @@ def _backfill_user_mirror_avatar(payload: DirectoryJson) -> None:
 
 
 def _upsert_org_context(payload: DirectoryJson) -> None:
-    source_slug = _string(payload.get("source_slug")) or "dingtalk"
+    source_slug = _directory_source_slug(payload)
     _ = DingTalkUserOrgContext.objects.update_or_create(
         source_slug=source_slug,
         corp_id=_string(payload.get("corp_id")),
@@ -479,9 +488,10 @@ def _upsert_org_context(payload: DirectoryJson) -> None:
 
 
 def _update_user_mirror_summary(payload: DirectoryJson) -> None:
+    source_slug = _directory_source_slug(payload)
     corp_id = _string(payload.get("corp_id"))
     user_id = _string(payload.get("user_id"))
-    if corp_id == "" or user_id == "":
+    if source_slug == "" or corp_id == "" or user_id == "":
         return
     if payload.get("stale") is True:
         # 过期快照不可信, 不用它清空或改写主管链。
@@ -492,7 +502,11 @@ def _update_user_mirror_summary(payload: DirectoryJson) -> None:
         "department": summary.primary_department_name,
         "manager_userid": summary.manager_user_id,
     }
-    queryset = UserMirror.objects.filter(dingtalk_corp_id=corp_id, dingtalk_userid=user_id)
+    queryset = UserMirror.objects.filter(
+        dingtalk_source_slug=source_slug,
+        dingtalk_corp_id=corp_id,
+        dingtalk_userid=user_id,
+    )
     for user in queryset.select_for_update():
         update_fields: list[str] = []
         previous_department = user.department
@@ -568,18 +582,22 @@ def _reconcile_user_mirror_status(snapshot: _DirectorySnapshot) -> _StatusReconc
         return _StatusReconciliation(applied_count=0, departed_count=0, revoked_count=0)
 
     # 状态已在任何写入前完成契约校验, 这里仅把权威快照映射为本地域状态。
-    status_by_key: dict[tuple[str, str], UserStatus] = {
-        _directory_user_key(payload): _directory_user_status(payload) for payload in snapshot.users
+    status_by_key: dict[tuple[str, str, str], UserStatus] = {
+        (snapshot.source_slug, *_directory_user_key(payload)): _directory_user_status(payload)
+        for payload in snapshot.users
     }
 
     applied_count = 0
     departed_count = 0
     revoked_count = 0
-    bound_users = UserMirror.objects.filter(dingtalk_corp_id__in=corp_ids).exclude(
+    bound_users = UserMirror.objects.filter(
+        dingtalk_source_slug=snapshot.source_slug,
+        dingtalk_corp_id__in=corp_ids,
+    ).exclude(
         dingtalk_userid="",
     )
     for user in bound_users:
-        key = (user.dingtalk_corp_id, user.dingtalk_userid)
+        key = (user.dingtalk_source_slug, user.dingtalk_corp_id, user.dingtalk_userid)
         # 目录里已经不存在的绑定用户按离职处理, 与上游硬删除口径一致。
         target_status = status_by_key.get(key, cast("UserStatus", USER_STATUS_DEPARTED))
         was_departed = user.status == USER_STATUS_DEPARTED

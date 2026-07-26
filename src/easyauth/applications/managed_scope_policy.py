@@ -31,7 +31,6 @@ class ManagedScopePolicyService:
         return ManagedScopePolicy.objects.filter(
             app=app,
             target_type=MANAGED_SCOPE_POLICY_TARGET_APP_DEFAULT,
-            target_id=app.id,
             scope=MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS,
         ).first()
 
@@ -47,7 +46,7 @@ class ManagedScopePolicyService:
         return ManagedScopePolicy.objects.filter(
             app=app,
             target_type=MANAGED_SCOPE_POLICY_TARGET_AUTHORIZATION_GROUP_GRANT,
-            target_id=grant.id,
+            authorization_group_grant=grant,
             scope=MANAGED_SCOPE_POLICY_SCOPE_MANAGED_USERS,
         ).first()
 

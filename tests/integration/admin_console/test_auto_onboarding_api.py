@@ -6,8 +6,6 @@ from typing import TYPE_CHECKING, Final, cast
 import pytest
 from django.test import Client
 
-from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
-from easyauth.accounts.models import UserMirror
 from easyauth.admin_console import auto_onboarding_api
 from easyauth.applications.configuration import configuration_readiness_for_app
 from easyauth.applications.models import (
@@ -17,6 +15,10 @@ from easyauth.applications.models import (
     PermissionTemplateVersion,
 )
 from easyauth.applications.ops_models import APP_MEMBERSHIP_ROLE_OWNER
+from tests.integration.admin_console.auth_helpers import (
+    authenticate_console_admin,
+    authenticate_console_user,
+)
 
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
@@ -297,12 +299,8 @@ def test_auto_onboarding_rejects_private_host_before_fetch(
 
 
 def test_auto_onboarding_requires_superuser() -> None:
-    _ = UserMirror.objects.create(authentik_user_id="auto-onboard-normal-user")
     client = Client(HTTP_HOST="localhost")
-    session = client.session
-    session[AUTHENTIK_SESSION_KEY] = "auto-onboard-normal-user"
-    session["easyauth_authentik_groups"] = ["Employees"]
-    session.save()
+    authenticate_console_user(client, "auto-onboard-normal-user")
 
     response = client.post(
         AUTO_ONBOARDING_URL,
@@ -314,10 +312,5 @@ def test_auto_onboarding_requires_superuser() -> None:
 
 
 def _logged_in_superuser(username: str) -> Client:
-    _ = UserMirror.objects.create(authentik_user_id=username)
     client = Client(HTTP_HOST="localhost")
-    session = client.session
-    session[AUTHENTIK_SESSION_KEY] = username
-    session["easyauth_authentik_groups"] = ["EasyAuth Admins"]
-    session.save()
-    return client
+    return authenticate_console_admin(client, username)

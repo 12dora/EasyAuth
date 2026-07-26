@@ -61,7 +61,7 @@ def apply_permission_template(
 ) -> PermissionTemplateImportResult:
     # 锁住 App 行串行化同一 App 的并发导入; 版本检查和写入在同一把锁内完成,
     # 消除"两个导入都读到 latest=1 然后交错落库"的 TOCTOU。
-    locked_app = App.objects.select_for_update().get(pk=app.pk)
+    locked_app = App.objects.select_for_update().get(pk=app.id)
     _reject_duplicate_template_version(app=locked_app, version=template.schema_version)
     flattened = flatten_template(template)
     actions = template_actions(locked_app, flattened)

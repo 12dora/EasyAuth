@@ -9,14 +9,14 @@ from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 
 from easyauth.api.authentication import AppBearerAuthentication, AppPrincipal
 from easyauth.api.permission_query_auth import permission_query_ttl_seconds
-from easyauth.applications.models import App, AppStaticToken
+from easyauth.applications.models import App, AppCredential
 from easyauth.applications.oauth import (
     APP_CREDENTIAL_TYPE_OAUTH_CLIENT,
     OAuthClientAppDisabledError,
     OAuthClientAuthenticationError,
     OAuthClientService,
 )
-from easyauth.applications.services import StaticTokenAuthenticationError, StaticTokenService
+from easyauth.applications.services import AppCredentialService, StaticTokenAuthenticationError
 
 pytestmark = pytest.mark.django_db
 
@@ -26,7 +26,7 @@ DEFAULT_PERMISSION_QUERY_TTL_SECONDS = 300
 def test_app_bearer_authentication_returns_app_principal_for_valid_static_token() -> None:
     # Given
     app = App.objects.create(app_key="crm", name="CRM")
-    issue = StaticTokenService.create_token(app=app, name="CRM integration")
+    issue = AppCredentialService.create_static_token(app=app, name="CRM integration")
     request = RequestFactory().get(
         "/api/v1/auth-probe",
         HTTP_AUTHORIZATION=f"Bearer {issue.plaintext_token}",
@@ -43,7 +43,7 @@ def test_app_bearer_authentication_returns_app_principal_for_valid_static_token(
     assert principal.app_id == app.id
     assert principal.app_key == "crm"
     assert principal.credential_type == "static_token"
-    assert principal.credential_id == issue.credential_id
+    assert principal.credential_id == issue.credential.id
 
 
 def test_app_bearer_authentication_returns_none_when_authorization_is_missing() -> None:
@@ -75,7 +75,11 @@ def test_app_bearer_authentication_returns_oauth_principal_when_static_token_fai
         assert credential == "oauth-access-token"
         return expected
 
-    monkeypatch.setattr(StaticTokenService, "authenticate_for_api", reject_static_token)
+    monkeypatch.setattr(
+        AppCredentialService,
+        "authenticate_static_token_for_api",
+        reject_static_token,
+    )
     monkeypatch.setattr(OAuthClientService, "authenticate_access_token_for_api", accept_oauth_token)
     request = RequestFactory().get(
         "/api/v1/auth-probe",
@@ -99,7 +103,11 @@ def test_app_bearer_authentication_raises_permission_denied_when_oauth_app_is_di
     def reject_disabled_oauth_app(_token: str) -> AppPrincipal:
         raise OAuthClientAppDisabledError(app_id=1)
 
-    monkeypatch.setattr(StaticTokenService, "authenticate_for_api", reject_static_token)
+    monkeypatch.setattr(
+        AppCredentialService,
+        "authenticate_static_token_for_api",
+        reject_static_token,
+    )
     monkeypatch.setattr(
         OAuthClientService,
         "authenticate_access_token_for_api",
@@ -149,7 +157,7 @@ def test_app_bearer_authentication_rejects_malformed_bearer_headers(
     def fail_if_called(_token: str) -> AppPrincipal:
         raise AssertionError
 
-    monkeypatch.setattr(StaticTokenService, "authenticate_for_api", fail_if_called)
+    monkeypatch.setattr(AppCredentialService, "authenticate_static_token_for_api", fail_if_called)
     monkeypatch.setattr(OAuthClientService, "authenticate_access_token_for_api", fail_if_called)
     request = RequestFactory().get(
         "/api/v1/auth-probe",
@@ -175,7 +183,11 @@ def test_app_bearer_authentication_preserves_extra_bearer_whitespace_as_token(
         observed_tokens.append(token)
         raise OAuthClientAuthenticationError
 
-    monkeypatch.setattr(StaticTokenService, "authenticate_for_api", reject_static_token)
+    monkeypatch.setattr(
+        AppCredentialService,
+        "authenticate_static_token_for_api",
+        reject_static_token,
+    )
     monkeypatch.setattr(OAuthClientService, "authenticate_access_token_for_api", reject_oauth_token)
     request = RequestFactory().get(
         "/api/v1/auth-probe",
@@ -191,12 +203,19 @@ def test_app_bearer_authentication_preserves_extra_bearer_whitespace_as_token(
 def test_app_bearer_authentication_rejects_disabled_token_and_disabled_app() -> None:
     # Given
     active_app = App.objects.create(app_key="crm", name="CRM")
-    disabled_token_issue = StaticTokenService.create_token(app=active_app, name="Disabled token")
-    _ = AppStaticToken.objects.filter(id=disabled_token_issue.credential_id).update(
+    disabled_token_issue = AppCredentialService.create_static_token(
+        app=active_app,
+        name="Disabled token",
+    )
+    _ = AppCredential.objects.filter(id=disabled_token_issue.credential.id).update(
         is_active=False,
     )
-    disabled_app = App.objects.create(app_key="erp", name="ERP", is_active=False)
-    disabled_app_issue = StaticTokenService.create_token(app=disabled_app, name="Disabled app")
+    disabled_app = App.objects.create(app_key="erp", name="ERP")
+    disabled_app_issue = AppCredentialService.create_static_token(
+        app=disabled_app,
+        name="Disabled app",
+    )
+    _ = App.objects.filter(id=disabled_app.id).update(is_active=False)
 
     disabled_token_request = RequestFactory().get(
         "/api/v1/auth-probe",
@@ -241,7 +260,7 @@ def test_app_bearer_authentication_accepts_case_insensitive_scheme(
             credential_id=1,
         )
 
-    monkeypatch.setattr(StaticTokenService, "authenticate_for_api", record_token)
+    monkeypatch.setattr(AppCredentialService, "authenticate_static_token_for_api", record_token)
     request = RequestFactory().get(
         "/api/v1/auth-probe",
         HTTP_AUTHORIZATION="bearer eat_lower-case-scheme",

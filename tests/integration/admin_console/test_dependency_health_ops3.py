@@ -9,9 +9,8 @@ from django.test import Client
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict
 
-from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
-from easyauth.accounts.models import UserMirror
 from easyauth.applications.ops_models import DependencyHealthSnapshot
+from tests.integration.admin_console.auth_helpers import authenticate_console_admin
 
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
@@ -49,6 +48,7 @@ class _HealthResponse(BaseModel):
     dingtalk: _HealthComponent
     dingtalk_notify: _HealthComponent
     celery: _HealthComponent
+    connectors: _HealthComponent
 
 
 def test_ops3_console_dependency_health_returns_latest_snapshots_without_secrets() -> None:
@@ -95,6 +95,7 @@ def test_ops3_console_dependency_health_returns_latest_snapshots_without_secrets
     assert payload.dingtalk.status == "warning"
     assert payload.dingtalk_notify.status == "unknown"
     assert payload.celery.status == "healthy"
+    assert payload.connectors.status == "unknown"
     assert items["authentik"].status == "healthy"
     assert items["authentik"].summary == "最近同步成功"
     assert "旧同步失败" not in body
@@ -129,10 +130,5 @@ def test_dependency_health_includes_authentik_directory_status() -> None:
 
 
 def _logged_in_superuser(username: str) -> Client:
-    _ = UserMirror.objects.create(authentik_user_id=username)
     client = Client(HTTP_HOST="localhost")
-    session = client.session
-    session[AUTHENTIK_SESSION_KEY] = username
-    session["easyauth_authentik_groups"] = ["EasyAuth Admins"]
-    session.save()
-    return client
+    return authenticate_console_admin(client, username)

@@ -13,7 +13,7 @@
       --surface: #ffffff;
       --ink: #0f172a;
       --muted: #475569;
-      --faint: #94a3b8;
+      --faint: #64748b;
       --line: #e2e8f0;
       --brand: #2563eb;
       --brand-strong: #1d4ed8;
@@ -28,7 +28,7 @@
 
     body {
       min-width: 320px;
-      min-height: 100vh;
+      min-height: 100dvh;
       margin: 0;
       background: var(--bg);
       -webkit-font-smoothing: antialiased;
@@ -93,7 +93,7 @@
       display: grid;
       align-items: center;
       width: min(960px, 100%);
-      min-height: calc(100vh - 56px);
+      min-height: calc(100dvh - 57px);
       margin: 0 auto;
       padding: 56px 20px 72px;
     }
@@ -162,6 +162,11 @@
     .button-primary:hover {
       background: var(--brand-strong);
       color: #ffffff;
+    }
+
+    .button:focus-visible {
+      outline: 2px solid var(--brand);
+      outline-offset: 2px;
     }
 
     @media (max-width: 640px) {

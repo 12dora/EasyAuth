@@ -62,7 +62,6 @@ TEMPLATE_NOT_FOUND_MESSAGE: Final = "审批模板不存在或未启用。"
 ORIGINATOR_INVALID_MESSAGE: Final = "发起人不存在、已停用或缺少钉钉绑定。"
 INSTANCE_STATUS_CONFLICT_MESSAGE: Final = "回调状态与审批实例状态不匹配。"
 INSTANCE_NOT_FOUND_MESSAGE: Final = "审批实例不存在。"
-FORM_MAPPING_INVALID_MESSAGE: Final = "审批模板 form_mapping 必须是字符串到字符串的映射。"
 FORM_SCHEMA_INVALID_MESSAGE: Final = "审批模板 form_schema 或提交的 form 不符合契约。"
 IDEMPOTENCY_PAYLOAD_CONFLICT_MESSAGE: Final = "同一 biz_key 已使用不同的发起人或表单载荷。"
 RETRY_REQUIRED_MESSAGE: Final = "审批提交失败, 必须显式设置 retry=true 后重试。"
@@ -216,7 +215,8 @@ def apply_instance_callback(
         if callback.status != status:
             callback.state = CALLBACK_STATE_CONFLICT
             callback.last_error = INSTANCE_STATUS_CONFLICT_MESSAGE
-            callback.save(update_fields=["state", "last_error", "updated_at"])
+            callback.applied_at = None
+            callback.save(update_fields=["state", "last_error", "applied_at", "updated_at"])
             conflict = ApprovalCallbackConflictError(
                 instance_id=str(instance.id) if instance is not None else "",
                 status=callback.status,
@@ -384,6 +384,42 @@ def recover_stale_submission(instance: ApprovalInstance) -> ApprovalInstance:
     return instance
 
 
+def recover_stale_submissions(
+    instances: tuple[ApprovalInstance, ...],
+) -> tuple[ApprovalInstance, ...]:
+    now = timezone.now()
+    due_ids = tuple(
+        instance.id
+        for instance in instances
+        if (
+            instance.submission_state == SUBMISSION_STATE_SUBMITTING
+            and instance.submission_deadline_at is not None
+            and instance.submission_deadline_at <= now
+        )
+    )
+    if not due_ids:
+        return instances
+    updated = ApprovalInstance.objects.filter(
+        id__in=due_ids,
+        submission_state=SUBMISSION_STATE_SUBMITTING,
+        submission_deadline_at__lte=now,
+    ).update(
+        submission_state=SUBMISSION_STATE_AMBIGUOUS,
+        submission_deadline_at=None,
+        last_error=SUBMISSION_AMBIGUOUS_MESSAGE,
+        updated_at=now,
+    )
+    if updated == 0:
+        return instances
+    for instance in instances:
+        if instance.id in due_ids:
+            instance.submission_state = SUBMISSION_STATE_AMBIGUOUS
+            instance.submission_deadline_at = None
+            instance.last_error = SUBMISSION_AMBIGUOUS_MESSAGE
+            instance.updated_at = now
+    return instances
+
+
 def _mark_stale_submission_ambiguous_locked(instance: ApprovalInstance) -> None:
     if (
         instance.submission_state != SUBMISSION_STATE_SUBMITTING
@@ -422,7 +458,8 @@ def _apply_callback_locked(
         callback.state = CALLBACK_STATE_CONFLICT
         callback.instance = instance
         callback.last_error = INSTANCE_STATUS_CONFLICT_MESSAGE
-        callback.save(update_fields=["state", "instance", "last_error", "updated_at"])
+        callback.applied_at = None
+        callback.save(update_fields=["state", "instance", "last_error", "applied_at", "updated_at"])
         return False, ApprovalCallbackConflictError(
             instance_id=str(instance.id),
             status=instance.status,
@@ -454,8 +491,8 @@ def deliver_completion(instance: ApprovalInstance) -> None:
             .select_related("app", "template", "originator_user")
             .get(id=instance.id)
         )
-        if locked.completion_delivery_id is not None:
-            instance.completion_delivery_id = locked.completion_delivery_id
+        if locked.completion_delivery_id is not None:  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
+            instance.completion_delivery_id = locked.completion_delivery_id  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
             return
         config = AppWebhookConfig.objects.filter(app=locked.app, enabled=True).first()
         url = config.approval_callback_url if config is not None else ""

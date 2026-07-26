@@ -169,6 +169,8 @@ def _submitted_instance(app_key: str, process_instance_id: str) -> ApprovalInsta
     )
     originator = UserMirror.objects.create(
         authentik_user_id=f"{app_key}-originator",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id=f"{app_key}-corp",
         dingtalk_userid=f"{app_key}-dt",
     )
     return ApprovalInstance.objects.create(

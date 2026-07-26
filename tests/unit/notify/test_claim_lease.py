@@ -8,6 +8,9 @@ from django.utils import timezone
 
 from easyauth.accounts.models import DingTalkUserMirror, UserMirror
 from easyauth.applications.models import App, AppNotificationChannel
+from easyauth.notify.acceptance import accept_notify_message
+from easyauth.notify.contracts import NOTIFY_LEASE_SECONDS
+from easyauth.notify.delivery import deliver_message
 from easyauth.notify.models import (
     CREDENTIAL_TYPE_STATIC_TOKEN,
     NOTIFY_MESSAGE_STATUS_PENDING,
@@ -15,13 +18,8 @@ from easyauth.notify.models import (
     NOTIFY_TEMPLATE_TEXT,
     NotifyMessage,
 )
-from easyauth.notify.services import (
-    NOTIFY_LEASE_SECONDS,
-    accept_notify_message,
-    deliver_message,
-)
 
-pytestmark = pytest.mark.django_db
+pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("notification_channel_for_apps")]
 
 CORP_ID = "corp-claim"
 SOURCE = "dingtalk-claim"
@@ -37,6 +35,7 @@ def _seed(authentik: str = "c1", dingtalk: str = "dt-c1") -> None:
     )
     _ = UserMirror.objects.create(
         authentik_user_id=authentik,
+        dingtalk_source_slug=SOURCE,
         dingtalk_userid=dingtalk,
         dingtalk_corp_id=CORP_ID,
     )
@@ -74,7 +73,7 @@ def test_concurrent_claim_only_one_wins(monkeypatch: pytest.MonkeyPatch) -> None
         return client, 1
 
     monkeypatch.setattr(
-        "easyauth.notify.services._dingtalk_client_and_agent",
+        "easyauth.notify.channel_config.dingtalk_client_and_agent",
         client_for_channel,
     )
 
@@ -111,7 +110,7 @@ def test_expired_lease_can_be_taken_over(monkeypatch: pytest.MonkeyPatch) -> Non
         return client, 1
 
     monkeypatch.setattr(
-        "easyauth.notify.services._dingtalk_client_and_agent",
+        "easyauth.notify.channel_config.dingtalk_client_and_agent",
         client_for_channel,
     )
 

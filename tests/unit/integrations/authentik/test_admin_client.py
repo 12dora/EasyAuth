@@ -10,6 +10,7 @@ from easyauth.integrations.authentik.admin_client import (
     RESPONSE_TOO_LARGE_MESSAGE,
     AuthentikAdminClient,
     AuthentikAdminError,
+    AuthentikAdminPaginationLimitError,
 )
 
 if TYPE_CHECKING:
@@ -136,6 +137,56 @@ def test_disable_user_revokes_every_session_page(monkeypatch: pytest.MonkeyPatch
     )
 
 
+def test_user_group_names_by_uid_reads_current_user_detail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter(
+        [
+            _json_response(_user_page()),
+            _json_response(
+                {
+                    "groups": [
+                        {"name": "EasyAuth Admins"},
+                        {"name": "Developers"},
+                        "EasyAuth Admins",
+                    ],
+                },
+            ),
+        ],
+    )
+    seen_urls: list[str] = []
+
+    def fake_urlopen(request: Request, *, timeout: float) -> _Response:
+        assert timeout > 0
+        seen_urls.append(request.full_url)
+        return next(responses)
+
+    monkeypatch.setattr("easyauth.integrations.authentik.admin_client.urlopen", fake_urlopen)
+
+    groups = _client().user_group_names_by_uid("user-uid")
+
+    assert groups == ("Developers", "EasyAuth Admins")
+    assert seen_urls == [
+        "https://authentik.test/api/v3/core/users/?page=1&page_size=500",
+        "https://authentik.test/api/v3/core/users/7/",
+    ]
+
+
+def test_user_group_names_by_uid_rejects_missing_groups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    responses = iter([_json_response(_user_page()), _json_response({})])
+
+    def fake_urlopen(_request: Request, *, timeout: float) -> _Response:
+        _ = timeout
+        return next(responses)
+
+    monkeypatch.setattr("easyauth.integrations.authentik.admin_client.urlopen", fake_urlopen)
+
+    with pytest.raises(AuthentikAdminError, match="响应格式"):
+        _ = _client().user_group_names_by_uid("user-uid")
+
+
 @pytest.mark.parametrize(
     "payload",
     [
@@ -164,6 +215,19 @@ def test_session_revoke_rejects_malformed_envelope(
     monkeypatch.setattr("easyauth.integrations.authentik.admin_client.urlopen", fake_urlopen)
 
     with pytest.raises(AuthentikAdminError, match="响应格式"):
+        _ = _client().disable_user_and_revoke_sessions("user-uid")
+
+
+def test_user_lookup_distinguishes_pagination_limit_from_not_found(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_urlopen(_request: Request, *, timeout: float) -> _Response:
+        _ = timeout
+        return _json_response({"results": [], "pagination": {"total_pages": 41}})
+
+    monkeypatch.setattr("easyauth.integrations.authentik.admin_client.urlopen", fake_urlopen)
+
+    with pytest.raises(AuthentikAdminPaginationLimitError, match="分页超过上限"):
         _ = _client().disable_user_and_revoke_sessions("user-uid")
 
 

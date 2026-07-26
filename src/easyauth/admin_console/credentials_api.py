@@ -89,12 +89,15 @@ def console_static_token_create(request: HttpRequest, app_key: str) -> JsonRespo
         case JsonResponse() as response:
             return response
 
-    one_time_secret = create_static_token_for_console(
-        app=app,
-        name=payload.name,
-        actor=CredentialActor(actor_id=actor.user_id),
-        capabilities=list(payload.capabilities),
-    )
+    try:
+        one_time_secret = create_static_token_for_console(
+            app=app,
+            name=payload.name,
+            actor=CredentialActor(actor_id=actor.user_id),
+            capabilities=list(payload.capabilities),
+        )
+    except CredentialOperationError as exc:
+        return _credential_operation_error_response(exc)
     credential = AppCredential.objects.get(id=one_time_secret.credential_id)
     return _json_response(
         credential_secret_payload(static_credential_item(credential), one_time_secret),
@@ -122,8 +125,8 @@ def console_static_token_rotate(
             credential_id=credential_id,
             actor=CredentialActor(actor_id=actor.user_id),
         )
-    except CredentialOperationError:
-        return _not_found_response()
+    except CredentialOperationError as exc:
+        return _credential_operation_error_response(exc)
     credential = AppCredential.objects.get(id=one_time_secret.credential_id)
     return _json_response(
         credential_secret_payload(static_credential_item(credential), one_time_secret),
@@ -269,3 +272,14 @@ def _not_found_response() -> JsonResponse:
         "凭据不存在。",
         status=HTTPStatus.NOT_FOUND,
     )
+
+
+def _credential_operation_error_response(exc: CredentialOperationError) -> JsonResponse:
+    if exc.code == "app_disabled":
+        return _error_response(
+            ErrorCode.CONFLICT,
+            "App 已停用, 不能签发静态 token。",
+            {"reason": "app_disabled", "app_id": exc.credential_id},
+            status=HTTPStatus.CONFLICT,
+        )
+    return _not_found_response()

@@ -8,9 +8,10 @@ from easyauth.integrations.authentik.admin_client import (
     AuthentikAdminClient,
     AuthentikAdminError,
     AuthentikAdminNotConfiguredError,
+    AuthentikAdminPaginationLimitError,
     AuthentikAdminUserNotFoundError,
 )
-from easyauth.lifecycle.services import DISABLE_ACCOUNT_TASK_NAME
+from easyauth.lifecycle.tasks import DISABLE_ACCOUNT_TASK_NAME
 
 
 @shared_task(
@@ -38,10 +39,13 @@ def disable_departed_account_task(user_mirror_id: int) -> str:
             ok=False,
             detail="authentik_admin_not_configured",
         )
-        return "not_configured"
+        raise
+    except AuthentikAdminPaginationLimitError:
+        _record_disable_event(user, ok=False, detail="authentik_admin_pagination_limit")
+        raise
     except AuthentikAdminUserNotFoundError:
         _record_disable_event(user, ok=False, detail="authentik_user_not_found")
-        return "user_not_found"
+        raise
     _record_disable_event(
         user,
         ok=True,

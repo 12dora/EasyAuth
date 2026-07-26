@@ -5,7 +5,6 @@ import threading
 
 import pytest
 
-from easyauth.config import net
 from easyauth.config.net import (
     BlockedHostError,
     InvalidWebhookUrlError,
@@ -38,7 +37,7 @@ def test_validate_public_https_url_rejects_private_dns_answer(
     def private_dns(*_args: object, **_kwargs: object) -> list[tuple[object, ...]]:
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.0.0.8", 443))]
 
-    monkeypatch.setattr(net.socket, "getaddrinfo", private_dns)
+    monkeypatch.setattr(socket, "getaddrinfo", private_dns)
 
     with pytest.raises(BlockedHostError):
         _ = validate_public_https_url("https://hooks.example.com/callback")
@@ -53,7 +52,7 @@ def test_validate_public_https_url_rejects_any_mixed_private_answer(
             (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("192.168.1.10", 443)),
         ]
 
-    monkeypatch.setattr(net.socket, "getaddrinfo", mixed_dns)
+    monkeypatch.setattr(socket, "getaddrinfo", mixed_dns)
 
     with pytest.raises(BlockedHostError):
         _ = validate_public_https_url("https://hooks.example.com/callback")
@@ -65,7 +64,7 @@ def test_validate_public_https_url_enforces_per_app_allowlist(
     def public_dns(*_args: object, **_kwargs: object) -> list[tuple[object, ...]]:
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 443))]
 
-    monkeypatch.setattr(net.socket, "getaddrinfo", public_dns)
+    monkeypatch.setattr(socket, "getaddrinfo", public_dns)
 
     with pytest.raises(InvalidWebhookUrlError, match="允许列表"):
         _ = validate_public_https_url(
@@ -82,6 +81,12 @@ def test_validate_public_https_url_enforces_per_app_allowlist(
     assert result.request_target == "/callback?event=1"
 
 
+def test_parse_https_url_percent_encodes_unicode_request_target() -> None:
+    result = parse_https_url("https://hooks.example.com/回调?q=中文")
+
+    assert result.request_target == "/%E5%9B%9E%E8%B0%83?q=%E4%B8%AD%E6%96%87"
+
+
 def test_validate_public_https_url_bounds_dns_resolution_time(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -91,7 +96,7 @@ def test_validate_public_https_url_bounds_dns_resolution_time(
         _ = release_resolver.wait(timeout=1)
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 443))]
 
-    monkeypatch.setattr(net.socket, "getaddrinfo", slow_dns)
+    monkeypatch.setattr(socket, "getaddrinfo", slow_dns)
 
     try:
         with pytest.raises(BlockedHostError, match="解析超时"):

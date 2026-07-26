@@ -3,15 +3,24 @@ from __future__ import annotations
 from datetime import timedelta
 from http import HTTPStatus
 from typing import TYPE_CHECKING, ClassVar, Final, cast
+from uuid import UUID
 
 import pytest
 from django.test import Client
 from django.utils import timezone
 
-from easyauth.accounts.auth import AUTHENTIK_GROUPS_SESSION_KEY, AUTHENTIK_SESSION_KEY
+from easyauth.accounts.auth import (
+    AUTHENTIK_SESSION_KEY,
+)
 from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import App, AppMembership, AuthorizationGroup
-from easyauth.connectors.models import ConnectorInstance, ConnectorMapping, ConnectorSyncRun
+from easyauth.connectors.models import (
+    ConnectorExternalGroup,
+    ConnectorInstance,
+    ConnectorMapping,
+    ConnectorSyncRun,
+)
+from tests.integration.admin_console.auth_helpers import authenticate_console_admin
 from tests.unit.connectors.fakes import FakeConnector
 
 if TYPE_CHECKING:
@@ -25,6 +34,18 @@ FAKE_CONNECTOR_PATH: Final = "tests.unit.connectors.fakes.FakeConnector"
 OTHER_FAKE_CONNECTOR_PATH: Final = (
     "tests.integration.admin_console.test_connectors_api.OtherFakeConnector"
 )
+RUNNING_GENERATION = 3
+RECONCILED_GENERATION = 2
+
+
+def _request_instance_reconcile_succeeds(
+    _instance_id: int,
+    *,
+    trigger: str,
+    countdown: int,
+) -> bool:
+    _ = (trigger, countdown)
+    return True
 
 
 class OtherFakeConnector(FakeConnector):
@@ -35,17 +56,13 @@ class OtherFakeConnector(FakeConnector):
 @pytest.fixture(autouse=True)
 def register_fake_connector(settings: SettingsWrapper) -> None:
     settings.EASYAUTH_CONNECTORS = (FAKE_CONNECTOR_PATH,)
+    settings.EASYAUTH_CONSOLE_SUPERUSER_GROUPS = ("EasyAuth Admins",)
     FakeConnector.reset()
 
 
 def _logged_in_superuser(username: str) -> Client:
-    _ = UserMirror.objects.get_or_create(authentik_user_id=username)
     client = Client(HTTP_HOST="localhost")
-    session = client.session
-    session[AUTHENTIK_SESSION_KEY] = username
-    session[AUTHENTIK_GROUPS_SESSION_KEY] = ["EasyAuth Admins"]
-    session.save()
-    return client
+    return authenticate_console_admin(client, username)
 
 
 def _logged_in_owner(username: str, app: App) -> Client:
@@ -103,10 +120,38 @@ def test_create_list_and_redact_secret() -> None:
     assert instance.config["token"] == "s3cret"  # noqa: S105 - 测试用假密钥.
 
 
+def test_list_surfaces_corrupted_connector_config() -> None:
+    app = App.objects.create(app_key="conn-corrupt", name="X")
+    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+    instance.config_encrypted = "[1, 2, 3]"
+    instance.save(update_fields=["config_encrypted"])
+    client = _logged_in_superuser("conn-corrupt-admin")
+
+    response = client.get(_connectors_url("conn-corrupt"))
+
+    assert response.status_code == HTTPStatus.OK
+    payload = cast("dict[str, JsonValue]", response.json())
+    data = payload["data"]
+    assert isinstance(data, list)
+    item = cast("dict[str, JsonValue]", data[0])
+    config_error = cast("dict[str, JsonValue]", item["config_error"])
+    assert config_error["kind"] == "not_object"
+    assert "JSON object" in str(config_error["message"])
+    assert item["config"] == {}
+
+
 def test_list_returns_all_connector_instances(settings: SettingsWrapper) -> None:
     settings.EASYAUTH_CONNECTORS = (FAKE_CONNECTOR_PATH, OTHER_FAKE_CONNECTOR_PATH)
     app = App.objects.create(app_key="conn-multiple", name="X")
-    first = ConnectorInstance.objects.create(app=app, connector_key="fake")
+    first = ConnectorInstance.objects.create(
+        app=app,
+        connector_key="fake",
+        reconcile_generation=RUNNING_GENERATION,
+        reconciled_generation=RECONCILED_GENERATION,
+        reconcile_dirty=True,
+        reconcile_lease_token=UUID("33333333-3333-4333-8333-333333333333"),
+        reconcile_lease_expires_at=timezone.now() + timedelta(minutes=5),
+    )
     second = ConnectorInstance.objects.create(app=app, connector_key="other-fake")
     client = _logged_in_superuser("conn-multiple-admin")
 
@@ -117,6 +162,15 @@ def test_list_returns_all_connector_instances(settings: SettingsWrapper) -> None
     data = payload["data"]
     assert isinstance(data, list)
     assert [item["id"] for item in data if isinstance(item, dict)] == [first.id, second.id]
+    first_item = data[0]
+    assert isinstance(first_item, dict)
+    state = first_item["reconcile_state"]
+    assert isinstance(state, dict)
+    assert state["status"] == "running"
+    assert state["generation"] == RUNNING_GENERATION
+    assert state["reconciled_generation"] == RECONCILED_GENERATION
+    assert state["dirty"] is True
+    assert state["lease_active"] is True
 
 
 def test_update_keeps_secret_when_blank() -> None:
@@ -270,6 +324,19 @@ def test_mappings_round_trip() -> None:
     )
     assert bad_response.status_code == HTTPStatus.BAD_REQUEST
 
+    duplicate_response = client.put(
+        url,
+        data={
+            "revision": updated_revision,
+            "mappings": [
+                {"authorization_group_key": "vpn-users", "external_ref": "a", "auto_create": False},
+                {"authorization_group_key": "vpn-users", "external_ref": "b", "auto_create": True},
+            ],
+        },
+        content_type="application/json",
+    )
+    assert duplicate_response.status_code == HTTPStatus.BAD_REQUEST
+
     # 旧快照不能覆盖之后的映射, 防止 GET 失败或并发编辑演变为整表清空。
     stale_response = client.put(
         url,
@@ -358,10 +425,16 @@ def test_manual_reconcile_requires_enabled_instance(monkeypatch: pytest.MonkeyPa
     assert len(sent) == 1
 
 
-def test_external_groups_lists_connector_data() -> None:
+def test_external_groups_lists_local_snapshot_without_remote_call() -> None:
     # Given
     app = App.objects.create(app_key="conn-groups", name="X")
     instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+    _ = ConnectorExternalGroup.objects.create(
+        instance=instance,
+        external_ref="cached-group",
+        external_name="Cached Group",
+        last_seen_at=timezone.now(),
+    )
     client = _logged_in_superuser("conn-groups-admin")
 
     # When
@@ -370,7 +443,8 @@ def test_external_groups_lists_connector_data() -> None:
     # Then
     assert response.status_code == HTTPStatus.OK
     payload = cast("dict[str, JsonValue]", response.json())
-    assert payload["data"] == [{"ref": "fake-group", "name": "Fake Group"}]
+    assert payload["data"] == [{"ref": "cached-group", "name": "Cached Group"}]
+    assert FakeConnector.list_external_groups_calls == 0
 
 
 def test_sync_runs_use_standard_server_pagination() -> None:
@@ -459,7 +533,11 @@ def test_delete_instance_keeps_tombstone_until_external_cleanup(
     client = _logged_in_superuser("conn-del-admin")
     from easyauth.admin_console import connectors_api as api_module  # noqa: PLC0415
 
-    monkeypatch.setattr(api_module, "request_instance_reconcile", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(
+        api_module,
+        "request_instance_reconcile",
+        _request_instance_reconcile_succeeds,
+    )
 
     # When
     response = client.delete(f"{_connectors_url('conn-del')}/{instance.id}")

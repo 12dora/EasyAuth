@@ -17,7 +17,6 @@ from webauthn.helpers import bytes_to_base64url
 
 from easyauth.accounts import local_admin
 from easyauth.accounts.auth import (
-    AUTHENTIK_GROUPS_SESSION_KEY,
     AUTHENTIK_SESSION_KEY,
     OidcSessionError,
     VerifiedOidcClaims,
@@ -77,13 +76,21 @@ def _login(client: Client, *, password: str = GOOD_CREDENTIAL) -> object:
     return client.post("/auth/local/", {"username": USERNAME, "password": password})
 
 
+def _login_with_totp(client: Client, secret: str) -> None:
+    response = _login(client)
+    assert response.status_code == HTTPStatus.FOUND
+    assert response.headers["Location"] == "/auth/local/verify/"
+    verify = client.post("/auth/local/verify/totp/", {"code": pyotp.TOTP(secret).now()})
+    assert verify.status_code == HTTPStatus.FOUND
+    assert verify.headers["Location"] == "/console/"
+
+
 def _post_json(client: Client, url: str, payload: dict[str, object]) -> object:
     return client.post(url, data=json.dumps(payload), content_type="application/json")
 
 
 def _assert_session_bound(client: Client) -> None:
     assert client.session[AUTHENTIK_SESSION_KEY] == LOCAL_ADMIN_SUBJECT
-    assert client.session[AUTHENTIK_GROUPS_SESSION_KEY] == ["EasyAuth Admins"]
 
 
 def test_login_page_renders() -> None:
@@ -98,6 +105,20 @@ def test_login_page_renders() -> None:
     html = response.content.decode()
     assert "登录 EasyAuth" in html
     assert "或使用本地账号登录" in html
+
+
+def test_login_page_accessibility_layout_baseline() -> None:
+    client = Client()
+
+    response = client.get("/auth/local/")
+
+    html = response.content.decode()
+    assert response.status_code == HTTPStatus.OK
+    assert 'role="button">使用工作账号登录' not in html
+    assert 'href="/auth/login/?next=/portal/">使用工作账号登录' in html
+    assert "--faint: #64748b" in html
+    assert "min-height: calc(100dvh - 57px)" in html
+    assert "outline: 2px solid #2563eb" in html
 
 
 def test_login_rejects_wrong_password_with_generic_error() -> None:
@@ -146,7 +167,7 @@ def test_login_rejects_disabled_account() -> None:
     assert AUTHENTIK_SESSION_KEY not in client.session
 
 
-def test_login_without_second_factor_binds_superuser_session() -> None:
+def test_login_without_second_factor_requires_enrollment_before_console_actor() -> None:
     # Given
     _ = _create_account()
     client = Client()
@@ -156,7 +177,7 @@ def test_login_without_second_factor_binds_superuser_session() -> None:
 
     # Then
     assert response.status_code == HTTPStatus.FOUND
-    assert response.headers["Location"] == "/console/"
+    assert response.headers["Location"] == "/auth/local/security/"
     _assert_session_bound(client)
     user = UserMirror.objects.get(authentik_user_id=LOCAL_ADMIN_SUBJECT)
     assert user.name == "本地管理员 admin"
@@ -164,8 +185,7 @@ def test_login_without_second_factor_binds_superuser_session() -> None:
     request = RequestFactory().get("/console/")
     request.session = client.session
     actor = actor_from_request(request)
-    assert actor is not None
-    assert actor.is_superuser
+    assert actor is None
     succeeded = AuditLog.objects.get(event_type="admin_local_login_succeeded")
     assert succeeded.actor_type == "local_admin"
     assert succeeded.metadata == {"second_factor": "none"}
@@ -324,6 +344,46 @@ def test_passkey_complete_binds_session(monkeypatch: pytest.MonkeyPatch) -> None
     assert succeeded.metadata == {"second_factor": "passkey"}
 
 
+def test_passkey_complete_verifies_against_locked_latest_sign_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: challenge 签发后, 同一凭据的计数已被另一请求推进。
+    account = _create_account()
+    passkey = _add_passkey(account)
+    client = Client()
+    _ = _login(client)
+    begin = _post_json(client, "/auth/local/passkey/begin/", {}).json()
+    latest_sign_count = 11
+    verified_sign_count = 12
+    passkey.sign_count = latest_sign_count
+    passkey.save(update_fields=["sign_count"])
+    seen_current_counts: list[int] = []
+
+    def verify_response(**kwargs: object) -> SimpleNamespace:
+        current_count = kwargs["credential_current_sign_count"]
+        assert isinstance(current_count, int)
+        seen_current_counts.append(current_count)
+        return SimpleNamespace(new_sign_count=verified_sign_count)
+
+    monkeypatch.setattr(local_admin.webauthn, "verify_authentication_response", verify_response)
+
+    # When
+    response = _post_json(
+        client,
+        "/auth/local/passkey/complete/",
+        {
+            "state_token": begin["state_token"],
+            "credential": {"id": passkey.credential_id, "rawId": passkey.credential_id},
+        },
+    )
+
+    # Then: WebAuthn 校验拿到锁内最新计数, 而不是 begin 前后任何旧快照。
+    assert response.status_code == HTTPStatus.OK
+    assert seen_current_counts == [latest_sign_count]
+    passkey.refresh_from_db()
+    assert passkey.sign_count == verified_sign_count
+
+
 def test_passkey_complete_rejects_wrong_state_token() -> None:
     # Given
     account = _create_account()
@@ -476,7 +536,7 @@ def test_change_password_happy_path_clears_flag_and_unblocks_navigation() -> Non
         },
     )
 
-    # Then: 密码更新、标记清除、审计落盘, 后续访问不再被拦截。
+    # Then: 密码更新、标记清除、审计落盘; 因尚未绑定二次因子, 只能继续进入安全设置绑定。
     assert response.status_code == HTTPStatus.FOUND
     assert response.headers["Location"] == "/portal/"
     account.refresh_from_db()
@@ -486,9 +546,11 @@ def test_change_password_happy_path_clears_flag_and_unblocks_navigation() -> Non
         event_type="admin_local_password_changed",
         actor_id=USERNAME,
     ).exists()
+    security = client.get("/auth/local/security/")
     console = client.get("/console/")
-    assert console.status_code == HTTPStatus.OK
-    assert 'data-easyauth-react-shell="console"' in console.content.decode()
+    assert security.status_code == HTTPStatus.OK
+    assert console.status_code == HTTPStatus.FOUND
+    assert console.headers["Location"].startswith("/auth/login/")
 
 
 def test_change_password_rejects_wrong_current_password() -> None:
@@ -899,11 +961,69 @@ def test_bind_oidc_session_rejects_reserved_local_admin_subject() -> None:
         )
 
 
+def test_bind_oidc_session_allows_empty_groups() -> None:
+    request = RequestFactory().get("/auth/callback/")
+    request.session = SessionStore()
+
+    user = bind_oidc_session(
+        request,
+        VerifiedOidcClaims(
+            subject="oidc-admin",
+            name="OIDC 管理员",
+            email="admin@example.com",
+            groups=(),
+        ),
+    )
+
+    assert user.authentik_user_id == "oidc-admin"
+    assert request.session[AUTHENTIK_SESSION_KEY] == user.authentik_user_id
+
+
+def test_console_actor_uses_authentik_authority_for_oidc_superuser(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    user = UserMirror.objects.create(authentik_user_id="oidc-admin")
+    _patch_authentik_groups(monkeypatch, user.authentik_user_id, ("EasyAuth Admins",))
+    request = RequestFactory().get("/console/")
+    request.session = SessionStore()
+    request.session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
+
+    actor = actor_from_request(request)
+
+    assert actor is not None
+    assert actor.is_superuser is True
+
+
+def test_console_actor_revokes_oidc_superuser_after_upstream_group_removed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = RequestFactory().get("/auth/callback/")
+    request.session = SessionStore()
+    user = bind_oidc_session(
+        request,
+        VerifiedOidcClaims(
+            subject="oidc-admin-revoked",
+            name="OIDC 管理员",
+            email="admin@example.com",
+            groups=("EasyAuth Admins",),
+        ),
+    )
+    _patch_authentik_groups(monkeypatch, user.authentik_user_id, ())
+    request_for_actor = RequestFactory().get("/console/")
+    request_for_actor.session = request.session
+
+    actor = actor_from_request(request_for_actor)
+
+    assert actor is not None
+    assert actor.is_superuser is False
+
+
 def test_console_actor_none_when_local_admin_deactivated() -> None:
     # Given: 本地管理员登录并绑定控制台会话。
-    account = _create_account()
+    secret = pyotp.random_base32()
+    account = _create_account(totp_secret=secret)
     client = Client()
-    _ = _login(client)
+    _login_with_totp(client, secret)
     request = RequestFactory().get("/console/")
     request.session = client.session
     assert actor_from_request(request) is not None
@@ -914,3 +1034,35 @@ def test_console_actor_none_when_local_admin_deactivated() -> None:
 
     # Then: 已有控制台会话立即失效。
     assert actor_from_request(request) is None
+
+
+def test_console_actor_none_when_local_admin_session_version_is_stale() -> None:
+    secret = pyotp.random_base32()
+    account = _create_account(totp_secret=secret)
+    client = Client()
+    _login_with_totp(client, secret)
+    request = RequestFactory().get("/console/")
+    request.session = client.session
+    assert actor_from_request(request) is not None
+
+    account.session_version += 1
+    account.save(update_fields=["session_version", "updated_at"])
+    account.refresh_from_db()
+
+    assert actor_from_request(request) is None
+
+
+def _patch_authentik_groups(
+    monkeypatch: pytest.MonkeyPatch,
+    expected_user_id: str,
+    groups: tuple[str, ...],
+) -> None:
+    class FakeAuthentikClient:
+        def user_group_names_by_uid(self, authentik_user_uid: str) -> tuple[str, ...]:
+            assert authentik_user_uid == expected_user_id
+            return groups
+
+    monkeypatch.setattr(
+        "easyauth.admin_console.identity.AuthentikAdminClient.from_settings",
+        lambda: FakeAuthentikClient(),
+    )

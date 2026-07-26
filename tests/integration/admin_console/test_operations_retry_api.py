@@ -11,6 +11,7 @@ from django.test import Client
 from django.utils import timezone
 
 from easyauth.access_requests.models import (
+    DECISION_ACTOR_CONSOLE_ADMIN,
     GRANT_TYPE_TIMED,
     REQUEST_STATUS_GRANT_APPLIED,
     REQUEST_STATUS_GRANT_FAILED,
@@ -19,16 +20,26 @@ from easyauth.access_requests.models import (
     REQUEST_TYPE_REVOKE,
     AccessRequest,
     AccessRequestGroup,
+    AccessRequestGroupGrantSnapshot,
 )
 from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import ErrorCode
-from easyauth.applications.models import App, ApprovalRule, AuthorizationGroup
+from easyauth.applications.models import (
+    App,
+    ApprovalRule,
+    AppScope,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
+    Permission,
+)
 from easyauth.audit.models import AuditLog
 from easyauth.grants.models import (
     GRANT_STATUS_ACTIVE,
     AccessGrant,
     AccessGrantGroup,
+    AccessGrantPermission,
 )
+from tests.integration.admin_console.auth_helpers import authenticate_console_admin
 
 pytestmark = pytest.mark.django_db
 
@@ -52,6 +63,10 @@ def test_retry_grant_rejects_existing_current_grant_without_mutating_state() -> 
         reason="授权写入超时",
         idempotency_key="retry-current-grant",
         payload_digest="a" * 64,
+        approved_at=timezone.now(),
+        decided_at=timezone.now(),
+        decided_by="ops3-retry-current-admin",
+        decision_actor_type=DECISION_ACTOR_CONSOLE_ADMIN,
     )
     existing_grant = AccessGrant.objects.create(
         user=target_user,
@@ -108,14 +123,21 @@ def test_retry_failed_change_applies_original_lifecycle_with_current_grant() -> 
         app=app,
         request_type=REQUEST_TYPE_CHANGE,
         status=REQUEST_STATUS_GRANT_FAILED,
+        base_grant=grant,
+        base_grant_revision=EXISTING_GRANT_VERSION,
         reason="变更授权写入失败",
         idempotency_key="retry-failed-change",
         payload_digest="b" * 64,
+        approved_at=timezone.now(),
+        decided_at=timezone.now(),
+        decided_by="ops4-retry-change-admin",
+        decision_actor_type=DECISION_ACTOR_CONSOLE_ADMIN,
     )
     _ = AccessRequestGroup.objects.create(
         access_request=access_request,
         authorization_group=new_group,
     )
+    _attach_group_snapshot(access_request, new_group)
 
     # When: 管理员重试该 change 申请, 随后重复提交已应用申请。
     response = client.post(
@@ -132,10 +154,11 @@ def test_retry_failed_change_applies_original_lifecycle_with_current_grant() -> 
     # Then: API 复用 change 语义更新当前授权, 重复提交不会再次递增。
     grant.refresh_from_db()
     access_request.refresh_from_db()
-    group_keys = tuple(
-        AccessGrantGroup.objects.filter(grant=grant).values_list(
-            "authorization_group__key",
-            flat=True,
+    group_count = AccessGrantGroup.objects.filter(grant=grant).count()
+    direct_grants = tuple(
+        AccessGrantPermission.objects.filter(grant=grant).values_list(
+            "permission__key",
+            "scope_key",
         ),
     )
     assert response.status_code == HTTPStatus.OK
@@ -144,7 +167,8 @@ def test_retry_failed_change_applies_original_lifecycle_with_current_grant() -> 
     assert response.json()["status"] == REQUEST_STATUS_GRANT_APPLIED
     assert repeated.json()["request_id"] == access_request.id
     assert repeated.json()["version"] == EXISTING_GRANT_VERSION + 1
-    assert group_keys == ("writer",)
+    assert group_count == 0
+    assert direct_grants == (("writer.read", "writer-scope"),)
     assert grant.version == EXISTING_GRANT_VERSION + 1
     assert access_request.status == REQUEST_STATUS_GRANT_APPLIED
     assert AuditLog.objects.filter(event_type="access_request_grant_retry_applied").count() == 1
@@ -192,14 +216,21 @@ def test_retry_failed_revoke_applies_original_lifecycle_with_current_grant() -> 
         app=app,
         request_type=REQUEST_TYPE_REVOKE,
         status=REQUEST_STATUS_GRANT_FAILED,
+        base_grant=grant,
+        base_grant_revision=EXISTING_GRANT_VERSION,
         reason="撤权授权写入失败",
         idempotency_key="retry-failed-revoke",
         payload_digest="c" * 64,
+        approved_at=timezone.now(),
+        decided_at=timezone.now(),
+        decided_by="ops4-retry-revoke-admin",
+        decision_actor_type=DECISION_ACTOR_CONSOLE_ADMIN,
     )
     _ = AccessRequestGroup.objects.create(
         access_request=access_request,
         authorization_group=keep_group,
     )
+    _attach_group_snapshot(access_request, keep_group)
 
     # When: 管理员重试该 revoke 申请, 随后重复提交已应用申请。
     response = client.post(
@@ -216,10 +247,11 @@ def test_retry_failed_revoke_applies_original_lifecycle_with_current_grant() -> 
     # Then: API 缩减当前授权成员, 重复提交不会再次递增。
     grant.refresh_from_db()
     access_request.refresh_from_db()
-    group_keys = tuple(
-        AccessGrantGroup.objects.filter(grant=grant).values_list(
-            "authorization_group__key",
-            flat=True,
+    group_count = AccessGrantGroup.objects.filter(grant=grant).count()
+    direct_grants = tuple(
+        AccessGrantPermission.objects.filter(grant=grant).values_list(
+            "permission__key",
+            "scope_key",
         ),
     )
     assert response.status_code == HTTPStatus.OK
@@ -228,7 +260,8 @@ def test_retry_failed_revoke_applies_original_lifecycle_with_current_grant() -> 
     assert response.json()["status"] == REQUEST_STATUS_GRANT_APPLIED
     assert repeated.json()["request_id"] == access_request.id
     assert repeated.json()["version"] == EXISTING_GRANT_VERSION + 1
-    assert group_keys == ("viewer",)
+    assert group_count == 0
+    assert direct_grants == (("viewer.read", "viewer-scope"),)
     assert grant.version == EXISTING_GRANT_VERSION + 1
     assert access_request.status == REQUEST_STATUS_GRANT_APPLIED
 
@@ -261,16 +294,23 @@ def test_retry_failed_renew_applies_original_lifecycle_with_current_grant() -> N
         app=app,
         request_type=REQUEST_TYPE_RENEW,
         status=REQUEST_STATUS_GRANT_FAILED,
+        base_grant=grant,
+        base_grant_revision=EXISTING_GRANT_VERSION,
         grant_type=GRANT_TYPE_TIMED,
         grant_expires_at=renewed_expires_at,
         reason="续期授权写入失败",
         idempotency_key="retry-failed-renew",
         payload_digest="d" * 64,
+        approved_at=timezone.now(),
+        decided_at=timezone.now(),
+        decided_by="ops4-retry-renew-admin",
+        decision_actor_type=DECISION_ACTOR_CONSOLE_ADMIN,
     )
     _ = AccessRequestGroup.objects.create(
         access_request=access_request,
         authorization_group=group,
     )
+    _attach_group_snapshot(access_request, group)
 
     # When: 管理员重试该 renew 申请, 随后重复提交已应用申请。
     response = client.post(
@@ -287,9 +327,11 @@ def test_retry_failed_renew_applies_original_lifecycle_with_current_grant() -> N
     # Then: API 延长当前授权期限, 重复提交不会再次递增。
     grant.refresh_from_db()
     access_request.refresh_from_db()
-    renewed_grant_group = AccessGrantGroup.objects.get(
+    group_count = AccessGrantGroup.objects.filter(grant=grant).count()
+    renewed_direct_grant = AccessGrantPermission.objects.get(
         grant=grant,
-        authorization_group=group,
+        permission__key="reader.read",
+        scope_key="reader-scope",
     )
     assert response.status_code == HTTPStatus.OK
     assert repeated.status_code == HTTPStatus.OK
@@ -297,7 +339,8 @@ def test_retry_failed_renew_applies_original_lifecycle_with_current_grant() -> N
     assert response.json()["status"] == REQUEST_STATUS_GRANT_APPLIED
     assert repeated.json()["request_id"] == access_request.id
     assert repeated.json()["version"] == EXISTING_GRANT_VERSION + 1
-    assert renewed_grant_group.expires_at == renewed_expires_at
+    assert group_count == 0
+    assert renewed_direct_grant.expires_at == renewed_expires_at
     assert grant.version == EXISTING_GRANT_VERSION + 1
     assert access_request.status == REQUEST_STATUS_GRANT_APPLIED
 
@@ -312,5 +355,30 @@ def _logged_in_superuser(
         HTTP_HOST="localhost",
         raise_request_exception=raise_request_exception,
     )
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    _ = authenticate_console_admin(client, username)
     return client
+
+
+def _attach_group_snapshot(access_request: AccessRequest, group: AuthorizationGroup) -> None:
+    scope = AppScope.objects.create(app=access_request.app, key=f"{group.key}-scope", name="Scope")
+    permission = Permission.objects.create(
+        app=access_request.app,
+        key=f"{group.key}.read",
+        name=f"{group.name} Read",
+        supported_scopes=[scope.key],
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key=scope.key,
+    )
+    _ = AccessRequestGroupGrantSnapshot.objects.create(
+        access_request=access_request,
+        authorization_group_id_snapshot=group.id,
+        authorization_group_key=group.key,
+        authorization_group_kind=group.kind,
+        authorization_group_name=group.name,
+        permission_key=permission.key,
+        permission_name=permission.name,
+        scope_key=scope.key,
+    )

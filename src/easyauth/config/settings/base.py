@@ -119,10 +119,11 @@ def database_config_from_env(environ: Mapping[str, str]) -> DatabaseSettings:
         # 生产路径缺失数据库配置必须启动失败, 否则 IAM 会静默跑在空 SQLite 上。
         if environ.get("DJANGO_DEBUG", "0") != "1":
             raise ImproperlyConfigured(DATABASE_URL_REQUIRED_ERROR)
+        sqlite_path = environ.get("EASYAUTH_SQLITE_PATH", "").strip()
         return {
             "default": {
                 "ENGINE": "django.db.backends.sqlite3",
-                "NAME": BASE_DIR / "db.sqlite3",
+                "NAME": Path(sqlite_path) if sqlite_path else BASE_DIR / "db.sqlite3",
             },
         }
     return {"default": _postgres_database_config(database_url)}
@@ -267,6 +268,9 @@ EASYAUTH_AUTHENTIK_OIDC_SIGNING_ALGORITHMS = tuple(
 EASYAUTH_AUTHENTIK_OIDC_HTTP_TIMEOUT_SECONDS = float(
     os.environ.get("EASYAUTH_AUTHENTIK_OIDC_HTTP_TIMEOUT_SECONDS", "5"),
 )
+EASYAUTH_AUTHENTIK_OIDC_JWKS_CACHE_TTL_SECONDS = int(
+    os.environ.get("EASYAUTH_AUTHENTIK_OIDC_JWKS_CACHE_TTL_SECONDS", "300"),
+)
 EASYAUTH_CONSOLE_SUPERUSER_GROUPS = tuple(
     group.strip()
     for group in os.environ.get("EASYAUTH_CONSOLE_SUPERUSER_GROUPS", "EasyAuth Admins").split(",")
@@ -317,6 +321,7 @@ CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://localho
 CELERY_TASK_EAGER_PROPAGATES = True
 CELERY_TASK_ROUTES = {
     "easyauth.webhooks.deliver": {"queue": "webhooks"},
+    "easyauth.webhooks.recover_expired_leases": {"queue": "webhooks"},
     "easyauth.notify.deliver_message": {"queue": "notify"},
 }
 CELERY_IMPORTS = (
@@ -364,6 +369,11 @@ CELERY_BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
         "task": "easyauth.outbox.dispatch_pending",
         "schedule": float(os.environ.get("EASYAUTH_OUTBOX_DISPATCH_SECONDS", "5")),
     },
+    # Webhook 投递租约 watchdog: 接管 worker 异常退出或硬超时后遗留的 pending。
+    "webhook-delivery-lease-recovery": {
+        "task": "easyauth.webhooks.recover_expired_leases",
+        "schedule": float(os.environ.get("EASYAUTH_WEBHOOK_WATCHDOG_SECONDS", "15")),
+    },
     # 通知回执对账: sent → delivered/failed(第 3 篇 §5)。
     "notify-reconcile-send-results": {
         "task": "easyauth.notify.reconcile_send_results",
@@ -373,6 +383,11 @@ CELERY_BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
     "notify-prune-messages": {
         "task": "easyauth.notify.prune_messages",
         "schedule": float(os.environ.get("EASYAUTH_NOTIFY_PRUNE_SECONDS", "86400")),
+    },
+    # 数据保留矩阵清理: 离职画像最小化、Stream/Webhook 原文最小化、审计/健康历史清理。
+    "data-retention-cleanup": {
+        "task": "easyauth.health.data_retention_cleanup",
+        "schedule": float(os.environ.get("EASYAUTH_DATA_RETENTION_CLEANUP_SECONDS", "86400")),
     },
 }
 

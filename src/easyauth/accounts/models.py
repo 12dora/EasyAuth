@@ -6,6 +6,7 @@ from django.contrib.auth import hashers
 from django.core.exceptions import ValidationError
 from django.core.validators import RegexValidator
 from django.db import models
+from django.db.models import Q
 
 from easyauth.config.crypto import EncryptedCharField
 
@@ -28,7 +29,22 @@ USER_STATUS_CHOICES: Final[tuple[tuple[str, str], ...]] = (
 )
 
 
+class UserMirrorQuerySet(models.QuerySet["UserMirror"]):
+    @override
+    def delete(self) -> tuple[int, dict[str, int]]:
+        raise ValidationError(USER_MIRROR_DELETE_ERROR)
+
+
+class UserMirrorManager(models.Manager["UserMirror"]):
+    @override
+    def get_queryset(self) -> UserMirrorQuerySet:
+        return UserMirrorQuerySet(self.model, using=self._db)
+
+
 class UserMirror(models.Model):
+    if TYPE_CHECKING:
+        id: int = 0
+
     authentik_user_id: models.CharField[str, str] = models.CharField(
         max_length=128,
         unique=True,
@@ -41,6 +57,10 @@ class UserMirror(models.Model):
         max_length=16,
         choices=USER_STATUS_CHOICES,
         default=USER_STATUS_ACTIVE,
+    )
+    dingtalk_source_slug: models.CharField[str, str] = models.CharField(
+        max_length=128,
+        blank=True,
     )
     dingtalk_union_id: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
     dingtalk_userid: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
@@ -62,12 +82,45 @@ class UserMirror(models.Model):
 
     class Meta:
         ordering: ClassVar[list[str]] = ["authentik_user_id"]
-        indexes: ClassVar[list[models.Index]] = [
-            models.Index(
-                fields=["dingtalk_corp_id", "dingtalk_userid"],
-                name="accounts_user_dingtalk_idx",
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.CheckConstraint(
+                condition=(
+                    (
+                        Q(dingtalk_source_slug="")
+                        & Q(dingtalk_corp_id="")
+                        & Q(dingtalk_userid="")
+                    )
+                    | (
+                        ~Q(dingtalk_source_slug="")
+                        & ~Q(dingtalk_corp_id="")
+                        & ~Q(dingtalk_userid="")
+                    )
+                ),
+                name="accounts_user_dingtalk_binding_shape",
+            ),
+            models.UniqueConstraint(
+                fields=["dingtalk_source_slug", "dingtalk_corp_id", "dingtalk_userid"],
+                condition=(
+                    ~Q(dingtalk_source_slug="")
+                    & ~Q(dingtalk_corp_id="")
+                    & ~Q(dingtalk_userid="")
+                ),
+                name="accounts_user_dingtalk_binding_unique",
             ),
         ]
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["dingtalk_source_slug", "dingtalk_corp_id", "dingtalk_userid"],
+                name="accounts_user_dingtalk_idx",
+            ),
+            models.Index(
+                fields=["status", "updated_at", "id"],
+                name="accounts_user_retention_idx",
+            ),
+        ]
+        base_manager_name: ClassVar[str] = "objects"
+
+    objects: ClassVar[UserMirrorManager] = UserMirrorManager()  # pyright: ignore[reportIncompatibleVariableOverride]
 
     @override
     def __str__(self) -> str:
@@ -152,6 +205,10 @@ class DingTalkUserMirror(models.Model):
                 fields=["source_slug", "corp_id", "manager_userid"],
                 name="accounts_dt_user_manager_idx",
             ),
+            models.Index(
+                fields=["status", "departed_at", "id"],
+                name="accounts_dt_user_retention_idx",
+            ),
         ]
         ordering: ClassVar[list[str]] = ["source_slug", "corp_id", "user_id"]
 
@@ -201,6 +258,10 @@ LOCAL_ADMIN_USERNAME_ERROR: Final = (
 
 class LocalAdminAccount(models.Model):
     # 本地超级管理员账号: 不经 Authentik, 用密码 + 二次验证直接登录 console。
+    if TYPE_CHECKING:
+        id: ClassVar[int]
+        passkeys: ClassVar[models.Manager[LocalAdminPasskey]]
+
     username: models.CharField[str, str] = models.CharField(
         max_length=LOCAL_ADMIN_USERNAME_MAX_LENGTH,
         unique=True,
@@ -251,7 +312,7 @@ class LocalAdminAccount(models.Model):
         effective_update_fields = None if update_fields is None else set(update_fields)
         if not self._state.adding:
             previous = (
-                LocalAdminAccount.objects.filter(pk=self.pk)
+                LocalAdminAccount.objects.filter(pk=self.pk)  # pyright: ignore[reportAny]
                 .values(
                     "is_active",
                     "session_version",
@@ -259,7 +320,7 @@ class LocalAdminAccount(models.Model):
                 .first()
             )
             if previous is not None and previous["is_active"] != self.is_active:
-                self.session_version = int(previous["session_version"]) + 1
+                self.session_version = int(previous["session_version"]) + 1  # pyright: ignore[reportAny]
                 if effective_update_fields is not None:
                     effective_update_fields.add("session_version")
         super().save(
@@ -273,7 +334,7 @@ class LocalAdminAccount(models.Model):
         self.password_hash = hashers.make_password(raw_password)
 
     def check_password(self, raw_password: str) -> bool:
-        return hashers.check_password(raw_password, self.password_hash)
+        return hashers.check_password(raw_password, self.password_hash)  # pyright: ignore[reportUnknownMemberType]
 
     def has_second_factor(self) -> bool:
         return self.totp_enabled or self.passkeys.exists()
@@ -281,6 +342,9 @@ class LocalAdminAccount(models.Model):
 
 class LocalAdminPasskey(models.Model):
     # 本地超管的 WebAuthn 通行密钥凭据; credential_id/public_key 均为 base64url 文本。
+    if TYPE_CHECKING:
+        id: ClassVar[int]
+
     account: models.ForeignKey[LocalAdminAccount, LocalAdminAccount] = models.ForeignKey(
         LocalAdminAccount,
         on_delete=models.CASCADE,
@@ -300,6 +364,12 @@ class LocalAdminPasskey(models.Model):
 
     class Meta:
         ordering: ClassVar[list[str]] = ["created_at", "id"]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.CheckConstraint(
+                condition=models.Q(sign_count__gte=0),
+                name="accounts_passkey_sc_gte_0",
+            ),
+        ]
 
     @override
     def __str__(self) -> str:

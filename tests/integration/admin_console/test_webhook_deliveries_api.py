@@ -12,11 +12,16 @@ from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import App
 from easyauth.audit.models import AuditLog
 from easyauth.webhooks.models import WebhookDelivery
+from tests.integration.admin_console.auth_helpers import authenticate_console_admin
 
 pytestmark = pytest.mark.django_db
 
 LOGIN_VALUE: Final = "console-webhook-deliveries"
+EXPECTED_DELIVERY_COUNT: Final = 2
+LAST_ERROR_SUMMARY_LIMIT: Final = 201
 JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+
+type JsonObject = dict[str, JsonValue]
 
 
 class HttpResponseLike(Protocol):
@@ -69,15 +74,14 @@ def test_list_webhook_deliveries_summary_and_redeliver() -> None:
     # Then
     body = _response_json(listed)
     assert listed.status_code == HTTPStatus.OK
-    assert body["pagination"]["total_items"] == 2
-    items = body["data"]
-    assert isinstance(items, list)
-    assert len(items) == 2
+    assert _json_object(body["pagination"])["total_items"] == EXPECTED_DELIVERY_COUNT
+    items = _json_list(body["data"])
+    assert len(items) == EXPECTED_DELIVERY_COUNT
     for item in items:
-        assert isinstance(item, dict)
-        assert "payload" not in item
-        assert "secret" not in str(item)
-        assert set(item) >= {
+        item_object = _json_object(item)
+        assert "payload" not in item_object
+        assert "secret" not in str(item_object)
+        assert set(item_object) >= {
             "id",
             "delivery_id",
             "event_type",
@@ -89,19 +93,26 @@ def test_list_webhook_deliveries_summary_and_redeliver() -> None:
             "created_at",
             "updated_at",
         }
-    failed_item = next(item for item in items if item["delivery_id"] == "del-failed-1")
+    failed_item = next(
+        item
+        for item in (_json_object(item) for item in items)
+        if item["delivery_id"] == "del-failed-1"
+    )
     assert isinstance(failed_item["last_error"], str)
-    assert len(failed_item["last_error"]) <= 201
+    assert len(failed_item["last_error"]) <= LAST_ERROR_SUMMARY_LIMIT
 
     filtered_body = _response_json(filtered)
     assert filtered.status_code == HTTPStatus.OK
-    assert filtered_body["pagination"]["total_items"] == 1
-    assert filtered_body["data"][0]["delivery_id"] == "del-failed-1"
+    assert _json_object(filtered_body["pagination"])["total_items"] == 1
+    filtered_items = _json_list(filtered_body["data"])
+    assert _json_object(filtered_items[0])["delivery_id"] == "del-failed-1"
 
     payload_body = _response_json(with_payload)
     assert with_payload.status_code == HTTPStatus.OK
     payload_item = next(
-        item for item in payload_body["data"] if item["delivery_id"] == "del-failed-1"
+        item
+        for item in (_json_object(item) for item in _json_list(payload_body["data"]))
+        if item["delivery_id"] == "del-failed-1"
     )
     assert payload_item["payload"] == {"secret": "should-not-leak-by-default"}
 
@@ -129,11 +140,21 @@ def test_webhook_deliveries_require_auth_and_known_app() -> None:
 def _logged_in_superuser(username: str) -> Client:
     _ = User.objects.create_superuser(username=username, password=LOGIN_VALUE)
     client = Client(HTTP_HOST="localhost")
-    assert client.login(username=username, password=LOGIN_VALUE) is True
+    _ = authenticate_console_admin(client, username)
     return client
 
 
-def _response_json(response: HttpResponseLike) -> dict[str, JsonValue]:
+def _response_json(response: HttpResponseLike) -> JsonObject:
     parsed = JSON_VALUE_ADAPTER.validate_json(response.content)
     assert isinstance(parsed, dict), response.content.decode()
     return parsed
+
+
+def _json_object(value: JsonValue) -> JsonObject:
+    assert isinstance(value, dict)
+    return value
+
+
+def _json_list(value: JsonValue) -> list[JsonValue]:
+    assert isinstance(value, list)
+    return value

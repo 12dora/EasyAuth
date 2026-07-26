@@ -16,7 +16,7 @@ class _Signal(Protocol):
     def disconnect(self, receiver: object, *, sender: object) -> bool | None: ...
 
 
-@pytest.fixture(autouse=True)
+@pytest.fixture
 def notification_channel_for_apps(db: None) -> Iterator[None]:
     _ = db
 

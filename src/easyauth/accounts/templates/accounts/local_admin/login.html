@@ -13,7 +13,7 @@
       --surface: #ffffff;
       --ink: #0f172a;
       --muted: #475569;
-      --faint: #94a3b8;
+      --faint: #64748b;
       --line: #e2e8f0;
       --brand: #0f172a;
       --brand-strong: #1e293b;
@@ -29,7 +29,7 @@
 
     body {
       min-width: 320px;
-      min-height: 100vh;
+      min-height: 100dvh;
       margin: 0;
       background: var(--bg);
       -webkit-font-smoothing: antialiased;
@@ -95,7 +95,7 @@
       align-items: start;
       justify-items: center;
       width: min(960px, 100%);
-      min-height: calc(100vh - 56px);
+      min-height: calc(100dvh - 57px);
       margin: 0 auto;
       padding: 72px 20px;
     }
@@ -144,7 +144,7 @@
 
     .field input:focus {
       border-color: var(--brand);
-      outline: 2px solid rgba(15, 23, 42, 0.25);
+      outline: 2px solid #2563eb;
       outline-offset: 1px;
     }
 
@@ -192,6 +192,12 @@
     .button-secondary:hover {
       border-color: var(--muted);
       background: var(--bg-deep);
+    }
+
+    .button-primary:focus-visible,
+    .button-secondary:focus-visible {
+      outline: 2px solid #2563eb;
+      outline-offset: 2px;
     }
 
     .divider {
@@ -247,7 +253,7 @@
       <div>
         <h1 class="card-title" id="login-title">登录 EasyAuth</h1>
       </div>
-      <a class="button-primary" href="/auth/login/?next=/portal/" role="button">使用工作账号登录</a>
+      <a class="button-primary" href="/auth/login/?next=/portal/">使用工作账号登录</a>
       <div class="divider" aria-hidden="true"><span>或使用本地账号登录</span></div>
       {% if error %}<p class="form-error" role="alert">{{ error }}</p>{% endif %}
       <form method="post" action="/auth/local/" autocomplete="off">

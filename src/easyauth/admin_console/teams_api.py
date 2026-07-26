@@ -8,14 +8,20 @@ from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
-from easyauth.admin_console.api_payloads import list_payload
+from easyauth.admin_console.api_payloads import paginated_list_payload
 from easyauth.admin_console.api_responses import (
     error_response,
     json_response,
     method_not_allowed_response,
 )
+from easyauth.admin_console.operation_filters import (
+    OperationFilterValidationError,
+    operation_filter_error_response,
+    paginate_queryset,
+)
 from easyauth.admin_console.request_guards import require_console_actor
 from easyauth.api.errors import ErrorCode, JsonValue
+from easyauth.api.pagination import pagination_item
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.teams.models import (
     TEAM_MEMBER_ROLE_LEADER,
@@ -102,16 +108,21 @@ def console_teams(request: HttpRequest) -> JsonResponse:
         case actor:
             pass
     if request.method == "GET":
-        teams = list(Team.objects.order_by("name"))
+        try:
+            page = paginate_queryset(Team.objects.order_by("name"), request.GET)
+        except OperationFilterValidationError as exc:
+            return operation_filter_error_response(exc)
+        teams = tuple(page.items)
         members_by_team: dict[int, list[TeamMember]] = {}
         for member in TeamMember.objects.select_related("user").filter(team__in=teams):
             members_by_team.setdefault(member.team_id, []).append(member)
         return json_response(
-            list_payload(
-                [
+            paginated_list_payload(
+                items=[
                     _team_item_from_members(team, members_by_team.get(team.id, []))
                     for team in teams
                 ],
+                pagination=pagination_item(page),
             ),
         )
     if request.method == "POST":
@@ -265,7 +276,7 @@ def _patch_member(
 
 
 def _delete_team(team: Team, actor: ConsoleActor) -> JsonResponse:
-    # 硬删除团队: 成员(TeamMember)与交接项(HandoverTeamItem)按 CASCADE 一并清除; 先审计再删除以保留 team 信息。
+    # 硬删除团队: 成员与交接项按 CASCADE 清除; 先审计再删除以保留 team 信息。
     _record_team_event(actor=actor, team=team, action="team_deleted")
     _ = team.delete()
     return json_response({"deleted": True})

@@ -16,7 +16,7 @@ from easyauth.applications.models import (
     Permission,
     PermissionGroup,
 )
-from easyauth.applications.services import StaticTokenService
+from easyauth.applications.services import AppCredentialService
 from easyauth.grants.models import (
     AccessGrant,
     AccessGrantGroup,
@@ -38,7 +38,7 @@ def test_permission_query_excludes_deprecated_permissions_and_permission_group_k
     user = UserMirror.objects.create(authentik_user_id="user-api-deprecated-permission")
     app = App.objects.create(app_key="deprecated-api-app", name="Deprecated API App")
     _scope(app, "SELF")
-    issue = StaticTokenService.create_token(app=app, name="integration")
+    issue = AppCredentialService.create_static_token(app=app, name="integration")
     permission_group = PermissionGroup.objects.create(
         app=app,
         key="PIPELINE_GROUP",
@@ -120,7 +120,7 @@ def test_permission_query_excludes_inactive_groups_group_grants_permissions_and_
     app = App.objects.create(app_key="inactive-catalog-api-app", name="Inactive Catalog API App")
     _scope(app, "SELF")
     _scope(app, "INACTIVE", is_active=False)
-    issue = StaticTokenService.create_token(app=app, name="integration")
+    issue = AppCredentialService.create_static_token(app=app, name="integration")
     active_group = AuthorizationGroup.objects.create(
         app=app,
         key="operator",
@@ -229,7 +229,7 @@ def test_permission_query_returns_empty_snake_case_snapshot_without_envelope() -
     # Given: 用户有 App 级授权快照, 但没有任何授权组或直授权限。
     user = UserMirror.objects.create(authentik_user_id="user-api-empty-grants")
     app = App.objects.create(app_key="empty-grants-api-app", name="Empty Grants API App")
-    issue = StaticTokenService.create_token(app=app, name="integration")
+    issue = AppCredentialService.create_static_token(app=app, name="integration")
     _ = AccessGrant.objects.create(user=user, app=app)
 
     # When: 应用查询该用户权限。
