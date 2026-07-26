@@ -11,7 +11,6 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 from easyauth_app_sdk import (
-    DINGTALK_REF_PREFIX,
     NOTIFY_TEMPLATE_ACTION_CARD,
     NOTIFY_TEMPLATE_MARKDOWN,
     NOTIFY_TEMPLATE_TEXT,
@@ -23,6 +22,9 @@ from easyauth_app_sdk import client as client_module
 # 仓库根下的契约样例(与服务端契约测试共用)。
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _SAMPLES = _REPO_ROOT / "tests" / "contract_samples"
+_USER_REF = "dt:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:dXNlcjAxMjM"
+_MANAGER_REF = "dt:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:bWFuYWdlcjg4MzY"
+_DEPARTMENT_REF = "dept:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:NDYwMDAx"
 
 
 def _load_sample(relative: str) -> dict[str, Any]:
@@ -85,7 +87,6 @@ def test_constants_exported() -> None:
     assert NOTIFY_TEMPLATE_TEXT == "text"
     assert NOTIFY_TEMPLATE_MARKDOWN == "markdown"
     assert NOTIFY_TEMPLATE_ACTION_CARD == "action_card"
-    assert DINGTALK_REF_PREFIX == "dt:"
 
 
 def test_search_directory_users_url_and_query(monkeypatch: Any) -> None:
@@ -94,8 +95,8 @@ def test_search_directory_users_url_and_query(monkeypatch: Any) -> None:
 
     result = _client().search_directory_users(
         q="王",
-        department_id="460001",
-        manager_id="dt:manager8836",
+        department_id=_DEPARTMENT_REF,
+        manager_id=_MANAGER_REF,
         include_inactive=True,
         snapshot_id=sample["directory_snapshot"]["snapshot_id"],
         page=2,
@@ -108,8 +109,8 @@ def test_search_directory_users_url_and_query(monkeypatch: Any) -> None:
     assert parsed.path == "/api/v1/apps/my%20app/directory/users"
     query = parse_qs(parsed.query)
     assert query["q"] == ["王"]
-    assert query["department_id"] == ["460001"]
-    assert query["manager_id"] == ["dt:manager8836"]
+    assert query["department_id"] == [_DEPARTMENT_REF]
+    assert query["manager_id"] == [_MANAGER_REF]
     assert query["include_inactive"] == ["true"]
     assert query["snapshot_id"] == [sample["directory_snapshot"]["snapshot_id"]]
     assert query["page"] == ["2"]
@@ -190,12 +191,13 @@ def test_get_directory_user_encodes_ref(monkeypatch: Any) -> None:
     sample = _load_sample("directory/user_detail.json")
     captured = _stub_json(monkeypatch, sample)
 
-    result = _client().get_directory_user("dt:user0123")
+    result = _client().get_directory_user(_USER_REF)
 
     assert result == sample
     _assert_bearer(captured)
     assert captured["url"] == (
-        "http://easyauth:8001/api/v1/apps/my%20app/directory/users/dt%3Auser0123"
+        "http://easyauth:8001/api/v1/apps/my%20app/directory/users/"
+        "dt%3Av1%3AZGluZ3RhbGs%3AY29ycC1kZW1v%3AdXNlcjAxMjM"
     )
 
 
@@ -217,13 +219,13 @@ def test_list_directory_user_subordinates(monkeypatch: Any) -> None:
     sample = _load_sample("directory/user_subordinates.json")
     captured = _stub_json(monkeypatch, sample)
 
-    result = _client().list_directory_user_subordinates("dt:manager8836")
+    result = _client().list_directory_user_subordinates(_MANAGER_REF)
 
     assert result == sample
     _assert_bearer(captured)
     assert captured["url"] == (
         "http://easyauth:8001/api/v1/apps/my%20app/directory/users/"
-        "dt%3Amanager8836/subordinates"
+        "dt%3Av1%3AZGluZ3RhbGs%3AY29ycC1kZW1v%3AbWFuYWdlcjg4MzY/subordinates"
     )
 
 
@@ -281,14 +283,14 @@ def test_send_notification_minimal_body(monkeypatch: Any) -> None:
     captured = _stub_json(monkeypatch, response)
 
     _ = _client().send_notification(
-        recipients=["dt:user0123"],
+        recipients=[_USER_REF],
         template=NOTIFY_TEMPLATE_TEXT,
         content="hello",
     )
 
     _assert_bearer(captured)
     assert captured["body"] == {
-        "recipients": ["dt:user0123"],
+        "recipients": [_USER_REF],
         "template": "text",
         "content": "hello",
     }

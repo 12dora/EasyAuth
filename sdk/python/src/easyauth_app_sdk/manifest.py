@@ -34,8 +34,6 @@ ALLOWED_AUTH_GROUP_KINDS = frozenset({"role", "bundle"})
 ALLOWED_APPROVAL_TARGET_TYPES = frozenset({"authorization_group", "permission"})
 ALLOWED_RISK_LEVELS = frozenset({"standard", "high"})
 ALLOWED_WEBHOOK_SIGNING = frozenset({"hmac-sha256"})
-# 顶层 capabilities 节: 平台能力申明(申明 ≠ 开通)。
-ALLOWED_PLATFORM_CAPABILITIES = frozenset({"directory", "notify"})
 OPTIONAL_TOP_SECTIONS = frozenset({"lifecycle", "webhook", "capabilities"})
 
 

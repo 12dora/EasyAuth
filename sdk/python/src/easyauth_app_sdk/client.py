@@ -32,10 +32,6 @@ _HTTP_SERVER_ERROR_MAX: Final = 600
 NOTIFY_TEMPLATE_TEXT: Final = "text"
 NOTIFY_TEMPLATE_MARKDOWN: Final = "markdown"
 NOTIFY_TEMPLATE_ACTION_CARD: Final = "action_card"
-# Legacy-only/deprecated 输入识别前缀。新接入不得据此构造 ref, 必须消费目录返回的 opaque ref。
-DINGTALK_REF_PREFIX: Final = "dt:"
-
-
 class EasyAuthClientError(RuntimeError):
     """EasyAuth API 调用失败。"""
 
@@ -202,7 +198,6 @@ class EasyAuthAppClient:
         """用户详情(含主管摘要)。
 
         user_ref 必须消费目录响应返回的 opaque user_ref 并原样回传。
-        裸 user_id / "dt:<id>" 仅为 legacy-only/deprecated 兼容输入, 不得新构造。
         GET {app_base}/directory/users/{user_ref}
         """
         url = f"{self._app_base()}/directory/users/{quote(user_ref, safe='')}"
@@ -262,7 +257,6 @@ class EasyAuthAppClient:
         """发送钉钉工作通知(异步受理)。POST {app_base}/notify/messages。
 
         recipients 元素必须使用目录响应返回并由业务后端保存的 opaque user_ref。
-        裸 user_id / "dt:<id>" 仅为 legacy-only/deprecated 兼容输入, 不得新构造。
         template 取 "text" | "markdown" | "action_card"。
         返回 {"message_id", "accepted", ...}。
         幂等: 相同 dedup_key 重复调用返回同一 message_id 且 accepted=False。

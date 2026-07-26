@@ -1,9 +1,4 @@
-name: Build Docker image
-
-# Builds a multi-architecture EasyAuth image and publishes it to the GitHub Container
-# Registry (GHCR):
-#   - linux/amd64  → Linux x86-64
-#   - linux/arm64  → Apple Silicon / ARM (e.g. Docker Desktop on an ARM Mac)
+name: 质量门禁与镜像发布
 
 on:
   push:
@@ -16,35 +11,301 @@ on:
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}
+  PYTHON_VERSION: "3.12.12"
+  NODE_VERSION: "22.21.1"
+  PNPM_VERSION: "11.2.2"
+  UV_VERSION: "0.8.22"
 
 jobs:
-  docker:
-    runs-on: ubuntu-latest
+  backend-sqlite:
+    name: 后端 SQLite 隔离套件
+    runs-on: ubuntu-24.04
     permissions:
-      contents: write   # create GitHub Releases on version tags
+      contents: read
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: 安装 Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 安装 uv
+        run: python -m pip install "uv==${UV_VERSION}"
+
+      - name: 安装后端依赖
+        run: uv sync --extra dev --frozen
+
+      - name: 断言 SQLite 测试数据库隔离
+        run: |
+          unset DATABASE_URL
+          .venv/bin/python - <<'PY'
+          import os
+
+          os.environ.setdefault("DJANGO_SETTINGS_MODULE", "easyauth.config.settings.test")
+          import django
+          from django.db import connection
+
+          django.setup()
+          assert connection.vendor == "sqlite", connection.vendor
+          PY
+
+      - name: Django 检查与迁移漂移检查
+        run: |
+          unset DATABASE_URL
+          .venv/bin/python manage.py check
+          .venv/bin/python manage.py makemigrations --check --dry-run
+
+      - name: 主后端测试
+        run: |
+          unset DATABASE_URL
+          .venv/bin/pytest -ra --ignore=tests/integration/notify/test_quota_concurrency.py
+
+  backend-postgres-redis:
+    name: PostgreSQL 多连接与 Redis/broker 套件
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    services:
+      postgres:
+        image: postgres:16.11-bookworm
+        env:
+          POSTGRES_DB: easyauth_ci
+          POSTGRES_USER: easyauth
+          POSTGRES_PASSWORD: easyauth_ci_password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U easyauth -d easyauth_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7.4.7-bookworm
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://easyauth:easyauth_ci_password@127.0.0.1:5432/easyauth_ci
+      CELERY_BROKER_URL: redis://127.0.0.1:6379/0
+      CELERY_RESULT_BACKEND: redis://127.0.0.1:6379/1
+      EASYAUTH_CACHE_URL: redis://127.0.0.1:6379/2
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: 安装 Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 安装 uv
+        run: python -m pip install "uv==${UV_VERSION}"
+
+      - name: 安装后端依赖
+        run: uv sync --extra dev --frozen
+
+      - name: 断言 PostgreSQL vendor
+        run: |
+          .venv/bin/python - <<'PY'
+          import os
+
+          os.environ.setdefault("DJANGO_SETTINGS_MODULE", "easyauth.config.settings.test")
+          import django
+          from django.db import connection
+
+          django.setup()
+          assert connection.vendor == "postgresql", connection.vendor
+          PY
+
+      - name: 迁移 PostgreSQL 测试库
+        run: .venv/bin/python manage.py migrate --noinput
+
+      - name: 多连接、Redis 与 broker 关键回归
+        run: |
+          .venv/bin/pytest -ra \
+            tests/integration/notify/test_quota_concurrency.py \
+            tests/unit/outbox/test_services.py \
+            tests/unit/connectors/test_dispatch.py \
+            tests/integration/config/test_runtime_health.py
+
+  sdk-fastapi:
+    name: SDK 与 FastAPI 全功能套件
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: 安装 Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 安装 SDK 全功能依赖
+        working-directory: sdk/python
+        run: python -m pip install pytest ".[fastapi]"
+
+      - name: 运行 SDK 全量测试并禁止 skip
+        working-directory: sdk/python
+        run: |
+          set -o pipefail
+          printf '[pytest]\n' > /tmp/easyauth-sdk-pytest.ini
+          python -m pytest -c /tmp/easyauth-sdk-pytest.ini --rootdir=. -ra tests \
+            | tee /tmp/easyauth-sdk-pytest.log
+          ! grep -E "SKIPPED|skipped" /tmp/easyauth-sdk-pytest.log
+
+  python-static:
+    name: Ruff 与 BasedPyright
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: 安装 Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 安装 uv
+        run: python -m pip install "uv==${UV_VERSION}"
+
+      - name: 安装后端依赖
+        run: uv sync --extra dev --frozen
+
+      - name: Ruff
+        run: .venv/bin/ruff check .
+
+      - name: BasedPyright
+        run: .venv/bin/basedpyright
+
+  frontend:
+    name: 前端类型、测试与构建
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: 安装 Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 类型检查
+        run: pnpm --filter @easyauth/frontend typecheck
+
+      - name: Vitest
+        run: pnpm --filter @easyauth/frontend test --maxWorkers=1
+
+      - name: 生产构建
+        run: pnpm --filter @easyauth/frontend build
+
+  playwright-fullstack:
+    name: Playwright 真实全栈关键冒烟
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      DJANGO_DEBUG: "1"
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+
+      - name: 安装 Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: 安装 uv
+        run: python -m pip install "uv==${UV_VERSION}"
+
+      - name: 安装后端依赖
+        run: uv sync --extra dev --frozen
+
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: 安装 Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 构建真实静态资源
+        run: pnpm --filter @easyauth/frontend build
+
+      - name: 准备 SQLite 测试库
+        run: |
+          unset DATABASE_URL
+          .venv/bin/python manage.py migrate --noinput
+
+      - name: 安装固定 Playwright 浏览器
+        run: pnpm --filter @easyauth/frontend exec playwright install --with-deps chromium
+
+      - name: 运行无 EasyAuth API mock 的全栈冒烟
+        run: |
+          unset DATABASE_URL
+          pnpm --filter @easyauth/frontend e2e:fullstack
+
+  docker:
+    name: 构建、签名并发布镜像
+    runs-on: ubuntu-24.04
+    needs:
+      - backend-sqlite
+      - backend-postgres-redis
+      - sdk-fastapi
+      - python-static
+      - frontend
+      - playwright-fullstack
+    permissions:
+      contents: write
       id-token: write
       packages: write
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: 检出代码
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
 
-      - name: Set up QEMU (cross-arch emulation)
-        uses: docker/setup-qemu-action@v3
+      - name: 设置 QEMU
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: 设置 Docker Buildx
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f
 
-      - name: Log in to GHCR
+      - name: 登录 GHCR
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Derive image tags & labels
+      - name: 生成镜像标签与标签元数据
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
@@ -55,9 +316,9 @@ jobs:
             type=sha,format=short
             type=raw,value=latest,enable={{is_default_branch}}
 
-      - name: Build and push
+      - name: 构建并按需推送
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8
         with:
           context: .
           file: ./Dockerfile
@@ -72,7 +333,7 @@ jobs:
 
       - name: 安装 Cosign
         if: github.event_name != 'pull_request'
-        uses: sigstore/cosign-installer@v3
+        uses: sigstore/cosign-installer@f713795cb21599bc4e5c4b58cbad1da852d7eeb9
 
       - name: 签名并验证镜像
         if: github.event_name != 'pull_request'
@@ -86,31 +347,27 @@ jobs:
             --certificate-oidc-issuer "https://token.actions.githubusercontent.com" \
             "${IMAGE_REF}@${IMAGE_DIGEST}"
 
-      # On a version tag (vX.Y.Z), publish a GitHub Release that links to the
-      # multi-arch image in GHCR (Packages). No large binaries are attached.
-      - name: Create GitHub Release
+      - name: 创建 GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65
         with:
           name: EasyAuth ${{ github.ref_name }}
           generate_release_notes: true
           body: |
             ## EasyAuth ${{ github.ref_name }}
 
-            Multi-architecture container image (`linux/amd64` · `linux/arm64`),
-            published to the GitHub Container Registry — see the repository **Packages** tab.
+            多架构容器镜像已发布到 GitHub Container Registry，支持 `linux/amd64` 与 `linux/arm64`。
 
-            **Pull:**
+            拉取命令：
             ```bash
             docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/easyauth:${{ steps.meta.outputs.version }}
-            # immutable, by digest:
             docker pull ${{ env.REGISTRY }}/${{ github.repository_owner }}/easyauth@${{ steps.build.outputs.digest }}
             ```
 
-            | | |
+            | 项 | 值 |
             | --- | --- |
-            | Image | `${{ env.REGISTRY }}/${{ github.repository_owner }}/easyauth:${{ steps.meta.outputs.version }}` |
+            | 镜像 | `${{ env.REGISTRY }}/${{ github.repository_owner }}/easyauth:${{ steps.meta.outputs.version }}` |
             | Digest | `${{ steps.build.outputs.digest }}` |
-            | Platforms | `linux/amd64`, `linux/arm64` |
+            | 平台 | `linux/amd64`, `linux/arm64` |
 
-            Configure and run per the [README](https://github.com/${{ github.repository }}#configuration-reference).
+            配置与运行方式以仓库 README 的当前中文说明为准。

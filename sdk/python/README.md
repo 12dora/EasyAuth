@@ -153,11 +153,9 @@ department_members = directory_client.search_directory_users(
 `EasyAuthClientError` 中，并保持 `retryable=False`。调用方不得自动重试当前页或混合两个快照，
 应放弃本轮结果并按业务调度策略从第一页重新开始。
 
-裸 Authentik `user_id`、旧 `dt:<id>` 与原始 `department_id` 仅是 legacy 兼容输入，不是下游
-应持久化或新建的引用。只有在所有目录源与企业作用域中唯一匹配时才会解析；歧义的用户或部门
-引用由目录 API 返回 `409 CONFLICT` 和 `candidate_refs`。格式畸形的 scoped `user_ref` /
-`department_ref` 由目录 API 返回 `422 VALIDATION_ERROR`。调用方应改用目录响应给出的 opaque
-ref，而不是尝试修补或重新构造引用。
+裸 Authentik `user_id`、未作用域 `dt:<id>` 与原始 `department_id` 不再是目录引用。
+目录 API 对畸形或未作用域的 `user_ref` / `department_ref` 返回
+`422 VALIDATION_ERROR`。调用方必须使用目录响应给出的 opaque ref，而不是尝试修补或重新构造引用。
 
 ## 钉钉通知
 
@@ -186,10 +184,10 @@ message = notify_client.get_notification(accepted["message_id"])
 ```
 
 `send_notification` 的 HTTP `202` 只表示 EasyAuth 已受理，绝不表示钉钉已发送或用户已收到。
-格式畸形的 scoped ref、未知 ref、legacy 歧义和通道 scope 不匹配不会把整次请求改成 HTTP
+格式畸形的 scoped ref、未知 ref 和通道 scope 不匹配不会把整次请求改成 HTTP
 `422`；在请求体结构本身有效时，消息仍以 `202` 受理，这些收件人随后分别成为终态 `failed`。
 当前逐收件人 `error_code` 为：`USER_NOT_FOUND`（畸形或未知引用）、`NO_DINGTALK_ID`、
-`USER_INACTIVE`、`USER_AMBIGUOUS`（legacy 引用歧义）、`USER_SCOPE_MISMATCH`、
+`USER_INACTIVE`、`USER_AMBIGUOUS`（保留错误码）、`USER_SCOPE_MISMATCH`、
 `DINGTALK_REJECTED`、`DINGTALK_DUPLICATE`、`DINGTALK_DAILY_LIMIT`、`EXHAUSTED`。只有请求体
 级校验失败（例如 recipients 不是 1~500 个非空且长度合规的字符串）才返回 HTTP `422`。
 下游应持久化 `dedup_key`、EasyAuth `message_id` 与本地业务事件，并根据查询结果维护自己的

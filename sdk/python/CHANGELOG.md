@@ -34,7 +34,7 @@
 - `EasyAuthAppClient` 钉钉通知方法：`send_notification`（含可选 `deeplink_title`）、
   `get_notification`。
 - 通知相关常量：`NOTIFY_TEMPLATE_TEXT`、`NOTIFY_TEMPLATE_MARKDOWN`、
-  `NOTIFY_TEMPLATE_ACTION_CARD`、`DINGTALK_REF_PREFIX`。
+  `NOTIFY_TEMPLATE_ACTION_CARD`。
 - manifest 可选顶层节 `capabilities`（`["directory", "notify"]` 白名单校验）；
   申明仅供展示，**不产生授权副作用**（开通仍由超管手工翻转）。
 
