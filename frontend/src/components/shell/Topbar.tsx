@@ -4,7 +4,6 @@ import { useLocation } from "react-router-dom";
 import type { CurrentUser } from "../../App";
 import { useI18n } from "../../i18n/I18nProvider";
 import { LanguageSwitcher } from "./LanguageSwitcher";
-import { NotificationsButton } from "./NotificationsButton";
 import { UserSummary } from "./UserSummary";
 
 interface TopbarProps {
@@ -13,7 +12,7 @@ interface TopbarProps {
   mode: "console" | "portal";
 }
 
-type TopbarMenu = "language" | "notifications" | "user" | null;
+type TopbarMenu = "language" | "user" | null;
 
 export function Topbar({ brandLogoUrl, currentUser, mode }: TopbarProps) {
   const { t } = useI18n();
@@ -72,7 +71,6 @@ export function Topbar({ brandLogoUrl, currentUser, mode }: TopbarProps) {
         </a>
         <div className="topbar-actions" aria-label={t("shell.topbarTools")} ref={actionsRef}>
           <LanguageSwitcher open={openMenu === "language"} onOpenChange={menuOpenChange("language")} />
-          <NotificationsButton open={openMenu === "notifications"} onOpenChange={menuOpenChange("notifications")} />
           {currentUser ? (
             <>
               <span className="topbar-divider" aria-hidden="true" />

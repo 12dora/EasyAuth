@@ -25,9 +25,12 @@ import type { ListPayload } from "../../../../lib/api";
 import type { AppScopeItem, AuthorizationGroupGrantItem, AuthorizationGroupItem, ManagedScopePolicyItem, PermissionItem } from "../../../../lib/domain";
 import { useI18n } from "../../../../i18n/I18nProvider";
 import type { Translator } from "../../../../lib/status";
+import { invalidateAppCatalogQueries } from "../invalidateAppQueries";
 import { buildAuthorizationGroupPayload, grantKey, normalizeGrants } from "../matrix/grantDraft";
 
 type AuthorizationGroupForm = AuthorizationGroupItem;
+const AUTHORIZATION_GROUP_MATRIX_PAGE_SIZE = 100;
+const AUTHORIZATION_GROUP_MATRIX_MAX_PAGES = 1000;
 
 const emptyGroupForm: AuthorizationGroupForm = {
   key: "",
@@ -39,7 +42,7 @@ const emptyGroupForm: AuthorizationGroupForm = {
   grants: [],
 };
 
-export function MatrixTab({ appKey }: { appKey: string }) {
+export function MatrixTab({ appKey, canManage = true }: { appKey: string; canManage?: boolean }) {
   const { t } = useI18n();
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -52,7 +55,7 @@ export function MatrixTab({ appKey }: { appKey: string }) {
 
   const groupsQuery = useQuery({
     queryKey: groupsQueryKey,
-    queryFn: () => apiRequest<ListPayload<AuthorizationGroupItem>>(`/console/api/v1/apps/${appKey}/authorization-groups`),
+    queryFn: () => fetchAllAuthorizationGroups(appKey),
   });
   const permissionsQuery = useQuery({
     queryKey: ["console", "app", appKey, "permissions"],
@@ -102,6 +105,7 @@ export function MatrixTab({ appKey }: { appKey: string }) {
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: groupsQueryKey });
+      invalidateAppCatalogQueries(queryClient, appKey);
       setGroupDialogOpen(false);
       setSelectedKey("");
       setForm(emptyGroupForm);
@@ -148,7 +152,7 @@ export function MatrixTab({ appKey }: { appKey: string }) {
       header: t("common.actions"),
       cell: ({ row }) => (
         <TableActionCell>
-          <TableRowActionButton type="button" onClick={() => {
+          <TableRowActionButton type="button" disabled={!canManage} onClick={() => {
             setSelectedKey(row.original.key);
             setForm({ ...row.original, description: row.original.description ?? "", grants: normalizeGrants(row.original.grants ?? []) });
             setGroupDialogOpen(true);
@@ -209,11 +213,12 @@ export function MatrixTab({ appKey }: { appKey: string }) {
           <TableRowActionButton
             type="button"
             variant={row.original.is_active ? "ghost-danger" : "ghost"}
+            disabled={!canManage}
             onClick={() => updateGrant(row.original, !row.original.is_active, setForm)}
           >
             {row.original.is_active ? t("common.disable") : t("common.enable")}
           </TableRowActionButton>
-          <TableRowActionButton type="button" variant="ghost-danger" onClick={() => removeGrant(row.original, setForm)}>
+          <TableRowActionButton type="button" variant="ghost-danger" disabled={!canManage} onClick={() => removeGrant(row.original, setForm)}>
             {t("common.remove")}
           </TableRowActionButton>
         </TableActionCell>
@@ -240,13 +245,14 @@ export function MatrixTab({ appKey }: { appKey: string }) {
             setForm(emptyGroupForm);
             setGroupDialogOpen(true);
           }}
+          disabled={!canManage}
         >
           {t("common.new")}
         </Button>
       </div>
-      {groupsQuery.error ? <StatusBanner tone="signal" title={t("console.matrix.groupsLoadFailed")} message={(groupsQuery.error as Error).message} /> : null}
-      {permissionsQuery.error ? <StatusBanner tone="signal" title={t("console.matrix.permissionsLoadFailed")} message={(permissionsQuery.error as Error).message} /> : null}
-      {scopesQuery.error ? <StatusBanner tone="signal" title={t("console.matrix.scopesLoadFailed")} message={(scopesQuery.error as Error).message} /> : null}
+      {groupsQuery.error ? <StatusBanner live="alert" tone="signal" title={t("console.matrix.groupsLoadFailed")} message={(groupsQuery.error as Error).message} /> : null}
+      {permissionsQuery.error ? <StatusBanner live="alert" tone="signal" title={t("console.matrix.permissionsLoadFailed")} message={(permissionsQuery.error as Error).message} /> : null}
+      {scopesQuery.error ? <StatusBanner live="alert" tone="signal" title={t("console.matrix.scopesLoadFailed")} message={(scopesQuery.error as Error).message} /> : null}
       <TableFrame>
         <TableRoot>
           <TableHead>
@@ -293,7 +299,7 @@ export function MatrixTab({ appKey }: { appKey: string }) {
               type="submit"
               variant="primary"
               icon={<Check size={16} />}
-              disabled={!form.key || !form.name || saveMutation.isPending}
+              disabled={!canManage || !form.key || !form.name || saveMutation.isPending}
               loading={saveMutation.isPending}
             >
               {t("common.save")}
@@ -320,10 +326,10 @@ export function MatrixTab({ appKey }: { appKey: string }) {
               </Field>
               <Field label={t("common.status")}>
                 <div className="flex flex-wrap gap-3">
-                  <Button type="button" variant="ghost" onClick={() => setForm((current) => ({ ...current, requestable: !current.requestable }))}>
+                  <Button type="button" variant="ghost" disabled={!canManage} onClick={() => setForm((current) => ({ ...current, requestable: !current.requestable }))}>
                     {form.requestable ? t("console.matrix.setNotRequestable") : t("console.matrix.setRequestable")}
                   </Button>
-                  <Button type="button" variant="ghost" onClick={() => setForm((current) => ({ ...current, is_active: !current.is_active }))}>
+                  <Button type="button" variant="ghost" disabled={!canManage} onClick={() => setForm((current) => ({ ...current, is_active: !current.is_active }))}>
                     {form.is_active ? t("common.disable") : t("common.enable")}
                   </Button>
                 </div>
@@ -348,7 +354,7 @@ export function MatrixTab({ appKey }: { appKey: string }) {
                 ))}
               </SelectInput>
             </Field>
-            <Button type="button" icon={<Plus size={16} />} onClick={addGrant} disabled={!grantPermission || !grantScope}>
+            <Button type="button" icon={<Plus size={16} />} onClick={addGrant} disabled={!canManage || !grantPermission || !grantScope}>
               {t("console.matrix.addGrant")}
             </Button>
           </PanelSurface>
@@ -395,6 +401,23 @@ export function MatrixTab({ appKey }: { appKey: string }) {
       ) : null}
     </section>
   );
+}
+
+async function fetchAllAuthorizationGroups(appKey: string): Promise<ListPayload<AuthorizationGroupItem>> {
+  const data: AuthorizationGroupItem[] = [];
+  for (let page = 1; page <= AUTHORIZATION_GROUP_MATRIX_MAX_PAGES; page += 1) {
+    const payload = await apiRequest<ListPayload<AuthorizationGroupItem>>(
+      `/console/api/v1/apps/${appKey}/authorization-groups?include_inactive=true&page=${page}&page_size=${AUTHORIZATION_GROUP_MATRIX_PAGE_SIZE}`,
+    );
+    data.push(...itemsFromPayload<AuthorizationGroupItem>(payload));
+    if (!payload.pagination) {
+      throw new Error("AUTHORIZATION_GROUP_PAGINATION_MISSING");
+    }
+    if (payload.pagination.page >= payload.pagination.total_pages) {
+      return { data, pagination: payload.pagination };
+    }
+  }
+  throw new Error("AUTHORIZATION_GROUP_PAGE_LIMIT_EXCEEDED");
 }
 
 function updateGrant(

@@ -2,10 +2,14 @@ import { useMemo, useState } from "react";
 
 import { Field, SelectInput, TextArea, TextInput } from "../../../components/Field";
 import { useI18n } from "../../../i18n/I18nProvider";
-import type { AccessGrantType, ApproverOption } from "../hooks/useAccessRequestForm";
+import type { AccessGrantType, AccessRequestType, ApproverOption } from "../hooks/useAccessRequestForm";
+import type { PortalGrantRow } from "../portalListPayload";
 
 interface AccessRequestFieldsProps {
+  requestType: AccessRequestType;
   appKey: string;
+  baseGrantId: string;
+  currentGrants: PortalGrantRow[];
   approverOptions: ApproverOption[];
   selectedApproverUserIds: string[];
   grantType: AccessGrantType;
@@ -13,6 +17,8 @@ interface AccessRequestFieldsProps {
   expiresAtError: boolean;
   reason: string;
   disabled?: boolean;
+  onRequestTypeChange: (requestType: AccessRequestType) => void;
+  onBaseGrantChange: (grantId: string) => void;
   onApproverToggle: (userId: string) => void;
   onGrantTypeChange: (grantType: AccessGrantType) => void;
   onExpiresAtChange: (expiresAt: string) => void;
@@ -20,7 +26,10 @@ interface AccessRequestFieldsProps {
 }
 
 export function AccessRequestFields({
+  requestType,
   appKey,
+  baseGrantId,
+  currentGrants,
   approverOptions,
   selectedApproverUserIds,
   grantType,
@@ -28,6 +37,8 @@ export function AccessRequestFields({
   expiresAtError,
   reason,
   disabled = false,
+  onRequestTypeChange,
+  onBaseGrantChange,
   onApproverToggle,
   onGrantTypeChange,
   onExpiresAtChange,
@@ -37,6 +48,36 @@ export function AccessRequestFields({
   const nowMin = useMemo(nowLocalDatetime, []);
   return (
     <>
+      <div className="grid gap-4 md:grid-cols-2">
+        <Field label={t("portal.request.requestType")}>
+          <SelectInput
+            value={requestType}
+            disabled={disabled}
+            onChange={(event) => onRequestTypeChange(event.currentTarget.value as AccessRequestType)}
+          >
+            <option value="grant">{t("portal.approvals.requestType.grant")}</option>
+            <option value="change">{t("portal.approvals.requestType.change")}</option>
+            <option value="revoke">{t("portal.approvals.requestType.revoke")}</option>
+            <option value="renew">{t("portal.approvals.requestType.renew")}</option>
+          </SelectInput>
+        </Field>
+        {requestType !== "grant" ? (
+          <Field label={t("portal.request.baseGrant")}>
+            <SelectInput
+              value={baseGrantId}
+              disabled={disabled}
+              onChange={(event) => onBaseGrantChange(event.currentTarget.value)}
+            >
+              <option value="">{t("portal.request.baseGrantPlaceholder")}</option>
+              {currentGrants.map((grant) => (
+                <option key={grant.grant_id} value={String(grant.grant_id)}>
+                  {grant.app_name} ({grant.app_key}) v{grant.grant_revision}
+                </option>
+              ))}
+            </SelectInput>
+          </Field>
+        ) : null}
+      </div>
       <ApproverMultiSelect
         appKey={appKey}
         options={approverOptions}

@@ -7,7 +7,7 @@ export function flattenGroups(groups: PermissionGroupItem[]): PermissionGroupIte
   ]);
 }
 
-export function isPermissionGroup(item: PermissionGroupItem | PermissionItem): item is PermissionGroupItem {
+function isPermissionGroup(item: PermissionGroupItem | PermissionItem): item is PermissionGroupItem {
   return "type" in item && item.type === "group";
 }
 

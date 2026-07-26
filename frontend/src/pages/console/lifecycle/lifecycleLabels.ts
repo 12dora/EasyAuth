@@ -98,7 +98,7 @@ export function handoverActionStatusTone(status: string): BadgeTone {
   }
 }
 
-export function actionReleasesToPool(action: HandoverAppActionRow): boolean {
+function actionReleasesToPool(action: HandoverAppActionRow): boolean {
   return action.policy?.unowned_strategy === "release_to_pool";
 }
 

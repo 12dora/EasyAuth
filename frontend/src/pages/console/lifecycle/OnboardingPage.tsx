@@ -15,7 +15,6 @@ import { Field, SelectInput, TextArea, TextInput } from "../../../components/Fie
 import { PageHeader } from "../../../components/PageHeader";
 import { StatusBanner } from "../../../components/StatusBanner";
 import { UserSearchInput } from "../../../components/UserSelect";
-import { ConfirmDialog } from "../../../components/ui/ConfirmDialog";
 import { EmptyState } from "../../../components/ui/EmptyState";
 import { useToast } from "../../../components/ui/Toast";
 import { PageState } from "../../../components/ui/PageState";
@@ -73,7 +72,6 @@ export function OnboardingPage() {
   const queryClient = useQueryClient();
   const [editorState, setEditorState] = useState<{ template: OnboardingTemplateRow | null } | null>(null);
   const [onboardOpen, setOnboardOpen] = useState(false);
-  const [deleteTarget, setDeleteTarget] = useState<OnboardingTemplateRow | null>(null);
 
   const templatesQuery = useQuery({
     queryKey: TEMPLATES_QUERY_KEY,
@@ -113,26 +111,14 @@ export function OnboardingPage() {
       }),
     onSuccess: (_, template) => {
       void queryClient.invalidateQueries({ queryKey: TEMPLATES_QUERY_KEY });
-      // template.is_active 是切换前的旧值: 旧值为启用即刚被停用, 反之亦然。
+      // template.is_active 是切换前的旧值。
+      // 旧值为启用即刚被停用，反之亦然。
       toast.success(template.is_active ? t("onboarding.templates.disableSuccess") : t("onboarding.templates.enableSuccess"));
     },
     onError: (error: Error) => {
       toast.error(t("onboarding.templates.toggleFailed"), error.message);
     },
   });
-  const deleteMutation = useMutation({
-    mutationFn: (template: OnboardingTemplateRow) =>
-      apiRequest(`/console/api/v1/lifecycle/onboarding-templates/${template.id}`, { method: "DELETE" }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: TEMPLATES_QUERY_KEY });
-      setDeleteTarget(null);
-      toast.success(t("onboarding.templates.deleteSuccess"));
-    },
-    onError: (error: Error) => {
-      toast.error(t("onboarding.templates.deleteFailed"), error.message);
-    },
-  });
-
   const openEditor = (template: OnboardingTemplateRow | null) => {
     saveMutation.reset();
     setEditorState({ template });
@@ -141,7 +127,6 @@ export function OnboardingPage() {
   const columns = templateColumns(t, {
     onEdit: openEditor,
     onToggle: (template) => toggleMutation.mutate(template),
-    onDelete: (template) => setDeleteTarget(template),
     toggling: toggleMutation.isPending,
   });
   const table = useReactTable({
@@ -171,7 +156,7 @@ export function OnboardingPage() {
         }
       />
       {templatesQuery.error && templates.length > 0 ? (
-        <StatusBanner tone="signal" title={t("onboarding.templates.loadFailed")} message={(templatesQuery.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("onboarding.templates.loadFailed")} message={(templatesQuery.error as Error).message} />
       ) : null}
       {templatesQuery.error && templates.length === 0 ? (
         <PageState
@@ -237,16 +222,6 @@ export function OnboardingPage() {
         />
       ) : null}
       {onboardOpen ? <OnboardDialog templates={templates.filter((template) => template.is_active)} onClose={() => setOnboardOpen(false)} /> : null}
-      {deleteTarget ? (
-        <ConfirmDialog
-          title={t("onboarding.templates.deleteTitle")}
-          message={t("onboarding.templates.deleteMessage", { name: deleteTarget.name })}
-          confirmLabel={t("common.delete")}
-          confirming={deleteMutation.isPending}
-          onConfirm={() => deleteMutation.mutate(deleteTarget)}
-          onClose={() => setDeleteTarget(null)}
-        />
-      ) : null}
     </>
   );
 }
@@ -254,7 +229,6 @@ export function OnboardingPage() {
 interface TemplateRowActions {
   onEdit: (template: OnboardingTemplateRow) => void;
   onToggle: (template: OnboardingTemplateRow) => void;
-  onDelete: (template: OnboardingTemplateRow) => void;
   toggling: boolean;
 }
 
@@ -294,9 +268,6 @@ function templateColumns(t: Translator, actions: TemplateRowActions): ColumnDef<
           </TableRowActionButton>
           <TableRowActionButton type="button" disabled={actions.toggling} onClick={() => actions.onToggle(row.original)}>
             {row.original.is_active ? t("common.disable") : t("common.enable")}
-          </TableRowActionButton>
-          <TableRowActionButton type="button" variant="ghost-danger" onClick={() => actions.onDelete(row.original)}>
-            {t("common.delete")}
           </TableRowActionButton>
         </>
       ),
@@ -348,7 +319,8 @@ function TemplateEditorDialog({
     if (!normalizedName) {
       return;
     }
-    // 启用/停用已移到列表操作列(直接 PATCH); 编辑弹窗只改内容, is_active 原样透传(新建默认启用)。
+    // 启用/停用已移到列表操作列。
+    // 编辑弹窗只改内容，is_active 原样透传；新建默认启用。
     onSubmit({ name: normalizedName, description: description.trim(), is_active: template?.is_active ?? true, items });
   };
 
@@ -405,7 +377,7 @@ function TemplateEditorDialog({
             <TemplateItemComposer onAdd={(item) => setItems((current) => [...current, item])} />
           </div>
         </Field>
-        {errorMessage ? <StatusBanner tone="signal" title={t("onboarding.editor.saveFailed")} message={errorMessage} /> : null}
+        {errorMessage ? <StatusBanner live="alert" tone="signal" title={t("onboarding.editor.saveFailed")} message={errorMessage} /> : null}
       </form>
     </Dialog>
   );
@@ -423,9 +395,9 @@ function TemplateItemComposer({ onAdd }: { onAdd: (item: TemplateItemDraft) => v
 
   const appsQuery = useQuery({
     queryKey: ["console", "apps", "selector"],
-    queryFn: () => apiRequest<AppListPayload>("/console/api/v1/apps?page=1&page_size=100"),
+    queryFn: fetchAllSelectorApps,
   });
-  const apps = itemsFromPayload<AppSummary>(appsQuery.data);
+  const apps = appsQuery.data ?? [];
 
   const groupsQuery = useQuery({
     queryKey: ["console", "app", appKey, "authorization-groups"],
@@ -552,13 +524,27 @@ function TemplateItemComposer({ onAdd }: { onAdd: (item: TemplateItemDraft) => v
         ) : null}
       </div>
       {optionsError ? (
-        <StatusBanner tone="signal" title={t("onboarding.editor.optionsLoadFailed")} message={optionsError.message} />
+        <StatusBanner live="alert" tone="signal" title={t("onboarding.editor.optionsLoadFailed")} message={optionsError.message} />
       ) : null}
       <Button type="button" icon={<Plus size={15} />} disabled={!appKey || !targetKey} onClick={add}>
         {t("onboarding.editor.addItem")}
       </Button>
     </div>
   );
+}
+
+async function fetchAllSelectorApps(): Promise<AppSummary[]> {
+  const firstPage = await apiRequest<AppListPayload>("/console/api/v1/apps?page=1&page_size=100");
+  const pagination = firstPage.pagination;
+  if (!pagination) {
+    throw new Error("app_selector_missing_pagination");
+  }
+  const apps = [...itemsFromPayload<AppSummary>(firstPage)];
+  for (let page = 2; page <= pagination.total_pages; page += 1) {
+    const payload = await apiRequest<AppListPayload>(`/console/api/v1/apps?page=${page}&page_size=${pagination.page_size}`);
+    apps.push(...itemsFromPayload<AppSummary>(payload));
+  }
+  return apps;
 }
 
 function OnboardDialog({ templates, onClose }: { templates: OnboardingTemplateRow[]; onClose: () => void }) {
@@ -574,7 +560,8 @@ function OnboardDialog({ templates, onClose }: { templates: OnboardingTemplateRo
         method: "POST",
         body: { user_id: userId.trim(), template_id: Number(templateId) } satisfies JsonObject,
       }),
-    // 入职结果即操作反馈: 成功弹 toast 并关闭弹窗, 失败弹 toast 保留弹窗以便修正重试。
+    // 入职结果即操作反馈。
+    // 成功弹 toast 并关闭弹窗，失败弹 toast 保留弹窗以便修正重试。
     onSuccess: (payload) => {
       toast.success(t("onboarding.onboard.success", { count: payload.granted_app_count }));
       onClose();

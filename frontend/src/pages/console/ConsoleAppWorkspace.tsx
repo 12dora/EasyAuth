@@ -8,6 +8,7 @@ import { Field, SelectInput } from "../../components/Field";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
 import { PanelSurface } from "../../components/ui/PanelSurface";
+import { useRovingTabs } from "../../components/useRovingTabs";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { MessageKey } from "../../i18n/messages";
 import { apiRequest } from "../../lib/api";
@@ -26,6 +27,7 @@ import { AppBasicInfoDialog, type AppPatchPayload, OverviewTab } from "./workspa
 import { QueryTestTab } from "./workspace/tabs/QueryTestTab";
 import { RulesTab } from "./workspace/tabs/RulesTab";
 import { WebhookTab } from "./workspace/tabs/WebhookTab";
+import { invalidateAppDerivedQueries } from "./workspace/invalidateAppQueries";
 
 type WorkspaceTab = "overview" | "catalog" | "matrix" | "managed-scope" | "rules" | "manifest" | "credentials" | "integration" | "webhook" | "connector" | "test" | "guide";
 
@@ -53,6 +55,14 @@ export function ConsoleAppWorkspace() {
   const activeTab = TABS.some((item) => item.key === tab) ? tab : "overview";
   const activeTabIndex = TABS.findIndex((item) => item.key === activeTab);
   const tabButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const tabKeys = TABS.map((item) => item.key);
+  const activateTab = (key: WorkspaceTab) => setSearchParams({ tab: key });
+  const onTabListKeyDown = useRovingTabs({
+    activeKey: activeTab,
+    items: tabKeys,
+    refs: tabButtonRefs,
+    onActivate: activateTab,
+  });
   const [indicatorStyle, setIndicatorStyle] = useState({ left: 0, width: 0 });
   const [basicInfoEditing, setBasicInfoEditing] = useState(false);
 
@@ -69,7 +79,7 @@ export function ConsoleAppWorkspace() {
         body: { ...payload } satisfies JsonObject,
       }),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["console", "app", appKey] });
+      invalidateAppDerivedQueries(queryClient, appKey);
       setBasicInfoEditing(false);
     },
   });
@@ -113,7 +123,7 @@ export function ConsoleAppWorkspace() {
         actions={
           <div className="flex flex-col items-stretch gap-2 sm:items-end">
             <ButtonLink to="/console">{t("workspace.backToList")}</ButtonLink>
-            {app?.can_manage ? (
+            {app?.capabilities?.can_edit_basic_info ? (
               <Button
                 type="button"
                 onClick={() => {
@@ -128,9 +138,14 @@ export function ConsoleAppWorkspace() {
         }
       />
       {appQuery.error ? (
-        <StatusBanner tone="signal" title={t("workspace.loadFailed")} message={(appQuery.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("workspace.loadFailed")} message={(appQuery.error as Error).message} />
       ) : null}
-      <div className="relative mb-6 flex gap-1 overflow-x-auto border-b border-ink/12" role="tablist" aria-label={t("workspace.tablist")}>
+      <div
+        className="relative mb-6 flex gap-1 overflow-x-auto border-b border-ink/12"
+        role="tablist"
+        aria-label={t("workspace.tablist")}
+        onKeyDown={onTabListKeyDown}
+      >
         <span
           aria-hidden="true"
           className="pointer-events-none absolute bottom-0 h-0.5 bg-accent transition-[left,width] duration-200 ease-out"
@@ -145,35 +160,36 @@ export function ConsoleAppWorkspace() {
             role="tab"
             id={`workspace-tab-${item.key}`}
             aria-selected={item.key === activeTab}
-            aria-controls="workspace-tabpanel"
+            aria-controls={`workspace-tabpanel-${item.key}`}
+            tabIndex={item.key === activeTab ? 0 : -1}
             className={cn(
               "relative z-10 h-10 shrink-0 px-3 text-sm font-semibold transition-colors",
               item.key === activeTab
                 ? "text-ink"
                 : "text-ink-soft hover:text-ink",
             )}
-            onClick={() => setSearchParams({ tab: item.key })}
+            onClick={() => activateTab(item.key)}
             type="button"
           >
             {t(item.labelKey)}
           </button>
         ))}
       </div>
-      <div key={`${appKey}:${activeTab}`} id="workspace-tabpanel" role="tabpanel" aria-labelledby={`workspace-tab-${activeTab}`}>
+      <div key={`${appKey}:${activeTab}`} id={`workspace-tabpanel-${activeTab}`} role="tabpanel" aria-labelledby={`workspace-tab-${activeTab}`}>
       {activeTab === "overview" ? <OverviewTab appKey={appKey} app={app} /> : null}
       {activeTab === "catalog" ? <CatalogTab appKey={appKey} /> : null}
-      {activeTab === "matrix" ? <MatrixTab appKey={appKey} /> : null}
+      {activeTab === "matrix" ? <MatrixTab appKey={appKey} canManage={app?.capabilities?.can_manage_catalog === true} /> : null}
       {activeTab === "managed-scope" ? <ManagedScopeTab appKey={appKey} /> : null}
       {activeTab === "rules" ? <RulesTab appKey={appKey} /> : null}
       {activeTab === "manifest" ? <ManifestTab appKey={appKey} /> : null}
-      {activeTab === "credentials" ? <CredentialsTab appKey={appKey} canManage={Boolean(app?.can_manage)} /> : null}
-      {activeTab === "integration" ? <IntegrationTab appKey={appKey} canManage={Boolean(app?.can_manage)} /> : null}
+      {activeTab === "credentials" ? <CredentialsTab appKey={appKey} canManage={app?.capabilities?.can_manage_credentials === true} /> : null}
+      {activeTab === "integration" ? <IntegrationTab appKey={appKey} canManage={app?.capabilities?.can_edit_basic_info === true} /> : null}
       {activeTab === "webhook" ? <WebhookTab appKey={appKey} /> : null}
-      {activeTab === "connector" ? <ConnectorTab appKey={appKey} /> : null}
+      {activeTab === "connector" ? <ConnectorTab appKey={appKey} canManage={app?.capabilities?.can_manage_connectors === true} /> : null}
       {activeTab === "test" ? <QueryTestTab appKey={appKey} /> : null}
       {activeTab === "guide" ? <GuideTab appKey={appKey} /> : null}
       </div>
-      {app?.can_manage && basicInfoEditing ? (
+      {app?.capabilities?.can_edit_basic_info && basicInfoEditing ? (
         <AppBasicInfoDialog
           app={app}
           errorMessage={patchAppMutation.error ? (patchAppMutation.error as Error).message : ""}
@@ -223,13 +239,15 @@ function ManagedScopeTab({ appKey }: { appKey: string }) {
       ),
     onSuccess: (payload) => {
       queryClient.setQueryData(queryKey, payload);
+      invalidateAppDerivedQueries(queryClient, appKey);
     },
   });
   const effectivePolicy = policyQuery.data?.effective_managed_scope_policy ?? null;
+  const policyQueryError = policyQuery.error ?? policyQuery.failureReason;
   const teamBasedSelection = selection === "easyauth_team" || selection === "union";
   const loadState: ManagedScopeLoadState = policyQuery.isFetching || policyQuery.isPending
     ? "loading"
-    : policyQuery.isError
+    : policyQuery.isRefetchError || policyQueryError
       ? "error"
       : policyQuery.data?.managed_scope_policy
         ? "configured"
@@ -264,7 +282,7 @@ function ManagedScopeTab({ appKey }: { appKey: string }) {
         {loadState === "error" ? (
           <div className="flex flex-wrap items-center gap-3">
             <div className="min-w-0 flex-1">
-              <StatusBanner tone="signal" title={t("console.managedScope.loadFailed")} message={(policyQuery.error as Error).message} />
+              <StatusBanner live="alert" tone="signal" title={t("console.managedScope.loadFailed")} message={policyQueryError?.message ?? ""} />
             </div>
             <Button type="button" loading={policyQuery.isFetching} onClick={() => void policyQuery.refetch()}>
               {t("common.retry")}
@@ -272,7 +290,7 @@ function ManagedScopeTab({ appKey }: { appKey: string }) {
           </div>
         ) : null}
         {saveMutation.error ? (
-          <StatusBanner tone="signal" title={t("console.managedScope.saveFailed")} message={(saveMutation.error as Error).message} />
+          <StatusBanner live="alert" tone="signal" title={t("console.managedScope.saveFailed")} message={(saveMutation.error as Error).message} />
         ) : null}
         {hasAuthoritativeSnapshot ? <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(280px,360px)]">
           <div className="space-y-2">

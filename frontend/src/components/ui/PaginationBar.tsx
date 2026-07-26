@@ -4,7 +4,7 @@ import { Button } from "../Button";
 import { SelectInput } from "../Field";
 
 export const DEFAULT_TABLE_PAGE_SIZE = 10;
-export const TABLE_PAGE_SIZE_OPTIONS = [5, 10, 20, 50] as const;
+const TABLE_PAGE_SIZE_OPTIONS = [5, 10, 20, 50] as const;
 
 interface PaginationBarProps {
   pageStart: number;

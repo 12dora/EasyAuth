@@ -237,7 +237,7 @@ export function ManifestTab({ appKey }: { appKey: string }) {
           确认导入
         </Button>
       </div>
-      {versionsQuery.error ? <StatusBanner tone="signal" title="版本历史加载失败" message={(versionsQuery.error as Error).message} /> : null}
+      {versionsQuery.error ? <StatusBanner live="alert" tone="signal" title="版本历史加载失败" message={(versionsQuery.error as Error).message} /> : null}
       {currentPreview ? <ManifestDiffView preview={currentPreview.payload} /> : null}
       <div className="space-y-3">
         <h2 className="text-base font-semibold text-ink">版本历史</h2>
@@ -381,9 +381,9 @@ function CurrentManifestPanel({ appKey, onSaved }: { appKey: string; onSaved: ()
         </div>
       </div>
       {manifestQuery.error ? (
-        <StatusBanner tone="signal" title={t("manifest.current.loadFailed")} message={(manifestQuery.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("manifest.current.loadFailed")} message={(manifestQuery.error as Error).message} />
       ) : null}
-      {jsonError ? <StatusBanner tone="signal" title={jsonError} /> : null}
+      {jsonError ? <StatusBanner live="alert" tone="signal" title={jsonError} /> : null}
       {editing ? (
         <>
           <TextArea

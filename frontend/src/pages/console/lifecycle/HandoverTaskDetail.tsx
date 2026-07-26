@@ -172,7 +172,7 @@ export function HandoverTaskDetail() {
         }
       />
       {taskQuery.error && task ? (
-        <StatusBanner tone="signal" title={t("handover.detail.loadFailed")} message={(taskQuery.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("handover.detail.loadFailed")} message={(taskQuery.error as Error).message} />
       ) : null}
       {task ? (
         <section className="space-y-6">
@@ -445,7 +445,7 @@ function TransferGrantSection({
         <p className="max-w-3xl text-body leading-5 text-ink-soft">{t("handover.transfer.grantHint")}</p>
       </div>
       {templatesQuery.error ? (
-        <StatusBanner tone="signal" title={t("onboarding.templates.loadFailed")} message={(templatesQuery.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("onboarding.templates.loadFailed")} message={(templatesQuery.error as Error).message} />
       ) : null}
       <div className="flex flex-wrap items-end gap-2">
         <div className="w-64">
@@ -455,6 +455,7 @@ function TransferGrantSection({
               {templates.map((template) => (
                 <option key={template.id} value={String(template.id)}>
                   {template.name}
+                  {template.current_revision ? ` · r${template.current_revision}` : ""}
                 </option>
               ))}
             </SelectInput>
@@ -478,9 +479,15 @@ function TransferGrantSection({
               keep: keepEntries.length,
             })}
           </p>
+          <p className="text-caption text-ink-faint">
+            {t("handover.transfer.boundRevision", {
+              template: plan.template_name || "-",
+              revision: plan.template_revision ?? "-",
+            })}
+          </p>
           {confirmed ? (
-            <div role="status">
-              <StatusBanner tone="evergreen" title={t("handover.transfer.confirmedAt", { time: formatDateTime(plan.confirmed_at) })} />
+            <div>
+              <StatusBanner live="status" tone="evergreen" title={t("handover.transfer.confirmedAt", { time: formatDateTime(plan.confirmed_at) })} />
             </div>
           ) : null}
           <div className="grid gap-4 lg:grid-cols-3">
@@ -558,7 +565,11 @@ function DiffGroup({
         <ul className="grid gap-1.5">
           {entries.map((entry) => {
             const parsed = parseGrantDiffKey(entry.key);
-            const mappedName = nameMap.get(`${parsed.appKey}:${parsed.kind}:${parsed.key}`);
+            const mapKey =
+              parsed.kind === "permission"
+                ? `${parsed.appKey}:${parsed.kind}:${parsed.key}:${parsed.scopeKey}`
+                : `${parsed.appKey}:${parsed.kind}:${parsed.key}`;
+            const mappedName = entry.name || nameMap.get(mapKey);
             const kindLabel = parsed.kind === "group" ? t("handover.diff.kind.group") : t("handover.diff.kind.permission");
             const label = (
               <span className="flex min-w-0 flex-col gap-0.5">

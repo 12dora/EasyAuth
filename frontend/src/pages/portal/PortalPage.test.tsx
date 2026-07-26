@@ -179,6 +179,80 @@ describe("PortalPage access request form", () => {
           }),
         ),
       );
+      const submittedNotice = await screen.findByRole("status");
+      expect(submittedNotice).toHaveTextContent("申请已提交");
+      expect(submittedNotice).toHaveAttribute("aria-live", "polite");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("续期申请绑定当前授权修订并提交 renew payload", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/request-catalog") {
+        return jsonResponse({
+          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["manager-001"] }],
+          approver_options: [{ user_id: "manager-001", name: "直属主管" }],
+          authorization_groups: [],
+          permission_groups: [],
+          ungrouped_permissions: [
+            { id: 101, app_key: "crm", key: "crm.customer.read", name: "查看客户", scopes: [{ key: "SELF", name: "本人" }] },
+          ],
+        });
+      }
+      if (url === "/portal/api/v1/me/grants?page=1&page_size=100") {
+        return jsonResponse({
+          data: [{
+            grant_id: 42,
+            grant_revision: 7,
+            app_key: "crm",
+            app_name: "CRM",
+            groups: [],
+            grants: [{ permission: "crm.customer.read", scope: "SELF", source_type: "direct", source_key: null }],
+            grant_version: 7,
+            catalog_version: 3,
+            snapshot_version: "crm:7",
+            grant_type: "timed",
+            grant_expires_at: "2030-01-01T00:00:00+00:00",
+          }],
+          pagination: { page: 1, page_size: 100, total_items: 1, total_pages: 1 },
+        });
+      }
+      if (url === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
+        return jsonResponse({ ok: true });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage();
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "CRM (crm)" });
+      await user.selectOptions(screen.getByLabelText("申请类型"), "renew");
+      await screen.findByRole("option", { name: "CRM (crm) v7" });
+      await user.selectOptions(screen.getByLabelText("基础授权"), "42");
+      await user.type(screen.getByLabelText("过期时间"), "2030-02-01T09:00");
+      await user.type(screen.getByLabelText("申请原因"), "延长期限");
+
+      await user.click(screen.getByRole("button", { name: "提交申请" }));
+
+      await waitFor(() => {
+        const postCall = fetchMock.mock.calls.find(([input, init]) => String(input) === "/portal/api/v1/me/access-requests" && init?.method === "POST");
+        expect(postCall).toBeDefined();
+        expect(JSON.parse(String(postCall?.[1]?.body))).toMatchObject({
+          app_key: "crm",
+          request_type: "renew",
+          base_grant_id: 42,
+          base_grant_revision: 7,
+          direct_grants: [{ permission: "crm.customer.read", scope: "SELF" }],
+          approver_user_ids: ["manager-001"],
+          grant_type: "timed",
+          reason: "延长期限",
+        });
+      });
     } finally {
       vi.unstubAllGlobals();
     }
@@ -1783,6 +1857,39 @@ describe("PortalPage tables", () => {
     }
   });
 
+  test("申请历史对 submitted 申请显示撤回并调用撤回端点", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/me/access-requests?page=1&page_size=20") {
+        return jsonResponse({
+          data: [portalRequestRow({ id: 88, app_key: "crm", app_name: "CRM", status: "submitted", status_label: "已提交" })],
+          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+        });
+      }
+      if (url === "/portal/api/v1/me/access-requests/88/withdraw" && init?.method === "POST") {
+        return jsonResponse({ access_request: portalRequestRow({ id: 88, status: "withdrawn", status_label: "已撤回" }) });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage("/portal/requests");
+
+      await screen.findByText("CRM");
+      await userEvent.click(screen.getByRole("button", { name: "撤回" }));
+
+      await waitFor(() =>
+        expect(fetchMock).toHaveBeenCalledWith(
+          "/portal/api/v1/me/access-requests/88/withdraw",
+          expect.objectContaining({ method: "POST" }),
+        ),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   test.each([
     ["缺少 data", {}],
     ["data 为 null", { data: null, pagination: { page: 1, page_size: 20, total_items: 0, total_pages: 0 } }],
@@ -1842,8 +1949,10 @@ function portalGrantRow(overrides: Record<string, unknown> = {}) {
   return {
     app_key: "crm",
     app_name: "CRM",
+    grant_id: 1,
     groups: [],
     grants: [],
+    grant_revision: 1,
     grant_version: 1,
     catalog_version: 1,
     snapshot_version: "1.1",
@@ -1859,6 +1968,8 @@ function portalRequestRow(overrides: Record<string, unknown> = {}) {
     app_key: "crm",
     app_name: "CRM",
     request_type: "grant",
+    base_grant_id: null,
+    base_grant_revision: null,
     status: "pending",
     status_label: "待审批",
     grant_type: "permanent",

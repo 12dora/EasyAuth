@@ -318,7 +318,7 @@ function BasicsStep({
           <UserMultiSelect value={developerUserIds} onChange={setDeveloperUserIds} />
         </Field>
         {createMutation.error ? (
-          <StatusBanner tone="signal" title={t("wizard.basics.createFailed")} message={(createMutation.error as Error).message} />
+          <StatusBanner live="alert" tone="signal" title={t("wizard.basics.createFailed")} message={(createMutation.error as Error).message} />
         ) : null}
         <StepFooter>
           <Button type="submit" variant="primary" icon={<Plus size={16} />} loading={createMutation.isPending} disabled={createMutation.isPending}>
@@ -441,11 +441,12 @@ function AutoOnboardPanel({ onAutoOnboarded }: { onAutoOnboarded: (appKey: strin
         </Button>
       </div>
       {onboardMutation.error && onboardMutation.variables?.requestId === requestIdRef.current ? (
-        <StatusBanner tone="signal" title={t("wizard.auto.failed")} message={(onboardMutation.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("wizard.auto.failed")} message={(onboardMutation.error as Error).message} />
       ) : null}
       {result ? (
         <div className="space-y-3">
           <StatusBanner
+            live="status"
             tone="evergreen"
             title={t("wizard.auto.success")}
             message={
@@ -668,13 +669,14 @@ function CatalogStep({
         </Button>
       </div>
       {previewMutation.error && previewMutation.variables?.requestId === contentRequestIdRef.current ? (
-        <StatusBanner tone="signal" title={t("wizard.catalog.previewFailed")} message={(previewMutation.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("wizard.catalog.previewFailed")} message={(previewMutation.error as Error).message} />
       ) : null}
       {importMutation.error && importMutation.variables?.requestId === contentRequestIdRef.current ? (
-        <StatusBanner tone="signal" title={t("wizard.catalog.importFailed")} message={(importMutation.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("wizard.catalog.importFailed")} message={(importMutation.error as Error).message} />
       ) : null}
       {importedCatalogVersion ? (
         <StatusBanner
+          live="status"
           tone="evergreen"
           title={t("wizard.catalog.importSuccess")}
           message={t("wizard.catalog.currentCatalogVersion", { version: importedCatalogVersion })}
@@ -741,13 +743,14 @@ function AuthzStep({ appKey, onBack, onContinue }: { appKey: string; onBack: () 
   return (
     <StepPanel title={t("wizard.authz.title")} description={t("wizard.authz.description")}>
       {statusQuery.error ? (
-        <StatusBanner tone="signal" title={t("wizard.authz.statusLoadFailed")} message={(statusQuery.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("wizard.authz.statusLoadFailed")} message={(statusQuery.error as Error).message} />
       ) : null}
       {statusQuery.data ? (
         issues.length === 0 ? (
-          <StatusBanner tone="evergreen" title={t("wizard.authz.ready")} />
+          <StatusBanner live="status" tone="evergreen" title={t("wizard.authz.ready")} />
         ) : (
           <StatusBanner
+            live={blockingCount > 0 ? "alert" : "status"}
             tone={blockingCount > 0 ? "signal" : "amber"}
             title={t("wizard.authz.issuesFound", { count: issues.length })}
           />
@@ -921,13 +924,13 @@ function CredentialStep({
         </Button>
       </div>
       {createMutation.error ? (
-        <StatusBanner
+        <StatusBanner live="alert"
           tone="signal"
           title={t("wizard.credential.createFailed")}
           message={(createMutation.error as Error).message}
         />
       ) : exchangeMutation.error ? (
-        <StatusBanner
+        <StatusBanner live="alert"
           tone="signal"
           title={t("wizard.credential.exchangeFailed")}
           message={(exchangeMutation.error as Error).message}
@@ -1025,11 +1028,12 @@ function VerifyStep({ appKey, onBack, onContinue }: { appKey: string; onBack: ()
         </Button>
       </div>
       {testMutation.error && testMutation.variables?.requestId === requestIdRef.current ? (
-        <StatusBanner tone="signal" title={t("wizard.verify.failed")} message={(testMutation.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("wizard.verify.failed")} message={(testMutation.error as Error).message} />
       ) : null}
       {result ? (
         <>
           <StatusBanner
+            live="status"
             tone={result.allowed ? "evergreen" : "neutral"}
             title={result.allowed ? t("wizard.verify.hit") : t("wizard.verify.noHit")}
             message={`${t("wizard.verify.groupsCount", { count: result.groups?.length ?? 0 })} · ${t("wizard.verify.grantsCount", {
@@ -1102,13 +1106,13 @@ function DoneStep({
   return (
     <StepPanel title={t("wizard.done.title")} description={t("wizard.done.description")}>
       {statusQuery.error ? (
-        <StatusBanner tone="signal" title={t("wizard.authz.statusLoadFailed")} message={(statusQuery.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("wizard.authz.statusLoadFailed")} message={(statusQuery.error as Error).message} />
       ) : null}
       {statusQuery.data ? (
         issues.length === 0 ? (
-          <StatusBanner tone="evergreen" title={t("wizard.done.configReady")} />
+          <StatusBanner live="status" tone="evergreen" title={t("wizard.done.configReady")} />
         ) : (
-          <StatusBanner tone="amber" title={t("wizard.done.configIssues", { count: issues.length })} />
+          <StatusBanner live="status" tone="amber" title={t("wizard.done.configIssues", { count: issues.length })} />
         )
       ) : null}
       <div className="space-y-3">

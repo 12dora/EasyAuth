@@ -11,7 +11,9 @@ const REQUEST_STATUS_KEYS: Record<string, MessageKey> = {
   rejected: "status.request.rejected",
   grant_applied: "status.request.grantApplied",
   grant_failed: "status.request.grantFailed",
+  grant_conflict: "status.request.grantConflict",
   grant_expired: "status.request.grantExpired",
+  withdrawn: "status.request.withdrawn",
 };
 
 export function accessRequestStatusLabel(t: Translator, status: string | null | undefined): string {
@@ -32,7 +34,9 @@ export function badgeToneForAccessRequestStatus(status: string | null | undefine
       return "amber";
     case "rejected":
     case "grant_failed":
+    case "grant_conflict":
     case "grant_expired":
+    case "withdrawn":
       return "signal";
     default:
       return "neutral";
@@ -45,9 +49,7 @@ export function readinessLabel(t: Translator, status: string | null | undefined)
       return t("status.readiness.ready");
     case "warning":
       return t("status.readiness.warning");
-    // 后端配置检查的实际取值是 blocking(configuration.py); blocked 为历史兼容。
     case "blocking":
-    case "blocked":
       return t("status.readiness.blocked");
     default:
       return status ?? t("status.readiness.unknown");
@@ -61,7 +63,6 @@ export function readinessTone(status: string | null | undefined): BadgeTone {
     case "warning":
       return "amber";
     case "blocking":
-    case "blocked":
       return "signal";
     default:
       return "neutral";

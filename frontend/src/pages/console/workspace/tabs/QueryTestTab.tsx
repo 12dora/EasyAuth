@@ -1,7 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { flexRender, getCoreRowModel, getPaginationRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
 import { Play } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow } from "../../../../components/ui/TablePrimitives";
 import { PanelSurface } from "../../../../components/ui/PanelSurface";
 import { TablePagination } from "../../../../components/ui/TablePagination";
@@ -36,17 +36,28 @@ export function QueryTestTab({ appKey }: { appKey: string }) {
   const [userId, setUserId] = useState("");
   const [token, setToken] = useState("");
   const [result, setResult] = useState<StructuredQueryTestResult | null>(null);
+  const latestRequestRef = useRef(0);
   const testMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: ({ requestId, snapshot }: { requestId: number; snapshot: { userId: string; token: string } }) =>
       apiRequest<StructuredQueryTestResult>(`/console/api/v1/apps/${appKey}/permission-query-tests`, {
         method: "POST",
-        body: { user_id: userId, token },
-      }),
-    onSuccess: (payload) => {
+        body: { user_id: snapshot.userId, token: snapshot.token },
+      }).then((payload) => ({ payload, requestId })),
+    onSuccess: ({ payload, requestId }) => {
+      if (requestId !== latestRequestRef.current) {
+        return;
+      }
       setResult(payload);
       setToken("");
     },
   });
+  const submit = () => {
+    latestRequestRef.current += 1;
+    testMutation.mutate({
+      requestId: latestRequestRef.current,
+      snapshot: { userId: userId.trim(), token },
+    });
+  };
   const groupColumns: ColumnDef<QueryTestGroup>[] = [
     { header: t("console.queryTest.column.group"), cell: ({ row }) => row.original.key ?? "-" },
     { header: t("common.name"), cell: ({ row }) => row.original.name ?? "-" },
@@ -89,14 +100,15 @@ export function QueryTestTab({ appKey }: { appKey: string }) {
         <Field label="Bearer token">
           <TextInput type="password" value={token} onChange={(event) => setToken(event.currentTarget.value)} autoComplete="off" />
         </Field>
-        <Button variant="primary" icon={<Play size={16} />} disabled={!userId || !token} onClick={() => testMutation.mutate()}>
+        <Button variant="primary" icon={<Play size={16} />} disabled={!userId || !token || testMutation.isPending} onClick={submit}>
           {t("wizard.verify.run")}
         </Button>
       </PanelSurface>
-      {testMutation.error ? <StatusBanner tone="signal" title={t("wizard.verify.failed")} message={(testMutation.error as Error).message} /> : null}
+      {testMutation.error ? <StatusBanner live="alert" tone="signal" title={t("wizard.verify.failed")} message={(testMutation.error as Error).message} /> : null}
       {result ? (
         <>
           <StatusBanner
+            live="status"
             tone={result.allowed ? "evergreen" : "neutral"}
             title={result.allowed ? t("wizard.verify.hit") : t("wizard.verify.noHit")}
           />

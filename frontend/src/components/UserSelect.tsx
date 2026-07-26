@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent, ReactNode } from "react";
 
 import { useI18n } from "../i18n/I18nProvider";
@@ -56,33 +56,55 @@ function useCloseOnOutsidePointerDown(onClose: () => void) {
 }
 
 function OptionList({
+  listId,
   options,
   isLoading,
+  error,
   highlightIndex,
+  getOptionId,
   onPick,
+  onRetry,
 }: {
+  listId: string;
   options: UserOption[];
   isLoading: boolean;
+  error: Error | null;
   highlightIndex: number;
+  getOptionId: (option: UserOption) => string;
   onPick: (option: UserOption) => void;
+  onRetry: () => void;
 }) {
   const { t } = useI18n();
 
   return (
     <div
+      id={listId}
       role="listbox"
       className="absolute left-0 right-0 top-full z-30 mt-1 max-h-64 overflow-y-auto rounded-[3px] border border-ink/12 bg-paper p-1 shadow-lg"
     >
-      {isLoading && options.length === 0 ? (
+      {error ? (
+        <div className="space-y-1 px-2.5 py-1.5 text-body text-signal">
+          <p>{t("userSelect.loadFailed")}</p>
+          <button
+            type="button"
+            className="text-xs font-semibold underline"
+            onPointerDown={(event) => event.preventDefault()}
+            onClick={onRetry}
+          >
+            {t("common.retry")}
+          </button>
+        </div>
+      ) : null}
+      {!error && isLoading && options.length === 0 ? (
         <p className="px-2.5 py-1.5 text-body text-ink-faint">{t("userSelect.loading")}</p>
       ) : null}
-      {!isLoading && options.length === 0 ? (
+      {!error && !isLoading && options.length === 0 ? (
         <p className="px-2.5 py-1.5 text-body text-ink-faint">{t("userSelect.empty")}</p>
       ) : null}
-      {options.map((option, index) => (
-        <button
+      {!error ? options.map((option, index) => (
+        <div
           key={option.user_id}
-          type="button"
+          id={getOptionId(option)}
           role="option"
           aria-selected={index === highlightIndex}
           className={cn(
@@ -98,8 +120,8 @@ function OptionList({
           <span className="flex flex-wrap items-center gap-x-2 text-xs text-ink-faint">
             <code>{option.user_id}</code>
           </span>
-        </button>
-      ))}
+        </div>
+      )) : null}
     </div>
   );
 }
@@ -117,6 +139,8 @@ interface UserSearchInputProps {
 /** 单个用户 ID 输入: 聚焦即拉取候选, 支持按姓名/邮箱/ID 模糊搜索, 也允许直接输入 ID。 */
 export function UserSearchInput({ id, value, onChange, placeholder, required, ...aria }: UserSearchInputProps) {
   const { t } = useI18n();
+  const generatedId = useId();
+  const listId = `${id ?? generatedId}-listbox`;
   const [open, setOpen] = useState(false);
   const [highlightIndex, setHighlightIndex] = useState(0);
   const containerRef = useCloseOnOutsidePointerDown(() => setOpen(false));
@@ -131,6 +155,8 @@ export function UserSearchInput({ id, value, onChange, placeholder, required, ..
     onChange(option.user_id);
     setOpen(false);
   };
+  const activeOption = open ? options[highlightIndex] : undefined;
+  const getOptionId = (option: UserOption) => `${listId}-option-${encodeURIComponent(option.user_id)}`;
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Escape") {
@@ -159,6 +185,8 @@ export function UserSearchInput({ id, value, onChange, placeholder, required, ..
         role="combobox"
         aria-expanded={open}
         aria-autocomplete="list"
+        aria-controls={listId}
+        aria-activedescendant={activeOption ? getOptionId(activeOption) : undefined}
         autoComplete="off"
         required={required}
         placeholder={placeholder ?? t("userSelect.searchPlaceholder")}
@@ -173,10 +201,14 @@ export function UserSearchInput({ id, value, onChange, placeholder, required, ..
       />
       {open ? (
         <OptionList
+          listId={listId}
           options={options}
           isLoading={optionsQuery.isLoading || optionsQuery.isFetching}
+          error={optionsQuery.error as Error | null}
           highlightIndex={highlightIndex}
+          getOptionId={getOptionId}
           onPick={pick}
+          onRetry={() => void optionsQuery.refetch()}
         />
       ) : null}
     </div>
@@ -197,6 +229,8 @@ interface UserMultiSelectProps {
 /** 多个用户 ID 选择: 模糊搜索加入, 已选用户以 chip 展示, 也允许回车录入手输 ID。 */
 export function UserMultiSelect({ id, value, onChange, placeholder, searchPurpose = "employee", ...aria }: UserMultiSelectProps) {
   const { t } = useI18n();
+  const generatedId = useId();
+  const listId = `${id ?? generatedId}-listbox`;
   const [inputValue, setInputValue] = useState("");
   const [open, setOpen] = useState(false);
   const [highlightIndex, setHighlightIndex] = useState(0);
@@ -231,6 +265,8 @@ export function UserMultiSelect({ id, value, onChange, placeholder, searchPurpos
   const remove = (userId: string) => {
     onChange(value.filter((item) => item !== userId));
   };
+  const activeOption = open ? options[highlightIndex] : undefined;
+  const getOptionId = (option: UserOption) => `${listId}-option-${encodeURIComponent(option.user_id)}`;
 
   const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Escape") {
@@ -273,6 +309,8 @@ export function UserMultiSelect({ id, value, onChange, placeholder, searchPurpos
         role="combobox"
         aria-expanded={open}
         aria-autocomplete="list"
+        aria-controls={listId}
+        aria-activedescendant={activeOption ? getOptionId(activeOption) : undefined}
         autoComplete="off"
         className={value.length > 0 ? "mt-1.5" : undefined}
         placeholder={placeholder ?? t("userSelect.searchPlaceholder")}
@@ -291,10 +329,14 @@ export function UserMultiSelect({ id, value, onChange, placeholder, searchPurpos
       />
       {open ? (
         <OptionList
+          listId={listId}
           options={options}
           isLoading={optionsQuery.isLoading || optionsQuery.isFetching}
+          error={optionsQuery.error as Error | null}
           highlightIndex={highlightIndex}
+          getOptionId={getOptionId}
           onPick={(option) => add(option.user_id)}
+          onRetry={() => void optionsQuery.refetch()}
         />
       ) : null}
     </div>
@@ -316,7 +358,7 @@ function UserChip({
       <button
         type="button"
         aria-label={removeLabel}
-        className="inline-flex items-center text-ink-faint transition-colors hover:text-signal"
+        className="inline-flex min-h-6 min-w-6 items-center justify-center text-ink-faint transition-colors hover:text-signal"
         onClick={onRemove}
       >
         <X size={12} aria-hidden="true" />

@@ -144,7 +144,7 @@ export function ConsoleTeamList() {
         }
       />
       {teamsQuery.error && teams.length > 0 ? (
-        <StatusBanner tone="signal" title={t("console.teams.loadFailed")} message={(teamsQuery.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("console.teams.loadFailed")} message={(teamsQuery.error as Error).message} />
       ) : null}
       {teamsQuery.error && teams.length === 0 ? (
         <PageState
@@ -270,7 +270,7 @@ function TeamCreateDialog({
         <Field label={t("common.description")}>
           <TextArea rows={3} value={description} onChange={(event) => setDescription(event.currentTarget.value)} />
         </Field>
-        {errorMessage ? <StatusBanner tone="signal" title={t("console.teams.createFailed")} message={errorMessage} /> : null}
+        {errorMessage ? <StatusBanner live="alert" tone="signal" title={t("console.teams.createFailed")} message={errorMessage} /> : null}
       </form>
     </Dialog>
   );

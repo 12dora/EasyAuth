@@ -157,7 +157,7 @@ export function ApprovalInstancesPage() {
         />
       </div>
       {query.error && rows.length > 0 ? (
-        <StatusBanner tone="signal" title={t("console.operations.loadFailed")} message={(query.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("console.operations.loadFailed")} message={(query.error as Error).message} />
       ) : null}
       {query.error && rows.length === 0 ? (
         <PageState

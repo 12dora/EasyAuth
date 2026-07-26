@@ -5,8 +5,10 @@ import { BrowserRouter } from "react-router-dom";
 
 import { App } from "./App";
 import type { CurrentUser } from "./App";
+import { UnsupportedBrowserPage } from "./components/UnsupportedBrowserPage";
 import { ToastProvider } from "./components/ui/Toast";
 import { I18nProvider } from "./i18n/I18nProvider";
+import { checkBrowserSupport } from "./lib/browserSupport";
 import { queryClient } from "./lib/query";
 import "./styles/index.css";
 
@@ -20,18 +22,24 @@ const shell = readShell(rootElement);
 const currentUserId = readCurrentUserId(rootElement);
 const currentUser = readCurrentUser(rootElement, currentUserId);
 const brandLogoUrl = readBrandLogoUrl(rootElement);
+const root = createRoot(rootElement);
+const browserSupport = checkBrowserSupport();
 
-createRoot(rootElement).render(
+root.render(
   <StrictMode>
-    <QueryClientProvider client={queryClient}>
-      <I18nProvider>
-        <ToastProvider>
-          <BrowserRouter>
-            <App brandLogoUrl={brandLogoUrl} currentUser={currentUser} currentUserId={currentUserId} shell={shell} />
-          </BrowserRouter>
-        </ToastProvider>
-      </I18nProvider>
-    </QueryClientProvider>
+    {browserSupport.supported ? (
+      <QueryClientProvider client={queryClient}>
+        <I18nProvider>
+          <ToastProvider>
+            <BrowserRouter>
+              <App brandLogoUrl={brandLogoUrl} currentUser={currentUser} currentUserId={currentUserId} shell={shell} />
+            </BrowserRouter>
+          </ToastProvider>
+        </I18nProvider>
+      </QueryClientProvider>
+    ) : (
+      <UnsupportedBrowserPage missing={browserSupport.missing} />
+    )}
   </StrictMode>,
 );
 

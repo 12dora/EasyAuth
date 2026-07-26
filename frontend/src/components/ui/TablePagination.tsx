@@ -2,7 +2,7 @@ import type { Table } from "@tanstack/react-table";
 
 import { PaginationBar } from "./PaginationBar";
 
-export { DEFAULT_TABLE_PAGE_SIZE, TABLE_PAGE_SIZE_OPTIONS } from "./PaginationBar";
+export { DEFAULT_TABLE_PAGE_SIZE } from "./PaginationBar";
 
 interface TablePaginationProps<T> {
   table: Table<T>;

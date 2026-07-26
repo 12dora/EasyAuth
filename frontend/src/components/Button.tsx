@@ -1,4 +1,5 @@
 import type { ButtonHTMLAttributes, ReactNode } from "react";
+import { useId } from "react";
 
 import { cn } from "../lib/cn";
 
@@ -10,10 +11,11 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
   size?: ButtonSize;
   icon?: ReactNode;
   loading?: boolean;
+  loadingLabel?: string;
 }
 
 export const BUTTON_BASE_CLASSES =
-  "inline-flex shrink-0 items-center justify-center gap-2 rounded-[2px] border font-medium transition-all duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent/50 disabled:cursor-not-allowed disabled:opacity-55";
+  "inline-flex shrink-0 items-center justify-center gap-2 rounded-[2px] border font-medium transition-all duration-150 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent disabled:cursor-not-allowed disabled:opacity-55";
 
 export const BUTTON_VARIANT_CLASSES: Record<ButtonVariant, string> = {
   primary: "border-ink bg-ink text-paper hover:bg-ink/90 active:[transform:translateY(1px)]",
@@ -38,16 +40,29 @@ export function Button({
   disabled,
   icon,
   loading = false,
+  loadingLabel = "正在处理",
   size = "md",
   variant = "outline",
   children,
   ...props
 }: ButtonProps) {
+  const labelId = useId();
+  const loadingDescriptionId = useId();
+  const describedBy = loading
+    ? [props["aria-describedby"], loadingDescriptionId].filter(Boolean).join(" ")
+    : props["aria-describedby"];
+  const labelledBy =
+    loading && !props["aria-label"] && children
+      ? [props["aria-labelledby"], labelId].filter(Boolean).join(" ")
+      : props["aria-labelledby"];
   return (
     <button
       className={cn(BUTTON_BASE_CLASSES, BUTTON_VARIANT_CLASSES[variant], BUTTON_SIZE_CLASSES[size], className)}
       disabled={disabled || loading}
       {...props}
+      aria-busy={loading || undefined}
+      aria-describedby={describedBy}
+      aria-labelledby={labelledBy || undefined}
     >
       {loading ? (
         <span
@@ -60,7 +75,12 @@ export function Button({
           {icon}
         </span>
       ) : null}
-      {children ? <span>{children}</span> : null}
+      {children ? <span id={loading && !props["aria-label"] ? labelId : undefined}>{children}</span> : null}
+      {loading ? (
+        <span id={loadingDescriptionId} className="sr-only">
+          {loadingLabel}
+        </span>
+      ) : null}
     </button>
   );
 }

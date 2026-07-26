@@ -208,7 +208,7 @@ function ToastViewport({
   }
   return createPortal(
     <div
-      className="pointer-events-none fixed right-4 top-4 z-[1100] flex w-[360px] max-w-[calc(100vw-2rem)] flex-col gap-2"
+      className="pointer-events-none fixed right-4 top-4 z-[1100] flex max-h-[min(60vh,28rem)] w-[360px] max-w-[calc(100vw-2rem)] flex-col gap-2 overflow-y-auto max-[480px]:bottom-4 max-[480px]:top-auto max-[480px]:w-[calc(100vw-2rem)]"
       data-testid="toast-viewport"
       aria-live="polite"
       aria-relevant="additions text"
@@ -262,7 +262,7 @@ function ToastCard({
         type="button"
         aria-label={dismissLabel}
         onClick={onDismiss}
-        className="shrink-0 bg-transparent text-ink-faint transition-colors hover:text-ink"
+        className="inline-flex min-h-6 min-w-6 shrink-0 items-center justify-center bg-transparent text-ink-faint transition-colors hover:text-ink"
       >
         <X size={15} aria-hidden="true" />
       </button>

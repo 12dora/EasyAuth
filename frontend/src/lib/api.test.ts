@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-import { apiRequest, itemsFromPayload, readCsrfToken } from "./api";
+import { API_SESSION_EXPIRED_EVENT, apiRequest, itemsFromPayload, readCsrfToken } from "./api";
 
 const domainSource = readFileSync(resolve(process.cwd(), "src/lib/domain.ts"), "utf8");
 
@@ -85,6 +85,44 @@ describe("apiRequest", () => {
     expect(message).toContain("500");
   });
 
+  test("非 JSON 成功响应作为协议错误失败", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("<html>login page</html>", {
+        status: 200,
+        headers: { "Content-Type": "text/html" },
+      }),
+    );
+
+    await expect(apiRequest("/console/api/v1/settings/integrations")).rejects.toMatchObject({
+      status: 200,
+      code: "UNEXPECTED_RESPONSE_TYPE",
+    });
+  });
+
+  test("损坏 JSON 成功响应作为协议错误失败", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response("{bad-json", {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+
+    await expect(apiRequest("/console/api/v1/settings/integrations")).rejects.toMatchObject({
+      status: 200,
+      code: "INVALID_JSON_RESPONSE",
+    });
+  });
+
+  test("网络失败归一化为稳定错误码", async () => {
+    vi.spyOn(globalThis, "fetch").mockRejectedValue(new TypeError("Failed to fetch"));
+
+    await expect(apiRequest("/console/api/v1/apps")).rejects.toMatchObject({
+      status: 0,
+      code: "NETWORK_ERROR",
+      message: "网络连接失败，请检查网络后重试。",
+    });
+  });
+
   test("解析统一错误结构", async () => {
     vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(
@@ -109,6 +147,33 @@ describe("apiRequest", () => {
       details: { field: "app_key" },
     });
   });
+
+  test("401 响应发布单一会话失效事件", async () => {
+    const listener = vi.fn();
+    window.addEventListener(API_SESSION_EXPIRED_EVENT, listener);
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          error: {
+            code: "AUTHENTICATION_FAILED",
+            message: "控制台登录已失效。",
+          },
+        }),
+        {
+          status: 401,
+          headers: { "Content-Type": "application/json" },
+        },
+      ),
+    );
+
+    await apiRequest("/console/api/v1/apps").catch(() => undefined);
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(listener.mock.calls[0]?.[0]).toMatchObject({
+      detail: { code: "AUTHENTICATION_FAILED", message: "控制台登录已失效。" },
+    });
+    window.removeEventListener(API_SESSION_EXPIRED_EVENT, listener);
+  });
 });
 
 describe("readCsrfToken", () => {
@@ -120,9 +185,13 @@ describe("readCsrfToken", () => {
 });
 
 describe("itemsFromPayload", () => {
-  test("缺少列表数据时返回稳定空数组引用", () => {
-    expect(itemsFromPayload(undefined)).toBe(itemsFromPayload(undefined));
-    expect(itemsFromPayload({})).toBe(itemsFromPayload({ data: undefined }));
+  test("未加载数据时返回稳定空数组引用", () => {
+    expect(itemsFromPayload(undefined)).toEqual([]);
+    expect(itemsFromPayload(null)).toEqual([]);
+  });
+
+  test("成功信封缺少列表数据时快速失败", () => {
+    expect(() => itemsFromPayload({})).toThrow("列表响应契约异常");
   });
 
   test("保留 payload 中已有列表引用", () => {
@@ -131,14 +200,8 @@ describe("itemsFromPayload", () => {
     expect(itemsFromPayload<{ id: number }>({ data: items })).toBe(items);
   });
 
-  test("payload.data 非数组时返回空数组并在开发环境告警(不静默兜底)", () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    try {
-      expect(itemsFromPayload({ data: "oops" })).toEqual([]);
-      expect(warnSpy).toHaveBeenCalled();
-    } finally {
-      warnSpy.mockRestore();
-    }
+  test("payload.data 非数组时快速失败", () => {
+    expect(() => itemsFromPayload({ data: "oops" })).toThrow("列表响应契约异常");
   });
 });
 

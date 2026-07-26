@@ -51,7 +51,7 @@ test("连接器动线: 选择类型 → 测试连接 → 保存启用 → 配置
   await expect(page.getByRole("heading", { name: "出站供给连接器" })).toBeVisible();
 
   // 1. 选择连接器类型, schema 驱动的表单出现。
-  await page.getByLabel("连接器类型").selectOption("netbird");
+  await page.getByLabel("连接器类型").selectOption({ label: "NetBird VPN" });
   await expect(page.getByLabel(/管理 API 地址/)).toBeVisible();
 
   // 2. 填配置并勾选启用: 首次启用前保存按钮被测试门槛拦住。
@@ -92,14 +92,14 @@ async function setConsoleAdmin(page: Page) {
     await route.fulfill({
       response,
       body: html
-        .replace("<body", '<body data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001"')
+        .replace("<body", '<body data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001" data-current-user-is-superuser="true"')
         .replace(
           '<div id="root"',
-          '<div id="root" data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001"',
+          '<div id="root" data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001" data-current-user-is-superuser="true"',
         )
         .replace(
           '<div id="easyauth-root"',
-          '<div id="easyauth-root" data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001"',
+          '<div id="easyauth-root" data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001" data-current-user-is-superuser="true"',
         ),
       headers: { ...response.headers(), "content-type": "text/html" },
     });
@@ -107,7 +107,7 @@ async function setConsoleAdmin(page: Page) {
 }
 
 async function mockConsoleApp(page: Page) {
-  await page.route("**/console/api/v1/apps/demo", async (route) => {
+  await page.route((url) => url.pathname === "/console/api/v1/apps/demo", async (route) => {
     await route.fulfill({
       contentType: "application/json",
       json: {
@@ -117,6 +117,9 @@ async function mockConsoleApp(page: Page) {
           name: "Demo App",
           description: "Demo console app",
           can_manage: true,
+          capabilities: {
+            can_manage_connectors: true,
+          },
         },
       },
     });
@@ -170,12 +173,14 @@ async function mockConnectorApis(
       json: { ok: true, message: "连接成功, NetBird 现有 2 个组。" },
     });
   });
-  await page.route("**/console/api/v1/apps/demo/authorization-groups", async (route) => {
+  await page.route("**/console/api/v1/apps/demo/authorization-groups**", async (route) => {
     await route.fulfill({
       contentType: "application/json",
       json: {
         data: [
           {
+            id: 10,
+            app_key: "demo",
             key: "vpn-users",
             kind: "bundle",
             name: "VPN 基础准入",
@@ -184,6 +189,7 @@ async function mockConnectorApis(
             grants: [],
           },
         ],
+        pagination: { page: 1, page_size: 100, total_items: 1, total_pages: 1 },
       },
     });
   });
@@ -199,12 +205,15 @@ async function mockConnectorApis(
         auto_create: entry.auto_create,
       }));
     }
-    await route.fulfill({ contentType: "application/json", json: { data: state.mappings } });
+    await route.fulfill({ contentType: "application/json", json: { data: state.mappings, revision: "a".repeat(64) } });
   });
   await page.route("**/console/api/v1/apps/demo/connectors/1/external-groups", async (route) => {
     await route.fulfill({
       contentType: "application/json",
-      json: { data: [{ ref: "vpn-users", name: "vpn-users" }] },
+      json: {
+        data: [{ ref: "vpn-users", name: "vpn-users" }],
+        pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+      },
     });
   });
   await page.route("**/console/api/v1/apps/demo/connectors/1/sync-runs*", async (route) => {

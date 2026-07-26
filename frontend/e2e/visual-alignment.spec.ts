@@ -2,14 +2,17 @@ import { expect, test, type Locator, type Page } from "@playwright/test";
 
 const TARGETS = [
   { path: "/console", marker: "应用列表" },
-  { path: "/console/operations/access-requests", marker: "申请运营" },
+  { path: "/console/operations/access-requests", marker: "待审批" },
   { path: "/portal", marker: "我的权限" },
   { path: "/portal/request", marker: "申请权限" },
 ];
 
 const VIEWPORTS = [
   { name: "desktop", width: 1280, height: 800 },
+  { name: "tablet900", width: 900, height: 800 },
+  { name: "tablet768", width: 768, height: 800 },
   { name: "mobile390", width: 390, height: 844 },
+  { name: "mobile320", width: 320, height: 740 },
 ];
 
 for (const viewport of VIEWPORTS) {
@@ -23,9 +26,14 @@ for (const viewport of VIEWPORTS) {
 
       await expect(page.getByText(target.marker).first()).toBeVisible();
       await expect(page.getByTestId("route-transition")).toHaveAttribute("data-route-pathname", target.path);
+      await expectSeedDataIsVisible(page, target.path);
       await expectVisibleControlsAreClickable(page.getByRole("main"));
       if (target.path === "/console") {
+        await expectPageHeaderActionsAreUsable(page);
         await expectCreateAppDialogIsCovered(page);
+      }
+      if (target.path === "/console" || target.path === "/portal") {
+        await expectTablesUseLocalHorizontalScroll(page);
       }
       await expectVisibleTextFits(page);
     });
@@ -33,7 +41,7 @@ for (const viewport of VIEWPORTS) {
 }
 
 async function expectCreateAppDialogIsCovered(page: Page) {
-  await page.getByRole("button", { name: "新建应用" }).click();
+  await page.getByRole("button", { name: "快速新建" }).click();
   const dialog = page.getByRole("dialog", { name: "新建应用" });
   await expect(dialog).toBeVisible();
   await expect(page.getByLabel("app_key")).toBeVisible();
@@ -41,6 +49,12 @@ async function expectCreateAppDialogIsCovered(page: Page) {
   await expect(page.getByLabel("描述")).toBeVisible();
   await expect(page.getByRole("button", { name: "创建" })).toBeVisible();
   await expectVisibleControlsAreClickable(dialog);
+}
+
+async function expectPageHeaderActionsAreUsable(page: Page) {
+  await expect(page.getByRole("button", { name: "刷新" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "快速新建" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "接入向导" })).toBeVisible();
 }
 
 async function setConsoleAdmin(page: Page) {
@@ -55,14 +69,14 @@ async function setConsoleAdmin(page: Page) {
     await route.fulfill({
       response,
       body: html
-        .replace("<body", '<body data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001"')
+        .replace("<body", '<body data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001" data-current-user-is-superuser="true"')
         .replace(
           '<div id="root"',
-          '<div id="root" data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001"',
+          '<div id="root" data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001" data-current-user-is-superuser="true"',
         )
         .replace(
           '<div id="easyauth-root"',
-          '<div id="easyauth-root" data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001"',
+          '<div id="easyauth-root" data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001" data-current-user-is-superuser="true"',
         ),
       headers: { ...response.headers(), "content-type": "text/html" },
     });
@@ -72,21 +86,23 @@ async function setConsoleAdmin(page: Page) {
     document.addEventListener("DOMContentLoaded", () => {
       document.body.dataset.currentUserRole = "EasyAuth Admins";
       document.body.dataset.currentUserId = "admin-001";
+      document.body.dataset.currentUserIsSuperuser = "true";
       const root = document.getElementById("easyauth-root") ?? document.getElementById("root");
       if (root) {
         root.dataset.currentUserRole = "EasyAuth Admins";
         root.dataset.currentUserId = "admin-001";
+        root.dataset.currentUserIsSuperuser = "true";
       }
     });
   });
 }
 
 async function mockVisualData(page: Page) {
-  await page.route("**/console/api/v1/apps", async (route) => {
+  await page.route("**/console/api/v1/apps**", async (route) => {
     await route.fulfill({
       contentType: "application/json",
       json: {
-        items: [
+        data: [
           {
             id: 1,
             app_key: "demo",
@@ -99,14 +115,15 @@ async function mockVisualData(page: Page) {
             can_manage: true,
           },
         ],
+        pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
       },
     });
   });
-  await page.route("**/console/api/v1/operations/access-requests", async (route) => {
+  await page.route("**/console/api/v1/operations/access-requests**", async (route) => {
     await route.fulfill({
       contentType: "application/json",
       json: {
-        items: [
+        data: [
           {
             id: 2001,
             user_id: "employee-001",
@@ -116,26 +133,30 @@ async function mockVisualData(page: Page) {
             submitted_at: "2026-07-01T00:00:00Z",
           },
         ],
+        pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
       },
     });
   });
-  await page.route("**/portal/api/v1/me/grants", async (route) => {
+  await page.route((url) => url.pathname === "/portal/api/v1/me/grants", async (route) => {
     await route.fulfill({
       contentType: "application/json",
       json: {
-        items: [
+        data: [
           {
             app_key: "demo",
             app_name: "Demo App",
             grant_type: "permanent",
             grant_expires_at: null,
+            grant_id: 101,
+            grant_revision: 1,
             groups: [{ key: "reader", kind: "role", name: "只读角色" }],
             grants: [{ permission: "invoice.read", scope: "customer_id", source_type: "authorization_group", source_key: "reader" }],
-            grant_version: "grant-visual-v1",
-            catalog_version: "catalog-visual-v1",
+            grant_version: 1,
+            catalog_version: 1,
             snapshot_version: "snapshot-visual-v1",
           },
         ],
+        pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
       },
     });
   });
@@ -171,6 +192,36 @@ async function mockVisualData(page: Page) {
       },
     });
   });
+}
+
+async function expectSeedDataIsVisible(page: Page, path: string) {
+  if (path === "/console" || path === "/portal") {
+    await expect(page.getByText("Demo App").first()).toBeVisible();
+  }
+  if (path === "/portal") {
+    await expect(page.getByText("invoice.read").first()).toBeVisible();
+  }
+  if (path === "/console/operations/access-requests") {
+    await expect(page.getByText("employee-001").first()).toBeVisible();
+  }
+}
+
+async function expectTablesUseLocalHorizontalScroll(page: Page) {
+  const tableFrames = page.locator(".paper-card:has(table)");
+  const count = await tableFrames.count();
+  expect(count).toBeGreaterThan(0);
+  for (let index = 0; index < count; index += 1) {
+    const frame = tableFrames.nth(index);
+    const hasLocalScroll = await frame.evaluate((element) => {
+      const scroller = element.firstElementChild;
+      const table = element.querySelector("table");
+      if (!(scroller instanceof HTMLElement) || !(table instanceof HTMLElement)) {
+        return false;
+      }
+      return scroller.scrollWidth >= table.getBoundingClientRect().width && table.getBoundingClientRect().width >= 760;
+    });
+    expect(hasLocalScroll).toBe(true);
+  }
 }
 
 async function expectVisibleControlsAreClickable(scope: Page | Locator) {

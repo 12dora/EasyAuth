@@ -1,5 +1,6 @@
 import { LogOut, ShieldCheck } from "lucide-react";
-import { useId } from "react";
+import { useEffect, useId, useRef } from "react";
+import type { KeyboardEvent } from "react";
 import { Link } from "react-router-dom";
 
 import type { CurrentUser } from "../../App";
@@ -18,6 +19,9 @@ interface UserSummaryProps {
 export function UserSummary({ currentUser, mode, open, onOpenChange }: UserSummaryProps) {
   const { t } = useI18n();
   const menuId = useId();
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const menuItemRefs = useRef<Array<HTMLElement | null>>([]);
+  const shouldRestoreFocusRef = useRef(false);
   const userName = firstPresent(
     currentUser.displayName,
     mode === "console" ? t("shell.user.consoleFallback") : t("shell.user.portalFallback"),
@@ -25,13 +29,62 @@ export function UserSummary({ currentUser, mode, open, onOpenChange }: UserSumma
   const userRole = firstPresent(currentUser.role, t("shell.user.ungrouped"));
   const logoutUrl = localLogoutUrl(currentUser.logoutUrl);
   const avatarUrl = safeAvatarUrl(currentUser.avatarUrl);
-  const securityHref = mode === "console" ? "/console/settings" : "/portal/settings";
   const avatarLabel = userName.slice(0, 1).toUpperCase();
   const csrfToken = readCsrfToken();
+
+  useEffect(() => {
+    if (open) {
+      window.requestAnimationFrame(() => menuItemRefs.current[0]?.focus());
+      return;
+    }
+    if (shouldRestoreFocusRef.current) {
+      shouldRestoreFocusRef.current = false;
+      window.requestAnimationFrame(() => triggerRef.current?.focus());
+    }
+  }, [open]);
+
+  const closeAndReturnFocus = () => {
+    shouldRestoreFocusRef.current = true;
+    onOpenChange(false);
+  };
+
+  const onTriggerKeyDown = (event: KeyboardEvent<HTMLButtonElement>) => {
+    if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      onOpenChange(true);
+    }
+  };
+
+  const onMenuKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    const items = menuItemRefs.current.filter((item): item is HTMLElement => item !== null);
+    const currentIndex = items.findIndex((item) => item === document.activeElement);
+    const nextIndex =
+      event.key === "ArrowDown"
+        ? (currentIndex + 1) % items.length
+        : event.key === "ArrowUp"
+          ? (currentIndex - 1 + items.length) % items.length
+          : event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? items.length - 1
+              : -1;
+
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeAndReturnFocus();
+      return;
+    }
+    if (nextIndex === -1) {
+      return;
+    }
+    event.preventDefault();
+    items[nextIndex]?.focus();
+  };
 
   return (
     <div className="user-menu">
       <button
+        ref={triggerRef}
         type="button"
         className="user-menu-trigger"
         aria-label={t("shell.userMenu")}
@@ -39,6 +92,7 @@ export function UserSummary({ currentUser, mode, open, onOpenChange }: UserSumma
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
         onClick={() => onOpenChange(!open)}
+        onKeyDown={onTriggerKeyDown}
       >
         <span className="user-summary">
           <strong>{userName}</strong>
@@ -53,14 +107,31 @@ export function UserSummary({ currentUser, mode, open, onOpenChange }: UserSumma
         )}
       </button>
       {open ? (
-        <div className="user-menu-popover topbar-popover" id={menuId} data-open="true" role="menu">
-          <Link className="user-menu-item" to={securityHref} role="menuitem" onClick={() => onOpenChange(false)}>
-            <ShieldCheck size={15} aria-hidden="true" />
-            <span>{t("shell.securitySettings")}</span>
-          </Link>
+        <div className="user-menu-popover topbar-popover" id={menuId} data-open="true" role="menu" onKeyDown={onMenuKeyDown}>
+          {mode === "console" ? (
+            <Link
+              ref={(node) => {
+                menuItemRefs.current[0] = node;
+              }}
+              className="user-menu-item"
+              to="/console/settings"
+              role="menuitem"
+              onClick={() => onOpenChange(false)}
+            >
+              <ShieldCheck size={15} aria-hidden="true" />
+              <span>{t("shell.securitySettings")}</span>
+            </Link>
+          ) : null}
           <form action={logoutUrl} aria-label={t("shell.logout")} method="post">
             {csrfToken ? <input type="hidden" name="csrfmiddlewaretoken" value={csrfToken} /> : null}
-            <button type="submit" className="user-menu-item user-menu-item-danger" role="menuitem">
+            <button
+              ref={(node) => {
+                menuItemRefs.current[mode === "console" ? 1 : 0] = node;
+              }}
+              type="submit"
+              className="user-menu-item user-menu-item-danger"
+              role="menuitem"
+            >
               <LogOut size={15} aria-hidden="true" />
               <span>{t("shell.logout")}</span>
             </button>

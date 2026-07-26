@@ -1,3 +1,5 @@
+import type { HTMLAttributes } from "react";
+
 import type { BadgeTone } from "../lib/status";
 import { toneIcon } from "./toneIcon";
 
@@ -7,6 +9,7 @@ interface StatusBannerProps {
   tone?: StatusBannerTone;
   title: string;
   message?: string;
+  live?: "alert" | "status" | "off";
 }
 
 const TONE_CLASSES: Record<StatusBannerTone, string> = {
@@ -17,10 +20,16 @@ const TONE_CLASSES: Record<StatusBannerTone, string> = {
   bond: "border-bond/30 bg-bond/8 text-bond",
 };
 
-export function StatusBanner({ tone = "neutral", title, message }: StatusBannerProps) {
+export function StatusBanner({ tone = "neutral", title, message, live = "off" }: StatusBannerProps) {
   const Icon = toneIcon(tone);
+  const liveProps: Pick<HTMLAttributes<HTMLDivElement>, "aria-live" | "role"> =
+    live === "alert"
+      ? { role: "alert" }
+      : live === "status"
+        ? { role: "status", "aria-live": "polite" }
+        : {};
   return (
-    <div className={`flex items-start gap-3 rounded-[3px] border px-4 py-3 ${TONE_CLASSES[tone]}`}>
+    <div className={`flex items-start gap-3 rounded-[3px] border px-4 py-3 ${TONE_CLASSES[tone]}`} {...liveProps}>
       <Icon size={18} className="mt-0.5 shrink-0" />
       <div className="min-w-0">
         <strong className="block text-sm font-semibold leading-5">{title}</strong>

@@ -12,7 +12,7 @@ export function collectPermissionKeys(groups: PermissionGroupItem[], ungroupedPe
   return [...collectPermissions(groups).map((permission) => permission.key), ...ungroupedPermissions.map((permission) => permission.key)];
 }
 
-export function collectPermissions(groups: PermissionGroupItem[]): PermissionItem[] {
+function collectPermissions(groups: PermissionGroupItem[]): PermissionItem[] {
   return groups.flatMap((group) => collectGroupPermissions(group));
 }
 
@@ -53,7 +53,7 @@ export function filterGroupsByApp(groups: PermissionGroupItem[], appKey: string)
     }));
 }
 
-export function filterGroupByApp(group: PermissionGroupItem, appKey: string): PermissionGroupItem | null {
+function filterGroupByApp(group: PermissionGroupItem, appKey: string): PermissionGroupItem | null {
   if (group.app_key && group.app_key !== appKey) {
     return null;
   }
@@ -66,7 +66,7 @@ export function filterGroupByApp(group: PermissionGroupItem, appKey: string): Pe
   };
 }
 
-export function filterPermissionByApp(permission: PermissionItem, appKey: string): PermissionItem | null {
+function filterPermissionByApp(permission: PermissionItem, appKey: string): PermissionItem | null {
   return permissionMatchesApp(permission, appKey) ? permission : null;
 }
 

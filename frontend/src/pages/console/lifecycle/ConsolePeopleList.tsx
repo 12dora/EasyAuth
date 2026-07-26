@@ -145,7 +145,7 @@ export function ConsolePeopleList() {
         />
       </div>
       {peopleQuery.error && people.length > 0 ? (
-        <StatusBanner tone="signal" title={t("people.loadFailed")} message={(peopleQuery.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("people.loadFailed")} message={(peopleQuery.error as Error).message} />
       ) : null}
       {peopleQuery.error && people.length === 0 ? (
         <PageState
@@ -326,7 +326,7 @@ function HandoverStartDialog({
         <Field label={t("people.startDialog.reason")} hint={t("people.startDialog.reasonHint")}>
           <TextArea rows={3} value={reason} onChange={(event) => setReason(event.currentTarget.value)} />
         </Field>
-        {errorMessage ? <StatusBanner tone="signal" title={t("people.startFailed")} message={errorMessage} /> : null}
+        {errorMessage ? <StatusBanner live="alert" tone="signal" title={t("people.startFailed")} message={errorMessage} /> : null}
       </form>
     </Dialog>
   );

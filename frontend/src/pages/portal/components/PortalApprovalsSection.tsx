@@ -19,6 +19,7 @@ import { TablePagination } from "../../../components/ui/TablePagination";
 import { EmptyState } from "../../../components/ui/EmptyState";
 import { PageState } from "../../../components/ui/PageState";
 import { MONO_TEXT_CLASS } from "../../../components/ui/tableStyles";
+import { useRovingTabs } from "../../../components/useRovingTabs";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { ApiError, apiRequest } from "../../../lib/api";
 import type { Pagination } from "../../../lib/api";
@@ -33,11 +34,13 @@ import {
 import type { Translator } from "../../../lib/status";
 
 type ApprovalTab = "pending" | "processed";
+const APPROVAL_TAB_KEYS = ["pending", "processed"] as const satisfies readonly ApprovalTab[];
 
 type ApprovalNoticeKey =
   | "approvals.approved"
   | "approvals.rejected"
   | "approvals.conflict"
+  | "approvals.resubmitRequired"
   | "approvals.grantFailedCommitted"
   | "status.request.grantExpired"
   | "";
@@ -62,6 +65,8 @@ interface PortalApprovalRow {
   app_key: string;
   app_name: string;
   request_type: string;
+  base_grant_id: number | null;
+  base_grant_revision: number | null;
   status: string;
   status_label: string;
   grant_type: string;
@@ -95,6 +100,7 @@ const APPROVAL_STATUSES = new Set([
   "rejected",
   "grant_applied",
   "grant_failed",
+  "grant_conflict",
   "grant_expired",
 ]);
 const APPROVAL_GRANT_TYPES = new Set(["permanent", "timed"]);
@@ -103,6 +109,8 @@ const APPROVAL_ROW_KEYS = [
   "app_key",
   "app_name",
   "request_type",
+  "base_grant_id",
+  "base_grant_revision",
   "status",
   "status_label",
   "grant_type",
@@ -173,7 +181,11 @@ export function PortalApprovalsSection() {
         void queryClient.invalidateQueries({ queryKey: ["portal", "approvals"] });
       } else if (error instanceof ApiError && error.status === 409) {
         setPendingDecision(null);
-        setNoticeKey("approvals.conflict");
+        setNoticeKey(
+          applicationConflictRequiresResubmit(error)
+            ? "approvals.resubmitRequired"
+            : "approvals.conflict",
+        );
         void queryClient.invalidateQueries({ queryKey: ["portal", "approvals"] });
       }
     },
@@ -210,6 +222,13 @@ export function PortalApprovalsSection() {
   }, [clampedPageIndex, pagination.pageIndex]);
 
   const columns = approvalColumns(t, tab, decisionMutation.isPending, openDecision);
+  const tabButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const onTabListKeyDown = useRovingTabs({
+    activeKey: tab,
+    items: APPROVAL_TAB_KEYS,
+    refs: tabButtonRefs,
+    onActivate: switchTab,
+  });
   const table = useReactTable({
     data: approvals,
     columns,
@@ -229,15 +248,24 @@ export function PortalApprovalsSection() {
 
   return (
     <>
-      <div className="mb-4 flex gap-1 border-b border-ink/12" role="tablist" aria-label={t("portal.approvals.tablist")}>
-        {(["pending", "processed"] as const).map((item) => (
+      <div
+        className="mb-4 flex gap-1 border-b border-ink/12"
+        role="tablist"
+        aria-label={t("portal.approvals.tablist")}
+        onKeyDown={onTabListKeyDown}
+      >
+        {APPROVAL_TAB_KEYS.map((item, index) => (
           <button
             key={item}
+            ref={(node) => {
+              tabButtonRefs.current[index] = node;
+            }}
             type="button"
             role="tab"
             id={`portal-approvals-tab-${item}`}
             aria-selected={item === tab}
-            aria-controls="portal-approvals-tabpanel"
+            aria-controls={`portal-approvals-tabpanel-${item}`}
+            tabIndex={item === tab ? 0 : -1}
             className={cn(
               "relative -mb-px h-10 shrink-0 border-b-2 px-3 text-sm font-semibold transition-colors",
               item === tab ? "border-accent text-ink" : "border-transparent text-ink-soft hover:text-ink",
@@ -249,12 +277,22 @@ export function PortalApprovalsSection() {
         ))}
       </div>
       {noticeKey ? (
-        <div className="mb-4" role="status">
+        <div className="mb-4">
           <StatusBanner
+            live={
+              noticeKey === "approvals.conflict" ||
+              noticeKey === "approvals.resubmitRequired" ||
+              noticeKey === "approvals.grantFailedCommitted" ||
+              noticeKey === "status.request.grantExpired"
+                ? "alert"
+                : "status"
+            }
             tone={
               noticeKey === "approvals.conflict"
                 ? "amber"
-                : noticeKey === "approvals.grantFailedCommitted" || noticeKey === "status.request.grantExpired"
+                : noticeKey === "approvals.resubmitRequired" ||
+                    noticeKey === "approvals.grantFailedCommitted" ||
+                    noticeKey === "status.request.grantExpired"
                   ? "signal"
                   : "evergreen"
             }
@@ -268,9 +306,9 @@ export function PortalApprovalsSection() {
         </div>
       ) : null}
       {query.error && approvals.length > 0 ? (
-        <StatusBanner tone="signal" title={t("portal.approvals.loadFailed")} message={(query.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("portal.approvals.loadFailed")} message={(query.error as Error).message} />
       ) : null}
-      <div id="portal-approvals-tabpanel" role="tabpanel" aria-labelledby={`portal-approvals-tab-${tab}`}>
+      <div id={`portal-approvals-tabpanel-${tab}`} role="tabpanel" aria-labelledby={`portal-approvals-tab-${tab}`}>
         {query.error && approvals.length === 0 ? (
           <PageState
             tone="signal"
@@ -510,6 +548,7 @@ function decisionDetails(
   if (error || !approval) {
     return (
       <StatusBanner
+        live="alert"
         tone="signal"
         title={t("portal.approvals.detailLoadFailed")}
         message={error?.message}
@@ -534,6 +573,14 @@ function decisionDetails(
         ) : null}
         <dt className="text-ink-faint">{t("portal.column.reason")}</dt>
         <dd>{approval.reason || "-"}</dd>
+        {approval.request_type !== "grant" ? (
+          <>
+            <dt className="text-ink-faint">{t("portal.approvals.baseRevision")}</dt>
+            <dd>
+              {approval.base_grant_id}.{approval.base_grant_revision}
+            </dd>
+          </>
+        ) : null}
       </dl>
       {decisionAlreadyCommitted ? (
         <StatusBanner tone="amber" title={t("approvals.conflict")} />
@@ -606,6 +653,16 @@ function committedGrantStatus(error: unknown, expectedApprovalId: number): Commi
     : null;
 }
 
+function applicationConflictRequiresResubmit(error: ApiError): boolean {
+  if (!isRecord(error.details)) {
+    return false;
+  }
+  return (
+    error.details.reason === "base_grant_revision_conflict" ||
+    error.details.reason === "request_expired"
+  );
+}
+
 function parseApprovalListPayload(payload: unknown, errorMessage: string): ApprovalListPayload {
   if (
     !isRecord(payload) ||
@@ -663,6 +720,7 @@ function isPortalApprovalRow(value: unknown): value is PortalApprovalRow {
     value.id > 0 &&
     requiredStrings.every(isNonEmptyString) &&
     APPROVAL_REQUEST_TYPES.has(value.request_type as string) &&
+    isLifecycleBaseGrantShape(value.request_type as string, value.base_grant_id, value.base_grant_revision) &&
     APPROVAL_STATUSES.has(value.status as string) &&
     APPROVAL_GRANT_TYPES.has(value.grant_type as string) &&
     isNullableDateTimeString(value.grant_expires_at) &&
@@ -679,6 +737,17 @@ function isPortalApprovalRow(value: unknown): value is PortalApprovalRow {
     value.approver_user_ids.every((item) => typeof item === "string") &&
     isNullableString(value.decided_by)
   );
+}
+
+function isLifecycleBaseGrantShape(
+  requestType: string,
+  baseGrantId: unknown,
+  baseGrantRevision: unknown,
+): boolean {
+  if (requestType === "grant") {
+    return baseGrantId === null && baseGrantRevision === null;
+  }
+  return isIntegerAtLeast(baseGrantId, 1) && isIntegerAtLeast(baseGrantRevision, 1);
 }
 
 function isApprovalAuthorizationGroup(value: unknown): value is ApprovalAuthorizationGroup {

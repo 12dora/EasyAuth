@@ -29,8 +29,24 @@ describe("ConsoleAppList", () => {
       if (url.startsWith("/console/api/v1/apps?") && !init?.method) {
         return jsonResponse({
           data: [
-            { id: 1, app_key: "crm", name: "CRM", owners: ["owner-a"], is_active: true, updated_at: "2026-07-01T09:00:00Z" },
-            { id: 2, app_key: "billing", name: "Billing", owners: ["owner-b"], is_active: false, updated_at: "2026-07-01T09:00:00Z" },
+            {
+              id: 1,
+              app_key: "crm",
+              name: "CRM",
+              owners: ["owner-a"],
+              is_active: true,
+              updated_at: "2026-07-01T09:00:00Z",
+              capabilities: { can_delete: true, can_toggle_active: true },
+            },
+            {
+              id: 2,
+              app_key: "billing",
+              name: "Billing",
+              owners: ["owner-b"],
+              is_active: false,
+              updated_at: "2026-07-01T09:00:00Z",
+              capabilities: { can_delete: true, can_toggle_active: true },
+            },
           ],
         });
       }

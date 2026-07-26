@@ -205,7 +205,7 @@ export function ApprovalTemplatesPage() {
         }
       />
       {templatesQuery.error && templates.length > 0 ? (
-        <StatusBanner tone="signal" title={t("approvalTemplates.loadFailed")} message={(templatesQuery.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("approvalTemplates.loadFailed")} message={(templatesQuery.error as Error).message} />
       ) : null}
       {templatesQuery.error && templates.length === 0 ? (
         <PageState
@@ -493,7 +493,7 @@ function TemplateEditorDialog({
           <input type="checkbox" checked={isActive} onChange={(event) => setIsActive(event.currentTarget.checked)} />
           <span>{t("approvalTemplates.field.isActive")}</span>
         </label>
-        {errorMessage ? <StatusBanner tone="signal" title={t("approvalTemplates.saveFailed")} message={errorMessage} /> : null}
+        {errorMessage ? <StatusBanner live="alert" tone="signal" title={t("approvalTemplates.saveFailed")} message={errorMessage} /> : null}
       </form>
     </Dialog>
   );
@@ -609,11 +609,11 @@ function TemplateTestDialog({ template, onClose }: { template: ApprovalTemplateI
           />
         </Field>
         {testMutation.error ? (
-          <StatusBanner tone="signal" title={t("approvalTemplates.test.failed")} message={(testMutation.error as Error).message} />
+          <StatusBanner live="alert" tone="signal" title={t("approvalTemplates.test.failed")} message={(testMutation.error as Error).message} />
         ) : null}
         {result ? (
-          <div role="status" className="space-y-3">
-            <StatusBanner tone="evergreen" title={t("approvalTemplates.test.success")} />
+          <div className="space-y-3">
+            <StatusBanner live="status" tone="evergreen" title={t("approvalTemplates.test.success")} />
             <dl className="grid gap-2 rounded-[3px] border border-ink/10 bg-paper-soft p-4 text-body text-ink-soft">
               <div className="flex items-center justify-between gap-4">
                 <dt>{t("approvalTemplates.test.instanceId")}</dt>

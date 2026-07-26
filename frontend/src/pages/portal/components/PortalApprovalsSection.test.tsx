@@ -6,6 +6,7 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { PortalApprovalsSection } from "./PortalApprovalsSection";
 
 const PENDING_LIST_URL = "/portal/api/v1/me/approvals?status=pending&page=1&page_size=20";
+const PROCESSED_LIST_URL = "/portal/api/v1/me/approvals?status=processed&page=1&page_size=20";
 const PENDING_DETAIL_URL = "/portal/api/v1/me/approvals/42";
 
 const pendingApproval = {
@@ -13,6 +14,8 @@ const pendingApproval = {
   app_key: "crm",
   app_name: "CRM",
   request_type: "grant",
+  base_grant_id: null,
+  base_grant_revision: null,
   status: "submitted",
   status_label: "待审批",
   grant_type: "permanent",
@@ -79,6 +82,37 @@ describe("PortalApprovalsSection", () => {
     expect(screen.getByRole("button", { name: "驳回" })).toBeVisible();
     expect(screen.getByRole("tab", { name: "待办" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "已处理" })).toHaveAttribute("aria-selected", "false");
+  });
+
+  test("审批 tabs 使用方向键 roving tabindex 切换", async () => {
+    const user = userEvent.setup();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) => {
+        if (String(input) === PENDING_LIST_URL) {
+          return pendingListResponse();
+        }
+        if (String(input) === PROCESSED_LIST_URL) {
+          return jsonResponse({ data: [], pagination: { page: 1, page_size: 20, total_items: 0, total_pages: 0 } });
+        }
+        throw new Error(`Unexpected fetch: ${String(input)}`);
+      }),
+    );
+
+    renderSection();
+
+    const pendingTab = await screen.findByRole("tab", { name: "待办" });
+    const processedTab = screen.getByRole("tab", { name: "已处理" });
+    expect(pendingTab).toHaveAttribute("tabindex", "0");
+    expect(processedTab).toHaveAttribute("tabindex", "-1");
+
+    pendingTab.focus();
+    await user.keyboard("{ArrowRight}");
+
+    await waitFor(() => expect(processedTab).toHaveFocus());
+    expect(processedTab).toHaveAttribute("aria-selected", "true");
+    expect(processedTab).toHaveAttribute("tabindex", "0");
+    expect(pendingTab).toHaveAttribute("tabindex", "-1");
   });
 
   test("待办列表为空时展示空状态文案", async () => {
@@ -169,7 +203,9 @@ describe("PortalApprovalsSection", () => {
       );
       expect(JSON.parse(String(approveCall?.[1]?.body))).toEqual({ comment: "同意开通" });
     });
-    expect(await screen.findByRole("status")).toHaveTextContent("授权已生效");
+    const successNotice = await screen.findByRole("status");
+    expect(successNotice).toHaveTextContent("授权已生效");
+    expect(successNotice).toHaveAttribute("aria-live", "polite");
     // 成功后失效列表 query, 会重新拉取待办列表。
     await waitFor(() => {
       expect(fetchMock.mock.calls.filter(([input]) => String(input) === PENDING_LIST_URL).length).toBeGreaterThan(1);
@@ -200,7 +236,56 @@ describe("PortalApprovalsSection", () => {
     await waitFor(() => expect(within(dialog).getByRole("button", { name: "确认同意" })).toBeEnabled());
     await user.click(within(dialog).getByRole("button", { name: "确认同意" }));
 
-    expect(await screen.findByRole("status")).toHaveTextContent("该申请已被其他审批人处理");
+    expect(await screen.findByRole("alert")).toHaveTextContent("该申请已被其他审批人处理");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.filter(([input]) => String(input) === PENDING_LIST_URL).length).toBeGreaterThan(1);
+    });
+  });
+
+  test("base revision 409 时提示重新提交申请并刷新列表", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === PENDING_LIST_URL && !init?.method) {
+        return pendingListResponse();
+      }
+      if (url === PENDING_DETAIL_URL && !init?.method) {
+        return pendingDetailResponse({
+          ...pendingApproval,
+          request_type: "change",
+          base_grant_id: 7,
+          base_grant_revision: 3,
+        });
+      }
+      if (url === "/portal/api/v1/me/approvals/42/approve" && init?.method === "POST") {
+        return jsonResponse(
+          {
+            error: {
+              code: "CONFLICT",
+              message: "基础授权已变化, 请重新提交申请。",
+              details: {
+                decision_committed: true,
+                reason: "base_grant_revision_conflict",
+                status: "grant_conflict",
+              },
+            },
+          },
+          409,
+        );
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderSection();
+
+    await user.click(await screen.findByRole("button", { name: "同意" }));
+    const dialog = screen.getByRole("dialog", { name: "同意申请" });
+    await waitFor(() => expect(within(dialog).getByRole("button", { name: "确认同意" })).toBeEnabled());
+    await user.click(within(dialog).getByRole("button", { name: "确认同意" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("授权事实已变化，请重新提交申请");
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     await waitFor(() => {
       expect(fetchMock.mock.calls.filter(([input]) => String(input) === PENDING_LIST_URL).length).toBeGreaterThan(1);
@@ -328,7 +413,7 @@ describe("PortalApprovalsSection", () => {
       await waitFor(() => expect(within(dialog).getByRole("button", { name: "确认同意" })).toBeEnabled());
       await user.click(within(dialog).getByRole("button", { name: "确认同意" }));
 
-      const notice = await screen.findByRole("status");
+      const notice = await screen.findByRole("alert");
       expect(notice).toHaveTextContent(title);
       if (description) {
         expect(notice).toHaveTextContent(description);

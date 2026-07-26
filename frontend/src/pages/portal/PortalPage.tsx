@@ -5,7 +5,7 @@ import {
   type ColumnDef,
   type PaginationState,
 } from "@tanstack/react-table";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 
@@ -17,6 +17,7 @@ import { PageState } from "../../components/ui/PageState";
 import { MONO_TEXT_CLASS } from "../../components/ui/tableStyles";
 
 import { Badge } from "../../components/Badge";
+import { Button } from "../../components/Button";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
 import { apiRequest } from "../../lib/api";
@@ -101,7 +102,7 @@ function PortalGrantSection({ endpoint, emptyText }: { endpoint: string; emptyTe
   return (
     <>
       {query.error && grants.length > 0 ? (
-        <StatusBanner tone="signal" title={t("portal.grants.loadFailed")} message={(query.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("portal.grants.loadFailed")} message={(query.error as Error).message} />
       ) : null}
       {query.error && grants.length === 0 ? (
         <PageState tone="signal" title={t("portal.grants.loadFailed")} description={(query.error as Error).message} />
@@ -122,6 +123,7 @@ function PortalGrantSection({ endpoint, emptyText }: { endpoint: string; emptyTe
 
 function PortalRequestSection() {
   const { t } = useI18n();
+  const queryClient = useQueryClient();
   const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE });
   const query = useQuery({
     queryKey: ["portal", "requests", pagination.pageIndex, pagination.pageSize],
@@ -131,6 +133,17 @@ function PortalRequestSection() {
           `/portal/api/v1/me/access-requests?page=${pagination.pageIndex + 1}&page_size=${pagination.pageSize}`,
         ),
       ),
+  });
+  const withdrawMutation = useMutation({
+    mutationFn: (requestId: number) =>
+      apiRequest(`/portal/api/v1/me/access-requests/${requestId}/withdraw`, {
+        method: "POST",
+        body: {},
+      }),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["portal", "requests"] });
+      void queryClient.invalidateQueries({ queryKey: ["portal", "approvals"] });
+    },
   });
   const requests = query.data?.data ?? [];
   useClampPage(query.data, setPagination);
@@ -159,6 +172,28 @@ function PortalRequestSection() {
     { header: t("portal.column.expiresAt"), cell: ({ row }) => formatDateTime(row.original.grant_expires_at) },
     { header: t("portal.column.submittedAt"), cell: ({ row }) => formatDateTime(row.original.submitted_at) },
     { header: t("portal.column.reason"), cell: ({ row }) => row.original.reason ?? "-" },
+    {
+      id: "actions",
+      header: t("common.actions"),
+      cell: ({ row }) => {
+        const requestId = row.original.id;
+        if (row.original.status !== "submitted" || typeof requestId !== "number") {
+          return "-";
+        }
+        return (
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost-danger"
+            loading={withdrawMutation.isPending && withdrawMutation.variables === requestId}
+            disabled={withdrawMutation.isPending}
+            onClick={() => withdrawMutation.mutate(requestId)}
+          >
+            {t("portal.requests.withdraw")}
+          </Button>
+        );
+      },
+    },
   ];
   const table = useReactTable({
     data: requests,
@@ -173,7 +208,10 @@ function PortalRequestSection() {
   return (
     <>
       {query.error && requests.length > 0 ? (
-        <StatusBanner tone="signal" title={t("portal.requests.loadFailed")} message={(query.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("portal.requests.loadFailed")} message={(query.error as Error).message} />
+      ) : null}
+      {withdrawMutation.error ? (
+        <StatusBanner live="alert" tone="signal" title={t("portal.requests.withdrawFailed")} message={(withdrawMutation.error as Error).message} />
       ) : null}
       {query.error && requests.length === 0 ? (
         <PageState tone="signal" title={t("portal.requests.loadFailed")} description={(query.error as Error).message} />

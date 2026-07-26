@@ -274,7 +274,9 @@ describe("useAccessRequestForm", () => {
     act(() => result.current.submit());
     await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
 
-    const requestInit = fetchMock.mock.calls[1][1];
+    const requestInit = fetchMock.mock.calls.find(
+      ([input, init]) => String(input) === "/portal/api/v1/me/access-requests" && init?.method === "POST",
+    )?.[1];
     expect(JSON.parse(String(requestInit?.body))).toMatchObject({
       direct_grants: [{ permission: permissionKey, scope: scopeKey }],
     });
@@ -306,7 +308,7 @@ describe("useAccessRequestForm", () => {
     act(() => result.current.changeReason("幂等重试"));
     await waitFor(() => expect(result.current.canSubmit).toBe(true));
     act(() => result.current.submit());
-    await waitFor(() => expect(result.current.submitErrorMessage).toContain("network interrupted"));
+    await waitFor(() => expect(result.current.submitErrorMessage).toContain("网络连接失败"));
     act(() => result.current.submit());
     await waitFor(() => expect(result.current.toastMessageKey).toBe("portal.request.submitted"));
 

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { Badge } from "../../../components/Badge";
 import { Button } from "../../../components/Button";
@@ -9,26 +9,25 @@ import { Field } from "../../../components/Field";
 import { StatusBanner } from "../../../components/StatusBanner";
 import { UserSearchInput } from "../../../components/UserSelect";
 import { useI18n } from "../../../i18n/I18nProvider";
-import type { MessageKey } from "../../../i18n/messages";
 import { apiRequest, itemsFromPayload } from "../../../lib/api";
 import type { JsonObject, ListPayload } from "../../../lib/api";
 import type { HandoverAppActionRow, HandoverGrantItemRow, HandoverTaskDetailItem } from "../../../lib/domain";
 import { cn } from "../../../lib/cn";
 import { grantTypeLabel } from "../../../lib/status";
 import {
+  HANDOVER_WIZARD_STEPS,
+  isFirstStep,
+  isLastStep,
+  stepIndex,
+  useHandoverWizardController,
+  type HandoverWizardStepId,
+} from "./handoverWizardController";
+import {
   handoverActionStatusLabel,
   handoverActionStatusTone,
   previewAssets,
   previewHookSkipped,
 } from "./lifecycleLabels";
-
-const WIZARD_STEP_KEYS: MessageKey[] = [
-  "handover.wizard.step.apps",
-  "handover.wizard.step.receivers",
-  "handover.wizard.step.grants",
-  "handover.wizard.step.preview",
-  "handover.wizard.step.execute",
-];
 
 const ACTIONABLE_STATUSES = new Set(["pending", "previewed", "failed"]);
 
@@ -61,12 +60,16 @@ interface HandoverWizardProps {
 export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
   const { t } = useI18n();
   const queryClient = useQueryClient();
-  const detailQueryKey = ["console", "handover-task", String(task.id)];
-  const grantItemsQueryKey = ["console", "handover-task", String(task.id), "grant-items"];
+  const detailQueryKey = useMemo(() => ["console", "handover-task", String(task.id)], [task.id]);
+  const grantItemsQueryKey = useMemo(
+    () => ["console", "handover-task", String(task.id), "grant-items"],
+    [task.id],
+  );
   // 本次向导批次在打开时冻结；执行成功后的详情 refetch 不得让应用集合中途缩水。
   const [batchActions] = useState(() => task.app_actions.filter((action) => ACTIONABLE_STATUSES.has(action.status)));
 
-  const [step, setStep] = useState(0);
+  const wizard = useHandoverWizardController();
+  const step = wizard.step;
   const [selected, setSelected] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(batchActions.map((action) => [action.app_key, true])),
   );
@@ -96,17 +99,29 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
   const previewStateRef = useRef(previewState);
   previewStateRef.current = previewState;
 
-  const selectedApps = batchActions.filter((action) => selected[action.app_key]);
-  const selectedAppKeys = selectedApps.map((action) => action.app_key);
+  const selectedApps = useMemo(
+    () => batchActions.filter((action) => selected[action.app_key]),
+    [batchActions, selected],
+  );
+  const selectedAppKeys = useMemo(
+    () => selectedApps.map((action) => action.app_key),
+    [selectedApps],
+  );
 
-  const invalidateDetail = () => void queryClient.invalidateQueries({ queryKey: detailQueryKey });
+  const invalidateDetail = useCallback(
+    () => void queryClient.invalidateQueries({ queryKey: detailQueryKey }),
+    [detailQueryKey, queryClient],
+  );
 
   const grantItemsQuery = useQuery({
     queryKey: grantItemsQueryKey,
     queryFn: () =>
       apiRequest<ListPayload<HandoverGrantItemRow>>(`/console/api/v1/lifecycle/handover-tasks/${task.id}/grant-items`),
   });
-  const grantItems = itemsFromPayload<HandoverGrantItemRow>(grantItemsQuery.data);
+  const grantItems = useMemo(
+    () => itemsFromPayload<HandoverGrantItemRow>(grantItemsQuery.data),
+    [grantItemsQuery.data],
+  );
 
   // 勾选状态用服务端 selected 初始化; 只补新条目, 不覆盖本地已改动的勾选。
   useEffect(() => {
@@ -119,8 +134,7 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
       }
       return next;
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [grantItemsQuery.data]);
+  }, [grantItems]);
 
   const saveReceiversMutation = useMutation({
     mutationFn: async (override?: Record<string, ReceiverDraft>) => {
@@ -178,7 +192,7 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
     },
   });
 
-  const runPreview = async (appKey: string) => {
+  const runPreview = useCallback(async (appKey: string) => {
     setPreviewState((current) => ({ ...current, [appKey]: { status: "loading" } }));
     try {
       const payload = await apiRequest<{ app_action?: HandoverAppActionRow }>(
@@ -192,11 +206,11 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
     } catch (error) {
       setPreviewState((current) => ({ ...current, [appKey]: { status: "error", error: (error as Error).message } }));
     }
-  };
+  }, [task.id]);
 
   // 进入预览步后为所选应用逐个生成预览; 已有结果的应用不重复请求。
   useEffect(() => {
-    if (step !== 3) {
+    if (step !== "preview") {
       return;
     }
     let cancelled = false;
@@ -215,8 +229,7 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [step]);
+  }, [invalidateDetail, runPreview, selectedAppKeys, step]);
 
   const runExecute = async () => {
     if (isExecuting || !allPreviewed) {
@@ -254,7 +267,7 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
     selectedAppKeys.length > 0 && selectedAppKeys.every((appKey) => previewState[appKey]?.status === "done");
 
   const goNext = () => {
-    if (step === 1) {
+    if (step === "receivers") {
       // 防漏: 已在「统一接收人」选了人但忘点「应用到所选应用」时, 下一步自动
       // 把该接收人补到所有还没指定接收人/释放策略的应用上。
       const unified = unifiedReceiver.trim();
@@ -274,28 +287,28 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
           setReceivers(merged);
         }
       }
-      saveReceiversMutation.mutate(effective, { onSuccess: () => setStep(2) });
+      saveReceiversMutation.mutate(effective, { onSuccess: () => wizard.goTo("grants") });
       return;
     }
-    if (step === 2) {
+    if (step === "grants") {
       if (grantItemsQuery.isLoading || grantItemsQuery.error) {
         return;
       }
-      saveGrantsMutation.mutate(undefined, { onSuccess: () => setStep(3) });
+      saveGrantsMutation.mutate(undefined, { onSuccess: () => wizard.goTo("preview") });
       return;
     }
-    if (step === 3 && !allPreviewed) {
+    if (step === "preview" && !allPreviewed) {
       return;
     }
-    setStep((current) => Math.min(current + 1, WIZARD_STEP_KEYS.length - 1));
+    wizard.goNext();
   };
 
   const saveAndClose = () => {
-    if (step === 1) {
+    if (step === "receivers") {
       saveReceiversMutation.mutate(undefined, { onSuccess: onClose });
       return;
     }
-    if (step === 2) {
+    if (step === "grants") {
       saveGrantsMutation.mutate(undefined, { onSuccess: onClose });
       return;
     }
@@ -304,9 +317,9 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
 
   const isSaving = saveReceiversMutation.isPending || saveGrantsMutation.isPending;
   const nextDisabled =
-    (step === 0 && selectedApps.length === 0) ||
-    (step === 2 && (grantItemsQuery.isLoading || Boolean(grantItemsQuery.error))) ||
-    (step === 3 && !allPreviewed) ||
+    (step === "apps" && selectedApps.length === 0) ||
+    (step === "grants" && (grantItemsQuery.isLoading || Boolean(grantItemsQuery.error))) ||
+    (step === "preview" && !allPreviewed) ||
     isSaving ||
     isExecuting;
   const closeWizard = () => {
@@ -319,7 +332,7 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
     <Dialog title={t("handover.wizard.title")} size="xl" onClose={closeWizard} closeDisabled={isExecuting}>
       <div className="space-y-5">
         <WizardStepIndicator step={step} />
-        {step === 0 ? (
+        {step === "apps" ? (
           <StepSection hint={t("handover.wizard.apps.hint")}>
             {batchActions.length === 0 ? (
               <p className="text-body leading-5 text-ink-soft">{t("handover.wizard.apps.empty")}</p>
@@ -351,7 +364,7 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
             )}
           </StepSection>
         ) : null}
-        {step === 1 ? (
+        {step === "receivers" ? (
           <StepSection hint={t("handover.wizard.receivers.hint")}>
             <div className="flex flex-wrap items-end gap-2">
               <div className="min-w-64 flex-1">
@@ -427,7 +440,7 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
               </ul>
             ) : null}
             {saveReceiversMutation.error ? (
-              <StatusBanner
+              <StatusBanner live="alert"
                 tone="signal"
                 title={t("handover.wizard.receivers.saveFailed")}
                 message={(saveReceiversMutation.error as Error).message}
@@ -435,10 +448,10 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
             ) : null}
           </StepSection>
         ) : null}
-        {step === 2 ? (
+        {step === "grants" ? (
           <StepSection hint={t("handover.wizard.grants.hint")}>
             {grantItemsQuery.error ? (
-              <StatusBanner
+              <StatusBanner live="alert"
                 tone="signal"
                 title={t("handover.wizard.grants.loadFailed")}
                 message={(grantItemsQuery.error as Error).message}
@@ -454,7 +467,7 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
               />
             ) : null}
             {saveGrantsMutation.error ? (
-              <StatusBanner
+              <StatusBanner live="alert"
                 tone="signal"
                 title={t("handover.wizard.grants.saveFailed")}
                 message={(saveGrantsMutation.error as Error).message}
@@ -462,7 +475,7 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
             ) : null}
           </StepSection>
         ) : null}
-        {step === 3 ? (
+        {step === "preview" ? (
           <StepSection hint={t("handover.wizard.preview.hint")}>
             <ul className="grid gap-2.5">
               {selectedApps.map((action) => (
@@ -485,7 +498,7 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
             </ul>
           </StepSection>
         ) : null}
-        {step === 4 ? (
+        {step === "execute" ? (
           <StepSection hint={t("handover.wizard.execute.hint")}>
             <ul className="grid gap-2.5">
               {selectedApps.map((action) => (
@@ -540,12 +553,12 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
               ))}
             </ul>
             {allExecuted ? (
-              <div role="status">
-                <StatusBanner tone="evergreen" title={t("handover.wizard.execute.done")} />
+              <div>
+                <StatusBanner live="status" tone="evergreen" title={t("handover.wizard.execute.done")} />
               </div>
             ) : null}
             {someExecuteFailed && !isExecuting ? (
-              <StatusBanner tone="amber" title={t("handover.wizard.execute.failedSome")} />
+              <StatusBanner live="alert" tone="amber" title={t("handover.wizard.execute.failedSome")} />
             ) : null}
           </StepSection>
         ) : null}
@@ -554,16 +567,16 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
             {t("handover.wizard.saveLater")}
           </Button>
           <div className="flex flex-wrap items-center gap-2">
-            {step > 0 ? (
+            {!wizard.isFirstStep ? (
               <Button
                 type="button"
                 disabled={isSaving || isExecuting || executionStarted}
-                onClick={() => setStep(step - 1)}
+                onClick={wizard.goBack}
               >
                 {t("common.back")}
               </Button>
             ) : null}
-            {step < 4 ? (
+            {!wizard.isLastStep ? (
               <Button type="button" variant="primary" loading={isSaving} disabled={nextDisabled} onClick={goNext}>
                 {t("common.next")}
               </Button>
@@ -597,15 +610,16 @@ function omitKeys<T>(source: Record<string, T>, keys: string[]): Record<string, 
   return next;
 }
 
-function WizardStepIndicator({ step }: { step: number }) {
+function WizardStepIndicator({ step }: { step: HandoverWizardStepId }) {
   const { t } = useI18n();
   return (
     <ol className="flex flex-wrap gap-x-1 gap-y-2 border-b border-ink/12 pb-4" aria-label={t("handover.wizard.stepsAria")}>
-      {WIZARD_STEP_KEYS.map((labelKey, index) => {
-        const isActive = index === step;
-        const isDone = index < step;
+      {HANDOVER_WIZARD_STEPS.map((item, index) => {
+        const activeIndex = stepIndex(step);
+        const isActive = item.id === step;
+        const isDone = index < activeIndex;
         return (
-          <li key={labelKey} className="flex items-center gap-1" aria-current={isActive ? "step" : undefined}>
+          <li key={item.id} className="flex items-center gap-1" aria-current={isActive ? "step" : undefined}>
             {index > 0 ? <span aria-hidden="true" className="mx-1 hidden h-px w-5 bg-ink/15 sm:block" /> : null}
             <span
               className={cn(
@@ -624,7 +638,7 @@ function WizardStepIndicator({ step }: { step: number }) {
               >
                 {isDone ? <Check size={13} /> : index + 1}
               </span>
-              {t(labelKey)}
+              {t(item.labelKey)}
             </span>
           </li>
         );

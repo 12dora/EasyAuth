@@ -40,6 +40,19 @@ describe("全局基础样式契约", () => {
     expect(paperCardRule?.groups?.body).toMatch(/\bborder\s*:/);
     expect(paperCardRule?.groups?.body).toMatch(/\bbox-shadow\s*:/);
   });
+
+  test("弱文本、状态文本和焦点 token 满足 AA/焦点对比基线", () => {
+    const tokens = readCssRgbTokens(globalStylesCss);
+    const white = [255, 255, 255] as const;
+    const paperDeep = tokens["paper-deep"];
+
+    expect(contrast(tokens["ink-faint"], white)).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(tokens["ink-faint"], paperDeep)).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(tokens.amber, white)).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(tokens.evergreen, white)).toBeGreaterThanOrEqual(4.5);
+    expect(contrast(tokens.signal, white)).toBeGreaterThanOrEqual(4.5);
+    expect(globalStylesCss).toContain("outline: 2px solid rgb(var(--accent));");
+  });
 });
 
 describe("Button", () => {
@@ -51,7 +64,7 @@ describe("Button", () => {
     expect(button).toHaveClass("h-9", "border", "bg-transparent", "text-ink");
   });
 
-  test("支持尺寸、图标、loading 禁用点击", async () => {
+  test("支持尺寸、图标、loading 禁用点击并提供忙碌语义", async () => {
     const onClick = vi.fn();
     render(
       <Button size="sm" variant="primary" icon={<Plus aria-hidden size={16} />} loading onClick={onClick}>
@@ -59,10 +72,12 @@ describe("Button", () => {
       </Button>,
     );
 
-    const button = screen.getByRole("button", { name: "保存" });
+    const button = screen.getByRole("button", { name: /保存/ });
     expect(button).toBeDisabled();
+    expect(button).toHaveAttribute("aria-busy", "true");
     expect(button).toHaveClass("h-7", "bg-ink", "text-paper");
     expect(button.querySelector('[data-slot="spinner"]')).toHaveClass("size-3");
+    expect(button).toHaveTextContent("正在处理");
 
     await userEvent.click(button);
     expect(onClick).not.toHaveBeenCalled();
@@ -158,11 +173,20 @@ describe("StatusBanner", () => {
     expect(banner).toHaveClass("border-amber/30", "bg-amber/8");
     expect(banner).not.toHaveClass("status-banner");
   });
+
+  test("动态提示必须显式选择 live 语义", () => {
+    const { rerender } = render(<StatusBanner tone="signal" title="保存失败" live="alert" />);
+
+    expect(screen.getByRole("alert")).toHaveTextContent("保存失败");
+
+    rerender(<StatusBanner tone="evergreen" title="已保存" live="status" />);
+    expect(screen.getByRole("status")).toHaveAttribute("aria-live", "polite");
+  });
 });
 
 describe("CodeBlock", () => {
-  test("直接使用 Tailwind class 并支持复制", async () => {
-    const writeText = vi.fn();
+  test("直接使用 Tailwind class 并在复制成功后显示结果", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
       value: { writeText },
@@ -175,6 +199,22 @@ describe("CodeBlock", () => {
     expect(codeBlock).not.toHaveClass("code-block");
     await userEvent.click(screen.getByRole("button", { name: "复制" }));
     expect(writeText).toHaveBeenCalledWith('{"ok":true}');
+    expect(await screen.findByText("已复制")).toBeInTheDocument();
+  });
+
+  test("剪贴板拒绝时不显示已复制", async () => {
+    const writeText = vi.fn().mockRejectedValue(new Error("denied"));
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+
+    render(<CodeBlock language="json" code={'{"ok":true}'} />);
+
+    await userEvent.click(screen.getByRole("button", { name: "复制" }));
+
+    expect(writeText).toHaveBeenCalledWith('{"ok":true}');
+    expect(screen.queryByText("已复制")).not.toBeInTheDocument();
   });
 });
 
@@ -231,10 +271,11 @@ describe("UI primitives", () => {
     const frame = screen.getByTestId("table-frame");
     expect(frame).toHaveClass("paper-card", "overflow-hidden", "rounded-[3px]", "p-0");
     expect(frame.firstElementChild).toHaveClass("overflow-x-auto");
-    expect(container.querySelector("table")).toHaveClass("min-w-full", "border-separate", "border-spacing-0", "text-body");
+    expect(container.querySelector("table")).toHaveClass("min-w-[48rem]", "border-separate", "border-spacing-0", "text-body");
     expect(container.querySelector("thead")).toHaveClass("bg-paper-deep/60");
     expect(screen.getByRole("columnheader", { name: "名称" })).toHaveClass(
       "border-b",
+      "whitespace-nowrap",
       "border-ink/15",
       "px-3",
       "py-2.5",
@@ -341,3 +382,27 @@ type PaginatedRow = { name: string };
 
 const paginatedData: PaginatedRow[] = Array.from({ length: 12 }, (_, index) => ({ name: `item-${index + 1}` }));
 const paginatedColumns: ColumnDef<PaginatedRow>[] = [{ header: "名称", accessorKey: "name" }];
+
+function readCssRgbTokens(css: string): Record<string, readonly [number, number, number]> {
+  const tokens: Record<string, readonly [number, number, number]> = {};
+  for (const match of css.matchAll(/--([a-z-]+):\s*(\d+)\s+(\d+)\s+(\d+);/g)) {
+    tokens[match[1]] = [Number(match[2]), Number(match[3]), Number(match[4])];
+  }
+  return tokens;
+}
+
+function contrast(left: readonly [number, number, number], right: readonly [number, number, number]): number {
+  const leftLuminance = luminance(left);
+  const rightLuminance = luminance(right);
+  const lighter = Math.max(leftLuminance, rightLuminance);
+  const darker = Math.min(leftLuminance, rightLuminance);
+  return (lighter + 0.05) / (darker + 0.05);
+}
+
+function luminance(rgb: readonly [number, number, number]): number {
+  const [red, green, blue] = rgb.map((value) => {
+    const normalized = value / 255;
+    return normalized <= 0.03928 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * red + 0.7152 * green + 0.0722 * blue;
+}

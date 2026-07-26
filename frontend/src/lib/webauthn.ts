@@ -11,7 +11,7 @@ export function isWebAuthnAvailable(): boolean {
   );
 }
 
-export function base64urlToBytes(value: string): Uint8Array<ArrayBuffer> {
+function base64urlToBytes(value: string): Uint8Array<ArrayBuffer> {
   const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
   const padLength = (4 - (normalized.length % 4)) % 4;
   const base64 = normalized + "=".repeat(padLength);
@@ -24,7 +24,7 @@ export function base64urlToBytes(value: string): Uint8Array<ArrayBuffer> {
   return bytes;
 }
 
-export function bytesToBase64url(buffer: ArrayBuffer): string {
+function bytesToBase64url(buffer: ArrayBuffer): string {
   const view = new Uint8Array(buffer);
   let binary = "";
   for (let index = 0; index < view.length; index += 1) {

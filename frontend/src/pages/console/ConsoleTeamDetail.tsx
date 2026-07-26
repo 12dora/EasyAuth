@@ -176,7 +176,7 @@ export function ConsoleTeamDetail() {
         actions={<ButtonLink to="/console/teams">{t("console.teams.backToList")}</ButtonLink>}
       />
       {teamQuery.error && team ? (
-        <StatusBanner tone="signal" title={t("console.teams.loadFailed")} message={(teamQuery.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("console.teams.loadFailed")} message={(teamQuery.error as Error).message} />
       ) : null}
       <section className="space-y-6">
         <PanelSurface padding="lg" className="space-y-4">
@@ -505,7 +505,7 @@ function TeamInfoDialog({
         <Field label={t("common.description")}>
           <TextArea rows={3} value={description} onChange={(event) => setDescription(event.currentTarget.value)} />
         </Field>
-        {errorMessage ? <StatusBanner tone="signal" title={t("console.teams.saveFailed")} message={errorMessage} /> : null}
+        {errorMessage ? <StatusBanner live="alert" tone="signal" title={t("console.teams.saveFailed")} message={errorMessage} /> : null}
       </form>
     </Dialog>
   );
@@ -561,7 +561,7 @@ function TeamMemberCreateDialog({
             <option value="leader">{t("console.teams.role.leader")}</option>
           </SelectInput>
         </Field>
-        {errorMessage ? <StatusBanner tone="signal" title={t("console.teams.addMemberFailed")} message={errorMessage} /> : null}
+        {errorMessage ? <StatusBanner live="alert" tone="signal" title={t("console.teams.addMemberFailed")} message={errorMessage} /> : null}
       </form>
     </Dialog>
   );

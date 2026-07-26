@@ -7,6 +7,7 @@ import { credentialDisablePathSegment } from "../../../../lib/credentials";
 import type { CredentialItem, SecretPayload } from "../../../../lib/domain";
 import type { AppCapabilityKey } from "../../../../lib/domain";
 import { queryClient } from "../../../../lib/query";
+import { invalidateAppDerivedQueries } from "../invalidateAppQueries";
 
 type CreateCredentialKind = "static-tokens" | "oauth-clients";
 
@@ -41,6 +42,7 @@ export function useCredentialsActions(appKey: string): CredentialsActions {
 
   const invalidateCredentials = () => {
     void queryClient.invalidateQueries({ queryKey: credentialsQueryKey });
+    invalidateAppDerivedQueries(queryClient, appKey);
   };
 
   const enqueueSecret = (secret: SecretPayload) => {

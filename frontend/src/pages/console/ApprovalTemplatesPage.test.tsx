@@ -235,8 +235,37 @@ describe("ApprovalTemplatesPage", () => {
         app_key: "crm",
       });
     });
-    expect(await within(dialog).findByText("测试审批已发起")).toBeVisible();
+    const successBanner = await within(dialog).findByRole("status");
+    expect(successBanner).toHaveTextContent("测试审批已发起");
+    expect(successBanner).toHaveAttribute("aria-live", "polite");
     expect(within(dialog).getByText("PROC-INST-100")).toBeVisible();
+  });
+
+  test("发起测试审批失败时以 alert 暴露错误", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/approval-templates" && !init?.method) {
+        return jsonResponse({ data: [TEMPLATES[1]] });
+      }
+      if (url.startsWith("/console/api/v1/user-options")) {
+        return jsonResponse({ data: [] });
+      }
+      if (url === "/console/api/v1/approval-templates/2/test" && init?.method === "POST") {
+        return jsonResponse({ error: { message: "钉钉审批创建失败" } }, 502);
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderPage();
+
+    await user.click(await screen.findByRole("button", { name: "发起测试审批" }));
+    const dialog = await screen.findByRole("dialog", { name: "发起测试审批" });
+    await user.type(within(dialog).getByRole("combobox"), "emp-1");
+    await user.click(within(dialog).getByRole("button", { name: "发起测试" }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("钉钉审批创建失败");
   });
 
   test("同 key 模板发起测试时请求所选模板的精确 ID", async () => {

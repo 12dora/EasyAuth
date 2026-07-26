@@ -50,7 +50,7 @@ describe("MatrixTab", () => {
     };
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
-      if (url === "/console/api/v1/apps/demo/authorization-groups" && !init?.method) {
+      if (url === "/console/api/v1/apps/demo/authorization-groups?include_inactive=true&page=1&page_size=100" && !init?.method) {
         return jsonResponse(authorizationGroupsPayload);
       }
       if (url === "/console/api/v1/apps/demo/permissions") {
@@ -215,7 +215,7 @@ describe("MatrixTab", () => {
     };
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
-      if (url === "/console/api/v1/apps/demo/authorization-groups" && !init?.method) {
+      if (url === "/console/api/v1/apps/demo/authorization-groups?include_inactive=true&page=1&page_size=100" && !init?.method) {
         return jsonResponse(payload);
       }
       if (url === "/console/api/v1/apps/demo/permissions") {
@@ -292,7 +292,7 @@ describe("MatrixTab", () => {
     };
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
-      if (url === "/console/api/v1/apps/demo/authorization-groups" && !init?.method) {
+      if (url === "/console/api/v1/apps/demo/authorization-groups?include_inactive=true&page=1&page_size=100" && !init?.method) {
         return jsonResponse(payload);
       }
       if (url === "/console/api/v1/apps/demo/permissions") {
@@ -333,6 +333,60 @@ describe("MatrixTab", () => {
       expect(body.grants.every((grant) => grant.is_active === false)).toBe(true);
     });
   });
+
+  test("展示停用授权组并按管理能力重新启用", async () => {
+    const payload = {
+      data: [
+        {
+          id: 50,
+          key: "disabled-role",
+          kind: "role",
+          name: "停用角色",
+          description: "",
+          requestable: false,
+          is_active: false,
+          grants: [{ permission: "order.read", scope: "SELF", is_active: true }],
+        },
+      ],
+    };
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/demo/authorization-groups?include_inactive=true&page=1&page_size=100" && !init?.method) {
+        return jsonResponse(payload);
+      }
+      if (url === "/console/api/v1/apps/demo/permissions") {
+        return jsonResponse({ data: [{ id: 60, key: "order.read", name: "读取", supported_scopes: ["SELF"] }] });
+      }
+      if (url === "/console/api/v1/apps/demo/scopes") {
+        return jsonResponse({ data: [{ key: "SELF", name: "本人", is_active: true, display_order: 1 }] });
+      }
+      if (url === "/console/api/v1/apps/demo/authorization-groups/disabled-role" && init?.method === "PATCH") {
+        return jsonResponse(payload);
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWithClient(<MatrixTab appKey="demo" canManage />);
+
+    await screen.findByText("停用角色");
+    expect(screen.getByText("停用")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "编辑" }));
+    const dialog = await screen.findByRole("dialog", { name: "编辑授权组" });
+    await user.click(within(dialog).getByRole("button", { name: "启用" }));
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      const patchCall = findFetchCall(fetchMock, "/console/api/v1/apps/demo/authorization-groups/disabled-role", "PATCH");
+      expect(parseJsonBody(patchCall?.[1])).toEqual(
+        expect.objectContaining({
+          key: "disabled-role",
+          is_active: true,
+        }),
+      );
+    });
+  });
 });
 
 function renderWithClient(ui: ReactElement) {
@@ -351,10 +405,32 @@ function renderWithClient(ui: ReactElement) {
 }
 
 function jsonResponse(payload: unknown) {
-  return new Response(JSON.stringify(payload), {
+  const envelope = withPagination(payload);
+  return new Response(JSON.stringify(envelope), {
     status: 200,
     headers: { "Content-Type": "application/json" },
   });
+}
+
+function withPagination(payload: unknown) {
+  if (
+    payload &&
+    typeof payload === "object" &&
+    "data" in payload &&
+    Array.isArray(payload.data) &&
+    !("pagination" in payload)
+  ) {
+    return {
+      ...payload,
+      pagination: {
+        page: 1,
+        page_size: 100,
+        total_items: payload.data.length,
+        total_pages: payload.data.length > 0 ? 1 : 0,
+      },
+    };
+  }
+  return payload;
 }
 
 function findFetchCall(fetchMock: ReturnType<typeof vi.fn>, url: string, method: string) {

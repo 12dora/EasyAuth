@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { App } from "../App";
 import { I18nProvider } from "../i18n/I18nProvider";
+import { API_SESSION_EXPIRED_EVENT } from "../lib/api";
 import { AppShell } from "./AppShell";
 
 const layoutShellCss = readFileSync(resolve(__dirname, "../styles/layout-shell.css"), "utf8");
@@ -17,7 +18,10 @@ const responsiveCss = readFileSync(resolve(__dirname, "../styles/responsive.css"
 // Sidebar 的门户「待我审批」角标依赖 React Query, 壳层测试统一提供 QueryClient 并静音角标请求。
 function renderWithQueryClient(ui: ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+  return {
+    client,
+    ...render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>),
+  };
 }
 
 function renderShell(
@@ -29,6 +33,7 @@ function renderShell(
     avatarUrl: "https://authentik.example.test/media/avatars/alice.png",
     displayName: mode === "console" ? "控制台用户" : "张三",
     id: currentUserId,
+    isSuperuser: mode === "console",
     logoutUrl: "/auth/logout/",
     role: mode === "console" ? "EasyAuth Admins" : "研发中心",
   };
@@ -72,7 +77,6 @@ describe("AppShell", () => {
     expect(screen.getByLabelText("EasyAuth 管理控制台")).toBeVisible();
     expect(screen.getByRole("img", { name: "EasyAuth" })).toBeVisible();
     expect(screen.getByRole("button", { name: "切换语言" })).toBeVisible();
-    expect(screen.getByRole("button", { name: "通知中心" })).toBeVisible();
     expect(screen.getByText("控制台用户")).toBeVisible();
     expect(screen.getByText("EasyAuth Admins")).toBeVisible();
     expect(screen.getByRole("img", { name: "控制台用户 的头像" })).toHaveAttribute(
@@ -223,22 +227,16 @@ describe("AppShell", () => {
     expect(screen.getByRole("link", { name: "重新登录" })).toHaveAttribute("href", "/auth/local/");
   });
 
-  test("语言与通知弹层互斥展开, 语言菜单可切换界面语言", async () => {
+  test("语言菜单可切换界面语言", async () => {
     const user = userEvent.setup();
     renderShell("console");
 
     await user.click(screen.getByRole("button", { name: "切换语言" }));
     expect(screen.getByTestId("topbar-language-menu")).toBeVisible();
-    expect(screen.getByRole("button", { name: "中文" })).toHaveAttribute("aria-pressed", "true");
-    expect(screen.getByRole("button", { name: "English" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("menuitemradio", { name: "中文" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("menuitemradio", { name: "English" })).toHaveAttribute("aria-checked", "false");
 
-    await user.click(screen.getByRole("button", { name: "通知中心" }));
-    expect(screen.queryByTestId("topbar-language-menu")).not.toBeInTheDocument();
-    expect(screen.getByTestId("topbar-notifications-menu")).toBeVisible();
-    expect(screen.getByText("暂无新通知")).toBeVisible();
-
-    await user.click(screen.getByRole("button", { name: "切换语言" }));
-    await user.click(screen.getByRole("button", { name: "English" }));
+    await user.click(screen.getByRole("menuitemradio", { name: "English" }));
     expect(screen.queryByTestId("topbar-language-menu")).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Switch language" })).toBeVisible();
   });
@@ -254,7 +252,7 @@ describe("AppShell", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "true");
 
     const menu = screen.getByRole("menu");
-    expect(within(menu).getByRole("menuitem", { name: "安全设置" })).toHaveAttribute("href", "/portal/settings");
+    expect(within(menu).queryByRole("menuitem", { name: "安全设置" })).not.toBeInTheDocument();
 
     const logoutForm = screen.getByRole("form", { name: "退出登录" });
     expect(logoutForm).toHaveAttribute("action", "/auth/logout/");
@@ -293,12 +291,18 @@ describe("AppShell", () => {
     );
   });
 
-  test("侧边栏底部展示设置入口并用分隔线隔开", () => {
-    renderShell("portal");
+  test("控制台侧边栏底部展示设置入口并用分隔线隔开", () => {
+    renderShell("console");
 
     const footer = screen.getByLabelText("侧边栏底部操作");
     expect(within(footer).getByRole("separator")).toBeVisible();
-    expect(within(footer).getByRole("link", { name: "设置" })).toHaveAttribute("href", "/portal/settings");
+    expect(within(footer).getByRole("link", { name: "设置" })).toHaveAttribute("href", "/console/settings");
+  });
+
+  test("门户没有安全设置占位入口", () => {
+    renderShell("portal");
+
+    expect(screen.queryByLabelText("侧边栏底部操作")).not.toBeInTheDocument();
   });
 
   test("菜单切换更新共享指示灯和右侧路由动画容器", async () => {
@@ -313,6 +317,43 @@ describe("AppShell", () => {
     expect(screen.getByRole("link", { name: "申请权限" })).toHaveAttribute("aria-current", "page");
     expect(screen.getByTestId("nav-active-indicator")).toHaveAttribute("data-active-path", "/portal/request");
     expect(screen.getByTestId("route-transition")).toHaveAttribute("data-route-pathname", "/portal/request");
+  });
+
+  test("并发 401 只显示一个登录失效提示并清理缓存", () => {
+    window.history.pushState({}, "", "/console/operations/access-requests?status=submitted");
+    const { client } = renderWithQueryClient(
+      <I18nProvider>
+        <MemoryRouter initialEntries={["/console/operations/access-requests?status=submitted"]}>
+          <Routes>
+            <Route
+              element={
+                <AppShell
+                  currentUser={{ displayName: "控制台用户", id: "admin", isSuperuser: true, logoutUrl: "/auth/logout/" }}
+                  currentUserId="admin"
+                  mode="console"
+                />
+              }
+            >
+              <Route path="/console/operations/access-requests" element={<div>页面内容</div>} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </I18nProvider>,
+    );
+    client.setQueryData(["console", "operations", "access-requests"], { data: [{ id: 1 }] });
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(API_SESSION_EXPIRED_EVENT));
+      window.dispatchEvent(new CustomEvent(API_SESSION_EXPIRED_EVENT));
+    });
+
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(screen.getByText("登录状态已失效")).toBeVisible();
+    expect(screen.getByRole("link", { name: "重新登录" })).toHaveAttribute(
+      "href",
+      "/auth/local/?next=%2Fconsole%2Foperations%2Faccess-requests%3Fstatus%3Dsubmitted",
+    );
+    expect(client.getQueryData(["console", "operations", "access-requests"])).toBeUndefined();
   });
 
   test("壳层布局保留 EasyTrade 基准尺寸并收敛导航圆角", () => {
@@ -332,10 +373,10 @@ describe("AppShell", () => {
     expect(layoutShellCss).not.toContain("0 14px 32px");
   });
 
-  test("内容区桌面保持 40px 留白且移动端防止横向溢出", () => {
+  test("内容区桌面保持 40px 留白且移动端不再全局裁剪横向溢出", () => {
     expect(layoutShellCss).toMatch(/\.content\s*\{[^}]*padding: 40px;/s);
     expect(responsiveCss).toMatch(/\.content\s*\{[^}]*padding: 28px 20px;/s);
-    expect(responsiveCss).toMatch(/\.shell-body\s*\{[^}]*overflow-x: hidden;/s);
-    expect(responsiveCss).toMatch(/\.content\s*\{[^}]*overflow-x: hidden;/s);
+    expect(responsiveCss).not.toMatch(/\.shell-body\s*\{[^}]*overflow-x: hidden;/s);
+    expect(responsiveCss).not.toMatch(/\.content\s*\{[^}]*overflow-x: hidden;/s);
   });
 });

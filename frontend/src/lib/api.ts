@@ -14,7 +14,7 @@ export interface Pagination {
  * 作为前端唯一的列表载荷类型来源, 避免各处零散声明 `{ items?: T[] }` 与后端契约漂移。
  */
 export interface ListPayload<T> {
-  data?: T[];
+  data: T[];
   pagination?: Pagination;
 }
 
@@ -42,7 +42,7 @@ export interface ApiRequestOptions extends Omit<RequestInit, "body"> {
   body?: BodyInit | JsonValue;
 }
 
-const EMPTY_ITEMS: never[] = [];
+export const API_SESSION_EXPIRED_EVENT = "easyauth:api-session-expired";
 
 export function readCsrfToken(): string {
   const input = document.querySelector<HTMLInputElement>('input[name="csrfmiddlewaretoken"]');
@@ -94,31 +94,35 @@ export async function apiRequest<T = unknown>(
     }
   }
 
-  const response = await fetch(url, { ...init, headers });
+  let response: Response;
+  try {
+    response = await fetch(url, { ...init, headers });
+  } catch {
+    throw new ApiError("网络连接失败，请检查网络后重试。", 0, "NETWORK_ERROR", undefined);
+  }
   const payload = await parseResponse(response);
   if (!response.ok) {
     throw buildApiError(response, payload);
+  }
+  if (payload === NON_JSON_BODY) {
+    throw new ApiError("服务响应格式异常，请刷新后重试。", response.status, "UNEXPECTED_RESPONSE_TYPE");
   }
   return payload as T;
 }
 
 export function itemsFromPayload<T>(payload: unknown): T[] {
+  if (payload === undefined || payload === null) {
+    return [];
+  }
   if (isRecord(payload)) {
     const items = payload.data;
     if (Array.isArray(items)) {
       return items as T[];
     }
-    // 契约漂移(payload 是对象但 data 不是数组)不得静默吞掉; 开发环境显式告警。
-    if (items !== undefined && isDevEnvironment()) {
-      console.warn("itemsFromPayload: 期望 payload.data 为数组, 但收到", items);
-    }
   }
-  return EMPTY_ITEMS;
-}
-
-function isDevEnvironment(): boolean {
-  const meta = import.meta as unknown as { env?: { DEV?: boolean } };
-  return Boolean(meta.env?.DEV);
+  throw new ApiError("列表响应契约异常，请刷新后重试。", 200, "LIST_PAYLOAD_CONTRACT_ERROR", {
+    expected: "data[]",
+  });
 }
 
 function shouldAttachCsrf(method: string): boolean {
@@ -157,7 +161,14 @@ async function parseResponse(response: Response): Promise<unknown> {
   }
   const contentType = response.headers.get("Content-Type") ?? "";
   if (contentType.includes("application/json")) {
-    return response.json();
+    try {
+      return await response.json();
+    } catch {
+      if (response.ok) {
+        throw new ApiError("服务响应格式异常，请刷新后重试。", response.status, "INVALID_JSON_RESPONSE");
+      }
+      throw new ApiError(statusMessage(response.status), response.status, "INVALID_JSON_RESPONSE");
+    }
   }
   // 非 JSON 响应体不回传, 避免被 buildApiError 或调用方原样回显给用户。
   return NON_JSON_BODY;
@@ -184,15 +195,36 @@ function statusMessage(status: number): string {
 function buildApiError(response: Response, payload: unknown): ApiError {
   if (isRecord(payload) && isRecord(payload.error)) {
     const error = payload.error as ApiErrorShape;
-    return new ApiError(
+    const apiError = new ApiError(
       typeof error.message === "string" ? error.message : statusMessage(response.status),
       response.status,
       typeof error.code === "string" ? error.code : undefined,
       error.details,
     );
+    emitSessionExpired(apiError);
+    return apiError;
   }
   // 非结构化(含非 JSON 哨兵/字符串)响应统一降级为按状态码生成的确定性文案, 不回显原始 body。
-  return new ApiError(statusMessage(response.status), response.status);
+  const apiError = new ApiError(statusMessage(response.status), response.status);
+  emitSessionExpired(apiError);
+  return apiError;
+}
+
+function emitSessionExpired(error: ApiError): void {
+  if (error.status !== 401) {
+    return;
+  }
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.dispatchEvent(
+    new CustomEvent(API_SESSION_EXPIRED_EVENT, {
+      detail: {
+        code: error.code ?? "AUTHENTICATION_FAILED",
+        message: error.message,
+      },
+    }),
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

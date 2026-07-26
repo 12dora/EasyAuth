@@ -11,6 +11,7 @@ export interface AppSummary {
   configuration_status?: string;
   updated_at?: string;
   can_manage?: boolean;
+  capabilities?: AppActionCapabilities;
   authorization_group_count?: number;
   permission_count?: number;
   active_credential_count?: number;
@@ -20,6 +21,18 @@ export interface AppSummary {
     blocking_count?: number;
     warning_count?: number;
   };
+}
+
+export interface AppActionCapabilities {
+  can_view?: boolean;
+  can_edit_basic_info?: boolean;
+  can_toggle_active?: boolean;
+  can_delete?: boolean;
+  can_manage_memberships?: boolean;
+  can_manage_catalog?: boolean;
+  can_manage_credentials?: boolean;
+  can_manage_connectors?: boolean;
+  can_manage_platform_capabilities?: boolean;
 }
 
 export interface AppListPayload {
@@ -76,16 +89,6 @@ export interface ConfigurationStatus {
   app_key?: string;
   status?: string;
   data?: ConfigurationIssue[];
-}
-
-/** 历史兼容类型：新授权模型应优先使用 AuthorizationGroupItem。 */
-export interface RoleItem {
-  id: number;
-  key: string;
-  name: string;
-  description?: string;
-  requestable?: boolean;
-  is_active?: boolean;
 }
 
 export interface PermissionItem {
@@ -313,6 +316,8 @@ export interface QueryTestResult extends PermissionQueryResult {
 }
 
 export interface PortalGrant {
+  grant_id?: number;
+  grant_revision?: number;
   app_key?: string;
   app_name?: string;
   groups?: PermissionQueryGroupItem[];
@@ -339,6 +344,8 @@ export interface PortalRequest {
   status?: string;
   status_label?: string;
   request_type?: string;
+  base_grant_id?: number | null;
+  base_grant_revision?: number | null;
   grant_type?: string;
   reason?: string;
   submitted_at?: string;
@@ -360,6 +367,8 @@ export interface PortalApprovalItem {
   app_key?: string;
   app_name?: string;
   request_type?: string;
+  base_grant_id?: number | null;
+  base_grant_revision?: number | null;
   status?: string;
   status_label?: string;
   grant_type?: string;
@@ -380,17 +389,6 @@ export interface PortalCatalogApp {
   app_key: string;
   name: string;
   description?: string;
-}
-
-/** 历史兼容类型：门户 catalog 应使用 PortalCatalogAuthorizationGroup。 */
-export interface PortalCatalogRole {
-  id: number;
-  app_key: string;
-  key: string;
-  name: string;
-  description?: string;
-  requestable?: boolean;
-  requires_approval?: boolean;
 }
 
 export interface PortalCatalogAuthorizationGroup {
@@ -510,6 +508,24 @@ export interface ConnectorTypeItem {
   config_schema: ConnectorConfigSchema;
 }
 
+export interface ConnectorReconcileState {
+  status: "idle" | "queued" | "running" | "dirty" | string;
+  generation: number;
+  reconciled_generation: number;
+  dirty: boolean;
+  pending_trigger: "periodic" | "event" | "manual" | "offboard" | string;
+  worker_queued: boolean;
+  worker_queued_at: string | null;
+  lease_active: boolean;
+  lease_expires_at: string | null;
+}
+
+export interface ConnectorExternalGroupsRefreshState {
+  status: "" | "running" | "success" | "failed" | string;
+  cursor: string;
+  refreshed_at: string | null;
+}
+
 /** 连接器实例: config 中 x-secret 字段读接口恒为空串, configured_secrets 标记已配置。 */
 export interface ConnectorInstanceItem {
   id: number;
@@ -523,7 +539,9 @@ export interface ConnectorInstanceItem {
   last_status: "" | "success" | "partial" | "failed" | string;
   last_error: string;
   consecutive_failures: number;
+  external_groups_refresh?: ConnectorExternalGroupsRefreshState;
   updated_by: string;
+  reconcile_state: ConnectorReconcileState;
   updated_at: string;
 }
 
@@ -595,6 +613,7 @@ export interface HandoverTaskRow {
   subject: HandoverSubject;
   reason: string;
   created_by: string;
+  allowed_actions?: string[];
   created_at: string;
   updated_at: string;
 }
@@ -627,6 +646,14 @@ export interface HandoverTeamItemRow {
 
 export interface TransferGrantDiffEntry {
   key: string;
+  app_key?: string;
+  kind?: "group" | "permission" | string;
+  target_key?: string;
+  name?: string;
+  scope_key?: string;
+  grant_type?: string;
+  grant_expires_at?: string | null;
+  duration_days?: number | null;
   selected?: boolean;
 }
 
@@ -640,6 +667,8 @@ export interface TransferGrantDiff {
 export interface TransferPlanItem {
   template_id: number | null;
   template_name: string;
+  template_revision_id?: number | null;
+  template_revision?: number | null;
   grant_diff: TransferGrantDiff;
   revision: number;
   confirmed_at: string | null;
@@ -686,6 +715,8 @@ export interface OnboardingTemplateRow {
   name: string;
   description: string;
   is_active: boolean;
+  current_revision_id?: number | null;
+  current_revision?: number | null;
   items: OnboardingTemplateItemRow[];
   created_at?: string;
   updated_at?: string;

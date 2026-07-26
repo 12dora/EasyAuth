@@ -156,7 +156,7 @@ export function RulesTab({ appKey }: { appKey: string }) {
           {t("common.new")}
         </Button>
       </div>
-      {rulesQuery.error ? <StatusBanner tone="signal" title={t("console.rules.loadFailed")} message={(rulesQuery.error as Error).message} /> : null}
+      {rulesQuery.error ? <StatusBanner live="alert" tone="signal" title={t("console.rules.loadFailed")} message={(rulesQuery.error as Error).message} /> : null}
       <TableFrame>
         <TableRoot>
           <TableHead>

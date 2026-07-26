@@ -92,7 +92,7 @@ export function ConsoleSettingsPage() {
         actions={<ButtonLink to="/console/operations/dependency-health">{t("settings.integration.healthLink")}</ButtonLink>}
       />
       {settingsQuery.error ? (
-        <StatusBanner tone="signal" title={t("settings.integration.loadFailed")} message={(settingsQuery.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("settings.integration.loadFailed")} message={(settingsQuery.error as Error).message} />
       ) : null}
       <PanelSurface padding="lg" className="space-y-5">
         <div className="space-y-1">

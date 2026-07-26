@@ -29,7 +29,7 @@ import { StatusBanner } from "../../components/StatusBanner";
 import { useToast } from "../../components/ui/Toast";
 import { UserMultiSelect } from "../../components/UserSelect";
 import { ApiError, apiRequest, itemsFromPayload } from "../../lib/api";
-import type { JsonObject, ListPayload } from "../../lib/api";
+import type { JsonObject, JsonValue, ListPayload } from "../../lib/api";
 import type { OperationRow as DomainOperationRow } from "../../lib/domain";
 import type { OperationAuthorizationGroup, OperationDirectGrant } from "../../lib/domain";
 import { useI18n } from "../../i18n/I18nProvider";
@@ -59,21 +59,48 @@ interface AccessRequestAction {
   row: OperationRow;
 }
 
+interface OperationNotice {
+  tone: "amber" | "signal";
+  title: string;
+  message?: string;
+}
+
 const ACCESS_REQUEST_STATUSES = ["submitted", "approved", "rejected", "grant_applied", "grant_failed"] as const;
 const ACCESS_GRANT_STATUSES = ["active", "revoked", "expired"] as const;
 
 export function OperationsPage() {
   const { t } = useI18n();
+  const { section = "access-requests" } = useParams();
+  const config = ENDPOINTS[section];
+  if (!config) {
+    return (
+      <PageState
+        tone="neutral"
+        title={t("notFound.title")}
+        description={t("notFound.description")}
+      />
+    );
+  }
+  return <OperationsSectionPage section={section} config={config} />;
+}
+
+function OperationsSectionPage({
+  config,
+  section,
+}: {
+  config: { titleKey: MessageKey; endpoint: string };
+  section: string;
+}) {
+  const { t } = useI18n();
   const toast = useToast();
   const queryClient = useQueryClient();
-  const { section = "access-requests" } = useParams();
   const [searchParams, setSearchParams] = useSearchParams();
-  const config = ENDPOINTS[section] ?? ENDPOINTS["access-requests"];
   // 依赖健康返回非分页的 list_payload; 其余分区走后端分页, 需按分区区分表格模式。
   const isPaginated = section !== "dependency-health";
   const pagination = paginationFromSearchParams(searchParams);
   const [pendingAction, setPendingAction] = useState<AccessRequestAction | null>(null);
   const [pendingEmergencyRevoke, setPendingEmergencyRevoke] = useState<OperationRow | null>(null);
+  const [operationNotice, setOperationNotice] = useState<OperationNotice | null>(null);
   const queryString = isPaginated ? operationQueryString(section, searchParams, pagination) : "";
 
   const updateSearchParam = (key: string, value: string) => {
@@ -121,8 +148,19 @@ export function OperationsPage() {
     queryClient.invalidateQueries({ queryKey: ["console", "operations", "access-requests"] });
   // 409 = 申请状态已变化(如已被处理): 关弹窗、提示冲突并刷新, 其余错误留在弹窗内展示。
   const handleAccessRequestActionError = (error: Error) => {
+    if (isDecisionCommittedError(error)) {
+      setPendingAction(null);
+      setOperationNotice({
+        tone: "signal",
+        title: t("approvals.grantFailedCommitted"),
+        message: t("approvals.grantFailedCommittedDescription"),
+      });
+      void invalidateAccessRequests();
+      return;
+    }
     if (error instanceof ApiError && error.status === 409) {
       setPendingAction(null);
+      setOperationNotice({ tone: "amber", title: t("approvals.conflict") });
       toast.warning(t("approvals.conflict"));
       void invalidateAccessRequests();
     }
@@ -135,6 +173,7 @@ export function OperationsPage() {
       }),
     onSuccess: (_, variables) => {
       setPendingAction(null);
+      setOperationNotice(null);
       toast.success(t(variables.type === "approve" ? "approvals.approved" : "approvals.rejected"));
       void invalidateAccessRequests();
     },
@@ -148,6 +187,7 @@ export function OperationsPage() {
       }),
     onSuccess: () => {
       setPendingAction(null);
+      setOperationNotice(null);
       toast.success(t("console.accessRequests.reassigned"));
       void invalidateAccessRequests();
     },
@@ -161,6 +201,7 @@ export function OperationsPage() {
       }),
     onSuccess: () => {
       setPendingAction(null);
+      setOperationNotice(null);
       toast.success(t("console.operations.retryGrantSuccess"));
       void invalidateAccessRequests();
     },
@@ -177,8 +218,21 @@ export function OperationsPage() {
       }),
     onSuccess: () => {
       setPendingEmergencyRevoke(null);
+      setOperationNotice(null);
       toast.success(t("console.operations.emergencyRevokeSuccess"));
       void queryClient.invalidateQueries({ queryKey: ["console", "operations", "access-grants"] });
+    },
+    onError: (error: Error) => {
+      if (isActiveGrantNotFoundConflict(error)) {
+        setPendingEmergencyRevoke(null);
+        setOperationNotice({
+          tone: "amber",
+          title: t("console.operations.emergencyRevokeConflict"),
+          message: t("console.operations.emergencyRevokeConflictDescription"),
+        });
+        toast.warning(t("console.operations.emergencyRevokeConflict"));
+        void queryClient.invalidateQueries({ queryKey: ["console", "operations", "access-grants"] });
+      }
     },
   });
   const openAccessRequestAction = (type: AccessRequestActionType, row: OperationRow) => {
@@ -254,7 +308,10 @@ export function OperationsPage() {
         />
       ) : null}
       {query.error && rows.length > 0 ? (
-        <StatusBanner tone="signal" title={t("console.operations.loadFailed")} message={(query.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("console.operations.loadFailed")} message={(query.error as Error).message} />
+      ) : null}
+      {operationNotice ? (
+        <StatusBanner live="alert" tone={operationNotice.tone} title={operationNotice.title} message={operationNotice.message} />
       ) : null}
       {query.error && rows.length === 0 ? (
         <PageState
@@ -314,7 +371,7 @@ export function OperationsPage() {
             app: stringValue(pendingAction.row.app_key),
           })}
           note={t("console.accessRequests.auditNote")}
-          errorMessage={dialogErrorMessage(decisionMutation.error)}
+          errorMessage={dialogErrorMessage(decisionMutation.error, { hideConflict: true, hideDecisionCommitted: true })}
           isSubmitting={decisionMutation.isPending}
           onClose={() => setPendingAction(null)}
           onSubmit={(comment) => decisionMutation.mutate({ type: pendingAction.type as ApprovalDecisionMode, row: pendingAction.row, comment })}
@@ -326,7 +383,7 @@ export function OperationsPage() {
             user: stringValue(pendingAction.row.user_id),
             app: stringValue(pendingAction.row.app_key),
           })}
-          errorMessage={dialogErrorMessage(reassignMutation.error)}
+          errorMessage={dialogErrorMessage(reassignMutation.error, { hideConflict: true })}
           isSubmitting={reassignMutation.isPending}
           onClose={() => setPendingAction(null)}
           onSubmit={(approverUserIds) => reassignMutation.mutate({ row: pendingAction.row, approverUserIds })}
@@ -366,12 +423,41 @@ export function OperationsPage() {
   );
 }
 
-/** 409 冲突走顶部提示并刷新列表, 不在弹窗内重复展示。 */
-function dialogErrorMessage(error: Error | null): string {
-  if (!error || (error instanceof ApiError && error.status === 409)) {
+/** 已显式迁移到页面级提示的错误不在弹窗内重复展示。 */
+function dialogErrorMessage(
+  error: Error | null,
+  options: { hideConflict?: boolean; hideDecisionCommitted?: boolean } = {},
+): string {
+  if (!error) {
+    return "";
+  }
+  if (options.hideConflict && error instanceof ApiError && error.status === 409) {
+    return "";
+  }
+  if (options.hideDecisionCommitted && isDecisionCommittedError(error)) {
     return "";
   }
   return error.message;
+}
+
+function isDecisionCommittedError(error: Error): boolean {
+  return error instanceof ApiError && detailFlag(error.details, "decision_committed") === true;
+}
+
+function isActiveGrantNotFoundConflict(error: Error): boolean {
+  return error instanceof ApiError && error.status === 409 && detailString(error.details, "reason") === "active_grant_not_found";
+}
+
+function detailFlag(details: JsonValue | undefined, key: string): boolean | undefined {
+  return isJsonObject(details) && typeof details[key] === "boolean" ? details[key] : undefined;
+}
+
+function detailString(details: JsonValue | undefined, key: string): string | undefined {
+  return isJsonObject(details) && typeof details[key] === "string" ? details[key] : undefined;
+}
+
+function isJsonObject(value: JsonValue | undefined): value is JsonObject {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 function OperationFilters({
@@ -522,7 +608,7 @@ function ReasonActionDialog({
             }}
           />
         </Field>
-        {errorMessage ? <StatusBanner tone="signal" title={errorTitle} message={errorMessage} /> : null}
+        {errorMessage ? <StatusBanner live="alert" tone="signal" title={errorTitle} message={errorMessage} /> : null}
       </form>
     </Dialog>
   );
@@ -584,7 +670,7 @@ function ReassignApproversDialog({
           />
         </Field>
         <p className="text-xs leading-5 text-ink-faint">{t("console.accessRequests.reassignNote")}</p>
-        {errorMessage ? <StatusBanner tone="signal" title={t("console.accessRequests.reassignFailed")} message={errorMessage} /> : null}
+        {errorMessage ? <StatusBanner live="alert" tone="signal" title={t("console.accessRequests.reassignFailed")} message={errorMessage} /> : null}
       </form>
     </Dialog>
   );

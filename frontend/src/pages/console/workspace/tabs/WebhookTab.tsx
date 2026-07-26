@@ -181,7 +181,7 @@ export function WebhookTab({ appKey }: { appKey: string }) {
         </div>
         {configState.status === "error" ? (
           <div className="space-y-3">
-            <StatusBanner tone="signal" title={t("webhook.loadFailed")} message={configState.error.message} />
+            <StatusBanner live="alert" tone="signal" title={t("webhook.loadFailed")} message={configState.error.message} />
             <Button
               type="button"
               icon={<RefreshCcw size={15} />}
@@ -193,7 +193,7 @@ export function WebhookTab({ appKey }: { appKey: string }) {
           </div>
         ) : null}
         {configState.status === "unconfigured" ? (
-          <StatusBanner tone="amber" title={t("webhook.notConfigured")} />
+          <StatusBanner live="status" tone="amber" title={t("webhook.notConfigured")} />
         ) : null}
         <form className="grid max-w-3xl gap-4" onSubmit={submit}>
           <label className="inline-flex items-center gap-2 text-body text-ink">

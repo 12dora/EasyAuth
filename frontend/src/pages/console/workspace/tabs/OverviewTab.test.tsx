@@ -68,7 +68,10 @@ test("使用真实成员序列化形状按 membership ID 停用成员", async ()
 
   render(
     <QueryClientProvider client={client}>
-      <OverviewTab appKey="demo" app={{ id: 1, app_key: "demo", name: "Demo", can_manage: true }} />
+      <OverviewTab
+        appKey="demo"
+        app={{ id: 1, app_key: "demo", name: "Demo", capabilities: { can_manage_memberships: true } }}
+      />
     </QueryClientProvider>,
   );
 

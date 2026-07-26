@@ -15,6 +15,8 @@ interface PortalExpandedGrant {
 }
 
 export type PortalGrantRow = PortalGrant & {
+  grant_id: number;
+  grant_revision: number;
   groups: PortalGrantGroup[];
   grants: PortalExpandedGrant[];
   grant_version: number;
@@ -85,6 +87,8 @@ function parsePortalGrantRow(value: unknown, index: number): PortalGrantRow {
   requireString(row.app_name, `${label}.app_name`);
   requireString(row.grant_type, `${label}.grant_type`);
   requireNullableString(row.grant_expires_at, `${label}.grant_expires_at`);
+  requireInteger(row.grant_id, `${label}.grant_id`, 1);
+  requireInteger(row.grant_revision, `${label}.grant_revision`, 1);
   requireInteger(row.grant_version, `${label}.grant_version`, 0);
   requireInteger(row.catalog_version, `${label}.catalog_version`, 0);
   requireString(row.snapshot_version, `${label}.snapshot_version`);
@@ -103,7 +107,16 @@ function parsePortalGrantRow(value: unknown, index: number): PortalGrantRow {
     requireString(item.source_type, `${itemLabel}.source_type`);
     requireNullableString(item.source_key, `${itemLabel}.source_key`);
   });
-  return row as unknown as PortalGrantRow;
+  return {
+    ...row,
+    grant_id: row.grant_id,
+    grant_revision: row.grant_revision,
+    groups: row.groups,
+    grants: row.grants,
+    grant_version: row.grant_version,
+    catalog_version: row.catalog_version,
+    snapshot_version: row.snapshot_version,
+  } as PortalGrantRow;
 }
 
 function parsePortalRequestRow(value: unknown, index: number): PortalRequestRow {
@@ -113,6 +126,8 @@ function parsePortalRequestRow(value: unknown, index: number): PortalRequestRow 
   for (const field of ["app_key", "app_name", "request_type", "status", "status_label", "grant_type", "reason", "submitted_at"] as const) {
     requireString(row[field], `${label}.${field}`);
   }
+  requireNullableInteger(row.base_grant_id, `${label}.base_grant_id`, 1);
+  requireNullableInteger(row.base_grant_revision, `${label}.base_grant_revision`, 1);
   requireNullableString(row.grant_expires_at, `${label}.grant_expires_at`);
   requireNullableString(row.decided_at, `${label}.decided_at`);
   requireString(row.decision_comment, `${label}.decision_comment`);
@@ -130,7 +145,11 @@ function parsePortalRequestRow(value: unknown, index: number): PortalRequestRow 
     requireString(item.permission_name, `${itemLabel}.permission_name`);
     requireString(item.scope, `${itemLabel}.scope`);
   });
-  return row as unknown as PortalRequestRow;
+  return {
+    ...row,
+    authorization_groups: row.authorization_groups,
+    direct_grants: row.direct_grants,
+  } as PortalRequestRow;
 }
 
 function requireRecord(value: unknown, message: string): Record<string, unknown> {
@@ -157,6 +176,13 @@ function requireNullableString(value: unknown, label: string): asserts value is 
   if (value !== null && typeof value !== "string") {
     throw new Error(`${label} 必须是字符串或 null`);
   }
+}
+
+function requireNullableInteger(value: unknown, label: string, minimum: number): number | null {
+  if (value === null) {
+    return null;
+  }
+  return requireInteger(value, label, minimum);
 }
 
 function requireInteger(value: unknown, label: string, minimum: number): number {

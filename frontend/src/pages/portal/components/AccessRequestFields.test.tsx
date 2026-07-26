@@ -6,13 +6,18 @@ import { AccessRequestFields } from "./AccessRequestFields";
 function renderFields(overrides: Partial<Parameters<typeof AccessRequestFields>[0]> = {}) {
   render(
     <AccessRequestFields
+      requestType="grant"
       appKey="crm"
+      baseGrantId=""
+      currentGrants={[]}
       approverOptions={[{ user_id: "boss", name: "老板" }]}
       selectedApproverUserIds={[]}
       grantType="timed"
       expiresAt=""
       expiresAtError={false}
       reason=""
+      onRequestTypeChange={vi.fn()}
+      onBaseGrantChange={vi.fn()}
       onApproverToggle={vi.fn()}
       onGrantTypeChange={vi.fn()}
       onExpiresAtChange={vi.fn()}

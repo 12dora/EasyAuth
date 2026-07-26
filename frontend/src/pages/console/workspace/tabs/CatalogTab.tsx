@@ -23,6 +23,7 @@ import type { JsonObject, ListPayload } from "../../../../lib/api";
 import type { AppScopeItem, PermissionGroupItem, PermissionItem, PermissionTreePayload } from "../../../../lib/domain";
 import { useI18n } from "../../../../i18n/I18nProvider";
 import type { Translator } from "../../../../lib/status";
+import { invalidateAppCatalogQueries } from "../invalidateAppQueries";
 import { flattenGroups } from "../utils";
 
 type PermissionGroupForm = {
@@ -113,8 +114,7 @@ export function CatalogTab({ appKey }: { appKey: string }) {
       setPermissionForm(emptyPermissionForm);
       setEditingPermissionKey("");
       setActiveDialog(null);
-      void queryClient.invalidateQueries({ queryKey: ["console", "app", appKey, "permissions"] });
-      void queryClient.invalidateQueries({ queryKey: ["console", "app", appKey, "permission-tree"] });
+      invalidateAppCatalogQueries(queryClient, appKey);
     },
   });
   const saveScopeMutation = useMutation({
@@ -127,7 +127,7 @@ export function CatalogTab({ appKey }: { appKey: string }) {
       setScopeForm({ key: "", name: "", description: "", display_order: 0, is_active: true });
       setEditingScopeKey("");
       setActiveDialog(null);
-      void queryClient.invalidateQueries({ queryKey: ["console", "app", appKey, "scopes"] });
+      invalidateAppCatalogQueries(queryClient, appKey);
     },
   });
   const toggleScopeMutation = useMutation({
@@ -137,7 +137,7 @@ export function CatalogTab({ appKey }: { appKey: string }) {
         body: { ...scope, is_active: !scope.is_active } satisfies JsonObject,
       }),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["console", "app", appKey, "scopes"] });
+      invalidateAppCatalogQueries(queryClient, appKey);
     },
   });
   const saveGroupMutation = useMutation({
@@ -150,8 +150,7 @@ export function CatalogTab({ appKey }: { appKey: string }) {
       setGroupForm(emptyGroupForm);
       setEditingGroupKey("");
       setActiveDialog(null);
-      void queryClient.invalidateQueries({ queryKey: ["console", "app", appKey, "permission-groups"] });
-      void queryClient.invalidateQueries({ queryKey: ["console", "app", appKey, "permission-tree"] });
+      invalidateAppCatalogQueries(queryClient, appKey);
     },
   });
   const groupRows = treeGroups.length > 0 ? treeGroups : groups;
@@ -244,13 +243,13 @@ export function CatalogTab({ appKey }: { appKey: string }) {
   return (
     <section className="space-y-6">
       {treeQuery.error || groupsQuery.error ? (
-        <StatusBanner tone="signal" title={t("console.catalog.groupsLoadFailed")} message={((treeQuery.error ?? groupsQuery.error) as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("console.catalog.groupsLoadFailed")} message={((treeQuery.error ?? groupsQuery.error) as Error).message} />
       ) : null}
       {scopesQuery.error ? (
-        <StatusBanner tone="signal" title={t("console.catalog.scopesLoadFailed")} message={(scopesQuery.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("console.catalog.scopesLoadFailed")} message={(scopesQuery.error as Error).message} />
       ) : null}
       {permissionsQuery.error ? (
-        <StatusBanner tone="signal" title={t("console.catalog.permissionsLoadFailed")} message={(permissionsQuery.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("console.catalog.permissionsLoadFailed")} message={(permissionsQuery.error as Error).message} />
       ) : null}
       <div className="grid gap-6 xl:grid-cols-2">
         <section className="space-y-3">
@@ -420,7 +419,7 @@ export function CatalogTab({ appKey }: { appKey: string }) {
             <Field label={t("common.description")}>
               <TextArea value={scopeForm.description} onChange={(event) => setScopeForm((current) => ({ ...current, description: event.currentTarget.value }))} />
             </Field>
-            {saveScopeMutation.error ? <StatusBanner tone="signal" title={t("console.catalog.scopeSaveFailed")} message={(saveScopeMutation.error as Error).message} /> : null}
+            {saveScopeMutation.error ? <StatusBanner live="alert" tone="signal" title={t("console.catalog.scopeSaveFailed")} message={(saveScopeMutation.error as Error).message} /> : null}
           </form>
         </Dialog>
       ) : null}
@@ -450,7 +449,7 @@ export function CatalogTab({ appKey }: { appKey: string }) {
             <Field label={t("common.description")}>
               <TextArea value={groupForm.description} onChange={(event) => setGroupForm((current) => ({ ...current, description: event.currentTarget.value }))} />
             </Field>
-            {saveGroupMutation.error ? <StatusBanner tone="signal" title={t("console.catalog.groupSaveFailed")} message={(saveGroupMutation.error as Error).message} /> : null}
+            {saveGroupMutation.error ? <StatusBanner live="alert" tone="signal" title={t("console.catalog.groupSaveFailed")} message={(saveGroupMutation.error as Error).message} /> : null}
           </form>
         </Dialog>
       ) : null}
@@ -489,7 +488,7 @@ export function CatalogTab({ appKey }: { appKey: string }) {
             <Field label={t("common.description")}>
               <TextArea value={permissionForm.description} onChange={(event) => setPermissionForm((current) => ({ ...current, description: event.currentTarget.value }))} />
             </Field>
-            {savePermissionMutation.error ? <StatusBanner tone="signal" title={t("console.catalog.permissionSaveFailed")} message={(savePermissionMutation.error as Error).message} /> : null}
+            {savePermissionMutation.error ? <StatusBanner live="alert" tone="signal" title={t("console.catalog.permissionSaveFailed")} message={(savePermissionMutation.error as Error).message} /> : null}
           </form>
         </Dialog>
       ) : null}

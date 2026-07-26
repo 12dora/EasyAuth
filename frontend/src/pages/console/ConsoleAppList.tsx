@@ -121,7 +121,7 @@ export function ConsoleAppList() {
           <TableRowActionButton
             type="button"
             variant={row.original.is_active ? "ghost-danger" : "ghost"}
-            disabled={updateStatusMutation.isPending}
+            disabled={updateStatusMutation.isPending || row.original.capabilities?.can_toggle_active !== true}
             onClick={() => updateStatusMutation.mutate({ appKey: row.original.app_key, isActive: !row.original.is_active })}
           >
             {row.original.is_active ? t("common.disable") : t("common.enable")}
@@ -129,16 +129,16 @@ export function ConsoleAppList() {
           <TableRowActionButton
             type="button"
             variant="ghost-danger"
-            disabled={deleteMutation.isPending}
+            disabled={deleteMutation.isPending || row.original.capabilities?.can_delete !== true}
             onClick={() => setDeleteTarget(row.original)}
           >
             {t("common.delete")}
           </TableRowActionButton>
           {/* 已就绪的行以 invisible 占位保持每行操作按钮列对齐 */}
           <TableRowActionLink
-            className={row.original.configuration_status === "ready" ? "invisible" : undefined}
-            aria-hidden={row.original.configuration_status === "ready" || undefined}
-            tabIndex={row.original.configuration_status === "ready" ? -1 : undefined}
+            className={row.original.configuration_status === "ready" || row.original.capabilities?.can_manage_catalog !== true ? "invisible" : undefined}
+            aria-hidden={(row.original.configuration_status === "ready" || row.original.capabilities?.can_manage_catalog !== true) || undefined}
+            tabIndex={row.original.configuration_status === "ready" || row.original.capabilities?.can_manage_catalog !== true ? -1 : undefined}
             href={`/console/apps/new?app_key=${row.original.app_key}&step=catalog`}
             icon={<Compass size={15} />}
             onClick={(event) => {
@@ -193,7 +193,7 @@ export function ConsoleAppList() {
         }
       />
       {appsQuery.error && apps.length > 0 ? (
-        <StatusBanner tone="signal" title={t("appList.loadFailed")} message={(appsQuery.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("appList.loadFailed")} message={(appsQuery.error as Error).message} />
       ) : null}
       {appsQuery.error && apps.length === 0 ? (
         <PageState
@@ -337,7 +337,7 @@ function CreateAppDialog({
         <Field label={t("appList.createDialog.developerIds")} hint={t("appList.createDialog.userIdsHint")}>
           <UserMultiSelect aria-label="Developer 用户 ID" value={developerUserIds} onChange={setDeveloperUserIds} />
         </Field>
-        {errorMessage ? <StatusBanner tone="signal" title={t("appList.createDialog.failed")} message={errorMessage} /> : null}
+        {errorMessage ? <StatusBanner live="alert" tone="signal" title={t("appList.createDialog.failed")} message={errorMessage} /> : null}
       </form>
     </Dialog>
   );

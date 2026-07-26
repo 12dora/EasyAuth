@@ -95,7 +95,7 @@ export function ApprovalDecisionDialog({
         </Field>
         {note ? <p className="text-xs leading-5 text-ink-faint">{note}</p> : null}
         {errorMessage ? (
-          <StatusBanner
+          <StatusBanner live="alert"
             tone="signal"
             title={isReject ? t("approvals.rejectFailed") : t("approvals.approveFailed")}
             message={errorMessage}

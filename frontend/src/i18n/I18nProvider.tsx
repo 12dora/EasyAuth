@@ -29,7 +29,12 @@ function readStoredLocale(): Locale {
   if (typeof window === "undefined") {
     return DEFAULT_LOCALE;
   }
-  const stored = window.localStorage.getItem(LOCALE_STORAGE_KEY);
+  let stored: string | null = null;
+  try {
+    stored = window.localStorage.getItem(LOCALE_STORAGE_KEY);
+  } catch {
+    return DEFAULT_LOCALE;
+  }
   return SUPPORTED_LOCALES.includes(stored as Locale) ? (stored as Locale) : DEFAULT_LOCALE;
 }
 
@@ -56,7 +61,11 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
   const setLocale = useCallback((next: Locale) => {
     setLocaleState(next);
-    window.localStorage.setItem(LOCALE_STORAGE_KEY, next);
+    try {
+      window.localStorage.setItem(LOCALE_STORAGE_KEY, next);
+    } catch {
+      // 浏览器或嵌入式 WebView 可拒绝持久化访问；locale 状态仍以当前内存值生效。
+    }
   }, []);
 
   const value = useMemo<I18nContextValue>(

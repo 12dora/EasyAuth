@@ -14,8 +14,11 @@ import type {
 } from "../../../lib/domain";
 import { queryClient } from "../../../lib/query";
 import { collectPermissionKeys, filterGroupsByApp, permissionMatchesApp } from "../permissionTree";
+import { parsePortalGrantList, type PortalGrantRow } from "../portalListPayload";
+import { parsePortalRequestCatalog } from "../requestCatalogContract";
 
 export type AccessGrantType = "permanent" | "timed";
+export type AccessRequestType = "grant" | "change" | "revoke" | "renew";
 
 export interface AuthorizationGroupGrantRef {
   permission_key: string;
@@ -71,7 +74,7 @@ export type ScopedPermissionGroupItem = Omit<PermissionGroupItem, "children" | "
 export const ACCESS_REQUEST_MAX_APPROVERS = 20;
 export const ACCESS_REQUEST_MAX_REASON_LENGTH = 1000;
 
-interface PortalRequestCatalogView extends Omit<PortalRequestCatalog, "permission_groups" | "ungrouped_permissions"> {
+export interface PortalRequestCatalogView extends Omit<PortalRequestCatalog, "permission_groups" | "ungrouped_permissions"> {
   apps?: PortalCatalogAppView[];
   approver_options?: ApproverOption[];
   authorization_groups?: AuthorizationGroupItem[];
@@ -91,7 +94,10 @@ interface CatalogView {
 }
 
 interface AccessRequestPayloadValues {
+  requestType: AccessRequestType;
   appKey: string;
+  baseGrantId: string;
+  baseGrantRevision: number | null;
   authorizationGroupKey: string;
   selectedPermissionKeys: string[];
   selectedPermissionScopes: Record<string, string>;
@@ -104,7 +110,10 @@ interface AccessRequestPayloadValues {
 interface AccessRequestFields extends AccessRequestPayloadValues {
   expandedGroupKeys: string[];
   approverSelectionWasEdited: boolean;
+  setRequestType: Dispatch<SetStateAction<AccessRequestType>>;
   setAppKey: Dispatch<SetStateAction<string>>;
+  setBaseGrantId: Dispatch<SetStateAction<string>>;
+  setBaseGrantRevision: Dispatch<SetStateAction<number | null>>;
   setAuthorizationGroupKey: Dispatch<SetStateAction<string>>;
   setSelectedPermissionKeys: Dispatch<SetStateAction<string[]>>;
   setSelectedPermissionScopes: Dispatch<SetStateAction<Record<string, string>>>;
@@ -117,6 +126,8 @@ interface AccessRequestFields extends AccessRequestPayloadValues {
 }
 
 interface AccessRequestActions {
+  changeRequestType: (requestType: AccessRequestType) => void;
+  changeBaseGrantId: (grantId: string) => void;
   changeAppKey: (nextAppKey: string) => void;
   changeAuthorizationGroupKey: (groupKey: string) => void;
   selectPermissionKeys: (keys: string[]) => void;
@@ -131,7 +142,9 @@ interface AccessRequestActions {
 }
 
 interface AccessRequestFormResult {
+  requestType: AccessRequestType;
   appKey: string;
+  baseGrantId: string;
   authorizationGroupKey: string;
   selectedPermissionKeys: string[];
   selectedPermissionScopes: Record<string, string>;
@@ -141,6 +154,7 @@ interface AccessRequestFormResult {
   expiresAt: string;
   reason: string;
   apps: PortalCatalogAppView[];
+  currentGrants: PortalGrantRow[];
   approverOptions: ApproverOption[];
   authorizationGroups: AuthorizationGroupItem[];
   permissionGroups: ScopedPermissionGroupItem[];
@@ -157,6 +171,8 @@ interface AccessRequestFormResult {
   expiresAtError: boolean;
   isSubmitting: boolean;
   changeAppKey: (nextAppKey: string) => void;
+  changeRequestType: (requestType: AccessRequestType) => void;
+  changeBaseGrantId: (grantId: string) => void;
   changeAuthorizationGroupKey: (groupKey: string) => void;
   changeGrantType: Dispatch<SetStateAction<AccessGrantType>>;
   changeExpiresAt: Dispatch<SetStateAction<string>>;
@@ -178,6 +194,12 @@ export function useAccessRequestForm(currentUserId = ""): AccessRequestFormResul
     queryKey: ["portal", "request-catalog"],
     queryFn: async () => parsePortalRequestCatalog(await apiRequest<unknown>("/portal/api/v1/request-catalog")),
   });
+  const currentGrantsQuery = useQuery({
+    queryKey: ["portal", "current-grants-selector"],
+    queryFn: async () =>
+      parsePortalGrantList(await apiRequest<unknown>("/portal/api/v1/me/grants?page=1&page_size=100")),
+    enabled: fields.requestType !== "grant",
+  });
   const catalogView = useMemo(
     () => buildCatalogView(catalogQuery.data, fields.appKey, currentUserId),
     [fields.appKey, catalogQuery.data, currentUserId],
@@ -186,8 +208,15 @@ export function useAccessRequestForm(currentUserId = ""): AccessRequestFormResul
   useGroupCoverageInvariant(fields, catalogView);
   useDefaultApprovers(fields, catalogView, currentUserId);
   const submitMutation = useAccessRequestSubmitMutation(fields, catalogView);
-  const actions = buildAccessRequestActions(fields, catalogView, () => submitMutation.mutate());
-  const hasTarget = Boolean(fields.authorizationGroupKey || fields.selectedPermissionKeys.length > 0);
+  const currentGrants = currentGrantsQuery.data?.data ?? [];
+  const selectedBaseGrant = currentGrants.find((grant) => String(grant.grant_id) === fields.baseGrantId);
+  useLifecycleGrantInvariant(fields, selectedBaseGrant);
+  const actions = buildAccessRequestActions(fields, catalogView, currentGrants, () => submitMutation.mutate());
+  const lifecycleSelectorActive = fields.requestType !== "grant";
+  const hasTarget = fields.requestType === "revoke" || Boolean(fields.authorizationGroupKey || fields.selectedPermissionKeys.length > 0);
+  const lifecycleHasBaseGrant = fields.requestType === "grant" || Boolean(selectedBaseGrant);
+  const lifecycleSelectorIsComplete = fields.requestType !== "renew" || selectedBaseGrant?.grant_type === "timed";
+  const currentGrantsTruncated = Boolean(currentGrantsQuery.data && currentGrantsQuery.data.pagination.total_pages > 1);
   const selectedScopesAreComplete = fields.selectedPermissionKeys.every((key) => hasSelectionScope(key));
   const managedUsersTargetHasMissingDirectManager = selectedManagedUsersTargetHasMissingDirectManager(
     fields,
@@ -197,8 +226,11 @@ export function useAccessRequestForm(currentUserId = ""): AccessRequestFormResul
   const expiresAtIsFuture = Boolean(fields.expiresAt) && new Date(fields.expiresAt) > new Date();
   const expiresAtError = fields.grantType === "timed" && Boolean(fields.expiresAt) && !expiresAtIsFuture;
   const canSubmit = Boolean(
-    fields.appKey &&
+      fields.appKey &&
       hasTarget &&
+      lifecycleHasBaseGrant &&
+      lifecycleSelectorIsComplete &&
+      !currentGrantsTruncated &&
       selectedScopesAreComplete &&
       fields.selectedApproverUserIds.length > 0 &&
       fields.selectedApproverUserIds.length <= ACCESS_REQUEST_MAX_APPROVERS &&
@@ -210,11 +242,25 @@ export function useAccessRequestForm(currentUserId = ""): AccessRequestFormResul
       !submitMutation.isPending,
   );
 
-  return buildAccessRequestFormResult(fields, catalogView, catalogQuery.isLoading, catalogQuery.error, submitMutation, canSubmit, expiresAtError, actions);
+  return buildAccessRequestFormResult(
+    fields,
+    catalogView,
+    currentGrants,
+    catalogQuery.isLoading || (lifecycleSelectorActive && currentGrantsQuery.isLoading),
+    catalogQuery.error ?? (lifecycleSelectorActive ? currentGrantsQuery.error : null),
+    submitMutation,
+    canSubmit,
+    expiresAtError,
+    actions,
+    currentGrantsTruncated,
+  );
 }
 
 function useAccessRequestFields(): AccessRequestFields {
+  const [requestType, setRequestType] = useState<AccessRequestType>("grant");
   const [appKey, setAppKey] = useState("");
+  const [baseGrantId, setBaseGrantId] = useState("");
+  const [baseGrantRevision, setBaseGrantRevision] = useState<number | null>(null);
   const [authorizationGroupKey, setAuthorizationGroupKey] = useState("");
   const [selectedPermissionKeys, setSelectedPermissionKeys] = useState<string[]>([]);
   const [selectedPermissionScopes, setSelectedPermissionScopes] = useState<Record<string, string>>({});
@@ -227,6 +273,9 @@ function useAccessRequestFields(): AccessRequestFields {
 
   return {
     appKey,
+    requestType,
+    baseGrantId,
+    baseGrantRevision,
     authorizationGroupKey,
     selectedPermissionKeys,
     selectedPermissionScopes,
@@ -236,7 +285,10 @@ function useAccessRequestFields(): AccessRequestFields {
     grantType,
     expiresAt,
     reason,
+    setRequestType,
     setAppKey,
+    setBaseGrantId,
+    setBaseGrantRevision,
     setAuthorizationGroupKey,
     setSelectedPermissionKeys,
     setSelectedPermissionScopes,
@@ -264,6 +316,9 @@ function useAccessRequestSubmitMutation(
     draftRevision.current += 1;
   }, [
     fields.appKey,
+    fields.requestType,
+    fields.baseGrantId,
+    fields.baseGrantRevision,
     fields.authorizationGroupKey,
     fields.selectedPermissionKeys,
     fields.selectedPermissionScopes,
@@ -308,15 +363,19 @@ function useAccessRequestSubmitMutation(
 function buildAccessRequestFormResult(
   fields: AccessRequestFields,
   catalogView: CatalogView,
+  currentGrants: PortalGrantRow[],
   catalogIsLoading: boolean,
   catalogError: Error | null,
   submitMutation: UseMutationResult<unknown, Error, void, unknown>,
   canSubmit: boolean,
   expiresAtError: boolean,
   actions: AccessRequestActions,
+  currentGrantsTruncated: boolean,
 ): AccessRequestFormResult {
   return {
+    requestType: fields.requestType,
     appKey: fields.appKey,
+    baseGrantId: fields.baseGrantId,
     authorizationGroupKey: fields.authorizationGroupKey,
     selectedPermissionKeys: fields.selectedPermissionKeys,
     selectedPermissionScopes: fields.selectedPermissionScopes,
@@ -326,6 +385,7 @@ function buildAccessRequestFormResult(
     expiresAt: fields.expiresAt,
     reason: fields.reason,
     apps: catalogView.apps,
+    currentGrants,
     approverOptions: catalogView.approverOptions,
     authorizationGroups: catalogView.authorizationGroups,
     permissionGroups: catalogView.permissionGroups,
@@ -333,12 +393,14 @@ function buildAccessRequestFormResult(
     visiblePermissionKeys: catalogView.visiblePermissionKeys,
     groupCoveredSelectionKeys: buildGroupCoveredSelectionKeys(fields, catalogView),
     catalogIsLoading,
-    catalogErrorMessage: catalogError ? catalogError.message : "",
+    catalogErrorMessage: currentGrantsTruncated ? "当前授权超过 100 条，不能在申请表中截断选择。" : catalogError ? catalogError.message : "",
     submitErrorMessage: submitMutation.error ? submitMutation.error.message : "",
     toastMessageKey: submitMutation.isSuccess ? "portal.request.submitted" : accessRequestToastMessageKey(fields, catalogView, catalogIsLoading),
     canSubmit,
     expiresAtError,
     isSubmitting: submitMutation.isPending,
+    changeRequestType: actions.changeRequestType,
+    changeBaseGrantId: actions.changeBaseGrantId,
     changeAppKey: actions.changeAppKey,
     changeAuthorizationGroupKey: actions.changeAuthorizationGroupKey,
     changeGrantType: fields.setGrantType,
@@ -390,11 +452,80 @@ function filterDirectGrantSelections(
     .filter((key) => !coveredKeySet.has(key));
 }
 
+function useLifecycleGrantInvariant(fields: AccessRequestFields, selectedBaseGrant: PortalGrantRow | undefined): void {
+  const { requestType, setAppKey, setAuthorizationGroupKey, setBaseGrantRevision, setGrantType, setSelectedPermissionKeys } = fields;
+  useEffect(() => {
+    if (requestType === "grant" || !selectedBaseGrant) {
+      return;
+    }
+    setAppKey(selectedBaseGrant.app_key ?? "");
+    setBaseGrantRevision(selectedBaseGrant.grant_revision);
+    if (requestType !== "renew") {
+      return;
+    }
+    setAuthorizationGroupKey(selectedBaseGrant.groups[0]?.key ?? "");
+    setSelectedPermissionKeys(
+      selectedBaseGrant.grants
+        .filter((item) => item.source_type === "direct")
+        .map((item) => directGrantSelectionKey(item.permission, item.scope)),
+    );
+    setGrantType("timed");
+  }, [
+    requestType,
+    selectedBaseGrant?.app_key,
+    selectedBaseGrant?.grant_id,
+    selectedBaseGrant?.grant_revision,
+    selectedBaseGrant?.groups,
+    selectedBaseGrant?.grants,
+    setAppKey,
+    setAuthorizationGroupKey,
+    setBaseGrantRevision,
+    setGrantType,
+    setSelectedPermissionKeys,
+  ]);
+}
 
-function buildAccessRequestActions(fields: AccessRequestFields, catalogView: CatalogView, submit: () => void): AccessRequestActions {
+
+function buildAccessRequestActions(
+  fields: AccessRequestFields,
+  catalogView: CatalogView,
+  currentGrants: PortalGrantRow[],
+  submit: () => void,
+): AccessRequestActions {
   return {
+    changeRequestType: (requestType: AccessRequestType) => {
+      fields.setRequestType(requestType);
+      fields.setBaseGrantId("");
+      fields.setBaseGrantRevision(null);
+      fields.setAppKey("");
+      fields.setAuthorizationGroupKey("");
+      fields.setSelectedPermissionKeys([]);
+      fields.setSelectedPermissionScopes({});
+      fields.setExpandedGroupKeys([]);
+      fields.setSelectedApproverUserIds([]);
+      fields.setApproverSelectionWasEdited(false);
+      fields.setGrantType(requestType === "renew" ? "timed" : "permanent");
+      fields.setExpiresAt("");
+    },
+    changeBaseGrantId: (grantId: string) => {
+      const grant = currentGrants.find((item) => String(item.grant_id) === grantId);
+      fields.setBaseGrantId(grantId);
+      fields.setBaseGrantRevision(grant?.grant_revision ?? null);
+      if (!grant) {
+        return;
+      }
+      fields.setAppKey(grant.app_key ?? "");
+      fields.setAuthorizationGroupKey(grant.groups[0]?.key ?? "");
+      fields.setSelectedPermissionKeys(
+        grant.grants
+          .filter((item) => item.source_type === "direct")
+          .map((item) => directGrantSelectionKey(item.permission, item.scope)),
+      );
+    },
     changeAppKey: (nextAppKey: string) => {
       fields.setAppKey(nextAppKey);
+      fields.setBaseGrantId("");
+      fields.setBaseGrantRevision(null);
       fields.setAuthorizationGroupKey("");
       fields.setSelectedPermissionKeys([]);
       fields.setSelectedPermissionScopes({});
@@ -502,9 +633,16 @@ function buildAccessRequestPayload(values: AccessRequestPayloadValues, catalogVi
   if (overlappingSelection) {
     throw new Error(`直接权限与权限组覆盖范围重复: ${overlappingSelection}`);
   }
+  const baseGrant: JsonObject = values.requestType === "grant"
+    ? {}
+    : {
+        base_grant_id: Number(values.baseGrantId),
+        base_grant_revision: values.baseGrantRevision,
+      };
   return {
     app_key: values.appKey,
-    request_type: "grant",
+    request_type: values.requestType,
+    ...baseGrant,
     authorization_group_keys: values.authorizationGroupKey ? [values.authorizationGroupKey] : [],
     direct_grants: values.selectedPermissionKeys.map((selectionKey) => buildDirectGrantPayload(selectionKey)),
     approver_user_ids: values.selectedApproverUserIds,
@@ -515,6 +653,9 @@ function buildAccessRequestPayload(values: AccessRequestPayloadValues, catalogVi
 }
 
 function assertAccessRequestPayloadLimits(values: AccessRequestPayloadValues): void {
+  if (values.requestType !== "grant" && (!values.baseGrantId || values.baseGrantRevision === null)) {
+    throw new Error("生命周期申请缺少基础授权。");
+  }
   if (values.selectedApproverUserIds.length > ACCESS_REQUEST_MAX_APPROVERS) {
     throw new Error(`审批人不能超过 ${ACCESS_REQUEST_MAX_APPROVERS} 名`);
   }
@@ -545,7 +686,7 @@ export function directGrantSelectionPermissionKey(selectionKey: string): string 
   return parseDirectGrantSelectionKey(selectionKey)[0];
 }
 
-export function directGrantSelectionScopeKey(selectionKey: string): string | null {
+function directGrantSelectionScopeKey(selectionKey: string): string | null {
   return parseDirectGrantSelectionKey(selectionKey)[1];
 }
 
@@ -581,29 +722,29 @@ function uniqueStrings(items: string[]): string[] {
   return Array.from(new Set(items.filter(Boolean)));
 }
 
-export function permissionSelectionKeys(permission: ScopedPermissionItem): string[] {
+function permissionSelectionKeys(permission: ScopedPermissionItem): string[] {
   return permissionScopeKeys(permission).map((scopeKey) => directGrantSelectionKey(permission.key, scopeKey));
 }
 
-export function permissionScopeSelectionKey(permission: ScopedPermissionItem, scopeKey: string): string | null {
+function permissionScopeSelectionKey(permission: ScopedPermissionItem, scopeKey: string): string | null {
   return (permission.scopes ?? []).some((scope) => scope.key === scopeKey)
     ? directGrantSelectionKey(permission.key, scopeKey)
     : null;
 }
 
-export function permissionScopeKeys(permission: ScopedPermissionItem): string[] {
+function permissionScopeKeys(permission: ScopedPermissionItem): string[] {
   const scopes = permission.scopes ?? [];
   return scopes.map((scope) => scope.key);
 }
 
-export function selectedScopeKeysForPermission(permission: ScopedPermissionItem, selectedPermissionKeys: string[]): string[] {
+function selectedScopeKeysForPermission(permission: ScopedPermissionItem, selectedPermissionKeys: string[]): string[] {
   const selectedKeySet = new Set(selectedPermissionKeys);
   return (permission.scopes ?? [])
     .filter((scope) => selectedKeySet.has(directGrantSelectionKey(permission.key, scope.key)))
     .map((scope) => scope.key);
 }
 
-export function nextPermissionScopeSelection(
+function nextPermissionScopeSelection(
   permission: ScopedPermissionItem,
   scopeKey: string,
   shouldSelect: boolean,
@@ -883,146 +1024,4 @@ function uniqueUserIds(userIds: string[]): string[] {
 
 function listsAreEqual(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((item, index) => item === right[index]);
-}
-
-function parsePortalRequestCatalog(value: unknown): PortalRequestCatalogView {
-  const catalog = contractRecord(value, "申请目录");
-  const apps = contractArray(catalog.apps, "申请目录.apps");
-  const approverOptions = contractArray(catalog.approver_options, "申请目录.approver_options");
-  const authorizationGroups = contractArray(catalog.authorization_groups, "申请目录.authorization_groups");
-  const permissionGroups = contractArray(catalog.permission_groups, "申请目录.permission_groups");
-  const ungroupedPermissions = contractArray(catalog.ungrouped_permissions, "申请目录.ungrouped_permissions");
-
-  apps.forEach((item, index) => validateCatalogApp(item, `申请目录.apps[${index}]`));
-  approverOptions.forEach((item, index) => validateApproverOption(item, `申请目录.approver_options[${index}]`));
-  authorizationGroups.forEach((item, index) => validateAuthorizationGroup(item, `申请目录.authorization_groups[${index}]`));
-  permissionGroups.forEach((item, index) => validatePermissionGroup(item, `申请目录.permission_groups[${index}]`));
-  ungroupedPermissions.forEach((item, index) => validatePermission(item, `申请目录.ungrouped_permissions[${index}]`));
-  return catalog as unknown as PortalRequestCatalogView;
-}
-
-function validateCatalogApp(value: unknown, path: string): void {
-  const item = contractRecord(value, path);
-  contractNumber(item.id, `${path}.id`);
-  contractNonEmptyString(item.app_key, `${path}.app_key`);
-  contractNonEmptyString(item.name, `${path}.name`);
-  contractOptionalStringArray(item.default_approver_user_ids, `${path}.default_approver_user_ids`);
-  contractOptionalString(item.approver_resolution_status, `${path}.approver_resolution_status`);
-}
-
-function validateApproverOption(value: unknown, path: string): void {
-  const item = contractRecord(value, path);
-  contractNonEmptyString(item.user_id, `${path}.user_id`);
-  for (const field of ["name", "label", "display_name", "email", "department"] as const) {
-    contractOptionalString(item[field], `${path}.${field}`);
-  }
-}
-
-function validateAuthorizationGroup(value: unknown, path: string): void {
-  const item = contractRecord(value, path);
-  contractNumber(item.id, `${path}.id`);
-  contractNonEmptyString(item.app_key, `${path}.app_key`);
-  contractNonEmptyString(item.key, `${path}.key`);
-  contractNonEmptyString(item.kind, `${path}.kind`);
-  contractNonEmptyString(item.name, `${path}.name`);
-  contractOptionalBoolean(item.requestable, `${path}.requestable`);
-  contractOptionalBoolean(item.requires_approval, `${path}.requires_approval`);
-  contractOptionalStringArray(item.default_approver_user_ids, `${path}.default_approver_user_ids`);
-  contractOptionalString(item.approver_resolution_status, `${path}.approver_resolution_status`);
-  if (item.grants !== undefined) {
-    contractArray(item.grants, `${path}.grants`).forEach((value, index) => {
-      const grant = contractRecord(value, `${path}.grants[${index}]`);
-      contractNonEmptyString(grant.permission_key, `${path}.grants[${index}].permission_key`);
-      contractNonEmptyString(grant.scope_key, `${path}.grants[${index}].scope_key`);
-    });
-  }
-}
-
-function validatePermissionGroup(value: unknown, path: string): void {
-  const item = contractRecord(value, path);
-  contractNumber(item.id, `${path}.id`);
-  contractNonEmptyString(item.app_key, `${path}.app_key`);
-  if (item.type !== "group") {
-    throw new Error(`${path}.type 必须为 group`);
-  }
-  contractNonEmptyString(item.key, `${path}.key`);
-  contractNonEmptyString(item.name, `${path}.name`);
-  if (item.children !== undefined) {
-    contractArray(item.children, `${path}.children`).forEach((child, index) => {
-      const childRecord = contractRecord(child, `${path}.children[${index}]`);
-      if (childRecord.type === "group") {
-        validatePermissionGroup(child, `${path}.children[${index}]`);
-      } else {
-        validatePermission(child, `${path}.children[${index}]`);
-      }
-    });
-  }
-  if (item.permissions !== undefined) {
-    contractArray(item.permissions, `${path}.permissions`).forEach((permission, index) =>
-      validatePermission(permission, `${path}.permissions[${index}]`),
-    );
-  }
-}
-
-function validatePermission(value: unknown, path: string): void {
-  const item = contractRecord(value, path);
-  contractNumber(item.id, `${path}.id`);
-  contractOptionalString(item.app_key, `${path}.app_key`);
-  if (item.type !== undefined && item.type !== "permission") {
-    throw new Error(`${path}.type 必须为 permission`);
-  }
-  contractNonEmptyString(item.key, `${path}.key`);
-  contractNonEmptyString(item.name, `${path}.name`);
-  contractArray(item.scopes, `${path}.scopes`).forEach((scope, index) => {
-    const scopeItem = contractRecord(scope, `${path}.scopes[${index}]`);
-    contractNonEmptyString(scopeItem.key, `${path}.scopes[${index}].key`);
-    contractNonEmptyString(scopeItem.name, `${path}.scopes[${index}].name`);
-  });
-  contractOptionalStringArray(item.default_approver_user_ids, `${path}.default_approver_user_ids`);
-  contractOptionalString(item.approver_resolution_status, `${path}.approver_resolution_status`);
-}
-
-function contractRecord(value: unknown, path: string): Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new Error(`${path} 必须为对象`);
-  }
-  return value as Record<string, unknown>;
-}
-
-function contractArray(value: unknown, path: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`${path} 必须为数组`);
-  }
-  return value;
-}
-
-function contractNumber(value: unknown, path: string): void {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    throw new Error(`${path} 必须为有限数字`);
-  }
-}
-
-function contractNonEmptyString(value: unknown, path: string): void {
-  if (typeof value !== "string" || !value) {
-    throw new Error(`${path} 必须为非空字符串`);
-  }
-}
-
-function contractOptionalString(value: unknown, path: string): void {
-  if (value !== undefined && typeof value !== "string") {
-    throw new Error(`${path} 必须为字符串`);
-  }
-}
-
-function contractOptionalBoolean(value: unknown, path: string): void {
-  if (value !== undefined && typeof value !== "boolean") {
-    throw new Error(`${path} 必须为布尔值`);
-  }
-}
-
-function contractOptionalStringArray(value: unknown, path: string): void {
-  if (value === undefined) {
-    return;
-  }
-  contractArray(value, path).forEach((item, index) => contractNonEmptyString(item, `${path}[${index}]`));
 }

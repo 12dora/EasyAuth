@@ -6,25 +6,31 @@ const VIEWPORTS = [
 ];
 
 test("控制台 React shell 可以加载", async ({ page }) => {
-  await page.goto("/");
+  await setConsoleAdmin(page);
+  await mockConsoleAppList(page);
+
+  await page.goto("/console");
 
   await expect(page.getByText("EasyAuth").first()).toBeVisible();
   await expect(page.getByRole("navigation").getByText("应用")).toBeVisible();
 });
 
 test("控制台和门户深链可以直接打开", async ({ page }) => {
+  await setConsoleAdmin(page);
   await page.goto("/console/operations/access-requests");
 
-  await expect(page.getByRole("navigation").getByText("申请运营")).toBeVisible();
+  await expect(page.getByRole("navigation").getByText("待审批")).toBeVisible();
   await expect(page.getByTestId("route-transition")).toHaveAttribute(
     "data-route-pathname",
     "/console/operations/access-requests",
   );
+  await expectLazyModuleLoaded(page, "OperationsPage");
 
   await page.goto("/portal/request");
 
   await expect(page.getByRole("navigation").getByText("申请权限")).toBeVisible();
   await expect(page.getByTestId("route-transition")).toHaveAttribute("data-route-pathname", "/portal/request");
+  await expectLazyModuleLoaded(page, "PortalPage");
 });
 
 for (const viewport of VIEWPORTS) {
@@ -36,7 +42,7 @@ for (const viewport of VIEWPORTS) {
     await page.goto("/console");
 
     await expect(page.getByTestId("route-transition")).toHaveAttribute("data-route-pathname", "/console");
-    const createEntry = page.getByRole("link", { name: /新建应用|创建应用/ }).or(page.getByRole("button", { name: /新建应用|创建应用/ }));
+    const createEntry = page.getByRole("button", { name: "快速新建" });
 
     await expect(createEntry.first()).toBeVisible();
     await expectNoTextOverflow(createEntry.first());
@@ -53,7 +59,7 @@ for (const viewport of VIEWPORTS) {
     await page.goto("/console/apps/demo");
 
     await expect(page.getByTestId("route-transition")).toHaveAttribute("data-route-pathname", "/console/apps/demo");
-    const editEntry = page.getByRole("button", { name: /编辑基本信息|基本信息/ }).or(page.getByRole("link", { name: /编辑基本信息|基本信息/ }));
+    const editEntry = page.getByRole("button", { name: "编辑" });
 
     await expect(editEntry.first()).toBeVisible();
     await expectNoTextOverflow(editEntry.first());
@@ -62,6 +68,7 @@ for (const viewport of VIEWPORTS) {
 
   test(`05 console smoke can enter the manifest tab on ${viewport.name}`, async ({ page }) => {
     await page.setViewportSize(viewport.size);
+    await setConsoleAdmin(page);
     await mockConsoleApp(page);
     await mockConsoleManifest(page);
 
@@ -78,6 +85,7 @@ for (const viewport of VIEWPORTS) {
 
   test(`05 console smoke shows grants in query test results on ${viewport.name}`, async ({ page }) => {
     await page.setViewportSize(viewport.size);
+    await setConsoleAdmin(page);
     await mockConsoleApp(page);
     await mockConsoleQueryTest(page);
 
@@ -136,17 +144,20 @@ for (const viewport of VIEWPORTS) {
 
   test(`console credentials smoke renders credential controls on ${viewport.name}`, async ({ page }) => {
     await page.setViewportSize(viewport.size);
+    await setConsoleAdmin(page);
     await mockConsoleApp(page);
     await mockConsoleCredentials(page);
 
     await page.goto("/console/apps/demo?tab=credentials");
 
     await expect(page.getByTestId("route-transition")).toHaveAttribute("data-route-pathname", "/console/apps/demo");
+    await expect(page.getByRole("cell", { name: "Static Primary" })).toBeVisible();
+    await expect(page.getByRole("cell", { name: "OAuth Primary" })).toBeVisible();
+
+    await page.getByRole("button", { name: "新建" }).click();
     await expect(page.getByLabel("凭据名称")).toBeVisible();
     await expect(page.getByRole("button", { name: "静态 token" })).toBeVisible();
     await expect(page.getByRole("button", { name: "OAuth client" })).toBeVisible();
-    await expect(page.getByRole("cell", { name: "Static Primary" })).toBeVisible();
-    await expect(page.getByRole("cell", { name: "OAuth Primary" })).toBeVisible();
 
     await expectButtonNotCovered(page.getByRole("button", { name: "静态 token" }));
     await expectButtonNotCovered(page.getByRole("button", { name: "OAuth client" }));
@@ -154,18 +165,17 @@ for (const viewport of VIEWPORTS) {
 
   test(`console matrix smoke renders matrix controls on ${viewport.name}`, async ({ page }) => {
     await page.setViewportSize(viewport.size);
+    await setConsoleAdmin(page);
     await mockConsoleApp(page);
     await mockConsoleMatrix(page);
 
     await page.goto("/console/apps/demo?tab=matrix");
 
     await expect(page.getByTestId("route-transition")).toHaveAttribute("data-route-pathname", "/console/apps/demo");
-    await expect(page.getByRole("button", { name: "保存授权组" })).toBeVisible();
-    await expect(page.getByRole("button", { name: "新建授权组" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "新建" })).toBeVisible();
     await expect(page.getByText("reader")).toBeVisible();
-    await expect(page.getByRole("cell", { name: "invoice.read / customer_id" })).toBeVisible();
 
-    await expectButtonNotCovered(page.getByRole("button", { name: "保存授权组" }));
+    await expectButtonNotCovered(page.getByRole("button", { name: "新建" }));
   });
 }
 
@@ -181,14 +191,14 @@ async function setConsoleAdmin(page: Page) {
     await route.fulfill({
       response,
       body: html
-        .replace("<body", '<body data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001"')
+        .replace("<body", '<body data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001" data-current-user-is-superuser="true"')
         .replace(
           '<div id="root"',
-          '<div id="root" data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001"',
+          '<div id="root" data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001" data-current-user-is-superuser="true"',
         )
         .replace(
           '<div id="easyauth-root"',
-          '<div id="easyauth-root" data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001"',
+          '<div id="easyauth-root" data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001" data-current-user-is-superuser="true"',
         ),
       headers: { ...response.headers(), "content-type": "text/html" },
     });
@@ -198,17 +208,19 @@ async function setConsoleAdmin(page: Page) {
     document.addEventListener("DOMContentLoaded", () => {
       document.body.dataset.currentUserRole = "EasyAuth Admins";
       document.body.dataset.currentUserId = "admin-001";
+      document.body.dataset.currentUserIsSuperuser = "true";
       const root = document.getElementById("easyauth-root") ?? document.getElementById("root");
       if (root) {
         root.dataset.currentUserRole = "EasyAuth Admins";
         root.dataset.currentUserId = "admin-001";
+        root.dataset.currentUserIsSuperuser = "true";
       }
     });
   });
 }
 
 async function mockConsoleApp(page: Page) {
-  await page.route("**/console/api/v1/apps/demo", async (route) => {
+  await page.route((url) => url.pathname === "/console/api/v1/apps/demo", async (route) => {
     await route.fulfill({
       contentType: "application/json",
       json: {
@@ -218,6 +230,16 @@ async function mockConsoleApp(page: Page) {
           name: "Demo App",
           description: "Demo console app",
           can_manage: true,
+          capabilities: {
+            can_edit_basic_info: true,
+            can_manage_memberships: true,
+            can_manage_credentials: true,
+            can_manage_authorization_groups: true,
+            can_manage_permissions: true,
+            can_manage_scopes: true,
+            can_manage_platform_capabilities: true,
+            can_manage_connectors: true,
+          },
           authorization_group_count: 1,
           permission_count: 2,
           active_credential_count: 1,
@@ -232,7 +254,8 @@ async function mockConsoleMemberships(page: Page) {
     await route.fulfill({
       contentType: "application/json",
       json: {
-        items: [{ id: 1, user_id: "owner-001", role: "owner", is_active: true }],
+        data: [{ id: 1, user_id: "owner-001", role: "owner", is_active: true }],
+        pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
       },
     });
   });
@@ -243,7 +266,7 @@ async function mockConsoleAppList(page: Page) {
     await route.fulfill({
       contentType: "application/json",
       json: {
-        items: [
+        data: [
           {
             id: 1,
             app_key: "demo",
@@ -256,6 +279,7 @@ async function mockConsoleAppList(page: Page) {
             can_manage: true,
           },
         ],
+        pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
       },
     });
   });
@@ -275,11 +299,11 @@ async function mockConsoleConfigurationStatus(page: Page) {
 }
 
 async function mockConsoleCredentials(page: Page) {
-  await page.route("**/console/api/v1/apps/demo/credentials", async (route) => {
+  await page.route((url) => url.pathname === "/console/api/v1/apps/demo/credentials", async (route) => {
     await route.fulfill({
       contentType: "application/json",
       json: {
-        items: [
+        data: [
           { id: 101, kind: "static_token", name: "Static Primary", is_active: true },
           { id: 202, kind: "oauth_client", name: "OAuth Primary", client_id: "oauth-client-1", is_active: true },
         ],
@@ -293,7 +317,8 @@ async function mockConsoleManifest(page: Page) {
     await route.fulfill({
       contentType: "application/json",
       json: {
-        items: [{ version: "catalog-smoke-v1", imported_at: "2026-07-01T00:00:00Z" }],
+        data: [{ version: "catalog-smoke-v1", imported_at: "2026-07-01T00:00:00Z" }],
+        pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
       },
     });
   });
@@ -332,51 +357,68 @@ async function mockConsoleQueryTest(page: Page) {
 }
 
 async function mockConsoleMatrix(page: Page) {
-  await page.route("**/console/api/v1/apps/demo/authorization-groups", async (route) => {
+  await page.route((url) => url.pathname === "/console/api/v1/apps/demo/authorization-groups", async (route) => {
+    const requestUrl = new URL(route.request().url());
+    const pageNumber = Number(requestUrl.searchParams.get("page") ?? "1");
     await route.fulfill({
       contentType: "application/json",
       json: {
-        items: [
-          {
-            id: 10,
-            key: "reader",
-            kind: "role",
-            name: "只读角色",
-            requestable: true,
-            is_active: true,
-            grants: [{ permission: "invoice.read", scope: "customer_id", is_active: true }],
-          },
-        ],
+        data:
+          pageNumber === 1
+            ? [
+                {
+                  id: 10,
+                  app_key: "demo",
+                  key: "reader",
+                  kind: "role",
+                  name: "只读角色",
+                  requestable: true,
+                  is_active: true,
+                  grants: [{ permission: "invoice.read", scope: "customer_id", is_active: true }],
+                },
+              ]
+            : [],
+        pagination: { page: pageNumber, page_size: 100, total_items: 1, total_pages: 1 },
       },
     });
   });
-  await page.route("**/console/api/v1/apps/demo/permissions", async (route) => {
+  await page.route((url) => url.pathname === "/console/api/v1/apps/demo/permissions", async (route) => {
     await route.fulfill({
       contentType: "application/json",
       json: {
-        items: [
+        data: [
           { id: 20, key: "invoice.read", name: "发票读取", supported_scopes: ["customer_id"] },
           { id: 21, key: "invoice.export", name: "发票导出", supported_scopes: ["customer_id"] },
         ],
       },
     });
   });
-  await page.route("**/console/api/v1/apps/demo/scopes", async (route) => {
+  await page.route((url) => url.pathname === "/console/api/v1/apps/demo/scopes", async (route) => {
     await route.fulfill({
       contentType: "application/json",
       json: {
-        items: [{ key: "customer_id", name: "客户", description: "", is_active: true, display_order: 1 }],
+        data: [{ key: "customer_id", name: "客户", description: "", is_active: true, display_order: 1 }],
       },
     });
   });
 }
 
 async function mockPortalRequestCatalog(page: Page) {
-  await page.route("**/portal/api/v1/request-catalog", async (route) => {
+  await page.route("**/portal/api/v1/me/grants**", async (route) => {
     await route.fulfill({
       contentType: "application/json",
       json: {
-        apps: [{ id: 1, app_key: "demo", name: "Demo App" }],
+        data: [],
+        pagination: { page: 1, page_size: 100, total_items: 0, total_pages: 0 },
+      },
+    });
+  });
+  await page.route((url) => url.pathname === "/portal/api/v1/request-catalog", async (route) => {
+    await route.fulfill({
+      contentType: "application/json",
+      json: {
+        apps: [{ id: 1, app_key: "demo", name: "Demo App", default_approver_user_ids: ["approver-001"] }],
+        approver_options: [{ user_id: "approver-001", name: "审批人" }],
         authorization_groups: [
           {
             id: 10,
@@ -386,7 +428,7 @@ async function mockPortalRequestCatalog(page: Page) {
             name: "只读角色",
             requestable: true,
             is_active: true,
-            grants: [{ permission: "invoice.read", scope: "customer_id:1001", is_active: true }],
+            grants: [{ permission_key: "invoice.read", scope_key: "customer_id:1001", is_active: true }],
           },
         ],
         permission_groups: [],
@@ -411,6 +453,20 @@ async function mockPortalRequestCatalog(page: Page) {
       },
     });
   });
+}
+
+async function expectLazyModuleLoaded(page: Page, moduleName: string) {
+  await expect
+    .poll(
+      async () =>
+        page.evaluate((name) =>
+          performance
+            .getEntriesByType("resource")
+            .some((entry) => entry.name.includes(name)),
+        moduleName),
+      { timeout: 5_000 },
+    )
+    .toBe(true);
 }
 
 async function mockPortalAccessRequestSubmit(page: Page) {

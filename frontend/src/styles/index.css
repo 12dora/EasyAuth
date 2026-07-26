@@ -14,7 +14,7 @@
 
   --ink: 15 23 42;
   --ink-soft: 71 85 105;
-  --ink-faint: 148 163 184;
+  --ink-faint: 100 116 139;
 
   --hairline: 226 232 240;
   --hairline-strong: 203 213 225;
@@ -23,10 +23,10 @@
   /* 品牌交互色：导航、焦点、选中态 */
   --accent: 37 99 235;
   /* 警示琥珀：待处理、需关注 */
-  --amber: 217 119 6;
-  --signal: 220 38 38;
-  --bond: 79 70 229;
-  --evergreen: 5 150 105;
+  --amber: 146 64 14;
+  --signal: 185 28 28;
+  --bond: 67 56 202;
+  --evergreen: 4 120 87;
 
   --ease-out-paper: cubic-bezier(0.16, 1, 0.3, 1);
   --ease-press: cubic-bezier(0.4, 0, 0.2, 1);
@@ -135,7 +135,7 @@ table,
 }
 
 :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
-  outline: 2px solid rgb(var(--accent) / 0.5);
+  outline: 2px solid rgb(var(--accent));
   outline-offset: 2px;
 }
 

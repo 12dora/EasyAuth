@@ -26,6 +26,7 @@ import type { AppSummary, ConfigurationIssue, ConfigurationStatus } from "../../
 import { useI18n } from "../../../../i18n/I18nProvider";
 import { formatDateTime, readinessLabel, readinessTone } from "../../../../lib/status";
 import type { Translator } from "../../../../lib/status";
+import { invalidateAppDerivedQueries } from "../invalidateAppQueries";
 import { safeJoin } from "../utils";
 
 export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary }) {
@@ -54,6 +55,7 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["console", "app", appKey, "memberships"] });
+      invalidateAppDerivedQueries(queryClient, appKey);
       setMembershipDialogOpen(false);
     },
   });
@@ -65,9 +67,10 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["console", "app", appKey, "memberships"] });
+      invalidateAppDerivedQueries(queryClient, appKey);
     },
   });
-  const canWrite = Boolean(app?.can_manage);
+  const canWrite = app?.capabilities?.can_manage_memberships === true;
   const membershipColumns = membershipTableColumns({
     t,
     canWrite,
@@ -98,10 +101,10 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
   return (
     <section className="space-y-6">
       {status && status !== "ready" ? (
-        <StatusBanner tone={statusBannerTone} title={t("console.overview.configBanner", { status: readinessLabel(t, status) })} />
+        <StatusBanner live="status" tone={statusBannerTone} title={t("console.overview.configBanner", { status: readinessLabel(t, status) })} />
       ) : null}
       {statusQuery.error ? (
-        <StatusBanner tone="signal" title={t("console.overview.configStatusLoadFailed")} message={(statusQuery.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("console.overview.configStatusLoadFailed")} message={(statusQuery.error as Error).message} />
       ) : null}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <Metric
@@ -139,10 +142,10 @@ export function OverviewTab({ appKey, app }: { appKey: string; app?: AppSummary 
           ) : null}
         </div>
         {membershipsQuery.error ? (
-          <StatusBanner tone="signal" title={t("console.overview.membersLoadFailed")} message={(membershipsQuery.error as Error).message} />
+          <StatusBanner live="alert" tone="signal" title={t("console.overview.membersLoadFailed")} message={(membershipsQuery.error as Error).message} />
         ) : null}
         {disableMembershipMutation.error ? (
-          <StatusBanner tone="signal" title={t("console.overview.membersOperationFailed")} message={(disableMembershipMutation.error as Error).message} />
+          <StatusBanner live="alert" tone="signal" title={t("console.overview.membersOperationFailed")} message={(disableMembershipMutation.error as Error).message} />
         ) : null}
         <TableFrame>
           <TableRoot>
@@ -312,7 +315,7 @@ export function AppBasicInfoDialog({
         <Field label={t("common.description")}>
           <TextArea rows={3} value={description} onChange={(event) => setDescription(event.currentTarget.value)} />
         </Field>
-        {errorMessage ? <StatusBanner tone="signal" title={t("console.overview.saveFailed")} message={errorMessage} /> : null}
+        {errorMessage ? <StatusBanner live="alert" tone="signal" title={t("console.overview.saveFailed")} message={errorMessage} /> : null}
       </form>
     </Dialog>
   );
@@ -368,7 +371,7 @@ function MembershipCreateDialog({
             <option value="owner">{t("console.overview.roleOption.owner")}</option>
           </SelectInput>
         </Field>
-        {errorMessage ? <StatusBanner tone="signal" title={t("console.overview.addMemberFailed")} message={errorMessage} /> : null}
+        {errorMessage ? <StatusBanner live="alert" tone="signal" title={t("console.overview.addMemberFailed")} message={errorMessage} /> : null}
       </form>
     </Dialog>
   );

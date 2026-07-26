@@ -21,7 +21,7 @@ type CellProps = ComponentPropsWithoutRef<"td">;
 export function TableFrame({ className, children, ...props }: DivProps) {
   return (
     <div className={cn("paper-card overflow-hidden rounded-[3px] p-0", className)} {...props}>
-      <div className="overflow-x-auto">{children}</div>
+      <div className="overflow-x-auto" tabIndex={0}>{children}</div>
     </div>
   );
 }

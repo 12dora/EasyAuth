@@ -134,7 +134,7 @@ export function HandoverTaskList() {
         </SelectInput>
       </div>
       {tasksQuery.error && tasks.length > 0 ? (
-        <StatusBanner tone="signal" title={t("handover.list.loadFailed")} message={(tasksQuery.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("handover.list.loadFailed")} message={(tasksQuery.error as Error).message} />
       ) : null}
       {tasksQuery.error && tasks.length === 0 ? (
         <PageState
@@ -248,9 +248,11 @@ function taskColumns(
           >
             {t("handover.continue")}
           </TableRowActionLink>
-          <TableRowActionButton type="button" variant="ghost-danger" onClick={() => onDelete(row.original)}>
-            {t("common.delete")}
-          </TableRowActionButton>
+          {row.original.allowed_actions?.includes("delete") ? (
+            <TableRowActionButton type="button" variant="ghost-danger" onClick={() => onDelete(row.original)}>
+              {t("common.delete")}
+            </TableRowActionButton>
+          ) : null}
         </>
       ),
     },

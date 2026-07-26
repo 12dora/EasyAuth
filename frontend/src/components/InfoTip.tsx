@@ -12,7 +12,7 @@ export function InfoTip({ text, label }: InfoTipProps) {
       <button
         type="button"
         aria-label={label ?? text}
-        className="inline-flex cursor-help items-center text-ink-faint transition-colors hover:text-ink-soft focus-visible:text-ink-soft"
+        className="inline-flex min-h-6 min-w-6 cursor-help items-center justify-center text-ink-faint transition-colors hover:text-ink-soft focus-visible:text-ink-soft"
       >
         <Info size={13} aria-hidden="true" />
       </button>

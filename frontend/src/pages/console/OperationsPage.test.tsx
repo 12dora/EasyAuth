@@ -82,6 +82,16 @@ describe("OperationsPage", () => {
     expect(screen.queryByRole("columnheader", { name: "提交时间" })).not.toBeInTheDocument();
   });
 
+  test("未知运营分区显示 404 且不回退访问申请列表", async () => {
+    const fetchMock = vi.fn<typeof fetch>();
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderOperationsPage("not-real");
+
+    expect(await screen.findByText("页面没有找到")).toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   test("翻页触发服务端分页请求(FF-1)", async () => {
     document.body.dataset.currentUserRole = "EasyAuth Admins";
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
@@ -207,6 +217,58 @@ describe("OperationsPage", () => {
     });
   });
 
+  test("审批已提交但授权落地失败时关闭弹窗并刷新申请列表", async () => {
+    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    let listCalls = 0;
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/operations/access-requests?page=1&page_size=20") {
+        listCalls += 1;
+        return jsonResponse({
+          data: [{
+            id: 91,
+            user_id: "needs-retry",
+            app_key: "crm",
+            status: listCalls > 1 ? "grant_failed" : "submitted",
+            request_type: "grant",
+            failure_reason: listCalls > 1 ? "目录写入失败" : "",
+            submitted_at: "2026-07-02T00:00:00Z",
+          }],
+          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+        });
+      }
+      if (url === "/console/api/v1/operations/access-requests/91/approve" && init?.method === "POST") {
+        return jsonResponse(
+          {
+            error: {
+              code: "SEMANTIC_VALIDATION_ERROR",
+              message: "目录写入失败",
+              details: {
+                decision_committed: true,
+                request_id: 91,
+                status: "grant_failed",
+                approval: { id: 91, status: "approved" },
+              },
+            },
+          },
+          422,
+        );
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderOperationsPage();
+
+    await user.click(await screen.findByRole("button", { name: "同意" }));
+    await user.click(screen.getByRole("button", { name: "确认同意" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("审批已通过，但授权未落地");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "同意申请" })).not.toBeInTheDocument());
+    await waitFor(() => expect(listCalls).toBeGreaterThan(1));
+  });
+
   test("授权列表展示版本状态并通过带原因确认框紧急撤权(FF-21)", async () => {
     document.body.dataset.currentUserRole = "EasyAuth Admins";
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
@@ -274,6 +336,60 @@ describe("OperationsPage", () => {
         }),
       );
     });
+  });
+
+  test("紧急撤权目标不存在时显示冲突并刷新授权列表", async () => {
+    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    let listCalls = 0;
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith("/console/api/v1/operations/access-grants?")) {
+        listCalls += 1;
+        return jsonResponse({
+          data: listCalls > 1 ? [] : [{
+            id: 7,
+            user_id: "risk-user",
+            app_key: "crm",
+            status: "active",
+            version: 3,
+            is_current: true,
+            authorization_groups: [],
+            direct_grants: [],
+          }],
+          pagination: { page: 1, page_size: 20, total_items: listCalls > 1 ? 0 : 1, total_pages: 1 },
+        });
+      }
+      if (url === "/console/api/v1/operations/emergency-revokes" && init?.method === "POST") {
+        return jsonResponse(
+          {
+            error: {
+              code: "CONFLICT",
+              message: "当前没有可撤销的有效授权。",
+              details: {
+                reason: "active_grant_not_found",
+                user_id: "risk-user",
+                app_key: "crm",
+              },
+            },
+          },
+          409,
+        );
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderOperationsPage("access-grants");
+
+    await user.click(await screen.findByRole("button", { name: "紧急撤权" }));
+    const dialog = screen.getByRole("dialog", { name: "紧急撤权" });
+    await user.type(within(dialog).getByRole("textbox", { name: "原因" }), "核对风险授权");
+    await user.click(within(dialog).getByRole("button", { name: "紧急撤权" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("当前授权已不存在");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "紧急撤权" })).not.toBeInTheDocument());
+    await waitFor(() => expect(listCalls).toBeGreaterThan(1));
   });
 });
 

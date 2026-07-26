@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 
 import { useI18n } from "../../i18n/I18nProvider";
+import type { CurrentUser } from "../../App";
 import type { MessageKey } from "../../i18n/messages";
 import { apiRequest } from "../../lib/api";
 import type { ListPayload } from "../../lib/api";
@@ -12,6 +13,7 @@ import type { ShellNavGroup } from "./ShellNav";
 
 interface SidebarProps {
   mode: "console" | "portal";
+  currentUser?: CurrentUser;
 }
 
 interface NavGroupSpec {
@@ -84,15 +86,16 @@ function usePendingApprovalsBadge(enabled: boolean): string {
   return totalItems > 99 ? "99+" : String(totalItems);
 }
 
-export function Sidebar({ mode }: SidebarProps) {
+export function Sidebar({ mode, currentUser }: SidebarProps) {
   const { t } = useI18n();
   const location = useLocation();
   const sidebarRef = useRef<HTMLElement>(null);
   const [indicatorStyle, setIndicatorStyle] = useState<CSSProperties>({});
   const pendingApprovalsBadge = usePendingApprovalsBadge(mode === "portal");
+  const consoleGroups = currentUser?.isSuperuser === true ? CONSOLE_GROUPS : [CONSOLE_GROUPS[0]];
   const groups = useMemo<ShellNavGroup[]>(
     () =>
-      (mode === "console" ? CONSOLE_GROUPS : PORTAL_GROUPS).map((group) => ({
+      (mode === "console" ? consoleGroups : PORTAL_GROUPS).map((group) => ({
         label: t(group.labelKey),
         links: group.links.map((link) => ({
           to: link.to,
@@ -100,12 +103,12 @@ export function Sidebar({ mode }: SidebarProps) {
           badge: link.to === PORTAL_APPROVALS_PATH ? pendingApprovalsBadge : undefined,
         })),
       })),
-    [mode, pendingApprovalsBadge, t],
+    [consoleGroups, mode, pendingApprovalsBadge, t],
   );
-  const settingsPath = mode === "console" ? "/console/settings" : "/portal/settings";
+  const settingsPath = "/console/settings";
   const navLinks = useMemo(() => groups.flatMap((group) => group.links), [groups]);
   const activePath = useMemo(() => {
-    const candidates = [...navLinks.map((link) => link.to), settingsPath];
+    const candidates = mode === "console" ? [...navLinks.map((link) => link.to), settingsPath] : navLinks.map((link) => link.to);
     return (
       candidates
         .filter((path) => location.pathname === path || (path !== "/console" && path !== "/portal" && location.pathname.startsWith(path)))
@@ -149,12 +152,14 @@ export function Sidebar({ mode }: SidebarProps) {
         aria-hidden="true"
       />
       <ShellNav groups={groups} />
-      <div className="sidebar-footer" aria-label={t("shell.sidebarFooter")}>
-        <hr />
-        <NavLink to={settingsPath} data-nav-path={settingsPath}>
-          <span>{t("shell.settings")}</span>
-        </NavLink>
-      </div>
+      {mode === "console" ? (
+        <div className="sidebar-footer" aria-label={t("shell.sidebarFooter")}>
+          <hr />
+          <NavLink to={settingsPath} data-nav-path={settingsPath}>
+            <span>{t("shell.settings")}</span>
+          </NavLink>
+        </div>
+      ) : null}
     </aside>
   );
 }

@@ -19,6 +19,7 @@ import type {
   AppNotificationChannelPayload,
   DirectoryScopeItem,
 } from "../../../../lib/domain";
+import { invalidateAppDerivedQueries } from "../invalidateAppQueries";
 
 const CAPABILITY_KEYS: AppCapabilityKey[] = ["directory", "notify"];
 
@@ -93,6 +94,7 @@ function CapabilityPanel({ appKey }: { appKey: string }) {
             : capabilityFromPayload(current, key),
         ),
       }));
+      invalidateAppDerivedQueries(queryClient, appKey);
       toast.success(t("console.integration.capabilitySaveSuccess"));
     },
     onError: (error: Error) => {
@@ -115,7 +117,7 @@ function CapabilityPanel({ appKey }: { appKey: string }) {
         </Badge>
       </div>
       {capabilityQuery.error ? (
-        <StatusBanner
+        <StatusBanner live="alert"
           tone="signal"
           title={t("console.integration.capabilitiesLoadFailed")}
           message={(capabilityQuery.error as Error).message}
@@ -239,6 +241,7 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
         notification_channel: notificationChannel,
         available_directory_scopes: current?.available_directory_scopes ?? [],
       }));
+      invalidateAppDerivedQueries(queryClient, appKey);
       toast.success(t("console.integration.channelSaveSuccess"));
     },
     onError: (error: Error) => {
@@ -304,6 +307,7 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
       {loadState === "error" ? (
         <div className="space-y-3">
           <StatusBanner
+            live="alert"
             tone="signal"
             title={t("console.integration.channelLoadFailed")}
             message={(channelQuery.error as Error).message}
@@ -314,7 +318,12 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
         </div>
       ) : null}
       {loadState === "unconfigured" ? (
-        <StatusBanner tone="amber" title={t("console.integration.channelNotConfigured")} message={t("console.integration.channelEmptyDescription")} />
+        <StatusBanner
+          live="status"
+          tone="amber"
+          title={t("console.integration.channelNotConfigured")}
+          message={t("console.integration.channelEmptyDescription")}
+        />
       ) : null}
       {loadState === "configured" ? (
         <div className={`flex flex-wrap items-center justify-between gap-2 border px-3 py-2 ${currentScopeIsAvailable ? "border-bond/25 bg-bond/5" : "border-signal/30 bg-signal/8"}`}>
@@ -328,6 +337,7 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
       ) : null}
       {loadState === "configured" && !currentScopeIsAvailable ? (
         <StatusBanner
+          live="alert"
           tone="signal"
           title={t("console.integration.currentScopeUnavailable")}
           message={t("console.integration.currentScopeUnavailableDescription")}
@@ -335,6 +345,7 @@ function NotificationChannelPanel({ appKey, canManage }: { appKey: string; canMa
       ) : null}
       {noAvailableScopes ? (
         <StatusBanner
+          live="status"
           tone="amber"
           title={t("console.integration.noAvailableScopes")}
           message={t("console.integration.noAvailableScopesDescription")}

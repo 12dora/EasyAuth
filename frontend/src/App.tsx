@@ -1,6 +1,6 @@
 import { Settings } from "lucide-react";
-import { useEffect } from "react";
-import { Navigate, Outlet, Route, Routes } from "react-router-dom";
+import { Component, lazy, Suspense, useEffect, type ErrorInfo, type ReactNode } from "react";
+import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
 
 import { AppShell } from "./components/AppShell";
 import { ButtonLink } from "./components/ButtonLink";
@@ -8,20 +8,47 @@ import { PageHeader } from "./components/PageHeader";
 import { Topbar } from "./components/shell/Topbar";
 import { EmptyState } from "./components/ui/EmptyState";
 import { useI18n } from "./i18n/I18nProvider";
-import { ApprovalInstancesPage } from "./pages/console/ApprovalInstancesPage";
-import { ApprovalTemplatesPage } from "./pages/console/ApprovalTemplatesPage";
-import { ConsoleAppList } from "./pages/console/ConsoleAppList";
-import { ConsoleAppWorkspace } from "./pages/console/ConsoleAppWorkspace";
-import { ConsoleSettingsPage } from "./pages/console/ConsoleSettingsPage";
-import { ConsoleTeamDetail } from "./pages/console/ConsoleTeamDetail";
-import { ConsoleTeamList } from "./pages/console/ConsoleTeamList";
-import { OperationsPage } from "./pages/console/OperationsPage";
-import { ConsolePeopleList } from "./pages/console/lifecycle/ConsolePeopleList";
-import { HandoverTaskDetail } from "./pages/console/lifecycle/HandoverTaskDetail";
-import { HandoverTaskList } from "./pages/console/lifecycle/HandoverTaskList";
-import { OnboardingPage } from "./pages/console/lifecycle/OnboardingPage";
-import { AppOnboardingWizard } from "./pages/console/onboarding/AppOnboardingWizard";
-import { PortalPage } from "./pages/portal/PortalPage";
+
+const ApprovalInstancesPage = lazy(() =>
+  import("./pages/console/ApprovalInstancesPage").then((module) => ({ default: module.ApprovalInstancesPage })),
+);
+const ApprovalTemplatesPage = lazy(() =>
+  import("./pages/console/ApprovalTemplatesPage").then((module) => ({ default: module.ApprovalTemplatesPage })),
+);
+const ConsoleAppList = lazy(() =>
+  import("./pages/console/ConsoleAppList").then((module) => ({ default: module.ConsoleAppList })),
+);
+const ConsoleAppWorkspace = lazy(() =>
+  import("./pages/console/ConsoleAppWorkspace").then((module) => ({ default: module.ConsoleAppWorkspace })),
+);
+const ConsoleSettingsPage = lazy(() =>
+  import("./pages/console/ConsoleSettingsPage").then((module) => ({ default: module.ConsoleSettingsPage })),
+);
+const ConsoleTeamDetail = lazy(() =>
+  import("./pages/console/ConsoleTeamDetail").then((module) => ({ default: module.ConsoleTeamDetail })),
+);
+const ConsoleTeamList = lazy(() =>
+  import("./pages/console/ConsoleTeamList").then((module) => ({ default: module.ConsoleTeamList })),
+);
+const OperationsPage = lazy(() =>
+  import("./pages/console/OperationsPage").then((module) => ({ default: module.OperationsPage })),
+);
+const ConsolePeopleList = lazy(() =>
+  import("./pages/console/lifecycle/ConsolePeopleList").then((module) => ({ default: module.ConsolePeopleList })),
+);
+const HandoverTaskDetail = lazy(() =>
+  import("./pages/console/lifecycle/HandoverTaskDetail").then((module) => ({ default: module.HandoverTaskDetail })),
+);
+const HandoverTaskList = lazy(() =>
+  import("./pages/console/lifecycle/HandoverTaskList").then((module) => ({ default: module.HandoverTaskList })),
+);
+const OnboardingPage = lazy(() =>
+  import("./pages/console/lifecycle/OnboardingPage").then((module) => ({ default: module.OnboardingPage })),
+);
+const AppOnboardingWizard = lazy(() =>
+  import("./pages/console/onboarding/AppOnboardingWizard").then((module) => ({ default: module.AppOnboardingWizard })),
+);
+const PortalPage = lazy(() => import("./pages/portal/PortalPage").then((module) => ({ default: module.PortalPage })));
 
 interface AppProps {
   shell: "console" | "portal";
@@ -59,13 +86,12 @@ export function App({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUse
           <Route path="/auth/logged-out/" element={<LoggedOutPage />} />
         </Route>
         <Route element={<AppShell brandLogoUrl={brandLogoUrl} currentUser={currentUser} currentUserId={currentUserId} mode="portal" />}>
-          <Route path="/portal" element={<PortalPage view="grants" />} />
-          <Route path="/portal/request" element={<PortalPage view="request" />} />
-          <Route path="/portal/requests" element={<PortalPage view="requests" />} />
-          <Route path="/portal/expiring" element={<PortalPage view="expiring" />} />
-          <Route path="/portal/approvals" element={<PortalPage view="approvals" />} />
-          <Route path="/portal/settings" element={<SettingsPlaceholder mode="portal" />} />
-          <Route path="*" element={<Navigate to="/portal" replace />} />
+          <Route path="/portal" element={<LazyRoute routeName="portal"><PortalPage view="grants" /></LazyRoute>} />
+          <Route path="/portal/request" element={<LazyRoute routeName="portal"><PortalPage view="request" /></LazyRoute>} />
+          <Route path="/portal/requests" element={<LazyRoute routeName="portal"><PortalPage view="requests" /></LazyRoute>} />
+          <Route path="/portal/expiring" element={<LazyRoute routeName="portal"><PortalPage view="expiring" /></LazyRoute>} />
+          <Route path="/portal/approvals" element={<LazyRoute routeName="portal"><PortalPage view="approvals" /></LazyRoute>} />
+          <Route path="*" element={<NotFoundRoute mode="portal" />} />
         </Route>
       </Routes>
     );
@@ -78,24 +104,79 @@ export function App({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUse
   return (
     <Routes>
       <Route element={<AppShell brandLogoUrl={brandLogoUrl} currentUser={currentUser} currentUserId={currentUserId} mode="console" />}>
-        <Route path="/console" element={<ConsoleAppList />} />
+        <Route path="/console" element={<LazyRoute routeName="console"><ConsoleAppList /></LazyRoute>} />
         {/* 创建应用仅超管; 非超管深链回应用列表, API 仍为最终权威。 */}
-        <Route path="/console/apps/new" element={isSuperuser ? <AppOnboardingWizard /> : <Navigate to="/console" replace />} />
-        <Route path="/console/apps/:appKey" element={<ConsoleAppWorkspace />} />
-        <Route path="/console/teams" element={<ConsoleTeamList />} />
-        <Route path="/console/teams/:teamId" element={<ConsoleTeamDetail />} />
-        <Route path="/console/people" element={<ConsolePeopleList />} />
-        <Route path="/console/lifecycle/handover-tasks" element={<HandoverTaskList />} />
-        <Route path="/console/lifecycle/handover-tasks/:taskId" element={<HandoverTaskDetail />} />
-        <Route path="/console/lifecycle/onboarding" element={<OnboardingPage />} />
-        <Route path="/console/approval-templates" element={<ApprovalTemplatesPage />} />
-        <Route path="/console/operations/approval-instances" element={<ApprovalInstancesPage />} />
-        <Route path="/console/operations/:section" element={<OperationsPage />} />
+        <Route path="/console/apps/new" element={isSuperuser ? <LazyRoute routeName="console"><AppOnboardingWizard /></LazyRoute> : <Navigate to="/console" replace />} />
+        <Route path="/console/apps/:appKey" element={<LazyRoute routeName="workspace"><ConsoleAppWorkspace /></LazyRoute>} />
+        <Route path="/console/teams" element={isSuperuser ? <LazyRoute routeName="console"><ConsoleTeamList /></LazyRoute> : <Navigate to="/console" replace />} />
+        <Route path="/console/teams/:teamId" element={isSuperuser ? <LazyRoute routeName="console"><ConsoleTeamDetail /></LazyRoute> : <Navigate to="/console" replace />} />
+        <Route path="/console/people" element={isSuperuser ? <LazyRoute routeName="lifecycle"><ConsolePeopleList /></LazyRoute> : <Navigate to="/console" replace />} />
+        <Route path="/console/lifecycle/handover-tasks" element={isSuperuser ? <LazyRoute routeName="lifecycle"><HandoverTaskList /></LazyRoute> : <Navigate to="/console" replace />} />
+        <Route path="/console/lifecycle/handover-tasks/:taskId" element={isSuperuser ? <LazyRoute routeName="lifecycle"><HandoverTaskDetail /></LazyRoute> : <Navigate to="/console" replace />} />
+        <Route path="/console/lifecycle/onboarding" element={isSuperuser ? <LazyRoute routeName="lifecycle"><OnboardingPage /></LazyRoute> : <Navigate to="/console" replace />} />
+        <Route path="/console/approval-templates" element={isSuperuser ? <LazyRoute routeName="console"><ApprovalTemplatesPage /></LazyRoute> : <Navigate to="/console" replace />} />
+        <Route path="/console/operations/approval-instances" element={isSuperuser ? <LazyRoute routeName="operations"><ApprovalInstancesPage /></LazyRoute> : <Navigate to="/console" replace />} />
+        <Route path="/console/operations/:section" element={isSuperuser ? <LazyRoute routeName="operations"><OperationsPage /></LazyRoute> : <Navigate to="/console" replace />} />
         <Route path="/console/operations" element={<Navigate to="/console/operations/access-requests" replace />} />
-        <Route path="/console/settings" element={<ConsoleSettingsPage />} />
-        <Route path="*" element={<Navigate to="/console" replace />} />
+        <Route path="/console/settings" element={<LazyRoute routeName="console"><ConsoleSettingsPage /></LazyRoute>} />
+        <Route path="*" element={<NotFoundRoute mode="console" />} />
       </Route>
     </Routes>
+  );
+}
+
+function LazyRoute({ children, routeName }: { children: ReactNode; routeName: "console" | "lifecycle" | "operations" | "portal" | "workspace" }) {
+  const location = useLocation();
+
+  return (
+    <RouteErrorBoundary key={`${routeName}:${location.pathname}`}>
+      <Suspense fallback={<RouteLoadingState />}>{children}</Suspense>
+    </RouteErrorBoundary>
+  );
+}
+
+function RouteLoadingState() {
+  const { t } = useI18n();
+
+  return (
+    <section aria-busy="true" aria-live="polite" className="space-y-4" role="status">
+      <PageHeader eyebrow="EasyAuth" title={t("route.loading.title")} description={t("route.loading.description")} />
+    </section>
+  );
+}
+
+interface RouteErrorBoundaryState {
+  hasError: boolean;
+}
+
+class RouteErrorBoundary extends Component<{ children: ReactNode }, RouteErrorBoundaryState> {
+  state: RouteErrorBoundaryState = { hasError: false };
+
+  static getDerivedStateFromError(): RouteErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error("EasyAuth route chunk failed", error, info.componentStack);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return <RouteLoadFailedState />;
+    }
+
+    return this.props.children;
+  }
+}
+
+function RouteLoadFailedState() {
+  const { t } = useI18n();
+
+  return (
+    <section className="space-y-6" role="alert">
+      <PageHeader eyebrow="EasyAuth" title={t("route.loadFailed.title")} description={t("route.loadFailed.description")} />
+      <ButtonLink to={window.location.pathname}>{t("common.retry")}</ButtonLink>
+    </section>
   );
 }
 
@@ -128,20 +209,22 @@ function LoggedOutPage() {
   );
 }
 
-function SettingsPlaceholder({ mode }: { mode: "console" | "portal" }) {
+function NotFoundRoute({ mode }: { mode: "console" | "portal" }) {
   const { t } = useI18n();
+  const home = mode === "console" ? "/console" : "/portal";
 
   return (
-    <section className="space-y-6">
+    <section className="space-y-6" aria-labelledby="react-not-found-title">
       <PageHeader
-        eyebrow={t("settingsPlaceholder.eyebrow")}
-        title={mode === "console" ? t("settingsPlaceholder.console.title") : t("settingsPlaceholder.portal.title")}
-        description={t("settingsPlaceholder.description")}
+        eyebrow="404"
+        title={t("notFound.title")}
+        description={t("notFound.description")}
+        actions={<ButtonLink to={home}>{t("notFound.backHome")}</ButtonLink>}
       />
       <EmptyState
         icon={<Settings size={18} aria-hidden="true" />}
-        title={t("settingsPlaceholder.emptyTitle")}
-        description={t("settingsPlaceholder.emptyDescription")}
+        title={t("notFound.emptyTitle")}
+        description={t("notFound.emptyDescription")}
       />
     </section>
   );

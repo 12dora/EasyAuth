@@ -39,16 +39,20 @@ import type {
 } from "../../../../lib/domain";
 import type { Translator } from "../../../../lib/status";
 import { formatDateTime } from "../../../../lib/status";
+import {
+  parseAuthorizationGroupsPayload,
+  parseConnectorIntervalSeconds,
+  parseConnectorMappingsPayload,
+  type ConnectorMappingsPayload,
+} from "../connectorsContract";
 
 interface MappingDraft {
   external_ref: string;
   auto_create: boolean;
 }
 
-interface ConnectorMappingsPayload extends ListPayload<ConnectorMappingItem> {
-  data: ConnectorMappingItem[];
-  revision: string;
-}
+const AUTHORIZATION_GROUP_CONNECTOR_PAGE_SIZE = 100;
+const AUTHORIZATION_GROUP_CONNECTOR_MAX_PAGES = 1000;
 
 interface TestCandidate {
   connectorKey: string;
@@ -73,7 +77,7 @@ const RUN_TRIGGER_LABEL_KEYS: Record<string, MessageKey> = {
   offboard: "console.connector.trigger.offboard",
 };
 
-export function ConnectorTab({ appKey }: { appKey: string }) {
+export function ConnectorTab({ appKey, canManage }: { appKey: string; canManage: boolean }) {
   const { t } = useI18n();
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -196,7 +200,7 @@ export function ConnectorTab({ appKey }: { appKey: string }) {
     mutationFn: () => {
       const body = {
         enabled: enabledDraft,
-        reconcile_interval_seconds: Number(intervalDraft) || 300,
+        reconcile_interval_seconds: parseConnectorIntervalSeconds(intervalDraft),
         config: configDraft,
       } satisfies JsonObject;
       if (instance) {
@@ -243,15 +247,19 @@ export function ConnectorTab({ appKey }: { appKey: string }) {
 
   const reconcileMutation = useMutation({
     mutationFn: () =>
-      apiRequest(
+      apiRequest<{ queued: boolean }>(
         `/console/api/v1/apps/${appKey}/connectors/${instance?.id}/reconcile`,
         {
           method: "POST",
           body: {} satisfies JsonObject,
         },
       ),
-    onSuccess: () => {
-      toast.success(t("console.connector.reconcileQueued"));
+    onSuccess: (payload) => {
+      if (payload.queued) {
+        toast.success(t("console.connector.reconcileQueued"));
+      } else {
+        toast.info(t("console.connector.reconcileCoalesced"));
+      }
       void queryClient.invalidateQueries({
         queryKey: ["console", "app", appKey, "connector-sync-runs"],
       });
@@ -315,6 +323,7 @@ export function ConnectorTab({ appKey }: { appKey: string }) {
     connectorsQuery.isSuccess && !connectorsQuery.error;
   const candidateLoaded = !instance || draftInstanceId === instance.id;
   const canOperate =
+    canManage &&
     authoritativeConfigLoaded &&
     candidateLoaded &&
     Boolean(connectorKey && activeType);
@@ -340,6 +349,7 @@ export function ConnectorTab({ appKey }: { appKey: string }) {
         </div>
         {connectorsQuery.error ? (
           <StatusBanner
+            live="alert"
             tone="signal"
             title={t("console.connector.loadFailed")}
             message={(connectorsQuery.error as Error).message}
@@ -347,6 +357,7 @@ export function ConnectorTab({ appKey }: { appKey: string }) {
         ) : null}
         {instance?.consecutive_failures ? (
           <StatusBanner
+            live="status"
             tone={instance.consecutive_failures >= 3 ? "signal" : "amber"}
             title={t("console.connector.consecutiveFailures", {
               count: String(instance.consecutive_failures),
@@ -356,6 +367,7 @@ export function ConnectorTab({ appKey }: { appKey: string }) {
         ) : null}
         {!connectorsQuery.isLoading && !connectorsQuery.error && !instance ? (
           <StatusBanner
+            live="status"
             tone="amber"
             title={t("console.connector.notConfigured")}
           />
@@ -373,7 +385,7 @@ export function ConnectorTab({ appKey }: { appKey: string }) {
                 type="button"
                 icon={<RefreshCw size={14} />}
                 loading={reconcileMutation.isPending}
-                disabled={reconcileMutation.isPending || !instance.enabled}
+                disabled={reconcileMutation.isPending || !instance.enabled || !canManage}
                 onClick={() => reconcileMutation.mutate()}
               >
                 {t("console.connector.reconcileNow")}
@@ -382,6 +394,7 @@ export function ConnectorTab({ appKey }: { appKey: string }) {
                 type="button"
                 variant="ghost-danger"
                 icon={<Trash2 size={14} />}
+                disabled={!canManage}
                 onClick={() => setDeleteConfirmOpen(true)}
               >
                 {t("console.connector.deleteInstance")}
@@ -452,6 +465,7 @@ export function ConnectorTab({ appKey }: { appKey: string }) {
                 configuredSecrets={instance?.configured_secrets ?? []}
                 disabled={
                   !authoritativeConfigLoaded ||
+                  !canManage ||
                   !candidateLoaded ||
                   saveMutation.isPending ||
                   testMutation.isPending
@@ -468,6 +482,7 @@ export function ConnectorTab({ appKey }: { appKey: string }) {
                   value={intervalDraft}
                   disabled={
                     !authoritativeConfigLoaded ||
+                    !canManage ||
                     !candidateLoaded ||
                     saveMutation.isPending
                   }
@@ -482,6 +497,7 @@ export function ConnectorTab({ appKey }: { appKey: string }) {
                   checked={enabledDraft}
                   disabled={
                     !authoritativeConfigLoaded ||
+                    !canManage ||
                     !candidateLoaded ||
                     saveMutation.isPending
                   }
@@ -535,11 +551,12 @@ export function ConnectorTab({ appKey }: { appKey: string }) {
         </p>
       </PanelSurface>
       {instance ? (
-        <MappingsPanel
-          key={`mappings:${instance.id}`}
-          appKey={appKey}
-          instance={instance}
-        />
+          <MappingsPanel
+            key={`mappings:${instance.id}`}
+            appKey={appKey}
+            instance={instance}
+            canManage={canManage}
+          />
       ) : null}
       {instance ? (
         <SyncRunsPanel
@@ -562,7 +579,7 @@ export function ConnectorTab({ appKey }: { appKey: string }) {
                 type="button"
                 variant="danger"
                 loading={deleteMutation.isPending}
-                disabled={deleteMutation.isPending}
+                disabled={deleteMutation.isPending || !canManage}
                 onClick={() => deleteMutation.mutate()}
               >
                 {t("console.connector.deleteConfirm")}
@@ -613,9 +630,11 @@ function InstanceStatusBadges({
 function MappingsPanel({
   appKey,
   instance,
+  canManage,
 }: {
   appKey: string;
   instance: ConnectorInstanceItem;
+  canManage: boolean;
 }) {
   const { t } = useI18n();
   const toast = useToast();
@@ -631,12 +650,7 @@ function MappingsPanel({
 
   const groupsQuery = useQuery({
     queryKey: ["console", "app", appKey, "authorization-groups"],
-    queryFn: async () =>
-      parseAuthorizationGroupsPayload(
-        await apiRequest<unknown>(
-          `/console/api/v1/apps/${appKey}/authorization-groups`,
-        ),
-      ),
+    queryFn: () => fetchActiveAuthorizationGroups(appKey),
     enabled: Boolean(appKey),
   });
   const mappingsQuery = useQuery({
@@ -745,7 +759,7 @@ function MappingsPanel({
           variant="primary"
           icon={<Save size={15} />}
           loading={saveMutation.isPending}
-          disabled={saveMutation.isPending || !authoritativeMappingsLoaded}
+          disabled={saveMutation.isPending || !authoritativeMappingsLoaded || !canManage}
           onClick={() => saveMutation.mutate()}
         >
           {t("common.save")}
@@ -758,7 +772,7 @@ function MappingsPanel({
       ) : null}
       {mappingsQuery.error || groupsQuery.error ? (
         <div className="space-y-2">
-          <StatusBanner
+          <StatusBanner live="alert"
             tone="signal"
             title={t("console.connector.loadFailed")}
             message={
@@ -831,7 +845,7 @@ function MappingsPanel({
                           "console.connector.mappingsRefPlaceholder",
                         )}
                         value={draft.external_ref}
-                        disabled={!authoritativeMappingsLoaded}
+                        disabled={!authoritativeMappingsLoaded || !canManage}
                         onChange={(event) =>
                           setDraft(group.key, {
                             external_ref: event.currentTarget.value,
@@ -846,6 +860,7 @@ function MappingsPanel({
                           checked={draft.auto_create}
                           disabled={
                             !authoritativeMappingsLoaded ||
+                            !canManage ||
                             draft.external_ref.trim() === ""
                           }
                           onChange={(event) =>
@@ -868,58 +883,6 @@ function MappingsPanel({
       </TableFrame>
     </PanelSurface>
   );
-}
-
-function parseAuthorizationGroupsPayload(
-  payload: unknown,
-): ListPayload<AuthorizationGroupItem> {
-  if (!isRecord(payload) || !Array.isArray(payload.data)) {
-    throw new Error("授权组响应格式无效。");
-  }
-  if (
-    !payload.data.every(
-      (row) =>
-        isRecord(row) &&
-        typeof row.key === "string" &&
-        row.key.length > 0 &&
-        typeof row.name === "string" &&
-        typeof row.is_active === "boolean",
-    )
-  ) {
-    throw new Error("授权组响应格式无效。");
-  }
-  return payload as unknown as ListPayload<AuthorizationGroupItem>;
-}
-
-function parseConnectorMappingsPayload(
-  payload: unknown,
-): ConnectorMappingsPayload {
-  if (
-    !isRecord(payload) ||
-    typeof payload.revision !== "string" ||
-    payload.revision.length === 0 ||
-    !Array.isArray(payload.data)
-  ) {
-    throw new Error("连接器映射响应格式无效。");
-  }
-  if (
-    !payload.data.every(
-      (row) =>
-        isRecord(row) &&
-        typeof row.authorization_group_key === "string" &&
-        row.authorization_group_key.length > 0 &&
-        typeof row.authorization_group_name === "string" &&
-        typeof row.external_ref === "string" &&
-        typeof row.auto_create === "boolean",
-    )
-  ) {
-    throw new Error("连接器映射响应格式无效。");
-  }
-  return payload as unknown as ConnectorMappingsPayload;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function SyncRunsPanel({
@@ -1034,6 +997,25 @@ function SyncRunsPanel({
       </TableFrame>
     </PanelSurface>
   );
+}
+
+async function fetchActiveAuthorizationGroups(appKey: string): Promise<ListPayload<AuthorizationGroupItem>> {
+  const data: AuthorizationGroupItem[] = [];
+  for (let page = 1; page <= AUTHORIZATION_GROUP_CONNECTOR_MAX_PAGES; page += 1) {
+    const payload = parseAuthorizationGroupsPayload(
+      await apiRequest<unknown>(
+        `/console/api/v1/apps/${appKey}/authorization-groups?status=active&page=${page}&page_size=${AUTHORIZATION_GROUP_CONNECTOR_PAGE_SIZE}`,
+      ),
+    );
+    data.push(...payload.data);
+    if (!payload.pagination) {
+      throw new Error("AUTHORIZATION_GROUP_PAGINATION_MISSING");
+    }
+    if (payload.pagination.page >= payload.pagination.total_pages) {
+      return { data, pagination: payload.pagination };
+    }
+  }
+  throw new Error("AUTHORIZATION_GROUP_PAGE_LIMIT_EXCEEDED");
 }
 
 const RUN_STATUS_LABEL_KEYS: Record<string, MessageKey> = {

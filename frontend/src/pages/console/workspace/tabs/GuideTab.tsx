@@ -33,7 +33,7 @@ export function GuideTab({ appKey }: { appKey: string }) {
   return (
     <section className="space-y-6">
       {guideQuery.error ? (
-        <StatusBanner tone="signal" title="接入说明加载失败" message={(guideQuery.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title="接入说明加载失败" message={(guideQuery.error as Error).message} />
       ) : null}
       <div className="space-y-3">
         <h2 className="text-base font-semibold text-ink">凭据模式</h2>

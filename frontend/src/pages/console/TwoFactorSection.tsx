@@ -48,8 +48,38 @@ export function TwoFactorSection() {
   });
   const status = statusQuery.data;
 
-  // 未加载完成或非本地管理员(OIDC 管理员的两步验证由上游 Authentik 管理)时不渲染。
-  if (!status || !status.supported) {
+  if (statusQuery.isLoading) {
+    return (
+      <PanelSurface padding="lg" className="space-y-3" data-test-id="two-factor-card">
+        <h2 className="text-base font-semibold text-ink" data-test-id="two-factor-title">
+          {t("settings.twoFactor.title")}
+        </h2>
+        <p className="text-body text-ink-faint">{t("common.loading")}</p>
+      </PanelSurface>
+    );
+  }
+
+  if (statusQuery.error) {
+    return (
+      <PanelSurface padding="lg" className="space-y-3" data-test-id="two-factor-card">
+        <h2 className="text-base font-semibold text-ink" data-test-id="two-factor-title">
+          {t("settings.twoFactor.title")}
+        </h2>
+        <StatusBanner
+          live="alert"
+          tone="signal"
+          title={t("settings.twoFactor.loadFailed")}
+          message={(statusQuery.error as Error).message}
+        />
+        <Button type="button" onClick={() => void statusQuery.refetch()}>
+          {t("common.retry")}
+        </Button>
+      </PanelSurface>
+    );
+  }
+
+  // 非本地管理员(OIDC 管理员的两步验证由上游 Authentik 管理)由后端显式 supported=false 表达。
+  if (!status?.supported) {
     return null;
   }
 
@@ -119,7 +149,7 @@ function TotpRow({ t, enabled, onStatus }: { t: Translate; enabled: boolean; onS
       )}
       {error && !beginOpen ? (
         <div className="w-full">
-          <StatusBanner tone="signal" title={error} />
+          <StatusBanner live="alert" tone="signal" title={error} />
         </div>
       ) : null}
       {setup ? (
@@ -189,7 +219,7 @@ function TotpBeginDialog({
             onChange={(event) => setCurrentPassword(event.currentTarget.value)}
           />
         </Field>
-        {error ? <StatusBanner tone="signal" title={error} /> : null}
+        {error ? <StatusBanner live="alert" tone="signal" title={error} /> : null}
       </div>
     </Dialog>
   );
@@ -270,7 +300,7 @@ function TotpEnrollDialog({
             className="text-center font-mono tracking-[0.4em]"
           />
         </Field>
-        {error ? <StatusBanner tone="signal" title={error} /> : null}
+        {error ? <StatusBanner live="alert" tone="signal" title={error} /> : null}
       </div>
     </Dialog>
   );
@@ -349,7 +379,7 @@ function TotpDisableDialog({
             onChange={(event) => setCurrentPassword(event.currentTarget.value)}
           />
         </Field>
-        {error ? <StatusBanner tone="signal" title={error} /> : null}
+        {error ? <StatusBanner live="alert" tone="signal" title={error} /> : null}
       </div>
     </Dialog>
   );
@@ -528,7 +558,7 @@ function AddPasskeyDialog({
             onChange={(event) => setCurrentPassword(event.currentTarget.value)}
           />
         </Field>
-        {error ? <StatusBanner tone="signal" title={error} /> : null}
+        {error ? <StatusBanner live="alert" tone="signal" title={error} /> : null}
       </div>
     </Dialog>
   );
@@ -602,7 +632,7 @@ function RemovePasskeyDialog({
             onChange={(event) => setCurrentPassword(event.currentTarget.value)}
           />
         </Field>
-        {error ? <StatusBanner tone="signal" title={error} /> : null}
+        {error ? <StatusBanner live="alert" tone="signal" title={error} /> : null}
       </div>
     </Dialog>
   );

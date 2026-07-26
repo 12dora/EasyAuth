@@ -27,6 +27,7 @@ import { credentialDisablePathSegment } from "../../../../lib/credentials";
 import { useI18n } from "../../../../i18n/I18nProvider";
 import { CreateCredentialForm } from "../credentials/CreateCredentialForm";
 import { useCredentialsActions } from "../credentials/useCredentialsActions";
+import { invalidateAppDerivedQueries } from "../invalidateAppQueries";
 import { credentialKindLabel } from "../utils";
 
 export function CredentialsTab({ appKey, canManage }: { appKey: string; canManage: boolean }) {
@@ -49,6 +50,7 @@ export function CredentialsTab({ appKey, canManage }: { appKey: string; canManag
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["console", "app", appKey, "credentials"] });
+      invalidateAppDerivedQueries(queryClient, appKey);
       setEditingCredential(null);
       toast.success(t("console.credentials.capabilitiesSaveSuccess"));
     },
@@ -157,7 +159,7 @@ export function CredentialsTab({ appKey, canManage }: { appKey: string; canManag
         message={t("console.credentials.permissionBoundaryDescription")}
       />
       {credentialsQuery.error ? (
-        <StatusBanner tone="signal" title={t("console.credentials.loadFailed")} message={(credentialsQuery.error as Error).message} />
+        <StatusBanner live="alert" tone="signal" title={t("console.credentials.loadFailed")} message={(credentialsQuery.error as Error).message} />
       ) : null}
       <TableFrame>
         <TableRoot>
