@@ -37,6 +37,25 @@ jobs:
       - name: 安装后端依赖
         run: uv sync --extra dev --frozen
 
+      - name: 安装 pnpm
+        uses: pnpm/action-setup@f40ffcd9367d9f12939873eb1018b921a783ffaa
+        with:
+          version: ${{ env.PNPM_VERSION }}
+
+      - name: 安装 Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: pnpm
+
+      - name: 安装前端依赖
+        run: pnpm install --frozen-lockfile
+
+      # React shell 集成测试与 manage.py check 依赖真实 Vite manifest 和 static 目录,
+      # 这些产物不入库, 必须在后端测试前现场构建。
+      - name: 构建真实静态资源
+        run: pnpm --filter @easyauth/frontend build
+
       - name: 断言 SQLite 测试数据库隔离
         run: |
           unset DATABASE_URL
@@ -52,6 +71,8 @@ jobs:
           PY
 
       - name: Django 检查与迁移漂移检查
+        env:
+          DJANGO_SETTINGS_MODULE: easyauth.config.settings.test
         run: |
           unset DATABASE_URL
           .venv/bin/python manage.py check
@@ -124,6 +145,8 @@ jobs:
           PY
 
       - name: 迁移 PostgreSQL 测试库
+        env:
+          DJANGO_SETTINGS_MODULE: easyauth.config.settings.test
         run: .venv/bin/python manage.py migrate --noinput
 
       - name: 多连接、Redis 与 broker 关键回归

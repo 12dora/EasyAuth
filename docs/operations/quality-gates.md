@@ -7,7 +7,7 @@ Cosign 签名并验证镜像（打 `v*.*.*` tag 时还会创建 GitHub Release�
 
 | 作业 | 覆盖 |
 | --- | --- |
-| 后端 SQLite 隔离套件 | 断言测试库确实是 SQLite → `manage.py check` → `makemigrations --check --dry-run` → 主 pytest |
+| 后端 SQLite 隔离套件 | 构建前端产物 → 断言测试库确实是 SQLite → `manage.py check` → `makemigrations --check --dry-run` → 主 pytest |
 | PostgreSQL 多连接与 Redis/broker 套件 | 真实 PG 16 + Redis 7 服务；断言 vendor → 迁移回放 → 通知配额并发、outbox、连接器 dispatch、运行健康 |
 | SDK 与 FastAPI 全功能套件 | 以 `.[fastapi]` 安装后跑全量 SDK 测试，并**禁止出现 skip**（防止可选依赖缺失被当成通过） |
 | Ruff 与 BasedPyright | 静态检查 |
@@ -39,13 +39,17 @@ Cosign 签名并验证镜像（打 `v*.*.*` tag 时还会创建 GitHub Release�
 
 ## 本地等价命令
 
+Vite manifest 与 `src/easyauth/static/` 产物不入库，而 React shell 集成测试和 `manage.py check`
+都依赖它们，所以先构建前端再跑后端测试。未配置 `.env.local` 时，`manage.py` 需要显式指定
+测试配置模块（否则 `base` 会因缺少 `DJANGO_SECRET_KEY` 而拒绝启动）。
+
 ```bash
-.venv/bin/python manage.py check
-.venv/bin/python manage.py makemigrations --check --dry-run
+pnpm --filter @easyauth/frontend build
+DJANGO_SETTINGS_MODULE=easyauth.config.settings.test .venv/bin/python manage.py check
+DJANGO_SETTINGS_MODULE=easyauth.config.settings.test .venv/bin/python manage.py makemigrations --check --dry-run
 .venv/bin/pytest
 .venv/bin/ruff check .
 .venv/bin/basedpyright
 pnpm --filter @easyauth/frontend test
-pnpm --filter @easyauth/frontend build
 pnpm --filter @easyauth/frontend e2e:fullstack
 ```
