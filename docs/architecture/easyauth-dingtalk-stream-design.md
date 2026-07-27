@@ -86,7 +86,7 @@ ACK 契约(`EasyAuthDingTalkEventHandler`):
 
 ### 运维观测
 
-- 收件箱可在 Django admin(`DingTalkStreamEvent`, 只读)按状态/类型筛查; `failed` 行携带完整错误与原始事件体, 修复后可人工重放(把 `status` 改回 `received` 后重新派发任务)——正常路径不允许人工改写。
+- 收件箱按状态/类型排查; `failed` 行携带完整错误与原始事件体(保留期内), 修复后可人工重放(把 `status` 改回 `received` 后重新派发任务)——正常路径不允许人工改写。生产不暴露 `/admin/`, 排查走控制台运营页或数据库只读会话。
 - 目录刷新的结果落在既有 `DingTalkDirectorySyncState` 与任务日志; 离职处置照旧产生审计事件与交接单。
 - Stream 进程掉线的影响面 = 退化回既有轮询节奏(最长 5 分钟 + Authentik 自身同步间隔), 不丢业务事实。
 

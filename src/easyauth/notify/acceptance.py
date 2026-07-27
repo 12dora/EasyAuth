@@ -121,7 +121,7 @@ def accept_notify_message(  # noqa: PLR0913 - 受理入口完整业务事实。
     try:
         with transaction.atomic():
             locked_app = App.objects.select_for_update().get(id=app.id)
-            # 日配额: 事务内先查后写(第 2 篇 §3.2)。
+            # 日配额: 事务内先查后写。
             assert_daily_quota(app_id=locked_app.id, additional=len(resolved))
             message = _create_message_with_recipients(
                 app=locked_app,

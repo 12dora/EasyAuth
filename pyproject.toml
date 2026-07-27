@@ -83,8 +83,8 @@ ignore = [
 [tool.basedpyright]
 # BasedPyright 是生产运行时代码门禁；测试代码由 pytest 与 Ruff 负责。
 include = ["src/easyauth"]
-# Django 迁移由 SQLite/PG 迁移回放和漂移检查负责。deploy.py 属于用户明确排除的
-# EA-AUD-001 整改范围；除这两个边界外，生产运行时代码全部进入类型门禁。
+# Django 迁移由 SQLite/PG 迁移回放和漂移检查负责。deploy.py 是用户明确排除的
+# 反代部署路径（不作为上线路径）；除这两个边界外，生产运行时代码全部进入类型门禁。
 exclude = [
   "src/easyauth/**/migrations/**",
   "src/easyauth/config/settings/deploy.py",

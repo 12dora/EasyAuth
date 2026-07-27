@@ -6,7 +6,7 @@
 
 **面向内部应用的集中式自助授权层。**
 
-Authentik 负责身份认证，DingTalk 负责审批流程，EasyAuth 是每个已接入应用里
+Authentik 负责身份认证，钉钉提供组织目录与审批能力，EasyAuth 是每个已接入应用里
 *「用户到底能做什么」* 的唯一事实来源，同时也是员工发起访问申请的自助门户。
 
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](./LICENSE)
@@ -54,14 +54,14 @@ EasyAuth 是**单公司、自托管**的**授权**服务。它不替代身份提
 
 > *「这个用户此刻在**我这个应用**里拥有哪些角色和权限？」*
 
-目标是：试点内部应用能在**一个工作日内**接入，此后不必再自己实现 DingTalk 审批、角色建模或权限逻辑。
+目标是：试点内部应用能在**一个工作日内**接入，此后不必再自己实现审批流程、角色建模或权限逻辑。
 
 ### 亮点
 
 - 🔐 **授权事实的唯一来源** —— 授权记录只能由 EasyAuth 的 `GrantService` 写入；
-  Authentik、DingTalk、下游应用都无法伪造一条授权事实。
-- 🧑‍💼 **员工自助门户** —— 申请角色/权限、选择有效期，查看「我的权限 / 我的申请 / 即将过期」。
-- 🧰 **运营控制台** —— 建模应用、角色、权限、权限分组、审批规则、授权范围、凭据，并可现场联调查询。
+  Authentik、钉钉、下游应用都无法伪造一条授权事实。
+- 🧑‍💼 **员工自助门户** —— 申请授权组/权限、选择有效期，查看「我的权限 / 我的申请 / 待我审批」。
+- 🧰 **运营控制台** —— 建模应用、授权组、权限、权限分组、审批规则、授权范围、凭据，并可现场联调查询。
 - 🧩 **一天接入** —— 6 步接入向导，配合零依赖 SDK，从描述符端点自动注册应用并导入权限目录。
 - 🪪 **两种凭据，同一协议** —— 静态 app token 与 OAuth2 client credentials
   都调用同一公共 API；`directory` / `notify` 能力按具体凭据独立授予。
@@ -74,14 +74,14 @@ EasyAuth 是**单公司、自托管**的**授权**服务。它不替代身份提
 
 ```mermaid
 flowchart LR
-  subgraph Upstream["身份与审批（上游）"]
+  subgraph Upstream["身份与组织（上游）"]
     AK["Authentik<br/>OIDC 登录 · 用户状态 · groups"]
-    DT["DingTalk<br/>审批流程 · 组织目录"]
+    DT["钉钉<br/>组织目录 · 审批 · 工作通知"]
   end
 
   subgraph EA["EasyAuth（授权事实来源）"]
-    Portal["员工门户<br/>自助申请"]
-    Console["运营控制台<br/>应用 · 角色 · 权限"]
+    Portal["员工门户<br/>自助申请 · 站内审批"]
+    Console["运营控制台<br/>应用 · 授权组 · 权限"]
     Grant["GrantService<br/>授权记录的唯一写入口"]
     API["公共 API /api/v1"]
     Audit["append-only 审计日志"]
@@ -89,16 +89,16 @@ flowchart LR
 
   subgraph Down["内部应用（下游）"]
     App1["EasyTrade"]
-    App2["CRM"]
+    App2["EasyProject"]
     AppN["…任意内部应用"]
   end
 
   AK -- "OIDC subject · groups · 在职/离职" --> EA
-  DT -- "审批结果（不是授权）" --> Grant
+  DT -- "组织目录 · Stream 事件" --> EA
   Portal --> Grant
   Console --> Grant
   Grant --> API
-  API -- "roles + permissions 快照" --> App1
+  API -- "groups + grants 快照" --> App1
   API --> App2
   API --> AppN
 ```
@@ -106,8 +106,8 @@ flowchart LR
 **基本规则**
 
 - **Authentik** 是登录身份、公共 `user_id`（OIDC subject）和在职状态的权威来源。EasyAuth 镜像用户，从不凭空创造用户。
-- **DingTalk** 只提供审批流程和组织目录。审批只是信号，**不是**授权——审批通过后由 EasyAuth 落库授权。
-- **EasyAuth** 拥有授权事实。下游应用拉取快照后落地本地缓存，不得在每次业务查询时实时调用 EasyAuth。
+- **钉钉** 提供组织通讯录、面向下游应用的审批能力和工作通知投递，**不是**授权来源。
+- **EasyAuth** 拥有授权事实，员工申请的审批也在 EasyAuth 内部完成。下游应用拉取快照后落地本地缓存，不得在每次业务查询时实时调用 EasyAuth。
 
 ---
 
@@ -115,12 +115,12 @@ flowchart LR
 
 | 术语 | 含义 |
 | --- | --- |
-| **授权事实 / 授权记录** | 用户在某应用当前的角色与权限，只能由 `GrantService` 写入。 |
+| **授权事实 / 授权记录** | 用户在某应用当前的授权组与权限，只能由 `GrantService` 写入。 |
 | **App** | 一个已接入的内部应用，由稳定的 `app_key` 标识。 |
-| **Role / Permission** | `Role` 是员工申请的单元；`Permission`（如 `customer:view:department`）是应用消费的细粒度能力。 |
+| **授权组 / 权限** | 授权组（`AuthorizationGroup`，kind 为 `role` 或 `bundle`）是员工申请的单元；权限（如 `customer:view:department`）是应用消费的细粒度能力。 |
 | **授权范围** | 权限作用的数据/人员边界，如 `SELF`、`MANAGED`、`MANAGED_USERS`、`ALL`。 |
-| **`MANAGED_USERS`** | 当前用户在指定权限下可管理的下级人员集合，由组织关系解析得到（第一版：钉钉主管链）。 |
-| **下游授权快照** | 接入应用拉取并落地的内容：`version`、`expires_at`、授权列表和解析后的 `MANAGED_USERS`；业务查询只依赖本地快照。 |
+| **`MANAGED_USERS`** | 当前用户在指定权限下可管理的下级人员集合，由组织关系解析得到（钉钉主管链 / EasyAuth 团队 / 两者并集）。 |
+| **下游授权快照** | 接入应用拉取并落地的内容：`groups`、`grants`、三个版本号、`expires_at` 和解析后的 `MANAGED_USERS`；业务查询只依赖本地快照。 |
 
 完整领域词表见 [`CONTEXT.md`](./CONTEXT.md)。
 
@@ -173,13 +173,14 @@ EasyAuth 拉取描述符，自动注册应用并导入权限目录，无需手�
 ```python
 from easyauth_app_sdk import EasyAuthAppClient
 
-client = EasyAuthAppClient(base_url="http://easyauth:8001", app_key="crm", token="eat_...")
-snapshot = client.query_user_permissions("ak_uid_123")
-# snapshot.roles, snapshot.permissions, snapshot.version, snapshot.expires_at
+client = EasyAuthAppClient(base_url="https://easyauth.example.com", app_key="crm", token="eat_...")
+snapshot = client.query_user_permissions("ak_uid_123")   # 返回 dict
+# snapshot["groups"], snapshot["grants"], snapshot["snapshot_version"], snapshot["expires_at"]
 ```
 
-与此同时，员工在**门户**发起申请（选择应用 → 角色/权限 → 有效期 → 原因）。申请进入 DingTalk 审批；
-审批通过后 EasyAuth 写入授权，该用户的下一次权限查询即刻生效。
+与此同时，员工在**门户**发起申请（选择应用 → 授权组/权限 → 有效期 → 原因 → 审批人）。
+审批在 EasyAuth 内部完成（审批人在门户「待我审批」处理，管理员可代审并留痕）；
+通过后 EasyAuth 写入授权，该用户的下一次权限查询即刻生效。
 
 ---
 
@@ -198,17 +199,28 @@ Authorization: Bearer {app_token_or_oauth_access_token}
 {
   "user_id": "ak_uid_123",
   "app_key": "crm",
-  "roles": ["sales_manager"],
-  "permissions": ["customer:edit:own", "customer:view:department"],
-  "version": 12,
+  "groups": [
+    {"key": "sales_manager", "kind": "role", "name": "销售主管"}
+  ],
+  "grants": [
+    {"permission": "customer:view", "scope": "MANAGED_USERS", "source_type": "group", "source_key": "sales_manager"}
+  ],
+  "grant_version": 12,
+  "catalog_version": 7,
+  "snapshot_version": "12.7.a1b2c3",
   "expires_at": "2026-06-05T10:15:00Z"
 }
 ```
 
 - `user_id` 是 Authentik UID / OIDC subject，绝不暴露 EasyAuth 内部数据库 ID。
-- disabled / departed 用户、revoked / expired 授权都解析为**空** roles 和 permissions（不泄露用户存在性）。
-- `version` 是单调递增的授权版本，用于缓存失效判断；`expires_at` 是**缓存**过期时间（默认 TTL 300 秒，最大 900 秒），不是授权生命周期。
+- disabled / departed 用户、revoked / expired 授权都解析为**空** `groups` 和 `grants`（不泄露用户存在性）。
+- 三个版本号用于缓存失效判断：`grant_version` 是授权事实版本，`catalog_version` 是权限目录版本，
+  `snapshot_version` 是两者加解析结果摘要的组合值。
+- `expires_at` 是**缓存**过期时间（默认 TTL 300 秒），不是授权生命周期。
+- 目录瞬时故障导致 `MANAGED_USERS` 无法解析时返回 `503`，下游**不得**当作真实撤权。
 - 每次成功查询写入 `app_permission_queried` 审计事件。
+
+完整字段说明见 [`docs/api/easyauth-public-api.md`](docs/api/easyauth-public-api.md)。
 
 ### OAuth2 client credentials
 
@@ -220,17 +232,17 @@ grant_type=client_credentials&client_id={client_id}&client_secret={client_secret
 ```
 
 静态 app token 与 OAuth2 access token 使用同一公共 API 协议；每条凭据可独立获授
-`directory` / `notify` capability，因此不同凭据的可调用能力可以不同。完整契约见
-[`docs/architecture/easyauth-architecture-design.md`](docs/architecture/easyauth-architecture-design.md)。
-生产下游必须分别创建权限查询、目录同步、通知发送三条 credential，并使用三个
-`EasyAuthAppClient` 实例和三个不同 token：权限查询凭据不授予平台 capability，目录凭据
+`directory` / `notify` 能力，因此不同凭据的可调用能力可以不同。
+
+生产下游必须分别创建权限查询、目录同步、通知发送三条凭据，并使用三个
+`EasyAuthAppClient` 实例和三个不同 token：权限查询凭据不授予平台能力，目录凭据
 仅授予 `directory`，通知凭据仅授予 `notify`。
 
 目录用户、部门和主管条目返回带 `source_slug` / `corp_id` 的 opaque
-`user_ref` / `department_ref`；下游必须原样保存并用于详情、过滤与通知，不要自行
-构造 `dt:` 或只按原始钉钉 ID 关联。每个 App 的通知通道还必须绑定控制台权威列表中的
-一个目录作用域，避免跨企业投递。平台能力就绪并不表示 EasyTrade 已完成消费端切换；
-仍需单独迁移、授权凭据并验收。
+`user_ref` / `department_ref`；下游必须原样保存并用于详情、过滤与通知，不要自行拼接或
+按原始钉钉 ID 关联。每个 App 的通知通道还必须绑定控制台权威列表中的一个目录作用域，
+避免跨企业投递。详见
+[`docs/architecture/platform-directory-notify.md`](docs/architecture/platform-directory-notify.md)。
 
 ---
 
@@ -284,7 +296,7 @@ EasyAuth 有**两条**登录路径：
 
 ### 1. 工作账号（生产路径）—— Authentik OIDC
 
-`/auth/login/` → Authentik（→ DingTalk）→ `/auth/callback/`。OIDC callback 只绑定当前
+`/auth/login/` → Authentik（→ 钉钉扫码）→ `/auth/callback/`。OIDC callback 只绑定当前
 `sub` 对应的 active `UserMirror`；后续控制台请求必须通过 Authentik admin API 读取该用户
 当前组，并与 `EASYAUTH_CONSOLE_SUPERUSER_GROUPS`（默认 `EasyAuth Admins`）求交集判断
 **控制台超级管理员**。无法取得上游当前组时失败关闭，不信任登录时的 `groups` claim 或
@@ -343,8 +355,9 @@ export EASYAUTH_CONSOLE_SUPERUSER_GROUPS="EasyAuth Admins"
   —— 幂等地配置 Provider/Application/scope mapping/logout，并附验收探测。
 - **手动 UI 配置：** [`docs/guides/authentik-easyauth-ui-setup-human.md`](docs/guides/authentik-easyauth-ui-setup-human.md)。
 
-处于 Authentik *Application Binding* **不会**使某人成为 EasyAuth 管理员——管理员权限只来自
-`groups` claim 与 `EASYAUTH_CONSOLE_SUPERUSER_GROUPS` 的交集。
+处于 Authentik *Application Binding* **不会**使某人成为 EasyAuth 管理员——管理员权限来自
+每次请求期从 Authentik 读到的当前组与 `EASYAUTH_CONSOLE_SUPERUSER_GROUPS` 的交集。
+在 Authentik 里移出该组后，已有 session 会立即失去控制台权限。
 
 ---
 
@@ -410,7 +423,7 @@ ASGI worker 时使用，但在加入 Uvicorn 或等价 ASGI 服务器依赖并�
 - 后端：Django 5.2（Python 3.12），由 gunicorn `easyauth.config.wsgi:application` 提供。
 - 前端：React 19 + Vite，构建到 `src/easyauth/static/easyauth/frontend`。
 - 数据存储：PostgreSQL 16 + Redis 7（见 docker-compose.yml）。需要 Celery worker + beat。
-- 身份上游是 Authentik（OIDC）；DingTalk 提供审批。EasyAuth 是授权事实来源。
+- 身份上游是 Authentik（OIDC）；钉钉提供组织目录与通知。EasyAuth 是授权事实来源。
   管理员权限 = 请求期 Authentik 当前组 ∩ `EASYAUTH_CONSOLE_SUPERUSER_GROUPS`；上游不可用
   或当前组不再匹配时旧 session 立即失去高权限。
 
@@ -479,7 +492,7 @@ ASGI worker 时使用，但在加入 Uvicorn 或等价 ASGI 服务器依赖并�
 | `EASYAUTH_AUTHENTIK_OIDC_*` | ✓ | issuer、authorization/token/JWKS 端点、client id/secret、redirect URI、scopes。 |
 | `EASYAUTH_CONSOLE_SUPERUSER_GROUPS` | ✓ | 授予控制台超管的 groups（来自 OIDC `groups`）。默认 `EasyAuth Admins`。 |
 | `EASYAUTH_AUTHENTIK_BASE_URL` / `EASYAUTH_AUTHENTIK_API_TOKEN` | 目录同步需要 | Authentik 目录/API 访问。 |
-| `EASYAUTH_DINGTALK_CALLBACK_SECRET` | 审批需要 | 校验 DingTalk 审批回调。 |
+| `EASYAUTH_DINGTALK_CALLBACK_SECRET` | 审批需要 | 校验钉钉审批回调。 |
 | `EASYAUTH_WEBAUTHN_RP_ID` / `_RP_NAME` / `_ORIGINS` | 通行密钥需要 | WebAuthn RP 配置；必须与浏览器地址栏完全一致。 |
 | `EASYAUTH_TRUSTED_PROXY_HOPS` | 反代后需要 | 可信反向代理层数，用于解析客户端 IP。 |
 | `DJANGO_SECURE_HSTS_SECONDS` | 可选 | `DEBUG=0` 时的 HSTS max-age（默认 3600）。 |
@@ -494,15 +507,19 @@ ASGI worker 时使用，但在加入 Uvicorn 或等价 ASGI 服务器依赖并�
 
 ```bash
 .venv/bin/python manage.py check
-.venv/bin/python manage.py migrate --check
+.venv/bin/python manage.py makemigrations --check --dry-run   # 迁移漂移
 .venv/bin/pytest                                   # 后端单元 + 集成
 .venv/bin/ruff check .                             # lint
-.venv/bin/basedpyright                             # 类型检查
+.venv/bin/basedpyright                             # 类型检查（覆盖 src/easyauth）
 pnpm --filter @easyauth/frontend test              # 前端单元（vitest）
-pnpm --filter @easyauth/frontend build             # 类型检查 + 生产构建
-pnpm --filter @easyauth/frontend e2e               # Playwright 冒烟
-PYTHONPATH=sdk/python/src .venv/bin/pytest sdk/python/tests   # SDK
+pnpm --filter @easyauth/frontend build             # 类型检查 + 生产构建 + 分包预算
+pnpm --filter @easyauth/frontend e2e:fullstack     # 真实后端全栈冒烟（无 API mock）
+cd sdk/python && python -m pip install ".[fastapi]" && python -m pytest tests   # SDK
 ```
+
+CI 把这些拆成 6 个必过作业（SQLite 后端、PostgreSQL/Redis 并发、SDK+FastAPI、Ruff 与
+BasedPyright、前端、全栈 Playwright），全部通过后才构建、签名并发布镜像。
+详见 [`docs/operations/quality-gates.md`](docs/operations/quality-gates.md)。
 
 ---
 
@@ -511,20 +528,23 @@ PYTHONPATH=sdk/python/src .venv/bin/pytest sdk/python/tests   # SDK
 ```text
 EasyAuth/
 ├─ src/easyauth/
-│  ├─ config/            # settings、URLs、WSGI/ASGI、Celery、middleware
-│  ├─ accounts/          # Authentik 登录、本地管理员、用户镜像与状态同步
-│  ├─ applications/      # App / Role / Permission / 分组 / 审批规则 / 凭据
-│  ├─ access_requests/   # AccessRequest 状态机与员工申请服务
+│  ├─ config/            # settings、URLs、WSGI/ASGI、Celery、middleware、限流
+│  ├─ accounts/          # Authentik 登录、本地管理员、用户与钉钉目录镜像
+│  ├─ applications/      # App / 权限 / 授权组 / 审批规则 / 凭据 / 平台能力
+│  ├─ access_requests/   # AccessRequest 状态机、站内审批、授权落地
 │  ├─ grants/            # AccessGrant —— 授权事实的唯一写入口
-│  ├─ api/               # DRF 公共 API（/api/v1）—— 权限查询、认证类
-│  ├─ integrations/      # authentik/ + dingtalk/ 适配器（协议、签名、payload）
+│  ├─ api/               # 公共 API（/api/v1）—— 权限查询、目录、通知、审批
 │  ├─ portal/ · admin_console/   # 员工门户与运营控制台（承载 React 应用）
+│  ├─ integrations/      # authentik/ + dingtalk/ 适配器（协议、签名、Stream）
+│  ├─ connectors/        # 出站供给连接器（NetBird 等）与对账
+│  ├─ lifecycle/ · teams/        # 离职转岗交接、入职模板 · 团队
+│  ├─ workflows/ · notify/ · webhooks/ · outbox/   # 审批实例 · 通知 · Webhook · 事务发件箱
 │  ├─ audit/ · tasks/    # append-only 审计日志 · Celery 任务
 │  └─ static/            # 构建后的 React 产物落在此处
 ├─ frontend/             # React 19 + Vite + Tailwind SPA（双语 i18n）
 ├─ sdk/python/           # easyauth-app-sdk（下游接入，零运行时依赖）
-├─ docs/                 # 架构、API、指南、决策、计划（中文）
-├─ tests/                # 单元 / 集成 / e2e
+├─ docs/                 # 架构、API、指南、决策、运维（中文）
+├─ tests/                # 单元 / 集成
 └─ docker-compose.yml    # 本地/生产数据存储 PostgreSQL + Redis
 ```
 
@@ -534,11 +554,10 @@ EasyAuth/
 
 深入文档见 [`docs/`](docs/README.md)（中文撰写）：
 
-- **架构** —— [`docs/architecture/easyauth-architecture-design.md`](docs/architecture/easyauth-architecture-design.md)
-- **平台目录与通知能力** —— [`docs/design/platform-directory-notify/`](docs/design/platform-directory-notify/README.md)
-- **公共 API 设计** —— [`docs/api/`](docs/api/)
-- **从零部署实录（三应用全链路）** —— [`docs/guides/zero-to-full-deployment.md`](docs/guides/zero-to-full-deployment.md)
-- **Authentik 配置** —— [自动化（LLM）](docs/guides/authentik-easyauth-automation-setup-llm.md) · [手动（人工）](docs/guides/authentik-easyauth-ui-setup-human.md)
+- **架构** —— [架构设计](docs/architecture/easyauth-architecture-design.md) · [异步动作与失败语义](docs/architecture/async-and-failure-semantics.md) · [前端契约](docs/architecture/frontend-contract.md)
+- **平台能力** —— [企业目录与钉钉通知](docs/architecture/platform-directory-notify.md) · [钉钉 Stream 事件](docs/architecture/easyauth-dingtalk-stream-design.md)
+- **API 契约** —— [`docs/api/`](docs/api/)（公共 / 控制台 / 门户）
+- **部署** —— [从零部署全链路](docs/guides/zero-to-full-deployment.md) · [Authentik 自动化配置](docs/guides/authentik-easyauth-automation-setup-llm.md) · [Authentik 手动配置](docs/guides/authentik-easyauth-ui-setup-human.md)
 - **应用接入** —— [接入向导](docs/guides/easyauth-app-onboarding-wizard.md) · [SDK 集成](docs/guides/easyauth-app-sdk-integration.md)
 - **本地管理员登录** —— [`docs/guides/local-admin-login.md`](docs/guides/local-admin-login.md)
 - **领域词表** —— [`CONTEXT.md`](./CONTEXT.md) · **协作规则** —— [`AGENTS.md`](./AGENTS.md)
@@ -548,18 +567,19 @@ EasyAuth/
 ## 当前能力
 
 - 下游应用可通过静态 token 或 OAuth2 client credentials 查询授权快照。
-- 员工门户支持权限申请、审批、变更、撤销和续期。
-- 管理控制台支持应用、授权目录、凭据、生命周期、团队、工作流与连接器管理。
+- 员工门户支持权限申请、站内审批、变更、撤销、续期和撤回。
+- 管理控制台支持应用、授权目录、凭据、生命周期、团队、审批模板与连接器管理。
 - 平台能力提供企业目录查询和按应用隔离的钉钉工作通知。
 
 ---
 
 ## 安全
 
-- 授权记录只能由 `GrantService` 写入；DingTalk 审批从不直接授予权限，紧急撤权只能*减少*访问。
+- 授权记录只能由 `GrantService` 写入；审批通过只是信号，紧急撤权只能*减少*访问。
+- 控制台超管权限在每次请求期向 Authentik 核对当前组，撤组后旧 session 立即失效；本地管理员必须绑定二次因子；生产不暴露 `/admin/`。
 - app token 与 OAuth secret 以 hash 存储、绝不明文记录；一条凭据只绑定一个应用，路径 `app_key` 必须与凭据所属应用一致。
 - `directory` / `notify` 必须同时通过 App 层开通与单凭据授权；manifest 声明不会自动开通任一层。
-- 所有外部输入（DingTalk 回调、Authentik payload、门户/控制台表单、应用请求）都在边界处校验，之后才能影响授权决策。
+- 所有外部输入（钉钉回调与 Stream 事件、Authentik payload、门户/控制台表单、应用请求）都在边界处校验，之后才能影响授权决策。
 - 审计日志 append-only。发现漏洞？请私下向维护者披露，而非公开 issue。
 
 ---

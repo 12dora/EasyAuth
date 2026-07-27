@@ -244,7 +244,7 @@ def test_deliver_network_interrupt_keeps_pending(
 def test_deliver_http_5xx_keeps_pending_and_reschedules(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """钉钉 HTTP 5xx 不得终态, 走常规退避(第 3 篇 §4)。"""
+    """钉钉 HTTP 5xx 不得终态, 走常规退避。"""
     app = App.objects.create(app_key="notify-sm-5xx", name="5xx")
     _seed_user(authentik="x1", dingtalk="dt-x1")
     message = _accept(app, ["x1"])

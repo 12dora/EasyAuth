@@ -40,19 +40,26 @@
 
 控制台 API 返回的模板列表包含当前修订号,转岗计划返回绑定修订号。前端展示差异名称优先使用冻结 `grant_diff` 中的名称,只在历史数据缺字段时才用当前目录映射辅助显示;提交确认仍只发送冻结条目的 `key` 和计划 `revision`。
 
-## 界面语言
+## 权限目录的双语显示名
 
-前端提供 zh-CN / en 两种界面语言,顶栏「中 / EN」切换,选择持久化在 `localStorage` 的 `easyauth.locale`,默认 zh-CN。
+权限、权限组、权限范围和授权组的英文显示名来自目录双语字段 `name_en` / `description_en`
+(manifest 可选字段,控制台目录页可维护);en 界面下英文字段为空时回落中文主字段。
 
-- 界面文案消息目录在 `frontend/src/i18n/messages.ts`,zh-CN 为事实源,en 通过 `Record<MessageKey, string>` 在编译期强制键集合一致。
-- 权限、权限组、权限范围、授权组等目录数据的英文显示名来自目录双语字段 `name_en` / `description_en`(manifest 可选字段,控制台目录页和 Django admin 均可维护);en 语言下英文字段为空时回落中文主字段。
-- 公共权限查询响应形状不变,不包含双语字段;下游展示名以下游本地目录为准。
+公共权限查询响应不含双语字段——下游展示名以下游本地目录为准。界面语言的完整口径见
+[前端契约](../architecture/frontend-contract.md#5-国际化)。
 
-## 部署口径(S0-Q2)
+## 联调时的 Host 配置
 
-下游应用(如 EasyTrade)在容器内访问宿主机上的 EasyAuth 时,请求 Host 为 `host.docker.internal`,必须加入 Django `ALLOWED_HOSTS`,否则返回 400 DisallowedHost:
+下游应用在容器内访问宿主机上的 EasyAuth 时,请求 Host 是 `host.docker.internal`,必须加入
+Django `ALLOWED_HOSTS`,否则返回 `400 DisallowedHost`:
 
-- 环境变量:`DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,host.docker.internal`(`manage.py` 会从 `.env.local` 读取,但**不会覆盖进程环境中已存在的同名变量**)。
-- 本机 dev 服务由 launchd 任务 `com.konata.easyauth.dev` 守护(`launchctl submit`,KeepAlive)。该任务的启动命令显式 `export DJANGO_ALLOWED_HOSTS=...`,优先级高于 `.env.local`;调整 allowlist 必须同步更新该任务的提交命令并 `launchctl remove` 后重新 `submit`。
-- dev 服务监听 `0.0.0.0:8001`;下游容器内使用 `EASYAUTH_BASE_URL=http://host.docker.internal:8001`。
-- 服务端凭据模式当前采用 static token(`Authorization: Bearer eat_...`),由控制台凭据页或接入向导第 4 步签发。
+```bash
+DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,host.docker.internal
+```
+
+`manage.py` 会读 `.env.local`,但**不会覆盖进程环境中已存在的同名变量**——用进程管理器
+(launchd/systemd)守护 dev 服务时,以启动命令里的 export 为准,改 allowlist 要同步改那里
+并重启任务。
+
+dev 服务监听 `0.0.0.0:8001`,下游容器内配置 `EASYAUTH_BASE_URL=http://host.docker.internal:8001`,
+凭据用控制台或向导第 4 步签发的静态 token(`Authorization: Bearer eat_...`)。

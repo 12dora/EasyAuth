@@ -75,7 +75,7 @@ def deliver_message(message_id: str, generation: int) -> None:
     try:
         client, agent_id = channel_config.dingtalk_client_and_agent(message.channel)
     except (DingTalkNotConfiguredError, ValueError) as error:
-        # 配置缺失视为可恢复: 保持 pending, 走常规退避; 健康探测补齐后自动恢复(第 3 篇 §8)。
+        # 配置缺失视为可恢复: 保持 pending, 走常规退避; 健康探测补齐后自动恢复。
         network_interrupted = True
         _ = NotifyMessage.objects.filter(id=message.id, claim_token=claim_token).update(
             last_error=str(error)[:NOTIFY_ERROR_MAX_CHARS],
@@ -120,7 +120,7 @@ def deliver_message(message_id: str, generation: int) -> None:
                 _mark_chunk_throttled(chunk, error=str(error)[:NOTIFY_ERROR_MAX_CHARS])
                 continue
             if _is_retryable_request_error(error):
-                # 钉钉 5xx / 无业务 errcode 的 HTTP 层故障: 保持原状态, 常规退避(第 3 篇 §4)。
+                # 钉钉 5xx / 无业务 errcode 的 HTTP 层故障: 保持原状态, 常规退避。
                 network_interrupted = True
                 _ = NotifyMessage.objects.filter(id=message.id, claim_token=claim_token).update(
                     last_error=str(error)[:NOTIFY_ERROR_MAX_CHARS],

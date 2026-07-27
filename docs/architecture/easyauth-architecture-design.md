@@ -1,783 +1,285 @@
-# EasyAuth 架构设计文档
+# EasyAuth 架构设计
 
-## 状态
+本文描述 EasyAuth 的**当前**架构：模块边界、领域模型、核心流程和安全设计。接口细节以
+[`docs/api/`](../api/) 下的三份 API 文档为准，本文不重复字段级契约。
 
-当前有效架构设计。本文已整合历史规格、技术规划、MVP 方案和业务授权运营增强需求中的有效决策，用于指导当前实现、试点接入和后续运营增强。
+## 1. 定位
 
-## 设计目标
+EasyAuth 是单公司内部部署的集中式**授权**层。它不替代 Authentik 的认证与身份生命周期，也不
+替代钉钉的审批流程；它回答的是一个问题：
 
-EasyAuth 是单公司内部部署的集中式授权层。它不替代 Authentik 的认证和身份生命周期能力，也不替代 DingTalk 的审批流程能力。它的核心职责是让内部应用通过一个稳定 API 查询用户在本应用中的角色和权限，并让员工通过自助门户发起由 DingTalk 支撑的访问申请。
+> 这个用户此刻在**这个应用**里有哪些权限？
 
-MVP 成功标准是：试点内部应用可以在一个工作日内接入 EasyAuth，之后不再自行实现 DingTalk 审批、角色和权限逻辑。
+三方分工：
 
-本设计优先满足以下约束：
+| 系统 | 权威范围 |
+| --- | --- |
+| Authentik | 登录身份、公共 `user_id`（OIDC subject）、在职状态、组织目录来源 |
+| 钉钉 | 组织通讯录、下游应用发起的审批流程、工作通知投递 |
+| **EasyAuth** | **授权事实**——谁在哪个应用有什么权限 |
 
-- Authentik 是登录身份、用户 UID 和在职状态的权威来源。
-- DingTalk 只提供审批流程，不是授权事实来源，也不是在职状态来源。
-- EasyAuth 是已连接内部应用的授权事实来源。
-- 公共 `user_id` 使用 Authentik UID/OIDC subject，不暴露 EasyAuth 内部数据库 ID。
-- 内部应用凭据同时支持静态 app token 与 OAuth2 client credentials，但两者必须得到完全一致的授权查询结果。
-- 所有公共接口遵循契约优先、统一错误语义、边界校验和向后兼容扩展。
+不做的事：多租户 SaaS、完整 IAM 套件、ABAC 策略引擎、行级/字段级数据权限、未经审批的授权。
 
-## 非目标
+## 2. 运行形态
 
-MVP 不实现多租户 SaaS、完整 IAM 套件、ABAC 策略引擎、行级或字段级数据权限、AI 权限推荐、复杂权限复制、所有权交接或未经审批的访问授权。
+Django 模块化单体。单体让审批、授权落库和审计共享一个事务边界，模块边界保持清晰以便将来
+按需拆分。
 
-## 总体架构
+| 组件 | 职责 |
+| --- | --- |
+| Django web（gunicorn） | 员工门户、管理控制台、公共 API、OIDC 回调 |
+| PostgreSQL | 领域模型、配置、授权事实、审计日志 |
+| Redis | Celery broker/result、缓存、限流计数 |
+| Celery worker | 目录同步、授权过期、连接器对账、Webhook 与通知投递、离职处置 |
+| Celery beat | 定时调度（见 §7） |
+| `run_dingtalk_stream` | 钉钉 Stream 长连接进程，单实例运行 |
 
-EasyAuth 采用 Django 模块化单体架构。单体部署降低 MVP 的接入与运维复杂度，模块边界保持清晰，方便后续在确有需要时拆分后台任务、集成适配器或 API 层。
+前端是 React 19 + Vite 单页应用，构建产物落到 `src/easyauth/static/easyauth/frontend`，
+由 Django 返回 React shell 承载。
 
-```mermaid
-flowchart LR
-  Employee["员工浏览器"] --> Web["Django SSR + HTMX 门户"]
-  Admin["管理员浏览器"] --> AdminUI["Django Admin / 管理控制台"]
-  InternalApp["内部应用"] --> API["DRF API /api/v1"]
-  API --> Authz["授权查询服务"]
-  Web --> RequestSvc["访问申请服务"]
-  AdminUI --> ConfigSvc["应用配置服务"]
-  RequestSvc --> DingTalk["DingTalk 审批适配器"]
-  DingTalk --> Callback["DingTalk 回调入口"]
-  Callback --> RequestSvc
-  RequestSvc --> GrantSvc["授权记录服务"]
-  Authentik["Authentik OIDC + 用户状态"] --> AuthSync["身份同步服务"]
-  AuthSync --> GrantSvc
-  Authz --> DB["PostgreSQL"]
-  GrantSvc --> DB
-  ConfigSvc --> DB
-  RequestSvc --> DB
-  AuthSync --> DB
-  Audit["审计服务"] --> DB
-  Worker["Celery worker / beat"] --> AuthSync
-  Worker --> RequestSvc
-```
-
-运行组件：
-
-- Django web 进程：承载员工门户、管理控制台、DRF API、Authentik 登录回调、DingTalk 回调。
-- PostgreSQL 16+：主数据存储，保存领域模型、配置、授权记录和审计日志。
-- Redis：Celery broker。
-- Celery worker：处理 Authentik 定时同步、DingTalk 审批状态兜底查询、授权过期清理和异步重试。
-- Authentik：登录、OIDC subject、用户 active/disabled/departed 状态来源。
-- DingTalk：审批实例创建和审批结果回调。
-
-## 建议代码结构
-
-以下结构是当前主要模块与后续扩展目标。当前仓库已具备 Django 工程、核心模型、权限查询 API、凭据服务、授权服务、员工门户和部分管理入口；后续新增能力应继续放在这些边界内演进。
+### 模块边界
 
 ```text
 src/easyauth/
-  config/                 # Django settings、URL 路由、ASGI/WSGI
-  accounts/               # Authentik 登录、User mirror、用户状态同步入口
-  applications/           # App、Role、Permission、ApprovalRule、凭据管理
-  application_templates/  # 权限模板、模块分组和导入差异；也可先放在 applications 下
-  access_requests/        # AccessRequest 状态机、员工申请服务
-  grants/                 # AccessGrant、权限解析、版本和缓存 TTL
-  api/                    # DRF serializers、views、认证类、OpenAPI 契约
-  integrations/
-    authentik/            # Authentik API client、webhook payload 解析
-    dingtalk/             # DingTalk approval gateway、callback payload 解析
-  audit/                  # append-only AuditLog 写入与查询
-  portal/                 # 员工门户 SSR + HTMX 页面
-  admin_console/          # 自定义管理页；早期可主要使用 Django Admin
-  tasks/                  # Celery task 定义
-tests/
-  unit/
-  integration/
-  e2e/
+  config/          # settings、URL、WSGI/ASGI、Celery、中间件、限流、加密
+  accounts/        # Authentik 登录、本地管理员、UserMirror、钉钉目录镜像
+  applications/    # App、Permission、AuthorizationGroup、审批规则、凭据、平台能力
+  access_requests/ # AccessRequest 状态机、站内审批、授权落地
+  grants/          # AccessGrant —— 授权事实的唯一写入口、权限解析
+  api/             # 公共 API /api/v1（权限查询、manifest、审批、目录、通知）
+  admin_console/   # 控制台私有 API /console/api/v1
+  portal/          # 员工门户私有 API /portal/api/v1
+  integrations/    # authentik/ + dingtalk/ 协议适配（签名、payload、Stream）
+  connectors/      # 出站供给连接器（NetBird 等）与对账
+  lifecycle/       # 离职/转岗交接单、入职岗位模板
+  teams/           # 团队与成员
+  workflows/       # 审批模板与审批实例（下游应用使用的钉钉审批能力）
+  notify/          # 钉钉工作通知消息与收件人
+  webhooks/        # 应用 Webhook 配置与投递
+  outbox/          # 事务发件箱
+  audit/ · tasks/  # append-only 审计 · Celery 任务定义
 ```
 
-模块依赖方向：
+依赖方向的硬规则：
 
-- `api` 和 `portal` 可以调用领域服务，但不能直接绕过领域服务写 `AccessGrant`。
-- `integrations` 只负责外部协议、签名校验、payload 解析和 API 调用，不承载授权决策。
-- `grants` 是授权记录的唯一写入口。
+- `grants` 是授权事实的**唯一**写入口，任何模块都不得绕过它写 `AccessGrant`。
+- `integrations` 只做协议、签名、payload 解析和外部 API 调用，**不承载授权决策**。
 - `audit` 是所有安全敏感事件的统一写入口。
-- `applications` 负责配置和凭据生命周期，不决定单个用户是否获得授权。
-- `application_templates` 只负责权限目录、模块分组和模板导入差异，不产生用户授权事实。
-- `admin_console` 可以编排配置、凭据、联调和运营查询，但授权写入仍必须调用领域服务。
+- `applications` 管配置与凭据生命周期，不决定单个用户是否获得授权。
+- `admin_console` / `portal` / `api` 可以编排领域服务，但不能直接写授权事实。
 
-## 领域模型设计
+## 3. 领域模型
 
-### UserMirror
+### 身份
 
-镜像 Authentik 用户。公共接口使用 `authentik_user_id`，内部数据库主键只用于关系和查询优化。
+**`UserMirror`** 镜像 Authentik 用户，公共标识是 `authentik_user_id`（全局唯一、不可变），
+内部主键只用于关系与查询优化。状态为 `active` / `disabled` / `departed`；后两者不保留授权。
+邮箱、手机号、工号、钉钉 ID **都不是**规范授权标识符。
 
-关键字段：
+钉钉侧另有 `DingTalkUserMirror` / `DingTalkDepartmentMirror` / `DingTalkUserOrgContext`
+承载目录镜像与组织关系，按 `(source_slug, corp_id)` 作用域隔离多企业。
 
-- `id`
-- `authentik_user_id`
-- `name`
-- `email`
-- `department`
-- `status`: `active`、`disabled`、`departed`
-- `dingtalk_union_id`
-- `dingtalk_userid`
-- `dingtalk_corp_id`
-- `employee_number`
-- `manager_userid`
-- `created_at`
-- `updated_at`
+`LocalAdminAccount` / `LocalAdminPasskey` 是不依赖 Authentik 的应急登录通道，
+见[本地超级管理员登录](../guides/local-admin-login.md)。
 
-设计规则：
+### 应用与权限目录
 
-- `authentik_user_id` 全局唯一且不可变。
-- 邮箱、手机号、工号、DingTalk ID 都不是规范授权标识符。
-- Authentik `inactive` 或 `disabled` 会映射为不可保留授权的状态。
-
-### App
-
-连接到 EasyAuth 的内部应用。
-
-关键字段：
-
-- `id`
-- `app_key`
-- `name`
-- `description`
-- `status`: `active`、`disabled`
-- `cache_ttl_seconds`
-- `created_at`
-- `updated_at`
-
-设计规则：
-
-- `app_key` 是公共 API 路径标识，必须稳定且唯一。
-- `cache_ttl_seconds` 默认 300 秒，最低可配置到 60 秒，最高 900 秒。
-- 禁用应用不能查询权限，也不能创建新的访问申请。
-
-### Role、Permission 与 RolePermission
-
-`Role` 是员工主要申请的授权单元，`Permission` 是内部应用消费的细粒度能力。
-
-设计规则：
-
-- `Role.key` 和 `Permission.key` 在同一个 `app_id` 下唯一。
-- `Role.requestable=false` 的角色不能出现在员工申请选项中。
-- `RolePermission` 必须保证角色和权限属于同一 App。
-- 权限 key 使用稳定字符串，例如 `customer:view:department`。
-
-### ApprovalRule
-
-定义角色或权限申请必须由谁审批。
-
-建议存储方式：
-
-- 使用 `app_id`
-- 使用 `target_type`: `role` 或 `permission`
-- 存储明确的 `role_id` 或 `permission_id`，并通过数据库约束保证二者有且仅有一个。
-- 对外展示时仍使用 `target_type` 和 `target_id`。
-
-这样比通用外键更容易加约束，也能减少错误配置。
-
-### AccessRequest
-
-表示员工发起的 `grant`、`change`、`revoke` 或 `renew` 申请。
-
-关键字段：
-
-- `id`
-- `requester_user_id`
-- `app_id`
-- `request_type`: `grant`、`change`、`revoke`、`renew`
-- `base_grant_id`: `grant` 申请为空；`change`、`revoke`、`renew` 必须绑定被申请人当前授权主键
-- `base_grant_revision`: `grant` 申请为空；生命周期申请必须绑定提交时的 `AccessGrant.version`
-- `status`
-- `requested_roles`
-- `requested_permissions`
-- `grant_lifetime_type`: `permanent` 或 `timed`
-- `grant_expires_at`
-- `request_reason`
-- `dingtalk_process_instance_id`
-- `created_at`
-- `updated_at`
-
-状态机：
-
-```text
-draft
-  -> submitted
-  -> approval_pending
-  -> approved
-  -> grant_applied
-
-approval_pending
-  -> rejected
-  -> cancelled
-
-approved
-  -> grant_failed
-```
-
-设计规则：
-
-- `grant_lifetime_type=timed` 时必须填写 `grant_expires_at`。
-- `grant_lifetime_type=permanent` 时 `grant_expires_at` 必须为空。
-- 拒绝审批永远不能创建或变更授权记录。
-- `approved` 不是最终业务完成状态，只有 `grant_applied` 表示授权已经落库。
-
-### AccessGrant
-
-表示某用户在某应用上的当前授权状态。
-
-建议将角色和权限集合拆成子表存储：
-
-- `AccessGrant`
-  - `id`
-  - `user_id`
-  - `app_id`
-  - `status`: `active`、`revoked`、`expired`
-  - `source_request_id`
-  - `version`
-  - `grant_lifetime_type`
-  - `grant_expires_at`
-  - `created_at`
-  - `updated_at`
-- `AccessGrantRole`
-  - `grant_id`
-  - `role_id`
-- `AccessGrantPermission`
-  - `grant_id`
-  - `permission_id`
-
-设计规则：
-
-- 每个 `user_id + app_id` 最多存在一个当前授权记录。
-- 每次创建、变更、撤销或过期都必须递增 `version`。
-- `grant_expires_at` 表示授权记录生命周期，不是 API 响应缓存过期时间。
-- 直接权限只用于应用确实需要的细粒度授权，MVP 默认通过角色展开权限。
-
-### AppCredential 与 OAuth client binding
-
-内部应用可以使用两种凭据：
-
-- 静态 app token：hash 存储，只展示一次，可轮换，可禁用，绑定单个 App。
-- OAuth2 client credentials：通过 Django OAuth Toolkit 签发短期 access token，client 绑定单个 App。
-
-两种凭据在权限查询中映射为同一种内部调用主体：
-
-```text
-AppPrincipal {
-  app_id
-  app_key
-  credential_type
-  credential_id
-}
-```
-
-授权查询服务只能接收 `AppPrincipal`，不能接收原始 token 或 client secret。
-
-### 业务授权运营增强模型
-
-业务授权运营增强只补齐配置、展示、联调和排障能力，不改变 `AccessGrant` 的事实来源地位。
-
-建议新增模型：
-
-- `AppMembership`：记录用户与 App 的运营关系，至少支持 `owner` 和 `developer`。应用负责人只能管理自己负责的 App，系统管理员可以管理所有 App。
-- `PermissionTemplateVersion`：记录某 App 的权限模板版本、来源、内容摘要、导入人、导入时间和导入结果。
-- `PermissionGroup`：记录某 App 下的权限模块分组树，包含 `key`、`name`、`parent`、`display_order`、`depth` 和 `is_active`。
-- `Permission.group`：记录 permission 叶子节点的直接父 group。同一时间一个 Permission 只能归属一个直接父 group。
-- `Permission.deprecated_at`：标记不再推荐使用但仍需保留历史引用的权限 key。
-- `DependencyHealthSnapshot`：记录 Authentik 同步、DingTalk 回调和 Celery 清理任务的只读健康状态摘要。
-
-设计规则：
-
-- 权限模板和模块分组只组织 `Permission`，不能直接授予用户权限。
-- group key 不出现在公共权限查询 API 的 `permissions` 中。
-- 模板导入不能删除已被 Role、AccessGrant、AccessRequest 或审计日志引用的 Permission，只能禁用或废弃。
-- 模板导入不能改变既有 `Permission.key` 的业务含义；含义变化时新增 key 并废弃旧 key。
-- `PermissionGroup` 最大深度默认为 5 层，必须防止环形父子关系。
-- 凭据最近使用时间可以用于运营排查，但不能用于授权决策。
-
-### AuditLog
-
-append-only 安全事件日志。
-
-关键字段：
-
-- `id`
-- `actor_type`: `user`、`admin`、`app`、`system`、`dingtalk`、`authentik`
-- `actor_id`
-- `event_type`
-- `target_type`
-- `target_id`
-- `metadata`
-- `created_at`
-
-最少事件：
-
-- `access_request_submitted`
-- `approval_created`
-- `approval_approved`
-- `approval_rejected`
-- `grant_created`
-- `grant_changed`
-- `grant_revoked`
-- `grant_expired`
-- `grant_apply_failed`
-- `user_departure_detected`
-- `app_permission_queried`
-- `app_credential_created`
-- `app_credential_rotated`
-- `emergency_revoke_applied`
-- `permission_template_imported`
-- `permission_template_import_rejected`
-- `permission_group_changed`
-- `role_permission_matrix_changed`
-- `app_configuration_validated`
-- `permission_query_test_executed`
-- `grant_retry_requested`
-- `dependency_health_checked`
-
-## 公共 API 契约
-
-### 契约原则
-
-- 所有 `/api/v1` 响应字段使用 snake_case，与现有规格保持一致。
-- REST 路径使用复数资源名，不在路径中放动词。
-- 列表接口必须从一开始支持分页。
-- 错误响应必须使用统一结构。
-- 新字段只能以可选字段方式添加；不能修改既有字段含义或类型。
-- 静态 token 与 OAuth2 access token 只影响认证方式，不能影响授权结果。
-
-### 统一错误格式
-
-```json
-{
-  "error": {
-    "code": "VALIDATION_ERROR",
-    "message": "请求参数无效。",
-    "details": {
-      "field": "reason"
-    }
-  }
-}
-```
-
-状态码约定：
-
-| 状态码 | 使用场景 |
+| 模型 | 说明 |
 | --- | --- |
-| 400 | 请求格式或查询参数非法 |
-| 401 | 缺失凭据、无效凭据或过期 OAuth2 token |
-| 403 | 凭据有效但无权访问该 App，或绑定 App 已禁用 |
-| 404 | 请求的管理资源不存在；权限查询不使用 404 表示用户不存在 |
-| 409 | 状态转换冲突、重复配置、版本冲突 |
-| 422 | 语义校验失败，例如 timed 授权缺少过期时间 |
-| 500 | EasyAuth 内部错误，不暴露实现细节 |
+| `App` | 已接入应用，由稳定的 `app_key` 标识；`catalog_version` 随目录变更递增 |
+| `Permission` | 应用消费的细粒度能力，key 稳定（如 `customer:view:department`）；同一 App 下唯一 |
+| `AppScope` | 该应用支持的授权范围（`SELF` / `MANAGED` / `MANAGED_USERS` / `ALL` 等） |
+| `AuthorizationGroup` | **员工申请的单元**；`kind` 为 `role` 或 `bundle`；`requestable=false` 不出现在申请选项中 |
+| `AuthorizationGroupGrant` | 授权组展开出的 `(permission, scope_key)` 条目 |
+| `ManagedScopePolicy` | `MANAGED_USERS` 的解析策略（第一版：钉钉主管链） |
+| `ApprovalRule` | 某个授权组或权限由谁审批；数据库约束保证目标二选一 |
+| `AppCredential` | 静态 token（hash 存储）与 OAuth2 client，各自绑定唯一 App |
+| `AppCapability` | 应用级平台能力开关（`directory` / `notify`） |
 
-### 查询用户权限
+权限目录只负责组织和展示，**不产生授权事实**。模板导入不能删除已被引用的 Permission
+（只能停用），也不能改变既有 key 的业务含义——含义变了就新增 key 并废弃旧 key。
 
-```http
-GET /api/v1/apps/{app_key}/users/{user_id}/permissions
-Authorization: Bearer {app_token_or_oauth_access_token}
-```
+### 申请与授权
 
-路径参数：
+**`AccessRequest`** 表示员工发起的 `grant` / `change` / `revoke` / `renew` 申请。
 
-- `app_key`: 调用方应用 key。
-- `user_id`: Authentik UID/OIDC subject。
+状态：`submitted` → `approved` → `grant_applied`；分支终态 `rejected`、`withdrawn`、
+`grant_failed`、`grant_conflict`、`grant_expired`。
 
-成功响应：
+- `approved` **不是**业务完成状态，只有 `grant_applied` 表示授权已落库。
+- `grant` 申请的 `base_grant` / `base_grant_revision` 为空；`change` / `revoke` / `renew`
+  **必须**绑定提交时的授权主键与 `AccessGrant.version`。
+- `grant_type=timed` 必须填 `grant_expires_at`，`permanent` 必须为空（数据库约束）。
+- 提交时冻结一份**不可变**的授权组展开快照（`AccessRequestGroupGrantSnapshot`），审批列
+  表、审批详情、审计元数据和落地前置校验都读这份快照。提交后的授权组配置变更只影响新申
+  请，不改变已提交申请的展示或执行事实。
 
-```json
-{
-  "user_id": "ak_uid_123",
-  "app_key": "crm",
-  "roles": ["sales_manager"],
-  "permissions": ["customer:view:department", "customer:edit:own"],
-  "version": 12,
-  "expires_at": "2026-06-05T10:15:00Z"
-}
-```
+**`AccessGrant`** 是某用户在某应用的当前授权：
 
-无有效权限响应：
+- `(user, app)` 在 `is_current=True` 下唯一——一个用户在一个应用只有一条当前授权。
+- `(user, app, version)` 唯一：`version` 是授权事实的锚点，每次创建、变更、撤销、过期都
+  递增，并发操作不允许产生两行相同版本号。
+- 成员由 `AccessGrantGroup`（授权组）和 `AccessGrantPermission`（直接权限 + scope）组成，
+  **有效期落在成员级** `expires_at`，不是父级字段。
 
-```json
-{
-  "user_id": "ak_uid_123",
-  "app_key": "crm",
-  "roles": [],
-  "permissions": [],
-  "version": 13,
-  "expires_at": "2026-06-05T10:15:00Z"
-}
-```
+### 审计
 
-行为规则：
+**`AuditLog`** 是 append-only 的安全事件日志，字段包括 `actor_type`
+（`user` / `admin` / `local_admin` / `app` / `system` / `dingtalk` / `authentik`）、`actor_id`、
+`event_type`、`target_type` / `target_id`、`metadata`、`created_at`。
 
-- 凭据必须解析为一个绑定 App 的 `AppPrincipal`。
-- 路径中的 `app_key` 必须与 `AppPrincipal.app_key` 完全匹配，否则返回 403。
-- 绑定 App 被禁用时返回 403。
-- 用户不存在、disabled 或 departed 时返回空 roles 和 permissions，不暴露用户存在性差异。
-- 用户不存在且没有历史授权记录时 `version` 返回 0；用户存在但授权已被撤销或过期时返回该用户在该 App 下的最新授权版本。
-- 过期、revoked 或 inactive 用户的授权记录不参与权限计算。
-- `permissions` 是直接权限与角色展开权限的去重并集，返回顺序按 key 升序稳定排序。
-- `roles` 返回当前 active grant 的角色 key，按 key 升序稳定排序。
-- `expires_at` 是客户端缓存过期时间，不是授权生命周期。
-- 如果最近的 `grant_expires_at` 早于配置 TTL，则 `expires_at` 取最近授权过期时间，避免客户端缓存越过授权生命周期。
-- 每次成功查询写入 `app_permission_queried` 审计事件，至少记录 app、user、version、result count 和 credential metadata。
+记录事实，不记录推测；不可编辑、不可删除。普通应用日志用于排障，不能替代审计日志。
+`DirectoryAuditBucket` 用于把高频目录查询按小时聚合，避免审计表被选人器击穿。
 
-### OAuth2 client credentials
+## 4. 核心流程
 
-```http
-POST /oauth/token
-Content-Type: application/x-www-form-urlencoded
+### 4.1 员工申请与站内审批
 
-grant_type=client_credentials&client_id={client_id}&client_secret={client_secret}
-```
-
-该端点由 Django OAuth Toolkit 提供。EasyAuth 需要在 client 创建和 token 校验时保证 OAuth client 精确绑定一个 App。OAuth access token 调用权限查询时，与静态 app token 得到同一 `AppPrincipal` 语义。
-
-### 试点集成包应暴露的 API 文档
-
-试点文档至少包含：
-
-- 静态 token 和 OAuth2 client credentials 两种认证方式。
-- Authentik UID 作为 `user_id`。
-- 权限查询端点、响应示例、空权限响应示例。
-- 错误码、缓存规则、version 语义和撤权 SLA。
-- CRM 示例角色和权限 key。
-
-### 管理控制台私有 API
-
-管理控制台可以新增私有 API，但不能把它们当作下游应用接入契约。当前接口目录见 `docs/api/easyauth-console-api.md`，员工门户私有接口见 `docs/api/easyauth-portal-react-api.md`。
-
-管理端 API 规则：
-
-- 路径建议使用 `/console/api/v1/`，避免与下游应用使用的 `/api/v1/` 混淆。
-- 只接受 Django session、CSRF 保护和 EasyAuth 管理端权限，不接受下游应用 app token。
-- 所有列表接口必须分页，所有筛选参数必须在边界校验。
-- 管理端 API 可以返回模块分组、配置完整性和联调细节，但不能改变公共权限查询 API 响应。
-- 任何授权写入、撤权、重试和凭据操作必须复用既有服务层并写入审计日志。
-
-## 内部服务接口
-
-内部模块使用明确服务接口隔离状态变更。以下接口为设计契约，具体实现可以使用 Django service class 或函数模块。
-
-```text
-PermissionQueryService.resolve(app_principal, app_key, authentik_user_id) -> PermissionQueryResult
-AccessRequestService.submit(requester, app, request_type, base_grant_revision, target_roles, target_permissions, lifetime, reason) -> AccessRequest
-DingTalkApprovalGateway.create_instance(access_request) -> DingTalkProcessRef
-DingTalkCallbackService.handle(payload, headers) -> CallbackResult
-GrantService.apply_approved_request(access_request) -> AccessGrant
-GrantService.revoke_for_user(user, reason, actor) -> list[AccessGrant]
-AuthentikSyncService.upsert_user(authentik_payload) -> UserMirror
-AuditService.record(event) -> AuditLog
-AppConfigurationService.validate(app) -> AppConfigurationStatus
-PermissionTemplateImportService.preview(app, template_payload) -> PermissionTemplateDiff
-PermissionTemplateImportService.confirm(app, import_id, actor) -> PermissionTemplateVersion
-CredentialOperationService.create_or_rotate(app, credential_kind, actor) -> OneTimeSecret
-PermissionQueryTestService.execute(app, authentik_user_id, credential_selector, actor) -> PermissionQueryTestResult
-GrantFailureRecoveryService.retry(access_request, actor) -> GrantRetryResult
-DependencyHealthService.snapshot(actor) -> DependencyHealthSnapshot
-```
-
-接口规则：
-
-- 外部输入只能在 API view、form handler、webhook handler 和 integration adapter 边界处校验。
-- 校验通过后，内部服务依赖类型化对象，不重复解析原始 dict。
-- 所有改变 `AccessRequest`、`AccessGrant`、`AppCredential` 和 `ApprovalRule` 的操作必须通过服务层写审计日志。
-- `GrantService` 是唯一可以创建、变更、撤销授权记录的模块。
-- 管理控制台服务只能编排领域服务，不能直接写 `AccessGrant`、明文 token、client secret 或外部系统配置副本。
-
-## 业务授权运营增强架构
-
-业务授权运营增强的目标是把现有授权闭环从“工程可用”提升到“运营可用”。新增能力包括应用配置完整性、权限模板、矩阵配置、凭据运营、联调测试、员工权限可见性、失败恢复和依赖健康状态。
-
-```mermaid
-flowchart LR
-  Owner["应用负责人"] --> Console["管理控制台"]
-  Developer["应用开发者"] --> Docs["接入说明与联调页"]
-  AdminUser["系统管理员"] --> Ops["运营看板"]
-  EmployeeUser["员工"] --> Portal2["员工门户增强"]
-  Console --> ConfigSvc2["配置完整性服务"]
-  Console --> TemplateSvc["权限模板导入服务"]
-  Console --> CredentialSvc["凭据操作服务"]
-  Docs --> TestSvc["联调测试服务"]
-  Ops --> RecoverySvc["失败恢复服务"]
-  Ops --> HealthSvc["依赖健康服务"]
-  Portal2 --> RequestSvc2["访问申请服务"]
-  TemplateSvc --> AppsDB["App / Role / Permission / PermissionGroup"]
-  ConfigSvc2 --> AppsDB
-  CredentialSvc --> CredDB["AppCredential / OAuthClientBinding"]
-  TestSvc --> QuerySvc["权限查询服务"]
-  RecoverySvc --> GrantSvc2["GrantService"]
-  HealthSvc --> HealthDB["DependencyHealthSnapshot"]
-  ConfigSvc2 --> Audit2["审计服务"]
-  TemplateSvc --> Audit2
-  CredentialSvc --> Audit2
-  TestSvc --> Audit2
-  RecoverySvc --> Audit2
-```
-
-关键边界：
-
-- 应用负责人可以管理本 App 的业务授权配置，但不能管理 Authentik Provider、Source、Flow、MFA、公司级用户组或 DingTalk 审批模板。
-- 应用开发者只消费接入说明、示例和联调结果，不能查看明文历史凭据或绕过授权查询 API。
-- 普通员工只管理自己的申请和授权可见性，不能直接创建角色、权限、审批规则或凭据。
-- 系统管理员可以处理全局失败恢复、紧急撤权、审计和应用负责人归属。
-- 权限模板只改变目录和展示，授权事实仍由 RolePermission、AccessRequest、审批结果和 `GrantService` 共同产生。
-
-当前实现的管理端、员工端和下游公共接口分别以 `docs/api/easyauth-console-api.md`、`docs/api/easyauth-portal-react-api.md` 和 `docs/api/easyauth-public-api.md` 为准。
-
-## 核心流程
-
-### 访问申请流程
+**审批发生在 EasyAuth 内部**（不是钉钉）。审批人在门户"待我审批"处理，控制台管理员可代审
+并留痕（`decision_actor_type = console_admin`）。
 
 ```mermaid
 sequenceDiagram
   participant E as 员工
-  participant P as EasyAuth 门户
+  participant P as 员工门户
   participant R as AccessRequestService
-  participant D as DingTalk
+  participant A as 审批人
   participant G as GrantService
-  participant A as AuditLog
-
-  E->>P: 选择 App、角色、有效期和原因
-  P->>R: submit()
-  R->>A: access_request_submitted
-  R->>D: create approval instance
-  D-->>R: process_instance_id
-  R->>A: approval_created
-  D-->>R: approval callback
-  R->>R: 校验签名、process ID、状态
-  alt 审批通过
-    R->>A: approval_approved
-    R->>G: apply_approved_request()
-    G->>A: grant_created 或 grant_changed
-  else 审批拒绝
-    R->>A: approval_rejected
+  E->>P: 选择应用、授权组/权限、有效期、原因、审批人
+  P->>R: submit()（校验 + 冻结展开快照 + 幂等键）
+  R-->>E: access_request_submitted 审计
+  A->>P: 在「待我审批」通过或驳回
+  alt 通过
+    P->>G: apply_approved_request()
+    G-->>A: grant_created / grant_changed 审计
+  else 驳回
+    P-->>E: approval_rejected 审计（必须填意见）
   end
 ```
 
-幂等规则：
+规则：
 
-- `dingtalk_process_instance_id` 必须唯一。
-- 回调处理必须在数据库事务中锁定对应 `AccessRequest`。
-- `change`、`revoke`、`renew` 的基础授权主键和修订必须进入幂等摘要；缺少修订或修订不一致时显式失败。
-- 重复批准回调只能返回已处理结果，不能再次递增授权版本。
-- 重复拒绝回调不能覆盖已经 `grant_applied` 的请求。
-- 未知 process instance、签名失败和 payload 结构异常必须记录安全相关日志。
+- 申请人不能审批自己的申请。
+- 目标含 `MANAGED_USERS` 范围时，审批人必须是本人的在职直属主管。
+- 已有当前授权时不能再提交 `grant`，必须走 `change`——否则审批通过后才会撞唯一约束，白白
+  消耗一次审批。
+- 幂等键 + payload 摘要防重复提交；`change` / `revoke` / `renew` 的基础授权主键与修订进入
+  摘要。
 
-### 权限查询流程
+### 4.2 授权落地的事务顺序
+
+1. 锁定 `AccessRequest`，确认状态是 `approved` 且尚未 `grant_applied`。
+2. `grant` 申请创建新的当前 `AccessGrant`；生命周期申请锁定冻结的 `base_grant_id`。
+3. 比较 `base_grant_revision` 与当前 `AccessGrant.version`：不一致进入 `grant_conflict`，
+   接口返回 `409` 要求重新提交。**该状态不进重试通道，也不允许读最新授权重试。**
+4. 用提交时冻结的展开快照校验前置事实（已过期成员不属于当前有效成员集合）。
+5. 替换、续期或撤销冻结的目标集合，递增 `version`，写审计，状态改为 `grant_applied`。
+
+普通落库失败 → `grant_failed` + `grant_apply_failed` 审计；修订冲突 → `grant_conflict` +
+`grant_apply_conflict`；落地前过期 → `grant_expired`。**这些失败都不得静默吞掉。**
+
+### 4.3 权限查询
 
 ```text
-1. DRF 认证类解析 Bearer token。
-2. 认证类输出 AppPrincipal。
-3. API view 校验 app_key 与 AppPrincipal 绑定 App 是否一致。
-4. PermissionQueryService 读取 UserMirror、App、AccessGrant、RolePermission。
-5. 服务过滤 disabled/departed 用户、revoked grant、expired timed grant。
-6. 服务计算 roles、permissions、version 和 expires_at。
-7. API view 返回稳定 JSON 响应并记录审计事件。
+1. 认证类解析 Bearer token（静态 token 或 OAuth2 access token）→ AppPrincipal
+2. 校验路径 app_key == AppPrincipal.app_key，否则 403
+3. resolve_user_permissions() 读 UserMirror、App、AccessGrant 及展开的权限
+4. 过滤 disabled/departed 用户、revoked/expired 授权、过期成员
+5. 解析 MANAGED_USERS（目录故障时显式 503，不返回空集）
+6. 返回快照并写 app_permission_queried 审计
 ```
 
-### 离职清理流程
+两种凭据得到**完全一致**的授权结果——凭据只影响认证方式，不影响授权结果。
 
-Authentik 状态通过 webhook 和定时同步两条路径进入 EasyAuth。
+### 4.4 离职与目录同步
 
-- webhook 用于快速响应。
-- 定时同步用于最终一致性兜底。
+Authentik 的组织事实通过 `dingtalk-directory-sync`（默认 300 秒）回灌 `UserMirror`；钉钉
+Stream 事件用于把延迟从"轮询间隔之和"压到秒级，beat 轮询作为断连兜底。详见
+[钉钉 Stream 事件集成](easyauth-dingtalk-stream-design.md)。
 
-当 Authentik 表示用户 inactive、disabled 或 departed：
+检出离职后：更新 `UserMirror.status` → 撤销全部当前授权（逐条递增 version）→ 建交接单 →
+禁用 Authentik 账号并吊销会话 → 写 `user_departure_detected` / `grant_revoked` 审计。
+后续权限查询返回空结果。
 
-1. `AuthentikSyncService` 更新 `UserMirror.status`。
-2. `GrantService.revoke_for_user` 撤销该用户所有 active grant。
-3. 每条受影响 grant 递增 version。
-4. 写入 `user_departure_detected` 与 `grant_revoked` 审计事件。
-5. 后续权限查询返回空 roles 和 permissions。
+从未登录过系统的员工没有 `UserMirror`，只会从目录镜像和他人管理范围中消失——无账号可禁、
+无授权可撤。
 
-### 授权过期流程
+### 4.5 授权过期
 
-Celery beat 定期扫描 `grant_lifetime_type=timed` 且 `grant_expires_at <= now()` 的 active grant。
+beat 每 60 秒扫描到期的成员级 `expires_at`，在事务中转为过期、递增 version、写
+`grant_expired` 审计。已被人工撤销或离职清理处理过的授权，过期任务必须幂等跳过。
+PostgreSQL 下使用 `select_for_update(skip_locked=True)` 分批处理，避免多 worker 抢同一批。
 
-处理规则：
+## 5. 缓存与撤权 SLA
 
-- 每条过期 grant 在事务中从 active 转为 expired。
-- 递增 version。
-- 写入 `grant_expired` 审计事件。
-- 如果同一 grant 已被人工撤销或离职清理撤销，过期任务必须幂等跳过。
+权限查询响应里：
 
-## 数据一致性与事务边界
+- `grant_version` / `catalog_version` / `snapshot_version` 用于下游判断本地缓存是否过时。
+- `expires_at` 是**缓存**有效期，不是授权有效期。
 
-需要事务保护的操作：
+```text
+expires_at = min(now + TTL, 最近的成员级 expires_at)
+```
 
-- 提交访问申请并创建初始审计事件。
-- DingTalk 回调状态转换。
-- 审批通过后应用授权记录。
-- 授权记录变更、撤销、过期和紧急撤权。
-- App 凭据创建、轮换和禁用。
+TTL 默认 300 秒（`EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS`）。下游只能缓存到
+`expires_at`，不得自行延长。默认撤权 SLA：已接入应用应在 5 分钟内停止使用已撤销的权限。
 
-授权记录应用的事务顺序：
-
-1. 锁定 `AccessRequest`。
-2. 确认请求状态是 `approved` 且尚未 `grant_applied`。
-3. `grant` 申请创建新的当前 `AccessGrant`；`change`、`revoke`、`renew` 锁定申请冻结的 `base_grant_id`。
-4. 对生命周期申请比较 `base_grant_revision` 与当前 `AccessGrant.version`，不一致时进入 `grant_conflict`，接口返回 `409 CONFLICT` 并要求重新提交申请；该状态不得进入 `grant_failed` 重试通道，也不得读取最新授权事实重试。
-5. 使用提交时冻结的授权组展开快照校验审批展示、审计元数据和落地前置事实，已过期成员不属于当前有效成员集合。
-6. 替换、续期或撤销冻结目标集合。
-7. 递增 version。
-8. 写入审计事件。
-9. 将请求状态更新为 `grant_applied`。
-
-如果第 3 到第 7 步出现普通落库失败，请求状态应进入 `grant_failed`，并写入 `grant_apply_failed`。如果基础授权修订冲突，请求状态进入 `grant_conflict` 并写入 `grant_apply_conflict`；如果授权在落地前过期，请求状态进入 `grant_expired`。这些失败不得静默吞掉。
-
-授权申请提交时必须持久化不可变的授权组展开快照，至少包含提交时的 `authorization_group_id_snapshot` 稳定历史值、授权组 key、kind、名称、permission key、permission 名称和 scope。审批列表、审批详情、审批决定审计和授权落地前置校验都读取这份快照；提交后的 `AuthorizationGroupGrant` 配置变更只能影响新申请，不能改变既有申请的展示事实或执行事实。
-
-## 安全设计
+## 6. 安全设计
 
 ### 身份与会话
 
-- 员工登录使用 Authentik OIDC。
-- 登录回调只接受已配置 issuer、audience 和 redirect URI 的 token。
-- Django session 用于门户和管理控制台。
-- 管理端权限由 EasyAuth 管理员角色控制，不能由 DingTalk 审批结果隐式授予。
+- 员工登录走 Authentik OIDC；回调只接受已配置 issuer、audience 和 redirect URI 的 token，
+  且只绑定 active 的 `UserMirror`。
+- **控制台超管权限在每次请求期判定**：通过 Authentik admin API 读取该用户当前组，与
+  `EASYAUTH_CONSOLE_SUPERUSER_GROUPS` 求交集。取不到上游当前组时失败关闭，不信任登录时的
+  `groups` claim 或 session 快照。
+- 本地超级管理员必须绑定至少一种二次因子（TOTP 或通行密钥）才能形成控制台 actor；会话敏感
+  操作推进 `session_version`，旧会话立即失效。
+- Django Admin **不作为产品特权入口**，生产 URL 不暴露 `/admin/`。
 
 ### 应用认证
 
-- 静态 app token 只以 hash 形式存储。
-- token 创建时只展示一次明文。
-- token 轮换支持新旧 token 短暂并存，禁用旧 token 后立即不可用。
+- 静态 token 只存 hash，明文只展示一次，可轮换可禁用。
 - OAuth2 client secret 不记录明文。
-- 每个 token 或 OAuth client 只能绑定一个 App。
-- 权限查询必须校验路径 `app_key` 与凭据绑定 App 一致。
+- 一条凭据只绑定一个 App；路径 `app_key` 必须与凭据所属应用一致。
+- `directory` / `notify` 需要 App 层开通与单凭据授权**同时**通过，见
+  [企业目录与钉钉通知](platform-directory-notify.md)。
 
 ### 外部输入
 
-需要作为不可信输入校验：
-
-- DingTalk callback headers 和 body。
-- Authentik webhook payload。
-- Authentik 定时同步 API 响应。
-- DingTalk profile 或 approval API 响应。
-- 员工门户表单提交。
-- 管理端配置表单。
-- 内部应用 API 请求。
-
-校验策略：
-
-- 在边界使用 DRF serializers、Django forms 或明确 schema 解析。
-- 校验失败返回统一错误结构或记录 webhook 安全事件。
-- 外部响应字段不能直接进入授权决策，必须先转换为内部类型化对象。
+以下一律视为不可信输入，在边界处用 serializer / form / 明确 schema 解析后才能影响授权决策：
+钉钉回调与 Stream 事件、Authentik 同步响应、下游应用 API 请求、门户与控制台表单、下游描述符
+端点响应。外部响应字段不能直接进入授权决策，必须先转成内部类型化对象。
 
 ### 审批与授权边界
 
-- DingTalk 批准只表示流程通过，不直接授予权限。
-- EasyAuth 在 `GrantService` 中根据已批准的 `AccessRequest` 应用授权。
-- 紧急撤权只能减少访问权限，不能授予或增加权限。
-- 没有审批规则的 role 或 permission 不能被员工申请。
+- 审批通过只表示流程通过，授权由 `GrantService` 落库。
+- 紧急撤权只能**减少**访问，不能授予或增加权限。
+- 没有审批规则的授权组或权限不能被员工申请。
 
-## 缓存、版本与撤权 SLA
+失败与完成语义的统一口径见[异步动作与失败语义](async-and-failure-semantics.md)。
 
-权限查询响应中的 `version` 是单调递增的授权记录版本，用于内部应用识别本地缓存是否过时。响应中的 `expires_at` 是缓存有效期，不是授权记录有效期。
+## 7. 后台调度
 
-缓存计算：
+| 任务 | 默认周期 | 作用 |
+| --- | ---: | --- |
+| `easyauth.outbox.dispatch_pending` | 5s | 事务发件箱扫描，恢复发布失败与租约超时的安全关键任务 |
+| `easyauth.health.runtime_heartbeat` | 20s | 运行心跳 |
+| `easyauth.webhooks.recover_expired_leases` | 15s | Webhook 投递租约 watchdog |
+| `easyauth.grants.cleanup_expired_grants` | 60s | 授权过期清理 |
+| `easyauth.connectors.schedule_reconciles` | 60s | 连接器对账调度 |
+| `easyauth.notify.reconcile_send_results` | 60s | 通知回执对账 |
+| `easyauth.authentik.sync_dingtalk_directory` | 300s | 钉钉目录同步兼离职回收 |
+| `easyauth.health.run_dependency_health_checks` | 300s | 上游依赖健康探测 |
+| `easyauth.health.data_retention_cleanup` | 1d | 数据保留矩阵清理 |
+| `easyauth.notify.prune_messages` | 1d | 通知历史清理 |
+| `easyauth.connectors.prune_sync_runs` | 1d | 连接器运行记录清理 |
 
-```text
-configured_expiry = now + app.cache_ttl_seconds
-grant_expiry = nearest active timed grant_expires_at for this user/app
-expires_at = min(configured_expiry, grant_expiry) if grant_expiry exists
-expires_at = configured_expiry otherwise
-```
+全部周期都可用环境变量覆盖。保留矩阵见[数据保留与自动清理](../operations/data-retention.md)。
 
-默认策略：
+## 8. 演进约束
 
-- 默认 TTL：300 秒。
-- 最大 TTL：900 秒。
-- 高风险应用最低 TTL：60 秒。
-- 默认撤权 SLA：已连接应用应在 5 分钟内停止使用已撤销权限。
-
-内部应用接入文档必须要求客户端只缓存到 `expires_at`，不能自行延长缓存。
-
-## 可观测性与审计
-
-审计日志记录事实，不记录推测。每条安全敏感事件至少包含：
-
-- actor 类型与 ID。
-- target 类型与 ID。
-- event type。
-- request ID、grant ID、app key、authentik user ID 等关键上下文。
-- old version 与 new version。
-- 外部 process instance ID 或 credential ID。
-- 创建时间。
-
-普通应用日志用于排障，不能替代审计日志。审计查询应支持按 user、app、request、grant、event_type 和时间范围过滤，并且分页。
-
-## 管理控制台边界
-
-MVP 早期可以优先使用 Django Admin 完成试点配置，但需要保证：
-
-- 安全敏感字段只读或受控展示。
-- app token 明文不在列表页、详情页或日志中出现。
-- 审计日志不可编辑、不可删除。
-- ApprovalRule 配置保存时校验目标角色或权限属于同一 App。
-- 没有审批规则的 requestable role 不能被员工申请。
-
-后续自定义管理控制台应复用 `applications`、`grants` 和 `audit` 服务，不重新实现授权写入逻辑。
-
-## 测试策略
-
-最低测试层级：
-
-- 单元测试：AccessRequest 状态机、GrantService 版本递增、缓存过期计算、ApprovalRule 校验。
-- 集成测试：权限查询 API、静态 token 认证、OAuth2 client credentials、跨应用拒绝、DingTalk callback 幂等、Authentik webhook 与定时同步。
-- 端到端 smoke：Authentik 登录、申请 CRM role、DingTalk mock 审批、授权记录应用、CRM 权限查询。
-- 管理端 smoke：从空库创建 CRM App、roles、permissions、role mappings、approval rules、app credentials。
-
-质量门槛：
-
-- `python manage.py check`
-- `python manage.py migrate --check`
-- `pytest`
-- `ruff`
-- `basedpyright`
-- Playwright smoke
-
-当前仓库已具备部分 MVP 实现。后续运营增强实现完成后，仍应以这些命令和对应的页面冒烟作为交付门槛。
-
-## 关键取舍
-
-### 采用模块化 Django 单体
-
-选择原因：
-
-- MVP 需要快速完成内部试点接入。
-- Django Admin 能加速应用、角色、权限和审批规则配置。
-- 单体事务边界清晰，适合审批回调、授权记录和审计日志的一致性要求。
-
-放弃方案：
-
-- 前后端完全分离：会增加认证、CSRF、部署和权限页面实现成本。
-- 微服务拆分：当前业务边界尚未证明需要独立部署，过早拆分会增加事务和审计复杂度。
-
-### 授权查询 API 优先
-
-选择原因：
-
-- MVP 成功标准依赖内部应用一天内接入。
-- API 契约一旦被内部应用使用，就会成为事实契约。
-- 先稳定查询契约可以避免 UI 和审批流程实现后再反复修改授权输出。
-
-### 一个 API 版本内向后兼容扩展
-
-选择原因：
-
-- 静态 token 与 OAuth2 client credentials 不应形成两套接口。
-- 内部应用接入成本应该低，不能要求不同应用选择不同版本。
-- 新字段通过可选字段添加，避免破坏已连接应用。
-
-## 演进约束
-
-- 公共权限查询 API 是下游稳定契约，扩展页面和运营能力不得破坏其字段语义。
-- 任何阶段都不能让 Authentik、DingTalk 或权限模板成为授权事实来源。
-- 任何阶段都不能绕过 `GrantService` 写入最终授权事实。
-- 任何阶段都不能破坏 `/api/v1/apps/{app_key}/users/{user_id}/permissions` 的既有字段语义。
-
-## 开放输入
-
-以下不是架构阻塞项，但在试点部署前必须确定：
-
-- Authentik issuer URL、client ID、client secret 和 callback URL。
-- DingTalk app key/client ID、secret、agent ID 和 approval process code。
-- CRM app owner、首个审批路由规则和角色审批人。
-- 生产域名、HTTPS 证书和网络访问策略。
-- 审计日志保留周期与导出要求。
+- 公共权限查询 API 是下游的稳定契约：只能以可选字段扩展，不得修改既有字段的含义或类型。
+- 任何阶段都不能让 Authentik、钉钉或权限模板成为授权事实来源。
+- 任何阶段都不能绕过 `GrantService` 写入授权事实。
+- 静态 token 与 OAuth2 client credentials 不形成两套接口。

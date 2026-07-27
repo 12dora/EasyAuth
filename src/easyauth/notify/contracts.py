@@ -138,7 +138,7 @@ HTTPS_PREFIX: Final = "https://"
 DINGTALK_LINK_PREFIX: Final = "dingtalk://dingtalkclient/page/link?"
 DINGTALK_USER_STATUS_ACTIVE: Final = "active"
 
-# 投递管道常量(第 3 篇 §1/§3/§4/§5/§6)
+# 投递管道常量
 NOTIFY_RETRY_DELAYS_SECONDS: Final[tuple[int, ...]] = (60, 300, 1800, 7200)
 NOTIFY_THROTTLE_RETRY_SECONDS: Final = 120
 NOTIFY_MAX_CHUNKS_PER_RUN: Final = 5
@@ -150,7 +150,7 @@ NOTIFY_RECONCILE_TASK_LIMIT: Final = 50
 NOTIFY_PRUNE_BATCH_SIZE: Final = 500
 DEFAULT_RETENTION_DAYS: Final = 180
 DINGTALK_PROGRESS_DONE: Final = 2
-# 调用级频控 errcode(第 4 篇 §4): QPS 90018, QPM 人次 143103/143104。
+# 调用级频控 errcode: QPS 90018, QPM 人次 143103/143104。
 DINGTALK_THROTTLE_ERRCODES: Final[frozenset[int]] = frozenset({90018, 143103, 143104})
 # 受理期解析失败集合: 幂等重放时 recipient_rejected 只计这些(契约 §N2)。
 ACCEPT_TIME_ERROR_CODES: Final[frozenset[str]] = frozenset(

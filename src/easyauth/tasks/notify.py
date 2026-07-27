@@ -13,7 +13,7 @@ from easyauth.notify.delivery import deliver_message
 from easyauth.notify.reconciliation import reconcile_send_results
 from easyauth.notify.retention import prune_messages
 
-# 单轮最多 5 批 x 钉钉 ~5s 超时 + 余量(第 3 篇 §1)。
+# 单轮最多 5 批 x 钉钉 ~5s 超时 + 余量。
 _DELIVER_SOFT_TIME_LIMIT: Final = 25
 _DELIVER_TIME_LIMIT: Final = 30
 

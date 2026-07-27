@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 # 默认走钉钉新版 v1.0 API(api.dingtalk.com); 审批等能力均有新版。
 # 例外: 工作通知仅有旧版 oapi topapi(asyncsend_v2 / getsendprogress / getsendresult),
-# 官方无 api.dingtalk.com 新版替代——见 docs/design/platform-directory-notify/
+# 官方无 api.dingtalk.com 新版替代——见 docs/architecture/platform-directory-notify.md
 # 04-钉钉工作通知调研结论.md §1。oapi 例外范围仅限本文件三个工作通知方法。
 DINGTALK_API_BASE_URL: Final = "https://api.dingtalk.com"
 DINGTALK_OAPI_BASE_URL: Final = "https://oapi.dingtalk.com"
@@ -34,7 +34,7 @@ MAX_ERROR_RESPONSE_BYTES: Final = 4096
 OAPI_ASYNC_SEND_PATH: Final = "/topapi/message/corpconversation/asyncsend_v2"
 OAPI_GET_SEND_PROGRESS_PATH: Final = "/topapi/message/corpconversation/getsendprogress"
 OAPI_GET_SEND_RESULT_PATH: Final = "/topapi/message/corpconversation/getsendresult"
-# 官方 userid_list 上限, 同时保住 getsendresult 回执能力(第 4 篇 §1.1 / §2.2)。
+# 官方 userid_list 上限, 同时保住 getsendresult 回执能力。
 WORK_NOTIFICATION_MAX_USERIDS: Final = 100
 WORK_NOTIFICATION_PROGRESS_MAX_PERCENT: Final = 100
 
@@ -217,7 +217,7 @@ class DingTalkApiClient:
     ) -> str:
         """发送工作通知(旧版 oapi asyncsend_v2)。返回 task_id 字符串。
 
-        oapi 例外说明见模块顶部注释与第 4 篇 §1。
+        oapi 例外说明见模块顶部注释。
         """
         if not userid_list:
             message = "工作通知 userid_list 不能为空。"
@@ -297,7 +297,7 @@ class DingTalkApiClient:
         body: DingTalkJson,
         _deadline: float | None = None,
     ) -> DingTalkJson:
-        # 旧版 oapi: access_token 走查询参数(第 4 篇 §1), 不走 x-acs 头。
+        # 旧版 oapi: access_token 走查询参数, 不走 x-acs 头。
         deadline = monotonic() + self._timeout_seconds if _deadline is None else _deadline
         token = self.get_access_token(_deadline=deadline)
         url = f"{DINGTALK_OAPI_BASE_URL}{path}?{urlencode({'access_token': token})}"

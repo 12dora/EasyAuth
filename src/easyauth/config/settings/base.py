@@ -374,12 +374,12 @@ CELERY_BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
         "task": "easyauth.webhooks.recover_expired_leases",
         "schedule": float(os.environ.get("EASYAUTH_WEBHOOK_WATCHDOG_SECONDS", "15")),
     },
-    # 通知回执对账: sent → delivered/failed(第 3 篇 §5)。
+    # 通知回执对账: sent → delivered/failed。
     "notify-reconcile-send-results": {
         "task": "easyauth.notify.reconcile_send_results",
         "schedule": float(os.environ.get("EASYAUTH_NOTIFY_RECONCILE_SECONDS", "60")),
     },
-    # 通知历史清理: 默认 180 天保留(第 3 篇 §6)。
+    # 通知历史清理: 默认 180 天保留。
     "notify-prune-messages": {
         "task": "easyauth.notify.prune_messages",
         "schedule": float(os.environ.get("EASYAUTH_NOTIFY_PRUNE_SECONDS", "86400")),
@@ -391,7 +391,7 @@ CELERY_BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
     },
 }
 
-# 通知管道默认值(第 2 篇 §1、第 3 篇 §4/§5/§6)。
+# 通知管道默认值(见 docs/architecture/platform-directory-notify.md)。
 EASYAUTH_NOTIFY_DEFAULT_DAILY_RECIPIENT_QUOTA = int(
     os.environ.get("EASYAUTH_NOTIFY_DEFAULT_DAILY_RECIPIENT_QUOTA", "5000"),
 )

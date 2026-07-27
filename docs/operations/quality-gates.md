@@ -1,38 +1,51 @@
 # 质量门禁
 
+## CI 作业
+
+`.github/workflows/docker-build.yml` 定义 6 个必过作业，全部通过后才构建、多架构发布、
+Cosign 签名并验证镜像（打 `v*.*.*` tag 时还会创建 GitHub Release）。发布**不会**绕过质量作业。
+
+| 作业 | 覆盖 |
+| --- | --- |
+| 后端 SQLite 隔离套件 | 断言测试库确实是 SQLite → `manage.py check` → `makemigrations --check --dry-run` → 主 pytest |
+| PostgreSQL 多连接与 Redis/broker 套件 | 真实 PG 16 + Redis 7 服务；断言 vendor → 迁移回放 → 通知配额并发、outbox、连接器 dispatch、运行健康 |
+| SDK 与 FastAPI 全功能套件 | 以 `.[fastapi]` 安装后跑全量 SDK 测试，并**禁止出现 skip**（防止可选依赖缺失被当成通过） |
+| Ruff 与 BasedPyright | 静态检查 |
+| 前端 | typecheck → vitest → 生产构建（含分包预算） |
+| Playwright 真实全栈冒烟 | 真实构建产物 + 真实 Django + 真实 SQLite，**不 mock EasyAuth 自身 API** |
+
+后两类作业是刻意分开的：普通 Playwright 套件大量 mock 自身 API，只能算 UI/布局冒烟；
+只有 `e2e:fullstack` 能证明前后端闭环。
+
 ## 静态检查边界
 
-Python 静态门禁分为两层：
-
-- `ruff check .` 覆盖仓库内 Python 代码和测试，迁移目录按生成代码处理，不参与风格检查。
+- `ruff check .` 覆盖仓库内 Python 代码和测试；迁移目录按生成代码处理，不参与风格检查。
 - `basedpyright` 覆盖生产运行时代码 `src/easyauth`，保持 `typeCheckingMode = "all"`。
 
-`basedpyright` 不排除本轮整改范围内的普通生产模块。排除项只有：
+排除项只有两个：
 
-- `src/easyauth/**/migrations/**`，迁移正确性由迁移门禁验证，而不是由类型门禁替代；
-- `src/easyauth/config/settings/deploy.py`，该文件属于用户明确要求不整改的 `EA-AUD-001`
-  反代部署路径。
+- `src/easyauth/**/migrations/**` —— 迁移正确性由迁移回放和漂移检查验证，不由类型门禁替代；
+- `src/easyauth/config/settings/deploy.py` —— 用户明确排除的反代部署路径。该排除只表示范围
+  边界，**不代表**这条部署路径通过验收或可以上线。
 
-`deploy.py` 的排除只体现本轮范围边界，不代表该部署路径通过质量验收或可以上线。
+不得通过降低 `typeCheckingMode`、排除普通生产模块、加宽泛 `noqa` 或扩大 `per-file-ignores`
+制造绿色。静态检查失败时修根因。
 
-## 测试和迁移职责
+## 测试约定
 
-测试代码由 pytest 执行业务回归，并由 Ruff 检查导入、临时路径、危险调用和结构问题。测试中需要临时文件或临时目录时，应使用 pytest 提供的 `tmp_path`、`tmp_path_factory` 或等价动态目录，不应写入固定的系统临时路径。
+- 业务回归由 pytest 执行；测试代码的导入、临时路径和危险调用由 Ruff 检查。
+- 需要临时文件或目录时使用 `tmp_path` / `tmp_path_factory`，不写固定系统临时路径。
+- mock 只用于隔离外部依赖，**不得替代业务事实或掩盖缺陷**。
 
-Django 迁移必须通过两类证据：
-
-- SQLite 快速层执行 `manage.py makemigrations --check --dry-run` 和主后端测试。
-- PostgreSQL 层执行真实迁移回放，并覆盖多连接、Redis、broker、租约和 `skip_locked` 等并发语义。
-
-## CI 命令
-
-CI 中的 Python 静态作业必须使用与本地一致的虚拟环境命令：
+## 本地等价命令
 
 ```bash
+.venv/bin/python manage.py check
+.venv/bin/python manage.py makemigrations --check --dry-run
+.venv/bin/pytest
 .venv/bin/ruff check .
 .venv/bin/basedpyright
+pnpm --filter @easyauth/frontend test
+pnpm --filter @easyauth/frontend build
+pnpm --filter @easyauth/frontend e2e:fullstack
 ```
-
-不得通过降低 `typeCheckingMode`、排除整改范围内的普通生产模块、增加宽泛 `noqa` 或扩大
-`per-file-ignores` 来制造绿色结果。静态检查失败时，应修复根因；超出当前修复范围的生产类型
-错误必须以明确、可审计的范围边界记录。

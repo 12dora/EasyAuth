@@ -14,7 +14,7 @@
 
 ## 管理范围计算方式
 
-管理范围计算方式是 EasyAuth 将组织关系解析成 `MANAGED_USERS` 的策略。第一版支持 `dingtalk_manager_chain`，控制台展示为“按钉钉主管关系”。
+管理范围计算方式是 EasyAuth 将组织关系解析成 `MANAGED_USERS` 的策略，由 `ManagedScopePolicy` 按应用配置。可选 `dingtalk_manager_chain`（按钉钉主管关系）、`easyauth_team`（按 EasyAuth 团队）、`union`（两者并集）和 `disabled`。
 
 ## 管理对象快照
 
@@ -26,4 +26,4 @@
 
 ## 下游授权快照
 
-下游授权快照是 EasyTrade 等应用从 EasyAuth 拉取并落地的权限结果，包含 `snapshot_version`、`expires_at`、授权 grant 列表以及 `MANAGED_USERS` 的解析结果。业务查询只能依赖本地快照。
+下游授权快照是 EasyTrade 等应用从 EasyAuth 拉取并落地的权限结果，包含 `groups`、`grants`、`grant_version`、`catalog_version`、`snapshot_version`、`expires_at` 以及 `MANAGED_USERS` 的解析结果。业务查询只能依赖本地快照。
