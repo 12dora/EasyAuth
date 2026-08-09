@@ -636,6 +636,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
   "subject": { "user_id": "3f1a…", "name": "王某某", "department": "华东销售部", "status": "departed" },
   "assignee": { "user_id": "8c44…", "name": "李某某", "state": "manager", "escalation_level": 0 },
   "escalation": { "deadline": "2026-08-24T10:00:00Z", "days_left": 14, "level": 0, "deferred_at": null },
+  // deadline/days_left 为 null 表示已落超管池, 不再上交; deferred_at 非空表示本层级已顺延过一次
   "reason": "目录同步检出离职",
   "created_at": "2026-08-10T10:00:00Z",
   "actions": [
@@ -646,6 +647,9 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
       "blocked_reason": "",
       "skip_reason": "",
       "last_error": "",
+      "grant_receiver": { "user_id": "8c44…", "name": "李某某" },
+      "summary": null,
+      "data_completed_at": null,
       "asset_types": [
         {
           "type": "customer", "label": "名下客户", "count": 187,
@@ -661,6 +665,11 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
       "app_name": "EasyProject",
       "status": "blocked",
       "blocked_reason": "capability_undeclared",
+      "skip_reason": "",
+      "last_error": "",
+      "grant_receiver": null,
+      "summary": null,
+      "data_completed_at": null,
       "asset_types": []
     }
   ],

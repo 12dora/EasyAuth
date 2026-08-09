@@ -137,12 +137,16 @@ export interface HandoverAction {
   grant_receiver: HandoverUserRef | null;
   /** done 之后才有; 按 asset_type 分组的五元统计 */
   summary: Record<string, HandoverAssetSummary> | null;
+  /** 非 null = 数据已落地、权限尚未转授(契约 §10.5.1.1)。failed 时靠它区分两种现场 */
+  data_completed_at: string | null;
 }
 
 export interface HandoverEscalation {
   deadline: string | null;   // null = 已落超管池, 不再上交
   days_left: number | null;
   level: number;
+  /** 非 null = 本层级已被超管顺延过一次, 顺延按钮必须禁用(01 §6.3) */
+  deferred_at: string | null;
 }
 
 export interface HandoverTaskDetail {
@@ -216,7 +220,13 @@ export interface HandoverAssetItemsPage {
 | `previewed` | 展开资产分配器（§6）+ [重新预演] [执行交接] |
 | `executing` / `async_pending` | 骨架 + 轮询（React Query `refetchInterval: 3000`），禁用按钮 |
 | `done` | 绿底，按 `summary` 逐类展示五元统计（`merged`/`failed` 为 0 时可折叠，但不得隐藏字段） |
-| `failed` | 红底，展示 `last_error` + [重试] |
+| `failed` 且 `data_completed_at == null` | 红底，「数据未移交，权限未变更」+ `last_error` + [重试]（重试会重新发数据请求） |
+| `failed` 且 `data_completed_at != null` | 橙底，「**数据已移交成功，权限转移失败**」+ `last_error` + [重试]（重试只补做权限转移，不会重复搬数据） |
+
+> **最后两行必须分开显示，不能合成一个「失败」。** 契约 §10.5.1.1 把 execute 拆成
+> 「先搬数据、再转授权」两步并持久化了中间态；两种失败的**现场完全不同**：
+> 前者数据还在离职者名下，后者数据已经在接收人那里、只是权限还没跟上。
+> 混成一句「执行失败」会让人以为可以放着不管，或者反过来手工再搬一次导致重复。
 
 **关键交互约束**：[执行交接] 是不可逆动作，必须二次确认对话框，且确认文案要把后果说清楚：
 
@@ -236,13 +246,19 @@ export interface HandoverAssetItemsPage {
 ### 5.4 发起「移交下属数据」（`PortalReassignDialog`）
 
 入口：门户「我的交接」页，**仅当**当前用户对至少一人有管辖权时显示。
-判定方式：`GET /portal/api/v1/handover-candidates?scope=managed` 返回非空。
+判定方式：`GET /portal/api/v1/handover-candidates?purpose=reassign_subject` 返回非空。
+
+> **参数名以 `01` §6.1 为准：`purpose`，枚举 `receiver` / `reassign_subject`，必填。**
+> 资产分配器里选**接收人**用 `purpose=receiver`（全体在职员工），
+> 这里选**转出方**用 `purpose=reassign_subject`（限我的管辖范围）。
+> 两者绝不能共用一次请求的结果 —— 把 `receiver` 的结果拿来当转出方候选，
+> 等于让任何人都能移交任何人的数据。
 
 字段：
 
 | 字段 | 控件 | 校验 |
 |---|---|---|
-| 转出方 | 人员选择器，数据源 `?scope=managed` | 必填 |
+| 转出方 | 人员选择器，数据源 `?purpose=reassign_subject` | 必填 |
 | 理由 | `TextArea` | 必填，≥10 字符，前端先校验再提交 |
 
 提交后建单跳详情，接收人在详情页的资产分配器里逐类指定（不在对话框里定）。
@@ -309,7 +325,8 @@ export interface HandoverAssetItemsPage {
 
 ### 6.3 人员选择器（`HandoverUserPicker`）
 
-数据源 `GET /portal/api/v1/handover-candidates?q=`（控制台走对应超管端点）。
+数据源 `GET /portal/api/v1/handover-candidates?purpose=receiver&q=`（控制台走对应超管端点）。
+`purpose` **必填**，漏传返回 `422 purpose_required`（`01` §6.1）。
 输入 300ms 防抖，React Query `keepPreviousData`。
 必须排除当事人本人（后端已排除，前端不重复实现，但要能正确渲染后端返回的空集）。
 
