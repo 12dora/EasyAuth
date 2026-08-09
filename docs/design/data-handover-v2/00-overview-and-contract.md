@@ -56,7 +56,7 @@
 | D4 | 悬置期发**限时代管授权** | 把离职者显式放进 assignee 的 `MANAGED_USERS`，并按建单快照复制授权，使主管在业务系统里看得见、跟得了 |
 | D5 | 代管授权 **14 天**，每天钉钉提醒 | 到期收回当前代管权，**自动上交上一级主管**并重发，到顶落超管池 |
 | D6 | 未声明交接能力的 APP **阻塞** | 状态 `blocked`，交接单不能整体完成；超管填理由可强行 `skipped` |
-| D7 | 在职提前交接**只搬数据，不动权限** | 员工正常工作到最后一天；离职日到来时**同一张单升级为 offboard 并重新盘点** |
+| D7 | 在职提前交接**只搬数据，不动权限** | 用独立单据类型 `pre_offboard`（**与「转岗」不是一回事**，见 §6.1）；员工正常工作到最后一天；离职日到来时**同一张单升级为 offboard 并重新盘点** |
 | D8 | 支持**二次转交** | 升级为通用数据移交：任意两名在职员工之间也可发起（`kind=reassign`），用于纠错与重分配 |
 | D9 | 在职移交发起权在**主管** | 仅限自己管辖范围内；跨部门走超管；必填理由；执行后通知转出方/接收方/上级三方；全程审计 |
 | D10 | 粒度：**按类型默认全选 + 逐条反选改派** | 一个 APP 内允许多个接收人（接收人下沉到条目级） |
@@ -129,10 +129,17 @@ EasyAuth 只做存储与回传，不解析、不排序、不校验格式。长�
 | kind | 触发 | subject 状态 | 是否动权限 |
 |---|---|---|---|
 | `offboard` | 目录同步检出离职（自动）；超管手动建单 | `departed` | 权限已在检出时全部撤销 |
-| `transfer` | 转岗；**在职员工自助提前交接** | `active` | **不动**（D7） |
+| `transfer` | **转岗**（岗位变了，人还在）。既有类型，不改语义 | `active` | **必须动**：按 `TransferPlan` 的差异清单撤旧授权、加新授权 |
+| `pre_offboard` | **新增**。在职员工自助发起的提前交接（人要走了，但还没走） | `active` | **一点不动**（D7） |
 | `reassign` | **新增**。主管发起的在职员工之间数据移交；交接纠错 | 双方均 `active` | 不动 |
 
-`transfer` → `offboard` 的**升级**是唯一允许的 kind 变更（D7），见 §8.3。
+> **`transfer` 与 `pre_offboard` 必须分开，不能合并成一个类型。** 两者对权限的处理正好相反：
+> 转岗是"换岗位"，权限必须跟着岗位重算（这正是既有 `TransferPlan`/`OnboardingTemplateRevision`
+> 差异计算的用途）；提前交接是"人要走了先把活交出去"，权限一动都不能动，否则员工在剩下的
+> 在职期里没法工作。把两者塞进同一个 kind 会让实现方在"要不要调用授权差异逻辑"上二选一，必错一半。
+
+`pre_offboard` → `offboard` 的**升级**是唯一允许的 kind 变更（D7），见 §8.3。
+`transfer`（转岗）单**不参与**升级：转岗完成即完成，若此人后续离职，那是一张新的 `offboard` 单。
 
 ### 6.2 单据状态机
 
@@ -266,15 +273,16 @@ resolve_assignee(subject, start_level=0):
 
 ```
 在职期间：
-  员工本人在门户发起 kind=transfer 单
+  员工本人在门户发起 kind=pre_offboard 单
     ├─ 快照当前授权 → HandoverGrantItem
     ├─ assignee = 本人（assignee_state=subject）
     ├─ 不发代管授权（本人权限本来就在）
-    └─ execute 时：只发 webhook 搬数据，跳过 transfer_selected_grants()
+    └─ execute 时：只发 webhook 搬数据，跳过一切授权改写
 
 离职日：
-  start_offboarding() 发现已有 open 的 transfer 单
-    ├─ 该单 kind: transfer → offboard（唯一允许的 kind 变更）
+  start_offboarding() 发现已有 open 的 pre_offboard 单
+    │  （若已有的是 open 的 transfer 转岗单, 则该转岗单先按既有逻辑收尾/取消, 再新建 offboard 单）
+    ├─ 该单 kind: pre_offboard → offboard（唯一允许的 kind 变更）
     ├─ assignee: 本人 → 按 §8.2 重新解析为主管
     ├─ generation += 1，全部 action 状态重置为 pending（已 done 的也重置）
     ├─ 重新快照授权 → 新一轮 HandoverGrantItem

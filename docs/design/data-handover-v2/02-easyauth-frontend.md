@@ -90,7 +90,7 @@ Django 侧无需改动：`portal_react_route`（`src/easyauth/portal/urls.py:51`
 现有 `domain.ts` 也是 snake_case，保持一致。
 
 ```ts
-export type HandoverKind = "offboard" | "transfer" | "reassign";
+export type HandoverKind = "offboard" | "transfer" | "pre_offboard" | "reassign";
 export type HandoverTaskStatus = "pending" | "in_progress" | "completed" | "cancelled";
 export type HandoverAssigneeState = "manager" | "subject" | "superuser_pool";
 export type HandoverActionStatus =
@@ -209,11 +209,11 @@ export interface HandoverAssetItemsPage {
 > 即将把 **187 个客户、23 个在途订单** 移交给 **张某某**，其中 2 项另行指定了接收人。
 > 执行后归属立即变更。如果发现给错人，需要再发起一次数据移交来纠正。
 
-### 5.3 发起「提前交接」（`PortalSelfTransferDialog`）
+### 5.3 发起「提前交接」（`PortalPreOffboardDialog`）
 
 入口：门户首页与「我的交接」页各一个次要按钮「我要提前交接工作」。
 
-- 调 `POST /portal/api/v1/handover-tasks/self-transfer`
+- 调 `POST /portal/api/v1/handover-tasks/pre-offboard`（建 `kind=pre_offboard` 单）
 - 409 `open_task_exists` → 提示「你已有一张进行中的交接单」并给跳转链接
 - 建单后直接跳详情页
 - 对话框里必须明确写一句：「提前交接**只移交数据归属，不会影响你的账号权限**，你可以正常工作到最后一天。」
@@ -297,7 +297,7 @@ export interface HandoverAssetItemsPage {
 | 段 | 内容 |
 |---|---|
 | 1 应用 | 不变；`blocked` 的 APP 在此段即标红，且**不可勾选进入后续段** |
-| 2 授权 | 不变（`HandoverGrantItem` 勾选，仅 `kind=offboard` 显示） |
+| 2 授权 | 不变（`HandoverGrantItem` 勾选，仅 `kind=offboard` 显示；`transfer` 转岗单仍走既有的差异确认界面） |
 | 3 预演与分配 | preview 后直接内嵌 §6 的 `AssetAllocator` |
 | 4 执行 | 不变，加 blocked 汇总提示 |
 

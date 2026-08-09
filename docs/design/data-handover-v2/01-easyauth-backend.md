@@ -54,7 +54,13 @@ ASSIGNEE_STATE_VALUES: Final[tuple[str, ...]] = (
     ASSIGNEE_STATE_MANAGER, ASSIGNEE_STATE_SUBJECT, ASSIGNEE_STATE_SUPERUSER_POOL,
 )
 
-HANDOVER_KIND_REASSIGN: Final = "reassign"   # 加入 HANDOVER_KIND_CHOICES / _VALUES
+HANDOVER_KIND_PRE_OFFBOARD: Final = "pre_offboard"  # 在职提前交接(不动权限)
+HANDOVER_KIND_REASSIGN: Final = "reassign"          # 在职互转(不动权限)
+# 两者都要加入 HANDOVER_KIND_CHOICES / HANDOVER_KIND_VALUES;
+# 既有的 transfer 保持"转岗"原义, 继续走 TransferPlan 授权差异, 不要复用它承载提前交接。
+
+# 会改动授权的 kind, 供 §5.5 判定
+GRANT_MUTATING_KINDS: Final[tuple[str, ...]] = (HANDOVER_KIND_OFFBOARD, HANDOVER_KIND_TRANSFER)
 ```
 
 **约束变更**（关键）：现有 `lifecycle_task_one_open_per_subject` 会挡住 `reassign` 与离职单并存，
@@ -64,7 +70,8 @@ HANDOVER_KIND_REASSIGN: Final = "reassign"   # 加入 HANDOVER_KIND_CHOICES / _V
 models.UniqueConstraint(
     fields=["subject_user"],
     condition=Q(status__in=TASK_OPEN_STATUSES)
-              & Q(kind__in=(HANDOVER_KIND_OFFBOARD, HANDOVER_KIND_TRANSFER)),
+              & Q(kind__in=(HANDOVER_KIND_OFFBOARD, HANDOVER_KIND_TRANSFER,
+                            HANDOVER_KIND_PRE_OFFBOARD)),
     name="lifecycle_task_one_open_lifecycle_per_subject",
 )
 ```
@@ -304,7 +311,8 @@ def resolve_assignee(subject: UserMirror, *, start_level: int = 0) -> AssigneeRe
 ### 4.1 发放 `grant_custody(task) -> CustodyGrant | None`
 
 - `task.assignee is None` → 直接返回 `None`（超管池不发代管，契约 §7.4）。
-- `task.kind in (transfer, reassign)` → 返回 `None`（当事人在职，主管本就有可见范围，D7/D9）。
+- `task.kind in (transfer, pre_offboard, reassign)` → 返回 `None`（当事人在职，其数据本就在自己或
+  主管的可见范围内，无需代管，D7/D9）。
 - 同事务内：
   1. 建 `CustodyGrant(expires_at=now + CUSTODY_TTL_DAYS)`。
   2. 遍历 `task.grant_items`（`HandoverGrantItem`），按 `(app, group|permission, scope_key)` 去重。
@@ -422,8 +430,10 @@ def preview_action(action) -> HandoverAppAction
 
 - 组 payload：`assignments` 由 `HandoverAssetType`（`selected=True`）与其 `overrides` 生成。
 - 把完整请求体写入 `action.execution_payload`（不可变审计凭据），替代原 `execution_to_user`/`execution_policy`。
-- `transfer_selected_grants(action)` 的调用条件收紧：**仅 `kind == offboard` 时执行**（D7 —— 在职提前交接
-  与在职移交都不动权限）。
+- `transfer_selected_grants(action)` 的调用条件收紧：**仅 `kind == offboard` 时执行**。
+  `pre_offboard` 与 `reassign` 一律不动权限（D7/D9）；`transfer`（转岗）走的是**另一条路** ——
+  既有的 `TransferPlan` 差异确认（`lifecycle/transfer.py`），不经过 `transfer_selected_grants`
+  的接收人转移语义。三者不可混为一谈，实现时用 `GRANT_MUTATING_KINDS` 与显式分支区分。
 - 成功后：`action.status = done` → 触发 §4.3 逐 APP 收回代管 → `refresh_task_status(task)`。
 
 ### 5.6 items（契约 §10.4，新增）
@@ -449,7 +459,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | 方法 | 路径 | 可访问条件 | 说明 |
 |---|---|---|---|
 | GET | `/me/handover-tasks` | 登录即可 | 返回两组：`as_assignee`（我负责的）、`as_subject`（我是当事人的） |
-| POST | `/handover-tasks/self-transfer` | 登录即可，且自己无 open 的 offboard/transfer 单 | 在职提前交接建单（D7），`kind=transfer`，assignee=本人 |
+| POST | `/handover-tasks/pre-offboard` | 登录即可，且自己无 open 的 offboard/transfer/pre_offboard 单 | 在职提前交接建单（D7），`kind=pre_offboard`，assignee=本人 |
 | POST | `/handover-tasks/reassign` | `subject ∈ 我的 MANAGED_USERS` 且双方 active | 在职移交（D9），必填 `reason`（≥10 字符），否则 `422 reason_required` |
 | GET | `/handover-tasks/{task_id}` | 我是 assignee 或 subject | 单据详情，含各 APP action、资产分类、代管剩余天数 |
 | GET | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}/items` | 同上 | 明细分页，query: `page`、`page_size`、`q` |
