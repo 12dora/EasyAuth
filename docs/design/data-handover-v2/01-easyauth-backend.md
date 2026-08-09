@@ -120,10 +120,11 @@ models.CheckConstraint(
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `generation` | `PositiveIntegerField(default=1)` | 建 action 时从 `task.generation` 拷贝；升级时重置 |
-| `snapshot_token` | `CharField(max_length=128, blank=True)` | preview 响应带回的不透明令牌，execute 时回传（契约 §10.5.1） |
-| `batch_seq` | `PositiveIntegerField(default=0)` | 已发出的 execute 批次号，每发一批 +1，作幂等键第三元 |
+| `snapshot_token` | `CharField(max_length=128, blank=True)` | 最近一次 preview 返回的令牌（契约 §10.5.1） |
+| `batch_seq` | `PositiveIntegerField(default=0)` | 已分配的最大批次号。**注意：批次的事实来源是 §2.4.1 的 append-only 表，本字段只是分配器** |
+| `data_completed_at` | `DateTimeField(null=True, blank=True)` | 数据 webhook 已成功、权限尚未转授（契约 §10.5.1.1 的子状态，持久化） |
 | `grant_receiver` | `FK(UserMirror, PROTECT, null=True, related_name="handover_grant_receiving")` | 权限接收人，见上 |
-| `execution_payload` | `JSONField(default=dict, blank=True)` | 实际发出的 execute 请求体快照，不可变审计凭据 |
+| ~~`execution_payload`~~ | — | **取消**。单个可更新字段无法承载多批历史，也称不上"不可变凭据"。改用 §2.4.1 的 append-only 表 |
 | `blocked_reason` | `CharField(max_length=64, blank=True)` | `capability_undeclared` / `descriptor_unreachable` |
 | `skip_reason` | `TextField(blank=True)` | 超管强行跳过的理由（D6） |
 | `skipped_by` | `CharField(max_length=128, blank=True)` | 超管 actor id |
@@ -230,6 +231,67 @@ class HandoverAssetOverride(models.Model):
         ordering = ["asset_type_id", "asset_id"]
 ```
 
+### 2.4.1 `HandoverExecutionAttempt`（新表，append-only）
+
+每一次真实发出的 execute 请求固化为一行，**只增不改**，是审计与幂等的事实来源。
+
+```python
+class HandoverExecutionAttempt(models.Model):
+    action = FK(HandoverAppAction, on_delete=CASCADE, related_name="attempts_log")
+    generation = PositiveIntegerField()
+    batch_seq = PositiveIntegerField()
+    snapshot_token = CharField(max_length=128)
+    request_payload = JSONField()                 # canonical, 发出前固化
+    request_hash = CharField(max_length=64)       # sha256(canonical payload)
+    response_payload = JSONField(default=dict, blank=True)
+    outcome = CharField(max_length=16)            # sent | succeeded | failed | async_accepted
+    http_status = PositiveSmallIntegerField(null=True, blank=True)
+    error_text = TextField(blank=True)
+    created_at = DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["action", "generation", "batch_seq"],
+                name="lifecycle_execution_attempt_unique",
+            ),
+        ]
+```
+
+**分配与发送必须可恢复**：在事务内分配 `batch_seq`、写入本行（`outcome="sent"`）并写 outbox，
+提交后才由 worker 真正发请求。这样"先加号后崩溃"只留下一行 `sent` 待续跑，
+"先发送后加号"导致的重复分配不会发生。
+
+`retry_action` 的语义随之明确：**重放原 batch、原 payload**，不新建行。
+改动 assignment、重新 preview、或 413 分片，才创建新 `batch_seq`。
+
+### 2.4.2 `HandoverExecutionLease`（新表，契约 §10.5.2）
+
+```python
+class HandoverExecutionLease(models.Model):
+    subject_user = FK(UserMirror, on_delete=PROTECT, related_name="handover_leases")
+    app = FK(App, on_delete=PROTECT, related_name="handover_leases")
+    action = FK(HandoverAppAction, on_delete=CASCADE, related_name="leases")
+    generation = PositiveIntegerField()
+    batch_seq = PositiveIntegerField()
+    owner = CharField(max_length=128)             # worker 标识
+    fence = PositiveBigIntegerField()             # 单调递增, 防旧持有者写脏
+    acquired_at = DateTimeField(auto_now_add=True)
+    released_at = DateTimeField(null=True, blank=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["subject_user", "app"],
+                condition=Q(released_at__isnull=True),
+                name="lifecycle_lease_one_active_per_subject_app",
+            ),
+        ]
+```
+
+**过期租约不得直接强解**：先按 `(task_id, generation, batch_seq)` 向下游确认真实状态
+（下游幂等记录是权威），确认终结后 fence +1 再释放。
+
 ### 2.5 ~~`CustodyGrant`~~ / ~~`CustodyGrantItem`~~ —— **已取消**
 
 代管授权在第二轮复核后整体废弃（契约 §7、`07-review-log.md` §1.1）。这两张表**不建**，
@@ -243,6 +305,14 @@ class HandoverAssetOverride(models.Model):
 | `last_reminded_on` | `DateField(null=True, blank=True)` | 每日提醒按**上海业务日**去重（`timezone.localdate(..., Asia/Shanghai)`） |
 
 `HANDOVER_ESCALATION_DAYS: Final = 14`（原 `CUSTODY_TTL_DAYS` 作废）。
+
+### 2.5.1 `HandoverGrantItem` 补 `generation`
+
+升级会重新快照授权（契约 §8.3）。现有 `HandoverGrantItem` 没有 generation，
+重新快照只能删旧行（毁审计）或追加不可区分的行（新旧混用）。
+
+新增 `generation = PositiveIntegerField(default=1)`，唯一约束加入该列；
+授权转授、勾选、审计一律按精确 generation 过滤，历史行只读保留。
 
 ### 2.7 `App` 交接能力声明（`applications/models.py:102`，修改，契约 §9）
 
@@ -459,7 +529,11 @@ def preview_action(action) -> HandoverAppAction
 
 - 组 payload：`assignments` 由该 `(action, generation)` 下的**全部** `HandoverAssetType`
   （含 `default_action=skip` 的）与其 `overrides` 生成，形状严格照契约 §10.5。
-- 把完整请求体写入 `action.execution_payload`（不可变审计凭据），替代原 `execution_to_user`/`execution_policy`。
+- 在事务内分配 `batch_seq`、写入一行 `HandoverExecutionAttempt`（`outcome="sent"`，含 canonical
+  payload 与其 sha256）、写 outbox，**提交后**才由 worker 真正发请求（§2.4.1）。
+- 顺序按契约 §10.5.1.1：**先数据 webhook，成功后置 `data_completed_at`，再幂等转授权限**。
+  `transfer_selected_grants()` 的调用点必须从当前位置（`handover.py:182`，在 webhook 之前）
+  **移到 webhook 成功之后**。这是修既有缺陷，不是新增功能。
 - `transfer_selected_grants(action)` 的调用条件收紧：**仅 `kind == offboard` 时执行**。
   `pre_offboard` 与 `reassign` 一律不动权限（D7/D9）；`transfer`（转岗）走的是**另一条路** ——
   既有的 `TransferPlan` 差异确认（`lifecycle/transfer.py`），不经过 `transfer_selected_grants`
@@ -485,6 +559,15 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 
 认证：既有门户会话（OIDC 登录的 active `UserMirror`），**不需要超管**。
 授权：见每行的「可访问条件」。越权一律 `404`（与既有门户一致，防枚举）。
+
+> **门户必须显式拒绝本地管理员。** break-glass 本地超管会生成 active 的
+> `local-admin:` 前缀 `UserMirror`（`accounts/local_admin.py`），现有门户 guard 只检查
+> "有 session 且用户 active"，因此本地超管**可以冒充员工调用全部自助 API**。
+> 门户入口必须加一条：`authentik_user_id` 以 `LOCAL_ADMIN_SUBJECT_PREFIX` 开头 → 403。
+> 这与既有的"本地管理员不参与生命周期"（`lifecycle/offboarding.py:_assert_lifecycle_subject`）一致。
+>
+> **门户与控制台必须各自注册路由与 guard**，只共享 domain service。
+> 早期写的"控制台复用门户端点"会让两套身份判定混在一个入口上。
 
 | 方法 | 路径 | 可访问条件 | 说明 |
 |---|---|---|---|
@@ -573,7 +656,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 
 ---
 
-## 7. 异步任务（`tasks/lifecycle.py`，新建）
+## 7. 异步任务（`tasks/lifecycle.py`，**扩展既有文件**）
 
 | 任务 | 周期 | 逻辑 |
 |---|---|---|
@@ -582,7 +665,12 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | `lifecycle_superuser_pool_reminder` | beat 每天 09:05 | `assignee_state=superuser_pool` 且未完成的单，向全体超管推认领通知 |
 | `lifecycle_blocked_apps_digest` | beat 每周一 09:10 | 汇总 `blocked` action，向超管推周报 |
 
-全部通过 `outbox.enqueue_task` 入队，遵循既有「网络副作用出事务」的约定。
+> `src/easyauth/tasks/lifecycle.py` **已经存在**，本节是扩展而非新建。
+> 另外两点与既有实现不符，需一并处理：beat 目前是**直接投递任务**，不经 outbox；
+> beat schedule 只接受 float interval，**crontab 需要扩展 schedule 类型**才能表达"每天 09:00"。
+
+业务扫描由 beat 直接触发即可；**只有网络副作用（钉钉通知）走 outbox**，
+遵循既有「网络副作用出事务」的约定。
 通知内容与收件人见契约 §13，模板放 `notify/messages.py`。
 
 ---
