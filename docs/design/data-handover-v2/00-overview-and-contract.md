@@ -618,7 +618,7 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
 > **为什么必须有 `skip` 而不能用 `to_user_id=null` 兼表两义**：
 > 「不动」和「释放为无主」是两件完全不同的事，而 `releasable=false` 的类型**不允许**无主。
 > 若用 `null` 同时表达两者，那么所有 `releasable=false` 的类型（EasyTrade 的在途订单、进行中询盘、
-> 未完成任务，以及 EasyProject 的全部 11 类）都将**无法部分交接** —— 想转其中 3 条就必须整批转，
+> 未完成任务，以及 EasyProject 的全部 9 类）都将**无法部分交接** —— 想转其中 3 条就必须整批转，
 > D10 的「逐条反选改派」对它们彻底失效。三值 `action` 把这两个语义彻底分开。
 >
 > 于是「只转一部分」的标准写法是：`default_action="skip"` + `overrides` 列出要转的条目
@@ -851,20 +851,22 @@ D11 是冻结决策，**下游文档不得单方面豁免**。经复核确认，
 
 ## 14. 并行开工边界
 
-| Agent | 仓库 | 文档 | 依赖 |
-|---|---|---|---|
-| A1 | EasyAuth | `01-easyauth-backend.md` | 本文件 §5–§12 |
-| A2 | EasyAuth | `02-easyauth-frontend.md` | 本文件 §4、§6、§9；A1 的 console/portal API 契约（在 01 文档内冻结） |
-| A3 | EasyTrade | `03-easytrade-backend.md` | 本文件 §5、§7.3、§10、§11 |
-| A4 | EasyTrade | `04-easytrade-frontend.md` | A3 的 §3.1（候选接口按用途分流 + `isActive`） |
-| A5 | EasyProject | `05-easyproject-backend.md` | 本文件 §5.2、§7.3、§10、§11 |
-| A6 | EasyProject | `06-easyproject-frontend.md` | A5 的 §5.6（目录响应补 `isActive`） |
+> **本节以 `README.md`「并行边界」为准，此处只做摘要。** 早期版本写的「A1/A3/A5 三个后端可完全并行」
+> 与「A4/A6 立即开工」都已作废：前者忽略了下游要用 A1 产出的 SDK vNext 与契约样本，
+> 后者对应的两份前端文档本期已取消。
 
-**A1 / A3 / A5 三个后端可完全并行**：都只依赖本文件的 webhook 契约，互不阻塞。
-两个下游前端（A4/A6）各自依赖同仓库后端的一个小接口改动，可在该改动落地后立即开工，
-无需等待整个后端完成。
-**A2 依赖 A1 的 HTTP API 契约**，该契约在 `01-easyauth-backend.md` §6 冻结，A1 必须**先提交该章节**再继续实现，
-A2 据此即可开工。
+| Agent | 仓库 | 文档 | 可开工条件 |
+|---|---|---|---|
+| A1 | EasyAuth | `01-easyauth-backend.md` | 立即。**第 0 步先独做 SDK vNext**（三事件内核 + `handover_payloads` 类型 + 打包进包内的契约样本），打版本号并记 SHA |
+| A2 | EasyAuth | `02-easyauth-frontend.md` | A1 提交 `01` §6 的 HTTP API 契约章节后 |
+| A3 | EasyTrade | `03-easytrade-backend.md` | SDK vNext 发布后 |
+| ~~A4~~ | EasyTrade | ~~`04-easytrade-frontend.md`~~ | **本期取消**（代管废弃，F1/F2/F3 不会发生） |
+| A5 | EasyProject | `05-easyproject-backend.md` | **阻塞**：AG-00 的所有权裁定 + system-actor 语义裁定 + CCR APPROVED。裁定前只能做 `05` §2.1 身份映射与 §2.3 `hint` |
+| ~~A6~~ | EasyProject | ~~`06-easyproject-frontend.md`~~ | **本期取消**（同上） |
+
+契约样本**随 SDK 分发**（`easyauth_app_sdk.contract_samples` 包内资源），下游用 `importlib.resources`
+读取比对；**样本缺失必须让测试失败，不允许 skip 通过**。不得依赖兄弟目录路径 —— 下游 CI 独立检出，
+那条路径必然不存在。
 
 联调门禁：EasyAuth 的 `webhook.test` 事件对每个 APP 返回 200，且各 APP 的 descriptor 能被
 `GET /.well-known/easyauth-app.json` 正确拉取，并解析出 `lifecycle.capabilities` 含 `"handover.v2"`

@@ -467,7 +467,7 @@ CCR 内容（按 `contracts/workflow.md` §6 的六要素）：
 | 文件 | 覆盖 |
 |---|---|
 | `backend/tests/unit/identity/test_handover_identity.py` | **P2**：已绑定命中；未绑定走目录补绑；冲突绑定被拒；解析不到抛 `IdentityUnmappedError` |
-| `backend/tests/unit/handover/test_assets_registry.py` | 11 类 count 口径；注册表与 descriptor 用同一常量断言 |
+| `backend/tests/unit/handover/test_assets_registry.py` | 9 类 count 口径（§3.1 全表逐类）；§3.1.2 终态谓词逐类断言；注册表与 descriptor 用同一常量断言 |
 | `backend/tests/unit/handover/test_items_pagination.py` | 排序稳定、连续翻页不漏不重、`total` 与 preview 一致 |
 | `backend/tests/integration/handover/test_execute_composite_keys.py` | §4.3 四类合并场景；OWNER 升级；每项目一个 OWNER 的部分唯一索引不被违反；`merged` 如实上报 |
 | `backend/tests/integration/handover/test_execute_transaction.py` | §4.5：事务内无网络调用；失败整体回滚 |
