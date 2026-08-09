@@ -358,23 +358,37 @@ POST /api/v1/easyauth/lifecycle/handover
 ### 5.2 需要 CCR 的部分（很小，但不可省）
 
 只有一项：给这个既有操作的 `x-error-codes` 补齐条目。当前三个不足以覆盖契约 v2 的失败面。
+**新增 7 个，保留既有 3 个，共 10 个。**
 
 | 错误码 | HTTP | 触发 | 现状 |
 |---|---|---|---|
 | `WEBHOOK_SIGNATURE_INVALID` | 401 | 验签失败 | 已有 |
+| `HANDOVER_CONFLICT` | 409 | 保留，用于归属改写时的业务冲突、快照失效、迟到 generation | 已有 |
+| `VALIDATION_ERROR` | 422 | 保留，payload 结构不合法 | 已有 |
 | `WEBHOOK_TIMESTAMP_INVALID` | 400 | 时间戳超 300 秒容差 | **补** |
-| `WEBHOOK_PAYLOAD_CONFLICT` | 409 | 同 delivery id 不同 payload hash | **补** |
+| `WEBHOOK_PAYLOAD_CONFLICT` | 409 | 同 `(task_id, generation, batch_id)` 不同 payload hash | **补** |
 | `EVENT_UNSUPPORTED` | 422 | `X-EasyAuth-Event` 不是 preview/items/execute/test | **补** |
+| `EVENT_MODE_MISMATCH` | 422 | `X-EasyAuth-Event` 与 body `mode` 不一致（契约 §10.1 的强制补偿校验） | **补** |
 | `IDENTITY_UNMAPPED` | 409 | §2.1 解析不到 dtuid | **补** |
 | `ASSET_TYPE_UNDECLARED` | 422 | 请求里的 `asset_type` 不在注册表中 | **补** |
 | `REQUEST_BODY_TOO_LARGE` | 413 | 超 256 KiB | **补** |
-| `HANDOVER_CONFLICT` | 409 | 保留，用于归属改写时的业务冲突、快照失效、迟到 generation | 已有 |
 
-> **401 与 403 的定级冲突需一并裁定**：本仓库的 webhook 验签失败返回 **401
-> `WEBHOOK_SIGNATURE_INVALID`**（`contracts/test-vectors/webhook-hmac.json` 的反例已冻结），
-> 而契约 §10.6 把验签失败列在 401/403 同一行。两者语义一致、EasyAuth 侧处置相同（`failed` 且不可重试），
-> **以本仓库的 401 为准**，无需改动，但 CCR 里要写明这一裁定，避免后续被当成不一致。
-| `VALIDATION_ERROR` | 422 | 保留，payload 结构不合法 | 已有 |
+> **为什么 `EVENT_MODE_MISMATCH` 要独立成码、不并进 `VALIDATION_ERROR`**：
+> 这条校验是契约 §10.1 针对「签名不覆盖 `X-EasyAuth-Event` 头」这一已知弱点的**安全补偿**。
+> 并进通用校验错误会让一次可能的头部替换尝试，在日志里与普通的字段写错完全无法区分。
+> 独立错误码是这条补偿唯一的可观测出口。
+>
+> **`items` 事件没有 `mode` 字段，因此本码不适用于 items** —— items 的防替换依据是
+> 「请求体必含 `asset_type` + `snapshot_token`，而 preview/execute 的体里没有 `asset_type`」，
+> 结构上无法互换。校验规则写死为：
+> `preview↔mode="preview"`、`execute↔mode="execute"`、`items↔无 mode 且有 asset_type`，
+> 三者任一不满足即 422。
+
+> **401 与 403 的定级裁定**：本仓库的 webhook 验签失败返回 **401 `WEBHOOK_SIGNATURE_INVALID`**
+> （`contracts/test-vectors/webhook-hmac.json` 的反例已冻结），而契约 §10.6 把验签失败列在
+> 401/403 同一行、§10.1 只写了 403。三者语义一致、EasyAuth 侧处置相同（`failed` 且不可重试），
+> **以本仓库的 401 为准**，本仓库无需改动；契约 §10.1 已同步改为「401 或 403（下游各自既有约定）」。
+> CCR 里要写明这一裁定，避免后续被当成不一致。
 
 CCR 内容（按 `contracts/workflow.md` §6 的六要素）：
 

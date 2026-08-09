@@ -59,7 +59,7 @@ A3 / A5 的实现要用到 v2 SDK（新的 `items` 回调、`handover_payloads` 
 
 ## 需要人走流程的两件事
 
-1. **EasyProject CCR**：给既有操作 `postEasyauthLifecycleHandover` 补 6 个错误码（`05` §5.2）。
+1. **EasyProject CCR**：给既有操作 `postEasyauthLifecycleHandover` 补 7 个错误码（`05` §5.2）。
    周期长于代码实现，开工第一天就提。**它是 M06 交接端点实施的门禁** —— 只有 P1/P2 修复与各领域的
    `system_handover` 命令可以先行，端点改写、错误码、descriptor、测试向量都要等 APPROVED。
 2. **EasyAuth ADR-002 修订**：两条现行条款与本设计抵触，修订文本见 `01` §9。

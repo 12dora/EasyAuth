@@ -469,7 +469,10 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
 - 事件名：`X-EasyAuth-Event`
 - 请求体上限：**从 64 KiB 提升到 256 KiB**（`assignments.overrides` 可能较长），
   SDK `DEFAULT_MAX_BODY_BYTES` 同步调整
-- 验签失败 → 403；未知事件 → 422；业务异常 → 500（SDK 内核已实现）
+- 验签失败 → **401 或 403**（各下游沿用自己仓库既有约定：EasyTrade 403、EasyProject 401，
+  后者的反例向量已冻结在 `contracts/test-vectors/webhook-hmac.json`）；未知事件 → 422；
+  业务异常 → 500（SDK 内核已实现）。EasyAuth 侧两者处置完全相同（`failed` 且不可重试，见 §10.6），
+  因此**不要求统一**。
 
 ### 10.2 事件一览
 
