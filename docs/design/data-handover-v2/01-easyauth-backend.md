@@ -739,12 +739,20 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | `tests/unit/lifecycle/test_upgrade.py` | pre_offboard → offboard 升级：kind 变更、generation+1、action 重置、assignee 重解析、上交截止时间重置 |
 | `tests/unit/lifecycle/test_reassign.py` | 管辖校验、必填理由、与 offboard 单并存不违反唯一约束、三方通知 |
 | `tests/integration/test_portal_handover_api.py` | §6.1 全部端点的权限边界（非 assignee 拿到 404） |
-| `tests/integration/test_handover_webhook_v2.py` | payload 形状逐字段比对 `tests/contract_samples/` 下的 golden JSON；幂等键 `(task_id, generation, batch_id)` |
+| `tests/integration/test_handover_webhook_v2.py` | payload 形状逐字段比对契约样本（读法见下）；幂等键 `(task_id, generation, batch_id)` |
 | `tests/unit/test_blocked_never_completes.py` | 存在 blocked 时 `refresh_task_status` 永不返回 completed（D13） |
 
-新增 `tests/contract_samples/handover_v2/`：`preview_request.json`、`preview_response.json`、
-`items_request.json`、`items_response.json`、`execute_request.json`、`execute_response.json`。
-**EasyTrade 与 EasyProject 的契约测试直接复用这批样本**，这是跨仓库对齐的机械保证。
+#### 契约样本只有一份，就放在 SDK 包里
+
+新增 **`sdk/python/src/easyauth_app_sdk/contract_samples/handover_v2/`**：
+`preview_request.json`、`preview_response.json`、`items_request.json`、`items_response.json`、
+`execute_request.json`、`execute_response.json`。
+
+- **EasyAuth 自己的契约测试也用 `importlib.resources` 从这个包读**，不在 `tests/` 下另放一份副本。
+  两份副本必然漂移，而漂移的那一天没有任何测试会失败 —— 这正是本次改造要消灭的那类问题。
+- 三个仓库因此比对的是**同一批字节**，随 SDK 版本一起分发。
+- 样本变更 = SDK 版本变更 = 全部下游契约测试同时失败。这是跨仓库对齐的机械保证。
+- **样本缺失必须让测试失败，不允许 skip 通过。**
 
 ### 执行方式
 

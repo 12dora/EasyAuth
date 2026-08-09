@@ -3,7 +3,8 @@
 > 基准文档：`00-overview-and-contract.md`（下称「契约」）。
 > 契约里的事件名、payload 形状、错误码、身份标识规则是**冻结**的，本文件不重复定义，只给 EasyTrade 侧落地方案。
 > 本仓库的改造与 EasyAuth、EasyProject **完全并行**，唯一耦合点是契约 §10 的 webhook 形状与
-> `EasyAuth/tests/contract_samples/handover_v2/` 下的 golden JSON。
+> SDK 包内的契约样本（`easyauth_app_sdk.contract_samples.handover_v2`，用 `importlib.resources` 读）。
+> **不要**去 `../EasyAuth/tests/` 找样本 —— 本仓库 CI 独立检出，兄弟目录必然不存在，测试会稳定退化成 skip。
 
 ---
 
