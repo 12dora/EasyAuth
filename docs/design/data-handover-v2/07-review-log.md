@@ -1,11 +1,48 @@
 # 07 · 复核记录与未决事项
 
-> 本文件记录对 `00`–`06` 的两轮对抗式复核结果与处置。
+> 本文件记录对全部设计文档的历次对抗式复核结果与处置。
 > **它不是设计文档，而是"这套设计现在可不可信"的账本。** 开工前必读。
 
 ---
 
-## 0. 当前状态：**三处结构性问题全部定案**
+## 0. 当前状态
+
+### 第三轮（2026-08-10，7 路并行）—— A5 阻塞已解除
+
+本轮做了两件事：**起草解阻材料**，以及**七片对抗式复核**。
+
+**解阻材料**（新增两份文档）：
+
+| 文档 | 内容 | 下一步 |
+|---|---|---|
+| [`08`](08-easyproject-ag00-rulings.md) | AG-00 的两份裁定：**所有权**（逐表 owner + 六个 `system_handover` 命令签名 + 三条并行 revision + 评审签署回滚）与 **system-actor 语义**（actor 表示、锁内版本、幂等键、审批锁、豁免边界、通知责任） | AG-00 审核 → 追加进 `EasyProject/contracts/ownership.md` |
+| [`09`](09-easyproject-ccr.md) | 按 `contracts/workflow.md` 六要素写全的 CCR 正文，11 个错误码 | AG-00 提交进 CCR 流程 |
+
+A5 的开工前置从"等两份不存在的裁定"变成"等三样可机械核对的凭据"（README「A5 的三道门禁」）。
+
+**复核**：七片（跨文档一致性 / EasyAuth 后端 / EasyAuth 前端 / EasyTrade / EasyProject /
+安全并发 / 可实施性）共产出 **约 130 条**，其中 BLOCKER 约 60 条。**全部逐条对照代码验证后落文档**。
+
+本轮最值得记住的几条（都不是文字问题，是照做必错）：
+
+| # | 问题 | 后果 |
+|---|---|---|
+| 1 | **`HandoverExecutionAttempt` 单表自相矛盾** —— 既 append-only 又要回填结果 | 一次请求的最终成败无处安放。拆成不可变 Batch + append-only DeliveryAttempt |
+| 2 | **413 分批与 action 级 `done` 互斥** | 第一批成功后 action 置 `done`，第二批既不能 execute 也不能 retry，剩余资产永远搬不走而单据显示已完成 |
+| 3 | **异步 202 路径直接置 `done`** | 既不落 `data_completed_at` 也**根本不转授权限**，离职者授权原地不动 |
+| 4 | **202 没有任何轮询任务** | `async_pending` 是个死胡同，永远到不了终态，租约也永不释放 |
+| 5 | **租约没有过期字段** | worker 崩一次，条件唯一约束就永久锁死 `(subject, app)` |
+| 6 | **快照失效与身份冲突都用 409** | 两者处置相反（退回重预演 vs 判失败），而 EasyAuth 被禁止解析响应体 —— 无从区分。改用 **412** |
+| 7 | **`event_type` 校验只写了接收端** | EasyAuth 自己的 `webhook.test` body 里没有该字段，新 SDK 一上线联调门禁永远过不去 |
+| 8 | **descriptor 有三道白名单不是两道** | EasyAuth 自己的 `_LifecyclePayload` 是 `extra="forbid"`，下游推 manifest 直接抛校验错 |
+| 9 | **`ApprovalRule.approver_userids` 存的是 sub 不是 dtuid** | 按 dtuid 替换一项都匹配不到，规则里仍挂着离职者且不报错 |
+| 10 | **OpenProject 人员投影整段漏掉** | assignee 投影成 OP 自定义字段而 M34 对账「永不改人员字段」—— OP 侧永久停在离职者身上且无自动修复 |
+| 11 | **execute 没绑定用户看过的 preview 版本** | 并发重新预演会把用户从没见过的数据一起搬走 |
+| 12 | **override 整体 PUT 却没有读回接口** | 刷新页面后改一条就把其余全部静默删掉 |
+| 13 | **跨表 `CheckConstraint`** | Django 判 `models.E041`，迁移直接失败 |
+| 14 | **迁移章节写「删除 `to_user`」** | 与 §2.2 的 `RenameField` 矛盾，删了 `transfer_selected_grants()` 就没有输入 |
+
+### 前两轮：三处结构性问题全部定案
 
 第二轮复核（6 路并行，覆盖代管 scope / 并发幂等 / EasyAuth 后端 / EasyTrade / EasyProject / 跨文档一致性）
 共产出约 70 条发现。机械性矛盾已修（见 §2）。三处结构性问题中：
@@ -174,6 +211,20 @@ recurrence patch 不支持 assignee/assigner。**而 webhook 没有合法的人�
 - `02` 的 `HandoverAction` 类型没有 `summary`，但 done 界面要展示它。
 - README 的 SDK 串行头 / CCR 门禁 / A6 立即开工，与 `00`/`03`/`05` 正文的旧说法并存。
 - README 声称强制校验 event header 与 body `mode`，两个下游都没安排实现与验收用例。
+
+---
+
+## 5. 第三轮的处置原则（新增）
+
+1. **凡是"这件事做不到"的，改成如实说做不到，并写清补做条件** —— 不许留下一个听起来能做、
+   实现时才发现做不到的承诺。本轮据此降级了两处：钉钉在途审批实例的**逐条清单与条数**
+   （`ApprovalInstance` 与 `ApprovalRule` 无关联，粗匹配的 N 是假数字）、
+   以及**向全体超管推送**（没有可枚举的超管名单）。
+2. **凡是"二选一，PR 里写明结论"的，本轮尽量当场定死** —— 两个下游各选一种实现，
+   契约测试就没法复用。generation 水位、幂等键格式、错误码分工都已收敛为单一方案。
+3. **凡是跨仓库的门禁，凭据必须可以贴出来** —— "批准了"不能当开工依据。
+   SDK vNext 用「版本号 + commit SHA + wheel SHA-256 + 下游 `VENDORED.md`」，
+   A5 用「ownership.md 合入 SHA + CCR 编号与 APPROVED 状态」。
 
 ---
 
