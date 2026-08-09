@@ -140,6 +140,16 @@ EasyProject 收到 `from_user_id` / `to_user_id`（均为 sub）后必须解析�
 `asset_id` 是 APP 内部的字符串主键（UUID 或数字转字符串均可），**对 EasyAuth 不透明**。
 EasyAuth 只做存储与回传，不解析、不排序、不校验格式。长度上限 128 字节。
 
+### 5.4 `task_id` 的格式与长度（下游要拿它当幂等键的一部分）
+
+`task_id` 由 EasyAuth 生成，形如 `"{handover_task.id}:{app.key}"`（例：`"137:easytrade"`）。
+**长度上限 64 字节**，字符集限 `[A-Za-z0-9:_-]`。
+
+这不是装饰性约束：两个下游都要把它拼进本地幂等键
+（EasyProject 的 `idempotency_records.idempotency_key` 列宽 128，
+EasyTrade 的回执表同理），不设上限就只能改用哈希键，而哈希键在排障时无法从日志反查
+是哪张单的哪一批。EasyAuth 侧建 action 时即校验，超限直接建单失败并告警。
+
 ---
 
 ## 6. 交接单模型（EasyAuth 侧，对下游不可见但决定 payload）
