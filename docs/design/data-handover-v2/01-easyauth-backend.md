@@ -95,14 +95,35 @@ models.CheckConstraint(
 
 ### 2.2 `HandoverAppAction`（`lifecycle/models.py:163`，破坏性修改）
 
-**删除**：`to_user`、`execution_to_user`、`policy`、`execution_policy`（接收人下沉到条目级，D10；
-`policy.unowned_strategy` 被 `default_to_user_id=null` 语义取代）。
+**删除**：`execution_to_user`、`policy`、`execution_policy`（数据接收人下沉到条目级 D10；
+`policy.unowned_strategy` 被三值 `action` 取代）。
+
+**保留并改名**：原 `to_user` → **`grant_receiver`**（契约 §7.2.1）。它不再是「数据接收人」，
+而是**权限接收人**：该 APP 上离职者的授权转给谁。
+
+- 可为空（留空 = 只撤权、不转授，接收人自行走申请流程；这是安全默认）
+- **仅 `kind=offboard` 有意义**，其余 kind 上必须为空
+- 与 `HandoverAssetType.default_to_user` / `HandoverAssetOverride.to_user` 是**三个不同的字段**，
+  实现时不要合并
+
+```python
+models.CheckConstraint(
+    condition=Q(task__kind=HANDOVER_KIND_OFFBOARD) | Q(grant_receiver__isnull=True),
+    name="lifecycle_action_grant_receiver_only_offboard",
+),
+```
+
+> 早期版本把 `to_user` 整个删掉，导致 `transfer_selected_grants(action)` 失去输入 ——
+> 该函数依赖 action 级接收人，而条目级有多个接收人时无法推断授权该给谁。`grant_receiver` 补上这个洞。
 
 **新增**：
 
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `generation` | `PositiveIntegerField(default=1)` | 建 action 时从 `task.generation` 拷贝；升级时重置 |
+| `snapshot_token` | `CharField(max_length=128, blank=True)` | preview 响应带回的不透明令牌，execute 时回传（契约 §10.5.1） |
+| `batch_seq` | `PositiveIntegerField(default=0)` | 已发出的 execute 批次号，每发一批 +1，作幂等键第三元 |
+| `grant_receiver` | `FK(UserMirror, PROTECT, null=True, related_name="handover_grant_receiving")` | 权限接收人，见上 |
 | `execution_payload` | `JSONField(default=dict, blank=True)` | 实际发出的 execute 请求体快照，不可变审计凭据 |
 | `blocked_reason` | `CharField(max_length=64, blank=True)` | `capability_undeclared` / `descriptor_unreachable` |
 | `skip_reason` | `TextField(blank=True)` | 超管强行跳过的理由（D6） |
@@ -253,19 +274,17 @@ class CustodyGrant(models.Model):
 class CustodyGrantItem(models.Model):
     custody = FK(CustodyGrant, on_delete=CASCADE, related_name="items")
     app = FK(App, on_delete=PROTECT, related_name="custody_grant_items")
-    authorization_group = FK(AuthorizationGroup, on_delete=SET_NULL, null=True, blank=True)
     permission = FK(Permission, on_delete=SET_NULL, null=True, blank=True)
-    scope_key = CharField(max_length=64, blank=True)
-    applied = BooleanField(default=False)     # False 表示 custodian 本来就有, 未重复发放
+    # scope 恒为 HANDOVER_CUSTODY, 故不存字段, 避免出现"代管带别的 scope"这种非法状态
     revoked_at = DateTimeField(null=True, blank=True)
     created_at = DateTimeField(auto_now_add=True)
 
     class Meta:
         constraints = [
-            models.CheckConstraint(
-                condition=(Q(authorization_group__isnull=False, permission__isnull=True)
-                           | Q(authorization_group__isnull=True, permission__isnull=False)),
-                name="lifecycle_custody_item_target_shape",
+            models.UniqueConstraint(
+                fields=["custody", "app", "permission"],
+                condition=Q(revoked_at__isnull=True),
+                name="lifecycle_custody_item_unique_active",
             ),
         ]
 ```
@@ -347,10 +366,15 @@ def resolve_assignee(subject: UserMirror, *, start_level: int = 0) -> AssigneeRe
   主管的可见范围内，无需代管，D7/D9）。
 - 同事务内：
   1. 建 `CustodyGrant(expires_at=now + CUSTODY_TTL_DAYS)`。
-  2. 遍历 `task.grant_items`（`HandoverGrantItem`），按 `(app, group|permission, scope_key)` 去重。
-  3. 对每条：若 custodian 在该 app 的**当前** `AccessGrant` 里已有等价条目 → 建
-     `CustodyGrantItem(applied=False)`，**不发放**；否则写入 custodian 的当前 `AccessGrant`
-     （`grant_type=timed`, `expires_at=custody.expires_at`），并建 `CustodyGrantItem(applied=True)`。
+  2. 遍历 `task.grant_items`（`HandoverGrantItem`），取出其中的**能力**（`permission`），
+     **丢弃原 `scope_key`**（契约 §7.2 —— 原样复制 scope 会提权）。按 `(app, permission)` 去重。
+     `GLOBAL` 类能力与 `authorization_group` 形式的条目**不进代管**（组内含多种 scope，无法逐一降级），
+     在交接单上标注「该能力不可代管，需接收人自行申请」。
+  3. 一律以 `scope_key = HANDOVER_CUSTODY` 写入 custodian 的当前 `AccessGrant`
+     （`grant_type=timed`, `expires_at=custody.expires_at`），并建 `CustodyGrantItem`。
+     由于 scope 与 custodian 自有授权不同，**不存在「已有等价条目」的情况**，
+     早期版本的 `applied` 布尔随之取消 —— 它不可靠：custodian 在代管期间新获得的同名权限
+     会在收回时被误删。现在按 `(app, permission, HANDOVER_CUSTODY)` 精确定位，结构上不可能误伤。
   4. 发放走既有授权写入路径（递增 `AccessGrant.version`，`AccessGrantPermission.source_note`
      记 `custody:task={id}`），保证 `snapshot_version` 变化、下游 5 分钟内刷新到。
   5. 审计 `handover_custody_granted`。
@@ -375,8 +399,9 @@ custody_subjects = UserMirror.objects.filter(
 
 ### 4.3 收回 `revoke_custody(custody, *, trigger)`
 
-- 对 `applied=True` 的 `CustodyGrantItem`，从 custodian 当前 `AccessGrant` 中移除对应条目并递增 version。
-- `applied=False` 的只标记 `revoked_at`，**不动** custodian 自有授权。
+- 按 `(app, permission, scope_key=HANDOVER_CUSTODY)` 精确定位并移除 custodian 当前 `AccessGrant`
+  中的对应条目，递增 version。custodian 自有授权 scope 不同，**结构上不可能被误删**。
+- 逐 APP 收回时只处理该 app 的条目（契约 §7.4）。
 - 写 `handover_custody_revoked`。
 
 调用点：
@@ -416,6 +441,20 @@ else:
 `HOOK_NOT_DECLARED_RESULT`（`handover.py:122,325`）—— 这是契约 §1.1 第 1 条要修的正确性缺陷。
 `declared` 但 `AppWebhookConfig.handover_url` 为空 ⇒ **数据不一致**，直接抛
 `HandoverError("declared 能力与 webhook 配置不一致")`，快速失败，不兜底。
+
+### 5.1.1 capability 恢复（契约 §9.1.1）
+
+`sync_handover_capability()` 把某 App 从 `undeclared` 改为 `declared` 成功后，必须在同事务内
+reconcile 该 App 下所有 `blocked` 且所属 task 仍 open 的 action：
+置 `pending`、清 `blocked_reason`、`generation` 对齐 `task.generation`、
+写审计 `handover_action_unblocked`、`refresh_task_status(task)`，随后给这些单的 assignee 发通知。
+
+反方向（`declared → undeclared`，通常是 descriptor 拉不到）**不得**把运行中的 action 打回 `blocked`，
+只写告警。初始状态只在建单时判定。
+
+新增 `AppScope` 记录：`HANDOVER_CUSTODY` 需要作为**系统级 scope** 注册到每个 App
+（或作为 EasyAuth 内建 scope 特判），否则 `AccessGrantPermission.clean()` 的
+"scope 必须属于该 app 且被 permission 支持"校验会拒绝代管条目。**这一步不能漏，否则代管授权写不进去。**
 
 ### 5.2 descriptor 同步
 
@@ -638,7 +677,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | 文件 | 覆盖 |
 |---|---|
 | `tests/unit/lifecycle/test_assignee.py` | 主管链正常/跳过离职主管/整链失效落池/stale 落池/本地管理员跳过/不设层数上限 |
-| `tests/unit/lifecycle/test_custody.py` | 发放后 `MANAGED_USERS` 含 departed subject；到期后不含；自有授权不被误收；逐 APP 收回；上交链路；到顶落池 |
+| `tests/unit/lifecycle/test_custody.py` | 发放的是 `HANDOVER_CUSTODY` scope 而非原 scope（**提权回归测试**：离职者持 `MANAGED_USERS`/`GLOBAL` 时 custodian 不得因此看到自己下属或全局数据）；发放后 `MANAGED_USERS` 含 departed subject；到期后不含；custodian 代管期间新获得的同名权限不被误收；逐 APP 收回；上交链路；到顶落池；`HANDOVER_CUSTODY` 未注册时快速失败 |
 | `tests/unit/lifecycle/test_capability.py` | 三态 → action 初始状态；`declared` 但无 URL 抛错；`none` 缺声明人被约束拒绝 |
 | `tests/unit/lifecycle/test_assignments.py` | §5.4 六条校验；三值 action 的库层 CheckConstraint；`releasable=False` 时 `skip`+逐条 `transfer` 可用（部分交接不依赖 releasable）；override 唯一约束；失效 override 被清理并计数 |
 | `tests/unit/lifecycle/test_upgrade.py` | transfer → offboard 升级：kind 变更、generation+1、action 重置、assignee 重解析、代管发放 |
@@ -663,10 +702,14 @@ docker run --rm -v "$PWD":/w -w /w <image> uv run --frozen pytest tests/unit/lif
 
 ## 11. 交付顺序（本仓库内部）
 
-1. **先提交 §6**（API 契约章节）→ 解锁前端 agent。
-2. §2 模型 + 迁移 → `manage.py makemigrations --check` 无漂移。
-3. §3 assignee → §4 custody → §5 handover 执行链。
-4. §7 异步任务 → §8 SDK → §9 ADR。
+0. **最先做**：§8 的 SDK vNext 打包发布（三事件内核 + `handover_payloads` 类型 +
+   **契约样本打进包内**）。它是 A3/A5 两个下游的开工前提，且只依赖已冻结的契约，不依赖本仓库实现。
+1. **然后提交 §6**（API 契约章节）→ 解锁前端 agent。
+2. §2 模型 + 迁移。**schema 变更与全部调用方必须在同一个 commit 里** ——
+   先删 `HandoverAppAction.policy` 再改 `handover.py` 会产出一个**跑不起来的中间提交**，
+   与「每次提交后必须重建前后端并确认构建成功」直接冲突。原子提交，`makemigrations --check` 无漂移。
+3. §3 assignee → §4 custody（含新 scope `HANDOVER_CUSTODY` 的注册与解析）→ §5 handover 执行链。
+4. §7 异步任务 → §9 ADR。
 5. §10 测试补齐。
 
 每完成一项立即单独 commit；提交后必须重建前后端并确认构建命令成功结束（`AGENTS.md`）。
