@@ -138,7 +138,9 @@ class HandoverAssetSpec:
     count_stmt: Callable[[str], Select]           # dtuid -> count 语句
     items_stmt: Callable[[str, str], Select]      # (dtuid, q) -> 明细语句(稳定排序)
     render_item: Callable[[Any], tuple[str, str, str]]
-    reassign: Callable[[AsyncSession, str, str, Sequence[str] | None], Awaitable[ReassignResult]]
+    # (session, from_dtuid, to_dtuid|None, 限定的 asset_id 集合|None) -> 统计
+    # to_dtuid=None 仅在 releasable=True 时出现; 本应用全部 False, 故实际恒为非 None
+    reassign: Callable[[AsyncSession, str, str | None, Sequence[str] | None], Awaitable[ReassignResult]]
 ```
 
 分层归属：注册表放 `domain/`（纯业务判定，不 import FastAPI / SQLAlchemy model 以外的东西——
@@ -202,8 +204,11 @@ POST /api/v1/easyauth/lifecycle/handover
 ### 4.6 descriptor（契约 §9.1）
 
 `api/v1/easyauth_descriptor.py` 输出增加 `lifecycle.handover` 段，`asset_types` 由 §4.1 注册表生成，
-`capability="declared"`，`url` 指向 §4.2 的端点。全部 11 类 `releasable` 均为 `false`
-（EasyProject 没有"无主"这一合法状态）。
+`capability="declared"`，`url` 指向 §4.2 的端点。全部 11 类 `releasable` 均为 `false`（EasyProject 没有「无主」这一合法状态）。
+
+> 这**不影响部分交接**：契约 §10.5 的 `default_action="skip"` + 逐条 `action="transfer"` 这条路径
+> 与 `releasable` 无关，因此本应用的 11 类资产同样支持逐条改派。`releasable=false` 只是禁掉
+> `action="release"` 这一种处置方式。
 
 ### 4.7 迁移
 

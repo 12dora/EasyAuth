@@ -137,9 +137,10 @@ class HandoverAssetType(models.Model):
     count = PositiveIntegerField(default=0)
     detail_supported = BooleanField(default=False)
     releasable = BooleanField(default=False)
+    default_action = CharField(max_length=8, choices=ASSET_ACTION_CHOICES,
+                               default=ASSET_ACTION_SKIP)    # transfer | release | skip
     default_to_user = FK(UserMirror, on_delete=PROTECT, null=True, blank=True,
                          related_name="handover_default_receiving_types")
-    selected = BooleanField(default=True)                    # 该类是否参与本次 execute
     created_at = DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -152,8 +153,33 @@ class HandoverAssetType(models.Model):
         ordering = ["action_id", "generation", "type_key"]
 ```
 
-- `selected=False` 的类型**不进** execute 的 `assignments`（契约 §10.5 语义 4）。
-- `default_to_user=NULL` 且 `selected=True` ⇒ 整批释放；若 `releasable=False` 则 §5.4 校验拒绝。
+追加约束：`action=transfer` 必须有接收人，其余两种必须没有。
+
+```python
+models.CheckConstraint(
+    condition=(Q(default_action=ASSET_ACTION_TRANSFER, default_to_user__isnull=False)
+               | (~Q(default_action=ASSET_ACTION_TRANSFER) & Q(default_to_user__isnull=True))),
+    name="lifecycle_asset_type_action_shape",
+),
+```
+
+新增常量：
+
+```python
+ASSET_ACTION_TRANSFER: Final = "transfer"
+ASSET_ACTION_RELEASE: Final = "release"
+ASSET_ACTION_SKIP: Final = "skip"
+ASSET_ACTION_CHOICES: Final[tuple[tuple[str, str], ...]] = (
+    (ASSET_ACTION_TRANSFER, "transfer"),
+    (ASSET_ACTION_RELEASE, "release"),
+    (ASSET_ACTION_SKIP, "skip"),
+)
+```
+
+- 默认值是 `skip`：**未经人明确指定的资产一律不动**，这是安全侧的默认。
+- `release` 只在 `releasable=True` 时允许（§5.4 校验）。
+- `default_action=skip` 的类型**仍然进** `assignments`（值为 skip），下游据此知道"这一类本轮被明确跳过"，
+  与"这一类根本没出现"在审计上是同一结果但表达更清楚。
 
 ### 2.4 `HandoverAssetOverride`（新表）
 
@@ -164,6 +190,7 @@ class HandoverAssetOverride(models.Model):
     asset_type = FK(HandoverAssetType, on_delete=CASCADE, related_name="overrides")
     asset_id = CharField(max_length=128)                     # 契约 §5.3，对 EasyAuth 不透明
     label_snapshot = CharField(max_length=120, blank=True)
+    action = CharField(max_length=8, choices=ASSET_ACTION_CHOICES)
     to_user = FK(UserMirror, on_delete=PROTECT, null=True, blank=True,
                  related_name="handover_override_receiving")
     created_at = DateTimeField(auto_now_add=True)
@@ -173,6 +200,11 @@ class HandoverAssetOverride(models.Model):
             models.UniqueConstraint(
                 fields=["asset_type", "asset_id"],
                 name="lifecycle_asset_override_unique",
+            ),
+            models.CheckConstraint(
+                condition=(Q(action=ASSET_ACTION_TRANSFER, to_user__isnull=False)
+                           | (~Q(action=ASSET_ACTION_TRANSFER) & Q(to_user__isnull=True))),
+                name="lifecycle_asset_override_action_shape",
             ),
         ]
         ordering = ["asset_type_id", "asset_id"]
@@ -410,7 +442,9 @@ def preview_action(action) -> HandoverAppAction
 - 响应校验：每个 `type` 必须在 `App.handover_asset_types` 中声明过，否则 action → `failed`，
   `last_error="undeclared_asset_type: {type}"`。
 - 用响应**重建**该 `(action, generation)` 下的 `HandoverAssetType` 行（`count`/`label_snapshot`），
-  保留已存在行的 `default_to_user` / `selected`（重新 preview 不应清空用户已做的选择）。
+  保留已存在行的 `default_action` / `default_to_user` 与其 `overrides`（重新 preview 不应清空人已做的选择）。
+  但若某个 override 的 `asset_id` 在新一轮明细里已不存在（数据被删或已终结），该 override 行必须删除并计数，
+  在响应里回报给前端提示「N 条单独指定已失效」——不得静默保留、到 execute 时打空。
 - 响应中缺失的已声明类型视为 `count=0`，仍建行（契约要求 APP 返回 0 值，此处是防御性补齐并记
   `last_error` 警示不一致 —— **不静默**）。
 
@@ -420,15 +454,20 @@ def preview_action(action) -> HandoverAppAction
 
 | 校验 | 错误码 |
 |---|---|
-| `selected=True` 且 `releasable=False` 且 `default_to_user=NULL` | `asset_type_not_releasable` |
-| override 的 `to_user=NULL` 且该类 `releasable=False` | `asset_type_not_releasable` |
+| 任一 `action="release"` 落在 `releasable=False` 的类型上（默认或 override） | `asset_type_not_releasable` |
+| `action="transfer"` 但接收人为空 | `receiver_required` |
 | 任一接收人 `status != active` | `receiver_not_active` |
 | 任一接收人 == `task.subject_user` | `receiver_is_subject` |
-| 全部 `selected=False` | `nothing_selected` |
+| 全部类型 `default_action="skip"` 且无任何非 skip 的 override | `nothing_selected` |
+| 同一 `asset_type` 出现多次，或同一 `asset_id` 在 override 中重复 | `duplicate_assignment` |
+
+前两条已被 §2.3/§2.4 的 CheckConstraint 挡在库层，此处是 API 层的第二道防线：
+库约束保证数据不脏，API 校验保证用户拿到可读的错误。两者都要有。
 
 ### 5.5 execute（契约 §10.5）
 
-- 组 payload：`assignments` 由 `HandoverAssetType`（`selected=True`）与其 `overrides` 生成。
+- 组 payload：`assignments` 由该 `(action, generation)` 下的**全部** `HandoverAssetType`
+  （含 `default_action=skip` 的）与其 `overrides` 生成，形状严格照契约 §10.5。
 - 把完整请求体写入 `action.execution_payload`（不可变审计凭据），替代原 `execution_to_user`/`execution_policy`。
 - `transfer_selected_grants(action)` 的调用条件收紧：**仅 `kind == offboard` 时执行**。
   `pre_offboard` 与 `reassign` 一律不动权限（D7/D9）；`transfer`（转岗）走的是**另一条路** ——
@@ -463,8 +502,8 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | POST | `/handover-tasks/reassign` | `subject ∈ 我的 MANAGED_USERS` 且双方 active | 在职移交（D9），必填 `reason`（≥10 字符），否则 `422 reason_required` |
 | GET | `/handover-tasks/{task_id}` | 我是 assignee 或 subject | 单据详情，含各 APP action、资产分类、代管剩余天数 |
 | GET | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}/items` | 同上 | 明细分页，query: `page`、`page_size`、`q` |
-| PATCH | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}` | 我是 assignee | body: `{"selected": bool, "default_to_user_id": str\|null}` |
-| PUT | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}/overrides` | 我是 assignee | body: `{"overrides":[{"asset_id":"...","to_user_id":"..."\|null,"label":"..."}]}`，整体替换 |
+| PATCH | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}` | 我是 assignee | body: `{"default_action": "transfer"\|"release"\|"skip", "default_to_user_id": str\|null}` |
+| PUT | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}/overrides` | 我是 assignee | body: `{"overrides":[{"asset_id":"...","action":"transfer"\|"release"\|"skip","to_user_id":"..."\|null,"label":"..."}]}`，**整体替换** |
 | POST | `/handover-tasks/{task_id}/actions/{app_key}/preview` | 我是 assignee | |
 | POST | `/handover-tasks/{task_id}/actions/{app_key}/execute` | 我是 assignee | |
 | POST | `/handover-tasks/{task_id}/actions/{app_key}/retry` | 我是 assignee | 仅 `failed` 可重试 |
@@ -477,7 +516,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | 403 | `out_of_managed_scope` | reassign 的 subject 不在我的管辖范围（契约 §4） |
 | 409 | `open_task_exists` | 自助建单时已有 open 的 offboard/transfer 单 |
 | 422 | `reason_required` | reassign 未填理由或不足 10 字符 |
-| 422 | `receiver_not_active` / `receiver_is_subject` / `asset_type_not_releasable` / `nothing_selected` | §5.4 |
+| 422 | `receiver_not_active` / `receiver_is_subject` / `receiver_required` / `asset_type_not_releasable` / `nothing_selected` / `duplicate_assignment` | §5.4 |
 | 400 | `detail_not_supported` | 该资产类型不支持明细 |
 
 ### 6.2 交接单详情响应体（前端据此建类型）
@@ -505,7 +544,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
         {
           "type": "customer", "label": "名下客户", "count": 187,
           "detail_supported": true, "releasable": true,
-          "selected": true,
+          "default_action": "transfer",
           "default_to_user": { "user_id": "d017…", "name": "张某某" },
           "override_count": 2
         }
@@ -601,7 +640,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | `tests/unit/lifecycle/test_assignee.py` | 主管链正常/跳过离职主管/整链失效落池/stale 落池/本地管理员跳过/不设层数上限 |
 | `tests/unit/lifecycle/test_custody.py` | 发放后 `MANAGED_USERS` 含 departed subject；到期后不含；自有授权不被误收；逐 APP 收回；上交链路；到顶落池 |
 | `tests/unit/lifecycle/test_capability.py` | 三态 → action 初始状态；`declared` 但无 URL 抛错；`none` 缺声明人被约束拒绝 |
-| `tests/unit/lifecycle/test_assignments.py` | §5.4 五条校验；`selected=False` 不进 payload；override 唯一约束 |
+| `tests/unit/lifecycle/test_assignments.py` | §5.4 六条校验；三值 action 的库层 CheckConstraint；`releasable=False` 时 `skip`+逐条 `transfer` 可用（部分交接不依赖 releasable）；override 唯一约束；失效 override 被清理并计数 |
 | `tests/unit/lifecycle/test_upgrade.py` | transfer → offboard 升级：kind 变更、generation+1、action 重置、assignee 重解析、代管发放 |
 | `tests/unit/lifecycle/test_reassign.py` | 管辖校验、必填理由、与 offboard 单并存不违反唯一约束、三方通知 |
 | `tests/integration/test_portal_handover_api.py` | §6.1 全部端点的权限边界（非 assignee 拿到 404） |

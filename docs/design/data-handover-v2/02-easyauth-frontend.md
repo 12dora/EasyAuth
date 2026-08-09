@@ -104,13 +104,15 @@ export interface HandoverUserRef {
   status?: "active" | "disabled" | "departed";
 }
 
+export type HandoverAssetAction = "transfer" | "release" | "skip";
+
 export interface HandoverAssetType {
   type: string;
   label: string;
   count: number;
   detail_supported: boolean;
   releasable: boolean;
-  selected: boolean;
+  default_action: HandoverAssetAction;
   default_to_user: HandoverUserRef | null;
   override_count: number;
 }
@@ -245,16 +247,28 @@ export interface HandoverAssetItemsPage {
 每个资产类型一行：
 
 ```
-☑ 名下客户            187 条    接收人 [ 张某某  ▾ ]   其中 2 项单独指定  [展开明细]
-☑ 在途订单             23 条    接收人 [ 张某某  ▾ ]                      [展开明细]
-☐ 进行中询盘           41 条    接收人 [ 请选择  ▾ ]   ⓘ 此类不可无主      [展开明细]
+名下客户       187 条   [ 全部转给 ▾ ] [ 张某某 ▾ ]   其中 2 项单独指定   [展开明细]
+在途订单        23 条   [ 暂不处理 ▾ ]                 其中 1 项单独指定   [展开明细]
+进行中询盘      41 条   [ 全部释放 ▾ ]                                     [展开明细]
+未完成任务       0 条   无数据
 ```
 
-- 勾选框 = `selected`，`PATCH .../assets/{type}`
-- 接收人下拉 = `default_to_user_id`，同一端点。下拉里含一项「暂不指定（释放为无主）」，
-  **仅当 `releasable=true` 时可选**；`releasable=false` 时该项禁用并 tooltip 说明
-  「该应用要求这类数据必须有负责人」。
-- `count=0` 的类型仍然显示，置灰并标「无数据」——**不要隐藏**。隐藏就等于回到了"看不出区别"的老问题。
+- **一个三选一的下拉**（不是勾选框）对应 `default_action`：
+
+  | 选项文案 | `default_action` | 后续控件 |
+  |---|---|---|
+  | 全部转给… | `transfer` | 右侧出现人员选择器，必选 |
+  | 全部释放为无主 | `release` | 无 |
+  | 暂不处理 | `skip` | 无 |
+
+- 「全部释放为无主」**仅当 `releasable=true` 时可选**；否则该项禁用并 tooltip
+  「该应用要求这类数据必须有负责人」。**`transfer` 与 `skip` 永远可选**，
+  所以 `releasable=false` 的类型照样能用「暂不处理 + 逐条转移」做部分交接。
+- 默认值是 `skip`（后端默认，§4）。这意味着**用户什么都不做时不会误转任何数据**，
+  但也意味着 UI 必须显眼地提示"还有 N 类未处理"，否则会出现"点了执行却什么都没发生"。
+  在执行按钮旁常驻一行：`已安排 2 类 / 共 4 类`。
+- `count=0` 的类型仍然显示，置灰标「无数据」并禁用下拉 —— **不要隐藏**。
+  隐藏就等于回到了「看不出区别」的老问题。
 - `detail_supported=false` 时不显示 [展开明细]。
 
 ### 6.2 展开态（明细改派）
@@ -272,9 +286,11 @@ export interface HandoverAssetItemsPage {
                                             [1] 2 3 4 →
 ```
 
-- 每行接收人下拉默认显示继承自该类的 `default_to_user`，**灰色**表示继承。
-- 一旦改成别人 → 变实色 + 右侧圆点标记，加入本地待提交的 override 集合。
-- 改回与默认一致 → 自动从 override 集合移除（不要留一条"值相同的 override"，那会污染审计）。
+- 每行是一个同样的三选一 + 人员选择器组合，默认**继承**该类的 `default_action`/`default_to_user`，
+  以灰色表示"跟随默认"。
+- 一旦改成与默认不同 → 变实色 + 右侧圆点标记，加入本地待提交的 override 集合。
+- 改回与默认完全一致（action 与接收人都相同）→ 自动从 override 集合移除
+  （不要留一条「值与默认相同的 override」，那会污染审计与 diff）。
 - 保存：`PUT .../assets/{type}/overrides` **整体替换**。因此提交时必须带上当前完整的 override 集合，
   而不只是本页改动 —— override 集合由前端在组件级维护，与分页解耦。
 - 响应 `stale=true` → 顶部黄条「清单已变化，建议重新预演后再分配」。
@@ -361,7 +377,7 @@ key 前缀统一 `handover.*`，门户专用 `handover.portal.*`，控制台专�
 
 | 文件 | 覆盖 |
 |---|---|
-| `features/handover/AssetAllocator.test.tsx` | 勾选/取消；`releasable=false` 时禁用「暂不指定」；override 改回默认自动移除；整体替换提交的 payload 形状 |
+| `features/handover/AssetAllocator.test.tsx` | 三选一切换；`releasable=false` 时「全部释放」禁用而「暂不处理」「全部转给」可用；`transfer` 必选接收人；override 改回默认自动移除；整体替换提交的 payload 形状；「已安排 N 类 / 共 M 类」计数 |
 | `features/handover/HandoverUserPicker.test.tsx` | 防抖、空集渲染、排除本人 |
 | `pages/portal/PortalHandoverList.test.tsx` | 两分区渲染；剩余天数配色分档；blocked 提示无跳过按钮 |
 | `pages/portal/PortalHandoverDetail.test.tsx` | 八种 action 状态各自形态；执行前二次确认文案含数量与接收人 |

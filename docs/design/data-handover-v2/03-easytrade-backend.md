@@ -192,6 +192,19 @@ HANDOVER_ASSETS_BY_KEY: Final[dict[str, HandoverAssetSpec]] = {...}
 ### 3.6 `execute`（契约 §10.5，重写）
 
 ```python
+@dataclass(frozen=True, slots=True)
+class OverrideSpec:
+    asset_id: str
+    action: str                       # transfer | release | skip
+    to_user_id: uuid.UUID | None
+
+@dataclass(frozen=True, slots=True)
+class AssignmentSpec:
+    asset_type: str
+    default_action: str               # transfer | release | skip
+    default_to_user_id: uuid.UUID | None
+    overrides: tuple[OverrideSpec, ...]
+
 def execute_handover(
     db: Session,
     *,
@@ -204,17 +217,23 @@ def execute_handover(
 单事务内，逐 `assignment` 处理：
 
 1. 查注册表拿 `HandoverAssetSpec`；未知类型 → `422 undeclared_asset_type`。
-2. **前置校验**（修 B1/B2）：`spec.releasable is False` 且（`default_to_user_id is None`
-   或任一 override 的 `to_user_id is None`）→ 抛领域错误 → `422 asset_type_not_releasable`。
+2. **前置校验**（修 B1/B2）：任一 `action == "release"` 落在 `spec.releasable is False` 的类型上
+   → 抛领域错误 → `422 asset_type_not_releasable`。
    **绝不允许**再出现写 `NULL` 进非空列，也**绝不允许**静默保持原归属。
-3. 先处理 `overrides`（精确 id 集合），再处理剩余条目按 `default_to_user_id`：
+3. 先处理 `overrides`（精确 id 集合），再按 `default_action` 处理剩余条目：
    ```
    overridden_ids = {o.id for o in overrides}
-   for o in overrides:  reassign(单条, o.to_user_id)
-   if default_to_user_id is not None or spec.releasable:
-       reassign(query.filter(id.notin_(overridden_ids)), default_to_user_id)
+   for o in overrides:
+       if   o.action == "transfer": reassign(单条, o.to_user_id)
+       elif o.action == "release":  reassign(单条, None)
+       else:                        pass          # skip: 原样不动
+   rest = query.filter(id.notin_(overridden_ids))
+   if   default_action == "transfer": reassign(rest, default_to_user_id)
+   elif default_action == "release":  reassign(rest, None)
+   else:                              pass        # skip: 整批不动
    ```
-   `default_to_user_id is None` 且 `releasable=False` 已在第 2 步被拦，不会走到这里。
+   写 `NULL` 只可能发生在 `action == "release"` 分支，而该分支已被第 2 步保证只落在
+   `releasable=True`（即可空列）的类型上 —— B1 从结构上不可能再复发。
 4. 全程 `with_for_update`，与既有实现一致。
 5. 客户归属变更继续写既有的负责人变更事件（`_handover_customers` 中的 owner history），
    `reason` 按 `kind` 取：`offboard`→「EasyAuth 离职交接」、`transfer`→「EasyAuth 转岗交接」、
@@ -259,7 +278,7 @@ def execute_handover(
 | `backend/app/tests/authz/test_scope_resolution_inactive.py` | **B3**：inactive 本地用户仍进 scope 集合；映射不到的被剔除且有计数日志 |
 | `backend/app/tests/test_easyauth_handover_assets.py` | 8 类资产的 count 口径；`count=0` 也返回；注册表与 descriptor 一致（用同一常量断言） |
 | `backend/app/tests/test_easyauth_handover_items.py` | 分页稳定性（连续翻页不漏不重）；`q` 过滤；`total` 与 preview 一致；`page_size` 钳制 |
-| `backend/app/tests/test_easyauth_handover_execute.py` | override 优先于 default；剩余条目按 default；**B1** 非空列永不写 NULL；**B2** `releasable=false` + null 接收人抛 422 而非静默；`(task_id, generation)` 幂等；不同 generation 真正重执行 |
+| `backend/app/tests/test_easyauth_handover_execute.py` | override 优先于 default；剩余条目按 `default_action`；三值 action 各自行为；**B1** 非空列永不写 NULL；**B2** `release` 落在 `releasable=false` 上抛 422 而非静默；`default_action="skip"` + 逐条 `transfer` 能对非空列做部分交接；`(task_id, generation)` 幂等；不同 generation 真正重执行 |
 | `backend/app/tests/contract/test_handover_v2_golden.py` | 直接读 `EasyAuth/tests/contract_samples/handover_v2/*.json` 逐字段比对请求解析与响应形状 |
 | `backend/app/tests/test_easyauth_lifecycle.py` | 既有用例按 v2 payload 重写 |
 

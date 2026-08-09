@@ -476,20 +476,24 @@ EasyAuth 在 execute 前校验：对 `releasable=false` 的类型指定 `to_user
   "assignments": [
     {
       "asset_type": "customer",
+      "default_action": "transfer",
       "default_to_user_id": "8c44…",
       "overrides": [
-        { "id": "9b2c…", "to_user_id": "d017…" },
-        { "id": "4d81…", "to_user_id": null }
+        { "id": "9b2c…", "action": "transfer", "to_user_id": "d017…" },
+        { "id": "4d81…", "action": "release" },
+        { "id": "7a10…", "action": "skip" }
       ]
     },
     {
       "asset_type": "order_in_transit",
-      "default_to_user_id": "8c44…",
-      "overrides": []
+      "default_action": "skip",
+      "overrides": [
+        { "id": "o-2291", "action": "transfer", "to_user_id": "8c44…" }
+      ]
     },
     {
       "asset_type": "inquiry_open",
-      "default_to_user_id": null,
+      "default_action": "release",
       "overrides": []
     }
   ]
@@ -499,13 +503,30 @@ EasyAuth 在 execute 前校验：对 `releasable=false` 的类型指定 `to_user
 语义（**唯一权威定义**）：
 
 1. 每个 `asset_type` 在 `assignments` 中**最多出现一次**；重复出现由 EasyAuth 在发送前拒绝。
-2. `default_to_user_id` 是该类型的默认接收人。`null` 表示**整批释放为无主**。
-3. `overrides` 是逐条例外，`to_user_id=null` 表示**该条释放为无主**。同一 `id` 只能出现一次。
-4. **未出现在 `assignments` 中的 `asset_type` 一律不动**（既不转移也不释放）。这是"逐条反选"的表达方式：
-   反选掉的条目通过不进 `overrides`、且该类型不整批指定来实现 —— 若某类型只想转移一部分，
-   做法是 `default_to_user_id=null` + `overrides` 列出要转移的条目。
-5. `releasable=false` 的类型出现任何 `null` 接收人时，EasyAuth **不会发出请求**（§9.1）；
-   APP 若仍收到，应返回 `422 asset_type_not_releasable`。
+2. `default_action` 是该类型**未被 override 覆盖的全部条目**的处置方式，三选一：
+
+   | `default_action` | 含义 | 必填字段 | 前置条件 |
+   |---|---|---|---|
+   | `transfer` | 转给指定接收人 | `default_to_user_id`（非 null） | 接收人 active 且不是当事人 |
+   | `release` | 释放为无主 | — | 该类型 `releasable=true` |
+   | `skip` | **原样不动** | — | 无 |
+
+3. `overrides` 是逐条例外，每条同样带 `action`，取值与语义完全一致（`transfer` 需 `to_user_id`，
+   `release` 需 `releasable=true`，`skip` 表示这一条不动）。同一 `id` 只能出现一次。
+4. **未出现在 `assignments` 中的 `asset_type` 等价于 `default_action="skip"`**，一条都不动。
+
+> **为什么必须有 `skip` 而不能用 `to_user_id=null` 兼表两义**：
+> 「不动」和「释放为无主」是两件完全不同的事，而 `releasable=false` 的类型**不允许**无主。
+> 若用 `null` 同时表达两者，那么所有 `releasable=false` 的类型（EasyTrade 的在途订单、进行中询盘、
+> 未完成任务，以及 EasyProject 的全部 11 类）都将**无法部分交接** —— 想转其中 3 条就必须整批转，
+> D10 的「逐条反选改派」对它们彻底失效。三值 `action` 把这两个语义彻底分开。
+>
+> 于是「只转一部分」的标准写法是：`default_action="skip"` + `overrides` 列出要转的条目
+> （见上例的 `order_in_transit`）。这条路径对 `releasable` 取值**没有任何依赖**，任何类型都能用。
+
+5. EasyAuth 在发出请求前完成全部校验（见 `01-easyauth-backend.md` §5.4），因此下游收到的
+   `assignments` 必然满足上述前置条件。下游仍应做防御性校验：`action="release"` 落在
+   `releasable=false` 的类型上时返回 **HTTP 422**，不得静默改成保持原状。
 
 响应 200（同步完成）：
 
