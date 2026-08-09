@@ -178,13 +178,59 @@ EasyAuth 只做存储与回传，不解析、不排序、不校验格式。长�
 代管授权让 assignee **临时获得离职者的权限与可见范围**，从而在业务系统里正常跟进那批数据，
 直到指定真正的接收人。它**不改变任何业务数据的归属**。
 
-### 7.2 发放
+### 7.2 发放：**委托授权**，不是复制授权
 
-建单同事务内发放，内容 = 该单 `HandoverGrantItem` 快照（即离职者被撤销前的授权），逐条复制给 assignee：
+> **这一节是本设计的安全核心。早期版本写的是"把离职者的授权原样复制给主管"，那是错的，会实实在在地提权。**
 
-- 一律 `grant_type=timed`，`expires_at = 建单时刻 + 14 天`
-- 打上来源标记，与 assignee 自有授权区分，收回时只收代管的那部分
-- assignee 自己已有的同一条授权**不重复发放**，也不因代管到期被误收
+原样复制会出事，因为授权带 `scope`，而 scope 是**相对于持有人**求值的：
+
+| 离职者持有 | 原样复制给主管后变成 | 后果 |
+|---|---|---|
+| `customer.read` @ `SELF` | 主管自己名下的客户 | 没解决问题（看不到离职者的） |
+| `customer.read` @ `MANAGED_USERS` | 主管**自己全部下属**的客户 | **提权**：拿到了一整支团队的数据 |
+| `customer.export` @ `GLOBAL` | 全公司客户导出权 | **提权**：一次离职把全局权限发给了主管 |
+
+因此代管授权**必须是一种绑定了来源人的委托授权**（delegated entitlement），语义固定为：
+
+> 在有效期内，`custodian` 可以用 `permission` 这项能力，**且仅能作用于 `source_subject`（该离职者）名下的数据**。
+
+具体规则：
+
+1. 代管条目从 `HandoverGrantItem` 快照取**能力（`permission.key`）**，**丢弃原 scope**。
+2. 一律以 `scope = HANDOVER_CUSTODY` 发放 —— 这是一个**新增的系统级 scope**，解析结果恒为
+   `{source_subject}` 这一个人的集合，与 custodian 自己的 `SELF`/`MANAGED_USERS` 互不相干、也不叠加。
+3. 一律 `grant_type=timed`，`expires_at = 建单时刻 + 14 天`。
+4. custodian 自己已有的同名能力**互不影响**：代管发的是另一条 scope 不同的授权行，
+   收回时按 `CustodyGrantItem` 精确定位，**绝不可能**误删 custodian 自有授权。
+5. **`GLOBAL` 与任何"全局读写"性质的能力不进代管**：它们不是"看某个人的数据"，
+   委托语义对其无意义。这类能力在交接单上显式标注「该能力不可代管，需接收人自行申请」。
+
+> 这样一来，代管不再"扩大"任何范围，而是精确地打开一个人的数据。
+> `MANAGED_USERS` 里出现离职者（§7.3）与本条是配套的：前者解决"看得见哪些人"，后者解决"能对他们做什么"。
+
+**对下游的影响**：下游会在权限快照里看到一个新的 scope 值 `HANDOVER_CUSTODY`，其 `resolved.user_ids`
+只含一个人。下游把它当作一个**普通的人员集合 scope** 处理即可（与 `MANAGED_USERS` 同款），
+不需要为它写特例分支。不认识该 scope 的下游必须**按既有约定跳过该条 grant 并计数告警**，
+不得报错中断整份快照。
+
+### 7.2.1 与"授权转移"的区别（两件事，别混）
+
+交接单上有**两个不同的接收人概念**，必须分开理解：
+
+| | 数据接收人 | 权限接收人 |
+|---|---|---|
+| 粒度 | **逐资产条目**，一个 APP 内可以有多个（D10） | **每个 APP 一个** |
+| 转的是 | 业务数据的归属（客户归谁、任务派给谁） | EasyAuth 里的授权行（能做什么） |
+| 何时用 | 全部 kind | **仅 `offboard`**（`transfer` 走 `TransferPlan`；`pre_offboard`/`reassign` 不动权限） |
+| scope 处理 | 不涉及 | **保留原 scope**，因为这是"继任者接手这个岗位"，`MANAGED_USERS` 落到继任者自己的下属才是对的 |
+| 可为空 | 是（该类不动） | 是（不指定则只撤权、不转授，接收人自行走申请流程） |
+
+> **为什么权限保留原 scope 而代管要换成 `HANDOVER_CUSTODY`**：
+> 权限转移是**永久的岗位继承**，继任者本来就该按自己的身份求值 scope；
+> 代管是**临时的看管**，看管人不该因此获得自己岗位之外的任何东西。两者取舍相反，不能共用一套逻辑。
+
+早期版本把接收人只放在资产条目上，导致"授权该转给谁"无法确定 —— 一个 APP 有 3 个数据接收人时，
+授权转给谁？现在由独立的权限接收人字段回答，且**允许留空**（留空是安全默认）。
 
 ### 7.3 可见范围（对下游的契约变更，**最关键的一条**）
 
@@ -204,6 +250,9 @@ EasyAuth 只做存储与回传，不解析、不排序、不校验格式。长�
    （各仓库字段名不同：EasyTrade 是 `User.active`，EasyProject 是 `directory_users.is_active`）。
 3. 映射不到本地用户的 ID 仍可剔除（那是真的不存在），但必须计数并记日志，不得静默。
 4. 业务列表按 owner 过滤时照常使用该集合，因此代管期内主管能看到离职者名下的数据。
+5. **代管的可见范围是逐 APP 独立的**：某个 APP 的 action 完成后，该 APP 的代管条目即被收回，
+   离职者随即从**该 APP** 的 `MANAGED_USERS` 中消失，但在其他未完成 APP 里仍然可见。
+   下游不需要为此做任何事 —— 它本来就只消费自己那份快照。
 
 **两个下游都不满足这条，且失效原因不同，必须各自修：**
 
@@ -218,9 +267,9 @@ EasyProject 这一条不是"顺带优化"，而是**它当前就违反 EasyAuth 
 
 | 事件 | 动作 |
 |---|---|
-| 该 APP 的 action 到达 `done`/`skipped` | 收回该 APP 对应的代管授权（逐 APP 收，不等整单） |
+| 该 APP 的 action 到达 `done`/`skipped` | 收回**该 APP 对应**的代管条目（逐 APP 收，不等整单）。收回后该 APP 的权限查询里立刻不再有 `HANDOVER_CUSTODY` scope，主管对这个 APP 的代管可见性随即消失 |
 | 整单 `completed` 或 `cancelled` | 收回全部代管授权 |
-| 到期（14 天）且单未完成 | 收回当前 assignee 全部代管授权 → `escalation_level += 1` → 沿主管链取下一级 active 主管 → 重新发放 14 天代管授权 → 通知新 assignee 与被替下的 assignee |
+| 到期（14 天）且单未完成 | 收回当前 assignee **全部**代管条目 → `escalation_level += 1` → 沿主管链取下一级 active 主管 → **只对尚未终结的 action 所属 APP** 重新发放 14 天代管条目（已完成的 APP 不再发）→ 通知新旧 assignee |
 | 主管链已到顶 | `assignee_state = superuser_pool`，`assignee = NULL`，**不发代管授权**，改为向全体超管推送认领通知（每日） |
 
 ### 7.5 提醒节奏
@@ -252,17 +301,38 @@ EasyProject 这一条不是"顺带优化"，而是**它当前就违反 EasyAuth 
 
 ```
 resolve_assignee(subject, start_level=0):
-    chain = DingTalkUserOrgContext(subject).manager_chain   # 自下而上
-    if chain 为空 或 stale:
+    ctx = DingTalkUserOrgContext.get(
+        source_slug=subject.dingtalk_source_slug,
+        corp_id=subject.dingtalk_corp_id,
+        user_id=subject.dingtalk_userid,
+    )
+    if ctx 不存在 or ctx.stale or not ctx.manager_chain:
         # 目录数据不可用时不能阻断建单（离职单是自动建的）
         记录 audit(assignee_resolution_degraded)
-        return (None, superuser_pool, 0)
-    for level, manager_userid in enumerate(chain[start_level:], start=start_level):
-        m = UserMirror.by_dingtalk_userid(manager_userid)
-        if m 存在 and m.status == active and m 不是 subject 本人 and m 不是本地管理员:
-            return (m, manager, level)
-    return (None, superuser_pool, len(chain))
+        return (None, superuser_pool, 0, degraded=True)
+
+    for level, entry in enumerate(ctx.manager_chain[start_level:], start=start_level):
+        # manager_chain 的元素是映射 {"user_id": ..., "name": ...}，不是裸字符串
+        # （directory_sync.py 用 _mapping(item) 逐项落库）
+        manager_userid = entry.get("user_id") if isinstance(entry, dict) else None
+        if not manager_userid:
+            记录 audit(assignee_chain_entry_malformed); continue   # 畸形元素跳过并留痕，不静默
+        m = UserMirror.objects.filter(
+            dingtalk_source_slug=subject.dingtalk_source_slug,   # 钉钉 userid 只在
+            dingtalk_corp_id=subject.dingtalk_corp_id,           # (source, corp) 内唯一
+            dingtalk_userid=manager_userid,
+        ).first()
+        if m and m.status == active and m != subject and not m.is_local_admin:
+            return (m, manager, level, degraded=False)
+    return (None, superuser_pool, len(ctx.manager_chain), degraded=False)
 ```
+
+三个容易写错的点：
+
+- `manager_chain` 的元素是**映射**（`{"user_id","name"}`），不是 userid 字符串数组。
+- 钉钉 userid **只在 `(source_slug, corp_id)` 内唯一**，跨企业可能重复，查询必须带上这两个维度。
+- EasyAuth **没有** `UserMirror.by_dingtalk_userid()` 这样的便捷方法，需要按上面三个字段自行查询；
+  若要新增便捷方法，必须带 source/corp 参数，不能只接 userid。
 
 - **不设层数上限**（已决策：逐级向上找到顶）。
 - 主管本人同期离职 → 自动跳过，继续向上，天然覆盖"部门整体裁撤"。
@@ -293,7 +363,14 @@ resolve_assignee(subject, start_level=0):
 ```
 
 `generation` 是幂等边界：同一 `task_id` 的第二轮 execute 携带 `generation=2`，下游必须视为**新的一次执行**，
-而不是重复投递。见 §10.4。
+而不是重复投递。见 §10.5.2。
+
+**若提前交接单在离职前就已 `completed`**：不升级、不重开（`completed` 单不可重开是硬规则，§6.2），
+而是**新建一张 `offboard` 单**。"一人同时只有一张 open 单"的约束只管 open 单，已完成的不挡新建。
+新单会重新盘点全部 APP，把提前交接之后新产生的数据揪出来；已经交接干净的 APP 自然返回 `count=0`。
+两张单在审计上首尾相接，历史完整。
+
+因此升级路径只在**存在 open 的 `pre_offboard` 单**时触发，这是唯一情形。
 
 ### 8.4 二次转交（D8/D9）
 
@@ -359,6 +436,29 @@ APP 在 descriptor（`/.well-known/easyauth-app.json`，SDK `integration.py:29` 
 EasyAuth 在 execute 前校验：对 `releasable=false` 的类型指定 `to_user_id=null` 时，直接返回
 `422 asset_type_not_releasable`，**不发 webhook**。这修掉了现状里"静默保持原归属"的兜底分支。
 
+### 9.1.1 capability 变化后的恢复（blocked 不是死路）
+
+APP 后来接入了交接，历史上被判 `blocked` 的单必须能自动恢复，否则只剩"永久阻塞"或"强行跳过"两条路，
+而两条都是坏结局。
+
+`sync_handover_capability()` 成功把某 APP 从 `undeclared` 改为 `declared` 时，必须触发一次
+**reconcile**：
+
+```
+对该 App 下所有 status=blocked 且所属 task 仍 open 的 action:
+    加行锁 → 校验 App.handover_capability 仍为 declared 且 handover_url 非空
+           → action.status = pending
+           → action.blocked_reason = ""
+           → action.generation = task.generation   # 与当前轮次对齐
+           → 审计 handover_action_unblocked(app_key, task_id)
+           → refresh_task_status(task)             # 可能从 in_progress 退回 pending
+    随后给这些单的 assignee 各发一次钉钉通知：「{APP} 已接入交接，有新的待处理项」
+```
+
+反方向（`declared` → `undeclared`，通常是 descriptor 拉取失败）**不得**把已有的 `pending`/`previewed`
+action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在**建单时**判定初始状态；
+运行中的拉取失败只写告警，不改既有 action。
+
 ### 9.2 blocked 的表现
 
 - 交接单详情里该 APP 一行显示红色「未接入交接」，附「该 APP 尚未实现数据交接，无法确认是否有遗留数据」。
@@ -375,7 +475,23 @@ EasyAuth 在 execute 前校验：对 `releasable=false` 的类型指定 `to_user
 
 - 传输：HTTPS POST，`Content-Type: application/json; charset=utf-8`
 - 签名：`X-EasyAuth-Signature` = HMAC-SHA256(secret, `timestamp + "." + raw_body`)，
-  `X-EasyAuth-Timestamp`，重放窗口 300 秒（`sdk/.../webhook.py:20`）
+  `X-EasyAuth-Timestamp`，重放窗口 300 秒（`sdk/python/src/easyauth_app_sdk/webhook.py:68`）
+
+  > **已知弱点（本次不改，但必须知道）**：签名串**不覆盖** `X-EasyAuth-Event` 与
+  > `X-EasyAuth-Delivery`，而这两个头分别决定路由与去重。理论上在 300 秒窗口内可以替换它们。
+  >
+  > 实际可利用面很窄：body 里带 `mode` 字段，路由与载荷不一致会被下游校验拒绝；
+  > 幂等键是 `(task_id, generation, batch_id)` 而非 delivery id，替换 delivery 也换不出重复执行。
+  >
+  > **不在本次改的理由**：EasyProject 的 `contracts/test-vectors/webhook-hmac.json` 已把
+  > `signingString` 冻结为 `timestamp + "." + raw_body`（标注 `W0-ADJUDICATED`），改签名串要额外一次
+  > 契约变更并同步全部下游与向量，成本远高于收益。
+  >
+  > **必须做的补偿**：下游收到请求后**必须校验 `X-EasyAuth-Event` 与 body 的 `mode` 一致**
+  > （`preview`/`execute` 对应各自 mode，`items` 无 mode 字段），不一致返回 422。
+  > 这条是强制的，写进各 APP 的验收用例。
+  >
+  > 把 event/delivery 纳入签名列为后续独立改造项，需单独立项与 CCR。
 - 去重：`X-EasyAuth-Delivery`
 - 事件名：`X-EasyAuth-Event`
 - 请求体上限：**从 64 KiB 提升到 256 KiB**（`assignments.overrides` 可能较长），
@@ -409,6 +525,7 @@ EasyAuth 在 execute 前校验：对 `releasable=false` 的类型指定 `to_user
 
 ```json
 {
+  "snapshot_token": "et-2026-08-10T10:22:41.331Z-9f2c",
   "assets": [
     { "type": "customer",        "label": "名下客户",     "count": 187 },
     { "type": "order_in_transit","label": "在途订单",     "count": 23  },
@@ -417,6 +534,8 @@ EasyAuth 在 execute 前校验：对 `releasable=false` 的类型指定 `to_user
   ]
 }
 ```
+
+- `snapshot_token` 必填，见 §10.5.1。
 
 - `type` 必须是 descriptor 中声明过的 `asset_types`，否则 EasyAuth 返回 `422 undeclared_asset_type` 并置 action 为 `failed`。
 - `count=0` 的类型也必须返回，不得省略（省略与"不支持"无法区分）。
@@ -430,6 +549,7 @@ EasyAuth 在 execute 前校验：对 `releasable=false` 的类型指定 `to_user
 {
   "task_id": "137:easytrade",
   "generation": 1,
+  "snapshot_token": "et-2026-08-10T10:22:41.331Z-9f2c",
   "from_user_id": "3f1a…",
   "asset_type": "customer",
   "page": 1,
@@ -458,7 +578,9 @@ EasyAuth 在 execute 前校验：对 `releasable=false` 的类型指定 `to_user
 - `id`：§5.3 定义的 `asset_id`
 - `label`：给人看的名字，≤120 字符
 - `hint`：辅助判断的一行摘要，可空，≤120 字符
-- `total`：该类型总数，必须与同一 `generation` 下 preview 的 `count` 一致
+- `total`：**按 `q` 过滤之后**的总数。仅当 `q` 为空串时，`total` 必须等于同一 `snapshot_token` 下
+  preview 返回的 `count`；`q` 非空时两者本就不应相等。若 APP 想同时给出未过滤总数，可另加
+  可选字段 `unfiltered_total`（EasyAuth 只用它做一致性提示，不参与任何判定）
 
 仅当 descriptor 里该类型 `detail_supported=true` 时 EasyAuth 才会调用此事件。
 
@@ -470,6 +592,8 @@ EasyAuth 在 execute 前校验：对 `releasable=false` 的类型指定 `to_user
 {
   "task_id": "137:easytrade",
   "generation": 1,
+  "batch_id": 1,
+  "snapshot_token": "et-2026-08-10T10:22:41.331Z-9f2c",
   "kind": "offboard",
   "from_user_id": "3f1a…",
   "mode": "execute",
@@ -533,18 +657,74 @@ EasyAuth 在 execute 前校验：对 `releasable=false` 的类型指定 `to_user
 ```json
 {
   "summary": {
-    "customer":         { "transferred": 185, "released": 1, "skipped": 1 },
-    "order_in_transit": { "transferred": 23,  "released": 0, "skipped": 0 },
-    "inquiry_open":     { "transferred": 0,   "released": 41, "skipped": 0 }
+    "customer":         { "transferred": 185, "released": 1, "skipped": 1, "merged": 0, "failed": 0 },
+    "order_in_transit": { "transferred": 23,  "released": 0, "skipped": 0, "merged": 0, "failed": 0 },
+    "inquiry_open":     { "transferred": 0,   "released": 41, "skipped": 0, "merged": 0, "failed": 0 }
   }
 }
 ```
 
+**summary 的字段是冻结的五元，任何 APP 不得自行增删**：
+
+| 字段 | 含义 |
+|---|---|
+| `transferred` | 归属被改写为某个接收人的条目数 |
+| `released` | 被置为无主的条目数（仅 `releasable=true` 的类型可能非零） |
+| `skipped` | 按 `action="skip"` 明确不动的条目数 |
+| `merged` | **接收人已经在里面，因此删除来源方关系行而非改写**。复合主键的成员/协作/参与关系会出现这种情况（EasyProject 多类资产、EasyTrade 无）。它是一种成功结果，但**必须与 `transferred` 分开报**，否则"转了 5 条"和"其中 3 条其实是合并掉的"就分不出来 |
+| `failed` | 该类型内单条失败但整体未回滚的条目数。**正常情况下恒为 0** —— execute 要求整事务成败一致（§10.5）。非 0 意味着 APP 实现了部分成功语义，EasyAuth 会把该 action 判为 `failed` 并要求重试 |
+
+**守恒公式**（EasyAuth 会校验，不满足则把 action 判为 `failed` 并展示差额）：
+
+```
+transferred + released + skipped + merged + failed == 该类型在本轮 assignments 覆盖到的条目总数
+```
+
+其中"覆盖到的条目总数"= `default_action != "skip"` 时的全类型条目数，
+加上 `default_action == "skip"` 时 `overrides` 中非 skip 的条目数。
+
 响应 202（异步，沿用现有机制）：返回 `Location` 头指向状态查询 URL，EasyAuth 轮询
 （`handover.py:261 poll_async_action`，逻辑不变）。
 
-**幂等**：幂等键为 `(task_id, generation)`。同一对重复投递必须安全且返回相同 `summary`。
-不同 `generation` 是**新的一次执行**，必须真正执行（§8.3 升级依赖此语义）。
+### 10.5.1 快照令牌与并发（execute 的安全前提）
+
+`generation` 只是"第几轮盘点"，**它不是数据快照**。preview / items / execute 是三次独立的实时查询，
+中间数据会变。不加约束就会出现两类事故：
+
+- preview 时 187 个客户，execute 时变成 191 个 —— **4 个没被任何人看过的客户被一起搬走了**。
+- override 里的某个 `asset_id` 在这期间已经不属于当事人（被别人认领了）—— 却仍被改写归属。
+
+因此契约增加 `snapshot_token`：
+
+1. `preview` **响应**必须返回 `snapshot_token`（APP 自定义的不透明字符串，≤128 字节；
+   可以是最大更新时间戳、内容 hash 或版本号，EasyAuth 不解析）。
+2. `items` 与 `execute` **请求**回带同一个 `snapshot_token`。
+3. APP 在 `execute` 时必须校验：**当前数据状态是否仍与该 token 一致**。
+   不一致则返回 **HTTP 409**，EasyAuth 把 action 打回 `previewed` 之前并提示"清单已变化，请重新预演"。
+4. 逐条校验同样是硬要求：每个被改写的条目必须**当前仍属于 `from_user_id`** 且**仍属于该 `asset_type`**；
+   否则整体 409，**不允许**跳过该条继续处理其余条目（那是静默兜底）。
+
+### 10.5.2 资产互斥（同一批数据不能被两张单同时搬）
+
+`reassign` 单可以与离职单并存、同一 subject 也可以有多张 open 的 `reassign`（§8.4）。
+若两张单同时对同一批数据执行，先到者全搬走，后到者返回一堆 0 —— 看起来"成功"，实际什么都没发生。
+
+约束：**EasyAuth 侧对 `(subject_user, app)` 加执行级互斥锁**，同一当事人在同一 APP 上
+任一时刻只允许一个 execute 在途（含 `async_pending`）。冲突时第二个请求立即返回
+`409 handover_execution_in_flight`，不排队、不重试。
+
+这把互斥放在 EasyAuth 而不是各 APP，是因为只有 EasyAuth 知道全部在途单据。
+APP 侧仍应保留自己的行锁作为第二道防线。
+
+**幂等**：幂等键为 `(task_id, generation, batch_id)`。
+
+- `batch_id` 是 EasyAuth 生成的单调递增整数，**同一 generation 内可以有多批**
+  —— 这是 413 时"分批执行"能成立的前提（§10.6）。不引入它，第二批会被当成重放而静默丢弃。
+- 同一三元组重复投递：必须安全，且返回**与首次完全相同**的 `summary`。
+- 同一三元组但 payload 不同：返回 **HTTP 409**（投递冲突），不得按新 payload 执行。
+  APP 应存 canonical payload 的 SHA-256 用于比对。
+- 迟到的旧 `generation`：**必须拒绝**（409），不得执行。APP 需记录该 `task_id` 见过的最大
+  `generation`，小于它的一律拒绝。这防止升级后旧一轮的执行请求姗姗来迟把数据搬错。
 
 ### 10.6 错误响应（APP → EasyAuth）
 
@@ -568,7 +748,7 @@ EasyAuth 在 execute 前校验：对 `releasable=false` 的类型指定 `to_user
 | 202 | 异步受理 | `async_pending` | — | 轮询中 |
 | 400 | 请求不合法（如时间戳超窗） | `failed` | 是 | 请求被应用拒绝 |
 | 401 / 403 | 验签失败 | `failed` | 否 | 签名校验失败，请检查该应用的 webhook 密钥 |
-| 409 | 人员无法识别 / 投递冲突 | `failed` | 否 | 该应用无法识别此人员或检测到投递冲突 |
+| 409 | 人员无法识别 / 快照已失效 / 投递冲突 / 迟到的旧 generation | 见右 | 否 | 快照失效 → action 退回 `pending` 并提示「清单已变化，请重新预演」；其余 → `failed` |
 | 413 | 请求体过大 | `failed` | 否 | 单独指定的条目过多，请分批执行 |
 | 422 | 载荷不被支持（未声明的资产类型、不支持的事件） | `failed` | 否 | 应用声明与实现不一致 |
 | 5xx | 应用内部错误 | `failed` | 是 | 可重试 |
