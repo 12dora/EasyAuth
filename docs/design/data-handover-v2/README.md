@@ -36,10 +36,33 @@ EasyProject 三个仓库。文档统一放在这里，各仓库不再分散存�
 A3 / A5 的实现要用到 v2 SDK（新的 `items` 回调、`handover_payloads` TypedDict、256 KiB 上限）
 与契约样本，这些都是 A1 的产出。所以真实次序是**一个短的串行头 + 大段并行**：
 
-**第 0 步（A1 独做，尽量短）**：发布 **SDK vNext**，含
-`lifecycle.py` 的三事件内核、`handover_payloads` 类型、以及**打包进 SDK 的契约样本**
-（`easyauth_app_sdk.contract_samples`）。打版本号并记录 SHA。这一步不需要 EasyAuth 后端实现完成，
+**第 0 步（A1 独做，尽量短）**：发布 **SDK vNext**。这一步不需要 EasyAuth 后端实现完成，
 只需要契约固定 —— 契约在 `00` 里已经冻结，所以这步是纯打包工作。
+
+**交付内容（缺一项下游就开不了工，见 `01` §8）**：
+
+| # | 内容 |
+|---|---|
+| 1 | `lifecycle.py` 的三事件内核（新增 items 回调） |
+| 2 | `event_type` 一致性校验，**位置在 `webhook.test` 短路之前** |
+| 3 | `handover_payloads` TypedDict（每个 Request 含 `event_type`） |
+| 4 | `DEFAULT_MAX_BODY_BYTES` 提到 256 KiB |
+| 5 | `manifest.py` 的 `_validate_lifecycle()` 白名单放行 `handover_asset_types` |
+| 6 | 目录接口 `get_directory_user_by_authentik_sub(sub)`（EasyProject P2 的硬依赖） |
+| 7 | 包内契约样本 `easyauth_app_sdk/contract_samples/handover_v2/*.json`，并在 `pyproject.toml` 的 package-data 里显式包含 |
+| 8 | 回调异常边界改为固定文案，不再拼 `str(error)` |
+
+**解锁凭据必须是可机械核对的三样东西**，不是"我发布了"这句话：
+
+1. **版本号锁死**：`easyauth-app-sdk` 的 `pyproject.toml` version、
+   `descriptor.SDK_VERSION`、`uv.lock`、CHANGELOG 四处**取同一个值**；
+2. **两个 SHA**：构建所用的 **commit SHA** 与产出 **wheel 的 SHA-256**，记进 CHANGELOG；
+3. **下游各自更新 `VENDORED.md`**（EasyTrade / EasyProject 的 vendor 目录各有一份），
+   写上同一组版本号与 SHA。
+
+**A3 / A5 以自己仓库的 `VENDORED.md` 更新完成为开工信号**，不是以"A1 说发完了"为信号。
+只改源码不改版本号、或只发包不同步 `descriptor.SDK_VERSION`，都会让下游 vendor 到不同的提交
+而没人发现。
 
 **之后全部并行**：
 
@@ -49,8 +72,24 @@ A3 / A5 的实现要用到 v2 SDK（新的 `items` 回调、`handover_payloads` 
 | A2 EasyAuth 前端 | A1 提交 `01` §6 的 API 契约章节后 |
 | A3 EasyTrade 后端 | SDK vNext 发布后 |
 | ~~A4 EasyTrade 前端~~ | **本期取消**（代管废弃，F1/F2/F3 不会发生） |
-| A5 EasyProject 后端 | **裁定已起草**（`08`），待 AG-00 批准。批准后可做 M06 编排；各领域的 `system_handover` 命令由对应 owner 交付；冻结基线相关改动仍等 `09` 的 CCR APPROVED。**现在就能做**：`05` §2.1 身份映射、§2.3 `hint`、§3.1.2 终态谓词选择器 |
+| A5 EasyProject 后端 | **三道门禁**，见下表。**现在就能做**：`05` §2.1 身份映射的本地命中那一半、§2.3 `hint`、§3.1.2 终态谓词选择器 |
 | ~~A6 EasyProject 前端~~ | **本期取消**（同上） |
+
+### A5 的三道门禁与解锁凭据
+
+「批准了」这句话不能当开工依据 —— 不同 agent 会在不同时点各自认为已经解锁。
+三样凭据**必须同时具备**，且都是可以贴出来的东西：
+
+| 门禁 | 凭据 | 解锁了什么 |
+|---|---|---|
+| AG-00 所有权裁定（`08` §1） | `EasyProject/contracts/ownership.md` 的**合入 commit SHA** | 各 owner 可以开始写 `system_handover` 命令；A5 可以写 M06 编排 |
+| AG-00 system-actor 裁定（`08` §2） | 同上（两份裁定合入同一文件） | actor / 锁序 / 幂等 / 审批锁语义确定 |
+| CCR（`09`） | **CCR 编号 + `status: APPROVED`** | 端点 v2 改写、新错误码、descriptor 输出、测试向量 |
+
+- **提交人**：AG-06（A5）在开工第一天把三份材料交给 AG-00；
+- **产物路径**：`08` / `09` 的正文原样落进 EasyProject 仓库对应位置；
+- **时限**：AG-00 在 1 个工作日内批准或退回，退回必须写明理由；
+- **三项未齐时**，A5 只允许做上表"现在就能做"的三项，**不得**碰任何跨模块表或契约文件。
 
 ## 跨仓库对齐的机械保证
 

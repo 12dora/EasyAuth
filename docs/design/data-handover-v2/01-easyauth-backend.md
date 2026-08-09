@@ -560,7 +560,17 @@ def escalate_overdue_task(task: HandoverTask) -> HandoverTask:
 同事务内：
 
 1. `select_for_update` 锁 task，复检仍 open（避免与 `cancel_task` / `refresh_task_status` 竞态）。
-2. `res = resolve_assignee(task.subject_user, start_level=task.escalation_level + 1)`（§3）。
+2. **起始层级要分情况**：
+
+   ```python
+   start = 0 if task.assignee_state == ASSIGNEE_STATE_SUBJECT else task.escalation_level + 1
+   res = resolve_assignee(task.subject_user, start_level=start)
+   ```
+
+   > **固定写 `escalation_level + 1` 会跳过直属主管。** 本人自助发起的 `pre_offboard` 单
+   > `assignee_state=subject`、`escalation_level=0`（那个 0 指的是"本人"，不是"主管链第 0 级"）。
+   > 首次超时若从 `start_level=1` 找，`manager_chain[0]`（直属主管）被整个跳过，
+   > 单子直接飞到隔级主管手里 —— 而直属主管才是最该先看到它的人。
 3. `res.user` 非空 → `apply_assignee(task, res)`；否则 `assignee=None`、
    `assignee_state=superuser_pool`、`escalation_level=res.level`。
 4. `escalation_deadline = now + HANDOVER_ESCALATION_DAYS`（落超管池时置空——超管池只做每日认领提醒，
@@ -591,12 +601,32 @@ def escalate_overdue_task(task: HandoverTask) -> HandoverTask:
 对所有 status == "submitted" 的 AccessRequest, 其 approver 是 subject 的 AccessRequestApprover 行:
     new_approver = resolve_assignee(该申请的申请人, start_level=0).user   # 沿申请人自己的主管链
     if new_approver is None or new_approver == 申请人:
-        → 标记该申请为「需超管处理」并进超管待办, 不静默留在离职者名下
+        → 删除离职者那条审批人行, 保持 status="submitted" 不变,
+          并把该 AccessRequest 的 approval_routing_state 置为 "superuser_pool"
+          (新增字段, 见下), 写 routing_reason
+        → 绝不静默留在离职者名下, 也绝不把 status 改成任何终态
     else:
         approver = new_approver
         审计 handover_approver_reassigned
         通知申请人与新审批人
 ```
+
+> **「进超管待办」不是一个已存在的状态，必须先把它造出来。**
+> `AccessRequest` 现有的 status 集合里没有"待超管认领"这一档
+> （`access_requests/models.py:33-59`），`AccessRequestApprover` 也只是一张审批人关联表。
+> 不新增载体的话，实现者只能二选一：把离职者留在审批人位上（申请永远卡死），
+> 或者自造一个互不兼容的队列。
+>
+> 新增两个字段到 `AccessRequest`：
+>
+> | 字段 | 类型 | 说明 |
+> |---|---|---|
+> | `approval_routing_state` | `CharField(max_length=16, default="normal")` | `normal` \| `superuser_pool` |
+> | `routing_reason` | `CharField(max_length=64, blank=True)` | `no_active_manager` \| `chain_exhausted` |
+>
+> `status` **保持 `submitted` 不变** —— 申请本身仍在审批中，只是暂时没有指定审批人。
+> 控制台按 `approval_routing_state="superuser_pool"` 查询待认领列表，
+> 超管认领时**必须写入至少一名 active 审批人**并把状态改回 `normal`。
 
 注意审批人要沿**申请人**的主管链解析，不是离职者的 —— 审批权来自"谁管这个申请人"。
 唯一约束 `(access_request, approver)` 已存在（`:351`），改派后若与既有审批人重复则删除该行而非报错。
@@ -758,6 +788,29 @@ def sync_handover_capability(app: App) -> None: ...
   action 建单时即 `blocked`（`blocked_reason="descriptor_unreachable"`）。
 - 挂到既有 manifest 同步入口（`api/manifest_sync_views.py`）与控制台"重新同步"按钮。
 
+> **⚠ EasyAuth 自己的解析模型会先把这个新字段扔掉。**
+> `applications/permission_template_parsing.py` 的 `_LifecyclePayload` 是
+> `ConfigDict(extra="forbid", frozen=True)`，字段只有
+> `handover_url` / `onboard_url` / `capabilities`（`:116-124`）——
+> 下游带着 `handover_asset_types` 推 manifest 上来，**这一层直接抛校验错误**。
+>
+> 所以「两道白名单」其实是**三道**（契约 §9.1 列了下游的两道，这是 EasyAuth 自己的第三道）：
+> `_LifecyclePayload` 与 `permission_template_types.py` 的 `AppManifestLifecycleInput`
+> 都必须显式加上 `handover_asset_types` 的 DTO（`tuple[_HandoverAssetTypePayload, ...]`，
+> 逐项含 `type` / `label` / `detail_supported` / `releasable`）。
+>
+> **另外，`sync_handover_capability(app)` 这个签名是拉取式的，但它没有 base_url 也没有凭证** ——
+> 光有一个 `App` 对象拉不到 descriptor。改为**在既有的 manifest push 事务内**调用：
+>
+> ```python
+> def sync_handover_capability_from_manifest(
+>     app: App, lifecycle: AppManifestLifecycleInput, *, actor_id: str
+> ) -> None: ...
+> ```
+>
+> 控制台的"重新同步"按钮走既有的 manifest 重新拉取路径（那条路径本来就有 base_url 与凭证），
+> 不另造一条。
+
 ### 5.3 preview（契约 §10.3）
 
 ```python
@@ -913,7 +966,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 |---|---|---|---|
 | GET | `/me/handover-tasks` | 登录即可 | 返回两组：`as_assignee`（我负责的）、`as_subject`（我是当事人的） |
 | POST | `/handover-tasks/pre-offboard` | 登录即可，且自己无 open 的 offboard/transfer/pre_offboard 单 | 在职提前交接建单（D7），`kind=pre_offboard`，assignee=本人 |
-| POST | `/handover-tasks/reassign` | 我对 `subject` 有管辖权（契约 §4 的主管链判定，**不走 `resolve_managed_users`**）且双方 active | 在职移交（D9）。body：`{"subject_user_id": "<OIDC sub>", "reason": "至少 10 字"}`。缺 `subject_user_id` → `422`；`reason` 不足 10 字 → `422 reason_required` |
+| POST | `/handover-tasks/reassign` | 我对 `subject` 有管辖权（契约 §4 的主管链判定，**不走 `resolve_managed_users`**）且双方 active | 在职移交（D9）。body：`{"subject_user_id": "<OIDC sub>", "app_keys": ["easytrade", ...], "reason": "至少 10 字"}`。**`app_keys` 必填且非空** —— 只为列出的 APP 建 action，**不得**隐式把该员工在其他 APP 的数据也拉进来（`00` §8.4 明说同一 subject 可以有多张针对不同 APP 的 open `reassign` 单）。缺 `subject_user_id` / `app_keys` → `422`；`reason` 不足 10 字 → `422 reason_required` |
 | GET | `/handover-tasks/{task_id}` | 我是 assignee 或 subject | 单据详情，含各 APP action、资产分类、距上交剩余天数 |
 | GET | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}/items` | 同上 | 明细分页，query: `page`、`page_size`、`q` |
 | GET | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}/overrides` | 同上 | **返回当前 generation 的完整 override 集合**与 `overrides_version`。`PUT` 是整体替换，没有这个读回入口，用户刷新页面后改一条就会把其余全部删掉 |
@@ -1126,6 +1179,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 |---|---|---|
 | `lifecycle_escalation` | beat 每 10 分钟 | 扫 `status in OPEN and escalation_deadline <= now` 的 `HandoverTask`，逐个 `escalate_overdue_task()`。PostgreSQL 下 `select_for_update(skip_locked=True)` 分批（与 `grants` 过期任务同款） |
 | `lifecycle_daily_reminder` | beat 每天 09:00（Asia/Shanghai） | 对未完成且有 assignee 的单发钉钉提醒；`last_reminded_on` 用 `timezone.localdate(..., Asia/Shanghai)` 去重保证每业务日一次；上交前 1 天额外发"即将上交"。注意既有 beat schedule 只接受 float interval，crontab 需扩展 |
+| `lifecycle_poll_async_actions` | beat 每 1 分钟 | 扫 `status=async_pending` 的 action，逐个调既有 `poll_async_action()`。**这个任务不存在的话，202 就是个死胡同**：action 进 `async_pending` 后门户不允许 retry（在途）、也没有任何东西去 poll，永远到不了 `done`/`failed`，租约也永远不释放。需定义：最大轮询次数（超过则判 `failed` 并写明"下游长时间未返回终态"）、`Location` 头的持久化与更新、终态后调 `complete_data_phase()` 并释放租约 |
 | ~~`lifecycle_superuser_pool_reminder`~~ | — | **本期不做**，见下 |
 | ~~`lifecycle_blocked_apps_digest`~~ | — | **本期不做**，见下 |
 
@@ -1164,6 +1218,16 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 5. 新增 `easyauth_app_sdk/handover_payloads.py`：v2 请求/响应的 `TypedDict` 定义
    （`PreviewRequest`/`PreviewResponse`/`ItemsRequest`/`ItemsResponse`/`ExecuteRequest`/`ExecuteResponse`），
    下游 APP 直接 import 使用，杜绝字段名手抄出错。**每个 Request 都含 `event_type` 字段。**
+5.1 **EasyAuth 自己的发送端必须先注入 `event_type`**，否则新 SDK 一上线联调门禁就永远过不去：
+   现有 `webhook.test` 的 body 是 `{"message": ..., "app_key": ...}`
+   （`admin_console/webhook_config_api.py:99`），**没有 `event_type`** ——
+   新版 SDK 会在短路之前发现缺字段并返回 422，而 README 的联调门禁正是"`webhook.test` 返回 200"。
+
+   改法：在**所有** webhook 发送入口（`webhooks/hooks.py` 的统一出口）里，
+   **签名之前**原子注入 `payload["event_type"] = event_type`，覆盖 `webhook.test` /
+   preview / items / execute 四种事件。补一个**字节级**的 sender-side 测试：
+   断言四种事件发出的 raw body 里都含正确的 `event_type`，且签名是对注入后的 body 算的。
+
 6. **`event_type` 一致性校验，位置必须在 `webhook.test` 短路之前**（契约 §10.1 的强制补偿）：
 
    ```
@@ -1241,11 +1305,20 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 
 ### 执行方式
 
-后端测试走 Docker + uv（host `.venv` 不可用）：
+后端测试走 Docker + uv（host `.venv` 不可用）。**镜像名不能留占位符** ——
+用仓库 CI 里实际使用的那一个（见 `.github/workflows/docker-build.yml`），
+或先 `docker build` 出本地 tag 再引用：
 
 ```bash
-docker run --rm -v "$PWD":/w -w /w <image> uv run --frozen pytest tests/unit/lifecycle -q
+IMAGE=easyauth-backend:local          # 与 CI 一致的 tag, 不要写 <image>
+docker run --rm -v "$PWD":/w -w /w "$IMAGE" \
+  uv sync --extra dev --frozen && \
+  docker run --rm -v "$PWD":/w -w /w "$IMAGE" \
+  uv run --frozen pytest tests/unit/lifecycle -q
 ```
+
+**租约并发用例必须跑在真 PostgreSQL 的那条 lane 上**（条件唯一约束与
+`SELECT ... FOR UPDATE` 在 SQLite 上行为不同，跑过了也不说明问题）。
 
 ---
 

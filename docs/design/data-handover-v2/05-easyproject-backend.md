@@ -60,9 +60,22 @@ async def resolve_dtuid(uow, *, authentik_sub: str) -> str:
 解析顺序：
 
 1. 查 `directory_users where authentik_user_id = sub` → 命中即返回 dtuid。
-2. 未命中 → 调 EasyAuth 目录接口按 sub 取用户详情
-   （SDK `easyauth_directory` 适配器已封装，`domain/ports/easyauth.py:23` 的用户引用协议本就同时接受
-   `sub` 与 `dt:<dtuid>`），拿到其 dtuid。
+2. 未命中 → 调 EasyAuth 目录接口**按 sub 精确取**用户详情，拿到其 dtuid。
+
+   > **⚠ 这个接口目前不存在，是 SDK vNext 的交付内容之一。**
+   > 现有 port（`domain/ports/easyauth.py`）与 SDK client 只接受**目录返回过的 opaque
+   > `user_ref`**；把一个裸 Authentik `sub` 塞进 `get_user()` 会被 EasyAuth 判 422，
+   > dtuid 解析不到，整次交接 409 —— 而"从未登录过 EasyProject 的员工"正是 P2 要解决的那批人，
+   > 这条路径**必然**会走到。
+   >
+   > 因此必须先在 EasyAuth 目录契约与 SDK 里新增一个显式接口：
+   >
+   > ```python
+   > def get_directory_user_by_authentik_sub(sub: str) -> DirectoryUser | None: ...
+   > ```
+   >
+   > 随 SDK vNext 一起发布。**在它可用之前，P2 只能做第 1 步（本地命中）那一半**，
+   > 未命中直接抛 `IdentityUnmappedError`。**禁止**把裸 sub 伪装成 opaque user_ref 去碰运气。
 3. 用该 dtuid 回填 `authentik_user_id`。**不得复用登录绑定路径**：
    `user_repo.bind_or_refresh()` 会同时写 `first_login_at` / `last_login_at`
    （`infra/repositories/directory.py:675,676`），webhook 触发时写这两个字段等于**伪造登录事实**，

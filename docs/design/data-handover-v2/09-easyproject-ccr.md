@@ -89,7 +89,7 @@ x-error-codes = [WEBHOOK_SIGNATURE_INVALID, HANDOVER_CONFLICT, VALIDATION_ERROR]
 
 改为「EasyAuth 交接 preview/items/execute」。
 
-#### 5.2 `x-error-codes` 冻结为完整 10 项
+#### 5.2 `x-error-codes` 冻结为完整 11 项
 
 | 错误码 | HTTP | 说明 | 状态 |
 |---|---:|---|---|
@@ -119,7 +119,7 @@ x-error-codes = [WEBHOOK_SIGNATURE_INVALID, HANDOVER_CONFLICT, VALIDATION_ERROR]
 
 1. **`contracts/tools/generate_baseline.py`** ← **必须先改这里**
    - endpoint summary 改为 preview/items/execute；
-   - 上述 10 个错误码写进生成源；
+   - 上述 11 个错误码写进生成源；
    - 不新增 path / permission / scope / schema。
 2. **`contracts/openapi-baseline.json`**
    - 由生成器**重新生成**，不手工长期维护。**禁止只手改 JSON。**

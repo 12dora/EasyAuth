@@ -192,7 +192,7 @@ export interface HandoverTaskDetail {
   reason: string;
   created_at: string;
   actions: HandoverAction[];
-  team_items: HandoverTeamItem[];   // 既有类型，形状不变
+  team_items: HandoverTeamItemRow[];   // 既有类型(domain.ts:638), 形状不变——注意是 Row 后缀
 }
 
 export interface HandoverAssetItem {
