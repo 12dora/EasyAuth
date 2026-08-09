@@ -925,7 +925,7 @@ D11 是冻结决策，**下游文档不得单方面豁免**。经复核确认，
 
 | 例外 | 为什么 | 本期怎么办 | 补做条件 |
 |---|---|---|---|
-| **在途的钉钉审批实例，其当前审批人是离职者** | EasyAuth 不存实例的当前审批人（`workflows/models.py` 的 `ApprovalInstance` 只有 `originator_user`），钉钉客户端也只有 `create_process_instance` / `get_process_instance`，**没有转办接口**。能否程序化转办取决于钉钉开放平台是否提供该 API，本仓库无从确认 | 做**可行的那半**：离职时把 `ApprovalRule.approver_userids` 里的离职者替换为新主管，保证**新发起**的审批不再落到他头上。**在途实例需人工到钉钉里转办**，交接单上显式列出这些实例并给出钉钉跳转链接 | 确认钉钉转办 API 可用后，封装该调用并在 `ApprovalInstance` 上跟踪当前审批人 |
+| **在途的钉钉审批实例，其当前审批人是离职者** | `ApprovalInstance` 只有 `app` / `template` / `biz_key` / `originator_user` / `dingtalk_process_instance_id` / `status`（`workflows/models.py:147-183`）——**既不存当前审批人，也与 `ApprovalRule` 没有任何关联字段**；钉钉客户端也只有 `create_process_instance` / `get_process_instance`，**没有转办接口** | 做**可行的那半**：离职时把 `ApprovalRule.approver_userids` 里的离职者替换为新主管，保证**新发起**的审批不再落到他头上。在途实例只做**存在性提示**（「本应用存在未终结的钉钉审批，可能有由他审批的条目，请到钉钉检查并人工转办」）——**不列逐条清单、不给条数**，因为按 APP 粗匹配出来的清单会同时漏报误报，条数是个假数字 | 先给 `ApprovalInstance` 持久化当前审批人（钉钉回调或轮询维护），再确认钉钉转办 API 可用并封装 |
 | **EasyProject `WorkRecordRow.created_by_dingtalk_user_id`** | 字段名是历史式的，实际承担当前归属与鉴权语义。转移它等于同时改写"谁写的"与"谁负责"两个语义 | **不转移**。记入 EasyProject 风险清单 | 先做独立领域改造：新增 `owner_dingtalk_user_id` 列 + 迁移 + 鉴权切换，再作为新 `asset_type` 加入 |
 
 > **EasyAuth 自身的权限申请审批不在例外之列。** `AccessRequestApprover` 是本地表、`approver`
@@ -948,7 +948,7 @@ D11 是冻结决策，**下游文档不得单方面豁免**。经复核确认，
 | 事件 | 时机 | 关键字段 |
 |---|---|---|
 | `handover_task_created` | 建单 | kind, subject, created_by, reason |
-| `handover_task_upgraded` | transfer → offboard 升级 | task, old_kind, generation |
+| `handover_task_upgraded` | **`pre_offboard` → `offboard`** 升级（唯一允许的 kind 变更，§6.1） | task, `old_kind="pre_offboard"`, generation |
 | `handover_assignee_assigned` | assignee 解析/变更 | task, assignee, assignee_state, escalation_level |
 | `handover_assignee_resolution_degraded` | 主管链缺失或 stale，落超管池 | task, reason |
 | `handover_task_escalated` | 到期上交 | task, from_assignee, to_assignee, escalation_level |

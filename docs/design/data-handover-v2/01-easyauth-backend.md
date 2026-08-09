@@ -531,8 +531,12 @@ def escalate_overdue_task(task: HandoverTask) -> HandoverTask:
 `AccessRequestApprover.approver` 外键指向 `UserMirror`（`access_requests/models.py:339`），
 可以直接改派：
 
+**范围严格限定为 `AccessRequest.status == "submitted"`**（既有 `reassign_access_request()`
+只接受这一种状态，`access_requests/approvals.py:177,185`）。`approved` / `grant_failed` 等
+已决状态**不改写** —— 那是已完成的审批历史，改它等于伪造。
+
 ```
-对所有「未终结的 AccessRequest」且其 approver 是 subject 的 AccessRequestApprover 行:
+对所有 status == "submitted" 的 AccessRequest, 其 approver 是 subject 的 AccessRequestApprover 行:
     new_approver = resolve_assignee(该申请的申请人, start_level=0).user   # 沿申请人自己的主管链
     if new_approver is None or new_approver == 申请人:
         → 标记该申请为「需超管处理」并进超管待办, 不静默留在离职者名下
@@ -544,26 +548,80 @@ def escalate_overdue_task(task: HandoverTask) -> HandoverTask:
 
 注意审批人要沿**申请人**的主管链解析，不是离职者的 —— 审批权来自"谁管这个申请人"。
 唯一约束 `(access_request, approver)` 已存在（`:351`），改派后若与既有审批人重复则删除该行而非报错。
+**必须调用既有的 `reassign_access_request()`，不得直接 UPDATE 审批行** —— 直接改会绕过它的
+状态校验与审计写入。
 
 ### 4.5.2 钉钉审批规则的审批人替换（必做）
 
 `ApprovalRule.approver_userids` 是 JSON 列表（`applications/models.py:717`）。
-离职时把其中的离职者 dingtalk userid 替换为新主管的：
 
-- 替换后列表为空 → **快速失败**并进超管待办（`approval_rule_rules.py:49` 要求非空列表）
+> **⚠ 这个列表里存的是 `UserMirror.authentik_user_id`，不是钉钉 userid。**
+> 运行时解析器 `_ApproverResolver.resolve()` 把每一项拿去查
+> `_user_id_by_authentik_user_id`（`portal/request_catalog.py:576-583`）；
+> 只有 `resolve_direct_manager()` 那条独立路径才用 dtuid。
+>
+> 早期版本写「替换其中的离职者 dingtalk userid」，照做的话**根本匹配不到任何一项**：
+> 替换静默不发生，规则里仍挂着离职者，新申请依然解析不到有效审批人 ——
+> 而且不会有任何报错。
+>
+> 正确做法：把列表里等于 `subject.authentik_user_id` 的项替换为新主管的
+> `authentik_user_id`。**钉钉 userid 只在最终调用钉钉接口时使用，绝不写进这一列。**
+
 - 审计 `handover_approval_rule_approver_replaced`
 - 这只影响**新发起**的审批
+- 替换后列表为空 → **保持规则原样不动**，并写一条持久化待办（见下）
+
+> **「快速失败并进超管待办」这两件事不能放在同一个事务里同时做。**
+> 抛异常会让建单与待办一起回滚，什么都不剩；不抛又可能把空列表写进库
+> （`approval_rule_rules.py:49` 要求非空，但那是 `full_clean()` 路径，直接 `save()` 绕得过去）。
+>
+> 裁定：解析不到替代审批人时，**规则不动**，另写一条待办事实：
+>
+> ```python
+> class ApprovalRuleReplacementRequired(models.Model):
+>     approval_rule = FK(ApprovalRule, on_delete=CASCADE)
+>     task          = FK(HandoverTask, on_delete=CASCADE)
+>     departed_user = FK(UserMirror, on_delete=PROTECT)
+>     reason        = CharField(max_length=64)     # no_active_manager | chain_exhausted
+>     resolved_at   = DateTimeField(null=True, blank=True)
+>     resolved_by   = CharField(max_length=128, blank=True)
+>
+>     class Meta:
+>         constraints = [UniqueConstraint(
+>             fields=["approval_rule", "departed_user"],
+>             condition=Q(resolved_at__isnull=True),
+>             name="lifecycle_approval_rule_replacement_open_unique")]
+> ```
+>
+> 控制台按 `resolved_at IS NULL` 查询并提供解决入口
+> （`POST /console/api/v1/lifecycle/approval-rule-replacements/{id}/resolve`，body 带新审批人）。
+> 这样"需要人处理"是**库里的一行**，不是一个抛掉就没了的异常。
 
 ### 4.5.3 在途钉钉审批实例（本期做不了，必须显式呈现）
 
 `ApprovalInstance` 不存当前审批人，`integrations/dingtalk/api_client.py` 也没有转办接口。
 本期的处理是**把问题显式暴露出来**，而不是假装不存在：
 
-- 建单时查出所有 `status` 未终结、且该离职者在其 `ApprovalRule.approver_userids` 里的
-  `ApprovalInstance`，作为交接单上的一个**只读清单区块**展示；
-- 每条给出钉钉审批的跳转链接与「需人工转办」标记；
-- 这些条目**不计入** action 的完成判定（它们不是 APP 资产），但在单据完成时提示
-  「仍有 N 条在途审批需在钉钉中人工转办」。
+> **但"逐条精确清单"这个承诺本身也做不到，不要许下它。**
+> `ApprovalInstance` 只有 `app` / `template` / `biz_key` / `originator_user` /
+> `dingtalk_process_instance_id` / `status`（`workflows/models.py:147-183`）——
+> **它与 `ApprovalRule` 之间没有任何关联字段**，也不存当前审批人。
+> 按 APP 粗匹配出来的清单会同时漏报和误报，给出的条数 N 是个**假数字**。
+> 报一个假的精确数，比报"不确定"更糟。
+
+因此本期只做**存在性提示**：
+
+- 建单时判定：该离职者出现在本 APP 任一 active `ApprovalRule.approver_userids` 里，
+  且该 APP 存在 `status` 未终结的 `ApprovalInstance` → 在交接单上显示警示区块：
+  「本应用存在未终结的钉钉审批，其中可能有由 {离职者} 审批的条目，请到钉钉中检查并人工转办。」
+  附该 APP 的钉钉审批入口链接；
+- **不列逐条实例，不给条数**；
+- 这些条目**不计入** action 的完成判定（它们不是 APP 资产）；
+- 单据完成时保留该提示。
+
+**解除这个降级的前置条件**（写进缺口清单）：先给 `ApprovalInstance` 持久化
+`current_approver_userids`（由钉钉回调或轮询维护），或确认钉钉开放平台提供可查询当前审批人的接口。
+在那之前，任何"精确清单 + 条数"的实现都是编造。
 
 ## 5. 交接执行改造（`lifecycle/handover.py`）
 
