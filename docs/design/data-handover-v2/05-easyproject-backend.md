@@ -116,7 +116,7 @@ async def resolve_dtuid(uow, *, authentik_sub: str) -> str:
 
 | 原资产类型 | 为什么错 | 正确处理 |
 |---|---|---|
-| `approval_pending`（我发起的待审批） | 两处都错：一、活跃状态是 `CREATED` / `SUBMITTED`（`infra/repositories/approvals.py:187`），不是 "pending"。二、`requester_dingtalk_user_id` 是**发起人**（历史事实），不是当前审批人；改它**根本不会**改变谁该审批 —— 审批责任在 EasyAuth/钉钉的审批实例上 | **本次不做**。"待审批单据的审批人是离职者"确实属活的责任（契约 §11 判例），但它要求扩展 **EasyAuth 的审批契约**（转移审批实例的当前处理人），超出本次范围。作为已知缺口记入 `docs/design/09-分期计划与风险清单.md` |
+| `approval_pending`（我发起的待审批） | 两处都错：一、活跃状态是 `CREATED` / `SUBMITTED`（`infra/repositories/approvals.py:187`），不是 "pending"。二、`requester_dingtalk_user_id` 是**发起人**（历史事实），不是当前审批人；改它**根本不会**改变谁该审批 —— 审批责任在 EasyAuth/钉钉一侧 | **EasyProject 侧不做**。审批责任的改派已由 **EasyAuth 承担**（契约 §11.1、`01` §4.5）：EasyAuth 自身的权限申请审批人必改；钉钉审批规则的审批人必替换；在途钉钉实例作为只读清单显式呈现待人工转办。EasyProject 无需为此新增任何 asset_type |
 | `reminder_occurrence`（待发提醒） | recipient 不是一个可以脱离任务角色单独搬的字段：它由 `payload_snapshot.recipientRole` 在入队时**重新解析**并与任务当前角色比对（`infra/jobs/reminder_enqueue.py:269-310`）。把它当独立资产、脱离任务改派单独转移，只会制造角色与收件人不一致 | **不做独立资产**，改为任务/模板改派的**连带副作用**（见 §4.3.1）。**这一步不是可选的**，见下方警告 |
 
 

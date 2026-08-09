@@ -338,6 +338,49 @@ def escalate_overdue_task(task: HandoverTask) -> HandoverTask:
 > （复用 §6.3 的 `handover-blocked-apps` 同款机制）。
 > 建立权威超管收件人镜像列为独立后续项。
 
+## 4.5 审批责任改派（契约 §11.1，`lifecycle/approvals.py` 新建）
+
+离职建单同事务内执行，**与业务数据交接无关，不走 webhook**。
+
+### 4.5.1 EasyAuth 自身的权限申请（必做）
+
+`AccessRequestApprover.approver` 外键指向 `UserMirror`（`access_requests/models.py:339`），
+可以直接改派：
+
+```
+对所有「未终结的 AccessRequest」且其 approver 是 subject 的 AccessRequestApprover 行:
+    new_approver = resolve_assignee(该申请的申请人, start_level=0).user   # 沿申请人自己的主管链
+    if new_approver is None or new_approver == 申请人:
+        → 标记该申请为「需超管处理」并进超管待办, 不静默留在离职者名下
+    else:
+        approver = new_approver
+        审计 handover_approver_reassigned
+        通知申请人与新审批人
+```
+
+注意审批人要沿**申请人**的主管链解析，不是离职者的 —— 审批权来自"谁管这个申请人"。
+唯一约束 `(access_request, approver)` 已存在（`:351`），改派后若与既有审批人重复则删除该行而非报错。
+
+### 4.5.2 钉钉审批规则的审批人替换（必做）
+
+`ApprovalRule.approver_userids` 是 JSON 列表（`applications/models.py:717`）。
+离职时把其中的离职者 dingtalk userid 替换为新主管的：
+
+- 替换后列表为空 → **快速失败**并进超管待办（`approval_rule_rules.py:49` 要求非空列表）
+- 审计 `handover_approval_rule_approver_replaced`
+- 这只影响**新发起**的审批
+
+### 4.5.3 在途钉钉审批实例（本期做不了，必须显式呈现）
+
+`ApprovalInstance` 不存当前审批人，`integrations/dingtalk/api_client.py` 也没有转办接口。
+本期的处理是**把问题显式暴露出来**，而不是假装不存在：
+
+- 建单时查出所有 `status` 未终结、且该离职者在其 `ApprovalRule.approver_userids` 里的
+  `ApprovalInstance`，作为交接单上的一个**只读清单区块**展示；
+- 每条给出钉钉审批的跳转链接与「需人工转办」标记；
+- 这些条目**不计入** action 的完成判定（它们不是 APP 资产），但在单据完成时提示
+  「仍有 N 条在途审批需在钉钉中人工转办」。
+
 ## 5. 交接执行改造（`lifecycle/handover.py`）
 
 ### 5.1 建 action 时的能力判定（契约 §9.1）

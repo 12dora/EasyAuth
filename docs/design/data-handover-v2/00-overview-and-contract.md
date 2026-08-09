@@ -60,7 +60,7 @@
 | D8 | 支持**二次转交** | 升级为通用数据移交：任意两名在职员工之间也可发起（`kind=reassign`），用于纠错与重分配 |
 | D9 | 在职移交发起权在**主管** | 仅限自己管辖范围内；跨部门走超管；必填理由；执行后通知转出方/接收方/上级三方；全程审计 |
 | D10 | 粒度：**按类型默认全选 + 逐条反选改派** | 一个 APP 内允许多个接收人（接收人下沉到条目级） |
-| D11 | 范围标准：**只转"活的责任"** | 当前负责人、待办、待审批、未完成项全部转；创建人/评论/操作日志等历史事实一律不动 |
+| D11 | 范围标准：**只转"活的责任"** | 当前负责人、待办、待审批、未完成项全部转；创建人/评论/操作日志等历史事实一律不动。**两条显式例外见 §11.1**，不得由下游文档自行豁免 |
 | D12 | 接收人**不需点同意** | 执行后通知即可。卡在接收人手上会让交接再次拖死 |
 | D13 | 交接单完成 = 全部 APP action 处于 `done` 或 `skipped` | 存在任何 `blocked`/`pending`/`failed` 即未完成 |
 
@@ -729,6 +729,20 @@ APP 侧仍应保留自己的行锁作为第二道防线。
 | **历史事实** | 该字段记录"当时是谁做的" | **不动**。包括 `created_by`、评论作者、操作日志 actor、`confirmed_by`、`cancelled_by` 等一切过去式署名 |
 | **个人配置** | 只对本人有意义（仪表盘布局、通知偏好） | **不动**，随账号停用自然失效 |
 
+### 11.1 D11 的两条显式例外（已裁定）
+
+D11 是冻结决策，**下游文档不得单方面豁免**。经复核确认，只有以下两条属于正式例外，
+其余一律照 D11 执行：
+
+| 例外 | 为什么 | 本期怎么办 | 补做条件 |
+|---|---|---|---|
+| **在途的钉钉审批实例，其当前审批人是离职者** | EasyAuth 不存实例的当前审批人（`workflows/models.py` 的 `ApprovalInstance` 只有 `originator_user`），钉钉客户端也只有 `create_process_instance` / `get_process_instance`，**没有转办接口**。能否程序化转办取决于钉钉开放平台是否提供该 API，本仓库无从确认 | 做**可行的那半**：离职时把 `ApprovalRule.approver_userids` 里的离职者替换为新主管，保证**新发起**的审批不再落到他头上。**在途实例需人工到钉钉里转办**，交接单上显式列出这些实例并给出钉钉跳转链接 | 确认钉钉转办 API 可用后，封装该调用并在 `ApprovalInstance` 上跟踪当前审批人 |
+| **EasyProject `WorkRecordRow.created_by_dingtalk_user_id`** | 字段名是历史式的，实际承担当前归属与鉴权语义。转移它等于同时改写"谁写的"与"谁负责"两个语义 | **不转移**。记入 EasyProject 风险清单 | 先做独立领域改造：新增 `owner_dingtalk_user_id` 列 + 迁移 + 鉴权切换，再作为新 `asset_type` 加入 |
+
+> **EasyAuth 自身的权限申请审批不在例外之列。** `AccessRequestApprover` 是本地表、`approver`
+> 直接外键到 `UserMirror`，离职时**必须**把待审批申请的审批人改派给新主管（见 `01` §4.5）。
+> 这是最常见的卡死场景：员工申请权限，单子挂在已离职的主管头上。
+
 边界判例（已裁定，各 APP 直接照用）：
 
 - 订阅/关注关系 → **归入个人配置，不转移**。接收人若需要，自行关注。
@@ -756,6 +770,8 @@ APP 侧仍应保留自己的行锁作为第二道防线。
 | `handover_action_skipped` | 超管强行跳过 | task, app_key, actor, reason |
 | `handover_task_completed` | 全部 action 终结 | task |
 | `handover_reassign_created` | 在职移交建单 | subject, initiator, reason |
+| `handover_approver_reassigned` | 待审批申请的审批人改派 | task, access_request, from_approver, to_approver |
+| `handover_approval_rule_approver_replaced` | 审批规则里的离职者被替换 | task, approval_rule, from_userid, to_userid |
 
 ---
 

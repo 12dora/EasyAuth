@@ -5,14 +5,14 @@
 
 ---
 
-## 0. 当前状态：**一处已定案，两处待定**
+## 0. 当前状态：**三处结构性问题全部定案**
 
 第二轮复核（6 路并行，覆盖代管 scope / 并发幂等 / EasyAuth 后端 / EasyTrade / EasyProject / 跨文档一致性）
 共产出约 70 条发现。机械性矛盾已修（见 §2）。三处结构性问题中：
 
-- §1.1 代管授权 —— ✅ **已定案：整体砍掉**，范围随之大幅收窄
-- §1.2 D11 被下游静默豁免 —— ⏳ 待定
-- §1.3 EasyProject 实施可行性 —— ⏳ 待定（需 AG-00 裁定所有权与 system-actor 语义）
+- §1.1 代管授权 —— ✅ **定案：整体砍掉**，范围随之大幅收窄
+- §1.2 D11 被下游静默豁免 —— ✅ **定案：审批责任纳入本期，`WorkRecord` 写成显式例外**
+- §1.3 EasyProject 实施可行性 —— ✅ **定案：完整做，A5 阻塞等 AG-00 裁定所有权与 system-actor 语义**
 
 §3.2–§3.6 中与代管无关的发现（并发/执行、EasyAuth 后端、EasyTrade 谓词与副作用、
 EasyProject 命令层）**仍未落文档**，是下一轮修改的对象。
@@ -44,16 +44,27 @@ EasyProject `domain/authz/types.py`），且 EasyProject 的 `MANAGED_USERS` 谓
 代价是主管只能靠 `items.hint` 判断归属，因此 `hint` 从"可选摘要"升级为**硬要求**，
 各 APP 文档已列出逐类必含要素与验收断言。
 
-### 1.2 D11「只转活的责任」被下游文档静默豁免 🔴
+### 1.2 ~~D11 被下游文档静默豁免~~ —— ✅ **已定案**
 
 `00` §3 D11 与 §11 判例明确规定「待审批单据中当前审批人是离职者 → **必须转移**」，
 但 `05` §3.1.1 与 README「已知缺口」把它列为本期不做；
 `WorkRecordRow.created_by_` 明知承担当前归属语义，也只保证代管期可见——代管一结束又是黑洞。
 
-**下游文档不能单方面豁免冻结决策。** 要么纳入本期（需扩展 EasyAuth 审批契约 + EasyProject 新增
-owner 列与迁移），要么**显式修订 D11** 并写明例外与补做条件。
+**处置（已定案）**：审批责任**纳入本期**，`WorkRecordRow.created_by_` 写成 D11 的显式例外。
+已在契约新增 §11.1「D11 的两条显式例外」，并在 `01` 新增 §4.5「审批责任改派」。
 
-### 1.3 EasyProject 的实施可行性存疑 🟠
+但复核后查清：**"审批人"其实是两件被混在一起的事，可行性天差地别**（这一点原复核也没分开）：
+
+| | 事实 | 本期 |
+|---|---|---|
+| EasyAuth 自身的权限申请审批 | `AccessRequestApprover.approver` 是本地表、直接外键 `UserMirror`（`access_requests/models.py:339`） | **必做**，沿**申请人**（不是离职者）的主管链改派 |
+| 钉钉审批**规则**的审批人配置 | `ApprovalRule.approver_userids` 是本地 JSON 列表（`applications/models.py:717`） | **必做**，替换离职者；替换后为空则快速失败进超管待办 |
+| 钉钉**在途实例**的当前审批人 | `ApprovalInstance` **不存**当前审批人（只有 `originator_user`）；钉钉客户端只有 `create_process_instance`/`get_process_instance`，**无转办接口** | **做不了**。本期作为交接单上的只读清单显式呈现 + 钉钉跳转链接 + 「需人工转办」标记，并在单据完成时提示条数 |
+
+第三行是本期真正的缺口，补做条件：确认钉钉开放平台提供转办 API 后，封装该调用并在
+`ApprovalInstance` 上跟踪当前审批人。
+
+### 1.3 ~~EasyProject 实施可行性存疑~~ —— ✅ **已定案：完整做，但先阻塞**
 
 `05` §4.1.1 要求各领域提供 `system_handover` 命令。复核核实：现有命令**无法直接复用** ——
 task reassign 要 actor / 角色 / scope / `state_version` / 幂等键 / reason 且拒绝审批锁且只能改 assignee；
@@ -63,7 +74,15 @@ recurrence patch 不支持 assignee/assigner。**而 webhook 没有合法的人�
 同时所有权跨 M03/M05/M06/M07/M08/M10/M13/M14/M18/M19/M40 十余个模块，
 `contracts/ownership.md` 甚至没登记 work-record 表。
 
-**需 AG-00 先做所有权与 system-actor 语义裁定**，否则 A5 无法启动。
+**处置（已定案）**：EasyProject **完整做**（preview + items + execute 全量），
+但 **A5 阻塞，等 AG-00 完成两项裁定后才开工**：
+
+1. **所有权裁定**：交接触及 M03/M05/M06/M07/M08/M10/M13/M14/M18/M19/M40，
+   `contracts/ownership.md` 需补登记（含尚未登记的 work-record 表），明确 M06 只编排、各领域 owner 出命令。
+2. **system-actor 语义裁定**：webhook 触发没有人类 actor，而现有命令都要求 actor / `state_version` /
+   幂等键 / reason 且会被审批锁拒绝。需要定义一个系统 actor 身份及其在审计、锁、版本读取上的语义。
+
+在裁定完成前，A5 可以做的只有：§2.1 身份映射（P2）、§2.3 `hint`、以及各领域内部的只读查询实现。
 
 ---
 
