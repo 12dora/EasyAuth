@@ -3,6 +3,10 @@
 本目录是本次「离职/转岗/在职数据交接」改造的**全部**设计文档，覆盖 EasyAuth、EasyTrade、
 EasyProject 三个仓库。文档统一放在这里，各仓库不再分散存放。
 
+> ⚠ **当前状态：不可进入实施。** 两轮对抗式复核共产出约 70 条发现，机械性矛盾已修，
+> 但代管授权模型、D11 的下游豁免、EasyProject 实施可行性三处结构性问题尚未定案。
+> **开工前必读 [`07-review-log.md`](07-review-log.md)。**
+
 ## 阅读顺序
 
 | # | 文档 | 负责 agent | 仓库 |
@@ -14,6 +18,7 @@ EasyProject 三个仓库。文档统一放在这里，各仓库不再分散存�
 | 04 | [EasyTrade 前端改造设计](04-easytrade-frontend.md) | A4 | EasyTrade |
 | 05 | [EasyProject 后端接入设计](05-easyproject-backend.md) | A5 | EasyProject |
 | 06 | [EasyProject 前端改造设计](06-easyproject-frontend.md) | A6 | EasyProject |
+| 07 | [复核记录与未决事项](07-review-log.md) | **全体必读** | — |
 
 **`00` 是唯一基准。** 里面的字段名、事件名、状态值、HTTP 状态码语义对所有仓库冻结；
 任何一方需要变更，先改 `00`，再同步全部下游文档，不得在自己仓库内单方面调整。
