@@ -79,7 +79,7 @@
 | 角色 | 判定方式 | 可做 |
 |---|---|---|
 | 当事人（subject） | 登录用户本人 | 在职期间对自己发起 **`pre_offboard`** 单（提前交接，D7）；查看自己作为 subject 的单据进度。**`transfer` 是转岗，不是提前交接的入口** —— 它会重算授权（§6.1），员工自助发起它会误改自己仍在使用的权限 |
-| 负责人（assignee） | 单上的 `assignee` 字段 | 指定/改派接收人、preview、execute、查看明细、申请延期 |
+| 负责人（assignee） | 单上的 `assignee` 字段 | 指定/改派接收人、preview、execute、查看明细。**没有「申请延期」这个功能** —— 系统不保存延期申请的中间态；确需顺延时线下联系超管，由超管按 §7.4 填理由顺延 |
 | 主管（manager） | `DingTalkUserOrgContext.manager_chain` 上的 active 用户 | 对**自己管辖范围内**的在职员工发起 `reassign` 单 |
 | 超管（superuser） | `require_superuser`（Authentik 组交集，每请求判定） | 全部权限；强行 `skip` 未接入 APP；认领超管池中的单 |
 
@@ -771,7 +771,14 @@ transferred + released + skipped + merged + failed == 该类型在本轮 assignm
 
 2. `items` 与 `execute` **请求**回带同一个 `snapshot_token`。
 3. APP 在 `execute` 时必须**在同一写事务内、锁定受影响集合之后**重算摘要并与请求携带的 token 比较，
-   **完全一致才允许任何改写**。不一致则返回 **HTTP 409**，且**零写入**；
+   **完全一致才允许任何改写**。不一致则返回 **HTTP 412 Precondition Failed**，且**零写入**；
+
+   > **为什么专门用 412 而不是 409。** EasyAuth 侧的规矩是「只看状态码，不解析响应体」（§10.6）。
+   > 快照失效要**退回 `pending` 让人重新预演**，而身份识别失败 / 投递冲突 / 迟到 generation 要
+   > **判 `failed`** —— 两种处置完全相反。都用 409 的话，EasyAuth 只能靠解析响应体来区分，
+   > 而那正是被禁止的。412 的语义（前置条件不满足）也恰好就是这件事。
+   >
+   > `items` 事件的 token 校验失败同样返回 412。
    EasyAuth 把 action 打回 `previewed` 之前并提示"清单已变化，请重新预演"。
    preview 的 `count`、items 的基础集合、execute 的摘要必须来自**同一份一致性快照定义**（同一个选择器）。
 4. 逐条校验同样是硬要求：每个被改写的条目必须**当前仍属于 `from_user_id`** 且**仍属于该 `asset_type`**；
@@ -899,7 +906,8 @@ APP 侧仍应保留自己的行锁作为第二道防线。
 | 202 | 异步受理 | `async_pending` | — | 轮询中 |
 | 400 | 请求不合法（如时间戳超窗） | `failed` | 是 | 请求被应用拒绝 |
 | 401 / 403 | 验签失败 | `failed` | 否 | 签名校验失败，请检查该应用的 webhook 密钥 |
-| 409 | 人员无法识别 / 快照已失效 / 投递冲突 / 迟到的旧 generation | 见右 | 否 | 快照失效 → action 退回 `pending` 并提示「清单已变化，请重新预演」；其余 → `failed` |
+| **412** | **快照已失效**（`snapshot_token` 与当前数据不一致） | 退回 `pending` | 否 | 「清单已变化，请重新预演」 |
+| 409 | 人员无法识别 / 投递冲突 / 迟到的旧 generation / 业务归属冲突 | `failed` | 否 | 按原样展示下游错误 |
 | 413 | 请求体过大 | `failed` | 否 | 单独指定的条目过多，请分批执行 |
 | 422 | 载荷不被支持（未声明的资产类型、不支持的事件） | `failed` | 否 | 应用声明与实现不一致 |
 | 5xx | 应用内部错误 | `failed` | 是 | 可重试 |
@@ -1022,4 +1030,23 @@ D11 是冻结决策，**下游文档不得单方面豁免**。经复核确认，
    整单不能完成；超管填理由跳过后整单完成。
 7. 把 `escalation_deadline` 人为改到过去 → 跑一次上交任务 → 单子上交到上一级主管、`escalation_level` +1、双方均收到通知。
 8. 用另一个在职员工发起 `kind=reassign`，把步骤 5 中接收人的部分客户再转给第三人 → 成功，且三方均收到通知。
-9. 全流程审计事件齐全（§12 全部出现），无一条静默成功、无一条 mock 数据。
+9. 全流程审计事件齐全，无一条静默成功、无一条 mock 数据。
+
+### 15.1 这九条不是一份可直接执行的测试脚本
+
+上面是**验收目标**，不是步骤。真正跑之前必须先拆成两类，否则会出现"跑了但判不出通过"：
+
+| | 内容 | 判定 |
+|---|---|---|
+| **自动化** | 步骤 1–2、4–8 的服务端部分：fixture 用 ORM 直接造（subject / manager / 两个接收人 / App / task / action），下游用一个**签名确定的假服务**顶替 | 断言数据库状态 + HTTP 状态码，有明确 PASS/FAIL |
+| **人工** | 步骤 2 的钉钉侧标记离职、步骤 6 的 descriptor 手改、以及一切需要真钉钉的操作 | 未执行记 **`NOT_RUN`**，**不得记 PASS** |
+
+三处必须写清楚的前提，否则按字面跑必然失败：
+
+- **步骤 6**：跳过一个 `blocked` APP 之后整单要能 `completed`，前提是**其余全部 action 已是
+  `done`/`skipped`**（D13）。只跳过 blocked 那一个而别的还 `pending`，单子当然不会完成 —— 这不是 bug。
+- **步骤 9**：§12 的事件里，`handover_task_upgraded` / `handover_assignee_resolution_degraded` /
+  `handover_task_deferred` / `handover_action_failed` / `handover_action_unblocked` /
+  `handover_capability_conflict` **不会**在步骤 1–8 的主流程里出现，各自需要独立的触发场景。
+  逐事件配一个最小用例（见 `01` §6.4 的落点表）。
+- **等待时长**：所有异步等待都要有上限（建议 60 秒），超时记 FAIL，不允许无限等。

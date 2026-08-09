@@ -319,6 +319,37 @@ router 也已在 `api/v1/router.py:49-56` 挂载。工作是把 v1 占位实现*
 本应用 `released` 恒为 0（全部 `releasable=false`）、`failed` 恒为 0（整事务成败一致）；
 `merged` 是复合主键合并的正常结果，**必须如实上报**，不得并进 `transferred` 掩盖。
 
+### 4.3.3 `snapshot_token` 的生成与校验（契约 §10.5.1，**原设计整段缺失**）
+
+`preview` 必须返回它，`items` 与 `execute` 必须回带并校验它。三处**共用同一个生成函数**：
+
+```python
+async def build_snapshot_token(session, *, from_dtuid: str) -> str:
+    # 遍历 §3.1 的 9 类, 用 §3.1.2 的同一批共享选择器取
+    # (type_key, asset_id, 当前归属 dtuid, 影响谓词的状态列)
+    # 按 (type_key, asset_id) 排序拼串 -> SHA-256 -> 前 32 hex (≤128 字节)
+    ...
+```
+
+> **不能用"最大 updated_at"或"版本号"糊弄。** 本应用 9 类里有 5 类是复合主键关联表
+> （`project_members` / `task_collaborators` / `recurring_template_collaborators` /
+> `work_record_participants`，以及 OWNER 那一行），**这些表没有 `updated_at`、没有版本列**，
+> 改法是 delete + insert。preview 之后新增一条协作关系，时间戳型 token **纹丝不动** ——
+> execute 于是通过校验，把一条从没人看过的关系按 `default_action` 一起处理掉，
+> 然后返回的条数比 preview 多，EasyAuth 的守恒校验才发现不对。那时**数据已经改完了**。
+
+校验时机与失败码：
+
+- `execute`：在业务事务内、按 `08` §2.2 的锁序**锁定受影响集合之后**重算，
+  不一致 → **HTTP 412**（不是 409），且**零写入**；
+- `items`：不一致同样 **412**；
+- **逐条校验是独立的第二层**：每个被改写的 asset_id 必须当前仍属于 `from_user_id`
+  且仍满足该类型谓词，任一不满足 → 整体 `409 HANDOVER_CONFLICT`。
+  **不允许**跳过该条继续处理其余条目。
+
+> 412 与 409 的分工是契约 §10.6 定死的：412 让 EasyAuth 把 action **退回 `pending` 重新预演**，
+> 409 判 `failed`。混用会让"清单变了"被永久标成失败。
+
 ### 4.4 幂等
 
 契约 §10.5.2 的幂等键是**三元组** `(task_id, generation, batch_id)`。复用既有的
@@ -507,6 +538,7 @@ EasyProject 只记 `trigger_system=EasyAuth` 与 `handover_task_id`，
 | `IDENTITY_UNMAPPED` | 409 | §2.1 解析不到 dtuid | **补** |
 | `ASSET_TYPE_UNDECLARED` | 422 | 请求里的 `asset_type` 不在注册表中 | **补** |
 | `REQUEST_BODY_TOO_LARGE` | 413 | 超 256 KiB | **补** |
+| `SNAPSHOT_STALE` | **412** | `snapshot_token` 与当前数据不一致（§4.3.3） | **补** |
 
 > **为什么 `EVENT_MODE_MISMATCH` 要独立成码、不并进 `VALIDATION_ERROR`**：
 > 这条校验是契约 §10.1 针对「签名不覆盖 `X-EasyAuth-Event` 头」这一已知弱点的**安全补偿**。

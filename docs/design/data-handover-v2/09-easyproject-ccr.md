@@ -94,7 +94,7 @@ x-error-codes = [WEBHOOK_SIGNATURE_INVALID, HANDOVER_CONFLICT, VALIDATION_ERROR]
 | 错误码 | HTTP | 说明 | 状态 |
 |---|---:|---|---|
 | `WEBHOOK_SIGNATURE_INVALID` | 401 | HMAC 验签失败 | 保留 |
-| `HANDOVER_CONFLICT` | 409 | snapshot 失效、审批锁、当前归属已变、迟到的旧 generation 等业务冲突 | 保留 |
+| `HANDOVER_CONFLICT` | 409 | 审批锁、当前归属已变、迟到的旧 generation 等业务冲突 | 保留 |
 | `VALIDATION_ERROR` | 422 | JSON / 字段形状不合法 | 保留 |
 | `WEBHOOK_TIMESTAMP_INVALID` | 400 | timestamp 非法或超 300 秒窗口 | **新增** |
 | `WEBHOOK_PAYLOAD_CONFLICT` | 409 | 同 `(task_id, generation, batch_id)` 不同 canonical payload hash | **新增** |
@@ -103,6 +103,11 @@ x-error-codes = [WEBHOOK_SIGNATURE_INVALID, HANDOVER_CONFLICT, VALIDATION_ERROR]
 | `IDENTITY_UNMAPPED` | 409 | Authentik `sub` 无法映射为本地 dtuid | **新增** |
 | `ASSET_TYPE_UNDECLARED` | 422 | 请求里的资产类型未在 descriptor 声明 | **新增** |
 | `REQUEST_BODY_TOO_LARGE` | 413 | 请求体超过 256 KiB | **新增** |
+| `SNAPSHOT_STALE` | **412** | `snapshot_token` 与当前数据不一致（契约 §10.5.1） | **新增** |
+
+> **`SNAPSHOT_STALE` 必须与 `HANDOVER_CONFLICT` 分开成两个状态码。**
+> EasyAuth 只看状态码不解析响应体（契约 §10.6）：412 让它把 action **退回 `pending` 重新预演**，
+> 409 判 `failed`。合在 409 里，"清单变了"会被永久标成失败，用户无路可走。
 
 > `EVENT_MODE_MISMATCH` 的名字沿用「mode」是历史原因，判定依据已升级为 body 里的
 > `event_type` 字段（契约 §10.1）。**不改名**：错误码一旦进基线就是冻结资产，

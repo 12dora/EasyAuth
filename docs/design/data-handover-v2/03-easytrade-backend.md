@@ -82,7 +82,7 @@ v2 用 descriptor 的 `releasable` 字段把它显式化（契约 §9.1），由
 | `requirement_open` | 状态不在 `{COMPLETED, REJECTED, MERGED}`（`ON_HOLD` **仍算活跃**） |
 | `sample_request_open` | 状态不在 `{CLOSED_WON, CLOSED_LOST, CANCELLED}` 且 `cancelled_at IS NULL` |
 
-> `releasable=false` 的四类，一旦 EasyAuth 侧对其指定 `default_to_user_id=null`，
+> `releasable=false` 的**六类**（`inquiry_open` / `order_in_transit` / `receivable_open` / `task_open` / `requirement_open` / `sample_request_open`），一旦 EasyAuth 侧对其指定 `default_to_user_id=null`，
 > EasyAuth 会在发请求前直接返回 `422 asset_type_not_releasable`（契约 §9.1）。
 > EasyTrade 收到这种组合仍要防御性返回 `422`，**不得**再走静默保持原状的老路（修 B2）。
 
@@ -238,9 +238,10 @@ def snapshot_token(db, *, task_id: str, generation: int, from_user_id: uuid.UUID
     # 按 (type_key, id) 排序后拼串, SHA-256, 取前 32 hex → ≤128 字节 (契约 §10.5.1)
 ```
 
-- `execute` 在**任何写入之前**重算一次；与请求携带的 token 不一致 → 整体 `409`，
+- `execute` 在**任何写入之前**重算一次；与请求携带的 token 不一致 → 整体 **`412`**（不是 409），
   EasyAuth 侧按契约 §10.6 把 action 退回 `pending` 并提示「清单已变化，请重新预演」。
-- `items` 也校验：不一致时同样 409，让前端立刻重新 preview，而不是翻着一份已经过期的清单做决定。
+  **412 与 409 必须分开**：409 会被判 `failed`，只有 412 才退回重预演。
+- `items` 也校验：不一致时同样 **412**，让前端立刻重新 preview，而不是翻着一份已经过期的清单做决定。
 - **逐条校验是独立的第二层**：每个被改写的 id 必须当前仍属于 `from_user_id` 且仍满足该类型谓词，
   任一不满足 → 整体 409。**不允许**跳过该条继续处理其余条目。
 - 分批时每批都要重新 preview 换新 token（契约 §10.5.2），同一 token 只能用于一批。
@@ -303,7 +304,7 @@ def execute_handover(
      非空列（订单、询盘、任务、需求、样品）则要到 flush 时才炸
    - **override 的 id 必须先验证**：存在、仍属于 `from_user_id`、仍满足该类型谓词。
      任一不满足 → 整体 `409`。**不得**把无效 id 默默排除出默认集（那等于静默跳过）
-   - `snapshot_token` 与当前数据状态不一致 → 整体 `409`
+   - `snapshot_token` 与当前数据状态不一致 → 整体 **`412`**（见 §3.5.1）
 3. 先处理 `overrides`（精确 id 集合），再按 `default_action` 处理剩余条目：
    ```
    overridden_ids = {o.id for o in overrides}
