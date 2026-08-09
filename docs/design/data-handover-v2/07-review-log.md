@@ -7,7 +7,7 @@
 
 ## 0. 当前状态
 
-### 第三轮（2026-08-10，7 路并行）—— A5 阻塞已解除
+### 第三轮（2026-08-10，7 路并行）—— A5 的解阻材料已备齐（门禁待批）
 
 本轮做了两件事：**起草解阻材料**，以及**七片对抗式复核**。
 
@@ -49,7 +49,7 @@ A5 的开工前置从"等两份不存在的裁定"变成"等三样可机械核�
 
 - §1.1 代管授权 —— ✅ **定案：整体砍掉**，范围随之大幅收窄
 - §1.2 D11 被下游静默豁免 —— ✅ **定案：审批责任纳入本期，`WorkRecord` 写成显式例外**
-- §1.3 EasyProject 实施可行性 —— ✅ **定案：完整做，A5 阻塞等 AG-00 裁定所有权与 system-actor 语义**
+- §1.3 EasyProject 实施可行性 —— ✅ **定案：完整做**。两份裁定与 CCR 已起草（`08`/`09`），**但门禁尚未通过**（CCR 仍是 `PROPOSED`，裁定正文也还没合进 `EasyProject/contracts/ownership.md`），A5 目前只能做 README「现在就能做」的三项
 
 §3.2–§3.6 中与代管无关的发现**已全部落入各自文档**（见各节标题的状态标记）。
 
@@ -58,7 +58,7 @@ A5 的开工前置从"等两份不存在的裁定"变成"等三样可机械核�
 | 项 | 为什么暂不处理 |
 |---|---|
 | 建立权威超管收件人镜像 | 「通知全体超管」当前实现不了（超管资格只在请求期远程判定）。本期改为控制台常驻告警条，镜像列为独立后续项 |
-| 钉钉在途审批实例转办 | 客户端无转办接口，需先确认钉钉开放平台能力。见 `00` §11.1 |
+| 钉钉在途审批实例转办（以及逐条清单） | 客户端无转办接口；`ApprovalInstance` 也不存当前审批人、与 `ApprovalRule` 无关联，因此**清单本身也做不到**。补做条件：先持久化当前审批人，再确认钉钉转办 API。见 `00` §11.1 |
 | `EasyProject WorkRecordRow` 归属列 | D11 的显式例外，需独立领域改造 |
 | HMAC 覆盖 event/delivery 头 | 改签名串要同步全部下游与已冻结的向量，成本高。本期补偿升级为**在 body 里加签名覆盖的 `event_type` 字段**（四事件无例外，SDK 在 `webhook.test` 短路前比对）——原先的「校验 event 与 body `mode` 一致」有两个洞：`items` 没有 `mode`，`webhook.test` 根本不看 body |
 | EasyProject 消费快照（原 P1） | 代管砍掉后失去本期依据，降级为已知偏差另行立项 |
@@ -105,7 +105,7 @@ EasyProject `domain/authz/types.py`），且 EasyProject 的 `MANAGED_USERS` 谓
 |---|---|---|
 | EasyAuth 自身的权限申请审批 | `AccessRequestApprover.approver` 是本地表、直接外键 `UserMirror`（`access_requests/models.py:339`） | **必做**，沿**申请人**（不是离职者）的主管链改派 |
 | 钉钉审批**规则**的审批人配置 | `ApprovalRule.approver_userids` 是本地 JSON 列表（`applications/models.py:717`） | **必做**，替换离职者；替换后为空则快速失败进超管待办 |
-| 钉钉**在途实例**的当前审批人 | `ApprovalInstance` **不存**当前审批人（只有 `originator_user`）；钉钉客户端只有 `create_process_instance`/`get_process_instance`，**无转办接口** | **做不了**。本期作为交接单上的只读清单显式呈现 + 钉钉跳转链接 + 「需人工转办」标记，并在单据完成时提示条数 |
+| 钉钉**在途实例**的当前审批人 | `ApprovalInstance` 既**不存**当前审批人（只有 `originator_user`），**也与 `ApprovalRule` 没有任何关联字段**（`workflows/models.py:147-183`）；钉钉客户端只有 `create_process_instance`/`get_process_instance`，**无转办接口** | **连逐条列清单都做不到** —— 按 APP 粗匹配必然同时漏报误报，条数是假数字。本期只做**按 APP 的存在性警示 + 钉钉入口**，不列实例、不报条数 |
 
 第三行是本期真正的缺口，补做条件：确认钉钉开放平台提供转办 API 后，封装该调用并在
 `ApprovalInstance` 上跟踪当前审批人。
