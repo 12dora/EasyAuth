@@ -391,9 +391,19 @@ def execute_handover(
 > `batch_id` 列不存在而直接失败；而只加 `generation` 的话，同一 generation 的第二批
 > 仍然会被旧键吞掉（这正是 §3.6 幂等段要防的那个坑）。
 >
-> 另需持久化每个 `task_id` 的**已见最大 `generation`**（可用同表 `MAX(generation)` 查，
-> 但必须在 task 级串行化之后读，否则并发下两个旧请求会互相"看不见"对方）。
-> 用哪种实现由 A3 定，但**必须在 PR 说明里写明结论**。
+**generation 水位单独建表，不用 `MAX()` 扫描**（与 EasyProject 的裁定一致，`08` §1.4）：
+
+```
+easyauth_handover_generation_watermarks(task_id VARCHAR(64) PRIMARY KEY,
+                                        max_generation INTEGER NOT NULL,
+                                        updated_at TIMESTAMPTZ NOT NULL)
+```
+
+事务内**先锁定或创建**该行 → 小于水位立即 409 → 大于则推进；
+水位推进、回执写入、业务改写**同事务提交**。
+
+> **不允许用未串行化的 `SELECT MAX(generation)`。** `generation=2` 与迟到的 `generation=1`
+> 并发时，两个查询会互相看不见对方，双双通过判定，旧 payload 在升级之后被执行。
 
 **DEFAULT 只为迁移历史行服务，加完必须去掉**：三列在应用层都是必填，
 留着 server default 会让漏传字段变成静默写入默认值。
@@ -444,13 +454,13 @@ execute body 走进 preview 分支，或反过来。
 | 文件 | 覆盖 |
 |---|---|
 | `backend/app/tests/test_easyauth_handover_assets.py` | 8 类资产的 count 口径；`count=0` 也返回；注册表与 descriptor 一致（用同一常量断言） |
-| `backend/app/tests/test_easyauth_handover_items.py` | 分页稳定性（连续翻页不漏不重）；`q` 过滤；`total` 与 preview 一致；`page_size` 钳制 |
+| `backend/app/tests/test_easyauth_handover_items.py` | 分页稳定性（连续翻页不漏不重）；`page_size` 钳制；**`total` 的两种口径**：`q=""` 时等于 preview 的 `count`，`q!=""` 时等于**过滤后**的数量（可选的 `unfiltered_total` 才等于 `count`）。**不要写成"`total` 始终等于 preview count"** —— 那会把正确实现打红，而迎合它的实现会让前端翻出一堆空页 |
 | `backend/app/tests/test_easyauth_handover_execute.py` | override 优先于 default；剩余条目按 `default_action`；三值 action 各自行为；**B1** 非空列永不写 NULL；**B2** `release` 落在 `releasable=false` 上抛 422 而非静默；`default_action="skip"` + 逐条 `transfer` 能对非空列做部分交接；`(task_id, generation, batch_id)` 幂等；不同 generation 真正重执行 |
 | `backend/app/tests/contract/test_handover_v2_golden.py` | 从 `easyauth_app_sdk.contract_samples` 包内资源读取样本逐字段比对；样本缺失必须 fail |
 | `backend/app/tests/test_easyauth_lifecycle.py` | 既有用例按 v2 payload 重写；**§4.1 负向用例**：签名合法但 `X-EasyAuth-Event` 与 body **`event_type`** 不一致（含把事件头改成 `webhook.test`）→ 422 |
-| `backend/app/tests/test_easyauth_handover_snapshot.py` | §3.5.1：preview 返回 token；数据变动后 execute 整体 409 且**零写入**；override 的 id 已不属当事人 → 409；分批时旧 token 不可复用 |
+| `backend/app/tests/test_easyauth_handover_snapshot.py` | §3.5.1：preview 返回 token；数据变动后 execute 整体 **412** 且**零写入**（**不是 409** —— 409 会被 EasyAuth 判 `failed`，只有 412 才退回重预演）；override 的 id 已不属当事人 → **409**；分批时旧 token 不可复用 |
 | `backend/app/tests/test_easyauth_handover_locking.py` | §3.6 第 4 步：assignments 顺序颠倒时加锁次序不变；先冻结主键后订单 owner 改写不会让 NULL-owner 应收从集合消失 |
-| `backend/app/tests/test_easyauth_handover_identity.py` | §3.6 身份边界：payload 里三个位置的 sub 全部解析为本地 id；**overrides 里的接收人不得漏解析**；解析不到/非 active/等于当事人 → 422 |
+| `backend/app/tests/test_easyauth_handover_identity.py` | §3.6 身份边界：payload 里三个位置的 sub 全部解析为本地 id；**overrides 里的接收人不得漏解析**；**解析不到 → 409**（契约 §10.6「人员无法识别」，与 EasyProject 的 `IDENTITY_UNMAPPED` 一致）；**为空 / 非 active / 等于当事人 → 422** |
 
 golden 样本的取用方式：**随 SDK 一起分发**，作为 `easyauth_app_sdk` 的包内数据资源
 （`easyauth_app_sdk.contract_samples`），版本与 SDK 绑定。测试通过 `importlib.resources` 读取。
@@ -462,11 +472,16 @@ golden 样本的取用方式：**随 SDK 一起分发**，作为 `easyauth_app_s
 
 ## 6. 交付顺序
 
+0. **§4 SDK 升级放在第一步**：更新 `backend/vendor/easyauth-app-sdk` 到 vNext，
+   更新 `VENDORED.md`（版本 + 构建 commit SHA + wheel SHA-256），
+   并验证五项能力可用：items 回调、`handover_payloads`、256 KiB、
+   `manifest.py` 放行 `handover_asset_types`、`HandoverBusinessError`。
+   **这一步没做完，后面每一步都只能造本地 shim，之后再返工。**
 1. ~~§3.1 修 B3~~ —— 本期取消（代管废弃）
 2. §3.3 资产注册表 + §3.2 descriptor（两者共用常量，必须同一提交）
-3. §3.4 preview + §3.5 items
+3. §3.4 preview + §3.5 items + §3.5.1 snapshot_token
 4. §3.6 execute 重写 + §3.8 迁移（修 B1/B2）
-5. §4 SDK 升级
+5. §4.1 event_type 一致性校验的验收用例
 6. §5 测试补齐
 
 每完成一项立即单独 commit。改完后端后必须重建容器镜像并重启，host dev server 不算上线。
