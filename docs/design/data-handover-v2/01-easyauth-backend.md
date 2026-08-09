@@ -602,18 +602,28 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | PUT | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}/overrides` | 我是 assignee | body: `{"overrides":[{"asset_id":"...","action":"transfer"\|"release"\|"skip","to_user_id":"..."\|null,"label":"..."}]}`，**整体替换** |
 | POST | `/handover-tasks/{task_id}/actions/{app_key}/preview` | 我是 assignee | |
 | POST | `/handover-tasks/{task_id}/actions/{app_key}/execute` | 我是 assignee | |
-| POST | `/handover-tasks/{task_id}/actions/{app_key}/retry` | 我是 assignee | 仅 `failed` 可重试 |
-| GET | `/handover-candidates` | 登录即可 | 选人控件数据源，query `q`；只返回 active 且非本人；`kind=reassign` 时限定在我的 `MANAGED_USERS` 内 |
+| POST | `/handover-tasks/{task_id}/actions/{app_key}/retry` | 我是 assignee | 仅 `failed` 可重试，否则 `409 action_not_retryable`。**若 `data_completed_at` 非空，重试只重做授权转移那一步**（契约 §10.5.1.1），不重发数据 webhook |
+| GET | `/handover-candidates` | 登录即可 | 选人控件数据源。query：`q`（模糊，可空）、`purpose`（枚举 `receiver` \| `reassign_subject`，**必填**）。两者都只返回 active 且非本人；`purpose=reassign_subject` 时额外限定在我的 `MANAGED_USERS` 内。**不设默认值** —— 缺 `purpose` 返回 `422 purpose_required`，否则前端漏传就会静默拿到范围过宽的人员列表 |
+
+> **`snapshot_token` 不出现在门户 API 里，前端一个字节都不用碰。** 它由 EasyAuth 在
+> preview 响应中取回并存进 `HandoverAppAction.snapshot_token`（§2.2），
+> items / execute 发 webhook 时由后端自动回带（契约 §10.5.1）。
+> 前端只需要知道：execute 返回 `409 snapshot_stale` 时，要引导用户重新 preview。
 
 **错误码**（门户专用，均为 `{"error":{"code","message"}}`）：
 
 | HTTP | code | 触发 |
 |---|---|---|
 | 403 | `out_of_managed_scope` | reassign 的 subject 不在我的管辖范围（契约 §4） |
-| 409 | `open_task_exists` | 自助建单时已有 open 的 offboard/transfer 单 |
+| 409 | `open_task_exists` | 自助建单时已有 open 的 `offboard`/`transfer`/`pre_offboard` 单（与 §2.1 的 `lifecycle_task_one_open_lifecycle_per_subject` 同一集合）。`reassign` 单**不**触发本错误 |
+| 409 | `handover_execution_in_flight` | 该 `(subject, app)` 已有 execute 在途（含 `async_pending`），契约 §10.5.2。**不排队、不自动重试**，前端提示稍后再试 |
+| 409 | `snapshot_stale` | 下游返回 409 判定为快照失效，action 已退回 `pending`，需重新 preview（契约 §10.6） |
+| 409 | `action_not_retryable` | 对非 `failed` 状态的 action 调 `retry` |
 | 422 | `reason_required` | reassign 未填理由或不足 10 字符 |
 | 422 | `receiver_not_active` / `receiver_is_subject` / `receiver_required` / `asset_type_not_releasable` / `duplicate_assignment` | §5.4 |
 | 400 | `detail_not_supported` | 该资产类型不支持明细 |
+| 422 | `purpose_required` | `/handover-candidates` 缺 `purpose` 参数 |
+| 409 | `action_blocked` | 对 `blocked` 状态的 action 调 preview/execute（未接入 APP，D6；只有超管能 skip） |
 
 ### 6.2 交接单详情响应体（前端据此建类型）
 

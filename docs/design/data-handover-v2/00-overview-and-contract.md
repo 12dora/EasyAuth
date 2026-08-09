@@ -357,9 +357,21 @@ resolve_assignee(subject, start_level=0):
 ```
 
 `reassign` 单不受"一人一张 open 单"约束的限制方式：唯一约束改为
-`UniqueConstraint(subject_user, condition=Q(status__in=OPEN) & Q(kind__in=("offboard","transfer")))`，
-即 `reassign` 可与 offboard/transfer 并存，也允许同一 subject 有多张 open 的 reassign 单
+
+```python
+UniqueConstraint(
+    fields=["subject_user"],
+    condition=Q(status__in=OPEN) & Q(kind__in=("offboard", "transfer", "pre_offboard")),
+)
+```
+
+即 `reassign` 可与生命周期单并存，也允许同一 subject 有多张 open 的 reassign 单
 （不同 APP、不同批次的重分配是正常操作）。
+
+> **`pre_offboard` 必须在约束里。** 少了它，同一个人可以建出任意多张 open 的提前交接单，
+> 而 §8.3 的升级逻辑写的是「发现**已有** open 的 `pre_offboard` 单就升级它」——
+> 有两张时根本无从选择，升级路径直接失效。
+> 权威定义见 `01` §2.1 的 `lifecycle_task_one_open_lifecycle_per_subject`。
 
 ---
 
