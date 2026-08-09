@@ -10,7 +10,7 @@
 
 | 模块 | 改动性质 | 说明 |
 |---|---|---|
-| `lifecycle/models.py` | 扩展 + 破坏性重构 | 新增 4 张表（AssetType / AssetOverride / ExecutionAttempt / ExecutionLease），`HandoverTask` 加 6 字段，`HandoverAppAction` 数据接收人下沉到条目级、保留 `grant_receiver` |
+| `lifecycle/models.py` | 扩展 + 破坏性重构 | 新增 4 张表（AssetType / AssetOverride / ExecutionAttempt / ExecutionLease），`HandoverTask` 加 7 字段（assignee / assignee_state / escalation_level / generation / escalation_deadline / last_reminded_on / escalation_deferred_at），`HandoverAppAction` 数据接收人下沉到条目级、保留 `grant_receiver` |
 | `lifecycle/assignee.py` | **新建** | 主管链解析（契约 §8.2） |
 | `lifecycle/escalation.py` | **新建** | 交接单超时上交（契约 §7.4）。~~代管授权~~已废弃 |
 | `lifecycle/handover.py` | 重构 | webhook payload v2、新增 items 事件、blocked 判定 |
@@ -150,10 +150,43 @@ models.CheckConstraint(
 > 就被判为 `in_progress`，从未经历 `pending`。这会让"待处理"筛选器漏掉这类单 —— 而它们恰恰是最需要
 > 被看见的。
 >
-> **修法**：`started` 的判定改为 `any(a.status not in (ACTION_STATUS_PENDING, ACTION_STATUS_BLOCKED) ...)`，
-> 即 `blocked` 与 `pending` 一样不算"有进展"。同时 `skipped`（`capability="none"` 的初始状态）
-> 也应排除在 `started` 之外，否则一张全是 `none` 声明的单同样会跳过 `pending`。
-> 最终判定：`started = any(a.status not in (PENDING, BLOCKED, SKIPPED) for a in actions) or 团队项有进展`。
+> **修法**：`refresh_task_status()` 改写成一个**全量纯函数**，算出 `next_status` 后无条件比较并保存
+> —— 包括 `in_progress → pending` 的**回退**。现有实现只升不降，升级重置或 capability 恢复后
+> 会停在「task 是 `in_progress`、所有 action 都是 `pending`」这种自相矛盾的状态上。
+>
+> ```python
+> def compute_task_status(task, actions, team_items) -> str:
+>     if task.status == TASK_STATUS_CANCELLED:
+>         return TASK_STATUS_CANCELLED              # 终态, 不再重算
+>     finished = all(a.status in ACTION_FINISHED_STATUSES for a in actions)
+>     if finished and all(t.is_finished for t in team_items):
+>         return TASK_STATUS_COMPLETED              # D13; 存在 blocked 时 finished 必为 False
+>     started = (
+>         any(a.status not in (ACTION_STATUS_PENDING,
+>                              ACTION_STATUS_BLOCKED,
+>                              ACTION_STATUS_SKIPPED) for a in actions)
+>         or any(t.is_started for t in team_items)
+>     )
+>     return TASK_STATUS_IN_PROGRESS if started else TASK_STATUS_PENDING
+>
+> def refresh_task_status(task) -> None:
+>     nxt = compute_task_status(task, task.app_actions.all(), task.team_items.all())
+>     if task.status != nxt:                        # 任何方向都保存, 含回退
+>         task.status = nxt
+>         task.save(update_fields=["status", "updated_at"])
+>         if nxt == TASK_STATUS_COMPLETED:
+>             审计 handover_task_completed
+> ```
+>
+> `started` 排除 `pending` / `blocked` / `skipped` 三种**初始态**：
+> `blocked` 是未接入 APP 的初始状态，`skipped` 是 `capability="none"` 的初始状态。
+> 不排除的话，一张全部未接入或全部声明无数据的单会在**建单当场**就被判成 `in_progress`，
+> 从未经历 `pending` —— 而"待处理"筛选器恰恰最需要看见它们。
+>
+> **调用点（缺一个就会状态滞后）**：preview 成功、preview 失败、`default_action` / override 变更、
+> execute 各阶段、retry、skip、capability reconcile、`apply_team_item()` 完成、升级重置。
+> 全部在**业务事务提交后**调用。现有代码在 preview 后**根本没有调用**（`handover.py:542,551`），
+> 首次 preview 完成后单据仍停在 `pending`。
 
 ### 2.3 `HandoverAssetType`（新表）
 
@@ -746,16 +779,69 @@ def preview_action(action) -> HandoverAppAction
   attempt 并写审计，**不发**。outbox 里的旧记录被 worker 延迟取出时会用当前时间重新签名，
   重放窗口拦不住；下游虽然也有「迟到的旧 generation 一律 409」的兜底（契约 §10.5.2），
   但发送方不该指望接收方兜底。
-- 在事务内分配 `batch_seq`、写入一行 `HandoverExecutionAttempt`（`outcome="sent"`，含 canonical
-  payload 与其 sha256）、写 outbox，**提交后**才由 worker 真正发请求（§2.4.1）。
+- 在事务内分配 `batch_seq`、写入 `HandoverExecutionBatch`（`status="pending"`）与首条
+  `HandoverDeliveryAttempt`（`outcome="sent"`，含 canonical payload 与其 sha256）、写 outbox，
+  **提交后**才由 worker 真正发请求（§2.4.1）。
 - 顺序按契约 §10.5.1.1：**先数据 webhook，成功后置 `data_completed_at`，再幂等转授权限**。
   `transfer_selected_grants()` 的调用点必须从当前位置（`handover.py:182`，在 webhook 之前）
   **移到 webhook 成功之后**。这是修既有缺陷，不是新增功能。
-- `transfer_selected_grants(action)` 的调用条件收紧：**仅 `kind == offboard` 时执行**。
-  `pre_offboard` 与 `reassign` 一律不动权限（D7/D9）；`transfer`（转岗）走的是**另一条路** ——
-  既有的 `TransferPlan` 差异确认（`lifecycle/transfer.py`），不经过 `transfer_selected_grants`
-  的接收人转移语义。三者不可混为一谈，实现时用 `GRANT_MUTATING_KINDS` 与显式分支区分。
-- 成功后：`action.status = done` → `refresh_task_status(task)`。
+
+#### 同步 200 与异步 202 必须汇合到同一个收尾函数
+
+```python
+def complete_data_phase(batch: HandoverExecutionBatch) -> None:
+    # 1. 持久化 batch.data_completed_at
+    # 2. 若 is_final 且 kind == offboard: 幂等转授权限
+    # 3. 全部成功后才把 action 置 done
+    ...
+```
+
+- 同步 200 走它；**异步 `poll_async_action()` 拿到最终 200 也必须走它**。
+- **禁止 `async_pending → done` 直接跳转。** 现有 `poll_async_action()`（`handover.py:261`）
+  正是直接置 `done` 的：那条路径既不会落 `data_completed_at`，也**根本不会转授权限** ——
+  离职者的授权原地不动，而单据显示已完成。这是必须改掉的既有缺陷，不是新增功能。
+
+#### 授权转移这一步必须在**一个事务**里完成
+
+「幂等」不等于「原子」。现有实现里 grant 的变更与 `HandoverGrantItem.status` 的落库
+不在同一事务（`lifecycle/transfer.py:207,261,268`）；grant 已提交而 item 状态未落库时崩溃，
+重试会再次把该 item 当 pending 处理，**重复变更 grant 并再次递增 version**。
+
+规定：同一事务内锁 action → 锁该 `(action, generation)` 下的全部 `HandoverGrantItem` →
+锁目标 grant → 变更 grant 与 item 转 `done` **一起提交**。
+没有 pending item 时直接成功返回，**不得再次递增 grant version**。
+
+#### 三种 kind 的授权处理互不相同，不要用一个常量糊过去
+
+| kind | 授权处理 |
+|---|---|
+| `offboard` | 走 `transfer_selected_grants(action)`，把快照授权转给 `grant_receiver` |
+| `transfer`（转岗） | **不走这条路**。走既有的 `TransferPlan` 差异确认（`lifecycle/transfer.py`），按新岗位重算 |
+| `pre_offboard` / `reassign` | **一动不动**（D7 / D9） |
+
+> **`GRANT_MUTATING_KINDS = (OFFBOARD, TRANSFER)` 不能用在 action 执行路径上。**
+> 它表达的是"这两种单会动权限"，而 action 执行路径要问的是"要不要调
+> `transfer_selected_grants`" —— 答案只有 `offboard`。
+> 拿前者当后者用，转岗单会**同时**走接收人转授和 TransferPlan 差异，授权被改两遍。
+>
+> 执行路径用独立常量：`ACTION_GRANT_TRANSFER_KINDS: Final = (HANDOVER_KIND_OFFBOARD,)`。
+
+- 全部成功后：`action.status = done` → `refresh_task_status(task)`。
+
+### 5.5.1 必须**删掉**既有的 `attempts` 禁令（否则单据死锁）
+
+现有 `skip_action` 在 `action.attempts` 非零时拒绝（`handover.py:357,364`），
+`cancel_task` 在任一 action `attempts > 0` 时拒绝（`:442,446`）。
+而 401 / 403 / 413 / 422 按契约 §10.6 是**不可重试的 `failed`**，且此时 `attempts` 必然非零
+—— 这张单于是**既不能跳过也不能取消**，永久死锁。
+
+改法（契约 §6.2 已冻结）：
+
+- **删除**两处的 `attempts` 判断；
+- 改为只禁止对**真正在途**的批次操作：存在 `status ∈ {executing, async_pending}` 的
+  `HandoverExecutionBatch`，或存在未释放的 `HandoverExecutionLease`；
+- `failed` 状态**必须**允许超管填 reason 后转 `skipped`（写 `skip_reason` / `skipped_by` / 审计）；
+- 整单**必须**允许 `cancelled`。
 
 ### 5.6 items（契约 §10.4，新增）
 
@@ -765,8 +851,15 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 
 - 仅当该类型 `detail_supported=True` 才允许调用，否则 `400 detail_not_supported`。
 - **透传不落库**（明细可能上千条，落库无意义且会过期）；前端翻页即实时回源。
-- 校验 `total` 与同 generation 的 `HandoverAssetType.count` 一致；不一致时**不报错**但在响应里带
-  `stale=true`，前端提示"清单已变化，建议重新预演"。
+- **`stale` 只在 `q` 为空串时才判**：`q` 非空时 `total` 是过滤后的数量（契约 §10.4），
+  与 `HandoverAssetType.count` 本来就不该相等。
+  拿过滤后的 `total` 去比全量 `count`，会让一次正常搜索（187 个客户里搜"华东"命中 2 条）
+  被判成 `stale=true`，前端不停要求重新预演，搜索功能直接不可用。
+- 判定式：
+  - `q == ""` 且 `total != count` → `stale=true`；
+  - `q != ""` 且下游返回了可选的 `unfiltered_total` 且它 `!= count` → `stale=true`；
+  - 其余一律 `stale=false`。
+- `stale=true` **不报错**，只在响应里带标记，前端提示"清单已变化，建议重新预演"。
 
 ---
 
@@ -790,7 +883,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 |---|---|---|---|
 | GET | `/me/handover-tasks` | 登录即可 | 返回两组：`as_assignee`（我负责的）、`as_subject`（我是当事人的） |
 | POST | `/handover-tasks/pre-offboard` | 登录即可，且自己无 open 的 offboard/transfer/pre_offboard 单 | 在职提前交接建单（D7），`kind=pre_offboard`，assignee=本人 |
-| POST | `/handover-tasks/reassign` | `subject ∈ 我的 MANAGED_USERS` 且双方 active | 在职移交（D9），必填 `reason`（≥10 字符），否则 `422 reason_required` |
+| POST | `/handover-tasks/reassign` | 我对 `subject` 有管辖权（契约 §4 的主管链判定，**不走 `resolve_managed_users`**）且双方 active | 在职移交（D9）。body：`{"subject_user_id": "<OIDC sub>", "reason": "至少 10 字"}`。缺 `subject_user_id` → `422`；`reason` 不足 10 字 → `422 reason_required` |
 | GET | `/handover-tasks/{task_id}` | 我是 assignee 或 subject | 单据详情，含各 APP action、资产分类、距上交剩余天数 |
 | GET | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}/items` | 同上 | 明细分页，query: `page`、`page_size`、`q` |
 | PATCH | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}` | 我是 assignee | body: `{"default_action": "transfer"\|"release"\|"skip", "default_to_user_id": str\|null}` |
@@ -804,6 +897,28 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 > preview 响应中取回并存进 `HandoverAppAction.snapshot_token`（§2.2），
 > items / execute 发 webhook 时由后端自动回带（契约 §10.5.1）。
 > 前端只需要知道：execute 返回 `409 snapshot_stale` 时，要引导用户重新 preview。
+
+**成功响应（与错误码同等冻结，前端据此建类型）**：
+
+| 端点 | 成功码 | 响应体 |
+|---|---|---|
+| `GET /me/handover-tasks` | 200 | `{"as_assignee": [<列表项>], "as_subject": [<列表项>]}`。列表项 = §6.2 的详情对象去掉 `actions`/`team_items`，另加 `pending_app_count` / `blocked_app_count` / `total_asset_count` |
+| `POST /handover-tasks/pre-offboard` | **201** | 完整的 §6.2 详情对象 |
+| `POST /handover-tasks/reassign` | **201** | 完整的 §6.2 详情对象 |
+| `GET /handover-tasks/{id}` | 200 | §6.2 详情对象 |
+| `GET .../items` | 200 | `{"items": [{"id","label","hint"}], "page": 1, "page_size": 50, "total": 0, "unfiltered_total": null, "stale": false}` |
+| `PATCH .../assets/{type}` | 200 | 该 `asset_type` 的最新对象（§6.2 `asset_types` 里的一项） |
+| `PUT .../overrides` | 200 | `{"override_count": n, "dropped_invalid": m}` |
+| `POST .../preview` / `.../execute` / `.../retry` | 200 | 该 action 的最新对象（§6.2 `actions` 里的一项） |
+| `GET /handover-candidates` | 200 | `{"items": [{"user_id","name","department"}]}` |
+
+**三条硬规定**：
+
+1. **任何 mutation 都不得返回 204。** 现有前端把非 JSON 的成功响应当异常处理
+   （`frontend/src/lib/api.ts:103,107`），返回 204 会让每一次成功操作在界面上表现成失败。
+2. **创建类返回 201，其余 mutation 返回 200**，都带 JSON 体。
+3. **分页参数以契约为准，不是仓库默认值**：`page_size` 默认 **50**、上限 **200**
+   （既有 `portal/pagination.py` 是 20/100，**不要沿用**）。超限直接钳制，不报错。
 
 **错误码**（门户专用，均为 `{"error":{"code","message"}}`）：
 
@@ -881,15 +996,23 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
-| POST | `.../handover-tasks/{id}/actions/{app_key}/skip` | 强行跳过（D6），body `{"reason": "..."}`，`reason` 必填且 ≥10 字符 |
-| POST | `.../handover-tasks/{id}/claim` | 超管认领 `superuser_pool` 中的单，assignee 置为该超管，`assignee_state=manager` |
+| POST | `.../handover-tasks/{id}/actions/{app_key}/skip` | 强行跳过（D6），body `{"reason": "..."}`，`reason` 必填且 ≥10 字符。**实现方式：扩展既有的 `operation=="skip"` 分支**（`admin_console/lifecycle_api.py:362,403`），不要新注册一条会与既有动态 operation 路由（`admin_console/urls.py:252`）重叠的 URL —— 注册在后面就永远不可达。现有 handler **完全不读 body 里的 reason**，必须补：严格解析 `{"reason": str}`、校验 ≥10 字符、传给 `skip_action(action, actor_id=..., reason=...)` |
+| POST | `.../handover-tasks/{id}/claim` | 超管认领 `superuser_pool` 中的单，assignee 置为该超管，`assignee_state=manager`。**认领人必须是 active、非 `local-admin:`、且有有效钉钉绑定的 OIDC 超管**，否则 `403 local_admin_cannot_claim` |
 | POST | `.../handover-tasks/reassign` | **超管跨管辖范围建 `reassign` 单**（D9 的「跨部门走超管」路径）。body 同门户版，但**不做管辖范围校验**；仍校验双方 active、双方非本地管理员、`reason` ≥10 字符、接收人 ≠ 当事人。写审计 `handover_reassign_created`（`initiator` 记该超管） |
 | POST | `.../handover-tasks/{id}/escalation/defer` | 把 `escalation_deadline` 顺延 `HANDOVER_ESCALATION_DAYS`（不改 `escalation_level`），必填 `reason` ≥10 字符。**同一 `escalation_level` 内至多一次**（靠 `escalation_deferred_at` 判定，非空即拒 `409 already_deferred`）；上交后该字段清空，新层级可再顺延一次。写审计 `handover_task_deferred`，单据上永久显示「已由 {超管} 于 {时间} 顺延：{理由}」 |
 | GET | `.../handover-blocked-apps` | 未接入 APP 汇总，供控制台顶部告警条 |
 | POST | `.../apps/{app_key}/handover-capability` | 声明 `none`，body `{"reason": "..."}`；写 `declared_by`/`declared_at` |
 | POST | `.../apps/{app_key}/handover-capability/sync` | 手动触发 §5.2 descriptor 同步 |
 
-控制台复用 §6.1 的资产/明细端点，但走 `require_superuser` 且不做 assignee 校验。
+**控制台不复用门户的 URL 与 view。** 资产/明细能力在控制台下**另注册一套路径**
+（`/console/api/v1/lifecycle/handover-tasks/{id}/...`），走 `require_superuser()` 且不做 assignee 校验，
+两边只共享**不含任何 HTTP 身份逻辑**的 domain service。
+
+> 早期写的"控制台复用 §6.1 的端点"与本节开头的"各自注册路由与 guard"直接冲突。
+> 混在一个入口上，assignee 校验、404 防枚举、本地管理员拒绝这三条会在两条调用路径上
+> 表现不一致 —— 最坏的情况是本地管理员从控制台入口拿到了门户语义。
+> 统一规定：**门户一律 `require_portal_user()`（内含拒绝 `local-admin:`），
+> 控制台一律 `require_superuser()`。**
 
 ### 6.4 审计事件的落点（契约 §12 全表必须有主）
 
@@ -927,8 +1050,24 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 |---|---|---|
 | `lifecycle_escalation` | beat 每 10 分钟 | 扫 `status in OPEN and escalation_deadline <= now` 的 `HandoverTask`，逐个 `escalate_overdue_task()`。PostgreSQL 下 `select_for_update(skip_locked=True)` 分批（与 `grants` 过期任务同款） |
 | `lifecycle_daily_reminder` | beat 每天 09:00（Asia/Shanghai） | 对未完成且有 assignee 的单发钉钉提醒；`last_reminded_on` 用 `timezone.localdate(..., Asia/Shanghai)` 去重保证每业务日一次；上交前 1 天额外发"即将上交"。注意既有 beat schedule 只接受 float interval，crontab 需扩展 |
-| `lifecycle_superuser_pool_reminder` | beat 每天 09:05 | `assignee_state=superuser_pool` 且未完成的单，向全体超管推认领通知 |
-| `lifecycle_blocked_apps_digest` | beat 每周一 09:10 | 汇总 `blocked` action，向超管推周报 |
+| ~~`lifecycle_superuser_pool_reminder`~~ | — | **本期不做**，见下 |
+| ~~`lifecycle_blocked_apps_digest`~~ | — | **本期不做**，见下 |
+
+> **两个"向全体超管推送"的任务本期删除，不是延后实现。**
+> §4 已经查清：超管资格只在请求期通过 Authentik 组交集判定（`admin_console/authz.py`），
+> **没有可枚举的本地超管名单**。留着这两个任务，实现者只有三条路：不发（任务形同虚设）、
+> 扫描猜测（漏发）、或扩大广播范围（把离职交接信息发给无权限的人）。三条都比不做更糟。
+>
+> 本期的替代：控制台顶部常驻告警条（§6.3 的 `handover-blocked-apps` 与超管池计数），
+> 超管登录即见。等建立了权威的超管收件人镜像，再恢复这两个推送任务。
+
+> **通知发送方的身份必须先定下来。** `notify/acceptance.py` 的 `accept_notify_message()`
+> 要求 App、channel、credential 三者齐全（`:46,48,57,113`）。
+> 生命周期通知**不属于任何业务 APP**，随便借用一个会把配额、审计归属、收件范围全搞错。
+>
+> 因此需要**先建一个 EasyAuth 内部的生命周期通知身份**：专用 App 记录 + 唯一 active
+> notification channel + credential，并在启动健康检查里断言其存在。
+> 配置缺失时**只告警、不借用业务 APP、不静默丢消息**。
 
 > `src/easyauth/tasks/lifecycle.py` **已经存在**，本节是扩展而非新建。
 > 另外两点与既有实现不符，需一并处理：beat 目前是**直接投递任务**，不经 outbox；
