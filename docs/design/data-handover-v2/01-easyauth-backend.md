@@ -1227,16 +1227,6 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 5. 新增 `easyauth_app_sdk/handover_payloads.py`：v2 请求/响应的 `TypedDict` 定义
    （`PreviewRequest`/`PreviewResponse`/`ItemsRequest`/`ItemsResponse`/`ExecuteRequest`/`ExecuteResponse`），
    下游 APP 直接 import 使用，杜绝字段名手抄出错。**每个 Request 都含 `event_type` 字段。**
-5.1 **EasyAuth 自己的发送端必须先注入 `event_type`**，否则新 SDK 一上线联调门禁就永远过不去：
-   现有 `webhook.test` 的 body 是 `{"message": ..., "app_key": ...}`
-   （`admin_console/webhook_config_api.py:99`），**没有 `event_type`** ——
-   新版 SDK 会在短路之前发现缺字段并返回 422，而 README 的联调门禁正是"`webhook.test` 返回 200"。
-
-   改法：在**所有** webhook 发送入口（`webhooks/hooks.py` 的统一出口）里，
-   **签名之前**原子注入 `payload["event_type"] = event_type`，覆盖 `webhook.test` /
-   preview / items / execute 四种事件。补一个**字节级**的 sender-side 测试：
-   断言四种事件发出的 raw body 里都含正确的 `event_type`，且签名是对注入后的 body 算的。
-
 6. **`event_type` 一致性校验，位置必须在 `webhook.test` 短路之前**（契约 §10.1 的强制补偿）：
 
    ```
@@ -1262,10 +1252,30 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 8. 新增 `easyauth_app_sdk/manifest.py` 的 `_validate_lifecycle()` 白名单加 `handover_asset_types`
    （契约 §9.1）。**不改这一处，两个下游连 descriptor 都生成不出来**（会抛
    `ManifestValidationError: lifecycle 含未知字段`）。
-9. 新增包内数据资源 `easyauth_app_sdk/contract_samples/handover_v2/*.json`（§10），
-   并在 `pyproject.toml` 的打包配置里显式包含（`package-data`），否则 wheel 里没有这些文件。
-10. `sdk/python/CHANGELOG.md` 记为 **breaking**，版本号 minor 升级（未上线，不做兼容分支）。
-11. `sdk/python/README.md` 补 v2 接入示例（中文）。
+9. 新增目录接口 `get_directory_user_by_authentik_sub(sub: str) -> DirectoryUser | None`。
+   现有 client 只接受目录返回过的 **opaque `user_ref`**，把裸 Authentik `sub` 塞进去会被 EasyAuth
+   判 422 —— 而 EasyProject 的 P2（从未登录过的员工解析 dtuid）**必然**走这条路径（`05` §2.1）。
+   EasyAuth 侧同时提供对应的目录端点。
+10. 新增包内数据资源 `easyauth_app_sdk/contract_samples/handover_v2/*.json`（§10），
+    并在 `pyproject.toml` 的打包配置里显式包含（`package-data`），否则 wheel 里没有这些文件。
+11. `sdk/python/CHANGELOG.md` 记为 **breaking**；版本号锁死并记录 **commit SHA 与 wheel SHA-256**
+    （README「解锁凭据」）。`pyproject.toml` version、`descriptor.SDK_VERSION`、`uv.lock`、CHANGELOG
+    四处取同一个值 —— 只改源码不改版本号会让下游 vendor 到不同提交而无人发现。
+12. `sdk/python/README.md` 补 v2 接入示例（中文）。
+
+### 8.1 EasyAuth 发送端的配套改造（**不在 SDK 里，但必须与 SDK 同批上线**）
+
+**所有 webhook 发送入口在签名之前原子注入 `payload["event_type"] = event_type`。**
+
+现有 `webhook.test` 的 body 是 `{"message": ..., "app_key": ...}`
+（`admin_console/webhook_config_api.py:99`），**没有 `event_type`**。
+新版 SDK 会在 `webhook.test` 短路之前发现缺字段并返回 422，
+而 README 的联调门禁正是「`webhook.test` 对每个 APP 返回 200」——
+**不做这一步，门禁永远过不去，而且看起来像下游的问题。**
+
+改法：在 `webhooks/hooks.py` 的统一出口注入，覆盖 `webhook.test` / preview / items / execute
+四种事件。补一个**字节级**的 sender-side 测试：断言四种事件发出的 raw body 里都含正确的
+`event_type`，且签名是对**注入之后**的 body 计算的（注入在签名之后就等于没做）。
 
 ---
 
