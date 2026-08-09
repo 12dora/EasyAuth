@@ -410,6 +410,9 @@ def execute_handover(
 - `backend/app/api/v1/easyauth_lifecycle.py` 增加 `on_handover_items` 回调
 - 请求体上限跟随 SDK 提升到 256 KiB
 - 直接使用 SDK 的 `handover_payloads` TypedDict，**禁止**在 EasyTrade 内手抄字段名
+- **业务错误一律抛 SDK 的 `HandoverBusinessError(status_code, code, message)`**（`01` §8 第 6.1 条）。
+  现有 `HandoverCallback` 只返回 dict，内核把一切都包成 200 或 500 ——
+  §3.6 要求的 409 / 412 / 422 **发不出去**。这是 SDK vNext 的前置改造，不是 EasyTrade 能绕开的
 - SDK `manifest.py` 的 `_validate_lifecycle()` 已放行 `handover_asset_types`（§3.2）——
   **vendor 目录必须一并更新到该版本**，否则 descriptor 生成时抛 `ManifestValidationError`
 

@@ -257,6 +257,9 @@ router 也已在 `api/v1/router.py:49-56` 挂载。工作是把 v1 占位实现*
   （三个事件：preview / items / execute）
 - 请求体上限 256 KiB（契约 §10.1）
 - 直接使用 SDK 的 `handover_payloads` TypedDict，**禁止**手抄字段名
+- **业务错误一律抛 SDK 的 `HandoverBusinessError(status_code, code, message)`**（`01` §8 第 6.1 条）。
+  现有回调协议只返回 dict，内核一律包成 200 或 500 —— §5.2 那 11 个错误码里除验签外
+  **一个都发不出去**。API 层再把它映射成本仓库标准 `ErrorBody`
 - 请求/响应模型**不继承** `app/core/schemas.ApiModel`：webhook 的 JSON 体由 EasyAuth 定义，是
   **snake_case**，与本仓库 camelCase 约定不同。详见 §5.4 的裁定与理由。
 

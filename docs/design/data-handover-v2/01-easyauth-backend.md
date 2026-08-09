@@ -1245,6 +1245,45 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
    > 就能让下游回一句"好的"而什么都不做 —— 而 EasyAuth 把 200 当成功。
    > 校验必须挡在短路前面。
 
+6.1 **回调必须能表达非 200 的业务状态码 —— 现在完全表达不了。**
+
+   `HandoverCallback = Callable[[WebhookEvent], dict[str, Any]]`
+   （`sdk/.../lifecycle.py:35`）**只返回一个 dict**；内核把它一律包成
+   `_json_response(200, result)`，任何异常一律 `_error_response(500, ...)`。
+
+   也就是说，一个用 `lifecycle_http_response()` 的 APP **根本发不出**
+   409（身份无法识别 / 投递冲突 / 迟到 generation）、**412**（快照失效）、
+   413（体积超限）、422（资产类型未声明 / event_type 不一致）——
+   这些全部会变成 200 或 500。而契约 §10.6 的整张状态码表正是建立在这些码上的：
+   EasyAuth 只看状态码决定 action 状态与可否重试。
+
+   **不修这一条，v2 的错误语义在两个下游都无法实现。**
+
+   改法：SDK 定义一个业务异常，内核捕获后按其携带的状态码渲染：
+
+   ```python
+   class HandoverBusinessError(Exception):
+       def __init__(self, status_code: int, code: str, message: str) -> None: ...
+
+   ALLOWED_BUSINESS_STATUS: Final = frozenset({400, 409, 412, 413, 422})
+   ```
+
+   内核：
+
+   ```
+   try:
+       result = callback(event)
+   except HandoverBusinessError as e:
+       assert e.status_code in ALLOWED_BUSINESS_STATUS   # 不在白名单内按 500 处理
+       return _error_response(e.status_code, e.code, e.message)
+   except Exception:
+       return _error_response(500, "handover_callback_failed", 固定文案)
+   return _json_response(200, result)
+   ```
+
+   状态码**白名单**是有意的：不允许 APP 随便返回 2xx/3xx，否则 EasyAuth 的状态机会被喂进
+   它无法解释的输入。白名单外的值按 500 处理并写 SDK 侧告警。
+
 7. **回调异常边界不得回显异常文本**（契约 §10.6）：现有
    `_error_response(500, "handover_callback_failed", f"交接回调执行失败: {error}")`
    会把 `str(error)` 拼进响应体。改为固定通用文案（如「交接回调执行失败，请查看应用日志」），
