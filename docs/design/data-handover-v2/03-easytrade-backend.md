@@ -59,6 +59,23 @@ v2 用 descriptor 的 `releasable` 字段把它显式化（契约 §9.1），由
 | `requirement_open` | 进行中产品需求 | `ProductRequirement.owner_user_id`（`domain/requirement/models.py:79`） | 否 | **false** | 未关闭。**新增覆盖** |
 | `sample_request_open` | 未完成样品申请 | `SampleRequest.requested_by_user_id`（`domain/crm/models.py:71`） | 否 | **false** | 未终结。**新增覆盖** |
 
+### 2.1.1 终态谓词必须冻结在共享选择器里
+
+上表的"口径"列是**规范**，不是提示。复核发现现有实现的判定普遍不全，必须逐条补齐并**冻结在一处**
+（`handover_assets.py` 的 `HandoverAssetSpec.query`），preview / items / execute 三处共用同一个选择器，
+不得各写各的：
+
+| 类型 | 完整谓词 |
+|---|---|
+| `customer` | 未软删除（`deleted_at IS NULL`） |
+| `inquiry_open` | `deleted_at IS NULL` 且 `PipelineStage.is_terminal = false` 且 `lost_at IS NULL` 且 `cancelled_at IS NULL` |
+| `order_in_transit` | 非终态状态集 **且 `cancelled_at IS NULL`** |
+| `receivable_open` | 未结清、`cancelled_at IS NULL`，**且用 `receivable_owner_filter({from_user})` 判归属** —— owner 为 NULL 时归属继承订单负责人（`domain/ar/ownership.py`），只看显式 owner 会漏 |
+| `task_open` | `status='OPEN' AND voided_at IS NULL` |
+| `activity_followup` | `voided_at IS NULL AND next_action_owner_user_id IS NOT NULL`（**不加日期条件**，逾期的最该交） |
+| `requirement_open` | 状态不在 `{COMPLETED, REJECTED, MERGED}`（`ON_HOLD` **仍算活跃**） |
+| `sample_request_open` | 状态不在 `{CLOSED_WON, CLOSED_LOST, CANCELLED}` 且 `cancelled_at IS NULL` |
+
 > `releasable=false` 的四类，一旦 EasyAuth 侧对其指定 `default_to_user_id=null`，
 > EasyAuth 会在发请求前直接返回 `422 asset_type_not_releasable`（契约 §9.1）。
 > EasyTrade 收到这种组合仍要防御性返回 `422`，**不得**再走静默保持原状的老路（修 B2）。
@@ -211,9 +228,15 @@ def execute_handover(
 单事务内，逐 `assignment` 处理：
 
 1. 查注册表拿 `HandoverAssetSpec`；未知类型 → `422 undeclared_asset_type`。
-2. **前置校验**（修 B1/B2）：任一 `action == "release"` 落在 `spec.releasable is False` 的类型上
-   → 抛领域错误 → `422 asset_type_not_releasable`。
-   **绝不允许**再出现写 `NULL` 进非空列，也**绝不允许**静默保持原归属。
+2. **前置校验**（修 B1/B2）。**四项都要，缺一不可**：
+   - 任一 `action == "release"` 落在 `spec.releasable is False` 的类型上 → `422 asset_type_not_releasable`。
+     绝不允许写 `NULL` 进非空列，也绝不允许静默保持原归属
+   - 任一 `action == "transfer"` 的 `to_user_id` 为空 / 映射不到本地用户 / 用户非 active /
+     等于 `from_user_id` → `422`。**这一条早期漏了**：畸形 payload 会让可空列（客户、活动）
+     被静默释放，非空列（订单、询盘、任务、需求、样品）则要到 flush 时才炸
+   - **override 的 id 必须先验证**：存在、仍属于 `from_user_id`、仍满足该类型谓词。
+     任一不满足 → 整体 `409`。**不得**把无效 id 默默排除出默认集（那等于静默跳过）
+   - `snapshot_token` 与当前数据状态不一致 → 整体 `409`
 3. 先处理 `overrides`（精确 id 集合），再按 `default_action` 处理剩余条目：
    ```
    overridden_ids = {o.id for o in overrides}
@@ -228,8 +251,15 @@ def execute_handover(
    ```
    写 `NULL` 只可能发生在 `action == "release"` 分支，而该分支已被第 2 步保证只落在
    `releasable=True`（即可空列）的类型上 —— B1 从结构上不可能再复发。
-4. 全程 `with_for_update`，与既有实现一致。
-5. 客户归属变更继续写既有的负责人变更事件（`_handover_customers` 中的 owner history），
+4. 全程 `with_for_update`。**锁顺序必须固定**：先按聚合根顺序（Customer → Inquiry → Activity、
+   Inquiry → SampleRequest），同一聚合内按主键升序。先解析出完整的受影响集合再统一加锁，
+   不要边遍历边锁 —— 否则与既有业务路径的加锁顺序相反，会死锁。
+5. **必须走既有的领域命令，保住副作用**，不能裸 UPDATE：
+   - 客户转移走 `transfer_customer()`；释放公海走 `release_customer_to_pool(action="auto_release")`
+     —— 现有 `_handover_customers` 释放时也写 `action="transfer"`，事件分类是错的，光改 reason 修不了
+   - 订单改 owner 须写既有的 `order.update` 审计记录
+   - 任务改派须**清空 `reminder_dismissed_at`**，否则新负责人收到的是一条已被前任忽略掉的提醒
+6. 客户归属变更继续写既有的负责人变更事件（`_handover_customers` 中的 owner history），
    `reason` 按 `kind` 取：`offboard`→「EasyAuth 离职交接」、`transfer`→「EasyAuth 转岗交接」、
    `reassign`→「EasyAuth 数据移交」，释放时→「EasyAuth 交接释放公海」。
 6. 返回 `{asset_type: {"transferred": n, "released": m, "skipped": k}}`。

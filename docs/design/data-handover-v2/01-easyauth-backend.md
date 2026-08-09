@@ -10,7 +10,7 @@
 
 | 模块 | 改动性质 | 说明 |
 |---|---|---|
-| `lifecycle/models.py` | 扩展 + 破坏性重构 | 新增 4 张表，`HandoverTask` 加 4 字段，`HandoverAppAction` 去掉接收人字段改为条目级 |
+| `lifecycle/models.py` | 扩展 + 破坏性重构 | 新增 4 张表（AssetType / AssetOverride / ExecutionAttempt / ExecutionLease），`HandoverTask` 加 6 字段，`HandoverAppAction` 数据接收人下沉到条目级、保留 `grant_receiver` |
 | `lifecycle/assignee.py` | **新建** | 主管链解析（契约 §8.2） |
 | `lifecycle/escalation.py` | **新建** | 交接单超时上交（契约 §7.4）。~~代管授权~~已废弃 |
 | `lifecycle/handover.py` | 重构 | webhook payload v2、新增 items 事件、blocked 判定 |
@@ -20,13 +20,19 @@
 | `webhooks/models.py` | 微调 | body 上限常量 |
 | `admin_console/lifecycle_api.py` | 扩展 | 新增 skip/claim/items 端点 |
 | `portal/` | **新建一组端点** | 自助交接（D1），全部非超管 |
-| `tasks/lifecycle.py` | **新建** | 到期上交、每日提醒两个 beat 任务 |
+| `tasks/lifecycle.py` | **扩展既有文件** | 到期上交、每日提醒两个 beat 任务（该文件已存在） |
 | `sdk/python/.../lifecycle.py` | 扩展 | v2 事件与 items 回调 |
-| `docs/decisions/ADR-002` | 修订 | 契约 §3.1 两条 |
+| `lifecycle/approvals.py` | **新建** | 审批责任改派（契约 §11.1，见 §4.5） |
+| `lifecycle/core.py` | 修既有缺陷 | 状态汇总改全量纯函数、允许回退 pending |
+| `docs/decisions/ADR-002` | 修订 | 仅 §36 一条（§19 已取消） |
 
 **硬约束提醒**（`AGENTS.md`）：项目未上线，**不保留旧形态、不写兼容层**。
-`HandoverAppAction.to_user` / `execution_to_user` 直接删除，不做双写、不留过渡字段；
-相关迁移直接改列，不保留旧列。所有文档必须中文。
+`execution_to_user` / `policy` / `execution_policy` 直接删除；`to_user` 走 `RenameField`
+改名为 `grant_receiver`。所有文档必须中文。
+
+**迁移与调用方必须原子提交**：`handover.py`、`transfer.py`、`admin_console/lifecycle_api.py`、
+生命周期测试、`HandoverWizard.tsx`、前端类型定义与已构建的静态产物**都读这些字段**，
+分开提交会产出跑不起来的中间 commit，与「每次提交后必须重建前后端并确认构建成功」冲突。
 
 ---
 
