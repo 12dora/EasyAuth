@@ -155,8 +155,9 @@ export interface HandoverAction {
   last_error: string;
   /** 后端算好的可用操作; 前端不得解析 last_error 猜可不可重试 */
   allowed_actions: HandoverAllowedAction[];
-  /** execute 必须回带; 与服务端不一致时 409 preview_version_stale */
-  preview_version: number;
+  /** execute 必须回带; 与服务端不一致时 409 confirm_version_stale。
+   *  preview 成功、改类型级默认、整体替换 overrides、改 grant_receiver 四件事都会 +1 */
+  confirm_version: number;
   /** PUT overrides 必须回带; 整体替换的并发保护 */
   overrides_version: number;
   /** 413 分批时非 null */

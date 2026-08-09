@@ -131,7 +131,7 @@ models.CheckConstraint(
 |---|---|---|
 | `generation` | `PositiveIntegerField(default=1)` | 建 action 时从 `task.generation` 拷贝；升级时重置 |
 | `snapshot_token` | `CharField(max_length=128, blank=True)` | 最近一次 preview 返回的令牌（契约 §10.5.1），**不出现在任何 HTTP 响应里** |
-| `preview_version` | `PositiveIntegerField(default=0)` | 单调递增，每次 preview 成功 +1。execute 请求必须回带匹配值，否则 409（§6.1） |
+| `confirm_version` | `PositiveIntegerField(default=0)` | 单调递增。**preview 成功、修改类型级 `default_action`/`default_to_user`、整体替换 overrides、修改 `grant_receiver` —— 这四件事任意一件都 +1。** execute 请求必须回带匹配值，否则 `409 confirm_version_stale`（§6.1） |
 | `overrides_version` | `PositiveIntegerField(default=0)` | 单调递增，每次 override 集合被替换 +1。`PUT overrides` 必须回带匹配值，否则 409 |
 | `skipped_at` | `DateTimeField(null=True, blank=True)` | 强行跳过的时间，与 `skipped_by` 一起构成责任链 |
 | `last_error_raw` | `TextField(blank=True)` | **新增**。下游原始响应体，截断 2000 字符，**只在控制台对超管展示且每次查看写审计**。既有的 `last_error`（`lifecycle/models.py:233`）改为只放「状态码 + 本地分类文案 + 白名单提取的 `code`/`message`，各截断 200 字符并脱敏」，门户与控制台都能看（契约 §10.6） |
@@ -313,7 +313,7 @@ class HandoverExecutionBatch(models.Model):
         ]
 ```
 
-**`HandoverDeliveryAttempt`（append-only，一次真实 HTTP 调用一行）**
+**`HandoverDeliveryAttempt`（一次真实 HTTP 调用一行，受控单次状态转换）**
 
 ```python
 class HandoverDeliveryAttempt(models.Model):
@@ -336,6 +336,20 @@ class HandoverDeliveryAttempt(models.Model):
 ```
 
 事件幂等键（outbox / delivery 头）用 `lifecycle-execute:{batch_id}:{delivery_seq}`。
+
+> **这张表不是 append-only，别把它写成 append-only。**
+> 发送前必须先插入一行 `outcome="sent"`（否则"发出去了但没记账"这种失序拦不住），
+> 拿到响应后又必须把 `http_status` / `response_payload` / 终态 `outcome` 存下来。
+> 严格 append-only 的话，所有行会永远停在 `sent`，一次调用的成败根本无处落库。
+>
+> 规矩是**受控的单次转换**：
+> `sent → succeeded | failed | async_accepted` **只允许发生一次**，且必须走
+> §2.4.2 的 CAS（`owner + fence + released_at IS NULL`）；**终态之后禁止任何修改**。
+> 请求侧字段（`batch.request_payload` / `request_hash`）在 batch 上，**创建后不可变** ——
+> 审计凭据在那里，不在这里。
+>
+> 库层加一条 CHECK：`outcome='sent' OR http_status IS NOT NULL`，
+> 让"标了终态却没有响应记录"这种行写不进去。
 
 **为什么是 `PROTECT` 而不是 `CASCADE`**：契约 §6.2 允许 `cancelled` 单被删除。
 用 `CASCADE` 的话，「execute 真的发出去了、下游真的改了数据、随后超管取消并删单」这条路径
@@ -366,13 +380,27 @@ delivery（`outcome="sent"`）、写 outbox，**提交后**才由 worker 真正�
 - 只有 `is_final=True` 的批次数据成功、且授权转移那一步也成功后，action 才转 `done`；
 - 界面上要显示「已完成 N / M 批」，不能只显示一个"进行中"。
 
-**M（总批数）在收到 413 的那一刻就要算出来，不是边做边看。**
-EasyAuth 手上有完整的 `assignments`，知道每条 override 的字节数；收到 413 后按
-「每批不超过 200 KiB（对 256 KiB 上限留 56 KiB 余量）」切分，一次性把 M 个 batch 行
-**全部建出来**（只有最后一个 `is_final=True`，其余 `status="pending"`），再逐批执行。
+**M（总批数）在收到 413 的那一刻就要算出来，但 batch 行不能提前建。**
 
-这样 `batch_progress.total` 有确定的值，用户看得到进度；
-边做边切的话 M 始终未知，界面只能显示一个永远不知道还剩多久的进行中。
+两件事要分开：
+
+| | 何时固化 | 内容 |
+|---|---|---|
+| **分片计划** `HandoverBatchPlan` | 收到 413 时**一次性**算好并落库 | `total=M`、每一批覆盖哪些 `asset_type` 与 `asset_id`、`plan_seq` |
+| **批次行** `HandoverExecutionBatch` | **每批执行前才创建** | 该批的 `snapshot_token`、canonical payload、`request_hash` |
+
+> **为什么不能一次建完 M 个 batch 行**：batch 上的 `snapshot_token` 与 payload 是
+> **创建即不可变**的审计凭据，而第 2 批的 token **此刻还不存在** ——
+> 契约 §10.5.2 规定每批必须重新 preview 取新 token（第 1 批已经改过数据，旧 token 必然失效）。
+> 预建的话只有三条路：填旧 token（execute 必然 412）、填空（违反非空）、
+> 或事后修改"不可变"的行（毁掉审计凭据）。三条都不行。
+
+切分口径：按「每批不超过 200 KiB」（对 256 KiB 上限留 56 KiB 余量）。
+`batch_progress.total` 取自计划的 `M`，`completed` 取自已终结的 batch 数 ——
+所以用户从第一批开始就能看到确定的进度，不会面对一个不知道还剩多久的"进行中"。
+
+每批的流程固定为：**重新 preview → 拿新 token → 建该批 batch 行 → execute**。
+最后一批的 batch 记 `is_final=True`，只有它成功后 action 才转 `done`。
 
 ### 2.4.2 `HandoverExecutionLease`（新表，契约 §10.5.2）
 
@@ -982,20 +1010,27 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | PATCH | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}` | 我是 assignee | body: `{"default_action": "transfer"\|"release"\|"skip", "default_to_user_id": str\|null}` |
 | PUT | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}/overrides` | 我是 assignee | body: `{"overrides_version": n, "overrides":[{"asset_id":"...","action":"transfer"\|"release"\|"skip","to_user_id":"..."\|null,"label":"..."}]}`，**整体替换**。`overrides_version` 必填，与服务端不一致返回 `409 overrides_version_stale` —— 整体替换 + 无版本号 = 后一次保存静默吃掉前一次的全部修改 |
 | POST | `/handover-tasks/{task_id}/actions/{app_key}/preview` | 我是 assignee | |
-| POST | `/handover-tasks/{task_id}/actions/{app_key}/execute` | 我是 assignee | body **必填** `{"preview_version": n}` —— 用户点确认时界面上显示的那一版。与服务端当前值不一致 → `409 preview_version_stale`，要求重新预演 |
+| POST | `/handover-tasks/{task_id}/actions/{app_key}/execute` | 我是 assignee | body **必填** `{"confirm_version": n}` —— 用户点确认时界面上显示的那一版。与服务端当前值不一致 → `409 confirm_version_stale`，**不创建 batch**，要求刷新后重新确认 |
 | POST | `/handover-tasks/{task_id}/actions/{app_key}/retry` | 我是 assignee | 仅 `failed` 可重试，否则 `409 action_not_retryable`。**若 `data_completed_at` 非空，重试只重做授权转移那一步**（契约 §10.5.1.1），不重发数据 webhook |
 | GET | `/handover-candidates` | 登录即可 | 选人控件数据源。query：`q`（模糊，可空）、`purpose`（枚举 `receiver` \| `reassign_subject`，**必填**）。两者都只返回 active 且非本人；`purpose=reassign_subject` 时额外限定在我的 `MANAGED_USERS` 内。**不设默认值** —— 缺 `purpose` 返回 `422 purpose_required`，否则前端漏传就会静默拿到范围过宽的人员列表 |
 
-> **`preview_version`：浏览器必须把"我看的是哪一版"带回来。**
+> **`confirm_version`：浏览器必须把"我确认的是哪一版"带回来。**
 > `snapshot_token` 是 EasyAuth 与下游之间的凭据，**替代不了这件事** ——
 > 它存在服务端 action 上，谁重新 preview 谁就把它覆盖成最新的。
 >
-> 故障场景很具体：负责人 A 预演看到 187 条客户，正在逐条勾选；此时超管 B 对同一 action
-> 重新预演，服务端 token 变成对应 191 条的新值；A 点「执行交接」，后端拿**最新** token 去执行
-> —— 191 条全部被搬走，其中 4 条 A 从来没见过。
+> 两个故障场景，只挡住一个是不够的：
 >
-> 因此 `HandoverAppAction` 上再加一个**单调递增**的 `preview_version`：每次 preview 成功 +1，
-> 在详情响应里返回，execute 请求必须回带。不一致就 409 让用户重新看一遍。
+> | 场景 | 后果 |
+> |---|---|
+> | A 预演看到 187 条正在勾选，B 重新预演（服务端 token 变成对应 191 条的新值），A 点执行 | 191 条全部被搬走，其中 4 条 A 从没见过 |
+> | A 打开确认框，B **没有重新预演**，只是把某类的默认接收人从张某某改成李某某 | A 点执行，后端按数据库里**最新的** assignments 执行 —— 数据转给了 A 从没确认过的人 |
+>
+> 第二种是只做"preview 版本号"挡不住的：preview 没变，版本号也就没变。
+> 所以 `confirm_version` 的递增条件是**四件事**（见 §2.2 的字段说明）：
+> preview 成功、改类型级默认、整体替换 overrides、改 `grant_receiver`。
+> **任何会改变"执行下去会发生什么"的操作都要让它 +1。**
+>
+> 详情响应返回它，execute 必须回带；不一致 → `409 confirm_version_stale`，**且不创建任何 batch**。
 > **下游的 `snapshot_token` 仍然只存在后端，前端不碰。**
 
 > **`snapshot_token` 不出现在门户 API 里，前端一个字节都不用碰。** 它由 EasyAuth 在
@@ -1013,7 +1048,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | `GET /handover-tasks/{id}` | 200 | §6.2 详情对象 |
 | `GET .../items` | 200 | `{"items": [{"id","label","hint"}], "page": 1, "page_size": 50, "total": 0, "unfiltered_total": null, "stale": false}` |
 | `PATCH .../assets/{type}` | 200 | 该 `asset_type` 的最新对象（§6.2 `asset_types` 里的一项） |
-| `PUT .../overrides` | 200 | `{"override_count": n, "dropped_invalid": m}` |
+| `PUT .../overrides` | 200 | `{"overrides_version": n+1, "confirm_version": m+1, "override_count": k, "dropped_invalid": j}` —— **必须回传两个新版本号**，否则前端手上还是旧值，翻到下一页再保存必然 409 |
 | `POST .../preview` / `.../execute` / `.../retry` | 200 | 该 action 的最新对象（§6.2 `actions` 里的一项） |
 | `GET /handover-candidates` | 200 | `{"items": [{"user_id","name","department"}]}` |
 
@@ -1067,7 +1102,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
       "grant_receiver": { "user_id": "8c44…", "name": "李某某" },
       "summary": null,
       "data_completed_at": null,
-      "preview_version": 3,
+      "confirm_version": 3,
       "overrides_version": 7,
       "skipped_by": "", "skipped_at": null,
       "allowed_actions": ["preview", "execute"],
@@ -1092,7 +1127,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
       "grant_receiver": null,
       "summary": null,
       "data_completed_at": null,
-      "preview_version": 0,
+      "confirm_version": 0,
       "overrides_version": 0,
       "skipped_by": "", "skipped_at": null,
       "allowed_actions": [],
