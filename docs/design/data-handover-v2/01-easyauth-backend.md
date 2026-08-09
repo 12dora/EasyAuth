@@ -450,8 +450,24 @@ delivery 结果、action 状态或 summary。异步轮询回来的那条路径�
 升级会重新快照授权（契约 §8.3）。现有 `HandoverGrantItem` 没有 generation，
 重新快照只能删旧行（毁审计）或追加不可区分的行（新旧混用）。
 
-新增 `generation = PositiveIntegerField(default=1)`，唯一约束加入该列；
-授权转授、勾选、审计一律按精确 generation 过滤，历史行只读保留。
+新增 `generation = PositiveIntegerField(default=1)`。
+
+> **但现有模型上根本没有唯一约束**（`lifecycle/models.py:334-344`），
+> 所以"唯一约束加入 generation"这句话没有可加的对象 —— 必须**新建**一条，并把唯一键写死。
+> 不写死的话，三个实现者会分别挑 source grant / target / scope 当键，快照去重行为互不兼容；
+> 也可能干脆不建，同一条授权被重复快照后转移两次。
+
+```python
+models.UniqueConstraint(
+    fields=["task", "generation", "source_grant_id",
+            "target_kind_snapshot", "target_key_snapshot", "scope_key"],
+    name="lifecycle_grant_item_unique_per_generation",
+)
+```
+
+迁移前先断言存量数据在该键上无重复（有重复说明现有快照逻辑已经出过问题，需要人工核对，不得自动去重）。
+
+授权转授、勾选、审计一律按精确 `generation` 过滤，历史行只读保留。
 
 ### 2.7 `App` 交接能力声明（`applications/models.py:102`，修改，契约 §9）
 
@@ -768,8 +784,19 @@ def preview_action(action) -> HandoverAppAction
 | ~~全部类型 skip~~ | **删除该校验**。全 skip 是合法的 no-op（契约把 `skip` 定义为正当动作），零资产 APP 也要靠它确认完成。改为：允许执行并返回全零 summary |
 | 同一 `asset_type` 出现多次，或同一 `asset_id` 在 override 中重复 | `duplicate_assignment` |
 
-前两条已被 §2.3/§2.4 的 CheckConstraint 挡在库层，此处是 API 层的第二道防线：
-库约束保证数据不脏，API 校验保证用户拿到可读的错误。两者都要有。
+**库层与 API 层各挡一部分，但覆盖面不一样，不要以为库约束已经全包了**：
+
+| 不变量 | 库层落法 |
+|---|---|
+| `action ∈ {transfer, release, skip}` | 普通 `CheckConstraint`，`HandoverAssetType` 与 `HandoverAssetOverride` 各加一条 |
+| `default_action == "transfer"` ⇒ `default_to_user` 非空 | 普通 `CheckConstraint`（同表两列） |
+| `default_action == "release"` ⇒ `releasable = true` | 普通 `CheckConstraint`（`releasable` 与 `default_action` 同在 `HandoverAssetType` 上） |
+| **override 的 `action == "release"` ⇒ 父类型 `releasable = true`** | **跨表，普通 CHECK 做不到** —— `releasable` 在父表 `HandoverAssetType` 上。用**约束触发器**，或在 override 表上冗余一列 `releasable_snapshot` 并加同表 CHECK（冗余列需在 preview 重建行时同步刷新） |
+| `grant_receiver` 仅 `offboard` | 跨表，同上（§2.2 已说明） |
+
+早期版本写的"前两条均已被 CheckConstraint 挡在库层"是不准确的：
+跨表的两条挡不住，绕过 API 直接写库就能造出非法组合，进而生成非法 webhook。
+API 层的 `validate_assignments()` 仍然要有 —— 库约束保证数据不脏，API 校验保证用户拿到可读的错误。
 
 ### 5.5 execute（契约 §10.5）
 
