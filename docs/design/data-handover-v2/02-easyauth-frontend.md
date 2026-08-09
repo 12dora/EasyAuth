@@ -45,7 +45,7 @@
 | 门户「提前交接」发起 | **新建** | D7 |
 | 门户「移交下属数据」发起 | **新建** | D8/D9 |
 | 控制台 `HandoverWizard` | **重构** | 接收人从 APP 级下沉到资产条目级，第 2 段整段重写 |
-| 控制台 `HandoverTaskDetail` | 扩展 | 展示 blocked / skip / 代管剩余天数 / assignee 与上交层级 |
+| 控制台 `HandoverTaskDetail` | 扩展 | 展示 blocked / skip / **上交倒计时**（`escalation.days_left`）/ assignee 与上交层级；顺延按钮仅在 `escalation.deferred_at == null` 时可点 |
 | 控制台 `HandoverTaskList` | 扩展 | 新增 `assignee_state`、`blocked` 筛选与角标 |
 | 控制台顶部告警条 | **新建** | 未接入 APP 常驻告警（D6） |
 | 控制台 APP 能力声明 | **新建** | 在 app 详情页声明 `none` / 手动同步 descriptor |

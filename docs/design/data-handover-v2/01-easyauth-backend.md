@@ -309,8 +309,11 @@ class HandoverExecutionLease(models.Model):
 |---|---|---|
 | `escalation_deadline` | `DateTimeField(null=True, blank=True)` | 建单/上交时置为 `now + HANDOVER_ESCALATION_DAYS`；单终结后置空 |
 | `last_reminded_on` | `DateField(null=True, blank=True)` | 每日提醒按**上海业务日**去重（`timezone.localdate(..., Asia/Shanghai)`） |
+| `escalation_deferred_at` | `DateTimeField(null=True, blank=True)` | 超管在**当前** `escalation_level` 内顺延过一次的时间戳；每次上交时清空。非空即禁止再次顺延（§6.3） |
 
 `HANDOVER_ESCALATION_DAYS: Final = 14`（原 `CUSTODY_TTL_DAYS` 作废）。
+**这个常量是硬编码的 `Final`，不接受环境变量覆盖**（D5 冻结 14 天）；唯一的例外口子是
+§6.3 的超管顺延，且每层级至多一次。
 
 ### 2.5.1 `HandoverGrantItem` 补 `generation`
 
@@ -622,7 +625,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
   "generation": 1,
   "subject": { "user_id": "3f1a…", "name": "王某某", "department": "华东销售部", "status": "departed" },
   "assignee": { "user_id": "8c44…", "name": "李某某", "state": "manager", "escalation_level": 0 },
-  "custody": { "expires_at": "2026-08-24T10:00:00Z", "days_left": 14, "active": true },
+  "escalation": { "deadline": "2026-08-24T10:00:00Z", "days_left": 14, "level": 0, "deferred_at": null },
   "reason": "目录同步检出离职",
   "created_at": "2026-08-10T10:00:00Z",
   "actions": [
@@ -666,7 +669,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 |---|---|---|
 | POST | `.../handover-tasks/{id}/actions/{app_key}/skip` | 强行跳过（D6），body `{"reason": "..."}`，`reason` 必填且 ≥10 字符 |
 | POST | `.../handover-tasks/{id}/claim` | 超管认领 `superuser_pool` 中的单，assignee 置为该超管，`assignee_state=manager` |
-| POST | `.../handover-tasks/{id}/custody/extend` | 手动续 14 天（不改 `escalation_level`），必填理由 |
+| POST | `.../handover-tasks/{id}/escalation/defer` | 把 `escalation_deadline` 顺延 `HANDOVER_ESCALATION_DAYS`（不改 `escalation_level`），必填 `reason` ≥10 字符。**同一 `escalation_level` 内至多一次**（靠 `escalation_deferred_at` 判定，非空即拒 `409 already_deferred`）；上交后该字段清空，新层级可再顺延一次。写审计 `handover_task_deferred`，单据上永久显示「已由 {超管} 于 {时间} 顺延：{理由}」 |
 | GET | `.../handover-blocked-apps` | 未接入 APP 汇总，供控制台顶部告警条 |
 | POST | `.../apps/{app_key}/handover-capability` | 声明 `none`，body `{"reason": "..."}`；写 `declared_by`/`declared_at` |
 | POST | `.../apps/{app_key}/handover-capability/sync` | 手动触发 §5.2 descriptor 同步 |

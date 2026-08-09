@@ -228,6 +228,12 @@ EasyProject：所属项目 + 截止日期）。这是各 APP 设计文档里的�
 | 到期前 1 天 | 额外一次"即将上交"提醒 |
 | 到期且单未完成 | `escalation_level += 1` → 沿主管链取下一级 active 主管 → 重置 `escalation_deadline` → 通知新旧 assignee 双方 |
 | 主管链已到顶 | `assignee_state = superuser_pool`，`assignee = NULL`，改为每日向全体超管推认领通知 |
+| 超管顺延（唯一例外口子） | 超管填理由后把 `escalation_deadline` 顺延 14 天，`escalation_level` 不变。**同一层级至多一次**，上交后重置。写审计 `handover_task_deferred`，单据上永久留痕 |
+
+> **为什么给这个口子，以及为什么把它卡这么死**：assignee 正在处理却卡在第 14 天时，
+> 硬上交只会让新 assignee 从头看一遍明细，纯粹的返工。但"能续期"本身就是 D5 想消灭的
+> 拖延通道，所以限定为：只有超管能按、必填理由、每层级一次、永久留痕。
+> **`HANDOVER_ESCALATION_DAYS` 不接受环境变量覆盖** —— 那是绕过 D5 的第二条通道。
 
 `CUSTODY_TTL_DAYS` 这个名字随代管一起废弃，改为 `HANDOVER_ESCALATION_DAYS: Final = 14`。
 
@@ -814,6 +820,7 @@ D11 是冻结决策，**下游文档不得单方面豁免**。经复核确认，
 | `handover_assignee_assigned` | assignee 解析/变更 | task, assignee, assignee_state, escalation_level |
 | `handover_assignee_resolution_degraded` | 主管链缺失或 stale，落超管池 | task, reason |
 | `handover_task_escalated` | 到期上交 | task, from_assignee, to_assignee, escalation_level |
+| `handover_task_deferred` | 超管顺延截止时间（§7.4） | task, actor, reason, old_deadline, new_deadline, escalation_level |
 | `handover_action_previewed` | preview 成功 | task, app_key, generation, assets |
 | `handover_action_executed` | execute 成功 | task, app_key, generation, assignments 摘要, summary |
 | `handover_action_failed` | execute 失败 | task, app_key, error code/message |
