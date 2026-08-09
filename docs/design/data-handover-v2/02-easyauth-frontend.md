@@ -217,7 +217,8 @@ export interface HandoverAssetItemsPage {
 
 ### 5.1 `PortalHandoverList`
 
-数据源：`GET /portal/api/v1/me/handover-tasks` → `{ as_assignee: [...], as_subject: [...] }`
+数据源：`GET /portal/api/v1/me/handover-tasks` → `{ handover_tasks: { as_assignee: [...], as_subject: [...] } }`
+（**带信封**，与详情一致；直接读裸对象会拿到 `undefined`）
 
 布局：两个分区，**`as_assignee` 在上**（那是待办，有截止压力）。
 
@@ -308,7 +309,12 @@ export interface HandoverAssetItemsPage {
 | 字段 | 控件 | 校验 |
 |---|---|---|
 | 转出方 | 人员选择器，数据源 `?purpose=reassign_subject` | 必填 |
+| **应用范围** | 多选（数据源：该 subject 有数据的 APP 列表） | **必填至少一个**，`01` §6.1 的 `app_keys` |
 | 理由 | `TextArea` | 必填，≥10 字符，前端先校验再提交 |
+
+提交 body 固定为 `{"subject_user_id": "...", "app_keys": ["..."], "reason": "..."}`。
+**不得默认全选所有 APP** —— 那会把用户没打算移交的应用一起拉进单据（`00` §8.4 明说
+同一 subject 可以有多张针对不同 APP 的 open `reassign` 单）。
 
 提交后建单跳详情，接收人在详情页的资产分配器里逐类指定（不在对话框里定）。
 403 `out_of_managed_scope` → 「你没有该员工的管理权限，请联系管理员处理。」

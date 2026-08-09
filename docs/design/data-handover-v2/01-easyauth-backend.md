@@ -10,7 +10,7 @@
 
 | 模块 | 改动性质 | 说明 |
 |---|---|---|
-| `lifecycle/models.py` | 扩展 + 破坏性重构 | 新增 4 张表（AssetType / AssetOverride / ExecutionAttempt / ExecutionLease），`HandoverTask` 加 7 字段（assignee / assignee_state / escalation_level / generation / escalation_deadline / last_reminded_on / escalation_deferred_at），`HandoverAppAction` 数据接收人下沉到条目级、保留 `grant_receiver` |
+| `lifecycle/models.py` | 扩展 + 破坏性重构 | **新增 7 张表**：`HandoverAssetType` / `HandoverAssetOverride` / `HandoverExecutionBatch` / `HandoverDeliveryAttempt` / `HandoverExecutionLease` / `HandoverLeaseFence` / `HandoverBatchPlan`；`HandoverTask` 加 7 字段（assignee / assignee_state / escalation_level / generation / escalation_deadline / last_reminded_on / escalation_deferred_at）；`HandoverAppAction` 数据接收人下沉到条目级、保留并改名 `grant_receiver`，另加 generation / snapshot_token / confirm_version / overrides_version / batch_seq / data_completed_at / blocked_reason / skip_reason / skipped_by / skipped_at / last_error_raw / async_status_url / async_poll_attempts |
 | `lifecycle/assignee.py` | **新建** | 主管链解析（契约 §8.2） |
 | `lifecycle/escalation.py` | **新建** | 交接单超时上交（契约 §7.4）。~~代管授权~~已废弃 |
 | `lifecycle/handover.py` | 重构 | webhook payload v2、新增 items 事件、blocked 判定 |
@@ -560,7 +560,9 @@ models.CheckConstraint(
 | App | 迁移 | 内容 |
 |---|---|---|
 | `applications` | `00XX_app_handover_capability.py` | §2.7 五字段 + 约束 |
-| `lifecycle` | `00XX_handover_v2_schema.py` | §2.1–§2.5.1 的全部 lifecycle 变更；**`to_user` 用 `RenameField` 改名为 `grant_receiver`**；只删除 `execution_to_user` / `policy` / `execution_policy` |
+| `access_requests` | `00XX_approval_routing_state.py` | §4.5.1 的 `approval_routing_state` / `routing_reason` 两字段 + 默认值 |
+| `lifecycle` | `00XX_approval_rule_replacement.py` | §4.5.2 的 `ApprovalRuleReplacementRequired` 表 + 条件唯一约束 |
+| `lifecycle` | `00XX_handover_v2_schema.py` | §2.1–§2.5.1 的全部 lifecycle 变更：**7 张新表**、`HandoverTask` 的 7 个新字段、`HandoverAppAction` 的全部新字段（含 `last_error_raw`）；**`to_user` 用 `RenameField` 改名为 `grant_receiver`**；只删除 `execution_to_user` / `policy` / `execution_policy`；§2.2 与 §2.4 的两个**约束触发器**用 `RunSQL` 建（含 reverse_sql） |
 
 `lifecycle` 迁移必须是**一个**迁移文件完成改名、删列与建表，避免中间态。
 
@@ -1066,7 +1068,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 
 | 端点 | 成功码 | 响应体 |
 |---|---|---|
-| `GET /me/handover-tasks` | 200 | `{"as_assignee": [<列表项>], "as_subject": [<列表项>]}`。列表项 = §6.2 的详情对象去掉 `actions`/`team_items`，另加 `pending_app_count` / `blocked_app_count` / `total_asset_count` |
+| `GET /me/handover-tasks` | 200 | `{"handover_tasks": {"as_assignee": [<列表项>], "as_subject": [<列表项>]}}`（与详情同样带信封）。列表项 = §6.2 的详情对象去掉 `actions`/`team_items`，另加 `pending_app_count` / `blocked_app_count` / `total_asset_count` |
 | `POST /handover-tasks/pre-offboard` | **201** | 完整的 §6.2 详情对象 |
 | `POST /handover-tasks/reassign` | **201** | 完整的 §6.2 详情对象 |
 | `GET /handover-tasks/{id}` | 200 | §6.2 详情对象 |
@@ -1263,9 +1265,16 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 > 要求 App、channel、credential 三者齐全（`:46,48,57,113`）。
 > 生命周期通知**不属于任何业务 APP**，随便借用一个会把配额、审计归属、收件范围全搞错。
 >
-> 因此需要**先建一个 EasyAuth 内部的生命周期通知身份**：专用 App 记录 + 唯一 active
-> notification channel + credential，并在启动健康检查里断言其存在。
-> 配置缺失时**只告警、不借用业务 APP、不静默丢消息**。
+> 因此需要**先建一个 EasyAuth 内部的生命周期通知身份**，并且要有具体交付物，
+> 不能只写一句"需要一个身份"：
+>
+> | 交付物 | 内容 |
+> |---|---|
+> | 固定 app key | `easyauth-lifecycle`（内部保留，不对外注册，不参与交接自身的 App 清单） |
+> | 数据迁移 | 建该 App 记录 + 一条 active 的钉钉 notification channel + credential 引用 |
+> | 启动健康检查 | 断言三者齐全且 channel active；缺失**只告警**，不阻断启动 |
+> | 模板 | `notify/messages.py` 里 §13 的全部文案，key 前缀 `lifecycle.` |
+> | 测试 | `tests/unit/lifecycle/test_notifications.py`：每种通知的收件人与去重键；配置缺失时**告警且不发送**，**不借用业务 APP**，**不静默丢消息** |
 
 > `src/easyauth/tasks/lifecycle.py` **已经存在**，本节是扩展而非新建。
 > 另外两点与既有实现不符，需一并处理：beat 目前是**直接投递任务**，不经 outbox；
@@ -1433,20 +1442,19 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 
 ### 执行方式
 
-后端测试走 Docker + uv（host `.venv` 不可用）。**镜像名不能留占位符** ——
-用仓库 CI 里实际使用的那一个（见 `.github/workflows/docker-build.yml`），
-或先 `docker build` 出本地 tag 再引用：
+**两条 lane，用途不同，都要跑：**
 
-```bash
-IMAGE=easyauth-backend:local          # 与 CI 一致的 tag, 不要写 <image>
-docker run --rm -v "$PWD":/w -w /w "$IMAGE" \
-  uv sync --extra dev --frozen && \
-  docker run --rm -v "$PWD":/w -w /w "$IMAGE" \
-  uv run --frozen pytest tests/unit/lifecycle -q
-```
+| lane | 命令 | 覆盖 |
+|---|---|---|
+| CI（权威门禁） | `uv sync --extra dev --frozen` 后 `.venv/bin/pytest tests/unit/lifecycle -q`（与 `.github/workflows/docker-build.yml` 一致） | 全部单测 |
+| **PostgreSQL lane（必须）** | 起 `docker compose up -d postgres` 后跑集成用例 | **约束触发器、条件唯一约束、租约并发、`SELECT ... FOR UPDATE`** |
 
-**租约并发用例必须跑在真 PostgreSQL 的那条 lane 上**（条件唯一约束与
-`SELECT ... FOR UPDATE` 在 SQLite 上行为不同，跑过了也不说明问题）。
+> **第二条不是可选项。** 本次新增的两个跨表不变量靠**约束触发器**、执行互斥靠
+> **条件唯一约束**、接管靠 `FOR UPDATE` —— 这四样在 SQLite 上要么不生效、要么语义不同，
+> 在 SQLite 上"跑过了"完全不说明问题。相关用例必须显式标记为需要真库。
+
+> 本机开发若 host `.venv` 不可用，用 `docker compose run --rm` 走 compose 里已定义的
+> 服务执行同样的命令；**不要在文档里写 `<image>` 这类占位 tag**，照抄跑不了。
 
 ---
 
