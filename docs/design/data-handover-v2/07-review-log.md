@@ -14,8 +14,17 @@
 - §1.2 D11 被下游静默豁免 —— ✅ **定案：审批责任纳入本期，`WorkRecord` 写成显式例外**
 - §1.3 EasyProject 实施可行性 —— ✅ **定案：完整做，A5 阻塞等 AG-00 裁定所有权与 system-actor 语义**
 
-§3.2–§3.6 中与代管无关的发现（并发/执行、EasyAuth 后端、EasyTrade 谓词与副作用、
-EasyProject 命令层）**仍未落文档**，是下一轮修改的对象。
+§3.2–§3.6 中与代管无关的发现**已全部落入各自文档**（见各节标题的状态标记）。
+
+**仍未处理的少数项**（都不是 blocker，且都已在正文里显式记为缺口）：
+
+| 项 | 为什么暂不处理 |
+|---|---|
+| 建立权威超管收件人镜像 | 「通知全体超管」当前实现不了（超管资格只在请求期远程判定）。本期改为控制台常驻告警条，镜像列为独立后续项 |
+| 钉钉在途审批实例转办 | 客户端无转办接口，需先确认钉钉开放平台能力。见 `00` §11.1 |
+| `EasyProject WorkRecordRow` 归属列 | D11 的显式例外，需独立领域改造 |
+| HMAC 覆盖 event/delivery 头 | 可利用面窄，且下游冻结向量已写死签名串。本期补偿为强制校验 event 与 body `mode` 一致 |
+| EasyProject 消费快照（原 P1） | 代管砍掉后失去本期依据，降级为已知偏差另行立项 |
 
 ---
 
@@ -105,7 +114,7 @@ recurrence patch 不支持 assignee/assigner。**而 webhook 没有合法的人�
 
 ---
 
-## 3. 已接受但尚未落文档的发现（下一轮修）
+## 3. 已接受的发现与落文档情况
 
 ### 3.1 代管选型候选（对应 §1.1）
 
@@ -115,7 +124,7 @@ recurrence patch 不支持 assignee/assigner。**而 webhook 没有合法的人�
 | B 砍掉代管 | 悬置期不给主管任何业务系统权限；改为在 EasyAuth 门户的交接单里直接展示各 APP 的资产明细（items 接口已有），主管据此判断给谁 | 最小；代价是主管**看不到业务上下文**（客户最近在谈什么），判断质量下降 |
 | C 只读代管 | 只发只读能力，且仍需 A 的 scope 机制 | 未真正降低复杂度 |
 
-### 3.2 并发与执行（切片 2，14 条）
+### 3.2 并发与执行（切片 2）—— ✅ 已落文档
 
 - 授权转移**先于**数据 webhook 执行（`handover.py:182` vs `:190`）→ webhook 失败时"数据没搬、权限已转"，状态机表达不了。必须改为数据成功后再幂等转授，并引入 `data_completed` / `grants_completed` 子状态。
 - 永久失败的 action 让整张单**既不能跳过也不能取消**（`skip_action` 卡 `attempts`、`cancel_task` 卡 `attempts__gt=0`）→ 死锁。
@@ -124,7 +133,7 @@ recurrence patch 不支持 assignee/assigner。**而 webhook 没有合法的人�
 - 执行互斥需持久化租约行（含 owner/fence），短事务 `select_for_update` 跨 worker/Celery 不成立。
 - `HandoverGrantItem` / `CustodyGrant` 缺 generation，升级后新旧混用。
 
-### 3.3 EasyAuth 后端（切片 3）
+### 3.3 EasyAuth 后端（切片 3）—— ✅ 主要项已落文档
 
 - 门户 guard 只查 session subject + active，本地超管会生成 active `local-admin:` UserMirror → **可冒充员工调用自助 API**。门户必须显式拒绝本地管理员。
 - 「通知全体超管」当前不可实现：超管资格只在请求期远程查 Authentik，没有可枚举的本地成员表。
@@ -133,7 +142,7 @@ recurrence patch 不支持 assignee/assigner。**而 webhook 没有合法的人�
 - `tasks/lifecycle.py` 已存在（不是"新建"）；beat 直接投递不走 outbox；schedule 只接受 float interval，crontab 需扩展。
 - 多个不变量未落库：asset action / capability / revoke trigger 缺 check、`generation` 允许 0、未约束 assignee ≠ subject。
 
-### 3.4 EasyTrade（切片 4）
+### 3.4 EasyTrade（切片 4）—— ✅ 已落文档
 
 - **descriptor 形状冲突**：不是手写，而是经 `easyauth_manifest_export._lifecycle()` 产出，该校验器只接受并只返回 `{handover_url, onboard_url, capabilities}`（`:109,117-121`）。设计里的嵌套 `lifecycle.handover` 会被拒绝或剥掉。应扩既有结构（已有 `lifecycle.capabilities` 列表）。
 - 8 类资产的终态判定普遍不全：订单缺 `cancelled_at`；询盘缺 `deleted_at`/`lost_at`；任务应为 `status='OPEN' AND voided_at IS NULL`；样品申请缺三个 CLOSED 状态；需求终态集应为 `COMPLETED/REJECTED/MERGED`（`ON_HOLD` 仍活跃）。
@@ -144,7 +153,7 @@ recurrence patch 不支持 assignee/assigner。**而 webhook 没有合法的人�
 - `/api/v1/user-candidates` 始终过滤 `active=true`，`fetchUserCandidateById()` 其实不按 id 取——离职者当前值仍会显示失败。
 - `tasks_scope.py` 用 `created_by_user_id` 参与鉴权 → 代管期会连带暴露"仅由该人创建"的任务。
 
-### 3.5 EasyProject（切片 5）
+### 3.5 EasyProject（切片 5）—— ✅ 已落文档
 
 - `06` 的「无后端改动」不成立：`isActive` 只在**目录 API** 有，task/project/board/work-record 的 `UserBrief` 都没有状态字段。
 - 「仅看已离职人员的数据」现有过滤 API 表达不了（任务只有 `assigneeId[]`，项目只有单值 owner/member）。
@@ -154,7 +163,7 @@ recurrence patch 不支持 assignee/assigner。**而 webhook 没有合法的人�
 - CCR 范围不止错误码：custody scope / permission baseline 也要变，且 `generate_baseline.py` 本身需改，否则再生会覆盖。
 - 401 与契约 §10.1 的 403 定级冲突需裁定。
 
-### 3.6 跨文档（切片 6）
+### 3.6 跨文档（切片 6）—— ✅ 已落文档
 
 - D5 冻结 14 天，`01` 却允许环境变量覆盖 + 超管续期。
 - D9 规定跨部门由超管发起，但冻结 API 没有超管跨范围创建 `reassign` 的端点。
