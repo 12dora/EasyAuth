@@ -492,10 +492,23 @@ reconcile 该 App 下所有 `blocked` 且所属 task 仍 open 的 action：
 def sync_handover_capability(app: App) -> None: ...
 ```
 
-- 拉取 `/.well-known/easyauth-app.json`，解析 `lifecycle.handover`（契约 §9.1）。
-- 成功 → 写 `handover_capability=declared`、`handover_asset_types`、`handover_capability_synced_at`；
-  同步 `AppWebhookConfig.handover_url`。
-- 拉取失败或缺 `lifecycle.handover` → **不覆盖**已有的 `none` 声明；否则置 `undeclared`，
+- 拉取 `/.well-known/easyauth-app.json`，解析 **`lifecycle.capabilities` 与 `lifecycle.handover_asset_types`**
+  （契约 §9.1 —— descriptor **没有**嵌套的 `lifecycle.handover` 对象，那是被废弃的早期形状，
+  会被 EasyTrade 的 `_lifecycle()` 校验器直接剥掉）。
+- 判定三态，与契约 §9.1 的表逐行对应：
+
+  | 判定条件 | `handover_capability` |
+  |---|---|
+  | `"handover.v2" in lifecycle.capabilities` 且 `lifecycle.handover_url` 非空 | `declared` |
+  | `"handover.none" in lifecycle.capabilities` 且 `handover_asset_types == []` | `none` |
+  | 其余（含两个能力串同时出现、含拉取失败） | `undeclared` |
+
+  两个能力串同时出现是 APP 的声明错误，按 `undeclared` 处理并写告警
+  `handover_capability_conflict`，**不得**任选其一（那是静默兜底）。
+- `declared` → 写 `handover_capability=declared`、`handover_asset_types`（取自
+  `lifecycle.handover_asset_types`，逐项含 `type`/`label`/`detail_supported`/`releasable`）、
+  `handover_capability_synced_at`；同步 `AppWebhookConfig.handover_url`。
+- 拉取失败或 `capabilities` 里两个能力串都没有 → **不覆盖**已有的 `none` 声明；否则置 `undeclared`，
   action 建单时即 `blocked`（`blocked_reason="descriptor_unreachable"`）。
 - 挂到既有 manifest 同步入口（`api/manifest_sync_views.py`）与控制台"重新同步"按钮。
 

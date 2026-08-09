@@ -294,8 +294,18 @@ POST /api/v1/easyauth/lifecycle/handover
 
 ### 4.6 descriptor（契约 §9.1）
 
-`api/v1/easyauth_descriptor.py` 输出增加 `lifecycle.handover` 段，`asset_types` 由 §4.1 注册表生成，
-`capability="declared"`，`url` 指向 §4.2 的端点。全部 9 类 `releasable` 均为 `false`（EasyProject 没有「无主」这一合法状态）。
+`api/v1/easyauth_descriptor.py` 的 `lifecycle` 段按契约 §9.1 的形状扩展 —— **不新增嵌套对象**，
+而是在既有 `lifecycle` 下：
+
+- `capabilities` 数组里加入 `"handover.v2"`；
+- 新增 `handover_asset_types` 数组，逐项 `{type, label, detail_supported, releasable}`，
+  由 §4.1 注册表生成（与 preview/items/execute 共用同一常量，杜绝漂移）；
+- `handover_url` 指向 §4.2 的端点。
+
+全部 9 类 `releasable` 均为 `false`（EasyProject 没有「无主」这一合法状态）。
+
+> 契约 §9.1 已废弃早期的嵌套 `lifecycle.handover` 对象与独立的 `capability` 字段；
+> 能力判定的**唯一**依据是 `capabilities` 里是否出现 `"handover.v2"`。
 
 > 这**不影响部分交接**：契约 §10.5 的 `default_action="skip"` + 逐条 `action="transfer"` 这条路径
 > 与 `releasable` 无关，因此本应用的 9 类资产同样支持逐条改派。`releasable=false` 只是禁掉
@@ -417,7 +427,7 @@ CCR 内容（按 `contracts/workflow.md` §6 的六要素）：
 ### 5.5 descriptor 输出变更
 
 `GET /.well-known/easyauth-app.json`（基线中 `x-auth: descriptor-bearer`，owner 同为 AG-06）
-的**响应体新增** `lifecycle.handover` 段（§4.6）。同 §5.4 的理由：响应 schema 不在基线内，
+的**响应体扩展 `lifecycle` 段**（`capabilities` 增项 + 新增 `handover_asset_types`，见 §4.6）。同 §5.4 的理由：响应 schema 不在基线内，
 **不需要 CCR**。
 
 但需同步更新 `docs/design/easyproject-manifest.draft.json` —— 该文件是 descriptor 内容的设计来源，

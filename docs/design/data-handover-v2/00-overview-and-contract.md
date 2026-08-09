@@ -860,7 +860,8 @@ D11 是冻结决策，**下游文档不得单方面豁免**。经复核确认，
 A2 据此即可开工。
 
 联调门禁：EasyAuth 的 `webhook.test` 事件对每个 APP 返回 200，且各 APP 的 descriptor 能被
-`GET /.well-known/easyauth-app.json` 正确拉取并解析出 `lifecycle.handover`。
+`GET /.well-known/easyauth-app.json` 正确拉取，并解析出 `lifecycle.capabilities` 含 `"handover.v2"`
+与非空的 `lifecycle.handover_asset_types`（§9.1 的形状，**不是**嵌套的 `lifecycle.handover` 对象）。
 
 ---
 
@@ -874,7 +875,7 @@ A2 据此即可开工。
    展开明细能看到逐条名称与 `hint` 摘要（验证 §7.2 的可见性方案生效）。
 5. 主管对「名下客户」展开明细，把其中 2 个改派给另一人，其余整批给接收人 → execute → 两个接收人在 EasyTrade 里
    各自看到对应客户。
-6. 把某个 APP 的 descriptor 改为不声明 `lifecycle.handover` → 重新建单 → 该行显示「未接入交接」，
+6. 把某个 APP 的 descriptor 的 `lifecycle.capabilities` 去掉 `"handover.v2"` → 重新建单 → 该行显示「未接入交接」，
    整单不能完成；超管填理由跳过后整单完成。
 7. 把 `escalation_deadline` 人为改到过去 → 跑一次上交任务 → 单子上交到上一级主管、`escalation_level` +1、双方均收到通知。
 8. 用另一个在职员工发起 `kind=reassign`，把步骤 5 中接收人的部分客户再转给第三人 → 成功，且三方均收到通知。
