@@ -130,7 +130,10 @@ models.CheckConstraint(
 | 字段 | 类型 | 说明 |
 |---|---|---|
 | `generation` | `PositiveIntegerField(default=1)` | 建 action 时从 `task.generation` 拷贝；升级时重置 |
-| `snapshot_token` | `CharField(max_length=128, blank=True)` | 最近一次 preview 返回的令牌（契约 §10.5.1） |
+| `snapshot_token` | `CharField(max_length=128, blank=True)` | 最近一次 preview 返回的令牌（契约 §10.5.1），**不出现在任何 HTTP 响应里** |
+| `preview_version` | `PositiveIntegerField(default=0)` | 单调递增，每次 preview 成功 +1。execute 请求必须回带匹配值，否则 409（§6.1） |
+| `overrides_version` | `PositiveIntegerField(default=0)` | 单调递增，每次 override 集合被替换 +1。`PUT overrides` 必须回带匹配值，否则 409 |
+| `skipped_at` | `DateTimeField(null=True, blank=True)` | 强行跳过的时间，与 `skipped_by` 一起构成责任链 |
 | `batch_seq` | `PositiveIntegerField(default=0)` | 已分配的最大批次号。**注意：批次的事实来源是 §2.4.1 的 append-only 表，本字段只是分配器** |
 | `data_completed_at` | `DateTimeField(null=True, blank=True)` | 数据 webhook 已成功、权限尚未转授（契约 §10.5.1.1 的子状态，持久化） |
 | `grant_receiver` | `FK(UserMirror, PROTECT, null=True, related_name="handover_grant_receiving")` | 权限接收人，见上 |
@@ -913,12 +916,25 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | POST | `/handover-tasks/reassign` | 我对 `subject` 有管辖权（契约 §4 的主管链判定，**不走 `resolve_managed_users`**）且双方 active | 在职移交（D9）。body：`{"subject_user_id": "<OIDC sub>", "reason": "至少 10 字"}`。缺 `subject_user_id` → `422`；`reason` 不足 10 字 → `422 reason_required` |
 | GET | `/handover-tasks/{task_id}` | 我是 assignee 或 subject | 单据详情，含各 APP action、资产分类、距上交剩余天数 |
 | GET | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}/items` | 同上 | 明细分页，query: `page`、`page_size`、`q` |
+| GET | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}/overrides` | 同上 | **返回当前 generation 的完整 override 集合**与 `overrides_version`。`PUT` 是整体替换，没有这个读回入口，用户刷新页面后改一条就会把其余全部删掉 |
 | PATCH | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}` | 我是 assignee | body: `{"default_action": "transfer"\|"release"\|"skip", "default_to_user_id": str\|null}` |
-| PUT | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}/overrides` | 我是 assignee | body: `{"overrides":[{"asset_id":"...","action":"transfer"\|"release"\|"skip","to_user_id":"..."\|null,"label":"..."}]}`，**整体替换** |
+| PUT | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}/overrides` | 我是 assignee | body: `{"overrides_version": n, "overrides":[{"asset_id":"...","action":"transfer"\|"release"\|"skip","to_user_id":"..."\|null,"label":"..."}]}`，**整体替换**。`overrides_version` 必填，与服务端不一致返回 `409 overrides_version_stale` —— 整体替换 + 无版本号 = 后一次保存静默吃掉前一次的全部修改 |
 | POST | `/handover-tasks/{task_id}/actions/{app_key}/preview` | 我是 assignee | |
-| POST | `/handover-tasks/{task_id}/actions/{app_key}/execute` | 我是 assignee | |
+| POST | `/handover-tasks/{task_id}/actions/{app_key}/execute` | 我是 assignee | body **必填** `{"preview_version": n}` —— 用户点确认时界面上显示的那一版。与服务端当前值不一致 → `409 preview_version_stale`，要求重新预演 |
 | POST | `/handover-tasks/{task_id}/actions/{app_key}/retry` | 我是 assignee | 仅 `failed` 可重试，否则 `409 action_not_retryable`。**若 `data_completed_at` 非空，重试只重做授权转移那一步**（契约 §10.5.1.1），不重发数据 webhook |
 | GET | `/handover-candidates` | 登录即可 | 选人控件数据源。query：`q`（模糊，可空）、`purpose`（枚举 `receiver` \| `reassign_subject`，**必填**）。两者都只返回 active 且非本人；`purpose=reassign_subject` 时额外限定在我的 `MANAGED_USERS` 内。**不设默认值** —— 缺 `purpose` 返回 `422 purpose_required`，否则前端漏传就会静默拿到范围过宽的人员列表 |
+
+> **`preview_version`：浏览器必须把"我看的是哪一版"带回来。**
+> `snapshot_token` 是 EasyAuth 与下游之间的凭据，**替代不了这件事** ——
+> 它存在服务端 action 上，谁重新 preview 谁就把它覆盖成最新的。
+>
+> 故障场景很具体：负责人 A 预演看到 187 条客户，正在逐条勾选；此时超管 B 对同一 action
+> 重新预演，服务端 token 变成对应 191 条的新值；A 点「执行交接」，后端拿**最新** token 去执行
+> —— 191 条全部被搬走，其中 4 条 A 从来没见过。
+>
+> 因此 `HandoverAppAction` 上再加一个**单调递增**的 `preview_version`：每次 preview 成功 +1，
+> 在详情响应里返回，execute 请求必须回带。不一致就 409 让用户重新看一遍。
+> **下游的 `snapshot_token` 仍然只存在后端，前端不碰。**
 
 > **`snapshot_token` 不出现在门户 API 里，前端一个字节都不用碰。** 它由 EasyAuth 在
 > preview 响应中取回并存进 `HandoverAppAction.snapshot_token`（§2.2），
@@ -971,7 +987,9 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
   "status": "in_progress",
   "generation": 1,
   "subject": { "user_id": "3f1a…", "name": "王某某", "department": "华东销售部", "status": "departed" },
-  "assignee": { "user_id": "8c44…", "name": "李某某", "state": "manager", "escalation_level": 0 },
+  "assignee": { "user_id": "8c44…", "name": "李某某" },
+  "assignee_state": "manager",
+  "escalation_level": 0,
   "escalation": { "deadline": "2026-08-24T10:00:00Z", "days_left": 14, "level": 0, "deferred_at": null },
   // deadline/days_left 为 null 表示已落超管池, 不再上交; deferred_at 非空表示本层级已顺延过一次
   "reason": "目录同步检出离职",
@@ -987,6 +1005,11 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
       "grant_receiver": { "user_id": "8c44…", "name": "李某某" },
       "summary": null,
       "data_completed_at": null,
+      "preview_version": 3,
+      "overrides_version": 7,
+      "skipped_by": "", "skipped_at": null,
+      "allowed_actions": ["preview", "execute"],
+      "batch_progress": null,
       "asset_types": [
         {
           "type": "customer", "label": "名下客户", "count": 187,
@@ -1007,6 +1030,11 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
       "grant_receiver": null,
       "summary": null,
       "data_completed_at": null,
+      "preview_version": 0,
+      "overrides_version": 0,
+      "skipped_by": "", "skipped_at": null,
+      "allowed_actions": [],
+      "batch_progress": null,
       "asset_types": []
     }
   ],
@@ -1014,8 +1042,27 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 }
 ```
 
+整个详情**包在信封里**返回：`{"handover_task": { ...上述对象... }}`。
+
+> **信封与字段名都要与既有控制台对齐，不能各写各的。** 现有控制台读的是
+> `response.handover_task`（`admin_console/lifecycle_api.py:245-260`、
+> `frontend/src/pages/console/lifecycle/HandoverTaskDetail.tsx:58-64`），
+> 而 action 数组既有名字是 `app_actions`。
+> v2 统一为：**保留 `handover_task` 信封**（改动面小），**数组统一改名 `actions`**，
+> 并在**同一次改造里**把既有控制台消费者一起迁过来。
+> 一半新一半旧的话，`task` 会直接是 `undefined`。
+
+三个新字段的语义：
+
+| 字段 | 语义 |
+|---|---|
+| `skipped_by` / `skipped_at` | 强行跳过的**责任链**。契约 §9.2 要求单据上永久显示「已由 {谁} 于 {何时} 强行跳过：{理由}」，只有 `skip_reason` 是匿名的，满足不了 |
+| `allowed_actions` | `("preview"\|"execute"\|"retry"\|"skip")[]`，**由后端算好**。前端据此决定按钮，**不得解析 `last_error` 去猜可不可重试**。按契约 §10.6：4xx（除 400）不可重试 → 不含 `retry`；`failed` 且非在途 → 控制台含 `skip`（门户永远不含，D6 是超管专属） |
+| `batch_progress` | 413 分批时非 null：`{"completed": 1, "total": 3, "current_batch_seq": 2}`；未分批时 null |
+
 `GET /me/handover-tasks` 的列表项是上述对象去掉 `actions`/`team_items`，另加
-`pending_app_count`、`blocked_app_count`、`total_asset_count`。
+`pending_app_count`、`blocked_app_count`、`total_asset_count`，同样包在
+`{"handover_tasks": {"as_assignee": [...], "as_subject": [...]}}` 里。
 
 ### 6.3 控制台（`/console/api/v1/lifecycle/`，超管）
 
@@ -1027,7 +1074,9 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | POST | `.../handover-tasks/{id}/claim` | 超管认领 `superuser_pool` 中的单，assignee 置为该超管，`assignee_state=manager`。**认领人必须是 active、非 `local-admin:`、且有有效钉钉绑定的 OIDC 超管**，否则 `403 local_admin_cannot_claim` |
 | POST | `.../handover-tasks/reassign` | **超管跨管辖范围建 `reassign` 单**（D9 的「跨部门走超管」路径）。body 同门户版，但**不做管辖范围校验**；仍校验双方 active、双方非本地管理员、`reason` ≥10 字符、接收人 ≠ 当事人。写审计 `handover_reassign_created`（`initiator` 记该超管） |
 | POST | `.../handover-tasks/{id}/escalation/defer` | 把 `escalation_deadline` 顺延 `HANDOVER_ESCALATION_DAYS`（不改 `escalation_level`），必填 `reason` ≥10 字符。**同一 `escalation_level` 内至多一次**（靠 `escalation_deferred_at` 判定，非空即拒 `409 already_deferred`）；上交后该字段清空，新层级可再顺延一次。写审计 `handover_task_deferred`，单据上永久显示「已由 {超管} 于 {时间} 顺延：{理由}」 |
-| GET | `.../handover-blocked-apps` | 未接入 APP 汇总，供控制台顶部告警条 |
+| GET | `.../handover-blocked-apps` | 未接入 APP 汇总，供控制台顶部告警条。响应 `{"app_count": n, "task_count": m, "apps": [{"app_key","app_name","blocked_task_count"}]}` |
+| GET | `.../apps/{app_key}/handover-capability` | 能力标签页的**初始数据**。响应 `{"handover_capability": "declared"\|"none"\|"undeclared", "handover_asset_types": [...], "handover_url": "", "declared_by": "", "declared_at": null, "synced_at": null}`。**没有这个 GET，能力标签页打开就是空白** —— 既有 app detail 不返回三态，冻结契约里也只有两个 POST |
+| PATCH | `.../handover-tasks/{id}/actions/{app_key}` | 设置**权限接收人**，body `{"grant_receiver_user_id": string\|null}`。仅 `kind=offboard` 允许非空，否则 `422`。修改后该 action 回退 `pending` 并清除上一轮 preview 结果（接收人变了，之前的预演不再代表现在的意图）。返回更新后的 action 对象 |
 | POST | `.../apps/{app_key}/handover-capability` | 声明 `none`，body `{"reason": "..."}`；写 `declared_by`/`declared_at` |
 | POST | `.../apps/{app_key}/handover-capability/sync` | 手动触发 §5.2 descriptor 同步 |
 

@@ -78,7 +78,7 @@
 
 | 角色 | 判定方式 | 可做 |
 |---|---|---|
-| 当事人（subject） | 登录用户本人 | 在职期间对自己发起 `transfer` 单；查看自己单子的进度 |
+| 当事人（subject） | 登录用户本人 | 在职期间对自己发起 **`pre_offboard`** 单（提前交接，D7）；查看自己作为 subject 的单据进度。**`transfer` 是转岗，不是提前交接的入口** —— 它会重算授权（§6.1），员工自助发起它会误改自己仍在使用的权限 |
 | 负责人（assignee） | 单上的 `assignee` 字段 | 指定/改派接收人、preview、execute、查看明细、申请延期 |
 | 主管（manager） | `DingTalkUserOrgContext.manager_chain` 上的 active 用户 | 对**自己管辖范围内**的在职员工发起 `reassign` 单 |
 | 超管（superuser） | `require_superuser`（Authentik 组交集，每请求判定） | 全部权限；强行 `skip` 未接入 APP；认领超管池中的单 |

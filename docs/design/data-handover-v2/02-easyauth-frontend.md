@@ -68,8 +68,18 @@
 | `/portal/handovers` | `PortalHandoverList` |
 | `/portal/handovers/:taskId` | `PortalHandoverDetail` |
 
-Django 侧无需改动：`portal_react_route`（`src/easyauth/portal/urls.py:51`）已用
-`<path:_portal_path>` catch-all 把所有非 API 深路径交给同一 React 壳。
+**Django 侧必须改动，不能只靠 React 路由。**
+`portal_react_route`（`src/easyauth/portal/urls.py:51`）的 `<path:_portal_path>` catch-all
+确实已经把深路径交给同一 React 壳，但 `portal_home` / `portal_react_route` 现在**只校验
+session 用户 active**（`portal/views.py:16-27`）—— 而 break-glass 本地管理员正好是一个
+active 的 `local-admin:*` `UserMirror`（`accounts/local_admin.py:125-134`）。
+
+结果是「界面进得去、API 才拒绝」的**半授权状态**：本地管理员能打开 `/portal/handovers`，
+看到完整的员工自助界面框架，只是每个请求都 403。
+
+因此：**门户壳视图与全部自助 API 共用同一个门禁** `require_portal_user()`，
+session subject 以 `LOCAL_ADMIN_SUBJECT_PREFIX` 开头时**在 Django 层直接 403**。
+**React 路由不承担这条安全边界** —— 前端路由只管展示。
 
 ### 3.2 控制台
 
@@ -125,13 +135,32 @@ export interface HandoverAssetSummary {
   failed: number;
 }
 
+export type HandoverAllowedAction = "preview" | "execute" | "retry" | "skip";
+
+export interface HandoverBatchProgress {
+  completed: number;
+  total: number;
+  current_batch_seq: number;
+}
+
 export interface HandoverAction {
   app_key: string;
   app_name: string;
   status: HandoverActionStatus;
   blocked_reason: string;
   skip_reason: string;
+  /** 强行跳过的责任链; 单据上永久展示「已由 X 于 T 强行跳过」 */
+  skipped_by: string;
+  skipped_at: string | null;
   last_error: string;
+  /** 后端算好的可用操作; 前端不得解析 last_error 猜可不可重试 */
+  allowed_actions: HandoverAllowedAction[];
+  /** execute 必须回带; 与服务端不一致时 409 preview_version_stale */
+  preview_version: number;
+  /** PUT overrides 必须回带; 整体替换的并发保护 */
+  overrides_version: number;
+  /** 413 分批时非 null */
+  batch_progress: HandoverBatchProgress | null;
   asset_types: HandoverAssetType[];
   /** 仅 kind=offboard 有意义; null = 只撤权不转授 */
   grant_receiver: HandoverUserRef | null;
@@ -155,7 +184,10 @@ export interface HandoverTaskDetail {
   status: HandoverTaskStatus;
   generation: number;
   subject: HandoverUserRef;
-  assignee: (HandoverUserRef & { state: HandoverAssigneeState; escalation_level: number }) | null;
+  assignee: HandoverUserRef | null;
+  /** 与 assignee 平级: assignee 为 null(超管池)时这两个字段仍然有值 */
+  assignee_state: HandoverAssigneeState;
+  escalation_level: number;
   escalation: HandoverEscalation;
   reason: string;
   created_at: string;
@@ -220,8 +252,24 @@ export interface HandoverAssetItemsPage {
 | `previewed` | 展开资产分配器（§6）+ [重新预演] [执行交接] |
 | `executing` / `async_pending` | 骨架 + 轮询（React Query `refetchInterval: 3000`），禁用按钮 |
 | `done` | 绿底，按 `summary` 逐类展示五元统计（`merged`/`failed` 为 0 时可折叠，但不得隐藏字段） |
-| `failed` 且 `data_completed_at == null` | 红底，「数据未移交，权限未变更」+ `last_error` + [重试]（重试会重新发数据请求） |
-| `failed` 且 `data_completed_at != null` | 橙底，「**数据已移交成功，权限转移失败**」+ `last_error` + [重试]（重试只补做权限转移，不会重复搬数据） |
+| `failed` 且 `data_completed_at == null` | 红底，「数据未移交，权限未变更」+ `last_error`。按钮**由 `allowed_actions` 决定**，不是固定 [重试] |
+| `failed` 且 `data_completed_at != null` | 橙底，「**数据已移交成功，权限转移失败**」+ `last_error`。同上（重试只补做权限转移，不会重复搬数据） |
+
+> **按钮一律读 `allowed_actions`，绝不自己判断。**
+> 契约 §10.6 里 401/403/413/422 都是**不可重试**的 `failed`。
+> 固定显示 [重试] 的话，用户会反复把同一份不受支持的载荷再发一遍，每次都失败；
+> 而门户又不给 `failed` 任何跳过入口 —— action 永远进不了 `done`/`skipped`，整单卡死。
+>
+> - `allowed_actions` 含 `retry` → 显示 [重试]；
+> - 含 `skip` → 显示 [填理由后跳过]（**只会出现在控制台**，D6 是超管专属）；
+> - 两者都不含（门户遇到不可重试失败）→ 只显示「此项无法自动重试，请联系管理员处理」。
+>
+> **前端不得解析 `last_error` 文本去猜可重试性** —— 那是下游自由格式的字符串。
+
+**413 分批不是普通失败**：`batch_progress != null` 时显示「已完成 {completed}/{total} 批」
+与 [执行下一批]，而不是 [重试]。每批执行前**必须重新预演**（契约 §10.5.2：同一 token 只能用一批），
+所以 [执行下一批] 的动作是「重新 preview → 再 execute」两步，界面要把这一点说清楚。
+只有最后一批成功后 action 才转 `done`。
 
 > **最后两行必须分开显示，不能合成一个「失败」。** 契约 §10.5.1.1 把 execute 拆成
 > 「先搬数据、再转授权」两步并持久化了中间态；两种失败的**现场完全不同**：
@@ -290,6 +338,10 @@ export interface HandoverAssetItemsPage {
   | 暂不处理 | `skip` | 无 |
 
 - 「全部释放为无主」**仅当 `releasable=true` 时可选**；否则该项禁用并 tooltip
+- **逐条 override 的 action 下拉必须复用同一条规则**：所属类型 `releasable=false` 时，
+  明细行的「释放为无主」同样禁用。只禁类型级、放行明细级的话，execute 前校验会整批返回 422
+  （契约 §10.5 语义 3），连本来合法的逐条 `transfer` 也一起被拒。
+  `transfer` 与 `skip` 在任何 `releasable` 取值下都始终可用
   「该应用要求这类数据必须有负责人」。**`transfer` 与 `skip` 永远可选**，
   所以 `releasable=false` 的类型照样能用「暂不处理 + 逐条转移」做部分交接。
 - 默认值是 `skip`（后端默认，§4）。这意味着**用户什么都不做时不会误转任何数据**，
@@ -327,7 +379,10 @@ export interface HandoverAssetItemsPage {
 
 数据源 `GET /portal/api/v1/handover-candidates?purpose=receiver&q=`（控制台走对应超管端点）。
 `purpose` **必填**，漏传返回 `422 purpose_required`（`01` §6.1）。
-输入 300ms 防抖，React Query `keepPreviousData`。
+输入 300ms 防抖。**React Query 是 v5**（`frontend/package.json`），保留上一批结果用
+`placeholderData: (previous) => previous`，与现有 `components/UserSelect.tsx:22-39` 一致。
+**不要写 v4 的 `keepPreviousData: true`** —— v5 的 options 类型不接受它，`pnpm build` 会在
+TypeScript 阶段直接失败。
 必须排除当事人本人（后端已排除，前端不重复实现，但要能正确渲染后端返回的空集）。
 
 ---
@@ -398,7 +453,7 @@ key 前缀统一 `handover.*`，门户专用 `handover.portal.*`，控制台专�
 | asset type | 资产类型 | `assetType` |
 | override | 单独指定 | `override` |
 | blocked | 未接入交接 | `blocked` |
-| release / 无主 | 暂不指定 | `release` |
+| release / 无主 | **释放为无主** | `release` |
 
 ---
 
