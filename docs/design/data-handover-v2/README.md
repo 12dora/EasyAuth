@@ -60,7 +60,7 @@ A3 / A5 的实现要用到 v2 SDK（新的 `items` 回调、`handover_payloads` 
 各仓库的契约测试用 `importlib.resources` 从 SDK 包内读取样本做逐字段比对。
 **样本缺失必须让测试失败，不允许 skip 通过。** 样本变更即所有下游测试失败，这是契约漂移的第一道拦截。
 
-## 需要人走流程的两件事
+## 需要人走流程的三件事
 
 1. **EasyProject CCR**：给既有操作 `postEasyauthLifecycleHandover` 补 7 个错误码。
    **可直接提交的正文见 [`09`](09-easyproject-ccr.md)。** 周期长于代码实现，开工第一天就提。
@@ -79,9 +79,11 @@ A3 / A5 的实现要用到 v2 SDK（新的 `items` 回调、`handover_payloads` 
    改它需要独立的领域改造（新增显式 owner 列 + 迁移 + 鉴权切换）。见 `05` §3.4。
 3. **人员集合 scope 泛化 / 代管授权**：本期已砍（`00` §7）。若日后主管反馈"只看名称和摘要判断不了归属"，
    再单独立项。
-4. **webhook HMAC 未覆盖 `X-EasyAuth-Event` / `X-EasyAuth-Delivery`**：可利用面窄，且 EasyProject 的
-   冻结测试向量已把签名串写死，改动需单独立项。本次的补偿是**强制校验 event 头与 body `mode` 一致**。
-   见 `00` §10.1。
+4. **webhook HMAC 未覆盖 `X-EasyAuth-Event` / `X-EasyAuth-Delivery`**：改签名串需要同步全部下游与
+   已冻结的测试向量，成本高，单独立项。本次的补偿是**在 body 里加签名覆盖的 `event_type` 字段**，
+   四个事件无一例外，SDK 在 `webhook.test` 短路之前就比对。见 `00` §10.1。
+   （早期写的"校验 event 头与 body `mode` 一致"已作废：`items` 没有 `mode`，
+   而 `webhook.test` 在 SDK 里根本不看 body 就短路返回。）
 
 ## 关键决策速查
 
