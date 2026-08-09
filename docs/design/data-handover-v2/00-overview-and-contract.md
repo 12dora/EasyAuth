@@ -1,8 +1,7 @@
-# 数据交接 v2：总体设计与跨系统契约
+# 00 · 数据交接 v2：总体设计与跨系统契约
 
 > **本文件是所有并行开发 agent 的唯一基准。** EasyAuth、EasyTrade、EasyProject 三个仓库的改造设计
-> （`handover-01-backend.md`、`handover-02-frontend.md`、EasyTrade `docs/plans/easytrade-data-handover-2026-08-10.md`、
-> EasyProject `docs/design/12`、`docs/design/13`）都从本文件派生。
+> （`01`–`06` 六份，同目录）都从本文件派生。
 > 本文件中的字段名、事件名、状态值、错误码是**冻结契约**，任何一方不得单独修改；确需变更时先改本文件，再同步全部下游文档。
 
 ---
@@ -72,7 +71,7 @@
 | ADR-002 §19 | `MANAGED_USERS` 表示可管理的 **active** Authentik 用户集合 | 新增例外：存在未到期 `CustodyGrant` 时，其 `task.subject_user` 加入集合，**即使该用户为 `departed`/`disabled`** | 不开这个口，D4 无法实现 |
 | ADR-002 §36 | 自助申请审批人必须严格为 active **直属**主管；缺失时禁止提交，不允许向上找 | 改为：沿 `manager_chain` 逐级向上取第一个 active 主管；整链不可用时进超管待认领池 | 与 D3 直接抵触 |
 
-> 修订 ADR 是 EasyAuth 后端 agent 的交付物之一，见 `handover-01-backend.md` §9。
+> 修订 ADR 是 EasyAuth 后端 agent 的交付物之一，见 `01-easyauth-backend.md` §9。
 
 ---
 
@@ -109,12 +108,12 @@ EasyAuth 内部即 `UserMirror.authentik_user_id`（`accounts/models.py:21`）�
 
 EasyProject 收到 `from_user_id` / `to_user_id`（均为 sub）后必须解析为本地 `dtuid`。
 
-- 解析不到时**必须显式失败**，返回 `409` + `{"error":{"code":"identity_unmapped","message":"..."}}`，
-  由 EasyAuth 把该 action 置为 `failed` 并展示原因。
+- 解析不到时**必须显式失败**，返回 **HTTP 409**（错误体沿用各自仓库既有约定，见 §10.6），
+  由 EasyAuth 把该 action 置为 `failed` 并把响应体原样展示出来。
 - **严禁**按姓名/邮箱模糊匹配（违反 EasyProject 不变量 1），**严禁**静默跳过。
 - 从未登录过 EasyProject 的员工没有 sub 绑定，这是**真实且常见**的情况：EasyProject 必须提供一条
   从 EasyAuth 目录接口（`GET /api/v1/directory/users`，SDK 已封装）按 sub 反查 dtuid 并回填绑定的路径。
-  详见 `EasyProject/docs/design/12`。
+  详见 `05-easyproject-backend.md` §2.1。
 
 ### 5.3 资产标识
 
@@ -518,16 +517,32 @@ EasyAuth 在 execute 前校验：对 `releasable=false` 的类型指定 `to_user
 
 ### 10.6 错误响应（APP → EasyAuth）
 
-统一体：`{"error": {"code": "...", "message": "..."}}`
+**HTTP 状态码是唯一规范部分；响应体是参考信息。**
 
-| HTTP | code | EasyAuth 侧处理 |
-|---|---|---|
-| 403 | `webhook_verification_failed` | action → `failed`，展示"签名校验失败" |
-| 409 | `identity_unmapped` | action → `failed`，展示"该 APP 无法识别此人员，需先完成身份绑定" |
-| 422 | `undeclared_asset_type` | action → `failed`，提示 descriptor 与实现不一致 |
-| 422 | `asset_type_not_releasable` | action → `failed`（正常路径下不应发生，属实现不一致） |
-| 413 | `request_body_too_large` | action → `failed`，提示改用更少的 overrides 分批执行 |
-| 500 | `handover_callback_failed` | action → `failed`，可重试（`retry_action`） |
+各下游应用有各自冻结的错误体约定，且互不兼容 —— EasyTrade 用
+`{"error":{"code","message"}}`（小写下划线码），EasyProject 用
+`{"detail":{"code","message","traceId"}}`（全大写码，`contracts/openapi-baseline.json` 的 `ErrorBody`）。
+**EasyAuth 不得要求任何一方改自己的错误体**，那既是无谓的破坏性变更，也会逼出兼容层。
+
+因此 EasyAuth 侧的规则是：
+
+1. 按 **HTTP 状态码**决定 action 状态与是否可重试（下表）。
+2. 响应体**原样截断存入** `action.last_error`（上限 2000 字符），在界面上直接展示给人看。
+   不解析、不映射、不依赖任何字段名。
+3. 响应体不是 JSON 或为空 **不构成额外错误**，按状态码处理即可。
+
+| HTTP | 语义 | action 状态 | 可重试 | 界面提示 |
+|---|---|---|---|---|
+| 200 | 成功 | `done` | — | — |
+| 202 | 异步受理 | `async_pending` | — | 轮询中 |
+| 400 | 请求不合法（如时间戳超窗） | `failed` | 是 | 请求被应用拒绝 |
+| 401 / 403 | 验签失败 | `failed` | 否 | 签名校验失败，请检查该应用的 webhook 密钥 |
+| 409 | 人员无法识别 / 投递冲突 | `failed` | 否 | 该应用无法识别此人员或检测到投递冲突 |
+| 413 | 请求体过大 | `failed` | 否 | 单独指定的条目过多，请分批执行 |
+| 422 | 载荷不被支持（未声明的资产类型、不支持的事件） | `failed` | 否 | 应用声明与实现不一致 |
+| 5xx | 应用内部错误 | `failed` | 是 | 可重试 |
+
+> 各 APP 在自己的设计文档里按本表对齐**状态码**即可，错误码字符串沿用本仓库既有约定，无需统一。
 
 ---
 
@@ -593,14 +608,17 @@ EasyAuth 在 execute 前校验：对 `releasable=false` 的类型指定 `to_user
 
 | Agent | 仓库 | 文档 | 依赖 |
 |---|---|---|---|
-| A1 | EasyAuth | `handover-01-backend.md` | 本文件 §5–§12 |
-| A2 | EasyAuth | `handover-02-frontend.md` | 本文件 §4、§6、§9；A1 的 console/portal API 契约（在 01 文档内冻结） |
-| A3 | EasyTrade | `docs/plans/easytrade-data-handover-2026-08-10.md` | 本文件 §5、§7.3、§10、§11 |
-| A4 | EasyProject | `docs/design/12-数据交接后端接入.md` | 本文件 §5.2、§7.3、§10、§11 |
-| A5 | EasyProject | `docs/design/13-数据交接前端改造.md` | A4 |
+| A1 | EasyAuth | `01-easyauth-backend.md` | 本文件 §5–§12 |
+| A2 | EasyAuth | `02-easyauth-frontend.md` | 本文件 §4、§6、§9；A1 的 console/portal API 契约（在 01 文档内冻结） |
+| A3 | EasyTrade | `03-easytrade-backend.md` | 本文件 §5、§7.3、§10、§11 |
+| A4 | EasyTrade | `04-easytrade-frontend.md` | A3 的 §3.1（候选接口按用途分流 + `isActive`） |
+| A5 | EasyProject | `05-easyproject-backend.md` | 本文件 §5.2、§7.3、§10、§11 |
+| A6 | EasyProject | `06-easyproject-frontend.md` | A5 的 §5.6（目录响应补 `isActive`） |
 
-**A1 与 A3/A4 可完全并行**：三方都只依赖本文件的 webhook 契约，互不阻塞。
-**A2 依赖 A1 的 HTTP API 契约**，该契约在 `handover-01-backend.md` §6 冻结，A1 必须**先提交该章节**再继续实现，
+**A1 / A3 / A5 三个后端可完全并行**：都只依赖本文件的 webhook 契约，互不阻塞。
+两个下游前端（A4/A6）各自依赖同仓库后端的一个小接口改动，可在该改动落地后立即开工，
+无需等待整个后端完成。
+**A2 依赖 A1 的 HTTP API 契约**，该契约在 `01-easyauth-backend.md` §6 冻结，A1 必须**先提交该章节**再继续实现，
 A2 据此即可开工。
 
 联调门禁：EasyAuth 的 `webhook.test` 事件对每个 APP 返回 200，且各 APP 的 descriptor 能被

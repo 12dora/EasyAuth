@@ -1,7 +1,7 @@
-# 数据交接 v2：EasyAuth 前端改造设计
+# 02 · EasyAuth 前端改造设计
 
-> 基准文档：[`handover-00-overview-and-contract.md`](handover-00-overview-and-contract.md)（下称「契约」）
-> 与 [`handover-01-backend.md`](handover-01-backend.md)（下称「后端设计」）。
+> 基准文档：[`00-overview-and-contract.md`](00-overview-and-contract.md)（下称「契约」）
+> 与 [`01-easyauth-backend.md`](01-easyauth-backend.md)（下称「后端设计」）。
 > 本文件只依赖后端设计 **§6 HTTP API 契约**；该章节冻结后即可开工，不必等后端实现完成。
 > 开发期可用 MSW 或本地 fixture 顶住，但**禁止把假数据留进产物**（`AGENTS.md`：不得用模拟数据掩盖真实问题）。
 

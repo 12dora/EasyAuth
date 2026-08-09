@@ -1,8 +1,8 @@
-# 数据交接 v2：EasyAuth 后端改造设计
+# 01 · EasyAuth 后端改造设计
 
-> 基准文档：[`handover-00-overview-and-contract.md`](handover-00-overview-and-contract.md)（下称「契约」）。
+> 基准文档：[`00-overview-and-contract.md`](00-overview-and-contract.md)（下称「契约」）。
 > 本文件中出现的 D1–D13 编号、事件名、错误码、payload 形状均以契约为准，此处不重复定义，只给落地方案。
-> **§6 的 HTTP API 契约是前端 agent（`handover-02-frontend.md`）的依赖，必须最先提交。**
+> **§6 的 HTTP API 契约是前端 agent（`02-easyauth-frontend.md`）的依赖，必须最先提交。**
 
 ---
 
