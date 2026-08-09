@@ -3,8 +3,12 @@
 本目录是本次「离职/转岗/在职数据交接」改造的**全部**设计文档，覆盖 EasyAuth、EasyTrade、
 EasyProject 三个仓库。文档统一放在这里，各仓库不再分散存放。
 
-> ⚠ **当前状态：不可进入实施。** 两轮对抗式复核共产出约 70 条发现，机械性矛盾已修，
-> 但代管授权模型、D11 的下游豁免、EasyProject 实施可行性三处结构性问题尚未定案。
+> **当前状态：代管授权已废弃，范围大幅收窄。**
+> 两轮对抗式复核共产出约 70 条发现。第一处结构性问题（代管授权模型）已定案：**整体砍掉**，
+> 悬置期的可见性改由交接单自身的资产明细承担（契约 §7）。
+> 随之取消的还有：`04`/`06` 两份下游前端文档、EasyTrade 的 B3、EasyProject 的 P1、ADR-002 §19 修订。
+>
+> 仍未定案：**D11 被下游静默豁免**、**EasyProject 实施可行性**（`07` §1.2、§1.3）。
 > **开工前必读 [`07-review-log.md`](07-review-log.md)。**
 
 ## 阅读顺序
@@ -15,9 +19,9 @@ EasyProject 三个仓库。文档统一放在这里，各仓库不再分散存�
 | 01 | [EasyAuth 后端改造设计](01-easyauth-backend.md) | A1 | EasyAuth |
 | 02 | [EasyAuth 前端改造设计](02-easyauth-frontend.md) | A2 | EasyAuth |
 | 03 | [EasyTrade 后端改造设计](03-easytrade-backend.md) | A3 | EasyTrade |
-| 04 | [EasyTrade 前端改造设计](04-easytrade-frontend.md) | A4 | EasyTrade |
+| 04 | [EasyTrade 前端改造设计](04-easytrade-frontend.md) | ~~A4~~ **本期取消** | EasyTrade |
 | 05 | [EasyProject 后端接入设计](05-easyproject-backend.md) | A5 | EasyProject |
-| 06 | [EasyProject 前端改造设计](06-easyproject-frontend.md) | A6 | EasyProject |
+| 06 | [EasyProject 前端改造设计](06-easyproject-frontend.md) | ~~A6~~ **本期取消** | EasyProject |
 | 07 | [复核记录与未决事项](07-review-log.md) | **全体必读** | — |
 
 **`00` 是唯一基准。** 里面的字段名、事件名、状态值、HTTP 状态码语义对所有仓库冻结；
@@ -40,9 +44,9 @@ A3 / A5 的实现要用到 v2 SDK（新的 `items` 回调、`handover_payloads` 
 | A1 EasyAuth 后端 | 立即 |
 | A2 EasyAuth 前端 | A1 提交 `01` §6 的 API 契约章节后 |
 | A3 EasyTrade 后端 | SDK vNext 发布后 |
-| A4 EasyTrade 前端 | A3 落地候选接口改造（`04` §3.1 描述需求，后端实现属 A3）后 |
-| A5 EasyProject 后端 | 修 P1/P2 可立即开工；**交接端点本身须等 CCR APPROVED**（`05` §5.2） |
-| A6 EasyProject 前端 | **立即** —— `is_active` 与 `includeInactive` 都已存在，无后端前置依赖 |
+| ~~A4 EasyTrade 前端~~ | **本期取消**（代管废弃，F1/F2/F3 不会发生） |
+| A5 EasyProject 后端 | 修 P2 可立即开工；**交接端点须等 CCR APPROVED**，且**须等 AG-00 的所有权与 system-actor 裁定**（`07` §1.3） |
+| ~~A6 EasyProject 前端~~ | **本期取消**（同上） |
 
 ## 跨仓库对齐的机械保证
 
@@ -61,11 +65,15 @@ A3 / A5 的实现要用到 v2 SDK（新的 `items` 回调、`handover_payloads` 
 
 ## 已知缺口（明确不做，但必须记着）
 
+0. **⚠ 与 D11 冲突，尚未定案**：D11 与 §11 判例明确要求「待审批单据的当前审批人是离职者 → 必须转移」，
+   而下面第 1 条把它列为不做。下游文档不能单方面豁免冻结决策 —— 见 `07` §1.2，需拍板。
 1. **EasyProject 待审批单据的审批人转移**：需要扩展 EasyAuth 审批契约以转移审批实例的当前处理人，
    超出本次范围。见 `05` §3.1.1。
 2. **EasyProject `WorkRecordRow.created_by_` 的归属语义**：字段名是历史式的但实际充当当前归属，
    改它需要独立的领域改造（新增显式 owner 列 + 迁移 + 鉴权切换）。见 `05` §3.4。
-3. **webhook HMAC 未覆盖 `X-EasyAuth-Event` / `X-EasyAuth-Delivery`**：可利用面窄，且 EasyProject 的
+3. **人员集合 scope 泛化 / 代管授权**：本期已砍（`00` §7）。若日后主管反馈"只看名称和摘要判断不了归属"，
+   再单独立项。
+4. **webhook HMAC 未覆盖 `X-EasyAuth-Event` / `X-EasyAuth-Delivery`**：可利用面窄，且 EasyProject 的
    冻结测试向量已把签名串写死，改动需单独立项。本次的补偿是**强制校验 event 头与 body `mode` 一致**。
    见 `00` §10.1。
 
@@ -73,7 +81,6 @@ A3 / A5 的实现要用到 v2 SDK（新的 `items` 回调、`handover_payloads` 
 
 完整 13 条见 `00` §3。最容易被实现者忽略的四条：
 
-- **D2**：主管只接管"事"，不接管数据 —— 数据**不会**自动落到主管名下。
 - **D6**：未声明交接能力的 APP 状态是 `blocked`，**不是**"已完成"；整单永不 `completed`。
 - **D7**：在职提前交接**只搬数据、不动权限**；离职日到来时同一张单升级并**重新盘点**。
 - **D11**：只转"活的责任"；创建人、评论、操作日志等历史事实一律不动。

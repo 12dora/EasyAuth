@@ -32,7 +32,7 @@ descriptor 已暴露在 `GET /.well-known/easyauth-app.json`（`api/v1/easyauth_
 
 | # | 问题 | 位置 | 后果 |
 |---|---|---|---|
-| P1 | **`MANAGED_USERS` 不消费 EasyAuth 快照**，而是自己递归调下属接口推算（depth 20，5 分钟缓存） | `backend/app/domain/authz/managed_users.py:19`、`domain/authz/service.py:184` | 离职者不是任何人的下属 → 代管授权对 EasyProject **完全无效**（契约 D4 失效）。同时这本身就违反 EasyAuth 下游契约（`CONTEXT.md`「管理对象快照」条：下游必须落地快照并用本地数据过滤） |
+| ~~P1~~ | `MANAGED_USERS` 不消费 EasyAuth 快照，而是自己递归调下属接口推算 | `backend/app/domain/authz/managed_users.py:19` | **本期降级为已知偏差，不修**。它确实违反 EasyAuth 下游契约（`CONTEXT.md`「管理对象快照」条），但原本的修复依据是代管授权，而代管已整体废弃（契约 §7）。本项与数据交接无关，另行立项 |
 | P2 | 从未登录过 EasyProject 的员工，`directory_users.authentik_user_id` 为 `NULL` | `infra/repositories/directory.py:45`、`m07_001_directory_tables.py:51` | 契约 payload 里的 `from_user_id`/`to_user_id` 是 Authentik `sub`，这类人**解析不到本地行** |
 
 P1 与 webhook 实现相互独立，应作为第一个可单独验证、单独上线的提交。
@@ -72,23 +72,25 @@ async def resolve_dtuid(uow, *, authentik_sub: str) -> str:
 **禁止**按姓名/邮箱模糊匹配（违反不变量 1）。**禁止**静默跳过或返回空统计 —— 那会让 EasyAuth 误判
 "此人在 EasyProject 无数据"。
 
-### 2.2 修 P1：改为消费快照
+### 2.2 ~~修 P1~~ —— **本期取消**
 
-`domain/authz/service.py:184` 与 `domain/authz/managed_users.py` 当前的递归下属遍历整段删除，改为：
+见 §1.1。代管废弃后本项失去依据，`domain/authz/managed_users.py` 与 `service.py` **一行不改**。
+该偏差记入 `docs/design/09-分期计划与风险清单.md`。
 
-```
-MANAGED_USERS 的成员集合 = 权限快照响应里已解析的人员集合
-  → 按 §2.1 的规则把每个 sub 映射为本地 dtuid
-  → 映射不到的剔除并计数 + structlog 记录（不得静默）
-  → 不得以 directory_users.is_active == False 为由剔除（契约 §7.3）
-```
+### 2.3 `hint` 是硬要求，不是可选项
 
-`scope_predicate.py:20` 编译 SQL 谓词的方式不变（仍然是 SQL 层过滤，不做 Python 后过滤）。
-快照缓存沿用既有的 5 分钟软 / 15 分钟硬 TTL 与 fail-closed 行为
-（`domain/authz/service.py:45,127`），只是集合来源变了。
+代管废弃后，主管**只能靠交接单里的明细判断归属**。`items` 响应里每条的 `hint`（≤120 字符）
+承担全部判断依据：
 
-**验证**：构造一个 `is_active=false` 的 `directory_users` 行 A，令快照的 `MANAGED_USERS` 含 A 的 sub，
-断言项目/任务列表能查到 A 名下的数据。
+| `asset_type` | `hint` 必须包含 |
+|---|---|
+| `project_owned` / `project_member` | 项目状态 + 截止日期 + 成员数 |
+| `task_assigned` / `task_assigner` | 所属项目 + 截止日期 + 当前状态 |
+| `task_collaborator` | 所属项目 + 任务标题 |
+| `recurring_assignee` / `recurring_assigner` / `recurring_collaborator` | 周期规则 + 下次生成时间 |
+| `work_record_participant` | 关联项目/任务 + 记录日期 |
+
+**`hint` 为空或只有 ID 视为未完成本项**，验收用例须逐类断言。
 
 ---
 
@@ -431,7 +433,6 @@ CCR 内容（按 `contracts/workflow.md` §6 的六要素）：
 
 | 文件 | 覆盖 |
 |---|---|
-| `backend/tests/unit/authz/test_managed_users_from_snapshot.py` | **P1**：集合来自快照而非递归遍历；inactive 成员保留；映射不到的剔除且有计数日志 |
 | `backend/tests/unit/identity/test_handover_identity.py` | **P2**：已绑定命中；未绑定走目录补绑；冲突绑定被拒；解析不到抛 `IdentityUnmappedError` |
 | `backend/tests/unit/handover/test_assets_registry.py` | 11 类 count 口径；注册表与 descriptor 用同一常量断言 |
 | `backend/tests/unit/handover/test_items_pagination.py` | 排序稳定、连续翻页不漏不重、`total` 与 preview 一致 |
@@ -452,8 +453,8 @@ secret 扫描、前端检查、契约检查）。**不存在只跑"前端段"这
 
 ## 7. 交付顺序
 
-1. **§2.2 修 P1**（独立、最高价值、单独可上线；不改它则代管授权对本应用永远无效）
-2. §2.1 身份映射（修 P2）
+1. ~~§2.2 修 P1~~ —— 本期取消（代管废弃）
+2. §2.1 身份映射（修 P2）+ §2.3 `hint`
 3. §5.2 提 CCR（**与 1/2 并行提，通过周期较长，越早越好**）；同时向 AG-00 核实 §5.6 的前提
 4. §4.1 注册表 + §4.6 descriptor（共用常量，同一提交）
 5. §4.2 端点 + preview / items

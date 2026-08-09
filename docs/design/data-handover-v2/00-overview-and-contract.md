@@ -23,7 +23,7 @@
 | **自助交接（非超管可操作）** | **完全没有**，`admin_console/lifecycle_api.py` 全部 `require_superuser`，门户无任何 lifecycle 路由 | 新建 |
 | **未接入 APP 的识别** | **静默当作"无数据"并标记成功**（`handover.py:122,325,590`） | 修正为阻塞 |
 | **EasyProject 接入** | 未接入（只接了 directory/authz/approval/notify 四个适配器） | 新建 |
-| **悬置期数据可见性** | 无。离职者不在任何人的 `MANAGED_USERS` 里（ADR-002 §19），其名下数据对所有人不可见 | 新建代管授权 |
+| **悬置期数据可见性** | 无。离职者不在任何人的 `MANAGED_USERS` 里（ADR-002 §19），其名下数据在业务系统里对所有人不可见 | 由交接单的资产明细承担（§7） |
 | **部分交接 / 二次转交** | 无。execute 是全量、单接收人、不可逆 | 新建 |
 
 ### 1.1 三个必须解决的正确性问题
@@ -53,8 +53,8 @@
 | D1 | 交接主体是**主管 + 接收人** | 离职者本人在职期间可自行发起；离职时未走完则自动落到组织树上的主管；超管全权 |
 | D2 | 主管**只接管"事"** | 主管是交接单负责人（`assignee`），负责指定真正的接收人；数据不会自动落到主管名下 |
 | D3 | assignee 沿主管链**逐级向上**解析 | 跳过 departed/disabled，取第一个 active；整条链不可用则进**超管待认领池**。单子必须建得出来 |
-| D4 | 悬置期发**限时代管授权** | 把离职者显式放进 assignee 的 `MANAGED_USERS`，并按建单快照复制授权，使主管在业务系统里看得见、跟得了 |
-| D5 | 代管授权 **14 天**，每天钉钉提醒 | 到期收回当前代管权，**自动上交上一级主管**并重发，到顶落超管池 |
+| D4 | 悬置期的可见性靠**交接单本身** | ~~发限时代管授权~~（复核后废弃，见 §7）。改为在交接单里直接展示各 APP 的资产明细，主管据此判断归属；**不发放任何临时授权、不新增 scope、不碰 `MANAGED_USERS`** |
+| D5 | 交接单 **14 天**，每天钉钉提醒 | 到期未完成则 `escalation_level += 1`，**自动上交上一级主管**，到顶落超管池。截止压力作用在单据上，不再涉及任何授权 |
 | D6 | 未声明交接能力的 APP **阻塞** | 状态 `blocked`，交接单不能整体完成；超管填理由可强行 `skipped` |
 | D7 | 在职提前交接**只搬数据，不动权限** | 用独立单据类型 `pre_offboard`（**与「转岗」不是一回事**，见 §6.1）；员工正常工作到最后一天；离职日到来时**同一张单升级为 offboard 并重新盘点** |
 | D8 | 支持**二次转交** | 升级为通用数据移交：任意两名在职员工之间也可发起（`kind=reassign`），用于纠错与重分配 |
@@ -68,7 +68,6 @@
 
 | ADR | 现行条款 | 修订为 | 原因 |
 |---|---|---|---|
-| ADR-002 §19 | `MANAGED_USERS` 表示可管理的 **active** Authentik 用户集合 | 新增例外：存在未到期 `CustodyGrant` 时，其 `task.subject_user` 加入集合，**即使该用户为 `departed`/`disabled`** | 不开这个口，D4 无法实现 |
 | ADR-002 §36 | 自助申请审批人必须严格为 active **直属**主管；缺失时禁止提交，不允许向上找 | 改为：沿 `manager_chain` 逐级向上取第一个 active 主管；整链不可用时进超管待认领池 | 与 D3 直接抵触 |
 
 > 修订 ADR 是 EasyAuth 后端 agent 的交付物之一，见 `01-easyauth-backend.md` §9。
@@ -165,119 +164,77 @@ EasyAuth 只做存储与回传，不解析、不排序、不校验格式。长�
 |---|---|---|
 | `manager` | 由主管链上某一级主管负责 | 该主管的 `UserMirror` |
 | `subject` | 在职员工自助发起，本人负责 | subject 本人 |
-| `superuser_pool` | 主管链走完仍无 active 主管，或代管逐级上交到顶 | `NULL` |
+| `superuser_pool` | 主管链走完仍无 active 主管，或超时逐级上交到顶 | `NULL` |
 
 `escalation_level`（整数，从 0 起）记录当前 assignee 在主管链上的层级；每次超时上交 +1。
 
 ---
 
-## 7. 代管授权契约（D4/D5）
+## 7. 悬置期的可见性（D4/D5，**已重新选型**）
 
-### 7.1 语义
+> **本节在第二轮复核后整体重写。** 原方案是「给主管发限时代管授权，让他在业务系统里看到离职者的数据」，
+> 该方案经验证不可实现且带安全漏洞（四条独立致命问题，见 `07-review-log.md` §1.1），已**整体废弃**。
 
-代管授权让 assignee **临时获得离职者的权限与可见范围**，从而在业务系统里正常跟进那批数据，
-直到指定真正的接收人。它**不改变任何业务数据的归属**。
+### 7.1 问题回顾
 
-### 7.2 发放：**委托授权**，不是复制授权
+离职检出后，当事人的授权被全部撤销、账号被禁用，他也随之从所有人的 `MANAGED_USERS` 中消失。
+于是在交接完成之前，他名下的客户、在途订单、未结应收在**业务系统里对所有人不可见**。
+主管要决定"这批东西给谁"，却看不到这批东西是什么。
 
-> **这一节是本设计的安全核心。早期版本写的是"把离职者的授权原样复制给主管"，那是错的，会实实在在地提权。**
+### 7.2 选定方案：**在交接单里看，不在业务系统里看**
 
-原样复制会出事，因为授权带 `scope`，而 scope 是**相对于持有人**求值的：
+不给主管任何业务系统的临时权限。改为：**交接单本身就是那份清单。**
 
-| 离职者持有 | 原样复制给主管后变成 | 后果 |
+- `preview` 已经给出每类资产的数量；
+- `items` 已经给出逐条明细（名称 + 一行摘要 `hint`），支持分页与搜索；
+- 主管在 EasyAuth 门户的交接单页面里直接翻这份明细，逐条决定给谁。
+
+也就是说：**做交接这件事所需的信息，全部由交接单自己提供，不依赖任何跨系统的临时授权。**
+
+### 7.3 这个取舍换掉了什么
+
+| | 得到 | 失去 |
 |---|---|---|
-| `customer.read` @ `SELF` | 主管自己名下的客户 | 没解决问题（看不到离职者的） |
-| `customer.read` @ `MANAGED_USERS` | 主管**自己全部下属**的客户 | **提权**：拿到了一整支团队的数据 |
-| `customer.export` @ `GLOBAL` | 全公司客户导出权 | **提权**：一次离职把全局权限发给了主管 |
+| 安全 | 零新增权限面。不发任何临时授权，不碰 `MANAGED_USERS`，不新增 scope | — |
+| 改动面 | EasyAuth 无需新增 scope / 委托授权模型；**两个下游的 scope 处理一行都不用改** | — |
+| 判断质量 | — | 主管只能看到名称与摘要，**看不到业务上下文**（这个客户最近在谈什么、这单卡在哪） |
 
-因此代管授权**必须是一种绑定了来源人的委托授权**（delegated entitlement），语义固定为：
+**失去的那一项是真实代价**，缓解手段是把 `hint` 用好 —— 契约允许每条明细带一行 ≤120 字符的摘要，
+各 APP 应当把最能帮助判断归属的信息放进去（EasyTrade：最近跟进时间 + 在途单数；
+EasyProject：所属项目 + 截止日期）。这是各 APP 设计文档里的硬要求，不是可选项。
 
-> 在有效期内，`custodian` 可以用 `permission` 这项能力，**且仅能作用于 `source_subject`（该离职者）名下的数据**。
+若日后确认摘要不足以支撑判断，再单独立项做「人员集合 scope 泛化」，届时代管可以作为独立能力回归。
+**本期不做，也不为它预留任何字段或分支。**
 
-具体规则：
+### 7.4 超时上交（D5 保留，但不再涉及授权）
 
-1. 代管条目从 `HandoverGrantItem` 快照取**能力（`permission.key`）**，**丢弃原 scope**。
-2. 一律以 `scope = HANDOVER_CUSTODY` 发放 —— 这是一个**新增的系统级 scope**，解析结果恒为
-   `{source_subject}` 这一个人的集合，与 custodian 自己的 `SELF`/`MANAGED_USERS` 互不相干、也不叠加。
-3. 一律 `grant_type=timed`，`expires_at = 建单时刻 + 14 天`。
-4. custodian 自己已有的同名能力**互不影响**：代管发的是另一条 scope 不同的授权行，
-   收回时按 `CustodyGrantItem` 精确定位，**绝不可能**误删 custodian 自有授权。
-5. **`GLOBAL` 与任何"全局读写"性质的能力不进代管**：它们不是"看某个人的数据"，
-   委托语义对其无意义。这类能力在交接单上显式标注「该能力不可代管，需接收人自行申请」。
-
-> 这样一来，代管不再"扩大"任何范围，而是精确地打开一个人的数据。
-> `MANAGED_USERS` 里出现离职者（§7.3）与本条是配套的：前者解决"看得见哪些人"，后者解决"能对他们做什么"。
-
-**对下游的影响**：下游会在权限快照里看到一个新的 scope 值 `HANDOVER_CUSTODY`，其 `resolved.user_ids`
-只含一个人。下游把它当作一个**普通的人员集合 scope** 处理即可（与 `MANAGED_USERS` 同款），
-不需要为它写特例分支。不认识该 scope 的下游必须**按既有约定跳过该条 grant 并计数告警**，
-不得报错中断整份快照。
-
-### 7.2.1 与"授权转移"的区别（两件事，别混）
-
-交接单上有**两个不同的接收人概念**，必须分开理解：
-
-| | 数据接收人 | 权限接收人 |
-|---|---|---|
-| 粒度 | **逐资产条目**，一个 APP 内可以有多个（D10） | **每个 APP 一个** |
-| 转的是 | 业务数据的归属（客户归谁、任务派给谁） | EasyAuth 里的授权行（能做什么） |
-| 何时用 | 全部 kind | **仅 `offboard`**（`transfer` 走 `TransferPlan`；`pre_offboard`/`reassign` 不动权限） |
-| scope 处理 | 不涉及 | **保留原 scope**，因为这是"继任者接手这个岗位"，`MANAGED_USERS` 落到继任者自己的下属才是对的 |
-| 可为空 | 是（该类不动） | 是（不指定则只撤权、不转授，接收人自行走申请流程） |
-
-> **为什么权限保留原 scope 而代管要换成 `HANDOVER_CUSTODY`**：
-> 权限转移是**永久的岗位继承**，继任者本来就该按自己的身份求值 scope；
-> 代管是**临时的看管**，看管人不该因此获得自己岗位之外的任何东西。两者取舍相反，不能共用一套逻辑。
-
-早期版本把接收人只放在资产条目上，导致"授权该转给谁"无法确定 —— 一个 APP 有 3 个数据接收人时，
-授权转给谁？现在由独立的权限接收人字段回答，且**允许留空**（留空是安全默认）。
-
-### 7.3 可见范围（对下游的契约变更，**最关键的一条**）
-
-存在未到期代管授权时，权限查询响应中 assignee 的 `MANAGED_USERS` 解析结果里**会出现 `departed` 或 `disabled` 状态的用户 ID**。
-
-> **所有下游 APP 必须接受这一点。**
-> EasyTrade 现有实现会在 scope 解析时过滤掉 inactive 用户
-> （`backend/app/domain/authz/scope_resolution.py` 的 `_managed_user_ids_from_resolved_grant()` 末行，
-> 判定字段是 `User.active`），若不改，代管授权在 EasyTrade 侧会被丢弃，D4 完全失效。
-> EasyProject 接入时必须从一开始就允许。
-
-对下游的具体要求：
-
-1. **`MANAGED_USERS` 的唯一事实来源是权限查询响应里的已解析人员集合**，下游必须落地这份快照并用它过滤业务查询
-   （`CONTEXT.md`「管理对象快照」条已如此规定）。下游**不得**自行调用目录接口递归推算管辖关系。
-2. 把 `MANAGED_USERS` 里的外部 ID 映射为本地用户 ID 时，**不得以本地用户「已停用」为由剔除**
-   （各仓库字段名不同：EasyTrade 是 `User.active`，EasyProject 是 `directory_users.is_active`）。
-3. 映射不到本地用户的 ID 仍可剔除（那是真的不存在），但必须计数并记日志，不得静默。
-4. 业务列表按 owner 过滤时照常使用该集合，因此代管期内主管能看到离职者名下的数据。
-5. **代管的可见范围是逐 APP 独立的**：某个 APP 的 action 完成后，该 APP 的代管条目即被收回，
-   离职者随即从**该 APP** 的 `MANAGED_USERS` 中消失，但在其他未完成 APP 里仍然可见。
-   下游不需要为此做任何事 —— 它本来就只消费自己那份快照。
-
-**两个下游都不满足这条，且失效原因不同，必须各自修：**
-
-| APP | 现状 | 后果 | 修法 |
-|---|---|---|---|
-| EasyTrade | 消费快照，但把 inactive 本地用户从 scope 集合中剔除（`scope_resolution.py` 的 `_managed_user_ids_from_resolved_grant()`，`row.active` 判定） | 代管授权被丢弃（已有 `inactive_count` 日志，但仍然剔除） | 去掉 `row.active` 这一条件，仅保留"映射不到"的剔除；既有计数日志保留 |
-| EasyProject | **根本不消费快照的 `MANAGED_USERS`**，而是自己递归调 EasyAuth 下属接口推算（depth 20，5 分钟缓存，`backend/app/domain/authz/managed_users.py:19`） | 离职者不是任何人的下属，代管授权对 EasyProject 完全无效 | 改为直接消费快照里的已解析集合，删除递归推算路径 |
-
-EasyProject 这一条不是"顺带优化"，而是**它当前就违反 EasyAuth 下游契约**；不修则 D4 在 EasyProject 上永远无法生效。
-
-### 7.4 收回与升级
+交接单仍有截止压力，只是压力不再通过"权限到期"表达，而是直接作用在单据上：
 
 | 事件 | 动作 |
 |---|---|
-| 该 APP 的 action 到达 `done`/`skipped` | 收回**该 APP 对应**的代管条目（逐 APP 收，不等整单）。收回后该 APP 的权限查询里立刻不再有 `HANDOVER_CUSTODY` scope，主管对这个 APP 的代管可见性随即消失 |
-| 整单 `completed` 或 `cancelled` | 收回全部代管授权 |
-| 到期（14 天）且单未完成 | 收回当前 assignee **全部**代管条目 → `escalation_level += 1` → 沿主管链取下一级 active 主管 → **只对尚未终结的 action 所属 APP** 重新发放 14 天代管条目（已完成的 APP 不再发）→ 通知新旧 assignee |
-| 主管链已到顶 | `assignee_state = superuser_pool`，`assignee = NULL`，**不发代管授权**，改为向全体超管推送认领通知（每日） |
+| 建单 | `assignee` 按 §8.2 解析，`escalation_deadline = now + 14 天` |
+| 代办期内每天 | 钉钉提醒 assignee（`notify` 模块，按业务日去重） |
+| 到期前 1 天 | 额外一次"即将上交"提醒 |
+| 到期且单未完成 | `escalation_level += 1` → 沿主管链取下一级 active 主管 → 重置 `escalation_deadline` → 通知新旧 assignee 双方 |
+| 主管链已到顶 | `assignee_state = superuser_pool`，`assignee = NULL`，改为每日向全体超管推认领通知 |
 
-### 7.5 提醒节奏
+`CUSTODY_TTL_DAYS` 这个名字随代管一起废弃，改为 `HANDOVER_ESCALATION_DAYS: Final = 14`。
 
-代管期内**每天**一次钉钉工作通知（复用 `notify` 模块），内容含：剩余天数、待处理 APP 数、
-各 APP 待交接资产条数、一键跳转门户的链接。到期上交时额外一次通知。
+### 7.5 随之取消的改动（重要）
 
----
+代管一砍，下面这些**本期全部不做**，各下游文档已同步：
+
+| 原计划 | 状态 | 说明 |
+|---|---|---|
+| 新增 scope `HANDOVER_CUSTODY` | **取消** | 不再需要 |
+| `CustodyGrant` / `CustodyGrantItem` 两张表 | **取消** | — |
+| 把 departed 用户并入 `MANAGED_USERS` | **取消** | 这本身就是提权（`07` §1.1 第 1 条） |
+| ADR-002 §19 修订（允许非 active 入集） | **取消** | 该条款保持原样，无需修订 |
+| EasyTrade 去掉 `row.active` 过滤（原 B3） | **取消** | 没有代管就不会有 departed 用户进入 scope 集合 |
+| EasyProject 改为消费快照（原 P1） | **降级为已知偏差** | 它确实违反下游契约，但与本次交接无关，另行立项 |
+| EasyTrade / EasyProject 前端改造（`04` / `06`） | **取消** | 离职者不会出现在下游列表里，F1/F2/F3 三个故障都不会发生 |
+
+**唯一保留的 ADR 修订**是 ADR-002 §36（自助申请审批人允许沿主管链向上），它由 D3 驱动，与代管无关。
 
 ## 8. 关键流程
 
@@ -292,7 +249,6 @@ EasyProject 这一条不是"顺带优化"，而是**它当前就违反 EasyAuth 
        ├─ 按快照涉及的 App 生成 HandoverAppAction
        │    └─ 未声明交接能力的 App → status=blocked（§9）
        ├─ 解析 assignee（§8.2）
-       ├─ 发放代管授权（§7.2）
        ├─ 移出所有团队 + 排队禁用 Authentik 账号（既有逻辑，不改）
        └─ 首次钉钉通知 assignee
 ```
@@ -346,7 +302,6 @@ resolve_assignee(subject, start_level=0):
   员工本人在门户发起 kind=pre_offboard 单
     ├─ 快照当前授权 → HandoverGrantItem
     ├─ assignee = 本人（assignee_state=subject）
-    ├─ 不发代管授权（本人权限本来就在）
     └─ execute 时：只发 webhook 搬数据，跳过一切授权改写
 
 离职日：
@@ -356,7 +311,6 @@ resolve_assignee(subject, start_level=0):
     ├─ assignee: 本人 → 按 §8.2 重新解析为主管
     ├─ generation += 1，全部 action 状态重置为 pending（已 done 的也重置）
     ├─ 重新快照授权 → 新一轮 HandoverGrantItem
-    ├─ 发放代管授权
     └─ 对每个 APP 重新 preview
        └─ 已交接干净的 APP 会返回 count=0，assignee 一键确认即 done
        └─ 这两周新产生的数据会重新出现在清单里
@@ -381,7 +335,6 @@ resolve_assignee(subject, start_level=0):
   ├─ 必填 reason（≥10 字符）
   ├─ assignee = 发起人（assignee_state=manager, escalation_level=0）
   ├─ 不动任何权限（D7 同理）
-  ├─ 不发代管授权（发起人对下属本来就有可见范围）
   ├─ 走与 offboard 相同的 preview/execute 流程
   └─ execute 成功后通知三方：转出方、接收方、发起人的上一级主管
 ```
@@ -795,9 +748,7 @@ APP 侧仍应保留自己的行锁作为第二道防线。
 | `handover_task_upgraded` | transfer → offboard 升级 | task, old_kind, generation |
 | `handover_assignee_assigned` | assignee 解析/变更 | task, assignee, assignee_state, escalation_level |
 | `handover_assignee_resolution_degraded` | 主管链缺失或 stale，落超管池 | task, reason |
-| `handover_custody_granted` | 发放代管授权 | task, custodian, expires_at, grant_item 数量 |
-| `handover_custody_revoked` | 收回代管授权 | task, custodian, trigger（completed/action_done/escalated/cancelled） |
-| `handover_custody_escalated` | 到期上交 | task, from_custodian, to_custodian, escalation_level |
+| `handover_task_escalated` | 到期上交 | task, from_assignee, to_assignee, escalation_level |
 | `handover_action_previewed` | preview 成功 | task, app_key, generation, assets |
 | `handover_action_executed` | execute 成功 | task, app_key, generation, assignments 摘要, summary |
 | `handover_action_failed` | execute 失败 | task, app_key, error code/message |
@@ -813,9 +764,9 @@ APP 侧仍应保留自己的行锁作为第二道防线。
 | 通知 | 收件人 | 触发 | 频率 |
 |---|---|---|---|
 | 新交接单待处理 | assignee | 建单 / 升级 / 上交 | 即时 1 次 |
-| 交接单每日提醒 | assignee | 代管期内单未完成 | 每日 1 次 |
-| 代管即将到期 | assignee | 到期前 1 天 | 1 次 |
-| 代管已上交 | 原 assignee + 新 assignee | 超时上交 | 即时 |
+| 交接单每日提醒 | assignee | 单未完成 | 每日 1 次（按业务日去重） |
+| 即将上交 | assignee | 上交前 1 天 | 1 次 |
+| 已上交 | 原 assignee + 新 assignee | 超时上交 | 即时 |
 | 超管池待认领 | 全体超管 | 单进入 `superuser_pool` 后仍未完成 | 每日 1 次 |
 | 数据已移交给你 | 接收人 | execute 成功 | 即时（D12：仅通知，无需同意） |
 | 你的数据已被移交 | 转出方（在职时） | `reassign` execute 成功 | 即时 |
@@ -850,13 +801,14 @@ A2 据此即可开工。
 
 1. 造一个测试员工，在 EasyTrade 与 EasyProject 各留下若干活的责任数据。
 2. 在钉钉侧标记其离职 → 目录同步后：其权限被全部撤销、账号被禁用、交接单自动建出、assignee 为其直属主管、
-   主管收到钉钉通知、主管拿到 14 天代管授权。
-3. 主管登录 EasyTrade → **能看到该离职者名下的客户与在途订单**（验证 §7.3 生效）。
-4. 主管在门户打开交接单 → 看到 EasyTrade 与 EasyProject 两行，各自列出资产分类与数量。
+   主管收到钉钉通知。
+3. 主管登录 EasyTrade → **看不到**该离职者名下的客户（这是预期行为：不发任何临时授权）。
+4. 主管在门户打开交接单 → 看到 EasyTrade 与 EasyProject 两行，各自列出资产分类与数量；
+   展开明细能看到逐条名称与 `hint` 摘要（验证 §7.2 的可见性方案生效）。
 5. 主管对「名下客户」展开明细，把其中 2 个改派给另一人，其余整批给接收人 → execute → 两个接收人在 EasyTrade 里
    各自看到对应客户。
 6. 把某个 APP 的 descriptor 改为不声明 `lifecycle.handover` → 重新建单 → 该行显示「未接入交接」，
    整单不能完成；超管填理由跳过后整单完成。
-7. 把代管到期时间人为改到过去 → 跑一次到期任务 → 主管代管权被收回、单子上交到上一级主管、双方均收到通知。
+7. 把 `escalation_deadline` 人为改到过去 → 跑一次上交任务 → 单子上交到上一级主管、`escalation_level` +1、双方均收到通知。
 8. 用另一个在职员工发起 `kind=reassign`，把步骤 5 中接收人的部分客户再转给第三人 → 成功，且三方均收到通知。
 9. 全流程审计事件齐全（§12 全部出现），无一条静默成功、无一条 mock 数据。

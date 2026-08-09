@@ -12,13 +12,12 @@
 |---|---|---|
 | `lifecycle/models.py` | 扩展 + 破坏性重构 | 新增 4 张表，`HandoverTask` 加 4 字段，`HandoverAppAction` 去掉接收人字段改为条目级 |
 | `lifecycle/assignee.py` | **新建** | 主管链解析（契约 §8.2） |
-| `lifecycle/custody.py` | **新建** | 代管授权发放/收回/上交（契约 §7） |
+| `lifecycle/escalation.py` | **新建** | 交接单超时上交（契约 §7.4）。~~代管授权~~已废弃 |
 | `lifecycle/handover.py` | 重构 | webhook payload v2、新增 items 事件、blocked 判定 |
-| `lifecycle/offboarding.py` | 扩展 | 建单时解析 assignee、发代管、升级路径 |
+| `lifecycle/offboarding.py` | 扩展 | 建单时解析 assignee、置上交截止时间、升级路径 |
 | `lifecycle/reassign.py` | **新建** | 在职移交建单与管辖校验（D8/D9） |
 | `applications/models.py` | 扩展 | `App` 加交接能力三态与资产类型声明 |
 | `webhooks/models.py` | 微调 | body 上限常量 |
-| `grants/managed_users.py` | 扩展 | 代管期把 departed subject 并入集合（契约 §7.3） |
 | `admin_console/lifecycle_api.py` | 扩展 | 新增 skip/claim/items 端点 |
 | `portal/` | **新建一组端点** | 自助交接（D1），全部非超管 |
 | `tasks/lifecycle.py` | **新建** | 到期上交、每日提醒两个 beat 任务 |
@@ -231,63 +230,19 @@ class HandoverAssetOverride(models.Model):
         ordering = ["asset_type_id", "asset_id"]
 ```
 
-### 2.5 `CustodyGrant`（新表，契约 §7）
+### 2.5 ~~`CustodyGrant`~~ / ~~`CustodyGrantItem`~~ —— **已取消**
 
-```python
-CUSTODY_REVOKE_TRIGGER_CHOICES = (
-    ("action_finished", "action_finished"),
-    ("task_completed", "task_completed"),
-    ("task_cancelled", "task_cancelled"),
-    ("escalated", "escalated"),
-    ("manual", "manual"),
-)
+代管授权在第二轮复核后整体废弃（契约 §7、`07-review-log.md` §1.1）。这两张表**不建**，
+`HANDOVER_CUSTODY` scope **不加**，`grants/managed_users.py` **不改**。
 
-class CustodyGrant(models.Model):
-    task = FK(HandoverTask, on_delete=CASCADE, related_name="custody_grants")
-    custodian = FK(UserMirror, on_delete=PROTECT, related_name="custody_grants")
-    escalation_level = PositiveSmallIntegerField(default=0)
-    expires_at = DateTimeField()                             # 建单时刻 + CUSTODY_TTL_DAYS
-    revoked_at = DateTimeField(null=True, blank=True)
-    revoke_trigger = CharField(max_length=24, blank=True, choices=CUSTODY_REVOKE_TRIGGER_CHOICES)
-    last_reminded_on = DateField(null=True, blank=True)      # 每日提醒去重
-    created_at = DateTimeField(auto_now_add=True)
+`HandoverTask` 改为直接持有上交截止时间：
 
-    class Meta:
-        constraints = [
-            # 同一交接单同一时刻只允许一份未收回的代管授权。
-            models.UniqueConstraint(
-                fields=["task"],
-                condition=Q(revoked_at__isnull=True),
-                name="lifecycle_custody_one_active_per_task",
-            ),
-        ]
-        ordering = ["task_id", "-created_at"]
-```
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| `escalation_deadline` | `DateTimeField(null=True, blank=True)` | 建单/上交时置为 `now + HANDOVER_ESCALATION_DAYS`；单终结后置空 |
+| `last_reminded_on` | `DateField(null=True, blank=True)` | 每日提醒按**上海业务日**去重（`timezone.localdate(..., Asia/Shanghai)`） |
 
-`CUSTODY_TTL_DAYS: Final = 14`，可由 `EASYAUTH_HANDOVER_CUSTODY_TTL_DAYS` 覆盖（D5）。
-
-### 2.6 `CustodyGrantItem`（新表）
-
-记录代管授权实际发出了哪些条目，收回时精确回收，**不误伤 custodian 自有授权**。
-
-```python
-class CustodyGrantItem(models.Model):
-    custody = FK(CustodyGrant, on_delete=CASCADE, related_name="items")
-    app = FK(App, on_delete=PROTECT, related_name="custody_grant_items")
-    permission = FK(Permission, on_delete=SET_NULL, null=True, blank=True)
-    # scope 恒为 HANDOVER_CUSTODY, 故不存字段, 避免出现"代管带别的 scope"这种非法状态
-    revoked_at = DateTimeField(null=True, blank=True)
-    created_at = DateTimeField(auto_now_add=True)
-
-    class Meta:
-        constraints = [
-            models.UniqueConstraint(
-                fields=["custody", "app", "permission"],
-                condition=Q(revoked_at__isnull=True),
-                name="lifecycle_custody_item_unique_active",
-            ),
-        ]
-```
+`HANDOVER_ESCALATION_DAYS: Final = 14`（原 `CUSTODY_TTL_DAYS` 作废）。
 
 ### 2.7 `App` 交接能力声明（`applications/models.py:102`，修改，契约 §9）
 
@@ -357,73 +312,31 @@ def resolve_assignee(subject: UserMirror, *, start_level: int = 0) -> AssigneeRe
 
 ---
 
-## 4. 代管授权（`lifecycle/custody.py`，新建）
+## 4. 超时上交（`lifecycle/escalation.py`，新建）
 
-### 4.1 发放 `grant_custody(task) -> CustodyGrant | None`
-
-- `task.assignee is None` → 直接返回 `None`（超管池不发代管，契约 §7.4）。
-- `task.kind in (transfer, pre_offboard, reassign)` → 返回 `None`（当事人在职，其数据本就在自己或
-  主管的可见范围内，无需代管，D7/D9）。
-- 同事务内：
-  1. 建 `CustodyGrant(expires_at=now + CUSTODY_TTL_DAYS)`。
-  2. 遍历 `task.grant_items`（`HandoverGrantItem`），取出其中的**能力**（`permission`），
-     **丢弃原 `scope_key`**（契约 §7.2 —— 原样复制 scope 会提权）。按 `(app, permission)` 去重。
-     `GLOBAL` 类能力与 `authorization_group` 形式的条目**不进代管**（组内含多种 scope，无法逐一降级），
-     在交接单上标注「该能力不可代管，需接收人自行申请」。
-  3. 一律以 `scope_key = HANDOVER_CUSTODY` 写入 custodian 的当前 `AccessGrant`
-     （`grant_type=timed`, `expires_at=custody.expires_at`），并建 `CustodyGrantItem`。
-     由于 scope 与 custodian 自有授权不同，**不存在「已有等价条目」的情况**，
-     早期版本的 `applied` 布尔随之取消 —— 它不可靠：custodian 在代管期间新获得的同名权限
-     会在收回时被误删。现在按 `(app, permission, HANDOVER_CUSTODY)` 精确定位，结构上不可能误伤。
-  4. 发放走既有授权写入路径（递增 `AccessGrant.version`，`AccessGrantPermission.source_note`
-     记 `custody:task={id}`），保证 `snapshot_version` 变化、下游 5 分钟内刷新到。
-  5. 审计 `handover_custody_granted`。
-
-### 4.2 可见范围接入（`grants/managed_users.py`，修改，契约 §7.3）
-
-`resolve_managed_users()` 在按策略解析出集合后，**追加**一步：
+代管废弃后，本章只剩一件事：**单子放太久就往上交**，不涉及任何授权。
 
 ```python
-custody_subjects = UserMirror.objects.filter(
-    handover_tasks__custody_grants__custodian=viewer,
-    handover_tasks__custody_grants__revoked_at__isnull=True,
-    handover_tasks__custody_grants__expires_at__gt=now,
-).values_list("authentik_user_id", flat=True)
+def escalate_overdue_task(task: HandoverTask) -> HandoverTask:
+    """上交一级; 主管链到顶则落超管池。"""
 ```
 
-并入结果集合。**这是全系统唯一允许非 active 用户进入 `MANAGED_USERS` 的位置**，
-代码处必须留注释指向 ADR-002 修订条款。
+同事务内：
 
-注意 `_resolved_digest()`（`grants/query.py:320`）参与 `snapshot_version` 计算，
-代管人员并入后 digest 自然变化，下游缓存会正确失效，无需额外处理。
+1. `select_for_update` 锁 task，复检仍 open（避免与 `cancel_task` / `refresh_task_status` 竞态）。
+2. `res = resolve_assignee(task.subject_user, start_level=task.escalation_level + 1)`（§3）。
+3. `res.user` 非空 → `apply_assignee(task, res)`；否则 `assignee=None`、
+   `assignee_state=superuser_pool`、`escalation_level=res.level`。
+4. `escalation_deadline = now + HANDOVER_ESCALATION_DAYS`（落超管池时置空——超管池只做每日认领提醒，
+   不再继续上交）。
+5. 审计 `handover_task_escalated`。
+6. 通知（走 outbox，出事务）：新旧 assignee 双方；落超管池则通知全体超管。
 
-### 4.3 收回 `revoke_custody(custody, *, trigger)`
-
-- 按 `(app, permission, scope_key=HANDOVER_CUSTODY)` 精确定位并移除 custodian 当前 `AccessGrant`
-  中的对应条目，递增 version。custodian 自有授权 scope 不同，**结构上不可能被误删**。
-- 逐 APP 收回时只处理该 app 的条目（契约 §7.4）。
-- 写 `handover_custody_revoked`。
-
-调用点：
-- action 到达 `done`/`skipped` → 只收该 app 的条目（逐 APP 收，契约 §7.4）
-- 整单 `completed` / `cancelled` → 全收
-
-### 4.4 到期上交 `escalate_custody(custody)`（D5）
-
-```
-revoke_custody(custody, trigger="escalated")
-res = resolve_assignee(task.subject_user, start_level=task.escalation_level + 1)
-if res.user is None:
-    task.assignee = None; task.assignee_state = superuser_pool
-    task.escalation_level = res.level
-    审计 handover_custody_escalated(to=None) + 通知全体超管
-else:
-    apply_assignee(task, res)
-    grant_custody(task)                       # 新的 14 天
-    审计 handover_custody_escalated + 通知新旧 assignee 双方
-```
-
----
+> **超管收件人的现实问题**：超管资格目前只在请求期通过 Authentik 组交集判定
+> （`admin_console/authz.py`），**没有可枚举的本地超管名单**，"通知全体超管"当前无法实现。
+> 本期的落地方式：落超管池时**不发个人通知**，改为在控制台顶部常驻「N 张交接单待认领」告警条
+> （复用 §6.3 的 `handover-blocked-apps` 同款机制）。
+> 建立权威超管收件人镜像列为独立后续项。
 
 ## 5. 交接执行改造（`lifecycle/handover.py`）
 
@@ -451,10 +364,6 @@ reconcile 该 App 下所有 `blocked` 且所属 task 仍 open 的 action：
 
 反方向（`declared → undeclared`，通常是 descriptor 拉不到）**不得**把运行中的 action 打回 `blocked`，
 只写告警。初始状态只在建单时判定。
-
-新增 `AppScope` 记录：`HANDOVER_CUSTODY` 需要作为**系统级 scope** 注册到每个 App
-（或作为 EasyAuth 内建 scope 特判），否则 `AccessGrantPermission.clean()` 的
-"scope 必须属于该 app 且被 permission 支持"校验会拒绝代管条目。**这一步不能漏，否则代管授权写不进去。**
 
 ### 5.2 descriptor 同步
 
@@ -512,7 +421,7 @@ def preview_action(action) -> HandoverAppAction
   `pre_offboard` 与 `reassign` 一律不动权限（D7/D9）；`transfer`（转岗）走的是**另一条路** ——
   既有的 `TransferPlan` 差异确认（`lifecycle/transfer.py`），不经过 `transfer_selected_grants`
   的接收人转移语义。三者不可混为一谈，实现时用 `GRANT_MUTATING_KINDS` 与显式分支区分。
-- 成功后：`action.status = done` → 触发 §4.3 逐 APP 收回代管 → `refresh_task_status(task)`。
+- 成功后：`action.status = done` → `refresh_task_status(task)`。
 
 ### 5.6 items（契约 §10.4，新增）
 
@@ -539,7 +448,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | GET | `/me/handover-tasks` | 登录即可 | 返回两组：`as_assignee`（我负责的）、`as_subject`（我是当事人的） |
 | POST | `/handover-tasks/pre-offboard` | 登录即可，且自己无 open 的 offboard/transfer/pre_offboard 单 | 在职提前交接建单（D7），`kind=pre_offboard`，assignee=本人 |
 | POST | `/handover-tasks/reassign` | `subject ∈ 我的 MANAGED_USERS` 且双方 active | 在职移交（D9），必填 `reason`（≥10 字符），否则 `422 reason_required` |
-| GET | `/handover-tasks/{task_id}` | 我是 assignee 或 subject | 单据详情，含各 APP action、资产分类、代管剩余天数 |
+| GET | `/handover-tasks/{task_id}` | 我是 assignee 或 subject | 单据详情，含各 APP action、资产分类、距上交剩余天数 |
 | GET | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}/items` | 同上 | 明细分页，query: `page`、`page_size`、`q` |
 | PATCH | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}` | 我是 assignee | body: `{"default_action": "transfer"\|"release"\|"skip", "default_to_user_id": str\|null}` |
 | PUT | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}/overrides` | 我是 assignee | body: `{"overrides":[{"asset_id":"...","action":"transfer"\|"release"\|"skip","to_user_id":"..."\|null,"label":"..."}]}`，**整体替换** |
@@ -625,8 +534,8 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 
 | 任务 | 周期 | 逻辑 |
 |---|---|---|
-| `lifecycle_custody_expiry` | beat 每 10 分钟 | 扫 `revoked_at IS NULL AND expires_at <= now` 的 `CustodyGrant`，逐个 `escalate_custody()`。PostgreSQL 下 `select_for_update(skip_locked=True)` 分批，避免多 worker 抢同一批（与 `grants` 过期任务同款） |
-| `lifecycle_custody_reminder` | beat 每天 09:00（Asia/Shanghai） | 对未收回且单未完成的代管发钉钉提醒；用 `last_reminded_on` 去重保证每日一次；到期前 1 天额外发"即将到期" |
+| `lifecycle_escalation` | beat 每 10 分钟 | 扫 `status in OPEN and escalation_deadline <= now` 的 `HandoverTask`，逐个 `escalate_overdue_task()`。PostgreSQL 下 `select_for_update(skip_locked=True)` 分批（与 `grants` 过期任务同款） |
+| `lifecycle_daily_reminder` | beat 每天 09:00（Asia/Shanghai） | 对未完成且有 assignee 的单发钉钉提醒；`last_reminded_on` 用 `timezone.localdate(..., Asia/Shanghai)` 去重保证每业务日一次；上交前 1 天额外发"即将上交"。注意既有 beat schedule 只接受 float interval，crontab 需扩展 |
 | `lifecycle_superuser_pool_reminder` | beat 每天 09:05 | `assignee_state=superuser_pool` 且未完成的单，向全体超管推认领通知 |
 | `lifecycle_blocked_apps_digest` | beat 每周一 09:10 | 汇总 `blocked` action，向超管推周报 |
 
@@ -651,15 +560,9 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 
 ## 9. ADR 修订（契约 §3.1）
 
-### ADR-002 修订点 1（§19）
+### ~~ADR-002 修订点 1（§19）~~ —— **已取消**
 
-在 `MANAGED_USERS` 定义后追加：
-
-> **例外（数据交接代管）**：当查询者持有针对某交接单的未到期 `CustodyGrant` 时，该交接单当事人
-> （`HandoverTask.subject_user`）会被并入其 `MANAGED_USERS`，**即使该用户为 `departed` 或 `disabled`**。
-> 这是全系统唯一允许非 active 用户进入该集合的场景，目的是让交接负责人在业务系统里看得见待交接数据。
-> 实现位置 `grants/managed_users.py`，代管授权到期或收回后自动消失。
-> 下游应用因此**不得**以本地用户 inactive 为由从 scope 集合中剔除成员。
+代管废弃后，`MANAGED_USERS` 不再需要容纳非 active 用户，该条款**保持原样**。
 
 ### ADR-002 修订点 2（§36）
 
@@ -677,10 +580,10 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | 文件 | 覆盖 |
 |---|---|
 | `tests/unit/lifecycle/test_assignee.py` | 主管链正常/跳过离职主管/整链失效落池/stale 落池/本地管理员跳过/不设层数上限 |
-| `tests/unit/lifecycle/test_custody.py` | 发放的是 `HANDOVER_CUSTODY` scope 而非原 scope（**提权回归测试**：离职者持 `MANAGED_USERS`/`GLOBAL` 时 custodian 不得因此看到自己下属或全局数据）；发放后 `MANAGED_USERS` 含 departed subject；到期后不含；custodian 代管期间新获得的同名权限不被误收；逐 APP 收回；上交链路；到顶落池；`HANDOVER_CUSTODY` 未注册时快速失败 |
+| `tests/unit/lifecycle/test_escalation.py` | 到期上交一级；跳过已离职主管继续向上；到顶落超管池且 `escalation_deadline` 置空；**回归测试：整个流程不产生任何 `AccessGrant` 变更**（代管已废弃，权限面必须零变化）；每业务日只提醒一次且跨时区正确 |
 | `tests/unit/lifecycle/test_capability.py` | 三态 → action 初始状态；`declared` 但无 URL 抛错；`none` 缺声明人被约束拒绝 |
 | `tests/unit/lifecycle/test_assignments.py` | §5.4 六条校验；三值 action 的库层 CheckConstraint；`releasable=False` 时 `skip`+逐条 `transfer` 可用（部分交接不依赖 releasable）；override 唯一约束；失效 override 被清理并计数 |
-| `tests/unit/lifecycle/test_upgrade.py` | transfer → offboard 升级：kind 变更、generation+1、action 重置、assignee 重解析、代管发放 |
+| `tests/unit/lifecycle/test_upgrade.py` | pre_offboard → offboard 升级：kind 变更、generation+1、action 重置、assignee 重解析、上交截止时间重置 |
 | `tests/unit/lifecycle/test_reassign.py` | 管辖校验、必填理由、与 offboard 单并存不违反唯一约束、三方通知 |
 | `tests/integration/test_portal_handover_api.py` | §6.1 全部端点的权限边界（非 assignee 拿到 404） |
 | `tests/integration/test_handover_webhook_v2.py` | payload 形状逐字段比对 `tests/contract_samples/` 下的 golden JSON；幂等键 `(task_id, generation, batch_id)` |
@@ -708,7 +611,7 @@ docker run --rm -v "$PWD":/w -w /w <image> uv run --frozen pytest tests/unit/lif
 2. §2 模型 + 迁移。**schema 变更与全部调用方必须在同一个 commit 里** ——
    先删 `HandoverAppAction.policy` 再改 `handover.py` 会产出一个**跑不起来的中间提交**，
    与「每次提交后必须重建前后端并确认构建成功」直接冲突。原子提交，`makemigrations --check` 无漂移。
-3. §3 assignee → §4 custody（含新 scope `HANDOVER_CUSTODY` 的注册与解析）→ §5 handover 执行链。
+3. §3 assignee → §4 超时上交 → §5 handover 执行链。
 4. §7 异步任务 → §9 ADR。
 5. §10 测试补齐。
 

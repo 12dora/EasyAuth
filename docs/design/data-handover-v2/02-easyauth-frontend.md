@@ -127,10 +127,10 @@ export interface HandoverAction {
   asset_types: HandoverAssetType[];
 }
 
-export interface HandoverCustody {
-  expires_at: string;
-  days_left: number;
-  active: boolean;
+export interface HandoverEscalation {
+  deadline: string | null;   // null = 已落超管池, 不再上交
+  days_left: number | null;
+  level: number;
 }
 
 export interface HandoverTaskDetail {
@@ -140,7 +140,7 @@ export interface HandoverTaskDetail {
   generation: number;
   subject: HandoverUserRef;
   assignee: (HandoverUserRef & { state: HandoverAssigneeState; escalation_level: number }) | null;
-  custody: HandoverCustody | null;
+  escalation: HandoverEscalation;
   reason: string;
   created_at: string;
   actions: HandoverAction[];
@@ -183,7 +183,7 @@ export interface HandoverAssetItemsPage {
 └──────────────────────────────────────────────────────────┘
 ```
 
-- 「还剩 N 天」来自 `custody.days_left`：`>7` 中性色，`3–7` 警示色，`<3` 危险色，`custody.active=false` 显示「已上交」。
+- 「还剩 N 天」来自 `escalation.days_left`：`>7` 中性色，`3–7` 警示色，`<3` 危险色；`deadline` 为 null 显示「待超管认领」。
 - `blocked_app_count > 0` 时显示⚠行，文案：「N 个应用未接入交接，需管理员处理」，**不给普通用户跳过按钮**。
 - 空态文案：「你当前没有需要处理的交接。」不要画插画占位，与现有门户风格一致。
 
@@ -191,7 +191,7 @@ export interface HandoverAssetItemsPage {
 
 ### 5.2 `PortalHandoverDetail`
 
-顶部信息条：当事人、类型、状态、代管剩余天数、当前负责人与上交层级
+顶部信息条：当事人、类型、状态、距上交剩余天数、当前负责人与上交层级
 （`escalation_level > 0` 时显示「已上交 N 级」）。
 
 主体是**逐 APP 的可折叠区块**，按 `status` 决定形态：
@@ -322,7 +322,7 @@ export interface HandoverAssetItemsPage {
 ### 7.2 `HandoverTaskDetail` 扩展
 
 - 顶部新增「负责人」卡片：assignee 姓名、`assignee_state` 中文标签、`escalation_level`、
-  代管到期时间与剩余天数、[手动续期] [认领]（`superuser_pool` 时）。
+  上交截止时间与剩余天数、[延期] [认领]（`superuser_pool` 时）。
 - 每个 action 区块新增 blocked/skipped 形态（同 §5.2 表格）。
 - `blocked` 区块给超管一个 [强行跳过] 按钮 → 对话框必填理由（≥10 字符）→
   `POST .../actions/{app_key}/skip`。对话框需明确警示：
@@ -331,7 +331,7 @@ export interface HandoverAssetItemsPage {
 ### 7.3 `HandoverTaskList` 扩展
 
 新增筛选：`assignee_state`、「仅看被阻塞的」。
-列表行新增两个角标：`blocked_app_count`（红）、`custody.days_left`（按 §5.1 配色）。
+列表行新增两个角标：`blocked_app_count`（红）、`escalation.days_left`（按 §5.1 配色）。
 
 ### 7.4 未接入告警条（`BlockedAppsBanner`）
 
@@ -365,7 +365,7 @@ key 前缀统一 `handover.*`，门户专用 `handover.portal.*`，控制台专�
 |---|---|---|
 | HandoverTask | 交接单 | `task` |
 | assignee | 负责人 | `assignee` |
-| CustodyGrant | 代管权限 | `custody` |
+| escalation | 上交 | `escalation` |
 | asset type | 资产类型 | `assetType` |
 | override | 单独指定 | `override` |
 | blocked | 未接入交接 | `blocked` |

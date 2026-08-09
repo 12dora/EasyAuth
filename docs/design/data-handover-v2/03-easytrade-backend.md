@@ -27,7 +27,6 @@ EasyTrade 是三个下游里唯一已接入交接的应用：
 |---|---|---|---|
 | B1 | 无接收人时把非空列 `Order.owner_user_id` 置 `NULL` | `easyauth_handover.py:123` 经 `_reassign_owners` | 违反模型不变量，事务本应失败却被放过 |
 | B2 | 询盘在无接收人时**静默保持原归属** | `easyauth_handover.py:132-142` | 典型的静默兜底：调用方以为交接完成，实际数据还挂在离职者名下 |
-| B3 | scope 解析把 inactive 本地用户从集合中剔除 | `backend/app/domain/authz/scope_resolution.py` 的 `_managed_user_ids_from_resolved_grant()` 返回行 | **代管授权在 EasyTrade 侧被丢弃，契约 D4 完全失效** |
 | B4 | lifecycle 路由直接抛 FastAPI `HTTPException`，实际错误体是 `{"detail": ...}` | `backend/app/api/v1/easyauth_lifecycle.py` | 与本仓库其他接口的错误体不一致。契约 §10.6 只规范状态码，因此**不强制统一**，但需在实现时明确选一种并写进测试，不要两种混用 |
 
 B1/B2 的根因相同：把"能不能没有负责人"这件事藏在实现里，而不是作为契约声明出去。
@@ -89,35 +88,29 @@ COA 档案/批次创建人、需求进展与附件创建人、文档与产品上
 
 ## 3. 后端改造
 
-### 3.1 修 B3：scope 解析不得剔除 inactive（**最高优先级**）
+### 3.1 ~~修 B3（scope 解析剔除 inactive）~~ —— **本期取消**
 
-`_managed_user_ids_from_resolved_grant()` 末行当前是：
+原本要求去掉 `_managed_user_ids_from_resolved_grant()` 里的 `row.active` 判定，理由是代管授权
+需要让 departed 用户进入 scope 集合。**代管已在第二轮复核后整体废弃**（契约 §7），
+离职者不会再进入任何人的 `MANAGED_USERS`，本项**没有依据，本期不做**，`scope_resolution.py` 一行不改。
 
-```python
-return {row.id for row in rows if row.active and row.id != current_user.id}
-```
+### 3.1.1 `hint` 是硬要求，不是可选项
 
-按契约 §7.3 改为：
+代管废弃后，主管**只能靠交接单里的明细判断归属**，看不到业务系统里的上下文。
+因此 `items` 响应里每条的 `hint`（≤120 字符）承担了全部判断依据，必须给足信息：
 
-```python
-return {row.id for row in rows if row.id != current_user.id}
-```
+| `asset_type` | `hint` 必须包含 |
+|---|---|
+| `customer` | 最近跟进日期 + 在途单数 + 客户等级/区域 |
+| `order_in_transit` | 单号 + 客户名 + 当前阶段 + 金额 |
+| `inquiry_open` | 客户名 + 当前 pipeline 阶段 + 最近活动日期 |
+| `receivable_open` | 关联单号 + 到期日 + 未结金额 |
+| `task_open` | 关联对象 + 截止日期 |
+| `activity_followup` | 客户名 + 下一步日期 |
+| `requirement_open` | 产品/客户 + 当前状态 |
+| `sample_request_open` | 客户名 + 样品 + 当前状态 |
 
-即**只去掉 `row.active` 这一个条件**，其余全部保留：
-
-- 「映射不到本地用户」的外部 ID 仍然剔除
-- 既有的 `authz.managed_users.resolved_excluded` 日志**保留不动**（它已经在打
-  `unmapped_count` 与 `inactive_count`，是排障的有效信号；只是 `inactive_count` 从
-  「被剔除的数量」变成「集合中在职状态为 false 的数量」，需同步改该日志的注释与字段语义说明）
-- 排除自己的行为不变
-
-> 注意判定字段是 `User.active`，不是 `is_active`。
-
-**这条不改，主管在代管期内根本看不到离职者的客户，本次改造的核心价值归零。**
-它与 webhook 改造相互独立，应作为第一个可独立上线、可独立验证的提交。
-
-验证方式：构造一个 `is_active=false` 的本地用户 A，让快照的 `MANAGED_USERS` 含 A 的 sub，
-断言客户列表能查到 A 名下的客户。
+**`hint` 为空或只有 ID 视为未完成本项**，验收用例须逐类断言非空且含上表要素。
 
 ### 3.2 descriptor 声明（契约 §9.1）
 
@@ -276,7 +269,6 @@ def execute_handover(
 
 | 文件 | 覆盖 |
 |---|---|
-| `backend/app/tests/authz/test_scope_resolution_inactive.py` | **B3**：inactive 本地用户仍进 scope 集合；映射不到的被剔除且有计数日志 |
 | `backend/app/tests/test_easyauth_handover_assets.py` | 8 类资产的 count 口径；`count=0` 也返回；注册表与 descriptor 一致（用同一常量断言） |
 | `backend/app/tests/test_easyauth_handover_items.py` | 分页稳定性（连续翻页不漏不重）；`q` 过滤；`total` 与 preview 一致；`page_size` 钳制 |
 | `backend/app/tests/test_easyauth_handover_execute.py` | override 优先于 default；剩余条目按 `default_action`；三值 action 各自行为；**B1** 非空列永不写 NULL；**B2** `release` 落在 `releasable=false` 上抛 422 而非静默；`default_action="skip"` + 逐条 `transfer` 能对非空列做部分交接；`(task_id, generation, batch_id)` 幂等；不同 generation 真正重执行 |
@@ -293,7 +285,7 @@ golden 样本的取用方式：**随 SDK 一起分发**，作为 `easyauth_app_s
 
 ## 6. 交付顺序
 
-1. **§3.1 修 B3**（独立、最高价值、可单独验证上线）
+1. ~~§3.1 修 B3~~ —— 本期取消（代管废弃）
 2. §3.3 资产注册表 + §3.2 descriptor（两者共用常量，必须同一提交）
 3. §3.4 preview + §3.5 items
 4. §3.6 execute 重写 + §3.8 迁移（修 B1/B2）
