@@ -537,17 +537,17 @@ EasyProject 只记 `trigger_system=EasyAuth` 与 `handover_task_id`，
 ### 5.2 需要 CCR 的部分（很小，但不可省）
 
 只有一项：给这个既有操作的 `x-error-codes` 补齐条目。当前三个不足以覆盖契约 v2 的失败面。
-**新增 7 个，保留既有 3 个，共 10 个。**
+**新增 8 个，保留既有 3 个，共 11 个。**
 
 | 错误码 | HTTP | 触发 | 现状 |
 |---|---|---|---|
 | `WEBHOOK_SIGNATURE_INVALID` | 401 | 验签失败 | 已有 |
-| `HANDOVER_CONFLICT` | 409 | 保留，用于归属改写时的业务冲突、快照失效、迟到 generation | 已有 |
+| `HANDOVER_CONFLICT` | 409 | 保留，用于归属改写时的业务冲突、迟到 generation。**快照失效不走这个码**，走 412 `SNAPSHOT_STALE` | 已有 |
 | `VALIDATION_ERROR` | 422 | 保留，payload 结构不合法 | 已有 |
 | `WEBHOOK_TIMESTAMP_INVALID` | 400 | 时间戳超 300 秒容差 | **补** |
 | `WEBHOOK_PAYLOAD_CONFLICT` | 409 | 同 `(task_id, generation, batch_id)` 不同 payload hash | **补** |
 | `EVENT_UNSUPPORTED` | 422 | `X-EasyAuth-Event` 不是 preview/items/execute/test | **补** |
-| `EVENT_MODE_MISMATCH` | 422 | `X-EasyAuth-Event` 与 body `mode` 不一致（契约 §10.1 的强制补偿校验） | **补** |
+| `EVENT_MODE_MISMATCH` | 422 | `X-EasyAuth-Event` 与 body **`event_type`** 不一致（契约 §10.1 的强制补偿校验）。码名沿用「mode」是历史原因，判定依据已是 `event_type`，见 `09` §5.2 | **补** |
 | `IDENTITY_UNMAPPED` | 409 | §2.1 解析不到 dtuid | **补** |
 | `ASSET_TYPE_UNDECLARED` | 422 | 请求里的 `asset_type` 不在注册表中 | **补** |
 | `REQUEST_BODY_TOO_LARGE` | 413 | 超 256 KiB | **补** |

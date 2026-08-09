@@ -444,7 +444,7 @@ execute body 走进 preview 分支，或反过来。
 | `backend/app/tests/test_easyauth_handover_items.py` | 分页稳定性（连续翻页不漏不重）；`q` 过滤；`total` 与 preview 一致；`page_size` 钳制 |
 | `backend/app/tests/test_easyauth_handover_execute.py` | override 优先于 default；剩余条目按 `default_action`；三值 action 各自行为；**B1** 非空列永不写 NULL；**B2** `release` 落在 `releasable=false` 上抛 422 而非静默；`default_action="skip"` + 逐条 `transfer` 能对非空列做部分交接；`(task_id, generation, batch_id)` 幂等；不同 generation 真正重执行 |
 | `backend/app/tests/contract/test_handover_v2_golden.py` | 从 `easyauth_app_sdk.contract_samples` 包内资源读取样本逐字段比对；样本缺失必须 fail |
-| `backend/app/tests/test_easyauth_lifecycle.py` | 既有用例按 v2 payload 重写；**§4.1 负向用例**：签名合法但 `X-EasyAuth-Event` 与 body `mode` 对调 → 422 |
+| `backend/app/tests/test_easyauth_lifecycle.py` | 既有用例按 v2 payload 重写；**§4.1 负向用例**：签名合法但 `X-EasyAuth-Event` 与 body **`event_type`** 不一致（含把事件头改成 `webhook.test`）→ 422 |
 | `backend/app/tests/test_easyauth_handover_snapshot.py` | §3.5.1：preview 返回 token；数据变动后 execute 整体 409 且**零写入**；override 的 id 已不属当事人 → 409；分批时旧 token 不可复用 |
 | `backend/app/tests/test_easyauth_handover_locking.py` | §3.6 第 4 步：assignments 顺序颠倒时加锁次序不变；先冻结主键后订单 owner 改写不会让 NULL-owner 应收从集合消失 |
 | `backend/app/tests/test_easyauth_handover_identity.py` | §3.6 身份边界：payload 里三个位置的 sub 全部解析为本地 id；**overrides 里的接收人不得漏解析**；解析不到/非 active/等于当事人 → 422 |

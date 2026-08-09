@@ -851,7 +851,7 @@ APP 侧仍应保留自己的行锁作为第二道防线。
 **幂等**：幂等键为 `(task_id, generation, batch_id)`。
 
 - `batch_id` 是 EasyAuth 生成的单调递增整数，**同一 generation 内可以有多批**。
-  它在 EasyAuth 内部的字段名是 `batch_seq`（`HandoverExecutionAttempt.batch_seq`、
+  它在 EasyAuth 内部的字段名是 `batch_seq`（`HandoverExecutionBatch.batch_seq`、
   `HandoverExecutionLease.batch_seq`、`HandoverAppAction.batch_seq` 分配器）——
   **`batch_seq` 与线上契约字段 `batch_id` 是同一个值，不是两个编号**，
   发 payload 时原样填入，不做任何映射或重编号。作用域是 `(action, generation)`，从 1 起

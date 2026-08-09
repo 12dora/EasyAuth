@@ -1023,7 +1023,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | 403 | `out_of_managed_scope` | reassign 的 subject 不在我的管辖范围（契约 §4） |
 | 409 | `open_task_exists` | 自助建单时已有 open 的 `offboard`/`transfer`/`pre_offboard` 单（与 §2.1 的 `lifecycle_task_one_open_lifecycle_per_subject` 同一集合）。`reassign` 单**不**触发本错误 |
 | 409 | `handover_execution_in_flight` | 该 `(subject, app)` 已有 execute 在途（含 `async_pending`），契约 §10.5.2。**不排队、不自动重试**，前端提示稍后再试 |
-| 409 | `snapshot_stale` | 下游返回 409 判定为快照失效，action 已退回 `pending`，需重新 preview（契约 §10.6） |
+| **412** | `snapshot_stale` | 下游返回 **412** 判定为快照失效，action 已退回 `pending`，需重新 preview（契约 §10.6）。**不要用 409** —— 409 会被判 `failed` |
 | 409 | `action_not_retryable` | 对非 `failed` 状态的 action 调 `retry` |
 | 422 | `reason_required` | reassign 未填理由或不足 10 字符 |
 | 422 | `receiver_not_active` / `receiver_is_subject` / `receiver_required` / `asset_type_not_releasable` / `duplicate_assignment` | §5.4 |
