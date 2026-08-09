@@ -210,23 +210,48 @@ FastAPI / SQLAlchemy model / SDK DTO）。因此上面的签名是**示意**，�
 
 因此：
 
-> **每个涉及的领域模块各自提供一个 `system_handover` 命令用例**，由 M06 的交接服务调用。
-> 命令内部锁聚合根、走既有状态机、写全套副作用（history / activity / 站内通知 / 提醒重物化），
-> 并对 `APPROVAL_PENDING` / `FIELD_LOCKED` 等锁状态返回明确的领域错误。
+> **每个涉及的领域模块各自提供一个专用 `system_handover` 命令用例**，由 M06 的交接服务调用。
+> 命令内部锁聚合根、**保住业务不变量**，并对审批锁 / 终态 / 归属已变返回明确的领域错误。
+
+**六个命令的确切签名、逐条保证、以及每张表允许写哪些列，由 AG-00 裁定冻结，见
+[`08-easyproject-ag00-rulings.md`](08-easyproject-ag00-rulings.md) §1.3。本节只讲原则。**
+
+两条容易写反的原则：
+
+1. **不得复用会改变状态的人类命令。** 现有 task `reassign` 会把任务重新推回 `PENDING_ACCEPTANCE`
+   （`domain/tasks/state_machine.py:56-69`）。交接只转**责任**，不改状态 ——
+   `status` / `state_version` / `accepted_at` / review 状态一律保持不变。
+2. **只写适用的 history / activity / 提醒重物化，不发逐对象站内通知。**
+   本文件早期版本写的"写全套副作用（含站内通知）"是错的：普通改派每任务发一条通知
+   （`domain/tasks/commands.py:980-997`），批量交接调用它就是一场通知风暴。
+   完成通知由 EasyAuth 在 action / 整单收敛后合并发送（契约 §13）。
 
 M06 **只做编排与契约适配**，一行业务 UPDATE 都不写。
 
-### 4.2 API 端点（新文件 `backend/app/api/v1/easyauth_lifecycle.py`）
+### 4.2 API 端点（**改写既有文件** `backend/app/api/v1/easyauth_lifecycle.py`）
 
 ```
 POST /api/v1/easyauth/lifecycle/handover
 ```
 
-- 用 SDK 的 `lifecycle_http_response()` 内核做验签与事件分发（三个事件：preview / items / execute）
+**这不是新建。** 该文件与 route 已存在（`api/v1/easyauth_lifecycle.py:55-92`），
+router 也已在 `api/v1/router.py:49-56` 挂载。工作是把 v1 占位实现**原地改写**为 v2，
+保留既有 route 与 `operationId`（`postEasyauthLifecycleHandover` 已在冻结基线里）。
+
+- 用 SDK 的 `lifecycle_http_response()` 内核做验签、`event_type` 一致性校验与事件分发
+  （三个事件：preview / items / execute）
 - 请求体上限 256 KiB（契约 §10.1）
 - 直接使用 SDK 的 `handover_payloads` TypedDict，**禁止**手抄字段名
 - 请求/响应模型**不继承** `app/core/schemas.ApiModel`：webhook 的 JSON 体由 EasyAuth 定义，是
   **snake_case**，与本仓库 camelCase 约定不同。详见 §5.4 的裁定与理由。
+
+> **⚠ 上面三条 SDK 能力现在一个都没有。**
+> vendored SDK 当前只有 preview / execute 两个事件、`DEFAULT_MAX_BODY_BYTES = 64 KiB`、
+> 没有 `handover_payloads`，`manifest.py:101-118` 的 `_validate_lifecycle()` 白名单还会
+> **拒绝** `handover_asset_types`。
+>
+> 因此这是一条硬依赖：**M03 先升级 vendored SDK（`08` §1.2），A5 才能引用 items 回调、
+> v2 payload 类型与 256 KiB 常量。** 在那之前写这些代码只会得到 ImportError。
 
 ### 4.3 复合主键与唯一约束的处理（本仓库特有难点）
 
@@ -234,7 +259,7 @@ POST /api/v1/easyauth/lifecycle/handover
 
 | 表 | 冲突场景 | 处理 |
 |---|---|---|
-| `ProjectMemberRow` | 接收人已是该项目成员 | 合并：删除离职者行；若离职者是 `OWNER` 而接收人是 `MEMBER`，把接收人行升级为 `OWNER`（满足"每项目一个 OWNER"的部分唯一索引，`m13_001_project_tables.py:127`）。计入 `merged` |
+| `ProjectMemberRow` | 接收人已是该项目成员 | 合并：删除离职者行；若离职者是 `OWNER` 而接收人是 `MEMBER`，把接收人行升级为 `OWNER`（满足"每项目一个 OWNER"的部分唯一索引，`m13_001_project_tables.py:135-142`）。计入 `merged` |
 | `TaskCollaboratorRow` | 接收人已是协作人 | 直接删除离职者行，计入 `merged` |
 | `RecurringTemplateCollaboratorRow` | 同上 | 同上 |
 | `WorkRecordParticipantRow` | 同上 | 同上 |
@@ -261,11 +286,21 @@ POST /api/v1/easyauth/lifecycle/handover
 > 也就是说：改了任务负责人却不管 occurrence，接收人**收不到任何提醒，而且没有任何报错**。
 > 这正是本次改造要消灭的那类"看起来成功、实际什么都没发生"。
 
-任务/周期模板的角色改派完成后，**同一事务内**必须：
+**只有任务（`task_assigned` / `task_assigner`）的角色改派需要这一步**，**同一事务内**必须：
 
-1. 取消该任务/模板下所有**未发送**的 `ReminderOccurrenceRow`（不只是 recipient 为离职者的那些）；
+1. 把该**任务**下所有**未发送**的 `ReminderOccurrenceRow` 置为 `SKIPPED` / `HANDOVER_SUPERSEDED`
+   （不只是 recipient 为离职者的那些）；
 2. 复用领域既有的物化用例按新角色重新物化（`infra/jobs/reminder_materialize.py`），
    **不要**在交接代码里手写 INSERT。
+
+具体由 M18 的 `refresh_after_system_handover()` 承担（`08` §1.3），M06 不直接改 occurrence。
+
+> **周期模板改人不走这一步，也走不了。** `reminder_occurrences` 的外键是
+> `(rule_id, task_id) → task_reminder_rules(id, task_id)`（`infra/repositories/reminders.py:97-105`），
+> **表里根本没有 template_id 这一维**，无从按模板去筛。
+> 模板改人之后，由它生成的**新任务**天然带新角色，提醒随新任务正常物化；
+> 已经生成出来的历史任务则各自作为独立任务参与交接。
+> 本文件早期版本写的「取消该任务/**模板**下所有未发送 occurrence」，对模板那半是无法实现的。
 
 **为什么是"取消+重物化"而不是"直接 UPDATE recipient"**：
 `ASSIGNEE` / `ASSIGNER` 两种角色直接改 recipient 确实能重新对上，但 `MANAGER` 角色的收件人是
@@ -290,9 +325,9 @@ POST /api/v1/easyauth/lifecycle/handover
 
 | 列 | 值 |
 |---|---|
-| `principal_key` | `"easyauth"` |
-| `operation` | `"lifecycle.handover.execute"` |
-| `idempotency_key` | `f"{task_id}:{generation}:{batch_id}"`（列宽 `String(128)`，够用） |
+| `principal_key` | `"system:easyauth-handover"` |
+| `operation` | `"postEasyauthLifecycleHandover"` |
+| `idempotency_key` | `f"handover:v2:{task_id}:{generation}:{batch_id}"`（列宽 `String(128)`；契约 §5.4 已把 `task_id` 限到 64 字节，放得下） |
 | `request_sha256` | canonical payload 的 SHA-256（既有列，直接用） |
 | `response_json` | 首次成功的 `{"summary": ...}` 整体 |
 
@@ -313,8 +348,12 @@ POST /api/v1/easyauth/lifecycle/handover
 另需按 `task_id` 维护**已见最大 `generation`**，并且**读它必须在 task 级串行化之后**
 （同一 `task_id` 上先取一把行锁或 advisory lock），否则两个并发的旧请求会互相"看不见"对方，
 双双通过判定。推进最大轮次、写 payload hash、写回执、业务改写**必须在同一事务内**完成。
-落法二选一（在 PR 里写明结论）：同表加一条 `idempotency_key=f"{task_id}:maxgen"` 的记录，
-或在幂等表上按 `task_id` 前缀查 `MAX(generation)`。
+**落法已由 `08` §1.4 裁定，不再二选一**：用 M06 自有的新表
+`easyauth_handover_generations`（迁移 `m06_003_handover_generation_watermarks`）加行锁。
+
+> **不能塞进通用幂等表。** `IdempotencyRecordModel` 的记录是**永久墓碑** ——
+> `COMPLETED` 之后 `store_response` 直接返回，行不可更新
+> （`infra/idempotency/guard.py:136-175`）。水位是要反复推进的可变值，放进去第一次写完就再也改不动。
 
 必须有测试：**按 `generation=2` → `generation=1` 的顺序投递，第二个请求返回 409 且零写入。**
 这不是理论场景 —— outbox 里 generation 1 的旧记录被 worker 延迟取出时会用**当前时间**重新签名，
@@ -328,17 +367,51 @@ canonical 的定义固定为：对 JSON 体做 key 排序、去空白、UTF-8 �
 
 ### 4.5 事务与网络副作用
 
-按 `AGENTS.md` 不变量 4：execute 的业务写入（归属改写 + audit/activity + 站内通知）在一个事务内完成；
+按 `AGENTS.md` 不变量 4：execute 的业务写入在一个事务内完成；
 对 EasyAuth 的任何反向 HTTP 调用（如 §2.1 第 2 步的目录查询）**必须在事务外先做完**，
 再进事务写库。**禁止持业务行锁调网络。**
 
-因此 execute 的编排是：
+execute 的编排：
 
 ```
 1. 事务外: 解析 from/to 的全部 sub -> dtuid（可能触发目录查询与补绑）
-2. 事务内: 校验 -> 逐 asset_type 改写 -> 写 audit/activity/站内通知 -> 写幂等记录
-3. 事务后: 无网络副作用（交接结果由 EasyAuth 收敛）
+2. 事务内: 锁 generation 水位 -> 校验 -> 按 08 §2.2 的固定锁序逐 asset_type
+          调各领域 system_handover 命令 -> 写 audit/activity
+          -> 写 OpenProject 投影 outbox -> 写幂等记录
+3. 事务后: 由 M33 worker 异步消费投影 outbox；不发任何逐对象站内通知
 ```
+
+三条容易漏的：
+
+**① actor 是谁 —— 见 `08` §2.1。**
+webhook 没有人类操作人。审计与 activity 的 `actor_dingtalk_user_id` 一律写 `NULL`，
+执行者身份放进 `metadata_json.executor = "SYSTEM:EASYAUTH_HANDOVER"`。
+`task_assignment_history.changed_by_dingtalk_user_id` **当前非空**
+（`infra/repositories/tasks.py:226`），需要 `m10_002_task_handover_actor` 迁移改为 nullable。
+**不要造哨兵 dtuid** —— 它会进目录外键与人员查询，在界面上伪装成一名真实员工。
+
+**② "谁在 EasyAuth 发起的"这件事，本期记不下来。**
+冻结的 execute payload 里没有 initiator / operator 字段（契约 §10.5）。
+EasyProject 只记 `trigger_system=EasyAuth` 与 `handover_task_id`，
+**具体发起人以 EasyAuth 自己的审计为权威**（契约 §12）。
+**不得**用 `from_user_id`、接收人或签名身份去推断 —— 那是编造。
+若产品确实需要，另提跨系统 CCR 在 payload 加 `initiator_user_id`。
+
+**③ OpenProject 人员投影 —— 原设计整段漏了。**
+
+> `domain/openproject/mapping.py:82-83` 把
+> `assignee_dingtalk_user_id → cf:assignee_dtuid`、
+> `collaborator_dingtalk_user_ids → cf:collaborators_dtuid` 投影到 OpenProject 自定义字段；
+> 而 M34 对账在文件头不变量里写死「**永不改…人员字段**」（`domain/openproject/reconcile.py:4`）。
+>
+> 所以：交接改了 assignee 却不投影，OpenProject 侧会**永久停留在离职者身上，
+> 且没有任何自动修复路径**。这正是本次改造要消灭的那类"看起来成功、实际没搬干净"。
+>
+> 又**不能**直接复用既有写穿：`write_through.py:668-724` 的 `_run_transition`
+> 是**持任务锁发网络请求**，与不变量 4 直接冲突。
+>
+> 裁定（`08` §1.3 M32/M33）：业务事务内**只写 durable outbox**，事务提交后由 M33 worker 异步投影。
+> **execute 的本地成功以 outbox 落库为界**，不等 OpenProject 返回。
 
 ### 4.6 descriptor（契约 §9.1）
 
@@ -361,13 +434,25 @@ canonical 的定义固定为：对 JSON 体做 key 排序、去空白、UTF-8 �
 
 ### 4.7 迁移
 
-| 迁移 | 内容 |
-|---|---|
-| `mNN_001_handover_idempotency.py` | 幂等记录扩展以支持 `handover:{task_id}:{generation}` 键（若既有表已足够通用则本迁移可省，需在 PR 说明中明确结论） |
+**三条并行 revision，各由自己的 owner 创建**（`08` §1.4 已冻结）。当前唯一 head 是
+`m46_001_record_task_order`：
 
+| revision | owner | 内容 |
+|---|---|---|
+| `m06_003_handover_generation_watermarks` | M06 | 建 `easyauth_handover_generations`（generation 水位，§4.4） |
+| `m10_002_task_handover_actor` | M10 | 把 `task_assignment_history.changed_by_dingtalk_user_id` 改为 **nullable**（system actor 无 dtuid） |
+| `m32_002_handover_projection_outbox` | M32 | 建 `op_handover_projection_outbox`（OpenProject 人员投影，§4.5 ③） |
+
+三条 `down_revision` 都指向 `m46_001_record_task_order`；落地后由 **AG-00** 创建
+`m00_004_data_handover_v2_heads` 合并。
+
+- **`idempotency_records` 不需要迁移**：既有列已够用（§4.4）。早期版本写的
+  「幂等记录扩展以支持 `handover:{task_id}:{generation}` 键，若既有表足够通用则本迁移可省」
+  两处都错 —— 键少了 `batch_id`，而真正需要新表的是 generation 水位。
 - 遵循 `AGENTS.md` 不变量 6：Alembic 是唯一 schema 入口，revision 命名 `mNN_###_description`，
   空库必须可 `upgrade head`，merge revision 只由 AG-00 创建。
 - **本次不新增业务列**（§3.4 已说明为何不给 `WorkRecordRow` 加 owner 列）。
+- downgrade 前置：确认没有 NULL 的 assignment-history actor、没有未消费的 OP outbox 行。
 
 ## 5. API 改造方案
 
@@ -450,7 +535,13 @@ CCR 内容（按 `contracts/workflow.md` §6 的六要素）：
    新增错误码覆盖掉）。
 6. **回滚方式**：还原该操作条目即可，无数据与代码耦合。
 
+**可直接提交的 CCR 全文见 [`09-easyproject-ccr.md`](09-easyproject-ccr.md)**，本节只保留清单与理由。
+
 **这份 CCR 应在开工第一天就提**（周期长于代码实现）。
+
+> **批准后必须先改 `contracts/tools/generate_baseline.py`，再重新生成基线。**
+> 该脚本是基线的权威再生入口，endpoint 元数据硬编码在里面；
+> **只手改 `openapi-baseline.json` 会在下次再生时被静默覆盖**，而且不会有任何报错。
 
 **CCR 批准前的可做/不可做边界**（按 `contracts/workflow.md` §6「AG-00 批准前所有 Agent 继续用旧契约」）：
 
@@ -553,8 +644,10 @@ secret 扫描、前端检查、契约检查）。**不存在只跑"前端段"这
 
 ## 7. 交付顺序
 
+0. **前置（不做完 A5 无法开工）**：AG-00 批准 [`08`](08-easyproject-ag00-rulings.md) 的两份裁定；
+   AG-00 提交 [`09`](09-easyproject-ccr.md) 的 CCR；M03 发布含 v2 能力的 vendored SDK
 1. ~~§2.2 修 P1~~ —— 本期取消（代管废弃）
-2. §2.1 身份映射（修 P2）+ §2.3 `hint`
+2. §2.1 身份映射（修 P2）+ §2.3 `hint` + §3.1.2 终态谓词选择器（这三项**不受任何门禁限制**，可立刻开工）
 3. §5.2 提 CCR（**与 1/2 并行提，通过周期较长，越早越好**）；同时向 AG-00 核实 §5.6 的前提
 4. §4.1 注册表 + §4.6 descriptor（共用常量，同一提交）
 5. §4.2 端点 + preview / items

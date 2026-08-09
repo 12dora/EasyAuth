@@ -9,7 +9,8 @@ EasyProject 三个仓库。文档统一放在这里，各仓库不再分散存�
 > 随之取消的还有：`04`/`06` 两份下游前端文档、EasyTrade 的 B3、EasyProject 的 P1、ADR-002 §19 修订。
 >
 > 另两处也已定案：**审批责任纳入本期**（`WorkRecord` 写成 D11 显式例外，见 `00` §11.1、`01` §4.5）；
-> **EasyProject 完整做但 A5 阻塞**，等 AG-00 裁定所有权与 system-actor 语义。
+> **EasyProject 完整做**，两份 AG-00 裁定已起草于 [`08`](08-easyproject-ag00-rulings.md)、
+> CCR 正文已起草于 [`09`](09-easyproject-ccr.md)，AG-00 批准即可开工。
 > **开工前必读 [`07-review-log.md`](07-review-log.md)。**
 
 ## 阅读顺序
@@ -24,6 +25,8 @@ EasyProject 三个仓库。文档统一放在这里，各仓库不再分散存�
 | 05 | [EasyProject 后端接入设计](05-easyproject-backend.md) | A5 | EasyProject |
 | 06 | [EasyProject 前端改造设计](06-easyproject-frontend.md) | ~~A6~~ **本期取消** | EasyProject |
 | 07 | [复核记录与未决事项](07-review-log.md) | **全体必读** | — |
+| 08 | [EasyProject AG-00 两份裁定](08-easyproject-ag00-rulings.md) | AG-00 审批 → A5 依据 | EasyProject |
+| 09 | [EasyProject CCR 正文](09-easyproject-ccr.md) | AG-00 提交 | EasyProject |
 
 **`00` 是唯一基准。** 里面的字段名、事件名、状态值、HTTP 状态码语义对所有仓库冻结；
 任何一方需要变更，先改 `00`，再同步全部下游文档，不得在自己仓库内单方面调整。
@@ -46,7 +49,7 @@ A3 / A5 的实现要用到 v2 SDK（新的 `items` 回调、`handover_payloads` 
 | A2 EasyAuth 前端 | A1 提交 `01` §6 的 API 契约章节后 |
 | A3 EasyTrade 后端 | SDK vNext 发布后 |
 | ~~A4 EasyTrade 前端~~ | **本期取消**（代管废弃，F1/F2/F3 不会发生） |
-| A5 EasyProject 后端 | **阻塞**。开工前置：AG-00 的所有权裁定 + system-actor 语义裁定 + CCR APPROVED。裁定前只能做 §2.1 身份映射与 §2.3 `hint`（`07` §1.3） |
+| A5 EasyProject 后端 | **裁定已起草**（`08`），待 AG-00 批准。批准后可做 M06 编排；各领域的 `system_handover` 命令由对应 owner 交付；冻结基线相关改动仍等 `09` 的 CCR APPROVED。**现在就能做**：`05` §2.1 身份映射、§2.3 `hint`、§3.1.2 终态谓词选择器 |
 | ~~A6 EasyProject 前端~~ | **本期取消**（同上） |
 
 ## 跨仓库对齐的机械保证
@@ -59,10 +62,13 @@ A3 / A5 的实现要用到 v2 SDK（新的 `items` 回调、`handover_payloads` 
 
 ## 需要人走流程的两件事
 
-1. **EasyProject CCR**：给既有操作 `postEasyauthLifecycleHandover` 补 7 个错误码（`05` §5.2）。
-   周期长于代码实现，开工第一天就提。**它是 M06 交接端点实施的门禁** —— 只有 P1/P2 修复与各领域的
-   `system_handover` 命令可以先行，端点改写、错误码、descriptor、测试向量都要等 APPROVED。
-2. **EasyAuth ADR-002 修订**：两条现行条款与本设计抵触，修订文本见 `01` §9。
+1. **EasyProject CCR**：给既有操作 `postEasyauthLifecycleHandover` 补 7 个错误码。
+   **可直接提交的正文见 [`09`](09-easyproject-ccr.md)。** 周期长于代码实现，开工第一天就提。
+   **它是 M06 交接端点实施的门禁** —— 端点改写、错误码、descriptor、测试向量都要等 APPROVED。
+2. **EasyProject AG-00 两份裁定**（所有权 + system-actor 语义）：正文见 [`08`](08-easyproject-ag00-rulings.md)，
+   批准后追加进 `EasyProject/contracts/ownership.md`。**它是各领域 `system_handover` 命令的门禁**，
+   与 CCR 是两道独立的门。
+3. **EasyAuth ADR-002 修订**：两条现行条款与本设计抵触，修订文本见 `01` §9。
 
 ## 已知缺口（明确不做，但必须记着）
 

@@ -160,7 +160,10 @@ recurrence patch 不支持 assignee/assigner。**而 webhook 没有合法的人�
 - 审批列表响应根本不返回 requester；周期模板前端界面不存在。
 - 终态口径不全：项目须排除 `COMPLETED/CANCELLED`；三类 task 同上；三类 recurrence 须 `is_enabled=true`；work-record participant 须 `status='OPEN'`。
 - `project_member` 定义含 OWNER 而 §4.3 说只处理非 OWNER → 重复计数；OWNER 部分唯一索引非 deferrable，先升级接收人会立即冲突。
-- CCR 范围不止错误码：custody scope / permission baseline 也要变，且 `generate_baseline.py` 本身需改，否则再生会覆盖。
+- ~~CCR 范围不止错误码：custody scope / permission baseline 也要变~~ —— **该结论已随代管废弃过期**。
+  实际影响面是 **0 新 scope、0 新 permission、0 新 operation、0 schema 变更**，只改 1 个既有 operation 的元数据。
+  但 `generate_baseline.py` 本身必须改，否则再生会静默覆盖新增错误码 —— 这一条仍然成立，
+  已写进 `09` §6 与 `05` §5.2。
 - 401 与契约 §10.1 的 403 定级冲突需裁定。
 
 ### 3.6 跨文档（切片 6）—— ✅ 已落文档
