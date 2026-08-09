@@ -134,6 +134,7 @@ models.CheckConstraint(
 | `preview_version` | `PositiveIntegerField(default=0)` | 单调递增，每次 preview 成功 +1。execute 请求必须回带匹配值，否则 409（§6.1） |
 | `overrides_version` | `PositiveIntegerField(default=0)` | 单调递增，每次 override 集合被替换 +1。`PUT overrides` 必须回带匹配值，否则 409 |
 | `skipped_at` | `DateTimeField(null=True, blank=True)` | 强行跳过的时间，与 `skipped_by` 一起构成责任链 |
+| `last_error_raw` | `TextField(blank=True)` | **新增**。下游原始响应体，截断 2000 字符，**只在控制台对超管展示且每次查看写审计**。既有的 `last_error`（`lifecycle/models.py:233`）改为只放「状态码 + 本地分类文案 + 白名单提取的 `code`/`message`，各截断 200 字符并脱敏」，门户与控制台都能看（契约 §10.6） |
 | `batch_seq` | `PositiveIntegerField(default=0)` | 已分配的最大批次号。**只是分配器**；批次的事实来源是 §2.4.1 的 `HandoverExecutionBatch` 行 |
 | `data_completed_at` | `DateTimeField(null=True, blank=True)` | 数据 webhook 已成功、权限尚未转授（契约 §10.5.1.1 的子状态，持久化） |
 | `grant_receiver` | `FK(UserMirror, PROTECT, null=True, related_name="handover_grant_receiving")` | 权限接收人，见上 |
