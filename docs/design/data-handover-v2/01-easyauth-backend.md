@@ -1289,10 +1289,21 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 
 原「审批人必须严格为申请人的 active 直属主管；缺少可解析的直属主管时禁止提交」改为：
 
-> 审批人按 `manager_chain` 逐级向上取第一个 active 主管（跳过 departed/disabled/本地管理员/申请人本人）。
-> 整条链不可用时进入超管待认领池，由超管审批。仍然**禁止**手动改填 App owner 或任意其他用户绕过。
+> 审批人按 `manager_chain` **逐级向上**取第一个 active 主管，跳过
+> departed / disabled / 本地管理员（`local-admin:` 前缀）/ 申请人本人。
+> 钉钉 userid 只在 `(source_slug, corp_id)` 内唯一，查询必须带上这两个维度。
+>
+> 整条链走完仍无可用主管时，**不禁止提交**：申请照常进入 `submitted`，
+> 但 `approval_routing_state` 置为 `superuser_pool`（见 §4.5.1），由超管在控制台认领并指定审批人。
+>
+> 仍然**禁止**手动改填 App owner 或任意其他用户来绕过主管链。
 
-新增 ADR-005「数据交接 v2 的能力声明与阻塞语义」，记录 D6 的决策与"静默成功"缺陷的修复。
+> **这条修订与 §8.2 建单时的降级取舍方向一致，但与权限查询相反**，修订说明里要写明：
+> 权限查询宁可 503 也不能少给或多给；而"谁来审批"和"谁来交接"这两件事宁可先落到超管池，
+> 也不能把申请或单据丢掉。目录 `stale` 时**不 fail-closed**。
+
+新增 ADR-005「数据交接 v2 的能力声明与阻塞语义」，记录 D6 的决策与"静默成功"缺陷的修复，
+以及本次新增的 `approval_routing_state`（审批人无解时的落点）。
 
 ---
 
