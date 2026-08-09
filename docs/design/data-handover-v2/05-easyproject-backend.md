@@ -35,7 +35,8 @@ descriptor 已暴露在 `GET /.well-known/easyauth-app.json`（`api/v1/easyauth_
 | ~~P1~~ | `MANAGED_USERS` 不消费 EasyAuth 快照，而是自己递归调下属接口推算 | `backend/app/domain/authz/managed_users.py:19` | **本期降级为已知偏差，不修**。它确实违反 EasyAuth 下游契约（`CONTEXT.md`「管理对象快照」条），但原本的修复依据是代管授权，而代管已整体废弃（契约 §7）。本项与数据交接无关，另行立项 |
 | P2 | 从未登录过 EasyProject 的员工，`directory_users.authentik_user_id` 为 `NULL` | `infra/repositories/directory.py:45`、`m07_001_directory_tables.py:51` | 契约 payload 里的 `from_user_id`/`to_user_id` 是 Authentik `sub`，这类人**解析不到本地行** |
 
-P1 与 webhook 实现相互独立，应作为第一个可单独验证、单独上线的提交。
+P2 与 webhook 实现相互独立，且**不受 A5 阻塞与 CCR 门禁的限制**（纯内部实现，不碰契约），
+应作为第一个可单独验证、单独上线的提交。
 
 ---
 
@@ -154,8 +155,16 @@ async def resolve_dtuid(uow, *, authentik_sub: str) -> str:
 （`work_records.py:86,235`）。
 
 **本次不转移，也不改名。** 理由：改动它等于同时改写"谁写的"与"谁负责"两个语义，且需要新增显式
-owner 列与数据迁移，超出交接改造的范围。工作记录的可见性在代管期内由 §2.2 的快照修复覆盖
-（主管能看到离职者的记录），足以支撑交接期业务。
+owner 列与数据迁移，超出交接改造的范围。
+
+> **这是一个真实的缺口，不要用"有别的东西覆盖了"来自我安慰。** 本文件早期版本写的是
+> 「可见性由 §2.2 的快照修复在代管期内覆盖」—— 代管与 P1 都已整体砍掉（契约 §7），
+> 这个理由**已经不成立**。
+>
+> 缺口的准确表述是：离职者名下的工作记录，在交接完成后**仍然挂在他的
+> `created_by_dingtalk_user_id` 上**，接收人既看不到也改不了，主管只能在交接单的
+> `work_record_participant` 明细里看到他**参与**的记录，看不到他**创建**的记录。
+> 契约 §11.1 已把这一条登记为 D11 的两条显式例外之一。
 
 若后续要转移，必须先补一次独立的领域改造：新增 `owner_dingtalk_user_id` 列 + 迁移 + 鉴权切换，
 再作为一个新的 `asset_type` 加入注册表。**此项作为已知缺口写入本设计，不得默默忽略。**
@@ -274,9 +283,34 @@ POST /api/v1/easyauth/lifecycle/handover
 
 ### 4.4 幂等
 
-契约 §10.5 的幂等键是 `(task_id, generation, batch_id)`。复用既有幂等基础设施
-（`infra/repositories/reliability.py` 的幂等记录表），键为 `handover:{task_id}:{generation}`。
-同键重放返回首次 `summary`；不同 `generation` 必须真正执行。
+契约 §10.5.2 的幂等键是**三元组** `(task_id, generation, batch_id)`。复用既有幂等基础设施
+（`infra/repositories/reliability.py` 的幂等记录表），键为：
+
+```
+handover:{task_id}:{generation}:{batch_id}
+```
+
+> **`batch_id` 一个都不能少。** 早期版本写的是 `handover:{task_id}:{generation}`，
+> 这会让同一 generation 内的**第二批**被当成第一批的重放：接口返回第一批的 `summary`、
+> HTTP 200，而第二批的数据**一条都没搬**。EasyAuth 那边看到的是"成功"。
+> 这正是 413 分批执行（契约 §10.6）必然触发的路径，不是边角情况。
+
+三条行为规定，缺一不可：
+
+| 情形 | 行为 |
+|---|---|
+| 同三元组重放，payload 的 canonical SHA-256 相同 | 返回**与首次完全相同**的 `summary`，HTTP 200，不重复执行 |
+| 同三元组重放，payload hash 不同 | HTTP 409 `WEBHOOK_PAYLOAD_CONFLICT`，**不得**按新 payload 执行 |
+| `generation` 小于本 `task_id` 见过的最大值 | HTTP 409 `HANDOVER_CONFLICT`（迟到的旧一轮，见契约 §10.5.2） |
+
+因此幂等记录行除了键与 `summary`，还必须存 **canonical payload 的 SHA-256**；
+另需按 `task_id` 维护**已见最大 `generation`**（可落在同一张表上，用 `handover:{task_id}:maxgen`
+这样的独立键，或在幂等表上加索引查 max —— 二选一，在 PR 里写明结论）。
+
+canonical 的定义固定为：对 JSON 体做 key 排序、去空白、UTF-8 编码后取 SHA-256
+（`json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")`）。
+**必须用解析后的对象重新序列化，不能直接哈希原始字节** —— 否则 EasyAuth 侧无意义的空白差异
+会被误判成 payload 冲突。
 
 ### 4.5 事务与网络副作用
 
@@ -408,10 +442,15 @@ CCR 内容（按 `contracts/workflow.md` §6 的六要素）：
 
 | 可以先做 | 必须等 CCR APPROVED |
 |---|---|
-| §2.2 修 P1（消费快照，纯内部实现） | 交接端点的 v2 改写 |
-| §2.1 修 P2（身份映射，纯内部实现） | 新错误码的实现与返回 |
-| 领域侧 `system_handover` 命令用例（§4.1.1，各模块内部） | descriptor 输出变更 |
-| 单元测试 | 测试向量更新、契约测试 |
+| §2.1 修 P2（身份映射，纯内部实现） | 交接端点的 v2 改写 |
+| §2.3 `hint` 的取数实现（只读查询） | 新错误码的实现与返回 |
+| §3.1.2 终态谓词的共享选择器（只读） | descriptor 输出变更 |
+| 领域侧 `system_handover` 命令用例（§4.1.1，各模块内部）——**但这一列还另外受 AG-00 所有权裁定阻塞**，见 §0 | 测试向量更新、契约测试 |
+| 上述各项的单元测试 | 端到端与契约测试 |
+
+> **两道门禁是独立的，不要混为一谈**：CCR 管的是「契约基线能不能改」，
+> AG-00 的两份裁定管的是「A5 能不能碰别的模块的表」。
+> 只有 §2.1 / §2.3 / §3.1.2 这三项同时不受两道门禁限制，可以立刻开工。
 
 即：**CCR APPROVED 是 M06 交接端点实施的门禁**，不是"边做边等"。
 
