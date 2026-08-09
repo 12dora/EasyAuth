@@ -121,6 +121,10 @@ models.CheckConstraint(
 > 2. **领域侧**：`validate_assignments()` 与建 action 路径各自显式校验一次，给出可读错误。
 >
 > 只做领域侧校验不够 —— 数据修复脚本、shell、以及未来的批量导入都会绕过它。
+>
+> **全仓统一用约束触发器表达跨表不变量**（本节与 §2.4 的 override 那条）。
+> SQLite 上的单测只验 domain / API 校验；**触发器只在 PostgreSQL lane 验证**，
+> 对应用例必须显式标记为需要真库，不允许在 SQLite 上"跑过了"就算数。
 
 > 早期版本把 `to_user` 整个删掉，导致 `transfer_selected_grants(action)` 失去输入 ——
 > 该函数依赖 action 级接收人，而条目级有多个接收人时无法推断授权该给谁。`grant_receiver` 补上这个洞。
@@ -351,11 +355,20 @@ class HandoverDeliveryAttempt(models.Model):
 > 库层加一条 CHECK：`outcome='sent' OR http_status IS NOT NULL`，
 > 让"标了终态却没有响应记录"这种行写不进去。
 
-**为什么是 `PROTECT` 而不是 `CASCADE`**：契约 §6.2 允许 `cancelled` 单被删除。
-用 `CASCADE` 的话，「execute 真的发出去了、下游真的改了数据、随后超管取消并删单」这条路径
-会把请求 hash、下游响应、幂等证据**全部级联删掉** —— 恰恰是最需要留证的那次。
-因此执行记录不随业务单消失：`PROTECT` 阻止删除，或（若产品坚持要能删单）把 action FK 改 `SET_NULL`
-并依靠 `task_snapshot` 保住上下文。**两种都行，但不允许 `CASCADE`。**
+**FK 定死为 `SET_NULL`，不是 `PROTECT`，更不是 `CASCADE`：**
+
+| 选项 | 为什么不行 / 行 |
+|---|---|
+| `CASCADE` | 「execute 真发出去了、下游真改了数据、随后超管取消并删单」会把请求 hash、下游响应、幂等证据**全部级联删掉** —— 恰恰是最需要留证的那次 |
+| `PROTECT` | 契约 §6.2 明说 `cancelled` 单**可以删除**；用 `PROTECT` 的话，凡是执行过的单就永远删不掉，等于偷偷改了契约 |
+| **`SET_NULL`** | ✅ 单可以删，证据留下 |
+
+因此：`action` 与 `task` 的 FK 都是 `null=True, on_delete=SET_NULL`，
+而 `task_snapshot`（JSON，含 `task_id` / `kind` / `app_key` / `subject_user_id`）**非空**，
+在创建 batch 时写入。
+唯一约束建在**快照键**上：`(action_snapshot_id, generation, batch_seq)`，
+`action_snapshot_id` 是创建时冗余下来的整数列（非空），这样 action 行没了唯一性也还在。
+`HandoverDeliveryAttempt` 对 `batch` 继续用 `PROTECT`（batch 本身不随业务单消失）。
 
 **分配与发送必须可恢复**：在事务内分配 `batch_seq`、写入 batch（`status="pending"`）与第一条
 delivery（`outcome="sent"`）、写 outbox，**提交后**才由 worker 真正发请求。
@@ -442,8 +455,16 @@ class HandoverLeaseFence(models.Model):
 
 **`lease_expires_at` 必填，否则一次 worker 崩溃就永久锁死。**
 条件唯一约束会让后续任何执行都拿不到租约，而没有过期时间就没有任何合法的接管入口
-——只能靠人手工删行，那正是最容易删错的操作。取值：`now + LEASE_TTL`（建议 5 分钟），
-worker 在长任务期间**周期性续约**（更新 `lease_expires_at` / `renewed_at`）。
+——只能靠人手工删行，那正是最容易删错的操作。**常量冻结，不由实现者自行选择**（否则同一故障下有的 worker 抢占、有的长期锁死）：
+
+```python
+LEASE_TTL: Final = timedelta(minutes=5)
+LEASE_RENEW_INTERVAL: Final = LEASE_TTL / 3        # 续约周期不得超过 TTL/3
+```
+
+`lease_expires_at = now + LEASE_TTL`；worker 在长任务期间按 `LEASE_RENEW_INTERVAL`
+**周期性续约**（CAS 更新 `lease_expires_at` / `renewed_at`）。
+这两个常量进单元测试断言。
 
 **fence 用取号器原子分配**：`UPDATE ... SET next_fence = next_fence + 1 RETURNING next_fence`。
 不允许用「当前最大 fence + 1」这种读后写。
@@ -780,7 +801,10 @@ reconcile 该 App 下所有 `blocked` 且所属 task 仍 open 的 action：
 | `data_completed_at` | → `NULL` | **最严重的一条**：非空会让 execute 走「数据已落地，只补转授权」的续跑分支，**这两周新产生的数据一条都不会搬**，而单据显示 `done` |
 | `snapshot_token` | → `""` | 拿上一轮的 token 去 execute，下游校验必然 409，整轮卡死 |
 | `batch_seq` | → `0` | 批次号从旧值续接，与新 generation 组合出的幂等键仍然唯一，倒不会错乱，但审计上批次号不连续、难排查 |
-| `last_error` | → `""` | 新一轮界面上挂着上一轮的错误文案 |
+| `last_error` / `last_error_raw` | → `""` | 新一轮界面上挂着上一轮的错误文案 |
+| `async_status_url` / `async_poll_attempts` | → `""` / `0` | 上一轮轮了 10 次（`ASYNC_POLL_MAX_ATTEMPTS`，`lifecycle/core.py:30`）已经触顶；不清零的话新一轮第一次 202 就直接判失败 |
+| `skipped_at` / `skipped_by` / `skip_reason` | → 空 | 与下方「强行跳过不继承」一致 |
+| `confirm_version` / `overrides_version` | **各 +1**（不是清零） | 主动击穿上一轮浏览器里缓存的版本号：还开着旧页面的人点执行会拿到 409，而不是把上一轮的选择写进新一轮 |
 | `status` / `blocked_reason` | **按 §5.1 重新判定**，不是无脑置 `pending` | 见下 |
 | `skip_reason` / `skipped_by` | → `""` | 见下 |
 
@@ -884,7 +908,7 @@ def preview_action(action) -> HandoverAppAction
 | `action ∈ {transfer, release, skip}` | 普通 `CheckConstraint`，`HandoverAssetType` 与 `HandoverAssetOverride` 各加一条 |
 | `default_action == "transfer"` ⇒ `default_to_user` 非空 | 普通 `CheckConstraint`（同表两列） |
 | `default_action == "release"` ⇒ `releasable = true` | 普通 `CheckConstraint`（`releasable` 与 `default_action` 同在 `HandoverAssetType` 上） |
-| **override 的 `action == "release"` ⇒ 父类型 `releasable = true`** | **跨表，普通 CHECK 做不到** —— `releasable` 在父表 `HandoverAssetType` 上。用**约束触发器**，或在 override 表上冗余一列 `releasable_snapshot` 并加同表 CHECK（冗余列需在 preview 重建行时同步刷新） |
+| **override 的 `action == "release"` ⇒ 父类型 `releasable = true`** | **跨表，普通 CHECK 做不到**（`releasable` 在父表 `HandoverAssetType` 上）。**统一用 PostgreSQL `CONSTRAINT TRIGGER ... DEFERRABLE INITIALLY DEFERRED`**，不加 `releasable_snapshot` 冗余列 —— 冗余列要在每次 preview 重建行时同步刷新，多一条必然会漏的同步路径 |
 | `grant_receiver` 仅 `offboard` | 跨表，同上（§2.2 已说明） |
 
 早期版本写的"前两条均已被 CheckConstraint 挡在库层"是不准确的：
@@ -1223,7 +1247,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 |---|---|---|
 | `lifecycle_escalation` | beat 每 10 分钟 | 扫 `status in OPEN and escalation_deadline <= now` 的 `HandoverTask`，逐个 `escalate_overdue_task()`。PostgreSQL 下 `select_for_update(skip_locked=True)` 分批（与 `grants` 过期任务同款） |
 | `lifecycle_daily_reminder` | beat 每天 09:00（Asia/Shanghai） | 对未完成且有 assignee 的单发钉钉提醒；`last_reminded_on` 用 `timezone.localdate(..., Asia/Shanghai)` 去重保证每业务日一次；上交前 1 天额外发"即将上交"。注意既有 beat schedule 只接受 float interval，crontab 需扩展 |
-| `lifecycle_poll_async_actions` | beat 每 1 分钟 | 扫 `status=async_pending` 的 action，逐个调既有 `poll_async_action()`。**这个任务不存在的话，202 就是个死胡同**：action 进 `async_pending` 后门户不允许 retry（在途）、也没有任何东西去 poll，永远到不了 `done`/`failed`，租约也永远不释放。需定义：最大轮询次数（超过则判 `failed` 并写明"下游长时间未返回终态"）、`Location` 头的持久化与更新、终态后调 `complete_data_phase()` 并释放租约 |
+| `lifecycle_poll_async_actions` | beat 每 **1 分钟** | 扫 `status=async_pending` 的 action，逐个调既有 `poll_async_action()`。**这个任务不存在的话，202 就是个死胡同**：action 进 `async_pending` 后门户不允许 retry（在途）、也没有任何东西去 poll，永远到不了 `done`/`failed`，租约也永远不释放。<br>**上限沿用既有的 `ASYNC_POLL_MAX_ATTEMPTS = 10`**（`lifecycle/core.py:30`），不要新造一个：第 10 次仍非终态 → CAS 标 `failed`、`last_error` 写固定文案「下游超过 10 次轮询仍未返回终态」、释放租约。`Location` 头持久化在 `async_status_url` 上，每次响应带新 `Location` 就更新。拿到终态 200 后**必须走 `complete_data_phase()`**，不得直接置 `done` |
 | ~~`lifecycle_superuser_pool_reminder`~~ | — | **本期不做**，见下 |
 | ~~`lifecycle_blocked_apps_digest`~~ | — | **本期不做**，见下 |
 
