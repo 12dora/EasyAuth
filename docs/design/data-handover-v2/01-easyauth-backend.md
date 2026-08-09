@@ -134,7 +134,7 @@ models.CheckConstraint(
 | `preview_version` | `PositiveIntegerField(default=0)` | 单调递增，每次 preview 成功 +1。execute 请求必须回带匹配值，否则 409（§6.1） |
 | `overrides_version` | `PositiveIntegerField(default=0)` | 单调递增，每次 override 集合被替换 +1。`PUT overrides` 必须回带匹配值，否则 409 |
 | `skipped_at` | `DateTimeField(null=True, blank=True)` | 强行跳过的时间，与 `skipped_by` 一起构成责任链 |
-| `batch_seq` | `PositiveIntegerField(default=0)` | 已分配的最大批次号。**注意：批次的事实来源是 §2.4.1 的 append-only 表，本字段只是分配器** |
+| `batch_seq` | `PositiveIntegerField(default=0)` | 已分配的最大批次号。**只是分配器**；批次的事实来源是 §2.4.1 的 `HandoverExecutionBatch` 行 |
 | `data_completed_at` | `DateTimeField(null=True, blank=True)` | 数据 webhook 已成功、权限尚未转授（契约 §10.5.1.1 的子状态，持久化） |
 | `grant_receiver` | `FK(UserMirror, PROTECT, null=True, related_name="handover_grant_receiving")` | 权限接收人，见上 |
 | ~~`execution_payload`~~ | — | **取消**。单个可更新字段无法承载多批历史，也称不上"不可变凭据"。改用 §2.4.1 的 append-only 表 |
@@ -364,6 +364,14 @@ delivery（`outcome="sent"`）、写 outbox，**提交后**才由 worker 真正�
   **重新 preview 取新的 `snapshot_token`**（契约 §10.5.2：同一 token 只能用于一批）；
 - 只有 `is_final=True` 的批次数据成功、且授权转移那一步也成功后，action 才转 `done`；
 - 界面上要显示「已完成 N / M 批」，不能只显示一个"进行中"。
+
+**M（总批数）在收到 413 的那一刻就要算出来，不是边做边看。**
+EasyAuth 手上有完整的 `assignments`，知道每条 override 的字节数；收到 413 后按
+「每批不超过 200 KiB（对 256 KiB 上限留 56 KiB 余量）」切分，一次性把 M 个 batch 行
+**全部建出来**（只有最后一个 `is_final=True`，其余 `status="pending"`），再逐批执行。
+
+这样 `batch_progress.total` 有确定的值，用户看得到进度；
+边做边切的话 M 始终未知，界面只能显示一个永远不知道还剩多久的进行中。
 
 ### 2.4.2 `HandoverExecutionLease`（新表，契约 §10.5.2）
 
