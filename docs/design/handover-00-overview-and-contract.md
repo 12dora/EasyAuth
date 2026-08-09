@@ -1,0 +1,624 @@
+# 数据交接 v2：总体设计与跨系统契约
+
+> **本文件是所有并行开发 agent 的唯一基准。** EasyAuth、EasyTrade、EasyProject 三个仓库的改造设计
+> （`handover-01-backend.md`、`handover-02-frontend.md`、EasyTrade `docs/plans/easytrade-data-handover-2026-08-10.md`、
+> EasyProject `docs/design/12`、`docs/design/13`）都从本文件派生。
+> 本文件中的字段名、事件名、状态值、错误码是**冻结契约**，任何一方不得单独修改；确需变更时先改本文件，再同步全部下游文档。
+
+---
+
+## 1. 背景与问题
+
+员工离职后数据交接困难：老员工的数据不能自助交接，也不能由管理员一次性交接给其他员工，只能人工逐个系统复制，
+应用一多必然遗漏。
+
+现状盘点（2026-08-10，基于主线代码）：
+
+| 能力 | 现状 | 结论 |
+|---|---|---|
+| 离职检出 → 冻结权限 → 建交接单 | 已实现（`accounts/services.py:56`、`lifecycle/offboarding.py:92`） | 保留 |
+| 逐 APP 指定接收人、两阶段 preview/execute | 已实现（`lifecycle/handover.py`） | 扩展 |
+| 待交接缓冲（无接收人时无限期挂起） | 已实现（`lifecycle/models.py:111`） | 保留并补齐可见性 |
+| SDK 交接 webhook 内核 | 已实现（`sdk/python/src/easyauth_app_sdk/lifecycle.py`） | 扩展为 v2 |
+| EasyTrade 下游落地 | 已实现，覆盖 4 类资产 | 扩展并修 bug |
+| **自助交接（非超管可操作）** | **完全没有**，`admin_console/lifecycle_api.py` 全部 `require_superuser`，门户无任何 lifecycle 路由 | 新建 |
+| **未接入 APP 的识别** | **静默当作"无数据"并标记成功**（`handover.py:122,325,590`） | 修正为阻塞 |
+| **EasyProject 接入** | 未接入（只接了 directory/authz/approval/notify 四个适配器） | 新建 |
+| **悬置期数据可见性** | 无。离职者不在任何人的 `MANAGED_USERS` 里（ADR-002 §19），其名下数据对所有人不可见 | 新建代管授权 |
+| **部分交接 / 二次转交** | 无。execute 是全量、单接收人、不可逆 | 新建 |
+
+### 1.1 三个必须解决的正确性问题
+
+1. **系统在骗人**：未登记 `handover_url` 的 APP，交接单上显示"已完成"，与"确实没有该员工数据"无法区分。
+   违反 `AGENTS.md`「不得使用静默默认值、空结果兜底或绕行逻辑掩盖真实问题」。
+2. **悬置期黑洞**：交接单挂在待交接列表期间，下游未收到 execute，数据 owner 仍是离职者，而离职者已被移出所有人的
+   可管人员集合 —— 那批客户、在途订单、未结应收对全公司不可见，业务停摆。
+3. **EasyTrade 释放路径写坏不变量**：无接收人时把非空约束的 `Order.owner_user_id` 置 NULL
+   （`easytrade/backend/app/domain/authz/easyauth_handover.py:123`），事务本应失败；而 `Inquiry` 又走了
+   "保持原归属"的静默兜底分支。两个分支都必须改成显式契约。
+
+---
+
+## 2. 目标形态（一句话）
+
+> 交接不再是"离职后由超管补救"，而是**一等的数据移交能力**：任何一次人员变动（离职、转岗、在职调整、纠错）
+> 都产生一张有明确责任人、有截止压力、有完整资产清单、可逐条改派、全程审计的交接单；
+> 没有任何一个 APP 能以"我没接入"的方式从这张单上隐身。
+
+---
+
+## 3. 已决策清单（不可再议，实现必须遵循）
+
+| # | 决策 | 说明 |
+|---|---|---|
+| D1 | 交接主体是**主管 + 接收人** | 离职者本人在职期间可自行发起；离职时未走完则自动落到组织树上的主管；超管全权 |
+| D2 | 主管**只接管"事"** | 主管是交接单负责人（`assignee`），负责指定真正的接收人；数据不会自动落到主管名下 |
+| D3 | assignee 沿主管链**逐级向上**解析 | 跳过 departed/disabled，取第一个 active；整条链不可用则进**超管待认领池**。单子必须建得出来 |
+| D4 | 悬置期发**限时代管授权** | 把离职者显式放进 assignee 的 `MANAGED_USERS`，并按建单快照复制授权，使主管在业务系统里看得见、跟得了 |
+| D5 | 代管授权 **14 天**，每天钉钉提醒 | 到期收回当前代管权，**自动上交上一级主管**并重发，到顶落超管池 |
+| D6 | 未声明交接能力的 APP **阻塞** | 状态 `blocked`，交接单不能整体完成；超管填理由可强行 `skipped` |
+| D7 | 在职提前交接**只搬数据，不动权限** | 员工正常工作到最后一天；离职日到来时**同一张单升级为 offboard 并重新盘点** |
+| D8 | 支持**二次转交** | 升级为通用数据移交：任意两名在职员工之间也可发起（`kind=reassign`），用于纠错与重分配 |
+| D9 | 在职移交发起权在**主管** | 仅限自己管辖范围内；跨部门走超管；必填理由；执行后通知转出方/接收方/上级三方；全程审计 |
+| D10 | 粒度：**按类型默认全选 + 逐条反选改派** | 一个 APP 内允许多个接收人（接收人下沉到条目级） |
+| D11 | 范围标准：**只转"活的责任"** | 当前负责人、待办、待审批、未完成项全部转；创建人/评论/操作日志等历史事实一律不动 |
+| D12 | 接收人**不需点同意** | 执行后通知即可。卡在接收人手上会让交接再次拖死 |
+| D13 | 交接单完成 = 全部 APP action 处于 `done` 或 `skipped` | 存在任何 `blocked`/`pending`/`failed` 即未完成 |
+
+### 3.1 必须修订的既有 ADR
+
+| ADR | 现行条款 | 修订为 | 原因 |
+|---|---|---|---|
+| ADR-002 §19 | `MANAGED_USERS` 表示可管理的 **active** Authentik 用户集合 | 新增例外：存在未到期 `CustodyGrant` 时，其 `task.subject_user` 加入集合，**即使该用户为 `departed`/`disabled`** | 不开这个口，D4 无法实现 |
+| ADR-002 §36 | 自助申请审批人必须严格为 active **直属**主管；缺失时禁止提交，不允许向上找 | 改为：沿 `manager_chain` 逐级向上取第一个 active 主管；整链不可用时进超管待认领池 | 与 D3 直接抵触 |
+
+> 修订 ADR 是 EasyAuth 后端 agent 的交付物之一，见 `handover-01-backend.md` §9。
+
+---
+
+## 4. 角色与权限矩阵
+
+| 角色 | 判定方式 | 可做 |
+|---|---|---|
+| 当事人（subject） | 登录用户本人 | 在职期间对自己发起 `transfer` 单；查看自己单子的进度 |
+| 负责人（assignee） | 单上的 `assignee` 字段 | 指定/改派接收人、preview、execute、查看明细、申请延期 |
+| 主管（manager） | `DingTalkUserOrgContext.manager_chain` 上的 active 用户 | 对**自己管辖范围内**的在职员工发起 `reassign` 单 |
+| 超管（superuser） | `require_superuser`（Authentik 组交集，每请求判定） | 全部权限；强行 `skip` 未接入 APP；认领超管池中的单 |
+
+**管辖范围判定**：`manager` 对 `subject` 有管辖权 ⟺ `subject` 出现在 `manager` 的 `MANAGED_USERS` 解析结果中
+（复用 `grants/managed_users.py:resolve_managed_users`）。跨管辖范围的移交返回 `403 out_of_managed_scope`，
+提示改由超管操作。
+
+---
+
+## 5. 身份标识契约（跨系统最容易出错的地方）
+
+### 5.1 唯一人员标识
+
+**所有跨系统 payload 中的人员字段一律使用 `authentik_user_id`（Authentik OIDC `sub`，配置为 `user_uuid` 模式）。**
+EasyAuth 内部即 `UserMirror.authentik_user_id`（`accounts/models.py:21`）。
+
+各 APP 的本地映射现状：
+
+| APP | 本地业务外键 | 与 `authentik_user_id` 的关系 | 结论 |
+|---|---|---|---|
+| EasyTrade | `users.external_user_id`（`external_source="authentik"`） | **就是 sub**，有部分唯一索引（`shared/models.py:109`） | 天然满足，无需改造 |
+| EasyProject | `directory_users.dingtalk_user_id`（dtuid） | 同表存 `authentik_user_id`（**可空**，部分唯一索引），首次登录才补绑（`infra/repositories/directory.py:45`、`m07_001_directory_tables.py:51`） | **必须补齐未登录者的映射**，见 §5.2 |
+
+### 5.2 EasyProject 的映射义务（硬要求）
+
+EasyProject 收到 `from_user_id` / `to_user_id`（均为 sub）后必须解析为本地 `dtuid`。
+
+- 解析不到时**必须显式失败**，返回 `409` + `{"error":{"code":"identity_unmapped","message":"..."}}`，
+  由 EasyAuth 把该 action 置为 `failed` 并展示原因。
+- **严禁**按姓名/邮箱模糊匹配（违反 EasyProject 不变量 1），**严禁**静默跳过。
+- 从未登录过 EasyProject 的员工没有 sub 绑定，这是**真实且常见**的情况：EasyProject 必须提供一条
+  从 EasyAuth 目录接口（`GET /api/v1/directory/users`，SDK 已封装）按 sub 反查 dtuid 并回填绑定的路径。
+  详见 `EasyProject/docs/design/12`。
+
+### 5.3 资产标识
+
+`asset_id` 是 APP 内部的字符串主键（UUID 或数字转字符串均可），**对 EasyAuth 不透明**。
+EasyAuth 只做存储与回传，不解析、不排序、不校验格式。长度上限 128 字节。
+
+---
+
+## 6. 交接单模型（EasyAuth 侧，对下游不可见但决定 payload）
+
+### 6.1 单据类型 `kind`
+
+| kind | 触发 | subject 状态 | 是否动权限 |
+|---|---|---|---|
+| `offboard` | 目录同步检出离职（自动）；超管手动建单 | `departed` | 权限已在检出时全部撤销 |
+| `transfer` | 转岗；**在职员工自助提前交接** | `active` | **不动**（D7） |
+| `reassign` | **新增**。主管发起的在职员工之间数据移交；交接纠错 | 双方均 `active` | 不动 |
+
+`transfer` → `offboard` 的**升级**是唯一允许的 kind 变更（D7），见 §8.3。
+
+### 6.2 单据状态机
+
+```
+                    ┌──────────────────────────────────────────┐
+                    │                                          │
+  [建单] ──> pending ──(任一 action 进入非 pending)──> in_progress │
+                    │                                          │
+                    └──(全部 action ∈ {done, skipped})──> completed
+                    │
+                    └──(超管取消)──────────────────────> cancelled
+```
+
+- `completed` 的判定见 D13，由 `refresh_task_status()` 在每次 action 状态变更后重算。
+- 存在 `blocked` action 时**永远不会**到达 `completed`。
+- `cancelled` 单可删除；`completed` 单不可删除、不可重开（纠错走 `kind=reassign` 新单，D8）。
+
+### 6.3 负责人状态 `assignee_state`
+
+与 `status` 正交，描述"这张单现在压在谁头上"：
+
+| assignee_state | 含义 | assignee 字段 |
+|---|---|---|
+| `manager` | 由主管链上某一级主管负责 | 该主管的 `UserMirror` |
+| `subject` | 在职员工自助发起，本人负责 | subject 本人 |
+| `superuser_pool` | 主管链走完仍无 active 主管，或代管逐级上交到顶 | `NULL` |
+
+`escalation_level`（整数，从 0 起）记录当前 assignee 在主管链上的层级；每次超时上交 +1。
+
+---
+
+## 7. 代管授权契约（D4/D5）
+
+### 7.1 语义
+
+代管授权让 assignee **临时获得离职者的权限与可见范围**，从而在业务系统里正常跟进那批数据，
+直到指定真正的接收人。它**不改变任何业务数据的归属**。
+
+### 7.2 发放
+
+建单同事务内发放，内容 = 该单 `HandoverGrantItem` 快照（即离职者被撤销前的授权），逐条复制给 assignee：
+
+- 一律 `grant_type=timed`，`expires_at = 建单时刻 + 14 天`
+- 打上来源标记，与 assignee 自有授权区分，收回时只收代管的那部分
+- assignee 自己已有的同一条授权**不重复发放**，也不因代管到期被误收
+
+### 7.3 可见范围（对下游的契约变更，**最关键的一条**）
+
+存在未到期代管授权时，权限查询响应中 assignee 的 `MANAGED_USERS` 解析结果里**会出现 `departed` 或 `disabled` 状态的用户 ID**。
+
+> **所有下游 APP 必须接受这一点。**
+> EasyTrade 现有实现会在 scope 解析时过滤掉 inactive 用户
+> （`backend/app/domain/authz/scope_resolution.py:49`），若不改，代管授权在 EasyTrade 侧会被静默丢弃，D4 完全失效。
+> EasyProject 接入时必须从一开始就允许。
+
+对下游的具体要求：
+
+1. **`MANAGED_USERS` 的唯一事实来源是权限查询响应里的已解析人员集合**，下游必须落地这份快照并用它过滤业务查询
+   （`CONTEXT.md`「管理对象快照」条已如此规定）。下游**不得**自行调用目录接口递归推算管辖关系。
+2. 把 `MANAGED_USERS` 里的外部 ID 映射为本地用户 ID 时，**不得以本地用户 `is_active=false` 为由剔除**。
+3. 映射不到本地用户的 ID 仍可剔除（那是真的不存在），但必须计数并记日志，不得静默。
+4. 业务列表按 owner 过滤时照常使用该集合，因此代管期内主管能看到离职者名下的数据。
+
+**两个下游都不满足这条，且失效原因不同，必须各自修：**
+
+| APP | 现状 | 后果 | 修法 |
+|---|---|---|---|
+| EasyTrade | 消费快照，但把 inactive 本地用户从 scope 集合中剔除（`backend/app/domain/authz/scope_resolution.py:49`） | 代管授权被静默丢弃 | 去掉 inactive 剔除逻辑，仅保留"映射不到"的剔除并计数 |
+| EasyProject | **根本不消费快照的 `MANAGED_USERS`**，而是自己递归调 EasyAuth 下属接口推算（depth 20，5 分钟缓存，`backend/app/domain/authz/managed_users.py:19`） | 离职者不是任何人的下属，代管授权对 EasyProject 完全无效 | 改为直接消费快照里的已解析集合，删除递归推算路径 |
+
+EasyProject 这一条不是"顺带优化"，而是**它当前就违反 EasyAuth 下游契约**；不修则 D4 在 EasyProject 上永远无法生效。
+
+### 7.4 收回与升级
+
+| 事件 | 动作 |
+|---|---|
+| 该 APP 的 action 到达 `done`/`skipped` | 收回该 APP 对应的代管授权（逐 APP 收，不等整单） |
+| 整单 `completed` 或 `cancelled` | 收回全部代管授权 |
+| 到期（14 天）且单未完成 | 收回当前 assignee 全部代管授权 → `escalation_level += 1` → 沿主管链取下一级 active 主管 → 重新发放 14 天代管授权 → 通知新 assignee 与被替下的 assignee |
+| 主管链已到顶 | `assignee_state = superuser_pool`，`assignee = NULL`，**不发代管授权**，改为向全体超管推送认领通知（每日） |
+
+### 7.5 提醒节奏
+
+代管期内**每天**一次钉钉工作通知（复用 `notify` 模块），内容含：剩余天数、待处理 APP 数、
+各 APP 待交接资产条数、一键跳转门户的链接。到期上交时额外一次通知。
+
+---
+
+## 8. 关键流程
+
+### 8.1 离职（kind=offboard）
+
+```
+目录同步检出 departed
+  └─ apply_directory_status(): UserMirror.status=departed, 撤销全部当前授权（既有逻辑，不改）
+  └─ start_offboarding():
+       ├─ ensure_handover_task(kind=offboard)  ← 若已存在 open 的 transfer 单，走 §8.3 升级
+       ├─ 快照授权 → HandoverGrantItem
+       ├─ 按快照涉及的 App 生成 HandoverAppAction
+       │    └─ 未声明交接能力的 App → status=blocked（§9）
+       ├─ 解析 assignee（§8.2）
+       ├─ 发放代管授权（§7.2）
+       ├─ 移出所有团队 + 排队禁用 Authentik 账号（既有逻辑，不改）
+       └─ 首次钉钉通知 assignee
+```
+
+### 8.2 assignee 解析算法（D3）
+
+```
+resolve_assignee(subject, start_level=0):
+    chain = DingTalkUserOrgContext(subject).manager_chain   # 自下而上
+    if chain 为空 或 stale:
+        # 目录数据不可用时不能阻断建单（离职单是自动建的）
+        记录 audit(assignee_resolution_degraded)
+        return (None, superuser_pool, 0)
+    for level, manager_userid in enumerate(chain[start_level:], start=start_level):
+        m = UserMirror.by_dingtalk_userid(manager_userid)
+        if m 存在 and m.status == active and m 不是 subject 本人 and m 不是本地管理员:
+            return (m, manager, level)
+    return (None, superuser_pool, len(chain))
+```
+
+- **不设层数上限**（已决策：逐级向上找到顶）。
+- 主管本人同期离职 → 自动跳过，继续向上，天然覆盖"部门整体裁撤"。
+- `stale=True` 时**不 fail-closed**：这是与权限查询相反的取舍。权限查询宁可 503 也不能少给或多给权限；
+  建单则宁可先落到超管池，也不能丢单。此差异必须写进 ADR-002 修订说明。
+
+### 8.3 在职提前交接与离职日升级（D7）
+
+```
+在职期间：
+  员工本人在门户发起 kind=transfer 单
+    ├─ 快照当前授权 → HandoverGrantItem
+    ├─ assignee = 本人（assignee_state=subject）
+    ├─ 不发代管授权（本人权限本来就在）
+    └─ execute 时：只发 webhook 搬数据，跳过 transfer_selected_grants()
+
+离职日：
+  start_offboarding() 发现已有 open 的 transfer 单
+    ├─ 该单 kind: transfer → offboard（唯一允许的 kind 变更）
+    ├─ assignee: 本人 → 按 §8.2 重新解析为主管
+    ├─ generation += 1，全部 action 状态重置为 pending（已 done 的也重置）
+    ├─ 重新快照授权 → 新一轮 HandoverGrantItem
+    ├─ 发放代管授权
+    └─ 对每个 APP 重新 preview
+       └─ 已交接干净的 APP 会返回 count=0，assignee 一键确认即 done
+       └─ 这两周新产生的数据会重新出现在清单里
+```
+
+`generation` 是幂等边界：同一 `task_id` 的第二轮 execute 携带 `generation=2`，下游必须视为**新的一次执行**，
+而不是重复投递。见 §10.4。
+
+### 8.4 二次转交（D8/D9）
+
+```
+主管在门户对在职下属发起 kind=reassign 单
+  ├─ 校验：subject 与 to_user 均 active，且 subject ∈ 发起人的 MANAGED_USERS
+  │        否则 403 out_of_managed_scope
+  ├─ 必填 reason（≥10 字符）
+  ├─ assignee = 发起人（assignee_state=manager, escalation_level=0）
+  ├─ 不动任何权限（D7 同理）
+  ├─ 不发代管授权（发起人对下属本来就有可见范围）
+  ├─ 走与 offboard 相同的 preview/execute 流程
+  └─ execute 成功后通知三方：转出方、接收方、发起人的上一级主管
+```
+
+`reassign` 单不受"一人一张 open 单"约束的限制方式：唯一约束改为
+`UniqueConstraint(subject_user, condition=Q(status__in=OPEN) & Q(kind__in=("offboard","transfer")))`，
+即 `reassign` 可与 offboard/transfer 并存，也允许同一 subject 有多张 open 的 reassign 单
+（不同 APP、不同批次的重分配是正常操作）。
+
+---
+
+## 9. APP 交接能力声明（D6）
+
+### 9.1 声明位置
+
+APP 在 descriptor（`/.well-known/easyauth-app.json`，SDK `integration.py:29` 已支持）中新增：
+
+```json
+{
+  "lifecycle": {
+    "handover": {
+      "capability": "declared",
+      "url": "https://app.example.com/api/v1/easyauth/lifecycle/handover",
+      "asset_types": [
+        {
+          "type": "customer",
+          "label": "名下客户",
+          "detail_supported": true,
+          "releasable": true
+        },
+        {
+          "type": "inquiry_open",
+          "label": "进行中询盘",
+          "detail_supported": true,
+          "releasable": false
+        }
+      ]
+    }
+  }
+}
+```
+
+`capability` 三态：
+
+| 值 | 含义 | action 初始状态 |
+|---|---|---|
+| `declared` | 已实现交接 webhook，`url` 与 `asset_types` 必填 | `pending` |
+| `none` | **运营显式声明**本 APP 不存在任何用户级数据 | `skipped`，并在单据上标注声明人与声明时间 |
+| 未声明 / descriptor 拉取失败 | 默认 | **`blocked`** |
+
+`releasable=false` 表示该类资产**不允许无接收人释放**（如 EasyTrade `Inquiry.owner_user_id` 非空约束）。
+EasyAuth 在 execute 前校验：对 `releasable=false` 的类型指定 `to_user_id=null` 时，直接返回
+`422 asset_type_not_releasable`，**不发 webhook**。这修掉了现状里"静默保持原归属"的兜底分支。
+
+### 9.2 blocked 的表现
+
+- 交接单详情里该 APP 一行显示红色「未接入交接」，附「该 APP 尚未实现数据交接，无法确认是否有遗留数据」。
+- 整单永远不会 `completed`（D13）。
+- 控制台顶部常驻告警：「N 个 APP 未接入数据交接，M 张交接单被阻塞」。
+- 超管可 `POST .../actions/{app_key}/skip`，**必填 reason**，写审计 `handover_action_skipped`，
+  单据上永久显示「已由 {超管} 于 {时间} 强行跳过：{理由}」。
+
+---
+
+## 10. Webhook 契约 v2（冻结）
+
+### 10.1 通用规范（沿用现有，不变）
+
+- 传输：HTTPS POST，`Content-Type: application/json; charset=utf-8`
+- 签名：`X-EasyAuth-Signature` = HMAC-SHA256(secret, `timestamp + "." + raw_body`)，
+  `X-EasyAuth-Timestamp`，重放窗口 300 秒（`sdk/.../webhook.py:20`）
+- 去重：`X-EasyAuth-Delivery`
+- 事件名：`X-EasyAuth-Event`
+- 请求体上限：**从 64 KiB 提升到 256 KiB**（`assignments.overrides` 可能较长），
+  SDK `DEFAULT_MAX_BODY_BYTES` 同步调整
+- 验签失败 → 403；未知事件 → 422；业务异常 → 500（SDK 内核已实现）
+
+### 10.2 事件一览
+
+| 事件 | 方向 | 幂等 | 说明 |
+|---|---|---|---|
+| `webhook.test` | EasyAuth → APP | — | 已有，不变 |
+| `lifecycle.handover.preview` | EasyAuth → APP | 只读 | **payload 变更** |
+| `lifecycle.handover.items` | EasyAuth → APP | 只读 | **新增**，明细分页 |
+| `lifecycle.handover.execute` | EasyAuth → APP | `(task_id, generation)` | **payload 重大变更** |
+
+### 10.3 `lifecycle.handover.preview`
+
+请求：
+
+```json
+{
+  "task_id": "137:easytrade",
+  "generation": 1,
+  "kind": "offboard",
+  "from_user_id": "3f1a…-authentik-sub",
+  "mode": "preview"
+}
+```
+
+响应 200：
+
+```json
+{
+  "assets": [
+    { "type": "customer",        "label": "名下客户",     "count": 187 },
+    { "type": "order_in_transit","label": "在途订单",     "count": 23  },
+    { "type": "inquiry_open",    "label": "进行中询盘",   "count": 41  },
+    { "type": "task_open",       "label": "未完成任务",   "count": 9   }
+  ]
+}
+```
+
+- `type` 必须是 descriptor 中声明过的 `asset_types`，否则 EasyAuth 返回 `422 undeclared_asset_type` 并置 action 为 `failed`。
+- `count=0` 的类型也必须返回，不得省略（省略与"不支持"无法区分）。
+- 响应不含明细，明细走 §10.4。
+
+### 10.4 `lifecycle.handover.items`（新增）
+
+请求：
+
+```json
+{
+  "task_id": "137:easytrade",
+  "generation": 1,
+  "from_user_id": "3f1a…",
+  "asset_type": "customer",
+  "page": 1,
+  "page_size": 50,
+  "q": "华东"
+}
+```
+
+- `page` 从 1 起；`page_size` 取值 1–200，EasyAuth 默认传 50
+- `q` 可为空串，APP 自行决定在哪些字段上模糊匹配；不支持搜索的 APP 忽略该字段即可
+
+响应 200：
+
+```json
+{
+  "items": [
+    { "id": "9b2c…", "label": "上海某某国际贸易有限公司", "hint": "最近跟进 2026-07-30 · 在途 3 单" },
+    { "id": "4d81…", "label": "宁波某某进出口",           "hint": "最近跟进 2026-06-11" }
+  ],
+  "page": 1,
+  "page_size": 50,
+  "total": 187
+}
+```
+
+- `id`：§5.3 定义的 `asset_id`
+- `label`：给人看的名字，≤120 字符
+- `hint`：辅助判断的一行摘要，可空，≤120 字符
+- `total`：该类型总数，必须与同一 `generation` 下 preview 的 `count` 一致
+
+仅当 descriptor 里该类型 `detail_supported=true` 时 EasyAuth 才会调用此事件。
+
+### 10.5 `lifecycle.handover.execute`
+
+请求：
+
+```json
+{
+  "task_id": "137:easytrade",
+  "generation": 1,
+  "kind": "offboard",
+  "from_user_id": "3f1a…",
+  "mode": "execute",
+  "assignments": [
+    {
+      "asset_type": "customer",
+      "default_to_user_id": "8c44…",
+      "overrides": [
+        { "id": "9b2c…", "to_user_id": "d017…" },
+        { "id": "4d81…", "to_user_id": null }
+      ]
+    },
+    {
+      "asset_type": "order_in_transit",
+      "default_to_user_id": "8c44…",
+      "overrides": []
+    },
+    {
+      "asset_type": "inquiry_open",
+      "default_to_user_id": null,
+      "overrides": []
+    }
+  ]
+}
+```
+
+语义（**唯一权威定义**）：
+
+1. 每个 `asset_type` 在 `assignments` 中**最多出现一次**；重复出现由 EasyAuth 在发送前拒绝。
+2. `default_to_user_id` 是该类型的默认接收人。`null` 表示**整批释放为无主**。
+3. `overrides` 是逐条例外，`to_user_id=null` 表示**该条释放为无主**。同一 `id` 只能出现一次。
+4. **未出现在 `assignments` 中的 `asset_type` 一律不动**（既不转移也不释放）。这是"逐条反选"的表达方式：
+   反选掉的条目通过不进 `overrides`、且该类型不整批指定来实现 —— 若某类型只想转移一部分，
+   做法是 `default_to_user_id=null` + `overrides` 列出要转移的条目。
+5. `releasable=false` 的类型出现任何 `null` 接收人时，EasyAuth **不会发出请求**（§9.1）；
+   APP 若仍收到，应返回 `422 asset_type_not_releasable`。
+
+响应 200（同步完成）：
+
+```json
+{
+  "summary": {
+    "customer":         { "transferred": 185, "released": 1, "skipped": 1 },
+    "order_in_transit": { "transferred": 23,  "released": 0, "skipped": 0 },
+    "inquiry_open":     { "transferred": 0,   "released": 41, "skipped": 0 }
+  }
+}
+```
+
+响应 202（异步，沿用现有机制）：返回 `Location` 头指向状态查询 URL，EasyAuth 轮询
+（`handover.py:261 poll_async_action`，逻辑不变）。
+
+**幂等**：幂等键为 `(task_id, generation)`。同一对重复投递必须安全且返回相同 `summary`。
+不同 `generation` 是**新的一次执行**，必须真正执行（§8.3 升级依赖此语义）。
+
+### 10.6 错误响应（APP → EasyAuth）
+
+统一体：`{"error": {"code": "...", "message": "..."}}`
+
+| HTTP | code | EasyAuth 侧处理 |
+|---|---|---|
+| 403 | `webhook_verification_failed` | action → `failed`，展示"签名校验失败" |
+| 409 | `identity_unmapped` | action → `failed`，展示"该 APP 无法识别此人员，需先完成身份绑定" |
+| 422 | `undeclared_asset_type` | action → `failed`，提示 descriptor 与实现不一致 |
+| 422 | `asset_type_not_releasable` | action → `failed`（正常路径下不应发生，属实现不一致） |
+| 413 | `request_body_too_large` | action → `failed`，提示改用更少的 overrides 分批执行 |
+| 500 | `handover_callback_failed` | action → `failed`，可重试（`retry_action`） |
+
+---
+
+## 11. 数据范围标准（D11）
+
+每个 APP 在接入时**必须**在自己的设计文档里产出一张三列清单，逐字段判定：
+
+| 分类 | 判定标准 | 处理 |
+|---|---|---|
+| **活的责任** | 该字段决定"现在谁该干这件事"或"谁能看到这条数据"，且对象尚未终结 | **转移**，纳入某个 `asset_type` |
+| **历史事实** | 该字段记录"当时是谁做的" | **不动**。包括 `created_by`、评论作者、操作日志 actor、`confirmed_by`、`cancelled_by` 等一切过去式署名 |
+| **个人配置** | 只对本人有意义（仪表盘布局、通知偏好） | **不动**，随账号停用自然失效 |
+
+边界判例（已裁定，各 APP 直接照用）：
+
+- 订阅/关注关系 → **归入个人配置，不转移**。接收人若需要，自行关注。
+- 业绩目标（`PerformanceTarget`）→ **不转移**。业绩归属是历史事实，转移会造成考核失真。
+- 草稿（未提交的报价单、文档）→ **不单独转移**，随其父对象（客户/订单）的归属自然继承访问权。
+- 待审批单据中"当前审批人是离职者" → **必须转移**，属活的责任，单列一个 `asset_type`。
+
+---
+
+## 12. 审计事件清单（冻结）
+
+全部写入 `AuditLog`（`audit/models.py:46`，append-only）。
+
+| 事件 | 时机 | 关键字段 |
+|---|---|---|
+| `handover_task_created` | 建单 | kind, subject, created_by, reason |
+| `handover_task_upgraded` | transfer → offboard 升级 | task, old_kind, generation |
+| `handover_assignee_assigned` | assignee 解析/变更 | task, assignee, assignee_state, escalation_level |
+| `handover_assignee_resolution_degraded` | 主管链缺失或 stale，落超管池 | task, reason |
+| `handover_custody_granted` | 发放代管授权 | task, custodian, expires_at, grant_item 数量 |
+| `handover_custody_revoked` | 收回代管授权 | task, custodian, trigger（completed/action_done/escalated/cancelled） |
+| `handover_custody_escalated` | 到期上交 | task, from_custodian, to_custodian, escalation_level |
+| `handover_action_previewed` | preview 成功 | task, app_key, generation, assets |
+| `handover_action_executed` | execute 成功 | task, app_key, generation, assignments 摘要, summary |
+| `handover_action_failed` | execute 失败 | task, app_key, error code/message |
+| `handover_action_blocked` | 建单时判定未接入 | task, app_key |
+| `handover_action_skipped` | 超管强行跳过 | task, app_key, actor, reason |
+| `handover_task_completed` | 全部 action 终结 | task |
+| `handover_reassign_created` | 在职移交建单 | subject, initiator, reason |
+
+---
+
+## 13. 通知清单（钉钉工作通知，复用 `notify`）
+
+| 通知 | 收件人 | 触发 | 频率 |
+|---|---|---|---|
+| 新交接单待处理 | assignee | 建单 / 升级 / 上交 | 即时 1 次 |
+| 交接单每日提醒 | assignee | 代管期内单未完成 | 每日 1 次 |
+| 代管即将到期 | assignee | 到期前 1 天 | 1 次 |
+| 代管已上交 | 原 assignee + 新 assignee | 超时上交 | 即时 |
+| 超管池待认领 | 全体超管 | 单进入 `superuser_pool` 后仍未完成 | 每日 1 次 |
+| 数据已移交给你 | 接收人 | execute 成功 | 即时（D12：仅通知，无需同意） |
+| 你的数据已被移交 | 转出方（在职时） | `reassign` execute 成功 | 即时 |
+| 下属数据发生移交 | 发起人的上一级主管 | `reassign` execute 成功 | 即时 |
+| APP 未接入告警 | 全体超管 | 存在 `blocked` action | 每周 1 次 |
+
+---
+
+## 14. 并行开工边界
+
+| Agent | 仓库 | 文档 | 依赖 |
+|---|---|---|---|
+| A1 | EasyAuth | `handover-01-backend.md` | 本文件 §5–§12 |
+| A2 | EasyAuth | `handover-02-frontend.md` | 本文件 §4、§6、§9；A1 的 console/portal API 契约（在 01 文档内冻结） |
+| A3 | EasyTrade | `docs/plans/easytrade-data-handover-2026-08-10.md` | 本文件 §5、§7.3、§10、§11 |
+| A4 | EasyProject | `docs/design/12-数据交接后端接入.md` | 本文件 §5.2、§7.3、§10、§11 |
+| A5 | EasyProject | `docs/design/13-数据交接前端改造.md` | A4 |
+
+**A1 与 A3/A4 可完全并行**：三方都只依赖本文件的 webhook 契约，互不阻塞。
+**A2 依赖 A1 的 HTTP API 契约**，该契约在 `handover-01-backend.md` §6 冻结，A1 必须**先提交该章节**再继续实现，
+A2 据此即可开工。
+
+联调门禁：EasyAuth 的 `webhook.test` 事件对每个 APP 返回 200，且各 APP 的 descriptor 能被
+`GET /.well-known/easyauth-app.json` 正确拉取并解析出 `lifecycle.handover`。
+
+---
+
+## 15. 验收标准（端到端，跨仓库）
+
+1. 造一个测试员工，在 EasyTrade 与 EasyProject 各留下若干活的责任数据。
+2. 在钉钉侧标记其离职 → 目录同步后：其权限被全部撤销、账号被禁用、交接单自动建出、assignee 为其直属主管、
+   主管收到钉钉通知、主管拿到 14 天代管授权。
+3. 主管登录 EasyTrade → **能看到该离职者名下的客户与在途订单**（验证 §7.3 生效）。
+4. 主管在门户打开交接单 → 看到 EasyTrade 与 EasyProject 两行，各自列出资产分类与数量。
+5. 主管对「名下客户」展开明细，把其中 2 个改派给另一人，其余整批给接收人 → execute → 两个接收人在 EasyTrade 里
+   各自看到对应客户。
+6. 把某个 APP 的 descriptor 改为不声明 `lifecycle.handover` → 重新建单 → 该行显示「未接入交接」，
+   整单不能完成；超管填理由跳过后整单完成。
+7. 把代管到期时间人为改到过去 → 跑一次到期任务 → 主管代管权被收回、单子上交到上一级主管、双方均收到通知。
+8. 用另一个在职员工发起 `kind=reassign`，把步骤 5 中接收人的部分客户再转给第三人 → 成功，且三方均收到通知。
+9. 全流程审计事件齐全（§12 全部出现），无一条静默成功、无一条 mock 数据。
