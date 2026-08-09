@@ -121,6 +121,18 @@ async def resolve_dtuid(uow, *, authentik_sub: str) -> str:
 
 
 
+### 3.1.2 终态谓词（必须冻结在共享选择器里）
+
+上表的"口径"列是规范。复核发现只有 `task_assigned` 一行写明了终态条件，其余全缺，必须补齐并
+冻结在 `HandoverAssetSpec` 的查询定义里，preview / items / execute 共用：
+
+| 类型 | 完整谓词 |
+|---|---|
+| `project_owned` / `project_member` | 项目状态不在 `{COMPLETED, CANCELLED}` |
+| `task_assigned` / `task_assigner` / `task_collaborator` | 任务状态不在 `{COMPLETED, CANCELLED}` |
+| `recurring_assignee` / `recurring_assigner` / `recurring_collaborator` | 模板 `is_enabled = true` |
+| `work_record_participant` | 工作记录 `status = 'OPEN'` |
+
 ### 3.2 历史事实 —— 一律不动
 
 `ProjectRow.created_by_`、`ProjectMemberRow.added_by_`、`TaskRow.created_by_`、
@@ -217,10 +229,14 @@ POST /api/v1/easyauth/lifecycle/handover
 | `RecurringTemplateCollaboratorRow` | 同上 | 同上 |
 | `WorkRecordParticipantRow` | 同上 | 同上 |
 
-`project_owned` 与 `project_member` 必须在**同一事务**内处理：改 `ProjectRow.owner_` 的同时调整
-`ProjectMemberRow` 的 OWNER 行，否则会出现"项目负责人不是项目成员"的破损状态。
-实现上把这两类合并到一个 `reassign` 实现里，由 `project_owned` 驱动，`project_member` 只处理
-**非 OWNER** 的参与关系。
+`project_owned` 与 `project_member` 必须在**同一事务**内处理，否则会出现"项目负责人不是项目成员"
+的破损状态。两条硬性规定：
+
+1. **`project_member` 的谓词必须显式排除 OWNER 行**（`role != 'OWNER'`），否则同一条成员关系
+   会被 `project_owned` 和 `project_member` 各算一次，统计重复。
+2. **OWNER 的升级顺序不能反**：`ProjectMemberRow` 上"每项目至多一个 OWNER"是**部分唯一索引且非
+   deferrable**，先把接收人升为 OWNER 会立即撞唯一约束。正确顺序是
+   **先删除/降级离职者的 OWNER 行 → flush → 再升级接收人 → 最后同步 `ProjectRow.owner_`**。
 
 ### 4.3.1 提醒的连带重物化（取代原先的独立资产类型）
 
@@ -342,7 +358,12 @@ POST /api/v1/easyauth/lifecycle/handover
 | `IDENTITY_UNMAPPED` | 409 | §2.1 解析不到 dtuid | **补** |
 | `ASSET_TYPE_UNDECLARED` | 422 | 请求里的 `asset_type` 不在注册表中 | **补** |
 | `REQUEST_BODY_TOO_LARGE` | 413 | 超 256 KiB | **补** |
-| `HANDOVER_CONFLICT` | 409 | 保留，用于归属改写时的业务冲突 | 已有 |
+| `HANDOVER_CONFLICT` | 409 | 保留，用于归属改写时的业务冲突、快照失效、迟到 generation | 已有 |
+
+> **401 与 403 的定级冲突需一并裁定**：本仓库的 webhook 验签失败返回 **401
+> `WEBHOOK_SIGNATURE_INVALID`**（`contracts/test-vectors/webhook-hmac.json` 的反例已冻结），
+> 而契约 §10.6 把验签失败列在 401/403 同一行。两者语义一致、EasyAuth 侧处置相同（`failed` 且不可重试），
+> **以本仓库的 401 为准**，无需改动，但 CCR 里要写明这一裁定，避免后续被当成不一致。
 | `VALIDATION_ERROR` | 422 | 保留，payload 结构不合法 | 已有 |
 
 CCR 内容（按 `contracts/workflow.md` §6 的六要素）：
@@ -352,7 +373,9 @@ CCR 内容（按 `contracts/workflow.md` §6 的六要素）：
 3. **影响面**：1 个既有操作的元数据；**0 个新增操作、0 个新增权限码、0 个 schema 变更**。
 4. **兼容方案**：纯增量补充错误码，既有三项保留不动，无破坏性变更。
 5. **同步修改清单**：`contracts/openapi-baseline.json` 该操作条目；`contracts/test-vectors/webhook-hmac.json`
-   补 handover 事件的正反例向量（复用既有 `testSecret`）。
+   补 handover 事件的正反例向量（复用既有 `testSecret`）；
+   **`contracts/tools/generate_baseline.py` 本身**（它是基线的权威再生入口，不改则下次再生会把
+   新增错误码覆盖掉）。
 6. **回滚方式**：还原该操作条目即可，无数据与代码耦合。
 
 **这份 CCR 应在开工第一天就提**（周期长于代码实现）。

@@ -117,6 +117,14 @@ export interface HandoverAssetType {
   override_count: number;
 }
 
+export interface HandoverAssetSummary {
+  transferred: number;
+  released: number;
+  skipped: number;
+  merged: number;
+  failed: number;
+}
+
 export interface HandoverAction {
   app_key: string;
   app_name: string;
@@ -125,6 +133,10 @@ export interface HandoverAction {
   skip_reason: string;
   last_error: string;
   asset_types: HandoverAssetType[];
+  /** 仅 kind=offboard 有意义; null = 只撤权不转授 */
+  grant_receiver: HandoverUserRef | null;
+  /** done 之后才有; 按 asset_type 分组的五元统计 */
+  summary: Record<string, HandoverAssetSummary> | null;
 }
 
 export interface HandoverEscalation {
@@ -203,7 +215,7 @@ export interface HandoverAssetItemsPage {
 | `pending` | 「尚未预演」+ [预演] 按钮 |
 | `previewed` | 展开资产分配器（§6）+ [重新预演] [执行交接] |
 | `executing` / `async_pending` | 骨架 + 轮询（React Query `refetchInterval: 3000`），禁用按钮 |
-| `done` | 绿底，展示 `summary` 统计 |
+| `done` | 绿底，按 `summary` 逐类展示五元统计（`merged`/`failed` 为 0 时可折叠，但不得隐藏字段） |
 | `failed` | 红底，展示 `last_error` + [重试] |
 
 **关键交互约束**：[执行交接] 是不可逆动作，必须二次确认对话框，且确认文案要把后果说清楚：
@@ -314,7 +326,7 @@ export interface HandoverAssetItemsPage {
 |---|---|
 | 1 应用 | 不变；`blocked` 的 APP 在此段即标红，且**不可勾选进入后续段** |
 | 2 授权 | 不变（`HandoverGrantItem` 勾选，仅 `kind=offboard` 显示；`transfer` 转岗单仍走既有的差异确认界面） |
-| 3 预演与分配 | preview 后直接内嵌 §6 的 `AssetAllocator` |
+| 3 预演与分配 | preview 后直接内嵌 §6 的 `AssetAllocator`；**同段还要有一个 APP 级的「权限接收人」选择器**（`grant_receiver`），仅 `kind=offboard` 显示，可留空并注明"留空 = 只撤权、不转授" |
 | 4 执行 | 不变，加 blocked 汇总提示 |
 
 `handoverWizardController.ts` 的 stage 枚举、跳转守卫、以及对应测试同步改。
