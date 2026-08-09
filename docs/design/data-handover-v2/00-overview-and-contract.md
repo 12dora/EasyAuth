@@ -505,7 +505,7 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
 | `webhook.test` | EasyAuth → APP | — | 已有，不变 |
 | `lifecycle.handover.preview` | EasyAuth → APP | 只读 | **payload 变更** |
 | `lifecycle.handover.items` | EasyAuth → APP | 只读 | **新增**，明细分页 |
-| `lifecycle.handover.execute` | EasyAuth → APP | `(task_id, generation)` | **payload 重大变更** |
+| `lifecycle.handover.execute` | EasyAuth → APP | `(task_id, generation, batch_id)` | **payload 重大变更** |
 
 ### 10.3 `lifecycle.handover.preview`
 
@@ -516,7 +516,7 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
   "task_id": "137:easytrade",
   "generation": 1,
   "kind": "offboard",
-  "from_user_id": "3f1a…-authentik-sub",
+  "from_user_id": "3f1a5c88-0e21-4b7a-9c3d-77e5a1f0b912",
   "mode": "preview"
 }
 ```
@@ -550,7 +550,7 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
   "task_id": "137:easytrade",
   "generation": 1,
   "snapshot_token": "et-2026-08-10T10:22:41.331Z-9f2c",
-  "from_user_id": "3f1a…",
+  "from_user_id": "3f1a5c88-0e21-4b7a-9c3d-77e5a1f0b912",
   "asset_type": "customer",
   "page": 1,
   "page_size": 50,
@@ -571,9 +571,12 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
   ],
   "page": 1,
   "page_size": 50,
-  "total": 187
+  "total": 2,
+  "unfiltered_total": 187
 }
 ```
+
+（示例带了 `q="华东"`，故 `total` 是过滤后的 2；`unfiltered_total` 是可选字段。）
 
 - `id`：§5.3 定义的 `asset_id`
 - `label`：给人看的名字，≤120 字符
@@ -595,7 +598,7 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
   "batch_id": 1,
   "snapshot_token": "et-2026-08-10T10:22:41.331Z-9f2c",
   "kind": "offboard",
-  "from_user_id": "3f1a…",
+  "from_user_id": "3f1a5c88-0e21-4b7a-9c3d-77e5a1f0b912",
   "mode": "execute",
   "assignments": [
     {
@@ -617,7 +620,7 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
     },
     {
       "asset_type": "inquiry_open",
-      "default_action": "release",
+      "default_action": "skip",
       "overrides": []
     }
   ]
@@ -658,8 +661,8 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
 {
   "summary": {
     "customer":         { "transferred": 185, "released": 1, "skipped": 1, "merged": 0, "failed": 0 },
-    "order_in_transit": { "transferred": 23,  "released": 0, "skipped": 0, "merged": 0, "failed": 0 },
-    "inquiry_open":     { "transferred": 0,   "released": 41, "skipped": 0, "merged": 0, "failed": 0 }
+    "order_in_transit": { "transferred": 1,   "released": 0, "skipped": 22, "merged": 0, "failed": 0 },
+    "inquiry_open":     { "transferred": 0,   "released": 0,  "skipped": 41, "merged": 0, "failed": 0 }
   }
 }
 ```
@@ -680,8 +683,11 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
 transferred + released + skipped + merged + failed == 该类型在本轮 assignments 覆盖到的条目总数
 ```
 
-其中"覆盖到的条目总数"= `default_action != "skip"` 时的全类型条目数，
-加上 `default_action == "skip"` 时 `overrides` 中非 skip 的条目数。
+**口径固定为全量**：右边是该 `asset_type` 在本次快照下的**全部**条目数（等于 preview 的 `count`），
+与 `default_action` 取什么值无关。被 `skip` 的条目计入 `skipped`。
+
+这样公式恒等、无分支，下游实现和 EasyAuth 校验都不会有第二种解释。
+上例中 23 张在途订单里 1 张被 override 转移、22 张按默认 skip，故 `transferred:1, skipped:22`。
 
 响应 202（异步，沿用现有机制）：返回 `Location` 头指向状态查询 URL，EasyAuth 轮询
 （`handover.py:261 poll_async_action`，逻辑不变）。
@@ -720,6 +726,9 @@ APP 侧仍应保留自己的行锁作为第二道防线。
 
 - `batch_id` 是 EasyAuth 生成的单调递增整数，**同一 generation 内可以有多批**
   —— 这是 413 时"分批执行"能成立的前提（§10.6）。不引入它，第二批会被当成重放而静默丢弃。
+- **每一批必须重新 preview 取新的 `snapshot_token`**：第一批已经改写了数据，沿用旧 token 的第二批
+  必然校验失败。因此分批的正确流程是「preview → 执行第 1 批 → 重新 preview → 执行第 2 批 …」，
+  每批携带自己那一轮的 token。**同一 token 只能用于一批。**
 - 同一三元组重复投递：必须安全，且返回**与首次完全相同**的 `summary`。
 - 同一三元组但 payload 不同：返回 **HTTP 409**（投递冲突），不得按新 payload 执行。
   APP 应存 canonical payload 的 SHA-256 用于比对。

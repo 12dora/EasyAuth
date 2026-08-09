@@ -256,7 +256,7 @@ POST /api/v1/easyauth/lifecycle/handover
 
 ### 4.4 幂等
 
-契约 §10.5 的幂等键是 `(task_id, generation)`。复用既有幂等基础设施
+契约 §10.5 的幂等键是 `(task_id, generation, batch_id)`。复用既有幂等基础设施
 （`infra/repositories/reliability.py` 的幂等记录表），键为 `handover:{task_id}:{generation}`。
 同键重放返回首次 `summary`；不同 `generation` 必须真正执行。
 
@@ -277,10 +277,10 @@ POST /api/v1/easyauth/lifecycle/handover
 ### 4.6 descriptor（契约 §9.1）
 
 `api/v1/easyauth_descriptor.py` 输出增加 `lifecycle.handover` 段，`asset_types` 由 §4.1 注册表生成，
-`capability="declared"`，`url` 指向 §4.2 的端点。全部 11 类 `releasable` 均为 `false`（EasyProject 没有「无主」这一合法状态）。
+`capability="declared"`，`url` 指向 §4.2 的端点。全部 9 类 `releasable` 均为 `false`（EasyProject 没有「无主」这一合法状态）。
 
 > 这**不影响部分交接**：契约 §10.5 的 `default_action="skip"` + 逐条 `action="transfer"` 这条路径
-> 与 `releasable` 无关，因此本应用的 11 类资产同样支持逐条改派。`releasable=false` 只是禁掉
+> 与 `releasable` 无关，因此本应用的 9 类资产同样支持逐条改派。`releasable=false` 只是禁掉
 > `action="release"` 这一种处置方式。
 
 ### 4.7 迁移
@@ -437,8 +437,8 @@ CCR 内容（按 `contracts/workflow.md` §6 的六要素）：
 | `backend/tests/unit/handover/test_items_pagination.py` | 排序稳定、连续翻页不漏不重、`total` 与 preview 一致 |
 | `backend/tests/integration/handover/test_execute_composite_keys.py` | §4.3 四类合并场景；OWNER 升级；每项目一个 OWNER 的部分唯一索引不被违反；`merged` 如实上报 |
 | `backend/tests/integration/handover/test_execute_transaction.py` | §4.5：事务内无网络调用；失败整体回滚 |
-| `backend/tests/integration/handover/test_idempotency.py` | `(task_id, generation)` 幂等；不同 generation 真正重执行 |
-| `backend/tests/contract/test_handover_v2_golden.py` | 直接比对 `EasyAuth/tests/contract_samples/handover_v2/*.json` |
+| `backend/tests/integration/handover/test_idempotency.py` | `(task_id, generation, batch_id)` 幂等；不同 generation 真正重执行 |
+| `backend/tests/contract/test_handover_v2_golden.py` | 从 `easyauth_app_sdk.contract_samples` 包内资源读取样本逐字段比对；样本缺失必须 fail |
 
 golden 样本取用：**随 SDK 分发**（`easyauth_app_sdk.contract_samples` 包内资源，版本与 SDK 绑定），
 用 `importlib.resources` 读取。**不得**依赖 `../EasyAuth/` 兄弟目录路径 —— 本仓库 CI 独立检出，

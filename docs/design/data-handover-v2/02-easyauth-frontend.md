@@ -369,7 +369,7 @@ key 前缀统一 `handover.*`，门户专用 `handover.portal.*`，控制台专�
 | asset type | 资产类型 | `assetType` |
 | override | 单独指定 | `override` |
 | blocked | 未接入交接 | `blocked` |
-| release / 无主 | 暂不指定 | `unassignedPool` |
+| release / 无主 | 暂不指定 | `release` |
 
 ---
 

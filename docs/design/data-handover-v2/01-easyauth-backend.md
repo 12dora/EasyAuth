@@ -98,7 +98,7 @@ models.CheckConstraint(
 **删除**：`execution_to_user`、`policy`、`execution_policy`（数据接收人下沉到条目级 D10；
 `policy.unowned_strategy` 被三值 `action` 取代）。
 
-**保留并改名**：原 `to_user` → **`grant_receiver`**（契约 §7.2.1）。它不再是「数据接收人」，
+**保留并改名**：原 `to_user` → **`grant_receiver`**（契约 §7.2.1）。迁移用 `RenameField`，**不是** Remove+Add。它不再是「数据接收人」，
 而是**权限接收人**：该 APP 上离职者的授权转给谁。
 
 - 可为空（留空 = 只撤权、不转授，接收人自行走申请流程；这是安全默认）
@@ -484,8 +484,8 @@ def preview_action(action) -> HandoverAppAction
   保留已存在行的 `default_action` / `default_to_user` 与其 `overrides`（重新 preview 不应清空人已做的选择）。
   但若某个 override 的 `asset_id` 在新一轮明细里已不存在（数据被删或已终结），该 override 行必须删除并计数，
   在响应里回报给前端提示「N 条单独指定已失效」——不得静默保留、到 execute 时打空。
-- 响应中缺失的已声明类型视为 `count=0`，仍建行（契约要求 APP 返回 0 值，此处是防御性补齐并记
-  `last_error` 警示不一致 —— **不静默**）。
+- 响应中**缺失**任何已声明类型 → action 直接 `failed`，`last_error` 写明缺了哪些类型。
+  **不得补零继续**（契约 §10.3）—— 补零是把下游契约违约伪装成"这一类真的没数据"。
 
 ### 5.4 execute 前置校验（契约 §10.5 语义 5）
 
@@ -497,7 +497,7 @@ def preview_action(action) -> HandoverAppAction
 | `action="transfer"` 但接收人为空 | `receiver_required` |
 | 任一接收人 `status != active` | `receiver_not_active` |
 | 任一接收人 == `task.subject_user` | `receiver_is_subject` |
-| 全部类型 `default_action="skip"` 且无任何非 skip 的 override | `nothing_selected` |
+| ~~全部类型 skip~~ | **删除该校验**。全 skip 是合法的 no-op（契约把 `skip` 定义为正当动作），零资产 APP 也要靠它确认完成。改为：允许执行并返回全零 summary |
 | 同一 `asset_type` 出现多次，或同一 `asset_id` 在 override 中重复 | `duplicate_assignment` |
 
 前两条已被 §2.3/§2.4 的 CheckConstraint 挡在库层，此处是 API 层的第二道防线：
@@ -555,7 +555,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | 403 | `out_of_managed_scope` | reassign 的 subject 不在我的管辖范围（契约 §4） |
 | 409 | `open_task_exists` | 自助建单时已有 open 的 offboard/transfer 单 |
 | 422 | `reason_required` | reassign 未填理由或不足 10 字符 |
-| 422 | `receiver_not_active` / `receiver_is_subject` / `receiver_required` / `asset_type_not_releasable` / `nothing_selected` / `duplicate_assignment` | §5.4 |
+| 422 | `receiver_not_active` / `receiver_is_subject` / `receiver_required` / `asset_type_not_releasable` / `duplicate_assignment` | §5.4 |
 | 400 | `detail_not_supported` | 该资产类型不支持明细 |
 
 ### 6.2 交接单详情响应体（前端据此建类型）
@@ -683,7 +683,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | `tests/unit/lifecycle/test_upgrade.py` | transfer → offboard 升级：kind 变更、generation+1、action 重置、assignee 重解析、代管发放 |
 | `tests/unit/lifecycle/test_reassign.py` | 管辖校验、必填理由、与 offboard 单并存不违反唯一约束、三方通知 |
 | `tests/integration/test_portal_handover_api.py` | §6.1 全部端点的权限边界（非 assignee 拿到 404） |
-| `tests/integration/test_handover_webhook_v2.py` | payload 形状逐字段比对 `tests/contract_samples/` 下的 golden JSON；幂等键 `(task_id, generation)` |
+| `tests/integration/test_handover_webhook_v2.py` | payload 形状逐字段比对 `tests/contract_samples/` 下的 golden JSON；幂等键 `(task_id, generation, batch_id)` |
 | `tests/unit/test_blocked_never_completes.py` | 存在 blocked 时 `refresh_task_status` 永不返回 completed（D13） |
 
 新增 `tests/contract_samples/handover_v2/`：`preview_request.json`、`preview_response.json`、

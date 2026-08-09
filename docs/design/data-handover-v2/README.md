@@ -35,7 +35,7 @@ A3 / A5 的实现要用到 v2 SDK（新的 `items` 回调、`handover_payloads` 
 | A1 EasyAuth 后端 | 立即 |
 | A2 EasyAuth 前端 | A1 提交 `01` §6 的 API 契约章节后 |
 | A3 EasyTrade 后端 | SDK vNext 发布后 |
-| A4 EasyTrade 前端 | A3 的 §3.1（候选接口按用途分流）落地后 |
+| A4 EasyTrade 前端 | A3 落地候选接口改造（`04` §3.1 描述需求，后端实现属 A3）后 |
 | A5 EasyProject 后端 | 修 P1/P2 可立即开工；**交接端点本身须等 CCR APPROVED**（`05` §5.2） |
 | A6 EasyProject 前端 | **立即** —— `is_active` 与 `includeInactive` 都已存在，无后端前置依赖 |
 

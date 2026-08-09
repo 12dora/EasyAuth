@@ -195,7 +195,7 @@ HANDOVER_ASSETS_BY_KEY: Final[dict[str, HandoverAssetSpec]] = {...}
 ```python
 @dataclass(frozen=True, slots=True)
 class OverrideSpec:
-    asset_id: str
+    id: str          # 契约字段名就叫 id, 不是 asset_id
     action: str                       # transfer | release | skip
     to_user_id: uuid.UUID | None
 
@@ -241,7 +241,7 @@ def execute_handover(
    `reassign`→「EasyAuth 数据移交」，释放时→「EasyAuth 交接释放公海」。
 6. 返回 `{asset_type: {"transferred": n, "released": m, "skipped": k}}`。
 
-**幂等**：幂等键从 `task_id` 改为 `(task_id, generation)`（契约 §10.5）。
+**幂等**：幂等键从 `task_id` 改为 `(task_id, generation, batch_id)`（契约 §10.5）。
 本地幂等记录表加 `generation` 列；同键重放返回首次的 `summary`，不同 `generation` 必须真正执行。
 
 ### 3.7 任务提醒的连带处理
@@ -255,7 +255,7 @@ def execute_handover(
 
 | 迁移 | 内容 |
 |---|---|
-| `<rev>_handover_idempotency_generation` | 幂等记录表加 `generation` 列（非空，默认 1），唯一键改为 `(task_id, generation)` |
+| `<rev>_handover_idempotency_generation` | 幂等记录表加 `generation` 列（非空，默认 1），唯一键改为 `(task_id, generation, batch_id)` |
 
 **不新增业务列**：所有资产类型都复用既有归属字段。`Order`/`Inquiry` 的非空约束
 **保持不变**，靠 `releasable=false` 在契约层解决，而不是放宽不变量。
@@ -279,8 +279,8 @@ def execute_handover(
 | `backend/app/tests/authz/test_scope_resolution_inactive.py` | **B3**：inactive 本地用户仍进 scope 集合；映射不到的被剔除且有计数日志 |
 | `backend/app/tests/test_easyauth_handover_assets.py` | 8 类资产的 count 口径；`count=0` 也返回；注册表与 descriptor 一致（用同一常量断言） |
 | `backend/app/tests/test_easyauth_handover_items.py` | 分页稳定性（连续翻页不漏不重）；`q` 过滤；`total` 与 preview 一致；`page_size` 钳制 |
-| `backend/app/tests/test_easyauth_handover_execute.py` | override 优先于 default；剩余条目按 `default_action`；三值 action 各自行为；**B1** 非空列永不写 NULL；**B2** `release` 落在 `releasable=false` 上抛 422 而非静默；`default_action="skip"` + 逐条 `transfer` 能对非空列做部分交接；`(task_id, generation)` 幂等；不同 generation 真正重执行 |
-| `backend/app/tests/contract/test_handover_v2_golden.py` | 直接读 `EasyAuth/tests/contract_samples/handover_v2/*.json` 逐字段比对请求解析与响应形状 |
+| `backend/app/tests/test_easyauth_handover_execute.py` | override 优先于 default；剩余条目按 `default_action`；三值 action 各自行为；**B1** 非空列永不写 NULL；**B2** `release` 落在 `releasable=false` 上抛 422 而非静默；`default_action="skip"` + 逐条 `transfer` 能对非空列做部分交接；`(task_id, generation, batch_id)` 幂等；不同 generation 真正重执行 |
+| `backend/app/tests/contract/test_handover_v2_golden.py` | 从 `easyauth_app_sdk.contract_samples` 包内资源读取样本逐字段比对；样本缺失必须 fail |
 | `backend/app/tests/test_easyauth_lifecycle.py` | 既有用例按 v2 payload 重写 |
 
 golden 样本的取用方式：**随 SDK 一起分发**，作为 `easyauth_app_sdk` 的包内数据资源
