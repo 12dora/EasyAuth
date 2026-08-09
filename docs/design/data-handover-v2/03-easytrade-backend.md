@@ -62,16 +62,19 @@ v2 用 descriptor 的 `releasable` 字段把它显式化（契约 §9.1），由
 
 ### 2.1.1 终态谓词必须冻结在共享选择器里
 
-上表的"口径"列是**规范**，不是提示。复核发现现有实现的判定普遍不全，必须逐条补齐并**冻结在一处**
-（`handover_assets.py` 的 `HandoverAssetSpec.query`），preview / items / execute 三处共用同一个选择器，
-不得各写各的：
+> **§2.1 的"判定口径"列只是业务说明，不是查询定义。唯一可执行的谓词是本节下表。**
+> preview / items / execute 三处**只能**调用 `HandoverAssetSpec.query`，
+> 不得按 §2.1 的简写条件另行拼装 —— 两份口径并存时，同一 generation 的 `count` 与明细会对不上，
+> 而这种不一致恰好会被 `snapshot_token` 校验放大成整批 409。
+
+必须逐条补齐并**冻结在一处**（`handover_assets.py` 的 `HandoverAssetSpec.query`）：
 
 | 类型 | 完整谓词 |
 |---|---|
-| `customer` | 未软删除（`deleted_at IS NULL`） |
+| `customer` | **未软删 = `Customer.status != CustomerStatus.DELETED.value`**，直接复用 `domain/customer/soft_delete.py:11` 的 `exclude_deleted_customers(query)`。**`Customer` 没有 `deleted_at` 字段**（`domain/customer/models.py:96` 只有 `status`），写 `deleted_at IS NULL` 会直接构造失败 |
 | `inquiry_open` | `deleted_at IS NULL` 且 `PipelineStage.is_terminal = false` 且 `lost_at IS NULL` 且 `cancelled_at IS NULL` |
 | `order_in_transit` | 非终态状态集 **且 `cancelled_at IS NULL`** |
-| `receivable_open` | 未结清、`cancelled_at IS NULL`，**且用 `receivable_owner_filter({from_user})` 判归属** —— owner 为 NULL 时归属继承订单负责人（`domain/ar/ownership.py`），只看显式 owner 会漏 |
+| `receivable_open` | 未结清、`cancelled_at IS NULL`，**且必须先 `join(Order)` 再用 `receivable_owner_filter({from_user_id})` 判归属**：<br>`db.query(OrderReceivable).join(Order, OrderReceivable.order_id == Order.id).filter(receivable_owner_filter({from_user_id}), OrderReceivable.cancelled_at.is_(None), ...)`<br>该 filter 的第二个分支直接引用 `Order.owner_user_id`（`domain/ar/ownership.py:16-19`）。**不 join 就在未关联的查询上调用它，SQLAlchemy 会把 `orders` 加成一张无关联的 FROM 表，产生笛卡尔积** —— 只要离职者名下有一张订单，全库所有 owner 为 NULL 的应收都会命中，preview 重复计数、execute 改错人 |
 | `task_open` | `status='OPEN' AND voided_at IS NULL` |
 | `activity_followup` | `voided_at IS NULL AND next_action_owner_user_id IS NOT NULL`（**不加日期条件**，逾期的最该交） |
 | `requirement_open` | 状态不在 `{COMPLETED, REJECTED, MERGED}`（`ON_HOLD` **仍算活跃**） |
@@ -132,28 +135,46 @@ COA 档案/批次创建人、需求进展与附件创建人、文档与产品上
 
 ### 3.2 descriptor 声明（契约 §9.1）
 
-`backend/app/api/v1/easyauth_descriptor.py` 输出的 `/.well-known/easyauth-app.json` 增加：
+`backend/app/api/v1/easyauth_descriptor.py` 输出的 `/.well-known/easyauth-app.json`，
+`lifecycle` 段**保持扁平**（契约 §9.1）：
 
 ```json
 {
   "lifecycle": {
-    "handover": {
-      "capability": "declared",
-      "url": "https://<host>/api/v1/easyauth/lifecycle/handover",
-      "asset_types": [
-        {"type": "customer",            "label": "名下客户",       "detail_supported": true,  "releasable": true},
-        {"type": "inquiry_open",        "label": "进行中询盘",     "detail_supported": true,  "releasable": false},
-        {"type": "order_in_transit",    "label": "在途订单",       "detail_supported": true,  "releasable": false},
-        {"type": "receivable_open",     "label": "未结应收计划",   "detail_supported": true,  "releasable": false},
-        {"type": "task_open",           "label": "未完成任务",     "detail_supported": true,  "releasable": false},
-        {"type": "activity_followup",   "label": "待跟进活动",     "detail_supported": true,  "releasable": true},
-        {"type": "requirement_open",    "label": "进行中产品需求", "detail_supported": true,  "releasable": false},
-        {"type": "sample_request_open", "label": "未完成样品申请", "detail_supported": true,  "releasable": false}
-      ]
-    }
+    "handover_url": "https://<host>/api/v1/easyauth/lifecycle/handover",
+    "onboard_url": null,
+    "capabilities": ["handover.v2"],
+    "handover_asset_types": [
+      {"type": "customer",            "label": "名下客户",       "detail_supported": true,  "releasable": true},
+      {"type": "inquiry_open",        "label": "进行中询盘",     "detail_supported": true,  "releasable": false},
+      {"type": "order_in_transit",    "label": "在途订单",       "detail_supported": true,  "releasable": false},
+      {"type": "receivable_open",     "label": "未结应收计划",   "detail_supported": true,  "releasable": false},
+      {"type": "task_open",           "label": "未完成任务",     "detail_supported": true,  "releasable": false},
+      {"type": "activity_followup",   "label": "待跟进活动",     "detail_supported": true,  "releasable": true},
+      {"type": "requirement_open",    "label": "进行中产品需求", "detail_supported": true,  "releasable": false},
+      {"type": "sample_request_open", "label": "未完成样品申请", "detail_supported": true,  "releasable": false}
+    ]
   }
 }
 ```
+
+> **绝对不要写成嵌套的 `lifecycle.handover` 对象。** 早期版本那样写，会在**两处**被拒：
+>
+> | 拦截点 | 现状 |
+> |---|---|
+> | `backend/app/domain/authz/easyauth_manifest_export.py:109` | `_require_fields(lifecycle, ..., {"handover_url","onboard_url","capabilities"})`，且返回字典（`:117-121`）只重建这三个键 —— 多出来的键会被**静默剥掉** |
+> | `backend/vendor/easyauth-app-sdk/.../manifest.py:101-107` | `_validate_lifecycle()` 的 `allowed = {"handover_url","onboard_url","capabilities"}`，未知字段直接 `raise ManifestValidationError` |
+>
+> 因此本项的实际改动是**两处都要扩**，缺一不可：
+>
+> 1. `easyauth_manifest_export.py` 的 `_require_fields` 白名单与返回字典加 `handover_asset_types`，
+>    并校验其为 list[dict]、每项含 `type`/`label`/`detail_supported`/`releasable` 四键；
+> 2. **SDK `manifest.py` 的 `_validate_lifecycle()` 的 `allowed` 集合同步加 `handover_asset_types`**
+>    —— 这一条属于 SDK vNext 的交付内容（A1 的第 0 步），A3 依赖它发布后才能通过校验。
+>    SDK 不改，descriptor 连生成都生成不出来。
+>
+> `capabilities` 里出现 `"handover.v2"` 是 EasyAuth 判定「已接入」的**唯一**依据，
+> 不再有独立的 `capability` 字段。
 
 `asset_types` 是**单一事实来源**：`preview` 返回的 `type` 必须全部出自这里，否则 EasyAuth 判
 `422 undeclared_asset_type`。为杜绝手抄漂移，descriptor 与实现共用同一份常量表（§3.3）。
@@ -188,43 +209,80 @@ HANDOVER_ASSETS_BY_KEY: Final[dict[str, HandoverAssetSpec]] = {...}
 - 遍历 `HANDOVER_ASSETS`，逐条 `query(...).count()`。
 - **所有已声明类型都要返回，包括 `count=0` 的**（契约明确要求，省略与"不支持"无法区分）。
 - 只读，不落库，不开写事务。
+- **响应必须带 `snapshot_token`**（契约 §10.3 必填字段）。见 §3.5.1。
 
 ### 3.5 `items`（契约 §10.4，新增分支）
 
 ```
-请求: {task_id, generation, from_user_id, asset_type, page, page_size, q}
+请求: {task_id, generation, snapshot_token, from_user_id, asset_type, page, page_size, q}
 ```
 
 - `asset_type` 不在注册表 → `422 undeclared_asset_type`
 - `page_size` 钳制到 1–200
 - `q` 非空时按各类型自定字段模糊匹配（客户按名称，订单按单号，任务按标题…），由 `HandoverAssetSpec` 决定
-- `total` 必须与同 `generation` 的 preview `count` 用**同一个 query** 计算，保证一致
+- **`total` 是应用 `q` 之后的总数**（契约 §10.4）。仅当 `q` 为空串时，`total` 才必须等于同一
+  `snapshot_token` 下 preview 的 `count`。想同时给出未过滤总数就另加可选字段 `unfiltered_total`。
+  写成"无条件等于 preview count"会让搜索"华东"命中 2 条却返回 187，前端翻出一堆空页
 - 排序必须稳定（按主键兜底），否则翻页会漏项/重项
+
+### 3.5.1 `snapshot_token` 的生成与校验（契约 §10.5.1，**原设计整段缺失**）
+
+`preview` 必须返回它，`items` 与 `execute` 必须回带并校验它。三处**共用同一个生成函数**：
+
+```python
+def snapshot_token(db, *, task_id: str, generation: int, from_user_id: uuid.UUID) -> str:
+    """对当事人名下全部资产的当前状态取确定性摘要。"""
+    # 逐 asset_type 调 spec.query(db, from_user_id), 取 (type_key, id, 归属列, 状态列)
+    # 按 (type_key, id) 排序后拼串, SHA-256, 取前 32 hex → ≤128 字节 (契约 §10.5.1)
+```
+
+- `execute` 在**任何写入之前**重算一次；与请求携带的 token 不一致 → 整体 `409`，
+  EasyAuth 侧按契约 §10.6 把 action 退回 `pending` 并提示「清单已变化，请重新预演」。
+- `items` 也校验：不一致时同样 409，让前端立刻重新 preview，而不是翻着一份已经过期的清单做决定。
+- **逐条校验是独立的第二层**：每个被改写的 id 必须当前仍属于 `from_user_id` 且仍满足该类型谓词，
+  任一不满足 → 整体 409。**不允许**跳过该条继续处理其余条目。
+- 分批时每批都要重新 preview 换新 token（契约 §10.5.2），同一 token 只能用于一批。
 
 ### 3.6 `execute`（契约 §10.5，重写）
 
 ```python
 @dataclass(frozen=True, slots=True)
 class OverrideSpec:
-    id: str          # 契约字段名就叫 id, 不是 asset_id
-    action: str                       # transfer | release | skip
-    to_user_id: uuid.UUID | None
+    id: str                              # 契约字段名就叫 id, 不是 asset_id
+    action: str                          # transfer | release | skip
+    to_local_user_id: uuid.UUID | None   # 已由 sub 解析为本地 users.id
 
 @dataclass(frozen=True, slots=True)
 class AssignmentSpec:
     asset_type: str
-    default_action: str               # transfer | release | skip
-    default_to_user_id: uuid.UUID | None
+    default_action: str                       # transfer | release | skip
+    default_to_local_user_id: uuid.UUID | None
     overrides: tuple[OverrideSpec, ...]
 
 def execute_handover(
     db: Session,
     *,
     kind: str,
-    from_user_id: uuid.UUID,
+    task_id: str,
+    generation: int,
+    batch_id: int,
+    snapshot_token: str,
+    from_local_user_id: uuid.UUID,
     assignments: list[AssignmentSpec],   # 取代旧的 to_user_id + release_customers_to_pool
 ) -> dict[str, dict[str, int]]:
 ```
+
+> **身份边界：HTTP 层收到的全是 Authentik `sub` 字符串，内部 DTO 里全是本地 `users.id`。**
+> 契约 §5.1 规定 payload 的 `from_user_id` / `default_to_user_id` / `overrides[].to_user_id`
+> **一律是 sub**；而 EasyTrade 的归属列外键指向本地 `User.id`（`domain/shared/models.py`）。
+> 二者恰好都是 UUID，把 sub 直接当本地 id 赋值**不会有类型错误**，只会在 flush 时报 FK 违约
+> —— 或者更糟，撞上某个真实存在的本地 id。
+>
+> 因此：`_handle_execute` 必须在构造 DTO **之前**，把三个位置的 sub **逐个**经
+> `_find_external_user()` 解析成本地 id，**尤其不能只解析默认接收人而漏掉 overrides 里的**
+> （每条 override 可以有不同接收人，这正是 D10 的用法）。
+> 内部 DTO 的字段名统一带 `local` 前缀（如上），让漏解析在类型层面就显眼。
+> 任一接收人解析不到 / 非 active / 等于当事人 → `422`。
 
 单事务内，逐 `assignment` 处理：
 
@@ -252,21 +310,58 @@ def execute_handover(
    ```
    写 `NULL` 只可能发生在 `action == "release"` 分支，而该分支已被第 2 步保证只落在
    `releasable=True`（即可空列）的类型上 —— B1 从结构上不可能再复发。
-4. 全程 `with_for_update`。**锁顺序必须固定**：先按聚合根顺序（Customer → Inquiry → Activity、
-   Inquiry → SampleRequest），同一聚合内按主键升序。先解析出完整的受影响集合再统一加锁，
-   不要边遍历边锁 —— 否则与既有业务路径的加锁顺序相反，会死锁。
+4. **先冻结主键集合，再统一加锁，且忽略 payload 里 assignments 的顺序。**
+
+   两步走：
+   - 第一步（无写入）：逐 `asset_type` 跑 `spec.query` 解析出受影响的主键集合，连同 override 的
+     id 一起冻结下来。
+   - 第二步：按**固定的全局表序**加 `with_for_update`，同表内按 id 升序：
+
+     ```
+     Customer → Inquiry → Activity → SampleRequest → Order → OrderReceivable
+              → Task → ProductRequirement
+     ```
+
+   > **为什么必须无视 payload 顺序**：EasyAuth 的 `assignments` 数组顺序由前端决定。
+   > 若照单遍历，一次「先 `receivable_open` 后 `order_in_transit`」的请求会**先锁应收再等订单**，
+   > 而既有的订单取消路径（`api/v1/orders/routes.py`、`route_mutations.py`）是**先锁订单再改应收**
+   > —— 两者反向，直接死锁。
+   >
+   > **另一个必须先冻结的理由**：应收的归属谓词会**继承订单负责人**（§2.1.1）。
+   > 如果先改了订单 owner 再实时跑应收 selector，那些 owner 为 NULL 的应收会因为
+   > 订单已经不属于当事人而**从集合里凭空消失**，静默漏转。
+   > 所有 `reassign` 只能操作第一步冻结下来的主键集合，**不得在前序改写后重新执行责任谓词**。
+
 5. **必须走既有的领域命令，保住副作用**，不能裸 UPDATE：
    - 客户转移走 `transfer_customer()`；释放公海走 `release_customer_to_pool(action="auto_release")`
      —— 现有 `_handover_customers` 释放时也写 `action="transfer"`，事件分类是错的，光改 reason 修不了
-   - 订单改 owner 须写既有的 `order.update` 审计记录
    - 任务改派须**清空 `reminder_dismissed_at`**，否则新负责人收到的是一条已被前任忽略掉的提醒
+   - **订单改 owner 必须新写一个事务内的 `reassign_order_owner()`，禁止调用
+     `finish_update_order()`** —— 那个 helper 在
+     `backend/app/api/v1/orders/update_order_helpers.py:209` **自己 `db.commit()`**。
+     一旦调用它，后面任何一个 assignment 校验失败返回 409 时，订单归属**已经永久落库**，
+     execute 就退化成了部分成功，与契约 §10.5「整事务成败一致」直接冲突。
+     新函数的职责：存 `_order_update_audit_snapshot()` 的 before 快照 → 改 `owner_user_id` →
+     写 `action="order.update"` 的审计行 → **只 `flush()`**。提交与回滚一律由 execute 外层统一做。
+     其余任何"内部自己 commit"的 API helper 同样禁止在 execute 路径里调用。
 6. 客户归属变更继续写既有的负责人变更事件（`_handover_customers` 中的 owner history），
    `reason` 按 `kind` 取：`offboard`→「EasyAuth 离职交接」、`transfer`→「EasyAuth 转岗交接」、
    `reassign`→「EasyAuth 数据移交」，释放时→「EasyAuth 交接释放公海」。
-6. 返回 `{asset_type: {"transferred": n, "released": m, "skipped": k}}`。
+7. 返回**冻结的五元** `{asset_type: {"transferred": n, "released": m, "skipped": k, "merged": 0, "failed": 0}}`，
+   外层包成 `{"summary": result}`（契约 §10.5）。
 
-**幂等**：幂等键从 `task_id` 改为 `(task_id, generation, batch_id)`（契约 §10.5）。
-本地幂等记录表加 `generation` 列；同键重放返回首次的 `summary`，不同 `generation` 必须真正执行。
+   > **`merged` 与 `failed` 即使恒为 0 也必须显式返回。** 契约把 summary 定义为五元冻结结构，
+   > EasyAuth 会按 `transferred + released + skipped + merged + failed == count` 做守恒校验；
+   > 少两个键会让校验取不到值。EasyTrade 没有复合主键合并场景（`merged` 恒 0），
+   > 也不实现部分成功（`failed` 恒 0），但**不返回**与**返回 0** 是两回事。
+   >
+   > 另注意现有实现返回的是 `customers_transferred` 这类扁平旧键（`easyauth_handover.py:61,117-129`），
+   > 与 v2 完全不匹配，属于要整体替换掉的部分。
+
+**幂等**：幂等键从 `task_id` 改为三元组 `(task_id, generation, batch_id)`（契约 §10.5.2）。
+同键同 payload hash 返回首次 `summary`；同键不同 hash 返回 `409`；
+`generation` 小于该 `task_id` 已见最大值的请求一律 `409`（迟到的旧一轮）。
+表结构改动见 §3.8。
 
 ### 3.7 任务提醒的连带处理
 
@@ -279,7 +374,20 @@ def execute_handover(
 
 | 迁移 | 内容 |
 |---|---|
-| `<rev>_handover_idempotency_generation` | 幂等记录表加 `generation` 列（非空，默认 1），唯一键改为 `(task_id, generation, batch_id)` |
+| `<rev>_handover_receipt_v2_key` | `easyauth_handover_receipts` 表：**新增三列** `generation INTEGER NOT NULL DEFAULT 1`、`batch_id INTEGER NOT NULL DEFAULT 1`、`payload_sha256 CHAR(64) NOT NULL DEFAULT ''`；**删除** `uq_easyauth_handover_receipts_task_id`；**新增** `UNIQUE(task_id, generation, batch_id)` |
+
+> **`batch_id` 是新列，不是已有列。** 现表（`domain/authz/models.py:107-120`）只有
+> `task_id` / `mode` / `payload` / `result`，唯一约束是 `UniqueConstraint("task_id")` 单列。
+> 早期版本写的"加 `generation` 列，唯一键改为三元组"**建不出来** —— 迁移会因为
+> `batch_id` 列不存在而直接失败；而只加 `generation` 的话，同一 generation 的第二批
+> 仍然会被旧键吞掉（这正是 §3.6 幂等段要防的那个坑）。
+>
+> 另需持久化每个 `task_id` 的**已见最大 `generation`**（可用同表 `MAX(generation)` 查，
+> 但必须在 task 级串行化之后读，否则并发下两个旧请求会互相"看不见"对方）。
+> 用哪种实现由 A3 定，但**必须在 PR 说明里写明结论**。
+
+**DEFAULT 只为迁移历史行服务，加完必须去掉**：三列在应用层都是必填，
+留着 server default 会让漏传字段变成静默写入默认值。
 
 **不新增业务列**：所有资产类型都复用既有归属字段。`Order`/`Inquiry` 的非空约束
 **保持不变**，靠 `releasable=false` 在契约层解决，而不是放宽不变量。
@@ -293,6 +401,29 @@ def execute_handover(
 - `backend/app/api/v1/easyauth_lifecycle.py` 增加 `on_handover_items` 回调
 - 请求体上限跟随 SDK 提升到 256 KiB
 - 直接使用 SDK 的 `handover_payloads` TypedDict，**禁止**在 EasyTrade 内手抄字段名
+- SDK `manifest.py` 的 `_validate_lifecycle()` 已放行 `handover_asset_types`（§3.2）——
+  **vendor 目录必须一并更新到该版本**，否则 descriptor 生成时抛 `ManifestValidationError`
+
+### 4.1 事件头与 body 的一致性校验（契约 §10.1 的强制补偿）
+
+签名串**不覆盖** `X-EasyAuth-Event`（契约 §10.1 已知弱点）。现有实现
+（`backend/app/api/v1/easyauth_lifecycle.py:39-50`）**完全按头分发**，handler 不看 body。
+攻击者或一个坏掉的中间代理只要在 300 秒窗口内替换事件头，就能让一个合法签名的
+execute body 走进 preview 分支，或反过来。
+
+因此：**验签通过之后、调用任何 handler 之前**，先校验事件与 body 形状一致：
+
+| `X-EasyAuth-Event` | 必须满足 |
+|---|---|
+| `lifecycle.handover.preview` | `payload["mode"] == "preview"` |
+| `lifecycle.handover.execute` | `payload["mode"] == "execute"` |
+| `lifecycle.handover.items` | **无 `mode` 字段**，且含 `asset_type` 与 `snapshot_token` |
+
+任一不满足 → **422**，不进业务逻辑。
+`items` 没有 `mode` 可比，它的防替换依据是结构：preview/execute 的 body 里没有 `asset_type`，
+所以三种载荷两两不可互换。
+
+**必须有负向测试**：把两个事件头对调、保持签名合法，断言返回 422（§5）。
 
 ---
 
@@ -304,7 +435,10 @@ def execute_handover(
 | `backend/app/tests/test_easyauth_handover_items.py` | 分页稳定性（连续翻页不漏不重）；`q` 过滤；`total` 与 preview 一致；`page_size` 钳制 |
 | `backend/app/tests/test_easyauth_handover_execute.py` | override 优先于 default；剩余条目按 `default_action`；三值 action 各自行为；**B1** 非空列永不写 NULL；**B2** `release` 落在 `releasable=false` 上抛 422 而非静默；`default_action="skip"` + 逐条 `transfer` 能对非空列做部分交接；`(task_id, generation, batch_id)` 幂等；不同 generation 真正重执行 |
 | `backend/app/tests/contract/test_handover_v2_golden.py` | 从 `easyauth_app_sdk.contract_samples` 包内资源读取样本逐字段比对；样本缺失必须 fail |
-| `backend/app/tests/test_easyauth_lifecycle.py` | 既有用例按 v2 payload 重写 |
+| `backend/app/tests/test_easyauth_lifecycle.py` | 既有用例按 v2 payload 重写；**§4.1 负向用例**：签名合法但 `X-EasyAuth-Event` 与 body `mode` 对调 → 422 |
+| `backend/app/tests/test_easyauth_handover_snapshot.py` | §3.5.1：preview 返回 token；数据变动后 execute 整体 409 且**零写入**；override 的 id 已不属当事人 → 409；分批时旧 token 不可复用 |
+| `backend/app/tests/test_easyauth_handover_locking.py` | §3.6 第 4 步：assignments 顺序颠倒时加锁次序不变；先冻结主键后订单 owner 改写不会让 NULL-owner 应收从集合消失 |
+| `backend/app/tests/test_easyauth_handover_identity.py` | §3.6 身份边界：payload 里三个位置的 sub 全部解析为本地 id；**overrides 里的接收人不得漏解析**；解析不到/非 active/等于当事人 → 422 |
 
 golden 样本的取用方式：**随 SDK 一起分发**，作为 `easyauth_app_sdk` 的包内数据资源
 （`easyauth_app_sdk.contract_samples`），版本与 SDK 绑定。测试通过 `importlib.resources` 读取。

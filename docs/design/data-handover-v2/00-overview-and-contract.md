@@ -407,8 +407,15 @@ APP 在 descriptor（`/.well-known/easyauth-app.json`）中声明。
 
 - `capabilities` 里出现 `"handover.v2"` 即表示已实现 v2 三事件（preview / items / execute）。
   这是**唯一**的能力判定依据，不再另设 `capability` 字段。
-- `handover_asset_types` 是新增键。`_lifecycle()` 的 `_require_fields` 与返回字典**必须同步扩展**，
-  否则该键会被静默剥掉 —— 这是 EasyTrade / EasyProject 各自设计文档里的明确任务。
+- `handover_asset_types` 是新增键。它会被**两道**白名单拦住，**两道都要扩，缺一不可**：
+
+  | 拦截点 | 现状 | 不改的后果 |
+  |---|---|---|
+  | EasyTrade `easyauth_manifest_export.py:109,117-121` 的 `_lifecycle()` | `_require_fields` 白名单与返回字典都只有三个键 | 新键被**静默剥掉**，EasyAuth 收到一份没有资产声明的 descriptor |
+  | **SDK `easyauth_app_sdk/manifest.py` 的 `_validate_lifecycle()`** | `allowed = {"handover_url","onboard_url","capabilities"}`，未知字段直接 `raise ManifestValidationError` | descriptor **连生成都生成不出来**，直接抛异常 |
+
+  SDK 那一处属于 **SDK vNext 的交付内容（A1 第 0 步）**，是 A3/A5 的前置依赖 ——
+  它没发布，两个下游连 descriptor 都发不出来。这条必须写进 SDK 的 CHANGELOG。
 - 声明「本 APP 无用户级数据」的方式：`capabilities` 含 `"handover.none"`，且
   `handover_asset_types` 为空数组。运营在控制台做此声明时必须留下人和时间（§9.1 约束）。
 
