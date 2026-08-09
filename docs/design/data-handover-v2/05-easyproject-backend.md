@@ -115,7 +115,7 @@ MANAGED_USERS 的成员集合 = 权限快照响应里已解析的人员集合
 | 原资产类型 | 为什么错 | 正确处理 |
 |---|---|---|
 | `approval_pending`（我发起的待审批） | 两处都错：一、活跃状态是 `CREATED` / `SUBMITTED`（`infra/repositories/approvals.py:187`），不是 "pending"。二、`requester_dingtalk_user_id` 是**发起人**（历史事实），不是当前审批人；改它**根本不会**改变谁该审批 —— 审批责任在 EasyAuth/钉钉的审批实例上 | **本次不做**。"待审批单据的审批人是离职者"确实属活的责任（契约 §11 判例），但它要求扩展 **EasyAuth 的审批契约**（转移审批实例的当前处理人），超出本次范围。作为已知缺口记入 `docs/design/09-分期计划与风险清单.md` |
-| `reminder_occurrence`（待发提醒） | recipient 不是可独立改写的字段：它与 `payload_snapshot.recipientRole`、任务上的角色、以及 dedup key 三者绑定；单改 recipient 会导致物化出的提醒与角色不符而被判定为过期收件人 | **不做独立资产**。改为**副作用**：`task_assigned` / `task_assigner` / `recurring_*` 改派时，由该领域的交接命令**取消旧的未发送 occurrence 并按新角色重新物化**（见 §4.3.1） |
+| `reminder_occurrence`（待发提醒） | recipient 不是一个可以脱离任务角色单独搬的字段：它由 `payload_snapshot.recipientRole` 在入队时**重新解析**并与任务当前角色比对（`infra/jobs/reminder_enqueue.py:269-310`）。把它当独立资产、脱离任务改派单独转移，只会制造角色与收件人不一致 | **不做独立资产**，改为任务/模板改派的**连带副作用**（见 §4.3.1）。**这一步不是可选的**，见下方警告 |
 
 
 
@@ -222,13 +222,31 @@ POST /api/v1/easyauth/lifecycle/handover
 
 ### 4.3.1 提醒的连带重物化（取代原先的独立资产类型）
 
+> **⚠ 不做这一步的后果是「整组提醒静默全灭」，不是「少发一条」。**
+>
+> 入队任务会逐行按 `recipientRole` 重解当前归属并与任务上的角色比对
+> （`infra/jobs/reminder_enqueue.py:276-309`）。`ASSIGNEE` 角色的行若
+> `row.recipient_dingtalk_user_id != task.assignee_dingtalk_user_id` 即判为 stale；
+> 而 `:313-315` 是**整组 fail-closed** —— 只要该组里有任何一行 stale 或 inactive，
+> **这一组的全部 occurrence 都被标 `SKIPPED` 并直接返回，一条提醒都不发**。
+>
+> 也就是说：改了任务负责人却不管 occurrence，接收人**收不到任何提醒，而且没有任何报错**。
+> 这正是本次改造要消灭的那类"看起来成功、实际什么都没发生"。
+
 任务/周期模板的角色改派完成后，**同一事务内**必须：
 
-1. 取消该任务/模板下所有未发送、且 recipient 为离职者的 `ReminderOccurrenceRow`；
-2. 按新角色重新物化 occurrence（复用领域既有的物化用例，不要在交接代码里手写 INSERT）。
+1. 取消该任务/模板下所有**未发送**的 `ReminderOccurrenceRow`（不只是 recipient 为离职者的那些）；
+2. 复用领域既有的物化用例按新角色重新物化（`infra/jobs/reminder_materialize.py`），
+   **不要**在交接代码里手写 INSERT。
 
-**不得**直接 UPDATE occurrence 的 recipient —— 它与 `payload_snapshot.recipientRole`、任务角色、
-dedup key 三者绑定，单改一处会物化出自相矛盾的提醒。
+**为什么是"取消+重物化"而不是"直接 UPDATE recipient"**：
+`ASSIGNEE` / `ASSIGNER` 两种角色直接改 recipient 确实能重新对上，但 `MANAGER` 角色的收件人是
+**负责人的主管**（`reminder_enqueue.py:292-306` 还要校验 `assignee_state[1] == manager_dtuid`），
+换了负责人就得换成新负责人的主管，UPDATE 一个字段解决不了。统一走重物化对三种角色都正确，
+也不需要在交接代码里复刻角色解析逻辑。
+
+> 顺带更正一处早期表述：本文件先前写的"直接 UPDATE recipient 会被判 `RECIPIENT_STALE`"是反的 ——
+> **不更新才会 stale**。真正的理由是上面的 `MANAGER` 角色问题，以及不该在交接代码里重写角色解析。
 
 ### 4.3.2 统计口径
 
