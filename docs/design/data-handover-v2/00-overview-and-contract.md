@@ -326,7 +326,10 @@ resolve_assignee(subject, start_level=0):
     │  （若已有的是 open 的 transfer 转岗单, 则该转岗单先按既有逻辑收尾/取消, 再新建 offboard 单）
     ├─ 该单 kind: pre_offboard → offboard（唯一允许的 kind 变更）
     ├─ assignee: 本人 → 按 §8.2 重新解析为主管
-    ├─ generation += 1，全部 action 状态重置为 pending（已 done 的也重置）
+    ├─ generation += 1，全部 action 按当前 capability 重新判定初始状态
+    │    （逐字段重置清单见 `01` §5.1.2 —— 尤其 data_completed_at 必须清空，
+    │     否则新一轮 execute 会走「只补转授权」的续跑分支，这两周的新数据一条都不搬）
+    │    上一轮超管的强行 skip **不继承**，未接入的 APP 重新回到 blocked
     ├─ 重新快照授权 → 新一轮 HandoverGrantItem
     └─ 对每个 APP 重新 preview
        └─ 已交接干净的 APP 会返回 count=0，assignee 一键确认即 done

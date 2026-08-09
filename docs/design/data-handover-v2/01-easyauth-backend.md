@@ -487,6 +487,34 @@ reconcile 该 App 下所有 `blocked` 且所属 task 仍 open 的 action：
 反方向（`declared → undeclared`，通常是 descriptor 拉不到）**不得**把运行中的 action 打回 `blocked`，
 只写告警。初始状态只在建单时判定。
 
+### 5.1.2 升级时的字段重置（契约 §8.3，**遗漏会直接造成数据不一致**）
+
+`pre_offboard → offboard` 升级会 `task.generation += 1` 并重新盘点。
+`HandoverAppAction` 上有一批**按轮次**的字段，不逐个重置就会用上一轮的中间态污染这一轮：
+
+| 字段 | 升级时 | 不重置的后果 |
+|---|---|---|
+| `generation` | ← `task.generation` | 新一轮的 preview/execute 带着旧轮次号发出去，下游按 §10.5.2 判为「迟到的旧 generation」直接 409 |
+| `data_completed_at` | → `NULL` | **最严重的一条**：非空会让 execute 走「数据已落地，只补转授权」的续跑分支，**这两周新产生的数据一条都不会搬**，而单据显示 `done` |
+| `snapshot_token` | → `""` | 拿上一轮的 token 去 execute，下游校验必然 409，整轮卡死 |
+| `batch_seq` | → `0` | 批次号从旧值续接，与新 generation 组合出的幂等键仍然唯一，倒不会错乱，但审计上批次号不连续、难排查 |
+| `last_error` | → `""` | 新一轮界面上挂着上一轮的错误文案 |
+| `status` / `blocked_reason` | **按 §5.1 重新判定**，不是无脑置 `pending` | 见下 |
+| `skip_reason` / `skipped_by` | → `""` | 见下 |
+
+**`status` 必须按当前 capability 重新判定，超管的强行跳过不继承。**
+上一轮被超管 `skipped` 的 APP，如果至今仍未接入，这一轮要重新回到 `blocked`、由超管重新填理由跳过。
+理由：那次跳过是对**第一轮数据**做的判断，而升级的全部意义就是「这两周又产生了新数据」。
+让它自动继承，等于用一次两周前的判断永久豁免掉这个 APP —— 正是 D6 要消灭的「静默当作没数据」。
+旧一轮的 `skip_reason` 与审计事件保留在 `AuditLog` 里，历史不丢。
+
+**旧一轮的 `HandoverAssetType` / `HandoverAssetOverride` 行不删除**（它们带 `generation`，天然隔离），
+新一轮 preview 时按新 `(action, generation)` 重建；`HandoverGrantItem` 同理（§2.5.1）。
+
+**升级前必须确认没有在途执行**：存在未释放的 `HandoverExecutionLease` 时，升级操作返回
+`409 handover_execution_in_flight`，**不得**强解租约后升级 —— 那会让一个正在下游执行的批次
+带着已经作废的 generation 回写。
+
 ### 5.2 descriptor 同步
 
 新增 `applications/handover_capability.py`：
@@ -755,7 +783,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | `tests/unit/lifecycle/test_escalation.py` | 到期上交一级；跳过已离职主管继续向上；到顶落超管池且 `escalation_deadline` 置空；**回归测试：整个流程不产生任何 `AccessGrant` 变更**（代管已废弃，权限面必须零变化）；每业务日只提醒一次且跨时区正确 |
 | `tests/unit/lifecycle/test_capability.py` | 三态 → action 初始状态；`declared` 但无 URL 抛错；`none` 缺声明人被约束拒绝 |
 | `tests/unit/lifecycle/test_assignments.py` | §5.4 六条校验；三值 action 的库层 CheckConstraint；`releasable=False` 时 `skip`+逐条 `transfer` 可用（部分交接不依赖 releasable）；override 唯一约束；失效 override 被清理并计数 |
-| `tests/unit/lifecycle/test_upgrade.py` | pre_offboard → offboard 升级：kind 变更、generation+1、action 重置、assignee 重解析、上交截止时间重置 |
+| `tests/unit/lifecycle/test_upgrade.py` | pre_offboard → offboard 升级：kind 变更、generation+1、assignee 重解析、上交截止时间重置；**§5.1.2 逐字段重置**（`data_completed_at`/`snapshot_token`/`batch_seq`/`last_error` 全部清空）；上一轮超管 skip 的 APP 若仍未接入则回到 `blocked` 而非继承 `skipped`；存在未释放租约时升级返回 409 |
 | `tests/unit/lifecycle/test_reassign.py` | 管辖校验、必填理由、与 offboard 单并存不违反唯一约束、三方通知 |
 | `tests/integration/test_portal_handover_api.py` | §6.1 全部端点的权限边界（非 assignee 拿到 404） |
 | `tests/integration/test_handover_webhook_v2.py` | payload 形状逐字段比对契约样本（读法见下）；幂等键 `(task_id, generation, batch_id)` |
