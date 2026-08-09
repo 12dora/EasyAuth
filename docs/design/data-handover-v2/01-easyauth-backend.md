@@ -579,6 +579,10 @@ def preview_action(action) -> HandoverAppAction
 
 - 组 payload：`assignments` 由该 `(action, generation)` 下的**全部** `HandoverAssetType`
   （含 `default_action=skip` 的）与其 `overrides` 生成，形状严格照契约 §10.5。
+- **发出前必须校验 `attempt.generation == action.generation == task.generation`**，不等则直接作废该
+  attempt 并写审计，**不发**。outbox 里的旧记录被 worker 延迟取出时会用当前时间重新签名，
+  重放窗口拦不住；下游虽然也有「迟到的旧 generation 一律 409」的兜底（契约 §10.5.2），
+  但发送方不该指望接收方兜底。
 - 在事务内分配 `batch_seq`、写入一行 `HandoverExecutionAttempt`（`outcome="sent"`，含 canonical
   payload 与其 sha256）、写 outbox，**提交后**才由 worker 真正发请求（§2.4.1）。
 - 顺序按契约 §10.5.1.1：**先数据 webhook，成功后置 `data_completed_at`，再幂等转授权限**。
@@ -752,9 +756,36 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 4. `fastapi.py` 的挂载 helper 同步增加 items 回调参数。
 5. 新增 `easyauth_app_sdk/handover_payloads.py`：v2 请求/响应的 `TypedDict` 定义
    （`PreviewRequest`/`PreviewResponse`/`ItemsRequest`/`ItemsResponse`/`ExecuteRequest`/`ExecuteResponse`），
-   下游 APP 直接 import 使用，杜绝字段名手抄出错。
-6. `sdk/python/CHANGELOG.md` 记为 **breaking**，版本号 minor 升级（未上线，不做兼容分支）。
-7. `sdk/python/README.md` 补 v2 接入示例（中文）。
+   下游 APP 直接 import 使用，杜绝字段名手抄出错。**每个 Request 都含 `event_type` 字段。**
+6. **`event_type` 一致性校验，位置必须在 `webhook.test` 短路之前**（契约 §10.1 的强制补偿）：
+
+   ```
+   event = verify_webhook(...)                       # 验签
+   body  = json.loads(raw_body)
+   if body.get("event_type") != event.event_type:    # ← 新增, 必须在这里
+       return 422 event_type_mismatch
+   if event.event_type == WEBHOOK_TEST_EVENT:        # 现有短路
+       return 200 {"ok": true}
+   ...
+   ```
+
+   > **顺序不能反。** 现有实现（`sdk/.../lifecycle.py`）验签后**第一件事**就是判
+   > `event.event_type == WEBHOOK_TEST_EVENT` 直接回 `{"ok": true}`，完全不看 body。
+   > 由于事件头不在签名覆盖范围内，把一次真实 execute 请求的事件头改成 `webhook.test`，
+   > 就能让下游回一句"好的"而什么都不做 —— 而 EasyAuth 把 200 当成功。
+   > 校验必须挡在短路前面。
+
+7. **回调异常边界不得回显异常文本**（契约 §10.6）：现有
+   `_error_response(500, "handover_callback_failed", f"交接回调执行失败: {error}")`
+   会把 `str(error)` 拼进响应体。改为固定通用文案（如「交接回调执行失败，请查看应用日志」），
+   真实异常由 APP 自己记日志。理由：该响应体会被 EasyAuth 存下并展示给主管（普通员工）。
+8. 新增 `easyauth_app_sdk/manifest.py` 的 `_validate_lifecycle()` 白名单加 `handover_asset_types`
+   （契约 §9.1）。**不改这一处，两个下游连 descriptor 都生成不出来**（会抛
+   `ManifestValidationError: lifecycle 含未知字段`）。
+9. 新增包内数据资源 `easyauth_app_sdk/contract_samples/handover_v2/*.json`（§10），
+   并在 `pyproject.toml` 的打包配置里显式包含（`package-data`），否则 wheel 里没有这些文件。
+10. `sdk/python/CHANGELOG.md` 记为 **breaking**，版本号 minor 升级（未上线，不做兼容分支）。
+11. `sdk/python/README.md` 补 v2 接入示例（中文）。
 
 ---
 

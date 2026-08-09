@@ -83,9 +83,30 @@
 | 主管（manager） | `DingTalkUserOrgContext.manager_chain` 上的 active 用户 | 对**自己管辖范围内**的在职员工发起 `reassign` 单 |
 | 超管（superuser） | `require_superuser`（Authentik 组交集，每请求判定） | 全部权限；强行 `skip` 未接入 APP；认领超管池中的单 |
 
-**管辖范围判定**：`manager` 对 `subject` 有管辖权 ⟺ `subject` 出现在 `manager` 的 `MANAGED_USERS` 解析结果中
-（复用 `grants/managed_users.py:resolve_managed_users`）。跨管辖范围的移交返回 `403 out_of_managed_scope`，
-提示改由超管操作。
+**管辖范围判定**（`reassign` 的发起权，**不要复用授权系统的 `MANAGED_USERS`**）：
+
+`manager` 对 `subject` 有管辖权，当且仅当以下**全部**成立：
+
+1. 双方都 `active`，且都不是本地管理员（`local-admin:` 前缀）；
+2. 双方属于同一 `(dingtalk_source_slug, dingtalk_corp_id)`；
+3. `subject` 的 `DingTalkUserOrgContext` 存在且 `stale=false`；
+4. `manager` 的 `dingtalk_userid` 出现在 `subject` 当前的 `manager_chain` 里。
+
+目录数据缺失、`stale=true` 或链上元素畸形 → **fail-closed**：返回 `503`（目录不可用）或 `403`，
+并写审计。**这与 §8.2 建单时的降级取舍相反，是有意为之**：建单不能丢单，所以宁可落超管池；
+而"谁有权移交别人的数据"是一次授权判定，宁可拒绝也不能放过。
+
+> **为什么明确禁止复用 `resolve_managed_users`**：
+> 该函数的签名是 `resolve_managed_users(*, user, app, authorization_group_grant=None, ...)`
+> （`grants/managed_users.py:46`）—— 它**必须指定一个 App**，结果由该 App 的 managed-scope 策略决定，
+> 策略解析器可以是 `easyauth_team` 或 `union`（`:76-80`）。
+> 也就是说：换一个 App 参数，同一对人的管辖关系可能相反；用 `easyauth_team` 策略时，
+> 一个**不在员工主管链上**的团队负责人也会被算成有管辖权，从而获得移交他人数据的能力。
+>
+> 「谁能移交谁的数据」是一条组织事实，不能随某个业务 App 的授权策略漂移。
+> 因此它走独立的主管链判定，与任何 App / grant / team / scope 策略无关。
+
+跨管辖范围的移交返回 `403 out_of_managed_scope`，提示改由超管操作。
 
 ---
 
@@ -482,11 +503,27 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
   > `signingString` 冻结为 `timestamp + "." + raw_body`（标注 `W0-ADJUDICATED`），改签名串要额外一次
   > 契约变更并同步全部下游与向量，成本远高于收益。
   >
-  > **必须做的补偿**：下游收到请求后**必须校验 `X-EasyAuth-Event` 与 body 的 `mode` 一致**
-  > （`preview`/`execute` 对应各自 mode，`items` 无 mode 字段），不一致返回 422。
-  > 这条是强制的，写进各 APP 的验收用例。
+  > **必须做的补偿：body 里新增冻结字段 `event_type`。**
   >
-  > 把 event/delivery 纳入签名列为后续独立改造项，需单独立项与 CCR。
+  > 早期版本写的是「校验 `X-EasyAuth-Event` 与 body 的 `mode` 一致」，**这条补偿有两个洞**：
+  >
+  > | 洞 | 说明 |
+  > |---|---|
+  > | `items` 没有 `mode` 字段 | 对它根本无从校验 |
+  > | `webhook.test` 在 SDK 里**短路返回** | `sdk/.../lifecycle.py` 验签后第一件事就是判 `event_type == WEBHOOK_TEST_EVENT` 直接回 `{"ok": true}`，压根不看 body。把任意事件头改成 `webhook.test` 就能让一次真实的 execute 变成一句"好的" |
+  >
+  > 因此改为：**所有 webhook body 必须含 `event_type` 字段，取值与 `X-EasyAuth-Event` 完全相同**，
+  > `preview` / `items` / `execute` / `webhook.test` 四者**无一例外**。
+  > body 在签名覆盖范围内，所以这个字段是不可篡改的。
+  >
+  > SDK 必须在**任何分发与 `webhook.test` 短路之前**比较两者，不一致返回 **422**。
+  > 既有的 `mode` 字段保留不动（preview/execute 各自的值），但**判定依据是 `event_type`**。
+  >
+  > 三个仓库的验收用例都必须包含反例：篡改 event 头、篡改 delivery 头、
+  > 以及 event 头与 body `event_type` 不一致 —— 全部断言 422。
+  >
+  > 把 event/delivery 纳入签名串本身仍列为后续独立改造项（需单独立项与 CCR），
+  > 但有了 `event_type` 之后，那件事的收益已经很小。
 - 去重：`X-EasyAuth-Delivery`
 - 事件名：`X-EasyAuth-Event`
 - 请求体上限：**从 64 KiB 提升到 256 KiB**（`assignments.overrides` 可能较长），
@@ -511,6 +548,7 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
 
 ```json
 {
+  "event_type": "lifecycle.handover.preview",
   "task_id": "137:easytrade",
   "generation": 1,
   "kind": "offboard",
@@ -545,6 +583,7 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
 
 ```json
 {
+  "event_type": "lifecycle.handover.items",
   "task_id": "137:easytrade",
   "generation": 1,
   "snapshot_token": "et-2026-08-10T10:22:41.331Z-9f2c",
@@ -591,6 +630,7 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
 
 ```json
 {
+  "event_type": "lifecycle.handover.execute",
   "task_id": "137:easytrade",
   "generation": 1,
   "batch_id": 1,
@@ -700,11 +740,27 @@ transferred + released + skipped + merged + failed == 该类型在本轮 assignm
 
 因此契约增加 `snapshot_token`：
 
-1. `preview` **响应**必须返回 `snapshot_token`（APP 自定义的不透明字符串，≤128 字节；
-   可以是最大更新时间戳、内容 hash 或版本号，EasyAuth 不解析）。
+1. `preview` **响应**必须返回 `snapshot_token`（对 EasyAuth 不透明的字符串，≤128 字节，
+   EasyAuth 只存储与回传、不解析）。
+
+   > **它必须是「本次全部已声明资产集合」的规范摘要**，至少覆盖每条资产的
+   > `(asset_type, asset_id, 当前归属, 影响谓词的状态/版本)`，按 `(asset_type, asset_id)` 排序后取哈希。
+   >
+   > **不允许**用「最大更新时间戳」或「单表最大版本号」这类廉价实现。理由很具体：
+   > EasyProject 的成员/协作/参与关系是复合主键关联表（`(project_id, user)` 一类），
+   > 这些表**没有 `updated_at`、没有版本列**，改成员的方式是 delete + insert。
+   > 用时间戳或版本号做 token，preview 之后新增一条协作关系，token **纹丝不动** ——
+   > execute 于是通过校验，把一条从没人看过的关系按 `default_action` 一起处理掉，
+   > 然后返回的条数比 preview 多，EasyAuth 的守恒校验才发现不对。
+   > 那时**数据已经改完了**，而 action 被判 `failed`；同一幂等键重试只会重复返回那份错误 summary。
+   >
+   > 做不到这种摘要保证的 APP，**不得声明 `handover.v2`**。
+
 2. `items` 与 `execute` **请求**回带同一个 `snapshot_token`。
-3. APP 在 `execute` 时必须校验：**当前数据状态是否仍与该 token 一致**。
-   不一致则返回 **HTTP 409**，EasyAuth 把 action 打回 `previewed` 之前并提示"清单已变化，请重新预演"。
+3. APP 在 `execute` 时必须**在同一写事务内、锁定受影响集合之后**重算摘要并与请求携带的 token 比较，
+   **完全一致才允许任何改写**。不一致则返回 **HTTP 409**，且**零写入**；
+   EasyAuth 把 action 打回 `previewed` 之前并提示"清单已变化，请重新预演"。
+   preview 的 `count`、items 的基础集合、execute 的摘要必须来自**同一份一致性快照定义**（同一个选择器）。
 4. 逐条校验同样是硬要求：每个被改写的条目必须**当前仍属于 `from_user_id`** 且**仍属于该 `asset_type`**；
    否则整体 409，**不允许**跳过该条继续处理其余条目（那是静默兜底）。
 
@@ -750,9 +806,24 @@ executing
 > （`released_at IS NULL`），行内记 `action_id` / `generation` / `batch_seq` / `acquired_at` /
 > `owner`（worker 标识）/ `fence`（单调递增，防旧持有者回来写脏）。
 >
-> **超时不得直接解锁。** 租约过期只代表"可能卡住了"，必须先向下游确认该 `(task_id, generation,
-> batch_id)` 的真实状态（下游幂等记录是权威），确认终结后才 fence 并释放。
-> 直接强解会造成两个执行者同时改同一批数据。
+> **`fence` 的分配必须是原子的、单调的**：`(subject_user, app)` 维度上一个持久计数器，
+> 用 `UPDATE ... SET fence = fence + 1 RETURNING fence` 取号。不是"随便填个大点的数"。
+>
+> **超时不得直接解锁，但接管的顺序是「先 fence，后查证」，不是反过来。**
+> 租约过期只代表"可能卡住了"。恢复流程：
+>
+> 1. **先在租约仍 active 的前提下递增 `fence` 并把 `owner` 改成自己** —— 这一步让旧持有者
+>    **立刻失效**；
+> 2. 再用原 `(task_id, generation, batch_id)` 与原 payload 向下游查证真实状态
+>    （下游幂等记录是权威）；
+> 3. 确认已终结后才释放租约。
+>
+> **顺序反过来就是个洞**：若先查证再 fence，查证那几秒里旧 worker 复活，
+> 它会沿着原来的完成路径把 action 写成 `done` —— 而此时 fence 还没抬，条件更新拦不住它。
+>
+> **因此所有与执行相关的写入都必须是条件更新**：`WHERE owner = :me AND fence = :my_fence
+> AND released_at IS NULL`。影响行数为 0 时，旧 worker 必须**丢弃自己手上的响应并退出**，
+> 不得改写 action 状态、attempt 结果或 summary。这条对 async 轮询回来的那条路径同样适用。
 
 这把互斥放在 EasyAuth 而不是各 APP，是因为只有 EasyAuth 知道全部在途单据。
 APP 侧仍应保留自己的行锁作为第二道防线。
@@ -785,9 +856,28 @@ APP 侧仍应保留自己的行锁作为第二道防线。
 
 因此 EasyAuth 侧的规则是：
 
-1. 按 **HTTP 状态码**决定 action 状态与是否可重试（下表）。
-2. 响应体**原样截断存入** `action.last_error`（上限 2000 字符），在界面上直接展示给人看。
-   不解析、不映射、不依赖任何字段名。
+1. 按 **HTTP 状态码**决定 action 状态与是否可重试（下表）。**状态码是唯一参与判定的输入**，
+   任何字段名都不参与逻辑分支 —— 这一条不变。
+2. **响应体分两处存，可见范围不同**（原先"原样存进 `last_error` 并展示给人看"已废弃）：
+
+   | 去处 | 内容 | 谁能看 |
+   |---|---|---|
+   | `action.last_error`（门户与控制台都展示） | HTTP 状态码 + 本地稳定分类文案（`00` §10.6 下表的「界面提示」列）+ **白名单提取**的下游 `code` / `message`（各截断 200 字符），再过一遍脱敏 | assignee / subject / 超管 |
+   | `action.last_error_raw`（仅超管控制台，且写审计） | 下游原始响应体，截断 2000 字符 | 仅超管 |
+
+   白名单只认 `code` / `message` / `traceId` 三个键（两个下游的错误体恰好都有，见上）；
+   其余字段、非 JSON 体、异常堆栈**一律不进 `last_error`**，只进 `last_error_raw`。
+   脱敏至少覆盖：密钥/token 形态串、URL 里的凭据、以及人员标识（sub / dtuid / 邮箱）。
+
+   > **为什么改**：assignee 是普通员工（主管），不是管理员。下游一旦抛出未捕获异常，
+   > SDK 会把 `str(error)` 拼进 500 响应体（`sdk/.../lifecycle.py` 的回调异常边界），
+   > 里面可能带 SQL、参数、内部对象。原样展示等于把内部错误细节推给普通员工。
+   > EasyProject 自己有明确规矩：外部原始 body 只进脱敏后的运维日志
+   > （`domain/reliability/redaction.py`），原设计正好把这条边界反着破了。
+   >
+   > **同时要求 SDK 侧修正**：回调异常边界返回**固定通用文案**，不得拼接 `str(error)`；
+   > 真实异常写进 APP 自己的日志。见 `01` §8。
+
 3. 响应体不是 JSON 或为空 **不构成额外错误**，按状态码处理即可。
 
 | HTTP | 语义 | action 状态 | 可重试 | 界面提示 |

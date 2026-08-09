@@ -284,12 +284,17 @@ POST /api/v1/easyauth/lifecycle/handover
 
 ### 4.4 幂等
 
-契约 §10.5.2 的幂等键是**三元组** `(task_id, generation, batch_id)`。复用既有幂等基础设施
-（`infra/repositories/reliability.py` 的幂等记录表），键为：
+契约 §10.5.2 的幂等键是**三元组** `(task_id, generation, batch_id)`。复用既有的
+`IdempotencyRecordModel`（`infra/repositories/reliability.py:55`，唯一约束
+`(principal_key, operation, idempotency_key)`），三个字段固定取值：
 
-```
-handover:{task_id}:{generation}:{batch_id}
-```
+| 列 | 值 |
+|---|---|
+| `principal_key` | `"easyauth"` |
+| `operation` | `"lifecycle.handover.execute"` |
+| `idempotency_key` | `f"{task_id}:{generation}:{batch_id}"`（列宽 `String(128)`，够用） |
+| `request_sha256` | canonical payload 的 SHA-256（既有列，直接用） |
+| `response_json` | 首次成功的 `{"summary": ...}` 整体 |
 
 > **`batch_id` 一个都不能少。** 早期版本写的是 `handover:{task_id}:{generation}`，
 > 这会让同一 generation 内的**第二批**被当成第一批的重放：接口返回第一批的 `summary`、
@@ -305,8 +310,16 @@ handover:{task_id}:{generation}:{batch_id}
 | `generation` 小于本 `task_id` 见过的最大值 | HTTP 409 `HANDOVER_CONFLICT`（迟到的旧一轮，见契约 §10.5.2） |
 
 因此幂等记录行除了键与 `summary`，还必须存 **canonical payload 的 SHA-256**；
-另需按 `task_id` 维护**已见最大 `generation`**（可落在同一张表上，用 `handover:{task_id}:maxgen`
-这样的独立键，或在幂等表上加索引查 max —— 二选一，在 PR 里写明结论）。
+另需按 `task_id` 维护**已见最大 `generation`**，并且**读它必须在 task 级串行化之后**
+（同一 `task_id` 上先取一把行锁或 advisory lock），否则两个并发的旧请求会互相"看不见"对方，
+双双通过判定。推进最大轮次、写 payload hash、写回执、业务改写**必须在同一事务内**完成。
+落法二选一（在 PR 里写明结论）：同表加一条 `idempotency_key=f"{task_id}:maxgen"` 的记录，
+或在幂等表上按 `task_id` 前缀查 `MAX(generation)`。
+
+必须有测试：**按 `generation=2` → `generation=1` 的顺序投递，第二个请求返回 409 且零写入。**
+这不是理论场景 —— outbox 里 generation 1 的旧记录被 worker 延迟取出时会用**当前时间**重新签名，
+300 秒重放窗口拦不住它，而它的三元幂等键此前并不存在，"不同 generation 必须真正执行"
+这条规则会让它被当成一次新请求执行下去。
 
 canonical 的定义固定为：对 JSON 体做 key 排序、去空白、UTF-8 编码后取 SHA-256
 （`json.dumps(body, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode("utf-8")`）。

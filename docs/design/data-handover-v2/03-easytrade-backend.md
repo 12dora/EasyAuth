@@ -411,19 +411,19 @@ def execute_handover(
 攻击者或一个坏掉的中间代理只要在 300 秒窗口内替换事件头，就能让一个合法签名的
 execute body 走进 preview 分支，或反过来。
 
-因此：**验签通过之后、调用任何 handler 之前**，先校验事件与 body 形状一致：
+因此契约 §10.1 规定：**所有 body 都带 `event_type` 字段，取值与 `X-EasyAuth-Event` 完全相同**，
+`preview` / `items` / `execute` / `webhook.test` 无一例外。body 在签名覆盖范围内，该字段不可篡改。
 
-| `X-EasyAuth-Event` | 必须满足 |
-|---|---|
-| `lifecycle.handover.preview` | `payload["mode"] == "preview"` |
-| `lifecycle.handover.execute` | `payload["mode"] == "execute"` |
-| `lifecycle.handover.items` | **无 `mode` 字段**，且含 `asset_type` 与 `snapshot_token` |
+校验位置：**验签之后、`webhook.test` 短路与任何分发之前**。不一致 → **422**。
 
-任一不满足 → **422**，不进业务逻辑。
-`items` 没有 `mode` 可比，它的防替换依据是结构：preview/execute 的 body 里没有 `asset_type`，
-所以三种载荷两两不可互换。
+> 早期版本写的是「校验事件头与 body 的 `mode` 一致」，有两个洞：
+> `items` 根本没有 `mode` 字段；`webhook.test` 在 SDK 里直接短路返回 `{"ok": true}`，
+> 把事件头改成 `webhook.test` 就能让一次真实的 execute 变成一句"好的"，而 EasyAuth 把 200 当成功。
+> `event_type` 同时堵住这两个洞。这一校验由 SDK vNext 统一实现（`01` §8 第 6 条），
+> EasyTrade 只需升级 SDK 并补验收用例。
 
-**必须有负向测试**：把两个事件头对调、保持签名合法，断言返回 422（§5）。
+**必须有负向测试**（§5）：签名合法的前提下，
+① 把两个事件头对调、② 把事件头改成 `webhook.test`、③ 篡改 delivery 头 —— 断言前两者 422。
 
 ---
 
