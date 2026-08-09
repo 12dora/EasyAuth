@@ -152,8 +152,19 @@ EasyAuth 只做存储与回传，不解析、不排序、不校验格式。长�
                     └──(超管取消)──────────────────────> cancelled
 ```
 
-- `completed` 的判定见 D13，由 `refresh_task_status()` 在每次 action 状态变更后重算。
+- `completed` 的判定见 D13，由 `refresh_task_status()` 在**每次** action / 团队项状态变更后重算
+  —— 包括 preview 成功（现有代码在 preview 后没调用它，是缺陷）。
+- **状态汇总必须是全量纯函数，允许 `in_progress → pending` 回退。** 现有实现只升不降
+  （`lifecycle/core.py:119`），升级重置或 capability 恢复后会出现「task 是 `in_progress`、
+  但所有 action 都是 `pending`」的自相矛盾。
+- `started` 的判定要排除 `pending` / `blocked` / `skipped` 三种初始态，否则一张全部未接入或
+  全部声明无数据的单，会在建单当场就被判成 `in_progress`，从未经历 `pending`。
 - 存在 `blocked` action 时**永远不会**到达 `completed`。
+- **`failed` 不得让单据死锁。** 现有 `skip_action` 在 `attempts` 非零时拒绝、`cancel_task` 在任一
+  action `attempts > 0` 时拒绝；而 401/403/413/422 按 §10.6 是不可重试的 `failed` 且 `attempts` 已非零
+  —— 这张单会变得**既不能跳过也不能取消**。
+  v2 规定：只禁止对**真正在途**的 batch（`executing` / `async_pending`）做跳过与取消；
+  `failed` 状态必须允许超管填理由后转 `skipped`，也允许整单 `cancelled`。
 - `cancelled` 单可删除；`completed` 单不可删除、不可重开（纠错走 `kind=reassign` 新单，D8）。
 
 ### 6.3 负责人状态 `assignee_state`
@@ -350,40 +361,43 @@ resolve_assignee(subject, start_level=0):
 
 ### 9.1 声明位置
 
-APP 在 descriptor（`/.well-known/easyauth-app.json`，SDK `integration.py:29` 已支持）中新增：
+APP 在 descriptor（`/.well-known/easyauth-app.json`）中声明。
+
+> **形状必须迁就既有实现，不能另造。** EasyTrade 的 descriptor 不是手写的，而是经
+> `backend/app/domain/authz/easyauth_manifest_export.py` 的 `_lifecycle()` 产出，
+> 该校验器**只接受也只返回** `{handover_url, onboard_url, capabilities}` 三个键
+> （`:109,117-121`）。早期设计里的嵌套 `lifecycle.handover` 对象会被直接拒绝或剥掉。
+>
+> 因此 v2 **扩展既有结构**，不新增嵌套层：
 
 ```json
 {
   "lifecycle": {
-    "handover": {
-      "capability": "declared",
-      "url": "https://app.example.com/api/v1/easyauth/lifecycle/handover",
-      "asset_types": [
-        {
-          "type": "customer",
-          "label": "名下客户",
-          "detail_supported": true,
-          "releasable": true
-        },
-        {
-          "type": "inquiry_open",
-          "label": "进行中询盘",
-          "detail_supported": true,
-          "releasable": false
-        }
-      ]
-    }
+    "handover_url": "https://app.example.com/api/v1/easyauth/lifecycle/handover",
+    "onboard_url": null,
+    "capabilities": ["handover.v2"],
+    "handover_asset_types": [
+      { "type": "customer",     "label": "名下客户",   "detail_supported": true, "releasable": true },
+      { "type": "inquiry_open", "label": "进行中询盘", "detail_supported": true, "releasable": false }
+    ]
   }
 }
 ```
 
-`capability` 三态：
+- `capabilities` 里出现 `"handover.v2"` 即表示已实现 v2 三事件（preview / items / execute）。
+  这是**唯一**的能力判定依据，不再另设 `capability` 字段。
+- `handover_asset_types` 是新增键。`_lifecycle()` 的 `_require_fields` 与返回字典**必须同步扩展**，
+  否则该键会被静默剥掉 —— 这是 EasyTrade / EasyProject 各自设计文档里的明确任务。
+- 声明「本 APP 无用户级数据」的方式：`capabilities` 含 `"handover.none"`，且
+  `handover_asset_types` 为空数组。运营在控制台做此声明时必须留下人和时间（§9.1 约束）。
 
-| 值 | 含义 | action 初始状态 |
+三态判定：
+
+| descriptor 情况 | 含义 | action 初始状态 |
 |---|---|---|
-| `declared` | 已实现交接 webhook，`url` 与 `asset_types` 必填 | `pending` |
-| `none` | **运营显式声明**本 APP 不存在任何用户级数据 | `skipped`，并在单据上标注声明人与声明时间 |
-| 未声明 / descriptor 拉取失败 | 默认 | **`blocked`** |
+| `capabilities` 含 `handover.v2` 且 `handover_url` 非空 | 已接入 | `pending` |
+| `capabilities` 含 `handover.none` | 运营显式声明无用户级数据 | `skipped`（标注声明人与时间） |
+| 其余（含拉取失败） | 未声明 | **`blocked`** |
 
 `releasable=false` 表示该类资产**不允许无接收人释放**（如 EasyTrade `Inquiry.owner_user_id` 非空约束）。
 EasyAuth 在 execute 前校验：对 `releasable=false` 的类型指定 `to_user_id=null` 时，直接返回
@@ -663,14 +677,51 @@ transferred + released + skipped + merged + failed == 该类型在本轮 assignm
 4. 逐条校验同样是硬要求：每个被改写的条目必须**当前仍属于 `from_user_id`** 且**仍属于该 `asset_type`**；
    否则整体 409，**不允许**跳过该条继续处理其余条目（那是静默兜底）。
 
+### 10.5.1.1 执行顺序：**数据先，授权后**（修既有缺陷）
+
+现有代码在调用数据 webhook **之前**就执行了授权转移
+（`lifecycle/handover.py:182` 的 `transfer_selected_grants()` 早于 `:190` 的 `signed_hook_post()`）。
+webhook 失败时 action 标 `failed`，**但权限已经转走了** —— 状态机根本表达不了"数据没搬、权限已转"，
+重试也恢复不了。
+
+v2 固定顺序，并用子状态把中间态显式化：
+
+```
+executing
+  └─ 1. 发数据 webhook（execute）
+        失败 → failed（权限一动未动，重试安全）
+        202  → async_pending → 轮询
+        200  ↓
+  └─ 2. data_completed        ← 数据已落地，权限尚未转
+  └─ 3. 幂等转授 grant_receiver 的权限（仅 kind=offboard 且 grant_receiver 非空）
+        失败 → failed，但**保留 data_completed 子状态**，重试只重做第 3 步
+  └─ 4. done
+```
+
+- 第 3 步必须**幂等**：重试时若目标授权已存在则跳过，不重复递增 version。
+- `data_completed` 是持久化字段，不是内存态；重试路径靠它决定从哪一步续跑。
+- `kind` 非 `offboard` 时第 3 步直接跳过（D7/D9：不动权限）。
+
 ### 10.5.2 资产互斥（同一批数据不能被两张单同时搬）
 
 `reassign` 单可以与离职单并存、同一 subject 也可以有多张 open 的 `reassign`（§8.4）。
 若两张单同时对同一批数据执行，先到者全搬走，后到者返回一堆 0 —— 看起来"成功"，实际什么都没发生。
 
-约束：**EasyAuth 侧对 `(subject_user, app)` 加执行级互斥锁**，同一当事人在同一 APP 上
+约束：**EasyAuth 侧对 `(subject_user, app)` 加执行互斥**，同一当事人在同一 APP 上
 任一时刻只允许一个 execute 在途（含 `async_pending`）。冲突时第二个请求立即返回
 `409 handover_execution_in_flight`，不排队、不重试。
+
+> **实现必须是持久化租约行，不能是短事务的 `select_for_update`。**
+> webhook 调用发生在事务之外（`AGENTS.md`：网络副作用出事务），且 `async_pending` 可能持续很久，
+> 跨 web worker 与 Celery 的短事务行锁根本盖不住这段时间。
+>
+> 具体：建一张 `HandoverExecutionLease`，`(subject_user, app)` 上加**条件唯一约束**
+> （`released_at IS NULL`），行内记 `action_id` / `generation` / `batch_seq` / `acquired_at` /
+> `owner`（worker 标识）/ `fence`（单调递增，防旧持有者回来写脏）。
+>
+> **超时不得直接解锁。** 租约过期只代表"可能卡住了"，必须先向下游确认该 `(task_id, generation,
+> batch_id)` 的真实状态（下游幂等记录是权威），确认终结后才 fence 并释放。
+> 直接强解会造成两个执行者同时改同一批数据。
 
 这把互斥放在 EasyAuth 而不是各 APP，是因为只有 EasyAuth 知道全部在途单据。
 APP 侧仍应保留自己的行锁作为第二道防线。
