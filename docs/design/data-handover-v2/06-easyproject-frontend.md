@@ -72,15 +72,14 @@ interface UserRefProps {
 `directory_users` 已有 `is_active`（后端设计 §2.2 明确**不得**因 inactive 剔除），
 所以列表接口返回的人员对象里必须带上在职状态。
 
-若现有列表 DTO 未携带该字段，由 **AG-07（M07 目录模块 owner）** 在响应里补一个 `isActive`。
+**该字段已经有了，不需要任何后端改动**（这与本文件早期版本的说法不同，以此处为准）：
+`backend/app/api/v1/directory.py:170,193,221,262,357` 的 DTO 都含 `is_active`，
+生成的 TS 类型里也有。
 
-冻结基线 `contracts/openapi-baseline.json` 的 `components.schemas` 只有 `ErrorBody` 与 `Pagination`
-两项，**不收敛响应 schema**，因此此项大概率**不需要 CCR**（详见后端设计 §5.6）。
-但有一个前提必须先向 AG-00 核实：`contracts/tools/generate_baseline.py` 再生基线时是否会把响应
-schema 收敛进去；若会，则需并入后端设计 §5.2 的 CCR 一起提。
+真正要改的是**调用方传参**：`includeInactive` query 参数早就存在
+（`backend/app/api/v1/directory.py:292`，默认 `false`）。前端此前一直用默认值，所以从来看不到离职者。
 
-> 前端 agent 开工前必须拿到这个确认，不要靠猜；也**不要**用"前端多打一次目录接口"绕过 ——
-> 那会在列表页产生 N+1 请求。
+> 因此本项**没有后端前置依赖，也不需要 CCR**，前端可以立即开工。
 
 ### 3.3 需要接入 `UserRef` 的界面
 
@@ -122,8 +121,9 @@ schema 收敛进去；若会，则需并入后端设计 §5.2 的 CCR 一起提�
 选择器与筛选器共用一个底层查询 hook，通过参数区分：
 
 ```ts
-useDirectoryUserOptions({ purpose: "assign" })  // 过滤离职
-useDirectoryUserOptions({ purpose: "filter" })  // 保留离职，附「仅看已离职」快捷项
+// purpose 决定是否给目录接口传 includeInactive
+useDirectoryUserOptions({ purpose: "assign" })  // includeInactive=false（默认），过滤离职
+useDirectoryUserOptions({ purpose: "filter" })  // includeInactive=true，保留离职 + 「仅看已离职」快捷项
 ```
 
 **禁止**在各业务模块各写一份过滤逻辑 —— 那是遗漏的温床，和后端"每个 APP 各自决定交接什么"
@@ -170,7 +170,7 @@ useDirectoryUserOptions({ purpose: "filter" })  // 保留离职，附「仅看�
 
 ## 8. 交付顺序
 
-1. 向 AG-00 核实 §3.2 的基线再生前提，并确认 AG-07 已排期 `isActive` —— **开工前置条件**
+1. ~~等待后端补字段~~ —— **无前置依赖**，`is_active` 与 `includeInactive` 均已存在，直接开工
 2. §3.1 `UserRef` + §4.3 `useDirectoryUserOptions`（可独立测试）
 3. §3.3 逐界面接入
 4. §4.1 §4.2 选择器与筛选器

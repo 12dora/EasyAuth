@@ -13,8 +13,20 @@ EasyProject 已接入 EasyAuth 的四个适配器：目录（`infra/easyauth_dir
 （`infra/easyauth_authz/`）、审批（`infra/easyauth_approval/`）、通知（`infra/easyauth_notify/`），
 descriptor 已暴露在 `GET /.well-known/easyauth-app.json`（`api/v1/easyauth_descriptor.py:50`）。
 
-**唯独没有接入数据交接。** 后果按契约 §1.1 第 1 条：在 EasyAuth 的交接单上，EasyProject 这一行
-与"确实没有该员工数据"完全无法区分，且显示为已完成。契约 v2 之后它会变成 `blocked`，整张单无法完成。
+**数据交接则处于"有壳无肉"的状态**（这与本文件早期版本写的"完全未接入"不同，以此处为准）：
+
+- `backend/app/api/v1/easyauth_lifecycle.py` 已存在，router 已在 `api/v1/router.py:56` 挂载
+  （`# M06 lifecycle handover`）。
+- `backend/app/domain/authz/lifecycle.py` 已有 `HandoverRequest` / `HandoverContributor` /
+  `HandoverReceiptStore` 框架，但：
+  - 用的是 **v1 payload**（`to_user_id` 单接收人，无 `assignments`）
+  - 幂等靠 **`InMemoryHandoverReceiptStore`** —— 进程重启即失忆，多实例部署直接失效
+  - **contributor 是空的**，注释写明"G2 由各领域注册"，至今未注册
+  - 有 partial-success 语义（`ContributorCount.failures`），与契约 §10.5「整事务成败一致」冲突
+
+所以真实工作量是**把占位实现改写为 v2**，不是从零新建：删掉 v1 payload 解析、换掉内存幂等、
+去掉 partial-success、把 contributor 真正实现出来。改写时按 `AGENTS.md`「不保留历史错误形态」
+一次性替换，不留兼容分支。
 
 ### 1.1 两个必须先修的阻塞项
 
@@ -47,8 +59,13 @@ async def resolve_dtuid(uow, *, authentik_sub: str) -> str:
 2. 未命中 → 调 EasyAuth 目录接口按 sub 取用户详情
    （SDK `easyauth_directory` 适配器已封装，`domain/ports/easyauth.py:23` 的用户引用协议本就同时接受
    `sub` 与 `dt:<dtuid>`），拿到其 dtuid。
-3. 用该 dtuid 走既有的绑定路径回填 `authentik_user_id`
-   （`domain/identity/binding.py:109`，已实现"存在未绑定行则补绑、冲突则拒绝"的原子逻辑），再返回。
+3. 用该 dtuid 回填 `authentik_user_id`。**不得复用登录绑定路径**：
+   `user_repo.bind_or_refresh()` 会同时写 `first_login_at` / `last_login_at`
+   （`infra/repositories/directory.py:675,676`），webhook 触发时写这两个字段等于**伪造登录事实**，
+   会污染"从未登录"的判定与相关统计。
+   需要**新增**一个"已验证 sub 的纯绑定"用例：只写 `authentik_user_id`，复用既有的冲突检测
+   （dtuid↔sub 不一致时拒绝，`domain/identity/binding.py` 的 `platform_sub_mismatch` /
+   `local_binding_conflict` 逻辑），**不碰任何时间戳**。
 4. 仍解析不到 → 抛 `IdentityUnmappedError`，API 层转 **HTTP 409**，错误码 `IDENTITY_UNMAPPED`，
    错误体沿用本仓库标准 `ErrorBody`（契约 §10.6 只规范状态码，见 §5.3）。
 
@@ -90,8 +107,17 @@ MANAGED_USERS 的成员集合 = 权限快照响应里已解析的人员集合
 | `recurring_assigner` | 周期任务模板指派人 | `RecurringTemplateRow.assigner_dingtalk_user_id`（`recurrence.py:90`，非空） | **false** | 同上 |
 | `recurring_collaborator` | 周期任务模板协作人 | `RecurringTemplateCollaboratorRow`（PK `(template_id, user)`，`recurrence.py:138`） | **false** | 会被复制进生成的任务，必须转移 |
 | `work_record_participant` | 参与的工作记录 | `WorkRecordParticipantRow.dingtalk_user_id`（PK `(record_id, user)`，`work_records.py:102`） | **false** | 复合主键，同 §4.3 |
-| `approval_pending` | 我发起的待审批 | `ApprovalRequestRow.requester_dingtalk_user_id`（`approvals.py:61`，非空） | **false** | 仅 pending 状态；契约 §11 判例：待审批属活的责任 |
-| `reminder_occurrence` | 待发提醒 | `ReminderOccurrenceRow.recipient_dingtalk_user_id`（`reminders.py:48`，参与自然唯一键） | **false** | 仅未发送的；`$MANAGER` 占位符行不转移（它本就动态解析） |
+
+### 3.1.1 两类**不做**独立资产的裁定（复核后修正）
+
+早期版本把下面两项列成了 `asset_type`，都是错的，已删除：
+
+| 原资产类型 | 为什么错 | 正确处理 |
+|---|---|---|
+| `approval_pending`（我发起的待审批） | 两处都错：一、活跃状态是 `CREATED` / `SUBMITTED`（`infra/repositories/approvals.py:187`），不是 "pending"。二、`requester_dingtalk_user_id` 是**发起人**（历史事实），不是当前审批人；改它**根本不会**改变谁该审批 —— 审批责任在 EasyAuth/钉钉的审批实例上 | **本次不做**。"待审批单据的审批人是离职者"确实属活的责任（契约 §11 判例），但它要求扩展 **EasyAuth 的审批契约**（转移审批实例的当前处理人），超出本次范围。作为已知缺口记入 `docs/design/09-分期计划与风险清单.md` |
+| `reminder_occurrence`（待发提醒） | recipient 不是可独立改写的字段：它与 `payload_snapshot.recipientRole`、任务上的角色、以及 dedup key 三者绑定；单改 recipient 会导致物化出的提醒与角色不符而被判定为过期收件人 | **不做独立资产**。改为**副作用**：`task_assigned` / `task_assigner` / `recurring_*` 改派时，由该领域的交接命令**取消旧的未发送 occurrence 并按新角色重新物化**（见 §4.3.1） |
+
+
 
 ### 3.2 历史事实 —— 一律不动
 
@@ -143,9 +169,28 @@ class HandoverAssetSpec:
     reassign: Callable[[AsyncSession, str, str | None, Sequence[str] | None], Awaitable[ReassignResult]]
 ```
 
-分层归属：注册表放 `domain/`（纯业务判定，不 import FastAPI / SQLAlchemy model 以外的东西——
-按 `AGENTS.md` 后端分层，实际 SQL 语句构造下沉到 `infra/repositories/handover.py`，
-`domain` 只持有 spec 与编排）。
+**分层：`domain` 不得出现 `Select` / `AsyncSession`**（`AGENTS.md` 后端分层：domain 不导入
+FastAPI / SQLAlchemy model / SDK DTO）。因此上面的签名是**示意**，真实形态必须是：
+
+- `domain/handover/assets.py`：只持有 `type_key` / `label` / `detail_supported` / `releasable`
+  与一个**领域端口协议**（`HandoverAssetPort`），不碰任何 SQLAlchemy 类型。
+- `infra/repositories/handover.py`：实现该端口，SQL 语句、`AsyncSession`、`Select` 全在这里。
+- `domain/handover/service.py`：编排（校验 assignments、按 action 分派、汇总 summary）。
+
+### 4.1.1 归属改写必须走各领域的显式命令，**不得跨表裸 UPDATE**
+
+这是本仓库最硬的一条约束（`AGENTS.md` 不变量 3「显式状态命令」、不变量 4「网络副作用出事务」）：
+任务/项目的状态与责任变更必须走领域命令端点，禁止 `PATCH status` 式的裸改。
+交接同样不能例外 —— 裸 UPDATE 会绕过版本号、assignment history、activity 时间线、提醒物化
+与审批锁，产生一堆自相矛盾的数据。
+
+因此：
+
+> **每个涉及的领域模块各自提供一个 `system_handover` 命令用例**，由 M06 的交接服务调用。
+> 命令内部锁聚合根、走既有状态机、写全套副作用（history / activity / 站内通知 / 提醒重物化），
+> 并对 `APPROVAL_PENDING` / `FIELD_LOCKED` 等锁状态返回明确的领域错误。
+
+M06 **只做编排与契约适配**，一行业务 UPDATE 都不写。
 
 ### 4.2 API 端点（新文件 `backend/app/api/v1/easyauth_lifecycle.py`）
 
@@ -175,11 +220,21 @@ POST /api/v1/easyauth/lifecycle/handover
 实现上把这两类合并到一个 `reassign` 实现里，由 `project_owned` 驱动，`project_member` 只处理
 **非 OWNER** 的参与关系。
 
-`reminder_occurrence` 的 recipient 参与自然唯一键，转移前需检查目标是否已有同一 occurrence，
-已有则删除离职者行（计入 `merged`），避免唯一键冲突。
+### 4.3.1 提醒的连带重物化（取代原先的独立资产类型）
 
-返回统计因此是四元：`{"transferred": n, "merged": m, "released": 0, "skipped": k}`。
-`merged` 是 EasyProject 特有的合法结果，**必须如实上报**，不得并进 `transferred` 掩盖。
+任务/周期模板的角色改派完成后，**同一事务内**必须：
+
+1. 取消该任务/模板下所有未发送、且 recipient 为离职者的 `ReminderOccurrenceRow`；
+2. 按新角色重新物化 occurrence（复用领域既有的物化用例，不要在交接代码里手写 INSERT）。
+
+**不得**直接 UPDATE occurrence 的 recipient —— 它与 `payload_snapshot.recipientRole`、任务角色、
+dedup key 三者绑定，单改一处会物化出自相矛盾的提醒。
+
+### 4.3.2 统计口径
+
+返回统计沿用契约 §10.5 冻结的**五元** `{transferred, released, skipped, merged, failed}`。
+本应用 `released` 恒为 0（全部 `releasable=false`）、`failed` 恒为 0（整事务成败一致）；
+`merged` 是复合主键合并的正常结果，**必须如实上报**，不得并进 `transferred` 掩盖。
 
 ### 4.4 幂等
 
@@ -280,7 +335,18 @@ CCR 内容（按 `contracts/workflow.md` §6 的六要素）：
    补 handover 事件的正反例向量（复用既有 `testSecret`）。
 6. **回滚方式**：还原该操作条目即可，无数据与代码耦合。
 
-**这份 CCR 应在开工第一天就提**（周期长于代码实现），但**不阻塞** §2.1/§2.2 两项修复的开发与合入。
+**这份 CCR 应在开工第一天就提**（周期长于代码实现）。
+
+**CCR 批准前的可做/不可做边界**（按 `contracts/workflow.md` §6「AG-00 批准前所有 Agent 继续用旧契约」）：
+
+| 可以先做 | 必须等 CCR APPROVED |
+|---|---|
+| §2.2 修 P1（消费快照，纯内部实现） | 交接端点的 v2 改写 |
+| §2.1 修 P2（身份映射，纯内部实现） | 新错误码的实现与返回 |
+| 领域侧 `system_handover` 命令用例（§4.1.1，各模块内部） | descriptor 输出变更 |
+| 单元测试 | 测试向量更新、契约测试 |
+
+即：**CCR APPROVED 是 M06 交接端点实施的门禁**，不是"边做边等"。
 
 ### 5.3 错误体形状：不改，走状态码对齐
 
@@ -315,18 +381,18 @@ CCR 内容（按 `contracts/workflow.md` §6 的六要素）：
 且 `contracts/test-vectors/webhook-hmac.json` 的 `sources` 引用了它的 `webhook.signing` 段。
 不同步会造成设计与实现脱节。
 
-### 5.6 目录用户响应补 `isActive`（供前端 §06 使用）
+### 5.6 目录在职状态：**后端无需改动**（复核后修正）
 
-前端改造（`06-easyproject-frontend.md`）需要人员对象携带在职状态。涉及 M07 目录模块的
-`getDirectoryUsers` 等响应体。
+早期版本要求"给目录响应补 `isActive`"，这是错的 —— **该字段早就有了**：
+`backend/app/api/v1/directory.py:170,193,221,262,357` 的 DTO 均含 `is_active`，
+生成的前端 TS 类型里也有。
 
-同样因为**响应 schema 不在基线内**，此项**大概率不需要 CCR**。但有一个前提必须先向 AG-00 核实：
+真正缺的是**调用方没有按用途传 `includeInactive`**：
+`backend/app/api/v1/directory.py:292` 已提供 `includeInactive` query 参数
+（`infra/repositories/directory.py:239,244` 据此决定是否过滤），默认 `False`。
 
-> `contracts/tools/generate_baseline.py` 在再生基线时是否会把响应 schema 收敛进
-> `components.schemas`。若会，则新增字段会造成基线漂移，需并入 §5.2 的 CCR 一起提。
-
-**开工前必须拿到这个确认**，不要靠猜。若确认不需要 CCR，则该字段由 AG-07（M07 owner）实现，
-前端生成物由 AG-00 再生。
+因此这一项**没有任何后端改动，也不需要 CCR**，纯粹是前端按场景传参（见 `06` §3.2、§4）。
+后端唯一要做的是**在 API 文档里把两种用途写清楚**，避免前端继续用默认值。
 
 ### 5.7 共享热点（必须走 AG-00）
 
@@ -356,11 +422,13 @@ CCR 内容（按 `contracts/workflow.md` §6 的六要素）：
 | `backend/tests/integration/handover/test_idempotency.py` | `(task_id, generation)` 幂等；不同 generation 真正重执行 |
 | `backend/tests/contract/test_handover_v2_golden.py` | 直接比对 `EasyAuth/tests/contract_samples/handover_v2/*.json` |
 
-golden 样本取用：CI 用环境变量指向 EasyAuth 仓库；本地按 `../EasyAuth/...` 相对路径读取，
-**找不到时跳过并显式报告 skip 原因**，不得静默通过。
+golden 样本取用：**随 SDK 分发**（`easyauth_app_sdk.contract_samples` 包内资源，版本与 SDK 绑定），
+用 `importlib.resources` 读取。**不得**依赖 `../EasyAuth/` 兄弟目录路径 —— 本仓库 CI 独立检出，
+那条路径必然不存在，测试会稳定退化成 skip。**样本缺失必须让测试失败**，不允许 skip 通过。
 
 pytest 使用既有 async auto 模式与 unit/integration/contract 标记（`backend/pyproject.toml:70`）。
-全量门禁：`scripts/quality-gate.sh`。
+全量门禁：合入后跑**完整**的 `scripts/quality-gate.sh`（Ruff、migration smoke、PostgreSQL 实库 pytest、
+secret 扫描、前端检查、契约检查）。**不存在只跑"前端段"这种用法**，不要在文档或 CI 里那样写。
 
 ---
 

@@ -28,6 +28,7 @@ EasyTrade 是三个下游里唯一已接入交接的应用：
 | B1 | 无接收人时把非空列 `Order.owner_user_id` 置 `NULL` | `easyauth_handover.py:123` 经 `_reassign_owners` | 违反模型不变量，事务本应失败却被放过 |
 | B2 | 询盘在无接收人时**静默保持原归属** | `easyauth_handover.py:132-142` | 典型的静默兜底：调用方以为交接完成，实际数据还挂在离职者名下 |
 | B3 | scope 解析把 inactive 本地用户从集合中剔除 | `backend/app/domain/authz/scope_resolution.py` 的 `_managed_user_ids_from_resolved_grant()` 返回行 | **代管授权在 EasyTrade 侧被丢弃，契约 D4 完全失效** |
+| B4 | lifecycle 路由直接抛 FastAPI `HTTPException`，实际错误体是 `{"detail": ...}` | `backend/app/api/v1/easyauth_lifecycle.py` | 与本仓库其他接口的错误体不一致。契约 §10.6 只规范状态码，因此**不强制统一**，但需在实现时明确选一种并写进测试，不要两种混用 |
 
 B1/B2 的根因相同：把"能不能没有负责人"这件事藏在实现里，而不是作为契约声明出去。
 v2 用 descriptor 的 `releasable` 字段把它显式化（契约 §9.1），由 EasyAuth 在发请求前就拦掉非法组合。
@@ -50,14 +51,14 @@ v2 用 descriptor 的 `releasable` 字段把它显式化（契约 §9.1），由
 
 | `asset_type` | 中文名 | 字段 | 可空 | `releasable` | 判定口径 |
 |---|---|---|---|---|---|
-| `customer` | 名下客户 | `Customer.owner_user_id`（`domain/customer/models.py:66`） | 是 | **true** | 未软删除的全部客户；`NULL` 即公海，本就是合法状态 |
-| `inquiry_open` | 进行中询盘 | `Inquiry.owner_user_id`（`domain/order/model_inquiry.py:19`） | 否 | **false** | `PipelineStage.is_terminal = false` |
-| `order_in_transit` | 在途订单 | `Order.owner_user_id`（`domain/order/model_order.py:45`） | 否 | **false** | 非终态订单 |
-| `receivable_open` | 未结应收计划 | `OrderReceivable.owner_user_id`（`domain/order/model_finance.py:252`） | 是 | **true** | 未结清；`NULL` 时报表回落到订单负责人，是既有合法语义 |
-| `task_open` | 未完成任务 | `Task.assignee_user_id`（`domain/task/models.py:24`） | 否 | **false** | 状态非完成/取消。**新增覆盖** |
-| `activity_followup` | 待跟进活动 | `Activity.next_action_owner_user_id`（`domain/activity/models.py:25`） | 是 | **true** | 该字段非空且下一步日期未过期。**新增覆盖** |
-| `requirement_open` | 进行中产品需求 | `ProductRequirement.owner_user_id`（`domain/requirement/models.py:55`） | 否 | **false** | 未关闭。**新增覆盖** |
-| `sample_request_open` | 未完成样品申请 | `SampleRequest.requested_by_user_id`（见 `api/v1/sample_scope.py:16`） | 否 | **false** | 未终结。**新增覆盖** |
+| `customer` | 名下客户 | `Customer.owner_user_id`（`domain/customer/models.py:87`） | 是 | **true** | 未软删除的全部客户；`NULL` 即公海，是既有的合法状态 |
+| `inquiry_open` | 进行中询盘 | `Inquiry.owner_user_id`（`domain/order/model_inquiry.py:39`） | 否 | **false** | `PipelineStage.is_terminal = false` |
+| `order_in_transit` | 在途订单 | `Order.owner_user_id`（`domain/order/model_order.py:52`） | 否 | **false** | 非终态订单 |
+| `receivable_open` | 未结应收计划 | `OrderReceivable.owner_user_id`（`domain/order/model_finance.py:277`） | 是 | **false** | 未结清。**列可空但不可 release**：`domain/ar/ownership.py` 明确 owner 为 `NULL` 时**回退到订单负责人**，不是无主。若订单尚未转移，置 NULL 等于把应收又挂回离职者 —— 是静默兜底的另一种形态 |
+| `task_open` | 未完成任务 | `Task.assignee_user_id`（`domain/task/models.py:33`） | 否 | **false** | 状态非完成/取消。**新增覆盖** |
+| `activity_followup` | 待跟进活动 | `Activity.next_action_owner_user_id`（`domain/activity/models.py:50`） | 是 | **true** | 口径：`voided_at IS NULL AND next_action_owner_user_id IS NOT NULL`。**不得**加"下一步日期未过期"条件 —— 逾期未跟进的活动恰恰是最需要移交的那批。**新增覆盖** |
+| `requirement_open` | 进行中产品需求 | `ProductRequirement.owner_user_id`（`domain/requirement/models.py:79`） | 否 | **false** | 未关闭。**新增覆盖** |
+| `sample_request_open` | 未完成样品申请 | `SampleRequest.requested_by_user_id`（`domain/crm/models.py:71`） | 否 | **false** | 未终结。**新增覆盖** |
 
 > `releasable=false` 的四类，一旦 EasyAuth 侧对其指定 `default_to_user_id=null`，
 > EasyAuth 会在发请求前直接返回 `422 asset_type_not_releasable`（契约 §9.1）。
@@ -74,8 +75,8 @@ COA 档案/批次创建人、需求进展与附件创建人、文档与产品上
 
 ### 2.3 个人配置 —— 不转移
 
-- `UserDashboardLayout.user_id`（`domain/performance/models.py:26`）：仪表盘布局，随账号停用自然失效。
-- `PerformanceTarget.user_id`（`domain/performance/models.py:50`）：**业绩目标不转移**。
+- `UserDashboardLayout.user_id`：仪表盘布局，随账号停用自然失效。
+- `PerformanceTarget.user_id`：**业绩目标不转移**。
   它参与 `(user, period, metric, entity)` 的部分唯一键，转移会与接收人已有目标冲突；
   更重要的是业绩归属是考核事实，转移即失真。契约 §11 已把此条列为全局判例。
 
@@ -132,7 +133,7 @@ return {row.id for row in rows if row.id != current_user.id}
         {"type": "customer",            "label": "名下客户",       "detail_supported": true,  "releasable": true},
         {"type": "inquiry_open",        "label": "进行中询盘",     "detail_supported": true,  "releasable": false},
         {"type": "order_in_transit",    "label": "在途订单",       "detail_supported": true,  "releasable": false},
-        {"type": "receivable_open",     "label": "未结应收计划",   "detail_supported": true,  "releasable": true},
+        {"type": "receivable_open",     "label": "未结应收计划",   "detail_supported": true,  "releasable": false},
         {"type": "task_open",           "label": "未完成任务",     "detail_supported": true,  "releasable": false},
         {"type": "activity_followup",   "label": "待跟进活动",     "detail_supported": true,  "releasable": true},
         {"type": "requirement_open",    "label": "进行中产品需求", "detail_supported": true,  "releasable": false},
@@ -282,9 +283,11 @@ def execute_handover(
 | `backend/app/tests/contract/test_handover_v2_golden.py` | 直接读 `EasyAuth/tests/contract_samples/handover_v2/*.json` 逐字段比对请求解析与响应形状 |
 | `backend/app/tests/test_easyauth_lifecycle.py` | 既有用例按 v2 payload 重写 |
 
-golden 样本的取用方式：CI 里通过环境变量指向 EasyAuth 仓库路径；本地开发按相对路径
-`../EasyAuth/tests/contract_samples/handover_v2/` 读取，找不到时**跳过并显式报告 skip 原因**
-（不得静默通过）。
+golden 样本的取用方式：**随 SDK 一起分发**，作为 `easyauth_app_sdk` 的包内数据资源
+（`easyauth_app_sdk.contract_samples`），版本与 SDK 绑定。测试通过 `importlib.resources` 读取。
+
+**不得**依赖 `../EasyAuth/` 这样的兄弟目录相对路径 —— 本仓库 CI 独立检出，那条路径必然不存在，
+测试会稳定退化成 skip。**样本缺失必须让测试失败**，不允许 skip 通过（`AGENTS.md`：不得用空结果兜底掩盖真实问题）。
 
 ---
 
@@ -298,4 +301,4 @@ golden 样本的取用方式：CI 里通过环境变量指向 EasyAuth 仓库路
 6. §5 测试补齐
 
 每完成一项立即单独 commit。改完后端后必须重建容器镜像并重启，host dev server 不算上线。
-全量门禁：`make quality` / `scripts/` 下既有质量门禁脚本必须通过。
+全量门禁：`make finish-check`（Makefile 中的既有目标，串起 migrations / backend-style / backend-tests / frontend-typecheck / frontend-tests）。**本仓库没有 `make quality` 这个目标。**
