@@ -111,12 +111,16 @@ models.CheckConstraint(
 - 与 `HandoverAssetType.default_to_user` / `HandoverAssetOverride.to_user` 是**三个不同的字段**，
   实现时不要合并
 
-```python
-models.CheckConstraint(
-    condition=Q(task__kind=HANDOVER_KIND_OFFBOARD) | Q(grant_receiver__isnull=True),
-    name="lifecycle_action_grant_receiver_only_offboard",
-),
-```
+> **这条不变量不能用 `CheckConstraint` 表达。** Django 的 `CheckConstraint` 不允许跨关联
+> （`Q(task__kind=...)` 会被 system check 判 `models.E041`），PostgreSQL 的 CHECK 也不能引用别的表。
+> 落法二选一，**必须二者都做**：
+>
+> 1. **数据库侧**：PostgreSQL 约束触发器（`CONSTRAINT TRIGGER ... DEFERRABLE INITIALLY DEFERRED`），
+>    在 `HandoverAppAction` 的 INSERT/UPDATE 上校验
+>    `task.kind = 'offboard' OR grant_receiver_id IS NULL`；
+> 2. **领域侧**：`validate_assignments()` 与建 action 路径各自显式校验一次，给出可读错误。
+>
+> 只做领域侧校验不够 —— 数据修复脚本、shell、以及未来的批量导入都会绕过它。
 
 > 早期版本把 `to_user` 整个删掉，导致 `transfer_selected_grants(action)` 失去输入 ——
 > 该函数依赖 action 级接收人，而条目级有多个接收人时无法推断授权该给谁。`grant_receiver` 补上这个洞。
@@ -237,39 +241,93 @@ class HandoverAssetOverride(models.Model):
         ordering = ["asset_type_id", "asset_id"]
 ```
 
-### 2.4.1 `HandoverExecutionAttempt`（新表，append-only）
+### 2.4.1 执行记录：**两张表**，不是一张
 
-每一次真实发出的 execute 请求固化为一行，**只增不改**，是审计与幂等的事实来源。
+> **早期版本用单表 `HandoverExecutionAttempt` 表达不了。** 它同时被要求
+> 「append-only、只增不改」与「发送前先写 `outcome="sent"`、拿到响应后回填结果」——
+> 回填就违反 append-only，追加又撞 `(action, generation, batch_seq)` 唯一约束。
+> 结果是**一次请求的最终成败根本无处安放**。拆成两张即可：批次不可变，投递可重试。
+
+**`HandoverExecutionBatch`（不可变，一批一行）**
 
 ```python
-class HandoverExecutionAttempt(models.Model):
-    action = FK(HandoverAppAction, on_delete=CASCADE, related_name="attempts_log")
+class HandoverExecutionBatch(models.Model):
+    action = FK(HandoverAppAction, on_delete=PROTECT, related_name="execution_batches")
     generation = PositiveIntegerField()
     batch_seq = PositiveIntegerField()
+    is_final = BooleanField(default=True)         # 见下方 413 分批
     snapshot_token = CharField(max_length=128)
-    request_payload = JSONField()                 # canonical, 发出前固化
+    request_payload = JSONField()                 # canonical, 发出前固化, 之后只读
     request_hash = CharField(max_length=64)       # sha256(canonical payload)
-    response_payload = JSONField(default=dict, blank=True)
+    status = CharField(max_length=16)             # pending | executing | async_pending
+                                                  # | data_completed | done | failed
+    data_completed_at = DateTimeField(null=True, blank=True)
+    created_at = DateTimeField(auto_now_add=True)
+
+    # 单据被删时保留审计所需的快照, 见下方 PROTECT 说明
+    task_snapshot = JSONField(default=dict)       # {task_id, kind, app_key, subject_user_id}
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["action", "generation", "batch_seq"],
+                name="lifecycle_execution_batch_unique",
+            ),
+        ]
+```
+
+**`HandoverDeliveryAttempt`（append-only，一次真实 HTTP 调用一行）**
+
+```python
+class HandoverDeliveryAttempt(models.Model):
+    batch = FK(HandoverExecutionBatch, on_delete=PROTECT, related_name="deliveries")
+    delivery_seq = PositiveIntegerField()
+    lease_fence = PositiveBigIntegerField()       # 发起时持有的 fence, 用于丢弃陈旧写回
     outcome = CharField(max_length=16)            # sent | succeeded | failed | async_accepted
     http_status = PositiveSmallIntegerField(null=True, blank=True)
+    response_payload = JSONField(default=dict, blank=True)
     error_text = TextField(blank=True)
     created_at = DateTimeField(auto_now_add=True)
 
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["action", "generation", "batch_seq"],
-                name="lifecycle_execution_attempt_unique",
+                fields=["batch", "delivery_seq"],
+                name="lifecycle_delivery_attempt_unique",
             ),
         ]
 ```
 
-**分配与发送必须可恢复**：在事务内分配 `batch_seq`、写入本行（`outcome="sent"`）并写 outbox，
-提交后才由 worker 真正发请求。这样"先加号后崩溃"只留下一行 `sent` 待续跑，
-"先发送后加号"导致的重复分配不会发生。
+事件幂等键（outbox / delivery 头）用 `lifecycle-execute:{batch_id}:{delivery_seq}`。
 
-`retry_action` 的语义随之明确：**重放原 batch、原 payload**，不新建行。
+**为什么是 `PROTECT` 而不是 `CASCADE`**：契约 §6.2 允许 `cancelled` 单被删除。
+用 `CASCADE` 的话，「execute 真的发出去了、下游真的改了数据、随后超管取消并删单」这条路径
+会把请求 hash、下游响应、幂等证据**全部级联删掉** —— 恰恰是最需要留证的那次。
+因此执行记录不随业务单消失：`PROTECT` 阻止删除，或（若产品坚持要能删单）把 action FK 改 `SET_NULL`
+并依靠 `task_snapshot` 保住上下文。**两种都行，但不允许 `CASCADE`。**
+
+**分配与发送必须可恢复**：在事务内分配 `batch_seq`、写入 batch（`status="pending"`）与第一条
+delivery（`outcome="sent"`）、写 outbox，**提交后**才由 worker 真正发请求。
+这样"先加号后崩溃"只留下一条待续跑的记录，"先发送后加号"导致的重复分配不会发生。
+
+`retry_action` 的语义：**重放原 batch、原 payload**，只追加一条新的 `HandoverDeliveryAttempt`
+（`delivery_seq + 1`），**不新建 batch**。
 改动 assignment、重新 preview、或 413 分片，才创建新 `batch_seq`。
+
+#### 2.4.1.1 413 分批：状态必须落在**批次**上，不能落在 action 上
+
+契约 §10.6 规定 413 时「分批执行」。但如果成功一批就把 action 置 `done`
+（`data_completed_at` 也挂在 action 上），第二批就**既不能 execute、也不能 retry** ——
+剩余资产永远搬不走，而单据显示已完成。
+
+规则：
+
+- `data_completed_at` 与执行态**同时存在于批次上**（见上表）。action 上的
+  `data_completed_at` 只是**最终批**的镜像，供界面与 retry 判断用；
+- 非最终批（`is_final=False`）成功后，action **保持 `previewed`**，并要求
+  **重新 preview 取新的 `snapshot_token`**（契约 §10.5.2：同一 token 只能用于一批）；
+- 只有 `is_final=True` 的批次数据成功、且授权转移那一步也成功后，action 才转 `done`；
+- 界面上要显示「已完成 N / M 批」，不能只显示一个"进行中"。
 
 ### 2.4.2 `HandoverExecutionLease`（新表，契约 §10.5.2）
 
@@ -283,6 +341,8 @@ class HandoverExecutionLease(models.Model):
     owner = CharField(max_length=128)             # worker 标识
     fence = PositiveBigIntegerField()             # 单调递增, 防旧持有者写脏
     acquired_at = DateTimeField(auto_now_add=True)
+    lease_expires_at = DateTimeField()            # 必填, 见下
+    renewed_at = DateTimeField(null=True, blank=True)
     released_at = DateTimeField(null=True, blank=True)
 
     class Meta:
@@ -293,10 +353,47 @@ class HandoverExecutionLease(models.Model):
                 name="lifecycle_lease_one_active_per_subject_app",
             ),
         ]
+
+
+class HandoverLeaseFence(models.Model):
+    """(subject_user, app) 维度的 fence 取号器, 与租约行分开, 永不删除。"""
+    subject_user = FK(UserMirror, on_delete=PROTECT)
+    app = FK(App, on_delete=PROTECT)
+    next_fence = PositiveBigIntegerField(default=1)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(fields=["subject_user", "app"], name="lifecycle_fence_unique"),
+        ]
 ```
 
-**过期租约不得直接强解**：先按 `(task_id, generation, batch_seq)` 向下游确认真实状态
-（下游幂等记录是权威），确认终结后 fence +1 再释放。
+**`lease_expires_at` 必填，否则一次 worker 崩溃就永久锁死。**
+条件唯一约束会让后续任何执行都拿不到租约，而没有过期时间就没有任何合法的接管入口
+——只能靠人手工删行，那正是最容易删错的操作。取值：`now + LEASE_TTL`（建议 5 分钟），
+worker 在长任务期间**周期性续约**（更新 `lease_expires_at` / `renewed_at`）。
+
+**fence 用取号器原子分配**：`UPDATE ... SET next_fence = next_fence + 1 RETURNING next_fence`。
+不允许用「当前最大 fence + 1」这种读后写。
+
+**所有与执行相关的写回都必须是 CAS**，条件固定为：
+
+```sql
+WHERE id = :lease_id AND owner = :me AND fence = :my_fence AND released_at IS NULL
+```
+
+影响行数不为 1 时，**该 worker 必须丢弃手上的响应并退出**，不得改写 batch 状态、
+delivery 结果、action 状态或 summary。异步轮询回来的那条路径同样适用。
+
+**过期租约的接管顺序是「先抢占，后查证」**（契约 §10.5.2）：
+
+1. 在租约仍是 active 行的前提下，**先**取新 fence 并把 `owner` 改成自己 ——
+   旧持有者从这一刻起所有 CAS 都会失败；
+2. **再**用原 `(task_id, generation, batch_seq)` 与原 payload 向下游查证真实状态
+   （下游幂等记录是权威）；
+3. 查到终态才 CAS 释放租约；**查不到或下游不可达时继续持有并告警**，不释放。
+
+顺序反过来（先查证再抢占）会留下一个窗口：查证那几秒里旧 worker 复活，
+沿原路径把 action 写成 `done`，而 fence 还没抬，拦不住它。
 
 ### 2.5 ~~`CustodyGrant`~~ / ~~`CustodyGrantItem`~~ —— **已取消**
 
