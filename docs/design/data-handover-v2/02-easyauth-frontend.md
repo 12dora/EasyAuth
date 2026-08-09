@@ -337,14 +337,14 @@ export interface HandoverAssetItemsPage {
   | 全部释放为无主 | `release` | 无 |
   | 暂不处理 | `skip` | 无 |
 
-- 「全部释放为无主」**仅当 `releasable=true` 时可选**；否则该项禁用并 tooltip
+- 「全部释放为无主」**仅当 `releasable=true` 时可选**；否则该项禁用，tooltip 写
+  「该应用要求这类数据必须有负责人」。
 - **逐条 override 的 action 下拉必须复用同一条规则**：所属类型 `releasable=false` 时，
   明细行的「释放为无主」同样禁用。只禁类型级、放行明细级的话，execute 前校验会整批返回 422
   （契约 §10.5 语义 3），连本来合法的逐条 `transfer` 也一起被拒。
-  `transfer` 与 `skip` 在任何 `releasable` 取值下都始终可用
-  「该应用要求这类数据必须有负责人」。**`transfer` 与 `skip` 永远可选**，
+- **`transfer` 与 `skip` 在任何 `releasable` 取值下都始终可用**，
   所以 `releasable=false` 的类型照样能用「暂不处理 + 逐条转移」做部分交接。
-- 默认值是 `skip`（后端默认，§4）。这意味着**用户什么都不做时不会误转任何数据**，
+- 默认值是 `skip`（后端模型默认，见 `01` §2.3）。这意味着**用户什么都不做时不会误转任何数据**，
   但也意味着 UI 必须显眼地提示"还有 N 类未处理"，否则会出现"点了执行却什么都没发生"。
   在执行按钮旁常驻一行：`已安排 2 类 / 共 4 类`。
 - `count=0` 的类型仍然显示，置灰标「无数据」并禁用下拉 —— **不要隐藏**。
@@ -371,9 +371,19 @@ export interface HandoverAssetItemsPage {
 - 一旦改成与默认不同 → 变实色 + 右侧圆点标记，加入本地待提交的 override 集合。
 - 改回与默认完全一致（action 与接收人都相同）→ 自动从 override 集合移除
   （不要留一条「值与默认相同的 override」，那会污染审计与 diff）。
-- 保存：`PUT .../assets/{type}/overrides` **整体替换**。因此提交时必须带上当前完整的 override 集合，
-  而不只是本页改动 —— override 集合由前端在组件级维护，与分页解耦。
+- **展开明细时必须先 `GET .../assets/{type}/overrides` 把当前完整的 override 集合与
+  `overrides_version` 一起拉回来**，加载成功前**禁止提交**。
+- 保存：`PUT .../assets/{type}/overrides`，body 带 `overrides_version` + **完整**集合，**整体替换**。
+
+  > **这两条是一体的，缺前一条会静默删数据。** PUT 是整体替换：
+  > 用户刷新页面后只加载了当前页，组件里只有本页那几条 override，直接提交就会把
+  > 其余（可能上百条）全部删掉，而且没有任何报错。
+  >
+  > `overrides_version` 不匹配 → `409 overrides_version_stale`：提示「有人刚刚改过这份分配，
+  > 已为你重新加载」，**自动重新 GET 后让用户复核，不要静默覆盖**。
+
 - 响应 `stale=true` → 顶部黄条「清单已变化，建议重新预演后再分配」。
+  注意 `stale` 只在搜索框为空时才有意义（`q` 非空时 `total` 本来就是过滤后的数量，见 `01` §5.6）。
 
 ### 6.3 人员选择器（`HandoverUserPicker`）
 
@@ -406,7 +416,9 @@ TypeScript 阶段直接失败。
 ### 7.2 `HandoverTaskDetail` 扩展
 
 - 顶部新增「负责人」卡片：assignee 姓名、`assignee_state` 中文标签、`escalation_level`、
-  上交截止时间与剩余天数、[延期] [认领]（`superuser_pool` 时）。
+  上交截止时间与剩余天数、**[顺延]**（`escalation.deferred_at == null` 时才可点，
+  每层级只能按一次，必填理由 ≥10 字符）、[认领]（`assignee_state == "superuser_pool"` 时）。
+  **[认领] 对本地管理员要禁用**：后端会返回 `403 local_admin_cannot_claim`（`01` §6.3）。
 - 每个 action 区块新增 blocked/skipped 形态（同 §5.2 表格）。
 - `blocked` 区块给超管一个 [强行跳过] 按钮 → 对话框必填理由（≥10 字符）→
   `POST .../actions/{app_key}/skip`。对话框需明确警示：
@@ -419,13 +431,22 @@ TypeScript 阶段直接失败。
 
 ### 7.4 未接入告警条（`BlockedAppsBanner`）
 
-数据源 `GET /console/api/v1/lifecycle/handover-blocked-apps`，挂在控制台 shell 顶部，常驻。
+数据源 `GET /console/api/v1/lifecycle/handover-blocked-apps`
+（响应 `{app_count, task_count, apps:[{app_key, app_name, blocked_task_count}]}`），
+挂在控制台 shell 顶部，常驻。
+
+**仅在当前用户是超管时挂载**：`currentUser.isSuperuser` 为 false 时**既不渲染也不发请求** ——
+控制台 workspace 允许 owner/developer 进入，他们请求这个超管端点只会持续拿到 403。
+「数据交接」标签页同理：无权限时不加入 TABS，深链直接回退到 overview。
 
 > ⚠ 3 个应用未接入数据交接，12 张交接单被阻塞。 [查看详情]
 
 `count=0` 时不渲染。**不要做成可关闭的** —— 关掉就等于回到静默状态。
 
 ### 7.5 APP 能力声明（app-workspace 新标签页）
+
+**初始数据源：`GET /console/api/v1/lifecycle/apps/{app_key}/handover-capability`**
+（`01` §6.3）—— 既有的 app detail 接口**不返回**三态与资产类型，没有这个 GET 页面打开就是空白。
 
 三态展示 + 两个操作：
 
