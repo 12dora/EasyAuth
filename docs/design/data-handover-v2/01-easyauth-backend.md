@@ -102,7 +102,20 @@ models.CheckConstraint(
 | `skipped_by` | `CharField(max_length=128, blank=True)` | 超管 actor id |
 
 **状态枚举新增**：`ACTION_STATUS_BLOCKED: Final = "blocked"`，加入 `ACTION_STATUS_CHOICES` / `_VALUES`。
-`ACTION_FINISHED_STATUSES` **保持** `(done, skipped)` 不变 —— `blocked` 不是终结态，这正是 D13 的实现基础。
+`ACTION_FINISHED_STATUSES` **保持** `(done, skipped)` 不变 —— `blocked` 不是终结态，这正是 D13 的实现基础：
+`refresh_task_status()`（`lifecycle/core.py:131`）用 `all(a.status in ACTION_FINISHED_STATUSES)` 判完成，
+`blocked` 天然落不进去，无需改判定逻辑。
+
+> **但有一个必须处理的副作用**：同函数 `lifecycle/core.py:144` 用
+> `started = any(a.status != ACTION_STATUS_PENDING ...)` 判是否进 `in_progress`。
+> 由于 `blocked` 是 action 的**初始**状态之一（§5.1），一张所有 APP 都未接入的单会在**建单当场**
+> 就被判为 `in_progress`，从未经历 `pending`。这会让"待处理"筛选器漏掉这类单 —— 而它们恰恰是最需要
+> 被看见的。
+>
+> **修法**：`started` 的判定改为 `any(a.status not in (ACTION_STATUS_PENDING, ACTION_STATUS_BLOCKED) ...)`，
+> 即 `blocked` 与 `pending` 一样不算"有进展"。同时 `skipped`（`capability="none"` 的初始状态）
+> 也应排除在 `started` 之外，否则一张全是 `none` 声明的单同样会跳过 `pending`。
+> 最终判定：`started = any(a.status not in (PENDING, BLOCKED, SKIPPED) for a in actions) or 团队项有进展`。
 
 ### 2.3 `HandoverAssetType`（新表）
 

@@ -27,7 +27,7 @@ EasyTrade 是三个下游里唯一已接入交接的应用：
 |---|---|---|---|
 | B1 | 无接收人时把非空列 `Order.owner_user_id` 置 `NULL` | `easyauth_handover.py:123` 经 `_reassign_owners` | 违反模型不变量，事务本应失败却被放过 |
 | B2 | 询盘在无接收人时**静默保持原归属** | `easyauth_handover.py:132-142` | 典型的静默兜底：调用方以为交接完成，实际数据还挂在离职者名下 |
-| B3 | scope 解析把 inactive 本地用户从集合中剔除 | `backend/app/domain/authz/scope_resolution.py:49` | **代管授权在 EasyTrade 侧被静默丢弃，契约 D4 完全失效** |
+| B3 | scope 解析把 inactive 本地用户从集合中剔除 | `backend/app/domain/authz/scope_resolution.py` 的 `_managed_user_ids_from_resolved_grant()` 返回行 | **代管授权在 EasyTrade 侧被丢弃，契约 D4 完全失效** |
 
 B1/B2 的根因相同：把"能不能没有负责人"这件事藏在实现里，而不是作为契约声明出去。
 v2 用 descriptor 的 `releasable` 字段把它显式化（契约 §9.1），由 EasyAuth 在发请求前就拦掉非法组合。
@@ -90,15 +90,27 @@ COA 档案/批次创建人、需求进展与附件创建人、文档与产品上
 
 ### 3.1 修 B3：scope 解析不得剔除 inactive（**最高优先级**）
 
-`backend/app/domain/authz/scope_resolution.py:49` 当前把 `MANAGED_USERS` 里的外部 ID 映射为本地
-`users.id` 时会剔除 inactive 用户。按契约 §7.3：
+`_managed_user_ids_from_resolved_grant()` 末行当前是：
 
+```python
+return {row.id for row in rows if row.active and row.id != current_user.id}
 ```
-改为：
-  - 仅剔除「映射不到本地用户」的外部 ID，并计数 + structlog 记录（不得静默）
-  - 不再以 users.is_active == False 为由剔除
-  - 保留排除自己的既有行为
+
+按契约 §7.3 改为：
+
+```python
+return {row.id for row in rows if row.id != current_user.id}
 ```
+
+即**只去掉 `row.active` 这一个条件**，其余全部保留：
+
+- 「映射不到本地用户」的外部 ID 仍然剔除
+- 既有的 `authz.managed_users.resolved_excluded` 日志**保留不动**（它已经在打
+  `unmapped_count` 与 `inactive_count`，是排障的有效信号；只是 `inactive_count` 从
+  「被剔除的数量」变成「集合中在职状态为 false 的数量」，需同步改该日志的注释与字段语义说明）
+- 排除自己的行为不变
+
+> 注意判定字段是 `User.active`，不是 `is_active`。
 
 **这条不改，主管在代管期内根本看不到离职者的客户，本次改造的核心价值归零。**
 它与 webhook 改造相互独立，应作为第一个可独立上线、可独立验证的提交。

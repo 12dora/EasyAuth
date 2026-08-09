@@ -185,14 +185,16 @@ EasyAuth 只做存储与回传，不解析、不排序、不校验格式。长�
 
 > **所有下游 APP 必须接受这一点。**
 > EasyTrade 现有实现会在 scope 解析时过滤掉 inactive 用户
-> （`backend/app/domain/authz/scope_resolution.py:49`），若不改，代管授权在 EasyTrade 侧会被静默丢弃，D4 完全失效。
+> （`backend/app/domain/authz/scope_resolution.py` 的 `_managed_user_ids_from_resolved_grant()` 末行，
+> 判定字段是 `User.active`），若不改，代管授权在 EasyTrade 侧会被丢弃，D4 完全失效。
 > EasyProject 接入时必须从一开始就允许。
 
 对下游的具体要求：
 
 1. **`MANAGED_USERS` 的唯一事实来源是权限查询响应里的已解析人员集合**，下游必须落地这份快照并用它过滤业务查询
    （`CONTEXT.md`「管理对象快照」条已如此规定）。下游**不得**自行调用目录接口递归推算管辖关系。
-2. 把 `MANAGED_USERS` 里的外部 ID 映射为本地用户 ID 时，**不得以本地用户 `is_active=false` 为由剔除**。
+2. 把 `MANAGED_USERS` 里的外部 ID 映射为本地用户 ID 时，**不得以本地用户「已停用」为由剔除**
+   （各仓库字段名不同：EasyTrade 是 `User.active`，EasyProject 是 `directory_users.is_active`）。
 3. 映射不到本地用户的 ID 仍可剔除（那是真的不存在），但必须计数并记日志，不得静默。
 4. 业务列表按 owner 过滤时照常使用该集合，因此代管期内主管能看到离职者名下的数据。
 
@@ -200,7 +202,7 @@ EasyAuth 只做存储与回传，不解析、不排序、不校验格式。长�
 
 | APP | 现状 | 后果 | 修法 |
 |---|---|---|---|
-| EasyTrade | 消费快照，但把 inactive 本地用户从 scope 集合中剔除（`backend/app/domain/authz/scope_resolution.py:49`） | 代管授权被静默丢弃 | 去掉 inactive 剔除逻辑，仅保留"映射不到"的剔除并计数 |
+| EasyTrade | 消费快照，但把 inactive 本地用户从 scope 集合中剔除（`scope_resolution.py` 的 `_managed_user_ids_from_resolved_grant()`，`row.active` 判定） | 代管授权被丢弃（已有 `inactive_count` 日志，但仍然剔除） | 去掉 `row.active` 这一条件，仅保留"映射不到"的剔除；既有计数日志保留 |
 | EasyProject | **根本不消费快照的 `MANAGED_USERS`**，而是自己递归调 EasyAuth 下属接口推算（depth 20，5 分钟缓存，`backend/app/domain/authz/managed_users.py:19`） | 离职者不是任何人的下属，代管授权对 EasyProject 完全无效 | 改为直接消费快照里的已解析集合，删除递归推算路径 |
 
 EasyProject 这一条不是"顺带优化"，而是**它当前就违反 EasyAuth 下游契约**；不修则 D4 在 EasyProject 上永远无法生效。
