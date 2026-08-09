@@ -292,7 +292,10 @@ EasyProject：所属项目 + 截止日期）。这是各 APP 设计文档里的�
 目录同步检出 departed
   └─ apply_directory_status(): UserMirror.status=departed, 撤销全部当前授权（既有逻辑，不改）
   └─ start_offboarding():
-       ├─ ensure_handover_task(kind=offboard)  ← 若已存在 open 的 transfer 单，走 §8.3 升级
+       ├─ ensure_handover_task(kind=offboard)
+       │    ├─ 已存在 open 的 pre_offboard 单 → 按 §8.3 **升级它**（唯一允许的 kind 变更）
+       │    └─ 已存在 open 的 transfer(转岗) 单 → 该单**先按既有逻辑收尾或取消**，再新建 offboard 单
+       │       （转岗单不参与升级，§6.1）
        ├─ 快照授权 → HandoverGrantItem
        ├─ 按快照涉及的 App 生成 HandoverAppAction
        │    └─ 未声明交接能力的 App → status=blocked（§9）
@@ -583,7 +586,7 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
 
 - `snapshot_token` 必填，见 §10.5.1。
 
-- `type` 必须是 descriptor 中声明过的 `asset_types`，否则 EasyAuth 返回 `422 undeclared_asset_type` 并置 action 为 `failed`。
+- `type` 必须是 descriptor 的 `lifecycle.handover_asset_types` 里声明过的类型，否则 EasyAuth 返回 `422 undeclared_asset_type` 并置 action 为 `failed`。
 - `count=0` 的类型也必须返回，不得省略（省略与"不支持"无法区分）。
 - 响应不含明细，明细走 §10.4。
 
@@ -950,6 +953,8 @@ D11 是冻结决策，**下游文档不得单方面豁免**。经复核确认，
 | `handover_assignee_resolution_degraded` | 主管链缺失或 stale，落超管池 | task, reason |
 | `handover_task_escalated` | 到期上交 | task, from_assignee, to_assignee, escalation_level |
 | `handover_task_deferred` | 超管顺延截止时间（§7.4） | task, actor, reason, old_deadline, new_deadline, escalation_level |
+| `handover_action_unblocked` | APP 后来接入交接，blocked action 自动恢复为 pending（§9.1.1） | task, app_key, generation |
+| `handover_capability_conflict` | descriptor 同时声明 `handover.v2` 与 `handover.none`（`01` §5.2） | app_key, capabilities |
 | `handover_action_previewed` | preview 成功 | task, app_key, generation, assets |
 | `handover_action_executed` | execute 成功 | task, app_key, generation, assignments 摘要, summary |
 | `handover_action_failed` | execute 失败 | task, app_key, error code/message |

@@ -2,7 +2,9 @@
 
 > 基准文档：`00-overview-and-contract.md`（下称「契约」）。
 > 契约里的事件名、payload 形状、错误码、身份标识规则是**冻结**的，本文件不重复定义，只给 EasyTrade 侧落地方案。
-> 本仓库的改造与 EasyAuth、EasyProject **完全并行**，唯一耦合点是契约 §10 的 webhook 形状与
+> **开工条件：SDK vNext 发布后**（需要 items 回调、`handover_payloads` TypedDict、256 KiB 上限、
+> `handover_asset_types` 的 manifest 白名单、`event_type` 一致性校验 —— 现有 SDK 一个都没有）。
+> 之后与 EasyAuth、EasyProject 的实现并行推进，唯一耦合点是契约 §10 的 webhook 形状与
 > SDK 包内的契约样本（`easyauth_app_sdk.contract_samples.handover_v2`，用 `importlib.resources` 读）。
 > **不要**去 `../EasyAuth/tests/` 找样本 —— 本仓库 CI 独立检出，兄弟目录必然不存在，测试会稳定退化成 skip。
 
@@ -176,7 +178,7 @@ COA 档案/批次创建人、需求进展与附件创建人、文档与产品上
 > `capabilities` 里出现 `"handover.v2"` 是 EasyAuth 判定「已接入」的**唯一**依据，
 > 不再有独立的 `capability` 字段。
 
-`asset_types` 是**单一事实来源**：`preview` 返回的 `type` 必须全部出自这里，否则 EasyAuth 判
+`handover_asset_types` 是**单一事实来源**：`preview` 返回的 `type` 必须全部出自这里，否则 EasyAuth 判
 `422 undeclared_asset_type`。为杜绝手抄漂移，descriptor 与实现共用同一份常量表（§3.3）。
 
 ### 3.3 资产注册表（新文件 `backend/app/domain/authz/handover_assets.py`）
@@ -290,9 +292,15 @@ def execute_handover(
 2. **前置校验**（修 B1/B2）。**四项都要，缺一不可**：
    - 任一 `action == "release"` 落在 `spec.releasable is False` 的类型上 → `422 asset_type_not_releasable`。
      绝不允许写 `NULL` 进非空列，也绝不允许静默保持原归属
-   - 任一 `action == "transfer"` 的 `to_user_id` 为空 / 映射不到本地用户 / 用户非 active /
-     等于 `from_user_id` → `422`。**这一条早期漏了**：畸形 payload 会让可空列（客户、活动）
-     被静默释放，非空列（订单、询盘、任务、需求、样品）则要到 flush 时才炸
+   - 任一 `action == "transfer"` 的接收人有问题 → 拒绝。**状态码按原因分开，不能一律 422**：
+
+     | 原因 | 状态码 | 对齐依据 |
+     |---|---|---|
+     | 接收人 sub **映射不到本地用户** | **409** | 契约 §10.6「人员无法识别 → 409」。EasyProject 的 `IDENTITY_UNMAPPED` 也是 409，两个下游必须一致，否则同一种故障在 EasyAuth 上显示成两种语义 |
+     | 接收人为空 / 非 active / 等于 `from_user_id` | **422** | 载荷本身不合法，与身份系统无关 |
+
+     **这一整条早期漏了**：畸形 payload 会让可空列（客户、活动）被静默释放，
+     非空列（订单、询盘、任务、需求、样品）则要到 flush 时才炸
    - **override 的 id 必须先验证**：存在、仍属于 `from_user_id`、仍满足该类型谓词。
      任一不满足 → 整体 `409`。**不得**把无效 id 默默排除出默认集（那等于静默跳过）
    - `snapshot_token` 与当前数据状态不一致 → 整体 `409`

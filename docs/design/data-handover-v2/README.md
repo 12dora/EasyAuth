@@ -68,7 +68,8 @@ A3 / A5 的实现要用到 v2 SDK（新的 `items` 回调、`handover_payloads` 
 2. **EasyProject AG-00 两份裁定**（所有权 + system-actor 语义）：正文见 [`08`](08-easyproject-ag00-rulings.md)，
    批准后追加进 `EasyProject/contracts/ownership.md`。**它是各领域 `system_handover` 命令的门禁**，
    与 CCR 是两道独立的门。
-3. **EasyAuth ADR-002 修订**：两条现行条款与本设计抵触，修订文本见 `01` §9。
+3. **EasyAuth ADR-002 修订**：**只剩 §36 一条**（自助申请审批人允许沿主管链向上，由 D3 驱动）。
+   §19 的修订随代管废弃**一并取消**，该条款保持原样。修订文本见 `01` §9。
 
 ## 已知缺口（明确不做，但必须记着）
 

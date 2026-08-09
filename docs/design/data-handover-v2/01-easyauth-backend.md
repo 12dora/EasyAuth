@@ -103,7 +103,7 @@ models.CheckConstraint(
 **删除**：`execution_to_user`、`policy`、`execution_policy`（数据接收人下沉到条目级 D10；
 `policy.unowned_strategy` 被三值 `action` 取代）。
 
-**保留并改名**：原 `to_user` → **`grant_receiver`**（契约 §7.2.1）。迁移用 `RenameField`，**不是** Remove+Add。它不再是「数据接收人」，
+**保留并改名**：原 `to_user` → **`grant_receiver`**（契约 §10.5.1.1）。迁移用 `RenameField`，**不是** Remove+Add。它不再是「数据接收人」，
 而是**权限接收人**：该 APP 上离职者的授权转给谁。
 
 - 可为空（留空 = 只撤权、不转授，接收人自行走申请流程；这是安全默认）
@@ -353,10 +353,18 @@ models.CheckConstraint(
 | App | 迁移 | 内容 |
 |---|---|---|
 | `applications` | `00XX_app_handover_capability.py` | §2.7 五字段 + 约束 |
-| `lifecycle` | `00XX_handover_v2_schema.py` | §2.1–§2.6 全部；删除 `HandoverAppAction.to_user`/`execution_to_user`/`policy`/`execution_policy` |
+| `lifecycle` | `00XX_handover_v2_schema.py` | §2.1–§2.5.1 的全部 lifecycle 变更；**`to_user` 用 `RenameField` 改名为 `grant_receiver`**；只删除 `execution_to_user` / `policy` / `execution_policy` |
 
-`lifecycle` 迁移必须是**一个**迁移文件完成删列与建表，避免中间态。
-数据迁移：存量 `HandoverAppAction.to_user` 不做转换（未上线，无需保留），迁移里直接删列。
+`lifecycle` 迁移必须是**一个**迁移文件完成改名、删列与建表，避免中间态。
+
+> **`to_user` 绝不能删。** 它改名后就是 `grant_receiver`（§2.2），是
+> `transfer_selected_grants(action)` 的唯一输入 —— 删掉它，授权转移这一步直接失去接收人。
+> 早期版本在这里写「直接删列」，与 §2.2 的 `RenameField` 自相矛盾，
+> 而**迁移章节才是实现者真正会照抄的那一份**。
+>
+> 另外三个字段（`execution_to_user` / `policy` / `execution_policy`）确实是删除：
+> 数据接收人已下沉到条目级，`policy.unowned_strategy` 被三值 `action` 取代。
+> 存量数据不做转换（未上线）。
 
 ---
 
@@ -720,12 +728,41 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 |---|---|---|
 | POST | `.../handover-tasks/{id}/actions/{app_key}/skip` | 强行跳过（D6），body `{"reason": "..."}`，`reason` 必填且 ≥10 字符 |
 | POST | `.../handover-tasks/{id}/claim` | 超管认领 `superuser_pool` 中的单，assignee 置为该超管，`assignee_state=manager` |
+| POST | `.../handover-tasks/reassign` | **超管跨管辖范围建 `reassign` 单**（D9 的「跨部门走超管」路径）。body 同门户版，但**不做管辖范围校验**；仍校验双方 active、双方非本地管理员、`reason` ≥10 字符、接收人 ≠ 当事人。写审计 `handover_reassign_created`（`initiator` 记该超管） |
 | POST | `.../handover-tasks/{id}/escalation/defer` | 把 `escalation_deadline` 顺延 `HANDOVER_ESCALATION_DAYS`（不改 `escalation_level`），必填 `reason` ≥10 字符。**同一 `escalation_level` 内至多一次**（靠 `escalation_deferred_at` 判定，非空即拒 `409 already_deferred`）；上交后该字段清空，新层级可再顺延一次。写审计 `handover_task_deferred`，单据上永久显示「已由 {超管} 于 {时间} 顺延：{理由}」 |
 | GET | `.../handover-blocked-apps` | 未接入 APP 汇总，供控制台顶部告警条 |
 | POST | `.../apps/{app_key}/handover-capability` | 声明 `none`，body `{"reason": "..."}`；写 `declared_by`/`declared_at` |
 | POST | `.../apps/{app_key}/handover-capability/sync` | 手动触发 §5.2 descriptor 同步 |
 
 控制台复用 §6.1 的资产/明细端点，但走 `require_superuser` 且不做 assignee 校验。
+
+### 6.4 审计事件的落点（契约 §12 全表必须有主）
+
+契约 §12 冻结了 16 个事件。**每一个都必须有明确的写入位置，缺一个就是验收失败**
+（`00` §15 第 9 条要求「§12 全部出现」）。对照表：
+
+| 事件 | 写在哪 |
+|---|---|
+| `handover_task_created` | `lifecycle/offboarding.py` 建单事务内；门户 `pre-offboard` / `reassign` 建单同事务 |
+| `handover_task_upgraded` | §5.1.2 的升级事务内，与 `generation += 1` 同事务 |
+| `handover_assignee_assigned` | `lifecycle/assignee.py` 解析成功后，与 assignee 落库同事务 |
+| `handover_assignee_resolution_degraded` | 同上，落超管池分支 |
+| `handover_task_escalated` | `lifecycle/escalation.py` 上交事务内 |
+| `handover_task_deferred` | §6.3 的 `escalation/defer` 端点事务内 |
+| `handover_action_previewed` | §5.3 preview 成功后 |
+| `handover_action_executed` | §5.5 execute 成功后（含 summary 摘要） |
+| `handover_action_failed` | §5.5 失败分支 |
+| `handover_action_blocked` | §5.1 建 action 判定为 `blocked` 时，与建 action 同事务 |
+| `handover_action_unblocked` | §5.1.1 capability 恢复 reconcile 事务内 |
+| `handover_action_skipped` | §6.3 的 `skip` 端点事务内 |
+| `handover_task_completed` | `refresh_task_status()` 判定为 `completed` 的那一次 |
+| `handover_reassign_created` | 门户 `reassign` 与 §6.3 超管跨范围 `reassign` 两个入口**都要写** |
+| `handover_approver_reassigned` | §4.5.1 |
+| `handover_approval_rule_approver_replaced` | §4.5.2 |
+| `handover_capability_conflict` | §5.2 两个能力串同时出现时（告警性质，仍入审计） |
+
+`tests/unit/lifecycle/test_audit_events.py` 逐事件断言：触发一次对应操作，
+审计表出现且仅出现一行，关键字段非空。
 
 ---
 

@@ -2,7 +2,9 @@
 
 > 基准文档：`00-overview-and-contract.md`（下称「契约」）。
 > 契约中的事件名、payload 形状、错误码、身份规则是**冻结**的，本文件不重复定义，只给 EasyProject 落地方案。
-> 本仓库改造与 EasyAuth、EasyTrade **完全并行**，唯一耦合点是契约 §10 的 webhook 形状与
+> **开工条件：AG-00 批准 [`08`](08-easyproject-ag00-rulings.md) 的两份裁定 + [`09`](09-easyproject-ccr.md)
+> 的 CCR APPROVED + M03 发布 SDK vNext**（三道门禁各管一段，见 §5.2 与 `08` §1.6）。
+> 之后与 EasyAuth、EasyTrade 的实现并行推进，唯一耦合点是契约 §10 的 webhook 形状与
 > SDK 包内的契约样本（`easyauth_app_sdk.contract_samples.handover_v2`，用 `importlib.resources` 读）。
 > **不要**去 `../EasyAuth/tests/` 找样本 —— 本仓库 CI 独立检出，兄弟目录必然不存在，测试会稳定退化成 skip。
 
@@ -550,7 +552,7 @@ CCR 内容（按 `contracts/workflow.md` §6 的六要素）：
 | §2.1 修 P2（身份映射，纯内部实现） | 交接端点的 v2 改写 |
 | §2.3 `hint` 的取数实现（只读查询） | 新错误码的实现与返回 |
 | §3.1.2 终态谓词的共享选择器（只读） | descriptor 输出变更 |
-| 领域侧 `system_handover` 命令用例（§4.1.1，各模块内部）——**但这一列还另外受 AG-00 所有权裁定阻塞**，见 §0 | 测试向量更新、契约测试 |
+| 领域侧 `system_handover` 命令用例（§4.1.1，各模块内部）——**但这一列还另外受 AG-00 所有权裁定阻塞**，见 `08` §1.6 | 测试向量更新、契约测试 |
 | 上述各项的单元测试 | 端到端与契约测试 |
 
 > **两道门禁是独立的，不要混为一谈**：CCR 管的是「契约基线能不能改」，
@@ -574,7 +576,7 @@ CCR 内容（按 `contracts/workflow.md` §6 的六要素）：
 ### 5.4 成功响应体：外部契约，走 snake_case 例外
 
 三个事件的**成功**响应体形状由契约 §10.3/§10.4/§10.5 规定，是 **snake_case**
-（`asset_types`、`page_size`、`default_to_user_id`…），与 `AGENTS.md` 不变量 5 的 camelCase 约定不同。
+（`handover_asset_types`、`page_size`、`default_to_user_id`…），与 `AGENTS.md` 不变量 5 的 camelCase 约定不同。
 
 裁定：本端点的请求/响应模型**不继承 `ApiModel`**（不走 camelCase 别名生成），改用显式 snake_case
 的 Pydantic 模型，文件头注释标明"外部系统冻结契约，属不变量 5 的例外"。
@@ -602,8 +604,14 @@ CCR 内容（按 `contracts/workflow.md` §6 的六要素）：
 `backend/app/api/v1/directory.py:292` 已提供 `includeInactive` query 参数
 （`infra/repositories/directory.py:239,244` 据此决定是否过滤），默认 `False`。
 
-因此这一项**没有任何后端改动，也不需要 CCR**，纯粹是前端按场景传参（见 `06` §3.2、§4）。
-后端唯一要做的是**在 API 文档里把两种用途写清楚**，避免前端继续用默认值。
+因此这一项**本期没有任何交付物**：后端不改，而 `06`（前端）已整体取消，不会有人去改调用方。
+
+> **不要把它写成"等前端传参"的待办** —— 那会变成一个无人负责的交付项。
+> 现状如实记录：目录接口默认只返回在职人员；需要看已离职人员时调用方要显式传
+> `includeInactive=true`。等到确实有界面需要它的那一期再一并处理。
+>
+> 交接本身**不依赖**这个参数：交接单的资产明细由 `items` 事件提供，走的是本文件 §4 的路径，
+> 与目录接口无关。
 
 ### 5.7 共享热点（必须走 AG-00）
 
@@ -648,7 +656,7 @@ secret 扫描、前端检查、契约检查）。**不存在只跑"前端段"这
    AG-00 提交 [`09`](09-easyproject-ccr.md) 的 CCR；M03 发布含 v2 能力的 vendored SDK
 1. ~~§2.2 修 P1~~ —— 本期取消（代管废弃）
 2. §2.1 身份映射（修 P2）+ §2.3 `hint` + §3.1.2 终态谓词选择器（这三项**不受任何门禁限制**，可立刻开工）
-3. §5.2 提 CCR（**与 1/2 并行提，通过周期较长，越早越好**）；同时向 AG-00 核实 §5.6 的前提
+3. §5.2 提 CCR（**与 1/2 并行提，通过周期较长，越早越好**），正文见 [`09`](09-easyproject-ccr.md)
 4. §4.1 注册表 + §4.6 descriptor（共用常量，同一提交）
 5. §4.2 端点 + preview / items
 6. §4.3 §4.4 §4.5 execute
