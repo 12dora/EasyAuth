@@ -105,7 +105,9 @@ export type HandoverTaskStatus = "pending" | "in_progress" | "completed" | "canc
 export type HandoverAssigneeState = "manager" | "subject" | "superuser_pool";
 export type HandoverActionStatus =
   | "pending" | "previewed" | "executing" | "async_pending"
-  | "done" | "failed" | "skipped" | "blocked";
+  | "done" | "failed" | "skipped" | "blocked"
+  // 轮询 10 次仍拿不到终态; 系统推不动、必须人介入 (`01` §7)
+  | "async_attention_required";
 
 export interface HandoverUserRef {
   user_id: string;
@@ -149,9 +151,11 @@ export interface HandoverAction {
   status: HandoverActionStatus;
   blocked_reason: string;
   skip_reason: string;
-  /** 强行跳过的责任链; 单据上永久展示「已由 X 于 T 强行跳过」 */
+  /** 强行跳过的责任链(当前轮次); 升级时会被清空, 展示要优先读 skip_history */
   skipped_by: string;
   skipped_at: string | null;
+  /** 跨轮次永久的强跳记录; 契约 §9.2 的「单据上永久显示」只有它保证得了 */
+  skip_history: HandoverSkipRecord[];
   last_error: string;
   /** 后端算好的可用操作; 前端不得解析 last_error 猜可不可重试 */
   allowed_actions: HandoverAllowedAction[];
@@ -213,11 +217,20 @@ export interface HandoverAssetItem {
   hint: string;
 }
 
+export interface HandoverSkipRecord {
+  generation: number;
+  actor_id: string;
+  reason: string;
+  skipped_at: string;
+}
+
 export interface HandoverAssetItemsPage {
   items: HandoverAssetItem[];
   page: number;
   page_size: number;
   total: number;
+  /** 有搜索词时的未过滤总数; 无搜索词时为 null */
+  unfiltered_total: number | null;
   stale?: boolean;
 }
 ```
@@ -260,11 +273,12 @@ export interface HandoverAssetItemsPage {
 | action.status | 区块表现 |
 |---|---|
 | `blocked` | 红底，标题「未接入交接」，正文「该应用尚未实现数据交接，无法确认是否有遗留数据。请联系管理员。」**无任何操作按钮** |
-| `skipped` | 灰底，**永久**显示「已由 {skipped_by} 于 {format(skipped_at)} 强行跳过：{skip_reason}」。三个字段任一缺失 → 显示「责任链数据缺失」告警，**不得退化成匿名的「管理员」** |
+| `skipped` | 灰底，**永久**显示「已由 {谁} 于 {何时} 强行跳过：{理由}」。**优先读 `skip_history`**（跨轮次永久），当前轮次的 `skipped_by`/`skipped_at`/`skip_reason` 只是它的最新一条。三者为空但 `skip_history` 非空时展示历史轮次的记录 —— 单据升级（`pre_offboard → offboard`）会清空那三个字段，这是常规路径不是边缘情况，只读它们会让界面在升级后立刻显示「责任链数据缺失」。`skip_history` 也为空才显示该告警，**不得退化成匿名的「管理员」** |
+| `async_attention_required` | 橙底警示：「该应用的异步交接长时间没有给出结果，需要管理员在下游确认后手动了结」。门户**只读**，不提供任何按钮（`allowed_actions` 必为空）；控制台走 `async-abandon` 端点（`01` §6.3）。这是唯一一个「系统推不动、必须人介入」的状态，不能渲染成普通的处理中骨架态 |
 | `pending` | 「尚未预演」+ [预演] 按钮 |
 | `previewed` | 展开资产分配器（§6）+ [重新预演] [执行交接] |
-| `executing` / `async_pending` | 骨架 + 轮询（React Query `refetchInterval: 3000`），禁用按钮 |
-| **收到 `412 snapshot_stale`**（items 或 execute） | **立刻清掉该 action 的本地 items / override / 确认框状态**，重新拉详情，固定提示「清单已变化，请重新预演」。**不要把任何 409 当成快照失效** —— 409 是投递冲突或归属冲突，处置完全不同 |
+| `executing` / `async_pending` | 骨架 + 轮询（React Query `refetchInterval: 3000`）。**整个资产分配器切只读**，不只是禁用执行按钮 —— 后端在这两个状态下对 `PATCH .../assets/{type}`、`PUT .../overrides`、`PATCH grant_receiver` 一律返回 `409 handover_execution_in_flight`（`01` §2.4.1.1），界面留着可编辑控件只会让用户白改一遍 |
+| **收到 `412 snapshot_stale`**（items 或 execute） | **立刻清掉该 action 的本地 items / override / 确认框状态**，重新拉详情，固定提示「清单已变化，请重新预演」。**不要把任何 409 当成快照失效** —— 409 是「请求本身与应用的现实对不上」（人员无法识别、引用了快照外的条目、投递冲突、迟到的旧 generation），处置完全不同。**归属在预演之后变化走的是 412，不是 409**（契约 §10.5.1 第 4 条） |
 | **收到 `423`** | 提示「该应用中部分对象正在审批/锁定，解除后请重新预演」，按钮按 `allowed_actions` 走（这是**可恢复**的临时状态，不是失败） |
 | `done` | 绿底，按 `summary` 逐类展示五元统计（`merged`/`failed` 为 0 时可折叠，但不得隐藏字段） |
 | `failed` 且 `data_completed_at == null` | 红底，「数据未移交，权限未变更」+ `last_error`。按钮**由 `allowed_actions` 决定**，不是固定 [重试] |
@@ -554,7 +568,7 @@ key 前缀统一 `handover.*`，门户专用 `handover.portal.*`，控制台专�
 | `features/handover/AssetAllocator.test.tsx` | 三选一切换；`releasable=false` 时「全部释放」禁用而「暂不处理」「全部转给」可用；`transfer` 必选接收人；override 改回默认自动移除；整体替换提交的 payload 形状；「已安排 N 类 / 共 M 类」计数 |
 | `features/handover/HandoverUserPicker.test.tsx` | 防抖、空集渲染、排除本人 |
 | `pages/portal/PortalHandoverList.test.tsx` | 两分区渲染；剩余天数配色分档；blocked 提示无跳过按钮 |
-| `pages/portal/PortalHandoverDetail.test.tsx` | 八种 action 状态各自形态；执行前二次确认文案含数量与接收人 |
+| `pages/portal/PortalHandoverDetail.test.tsx` | **`HandoverActionStatus` 联合类型里的每一个值**各自形态（用类型驱动生成用例，别手写数量 —— 写死一个数字，枚举再加一个值时测试仍然绿）；执行前二次确认文案含数量与接收人 |
 | `pages/portal/PortalReassignDialog.test.tsx` | 理由 <10 字符不可提交；403 文案 |
 | `pages/console/lifecycle/handoverWizardController.test.ts` | 四段跳转守卫；blocked 应用不可进入后续段 |
 | `pages/console/lifecycle/HandoverTaskDetail.test.tsx` | 跳过对话框必填理由；认领与续期按钮的显示条件 |

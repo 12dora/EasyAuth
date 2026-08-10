@@ -214,6 +214,12 @@ EasyAuth 只做存储与回传，不解析、不排序、不校验格式。长�
   —— 这张单会变得**既不能跳过也不能取消**。
   v2 规定：只禁止对**真正在途**的 batch（`executing` / `async_pending`）做跳过与取消；
   `failed` 状态必须允许超管填理由后转 `skipped`，也允许整单 `cancelled`。
+- **`async_attention_required` 必须有人工出口。** 轮询到上限仍拿不到终态时，action 停在这个状态
+  且**继续持有租约**（§10.5.2 禁止未经确认就强解）。它于是同时不满足 retry（状态不是 `failed`）、
+  不满足 skip/cancel（租约未释放），也没有任何后台任务会推进它。
+  因此必须提供一个超管端点（`01` §6.3 的 `async-abandon`）：超管在下游人工确认真实结局后，
+  二选一写死 `done` / `failed`，**同一次 CAS 释放租约**。
+  没有这个出口，这条 `(subject, app)` 就永久锁死 —— 与上一条要消灭的是同一类死锁。
 - `cancelled` 单可删除；`completed` 单不可删除、不可重开（纠错走 `kind=reassign` 新单，D8）。
 
 ### 6.3 负责人状态 `assignee_state`
@@ -991,7 +997,7 @@ APP 侧仍应保留自己的行锁作为第二道防线。
 | HTTP | 语义 | action 状态 | 可重试 | 界面提示 |
 |---|---|---|---|---|
 | 200 | 成功 | **非最终批 → 保持 `previewed`**；最终批数据成功且授权步骤成功 → `done` | — | 分批时显示「已完成 N/M 批」 |
-| 202 | 异步受理 | `async_pending` | — | 轮询中 |
+| 202 | 异步受理 | `async_pending`；轮询到 `ASYNC_POLL_MAX_ATTEMPTS` 仍非终态 → **`async_attention_required`** | — | 轮询中；转 `async_attention_required` 后提示「需要管理员在下游确认后手动了结」 |
 | 400 | 请求不合法（如时间戳超窗） | `failed` | 是 | 请求被应用拒绝 |
 | 401 / 403 | 验签失败 | `failed` | 否 | 签名校验失败，请检查该应用的 webhook 密钥 |
 | 409 | **请求本身与 APP 的现实对不上**：人员无法识别、`overrides` 引用了快照外的 `asset_id`、投递冲突、迟到的旧 generation。**不含**「归属在 preview 之后变了」——那是 412（§10.5.1 第 4 条） | `failed` | 否 | 「应用拒绝了本次交接」 |
@@ -1072,6 +1078,8 @@ D11 是冻结决策，**下游文档不得单方面豁免**。经复核确认，
 | `handover_reassign_created` | 在职移交建单 | subject, initiator, reason |
 | `handover_approver_reassigned` | 待审批申请的审批人改派 | task, access_request, from_approver, to_approver |
 | `handover_approval_rule_approver_replaced` | 审批规则里的离职者被替换 | task, approval_rule, from_userid, to_userid |
+| `handover_assignee_chain_entry_malformed` | 主管链里有元素畸形被跳过（§8.2） | task, subject, chain_index |
+| `handover_reassign_scope_revoked` | `reassign` 单的管辖权复核失败（`01` §6.1） | task, initiator, subject, old_assignee |
 
 ---
 
@@ -1099,7 +1107,7 @@ D11 是冻结决策，**下游文档不得单方面豁免**。经复核确认，
 | Agent | 仓库 | 文档 | 可开工条件 |
 |---|---|---|---|
 | A1 | EasyAuth | `01-easyauth-backend.md` | 立即。**第 0 步先独做 SDK vNext**（三事件内核 + `handover_payloads` 类型 + 打包进包内的契约样本），打版本号并记 SHA |
-| A2 | EasyAuth | `02-easyauth-frontend.md` | A1 提交 `01` §6 的 HTTP API 契约章节后 |
+| A2 | EasyAuth | `02-easyauth-frontend.md` | 立即。`01` §6 已是冻结文本，**不需要等 A1"提交"** |
 | A3 | EasyTrade | `03-easytrade-backend.md` | SDK vNext 发布后 |
 | ~~A4~~ | EasyTrade | ~~`04-easytrade-frontend.md`~~ | **本期取消**（代管废弃，F1/F2/F3 不会发生） |
 | A5 | EasyProject | `05-easyproject-backend.md` | **阻塞**：AG-00 的所有权裁定 + system-actor 语义裁定 + CCR APPROVED。裁定前只能做 `05` §2.1 身份映射与 §2.3 `hint` |
