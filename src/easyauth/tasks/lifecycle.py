@@ -78,6 +78,8 @@ def disable_departed_account_task(user_mirror_id: int) -> str:
 @shared_task(name=LIFECYCLE_ESCALATION_TASK)
 def lifecycle_escalation_task() -> dict[str, int]:
     """beat 每 10 分钟: 扫到期交接单逐个 escalate。"""
+    from django.db import connection
+
     now = timezone.now()
     qs = (
         HandoverTask.objects.filter(
@@ -90,16 +92,17 @@ def lifecycle_escalation_task() -> dict[str, int]:
     )
     processed = 0
     errors = 0
-    # SQLite 无 skip_locked; PG 下用 skip_locked
     batch_ids = list(qs.values_list("id", flat=True)[:100])
+    use_skip_locked = connection.features.has_select_for_update_skip_locked
     for task_id in batch_ids:
         try:
             with transaction.atomic():
-                task = (
-                    HandoverTask.objects.select_for_update(skip_locked=True)
-                    .filter(pk=task_id)
-                    .first()
-                )
+                locked_qs = HandoverTask.objects.filter(pk=task_id)
+                if use_skip_locked:
+                    locked_qs = locked_qs.select_for_update(skip_locked=True)
+                else:
+                    locked_qs = locked_qs.select_for_update()
+                task = locked_qs.first()
                 if task is None:
                     continue
                 _ = escalate_overdue_task(task)
@@ -108,6 +111,48 @@ def lifecycle_escalation_task() -> dict[str, int]:
             logger.exception("lifecycle_escalation failed task_id=%s", task_id)
             errors += 1
     return {"processed": processed, "errors": errors}
+
+
+LIFECYCLE_SEND_REMINDER_TASK: Final = "easyauth.lifecycle.send_reminder"
+
+
+@shared_task(name=LIFECYCLE_SEND_REMINDER_TASK)
+def lifecycle_send_reminder_task(
+    task_id: int,
+    kind: str,
+    assignee_user_id: str = "",
+) -> str:
+    """outbox 消费者: 发送交接提醒。
+
+    notify 身份(easyauth-lifecycle) 尚未落地时: 记审计告警并返回, 不静默吞掉。
+    """
+    from easyauth.audit.services import AuditRecord, AuditService
+
+    task = HandoverTask.objects.filter(pk=task_id).first()
+    if task is None:
+        return "task_missing"
+    # 完整钉钉发送依赖 §7 easyauth-lifecycle 身份; 当前仅保证任务可执行且可观测。
+    _ = AuditService.record(
+        AuditRecord(
+            actor_type="system",
+            actor_id="lifecycle",
+            action="lifecycle_reminder_recorded",
+            target_type="handover_task",
+            target_id=str(task_id),
+            metadata={
+                "kind": kind,
+                "assignee_user_id": assignee_user_id,
+                "notify_identity": "pending",
+                "detail": "easyauth-lifecycle notify identity not provisioned; reminder not sent",
+            },
+        ),
+    )
+    logger.warning(
+        "lifecycle reminder skipped (notify identity pending): task_id=%s kind=%s",
+        task_id,
+        kind,
+    )
+    return "recorded"
 
 
 @shared_task(name=LIFECYCLE_DAILY_REMINDER_TASK)
@@ -138,28 +183,34 @@ def lifecycle_daily_reminder_task() -> dict[str, int]:
             task = HandoverTask.objects.select_related("assignee", "subject_user").get(
                 pk=task_id,
             )
-            kind = "daily"
+            kinds: list[str] = ["daily"]
             if task.escalation_deadline is not None:
-                if task.escalation_deadline.date() <= business_date + timedelta(days=1):
-                    kind = "deadline_soon"
-            dedup = f"handover:{task.id}:{business_date.isoformat()}:{kind}"
-            # 通知发送走 outbox 事件键; 实际 notify 身份若未配置则 dispatch 侧告警。
-            try:
-                enqueue_task(
-                    event_key=dedup,
-                    task_name="easyauth.lifecycle.send_reminder",
-                    args=[],
-                    kwargs={
-                        "task_id": task.id,
-                        "kind": kind,
-                        "assignee_user_id": (
-                            task.assignee.authentik_user_id if task.assignee else ""
-                        ),
-                    },
-                )
-                enqueued += 1
-            except Exception:
-                logger.exception("enqueue reminder failed task_id=%s", task_id)
+                deadline_local = timezone.localtime(task.escalation_deadline).date()
+                if deadline_local <= business_date + timedelta(days=1):
+                    # §7: deadline_soon 是 daily 之外的额外消息
+                    kinds.append("deadline_soon")
+            for kind in kinds:
+                dedup = f"handover:{task.id}:{business_date.isoformat()}:{kind}"
+                try:
+                    enqueue_task(
+                        event_key=dedup,
+                        task_name=LIFECYCLE_SEND_REMINDER_TASK,
+                        args=[],
+                        kwargs={
+                            "task_id": task.id,
+                            "kind": kind,
+                            "assignee_user_id": (
+                                task.assignee.authentik_user_id if task.assignee else ""
+                            ),
+                        },
+                    )
+                    enqueued += 1
+                except Exception:
+                    logger.exception(
+                        "enqueue reminder failed task_id=%s kind=%s",
+                        task_id,
+                        kind,
+                    )
     return {"claimed": claimed, "enqueued": enqueued, "as_of": str(now)}
 
 
@@ -191,17 +242,42 @@ def lifecycle_recover_expired_execution_leases_task() -> dict[str, int]:
 
 @shared_task(name=LIFECYCLE_POLL_ASYNC_TASK)
 def lifecycle_poll_async_actions_task() -> dict[str, int]:
-    """beat 每 1 分钟: 扫 async_pending / async_attention_required 并 poll。"""
-    action_ids = list(
+    """beat 每 1 分钟: 扫 async_pending / async_attention_required 并 poll。
+
+    async_attention_required 用 ASYNC_ATTENTION_POLL_INTERVAL_SECONDS(30 分钟) 退避。
+    """
+    from datetime import timedelta
+
+    from easyauth.lifecycle.core import ASYNC_ATTENTION_POLL_INTERVAL_SECONDS
+
+    now = timezone.now()
+    attention_cutoff = now - timedelta(seconds=ASYNC_ATTENTION_POLL_INTERVAL_SECONDS)
+    pending_ids = list(
         HandoverAppAction.objects.filter(
-            status__in={
-                ACTION_STATUS_ASYNC_PENDING,
-                ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
-            },
+            status=ACTION_STATUS_ASYNC_PENDING,
         ).values_list("id", flat=True)[:50],
     )
+    # renewed_at / updated_at 作为 last_polled 近似; 优先用租约 renewed_at
+    attention_qs = HandoverAppAction.objects.filter(
+        status=ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
+    )
+    attention_ids: list[int] = []
+    for action in attention_qs.select_related("task")[:50]:
+        lease = HandoverExecutionLease.objects.filter(
+            subject_user_id=action.task.subject_user_id,
+            app_id=action.app_id,
+            released_at__isnull=True,
+        ).first()
+        last = None
+        if lease is not None:
+            last = getattr(lease, "renewed_at", None) or lease.lease_expires_at
+        if last is None or last <= attention_cutoff:
+            attention_ids.append(int(action.pk))
+
+    action_ids = pending_ids + attention_ids
     polled = 0
     errors = 0
+    skipped = 0
     worker_id = f"async-poll:{uuid.uuid4().hex[:10]}"
     for action_id in action_ids:
         try:
@@ -215,7 +291,20 @@ def lifecycle_poll_async_actions_task() -> dict[str, int]:
         except Exception:
             logger.exception("poll async failed action_id=%s", action_id)
             errors += 1
-    return {"polled": polled, "errors": errors, "scanned": len(action_ids)}
+    # 因 30min 退避跳过的 attention 数量
+    skipped = max(
+        0,
+        HandoverAppAction.objects.filter(
+            status=ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
+        ).count()
+        - len(attention_ids),
+    )
+    return {
+        "polled": polled,
+        "errors": errors,
+        "scanned": len(action_ids),
+        "attention_skipped": skipped,
+    }
 
 
 def _record_disable_event(user: UserMirror, *, ok: bool, detail: str) -> None:

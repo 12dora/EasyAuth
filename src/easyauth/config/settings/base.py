@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Final
 from urllib.parse import unquote, urlparse
 
+from celery.schedules import crontab
 from django.core.exceptions import ImproperlyConfigured
 
 if TYPE_CHECKING:
@@ -318,6 +319,8 @@ EASYAUTH_CONNECTORS = tuple(
 
 CELERY_BROKER_URL = os.environ.get("CELERY_BROKER_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = os.environ.get("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
+CELERY_TIMEZONE = "Asia/Shanghai"
+CELERY_ENABLE_UTC = True
 CELERY_TASK_EAGER_PROPAGATES = True
 CELERY_TASK_ROUTES = {
     "easyauth.webhooks.deliver": {"queue": "webhooks"},
@@ -335,7 +338,7 @@ CELERY_IMPORTS = (
     "easyauth.tasks.outbox",
     "easyauth.tasks.notify",
 )
-CELERY_BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
+CELERY_BEAT_SCHEDULE: dict[str, dict[str, object]] = {
     "runtime-heartbeat": {
         "task": "easyauth.health.runtime_heartbeat",
         "schedule": float(os.environ.get("EASYAUTH_RUNTIME_HEARTBEAT_SECONDS", "20")),
@@ -394,10 +397,14 @@ CELERY_BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
         "task": "easyauth.lifecycle.escalation",
         "schedule": float(os.environ.get("EASYAUTH_LIFECYCLE_ESCALATION_SECONDS", "600")),
     },
-    # 交接 v2: 每日提醒(秒级 interval; crontab 扩展另议, 默认 24h)。
+    # 交接 v2: 每日提醒 — 默认 crontab 09:00(CELERY_TIMEZONE=Asia/Shanghai); 测试可秒级覆盖。
     "lifecycle-daily-reminder": {
         "task": "easyauth.lifecycle.daily_reminder",
-        "schedule": float(os.environ.get("EASYAUTH_LIFECYCLE_DAILY_REMINDER_SECONDS", "86400")),
+        "schedule": (
+            float(os.environ["EASYAUTH_LIFECYCLE_DAILY_REMINDER_SECONDS"])
+            if os.environ.get("EASYAUTH_LIFECYCLE_DAILY_REMINDER_SECONDS")
+            else crontab(hour=9, minute=0)
+        ),
     },
     # 交接 v2: 过期执行租约恢复。
     "lifecycle-recover-execution-leases": {
