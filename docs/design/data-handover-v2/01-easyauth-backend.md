@@ -137,7 +137,8 @@ models.CheckConstraint(
 | `snapshot_token` | `CharField(max_length=128, blank=True)` | 最近一次 preview 返回的令牌（契约 §10.5.1），**不出现在任何 HTTP 响应里** |
 | `confirm_version` | `PositiveIntegerField(default=0)` | 单调递增。**preview 成功、修改类型级 `default_action`/`default_to_user`、整体替换 overrides、修改 `grant_receiver` —— 这四件事任意一件都 +1。** execute 请求必须回带匹配值，否则 `409 confirm_version_stale`（§6.1） |
 | `overrides_version` | `PositiveIntegerField(default=0)` | 单调递增，每次 override 集合被替换 +1。`PUT overrides` 必须回带匹配值，否则 409 |
-| `skipped_at` | `DateTimeField(null=True, blank=True)` | 强行跳过的时间，与 `skipped_by` 一起构成责任链 |
+| `skipped_at` | `DateTimeField(null=True, blank=True)` | 强行跳过的时间，与 `skipped_by` 一起构成责任链（**当前轮次**，升级时会清空） |
+| — | **新表** `HandoverActionSkipRecord`（append-only） | `action_snapshot_id` / `generation` / `app_key` / `actor_id` / `reason` / `skipped_at`。**强行跳过的责任链只能靠它** —— action 上的三个字段在升级时会被清空（§5.1.2），而 `AuditLog` 有 **365 天保留期**（`config/data_retention.py:32-36`）之后会被物理删除。契约 §9.2 要求"单据上永久显示"，靠一张会过期的日志表是保证不了的。详情响应返回 `skip_history`；该表**豁免 retention**，且带 skip 历史的 task 不允许删除 |
 | `approval_instance_warning` | `JSONField(null=True, blank=True)` | §4.5.3 的在途钉钉审批警示 `{message, link, recorded_at}`，建单时一次性写入，**升级与完成都不清除**。没有这一列的话 §4.5.3 的「必须持久化」根本无处可写 |
 | `last_error_raw` | `TextField(blank=True)` | **新增**。下游原始响应体，截断 2000 字符，**只在控制台对超管展示且每次查看写审计**。既有的 `last_error`（`lifecycle/models.py:233`）改为只放「状态码 + 本地分类文案 + 白名单提取的 `code`/`message`，各截断 200 字符并脱敏」，门户与控制台都能看（契约 §10.6） |
 | `batch_seq` | `PositiveIntegerField(default=0)` | 已分配的最大批次号。**只是分配器**；批次的事实来源是 §2.4.1 的 `HandoverExecutionBatch` 行 |
@@ -1197,7 +1198,7 @@ def complete_data_phase(batch: HandoverExecutionBatch) -> None:
 | kind | 授权处理 |
 |---|---|
 | `offboard` | 走 `transfer_selected_grants(action)`，把快照授权转给 `grant_receiver` |
-| `transfer`（转岗） | **不走这条路**。走既有的 `TransferPlan` 差异确认（`lifecycle/transfer.py`），按新岗位重算 |
+| `transfer`（转岗） | **不走这条路**。走既有的 `TransferPlan` 差异确认（`lifecycle/transfer.py`），按新岗位重算。**但确认时机要卡住**，见下 |
 | `pre_offboard` / `reassign` | **一动不动**（D7 / D9） |
 
 > **`GRANT_MUTATING_KINDS = (OFFBOARD, TRANSFER)` 不能用在 action 执行路径上。**
@@ -1206,6 +1207,19 @@ def complete_data_phase(batch: HandoverExecutionBatch) -> None:
 > 拿前者当后者用，转岗单会**同时**走接收人转授和 TransferPlan 差异，授权被改两遍。
 >
 > 执行路径用独立常量：`ACTION_GRANT_TRANSFER_KINDS: Final = (HANDOVER_KIND_OFFBOARD,)`。
+
+#### 转岗单：`confirm_transfer_grant_diff()` 必须等数据先搬完
+
+`confirm_transfer_grant_diff()` 锁住 task 之后**必须断言**：
+全部 APP action 已经是 `done` / `skipped`，且**不存在未释放的 execution lease**；
+不满足 → `409 handover_data_not_completed`，**授权零写入**。
+
+> 不卡这一下，"权限已转、数据没搬"这个我们花大力气修掉的状态会**从转岗这条路原样回来**：
+> 超管先确认岗位差异、旧岗位权限当场被撤，随后某个 APP 的 execute 失败 ——
+> 单据没完成，权限却已经变了，而数据重试**不会**把权限恢复回去，
+> 也没有任何子状态能表达这个中间态。
+>
+> 固定顺序：**全部数据 action 收敛 → 单事务应用 TransferPlan 差异 → completed**。
 
 - 全部成功后：`action.status = done` → `refresh_task_status(task)`。
 
@@ -1271,7 +1285,19 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 |---|---|---|---|
 | GET | `/me/handover-tasks` | 登录即可 | 返回两组：`as_assignee`（我负责的）、`as_subject`（我是当事人的） |
 | POST | `/handover-tasks/pre-offboard` | 登录即可，且自己无 open 的 offboard/transfer/pre_offboard 单 | 在职提前交接建单（D7），`kind=pre_offboard`，assignee=本人 |
-| POST | `/handover-tasks/reassign` | 我对 `subject` 有管辖权（契约 §4 的主管链判定，**不走 `resolve_managed_users`**）且双方 active。**必带 `Idempotency-Key` 头**（≤128 字符）| 在职移交（D9）。body：`{"subject_user_id": "<OIDC sub>", "app_keys": ["easytrade", ...], "reason": "至少 10 字"}`。**`app_keys` 必填且非空** —— 只为列出的 APP 建 action，**不得**隐式把该员工在其他 APP 的数据也拉进来（`00` §8.4 明说同一 subject 可以有多张针对不同 APP 的 open `reassign` 单）。缺 `subject_user_id` / `app_keys` → `422`；`reason` 不足 10 字 → `422 reason_required` |
+| POST | `/handover-tasks/reassign` | 我对 `subject` 有管辖权（契约 §4 的主管链判定，**不走 `resolve_managed_users`**）且双方 active。**必带 `Idempotency-Key` 头**（≤128 字符）|
+
+> **`kind=reassign` 的管辖权要持续复核，不能只在建单时查一次。**
+> 详情、items、overrides、以及所有 mutation，都必须在 assignee 校验**之后**再按当前目录
+> 重跑一次契约 §4 的判定。失权 → fail-closed（403），把单据移交 `superuser_pool`
+> 并写审计 `handover_reassign_scope_revoked`。
+>
+> 不复核会这样：A 合法地为下属 B 建了 reassign 单；B 调岗、目录同步也更新了主管链；
+> 但 A 仍然是这张单的 `assignee` —— 他照样能翻 items、改接收人、点执行，
+> **把一个已经不归他管的人的资产搬走**。
+>
+> 超管创建或认领的单据存一个不可变的 `authority_source="superuser"`，
+> **只有这一种来源豁免主管链复核**。 在职移交（D9）。body：`{"subject_user_id": "<OIDC sub>", "app_keys": ["easytrade", ...], "reason": "至少 10 字"}`。**`app_keys` 必填且非空** —— 只为列出的 APP 建 action，**不得**隐式把该员工在其他 APP 的数据也拉进来（`00` §8.4 明说同一 subject 可以有多张针对不同 APP 的 open `reassign` 单）。缺 `subject_user_id` / `app_keys` → `422`；`reason` 不足 10 字 → `422 reason_required` |
 | GET | `/handover-tasks/{task_id}` | 我是 assignee 或 subject | 单据详情，含各 APP action、资产分类、距上交剩余天数 |
 | GET | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}/items` | 同上 | 明细分页，query: `page`、`page_size`、`q` |
 | GET | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}/overrides` | 同上 | **返回当前 generation 的完整 override 集合**与 `overrides_version`。`PUT` 是整体替换，没有这个读回入口，用户刷新页面后改一条就会把其余全部删掉 |
@@ -1657,6 +1683,20 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 
    状态码**白名单**是有意的：不允许 APP 随便返回 2xx/3xx，否则 EasyAuth 的状态机会被喂进
    它无法解释的输入。白名单外的值按 500 处理并写 SDK 侧告警。
+
+6.2 **`WebhookVerificationError` 必须带稳定 reason，时间戳超窗与签名不匹配要分开**。
+   现在 SDK 把两者一律当验签失败（`webhook.py:61-73` → `lifecycle.py:108-111` 统一 403），
+   而契约 §10.6 里 **400 可重试、401/403 不可重试**：
+   一次时钟偏差或请求延迟超过 300 秒，会被 EasyAuth 判成"签名校验失败，请检查该应用的
+   webhook 密钥"、隐藏重试按钮 —— 时钟恢复之后也重投不了，只能强行 skip 或取消整单，
+   而数据其实一条都没交接。
+
+   | reason | HTTP |
+   |---|---|
+   | `INVALID_TIMESTAMP` / `TIMESTAMP_SKEW` | **400** |
+   | 签名不匹配、鉴权头缺失 | 各下游既有约定（EasyTrade 403 / EasyProject 401） |
+
+   **禁止解析异常文案来分支** —— reason 是结构化字段。
 
 7. **回调异常边界不得回显异常文本**（契约 §10.6）：现有
    `_error_response(500, "handover_callback_failed", f"交接回调执行失败: {error}")`
