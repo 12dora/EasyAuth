@@ -10,7 +10,7 @@
 
 | 模块 | 改动性质 | 说明 |
 |---|---|---|
-| `lifecycle/models.py` | 扩展 + 破坏性重构 | **新增 8 张表**：`HandoverAssetType` / `HandoverAssetOverride` / `HandoverExecutionBatch` / `HandoverDeliveryAttempt` / `HandoverExecutionLease` / `HandoverLeaseFence` / `HandoverBatchPlan` / `HandoverActionSkipRecord`；`HandoverTask` 加 7 字段（assignee / assignee_state / escalation_level / generation / escalation_deadline / last_reminded_on / escalation_deferred_at）；`HandoverAppAction` 数据接收人下沉到条目级、保留并改名 `grant_receiver`，另加 generation / snapshot_token / confirm_version / overrides_version / batch_seq / data_completed_at / blocked_reason / skip_reason / skipped_by / skipped_at / last_error_raw / async_status_url / async_poll_attempts |
+| `lifecycle/models.py` | 扩展 + 破坏性重构 | **新增 8 张表**：`HandoverAssetType` / `HandoverAssetOverride` / `HandoverExecutionBatch` / `HandoverDeliveryAttempt` / `HandoverExecutionLease` / `HandoverLeaseFence` / `HandoverBatchPlan` / `HandoverActionSkipRecord`；`HandoverTask` 加 7 字段（assignee / assignee_state / escalation_level / generation / escalation_deadline / last_reminded_on / escalation_deferred_at）；`HandoverAppAction` 数据接收人下沉到条目级、保留并改名 `grant_receiver`，另加 generation / snapshot_token / confirm_version / overrides_version / batch_seq / data_completed_at / blocked_reason / skip_reason / skipped_by / skipped_at / last_error_raw。<br>**`async_status_url` / `async_poll_attempts` / `preview_generation` / `attempts` 是既有列，不要写 `AddField`**（`lifecycle/models.py:207-231`，`0001_initial` 就有）—— §2.8 要求把 lifecycle 变更手写成**一个**迁移文件，照着「新增」清单写会在 `migrate` 时报 duplicate column |
 | `lifecycle/assignee.py` | **新建** | 主管链解析（契约 §8.2） |
 | `lifecycle/escalation.py` | **新建** | 交接单超时上交（契约 §7.4）。~~代管授权~~已废弃 |
 | `lifecycle/handover.py` | 重构 | webhook payload v2、新增 items 事件、blocked 判定 |
@@ -81,6 +81,16 @@ models.UniqueConstraint(
 )
 ```
 
+**两条既有 CheckConstraint 必须随枚举扩容一起 `RemoveConstraint` + `AddConstraint`，
+只改 Python 常量是不够的** —— 字面量已经烤进 DDL 了：
+
+| 约束 | 位置 | 为什么必须重建 |
+|---|---|---|
+| `lifecycle_task_kind_supported` | `lifecycle/models.py:141-144`，`Q(kind__in=HANDOVER_KIND_VALUES)` | 本节往 `HANDOVER_KIND_VALUES` 加了 `pre_offboard` / `reassign`；不重建，建这两种单直接撞 CHECK 抛 IntegrityError |
+| `lifecycle_action_status_supported` | `lifecycle/models.py:247-250`，`Q(status__in=ACTION_STATUS_VALUES)` | §2.2 往 `ACTION_STATUS_VALUES` 加了 `blocked` / `async_attention_required`；不重建，写这两个状态同样 IntegrityError |
+
+§2.8 要求把 lifecycle 变更合并成**一个手写迁移文件**，这两条 Alter 最容易在合并时丢掉。
+
 新增约束：
 
 ```python
@@ -99,6 +109,17 @@ models.CheckConstraint(
 ```
 
 ### 2.2 `HandoverAppAction`（`lifecycle/models.py:163`，破坏性修改）
+
+**先说四个既有列的去留**，本节下面的删除/改名/新增三张表是在此之上的增量：
+
+| 既有列 | 去留 | 理由 |
+|---|---|---|
+| `preview_generation`（`models.py:207-209`） | **保留**，且 §5.3 必须继续用 | 语义是「preview 请求序号」，**与 `generation`（轮次）无关，同名不同义**。既有代码每次 preview 先 `+1` 再固化进 `_PreviewRequest.generation`（`handover.py:515-519`），落库时用 `filter(pk=..., preview_generation=...)` 条件加锁（`:554-569`）。**只按 `(action_id, generation)` 做 CAS 是降级**：那只挡得住跨轮次的迟到响应，挡不住同一轮次内的两次并发 preview（用户双击、前端重试、门户与控制台同时点）—— 两份响应都会通过，都去重建 `HandoverAssetType`（撞 `lifecycle_asset_type_unique_per_generation` 直接 500），都 `confirm_version + 1`（用户刚确认的那版立刻 stale，execute 稳定拿 `409 confirm_version_stale`）。<br>**升级时不重置**：它是全局单调序号，清零反而会让升级前的在途响应重新匹配上。<br>⚠️ 既有的 `_PreviewRequest.generation`（`handover.py:68`）指的是**这一列**，不是 `task.generation`，接字段时极易搞错 |
+| `preview_payload`（`:203-206`） | **删除** | v2 的事实来源是 `HandoverAssetType` 行。留着就是第二份会漂移的真相，而 `admin_console/lifecycle_api.py:920-921` 会把它原样吐进控制台响应 —— 升级后控制台仍挂着上一轮的清单，正是 §5.1.2 要防的「用上一轮中间态污染这一轮」 |
+| `result_payload`（`:210-213`） | **删除** | 同上，事实来源改为 `HandoverDeliveryAttempt.response_payload` |
+| `attempts`（`:232`） | **保留为纯计数**，§5.1.2 重置为 `0` | §5.5.1 废掉了全部基于它的判断，但 `_execute_action`（`handover.py:161-170`）仍在写它。不重置就会跨轮次累加，成为一个没人负责的计数器 |
+
+§2.8 的迁移内容要同步补上 `preview_payload` / `result_payload` 两个 `RemoveField`。
 
 **删除**：`execution_to_user`、`policy`、`execution_policy`（数据接收人下沉到条目级 D10；
 `policy.unowned_strategy` 被三值 `action` 取代）。
@@ -138,7 +159,7 @@ models.CheckConstraint(
 | `confirm_version` | `PositiveIntegerField(default=0)` | 单调递增。**preview 成功、修改类型级 `default_action`/`default_to_user`、整体替换 overrides、修改 `grant_receiver` —— 这四件事任意一件都 +1。** execute 请求必须回带匹配值，否则 `409 confirm_version_stale`（§6.1） |
 | `overrides_version` | `PositiveIntegerField(default=0)` | 单调递增，每次 override 集合被替换 +1。`PUT overrides` 必须回带匹配值，否则 409 |
 | `skipped_at` | `DateTimeField(null=True, blank=True)` | 强行跳过的时间，与 `skipped_by` 一起构成责任链（**当前轮次**，升级时会清空） |
-| — | **新表** `HandoverActionSkipRecord`（append-only） | `action_snapshot_id` / `generation` / `app_key` / `actor_id` / `reason` / `skipped_at`。**强行跳过的责任链只能靠它** —— action 上的三个字段在升级时会被清空（§5.1.2），而 `AuditLog` 有 **365 天保留期**（`config/data_retention.py:32-36`）之后会被物理删除。契约 §9.2 要求"单据上永久显示"，靠一张会过期的日志表是保证不了的。详情响应返回 `skip_history`；该表**豁免 retention**，且带 skip 历史的 task 不允许删除 |
+| — | **新表** `HandoverActionSkipRecord`（append-only，完整定义见 §2.2.1） | **强行跳过的责任链只能靠它** —— action 上的三个字段在升级时会被清空（§5.1.2），而 `AuditLog` 有 **365 天保留期**（`config/data_retention.py:32-36`）之后会被物理删除。契约 §9.2 要求"单据上永久显示"，靠一张会过期的日志表是保证不了的。详情响应返回 `skip_history`；该表**豁免 retention**，且带 skip 历史的 task 不允许删除 |
 | `approval_instance_warning` | `JSONField(null=True, blank=True)` | §4.5.3 的在途钉钉审批警示 `{message, link, recorded_at}`，建单时一次性写入，**升级与完成都不清除**。没有这一列的话 §4.5.3 的「必须持久化」根本无处可写 |
 | `last_error_raw` | `TextField(blank=True)` | **新增**。下游响应体的**脱敏投影**（不是原文），UTF-8 截断 2000 字节，**只在控制台对超管展示且每次查看写审计**。既有的 `last_error`（`lifecycle/models.py:233`）改为只放「状态码 + 本地分类文案 + 白名单提取的 `code`/`message`，各截断 200 字符并脱敏」，门户与控制台都能看。口径以契约 §10.6 为准 |
 | `batch_seq` | `PositiveIntegerField(default=0)` | 已分配的最大批次号。**只是分配器**；批次的事实来源是 §2.4.1 的 `HandoverExecutionBatch` 行 |
@@ -148,6 +169,35 @@ models.CheckConstraint(
 | `blocked_reason` | `CharField(max_length=64, blank=True)` | `capability_undeclared` / `descriptor_unreachable` |
 | `skip_reason` | `TextField(blank=True)` | 超管强行跳过的理由（D6） |
 | `skipped_by` | `CharField(max_length=128, blank=True)` | 超管 actor id |
+
+#### 2.2.1 `HandoverActionSkipRecord`（新表，append-only）
+
+其余 7 张新表在 §2.3–§2.4.2 都有完整 `class` 定义，只有它原先只在上面的字段表里占一个单元格
+—— 而 §2.8 说得很清楚「**迁移章节才是实现者真正会照抄的那一份**」。补齐规格：
+
+```python
+class HandoverActionSkipRecord(models.Model):
+    task = FK(HandoverTask, on_delete=SET_NULL, null=True, related_name="skip_records")
+    task_id_snapshot = PositiveIntegerField()     # 非空; task 被删后仍可按单号归集
+    action_snapshot_id = PositiveIntegerField()   # 非空
+    generation = PositiveIntegerField()
+    app_key = CharField(max_length=64)
+    actor_id = CharField(max_length=128)          # 超管的 OIDC sub
+    reason = TextField()
+    skipped_at = DateTimeField(auto_now_add=True)
+
+    class Meta:
+        indexes = [models.Index(fields=["task_id_snapshot"])]
+```
+
+- **FK 必须 `SET_NULL` + 快照列**，写法与 §4.5.2 的 `ApprovalRuleReplacementRequired` 一致。
+  只留一个裸 `action_snapshot_id` 是不够的：`HandoverAppAction.task` 是 `CASCADE`
+  （`lifecycle/models.py:172-176`），action 被级联删除后那个整数回指不了任何单据，
+  同段声称的「**带 skip 历史的 task 不允许删除**」也就没有可查询的 task 维度列去实现。
+- **retention 豁免要落到实处**：在 `config/data_retention.py` 的清理集合里显式**不加入**这张表，
+  并加一条单测断言。`AuditLog` 是 365 天物理删除（`config/data_retention.py:36`
+  的 `AUDIT_LOG_RETENTION_DAYS = 365`），契约 §9.2 要的是「单据上**永久**显示」，
+  靠一张会过期的日志表保证不了。
 
 **状态枚举新增两个**：`ACTION_STATUS_BLOCKED: Final = "blocked"` 与
 `ACTION_STATUS_ASYNC_ATTENTION_REQUIRED: Final = "async_attention_required"`（§7 轮询超次数用），
@@ -325,7 +375,15 @@ class HandoverAssetOverride(models.Model):
 > 回填就违反 append-only，追加又撞 `(action, generation, batch_seq)` 唯一约束。
 > 结果是**一次请求的最终成败根本无处安放**。拆成两张即可：批次不可变，投递可重试。
 
-**`HandoverExecutionBatch`（不可变，一批一行）**
+**`HandoverExecutionBatch`（**请求侧**不可变，一批一行）**
+
+> **别把「不可变」实现成 `save()` 拦截。** 不可变的只有请求侧三列
+> （`request_payload` / `request_hash` / `snapshot_token`，创建后只读，审计凭据在那里）；
+> `status` / `data_completed_at` 全程都要写。
+> 本仓库同一个文件里就有 `OnboardingTemplateRevision.save()` 直接 `raise ValidationError`
+> 的先例（`lifecycle/models.py:481-489`），是实现者手边最近的模仿对象 ——
+> 照它写，`complete_data_phase()` 第一次改状态就抛异常，整条同步 200 收尾路径挂掉，
+> 连带租约不释放。用列级注释 + 单测断言表达只读，不要用 `save()` override。
 
 ```python
 class HandoverExecutionBatch(models.Model):
@@ -402,10 +460,24 @@ class HandoverDeliveryAttempt(models.Model):
 > 所以库层 CHECK 要写成：
 >
 > ```
-> outcome IN ('sent', 'superseded') OR http_status IS NOT NULL
+> outcome IN ('sent', 'superseded') OR http_status IS NOT NULL OR error_text <> ''
 > ```
 >
 > 漏掉 `superseded` 的话，旧 generation 的 outbox 出队时那条作废记录**根本落不了库**。
+>
+> **`error_text <> ''` 这一段同样不能漏，它兜的是「根本没拿到 HTTP 状态码」那一类失败。**
+> 现有代码里这类异常不带状态码：`webhooks/hooks.py:87-89`（连接失败 / 超时 / SSRF 拒绝）、
+> `:122-124`（轮询 GET 同理）、`:141-146`（响应体不是 JSON、或不是 JSON 对象）
+> 全都 `raise HookCallError(message)`，`HookCallError.status_code` 是 `None`（`:42-45`），
+> 只有 `:129-131` 的非 2xx 才带状态码。
+>
+> 少了这一段会怎样：**下游宕机或超时**（最常见的故障，也正是租约机制存在的全部理由）时，
+> 按「写 `outcome="failed"`、`http_status=NULL`」落库会**违反 CHECK 抛 IntegrityError**，
+> 于是「写 failed + 同一次 CAS 释放租约」整个事务回滚 ——
+> delivery 永远停在 `sent`、batch 永远停在 `executing`、`released_at` 永远是 NULL。
+> 接着 §5.5.1 禁止对 `executing` batch 与未释放租约做 skip/cancel，
+> 这张单**既不能执行、不能跳过、也不能取消**；而恢复任务对「网络不可达」的处置是
+> 「续约后退避重试，不释放」，下游长期不可达就是无限期锁死。
 
 **FK 定死为 `SET_NULL`，不是 `PROTECT`，更不是 `CASCADE`：**
 
@@ -623,7 +695,11 @@ class HandoverLeaseFence(models.Model):
 ```
 事务 1（execute 入口）:
     select_for_update(action)
-    fence = UPDATE HandoverLeaseFence SET next_fence = next_fence + 1 RETURNING next_fence
+    fence = INSERT INTO lifecycle_handoverleasefence (subject_user_id, app_id, next_fence)
+            VALUES (%s, %s, 2)
+            ON CONFLICT (subject_user_id, app_id)
+            DO UPDATE SET next_fence = lifecycle_handoverleasefence.next_fence + 1
+            RETURNING next_fence            -- 首行由本语句自己建, 不许单独 get_or_create
     INSERT HandoverExecutionLease(subject_user, app, action, generation, batch_seq,
                                   owner, fence, lease_expires_at=now+LEASE_TTL)
         ← 条件唯一约束冲突 → 立即 409 handover_execution_in_flight
@@ -646,7 +722,8 @@ class HandoverLeaseFence(models.Model):
 | **429（APP 侧限流，action 保持 `previewed`）** | **同样要释放**。这一行最容易漏：429 在契约 §10.6 里写的是「不向用户报错、退避后重试」，看着不像终结路径，但对本次 execute 而言它就是终结了 —— 不释放的话，APP 前面挂个网关限流一次，那条 `(subject, app)` 就永久锁死。<br>落库口径也要写死，否则 §2.4.1 的 delivery 状态机套不上它：**本次 delivery 记 `outcome="failed"` + `http_status=429`**（不新造 `rate_limited` 取值），batch 退回 `pending`，按 `Retry-After` 重新入队一次新 delivery（重走入口事务、重新取租约）。留在 `sent` 是不行的 —— `sent` 的 batch 属于 `executing`，会触发 §5.5.1 的 skip/cancel 禁令 |
 | **400** / 409 / 422 / 401 / 403 / 5xx（`failed`） | 同上，写 `failed` 的那次 CAS 同时释放。**400 别漏** —— 契约 §10.6 把它标为「可重试的 `failed`」，看着像还没结束，但对本次 delivery 而言它已经终结了 |
 | **授权转移（事务 B/C）失败** | 写 `action.status="failed"` 的那次 CAS 同时释放。**这一行不按 HTTP 状态码分，容易整个漏掉**：数据 webhook 明明返回了 200，失败发生在之后的权限转授里。不释放的话，界面会出现「已经失败了却什么都点不了」的窗口（§5.5.1 禁止对未释放租约的 action 做 skip/cancel） |
-| 上表之外的任何状态码 | **不存在**。`ALLOWED_BUSINESS_STATUS`（§8）与本表必须逐一对应，加一个码就要加一行 |
+| **无响应**（连接失败 / 超时 / TLS / SSRF 拒绝 / 响应体不是 JSON） | action 置 `failed`（可重试），delivery 记终态 `outcome="failed"`、`http_status=NULL`、`error_text` 写本地分类文案，**同一次 CAS 释放租约**。<br>这一行**不按状态码分，最容易整个漏掉** —— 而它恰恰是最常见的故障，也是租约机制存在的全部理由。库层 CHECK 必须能容纳 `http_status IS NULL` 的终态行，见 §2.4.1 |
+| 上表之外的任何结局 | **不存在**。注意是「结局」不是「状态码」—— 无状态码的传输失败也必须在本表里有主。`ALLOWED_BUSINESS_STATUS`（§8）与本表的状态码行必须逐一对应，加一个码就要加一行 |
 
 > **漏掉任何一行，那条 `(subject, app)` 就被永久锁住**：条件唯一约束会让后续的 execute、
 > 以及升级（§5.1.2 要求无在途租约）统统撞上 `handover_execution_in_flight`，
@@ -667,8 +744,12 @@ LEASE_RENEW_INTERVAL: Final = LEASE_TTL / 3        # 续约周期不得超过 TT
 **周期性续约**（CAS 更新 `lease_expires_at` / `renewed_at`）。
 这两个常量进单元测试断言。
 
-**fence 用取号器原子分配**：`UPDATE ... SET next_fence = next_fence + 1 RETURNING next_fence`。
-不允许用「当前最大 fence + 1」这种读后写。
+**fence 用取号器原子分配**：单语句 upsert（`INSERT ... ON CONFLICT DO UPDATE SET
+next_fence = next_fence + 1 RETURNING next_fence`，全文见 §2.4.2 的事务 1）。
+不允许用「当前最大 fence + 1」这种读后写，**也不允许先 `get_or_create` 再 `UPDATE`** ——
+某个 `(subject, app)` 的第一次 execute 时那一行还不存在，裸 `UPDATE` 会影响 0 行、
+`RETURNING` 空集，而补 `get_or_create` 会让两个并发的首次 execute 撞
+`lifecycle_fence_unique` 抛 IntegrityError，而不是预期的 `409 handover_execution_in_flight`。
 
 **所有与执行相关的写回都必须是 CAS**，条件固定为：
 
@@ -839,7 +920,7 @@ models.CheckConstraint(
 | `applications` | `00XX_app_handover_capability.py` | §2.7 五字段 + 约束 |
 | `access_requests` | `00XX_approval_routing_state.py` | §4.5.1 的 `approval_routing_state` / `routing_reason` 两字段 + 默认值 |
 | `lifecycle` | `00XX_approval_rule_replacement.py` | §4.5.2 的 `ApprovalRuleReplacementRequired` 表 + 条件唯一约束 |
-| `lifecycle` | `00XX_handover_v2_schema.py` | §2.1–§2.5.1 的全部 lifecycle 变更：**8 张新表**（含 `HandoverActionSkipRecord` —— 它只在 §2.2 的字段表里出现过一行，最容易在这里漏掉；漏了它，强行跳过的责任链就只剩会在升级时被清空的三个字段和 365 天后物理删除的 `AuditLog`，契约 §9.2 要求的「单据上永久显示」直接失效）、`HandoverTask` 的 7 个新字段、`HandoverAppAction` 的全部新字段（含 `last_error_raw`）；**`to_user` 用 `RenameField` 改名为 `grant_receiver`**；只删除 `execution_to_user` / `policy` / `execution_policy`；§2.2 与 §2.4 的两个**约束触发器**用 `RunSQL` 建（含 reverse_sql） |
+| `lifecycle` | `00XX_handover_v2_schema.py` | §2.1–§2.5.1 的全部 lifecycle 变更：**8 张新表**（含 §2.2.1 的 `HandoverActionSkipRecord` —— 它最容易在这里漏掉；漏了它，强行跳过的责任链就只剩会在升级时被清空的三个字段和 365 天后物理删除的 `AuditLog`，契约 §9.2 要求的「单据上永久显示」直接失效）、`HandoverTask` 的 7 个新字段、`HandoverAppAction` 的全部新字段（含 `last_error_raw`）；**`to_user` 用 `RenameField` 改名为 `grant_receiver`**；删除 `execution_to_user` / `policy` / `execution_policy` / **`preview_payload` / `result_payload`**（后两个见 §2.2 的既有列去留表）；**`RemoveConstraint` + `AddConstraint` 重建 `lifecycle_task_kind_supported` 与 `lifecycle_action_status_supported`**（§2.1、§2.2 的枚举扩容，字面量已烤进 DDL，只改常量无效）；§2.2 与 §2.4 的两个**约束触发器**用 `RunSQL` 建（含 reverse_sql）。<br>**`async_status_url` / `async_poll_attempts` / `preview_generation` / `attempts` 是既有列，不要写 `AddField`** |
 
 `lifecycle` 迁移必须是**一个**迁移文件完成改名、删列与建表，避免中间态。
 
@@ -1122,7 +1203,9 @@ reconcile 该 App 下所有 `blocked` 且所属 task 仍 open 的 action：
 | `batch_seq` | → `0` | 批次号从旧值续接，与新 generation 组合出的幂等键仍然唯一，倒不会错乱，但审计上批次号不连续、难排查 |
 | `last_error` / `last_error_raw` | → `""` | 新一轮界面上挂着上一轮的错误文案 |
 | `async_status_url` / `async_poll_attempts` | → `""` / `0` | 上一轮轮了 10 次（`ASYNC_POLL_MAX_ATTEMPTS`，`lifecycle/core.py:30`）已经触顶；不清零的话新一轮第一次 202 就直接判失败 |
-| `skipped_at` / `skipped_by` / `skip_reason` | → 空 | 与下方「强行跳过不继承」一致 |
+| `skipped_at` / `skipped_by` / `skip_reason` | → 空 | 与下方「强行跳过不继承」一致。跨轮次的责任链在 §2.2.1 的 `HandoverActionSkipRecord` 里，不受影响 |
+| `attempts` | → `0` | 既有列，`_execute_action` 仍在写它（`handover.py:161-170`）。不重置就跨轮次累加，成为没人负责的计数器 |
+| `preview_generation` | **不重置** | 全局单调序号（§2.2）。清零会让升级前的在途 preview 响应重新匹配上条件更新 |
 | `confirm_version` / `overrides_version` | **各 +1**（不是清零） | 主动击穿上一轮浏览器里缓存的版本号：还开着旧页面的人点执行会拿到 409，而不是把上一轮的选择写进新一轮 |
 | `status` / `blocked_reason` | **按 §5.1 重新判定**，不是无脑置 `pending` | 见下 |
 | `skip_reason` / `skipped_by` | → `""` | 见下 |
@@ -1207,8 +1290,10 @@ def preview_action(action) -> HandoverAppAction
 - payload 加 `generation`。
 - 响应校验：每个 `type` 必须在 `App.handover_asset_types` 中声明过，否则 action → `failed`，
   `last_error="undeclared_asset_type: {type}"`。
-- **发请求前固化 `request_generation = action.generation`；响应落库时按
-  `(action_id, generation)` 做条件更新，不匹配就整份丢弃** —— 不写 `snapshot_token`、
+- **发请求前固化两个序号**：`request_generation = action.generation` 与
+  `request_preview_generation = action.preview_generation`（后者是既有列，见 §2.2）；
+  **响应落库时按 `(pk, generation, preview_generation)` 三者做条件更新，不匹配就整份丢弃**
+  —— 不写 `snapshot_token`、
   不重建资产行、不递增 `confirm_version`、不改 action 状态。
 
   > generation 1 的 preview 已经发出去了，单据随后升级到 generation 2 并清空 token；
