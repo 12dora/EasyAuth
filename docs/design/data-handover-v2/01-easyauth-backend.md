@@ -1201,7 +1201,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | POST | `/handover-tasks/{task_id}/actions/{app_key}/preview` | 我是 assignee | |
 | POST | `/handover-tasks/{task_id}/actions/{app_key}/execute` | 我是 assignee | body **必填** `{"confirm_version": n}` —— 用户点确认时界面上显示的那一版。与服务端当前值不一致 → `409 confirm_version_stale`，**不创建 batch**，要求刷新后重新确认 |
 | POST | `/handover-tasks/{task_id}/actions/{app_key}/retry` | 我是 assignee | 仅 `failed` 可重试，否则 `409 action_not_retryable`。**若 `data_completed_at` 非空，重试只重做授权转移那一步**（契约 §10.5.1.1），不重发数据 webhook |
-| GET | `/handover-candidates` | 登录即可 | 选人控件数据源。query：`q`（模糊，可空）、`purpose`（枚举 `receiver` \| `reassign_subject`，**必填**）。两者都只返回 active 且非本人；`purpose=reassign_subject` 时额外限定在我的 `MANAGED_USERS` 内。**不设默认值** —— 缺 `purpose` 返回 `422 purpose_required`，否则前端漏传就会静默拿到范围过宽的人员列表 |
+| GET | `/handover-candidates` | 登录即可 | 选人控件数据源。query：`q`（模糊，可空）、`purpose`（枚举 `receiver` \| `reassign_subject`，**必填**）。两者都只返回 active 且非本人；`purpose=reassign_subject` 时按**契约 §4 的组织主管链**筛选（active、同 `(source_slug, corp_id)`、组织上下文非 stale 且目录同步健康、且我的 `dingtalk_userid` 在其当前 `manager_chain` 里）。**禁止调用 `resolve_managed_users`** —— 它强制要求一个 `App` 参数，而这个端点根本没有 App 可传；用它还会让团队负责人在候选列表里看到不在自己主管链上的员工（提交时才 403，但名单已经泄露出去了）。目录不可用 → `503 directory_unavailable`。**不设默认值** —— 缺 `purpose` 返回 `422 purpose_required`，否则前端漏传就会静默拿到范围过宽的人员列表 |
 
 > **`confirm_version`：浏览器必须把"我确认的是哪一版"带回来。**
 > `snapshot_token` 是 EasyAuth 与下游之间的凭据，**替代不了这件事** ——
@@ -1286,7 +1286,8 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
   "assignee": { "user_id": "8c44…", "name": "李某某" },
   "assignee_state": "manager",
   "escalation_level": 0,
-  "escalation": { "deadline": "2026-08-24T10:00:00Z", "days_left": 14, "level": 0, "deferred_at": null },
+  "escalation": { "deadline": "2026-08-24T10:00:00Z", "days_left": 14, "level": 0, "deferred_at": null,
+                   "defer_history": [] },   // [{escalation_level, actor_id, at, reason}], 由审计事件生成, 永久保留
   // deadline/days_left 为 null 表示已落超管池, 不再上交; deferred_at 非空表示本层级已顺延过一次
   "reason": "目录同步检出离职",
   "created_at": "2026-08-10T10:00:00Z",
@@ -1365,15 +1366,24 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 
 ### 6.3 控制台（`/console/api/v1/lifecycle/`，超管）
 
-既有端点保留。新增：
+既有端点保留，但 **`GET .../handover-tasks` 列表要加参数与字段**：
+
+- 新增 query：`assignee_state=manager|subject|superuser_pool`、`blocked=true|false`；
+  非法枚举值 → `422`。**筛选必须在数据库分页之前完成** —— 在当前页做本地过滤的话，
+  分页总数与后续每一页都是错的。
+- 列表项新增：`assignee_state`、`escalation`、`blocked_app_count`。
+
+新增端点：
 
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | `.../handover-tasks/{id}/actions/{app_key}/skip` | 强行跳过（D6），body `{"reason": "..."}`，`reason` 必填且 ≥10 字符。**实现方式：扩展既有的 `operation=="skip"` 分支**（`admin_console/lifecycle_api.py:362,403`），不要新注册一条会与既有动态 operation 路由（`admin_console/urls.py:252`）重叠的 URL —— 注册在后面就永远不可达。现有 handler **完全不读 body 里的 reason**，必须补：严格解析 `{"reason": str}`、校验 ≥10 字符、传给 `skip_action(action, actor_id=..., reason=...)` |
 | POST | `.../handover-tasks/{id}/claim` | 超管认领 `superuser_pool` 中的单，assignee 置为该超管，`assignee_state=manager`。**认领人必须是 active、非 `local-admin:`、且有有效钉钉绑定的 OIDC 超管**，否则 `403 local_admin_cannot_claim` |
 | POST | `.../handover-tasks/reassign` | **超管跨管辖范围建 `reassign` 单**（D9 的「跨部门走超管」路径）。body 同门户版，但**不做管辖范围校验**；仍校验双方 active、双方非本地管理员、`reason` ≥10 字符、接收人 ≠ 当事人。写审计 `handover_reassign_created`（`initiator` 记该超管） |
-| POST | `.../handover-tasks/{id}/escalation/defer` | 把 `escalation_deadline` 顺延 `HANDOVER_ESCALATION_DAYS`（不改 `escalation_level`），必填 `reason` ≥10 字符。**同一 `escalation_level` 内至多一次**（靠 `escalation_deferred_at` 判定，非空即拒 `409 already_deferred`）；上交后该字段清空，新层级可再顺延一次。写审计 `handover_task_deferred`，单据上永久显示「已由 {超管} 于 {时间} 顺延：{理由}」 |
+| POST | `.../handover-tasks/{id}/escalation/defer` | 把 `escalation_deadline` 顺延 `HANDOVER_ESCALATION_DAYS`（不改 `escalation_level`），**body `{"reason": "..."}` 必填且去空白后 ≥10 字符**（空 body → 422）。**同一 `escalation_level` 内至多一次**（靠 `escalation_deferred_at` 判定，非空即拒 `409 already_deferred`）；上交后该字段清空，新层级可再顺延一次。写审计 `handover_task_deferred`，单据上永久显示「已由 {超管} 于 {时间} 顺延：{理由}」 |
 | GET | `.../handover-blocked-apps` | 未接入 APP 汇总，供控制台顶部告警条。响应 `{"app_count": n, "task_count": m, "apps": [{"app_key","app_name","blocked_task_count"}]}` |
+| GET | `.../handover-tasks/{id}/candidates` | **控制台专用的选人数据源**，query `q`。响应 `{"items": [{"user_id","name","department"}]}`，只含 active、非本地管理员、且**不等于本单 subject** 的用户。<br>**不要让前端把门户 URL 前缀换成控制台前缀了事** —— 现有 `/console/api/v1/user-options` 的 `purpose` 只接受 `employee` \| `approver`（`admin_console/users_api.py:66-90`），传 `receiver` 直接 422；传 `employee` 又会把当事人本人列进候选，一直到 execute 才报 `receiver_is_subject`。共享组件通过 **surface adapter** 注入 API，不做字符串替换 |
+| GET | `.../handover-tasks/{id}/actions/{app_key}/last-error-raw` | **超管专用**，返回 `{"last_error_raw": "..."}`。**每次读取先写审计**（谁、何时、看了哪个 action 的原始错误），再返回。该字段**禁止**出现在门户响应与普通详情响应里（契约 §10.6） |
 | GET | `.../apps/{app_key}/handover-capability` | 能力标签页的**初始数据**。响应 `{"handover_capability": "declared"\|"none"\|"undeclared", "handover_asset_types": [...], "handover_url": "", "declared_by": "", "declared_at": null, "synced_at": null}`。**没有这个 GET，能力标签页打开就是空白** —— 既有 app detail 不返回三态，冻结契约里也只有两个 POST |
 | PATCH | `.../handover-tasks/{id}/actions/{app_key}` | 设置**权限接收人**，body `{"grant_receiver_user_id": string\|null}`。仅 `kind=offboard` 允许非空，否则 `422`。修改后该 action 回退 `pending` 并清除上一轮 preview 结果（接收人变了，之前的预演不再代表现在的意图）。返回更新后的 action 对象 |
 | POST | `.../apps/{app_key}/handover-capability` | 声明 `none`，body `{"reason": "..."}`；写 `declared_by`/`declared_at` |

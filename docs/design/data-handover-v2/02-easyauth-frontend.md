@@ -249,10 +249,12 @@ export interface HandoverAssetItemsPage {
 | action.status | 区块表现 |
 |---|---|
 | `blocked` | 红底，标题「未接入交接」，正文「该应用尚未实现数据交接，无法确认是否有遗留数据。请联系管理员。」**无任何操作按钮** |
-| `skipped` | 灰底，显示「已由管理员跳过：{skip_reason}」 |
+| `skipped` | 灰底，**永久**显示「已由 {skipped_by} 于 {format(skipped_at)} 强行跳过：{skip_reason}」。三个字段任一缺失 → 显示「责任链数据缺失」告警，**不得退化成匿名的「管理员」** |
 | `pending` | 「尚未预演」+ [预演] 按钮 |
 | `previewed` | 展开资产分配器（§6）+ [重新预演] [执行交接] |
 | `executing` / `async_pending` | 骨架 + 轮询（React Query `refetchInterval: 3000`），禁用按钮 |
+| **收到 `412 snapshot_stale`**（items 或 execute） | **立刻清掉该 action 的本地 items / override / 确认框状态**，重新拉详情，固定提示「清单已变化，请重新预演」。**不要把任何 409 当成快照失效** —— 409 是投递冲突或归属冲突，处置完全不同 |
+| **收到 `423`** | 提示「该应用中部分对象正在审批/锁定，解除后请重新预演」，按钮按 `allowed_actions` 走（这是**可恢复**的临时状态，不是失败） |
 | `done` | 绿底，按 `summary` 逐类展示五元统计（`merged`/`failed` 为 0 时可折叠，但不得隐藏字段） |
 | `failed` 且 `data_completed_at == null` | 红底，「数据未移交，权限未变更」+ `last_error`。按钮**由 `allowed_actions` 决定**，不是固定 [重试] |
 | `failed` 且 `data_completed_at != null` | 橙底，「**数据已移交成功，权限转移失败**」+ `last_error`。同上（重试只补做权限转移，不会重复搬数据） |
@@ -267,6 +269,10 @@ export interface HandoverAssetItemsPage {
 > - 两者都不含（门户遇到不可重试失败）→ 只显示「此项无法自动重试，请联系管理员处理」。
 >
 > **前端不得解析 `last_error` 文本去猜可重试性** —— 那是下游自由格式的字符串。
+
+**控制台的 `failed` 区块多一个 [查看原始错误]（仅超管可见）**：点击才调
+`GET .../actions/{app_key}/last-error-raw`，服务端每次读取都写审计。
+**门户没有这个按钮**，`last_error_raw` 也不会出现在门户任何响应里（契约 §10.6）。
 
 **413 分批不是普通失败**：`batch_progress != null` 时显示「已完成 {completed}/{total} 批」
 与 [执行下一批]，而不是 [重试]。每批执行前**必须重新预演**（契约 §10.5.2：同一 token 只能用一批），
@@ -351,6 +357,14 @@ export interface HandoverAssetItemsPage {
   （契约 §10.5 语义 3），连本来合法的逐条 `transfer` 也一起被拒。
 - **`transfer` 与 `skip` 在任何 `releasable` 取值下都始终可用**，
   所以 `releasable=false` 的类型照样能用「暂不处理 + 逐条转移」做部分交接。
+- **类型级的 action 或默认接收人一变，就必须立刻 `PATCH .../assets/{type}` 落库**，
+  body `{"default_action": ..., "default_to_user_id": ...|null}`；保存期间禁用 [执行交接]；
+  成功后用响应对象替换本地该类型，失败则**回滚控件**并保留错误提示。
+
+  > 只改本地 state 不落库的话，会出现最难查的那种故障：用户把默认从「暂不处理」改成
+  > 「全部转给张某」，确认框也显示"已安排 1 类"，而服务端存的还是 `skip` ——
+  > execute **成功返回**，资产原样不动。
+
 - 默认值是 `skip`（后端模型默认，见 `01` §2.3）。这意味着**用户什么都不做时不会误转任何数据**，
   但也意味着 UI 必须显眼地提示"还有 N 类未处理"，否则会出现"点了执行却什么都没发生"。
   在执行按钮旁常驻一行：`已安排 2 类 / 共 4 类`。
@@ -394,7 +408,16 @@ export interface HandoverAssetItemsPage {
 
 ### 6.3 人员选择器（`HandoverUserPicker`）
 
-数据源 `GET /portal/api/v1/handover-candidates?purpose=receiver&q=`（控制台走对应超管端点）。
+数据源由 **surface adapter 注入**，不是把 URL 前缀替换一下：
+
+| surface | 端点 |
+|---|---|
+| 门户 | `GET /portal/api/v1/handover-candidates?purpose=receiver&q=` |
+| 控制台 | `GET /console/api/v1/lifecycle/handover-tasks/{id}/candidates?q=` |
+
+> **不能只换前缀**：控制台既有的 `/console/api/v1/user-options` 的 `purpose` 只接受
+> `employee` / `approver`（`admin_console/users_api.py:66-90`），传 `receiver` 直接 422；
+> 传 `employee` 又会把当事人本人列进候选，一直到 execute 才报 `receiver_is_subject`。
 `purpose` **必填**，漏传返回 `422 purpose_required`（`01` §6.1）。
 输入 300ms 防抖。**React Query 是 v5**（`frontend/package.json`），保留上一批结果用
 `placeholderData: (previous) => previous`，与现有 `components/UserSelect.tsx:22-39` 一致。
@@ -423,8 +446,13 @@ TypeScript 阶段直接失败。
 ### 7.2 `HandoverTaskDetail` 扩展
 
 - 顶部新增「负责人」卡片：assignee 姓名、`assignee_state` 中文标签、`escalation_level`、
-  上交截止时间与剩余天数、**[顺延]**（`escalation.deferred_at == null` 时才可点，
-  每层级只能按一次，必填理由 ≥10 字符）、[认领]（`assignee_state == "superuser_pool"` 时）。
+  上交截止时间与剩余天数、**[顺延]**、[认领]（`assignee_state == "superuser_pool"` 时）。
+- **[顺延] 打开理由对话框**（去空白后 ≥10 字符，前端先校验），
+  提交 `POST .../escalation/defer` body `{"reason": reason}`；空 body 会稳定 422。
+  按钮仅在 `escalation.deferred_at == null` 时可点（每层级一次）。
+- **顺延的责任链要永久可见**：展示 `escalation.defer_history`
+  （`[{escalation_level, actor_id, at, reason}]`），而不是只看 `deferred_at`
+  —— 后者在上交到下一层级时会被清空，历史就没了。
   **[认领] 对本地管理员要禁用**：后端会返回 `403 local_admin_cannot_claim`（`01` §6.3）。
 - 每个 action 区块新增 blocked/skipped 形态（同 §5.2 表格）。
 - `blocked` 区块给超管一个 [强行跳过] 按钮 → 对话框必填理由（≥10 字符）→
@@ -433,8 +461,21 @@ TypeScript 阶段直接失败。
 
 ### 7.3 `HandoverTaskList` 扩展
 
-新增筛选：`assignee_state`、「仅看被阻塞的」。
+新增筛选：`assignee_state`、「仅看被阻塞的」，对应 `01` §6.3 新增的 query
+`assignee_state=manager|subject|superuser_pool` 与 `blocked=true|false`。
+**必须由后端筛选**（它在数据库分页之前完成）；在当前页做本地过滤的话，
+分页总数与后续每一页都是错的。
 列表行新增两个角标：`blocked_app_count`（红）、`escalation.days_left`（按 §5.1 配色）。
+
+### 7.3.1 控制台的「在职数据移交」入口（D9 的跨部门路径）
+
+`01` §6.3 有超管专用的跨管辖范围 `reassign` 端点，但控制台里**没有任何入口** ——
+门户正确地返回 `403 out_of_managed_scope` 并提示"请找管理员"，超管进了控制台却只看得到
+offboard/transfer，业务流程到这里断掉。
+
+在控制台人员页加一个「在职数据移交」按钮，表单三项：subject（人员选择器）、
+**应用范围（多选，必填至少一项，不得默认全选）**、理由（≥10 字符）。
+提交 `POST /console/api/v1/lifecycle/handover-tasks/reassign`，成功后跳转新单详情。
 
 ### 7.4 未接入告警条（`BlockedAppsBanner`）
 
