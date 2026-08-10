@@ -732,7 +732,16 @@ def _patch_receiver_batch(
                 return _validation_error("接收人不存在或已停用。")
 
             for app_key, entry in entries_by_app.items():
-                # v2: 权限接收人 grant_receiver; release_to_pool 不再走 policy 字段。
+                # v2: release_to_pool / policy 已废弃, 仍传入则 400, 禁止静默丢弃。
+                if entry.release_to_pool:
+                    return _validation_error(
+                        "release_to_pool 已移除; 权限接收人请设置 to_user_id, "
+                        "数据接收人请在资产级分配中配置。",
+                    )
+                if not entry.to_user_id:
+                    return _validation_error(
+                        "必须指定 to_user_id 作为权限接收人。",
+                    )
                 _ = update_action_receiver(
                     action=actions_by_app[app_key],
                     to_user=receivers.get(entry.to_user_id or ""),

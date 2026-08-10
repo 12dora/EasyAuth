@@ -74,6 +74,30 @@ def apply_permission_template(
         template=template,
         downstream_base_url=downstream_base_url,
     )
+    if template.lifecycle is not None:
+        from easyauth.applications.handover_capability import (
+            sync_handover_capability_from_manifest,
+        )
+
+        # 用解析后的绝对 URL 写能力态, 避免相对路径无法 declared。
+        lifecycle_for_cap = template.lifecycle
+        if downstream_base_url:
+            resolved_url = _resolve_manifest_url(
+                template.lifecycle.handover_url,
+                downstream_base_url,
+            )
+            if resolved_url:
+                from dataclasses import replace
+
+                lifecycle_for_cap = replace(
+                    template.lifecycle,
+                    handover_url=resolved_url,
+                )
+        sync_handover_capability_from_manifest(
+            locked_app,
+            lifecycle_for_cap,
+            actor_id=template.imported_by or _MANIFEST_ACTOR,
+        )
     return PermissionTemplateImportResult(template_version=template_version, actions=actions)
 
 

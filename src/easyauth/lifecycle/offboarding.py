@@ -108,10 +108,10 @@ def ensure_handover_task(
             reason=reason,
             generation=1,
         )
-        resolution = resolve_assignee(subject)
         if kind == HANDOVER_KIND_PRE_OFFBOARD and created_by == subject.authentik_user_id:
             from easyauth.lifecycle.models import ASSIGNEE_STATE_SUBJECT
 
+            # 自助 pre_offboard 不走 resolve_assignee, 避免伪造 degraded 审计。
             task.assignee = subject
             task.assignee_state = ASSIGNEE_STATE_SUBJECT
             task.escalation_level = 0
@@ -134,6 +134,7 @@ def ensure_handover_task(
                 extra={"assignee_state": ASSIGNEE_STATE_SUBJECT},
             )
         else:
+            resolution = resolve_assignee(subject)
             _ = apply_assignee(
                 task,
                 resolution,

@@ -69,6 +69,9 @@ def escalate_overdue_task(task: HandoverTask) -> HandoverTask:
                     "reason": "escalation_pool",
                 },
             )
+        to_assignee = (
+            locked.assignee.authentik_user_id if locked.assignee is not None else ""
+        )
         record_task_event(
             locked,
             action="handover_task_escalated",
@@ -76,6 +79,7 @@ def escalate_overdue_task(task: HandoverTask) -> HandoverTask:
             actor_type="system",
             extra={
                 "from_assignee_user_id": previous_assignee_id,
+                "to_assignee": to_assignee,
                 "to_assignee_state": locked.assignee_state,
                 "escalation_level": locked.escalation_level,
                 "at": timezone.now().isoformat(),
