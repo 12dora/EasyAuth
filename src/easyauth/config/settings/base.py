@@ -389,6 +389,26 @@ CELERY_BEAT_SCHEDULE: dict[str, dict[str, str | float]] = {
         "task": "easyauth.health.data_retention_cleanup",
         "schedule": float(os.environ.get("EASYAUTH_DATA_RETENTION_CLEANUP_SECONDS", "86400")),
     },
+    # 交接 v2: 超时上交(01 §7)。
+    "lifecycle-escalation": {
+        "task": "easyauth.lifecycle.escalation",
+        "schedule": float(os.environ.get("EASYAUTH_LIFECYCLE_ESCALATION_SECONDS", "600")),
+    },
+    # 交接 v2: 每日提醒(秒级 interval; crontab 扩展另议, 默认 24h)。
+    "lifecycle-daily-reminder": {
+        "task": "easyauth.lifecycle.daily_reminder",
+        "schedule": float(os.environ.get("EASYAUTH_LIFECYCLE_DAILY_REMINDER_SECONDS", "86400")),
+    },
+    # 交接 v2: 过期执行租约恢复。
+    "lifecycle-recover-execution-leases": {
+        "task": "easyauth.lifecycle.recover_expired_execution_leases",
+        "schedule": float(os.environ.get("EASYAUTH_LIFECYCLE_LEASE_RECOVER_SECONDS", "60")),
+    },
+    # 交接 v2: 异步 action 轮询(含 async_attention_required)。
+    "lifecycle-poll-async-actions": {
+        "task": "easyauth.lifecycle.poll_async_actions",
+        "schedule": float(os.environ.get("EASYAUTH_LIFECYCLE_ASYNC_POLL_SECONDS", "60")),
+    },
 }
 
 # 通知管道默认值(见 docs/architecture/platform-directory-notify.md)。
