@@ -160,9 +160,11 @@ export interface HandoverAction {
   confirm_version: number;
   /** PUT overrides 必须回带; 整体替换的并发保护 */
   overrides_version: number;
-  /** 413 分批时非 null */
+  /** 413 分批时非 null。非 null 期间禁止改分配(后端会 409 batch_plan_in_progress) */
   batch_progress: HandoverBatchProgress | null;
   asset_types: HandoverAssetType[];
+  /** 在途钉钉审批的存在性警示; 建单时写入, 升级与完成都不清除 */
+  approval_instance_warning: { message: string; link: string; recorded_at: string } | null;
   /** 仅 kind=offboard 有意义; null = 只撤权不转授 */
   grant_receiver: HandoverUserRef | null;
   /** done 之后才有; 按 asset_type 分组的五元统计 */
@@ -171,10 +173,19 @@ export interface HandoverAction {
   data_completed_at: string | null;
 }
 
+export interface HandoverDeferRecord {
+  escalation_level: number;
+  actor_id: string;
+  at: string;
+  reason: string;
+}
+
 export interface HandoverEscalation {
   deadline: string | null;   // null = 已落超管池, 不再上交
   days_left: number | null;
   level: number;
+  /** 顺延责任链, 由审计事件生成; deferred_at 上交时会清空, 这个不会 */
+  defer_history: HandoverDeferRecord[];
   /** 非 null = 本层级已被超管顺延过一次, 顺延按钮必须禁用(01 §6.3) */
   deferred_at: string | null;
 }
@@ -274,7 +285,11 @@ export interface HandoverAssetItemsPage {
 `GET .../actions/{app_key}/last-error-raw`，服务端每次读取都写审计。
 **门户没有这个按钮**，`last_error_raw` 也不会出现在门户任何响应里（契约 §10.6）。
 
-**413 分批不是普通失败**：`batch_progress != null` 时显示「已完成 {completed}/{total} 批」
+**413 不是不可重试的失败，别按 `failed` 渲染。** 后端此时 action 仍是 `previewed`
+（只有那个超大 batch 记了 `failed`），`allowed_actions` 里也不会有 `retry` ——
+重发同一份 payload 只会再 413 一次。
+
+**`batch_progress != null` 时显示「已完成 {completed}/{total} 批」**
 与 [执行下一批]，而不是 [重试]。每批执行前**必须重新预演**（契约 §10.5.2：同一 token 只能用一批），
 所以 [执行下一批] 的动作是「重新 preview → 再 execute」两步，界面要把这一点说清楚。
 只有最后一批成功后 action 才转 `done`。

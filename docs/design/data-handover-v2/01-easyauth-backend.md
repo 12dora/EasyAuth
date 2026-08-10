@@ -470,6 +470,24 @@ delivery（`outcome="sent"`）、写 outbox，**提交后**才由 worker 真正�
    re-preview 里**仍然属于当事人**；如果最终批带着真实的 `transfer` 默认值而没有带上这些
    skip 项，它们会被默认动作**一起搬走** —— 用户明确说"这几条不要动"的那些。
 
+#### 分片计划固化之后，分配就不能随便改了
+
+`HandoverBatchPlan` 建立时必须**一并固化 `assignment_hash`** —— 对当前全部
+`default_action` / `default_to_user` / `overrides` / `grant_receiver` 取 canonical 摘要。
+
+| 状态 | 允许改分配吗 |
+|---|---|
+| `completed_batches == 0` | 允许。但必须在**同一事务**里把旧计划标 `abandoned` 并重新规划 |
+| `completed_batches > 0` | **禁止**。`PATCH .../assets/{type}`、`PUT .../overrides`、`PATCH grant_receiver` 一律返回 `409 batch_plan_in_progress` |
+
+execute 每一批同时校验**两样**：最新的 `confirm_version`（用户看的是不是这一版）
+与计划的 `assignment_hash`（要执行的还是不是同一份意图）。
+每批重新 preview 会让 `confirm_version` 递增，这是正常的；但 `assignment_hash` **不得变**。
+
+> 不定这条规则会这样：三批计划的第 1 批已经搬完，用户把第 2 批里的某条从 `transfer` 改成 `skip`。
+> 计划里存的还是旧的 `transfer` —— 要么按旧计划把用户刚说"别动"的数据搬走，
+> 要么被版本校验挡住而**没有任何重建计划的入口**，剩下两批就此卡死。
+
 > **残留限制要如实说出来**：如果单是这些 `skip` 逐条项就撑爆了 256 KiB，本方案无解。
 > 这时 execute 返回 `413`，界面提示「单独指定的条目过多，请减少逐条指定后重新预演」，
 > **不要再自动分片**。这是一个真实的能力边界，不要假装它不存在。
@@ -1305,6 +1323,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | 403 | `out_of_managed_scope` | reassign 的 subject 不在我的管辖范围（契约 §4） |
 | 409 | `open_task_exists` | 自助建单时已有 open 的 `offboard`/`transfer`/`pre_offboard` 单（与 §2.1 的 `lifecycle_task_one_open_lifecycle_per_subject` 同一集合）。`reassign` 单**不**触发本错误 |
 | 409 | `handover_execution_in_flight` | 该 `(subject, app)` 已有 execute 在途（含 `async_pending`），契约 §10.5.2。**不排队、不自动重试**，前端提示稍后再试 |
+| **413** | `payload_too_large` | **不是普通失败**：只把那个超大 batch 记 `failed`，**action 保持 `previewed`**，建 `HandoverBatchPlan` 并返回 `batch_progress`。界面走「重新预演 → 执行下一批」，**不显示 [重试]**（重发同一份 payload 只会再 413） |
 | **412** | `snapshot_stale` | 下游返回 **412** 判定为快照失效，action 已退回 `pending`，需重新 preview（契约 §10.6）。**不要用 409** —— 409 会被判 `failed` |
 | **423** | `downstream_locked` | 下游返回 **423**（对象被临时锁住，如项目审批锁），action 退回 `pending`；**可重试**，但要等人解除锁 |
 | 409 | `action_not_retryable` | 对非 `failed` 状态的 action 调 `retry` |
