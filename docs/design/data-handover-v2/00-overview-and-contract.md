@@ -121,7 +121,7 @@
 ### 5.1 唯一人员标识
 
 **所有跨系统 payload 中的人员字段一律使用 `authentik_user_id`（Authentik OIDC `sub`，配置为 `user_uuid` 模式）。**
-EasyAuth 内部即 `UserMirror.authentik_user_id`（`accounts/models.py:21`）。
+EasyAuth 内部即 `UserMirror.authentik_user_id`（`accounts/models.py:44,48`）。
 
 各 APP 的本地映射现状：
 
@@ -150,7 +150,11 @@ EasyAuth 只做存储与回传，不解析、不排序、不校验格式。长�
 ### 5.4 `task_id` 的格式与长度（下游要拿它当幂等键的一部分）
 
 `task_id` 由 EasyAuth 生成，格式固定为 **`"{handover_task.id}:{app.id}"`** —— **两段都是十进制数据库 ID**
-（例：`"137:4"`）。长度上限 **64 字节**，字符集限 `[0-9:]`。
+（例：`"137:4"`）。长度上限 **64 字节**，且必须匹配锚定正则 **`^[0-9]+:[0-9]+$`** ——
+两段都不得为空，不得出现第三段。下游对不匹配的 `task_id` 返回 **422**。
+
+> 只写「字符集限 `[0-9:]`」是不够的：`":"`、`"1:2:3"` 都能通过字符集校验，
+> 而下游要把 `task_id` split 开来做日志反查（见下），畸形值要到落库那一步才暴露。
 
 > **不要拼 `app.app_key`。** `App.app_key` 的列宽允许 64 个字符
 > （`applications/models.py:102-108`，自动接入接口也按这个长度放行），
@@ -456,12 +460,13 @@ APP 在 descriptor（`/.well-known/easyauth-app.json`）中声明。
 
 - `capabilities` 里出现 `"handover.v2"` 即表示已实现 v2 三事件（preview / items / execute）。
   这是**唯一**的能力判定依据，不再另设 `capability` 字段。
-- `handover_asset_types` 是新增键。它会被**两道**白名单拦住，**两道都要扩，缺一不可**：
+- `handover_asset_types` 是新增键。它会被**三道**白名单拦住，**三道都要扩，缺一不可**：
 
   | 拦截点 | 现状 | 不改的后果 |
   |---|---|---|
-  | EasyTrade `easyauth_manifest_export.py:109,117-121` 的 `_lifecycle()` | `_require_fields` 白名单与返回字典都只有三个键 | 新键被**静默剥掉**，EasyAuth 收到一份没有资产声明的 descriptor |
+  | EasyTrade `easyauth_manifest_export.py:109,117-121` 的 `_lifecycle()` | `_require_fields` 只传了 `required`、没传 `optional`（`:409-420`），返回字典也只有三个键 | 多一个键**直接抛 `EasyAuthManifestExportError`**，manifest 导出整体失败（即使绕过它，返回字典也只保留三个键） |
   | **SDK `easyauth_app_sdk/manifest.py` 的 `_validate_lifecycle()`** | `allowed = {"handover_url","onboard_url","capabilities"}`，未知字段直接 `raise ManifestValidationError` | descriptor **连生成都生成不出来**，直接抛异常 |
+  | **EasyAuth 自己的 `applications/permission_template_parsing.py:116-123` 的 `_LifecyclePayload`** | `ConfigDict(extra="forbid")`，只有三个字段；承接它的 `permission_template_types.py:87-93` `AppManifestLifecycleInput` 同样 | 下游发出的合法 descriptor 一推到 manifest 导入/自动接入就被 Pydantic 拒掉，**整份 manifest 报错、应用接不进来**——不是「少了资产声明」那么轻 |
 
   SDK 那一处属于 **SDK vNext 的交付内容（A1 第 0 步）**，是 A3/A5 的前置依赖 ——
   它没发布，两个下游连 descriptor 都发不出来。这条必须写进 SDK 的 CHANGELOG。
@@ -470,11 +475,18 @@ APP 在 descriptor（`/.well-known/easyauth-app.json`）中声明。
 
 三态判定：
 
-| descriptor 情况 | 含义 | action 初始状态 |
-|---|---|---|
-| `capabilities` 含 `handover.v2` 且 `handover_url` 非空 | 已接入 | `pending` |
-| `capabilities` 含 `handover.none` | 运营显式声明无用户级数据 | `skipped`（标注声明人与时间） |
-| 其余（含拉取失败） | 未声明 | **`blocked`** |
+判定表按**从上到下第一条命中**读，必须互斥全覆盖：
+
+| # | descriptor 情况 | 含义 | action 初始状态 |
+|---|---|---|---|
+| 1 | 同时含 `handover.v2` 与 `handover.none` | 声明冲突 | **`blocked`**，并写审计 `handover_capability_conflict`（§12）。**不得任选其一静默兜底** |
+| 2 | 含 `handover.v2` 且 `handover_url` 非空 | 已接入 | `pending` |
+| 3 | 含 `handover.none` **且 `handover_asset_types == []`** | 运营显式声明无用户级数据 | `skipped`（标注声明人与时间） |
+| 4 | 其余（含拉取失败、含 `handover.v2` 但 `handover_url` 为空、含 `handover.none` 但资产类型非空） | 未声明或声明畸形 | **`blocked`** |
+
+> 第 1 行不能省。§12 已经冻结了 `handover_capability_conflict` 这个审计事件，
+> 如果这里不写判定规则，实现方就会按表格顺序取首个命中，把冲突声明当成 `pending` 或 `skipped`
+> 放过去 —— 那正是这条事件要抓的情况。
 
 `releasable=false` 表示该类资产**不允许无接收人释放**（如 EasyTrade `Inquiry.owner_user_id` 非空约束）。
 EasyAuth 在 execute 前校验：对 `releasable=false` 的类型指定 `to_user_id=null` 时，直接返回
@@ -547,6 +559,11 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
   > SDK 必须在**任何分发与 `webhook.test` 短路之前**比较两者，不一致返回 **422**。
   > 既有的 `mode` 字段保留不动（preview/execute 各自的值），但**判定依据是 `event_type`**。
   >
+  > **EasyAuth 自己的发送端也必须改，这条容易漏。** `admin_console/webhook_config_api.py:97-100`
+  > 的测试 payload 现在只有 `{"message", "app_key"}`，必须加上 `"event_type": "webhook.test"`。
+  > 不改的话，SDK vNext 一上线，控制台那个「发送测试」按钮对**每个** APP 都会拿到 422，
+  > 而 §14 的联调门禁写的是「`webhook.test` 对每个 APP 返回 200」—— 门禁永远过不去。
+  >
   > 三个仓库的验收用例必须包含两个反例：**篡改 event 头**、**event 头与 body `event_type` 不一致**
   > —— 都断言 422。
   >
@@ -571,7 +588,7 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
 
 | 事件 | 方向 | 幂等 | 说明 |
 |---|---|---|---|
-| `webhook.test` | EasyAuth → APP | — | 已有，不变 |
+| `webhook.test` | EasyAuth → APP | — | 语义不变，但 **body 必须新增 `event_type`（§10.1），EasyAuth 发送端与 SDK 同步改** |
 | `lifecycle.handover.preview` | EasyAuth → APP | 只读 | **payload 变更** |
 | `lifecycle.handover.items` | EasyAuth → APP | 只读 | **新增**，明细分页 |
 | `lifecycle.handover.execute` | EasyAuth → APP | `(task_id, generation, batch_id)` | **payload 重大变更** |
@@ -831,12 +848,26 @@ transferred + released + skipped + merged + failed == 该类型在本轮 assignm
    EasyAuth 把 action 打回 `previewed` 之前并提示"清单已变化，请重新预演"。
    preview 的 `count`、items 的基础集合、execute 的摘要必须来自**同一份一致性快照定义**（同一个选择器）。
 4. 逐条校验同样是硬要求：每个被改写的条目必须**当前仍属于 `from_user_id`** 且**仍属于该 `asset_type`**；
-   否则整体 409，**不允许**跳过该条继续处理其余条目（那是静默兜底）。
+   否则整体失败，**不允许**跳过该条继续处理其余条目（那是静默兜底）。
+
+   > **校验顺序是规范的一部分：必须先比摘要、后逐条。** 两者的处置完全相反（412 退回重演 / 409 判死），
+   > 而「preview 之后有条客户被别人认领了」这**同一个**物理事件会同时满足两条 ——
+   > 摘要变了，那条也不再属于 `from_user_id`。不规定顺序的话，逐条校验天然写在行循环里、比重算全量摘要更早，
+   > 下游极可能先命中 409，于是一次普通竞态被判成 `failed` **且不可重试**，
+   > 界面只剩「应用拒绝了本次交接」，assignee 没有任何前进路径。两个下游各选一种顺序，
+   > 同一场景在 EasyTrade 和 EasyProject 上还会给出两种不同结局。
+   >
+   > 因此：**摘要不一致一律 412（零写入）。** 摘要一致时逐条校验才可能失败，
+   > 此时问题必然出在 EasyAuth 这次请求本身、而不是数据竞态（例如 `overrides` 引用了
+   > 本次快照集合之外的 `asset_id`、接收人 sub 映射不到本地用户、迟到的旧 generation），
+   > 这些返回 **409**。
+   >
+   > **归属在 preview 之后发生变化的一律走 412，不得用 409 表达。**
 
 ### 10.5.1.1 执行顺序：**数据先，授权后**（修既有缺陷）
 
 现有代码在调用数据 webhook **之前**就执行了授权转移
-（`lifecycle/handover.py:182` 的 `transfer_selected_grants()` 早于 `:190` 的 `signed_hook_post()`）。
+（`lifecycle/handover.py:182` 的 `transfer_selected_grants()` 早于 `:185` 的 `signed_hook_post()`）。
 webhook 失败时 action 标 `failed`，**但权限已经转走了** —— 状态机根本表达不了"数据没搬、权限已转"，
 重试也恢复不了。
 
@@ -963,19 +994,23 @@ APP 侧仍应保留自己的行锁作为第二道防线。
 | 202 | 异步受理 | `async_pending` | — | 轮询中 |
 | 400 | 请求不合法（如时间戳超窗） | `failed` | 是 | 请求被应用拒绝 |
 | 401 / 403 | 验签失败 | `failed` | 否 | 签名校验失败，请检查该应用的 webhook 密钥 |
-| 409 | 人员无法识别 / 投递冲突 / 迟到的旧 generation / 业务归属冲突 | `failed` | 否 | 「应用拒绝了本次交接」 |
+| 409 | **请求本身与 APP 的现实对不上**：人员无法识别、`overrides` 引用了快照外的 `asset_id`、投递冲突、迟到的旧 generation。**不含**「归属在 preview 之后变了」——那是 412（§10.5.1 第 4 条） | `failed` | 否 | 「应用拒绝了本次交接」 |
 | **412** | **快照已失效**（`snapshot_token` 与当前数据不一致） | 退回 `pending` | 否 | 「清单已变化，请重新预演」 |
 | 413 | 请求体过大 | **原超大 batch 记 `failed`；action 保持 `previewed`** | 否（不显示 [重试]） | 转入分批：创建 `HandoverBatchPlan`、返回 `batch_progress`，引导「重新预演 → 执行下一批」（`01` §2.4.1.1） |
 | 422 | 载荷不被支持（未声明的资产类型、不支持的事件） | `failed` | 否 | 应用声明与实现不一致 |
 | **423** | **对象被临时锁住**（如 EasyProject 的项目审批锁 `PROJECT_LOCKED`） | 退回 `pending` | **是**（人解除锁之后） | 「该应用中部分对象正在审批/锁定，解除后请重新预演」 |
-| **429** | **APP 侧限流**（`items` 的重放/读放大防护，§10.4） | **保持原状态不变** | **是** —— 按 `Retry-After` 退避 | 不向用户报错，后台重试即可 |
+| **429** | **APP 侧限流**（`items` 的重放/读放大防护，§10.4） | **按事件分**：`items` / `preview` 是只读，不改任何 action 状态；**`execute` 保持 `previewed`，并且必须在同一次 fence CAS 里释放租约** | **是** —— 按 `Retry-After` 退避 | `items`/`preview` 不向用户报错，退避后重试即可；`execute` 显示 [重试] 与「应用侧限流，请稍后重试」 |
 | 5xx | 应用内部错误 | `failed` | 是 | 可重试 |
 
 > 「界面提示」列是**本地稳定文案**，与下游返回什么无关。下游的 `code`/`message`
 > 按第 2 条白名单提取后追加在它后面，不替代它。
 >
-> **三个"退回 `pending`"的行（412 / 423）与 413 的"保持 `previewed`"要分清**：
-> 前者要求用户**重新预演**（清单已经不是他看过的那份了），后者的清单没变、只是一次发不完。
+> **两个"退回 `pending`"的行（412 / 423）与"保持 `previewed`"的两行（413 / execute 的 429）要分清**：
+> 前者要求用户**重新预演**（清单已经不是他看过的那份了），后者的清单没变 ——
+> 413 是一次发不完，429 是对方在限流。
+>
+> **任何允许出现的状态码，都必须在 `01` §2.4.2 的租约释放冻结表里有一行。**
+> 那张表少一行，对应的 `(subject, app)` 就会被永久锁住。
 
 > 各 APP 在自己的设计文档里按本表对齐**状态码**即可，错误码字符串沿用本仓库既有约定，无需统一。
 
@@ -1122,6 +1157,12 @@ D11 是冻结决策，**下游文档不得单方面豁免**。经复核确认，
   `done`/`skipped`**（D13）。只跳过 blocked 那一个而别的还 `pending`，单子当然不会完成 —— 这不是 bug。
 - **步骤 9**：§12 的事件里，`handover_task_upgraded` / `handover_assignee_resolution_degraded` /
   `handover_task_deferred` / `handover_action_failed` / `handover_action_unblocked` /
-  `handover_capability_conflict` **不会**在步骤 1–8 的主流程里出现，各自需要独立的触发场景。
+  `handover_capability_conflict` / `handover_approver_reassigned` /
+  `handover_approval_rule_approver_replaced` **不会**在步骤 1–8 的主流程里出现，各自需要独立的触发场景。
   逐事件配一个最小用例（见 `01` §6.4 的落点表）。
+
+  > 后两条尤其容易两头漏：步骤 1–8 的 fixture 只造了 EasyTrade / EasyProject 的业务数据，
+  > **没有任何一步让测试员工成为 `AccessRequestApprover`、或出现在 `ApprovalRule.approver_userids` 里**。
+  > 而 §12 把「单子挂在已离职的主管头上」称为最常见的卡死场景 —— 主流程反而不覆盖它。
+  > 步骤 1 的 fixture 要补：**测试员工同时是某条 `ApprovalRule` 的审批人，且名下有一条待审批的 `AccessRequest`**。
 - **等待时长**：所有异步等待都要有上限（建议 60 秒），超时记 FAIL，不允许无限等。

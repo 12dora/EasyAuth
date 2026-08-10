@@ -592,7 +592,9 @@ class HandoverLeaseFence(models.Model):
 | 同步 200（非最终批） | 写 batch 完成的那次 CAS 同时释放 |
 | **202** | **不释放**，移交 async sentinel（见下） |
 | 412 / 413 / 423（退回 `pending` / 保持 `previewed`） | 写回状态的那次 CAS 同时释放 |
+| **429（APP 侧限流，action 保持 `previewed`）** | **同样要释放**。这一行最容易漏：429 在契约 §10.6 里写的是「不向用户报错、退避后重试」，看着不像终结路径，但对本次 execute 而言它就是终结了 —— 不释放的话，APP 前面挂个网关限流一次，那条 `(subject, app)` 就永久锁死 |
 | 409 / 422 / 401 / 403 / 5xx（`failed`） | 同上，写 `failed` 的那次 CAS 同时释放 |
+| 上表之外的任何状态码 | **不存在**。`ALLOWED_BUSINESS_STATUS`（§8）与本表必须逐一对应，加一个码就要加一行 |
 
 > **漏掉任何一行，那条 `(subject, app)` 就被永久锁住**：条件唯一约束会让后续的 execute、
 > 以及升级（§5.1.2 要求无在途租约）统统撞上 `handover_execution_in_flight`，
