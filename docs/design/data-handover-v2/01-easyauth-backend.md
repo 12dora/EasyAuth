@@ -163,28 +163,50 @@ models.CheckConstraint(
 > 会停在「task 是 `in_progress`、所有 action 都是 `pending`」这种自相矛盾的状态上。
 >
 > ```python
-> def compute_task_status(task, actions, team_items) -> str:
+> def compute_task_status(task, actions, team_items, *, plan_confirmed: bool) -> str:
 >     if task.status == TASK_STATUS_CANCELLED:
 >         return TASK_STATUS_CANCELLED              # 终态, 不再重算
->     finished = all(a.status in ACTION_FINISHED_STATUSES for a in actions)
->     if finished and all(t.is_finished for t in team_items):
->         return TASK_STATUS_COMPLETED              # D13; 存在 blocked 时 finished 必为 False
+>     actions_finished = all(a.status in ACTION_FINISHED_STATUSES for a in actions)
+>     # 团队项没有 is_finished/is_started 属性, 只有 status 列
+>     teams_finished = all(t.status != ITEM_STATUS_PENDING for t in team_items)
+>     if actions_finished and teams_finished and plan_confirmed:
+>         return TASK_STATUS_COMPLETED              # D13; 存在 blocked 时 actions_finished 必为 False
 >     started = (
 >         any(a.status not in (ACTION_STATUS_PENDING,
 >                              ACTION_STATUS_BLOCKED,
 >                              ACTION_STATUS_SKIPPED) for a in actions)
->         or any(t.is_started for t in team_items)
+>         or any(t.status != ITEM_STATUS_PENDING for t in team_items)
 >     )
 >     return TASK_STATUS_IN_PROGRESS if started else TASK_STATUS_PENDING
 >
-> def refresh_task_status(task) -> None:
->     nxt = compute_task_status(task, task.app_actions.all(), task.team_items.all())
+> def refresh_task_status_locked(task) -> None:
+>     # 调用方已在同一事务里 select_for_update 锁住 task
+>     plan_confirmed = True
+>     if task.kind == HANDOVER_KIND_TRANSFER:
+>         plan = TransferPlan.objects.filter(task=task).first()
+>         plan_confirmed = plan is not None and plan.confirmed_at is not None
+>     nxt = compute_task_status(task, task.app_actions.all(), task.team_items.all(),
+>                               plan_confirmed=plan_confirmed)
 >     if task.status != nxt:                        # 任何方向都保存, 含回退
 >         task.status = nxt
 >         task.save(update_fields=["status", "updated_at"])
 >         if nxt == TASK_STATUS_COMPLETED:
 >             审计 handover_task_completed
+>             if task.kind == HANDOVER_KIND_TRANSFER:
+>                 清除 subject 的 department_changed_at   # 既有副作用, 不要丢
 > ```
+>
+> **三处不能改写既有行为**：
+>
+> 1. **`plan_confirmed` 门槛必须保留。** 现有实现（`lifecycle/core.py:127-131`）对 `kind=transfer`
+>    额外要求 `TransferPlan.confirmed_at` 非空。丢掉它的话，转岗单在 action 全部结束时就会被判
+>    `completed`，随后 `confirm_transfer_grant_diff()` 会被 `ensure_task_open()` 拒绝 ——
+>    **新岗位的授权差异永远应用不上，而单据显示已完成**。
+> 2. **团队项用 `status`，没有 `is_finished` / `is_started` 这两个属性。**
+>    `HandoverTeamItem` 只有 `status` 列（`lifecycle/models.py:360`），既有代码写的是
+>    `item.status != ITEM_STATUS_PENDING`。照虚构属性写，离职者是团队 leader 时建单当场
+>    抛 `AttributeError`，**整个建单事务回滚**。
+> 3. **完成时清除 `department_changed_at`** 这个既有副作用不要丢。
 >
 > `started` 排除 `pending` / `blocked` / `skipped` 三种**初始态**：
 > `blocked` 是未接入 APP 的初始状态，`skipped` 是 `capability="none"` 的初始状态。
@@ -193,8 +215,14 @@ models.CheckConstraint(
 >
 > **调用点（缺一个就会状态滞后）**：preview 成功、preview 失败、`default_action` / override 变更、
 > execute 各阶段、retry、skip、capability reconcile、`apply_team_item()` 完成、升级重置。
-> 全部在**业务事务提交后**调用。现有代码在 preview 后**根本没有调用**（`handover.py:542,551`），
-> 首次 preview 完成后单据仍停在 `pending`。
+> 现有代码在 preview 后**根本没有调用**（`handover.py:542,551`），首次 preview 完成后单据仍停在 `pending`。
+>
+> **必须与子状态同事务，不能"提交后再调一次"。** 网络调用仍在事务外，但**响应落库这一步**
+> 要按统一锁序 `task → 子项` 加锁，并在**同一事务**里调 `refresh_task_status_locked()`：
+> 子状态与汇总状态原子提交。
+> 分成两个事务的话，最后一个 action 提交完、进程恰好退出，task 就**永久停在 `in_progress`** ——
+> 之后再没有任何状态变化会触发修复，而提醒、列表筛选、以及"一人一张 open 单"的唯一约束
+> 会一直用着这个错值。周期 reconcile 只能当兜底，不能当唯一的正确性来源。
 
 ### 2.3 `HandoverAssetType`（新表）
 
