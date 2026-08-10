@@ -193,6 +193,71 @@ def test_validate_manifest_rejects_bad_lifecycle_and_webhook_types() -> None:
         validate_manifest(manifest)
 
 
+def test_validate_manifest_rejects_handover_asset_types_not_list() -> None:
+    manifest = _manifest()
+    manifest["lifecycle"] = {"handover_asset_types": {"type": "customer"}}
+    with pytest.raises(ManifestValidationError, match="handover_asset_types 必须是数组"):
+        validate_manifest(manifest)
+
+
+def test_validate_manifest_rejects_handover_asset_type_item_not_object() -> None:
+    manifest = _manifest()
+    manifest["lifecycle"] = {"handover_asset_types": ["customer"]}
+    with pytest.raises(ManifestValidationError, match="必须是 JSON object"):
+        validate_manifest(manifest)
+
+
+def test_validate_manifest_rejects_handover_asset_type_missing_or_empty_type_label() -> None:
+    base = {
+        "type": "customer",
+        "label": "名下客户",
+        "detail_supported": True,
+        "releasable": True,
+    }
+    for field, bad in (("type", ""), ("type", None), ("label", ""), ("label", None)):
+        item = dict(base)
+        if bad is None:
+            del item[field]
+        else:
+            item[field] = bad
+        manifest = _manifest()
+        manifest["lifecycle"] = {"handover_asset_types": [item]}
+        with pytest.raises(ManifestValidationError, match=rf"{field} 必须是非空字符串"):
+            validate_manifest(manifest)
+
+
+def test_validate_manifest_rejects_handover_asset_type_non_bool_flags() -> None:
+    base = {
+        "type": "customer",
+        "label": "名下客户",
+        "detail_supported": True,
+        "releasable": True,
+    }
+    for field in ("detail_supported", "releasable"):
+        for bad in ("true", 1, 0, "yes"):
+            item = dict(base)
+            item[field] = bad
+            manifest = _manifest()
+            manifest["lifecycle"] = {"handover_asset_types": [item]}
+            with pytest.raises(ManifestValidationError, match=rf"{field} 必须是布尔值"):
+                validate_manifest(manifest)
+
+
+def test_validate_manifest_rejects_handover_asset_type_missing_flags() -> None:
+    for field in ("detail_supported", "releasable"):
+        item = {
+            "type": "customer",
+            "label": "名下客户",
+            "detail_supported": True,
+            "releasable": True,
+        }
+        del item[field]
+        manifest = _manifest()
+        manifest["lifecycle"] = {"handover_asset_types": [item]}
+        with pytest.raises(ManifestValidationError, match=rf"{field} 必须是布尔值"):
+            validate_manifest(manifest)
+
+
 def test_validate_manifest_rejects_duplicate_keys_and_unknown_grants() -> None:
     manifest = _manifest()
     manifest["scopes"].append({"key": "SELF", "name": "重复"})

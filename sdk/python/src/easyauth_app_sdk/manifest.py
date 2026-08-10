@@ -129,9 +129,12 @@ def _validate_lifecycle(lifecycle: Any) -> None:
             value = item.get(field)
             if not isinstance(value, str) or not value:
                 raise ManifestValidationError(f"{label}.{field} 必须是非空字符串")
+        # 契约 §9.1: detail_supported / releasable 为声明形状必填布尔, 不得缺省或非 bool。
         for field in ("detail_supported", "releasable"):
-            value = item.get(field)
-            if value is not None and not isinstance(value, bool):
+            if field not in item:
+                raise ManifestValidationError(f"{label}.{field} 必须是布尔值")
+            value = item[field]
+            if not isinstance(value, bool):
                 raise ManifestValidationError(f"{label}.{field} 必须是布尔值")
 
 
