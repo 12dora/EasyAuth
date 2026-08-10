@@ -583,7 +583,7 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
 ```json
 {
   "event_type": "lifecycle.handover.preview",
-  "task_id": "137:easytrade",
+  "task_id": "137:4",
   "generation": 1,
   "kind": "offboard",
   "from_user_id": "3f1a5c88-0e21-4b7a-9c3d-77e5a1f0b912",
@@ -624,7 +624,7 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
 ```json
 {
   "event_type": "lifecycle.handover.items",
-  "task_id": "137:easytrade",
+  "task_id": "137:4",
   "generation": 1,
   "snapshot_token": "et-2026-08-10T10:22:41.331Z-9f2c",
   "from_user_id": "3f1a5c88-0e21-4b7a-9c3d-77e5a1f0b912",
@@ -679,7 +679,7 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
 ```json
 {
   "event_type": "lifecycle.handover.execute",
-  "task_id": "137:easytrade",
+  "task_id": "137:4",
   "generation": 1,
   "batch_id": 1,
   "snapshot_token": "et-2026-08-10T10:22:41.331Z-9f2c",
@@ -781,8 +781,16 @@ transferred + released + skipped + merged + failed == 该类型在本轮 assignm
 > 界面上展示给用户的总计是**各批 summary 逐字段相加**，
 > 不要拿它去和最初那次 preview 的 `count` 比对 —— 两者本来就不相等。
 
-响应 202（异步，沿用现有机制）：返回 `Location` 头指向状态查询 URL，EasyAuth 轮询
-（`handover.py:261 poll_async_action`，逻辑不变）。
+响应 202（异步）：返回 `Location` 头指向状态查询 URL，EasyAuth 轮询。
+
+> **轮询逻辑不是「不变」，恰恰是必须改的地方。**
+> 现有 `poll_async_action()`（`handover.py:261,303-320`）拿到终态 200 后**直接把 action 置 `done`** ——
+> 既不写最终批的 `data_completed_at`，也**根本不转授 `grant_receiver` 的权限**。
+> 照「逻辑不变」实现，单据显示完成而授权一动没动。
+>
+> v2 规定：① 收到 202 时 execute worker 必须把租约**移交给 async sentinel**（`01` §2.4.2）；
+> ② poll 拿到终态 200 后**必须走 `complete_data_phase(batch)`**；
+> ③ **禁止** `async_pending → done` 直跳。
 
 ### 10.5.1 快照令牌与并发（execute 的安全前提）
 

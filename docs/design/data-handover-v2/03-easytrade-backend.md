@@ -225,6 +225,12 @@ HANDOVER_ASSETS_BY_KEY: Final[dict[str, HandoverAssetSpec]] = {...}
 
 - `asset_type` 不在注册表 → `422 undeclared_asset_type`
 - `page_size` 钳制到 1–200
+- **任何查询之前**先校验上界（契约 §10.4）：`1 <= page <= 100000`、`1 <= page_size <= 200`、
+  `len(q.strip().encode("utf-8")) <= 128`。违反直接 `422`，**不要钳制后继续查** ——
+  钳制等于把一次攻击性输入变成一次正常查询
+- 验签之后按**签名覆盖的 body 指纹**做 300 秒响应缓存或 single-flight；超并发/频率上限返回 `429`。
+  **不能只按 `delivery_id` 去重** —— 那个头不在签名里，改一下就绕过去了。
+  测试覆盖：超大 `page`、超长 UTF-8 `q`、以及同一份合法签名请求的连续与并发重放
 - `q` 非空时按各类型自定字段模糊匹配（客户按名称，订单按单号，任务按标题…），由 `HandoverAssetSpec` 决定
 - **`total` 是应用 `q` 之后的总数**（契约 §10.4）。仅当 `q` 为空串时，`total` 才必须等于同一
   `snapshot_token` 下 preview 的 `count`。想同时给出未过滤总数就另加可选字段 `unfiltered_total`。
@@ -324,7 +330,8 @@ def execute_handover(
 2. **前置校验**（修 B1/B2）。**四项都要，缺一不可**：
    - 任一 `action == "release"` 落在 `spec.releasable is False` 的类型上 → `422 asset_type_not_releasable`。
      绝不允许写 `NULL` 进非空列，也绝不允许静默保持原归属
-   - 任一 `action == "transfer"` 的接收人有问题 → 拒绝。**状态码按原因分开，不能一律 422**：
+   - 任一 `action == "transfer"` 的接收人有问题 → 拒绝。**状态码按原因分开，不能一律 422**
+     （**默认接收人与每一条 override 的接收人，三个位置用同一套规则**）：
 
      | 原因 | 状态码 | 对齐依据 |
      |---|---|---|
@@ -348,14 +355,23 @@ def execute_handover(
               → Task → ProductRequirement
      ```
 
-   > **⚠ 这条锁序与既有的活动更新路径相反，必须一并改。**
-   > `api/v1/activities.py:159-170` 的 update/delete 是**先锁 Activity 再取关联的 Inquiry**，
-   > 而本表序是 `Inquiry → Activity`。两者并发就是一个标准死锁。
+   > **⚠ 既有代码里有三条反向锁路径，启用 handover 之前必须全部整改**（不是可选项）：
    >
-   > **启用 handover 之前**，活动的 update/delete 必须统一改成
-   > `Customer → Inquiry(按 id 升序) → Activity`；取得 Activity 锁后**重新校验关联未变**，
-   > 变了就重试或返回 409。这属于 A3 的前置改造，不是可选项。
-   > 补一个 PostgreSQL 双事务用例，覆盖 handover 与 activity update/delete 并发。
+   > | # | 现状 | 与本表序的冲突 |
+   > |---|---|---|
+   > | 1 | 活动 update/delete **先锁 Activity 再取关联 Inquiry**（`api/v1/activities.py:159-170`） | 本序是 `Inquiry → Activity` |
+   > | 2 | 订单写路径先锁 `Order`，随后 `derive_stage()` 去改 `Inquiry`（`api/v1/orders/common.py:78-81`、`orders/routes.py:198-214`、`domain/pipeline/stage_deriver.py:33-63`） | 本序是 `Inquiry → Order` |
+   > | 3 | `delete_sample_request()` 先锁 `SampleRequest`，再进 `Inquiry → SampleRequest` 的 helper（`api/v1/sample_requests_delete.py:29-35`） | 本序是 `Inquiry → SampleRequest` |
+   >
+   > 整改口径统一为「**先无锁读出关联 id，再按全局表序加锁，锁后复核关联未变**」：
+   >
+   > 1. 活动：`Customer → Inquiry(id 升序) → Activity`，锁后复核关联，变了就重试或 409；
+   > 2. 订单：先只读拿到 `inquiry_id`，按 `Inquiry → Order` 加锁，锁后复核 `Order.inquiry_id` 未变，
+   >    再做订单改写与阶段推导；
+   > 3. 样品：`delete_sample_request()` **不得**在调 `lock_sample_write_roots()` 之前先锁
+   >    `SampleRequest`；先无锁读，再统一 `Inquiry → SampleRequest` 加锁，锁内重验取消状态。
+   >
+   > 三条各补一个 PostgreSQL 双事务死锁用例。PostgreSQL 会回滚其中一方，交接那边表现为 5xx。
    >
    > **为什么必须无视 payload 顺序**：EasyAuth 的 `assignments` 数组顺序由前端决定。
    > 若照单遍历，一次「先 `receivable_open` 后 `order_in_transit`」的请求会**先锁应收再等订单**，
@@ -494,8 +510,9 @@ easyauth_handover_generation_watermarks(task_id VARCHAR(64) PRIMARY KEY,
 **DEFAULT 只为迁移历史行服务，加完必须去掉**：三列在应用层都是必填，
 留着 server default 会让漏传字段变成静默写入默认值。
 
-**`task_id` 收窄为 `VARCHAR(64)` 并加同等 CHECK**（契约 §5.4 已把它限到 64 字节、
-字符集 `[A-Za-z0-9:_-]`）。入口处也要校验：不满足 `^[A-Za-z0-9:_-]{1,64}$` → `422`。
+**`task_id` 收窄为 `VARCHAR(64)` 并加同等 CHECK**。契约 §5.4 的格式是 **`{handover_task.id}:{app.id}`，两段都是十进制**，所以入口正则是 **`^[0-9]+:[0-9]+$`**、UTF-8 长度 1–64 字节，不满足 → `422`。
+**不要写成 `[A-Za-z0-9:_-]`** —— 那会放行契约明令禁止的字母/下划线/连字符，把上游还没迁移完（仍在拼 `app_key`）这件事**掩盖过去**。
+测试必须拒绝 `137:easytrade`、`137_app`、以及缺冒号的值。
 不加的话，65–255 字符的非法键会被现有列**照单收下**，超过 255 才到 flush 时炸成 500 ——
 一个本该在入口稳定 422 的输入变成了不稳定的 5xx。迁移前先检查历史行。
 
