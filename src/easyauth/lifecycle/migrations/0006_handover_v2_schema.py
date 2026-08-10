@@ -16,6 +16,38 @@ if TYPE_CHECKING:
     from django.db.migrations.operations.base import Operation
 
 
+def assert_grant_item_unique_per_generation(
+    apps: Apps,
+    schema_editor: BaseDatabaseSchemaEditor,
+) -> None:
+    """01 §2.5.1: 加唯一约束前断言无重复; 有重复则失败并提示人工核对, 禁止自动去重。"""
+    HandoverGrantItem = apps.get_model("lifecycle", "HandoverGrantItem")
+    from django.db.models import Count
+
+    duplicates = (
+        HandoverGrantItem.objects.values(
+            "task_id",
+            "generation",
+            "source_grant_id",
+            "target_kind_snapshot",
+            "target_key_snapshot",
+            "scope_key",
+        )
+        .annotate(n=Count("id"))
+        .filter(n__gt=1)
+    )
+    if duplicates.exists():
+        sample = list(duplicates[:5])
+        message = (
+            "lifecycle_grant_item_unique_per_generation 预检失败: 存量 HandoverGrantItem "
+            "在 (task, generation, source_grant_id, target_kind_snapshot, "
+            "target_key_snapshot, scope_key) 上存在重复行。"
+            "说明现有快照逻辑已经出过问题，需要人工核对后处理，不得自动去重。"
+            f" 样例: {sample!r}"
+        )
+        raise RuntimeError(message)
+
+
 def install_cross_table_triggers(
     apps: Apps,
     schema_editor: BaseDatabaseSchemaEditor,
@@ -339,7 +371,7 @@ class Migration(migrations.Migration):
                     ("blocked", "blocked"),
                 ],
                 default="pending",
-                max_length=16,
+                max_length=32,
             ),
         ),
         migrations.AddConstraint(
@@ -366,6 +398,10 @@ class Migration(migrations.Migration):
             model_name="handovergrantitem",
             name="generation",
             field=models.PositiveIntegerField(default=1),
+        ),
+        migrations.RunPython(
+            assert_grant_item_unique_per_generation,
+            migrations.RunPython.noop,
         ),
         migrations.AddConstraint(
             model_name="handovergrantitem",

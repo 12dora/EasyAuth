@@ -175,7 +175,13 @@ BATCH_STATUS_VALUES: Final[tuple[str, ...]] = (
     BATCH_STATUS_DONE,
     BATCH_STATUS_FAILED,
 )
+# §5.5.1 skip/cancel: 仅真正在途; pending(429 重排队)不算 in-flight。
+# 改分配端点另用 ASSIGNMENT_MUTATION_IN_FLIGHT_STATUSES(含 pending)。
 BATCH_IN_FLIGHT_STATUSES: Final[tuple[str, ...]] = (
+    BATCH_STATUS_EXECUTING,
+    BATCH_STATUS_ASYNC_PENDING,
+)
+ASSIGNMENT_MUTATION_IN_FLIGHT_STATUSES: Final[tuple[str, ...]] = (
     BATCH_STATUS_PENDING,
     BATCH_STATUS_EXECUTING,
     BATCH_STATUS_ASYNC_PENDING,
@@ -361,7 +367,8 @@ class HandoverAppAction(models.Model):
         null=True,
     )
     status: models.CharField[str, str] = models.CharField(
-        max_length=16,
+        # async_attention_required = 24 chars; 16 会让 E009 与 PG DataError 永久锁租约。
+        max_length=32,
         choices=ACTION_STATUS_CHOICES,
         default=ACTION_STATUS_PENDING,
     )
