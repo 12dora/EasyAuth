@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
 import { Dialog } from "../../components/Dialog";
-import { TextArea } from "../../components/Field";
+import { Field, SelectInput, TextArea } from "../../components/Field";
 import { StatusBanner } from "../../components/StatusBanner";
 import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest } from "../../lib/api";
@@ -42,12 +42,21 @@ export function HandoverActionPanel({
   const [skipOpen, setSkipOpen] = useState(false);
   const [skipReason, setSkipReason] = useState("");
   const [rawError, setRawError] = useState<string | null>(null);
+  const [asyncAbandonOpen, setAsyncAbandonOpen] = useState(false);
+  const [asyncOutcome, setAsyncOutcome] = useState<"done" | "failed">("done");
+  const [asyncReason, setAsyncReason] = useState("");
 
   const status = action.status;
-  const readOnly = status === "executing" || status === "async_pending";
+  // batch_progress 非 null 期间禁止改分配（02 §4 / 01 batch_plan_in_progress）
+  const readOnly =
+    status === "executing" || status === "async_pending" || action.batch_progress != null;
   const poll = status === "executing" || status === "async_pending";
 
-  // 父级详情 query 应设置 refetchInterval；此处仅渲染。
+  const handleSnapshotStale = () => {
+    setConfirmOpen(false);
+    setBanner(t("handover.portal.detail.snapshotStale"));
+    onTaskRefresh();
+  };
 
   const previewMutation = useMutation({
     mutationFn: () =>
@@ -61,7 +70,7 @@ export function HandoverActionPanel({
       onTaskRefresh();
     },
     onError: (error: Error) => {
-      handleActionError(error, setBanner, t, onTaskRefresh);
+      handleActionError(error, setBanner, t, onTaskRefresh, setConfirmOpen);
     },
   });
 
@@ -78,8 +87,7 @@ export function HandoverActionPanel({
       onTaskRefresh();
     },
     onError: (error: Error) => {
-      setConfirmOpen(false);
-      handleActionError(error, setBanner, t, onTaskRefresh);
+      handleActionError(error, setBanner, t, onTaskRefresh, setConfirmOpen);
     },
   });
 
@@ -124,6 +132,28 @@ export function HandoverActionPanel({
     onError: (error: Error) => setBanner(error.message),
   });
 
+  const asyncAbandonMutation = useMutation({
+    mutationFn: () =>
+      apiRequest<HandoverActionPayload>(
+        handoverActionPath(surface, task.id, action.app_key, "async-abandon"),
+        {
+          method: "POST",
+          body: {
+            outcome: asyncOutcome,
+            reason: asyncReason.trim(),
+            summary: null,
+          },
+        },
+      ),
+    onSuccess: (payload) => {
+      setAsyncAbandonOpen(false);
+      setAsyncReason("");
+      onActionReplace(payload.action);
+      onTaskRefresh();
+    },
+    onError: (error: Error) => setBanner(error.message),
+  });
+
   const toneClass =
     status === "blocked" || (status === "failed" && !action.data_completed_at)
       ? "border-signal/30 bg-signal/5"
@@ -140,11 +170,7 @@ export function HandoverActionPanel({
   const skipDisplay = resolveSkipDisplay(action, t, fmt);
 
   const confirmParts = buildExecuteConfirmParts(action);
-  const primaryReceiver =
-    action.asset_types.find((row) => row.default_action === "transfer" && row.default_to_user)?.default_to_user
-      ?.name ||
-    action.grant_receiver?.name ||
-    "-";
+  const primaryReceiver = resolveConfirmReceiver(confirmParts, action, t);
 
   return (
     <li className={cn("space-y-3 rounded-[3px] border px-4 py-3", toneClass)} data-testid={`action-panel-${action.app_key}`}>
@@ -180,7 +206,14 @@ export function HandoverActionPanel({
       ) : null}
 
       {status === "async_attention_required" ? (
-        <p className="text-body text-ink-soft">{t("handover.portal.detail.asyncAttention")}</p>
+        <div className="space-y-2">
+          <p className="text-body text-ink-soft">{t("handover.portal.detail.asyncAttention")}</p>
+          {isConsoleSuperuser && surface === "console" ? (
+            <Button type="button" size="sm" variant="ghost-danger" onClick={() => setAsyncAbandonOpen(true)}>
+              {t("handover.console.asyncAbandon")}
+            </Button>
+          ) : null}
+        </div>
       ) : null}
 
       {status === "pending" ? (
@@ -217,6 +250,7 @@ export function HandoverActionPanel({
             action={action}
             readOnly={readOnly}
             onBusyChange={setAllocatorBusy}
+            onSnapshotStale={handleSnapshotStale}
             onActionUpdated={(patch) => {
               onActionReplace({
                 ...action,
@@ -365,11 +399,17 @@ export function HandoverActionPanel({
           }
         >
           <p className="text-body leading-5 text-ink-soft" data-testid="execute-confirm-body">
-            {t("handover.portal.detail.executeConfirmBody", {
-              assets: confirmParts.transferLines.join("、") || "-",
-              receiver: primaryReceiver,
-              overrides: confirmParts.overrideCount,
-            })}
+            {confirmParts.uniqueReceiverNames.length > 1
+              ? t("handover.portal.detail.executeConfirmBodyMulti", {
+                  assets: confirmParts.transferLines.join("、") || "-",
+                  count: confirmParts.uniqueReceiverNames.length,
+                  overrides: confirmParts.overrideCount,
+                })
+              : t("handover.portal.detail.executeConfirmBody", {
+                  assets: confirmParts.transferLines.join("、") || "-",
+                  receiver: primaryReceiver,
+                  overrides: confirmParts.overrideCount,
+                })}
           </p>
         </Dialog>
       ) : null}
@@ -407,6 +447,51 @@ export function HandoverActionPanel({
         </Dialog>
       ) : null}
 
+      {asyncAbandonOpen ? (
+        <Dialog
+          title={t("handover.console.asyncAbandonTitle")}
+          size="sm"
+          onClose={() => setAsyncAbandonOpen(false)}
+          footer={
+            <>
+              <Button type="button" onClick={() => setAsyncAbandonOpen(false)}>
+                {t("common.cancel")}
+              </Button>
+              <Button
+                type="button"
+                variant="danger"
+                disabled={asyncReason.trim().length < 10}
+                loading={asyncAbandonMutation.isPending}
+                onClick={() => asyncAbandonMutation.mutate()}
+              >
+                {t("handover.console.asyncAbandonConfirm")}
+              </Button>
+            </>
+          }
+        >
+          <div className="space-y-3">
+            <p className="text-body text-ink-soft">{t("handover.console.asyncAbandonHint")}</p>
+            <Field label={t("handover.console.asyncAbandonOutcome")}>
+              <SelectInput
+                value={asyncOutcome}
+                aria-label={t("handover.console.asyncAbandonOutcome")}
+                onChange={(event) => setAsyncOutcome(event.currentTarget.value as "done" | "failed")}
+              >
+                <option value="done">{t("handover.console.asyncAbandonOutcomeDone")}</option>
+                <option value="failed">{t("handover.console.asyncAbandonOutcomeFailed")}</option>
+              </SelectInput>
+            </Field>
+            <Field label={t("handover.console.asyncAbandonReason")} hint={t("handover.portal.reassign.reasonHint")}>
+              <TextArea
+                value={asyncReason}
+                aria-label={t("handover.console.asyncAbandonReason")}
+                onChange={(event) => setAsyncReason(event.currentTarget.value)}
+              />
+            </Field>
+          </div>
+        </Dialog>
+      ) : null}
+
       {poll ? (
         <PollMarker
           onTick={() => {
@@ -430,21 +515,53 @@ function PollMarker({ onTick }: { onTick: () => void }) {
 function handleActionError(
   error: Error,
   setBanner: (msg: string | null) => void,
-  t: (key: "handover.portal.detail.snapshotStale" | "handover.portal.detail.downstreamLocked", vars?: never) => string,
+  t: ReturnType<typeof useI18n>["t"],
   onTaskRefresh: () => void,
+  setConfirmOpen: (open: boolean) => void,
 ) {
   const reason = apiErrorReason(error);
   if (reason === "snapshot_stale") {
     setBanner(t("handover.portal.detail.snapshotStale"));
+    setConfirmOpen(false);
     onTaskRefresh();
     return;
   }
   if (reason === "downstream_locked") {
     setBanner(t("handover.portal.detail.downstreamLocked"));
+    setConfirmOpen(false);
     onTaskRefresh();
     return;
   }
+  // 409 confirm_version_stale：刷新详情并用新 confirm_version 重新确认（01 §6.1）
+  if (reason === "confirm_version_stale") {
+    setBanner(t("handover.portal.detail.confirmVersionStale"));
+    onTaskRefresh();
+    setConfirmOpen(true);
+    return;
+  }
+  // 413 payload_too_large：action 保持 previewed 并返回 batch_progress，刷新后出现 [执行下一批]
+  if (reason === "payload_too_large") {
+    setBanner(t("handover.portal.detail.payloadTooLarge"));
+    setConfirmOpen(false);
+    onTaskRefresh();
+    return;
+  }
+  setConfirmOpen(false);
   setBanner(error.message);
+}
+
+function resolveConfirmReceiver(
+  confirmParts: ReturnType<typeof buildExecuteConfirmParts>,
+  action: HandoverAction,
+  t: ReturnType<typeof useI18n>["t"],
+): string {
+  if (confirmParts.uniqueReceiverNames.length > 1) {
+    return t("handover.portal.detail.multiReceivers", { count: confirmParts.uniqueReceiverNames.length });
+  }
+  if (confirmParts.uniqueReceiverNames.length === 1) {
+    return confirmParts.uniqueReceiverNames[0];
+  }
+  return action.grant_receiver?.name || "-";
 }
 
 function resolveSkipDisplay(
@@ -522,4 +639,3 @@ function actionStatusBadgeTone(
       return "neutral";
   }
 }
-
