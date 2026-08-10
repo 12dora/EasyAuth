@@ -16,7 +16,7 @@
 | 文档 | 内容 | 下一步 |
 |---|---|---|
 | [`08`](08-easyproject-ag00-rulings.md) | AG-00 的两份裁定：**所有权**（逐表 owner + 六个 `system_handover` 命令签名 + 三条并行 revision + 评审签署回滚）与 **system-actor 语义**（actor 表示、锁内版本、幂等键、审批锁、豁免边界、通知责任） | AG-00 审核 → 追加进 `EasyProject/contracts/ownership.md` |
-| [`09`](09-easyproject-ccr.md) | 按 `contracts/workflow.md` 六要素写全的 CCR 正文，11 个错误码 | AG-00 提交进 CCR 流程 |
+| [`09`](09-easyproject-ccr.md) | 按 `contracts/workflow.md` 六要素写全的 CCR 正文（错误码清单以该文为准） | AG-00 提交进 CCR 流程 |
 
 A5 的开工前置从"等两份不存在的裁定"变成"等三样可机械核对的凭据"（README「A5 的三道门禁」）。
 

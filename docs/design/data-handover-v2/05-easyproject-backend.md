@@ -649,8 +649,8 @@ CCR 内容（按 `contracts/workflow.md` §6 的六要素）：
 
 ### 5.3 错误体形状：不改，走状态码对齐
 
-契约 §10.6 已裁定：**HTTP 状态码是唯一规范部分，响应体是参考信息**，EasyAuth 原样存入
-`action.last_error` 并展示，不解析字段名。
+契约 §10.6 已裁定：**HTTP 状态码是唯一规范部分，响应体是参考信息** ——
+EasyAuth 不解析你的字段名做任何逻辑分支。
 
 因此本端点继续返回 EasyProject 标准错误体 `{"detail":{"code","message","traceId"}}`
 （`components/schemas/ErrorBody`），**不需要**为 EasyAuth 另造一套 `{"error":{...}}` 信封。
