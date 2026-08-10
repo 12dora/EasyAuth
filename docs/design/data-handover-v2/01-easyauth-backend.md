@@ -450,10 +450,28 @@ delivery（`outcome="sent"`）、写 outbox，**提交后**才由 worker 真正�
 每批的流程固定为：**重新 preview → 拿新 token → 建该批 batch 行 → execute**。
 最后一批的 batch 记 `is_final=True`，只有它成功后 action 才转 `done`。
 
-> **分片 payload 里，被分片的类型必须强制 `default_action="skip"`，只列出本批的 overrides。**
-> 否则第一批带着原来的 `default_action="transfer"` 发出去，下游会把**整个类型**处理完
-> —— 分片就白分了，后面几批面对的是一个已经被搬空的集合，
-> 而 summary 的守恒校验在第一批就会对不上。
+#### 分片时 `default_action` 怎么放，是这件事最容易做错的地方
+
+线上契约里**没有"本批范围"这个概念**：下游只看得到 `default_action` + `overrides`，
+`default_action` 作用于**该类型当前全部未被 override 的条目**。因此分片规则必须这样定：
+
+| 批次 | `default_action` | `overrides` |
+|---|---|---|
+| 第 1 … M-1 批 | **强制 `skip`** | 只放本批的 `transfer` / `release` 逐条项 |
+| **第 M 批（最终批）** | 该类型**真实的** `default_action` | 本批剩余的 `transfer`/`release` 项 **+ 全部 `skip` 逐条项** |
+
+两条理由：
+
+1. **非最终批不能带真实的 `transfer` 默认值** —— 那会让下游把**整个类型**一次处理完，
+   分片白分，而且 summary 的守恒校验在第一批就对不上。
+2. **全部 `skip` 逐条项必须留到最终批**。`skip` 不改数据，被 skip 的条目在后续轮次的
+   re-preview 里**仍然属于当事人**；如果最终批带着真实的 `transfer` 默认值而没有带上这些
+   skip 项，它们会被默认动作**一起搬走** —— 用户明确说"这几条不要动"的那些。
+
+> **残留限制要如实说出来**：如果单是这些 `skip` 逐条项就撑爆了 256 KiB，本方案无解。
+> 这时 execute 返回 `413`，界面提示「单独指定的条目过多，请减少逐条指定后重新预演」，
+> **不要再自动分片**。这是一个真实的能力边界，不要假装它不存在。
+> （彻底的解法是给线上契约加一个签名覆盖的 `batch_scope`，那是一次跨系统契约变更，本期不做。）
 
 ### 2.4.2 `HandoverExecutionLease`（新表，契约 §10.5.2）
 
@@ -495,7 +513,24 @@ class HandoverLeaseFence(models.Model):
 
 **`lease_expires_at` 必填，否则一次 worker 崩溃就永久锁死。**
 条件唯一约束会让后续任何执行都拿不到租约，而没有过期时间就没有任何合法的接管入口
-——只能靠人手工删行，那正是最容易删错的操作。**常量冻结，不由实现者自行选择**（否则同一故障下有的 worker 抢占、有的长期锁死）：
+——只能靠人手工删行，那正是最容易删错的操作。**execute 的第一个事务就必须原子取得租约**，否则条件唯一约束根本不会被触发：
+
+```
+事务 1（execute 入口）:
+    select_for_update(action)
+    fence = UPDATE HandoverLeaseFence SET next_fence = next_fence + 1 RETURNING next_fence
+    INSERT HandoverExecutionLease(subject_user, app, action, generation, batch_seq,
+                                  owner, fence, lease_expires_at=now+LEASE_TTL)
+        ← 条件唯一约束冲突 → 立即 409 handover_execution_in_flight
+    创建 HandoverExecutionBatch + 首条 DeliveryAttempt + outbox
+    提交（事务回滚时租约一起回滚）
+```
+
+> **只描述租约表、不写这一步，互斥就是纸上的。** 同一 subject/app 上的离职 action 与
+> reassign action 并发 execute 时，两边各锁各的 action 行，谁也不去 INSERT 租约，
+> 于是两个 worker 都把请求发了出去。
+
+**常量冻结，不由实现者自行选择**（否则同一故障下有的 worker 抢占、有的长期锁死）：
 
 ```python
 LEASE_TTL: Final = timedelta(minutes=5)
@@ -524,7 +559,21 @@ delivery 结果、action 状态或 summary。异步轮询回来的那条路径�
    旧持有者从这一刻起所有 CAS 都会失败；
 2. **再**用原 `(task_id, generation, batch_seq)` 与原 payload 向下游查证真实状态
    （下游幂等记录是权威）；
-3. 查到终态才 CAS 释放租约；**查不到或下游不可达时继续持有并告警**，不释放。
+3. 查到终态才 CAS 释放租约；**查不到或下游不可达时续约并重试**，不释放也不永久卡住。
+
+**抢占必须是一条条件 UPDATE，同时写四样东西**：新 `owner`、新 `fence`、`renewed_at`、
+**以及 `lease_expires_at = now + LEASE_TTL`**。少写最后一项的话，新持有者刚接管就又是"已过期"，
+下一个恢复者立刻再抢一次。
+
+**"向下游查证"要有可执行的动作，不能只写四个字**。协议固定为：
+**用原 canonical body 重放一次 execute**（三元组不变，因此下游必然走幂等分支）：
+
+| 下游响应 | 判定 |
+|---|---|
+| 200 | 首次已成功。取其 summary 走 `complete_data_phase()`，然后释放租约 |
+| 202 + `Location` | 仍在途。按 §7 的轮询继续 |
+| 409 payload conflict | 同三元组不同 payload —— 说明有别的东西在乱写。**转人工告警**，租约保持 |
+| 网络不可达 / 5xx | 续约后按退避重试，**不释放** |
 
 顺序反过来（先查证再抢占）会留下一个窗口：查证那几秒里旧 worker 复活，
 沿原路径把 action 写成 `done`，而 fence 还没抬，拦不住它。
@@ -1023,8 +1072,10 @@ API 层的 `validate_assignments()` 仍然要有 —— 库约束保证数据不
 
 - 组 payload：`assignments` 由该 `(action, generation)` 下的**全部** `HandoverAssetType`
   （含 `default_action=skip` 的）与其 `overrides` 生成，形状严格照契约 §10.5。
-- **发出前必须校验 `attempt.generation == action.generation == task.generation`**，不等则直接作废该
-  attempt 并写审计，**不发**。outbox 里的旧记录被 worker 延迟取出时会用当前时间重新签名，
+- **发出前必须校验 `batch.generation == action.generation == task.generation`**（`generation` 在
+  `HandoverExecutionBatch` 上，**不在 delivery attempt 上**）。outbox 参数携带 **batch 主键**，
+  worker 取出后加载 batch → action → task 再比对；不等则把该 delivery 标 `superseded` 并写审计，
+  **不发网**。outbox 里的旧记录被 worker 延迟取出时会用当前时间重新签名，
   重放窗口拦不住；下游虽然也有「迟到的旧 generation 一律 409」的兜底（契约 §10.5.2），
   但发送方不该指望接收方兜底。
 - 在事务内分配 `batch_seq`、写入 `HandoverExecutionBatch`（`status="pending"`）与首条
@@ -1373,7 +1424,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | 任务 | 周期 | 逻辑 |
 |---|---|---|
 | `lifecycle_escalation` | beat 每 10 分钟 | 扫 `status in OPEN and escalation_deadline <= now` 的 `HandoverTask`，逐个 `escalate_overdue_task()`。PostgreSQL 下 `select_for_update(skip_locked=True)` 分批（与 `grants` 过期任务同款） |
-| `lifecycle_daily_reminder` | beat 每天 09:00（Asia/Shanghai） | 对未完成且有 assignee 的单发钉钉提醒；`last_reminded_on` 用 `timezone.localdate(..., Asia/Shanghai)` 去重保证每业务日一次；上交前 1 天额外发"即将上交"。注意既有 beat schedule 只接受 float interval，crontab 需扩展 |
+| `lifecycle_daily_reminder` | beat 每天 09:00（Asia/Shanghai） | 对未完成且有 assignee 的单发钉钉提醒；上交前 1 天额外发"即将上交"。注意既有 beat schedule 只接受 float interval，crontab 需扩展。**去重不能只靠"读一下 `last_reminded_on` 再写回"**，见下 |
 | `lifecycle_poll_async_actions` | beat 每 **1 分钟** | 扫 `status=async_pending` 的 action，逐个调既有 `poll_async_action()`。**这个任务不存在的话，202 就是个死胡同**：action 进 `async_pending` 后门户不允许 retry（在途）、也没有任何东西去 poll，永远到不了 `done`/`failed`，租约也永远不释放。<br>**上限沿用既有的 `ASYNC_POLL_MAX_ATTEMPTS = 10`**（`lifecycle/core.py:30`），不要新造一个：第 10 次仍非终态 → CAS 标 `failed`、`last_error` 写固定文案「下游超过 10 次轮询仍未返回终态」、释放租约。`Location` 头持久化在 `async_status_url` 上，每次响应带新 `Location` 就更新。拿到终态 200 后**必须走 `complete_data_phase()`**，不得直接置 `done` |
 | ~~`lifecycle_superuser_pool_reminder`~~ | — | **本期不做**，见下 |
 | ~~`lifecycle_blocked_apps_digest`~~ | — | **本期不做**，见下 |
@@ -1404,6 +1455,17 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 > `src/easyauth/tasks/lifecycle.py` **已经存在**，本节是扩展而非新建。
 > 另外两点与既有实现不符，需一并处理：beat 目前是**直接投递任务**，不经 outbox；
 > beat schedule 只接受 float interval，**crontab 需要扩展 schedule 类型**才能表达"每天 09:00"。
+
+> **每日提醒的去重要原子，否则两个 beat 实例会把全量单据各提醒一遍。**
+> "读 `last_reminded_on` → 发消息 → 写回今天"这个写法在两个实例同时跑时，两边都读到昨天，
+> 两边都发。规矩：
+>
+> 1. 扫描用 `select_for_update(skip_locked=True)` 分批；
+> 2. 在**同一事务**里做条件更新 `UPDATE ... WHERE last_reminded_on < :business_date`，
+>    **影响行数为 1 才继续**，为 0 说明别人已经领走了；
+> 3. 同事务写通知 outbox，dedup key 用稳定串
+>    `handover:{task_id}:{business_date}:{daily|deadline_soon}`；
+> 4. 通知表上的唯一约束作为最后一道兜底。
 
 业务扫描由 beat 直接触发即可；**只有网络副作用（钉钉通知）走 outbox**，
 遵循既有「网络副作用出事务」的约定。
@@ -1458,7 +1520,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
    class HandoverBusinessError(Exception):
        def __init__(self, status_code: int, code: str, message: str) -> None: ...
 
-   ALLOWED_BUSINESS_STATUS: Final = frozenset({400, 409, 412, 413, 422})
+   ALLOWED_BUSINESS_STATUS: Final = frozenset({400, 409, 412, 413, 422, 423})
    ```
 
    内核：
@@ -1505,9 +1567,17 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 而 README 的联调门禁正是「`webhook.test` 对每个 APP 返回 200」——
 **不做这一步，门禁永远过不去，而且看起来像下游的问题。**
 
-改法：在 `webhooks/hooks.py` 的统一出口注入，覆盖 `webhook.test` / preview / items / execute
-四种事件。补一个**字节级**的 sender-side 测试：断言四种事件发出的 raw body 里都含正确的
-`event_type`，且签名是对**注入之后**的 body 计算的（注入在签名之后就等于没做）。
+**发送端有两个真实出口，两个都要改**（只改一个的话另一半照样 422）：
+
+| 出口 | 覆盖的事件 |
+|---|---|
+| `webhooks/hooks.py::signed_hook_post` | preview / items / execute |
+| **`webhooks/delivery.py::attempt_delivery`** | **`webhook.test`** —— 控制台的测试按钮走 `enqueue_delivery()` 把 body 存进 `WebhookDelivery`，最终由这里原样序列化并签名，**根本不经过 `hooks.py`** |
+
+两处都必须**复制一份 payload**、在序列化与签名**之前**强制覆盖 `event_type`
+（注入在签名之后等于没做）。
+补**字节级**的 sender-side 测试：断言四种事件发出的 raw body 里都含正确的 `event_type`，
+且签名是对注入之后的字节算的。
 
 ---
 

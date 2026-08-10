@@ -90,7 +90,13 @@
 1. 双方都 `active`，且都不是本地管理员（`local-admin:` 前缀）；
 2. 双方属于同一 `(dingtalk_source_slug, dingtalk_corp_id)`；
 3. `subject` 的 `DingTalkUserOrgContext` 存在且 `stale=false`；
-4. `manager` 的 `dingtalk_userid` 出现在 `subject` 当前的 `manager_chain` 里。
+4. `manager` 的 `dingtalk_userid` 出现在 `subject` 当前的 `manager_chain` 里；
+5. **该 corp 的目录同步本身是健康的**：`DingTalkDirectorySyncState` 存在、`status='success'`、
+   `error` 为空、且未 stale。
+
+> **第 5 条不能省。** `DingTalkUserOrgContext.stale` 只描述"这一行有没有被标记为过期"，
+> 目录同步**整体停摆**时它不会自己变 true —— 于是一份半年前的 `manager_chain` 会一直被当成
+> 当前事实：员工早就调岗了，旧主管仍然可以发起移交、查看并搬走他的资产。
 
 目录数据缺失、`stale=true` 或链上元素畸形 → **fail-closed**：返回 `503`（目录不可用）或 `403`，
 并写审计。**这与 §8.2 建单时的降级取舍相反，是有意为之**：建单不能丢单，所以宁可落超管池；
@@ -384,8 +390,9 @@ resolve_assignee(subject, start_level=0):
 
 ```
 主管在门户对在职下属发起 kind=reassign 单
-  ├─ 校验：subject 与 to_user 均 active，且 subject ∈ 发起人的 MANAGED_USERS
-  │        否则 403 out_of_managed_scope
+  ├─ 校验：subject 与 to_user 均 active，且发起人对 subject 有管辖权（§4 的主管链判定，
+  │        **不是** MANAGED_USERS）。不成立 → 403 out_of_managed_scope
+  │        目录不可用 → 503 directory_unavailable
   ├─ 必填 reason（≥10 字符）
   ├─ assignee = 发起人（assignee_state=manager, escalation_level=0）
   ├─ 不动任何权限（D7 同理）
