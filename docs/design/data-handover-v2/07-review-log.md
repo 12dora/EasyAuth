@@ -27,7 +27,7 @@ A5 的开工前置从"等两份不存在的裁定"变成"等三样可机械核�
 
 | # | 问题 | 后果 |
 |---|---|---|
-| 1 | **`HandoverExecutionAttempt` 单表自相矛盾** —— 既 append-only 又要回填结果 | 一次请求的最终成败无处安放。拆成不可变 Batch + append-only DeliveryAttempt |
+| 1 | **`HandoverExecutionAttempt` 单表自相矛盾** —— 既 append-only 又要回填结果 | 一次请求的最终成败无处安放。拆成不可变 `HandoverExecutionBatch` + **受控单次转换**的 `HandoverDeliveryAttempt`（不是 append-only）|
 | 2 | **413 分批与 action 级 `done` 互斥** | 第一批成功后 action 置 `done`，第二批既不能 execute 也不能 retry，剩余资产永远搬不走而单据显示已完成 |
 | 3 | **异步 202 路径直接置 `done`** | 既不落 `data_completed_at` 也**根本不转授权限**，离职者授权原地不动 |
 | 4 | **202 没有任何轮询任务** | `async_pending` 是个死胡同，永远到不了终态，租约也永不释放 |
@@ -217,6 +217,32 @@ recurrence patch 不支持 assignee/assigner。**而 webhook 没有合法的人�
 - `02` 的 `HandoverAction` 类型没有 `summary`，但 done 界面要展示它。
 - README 的 SDK 串行头 / CCR 门禁 / A6 立即开工，与 `00`/`03`/`05` 正文的旧说法并存。
 - README 声称强制校验 event header 与 body `mode`，两个下游都没安排实现与验收用例。
+
+---
+
+### 第四轮（同日，8 路并行）—— 收敛
+
+第三轮修完之后又跑了一轮，这次多加了一片**端到端走查**（跟着一张单从建单走到完成/失败/
+升级/分批/异步/取消，专门找"走不出去的状态"）。产出 **88 条，BLOCKER 12** ——
+相比第三轮的约 130 条 / 60 BLOCKER 明显收敛，且**其中一半是第三轮新写内容自身的问题**。
+
+端到端走查确认了**四种硬死锁**，全部已修：
+
+| # | 状态 | 成因 |
+|---|---|---|
+| 1 | `async_pending` + 活跃租约 | 轮询超次数后释放租约违反「必须先确认下游终结」；下游任务还在跑，新单却拿到了锁 |
+| 2 | 同步请求已终结但租约没释放 | 只有 202 写了移交协议，200/412/413/423/4xx/5xx 六条终结路径都没写释放 |
+| 3 | 413 已完成部分批次后改分配 | 新 `confirm_version` 与旧计划脱节，既不能继续也没有重建入口 |
+| 4 | 非最终批被提前置 `done` | D13 会把整单判 `completed`，而 `completed` 不可重开，剩余批次没有入口 |
+
+本轮另外三条值得记住的：
+
+- **租约要移交两次，不是一次**：取得租约的是 HTTP worker，真正发 webhook 的是 Celery
+  outbox worker，两者 `owner` 不同 —— 严格 CAS 下首投的响应就写不回去。
+- **转岗单会从另一条路把「权限已转、数据没搬」带回来**：
+  `confirm_transfer_grant_diff()` 可以在数据 action 完成前确认并当场撤加授权。
+- **身份解析必须区分 source / target**：离职者早被目录置成 `is_active=false`，
+  一个不带 `purpose` 的签名只能二选一，而两个选择都是错的。
 
 ---
 
