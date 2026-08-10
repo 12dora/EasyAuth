@@ -31,8 +31,8 @@ from easyauth.access_requests.submission_types import (
     ScopedAccessRequestGrant,
 )
 from easyauth.access_requests.submission_validation import (
-    active_manager_chain_user_ids,
     contains_managed_users_target,
+    resolve_manager_chain,
     unique_authorization_groups,
     unique_direct_grants,
     validate_submission_scope,
@@ -113,14 +113,17 @@ def _submit_access_request(
                 direct_grants,
                 lock_base_grant=True,
             )
-            # 空审批人仅在 MANAGED_USERS 链耗尽时由 ADR-002 §36 放行, 其它类型仍强制至少一人。
+            # 空审批人仅在 MANAGED_USERS 链耗尽/目录缺失时由 ADR-002 §36 放行。
             is_managed_users = contains_managed_users_target(
                 authorization_groups,
                 direct_grants,
             )
-            chain_ids = (
-                active_manager_chain_user_ids(input_data.user) if is_managed_users else ()
+            chain_resolution = (
+                resolve_manager_chain(input_data.user)
+                if is_managed_users
+                else None
             )
+            chain_ids = chain_resolution.user_ids if chain_resolution is not None else ()
             allow_empty_approvers = (
                 is_managed_users
                 and not chain_ids
@@ -135,8 +138,12 @@ def _submit_access_request(
             routing_reason = ""
             if not approver_user_ids and allow_empty_approvers:
                 routing_state = "superuser_pool"
-                # 链被 walk 到尽头(含回退 manager_userid 仍无) → chain_exhausted
-                routing_reason = "chain_exhausted"
+                # 目录缺失/陈旧 → no_active_manager; 链 walk 到尽头 → chain_exhausted
+                routing_reason = (
+                    "no_active_manager"
+                    if chain_resolution is not None and chain_resolution.degraded
+                    else "chain_exhausted"
+                )
             access_request = AccessRequest(
                 user=input_data.user,
                 app=input_data.app,

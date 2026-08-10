@@ -17,7 +17,8 @@ from easyauth.applications.models import App, AppScope, Permission
 pytestmark = pytest.mark.django_db
 
 
-def test_chain_exhausted_empty_approver_succeeds_superuser_pool() -> None:
+def test_no_active_manager_empty_approver_succeeds_superuser_pool() -> None:
+    """目录上下文缺失时 routing_reason=no_active_manager。"""
     user = UserMirror.objects.create(
         authentik_user_id="adr36-user",
         name="u",
@@ -49,8 +50,66 @@ def test_chain_exhausted_empty_approver_succeeds_superuser_pool() -> None:
         ),
     )
     assert result.approval_routing_state == "superuser_pool"
-    assert result.routing_reason == "chain_exhausted"
+    # 无钉钉绑定 / 无目录上下文 → no_active_manager(非伪造的 chain_exhausted)
+    assert result.routing_reason == "no_active_manager"
     assert AccessRequest.objects.filter(pk=result.pk).exists()
+
+
+def test_chain_exhausted_when_manager_chain_walked_to_end() -> None:
+    """链被 walk 到尽头(全部 departed) → routing_reason=chain_exhausted。"""
+    from easyauth.accounts.models import DingTalkUserOrgContext
+
+    departed_mgr = UserMirror.objects.create(
+        authentik_user_id="adr36-dep-mgr",
+        name="dm",
+        status=USER_STATUS_DEPARTED,
+        dingtalk_source_slug="s",
+        dingtalk_corp_id="c",
+        dingtalk_userid="dm1",
+    )
+    user = UserMirror.objects.create(
+        authentik_user_id="adr36-walked",
+        name="w",
+        status=USER_STATUS_ACTIVE,
+        dingtalk_source_slug="s",
+        dingtalk_corp_id="c",
+        dingtalk_userid="w1",
+        manager_userid="dm1",
+    )
+    _ = DingTalkUserOrgContext.objects.create(
+        source_slug="s",
+        corp_id="c",
+        user_id="w1",
+        manager_chain=[{"user_id": "dm1"}],
+        stale=False,
+    )
+    app = App.objects.create(app_key="adr36-walked-app", name="a")
+    _ = AppScope.objects.create(app=app, key="MANAGED_USERS", name="下属")
+    permission = Permission.objects.create(
+        app=app,
+        key="customer.view.walked",
+        name="view",
+        supported_scopes=["MANAGED_USERS"],
+    )
+    result = AccessRequestService.submit_access_request(
+        AccessRequestSubmission(
+            user=user,
+            app=app,
+            grant_type="permanent",
+            grant_expires_at=None,
+            reason="查看下属客户",
+            actor_type="user",
+            actor_id=user.authentik_user_id,
+            idempotency_key="adr36-walked",
+            approver_user_ids=(),
+            direct_grants=(
+                ScopedAccessRequestGrant(permission=permission, scope_key="MANAGED_USERS"),
+            ),
+        ),
+    )
+    assert result.approval_routing_state == "superuser_pool"
+    assert result.routing_reason == "chain_exhausted"
+    assert departed_mgr.status == USER_STATUS_DEPARTED
 
 
 def test_chain_exhausted_non_manager_approver_still_rejected() -> None:

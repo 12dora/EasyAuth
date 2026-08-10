@@ -344,7 +344,8 @@ def test_s14_submission_validation_requires_approver_for_managed_users_target() 
         ),
     )
     assert created.approval_routing_state == "superuser_pool"
-    assert created.routing_reason == "chain_exhausted"
+    # 无钉钉/目录上下文 → no_active_manager(与 chain_exhausted 区分)
+    assert created.routing_reason == "no_active_manager"
     assert AccessRequest.objects.filter(pk=created.pk).exists()
 
     # And: 手填非主管审批人仍拒绝

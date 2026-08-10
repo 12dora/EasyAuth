@@ -209,31 +209,55 @@ def _validate_managed_users_approver(
     raise AccessRequestSubmissionError((MANAGED_USERS_APPROVER_REQUIRED_MESSAGE,))
 
 
-def active_manager_chain_user_ids(user: UserMirror) -> tuple[str, ...]:
-    """沿 manager_chain 取第一个可用主管; 链不可用时回退 manager_userid 直属字段。"""
+class ManagerChainResolution:
+    """主管链解析结果: ids 为空时用 degraded 区分目录缺失与链耗尽。"""
+
+    __slots__ = ("user_ids", "degraded")
+
+    def __init__(self, user_ids: tuple[str, ...], *, degraded: bool) -> None:
+        self.user_ids = user_ids
+        self.degraded = degraded
+
+
+def resolve_manager_chain(user: UserMirror) -> ManagerChainResolution:
+    """沿 manager_chain 取第一个可用主管; 链不可用时回退 manager_userid 直属字段。
+
+    - ``degraded=True``: 目录上下文缺失/陈旧/绑定不全 → routing_reason=no_active_manager
+    - ``degraded=False`` 且 ids 空: 链被 walk 到尽头 → routing_reason=chain_exhausted
+    """
     from easyauth.lifecycle.assignee import resolve_assignee
 
     resolution = resolve_assignee(user, start_level=0)
     if resolution.user is not None:
-        return (resolution.user.authentik_user_id,)
+        return ManagerChainResolution(
+            (resolution.user.authentik_user_id,),
+            degraded=False,
+        )
     # 回退: 部分同步路径只写 manager_userid、尚未有完整 manager_chain 行。
     manager_userid = (user.manager_userid or "").strip()
-    if not manager_userid:
-        return ()
-    manager = UserMirror.objects.filter(
-        authentik_user_id=manager_userid,
-        status=USER_STATUS_ACTIVE,
-    ).first()
-    if manager is None and user.dingtalk_source_slug and user.dingtalk_corp_id:
+    if manager_userid:
         manager = UserMirror.objects.filter(
-            dingtalk_source_slug=user.dingtalk_source_slug,
-            dingtalk_corp_id=user.dingtalk_corp_id,
-            dingtalk_userid=manager_userid,
+            authentik_user_id=manager_userid,
             status=USER_STATUS_ACTIVE,
         ).first()
-    if manager is None:
-        return ()
-    return (manager.authentik_user_id,)
+        if manager is None and user.dingtalk_source_slug and user.dingtalk_corp_id:
+            manager = UserMirror.objects.filter(
+                dingtalk_source_slug=user.dingtalk_source_slug,
+                dingtalk_corp_id=user.dingtalk_corp_id,
+                dingtalk_userid=manager_userid,
+                status=USER_STATUS_ACTIVE,
+            ).first()
+        if manager is not None:
+            return ManagerChainResolution(
+                (manager.authentik_user_id,),
+                degraded=False,
+            )
+    return ManagerChainResolution((), degraded=resolution.degraded)
+
+
+def active_manager_chain_user_ids(user: UserMirror) -> tuple[str, ...]:
+    """沿 manager_chain 取第一个可用主管; 链不可用时回退 manager_userid 直属字段。"""
+    return resolve_manager_chain(user).user_ids
 
 
 # 兼容内部调用名
