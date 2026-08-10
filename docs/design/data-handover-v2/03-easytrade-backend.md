@@ -75,8 +75,8 @@ v2 用 descriptor 的 `releasable` 字段把它显式化（契约 §9.1），由
 |---|---|
 | `customer` | **未软删 = `Customer.status != CustomerStatus.DELETED.value`**，直接复用 `domain/customer/soft_delete.py:11` 的 `exclude_deleted_customers(query)`。**`Customer` 没有 `deleted_at` 字段**（`domain/customer/models.py:96` 只有 `status`），写 `deleted_at IS NULL` 会直接构造失败 |
 | `inquiry_open` | `deleted_at IS NULL` 且 `PipelineStage.is_terminal = false` 且 `lost_at IS NULL` 且 `cancelled_at IS NULL` |
-| `order_in_transit` | 非终态状态集 **且 `cancelled_at IS NULL`** |
-| `receivable_open` | 未结清、`cancelled_at IS NULL`，**且必须先 `join(Order)` 再用 `receivable_owner_filter({from_user_id})` 判归属**：<br>`db.query(OrderReceivable).join(Order, OrderReceivable.order_id == Order.id).filter(receivable_owner_filter({from_user_id}), OrderReceivable.cancelled_at.is_(None), ...)`<br>该 filter 的第二个分支直接引用 `Order.owner_user_id`（`domain/ar/ownership.py:16-19`）。**不 join 就在未关联的查询上调用它，SQLAlchemy 会把 `orders` 加成一张无关联的 FROM 表，产生笛卡尔积** —— 只要离职者名下有一张订单，全库所有 owner 为 NULL 的应收都会命中，preview 重复计数、execute 改错人 |
+| `order_in_transit` | `status NOT IN {COMPLETED, CANCELLED}` **且 `cancelled_at IS NULL`**。把集合写死，不要写成「非终态状态集」—— 重构时最容易漏掉 `CANCELLED` |
+| `receivable_open` | `status NOT IN CLOSED_RECEIVABLE_STATUSES`（冻结集合 `{CLOSED, PAID, VOIDED, CANCELLED, CANCELED}` —— 写「未结清」三个字最容易只排除 `CLOSED/PAID`，把已作废的应收也搬走）、`cancelled_at IS NULL`，**且必须先 `join(Order)` 再用 `receivable_owner_filter({from_user_id})` 判归属**：<br>`db.query(OrderReceivable).join(Order, OrderReceivable.order_id == Order.id).filter(receivable_owner_filter({from_user_id}), OrderReceivable.cancelled_at.is_(None), ...)`<br>该 filter 的第二个分支直接引用 `Order.owner_user_id`（`domain/ar/ownership.py:16-19`）。**不 join 就在未关联的查询上调用它，SQLAlchemy 会把 `orders` 加成一张无关联的 FROM 表，产生笛卡尔积** —— 只要离职者名下有一张订单，全库所有 owner 为 NULL 的应收都会命中，preview 重复计数、execute 改错人 |
 | `task_open` | `status='OPEN' AND voided_at IS NULL` |
 | `activity_followup` | `voided_at IS NULL AND next_action_owner_user_id IS NOT NULL`（**不加日期条件**，逾期的最该交） |
 | `requirement_open` | 状态不在 `{COMPLETED, REJECTED, MERGED}`（`ON_HOLD` **仍算活跃**） |
@@ -210,7 +210,11 @@ HANDOVER_ASSETS_BY_KEY: Final[dict[str, HandoverAssetSpec]] = {...}
 
 - 遍历 `HANDOVER_ASSETS`，逐条 `query(...).count()`。
 - **所有已声明类型都要返回，包括 `count=0` 的**（契约明确要求，省略与"不支持"无法区分）。
-- 只读，不落库，不开写事务。
+- 只读，不落库。**但必须开一个 `REPEATABLE READ READ ONLY` 只读事务**，让 8 类 count 与
+  `snapshot_token` 取自**同一个数据库快照**（隔离级别写法照抄
+  `api/v1/system_maintenance_export.py:201-216`）。
+  默认的 READ COMMITTED 下，先统计 count、再算 token 之间发生的并发变更会让**响应从生成的那一刻
+  就自相矛盾**：token 描述的集合与 count 数出来的不是同一批。
 - **响应必须带 `snapshot_token`**（契约 §10.3 必填字段）。见 §3.5.1。
 
 ### 3.5 `items`（契约 §10.4，新增分支）
@@ -226,6 +230,9 @@ HANDOVER_ASSETS_BY_KEY: Final[dict[str, HandoverAssetSpec]] = {...}
   `snapshot_token` 下 preview 的 `count`。想同时给出未过滤总数就另加可选字段 `unfiltered_total`。
   写成"无条件等于 preview count"会让搜索"华东"命中 2 条却返回 187，前端翻出一堆空页
 - 排序必须稳定（按主键兜底），否则翻页会漏项/重项
+- **同样在 `REPEATABLE READ READ ONLY` 事务内完成**：token 校验、`total` 与本页数据必须来自同一快照，
+  否则会出现「token 校验通过了，翻页时读到的却是另一批数据」。
+  身份解析等需要网络的前置动作在进这个只读事务**之前**完成
 
 ### 3.5.1 `snapshot_token` 的生成与校验（契约 §10.5.1，**原设计整段缺失**）
 
@@ -341,6 +348,15 @@ def execute_handover(
               → Task → ProductRequirement
      ```
 
+   > **⚠ 这条锁序与既有的活动更新路径相反，必须一并改。**
+   > `api/v1/activities.py:159-170` 的 update/delete 是**先锁 Activity 再取关联的 Inquiry**，
+   > 而本表序是 `Inquiry → Activity`。两者并发就是一个标准死锁。
+   >
+   > **启用 handover 之前**，活动的 update/delete 必须统一改成
+   > `Customer → Inquiry(按 id 升序) → Activity`；取得 Activity 锁后**重新校验关联未变**，
+   > 变了就重试或返回 409。这属于 A3 的前置改造，不是可选项。
+   > 补一个 PostgreSQL 双事务用例，覆盖 handover 与 activity update/delete 并发。
+   >
    > **为什么必须无视 payload 顺序**：EasyAuth 的 `assignments` 数组顺序由前端决定。
    > 若照单遍历，一次「先 `receivable_open` 后 `order_in_transit`」的请求会**先锁应收再等订单**，
    > 而既有的订单取消路径（`api/v1/orders/routes.py`、`route_mutations.py`）是**先锁订单再改应收**
@@ -418,8 +434,22 @@ def execute_handover(
    > 与 v2 完全不匹配，属于要整体替换掉的部分。
 
 **幂等**：幂等键从 `task_id` 改为三元组 `(task_id, generation, batch_id)`（契约 §10.5.2）。
-同键同 payload hash 返回首次 `summary`；同键不同 hash 返回 `409`；
-`generation` 小于该 `task_id` 已见最大值的请求一律 `409`（迟到的旧一轮）。
+
+**串行化机制与顺序都定死**（对应上面的第 0–2 步）：
+
+1. 解析出三元组与 canonical hash 之后，**第一项数据库操作**是
+   `acquire_advisory_xact_lock(db, "easyauth_handover_task", task_id)`
+   （复用既有的 `domain/shared/advisory_lock.py:16`）；
+2. **锁内**先查同三元组回执：hash 相同 → **立即返回原 `result`，不做身份、active、snapshot 任何校验**；
+   hash 不同 → `409`；
+3. 只有全新键才继续读 generation 水位、校验快照、改写资产、插入回执；
+4. 事务提交后释放锁（xact lock 随事务自动释放）。
+
+> **顺序不能反**：首次成功已经改过数据，token 必然失效；重放若先校验，会返回 412/409
+> 而不是那份保存好的 200 summary。
+> **advisory lock 也不能省**：并发的 `generation=1` 与 `generation=2` 会同时读到相同的
+> 水位值，各自通过判定、各自写入不同的三元组回执，旧一轮的 payload 在升级之后被执行。
+
 表结构改动见 §3.8。
 
 ### 3.7 任务提醒的连带处理
@@ -457,6 +487,11 @@ easyauth_handover_generation_watermarks(task_id VARCHAR(64) PRIMARY KEY,
 
 **DEFAULT 只为迁移历史行服务，加完必须去掉**：三列在应用层都是必填，
 留着 server default 会让漏传字段变成静默写入默认值。
+
+**`task_id` 收窄为 `VARCHAR(64)` 并加同等 CHECK**（契约 §5.4 已把它限到 64 字节、
+字符集 `[A-Za-z0-9:_-]`）。入口处也要校验：不满足 `^[A-Za-z0-9:_-]{1,64}$` → `422`。
+不加的话，65–255 字符的非法键会被现有列**照单收下**，超过 255 才到 flush 时炸成 500 ——
+一个本该在入口稳定 422 的输入变成了不稳定的 5xx。迁移前先检查历史行。
 
 **不新增业务列**：所有资产类型都复用既有归属字段。`Order`/`Inquiry` 的非空约束
 **保持不变**，靠 `releasable=false` 在契约层解决，而不是放宽不变量。
