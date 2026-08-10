@@ -121,15 +121,32 @@ def take_lease(
 
 
 def renew_lease(handle: LeaseHandle) -> bool:
-    """续约: owner+fence+未释放+未过期。已过期 owner 不许复活。"""
+    """续约: owner+fence+未释放+未过期。已过期 owner 不许复活。谓词用 db_now()。"""
     now = timezone.now()
+    expires = now + LEASE_TTL
+    if connection.vendor == "postgresql":
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE lifecycle_handoverexecutionlease
+                SET lease_expires_at = NOW() + (%s * INTERVAL '1 second'),
+                    renewed_at = NOW()
+                WHERE id = %s
+                  AND owner = %s
+                  AND fence = %s
+                  AND released_at IS NULL
+                  AND lease_expires_at > NOW()
+                """,
+                [LEASE_TTL.total_seconds(), handle.lease_id, handle.owner, handle.fence],
+            )
+            return cursor.rowcount == 1
     updated = HandoverExecutionLease.objects.filter(
         pk=handle.lease_id,
         owner=handle.owner,
         fence=handle.fence,
         released_at__isnull=True,
         lease_expires_at__gt=now,
-    ).update(lease_expires_at=now + LEASE_TTL, renewed_at=now)
+    ).update(lease_expires_at=expires, renewed_at=now)
     return updated == 1
 
 
@@ -172,13 +189,14 @@ def cas_update_owner(
     app = App.objects.get(pk=app_id)
     new_fence = allocate_fence(subject_user=subject, app=app)
     now = timezone.now()
+    expires = now + LEASE_TTL
     updates: dict[str, object] = {
         "owner": new_owner,
         "fence": new_fence,
         "renewed_at": now,
     }
     if renew:
-        updates["lease_expires_at"] = now + LEASE_TTL
+        updates["lease_expires_at"] = expires
     updated = HandoverExecutionLease.objects.filter(
         pk=handle.lease_id,
         owner=handle.owner,
@@ -187,12 +205,11 @@ def cas_update_owner(
     ).update(**updates)
     if updated != 1:
         return None
-    expires = now + LEASE_TTL if renew else handle.expires_at
     return LeaseHandle(
         lease_id=handle.lease_id,
         owner=new_owner,
         fence=new_fence,
-        expires_at=expires,
+        expires_at=expires if renew else handle.expires_at,
     )
 
 
@@ -201,12 +218,47 @@ def preempt_expired_lease(
     *,
     new_owner: str,
 ) -> LeaseHandle | None:
-    """先抢占后查证: 过期 active 行, 写新 owner/fence/续期。"""
-    now = timezone.now()
-    if lease.released_at is not None or lease.lease_expires_at > now:
+    """先抢占后查证: 过期 active 行, 写新 owner/fence/续期。谓词用 db_now()。"""
+    if lease.released_at is not None:
         return None
     new_fence = allocate_fence(subject_user=lease.subject_user, app=lease.app)
+    now = timezone.now()
     expires = now + LEASE_TTL
+    if connection.vendor == "postgresql":
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE lifecycle_handoverexecutionlease
+                SET owner = %s,
+                    fence = %s,
+                    renewed_at = NOW(),
+                    lease_expires_at = NOW() + (%s * INTERVAL '1 second')
+                WHERE id = %s
+                  AND owner = %s
+                  AND fence = %s
+                  AND released_at IS NULL
+                  AND lease_expires_at <= NOW()
+                """,
+                [
+                    new_owner,
+                    new_fence,
+                    LEASE_TTL.total_seconds(),
+                    lease.pk,
+                    lease.owner,
+                    lease.fence,
+                ],
+            )
+            if cursor.rowcount != 1:
+                return None
+        refreshed = HandoverExecutionLease.objects.get(pk=lease.pk)
+        return LeaseHandle(
+            lease_id=int(lease.pk),  # type: ignore[arg-type]
+            owner=new_owner,
+            fence=new_fence,
+            expires_at=refreshed.lease_expires_at,
+        )
+    if lease.lease_expires_at > now:
+        return None
     updated = HandoverExecutionLease.objects.filter(
         pk=lease.pk,
         owner=lease.owner,
@@ -238,7 +290,7 @@ def has_active_lease(*, subject_user_id: int, app_id: int) -> bool:
 
 
 def action_execution_in_flight(action: HandoverAppAction) -> bool:
-    """§5.5.1 / 改分配共用: 未释放租约或在途 batch。"""
+    """§5.5.1 skip/cancel: 未释放租约或在途 batch(executing/async_pending)。"""
     from easyauth.lifecycle.models import (
         BATCH_IN_FLIGHT_STATUSES,
         HandoverExecutionBatch,
@@ -256,13 +308,43 @@ def action_execution_in_flight(action: HandoverAppAction) -> bool:
     ).exists()
 
 
-def require_cas(handle: LeaseHandle) -> None:
-    """校验当前 handle 仍持有租约; 否则抛冲突(调用方必须丢弃写回)。"""
-    exists = HandoverExecutionLease.objects.filter(
-        pk=handle.lease_id,
-        owner=handle.owner,
-        fence=handle.fence,
-        released_at__isnull=True,
+def assignment_mutation_in_flight(action: HandoverAppAction) -> bool:
+    """§2.4.1.1 改分配三端点: 含 pending batch(429 重排队中)。"""
+    from easyauth.lifecycle.models import (
+        ASSIGNMENT_MUTATION_IN_FLIGHT_STATUSES,
+        HandoverExecutionBatch,
+    )
+
+    if has_active_lease(
+        subject_user_id=int(action.task.subject_user_id),  # type: ignore[arg-type]
+        app_id=int(action.app_id),  # type: ignore[arg-type]
+    ):
+        return True
+    return HandoverExecutionBatch.objects.filter(
+        action_id=action.id,
+        generation=action.generation,
+        status__in=ASSIGNMENT_MUTATION_IN_FLIGHT_STATUSES,
     ).exists()
-    if not exists:
+
+
+def require_cas(handle: LeaseHandle) -> HandoverExecutionLease:
+    """持有租约行锁到本阶段提交; 不匹配则抛冲突(调用方必须丢弃写回)。"""
+    lease = (
+        HandoverExecutionLease.objects.select_for_update()
+        .filter(
+            pk=handle.lease_id,
+            owner=handle.owner,
+            fence=handle.fence,
+            released_at__isnull=True,
+        )
+        .first()
+    )
+    if lease is None:
         raise HandoverConflictError(LEASE_CAS_FAILED_MESSAGE)
+    return lease
+
+
+def must_cas_release(handle: LeaseHandle) -> None:
+    """CAS 释放失败即冲突 — 调用方不得再依赖已写状态。"""
+    if not cas_release(handle):
+        raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
