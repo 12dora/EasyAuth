@@ -231,7 +231,8 @@ export interface HandoverAssetItemsPage {
   total: number;
   /** 有搜索词时的未过滤总数; 无搜索词时为 null */
   unfiltered_total: number | null;
-  stale?: boolean;
+  /** 必填, 不要写成 stale?: —— 可选会让人写出 `stale ?? false` 去掩盖后端漏返 */
+  stale: boolean;
 }
 ```
 
@@ -268,6 +269,15 @@ export interface HandoverAssetItemsPage {
 顶部信息条：当事人、类型、状态、距上交剩余天数、当前负责人与上交层级
 （`escalation_level > 0` 时显示「已上交 N 级」）。
 
+> **所有错误分支读 `error.details.reason`，不是 `error.code`。** 后端的错误信封是
+> `{"error": {"code", "message", "details"}}`，而 `error.code` 只能取全 API 共用的
+> 9 个大写粗分类（`CONFLICT` / `PERMISSION_DENIED` / `SEMANTIC_VALIDATION_ERROR` …），
+> 见 `01` §6.1。本文里写成 `412 snapshot_stale`、`403 out_of_managed_scope`、
+> `409 overrides_version_stale` 的地方，细码都在 `details.reason` 里 ——
+> 按 `error.code === "snapshot_stale"` 分支的话**永远不命中**，
+> 412 重新预演、409 版本冲突自动重载、403 与 503 的文案区分会一起退化成通用报错，
+> 而且没有任何测试会红。`ApiError` 类型要带上 `details`。
+
 主体是**逐 APP 的可折叠区块**，按 `status` 决定形态：
 
 | action.status | 区块表现 |
@@ -296,7 +306,7 @@ export interface HandoverAssetItemsPage {
 > **前端不得解析 `last_error` 文本去猜可重试性** —— 那是下游自由格式的字符串。
 
 **控制台的 `failed` 区块多一个 [查看原始错误]（仅超管可见）**：点击才调
-`GET .../actions/{app_key}/last-error-raw`，服务端每次读取都写审计。
+`GET .../actions/{app_key}/errors/raw`，服务端每次读取都写审计。
 **门户没有这个按钮**，`last_error_raw` 也不会出现在门户任何响应里（契约 §10.6）。
 
 **413 不是不可重试的失败，别按 `failed` 渲染。** 后端此时 action 仍是 `previewed`

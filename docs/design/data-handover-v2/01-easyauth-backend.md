@@ -1597,7 +1597,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | `PATCH .../assets/{type}` | 200 | `{"asset_type": <最新的类型对象>, "confirm_version": n+1}` —— **必须回带新的 `confirm_version`**。这个 PATCH 本身会让它 +1；不回带的话，用户改完默认接收人**立刻**点执行就稳定得到 `409 confirm_version_stale`，而他什么都没做错 |
 | `GET .../overrides` | 200 | `{"overrides_version": n, "overrides": [{"asset_id","action","to_user","label"}]}` —— **完整集合**，不分页 |
 | `PUT .../overrides` | 200 | `{"overrides_version": n+1, "confirm_version": m+1, "override_count": k, "dropped_invalid": j}` —— **必须回传两个新版本号**，否则前端手上还是旧值，翻到下一页再保存必然 409 |
-| `POST .../preview` / `.../execute` / `.../retry` | 200 | 该 action 的最新对象（§6.2 `actions` 里的一项） |
+| `POST .../preview` / `.../execute` / `.../retry` | 200 | **`{"action": <§6.2 `actions` 里的一项>}`** —— 信封键冻结，不要返回裸对象，也不要沿用既有的 `app_action`（`lifecycle_api.py:415`） |
 | `GET /handover-candidates` | 200 | `{"items": [{"user_id","name","department"}]}` |
 
 **三条硬规定**：
@@ -1609,31 +1609,65 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
    （既有 `portal/pagination.py` 是 20/100，**不要沿用**）。超限直接钳制，不报错。
    **钳制只适用于 `page_size`。** `page` 与 `q` 越界一律 422（§5.6）——
    `03` §3.5 明写「不要钳制后继续查」，两边口径必须一致。
+4. **这 14 条门户 path 必须注册在 `portal/urls.py` 的 `portal-home` 与
+   `portal-react-route` 之前。** 那条 catch-all 是 `path("<path:_portal_path>", ...)`
+   （`portal/urls.py:51`，`urlpatterns` 的最后一项），`<path:…>` 会吞掉含斜杠的任意路径。
+   按习惯把新 API 追加在列表末尾的话，`GET /portal/api/v1/handover-tasks/137`
+   会命中 SPA catch-all 返回 **200 + HTML**，而前端对非 JSON 响应体一律抛
+   「服务响应格式异常，请刷新后重试。」（`frontend/src/lib/api.ts:107-108`）——
+   表现既不是 404 也不是 500，排查方向完全被带偏。补一条 `resolve()` 断言测试。
+   （控制台侧的同类顺序陷阱见 §6.3 的 `errors/raw`。）
 
-**错误码**（门户专用，均为 `{"error":{"code","message"}}`）：
+**错误码**（门户专用）。**先定落法，否则下面这张表在本仓库无处安放：**
 
-| HTTP | code | 触发 |
-|---|---|---|
-| 403 | `out_of_managed_scope` | reassign 的 subject 不在我的管辖范围（契约 §4） |
-| 409 | `open_task_exists` | 自助建单时已有 open 的 `offboard`/`transfer`/`pre_offboard` 单（与 §2.1 的 `lifecycle_task_one_open_lifecycle_per_subject` 同一集合）。`reassign` 单**不**触发本错误 |
-| 409 | `handover_execution_in_flight` | 该 `(subject, app)` 已有 execute 在途（含 `async_pending`），契约 §10.5.2。**不排队、不自动重试**，前端提示稍后再试 |
-| **413** | `payload_too_large` | **不是普通失败**：只把那个超大 batch 记 `failed`，**action 保持 `previewed`**，建 `HandoverBatchPlan` 并返回 `batch_progress`。界面走「重新预演 → 执行下一批」，**不显示 [重试]**（重发同一份 payload 只会再 413） |
-| **412** | `snapshot_stale` | 下游返回 **412** 判定为快照失效，action 已退回 `pending`，需重新 preview（契约 §10.6）。**不要用 409** —— 409 会被判 `failed` |
-| **423** | `downstream_locked` | 下游返回 **423**（对象被临时锁住，如项目审批锁），action 退回 `pending`；**可重试**，但要等人解除锁 |
-| 409 | `action_not_retryable` | 对非 `failed` 状态的 action 调 `retry` |
-| 422 | `reason_required` | reassign 未填理由或不足 10 字符 |
-| 422 | `receiver_not_active` / `receiver_is_subject` / `receiver_required` / `asset_type_not_releasable` / `duplicate_assignment` | §5.4 |
-| 400 | `detail_not_supported` | 该资产类型不支持明细 |
-| **503** | `directory_unavailable` | subject 的 `DingTalkUserOrgContext` 缺失、`stale=true`、或 `manager_chain` 元素畸形。**与 403 分开**：403 是"上下文健康但你不在他的主管链上"，503 是"组织目录现在不可用"。两者都 fail-closed，但审计事件与用户文案不同（前者提示联系管理员，后者提示稍后重试），运维也要能区分是越权还是依赖故障 |
-| 422 | `purpose_required` | `/handover-candidates` 缺 `purpose` 参数 |
-| 409 | `action_blocked` | 对 `blocked` 状态的 action 调 preview/execute（未接入 APP，D6；只有超管能 skip） |
-| 409 | `confirm_version_stale` | `execute` 回带的 `confirm_version` 与服务端不一致（§2.2）。**不创建 batch** |
-| 409 | `overrides_version_stale` | `PUT overrides` 回带的 `overrides_version` 与服务端不一致（§2.2） |
-| 409 | `batch_plan_in_progress` | 存在 `completed_batches > 0` 的 `HandoverBatchPlan` 时改分配（§2.4.1.1） |
-| 409 | `idempotency_conflict` | 同一 `Idempotency-Key` 配不同 body（本节上方的幂等规则） |
-| 422 | `idempotency_key_required` | 建单类端点缺 `Idempotency-Key` 头 |
-| 422 | `items_page_out_of_range` / `items_query_too_long` | items 的 `page` 或 `q` 越界（§5.6）。**在下发给下游之前就拦掉** |
-| 429 | `rate_limited` | items 触发 `(actor, task_id, app_id)` 限流（§5.6） |
+信封是 `{"error": {"code", "message", "details"}}` —— **三个字段，`details` 恒存在**
+（`api/errors.py:35-46` 的 `build_error_response()` 写死了它，门户走的就是这一条，
+`portal/api.py:25,271-276`）。而 `error.code` 只能取 `ErrorCode` 枚举的 **9 个大写值**
+（`api/errors.py:22-32`，`@unique`）：`VALIDATION_ERROR` / `AUTHENTICATION_FAILED` /
+`PERMISSION_DENIED` / `NOT_FOUND` / `CONFLICT` / `SEMANTIC_VALIDATION_ERROR` /
+`INTERNAL_ERROR` / `DEPENDENCY_UNAVAILABLE` / `THROTTLED`。
+
+**因此下表的细码一律落在 `details.reason`，不落在 `error.code`。**
+
+```json
+{"error": {"code": "CONFLICT", "message": "清单已变化，请重新预演。",
+           "details": {"reason": "snapshot_stale"}}}
+```
+
+> **不改成往 `ErrorCode` 里塞 20 多个小写成员。** 那个枚举是全 API 共用的粗分类，
+> 为一个功能加一批小写值既破坏 `@unique` 之外的命名一致性，也让枚举变成功能专属。
+> `details` 反正恒存在，`reason` 是天然的细化位。
+>
+> **这条不写死会怎样**：后端只能调 `error_response(ErrorCode.CONFLICT, …)`，
+> 浏览器拿到的 `error.code` 是 `"CONFLICT"`；而前端按 `snapshot_stale` /
+> `overrides_version_stale` / `out_of_managed_scope` 分支（`02` §5.3、§6.2、§7.2），
+> **永远不命中** —— 412 重新预演、409 版本冲突自动重载、403 与 503 的文案区分
+> 全部退化成一句通用报错，而且没有任何测试会红。
+>
+> `02` 的所有错误分支必须改成读 `details.reason`；`01` §6.3 的控制台错误码同规则。
+
+| HTTP | `error.code`（粗） | `details.reason`（细，前端据此分支） | 触发 |
+|---|---|---|---|
+| 403 | `PERMISSION_DENIED` | `out_of_managed_scope` | reassign 的 subject 不在我的管辖范围（契约 §4） |
+| 409 | `CONFLICT` | `open_task_exists` | 自助建单时已有 open 的 `offboard`/`transfer`/`pre_offboard` 单（与 §2.1 的 `lifecycle_task_one_open_lifecycle_per_subject` 同一集合）。`reassign` 单**不**触发本错误 |
+| 409 | `CONFLICT` | `handover_execution_in_flight` | 该 `(subject, app)` 已有 execute 在途（含 `async_pending`），契约 §10.5.2。**不排队、不自动重试**，前端提示稍后再试 |
+| **413** | `VALIDATION_ERROR` | `payload_too_large` | **不是普通失败**：只把那个超大 batch 记 `failed`，**action 保持 `previewed`**，建 `HandoverBatchPlan` 并返回 `batch_progress`。界面走「重新预演 → 执行下一批」，**不显示 [重试]**（重发同一份 payload 只会再 413） |
+| **412** | `CONFLICT` | `snapshot_stale` | 下游返回 **412** 判定为快照失效，action 已退回 `pending`，需重新 preview（契约 §10.6）。**不要用 409** —— 409 会被判 `failed` |
+| **423** | `CONFLICT` | `downstream_locked` | 下游返回 **423**（对象被临时锁住，如项目审批锁），action 退回 `pending`；**可重试**，但要等人解除锁 |
+| 409 | `CONFLICT` | `action_not_retryable` | 对非 `failed` 状态的 action 调 `retry` |
+| 422 | `SEMANTIC_VALIDATION_ERROR` | `reason_required` | reassign 未填理由或不足 10 字符 |
+| 422 | `SEMANTIC_VALIDATION_ERROR` | `receiver_not_active` / `receiver_is_subject` / `receiver_required` / `asset_type_not_releasable` / `duplicate_assignment` | §5.4 |
+| 400 | `VALIDATION_ERROR` | `detail_not_supported` | 该资产类型不支持明细 |
+| **503** | `DEPENDENCY_UNAVAILABLE` | `directory_unavailable` | subject 的 `DingTalkUserOrgContext` 缺失、`stale=true`、或 `manager_chain` 元素畸形。**与 403 分开**：403 是"上下文健康但你不在他的主管链上"，503 是"组织目录现在不可用"。两者都 fail-closed，但审计事件与用户文案不同（前者提示联系管理员，后者提示稍后重试），运维也要能区分是越权还是依赖故障 |
+| 422 | `SEMANTIC_VALIDATION_ERROR` | `purpose_required` | `/handover-candidates` 缺 `purpose` 参数 |
+| 409 | `CONFLICT` | `action_blocked` | 对 `blocked` 状态的 action 调 preview/execute（未接入 APP，D6；只有超管能 skip） |
+| 409 | `CONFLICT` | `confirm_version_stale` | `execute` 回带的 `confirm_version` 与服务端不一致（§2.2）。**不创建 batch** |
+| 409 | `CONFLICT` | `overrides_version_stale` | `PUT overrides` 回带的 `overrides_version` 与服务端不一致（§2.2） |
+| 409 | `CONFLICT` | `batch_plan_in_progress` | 存在 `completed_batches > 0` 的 `HandoverBatchPlan` 时改分配（§2.4.1.1） |
+| 409 | `CONFLICT` | `idempotency_conflict` | 同一 `Idempotency-Key` 配不同 body（本节上方的幂等规则） |
+| 422 | `SEMANTIC_VALIDATION_ERROR` | `idempotency_key_required` | 建单类端点缺 `Idempotency-Key` 头 |
+| 422 | `SEMANTIC_VALIDATION_ERROR` | `items_page_out_of_range` / `items_query_too_long` | items 的 `page` 或 `q` 越界（§5.6）。**在下发给下游之前就拦掉** |
+| 429 | `THROTTLED` | `rate_limited` | items 触发 `(actor, task_id, app_id)` 限流（§5.6） |
 
 > 上面这 8 行不是补充说明，是**冻结契约的一部分**。它们在本文别处都有定义，
 > 但 §6.1 才是 A2 建 `ApiError` 分支时照抄的那一份 —— 漏在这里，
@@ -1733,7 +1767,23 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 
 ### 6.3 控制台（`/console/api/v1/lifecycle/`，超管）
 
-既有端点保留，但 **`GET .../handover-tasks` 列表要加参数与字段**：
+既有端点**不是原样保留**，先处理两处会直接崩掉的既有形状：
+
+- **`PATCH /console/api/v1/lifecycle/handover-tasks/{id}` 的 `app_actions` 字段整体删除**，
+  只保留 `{"cancel": bool}`。该职责由下方新增的 `PATCH .../actions/{app_key}` 承接。
+  > 不删就是一个「import 与属性都在、一调就 500」的端点：
+  > `admin_console/lifecycle_api.py:102-105` 的 `HandoverTaskPatchPayload.app_actions`
+  > → `:694 _patch_receiver_batch()` → `lifecycle/handover.py:82-115 update_action_receiver()`，
+  > 直接读写 `locked.to_user`（`:107`）与 `locked.policy`（`:103,108`）——
+  > 而 §2.2 把 `policy` **删了**、`to_user` 改名成了 `grant_receiver`。
+  > `AGENTS.md` 禁止兼容层，所以只能删字段，不能留个转接。
+- **单 action 的 mutation 响应信封冻结为 `{"action": <§6.2 actions 里的一项>}`。**
+  既有的 `lifecycle_api.py:415` 返回的是 `{"app_action": ...}`，而数组已按 §6.2 改名成
+  `actions`（既有是 `lifecycle_api.py:895` 的 `app_actions`）—— 单数不跟着改就自相矛盾，
+  门户与控制台还会各自发明键名（裸对象 / `action` / `app_action`），
+  前端共享组件拿不到统一形状。消费者一起迁。
+
+**`GET .../handover-tasks` 列表要加参数与字段**：
 
 - 新增 query：`assignee_state=manager|subject|superuser_pool`、`blocked=true|false`；
   非法枚举值 → `422`。**筛选必须在数据库分页之前完成** —— 在当前页做本地过滤的话，
@@ -1754,11 +1804,31 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | GET | `.../handover-blocked-apps` | 未接入 APP 汇总，供控制台顶部告警条。响应 `{"app_count": n, "task_count": m, "apps": [{"app_key","app_name","blocked_task_count"}]}` |
 | GET | `.../handover-app-options` | 控制台版的应用范围数据源，query `subject_user_id`。响应与门户版同形状，但走 `require_superuser()` 且**不做管辖校验**（超管跨部门 reassign 用，§6.3 的 `handover-tasks/reassign`） |
 | GET | `.../handover-tasks/{id}/candidates` | **控制台专用的选人数据源**，query `q`。响应 `{"items": [{"user_id","name","department"}]}`，只含 active、非本地管理员、且**不等于本单 subject** 的用户。<br>**不要让前端把门户 URL 前缀换成控制台前缀了事** —— 现有 `/console/api/v1/user-options` 的 `purpose` 只接受 `employee` \| `approver`（`admin_console/users_api.py:66-90`），传 `receiver` 直接 422；传 `employee` 又会把当事人本人列进候选，一直到 execute 才报 `receiver_is_subject`。共享组件通过 **surface adapter** 注入 API，不做字符串替换 |
-| GET | `.../handover-tasks/{id}/actions/{app_key}/last-error-raw` | **超管专用**，返回 `{"last_error_raw": "..."}`。**每次读取先写审计**（谁、何时、看了哪个 action 的原始错误），再返回。该字段**禁止**出现在门户响应与普通详情响应里（契约 §10.6） |
+| GET | `.../handover-tasks/{id}/actions/{app_key}/assets/{type}/items` | 与门户同规格（§5.6 的参数上界与限流同样适用），但走 `require_superuser()`、**不做 assignee 校验** |
+| GET | `.../handover-tasks/{id}/actions/{app_key}/assets/{type}/overrides` | 同上，返回完整 override 集合与 `overrides_version` |
+| PUT | `.../handover-tasks/{id}/actions/{app_key}/assets/{type}/overrides` | 同上，整体替换，`overrides_version` 必填 |
+| PATCH | `.../handover-tasks/{id}/actions/{app_key}/assets/{type}` | 同上，改类型级 `default_action` / `default_to_user_id`，回带新 `confirm_version` |
+| GET | `.../handover-tasks/{id}/actions/{app_key}/errors/raw` | **超管专用**，返回 `{"last_error_raw": "..."}`。**每次读取先写审计**（谁、何时、看了哪个 action 的原始错误），再返回。该字段**禁止**出现在门户响应与普通详情响应里（契约 §10.6） |
 | GET | `.../apps/{app_key}/handover-capability` | 能力标签页的**初始数据**。响应 `{"handover_capability": "declared"\|"none"\|"undeclared", "handover_asset_types": [...], "handover_url": "", "declared_by": "", "declared_at": null, "synced_at": null}`。**没有这个 GET，能力标签页打开就是空白** —— 既有 app detail 不返回三态，冻结契约里也只有两个 POST |
 | PATCH | `.../handover-tasks/{id}/actions/{app_key}` | 设置**权限接收人**，body `{"grant_receiver_user_id": string\|null}`。仅 `kind=offboard` 允许非空，否则 `422`。修改后该 action 回退 `pending` 并清除上一轮 preview 结果（接收人变了，之前的预演不再代表现在的意图）。返回更新后的 action 对象 |
 | POST | `.../apps/{app_key}/handover-capability` | 声明 `none`，body `{"reason": "..."}`；写 `declared_by`/`declared_at` |
 | POST | `.../apps/{app_key}/handover-capability/sync` | 手动触发 §5.2 descriptor 同步 |
+
+上面四条资产/明细端点**必须真的建出来，别只写一句「另注册一套」就算数**：
+`02` §7.1 的控制台向导第 3 段直接内嵌门户那套 `AssetAllocator` 组件，
+组件里写的是无前缀相对路径。冻结表里没有控制台版本的话，A2 只有两条路 ——
+要么不做（控制台向导第 3 段没有后端，D10 的条目级分配在控制台完全用不了），
+要么直接拼门户前缀，那正好撞上下面这条禁令，而超管不是 assignee，
+门户 guard 会稳定回 404。`02` §6 的路径写法要标注由 surface adapter 注入前缀。
+
+**`errors/raw` 是两段路径，不是 `last-error-raw` 一段，这不是风格问题。**
+`admin_console/urls.py:252` 注册的是
+`.../actions/<str:app_key>/<str:operation>` —— `<str:…>` 吃掉任意非空单段，
+`last-error-raw` 会被当成 `operation` 命中它，然后 `lifecycle_api.py:373-374`
+对非 POST 直接回 405；即使改成 POST 也会落到 `:405-406` 的
+「操作必须为 preview、execute、retry 或 skip」400。
+控制台「查看原始错误」按钮 100% 失败，而要求的「每次读取先写审计」一次都不会执行。
+本节上面已经就 `skip` 警告过同一个陷阱，这条是对称的遗漏。
 
 **控制台不复用门户的 URL 与 view。** 资产/明细能力在控制台下**另注册一套路径**
 （`/console/api/v1/lifecycle/handover-tasks/{id}/...`），走 `require_superuser()` 且不做 assignee 校验，
@@ -1774,7 +1844,24 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 
 契约 §12 冻结的**全部**事件（不要在这里手写数量 —— 理由见本节末尾那条自己写的警告）。
 **每一个都必须有明确的写入位置，缺一个就是验收失败**
-（`00` §15 第 9 条要求「§12 全部出现」）。对照表：
+（`00` §15 第 9 条要求「§12 全部出现」）。
+
+**先改 `record_task_event()` 的 actor 归类，否则整张表记出来的 actor 都是错的。**
+现有实现是二值硬编码：`actor_type = "system" if actor_id in {LIFECYCLE_ACTOR_ID,
+"directory_sync"} else "admin"`（`lifecycle/core.py:107`）—— **没有 `user` 分支**。
+而 v2 里 `handover_reassign_created`、`handover_action_previewed` / `_executed` / `_failed`
+主要是**门户的普通员工与主管**触发的，全会被记成 `admin`。
+`actor_type` 是无枚举约束的自由 CharField（`audit/models.py:48`），不会报错，只会静默写错；
+`AuditLog` 上还有 `(actor_type, actor_id, -created_at)` 索引（`audit/models.py:64`），
+按 actor_type 的运维查询会全部失真，而 §6.3 的原始错误读取审计、§9 的顺延/跳过责任链、
+`00` §15 第 9 条的验收，都建立在 actor 可区分之上。
+
+改法：`record_task_event()` 增加显式 `actor_type` 参数（`system` / `user` / `admin` 三值），
+门户入口一律传 `user`、控制台入口传 `admin`、beat 传 `system`；
+`tests/unit/lifecycle/test_audit_events.py` 的逐事件断言同时校验 `actor_type`。
+（仓库其他门户/控制台写法用的就是 `actor_type="user"`，如 `admin_console/webhook_config_api.py:106`。）
+
+对照表：
 
 | 事件 | 写在哪 |
 |---|---|
@@ -2000,9 +2087,25 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 |---|---|
 | `webhooks/hooks.py::signed_hook_post` | preview / items / execute |
 | **`webhooks/delivery.py::attempt_delivery`** | **`webhook.test`** —— 控制台的测试按钮走 `enqueue_delivery()` 把 body 存进 `WebhookDelivery`，最终由这里原样序列化并签名，**根本不经过 `hooks.py`** |
+| `webhooks/hooks.py::signed_hook_get`（**只列出来，不注入**） | 202 的异步状态查询（`lifecycle/handover.py:272-277` 调它，`event_type=HOOK_EVENT_EXECUTE`）。它 **body 是 `b""`**，没有可注入的地方 —— 列在这里是为了避免实现者以为漏改了它 |
 
-两处都必须**复制一份 payload**、在序列化与签名**之前**强制覆盖 `event_type`
+前两处都必须**复制一份 payload**、在序列化与签名**之前**强制覆盖 `event_type`
 （注入在签名之后等于没做）。
+
+> **第三个出口带出一个真问题：SDK 现在验不了空 body 的签名请求。**
+> `signed_hook_get` 同样带 `X-EasyAuth-Event` 与签名头（`hooks.py:105,109`），
+> 签的是 `timestamp + "." + b""`；而 SDK 的 `verify_webhook()` 会
+> `json.loads(raw_body.decode())`（`sdk/python/src/easyauth_app_sdk/webhook.py:74-79`），
+> 对 `b""` 抛 `JSONDecodeError` → `WebhookVerificationError`。SDK 里也没有任何状态查询 helper。
+>
+> 后果：任何按 §8 用 SDK 实现 202 异步的下游，其状态查询端点**每一次轮询都会验签失败**，
+> action 卡在 `async_pending` 直到轮询上限、进 `async_attention_required`，
+> 而 §7 又要求那期间不释放租约 —— 「202 是个死胡同」以另一种方式成立。
+>
+> 因此 §8 的交付物增加一项：**`verify_webhook()` 支持空 body**（GET 分支跳过 JSON 解析，
+> 只验 `timestamp + "." + b""` 的签名并返回空 payload），
+> 或新增 `verify_status_request()`。契约侧在 §10.1 注明状态端点的验签口径与此一致。
+> 本期若不做 202，则 §7 必须显式关掉这条路径，而不是留一个 SDK 侧实现不了的必跑 beat。
 补**字节级**的 sender-side 测试：断言四种事件发出的 raw body 里都含正确的 `event_type`，
 且签名是对注入之后的字节算的。
 
@@ -2106,8 +2209,21 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | 分工 | 内容 | 何时开始 |
 |---|---|---|
 | **A1a** | 只做 §8 的 SDK 0.4.0 发布 | 第 0 天，做完即撤 |
-| **A1b** | §2 模型 + 迁移 + §5 执行链（租约、批次、两次 sentinel 移交、`complete_data_phase`、状态汇总纯函数） | 与 A1a 并行 |
-| **A1c** | §6 的 28 个 HTTP 端点 + §4.5 审批责任改派 + §7 异步任务 | **等 A1b 的模型层落地之后** |
+| **A1b** | §2 模型 + 迁移 + §5 执行链（租约、批次、两次 sentinel 移交、`complete_data_phase`、状态汇总纯函数）、**§3 `lifecycle/assignee.py`、§4 `lifecycle/escalation.py`**，以及 **§7 里要动 `lifecycle/handover.py` / `lifecycle/models.py` 的那部分**（`poll_async_action()` 改造、`async_attention_required` 常量、租约接管协议） | 与 A1a 并行 |
+| **A1c** | §6 的 32 个 HTTP 端点（14 门户 + 18 控制台）+ §4.5 审批责任改派 + §7 的 beat 注册与调度壳（`tasks/lifecycle.py`） | **等 A1b 的模型层落地之后** |
+
+> **§3 与 §4 必须显式有主。** 早先的分工只列了 §2/§5/§6/§4.5/§7，
+> `lifecycle/assignee.py` 与 `lifecycle/escalation.py` 这两个**新建文件**（见 §1 改造总览）
+> 落在任何一行之外 —— 而 §6.3 的 `claim` / `escalation/defer`、§6.4 的
+> `handover_assignee_assigned` / `handover_task_escalated` 落点、§7 的 `lifecycle_escalation` beat
+> 全都依赖它们，三方都会以为对方在做。归到 A1b：`apply_assignee()` 要与 assignee 写入同事务，
+> 天然属于模型层。
+>
+> **§7 也必须按文件切，不能整节给 A1c。** §7 明写「拿到终态 200 后必须走
+> `complete_data_phase()`」「把 action 置 `async_attention_required`」「按 §2.4.2 的协议接管租约」
+> —— 这三件事分别落在 `lifecycle/handover.py`（现状 `poll_async_action` 在
+> `handover.py:261-321`，直接置 `done`）与 `lifecycle/models.py` 的状态常量表，
+> 正是下面那条「不能同时改同一批文件」点名的两个文件。整节给 A1c 的话，隔离承诺是纸面的。
 
 > **A1b 与 A1c 不能真正同时改同一批文件。** §11 第 2 条要求 schema 变更与全部调用方
 > **在同一个 commit** 里；两人并行改 `lifecycle/models.py` 与 `lifecycle/handover.py`
