@@ -71,7 +71,7 @@ export function PortalReassignDialog({ onClose }: { onClose: () => void }) {
     createMutation.mutate();
   };
 
-  const outOfScope = Boolean(createMutation.error && apiErrorReason(createMutation.error) === "out_of_managed_scope");
+  const mutationErrorTitle = resolveReassignErrorTitle(createMutation.error, t);
 
   return (
     <Dialog
@@ -139,20 +139,34 @@ export function PortalReassignDialog({ onClose }: { onClose: () => void }) {
           />
         </Field>
         {formError ? <StatusBanner live="alert" tone="signal" title={formError} /> : null}
-        {outOfScope ? (
-          <StatusBanner live="alert" tone="signal" title={t("handover.portal.reassign.outOfScope")} />
-        ) : null}
-        {createMutation.error && !outOfScope ? (
-          <StatusBanner
-            live="alert"
-            tone="signal"
-            title={t("handover.portal.reassign.failed")}
-            message={(createMutation.error as Error).message}
-          />
-        ) : null}
+        {mutationErrorTitle ? <StatusBanner live="alert" tone="signal" title={mutationErrorTitle} /> : null}
       </div>
     </Dialog>
   );
+}
+
+function resolveReassignErrorTitle(
+  error: unknown,
+  t: ReturnType<typeof useI18n>["t"],
+): string | null {
+  if (!error) {
+    return null;
+  }
+  const reason = apiErrorReason(error);
+  switch (reason) {
+    case "out_of_managed_scope":
+      return t("handover.portal.reassign.outOfScope");
+    case "directory_unavailable":
+      return t("handover.portal.reassign.directoryUnavailable");
+    case "handover_execution_in_flight":
+      return t("handover.portal.reassign.executionInFlight");
+    case "action_blocked":
+      return t("handover.portal.reassign.actionBlocked");
+    case "idempotency_conflict":
+      return t("handover.portal.reassign.idempotencyConflict");
+    default:
+      return t("handover.portal.reassign.failed");
+  }
 }
 
 /** 转出方专用：purpose=reassign_subject，与接收人候选隔离。 */

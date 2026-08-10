@@ -106,7 +106,7 @@ function DetailBody({
       <PanelSurface padding="lg" className="space-y-3">
         <div className="flex flex-wrap items-center gap-2">
           <Badge tone="bond">{kindLabel(t, task.kind)}</Badge>
-          <Badge tone="neutral">{task.status}</Badge>
+          <Badge tone="neutral">{taskStatusLabel(t, task.status)}</Badge>
           {task.escalation.deadline == null ? (
             <Badge tone="neutral">{t("handover.portal.list.awaitingSuperuser")}</Badge>
           ) : (
@@ -157,5 +157,20 @@ function kindLabel(t: ReturnType<typeof useI18n>["t"], kind: string): string {
       return t("handover.kind.reassign");
     default:
       return kind;
+  }
+}
+
+function taskStatusLabel(t: ReturnType<typeof useI18n>["t"], status: string): string {
+  switch (status) {
+    case "pending":
+      return t("handover.taskStatus.pending");
+    case "in_progress":
+      return t("handover.taskStatus.inProgress");
+    case "completed":
+      return t("handover.taskStatus.completed");
+    case "cancelled":
+      return t("handover.taskStatus.cancelled");
+    default:
+      return status;
   }
 }

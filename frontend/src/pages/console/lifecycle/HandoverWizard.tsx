@@ -19,7 +19,6 @@ import {
   HANDOVER_WIZARD_STEPS,
   useHandoverWizardController,
   type HandoverWizardStepId,
-  stepIndex,
 } from "./handoverWizardController";
 import { handoverActionStatusLabel, handoverActionStatusTone } from "./lifecycleLabels";
 
@@ -157,12 +156,14 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
       (action) => previewed[action.app_key] || localActions[action.app_key]?.status === "previewed",
     );
 
+  const includeGrantsStep = task.kind === "offboard";
+
   const goNext = () => {
     if (step === "apps") {
       if (selectedApps.length === 0) {
         return;
       }
-      if (task.kind === "offboard") {
+      if (includeGrantsStep) {
         wizard.goTo("grants");
       } else {
         wizard.goTo("allocate");
@@ -177,6 +178,19 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
       return;
     }
     wizard.goNext();
+  };
+
+  /** 非 offboard 前进跳过授权段，后退也必须跳过，避免落在禁用的「授权」步。 */
+  const goBack = () => {
+    if (step === "allocate" && !includeGrantsStep) {
+      wizard.goTo("apps");
+      return;
+    }
+    if (step === "grants") {
+      wizard.goTo("apps");
+      return;
+    }
+    wizard.goBack();
   };
 
   const runExecute = async () => {
@@ -228,7 +242,7 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
   return (
     <Dialog title={t("handover.wizard.title")} size="xl" onClose={() => !isExecuting && onClose()} closeDisabled={isExecuting}>
       <div className="space-y-5">
-        <WizardStepIndicator step={step} />
+        <WizardStepIndicator step={step} includeGrants={includeGrantsStep} />
         {error ? <StatusBanner live="alert" tone="signal" title={error} /> : null}
 
         {step === "apps" ? (
@@ -407,7 +421,7 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
           </Button>
           <div className="flex flex-wrap gap-2">
             {!wizard.isFirstStep ? (
-              <Button type="button" disabled={isSaving || isExecuting} onClick={wizard.goBack}>
+              <Button type="button" disabled={isSaving || isExecuting} onClick={goBack}>
                 {t("common.back")}
               </Button>
             ) : null}
@@ -437,14 +451,17 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
   );
 }
 
-function WizardStepIndicator({ step }: { step: HandoverWizardStepId }) {
+function WizardStepIndicator({ step, includeGrants }: { step: HandoverWizardStepId; includeGrants: boolean }) {
   const { t } = useI18n();
+  const visibleSteps = includeGrants
+    ? HANDOVER_WIZARD_STEPS
+    : HANDOVER_WIZARD_STEPS.filter((item) => item.id !== "grants");
+  const activeIndex = visibleSteps.findIndex((item) => item.id === step);
   return (
     <ol className="flex flex-wrap gap-x-1 gap-y-2 border-b border-ink/12 pb-4" aria-label={t("handover.wizard.stepsAria")}>
-      {HANDOVER_WIZARD_STEPS.map((item, index) => {
-        const activeIndex = stepIndex(step);
+      {visibleSteps.map((item, index) => {
         const isActive = item.id === step;
-        const isDone = index < activeIndex;
+        const isDone = activeIndex >= 0 && index < activeIndex;
         return (
           <li key={item.id} className="flex items-center gap-1" aria-current={isActive ? "step" : undefined}>
             {index > 0 ? <span aria-hidden="true" className="mx-1 hidden h-px w-5 bg-ink/15 sm:block" /> : null}

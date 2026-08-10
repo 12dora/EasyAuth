@@ -31,6 +31,7 @@ import type { Translator } from "../../lib/status";
 import { useI18n } from "../../i18n/I18nProvider";
 import { AccessRequestForm } from "./components/AccessRequestForm";
 import { PortalApprovalsSection } from "./components/PortalApprovalsSection";
+import { PortalPreOffboardDialog } from "./PortalPreOffboardDialog";
 import {
   parsePortalGrantList,
   parsePortalRequestList,
@@ -47,15 +48,27 @@ export function PortalPage({ view }: { view: PortalView }) {
   const { t } = useI18n();
   const outletContext = useOutletContext<AppShellOutletContext | null>();
   const currentUserId = outletContext?.currentUserId ?? "";
+  const [preOffboardOpen, setPreOffboardOpen] = useState(false);
 
   return (
     <>
-      <PageHeader eyebrow={t("portal.eyebrow")} title={viewTitle(t, view)} />
+      <PageHeader
+        eyebrow={t("portal.eyebrow")}
+        title={viewTitle(t, view)}
+        actions={
+          view === "grants" ? (
+            <Button type="button" variant="ghost" onClick={() => setPreOffboardOpen(true)}>
+              {t("handover.portal.list.preOffboard")}
+            </Button>
+          ) : undefined
+        }
+      />
       {view === "grants" ? <PortalGrantSection endpoint="/portal/api/v1/me/grants" emptyText={t("portal.grants.emptyCurrent")} /> : null}
       {view === "expiring" ? <PortalGrantSection endpoint="/portal/api/v1/me/grants/expiring" emptyText={t("portal.grants.emptyExpiring")} /> : null}
       {view === "requests" ? <PortalRequestSection /> : null}
       {view === "request" ? <AccessRequestForm currentUserId={currentUserId} /> : null}
       {view === "approvals" ? <PortalApprovalsSection /> : null}
+      {preOffboardOpen ? <PortalPreOffboardDialog onClose={() => setPreOffboardOpen(false)} /> : null}
     </>
   );
 }

@@ -282,7 +282,7 @@ function taskColumns(
       cell: ({ row }) => (
         <div className="flex flex-wrap items-center gap-1">
           <span>{handoverKindLabel(t, row.original.kind)}</span>
-          {(row.original.blocked_app_count ?? 0) > 0 ? (
+          {row.original.blocked_app_count > 0 ? (
             <Badge tone="signal">{row.original.blocked_app_count}</Badge>
           ) : null}
           {row.original.escalation?.days_left != null ? (

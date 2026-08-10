@@ -149,13 +149,13 @@ function HandoverTaskCard({ task, interactive }: { task: HandoverTaskListItem; i
           </ButtonLink>
         </div>
         <p className="text-body text-ink-soft">
-          {t("handover.portal.list.pendingApps", { count: task.pending_app_count ?? 0 })}
+          {t("handover.portal.list.pendingApps", { count: task.pending_app_count })}
           {" · "}
-          {t("handover.portal.list.totalAssets", { count: task.total_asset_count ?? 0 })}
+          {t("handover.portal.list.totalAssets", { count: task.total_asset_count })}
         </p>
-        {(task.blocked_app_count ?? 0) > 0 ? (
+        {task.blocked_app_count > 0 ? (
           <p className="text-body text-signal" data-testid={`blocked-hint-${task.id}`}>
-            ⚠ {t("handover.portal.list.blockedApps", { count: task.blocked_app_count ?? 0 })}
+            ⚠ {t("handover.portal.list.blockedApps", { count: task.blocked_app_count })}
           </p>
         ) : null}
       </PanelSurface>

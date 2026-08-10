@@ -759,8 +759,8 @@ export interface HandoverBlockedAppsPayload {
 /** 门户/控制台列表行: 详情去掉 actions/team_items，另加计数。 */
 export interface HandoverTaskListItem {
   id: number;
-  kind: HandoverKind | string;
-  status: HandoverTaskStatus | string;
+  kind: HandoverKind;
+  status: HandoverTaskStatus;
   generation: number;
   subject: HandoverUserRef & { email?: string };
   assignee: HandoverUserRef | null;
@@ -769,9 +769,9 @@ export interface HandoverTaskListItem {
   escalation: HandoverEscalation;
   reason: string;
   created_at: string;
-  pending_app_count?: number;
-  blocked_app_count?: number;
-  total_asset_count?: number;
+  pending_app_count: number;
+  blocked_app_count: number;
+  total_asset_count: number;
   created_by?: string;
   allowed_actions?: string[];
   updated_at?: string;
@@ -822,8 +822,8 @@ export interface TransferPlanItem {
 
 export interface HandoverTaskDetail {
   id: number;
-  kind: HandoverKind | string;
-  status: HandoverTaskStatus | string;
+  kind: HandoverKind;
+  status: HandoverTaskStatus;
   generation: number;
   subject: HandoverUserRef & { email?: string };
   assignee: HandoverUserRef | null;
