@@ -367,7 +367,14 @@ class HandoverDeliveryAttempt(models.Model):
         ]
 ```
 
-事件幂等键（outbox / delivery 头）用 `lifecycle-execute:{batch_id}:{delivery_seq}`。
+事件幂等键（outbox `event_key` 与线上 `X-EasyAuth-Delivery`）用
+**`lifecycle-execute:batch:{batch.pk}:delivery:{delivery_seq}`**。
+
+> **不能用 `batch_id`（即 `batch_seq`）拼键。** 它的作用域是 `(action, generation)`，
+> 两个不同 action 的第一批都是 `batch_seq=1, delivery_seq=1`，拼出来是同一个字符串；
+> 而 outbox 的 `event_key` 是**全局唯一**的（`outbox/models.py:29-35`），
+> 第二次 `enqueue_task()` 会因为同键不同 payload 抛 `OutboxEventConflictError`。
+> 用数据库主键 `batch.pk` 才是全局唯一的。
 
 > **这张表不是 append-only，别把它写成 append-only。**
 > 发送前必须先插入一行 `outcome="sent"`（否则"发出去了但没记账"这种失序拦不住），
@@ -443,6 +450,11 @@ delivery（`outcome="sent"`）、写 outbox，**提交后**才由 worker 真正�
 每批的流程固定为：**重新 preview → 拿新 token → 建该批 batch 行 → execute**。
 最后一批的 batch 记 `is_final=True`，只有它成功后 action 才转 `done`。
 
+> **分片 payload 里，被分片的类型必须强制 `default_action="skip"`，只列出本批的 overrides。**
+> 否则第一批带着原来的 `default_action="transfer"` 发出去，下游会把**整个类型**处理完
+> —— 分片就白分了，后面几批面对的是一个已经被搬空的集合，
+> 而 summary 的守恒校验在第一批就会对不上。
+
 ### 2.4.2 `HandoverExecutionLease`（新表，契约 §10.5.2）
 
 ```python
@@ -516,6 +528,22 @@ delivery 结果、action 状态或 summary。异步轮询回来的那条路径�
 
 顺序反过来（先查证再抢占）会留下一个窗口：查证那几秒里旧 worker 复活，
 沿原路径把 action 写成 `done`，而 fence 还没抬，拦不住它。
+
+#### 202 之后必须把租约**移交**给轮询 worker
+
+`async_pending` 期间租约仍要持有（否则第二个 execute 会挤进来），
+但**发起 execute 的那个 worker 已经退出了**，而轮询在 beat 的另一个进程里 ——
+它的 `owner` 与原持有者不同，严格 CAS 下写回恒为 0 影响行数，
+**异步 action 会永远卡在 `async_pending`**；绕过 CAS 又等于把防脏写的机制关掉。
+
+因此规定一次**显式移交**：
+
+1. execute worker 收到 202 时，用**自己当前的 owner/fence** 做 CAS，把租约的
+   `owner` 改成 sentinel `async:{batch.pk}` 并**递增 fence**，随后自己退出；
+2. 每次 poll 先从该 sentinel **原子 claim**（CAS 成 `poller:{worker_id}`，fence +1）；
+3. 本次 poll 仍返回 202 → 续租并**移回 sentinel**（fence 再 +1）；
+4. 返回终态 200 → 在**同一 fence** 下调 `complete_data_phase()`，然后释放租约；
+5. 任何一步 claim / CAS 影响行数不为 1 → **丢弃本次响应并退出**，不写任何状态。
 
 ### 2.5 ~~`CustodyGrant`~~ / ~~`CustodyGrantItem`~~ —— **已取消**
 
@@ -624,7 +652,23 @@ def resolve_assignee(subject: UserMirror, *, start_level: int = 0) -> AssigneeRe
 2. `manager_chain` 为空 **或** `stale=True` → 返回 `(None, superuser_pool, 0, degraded=True)`，
    写审计 `handover_assignee_resolution_degraded`。
    **不 fail-closed**：离职单是自动建的，宁可落超管池也不能丢单（契约 §8.2 已说明与权限查询取舍相反的理由）。
-3. 从 `start_level` 起遍历，逐个用 `dingtalk_userid` 查 `UserMirror`；跳过：
+3. 从 `start_level` 起遍历。**`manager_chain` 的每一项是映射，取 `entry["user_id"]`**；
+   不是映射或取不到就写审计 `handover_assignee_chain_entry_malformed` 后跳过该项（不静默）。
+   **查询必须同时限定三个字段**：
+
+   ```python
+   UserMirror.objects.filter(
+       dingtalk_source_slug=subject.dingtalk_source_slug,
+       dingtalk_corp_id=subject.dingtalk_corp_id,
+       dingtalk_userid=manager_userid,
+   ).first()
+   ```
+
+   > 钉钉 userid **只在 `(source_slug, corp_id)` 内唯一**（`accounts/models.py:61-67`）。
+   > 只按 userid 查，两个企业都有 `manager01` 时会拿到另一家企业的人 ——
+   > 交接单被交给一个和当事人毫无管辖关系的人。
+
+   跳过：
    - 不存在的
    - `status != active` 的
    - `authentik_user_id` 以 `LOCAL_ADMIN_SUBJECT_PREFIX` 开头的（`accounts/local_admin.py`，break-glass 账号不参与生命周期）
@@ -964,11 +1008,21 @@ API 层的 `validate_assignments()` 仍然要有 —— 库约束保证数据不
 
 ```python
 def complete_data_phase(batch: HandoverExecutionBatch) -> None:
-    # 1. 持久化 batch.data_completed_at
-    # 2. 若 is_final 且 kind == offboard: 幂等转授权限
-    # 3. 全部成功后才把 action 置 done
+    # 事务 A(CAS 保护): batch.status="data_completed" + batch.data_completed_at
+    #                  若 batch.is_final: 同时写 action.data_completed_at   ← 必须在这里
+    # 提交 A
+    # 事务 B: 幂等转授权限(仅 is_final 且 kind == offboard)
+    # 事务 C: action.status = done + refresh_task_status_locked
     ...
 ```
+
+> **`action.data_completed_at` 必须在授权事务之前提交。** 顺序写反了会这样：
+> 最终批的数据 webhook 返回 200，只写了 batch 上的 marker；授权事务失败；
+> 此时 action 上的 marker 还是 NULL —— **retry 会重新发一次数据 webhook**，
+> 而不是只补做授权。数据已经搬过一次了。
+>
+> retry 的判定也随之写死：**先读最终批的 marker**，非空就**不创建新的 delivery、不写 outbox**，
+> 只跑那个幂等的授权事务。
 
 - 同步 200 走它；**异步 `poll_async_action()` 拿到最终 200 也必须走它**。
 - **禁止 `async_pending → done` 直接跳转。** 现有 `poll_async_action()`（`handover.py:261`）
