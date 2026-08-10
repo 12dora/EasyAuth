@@ -355,7 +355,8 @@ class HandoverDeliveryAttempt(models.Model):
     batch = FK(HandoverExecutionBatch, on_delete=PROTECT, related_name="deliveries")
     delivery_seq = PositiveIntegerField()
     lease_fence = PositiveBigIntegerField()       # 发起时持有的 fence, 用于丢弃陈旧写回
-    outcome = CharField(max_length=16)            # sent | succeeded | failed | async_accepted
+    outcome = CharField(max_length=16)            # sent | succeeded | failed
+                                                  # | async_accepted | superseded
     http_status = PositiveSmallIntegerField(null=True, blank=True)
     response_payload = JSONField(default=dict, blank=True)
     error_text = TextField(blank=True)
@@ -390,8 +391,15 @@ class HandoverDeliveryAttempt(models.Model):
 > 请求侧字段（`batch.request_payload` / `request_hash`）在 batch 上，**创建后不可变** ——
 > 审计凭据在那里，不在这里。
 >
-> 库层加一条 CHECK：`outcome='sent' OR http_status IS NOT NULL`，
-> 让"标了终态却没有响应记录"这种行写不进去。
+> 状态机固定为 **`sent → succeeded | failed | async_accepted | superseded`**。
+> `superseded` 是给「发送前发现 generation 已过期、整条作废」用的（§5.5），它**没有** HTTP 响应，
+> 所以库层 CHECK 要写成：
+>
+> ```
+> outcome IN ('sent', 'superseded') OR http_status IS NOT NULL
+> ```
+>
+> 漏掉 `superseded` 的话，旧 generation 的 outbox 出队时那条作废记录**根本落不了库**。
 
 **FK 定死为 `SET_NULL`，不是 `PROTECT`，更不是 `CASCADE`：**
 
@@ -437,7 +445,7 @@ delivery（`outcome="sent"`）、写 outbox，**提交后**才由 worker 真正�
 
 | | 何时固化 | 内容 |
 |---|---|---|
-| **分片计划** `HandoverBatchPlan` | 收到 413 时**一次性**算好并落库 | `total=M`、每一批覆盖哪些 `asset_type` 与 `asset_id`、`plan_seq` |
+| **分片计划** `HandoverBatchPlan` | 收到 413 时**一次性**算好并落库 | 见下方表定义 |
 | **批次行** `HandoverExecutionBatch` | **每批执行前才创建** | 该批的 `snapshot_token`、canonical payload、`request_hash` |
 
 > **为什么不能一次建完 M 个 batch 行**：batch 上的 `snapshot_token` 与 payload 是
@@ -445,6 +453,31 @@ delivery（`outcome="sent"`）、写 outbox，**提交后**才由 worker 真正�
 > 契约 §10.5.2 规定每批必须重新 preview 取新 token（第 1 批已经改过数据，旧 token 必然失效）。
 > 预建的话只有三条路：填旧 token（execute 必然 412）、填空（违反非空）、
 > 或事后修改"不可变"的行（毁掉审计凭据）。三条都不行。
+
+```python
+class HandoverBatchPlan(models.Model):
+    action = FK(HandoverAppAction, on_delete=SET_NULL, null=True)
+    action_snapshot_id = PositiveIntegerField()      # 非空, 唯一约束建在它上面
+    generation = PositiveIntegerField()
+    total = PositiveIntegerField()                   # = M
+    chunks = JSONField()                             # 按 plan_seq 排: [[{asset_type, ids:[...]}], ...]
+    assignment_hash = CharField(max_length=64)       # 见下方「计划固化之后」
+    status = CharField(max_length=16)                # active | abandoned | done
+    completed_batches = PositiveIntegerField(default=0)
+    created_at = DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["action_snapshot_id", "generation"],
+                condition=Q(status="active"),
+                name="lifecycle_batch_plan_one_active",
+            ),
+        ]
+```
+
+`HandoverExecutionBatch` 另加 `plan = FK(HandoverBatchPlan, null=True, on_delete=SET_NULL)`
+与 `plan_batch_no`（从 1 起），把批次挂回计划。
 
 切分口径：按「每批不超过 200 KiB」（对 256 KiB 上限留 56 KiB 余量）。
 `batch_progress.total` 取自计划的 `M`，`completed` 取自已终结的 batch 数 ——
@@ -659,7 +692,21 @@ delivery 结果、action 状态或 summary。异步轮询回来的那条路径�
 |---|---|---|
 | `escalation_deadline` | `DateTimeField(null=True, blank=True)` | 建单/上交时置为 `now + HANDOVER_ESCALATION_DAYS`；单终结后置空 |
 | `last_reminded_on` | `DateField(null=True, blank=True)` | 每日提醒按**上海业务日**去重（`timezone.localdate(..., Asia/Shanghai)`） |
+| `creation_idempotency_key` | `CharField(max_length=128, blank=True)` | 创建 `pre_offboard` / `reassign` 时的 `Idempotency-Key` |
+| `creation_payload_sha256` | `CharField(max_length=64, blank=True)` | 创建请求 canonical body 的摘要 |
 | `escalation_deferred_at` | `DateTimeField(null=True, blank=True)` | 超管在**当前** `escalation_level` 内顺延过一次的时间戳；每次上交时清空。非空即禁止再次顺延（§6.3） |
+
+```python
+models.UniqueConstraint(
+    fields=["created_by", "creation_idempotency_key"],
+    condition=~Q(creation_idempotency_key=""),
+    name="lifecycle_task_creation_idempotency_unique",
+)
+```
+
+**幂等键得有载体，不能只写在 API 描述里** —— 没有字段和唯一约束，「同 key 同 body 返回原单」
+就没有实现依据，并发双写也没有兜底。缺 `Idempotency-Key` 头 → `422 idempotency_key_required`；
+同 key 不同 body → `409 idempotency_conflict`。
 
 `HANDOVER_ESCALATION_DAYS: Final = 14`（原 `CUSTODY_TTL_DAYS` 作废）。
 **这个常量是硬编码的 `Final`，不接受环境变量覆盖**（D5 冻结 14 天）；唯一的例外口子是
@@ -1307,6 +1354,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | POST | `/handover-tasks/{task_id}/actions/{app_key}/preview` | 我是 assignee | |
 | POST | `/handover-tasks/{task_id}/actions/{app_key}/execute` | 我是 assignee | body **必填** `{"confirm_version": n}` —— 用户点确认时界面上显示的那一版。与服务端当前值不一致 → `409 confirm_version_stale`，**不创建 batch**，要求刷新后重新确认 |
 | POST | `/handover-tasks/{task_id}/actions/{app_key}/retry` | 我是 assignee | 仅 `failed` 可重试，否则 `409 action_not_retryable`。**若 `data_completed_at` 非空，重试只重做授权转移那一步**（契约 §10.5.1.1），不重发数据 webhook |
+| GET | `/handover-app-options` | 登录即可，query `subject_user_id` 必填（复用 §4 的管辖校验） | `reassign` 对话框里「应用范围」多选的**唯一数据源**。响应 `{"items": [{"app_key","app_name","handover_capability","blocked_reason"}]}`，只含 active 的 APP。<br>措辞是「该 subject **可选择**的 APP」，**不是「有数据的 APP」** —— preview 之前 EasyAuth 根本不知道下游有没有数据。没有这个端点，前端产生不出必填的 `app_keys`：借控制台 API 会 403，默认全选又违反冻结契约 |
 | GET | `/handover-candidates` | 登录即可 | 选人控件数据源。query：`q`（模糊，可空）、`purpose`（枚举 `receiver` \| `reassign_subject`，**必填**）。两者都只返回 active 且非本人；`purpose=reassign_subject` 时按**契约 §4 的组织主管链**筛选（active、同 `(source_slug, corp_id)`、组织上下文非 stale 且目录同步健康、且我的 `dingtalk_userid` 在其当前 `manager_chain` 里）。**禁止调用 `resolve_managed_users`** —— 它强制要求一个 `App` 参数，而这个端点根本没有 App 可传；用它还会让团队负责人在候选列表里看到不在自己主管链上的员工（提交时才 403，但名单已经泄露出去了）。目录不可用 → `503 directory_unavailable`。**不设默认值** —— 缺 `purpose` 返回 `422 purpose_required`，否则前端漏传就会静默拿到范围过宽的人员列表 |
 
 > **`confirm_version`：浏览器必须把"我确认的是哪一版"带回来。**
