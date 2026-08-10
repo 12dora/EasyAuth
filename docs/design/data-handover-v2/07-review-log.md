@@ -40,7 +40,7 @@ A5 的开工前置从"等两份不存在的裁定"变成"等三样可机械核�
 | 11 | **execute 没绑定用户看过的 preview 版本** | 并发重新预演会把用户从没见过的数据一起搬走 |
 | 12 | **override 整体 PUT 却没有读回接口** | 刷新页面后改一条就把其余全部静默删掉 |
 | 13 | **跨表 `CheckConstraint`** | Django 判 `models.E041`，迁移直接失败 |
-| 14 | **迁移章节写「删除 `to_user`」** | 与 §2.2 的 `RenameField` 矛盾，删了 `transfer_selected_grants()` 就没有输入 |
+| 14 | **迁移章节写「删除 `to_user`」** | 与 `01` §2.2 的 `RenameField` 矛盾，删了 `transfer_selected_grants()` 就没有输入 |
 
 ### 前两轮：三处结构性问题全部定案
 
@@ -163,12 +163,12 @@ recurrence patch 不支持 assignee/assigner。**而 webhook 没有合法的人�
 
 ### 3.2 并发与执行（切片 2）—— ✅ 已落文档
 
-- 授权转移**先于**数据 webhook 执行（`handover.py:182` vs `:190`）→ webhook 失败时"数据没搬、权限已转"，状态机表达不了。必须改为数据成功后再幂等转授，并引入 `data_completed` / `grants_completed` 子状态。
+- 授权转移**先于**数据 webhook 执行（`handover.py:182` vs `:190`）→ webhook 失败时「数据没搬、权限已转」，状态机表达不了。已改为数据成功后再幂等转授。**最终只保留 `data_completed_at` 一个持久化子状态**（`grants_completed` 没有必要：授权成功即 `done`），见 `01` §5.5。
 - 永久失败的 action 让整张单**既不能跳过也不能取消**（`skip_action` 卡 `attempts`、`cancel_task` 卡 `attempts__gt=0`）→ 死锁。
 - `refresh_task_status()` 只升不降，且 preview 成功后未调用 → 升级重置或 capability 恢复后出现「task in_progress 但全部 action pending」。
-- 单个 `execution_payload` 无法承载多批历史，需 append-only `HandoverExecutionAttempt`，唯一约束 `(action, generation, batch_seq)`。
+- ~~单个 `execution_payload` 无法承载多批历史，需 append-only `HandoverExecutionAttempt`~~ —— **第三轮再次修正**：单表既 append-only 又要回填结果自相矛盾。最终形态是 `HandoverBatchPlan` + 不可变 `HandoverExecutionBatch` + 受控单次转换的 `HandoverDeliveryAttempt`，见 `01` §2.4.1。
 - 执行互斥需持久化租约行（含 owner/fence），短事务 `select_for_update` 跨 worker/Celery 不成立。
-- `HandoverGrantItem` / `CustodyGrant` 缺 generation，升级后新旧混用。
+- `HandoverGrantItem` 缺 generation，升级后新旧混用 —— 已修（`01` §2.5.1，并补了原本就不存在的唯一约束）。<br>~~`CustodyGrant` 同问题~~：随代管授权整体取消，**不实施、不迁移、不验收**。
 
 ### 3.3 EasyAuth 后端（切片 3）—— ✅ 主要项已落文档
 
@@ -187,8 +187,8 @@ recurrence patch 不支持 assignee/assigner。**而 webhook 没有合法的人�
 - 只校验了 `release`，**未校验 `transfer` 的接收人非空** → 可空列静默释放、非空列 flush 时才炸。
 - override id 未先验证存在/仍属当事人/仍匹配谓词就排除出默认集 → 无效 id 被静默跳过而非 409。
 - 副作用缺失：任务改派须清 `reminder_dismissed_at`；订单改 owner 须写 `order.update` 审计；客户释放公海应走 `auto_release` 而非 `transfer` 事件。
-- `/api/v1/user-candidates` 始终过滤 `active=true`，`fetchUserCandidateById()` 其实不按 id 取——离职者当前值仍会显示失败。
-- `tasks_scope.py` 用 `created_by_user_id` 参与鉴权 → 代管期会连带暴露"仅由该人创建"的任务。
+- ~~`/api/v1/user-candidates` 始终过滤 `active=true`~~ —— **随 EasyTrade B3 与 `04` 前端一起取消**，本期**不改** candidate 的 active 过滤。
+- ~~`tasks_scope.py` 用 `created_by_user_id` 参与鉴权~~ —— 该问题只在**代管期**成立，代管已砍，本期**不改** `tasks_scope`。
 
 ### 3.5 EasyProject（切片 5）—— ✅ 已落文档
 
