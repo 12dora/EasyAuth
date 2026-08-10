@@ -380,21 +380,23 @@ async def enqueue_system_handover_projection(
 
 ### 1.4 迁移与 revision 裁定
 
-当前唯一 Alembic head 是 `m46_001_record_task_order`。需要**三个并行 revision**，各由自己的 owner 创建：
+当前唯一 Alembic head 是 `m46_001_record_task_order`。需要**四个并行 revision**，各由自己的 owner 创建：
 
 | revision | down_revision | 内容 | owner |
 |---|---|---|---|
 | `m06_003_handover_generation_watermarks` | `m46_001_record_task_order` | 建 `easyauth_handover_generations(task_key_sha256 CHAR(64) PK, task_id TEXT NOT NULL, max_generation INTEGER NOT NULL, updated_at TIMESTAMPTZ NOT NULL)` | M06 |
-| `m10_002_task_handover_actor` | `m46_001_record_task_order` | 仅把 `task_assignment_history.changed_by_dingtalk_user_id` 改为 **nullable** | M10 |
+| `m10_002_task_handover_actor` | `m46_001_record_task_order` | 把 `task_assignment_history.changed_by_dingtalk_user_id` **与 `task_collaborators.added_by_dingtalk_user_id`** 都改为 **nullable**，ORM 同步为 `Mapped[str \| None]` | M10 |
+| `m13_003_project_handover_actor` | `m46_001_record_task_order` | 把 `project_members.added_by_dingtalk_user_id` 改为 **nullable**，ORM 同步 | M13 |
 | `m32_002_handover_projection_outbox` | `m46_001_record_task_order` | 建 `op_handover_projection_outbox`，唯一约束 **`(handover_task_id, generation, batch_id, task_id)`** —— 与 §1.3 冻结的列名一致（早期这里写的是 `handover_task_key_sha256`，那一列根本不存在，照写 upgrade 当场失败）。同时给 `op_sync_conflicts` 加 `handover_outbox_id UUID NULL REFERENCES op_handover_projection_outbox(id)` 与非空部分唯一索引 | M32 |
 
-三条并行分支落地后，**由 AG-00 创建** merge revision：
+**四条**并行分支落地后，**由 AG-00 创建** merge revision：
 
 ```python
 revision = "m00_004_data_handover_v2_heads"
 down_revision = (
     "m06_003_handover_generation_watermarks",
     "m10_002_task_handover_actor",
+    "m13_003_project_handover_actor",
     "m32_002_handover_projection_outbox",
 )
 ```
@@ -404,7 +406,14 @@ down_revision = (
 `COMPLETED` 之后 `store_response` 直接返回，**不可更新**（`infra/idempotency/guard.py:136-175`）。
 水位必须走 M06 自己的 `easyauth_handover_generations` 表 + 行锁。
 
-**downgrade 的前置条件**：确认没有 NULL 的 assignment-history actor、没有未消费的 OP outbox 行。
+**downgrade 的前置条件**：确认 `task_assignment_history.changed_by_*`、
+`task_collaborators.added_by_*`、`project_members.added_by_*` **三列都没有 NULL**，
+且没有未消费的 OP outbox 行。
+
+> **这两个 `added_by` 的 nullable 是硬前置。** §1.1 要求新建的关系行写
+> `added_by = NULL`（不复制来源人的历史署名），而这两列现在都是 `NOT NULL`
+> （`alembic/versions/m13_001_project_tables.py:98`、`m10_001_task_core_tables.py:195`）——
+> 接收人原先不是成员/协作人时 INSERT 就是 `NotNullViolation`，**整批回滚成 5xx**。
 已有生产交接记录时**保留兼容 schema，走应用级补偿，不删历史**。
 
 ### 1.5 评审、签署与回滚
