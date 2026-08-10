@@ -37,9 +37,9 @@
 
 ### Provenance
 
-- 构建提交 C: _(P2 回填)_
+- 构建提交 C: `63f111495765678036638ac723149a63f7595047`
 - wheel: `sdk/python/dist/easyauth_app_sdk-0.4.0-py3-none-any.whl`
-- wheel SHA-256: _(P2 回填)_
+- wheel SHA-256: `655f55b65d88b6e1be45eb125632d89b1f76c342b9aa61d83270780d951594ac`
 
 ## [0.3.0] - 2026-07-16
 
