@@ -599,9 +599,24 @@ delivery 结果、action 状态或 summary。异步轮询回来的那条路径�
    （下游幂等记录是权威）；
 3. 查到终态才 CAS 释放租约；**查不到或下游不可达时续约并重试**，不释放也不永久卡住。
 
-**抢占必须是一条条件 UPDATE，同时写四样东西**：新 `owner`、新 `fence`、`renewed_at`、
-**以及 `lease_expires_at = now + LEASE_TTL`**。少写最后一项的话，新持有者刚接管就又是"已过期"，
+**续约与抢占的谓词都要写全，否则会误杀有效 worker**：
+
+| 动作 | 条件（缺一不可） |
+|---|---|
+| 续约 | `owner = :me AND fence = :my_fence AND released_at IS NULL AND lease_expires_at > db_now()` —— **已过期的 owner 不许复活** |
+| 抢占 | `owner = :observed_owner AND fence = :observed_fence AND released_at IS NULL AND lease_expires_at <= db_now()`，并与新 fence 取号**同事务** |
+
+只按 `released_at IS NULL` 抢占的话，恢复者扫到过期行、而原 owner 恰好在这中间续租成功，
+**有效 worker 会被误杀**。
+
+**抢占那条 UPDATE 同时写四样东西**：新 `owner`、新 `fence`、`renewed_at`、
+**以及 `lease_expires_at = now + LEASE_TTL`**。少写最后一项，新持有者刚接管就又是「已过期」，
 下一个恢复者立刻再抢一次。
+
+**A / B / C 三个事务各自都要重新 CAS 并持有租约行锁到本阶段提交**，不能只在事务 A 校验一次：
+旧 worker 在写完 `data_completed` 之后被抢占，若 B/C 不再校验 fence，
+它会继续把权限转掉、把 action 写成 `done`，而新 owner 的账本还在途。
+事务 C 里「写 `done`」与「释放租约」必须是**同一次** CAS。
 
 **"向下游查证"要有可执行的动作，不能只写四个字**。协议固定为：
 **用原 canonical body 重放一次 execute**（三元组不变，因此下游必然走幂等分支）：
@@ -1216,6 +1231,13 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 ```
 
 - 仅当该类型 `detail_supported=True` 才允许调用，否则 `400 detail_not_supported`。
+- **状态门槛**：只在 task 仍 open、action 非终态、且 `data_completed_at IS NULL` 时才允许调用；
+  否则 **`404`**，并且**不向下游发任何请求**。取消或完成时**同事务清空 `snapshot_token`**。
+
+  > 没有这道门槛的话：主管 preview 之后单据被取消，`assignee` 与 `snapshot_token` 都还留着 ——
+  > 他可以继续调 items 实时回源。只要归属与谓词没变，token 就一直有效，
+  > 而金额、跟进记录这些**不进 token 的展示字段**会把最新值一并吐出来。
+  > 历史单只展示**已落库**的 count / summary，不再实时回源。
 - **透传不落库**（明细可能上千条，落库无意义且会过期）；前端翻页即实时回源。
 - **`stale` 只在 `q` 为空串时才判**：`q` 非空时 `total` 是过滤后的数量（契约 §10.4），
   与 `HandoverAssetType.count` 本来就不该相等。
@@ -1278,6 +1300,17 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 > **任何会改变"执行下去会发生什么"的操作都要让它 +1。**
 >
 > 详情响应返回它，execute 必须回带；不一致 → `409 confirm_version_stale`，**且不创建任何 batch**。
+>
+> **「先比较再递增」必须是一次原子 CAS，不能读一次再写一次。**
+> preview 落库、`PATCH .../assets/{type}`、`PUT .../overrides`、`PATCH grant_receiver`、
+> 以及 execute 的预留，**都要在同一事务里先 `select_for_update(action)`**，
+> 锁内比较版本 → 改子表 → 递增版本；或者用单语句
+> `UPDATE ... SET confirm_version = confirm_version + 1 WHERE id = :id AND confirm_version = :expected`，
+> **影响行数不是 1 就 409 且子表零写入**。
+>
+> 不这么做的话：A、B 同时读到 7、各自整体替换 overrides、两边都在提交前看到 7 而都成功 ——
+> 最终集合由提交时序决定，版本还可能都变成 8，A 拿着 8 去 execute，
+> 服务端执行的却是 B 的接收人和条目集合。
 > **下游的 `snapshot_token` 仍然只存在后端，前端不碰。**
 
 > **`snapshot_token` 不出现在门户 API 里，前端一个字节都不用碰。** 它由 EasyAuth 在
@@ -1498,8 +1531,20 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 |---|---|---|
 | `lifecycle_escalation` | beat 每 10 分钟 | 扫 `status in OPEN and escalation_deadline <= now` 的 `HandoverTask`，逐个 `escalate_overdue_task()`。PostgreSQL 下 `select_for_update(skip_locked=True)` 分批（与 `grants` 过期任务同款） |
 | `lifecycle_daily_reminder` | beat 每天 09:00（Asia/Shanghai） | 对未完成且有 assignee 的单发钉钉提醒；上交前 1 天额外发"即将上交"。注意既有 beat schedule 只接受 float interval，crontab 需扩展。**去重不能只靠"读一下 `last_reminded_on` 再写回"**，见下 |
-| `lifecycle_recover_expired_execution_leases` | beat 每 **1 分钟** | 扫 `released_at IS NULL AND lease_expires_at <= now` 的租约，按 §2.4.2 的「先抢占、后重放查证」协议接管。**没有这个任务，worker 发完网崩溃就是一条永久锁死的租约** —— TTL 只让它过期，不会有任何东西去接管。轮询到第 10 次（`ASYNC_POLL_MAX_ATTEMPTS`）仍非终态时，在同一 fence 下标 `failed` 并释放，**不再移回 sentinel** |
-| `lifecycle_poll_async_actions` | beat 每 **1 分钟** | 扫 `status=async_pending` 的 action，逐个调既有 `poll_async_action()`。**这个任务不存在的话，202 就是个死胡同**：action 进 `async_pending` 后门户不允许 retry（在途）、也没有任何东西去 poll，永远到不了 `done`/`failed`，租约也永远不释放。<br>**上限沿用既有的 `ASYNC_POLL_MAX_ATTEMPTS = 10`**（`lifecycle/core.py:30`），不要新造一个：第 10 次仍非终态 → CAS 标 `failed`、`last_error` 写固定文案「下游超过 10 次轮询仍未返回终态」、释放租约。`Location` 头持久化在 `async_status_url` 上，每次响应带新 `Location` 就更新。拿到终态 200 后**必须走 `complete_data_phase()`**，不得直接置 `done` |
+| `lifecycle_recover_expired_execution_leases` | beat 每 **1 分钟** | 扫 `released_at IS NULL AND lease_expires_at <= now` 的租约，按 §2.4.2 的「先抢占、后重放查证」协议接管。**没有这个任务，worker 发完网崩溃就是一条永久锁死的租约** —— TTL 只让它过期，不会有任何东西去接管。轮询到第 10 次（`ASYNC_POLL_MAX_ATTEMPTS`）仍非终态时 **只告警、不释放**，见 §7 的说明 |
+| `lifecycle_poll_async_actions` | beat 每 **1 分钟** | 扫 `status=async_pending` 的 action，逐个调既有 `poll_async_action()`。**这个任务不存在的话，202 就是个死胡同**：action 进 `async_pending` 后门户不允许 retry（在途）、也没有任何东西去 poll，永远到不了 `done`/`failed`，租约也永远不释放。<br>**上限沿用既有的 `ASYNC_POLL_MAX_ATTEMPTS = 10`**（`lifecycle/core.py:30`），不要新造一个。
+**但第 10 次仍非终态时不能标 `failed`、更不能释放租约** —— 见下方警告。`Location` 头持久化在 `async_status_url` 上，每次响应带新 `Location` 就更新。拿到终态 200 后**必须走 `complete_data_phase()`**，不得直接置 `done`。<br>**第 10 次仍非终态：只写告警并把 action 置 `async_attention_required`，sentinel 继续持有并续租** |
+
+> **轮询超次数不能释放租约。** 契约 §10.5.2 写死了「超时不得直接强解，必须先向下游确认真实状态」——
+> 而"轮了 10 次还没终态"**恰恰是没确认到终态**。
+>
+> 释放会怎样：下游那个异步任务其实还在跑；EasyAuth 放开 `(subject, app)` 租约 →
+> 新建的单取得租约、搬同一批资产 → 旧任务随后完成 → **两个不同的幂等三元组先后覆盖同一批归属**，
+> 而 fence 撤不回一个已经交出去的下游任务。
+>
+> 正确处理：标 `async_attention_required`（新增的 action 状态）、写告警、**sentinel 继续持有并续租**。
+> 只有在「原三元组重放」或「状态查询」拿到**可证明的终态**之后，才允许 CAS 释放。
+> 下游长期给不出终态，就是一个需要人介入的事故 —— 让它显式停在那里，比悄悄放开锁安全。
 | ~~`lifecycle_superuser_pool_reminder`~~ | — | **本期不做**，见下 |
 | ~~`lifecycle_blocked_apps_digest`~~ | — | **本期不做**，见下 |
 
