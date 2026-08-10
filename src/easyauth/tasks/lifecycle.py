@@ -124,19 +124,20 @@ def lifecycle_send_reminder_task(
 ) -> str:
     """outbox 消费者: 发送交接提醒。
 
-    notify 身份(easyauth-lifecycle) 尚未落地时: 记审计告警并返回, 不静默吞掉。
+    notify 身份(easyauth-lifecycle) 尚未落地时: 记审计后抛错, 使 outbox 保持未发布
+    并在身份就绪后重试(测试 eager 模式下 send_task 会传播异常)。
     """
     from easyauth.audit.services import AuditRecord, AuditService
 
     task = HandoverTask.objects.filter(pk=task_id).first()
     if task is None:
         return "task_missing"
-    # 完整钉钉发送依赖 §7 easyauth-lifecycle 身份; 当前仅保证任务可执行且可观测。
+    # 完整钉钉发送依赖 §7 easyauth-lifecycle 身份; 缺身份不得冒充成功消费 outbox。
     _ = AuditService.record(
         AuditRecord(
             actor_type="system",
             actor_id="lifecycle",
-            action="lifecycle_reminder_recorded",
+            action="lifecycle_reminder_identity_missing",
             target_type="handover_task",
             target_id=str(task_id),
             metadata={
@@ -148,11 +149,15 @@ def lifecycle_send_reminder_task(
         ),
     )
     logger.warning(
-        "lifecycle reminder skipped (notify identity pending): task_id=%s kind=%s",
+        "lifecycle reminder blocked (notify identity pending): task_id=%s kind=%s",
         task_id,
         kind,
     )
-    return "recorded"
+    message = (
+        "easyauth-lifecycle notify identity not provisioned; "
+        f"reminder deferred task_id={task_id} kind={kind}"
+    )
+    raise RuntimeError(message)
 
 
 @shared_task(name=LIFECYCLE_DAILY_REMINDER_TASK)

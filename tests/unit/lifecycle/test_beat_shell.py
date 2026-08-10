@@ -101,7 +101,8 @@ def test_daily_reminder_claims_once_and_enqueues_dedup_key() -> None:
     assert OutboxEvent.objects.filter(event_key=daily_key).count() == 1
 
 
-def test_send_reminder_task_is_registered() -> None:
+def test_send_reminder_task_raises_when_notify_identity_missing() -> None:
+    """缺 easyauth-lifecycle 身份时必须失败, 使 outbox 保持未发布并重试。"""
     subject = UserMirror.objects.create(
         authentik_user_id="beat-send-sub",
         name="s",
@@ -112,12 +113,12 @@ def test_send_reminder_task_is_registered() -> None:
         subject_user=subject,
         status=TASK_STATUS_PENDING,
     )
-    result = lifecycle_send_reminder_task(
-        task_id=task.id,
-        kind="daily",
-        assignee_user_id="x",
-    )
-    assert result == "recorded"
+    with pytest.raises(RuntimeError, match="notify identity not provisioned"):
+        _ = lifecycle_send_reminder_task(
+            task_id=task.id,
+            kind="daily",
+            assignee_user_id="x",
+        )
 
 
 def test_recover_leases_empty() -> None:
@@ -131,14 +132,26 @@ def test_poll_async_empty() -> None:
 
 
 def test_beat_schedule_registers_lifecycle_entries() -> None:
+    """默认 daily 必须是 crontab(09:00) 且 CELERY_TIMEZONE=Asia/Shanghai。
+
+    不得写成 ``isinstance(daily, (float, crontab))`` 这种两边都过的假钉扎:
+    若默认退回 float(86400), 本用例必须红。
+    """
+    import os
+
     from celery.schedules import crontab
     from django.conf import settings
 
+    assert not os.environ.get(
+        "EASYAUTH_LIFECYCLE_DAILY_REMINDER_SECONDS",
+    ), "测试进程不得设置 EASYAUTH_LIFECYCLE_DAILY_REMINDER_SECONDS, 否则无法钉扎默认 crontab"
     keys = set(settings.CELERY_BEAT_SCHEDULE)
     assert "lifecycle-escalation" in keys
     assert "lifecycle-daily-reminder" in keys
     assert "lifecycle-recover-execution-leases" in keys
     assert "lifecycle-poll-async-actions" in keys
+    assert settings.CELERY_TIMEZONE == "Asia/Shanghai"
     daily = settings.CELERY_BEAT_SCHEDULE["lifecycle-daily-reminder"]["schedule"]
-    # 默认 crontab; 若 env 覆盖则为 float
-    assert isinstance(daily, (float, crontab))
+    assert isinstance(daily, crontab), f"expected crontab, got {type(daily)}: {daily!r}"
+    assert daily.hour == {9}
+    assert daily.minute == {0}
