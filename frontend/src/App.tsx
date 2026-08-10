@@ -49,6 +49,12 @@ const AppOnboardingWizard = lazy(() =>
   import("./pages/console/onboarding/AppOnboardingWizard").then((module) => ({ default: module.AppOnboardingWizard })),
 );
 const PortalPage = lazy(() => import("./pages/portal/PortalPage").then((module) => ({ default: module.PortalPage })));
+const PortalHandoverList = lazy(() =>
+  import("./pages/portal/PortalHandoverList").then((module) => ({ default: module.PortalHandoverList })),
+);
+const PortalHandoverDetail = lazy(() =>
+  import("./pages/portal/PortalHandoverDetail").then((module) => ({ default: module.PortalHandoverDetail })),
+);
 
 interface AppProps {
   shell: "console" | "portal";
@@ -91,6 +97,8 @@ export function App({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUse
           <Route path="/portal/requests" element={<LazyRoute routeName="portal"><PortalPage view="requests" /></LazyRoute>} />
           <Route path="/portal/expiring" element={<LazyRoute routeName="portal"><PortalPage view="expiring" /></LazyRoute>} />
           <Route path="/portal/approvals" element={<LazyRoute routeName="portal"><PortalPage view="approvals" /></LazyRoute>} />
+          <Route path="/portal/handovers" element={<LazyRoute routeName="portal"><PortalHandoverList /></LazyRoute>} />
+          <Route path="/portal/handovers/:taskId" element={<LazyRoute routeName="portal"><PortalHandoverDetail /></LazyRoute>} />
           <Route path="*" element={<NotFoundRoute mode="portal" />} />
         </Route>
       </Routes>
