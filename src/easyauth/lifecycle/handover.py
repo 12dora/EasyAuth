@@ -391,23 +391,43 @@ def complete_data_phase(
     response_payload: dict[str, JsonValue] | None = None,
 ) -> None:
     """同步 200 与异步终态汇合的收尾(01 §5.5)。A/B/C 必须各自 commit。"""
-    _ = response_payload
     action_id = batch.action_id
     is_final = batch.is_final
     needs_grant = False
 
-    # —— 事务 A: data_completed 标记必须先提交, 授权失败也不能丢 ——
+    # —— 事务 A: 守恒校验 + data_completed 标记必须先提交, 授权失败也不能丢 ——
     with transaction.atomic():
         require_cas(handle)
         batch = HandoverExecutionBatch.objects.select_for_update().get(pk=batch.pk)
         now = timezone.now()
-        batch.status = BATCH_STATUS_DATA_COMPLETED
-        batch.data_completed_at = now
-        batch.save(update_fields=["status", "data_completed_at"])
 
         action: HandoverAppAction | None = None
         if action_id is not None:
             action = _locked_action_after_task(int(action_id))
+            conservation_error = validate_execute_summary_conservation(
+                action,
+                response_payload=response_payload,
+            )
+            if conservation_error is not None:
+                action.status = ACTION_STATUS_FAILED
+                action.last_error = conservation_error
+                action.last_error_raw = conservation_error[:2000]
+                action.save(
+                    update_fields=["status", "last_error", "last_error_raw", "updated_at"],
+                )
+                batch.status = BATCH_STATUS_FAILED
+                batch.save(update_fields=["status"])
+                must_cas_release(handle)
+                task = HandoverTask.objects.select_for_update().get(pk=action.task_id)
+                _ = refresh_task_status_locked(task)
+                raise HandoverError("summary_conservation_failed")
+
+        batch.status = BATCH_STATUS_DATA_COMPLETED
+        batch.data_completed_at = now
+        batch.save(update_fields=["status", "data_completed_at"])
+
+        if action is not None and response_payload is not None:
+            _merge_result_summary(action, response_payload)
 
         if not is_final:
             batch.status = BATCH_STATUS_DONE
@@ -427,6 +447,7 @@ def complete_data_phase(
                             "status",
                             "snapshot_token",
                             "async_status_url",
+                            "result_summary",
                             "updated_at",
                         ],
                     )
@@ -436,7 +457,7 @@ def complete_data_phase(
 
         if action is not None:
             action.data_completed_at = now
-            action.save(update_fields=["data_completed_at", "updated_at"])
+            action.save(update_fields=["data_completed_at", "result_summary", "updated_at"])
             needs_grant = action.task.kind in ACTION_GRANT_TRANSFER_KINDS
 
     # —— 事务 B: 仅 offboard 转授权; 失败写 failed+释放并提交, 再 raise ——
@@ -753,6 +774,282 @@ def fetch_action_items(
     }
 
 
+def validate_execute_summary_conservation(
+    action: HandoverAppAction,
+    *,
+    response_payload: dict[str, JsonValue] | None,
+) -> str | None:
+    """00 §10.5: transferred+released+skipped+merged+failed == preview count。
+
+    不守恒或 failed>0 → 返回错误文案; 通过返回 None。
+    """
+    if response_payload is None:
+        return "execute 响应缺少 payload"
+    raw_summary = response_payload.get("summary")
+    if raw_summary is None:
+        # 无 summary 键: 仅当全部类型 count=0 时允许(零资产 no-op)
+        types_all = list(
+            HandoverAssetType.objects.filter(
+                action=action,
+                generation=action.generation,
+            ),
+        )
+        if any(int(at.count) > 0 for at in types_all):
+            return "execute 响应缺少 summary"
+        return None
+    if not isinstance(raw_summary, dict):
+        return "execute 响应 summary 形状非法"
+    types = {
+        at.type_key: at
+        for at in HandoverAssetType.objects.filter(
+            action=action,
+            generation=action.generation,
+        )
+    }
+    fields = ("transferred", "released", "skipped", "merged", "failed")
+    for type_key, row in raw_summary.items():
+        if not isinstance(type_key, str) or not isinstance(row, dict):
+            return f"summary[{type_key!r}] 形状非法"
+        if type_key not in types:
+            return f"summary 含未知资产类型 {type_key}"
+        counts: list[int] = []
+        for field in fields:
+            val = row.get(field, 0)
+            if not isinstance(val, int) or val < 0:
+                return f"summary[{type_key}].{field} 非法"
+            counts.append(val)
+        transferred, released, skipped, merged, failed = counts
+        if failed > 0:
+            return f"summary[{type_key}].failed={failed} (部分成功视为失败)"
+        total = transferred + released + skipped + merged + failed
+        expected = int(types[type_key].count)
+        if total != expected:
+            return (
+                f"summary[{type_key}] 不守恒: "
+                f"{transferred}+{released}+{skipped}+{merged}+{failed}={total} != count={expected}"
+            )
+    # preview 有 count>0 的类型必须出现在 summary
+    for type_key, asset in types.items():
+        if asset.count > 0 and type_key not in raw_summary:
+            return f"summary 缺少资产类型 {type_key} (count={asset.count})"
+    return None
+
+
+def _merge_result_summary(
+    action: HandoverAppAction,
+    response_payload: dict[str, JsonValue],
+) -> None:
+    raw = response_payload.get("summary")
+    if not isinstance(raw, dict):
+        return
+    current = action.result_summary if isinstance(action.result_summary, dict) else {}
+    merged: dict[str, JsonValue] = dict(current)
+    for type_key, row in raw.items():
+        if not isinstance(type_key, str) or not isinstance(row, dict):
+            continue
+        prev = merged.get(type_key)
+        base = (
+            dict(prev)
+            if isinstance(prev, dict)
+            else {"transferred": 0, "released": 0, "skipped": 0, "merged": 0, "failed": 0}
+        )
+        for field in ("transferred", "released", "skipped", "merged", "failed"):
+            prev_val = base.get(field, 0)
+            add_val = row.get(field, 0)
+            base[field] = (int(prev_val) if isinstance(prev_val, int) else 0) + (
+                int(add_val) if isinstance(add_val, int) else 0
+            )
+        merged[type_key] = cast("JsonValue", base)
+    action.result_summary = merged
+
+
+def async_abandon_action(
+    action: HandoverAppAction,
+    *,
+    outcome: str,
+    reason: str,
+    summary: dict[str, JsonValue] | None,
+    actor_id: str,
+) -> HandoverAppAction:
+    """§6.3 async-abandon: 超管人工确认异步结局, 同一次 fence CAS 释放租约。"""
+    reason_stripped = reason.strip()
+    if len(reason_stripped) < 10:
+        raise HandoverError("reason_required")
+    if outcome not in {"done", "failed"}:
+        raise HandoverError("outcome 必须为 done 或 failed")
+
+    # 解析租约与 batch(短事务)
+    with transaction.atomic():
+        locked = _locked_action(action.id)
+        if locked.status != ACTION_STATUS_ASYNC_ATTENTION_REQUIRED:
+            raise HandoverConflictError("action_not_operable")
+        lease = (
+            HandoverExecutionLease.objects.select_for_update()
+            .filter(
+                subject_user_id=locked.task.subject_user_id,
+                app_id=locked.app_id,
+                released_at__isnull=True,
+            )
+            .first()
+        )
+        if lease is None:
+            raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
+        handle = LeaseHandle(
+            subject_user_id=int(lease.subject_user_id),
+            app_id=int(lease.app_id),
+            fence=int(lease.fence),
+            owner=lease.owner,
+        )
+        require_cas(handle)
+        batch = (
+            HandoverExecutionBatch.objects.select_for_update()
+            .filter(
+                action=locked,
+                generation=locked.generation,
+                status__in={BATCH_STATUS_ASYNC_PENDING, BATCH_STATUS_EXECUTING},
+            )
+            .order_by("-batch_seq")
+            .first()
+        )
+        action_id = int(locked.id)
+        batch_id = int(batch.pk) if batch is not None else None
+        app_key = locked.app.app_key
+
+        if outcome == "failed":
+            locked.status = ACTION_STATUS_FAILED
+            locked.last_error = reason_stripped[:500]
+            locked.async_status_url = ""
+            locked.save(
+                update_fields=["status", "last_error", "async_status_url", "updated_at"],
+            )
+            if batch is not None:
+                batch.status = BATCH_STATUS_FAILED
+                batch.save(update_fields=["status"])
+            must_cas_release(handle)
+            task = HandoverTask.objects.select_for_update().get(pk=locked.task_id)
+            _ = refresh_task_status_locked(task)
+            record_task_event(
+                locked.task,
+                action="handover_action_failed",
+                actor_id=actor_id,
+                actor_type="admin",
+                extra={
+                    "app_key": app_key,
+                    "manual_resolution": True,
+                    "reason": reason_stripped,
+                },
+            )
+            return locked
+
+        # done 且无 batch: 直接结案
+        if batch is None:
+            locked.status = ACTION_STATUS_DONE
+            locked.async_status_url = ""
+            locked.last_error = ""
+            if summary:
+                locked.result_summary = summary
+            locked.data_completed_at = locked.data_completed_at or timezone.now()
+            locked.save(
+                update_fields=[
+                    "status",
+                    "async_status_url",
+                    "last_error",
+                    "result_summary",
+                    "data_completed_at",
+                    "updated_at",
+                ],
+            )
+            if locked.task.kind in ACTION_GRANT_TRANSFER_KINDS:
+                try:
+                    _ = transfer_selected_grants(locked)
+                except Exception as error:
+                    locked.status = ACTION_STATUS_FAILED
+                    locked.last_error = "授权转移失败"
+                    locked.last_error_raw = str(error)[:2000]
+                    locked.save(
+                        update_fields=[
+                            "status",
+                            "last_error",
+                            "last_error_raw",
+                            "updated_at",
+                        ],
+                    )
+                    must_cas_release(handle)
+                    raise HandoverError("授权转移失败") from error
+            must_cas_release(handle)
+            task = HandoverTask.objects.select_for_update().get(pk=locked.task_id)
+            _ = refresh_task_status_locked(task)
+            record_task_event(
+                locked.task,
+                action="handover_action_executed",
+                actor_id=actor_id,
+                actor_type="admin",
+                extra={
+                    "app_key": app_key,
+                    "manual_resolution": True,
+                    "reason": reason_stripped,
+                },
+            )
+            return locked
+
+        # done + 有 batch: 保持租约, 退出本事务后走 complete_data_phase
+        # batch 标记 is_final 以便走授权路径
+        if not batch.is_final:
+            batch.is_final = True
+            batch.save(update_fields=["is_final"])
+
+    payload: dict[str, JsonValue] = {"summary": cast("JsonValue", summary or {})}
+    # 人工结案跳过守恒(超管已在下游确认)
+    # 临时写入与 count 一致的零 summary 若未提供
+    if not summary:
+        auto: dict[str, JsonValue] = {}
+        for at in HandoverAssetType.objects.filter(
+            action_id=action_id,
+            generation=HandoverAppAction.objects.get(pk=action_id).generation,
+        ):
+            auto[at.type_key] = {
+                "transferred": 0,
+                "released": 0,
+                "skipped": int(at.count),
+                "merged": 0,
+                "failed": 0,
+            }
+        payload = {"summary": auto}
+
+    lease_row = HandoverExecutionLease.objects.filter(
+        subject_user_id=HandoverAppAction.objects.get(pk=action_id).task.subject_user_id,
+        app_id=HandoverAppAction.objects.get(pk=action_id).app_id,
+        released_at__isnull=True,
+    ).first()
+    if lease_row is None:
+        raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
+    handle = LeaseHandle(
+        subject_user_id=int(lease_row.subject_user_id),
+        app_id=int(lease_row.app_id),
+        fence=int(lease_row.fence),
+        owner=lease_row.owner,
+    )
+    assert batch_id is not None
+    complete_data_phase(
+        HandoverExecutionBatch.objects.get(pk=batch_id),
+        handle=handle,
+        response_payload=payload,
+    )
+    locked = HandoverAppAction.objects.select_related("app", "task").get(pk=action_id)
+    record_task_event(
+        locked.task,
+        action="handover_action_executed",
+        actor_id=actor_id,
+        actor_type="admin",
+        extra={
+            "app_key": locked.app.app_key,
+            "manual_resolution": True,
+            "reason": reason_stripped,
+        },
+    )
+    return locked
+
+
 def reset_action_for_upgrade(action: HandoverAppAction, *, task: HandoverTask) -> HandoverAppAction:
     """§5.1.2 升级字段重置。调用方已锁 task → action; 有未释放租约则 409。"""
     from easyauth.applications.handover_capability import _seed_asset_type_placeholders
@@ -776,6 +1073,7 @@ def reset_action_for_upgrade(action: HandoverAppAction, *, task: HandoverTask) -
     action.skipped_by = ""
     action.skip_reason = ""
     action.attempts = 0
+    action.result_summary = None
     action.confirm_version += 1
     action.overrides_version += 1
     # status 按 capability 重判

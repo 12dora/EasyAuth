@@ -151,12 +151,22 @@ class AccessRequest(models.Model):
         str | date | datetime | None,
         datetime | None,
     ] = models.DateTimeField(blank=True, null=True)
+    # 01 §4.5.1: 审批人无解时 status 保持 submitted, 路由状态进超管池。
+    approval_routing_state: models.CharField[str, str] = models.CharField(
+        max_length=16,
+        default="normal",
+    )
+    routing_reason: models.CharField[str, str] = models.CharField(max_length=64, blank=True)
 
     class Meta:
         constraints: ClassVar[list[models.BaseConstraint]] = [
             models.CheckConstraint(
                 condition=Q(request_type__in=REQUEST_TYPE_VALUES),
                 name="access_requests_request_type_supported",
+            ),
+            models.CheckConstraint(
+                condition=Q(approval_routing_state__in=("normal", "superuser_pool")),
+                name="access_requests_approval_routing_state_supported",
             ),
             models.CheckConstraint(
                 condition=Q(status__in=REQUEST_STATUS_VALUES),

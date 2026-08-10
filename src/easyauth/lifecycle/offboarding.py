@@ -70,12 +70,44 @@ def ensure_handover_task(
     reason: str = "",
     snapshot_grant_ids: tuple[int, ...] | None = None,
     app_keys: tuple[str, ...] | None = None,
+    authority_source: str = "",
+    creation_idempotency_key: str = "",
+    creation_payload_sha256: str = "",
 ) -> tuple[HandoverTask, bool]:
-    """建单(幂等): 同一当事人已有进行中交接单时直接返回既有单。"""
+    """建单(幂等): 同一当事人已有进行中交接单时直接返回既有单。
+
+    offboard 遇到 open pre_offboard → 升级(00 §8.3 / 01 §5.1.2)。
+    """
+    from easyauth.lifecycle.models import (
+        AUTHORITY_SOURCE_MANAGER_CHAIN,
+        AUTHORITY_SOURCE_SUBJECT,
+        AUTHORITY_SOURCE_SUPERUSER,
+    )
+
     _assert_lifecycle_subject(subject)
     subject_pk = cast("int", subject.pk)
     with transaction.atomic():
         subject = UserMirror.objects.select_for_update().get(pk=subject_pk)
+
+        # 幂等键命中: 同 initiator + key
+        if creation_idempotency_key:
+            existing_by_key = (
+                HandoverTask.objects.select_for_update()
+                .filter(
+                    created_by=created_by,
+                    creation_idempotency_key=creation_idempotency_key,
+                )
+                .first()
+            )
+            if existing_by_key is not None:
+                if (
+                    creation_payload_sha256
+                    and existing_by_key.creation_payload_sha256
+                    and existing_by_key.creation_payload_sha256 != creation_payload_sha256
+                ):
+                    raise HandoverConflictError("idempotency_conflict")
+                return existing_by_key, False
+
         # reassign 可与其他 open 单并存; 生命周期类单据一人一张。
         if kind == HANDOVER_KIND_REASSIGN:
             existing = None
@@ -94,9 +126,29 @@ def ensure_handover_task(
                 .first()
             )
         if existing is not None:
+            # pre_offboard → offboard 升级是唯一允许的 kind 变更
+            if (
+                existing.kind == HANDOVER_KIND_PRE_OFFBOARD
+                and kind == HANDOVER_KIND_OFFBOARD
+            ):
+                upgraded = upgrade_pre_offboard_to_offboard(
+                    existing,
+                    created_by=created_by,
+                    reason=reason or "目录同步检出离职",
+                    snapshot_grant_ids=snapshot_grant_ids,
+                )
+                return upgraded, False
             if existing.kind != kind:
                 raise HandoverConflictError(TASK_KIND_CONFLICT_MESSAGE)
             return existing, False
+
+        resolved_authority = authority_source
+        if not resolved_authority:
+            if kind == HANDOVER_KIND_PRE_OFFBOARD and created_by == subject.authentik_user_id:
+                resolved_authority = AUTHORITY_SOURCE_SUBJECT
+            else:
+                resolved_authority = AUTHORITY_SOURCE_MANAGER_CHAIN
+
         snapshot_grants = _snapshot_grants(
             subject=subject,
             explicit_grant_ids=snapshot_grant_ids,
@@ -107,6 +159,9 @@ def ensure_handover_task(
             created_by=created_by,
             reason=reason,
             generation=1,
+            authority_source=resolved_authority,
+            creation_idempotency_key=creation_idempotency_key,
+            creation_payload_sha256=creation_payload_sha256,
         )
         if kind == HANDOVER_KIND_PRE_OFFBOARD and created_by == subject.authentik_user_id:
             from easyauth.lifecycle.models import ASSIGNEE_STATE_SUBJECT
@@ -131,6 +186,7 @@ def ensure_handover_task(
                 task,
                 action="handover_assignee_assigned",
                 actor_id=created_by,
+                actor_type="user",
                 extra={"assignee_state": ASSIGNEE_STATE_SUBJECT},
             )
         else:
@@ -146,8 +202,107 @@ def ensure_handover_task(
         _snapshot_leader_teams(task)
         if kind == HANDOVER_KIND_TRANSFER:
             _ = TransferPlan.objects.create(task=task)
-        record_task_event(task, action="handover_task_created", actor_id=created_by)
+        if kind == HANDOVER_KIND_OFFBOARD:
+            from easyauth.lifecycle.approvals import reassign_approvals_for_departed
+
+            reassign_approvals_for_departed(
+                subject=subject,
+                task=task,
+                actor_id=created_by,
+            )
+        record_task_event(
+            task,
+            action="handover_task_created",
+            actor_id=created_by,
+            actor_type=(
+                "user"
+                if resolved_authority
+                in {AUTHORITY_SOURCE_SUBJECT, AUTHORITY_SOURCE_MANAGER_CHAIN}
+                and created_by not in {"directory_sync", LIFECYCLE_ACTOR_ID}
+                else None
+            ),
+        )
+        if kind == HANDOVER_KIND_REASSIGN:
+            record_task_event(
+                task,
+                action="handover_reassign_created",
+                actor_id=created_by,
+                actor_type=(
+                    "admin"
+                    if resolved_authority == AUTHORITY_SOURCE_SUPERUSER
+                    else "user"
+                ),
+                extra={"app_keys": list(app_keys or ())},
+            )
         return refresh_task_status(task), True
+
+
+def upgrade_pre_offboard_to_offboard(
+    task: HandoverTask,
+    *,
+    created_by: str,
+    reason: str = "",
+    snapshot_grant_ids: tuple[int, ...] | None = None,
+) -> HandoverTask:
+    """00 §8.3 / 01 §5.1.2: pre_offboard → offboard 升级。调用方须已锁 task。"""
+    from easyauth.lifecycle.handover import reset_action_for_upgrade
+    from easyauth.lifecycle.lease import has_active_lease
+    from easyauth.lifecycle.approvals import reassign_approvals_for_departed
+
+    if task.kind != HANDOVER_KIND_PRE_OFFBOARD:
+        raise HandoverConflictError(TASK_KIND_CONFLICT_MESSAGE)
+    if task.status not in TASK_OPEN_STATUSES:
+        raise HandoverConflictError(TASK_KIND_CONFLICT_MESSAGE)
+
+    # 任何 action 有未释放租约 → 409
+    actions = list(HandoverAppAction.objects.select_for_update().filter(task=task))
+    for action in actions:
+        if has_active_lease(
+            subject_user_id=int(task.subject_user_id),  # type: ignore[arg-type]
+            app_id=int(action.app_id),  # type: ignore[arg-type]
+        ):
+            from easyauth.lifecycle.lease import HANDOVER_EXECUTION_IN_FLIGHT
+
+            raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
+
+    old_kind = task.kind
+    task.kind = HANDOVER_KIND_OFFBOARD
+    task.generation += 1
+    if reason:
+        task.reason = reason
+    task.save(update_fields=["kind", "generation", "reason", "updated_at"])
+
+    # assignee 从本人重解析为主管
+    resolution = resolve_assignee(task.subject_user)
+    _ = apply_assignee(
+        task,
+        resolution,
+        actor_id=created_by,
+        reason="pre_offboard_upgraded",
+    )
+
+    for action in actions:
+        _ = reset_action_for_upgrade(action, task=task)
+
+    # 重新快照授权(新 generation)
+    snapshot_grants = _snapshot_grants(
+        subject=task.subject_user,
+        explicit_grant_ids=snapshot_grant_ids,
+    )
+    _snapshot_grant_items(task, grants=snapshot_grants)
+
+    reassign_approvals_for_departed(
+        subject=task.subject_user,
+        task=task,
+        actor_id=created_by,
+    )
+    record_task_event(
+        task,
+        action="handover_task_upgraded",
+        actor_id=created_by,
+        extra={"old_kind": old_kind, "generation": task.generation},
+    )
+    return refresh_task_status(task)
 
 
 def start_offboarding(
@@ -159,6 +314,7 @@ def start_offboarding(
     """离职立即项(§2.2 铁律一): 建单 + 禁号入列 + 移出所有团队; 数据交接进入缓冲。
 
     调用方须保证授权撤销已由既有离职回收完成(apply_directory_status)。
+    open pre_offboard → 升级(ensure_handover_task 内)。
     """
     with transaction.atomic():
         task, created = ensure_handover_task(

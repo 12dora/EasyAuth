@@ -212,6 +212,15 @@ BATCH_PLAN_STATUS_VALUES: Final[tuple[str, ...]] = (
 BLOCKED_REASON_CAPABILITY_UNDECLARED: Final = "capability_undeclared"
 BLOCKED_REASON_DESCRIPTOR_UNREACHABLE: Final = "descriptor_unreachable"
 
+AUTHORITY_SOURCE_MANAGER_CHAIN: Final = "manager_chain"
+AUTHORITY_SOURCE_SUPERUSER: Final = "superuser"
+AUTHORITY_SOURCE_SUBJECT: Final = "subject"
+AUTHORITY_SOURCE_VALUES: Final[tuple[str, ...]] = (
+    AUTHORITY_SOURCE_MANAGER_CHAIN,
+    AUTHORITY_SOURCE_SUPERUSER,
+    AUTHORITY_SOURCE_SUBJECT,
+)
+
 
 class HandoverTask(models.Model):
     # 交接单: 离职单由目录同步自动创建, 管理员可手动建单(含在职员工提前交接与转岗)。
@@ -273,6 +282,12 @@ class HandoverTask(models.Model):
     ] = models.DateTimeField(blank=True, null=True)
     created_by: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
     reason: models.TextField[str, str] = models.TextField(blank=True)
+    # 超管创建/认领的单据记 superuser, 豁免 reassign 主管链持续复核(01 §6.1)。
+    authority_source: models.CharField[str, str] = models.CharField(
+        max_length=32,
+        default=AUTHORITY_SOURCE_MANAGER_CHAIN,
+        blank=True,
+    )
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
     )
@@ -404,6 +419,11 @@ class HandoverAppAction(models.Model):
     attempts: models.PositiveIntegerField[int, int] = models.PositiveIntegerField(default=0)
     last_error: models.TextField[str, str] = models.TextField(blank=True)
     last_error_raw: models.TextField[str, str] = models.TextField(blank=True)
+    # 各批成功 summary 逐字段相加后的展示快照(00 §10.5)。
+    result_summary: models.JSONField[
+        dict[str, JsonValue] | None,
+        dict[str, JsonValue] | None,
+    ] = models.JSONField(blank=True, null=True)
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
     )
@@ -437,6 +457,57 @@ class HandoverAppAction(models.Model):
         if not self.app_catalog_version_snapshot:
             self.app_catalog_version_snapshot = self.app.catalog_version
         super().save(*args, **kwargs)
+
+
+class ApprovalRuleReplacementRequired(models.Model):
+    """§4.5.2: 审批规则替换失败时的持久化待办(规则本身不动)。"""
+
+    if TYPE_CHECKING:
+        id: ClassVar[int]
+        approval_rule_id: ClassVar[int]
+        task_id: ClassVar[int | None]
+        departed_user_id: ClassVar[int]
+
+    approval_rule = models.ForeignKey(
+        "applications.ApprovalRule",
+        on_delete=models.CASCADE,
+        related_name="replacement_todos",
+    )
+    task: models.ForeignKey[HandoverTask | None, HandoverTask | None] = models.ForeignKey(
+        HandoverTask,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="approval_rule_replacements",
+    )
+    task_id_snapshot: models.PositiveIntegerField[int, int] = models.PositiveIntegerField()
+    departed_user: models.ForeignKey[UserMirror, UserMirror] = models.ForeignKey(
+        UserMirror,
+        on_delete=models.PROTECT,
+        related_name="approval_rule_replacement_todos",
+    )
+    reason: models.CharField[str, str] = models.CharField(max_length=64)
+    resolved_at: models.DateTimeField[
+        str | date | datetime | None,
+        datetime | None,
+    ] = models.DateTimeField(blank=True, null=True)
+    resolved_by: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
+    created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["approval_rule", "departed_user"],
+                condition=Q(resolved_at__isnull=True),
+                name="lifecycle_approval_rule_replacement_open_unique",
+            ),
+        ]
+
+    @override
+    def __str__(self) -> str:
+        return f"rule-replace:{self.approval_rule_id}:{self.departed_user_id}"
 
 
 class HandoverActionSkipRecord(models.Model):
