@@ -8,16 +8,24 @@
 ### Breaking
 
 - 生命周期交接升级为 v2 三事件内核: 新增 `lifecycle.handover.items` 回调;
-  所有 body 必须含 `event_type` 且与 `X-EasyAuth-Event` 一致(校验在 `webhook.test`
+  **`on_handover_items` 在 `lifecycle_http_response` / `easyauth_lifecycle_router`
+  上为必填参数**(无默认值; 接线期失败优于运行时 422)。
+- 所有 body 必须含 `event_type` 且与 `X-EasyAuth-Event` 一致(校验在 `webhook.test`
   短路之前); 默认 body 上限由 64 KiB 提升至 **256 KiB**。
 - 回调异常边界改为固定文案「交接回调执行失败，请查看应用日志」, **不再**拼接
   `str(error)`。
 - 时间戳超窗验签失败映射为 **HTTP 400**(`TIMESTAMP_SKEW` / `INVALID_TIMESTAMP`),
-  与签名不匹配的 403 分离; `WebhookVerificationError` 增加结构化 `reason` 字段。
+  与签名/鉴权头失败分离; `WebhookVerificationError` 增加结构化 `reason` 字段。
+- manifest `lifecycle.handover_asset_types[]` 的 `detail_supported` / `releasable`
+  改为**必填布尔**(契约 §9.1 声明形状; 缺省或非 bool 拒绝)。
 
 ### Added
 
-- `HandoverBusinessError`: 业务回调可表达 400/409/412/413/422/423/429。
+- `signature_failure_status: int = 403` 旋钮: 仅作用于签名不匹配/鉴权头缺失;
+  EasyProject 传 `401`, EasyTrade 保持默认 `403`; 错误体含 `error.reason`。
+- `HandoverBusinessError`: 业务回调可表达 400/409/412/413/422/423/429;
+  可选 `retry_after: int | None` 渲染为响应头 `Retry-After`(契约 §10.6 的 429 退避通道)。
+- 白名单外业务状态码降级 500 时写 SDK `warning`; 意外回调异常 `logger.exception`。
 - `easyauth_app_sdk.handover_payloads` TypedDict(`Preview`/`Items`/`Execute` 的
   Request/Response; 每个 Request 含 `event_type`)。
 - 包内契约样本 `easyauth_app_sdk/contract_samples/handover_v2/*.json`
@@ -29,9 +37,9 @@
 
 ### Provenance
 
-- 构建提交 C: `2700b27484f57e779482eff4447f12104afb6e2a`
+- 构建提交 C: _(P2 回填)_
 - wheel: `sdk/python/dist/easyauth_app_sdk-0.4.0-py3-none-any.whl`
-- wheel SHA-256: `8e3a902328005deb096547904aee767d7ad07b5246fea89a8c489665614192a0`
+- wheel SHA-256: _(P2 回填)_
 
 ## [0.3.0] - 2026-07-16
 
