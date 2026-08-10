@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import hmac
+import json
 from http import HTTPStatus
 
 import pytest
@@ -8,6 +11,7 @@ from easyauth.applications.models import App
 from easyauth.webhooks import hooks as hooks_module
 from easyauth.webhooks.hooks import HookCallError, signed_hook_get, signed_hook_post
 from easyauth.webhooks.models import AppWebhookConfig
+from easyauth.webhooks.signing import SIGNATURE_HEADER, TIMESTAMP_HEADER
 from easyauth.webhooks.transport import WebhookHttpResponse
 
 pytestmark = pytest.mark.django_db
@@ -49,6 +53,58 @@ def test_signed_hook_post_preserves_202_status_and_location(
     assert response.status_code == HTTPStatus.ACCEPTED
     assert response.location == "https://hooks.example.com/jobs/job-1"
     assert response.payload == {"job_id": "job-1"}
+
+
+@pytest.mark.parametrize(
+    "event_type",
+    [
+        "lifecycle.handover.preview",
+        "lifecycle.handover.items",
+        "lifecycle.handover.execute",
+        "webhook.test",
+    ],
+)
+def test_signed_hook_post_injects_event_type_into_signed_body(
+    configured_app: App,
+    monkeypatch: pytest.MonkeyPatch,
+    event_type: str,
+) -> None:
+    """四种事件的 raw body 都必须含 event_type, 且签名覆盖注入后的字节。"""
+    captured: dict[str, object] = {}
+
+    def fake_post_webhook(**kwargs: object) -> WebhookHttpResponse:
+        captured["headers"] = kwargs["headers"]
+        captured["body"] = kwargs["body"]
+        return WebhookHttpResponse(
+            status_code=HTTPStatus.OK,
+            body=b'{"ok":true}',
+            location="",
+        )
+
+    monkeypatch.setattr(hooks_module, "post_webhook", fake_post_webhook)
+
+    _ = signed_hook_post(
+        app=configured_app,
+        url="https://hooks.example.com/handover",
+        event_type=event_type,
+        delivery_id=f"hook-et-{event_type}",
+        payload={"task_id": "137:4"},
+    )
+
+    body = captured["body"]
+    assert isinstance(body, bytes)
+    parsed = json.loads(body.decode("utf-8"))
+    assert parsed["event_type"] == event_type
+    assert parsed["task_id"] == "137:4"
+    headers = captured["headers"]
+    assert isinstance(headers, dict)
+    timestamp = headers[TIMESTAMP_HEADER]
+    expected = hmac.new(
+        b"whsec_hooks_test",
+        timestamp.encode("utf-8") + b"." + body,
+        hashlib.sha256,
+    ).hexdigest()
+    assert headers[SIGNATURE_HEADER] == expected
 
 
 def test_signed_hook_post_rejects_redirect_without_following(

@@ -60,9 +60,15 @@ def signed_hook_post(
     delivery_id: str,
     payload: dict[str, JsonValue],
 ) -> HookResponse:
-    """向 APP 发一次带 §5.1 签名的同步 POST, 返回其 JSON 响应。"""
+    """向 APP 发一次带 §5.1 签名的同步 POST, 返回其 JSON 响应。
+
+    在序列化与签名之前复制 payload 并强制写入 ``event_type``(契约 §10.1 /
+    设计 01 §8.1): body 在签名覆盖范围内, 供下游 SDK 与事件头做一致性校验。
+    """
     endpoint = resolve_endpoint(app, url=url)
-    body = dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    signed_payload = dict(payload)
+    signed_payload["event_type"] = event_type
+    body = dumps(signed_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     timestamp = str(int(timezone.now().timestamp()))
     headers = {
         "Content-Type": "application/json",

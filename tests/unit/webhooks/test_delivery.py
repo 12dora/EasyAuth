@@ -107,10 +107,11 @@ def test_attempt_delivery_signs_request_per_spec(monkeypatch: pytest.MonkeyPatch
     # When
     result = attempt_delivery(delivery.id, delivery.generation)
 
-    # Then: 头与签名符合 §5.1 规范, 投递翻 delivered。
+    # Then: 头与签名符合 §5.1 规范, body 已注入 event_type, 投递翻 delivered。
     headers = cast("dict[str, str]", captured["headers"])
     body = cast("bytes", captured["body"])
-    assert json.loads(body.decode("utf-8")) == {"biz_key": "order-1"}
+    parsed = json.loads(body.decode("utf-8"))
+    assert parsed == {"biz_key": "order-1", "event_type": "approval.completed"}
     assert headers[EVENT_HEADER] == "approval.completed"
     assert headers[DELIVERY_HEADER] == "d-sign-1"
     timestamp = headers[TIMESTAMP_HEADER]
@@ -121,8 +122,57 @@ def test_attempt_delivery_signs_request_per_spec(monkeypatch: pytest.MonkeyPatch
         hashlib.sha256,
     ).hexdigest()
     assert headers[SIGNATURE_HEADER] == expected
+    # 签名必须覆盖注入之后的字节: 用注入前 body 重算应不匹配。
+    unsigned_body = json.dumps(
+        {"biz_key": "order-1"},
+        ensure_ascii=False,
+        sort_keys=True,
+    ).encode("utf-8")
+    wrong = hmac.new(
+        SECRET.encode("utf-8"),
+        timestamp.encode("utf-8") + b"." + unsigned_body,
+        hashlib.sha256,
+    ).hexdigest()
+    assert headers[SIGNATURE_HEADER] != wrong
     assert result.status == "delivered"
     assert result.attempts == 1
+
+
+def test_attempt_delivery_injects_event_type_for_webhook_test(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """webhook.test 落库 payload 无 event_type 时, 发送端必须在签名前注入。"""
+    app = _configured_app("wh-test-event-type")
+    delivery = WebhookDelivery.objects.create(
+        app=app,
+        delivery_id="d-test-et-1",
+        event_type="webhook.test",
+        target_url="https://app.example.com/hook",
+        payload={"message": "EasyAuth webhook 测试事件", "app_key": app.app_key},
+    )
+    captured: dict[str, object] = {}
+
+    def fake_post_webhook(**kwargs: object) -> WebhookHttpResponse:
+        captured["headers"] = kwargs["headers"]
+        captured["body"] = kwargs["body"]
+        return WebhookHttpResponse(status_code=HTTPStatus.OK, body=b"{}", location="")
+
+    monkeypatch.setattr(delivery_module, "post_webhook", fake_post_webhook)
+
+    _ = attempt_delivery(delivery.id, delivery.generation)
+
+    body = cast("bytes", captured["body"])
+    parsed = json.loads(body.decode("utf-8"))
+    assert parsed["event_type"] == "webhook.test"
+    assert parsed["message"] == "EasyAuth webhook 测试事件"
+    headers = cast("dict[str, str]", captured["headers"])
+    timestamp = headers[TIMESTAMP_HEADER]
+    expected = hmac.new(
+        SECRET.encode("utf-8"),
+        timestamp.encode("utf-8") + b"." + body,
+        hashlib.sha256,
+    ).hexdigest()
+    assert headers[SIGNATURE_HEADER] == expected
 
 
 def test_attempt_delivery_failure_records_error_and_raises(

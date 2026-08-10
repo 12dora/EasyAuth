@@ -134,7 +134,12 @@ def attempt_delivery(delivery_id: int, generation: int) -> WebhookDelivery:
         return delivery
     try:
         endpoint = resolve_endpoint(delivery.app, url=delivery.target_url)
-        body = dumps(delivery.payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+        # 复制 payload 后强制注入 event_type, 再序列化签名(契约 §10.1 / 01 §8.1)。
+        # webhook.test 等经 enqueue_delivery 落库的 body 原先不含该字段; 若不在此注入,
+        # 下游 SDK 会在 webhook.test 短路前因 event_type 缺失返回 422。
+        signed_payload = dict(delivery.payload)
+        signed_payload["event_type"] = delivery.event_type
+        body = dumps(signed_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
         timestamp = str(int(timezone.now().timestamp()))
         headers = {
             "Content-Type": "application/json",
