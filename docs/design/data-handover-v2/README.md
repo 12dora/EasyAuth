@@ -186,8 +186,6 @@ descriptor 三道白名单** —— 四件事错一件就过不去，早发现�
 4. **webhook HMAC 未覆盖 `X-EasyAuth-Event` / `X-EasyAuth-Delivery`**：改签名串需要同步全部下游与
    已冻结的测试向量，成本高，单独立项。本次的补偿是**在 body 里加签名覆盖的 `event_type` 字段**，
    四个事件无一例外，SDK 在 `webhook.test` 短路之前就比对。见 `00` §10.1。
-   （早期写的"校验 event 头与 body `mode` 一致"已作废：`items` 没有 `mode`，
-   而 `webhook.test` 在 SDK 里根本不看 body 就短路返回。）
 
 ## 关键决策速查
 

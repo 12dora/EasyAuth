@@ -16,7 +16,7 @@ EasyProject 已接入 EasyAuth 的四个适配器：目录（`infra/easyauth_dir
 （`infra/easyauth_authz/`）、审批（`infra/easyauth_approval/`）、通知（`infra/easyauth_notify/`），
 descriptor 已暴露在 `GET /.well-known/easyauth-app.json`（`api/v1/easyauth_descriptor.py:50`）。
 
-**数据交接则处于"有壳无肉"的状态**（这与本文件早期版本写的"完全未接入"不同，以此处为准）：
+**数据交接则处于「有壳无肉」的状态**：
 
 - `backend/app/api/v1/easyauth_lifecycle.py` 已存在，router 已在 `api/v1/router.py:56` 挂载
   （`# M06 lifecycle handover`）。
@@ -139,7 +139,7 @@ async def resolve_dtuid(*, authentik_sub: str, purpose: Literal["source", "targe
 
 ### 3.1.1 两类**不做**独立资产的裁定（复核后修正）
 
-早期版本把下面两项列成了 `asset_type`，都是错的，已删除：
+下面两项**看起来像**该转移的资产，实际都不是。逐条说明为什么，避免有人再把它们加回来：
 
 | 原资产类型 | 为什么错 | 正确处理 |
 |---|---|---|
@@ -271,7 +271,7 @@ router 也已在 `api/v1/router.py:49-56` 挂载。工作是把 v1 占位实现*
   测试同时覆盖伪造 `Content-Length` 与 chunked 超限
 - 直接使用 SDK 的 `handover_payloads` TypedDict，**禁止**手抄字段名
 - **业务错误一律抛 SDK 的 `HandoverBusinessError(status_code, code, message)`**（`01` §8 第 6.1 条）。
-  现有回调协议只返回 dict，内核一律包成 200 或 500 —— §5.2 那 11 个错误码里除验签外
+  现有回调协议只返回 dict，内核一律包成 200 或 500 —— §5.2 那些错误码里除验签外
   **一个都发不出去**。API 层再把它映射成本仓库标准 `ErrorBody`
 - 请求/响应模型**不继承** `app/core/schemas.ApiModel`：webhook 的 JSON 体由 EasyAuth 定义，是
   **snake_case**，与本仓库 camelCase 约定不同。详见 §5.4 的裁定与理由。
@@ -352,9 +352,6 @@ router 也已在 `api/v1/router.py:49-56` 挂载。工作是把 v1 占位实现*
 换了负责人就得换成新负责人的主管，UPDATE 一个字段解决不了。统一走重物化对三种角色都正确，
 也不需要在交接代码里复刻角色解析逻辑。
 
-> 顺带更正一处早期表述：本文件先前写的"直接 UPDATE recipient 会被判 `RECIPIENT_STALE`"是反的 ——
-> **不更新才会 stale**。真正的理由是上面的 `MANAGER` 角色问题，以及不该在交接代码里重写角色解析。
-
 ### 4.3.2 统计口径
 
 返回统计沿用契约 §10.5 冻结的**五元** `{transferred, released, skipped, merged, failed}`。
@@ -364,6 +361,20 @@ router 也已在 `api/v1/router.py:49-56` 挂载。工作是把 v1 占位实现*
 ### 4.3.3 `snapshot_token` 的生成与校验（契约 §10.5.1，**原设计整段缺失**）
 
 `preview` 必须返回它，`items` 与 `execute` 必须回带并校验它。三处**共用同一个生成函数**：
+
+### items 的参数上界（与 `03` §3.5 同规格，契约 §10.4）
+
+**任何身份解析、事务或 SQL 之前**先校验，违反直接 `422`，**不要钳制后继续查**：
+
+| 参数 | 约束 |
+|---|---|
+| `page` | `1 ≤ page ≤ 100000` |
+| `page_size` | `1 ≤ page_size ≤ 200` |
+| `q` | 去空白后 UTF-8 ≤ 128 字节 |
+
+排序必须稳定（按主键兜底），否则翻页会漏项/重项。
+验签后按**签名覆盖的 body 指纹**做 300 秒响应缓存或 single-flight，超限返回 `429 RATE_LIMITED`；
+**不能只按 `delivery_id` 去重** —— 那个头不在签名里。
 
 preview 的 9 类 count 与 token、items 的 token 校验与 total/rows，
 **各自必须在一个 `REPEATABLE READ READ ONLY` 事务里完成**，共用同一份物化基础集合。
@@ -526,9 +537,7 @@ EasyProject 只记 `trigger_system=EasyAuth` 与 `handover_task_id`，
 三条 `down_revision` 都指向 `m46_001_record_task_order`；落地后由 **AG-00** 创建
 `m00_004_data_handover_v2_heads` 合并。
 
-- **`idempotency_records` 不需要迁移**：既有列已够用（§4.4）。早期版本写的
-  「幂等记录扩展以支持 `handover:{task_id}:{generation}` 键，若既有表足够通用则本迁移可省」
-  两处都错 —— 键少了 `batch_id`，而真正需要新表的是 generation 水位。
+- **`idempotency_records` 不需要迁移**：既有列已够用（§4.4）。真正需要新表的是 generation 水位。
 - 遵循 `AGENTS.md` 不变量 6：Alembic 是唯一 schema 入口，revision 命名 `mNN_###_description`，
   空库必须可 `upgrade head`，merge revision 只由 AG-00 创建。
 - **本次不新增业务列**（§3.4 已说明为何不给 `WorkRecordRow` 加 owner 列）。
@@ -594,12 +603,10 @@ EasyProject 只记 `trigger_system=EasyAuth` 与 `handover_task_id`，
 > 并进通用校验错误会让一次可能的头部替换尝试，在日志里与普通的字段写错完全无法区分。
 > 独立错误码是这条补偿唯一的可观测出口。
 >
-> **它适用于全部四个事件**：`preview` / `items` / `execute` / `webhook.test`。
-> 判定依据是 body 里签名覆盖的 `event_type` 字段与 `X-EasyAuth-Event` 是否逐字相同，
+> **适用于全部四个事件**（`preview` / `items` / `execute` / `webhook.test`）。
+> 判定依据是 body 里签名覆盖的 `event_type` 与 `X-EasyAuth-Event` 是否逐字相同，
 > **校验必须早于 `mode` 解析、事件分发、以及 `webhook.test` 的短路**（契约 §10.1、`01` §8）。
-> `mode` 只是 preview/execute 的一层额外结构校验，**不是**判定依据 ——
-> 早期版本写的「items 没有 mode 所以本码不适用」已作废：那正好会让
-> items→`webhook.test` 的头部替换在 body 校验之前被短路成 200。
+> `mode` 只是 preview/execute 的一层额外结构校验，**不是**判定依据。
 
 > **401 与 403 的定级裁定**：本仓库的 webhook 验签失败返回 **401 `WEBHOOK_SIGNATURE_INVALID`**
 > （`contracts/test-vectors/webhook-hmac.json` 的反例已冻结），而契约 §10.6 把验签失败列在
@@ -651,10 +658,9 @@ CCR 内容（按 `contracts/workflow.md` §6 的六要素）：
 因此本端点继续返回 EasyProject 标准错误体 `{"detail":{"code","message","traceId"}}`
 （`components/schemas/ErrorBody`），**不需要**为 EasyAuth 另造一套 `{"error":{...}}` 信封。
 
-> **但"EasyAuth 原样展示响应体"这句已作废。** 契约 §10.6 现在规定：
-> EasyAuth 只把**白名单提取（`code`/`message`/`traceId`）+ 截断 + 脱敏**后的内容放进
-> `action.last_error`（门户与控制台都能看），**原始响应体只进超管可见的 `last_error_raw`**。
-> EasyProject 侧不需要为此做任何改动，但不要再按"反正会原样展示给人看"来设计 message 内容。
+> **注意 EasyAuth 不会原样展示你的响应体**（契约 §10.6）：它只把白名单提取
+> （`code`/`message`/`traceId`）+ 截断 + 脱敏后的内容给普通用户看。
+> EasyProject 侧不需要为此改动，但不要按「反正会原样展示」来设计 message 内容。
 基线里 `responses.default → ErrorResponse` 的声明保持不变，也无需 CCR。
 
 > 这是本次改造中一处刻意的"不统一"：两个下游的错误码风格不同（EasyTrade 小写下划线、
@@ -683,7 +689,7 @@ CCR 内容（按 `contracts/workflow.md` §6 的六要素）：
 
 ### 5.6 目录在职状态：**后端无需改动**（复核后修正）
 
-早期版本要求"给目录响应补 `isActive`"，这是错的 —— **该字段早就有了**：
+**该字段早就有了**，不需要新增：
 `backend/app/api/v1/directory.py:170,193,221,262,357` 的 DTO 均含 `is_active`，
 生成的前端 TS 类型里也有。
 

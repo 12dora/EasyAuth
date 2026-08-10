@@ -140,7 +140,7 @@ models.CheckConstraint(
 | `skipped_at` | `DateTimeField(null=True, blank=True)` | 强行跳过的时间，与 `skipped_by` 一起构成责任链（**当前轮次**，升级时会清空） |
 | — | **新表** `HandoverActionSkipRecord`（append-only） | `action_snapshot_id` / `generation` / `app_key` / `actor_id` / `reason` / `skipped_at`。**强行跳过的责任链只能靠它** —— action 上的三个字段在升级时会被清空（§5.1.2），而 `AuditLog` 有 **365 天保留期**（`config/data_retention.py:32-36`）之后会被物理删除。契约 §9.2 要求"单据上永久显示"，靠一张会过期的日志表是保证不了的。详情响应返回 `skip_history`；该表**豁免 retention**，且带 skip 历史的 task 不允许删除 |
 | `approval_instance_warning` | `JSONField(null=True, blank=True)` | §4.5.3 的在途钉钉审批警示 `{message, link, recorded_at}`，建单时一次性写入，**升级与完成都不清除**。没有这一列的话 §4.5.3 的「必须持久化」根本无处可写 |
-| `last_error_raw` | `TextField(blank=True)` | **新增**。下游原始响应体，截断 2000 字符，**只在控制台对超管展示且每次查看写审计**。既有的 `last_error`（`lifecycle/models.py:233`）改为只放「状态码 + 本地分类文案 + 白名单提取的 `code`/`message`，各截断 200 字符并脱敏」，门户与控制台都能看（契约 §10.6） |
+| `last_error_raw` | `TextField(blank=True)` | **新增**。下游响应体的**脱敏投影**（不是原文），UTF-8 截断 2000 字节，**只在控制台对超管展示且每次查看写审计**。既有的 `last_error`（`lifecycle/models.py:233`）改为只放「状态码 + 本地分类文案 + 白名单提取的 `code`/`message`，各截断 200 字符并脱敏」，门户与控制台都能看。口径以契约 §10.6 为准 |
 | `batch_seq` | `PositiveIntegerField(default=0)` | 已分配的最大批次号。**只是分配器**；批次的事实来源是 §2.4.1 的 `HandoverExecutionBatch` 行 |
 | `data_completed_at` | `DateTimeField(null=True, blank=True)` | 数据 webhook 已成功、权限尚未转授（契约 §10.5.1.1 的子状态，持久化） |
 | `grant_receiver` | `FK(UserMirror, PROTECT, null=True, related_name="handover_grant_receiving")` | 权限接收人，见上 |
@@ -1342,8 +1342,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 > 门户入口必须加一条：`authentik_user_id` 以 `LOCAL_ADMIN_SUBJECT_PREFIX` 开头 → 403。
 > 这与既有的"本地管理员不参与生命周期"（`lifecycle/offboarding.py:_assert_lifecycle_subject`）一致。
 >
-> **门户与控制台必须各自注册路由与 guard**，只共享 domain service。
-> 早期写的"控制台复用门户端点"会让两套身份判定混在一个入口上。
+> **门户与控制台必须各自注册路由与 guard**，只共享 domain service（详见 §6.3）。
 
 | 方法 | 路径 | 可访问条件 | 说明 |
 |---|---|---|---|

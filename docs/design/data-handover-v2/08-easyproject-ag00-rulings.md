@@ -258,7 +258,7 @@ async def refresh_after_system_handover(
 > `reminder_occurrences` 的外键是 `(rule_id, task_id) → task_reminder_rules(id, task_id)`
 > （`infra/repositories/reminders.py:97-105`），**根本没有 template_id 这一维**。
 > 模板改人之后，由模板生成的**新任务**自然带新角色，无需也无法直接处理 occurrence。
-> `05` §4.3.1 早期写的「取消该任务/**模板**下所有未发送 occurrence」对模板那半是错的。
+> 因此**不能**按「取消该模板下所有未发送 occurrence」来实现 —— 那个筛选条件不存在。
 
 #### M19 · 周期任务
 

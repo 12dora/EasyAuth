@@ -562,10 +562,8 @@ execute body 走进 preview 分支，或反过来。
 
 校验位置：**验签之后、`webhook.test` 短路与任何分发之前**。不一致 → **422**。
 
-> 早期版本写的是「校验事件头与 body 的 `mode` 一致」，有两个洞：
-> `items` 根本没有 `mode` 字段；`webhook.test` 在 SDK 里直接短路返回 `{"ok": true}`，
-> 把事件头改成 `webhook.test` 就能让一次真实的 execute 变成一句"好的"，而 EasyAuth 把 200 当成功。
-> `event_type` 同时堵住这两个洞。这一校验由 SDK vNext 统一实现（`01` §8 第 6 条），
+> **判定依据是 `event_type`，不是 `mode`**（`mode` 对 `items` 与 `webhook.test` 都失效，
+> 理由见契约 §10.1）。这一校验由 SDK vNext 统一实现（`01` §8 第 6 条），
 > EasyTrade 只需升级 SDK 并补验收用例。
 
 **必须有负向测试**（§5）：签名合法的前提下，
