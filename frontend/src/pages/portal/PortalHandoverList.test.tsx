@@ -104,12 +104,14 @@ describe("PortalHandoverList", () => {
     expect(screen.getByTestId("blocked-hint-1")).toHaveTextContent("1 个应用未接入交接");
     expect(screen.queryByRole("button", { name: /跳过/ })).toBeNull();
 
+    // days_left=9 → neutral；days_left=2 → signal（02 §5.1）
     const days9 = screen.getByTestId("days-left-1");
     const days2 = screen.getByTestId("days-left-2");
-    expect(days9.querySelector("span")?.className ?? days9.className).toMatch(
-      /ink|amber|bond|signal|evergreen|neutral|faint/,
-    );
-    expect(days2.querySelector("span")?.className ?? "").toMatch(/signal/);
+    const days9Class = days9.querySelector("span")?.className ?? days9.className;
+    const days2Class = days2.querySelector("span")?.className ?? days2.className;
+    expect(days9Class).toMatch(/border-ink\/20/);
+    expect(days9Class).not.toMatch(/signal/);
+    expect(days2Class).toMatch(/signal/);
   });
 });
 

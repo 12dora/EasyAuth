@@ -19,6 +19,11 @@ const ALL_STATUSES = [
   "async_attention_required",
 ] as const satisfies readonly HandoverActionStatus[];
 
+// 反向穷尽：新增 HandoverActionStatus 时本测试必须同步扩展
+type _Exhaustive = Exclude<HandoverActionStatus, (typeof ALL_STATUSES)[number]> extends never ? true : never;
+const _assertAllStatusesExhaustive: _Exhaustive = true;
+void _assertAllStatusesExhaustive;
+
 function baseAction(status: HandoverActionStatus, patch: Partial<HandoverAction> = {}): HandoverAction {
   return {
     app_key: status,

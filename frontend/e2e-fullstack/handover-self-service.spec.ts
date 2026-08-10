@@ -22,15 +22,26 @@ test.describe("门户自助交接", () => {
     await page.getByRole("link", { name: /去处理/ }).first().click();
 
     await expect(page.getByTestId(/action-panel-/).first()).toBeVisible();
-    // 预演 → 展开明细 → 改 2 条 override → 执行
+    // 预演 → 展开明细 → 改 2 条 override → 保存 → 执行（02 §9）
     const preview = page.getByRole("button", { name: "预演" });
     if (await preview.isVisible()) {
       await preview.click();
     }
+    await expect(page.getByTestId("asset-allocator").first()).toBeVisible({ timeout: 30_000 });
+
     const expand = page.getByRole("button", { name: "展开明细" }).first();
-    if (await expand.isVisible()) {
-      await expand.click();
-    }
+    await expand.click();
+    await expect(page.getByTestId(/asset-item-/).first()).toBeVisible({ timeout: 30_000 });
+
+    // 改派 2 条：前两条改为「暂不处理」并保存 override
+    const itemRows = page.locator("[data-testid^=asset-item-]");
+    await expect(itemRows.first()).toBeVisible();
+    const selects = itemRows.locator('select[aria-label$=" action"]');
+    expect(await selects.count()).toBeGreaterThanOrEqual(2);
+    await selects.nth(0).selectOption("skip");
+    await selects.nth(1).selectOption("skip");
+    await page.getByRole("button", { name: "保存单独指定" }).click();
+
     await page.getByRole("button", { name: "执行交接" }).click();
     await page.getByRole("button", { name: "确认执行" }).click();
     await expect(page.getByText(/已交接|已转交/)).toBeVisible({ timeout: 60_000 });
