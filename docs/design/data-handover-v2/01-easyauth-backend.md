@@ -927,6 +927,12 @@ reconcile 该 App 下所有 `blocked` 且所属 task 仍 open 的 action：
 def sync_handover_capability(app: App) -> None: ...
 ```
 
+> **建 action 时必须校验 `task_id` 的形态。** 它由 `f"{task.id}:{app.app_key}"` 生成，
+> 而 `App.app_key` 的列宽足以让结果超过契约 §5.4 的 **64 字节**上限（一个 64 字符的合法 app_key
+> 配上 task id `1` 就已经 66 字节）。
+> 规则：生成后必须匹配 `^[A-Za-z0-9:_-]{1,64}$`，否则**整次建单回滚**并写持久告警 + 审计。
+> 拖到发 webhook 时才发现的话，下游会拒绝或落不进幂等记录，离职 action 直接卡死。
+
 - 拉取 `/.well-known/easyauth-app.json`，解析 **`lifecycle.capabilities` 与 `lifecycle.handover_asset_types`**
   （契约 §9.1 —— descriptor **没有**嵌套的 `lifecycle.handover` 对象，那是被废弃的早期形状，
   会被 EasyTrade 的 `_lifecycle()` 校验器直接剥掉）。
@@ -1135,7 +1141,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 |---|---|---|---|
 | GET | `/me/handover-tasks` | 登录即可 | 返回两组：`as_assignee`（我负责的）、`as_subject`（我是当事人的） |
 | POST | `/handover-tasks/pre-offboard` | 登录即可，且自己无 open 的 offboard/transfer/pre_offboard 单 | 在职提前交接建单（D7），`kind=pre_offboard`，assignee=本人 |
-| POST | `/handover-tasks/reassign` | 我对 `subject` 有管辖权（契约 §4 的主管链判定，**不走 `resolve_managed_users`**）且双方 active | 在职移交（D9）。body：`{"subject_user_id": "<OIDC sub>", "app_keys": ["easytrade", ...], "reason": "至少 10 字"}`。**`app_keys` 必填且非空** —— 只为列出的 APP 建 action，**不得**隐式把该员工在其他 APP 的数据也拉进来（`00` §8.4 明说同一 subject 可以有多张针对不同 APP 的 open `reassign` 单）。缺 `subject_user_id` / `app_keys` → `422`；`reason` 不足 10 字 → `422 reason_required` |
+| POST | `/handover-tasks/reassign` | 我对 `subject` 有管辖权（契约 §4 的主管链判定，**不走 `resolve_managed_users`**）且双方 active。**必带 `Idempotency-Key` 头**（≤128 字符）| 在职移交（D9）。body：`{"subject_user_id": "<OIDC sub>", "app_keys": ["easytrade", ...], "reason": "至少 10 字"}`。**`app_keys` 必填且非空** —— 只为列出的 APP 建 action，**不得**隐式把该员工在其他 APP 的数据也拉进来（`00` §8.4 明说同一 subject 可以有多张针对不同 APP 的 open `reassign` 单）。缺 `subject_user_id` / `app_keys` → `422`；`reason` 不足 10 字 → `422 reason_required` |
 | GET | `/handover-tasks/{task_id}` | 我是 assignee 或 subject | 单据详情，含各 APP action、资产分类、距上交剩余天数 |
 | GET | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}/items` | 同上 | 明细分页，query: `page`、`page_size`、`q` |
 | GET | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}/overrides` | 同上 | **返回当前 generation 的完整 override 集合**与 `overrides_version`。`PUT` 是整体替换，没有这个读回入口，用户刷新页面后改一条就会把其余全部删掉 |
@@ -1170,16 +1176,24 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 > items / execute 发 webhook 时由后端自动回带（契约 §10.5.1）。
 > 前端只需要知道：execute 返回 `409 snapshot_stale` 时，要引导用户重新 preview。
 
+> **两个创建端点都必须支持 `Idempotency-Key`。** `00` §8.4 允许同一 subject 有多张 open 的
+> `reassign` 单，所以数据库层没有唯一约束能挡住重复创建 —— 201 响应在网络上丢一次、
+> 浏览器重试一次，就是两张一模一样的单，而且都能被执行。
+> 服务端按 `(initiator, idempotency_key)` 存 canonical body 的 hash：
+> 同 key 同 body → 返回原单；同 key 不同 body → `409 idempotency_conflict`。
+> 并发双写靠该组合上的数据库唯一约束兜底。
+
 **成功响应（与错误码同等冻结，前端据此建类型）**：
 
 | 端点 | 成功码 | 响应体 |
 |---|---|---|
 | `GET /me/handover-tasks` | 200 | `{"handover_tasks": {"as_assignee": [<列表项>], "as_subject": [<列表项>]}}`（与详情同样带信封）。列表项 = §6.2 的详情对象去掉 `actions`/`team_items`，另加 `pending_app_count` / `blocked_app_count` / `total_asset_count` |
-| `POST /handover-tasks/pre-offboard` | **201** | 完整的 §6.2 详情对象 |
-| `POST /handover-tasks/reassign` | **201** | 完整的 §6.2 详情对象 |
-| `GET /handover-tasks/{id}` | 200 | §6.2 详情对象 |
+| `POST /handover-tasks/pre-offboard` | **201** | `{"handover_task": <§6.2 详情对象>}` |
+| `POST /handover-tasks/reassign` | **201** | `{"handover_task": <§6.2 详情对象>}` |
+| `GET /handover-tasks/{id}` | 200 | `{"handover_task": <§6.2 详情对象>}` |
 | `GET .../items` | 200 | `{"items": [{"id","label","hint"}], "page": 1, "page_size": 50, "total": 0, "unfiltered_total": null, "stale": false}` |
 | `PATCH .../assets/{type}` | 200 | 该 `asset_type` 的最新对象（§6.2 `asset_types` 里的一项） |
+| `GET .../overrides` | 200 | `{"overrides_version": n, "overrides": [{"asset_id","action","to_user","label"}]}` —— **完整集合**，不分页 |
 | `PUT .../overrides` | 200 | `{"overrides_version": n+1, "confirm_version": m+1, "override_count": k, "dropped_invalid": j}` —— **必须回传两个新版本号**，否则前端手上还是旧值，翻到下一页再保存必然 409 |
 | `POST .../preview` / `.../execute` / `.../retry` | 200 | 该 action 的最新对象（§6.2 `actions` 里的一项） |
 | `GET /handover-candidates` | 200 | `{"items": [{"user_id","name","department"}]}` |
@@ -1200,10 +1214,12 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | 409 | `open_task_exists` | 自助建单时已有 open 的 `offboard`/`transfer`/`pre_offboard` 单（与 §2.1 的 `lifecycle_task_one_open_lifecycle_per_subject` 同一集合）。`reassign` 单**不**触发本错误 |
 | 409 | `handover_execution_in_flight` | 该 `(subject, app)` 已有 execute 在途（含 `async_pending`），契约 §10.5.2。**不排队、不自动重试**，前端提示稍后再试 |
 | **412** | `snapshot_stale` | 下游返回 **412** 判定为快照失效，action 已退回 `pending`，需重新 preview（契约 §10.6）。**不要用 409** —— 409 会被判 `failed` |
+| **423** | `downstream_locked` | 下游返回 **423**（对象被临时锁住，如项目审批锁），action 退回 `pending`；**可重试**，但要等人解除锁 |
 | 409 | `action_not_retryable` | 对非 `failed` 状态的 action 调 `retry` |
 | 422 | `reason_required` | reassign 未填理由或不足 10 字符 |
 | 422 | `receiver_not_active` / `receiver_is_subject` / `receiver_required` / `asset_type_not_releasable` / `duplicate_assignment` | §5.4 |
 | 400 | `detail_not_supported` | 该资产类型不支持明细 |
+| **503** | `directory_unavailable` | subject 的 `DingTalkUserOrgContext` 缺失、`stale=true`、或 `manager_chain` 元素畸形。**与 403 分开**：403 是"上下文健康但你不在他的主管链上"，503 是"组织目录现在不可用"。两者都 fail-closed，但审计事件与用户文案不同（前者提示联系管理员，后者提示稍后重试），运维也要能区分是越权还是依赖故障 |
 | 422 | `purpose_required` | `/handover-candidates` 缺 `purpose` 参数 |
 | 409 | `action_blocked` | 对 `blocked` 状态的 action 调 preview/execute（未接入 APP，D6；只有超管能 skip） |
 
