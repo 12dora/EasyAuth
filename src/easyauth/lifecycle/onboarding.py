@@ -27,7 +27,7 @@ def onboard_user(
     with transaction.atomic():
         user = UserMirror.objects.select_for_update().get(pk=user_pk)
         template = (
-            OnboardingTemplate.objects.select_for_update()
+            OnboardingTemplate.objects.select_for_update(of=("self",))
             .select_related("current_revision")
             .get(pk=template.id)
         )

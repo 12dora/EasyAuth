@@ -15,6 +15,7 @@ from easyauth.applications.permission_template_types import (
     AppManifestApprovalRuleInput,
     AppManifestAuthorizationGroupInput,
     AppManifestGrantInput,
+    AppManifestHandoverAssetTypeInput,
     AppManifestInput,
     AppManifestLifecycleInput,
     AppManifestPermissionGroupInput,
@@ -113,6 +114,15 @@ class _ApprovalRulePayload(BaseModel):
     is_active: bool = True
 
 
+class _HandoverAssetTypePayload(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
+
+    type: str = Field(min_length=1, max_length=64)
+    label: str = Field(default="", max_length=120)
+    detail_supported: bool = False
+    releasable: bool = False
+
+
 class _LifecyclePayload(BaseModel):
     # 下游生命周期交接声明(与 easyauth-app-sdk 描述符契约一致): URL 允许绝对地址
     # 或以 / 开头的站内路径(自动接入时用下游 base_url 补全)。
@@ -121,6 +131,7 @@ class _LifecyclePayload(BaseModel):
     handover_url: str | None = Field(default=None, max_length=512)
     onboard_url: str | None = Field(default=None, max_length=512)
     capabilities: tuple[str, ...] = ()
+    handover_asset_types: tuple[_HandoverAssetTypePayload, ...] = ()
 
 
 class _WebhookPayload(BaseModel):
@@ -437,6 +448,15 @@ def _manifest_input(
                 handover_url=payload.lifecycle.handover_url or "",
                 onboard_url=payload.lifecycle.onboard_url or "",
                 capabilities=payload.lifecycle.capabilities,
+                handover_asset_types=tuple(
+                    AppManifestHandoverAssetTypeInput(
+                        type=item.type,
+                        label=item.label,
+                        detail_supported=item.detail_supported,
+                        releasable=item.releasable,
+                    )
+                    for item in payload.lifecycle.handover_asset_types
+                ),
             )
             if payload.lifecycle is not None
             else None

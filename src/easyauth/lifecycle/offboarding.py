@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Final, cast
 
 from django.db import transaction
@@ -9,8 +10,15 @@ from django.utils import timezone
 
 from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App, AppScope
+from easyauth.applications.handover_capability import _seed_asset_type_placeholders
+from easyauth.applications.models import (
+    HANDOVER_CAPABILITY_DECLARED,
+    HANDOVER_CAPABILITY_NONE,
+    App,
+    AppScope,
+)
 from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
+from easyauth.lifecycle.assignee import apply_assignee, resolve_assignee
 from easyauth.lifecycle.core import (
     LIFECYCLE_ACTOR_ID,
     TASK_KIND_CONFLICT_MESSAGE,
@@ -18,8 +26,15 @@ from easyauth.lifecycle.core import (
     refresh_task_status,
 )
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
+from easyauth.lifecycle.handover import initial_action_status_for_app
 from easyauth.lifecycle.models import (
+    ACTION_STATUS_BLOCKED,
+    ACTION_STATUS_PENDING,
+    ACTION_STATUS_SKIPPED,
+    HANDOVER_ESCALATION_DAYS,
     HANDOVER_KIND_OFFBOARD,
+    HANDOVER_KIND_PRE_OFFBOARD,
+    HANDOVER_KIND_REASSIGN,
     HANDOVER_KIND_TRANSFER,
     TASK_OPEN_STATUSES,
     HandoverAppAction,
@@ -31,7 +46,6 @@ from easyauth.lifecycle.models import (
 from easyauth.lifecycle.tasks import DISABLE_ACCOUNT_TASK_NAME
 from easyauth.outbox.services import enqueue_task
 from easyauth.teams.models import TEAM_MEMBER_ROLE_LEADER, TeamMember
-from easyauth.webhooks.models import AppWebhookConfig
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,17 +69,30 @@ def ensure_handover_task(
     created_by: str,
     reason: str = "",
     snapshot_grant_ids: tuple[int, ...] | None = None,
+    app_keys: tuple[str, ...] | None = None,
 ) -> tuple[HandoverTask, bool]:
     """建单(幂等): 同一当事人已有进行中交接单时直接返回既有单。"""
     _assert_lifecycle_subject(subject)
     subject_pk = cast("int", subject.pk)
     with transaction.atomic():
         subject = UserMirror.objects.select_for_update().get(pk=subject_pk)
-        existing = (
-            HandoverTask.objects.select_for_update()
-            .filter(subject_user=subject, status__in=TASK_OPEN_STATUSES)
-            .first()
-        )
+        # reassign 可与其他 open 单并存; 生命周期类单据一人一张。
+        if kind == HANDOVER_KIND_REASSIGN:
+            existing = None
+        else:
+            existing = (
+                HandoverTask.objects.select_for_update()
+                .filter(
+                    subject_user=subject,
+                    status__in=TASK_OPEN_STATUSES,
+                    kind__in=(
+                        HANDOVER_KIND_OFFBOARD,
+                        HANDOVER_KIND_TRANSFER,
+                        HANDOVER_KIND_PRE_OFFBOARD,
+                    ),
+                )
+                .first()
+            )
         if existing is not None:
             if existing.kind != kind:
                 raise HandoverConflictError(TASK_KIND_CONFLICT_MESSAGE)
@@ -79,9 +106,43 @@ def ensure_handover_task(
             subject_user=subject,
             created_by=created_by,
             reason=reason,
+            generation=1,
         )
+        if kind == HANDOVER_KIND_PRE_OFFBOARD and created_by == subject.authentik_user_id:
+            from easyauth.lifecycle.models import ASSIGNEE_STATE_SUBJECT
+
+            # 自助 pre_offboard 不走 resolve_assignee, 避免伪造 degraded 审计。
+            task.assignee = subject
+            task.assignee_state = ASSIGNEE_STATE_SUBJECT
+            task.escalation_level = 0
+            task.escalation_deadline = timezone.now() + timedelta(
+                days=HANDOVER_ESCALATION_DAYS,
+            )
+            task.save(
+                update_fields=[
+                    "assignee",
+                    "assignee_state",
+                    "escalation_level",
+                    "escalation_deadline",
+                    "updated_at",
+                ],
+            )
+            record_task_event(
+                task,
+                action="handover_assignee_assigned",
+                actor_id=created_by,
+                extra={"assignee_state": ASSIGNEE_STATE_SUBJECT},
+            )
+        else:
+            resolution = resolve_assignee(subject)
+            _ = apply_assignee(
+                task,
+                resolution,
+                actor_id=created_by,
+                reason="task_created",
+            )
         _snapshot_grant_items(task, grants=snapshot_grants)
-        _snapshot_app_actions(task, grants=snapshot_grants)
+        _snapshot_app_actions(task, grants=snapshot_grants, app_keys=app_keys)
         _snapshot_leader_teams(task)
         if kind == HANDOVER_KIND_TRANSFER:
             _ = TransferPlan.objects.create(task=task)
@@ -128,6 +189,7 @@ def _snapshot_grant_items(task: HandoverTask, *, grants: list[AccessGrant]) -> N
             _ = HandoverGrantItem.objects.create(
                 task=task,
                 app=grant.app,
+                generation=task.generation,
                 app_key_snapshot=grant.app.app_key,
                 app_name_snapshot=grant.app.name,
                 app_catalog_version_snapshot=grant.app.catalog_version,
@@ -158,6 +220,7 @@ def _snapshot_grant_items(task: HandoverTask, *, grants: list[AccessGrant]) -> N
             _ = HandoverGrantItem.objects.create(
                 task=task,
                 app=grant.app,
+                generation=task.generation,
                 app_key_snapshot=grant.app.app_key,
                 app_name_snapshot=grant.app.name,
                 app_catalog_version_snapshot=grant.app.catalog_version,
@@ -173,22 +236,54 @@ def _snapshot_grant_items(task: HandoverTask, *, grants: list[AccessGrant]) -> N
             )
 
 
-def _snapshot_app_actions(task: HandoverTask, *, grants: list[AccessGrant]) -> None:
-    # 交接面 = 当事人有授权痕迹的 APP, 加上声明了交接钩子的 APP。
-    app_ids = {grant.app_id for grant in grants}
-    hook_app_ids = set(
-        AppWebhookConfig.objects.filter(enabled=True, app__is_active=True)
-        .exclude(handover_url="")
-        .values_list("app_id", flat=True),
-    )
-    for app in App.objects.filter(id__in=app_ids | hook_app_ids):
-        _ = HandoverAppAction.objects.create(
+def _snapshot_app_actions(
+    task: HandoverTask,
+    *,
+    grants: list[AccessGrant],
+    app_keys: tuple[str, ...] | None = None,
+) -> None:
+    # 交接面 = 当事人有授权痕迹的 APP + 已声明交接能力的 APP; reassign 仅限 app_keys。
+    if app_keys is not None:
+        apps = list(App.objects.filter(app_key__in=app_keys, is_active=True))
+    else:
+        # 交接面 = 有授权痕迹的 APP + 已声明 capability 的 APP。
+        # 有授权但 undeclared → blocked(不再静默成功)。
+        app_ids = {grant.app_id for grant in grants}
+        capability_app_ids = set(
+            App.objects.filter(
+                is_active=True,
+                handover_capability__in=(
+                    HANDOVER_CAPABILITY_DECLARED,
+                    HANDOVER_CAPABILITY_NONE,
+                ),
+            ).values_list("id", flat=True),
+        )
+        apps = list(App.objects.filter(id__in=app_ids | capability_app_ids, is_active=True))
+    for app in apps:
+        status, blocked_reason, skip_reason, skipped_by = initial_action_status_for_app(app)
+        action = HandoverAppAction.objects.create(
             task=task,
             app=app,
             app_key_snapshot=app.app_key,
             app_name_snapshot=app.name,
             app_catalog_version_snapshot=app.catalog_version,
+            generation=task.generation,
+            status=status,
+            blocked_reason=blocked_reason,
+            skip_reason=skip_reason,
+            skipped_by=skipped_by,
+            skipped_at=timezone.now() if status == ACTION_STATUS_SKIPPED else None,
         )
+        if status == ACTION_STATUS_BLOCKED:
+            record_task_event(
+                task,
+                action="handover_action_blocked",
+                actor_id=LIFECYCLE_ACTOR_ID,
+                actor_type="system",
+                extra={"app_key": app.app_key, "blocked_reason": blocked_reason},
+            )
+        if status == ACTION_STATUS_PENDING:
+            _seed_asset_type_placeholders(action)
 
 
 def _snapshot_grants(
