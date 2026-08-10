@@ -111,7 +111,13 @@ print(json.dumps({"name": settings.SESSION_COOKIE_NAME, "value": session.session
     {
       cwd: repoRoot,
       encoding: "utf8",
-      env: { ...process.env, DATABASE_URL: "", EASYAUTH_SQLITE_PATH: fullstackSqlitePath() },
+      env: {
+        ...process.env,
+        DATABASE_URL: "",
+        DJANGO_DEBUG: "1",
+        EASYAUTH_SQLITE_PATH: fullstackSqlitePath(),
+      },
+
     },
   );
   const parsed = JSON.parse(output);
@@ -122,7 +128,7 @@ print(json.dumps({"name": settings.SESSION_COOKIE_NAME, "value": session.session
 }
 
 function fullstackSqlitePath(): string {
-  return process.env.EASYAUTH_PLAYWRIGHT_SQLITE_PATH ?? `/tmp/easyauth-playwright-${process.env.PLAYWRIGHT_FULLSTACK_PORT ?? "8001"}.sqlite3`;
+  return process.env.EASYAUTH_PLAYWRIGHT_SQLITE_PATH ?? `/tmp/easyauth-playwright-${process.env.PLAYWRIGHT_FULLSTACK_PORT ?? "8010"}.sqlite3`;
 }
 
 function expectedPortalAssets(): string[] {

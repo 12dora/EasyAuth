@@ -11,11 +11,15 @@ __pycache__/
 .basedpyright/
 db.sqlite3
 db.sqlite3.bak-*
+*.sqlite3
 htmlcov/
 .coverage
 node_modules/
 *.tsbuildinfo
 frontend/test-results/
+frontend/playwright-report/
+frontend/blob-report/
+/tmp/easyauth-playwright-*.sqlite3
 .superpowers/
 .omo/
 src/easyauth/static/easyauth/frontend/.vite/*

@@ -10,7 +10,7 @@
     "typecheck": "tsc -b",
     "test": "vitest run",
     "e2e": "playwright test",
-    "e2e:fullstack": "playwright test --config playwright.fullstack.config.ts"
+    "e2e:fullstack": "PLAYWRIGHT_FULLSTACK_PORT=${PLAYWRIGHT_FULLSTACK_PORT:-8010} playwright test --config playwright.fullstack.config.ts"
   },
   "dependencies": {
     "@fontsource-variable/geist": "^5.2.9",
