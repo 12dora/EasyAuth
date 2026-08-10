@@ -94,7 +94,7 @@ x-error-codes = [WEBHOOK_SIGNATURE_INVALID, HANDOVER_CONFLICT, VALIDATION_ERROR]
 | 错误码 | HTTP | 说明 | 状态 |
 |---|---:|---|---|
 | `WEBHOOK_SIGNATURE_INVALID` | 401 | HMAC 验签失败 | 保留 |
-| `HANDOVER_CONFLICT` | 409 | 审批锁、当前归属已变、迟到的旧 generation 等业务冲突 | 保留 |
+| `HANDOVER_CONFLICT` | 409 | **仅**用于：人员 sub 无法映射、`overrides` 引用快照外的 `asset_id`、投递冲突、迟到的旧 generation、**项目终态**（不可恢复的锁）。<br>**审批锁走 423，快照 / 归属在 preview 之后变化走 412**（契约 §10.5.1 第 4 条冻结了校验顺序：先比摘要、后逐条，归属变化不得用 409 表达） | 保留 |
 | `VALIDATION_ERROR` | 422 | JSON / 字段形状不合法 | 保留 |
 | `WEBHOOK_TIMESTAMP_INVALID` | 400 | timestamp 非法或超 300 秒窗口 | **新增** |
 | `WEBHOOK_PAYLOAD_CONFLICT` | 409 | 同 `(task_id, generation, batch_id)` 不同 canonical payload hash | **新增** |
@@ -104,8 +104,8 @@ x-error-codes = [WEBHOOK_SIGNATURE_INVALID, HANDOVER_CONFLICT, VALIDATION_ERROR]
 | `ASSET_TYPE_UNDECLARED` | 422 | 请求里的资产类型未在 descriptor 声明 | **新增** |
 | `REQUEST_BODY_TOO_LARGE` | 413 | 请求体超过 256 KiB | **新增** |
 | `SNAPSHOT_STALE` | **412** | `snapshot_token` 与当前数据不一致（契约 §10.5.1） | **新增** |
-| `HANDOVER_TEMPORARILY_LOCKED` | **423** | 项目审批锁期间禁止写。**可恢复**：EasyAuth 退回 `pending`，人解除审批后重新预演。<br>**新起一个码，不要复用 `PROJECT_LOCKED`** —— 后者是全局冻结码、现有端点与错误向量都写死 409（`contracts/test-vectors/error-bodies.json:165`），改全局映射会打坏一片。M06 在边界转译 | **新增** |
-| `RATE_LIMITED` | **429** | `items` 触发限流（契约 §10.4）。EasyAuth 保持 action 原状态，按 `Retry-After` 重试 | **新增** |
+| `HANDOVER_TEMPORARILY_LOCKED` | **423** | 项目**审批**锁期间禁止写（`lock_reason` 非空或状态在 `{PENDING_INITIATION_APPROVAL, CLOSING_APPROVAL}`）。**可恢复**：EasyAuth 退回 `pending`，人解除审批后重新预演。<br>**项目终态（`COMPLETED` / `CANCELLED`）不走这个码**——`_WRITE_LOCKED_STATUSES`（`domain/projects/ports.py:63-70`）把终态也算写锁，但它不可恢复，回 423 会造出「退回 pending → 重新预演 → 又 423」的死循环，必须回 `409 HANDOVER_CONFLICT`。<br>**新起一个码，不要复用 `PROJECT_LOCKED`** —— 后者是全局冻结码、现有端点与错误向量都写死 409（`contracts/test-vectors/error-bodies.json:172,222`），改全局映射会打坏一片。M06 在边界按锁因转译 | **新增** |
+| `RATE_LIMITED` | **429** | `items` 触发限流（契约 §10.4），**以及 `execute` 撞上 `ProcessingInProgressError`**（同幂等键正在处理中，见 `08` §2.3）。EasyAuth 保持 action 原状态，按 `Retry-After` 重试 | **新增** |
 
 > **`SNAPSHOT_STALE` 必须与 `HANDOVER_CONFLICT` 分开成两个状态码。**
 > EasyAuth 只看状态码不解析响应体（契约 §10.6）：412 让它把 action **退回 `pending` 重新预演**，
@@ -123,8 +123,10 @@ x-error-codes = [WEBHOOK_SIGNATURE_INVALID, HANDOVER_CONFLICT, VALIDATION_ERROR]
    - endpoint summary 改为 preview/items/execute；
    - 上述 13 个错误码写进生成源；
    - **同步更新全局 `x-http-error-map`**（同一脚本生成，`contracts/tools/generate_baseline.py:388`）：
-     新增 `412: ["SNAPSHOT_STALE"]`、`423: ["HANDOVER_TEMPORARILY_LOCKED"]`、`429: ["RATE_LIMITED"]`，把 `REQUEST_BODY_TOO_LARGE` 并入 413
-     （现在 413 只认识 `FILE_TOO_LARGE`），其余新码归入各自的 400/401/409/422 分组。
+     新增 `412: ["SNAPSHOT_STALE"]` 与 `423: ["HANDOVER_TEMPORARILY_LOCKED"]` 两组；
+     **`429: ["RATE_LIMITED"]` 已经存在**（`generate_baseline.py:388-400`，`openapi-baseline.json` 同），
+     只需确认合并时不被覆盖掉，**不要当成新增去加**；把 `REQUEST_BODY_TOO_LARGE` 并入 413
+     （现在 413 只认识 `FILE_TOO_LARGE`，见 `generate_baseline.py:394`），其余新码归入各自的 400/401/409/422 分组。
      **漏了这一步，operation 声明了 `SNAPSHOT_STALE` 而再生的 baseline 里根本没有 412，机器可读基线自相矛盾**；
    - 不新增 path / permission / scope / schema。
 2. **`contracts/openapi-baseline.json`**

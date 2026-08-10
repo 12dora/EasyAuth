@@ -558,8 +558,20 @@ UI 表现：管理审计列表对 NULL actor 已显示 `SYSTEM`；任务时间�
 > 而审批发起会 `FOR UPDATE` 锁项目并写锁态（`infra/repositories/projects.py:877`）。
 > 只锁 task 的话：handover 锁住 T、读到 P 还没上锁，并发审批把 P 锁上，handover 照样改了 T ——
 > **审批期间的写保护就这么被穿透了，而且不会返回 423。**
-- 并发者先提交并改变了归属或 snapshot → 返回 `409 HANDOVER_CONFLICT`。
-  **不得**在已经变化的对象上"尽量搬一搬"。
+- 并发者先提交并改变了归属或 snapshot → 返回 **`412 SNAPSHOT_STALE`**，零写入。
+  **不得**在已经变化的对象上"尽量搬一搬"，**也不得判成 409**。
+
+> **这一条不能写成 409，契约把校验顺序连同处置一起冻结了**（`00` §10.5.1 第 4 条）：
+> **先重算全量 snapshot 摘要、后逐条校验**，摘要不一致一律 412 且零写入；
+> **归属在 preview 之后发生变化的一律走 412，不得用 409 表达**。
+> 契约那段 rationale 点名的就是这里：逐条校验天然写在行循环里、比重算摘要更早，
+> 于是一次普通竞态先命中 409 —— 而 409 在 EasyAuth 侧是**不可重试的 `failed`**，
+> assignee 界面上只剩「应用拒绝了本次交接」，没有任何前进路径；
+> 正确处置是 412 → 退回 `pending` → 重新预演。
+>
+> 落到实现上：**M06 必须在调用任何领域命令之前、在锁内完成全量摘要重算并以 412 短路**；
+> §1.3 各条签名里领域命令内部的「来源不再匹配 / 不再满足谓词」只是**兜底**，
+> M06 收到后仍按 **412** 上报，不要原样透传成 409。
 - handover 先持锁时，随后到达的人类命令按其 expected version 走**原有的**版本冲突路径；
   system handover **不返回**伪造的 `state_version`。
 - 任务人员交接：`state_version` 不变，`version` +1，assignee 变化时 `assignment_version` +1，
@@ -633,6 +645,28 @@ generation 水位语义：
 > 再等 task，两者并发就是一个可复现的死锁。
 > `store_response` **不是新的末尾锁节点**：它只更新本事务开头已经 claim 的那一行。
 
+> **`IDEMPOTENCY_CONFLICT` 这个 code 被两个语义完全不同的异常共用，必须按异常类而不是 code 分流。**
+> `domain/reliability/errors.py:19-22` 的 `IdempotencyConflictError`（同键**不同** payload）
+> 与 `:55-59` 的 `ProcessingInProgressError`（同键**正在处理中**）**`code` 都是
+> `"IDEMPOTENCY_CONFLICT"`、都是 409**。后者在 `infra/idempotency/guard.py:128,199,215,224`
+> 四处抛出。
+>
+> M06 若按 `.code` 转译，一次**同 payload 的并发或网络重投**会被上报成
+> `409 WEBHOOK_PAYLOAD_CONFLICT` —— 按契约 §10.6 那是**不可重试的 `failed`**，
+> 一次正常重试就把整个 action 打死；不转译则返回未登记错误码，契约门禁判漂移。
+>
+> 冻结口径：
+>
+> | 异常类 | 转译成 |
+> |---|---|
+> | `IdempotencyConflictError` | `409 WEBHOOK_PAYLOAD_CONFLICT` |
+> | `ProcessingInProgressError` | **`429 RATE_LIMITED` + `Retry-After`**（可重试，EasyAuth 不改 action 状态） |
+>
+> 另外 **`claim_or_replay(..., wait_for_completion=False)` 是必须的**：
+> 该参数默认 `True`（`guard.py:70-71`），会在**持着 generation 水位行锁的业务事务里**
+> `asyncio.sleep` 最长约 1 秒（`guard.py:55-56`，40×0.025），与 §2.3「水位锁持到事务提交」
+> 叠加放大阻塞。
+
 > **顺序反了就违背"重放不得调用任何领域命令"这条规定。** 若先加锁跑命令再发现是重放，
 > 一次成功请求的重放会重新跑 snapshot 与归属校验，很可能返回 412/409 而不是那份保存好的
 > 200 summary —— EasyAuth 那边看到的是"上次成功、这次失败"。
@@ -649,12 +683,27 @@ generation 水位语义：
   message/metadata 里保留内部原因 `PROJECT_LOCKED`。
 
 > **不能直接把 `PROJECT_LOCKED` 改成 423。** 它是**全局**冻结码，现有项目/任务端点都在用，
-> 错误向量里也写死了 409（`contracts/test-vectors/error-bodies.json:165`、
+> 错误向量里也写死了 409（`contracts/test-vectors/error-bodies.json:172,222`、
 > `domain/tasks/errors.py:143`）。改全局映射会打坏一片既有端点与门禁。
 >
-> 正确做法：领域层照旧抛 `PROJECT_LOCKED(409)`；**M06 在边界处转译**成
-> `423 HANDOVER_TEMPORARILY_LOCKED`。
-> `HANDOVER_CONFLICT` 的说明里**删掉「审批锁」** —— 它只覆盖项目终态、归属变化、迟到 generation。
+> 正确做法：领域层照旧抛 `PROJECT_LOCKED(409)`；**M06 在边界处转译**。
+>
+> **但转译不能一刀切成 423 —— 必须按锁因分流。** `_WRITE_LOCKED_STATUSES`
+> （`domain/projects/ports.py:63-70`）里同时包含审批中与**终态**两类，
+> 而这两类的可恢复性完全相反：
+>
+> | 锁因 | 转译成 | 理由 |
+> |---|---|---|
+> | `projects.lock_reason` 非空，或状态在 `{PENDING_INITIATION_APPROVAL, CLOSING_APPROVAL}` | **423 `HANDOVER_TEMPORARILY_LOCKED`** | 审批一结束锁就没了，可恢复 |
+> | 状态在 `{COMPLETED, CANCELLED}` | **409 `HANDOVER_CONFLICT`** | **不可恢复**，如实判死 |
+>
+> 终态也回 423 的话就是个死循环：EasyAuth 退回 `pending` 提示重新预演 → 重新 preview
+> 该对象仍在清单里 → execute 又 423，而没有任何人工动作能「解除」一个已完成项目的锁。
+> 上游的谓词侧也要一起收（`05` §3.1.2 的任务类谓词要连父项目状态一起看），
+> 两边都做才真正堵住。
+>
+> `HANDOVER_CONFLICT` 的说明里**删掉「审批锁」** —— 它只覆盖项目终态、迟到 generation
+> 与「请求本身对不上」那一类；**归属变化归 412，不归它**（见 §2.2）。
 
 > **为什么不是 409。** 409 在契约里被判为**不可重试的 `failed`**。
 > 而审批锁是**临时**状态：审批一结束锁就没了，这次交接完全应该能继续。

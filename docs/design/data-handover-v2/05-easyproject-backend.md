@@ -156,9 +156,17 @@ async def resolve_dtuid(*, authentik_sub: str, purpose: Literal["source", "targe
 | 类型 | 完整谓词 |
 |---|---|
 | `project_owned` / `project_member` | 项目状态不在 `{COMPLETED, CANCELLED}` |
-| `task_assigned` / `task_assigner` / `task_collaborator` | 任务状态不在 `{COMPLETED, CANCELLED}` |
+| `task_assigned` / `task_assigner` / `task_collaborator` | 任务状态不在 `{COMPLETED, CANCELLED}` **且父项目状态不在 `{COMPLETED, CANCELLED}`** |
 | `recurring_assignee` / `recurring_assigner` / `recurring_collaborator` | 模板 `is_enabled = true` |
 | `work_record_participant` | 工作记录 `status = 'OPEN'` |
+
+> **任务类谓词必须连父项目一起看，漏了会造出一个无解的死循环。**
+> `_WRITE_LOCKED_STATUSES`（`domain/projects/ports.py:63-70`）里**包含 `COMPLETED` 与 `CANCELLED`**
+> —— 终态项目同样是写锁。只看任务状态的话，已完成项目下的未完成任务会正常进 preview / items，
+> execute 时被 `_ensure_project_unlocked`（`domain/tasks/commands.py:889-899`）判为 `PROJECT_LOCKED`，
+> M06 一刀切转成 423，EasyAuth 退回 `pending` 提示「解除后请重新预演」；
+> 重新 preview 该任务仍在清单里（谓词没变）→ execute 又 423。
+> **没有任何人工动作能「解除」一个已完成项目的锁**，而 423 在契约里是可重试的，会一直重试下去。
 
 ### 3.2 历史事实 —— 一律不动
 
@@ -401,12 +409,19 @@ async def build_snapshot_token(session, *, from_dtuid: str) -> str:
 - `execute`：在业务事务内、按 `08` §2.2 的锁序**锁定受影响集合之后**重算，
   不一致 → **HTTP 412**（不是 409），且**零写入**；
 - `items`：不一致同样 **412**；
-- **逐条校验是独立的第二层**：每个被改写的 asset_id 必须当前仍属于 `from_user_id`
-  且仍满足该类型谓词，任一不满足 → 整体 `409 HANDOVER_CONFLICT`。
+- **逐条校验是独立的第二层，且必须排在摘要比对之后**（契约 §10.5.1 第 4 条把顺序也冻结了）：
+  每个被改写的 asset_id 必须当前仍属于 `from_user_id` 且仍满足该类型谓词。
   **不允许**跳过该条继续处理其余条目。
+  - 归属或谓词状态**在 preview 之后变了** → **412 `SNAPSHOT_STALE`**（摘要那一层就该先拦下）；
+  - `overrides` 引用了**本次快照集合之外**的 asset_id → `409 HANDOVER_CONFLICT`
+    （这是 EasyAuth 的请求本身有问题，不是数据竞态）。
 
 > 412 与 409 的分工是契约 §10.6 定死的：412 让 EasyAuth 把 action **退回 `pending` 重新预演**，
-> 409 判 `failed`。混用会让"清单变了"被永久标成失败。
+> 409 判 `failed` **且不可重试**。混用会让"清单变了"被永久标成失败。
+>
+> **顺序也是规范的一部分。** 逐条校验天然写在行循环里、比重算全量摘要更早，
+> 不明写顺序的话，「preview 之后有个任务被别人改派了」这一次普通竞态会先命中 409，
+> assignee 界面上只剩「应用拒绝了本次交接」，没有任何前进路径。
 
 ### 4.4 幂等
 
@@ -522,23 +537,33 @@ M06 这一侧只需要知道两件事：
 
 ### 4.7 迁移
 
-**三条并行 revision，各由自己的 owner 创建**（`08` §1.4 已冻结）。当前唯一 head 是
-`m46_001_record_task_order`：
+**四条并行 revision，各由自己的 owner 创建**（`08` §1.4 已冻结，本表必须与它逐行一致）。
+当前唯一 head 是 `m46_001_record_task_order`：
 
 | revision | owner | 内容 |
 |---|---|---|
 | `m06_003_handover_generation_watermarks` | M06 | 建 `easyauth_handover_generations`（generation 水位，§4.4） |
-| `m10_002_task_handover_actor` | M10 | 把 `task_assignment_history.changed_by_dingtalk_user_id` 改为 **nullable**（system actor 无 dtuid） |
+| `m10_002_task_handover_actor` | M10 | 把 `task_assignment_history.changed_by_dingtalk_user_id` **与 `task_collaborators.added_by_dingtalk_user_id`** 都改为 **nullable**，ORM 同步为 `Mapped[str \| None]` |
+| **`m13_003_project_handover_actor`** | **M13** | 把 `project_members.added_by_dingtalk_user_id` 改为 **nullable**，ORM 同步 |
 | `m32_002_handover_projection_outbox` | M32 | 建 `op_handover_projection_outbox`（OpenProject 人员投影，§4.5 ③） |
 
-三条 `down_revision` 都指向 `m46_001_record_task_order`；落地后由 **AG-00** 创建
-`m00_004_data_handover_v2_heads` 合并。
+四条 `down_revision` 都指向 `m46_001_record_task_order`；落地后由 **AG-00** 创建
+`m00_004_data_handover_v2_heads` 合并，该 merge revision 有**四个** `down_revision`。
+
+> **`m13_003` 与 `m10_002` 的第二列漏了会当场炸在主路径上。** `08` §2.1 要求新建的目标关系行
+> 一律 `added_by = NULL`，而这两列现在都是 `nullable=False`
+> （`m13_001_project_tables.py:103`、`m10_001_task_core_tables.py:199`）——
+> 「接收人原先不是项目成员 / 不是协作人」正是**最常见**的交接场景，不是边角：
+> INSERT 直接 `NotNullViolation`，整批事务回滚成 5xx。
+> 少一条 revision 还会让 AG-00 的 merge 少一个 parent，`alembic upgrade head` 留下双 head。
 
 - **`idempotency_records` 不需要迁移**：既有列已够用（§4.4）。真正需要新表的是 generation 水位。
 - 遵循 `AGENTS.md` 不变量 6：Alembic 是唯一 schema 入口，revision 命名 `mNN_###_description`，
   空库必须可 `upgrade head`，merge revision 只由 AG-00 创建。
 - **本次不新增业务列**（§3.4 已说明为何不给 `WorkRecordRow` 加 owner 列）。
-- downgrade 前置：确认没有 NULL 的 assignment-history actor、没有未消费的 OP outbox 行。
+- downgrade 前置：确认**三列**都没有 NULL（`task_assignment_history.changed_by_dingtalk_user_id`、
+  `task_collaborators.added_by_dingtalk_user_id`、`project_members.added_by_dingtalk_user_id`），
+  且没有未消费的 OP outbox 行。
 
 ## 5. API 改造方案
 
@@ -582,7 +607,7 @@ M06 这一侧只需要知道两件事：
 | 错误码 | HTTP | 触发 | 现状 |
 |---|---|---|---|
 | `WEBHOOK_SIGNATURE_INVALID` | 401 | 验签失败 | 已有 |
-| `HANDOVER_CONFLICT` | 409 | 保留，用于归属改写时的业务冲突、迟到 generation。**快照失效不走这个码**，走 412 `SNAPSHOT_STALE` | 已有 |
+| `HANDOVER_CONFLICT` | 409 | 保留，**仅**用于：人员 sub 无法映射、`overrides` 引用快照外的 `asset_id`、投递冲突、迟到 generation、项目终态（不可恢复的锁）。<br>**快照失效与「归属在 preview 之后变了」都不走这个码**，走 412 `SNAPSHOT_STALE`（契约 §10.5.1 第 4 条）；**审批锁**走 423 | 已有 |
 | `VALIDATION_ERROR` | 422 | 保留，payload 结构不合法 | 已有 |
 | `WEBHOOK_TIMESTAMP_INVALID` | 400 | 时间戳超 300 秒容差 | **补** |
 | `WEBHOOK_PAYLOAD_CONFLICT` | 409 | 同 `(task_id, generation, batch_id)` 不同 payload hash | **补** |
@@ -593,7 +618,7 @@ M06 这一侧只需要知道两件事：
 | `REQUEST_BODY_TOO_LARGE` | 413 | 超 256 KiB | **补** |
 | `SNAPSHOT_STALE` | **412** | `snapshot_token` 与当前数据不一致（§4.3.3） | **补** |
 | `HANDOVER_TEMPORARILY_LOCKED` | **423** | 项目审批锁期间禁止写。**可恢复**：EasyAuth 退回 `pending`，人解除审批后重新预演（`08` §2.4）。领域层照旧抛 `PROJECT_LOCKED(409)`，**M06 在边界转译** —— `PROJECT_LOCKED` 是全局冻结码，不能改它的状态码 | **补** |
-| `RATE_LIMITED` | **429** | `items` 触发限流（契约 §10.4） | **补** |
+| `RATE_LIMITED` | **429** | `items` 触发限流（契约 §10.4），以及 `execute` 撞上 `ProcessingInProgressError`（同幂等键正在处理中，见 `08` §2.3——它与 `IdempotencyConflictError` **共用 `IDEMPOTENCY_CONFLICT` 这个 code**，必须按异常类分流） | **补** |
 
 > **为什么 `EVENT_MODE_MISMATCH` 要独立成码、不并进 `VALIDATION_ERROR`**：
 > 这条校验是契约 §10.1 针对「签名不覆盖 `X-EasyAuth-Event` 头」这一已知弱点的**安全补偿**。
