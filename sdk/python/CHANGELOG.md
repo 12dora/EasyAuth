@@ -3,6 +3,35 @@
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [0.4.0] - 2026-08-10
+
+### Breaking
+
+- 生命周期交接升级为 v2 三事件内核: 新增 `lifecycle.handover.items` 回调;
+  所有 body 必须含 `event_type` 且与 `X-EasyAuth-Event` 一致(校验在 `webhook.test`
+  短路之前); 默认 body 上限由 64 KiB 提升至 **256 KiB**。
+- 回调异常边界改为固定文案「交接回调执行失败，请查看应用日志」, **不再**拼接
+  `str(error)`。
+- 时间戳超窗验签失败映射为 **HTTP 400**(`TIMESTAMP_SKEW` / `INVALID_TIMESTAMP`),
+  与签名不匹配的 403 分离; `WebhookVerificationError` 增加结构化 `reason` 字段。
+
+### Added
+
+- `HandoverBusinessError`: 业务回调可表达 400/409/412/413/422/423/429。
+- `easyauth_app_sdk.handover_payloads` TypedDict(`Preview`/`Items`/`Execute` 的
+  Request/Response; 每个 Request 含 `event_type`)。
+- 包内契约样本 `easyauth_app_sdk/contract_samples/handover_v2/*.json`
+  (via `package-data`, `importlib.resources` 可读)。
+- manifest `lifecycle.handover_asset_types` 白名单放行。
+- `verify_webhook` 支持空 body(异步状态查询 GET 分支)。
+- `get_directory_user_by_authentik_sub` 纯委托别名; 文档明确既有
+  `get_directory_user` 已接受裸 Authentik `sub`。
+
+### Provenance
+
+- 构建提交 C: *(release commit 自身 SHA, 由 provenance 提交回填)*
+- wheel SHA-256: *(由 provenance 提交回填)*
+
 ## [0.3.0] - 2026-07-16
 
 ### Added
