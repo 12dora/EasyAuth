@@ -29,8 +29,9 @@
 
 ### Provenance
 
-- 构建提交 C: *(release commit 自身 SHA, 由 provenance 提交回填)*
-- wheel SHA-256: *(由 provenance 提交回填)*
+- 构建提交 C: `2700b27484f57e779482eff4447f12104afb6e2a`
+- wheel: `sdk/python/dist/easyauth_app_sdk-0.4.0-py3-none-any.whl`
+- wheel SHA-256: `8e3a902328005deb096547904aee767d7ad07b5246fea89a8c489665614192a0`
 
 ## [0.3.0] - 2026-07-16
 
