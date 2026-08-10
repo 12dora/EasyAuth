@@ -10,6 +10,8 @@ from django.http import JsonResponse
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.responses import error_response
 
+# HTTPStatus already imported for reason table + HookCallError mapping
+
 # reason → (HTTP, ErrorCode, 默认中文文案)
 _REASON_TABLE: Final[dict[str, tuple[int, ErrorCode, str]]] = {
     "out_of_managed_scope": (
@@ -61,6 +63,11 @@ _REASON_TABLE: Final[dict[str, tuple[int, ErrorCode, str]]] = {
         HTTPStatus.UNPROCESSABLE_ENTITY,
         ErrorCode.SEMANTIC_VALIDATION_ERROR,
         "接收人不能是当事人本人。",
+    ),
+    "grant_receiver_not_allowed": (
+        HTTPStatus.UNPROCESSABLE_ENTITY,
+        ErrorCode.SEMANTIC_VALIDATION_ERROR,
+        "仅 offboard 允许设置 grant_receiver。",
     ),
     "receiver_required": (
         HTTPStatus.UNPROCESSABLE_ENTITY,
@@ -200,6 +207,20 @@ def map_handover_exception(error: BaseException) -> JsonResponse | None:
     """将 domain 异常映射为 §6.1 响应; 无法识别时返回 None。"""
     from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
     from easyauth.lifecycle.lease import HANDOVER_EXECUTION_IN_FLIGHT
+    from easyauth.webhooks.hooks import HookCallError
+
+    if isinstance(error, HookCallError):
+        # 按 status_code 映射, 不用字符串子串(items / execute / preview 共用)
+        status = error.status_code
+        if status == HTTPStatus.PRECONDITION_FAILED:  # 412
+            return reason_error("snapshot_stale")
+        if status == HTTPStatus.REQUEST_ENTITY_TOO_LARGE:  # 413
+            return reason_error("payload_too_large")
+        if status == HTTPStatus.LOCKED:  # 423
+            return reason_error("downstream_locked")
+        if status == HTTPStatus.TOO_MANY_REQUESTS:  # 429
+            return reason_error("rate_limited")
+        return None
 
     text = str(error).strip()
     if isinstance(error, HandoverConflictError):
@@ -216,5 +237,12 @@ def map_handover_exception(error: BaseException) -> JsonResponse | None:
     if isinstance(error, HandoverError):
         if text in _REASON_TABLE:
             return reason_error(text)
+        # 中文消息回落: 下游 HTTP 提示
+        if "412" in text:
+            return reason_error("snapshot_stale")
+        if "413" in text:
+            return reason_error("payload_too_large")
+        if "423" in text:
+            return reason_error("downstream_locked")
         return None
     return None

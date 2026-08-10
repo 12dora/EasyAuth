@@ -87,7 +87,7 @@ class ReassignPayload(BaseModel):
 
     subject_user_id: str = Field(min_length=1, max_length=128)
     app_keys: list[str] = Field(min_length=1)
-    reason: str = Field(min_length=1, max_length=2000)
+    reason: str = Field(default="", max_length=2000)
 
 
 class AssetTypePatchPayload(BaseModel):
@@ -198,6 +198,7 @@ def portal_handover_pre_offboard(request: HttpRequest) -> JsonResponse:
             reason=payload.reason,
             creation_idempotency_key=idem,
             creation_payload_sha256=body_hash,
+            raise_on_existing=True,
         )
     except (HandoverConflictError, HandoverError) as error:
         text = str(error)

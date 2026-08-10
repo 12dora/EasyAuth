@@ -145,3 +145,53 @@ def test_ensure_offboard_upgrades_open_pre_offboard() -> None:
     assert upgraded.pk == task.pk
     assert upgraded.kind == HANDOVER_KIND_OFFBOARD
     assert upgraded.generation == gen + 1
+
+
+def test_upgrade_reinvents_new_app_action_granted_during_window() -> None:
+    """pre_offboard 窗口内新获授权的 undeclared APP 必须在升级时出现 blocked action。"""
+    from easyauth.applications.models import AppScope, Permission
+    from easyauth.grants.models import AccessGrant, AccessGrantPermission
+
+    subject = _subject("up-new-app")
+    app_a = _app("easytrade-a", capability="declared")
+    task, created = ensure_handover_task(
+        subject=subject,
+        kind=HANDOVER_KIND_PRE_OFFBOARD,
+        created_by=subject.authentik_user_id,
+        reason="提前交接",
+        app_keys=(app_a.app_key,),
+    )
+    assert created
+    assert HandoverAppAction.objects.filter(task=task).count() == 1
+
+    # 窗口内获得新 APP 授权(undeclared)
+    new_app = App.objects.create(app_key="late-app", name="late", handover_capability="undeclared")
+    _ = AppScope.objects.create(app=new_app, key="GLOBAL", name="全局")
+    perm = Permission.objects.create(
+        app=new_app,
+        key="x.view",
+        name="x",
+        supported_scopes=["GLOBAL"],
+    )
+    grant = AccessGrant.objects.create(
+        user=subject,
+        app=new_app,
+        status="active",
+        is_current=True,
+        version=1,
+    )
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=perm,
+        scope_key="GLOBAL",
+    )
+
+    upgraded = upgrade_pre_offboard_to_offboard(
+        task,
+        created_by="directory_sync",
+        reason="目录同步检出离职",
+    )
+    assert upgraded.kind == HANDOVER_KIND_OFFBOARD
+    late = HandoverAppAction.objects.filter(task=upgraded, app=new_app).first()
+    assert late is not None
+    assert late.status == ACTION_STATUS_BLOCKED

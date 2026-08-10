@@ -23,10 +23,7 @@ from easyauth.admin_console.api_responses import (
 from easyauth.admin_console.authz import require_superuser
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue
-from easyauth.applications.handover_capability import (
-    declare_handover_none,
-    sync_handover_capability_from_manifest,
-)
+from easyauth.applications.handover_capability import declare_handover_none
 from easyauth.applications.models import App
 from easyauth.lifecycle.api_errors import map_handover_exception, reason_error
 from easyauth.lifecycle.api_payloads import (
@@ -106,7 +103,7 @@ class ReassignPayload(BaseModel):
 
     subject_user_id: str = Field(min_length=1, max_length=128)
     app_keys: list[str] = Field(min_length=1)
-    reason: str = Field(min_length=1, max_length=2000)
+    reason: str = Field(default="", max_length=2000)
 
 
 class ResolveReplacementPayload(BaseModel):
@@ -185,10 +182,20 @@ def console_handover_claim(request: HttpRequest, task_id: int) -> JsonResponse:
     task = HandoverTask.objects.filter(pk=task_id).first()
     if task is None:
         return _not_found()
-    if task.assignee_state != ASSIGNEE_STATE_SUPERUSER_POOL or task.status not in TASK_OPEN_STATUSES:
-        return reason_error("action_not_operable", "仅超管池中的进行中单据可认领。")
     with transaction.atomic():
-        locked = HandoverTask.objects.select_for_update().get(pk=task.pk)
+        locked = (
+            HandoverTask.objects.select_for_update()
+            .filter(pk=task.pk)
+            .first()
+        )
+        if locked is None:
+            return _not_found()
+        # 状态校验必须在行锁内, 防止双超管抢领/认领已关闭单(§6.3)
+        if (
+            locked.assignee_state != ASSIGNEE_STATE_SUPERUSER_POOL
+            or locked.status not in TASK_OPEN_STATUSES
+        ):
+            return reason_error("action_not_operable", "仅超管池中的进行中单据可认领。")
         _ = apply_assignee(
             locked,
             AssigneeResolution(
@@ -313,7 +320,10 @@ def console_handover_defer(request: HttpRequest, task_id: int) -> JsonResponse:
             action="handover_task_deferred",
             actor_id=actor_id,
             actor_type="admin",
-            extra={"reason": payload.reason.strip()},
+            extra={
+                "reason": payload.reason.strip(),
+                "escalation_level": locked.escalation_level,
+            },
         )
     locked.refresh_from_db()
     return json_response({"handover_task": task_detail(locked, surface=SURFACE_CONSOLE)})
@@ -378,6 +388,7 @@ def console_approval_rule_replacements(request: HttpRequest) -> JsonResponse:
         qs = qs.filter(resolved_at__isnull=True)
     elif resolved_raw in {"true", "1"}:
         qs = qs.filter(resolved_at__isnull=False)
+    total = qs.count()
     items = []
     for row in qs.order_by("-created_at", "-id")[:200]:
         items.append(
@@ -395,7 +406,7 @@ def console_approval_rule_replacements(request: HttpRequest) -> JsonResponse:
                 "created_at": datetime_value(row.created_at),
             },
         )
-    return json_response({"items": items, "total": len(items)})
+    return json_response({"items": items, "total": total})
 
 
 def console_approval_rule_replacement_resolve(
@@ -532,7 +543,12 @@ def console_handover_candidates(request: HttpRequest, task_id: int) -> JsonRespo
     if actor is None:
         actor = task.subject_user
     q = request.GET.get("q", "")
-    users = list_receiver_candidates(actor, subject=task.subject_user, q=q)
+    users = list_receiver_candidates(
+        actor,
+        subject=task.subject_user,
+        q=q,
+        exclude_actor=False,
+    )
     return json_response(
         {
             "items": [
@@ -819,16 +835,59 @@ def console_handover_capability_sync(request: HttpRequest, app_key: str) -> Json
     app = App.objects.filter(app_key=app_key).first()
     if app is None:
         return _not_found()
-    # 手动同步: 用当前 webhook 配置刷新 declared 状态
+    # §5.2 / §6.3: 走既有 manifest 拉取路径, 禁止用本地 webhook 配置伪造 capability
     config = AppWebhookConfig.objects.filter(app=app).first()
+    base_url = _derive_app_base_url(config)
+    if not base_url:
+        return error_response(
+            ErrorCode.SEMANTIC_VALIDATION_ERROR,
+            "应用未配置可拉取的 base_url(handover/onboard/callback URL 均缺失)。",
+            {"reason": "base_url_required"},
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+        )
+    try:
+        from easyauth.admin_console.auto_onboarding_api import (
+            AutoOnboardingError,
+            _fetch_descriptor,
+            _validated_manifest,
+        )
+        from easyauth.applications.manifest_import import (
+            ManifestVersionConflictError,
+            sync_app_manifest,
+        )
+        from easyauth.applications.permission_templates import PermissionTemplateImportError
 
-    class _Lifecycle:
-        capabilities = ("handover.v2",) if config and config.handover_url else ()
-        handover_url = config.handover_url if config else ""
-        handover_asset_types = app.handover_asset_types or []
-
-    sync_handover_capability_from_manifest(app, _Lifecycle(), actor_id=actor_id)
+        descriptor = _fetch_descriptor(base_url, None)
+        manifest = _validated_manifest(descriptor, app.app_key)
+        with transaction.atomic():
+            _ = sync_app_manifest(
+                app=app,
+                manifest=manifest,
+                actor_id=actor_id,
+                downstream_base_url=base_url,
+            )
+    except AutoOnboardingError as exc:
+        return error_response(exc.code, exc.message, status=exc.status)
+    except ManifestVersionConflictError as exc:
+        return error_response(
+            ErrorCode.CONFLICT,
+            str(exc),
+            status=HTTPStatus.CONFLICT,
+        )
+    except PermissionTemplateImportError as exc:
+        return error_response(
+            ErrorCode.SEMANTIC_VALIDATION_ERROR,
+            f"manifest 导入失败: {exc.message}",
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+        )
+    except Exception as exc:  # noqa: BLE001 - 网络/解析失败显式 502
+        return error_response(
+            ErrorCode.DEPENDENCY_UNAVAILABLE,
+            f"descriptor 同步失败: {exc}",
+            status=HTTPStatus.BAD_GATEWAY,
+        )
     app.refresh_from_db()
+    config = AppWebhookConfig.objects.filter(app=app).first()
     return json_response(
         {
             "handover_capability": app.handover_capability,
@@ -839,6 +898,26 @@ def console_handover_capability_sync(request: HttpRequest, app_key: str) -> Json
             "synced_at": datetime_value(app.handover_capability_synced_at),
         },
     )
+
+
+def _derive_app_base_url(config: AppWebhookConfig | None) -> str:
+    """从已配置的下游 URL 反推 origin 作为 descriptor 拉取 base_url。"""
+    if config is None:
+        return ""
+    from urllib.parse import urlparse
+
+    for raw in (
+        config.handover_url,
+        config.onboard_url,
+        config.approval_callback_url,
+    ):
+        value = (raw or "").strip()
+        if not value:
+            continue
+        parsed = urlparse(value)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+    return ""
 
 
 def _action_or_none(task_id: int, app_key: str) -> HandoverAppAction | None:

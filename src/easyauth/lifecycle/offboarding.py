@@ -73,10 +73,12 @@ def ensure_handover_task(
     authority_source: str = "",
     creation_idempotency_key: str = "",
     creation_payload_sha256: str = "",
+    raise_on_existing: bool = False,
 ) -> tuple[HandoverTask, bool]:
     """建单(幂等): 同一当事人已有进行中交接单时直接返回既有单。
 
     offboard 遇到 open pre_offboard → 升级(00 §8.3 / 01 §5.1.2)。
+    ``raise_on_existing=True`` 时同 kind open 单抛 open_task_exists(门户自助)。
     """
     from easyauth.lifecycle.models import (
         AUTHORITY_SOURCE_MANAGER_CHAIN,
@@ -140,6 +142,10 @@ def ensure_handover_task(
                 return upgraded, False
             if existing.kind != kind:
                 raise HandoverConflictError(TASK_KIND_CONFLICT_MESSAGE)
+            # 同 kind open 单: 内部/系统调用可幂等返回; 门户自助建单要求 409 open_task_exists
+            # (01 §6.1), 由 raise_on_existing 区分。
+            if raise_on_existing:
+                raise HandoverConflictError("open_task_exists")
             return existing, False
 
         resolved_authority = authority_source
@@ -284,12 +290,14 @@ def upgrade_pre_offboard_to_offboard(
     for action in actions:
         _ = reset_action_for_upgrade(action, task=task)
 
-    # 重新快照授权(新 generation)
+    # 重新快照授权 + 重新盘点 APP action / 主管团队(00 §8.3 / D7)
     snapshot_grants = _snapshot_grants(
         subject=task.subject_user,
         explicit_grant_ids=snapshot_grant_ids,
     )
     _snapshot_grant_items(task, grants=snapshot_grants)
+    _snapshot_app_actions(task, grants=snapshot_grants, app_keys=None)
+    _snapshot_leader_teams(task)
 
     reassign_approvals_for_departed(
         subject=task.subject_user,
@@ -399,6 +407,7 @@ def _snapshot_app_actions(
     app_keys: tuple[str, ...] | None = None,
 ) -> None:
     # 交接面 = 当事人有授权痕迹的 APP + 已声明交接能力的 APP; reassign 仅限 app_keys。
+    # 升级路径复用: get_or_create, 新发现的 APP 才初始化状态。
     if app_keys is not None:
         apps = list(App.objects.filter(app_key__in=app_keys, is_active=True))
     else:
@@ -417,19 +426,23 @@ def _snapshot_app_actions(
         apps = list(App.objects.filter(id__in=app_ids | capability_app_ids, is_active=True))
     for app in apps:
         status, blocked_reason, skip_reason, skipped_by = initial_action_status_for_app(app)
-        action = HandoverAppAction.objects.create(
+        action, created = HandoverAppAction.objects.get_or_create(
             task=task,
             app=app,
-            app_key_snapshot=app.app_key,
-            app_name_snapshot=app.name,
-            app_catalog_version_snapshot=app.catalog_version,
-            generation=task.generation,
-            status=status,
-            blocked_reason=blocked_reason,
-            skip_reason=skip_reason,
-            skipped_by=skipped_by,
-            skipped_at=timezone.now() if status == ACTION_STATUS_SKIPPED else None,
+            defaults={
+                "app_key_snapshot": app.app_key,
+                "app_name_snapshot": app.name,
+                "app_catalog_version_snapshot": app.catalog_version,
+                "generation": task.generation,
+                "status": status,
+                "blocked_reason": blocked_reason,
+                "skip_reason": skip_reason,
+                "skipped_by": skipped_by,
+                "skipped_at": timezone.now() if status == ACTION_STATUS_SKIPPED else None,
+            },
         )
+        if not created:
+            continue
         if status == ACTION_STATUS_BLOCKED:
             record_task_event(
                 task,
@@ -478,7 +491,7 @@ def _snapshot_leader_teams(task: HandoverTask) -> None:
         team__is_active=True,
     )
     for membership in led_teams:
-        _ = HandoverTeamItem.objects.create(task=task, team=membership.team)
+        _ = HandoverTeamItem.objects.get_or_create(task=task, team=membership.team)
 
 
 def _remove_team_memberships(subject: UserMirror, task: HandoverTask) -> int:

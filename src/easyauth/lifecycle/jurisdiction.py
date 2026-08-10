@@ -139,11 +139,18 @@ def list_receiver_candidates(
     subject: UserMirror | None = None,
     q: str = "",
     limit: int = 50,
+    exclude_actor: bool = True,
 ) -> list[UserMirror]:
-    """purpose=receiver: active 且非本人、非本地管理员; 可选排除 subject。"""
+    """purpose=receiver: active、非本地管理员; 可选排除 actor / subject。
+
+    控制台 candidates(§6.3) 只排除 subject, 允许超管把自己列为接收人
+    (``exclude_actor=False``)。
+    """
     qs = UserMirror.objects.filter(status=USER_STATUS_ACTIVE).exclude(
-        authentik_user_id=actor.authentik_user_id,
-    ).exclude(authentik_user_id__startswith=LOCAL_ADMIN_SUBJECT_PREFIX)
+        authentik_user_id__startswith=LOCAL_ADMIN_SUBJECT_PREFIX,
+    )
+    if exclude_actor:
+        qs = qs.exclude(authentik_user_id=actor.authentik_user_id)
     if subject is not None:
         qs = qs.exclude(pk=subject.pk)
     q_stripped = q.strip()

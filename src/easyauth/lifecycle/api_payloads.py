@@ -58,19 +58,55 @@ def user_ref(user: UserMirror | None, *, include_status: bool = False) -> JsonOb
     return payload
 
 
-def escalation_payload(task: HandoverTask) -> JsonObject:
+def escalation_payload(
+    task: HandoverTask,
+    *,
+    include_defer_history: bool = False,
+) -> JsonObject:
     deadline = task.escalation_deadline
     days_left: int | None = None
     if deadline is not None and task.assignee_state != ASSIGNEE_STATE_SUPERUSER_POOL:
         delta = deadline - timezone.now()
         days_left = max(0, int(delta.total_seconds() // 86400))
+    history: list[JsonObject] = []
+    if include_defer_history:
+        history = _defer_history_for_task(task)
     return {
         "deadline": datetime_value(deadline),
         "days_left": days_left,
         "level": task.escalation_level,
         "deferred_at": datetime_value(task.escalation_deferred_at),
-        "defer_history": [],  # 由审计事件生成; 列表端点不强制扫审计
+        "defer_history": history,  # type: ignore[dict-item]
     }
+
+
+def _defer_history_for_task(task: HandoverTask) -> list[JsonObject]:
+    """从审计事件还原顺延责任链(01 §6.2 / §6.3)。"""
+    from easyauth.audit.models import AuditLog
+
+    rows = AuditLog.objects.filter(
+        event_type="handover_task_deferred",
+        target_type="handover_task",
+        target_id=str(task.id),
+    ).order_by("created_at", "id")
+    history: list[JsonObject] = []
+    for row in rows:
+        meta = row.metadata if isinstance(row.metadata, dict) else {}
+        level = meta.get("escalation_level", task.escalation_level)
+        if not isinstance(level, int):
+            try:
+                level = int(level)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                level = task.escalation_level
+        history.append(
+            {
+                "escalation_level": level,
+                "actor_id": row.actor_id,
+                "at": datetime_value(row.created_at),
+                "reason": str(meta.get("reason", "") or ""),
+            },
+        )
+    return history
 
 
 def task_list_item(task: HandoverTask) -> JsonObject:
@@ -202,7 +238,7 @@ def task_detail(task: HandoverTask, *, surface: str = SURFACE_CONSOLE) -> JsonOb
         "assignee": user_ref(task.assignee),
         "assignee_state": task.assignee_state,
         "escalation_level": task.escalation_level,
-        "escalation": escalation_payload(task),
+        "escalation": escalation_payload(task, include_defer_history=True),
         "reason": task.reason,
         "created_at": datetime_value(task.created_at),
         "actions": actions_payload,
@@ -289,56 +325,18 @@ def batch_progress(action: HandoverAppAction) -> JsonObject | None:
 
 
 def aggregated_summary(action: HandoverAppAction) -> JsonObject | None:
-    """各批成功 delivery 的 summary 逐字段相加(00 §10.5)。"""
+    """各批 summary 逐字段相加的权威值: 直接读 action.result_summary(00 §10.5)。
+
+    delivery.response_payload 经 redactor 后可能丢嵌套计数; result_summary 由
+    ``_merge_result_summary`` 在 complete_data_phase 中维护, 是 API 侧真相源。
+    """
     if action.status != ACTION_STATUS_DONE and action.data_completed_at is None:
-        # 进行中不展示; done 或 data 已完成时可能有部分 summary
         if action.status not in {ACTION_STATUS_DONE, ACTION_STATUS_FAILED}:
             return None
-    batches = HandoverExecutionBatch.objects.filter(
-        action=action,
-        generation=action.generation,
-        status__in={BATCH_STATUS_DONE, "data_completed"},
-    )
-    totals: dict[str, dict[str, int]] = {}
-    found = False
-    for batch in batches:
-        delivery = (
-            HandoverDeliveryAttempt.objects.filter(
-                batch=batch,
-                outcome=DELIVERY_OUTCOME_SUCCEEDED,
-            )
-            .order_by("-id")
-            .first()
-        )
-        if delivery is None:
-            continue
-        payload = delivery.response_payload or {}
-        summary = payload.get("summary")
-        if not isinstance(summary, dict):
-            # _redact 会把 summary 嵌在 summary.summary
-            nested = payload.get("summary")
-            if isinstance(nested, dict) and isinstance(nested.get("summary"), dict):
-                summary = nested["summary"]
-            else:
-                continue
-        found = True
-        for type_key, row in summary.items():
-            if not isinstance(type_key, str) or not isinstance(row, dict):
-                continue
-            bucket = totals.setdefault(
-                type_key,
-                {"transferred": 0, "released": 0, "skipped": 0, "merged": 0, "failed": 0},
-            )
-            for field in bucket:
-                val = row.get(field, 0)
-                if isinstance(val, int):
-                    bucket[field] += val
-    if not found:
-        stored = getattr(action, "result_summary", None)
-        if isinstance(stored, dict) and stored:
-            return stored  # type: ignore[return-value]
-        return None
-    return totals  # type: ignore[return-value]
+    stored = getattr(action, "result_summary", None)
+    if isinstance(stored, dict) and stored:
+        return stored  # type: ignore[return-value]
+    return None
 
 
 def allowed_actions_for(action: HandoverAppAction, *, surface: str) -> list[str]:
