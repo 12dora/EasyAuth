@@ -54,6 +54,24 @@ from easyauth.admin_console.credentials_disable_api import (
     console_credential_disable,
     console_static_token_disable,
 )
+from easyauth.admin_console.handover_v2_api import (
+    console_approval_rule_replacement_resolve,
+    console_approval_rule_replacements,
+    console_handover_action_patch,
+    console_handover_app_options,
+    console_handover_asset_type,
+    console_handover_async_abandon,
+    console_handover_blocked_apps,
+    console_handover_candidates,
+    console_handover_capability,
+    console_handover_capability_sync,
+    console_handover_claim,
+    console_handover_defer,
+    console_handover_errors_raw,
+    console_handover_items,
+    console_handover_overrides,
+    console_handover_reassign,
+)
 from easyauth.admin_console.lifecycle_api import (
     lifecycle_action_operation,
     lifecycle_grant_diff,
@@ -240,14 +258,95 @@ urlpatterns = [
         name="lifecycle-handover-tasks",
     ),
     path(
+        "api/v1/lifecycle/handover-tasks/reassign",
+        console_handover_reassign,
+        name="lifecycle-handover-reassign",
+    ),
+    path(
+        "api/v1/lifecycle/handover-blocked-apps",
+        console_handover_blocked_apps,
+        name="lifecycle-handover-blocked-apps",
+    ),
+    path(
+        "api/v1/lifecycle/handover-app-options",
+        console_handover_app_options,
+        name="lifecycle-handover-app-options",
+    ),
+    path(
+        "api/v1/lifecycle/approval-rule-replacements",
+        console_approval_rule_replacements,
+        name="lifecycle-approval-rule-replacements",
+    ),
+    path(
+        "api/v1/lifecycle/approval-rule-replacements/<int:replacement_id>/resolve",
+        console_approval_rule_replacement_resolve,
+        name="lifecycle-approval-rule-replacement-resolve",
+    ),
+    path(
+        "api/v1/lifecycle/apps/<str:app_key>/handover-capability",
+        console_handover_capability,
+        name="lifecycle-handover-capability",
+    ),
+    path(
+        "api/v1/lifecycle/apps/<str:app_key>/handover-capability/sync",
+        console_handover_capability_sync,
+        name="lifecycle-handover-capability-sync",
+    ),
+    path(
         "api/v1/lifecycle/handover-tasks/<int:task_id>",
         lifecycle_handover_task_detail,
         name="lifecycle-handover-task-detail",
     ),
     path(
+        "api/v1/lifecycle/handover-tasks/<int:task_id>/claim",
+        console_handover_claim,
+        name="lifecycle-handover-claim",
+    ),
+    path(
+        "api/v1/lifecycle/handover-tasks/<int:task_id>/escalation/defer",
+        console_handover_defer,
+        name="lifecycle-handover-defer",
+    ),
+    path(
+        "api/v1/lifecycle/handover-tasks/<int:task_id>/candidates",
+        console_handover_candidates,
+        name="lifecycle-handover-candidates",
+    ),
+    path(
         "api/v1/lifecycle/handover-tasks/<int:task_id>/grant-items",
         lifecycle_grant_items,
         name="lifecycle-grant-items",
+    ),
+    # 两段路径必须在动态 <operation> 之前(01 §6.3 errors/raw 陷阱)。
+    path(
+        "api/v1/lifecycle/handover-tasks/<int:task_id>/actions/<str:app_key>/errors/raw",
+        console_handover_errors_raw,
+        name="lifecycle-handover-errors-raw",
+    ),
+    path(
+        "api/v1/lifecycle/handover-tasks/<int:task_id>/actions/<str:app_key>/async-abandon",
+        console_handover_async_abandon,
+        name="lifecycle-handover-async-abandon",
+    ),
+    path(
+        "api/v1/lifecycle/handover-tasks/<int:task_id>/actions/<str:app_key>/assets/<str:asset_type>/items",
+        console_handover_items,
+        name="lifecycle-handover-items",
+    ),
+    path(
+        "api/v1/lifecycle/handover-tasks/<int:task_id>/actions/<str:app_key>/assets/<str:asset_type>/overrides",
+        console_handover_overrides,
+        name="lifecycle-handover-overrides",
+    ),
+    path(
+        "api/v1/lifecycle/handover-tasks/<int:task_id>/actions/<str:app_key>/assets/<str:asset_type>",
+        console_handover_asset_type,
+        name="lifecycle-handover-asset-type",
+    ),
+    path(
+        "api/v1/lifecycle/handover-tasks/<int:task_id>/actions/<str:app_key>",
+        console_handover_action_patch,
+        name="lifecycle-handover-action-patch",
     ),
     path(
         "api/v1/lifecycle/handover-tasks/<int:task_id>/actions/<str:app_key>/<str:operation>",

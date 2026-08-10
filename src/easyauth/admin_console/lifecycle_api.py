@@ -29,6 +29,13 @@ from easyauth.api.pagination import pagination_item
 from easyauth.applications.models import App, AuthorizationGroup, Permission
 from easyauth.lifecycle.core import refresh_task_status
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
+from easyauth.lifecycle.api_errors import map_handover_exception, reason_error
+from easyauth.lifecycle.api_payloads import (
+    SURFACE_CONSOLE,
+    action_item as v2_action_item,
+    console_task_list_item,
+    task_detail as v2_task_detail,
+)
 from easyauth.lifecycle.handover import (
     apply_team_item,
     cancel_task,
@@ -38,9 +45,10 @@ from easyauth.lifecycle.handover import (
     preview_action,
     retry_action,
     skip_action,
-    update_action_receiver,
 )
 from easyauth.lifecycle.models import (
+    ACTION_STATUS_BLOCKED,
+    ASSIGNEE_STATE_VALUES,
     HANDOVER_KIND_VALUES,
     TASK_STATUS_VALUES,
     HandoverAppAction,
@@ -82,18 +90,6 @@ class HandoverTaskCreatePayload(BaseModel):
     reason: str = Field(default="", max_length=2000)
 
 
-class ActionReceiverPayload(BaseModel):
-    model_config: ClassVar[ConfigDict] = ConfigDict(
-        extra="forbid",
-        frozen=True,
-        str_strip_whitespace=True,
-    )
-
-    app_key: str = Field(min_length=1, max_length=64)
-    to_user_id: str | None = Field(default=None, max_length=128)
-    release_to_pool: bool = False
-
-
 class HandoverTaskPatchPayload(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(
         extra="forbid",
@@ -101,8 +97,24 @@ class HandoverTaskPatchPayload(BaseModel):
         str_strip_whitespace=True,
     )
 
+    # 01 §6.3: app_actions 字段整体删除, 只保留 cancel。
     cancel: bool = False
-    app_actions: list[ActionReceiverPayload] = Field(default_factory=list)
+
+
+class SkipReasonPayload(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        str_strip_whitespace=True,
+    )
+
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class ExecuteConfirmPayload(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
+
+    confirm_version: int = Field(ge=0)
 
 
 class GrantItemSelectionPayload(BaseModel):
@@ -201,7 +213,7 @@ def lifecycle_handover_tasks(request: HttpRequest) -> JsonResponse:
             page = paginate_queryset(queryset, request.GET)
         except OperationFilterValidationError as exc:
             return operation_filter_error_response(exc)
-        items: list[JsonValue] = [_task_item(task) for task in page.items]
+        items: list[JsonValue] = [console_task_list_item(task) for task in page.items]
         return json_response(
             paginated_list_payload(
                 items=items,
@@ -230,14 +242,34 @@ def _filter_handover_tasks(
         )
     kind = request.GET.get("kind", "").strip()
     if kind in HANDOVER_KIND_VALUES:
-        return queryset.filter(kind=kind)
-    if kind:
+        queryset = queryset.filter(kind=kind)
+    elif kind:
         return operation_filter_error_response(
             OperationFilterValidationError(
                 key="kind",
                 value=kind,
-                message="kind 必须为 offboard 或 transfer。",
+                message="kind 必须为 offboard、transfer、pre_offboard 或 reassign。",
             ),
+        )
+    assignee_state = request.GET.get("assignee_state", "").strip()
+    if assignee_state:
+        if assignee_state not in ASSIGNEE_STATE_VALUES:
+            return error_response(
+                ErrorCode.SEMANTIC_VALIDATION_ERROR,
+                "assignee_state 枚举非法。",
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
+            )
+        queryset = queryset.filter(assignee_state=assignee_state)
+    blocked = request.GET.get("blocked", "").strip().lower()
+    if blocked in {"true", "1"}:
+        queryset = queryset.filter(app_actions__status=ACTION_STATUS_BLOCKED).distinct()
+    elif blocked in {"false", "0"}:
+        queryset = queryset.exclude(app_actions__status=ACTION_STATUS_BLOCKED).distinct()
+    elif blocked:
+        return error_response(
+            ErrorCode.SEMANTIC_VALIDATION_ERROR,
+            "blocked 必须为 true 或 false。",
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
         )
     return queryset
 
@@ -255,7 +287,7 @@ def lifecycle_handover_task_detail(  # noqa: PLR0911 - HTTP 分支在入口显�
     if task is None:
         return _not_found("交接单不存在。")
     if request.method == "GET":
-        return json_response({"handover_task": _task_detail(task)})
+        return json_response({"handover_task": v2_task_detail(task, surface=SURFACE_CONSOLE)})
     if request.method == "PATCH":
         return _patch_task(request, task, actor_id)
     if request.method == "DELETE":
@@ -387,7 +419,12 @@ def lifecycle_action_operation(
     )
     if action is None:
         return _not_found("交接单中不存在该应用。")
-    return _run_action_operation(action, operation=operation, actor_id=actor_id)
+    return _run_action_operation(
+        action,
+        operation=operation,
+        actor_id=actor_id,
+        request=request,
+    )
 
 
 def _run_action_operation(
@@ -395,29 +432,78 @@ def _run_action_operation(
     *,
     operation: str,
     actor_id: str,
+    request: HttpRequest | None = None,
 ) -> JsonResponse:
     try:
         if operation == "preview":
+            if action.status == ACTION_STATUS_BLOCKED:
+                return reason_error("action_blocked")
             action = preview_action(action)
         elif operation == "retry" and action.status == "async_pending":
             action = poll_async_action(action)
         elif operation == "execute":
-            action = execute_action(action)
+            if action.status == ACTION_STATUS_BLOCKED:
+                return reason_error("action_blocked")
+            confirm_version: int | None = None
+            if request is not None and request.body:
+                try:
+                    body = ExecuteConfirmPayload.model_validate_json(request.body)
+                    confirm_version = body.confirm_version
+                except ValidationError:
+                    return error_response(
+                        ErrorCode.VALIDATION_ERROR,
+                        "confirm_version 必填。",
+                        status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                    )
+            else:
+                return error_response(
+                    ErrorCode.VALIDATION_ERROR,
+                    "confirm_version 必填。",
+                    status=HTTPStatus.UNPROCESSABLE_ENTITY,
+                )
+            action = execute_action(action, confirm_version=confirm_version)
         elif operation == "retry":
             action = retry_action(action)
         elif operation == "skip":
-            action = skip_action(action, actor_id=actor_id)
+            reason = ""
+            if request is not None and request.body:
+                try:
+                    body = SkipReasonPayload.model_validate_json(request.body)
+                    reason = body.reason.strip()
+                except ValidationError:
+                    return reason_error("reason_required")
+            if len(reason) < 10:
+                return reason_error("reason_required")
+            action = skip_action(action, actor_id=actor_id, reason=reason)
         else:
             return _validation_error("操作必须为 preview、execute、retry 或 skip。")
     except HandoverConflictError as error:
-        return error_response(
-            ErrorCode.SEMANTIC_VALIDATION_ERROR,
+        mapped = map_handover_exception(error)
+        return mapped or error_response(
+            ErrorCode.CONFLICT,
             str(error),
+            {"reason": str(error)},
             status=HTTPStatus.CONFLICT,
         )
     except (HandoverError, HookCallError) as error:
-        return _validation_error(str(error))
-    return json_response({"app_action": _action_item(action)})
+        mapped = map_handover_exception(error)
+        if mapped is not None:
+            return mapped
+        text = str(error)
+        if "412" in text:
+            return reason_error("snapshot_stale")
+        if "413" in text:
+            from easyauth.lifecycle.api_payloads import batch_progress
+
+            action.refresh_from_db()
+            return reason_error(
+                "payload_too_large",
+                details={"batch_progress": batch_progress(action)},
+            )
+        if "423" in text:
+            return reason_error("downstream_locked")
+        return _validation_error(text)
+    return json_response({"action": v2_action_item(action, surface=SURFACE_CONSOLE)})
 
 
 def lifecycle_team_item_detail(
@@ -678,7 +764,10 @@ def _create_task(request: HttpRequest, actor_id: str) -> JsonResponse:
             reason=payload.reason,
         )
     status = HTTPStatus.CREATED if created else HTTPStatus.OK
-    return json_response({"handover_task": _task_detail(task)}, status=status)
+    return json_response(
+        {"handover_task": v2_task_detail(task, surface=SURFACE_CONSOLE)},
+        status=status,
+    )
 
 
 def _patch_task(request: HttpRequest, task: HandoverTask, actor_id: str) -> JsonResponse:
@@ -695,8 +784,13 @@ def _patch_task(request: HttpRequest, task: HandoverTask, actor_id: str) -> Json
                 str(error),
                 status=HTTPStatus.CONFLICT,
             )
-        return json_response({"handover_task": _task_detail(task)})
-    return _patch_receiver_batch(task, payload.app_actions)
+        return json_response(
+            {"handover_task": v2_task_detail(task, surface=SURFACE_CONSOLE)},
+        )
+    # app_actions 已删除: 无 cancel 的 PATCH 无操作, 返回最新详情。
+    return json_response(
+        {"handover_task": v2_task_detail(task, surface=SURFACE_CONSOLE)},
+    )
 
 
 def _patch_receiver_batch(

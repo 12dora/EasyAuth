@@ -15,8 +15,22 @@ from easyauth.portal.approvals_api import (
     portal_approval_reject,
     portal_approvals,
 )
+from easyauth.portal.handover_api import (
+    portal_handover_action_operation,
+    portal_handover_action_patch,
+    portal_handover_app_options,
+    portal_handover_asset_type,
+    portal_handover_candidates,
+    portal_handover_items,
+    portal_handover_overrides,
+    portal_handover_pre_offboard,
+    portal_handover_reassign,
+    portal_handover_task_detail,
+    portal_me_handover_tasks,
+)
 from easyauth.portal.views import portal_home, portal_react_route
 
+# 交接 path 必须在 portal-home / catch-all 之前(01 §6.1 硬规定 4)。
 urlpatterns = [
     path("api/v1/me/grants", portal_grants, name="portal-api-grants"),
     path("api/v1/me/grants/expiring", portal_expiring_grants, name="portal-api-expiring-grants"),
@@ -47,6 +61,75 @@ urlpatterns = [
         name="portal-api-approval-reject",
     ),
     path("api/v1/request-catalog", portal_request_catalog, name="portal-api-request-catalog"),
+    # —— 交接 v2 门户 API(14) ——
+    path(
+        "api/v1/me/handover-tasks",
+        portal_me_handover_tasks,
+        name="portal-api-me-handover-tasks",
+    ),
+    path(
+        "api/v1/handover-tasks/pre-offboard",
+        portal_handover_pre_offboard,
+        name="portal-api-handover-pre-offboard",
+    ),
+    path(
+        "api/v1/handover-tasks/reassign",
+        portal_handover_reassign,
+        name="portal-api-handover-reassign",
+    ),
+    path(
+        "api/v1/handover-tasks/<int:task_id>",
+        portal_handover_task_detail,
+        name="portal-api-handover-task-detail",
+    ),
+    path(
+        "api/v1/handover-tasks/<int:task_id>/actions/<str:app_key>/assets/<str:asset_type>/items",
+        portal_handover_items,
+        name="portal-api-handover-items",
+    ),
+    path(
+        "api/v1/handover-tasks/<int:task_id>/actions/<str:app_key>/assets/<str:asset_type>/overrides",
+        portal_handover_overrides,
+        name="portal-api-handover-overrides",
+    ),
+    path(
+        "api/v1/handover-tasks/<int:task_id>/actions/<str:app_key>/assets/<str:asset_type>",
+        portal_handover_asset_type,
+        name="portal-api-handover-asset-type",
+    ),
+    path(
+        "api/v1/handover-tasks/<int:task_id>/actions/<str:app_key>/preview",
+        portal_handover_action_operation,
+        {"operation": "preview"},
+        name="portal-api-handover-preview",
+    ),
+    path(
+        "api/v1/handover-tasks/<int:task_id>/actions/<str:app_key>/execute",
+        portal_handover_action_operation,
+        {"operation": "execute"},
+        name="portal-api-handover-execute",
+    ),
+    path(
+        "api/v1/handover-tasks/<int:task_id>/actions/<str:app_key>/retry",
+        portal_handover_action_operation,
+        {"operation": "retry"},
+        name="portal-api-handover-retry",
+    ),
+    path(
+        "api/v1/handover-tasks/<int:task_id>/actions/<str:app_key>",
+        portal_handover_action_patch,
+        name="portal-api-handover-action-patch",
+    ),
+    path(
+        "api/v1/handover-app-options",
+        portal_handover_app_options,
+        name="portal-api-handover-app-options",
+    ),
+    path(
+        "api/v1/handover-candidates",
+        portal_handover_candidates,
+        name="portal-api-handover-candidates",
+    ),
     path("", portal_home, name="portal-home"),
     path("<path:_portal_path>", portal_react_route, name="portal-react-route"),
 ]
