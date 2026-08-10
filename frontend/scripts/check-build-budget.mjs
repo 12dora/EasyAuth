@@ -13,7 +13,8 @@ const DEFAULT_BUDGETS = {
   synchronousChunkGzipBytes: 110 * 1024,
   asyncChunkRawBytes: 140 * 1024,
   asyncChunkGzipBytes: 40 * 1024,
-  totalJavaScriptRawBytes: 900 * 1024,
+  // 数据交接 v2 门户/共享组件落地后总量上调；见 docs/operations/frontend-build-budget.md
+  totalJavaScriptRawBytes: 960 * 1024,
 };
 
 const REQUIRED_DYNAMIC_ROUTE_KEYS = [
@@ -31,6 +32,8 @@ const REQUIRED_DYNAMIC_ROUTE_KEYS = [
   "src/pages/console/lifecycle/OnboardingPage.tsx",
   "src/pages/console/onboarding/AppOnboardingWizard.tsx",
   "src/pages/portal/PortalPage.tsx",
+  "src/pages/portal/PortalHandoverList.tsx",
+  "src/pages/portal/PortalHandoverDetail.tsx",
 ];
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
