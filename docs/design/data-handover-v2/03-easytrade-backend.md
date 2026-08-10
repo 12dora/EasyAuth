@@ -601,6 +601,14 @@ golden 样本的取用方式：**随 SDK 一起分发**，作为 `easyauth_app_s
    并验证五项能力可用：items 回调、`handover_payloads`、256 KiB、
    `manifest.py` 放行 `handover_asset_types`、`HandoverBusinessError`。
    **这一步没做完，后面每一步都只能造本地 shim，之后再返工。**
+0.5. **§3.6 第 3 步的三条反向锁路径整改，单独出一个 PR 先合。**
+   活动 update/delete、订单经 `derive_stage()` 改询盘、样品删除 —— 三处的加锁方向与本设计相反，
+   交接一上线就会与它们并发死锁（PostgreSQL 会回滚其中一方，交接侧表现为 5xx）。
+
+   > **必须单独成 PR，不要混进交接的改动里。** 它改的是**既有业务路径**，
+   > 回归面比交接代码本身大，混在一起 review 会无从下手；
+   > 而且它与 SDK 升级无关，**可以与第 0 步并行做**。
+
 1. ~~§3.1 修 B3~~ —— 本期取消（代管废弃）
 2. §3.3 资产注册表 + §3.2 descriptor（两者共用常量，必须同一提交）
 3. §3.4 preview + §3.5 items + §3.5.1 snapshot_token
