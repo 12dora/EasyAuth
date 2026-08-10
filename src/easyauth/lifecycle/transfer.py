@@ -67,7 +67,7 @@ def build_transfer_grant_diff(
         if plan.confirmed_at is not None:
             raise HandoverConflictError(TRANSFER_CONFIRMATION_CONFLICT_MESSAGE)
         template = (
-            OnboardingTemplate.objects.select_for_update()
+            OnboardingTemplate.objects.select_for_update(of=("self",))
             .select_related("current_revision")
             .get(pk=template.id)
         )
@@ -136,7 +136,7 @@ def confirm_transfer_grant_diff(
         if task.kind != HANDOVER_KIND_TRANSFER:
             raise HandoverConflictError(TRANSFER_TASK_REQUIRED_MESSAGE)
         plan = (
-            TransferPlan.objects.select_for_update()
+            TransferPlan.objects.select_for_update(of=("self",))
             .select_related("new_template", "new_template_revision")
             .get(task=task)
         )
@@ -150,6 +150,16 @@ def confirm_transfer_grant_diff(
                 return plan
             raise HandoverConflictError(TRANSFER_CONFIRMATION_CONFLICT_MESSAGE)
         ensure_task_open(task)
+        # 全部数据 action 收敛且无在途租约后才允许改权限(01 §5.5)。
+        from easyauth.lifecycle.core import HANDOVER_DATA_NOT_COMPLETED_MESSAGE
+        from easyauth.lifecycle.lease import action_execution_in_flight
+        from easyauth.lifecycle.models import ACTION_FINISHED_STATUSES, HandoverAppAction
+
+        open_actions = list(HandoverAppAction.objects.filter(task=task))
+        if any(a.status not in ACTION_FINISHED_STATUSES for a in open_actions):
+            raise HandoverConflictError(HANDOVER_DATA_NOT_COMPLETED_MESSAGE)
+        if any(action_execution_in_flight(a) for a in open_actions):
+            raise HandoverConflictError(HANDOVER_DATA_NOT_COMPLETED_MESSAGE)
         if plan.new_template is None or plan.new_template_revision is None:
             message = "请先选择新岗位模板并生成差异清单; 当前方案缺少绑定模板修订。"
             raise HandoverError(message)
@@ -205,11 +215,17 @@ def confirm_transfer_grant_diff(
 
 
 def transfer_selected_grants(action: HandoverAppAction) -> int:
-    """把该 APP 勾选的授权快照转授给接收人; 未勾选的标 skipped(§7 决策 12)。"""
+    """把该 APP 勾选的授权快照转授给接收人; 未勾选的标 skipped(§7 决策 12)。
+
+    同一事务内锁 action 与 grant items, 变更 grant 与 item 状态一起提交。
+    """
     items = list(
-        HandoverGrantItem.objects.select_related("authorization_group", "permission").filter(
+        HandoverGrantItem.objects.select_for_update(of=("self",))
+        .select_related("authorization_group", "permission")
+        .filter(
             task=action.task,
             app=action.app,
+            generation=action.generation,
             status=ITEM_STATUS_PENDING,
         ),
     )
@@ -235,7 +251,7 @@ def transfer_selected_grants(action: HandoverAppAction) -> int:
     _ = HandoverGrantItem.objects.filter(id__in=[i.id for i in expired]).update(
         status=ITEM_STATUS_SKIPPED,
     )
-    receiver = action.execution_to_user
+    receiver = action.grant_receiver
     if receiver is None or not selected:
         _ = HandoverGrantItem.objects.filter(id__in=[i.id for i in selected]).update(
             status=ITEM_STATUS_SKIPPED,

@@ -338,10 +338,10 @@ def lifecycle_grant_items(  # noqa: C901, PLR0911, PLR0912 - HTTP 校验失败�
                 )
                 for action in actions:
                     action.status = "pending"
-                    action.preview_payload = {}
+                    action.snapshot_token = ""
                     action.last_error = ""
                     action.save(
-                        update_fields=["status", "preview_payload", "last_error", "updated_at"],
+                        update_fields=["status", "snapshot_token", "last_error", "updated_at"],
                     )
         return lifecycle_grant_items_readback(task)
     return method_not_allowed_response()
@@ -376,7 +376,12 @@ def lifecycle_action_operation(
     if task is None:
         return _not_found("交接单不存在。")
     action = (
-        HandoverAppAction.objects.select_related("app", "task", "task__subject_user", "to_user")
+        HandoverAppAction.objects.select_related(
+            "app",
+            "task",
+            "task__subject_user",
+            "grant_receiver",
+        )
         .filter(task=task, app__app_key=app_key)
         .first()
     )
@@ -727,13 +732,10 @@ def _patch_receiver_batch(
                 return _validation_error("接收人不存在或已停用。")
 
             for app_key, entry in entries_by_app.items():
-                policy: JsonObject = (
-                    {"unowned_strategy": "release_to_pool"} if entry.release_to_pool else {}
-                )
+                # v2: 权限接收人 grant_receiver; release_to_pool 不再走 policy 字段。
                 _ = update_action_receiver(
                     action=actions_by_app[app_key],
                     to_user=receivers.get(entry.to_user_id or ""),
-                    policy=policy,
                 )
     except HandoverConflictError as error:
         return error_response(
@@ -884,7 +886,7 @@ def _task_detail(task: HandoverTask) -> JsonObject:
     item = _task_item(task)
     actions: list[JsonValue] = [
         _action_item(action)
-        for action in HandoverAppAction.objects.select_related("app", "to_user").filter(
+        for action in HandoverAppAction.objects.select_related("app", "grant_receiver").filter(
             task=task,
         )
     ]
@@ -904,21 +906,28 @@ def _task_detail(task: HandoverTask) -> JsonObject:
 
 
 def _action_item(action: HandoverAppAction) -> JsonObject:
-    to_user = action.to_user
+    grant_receiver = action.grant_receiver
     return {
         "id": action.id,
         "app_key": action.app_key_snapshot,
         "app_name": action.app_name_snapshot,
         "app_catalog_version": action.app_catalog_version_snapshot,
         "status": action.status,
-        "to_user": (
-            {"user_id": to_user.authentik_user_id, "name": to_user.name}
-            if to_user is not None
+        "grant_receiver": (
+            {
+                "user_id": grant_receiver.authentik_user_id,
+                "name": grant_receiver.name,
+            }
+            if grant_receiver is not None
             else None
         ),
-        "policy": action.policy,
-        "preview_payload": action.preview_payload,
-        "result_payload": action.result_payload,
+        "blocked_reason": action.blocked_reason,
+        "skip_reason": action.skip_reason,
+        "confirm_version": action.confirm_version,
+        "overrides_version": action.overrides_version,
+        "data_completed_at": (
+            action.data_completed_at.isoformat() if action.data_completed_at else None
+        ),
         "async_status_url": action.async_status_url,
         "async_poll_attempts": action.async_poll_attempts,
         "attempts": action.attempts,

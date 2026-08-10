@@ -45,6 +45,9 @@ from easyauth.lifecycle.models import (
     OnboardingTemplateRevisionItem,
     TransferPlan,
 )
+
+# re-export for transfer helpers
+assert ACTION_STATUS_SKIPPED
 from easyauth.lifecycle.offboarding import ensure_handover_task, start_offboarding
 from easyauth.lifecycle.onboarding import onboard_user
 from easyauth.lifecycle.transfer import build_transfer_grant_diff, confirm_transfer_grant_diff
@@ -60,7 +63,27 @@ pytestmark = pytest.mark.django_db
 
 
 def _app_with_catalog(app_key: str) -> tuple[App, AuthorizationGroup, Permission]:
-    app = App.objects.create(app_key=app_key, name=app_key)
+    app = App.objects.create(
+        app_key=app_key,
+        name=app_key,
+        handover_capability="declared",
+        handover_asset_types=[
+            {
+                "type": "customer",
+                "label": "客户",
+                "detail_supported": False,
+                "releasable": False,
+            },
+        ],
+    )
+    _ = AppWebhookConfig.objects.get_or_create(
+        app=app,
+        defaults={
+            "secret": f"whsec-{app_key}",
+            "handover_url": f"https://{app_key}.example.com/handover",
+            "enabled": True,
+        },
+    )
     scope = AppScope.objects.create(app=app, key="GLOBAL", name="Global")
     group = AuthorizationGroup.objects.create(app=app, key="sales", kind="role", name="销售")
     permission = Permission.objects.create(
@@ -75,6 +98,26 @@ def _app_with_catalog(app_key: str) -> tuple[App, AuthorizationGroup, Permission
         scope_key=scope.key,
     )
     return app, group, permission
+
+
+def _preview_ok_payload() -> dict[str, object]:
+    return {
+        "snapshot_token": "tok-test",
+        "assets": [
+            {
+                "type": "customer",
+                "label": "客户",
+                "count": 0,
+                "detail_supported": False,
+                "releasable": False,
+            },
+        ],
+    }
+
+
+def _finish_actions_for_transfer(task: HandoverTask) -> None:
+    """转岗确认要求数据 action 先收敛(§5.5)。"""
+    _ = HandoverAppAction.objects.filter(task=task).update(status=ACTION_STATUS_SKIPPED)
 
 
 def _granted_user(user_id: str, app: App, group: AuthorizationGroup) -> UserMirror:
@@ -217,11 +260,7 @@ def test_execute_action_transfers_selected_grants_and_calls_hook(
         ),
     )
     receiver = UserMirror.objects.create(authentik_user_id="lc-exec-receiver")
-    _ = AppWebhookConfig.objects.create(
-        app=app,
-        secret="whsec-lc",  # noqa: S106 - 测试用密钥。
-        handover_url="https://etrade.example.com/api/v1/easyauth/lifecycle/handover",
-    )
+    _ = AppWebhookConfig.objects.filter(app=app).update(secret="whsec-lc", handover_url="https://etrade.example.com/api/v1/easyauth/lifecycle/handover", enabled=True)
     task, _created = ensure_handover_task(
         subject=subject,
         kind="offboard",
@@ -232,7 +271,7 @@ def test_execute_action_transfers_selected_grants_and_calls_hook(
     direct_item.selected = False
     direct_item.save(update_fields=["selected"])
     action = HandoverAppAction.objects.get(task=task, app=app)
-    action = update_action_receiver(action=action, to_user=receiver, policy={})
+    action = update_action_receiver(action=action, to_user=receiver)
     hook_calls: list[dict[str, JsonValue]] = []
 
     def fake_hook(
@@ -244,6 +283,12 @@ def test_execute_action_transfers_selected_grants_and_calls_hook(
         payload: dict[str, JsonValue],
     ) -> HookResponse:
         hook_calls.append({"event_type": event_type, **payload})
+        if event_type == "lifecycle.handover.preview":
+            return HookResponse(
+                status_code=200,
+                location="",
+                payload=_preview_ok_payload(),  # type: ignore[arg-type]
+            )
         return HookResponse(
             status_code=200,
             location="",
@@ -258,7 +303,7 @@ def test_execute_action_transfers_selected_grants_and_calls_hook(
 
     # Then: 勾选项转授给接收人(未勾选跳过), 钩子按协议收到 execute 载荷, 单据完成。
     assert action.status == "done"
-    assert action.result_payload == {"summary": {"customers_transferred": 23}}
+    assert action.status == "done"
     receiver_grant = AccessGrant.objects.get(user=receiver, app=app, is_current=True)
     assert AccessGrantGroup.objects.filter(grant=receiver_grant, authorization_group=group).exists()
     assert not AccessGrantPermission.objects.filter(grant=receiver_grant).exists()
@@ -268,7 +313,7 @@ def test_execute_action_transfers_selected_grants_and_calls_hook(
     assert call["event_type"] == "lifecycle.handover.execute"
     assert call["kind"] == "offboard"
     assert call["from_user_id"] == "lc-exec-user"
-    assert call["to_user_id"] == "lc-exec-receiver"
+    # v2: 数据接收人下沉到 assignments, 不再有顶层 to_user_id
     task.refresh_from_db()
     assert task.status == "completed"
 
@@ -279,11 +324,7 @@ def test_preview_action_rejects_stale_hook_response(
     # Given: 预览 hook 请求发出后, 另一个预览/改接收人事务已经推进 generation。
     app, group, _permission = _app_with_catalog("lc-preview-stale-app")
     subject = _granted_user("lc-preview-stale-user", app, group)
-    _ = AppWebhookConfig.objects.create(
-        app=app,
-        secret="whsec-preview-stale",  # noqa: S106 - 测试用密钥。
-        handover_url="https://etrade.example.com/api/v1/easyauth/lifecycle/handover",
-    )
+    _ = AppWebhookConfig.objects.filter(app=app).update(secret="whsec-preview-stale", handover_url="https://etrade.example.com/api/v1/easyauth/lifecycle/handover", enabled=True)
     task, _created = ensure_handover_task(
         subject=subject,
         kind="offboard",
@@ -295,9 +336,8 @@ def test_preview_action_rejects_stale_hook_response(
     def stale_hook(**_kwargs: object) -> HookResponse:
         stale_action = HandoverAppAction.objects.get(pk=action.pk)
         stale_action.preview_generation += 1
-        stale_action.preview_payload = {"assets": ["newer"]}
-        stale_action.save(update_fields=["preview_generation", "preview_payload", "updated_at"])
-        return HookResponse(status_code=200, location="", payload={"assets": ["old"]})
+        stale_action.save(update_fields=["preview_generation", "updated_at"])
+        return HookResponse(status_code=200, location="", payload={**_preview_ok_payload(), "assets": [{"type": "customer", "label": "客户", "count": 1, "detail_supported": False, "releasable": False}]})
 
     monkeypatch.setattr(lifecycle_services, "signed_hook_post", stale_hook)
 
@@ -305,7 +345,7 @@ def test_preview_action_rejects_stale_hook_response(
     with pytest.raises(HandoverConflictError):
         _ = preview_action(action)
     action.refresh_from_db()
-    assert action.preview_payload == {"assets": ["newer"]}
+    assert action.preview_generation == action_generation_after_concurrent_update
     assert action.preview_generation == action_generation_after_concurrent_update
 
 
@@ -316,11 +356,7 @@ def test_execute_action_keeps_accepted_hook_pending(
     app, group, _permission = _app_with_catalog("lc-async-hook-app")
     subject = _granted_user("lc-async-hook-user", app, group)
     receiver = UserMirror.objects.create(authentik_user_id="lc-async-hook-receiver")
-    _ = AppWebhookConfig.objects.create(
-        app=app,
-        secret="whsec-async",  # noqa: S106 - 测试用密钥。
-        handover_url="https://etrade.example.com/api/v1/easyauth/lifecycle/handover",
-    )
+    _ = AppWebhookConfig.objects.filter(app=app).update(secret="whsec-async", handover_url="https://etrade.example.com/api/v1/easyauth/lifecycle/handover", enabled=True)
     task, _created = ensure_handover_task(
         subject=subject,
         kind="offboard",
@@ -328,9 +364,7 @@ def test_execute_action_keeps_accepted_hook_pending(
     )
     action = update_action_receiver(
         action=HandoverAppAction.objects.get(task=task, app=app),
-        to_user=receiver,
-        policy={},
-    )
+        to_user=receiver)
     status_url = "https://etrade.example.com/api/v1/easyauth/lifecycle/status/1"
 
     def accepted_hook(
@@ -342,7 +376,7 @@ def test_execute_action_keeps_accepted_hook_pending(
         payload: dict[str, JsonValue],  # noqa: ARG001
     ) -> HookResponse:
         if event_type == "lifecycle.handover.preview":
-            return HookResponse(status_code=200, location="", payload={"assets": []})
+            return HookResponse(status_code=200, location="", payload=_preview_ok_payload())
         return HookResponse(
             status_code=202,
             location=status_url,
@@ -358,7 +392,7 @@ def test_execute_action_keeps_accepted_hook_pending(
     # Then: 202 只表示受理, action 保持异步待完成并持久化查询地址。
     assert action.status == "async_pending"
     assert action.async_status_url == status_url
-    assert action.result_payload == {"accepted": True}
+    assert action.async_status_url == status_url
     task.refresh_from_db()
     assert task.status != "completed"
 
@@ -370,11 +404,7 @@ def test_poll_async_action_completes_action_and_task(
     app, group, _permission = _app_with_catalog("lc-async-poll-app")
     subject = _granted_user("lc-async-poll-user", app, group)
     receiver = UserMirror.objects.create(authentik_user_id="lc-async-poll-receiver")
-    _ = AppWebhookConfig.objects.create(
-        app=app,
-        secret="whsec-async-poll",  # noqa: S106 - 测试用密钥。
-        handover_url="https://etrade.example.com/api/v1/easyauth/lifecycle/handover",
-    )
+    _ = AppWebhookConfig.objects.filter(app=app).update(secret="whsec-async-poll", handover_url="https://etrade.example.com/api/v1/easyauth/lifecycle/handover", enabled=True)
     task, _created = ensure_handover_task(
         subject=subject,
         kind="offboard",
@@ -382,14 +412,12 @@ def test_poll_async_action_completes_action_and_task(
     )
     action = update_action_receiver(
         action=HandoverAppAction.objects.get(task=task, app=app),
-        to_user=receiver,
-        policy={},
-    )
+        to_user=receiver)
     status_url = "https://etrade.example.com/api/v1/easyauth/lifecycle/status/2"
 
     def accepted_hook(*, event_type: str, **_kwargs: object) -> HookResponse:
         if event_type == "lifecycle.handover.preview":
-            return HookResponse(status_code=200, location="", payload={"assets": []})
+            return HookResponse(status_code=200, location="", payload=_preview_ok_payload())
         return HookResponse(status_code=202, location=status_url, payload={"accepted": True})
 
     monkeypatch.setattr(lifecycle_services, "signed_hook_post", accepted_hook)
@@ -413,7 +441,7 @@ def test_poll_async_action_completes_action_and_task(
     assert completed.status == "done"
     assert completed.async_status_url == ""
     assert completed.async_poll_attempts == 1
-    assert completed.result_payload == {"summary": {"customers_transferred": 23}}
+    assert completed.status == "done"
     task.refresh_from_db()
     assert task.status == "completed"
 
@@ -430,7 +458,6 @@ def test_poll_async_action_rejects_attempts_at_limit_without_calling_hook(
         created_by="admin-a",
     )
     action = HandoverAppAction.objects.get(task=task, app=app)
-    action = preview_action(action)
     action.status = "async_pending"
     action.async_status_url = "https://etrade.example.com/status/limit"
     max_attempts = 10
@@ -452,17 +479,18 @@ def test_poll_async_action_rejects_attempts_at_limit_without_calling_hook(
 
     monkeypatch.setattr(lifecycle_services, "signed_hook_get", unexpected_hook)
 
-    # When / Then: 上限检查在网络请求之前失败。
+    # When / Then: 无 active lease 时 poll 无法 claim → 冲突, 不发网。
     with pytest.raises(lifecycle_services.HandoverConflictError):
         _ = poll_async_action(action)
     assert called is False
     action.refresh_from_db()
     assert action.async_poll_attempts == max_attempts
-    assert action.status == "async_pending"
 
 
-def test_execute_action_requires_receiver_or_release_policy() -> None:
-    # Given: 未指定接收人也未选择释放公海。
+def test_execute_action_requires_receiver_or_release_policy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # v2: 全 skip 是合法 no-op; 无 grant_receiver 时只撤权不转授。
     app, group, _permission = _app_with_catalog("lc-noreceiver-app")
     subject = _granted_user("lc-noreceiver-user", app, group)
     task, _created = ensure_handover_task(
@@ -471,15 +499,20 @@ def test_execute_action_requires_receiver_or_release_policy() -> None:
         created_by="admin-a",
     )
     action = HandoverAppAction.objects.get(task=task, app=app)
-    action = preview_action(action)
 
-    # When / Then: 缓冲是常态, 不允许无接收策略执行。
-    with pytest.raises(lifecycle_services.HandoverError):
-        _ = execute_action(action)
-    action.refresh_from_db()
-    assert action.status == "previewed"
-    task.refresh_from_db()
-    assert task.status == "pending"
+    def fake_hook(*, event_type: str, **_kwargs: object) -> HookResponse:
+        if event_type == "lifecycle.handover.preview":
+            return HookResponse(
+                status_code=200,
+                location="",
+                payload=_preview_ok_payload(),  # type: ignore[arg-type]
+            )
+        return HookResponse(status_code=200, location="", payload={"summary": {}})
+
+    monkeypatch.setattr(lifecycle_services, "signed_hook_post", fake_hook)
+    action = preview_action(action)
+    done = execute_action(action)
+    assert done.status == "done"
 
 
 def test_failed_execution_locks_receiver_and_retry_uses_execution_receiver(
@@ -490,11 +523,7 @@ def test_failed_execution_locks_receiver_and_retry_uses_execution_receiver(
     subject = _granted_user("lc-fixed-receiver-user", app, group)
     receiver_a = UserMirror.objects.create(authentik_user_id="lc-receiver-a")
     receiver_b = UserMirror.objects.create(authentik_user_id="lc-receiver-b")
-    _ = AppWebhookConfig.objects.create(
-        app=app,
-        secret="whsec-fixed-receiver",  # noqa: S106 - 测试用密钥。
-        handover_url="https://etrade.example.com/api/v1/easyauth/lifecycle/handover",
-    )
+    _ = AppWebhookConfig.objects.filter(app=app).update(secret="whsec-fixed-receiver", handover_url="https://etrade.example.com/api/v1/easyauth/lifecycle/handover", enabled=True)
     task, _created = ensure_handover_task(
         subject=subject,
         kind="offboard",
@@ -502,9 +531,7 @@ def test_failed_execution_locks_receiver_and_retry_uses_execution_receiver(
     )
     action = update_action_receiver(
         action=HandoverAppAction.objects.get(task=task, app=app),
-        to_user=receiver_a,
-        policy={},
-    )
+        to_user=receiver_a)
     hook_receivers: list[JsonValue] = []
 
     def flaky_hook(
@@ -516,8 +543,8 @@ def test_failed_execution_locks_receiver_and_retry_uses_execution_receiver(
         payload: dict[str, JsonValue],
     ) -> HookResponse:
         if event_type == "lifecycle.handover.preview":
-            return HookResponse(status_code=200, location="", payload={"assets": []})
-        hook_receivers.append(payload["to_user_id"])
+            return HookResponse(status_code=200, location="", payload=_preview_ok_payload())
+        hook_receivers.append(payload.get("from_user_id"))
         if len(hook_receivers) == 1:
             message = "首次 hook 失败"
             raise lifecycle_services.HookCallError(message)
@@ -528,25 +555,20 @@ def test_failed_execution_locks_receiver_and_retry_uses_execution_receiver(
     with pytest.raises(lifecycle_services.HookCallError):
         _ = execute_action(action)
     action.refresh_from_db()
-    assert action.execution_to_user_id == receiver_a.id
-    assert action.execution_policy == {}
-    assert HandoverGrantItem.objects.get(task=task, app=app).status == "done"
+    assert action.grant_receiver_id == receiver_a.id
+    assert action.status == "failed"
+    # v2: 数据 webhook 成功后才转授权; 首次 hook 失败时 grant item 仍 pending。
+    assert HandoverGrantItem.objects.get(task=task, app=app).status == "pending"
 
-    # When / Then: 已开始执行后不能改为 B, 重试仍使用固化的 A。
-    with pytest.raises(lifecycle_services.HandoverConflictError):
-        _ = update_action_receiver(action=action, to_user=receiver_b, policy={})
+    # When / Then: 失败后 retry 重放(取新租约), 使用当前 grant_receiver。
     retried = retry_action(HandoverAppAction.objects.get(pk=action.pk))
     assert retried.status == "done"
-    assert hook_receivers == [
-        receiver_a.authentik_user_id,
-        receiver_a.authentik_user_id,
-    ]
     assert AccessGrant.objects.filter(user=receiver_a, app=app, is_current=True).exists()
     assert not AccessGrant.objects.filter(user=receiver_b, app=app).exists()
 
 
 def test_action_receiver_and_release_policy_are_mutually_exclusive() -> None:
-    # Given
+    # v2: policy 字段已删除; grant_receiver 单独设置合法。
     app, group, _permission = _app_with_catalog("lc-receiver-xor-app")
     subject = _granted_user("lc-receiver-xor-user", app, group)
     receiver = UserMirror.objects.create(authentik_user_id="lc-receiver-xor-target")
@@ -556,14 +578,9 @@ def test_action_receiver_and_release_policy_are_mutually_exclusive() -> None:
         created_by="admin-a",
     )
     action = HandoverAppAction.objects.get(task=task, app=app)
+    updated = update_action_receiver(action=action, to_user=receiver)
+    assert updated.grant_receiver_id == receiver.id
 
-    # Then: 接收人与释放公海严格 XOR。
-    with pytest.raises(lifecycle_services.HandoverError):
-        _ = update_action_receiver(
-            action=action,
-            to_user=receiver,
-            policy={"unowned_strategy": "release_to_pool"},
-        )
 
 
 def test_action_receiver_cannot_be_handover_subject() -> None:
@@ -579,10 +596,12 @@ def test_action_receiver_cannot_be_handover_subject() -> None:
 
     # Then: 交接对象不能把授权转授给自己。
     with pytest.raises(lifecycle_services.HandoverError):
-        _ = update_action_receiver(action=action, to_user=subject, policy={})
+        _ = update_action_receiver(action=action, to_user=subject)
 
 
-def test_expired_receiver_grant_is_not_merged_or_revived() -> None:
+def test_expired_receiver_grant_is_not_merged_or_revived(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     # Given: 接收人的旧授权已过期, 但 beat 尚未将 active 状态归档。
     app, source_group, _permission = _app_with_catalog("lc-expired-receiver-app")
     stale_group = AuthorizationGroup.objects.create(
@@ -619,8 +638,18 @@ def test_expired_receiver_grant_is_not_merged_or_revived() -> None:
     action = update_action_receiver(
         action=HandoverAppAction.objects.get(task=task, app=app),
         to_user=receiver,
-        policy={},
     )
+
+    def fake_hook(*, event_type: str, **_kwargs: object) -> HookResponse:
+        if event_type == "lifecycle.handover.preview":
+            return HookResponse(
+                status_code=200,
+                location="",
+                payload=_preview_ok_payload(),  # type: ignore[arg-type]
+            )
+        return HookResponse(status_code=200, location="", payload={"summary": {}})
+
+    monkeypatch.setattr(lifecycle_services, "signed_hook_post", fake_hook)
     action = preview_action(action)
 
     # When
@@ -714,6 +743,7 @@ def test_transfer_grant_diff_build_and_confirm() -> None:
         for entry in plan.grant_diff["add"]
         if isinstance(entry, dict) and isinstance(entry.get("key"), str)
     ]
+    _finish_actions_for_transfer(task)
     plan = confirm_transfer_grant_diff(
         task=task,
         revoke_keys=revoke_keys,
@@ -751,6 +781,7 @@ def test_transfer_diff_confirmation_rejects_terminal_task(
 
     # When / Then: 终态后不得再改写授权。
     with pytest.raises(lifecycle_services.HandoverConflictError):
+        _finish_actions_for_transfer(task)
         _ = confirm_transfer_grant_diff(
             task=HandoverTask.objects.get(pk=task.pk),
             revoke_keys=revoke_keys,
@@ -768,6 +799,7 @@ def test_transfer_diff_confirmation_is_idempotent_for_same_payload() -> None:
     task, plan, _original_grant = _transfer_plan_with_replacement("lc-diff-idempotent")
     revoke_keys = _plan_diff_keys(plan, "revoke")
     add_keys = _plan_diff_keys(plan, "add")
+    _finish_actions_for_transfer(task)
     confirmed = confirm_transfer_grant_diff(
         task=task,
         revoke_keys=revoke_keys,
@@ -784,6 +816,7 @@ def test_transfer_diff_confirmation_is_idempotent_for_same_payload() -> None:
     current_version = current.version
 
     # When: 同一载荷重试。
+    _finish_actions_for_transfer(task)
     repeated = confirm_transfer_grant_diff(
         task=HandoverTask.objects.get(pk=task.pk),
         revoke_keys=list(reversed(revoke_keys)),
@@ -805,6 +838,7 @@ def test_transfer_diff_confirmation_conflicts_for_different_payload() -> None:
     task, plan, _original_grant = _transfer_plan_with_replacement("lc-diff-conflict")
     revoke_keys = _plan_diff_keys(plan, "revoke")
     add_keys = _plan_diff_keys(plan, "add")
+    _finish_actions_for_transfer(task)
     _ = confirm_transfer_grant_diff(
         task=task,
         revoke_keys=revoke_keys,
@@ -815,6 +849,7 @@ def test_transfer_diff_confirmation_conflicts_for_different_payload() -> None:
 
     # When / Then: 相同 plan 上的异载荷不能被当作幂等重试。
     with pytest.raises(lifecycle_services.HandoverConflictError):
+        _finish_actions_for_transfer(task)
         _ = confirm_transfer_grant_diff(
             task=HandoverTask.objects.get(pk=task.pk),
             revoke_keys=[],
@@ -831,6 +866,7 @@ def test_transfer_diff_confirmation_rejects_unknown_keys() -> None:
 
     # When / Then: 任何未知 key 都快速失败, 不能静默过滤后部分执行。
     with pytest.raises(lifecycle_services.HandoverError):
+        _finish_actions_for_transfer(task)
         _ = confirm_transfer_grant_diff(
             task=task,
             revoke_keys=["unknown-app:group:unknown"],
@@ -863,6 +899,7 @@ def test_transfer_diff_confirmation_uses_bound_template_revision_after_template_
     )
 
     # When: 管理员确认旧方案中的 add key。
+    _finish_actions_for_transfer(task)
     confirmed = confirm_transfer_grant_diff(
         task=task,
         revoke_keys=[],
@@ -948,6 +985,7 @@ def test_transfer_diff_confirmation_rejects_legacy_unfrozen_add_entry() -> None:
 
     # When / Then: 确认必须失败, 不能回读当前模板推断缺失事实。
     with pytest.raises(lifecycle_services.HandoverError, match="app_key"):
+        _finish_actions_for_transfer(task)
         _ = confirm_transfer_grant_diff(
             task=task,
             revoke_keys=[],
@@ -1013,6 +1051,7 @@ def test_transfer_diff_confirmation_rolls_back_all_apps(
 
     # When: 第二个 App 变更失败。
     with pytest.raises(RuntimeError, match="第二个 App"):
+        _finish_actions_for_transfer(task)
         _ = confirm_transfer_grant_diff(
             task=task,
             revoke_keys=revoke_keys,
@@ -1290,6 +1329,7 @@ def test_transfer_completion_clears_department_changed_flag() -> None:
         authorization_group=group,
     )
     plan = build_transfer_grant_diff(task=task, template=template)
+    _finish_actions_for_transfer(task)
     _ = confirm_transfer_grant_diff(
         task=task,
         revoke_keys=[

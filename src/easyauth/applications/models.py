@@ -30,6 +30,11 @@ __all__ = (
     "CAPABILITY_DIRECTORY",
     "CAPABILITY_NOTIFY",
     "CAPABILITY_VALUES",
+    "HANDOVER_CAPABILITY_CHOICES",
+    "HANDOVER_CAPABILITY_DECLARED",
+    "HANDOVER_CAPABILITY_NONE",
+    "HANDOVER_CAPABILITY_UNDECLARED",
+    "HANDOVER_CAPABILITY_VALUES",
     "App",
     "AppCapability",
     "AppCredential",
@@ -98,6 +103,21 @@ CAPABILITY_CHOICES: Final[tuple[tuple[str, str], ...]] = (
     (CAPABILITY_NOTIFY, "notify"),
 )
 
+# 交接能力三态(契约 §9)。
+HANDOVER_CAPABILITY_DECLARED: Final = "declared"
+HANDOVER_CAPABILITY_NONE: Final = "none"
+HANDOVER_CAPABILITY_UNDECLARED: Final = "undeclared"
+HANDOVER_CAPABILITY_CHOICES: Final[tuple[tuple[str, str], ...]] = (
+    (HANDOVER_CAPABILITY_DECLARED, "declared"),
+    (HANDOVER_CAPABILITY_NONE, "none"),
+    (HANDOVER_CAPABILITY_UNDECLARED, "undeclared"),
+)
+HANDOVER_CAPABILITY_VALUES: Final[tuple[str, ...]] = (
+    HANDOVER_CAPABILITY_DECLARED,
+    HANDOVER_CAPABILITY_NONE,
+    HANDOVER_CAPABILITY_UNDECLARED,
+)
+
 
 class App(models.Model):
     if TYPE_CHECKING:
@@ -109,6 +129,27 @@ class App(models.Model):
     description: models.TextField[str, str] = models.TextField(blank=True)
     is_active: models.BooleanField[bool, bool] = models.BooleanField(default=True)
     catalog_version: models.PositiveIntegerField[int, int] = models.PositiveIntegerField(default=1)
+    handover_capability: models.CharField[str, str] = models.CharField(
+        max_length=16,
+        choices=HANDOVER_CAPABILITY_CHOICES,
+        default=HANDOVER_CAPABILITY_UNDECLARED,
+    )
+    handover_asset_types: models.JSONField[list[JsonValue], list[JsonValue]] = models.JSONField(
+        default=list,
+        blank=True,
+    )
+    handover_capability_declared_by: models.CharField[str, str] = models.CharField(
+        max_length=128,
+        blank=True,
+    )
+    handover_capability_declared_at: models.DateTimeField[
+        str | date | datetime | None,
+        datetime | None,
+    ] = models.DateTimeField(blank=True, null=True)
+    handover_capability_synced_at: models.DateTimeField[
+        str | date | datetime | None,
+        datetime | None,
+    ] = models.DateTimeField(blank=True, null=True)
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
     )
@@ -118,6 +159,23 @@ class App(models.Model):
 
     class Meta:
         ordering: ClassVar[list[str]] = ["app_key"]
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.CheckConstraint(
+                condition=Q(handover_capability__in=HANDOVER_CAPABILITY_VALUES),
+                name="applications_app_handover_capability_supported",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(
+                        handover_capability=HANDOVER_CAPABILITY_NONE,
+                        handover_capability_declared_by__gt="",
+                        handover_capability_declared_at__isnull=False,
+                    )
+                    | ~Q(handover_capability=HANDOVER_CAPABILITY_NONE)
+                ),
+                name="applications_app_handover_none_requires_declaration",
+            ),
+        ]
 
     @override
     def __str__(self) -> str:
