@@ -25,7 +25,7 @@ export interface AssetAllocatorProps {
   surface: HandoverSurface;
   taskId: number | string;
   action: HandoverAction;
-  /** executing / async_pending 时整个分配器只读 */
+  /** executing / async_pending / batch_progress 期间整个分配器只读 */
   readOnly?: boolean;
   onActionUpdated?: (patch: {
     asset_types?: HandoverAssetType[];
@@ -34,6 +34,8 @@ export interface AssetAllocatorProps {
   }) => void;
   /** 保存中时禁用父级 [执行交接] */
   onBusyChange?: (busy: boolean) => void;
+  /** 412 snapshot_stale：清单已变，需清本地态并重新预演 */
+  onSnapshotStale?: () => void;
 }
 
 type DraftOverride = {
@@ -50,20 +52,22 @@ export function AssetAllocator({
   readOnly = false,
   onActionUpdated,
   onBusyChange,
+  onSnapshotStale,
 }: AssetAllocatorProps) {
   const { t } = useI18n();
   const [expandedType, setExpandedType] = useState<string | null>(null);
   const [localTypes, setLocalTypes] = useState(action.asset_types);
   const [typeError, setTypeError] = useState<string | null>(null);
   const [savingType, setSavingType] = useState(false);
+  const [detailsBusy, setDetailsBusy] = useState(false);
 
   useEffect(() => {
     setLocalTypes(action.asset_types);
   }, [action.asset_types]);
 
   useEffect(() => {
-    onBusyChange?.(savingType);
-  }, [onBusyChange, savingType]);
+    onBusyChange?.(savingType || detailsBusy);
+  }, [onBusyChange, savingType, detailsBusy]);
 
   const arrangedCount = localTypes.filter((row) => row.default_action !== "skip" || row.override_count > 0).length;
   const totalTypes = localTypes.length;
@@ -73,6 +77,19 @@ export function AssetAllocator({
     nextAction: HandoverAssetAction,
     nextUser: HandoverUserRef | null,
   ) => {
+    // transfer 必须先本地展示接收人选择器，选中接收人后才 PATCH（01 §5.4 receiver_required）
+    if (nextAction === "transfer" && !nextUser) {
+      setLocalTypes((current) =>
+        current.map((row) =>
+          row.type === assetType.type
+            ? { ...row, default_action: "transfer", default_to_user: null }
+            : row,
+        ),
+      );
+      setTypeError(null);
+      return;
+    }
+
     const previous = localTypes;
     const optimistic = localTypes.map((row) =>
       row.type === assetType.type
@@ -108,7 +125,13 @@ export function AssetAllocator({
       });
     } catch (error) {
       setLocalTypes(previous);
-      setTypeError((error as Error).message);
+      const reason = apiErrorReason(error);
+      if (reason === "snapshot_stale") {
+        setTypeError(t("handover.portal.detail.snapshotStale"));
+        onSnapshotStale?.();
+      } else {
+        setTypeError((error as Error).message);
+      }
     } finally {
       setSavingType(false);
     }
@@ -163,6 +186,16 @@ export function AssetAllocator({
                         disabled={readOnly || savingType}
                         aria-label={`${assetType.label} ${t("handover.allocator.receiver")}`}
                         onChange={(user) => {
+                          if (!user) {
+                            setLocalTypes((current) =>
+                              current.map((row) =>
+                                row.type === assetType.type
+                                  ? { ...row, default_action: "transfer", default_to_user: null }
+                                  : row,
+                              ),
+                            );
+                            return;
+                          }
                           void patchType(assetType, "transfer", user);
                         }}
                       />
@@ -193,6 +226,8 @@ export function AssetAllocator({
                   appKey={action.app_key}
                   assetType={assetType}
                   readOnly={readOnly}
+                  onBusyChange={setDetailsBusy}
+                  onSnapshotStale={onSnapshotStale}
                   onSaved={(result) => {
                     setLocalTypes((current) =>
                       current.map((row) =>
@@ -255,6 +290,8 @@ function AssetTypeDetails({
   assetType,
   readOnly,
   onSaved,
+  onBusyChange,
+  onSnapshotStale,
 }: {
   surface: HandoverSurface;
   taskId: number | string;
@@ -262,6 +299,8 @@ function AssetTypeDetails({
   assetType: HandoverAssetType;
   readOnly: boolean;
   onSaved: (result: { override_count: number; confirm_version: number; overrides_version: number }) => void;
+  onBusyChange?: (busy: boolean) => void;
+  onSnapshotStale?: () => void;
 }) {
   const { t } = useI18n();
   const queryClient = useQueryClient();
@@ -300,7 +339,25 @@ function AssetTypeDetails({
     setOverridesVersion(overridesQuery.data.overrides_version);
     setLoadedOverrides(true);
     setDrafts(Object.fromEntries(mapped.map((entry) => [entry.asset_id, entry])));
+    setError(null);
   }, [overridesQuery.data]);
+
+  useEffect(() => {
+    if (!overridesQuery.error) {
+      return;
+    }
+    // overrides GET 失败不得永久挂在 loading；表面化错误
+    setLoadedOverrides(false);
+    const reason = apiErrorReason(overridesQuery.error);
+    if (reason === "snapshot_stale") {
+      setError(t("handover.portal.detail.snapshotStale"));
+      setDrafts({});
+      setFullOverrides([]);
+      onSnapshotStale?.();
+      return;
+    }
+    setError((overridesQuery.error as Error).message);
+  }, [overridesQuery.error, onSnapshotStale, t]);
 
   const itemsQuery = useQuery({
     queryKey: ["handover", "items", surface, String(taskId), appKey, assetType.type, page, debouncedSearch],
@@ -310,6 +367,26 @@ function AssetTypeDetails({
       ),
     enabled: loadedOverrides,
   });
+
+  useEffect(() => {
+    if (!itemsQuery.error) {
+      return;
+    }
+    const reason = apiErrorReason(itemsQuery.error);
+    if (reason === "snapshot_stale") {
+      setError(t("handover.portal.detail.snapshotStale"));
+      setDrafts({});
+      setFullOverrides([]);
+      setLoadedOverrides(false);
+      onSnapshotStale?.();
+      return;
+    }
+    if (reason === "downstream_locked") {
+      setError(t("handover.portal.detail.downstreamLocked"));
+      return;
+    }
+    setError((itemsQuery.error as Error).message);
+  }, [itemsQuery.error, onSnapshotStale, t]);
 
   const items = itemsQuery.data?.items ?? [];
   const totalPages = Math.max(1, Math.ceil((itemsQuery.data?.total ?? 0) / 50));
@@ -343,6 +420,7 @@ function AssetTypeDetails({
       asset_id: item.id,
       label: item.label,
     };
+    // 条目级 transfer 也须先选接收人；无接收人时留在 draft 但不算合法 override 提交
     const sameAction = merged.action === assetType.default_action;
     const sameUser =
       (merged.to_user?.user_id ?? "") === (assetType.default_to_user?.user_id ?? "");
@@ -369,9 +447,10 @@ function AssetTypeDetails({
       for (const entry of Object.values(drafts)) {
         byId.set(entry.asset_id, entry);
       }
-      // Remove any that match defaults
+      // Remove any that match defaults；transfer 无接收人的条目不得提交
       const overrides = [...byId.values()]
         .filter((entry) => isStillOverride(entry, assetType))
+        .filter((entry) => entry.action !== "transfer" || Boolean(entry.to_user?.user_id))
         .map((entry) => ({
           asset_id: entry.asset_id,
           action: entry.action,
@@ -402,16 +481,32 @@ function AssetTypeDetails({
       });
     },
     onError: async (err: Error) => {
-      if (apiErrorReason(err) === "overrides_version_stale") {
+      const reason = apiErrorReason(err);
+      if (reason === "overrides_version_stale") {
         setError(t("handover.allocator.overridesStale"));
         await overridesQuery.refetch();
+        return;
+      }
+      if (reason === "snapshot_stale") {
+        setError(t("handover.portal.detail.snapshotStale"));
+        setDrafts({});
+        setFullOverrides([]);
+        setLoadedOverrides(false);
+        onSnapshotStale?.();
         return;
       }
       setError(err.message);
     },
   });
 
+  useEffect(() => {
+    onBusyChange?.(saveMutation.isPending);
+  }, [onBusyChange, saveMutation.isPending]);
+
   const canSubmit = loadedOverrides && !readOnly && !saveMutation.isPending;
+  const overridesLoading = overridesQuery.isLoading && !overridesQuery.isError;
+  const itemsLoading = loadedOverrides && itemsQuery.isLoading && !itemsQuery.isError;
+  const hasQueryError = Boolean(error);
 
   return (
     <div className="mt-3 space-y-3 border-t border-ink/10 pt-3">
@@ -419,8 +514,11 @@ function AssetTypeDetails({
         <StatusBanner live="status" tone="amber" title={t("handover.allocator.stale")} />
       ) : null}
       {error ? <StatusBanner live="alert" tone="signal" title={error} /> : null}
-      {!loadedOverrides || overridesQuery.isLoading ? (
+      {overridesLoading ? (
         <p className="text-body text-ink-faint">{t("common.loading")}</p>
+      ) : overridesQuery.isError && !loadedOverrides ? (
+        // 已 surface 错误；不渲染空列表也不挂 loading
+        null
       ) : (
         <>
           <div className="flex flex-wrap items-center gap-2">
@@ -438,54 +536,60 @@ function AssetTypeDetails({
               {t("handover.allocator.totalItems", { total: itemsQuery.data?.total ?? 0 })}
             </span>
           </div>
-          <ul className="grid gap-2">
-            {items.map((item) => {
-              const current = effectiveForItem(item);
-              const overridden = isOverridden(item);
-              return (
-                <li
-                  key={item.id}
-                  className={cn(
-                    "flex flex-wrap items-start justify-between gap-2 rounded-[2px] border px-2.5 py-2",
-                    overridden ? "border-ink/20 bg-paper" : "border-ink/8 bg-paper-deep/40 text-ink-soft",
-                  )}
-                  data-testid={`asset-item-${item.id}`}
-                >
-                  <div className="min-w-0">
-                    <p className="text-body font-medium text-ink">{item.label}</p>
-                    {item.hint ? <p className="text-caption text-ink-faint">{item.hint}</p> : null}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <AssetActionSelect
-                      value={current.action}
-                      releasable={assetType.releasable}
-                      disabled={readOnly}
-                      aria-label={`${item.label} action`}
-                      onChange={(next) =>
-                        updateItem(item, {
-                          action: next,
-                          to_user: next === "transfer" ? current.to_user : null,
-                        })
-                      }
-                    />
-                    {current.action === "transfer" ? (
-                      <HandoverUserPicker
-                        surface={surface}
-                        taskId={taskId}
-                        value={current.to_user}
+          {itemsLoading ? (
+            <p className="text-body text-ink-faint">{t("common.loading")}</p>
+          ) : itemsQuery.isError && hasQueryError ? (
+            null
+          ) : (
+            <ul className="grid gap-2">
+              {items.map((item) => {
+                const current = effectiveForItem(item);
+                const overridden = isOverridden(item);
+                return (
+                  <li
+                    key={item.id}
+                    className={cn(
+                      "flex flex-wrap items-start justify-between gap-2 rounded-[2px] border px-2.5 py-2",
+                      overridden ? "border-ink/20 bg-paper" : "border-ink/8 bg-paper-deep/40 text-ink-soft",
+                    )}
+                    data-testid={`asset-item-${item.id}`}
+                  >
+                    <div className="min-w-0">
+                      <p className="text-body font-medium text-ink">{item.label}</p>
+                      {item.hint ? <p className="text-caption text-ink-faint">{item.hint}</p> : null}
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <AssetActionSelect
+                        value={current.action}
+                        releasable={assetType.releasable}
                         disabled={readOnly}
-                        aria-label={`${item.label} ${t("handover.allocator.receiver")}`}
-                        onChange={(user) => updateItem(item, { to_user: user, action: "transfer" })}
+                        aria-label={`${item.label} action`}
+                        onChange={(next) =>
+                          updateItem(item, {
+                            action: next,
+                            to_user: next === "transfer" ? current.to_user : null,
+                          })
+                        }
                       />
-                    ) : null}
-                    {overridden ? (
-                      <span className="size-2 rounded-full bg-accent" aria-hidden="true" data-testid="override-dot" />
-                    ) : null}
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
+                      {current.action === "transfer" ? (
+                        <HandoverUserPicker
+                          surface={surface}
+                          taskId={taskId}
+                          value={current.to_user}
+                          disabled={readOnly}
+                          aria-label={`${item.label} ${t("handover.allocator.receiver")}`}
+                          onChange={(user) => updateItem(item, { to_user: user, action: "transfer" })}
+                        />
+                      ) : null}
+                      {overridden ? (
+                        <span className="size-2 rounded-full bg-accent" aria-hidden="true" data-testid="override-dot" />
+                      ) : null}
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <Button size="sm" type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
@@ -536,15 +640,23 @@ export function countArrangedAssetTypes(types: HandoverAssetType[]): { arranged:
 export function buildExecuteConfirmParts(action: HandoverAction): {
   transferLines: string[];
   overrideCount: number;
+  uniqueReceiverNames: string[];
 } {
   const transferLines: string[] = [];
+  const receiverIds = new Set<string>();
+  const uniqueReceiverNames: string[] = [];
   let overrideCount = 0;
   for (const assetType of action.asset_types) {
     overrideCount += assetType.override_count;
     if (assetType.default_action === "transfer" && assetType.count > 0) {
       const name = assetType.default_to_user?.name || assetType.default_to_user?.user_id || "";
       transferLines.push(`${assetType.count} ${assetType.label}${name ? ` → ${name}` : ""}`);
+      const id = assetType.default_to_user?.user_id;
+      if (id && !receiverIds.has(id)) {
+        receiverIds.add(id);
+        uniqueReceiverNames.push(name || id);
+      }
     }
   }
-  return { transferLines, overrideCount };
+  return { transferLines, overrideCount, uniqueReceiverNames };
 }
