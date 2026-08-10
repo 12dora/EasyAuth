@@ -149,13 +149,20 @@ EasyAuth 只做存储与回传，不解析、不排序、不校验格式。长�
 
 ### 5.4 `task_id` 的格式与长度（下游要拿它当幂等键的一部分）
 
-`task_id` 由 EasyAuth 生成，形如 `"{handover_task.id}:{app.key}"`（例：`"137:easytrade"`）。
-**长度上限 64 字节**，字符集限 `[A-Za-z0-9:_-]`。
+`task_id` 由 EasyAuth 生成，格式固定为 **`"{handover_task.id}:{app.id}"`** —— **两段都是十进制数据库 ID**
+（例：`"137:4"`）。长度上限 **64 字节**，字符集限 `[0-9:]`。
 
-这不是装饰性约束：两个下游都要把它拼进本地幂等键
-（EasyProject 的 `idempotency_records.idempotency_key` 列宽 128，
-EasyTrade 的回执表同理），不设上限就只能改用哈希键，而哈希键在排障时无法从日志反查
-是哪张单的哪一批。EasyAuth 侧建 action 时即校验，超限直接建单失败并告警。
+> **不要拼 `app.app_key`。** `App.app_key` 的列宽允许 64 个字符
+> （`applications/models.py:102-108`，自动接入接口也按这个长度放行），
+> 一个完全合法的 64 字符 app_key 配上 task id `1` 就已经 66 字节 ——
+> 按上限校验的话，**一个正常创建的应用会让离职交接直接建不出单**。
+> 换成 `app.id` 之后，两段十进制加冒号最长 39 字节，永远撞不到上限。
+>
+> 长度上限本身是必须的：两个下游都要把 `task_id` 拼进本地幂等键
+> （EasyProject 的 `idempotency_records.idempotency_key` 列宽 128，EasyTrade 的回执表同理），
+> 不设上限就只能改用哈希键，而哈希键在排障时无法从日志反查是哪张单的哪一批。
+>
+> `app_key` 仍然出现在 payload 之外的地方（descriptor、控制台展示），只是**不进 `task_id`**。
 
 ---
 
@@ -590,10 +597,14 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
 {
   "snapshot_token": "et-2026-08-10T10:22:41.331Z-9f2c",
   "assets": [
-    { "type": "customer",        "label": "名下客户",     "count": 187 },
-    { "type": "order_in_transit","label": "在途订单",     "count": 23  },
-    { "type": "inquiry_open",    "label": "进行中询盘",   "count": 41  },
-    { "type": "task_open",       "label": "未完成任务",   "count": 9   }
+    { "type": "customer",            "label": "名下客户",       "count": 187 },
+    { "type": "inquiry_open",        "label": "进行中询盘",     "count": 41  },
+    { "type": "order_in_transit",    "label": "在途订单",       "count": 23  },
+    { "type": "receivable_open",     "label": "未结应收计划",   "count": 12  },
+    { "type": "task_open",           "label": "未完成任务",     "count": 9   },
+    { "type": "activity_followup",   "label": "待跟进活动",     "count": 5   },
+    { "type": "requirement_open",    "label": "进行中产品需求", "count": 0   },
+    { "type": "sample_request_open", "label": "未完成样品申请", "count": 0   }
   ]
 }
 ```
@@ -602,6 +613,8 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
 
 - `type` 必须是 descriptor 的 `lifecycle.handover_asset_types` 里声明过的类型，否则 EasyAuth 返回 `422 undeclared_asset_type` 并置 action 为 `failed`。
 - `count=0` 的类型也必须返回，不得省略（省略与"不支持"无法区分）。
+  **上面的样本是完整的 8 类**（EasyTrade 的全量声明，含两个 `count=0`）——
+  golden sample 会按它逐字段比对，只返回其中几类会被判 `failed`。
 - 响应不含明细，明细走 §10.4。
 
 ### 10.4 `lifecycle.handover.items`（新增）
@@ -924,14 +937,14 @@ APP 侧仍应保留自己的行锁作为第二道防线。
 
 | HTTP | 语义 | action 状态 | 可重试 | 界面提示 |
 |---|---|---|---|---|
-| 200 | 成功 | `done` | — | — |
+| 200 | 成功 | **非最终批 → 保持 `previewed`**；最终批数据成功且授权步骤成功 → `done` | — | 分批时显示「已完成 N/M 批」 |
 | 202 | 异步受理 | `async_pending` | — | 轮询中 |
 | 400 | 请求不合法（如时间戳超窗） | `failed` | 是 | 请求被应用拒绝 |
 | 401 / 403 | 验签失败 | `failed` | 否 | 签名校验失败，请检查该应用的 webhook 密钥 |
 | **412** | **快照已失效**（`snapshot_token` 与当前数据不一致） | 退回 `pending` | 否 | 「清单已变化，请重新预演」 |
 | **423** | **对象被临时锁住**（如 EasyProject 的项目审批锁 `PROJECT_LOCKED`） | 退回 `pending` | **是**（人解除锁之后） | 「该应用中部分对象正在审批/锁定，解除后请重新预演」 |
 | 409 | 人员无法识别 / 投递冲突 / 迟到的旧 generation / 业务归属冲突 | `failed` | 否 | 稳定本地文案 + 白名单提取的 `code`/`message`（各 ≤200 字符、已脱敏），**不是原样展示** |
-| 413 | 请求体过大 | `failed` | 否 | 单独指定的条目过多，请分批执行 |
+| 413 | 请求体过大 | **原超大 batch 记 `failed`；action 保持 `previewed`** | 否（不显示 [重试]） | 转入分批：创建 `HandoverBatchPlan`、返回 `batch_progress`，引导「重新预演 → 执行下一批」（`01` §2.4.1.1） |
 | 422 | 载荷不被支持（未声明的资产类型、不支持的事件） | `failed` | 否 | 应用声明与实现不一致 |
 | 5xx | 应用内部错误 | `failed` | 是 | 可重试 |
 
