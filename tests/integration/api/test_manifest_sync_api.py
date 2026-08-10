@@ -201,3 +201,28 @@ def test_manifest_sync_rejects_mismatched_manifest_app_key() -> None:
     response = _post(Client(), app.app_key, token, {"manifest": _manifest("someone-else", 1)})
 
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+
+
+def test_manifest_sync_rejects_non_https_lifecycle_webhook_url() -> None:
+    # Given: 已注册应用; lifecycle 带明文 http 本机 webhook(非 https 公网)。
+    app, token = _app_with_token("sync-http-webhook")
+    catalog_before = app.catalog_version
+    manifest = _manifest(app.app_key, 1)
+    manifest["lifecycle"]["handover_url"] = (
+        "http://localhost:3001/api/v1/easyauth/lifecycle/handover"
+    )
+
+    # When: 推送该 manifest。
+    response = _post(Client(), app.app_key, token, {"manifest": manifest})
+
+    # Then: 结构化 422, 不落库任何模板/webhook 半成品。
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    payload = response.json()
+    assert payload["error"]["code"] == "SEMANTIC_VALIDATION_ERROR"
+    assert "https" in payload["error"]["message"].lower() or "Webhook" in payload["error"][
+        "message"
+    ]
+    assert not PermissionTemplateVersion.objects.filter(app=app).exists()
+    assert not AppWebhookConfig.objects.filter(app=app).exists()
+    app.refresh_from_db()
+    assert app.catalog_version == catalog_before

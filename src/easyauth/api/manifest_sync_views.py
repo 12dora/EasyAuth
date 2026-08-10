@@ -26,7 +26,12 @@ from easyauth.applications.manifest_import import (
 from easyauth.applications.models import App
 from easyauth.applications.permission_templates import PermissionTemplateImportError
 from easyauth.audit.services import AuditRecord, AuditService
-from easyauth.config.net import InsecureUrlError, require_secure_url
+from easyauth.config.net import (
+    BlockedHostError,
+    InsecureUrlError,
+    InvalidWebhookUrlError,
+    require_secure_url,
+)
 from easyauth.config.rate_limit import client_ip, over_limit, rate_limit_exceeded
 
 if TYPE_CHECKING:
@@ -107,6 +112,13 @@ def app_manifest_sync(request: HttpRequest, app_key: str) -> JsonResponse:  # no
         return _error(
             ErrorCode.SEMANTIC_VALIDATION_ERROR,
             f"manifest 导入失败: {exc.message}",
+            HTTPStatus.UNPROCESSABLE_ENTITY,
+        )
+    except (BlockedHostError, InvalidWebhookUrlError) as exc:
+        # webhook/handover URL 公网 https 校验失败属语义错误, 不得泄漏为 500。
+        return _error(
+            ErrorCode.SEMANTIC_VALIDATION_ERROR,
+            str(exc),
             HTTPStatus.UNPROCESSABLE_ENTITY,
         )
     app.refresh_from_db()
