@@ -128,7 +128,7 @@ def test_receiver_batch_rolls_back_all_updates_when_one_write_fails(
         *,
         action: HandoverAppAction,
         to_user: UserMirror | None,
-        policy: dict[str, JsonValue],
+        policy: dict[str, JsonValue] | None = None,
     ) -> HandoverAppAction:
         nonlocal call_count
         call_count += 1
@@ -165,8 +165,8 @@ def test_receiver_batch_rolls_back_all_updates_when_one_write_fails(
     first_action.refresh_from_db()
     second_action.refresh_from_db()
     assert response.status_code == HTTPStatus.CONFLICT
-    assert first_action.to_user is None
-    assert second_action.to_user is None
+    assert first_action.grant_receiver is None
+    assert second_action.grant_receiver is None
 
 
 @pytest.mark.parametrize(
@@ -179,6 +179,7 @@ def test_receiver_batch_rolls_back_all_updates_when_one_write_fails(
 def test_receiver_requires_exactly_one_transfer_strategy(
     strategy: tuple[str | None, bool],
 ) -> None:
+    # v2: release_to_pool 已移除; 缺 to_user_id 或仍传 release_to_pool 均 400。
     to_user_id, release_to_pool = strategy
     client = _logged_in_superuser(f"handover-xor-admin-{release_to_pool}")
     subject = UserMirror.objects.create(authentik_user_id="handover-xor-subject")
@@ -205,8 +206,7 @@ def test_receiver_requires_exactly_one_transfer_strategy(
 
     action.refresh_from_db()
     assert response.status_code == HTTPStatus.BAD_REQUEST
-    assert action.to_user is None
-    assert action.policy == {}
+    assert action.grant_receiver is None
 
 
 def test_receiver_rejects_handover_subject() -> None:
@@ -234,11 +234,12 @@ def test_receiver_rejects_handover_subject() -> None:
 
     action.refresh_from_db()
     assert response.status_code == HTTPStatus.BAD_REQUEST
-    assert action.to_user is None
-    assert action.policy == {}
+    assert action.grant_receiver is None
 
 
-def test_grant_selection_patch_invalidates_related_preview() -> None:
+def test_grant_selection_patch_invalidates_related_preview(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     client = _logged_in_superuser("handover-selection-preview-admin")
     app, group, _permission = _app_with_catalog("handover-selection-preview")
     subject = UserMirror.objects.create(authentik_user_id="handover-selection-preview-subject")
@@ -250,6 +251,25 @@ def test_grant_selection_patch_invalidates_related_preview() -> None:
         ),
     )
     receiver = UserMirror.objects.create(authentik_user_id="handover-selection-preview-receiver")
+    from easyauth.applications.models import HANDOVER_CAPABILITY_DECLARED
+    from easyauth.webhooks.hooks import HookResponse
+    from easyauth.webhooks.models import AppWebhookConfig
+
+    app.handover_capability = HANDOVER_CAPABILITY_DECLARED
+    app.handover_asset_types = [
+        {"type": "customer", "label": "客户", "detail_supported": False, "releasable": False},
+    ]
+    app.save(
+        update_fields=["handover_capability", "handover_asset_types", "updated_at"],
+    )
+    _ = AppWebhookConfig.objects.update_or_create(
+        app=app,
+        defaults={
+            "secret": "whsec-selection",
+            "handover_url": "https://example.com/handover",
+            "enabled": True,
+        },
+    )
     task, _created = offboarding_services.ensure_handover_task(
         subject=subject,
         kind="offboard",
@@ -258,8 +278,31 @@ def test_grant_selection_patch_invalidates_related_preview() -> None:
     action = update_action_receiver(
         action=HandoverAppAction.objects.get(task=task, app=app),
         to_user=receiver,
-        policy={},
     )
+    if action.status != "pending":
+        action.status = "pending"
+        action.blocked_reason = ""
+        action.save(update_fields=["status", "blocked_reason", "updated_at"])
+
+    def fake_preview(**_kwargs: object) -> HookResponse:
+        return HookResponse(
+            status_code=200,
+            location="",
+            payload={
+                "snapshot_token": "tok",
+                "assets": [
+                    {
+                        "type": "customer",
+                        "label": "客户",
+                        "count": 0,
+                        "detail_supported": False,
+                        "releasable": False,
+                    },
+                ],
+            },
+        )
+
+    monkeypatch.setattr(handover_services, "signed_hook_post", fake_preview)
     action = handover_services.preview_action(action)
     item = HandoverGrantItem.objects.get(task=task, app=app)
 
@@ -274,7 +317,7 @@ def test_grant_selection_patch_invalidates_related_preview() -> None:
     assert response.status_code == HTTPStatus.OK
     assert item.selected is False
     assert action.status == "pending"
-    assert action.preview_payload == {}
+    assert action.snapshot_token == ""
 
 
 def test_receiver_batch_semantic_error_prevents_all_writes() -> None:
@@ -311,10 +354,8 @@ def test_receiver_batch_semantic_error_prevents_all_writes() -> None:
     first_action.refresh_from_db()
     second_action.refresh_from_db()
     assert response.status_code == HTTPStatus.BAD_REQUEST
-    assert first_action.to_user is None
-    assert first_action.policy == {}
-    assert second_action.to_user is None
-    assert second_action.policy == {}
+    assert first_action.grant_receiver is None
+    assert second_action.grant_receiver is None
 
 
 def test_template_replacement_rolls_back_when_second_item_save_fails(
@@ -451,6 +492,8 @@ def test_confirmed_transfer_diff_is_idempotent_and_conflicts_on_other_payload() 
         kind="transfer",
         created_by="handover-confirm-diff-admin",
     )
+    # §5.5: 确认前全部 action 必须 done/skipped。
+    _ = HandoverAppAction.objects.filter(task=task).update(status="skipped")
     template = OnboardingTemplate.objects.create(name="差异确认模板")
     revision = _template_revision(template)
     _ = OnboardingTemplateRevisionItem.objects.create(
@@ -538,6 +581,7 @@ def test_transfer_diff_confirmation_rejects_stale_revision() -> None:
         kind="transfer",
         created_by="handover-stale-plan-admin",
     )
+    _ = HandoverAppAction.objects.filter(task=task).update(status="skipped")
     template = OnboardingTemplate.objects.create(name="旧方案版本测试模板")
     revision = _template_revision(template)
     _ = OnboardingTemplateRevisionItem.objects.create(

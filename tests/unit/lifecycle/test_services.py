@@ -303,7 +303,8 @@ def test_execute_action_transfers_selected_grants_and_calls_hook(
 
     # Then: 勾选项转授给接收人(未勾选跳过), 钩子按协议收到 execute 载荷, 单据完成。
     assert action.status == "done"
-    assert action.status == "done"
+    assert action.data_completed_at is not None
+    assert action.snapshot_token == ""
     receiver_grant = AccessGrant.objects.get(user=receiver, app=app, is_current=True)
     assert AccessGrantGroup.objects.filter(grant=receiver_grant, authorization_group=group).exists()
     assert not AccessGrantPermission.objects.filter(grant=receiver_grant).exists()
@@ -313,6 +314,8 @@ def test_execute_action_transfers_selected_grants_and_calls_hook(
     assert call["event_type"] == "lifecycle.handover.execute"
     assert call["kind"] == "offboard"
     assert call["from_user_id"] == "lc-exec-user"
+    assert "assignments" in call
+    assert call["assignments"][0]["asset_type"] == "customer"
     # v2: 数据接收人下沉到 assignments, 不再有顶层 to_user_id
     task.refresh_from_db()
     assert task.status == "completed"
@@ -346,7 +349,8 @@ def test_preview_action_rejects_stale_hook_response(
         _ = preview_action(action)
     action.refresh_from_db()
     assert action.preview_generation == action_generation_after_concurrent_update
-    assert action.preview_generation == action_generation_after_concurrent_update
+    # 陈旧响应不得写 snapshot_token
+    assert action.snapshot_token == ""
 
 
 def test_execute_action_keeps_accepted_hook_pending(
@@ -392,7 +396,6 @@ def test_execute_action_keeps_accepted_hook_pending(
     # Then: 202 只表示受理, action 保持异步待完成并持久化查询地址。
     assert action.status == "async_pending"
     assert action.async_status_url == status_url
-    assert action.async_status_url == status_url
     task.refresh_from_db()
     assert task.status != "completed"
 
@@ -437,39 +440,67 @@ def test_poll_async_action_completes_action_and_task(
     # When
     completed = poll_async_action(pending)
 
-    # Then: 200 完成 action、清理状态 URL 并驱动 task 收敛。
+    # Then: 200 走 complete_data_phase → 转授权 + data_completed_at + 释放租约。
     assert completed.status == "done"
     assert completed.async_status_url == ""
     assert completed.async_poll_attempts == 1
-    assert completed.status == "done"
+    assert completed.data_completed_at is not None
+    assert AccessGrant.objects.filter(user=receiver, app=app, is_current=True).exists()
     task.refresh_from_db()
     assert task.status == "completed"
 
 
-def test_poll_async_action_rejects_attempts_at_limit_without_calling_hook(
+def test_poll_async_action_at_limit_sets_attention_required(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Given: 异步查询已达有界重试上限。
+    # Given: 异步轮询达上限, 仍持有租约。
+    from easyauth.lifecycle.lease import take_lease
+    from easyauth.lifecycle.models import (
+        ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
+        ACTION_STATUS_ASYNC_PENDING,
+        BATCH_STATUS_ASYNC_PENDING,
+        HandoverExecutionBatch,
+    )
+
     app, group, _permission = _app_with_catalog("lc-async-limit-app")
     subject = _granted_user("lc-async-limit-user", app, group)
+    receiver = UserMirror.objects.create(authentik_user_id="lc-async-limit-receiver")
+    _ = AppWebhookConfig.objects.filter(app=app).update(
+        secret="whsec-async-limit",
+        handover_url="https://etrade.example.com/handover",
+        enabled=True,
+    )
     task, _created = ensure_handover_task(
         subject=subject,
         kind="offboard",
         created_by="admin-a",
     )
-    action = HandoverAppAction.objects.get(task=task, app=app)
-    action.status = "async_pending"
-    action.async_status_url = "https://etrade.example.com/status/limit"
-    max_attempts = 10
-    action.async_poll_attempts = max_attempts
-    action.save(
-        update_fields=[
-            "status",
-            "async_status_url",
-            "async_poll_attempts",
-            "updated_at",
-        ],
+    action = update_action_receiver(
+        action=HandoverAppAction.objects.get(task=task, app=app),
+        to_user=receiver,
     )
+    action.status = ACTION_STATUS_ASYNC_PENDING
+    action.async_status_url = "https://etrade.example.com/status/limit"
+    action.async_poll_attempts = 10
+    action.snapshot_token = "tok"
+    action.generation = 1
+    action.batch_seq = 1
+    action.save()
+    handle = take_lease(action=action, owner=f"async:prep", batch_seq=1)
+    batch = HandoverExecutionBatch.objects.create(
+        action=action,
+        action_snapshot_id=int(action.id),
+        generation=1,
+        batch_seq=1,
+        is_final=True,
+        snapshot_token="tok",
+        request_payload={},
+        request_hash="x" * 64,
+        status=BATCH_STATUS_ASYNC_PENDING,
+    )
+    from easyauth.lifecycle.lease import cas_update_owner
+
+    _ = cas_update_owner(handle, new_owner=f"async:{batch.pk}", renew=True)
     called = False
 
     def unexpected_hook(**_kwargs: object) -> HookResponse:
@@ -479,12 +510,14 @@ def test_poll_async_action_rejects_attempts_at_limit_without_calling_hook(
 
     monkeypatch.setattr(lifecycle_services, "signed_hook_get", unexpected_hook)
 
-    # When / Then: 无 active lease 时 poll 无法 claim → 冲突, 不发网。
-    with pytest.raises(lifecycle_services.HandoverConflictError):
-        _ = poll_async_action(action)
+    result = poll_async_action(action)
     assert called is False
-    action.refresh_from_db()
-    assert action.async_poll_attempts == max_attempts
+    assert result.status == ACTION_STATUS_ASYNC_ATTENTION_REQUIRED
+    from easyauth.lifecycle.models import HandoverExecutionLease
+
+    lease = HandoverExecutionLease.objects.get(action=action, released_at__isnull=True)
+    assert lease.released_at is None
+    assert AuditLog.objects.filter(event_type="handover_async_attention_required").exists()
 
 
 def test_execute_action_requires_receiver_or_release_policy(
