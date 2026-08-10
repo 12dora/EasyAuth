@@ -1952,9 +1952,31 @@ def takeover_expired_lease(
     owner: str | None = None,
 ) -> HandoverAppAction | None:
     """§2.4.2 先抢占后查证: 用原 canonical body 重放 execute。"""
+    from datetime import timedelta
+
+    from easyauth.lifecycle.core import ASYNC_ATTENTION_POLL_INTERVAL_SECONDS
     from easyauth.lifecycle.lease import preempt_expired_lease
 
     worker = owner or f"recover:{uuid.uuid4().hex[:12]}"
+
+    # async_attention_required 的 30 分钟退避必须在抢占前生效, 否则 60s recovery
+    # beat 会在租约 5 分钟过期后反复 preempt+poll, 烧掉 fence 并绕过 §7 的 48 次/天 上限。
+    if lease.action_id is not None:
+        attention_action = (
+            HandoverAppAction.objects.filter(
+                pk=lease.action_id,
+                status=ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
+            )
+            .only("id", "status")
+            .first()
+        )
+        if attention_action is not None:
+            last = getattr(lease, "renewed_at", None) or lease.acquired_at
+            if last is not None and last > timezone.now() - timedelta(
+                seconds=ASYNC_ATTENTION_POLL_INTERVAL_SECONDS,
+            ):
+                return None
+
     handle = preempt_expired_lease(lease, new_owner=worker)
     if handle is None:
         return None
@@ -1971,11 +1993,12 @@ def takeover_expired_lease(
         _ = cas_release(handle)
         return None
     action = HandoverAppAction.objects.select_related("app", "task").get(pk=lease.action_id)
-    if action.status in {
-        ACTION_STATUS_ASYNC_PENDING,
-        ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
-    }:
-        # 异步在途 / 待人工: 仅续约并交回 poll 路径, 禁止重放 execute(01 §7)
+    if action.status == ACTION_STATUS_ASYNC_PENDING:
+        # 异步在途: 续约并交回 poll 路径, 禁止重放 execute(01 §7)
+        _ = cas_update_owner(handle, new_owner=f"async:{batch.pk}", renew=True)
+        return poll_async_action(action, worker_id=worker)
+    if action.status == ACTION_STATUS_ASYNC_ATTENTION_REQUIRED:
+        # 已越过 30 分钟门禁(抢占前未 return): 续约并 poll 作为 beat 兜底
         _ = cas_update_owner(handle, new_owner=f"async:{batch.pk}", renew=True)
         return poll_async_action(action, worker_id=worker)
     hook_url = _handover_hook_url(action.app)

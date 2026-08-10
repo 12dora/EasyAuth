@@ -240,3 +240,79 @@ def test_map_hook_call_error_snapshot_stale() -> None:
     assert mapped423 is not None
     assert mapped423.status_code == 423
     assert "downstream_locked" in mapped423.content.decode()
+
+
+def test_map_hook_call_error_413_preserves_batch_progress_details() -> None:
+    from easyauth.lifecycle.api_errors import map_handover_exception
+    from easyauth.webhooks.hooks import HookCallError
+
+    mapped = map_handover_exception(
+        HookCallError("too large", status_code=413),
+        details={"batch_progress": {"completed": 1, "total": 3, "current_batch_seq": 2}},
+    )
+    assert mapped is not None
+    assert mapped.status_code == 413
+    import json
+
+    body = json.loads(mapped.content.decode())
+    assert body["error"]["details"]["reason"] == "payload_too_large"
+    assert body["error"]["details"]["batch_progress"]["completed"] == 1
+
+
+def test_attention_lease_recovery_respects_30min_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """V-01: 30 分钟内 recovery beat 不得 poll / 不得烧 fence。"""
+    from easyauth.lifecycle.handover import takeover_expired_lease
+    from easyauth.lifecycle.models import HandoverLeaseFence
+    from easyauth.tasks.lifecycle import lifecycle_recover_expired_execution_leases_task
+
+    _subject, app, _task, action = _subject_app_action(
+        status=ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
+    )
+    action.async_status_url = "https://example.test/status/attention"
+    action.save(update_fields=["async_status_url", "updated_at"])
+    handle = take_lease(action=action, owner="async:seed", batch_seq=1)
+    batch = HandoverExecutionBatch.objects.create(
+        action=action,
+        action_snapshot_id=int(action.id),
+        generation=1,
+        batch_seq=1,
+        status=BATCH_STATUS_ASYNC_PENDING,
+        is_final=True,
+        snapshot_token="tok",
+        request_payload={},
+        request_hash="a" * 64,
+    )
+    lease = HandoverExecutionLease.objects.get(pk=handle.lease_id)
+    now = timezone.now()
+    lease.owner = f"async:{batch.pk}"
+    lease.renewed_at = now - timedelta(minutes=2)
+    lease.lease_expires_at = now - timedelta(seconds=30)
+    lease.save(update_fields=["owner", "renewed_at", "lease_expires_at"])
+    fence_before = lease.fence
+    fence_row = HandoverLeaseFence.objects.get(subject_user=action.task.subject_user, app=app)
+    next_fence_before = fence_row.next_fence
+
+    get_calls = {"n": 0}
+
+    def unexpected_get(**_kwargs: object) -> object:
+        get_calls["n"] += 1
+        raise AssertionError("signed_hook_get must not run within 30min attention gate")
+
+    monkeypatch.setattr("easyauth.lifecycle.handover.signed_hook_get", unexpected_get)
+
+    first = lifecycle_recover_expired_execution_leases_task()
+    second = lifecycle_recover_expired_execution_leases_task()
+    assert first["scanned"] >= 1
+    assert second["scanned"] >= 1
+    assert get_calls["n"] == 0
+
+    lease.refresh_from_db()
+    fence_row.refresh_from_db()
+    assert lease.fence == fence_before
+    assert fence_row.next_fence == next_fence_before
+    # domain 入口同样跳过
+    assert takeover_expired_lease(lease, owner="recover:manual") is None
+    lease.refresh_from_db()
+    assert lease.fence == fence_before
