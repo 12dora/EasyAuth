@@ -95,17 +95,19 @@ app.include_router(
         lambda: settings.easyauth_webhook_secret,
         on_preview,
         on_execute,
-        on_handover_items=on_items,
+        on_items,  # 必填; EasyProject 可再传 signature_failure_status=401
     )
 )
 ```
 
 状态码约定:
 
-- 时间戳超窗 → **400**; 签名不匹配 / 头缺失 → **403**
+- 时间戳超窗 → **400**(不受 `signature_failure_status` 影响)
+- 签名不匹配 / 头缺失 → **`signature_failure_status`**(默认 **403**; EasyProject 传 **401**)
 - `webhook.test` 且 body.`event_type` 一致 → 200 `{"ok": true}`
-- 未知事件 → 422; 回调抛 `HandoverBusinessError` → 白名单状态码(400/409/412/413/422/423/429)
-- 其它回调异常 → 500, **固定文案**(不回显异常细节)
+- 未知事件 → 422; 回调抛 `HandoverBusinessError` → 白名单状态码(400/409/412/413/422/423/429);
+  可选 `retry_after` 渲染为响应头 `Retry-After`
+- 其它回调异常 → 500, **固定文案**(不回显异常细节); 白名单外状态码降级 500 时写 SDK warning
 
 TypedDict 与 golden 样本随包分发:
 

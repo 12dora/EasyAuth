@@ -61,21 +61,26 @@ def easyauth_lifecycle_router(
     secret_provider: SecretProvider,
     on_handover_preview: HandoverCallback,
     on_handover_execute: HandoverCallback,
+    on_handover_items: HandoverCallback,
     *,
-    on_handover_items: "HandoverCallback | None" = None,
     path: str = DEFAULT_HANDOVER_PATH,
     max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
+    signature_failure_status: int = 403,
 ) -> "APIRouter":
     """创建接收 EasyAuth 生命周期交接 webhook 的 FastAPI router。
 
     验签/事件分发/异常边界均由 SDK 承担, APP 实现业务回调:
     ``on_handover_preview`` 返回 preview 响应体(``{"snapshot_token", "assets": [...]}``, 不落库),
-    ``on_handover_items`` 返回 items 响应体(明细分页, 可选; 未提供时 items 事件回 422),
+    ``on_handover_items`` 返回 items 响应体(明细分页; **必填**, 接线期失败优于运行时 422),
     ``on_handover_execute`` 返回 execute 响应体(``{"summary": {...}}``, 按
     ``(task_id, generation, batch_id)`` 幂等)。``secret_provider`` 在每次请求时取密钥,
     避免 import 期读配置。
 
+    ``signature_failure_status`` 控制签名/鉴权头失败的 HTTP 状态码(默认 403;
+    EasyProject 传 401)。时间戳超窗始终 400, 不受此参数影响。
+
     在验签前先按 ``max_body_bytes`` 有界读取请求体, 超限返回 413。
+    业务错误若带 ``retry_after``, 会透传为响应头 ``Retry-After``。
     """
     from fastapi import APIRouter, Request, Response
 
@@ -87,11 +92,7 @@ def easyauth_lifecycle_router(
             raw_body = await read_bounded_body(request, max_body_bytes=max_body_bytes)
         except BodyTooLargeError:
             status_code, headers, body = body_too_large_response(max_body_bytes)
-            return Response(
-                content=body,
-                status_code=status_code,
-                media_type=headers["Content-Type"],
-            )
+            return _as_response(status_code, headers, body)
         status_code, headers, body = lifecycle_http_response(
             secret_provider=secret_provider,
             headers=dict(request.headers),
@@ -99,7 +100,22 @@ def easyauth_lifecycle_router(
             on_handover_preview=on_handover_preview,
             on_handover_execute=on_handover_execute,
             on_handover_items=on_handover_items,
+            signature_failure_status=signature_failure_status,
         )
-        return Response(content=body, status_code=status_code, media_type=headers["Content-Type"])
+        return _as_response(status_code, headers, body)
 
     return router
+
+
+def _as_response(status_code: int, headers: dict[str, str], body: bytes) -> "Response":
+    """把内核 ``(status, headers, body)`` 转成 Starlette Response, 保留 Retry-After 等头。"""
+    from fastapi import Response
+
+    media_type = headers.get("Content-Type")
+    extra = {key: value for key, value in headers.items() if key.lower() != "content-type"}
+    return Response(
+        content=body,
+        status_code=status_code,
+        media_type=media_type,
+        headers=extra or None,
+    )

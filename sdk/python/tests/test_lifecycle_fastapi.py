@@ -55,7 +55,7 @@ def _client() -> TestClient:
             lambda: SECRET,
             on_preview,
             on_execute,
-            on_handover_items=on_items,
+            on_items,
         )
     )
     return TestClient(api)
@@ -153,6 +153,7 @@ def test_router_rejects_oversized_unsigned_body() -> None:
             lambda: SECRET,
             lambda _event: {"assets": []},
             lambda _event: {"summary": {}},
+            lambda _event: {"items": [], "page": 1, "page_size": 50, "total": 0},
             max_body_bytes=32,
         )
     )
@@ -164,6 +165,27 @@ def test_router_rejects_oversized_unsigned_body() -> None:
     )
     assert response.status_code == 413
     assert response.json()["error"]["code"] == "request_body_too_large"
+
+
+def test_router_signature_failure_status_knob() -> None:
+    api = FastAPI()
+    api.include_router(
+        easyauth_lifecycle_router(
+            lambda: SECRET,
+            lambda _event: {"assets": []},
+            lambda _event: {"summary": {}},
+            lambda _event: {"items": [], "page": 1, "page_size": 50, "total": 0},
+            signature_failure_status=401,
+        )
+    )
+    body = json.dumps({"event_type": "lifecycle.handover.preview"}).encode("utf-8")
+    headers = _signed_headers(body, event_type="lifecycle.handover.preview")
+    headers["X-EasyAuth-Signature"] = "f" * 64
+
+    response = TestClient(api).post(DEFAULT_HANDOVER_PATH, content=body, headers=headers)
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "webhook_verification_failed"
 
 
 def test_router_default_max_body_is_256_kib() -> None:

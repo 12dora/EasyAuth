@@ -14,6 +14,7 @@ EasyAuth 会向 APP 的 handover_url 发同步 POST(三事件):
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Callable
 from typing import Any, Final, Protocol
 
@@ -22,6 +23,8 @@ from easyauth_app_sdk.webhook import (
     WebhookVerificationError,
     verify_webhook,
 )
+
+logger = logging.getLogger(__name__)
 
 HANDOVER_PREVIEW_EVENT: Final = "lifecycle.handover.preview"
 HANDOVER_ITEMS_EVENT: Final = "lifecycle.handover.items"
@@ -59,14 +62,26 @@ class HandoverBusinessError(Exception):
     """业务回调主动表达的非 200 状态(契约 §10.6)。
 
     内核捕获后按 ``status_code`` 渲染错误 JSON; 仅白名单内状态码生效,
-    白名单外的值按 500 处理, 避免 APP 喂进 EasyAuth 状态机无法解释的 2xx/3xx。
+    白名单外的值按 500 处理并写 SDK 侧 warning, 避免 APP 喂进 EasyAuth
+    状态机无法解释的 2xx/3xx。
+
+    ``retry_after`` 可选: 渲染为响应头 ``Retry-After``(秒)。契约 §10.6 要求
+    EasyAuth 对 429 按该头退避; 其它状态码也可带, 由发送端决定是否消费。
     """
 
-    def __init__(self, status_code: int, code: str, message: str) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        code: str,
+        message: str,
+        *,
+        retry_after: int | None = None,
+    ) -> None:
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.message = message
+        self.retry_after = retry_after
 
 
 class _RequestLike(Protocol):
@@ -80,8 +95,21 @@ def _json_response(status_code: int, payload: dict[str, Any]) -> tuple[int, dict
     return status_code, headers, json.dumps(payload, ensure_ascii=False).encode("utf-8")
 
 
-def _error_response(status_code: int, code: str, message: str) -> tuple[int, dict[str, str], bytes]:
-    return _json_response(status_code, {"error": {"code": code, "message": message}})
+def _error_response(
+    status_code: int,
+    code: str,
+    message: str,
+    *,
+    reason: str | None = None,
+    retry_after: int | None = None,
+) -> tuple[int, dict[str, str], bytes]:
+    error_body: dict[str, Any] = {"code": code, "message": message}
+    if reason is not None:
+        error_body["reason"] = reason
+    status, headers, body = _json_response(status_code, {"error": error_body})
+    if retry_after is not None:
+        headers = {**headers, "Retry-After": str(retry_after)}
+    return status, headers, body
 
 
 def body_too_large_response(
@@ -127,11 +155,13 @@ def lifecycle_http_response(
     raw_body: bytes,
     on_handover_preview: HandoverCallback,
     on_handover_execute: HandoverCallback,
-    on_handover_items: HandoverCallback | None = None,
+    on_handover_items: HandoverCallback,
+    signature_failure_status: int = 403,
 ) -> tuple[int, dict[str, str], bytes]:
     """构建生命周期 webhook 端点响应 ``(status, headers, body)``。
 
-    验签失败: 时间戳超窗返回 400, 签名/头缺失返回 403;
+    验签失败: 时间戳超窗返回 400, 签名/鉴权头失败返回 ``signature_failure_status``
+    (默认 403; EasyProject 等可传 401, 见契约 §10.1);
     ``event_type`` 与事件头不一致返回 422(在 ``webhook.test`` 短路之前);
     ``webhook.test`` 直接回 ``{"ok": true}``; 按事件分发到 preview/items/execute 回调;
     未知事件返回 422; ``HandoverBusinessError`` 按白名单状态码渲染;
@@ -141,8 +171,19 @@ def lifecycle_http_response(
         event = verify_webhook(secret=secret_provider(), headers=headers, raw_body=raw_body)
     except WebhookVerificationError as error:
         if error.reason in _TIMESTAMP_REASONS:
-            return _error_response(400, "webhook_timestamp_invalid", str(error))
-        return _error_response(403, "webhook_verification_failed", str(error))
+            return _error_response(
+                400,
+                "webhook_timestamp_invalid",
+                str(error),
+                reason=error.reason,
+            )
+        # 签名不匹配/鉴权头缺失等: 状态码由下游约定(403 或 401), 非时间戳类。
+        return _error_response(
+            signature_failure_status,
+            "webhook_verification_failed",
+            str(error),
+            reason=error.reason,
+        )
 
     # 契约 §10.1: 必须在 webhook.test 短路之前比对 body.event_type 与事件头。
     body_event_type = event.payload.get("event_type")
@@ -154,12 +195,6 @@ def lifecycle_http_response(
     if event.event_type == HANDOVER_PREVIEW_EVENT:
         callback = on_handover_preview
     elif event.event_type == HANDOVER_ITEMS_EVENT:
-        if on_handover_items is None:
-            return _error_response(
-                422,
-                "unsupported_event",
-                f"不支持的事件类型: {event.event_type}",
-            )
         callback = on_handover_items
     elif event.event_type == HANDOVER_EXECUTE_EVENT:
         callback = on_handover_execute
@@ -169,8 +204,21 @@ def lifecycle_http_response(
         result = callback(event)
     except HandoverBusinessError as error:
         if error.status_code not in ALLOWED_BUSINESS_STATUS:
+            # 01 §8 item 6.1: 白名单外状态码降级 500 时必须写 SDK 侧告警。
+            logger.warning(
+                "HandoverBusinessError status_code=%s outside ALLOWED_BUSINESS_STATUS; "
+                "degrading to 500 (code=%s)",
+                error.status_code,
+                error.code,
+            )
             return _error_response(500, CALLBACK_FAILED_CODE, CALLBACK_FAILED_MESSAGE)
-        return _error_response(error.status_code, error.code, error.message)
+        return _error_response(
+            error.status_code,
+            error.code,
+            error.message,
+            retry_after=error.retry_after,
+        )
     except Exception:  # noqa: BLE001 - 回调异常边界: 固定文案, 不回显异常细节。
+        logger.exception("handover callback failed with unexpected exception")
         return _error_response(500, CALLBACK_FAILED_CODE, CALLBACK_FAILED_MESSAGE)
     return _json_response(200, result)
