@@ -160,14 +160,23 @@ COA 档案/批次创建人、需求进展与附件创建人、文档与产品上
 }
 ```
 
-> **绝对不要写成嵌套的 `lifecycle.handover` 对象。** 早期版本那样写，会在**两处**被拒：
+> **绝对不要写成嵌套的 `lifecycle.handover` 对象。** 早期版本那样写，会在**三处**被拒
+> （契约 §9.1 的权威表也是三行）：
 >
-> | 拦截点 | 现状 |
-> |---|---|
-> | `backend/app/domain/authz/easyauth_manifest_export.py:109` | `_require_fields(lifecycle, ..., {"handover_url","onboard_url","capabilities"})`，且返回字典（`:117-121`）只重建这三个键 —— 多出来的键会被**静默剥掉** |
-> | `backend/vendor/easyauth-app-sdk/.../manifest.py:101-107` | `_validate_lifecycle()` 的 `allowed = {"handover_url","onboard_url","capabilities"}`，未知字段直接 `raise ManifestValidationError` |
+> | 拦截点 | 现状 | 归谁改 |
+> |---|---|---|
+> | `backend/app/domain/authz/easyauth_manifest_export.py:109` | `_require_fields(lifecycle, ..., {"handover_url","onboard_url","capabilities"})` —— **没传 `optional`**（`:409-420`），多一个键直接抛 `EasyAuthManifestExportError`；即便绕过它，返回字典（`:117-121`）也只重建这三个键 | A3（本仓） |
+> | `backend/vendor/easyauth-app-sdk/.../manifest.py:101-107` | `_validate_lifecycle()` 的 `allowed = {"handover_url","onboard_url","capabilities"}`，未知字段直接 `raise ManifestValidationError` | A1a（SDK 0.4.0） |
+> | **EasyAuth `applications/permission_template_parsing.py:116-123` 的 `_LifecyclePayload`** | `ConfigDict(extra="forbid")`，只有三个字段；承接它的 `permission_template_types.py:87-93` `AppManifestLifecycleInput` 同样 | **A1（EasyAuth 仓，`01` §5.2）—— 本仓改不了，只能依赖** |
 >
-> 因此本项的实际改动是**两处都要扩**，缺一不可：
+> **第三道最容易漏，而漏了它本仓这一步会假绿。** EasyTrade 把自己两处扩完之后，
+> 本地 `/.well-known/easyauth-app.json` 生成正常、单测全绿，§6 步骤 2 看上去就交付完成了；
+> 但这份 descriptor 一推到 EasyAuth 做 manifest 导入/自动接入，就被 Pydantic 整份拒掉 ——
+> 不是「少了资产声明」，是**应用根本接不进来**，而那时步骤 2/3/4 都已合入。
+> 因此 **§6 步骤 2 的完成判据是「EasyAuth 侧 manifest 导入实际通过」**，
+> 不是「本仓单测通过」。
+>
+> 因此本项的实际改动是**三处都要扩**（本仓负责前一处），缺一不可：
 >
 > 1. `easyauth_manifest_export.py` 的 `_require_fields` 白名单与返回字典加 `handover_asset_types`，
 >    并校验其为 list[dict]、每项含 `type`/`label`/`detail_supported`/`releasable` 四键；
@@ -224,10 +233,12 @@ HANDOVER_ASSETS_BY_KEY: Final[dict[str, HandoverAssetSpec]] = {...}
 ```
 
 - `asset_type` 不在注册表 → `422 undeclared_asset_type`
-- `page_size` 钳制到 1–200
 - **任何查询之前**先校验上界（契约 §10.4）：`1 <= page <= 100000`、`1 <= page_size <= 200`、
   `len(q.strip().encode("utf-8")) <= 128`。违反直接 `422`，**不要钳制后继续查** ——
-  钳制等于把一次攻击性输入变成一次正常查询
+  钳制等于把一次攻击性输入变成一次正常查询。
+  **三项一律 422，`page_size` 也不例外**（早期这里另写过一句「`page_size` 钳制到 1–200」，
+  与本条互斥，已删）—— 钳制 `page_size` 会让 `page_size=1000000` 变成一次合法的 200 条查询，
+  而它的 body 指纹每次都不同、缓存不命中，下面那套 single-flight/429 防读放大就被绕开一半
 - 验签之后按**签名覆盖的 body 指纹**做 300 秒响应缓存或 single-flight；超并发/频率上限返回 `429`。
   **不能只按 `delivery_id` 去重** —— 那个头不在签名里，改一下就绕过去了。
   测试覆盖：超大 `page`、超长 UTF-8 `q`、以及同一份合法签名请求的连续与并发重放
@@ -245,10 +256,20 @@ HANDOVER_ASSETS_BY_KEY: Final[dict[str, HandoverAssetSpec]] = {...}
 `preview` 必须返回它，`items` 与 `execute` 必须回带并校验它。三处**共用同一个生成函数**：
 
 ```python
-def snapshot_token(db, *, task_id: str, generation: int, from_user_id: uuid.UUID) -> str:
-    """对当事人名下全部资产的当前状态取确定性摘要。"""
+def snapshot_token(db, *, from_user_id: uuid.UUID) -> str:
+    """对当事人名下全部资产的当前状态取确定性摘要。
+
+    摘要输入**只有** (type_key, id, 归属列, 状态列) —— task_id 与 generation
+    不参与哈希, 所以也不收进签名 (要做日志关联在调用方拼)。
+    收了却不用的形参会让人以为该拌进去: preview 与 execute 两条路径一旦对
+    「拌不拌」取不同答案, token 恒不相等, 每次 execute 都 412, 表现成
+    「清单一直在变」而数据其实纹丝未动。
+    """
     # 逐 asset_type 调 spec.query(db, from_user_id), 取 (type_key, id, 归属列, 状态列)
     # 按 (type_key, id) 排序后拼串, SHA-256, 取前 32 hex → ≤128 字节 (契约 §10.5.1)
+    # 摘要必须由数据库侧聚合产出 (每类一条 md5(string_agg(...)) 一类的聚合查询),
+    # 不得把全部行物化进 Python 再拼串 —— items 每翻一页都要重算一次 token,
+    # 名下几千条资产的当事人按 page_size=200 翻完就是几十次全量扫描。
 ```
 
 - `execute` 在**任何写入之前**重算一次；与请求携带的 token 不一致 → 整体 **`412`**（不是 409），
@@ -298,7 +319,10 @@ def execute_handover(
 > `_find_external_user()` 解析成本地 id，**尤其不能只解析默认接收人而漏掉 overrides 里的**
 > （每条 override 可以有不同接收人，这正是 D10 的用法）。
 > 内部 DTO 的字段名统一带 `local` 前缀（如上），让漏解析在类型层面就显眼。
-> 任一接收人解析不到 / 非 active / 等于当事人 → `422`。
+> 接收人失败的状态码**分两种，不要一律 422**（详表见下方 §3.6 step 4）：
+> **sub 映射不到本地用户 → `409`**（契约 §10.6「人员无法识别」，EasyProject 的
+> `IDENTITY_UNMAPPED` 也是 409）；**为空 / 非 active / 等于当事人 → `422`**。
+> 要改的具体函数是 `_required_receiver()`（现状 `easyauth_lifecycle.py:102` 一律抛 422）。
 
 **整体执行顺序（步骤号就是必须的先后，不能重排）：**
 
@@ -340,9 +364,18 @@ def execute_handover(
 
      **这一整条早期漏了**：畸形 payload 会让可空列（客户、活动）被静默释放，
      非空列（订单、询盘、任务、需求、样品）则要到 flush 时才炸
-   - **override 的 id 必须先验证**：存在、仍属于 `from_user_id`、仍满足该类型谓词。
-     任一不满足 → 整体 `409`。**不得**把无效 id 默默排除出默认集（那等于静默跳过）
-   - `snapshot_token` 与当前数据状态不一致 → 整体 **`412`**（见 §3.5.1）
+   - `snapshot_token` 与当前数据状态不一致 → 整体 **`412`**（见 §3.5.1），**零写入**
+   - **摘要一致之后**才逐条验证 override 的 id：存在、仍属于 `from_user_id`、仍满足该类型谓词。
+     **不得**把无效 id 默默排除出默认集（那等于静默跳过）。
+     此时失败只可能源于请求本身 —— `overrides` 引用了**本次快照集合之外**的 asset_id
+     → 整体 `409`；**归属或谓词状态在 preview 之后变了 → 走 412，不是 409**
+
+   > **这两项的先后是规范的一部分，不是实现自由**（契约 §10.5.1 第 4 条冻结）。
+   > 逐条校验天然写在行循环里、比重算全量摘要更早，所以不写死顺序的话，
+   > 「preview 之后有个客户被别人认领了」这一次普通竞态会**先命中 409** ——
+   > 而 409 在 EasyAuth 侧是**不可重试的 `failed`**，界面只剩「应用拒绝了本次交接」，
+   > assignee 没有任何前进路径。正确处置是 412 → 退回 `pending` → 重新预演。
+   > 这是本节唯一会把可恢复故障变成死局的地方。
 3. **先冻结主键集合，再统一加锁，且忽略 payload 里 assignments 的顺序。**
 
    两步走：
@@ -359,15 +392,22 @@ def execute_handover(
    >
    > | # | 现状 | 与本表序的冲突 |
    > |---|---|---|
-   > | 1 | 活动 update/delete **先锁 Activity 再取关联 Inquiry**（`api/v1/activities.py:159-170`） | 本序是 `Inquiry → Activity` |
-   > | 2 | 订单写路径先锁 `Order`，随后 `derive_stage()` 去改 `Inquiry`（`api/v1/orders/common.py:78-81`、`orders/routes.py:198-214`、`domain/pipeline/stage_deriver.py:33-63`） | 本序是 `Inquiry → Order` |
+   > | 1 | 活动 **update** 先锁 Activity 再取关联 Inquiry（`api/v1/activities.py:159-170`）。**`delete_activity`（`:195-197`）已经是正序**，只补回归用例，别去动它 | 本序是 `Inquiry → Activity` |
+   > | 2 | 订单写路径先锁 `Order`，随后 `derive_stage()` 去改 `Inquiry`。**`orders` 表有三个彼此独立的行锁入口，三个都要改**：<br>① `api/v1/orders/common.py:80` 的 `_get_visible_order`（下游 `orders/routes.py:213`、`route_mutations.py:161`、`update_order_helpers.py:209`、`finance_payments.py:118`、`finance_payment_mutations.py:190`、`finance_receipt_confirmation.py:221` 都由它加锁）<br>② `api/v1/order_payment_completion.py:31` —— **同名但独立的私有 `_get_visible_order`**，无条件加锁，`:145` 调 `derive_stage`<br>③ `api/v1/pipeline_shipments.py:239` 的 `_resolve_order`，`:266` 调 `derive_stage`<br>（`derive_stage` 确实写 `Inquiry` 行：`domain/pipeline/stage_deriver.py:44-61` 直接赋值 `stage_id` / `last_activity_at` / `sampling_status` / `quotation_branch_status`，`:63` flush） | 本序是 `Inquiry → Order` |
    > | 3 | `delete_sample_request()` 先锁 `SampleRequest`，再进 `Inquiry → SampleRequest` 的 helper（`api/v1/sample_requests_delete.py:29-35`） | 本序是 `Inquiry → SampleRequest` |
    >
    > 整改口径统一为「**先无锁读出关联 id，再按全局表序加锁，锁后复核关联未变**」：
    >
-   > 1. 活动：`Customer → Inquiry(id 升序) → Activity`，锁后复核关联，变了就重试或 409；
-   > 2. 订单：先只读拿到 `inquiry_id`，按 `Inquiry → Order` 加锁，锁后复核 `Order.inquiry_id` 未变，
-   >    再做订单改写与阶段推导；
+   > 1. 活动：目标形态是 `Customer → Inquiry(id 升序) → Activity`
+   >    —— 这**正是 `delete_activity` 的现状**，也是现成 helper `activity_helpers.py:127-144` 的形态。
+   >    真正要做的只有一件事：把 `update_activity` 的 `inquiry_ids` 解析（`:167-169`）
+   >    提到锁 Activity **之前**，合并成一次 `_lock_activity_aggregate_rows`，锁后复核
+   >    `activity.inquiry_id` 未变。工作量比「update/delete 都要改」小一半；
+   > 2. 订单：**改造对象是每一个 `orders` 表的 `with_for_update` 入口（上表列的三处），
+   >    不是某一个 helper。** 每处都先只读拿到 `inquiry_id`，按 `Inquiry → Order` 加锁，
+   >    锁后复核 `Order.inquiry_id` 未变，再做订单改写与阶段推导。
+   >    只改 `orders/common.py` 的话，结算路径与发货推进路径仍是反向的，
+   >    而三条死锁用例按旧文档只会覆盖那一处 —— **PR 合了、测试绿了，死锁还在**；
    > 3. 样品：`delete_sample_request()` **不得**在调 `lock_sample_write_roots()` 之前先锁
    >    `SampleRequest`；先无锁读，再统一 `Inquiry → SampleRequest` 加锁，锁内重验取消状态。
    >
@@ -387,7 +427,10 @@ def execute_handover(
    - 每个待改写的条目**当前仍属于 `from_user_id`** 且仍满足该类型谓词；
    - **接收人与来源用户的 `users` 行也要一起锁**（在资产之前锁），并在锁内复核
      `receiver.active` —— 否则校验通过之后、写入之前，目录同步可能刚好把接收人停用；
-   - token 不一致 → 整体 **412**；逐条不一致 → 整体 **409**。二者都**零写入**。
+   - **顺序固定**：先重算摘要比对，不一致 → **412** 且零写入；
+     摘要一致之后才逐条复核，此时失败只可能源于请求本身（`overrides` 引用快照外的
+     asset_id / 接收人 sub 映射不到 / 迟到 generation）→ **409**。
+     **归属在 preview 之后变化的一律 412，不得用 409 表达**（契约 §10.5.1 第 4 条）。二者都零写入。
 
    > 锁前校验、锁后写入之间的窗口是真实存在的：验证订单仍属 A 之后、拿到订单锁之前，
    > 并发事务把它转给了 C 并提交；handover 拿到锁却不重验，就把 C 的订单又覆盖给了 B。
@@ -510,9 +553,13 @@ easyauth_handover_generation_watermarks(task_id VARCHAR(64) PRIMARY KEY,
 **DEFAULT 只为迁移历史行服务，加完必须去掉**：三列在应用层都是必填，
 留着 server default 会让漏传字段变成静默写入默认值。
 
-**`task_id` 收窄为 `VARCHAR(64)` 并加同等 CHECK**。契约 §5.4 的格式是 **`{handover_task.id}:{app.id}`，两段都是十进制**，所以入口正则是 **`^[0-9]+:[0-9]+$`**、UTF-8 长度 1–64 字节，不满足 → `422`。
+**`task_id` 收窄为 `VARCHAR(64)` 并加同等 CHECK**。契约 §5.4 的格式是 **`{handover_task.id}:{app.id}`，两段都是十进制**，所以入口校验必须写成 **`re.fullmatch(r"[0-9]+:[0-9]+", task_id)`**（或 `\A[0-9]+:[0-9]+\Z`）、UTF-8 长度 1–64 字节，不满足 → `422`。
+
+**不要写成 `re.match(r"^[0-9]+:[0-9]+$", ...)`** —— Python 的 `$` 在**结尾换行之前**也匹配，
+`"137:1\n"` 会通过校验。于是 `"137:1"` 与 `"137:1\n"` 是两个不同的 `task_id`，
+落成两行回执、推进两次 generation 水位、执行两次归属改写 —— §3.7 的三元组幂等被整个绕过。
 **不要写成 `[A-Za-z0-9:_-]`** —— 那会放行契约明令禁止的字母/下划线/连字符，把上游还没迁移完（仍在拼 `app_key`）这件事**掩盖过去**。
-测试必须拒绝 `137:easytrade`、`137_app`、以及缺冒号的值。
+测试必须拒绝 `137:easytrade`、`137_app`、缺冒号的值，**以及 `"137:1\n"` 与 `" 137:1"`**。
 不加的话，65–255 字符的非法键会被现有列**照单收下**，超过 255 才到 flush 时炸成 500 ——
 一个本该在入口稳定 422 的输入变成了不稳定的 5xx。迁移前先检查历史行。
 
@@ -576,7 +623,7 @@ execute body 走进 preview 分支，或反过来。
 | 文件 | 覆盖 |
 |---|---|
 | `backend/app/tests/test_easyauth_handover_assets.py` | 8 类资产的 count 口径；`count=0` 也返回；注册表与 descriptor 一致（用同一常量断言） |
-| `backend/app/tests/test_easyauth_handover_items.py` | 分页稳定性（连续翻页不漏不重）；`page_size` 钳制；**`total` 的两种口径**：`q=""` 时等于 preview 的 `count`，`q!=""` 时等于**过滤后**的数量（可选的 `unfiltered_total` 才等于 `count`）。**不要写成"`total` 始终等于 preview count"** —— 那会把正确实现打红，而迎合它的实现会让前端翻出一堆空页 |
+| `backend/app/tests/test_easyauth_handover_items.py` | 分页稳定性（连续翻页不漏不重）；**`page`/`page_size`/`q` 三项越界都返回 422**（含 `page_size` 为 0、负数、201 —— 断言必须是 422 而不是钳制，否则正确实现会被打红）；**`total` 的两种口径**：`q=""` 时等于 preview 的 `count`，`q!=""` 时等于**过滤后**的数量（可选的 `unfiltered_total` 才等于 `count`）。**不要写成"`total` 始终等于 preview count"** —— 那会把正确实现打红，而迎合它的实现会让前端翻出一堆空页 |
 | `backend/app/tests/test_easyauth_handover_execute.py` | override 优先于 default；剩余条目按 `default_action`；三值 action 各自行为；**B1** 非空列永不写 NULL；**B2** `release` 落在 `releasable=false` 上抛 422 而非静默；`default_action="skip"` + 逐条 `transfer` 能对非空列做部分交接；`(task_id, generation, batch_id)` 幂等；不同 generation 真正重执行 |
 | `backend/app/tests/contract/test_handover_v2_golden.py` | 从 `easyauth_app_sdk.contract_samples` 包内资源读取样本逐字段比对；样本缺失必须 fail |
 | `backend/app/tests/test_easyauth_lifecycle.py` | 既有用例按 v2 payload 重写；**§4.1 负向用例**：签名合法但 `X-EasyAuth-Event` 与 body **`event_type`** 不一致（含把事件头改成 `webhook.test`）→ 422 |

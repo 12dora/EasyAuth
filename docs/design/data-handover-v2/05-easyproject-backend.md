@@ -434,6 +434,12 @@ async def build_snapshot_token(session, *, from_dtuid: str) -> str:
 | `principal_key` | `"system:easyauth-handover"` |
 | `operation` | `"postEasyauthLifecycleHandover"` |
 | `idempotency_key` | `f"handover:v2:{task_id}:{generation}:{batch_id}"`（列宽 `String(128)`；契约 §5.4 已把 `task_id` 限到 64 字节，放得下） |
+
+> **拼键之前必须先校验 `task_id` 的格式，用 `re.fullmatch(r"[0-9]+:[0-9]+", task_id)`
+> 加 UTF-8 长度 1–64 字节，不满足 → `422 VALIDATION_ERROR`**（契约 §5.4，与 `03` §3.8 同规格）。
+> **不要用 `re.match(r"^[0-9]+:[0-9]+$", ...)`** —— Python 的 `$` 在结尾换行之前也匹配，
+> `"137:1\n"` 会被放行，于是它和 `"137:1"` 拼出两个不同的幂等键，
+> 同一批 execute 会被执行两次。拒绝用例要覆盖 `"137:1\n"` 与 `" 137:1"`。
 | `request_sha256` | canonical payload 的 SHA-256（既有列，直接用） |
 | `response_json` | 首次成功的 `{"summary": ...}` 整体 |
 
