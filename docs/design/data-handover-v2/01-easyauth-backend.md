@@ -1976,9 +1976,11 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 ## 8. SDK 改造（`sdk/python/src/easyauth_app_sdk/lifecycle.py`）
 
 1. 新增事件常量 `HANDOVER_ITEMS_EVENT: Final = "lifecycle.handover.items"`。
-2. `lifecycle_http_response()` 增参 `on_handover_items: HandoverCallback`，按事件分发。
+2. `lifecycle_http_response()` / `easyauth_lifecycle_router()` **必填**
+   `on_handover_items: HandoverCallback`（无默认值；接线期失败优于运行时 422），按事件分发。
 3. `DEFAULT_MAX_BODY_BYTES` 由 `64 * 1024` 改为 `256 * 1024`（契约 §10.1）。
-4. `fastapi.py` 的挂载 helper 同步增加 items 回调参数。
+4. `fastapi.py` 的挂载 helper 同步把 items 回调列为必填位置参数，并透传
+   `signature_failure_status` 与响应头（含 `Retry-After`）。
 5. 新增 `easyauth_app_sdk/handover_payloads.py`：v2 请求/响应的 `TypedDict` 定义
    （`PreviewRequest`/`PreviewResponse`/`ItemsRequest`/`ItemsResponse`/`ExecuteRequest`/`ExecuteResponse`），
    下游 APP 直接 import 使用，杜绝字段名手抄出错。**每个 Request 都含 `event_type` 字段。**
@@ -2018,10 +2020,20 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 
    ```python
    class HandoverBusinessError(Exception):
-       def __init__(self, status_code: int, code: str, message: str) -> None: ...
+       def __init__(
+           self,
+           status_code: int,
+           code: str,
+           message: str,
+           *,
+           retry_after: int | None = None,
+       ) -> None: ...
 
    ALLOWED_BUSINESS_STATUS: Final = frozenset({400, 409, 412, 413, 422, 423, 429})
    ```
+
+   ``retry_after`` 可选：内核渲染为响应头 ``Retry-After``（秒）。契约 §10.6 要求
+   EasyAuth 对 **429** 按该头退避；其它状态码也可携带，由发送端决定是否消费。
 
    内核：
 
@@ -2029,15 +2041,18 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
    try:
        result = callback(event)
    except HandoverBusinessError as e:
-       assert e.status_code in ALLOWED_BUSINESS_STATUS   # 不在白名单内按 500 处理
-       return _error_response(e.status_code, e.code, e.message)
+       if e.status_code not in ALLOWED_BUSINESS_STATUS:
+           logger.warning(...)   # 白名单外降级 500 必须写 SDK 侧告警
+           return _error_response(500, "handover_callback_failed", 固定文案)
+       return _error_response(e.status_code, e.code, e.message, retry_after=e.retry_after)
    except Exception:
+       logger.exception(...)     # 意外异常记 exception, 响应仍用固定文案
        return _error_response(500, "handover_callback_failed", 固定文案)
    return _json_response(200, result)
    ```
 
    状态码**白名单**是有意的：不允许 APP 随便返回 2xx/3xx，否则 EasyAuth 的状态机会被喂进
-   它无法解释的输入。白名单外的值按 500 处理并写 SDK 侧告警。
+   它无法解释的输入。白名单外的值按 500 处理并写 SDK 侧 warning。
 
 6.2 **`WebhookVerificationError` 必须带稳定 reason，时间戳超窗与签名不匹配要分开**。
    现在 SDK 把两者一律当验签失败（`webhook.py:61-73` → `lifecycle.py:108-111` 统一 403），
@@ -2048,18 +2063,25 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 
    | reason | HTTP |
    |---|---|
-   | `INVALID_TIMESTAMP` / `TIMESTAMP_SKEW` | **400** |
-   | 签名不匹配、鉴权头缺失 | 各下游既有约定（EasyTrade 403 / EasyProject 401） |
+   | `INVALID_TIMESTAMP` / `TIMESTAMP_SKEW` | **400**（不受旋钮影响） |
+   | 签名不匹配、鉴权头缺失 | ``signature_failure_status``（默认 **403**；EasyProject 传 **401**） |
 
-   **禁止解析异常文案来分支** —— reason 是结构化字段。
+   **禁止解析异常文案来分支** —— reason 是结构化字段。内核把 ``reason`` 写入错误体
+   ``error.reason``（与 ``code``/``message`` 并列），便于下游日志与联调对齐冻结向量。
+
+   ``lifecycle_http_response(..., signature_failure_status: int = 403)`` 与
+   FastAPI helper 同参：只作用于签名/鉴权头失败，**不**改时间戳超窗的 400。
 
 7. **回调异常边界不得回显异常文本**（契约 §10.6）：现有
    `_error_response(500, "handover_callback_failed", f"交接回调执行失败: {error}")`
    会把 `str(error)` 拼进响应体。改为固定通用文案（如「交接回调执行失败，请查看应用日志」），
-   真实异常由 APP 自己记日志。理由：该响应体会被 EasyAuth 存下并展示给主管（普通员工）。
+   真实异常由 APP 自己记日志；SDK 侧对意外异常调用 ``logger.exception``。
+   理由：该响应体会被 EasyAuth 存下并展示给主管（普通员工）。
 8. 新增 `easyauth_app_sdk/manifest.py` 的 `_validate_lifecycle()` 白名单加 `handover_asset_types`
    （契约 §9.1）。**不改这一处，两个下游连 descriptor 都生成不出来**（会抛
    `ManifestValidationError: lifecycle 含未知字段`）。
+   当 `handover_asset_types` 存在时，逐项 **必填** `type`/`label`（非空字符串）与
+   `detail_supported`/`releasable`（布尔，不得缺省或非 bool）。
 9. **不新增目录端点** —— 现有 `get_directory_user(user_ref)` 本来就接受裸 Authentik `sub`：
    `parse_user_ref()` 对不以 `dt:` 开头的引用一律按 `kind="authentik"` 解析
    （`accounts/directory_references.py:58-60,90-105`）。
@@ -2076,9 +2098,10 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 
 **所有 webhook 发送入口在签名之前原子注入 `payload["event_type"] = event_type`。**
 
-现有 `webhook.test` 的 body 是 `{"message": ..., "app_key": ...}`
-（`admin_console/webhook_config_api.py:99`），**没有 `event_type`**。
-新版 SDK 会在 `webhook.test` 短路之前发现缺字段并返回 422，
+`webhook.test` 的**落库** payload 也必须含 `"event_type": "webhook.test"`
+（`admin_console/webhook_config_api.py` 创建时写入），使控制台「原文」与签名字节一致；
+发送端注入只是兜底，不得靠它才能让 SDK 过 `event_type` 校验。
+新版 SDK 会在 `webhook.test` 短路之前比对该字段，缺了就 422，
 而 README 的联调门禁正是「`webhook.test` 对每个 APP 返回 200」——
 **不做这一步，门禁永远过不去，而且看起来像下游的问题。**
 
