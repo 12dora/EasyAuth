@@ -47,7 +47,7 @@ def test_build_and_parse_descriptor_roundtrip() -> None:
     payload = build_descriptor_payload(manifest=_manifest())
 
     assert payload["descriptor_version"] == DESCRIPTOR_VERSION
-    assert payload["sdk"]["version"] == SDK_VERSION == "0.3.0"
+    assert payload["sdk"]["version"] == SDK_VERSION == "0.4.0"
     assert payload["app"]["app_key"] == "demoapp"
 
     descriptor = parse_descriptor_payload(payload)
