@@ -309,7 +309,10 @@ def test_s14_portal_timed_request_creates_request_with_expiration() -> None:
 
 
 def test_s14_submission_validation_requires_approver_for_managed_users_target() -> None:
-    # Given: 员工提交包含 MANAGED_USERS scope 的 direct Permission 申请。
+    """ADR-002 §36: 链耗尽 + 空审批人 → 提交成功进 superuser_pool;
+    非首个可用主管的手填审批人仍拒绝。
+    """
+    # Given: 员工无可用主管链, 提交 MANAGED_USERS scope 申请。
     _client, user = logged_in_client("s14-managed-users-no-approver-user")
     app = App.objects.create(app_key="s14-managed-users-no-approver", name="Managed Users")
     _ = AppScope.objects.create(app=app, key="MANAGED_USERS", name="下属")
@@ -320,7 +323,35 @@ def test_s14_submission_validation_requires_approver_for_managed_users_target() 
         supported_scopes=["MANAGED_USERS"],
     )
 
-    # When / Then: 没有审批人时 submission_validation 返回 MANAGED_USERS 专用错误。
+    # When: 空审批人 + 链耗尽 → 提交成功, 进超管池
+    created = AccessRequestService.submit_access_request(
+        AccessRequestSubmission(
+            user=user,
+            app=app,
+            grant_type=GRANT_TYPE_PERMANENT,
+            grant_expires_at=None,
+            reason="查看下属客户",
+            actor_type="user",
+            actor_id=user.authentik_user_id,
+            idempotency_key="s14-managed-users-missing-approver",
+            approver_user_ids=(),
+            direct_grants=(
+                ScopedAccessRequestGrant(
+                    permission=permission,
+                    scope_key="MANAGED_USERS",
+                ),
+            ),
+        ),
+    )
+    assert created.approval_routing_state == "superuser_pool"
+    assert created.routing_reason == "chain_exhausted"
+    assert AccessRequest.objects.filter(pk=created.pk).exists()
+
+    # And: 手填非主管审批人仍拒绝
+    other, _ = UserMirror.objects.get_or_create(
+        authentik_user_id="s14-random-approver",
+        defaults={"name": "random", "status": "active"},
+    )
     with pytest.raises(AccessRequestSubmissionError) as exc_info:
         _ = AccessRequestService.submit_access_request(
             AccessRequestSubmission(
@@ -331,8 +362,8 @@ def test_s14_submission_validation_requires_approver_for_managed_users_target() 
                 reason="查看下属客户",
                 actor_type="user",
                 actor_id=user.authentik_user_id,
-                idempotency_key="s14-managed-users-missing-approver",
-                approver_user_ids=(),
+                idempotency_key="s14-managed-users-wrong-approver",
+                approver_user_ids=(other.authentik_user_id,),
                 direct_grants=(
                     ScopedAccessRequestGrant(
                         permission=permission,
@@ -341,9 +372,88 @@ def test_s14_submission_validation_requires_approver_for_managed_users_target() 
                 ),
             ),
         )
-
     assert exc_info.value.messages == ("MANAGED_USERS requests require a direct manager approver.",)
-    assert AccessRequest.objects.count() == 0
+
+
+def test_s14_managed_users_accepts_first_active_manager_only() -> None:
+    """链上有 active 主管时, 仅该主管可作为审批人。"""
+    from easyauth.accounts.models import DingTalkUserOrgContext
+
+    _client, user = logged_in_client("s14-managed-users-with-manager")
+    user.dingtalk_source_slug = "s14"
+    user.dingtalk_corp_id = "corp"
+    user.dingtalk_userid = "s14-emp"
+    user.manager_userid = "s14-mgr-dt"
+    user.save()
+    manager = UserMirror.objects.create(
+        authentik_user_id="s14-mgr-uid",
+        name="经理",
+        status="active",
+        dingtalk_source_slug="s14",
+        dingtalk_corp_id="corp",
+        dingtalk_userid="s14-mgr-dt",
+    )
+    _ = DingTalkUserOrgContext.objects.create(
+        source_slug="s14",
+        corp_id="corp",
+        user_id="s14-emp",
+        manager_chain=[{"user_id": "s14-mgr-dt"}],
+        stale=False,
+    )
+    app = App.objects.create(app_key="s14-managed-users-mgr", name="Managed Users")
+    _ = AppScope.objects.create(app=app, key="MANAGED_USERS", name="下属")
+    permission = Permission.objects.create(
+        app=app,
+        key="customer.profile.view2",
+        name="查看下属客户",
+        supported_scopes=["MANAGED_USERS"],
+    )
+    ok = AccessRequestService.submit_access_request(
+        AccessRequestSubmission(
+            user=user,
+            app=app,
+            grant_type=GRANT_TYPE_PERMANENT,
+            grant_expires_at=None,
+            reason="查看下属客户",
+            actor_type="user",
+            actor_id=user.authentik_user_id,
+            idempotency_key="s14-managed-ok",
+            approver_user_ids=(manager.authentik_user_id,),
+            direct_grants=(
+                ScopedAccessRequestGrant(
+                    permission=permission,
+                    scope_key="MANAGED_USERS",
+                ),
+            ),
+        ),
+    )
+    assert ok.approval_routing_state == "normal"
+
+    other = UserMirror.objects.create(
+        authentik_user_id="s14-not-mgr",
+        name="路人",
+        status="active",
+    )
+    with pytest.raises(AccessRequestSubmissionError):
+        _ = AccessRequestService.submit_access_request(
+            AccessRequestSubmission(
+                user=user,
+                app=app,
+                grant_type=GRANT_TYPE_PERMANENT,
+                grant_expires_at=None,
+                reason="查看下属客户",
+                actor_type="user",
+                actor_id=user.authentik_user_id,
+                idempotency_key="s14-managed-wrong",
+                approver_user_ids=(other.authentik_user_id,),
+                direct_grants=(
+                    ScopedAccessRequestGrant(
+                        permission=permission,
+                        scope_key="MANAGED_USERS",
+                    ),
+                ),
+            ),
+        )
 
 
 def _access_request_payload(

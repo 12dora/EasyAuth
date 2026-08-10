@@ -43,7 +43,8 @@ class AccessRequestPayload(BaseModel):
     base_grant_revision: int | None = Field(default=None, ge=1)
     authorization_group_keys: tuple[RoleKey, ...] = Field(default=(), max_length=20)
     direct_grants: tuple[DirectGrantPayload, ...] = ()
-    approver_user_ids: tuple[ApproverUserId, ...] = Field(min_length=1, max_length=20)
+    # ADR-002 §36: MANAGED_USERS 链耗尽时允许空审批人进 superuser_pool; 其它类型由 domain 校验。
+    approver_user_ids: tuple[ApproverUserId, ...] = Field(default=(), max_length=20)
     grant_type: GrantType
     grant_expires_at: AwareDatetime | None = None
     reason: str = Field(min_length=1, max_length=1000)

@@ -77,6 +77,14 @@ def filter_access_requests(
         lookup="request_type",
         allowed=REQUEST_TYPE_VALUES,
     )
+    # §4.5.1: 超管待认领列表按 approval_routing_state=superuser_pool 过滤
+    queryset = _filter_enum(
+        queryset,
+        query,
+        key="approval_routing_state",
+        lookup="approval_routing_state",
+        allowed=("normal", "superuser_pool"),
+    )
     queryset = _filter_datetime(queryset, query, key="created_from", lookup="submitted_at__gte")
     queryset = _filter_datetime(queryset, query, key="created_to", lookup="submitted_at__lte")
     queryset = _filter_datetime(queryset, query, key="applied_from", lookup="applied_at__gte")

@@ -209,7 +209,7 @@ def _validate_managed_users_approver(
     raise AccessRequestSubmissionError((MANAGED_USERS_APPROVER_REQUIRED_MESSAGE,))
 
 
-def _active_manager_chain_user_ids(user: UserMirror) -> tuple[str, ...]:
+def active_manager_chain_user_ids(user: UserMirror) -> tuple[str, ...]:
     """沿 manager_chain 取第一个可用主管; 链不可用时回退 manager_userid 直属字段。"""
     from easyauth.lifecycle.assignee import resolve_assignee
 
@@ -236,12 +236,16 @@ def _active_manager_chain_user_ids(user: UserMirror) -> tuple[str, ...]:
     return (manager.authentik_user_id,)
 
 
+# 兼容内部调用名
+_active_manager_chain_user_ids = active_manager_chain_user_ids
+
+
 def _active_direct_manager_user_id(user: UserMirror) -> str | None:
-    ids = _active_manager_chain_user_ids(user)
+    ids = active_manager_chain_user_ids(user)
     return ids[0] if ids else None
 
 
-def _contains_managed_users_target(
+def contains_managed_users_target(
     authorization_groups: tuple[AuthorizationGroup, ...],
     direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> bool:
@@ -255,6 +259,9 @@ def _contains_managed_users_target(
         is_active=True,
         scope_key=MANAGED_USERS_SCOPE,
     ).exists()
+
+
+_contains_managed_users_target = contains_managed_users_target
 
 
 def _validate_no_current_grant(user: UserMirror, app: App) -> None:

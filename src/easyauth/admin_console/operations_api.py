@@ -280,6 +280,12 @@ def _access_request_item(
         "grant_type": access_request.grant_type,
         "reason": access_request.reason,
         "submitted_at": access_request.submitted_at.isoformat(),
+        "approval_routing_state": getattr(
+            access_request,
+            "approval_routing_state",
+            "normal",
+        ),
+        "routing_reason": getattr(access_request, "routing_reason", "") or "",
         **access_request_decision_fields(access_request),
     }
     if access_request.status == "grant_failed":

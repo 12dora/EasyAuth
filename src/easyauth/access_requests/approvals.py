@@ -199,6 +199,13 @@ def reassign_access_request(
             )
             for user_id in normalized
         )
+        # §4.5.1: 超管认领/改派写入至少一名 active 审批人后必须回到 normal
+        if normalized and getattr(access_request, "approval_routing_state", "normal") != "normal":
+            access_request.approval_routing_state = "normal"
+            access_request.routing_reason = ""
+            access_request.save(
+                update_fields=["approval_routing_state", "routing_reason"],
+            )
         _ = AuditService.record(
             AuditRecord(
                 actor_type=DECISION_ACTOR_CONSOLE_ADMIN,

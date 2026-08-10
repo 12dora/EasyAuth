@@ -113,6 +113,12 @@ def _request_item(access_request: AccessRequest) -> dict[str, JsonValue]:
         "app_key": access_request.app.app_key,
         "status": access_request.status,
         "approver_user_ids": approver_ids,
+        "approval_routing_state": getattr(
+            access_request,
+            "approval_routing_state",
+            "normal",
+        ),
+        "routing_reason": getattr(access_request, "routing_reason", "") or "",
         "decided_by": access_request.decided_by,
         "decision_actor_type": access_request.decision_actor_type,
         "decision_comment": access_request.decision_comment,
