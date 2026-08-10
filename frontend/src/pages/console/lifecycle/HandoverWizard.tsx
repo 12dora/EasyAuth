@@ -1,62 +1,36 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 
 import { Badge } from "../../../components/Badge";
 import { Button } from "../../../components/Button";
 import { Dialog } from "../../../components/Dialog";
-import { Field } from "../../../components/Field";
 import { StatusBanner } from "../../../components/StatusBanner";
-import { UserSearchInput } from "../../../components/UserSelect";
+import { AssetAllocator } from "../../../features/handover/AssetAllocator";
+import { HandoverUserPicker } from "../../../features/handover/HandoverUserPicker";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../../lib/api";
 import type { JsonObject, ListPayload } from "../../../lib/api";
-import type { HandoverAppActionRow, HandoverGrantItemRow, HandoverTaskDetailItem } from "../../../lib/domain";
+import type { HandoverAction, HandoverActionPayload, HandoverGrantItemRow, HandoverTaskDetail } from "../../../lib/domain";
 import { cn } from "../../../lib/cn";
 import { grantTypeLabel } from "../../../lib/status";
 import {
+  canSelectActionForWizard,
   HANDOVER_WIZARD_STEPS,
-  isFirstStep,
-  isLastStep,
-  stepIndex,
   useHandoverWizardController,
   type HandoverWizardStepId,
+  stepIndex,
 } from "./handoverWizardController";
-import {
-  handoverActionStatusLabel,
-  handoverActionStatusTone,
-  previewAssets,
-  previewHookSkipped,
-} from "./lifecycleLabels";
+import { handoverActionStatusLabel, handoverActionStatusTone } from "./lifecycleLabels";
 
 const ACTIONABLE_STATUSES = new Set(["pending", "previewed", "failed"]);
 
-interface ReceiverDraft {
-  toUserId: string;
-  release: boolean;
-}
-
-interface PreviewState {
-  status: "loading" | "done" | "error";
-  payload?: JsonObject;
-  error?: string;
-}
-
-interface ExecuteState {
-  status: "running" | "async_pending" | "done" | "failed";
-  error?: string;
-}
-
-interface ActionOperationPayload {
-  app_action?: HandoverAppActionRow;
-}
-
 interface HandoverWizardProps {
-  task: HandoverTaskDetailItem;
+  task: HandoverTaskDetail;
   onClose: () => void;
 }
 
-/** 五步交接向导: 选应用 → 选接收人 → 选权限 → 预览数据 → 确认执行。所有进度都保存在服务端, 任何一步都可以关闭稍后继续。 */
+/** 四段交接向导: 应用 → 授权 → 预演与分配 → 执行。接收人下沉到资产条目级。 */
 export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
   const { t } = useI18n();
   const queryClient = useQueryClient();
@@ -65,48 +39,32 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
     () => ["console", "handover-task", String(task.id), "grant-items"],
     [task.id],
   );
-  // 本次向导批次在打开时冻结；执行成功后的详情 refetch 不得让应用集合中途缩水。
-  const [batchActions] = useState(() => task.app_actions.filter((action) => ACTIONABLE_STATUSES.has(action.status)));
+
+  const [batchActions] = useState(() =>
+    task.actions.filter((action) => ACTIONABLE_STATUSES.has(action.status) || action.status === "blocked"),
+  );
+  const [selected, setSelected] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(
+      batchActions.map((action) => [action.app_key, canSelectActionForWizard(action) && ACTIONABLE_STATUSES.has(action.status)]),
+    ),
+  );
+  const [localActions, setLocalActions] = useState<Record<string, HandoverAction>>(() =>
+    Object.fromEntries(task.actions.map((action) => [action.app_key, action])),
+  );
+  const [grantSelection, setGrantSelection] = useState<Record<number, boolean>>({});
+  const [previewed, setPreviewed] = useState<Record<string, boolean>>({});
+  const [executeState, setExecuteState] = useState<Record<string, "running" | "done" | "failed" | "async_pending">>({});
+  const [isExecuting, setIsExecuting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const wizard = useHandoverWizardController();
   const step = wizard.step;
-  const [selected, setSelected] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(batchActions.map((action) => [action.app_key, true])),
-  );
-  const [receivers, setReceivers] = useState<Record<string, ReceiverDraft>>(() =>
-    Object.fromEntries(
-      batchActions.map((action) => [
-        action.app_key,
-        {
-          toUserId: action.to_user?.user_id ?? "",
-          release: action.policy?.unowned_strategy === "release_to_pool",
-        },
-      ]),
-    ),
-  );
-  const [unifiedReceiver, setUnifiedReceiver] = useState("");
-  const [perAppOpen, setPerAppOpen] = useState(false);
-  const [grantSelection, setGrantSelection] = useState<Record<number, boolean>>({});
-  const [previewState, setPreviewState] = useState<Record<string, PreviewState>>(() =>
-    Object.fromEntries(
-      batchActions
-        .filter((action) => action.status === "previewed" || action.status === "failed")
-        .map((action) => [action.app_key, { status: "done", payload: action.preview_payload } satisfies PreviewState]),
-    ),
-  );
-  const [executeState, setExecuteState] = useState<Record<string, ExecuteState>>({});
-  const [isExecuting, setIsExecuting] = useState(false);
-  const previewStateRef = useRef(previewState);
-  previewStateRef.current = previewState;
 
   const selectedApps = useMemo(
-    () => batchActions.filter((action) => selected[action.app_key]),
+    () => batchActions.filter((action) => selected[action.app_key] && canSelectActionForWizard(action)),
     [batchActions, selected],
   );
-  const selectedAppKeys = useMemo(
-    () => selectedApps.map((action) => action.app_key),
-    [selectedApps],
-  );
+  const blockedCount = batchActions.filter((action) => action.status === "blocked").length;
 
   const invalidateDetail = useCallback(
     () => void queryClient.invalidateQueries({ queryKey: detailQueryKey }),
@@ -117,13 +75,13 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
     queryKey: grantItemsQueryKey,
     queryFn: () =>
       apiRequest<ListPayload<HandoverGrantItemRow>>(`/console/api/v1/lifecycle/handover-tasks/${task.id}/grant-items`),
+    enabled: task.kind === "offboard",
   });
   const grantItems = useMemo(
     () => itemsFromPayload<HandoverGrantItemRow>(grantItemsQuery.data),
     [grantItemsQuery.data],
   );
 
-  // 勾选状态用服务端 selected 初始化; 只补新条目, 不覆盖本地已改动的勾选。
   useEffect(() => {
     setGrantSelection((current) => {
       const next = { ...current };
@@ -136,90 +94,51 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
     });
   }, [grantItems]);
 
-  const saveReceiversMutation = useMutation({
-    mutationFn: async (override?: Record<string, ReceiverDraft>) => {
-      const effective = override ?? receivers;
-      const changedAppKeys = selectedApps
-        .filter((action) => {
-          const draft = effective[action.app_key] ?? { toUserId: "", release: false };
-          return (
-            (action.to_user?.user_id ?? "") !== (draft.release ? "" : draft.toUserId.trim()) ||
-            (action.policy?.unowned_strategy === "release_to_pool") !== draft.release
-          );
-        })
-        .map((action) => action.app_key);
-      await apiRequest(`/console/api/v1/lifecycle/handover-tasks/${task.id}`, {
-        method: "PATCH",
-        body: {
-          app_actions: selectedApps.map((action) => {
-            const draft = effective[action.app_key] ?? { toUserId: "", release: false };
-            return {
-              app_key: action.app_key,
-              to_user_id: draft.release ? null : draft.toUserId.trim() || null,
-              release_to_pool: draft.release,
-            };
-          }),
-        } satisfies JsonObject,
-      });
-      return changedAppKeys;
-    },
-    onSuccess: (changedAppKeys) => {
-      // 改接收人会使旧预览作废(服务端同样回退状态), 本地预览结果一并重置。
-      setPreviewState((current) => omitKeys(current, changedAppKeys));
-      invalidateDetail();
-    },
-  });
-
   const saveGrantsMutation = useMutation({
     mutationFn: async () => {
       const items = grantItems
-        .filter((item) => item.status === "pending" && selectedAppKeys.includes(item.app_key))
+        .filter((item) => item.status === "pending" && selectedApps.some((a) => a.app_key === item.app_key))
         .map((item) => ({ ...item, nextSelected: grantSelection[item.id] ?? item.selected }))
         .filter((item) => item.selected !== item.nextSelected);
       if (items.length === 0) {
-        return [];
+        return;
       }
       await apiRequest(`/console/api/v1/lifecycle/handover-tasks/${task.id}/grant-items`, {
         method: "PATCH",
         body: { items: items.map((item) => ({ id: item.id, selected: item.nextSelected })) } satisfies JsonObject,
       });
-      return [...new Set(items.map((item) => item.app_key))];
     },
-    onSuccess: (changedAppKeys) => {
-      setPreviewState((current) => omitKeys(current, changedAppKeys));
-      setExecuteState((current) => omitKeys(current, changedAppKeys));
-      void queryClient.invalidateQueries({ queryKey: grantItemsQueryKey });
-    },
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: grantItemsQueryKey }),
   });
 
-  const runPreview = useCallback(async (appKey: string) => {
-    setPreviewState((current) => ({ ...current, [appKey]: { status: "loading" } }));
+  const runPreview = async (appKey: string) => {
+    setError(null);
     try {
-      const payload = await apiRequest<{ app_action?: HandoverAppActionRow }>(
+      const payload = await apiRequest<HandoverActionPayload>(
         `/console/api/v1/lifecycle/handover-tasks/${task.id}/actions/${appKey}/preview`,
         { method: "POST", body: {} },
       );
-      setPreviewState((current) => ({
-        ...current,
-        [appKey]: { status: "done", payload: payload.app_action?.preview_payload ?? {} },
-      }));
-    } catch (error) {
-      setPreviewState((current) => ({ ...current, [appKey]: { status: "error", error: (error as Error).message } }));
+      setLocalActions((current) => ({ ...current, [appKey]: payload.action }));
+      setPreviewed((current) => ({ ...current, [appKey]: true }));
+    } catch (err) {
+      setError((err as Error).message);
     }
-  }, [task.id]);
+  };
 
-  // 进入预览步后为所选应用逐个生成预览; 已有结果的应用不重复请求。
   useEffect(() => {
-    if (step !== "preview") {
+    if (step !== "allocate") {
       return;
     }
     let cancelled = false;
     const run = async () => {
-      for (const appKey of selectedAppKeys) {
-        if (cancelled || previewStateRef.current[appKey]) {
+      for (const action of selectedApps) {
+        if (cancelled || previewed[action.app_key] || localActions[action.app_key]?.status === "previewed") {
+          if (localActions[action.app_key]?.status === "previewed") {
+            setPreviewed((current) => ({ ...current, [action.app_key]: true }));
+          }
           continue;
         }
-        await runPreview(appKey);
+        await runPreview(action.app_key);
       }
       if (!cancelled) {
         invalidateDetail();
@@ -229,229 +148,138 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
     return () => {
       cancelled = true;
     };
-  }, [invalidateDetail, runPreview, selectedAppKeys, step]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [step]);
+
+  const allPreviewed =
+    selectedApps.length > 0 &&
+    selectedApps.every(
+      (action) => previewed[action.app_key] || localActions[action.app_key]?.status === "previewed",
+    );
+
+  const goNext = () => {
+    if (step === "apps") {
+      if (selectedApps.length === 0) {
+        return;
+      }
+      if (task.kind === "offboard") {
+        wizard.goTo("grants");
+      } else {
+        wizard.goTo("allocate");
+      }
+      return;
+    }
+    if (step === "grants") {
+      saveGrantsMutation.mutate(undefined, { onSuccess: () => wizard.goTo("allocate") });
+      return;
+    }
+    if (step === "allocate" && !allPreviewed) {
+      return;
+    }
+    wizard.goNext();
+  };
 
   const runExecute = async () => {
     if (isExecuting || !allPreviewed) {
       return;
     }
     setIsExecuting(true);
-    for (const appKey of selectedAppKeys) {
-      if (["async_pending", "done"].includes(executeState[appKey]?.status ?? "")) {
-        continue;
-      }
-      setExecuteState((current) => ({ ...current, [appKey]: { status: "running" } }));
+    for (const action of selectedApps) {
+      const current = localActions[action.app_key] ?? action;
+      setExecuteState((s) => ({ ...s, [action.app_key]: "running" }));
       try {
-        const action = selectedApps.find((candidate) => candidate.app_key === appKey);
-        const operation = action?.status === "failed" || executeState[appKey]?.status === "failed" ? "retry" : "execute";
-        const payload = await apiRequest<ActionOperationPayload>(
-          `/console/api/v1/lifecycle/handover-tasks/${task.id}/actions/${appKey}/${operation}`,
-          { method: "POST", body: {} },
+        const operation = current.status === "failed" ? "retry" : "execute";
+        const payload = await apiRequest<HandoverActionPayload>(
+          `/console/api/v1/lifecycle/handover-tasks/${task.id}/actions/${action.app_key}/${operation}`,
+          {
+            method: "POST",
+            body: operation === "execute" ? { confirm_version: current.confirm_version } : ({} as JsonObject),
+          },
         );
-        const nextState = executeStateFromAction(payload.app_action, t("handover.wizard.execute.invalidResponse"));
-        setExecuteState((current) => ({ ...current, [appKey]: nextState }));
-      } catch (error) {
-        setExecuteState((current) => ({ ...current, [appKey]: { status: "failed", error: (error as Error).message } }));
+        setLocalActions((s) => ({ ...s, [action.app_key]: payload.action }));
+        setExecuteState((s) => ({
+          ...s,
+          [action.app_key]:
+            payload.action.status === "done"
+              ? "done"
+              : payload.action.status === "async_pending"
+                ? "async_pending"
+                : "failed",
+        }));
+      } catch (err) {
+        setExecuteState((s) => ({ ...s, [action.app_key]: "failed" }));
+        setError((err as Error).message);
       }
       invalidateDetail();
     }
     setIsExecuting(false);
   };
 
-  const executeStatuses = selectedAppKeys.map((appKey) => executeState[appKey]?.status);
-  const executionStarted = executeStatuses.some((status) => status !== undefined);
-  const allExecuted = executeStatuses.length > 0 && executeStatuses.every((status) => status === "done");
-  const someExecuteFailed = executeStatuses.some((status) => status === "failed");
-  const someExecuteAsyncPending = executeStatuses.some((status) => status === "async_pending");
-  const allPreviewed =
-    selectedAppKeys.length > 0 && selectedAppKeys.every((appKey) => previewState[appKey]?.status === "done");
-
-  const goNext = () => {
-    if (step === "receivers") {
-      // 防漏: 已在「统一接收人」选了人但忘点「应用到所选应用」时, 下一步自动
-      // 把该接收人补到所有还没指定接收人/释放策略的应用上。
-      const unified = unifiedReceiver.trim();
-      let effective = receivers;
-      if (unified) {
-        const merged = { ...receivers };
-        let changed = false;
-        for (const appKey of selectedAppKeys) {
-          const draft = merged[appKey];
-          if (!draft?.release && !draft?.toUserId?.trim()) {
-            merged[appKey] = { toUserId: unified, release: false };
-            changed = true;
-          }
-        }
-        if (changed) {
-          effective = merged;
-          setReceivers(merged);
-        }
-      }
-      saveReceiversMutation.mutate(effective, { onSuccess: () => wizard.goTo("grants") });
-      return;
-    }
-    if (step === "grants") {
-      if (grantItemsQuery.isLoading || grantItemsQuery.error) {
-        return;
-      }
-      saveGrantsMutation.mutate(undefined, { onSuccess: () => wizard.goTo("preview") });
-      return;
-    }
-    if (step === "preview" && !allPreviewed) {
-      return;
-    }
-    wizard.goNext();
-  };
-
-  const saveAndClose = () => {
-    if (step === "receivers") {
-      saveReceiversMutation.mutate(undefined, { onSuccess: onClose });
-      return;
-    }
-    if (step === "grants") {
-      saveGrantsMutation.mutate(undefined, { onSuccess: onClose });
-      return;
-    }
-    onClose();
-  };
-
-  const isSaving = saveReceiversMutation.isPending || saveGrantsMutation.isPending;
+  const allExecuted =
+    selectedApps.length > 0 && selectedApps.every((a) => executeState[a.app_key] === "done");
+  const isSaving = saveGrantsMutation.isPending;
   const nextDisabled =
     (step === "apps" && selectedApps.length === 0) ||
     (step === "grants" && (grantItemsQuery.isLoading || Boolean(grantItemsQuery.error))) ||
-    (step === "preview" && !allPreviewed) ||
+    (step === "allocate" && !allPreviewed) ||
     isSaving ||
     isExecuting;
-  const closeWizard = () => {
-    if (!isExecuting) {
-      onClose();
-    }
-  };
 
   return (
-    <Dialog title={t("handover.wizard.title")} size="xl" onClose={closeWizard} closeDisabled={isExecuting}>
+    <Dialog title={t("handover.wizard.title")} size="xl" onClose={() => !isExecuting && onClose()} closeDisabled={isExecuting}>
       <div className="space-y-5">
         <WizardStepIndicator step={step} />
+        {error ? <StatusBanner live="alert" tone="signal" title={error} /> : null}
+
         {step === "apps" ? (
           <StepSection hint={t("handover.wizard.apps.hint")}>
             {batchActions.length === 0 ? (
-              <p className="text-body leading-5 text-ink-soft">{t("handover.wizard.apps.empty")}</p>
+              <p className="text-body text-ink-soft">{t("handover.wizard.apps.empty")}</p>
             ) : (
-              <>
-                <ul className="grid gap-2">
-                  {batchActions.map((action) => (
+              <ul className="grid gap-2">
+                {batchActions.map((action) => {
+                  const blocked = !canSelectActionForWizard(action);
+                  return (
                     <li key={action.app_key}>
-                      <label className="flex items-center gap-2.5 rounded-[3px] border border-ink/12 bg-paper-soft px-3 py-2.5 text-body text-ink">
+                      <label
+                        className={cn(
+                          "flex items-center gap-2.5 rounded-[3px] border px-3 py-2.5 text-body",
+                          blocked ? "border-signal/40 bg-signal/5 text-signal" : "border-ink/12 bg-paper-soft text-ink",
+                        )}
+                      >
                         <input
                           type="checkbox"
-                          checked={Boolean(selected[action.app_key])}
+                          disabled={blocked}
+                          checked={Boolean(selected[action.app_key]) && !blocked}
                           onChange={(event) =>
                             setSelected((current) => ({ ...current, [action.app_key]: event.currentTarget.checked }))
                           }
                         />
                         <span className="flex-1 font-medium">{action.app_name || action.app_key}</span>
-                        <Badge tone={handoverActionStatusTone(action.status)}>
-                          {handoverActionStatusLabel(t, action.status)}
-                        </Badge>
-                      </label>
-                    </li>
-                  ))}
-                </ul>
-                <p className="text-caption text-ink-faint">
-                  {t("handover.wizard.apps.selectedCount", { count: selectedApps.length })}
-                </p>
-              </>
-            )}
-          </StepSection>
-        ) : null}
-        {step === "receivers" ? (
-          <StepSection hint={t("handover.wizard.receivers.hint")}>
-            <div className="flex flex-wrap items-end gap-2">
-              <div className="min-w-64 flex-1">
-                <Field label={t("handover.wizard.receivers.unified")} as="group">
-                  <UserSearchInput
-                    value={unifiedReceiver}
-                    aria-label={t("handover.wizard.receivers.unified")}
-                    onChange={setUnifiedReceiver}
-                  />
-                </Field>
-              </div>
-              <Button
-                type="button"
-                disabled={!unifiedReceiver.trim()}
-                onClick={() =>
-                  setReceivers((current) => {
-                    const next = { ...current };
-                    for (const appKey of selectedAppKeys) {
-                      next[appKey] = { toUserId: unifiedReceiver.trim(), release: false };
-                    }
-                    return next;
-                  })
-                }
-              >
-                {t("handover.wizard.receivers.applyAll")}
-              </Button>
-            </div>
-            <Button type="button" variant="ghost" onClick={() => setPerAppOpen((open) => !open)}>
-              {t("handover.wizard.receivers.perApp")}
-            </Button>
-            {perAppOpen ? (
-              <ul className="grid gap-2.5">
-                {selectedApps.map((action) => {
-                  const draft = receivers[action.app_key] ?? { toUserId: "", release: false };
-                  const appName = action.app_name || action.app_key;
-                  return (
-                    <li
-                      key={action.app_key}
-                      className="flex flex-wrap items-center gap-3 rounded-[3px] border border-ink/12 bg-paper-soft px-3 py-2.5"
-                    >
-                      <span className="min-w-32 text-body font-medium text-ink">{appName}</span>
-                      <div className="min-w-56 flex-1">
-                        <UserSearchInput
-                          value={draft.release ? "" : draft.toUserId}
-                          aria-label={`${appName} ${t("handover.wizard.receivers.receiver")}`}
-                          onChange={(value) =>
-                            setReceivers((current) => ({
-                              ...current,
-                              [action.app_key]: { toUserId: value, release: false },
-                            }))
-                          }
-                        />
-                      </div>
-                      <label className="inline-flex items-center gap-1.5 text-body text-ink-soft">
-                        <input
-                          type="checkbox"
-                          checked={draft.release}
-                          onChange={(event) =>
-                            setReceivers((current) => ({
-                              ...current,
-                              [action.app_key]: {
-                                toUserId: event.currentTarget.checked ? "" : draft.toUserId,
-                                release: event.currentTarget.checked,
-                              },
-                            }))
-                          }
-                        />
-                        <span>{t("handover.wizard.receivers.releaseToPool")}</span>
+                        {blocked ? (
+                          <span className="text-caption">{t("handover.wizard.apps.blocked")}</span>
+                        ) : (
+                          <Badge tone={handoverActionStatusTone(action.status)}>
+                            {handoverActionStatusLabel(t, action.status)}
+                          </Badge>
+                        )}
                       </label>
                     </li>
                   );
                 })}
               </ul>
-            ) : null}
-            {saveReceiversMutation.error ? (
-              <StatusBanner live="alert"
-                tone="signal"
-                title={t("handover.wizard.receivers.saveFailed")}
-                message={(saveReceiversMutation.error as Error).message}
-              />
-            ) : null}
+            )}
+            <p className="text-caption text-ink-faint">
+              {t("handover.wizard.apps.selectedCount", { count: selectedApps.length })}
+            </p>
           </StepSection>
         ) : null}
+
         {step === "grants" ? (
           <StepSection hint={t("handover.wizard.grants.hint")}>
             {grantItemsQuery.error ? (
-              <StatusBanner live="alert"
+              <StatusBanner
+                live="alert"
                 tone="signal"
                 title={t("handover.wizard.grants.loadFailed")}
                 message={(grantItemsQuery.error as Error).message}
@@ -466,113 +294,120 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
                 onToggle={(id, checked) => setGrantSelection((current) => ({ ...current, [id]: checked }))}
               />
             ) : null}
-            {saveGrantsMutation.error ? (
-              <StatusBanner live="alert"
-                tone="signal"
-                title={t("handover.wizard.grants.saveFailed")}
-                message={(saveGrantsMutation.error as Error).message}
-              />
-            ) : null}
           </StepSection>
         ) : null}
-        {step === "preview" ? (
-          <StepSection hint={t("handover.wizard.preview.hint")}>
-            <ul className="grid gap-2.5">
-              {selectedApps.map((action) => (
-                <li key={action.app_key} className="rounded-[3px] border border-ink/12 bg-paper-soft px-3 py-2.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <strong className="text-body text-ink">{action.app_name || action.app_key}</strong>
-                    {previewState[action.app_key]?.status === "error" ? (
-                      <Button size="sm" type="button" onClick={() => void runPreview(action.app_key)}>
-                        {t("handover.wizard.preview.retry")}
-                      </Button>
+
+        {step === "allocate" ? (
+          <StepSection hint={t("handover.wizard.allocate.hint")}>
+            <ul className="grid gap-4">
+              {selectedApps.map((base) => {
+                const action = localActions[base.app_key] ?? base;
+                return (
+                  <li key={action.app_key} className="space-y-2 rounded-[3px] border border-ink/12 bg-paper-soft px-3 py-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <strong className="text-body text-ink">{action.app_name || action.app_key}</strong>
+                      {action.status !== "previewed" ? (
+                        <Button size="sm" type="button" onClick={() => void runPreview(action.app_key)}>
+                          {t("handover.portal.detail.preview")}
+                        </Button>
+                      ) : (
+                        <Button size="sm" type="button" onClick={() => void runPreview(action.app_key)}>
+                          {t("handover.portal.detail.repreview")}
+                        </Button>
+                      )}
+                    </div>
+                    {task.kind === "offboard" && action.status === "previewed" ? (
+                      <div>
+                        <p className="mb-1 text-caption text-ink-faint">{t("handover.wizard.grantReceiver")}</p>
+                        <HandoverUserPicker
+                          surface="console"
+                          taskId={task.id}
+                          value={action.grant_receiver}
+                          onChange={async (user) => {
+                            const payload = await apiRequest<HandoverActionPayload>(
+                              `/console/api/v1/lifecycle/handover-tasks/${task.id}/actions/${action.app_key}`,
+                              { method: "PATCH", body: { grant_receiver_user_id: user?.user_id ?? null } },
+                            );
+                            setLocalActions((s) => ({ ...s, [action.app_key]: payload.action }));
+                            setPreviewed((s) => ({ ...s, [action.app_key]: false }));
+                          }}
+                        />
+                        <p className="mt-1 text-caption text-ink-faint">{t("handover.wizard.grantReceiverHint")}</p>
+                      </div>
                     ) : null}
-                  </div>
-                  <PreviewResultLine
-                    action={action}
-                    state={previewState[action.app_key]}
-                    receiver={receivers[action.app_key]}
-                  />
-                </li>
-              ))}
+                    {action.status === "previewed" ? (
+                      <AssetAllocator
+                        surface="console"
+                        taskId={task.id}
+                        action={action}
+                        onActionUpdated={(patch) => {
+                          setLocalActions((s) => ({
+                            ...s,
+                            [action.app_key]: {
+                              ...action,
+                              asset_types: patch.asset_types ?? action.asset_types,
+                              confirm_version: patch.confirm_version ?? action.confirm_version,
+                              overrides_version: patch.overrides_version ?? action.overrides_version,
+                            },
+                          }));
+                        }}
+                      />
+                    ) : (
+                      <p className="text-body text-ink-faint">{t("handover.wizard.preview.loading")}</p>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
           </StepSection>
         ) : null}
+
         {step === "execute" ? (
           <StepSection hint={t("handover.wizard.execute.hint")}>
-            <ul className="grid gap-2.5">
-              {selectedApps.map((action) => (
-                <ExecuteSummaryRow
-                  key={action.app_key}
-                  action={action}
-                  receiver={receivers[action.app_key]}
-                  grantCount={
-                    grantItems.filter(
-                      (item) => item.app_key === action.app_key && (grantSelection[item.id] ?? item.selected),
-                    ).length
-                  }
-                  assetCount={previewAssets(previewState[action.app_key]?.payload).reduce(
-                    (total, asset) => total + asset.count,
-                    0,
-                  )}
-                  state={executeState[action.app_key]}
-                  disabled={isExecuting}
-                  onRetry={() => {
-                    setExecuteState((current) => {
-                      const next = { ...current };
-                      delete next[action.app_key];
-                      return next;
-                    });
-                    void (async () => {
-                      setIsExecuting(true);
-                      setExecuteState((current) => ({ ...current, [action.app_key]: { status: "running" } }));
-                      try {
-                        const payload = await apiRequest<ActionOperationPayload>(
-                          `/console/api/v1/lifecycle/handover-tasks/${task.id}/actions/${action.app_key}/retry`,
-                          { method: "POST", body: {} },
-                        );
-                        const nextState = executeStateFromAction(
-                          payload.app_action,
-                          t("handover.wizard.execute.invalidResponse"),
-                        );
-                        setExecuteState((current) => ({
-                          ...current,
-                          [action.app_key]: nextState,
-                        }));
-                      } catch (error) {
-                        setExecuteState((current) => ({
-                          ...current,
-                          [action.app_key]: { status: "failed", error: (error as Error).message },
-                        }));
-                      }
-                      setIsExecuting(false);
-                      invalidateDetail();
-                    })();
-                  }}
-                />
-              ))}
+            {blockedCount > 0 ? (
+              <StatusBanner
+                live="status"
+                tone="amber"
+                title={t("handover.wizard.execute.blockedSummary", { count: blockedCount })}
+              />
+            ) : null}
+            <ul className="grid gap-2">
+              {selectedApps.map((base) => {
+                const action = localActions[base.app_key] ?? base;
+                const state = executeState[action.app_key];
+                return (
+                  <li key={action.app_key} className="rounded-[3px] border border-ink/12 bg-paper-soft px-3 py-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <strong className="text-body">{action.app_name || action.app_key}</strong>
+                      {state === "done" ? (
+                        <Badge tone="evergreen">{t("handover.actionStatus.done")}</Badge>
+                      ) : state === "failed" ? (
+                        <Badge tone="signal">{t("handover.actionStatus.failed")}</Badge>
+                      ) : state === "running" ? (
+                        <Badge tone="amber">{t("handover.actionStatus.executing")}</Badge>
+                      ) : state === "async_pending" ? (
+                        <Badge tone="amber">{t("handover.actionStatus.asyncPending")}</Badge>
+                      ) : (
+                        <Badge tone={handoverActionStatusTone(action.status)}>
+                          {handoverActionStatusLabel(t, action.status)}
+                        </Badge>
+                      )}
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
-            {allExecuted ? (
-              <div>
-                <StatusBanner live="status" tone="evergreen" title={t("handover.wizard.execute.done")} />
-              </div>
-            ) : null}
-            {someExecuteFailed && !isExecuting ? (
-              <StatusBanner live="alert" tone="amber" title={t("handover.wizard.execute.failedSome")} />
-            ) : null}
+            {allExecuted ? <StatusBanner live="status" tone="evergreen" title={t("handover.wizard.execute.done")} /> : null}
           </StepSection>
         ) : null}
+
         <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-ink/10 pt-4">
-          <Button type="button" variant="ghost" disabled={isSaving || isExecuting} onClick={saveAndClose}>
+          <Button type="button" variant="ghost" disabled={isSaving || isExecuting} onClick={onClose}>
             {t("handover.wizard.saveLater")}
           </Button>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap gap-2">
             {!wizard.isFirstStep ? (
-              <Button
-                type="button"
-                disabled={isSaving || isExecuting || executionStarted}
-                onClick={wizard.goBack}
-              >
+              <Button type="button" disabled={isSaving || isExecuting} onClick={wizard.goBack}>
                 {t("common.back")}
               </Button>
             ) : null}
@@ -581,7 +416,7 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
                 {t("common.next")}
               </Button>
             ) : allExecuted ? (
-              <Button type="button" variant="primary" onClick={closeWizard}>
+              <Button type="button" variant="primary" onClick={onClose}>
                 {t("common.done")}
               </Button>
             ) : (
@@ -589,7 +424,7 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
                 type="button"
                 variant="primary"
                 loading={isExecuting}
-                disabled={isExecuting || someExecuteAsyncPending || selectedApps.length === 0 || !allPreviewed}
+                disabled={isExecuting || selectedApps.length === 0 || !allPreviewed}
                 onClick={() => void runExecute()}
               >
                 {t("handover.wizard.execute.run")}
@@ -600,14 +435,6 @@ export function HandoverWizard({ task, onClose }: HandoverWizardProps) {
       </div>
     </Dialog>
   );
-}
-
-function omitKeys<T>(source: Record<string, T>, keys: string[]): Record<string, T> {
-  const next = { ...source };
-  for (const key of keys) {
-    delete next[key];
-  }
-  return next;
 }
 
 function WizardStepIndicator({ step }: { step: HandoverWizardStepId }) {
@@ -621,12 +448,7 @@ function WizardStepIndicator({ step }: { step: HandoverWizardStepId }) {
         return (
           <li key={item.id} className="flex items-center gap-1" aria-current={isActive ? "step" : undefined}>
             {index > 0 ? <span aria-hidden="true" className="mx-1 hidden h-px w-5 bg-ink/15 sm:block" /> : null}
-            <span
-              className={cn(
-                "flex items-center gap-2 rounded-[3px] px-2 py-1 text-sm font-semibold",
-                isActive ? "text-ink" : "text-ink-soft",
-              )}
-            >
+            <span className={cn("flex items-center gap-2 rounded-[3px] px-2 py-1 text-sm font-semibold", isActive ? "text-ink" : "text-ink-soft")}>
               <span
                 aria-hidden="true"
                 className={cn(
@@ -662,7 +484,7 @@ function GrantItemsChecklist({
   selection,
   onToggle,
 }: {
-  apps: HandoverAppActionRow[];
+  apps: HandoverAction[];
   items: HandoverGrantItemRow[];
   selection: Record<number, boolean>;
   onToggle: (id: number, checked: boolean) => void;
@@ -671,11 +493,9 @@ function GrantItemsChecklist({
   const grouped = apps
     .map((action) => ({ action, items: items.filter((item) => item.app_key === action.app_key) }))
     .filter((group) => group.items.length > 0);
-
   if (grouped.length === 0) {
-    return <p className="text-body leading-5 text-ink-soft">{t("handover.wizard.grants.empty")}</p>;
+    return <p className="text-body text-ink-soft">{t("handover.wizard.grants.empty")}</p>;
   }
-
   return (
     <div className="space-y-4">
       {grouped.map(({ action, items: appItems }) => (
@@ -691,10 +511,7 @@ function GrantItemsChecklist({
                     checked={selection[item.id] ?? item.selected}
                     onChange={(event) => onToggle(item.id, event.currentTarget.checked)}
                   />
-                  <span className="flex-1">
-                    <span className="font-medium">{item.name || item.key}</span>
-                    {item.scope_key ? <span className="ml-2 text-caption text-ink-faint">{item.scope_key}</span> : null}
-                  </span>
+                  <span className="flex-1 font-medium">{item.name || item.key}</span>
                   <span className="text-caption text-ink-faint">
                     {item.kind === "group" ? t("handover.diff.kind.group") : t("handover.diff.kind.permission")}
                     {" · "}
@@ -708,108 +525,4 @@ function GrantItemsChecklist({
       ))}
     </div>
   );
-}
-
-function PreviewResultLine({
-  action,
-  state,
-  receiver,
-}: {
-  action: HandoverAppActionRow;
-  state: PreviewState | undefined;
-  receiver: ReceiverDraft | undefined;
-}) {
-  const { t } = useI18n();
-  if (!state || state.status === "loading") {
-    return <p className="mt-1 text-body text-ink-faint">{t("handover.wizard.preview.loading")}</p>;
-  }
-  if (state.status === "error") {
-    return (
-      <p className="mt-1 text-body leading-5 text-signal">
-        {t("handover.wizard.preview.failed")}
-        {state.error ? ` - ${state.error}` : ""}
-      </p>
-    );
-  }
-  if (previewHookSkipped(state.payload)) {
-    return <p className="mt-1 text-body leading-5 text-ink-soft">{t("handover.wizard.preview.noHook")}</p>;
-  }
-  const assets = previewAssets(state.payload);
-  if (assets.length === 0) {
-    return <p className="mt-1 text-body leading-5 text-ink-soft">{t("handover.wizard.preview.empty")}</p>;
-  }
-  const itemsText = assets
-    .map((asset) => t("handover.wizard.preview.asset", { count: asset.count, label: asset.label || asset.type }))
-    .join("、");
-  const receiverName = action.to_user?.name || receiver?.toUserId || "";
-  const line = receiver?.release
-    ? t("handover.wizard.preview.releaseToPool", { items: itemsText })
-    : t("handover.wizard.preview.transferTo", { items: itemsText, name: receiverName });
-  return <p className="mt-1 text-body leading-5 text-ink-soft">{line}</p>;
-}
-
-function ExecuteSummaryRow({
-  action,
-  receiver,
-  grantCount,
-  assetCount,
-  state,
-  disabled,
-  onRetry,
-}: {
-  action: HandoverAppActionRow;
-  receiver: ReceiverDraft | undefined;
-  grantCount: number;
-  assetCount: number;
-  state: ExecuteState | undefined;
-  disabled: boolean;
-  onRetry: () => void;
-}) {
-  const { t } = useI18n();
-  const receiverLabel = receiver?.release
-    ? t("handover.wizard.receivers.releaseToPool")
-    : action.to_user?.name || receiver?.toUserId || t("handover.card.waiting");
-  return (
-    <li className="rounded-[3px] border border-ink/12 bg-paper-soft px-3 py-2.5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <strong className="text-body text-ink">{action.app_name || action.app_key}</strong>
-        {state?.status === "running" ? (
-          <Badge tone="amber">{t("handover.actionStatus.executing")}</Badge>
-        ) : state?.status === "async_pending" ? (
-          <span className="inline-flex items-center gap-1.5">
-            <Badge tone="amber">{t("handover.actionStatus.asyncPending")}</Badge>
-            <Button size="sm" type="button" disabled={disabled} onClick={onRetry}>
-              {t("handover.card.checkStatus")}
-            </Button>
-          </span>
-        ) : state?.status === "done" ? (
-          <Badge tone="evergreen">{t("handover.actionStatus.done")}</Badge>
-        ) : state?.status === "failed" ? (
-          <span className="inline-flex items-center gap-1.5">
-            <Badge tone="signal">{t("handover.actionStatus.failed")}</Badge>
-            <Button size="sm" type="button" disabled={disabled} onClick={onRetry}>
-              {t("handover.card.retry")}
-            </Button>
-          </span>
-        ) : null}
-      </div>
-      <p className="mt-1 text-caption leading-5 text-ink-soft">
-        {t("handover.wizard.receivers.receiver")}: {receiverLabel}
-        {" · "}
-        {t("handover.wizard.execute.grantsCount", { count: grantCount })}
-        {" · "}
-        {t("handover.wizard.execute.assetsCount", { count: assetCount })}
-      </p>
-      {state?.status === "failed" && state.error ? (
-        <p className="mt-1 text-caption leading-5 text-signal">{state.error}</p>
-      ) : null}
-    </li>
-  );
-}
-
-function executeStateFromAction(action: HandoverAppActionRow | undefined, invalidResponseMessage: string): ExecuteState {
-  if (action?.status === "done" || action?.status === "async_pending") {
-    return { status: action.status };
-  }
-  throw new Error(invalidResponseMessage);
 }

@@ -1,26 +1,29 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, RefreshCcw } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useNavigate, useOutletContext, useParams } from "react-router-dom";
 
+import type { AppShellOutletContext } from "../../../components/AppShell";
 import { Badge } from "../../../components/Badge";
 import { Button } from "../../../components/Button";
 import { ButtonLink } from "../../../components/ButtonLink";
 import { Dialog } from "../../../components/Dialog";
-import { Field, SelectInput } from "../../../components/Field";
+import { Field, SelectInput, TextArea } from "../../../components/Field";
 import { PageHeader } from "../../../components/PageHeader";
 import { StatusBanner } from "../../../components/StatusBanner";
 import { UserSearchInput } from "../../../components/UserSelect";
 import { PageState } from "../../../components/ui/PageState";
 import { PanelSurface } from "../../../components/ui/PanelSurface";
 import { useToast } from "../../../components/ui/Toast";
+import { HandoverActionPanel } from "../../../features/handover/HandoverActionPanel";
+import { daysLeftTone } from "../../../features/handover/surface";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../../lib/api";
 import type { JsonObject, ListPayload } from "../../../lib/api";
 import type {
-  HandoverAppActionRow,
+  HandoverAction,
   HandoverGrantItemRow,
-  HandoverTaskDetailItem,
+  HandoverTaskDetail,
   HandoverTaskPayload,
   HandoverTeamItemRow,
   OnboardingTemplateRow,
@@ -30,9 +33,7 @@ import type {
 import { formatDateTime } from "../../../lib/status";
 import { HandoverWizard } from "./HandoverWizard";
 import {
-  handoverActionStatusLabel,
-  handoverActionStatusTone,
-  handoverActionSummary,
+  handoverAssigneeStateLabel,
   handoverKindLabel,
   handoverTaskStatusLabel,
   handoverTaskStatusTone,
@@ -49,9 +50,14 @@ export function HandoverTaskDetail() {
   const toast = useToast();
   const { taskId = "" } = useParams();
   const queryClient = useQueryClient();
+  const outlet = useOutletContext<AppShellOutletContext | null>();
+  const isSuperuser = outlet?.isSuperuser === true;
+  const isLocalAdmin = (outlet?.currentUserId ?? "").startsWith("local-admin:");
   const [wizardOpen, setWizardOpen] = useState(false);
   const [cancelConfirmOpen, setCancelConfirmOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+  const [deferOpen, setDeferOpen] = useState(false);
+  const [deferReason, setDeferReason] = useState("");
   const detailQueryKey = ["console", "handover-task", taskId];
   const navigate = useNavigate();
 
@@ -59,9 +65,26 @@ export function HandoverTaskDetail() {
     queryKey: detailQueryKey,
     queryFn: () => apiRequest<HandoverTaskPayload>(`/console/api/v1/lifecycle/handover-tasks/${taskId}`),
     enabled: Boolean(taskId),
+    refetchInterval: (query) => {
+      const task = query.state.data?.handover_task;
+      if (!task) return false;
+      return task.actions.some((a) => a.status === "executing" || a.status === "async_pending") ? 3000 : false;
+    },
   });
   const task = taskQuery.data?.handover_task;
   const invalidateDetail = () => void queryClient.invalidateQueries({ queryKey: detailQueryKey });
+
+  const replaceAction = (next: HandoverAction) => {
+    queryClient.setQueryData<HandoverTaskPayload>(detailQueryKey, (current) => {
+      if (!current?.handover_task) return current;
+      return {
+        handover_task: {
+          ...current.handover_task,
+          actions: current.handover_task.actions.map((a) => (a.app_key === next.app_key ? next : a)),
+        },
+      };
+    });
+  };
 
   const cancelMutation = useMutation({
     mutationFn: () =>
@@ -74,35 +97,44 @@ export function HandoverTaskDetail() {
       void queryClient.invalidateQueries({ queryKey: ["console", "handover-tasks"] });
       setCancelConfirmOpen(false);
     },
-    onError: (error: Error) => {
-      toast.error(t("handover.detail.cancelFailed"), error.message);
-    },
-  });
-
-  const retryMutation = useMutation({
-    mutationFn: (appKey: string) =>
-      apiRequest(`/console/api/v1/lifecycle/handover-tasks/${taskId}/actions/${appKey}/retry`, {
-        method: "POST",
-        body: {},
-      }),
-    onSuccess: invalidateDetail,
-    onError: (error: Error) => {
-      toast.error(t("handover.card.retryFailed"), error.message);
-    },
+    onError: (error: Error) => toast.error(t("handover.detail.cancelFailed"), error.message),
   });
 
   const deleteMutation = useMutation({
-    mutationFn: () =>
-      apiRequest(`/console/api/v1/lifecycle/handover-tasks/${taskId}`, {
-        method: "DELETE",
-      }),
+    mutationFn: () => apiRequest(`/console/api/v1/lifecycle/handover-tasks/${taskId}`, { method: "DELETE" }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["console", "handover-tasks"] });
       void navigate("/console/lifecycle/handover-tasks");
     },
-    onError: (error: Error) => {
-      toast.error(t("handover.detail.deleteFailed"), error.message);
+    onError: (error: Error) => toast.error(t("handover.detail.deleteFailed"), error.message),
+  });
+
+  const claimMutation = useMutation({
+    mutationFn: () =>
+      apiRequest<HandoverTaskPayload>(`/console/api/v1/lifecycle/handover-tasks/${taskId}/claim`, {
+        method: "POST",
+        body: {},
+      }),
+    onSuccess: (payload) => {
+      queryClient.setQueryData(detailQueryKey, payload);
+      invalidateDetail();
     },
+    onError: (error: Error) => toast.error(error.message),
+  });
+
+  const deferMutation = useMutation({
+    mutationFn: () =>
+      apiRequest<HandoverTaskPayload>(`/console/api/v1/lifecycle/handover-tasks/${taskId}/escalation/defer`, {
+        method: "POST",
+        body: { reason: deferReason.trim() },
+      }),
+    onSuccess: (payload) => {
+      queryClient.setQueryData(detailQueryKey, payload);
+      setDeferOpen(false);
+      setDeferReason("");
+      invalidateDetail();
+    },
+    onError: (error: Error) => toast.error(error.message),
   });
 
   if (taskQuery.error && !task) {
@@ -121,8 +153,11 @@ export function HandoverTaskDetail() {
   }
 
   const isOpenTask = Boolean(task && OPEN_TASK_STATUSES.has(task.status));
-  const hasActionableApps = Boolean(task?.app_actions.some((action) => ACTIONABLE_STATUSES.has(action.status)));
+  const hasActionableApps = Boolean(task?.actions.some((action) => ACTIONABLE_STATUSES.has(action.status)));
   const subjectName = task ? task.subject.name || task.subject.user_id : "";
+  const subjectStatus = task?.subject.status ?? "";
+  const canDefer = Boolean(task && task.escalation.deferred_at == null && task.escalation.deadline != null);
+  const canClaim = Boolean(task && task.assignee_state === "superuser_pool");
 
   return (
     <>
@@ -135,36 +170,16 @@ export function HandoverTaskDetail() {
             <ButtonLink to="/console/lifecycle/handover-tasks">{t("handover.detail.backToList")}</ButtonLink>
             {isOpenTask ? (
               <>
-                <Button
-                  type="button"
-                  variant="ghost-danger"
-                  onClick={() => {
-                    cancelMutation.reset();
-                    setCancelConfirmOpen(true);
-                  }}
-                >
+                <Button type="button" variant="ghost-danger" onClick={() => { cancelMutation.reset(); setCancelConfirmOpen(true); }}>
                   {t("handover.detail.cancelTask")}
                 </Button>
-                <Button
-                  type="button"
-                  variant="primary"
-                  icon={<ArrowRight size={16} />}
-                  disabled={!hasActionableApps}
-                  onClick={() => setWizardOpen(true)}
-                >
+                <Button type="button" variant="primary" icon={<ArrowRight size={16} />} disabled={!hasActionableApps} onClick={() => setWizardOpen(true)}>
                   {t("handover.continue")}
                 </Button>
               </>
             ) : null}
             {task?.status === "cancelled" ? (
-              <Button
-                type="button"
-                variant="ghost-danger"
-                onClick={() => {
-                  deleteMutation.reset();
-                  setDeleteConfirmOpen(true);
-                }}
-              >
+              <Button type="button" variant="ghost-danger" onClick={() => { deleteMutation.reset(); setDeleteConfirmOpen(true); }}>
                 {t("handover.detail.deleteTask")}
               </Button>
             ) : null}
@@ -187,7 +202,7 @@ export function HandoverTaskDetail() {
                 value={
                   <span className="inline-flex items-center gap-1.5">
                     {subjectName}
-                    <Badge tone={personStatusTone(task.subject.status)}>{personStatusLabel(t, task.subject.status)}</Badge>
+                    {subjectStatus ? <Badge tone={personStatusTone(subjectStatus)}>{personStatusLabel(t, subjectStatus)}</Badge> : null}
                   </span>
                 }
               />
@@ -197,30 +212,88 @@ export function HandoverTaskDetail() {
               <OverviewItem label={t("handover.detail.createdAt")} value={formatDateTime(task.created_at)} />
               <OverviewItem label={t("handover.detail.createdBy")} value={task.created_by || "-"} />
             </dl>
-            {task.reason ? (
-              <p className="max-w-3xl text-body leading-5 text-ink-soft">
-                {t("handover.detail.reason")}: {task.reason}
-              </p>
+            {task.reason ? <p className="max-w-3xl text-body leading-5 text-ink-soft">{t("handover.detail.reason")}: {task.reason}</p> : null}
+          </PanelSurface>
+
+          <PanelSurface padding="lg" className="space-y-3" data-testid="assignee-card">
+            <h2 className="text-base font-semibold text-ink">{t("handover.console.assigneeCard")}</h2>
+            <dl className="grid gap-2 text-body sm:grid-cols-2">
+              <OverviewItem label={t("handover.console.assigneeCard")} value={task.assignee?.name || task.assignee?.user_id || "-"} />
+              <OverviewItem label={t("handover.console.filter.assigneeState")} value={handoverAssigneeStateLabel(t, task.assignee_state)} />
+              <OverviewItem label={t("handover.portal.detail.escalated")} value={String(task.escalation_level)} />
+              <OverviewItem
+                label={t("handover.console.escalationDeadline")}
+                value={
+                  task.escalation.deadline
+                    ? `${formatDateTime(task.escalation.deadline)} · ${t("handover.console.daysLeft", { count: task.escalation.days_left ?? 0 })}`
+                    : t("handover.portal.list.awaitingSuperuser")
+                }
+              />
+            </dl>
+            {task.escalation.days_left != null ? (
+              <Badge tone={daysLeftTone(task.escalation.days_left)}>{t("handover.console.daysLeft", { count: task.escalation.days_left })}</Badge>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="button"
+                size="sm"
+                disabled={!canDefer}
+                onClick={() => setDeferOpen(true)}
+                data-testid="defer-button"
+              >
+                {t("handover.console.defer")}
+              </Button>
+              {canClaim ? (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="primary"
+                  disabled={isLocalAdmin}
+                  title={isLocalAdmin ? t("handover.console.claimDisabledLocalAdmin") : undefined}
+                  loading={claimMutation.isPending}
+                  onClick={() => claimMutation.mutate()}
+                  data-testid="claim-button"
+                >
+                  {t("handover.console.claim")}
+                </Button>
+              ) : null}
+            </div>
+            {(task.escalation.defer_history?.length ?? 0) > 0 ? (
+              <div className="space-y-1">
+                <h3 className="text-caption font-semibold text-ink-soft">{t("handover.console.deferHistory")}</h3>
+                <ul className="grid gap-1 text-caption text-ink-faint">
+                  {task.escalation.defer_history.map((entry, index) => (
+                    <li key={`${entry.at}-${index}`}>
+                      L{entry.escalation_level} · {entry.actor_id} · {formatDateTime(entry.at)} · {entry.reason}
+                    </li>
+                  ))}
+                </ul>
+              </div>
             ) : null}
           </PanelSurface>
+
           <PanelSurface padding="lg" className="space-y-4">
             <h2 className="text-base font-semibold text-ink">{t("handover.detail.apps")}</h2>
-            {task.app_actions.length === 0 ? (
+            {task.actions.length === 0 ? (
               <p className="text-body leading-5 text-ink-soft">{t("handover.detail.appsEmpty")}</p>
             ) : (
-              <ul className="grid gap-3 sm:grid-cols-2">
-                {task.app_actions.map((action) => (
-                  <AppActionCard
+              <ul className="grid gap-3">
+                {task.actions.map((action) => (
+                  <HandoverActionPanel
                     key={action.app_key}
+                    surface="console"
+                    task={task}
                     action={action}
-                    canRetry={isOpenTask}
-                    retryPending={retryMutation.isPending && retryMutation.variables === action.app_key}
-                    onRetry={() => retryMutation.mutate(action.app_key)}
+                    isConsoleSuperuser={isSuperuser}
+                    isLocalAdmin={isLocalAdmin}
+                    onTaskRefresh={invalidateDetail}
+                    onActionReplace={replaceAction}
                   />
                 ))}
               </ul>
             )}
           </PanelSurface>
+
           {task.kind === "transfer" ? (
             <TransferGrantSection task={task} taskId={taskId} onChanged={invalidateDetail} canOperate={isOpenTask} />
           ) : null}
@@ -229,7 +302,37 @@ export function HandoverTaskDetail() {
           ) : null}
         </section>
       ) : null}
+
       {wizardOpen && task ? <HandoverWizard task={task} onClose={() => setWizardOpen(false)} /> : null}
+
+      {deferOpen ? (
+        <Dialog
+          title={t("handover.console.deferTitle")}
+          size="sm"
+          onClose={() => setDeferOpen(false)}
+          footer={
+            <>
+              <Button type="button" onClick={() => setDeferOpen(false)}>{t("common.cancel")}</Button>
+              <Button
+                type="button"
+                variant="primary"
+                disabled={deferReason.trim().length < 10}
+                loading={deferMutation.isPending}
+                onClick={() => deferMutation.mutate()}
+              >
+                {t("handover.console.deferConfirm")}
+              </Button>
+            </>
+          }
+        >
+          <TextArea
+            value={deferReason}
+            aria-label={t("handover.console.deferReason")}
+            onChange={(event) => setDeferReason(event.currentTarget.value)}
+          />
+        </Dialog>
+      ) : null}
+
       {deleteConfirmOpen && task ? (
         <Dialog
           title={t("handover.detail.deleteTask")}
@@ -237,24 +340,14 @@ export function HandoverTaskDetail() {
           onClose={() => setDeleteConfirmOpen(false)}
           footer={
             <>
-              <Button type="button" onClick={() => setDeleteConfirmOpen(false)}>
-                {t("common.cancel")}
-              </Button>
-              <Button
-                type="button"
-                variant="danger"
-                loading={deleteMutation.isPending}
-                disabled={deleteMutation.isPending}
-                onClick={() => deleteMutation.mutate()}
-              >
+              <Button type="button" onClick={() => setDeleteConfirmOpen(false)}>{t("common.cancel")}</Button>
+              <Button type="button" variant="danger" loading={deleteMutation.isPending} disabled={deleteMutation.isPending} onClick={() => deleteMutation.mutate()}>
                 {t("handover.detail.deleteConfirm")}
               </Button>
             </>
           }
         >
-          <div className="grid gap-3">
-            <p className="text-body leading-5 text-ink-soft">{t("handover.detail.deleteMessage", { name: subjectName })}</p>
-          </div>
+          <p className="text-body leading-5 text-ink-soft">{t("handover.detail.deleteMessage", { name: subjectName })}</p>
         </Dialog>
       ) : null}
       {cancelConfirmOpen && task ? (
@@ -264,88 +357,26 @@ export function HandoverTaskDetail() {
           onClose={() => setCancelConfirmOpen(false)}
           footer={
             <>
-              <Button type="button" onClick={() => setCancelConfirmOpen(false)}>
-                {t("common.cancel")}
-              </Button>
-              <Button
-                type="button"
-                variant="danger"
-                loading={cancelMutation.isPending}
-                disabled={cancelMutation.isPending}
-                onClick={() => cancelMutation.mutate()}
-              >
+              <Button type="button" onClick={() => setCancelConfirmOpen(false)}>{t("common.cancel")}</Button>
+              <Button type="button" variant="danger" loading={cancelMutation.isPending} disabled={cancelMutation.isPending} onClick={() => cancelMutation.mutate()}>
                 {t("handover.detail.cancelConfirm")}
               </Button>
             </>
           }
         >
-          <div className="grid gap-3">
-            <p className="text-body leading-5 text-ink-soft">{t("handover.detail.cancelMessage", { name: subjectName })}</p>
-          </div>
+          <p className="text-body leading-5 text-ink-soft">{t("handover.detail.cancelMessage", { name: subjectName })}</p>
         </Dialog>
       ) : null}
     </>
   );
 }
 
-function OverviewItem({ label, value }: { label: string; value: React.ReactNode }) {
+function OverviewItem({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="flex items-baseline justify-between gap-4 border-b border-ink/8 pb-2">
       <dt className="shrink-0 text-caption text-ink-faint">{label}</dt>
       <dd className="m-0 min-w-0 truncate text-right font-medium text-ink">{value}</dd>
     </div>
-  );
-}
-
-function AppActionCard({
-  action,
-  canRetry,
-  retryPending,
-  onRetry,
-}: {
-  action: HandoverAppActionRow;
-  canRetry: boolean;
-  retryPending: boolean;
-  onRetry: () => void;
-}) {
-  const { t } = useI18n();
-  return (
-    <li className="flex flex-col gap-2 rounded-[3px] border border-ink/12 bg-paper-soft px-4 py-3">
-      <div className="flex items-center justify-between gap-2">
-        <strong className="text-body text-ink">{action.app_name || action.app_key}</strong>
-        <Badge tone={handoverActionStatusTone(action.status)}>{handoverActionStatusLabel(t, action.status)}</Badge>
-      </div>
-      <p className="text-body leading-5 text-ink-soft">{handoverActionSummary(t, action)}</p>
-      {action.status === "failed" || action.status === "async_pending" ? (
-        <div className="flex flex-wrap items-center gap-2">
-          {action.status === "failed" && action.last_error ? (
-            <span className="text-caption leading-5 text-signal">{action.last_error}</span>
-          ) : null}
-          {canRetry ? (
-            <Button size="sm" type="button" loading={retryPending} onClick={onRetry}>
-              {t(action.status === "async_pending" ? "handover.card.checkStatus" : "handover.card.retry")}
-            </Button>
-          ) : null}
-        </div>
-      ) : null}
-      {action.attempts > 0 || action.last_error ? (
-        <details className="text-caption text-ink-faint">
-          <summary className="cursor-pointer">{t("handover.card.details")}</summary>
-          <dl className="mt-1.5 grid gap-1">
-            <div className="flex items-center justify-between gap-3">
-              <dt>{t("handover.card.attempts")}</dt>
-              <dd className="m-0 font-mono">{action.attempts}</dd>
-            </div>
-            {action.last_error ? (
-              <div className="flex items-start justify-between gap-3">
-                <dt className="shrink-0">{t("handover.card.lastError")}</dt>
-                <dd className="m-0 min-w-0 break-all text-right">{action.last_error}</dd>
-              </div>
-            ) : null}
-          </dl>
-        </details>
-      ) : null}
-    </li>
   );
 }
 
@@ -356,7 +387,7 @@ function TransferGrantSection({
   onChanged,
   canOperate,
 }: {
-  task: HandoverTaskDetailItem;
+  task: HandoverTaskDetail;
   taskId: string;
   onChanged: () => void;
   canOperate: boolean;
@@ -530,7 +561,7 @@ function selectionFromEntries(entries: TransferGrantDiffEntry[]): Record<string,
   return Object.fromEntries(entries.map((entry) => [entry.key, entry.selected !== false]));
 }
 
-function transferPlanVersion(plan: TransferPlanItem | null): string {
+function transferPlanVersion(plan: TransferPlanItem | null | undefined): string {
   if (!plan) {
     return "none";
   }
@@ -613,7 +644,7 @@ function TeamAdjustSection({
   onChanged,
   canOperate,
 }: {
-  task: HandoverTaskDetailItem;
+  task: HandoverTaskDetail;
   taskId: string;
   onChanged: () => void;
   canOperate: boolean;

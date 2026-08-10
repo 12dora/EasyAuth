@@ -1,6 +1,6 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Link, useParams, useSearchParams } from "react-router-dom";
+import { Link, useOutletContext, useParams, useSearchParams } from "react-router-dom";
 
 import { Button } from "../../components/Button";
 import { ButtonLink } from "../../components/ButtonLink";
@@ -28,10 +28,25 @@ import { QueryTestTab } from "./workspace/tabs/QueryTestTab";
 import { RulesTab } from "./workspace/tabs/RulesTab";
 import { WebhookTab } from "./workspace/tabs/WebhookTab";
 import { invalidateAppDerivedQueries } from "./workspace/invalidateAppQueries";
+import type { AppShellOutletContext } from "../../components/AppShell";
+import { HandoverCapabilityTab } from "./lifecycle/HandoverCapabilityTab";
 
-type WorkspaceTab = "overview" | "catalog" | "matrix" | "managed-scope" | "rules" | "manifest" | "credentials" | "integration" | "webhook" | "connector" | "test" | "guide";
+type WorkspaceTab =
+  | "overview"
+  | "catalog"
+  | "matrix"
+  | "managed-scope"
+  | "rules"
+  | "manifest"
+  | "credentials"
+  | "integration"
+  | "webhook"
+  | "connector"
+  | "test"
+  | "guide"
+  | "handover";
 
-const TABS: Array<{ key: WorkspaceTab; labelKey: MessageKey }> = [
+const BASE_TABS: Array<{ key: WorkspaceTab; labelKey: MessageKey }> = [
   { key: "overview", labelKey: "workspace.tab.overview" },
   { key: "catalog", labelKey: "workspace.tab.catalog" },
   { key: "matrix", labelKey: "workspace.tab.matrix" },
@@ -50,9 +65,24 @@ export function ConsoleAppWorkspace() {
   const { t } = useI18n();
   const { appKey = "" } = useParams();
   const queryClient = useQueryClient();
+  const outlet = useOutletContext<AppShellOutletContext | null>();
+  const isSuperuser = outlet?.isSuperuser === true;
+  const TABS = useMemo(
+    () =>
+      isSuperuser
+        ? [...BASE_TABS, { key: "handover" as const, labelKey: "handover.console.capability.tab" as MessageKey }]
+        : BASE_TABS,
+    [isSuperuser],
+  );
   const [searchParams, setSearchParams] = useSearchParams();
   const tab = (searchParams.get("tab") as WorkspaceTab | null) ?? "overview";
   const activeTab = TABS.some((item) => item.key === tab) ? tab : "overview";
+  // 无权限时深链 handover 回退 overview
+  useEffect(() => {
+    if (tab === "handover" && !isSuperuser) {
+      setSearchParams({ tab: "overview" }, { replace: true });
+    }
+  }, [isSuperuser, setSearchParams, tab]);
   const activeTabIndex = TABS.findIndex((item) => item.key === activeTab);
   const tabButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const tabKeys = TABS.map((item) => item.key);
@@ -188,6 +218,7 @@ export function ConsoleAppWorkspace() {
       {activeTab === "connector" ? <ConnectorTab appKey={appKey} canManage={app?.capabilities?.can_manage_connectors === true} /> : null}
       {activeTab === "test" ? <QueryTestTab appKey={appKey} /> : null}
       {activeTab === "guide" ? <GuideTab appKey={appKey} /> : null}
+      {activeTab === "handover" && isSuperuser ? <HandoverCapabilityTab appKey={appKey} /> : null}
       </div>
       {app?.capabilities?.can_edit_basic_info && basicInfoEditing ? (
         <AppBasicInfoDialog

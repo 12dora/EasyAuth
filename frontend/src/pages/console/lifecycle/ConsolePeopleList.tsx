@@ -36,6 +36,7 @@ import { apiRequest, itemsFromPayload } from "../../../lib/api";
 import type { JsonObject, ListPayload } from "../../../lib/api";
 import type { HandoverTaskPayload, PersonRow } from "../../../lib/domain";
 import type { Translator } from "../../../lib/status";
+import { ConsoleReassignDialog } from "./ConsoleReassignDialog";
 import { personStatusLabel, personStatusTone } from "./lifecycleLabels";
 
 const PEOPLE_QUERY_PREFIX = ["console", "people"];
@@ -57,6 +58,7 @@ export function ConsolePeopleList() {
   const [searchFilter, setSearchFilter] = useState("");
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE });
   const [startTarget, setStartTarget] = useState<HandoverStartTarget | null>(null);
+  const [reassignOpen, setReassignOpen] = useState(false);
 
   // 搜索输入去抖后生效, 避免每次按键都打后端。
   useEffect(() => {
@@ -116,9 +118,14 @@ export function ConsolePeopleList() {
         title={t("nav.console.people")}
         description={t("people.description")}
         actions={
-          <Button icon={<RefreshCcw size={16} />} loading={peopleQuery.isFetching} onClick={() => void peopleQuery.refetch()}>
-            {t("common.refresh")}
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="ghost" onClick={() => setReassignOpen(true)}>
+              {t("handover.console.reassign")}
+            </Button>
+            <Button icon={<RefreshCcw size={16} />} loading={peopleQuery.isFetching} onClick={() => void peopleQuery.refetch()}>
+              {t("common.refresh")}
+            </Button>
+          </div>
         }
       />
       <div className="mb-4 flex flex-wrap items-center gap-2">
@@ -208,6 +215,7 @@ export function ConsolePeopleList() {
           onSubmit={(reason) => createTaskMutation.mutate({ ...startTarget, reason })}
         />
       ) : null}
+      {reassignOpen ? <ConsoleReassignDialog onClose={() => setReassignOpen(false)} /> : null}
     </>
   );
 }

@@ -1,6 +1,5 @@
 import type { MessageKey } from "../../../i18n/messages";
-import type { JsonObject } from "../../../lib/api";
-import type { HandoverAppActionRow } from "../../../lib/domain";
+import type { HandoverAction } from "../../../lib/domain";
 import type { BadgeTone, Translator } from "../../../lib/status";
 
 const PERSON_STATUS_KEYS: Record<string, MessageKey> = {
@@ -57,6 +56,8 @@ export function handoverTaskStatusTone(status: string): BadgeTone {
 const KIND_KEYS: Record<string, MessageKey> = {
   offboard: "handover.kind.offboard",
   transfer: "handover.kind.transfer",
+  pre_offboard: "handover.kind.pre_offboard",
+  reassign: "handover.kind.reassign",
 };
 
 export function handoverKindLabel(t: Translator, kind: string): string {
@@ -72,6 +73,8 @@ const ACTION_STATUS_KEYS: Record<string, MessageKey> = {
   done: "handover.actionStatus.done",
   failed: "handover.actionStatus.failed",
   skipped: "handover.actionStatus.skipped",
+  blocked: "handover.actionStatus.blocked",
+  async_attention_required: "handover.actionStatus.asyncAttentionRequired",
 };
 
 export function handoverActionStatusLabel(t: Translator, status: string): string {
@@ -84,33 +87,38 @@ export function handoverActionStatusTone(status: string): BadgeTone {
     case "done":
       return "evergreen";
     case "failed":
+    case "blocked":
       return "signal";
     case "executing":
     case "async_pending":
+    case "async_attention_required":
       return "amber";
     case "previewed":
       return "bond";
     case "skipped":
       return "faint";
     default:
-      // pending 是常态而非异常, 用中性色, 不做告警。
       return "neutral";
   }
 }
 
-function actionReleasesToPool(action: HandoverAppActionRow): boolean {
-  return action.policy?.unowned_strategy === "release_to_pool";
+const ASSIGNEE_STATE_KEYS: Record<string, MessageKey> = {
+  manager: "handover.assigneeState.manager",
+  subject: "handover.assigneeState.subject",
+  superuser_pool: "handover.assigneeState.superuser_pool",
+};
+
+export function handoverAssigneeStateLabel(t: Translator, state: string): string {
+  const key = ASSIGNEE_STATE_KEYS[state];
+  return key ? t(key) : state || "-";
 }
 
-/** 应用交接卡的一句人话描述(不含技术细节)。 */
-export function handoverActionSummary(t: Translator, action: HandoverAppActionRow): string {
-  const receiverName = action.to_user?.name || action.to_user?.user_id || "";
+/** 应用交接卡的一句人话描述。 */
+export function handoverActionSummary(t: Translator, action: HandoverAction): string {
+  const grantName = action.grant_receiver?.name || action.grant_receiver?.user_id || "";
   switch (action.status) {
     case "done":
-      if (receiverName) {
-        return t("handover.card.doneTo", { name: receiverName });
-      }
-      return actionReleasesToPool(action) ? t("handover.card.doneReleased") : t("handover.card.done");
+      return grantName ? t("handover.card.doneTo", { name: grantName }) : t("handover.card.done");
     case "failed":
       return t("handover.card.failed");
     case "executing":
@@ -119,44 +127,15 @@ export function handoverActionSummary(t: Translator, action: HandoverAppActionRo
       return t("handover.card.asyncPending");
     case "skipped":
       return t("handover.card.skipped");
+    case "blocked":
+      return t("handover.actionStatus.blocked");
+    case "async_attention_required":
+      return t("handover.actionStatus.asyncAttentionRequired");
     case "previewed":
-      return receiverName ? t("handover.card.previewedTo", { name: receiverName }) : t("handover.card.previewed");
+      return t("handover.card.previewed");
     default:
-      if (receiverName) {
-        return t("handover.card.pendingTo", { name: receiverName });
-      }
-      return actionReleasesToPool(action) ? t("handover.card.pendingRelease") : t("handover.card.waiting");
+      return t("handover.card.waiting");
   }
-}
-
-export interface HandoverPreviewAsset {
-  type: string;
-  count: number;
-  label: string;
-}
-
-/** 从 preview 响应(原样 JsonObject)中安全提取 assets 列表。 */
-export function previewAssets(payload: JsonObject | null | undefined): HandoverPreviewAsset[] {
-  const rawAssets = payload?.assets;
-  if (!Array.isArray(rawAssets)) {
-    return [];
-  }
-  const assets: HandoverPreviewAsset[] = [];
-  for (const entry of rawAssets) {
-    if (typeof entry !== "object" || entry === null || Array.isArray(entry)) {
-      continue;
-    }
-    assets.push({
-      type: typeof entry.type === "string" ? entry.type : "",
-      count: typeof entry.count === "number" ? entry.count : 0,
-      label: typeof entry.label === "string" ? entry.label : "",
-    });
-  }
-  return assets;
-}
-
-export function previewHookSkipped(payload: JsonObject | null | undefined): boolean {
-  return payload?.hook === "skipped";
 }
 
 export interface ParsedGrantKey {

@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 
 import type { CurrentUser } from "../App";
@@ -10,6 +10,10 @@ import { BUTTON_BASE_CLASSES, BUTTON_SIZE_CLASSES, BUTTON_VARIANT_CLASSES } from
 import { Sidebar } from "./shell/Sidebar";
 import { Topbar } from "./shell/Topbar";
 import { StatusBanner } from "./StatusBanner";
+
+const BlockedAppsBanner = lazy(() =>
+  import("../pages/console/lifecycle/BlockedAppsBanner").then((module) => ({ default: module.BlockedAppsBanner })),
+);
 
 interface AppShellProps {
   mode: "console" | "portal";
@@ -66,6 +70,11 @@ export function AppShell({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", curre
                 </a>
               </div>
             </div>
+          ) : null}
+          {mode === "console" && shellUser?.isSuperuser === true ? (
+            <Suspense fallback={null}>
+              <BlockedAppsBanner enabled />
+            </Suspense>
           ) : null}
           <div className="route-transition" data-route-pathname={location.pathname} data-testid="route-transition" key={location.pathname}>
             <Outlet context={{ currentUserId, isSuperuser: shellUser?.isSuperuser === true } satisfies AppShellOutletContext} />

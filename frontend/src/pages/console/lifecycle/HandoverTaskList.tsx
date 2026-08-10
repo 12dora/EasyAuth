@@ -37,10 +37,17 @@ import type { ListPayload } from "../../../lib/api";
 import type { HandoverTaskRow } from "../../../lib/domain";
 import { formatDateTime } from "../../../lib/status";
 import type { Translator } from "../../../lib/status";
-import { handoverKindLabel, handoverTaskStatusLabel, handoverTaskStatusTone } from "./lifecycleLabels";
+import { daysLeftTone } from "../../../features/handover/surface";
+import {
+  handoverAssigneeStateLabel,
+  handoverKindLabel,
+  handoverTaskStatusLabel,
+  handoverTaskStatusTone,
+} from "./lifecycleLabels";
 
 const TASK_STATUSES = ["pending", "in_progress", "completed", "cancelled"] as const;
-const TASK_KINDS = ["offboard", "transfer"] as const;
+const TASK_KINDS = ["offboard", "transfer", "pre_offboard", "reassign"] as const;
+const ASSIGNEE_STATES = ["manager", "subject", "superuser_pool"] as const;
 
 export function HandoverTaskList() {
   const { t } = useI18n();
@@ -49,15 +56,37 @@ export function HandoverTaskList() {
   const queryClient = useQueryClient();
   const [statusFilter, setStatusFilter] = useState("");
   const [kindFilter, setKindFilter] = useState("");
+  const [assigneeStateFilter, setAssigneeStateFilter] = useState("");
+  const [blockedFilter, setBlockedFilter] = useState("");
   const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: DEFAULT_TABLE_PAGE_SIZE });
   const [deleteTarget, setDeleteTarget] = useState<HandoverTaskRow | null>(null);
 
   const tasksQuery = useQuery({
-    queryKey: ["console", "handover-tasks", statusFilter, kindFilter, pagination.pageIndex, pagination.pageSize],
-    queryFn: () =>
-      apiRequest<ListPayload<HandoverTaskRow>>(
-        `/console/api/v1/lifecycle/handover-tasks?status=${encodeURIComponent(statusFilter)}&kind=${encodeURIComponent(kindFilter)}&page=${pagination.pageIndex + 1}&page_size=${pagination.pageSize}`,
-      ),
+    queryKey: [
+      "console",
+      "handover-tasks",
+      statusFilter,
+      kindFilter,
+      assigneeStateFilter,
+      blockedFilter,
+      pagination.pageIndex,
+      pagination.pageSize,
+    ],
+    queryFn: () => {
+      const params = new URLSearchParams({
+        status: statusFilter,
+        kind: kindFilter,
+        page: String(pagination.pageIndex + 1),
+        page_size: String(pagination.pageSize),
+      });
+      if (assigneeStateFilter) {
+        params.set("assignee_state", assigneeStateFilter);
+      }
+      if (blockedFilter) {
+        params.set("blocked", blockedFilter);
+      }
+      return apiRequest<ListPayload<HandoverTaskRow>>(`/console/api/v1/lifecycle/handover-tasks?${params}`);
+    },
   });
   const tasks = itemsFromPayload<HandoverTaskRow>(tasksQuery.data);
   const deleteMutation = useMutation({
@@ -131,6 +160,35 @@ export function HandoverTaskList() {
               {handoverKindLabel(t, kind)}
             </option>
           ))}
+        </SelectInput>
+        <SelectInput
+          aria-label={t("handover.console.filter.assigneeState")}
+          className="w-44"
+          value={assigneeStateFilter}
+          onChange={(event) => {
+            setAssigneeStateFilter(event.currentTarget.value);
+            setPagination((current) => ({ ...current, pageIndex: 0 }));
+          }}
+        >
+          <option value="">{t("handover.console.filter.allAssigneeStates")}</option>
+          {ASSIGNEE_STATES.map((state) => (
+            <option key={state} value={state}>
+              {handoverAssigneeStateLabel(t, state)}
+            </option>
+          ))}
+        </SelectInput>
+        <SelectInput
+          aria-label={t("handover.console.filter.blockedAll")}
+          className="w-44"
+          value={blockedFilter}
+          onChange={(event) => {
+            setBlockedFilter(event.currentTarget.value);
+            setPagination((current) => ({ ...current, pageIndex: 0 }));
+          }}
+        >
+          <option value="">{t("handover.console.filter.blockedAll")}</option>
+          <option value="true">{t("handover.console.filter.blockedYes")}</option>
+          <option value="false">{t("handover.console.filter.blockedNo")}</option>
         </SelectInput>
       </div>
       {tasksQuery.error && tasks.length > 0 ? (
@@ -221,7 +279,17 @@ function taskColumns(
     },
     {
       header: t("handover.list.column.kind"),
-      cell: ({ row }) => handoverKindLabel(t, row.original.kind),
+      cell: ({ row }) => (
+        <div className="flex flex-wrap items-center gap-1">
+          <span>{handoverKindLabel(t, row.original.kind)}</span>
+          {(row.original.blocked_app_count ?? 0) > 0 ? (
+            <Badge tone="signal">{row.original.blocked_app_count}</Badge>
+          ) : null}
+          {row.original.escalation?.days_left != null ? (
+            <Badge tone={daysLeftTone(row.original.escalation.days_left)}>{row.original.escalation.days_left}d</Badge>
+          ) : null}
+        </div>
+      ),
     },
     {
       header: t("common.status"),
