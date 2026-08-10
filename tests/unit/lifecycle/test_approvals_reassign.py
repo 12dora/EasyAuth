@@ -86,6 +86,42 @@ def test_reassign_access_request_approver_to_new_manager() -> None:
     assert "fin" in ids  # 整体替换后保留财务
 
 
+def test_zero_matching_rules_skips_assignee_resolution_and_degraded_audit() -> None:
+    """V-07: 离职者未出现在任何规则时, 不得 resolve_assignee / 写 degraded 审计。"""
+    from easyauth.audit.models import AuditLog
+    from easyauth.applications.models import AuthorizationGroup
+
+    departed = _u("dep-zero", dtuid="dz", status=USER_STATUS_DEPARTED)
+    # 无钉钉完整绑定 → 若误 resolve 会写 handover_assignee_resolution_degraded
+    departed.dingtalk_source_slug = ""
+    departed.dingtalk_corp_id = ""
+    departed.dingtalk_userid = ""
+    departed.save()
+    other = _u("other-rule", dtuid="or")
+    app = App.objects.create(app_key="zero-rule-app", name="z")
+    group = AuthorizationGroup.objects.create(app=app, key="g0", name="g0", kind="role")
+    _ = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=group,
+        approver_userids=[other.authentik_user_id],
+        is_active=True,
+    )
+    task = HandoverTask.objects.create(
+        kind=HANDOVER_KIND_OFFBOARD,
+        subject_user=departed,
+        assignee_state="superuser_pool",
+    )
+    before = AuditLog.objects.filter(
+        event_type="handover_assignee_resolution_degraded",
+    ).count()
+    n = replace_approval_rule_approvers(subject=departed, task=task)
+    assert n == 0
+    after = AuditLog.objects.filter(
+        event_type="handover_assignee_resolution_degraded",
+    ).count()
+    assert after == before
+
+
 def test_approval_rule_replacement_todo_when_no_manager() -> None:
     from easyauth.applications.models import AuthorizationGroup
 

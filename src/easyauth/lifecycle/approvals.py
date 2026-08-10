@@ -83,8 +83,12 @@ def reassign_access_request_approvers(
                 actor_id=actor_id,
             )
         except ApprovalActionError:
-            # 单条不可改派不得回滚建单事务(§4.5 / 铁律一); 进超管池并记审计。
-            access_request = AccessRequest.objects.filter(pk=request_id).first()
+            # 单条不可改派不得回滚建单事务(§4.5 / 铁律一)。
+            # 仅 submitted 可进超管池: 已决定(approved/rejected/…)的申请不得改路由/审批人。
+            access_request = AccessRequest.objects.filter(
+                pk=request_id,
+                status=REQUEST_STATUS_SUBMITTED,
+            ).first()
             if access_request is not None:
                 _route_request_to_superuser_pool(
                     access_request,
@@ -228,16 +232,26 @@ def replace_approval_rule_approvers(
     actor_id: str = LIFECYCLE_ACTOR_ID,
 ) -> int:
     """§4.5.2: ApprovalRule.approver_userids 中的 subject.authentik_user_id 替换为新主管。"""
+    from easyauth.lifecycle.assignee import AssigneeResolution
+
     subject_uid = subject.authentik_user_id
-    # 解析一次, 避免每条规则重复审计 degraded 事件(§6.4 仅一行)
-    resolution = resolve_assignee(subject, start_level=0)
-    new_approver = resolution.user
+    # 惰性解析: 仅在首条命中规则时 resolve 一次, 零命中时不写 degraded 审计、不查目录。
+    resolution: AssigneeResolution | None = None
+
+    def _resolution() -> AssigneeResolution:
+        nonlocal resolution
+        if resolution is None:
+            resolution = resolve_assignee(subject, start_level=0)
+        return resolution
+
     rules = list(ApprovalRule.objects.filter(is_active=True))
     changed = 0
     for rule in rules:
         raw = rule.approver_userids
         if not isinstance(raw, list) or subject_uid not in raw:
             continue
+        resolved = _resolution()
+        new_approver = resolved.user
         new_list = [uid for uid in raw if uid != subject_uid]
         if (
             new_approver is not None
@@ -261,7 +275,7 @@ def replace_approval_rule_approvers(
                     task_id_snapshot=int(task.pk),
                     reason=(
                         ROUTING_NO_ACTIVE_MANAGER
-                        if resolution.degraded
+                        if resolved.degraded
                         else ROUTING_CHAIN_EXHAUSTED
                     ),
                 )
