@@ -111,10 +111,18 @@ def _submit_access_request(
                 direct_grants,
                 lock_base_grant=True,
             )
+            # 空审批人仅在 MANAGED_USERS 链耗尽时由 §36 放行。
+            allow_empty_approvers = not submitted_approver_user_ids
             approver_user_ids = validated_approver_user_ids(
                 submitted_approver_user_ids,
                 applicant_user_id=input_data.user.authentik_user_id,
+                allow_empty=allow_empty_approvers,
             )
+            routing_state = "normal"
+            routing_reason = ""
+            if not approver_user_ids:
+                routing_state = "superuser_pool"
+                routing_reason = "chain_exhausted"
             access_request = AccessRequest(
                 user=input_data.user,
                 app=input_data.app,
@@ -127,6 +135,8 @@ def _submit_access_request(
                 payload_digest=payload_digest,
                 base_grant_id=input_data.base_grant_id,
                 base_grant_revision=input_data.base_grant_revision,
+                approval_routing_state=routing_state,
+                routing_reason=routing_reason,
             )
             access_request.full_clean(validate_constraints=False)
             access_request.save()

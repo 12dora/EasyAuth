@@ -65,9 +65,13 @@ def validated_approver_user_ids(
     approver_user_ids: Iterable[str],
     *,
     applicant_user_id: str,
+    allow_empty: bool = False,
 ) -> tuple[str, ...]:
     user_ids = _unique_non_empty_strings(approver_user_ids)
     if not user_ids:
+        # ADR-002 §36: 主管链耗尽时允许空审批人, 路由进 superuser_pool。
+        if allow_empty:
+            return ()
         raise AccessRequestSubmissionError(("at least one approver is required",))
 
     # 审批人可由申请人自选是设计, 但绝不能是申请人本人: 自审自批会绕过整条审批链。
@@ -186,20 +190,36 @@ def _validate_managed_users_approver(
     authorization_groups: tuple[AuthorizationGroup, ...],
     direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> None:
+    """ADR-002 §36 修订: 审批人沿 manager_chain 向上取, 无可用主管时允许提交进超管池。
+
+    仍然禁止手动改填任意用户绕过主管链。
+    """
     if not _contains_managed_users_target(authorization_groups, direct_grants):
         return
-    manager_user_id = _active_direct_manager_user_id(input_data.user)
-    if manager_user_id is not None and _unique_non_empty_strings(
-        input_data.approver_user_ids,
-    ) == (manager_user_id,):
+    chain_ids = _active_manager_chain_user_ids(input_data.user)
+    submitted = _unique_non_empty_strings(input_data.approver_user_ids)
+    if chain_ids:
+        # 必须恰好是链上第一个可用主管(逐级向上的首个 active)
+        if submitted == (chain_ids[0],):
+            return
+        raise AccessRequestSubmissionError((MANAGED_USERS_APPROVER_REQUIRED_MESSAGE,))
+    # 链耗尽: 允许提交且无审批人 / 或空审批人 → 路由进超管池(由 services 落库)
+    if not submitted:
         return
     raise AccessRequestSubmissionError((MANAGED_USERS_APPROVER_REQUIRED_MESSAGE,))
 
 
-def _active_direct_manager_user_id(user: UserMirror) -> str | None:
-    manager_userid = user.manager_userid.strip()
+def _active_manager_chain_user_ids(user: UserMirror) -> tuple[str, ...]:
+    """沿 manager_chain 取第一个可用主管; 链不可用时回退 manager_userid 直属字段。"""
+    from easyauth.lifecycle.assignee import resolve_assignee
+
+    resolution = resolve_assignee(user, start_level=0)
+    if resolution.user is not None:
+        return (resolution.user.authentik_user_id,)
+    # 回退: 部分同步路径只写 manager_userid、尚未有完整 manager_chain 行。
+    manager_userid = (user.manager_userid or "").strip()
     if not manager_userid:
-        return None
+        return ()
     manager = UserMirror.objects.filter(
         authentik_user_id=manager_userid,
         status=USER_STATUS_ACTIVE,
@@ -211,7 +231,14 @@ def _active_direct_manager_user_id(user: UserMirror) -> str | None:
             dingtalk_userid=manager_userid,
             status=USER_STATUS_ACTIVE,
         ).first()
-    return manager.authentik_user_id if manager is not None else None
+    if manager is None:
+        return ()
+    return (manager.authentik_user_id,)
+
+
+def _active_direct_manager_user_id(user: UserMirror) -> str | None:
+    ids = _active_manager_chain_user_ids(user)
+    return ids[0] if ids else None
 
 
 def _contains_managed_users_target(

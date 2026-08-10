@@ -33,7 +33,20 @@ EasyTrade 需要让部门经理查看和管理下级人员数据。主管关系�
 - EasyAuth 公共权限查询响应扩展 `resolved.user_ids`，下游应用保存本地快照后再过滤业务数据。
 - 下游应用不得在每次业务查询时实时调用 EasyAuth、Authentik 或 DingTalk。
 - EasyTrade 的业务表继续使用本地 `users.id` 外键，授权快照中的 Authentik 用户 ID 通过 `users.external_user_id` 映射到本地用户。
-- 自助申请允许申请管理范围组，审批人必须严格为申请人的 active 直属主管；缺少可解析的直属主管时禁止提交，不允许手动改填 App owner 或其他用户绕过。
+- 自助申请允许申请管理范围组。审批人解析规则见下方 **§36 修订**。
+
+### §36 修订（数据交接 v2 / D3，程序已授权落地）
+
+**状态：已批准**
+
+原条款「审批人必须严格为申请人的 active 直属主管；缺少可解析的直属主管时禁止提交」修订为：
+
+- 审批人按 `manager_chain` **逐级向上**取第一个 active 主管，跳过 departed / disabled / 本地管理员（`local-admin:` 前缀）/ 申请人本人。
+- 钉钉 userid 只在 `(source_slug, corp_id)` 内唯一，查询必须带上这两个维度。
+- 整条链走完仍无可用主管时，**不禁止提交**：申请照常进入 `submitted`，但 `approval_routing_state` 置为 `superuser_pool`，由超管在控制台认领并指定审批人。
+- 仍然**禁止**手动改填 App owner 或任意其他用户来绕过主管链。
+
+**与权限查询的取舍差异**（必须写明）：权限查询宁可 503 也不能少给或多给；而「谁来审批」和「谁来交接」宁可先落到超管池，也不能把申请或单据丢掉。目录 `stale` 时建单/审批路由**不 fail-closed**。
 
 ## 备选方案
 
