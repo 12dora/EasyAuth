@@ -114,7 +114,7 @@ COA 档案/批次创建人、需求进展与附件创建人、文档与产品上
 ### 3.1 ~~修 B3（scope 解析剔除 inactive）~~ —— **本期取消**
 
 原本要求去掉 `_managed_user_ids_from_resolved_grant()` 里的 `row.active` 判定，理由是代管授权
-需要让 departed 用户进入 scope 集合。**代管已在第二轮复核后整体废弃**（契约 §7），
+需要让 departed 用户进入 scope 集合。**代管已整体废弃**（契约 §7），
 离职者不会再进入任何人的 `MANAGED_USERS`，本项**没有依据，本期不做**，`scope_resolution.py` 一行不改。
 
 ### 3.1.1 `hint` 是硬要求，不是可选项

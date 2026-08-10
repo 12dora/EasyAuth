@@ -137,7 +137,7 @@ async def resolve_dtuid(*, authentik_sub: str, purpose: Literal["source", "targe
 | `recurring_collaborator` | 周期任务模板协作人 | `RecurringTemplateCollaboratorRow`（PK `(template_id, user)`，`recurrence.py:138`） | **false** | 会被复制进生成的任务，必须转移 |
 | `work_record_participant` | 参与的工作记录 | `WorkRecordParticipantRow.dingtalk_user_id`（PK `(record_id, user)`，`work_records.py:102`） | **false** | 复合主键，同 §4.3 |
 
-### 3.1.1 两类**不做**独立资产的裁定（复核后修正）
+### 3.1.1 两类**不做**独立资产的裁定
 
 下面两项**看起来像**该转移的资产，实际都不是。逐条说明为什么，避免有人再把它们加回来：
 
@@ -150,7 +150,7 @@ async def resolve_dtuid(*, authentik_sub: str, purpose: Literal["source", "targe
 
 ### 3.1.2 终态谓词（必须冻结在共享选择器里）
 
-上表的"口径"列是规范。复核发现只有 `task_assigned` 一行写明了终态条件，其余全缺，必须补齐并
+上表的"口径"列是规范。**每一行都必须写明终态条件**（早先只有 `task_assigned` 一行有），必须补齐并
 冻结在 `HandoverAssetSpec` 的查询定义里，preview / items / execute 共用：
 
 | 类型 | 完整谓词 |
@@ -715,7 +715,7 @@ EasyAuth 不解析你的字段名做任何逻辑分支。
 且 `contracts/test-vectors/webhook-hmac.json` 的 `sources` 引用了它的 `webhook.signing` 段。
 不同步会造成设计与实现脱节。
 
-### 5.6 目录在职状态：**后端无需改动**（复核后修正）
+### 5.6 目录在职状态：**后端无需改动**
 
 **该字段早就有了**，不需要新增：
 `backend/app/api/v1/directory.py:170,193,221,262,357` 的 DTO 均含 `is_active`，
@@ -725,7 +725,7 @@ EasyAuth 不解析你的字段名做任何逻辑分支。
 `backend/app/api/v1/directory.py:292` 已提供 `includeInactive` query 参数
 （`infra/repositories/directory.py:239,244` 据此决定是否过滤），默认 `False`。
 
-因此这一项**本期没有任何交付物**：后端不改，而 `06`（前端）已整体取消，不会有人去改调用方。
+因此这一项**本期没有任何交付物**：后端不改，而前端改造已整体取消，不会有人去改调用方。
 
 > **不要把它写成"等前端传参"的待办** —— 那会变成一个无人负责的交付项。
 > 现状如实记录：目录接口默认只返回在职人员；需要看已离职人员时调用方要显式传

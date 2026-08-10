@@ -835,7 +835,7 @@ delivery 结果、action 状态或 summary。异步轮询回来的那条路径�
 
 ### 2.5 ~~`CustodyGrant`~~ / ~~`CustodyGrantItem`~~ —— **已取消**
 
-代管授权在第二轮复核后整体废弃（契约 §7、`07-review-log.md` §1.1）。这两张表**不建**，
+代管授权已整体废弃（契约 §7）。这两张表**不建**，
 `HANDOVER_CUSTODY` scope **不加**，`grants/managed_users.py` **不改**。
 
 `HandoverTask` 改为直接持有上交截止时间：
