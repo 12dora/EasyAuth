@@ -53,9 +53,25 @@ P2 与 webhook 实现相互独立，且**不受 A5 阻塞与 CCR 门禁的限制
 新增 `backend/app/domain/identity/handover_identity.py`：
 
 ```python
-async def resolve_dtuid(uow, *, authentik_sub: str) -> str:
-    """把契约里的 Authentik sub 解析为本地 dtuid; 解析不到抛 IdentityUnmappedError。"""
+async def resolve_dtuid(*, authentik_sub: str, purpose: Literal["source", "target"]) -> str:
+    # 把契约里的 Authentik sub 解析为本地 dtuid; 解析不到抛 IdentityUnmappedError
+    # 注意: 不接收 uow/session —— 三段边界见下
 ```
+
+> **不要把 `uow` 传进来。** 「本地 SELECT → 调 EasyAuth 目录 → 回填」三步如果共用一个 session，
+> 第一次 SELECT 就已经 autobegin，**整个 HTTP 等待期间都占着一个连接和一个打开的事务**
+> （`AGENTS.md` 不变量 4 明确禁止），并发几个 webhook 就能把连接池耗干，
+> execute 连进业务事务的机会都没有。
+>
+> 三段边界写死：
+>
+> | 段 | 边界 |
+> |---|---|
+> | ① 查本地映射 | 短只读 session，查完**立刻 rollback/close** |
+> | ② 调 `DirectoryPort` | **手上没有任何 DB session** |
+> | ③ 纯绑定回填 | 另开一个短写事务 |
+>
+> 全部人员解析完成之后，**才**新开 execute 的业务事务。禁止复用跨 HTTP `await` 的 session。
 
 解析顺序：
 

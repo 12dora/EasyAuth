@@ -375,6 +375,16 @@ async def enqueue_system_handover_projection(
 > 因此这一项**必须写进 EasyProject 的风险清单**，并配：重试耗尽的**告警**、
 > `op_sync_conflicts` 的运维查询入口、以及人工重投的操作步骤。
 > **不允许**只写进台账就当没事 —— 那正是本次改造要消灭的静默失败。
+>
+> **必须给出可执行的重投路径**（现有 conflict resolve 只能「标记已处理」，M34 又明确不修人员字段，
+> 光有台账等于永远修不回来）：
+>
+> | 交付物 | 内容 |
+> |---|---|
+> | 重投端点 | `POST /api/v1/admin/openproject/handover-projections/{outbox_id}/redrive`（超管）：把该行从 `APPLY_FAILED` 置回 `PENDING`、清 `claim_owner`、重设 `next_attempt_at`，写审计 |
+> | 批量查询 | `GET .../handover-projections?status=APPLY_FAILED`，带三元组与任务信息 |
+> | 告警 | 重试耗尽**即刻**告警，不是等人去翻台账 |
+> | runbook | 写进 `docs/runbooks/`：怎么判断、怎么重投、重投仍失败怎么办 |
 > （改成 202 + 状态轮询在语义上更干净，但那需要给 EasyProject 新增一条状态查询 path，
 > 属于新增 operation，要另走一次 CCR。本期取 200 + 显式债务。）
 
