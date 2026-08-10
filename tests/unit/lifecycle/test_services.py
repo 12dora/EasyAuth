@@ -292,7 +292,17 @@ def test_execute_action_transfers_selected_grants_and_calls_hook(
         return HookResponse(
             status_code=200,
             location="",
-            payload={"summary": {"customers_transferred": 23}},
+            payload={
+                "summary": {
+                    "customer": {
+                        "transferred": 0,
+                        "released": 0,
+                        "skipped": 0,
+                        "merged": 0,
+                        "failed": 0,
+                    },
+                },
+            },
         )
 
     monkeypatch.setattr(lifecycle_services, "signed_hook_post", fake_hook)
@@ -432,7 +442,17 @@ def test_poll_async_action_completes_action_and_task(
         return HookResponse(
             status_code=200,
             location="",
-            payload={"summary": {"customers_transferred": 23}},
+            payload={
+                "summary": {
+                    "customer": {
+                        "transferred": 0,
+                        "released": 0,
+                        "skipped": 0,
+                        "merged": 0,
+                        "failed": 0,
+                    },
+                },
+            },
         )
 
     monkeypatch.setattr(lifecycle_services, "signed_hook_get", completed_hook)

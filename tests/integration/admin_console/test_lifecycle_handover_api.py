@@ -110,9 +110,8 @@ def test_handover_task_list_rejects_unknown_filters(query: dict[str, str]) -> No
     assert error["details"] == {"field": next(iter(query)), "value": next(iter(query.values()))}
 
 
-def test_receiver_batch_rolls_back_all_updates_when_one_write_fails(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_receiver_batch_app_actions_removed_from_task_patch() -> None:
+    """01 §6.3: PATCH task 不再接受 app_actions; 批量改接收人走单 action 端点。"""
     client = _logged_in_superuser("handover-receiver-atomic-admin")
     subject = UserMirror.objects.create(authentik_user_id="handover-receiver-subject")
     receiver = UserMirror.objects.create(authentik_user_id="handover-receiver-target")
@@ -121,25 +120,6 @@ def test_receiver_batch_rolls_back_all_updates_when_one_write_fails(
     second_app = App.objects.create(app_key="handover-atomic-b", name="Atomic B")
     first_action = HandoverAppAction.objects.create(task=task, app=first_app)
     second_action = HandoverAppAction.objects.create(task=task, app=second_app)
-    real_update = update_action_receiver
-    call_count = 0
-
-    def fail_second_update(
-        *,
-        action: HandoverAppAction,
-        to_user: UserMirror | None,
-        policy: dict[str, JsonValue] | None = None,
-    ) -> HandoverAppAction:
-        nonlocal call_count
-        call_count += 1
-        if call_count == SECOND_UPDATE_CALL:
-            raise HandoverConflictError(CONCURRENT_CONFLICT_MESSAGE)
-        return real_update(action=action, to_user=to_user, policy=policy)
-
-    monkeypatch.setattr(
-        "easyauth.admin_console.lifecycle_api.update_action_receiver",
-        fail_second_update,
-    )
 
     response = client.patch(
         f"{TASKS_URL}/{task.id}",
@@ -164,7 +144,8 @@ def test_receiver_batch_rolls_back_all_updates_when_one_write_fails(
 
     first_action.refresh_from_db()
     second_action.refresh_from_db()
-    assert response.status_code == HTTPStatus.CONFLICT
+    # extra=forbid → 400; 不写任何 receiver
+    assert response.status_code == HTTPStatus.BAD_REQUEST
     assert first_action.grant_receiver is None
     assert second_action.grant_receiver is None
 
