@@ -138,6 +138,7 @@ models.CheckConstraint(
 | `confirm_version` | `PositiveIntegerField(default=0)` | 单调递增。**preview 成功、修改类型级 `default_action`/`default_to_user`、整体替换 overrides、修改 `grant_receiver` —— 这四件事任意一件都 +1。** execute 请求必须回带匹配值，否则 `409 confirm_version_stale`（§6.1） |
 | `overrides_version` | `PositiveIntegerField(default=0)` | 单调递增，每次 override 集合被替换 +1。`PUT overrides` 必须回带匹配值，否则 409 |
 | `skipped_at` | `DateTimeField(null=True, blank=True)` | 强行跳过的时间，与 `skipped_by` 一起构成责任链 |
+| `approval_instance_warning` | `JSONField(null=True, blank=True)` | §4.5.3 的在途钉钉审批警示 `{message, link, recorded_at}`，建单时一次性写入，**升级与完成都不清除**。没有这一列的话 §4.5.3 的「必须持久化」根本无处可写 |
 | `last_error_raw` | `TextField(blank=True)` | **新增**。下游原始响应体，截断 2000 字符，**只在控制台对超管展示且每次查看写审计**。既有的 `last_error`（`lifecycle/models.py:233`）改为只放「状态码 + 本地分类文案 + 白名单提取的 `code`/`message`，各截断 200 字符并脱敏」，门户与控制台都能看（契约 §10.6） |
 | `batch_seq` | `PositiveIntegerField(default=0)` | 已分配的最大批次号。**只是分配器**；批次的事实来源是 §2.4.1 的 `HandoverExecutionBatch` 行 |
 | `data_completed_at` | `DateTimeField(null=True, blank=True)` | 数据 webhook 已成功、权限尚未转授（契约 §10.5.1.1 的子状态，持久化） |
@@ -321,7 +322,8 @@ class HandoverAssetOverride(models.Model):
 
 ```python
 class HandoverExecutionBatch(models.Model):
-    action = FK(HandoverAppAction, on_delete=PROTECT, related_name="execution_batches")
+    action = FK(HandoverAppAction, on_delete=SET_NULL, null=True, related_name="execution_batches")
+    action_snapshot_id = PositiveIntegerField()   # 非空, 创建时冗余, 唯一约束建在它上面
     generation = PositiveIntegerField()
     batch_seq = PositiveIntegerField()
     is_final = BooleanField(default=True)         # 见下方 413 分批
@@ -339,7 +341,7 @@ class HandoverExecutionBatch(models.Model):
     class Meta:
         constraints = [
             models.UniqueConstraint(
-                fields=["action", "generation", "batch_seq"],
+                fields=["action_snapshot_id", "generation", "batch_seq"],
                 name="lifecycle_execution_batch_unique",
             ),
         ]
@@ -529,6 +531,24 @@ class HandoverLeaseFence(models.Model):
 > **只描述租约表、不写这一步，互斥就是纸上的。** 同一 subject/app 上的离职 action 与
 > reassign action 并发 execute 时，两边各锁各的 action 行，谁也不去 INSERT 租约，
 > 于是两个 worker 都把请求发了出去。
+
+**每一条终结路径都必须在同一次 fence CAS 里释放租约**，这张表是冻结的：
+
+| execute 的结局 | 租约怎么处理 |
+|---|---|
+| 同步 200（最终批，授权也成功） | 写 `action.status="done"` 的那次 CAS **同时** `released_at = now` |
+| 同步 200（非最终批） | 写 batch 完成的那次 CAS 同时释放 |
+| **202** | **不释放**，移交 async sentinel（见下） |
+| 412 / 413 / 423（退回 `pending` / 保持 `previewed`） | 写回状态的那次 CAS 同时释放 |
+| 409 / 422 / 401 / 403 / 5xx（`failed`） | 同上，写 `failed` 的那次 CAS 同时释放 |
+
+> **漏掉任何一行，那条 `(subject, app)` 就被永久锁住**：条件唯一约束会让后续的 execute、
+> 以及升级（§5.1.2 要求无在途租约）统统撞上 `handover_execution_in_flight`，
+> 而 action 本身早已终结、界面上看不出任何异常。
+
+**还必须有一个兜底的恢复任务**（§7 `lifecycle_recover_expired_execution_leases`，每分钟）：
+worker 发完网就崩溃时，TTL 只让租约"过期"，没有任何东西会去接管它 ——
+那一行会永远满足 `released_at IS NULL`，唯一约束继续挡住所有人。
 
 **常量冻结，不由实现者自行选择**（否则同一故障下有的 worker 抢占、有的长期锁死）：
 
@@ -1035,6 +1055,14 @@ def preview_action(action) -> HandoverAppAction
 - payload 加 `generation`。
 - 响应校验：每个 `type` 必须在 `App.handover_asset_types` 中声明过，否则 action → `failed`，
   `last_error="undeclared_asset_type: {type}"`。
+- **发请求前固化 `request_generation = action.generation`；响应落库时按
+  `(action_id, generation)` 做条件更新，不匹配就整份丢弃** —— 不写 `snapshot_token`、
+  不重建资产行、不递增 `confirm_version`、不改 action 状态。
+
+  > generation 1 的 preview 已经发出去了，单据随后升级到 generation 2 并清空 token；
+  > generation 1 的响应姗姗来迟，若照写就会把旧 token、旧资产清单、旧状态盖到新一轮上，
+  > 接下来的 execute 拿着旧 token 进入 412 死循环，界面上还显示着上一轮的清单。
+
 - 用响应**重建**该 `(action, generation)` 下的 `HandoverAssetType` 行（`count`/`label_snapshot`），
   保留已存在行的 `default_action` / `default_to_user` 与其 `overrides`（重新 preview 不应清空人已做的选择）。
   但若某个 override 的 `asset_id` 在新一轮明细里已不存在（数据被删或已终结），该 override 行必须删除并计数，
@@ -1090,13 +1118,23 @@ API 层的 `validate_assignments()` 仍然要有 —— 库约束保证数据不
 
 ```python
 def complete_data_phase(batch: HandoverExecutionBatch) -> None:
-    # 事务 A(CAS 保护): batch.status="data_completed" + batch.data_completed_at
+    # 事务 A(CAS 保护): batch.status = "data_completed" + batch.data_completed_at
     #                  若 batch.is_final: 同时写 action.data_completed_at   ← 必须在这里
     # 提交 A
-    # 事务 B: 幂等转授权限(仅 is_final 且 kind == offboard)
-    # 事务 C: action.status = done + refresh_task_status_locked
-    ...
+    #
+    # if not batch.is_final:                      ← 非最终批到此为止
+    #     batch.status = "done"
+    #     action.status 保持 "previewed"          （不是 done!）
+    #     action.data_completed_at 保持 NULL
+    #     更新 batch_progress, CAS 释放租约, 返回
+    #
+    # 事务 B: 幂等转授权限(仅 kind == offboard)
+    # 事务 C: action.status = "done" + refresh_task_status_locked + CAS 释放租约
 ```
+
+> **非最终批绝不能置 `done`。** 三批计划的第 1 批返回 200 就把 action 写成 `done` 的话，
+> D13 会把**整张单**判成 `completed`，而 `completed` 单**不可重开**（§6.2）——
+> 后两批再也没有执行入口，剩下的资产永远搬不走。
 
 > **`action.data_completed_at` 必须在授权事务之前提交。** 顺序写反了会这样：
 > 最终批的数据 webhook 返回 200，只写了 batch 上的 marker；授权事务失败；
@@ -1199,6 +1237,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | GET | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}/overrides` | 同上 | **返回当前 generation 的完整 override 集合**与 `overrides_version`。`PUT` 是整体替换，没有这个读回入口，用户刷新页面后改一条就会把其余全部删掉 |
 | PATCH | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}` | 我是 assignee | body: `{"default_action": "transfer"\|"release"\|"skip", "default_to_user_id": str\|null}` |
 | PUT | `/handover-tasks/{task_id}/actions/{app_key}/assets/{type}/overrides` | 我是 assignee | body: `{"overrides_version": n, "overrides":[{"asset_id":"...","action":"transfer"\|"release"\|"skip","to_user_id":"..."\|null,"label":"..."}]}`，**整体替换**。`overrides_version` 必填，与服务端不一致返回 `409 overrides_version_stale` —— 整体替换 + 无版本号 = 后一次保存静默吃掉前一次的全部修改 |
+| PATCH | `/handover-tasks/{task_id}/actions/{app_key}` | 我是 assignee | 设置**权限接收人**，body `{"grant_receiver_user_id": str\|null}`。仅 `kind=offboard` 允许非空。**门户必须有这个入口** —— 主管在门户做完数据分配却指定不了权限接收人的话，`grant_receiver` 一直是 null，授权快照全部按「只撤不转授」处理：数据搬过去了，接收人却进不了那个应用。修改后清 preview、`confirm_version + 1`，返回最新 action |
 | POST | `/handover-tasks/{task_id}/actions/{app_key}/preview` | 我是 assignee | |
 | POST | `/handover-tasks/{task_id}/actions/{app_key}/execute` | 我是 assignee | body **必填** `{"confirm_version": n}` —— 用户点确认时界面上显示的那一版。与服务端当前值不一致 → `409 confirm_version_stale`，**不创建 batch**，要求刷新后重新确认 |
 | POST | `/handover-tasks/{task_id}/actions/{app_key}/retry` | 我是 assignee | 仅 `failed` 可重试，否则 `409 action_not_retryable`。**若 `data_completed_at` 非空，重试只重做授权转移那一步**（契约 §10.5.1.1），不重发数据 webhook |
@@ -1226,7 +1265,8 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 > **`snapshot_token` 不出现在门户 API 里，前端一个字节都不用碰。** 它由 EasyAuth 在
 > preview 响应中取回并存进 `HandoverAppAction.snapshot_token`（§2.2），
 > items / execute 发 webhook 时由后端自动回带（契约 §10.5.1）。
-> 前端只需要知道：execute 返回 `409 snapshot_stale` 时，要引导用户重新 preview。
+> 前端只需要知道：execute 或 items 返回 **`412 snapshot_stale`** 时，要清掉本地状态并引导用户重新 preview。
+> **不是 409** —— 409 会被判成不可重试的 `failed`。
 
 > **两个创建端点都必须支持 `Idempotency-Key`。** `00` §8.4 允许同一 subject 有多张 open 的
 > `reassign` 单，所以数据库层没有唯一约束能挡住重复创建 —— 201 响应在网络上丢一次、
@@ -1244,7 +1284,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | `POST /handover-tasks/reassign` | **201** | `{"handover_task": <§6.2 详情对象>}` |
 | `GET /handover-tasks/{id}` | 200 | `{"handover_task": <§6.2 详情对象>}` |
 | `GET .../items` | 200 | `{"items": [{"id","label","hint"}], "page": 1, "page_size": 50, "total": 0, "unfiltered_total": null, "stale": false}` |
-| `PATCH .../assets/{type}` | 200 | 该 `asset_type` 的最新对象（§6.2 `asset_types` 里的一项） |
+| `PATCH .../assets/{type}` | 200 | `{"asset_type": <最新的类型对象>, "confirm_version": n+1}` —— **必须回带新的 `confirm_version`**。这个 PATCH 本身会让它 +1；不回带的话，用户改完默认接收人**立刻**点执行就稳定得到 `409 confirm_version_stale`，而他什么都没做错 |
 | `GET .../overrides` | 200 | `{"overrides_version": n, "overrides": [{"asset_id","action","to_user","label"}]}` —— **完整集合**，不分页 |
 | `PUT .../overrides` | 200 | `{"overrides_version": n+1, "confirm_version": m+1, "override_count": k, "dropped_invalid": j}` —— **必须回传两个新版本号**，否则前端手上还是旧值，翻到下一页再保存必然 409 |
 | `POST .../preview` / `.../execute` / `.../retry` | 200 | 该 action 的最新对象（§6.2 `actions` 里的一项） |
@@ -1379,9 +1419,11 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | `.../handover-tasks/{id}/actions/{app_key}/skip` | 强行跳过（D6），body `{"reason": "..."}`，`reason` 必填且 ≥10 字符。**实现方式：扩展既有的 `operation=="skip"` 分支**（`admin_console/lifecycle_api.py:362,403`），不要新注册一条会与既有动态 operation 路由（`admin_console/urls.py:252`）重叠的 URL —— 注册在后面就永远不可达。现有 handler **完全不读 body 里的 reason**，必须补：严格解析 `{"reason": str}`、校验 ≥10 字符、传给 `skip_action(action, actor_id=..., reason=...)` |
-| POST | `.../handover-tasks/{id}/claim` | 超管认领 `superuser_pool` 中的单，assignee 置为该超管，`assignee_state=manager`。**认领人必须是 active、非 `local-admin:`、且有有效钉钉绑定的 OIDC 超管**，否则 `403 local_admin_cannot_claim` |
+| POST | `.../handover-tasks/{id}/claim` | 超管认领 `superuser_pool` 中的单：同一事务内置 `assignee`、`assignee_state=manager`、**`escalation_deadline = now + HANDOVER_ESCALATION_DAYS`**、清 `escalation_deferred_at`，并写 `handover_assignee_assigned` 审计。<br>**不重置 deadline 的话这张单会脱离所有自动上交扫描**：落池时 deadline 被清空，认领只写 assignee —— 这位超管若不再处理，beat 因 `deadline IS NULL` 永远扫不到它，而界面又按 null 显示「待超管认领」，责任人与展示互相矛盾。到期且主管链已耗尽时重新退回 `superuser_pool`（清 assignee 与 deadline），允许别人再认领。**认领人必须是 active、非 `local-admin:`、且有有效钉钉绑定的 OIDC 超管**，否则 `403 local_admin_cannot_claim` |
 | POST | `.../handover-tasks/reassign` | **超管跨管辖范围建 `reassign` 单**（D9 的「跨部门走超管」路径）。body 同门户版，但**不做管辖范围校验**；仍校验双方 active、双方非本地管理员、`reason` ≥10 字符、接收人 ≠ 当事人。写审计 `handover_reassign_created`（`initiator` 记该超管） |
 | POST | `.../handover-tasks/{id}/escalation/defer` | 把 `escalation_deadline` 顺延 `HANDOVER_ESCALATION_DAYS`（不改 `escalation_level`），**body `{"reason": "..."}` 必填且去空白后 ≥10 字符**（空 body → 422）。**同一 `escalation_level` 内至多一次**（靠 `escalation_deferred_at` 判定，非空即拒 `409 already_deferred`）；上交后该字段清空，新层级可再顺延一次。写审计 `handover_task_deferred`，单据上永久显示「已由 {超管} 于 {时间} 顺延：{理由}」 |
+| GET | `.../approval-rule-replacements` | query `resolved=false`（默认）。响应 `{"items": [{"id", "approval_rule": {...}, "departed_user": {...}, "reason", "created_at"}], "total": n}`。**没有这个列表，§4.5.2 造出来的待办行谁都发现不了** —— 规则里仍挂着离职者，新权限申请解析不到有效审批人，而那条待办无限期没人处理。控制台按 `total > 0` 常驻计数告警 |
+| POST | `.../approval-rule-replacements/{id}/resolve` | body `{"approver_user_ids": ["..."]}`（非空）。**同一事务内**锁待办与规则 → 替换审批人 → 写 `resolved_at`/`resolved_by`。并发重复 resolve 由 `resolved_at IS NULL` 的条件更新兜底，影响行数为 0 → `409 already_resolved` |
 | GET | `.../handover-blocked-apps` | 未接入 APP 汇总，供控制台顶部告警条。响应 `{"app_count": n, "task_count": m, "apps": [{"app_key","app_name","blocked_task_count"}]}` |
 | GET | `.../handover-tasks/{id}/candidates` | **控制台专用的选人数据源**，query `q`。响应 `{"items": [{"user_id","name","department"}]}`，只含 active、非本地管理员、且**不等于本单 subject** 的用户。<br>**不要让前端把门户 URL 前缀换成控制台前缀了事** —— 现有 `/console/api/v1/user-options` 的 `purpose` 只接受 `employee` \| `approver`（`admin_console/users_api.py:66-90`），传 `receiver` 直接 422；传 `employee` 又会把当事人本人列进候选，一直到 execute 才报 `receiver_is_subject`。共享组件通过 **surface adapter** 注入 API，不做字符串替换 |
 | GET | `.../handover-tasks/{id}/actions/{app_key}/last-error-raw` | **超管专用**，返回 `{"last_error_raw": "..."}`。**每次读取先写审计**（谁、何时、看了哪个 action 的原始错误），再返回。该字段**禁止**出现在门户响应与普通详情响应里（契约 §10.6） |
@@ -1437,6 +1479,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 |---|---|---|
 | `lifecycle_escalation` | beat 每 10 分钟 | 扫 `status in OPEN and escalation_deadline <= now` 的 `HandoverTask`，逐个 `escalate_overdue_task()`。PostgreSQL 下 `select_for_update(skip_locked=True)` 分批（与 `grants` 过期任务同款） |
 | `lifecycle_daily_reminder` | beat 每天 09:00（Asia/Shanghai） | 对未完成且有 assignee 的单发钉钉提醒；上交前 1 天额外发"即将上交"。注意既有 beat schedule 只接受 float interval，crontab 需扩展。**去重不能只靠"读一下 `last_reminded_on` 再写回"**，见下 |
+| `lifecycle_recover_expired_execution_leases` | beat 每 **1 分钟** | 扫 `released_at IS NULL AND lease_expires_at <= now` 的租约，按 §2.4.2 的「先抢占、后重放查证」协议接管。**没有这个任务，worker 发完网崩溃就是一条永久锁死的租约** —— TTL 只让它过期，不会有任何东西去接管。轮询到第 10 次（`ASYNC_POLL_MAX_ATTEMPTS`）仍非终态时，在同一 fence 下标 `failed` 并释放，**不再移回 sentinel** |
 | `lifecycle_poll_async_actions` | beat 每 **1 分钟** | 扫 `status=async_pending` 的 action，逐个调既有 `poll_async_action()`。**这个任务不存在的话，202 就是个死胡同**：action 进 `async_pending` 后门户不允许 retry（在途）、也没有任何东西去 poll，永远到不了 `done`/`failed`，租约也永远不释放。<br>**上限沿用既有的 `ASYNC_POLL_MAX_ATTEMPTS = 10`**（`lifecycle/core.py:30`），不要新造一个：第 10 次仍非终态 → CAS 标 `failed`、`last_error` 写固定文案「下游超过 10 次轮询仍未返回终态」、释放租约。`Location` 头持久化在 `async_status_url` 上，每次响应带新 `Location` 就更新。拿到终态 200 后**必须走 `complete_data_phase()`**，不得直接置 `done` |
 | ~~`lifecycle_superuser_pool_reminder`~~ | — | **本期不做**，见下 |
 | ~~`lifecycle_blocked_apps_digest`~~ | — | **本期不做**，见下 |
