@@ -769,11 +769,17 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
 transferred + released + skipped + merged + failed == 该类型在本轮 assignments 覆盖到的条目总数
 ```
 
-**口径固定为全量**：右边是该 `asset_type` 在本次快照下的**全部**条目数（等于 preview 的 `count`），
-与 `default_action` 取什么值无关。被 `skip` 的条目计入 `skipped`。
+**口径固定为全量**：右边是该 `asset_type` 在**本批所用的那个 `snapshot_token` 对应的 preview**
+里返回的 `count`，与 `default_action` 取什么值无关。被 `skip` 的条目计入 `skipped`。
 
 这样公式恒等、无分支，下游实现和 EasyAuth 校验都不会有第二种解释。
 上例中 23 张在途订单里 1 张被 override 转移、22 张按默认 skip，故 `transferred:1, skipped:22`。
+
+> **分批（§10.6 的 413）时，守恒是"每批各自守恒"，不是"所有批加起来等于第一次的 count"。**
+> 每批执行前都要重新 preview，第 2 批的 `count` 已经不含第 1 批搬走的条目了。
+> EasyAuth 对**每一批**用**那一批的** preview `count` 做校验；
+> 界面上展示给用户的总计是**各批 summary 逐字段相加**，
+> 不要拿它去和最初那次 preview 的 `count` 比对 —— 两者本来就不相等。
 
 响应 202（异步，沿用现有机制）：返回 `Location` 头指向状态查询 URL，EasyAuth 轮询
 （`handover.py:261 poll_async_action`，逻辑不变）。
