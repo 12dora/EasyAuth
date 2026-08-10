@@ -31,7 +31,7 @@
 | `idempotency_records` | 既有列；`actor_dingtalk_user_id = NULL` | M08 既有通用端口，**不新增领域命令**。唯一键 `(principal_key, operation, idempotency_key)`，`idempotency_key` 列宽 128（`infra/repositories/reliability.py:55-78`） |
 | `audit_logs` | 新增 append-only 行；`actor_dingtalk_user_id = NULL`，上下文进 `metadata_json` | M08 既有审计端口。actor 本就允许空（`reliability.py:81-98`） |
 | `projects` | `owner_dingtalk_user_id`、`version`、`updated_at` | **M13 命令** |
-| `project_members` | 删除来源关系行；目标不存在时插入目标行并**原样继承**来源行的 `added_by_dingtalk_user_id` / `created_at`；目标已存在时只调整 `role` | **M13 命令**。复合主键 + `uq_project_members_one_owner` 部分唯一索引（`alembic/versions/m13_001_project_tables.py:135-142`）要求在同一命令内合并 |
+| `project_members` | **删除**来源关系行（`project_owned` 场景**只能删，不能降级为 MEMBER**）；目标不存在时插入目标行并**原样继承**来源行的 `added_by_dingtalk_user_id` / `created_at`；目标已存在且需要成为 OWNER 时才调整 `role` | **M13 命令**。复合主键 + `uq_project_members_one_owner` 部分唯一索引（`alembic/versions/m13_001_project_tables.py:135-142`）要求在同一命令内合并 |
 | `tasks` | `assignee_dingtalk_user_id`、`assigner_dingtalk_user_id`、`assignment_version`、`version`、`updated_at`；**明确不改** `status`、`state_version` | **M10 命令** |
 | `task_collaborators` | 删除来源行；目标不存在时插入并继承 `added_by` / `created_at` | **M10 命令**。复合主键 `(task_id, dingtalk_user_id)` |
 | `task_assignment_history` | assignee 变化时新增完整历史行，`changed_by_dingtalk_user_id = NULL` | **M10 命令**；该列**当前非空**（`infra/repositories/tasks.py:226`），须迁移改为 nullable |
@@ -45,6 +45,7 @@
 | `work_records` | **不写** `created_by_dingtalk_user_id` | 契约 §11.1 已列为 D11 的显式例外，本期不转移 |
 | `op_handover_projection_outbox`（**新表**） | `id`、三元组、`task_id`、人员快照、状态、重试与时间字段 | **M32 表 + M33 写路径**。见 §1.2 的 OpenProject 条 |
 | `tasks.op_lock_version` / `tasks.op_synced_at` | outbox worker 成功后更新 | M32 数据模型 / M33 worker，既有投影锚点列 |
+| `op_sync_conflicts` | worker 重试耗尽时写 `APPLY_FAILED` 行，**去重维度用 `outbox_id`** | M32 既有表。不加这一条，worker 按清单实施时无处记录最终失败 |
 | `notifications` / `notification_recipients` / `notification_outbox` | **不写** | M14 本次只做评审方。逐对象通知会造成通知风暴；完成通知由 EasyAuth 合并发送（契约 §13） |
 
 #### work-record 所有权补登记（`contracts/ownership.md` 当前缺失）
@@ -160,11 +161,15 @@ async def system_handover(
 保证：
 
 - `project_owned` 与 `project_member` 在**同一项目锁、同一事务**内处理，member 选择器**排除 OWNER 行**；
-- OWNER 转移顺序固定：**删除/降级旧 OWNER → flush → 升级或插入目标 OWNER → 最后同步
+- OWNER 转移顺序固定：**删除旧 OWNER 行 → flush → 升级或插入目标 OWNER → 最后同步
   `projects.owner_dingtalk_user_id`**（部分唯一索引非 deferrable，顺序反了立刻撞约束）；
+- **旧 OWNER 只能删除，不得"降级为 MEMBER"**：降级会让离职者以成员身份继续拥有项目可见性，
+  而这条新产生的 MEMDER 关系**从来没有出现在 preview 里** —— 用户以为交接干净了，实际没有；
+- 反方向也要小心：`project_member` 转给一个**已经是 OWNER** 的接收人时，
+  **只删除来源 MEMBER 行并计 `merged`，绝不修改目标的 `role`** —— 改了就变成项目没有 OWNER；
 - 保持「每项目恰有一个 OWNER」；成员关系的 `added_by` / `created_at` 历史元数据**继承不改写**；
-- 项目终态、审批锁、来源已非 owner/member、目标 inactive、snapshot 不匹配 → 抛
-  `ProjectHandoverConflict` → `409 HANDOVER_CONFLICT`；
+- 项目终态、来源已非 owner/member、目标 inactive → 抛 `ProjectHandoverConflict` → `409 HANDOVER_CONFLICT`；
+- **审批锁 → `423`**（见 §2.4）；**全局 snapshot 摘要不匹配 → `412`**，由 M06 在任何领域写入之前统一判定，不进领域命令；
 - **不发**成员逐条通知。
 
 > 现有 `replace_members` 强制传入的 OWNER 等于旧 owner，且会全量重写成员关系，无法承担该职责。
@@ -192,10 +197,14 @@ async def system_handover(
 - assignee 变化时 `assignment_version += 1` 并写 assignment history；一次命令内任一角色变化只把
   `version` 加一次；
 - collaborator 目标已存在 → 删除来源行并计入 `merged`；否则转移关系并保留历史 `added_by` / `created_at`；
+- **合并后的 collaborator 集合不得包含最终 assignee**（既有不变量
+  `assignee_cannot_be_collaborator`，`domain/tasks/commands.py:1757`）：
+  若转入目标恰好等于该任务最终的 assignee，**只删除来源关系并计 `merged`，不插入 collaborator 行**。
+  直接插入会造出普通 API 明令禁止的双重角色；
 - 写一条 M11 activity（actor 为 NULL，payload 带三元组）；
 - **不写** `task_state_transitions`，**不发** `TASK_REASSIGNED` 通知；
-- 审批锁、终态、来源不再匹配、目标 inactive、版本或唯一约束竞争 → `TaskHandoverConflict` →
-  `409 HANDOVER_CONFLICT`。
+- 终态、来源不再匹配、目标 inactive、版本或唯一约束竞争 → `TaskHandoverConflict` → `409 HANDOVER_CONFLICT`；
+  **审批锁 → `423`**；**全局 snapshot 不匹配由 M06 前置判定并返回 `412`**，不进领域命令。
 
 > **为什么不能复用现有 `reassign`**：它会把任务重新推回 `PENDING_ACCEPTANCE`
 > （`domain/tasks/state_machine.py:56-69`），并产生逐任务通知。交接只转责任，不改状态。
@@ -213,7 +222,23 @@ async def refresh_after_system_handover(
 
 - **只在任务 assignee 或 assigner 变化时调用**；
 - 任务已由 M10 锁定，M18 再按规则 UUID 升序锁定相关规则；
-- 旧 PENDING occurrence 标 `SKIPPED` / `HANDOVER_SUPERSEDED`，再用既有计算器生成新 occurrence 并推进规则游标；
+- **先算出新集合，再按自然键做差集**，不能"先全部 SKIP 再全部 INSERT"：
+  `uq_reminder_occurrences_natural (rule_id, scheduled_for, occurrence_kind, recipient_dingtalk_user_id)`
+  与 `uq_reminder_occurrences_dedup_key` 都是**永久唯一键，不按 status 过滤**
+  （`alembic/versions/m18_001_reminder_tables.py:244-251`）。
+  被标成 `SKIPPED` 的旧行仍然占着自然键，同一个自然键再 INSERT 会冲突；
+  若实现用了 `ON CONFLICT DO NOTHING`，结果是**静默不插入，最终一条 PENDING 提醒都没有**。
+
+  正确的三分支：
+
+  | 情形 | 处理 |
+  |---|---|
+  | 自然键在新集合里也存在 | **原位保持/恢复 `PENDING`**，刷新 `payload_snapshot`，不删不插 |
+  | 旧行的自然键不在新集合里 | 标 `SKIPPED` / `HANDOVER_SUPERSEDED` |
+  | 新集合里的全新自然键 | INSERT |
+
+  典型触发场景：assignee A→B 而 assigner 本来就是 B —— 新旧集合会有自然键重叠。
+- 推进规则游标；
 - 任一失败使整个 execute 数据库事务回滚；领域竞争 → `409 HANDOVER_CONFLICT`，意外故障按契约 §10.6 返回 5xx。
 
 > **周期模板（recurrence）的人员变化不调用本命令。**
@@ -238,6 +263,7 @@ async def system_handover(
 ```
 
 保证：模板须 `is_enabled=true`；锁内重新校验角色与目标 active；目标 collaborator 已存在则合并；
+**目标等于模板最终 assignee 时只删来源关系、不插入**（同 M10，`domain/recurrence/service.py:215,381` 有同样的不变量）；
 一次命令只把模板 `version` 加一次；**不修改历史 occurrence**；不发逐模板通知；冲突 → `409 HANDOVER_CONFLICT`。
 
 > 现有 recurrence patch 的 DTO 不含人员字段，无法复用。
@@ -256,8 +282,15 @@ async def system_handover_participant(
 ```
 
 保证：仅 `status='OPEN'` 的记录；锁记录后只处理参与人关系；目标已存在则删除来源并计 `merged`；
-**目标不得等于 creator**（既有 participant 归一化会排除 creator）；
-**不得修改** `created_by_dingtalk_user_id`；冲突 → `409 HANDOVER_CONFLICT`。
+**不得修改** `created_by_dingtalk_user_id`；其余冲突 → `409 HANDOVER_CONFLICT`。
+
+> **目标恰好是该记录的 creator 时，按「合并」处理，不是报错。**
+> 既有 participant 归一化会把 creator 排除在参与人之外（`domain/work_records/service.py:120`），
+> 所以不能插入这一行 —— 但也**不能因此整批 409**：
+> EasyAuth 在 preview 阶段无从得知"默认接收人恰好创建过其中某几条记录"，
+> 一次正常的批量转移会因为这个巧合整体失败，而 409 还是不可重试的。
+> 正确结果是：**不插入 participant，删除来源 participant，计入 `merged`** ——
+> creator 本来就对该记录有可见性，目的已经达到。
 
 #### M32 / M33 · OpenProject 投影
 
@@ -272,10 +305,52 @@ async def enqueue_system_handover_projection(
 ) -> UUID: ...
 ```
 
-保证：在 M10 的业务事务内**只写 durable outbox**；唯一键为三元组 + `task_id`；
-worker 在事务外更新 OpenProject 的 `assignee_dtuid` / `collaborators_dtuid` 两个 CF；
-成功后用短事务更新锚点列；失败可重试，最终写 M32 的 `APPLY_FAILED` 冲突台账。
-**不得依赖 M34 对账自动修复** —— 它明确不回写人员字段。
+`op_handover_projection_outbox` 的列**在此冻结**（M32 建表，M33 消费）：
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| `id` | UUID PK | |
+| `handover_task_id` / `generation` / `batch_id` | text / int / int | 溯源三元组 |
+| `task_id` | UUID | 本地任务 |
+| `assignee_dingtalk_user_id` | text | 入队时的人员快照 |
+| `collaborators_hash` | char(64) | 协作人集合的规范摘要 |
+| `expected_task_version` / `expected_assignment_version` | int | **版本护栏**，见下 |
+| `op_work_package_id` | int NULL | 入队时已知则填 |
+| `op_lock_version_at_enqueue` | int NULL | 同上 |
+| `status` | text | `PENDING` \| `CLAIMED` \| `APPLIED` \| `SUPERSEDED` \| `CANCELLED` \| `APPLY_FAILED` |
+| `attempts` / `next_attempt_at` | int / timestamptz | 指数退避 |
+| `claim_owner` / `claim_expires_at` | text / timestamptz | worker 抢占 |
+| `last_error` | text | |
+| `created_at` / `updated_at` | timestamptz | |
+
+唯一键 `(handover_task_id, generation, batch_id, task_id)`。
+
+保证：
+
+- 在 M10 的业务事务内**只写 outbox**，不发任何网络请求；
+- worker 消费时**必须先取既有的 `task_lock_key(task_id)` advisory lock**，与普通写穿共用同一把锁；
+- **版本护栏**：取锁后比对本地 `task.version` / `assignment_version` / 协作人 hash 与入队时的快照，
+  **已经前进 → 该行标 `SUPERSEDED`，不写 OP**（或改为投影当前本地权威值）；
+- 通过护栏才 PATCH OpenProject 的 `assignee_dtuid` / `collaborators_dtuid` 两个 CF，
+  成功后用短事务更新 `op_lock_version` / `op_synced_at` 锚点；
+- 重试耗尽 → 写 M32 的 `op_sync_conflicts`（`APPLY_FAILED`），
+  **去重维度用 `outbox_id`**，不要用 `(task, op)` —— 否则后一个 generation/batch 的失败
+  会命中前一条未解决的记录，新的错误详情直接丢失。因此 §1.1 的允许写表清单里
+  **加上 `op_sync_conflicts`**；
+- **不得依赖 M34 对账自动修复** —— 它明确不回写人员字段。
+
+> **没有版本护栏会发生什么**：交接入队"改成 B" → 人工又把负责人改成 C 并已写穿 OP →
+> 延迟的 worker 再 PATCH 一次旧快照 B，把 OP 改回去；worker 还会更新 `op_lock_version`，
+> 于是 M34 对账命中 ECHO 抑制，**永远不会发现也不会修复**。
+
+> **execute 仍返回 200，但必须如实说明这一点。**
+> OP 投影是**异步的内部债务**，不在 execute 的成败判定里 ——
+> EasyAuth 的 action 会在本地数据搬完时就变成 `done`，而 OP 那边可能还没同步、甚至最终失败。
+> 因此这一项**必须写进 EasyProject 的风险清单**，并配：重试耗尽的**告警**、
+> `op_sync_conflicts` 的运维查询入口、以及人工重投的操作步骤。
+> **不允许**只写进台账就当没事 —— 那正是本次改造要消灭的静默失败。
+> （改成 202 + 状态轮询在语义上更干净，但那需要给 EasyProject 新增一条状态查询 path，
+> 属于新增 operation，要另走一次 CCR。本期取 200 + 显式债务。）
 
 ### 1.4 迁移与 revision 裁定
 
@@ -470,12 +545,36 @@ generation 水位语义：
 2. execute 在事务外完成身份解析后，进业务事务**再次锁定**该水位；若此时已有更高 generation，立即 409；
 3. 业务事务**持有水位锁直到**全部领域写入、outbox、audit 与幂等响应一起提交。
 
+**幂等 claim 必须排在业务锁与领域命令之前**，顺序固定为：
+
+```
+锁 generation 水位行
+  → IdempotencyGuard.claim_or_replay(...)      ← 命中重放立即返回已存 summary, 到此结束
+  → 按 §2.2 的锁序依次加锁 projects / tasks / templates / work_records / rules
+  → 调各 owner 的 system_handover
+  → store_response(...)  与业务写入同事务提交
+```
+
+> **顺序反了就违背"重放不得调用任何领域命令"这条规定。** 若先加锁跑命令再发现是重放，
+> 一次成功请求的重放会重新跑 snapshot 与归属校验，很可能返回 412/409 而不是那份保存好的
+> 200 summary —— EasyAuth 那边看到的是"上次成功、这次失败"。
+
+**`IdempotencyGuard` 的错误码要转译**：同键不同 hash 时它抛的是通用的
+`IDEMPOTENCY_CONFLICT`（`infra/idempotency/guard.py:185`），而本 operation 冻结的是
+`WEBHOOK_PAYLOAD_CONFLICT`（`09` §5.2）。**M06 捕获后自行转换，不要去改 M08 的通用错误码。**
+
 ### 2.4 审批锁
 
-**裁定：不绕过。拒绝本批 execute。**
+**裁定：不绕过。拒绝本批 execute，但用一个"可恢复"的状态码。**
 
-- HTTP `409 HANDOVER_CONFLICT`，标准错误体的 message/metadata 里保留内部原因 `PROJECT_LOCKED`；
-  **不把 `PROJECT_LOCKED` 提升为跨系统冻结错误码**。
+- HTTP **`423 Locked`**（契约 §10.6 新增行），标准错误体的 message/metadata 里保留内部原因
+  `PROJECT_LOCKED`；**不把 `PROJECT_LOCKED` 提升为跨系统冻结错误码**。
+
+> **为什么不是 409。** 409 在契约里被判为**不可重试的 `failed`**。
+> 而审批锁是**临时**状态：审批一结束锁就没了，这次交接完全应该能继续。
+> 用 409 的话，一次正常的"执行时恰好有个项目在审批中"会把 action 永久打成失败，
+> 界面上既没有重试也没有重新预演的路径，只剩超管 skip 或整单 cancel —— 那是把临时冲突
+> 变成了人工事故。423 让 action 退回 `pending`，用户解除审批后重新预演即可。
 - 理由：项目锁的用途就是冻结审批期间的业务写，现有 task reassign 明确检查它。
   system actor 只豁免**人类授权**检查，不能破坏审批一致性。
 - **不允许**返回 200 且 `failed > 0` —— 契约要求整事务成败一致，正常情况 `failed` 恒为 0。

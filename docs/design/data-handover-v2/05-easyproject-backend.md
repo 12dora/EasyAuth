@@ -60,22 +60,16 @@ async def resolve_dtuid(uow, *, authentik_sub: str) -> str:
 解析顺序：
 
 1. 查 `directory_users where authentik_user_id = sub` → 命中即返回 dtuid。
-2. 未命中 → 调 EasyAuth 目录接口**按 sub 精确取**用户详情，拿到其 dtuid。
+2. 未命中 → 用**既有的** `DirectoryPort.get_user(user_ref)`，把裸 Authentik `sub` 直接当
+   `user_ref` 传进去，拿到其 dtuid。
 
-   > **⚠ 这个接口目前不存在，是 SDK vNext 的交付内容之一。**
-   > 现有 port（`domain/ports/easyauth.py`）与 SDK client 只接受**目录返回过的 opaque
-   > `user_ref`**；把一个裸 Authentik `sub` 塞进 `get_user()` 会被 EasyAuth 判 422，
-   > dtuid 解析不到，整次交接 409 —— 而"从未登录过 EasyProject 的员工"正是 P2 要解决的那批人，
-   > 这条路径**必然**会走到。
+   > **这条路现在就能走通，不用等 SDK vNext。** EasyAuth 侧的
+   > `parse_user_ref()`（`accounts/directory_references.py:58`）对**不以 `dt:` 开头**的引用
+   > 一律解释为 `kind="authentik"`，随后 `resolve_directory_user()`（`:89-97`）直接按
+   > `UserMirror.authentik_user_id` 查。所以裸 sub 是这个接口本来就接受的一种输入形态。
    >
-   > 因此必须先在 EasyAuth 目录契约与 SDK 里新增一个显式接口：
-   >
-   > ```python
-   > def get_directory_user_by_authentik_sub(sub: str) -> DirectoryUser | None: ...
-   > ```
-   >
-   > 随 SDK vNext 一起发布。**在它可用之前，P2 只能做第 1 步（本地命中）那一半**，
-   > 未命中直接抛 `IdentityUnmappedError`。**禁止**把裸 sub 伪装成 opaque user_ref 去碰运气。
+   > SDK vNext 可以补一个语义更清楚的别名与文档，但**那不是 P2 的前置依赖** ——
+   > 把 P2 挂在 SDK 上会让"从未登录过 EasyProject 的员工"这批人白白多等一个交付周期。
 3. 用该 dtuid 回填 `authentik_user_id`。**不得复用登录绑定路径**：
    `user_repo.bind_or_refresh()` 会同时写 `first_login_at` / `last_login_at`
    （`infra/repositories/directory.py:675,676`），webhook 触发时写这两个字段等于**伪造登录事实**，
@@ -561,11 +555,12 @@ EasyProject 只记 `trigger_system=EasyAuth` 与 `handover_task_id`，
 > 并进通用校验错误会让一次可能的头部替换尝试，在日志里与普通的字段写错完全无法区分。
 > 独立错误码是这条补偿唯一的可观测出口。
 >
-> **`items` 事件没有 `mode` 字段，因此本码不适用于 items** —— items 的防替换依据是
-> 「请求体必含 `asset_type` + `snapshot_token`，而 preview/execute 的体里没有 `asset_type`」，
-> 结构上无法互换。校验规则写死为：
-> `preview↔mode="preview"`、`execute↔mode="execute"`、`items↔无 mode 且有 asset_type`，
-> 三者任一不满足即 422。
+> **它适用于全部四个事件**：`preview` / `items` / `execute` / `webhook.test`。
+> 判定依据是 body 里签名覆盖的 `event_type` 字段与 `X-EasyAuth-Event` 是否逐字相同，
+> **校验必须早于 `mode` 解析、事件分发、以及 `webhook.test` 的短路**（契约 §10.1、`01` §8）。
+> `mode` 只是 preview/execute 的一层额外结构校验，**不是**判定依据 ——
+> 早期版本写的「items 没有 mode 所以本码不适用」已作废：那正好会让
+> items→`webhook.test` 的头部替换在 body 校验之前被短路成 200。
 
 > **401 与 403 的定级裁定**：本仓库的 webhook 验签失败返回 **401 `WEBHOOK_SIGNATURE_INVALID`**
 > （`contracts/test-vectors/webhook-hmac.json` 的反例已冻结），而契约 §10.6 把验签失败列在
@@ -616,6 +611,11 @@ CCR 内容（按 `contracts/workflow.md` §6 的六要素）：
 
 因此本端点继续返回 EasyProject 标准错误体 `{"detail":{"code","message","traceId"}}`
 （`components/schemas/ErrorBody`），**不需要**为 EasyAuth 另造一套 `{"error":{...}}` 信封。
+
+> **但"EasyAuth 原样展示响应体"这句已作废。** 契约 §10.6 现在规定：
+> EasyAuth 只把**白名单提取（`code`/`message`/`traceId`）+ 截断 + 脱敏**后的内容放进
+> `action.last_error`（门户与控制台都能看），**原始响应体只进超管可见的 `last_error_raw`**。
+> EasyProject 侧不需要为此做任何改动，但不要再按"反正会原样展示给人看"来设计 message 内容。
 基线里 `responses.default → ErrorResponse` 的声明保持不变，也无需 CCR。
 
 > 这是本次改造中一处刻意的"不统一"：两个下游的错误码风格不同（EasyTrade 小写下划线、
@@ -672,7 +672,7 @@ CCR 内容（按 `contracts/workflow.md` §6 的六要素）：
 | `contracts/openapi-baseline.json` | §5.2 CCR 通过后由 AG-00 更新 |
 | `contracts/test-vectors/webhook-hmac.json` | 同上 |
 | `frontend/src/lib/api/generated/openapi.d.ts` | 生成物，AG-00 再生 |
-| `backend/app/infra/job_registry.py` | 本次**不涉及**（交接无定时任务），列此备查 |
+| `backend/app/infra/job_registry.py` | **本次涉及**：M33 必须导出 `openproject-handover-projection` JobSpec（轮询 + 重试 `op_handover_projection_outbox`），并在此注册。**不注册就没有消费者** —— execute 写完 outbox 之后再没人处理，OpenProject 永久留着离职者。注册补丁与 composition 变更交 AG-00 合并 |
 
 ---
 
