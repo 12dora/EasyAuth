@@ -488,21 +488,18 @@ EasyProject 只记 `trigger_system=EasyAuth` 与 `handover_task_id`，
 **不得**用 `from_user_id`、接收人或签名身份去推断 —— 那是编造。
 若产品确实需要，另提跨系统 CCR 在 payload 加 `initiator_user_id`。
 
-**③ OpenProject 人员投影 —— 原设计整段漏了。**
+**③ 改了任务负责人之后，还要把人同步到 OpenProject。**
 
-> `domain/openproject/mapping.py:82-83` 把
-> `assignee_dingtalk_user_id → cf:assignee_dtuid`、
-> `collaborator_dingtalk_user_ids → cf:collaborators_dtuid` 投影到 OpenProject 自定义字段；
-> 而 M34 对账在文件头不变量里写死「**永不改…人员字段**」（`domain/openproject/reconcile.py:4`）。
->
-> 所以：交接改了 assignee 却不投影，OpenProject 侧会**永久停留在离职者身上，
-> 且没有任何自动修复路径**。这正是本次改造要消灭的那类"看起来成功、实际没搬干净"。
->
-> 又**不能**直接复用既有写穿：`write_through.py:668-724` 的 `_run_transition`
-> 是**持任务锁发网络请求**，与不变量 4 直接冲突。
->
-> 裁定（`08` §1.3 M32/M33）：业务事务内**只写 durable outbox**，事务提交后由 M33 worker 异步投影。
-> **execute 的本地成功以 outbox 落库为界**，不等 OpenProject 返回。
+任务的 assignee 与协作人会投影成 OpenProject 的自定义字段，而对账**不会**回写人员字段
+—— 只改本地不投影的话，OpenProject 那边会永久停在离职者身上且无人修复。
+
+**完整理由、outbox 的列定义、版本护栏、claim 的 owner-CAS、失败重投路径，
+全部在 [`08`](08-easyproject-ag00-rulings.md) §1.2 与 §1.3 的 M32/M33 条 —— 以那里为准，本节不重复。**
+
+M06 这一侧只需要知道两件事：
+
+1. 业务事务内**只写 outbox**，一个网络请求都不发；
+2. **execute 的本地成功以 outbox 落库为界**，不等 OpenProject 返回。
 
 ### 4.6 descriptor（契约 §9.1）
 
