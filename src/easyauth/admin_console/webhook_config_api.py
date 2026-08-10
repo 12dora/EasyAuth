@@ -96,7 +96,13 @@ def console_app_webhook_test(request: HttpRequest, app_key: str) -> JsonResponse
             app=app,
             event_type=WEBHOOK_EVENT_TEST,
             url=url,
-            payload={"message": "EasyAuth webhook 测试事件", "app_key": app.app_key},
+            # 契约 §10.1: 落库原文必须含 event_type, 与签名字节一致(发送端注入是兜底,
+            # 不得依赖它才能让控制台「原文」与 wire 一致)。
+            payload={
+                "event_type": WEBHOOK_EVENT_TEST,
+                "message": "EasyAuth webhook 测试事件",
+                "app_key": app.app_key,
+            },
         )
     except WebhookNotConfiguredError as exc:
         return _validation_error(str(exc))
