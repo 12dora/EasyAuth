@@ -3,6 +3,17 @@
 > 写于 2026-08-10 晚。上一班完成了三仓的全部主体实现与两轮 review/修复循环。
 > **读完本文即可直接开工，无需重读全部历史。** 设计文档集（本目录 `00`–`09`）仍是唯一事实来源。
 
+## 2026-08-11 班次增补（最新状态，覆盖下文过时处）
+
+- **§1 三批未审交付已全部审毕并修复关闭**：第三轮 review（8 分片 opus high，84 findings：EA 5b/13M/13m、ET 1b/16M/15m、EP 4b/11M/6m）→ grok 修复 → opus 复核（EA fail→8 findings、ET fail→7、EP pass-with-nits→4）→ grok round-3.5 修复 → 指挥抽查 majors 全部确认。**103 条零 disputed 遗留**。产物见 `review-artifacts/round3-*.md`。
+- **§3.2 跨仓 blocker 已证伪**：三道白名单（ET 导出器 `97b85791` / SDK 0.4.0 / EA `109e811`）代码里早已齐备，本班用真实解析函数实证 PARSE OK；上一班的失败是打在旧部署容器上。已补钉扎测试。§14 联调检查点仍需部署后跑。
+- **§3.3 A1c 自报缺口处置**：beat 已改 crontab 09:00 Asia/Shanghai 并真钉扎；send_reminder 缺身份时 fail-loud 重试（身份 provision 仍为债）；async_attention 30 分钟退避已在 preempt 前生效。
+- **终检已过**：EA 全量 1492 绿 + PG lane 9 绿 + check/migrations 干净（前端零改动，原构建绿有效）；ET `finish-check` exit 0（app/tests 3544 绿）；EP 2275→2287 绿 + 三 check 脚本 OK。
+- **ET 迁移注意**：0002 曾被原地改写（已部署库不重放），已补收敛迁移 **`0003_handover_task_id_check`**（双路径 schema diff 证明一致）；部署库已实际收敛到 0003 且 CHECK 齐备。部署卡里 alembic 目标改为 head=0003。v1 遗留 task_id 的清洗 SQL 见 ET `docs/DEPLOYMENT.md`。
+- **EP 部署形态已查证**：根目录 compose（frontend 宿主 3001 / backend 仅内网），`EASYPROJECT_AUTO_MIGRATE=true` 启动自动迁移，无需手动 alembic。
+- **新增用量纪律（用户 2026-08-11 指定）**：用 `~/code/agent_usage --json` 盯额度。codex 主池可用 >10% 时：清完 pending 后用 codex 全量复审本次改造（codex gpt-5.6-sol high=reviewer、medium=backend coder、grok high=frontend coder，分片要小）；claude 5h 可用 ≤10% 时收尾休眠、重置后 1min 唤醒。事件用 Monitor 脚本主动通知（60s 轮询、翻转才报）。
+- **剩余工作**：push 三仓（EA 带 `--tags`）→ 部署（EA/ET 要重建镜像；上线前查 EA WebhookDelivery 无 pending/failed）→ §14 检查点 → E2E（`EASYAUTH_HANDOVER_E2E=1`，含改派 2 条）→ 视 codex 额度触发全量复审。
+
 ## 0. 工作指令（必读）
 
 - **Think in English. Send all worker prompts in English.** 用户可见的输出用中文（说人话，少术语，见用户偏好）。
