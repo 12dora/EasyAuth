@@ -534,7 +534,7 @@ EasyProject 只记 `trigger_system=EasyAuth` 与 `handover_task_id`，
 ### 5.2 需要 CCR 的部分（很小，但不可省）
 
 只有一项：给这个既有操作的 `x-error-codes` 补齐条目。当前三个不足以覆盖契约 v2 的失败面。
-**新增 8 个，保留既有 3 个，共 11 个。**
+**新增 9 个，保留既有 3 个，共 12 个。**
 
 | 错误码 | HTTP | 触发 | 现状 |
 |---|---|---|---|
@@ -549,6 +549,7 @@ EasyProject 只记 `trigger_system=EasyAuth` 与 `handover_task_id`，
 | `ASSET_TYPE_UNDECLARED` | 422 | 请求里的 `asset_type` 不在注册表中 | **补** |
 | `REQUEST_BODY_TOO_LARGE` | 413 | 超 256 KiB | **补** |
 | `SNAPSHOT_STALE` | **412** | `snapshot_token` 与当前数据不一致（§4.3.3） | **补** |
+| `PROJECT_LOCKED` | **423** | 项目审批锁期间禁止写。**可恢复**：EasyAuth 退回 `pending`，人解除审批后重新预演（`08` §2.4） | **补** |
 
 > **为什么 `EVENT_MODE_MISMATCH` 要独立成码、不并进 `VALIDATION_ERROR`**：
 > 这条校验是契约 §10.1 针对「签名不覆盖 `X-EasyAuth-Event` 头」这一已知弱点的**安全补偿**。

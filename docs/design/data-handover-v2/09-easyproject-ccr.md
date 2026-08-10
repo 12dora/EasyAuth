@@ -89,7 +89,7 @@ x-error-codes = [WEBHOOK_SIGNATURE_INVALID, HANDOVER_CONFLICT, VALIDATION_ERROR]
 
 改为「EasyAuth 交接 preview/items/execute」。
 
-#### 5.2 `x-error-codes` 冻结为完整 11 项
+#### 5.2 `x-error-codes` 冻结为完整 12 项
 
 | 错误码 | HTTP | 说明 | 状态 |
 |---|---:|---|---|
@@ -104,6 +104,7 @@ x-error-codes = [WEBHOOK_SIGNATURE_INVALID, HANDOVER_CONFLICT, VALIDATION_ERROR]
 | `ASSET_TYPE_UNDECLARED` | 422 | 请求里的资产类型未在 descriptor 声明 | **新增** |
 | `REQUEST_BODY_TOO_LARGE` | 413 | 请求体超过 256 KiB | **新增** |
 | `SNAPSHOT_STALE` | **412** | `snapshot_token` 与当前数据不一致（契约 §10.5.1） | **新增** |
+| `PROJECT_LOCKED` | **423** | 项目审批锁期间禁止写。**可恢复**：EasyAuth 退回 `pending`，人解除审批后重新预演 | **新增** |
 
 > **`SNAPSHOT_STALE` 必须与 `HANDOVER_CONFLICT` 分开成两个状态码。**
 > EasyAuth 只看状态码不解析响应体（契约 §10.6）：412 让它把 action **退回 `pending` 重新预演**，
@@ -119,7 +120,11 @@ x-error-codes = [WEBHOOK_SIGNATURE_INVALID, HANDOVER_CONFLICT, VALIDATION_ERROR]
 
 1. **`contracts/tools/generate_baseline.py`** ← **必须先改这里**
    - endpoint summary 改为 preview/items/execute；
-   - 上述 11 个错误码写进生成源；
+   - 上述 12 个错误码写进生成源；
+   - **同步更新全局 `x-http-error-map`**（同一脚本生成，`contracts/tools/generate_baseline.py:388`）：
+     新增 `412: ["SNAPSHOT_STALE"]`、`423: ["PROJECT_LOCKED"]`，把 `REQUEST_BODY_TOO_LARGE` 并入 413
+     （现在 413 只认识 `FILE_TOO_LARGE`），其余新码归入各自的 400/401/409/422 分组。
+     **漏了这一步，operation 声明了 `SNAPSHOT_STALE` 而再生的 baseline 里根本没有 412，机器可读基线自相矛盾**；
    - 不新增 path / permission / scope / schema。
 2. **`contracts/openapi-baseline.json`**
    - 由生成器**重新生成**，不手工长期维护。**禁止只手改 JSON。**
@@ -127,13 +132,19 @@ x-error-codes = [WEBHOOK_SIGNATURE_INVALID, HANDOVER_CONFLICT, VALIDATION_ERROR]
    - 保留既有 endpoint 与签名正反例（该文件已把 handover URL 列入受保护 endpoint）；
    - 新增 preview / items / execute 三个**正例**；
    - 新增**反例**：timestamp 超窗、未知 event、事件头与 body `event_type` 不一致、
-     把事件头改成 `webhook.test`、items 带 `mode` 或缺 `asset_type`/`snapshot_token`、
-     同三元组不同 body；
+     把事件头改成 `webhook.test`、items 缺 `asset_type`/`snapshot_token`、同三元组不同 body；
+   - **不要写"篡改 delivery 头 → 422"** —— delivery 不在签名内、body 里也没有对应字段，
+     下游无从判断（契约 §10.1）；
    - 继续冻结验签失败为 **401**。
-4. **`contracts/test-vectors/error-bodies.json`**
+4. **新增 `contracts/test-vectors/handover-lifecycle.json`**（状态型向量，不要塞进纯 HMAC 向量里）
+   - `snapshot_token` 失效 → **412** 且**零写入**；
+   - 先成功处理 `generation=2`，再投递 `generation=1` → **409** 且零写入；
+   - 项目审批锁期间 execute → **423**；
+   - 同三元组同 hash 重放 → 200 且 summary 与首次逐字节相同。
+5. **`contracts/test-vectors/error-bodies.json`**
    - 补齐全部新码的标准 `{"detail":{"code","message","traceId"}}` 样本；
    - 不改跨系统状态码语义（EasyAuth 不解析下游错误体字段）。
-5. **SDK / contract golden**
+6. **SDK / contract golden**
    - SDK 增加 items 事件、v2 TypedDict、256 KiB 默认上限、`handover_asset_types` 的 manifest 白名单、
      以及 `event_type` 一致性校验；
    - golden 样本作为 **SDK 包内资源**分发，EasyProject 的契约测试**缺样本必须失败**，
