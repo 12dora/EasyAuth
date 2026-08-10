@@ -367,8 +367,14 @@ def execute_handover(
    > 订单已经不属于当事人而**从集合里凭空消失**，静默漏转。
    > 所有 `reassign` 只能操作第一步冻结下来的主键集合，**不得在前序改写后重新执行责任谓词**。
 
-4. **锁内**重算 `snapshot_token` 并逐条复核：每个待改写的条目**当前仍属于 `from_user_id`**
-   且仍满足该类型谓词。token 不一致 → 整体 **412**；逐条不一致 → 整体 **409**。二者都**零写入**。
+4. **锁内**重算 `snapshot_token` 并逐条复核 —— **这一步的每一项校验都必须在拿到行锁之后重做一遍**：
+   - 每个待改写的条目**当前仍属于 `from_user_id`** 且仍满足该类型谓词；
+   - **接收人与来源用户的 `users` 行也要一起锁**（在资产之前锁），并在锁内复核
+     `receiver.active` —— 否则校验通过之后、写入之前，目录同步可能刚好把接收人停用；
+   - token 不一致 → 整体 **412**；逐条不一致 → 整体 **409**。二者都**零写入**。
+
+   > 锁前校验、锁后写入之间的窗口是真实存在的：验证订单仍属 A 之后、拿到订单锁之前，
+   > 并发事务把它转给了 C 并提交；handover 拿到锁却不重验，就把 C 的订单又覆盖给了 B。
 5. 处理 `overrides`（精确 id 集合），再按 `default_action` 处理剩余条目
    —— **只在第 3 步冻结、第 4 步复核通过的集合上操作**：
    ```
@@ -502,7 +508,23 @@ easyauth_handover_generation_watermarks(task_id VARCHAR(64) PRIMARY KEY,
 
 `backend/vendor/easyauth-app-sdk` 更新到含 v2 的版本，接入点改动：
 
-- `backend/app/api/v1/easyauth_lifecycle.py` 增加 `on_handover_items` 回调
+- **`backend/app/api/v1/easyauth_lifecycle.py` 必须改接 SDK 的
+  `lifecycle_http_response()` / FastAPI helper，不能继续自己调 `verify_webhook` 再按头分发。**
+
+  > 现状是：`await request.body()` 读全量体 → `verify_webhook(...)` → **按事件头 if/elif 分发**，
+  > 且第一支就是 `if event.event_type == EVENT_WEBHOOK_TEST: return {"ok": True}`
+  > （`api/v1/easyauth_lifecycle.py:39-50`）。
+  >
+  > 这意味着两件事：
+  > 1. **"升级 SDK 就自动拿到 `event_type` 校验"是不成立的** —— 校验在 SDK 内核里，
+  >    而这条路由压根不走内核。截获一个合法 execute 请求、只把事件头改成 `webhook.test`，
+  >    它照样在业务分发前返回 200，数据一条没搬而 EasyAuth 记成功。
+  > 2. `await request.body()` **在验签之前就把整个体读进内存**，256 KiB 上限形同虚设：
+  >    不持有 secret 的人也能用超大或 chunked body 反复打内存。
+  >    必须改用 SDK 的 `read_bounded_body()`（先看 `Content-Length` 预拒，再流式读到 N+1 截断）。
+  >    测试要同时覆盖**伪造 `Content-Length`** 与 **chunked 超限**两种。
+
+- 增加 `on_handover_items` 回调
 - 请求体上限跟随 SDK 提升到 256 KiB
 - 直接使用 SDK 的 `handover_payloads` TypedDict，**禁止**在 EasyTrade 内手抄字段名
 - **业务错误一律抛 SDK 的 `HandoverBusinessError(status_code, code, message)`**（`01` §8 第 6.1 条）。

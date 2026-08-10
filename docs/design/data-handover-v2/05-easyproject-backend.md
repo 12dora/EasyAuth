@@ -249,7 +249,10 @@ router 也已在 `api/v1/router.py:49-56` 挂载。工作是把 v1 占位实现*
 
 - 用 SDK 的 `lifecycle_http_response()` 内核做验签、`event_type` 一致性校验与事件分发
   （三个事件：preview / items / execute）
-- 请求体上限 256 KiB（契约 §10.1）
+- 请求体上限 256 KiB（契约 §10.1）。**必须用 SDK 的 `read_bounded_body()`，
+  禁止 `await request.body()`** —— 后者在验签之前就把整个体读进内存，
+  不持有 secret 的人也能用超大或 chunked body 反复打内存，上限形同虚设。
+  测试同时覆盖伪造 `Content-Length` 与 chunked 超限
 - 直接使用 SDK 的 `handover_payloads` TypedDict，**禁止**手抄字段名
 - **业务错误一律抛 SDK 的 `HandoverBusinessError(status_code, code, message)`**（`01` §8 第 6.1 条）。
   现有回调协议只返回 dict，内核一律包成 200 或 500 —— §5.2 那 11 个错误码里除验签外
@@ -332,6 +335,11 @@ router 也已在 `api/v1/router.py:49-56` 挂载。工作是把 v1 占位实现*
 ### 4.3.3 `snapshot_token` 的生成与校验（契约 §10.5.1，**原设计整段缺失**）
 
 `preview` 必须返回它，`items` 与 `execute` 必须回带并校验它。三处**共用同一个生成函数**：
+
+preview 的 9 类 count 与 token、items 的 token 校验与 total/rows，
+**各自必须在一个 `REPEATABLE READ READ ONLY` 事务里完成**，共用同一份物化基础集合。
+默认隔离级别下，先数出 187 条、随后并发新增第 188 条、再算出包含 188 条的 token ——
+界面上确认的是 187 条，而 execute 的 token 校验会通过，第 188 条按默认动作被一起搬走。
 
 ```python
 async def build_snapshot_token(session, *, from_dtuid: str) -> str:
