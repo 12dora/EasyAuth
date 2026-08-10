@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import socket
 import subprocess
 import sys
@@ -33,6 +34,9 @@ DNS_RESOLVER_MAX_IN_FLIGHT: Final = 32
 HTTP_READ_CHUNK_BYTES: Final = 64 * 1024
 DNS_RESOLVER_TERMINATE_GRACE_SECONDS: Final = 0.2
 DNS_RESOLVER_OUTPUT_MAX_BYTES: Final = 64 * 1024
+# 仅全栈 E2E(DEBUG=1)可放行的环回 webhook 主机列表; 默认空=不放行任何主机。
+# 生产/非 DEBUG 下读取该变量也必须仍是空集, 见 e2e_allowed_insecure_webhook_hosts。
+E2E_ALLOW_INSECURE_WEBHOOK_HOSTS_ENV: Final = "EASYAUTH_E2E_ALLOW_INSECURE_WEBHOOK_HOSTS"
 DNS_RESOLVER_SCRIPT: Final = r"""
 import json
 import socket
@@ -115,6 +119,45 @@ class ValidatedHttpsUrl:
     port: int
     request_target: str
     addresses: tuple[str, ...]
+    # E2E 窄门: 仅当主机在 EASYAUTH_E2E_ALLOW_INSECURE_WEBHOOK_HOSTS 且 DEBUG 时为 True。
+    # 生产路径恒为 False; transport 据此决定是否走明文 HTTP 连接。
+    allow_insecure_http: bool = False
+
+
+def e2e_allowed_insecure_webhook_hosts() -> frozenset[str]:
+    """返回当前进程允许的 E2E 明文 webhook 主机集合。
+
+    仅在 ``settings.DEBUG is True`` 且环境变量
+    ``EASYAUTH_E2E_ALLOW_INSECURE_WEBHOOK_HOSTS`` 非空时生效; 其它情况一律空集。
+    默认路径(未设环境变量或 DEBUG=false)不得放宽任何公网 https 校验。
+    """
+    try:
+        from django.conf import settings as django_settings
+
+        if not bool(getattr(django_settings, "DEBUG", False)):
+            return frozenset()
+    except Exception:
+        # Django 尚未配置时不允许任何 E2E 放宽(单元测试未 setup 时走严格路径)。
+        return frozenset()
+    raw = os.environ.get(E2E_ALLOW_INSECURE_WEBHOOK_HOSTS_ENV, "").strip()
+    if not raw:
+        return frozenset()
+    hosts: set[str] = set()
+    for part in raw.split(","):
+        host = part.strip().lower().rstrip(".")
+        if host:
+            hosts.add(host)
+    return frozenset(hosts)
+
+
+def is_e2e_insecure_webhook_host(hostname: str) -> bool:
+    if not hostname:
+        return False
+    try:
+        normalized = normalize_hostname(hostname)
+    except InvalidWebhookUrlError:
+        return False
+    return normalized in e2e_allowed_insecure_webhook_hosts()
 
 
 def require_secure_url(url: str, *, allow_local_http: bool) -> None:
@@ -291,6 +334,16 @@ def validate_public_https_url(
     dns_timeout_seconds: float | None = None,
 ) -> ValidatedHttpsUrl:
     parsed_url = parse_https_url(url, allowed_hosts=allowed_hosts)
+    if parsed_url.allow_insecure_http:
+        # E2E 窄门: 不做公网 DNS 解析; 字面 IP 直接钉住, 主机名仅允许环回解析。
+        addresses = _e2e_resolve_addresses(parsed_url.hostname, port=parsed_url.port)
+        return ValidatedHttpsUrl(
+            hostname=parsed_url.hostname,
+            port=parsed_url.port,
+            request_target=parsed_url.request_target,
+            addresses=addresses,
+            allow_insecure_http=True,
+        )
     if dns_timeout_seconds is None:
         addresses = resolve_public_addresses(parsed_url.hostname, port=parsed_url.port)
     else:
@@ -304,6 +357,7 @@ def validate_public_https_url(
         port=parsed_url.port,
         request_target=parsed_url.request_target,
         addresses=addresses,
+        allow_insecure_http=False,
     )
 
 
@@ -322,21 +376,38 @@ def parse_https_url(
     except ValueError as error:
         raise InvalidWebhookUrlError from error
     if (
-        parsed.scheme.lower() != "https"
-        or parsed.hostname is None
+        parsed.hostname is None
         or parsed.username is not None
         or parsed.password is not None
         or parsed.fragment
-        or port not in (None, 443)
     ):
         raise InvalidWebhookUrlError
     hostname = normalize_hostname(parsed.hostname)
-    try:
-        literal_ip = ipaddress.ip_address(hostname)
-    except ValueError:
-        literal_ip = None
-    if literal_ip is not None and not literal_ip.is_global:
-        raise BlockedHostError
+    e2e_host = hostname in e2e_allowed_insecure_webhook_hosts()
+    scheme = parsed.scheme.lower()
+    if e2e_host:
+        # E2E-only: 允许 http/https + 任意端口 + 环回字面 IP; 仍拒绝 userinfo/fragment。
+        if scheme not in {"http", "https"}:
+            raise InvalidWebhookUrlError
+        if port is None:
+            port = 80 if scheme == "http" else 443
+        if port < 1 or port > 65535:
+            raise InvalidWebhookUrlError
+        allow_insecure_http = scheme == "http"
+    else:
+        if (
+            scheme != "https"
+            or port not in (None, 443)
+        ):
+            raise InvalidWebhookUrlError
+        port = 443
+        allow_insecure_http = False
+        try:
+            literal_ip = ipaddress.ip_address(hostname)
+        except ValueError:
+            literal_ip = None
+        if literal_ip is not None and not literal_ip.is_global:
+            raise BlockedHostError
     if allowed_hosts is not None:
         normalized_allowed_hosts = {normalize_hostname(host) for host in allowed_hosts}
         if hostname not in normalized_allowed_hosts:
@@ -346,10 +417,41 @@ def parse_https_url(
     request_target = f"{path}?{query}" if query else path
     return ValidatedHttpsUrl(
         hostname=hostname,
-        port=443,
+        port=port,
         request_target=request_target,
         addresses=(),
+        allow_insecure_http=allow_insecure_http,
     )
+
+
+def _e2e_resolve_addresses(hostname: str, *, port: int) -> tuple[str, ...]:
+    try:
+        literal_ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        literal_ip = None
+    if literal_ip is not None:
+        if not (literal_ip.is_loopback or literal_ip.is_private):
+            raise BlockedHostError
+        return (str(literal_ip),)
+    # 仅解析到环回; 禁止 E2E 放行主机名再解析到公网或其它内网。
+    try:
+        infos = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    except socket.gaierror as error:
+        raise BlockedHostError(UNRESOLVABLE_HOST_MESSAGE) from error
+    addresses: list[str] = []
+    for info in infos:
+        raw_ip = info[4][0]
+        if not isinstance(raw_ip, str):
+            continue
+        ip = ipaddress.ip_address(raw_ip)
+        if not ip.is_loopback:
+            raise BlockedHostError
+        canonical = str(ip)
+        if canonical not in addresses:
+            addresses.append(canonical)
+    if not addresses:
+        raise BlockedHostError(UNRESOLVABLE_HOST_MESSAGE)
+    return tuple(addresses)
 
 
 def _request_target_path(path: str) -> str:

@@ -159,14 +159,24 @@ def _postgres_database_config(database_url: str) -> DatabaseConfig:
 
 DATABASES = database_config_from_env(os.environ)
 
-# 共享缓存后端(Redis): 本地超管登录/改密/TOTP 的暴破节流依赖它; 未配置时 Django 回落到
-# 每进程独立的 LocMemCache, 多 worker 部署下 5 次锁定形同失效。用与 Celery 不同的 DB 索引。
-CACHES = {
-    "default": {
-        "BACKEND": "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": os.environ.get("EASYAUTH_CACHE_URL", "redis://localhost:6379/2"),
-    },
-}
+# 共享缓存后端(Redis): 本地超管登录/改密/TOTP 的暴破节流与交接 items 限流依赖它。
+# 生产必须显式连 Redis(多 worker 下 LocMem 会使限流失效)。
+# DEBUG 且未设 EASYAUTH_CACHE_URL 时用进程内 LocMem, 便于单进程 runserver / 全栈 E2E。
+_cache_url = os.environ.get("EASYAUTH_CACHE_URL", "").strip()
+if DEBUG and not _cache_url:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": "easyauth-debug-cache",
+        },
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": _cache_url or "redis://localhost:6379/2",
+        },
+    }
 
 # 本地超管口令策略的单一事实源: 改密视图与建号命令都调用 validate_password。
 AUTH_PASSWORD_VALIDATORS: list[dict[str, object]] = [

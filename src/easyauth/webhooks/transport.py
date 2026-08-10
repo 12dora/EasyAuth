@@ -6,7 +6,7 @@ import threading
 import time
 from contextlib import suppress
 from dataclasses import dataclass
-from http.client import HTTPException, HTTPResponse, HTTPSConnection
+from http.client import HTTPConnection, HTTPException, HTTPResponse, HTTPSConnection
 from typing import Final, final, override
 
 from easyauth.config.net import ValidatedHttpsUrl, validate_public_https_url
@@ -135,11 +135,20 @@ def _request_webhook(
     except ValueError as error:
         raise WebhookTransportError(str(error)) from error
     remaining = _remaining_seconds(started_at, policy.total_timeout_seconds)
-    connection = _PinnedHttpsConnection(
-        target=target,
-        address=target.addresses[0],
-        timeout=min(policy.connect_timeout_seconds, remaining),
-    )
+    connect_timeout = min(policy.connect_timeout_seconds, remaining)
+    if target.allow_insecure_http:
+        # E2E 窄门: 仅 DEBUG + 显式 allowlist 时 validate 才置 allow_insecure_http。
+        connection: HTTPConnection = HTTPConnection(
+            target.addresses[0],
+            port=target.port,
+            timeout=connect_timeout,
+        )
+    else:
+        connection = _PinnedHttpsConnection(
+            target=target,
+            address=target.addresses[0],
+            timeout=connect_timeout,
+        )
     deadline_reached, deadline_timer = _start_deadline_timer(connection, remaining)
     response: HTTPResponse | None = None
     try:
@@ -181,7 +190,7 @@ def _request_webhook(
 
 
 def _start_deadline_timer(
-    connection: HTTPSConnection,
+    connection: HTTPConnection,
     remaining_seconds: float,
 ) -> tuple[threading.Event, threading.Timer]:
     deadline_reached = threading.Event()
@@ -202,7 +211,7 @@ def _start_deadline_timer(
 def _read_bounded_response(
     response: HTTPResponse,
     *,
-    connection: HTTPSConnection,
+    connection: HTTPConnection,
     started_at: float,
     total_timeout_seconds: float,
     max_response_bytes: int,
