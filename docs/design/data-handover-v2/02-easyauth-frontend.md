@@ -330,12 +330,18 @@ export interface HandoverAssetItemsPage {
 | 字段 | 控件 | 校验 |
 |---|---|---|
 | 转出方 | 人员选择器，数据源 `?purpose=reassign_subject` | 必填 |
-| **应用范围** | 多选（数据源：该 subject 有数据的 APP 列表） | **必填至少一个**，`01` §6.1 的 `app_keys` |
+| **应用范围** | 多选，数据源 `GET /portal/api/v1/handover-app-options?subject_user_id=...`（`01` §6.1） | **必填至少一个**，对应 `01` §6.1 的 `app_keys` |
 | 理由 | `TextArea` | 必填，≥10 字符，前端先校验再提交 |
 
-提交 body 固定为 `{"subject_user_id": "...", "app_keys": ["..."], "reason": "..."}`。
+提交 body 固定为 `{"subject_user_id": "...", "app_keys": ["..."], "reason": "..."}`，
+并带 `Idempotency-Key` 头（对话框打开时生成一次 UUID，失败重试**复用同一个**，成功后才丢弃）。
+
 **不得默认全选所有 APP** —— 那会把用户没打算移交的应用一起拉进单据（`00` §8.4 明说
 同一 subject 可以有多张针对不同 APP 的 open `reassign` 单）。
+
+> **列表的措辞是「可选择的应用」，不是「有数据的应用」。**
+> preview 之前 EasyAuth 本地根本不知道某人在下游有没有数据 —— 那要建单之后才问得到。
+> 写成「有数据的」会让实现者去找一个不存在的判据。
 
 提交后建单跳详情，接收人在详情页的资产分配器里逐类指定（不在对话框里定）。
 403 `out_of_managed_scope` → 「你没有该员工的管理权限，请联系管理员处理。」
