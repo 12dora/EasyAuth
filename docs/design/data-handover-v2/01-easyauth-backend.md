@@ -976,11 +976,12 @@ reconcile 该 App 下所有 `blocked` 且所属 task 仍 open 的 action：
 def sync_handover_capability(app: App) -> None: ...
 ```
 
-> **建 action 时必须校验 `task_id` 的形态。** 它由 `f"{task.id}:{app.app_key}"` 生成，
-> 而 `App.app_key` 的列宽足以让结果超过契约 §5.4 的 **64 字节**上限（一个 64 字符的合法 app_key
-> 配上 task id `1` 就已经 66 字节）。
-> 规则：生成后必须匹配 `^[A-Za-z0-9:_-]{1,64}$`，否则**整次建单回滚**并写持久告警 + 审计。
-> 拖到发 webhook 时才发现的话，下游会拒绝或落不进幂等记录，离职 action 直接卡死。
+> **`task_id` 的生成公式改为 `f"{task.id}:{app.id}"`**（契约 §5.4）——
+> 现有 `handover.py:597-606` 拼的是 `app.app_key`，而 `App.app_key` 允许 64 个字符
+> （`applications/models.py:102-108`），一个完全合法的 app_key 就能让 `task_id` 超过 64 字节，
+> **正常创建的应用会让离职交接直接建不出单**。换成 `app.id` 之后最长 39 字节，撞不到上限。
+> 建 action 时仍然断言 `^[0-9:]{1,64}$` —— 改了公式之后这条断言只会在代码写错时触发，
+> 不会因为运营取了个长名字而触发。
 
 - 拉取 `/.well-known/easyauth-app.json`，解析 **`lifecycle.capabilities` 与 `lifecycle.handover_asset_types`**
   （契约 §9.1 —— descriptor **没有**嵌套的 `lifecycle.handover` 对象，那是被废弃的早期形状，
@@ -1408,7 +1409,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 |---|---|
 | `handover_task_created` | `lifecycle/offboarding.py` 建单事务内；门户 `pre-offboard` / `reassign` 建单同事务 |
 | `handover_task_upgraded` | §5.1.2 的升级事务内，与 `generation += 1` 同事务 |
-| `handover_assignee_assigned` | `lifecycle/assignee.py` 解析成功后，与 assignee 落库同事务 |
+| `handover_assignee_assigned` | **所有 assignee 变更统一走 `apply_assignee()`**：初始解析、逐级上交、**以及超管 `claim`**。与 assignee 写入同事务，记录 actor 与 reason。<br>漏掉 claim 这条路径的话，单据从超管池被认领后 assignee 已经变了，而审计里只留着「落池」那一条 —— 谁在什么时候接下了这张单，查不出来 |
 | `handover_assignee_resolution_degraded` | 同上，落超管池分支 |
 | `handover_task_escalated` | `lifecycle/escalation.py` 上交事务内 |
 | `handover_task_deferred` | §6.3 的 `escalation/defer` 端点事务内 |
@@ -1426,6 +1427,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 
 `tests/unit/lifecycle/test_audit_events.py` 逐事件断言：触发一次对应操作，
 审计表出现且仅出现一行，关键字段非空。
+**用例参数从契约 §12 的事件集合生成，不要手写数量** —— 手写一个数字，表格再加一行时测试仍然绿。
 
 ---
 
@@ -1556,10 +1558,11 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 8. 新增 `easyauth_app_sdk/manifest.py` 的 `_validate_lifecycle()` 白名单加 `handover_asset_types`
    （契约 §9.1）。**不改这一处，两个下游连 descriptor 都生成不出来**（会抛
    `ManifestValidationError: lifecycle 含未知字段`）。
-9. 新增目录接口 `get_directory_user_by_authentik_sub(sub: str) -> DirectoryUser | None`。
-   现有 client 只接受目录返回过的 **opaque `user_ref`**，把裸 Authentik `sub` 塞进去会被 EasyAuth
-   判 422 —— 而 EasyProject 的 P2（从未登录过的员工解析 dtuid）**必然**走这条路径（`05` §2.1）。
-   EasyAuth 侧同时提供对应的目录端点。
+9. **不新增目录端点** —— 现有 `get_directory_user(user_ref)` 本来就接受裸 Authentik `sub`：
+   `parse_user_ref()` 对不以 `dt:` 开头的引用一律按 `kind="authentik"` 解析
+   （`accounts/directory_references.py:58-60,90-105`）。
+   要做的只是**把这件事写进 SDK 的 docstring 与 README**（现在的措辞让人以为只收 opaque ref），
+   可以再加一个纯委托的别名提升可读性。**不要为此造第二个服务端端点。**
 10. 新增包内数据资源 `easyauth_app_sdk/contract_samples/handover_v2/*.json`（§10），
     并在 `pyproject.toml` 的打包配置里显式包含（`package-data`），否则 wheel 里没有这些文件。
 11. `sdk/python/CHANGELOG.md` 记为 **breaking**；版本号锁死并记录 **commit SHA 与 wheel SHA-256**

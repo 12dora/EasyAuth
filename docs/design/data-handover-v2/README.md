@@ -53,7 +53,7 @@ A3 / A5 的实现要用到 v2 SDK（新的 `items` 回调、`handover_payloads` 
 | 3 | `handover_payloads` TypedDict（每个 Request 含 `event_type`） |
 | 4 | `DEFAULT_MAX_BODY_BYTES` 提到 256 KiB |
 | 5 | `manifest.py` 的 `_validate_lifecycle()` 白名单放行 `handover_asset_types` |
-| 6 | 目录接口 `get_directory_user_by_authentik_sub(sub)`（EasyProject P2 的硬依赖） |
+| 6 | **文档修正**：说明现有 `get_directory_user(user_ref)` 已接受裸 Authentik `sub`（`parse_user_ref` 对非 `dt:` 前缀按 authentik 解析）。**不新增端点**，可加纯委托别名。EasyProject 的 P2 因此**不被 SDK 阻塞** |
 | 7 | 包内契约样本 `easyauth_app_sdk/contract_samples/handover_v2/*.json`，并在 `pyproject.toml` 的 package-data 里显式包含 |
 | 8 | 回调异常边界改为固定文案，不再拼 `str(error)` |
 
@@ -77,7 +77,7 @@ A3 / A5 的实现要用到 v2 SDK（新的 `items` 回调、`handover_payloads` 
 | A2 EasyAuth 前端 | A1 提交 `01` §6 的 API 契约章节后 |
 | A3 EasyTrade 后端 | SDK vNext 发布后 |
 | ~~A4 EasyTrade 前端~~ | **本期取消**（代管废弃，F1/F2/F3 不会发生） |
-| A5 EasyProject 后端 | **三道门禁**，见下表。**现在就能做**：`05` §2.1 身份映射的本地命中那一半、§2.3 `hint`、§3.1.2 终态谓词选择器 |
+| A5 EasyProject 后端 | **三道门禁**，见下表。**现在就能做**（四处文档统一以此为准）：`05` §2.1 身份映射**完整实现**（现有目录接口已支持裸 sub，不被 SDK 阻塞）、§2.3 `hint`、§3.1.2 终态谓词选择器，以及它们的单元测试 |
 | ~~A6 EasyProject 前端~~ | **本期取消**（同上） |
 
 ### A5 的三道门禁与解锁凭据
@@ -94,7 +94,11 @@ A3 / A5 的实现要用到 v2 SDK（新的 `items` 回调、`handover_payloads` 
 - **提交人**：AG-06（A5）在开工第一天把三份材料交给 AG-00；
 - **产物路径**：`08` / `09` 的正文原样落进 EasyProject 仓库对应位置；
 - **时限**：AG-00 在 1 个工作日内批准或退回，退回必须写明理由；
-- **三项未齐时**，A5 只允许做上表"现在就能做"的三项，**不得**碰任何跨模块表或契约文件。
+- **三项未齐时**，A5 只允许做上表「现在就能做」的三项及其单元测试；
+  **不得**实现 M06 编排、不得改跨模块表、不得改 descriptor 输出、错误码基线或契约测试。
+
+> **这段边界在 `00` §14、`05` §5.2/§7、`07` §1.3 里各出现过一次，四处曾经互不一致。
+> 以本表为唯一口径**，其余三处只做引用。
 
 ## 跨仓库对齐的机械保证
 
