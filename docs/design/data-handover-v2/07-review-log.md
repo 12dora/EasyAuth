@@ -128,7 +128,13 @@ recurrence patch 不支持 assignee/assigner。**而 webhook 没有合法的人�
 2. **system-actor 语义裁定**：webhook 触发没有人类 actor，而现有命令都要求 actor / `state_version` /
    幂等键 / reason 且会被审批锁拒绝。需要定义一个系统 actor 身份及其在审计、锁、版本读取上的语义。
 
-在裁定完成前，A5 可以做的只有：§2.1 身份映射（P2）、§2.3 `hint`、以及各领域内部的只读查询实现。
+在三样凭据齐全之前，A5 可以做的**只有 README「现在就能做」的三项**：
+`05` §2.1 身份映射、§2.3 `hint`、§3.1.2 终态谓词选择器，以及它们的单元测试。
+
+> 本节**不得扩大范围**。早期这里写的「以及各领域内部的只读查询实现」与 README 冲突：
+> 各领域的 count/items port、repository、注册表、以及 M06 编排，
+> **全部要等 `contracts/ownership.md` 的合入 SHA** ——
+> 在那之前碰 M03/M10/M13/M19 就是违反现行的所有权规则，而且大概率整段返工。
 
 ---
 
