@@ -729,6 +729,24 @@ def escalate_overdue_task(task: HandoverTask) -> HandoverTask:
 只接受这一种状态，`access_requests/approvals.py:177,185`）。`approved` / `grant_failed` 等
 已决状态**不改写** —— 那是已完成的审批历史，改它等于伪造。
 
+> **⚠ `reassign_access_request()` 是「整体替换」，不是「替换其中一个」。**
+> 它先 `AccessRequestApprover.objects.filter(access_request=...).delete()` 删掉**全部**审批人，
+> 再按传入的列表重建（`access_requests/approvals.py:193-201`）。
+> 原审批人是 `[离职主管, 财务]` 时，若只传 `[新主管]`，**财务的审批责任被静默取消**。
+>
+> 因此必须先读全集再算差集：
+>
+> ```python
+> previous = access_request_approver_user_ids(access_request)      # 既有 helper
+> desired  = [u for u in previous if u != subject.authentik_user_id]
+> if new_approver and new_approver.authentik_user_id not in desired:
+>     desired.append(new_approver.authentik_user_id)               # 稳定去重, 保序
+> if desired:
+>     reassign_access_request(..., approver_user_ids=desired)      # 传完整集合
+> else:
+>     进入 approval_routing_state="superuser_pool"
+> ```
+
 ```
 对所有 status == "submitted" 的 AccessRequest, 其 approver 是 subject 的 AccessRequestApprover 行:
     new_approver = resolve_assignee(该申请的申请人, start_level=0).user   # 沿申请人自己的主管链
@@ -794,7 +812,8 @@ def escalate_overdue_task(task: HandoverTask) -> HandoverTask:
 > ```python
 > class ApprovalRuleReplacementRequired(models.Model):
 >     approval_rule = FK(ApprovalRule, on_delete=CASCADE)
->     task          = FK(HandoverTask, on_delete=CASCADE)
+>     task          = FK(HandoverTask, on_delete=SET_NULL, null=True)   # 单可删, 待办不能跟着没
+>     task_id_snapshot = PositiveIntegerField()                          # 不可变, 溯源用
 >     departed_user = FK(UserMirror, on_delete=PROTECT)
 >     reason        = CharField(max_length=64)     # no_active_manager | chain_exhausted
 >     resolved_at   = DateTimeField(null=True, blank=True)
@@ -825,13 +844,18 @@ def escalate_overdue_task(task: HandoverTask) -> HandoverTask:
 
 因此本期只做**存在性提示**：
 
-- 建单时判定：该离职者出现在本 APP 任一 active `ApprovalRule.approver_userids` 里，
-  且该 APP 存在 `status` 未终结的 `ApprovalInstance` → 在交接单上显示警示区块：
-  「本应用存在未终结的钉钉审批，其中可能有由 {离职者} 审批的条目，请到钉钉中检查并人工转办。」
+- 建单时判定：**该 APP 存在 `status` 未终结的 `ApprovalInstance`** → 在交接单上显示警示区块：
+  「本应用存在未终结的钉钉审批，无法确认其中是否有由 {离职者} 审批的条目，请到钉钉中检查并人工转办。」
   附该 APP 的钉钉审批入口链接；
+- **判定条件里不要加「离职者在 `ApprovalRule.approver_userids` 里」**：钉钉审批模板可以把他配成
+  审批人而本地权限规则里根本没有他，那样会**漏报**；而本地有他、钉钉实例却与他无关又会**误报**。
+  两边都不准，索性只报"无法确认"；
 - **不列逐条实例，不给条数**；
+- **必须持久化，不能每次实时推断**：建单时把 `{message, link, recorded_at}` 写进 action
+  （§6.2 的 `approval_instance_warning` 字段）。实时推断的话，实例一终结或规则一替换提示就消失了，
+  与"完成后仍然保留"的要求直接冲突；
 - 这些条目**不计入** action 的完成判定（它们不是 APP 资产）；
-- 单据完成时保留该提示。
+- 升级与完成都**不清除**该提示。
 
 **解除这个降级的前置条件**（写进缺口清单）：先给 `ApprovalInstance` 持久化
 `current_approver_userids`（由钉钉回调或轮询维护），或确认钉钉开放平台提供可查询当前审批人的接口。
@@ -1213,6 +1237,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
       "confirm_version": 3,
       "overrides_version": 7,
       "skipped_by": "", "skipped_at": null,
+      "approval_instance_warning": null,
       "allowed_actions": ["preview", "execute"],
       "batch_progress": null,
       "asset_types": [
@@ -1238,6 +1263,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
       "confirm_version": 0,
       "overrides_version": 0,
       "skipped_by": "", "skipped_at": null,
+      "approval_instance_warning": null,
       "allowed_actions": [],
       "batch_progress": null,
       "asset_types": []
@@ -1264,6 +1290,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | `skipped_by` / `skipped_at` | 强行跳过的**责任链**。契约 §9.2 要求单据上永久显示「已由 {谁} 于 {何时} 强行跳过：{理由}」，只有 `skip_reason` 是匿名的，满足不了 |
 | `allowed_actions` | `("preview"\|"execute"\|"retry"\|"skip")[]`，**由后端算好**。前端据此决定按钮，**不得解析 `last_error` 去猜可不可重试**。按契约 §10.6：4xx（除 400）不可重试 → 不含 `retry`；`failed` 且非在途 → 控制台含 `skip`（门户永远不含，D6 是超管专属） |
 | `batch_progress` | 413 分批时非 null：`{"completed": 1, "total": 3, "current_batch_seq": 2}`；未分批时 null |
+| `approval_instance_warning` | `{"message": str, "link": str, "recorded_at": str} \| null`。建单时一次性写死并持久化（§4.5.3），**升级与完成都不清除** |
 
 `GET /me/handover-tasks` 的列表项是上述对象去掉 `actions`/`team_items`，另加
 `pending_app_count`、`blocked_app_count`、`total_asset_count`，同样包在
