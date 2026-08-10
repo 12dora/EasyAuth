@@ -1,0 +1,13 @@
+{
+  "snapshot_token": "et-2026-08-10T10:22:41.331Z-9f2c",
+  "assets": [
+    { "type": "customer",            "label": "名下客户",       "count": 187 },
+    { "type": "inquiry_open",        "label": "进行中询盘",     "count": 41  },
+    { "type": "order_in_transit",    "label": "在途订单",       "count": 23  },
+    { "type": "receivable_open",     "label": "未结应收计划",   "count": 12  },
+    { "type": "task_open",           "label": "未完成任务",     "count": 9   },
+    { "type": "activity_followup",   "label": "待跟进活动",     "count": 5   },
+    { "type": "requirement_open",    "label": "进行中产品需求", "count": 0   },
+    { "type": "sample_request_open", "label": "未完成样品申请", "count": 0   }
+  ]
+}

@@ -86,14 +86,30 @@ def test_validate_manifest_accepts_lifecycle_and_webhook_sections() -> None:
     manifest["lifecycle"] = {
         "handover_url": "/api/v1/easyauth/lifecycle/handover",
         "onboard_url": None,
-        "capabilities": ["preview", "reassign"],
+        "capabilities": ["handover.v2"],
+        "handover_asset_types": [
+            {
+                "type": "customer",
+                "label": "名下客户",
+                "detail_supported": True,
+                "releasable": True,
+            }
+        ],
     }
     manifest["webhook"] = {"signing": "hmac-sha256"}
 
     validated = validate_manifest(manifest)
 
-    assert validated["lifecycle"]["capabilities"] == ["preview", "reassign"]
+    assert validated["lifecycle"]["capabilities"] == ["handover.v2"]
+    assert validated["lifecycle"]["handover_asset_types"][0]["type"] == "customer"
     assert validated["webhook"]["signing"] == "hmac-sha256"
+
+
+def test_validate_manifest_rejects_unknown_lifecycle_fields() -> None:
+    manifest = _manifest()
+    manifest["lifecycle"] = {"handover_url": "/h", "nested": {"x": 1}}
+    with pytest.raises(ManifestValidationError, match="未知字段"):
+        validate_manifest(manifest)
 
 
 def test_validate_manifest_accepts_top_level_platform_capabilities() -> None:

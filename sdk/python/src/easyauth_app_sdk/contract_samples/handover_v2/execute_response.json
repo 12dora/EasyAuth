@@ -1,0 +1,7 @@
+{
+  "summary": {
+    "customer":         { "transferred": 185, "released": 1, "skipped": 1, "merged": 0, "failed": 0 },
+    "order_in_transit": { "transferred": 1,   "released": 0, "skipped": 22, "merged": 0, "failed": 0 },
+    "inquiry_open":     { "transferred": 0,   "released": 0,  "skipped": 41, "merged": 0, "failed": 0 }
+  }
+}

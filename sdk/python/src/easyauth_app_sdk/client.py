@@ -197,11 +197,27 @@ class EasyAuthAppClient:
     def get_directory_user(self, user_ref: str) -> dict[str, Any]:
         """用户详情(含主管摘要)。
 
-        user_ref 必须消费目录响应返回的 opaque user_ref 并原样回传。
+        ``user_ref`` 接受两种形态(服务端 ``parse_user_ref`` 口径, 不新增端点):
+
+        - 目录响应返回的 opaque ``user_ref``(原样回传, 推荐);
+        - 裸 Authentik ``sub``(UUID 字符串): 非 ``dt:`` 前缀一律按
+          ``kind="authentik"`` 解析, 因此交接 payload 里的 ``from_user_id`` /
+          ``to_user_id`` 可直接传入, 无需先换 opaque ref。
+
+        ``dt:`` 前缀的钉钉引用必须是已作用域的完整 ref; 未作用域的 ``dt:<id>``
+        与原始 ``department_id`` 仍会被服务端拒绝。
+
         GET {app_base}/directory/users/{user_ref}
         """
         url = f"{self._app_base()}/directory/users/{quote(user_ref, safe='')}"
         return self._request_json(url, method="GET")
+
+    def get_directory_user_by_authentik_sub(self, authentik_sub: str) -> dict[str, Any]:
+        """按裸 Authentik ``sub`` 查用户详情(``get_directory_user`` 的纯委托别名)。
+
+        不新增服务端端点; 语义与 ``get_directory_user(authentik_sub)`` 完全相同。
+        """
+        return self.get_directory_user(authentik_sub)
 
     def get_directory_user_manager(self, user_ref: str) -> dict[str, Any]:
         """直接主管。

@@ -19,3 +19,6 @@ fastapi = [
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"easyauth_app_sdk" = ["contract_samples/**/*.json", "py.typed"]

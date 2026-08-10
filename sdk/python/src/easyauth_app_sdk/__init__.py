@@ -7,7 +7,7 @@
 2. 描述符 HTTP 端点: 纯函数内核 + 可选 FastAPI 路由封装。
 3. API 客户端: 以 app 凭据调用 EasyAuth 权限、审批、企业目录与钉钉通知 API。
 4. webhook 验签: 校验 EasyAuth 反向推送(审批结果/交接事件)的签名与时间戳。
-5. 生命周期交接端点: 接收离职/转岗数据交接的 preview/execute 同步回调,
+5. 生命周期交接端点: 接收离职/转岗数据交接的 preview/items/execute 同步回调,
    纯函数内核 + 可选 FastAPI 路由封装(``easyauth_lifecycle_router``)。
 """
 
@@ -38,8 +38,10 @@ from easyauth_app_sdk.integration import (
 from easyauth_app_sdk.lifecycle import (
     DEFAULT_HANDOVER_PATH,
     HANDOVER_EXECUTE_EVENT,
+    HANDOVER_ITEMS_EVENT,
     HANDOVER_PREVIEW_EVENT,
     WEBHOOK_TEST_EVENT,
+    HandoverBusinessError,
     HandoverCallback,
     SecretProvider,
     lifecycle_http_response,
@@ -56,6 +58,7 @@ __all__ = [
     "DESCRIPTOR_VERSION",
     "DESCRIPTOR_WELL_KNOWN_PATH",
     "HANDOVER_EXECUTE_EVENT",
+    "HANDOVER_ITEMS_EVENT",
     "HANDOVER_PREVIEW_EVENT",
     "NOTIFY_TEMPLATE_ACTION_CARD",
     "NOTIFY_TEMPLATE_MARKDOWN",
@@ -68,6 +71,7 @@ __all__ = [
     "DescriptorProvider",
     "EasyAuthAppClient",
     "EasyAuthClientError",
+    "HandoverBusinessError",
     "HandoverCallback",
     "ManifestValidationError",
     "SecretProvider",

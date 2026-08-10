@@ -1,0 +1,8 @@
+{
+  "event_type": "lifecycle.handover.preview",
+  "task_id": "137:4",
+  "generation": 1,
+  "kind": "offboard",
+  "from_user_id": "3f1a5c88-0e21-4b7a-9c3d-77e5a1f0b912",
+  "mode": "preview"
+}

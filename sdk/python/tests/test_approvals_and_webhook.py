@@ -114,6 +114,21 @@ def _signed_headers(body: bytes, *, timestamp: int | None = None) -> dict[str, s
     }
 
 
+def test_verify_webhook_empty_body_skips_json_parse() -> None:
+    body = b""
+    event = verify_webhook(secret=SECRET, headers=_signed_headers(body), raw_body=body)
+    assert event.payload == {}
+    assert event.event_type == "approval.completed"
+
+
+def test_verify_webhook_timestamp_skew_has_structured_reason() -> None:
+    body = b"{}"
+    headers = _signed_headers(body, timestamp=int(time.time()) - 3600)
+    with pytest.raises(WebhookVerificationError) as exc_info:
+        _ = verify_webhook(secret=SECRET, headers=headers, raw_body=body)
+    assert exc_info.value.reason == "TIMESTAMP_SKEW"
+
+
 def test_verify_webhook_roundtrip() -> None:
     body = json.dumps({"biz_key": "order-42", "status": "approved"}).encode("utf-8")
 

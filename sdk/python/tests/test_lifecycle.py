@@ -6,8 +6,14 @@ import json
 import time
 
 from easyauth_app_sdk import (
+    HandoverBusinessError,
     WebhookEvent,
     lifecycle_http_response,
+)
+from easyauth_app_sdk.lifecycle import (
+    CALLBACK_FAILED_MESSAGE,
+    DEFAULT_MAX_BODY_BYTES,
+    HANDOVER_ITEMS_EVENT,
 )
 
 SECRET = "whsec_lifecycle"  # noqa: S105 - 测试用密钥。
@@ -33,17 +39,17 @@ def _signed_headers(
     }
 
 
-def _handover_body(mode: str) -> bytes:
-    return json.dumps(
-        {
-            "task_id": "task-1:etrade",
-            "kind": "offboard",
-            "from_user_id": "ak-user-1",
-            "to_user_id": None,
-            "mode": mode,
-            "policy": {"unowned_strategy": "release_to_pool"},
-        }
-    ).encode("utf-8")
+def _handover_body(*, mode: str, event_type: str, **extra: object) -> bytes:
+    payload: dict[str, object] = {
+        "event_type": event_type,
+        "task_id": "task-1:etrade",
+        "generation": 1,
+        "kind": "offboard",
+        "from_user_id": "ak-user-1",
+        "mode": mode,
+    }
+    payload.update(extra)
+    return json.dumps(payload).encode("utf-8")
 
 
 def _respond(
@@ -52,6 +58,7 @@ def _respond(
     *,
     on_preview: object = None,
     on_execute: object = None,
+    on_items: object = None,
 ) -> tuple[int, dict]:
     def _unexpected(event: WebhookEvent) -> dict:
         raise AssertionError(f"不应分发到该回调: {event.event_type}")
@@ -62,17 +69,25 @@ def _respond(
         raw_body=body,
         on_handover_preview=on_preview or _unexpected,  # type: ignore[arg-type]
         on_handover_execute=on_execute or _unexpected,  # type: ignore[arg-type]
+        on_handover_items=on_items or _unexpected,  # type: ignore[arg-type]
     )
     return status_code, json.loads(raw.decode("utf-8"))
 
 
+def test_default_max_body_bytes_is_256_kib() -> None:
+    assert DEFAULT_MAX_BODY_BYTES == 256 * 1024
+
+
 def test_dispatches_preview_event_to_preview_callback() -> None:
-    body = _handover_body("preview")
+    body = _handover_body(mode="preview", event_type="lifecycle.handover.preview")
     seen: list[WebhookEvent] = []
 
     def on_preview(event: WebhookEvent) -> dict:
         seen.append(event)
-        return {"assets": [{"type": "customer", "count": 23, "label": "名下客户"}]}
+        return {
+            "snapshot_token": "tok-1",
+            "assets": [{"type": "customer", "count": 23, "label": "名下客户"}],
+        }
 
     status_code, payload = _respond(
         body,
@@ -86,21 +101,72 @@ def test_dispatches_preview_event_to_preview_callback() -> None:
     assert seen[0].delivery_id == "delivery-lifecycle-1"
 
 
+def test_dispatches_items_event_to_items_callback() -> None:
+    body = _handover_body(
+        mode="items",
+        event_type=HANDOVER_ITEMS_EVENT,
+        snapshot_token="tok-1",
+        asset_type="customer",
+        page=1,
+        page_size=50,
+        q="",
+    )
+    # items 请求无 mode 字段(契约 §10.4); 上面为了复用 helper 带了 mode, 覆盖掉。
+    payload = json.loads(body.decode("utf-8"))
+    del payload["mode"]
+    body = json.dumps(payload).encode("utf-8")
+
+    def on_items(event: WebhookEvent) -> dict:
+        assert event.payload["asset_type"] == "customer"
+        return {
+            "items": [{"id": "c-1", "label": "客户甲", "hint": ""}],
+            "page": 1,
+            "page_size": 50,
+            "total": 1,
+        }
+
+    status_code, response = _respond(
+        body,
+        _signed_headers(body, event_type=HANDOVER_ITEMS_EVENT),
+        on_items=on_items,
+    )
+
+    assert status_code == 200
+    assert response["total"] == 1
+    assert response["items"][0]["id"] == "c-1"
+
+
 def test_dispatches_execute_event_to_execute_callback() -> None:
-    body = _handover_body("execute")
+    body = _handover_body(
+        mode="execute",
+        event_type="lifecycle.handover.execute",
+        batch_id=1,
+        snapshot_token="tok-1",
+        assignments=[],
+    )
 
     status_code, payload = _respond(
         body,
         _signed_headers(body, event_type="lifecycle.handover.execute"),
-        on_execute=lambda event: {"summary": {"customers_transferred": 5}},  # noqa: ARG005
+        on_execute=lambda event: {  # noqa: ARG005
+            "summary": {
+                "customer": {
+                    "transferred": 5,
+                    "released": 0,
+                    "skipped": 0,
+                    "merged": 0,
+                    "failed": 0,
+                }
+            }
+        },
     )
 
     assert status_code == 200
-    assert payload == {"summary": {"customers_transferred": 5}}
+    assert payload["summary"]["customer"]["transferred"] == 5
 
 
 def test_webhook_test_event_returns_ok_without_callbacks() -> None:
-    body = b"{}"
+    body = json.dumps({"event_type": "webhook.test", "message": "ping"}).encode("utf-8")
 
     status_code, payload = _respond(body, _signed_headers(body, event_type="webhook.test"))
 
@@ -108,8 +174,33 @@ def test_webhook_test_event_returns_ok_without_callbacks() -> None:
     assert payload == {"ok": True}
 
 
+def test_event_type_mismatch_returns_422_before_webhook_test_short_circuit() -> None:
+    # 把真实 execute body 的事件头改成 webhook.test —— 必须 422, 不得短路成功。
+    body = _handover_body(mode="execute", event_type="lifecycle.handover.execute")
+
+    status_code, payload = _respond(
+        body,
+        _signed_headers(body, event_type="webhook.test"),
+    )
+
+    assert status_code == 422
+    assert payload["error"]["code"] == "event_type_mismatch"
+
+
+def test_missing_body_event_type_returns_422() -> None:
+    body = json.dumps({"message": "EasyAuth webhook 测试事件"}).encode("utf-8")
+
+    status_code, payload = _respond(
+        body,
+        _signed_headers(body, event_type="webhook.test"),
+    )
+
+    assert status_code == 422
+    assert payload["error"]["code"] == "event_type_mismatch"
+
+
 def test_bad_signature_returns_403() -> None:
-    body = _handover_body("preview")
+    body = _handover_body(mode="preview", event_type="lifecycle.handover.preview")
     headers = _signed_headers(body, event_type="lifecycle.handover.preview")
     headers["X-EasyAuth-Signature"] = "0" * 64
 
@@ -119,8 +210,8 @@ def test_bad_signature_returns_403() -> None:
     assert payload["error"]["code"] == "webhook_verification_failed"
 
 
-def test_stale_timestamp_returns_403() -> None:
-    body = _handover_body("preview")
+def test_stale_timestamp_returns_400() -> None:
+    body = _handover_body(mode="preview", event_type="lifecycle.handover.preview")
     headers = _signed_headers(
         body,
         event_type="lifecycle.handover.preview",
@@ -129,21 +220,24 @@ def test_stale_timestamp_returns_403() -> None:
 
     status_code, payload = _respond(body, headers)
 
-    assert status_code == 403
-    assert payload["error"]["code"] == "webhook_verification_failed"
+    assert status_code == 400
+    assert payload["error"]["code"] == "webhook_timestamp_invalid"
 
 
 def test_unknown_event_returns_422() -> None:
-    body = b"{}"
+    body = json.dumps({"event_type": "approval.completed"}).encode("utf-8")
 
-    status_code, payload = _respond(body, _signed_headers(body, event_type="approval.completed"))
+    status_code, payload = _respond(
+        body,
+        _signed_headers(body, event_type="approval.completed"),
+    )
 
     assert status_code == 422
     assert payload["error"]["code"] == "unsupported_event"
 
 
-def test_callback_exception_returns_500_json() -> None:
-    body = _handover_body("execute")
+def test_callback_exception_returns_500_with_fixed_message() -> None:
+    body = _handover_body(mode="execute", event_type="lifecycle.handover.execute")
 
     def on_execute(event: WebhookEvent) -> dict:  # noqa: ARG001
         raise RuntimeError("业务回调爆炸")
@@ -156,4 +250,43 @@ def test_callback_exception_returns_500_json() -> None:
 
     assert status_code == 500
     assert payload["error"]["code"] == "handover_callback_failed"
-    assert "业务回调爆炸" in payload["error"]["message"]
+    assert payload["error"]["message"] == CALLBACK_FAILED_MESSAGE
+    assert "业务回调爆炸" not in payload["error"]["message"]
+
+
+def test_business_error_returns_declared_status() -> None:
+    body = _handover_body(
+        mode="execute",
+        event_type="lifecycle.handover.execute",
+        snapshot_token="stale",
+    )
+
+    def on_execute(event: WebhookEvent) -> dict:  # noqa: ARG001
+        raise HandoverBusinessError(412, "snapshot_stale", "快照已失效")
+
+    status_code, payload = _respond(
+        body,
+        _signed_headers(body, event_type="lifecycle.handover.execute"),
+        on_execute=on_execute,
+    )
+
+    assert status_code == 412
+    assert payload["error"]["code"] == "snapshot_stale"
+    assert payload["error"]["message"] == "快照已失效"
+
+
+def test_business_error_outside_whitelist_becomes_500() -> None:
+    body = _handover_body(mode="preview", event_type="lifecycle.handover.preview")
+
+    def on_preview(event: WebhookEvent) -> dict:  # noqa: ARG001
+        raise HandoverBusinessError(418, "teapot", "不允许")
+
+    status_code, payload = _respond(
+        body,
+        _signed_headers(body, event_type="lifecycle.handover.preview"),
+        on_preview=on_preview,
+    )
+
+    assert status_code == 500
+    assert payload["error"]["code"] == "handover_callback_failed"
+    assert payload["error"]["message"] == CALLBACK_FAILED_MESSAGE

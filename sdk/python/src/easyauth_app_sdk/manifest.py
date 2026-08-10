@@ -101,7 +101,8 @@ def _validate_capabilities(capabilities: Any) -> None:
 def _validate_lifecycle(lifecycle: Any) -> None:
     if not isinstance(lifecycle, dict):
         raise ManifestValidationError("lifecycle 必须是 JSON object")
-    allowed = {"handover_url", "onboard_url", "capabilities"}
+    # handover_asset_types 是 v2 新增键(契约 §9.1); 未放行则下游 descriptor 生成即失败。
+    allowed = {"handover_url", "onboard_url", "capabilities", "handover_asset_types"}
     unknown = sorted(set(lifecycle) - allowed)
     if unknown:
         raise ManifestValidationError(f"lifecycle 含未知字段: {unknown}")
@@ -110,12 +111,28 @@ def _validate_lifecycle(lifecycle: Any) -> None:
         if value is not None and not isinstance(value, str):
             raise ManifestValidationError(f"lifecycle.{field} 必须是字符串或 null")
     capabilities = lifecycle.get("capabilities")
-    if capabilities is None:
+    if capabilities is not None:
+        if not isinstance(capabilities, list) or any(
+            not isinstance(capability, str) for capability in capabilities
+        ):
+            raise ManifestValidationError("lifecycle.capabilities 必须是字符串数组")
+    asset_types = lifecycle.get("handover_asset_types")
+    if asset_types is None:
         return
-    if not isinstance(capabilities, list) or any(
-        not isinstance(capability, str) for capability in capabilities
-    ):
-        raise ManifestValidationError("lifecycle.capabilities 必须是字符串数组")
+    if not isinstance(asset_types, list):
+        raise ManifestValidationError("lifecycle.handover_asset_types 必须是数组")
+    for index, item in enumerate(asset_types):
+        label = f"lifecycle.handover_asset_types[{index}]"
+        if not isinstance(item, dict):
+            raise ManifestValidationError(f"{label} 必须是 JSON object")
+        for field in ("type", "label"):
+            value = item.get(field)
+            if not isinstance(value, str) or not value:
+                raise ManifestValidationError(f"{label}.{field} 必须是非空字符串")
+        for field in ("detail_supported", "releasable"):
+            value = item.get(field)
+            if value is not None and not isinstance(value, bool):
+                raise ManifestValidationError(f"{label}.{field} 必须是布尔值")
 
 
 def _validate_webhook(webhook: Any) -> None:

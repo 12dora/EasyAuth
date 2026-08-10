@@ -62,15 +62,17 @@ def easyauth_lifecycle_router(
     on_handover_preview: HandoverCallback,
     on_handover_execute: HandoverCallback,
     *,
+    on_handover_items: "HandoverCallback | None" = None,
     path: str = DEFAULT_HANDOVER_PATH,
     max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
 ) -> "APIRouter":
     """创建接收 EasyAuth 生命周期交接 webhook 的 FastAPI router。
 
-    验签/事件分发/异常边界均由 SDK 承担, APP 只需实现两个业务回调:
-    ``on_handover_preview`` 返回 preview 响应体(``{"assets": [...]}``, 不落库),
+    验签/事件分发/异常边界均由 SDK 承担, APP 实现业务回调:
+    ``on_handover_preview`` 返回 preview 响应体(``{"snapshot_token", "assets": [...]}``, 不落库),
+    ``on_handover_items`` 返回 items 响应体(明细分页, 可选; 未提供时 items 事件回 422),
     ``on_handover_execute`` 返回 execute 响应体(``{"summary": {...}}``, 按
-    ``payload.task_id`` 幂等)。``secret_provider`` 在每次请求时取密钥,
+    ``(task_id, generation, batch_id)`` 幂等)。``secret_provider`` 在每次请求时取密钥,
     避免 import 期读配置。
 
     在验签前先按 ``max_body_bytes`` 有界读取请求体, 超限返回 413。
@@ -96,6 +98,7 @@ def easyauth_lifecycle_router(
             raw_body=raw_body,
             on_handover_preview=on_handover_preview,
             on_handover_execute=on_handover_execute,
+            on_handover_items=on_handover_items,
         )
         return Response(content=body, status_code=status_code, media_type=headers["Content-Type"])
 

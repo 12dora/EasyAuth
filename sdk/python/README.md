@@ -10,9 +10,11 @@ EasyAuth 下游应用接入 SDK(Python)。与任何下游应用的业务代码�
 4. **企业目录客户端**: 分页搜索员工、查询员工及主管/下属、列出部门，并消费目录返回的
    opaque `user_ref` / `department_ref`。
 5. **钉钉通知客户端**: 异步提交通知并查询消息及逐收件人投递状态。
-6. **webhook 验签**: `verify_webhook` 校验 EasyAuth 反向推送(审批结果/交接事件)的签名与时间戳。
+6. **webhook 验签**: `verify_webhook` 校验 EasyAuth 反向推送(审批结果/交接事件)的签名与时间戳;
+   空 body 合法(异步状态查询 GET 分支)。
 7. **生命周期交接端点**: `easyauth_lifecycle_router` 接收离职/转岗数据交接的
-   `lifecycle.handover.preview` / `lifecycle.handover.execute` 同步回调, 验签与事件分发由 SDK 承担。
+   `lifecycle.handover.preview` / `lifecycle.handover.items` / `lifecycle.handover.execute`
+   三事件同步回调, 验签、`event_type` 一致性校验与事件分发由 SDK 承担。
 
 ## 下游集成(FastAPI 示例)
 
@@ -53,38 +55,85 @@ app.include_router(create_descriptor_router(current_manifest, token=可选共享
   token 同时拥有不必要的员工枚举与通知发送权限。三个 `EasyAuthAppClient` 实例不得复用同一
   token。
 
-## 生命周期交接(离职/转岗)端点
+## 生命周期交接 v2(离职/转岗/在职移交)端点
 
-EasyAuth 会向 manifest `lifecycle.handover_url` 声明的地址发同步 POST(两阶段):
-`lifecycle.handover.preview` 预演统计(不落库), `lifecycle.handover.execute` 真正执行
-(payload `task_id` 为幂等键, 重复 execute 必须安全返回同一结果)。APP 只需实现两个业务回调:
+EasyAuth 会向 manifest `lifecycle.handover_url` 声明的地址发同步 POST(三事件):
+
+| 事件 | 含义 |
+|---|---|
+| `lifecycle.handover.preview` | 预演统计, 不落库; 响应必含 `snapshot_token` 与全量 `assets` |
+| `lifecycle.handover.items` | 某资产类型的明细分页, 不落库 |
+| `lifecycle.handover.execute` | 真正执行; 幂等键为 `(task_id, generation, batch_id)` |
+
+**所有 body 必须含 `event_type`**, 取值与 `X-EasyAuth-Event` 完全一致。SDK 在
+`webhook.test` 短路**之前**做一致性校验, 不一致返回 `422 event_type_mismatch`。
+请求体上限默认 **256 KiB**。
 
 ```python
-from easyauth_app_sdk import WebhookEvent, easyauth_lifecycle_router
+from easyauth_app_sdk import (
+    HandoverBusinessError,
+    WebhookEvent,
+    easyauth_lifecycle_router,
+)
 
 def on_preview(event: WebhookEvent) -> dict:
-    # 统计待交接资产, 返回 {"assets": [{"type": ..., "count": ..., "label": ...}]}
+    # 返回 {"snapshot_token": "...", "assets": [{"type", "label", "count"}, ...]}
+    ...
+
+def on_items(event: WebhookEvent) -> dict:
+    # 返回 {"items": [{"id", "label", "hint"}], "page", "page_size", "total"}
     ...
 
 def on_execute(event: WebhookEvent) -> dict:
-    # 按 event.payload["task_id"] 幂等执行交接, 返回 {"summary": {...}}
+    # 按 (task_id, generation, batch_id) 幂等; 快照失效时:
+    # raise HandoverBusinessError(412, "snapshot_stale", "清单已变化")
+    # 返回 {"summary": {asset_type: {transferred, released, skipped, merged, failed}}}
     ...
 
 app.include_router(
-    easyauth_lifecycle_router(lambda: settings.easyauth_webhook_secret, on_preview, on_execute)
+    easyauth_lifecycle_router(
+        lambda: settings.easyauth_webhook_secret,
+        on_preview,
+        on_execute,
+        on_handover_items=on_items,
+    )
 )
 ```
 
-验签失败返回 403, `webhook.test` 自动应答 `{"ok": true}`, 未知事件返回 422, 回调异常统一转
-500 JSON。`secret_provider` 在每次请求时取密钥, 便于对接热更新的密钥存储。不使用 FastAPI 的
-集成方可直接调用纯函数内核 `lifecycle_http_response`。
+状态码约定:
+
+- 时间戳超窗 → **400**; 签名不匹配 / 头缺失 → **403**
+- `webhook.test` 且 body.`event_type` 一致 → 200 `{"ok": true}`
+- 未知事件 → 422; 回调抛 `HandoverBusinessError` → 白名单状态码(400/409/412/413/422/423/429)
+- 其它回调异常 → 500, **固定文案**(不回显异常细节)
+
+TypedDict 与 golden 样本随包分发:
+
+```python
+from importlib import resources
+from easyauth_app_sdk.handover_payloads import PreviewRequest, ExecuteResponse
+
+sample = resources.files("easyauth_app_sdk.contract_samples.handover_v2").joinpath(
+    "preview_request.json"
+).read_text(encoding="utf-8")
+```
+
+`secret_provider` 在每次请求时取密钥。不使用 FastAPI 时可直接调用纯函数内核
+`lifecycle_http_response`。
 
 manifest 可选顶层节(结构由 `validate_manifest` 校验, 描述符 build/parse 原样携带):
 
 ```json
 {
   "capabilities": ["directory", "notify"],
-  "lifecycle": {"handover_url": "/api/v1/easyauth/lifecycle/handover", "onboard_url": null, "capabilities": ["preview", "reassign"]},
+  "lifecycle": {
+    "handover_url": "/api/v1/easyauth/lifecycle/handover",
+    "onboard_url": null,
+    "capabilities": ["handover.v2"],
+    "handover_asset_types": [
+      {"type": "customer", "label": "名下客户", "detail_supported": true, "releasable": true}
+    ]
+  },
   "webhook": {"signing": "hmac-sha256"}
 }
 ```
@@ -153,9 +202,13 @@ department_members = directory_client.search_directory_users(
 `EasyAuthClientError` 中，并保持 `retryable=False`。调用方不得自动重试当前页或混合两个快照，
 应放弃本轮结果并按业务调度策略从第一页重新开始。
 
-裸 Authentik `user_id`、未作用域 `dt:<id>` 与原始 `department_id` 不再是目录引用。
-目录 API 对畸形或未作用域的 `user_ref` / `department_ref` 返回
-`422 VALIDATION_ERROR`。调用方必须使用目录响应给出的 opaque ref，而不是尝试修补或重新构造引用。
+`get_directory_user(user_ref)` **已接受裸 Authentik `sub`**(UUID 字符串): 服务端
+`parse_user_ref` 对不以 `dt:` 开头的引用一律按 `kind="authentik"` 解析, 因此交接
+payload 里的 `from_user_id` / `to_user_id` 可直接传入, **无需新增端点**。也提供纯委托
+别名 `get_directory_user_by_authentik_sub(sub)` 提升可读性。
+
+仍会被拒绝的引用: 未作用域的 `dt:<id>`、原始 `department_id`、畸形 ref —— 目录 API 返回
+`422 VALIDATION_ERROR`。钉钉/部门引用必须使用目录响应给出的 opaque ref, 不得自行拼接。
 
 ## 钉钉通知
 

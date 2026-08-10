@@ -1,0 +1,10 @@
+{
+  "items": [
+    { "id": "9b2c4e1a70f84c2b", "label": "上海某某国际贸易有限公司", "hint": "最近跟进 2026-07-30 · 在途 3 单" },
+    { "id": "4d81a2c9e5b14f70", "label": "宁波某某进出口",           "hint": "最近跟进 2026-06-11" }
+  ],
+  "page": 1,
+  "page_size": 50,
+  "total": 2,
+  "unfiltered_total": 187
+}

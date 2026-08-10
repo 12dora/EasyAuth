@@ -11,7 +11,7 @@ pytest.importorskip("fastapi", reason="fastapi 是可选集成 extra, 未安装�
 pytest.importorskip("starlette", reason="TestClient 依赖 starlette。")
 
 from easyauth_app_sdk import WebhookEvent, easyauth_lifecycle_router
-from easyauth_app_sdk.lifecycle import DEFAULT_HANDOVER_PATH
+from easyauth_app_sdk.lifecycle import DEFAULT_HANDOVER_PATH, DEFAULT_MAX_BODY_BYTES
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -36,18 +36,39 @@ def _signed_headers(body: bytes, *, event_type: str) -> dict[str, str]:
 def _client() -> TestClient:
     def on_preview(event: WebhookEvent) -> dict:
         asset = {"type": "customer", "count": event.payload["expected"], "label": "名下客户"}
-        return {"assets": [asset]}
+        return {"snapshot_token": "tok", "assets": [asset]}
 
     def on_execute(event: WebhookEvent) -> dict:
         return {"summary": {"task_id": event.payload["task_id"]}}
 
+    def on_items(event: WebhookEvent) -> dict:
+        return {
+            "items": [{"id": "1", "label": event.payload["asset_type"], "hint": ""}],
+            "page": event.payload["page"],
+            "page_size": event.payload["page_size"],
+            "total": 1,
+        }
+
     api = FastAPI()
-    api.include_router(easyauth_lifecycle_router(lambda: SECRET, on_preview, on_execute))
+    api.include_router(
+        easyauth_lifecycle_router(
+            lambda: SECRET,
+            on_preview,
+            on_execute,
+            on_handover_items=on_items,
+        )
+    )
     return TestClient(api)
 
 
 def test_router_dispatches_preview() -> None:
-    body = json.dumps({"mode": "preview", "expected": 7}).encode("utf-8")
+    body = json.dumps(
+        {
+            "event_type": "lifecycle.handover.preview",
+            "mode": "preview",
+            "expected": 7,
+        }
+    ).encode("utf-8")
 
     response = _client().post(
         DEFAULT_HANDOVER_PATH,
@@ -56,11 +77,40 @@ def test_router_dispatches_preview() -> None:
     )
 
     assert response.status_code == 200
-    assert response.json() == {"assets": [{"type": "customer", "count": 7, "label": "名下客户"}]}
+    assert response.json() == {
+        "snapshot_token": "tok",
+        "assets": [{"type": "customer", "count": 7, "label": "名下客户"}],
+    }
+
+
+def test_router_dispatches_items() -> None:
+    body = json.dumps(
+        {
+            "event_type": "lifecycle.handover.items",
+            "asset_type": "customer",
+            "page": 1,
+            "page_size": 50,
+        }
+    ).encode("utf-8")
+
+    response = _client().post(
+        DEFAULT_HANDOVER_PATH,
+        content=body,
+        headers=_signed_headers(body, event_type="lifecycle.handover.items"),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["label"] == "customer"
 
 
 def test_router_dispatches_execute() -> None:
-    body = json.dumps({"mode": "execute", "task_id": "task-9:etrade"}).encode("utf-8")
+    body = json.dumps(
+        {
+            "event_type": "lifecycle.handover.execute",
+            "mode": "execute",
+            "task_id": "task-9:etrade",
+        }
+    ).encode("utf-8")
 
     response = _client().post(
         DEFAULT_HANDOVER_PATH,
@@ -73,7 +123,7 @@ def test_router_dispatches_execute() -> None:
 
 
 def test_router_rejects_bad_signature() -> None:
-    body = b"{}"
+    body = json.dumps({"event_type": "lifecycle.handover.preview"}).encode("utf-8")
     headers = _signed_headers(body, event_type="lifecycle.handover.preview")
     headers["X-EasyAuth-Signature"] = "f" * 64
 
@@ -84,7 +134,7 @@ def test_router_rejects_bad_signature() -> None:
 
 
 def test_router_answers_webhook_test() -> None:
-    body = b"{}"
+    body = json.dumps({"event_type": "webhook.test"}).encode("utf-8")
 
     response = _client().post(
         DEFAULT_HANDOVER_PATH,
@@ -114,3 +164,7 @@ def test_router_rejects_oversized_unsigned_body() -> None:
     )
     assert response.status_code == 413
     assert response.json()["error"]["code"] == "request_body_too_large"
+
+
+def test_router_default_max_body_is_256_kib() -> None:
+    assert DEFAULT_MAX_BODY_BYTES == 256 * 1024
