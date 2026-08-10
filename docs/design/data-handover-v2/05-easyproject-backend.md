@@ -733,7 +733,16 @@ golden 样本取用：**随 SDK 分发**（`easyauth_app_sdk.contract_samples` �
 
 pytest 使用既有 async auto 模式与 unit/integration/contract 标记（`backend/pyproject.toml:70`）。
 全量门禁：合入后跑**完整**的 `scripts/quality-gate.sh`（Ruff、migration smoke、PostgreSQL 实库 pytest、
-secret 扫描、前端检查、契约检查）。**不存在只跑"前端段"这种用法**，不要在文档或 CI 里那样写。
+secret 扫描、前端检查、契约检查）。**不存在只跑「前端段」这种用法**，不要在文档或 CI 里那样写。
+
+> **该脚本本身要先修**：它在一个 pnpm 仓库里执行 `npm ci`（`scripts/quality-gate.sh:33`），
+> 后端全绿也会被前端安装步骤稳定打红。改成 `pnpm install --frozen-lockfile`，
+> 这属于本次的前置修复项（补丁交 AG-00 合并）。
+
+**两份现有 v1 测试必须重写，不是新增**：
+`backend/tests/unit/authz/test_lifecycle_handover.py` 仍在断言 v1 的 partial-success 语义
+（`:86`），与契约 §10.5「整事务成败一致」直接冲突；不改的话新实现一定把它跑挂，
+而改错方向（为了让它绿而保留 partial success）就更糟。
 
 ---
 

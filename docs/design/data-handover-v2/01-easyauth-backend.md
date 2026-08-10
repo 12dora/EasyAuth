@@ -1830,6 +1830,9 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | `tests/integration/test_portal_handover_api.py` | §6.1 全部端点的权限边界（非 assignee 拿到 404） |
 | `tests/integration/test_handover_webhook_v2.py` | payload 形状逐字段比对契约样本（读法见下）；幂等键 `(task_id, generation, batch_id)` |
 | `tests/unit/test_blocked_never_completes.py` | 存在 blocked 时 `refresh_task_status` 永不返回 completed（D13） |
+| `tests/integration/test_batch_plan.py` | 413 → 建计划（`total=M`、`assignment_hash`）；非最终批成功后 action 仍 `previewed`；`completed>0` 时改分配返回 409；`completed=0` 时改分配原子重规划 |
+| `tests/integration/test_execution_lease.py` | **PG lane**：并发 execute 只有一个拿到租约；续约/抢占谓词；过期恢复任务「先抢占后查证」；每条终结路径都释放；旧 fence 的写回影响 0 行并被丢弃 |
+| `tests/integration/test_async_handoff.py` | 202 → sentinel 移交；poll claim/续租/移回；终态走 `complete_data_phase`；第 10 次仍非终态 → `async_attention_required` 且**租约不释放** |
 
 #### 契约样本只有一份，就放在 SDK 包里
 
@@ -1849,8 +1852,13 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 
 | lane | 命令 | 覆盖 |
 |---|---|---|
-| CI（权威门禁） | `uv sync --extra dev --frozen` 后 `.venv/bin/pytest tests/unit/lifecycle -q`（与 `.github/workflows/docker-build.yml` 一致） | 全部单测 |
-| **PostgreSQL lane（必须）** | 起 `docker compose up -d postgres` 后跑集成用例 | **约束触发器、条件唯一约束、租约并发、`SELECT ... FOR UPDATE`** |
+| CI（权威门禁） | `uv sync --extra dev --frozen` 后 <br>`.venv/bin/pytest tests/unit/lifecycle tests/unit/test_blocked_never_completes.py tests/integration -q` | 单测 **+ 本章列出的全部 integration**。**只写 `tests/unit/lifecycle` 会把 integration 整段漏掉，而门禁照样是绿的** |
+| **PostgreSQL lane（必须）** | `EASYAUTH_POSTGRES_PASSWORD=... docker compose up -d postgres` 后，**显式设置 `DATABASE_URL` 指向它**再跑 `.venv/bin/pytest tests/integration -q` | **约束触发器、条件唯一约束、租约并发、`SELECT ... FOR UPDATE`** |
+
+> **PG lane 必须显式设连接串并断言真的连上了 PostgreSQL。** 不给密码或不设
+> `DATABASE_URL` 时，配置会**静默回退到 SQLite**（`config/settings/base.py:116`）——
+> 于是这条 lane 看起来跑过了，实际一条触发器、一次真并发都没验证。
+> 在 conftest 里加一句 `assert connection.vendor == "postgresql"`。
 
 > **第二条不是可选项。** 本次新增的两个跨表不变量靠**约束触发器**、执行互斥靠
 > **条件唯一约束**、接管靠 `FOR UPDATE` —— 这四样在 SQLite 上要么不生效、要么语义不同，

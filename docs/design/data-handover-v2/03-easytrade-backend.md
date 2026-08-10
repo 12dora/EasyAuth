@@ -609,4 +609,7 @@ golden 样本的取用方式：**随 SDK 一起分发**，作为 `easyauth_app_s
 6. §5 测试补齐
 
 每完成一项立即单独 commit。改完后端后必须重建容器镜像并重启，host dev server 不算上线。
-全量门禁：`make finish-check`（Makefile 中的既有目标，串起 migrations / backend-style / backend-tests / frontend-typecheck / frontend-tests）。**本仓库没有 `make quality` 这个目标。**
+全量门禁：**`BACKEND_TESTS='app/tests' make finish-check`**。
+**不能只写 `make finish-check`** —— 它默认跳过全部 `app/tests`（`scripts/finish-check.sh:68`），
+本次新增的交接用例会**一条都不被收集，而门禁照样绿**。
+（本仓库没有 `make quality` 这个目标。）
