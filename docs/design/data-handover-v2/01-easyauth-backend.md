@@ -665,7 +665,24 @@ delivery 结果、action 状态或 summary。异步轮询回来的那条路径�
 顺序反过来（先查证再抢占）会留下一个窗口：查证那几秒里旧 worker 复活，
 沿原路径把 action 写成 `done`，而 fence 还没抬，拦不住它。
 
-#### 202 之后必须把租约**移交**给轮询 worker
+#### 租约要移交**两次**，第一次就在首投之前
+
+**取得租约的是 HTTP worker，真正发 webhook 的却是 Celery outbox worker**
+（execute 事务只写 outbox，提交后才由 worker 发送，见 §2.4.1）。
+两者的 `owner` 不同 —— 严格 CAS 下，发送方拿到响应也写不回去：
+要么丢弃响应而 batch 永远停在 `sent`，要么先发再发现 CAS 失败，**下游已经改了数据而 EasyAuth 没有结果**。
+
+所以 sentinel 移交有**两处**，不是一处：
+
+| 时机 | 租约 owner |
+|---|---|
+| execute 事务创建 delivery 时 | `delivery:{delivery.pk}` |
+| outbox worker **发网之前**，以旧 owner/fence 为条件原子 claim | `sender:{worker_id}`，用 `HandoverLeaseFence` 取**全新 fence**，同时续期 |
+| 收到 202 之后 | `async:{batch.pk}`（见下） |
+
+**claim 失败就不许发网。** 所有响应写回都用 claim 得到的那一组 `owner + fence`。
+
+#### 202 之后再移交一次给轮询 worker
 
 `async_pending` 期间租约仍要持有（否则第二个 execute 会挤进来），
 但**发起 execute 的那个 worker 已经退出了**，而轮询在 beat 的另一个进程里 ——
@@ -1551,6 +1568,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 | GET | `.../approval-rule-replacements` | query `resolved=false`（默认）。响应 `{"items": [{"id", "approval_rule": {...}, "departed_user": {...}, "reason", "created_at"}], "total": n}`。**没有这个列表，§4.5.2 造出来的待办行谁都发现不了** —— 规则里仍挂着离职者，新权限申请解析不到有效审批人，而那条待办无限期没人处理。控制台按 `total > 0` 常驻计数告警 |
 | POST | `.../approval-rule-replacements/{id}/resolve` | body `{"approver_user_ids": ["..."]}`（非空）。**同一事务内**锁待办与规则 → 替换审批人 → 写 `resolved_at`/`resolved_by`。并发重复 resolve 由 `resolved_at IS NULL` 的条件更新兜底，影响行数为 0 → `409 already_resolved` |
 | GET | `.../handover-blocked-apps` | 未接入 APP 汇总，供控制台顶部告警条。响应 `{"app_count": n, "task_count": m, "apps": [{"app_key","app_name","blocked_task_count"}]}` |
+| GET | `.../handover-app-options` | 控制台版的应用范围数据源，query `subject_user_id`。响应与门户版同形状，但走 `require_superuser()` 且**不做管辖校验**（超管跨部门 reassign 用，§6.3 的 `handover-tasks/reassign`） |
 | GET | `.../handover-tasks/{id}/candidates` | **控制台专用的选人数据源**，query `q`。响应 `{"items": [{"user_id","name","department"}]}`，只含 active、非本地管理员、且**不等于本单 subject** 的用户。<br>**不要让前端把门户 URL 前缀换成控制台前缀了事** —— 现有 `/console/api/v1/user-options` 的 `purpose` 只接受 `employee` \| `approver`（`admin_console/users_api.py:66-90`），传 `receiver` 直接 422；传 `employee` 又会把当事人本人列进候选，一直到 execute 才报 `receiver_is_subject`。共享组件通过 **surface adapter** 注入 API，不做字符串替换 |
 | GET | `.../handover-tasks/{id}/actions/{app_key}/last-error-raw` | **超管专用**，返回 `{"last_error_raw": "..."}`。**每次读取先写审计**（谁、何时、看了哪个 action 的原始错误），再返回。该字段**禁止**出现在门户响应与普通详情响应里（契约 §10.6） |
 | GET | `.../apps/{app_key}/handover-capability` | 能力标签页的**初始数据**。响应 `{"handover_capability": "declared"\|"none"\|"undeclared", "handover_asset_types": [...], "handover_url": "", "declared_by": "", "declared_at": null, "synced_at": null}`。**没有这个 GET，能力标签页打开就是空白** —— 既有 app detail 不返回三态，冻结契约里也只有两个 POST |
