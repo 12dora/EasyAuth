@@ -133,14 +133,14 @@ class SystemHandoverResult:
 async def resolve_handover_identity(
     *, authentik_sub: str,
     purpose: Literal["source", "target"],          # 不能省
-    directory: EasyAuthDirectoryPort,
+    directory: DirectoryPort,                     # domain/ports/easyauth.py:265, 不叫 EasyAuthDirectoryPort
     users: DirectoryUserRepository, now: datetime,
 ) -> str: ...
 
 # backend/app/domain/identity/directory_repo.py
 async def bind_verified_authentik_sub(
     self, *, dingtalk_user_id: str, authentik_user_id: str, now: datetime,
-) -> DirectoryUserRecord: ...
+) -> LocalDirectoryUser: ...                     # domain/identity/directory_repo.py:20, 不叫 DirectoryUserRecord
 ```
 
 保证：只做精确 sub↔dtuid 映射（禁止姓名/邮箱模糊匹配，契约 §5.2）；冲突或解析不到抛
@@ -530,7 +530,7 @@ down_revision = (
 > **不得**用 `from_user_id`、接收人或签名身份去"推断"发起人 —— 那是编造。
 > 若产品确实需要 EasyProject 展示发起人，另提**跨系统** CCR，在 payload 增加 `initiator_user_id`。
 
-UI 表现：管理审计列表对 NULL actor 已显示 `SYSTEM`；任务时间线需由 M11 前端补一条文案映射
+UI 表现：管理审计列表对 NULL actor 已显示 `SYSTEM`；任务时间线需由 **M12**（前端 owner，`contracts/ownership.md:201,210` —— M11 只有后端）补一条文案映射
 `SYSTEM_HANDOVER → 「EasyAuth 数据交接（系统）」`，否则会落到 generic 兜底文案。
 
 ### 2.2 `state_version` 与乐观锁
@@ -543,13 +543,13 @@ UI 表现：管理审计列表对 NULL actor 已显示 `SYSTEM`；任务时间�
 
   ```
   generation 水位行
+    → IdempotencyGuard.claim_or_replay        ← 必须在业务锁之前, 见 §2.3
     → projects（UUID 升序；集合 = 显式的项目类资产 ∪ **所有待写 task 的非空 project_id**）
     → tasks（UUID 升序）
     → recurring_task_templates（UUID 升序）
     → work_records（UUID 升序）
     → task_reminder_rules（UUID 升序）
-    → 幂等响应行
-  ```
+    ```
 
 - 锁内重新校验：来源人仍拥有该角色、对象仍满足终态谓词、目标仍 active、snapshot 仍匹配、审批锁未出现。
 
@@ -623,10 +623,15 @@ generation 水位语义：
 ```
 锁 generation 水位行
   → IdempotencyGuard.claim_or_replay(...)      ← 命中重放立即返回已存 summary, 到此结束
-  → 按 §2.2 的锁序依次加锁 projects / tasks / templates / work_records / rules
+  → 按 §2.2 的锁序依次加锁 projects / tasks / templates / work_records / reminder rules
   → 调各 owner 的 system_handover
-  → store_response(...)  与业务写入同事务提交
+  → store_response(...)  只更新本事务已 claim 的那一行, 与业务写入同事务提交
 ```
+
+> **这就是唯一的锁序，§2.2 的那张表以本节为准。** 早期 §2.2 把「幂等响应行」排在业务锁**之后**，
+> 与这里的「claim 在业务锁之前」正好相反 —— 一个实现先锁 task 再等幂等行、另一个先占幂等行
+> 再等 task，两者并发就是一个可复现的死锁。
+> `store_response` **不是新的末尾锁节点**：它只更新本事务开头已经 claim 的那一行。
 
 > **顺序反了就违背"重放不得调用任何领域命令"这条规定。** 若先加锁跑命令再发现是重放，
 > 一次成功请求的重放会重新跑 snapshot 与归属校验，很可能返回 412/409 而不是那份保存好的

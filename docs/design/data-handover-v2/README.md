@@ -57,13 +57,20 @@ A3 / A5 的实现要用到 v2 SDK（新的 `items` 回调、`handover_payloads` 
 | 7 | 包内契约样本 `easyauth_app_sdk/contract_samples/handover_v2/*.json`，并在 `pyproject.toml` 的 package-data 里显式包含 |
 | 8 | 回调异常边界改为固定文案，不再拼 `str(error)` |
 
-**解锁凭据必须是可机械核对的三样东西**，不是"我发布了"这句话：
+**版本号本期固定为 `0.4.0`**（当前是 `0.3.0`）。发布流程写死成两个提交，因为
+「把构建用的 commit SHA 写进 CHANGELOG」这件事本身会产生一个新提交，不分开就自相矛盾：
 
-1. **版本号锁死**：`easyauth-app-sdk` 的 `pyproject.toml` version、
-   `descriptor.SDK_VERSION`、`uv.lock`、CHANGELOG 四处**取同一个值**；
-2. **两个 SHA**：构建所用的 **commit SHA** 与产出 **wheel 的 SHA-256**，记进 CHANGELOG；
-3. **下游各自更新 `VENDORED.md`**（EasyTrade / EasyProject 的 vendor 目录各有一份），
-   写上同一组版本号与 SHA。
+| 步骤 | 内容 |
+|---|---|
+| ① release commit **C** | 改源码 + 四处版本号（`sdk/python/pyproject.toml`、`descriptor.SDK_VERSION`、`uv.lock`、CHANGELOG 的版本行）**取同一个值 `0.4.0`** |
+| ② 构建 | 从干净的 C 执行 `cd sdk/python && uv build --wheel`，记下 wheel 的 SHA-256 |
+| ③ provenance commit **P** | 在 CHANGELOG 里记录 **C 的完整 commit SHA** 与 **wheel SHA-256**；打 tag `easyauth-app-sdk-v0.4.0` 指向 **P** |
+
+**下游从 P vendor**，各自的 `VENDORED.md` 同时记录：版本 `0.4.0`、构建提交 **C**、
+provenance 提交 **P**、wheel SHA-256。**四项一致才算解锁。**
+
+> EasyProject 启动时会精确校验 SDK 版本（`infra/easyauth_directory/_bridge.py:49`）——
+> 版本对不上会直接启动失败，不是一个可以"先跑起来再说"的项。
 
 **A3 / A5 以自己仓库的 `VENDORED.md` 更新完成为开工信号**，不是以"A1 说发完了"为信号。
 只改源码不改版本号、或只发包不同步 `descriptor.SDK_VERSION`，都会让下游 vendor 到不同的提交
@@ -118,6 +125,16 @@ A3 / A5 的实现要用到 v2 SDK（新的 `items` 回调、`handover_payloads` 
    与 CCR 是两道独立的门。
 3. **EasyAuth ADR-002 修订**：**只剩 §36 一条**（自助申请审批人允许沿主管链向上，由 D3 驱动）。
    §19 的修订随代管废弃**一并取消**，该条款保持原样。修订文本见 `01` §9。
+
+   | | |
+   |---|---|
+   | 提交人 | A1，开工第一天 |
+   | 提交给 | EasyAuth 项目维护人 |
+   | 时限 | 1 个工作日内批准或**书面**退回 |
+   | 批准前可做 | 准备实现 PR 与测试 |
+   | 批准前不可做 | **合并或启用新的审批人解析路由** —— 现行 ADR-002 是「已接受」状态且要求 active 直属主管（`docs/decisions/ADR-002-*.md:3,33`），代码也只接受直属主管（`access_requests/submission_validation.py:184`）。先合代码就是长期违反一条生效中的 ADR |
+   | 批准证据 | ADR 的合入 commit SHA |
+   | 批准后 | 代码、迁移与 ADR **同批生效** |
 
 ## 已知缺口（明确不做，但必须记着）
 
