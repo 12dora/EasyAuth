@@ -287,6 +287,30 @@ def execute_handover(
 > 内部 DTO 的字段名统一带 `local` 前缀（如上），让漏解析在类型层面就显眼。
 > 任一接收人解析不到 / 非 active / 等于当事人 → `422`。
 
+**整体执行顺序（步骤号就是必须的先后，不能重排）：**
+
+```
+0. 语法解析三元组与 canonical hash
+1. advisory 锁 (task_id)            ← 第一项数据库操作
+2. 查同三元组回执: hash 相同 → 直接返回原 summary(不做任何校验); hash 不同 → 409
+3. generation 水位校验
+4. 语法/声明层校验(未知 asset_type、release 落在 releasable=false、接收人形态)
+5. 冻结全部候选主键(只查不写)
+6. 按固定全局表序加行锁
+7. 锁内重算 snapshot_token + 逐条复核归属与谓词   ← 校验必须在锁之后
+8. 执行 overrides 与 default
+9. 写回执 → flush → commit
+```
+
+> **第 7 步必须在第 6 步之后。** 早期版本把快照校验放在加锁之前、又把 `reassign()`
+> 写在冻结之前，中间留了一个窗口：校验通过之后、拿到行锁之前，另一个事务先把客户从离职者
+> 转给了 B；handover 随后拿到锁，`transfer_customer()` 刷新出的当前 owner 是 B，
+> 而它**不校验预期来源**，于是把客户从 B 又转给了 C。
+>
+> **第 2 步必须在一切校验之前。** 首次成功已经改变了数据，因此 token 必然失效；
+> 重放若先跑身份或快照校验，会返回 412/409 而不是那份保存好的 summary ——
+> EasyAuth 看到的是"上次成功、这次失败"。
+
 单事务内，逐 `assignment` 处理：
 
 1. 查注册表拿 `HandoverAssetSpec`；未知类型 → `422 undeclared_asset_type`。
@@ -305,21 +329,7 @@ def execute_handover(
    - **override 的 id 必须先验证**：存在、仍属于 `from_user_id`、仍满足该类型谓词。
      任一不满足 → 整体 `409`。**不得**把无效 id 默默排除出默认集（那等于静默跳过）
    - `snapshot_token` 与当前数据状态不一致 → 整体 **`412`**（见 §3.5.1）
-3. 先处理 `overrides`（精确 id 集合），再按 `default_action` 处理剩余条目：
-   ```
-   overridden_ids = {o.id for o in overrides}
-   for o in overrides:
-       if   o.action == "transfer": reassign(单条, o.to_user_id)
-       elif o.action == "release":  reassign(单条, None)
-       else:                        pass          # skip: 原样不动
-   rest = query.filter(id.notin_(overridden_ids))
-   if   default_action == "transfer": reassign(rest, default_to_user_id)
-   elif default_action == "release":  reassign(rest, None)
-   else:                              pass        # skip: 整批不动
-   ```
-   写 `NULL` 只可能发生在 `action == "release"` 分支，而该分支已被第 2 步保证只落在
-   `releasable=True`（即可空列）的类型上 —— B1 从结构上不可能再复发。
-4. **先冻结主键集合，再统一加锁，且忽略 payload 里 assignments 的顺序。**
+3. **先冻结主键集合，再统一加锁，且忽略 payload 里 assignments 的顺序。**
 
    两步走：
    - 第一步（无写入）：逐 `asset_type` 跑 `spec.query` 解析出受影响的主键集合，连同 override 的
@@ -341,7 +351,47 @@ def execute_handover(
    > 订单已经不属于当事人而**从集合里凭空消失**，静默漏转。
    > 所有 `reassign` 只能操作第一步冻结下来的主键集合，**不得在前序改写后重新执行责任谓词**。
 
-5. **必须走既有的领域命令，保住副作用**，不能裸 UPDATE：
+4. **锁内**重算 `snapshot_token` 并逐条复核：每个待改写的条目**当前仍属于 `from_user_id`**
+   且仍满足该类型谓词。token 不一致 → 整体 **412**；逐条不一致 → 整体 **409**。二者都**零写入**。
+5. 处理 `overrides`（精确 id 集合），再按 `default_action` 处理剩余条目
+   —— **只在第 3 步冻结、第 4 步复核通过的集合上操作**：
+   ```
+   overridden_ids = {o.id for o in overrides}
+   for o in overrides:
+       if   o.action == "transfer": reassign(单条, o.to_user_id)
+       elif o.action == "release":  reassign(单条, None)
+       else:                        pass          # skip: 原样不动
+   rest = frozen_ids - overridden_ids               # 不重跑谓词查询
+   if   default_action == "transfer": reassign(rest, default_to_user_id)
+   elif default_action == "release":  reassign(rest, None)
+   else:                              pass        # skip: 整批不动
+   ```
+   写 `NULL` 只可能发生在 `action == "release"` 分支，而该分支已被第 2 步保证只落在
+   `releasable=True`（即可空列）的类型上 —— B1 从结构上不可能再复发。
+
+   #### 5.1 `receivable_open` 的 `skip` 需要一次显式物化，否则"不动"会变成"动了"
+
+   应收的**有效负责人**在 `owner_user_id` 为 NULL 时**继承订单负责人**
+   （`domain/ar/ownership.py:12-24`）。于是有这样一条路径：
+
+   > 应收 R 的 `owner_user_id = NULL`，其订单 O 属于离职者。
+   > 请求把 `order_in_transit` 转给 A，对 `receivable_open` 指定 `skip`。
+   > 执行后 R 的列值确实一个字节没改 —— 但它的**有效负责人已经从离职者变成了 A**，
+   > 而 summary 报的是 `skipped`。
+
+   规定：冻结阶段为每条**继承型**（`owner_user_id IS NULL`）应收记下
+   `effective_owner_before`；若其订单的负责人在本次会变化，则
+
+   | 该应收的 action | 处理 |
+   |---|---|
+   | `transfer` | 正常写入指定接收人 |
+   | `skip` / 该类型未出现在 `assignments` 里 | **把 `effective_owner_before` 显式写进 `OrderReceivable.owner_user_id`**，让"保持原归属"真的成立 |
+   | `release` | 仍然 422（`releasable=false`） |
+
+   这次物化写入**必须写审计**（它是一次真实的列变更，尽管语义上是"维持原状"）。
+   验收用例必须包含「订单 transfer + 继承型应收 skip」这一组合。
+
+6. **必须走既有的领域命令，保住副作用**，不能裸 UPDATE：
    - 客户转移走 `transfer_customer()`；释放公海走 `release_customer_to_pool(action="auto_release")`
      —— 现有 `_handover_customers` 释放时也写 `action="transfer"`，事件分类是错的，光改 reason 修不了
    - 任务改派须**清空 `reminder_dismissed_at`**，否则新负责人收到的是一条已被前任忽略掉的提醒
@@ -353,10 +403,10 @@ def execute_handover(
      新函数的职责：存 `_order_update_audit_snapshot()` 的 before 快照 → 改 `owner_user_id` →
      写 `action="order.update"` 的审计行 → **只 `flush()`**。提交与回滚一律由 execute 外层统一做。
      其余任何"内部自己 commit"的 API helper 同样禁止在 execute 路径里调用。
-6. 客户归属变更继续写既有的负责人变更事件（`_handover_customers` 中的 owner history），
+7. 客户归属变更继续写既有的负责人变更事件（`_handover_customers` 中的 owner history），
    `reason` 按 `kind` 取：`offboard`→「EasyAuth 离职交接」、`transfer`→「EasyAuth 转岗交接」、
    `reassign`→「EasyAuth 数据移交」，释放时→「EasyAuth 交接释放公海」。
-7. 返回**冻结的五元** `{asset_type: {"transferred": n, "released": m, "skipped": k, "merged": 0, "failed": 0}}`，
+8. 返回**冻结的五元** `{asset_type: {"transferred": n, "released": m, "skipped": k, "merged": 0, "failed": 0}}`，
    外层包成 `{"summary": result}`（契约 §10.5）。
 
    > **`merged` 与 `failed` 即使恒为 0 也必须显式返回。** 契约把 summary 定义为五元冻结结构，
