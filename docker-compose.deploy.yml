@@ -56,6 +56,13 @@ x-easyauth-common: &easyauth-common
   extra_hosts:
     # worker 经此访问宿主 Authentik(:19000, 禁号)与 EasyTrade backend(:8000, 交接钩子投递)。
     - "host.docker.internal:host-gateway"
+    # 宿主代理开 fake-ip DNS 时容器把公网域名解析到 198.18.0.0/15(保留段),
+    # 会被 config.net 的 is_global SSRF 校验拦下; 固定解析到 frps 公网 IP 绕开。
+    # eproject 公网 DNS 记录暂缺(浏览器访问需在 DNSPod 补 A 记录), frps/TLS 已就绪。
+    - "auth.jiefakj.com:122.51.254.148"
+    - "iam.jiefakj.com:122.51.254.148"
+    - "etrade.jiefakj.com:122.51.254.148"
+    - "eproject.jiefakj.com:122.51.254.148"
   depends_on:
     - redis
   networks: [easyauth]
