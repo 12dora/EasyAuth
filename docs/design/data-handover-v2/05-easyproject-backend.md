@@ -274,7 +274,7 @@ router 也已在 `api/v1/router.py:49-56` 挂载。工作是把 v1 占位实现*
 
 | 表 | 冲突场景 | 处理 |
 |---|---|---|
-| `ProjectMemberRow` | 接收人已是该项目成员 | 合并：删除离职者行；若离职者是 `OWNER` 而接收人是 `MEMBER`，把接收人行升级为 `OWNER`（满足"每项目一个 OWNER"的部分唯一索引，`m13_001_project_tables.py:135-142`）。计入 `merged` |
+| `ProjectMemberRow` | 接收人已是该项目成员 | 合并：**删除**离职者行（**不得降级为 `MEMBER`** —— 降级会让离职者留在 `project_members` 里，而项目可见性只看成员行是否存在（`infra/repositories/project_queries.py:115`），交接完成后他照样看得到这个项目）；若离职者是 `OWNER` 而接收人是 `MEMBER`，把接收人行升级为 `OWNER`（满足「每项目一个 OWNER」的部分唯一索引，`m13_001_project_tables.py:135-142`）。计入 `merged` |
 | `TaskCollaboratorRow` | 接收人已是协作人 | 直接删除离职者行，计入 `merged` |
 | `RecurringTemplateCollaboratorRow` | 同上 | 同上 |
 | `WorkRecordParticipantRow` | 同上 | 同上 |
@@ -303,10 +303,23 @@ router 也已在 `api/v1/router.py:49-56` 挂载。工作是把 v1 占位实现*
 
 **只有任务（`task_assigned` / `task_assigner`）的角色改派需要这一步**，**同一事务内**必须：
 
-1. 把该**任务**下所有**未发送**的 `ReminderOccurrenceRow` 置为 `SKIPPED` / `HANDOVER_SUPERSEDED`
-   （不只是 recipient 为离职者的那些）；
-2. 复用领域既有的物化用例按新角色重新物化（`infra/jobs/reminder_materialize.py`），
+1. **先算出新集合，再按自然键做差集**（`08` §1.3 M18 已冻结的三分支）：
+
+   | 情形 | 处理 |
+   |---|---|
+   | 自然键在新集合里也存在 | **原位保持/恢复 `PENDING`**，刷新 `payload_snapshot`，不删不插 |
+   | 旧行的自然键不在新集合里 | 标 `SKIPPED` / `HANDOVER_SUPERSEDED` |
+   | 新集合里的全新自然键 | INSERT |
+
+2. 复用领域既有的物化用例按新角色计算新集合（`infra/jobs/reminder_materialize.py`），
    **不要**在交接代码里手写 INSERT。
+
+> **不能"先把未发送的全部 SKIP 再重物化"。**
+> `uq_reminder_occurrences_natural` 与 `uq_reminder_occurrences_dedup_key` 都是
+> **永久唯一键、不按 status 过滤**（`alembic/versions/m18_001_reminder_tables.py:243-251`），
+> 被标 `SKIPPED` 的旧行仍然占着自然键；而现有插入用的是 `ON CONFLICT DO NOTHING`
+> （`infra/repositories/reminders.py:339`）—— 结果是**静默不插入，最终一条 PENDING 提醒都没有**。
+> 典型触发：assignee A→B 而 assigner 本来就是 B，新旧集合必然有自然键重叠。
 
 具体由 M18 的 `refresh_after_system_handover()` 承担（`08` §1.3），M06 不直接改 occurrence。
 
@@ -542,7 +555,7 @@ EasyProject 只记 `trigger_system=EasyAuth` 与 `handover_task_id`，
 ### 5.2 需要 CCR 的部分（很小，但不可省）
 
 只有一项：给这个既有操作的 `x-error-codes` 补齐条目。当前三个不足以覆盖契约 v2 的失败面。
-**新增 9 个，保留既有 3 个，共 12 个。**
+**新增 10 个，保留既有 3 个，共 13 个。**
 
 | 错误码 | HTTP | 触发 | 现状 |
 |---|---|---|---|
@@ -557,7 +570,8 @@ EasyProject 只记 `trigger_system=EasyAuth` 与 `handover_task_id`，
 | `ASSET_TYPE_UNDECLARED` | 422 | 请求里的 `asset_type` 不在注册表中 | **补** |
 | `REQUEST_BODY_TOO_LARGE` | 413 | 超 256 KiB | **补** |
 | `SNAPSHOT_STALE` | **412** | `snapshot_token` 与当前数据不一致（§4.3.3） | **补** |
-| `PROJECT_LOCKED` | **423** | 项目审批锁期间禁止写。**可恢复**：EasyAuth 退回 `pending`，人解除审批后重新预演（`08` §2.4） | **补** |
+| `HANDOVER_TEMPORARILY_LOCKED` | **423** | 项目审批锁期间禁止写。**可恢复**：EasyAuth 退回 `pending`，人解除审批后重新预演（`08` §2.4）。领域层照旧抛 `PROJECT_LOCKED(409)`，**M06 在边界转译** —— `PROJECT_LOCKED` 是全局冻结码，不能改它的状态码 | **补** |
+| `RATE_LIMITED` | **429** | `items` 触发限流（契约 §10.4） | **补** |
 
 > **为什么 `EVENT_MODE_MISMATCH` 要独立成码、不并进 `VALIDATION_ERROR`**：
 > 这条校验是契约 §10.1 针对「签名不覆盖 `X-EasyAuth-Event` 头」这一已知弱点的**安全补偿**。

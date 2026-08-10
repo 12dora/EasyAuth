@@ -1594,7 +1594,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
    class HandoverBusinessError(Exception):
        def __init__(self, status_code: int, code: str, message: str) -> None: ...
 
-   ALLOWED_BUSINESS_STATUS: Final = frozenset({400, 409, 412, 413, 422, 423})
+   ALLOWED_BUSINESS_STATUS: Final = frozenset({400, 409, 412, 413, 422, 423, 429})
    ```
 
    内核：
