@@ -12,7 +12,9 @@
 - **ET 迁移注意**：0002 曾被原地改写（已部署库不重放），已补收敛迁移 **`0003_handover_task_id_check`**（双路径 schema diff 证明一致）；部署库已实际收敛到 0003 且 CHECK 齐备。部署卡里 alembic 目标改为 head=0003。v1 遗留 task_id 的清洗 SQL 见 ET `docs/DEPLOYMENT.md`。
 - **EP 部署形态已查证**：根目录 compose（frontend 宿主 3001 / backend 仅内网），`EASYPROJECT_AUTO_MIGRATE=true` 启动自动迁移，无需手动 alembic。
 - **新增用量纪律（用户 2026-08-11 指定）**：用 `~/code/agent_usage --json` 盯额度。codex 主池可用 >10% 时：清完 pending 后用 codex 全量复审本次改造（codex gpt-5.6-sol high=reviewer、medium=backend coder、grok high=frontend coder，分片要小）；claude 5h 可用 ≤10% 时收尾休眠、重置后 1min 唤醒。事件用 Monitor 脚本主动通知（60s 轮询、翻转才报）。
-- **剩余工作**：push 三仓（EA 带 `--tags`）→ 部署（EA/ET 要重建镜像；上线前查 EA WebhookDelivery 无 pending/failed）→ §14 检查点 → E2E（`EASYAUTH_HANDOVER_E2E=1`，含改派 2 条）→ 视 codex 额度触发全量复审。
+- **push/部署/检查点均已完成（2026-08-11 凌晨）**：三仓已 push（EA 含 tag）；三仓已重建镜像上线（EA 迁移 4 个、ET alembic head=0003、EP 自动迁移）。上线排障记录：EP `APP_BASE_URL` 由 localhost 改 `https://eproject.jiefakj.com`；EA manifest-sync 校验异常兜 422（`0134bd8`）；宿主 fake-ip DNS 使容器把公网域名解析进 198.18/15 被 SSRF 拦，deploy compose 加 `extra_hosts` 固定到 122.51.254.148（`f7e205c`）；easytrade 历史 webhook 配置为内网 http（现行代码投递必拒），已改公网 https 并实测 webhook.test delivered。**§14**：easytrade 全过；easyproject descriptor 过（9 类 + declared），webhook.test 待用户补 DNSPod A 记录 `eproject.jiefakj.com→122.51.254.148` 与 frps 服务器 TLS 证书（本机 ssh key 被拒无法代办）。
+- **E2E 已通**（`56e0f31`/`dcc1010`/`8d0fb10`）：`EASYAUTH_HANDOVER_E2E=1 pnpm e2e:fullstack` 4/4（含改派 2 条→执行→done 全链路）。harness：host 装 user-local uv + 3.12 venv；`seed_handover_e2e`（DEBUG-only，走 `ensure_handover_task` 真实入口）；vendored-SDK 下游 stub（`scripts/e2e_handover_downstream.py`）；webhook 环回窄门 `EASYAUTH_E2E_ALLOW_INSECURE_WEBHOOK_HOSTS`（DEBUG+显式 env 双闸，默认惰性有单测钉扎）。注意：deploy compose 跑着 `DJANGO_DEBUG=1`（既有状态），窄门 env 未设故惰性，但收紧 deploy DEBUG 值得立项。
+- **剩余工作**：任务 #8 用户补 eproject DNS/TLS 后确认 webhook.test 自动转 delivered → 视 codex 额度触发全量复审（规则见上）。
 
 ## 0. 工作指令（必读）
 
