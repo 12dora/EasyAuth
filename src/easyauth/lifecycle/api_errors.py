@@ -203,8 +203,15 @@ def reason_error(
     )
 
 
-def map_handover_exception(error: BaseException) -> JsonResponse | None:
-    """将 domain 异常映射为 §6.1 响应; 无法识别时返回 None。"""
+def map_handover_exception(
+    error: BaseException,
+    *,
+    details: dict[str, JsonValue] | None = None,
+) -> JsonResponse | None:
+    """将 domain 异常映射为 §6.1 响应; 无法识别时返回 None。
+
+    ``details`` 会并入响应 details(例如 413 的 ``batch_progress``)。
+    """
     from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
     from easyauth.lifecycle.lease import HANDOVER_EXECUTION_IN_FLIGHT
     from easyauth.webhooks.hooks import HookCallError
@@ -213,36 +220,36 @@ def map_handover_exception(error: BaseException) -> JsonResponse | None:
         # 按 status_code 映射, 不用字符串子串(items / execute / preview 共用)
         status = error.status_code
         if status == HTTPStatus.PRECONDITION_FAILED:  # 412
-            return reason_error("snapshot_stale")
+            return reason_error("snapshot_stale", details=details)
         if status == HTTPStatus.REQUEST_ENTITY_TOO_LARGE:  # 413
-            return reason_error("payload_too_large")
+            return reason_error("payload_too_large", details=details)
         if status == HTTPStatus.LOCKED:  # 423
-            return reason_error("downstream_locked")
+            return reason_error("downstream_locked", details=details)
         if status == HTTPStatus.TOO_MANY_REQUESTS:  # 429
-            return reason_error("rate_limited")
+            return reason_error("rate_limited", details=details)
         return None
 
     text = str(error).strip()
     if isinstance(error, HandoverConflictError):
         if text == HANDOVER_EXECUTION_IN_FLIGHT or "in_flight" in text:
-            return reason_error("handover_execution_in_flight")
+            return reason_error("handover_execution_in_flight", details=details)
         if text in _REASON_TABLE:
-            return reason_error(text)
+            return reason_error(text, details=details)
         # 兼容既有中文冲突消息
         from easyauth.lifecycle.core import TASK_KIND_CONFLICT_MESSAGE
 
         if text == TASK_KIND_CONFLICT_MESSAGE:
-            return reason_error("task_kind_conflict", text)
-        return reason_error("action_not_operable", text)
+            return reason_error("task_kind_conflict", text, details=details)
+        return reason_error("action_not_operable", text, details=details)
     if isinstance(error, HandoverError):
         if text in _REASON_TABLE:
-            return reason_error(text)
+            return reason_error(text, details=details)
         # 中文消息回落: 下游 HTTP 提示
         if "412" in text:
-            return reason_error("snapshot_stale")
+            return reason_error("snapshot_stale", details=details)
         if "413" in text:
-            return reason_error("payload_too_large")
+            return reason_error("payload_too_large", details=details)
         if "423" in text:
-            return reason_error("downstream_locked")
+            return reason_error("downstream_locked", details=details)
         return None
     return None

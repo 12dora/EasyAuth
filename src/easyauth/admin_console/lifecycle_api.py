@@ -486,15 +486,22 @@ def _run_action_operation(
             status=HTTPStatus.CONFLICT,
         )
     except (HandoverError, HookCallError) as error:
-        mapped = map_handover_exception(error)
+        from easyauth.lifecycle.api_payloads import batch_progress
+
+        extra_details: dict[str, JsonValue] | None = None
+        if isinstance(error, HookCallError) and error.status_code == HTTPStatus.REQUEST_ENTITY_TOO_LARGE:
+            action.refresh_from_db()
+            extra_details = {"batch_progress": batch_progress(action)}
+        elif "413" in str(error):
+            action.refresh_from_db()
+            extra_details = {"batch_progress": batch_progress(action)}
+        mapped = map_handover_exception(error, details=extra_details)
         if mapped is not None:
             return mapped
         text = str(error)
         if "412" in text:
             return reason_error("snapshot_stale")
         if "413" in text:
-            from easyauth.lifecycle.api_payloads import batch_progress
-
             action.refresh_from_db()
             return reason_error(
                 "payload_too_large",

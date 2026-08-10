@@ -558,7 +558,16 @@ def portal_handover_action_operation(
                 status=HTTPStatus.BAD_REQUEST,
             )
     except (HandoverConflictError, HandoverError, HookCallError) as error:
-        mapped = map_handover_exception(error)
+        from easyauth.lifecycle.api_payloads import batch_progress
+
+        extra_details: dict[str, JsonValue] | None = None
+        if isinstance(error, HookCallError) and error.status_code == HTTPStatus.REQUEST_ENTITY_TOO_LARGE:
+            action.refresh_from_db()
+            extra_details = {"batch_progress": batch_progress(action)}
+        elif "413" in str(error):
+            action.refresh_from_db()
+            extra_details = {"batch_progress": batch_progress(action)}
+        mapped = map_handover_exception(error, details=extra_details)
         if mapped is not None:
             return mapped
         text = str(error)
@@ -567,8 +576,6 @@ def portal_handover_action_operation(
             return reason_error("snapshot_stale")
         if "413" in text:
             action.refresh_from_db()
-            from easyauth.lifecycle.api_payloads import batch_progress
-
             return reason_error(
                 "payload_too_large",
                 details={"batch_progress": batch_progress(action)},
