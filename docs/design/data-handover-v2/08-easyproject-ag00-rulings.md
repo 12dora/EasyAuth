@@ -31,9 +31,9 @@
 | `idempotency_records` | 既有列；`actor_dingtalk_user_id = NULL` | M08 既有通用端口，**不新增领域命令**。唯一键 `(principal_key, operation, idempotency_key)`，`idempotency_key` 列宽 128（`infra/repositories/reliability.py:55-78`） |
 | `audit_logs` | 新增 append-only 行；`actor_dingtalk_user_id = NULL`，上下文进 `metadata_json` | M08 既有审计端口。actor 本就允许空（`reliability.py:81-98`） |
 | `projects` | `owner_dingtalk_user_id`、`version`、`updated_at` | **M13 命令** |
-| `project_members` | **删除**来源关系行（`project_owned` 场景**只能删，不能降级为 MEMBER**）；目标不存在时插入目标行并**原样继承**来源行的 `added_by_dingtalk_user_id` / `created_at`；目标已存在且需要成为 OWNER 时才调整 `role` | **M13 命令**。复合主键 + `uq_project_members_one_owner` 部分唯一索引（`alembic/versions/m13_001_project_tables.py:135-142`）要求在同一命令内合并 |
+| `project_members` | **删除**来源关系行（`project_owned` 场景**只能删，不能降级为 MEMBER**）；目标不存在时插入目标行，`created_at = now`、**`added_by_dingtalk_user_id = NULL`**（见下方「不得复制历史署名」）；目标已存在且需要成为 OWNER 时才调整 `role` | **M13 命令**。复合主键 + `uq_project_members_one_owner` 部分唯一索引（`alembic/versions/m13_001_project_tables.py:135-142`）要求在同一命令内合并 |
 | `tasks` | `assignee_dingtalk_user_id`、`assigner_dingtalk_user_id`、`assignment_version`、`version`、`updated_at`；**明确不改** `status`、`state_version` | **M10 命令** |
-| `task_collaborators` | 删除来源行；目标不存在时插入并继承 `added_by` / `created_at` | **M10 命令**。复合主键 `(task_id, dingtalk_user_id)` |
+| `task_collaborators` | 删除来源行；目标不存在时插入，`created_at = now`、`added_by = NULL` | **M10 命令**。复合主键 `(task_id, dingtalk_user_id)` |
 | `task_assignment_history` | assignee 变化时新增完整历史行，`changed_by_dingtalk_user_id = NULL` | **M10 命令**；该列**当前非空**（`infra/repositories/tasks.py:226`），须迁移改为 nullable |
 | `task_state_transitions` | **不写** | 交接不改变任务状态，不得制造虚假的状态流转记录 |
 | `task_activities` | 新增 `activity_type="ASSIGNMENT"` 行，`actor_dingtalk_user_id = NULL`，`payload_json.action="SYSTEM_HANDOVER"` | M11 既有 writer。actor 已允许空 |
@@ -167,7 +167,7 @@ async def system_handover(
   而这条新产生的 MEMDER 关系**从来没有出现在 preview 里** —— 用户以为交接干净了，实际没有；
 - 反方向也要小心：`project_member` 转给一个**已经是 OWNER** 的接收人时，
   **只删除来源 MEMBER 行并计 `merged`，绝不修改目标的 `role`** —— 改了就变成项目没有 OWNER；
-- 保持「每项目恰有一个 OWNER」；成员关系的 `added_by` / `created_at` 历史元数据**继承不改写**；
+- 保持「每项目恰有一个 OWNER」；**已存在**的目标关系行，其 `added_by` / `created_at` 一个字节不动；
 - 项目终态、来源已非 owner/member、目标 inactive → 抛 `ProjectHandoverConflict` → `409 HANDOVER_CONFLICT`；
 - **审批锁 → `423`**（见 §2.4）；**全局 snapshot 摘要不匹配 → `412`**，由 M06 在任何领域写入之前统一判定，不进领域命令；
 - **不发**成员逐条通知。
@@ -196,7 +196,7 @@ async def system_handover(
 - **保持 `status`、`state_version`、`accepted_at` 与 review 状态不变**；
 - assignee 变化时 `assignment_version += 1` 并写 assignment history；一次命令内任一角色变化只把
   `version` 加一次；
-- collaborator 目标已存在 → 删除来源行并计入 `merged`；否则转移关系并保留历史 `added_by` / `created_at`；
+- collaborator 目标已存在 → 删除来源行并计入 `merged`（**保持目标行原有的 `added_by`/`created_at` 不动**）；否则新建目标行，`created_at = now`、`added_by = NULL`；
 - **合并后的 collaborator 集合不得包含最终 assignee**（既有不变量
   `assignee_cannot_be_collaborator`，`domain/tasks/commands.py:1757`）：
   若转入目标恰好等于该任务最终的 assignee，**只删除来源关系并计 `merged`，不插入 collaborator 行**。
@@ -439,6 +439,22 @@ down_revision = (
 | `task_activities.actor_dingtalk_user_id` | `NULL`；`payload_json.action = "SYSTEM_HANDOVER"` |
 | `task_assignment_history.changed_by_dingtalk_user_id` | `NULL`（需 `m10_002` 迁移改为 nullable） |
 | `created_by_*` / `added_by_*` 等历史署名 | **一律不改写**；关系转移时**继承来源关系**的历史元数据（D11） |
+
+**不得把来源关系的历史署名复制到新关系行。**
+
+早期版本写的是"新建目标行时原样继承来源行的 `added_by` / `created_at`"。那会造出一段
+**从未发生过的历史**：主管 X 一年前把 A 加进项目，今天系统把 A 的成员关系交接给 B，
+新的 `(project, B)` 行却显示"X 在一年前添加了 B"。审计和界面都会对着一个假事实做断言，
+真出事追责时也分不清哪条是原始记录、哪条是交接造出来的。
+
+规矩：
+
+| 情形 | `added_by` / `created_at` |
+|---|---|
+| 目标关系**已存在**（合并场景） | 一个字节不动 |
+| **新建**目标关系 | `created_at = now`；`added_by = NULL`（系统行为，需把该列改为 nullable） |
+
+来源关系的原始元数据连同三元组写进 **append-only 审计**，历史不丢，但不冒充成新关系的署名。
 
 **明确否决「哨兵 dtuid」方案**：哨兵值会进入 directory 外键与人员查询，在 UI 上伪装成一名真实员工。
 而 audit / activity 的 actor 本来就允许为空，只有 assignment history 需要一次 nullable 迁移 ——

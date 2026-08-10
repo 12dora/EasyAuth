@@ -135,7 +135,8 @@ EasyAuth 内部即 `UserMirror.authentik_user_id`（`accounts/models.py:21`）�
 EasyProject 收到 `from_user_id` / `to_user_id`（均为 sub）后必须解析为本地 `dtuid`。
 
 - 解析不到时**必须显式失败**，返回 **HTTP 409**（错误体沿用各自仓库既有约定，见 §10.6），
-  由 EasyAuth 把该 action 置为 `failed` 并把响应体原样展示出来。
+  由 EasyAuth 把该 action 置为 `failed`，并按 §10.6 的白名单+脱敏规则展示错误摘要
+  （**不是**原样展示响应体）。
 - **严禁**按姓名/邮箱模糊匹配（违反 EasyProject 不变量 1），**严禁**静默跳过。
 - 从未登录过 EasyProject 的员工没有 sub 绑定，这是**真实且常见**的情况：EasyProject 必须提供一条
   从 EasyAuth 目录接口（`GET /api/v1/directory/users`，SDK 已封装）按 sub 反查 dtuid 并回填绑定的路径。
@@ -621,7 +622,15 @@ action 改回 `blocked` —— 那会让正在处理的人莫名其妙。只在*
 }
 ```
 
-- `page` 从 1 起；`page_size` 取值 1–200，EasyAuth 默认传 50
+- `page` 从 1 起，**上限 100000**（超出 → 422）；`page_size` 取值 1–200，EasyAuth 默认传 50
+- `q` 去空白后 **UTF-8 ≤128 字节**（超出 → 422）
+
+> **这两个上界是防读放大，不是形式主义。** `items` 每次调用都要重算全量摘要 + count；
+> 一个合法签名的请求在 300 秒窗口内可以被反复重放，配上 `page=10^12` 的巨大 OFFSET
+> 与接近 256 KiB 的 `q`（全表 ILIKE），足以把下游数据库拖垮。
+> **EasyAuth 与 APP 两侧都要在查询之前校验**，不能只靠一边。
+> EasyAuth 侧再按 `(actor, task, app)` 限流；APP 侧对相同签名 body 的指纹做 300 秒
+> 响应缓存或 single-flight，超限返回 429。
 - `q` 可为空串，APP 自行决定在哪些字段上模糊匹配；不支持搜索的 APP 忽略该字段即可
 
 响应 200：
@@ -921,7 +930,7 @@ APP 侧仍应保留自己的行锁作为第二道防线。
 | 401 / 403 | 验签失败 | `failed` | 否 | 签名校验失败，请检查该应用的 webhook 密钥 |
 | **412** | **快照已失效**（`snapshot_token` 与当前数据不一致） | 退回 `pending` | 否 | 「清单已变化，请重新预演」 |
 | **423** | **对象被临时锁住**（如 EasyProject 的项目审批锁 `PROJECT_LOCKED`） | 退回 `pending` | **是**（人解除锁之后） | 「该应用中部分对象正在审批/锁定，解除后请重新预演」 |
-| 409 | 人员无法识别 / 投递冲突 / 迟到的旧 generation / 业务归属冲突 | `failed` | 否 | 按原样展示下游错误 |
+| 409 | 人员无法识别 / 投递冲突 / 迟到的旧 generation / 业务归属冲突 | `failed` | 否 | 稳定本地文案 + 白名单提取的 `code`/`message`（各 ≤200 字符、已脱敏），**不是原样展示** |
 | 413 | 请求体过大 | `failed` | 否 | 单独指定的条目过多，请分批执行 |
 | 422 | 载荷不被支持（未声明的资产类型、不支持的事件） | `failed` | 否 | 应用声明与实现不一致 |
 | 5xx | 应用内部错误 | `failed` | 是 | 可重试 |
