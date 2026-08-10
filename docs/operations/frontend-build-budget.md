@@ -10,11 +10,12 @@
 - `main`：只承载 React 挂载、鉴权 shell、路由表、加载态和错误边界。
 - `vendor`：第三方 React、Router、Query、Table 与图标依赖。
 - `i18n`：中英文消息目录。
-- 门户路由：`PortalPage` 独立异步 chunk。
+- 门户路由：`PortalPage`、`PortalHandoverList`、`PortalHandoverDetail` 独立异步 chunk。
 - 控制台路由：`ConsoleAppList`、`ConsoleAppWorkspace`、`ConsoleSettingsPage`、`ConsoleTeamList`、
   `ConsoleTeamDetail`、`ApprovalTemplatesPage`、`ApprovalInstancesPage`、`OperationsPage` 独立异步 chunk。
 - 生命周期路由：`ConsolePeopleList`、`HandoverTaskList`、`HandoverTaskDetail`、`OnboardingPage` 独立异步 chunk。
 - 应用接入路由：`AppOnboardingWizard` 独立异步 chunk。
+- 数据交接共享组件（`features/handover/*`）由门户详情与控制台详情/向导异步 chunk 复用，不进入 `main`。
 
 `App.tsx` 的懒加载边界必须保留 `AppShell`、侧边栏、顶栏、`route-transition`、`role="status"` 加载态和
 路由错误边界；不能为了减少代码而把懒加载 fallback 改成空节点。
@@ -32,7 +33,8 @@ node scripts/check-build-budget.mjs
 - 入口 `main` 原始体积不超过 `80 KiB`，gzip 不超过 `30 KiB`；
 - 单个同步 chunk 原始体积不超过 `360 KiB`，gzip 不超过 `110 KiB`；
 - 单个异步路由 chunk 原始体积不超过 `140 KiB`，gzip 不超过 `40 KiB`；
-- 全部 JavaScript 原始体积不超过 `900 KiB`；
+- 全部 JavaScript 原始体积不超过 `960 KiB`（数据交接 v2 门户自助与共享分配器落地后上调；
+  2026-08-10 构建实测约 `903 KiB`，保留余量）；
 - `App.tsx` 中的全部页面级路由必须继续以 Vite manifest key 出现在入口 `dynamicImports` 中,且对应
   manifest 条目必须标记 `isDynamicEntry`。删除任一控制台、门户或生命周期路由 chunk 都会使预算检查失败。
 

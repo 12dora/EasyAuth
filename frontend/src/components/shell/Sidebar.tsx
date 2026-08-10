@@ -46,6 +46,7 @@ const CONSOLE_GROUPS: NavGroupSpec[] = [
       { to: "/console/operations/access-grants", labelKey: "nav.console.accessGrants" },
       { to: "/console/operations/approval-instances", labelKey: "nav.console.approvalInstances" },
       { to: "/console/operations/dependency-health", labelKey: "nav.console.dependencyHealth" },
+      { to: "/console/operations/blocked-apps", labelKey: "nav.console.blockedApps" },
     ],
   },
 ];
@@ -67,9 +68,14 @@ const PORTAL_GROUPS: NavGroupSpec[] = [
     labelKey: "nav.portal.approval",
     links: [{ to: "/portal/approvals", labelKey: "nav.portal.myApprovals" }],
   },
+  {
+    labelKey: "nav.portal.handovers",
+    links: [{ to: "/portal/handovers", labelKey: "nav.portal.handovers" }],
+  },
 ];
 
 const PORTAL_APPROVALS_PATH = "/portal/approvals";
+const PORTAL_HANDOVERS_PATH = "/portal/handovers";
 
 /** 门户「待我审批」角标: 只取 pagination.total_items, 审批处理后由 ["portal","approvals"] 前缀失效自动刷新。 */
 function usePendingApprovalsBadge(enabled: boolean): string {
@@ -86,12 +92,33 @@ function usePendingApprovalsBadge(enabled: boolean): string {
   return totalItems > 99 ? "99+" : String(totalItems);
 }
 
+/** 门户「我的交接」角标: as_assignee + as_subject 之和 > 0 时显示。 */
+function useHandoverTasksBadge(enabled: boolean): string {
+  const query = useQuery({
+    queryKey: ["portal", "handover-tasks", "nav-badge"],
+    queryFn: () =>
+      apiRequest<{ handover_tasks: { as_assignee: unknown[]; as_subject: unknown[] } }>(
+        "/portal/api/v1/me/handover-tasks",
+      ),
+    enabled,
+    staleTime: 30_000,
+  });
+  const total =
+    (query.data?.handover_tasks?.as_assignee?.length ?? 0) +
+    (query.data?.handover_tasks?.as_subject?.length ?? 0);
+  if (total <= 0) {
+    return "";
+  }
+  return total > 99 ? "99+" : String(total);
+}
+
 export function Sidebar({ mode, currentUser }: SidebarProps) {
   const { t } = useI18n();
   const location = useLocation();
   const sidebarRef = useRef<HTMLElement>(null);
   const [indicatorStyle, setIndicatorStyle] = useState<CSSProperties>({});
   const pendingApprovalsBadge = usePendingApprovalsBadge(mode === "portal");
+  const handoverTasksBadge = useHandoverTasksBadge(mode === "portal");
   const consoleGroups = currentUser?.isSuperuser === true ? CONSOLE_GROUPS : [CONSOLE_GROUPS[0]];
   const groups = useMemo<ShellNavGroup[]>(
     () =>
@@ -100,10 +127,15 @@ export function Sidebar({ mode, currentUser }: SidebarProps) {
         links: group.links.map((link) => ({
           to: link.to,
           label: t(link.labelKey),
-          badge: link.to === PORTAL_APPROVALS_PATH ? pendingApprovalsBadge : undefined,
+          badge:
+            link.to === PORTAL_APPROVALS_PATH
+              ? pendingApprovalsBadge
+              : link.to === PORTAL_HANDOVERS_PATH
+                ? handoverTasksBadge
+                : undefined,
         })),
       })),
-    [consoleGroups, mode, pendingApprovalsBadge, t],
+    [consoleGroups, handoverTasksBadge, mode, pendingApprovalsBadge, t],
   );
   const settingsPath = "/console/settings";
   const navLinks = useMemo(() => groups.flatMap((group) => group.links), [groups]);
