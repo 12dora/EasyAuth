@@ -131,7 +131,9 @@ class SystemHandoverResult:
 ```python
 # backend/app/domain/identity/handover_identity.py
 async def resolve_handover_identity(
-    *, authentik_sub: str, directory: EasyAuthDirectoryPort,
+    *, authentik_sub: str,
+    purpose: Literal["source", "target"],          # 不能省
+    directory: EasyAuthDirectoryPort,
     users: DirectoryUserRepository, now: datetime,
 ) -> str: ...
 
@@ -142,7 +144,18 @@ async def bind_verified_authentik_sub(
 ```
 
 保证：只做精确 sub↔dtuid 映射（禁止姓名/邮箱模糊匹配，契约 §5.2）；冲突或解析不到抛
-`IdentityUnmappedError` → API 映射 `409 IDENTITY_UNMAPPED`；**不得修改任何登录时间戳**；目标用户仍须 active。
+`IdentityUnmappedError` → API 映射 `409 IDENTITY_UNMAPPED`；**不得修改任何登录时间戳**。
+
+**`purpose` 决定 active 的要求，这个参数不能省**：
+
+| purpose | active 要求 |
+|---|---|
+| `source`（`from_user_id`） | **不要求 active** —— 离职者早就被目录同步置成 `is_active=false` 了 |
+| `target`（各接收人） | **必须 active**，且各 owner 命令在**锁内**再校验一次 |
+
+> 没有这个参数就只能二选一，两个都是错的：要求 active 的话，**所有正常的离职交接都失败**；
+> 不要求的话，接收人可以是一个停用账号。
+> **也不得**把「source 是 inactive」当成 `IDENTITY_UNMAPPED` —— 那是能解析到的，只是不活跃。
 
 #### M13 · 项目
 
@@ -329,14 +342,27 @@ async def enqueue_system_handover_projection(
 
 - 在 M10 的业务事务内**只写 outbox**，不发任何网络请求；
 - worker 消费时**必须先取既有的 `task_lock_key(task_id)` advisory lock**，与普通写穿共用同一把锁；
-- **版本护栏**：取锁后比对本地 `task.version` / `assignment_version` / 协作人 hash 与入队时的快照，
-  **已经前进 → 该行标 `SUPERSEDED`，不写 OP**（或改为投影当前本地权威值）；
+- **版本护栏的判据只看人员，不看 `task.version`**：取锁后比对 `assignment_version` 与
+  `collaborators_hash`。**`task.version` 只作诊断，不得单独触发 `SUPERSEDED`** ——
+  它在任何普通字段修改时都会递增（`domain/tasks/commands.py:1677`），而那种修改的 OP PATCH
+  根本不含人员字段（`write_through.py:1088`）：一次改标题就会让人员投影被标 `SUPERSEDED`
+  而永久丢失，M34 又不回写人员，再也没人补。
+  人员确实已经前进时，**投影锁内读到的当前本地权威值**，而不是简单丢弃；
+  只有任务已删除、没有 OP 锚点、或已有更新的 outbox 明确接管时才允许 `SUPERSEDED`；
+- **claim 与终态都要 owner-CAS**：claim 只选 `status='PENDING'` 或已过期的 `CLAIMED`；
+  `renew` / 重试 / `APPLIED` / `SUPERSEDED` / `APPLY_FAILED` 的每一次更新都必须带
+  `WHERE id = ? AND status = 'CLAIMED' AND claim_owner = ?`。
+  HTTP 可能跨越 lease 时先续租；**CAS 影响 0 行的旧 worker 不得写任何终态或冲突账**。
+  拿不到 task advisory lock 时，只由当前 owner CAS 回 `PENDING` 并设 `next_attempt_at`；
 - 通过护栏才 PATCH OpenProject 的 `assignee_dtuid` / `collaborators_dtuid` 两个 CF，
   成功后用短事务更新 `op_lock_version` / `op_synced_at` 锚点；
-- 重试耗尽 → 写 M32 的 `op_sync_conflicts`（`APPLY_FAILED`），
-  **去重维度用 `outbox_id`**，不要用 `(task, op)` —— 否则后一个 generation/batch 的失败
-  会命中前一条未解决的记录，新的错误详情直接丢失。因此 §1.1 的允许写表清单里
-  **加上 `op_sync_conflicts`**；
+- 重试耗尽 → 写 M32 的 `op_sync_conflicts`（`APPLY_FAILED`）。
+  **现有表没有可用的去重维度**：仓储按 `(entity_type, entity_id, op_id, kind)` 命中未解决行
+  （`infra/repositories/op_sync.py:66,173-194`），generation 2 的同一任务失败会撞上
+  generation 1 那条未解决的记录，**新的错误详情被静默丢弃**。
+  因此 `m32_002` 给该表加 `handover_outbox_id` 外键并对非空值建唯一索引，
+  新增 `record_handover_apply_failed(..., outbox_id)`；**M34 既有的去重语义不动**。
+  §1.1 的允许写表清单里加上 `op_sync_conflicts`；
 - **不得依赖 M34 对账自动修复** —— 它明确不回写人员字段。
 
 > **没有版本护栏会发生什么**：交接入队"改成 B" → 人工又把负责人改成 C 并已写穿 OP →
@@ -360,7 +386,7 @@ async def enqueue_system_handover_projection(
 |---|---|---|---|
 | `m06_003_handover_generation_watermarks` | `m46_001_record_task_order` | 建 `easyauth_handover_generations(task_key_sha256 CHAR(64) PK, task_id TEXT NOT NULL, max_generation INTEGER NOT NULL, updated_at TIMESTAMPTZ NOT NULL)` | M06 |
 | `m10_002_task_handover_actor` | `m46_001_record_task_order` | 仅把 `task_assignment_history.changed_by_dingtalk_user_id` 改为 **nullable** | M10 |
-| `m32_002_handover_projection_outbox` | `m46_001_record_task_order` | 建 `op_handover_projection_outbox` 及唯一约束 `(handover_task_key_sha256, generation, batch_id, task_id)` | M32 |
+| `m32_002_handover_projection_outbox` | `m46_001_record_task_order` | 建 `op_handover_projection_outbox`，唯一约束 **`(handover_task_id, generation, batch_id, task_id)`** —— 与 §1.3 冻结的列名一致（早期这里写的是 `handover_task_key_sha256`，那一列根本不存在，照写 upgrade 当场失败）。同时给 `op_sync_conflicts` 加 `handover_outbox_id UUID NULL REFERENCES op_handover_projection_outbox(id)` 与非空部分唯一索引 | M32 |
 
 三条并行分支落地后，**由 AG-00 创建** merge revision：
 
@@ -498,7 +524,7 @@ UI 表现：管理审计列表对 NULL actor 已显示 `SYSTEM`；任务时间�
 
   ```
   generation 水位行
-    → projects（UUID 升序）
+    → projects（UUID 升序；集合 = 显式的项目类资产 ∪ **所有待写 task 的非空 project_id**）
     → tasks（UUID 升序）
     → recurring_task_templates（UUID 升序）
     → work_records（UUID 升序）
@@ -507,6 +533,12 @@ UI 表现：管理审计列表对 NULL actor 已显示 `SYSTEM`；任务时间�
   ```
 
 - 锁内重新校验：来源人仍拥有该角色、对象仍满足终态谓词、目标仍 active、snapshot 仍匹配、审批锁未出现。
+
+> **`projects` 的锁集合必须把待写任务的父项目也算进来**，哪怕这一批里一个项目类资产都没有。
+> 现有任务写路径是先锁 task、再**无锁** SELECT project（`infra/repositories/tasks.py:460,1232-1244`），
+> 而审批发起会 `FOR UPDATE` 锁项目并写锁态（`infra/repositories/projects.py:877`）。
+> 只锁 task 的话：handover 锁住 T、读到 P 还没上锁，并发审批把 P 锁上，handover 照样改了 T ——
+> **审批期间的写保护就这么被穿透了，而且不会返回 423。**
 - 并发者先提交并改变了归属或 snapshot → 返回 `409 HANDOVER_CONFLICT`。
   **不得**在已经变化的对象上"尽量搬一搬"。
 - handover 先持锁时，随后到达的人类命令按其 expected version 走**原有的**版本冲突路径；
@@ -556,8 +588,14 @@ sha256(
 
 generation 水位语义：
 
-1. preview / items / execute 进入后，在短事务里锁定或创建 `easyauth_handover_generations` 行；
-   小于当前值立即 409，大于则推进并提交；
+1. **preview / items** 进入后，在短事务里锁定或创建 `easyauth_handover_generations` 行；
+   小于当前值立即 409，大于则推进并提交。
+   **execute 不在入口做水位拒绝** —— 它的第一步是 `claim_or_replay`，命中已完成回执就直接
+   返回原 summary；**只有首次 claim 成功之后**才检查并推进水位。
+
+   > 顺序反了会这样：generation 1 成功；generation 2 的 preview 把水位推到 2；
+   > 此时 generation 1 的**网络重试**到达 —— 它在查幂等回执之前就被判「迟到的旧轮次」409。
+   > 上游看到的是「同一个请求上次成功、这次失败」。
 2. execute 在事务外完成身份解析后，进业务事务**再次锁定**该水位；若此时已有更高 generation，立即 409；
 3. 业务事务**持有水位锁直到**全部领域写入、outbox、audit 与幂等响应一起提交。
 
@@ -583,8 +621,16 @@ generation 水位语义：
 
 **裁定：不绕过。拒绝本批 execute，但用一个"可恢复"的状态码。**
 
-- HTTP **`423 Locked`**（契约 §10.6 新增行），标准错误体的 message/metadata 里保留内部原因
-  `PROJECT_LOCKED`；**不把 `PROJECT_LOCKED` 提升为跨系统冻结错误码**。
+- HTTP **`423 Locked`**，错误码 **`HANDOVER_TEMPORARILY_LOCKED`**（本 operation 新增），
+  message/metadata 里保留内部原因 `PROJECT_LOCKED`。
+
+> **不能直接把 `PROJECT_LOCKED` 改成 423。** 它是**全局**冻结码，现有项目/任务端点都在用，
+> 错误向量里也写死了 409（`contracts/test-vectors/error-bodies.json:165`、
+> `domain/tasks/errors.py:143`）。改全局映射会打坏一片既有端点与门禁。
+>
+> 正确做法：领域层照旧抛 `PROJECT_LOCKED(409)`；**M06 在边界处转译**成
+> `423 HANDOVER_TEMPORARILY_LOCKED`。
+> `HANDOVER_CONFLICT` 的说明里**删掉「审批锁」** —— 它只覆盖项目终态、归属变化、迟到 generation。
 
 > **为什么不是 409。** 409 在契约里被判为**不可重试的 `failed`**。
 > 而审批锁是**临时**状态：审批一结束锁就没了，这次交接完全应该能继续。
