@@ -359,17 +359,14 @@ function AssetTypeDetails({
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      // PUT 整体替换：合并未出现在当前页的既有 override
+      // PUT 整体替换：合并未出现在当前页的既有 override + 本页 drafts
       const pageIds = new Set(items.map((item) => item.id));
       const fromOtherPages = fullOverrides.filter((entry) => !pageIds.has(entry.asset_id));
-      const fromDrafts = Object.values(drafts);
-      const merged = [...fromOtherPages.filter((entry) => !drafts[entry.asset_id] || isStillOverride(entry, assetType))];
-      // rebuild from drafts + other pages that weren't touched
       const byId = new Map<string, DraftOverride>();
       for (const entry of fromOtherPages) {
         byId.set(entry.asset_id, entry);
       }
-      for (const entry of fromDrafts) {
+      for (const entry of Object.values(drafts)) {
         byId.set(entry.asset_id, entry);
       }
       // Remove any that match defaults
