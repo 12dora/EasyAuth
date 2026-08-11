@@ -22,7 +22,12 @@ class JurisdictionResult:
     reason: str = ""
 
 
-def assert_manager_of(actor: UserMirror, subject: UserMirror) -> JurisdictionResult:
+def assert_manager_of(
+    actor: UserMirror,
+    subject: UserMirror,
+    *,
+    lock_context: bool = False,
+) -> JurisdictionResult:
     """actor 是否在 subject 当前 manager_chain 上(契约 §4)。
 
     - 目录缺失 / stale / 链畸形 → directory_unavailable (503)
@@ -55,7 +60,10 @@ def assert_manager_of(actor: UserMirror, subject: UserMirror) -> JurisdictionRes
     ):
         return JurisdictionResult(allowed=False, reason=REASON_OUT_OF_SCOPE)
 
-    context = DingTalkUserOrgContext.objects.filter(
+    contexts = DingTalkUserOrgContext.objects
+    if lock_context:
+        contexts = contexts.select_for_update()
+    context = contexts.filter(
         source_slug=subject.dingtalk_source_slug,
         corp_id=subject.dingtalk_corp_id,
         user_id=subject.dingtalk_userid,

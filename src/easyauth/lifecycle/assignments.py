@@ -25,6 +25,7 @@ from easyauth.lifecycle.models import (
     HandoverAssetOverride,
     HandoverAssetType,
     HandoverBatchPlan,
+    HandoverTask,
 )
 
 if TYPE_CHECKING:
@@ -99,13 +100,9 @@ def put_overrides(
     overrides_version: int,
     overrides: Sequence[OverrideEntry],
 ) -> PutOverridesResult:
-    """整体替换 overrides; 失效 asset_id 计入 dropped_invalid(不在 preview 判)。"""
+    """校验完整集合后整体替换 overrides。"""
     with transaction.atomic():
-        locked = (
-            HandoverAppAction.objects.select_for_update(of=("self",))
-            .select_related("task", "task__subject_user")
-            .get(pk=action.pk)
-        )
+        locked = _locked_action_after_task(action)
         plan = _assert_mutable(locked)
         if overrides_version != locked.overrides_version:
             raise HandoverConflictError("overrides_version_stale")
@@ -117,29 +114,32 @@ def put_overrides(
         if asset is None:
             raise HandoverError("资产类型不存在。")
 
-        # 清理旧 overrides
-        _ = HandoverAssetOverride.objects.filter(asset_type=asset).delete()
-        kept = 0
-        dropped = 0
         seen_ids: set[str] = set()
         for entry in overrides:
-            if not entry.asset_id or entry.asset_id in seen_ids:
-                dropped += 1
-                continue
+            if entry.asset_id in seen_ids:
+                raise HandoverError("duplicate_assignment")
+            seen_ids.add(entry.asset_id)
+            if not entry.asset_id:
+                raise HandoverError("duplicate_assignment")
             if entry.action not in ASSET_ACTION_VALUES:
-                dropped += 1
-                continue
+                raise HandoverError("invalid_assignment_action")
             if entry.action == ASSET_ACTION_RELEASE and not asset.releasable:
                 raise HandoverError("asset_type_not_releasable")
-            to_user = None
             if entry.action == ASSET_ACTION_TRANSFER:
                 if not entry.to_user_id:
                     raise HandoverError("receiver_required")
-                to_user = _resolve_receiver(locked, entry.to_user_id, required=True)
+                _ = _resolve_receiver(locked, entry.to_user_id, required=True)
             elif entry.to_user_id:
                 raise HandoverError("receiver_not_allowed")
+
+        # 只有完整请求通过校验后才删除旧集合。
+        _ = HandoverAssetOverride.objects.filter(asset_type=asset).delete()
+        kept = 0
+        for entry in overrides:
+            to_user = None
+            if entry.action == ASSET_ACTION_TRANSFER:
+                to_user = _resolve_receiver(locked, entry.to_user_id, required=True)
             # 无明细时无法校验 asset_id 是否在下游存在; 整批保存, 失效在 execute 由下游 409。
-            # 此处仅做本地形状校验。空 id 已丢。
             _ = HandoverAssetOverride.objects.create(
                 asset_type=asset,
                 asset_id=entry.asset_id[:128],
@@ -147,7 +147,6 @@ def put_overrides(
                 action=entry.action,
                 to_user=to_user,
             )
-            seen_ids.add(entry.asset_id)
             kept += 1
 
         locked.overrides_version += 1
@@ -158,39 +157,53 @@ def put_overrides(
             overrides_version=locked.overrides_version,
             confirm_version=locked.confirm_version,
             override_count=kept,
-            dropped_invalid=dropped,
+            dropped_invalid=0,
         )
 
 
 def list_overrides(action: HandoverAppAction, *, type_key: str) -> dict[str, object]:
-    asset = HandoverAssetType.objects.filter(
-        action=action,
-        generation=action.generation,
-        type_key=type_key,
-    ).first()
-    if asset is None:
-        raise HandoverError("资产类型不存在。")
-    rows = []
-    for ov in HandoverAssetOverride.objects.select_related("to_user").filter(asset_type=asset):
-        rows.append(
-            {
-                "asset_id": ov.asset_id,
-                "action": ov.action,
-                "to_user": (
-                    {
-                        "user_id": ov.to_user.authentik_user_id,
-                        "name": ov.to_user.name,
-                    }
-                    if ov.to_user is not None
-                    else None
-                ),
-                "label": ov.label_snapshot,
-            },
-        )
-    return {
-        "overrides_version": action.overrides_version,
-        "overrides": rows,
-    }
+    with transaction.atomic():
+        locked = _locked_action_after_task(action)
+        asset = HandoverAssetType.objects.filter(
+            action=locked,
+            generation=locked.generation,
+            type_key=type_key,
+        ).first()
+        if asset is None:
+            raise HandoverError("资产类型不存在。")
+        rows = []
+        for ov in HandoverAssetOverride.objects.select_related("to_user").filter(
+            asset_type=asset,
+        ):
+            rows.append(
+                {
+                    "asset_id": ov.asset_id,
+                    "action": ov.action,
+                    "to_user": (
+                        {
+                            "user_id": ov.to_user.authentik_user_id,
+                            "name": ov.to_user.name,
+                        }
+                        if ov.to_user is not None
+                        else None
+                    ),
+                    "label": ov.label_snapshot,
+                },
+            )
+        return {
+            "overrides_version": locked.overrides_version,
+            "overrides": rows,
+        }
+
+
+def _locked_action_after_task(action: HandoverAppAction) -> HandoverAppAction:
+    _ = action.task_id
+    _ = HandoverTask.objects.select_for_update().get(pk=action.task_id)
+    return (
+        HandoverAppAction.objects.select_for_update(of=("self",))
+        .select_related("task", "task__subject_user")
+        .get(pk=action.pk)
+    )
 
 
 def _assert_mutable(action: HandoverAppAction) -> HandoverBatchPlan | None:
@@ -203,11 +216,15 @@ def _assert_mutable(action: HandoverAppAction) -> HandoverBatchPlan | None:
         pass
     else:
         raise HandoverConflictError("action_not_operable")
-    plan = HandoverBatchPlan.objects.select_for_update().filter(
-        action=action,
-        generation=action.generation,
-        status=BATCH_PLAN_STATUS_ACTIVE,
-    ).first()
+    plan = (
+        HandoverBatchPlan.objects.select_for_update()
+        .filter(
+            action=action,
+            generation=action.generation,
+            status=BATCH_PLAN_STATUS_ACTIVE,
+        )
+        .first()
+    )
     if plan is not None and plan.completed_batches > 0:
         raise HandoverConflictError("batch_plan_in_progress")
     return plan

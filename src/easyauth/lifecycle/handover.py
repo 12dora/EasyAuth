@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import timedelta
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final, Protocol, cast
 
 from django.db import transaction
 from django.utils import timezone
@@ -115,6 +115,10 @@ if TYPE_CHECKING:
     from easyauth.accounts.models import UserMirror
     from easyauth.applications.ops_models import JsonValue
 
+
+class MutationGuard(Protocol):
+    def __call__(self, action: HandoverAppAction) -> None: ...
+
 logger = logging.getLogger(__name__)
 
 TASK_ID_PATTERN: Final = re.compile(r"\A[0-9]+:[0-9]+\Z")
@@ -209,8 +213,12 @@ def update_action_receiver(
     return update_grant_receiver(action=action, grant_receiver=to_user)
 
 
-def preview_action(action: HandoverAppAction) -> HandoverAppAction:
-    request = _reserve_preview_request(action.id)
+def preview_action(
+    action: HandoverAppAction,
+    *,
+    mutation_guard: MutationGuard | None = None,
+) -> HandoverAppAction:
+    request = _reserve_preview_request(action.id, mutation_guard=mutation_guard)
     if not request.hook_url:
         raise HandoverError(DECLARED_WITHOUT_URL_MESSAGE)
     try:
@@ -233,6 +241,7 @@ def execute_action(
     *,
     confirm_version: int | None = None,
     owner: str | None = None,
+    mutation_guard: MutationGuard | None = None,
 ) -> HandoverAppAction:
     return _execute_action(
         action,
@@ -240,6 +249,7 @@ def execute_action(
         confirm_version=confirm_version,
         owner=owner,
         is_retry=False,
+        mutation_guard=mutation_guard,
     )
 
 
@@ -247,6 +257,7 @@ def retry_action(
     action: HandoverAppAction,
     *,
     owner: str | None = None,
+    mutation_guard: MutationGuard | None = None,
 ) -> HandoverAppAction:
     return _execute_action(
         action,
@@ -254,6 +265,7 @@ def retry_action(
         confirm_version=None,
         owner=owner,
         is_retry=True,
+        mutation_guard=mutation_guard,
     )
 
 
@@ -1157,6 +1169,7 @@ def _execute_action(
     confirm_version: int | None,
     owner: str | None,
     is_retry: bool,
+    mutation_guard: MutationGuard | None,
 ) -> HandoverAppAction:
     worker_owner = owner or f"http:{uuid.uuid4().hex[:12]}"
     grant_only_error: Exception | None = None
@@ -1170,7 +1183,9 @@ def _execute_action(
     body: dict[str, JsonValue] = {}
 
     with transaction.atomic():
-        action = _locked_action(action.id)
+        action = _locked_action_after_task(action.id)
+        if mutation_guard is not None:
+            mutation_guard(action)
         if is_retry and action.status != ACTION_STATUS_FAILED:
             # 01 §6.1: 对非 failed 调 retry → action_not_retryable(非泛化 action_not_operable)
             raise HandoverConflictError("action_not_retryable")
@@ -1600,9 +1615,15 @@ def _locked_action_after_task(action_id: int) -> HandoverAppAction:
     return _locked_action(action_id)
 
 
-def _reserve_preview_request(action_id: int) -> _PreviewRequest:
+def _reserve_preview_request(
+    action_id: int,
+    *,
+    mutation_guard: MutationGuard | None = None,
+) -> _PreviewRequest:
     with transaction.atomic():
-        action = _locked_action(action_id)
+        action = _locked_action_after_task(action_id)
+        if mutation_guard is not None:
+            mutation_guard(action)
         ensure_action_status(
             action,
             allowed={ACTION_STATUS_PENDING, ACTION_STATUS_PREVIEWED},

@@ -18,7 +18,7 @@ from easyauth.applications.models import (
     AppScope,
 )
 from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
-from easyauth.lifecycle.assignee import apply_assignee, resolve_assignee
+from easyauth.lifecycle.assignee import AssigneeResolution, apply_assignee, resolve_assignee
 from easyauth.lifecycle.core import (
     LIFECYCLE_ACTOR_ID,
     TASK_KIND_CONFLICT_MESSAGE,
@@ -73,6 +73,7 @@ def ensure_handover_task(
     authority_source: str = "",
     creation_idempotency_key: str = "",
     creation_payload_sha256: str = "",
+    assignee_resolution: AssigneeResolution | None = None,
     raise_on_existing: bool = False,
 ) -> tuple[HandoverTask, bool]:
     """建单(幂等): 同一当事人已有进行中交接单时直接返回既有单。
@@ -193,7 +194,7 @@ def ensure_handover_task(
                 extra={"assignee_state": ASSIGNEE_STATE_SUBJECT},
             )
         else:
-            resolution = resolve_assignee(subject)
+            resolution = assignee_resolution or resolve_assignee(subject)
             _ = apply_assignee(
                 task,
                 resolution,

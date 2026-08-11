@@ -6,7 +6,12 @@ import pytest
 
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.applications.models import App
-from easyauth.lifecycle.assignments import OverrideEntry, patch_asset_type_defaults, put_overrides
+from easyauth.lifecycle.assignments import (
+    OverrideEntry,
+    list_overrides,
+    patch_asset_type_defaults,
+    put_overrides,
+)
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
 from easyauth.lifecycle.handover import _ensure_batch_plan_on_413
 from easyauth.lifecycle.models import (
@@ -175,7 +180,77 @@ def test_idempotency_unique_constraint_loser_returns_conflict_for_different_body
             creation_payload_sha256="2" * 64,
         )
 
-    assert HandoverTask.objects.filter(
-        created_by="manager-r4",
-        creation_idempotency_key="same-key",
-    ).count() == 1
+    assert (
+        HandoverTask.objects.filter(
+            created_by="manager-r4",
+            creation_idempotency_key="same-key",
+        ).count()
+        == 1
+    )
+
+
+@pytest.mark.parametrize("invalid_action", ["garbage", "TRANSFER"])
+def test_put_overrides_rejects_invalid_action_atomically(invalid_action: str) -> None:
+    action, asset_type, _receiver = _action()
+    _ = HandoverAssetOverride.objects.create(
+        asset_type=asset_type,
+        asset_id="existing",
+        action="skip",
+    )
+
+    with pytest.raises(HandoverError, match="invalid_assignment_action"):
+        put_overrides(
+            action,
+            type_key=asset_type.type_key,
+            overrides_version=0,
+            overrides=[
+                OverrideEntry(
+                    asset_id="replacement",
+                    action=invalid_action,
+                    to_user_id=None,
+                ),
+            ],
+        )
+
+    assert list(asset_type.overrides.values_list("asset_id", flat=True)) == ["existing"]
+    action.refresh_from_db()
+    assert action.overrides_version == 0
+
+
+def test_put_overrides_rejects_duplicate_asset_id_atomically() -> None:
+    action, asset_type, _receiver = _action()
+    _ = HandoverAssetOverride.objects.create(
+        asset_type=asset_type,
+        asset_id="existing",
+        action="skip",
+    )
+
+    with pytest.raises(HandoverError, match="duplicate_assignment"):
+        put_overrides(
+            action,
+            type_key=asset_type.type_key,
+            overrides_version=0,
+            overrides=[
+                OverrideEntry(asset_id="same", action="skip", to_user_id=None),
+                OverrideEntry(asset_id="same", action="skip", to_user_id=None),
+            ],
+        )
+
+    assert list(asset_type.overrides.values_list("asset_id", flat=True)) == ["existing"]
+    action.refresh_from_db()
+    assert action.overrides_version == 0
+
+
+def test_list_overrides_refreshes_version_with_current_override_generation() -> None:
+    stale_action, asset_type, _receiver = _action()
+    HandoverAppAction.objects.filter(pk=stale_action.pk).update(overrides_version=8)
+    _ = HandoverAssetOverride.objects.create(
+        asset_type=asset_type,
+        asset_id="generation-8-row",
+        action="skip",
+    )
+
+    result = list_overrides(stale_action, type_key=asset_type.type_key)
+
+    assert result["overrides_version"] == 8
+    assert [row["asset_id"] for row in result["overrides"]] == ["generation-8-row"]
