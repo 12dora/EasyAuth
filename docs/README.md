@@ -52,7 +52,7 @@
 - [`design/data-handover-v2/`](design/data-handover-v2/README.md) —— **数据交接 v2**，跨 EasyAuth /
   EasyTrade / EasyProject 三仓的多代理协作项目。`00`–`09` 是冻结的契约文档，
   [`EXECUTION-HANDOVER.md`](design/data-handover-v2/EXECUTION-HANDOVER.md) 是给下一位指挥 agent 的现状交接，
-  `review-artifacts/` 只留尚有未结债务的第四轮产物。
+  评审产物已全部闭环删除（债务转入 EasyProject 风险清单，原文见 git 历史）。
 
 ---
 
