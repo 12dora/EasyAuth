@@ -21,6 +21,12 @@ from easyauth.tasks.lifecycle import LIFECYCLE_SEND_REMINDER_TASK, lifecycle_sen
 pytestmark = pytest.mark.django_db
 
 
+@pytest.fixture(autouse=True)
+def isolate_outbox_events() -> None:
+    # transaction=True 的集成用例可能留下已提交事件。本模块只发布自身创建的事件。
+    _ = OutboxEvent.objects.all().delete()
+
+
 def test_missing_identity_retries_after_outbox_publish_then_provisioning_delivers() -> None:
     _ = DingTalkUserMirror.objects.create(
         source_slug="corp-main",
