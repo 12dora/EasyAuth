@@ -61,13 +61,30 @@ function actionFixture(overrides: Partial<HandoverAction> = {}): HandoverAction 
   };
 }
 
-function renderAllocator(action = actionFixture()) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={client}>
-      <AssetAllocator surface="portal" taskId={1} action={action} />
-    </QueryClientProvider>,
-  );
+function renderAllocator(
+  action = actionFixture(),
+  props: {
+    onBusyChange?: (busy: boolean) => void;
+    onSnapshotStale?: () => void;
+    queryClient?: QueryClient;
+  } = {},
+) {
+  const client =
+    props.queryClient ?? new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return {
+    client,
+    ...render(
+      <QueryClientProvider client={client}>
+        <AssetAllocator
+          surface="portal"
+          taskId={1}
+          action={action}
+          onBusyChange={props.onBusyChange}
+          onSnapshotStale={props.onSnapshotStale}
+        />
+      </QueryClientProvider>,
+    ),
+  };
 }
 
 function jsonResponse(body: unknown, status = 200) {
@@ -308,4 +325,366 @@ describe("AssetAllocator", () => {
       });
     });
   });
+
+  test("ea-fe-allocator-01: transfer 无接收人时 onBusyChange=true 且不 PATCH", async () => {
+    const busyStates: boolean[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        asset_type: {
+          type: "customer",
+          label: "名下客户",
+          count: 187,
+          detail_supported: true,
+          releasable: true,
+          default_action: "transfer",
+          default_to_user: null,
+          override_count: 0,
+        },
+        confirm_version: 2,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    renderAllocator(actionFixture(), {
+      onBusyChange: (busy) => {
+        busyStates.push(busy);
+      },
+    });
+
+    const customerRow = screen.getByTestId("asset-type-row-customer");
+    await user.selectOptions(within(customerRow).getByLabelText(/默认处理方式/), "transfer");
+
+    expect(await within(customerRow).findByLabelText(/接收人/)).toBeVisible();
+    expect(busyStates).toContain(true);
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) => String(input).includes("/assets/customer") && init?.method === "PATCH",
+      ),
+    ).toBe(false);
+  });
+
+  test("ea-fe-allocator-02: 改回默认后翻页保存不得复活已删除 override", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/overrides") && method === "GET") {
+        return jsonResponse({
+          overrides_version: 3,
+          overrides: [
+            {
+              asset_id: "c1",
+              action: "transfer",
+              to_user: { user_id: "u-2", name: "李某某" },
+              label: "客户1",
+            },
+            {
+              asset_id: "c2",
+              action: "release",
+              to_user: null,
+              label: "客户2",
+            },
+          ],
+        });
+      }
+      if (url.includes("/items?")) {
+        // total>50 才能让 UI 分页到第 2 页（page_size 固定 50）
+        const page = Number(new URL(url, "http://local").searchParams.get("page") ?? "1");
+        if (page === 1) {
+          return jsonResponse({
+            items: [{ id: "c1", label: "客户1", hint: "" }],
+            page: 1,
+            page_size: 50,
+            total: 51,
+            unfiltered_total: 51,
+            stale: false,
+          });
+        }
+        return jsonResponse({
+          items: [{ id: "c2", label: "客户2", hint: "" }],
+          page: 2,
+          page_size: 50,
+          total: 51,
+          unfiltered_total: 51,
+          stale: false,
+        });
+      }
+      if (url.endsWith("/overrides") && method === "PUT") {
+        return jsonResponse({
+          overrides_version: 4,
+          confirm_version: 5,
+          override_count: 1,
+          dropped_invalid: 0,
+        });
+      }
+      if (url.includes("/handover-candidates")) {
+        return jsonResponse({
+          items: [
+            { user_id: "u-1", name: "张某某" },
+            { user_id: "u-2", name: "李某某" },
+          ],
+        });
+      }
+      throw new Error(`unexpected ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    const action = actionFixture({
+      asset_types: [
+        {
+          type: "customer",
+          label: "名下客户",
+          count: 2,
+          detail_supported: true,
+          releasable: true,
+          default_action: "transfer",
+          default_to_user: { user_id: "u-1", name: "张某某" },
+          override_count: 2,
+        },
+      ],
+    });
+    renderAllocator(action);
+
+    await user.click(screen.getByRole("button", { name: "展开明细" }));
+    expect(await screen.findByTestId("asset-item-c1")).toBeVisible();
+
+    // 把 c1 改回默认接收人 → 应从完整草稿集删除
+    const item = screen.getByTestId("asset-item-c1");
+    await user.click(within(item).getByRole("combobox", { name: /接收人/ }));
+    await user.click(await screen.findByRole("option", { name: /张某某/ }));
+
+    // 翻到第 2 页再保存
+    await user.click(screen.getByRole("button", { name: "→" }));
+    expect(await screen.findByTestId("asset-item-c2")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "保存单独指定" }));
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(
+        ([input, init]) => String(input).endsWith("/overrides") && init?.method === "PUT",
+      );
+      expect(putCall).toBeTruthy();
+      const body = JSON.parse(String(putCall?.[1]?.body));
+      expect(body.overrides.map((row: { asset_id: string }) => row.asset_id)).toEqual(["c2"]);
+      expect(body.overrides.some((row: { asset_id: string }) => row.asset_id === "c1")).toBe(false);
+    });
+  });
+
+  test("ea-fe-allocator-03: transfer 无接收人时禁用保存且不 PUT", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/overrides") && method === "GET") {
+        return jsonResponse({
+          overrides_version: 1,
+          overrides: [
+            {
+              asset_id: "c1",
+              action: "transfer",
+              to_user: { user_id: "u-2", name: "李某某" },
+              label: "客户1",
+            },
+          ],
+        });
+      }
+      if (url.includes("/items?")) {
+        return jsonResponse({
+          items: [{ id: "c1", label: "客户1", hint: "" }],
+          page: 1,
+          page_size: 50,
+          total: 1,
+          unfiltered_total: 1,
+          stale: false,
+        });
+      }
+      if (url.endsWith("/overrides") && method === "PUT") {
+        return jsonResponse({
+          overrides_version: 2,
+          confirm_version: 3,
+          override_count: 0,
+          dropped_invalid: 0,
+        });
+      }
+      if (url.includes("/handover-candidates")) {
+        return jsonResponse({ items: [{ user_id: "u-2", name: "李某某" }] });
+      }
+      throw new Error(`unexpected ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    const action = actionFixture({
+      asset_types: [
+        {
+          type: "customer",
+          label: "名下客户",
+          count: 1,
+          detail_supported: true,
+          releasable: true,
+          default_action: "skip",
+          default_to_user: null,
+          override_count: 1,
+        },
+      ],
+    });
+    renderAllocator(action);
+
+    await user.click(screen.getByRole("button", { name: "展开明细" }));
+    const item = await screen.findByTestId("asset-item-c1");
+    // 清空接收人 → 非法草稿
+    await user.click(within(item).getByRole("button", { name: "关闭" }));
+
+    const saveBtn = screen.getByRole("button", { name: "保存单独指定" });
+    expect(saveBtn).toBeDisabled();
+    expect(screen.getByText("转移必须指定接收人")).toBeVisible();
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) => String(input).endsWith("/overrides") && init?.method === "PUT",
+      ),
+    ).toBe(false);
+  });
+
+  test("ea-fe-allocator-04: 412 后移除 items/overrides 缓存并回调 onSnapshotStale", async () => {
+    const onSnapshotStale = vi.fn();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/overrides") && method === "GET") {
+        return jsonResponse({
+          overrides_version: 1,
+          overrides: [
+            {
+              asset_id: "c1",
+              action: "release",
+              to_user: null,
+              label: "客户1",
+            },
+          ],
+        });
+      }
+      if (url.includes("/items?")) {
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: "PRECONDITION_FAILED",
+              message: "stale",
+              details: { reason: "snapshot_stale" },
+            },
+          }),
+          { status: 412, headers: { "Content-Type": "application/json" } },
+        );
+      }
+      throw new Error(`unexpected ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    const action = actionFixture({
+      asset_types: [
+        {
+          type: "customer",
+          label: "名下客户",
+          count: 1,
+          detail_supported: true,
+          releasable: true,
+          default_action: "skip",
+          default_to_user: null,
+          override_count: 1,
+        },
+      ],
+    });
+    renderAllocator(action, { onSnapshotStale, queryClient: client });
+
+    await user.click(screen.getByRole("button", { name: "展开明细" }));
+    await waitFor(() => {
+      expect(onSnapshotStale).toHaveBeenCalled();
+    });
+    expect(screen.getByText("清单已变化，请重新预演")).toBeVisible();
+
+    const cached = client
+      .getQueryCache()
+      .findAll({
+        predicate: (query) => {
+          const key = query.queryKey;
+          return key[0] === "handover" && (key[1] === "items" || key[1] === "overrides");
+        },
+      })
+      .filter((query) => query.state.data !== undefined);
+    expect(cached).toHaveLength(0);
+  });
+
+  test("ea-fe-allocator-05: PUT 进行中禁用条目编辑控件", async () => {
+    const putGate = deferredResponse();
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      const method = init?.method ?? "GET";
+      if (url.endsWith("/overrides") && method === "GET") {
+        return jsonResponse({
+          overrides_version: 1,
+          overrides: [
+            {
+              asset_id: "c1",
+              action: "release",
+              to_user: null,
+              label: "客户1",
+            },
+          ],
+        });
+      }
+      if (url.includes("/items?")) {
+        return jsonResponse({
+          items: [{ id: "c1", label: "客户1", hint: "" }],
+          page: 1,
+          page_size: 50,
+          total: 1,
+          unfiltered_total: 1,
+          stale: false,
+        });
+      }
+      if (url.endsWith("/overrides") && method === "PUT") {
+        return putGate.promise;
+      }
+      throw new Error(`unexpected ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+    const action = actionFixture({
+      asset_types: [
+        {
+          type: "customer",
+          label: "名下客户",
+          count: 1,
+          detail_supported: true,
+          releasable: true,
+          default_action: "skip",
+          default_to_user: null,
+          override_count: 1,
+        },
+      ],
+    });
+    renderAllocator(action);
+
+    await user.click(screen.getByRole("button", { name: "展开明细" }));
+    const item = await screen.findByTestId("asset-item-c1");
+    const actionSelect = within(item).getByLabelText("客户1 action");
+    expect(actionSelect).toBeEnabled();
+
+    await user.click(screen.getByRole("button", { name: "保存单独指定" }));
+    await waitFor(() => {
+      expect(actionSelect).toBeDisabled();
+    });
+    putGate.resolve(
+      jsonResponse({
+        overrides_version: 2,
+        confirm_version: 3,
+        override_count: 1,
+        dropped_invalid: 0,
+      }),
+    );
+  });
 });
+
+function deferredResponse() {
+  let resolve!: (value: Response) => void;
+  const promise = new Promise<Response>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}

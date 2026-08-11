@@ -45,6 +45,10 @@ export function HandoverActionPanel({
   const [asyncAbandonOpen, setAsyncAbandonOpen] = useState(false);
   const [asyncOutcome, setAsyncOutcome] = useState<"done" | "failed">("done");
   const [asyncReason, setAsyncReason] = useState("");
+  /** 412 后强制 remount 分配器，清掉未保存 drafts / 展开态 */
+  const [allocatorResetKey, setAllocatorResetKey] = useState(0);
+  /** 409 confirm_version_stale：关闭确认并阻塞到新 confirm_version 装入 */
+  const [blockedConfirmVersion, setBlockedConfirmVersion] = useState<number | null>(null);
 
   const status = action.status;
   // batch_progress 非 null 期间禁止改分配（02 §4 / 01 batch_plan_in_progress）
@@ -52,10 +56,50 @@ export function HandoverActionPanel({
     status === "executing" || status === "async_pending" || action.batch_progress != null;
   const poll = status === "executing" || status === "async_pending";
 
-  const handleSnapshotStale = () => {
+  useEffect(() => {
+    if (blockedConfirmVersion !== null && action.confirm_version !== blockedConfirmVersion) {
+      setBlockedConfirmVersion(null);
+    }
+  }, [action.confirm_version, blockedConfirmVersion]);
+
+  const clearActionLocalState = () => {
     setConfirmOpen(false);
+    setAllocatorBusy(false);
+    setAllocatorResetKey((key) => key + 1);
+    void queryClient.removeQueries({
+      predicate: (query) => {
+        const key = query.queryKey;
+        return (
+          key[0] === "handover" &&
+          (key[1] === "items" || key[1] === "overrides") &&
+          key[2] === surface &&
+          key[3] === String(task.id) &&
+          key[4] === action.app_key
+        );
+      },
+    });
+  };
+
+  const handleSnapshotStale = () => {
+    clearActionLocalState();
     setBanner(t("handover.portal.detail.snapshotStale"));
     onTaskRefresh();
+  };
+
+  const handleActionFailure = (error: Error) => {
+    const reason = apiErrorReason(error);
+    if (reason === "snapshot_stale") {
+      handleSnapshotStale();
+      return;
+    }
+    if (reason === "confirm_version_stale") {
+      setBanner(t("handover.portal.detail.confirmVersionStale"));
+      setConfirmOpen(false);
+      setBlockedConfirmVersion(action.confirm_version);
+      onTaskRefresh();
+      return;
+    }
+    handleActionError(error, setBanner, t, onTaskRefresh, setConfirmOpen);
   };
 
   const previewMutation = useMutation({
@@ -70,7 +114,7 @@ export function HandoverActionPanel({
       onTaskRefresh();
     },
     onError: (error: Error) => {
-      handleActionError(error, setBanner, t, onTaskRefresh, setConfirmOpen);
+      handleActionFailure(error);
     },
   });
 
@@ -87,7 +131,7 @@ export function HandoverActionPanel({
       onTaskRefresh();
     },
     onError: (error: Error) => {
-      handleActionError(error, setBanner, t, onTaskRefresh, setConfirmOpen);
+      handleActionFailure(error);
     },
   });
 
@@ -131,6 +175,15 @@ export function HandoverActionPanel({
     },
     onError: (error: Error) => setBanner(error.message),
   });
+
+  // action 级互斥锁：grant_receiver PATCH 与执行/预演/分配不得竞态（§4 confirm_version）
+  const grantBusy = grantReceiverMutation.isPending;
+  const actionMutationLock =
+    grantBusy ||
+    allocatorBusy ||
+    previewMutation.isPending ||
+    executeMutation.isPending ||
+    blockedConfirmVersion !== null;
 
   const asyncAbandonMutation = useMutation({
     mutationFn: () =>
@@ -220,7 +273,13 @@ export function HandoverActionPanel({
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-body text-ink-soft">{t("handover.portal.detail.notPreviewed")}</span>
           {action.allowed_actions.includes("preview") ? (
-            <Button type="button" size="sm" loading={previewMutation.isPending} onClick={() => previewMutation.mutate()}>
+            <Button
+              type="button"
+              size="sm"
+              loading={previewMutation.isPending}
+              disabled={actionMutationLock && !previewMutation.isPending}
+              onClick={() => previewMutation.mutate()}
+            >
               {t("handover.portal.detail.preview")}
             </Button>
           ) : null}
@@ -237,7 +296,7 @@ export function HandoverActionPanel({
                   surface={surface}
                   taskId={task.id}
                   value={action.grant_receiver}
-                  disabled={readOnly || grantReceiverMutation.isPending}
+                  disabled={readOnly || actionMutationLock}
                   onChange={(user) => grantReceiverMutation.mutate(user?.user_id ?? null)}
                 />
               </div>
@@ -245,10 +304,11 @@ export function HandoverActionPanel({
             </div>
           ) : null}
           <AssetAllocator
+            key={allocatorResetKey}
             surface={surface}
             taskId={task.id}
             action={action}
-            readOnly={readOnly}
+            readOnly={readOnly || grantBusy}
             onBusyChange={setAllocatorBusy}
             onSnapshotStale={handleSnapshotStale}
             onActionUpdated={(patch) => {
@@ -262,7 +322,13 @@ export function HandoverActionPanel({
           />
           <div className="flex flex-wrap items-center gap-2">
             {action.allowed_actions.includes("preview") ? (
-              <Button type="button" size="sm" loading={previewMutation.isPending} onClick={() => previewMutation.mutate()}>
+              <Button
+                type="button"
+                size="sm"
+                loading={previewMutation.isPending}
+                disabled={actionMutationLock && !previewMutation.isPending}
+                onClick={() => previewMutation.mutate()}
+              >
                 {t("handover.portal.detail.repreview")}
               </Button>
             ) : null}
@@ -278,7 +344,7 @@ export function HandoverActionPanel({
                   type="button"
                   size="sm"
                   variant="primary"
-                  disabled={allocatorBusy}
+                  disabled={actionMutationLock}
                   onClick={() => {
                     previewMutation.mutate(undefined, {
                       onSuccess: () => setConfirmOpen(true),
@@ -294,7 +360,8 @@ export function HandoverActionPanel({
                 type="button"
                 size="sm"
                 variant="primary"
-                disabled={allocatorBusy || executeMutation.isPending}
+                disabled={actionMutationLock}
+                data-testid="execute-handover"
                 onClick={() => setConfirmOpen(true)}
               >
                 {t("handover.portal.detail.execute")}
@@ -312,27 +379,29 @@ export function HandoverActionPanel({
         </div>
       ) : null}
 
-      {status === "done" && action.summary ? (
-        <ul className="grid gap-1 text-body text-ink-soft">
-          {Object.entries(action.summary).map(([type, summary]) => (
-            <li key={type}>
-              <strong className="text-ink">{type}</strong>:{" "}
-              {t("handover.portal.detail.summaryTransferred", { count: summary.transferred })}
-              {" · "}
-              {t("handover.portal.detail.summaryReleased", { count: summary.released })}
-              {" · "}
-              {t("handover.portal.detail.summarySkipped", { count: summary.skipped })}
-              {(summary.merged > 0 || summary.failed > 0) && (
-                <>
-                  {" · "}
-                  {t("handover.portal.detail.summaryMerged", { count: summary.merged })}
-                  {" · "}
-                  {t("handover.portal.detail.summaryFailed", { count: summary.failed })}
-                </>
-              )}
-            </li>
-          ))}
-        </ul>
+      {status === "done" ? (
+        !action.summary || Object.keys(action.summary).length === 0 ? (
+          <p className="text-body text-ink-soft" data-testid="done-summary-empty">
+            {t("handover.portal.detail.summaryEmpty")}
+          </p>
+        ) : (
+          <ul className="grid gap-1 text-body text-ink-soft" data-testid="done-summary">
+            {Object.entries(action.summary).map(([type, summary]) => (
+              <li key={type} data-testid={`done-summary-${type}`}>
+                <strong className="text-ink">{type}</strong>:{" "}
+                {t("handover.portal.detail.summaryTransferred", { count: summary.transferred })}
+                {" · "}
+                {t("handover.portal.detail.summaryReleased", { count: summary.released })}
+                {" · "}
+                {t("handover.portal.detail.summarySkipped", { count: summary.skipped })}
+                {" · "}
+                {t("handover.portal.detail.summaryMerged", { count: summary.merged })}
+                {" · "}
+                {t("handover.portal.detail.summaryFailed", { count: summary.failed })}
+              </li>
+            ))}
+          </ul>
+        )
       ) : null}
 
       {status === "failed" ? (
@@ -391,6 +460,8 @@ export function HandoverActionPanel({
                 type="button"
                 variant="primary"
                 loading={executeMutation.isPending}
+                disabled={actionMutationLock && !executeMutation.isPending}
+                data-testid="execute-confirm"
                 onClick={() => executeMutation.mutate()}
               >
                 {t("handover.portal.detail.executeConfirm")}
@@ -520,23 +591,11 @@ function handleActionError(
   setConfirmOpen: (open: boolean) => void,
 ) {
   const reason = apiErrorReason(error);
-  if (reason === "snapshot_stale") {
-    setBanner(t("handover.portal.detail.snapshotStale"));
-    setConfirmOpen(false);
-    onTaskRefresh();
-    return;
-  }
+  // snapshot_stale / confirm_version_stale 由 handleActionFailure 专管（清本地态 / 阻塞确认）
   if (reason === "downstream_locked") {
     setBanner(t("handover.portal.detail.downstreamLocked"));
     setConfirmOpen(false);
     onTaskRefresh();
-    return;
-  }
-  // 409 confirm_version_stale：刷新详情并用新 confirm_version 重新确认（01 §6.1）
-  if (reason === "confirm_version_stale") {
-    setBanner(t("handover.portal.detail.confirmVersionStale"));
-    onTaskRefresh();
-    setConfirmOpen(true);
     return;
   }
   // 413 payload_too_large：action 保持 previewed 并返回 batch_progress，刷新后出现 [执行下一批]
