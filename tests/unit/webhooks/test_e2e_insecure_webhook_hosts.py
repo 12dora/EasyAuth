@@ -26,6 +26,7 @@ def test_e2e_allowlist_inert_when_env_unset(monkeypatch: pytest.MonkeyPatch) -> 
 
 def test_e2e_allowlist_inert_when_debug_false(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("EASYAUTH_E2E_ALLOW_INSECURE_WEBHOOK_HOSTS", "127.0.0.1")
+    monkeypatch.setenv("DJANGO_SETTINGS_MODULE", "easyauth.config.settings.e2e")
     with override_settings(DEBUG=False):
         assert e2e_allowed_insecure_webhook_hosts() == frozenset()
         with pytest.raises((BlockedHostError, InvalidWebhookUrlError)):
@@ -36,6 +37,7 @@ def test_e2e_allowlist_permits_loopback_http_when_debug(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("EASYAUTH_E2E_ALLOW_INSECURE_WEBHOOK_HOSTS", "127.0.0.1")
+    monkeypatch.setenv("DJANGO_SETTINGS_MODULE", "easyauth.config.settings.e2e")
     with override_settings(DEBUG=True):
         assert e2e_allowed_insecure_webhook_hosts() == frozenset({"127.0.0.1"})
         parsed = parse_https_url(
@@ -52,6 +54,23 @@ def test_e2e_allowlist_permits_loopback_http_when_debug(
         )
         assert validated.addresses == ("127.0.0.1",)
         assert validated.allow_insecure_http is True
+
+
+def test_e2e_allowlist_rejects_private_and_link_local_literal_ips(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DJANGO_SETTINGS_MODULE", "easyauth.config.settings.e2e")
+    monkeypatch.setenv(
+        "EASYAUTH_E2E_ALLOW_INSECURE_WEBHOOK_HOSTS",
+        "10.0.0.8,169.254.169.254",
+    )
+    with override_settings(DEBUG=True):
+        for host in ("10.0.0.8", "169.254.169.254"):
+            with pytest.raises(BlockedHostError):
+                _ = validate_public_https_url(
+                    f"http://{host}:8080/hook",
+                    allowed_hosts=(host,),
+                )
 
 
 def test_e2e_allowlist_does_not_open_other_hosts(

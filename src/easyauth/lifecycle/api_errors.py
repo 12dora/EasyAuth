@@ -231,7 +231,10 @@ def map_handover_exception(
         if status == HTTPStatus.LOCKED:  # 423
             return reason_error("downstream_locked", details=details)
         if status == HTTPStatus.TOO_MANY_REQUESTS:  # 429
-            return reason_error("rate_limited", details=details)
+            response = reason_error("rate_limited", details=details)
+            if error.retry_after_seconds is not None:
+                response["Retry-After"] = str(error.retry_after_seconds)
+            return response
         return None
 
     text = str(error).strip()

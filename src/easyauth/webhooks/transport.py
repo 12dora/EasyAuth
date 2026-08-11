@@ -35,6 +35,7 @@ class WebhookHttpResponse:
     status_code: int
     body: bytes
     location: str
+    retry_after: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,6 +176,7 @@ def _request_webhook(
             status_code=response.status,
             body=response_body,
             location=response.getheader("Location", ""),
+            retry_after=response.getheader("Retry-After", ""),
         )
     except TimeoutError as error:
         raise WebhookDeadlineExceededError from error

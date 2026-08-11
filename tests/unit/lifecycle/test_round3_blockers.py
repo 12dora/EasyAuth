@@ -808,6 +808,13 @@ def test_map_hook_call_error_snapshot_stale() -> None:
     assert mapped423.status_code == 423
     assert "downstream_locked" in mapped423.content.decode()
 
+    mapped429 = map_handover_exception(
+        HookCallError("rate limited", status_code=429, retry_after_seconds=120),
+    )
+    assert mapped429 is not None
+    assert mapped429.status_code == 429
+    assert mapped429["Retry-After"] == "120"
+
 
 def test_map_hook_call_error_413_preserves_batch_progress_details() -> None:
     from easyauth.lifecycle.api_errors import map_handover_exception

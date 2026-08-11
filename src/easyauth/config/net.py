@@ -37,6 +37,7 @@ DNS_RESOLVER_OUTPUT_MAX_BYTES: Final = 64 * 1024
 # 仅全栈 E2E(DEBUG=1)可放行的环回 webhook 主机列表; 默认空=不放行任何主机。
 # 生产/非 DEBUG 下读取该变量也必须仍是空集, 见 e2e_allowed_insecure_webhook_hosts。
 E2E_ALLOW_INSECURE_WEBHOOK_HOSTS_ENV: Final = "EASYAUTH_E2E_ALLOW_INSECURE_WEBHOOK_HOSTS"
+E2E_RUNTIME_SETTINGS_MODULE: Final = "easyauth.config.settings.e2e"
 DNS_RESOLVER_SCRIPT: Final = r"""
 import json
 import socket
@@ -134,7 +135,10 @@ def e2e_allowed_insecure_webhook_hosts() -> frozenset[str]:
     try:
         from django.conf import settings as django_settings
 
-        if not bool(getattr(django_settings, "DEBUG", False)):
+        if (
+            not bool(getattr(django_settings, "DEBUG", False))
+            or os.environ.get("DJANGO_SETTINGS_MODULE") != E2E_RUNTIME_SETTINGS_MODULE
+        ):
             return frozenset()
     except Exception:
         # Django 尚未配置时不允许任何 E2E 放宽(单元测试未 setup 时走严格路径)。
@@ -430,7 +434,7 @@ def _e2e_resolve_addresses(hostname: str, *, port: int) -> tuple[str, ...]:
     except ValueError:
         literal_ip = None
     if literal_ip is not None:
-        if not (literal_ip.is_loopback or literal_ip.is_private):
+        if not literal_ip.is_loopback:
             raise BlockedHostError
         return (str(literal_ip),)
     # 仅解析到环回; 禁止 E2E 放行主机名再解析到公网或其它内网。

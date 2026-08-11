@@ -32,6 +32,7 @@ if TYPE_CHECKING:
 HOOK_CONNECT_TIMEOUT_SECONDS: Final = 5.0
 HOOK_TOTAL_TIMEOUT_SECONDS: Final = 30.0
 HOOK_MAX_RESPONSE_BYTES: Final = 256 * 1024
+HOOK_RETRY_AFTER_MAX_SECONDS: Final = 6 * 60 * 60
 HOOK_REQUEST_POLICY: Final = WebhookRequestPolicy(
     connect_timeout_seconds=HOOK_CONNECT_TIMEOUT_SECONDS,
     total_timeout_seconds=HOOK_TOTAL_TIMEOUT_SECONDS,
@@ -48,12 +49,14 @@ class HookCallError(RuntimeError):
         payload: dict[str, JsonValue] | None = None,
         raw_body: str = "",
         location: str = "",
+        retry_after_seconds: int | None = None,
     ) -> None:
         super().__init__(message)
         self.status_code: int | None = status_code
         self.payload = payload
         self.raw_body = raw_body
         self.location = location
+        self.retry_after_seconds = retry_after_seconds
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +86,7 @@ def signed_hook_post(
     body = dumps(signed_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
     timestamp = str(int(timezone.now().timestamp()))
     headers = {
-        "Content-Type": "application/json",
+        "Content-Type": "application/json; charset=utf-8",
         "Accept": "application/json",
         EVENT_HEADER: event_type,
         DELIVERY_HEADER: delivery_id,
@@ -146,12 +149,13 @@ def signed_hook_get(
 def _parse_hook_response(response: WebhookHttpResponse) -> HookResponse:
     raw = response.body
     if not raw:
-        if HTTPStatus.MULTIPLE_CHOICES <= response.status_code < HTTPStatus.BAD_REQUEST:
+        if not HTTPStatus.OK <= response.status_code < HTTPStatus.MULTIPLE_CHOICES:
             message = f"应用交接接口返回 HTTP {response.status_code}。"
             raise HookCallError(
                 message,
                 status_code=response.status_code,
                 location=response.location,
+                retry_after_seconds=_parse_retry_after(response.retry_after),
             )
         return HookResponse(
             status_code=response.status_code,
@@ -163,25 +167,27 @@ def _parse_hook_response(response: WebhookHttpResponse) -> HookResponse:
         parsed = cast("object", loads(decoded))
     except (JSONDecodeError, UnicodeDecodeError) as error:
         if not HTTPStatus.OK <= response.status_code < HTTPStatus.MULTIPLE_CHOICES:
-            return HookResponse(
+            raise HookCallError(
+                f"应用交接接口返回 HTTP {response.status_code}。",
                 status_code=response.status_code,
-                location=response.location,
-                payload={},
                 raw_body=decoded,
-            )
+                location=response.location,
+                retry_after_seconds=_parse_retry_after(response.retry_after),
+            ) from error
         message = "应用交接接口响应不是有效 JSON。"
         raise HookCallError(message, raw_body=decoded) from error
     if not isinstance(parsed, dict):
         if not HTTPStatus.OK <= response.status_code < HTTPStatus.MULTIPLE_CHOICES:
-            return HookResponse(
+            raise HookCallError(
+                f"应用交接接口返回 HTTP {response.status_code}。",
                 status_code=response.status_code,
-                location=response.location,
-                payload={},
                 raw_body=decoded,
+                location=response.location,
+                retry_after_seconds=_parse_retry_after(response.retry_after),
             )
         message = "应用交接接口响应必须是 JSON 对象。"
         raise HookCallError(message, raw_body=decoded)
-    if HTTPStatus.MULTIPLE_CHOICES <= response.status_code < HTTPStatus.BAD_REQUEST:
+    if not HTTPStatus.OK <= response.status_code < HTTPStatus.MULTIPLE_CHOICES:
         message = f"应用交接接口返回 HTTP {response.status_code}。"
         raise HookCallError(
             message,
@@ -189,6 +195,7 @@ def _parse_hook_response(response: WebhookHttpResponse) -> HookResponse:
             payload=cast("dict[str, JsonValue]", parsed),
             raw_body=decoded,
             location=response.location,
+            retry_after_seconds=_parse_retry_after(response.retry_after),
         )
     return HookResponse(
         status_code=response.status_code,
@@ -196,3 +203,12 @@ def _parse_hook_response(response: WebhookHttpResponse) -> HookResponse:
         payload=cast("dict[str, JsonValue]", parsed),
         raw_body=decoded,
     )
+
+
+def _parse_retry_after(value: str) -> int | None:
+    if not value or not value.isascii() or not value.isdecimal():
+        return None
+    seconds = int(value)
+    if seconds < 1:
+        return None
+    return min(seconds, HOOK_RETRY_AFTER_MAX_SECONDS)

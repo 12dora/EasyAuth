@@ -9,6 +9,7 @@ const downstreamSecret = process.env.EASYAUTH_E2E_DOWNSTREAM_SECRET ?? "whsec_e2
 const downstreamHealth = `http://127.0.0.1:${downstreamPort}/health`;
 
 const djangoEnv = [
+  'DJANGO_SETTINGS_MODULE="easyauth.config.settings.e2e"',
   "DJANGO_DEBUG=1",
   'DATABASE_URL=""',
   `EASYAUTH_SQLITE_PATH="${sqlitePath}"`,

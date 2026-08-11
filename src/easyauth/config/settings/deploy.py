@@ -6,6 +6,11 @@
 /auth/login/ 的 canonical 比对会 302 死循环。这里显式补上。
 """
 
+import os
+
+if os.environ.get("EASYAUTH_E2E_ALLOW_INSECURE_WEBHOOK_HOSTS", "").strip():
+    raise RuntimeError("部署设置禁止启用 E2E 明文 webhook 窄门。")
+
 from .base import *  # noqa: F403
 
 # frpc 已注入 x-forwarded-proto=https; 让 Django 据此识别 https 请求。

@@ -98,6 +98,7 @@ def test_signed_hook_post_injects_event_type_into_signed_body(
     assert parsed["task_id"] == "137:4"
     headers = captured["headers"]
     assert isinstance(headers, dict)
+    assert headers["Content-Type"] == "application/json; charset=utf-8"
     timestamp = headers[TIMESTAMP_HEADER]
     expected = hmac.new(
         b"whsec_hooks_test",
@@ -145,21 +146,47 @@ def test_signed_hook_post_preserves_non_2xx_error_body(
 
     monkeypatch.setattr(hooks_module, "post_webhook", fake_post_webhook)
 
-    response = signed_hook_post(
-        app=configured_app,
-        url="https://hooks.example.com/handover",
-        event_type="lifecycle.handover.execute",
-        delivery_id="hook-error-body",
-        payload={},
-    )
+    with pytest.raises(HookCallError) as exc_info:
+        _ = signed_hook_post(
+            app=configured_app,
+            url="https://hooks.example.com/handover",
+            event_type="lifecycle.handover.execute",
+            delivery_id="hook-error-body",
+            payload={},
+        )
 
-    assert response.status_code == HTTPStatus.BAD_REQUEST
-    assert response.payload["error"] == {
+    assert exc_info.value.status_code == HTTPStatus.BAD_REQUEST
+    assert exc_info.value.payload is not None
+    assert exc_info.value.payload["error"] == {
         "code": "timestamp_out_of_range",
         "message": "expired",
         "traceId": "t1",
     }
-    assert "timestamp_out_of_range" in response.raw_body
+    assert "timestamp_out_of_range" in exc_info.value.raw_body
+
+
+def test_signed_hook_post_captures_retry_after(
+    configured_app: App,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_post_webhook(**_kwargs: object) -> WebhookHttpResponse:
+        return WebhookHttpResponse(
+            status_code=HTTPStatus.TOO_MANY_REQUESTS,
+            body=b'{"detail":{"code":"RATE_LIMITED"}}',
+            location="",
+            retry_after="120",
+        )
+
+    monkeypatch.setattr(hooks_module, "post_webhook", fake_post_webhook)
+    with pytest.raises(HookCallError) as exc_info:
+        _ = signed_hook_post(
+            app=configured_app,
+            url="https://hooks.example.com/handover",
+            event_type="lifecycle.handover.preview",
+            delivery_id="hook-rate-limit",
+            payload={},
+        )
+    assert exc_info.value.retry_after_seconds == 120
 
 
 def test_signed_hook_get_revalidates_location_and_preserves_202(
