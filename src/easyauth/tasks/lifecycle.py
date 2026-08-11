@@ -7,7 +7,7 @@ import uuid
 from typing import Final
 
 from celery import shared_task
-from django.db import transaction
+from django.db import connection, transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -141,9 +141,22 @@ def lifecycle_escalation_task() -> dict[str, int]:
 
 
 LIFECYCLE_SEND_REMINDER_TASK: Final = "easyauth.lifecycle.send_reminder"
+LIFECYCLE_REMINDER_BATCH_SIZE: Final = 200
 
 
-@shared_task(name=LIFECYCLE_SEND_REMINDER_TASK)
+class LifecycleNotifyIdentityMissingError(RuntimeError):
+    """生命周期通知身份尚未就绪，必须由 Celery 持续退避重试。"""
+
+
+@shared_task(
+    name=LIFECYCLE_SEND_REMINDER_TASK,
+    autoretry_for=(LifecycleNotifyIdentityMissingError,),
+    retry_backoff=True,
+    retry_backoff_max=3600,
+    retry_jitter=True,
+    max_retries=None,
+    acks_late=True,
+)
 def lifecycle_send_reminder_task(
     task_id: int,
     kind: str,
@@ -184,7 +197,7 @@ def lifecycle_send_reminder_task(
         "easyauth-lifecycle notify identity not provisioned; "
         f"reminder deferred task_id={task_id} kind={kind}"
     )
-    raise RuntimeError(message)
+    raise LifecycleNotifyIdentityMissingError(message)
 
 
 @shared_task(name=LIFECYCLE_DAILY_REMINDER_TASK)
@@ -198,32 +211,35 @@ def lifecycle_daily_reminder_task() -> dict[str, int]:
     business_date = timezone.localdate()
     claimed = 0
     enqueued = 0
-    qs = HandoverTask.objects.filter(
-        status__in=TASK_OPEN_STATUSES,
-        assignee__isnull=False,
-    ).filter(Q(last_reminded_on__isnull=True) | Q(last_reminded_on__lt=business_date))
-    for task_id in list(qs.values_list("id", flat=True)[:200]):
+    while True:
         with transaction.atomic():
-            updated = HandoverTask.objects.filter(
-                pk=task_id,
-            ).filter(
-                Q(last_reminded_on__isnull=True) | Q(last_reminded_on__lt=business_date),
-            ).update(last_reminded_on=business_date)
-            if updated != 1:
-                continue
-            claimed += 1
-            task = HandoverTask.objects.select_related("assignee", "subject_user").get(
-                pk=task_id,
+            eligible = (
+                HandoverTask.objects.select_related("assignee", "subject_user")
+                .filter(status__in=TASK_OPEN_STATUSES, assignee__isnull=False)
+                .filter(Q(last_reminded_on__isnull=True) | Q(last_reminded_on__lt=business_date))
+                .order_by("id")
             )
-            kinds: list[str] = ["daily"]
-            if task.escalation_deadline is not None:
-                deadline_local = timezone.localtime(task.escalation_deadline).date()
-                if deadline_local <= business_date + timedelta(days=1):
-                    # §7: deadline_soon 是 daily 之外的额外消息
-                    kinds.append("deadline_soon")
-            for kind in kinds:
-                dedup = f"handover:{task.id}:{business_date.isoformat()}:{kind}"
-                try:
+            if connection.features.has_select_for_update_skip_locked:
+                eligible = eligible.select_for_update(skip_locked=True)
+            else:
+                eligible = eligible.select_for_update()
+            tasks = list(eligible[:LIFECYCLE_REMINDER_BATCH_SIZE])
+            if not tasks:
+                break
+            for task in tasks:
+                updated = HandoverTask.objects.filter(pk=task.id).filter(
+                    Q(last_reminded_on__isnull=True) | Q(last_reminded_on__lt=business_date),
+                ).update(last_reminded_on=business_date)
+                if updated != 1:
+                    continue
+                claimed += 1
+                kinds: list[str] = ["daily"]
+                if task.escalation_deadline is not None:
+                    deadline_local = timezone.localtime(task.escalation_deadline).date()
+                    if deadline_local <= business_date + timedelta(days=1):
+                        kinds.append("deadline_soon")
+                for kind in kinds:
+                    dedup = f"handover:{task.id}:{business_date.isoformat()}:{kind}"
                     enqueue_task(
                         event_key=dedup,
                         task_name=LIFECYCLE_SEND_REMINDER_TASK,
@@ -231,18 +247,10 @@ def lifecycle_daily_reminder_task() -> dict[str, int]:
                         kwargs={
                             "task_id": task.id,
                             "kind": kind,
-                            "assignee_user_id": (
-                                task.assignee.authentik_user_id if task.assignee else ""
-                            ),
+                            "assignee_user_id": task.assignee.authentik_user_id,
                         },
                     )
                     enqueued += 1
-                except Exception:
-                    logger.exception(
-                        "enqueue reminder failed task_id=%s kind=%s",
-                        task_id,
-                        kind,
-                    )
     return {"claimed": claimed, "enqueued": enqueued, "as_of": str(now)}
 
 

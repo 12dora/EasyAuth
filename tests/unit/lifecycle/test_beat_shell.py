@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
+from celery.exceptions import Retry
 from django.utils import timezone
 
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
@@ -101,6 +102,42 @@ def test_daily_reminder_claims_once_and_enqueues_dedup_key() -> None:
     assert OutboxEvent.objects.filter(event_key=daily_key).count() == 1
 
 
+def test_daily_reminder_drains_more_than_one_batch() -> None:
+    assignee = UserMirror.objects.create(
+        authentik_user_id="beat-batch-asg",
+        name="a",
+        status=USER_STATUS_ACTIVE,
+    )
+    subjects = UserMirror.objects.bulk_create(
+        [
+            UserMirror(
+                authentik_user_id=f"beat-batch-sub-{index}",
+                name=f"s{index}",
+                status=USER_STATUS_ACTIVE,
+            )
+            for index in range(201)
+        ],
+    )
+    HandoverTask.objects.bulk_create(
+        [
+            HandoverTask(
+                kind=HANDOVER_KIND_OFFBOARD,
+                subject_user=subject,
+                assignee=assignee,
+                assignee_state=ASSIGNEE_STATE_MANAGER,
+                status=TASK_STATUS_PENDING,
+            )
+            for subject in subjects
+        ],
+    )
+
+    result = lifecycle_daily_reminder_task()
+
+    assert result["claimed"] == 201
+    assert result["enqueued"] == 201
+    assert HandoverTask.objects.filter(last_reminded_on=timezone.localdate()).count() == 201
+
+
 def test_send_reminder_task_raises_when_notify_identity_missing() -> None:
     """缺 easyauth-lifecycle 身份时必须失败, 使 outbox 保持未发布并重试。"""
     subject = UserMirror.objects.create(
@@ -119,6 +156,27 @@ def test_send_reminder_task_raises_when_notify_identity_missing() -> None:
             kind="daily",
             assignee_user_id="x",
         )
+
+
+def test_send_reminder_missing_identity_enters_durable_celery_retry() -> None:
+    subject = UserMirror.objects.create(
+        authentik_user_id="beat-retry-sub",
+        name="s",
+        status=USER_STATUS_ACTIVE,
+    )
+    task = HandoverTask.objects.create(
+        kind=HANDOVER_KIND_OFFBOARD,
+        subject_user=subject,
+        status=TASK_STATUS_PENDING,
+    )
+
+    with pytest.raises(Retry):
+        _ = lifecycle_send_reminder_task.apply(
+            kwargs={"task_id": task.id, "kind": "daily", "assignee_user_id": "x"},
+            throw=True,
+        )
+    assert lifecycle_send_reminder_task.max_retries is None
+    assert lifecycle_send_reminder_task.acks_late is True
 
 
 def test_recover_leases_empty() -> None:
