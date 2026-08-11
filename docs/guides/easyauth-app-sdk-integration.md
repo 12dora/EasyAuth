@@ -57,7 +57,7 @@ SDK 位于仓库 `sdk/python`(包名 `easyauth-app-sdk`,零运行时依赖,FastA
 
 ## 用户目录与钉钉通知
 
-SDK `0.3.0` 提供用户目录、钉钉工作通知与结构化错误语义。
+用户目录、钉钉工作通知与结构化错误语义自 SDK `0.3.0` 起提供。
 
 ### 能力开关前置条件
 
@@ -204,7 +204,7 @@ reports = directory_client.search_directory_users(
 - **事件性通知不必轮询**;失败靠 EasyAuth 控制台通知大盘与审计兜底。
 - 确需核对时用 `get_notification(message_id)` 查逐收件人明细,但不要对每条消息做 tight loop。
 
-### SDK `0.3.0` 错误处理
+### 错误处理
 
 `EasyAuthClientError` 暴露 `status_code`、`error_code`、`details`、`retry_after`、
 `retry_after_seconds`、`retryable` 和 `transport_error`。SDK **不自动重试**；业务层可按下表决定：
@@ -230,6 +230,47 @@ reports = directory_client.search_directory_users(
 | `list_directory_departments` | 部门列表(`parent_id` 省略=全量扁平列表,树由消费方自建) |
 | `send_notification` | 发送钉钉工作通知(异步受理;可选 `deeplink_title` 按钮文案,缺省「查看详情」) |
 | `get_notification` | 查询投递状态 |
+
+## 生命周期交接回调
+
+当前 SDK 版本是 `0.4.0`（2026-08-10），把生命周期交接升级为**三事件内核**，
+下游要接离职/转岗交接就必须实现这三个回调：
+
+| 事件 | 回调 | 语义 |
+|---|---|---|
+| `lifecycle.handover.preview` | `on_handover_preview` | 预演统计，**不落库** |
+| `lifecycle.handover.items` | `on_handover_items` | 明细分页，**不落库** |
+| `lifecycle.handover.execute` | `on_handover_execute` | 真正执行交接 |
+
+```python
+from easyauth_app_sdk.fastapi import easyauth_lifecycle_router
+
+app.include_router(
+    easyauth_lifecycle_router(
+        secret_provider,
+        on_handover_preview=...,
+        on_handover_execute=...,
+        on_handover_items=...,   # 0.4.0 起必填, 无默认值
+    )
+)
+```
+
+从 `0.3.x` 升级时要注意的破坏性变更：
+
+- `on_handover_items` 在 `easyauth_lifecycle_router` / `lifecycle_http_response` 上**必填**——
+  接线期失败优于运行时 422。
+- 所有 body 必须含 `event_type` 且与 `X-EasyAuth-Event` 一致；不一致返回 `422`，
+  该校验在 `webhook.test` 短路**之前**执行。默认 body 上限由 64 KiB 提升至 **256 KiB**。
+- 验签失败分成两类：时间戳超窗返回 `400`（`TIMESTAMP_SKEW` / `INVALID_TIMESTAMP`），
+  签名或鉴权头失败返回 `signature_failure_status`（默认 `403`，可传 `401`）。
+- 业务回调用 `HandoverBusinessError` 表达 400/409/412/413/422/423/429，可带 `retry_after`；
+  白名单外的状态码会降级为 500 并写 SDK warning。
+- 回调异常边界改为固定文案「交接回调执行失败，请查看应用日志」，不再拼接原始异常字符串。
+- manifest `lifecycle.handover_asset_types[]` 的 `detail_supported` / `releasable`
+  改为**必填布尔**，缺省或非 bool 会被拒绝。
+
+字段级契约以 [`design/data-handover-v2/00-overview-and-contract.md`](../design/data-handover-v2/00-overview-and-contract.md)
+为准；SDK 包内自带契约样本 `easyauth_app_sdk/contract_samples/handover_v2/*.json`。
 
 ## 参考实现
 
