@@ -15,6 +15,7 @@ from easyauth.lifecycle.models import (
     HANDOVER_KIND_OFFBOARD,
     HANDOVER_KIND_REASSIGN,
     HandoverAppAction,
+    HandoverAssetOverride,
     HandoverAssetType,
     HandoverTask,
 )
@@ -49,8 +50,6 @@ def test_grant_receiver_offboard_trigger_rejects_reassign() -> None:
 
 
 def test_override_releasable_trigger_rejects_release_when_not_releasable() -> None:
-    from easyauth.lifecycle.models import HandoverAssetOverride
-
     subject = UserMirror.objects.create(authentik_user_id="trg-rel-sub")
     app = App.objects.create(app_key="trg-rel-app", name="trg-rel")
     task = HandoverTask.objects.create(
@@ -78,3 +77,35 @@ def test_override_releasable_trigger_rejects_release_when_not_releasable() -> No
             asset_id="c1",
             action=ASSET_ACTION_RELEASE,
         )
+
+
+def test_override_releasable_trigger_rejects_parent_becoming_not_releasable() -> None:
+    subject = UserMirror.objects.create(authentik_user_id="trg-parent-rel-sub")
+    app = App.objects.create(app_key="trg-parent-rel-app", name="trg-parent-rel")
+    task = HandoverTask.objects.create(
+        kind=HANDOVER_KIND_OFFBOARD,
+        subject_user=subject,
+        created_by="admin",
+    )
+    action = HandoverAppAction.objects.create(
+        task=task,
+        app=app,
+        status=ACTION_STATUS_PENDING,
+    )
+    asset = HandoverAssetType.objects.create(
+        action=action,
+        generation=1,
+        type_key="customer",
+        label_snapshot="客户",
+        count=1,
+        releasable=True,
+        default_action=ASSET_ACTION_SKIP,
+    )
+    _ = HandoverAssetOverride.objects.create(
+        asset_type=asset,
+        asset_id="c1",
+        action=ASSET_ACTION_RELEASE,
+    )
+
+    with pytest.raises((InternalError, ProgrammingError)), transaction.atomic():
+        _ = HandoverAssetType.objects.filter(pk=asset.pk).update(releasable=False)
