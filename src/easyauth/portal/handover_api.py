@@ -5,8 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 from http import HTTPStatus
-from typing import TYPE_CHECKING, ClassVar, Final
+from typing import ClassVar, Final, Literal
 
+from django.db import transaction
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -24,6 +25,7 @@ from easyauth.lifecycle.api_payloads import (
     task_detail,
     task_list_item,
 )
+from easyauth.lifecycle.assignee import AssigneeResolution
 from easyauth.lifecycle.assignments import (
     OverrideEntry,
     list_overrides,
@@ -40,25 +42,23 @@ from easyauth.lifecycle.handover import (
 )
 from easyauth.lifecycle.jurisdiction import (
     assert_manager_of,
-    list_receiver_candidates,
     list_reassign_subject_candidates,
+    list_receiver_candidates,
 )
 from easyauth.lifecycle.models import (
     ACTION_STATUS_BLOCKED,
+    ASSIGNEE_STATE_MANAGER,
     ASSIGNEE_STATE_SUPERUSER_POOL,
     AUTHORITY_SOURCE_MANAGER_CHAIN,
     AUTHORITY_SOURCE_SUPERUSER,
     HANDOVER_KIND_PRE_OFFBOARD,
     HANDOVER_KIND_REASSIGN,
+    TASK_OPEN_STATUSES,
     HandoverAppAction,
     HandoverTask,
-    TASK_OPEN_STATUSES,
 )
 from easyauth.lifecycle.offboarding import ensure_handover_task
 from easyauth.webhooks.hooks import HookCallError
-
-if TYPE_CHECKING:
-    pass
 
 type PortalApiResult = UserMirror | JsonResponse
 
@@ -66,6 +66,8 @@ IDEMPOTENCY_KEY_MAX: Final = 128
 REASON_MIN_LEN: Final = 10
 ITEMS_DEFAULT_PAGE_SIZE: Final = 50
 ITEMS_MAX_PAGE_SIZE: Final = 200
+ITEMS_MAX_PAGE: Final = 100_000
+PORTAL_ASSIGNEE_REQUIRED: Final = "portal_assignee_required"
 
 
 class PreOffboardPayload(BaseModel):
@@ -109,7 +111,7 @@ class OverrideItemPayload(BaseModel):
     )
 
     asset_id: str = Field(min_length=1, max_length=128)
-    action: str = Field(min_length=1, max_length=8)
+    action: Literal["transfer", "release", "skip"]
     to_user_id: str | None = Field(default=None, max_length=128)
     label: str = Field(default="", max_length=120)
 
@@ -128,7 +130,7 @@ class GrantReceiverPayload(BaseModel):
         str_strip_whitespace=True,
     )
 
-    grant_receiver_user_id: str | None = Field(default=None, max_length=128)
+    grant_receiver_user_id: str | None = Field(max_length=128)
 
 
 class ExecutePayload(BaseModel):
@@ -191,7 +193,7 @@ def portal_handover_pre_offboard(request: HttpRequest) -> JsonResponse:
         {"kind": HANDOVER_KIND_PRE_OFFBOARD, "reason": payload.reason},
     )
     try:
-        task, created = ensure_handover_task(
+        task, _created = ensure_handover_task(
             subject=user,
             kind=HANDOVER_KIND_PRE_OFFBOARD,
             created_by=user.authentik_user_id,
@@ -213,7 +215,7 @@ def portal_handover_pre_offboard(request: HttpRequest) -> JsonResponse:
         return mapped or reason_error("open_task_exists", text)
     return json_response(
         {"handover_task": task_detail(task, surface=SURFACE_PORTAL)},
-        status=HTTPStatus.CREATED if created else HTTPStatus.OK,
+        status=HTTPStatus.CREATED,
     )
 
 
@@ -262,7 +264,7 @@ def portal_handover_reassign(request: HttpRequest) -> JsonResponse:
         },
     )
     try:
-        task, created = ensure_handover_task(
+        task, _created = ensure_handover_task(
             subject=subject,
             kind=HANDOVER_KIND_REASSIGN,
             created_by=user.authentik_user_id,
@@ -271,6 +273,12 @@ def portal_handover_reassign(request: HttpRequest) -> JsonResponse:
             authority_source=AUTHORITY_SOURCE_MANAGER_CHAIN,
             creation_idempotency_key=idem,
             creation_payload_sha256=body_hash,
+            assignee_resolution=AssigneeResolution(
+                user=user,
+                state=ASSIGNEE_STATE_MANAGER,
+                level=0,
+                degraded=False,
+            ),
         )
     except (HandoverConflictError, HandoverError) as error:
         mapped = map_handover_exception(error)
@@ -279,27 +287,9 @@ def portal_handover_reassign(request: HttpRequest) -> JsonResponse:
             str(error),
             status=HTTPStatus.BAD_REQUEST,
         )
-    # reassign 建单后 assignee 应为发起人
-    if created and task.assignee_id != user.pk:
-        from easyauth.lifecycle.assignee import AssigneeResolution, apply_assignee
-        from easyauth.lifecycle.models import ASSIGNEE_STATE_MANAGER
-
-        _ = apply_assignee(
-            task,
-            AssigneeResolution(
-                user=user,
-                state=ASSIGNEE_STATE_MANAGER,
-                level=0,
-                degraded=False,
-            ),
-            actor_id=user.authentik_user_id,
-            actor_type="user",
-            reason="reassign_initiator",
-        )
-        task.refresh_from_db()
     return json_response(
         {"handover_task": task_detail(task, surface=SURFACE_PORTAL)},
-        status=HTTPStatus.CREATED if created else HTTPStatus.OK,
+        status=HTTPStatus.CREATED,
     )
 
 
@@ -336,7 +326,9 @@ def portal_handover_items(
     action = _action_for_user(user, task_id, app_key, require_assignee=False)
     if isinstance(action, JsonResponse):
         return action
-    page = _parse_int(request.GET.get("page"), default=1)
+    page = _parse_page(request.GET.get("page"))
+    if page is None:
+        return reason_error("items_page_out_of_range")
     page_size = _parse_int(request.GET.get("page_size"), default=ITEMS_DEFAULT_PAGE_SIZE)
     page_size = min(max(page_size, 1), ITEMS_MAX_PAGE_SIZE)
     q = request.GET.get("q", "")
@@ -371,12 +363,11 @@ def portal_handover_overrides(
             pass
         case JsonResponse() as response:
             return response
-    require_assignee = request.method == "PUT"
-    action = _action_for_user(user, task_id, app_key, require_assignee=require_assignee)
-    if isinstance(action, JsonResponse):
-        return action
     if request.method == "GET":
         try:
+            action = _action_for_user(user, task_id, app_key, require_assignee=False)
+            if isinstance(action, JsonResponse):
+                return action
             return json_response(list_overrides(action, type_key=asset_type))  # type: ignore[arg-type]
         except HandoverError as error:
             return error_response(
@@ -394,21 +385,34 @@ def portal_handover_overrides(
                 {"errors": str(exc)},
                 status=HTTPStatus.UNPROCESSABLE_ENTITY,
             )
+        asset_ids = [item.asset_id for item in payload.overrides]
+        if len(asset_ids) != len(set(asset_ids)):
+            return reason_error("duplicate_assignment")
         try:
-            result = put_overrides(
-                action,
-                type_key=asset_type,
-                overrides_version=payload.overrides_version,
-                overrides=[
-                    OverrideEntry(
-                        asset_id=item.asset_id,
-                        action=item.action,
-                        to_user_id=item.to_user_id,
-                        label=item.label,
-                    )
-                    for item in payload.overrides
-                ],
-            )
+            with transaction.atomic():
+                action = _action_for_user(
+                    user,
+                    task_id,
+                    app_key,
+                    require_assignee=True,
+                    lock_for_mutation=True,
+                )
+                if isinstance(action, JsonResponse):
+                    return action
+                result = put_overrides(
+                    action,
+                    type_key=asset_type,
+                    overrides_version=payload.overrides_version,
+                    overrides=[
+                        OverrideEntry(
+                            asset_id=item.asset_id,
+                            action=item.action,
+                            to_user_id=item.to_user_id,
+                            label=item.label,
+                        )
+                        for item in payload.overrides
+                    ],
+                )
         except (HandoverConflictError, HandoverError) as error:
             mapped = map_handover_exception(error)
             return mapped or error_response(
@@ -440,9 +444,6 @@ def portal_handover_asset_type(
             return response
     if request.method != "PATCH":
         return _method_not_allowed()
-    action = _action_for_user(user, task_id, app_key, require_assignee=True)
-    if isinstance(action, JsonResponse):
-        return action
     try:
         payload = AssetTypePatchPayload.model_validate_json(request.body)
     except ValidationError as exc:
@@ -453,12 +454,22 @@ def portal_handover_asset_type(
             status=HTTPStatus.UNPROCESSABLE_ENTITY,
         )
     try:
-        asset, confirm_version = patch_asset_type_defaults(
-            action,
-            type_key=asset_type,
-            default_action=payload.default_action,
-            default_to_user_id=payload.default_to_user_id,
-        )
+        with transaction.atomic():
+            action = _action_for_user(
+                user,
+                task_id,
+                app_key,
+                require_assignee=True,
+                lock_for_mutation=True,
+            )
+            if isinstance(action, JsonResponse):
+                return action
+            asset, confirm_version = patch_asset_type_defaults(
+                action,
+                type_key=asset_type,
+                default_action=payload.default_action,
+                default_to_user_id=payload.default_to_user_id,
+            )
     except (HandoverConflictError, HandoverError) as error:
         mapped = map_handover_exception(error)
         return mapped or error_response(
@@ -486,9 +497,6 @@ def portal_handover_action_patch(
             return response
     if request.method != "PATCH":
         return _method_not_allowed()
-    action = _action_for_user(user, task_id, app_key, require_assignee=True)
-    if isinstance(action, JsonResponse):
-        return action
     try:
         payload = GrantReceiverPayload.model_validate_json(request.body)
     except ValidationError as exc:
@@ -507,7 +515,17 @@ def portal_handover_action_patch(
         if receiver is None:
             return reason_error("receiver_not_active")
     try:
-        action = update_grant_receiver(action=action, grant_receiver=receiver)
+        with transaction.atomic():
+            action = _action_for_user(
+                user,
+                task_id,
+                app_key,
+                require_assignee=True,
+                lock_for_mutation=True,
+            )
+            if isinstance(action, JsonResponse):
+                return action
+            action = update_grant_receiver(action=action, grant_receiver=receiver)
     except (HandoverConflictError, HandoverError) as error:
         mapped = map_handover_exception(error)
         return mapped or error_response(
@@ -536,9 +554,10 @@ def portal_handover_action_operation(
         return action
     if action.status == ACTION_STATUS_BLOCKED and operation in {"preview", "execute"}:
         return reason_error("action_blocked")
+    mutation_guard = _portal_mutation_guard(user)
     try:
         if operation == "preview":
-            action = preview_action(action)
+            action = preview_action(action, mutation_guard=mutation_guard)
         elif operation == "execute":
             try:
                 body = ExecutePayload.model_validate_json(request.body or b"{}")
@@ -548,9 +567,13 @@ def portal_handover_action_operation(
                     "confirm_version 必填。",
                     status=HTTPStatus.UNPROCESSABLE_ENTITY,
                 )
-            action = execute_action(action, confirm_version=body.confirm_version)
+            action = execute_action(
+                action,
+                confirm_version=body.confirm_version,
+                mutation_guard=mutation_guard,
+            )
         elif operation == "retry":
-            action = retry_action(action)
+            action = retry_action(action, mutation_guard=mutation_guard)
         else:
             return error_response(
                 ErrorCode.VALIDATION_ERROR,
@@ -558,10 +581,19 @@ def portal_handover_action_operation(
                 status=HTTPStatus.BAD_REQUEST,
             )
     except (HandoverConflictError, HandoverError, HookCallError) as error:
+        if str(error) == PORTAL_ASSIGNEE_REQUIRED:
+            return _not_found()
+        if str(error) in {"out_of_managed_scope", "directory_unavailable"}:
+            revoked = _recheck_reassign_scope_locked(task_id, user)
+            if isinstance(revoked, JsonResponse):
+                return revoked
         from easyauth.lifecycle.api_payloads import batch_progress
 
         extra_details: dict[str, JsonValue] | None = None
-        if isinstance(error, HookCallError) and error.status_code == HTTPStatus.REQUEST_ENTITY_TOO_LARGE:
+        if (
+            isinstance(error, HookCallError)
+            and error.status_code == HTTPStatus.REQUEST_ENTITY_TOO_LARGE
+        ):
             action.refresh_from_db()
             extra_details = {"batch_progress": batch_progress(action)}
         elif "413" in str(error):
@@ -742,17 +774,30 @@ def _action_for_user(
     app_key: str,
     *,
     require_assignee: bool,
+    lock_for_mutation: bool = False,
 ) -> HandoverAppAction | JsonResponse:
-    task = _task_visible_to(user, task_id)
+    if lock_for_mutation:
+        task = (
+            HandoverTask.objects.select_for_update(of=("self",))
+            .select_related("subject_user", "assignee")
+            .filter(pk=task_id)
+            .filter(models_Q_assignee_or_subject(user))
+            .first()
+        )
+    else:
+        task = _task_visible_to(user, task_id)
     if task is None:
         return _not_found()
     if require_assignee and task.assignee_id != user.pk:
         return _not_found()
-    revoked = _recheck_reassign_scope(task, user)
+    revoked = _recheck_reassign_scope(task, user, lock_context=lock_for_mutation)
     if isinstance(revoked, JsonResponse):
         return revoked
+    actions = HandoverAppAction.objects
+    if lock_for_mutation:
+        actions = actions.select_for_update(of=("self",))
     action = (
-        HandoverAppAction.objects.select_related(
+        actions.select_related(
             "app",
             "task",
             "task__subject_user",
@@ -769,6 +814,8 @@ def _action_for_user(
 def _recheck_reassign_scope(
     task: HandoverTask,
     actor: UserMirror,
+    *,
+    lock_context: bool = False,
 ) -> JsonResponse | None:
     """reassign 单持续复核管辖权; 失权 → 403 + 移交超管池。"""
     if task.kind != HANDOVER_KIND_REASSIGN:
@@ -777,7 +824,18 @@ def _recheck_reassign_scope(
         return None
     if task.assignee_id != actor.pk:
         return None
-    result = assert_manager_of(actor, task.subject_user)
+    if lock_context:
+        locked_users = {
+            item.pk: item
+            for item in UserMirror.objects.select_for_update()
+            .filter(
+                pk__in={actor.pk, task.subject_user_id},
+            )
+            .order_by("pk")
+        }
+        actor = locked_users[actor.pk]
+        task.subject_user = locked_users[task.subject_user_id]
+    result = assert_manager_of(actor, task.subject_user, lock_context=lock_context)
     if result.allowed:
         return None
     # 失权: 移交 superuser_pool
@@ -807,6 +865,46 @@ def _recheck_reassign_scope(
     return reason_error(result.reason or "out_of_managed_scope")
 
 
+def _portal_mutation_guard(user: UserMirror):  # noqa: ANN202
+    def guard(action: HandoverAppAction) -> None:
+        task = action.task
+        if task.assignee_id != user.pk:
+            raise HandoverError(PORTAL_ASSIGNEE_REQUIRED)
+        if task.kind != HANDOVER_KIND_REASSIGN:
+            return
+        if task.authority_source == AUTHORITY_SOURCE_SUPERUSER:
+            return
+        locked_users = {
+            item.pk: item
+            for item in UserMirror.objects.select_for_update()
+            .filter(pk__in={user.pk, task.subject_user_id})
+            .order_by("pk")
+        }
+        actor = locked_users[user.pk]
+        subject = locked_users[task.subject_user_id]
+        result = assert_manager_of(actor, subject, lock_context=True)
+        if not result.allowed:
+            raise HandoverError(result.reason or "out_of_managed_scope")
+
+    return guard
+
+
+def _recheck_reassign_scope_locked(
+    task_id: int,
+    actor: UserMirror,
+) -> JsonResponse | None:
+    with transaction.atomic():
+        task = (
+            HandoverTask.objects.select_for_update(of=("self",))
+            .select_related("subject_user", "assignee")
+            .filter(pk=task_id)
+            .first()
+        )
+        if task is None:
+            return _not_found()
+        return _recheck_reassign_scope(task, actor, lock_context=True)
+
+
 def _parse_int(raw: str | None, *, default: int) -> int:
     if raw is None or raw == "":
         return default
@@ -814,6 +912,18 @@ def _parse_int(raw: str | None, *, default: int) -> int:
         return int(raw)
     except ValueError:
         return default
+
+
+def _parse_page(raw: str | None) -> int | None:
+    if raw is None or raw == "":
+        return 1
+    try:
+        page = int(raw)
+    except ValueError:
+        return None
+    if page < 1 or page > ITEMS_MAX_PAGE:
+        return None
+    return page
 
 
 def _not_found() -> JsonResponse:
