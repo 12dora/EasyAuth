@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 from typing import Any
 from unittest.mock import patch
@@ -11,6 +12,7 @@ from django.utils import timezone
 
 from easyauth.accounts.models import USER_STATUS_ACTIVE, USER_STATUS_DEPARTED, UserMirror
 from easyauth.applications.models import App
+from easyauth.audit.models import AuditLog
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
 from easyauth.lifecycle.handover import (
     _ensure_batch_plan_on_413,
@@ -334,6 +336,21 @@ def test_async_abandon_claims_unique_fence_before_summary_write(
     assert str(observed["owner"]).startswith("manual:")
     assert observed["fence"] != stale.fence
     assert observed["competing_request_rejected"] is True
+    audit = AuditLog.objects.get(event_type="handover_action_executed")
+    assert audit.actor_type == "admin"
+    assert audit.metadata["generation"] == 1
+    assert audit.metadata["assignments"] == [
+        {"asset_type": "customer", "default_action": "skip", "override_count": 0},
+    ]
+    assert audit.metadata["summary"] == {
+        "customer": {
+            "transferred": 0,
+            "released": 0,
+            "skipped": 0,
+            "merged": 0,
+            "failed": 0,
+        },
+    }
 
 
 def test_poll_attention_action_enforces_30_minute_gate(
@@ -611,6 +628,62 @@ def test_later_413_keeps_partial_plan_and_releases_lease() -> None:
     assert plan.completed_batches == 1
     assert HandoverBatchPlan.objects.filter(action=action).count() == 1
     assert lease.released_at is not None
+
+
+def test_execute_error_body_is_whitelisted_redacted_and_utf8_bounded() -> None:
+    _subject, _app, _task, action = _subject_app_action(count=0)
+    action.status = ACTION_STATUS_EXECUTING
+    action.save(update_fields=["status", "updated_at"])
+    handle = take_lease(action=action, owner="sender:redaction", batch_seq=1)
+    batch = HandoverExecutionBatch.objects.create(
+        action=action,
+        action_snapshot_id=int(action.id),
+        generation=1,
+        batch_seq=1,
+        status=BATCH_STATUS_EXECUTING,
+        is_final=True,
+        snapshot_token="tok",
+        request_payload={},
+        request_hash="9" * 64,
+    )
+    delivery = HandoverDeliveryAttempt.objects.create(
+        batch=batch,
+        delivery_seq=1,
+        lease_fence=handle.fence,
+        outcome=DELIVERY_OUTCOME_SENT,
+    )
+    payload = {
+        "error": {
+            "code": "timestamp_out_of_range",
+            "message": "expired for alice@example.com",
+            "traceId": "trace-1",
+            "token": "sk-abcdef0123456789",
+        },
+        "blob": "中" * 3000,
+    }
+
+    with pytest.raises(HandoverError):
+        _handle_execute_response(
+            action_id=int(action.id),
+            batch_id=int(batch.id),
+            delivery_id=int(delivery.id),
+            handle=handle,
+            response=HookResponse(
+                status_code=400,
+                location="",
+                payload=payload,
+                raw_body=json.dumps(payload, ensure_ascii=False),
+            ),
+        )
+
+    action.refresh_from_db()
+    assert "timestamp_out_of_range" in action.last_error
+    assert "trace-1" in action.last_error
+    assert "alice@example.com" not in action.last_error
+    assert "sk-abcdef0123456789" not in action.last_error_raw
+    assert "alice@example.com" not in action.last_error_raw
+    assert len(action.last_error.encode("utf-8")) <= 200
+    assert len(action.last_error_raw.encode("utf-8")) <= 2000
 
 
 def test_partial_plan_rejects_grant_receiver_change() -> None:

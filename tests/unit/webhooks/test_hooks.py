@@ -132,6 +132,36 @@ def test_signed_hook_post_rejects_redirect_without_following(
     assert exc_info.value.status_code == HTTPStatus.FOUND
 
 
+def test_signed_hook_post_preserves_non_2xx_error_body(
+    configured_app: App,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_post_webhook(**_kwargs: object) -> WebhookHttpResponse:
+        return WebhookHttpResponse(
+            status_code=HTTPStatus.BAD_REQUEST,
+            body=b'{"error":{"code":"timestamp_out_of_range","message":"expired","traceId":"t1"}}',
+            location="",
+        )
+
+    monkeypatch.setattr(hooks_module, "post_webhook", fake_post_webhook)
+
+    response = signed_hook_post(
+        app=configured_app,
+        url="https://hooks.example.com/handover",
+        event_type="lifecycle.handover.execute",
+        delivery_id="hook-error-body",
+        payload={},
+    )
+
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+    assert response.payload["error"] == {
+        "code": "timestamp_out_of_range",
+        "message": "expired",
+        "traceId": "t1",
+    }
+    assert "timestamp_out_of_range" in response.raw_body
+
+
 def test_signed_hook_get_revalidates_location_and_preserves_202(
     configured_app: App,
     monkeypatch: pytest.MonkeyPatch,

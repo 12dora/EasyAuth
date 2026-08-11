@@ -47,6 +47,7 @@ from easyauth.lifecycle.core import (
     refresh_task_status_locked,
 )
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
+from easyauth.lifecycle.error_projection import project_handover_error
 from easyauth.lifecycle.lease import (
     HANDOVER_EXECUTION_IN_FLIGHT,
     LeaseHandle,
@@ -381,8 +382,7 @@ def poll_async_action(action: HandoverAppAction, *, worker_id: str | None = None
                 ACTION_STATUS_ASYNC_PENDING,
                 ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
             }:
-                action.last_error = str(error)[:500]
-                action.last_error_raw = str(error)[:2000]
+                _set_action_error(action, error)
                 action.save(update_fields=["last_error", "last_error_raw", "updated_at"])
             # 移回 sentinel
             _handoff_to_async_sentinel(action, handle, batch_id=batch.pk)
@@ -427,6 +427,9 @@ def complete_data_phase(
     response_payload: dict[str, JsonValue] | None = None,
     enforce_conservation: bool = True,
     summary_unknown: bool = False,
+    audit_actor_id: str | None = None,
+    audit_actor_type: str = "system",
+    audit_extra: dict[str, JsonValue] | None = None,
 ) -> None:
     """同步 200 与异步终态汇合的收尾(01 §5.5)。A/B/C 必须各自 commit。
 
@@ -455,8 +458,7 @@ def complete_data_phase(
                 )
                 if conservation_error is not None:
                     action.status = ACTION_STATUS_FAILED
-                    action.last_error = conservation_error
-                    action.last_error_raw = conservation_error[:2000]
+                    _set_action_error(action, conservation_error)
                     action.save(
                         update_fields=[
                             "status",
@@ -509,6 +511,14 @@ def complete_data_phase(
                         )
                     if first_data_completion:
                         _bump_plan_progress(action)
+                    if audit_actor_id is not None and audit_extra is not None:
+                        record_task_event(
+                            action.task,
+                            action="handover_action_executed",
+                            actor_id=audit_actor_id,
+                            actor_type=audit_actor_type,
+                            extra=audit_extra,
+                        )
                 must_cas_release(handle)
                 return
 
@@ -535,8 +545,7 @@ def complete_data_phase(
                 _ = transfer_selected_grants(action)
             except Exception as error:
                 action.status = ACTION_STATUS_FAILED
-                action.last_error = "授权转移失败"
-                action.last_error_raw = str(error)[:2000]
+                _set_action_error(action, error, stable_message="授权转移失败")
                 action.save(
                     update_fields=["status", "last_error", "last_error_raw", "updated_at"],
                 )
@@ -571,6 +580,14 @@ def complete_data_phase(
             _complete_active_plan(action)
             task = HandoverTask.objects.select_for_update().get(pk=action.task_id)
             _ = refresh_task_status_locked(task)
+            if audit_actor_id is not None and audit_extra is not None:
+                record_task_event(
+                    action.task,
+                    action="handover_action_executed",
+                    actor_id=audit_actor_id,
+                    actor_type=audit_actor_type,
+                    extra=audit_extra,
+                )
         batch.status = BATCH_STATUS_DONE
         batch.save(update_fields=["status"])
         must_cas_release(handle)
@@ -819,7 +836,13 @@ def fetch_action_items(
         payload=payload,
     )
     if response.status_code != HTTPStatus.OK:
-        raise HandoverError(f"items 接口返回 {response.status_code}")
+        raise HookCallError(
+            f"items 接口返回 {response.status_code}",
+            status_code=response.status_code,
+            payload=response.payload,
+            raw_body=response.raw_body,
+            location=response.location,
+        )
     body = response.payload
     total = int(body.get("total", 0) or 0)
     unfiltered = body.get("unfiltered_total")
@@ -993,10 +1016,16 @@ def async_abandon_action(
 
         if outcome == "failed":
             locked.status = ACTION_STATUS_FAILED
-            locked.last_error = reason_stripped[:500]
+            _set_action_error(locked, reason_stripped)
             locked.async_status_url = ""
             locked.save(
-                update_fields=["status", "last_error", "async_status_url", "updated_at"],
+                update_fields=[
+                    "status",
+                    "last_error",
+                    "last_error_raw",
+                    "async_status_url",
+                    "updated_at",
+                ],
             )
             if batch is not None:
                 batch.status = BATCH_STATUS_FAILED
@@ -1015,6 +1044,8 @@ def async_abandon_action(
                     "summary_provided": bool(summary),
                     "action_id": action_id,
                     "generation": locked.generation,
+                    "assignments": _audit_assignment_summary(locked),
+                    "summary": _audit_result_summary(summary),
                     "reason": reason_stripped,
                 },
             )
@@ -1045,8 +1076,7 @@ def async_abandon_action(
                     _ = transfer_selected_grants(locked)
                 except Exception as error:
                     locked.status = ACTION_STATUS_FAILED
-                    locked.last_error = "授权转移失败"
-                    locked.last_error_raw = str(error)[:2000]
+                    _set_action_error(locked, error, stable_message="授权转移失败")
                     locked.save(
                         update_fields=[
                             "status",
@@ -1071,6 +1101,8 @@ def async_abandon_action(
                     "summary_provided": bool(summary),
                     "action_id": action_id,
                     "generation": locked.generation,
+                    "assignments": _audit_assignment_summary(locked),
+                    "summary": _audit_result_summary(summary),
                     "reason": reason_stripped,
                 },
             )
@@ -1092,22 +1124,20 @@ def async_abandon_action(
         response_payload=payload,
         enforce_conservation=False,
         summary_unknown=not bool(summary),
-    )
-    locked = HandoverAppAction.objects.select_related("app", "task").get(pk=action_id)
-    record_task_event(
-        locked.task,
-        action="handover_action_executed",
-        actor_id=actor_id,
-        actor_type="admin",
-        extra={
-            "app_key": locked.app.app_key,
+        audit_actor_id=actor_id,
+        audit_actor_type="admin",
+        audit_extra={
+            "app_key": app_key,
             "manual_resolution": True,
             "summary_provided": bool(summary),
             "action_id": action_id,
-            "generation": locked.generation,
+            "generation": action.generation,
+            "assignments": _audit_assignment_summary(action),
+            "summary": _audit_result_summary(summary),
             "reason": reason_stripped,
         },
     )
+    locked = HandoverAppAction.objects.select_related("app", "task").get(pk=action_id)
     return locked
 
 
@@ -1240,8 +1270,7 @@ def _execute_action(
                     pk=action_id_grant,
                 )
                 action.status = ACTION_STATUS_FAILED
-                action.last_error = str(error)[:500]
-                action.last_error_raw = str(error)[:2000]
+                _set_action_error(action, error)
                 action.save(
                     update_fields=["status", "last_error", "last_error_raw", "updated_at"],
                 )
@@ -1401,6 +1430,8 @@ def _execute_action(
             handle=handle,
             error=error,
             http_status=error.status_code,
+            response_payload=error.payload,
+            raw_body=error.raw_body,
         )
         raise
 
@@ -1433,6 +1464,7 @@ def _handle_execute_response(
                 error=error,
                 http_status=status,
                 response_payload=response.payload,
+                raw_body=response.raw_body,
             )
             raise error
         with transaction.atomic():
@@ -1497,6 +1529,7 @@ def _handle_execute_response(
         error=HandoverError(f"execute HTTP {status}"),
         http_status=status,
         response_payload=response.payload,
+        raw_body=response.raw_body,
     )
     action = HandoverAppAction.objects.get(pk=action_id)
     raise HandoverError(action.last_error or f"execute HTTP {status}")
@@ -1511,6 +1544,7 @@ def _finish_delivery_failure(
     error: Exception,
     http_status: int | None,
     response_payload: dict[str, JsonValue] | None = None,
+    raw_body: str = "",
 ) -> None:
     with transaction.atomic():
         require_cas(handle)
@@ -1526,6 +1560,7 @@ def _finish_delivery_failure(
             update_fields=["outcome", "http_status", "error_text", "response_payload"],
         )
         # 412 / 423 / 429 / 413 → 退回 previewed/pending 并释放
+        stable_message: str | None = None
         if http_status in {
             HTTPStatus.PRECONDITION_FAILED,  # 412
             HTTPStatus.LOCKED,  # 423
@@ -1542,6 +1577,7 @@ def _finish_delivery_failure(
                 plan = _active_batch_plan(action)
                 if plan is not None and plan.completed_batches > 0:
                     error = HandoverError(UNSHARDABLE_BATCH_MESSAGE)
+                    stable_message = str(error)
                 else:
                     _ = _ensure_batch_plan_on_413(action)
             elif http_status in {HTTPStatus.PRECONDITION_FAILED, HTTPStatus.LOCKED}:
@@ -1551,8 +1587,14 @@ def _finish_delivery_failure(
             else:
                 batch.status = BATCH_STATUS_FAILED
                 action.status = ACTION_STATUS_PREVIEWED
-            action.last_error = str(error)[:500]
-            action.last_error_raw = str(error)[:2000]
+            _set_action_error(
+                action,
+                error,
+                status_code=None if stable_message is not None else http_status,
+                payload=response_payload,
+                raw_body=raw_body,
+                stable_message=stable_message,
+            )
             action.save(
                 update_fields=[
                     "status",
@@ -1568,8 +1610,13 @@ def _finish_delivery_failure(
         batch.status = BATCH_STATUS_FAILED
         batch.save(update_fields=["status"])
         action.status = ACTION_STATUS_FAILED
-        action.last_error = str(error)[:500]
-        action.last_error_raw = str(error)[:2000]
+        _set_action_error(
+            action,
+            error,
+            status_code=http_status,
+            payload=response_payload,
+            raw_body=raw_body,
+        )
         action.save(
             update_fields=["status", "last_error", "last_error_raw", "updated_at"],
         )
@@ -1581,7 +1628,7 @@ def _finish_delivery_failure(
         action="handover_action_failed",
         actor_id=LIFECYCLE_ACTOR_ID,
         actor_type="system",
-        extra={"app_key": action.app.app_key, "error": str(error)[:200]},
+        extra={"app_key": action.app.app_key, "error": action.last_error},
     )
 
 
@@ -1650,8 +1697,14 @@ def _record_preview_error(request: _PreviewRequest, error: Exception) -> None:
         action = _locked_preview_action(request)
         if action is None:
             return
-        action.last_error = str(error)[:500]
-        action.save(update_fields=["last_error", "updated_at"])
+        _set_action_error(
+            action,
+            error,
+            status_code=error.status_code if isinstance(error, HookCallError) else None,
+            payload=error.payload if isinstance(error, HookCallError) else None,
+            raw_body=error.raw_body if isinstance(error, HookCallError) else "",
+        )
+        action.save(update_fields=["last_error", "last_error_raw", "updated_at"])
         task = HandoverTask.objects.select_for_update().get(pk=action.task_id)
         _ = refresh_task_status_locked(task)
 
@@ -1701,8 +1754,13 @@ def _complete_preview_request(
         except HandoverError as error:
             # failed 必须提交后再 raise, 不能被 atomic 回滚。
             action.status = ACTION_STATUS_FAILED
-            action.last_error = str(error)[:500]
-            action.last_error_raw = str(error)[:2000]
+            _set_action_error(
+                action,
+                error,
+                status_code=error.status_code if isinstance(error, HookCallError) else None,
+                payload=error.payload if isinstance(error, HookCallError) else None,
+                raw_body=error.raw_body if isinstance(error, HookCallError) else "",
+            )
             action.save(
                 update_fields=["status", "last_error", "last_error_raw", "updated_at"],
             )
@@ -1890,6 +1948,40 @@ def _full_assignments(action: HandoverAppAction) -> list[dict[str, JsonValue]]:
     return assignments
 
 
+def _audit_assignment_summary(action: HandoverAppAction) -> list[JsonValue]:
+    """审计只保留分配策略与覆盖数量，不写人员标识或资产 ID。"""
+    result: list[JsonValue] = []
+    types = HandoverAssetType.objects.filter(
+        action=action,
+        generation=action.generation,
+    ).prefetch_related("overrides")
+    for asset_type in types:
+        result.append(
+            {
+                "asset_type": str(asset_type.type_key)[:64],
+                "default_action": asset_type.default_action,
+                "override_count": asset_type.overrides.count(),
+            },
+        )
+    return result
+
+
+def _audit_result_summary(summary: dict[str, JsonValue] | None) -> dict[str, JsonValue]:
+    if not summary:
+        return {}
+    safe: dict[str, JsonValue] = {}
+    for type_key, value in summary.items():
+        if not isinstance(type_key, str) or not isinstance(value, dict):
+            continue
+        counts: dict[str, JsonValue] = {}
+        for field in ("transferred", "released", "skipped", "merged", "failed"):
+            count = value.get(field)
+            if type(count) is int and count >= 0:
+                counts[field] = count
+        safe[type_key[:64]] = counts
+    return safe
+
+
 def _chunk_assignments(
     action: HandoverAppAction,
     *,
@@ -1971,7 +2063,13 @@ def _handover_hook_url(app: App) -> str:
 
 def _preview_response_payload(response: HookResponse) -> dict[str, JsonValue]:
     if response.status_code != HTTPStatus.OK:
-        raise HandoverError(PREVIEW_SYNC_REQUIRED_MESSAGE)
+        raise HookCallError(
+            PREVIEW_SYNC_REQUIRED_MESSAGE,
+            status_code=response.status_code,
+            payload=response.payload,
+            raw_body=response.raw_body,
+            location=response.location,
+        )
     return response.payload
 
 
@@ -1983,7 +2081,13 @@ def _ensure_accepted_location(response: HookResponse, *, message: str) -> None:
 def _validate_poll_response(response: HookResponse) -> None:
     if response.status_code not in {HTTPStatus.OK, HTTPStatus.ACCEPTED}:
         message = f"应用交接状态接口返回不支持的成功状态 {response.status_code}。"
-        raise HandoverError(message)
+        raise HookCallError(
+            message,
+            status_code=response.status_code,
+            payload=response.payload,
+            raw_body=response.raw_body,
+            location=response.location,
+        )
     if response.status_code == HTTPStatus.ACCEPTED:
         _ensure_accepted_location(
             response,
@@ -2341,4 +2445,24 @@ def _redact_response_payload(payload: dict[str, JsonValue] | None) -> dict[str, 
 
 
 def _redact_error_text(text: str) -> str:
-    return text[:512]
+    return project_handover_error(error=text).public
+
+
+def _set_action_error(
+    action: HandoverAppAction,
+    error: object,
+    *,
+    status_code: int | None = None,
+    payload: dict[str, JsonValue] | None = None,
+    raw_body: str = "",
+    stable_message: str | None = None,
+) -> None:
+    projection = project_handover_error(
+        error=error,
+        status_code=status_code,
+        payload=payload,
+        raw_body=raw_body,
+        stable_message=stable_message,
+    )
+    action.last_error = projection.public
+    action.last_error_raw = projection.raw
