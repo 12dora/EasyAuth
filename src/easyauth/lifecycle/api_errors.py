@@ -74,6 +74,11 @@ _REASON_TABLE: Final[dict[str, tuple[int, ErrorCode, str]]] = {
         ErrorCode.SEMANTIC_VALIDATION_ERROR,
         "转移动作必须指定接收人。",
     ),
+    "receiver_not_allowed": (
+        HTTPStatus.UNPROCESSABLE_ENTITY,
+        ErrorCode.SEMANTIC_VALIDATION_ERROR,
+        "非转移动作不能指定接收人。",
+    ),
     "asset_type_not_releasable": (
         HTTPStatus.UNPROCESSABLE_ENTITY,
         ErrorCode.SEMANTIC_VALIDATION_ERROR,

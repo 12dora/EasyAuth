@@ -10,12 +10,14 @@ from django.db import transaction
 from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
-from easyauth.lifecycle.lease import HANDOVER_EXECUTION_IN_FLIGHT, action_execution_in_flight
+from easyauth.lifecycle.lease import (
+    HANDOVER_EXECUTION_IN_FLIGHT,
+    assignment_mutation_in_flight,
+)
 from easyauth.lifecycle.models import (
     ACTION_STATUS_PENDING,
     ACTION_STATUS_PREVIEWED,
     ASSET_ACTION_RELEASE,
-    ASSET_ACTION_SKIP,
     ASSET_ACTION_TRANSFER,
     ASSET_ACTION_VALUES,
     BATCH_PLAN_STATUS_ACTIVE,
@@ -61,7 +63,7 @@ def patch_asset_type_defaults(
             .select_related("task", "task__subject_user")
             .get(pk=action.pk)
         )
-        _assert_mutable(locked)
+        plan = _assert_mutable(locked)
         asset = (
             HandoverAssetType.objects.select_for_update()
             .filter(action=locked, generation=locked.generation, type_key=type_key)
@@ -69,6 +71,8 @@ def patch_asset_type_defaults(
         )
         if asset is None:
             raise HandoverError("资产类型不存在。")
+        if default_action != ASSET_ACTION_TRANSFER and default_to_user_id:
+            raise HandoverError("receiver_not_allowed")
         default_to_user = _resolve_receiver(
             locked,
             default_to_user_id,
@@ -84,6 +88,7 @@ def patch_asset_type_defaults(
             # 分配变更不自动清 snapshot; confirm_version 负责击穿
             pass
         locked.save(update_fields=["confirm_version", "updated_at"])
+        _replan_zero_progress_batch(locked, plan)
         return asset, locked.confirm_version
 
 
@@ -101,7 +106,7 @@ def put_overrides(
             .select_related("task", "task__subject_user")
             .get(pk=action.pk)
         )
-        _assert_mutable(locked)
+        plan = _assert_mutable(locked)
         if overrides_version != locked.overrides_version:
             raise HandoverConflictError("overrides_version_stale")
         asset = (
@@ -132,7 +137,7 @@ def put_overrides(
                     raise HandoverError("receiver_required")
                 to_user = _resolve_receiver(locked, entry.to_user_id, required=True)
             elif entry.to_user_id:
-                to_user = _resolve_receiver(locked, entry.to_user_id, required=False)
+                raise HandoverError("receiver_not_allowed")
             # 无明细时无法校验 asset_id 是否在下游存在; 整批保存, 失效在 execute 由下游 409。
             # 此处仅做本地形状校验。空 id 已丢。
             _ = HandoverAssetOverride.objects.create(
@@ -148,6 +153,7 @@ def put_overrides(
         locked.overrides_version += 1
         locked.confirm_version += 1
         locked.save(update_fields=["overrides_version", "confirm_version", "updated_at"])
+        _replan_zero_progress_batch(locked, plan)
         return PutOverridesResult(
             overrides_version=locked.overrides_version,
             confirm_version=locked.confirm_version,
@@ -187,24 +193,36 @@ def list_overrides(action: HandoverAppAction, *, type_key: str) -> dict[str, obj
     }
 
 
-def _assert_mutable(action: HandoverAppAction) -> None:
+def _assert_mutable(action: HandoverAppAction) -> HandoverBatchPlan | None:
     from easyauth.lifecycle.core import ensure_task_open
 
     ensure_task_open(action.task)
-    if action_execution_in_flight(action):
+    if assignment_mutation_in_flight(action):
         raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
     if action.status in {ACTION_STATUS_PENDING, ACTION_STATUS_PREVIEWED, "failed", "blocked"}:
         pass
     else:
         raise HandoverConflictError("action_not_operable")
-    plan = HandoverBatchPlan.objects.filter(
+    plan = HandoverBatchPlan.objects.select_for_update().filter(
         action=action,
         generation=action.generation,
         status=BATCH_PLAN_STATUS_ACTIVE,
-        completed_batches__gt=0,
     ).first()
-    if plan is not None:
+    if plan is not None and plan.completed_batches > 0:
         raise HandoverConflictError("batch_plan_in_progress")
+    return plan
+
+
+def _replan_zero_progress_batch(
+    action: HandoverAppAction,
+    plan: HandoverBatchPlan | None,
+) -> None:
+    if plan is None:
+        return
+    # 01 §2.4.1.1: 修改与旧计划废弃、新 canonical assignment 重新规划同事务提交。
+    from easyauth.lifecycle.handover import _ensure_batch_plan_on_413
+
+    _ = _ensure_batch_plan_on_413(action)
 
 
 def _resolve_receiver(

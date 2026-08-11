@@ -51,6 +51,7 @@ from easyauth.lifecycle.lease import (
     HANDOVER_EXECUTION_IN_FLIGHT,
     LeaseHandle,
     action_execution_in_flight,
+    assignment_mutation_in_flight,
     cas_release,
     cas_update_owner,
     must_cas_release,
@@ -158,14 +159,14 @@ def update_grant_receiver(
     with transaction.atomic():
         locked = _locked_action(action.id)
         ensure_task_open(locked.task)
-        if action_execution_in_flight(locked):
+        if assignment_mutation_in_flight(locked):
             raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
-        if HandoverBatchPlan.objects.filter(
+        plan = HandoverBatchPlan.objects.select_for_update().filter(
             action=locked,
             generation=locked.generation,
             status=BATCH_PLAN_STATUS_ACTIVE,
-            completed_batches__gt=0,
-        ).exists():
+        ).first()
+        if plan is not None and plan.completed_batches > 0:
             raise HandoverConflictError("batch_plan_in_progress")
         if grant_receiver is not None and locked.task.kind != HANDOVER_KIND_OFFBOARD:
             raise HandoverError("grant_receiver_not_allowed")
@@ -190,6 +191,8 @@ def update_grant_receiver(
                 "updated_at",
             ],
         )
+        if plan is not None:
+            _ = _ensure_batch_plan_on_413(locked)
         return locked
 
 

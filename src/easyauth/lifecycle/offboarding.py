@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from typing import Final, cast
 
-from django.db import transaction
+from django.db import IntegrityError, transaction
 from django.db.models import Q
 from django.utils import timezone
 
@@ -102,11 +102,7 @@ def ensure_handover_task(
                 .first()
             )
             if existing_by_key is not None:
-                if (
-                    creation_payload_sha256
-                    and existing_by_key.creation_payload_sha256
-                    and existing_by_key.creation_payload_sha256 != creation_payload_sha256
-                ):
+                if existing_by_key.creation_payload_sha256 != creation_payload_sha256:
                     raise HandoverConflictError("idempotency_conflict")
                 return existing_by_key, False
 
@@ -159,16 +155,17 @@ def ensure_handover_task(
             subject=subject,
             explicit_grant_ids=snapshot_grant_ids,
         )
-        task = HandoverTask.objects.create(
+        task, won_create = _create_task_with_idempotency_constraint(
             kind=kind,
-            subject_user=subject,
+            subject=subject,
             created_by=created_by,
             reason=reason,
-            generation=1,
             authority_source=resolved_authority,
             creation_idempotency_key=creation_idempotency_key,
             creation_payload_sha256=creation_payload_sha256,
         )
+        if not won_create:
+            return task, False
         if kind == HANDOVER_KIND_PRE_OFFBOARD and created_by == subject.authentik_user_id:
             from easyauth.lifecycle.models import ASSIGNEE_STATE_SUBJECT
 
@@ -241,6 +238,48 @@ def ensure_handover_task(
                 extra={"app_keys": list(app_keys or ())},
             )
         return refresh_task_status(task), True
+
+
+def _create_task_with_idempotency_constraint(
+    *,
+    kind: str,
+    subject: UserMirror,
+    created_by: str,
+    reason: str,
+    authority_source: str,
+    creation_idempotency_key: str,
+    creation_payload_sha256: str,
+) -> tuple[HandoverTask, bool]:
+    try:
+        # savepoint 让唯一键竞态只回滚 INSERT，本事务仍可读取赢家并按冻结 body 判定。
+        with transaction.atomic():
+            task = HandoverTask.objects.create(
+                kind=kind,
+                subject_user=subject,
+                created_by=created_by,
+                reason=reason,
+                generation=1,
+                authority_source=authority_source,
+                creation_idempotency_key=creation_idempotency_key,
+                creation_payload_sha256=creation_payload_sha256,
+            )
+        return task, True
+    except IntegrityError:
+        if not creation_idempotency_key:
+            raise
+        existing_by_key = (
+            HandoverTask.objects.select_for_update()
+            .filter(
+                created_by=created_by,
+                creation_idempotency_key=creation_idempotency_key,
+            )
+            .first()
+        )
+        if existing_by_key is None:
+            raise
+        if existing_by_key.creation_payload_sha256 != creation_payload_sha256:
+            raise HandoverConflictError("idempotency_conflict")
+        return existing_by_key, False
 
 
 def upgrade_pre_offboard_to_offboard(
