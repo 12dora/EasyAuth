@@ -29,6 +29,7 @@ if str(SDK_SRC) not in sys.path:
 
 from easyauth_app_sdk.lifecycle import (  # noqa: E402
     DEFAULT_HANDOVER_PATH,
+    HandoverBusinessError,
     lifecycle_http_response,
 )
 from easyauth_app_sdk.webhook import WebhookEvent  # noqa: E402
@@ -41,6 +42,9 @@ ITEMS: list[dict[str, str]] = [
     {"id": "doc-3", "label": "文档丙", "hint": "E2E item 3"},
 ]
 HEALTH_PATH = "/health"
+EXECUTE_PAYLOAD_INVALID_CODE = "e2e_execute_payload_invalid"
+EXECUTE_PAYLOAD_INVALID_MESSAGE = "全栈 E2E execute 载荷与预期分配不一致。"
+EXPECTED_OVERRIDE_IDS = frozenset({"doc-1", "doc-2"})
 
 
 def _secret() -> str:
@@ -49,6 +53,18 @@ def _secret() -> str:
         message = "EASYAUTH_E2E_DOWNSTREAM_SECRET 未设置。"
         raise RuntimeError(message)
     return value
+
+
+def _expected_receiver() -> str:
+    return os.environ.get("EASYAUTH_E2E_PEER_USER", "e2e-peer").strip() or "e2e-peer"
+
+
+def _reject_execute_payload() -> None:
+    raise HandoverBusinessError(
+        422,
+        EXECUTE_PAYLOAD_INVALID_CODE,
+        EXECUTE_PAYLOAD_INVALID_MESSAGE,
+    )
 
 
 def on_preview(_event: WebhookEvent) -> dict[str, Any]:
@@ -89,40 +105,38 @@ def on_items(event: WebhookEvent) -> dict[str, Any]:
 def on_execute(event: WebhookEvent) -> dict[str, Any]:
     """按 assignments 守恒汇总: transferred+released+skipped+merged+failed == preview count。"""
     assignments = event.payload.get("assignments")
-    if not isinstance(assignments, list):
-        assignments = []
-    # 先以 preview count 为底; 默认全部 skip, 再按 override 改写。
-    by_id: dict[str, str] = {item["id"]: "skip" for item in ITEMS}
-    default_action = "skip"
-    for row in assignments:
-        if not isinstance(row, dict):
-            continue
-        if str(row.get("asset_type", "")) != ASSET_TYPE:
-            continue
-        default = str(row.get("default_action", "skip") or "skip")
-        if default in {"transfer", "release", "skip"}:
-            default_action = default
-            for item_id in by_id:
-                by_id[item_id] = default_action
-        overrides = row.get("overrides")
-        if not isinstance(overrides, list):
-            continue
-        for ov in overrides:
-            if not isinstance(ov, dict):
-                continue
-            asset_id = str(ov.get("id", "") or "")
-            action = str(ov.get("action", "") or "")
-            if asset_id in by_id and action in {"transfer", "release", "skip"}:
-                by_id[asset_id] = action
-    transferred = sum(1 for action in by_id.values() if action == "transfer")
-    released = sum(1 for action in by_id.values() if action == "release")
-    skipped = sum(1 for action in by_id.values() if action == "skip")
+    if not isinstance(assignments, list) or len(assignments) != 1:
+        _reject_execute_payload()
+    row = assignments[0]
+    if not isinstance(row, dict):
+        _reject_execute_payload()
+    if (
+        row.get("asset_type") != ASSET_TYPE
+        or row.get("default_action") != "transfer"
+        or row.get("default_to_user_id") != _expected_receiver()
+    ):
+        _reject_execute_payload()
+    overrides = row.get("overrides")
+    if not isinstance(overrides, list) or len(overrides) != len(EXPECTED_OVERRIDE_IDS):
+        _reject_execute_payload()
+    override_ids: set[str] = set()
+    for override in overrides:
+        if (
+            not isinstance(override, dict)
+            or override.get("action") != "skip"
+            or override.get("to_user_id") is not None
+            or not isinstance(override.get("id"), str)
+        ):
+            _reject_execute_payload()
+        override_ids.add(override["id"])
+    if override_ids != EXPECTED_OVERRIDE_IDS:
+        _reject_execute_payload()
     return {
         "summary": {
             ASSET_TYPE: {
-                "transferred": transferred,
-                "released": released,
-                "skipped": skipped,
+                "transferred": 1,
+                "released": 0,
+                "skipped": 2,
                 "merged": 0,
                 "failed": 0,
             },

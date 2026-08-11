@@ -15,12 +15,6 @@ import path from "node:path";
  *   用户主体仍是 seed 出的 manager，经真实 Django session + 门户 API 完成链路。
  */
 test.describe("门户自助交接", () => {
-  test.skip(({ }, testInfo) => {
-    // 后端 v2 端点由其他 worker 交付；本 worktree 仅交付前端。
-    // 有 EASYAUTH_HANDOVER_E2E=1 时跑真链路。
-    return process.env.EASYAUTH_HANDOVER_E2E !== "1";
-  }, "后端交接 v2 API 未就绪时跳过全栈链路");
-
   test("主管登录门户 → 打开单 → 改派 2 条 → 执行 → 状态变 done", async ({ browser }) => {
     const sessionCookie = createManagerPortalSession();
     const context = await browser.newContext();
@@ -82,13 +76,14 @@ test.describe("门户自助交接", () => {
     await selects.nth(0).selectOption("skip");
     await selects.nth(1).selectOption("skip");
     await page.getByRole("button", { name: "保存单独指定" }).click();
-    // 保存后应出现 override 角标
-    await expect(page.getByTestId("override-dot").first()).toBeVisible({ timeout: 15_000 });
+    // 保存后两条明细都应出现 override 角标
+    await expect(page.getByTestId("override-dot")).toHaveCount(2, { timeout: 15_000 });
 
     await page.getByRole("button", { name: "执行交接" }).click();
     await page.getByRole("button", { name: "确认执行" }).click();
-    // 状态角标「已交接」与摘要「已转交 N」会同时出现，取其一即可。
     await expect(page.getByText("已交接").first()).toBeVisible({ timeout: 60_000 });
+    await expect(page.getByText("已转交 1")).toBeVisible();
+    await expect(page.getByText("已跳过 2")).toBeVisible();
 
     await context.close();
   });

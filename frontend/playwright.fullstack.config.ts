@@ -6,6 +6,7 @@ const sqlitePath =
   process.env.EASYAUTH_PLAYWRIGHT_SQLITE_PATH ?? `/tmp/easyauth-playwright-${port}.sqlite3`;
 const downstreamPort = process.env.EASYAUTH_E2E_DOWNSTREAM_PORT ?? "18010";
 const downstreamSecret = process.env.EASYAUTH_E2E_DOWNSTREAM_SECRET ?? "whsec_e2e_handover";
+const downstreamPeer = process.env.EASYAUTH_E2E_PEER_USER ?? "e2e-peer";
 const downstreamHealth = `http://127.0.0.1:${downstreamPort}/health`;
 
 const djangoEnv = [
@@ -16,6 +17,7 @@ const djangoEnv = [
   'EASYAUTH_E2E_ALLOW_INSECURE_WEBHOOK_HOSTS="127.0.0.1"',
   `EASYAUTH_E2E_DOWNSTREAM_PORT="${downstreamPort}"`,
   `EASYAUTH_E2E_DOWNSTREAM_SECRET="${downstreamSecret}"`,
+  `EASYAUTH_E2E_PEER_USER="${downstreamPeer}"`,
   `EASYAUTH_E2E_MANAGER_USER="${process.env.EASYAUTH_E2E_MANAGER_USER ?? "manager"}"`,
   `EASYAUTH_E2E_SUBJECT_USER="${process.env.EASYAUTH_E2E_SUBJECT_USER ?? "e2e-subject"}"`,
 ].join(" ");
@@ -37,6 +39,7 @@ export default defineConfig({
         [
           `EASYAUTH_E2E_DOWNSTREAM_PORT="${downstreamPort}"`,
           `EASYAUTH_E2E_DOWNSTREAM_SECRET="${downstreamSecret}"`,
+          `EASYAUTH_E2E_PEER_USER="${downstreamPeer}"`,
           "PYTHONPATH=sdk/python/src",
           ".venv/bin/python scripts/e2e_handover_downstream.py",
         ].join(" "),
