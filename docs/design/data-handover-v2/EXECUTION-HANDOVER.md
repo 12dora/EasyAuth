@@ -5,7 +5,7 @@
 
 ## 2026-08-11 班次增补（最新状态，覆盖下文过时处）
 
-- **§1 三批未审交付已全部审毕并修复关闭**：第三轮 review（8 分片 opus high，84 findings：EA 5b/13M/13m、ET 1b/16M/15m、EP 4b/11M/6m）→ grok 修复 → opus 复核（EA fail→8 findings、ET fail→7、EP pass-with-nits→4）→ grok round-3.5 修复 → 指挥抽查 majors 全部确认。**103 条零 disputed 遗留**。产物见 `review-artifacts/round3-*.md`。
+- **§1 三批未审交付已全部审毕并修复关闭**：第三轮 review（8 分片 opus high，84 findings：EA 5b/13M/13m、ET 1b/16M/15m、EP 4b/11M/6m）→ grok 修复 → opus 复核（EA fail→8 findings、ET fail→7、EP pass-with-nits→4）→ grok round-3.5 修复 → 指挥抽查 majors 全部确认。**103 条零 disputed 遗留**（该轮产物已闭环删除，需要原文见 git 历史 `20da6c2`）。
 - **§3.2 跨仓 blocker 已证伪**：三道白名单（ET 导出器 `97b85791` / SDK 0.4.0 / EA `109e811`）代码里早已齐备，本班用真实解析函数实证 PARSE OK；上一班的失败是打在旧部署容器上。已补钉扎测试。§14 联调检查点仍需部署后跑。
 - **§3.3 A1c 自报缺口处置**：beat 已改 crontab 09:00 Asia/Shanghai 并真钉扎；send_reminder 缺身份时 fail-loud 重试（身份 provision 仍为债）；async_attention 30 分钟退避已在 preempt 前生效。
 - **终检已过**：EA 全量 1492 绿 + PG lane 9 绿 + check/migrations 干净（前端零改动，原构建绿有效）；ET `finish-check` exit 0（app/tests 3544 绿）；EP 2275→2287 绿 + 三 check 脚本 OK。
@@ -92,14 +92,21 @@ A1c 已核验：SQLite lane 89 绿、PG lane 7 绿（租约+触发器）、`mana
 
 ## 4. Review 产物与关键文件
 
-- 本目录 `review-artifacts/`：`ep-review-findings.md`（65 条）、`a1b-review-findings.md`（28 条）、`a3-locks-findings.md`。A2/SDK 的 findings 已全部修复关闭，未存档。
+- 本目录 `review-artifacts/` 只保留**第四轮**产物：`round4-codex-findings.md`、`round4-verdicts-and-fixes.md`。
+  保留原因：后者记录了 3 条 `[accepted-debt]`（`ep-op-worker-01/03/04`，尚未进任何仓库风险清单）与 6 条 refuted 判定，
+  前者是这些条目的缺陷正文。这 3 条债转移进 EasyProject 风险清单后，两份产物即可一并删除。
+- 更早的产物（a1b / a3-locks / ep-review / round3 / round3.5 系列共 13 份）都已闭环并删除，
+  需要原文见 git 历史 `4e63219`、`20da6c2`。A2/SDK 的 findings 已全部修复关闭，从未存档。
 - CCR：`EasyProject/docs/implementation/ccr/CCR-DH2-EP-01-…md`（APPROVED `be41946`）；裁定合入 `EasyProject/contracts/ownership.md`（`27a0415`）；ADR-002 §36 已批准落地（EasyAuth `bc4f6c1`）。
 - 本班以 AG-00 受托身份完成了上述批准（PROPOSED→APPROVED 双提交留痕）；用户已知情。
 
 ## 5. 环境速查
 
-- **EasyAuth 测试**（host 无 python/uv，一律 Docker）：
+- **EasyAuth 测试**：host `.venv` 现已可用（uv + Python 3.12，`~/.local/bin/uv`），`.venv/bin/pytest` 直接跑即可
+  （2026-08-11 复核：`tests/unit` 827 绿）。上文"host 无 python/uv"的旧说法已作废。
+  需要干净环境或 PG lane 时才走 Docker：
   `docker run --rm -v "$PWD":/app -w /app ghcr.io/astral-sh/uv:python3.12-bookworm-slim bash -lc "uv run --frozen pytest <paths> -q"`；PG lane 起一次性 `postgres:16`，`DATABASE_URL=postgres://postgres:test@host.docker.internal:<port>/postgres`。
+  注意容器内跑 pytest 必须 `UV_PROJECT_ENVIRONMENT=/opt/venv` + `--extra dev`，否则会把 host venv 改写成 Linux 布局。
 - **EasyTrade 门禁**：`BACKEND_TESTS='app/tests' make finish-check`（**不能**裸跑 `make finish-check`，会静默跳过 app/tests）。
 - **EasyProject**：`backend/.venv/bin/python -m pytest`（host venv 可用）；`python3 scripts/check_permissions.py`；`bash scripts/quality-gate.sh`。
 - **部署**（详见记忆 `reverse-proxy-deploy-topology`）：EasyAuth `docker compose -f docker-compose.deploy.yml build web && docker compose -f docker-compose.deploy.yml up -d`（web+worker+beat+stream 全起，worker/beat 必起）；EasyTrade `docker compose build backend frontend && docker compose up -d` + 手动 alembic；**EasyProject 的部署方式本班未查证**——上线前先确认其容器/compose 形态。
