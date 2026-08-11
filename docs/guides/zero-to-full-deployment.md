@@ -30,6 +30,8 @@
    **bootstrap token 之后同时充当 EasyAuth 的 `EASYAUTH_AUTHENTIK_API_TOKEN`。**
 3. `docker compose up -d`，然后**等 blueprint 应用完**——worker 异步创建默认 flow，轮询
    `/api/v3/flows/instances/` 看到 `default-source-authentication` 再继续。
+   本机现行拓扑是 Authentik 发布在宿主 `127.0.0.1:19000`，由反代对外为 auth 域名；
+   EasyAuth 容器访问它必须走 `http://host.docker.internal:19000`（容器内的 `localhost` 不是宿主）。
 4. 按 [Authentik 自动化配置](authentik-easyauth-automation-setup-llm.md) 幂等配置：钉钉
    Source（slug `dingtalk`）、`EasyAuth Admins` 组、`easyauth_org` / `dingtalk` scope mapping、
    `easyauth-portal` Provider + Application、logout stage 绑定、brand default_application、
@@ -56,7 +58,12 @@
 3. `.env.local`：OIDC 端点指向公网 Authentik、`EASYAUTH_AUTHENTIK_API_TOKEN` 用上一步的
    bootstrap token、client secret 与 Authentik provider 一致。部署级覆盖（容器内地址、公网
    回调、WebAuthn RP）都在 `docker-compose.deploy.yml` 里。
-4. `docker compose -f docker-compose.deploy.yml up -d`（web / worker / beat / stream / redis）。
+4. `docker compose -f docker-compose.deploy.yml up -d`——七个服务全起：
+   web、worker、webhook-worker、notify-worker、beat、stream、redis。
+   **worker 和 beat 不是可选增强**：beat 调度的目录同步是离职检出的信号源，缺了离职/转岗自动化
+   根本不触发；webhook-worker 和 notify-worker 各自消费独立队列，缺了对应投递会静默积压。
+   端口只发布到 `127.0.0.1:8001`，由反代对外为 iam 域名。
+   **之后每次改代码都要 `build web` 再 `up -d`**——源码 `COPY` 进镜像，只重启不重建等于没上线。
 5. 本地管理员登录 `/auth/local/` → `/auth/local/security/` 绑定 TOTP 或通行密钥 →
    `/console/settings` 填钉钉 AppKey / AppSecret →「测试连通性」应显示"钉钉凭证有效"。
    之后 stream 容器就能连上钉钉 WebSocket。
