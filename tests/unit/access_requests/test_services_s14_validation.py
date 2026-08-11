@@ -14,7 +14,7 @@ from easyauth.access_requests.services import (
     AccessRequestSubmissionError,
 )
 from easyauth.access_requests.submission_types import ScopedAccessRequestGrant
-from easyauth.accounts.models import UserMirror
+from easyauth.accounts.models import DingTalkUserOrgContext, UserMirror
 from easyauth.applications.models import (
     App,
     ApprovalRule,
@@ -271,6 +271,13 @@ def test_managed_users_requires_resolved_direct_manager_as_approver() -> None:
         dingtalk_corp_id="corp-managed",
         dingtalk_userid="managed-user-dingtalk",
         manager_userid=manager.dingtalk_userid,
+    )
+    _ = DingTalkUserOrgContext.objects.create(
+        source_slug="dingtalk",
+        corp_id="corp-managed",
+        user_id=user.dingtalk_userid,
+        manager_chain=[{"user_id": manager.dingtalk_userid}],
+        stale=False,
     )
     app = App.objects.create(app_key="managed-approver-app", name="直属主管校验")
     _ = AppScope.objects.create(app=app, key="MANAGED_USERS", name="下级用户")
