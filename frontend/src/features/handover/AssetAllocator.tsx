@@ -55,19 +55,50 @@ export function AssetAllocator({
   onSnapshotStale,
 }: AssetAllocatorProps) {
   const { t } = useI18n();
+  const queryClient = useQueryClient();
   const [expandedType, setExpandedType] = useState<string | null>(null);
   const [localTypes, setLocalTypes] = useState(action.asset_types);
   const [typeError, setTypeError] = useState<string | null>(null);
   const [savingType, setSavingType] = useState(false);
   const [detailsBusy, setDetailsBusy] = useState(false);
+  /** 412 后递增，写入 queryKey 使旧快照缓存不可复用 */
+  const [snapshotEpoch, setSnapshotEpoch] = useState(0);
 
   useEffect(() => {
     setLocalTypes(action.asset_types);
   }, [action.asset_types]);
 
+  // transfer 无接收人是显式非法草稿：禁止执行直到 PATCH 落库合法值（02 §6.1）
+  const hasIncompleteTypeTransfer = localTypes.some(
+    (row) => row.count > 0 && row.default_action === "transfer" && !row.default_to_user?.user_id,
+  );
+
   useEffect(() => {
-    onBusyChange?.(savingType || detailsBusy);
-  }, [onBusyChange, savingType, detailsBusy]);
+    onBusyChange?.(savingType || detailsBusy || hasIncompleteTypeTransfer);
+  }, [onBusyChange, savingType, detailsBusy, hasIncompleteTypeTransfer]);
+
+  const clearActionSnapshotCache = () => {
+    setExpandedType(null);
+    setSnapshotEpoch((epoch) => epoch + 1);
+    void queryClient.removeQueries({
+      predicate: (query) => {
+        const key = query.queryKey;
+        return (
+          key[0] === "handover" &&
+          (key[1] === "items" || key[1] === "overrides") &&
+          key[2] === surface &&
+          key[3] === String(taskId) &&
+          key[4] === action.app_key
+        );
+      },
+    });
+  };
+
+  const handleSnapshotStale = () => {
+    clearActionSnapshotCache();
+    setTypeError(t("handover.portal.detail.snapshotStale"));
+    onSnapshotStale?.();
+  };
 
   const arrangedCount = localTypes.filter((row) => row.default_action !== "skip" || row.override_count > 0).length;
   const totalTypes = localTypes.length;
@@ -78,6 +109,7 @@ export function AssetAllocator({
     nextUser: HandoverUserRef | null,
   ) => {
     // transfer 必须先本地展示接收人选择器，选中接收人后才 PATCH（01 §5.4 receiver_required）
+    // 非法草稿期间 onBusyChange=true，父级禁用执行，避免用服务端旧 assignment 执行。
     if (nextAction === "transfer" && !nextUser) {
       setLocalTypes((current) =>
         current.map((row) =>
@@ -86,7 +118,7 @@ export function AssetAllocator({
             : row,
         ),
       );
-      setTypeError(null);
+      setTypeError(t("handover.allocator.receiverRequired"));
       return;
     }
 
@@ -127,8 +159,7 @@ export function AssetAllocator({
       setLocalTypes(previous);
       const reason = apiErrorReason(error);
       if (reason === "snapshot_stale") {
-        setTypeError(t("handover.portal.detail.snapshotStale"));
-        onSnapshotStale?.();
+        handleSnapshotStale();
       } else {
         setTypeError((error as Error).message);
       }
@@ -187,6 +218,7 @@ export function AssetAllocator({
                         aria-label={`${assetType.label} ${t("handover.allocator.receiver")}`}
                         onChange={(user) => {
                           if (!user) {
+                            // 清空接收人 = 非法草稿；busy 锁住执行，直到选中新人并 PATCH
                             setLocalTypes((current) =>
                               current.map((row) =>
                                 row.type === assetType.type
@@ -194,6 +226,7 @@ export function AssetAllocator({
                                   : row,
                               ),
                             );
+                            setTypeError(t("handover.allocator.receiverRequired"));
                             return;
                           }
                           void patchType(assetType, "transfer", user);
@@ -226,8 +259,9 @@ export function AssetAllocator({
                   appKey={action.app_key}
                   assetType={assetType}
                   readOnly={readOnly}
+                  snapshotEpoch={snapshotEpoch}
                   onBusyChange={setDetailsBusy}
-                  onSnapshotStale={onSnapshotStale}
+                  onSnapshotStale={handleSnapshotStale}
                   onSaved={(result) => {
                     setLocalTypes((current) =>
                       current.map((row) =>
@@ -289,6 +323,7 @@ function AssetTypeDetails({
   appKey,
   assetType,
   readOnly,
+  snapshotEpoch,
   onSaved,
   onBusyChange,
   onSnapshotStale,
@@ -298,6 +333,7 @@ function AssetTypeDetails({
   appKey: string;
   assetType: HandoverAssetType;
   readOnly: boolean;
+  snapshotEpoch: number;
   onSaved: (result: { override_count: number; confirm_version: number; overrides_version: number }) => void;
   onBusyChange?: (busy: boolean) => void;
   onSnapshotStale?: () => void;
@@ -307,10 +343,10 @@ function AssetTypeDetails({
   const [page, setPage] = useState(1);
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  /** 完整 override 草稿集合（跨页/搜索）；删除即从本 map 移除，不得再从服务端快照复活 */
   const [drafts, setDrafts] = useState<Record<string, DraftOverride>>({});
   const [loadedOverrides, setLoadedOverrides] = useState(false);
   const [overridesVersion, setOverridesVersion] = useState(0);
-  const [fullOverrides, setFullOverrides] = useState<DraftOverride[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -321,7 +357,7 @@ function AssetTypeDetails({
   const basePath = handoverAssetTypePath(surface, taskId, appKey, assetType.type);
 
   const overridesQuery = useQuery({
-    queryKey: ["handover", "overrides", surface, String(taskId), appKey, assetType.type],
+    queryKey: ["handover", "overrides", surface, String(taskId), appKey, assetType.type, snapshotEpoch],
     queryFn: async () => apiRequest<HandoverOverridesPayload>(`${basePath}/overrides`),
   });
 
@@ -335,12 +371,17 @@ function AssetTypeDetails({
       to_user: entry.to_user ?? (entry.to_user_id ? { user_id: entry.to_user_id, name: entry.to_user_id } : null),
       label: entry.label,
     }));
-    setFullOverrides(mapped);
     setOverridesVersion(overridesQuery.data.overrides_version);
     setLoadedOverrides(true);
     setDrafts(Object.fromEntries(mapped.map((entry) => [entry.asset_id, entry])));
     setError(null);
   }, [overridesQuery.data]);
+
+  const resetLocalOverrideState = () => {
+    setDrafts({});
+    setLoadedOverrides(false);
+    setOverridesVersion(0);
+  };
 
   useEffect(() => {
     if (!overridesQuery.error) {
@@ -351,8 +392,7 @@ function AssetTypeDetails({
     const reason = apiErrorReason(overridesQuery.error);
     if (reason === "snapshot_stale") {
       setError(t("handover.portal.detail.snapshotStale"));
-      setDrafts({});
-      setFullOverrides([]);
+      resetLocalOverrideState();
       onSnapshotStale?.();
       return;
     }
@@ -360,7 +400,17 @@ function AssetTypeDetails({
   }, [overridesQuery.error, onSnapshotStale, t]);
 
   const itemsQuery = useQuery({
-    queryKey: ["handover", "items", surface, String(taskId), appKey, assetType.type, page, debouncedSearch],
+    queryKey: [
+      "handover",
+      "items",
+      surface,
+      String(taskId),
+      appKey,
+      assetType.type,
+      snapshotEpoch,
+      page,
+      debouncedSearch,
+    ],
     queryFn: () =>
       apiRequest<HandoverAssetItemsPage>(
         `${basePath}/items?page=${page}&page_size=50&q=${encodeURIComponent(debouncedSearch)}`,
@@ -375,9 +425,7 @@ function AssetTypeDetails({
     const reason = apiErrorReason(itemsQuery.error);
     if (reason === "snapshot_stale") {
       setError(t("handover.portal.detail.snapshotStale"));
-      setDrafts({});
-      setFullOverrides([]);
-      setLoadedOverrides(false);
+      resetLocalOverrideState();
       onSnapshotStale?.();
       return;
     }
@@ -420,7 +468,7 @@ function AssetTypeDetails({
       asset_id: item.id,
       label: item.label,
     };
-    // 条目级 transfer 也须先选接收人；无接收人时留在 draft 但不算合法 override 提交
+    // 改回默认 → 从完整草稿集删除；不得依赖 fullOverrides 在换页时复活
     const sameAction = merged.action === assetType.default_action;
     const sameUser =
       (merged.to_user?.user_id ?? "") === (assetType.default_to_user?.user_id ?? "");
@@ -433,24 +481,22 @@ function AssetTypeDetails({
       }
       return nextMap;
     });
+    setError(null);
   };
+
+  const draftList = Object.values(drafts);
+  const hasIncompleteTransferDraft = draftList.some(
+    (entry) => entry.action === "transfer" && !entry.to_user?.user_id,
+  );
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      // PUT 整体替换：合并未出现在当前页的既有 override + 本页 drafts
-      const pageIds = new Set(items.map((item) => item.id));
-      const fromOtherPages = fullOverrides.filter((entry) => !pageIds.has(entry.asset_id));
-      const byId = new Map<string, DraftOverride>();
-      for (const entry of fromOtherPages) {
-        byId.set(entry.asset_id, entry);
+      // drafts 即完整替换集合：跨页删除必须在 drafts 中已生效，禁止从旧快照回填
+      if (draftList.some((entry) => entry.action === "transfer" && !entry.to_user?.user_id)) {
+        throw new Error(t("handover.allocator.receiverRequired"));
       }
-      for (const entry of Object.values(drafts)) {
-        byId.set(entry.asset_id, entry);
-      }
-      // Remove any that match defaults；transfer 无接收人的条目不得提交
-      const overrides = [...byId.values()]
+      const overrides = draftList
         .filter((entry) => isStillOverride(entry, assetType))
-        .filter((entry) => entry.action !== "transfer" || Boolean(entry.to_user?.user_id))
         .map((entry) => ({
           asset_id: entry.asset_id,
           action: entry.action,
@@ -470,14 +516,13 @@ function AssetTypeDetails({
     onSuccess: (payload) => {
       setError(null);
       setOverridesVersion(payload.overrides_version);
-      setFullOverrides(Object.values(drafts).filter((entry) => isStillOverride(entry, assetType)));
       onSaved({
         override_count: payload.override_count,
         confirm_version: payload.confirm_version,
         overrides_version: payload.overrides_version,
       });
       void queryClient.invalidateQueries({
-        queryKey: ["handover", "overrides", surface, String(taskId), appKey, assetType.type],
+        queryKey: ["handover", "overrides", surface, String(taskId), appKey, assetType.type, snapshotEpoch],
       });
     },
     onError: async (err: Error) => {
@@ -489,9 +534,7 @@ function AssetTypeDetails({
       }
       if (reason === "snapshot_stale") {
         setError(t("handover.portal.detail.snapshotStale"));
-        setDrafts({});
-        setFullOverrides([]);
-        setLoadedOverrides(false);
+        resetLocalOverrideState();
         onSnapshotStale?.();
         return;
       }
@@ -500,10 +543,19 @@ function AssetTypeDetails({
   });
 
   useEffect(() => {
-    onBusyChange?.(saveMutation.isPending);
-  }, [onBusyChange, saveMutation.isPending]);
+    onBusyChange?.(saveMutation.isPending || hasIncompleteTransferDraft);
+  }, [onBusyChange, saveMutation.isPending, hasIncompleteTransferDraft]);
 
-  const canSubmit = loadedOverrides && !readOnly && !saveMutation.isPending;
+  // 保存中或仍在拉取权威集合时禁止提交/编辑，避免 PUT 期间改动被成功回流擦除
+  const editorsLocked = readOnly || saveMutation.isPending;
+  const queriesSettled =
+    loadedOverrides &&
+    !overridesQuery.isFetching &&
+    !itemsQuery.isFetching &&
+    !overridesQuery.isError &&
+    !itemsQuery.isError;
+  const canSubmit =
+    queriesSettled && !readOnly && !saveMutation.isPending && !hasIncompleteTransferDraft;
   const overridesLoading = overridesQuery.isLoading && !overridesQuery.isError;
   const itemsLoading = loadedOverrides && itemsQuery.isLoading && !itemsQuery.isError;
   const hasQueryError = Boolean(error);
@@ -514,6 +566,9 @@ function AssetTypeDetails({
         <StatusBanner live="status" tone="amber" title={t("handover.allocator.stale")} />
       ) : null}
       {error ? <StatusBanner live="alert" tone="signal" title={error} /> : null}
+      {hasIncompleteTransferDraft ? (
+        <StatusBanner live="alert" tone="signal" title={t("handover.allocator.receiverRequired")} />
+      ) : null}
       {overridesLoading ? (
         <p className="text-body text-ink-faint">{t("common.loading")}</p>
       ) : overridesQuery.isError && !loadedOverrides ? (
@@ -527,6 +582,7 @@ function AssetTypeDetails({
               value={search}
               placeholder={t("handover.allocator.search")}
               aria-label={t("handover.allocator.search")}
+              disabled={editorsLocked}
               onChange={(event) => {
                 setSearch(event.currentTarget.value);
                 setPage(1);
@@ -562,7 +618,7 @@ function AssetTypeDetails({
                       <AssetActionSelect
                         value={current.action}
                         releasable={assetType.releasable}
-                        disabled={readOnly}
+                        disabled={editorsLocked}
                         aria-label={`${item.label} action`}
                         onChange={(next) =>
                           updateItem(item, {
@@ -576,7 +632,7 @@ function AssetTypeDetails({
                           surface={surface}
                           taskId={taskId}
                           value={current.to_user}
-                          disabled={readOnly}
+                          disabled={editorsLocked}
                           aria-label={`${item.label} ${t("handover.allocator.receiver")}`}
                           onChange={(user) => updateItem(item, { to_user: user, action: "transfer" })}
                         />
@@ -592,13 +648,23 @@ function AssetTypeDetails({
           )}
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2">
-              <Button size="sm" type="button" disabled={page <= 1} onClick={() => setPage((p) => p - 1)}>
+              <Button
+                size="sm"
+                type="button"
+                disabled={page <= 1 || editorsLocked}
+                onClick={() => setPage((p) => p - 1)}
+              >
                 ←
               </Button>
               <span className="text-caption text-ink-faint">
                 {page} / {totalPages}
               </span>
-              <Button size="sm" type="button" disabled={page >= totalPages} onClick={() => setPage((p) => p + 1)}>
+              <Button
+                size="sm"
+                type="button"
+                disabled={page >= totalPages || editorsLocked}
+                onClick={() => setPage((p) => p + 1)}
+              >
                 →
               </Button>
             </div>
@@ -608,7 +674,13 @@ function AssetTypeDetails({
               variant="primary"
               disabled={!canSubmit}
               loading={saveMutation.isPending}
-              onClick={() => saveMutation.mutate()}
+              onClick={() => {
+                if (hasIncompleteTransferDraft) {
+                  setError(t("handover.allocator.receiverRequired"));
+                  return;
+                }
+                saveMutation.mutate();
+              }}
             >
               {t("handover.allocator.saveOverrides")}
             </Button>
