@@ -11,32 +11,16 @@
 
 这个边界避免把内部组件和任务节奏暴露给匿名调用方，同时保留运维排障需要的真实依赖状态。
 
-## 本地数据服务
+## 依赖服务的 healthcheck
 
-开发用 `docker-compose.yml` 为 PostgreSQL 和 Redis 定义真实 healthcheck：
+healthcheck 必须探测真实存活，不用 `sleep` 占位。
 
-- PostgreSQL：`pg_isready -U easyauth -d easyauth`
-- Redis：`redis-cli ping`
+- `docker-compose.yml`（开发数据存储）：PostgreSQL 用 `pg_isready -U easyauth -d easyauth`，
+  Redis 用 `redis-cli ping`。两者都 `healthy` 后再执行迁移和启动应用进程。
+- `docker-compose.deploy.yml`（反代部署）：Celery worker 覆盖镜像默认的 `curl :8001` 探针，
+  改用 `celery inspect ping`——worker 不监听 HTTP 端口，沿用默认探针会把活着的 worker 判成不健康。
 
-启动命令示例：
-
-```bash
-EASYAUTH_POSTGRES_PASSWORD=<生成> docker compose up -d postgres redis
-docker compose ps
-```
-
-只有两个服务都显示 `healthy` 后，才继续执行迁移和启动 Django/Celery。
-
-## 运行服务
-
-当前仓库只把 Gunicorn 作为运行依赖锁定：
-
-```bash
-.venv/bin/gunicorn easyauth.config.wsgi:application --bind 0.0.0.0:8001 --workers 4
-```
-
-ASGI 入口文件仍存在，但没有锁定 Uvicorn 或等价 ASGI server；在补依赖、锁文件和启动探测前，
-不要把 ASGI 命令写入部署流程。
+启动命令见[根 README 的部署章节](../../README.md#生产部署手动)。
 
 ## Stream 心跳
 
