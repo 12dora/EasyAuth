@@ -13,7 +13,6 @@ from easyauth.lifecycle.models import (
     ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
     ACTION_STATUS_ASYNC_PENDING,
     ACTION_STATUS_BLOCKED,
-    ACTION_STATUS_DONE,
     ACTION_STATUS_EXECUTING,
     ACTION_STATUS_FAILED,
     ACTION_STATUS_PENDING,
@@ -330,9 +329,6 @@ def aggregated_summary(action: HandoverAppAction) -> JsonObject | None:
     delivery.response_payload 经 redactor 后可能丢嵌套计数; result_summary 由
     ``_merge_result_summary`` 在 complete_data_phase 中维护, 是 API 侧真相源。
     """
-    if action.status != ACTION_STATUS_DONE and action.data_completed_at is None:
-        if action.status not in {ACTION_STATUS_DONE, ACTION_STATUS_FAILED}:
-            return None
     stored = getattr(action, "result_summary", None)
     if isinstance(stored, dict) and stored:
         return stored  # type: ignore[return-value]
