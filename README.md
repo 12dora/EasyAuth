@@ -408,6 +408,27 @@ ASGI worker 时使用，但在加入 Uvicorn 或等价 ASGI 服务器依赖并�
 当 `DJANGO_DEBUG=0` 时，缺失关键配置（secret key、加密 key、`DATABASE_URL`）会**快速失败**——
 这是刻意设计，生产环境不存在静默回退 SQLite。
 
+### 容器化部署（本仓库自用的反代形态）
+
+上面是通用的手动部署路径。本仓库自己的部署走 `docker-compose.deploy.yml`：
+web / celery worker / celery beat / webhook worker / 钉钉 stream 五个进程共用同一个
+`easyauth-web:local` 镜像，加一个专用 Redis，端口只发布到 `127.0.0.1:8001`，由反向代理对外。
+
+```bash
+docker compose -f docker-compose.deploy.yml build web
+docker compose -f docker-compose.deploy.yml up -d
+```
+
+三件必须知道的事：
+
+- **改完代码必须重建镜像。** `Dockerfile` 把 `src/`、`manage.py` 和前端构建产物 `COPY` 进镜像，
+  只 `restart` 容器不会带上新代码；本机 dev server 跑通也不等于线上生效。验证要打公网 URL 的真实响应。
+- **worker 和 beat 不是可选增强。** 缺了会静默丢掉一整批能力：beat 调度的目录同步是离职检出的信号源
+  （没有它，离职/转岗自动化链路根本不触发），限时授权回收和依赖健康探测也依赖它；
+  worker 消费 webhook 投递、通知投递和 Authentik 离职禁号。
+- **该 compose 是开发级部署**（`DJANGO_DEBUG=1` + 挂载宿主 SQLite，为保留已注册应用与联调状态），
+  与上面 `DJANGO_DEBUG=0` + PostgreSQL 的生产口径不同。文件顶部的注释写清了每一处取舍的原因。
+
 ---
 
 ## 用 AI Agent 部署
@@ -545,7 +566,8 @@ EasyAuth/
 ├─ sdk/python/           # easyauth-app-sdk（下游接入，零运行时依赖）
 ├─ docs/                 # 架构、API、指南、决策、运维（中文）
 ├─ tests/                # 单元 / 集成
-└─ docker-compose.yml    # 本地/生产数据存储 PostgreSQL + Redis
+├─ docker-compose.yml            # 开发数据存储 PostgreSQL + Redis
+└─ docker-compose.deploy.yml     # 反代部署（web/worker/beat/webhook-worker/stream + redis）
 ```
 
 ---
