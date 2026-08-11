@@ -1513,7 +1513,7 @@ def _finish_delivery_failure(
                 if plan is not None and plan.completed_batches > 0:
                     error = HandoverError(UNSHARDABLE_BATCH_MESSAGE)
                 else:
-                    _ensure_batch_plan_on_413(action)
+                    _ = _ensure_batch_plan_on_413(action)
             elif http_status in {HTTPStatus.PRECONDITION_FAILED, HTTPStatus.LOCKED}:
                 batch.status = BATCH_STATUS_FAILED
                 action.status = ACTION_STATUS_PENDING
@@ -2172,18 +2172,26 @@ def _assignment_hash(
         restored: list[dict[str, JsonValue]] = []
         for row in canonical_assignments:
             type_key = row.get("asset_type")
-            current_overrides = row.get("overrides", [])
+            raw_overrides = row.get("overrides", [])
+            current_overrides: list[dict[str, JsonValue]] = []
+            if isinstance(raw_overrides, list):
+                current_overrides = [
+                    dict(override) for override in raw_overrides if isinstance(override, dict)
+                ]
             completed = completed_by_type.get(str(type_key), {})
-            remaining = [
+            remaining: list[dict[str, JsonValue]] = [
                 override
                 for override in current_overrides
-                if isinstance(override, dict) and override.get("id") not in completed
+                if override.get("id") not in completed
             ]
             remaining.extend(completed.values())
             normalized = dict(row)
-            normalized["overrides"] = sorted(
-                remaining,
-                key=lambda override: str(override.get("id", "")),
+            normalized["overrides"] = cast(
+                "JsonValue",
+                sorted(
+                    remaining,
+                    key=lambda override: str(override.get("id", "")),
+                ),
             )
             restored.append(normalized)
         canonical_assignments = restored
