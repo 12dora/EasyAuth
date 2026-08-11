@@ -14,7 +14,9 @@
 - **新增用量纪律（用户 2026-08-11 指定）**：用 `~/code/agent_usage --json` 盯额度。codex 主池可用 >10% 时：清完 pending 后用 codex 全量复审本次改造（codex gpt-5.6-sol high=reviewer、medium=backend coder、grok high=frontend coder，分片要小）；claude 5h 可用 ≤10% 时收尾休眠、重置后 1min 唤醒。事件用 Monitor 脚本主动通知（60s 轮询、翻转才报）。
 - **push/部署/检查点均已完成（2026-08-11 凌晨）**：三仓已 push（EA 含 tag）；三仓已重建镜像上线（EA 迁移 4 个、ET alembic head=0003、EP 自动迁移）。上线排障记录：EP `APP_BASE_URL` 由 localhost 改 `https://eproject.jiefakj.com`；EA manifest-sync 校验异常兜 422（`0134bd8`）；宿主 fake-ip DNS 使容器把公网域名解析进 198.18/15 被 SSRF 拦，deploy compose 加 `extra_hosts` 固定到 122.51.254.148（`f7e205c`）；easytrade 历史 webhook 配置为内网 http（现行代码投递必拒），已改公网 https 并实测 webhook.test delivered。**§14**：easytrade 全过；easyproject descriptor 过（9 类 + declared），webhook.test 待用户补 DNSPod A 记录 `eproject.jiefakj.com→122.51.254.148` 与 frps 服务器 TLS 证书（本机 ssh key 被拒无法代办）。
 - **E2E 已通**（`56e0f31`/`dcc1010`/`8d0fb10`）：`EASYAUTH_HANDOVER_E2E=1 pnpm e2e:fullstack` 4/4（含改派 2 条→执行→done 全链路）。harness：host 装 user-local uv + 3.12 venv；`seed_handover_e2e`（DEBUG-only，走 `ensure_handover_task` 真实入口）；vendored-SDK 下游 stub（`scripts/e2e_handover_downstream.py`）；webhook 环回窄门 `EASYAUTH_E2E_ALLOW_INSECURE_WEBHOOK_HOSTS`（DEBUG+显式 env 双闸，默认惰性有单测钉扎）。注意：deploy compose 跑着 `DJANGO_DEBUG=1`（既有状态），窄门 env 未设故惰性，但收紧 deploy DEBUG 值得立项。
-- **剩余工作**：任务 #8 用户补 eproject DNS/TLS 后确认 webhook.test 自动转 delivered → 视 codex 额度触发全量复审（规则见上）。
+- **第四轮 codex 全量复审已完成（2026-08-11 上午，codex 重置后触发）**：22 分片 codex(gpt-5.6-sol high) 独立复审 → 95 findings → 21 分片对抗复核（新 codex 实例逐条反驳）→ 86 real / 6 refuted / 3 债 → 修复：后端 codex(medium) 11 批按仓串行 + 前端 grok(high) worktree（`round4-fe` 已合并）→ **85 fixed + 1 disputed-already-fixed，零遗留**。产物：`review-artifacts/round4-codex-findings.md`、`round4-verdicts-and-fixes.md`。终态门禁：EA 1564 绿 + PG lane 10 绿 + 前端 362 绿/build 绿；ET finish-check 3553 绿；EP 2296 绿 + 三 check OK。重点修复：非终批次 async-abandon 跳批、能力冲突静默放过、门户 TOCTOU、E2E 环回窄门再收紧、EP 纯绑定回滚、ET 用户先锁死锁面统一。
+- **环境备忘**：EasyAuth 仓库现有 host `.venv`（uv + Python 3.12，`~/.local/bin/uv`）；容器内跑 pytest 必须 `UV_PROJECT_ENVIRONMENT=/opt/venv` + `--extra dev`，否则会把 host venv 改写成 Linux 布局（本班踩过）。
+- **剩余工作**：任务 #8 用户补 eproject DNS/TLS 后确认 webhook.test 自动转 delivered。
 
 ## 0. 工作指令（必读）
 
