@@ -30,7 +30,14 @@ from easyauth.integrations.authentik.directory_sync import (
     UnsupportedDirectoryStatusError,
     sync_authentik_dingtalk_directory,
 )
-from easyauth.lifecycle.models import HandoverAppAction
+from easyauth.lifecycle.models import (
+    HANDOVER_KIND_OFFBOARD,
+    HANDOVER_KIND_TRANSFER,
+    HandoverAppAction,
+    HandoverTask,
+)
+from easyauth.lifecycle.tasks import RETRY_OFFBOARDING_TASK_NAME
+from easyauth.outbox.models import OutboxEvent
 
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
@@ -466,6 +473,61 @@ def test_directory_sync_marks_deleted_directory_user_departed_and_revokes_grants
         target_id="ak-departed-1",
     ).exists()
     assert HandoverAppAction.objects.filter(app=app).exists()
+
+
+def test_one_offboarding_kind_conflict_does_not_rollback_other_departures() -> None:
+    conflicted = UserMirror.objects.create(
+        authentik_user_id="ak-departed-conflict",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-conflict",
+        status="active",
+    )
+    unaffected = UserMirror.objects.create(
+        authentik_user_id="ak-departed-unaffected",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-unaffected",
+        status="active",
+    )
+    _ = HandoverTask.objects.create(
+        kind=HANDOVER_KIND_TRANSFER,
+        subject_user=conflicted,
+        created_by="admin",
+    )
+    client_stub = _stub_with_users(
+        [
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-conflict",
+                "status": "departed",
+            },
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-unaffected",
+                "status": "departed",
+            },
+        ],
+    )
+
+    result = sync_authentik_dingtalk_directory(client_stub)
+
+    conflicted.refresh_from_db()
+    unaffected.refresh_from_db()
+    assert conflicted.status == "departed"
+    assert unaffected.status == "departed"
+    assert result.departed_count == 2
+    assert result.offboarding_deferred_count == 1
+    assert HandoverTask.objects.filter(
+        subject_user=unaffected,
+        kind=HANDOVER_KIND_OFFBOARD,
+    ).exists()
+    deferred = OutboxEvent.objects.get(task_name=RETRY_OFFBOARDING_TASK_NAME)
+    assert deferred.args[0] == conflicted.pk
+    assert DingTalkDirectorySyncState.objects.get(
+        source_slug="dingtalk",
+        corp_id="corp-1",
+    ).generation == client_stub.generation
 
 
 def test_directory_sync_normalizes_inactive_user_to_disabled() -> None:

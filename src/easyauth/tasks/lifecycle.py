@@ -21,6 +21,7 @@ from easyauth.integrations.authentik.admin_client import (
     AuthentikAdminUserNotFoundError,
 )
 from easyauth.lifecycle.escalation import escalate_overdue_task
+from easyauth.lifecycle.errors import HandoverConflictError
 from easyauth.lifecycle.handover import poll_async_action, takeover_expired_lease
 from easyauth.lifecycle.models import (
     ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
@@ -30,7 +31,10 @@ from easyauth.lifecycle.models import (
     HandoverTask,
     TASK_OPEN_STATUSES,
 )
-from easyauth.lifecycle.tasks import DISABLE_ACCOUNT_TASK_NAME
+from easyauth.lifecycle.tasks import (
+    DISABLE_ACCOUNT_TASK_NAME,
+    RETRY_OFFBOARDING_TASK_NAME,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +77,29 @@ def disable_departed_account_task(user_mirror_id: int) -> str:
         detail=f"sessions_revoked={result.revoked_session_count}",
     )
     return "disabled"
+
+
+@shared_task(
+    name=RETRY_OFFBOARDING_TASK_NAME,
+    autoretry_for=(HandoverConflictError,),
+    retry_backoff=True,
+    retry_backoff_max=3600,
+    retry_jitter=True,
+    max_retries=None,
+    acks_late=True,
+)
+def retry_departed_offboarding_task(
+    user_mirror_id: int,
+    snapshot_grant_ids: list[int],
+) -> str:
+    """重试被单据 kind 冲突隔离的单个离职身份编排。"""
+    from easyauth.lifecycle.offboarding import start_offboarding
+
+    user = UserMirror.objects.filter(id=user_mirror_id).first()
+    if user is None:
+        return "user_missing"
+    _ = start_offboarding(user, snapshot_grant_ids=tuple(snapshot_grant_ids))
+    return "offboarding_started"
 
 
 @shared_task(name=LIFECYCLE_ESCALATION_TASK)

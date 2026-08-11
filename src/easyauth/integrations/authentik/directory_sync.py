@@ -30,7 +30,10 @@ from easyauth.integrations.authentik.directory_client import (
     AuthentikDirectoryError,
     AuthentikDirectoryUnavailableError,
 )
+from easyauth.lifecycle.errors import HandoverConflictError
 from easyauth.lifecycle.offboarding import start_offboarding
+from easyauth.lifecycle.tasks import RETRY_OFFBOARDING_TASK_NAME
+from easyauth.outbox.services import enqueue_task
 
 if TYPE_CHECKING:
     from easyauth.accounts.status import UserStatus
@@ -78,6 +81,7 @@ class AuthentikDirectorySyncResult:
     departed_count: int = 0
     revoked_count: int = 0
     org_fetch_failed_count: int = 0
+    offboarding_deferred_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +107,7 @@ class _StatusReconciliation:
     applied_count: int
     departed_count: int
     revoked_count: int
+    offboarding_deferred_count: int
 
 
 def sync_authentik_dingtalk_directory(
@@ -158,6 +163,7 @@ def sync_authentik_dingtalk_directory(
             departed_count=reconciliation.departed_count,
             revoked_count=reconciliation.revoked_count,
             org_fetch_failed_count=len(writable_snapshot.org_fetch_failures),
+            offboarding_deferred_count=reconciliation.offboarding_deferred_count,
         )
 
 
@@ -579,7 +585,12 @@ def _reconcile_missing_rows(snapshot: _DirectorySnapshot) -> tuple[int, int]:
 def _reconcile_user_mirror_status(snapshot: _DirectorySnapshot) -> _StatusReconciliation:
     corp_ids = _synced_corp_ids(snapshot)
     if not corp_ids:
-        return _StatusReconciliation(applied_count=0, departed_count=0, revoked_count=0)
+        return _StatusReconciliation(
+            applied_count=0,
+            departed_count=0,
+            revoked_count=0,
+            offboarding_deferred_count=0,
+        )
 
     # 状态已在任何写入前完成契约校验, 这里仅把权威快照映射为本地域状态。
     status_by_key: dict[tuple[str, str, str], UserStatus] = {
@@ -590,6 +601,7 @@ def _reconcile_user_mirror_status(snapshot: _DirectorySnapshot) -> _StatusReconc
     applied_count = 0
     departed_count = 0
     revoked_count = 0
+    offboarding_deferred_count = 0
     bound_users = UserMirror.objects.filter(
         dingtalk_source_slug=snapshot.source_slug,
         dingtalk_corp_id__in=corp_ids,
@@ -634,13 +646,30 @@ def _reconcile_user_mirror_status(snapshot: _DirectorySnapshot) -> _StatusReconc
             if not was_departed:
                 # 首次检出离职: 撤权已由 apply_directory_status 完成,
                 # 这里补齐生命周期立即项(自动建交接单+禁号+移出团队, §2.4)。
-                _ = start_offboarding(result.user, snapshot_grant_ids=grant_ids)
+                try:
+                    # start_offboarding 自带 atomic(savepoint)；单个身份冲突不得污染外层同步事务。
+                    _ = start_offboarding(result.user, snapshot_grant_ids=grant_ids)
+                except HandoverConflictError:
+                    _ = enqueue_task(
+                        event_key=(
+                            f"lifecycle-retry-offboarding:{result.user.pk}:"
+                            f"{_writable_generation_for_user(snapshot, result.user)}"
+                        ),
+                        task_name=RETRY_OFFBOARDING_TASK_NAME,
+                        args=[int(result.user.pk), list(grant_ids)],
+                    )
+                    offboarding_deferred_count += 1
 
     return _StatusReconciliation(
         applied_count=applied_count,
         departed_count=departed_count,
         revoked_count=revoked_count,
+        offboarding_deferred_count=offboarding_deferred_count,
     )
+
+
+def _writable_generation_for_user(snapshot: _DirectorySnapshot, user: UserMirror) -> int:
+    return snapshot.contracts[user.dingtalk_corp_id].generation
 
 
 def _synced_corp_ids(snapshot: _DirectorySnapshot) -> frozenset[str]:
