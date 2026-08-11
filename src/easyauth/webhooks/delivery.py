@@ -42,8 +42,9 @@ if TYPE_CHECKING:
     from easyauth.applications.models import App
     from easyauth.applications.ops_models import JsonValue
 
-# 指数退避重试间隔(秒): 1m/5m/30m/2h/6h, 共 5 次(§5.1)。
+# 指数退避重试间隔(秒): 首次尝试后最多重试 5 次(§5.1)。
 DELIVERY_RETRY_DELAYS_SECONDS: Final[tuple[int, ...]] = (60, 300, 1800, 7200, 21600)
+MAX_DELIVERY_ATTEMPTS: Final = 1 + len(DELIVERY_RETRY_DELAYS_SECONDS)
 DELIVERY_CONNECT_TIMEOUT_SECONDS: Final = 5.0
 DELIVERY_TOTAL_TIMEOUT_SECONDS: Final = 15.0
 DELIVERY_MAX_RESPONSE_BYTES: Final = 64 * 1024
@@ -77,9 +78,10 @@ class WebhookEndpointRejectedError(WebhookNotConfiguredError):
 class WebhookDeliveryAttemptError(RuntimeError):
     attempts: int
 
-    def __init__(self, message: str, *, attempts: int) -> None:
+    def __init__(self, message: str, *, attempts: int, retry_scheduled: bool) -> None:
         super().__init__(message)
         self.attempts = attempts
+        self.retry_scheduled = retry_scheduled
 
 
 class WebhookRedeliveryConflictError(RuntimeError):
@@ -122,14 +124,15 @@ def enqueue_delivery(
             event_type=event_type,
             target_url=url,
             payload=payload,
+            next_attempt_at=timezone.now(),
         )
         _schedule_delivery(delivery)
     return delivery
 
 
-def attempt_delivery(delivery_id: int, generation: int) -> WebhookDelivery:
+def attempt_delivery(delivery_id: int, generation: int, expected_attempt: int = 1) -> WebhookDelivery:
     """执行一次投递尝试; 失败时抛 WebhookDeliveryAttemptError 交由任务层重试。"""
-    delivery, claim_token = _claim_delivery(delivery_id, generation)
+    delivery, claim_token = _claim_delivery(delivery_id, generation, expected_attempt)
     if claim_token is None:
         return delivery
     try:
@@ -142,7 +145,7 @@ def attempt_delivery(delivery_id: int, generation: int) -> WebhookDelivery:
         body = dumps(signed_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
         timestamp = str(int(timezone.now().timestamp()))
         headers = {
-            "Content-Type": "application/json",
+            "Content-Type": "application/json; charset=utf-8",
             EVENT_HEADER: delivery.event_type,
             DELIVERY_HEADER: delivery.delivery_id,
             TIMESTAMP_HEADER: timestamp,
@@ -162,25 +165,46 @@ def attempt_delivery(delivery_id: int, generation: int) -> WebhookDelivery:
     except WebhookNotConfiguredError:
         raise
     except WebhookTransportError as error:
-        if not _mark_attempt_failed(delivery, claim_token, str(error)):
+        retry_scheduled = _mark_attempt_failed(delivery, claim_token, str(error))
+        if retry_scheduled is None:
             return _current_delivery(delivery_id)
         message = "webhook 投递失败: 目标不可达。"
-        raise WebhookDeliveryAttemptError(message, attempts=delivery.attempts) from error
+        raise WebhookDeliveryAttemptError(
+            message, attempts=delivery.attempts, retry_scheduled=retry_scheduled
+        ) from error
     except Exception as error:
-        if not _mark_attempt_failed(
+        retry_scheduled = _mark_attempt_failed(
             delivery,
             claim_token,
             f"{WEBHOOK_UNEXPECTED_ERROR_PREFIX}: {type(error).__name__}: {error}",
-        ):
+        )
+        if retry_scheduled is None:
             return _current_delivery(delivery_id)
         message = "webhook 投递失败: 非预期异常已记录并等待恢复。"
-        raise WebhookDeliveryAttemptError(message, attempts=delivery.attempts) from error
+        raise WebhookDeliveryAttemptError(
+            message, attempts=delivery.attempts, retry_scheduled=retry_scheduled
+        ) from error
     if not HTTPStatus.OK <= response.status_code < HTTPStatus.MULTIPLE_CHOICES:
         error = f"HTTP {response.status_code}"
-        if not _mark_attempt_failed(delivery, claim_token, error):
+        retryable = _is_retryable_status(response.status_code)
+        retry_delay = (
+            _retry_after_seconds(response.retry_after)
+            if response.status_code == HTTPStatus.TOO_MANY_REQUESTS
+            else None
+        )
+        retry_scheduled = _mark_attempt_failed(
+            delivery,
+            claim_token,
+            error,
+            retryable=retryable,
+            retry_delay_seconds=retry_delay,
+        )
+        if retry_scheduled is None:
             return _current_delivery(delivery_id)
         message = f"webhook 投递失败: {error}"
-        raise WebhookDeliveryAttemptError(message, attempts=delivery.attempts)
+        raise WebhookDeliveryAttemptError(
+            message, attempts=delivery.attempts, retry_scheduled=retry_scheduled
+        )
     updated = WebhookDelivery.objects.filter(
         id=delivery.id,
         status=DELIVERY_STATUS_PENDING,
@@ -191,6 +215,7 @@ def attempt_delivery(delivery_id: int, generation: int) -> WebhookDelivery:
         last_error="",
         claim_token="",
         lease_expires_at=None,
+        next_attempt_at=timezone.now(),
         updated_at=timezone.now(),
     )
     current = _current_delivery(delivery_id)
@@ -231,6 +256,7 @@ def redeliver(delivery: WebhookDelivery) -> WebhookDelivery:
             generation=F("generation") + 1,
             claim_token="",
             lease_expires_at=None,
+            next_attempt_at=timezone.now(),
             last_error="",
             updated_at=timezone.now(),
         )
@@ -286,11 +312,15 @@ def _schedule_delivery(delivery: WebhookDelivery) -> None:
     _ = enqueue_task(
         event_key=f"webhook-delivery:{delivery.delivery_id}:{delivery.generation}",
         task_name=WEBHOOK_DELIVERY_TASK_NAME,
-        args=[delivery.id, delivery.generation],
+        args=[delivery.id, delivery.generation, delivery.attempts + 1],
     )
 
 
-def _claim_delivery(delivery_id: int, generation: int) -> tuple[WebhookDelivery, str | None]:
+def _claim_delivery(
+    delivery_id: int,
+    generation: int,
+    expected_attempt: int,
+) -> tuple[WebhookDelivery, str | None]:
     now = timezone.now()
     claim_token = uuid.uuid4().hex
     updated = (
@@ -298,6 +328,8 @@ def _claim_delivery(delivery_id: int, generation: int) -> tuple[WebhookDelivery,
             id=delivery_id,
             status=DELIVERY_STATUS_PENDING,
             generation=generation,
+            attempts=expected_attempt - 1,
+            next_attempt_at__lte=now,
             claim_token="",
             lease_expires_at__isnull=True,
         )
@@ -316,8 +348,19 @@ def _mark_attempt_failed(
     delivery: WebhookDelivery,
     claim_token: str,
     error: str,
-) -> bool:
+    *,
+    retryable: bool = True,
+    retry_delay_seconds: int | None = None,
+) -> bool | None:
     with transaction.atomic():
+        should_retry = retryable and delivery.attempts < MAX_DELIVERY_ATTEMPTS
+        delay_index = min(delivery.attempts - 1, len(DELIVERY_RETRY_DELAYS_SECONDS) - 1)
+        delay_seconds = (
+            DELIVERY_RETRY_DELAYS_SECONDS[delay_index]
+            if retry_delay_seconds is None
+            else retry_delay_seconds
+        )
+        next_attempt_at = timezone.now() + timedelta(seconds=delay_seconds)
         updated = WebhookDelivery.objects.filter(
             id=delivery.id,
             status=DELIVERY_STATUS_PENDING,
@@ -327,35 +370,43 @@ def _mark_attempt_failed(
             last_error=error,
             claim_token="",
             lease_expires_at=None,
+            next_attempt_at=next_attempt_at if should_retry else timezone.now(),
+            status=DELIVERY_STATUS_PENDING if should_retry else DELIVERY_STATUS_FAILED,
             updated_at=timezone.now(),
         )
         if updated != 1:
-            return False
-        if delivery.attempts >= len(DELIVERY_RETRY_DELAYS_SECONDS):
-            _ = WebhookDelivery.objects.filter(
-                id=delivery.id,
-                status=DELIVERY_STATUS_PENDING,
-                generation=delivery.generation,
-            ).update(status=DELIVERY_STATUS_FAILED, updated_at=timezone.now())
+            return None
+        if not should_retry:
             _record_delivery_event(
                 _current_delivery(delivery.id),
                 action="webhook_delivery_exhausted",
             )
-            return True
-        delay_index = min(
-            delivery.attempts - 1,
-            len(DELIVERY_RETRY_DELAYS_SECONDS) - 1,
-        )
+            return False
         _ = enqueue_task(
             event_key=(
                 f"webhook-delivery:{delivery.delivery_id}:{delivery.generation}:"
                 f"attempt:{delivery.attempts + 1}"
             ),
             task_name=WEBHOOK_DELIVERY_TASK_NAME,
-            args=[delivery.id, delivery.generation],
-            countdown=DELIVERY_RETRY_DELAYS_SECONDS[delay_index],
+            args=[delivery.id, delivery.generation, delivery.attempts + 1],
+            countdown=delay_seconds,
         )
     return True
+
+
+def _is_retryable_status(status_code: int) -> bool:
+    return status_code in {HTTPStatus.BAD_REQUEST, HTTPStatus.LOCKED, HTTPStatus.TOO_MANY_REQUESTS} or (
+        status_code >= HTTPStatus.INTERNAL_SERVER_ERROR
+    )
+
+
+def _retry_after_seconds(value: str) -> int | None:
+    if not value or not value.isascii() or not value.isdecimal():
+        return None
+    seconds = int(value)
+    if seconds < 1:
+        return None
+    return min(seconds, DELIVERY_RETRY_DELAYS_SECONDS[-1])
 
 
 def _current_delivery(delivery_id: int) -> WebhookDelivery:

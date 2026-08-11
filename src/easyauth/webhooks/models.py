@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, ClassVar, Final, override
 
 from django.db import models
 from django.db.models import Q
+from django.utils import timezone
 
 from easyauth.applications.models import App
 from easyauth.config.crypto import EncryptedCharField
@@ -134,6 +135,9 @@ class WebhookDelivery(models.Model):
         default=DELIVERY_STATUS_PENDING,
     )
     attempts: models.PositiveIntegerField[int, int] = models.PositiveIntegerField(default=0)
+    next_attempt_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
+        default=timezone.now,
+    )
     generation: models.PositiveIntegerField[int, int] = models.PositiveIntegerField(default=1)
     claim_token: models.CharField[str, str] = models.CharField(max_length=32, blank=True)
     lease_expires_at: models.DateTimeField[

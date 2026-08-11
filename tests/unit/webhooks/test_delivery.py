@@ -81,7 +81,7 @@ def test_enqueue_persists_delivery_and_outbox_in_one_transaction() -> None:
     event = OutboxEvent.objects.get(
         event_key=f"webhook-delivery:{delivery.delivery_id}:{delivery.generation}",
     )
-    assert cast("list[object]", event.args) == [delivery.id, delivery.generation]
+    assert cast("list[object]", event.args) == [delivery.id, delivery.generation, 1]
     assert event.task_name == "easyauth.webhooks.deliver"
 
 
@@ -113,6 +113,7 @@ def test_attempt_delivery_signs_request_per_spec(monkeypatch: pytest.MonkeyPatch
     parsed = json.loads(body.decode("utf-8"))
     assert parsed == {"biz_key": "order-1", "event_type": "approval.completed"}
     assert headers[EVENT_HEADER] == "approval.completed"
+    assert headers["Content-Type"] == "application/json; charset=utf-8"
     assert headers[DELIVERY_HEADER] == "d-sign-1"
     timestamp = headers[TIMESTAMP_HEADER]
     assert isinstance(timestamp, str)
@@ -204,7 +205,7 @@ def test_attempt_delivery_failure_records_error_and_raises(
     retry_event = OutboxEvent.objects.get(
         event_key=f"webhook-delivery:{delivery.delivery_id}:{delivery.generation}:attempt:2",
     )
-    assert cast("list[object]", retry_event.args) == [delivery.id, delivery.generation]
+    assert cast("list[object]", retry_event.args) == [delivery.id, delivery.generation, 2]
 
     # 判定为最终失败后状态翻 failed。
     mark_delivery_exhausted(delivery.id, delivery.generation)
@@ -241,7 +242,102 @@ def test_attempt_delivery_unexpected_error_records_recoverable_attempt(
     retry_event = OutboxEvent.objects.get(
         event_key=f"webhook-delivery:{delivery.delivery_id}:{delivery.generation}:attempt:2",
     )
-    assert cast("list[object]", retry_event.args) == [delivery.id, delivery.generation]
+    assert cast("list[object]", retry_event.args) == [delivery.id, delivery.generation, 2]
+
+
+@pytest.mark.parametrize("status", [401, 403, 409, 412, 413, 422])
+def test_contractually_terminal_http_status_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch,
+    status: int,
+) -> None:
+    app = _configured_app(f"wh-terminal-{status}")
+    delivery = WebhookDelivery.objects.create(
+        app=app,
+        delivery_id=f"d-terminal-{status}",
+        event_type="webhook.test",
+        target_url="https://app.example.com/hook",
+        payload={},
+    )
+    monkeypatch.setattr(
+        delivery_module,
+        "post_webhook",
+        lambda **_kwargs: WebhookHttpResponse(status_code=status, body=b"{}", location=""),
+    )
+
+    with pytest.raises(WebhookDeliveryAttemptError) as exc_info:
+        _ = attempt_delivery(delivery.id, delivery.generation, 1)
+    delivery.refresh_from_db()
+    assert exc_info.value.retry_scheduled is False
+    assert delivery.status == "failed"
+    assert not OutboxEvent.objects.filter(event_key__contains=f"{delivery.delivery_id}:1:attempt").exists()
+
+
+def test_429_uses_retry_after_and_stale_redelivery_cannot_bypass_backoff(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _configured_app("wh-retry-after")
+    delivery = WebhookDelivery.objects.create(
+        app=app,
+        delivery_id="d-retry-after",
+        event_type="webhook.test",
+        target_url="https://app.example.com/hook",
+        payload={},
+    )
+    posts = 0
+
+    def rate_limited(**_kwargs: object) -> WebhookHttpResponse:
+        nonlocal posts
+        posts += 1
+        return WebhookHttpResponse(
+            status_code=HTTPStatus.TOO_MANY_REQUESTS,
+            body=b"{}",
+            location="",
+            retry_after="120",
+        )
+
+    monkeypatch.setattr(delivery_module, "post_webhook", rate_limited)
+    before = timezone.now()
+    with pytest.raises(WebhookDeliveryAttemptError):
+        _ = attempt_delivery(delivery.id, delivery.generation, 1)
+    delivery.refresh_from_db()
+    assert delivery.next_attempt_at >= before + timedelta(seconds=119)
+
+    stale = attempt_delivery(delivery.id, delivery.generation, 1)
+    early_scheduled = attempt_delivery(delivery.id, delivery.generation, 2)
+    assert stale.attempts == 1
+    assert early_scheduled.attempts == 1
+    assert posts == 1
+
+
+def test_all_five_retry_delays_are_reachable_before_sixth_attempt_exhausts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _configured_app("wh-all-retries")
+    delivery = WebhookDelivery.objects.create(
+        app=app,
+        delivery_id="d-all-retries",
+        event_type="webhook.test",
+        target_url="https://app.example.com/hook",
+        payload={},
+    )
+    monkeypatch.setattr(
+        delivery_module,
+        "post_webhook",
+        lambda **_kwargs: WebhookHttpResponse(status_code=500, body=b"{}", location=""),
+    )
+
+    for expected_attempt in range(1, 7):
+        _ = WebhookDelivery.objects.filter(pk=delivery.id).update(next_attempt_at=timezone.now())
+        with pytest.raises(WebhookDeliveryAttemptError) as exc_info:
+            _ = attempt_delivery(delivery.id, delivery.generation, expected_attempt)
+        assert exc_info.value.retry_scheduled is (expected_attempt < 6)
+
+    delivery.refresh_from_db()
+    assert delivery.attempts == 6
+    assert delivery.status == "failed"
+    assert OutboxEvent.objects.filter(
+        event_key=f"webhook-delivery:{delivery.delivery_id}:1:attempt:6",
+    ).exists()
 
 
 def test_redeliver_resets_counters() -> None:
@@ -448,7 +544,7 @@ def test_watchdog_advances_expired_lease_and_schedules_recovery() -> None:
     event = OutboxEvent.objects.get(
         event_key=f"webhook-delivery:{delivery.delivery_id}:{delivery.generation}",
     )
-    assert cast("list[object]", event.args) == [delivery.id, delivery.generation]
+    assert cast("list[object]", event.args) == [delivery.id, delivery.generation, 2]
 
 
 def test_expired_lease_same_generation_waits_for_watchdog(
@@ -486,7 +582,7 @@ def test_expired_lease_same_generation_waits_for_watchdog(
     event = OutboxEvent.objects.get(
         event_key=f"webhook-delivery:{delivery.delivery_id}:{delivery.generation}",
     )
-    assert cast("list[object]", event.args) == [delivery.id, delivery.generation]
+    assert cast("list[object]", event.args) == [delivery.id, delivery.generation, 2]
 
 
 def test_watchdog_ignores_unclaimed_pending_delivery() -> None:

@@ -23,8 +23,9 @@ def test_delivery_task_passes_generation_to_claim(
 ) -> None:
     captured: list[tuple[int, int]] = []
 
-    def attempt(delivery_id: int, generation: int) -> _Delivery:
+    def attempt(delivery_id: int, generation: int, expected_attempt: int) -> _Delivery:
         captured.append((delivery_id, generation))
+        assert expected_attempt == 1
         return _Delivery(status="delivered")
 
     monkeypatch.setattr(task_module, "attempt_delivery", attempt)
@@ -38,9 +39,9 @@ def test_delivery_task_passes_generation_to_claim(
 def test_delivery_task_retries_same_generation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fail_attempt(_delivery_id: int, _generation: int) -> _Delivery:
+    def fail_attempt(_delivery_id: int, _generation: int, _expected_attempt: int) -> _Delivery:
         message = "delivery failed"
-        raise WebhookDeliveryAttemptError(message, attempts=1)
+        raise WebhookDeliveryAttemptError(message, attempts=1, retry_scheduled=True)
 
     monkeypatch.setattr(task_module, "attempt_delivery", fail_attempt)
 
