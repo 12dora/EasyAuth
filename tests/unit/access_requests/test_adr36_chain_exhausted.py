@@ -13,6 +13,7 @@ from easyauth.access_requests.submission_types import (
 )
 from easyauth.accounts.models import USER_STATUS_ACTIVE, USER_STATUS_DEPARTED, UserMirror
 from easyauth.applications.models import App, AppScope, Permission
+from easyauth.audit.models import AuditLog
 
 pytestmark = pytest.mark.django_db
 
@@ -53,6 +54,50 @@ def test_no_active_manager_empty_approver_succeeds_superuser_pool() -> None:
     # 无钉钉绑定 / 无目录上下文 → no_active_manager(非伪造的 chain_exhausted)
     assert result.routing_reason == "no_active_manager"
     assert AccessRequest.objects.filter(pk=result.pk).exists()
+    assert AuditLog.objects.filter(
+        event_type="handover_assignee_resolution_degraded",
+    ).count() == 1
+
+
+def test_missing_manager_chain_does_not_fallback_to_legacy_manager_field() -> None:
+    """目录上下文缺失时，旧 manager_userid 即使指向 active 用户也必须进池。"""
+    legacy_manager = UserMirror.objects.create(
+        authentik_user_id="adr36-legacy-manager",
+        status=USER_STATUS_ACTIVE,
+    )
+    user = UserMirror.objects.create(
+        authentik_user_id="adr36-no-chain",
+        status=USER_STATUS_ACTIVE,
+        manager_userid=legacy_manager.authentik_user_id,
+    )
+    app = App.objects.create(app_key="adr36-no-chain-app", name="无主管链应用")
+    _ = AppScope.objects.create(app=app, key="MANAGED_USERS", name="下属")
+    permission = Permission.objects.create(
+        app=app,
+        key="customer.no-chain",
+        name="查看",
+        supported_scopes=["MANAGED_USERS"],
+    )
+
+    result = AccessRequestService.submit_access_request(
+        AccessRequestSubmission(
+            user=user,
+            app=app,
+            grant_type="permanent",
+            grant_expires_at=None,
+            reason="验证主管链缺失路由",
+            actor_type="user",
+            actor_id=user.authentik_user_id,
+            idempotency_key="adr36-no-chain",
+            approver_user_ids=(),
+            direct_grants=(
+                ScopedAccessRequestGrant(permission=permission, scope_key="MANAGED_USERS"),
+            ),
+        ),
+    )
+
+    assert result.approval_routing_state == "superuser_pool"
+    assert result.routing_reason == "no_active_manager"
 
 
 def test_chain_exhausted_when_manager_chain_walked_to_end() -> None:

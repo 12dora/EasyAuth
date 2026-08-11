@@ -182,45 +182,59 @@ def reassign_access_request(
 ) -> AccessRequest:
     with transaction.atomic():
         access_request = _locked_request(request_id)
-        if access_request.status != REQUEST_STATUS_SUBMITTED:
-            raise ApprovalActionError(
-                kind="conflict",
-                message=REASSIGN_ONLY_SUBMITTED_MESSAGE,
-                details={"request_id": request_id, "status": access_request.status},
-            )
-        normalized = _validated_reassign_approvers(access_request, approver_user_ids)
-        previous = access_request_approver_user_ids(access_request)
-        _ = AccessRequestApprover.objects.filter(access_request=access_request).delete()
-        approvers = UserMirror.objects.in_bulk(normalized, field_name="authentik_user_id")
-        _ = AccessRequestApprover.objects.bulk_create(
-            AccessRequestApprover(
-                access_request=access_request,
-                approver=approvers[user_id],
-            )
-            for user_id in normalized
+        return reassign_locked_access_request(
+            access_request=access_request,
+            approver_user_ids=approver_user_ids,
+            actor_id=actor_id,
         )
-        # §4.5.1: 超管认领/改派写入至少一名 active 审批人后必须回到 normal
-        if normalized and getattr(access_request, "approval_routing_state", "normal") != "normal":
-            access_request.approval_routing_state = "normal"
-            access_request.routing_reason = ""
-            access_request.save(
-                update_fields=["approval_routing_state", "routing_reason"],
-            )
-        _ = AuditService.record(
-            AuditRecord(
-                actor_type=DECISION_ACTOR_CONSOLE_ADMIN,
-                actor_id=actor_id,
-                action="access_request_reassigned",
-                target_type="access_request",
-                target_id=str(access_request.id),
-                metadata={
-                    "user_id": access_request.user.authentik_user_id,
-                    "app_key": access_request.app.app_key,
-                    "previous_approver_user_ids": list(previous),
-                    "approver_user_ids": list(normalized),
-                },
-            ),
+
+
+def reassign_locked_access_request(
+    *,
+    access_request: AccessRequest,
+    approver_user_ids: list[str],
+    actor_id: str,
+) -> AccessRequest:
+    """替换已由调用方 select_for_update 锁定的申请审批人全集。"""
+    if access_request.status != REQUEST_STATUS_SUBMITTED:
+        raise ApprovalActionError(
+            kind="conflict",
+            message=REASSIGN_ONLY_SUBMITTED_MESSAGE,
+            details={"request_id": access_request.id, "status": access_request.status},
         )
+    normalized = _validated_reassign_approvers(access_request, approver_user_ids)
+    previous = access_request_approver_user_ids(access_request)
+    _ = AccessRequestApprover.objects.filter(access_request=access_request).delete()
+    approvers = UserMirror.objects.in_bulk(normalized, field_name="authentik_user_id")
+    _ = AccessRequestApprover.objects.bulk_create(
+        AccessRequestApprover(
+            access_request=access_request,
+            approver=approvers[user_id],
+        )
+        for user_id in normalized
+    )
+    # §4.5.1: 超管认领/改派写入至少一名 active 审批人后必须回到 normal
+    if normalized and getattr(access_request, "approval_routing_state", "normal") != "normal":
+        access_request.approval_routing_state = "normal"
+        access_request.routing_reason = ""
+        access_request.save(
+            update_fields=["approval_routing_state", "routing_reason"],
+        )
+    _ = AuditService.record(
+        AuditRecord(
+            actor_type=DECISION_ACTOR_CONSOLE_ADMIN,
+            actor_id=actor_id,
+            action="access_request_reassigned",
+            target_type="access_request",
+            target_id=str(access_request.id),
+            metadata={
+                "user_id": access_request.user.authentik_user_id,
+                "app_key": access_request.app.app_key,
+                "previous_approver_user_ids": list(previous),
+                "approver_user_ids": list(normalized),
+            },
+        ),
+    )
     return access_request
 
 

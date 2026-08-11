@@ -17,8 +17,11 @@ from easyauth.accounts.models import (
     UserMirror,
 )
 from easyauth.applications.models import App
-from easyauth.lifecycle.approvals import reassign_access_request_approvers
-from easyauth.lifecycle.models import HANDOVER_KIND_OFFBOARD, HandoverTask
+from easyauth.lifecycle.approvals import (
+    ROUTING_NO_ACTIVE_MANAGER,
+    _route_request_to_superuser_pool,
+    reassign_access_request_approvers,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -171,3 +174,48 @@ def test_already_approved_request_not_routed_to_pool_on_reassign_conflict() -> N
         ),
     )
     assert remaining == {"dep-approved", "co-approved"}
+
+
+def test_pool_route_rechecks_decided_status_under_request_lock() -> None:
+    """扫描后已批准的申请不得删除审批历史或改写路由。"""
+    from easyauth.access_requests.models import REQUEST_STATUS_APPROVED
+
+    departed = _u("dep-pool-lock", dtuid="dpl", status=USER_STATUS_DEPARTED)
+    applicant = _u("app-pool-lock", dtuid="apl")
+    app = App.objects.create(app_key="req-pool-lock", name="req")
+    ar = AccessRequest.objects.create(
+        user=applicant,
+        app=app,
+        status=REQUEST_STATUS_SUBMITTED,
+        idempotency_key="pool-lock",
+        payload_digest="b" * 64,
+        approval_routing_state="normal",
+    )
+    _ = AccessRequestApprover.objects.create(access_request=ar, approver=departed)
+    from django.utils import timezone
+
+    decided_at = timezone.now()
+    AccessRequest.objects.filter(pk=ar.pk).update(
+        status=REQUEST_STATUS_APPROVED,
+        approved_at=decided_at,
+        decided_at=decided_at,
+        decided_by="co-approver",
+        decision_actor_type="user",
+        decision_comment="approved",
+    )
+
+    routed = _route_request_to_superuser_pool(
+        request_id=int(ar.pk),
+        reason=ROUTING_NO_ACTIVE_MANAGER,
+        subject=departed,
+        actor_id="directory_sync",
+        remove_subject=True,
+    )
+
+    ar.refresh_from_db()
+    assert routed is False
+    assert ar.approval_routing_state == "normal"
+    assert AccessRequestApprover.objects.filter(
+        access_request=ar,
+        approver=departed,
+    ).exists()

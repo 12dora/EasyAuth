@@ -99,6 +99,7 @@ def validate_submission_scope(
     direct_grants: tuple[ScopedAccessRequestGrant, ...],
     *,
     lock_base_grant: bool = False,
+    manager_chain_resolution: ManagerChainResolution | None = None,
 ) -> None:
     _validate_user(input_data.user)
     _validate_expiration_shape(input_data.grant_type, input_data.grant_expires_at)
@@ -110,23 +111,43 @@ def validate_submission_scope(
             _validate_no_current_grant(input_data.user, input_data.app)
             _validate_targets_present(authorization_groups, direct_grants)
             _validate_targets(input_data.app, authorization_groups, direct_grants)
-            _validate_managed_users_approver(input_data, authorization_groups, direct_grants)
+            _validate_managed_users_approver(
+                input_data,
+                authorization_groups,
+                direct_grants,
+                manager_chain_resolution=manager_chain_resolution,
+            )
         case "change":
             _ = base_lifecycle_grant_snapshot(input_data, for_update=lock_base_grant)
             _validate_targets_present(authorization_groups, direct_grants)
             _validate_targets(input_data.app, authorization_groups, direct_grants)
-            _validate_managed_users_approver(input_data, authorization_groups, direct_grants)
+            _validate_managed_users_approver(
+                input_data,
+                authorization_groups,
+                direct_grants,
+                manager_chain_resolution=manager_chain_resolution,
+            )
         case "revoke":
             snapshot = base_lifecycle_grant_snapshot(input_data, for_update=lock_base_grant)
             _validate_targets_belong_to_app(input_data.app, authorization_groups, direct_grants)
             _validate_revoke_subset(snapshot, authorization_groups, direct_grants)
-            _validate_managed_users_approver(input_data, authorization_groups, direct_grants)
+            _validate_managed_users_approver(
+                input_data,
+                authorization_groups,
+                direct_grants,
+                manager_chain_resolution=manager_chain_resolution,
+            )
         case "renew":
             snapshot = base_lifecycle_grant_snapshot(input_data, for_update=lock_base_grant)
             _validate_renew_request(input_data.grant_type, input_data.grant_expires_at, snapshot)
             _validate_targets_belong_to_app(input_data.app, authorization_groups, direct_grants)
             _validate_renew_targets(snapshot, authorization_groups, direct_grants)
-            _validate_managed_users_approver(input_data, authorization_groups, direct_grants)
+            _validate_managed_users_approver(
+                input_data,
+                authorization_groups,
+                direct_grants,
+                manager_chain_resolution=manager_chain_resolution,
+            )
 
 
 def _unique_non_empty_strings(values: Iterable[str]) -> tuple[str, ...]:
@@ -189,6 +210,8 @@ def _validate_managed_users_approver(
     input_data: AccessRequestSubmission,
     authorization_groups: tuple[AuthorizationGroup, ...],
     direct_grants: tuple[ScopedAccessRequestGrant, ...],
+    *,
+    manager_chain_resolution: ManagerChainResolution | None = None,
 ) -> None:
     """ADR-002 §36 修订: 审批人沿 manager_chain 向上取, 无可用主管时允许提交进超管池。
 
@@ -196,7 +219,8 @@ def _validate_managed_users_approver(
     """
     if not _contains_managed_users_target(authorization_groups, direct_grants):
         return
-    chain_ids = _active_manager_chain_user_ids(input_data.user)
+    resolution = manager_chain_resolution or resolve_manager_chain(input_data.user)
+    chain_ids = resolution.user_ids
     submitted = _unique_non_empty_strings(input_data.approver_user_ids)
     if chain_ids:
         # 必须恰好是链上第一个可用主管(逐级向上的首个 active)
@@ -220,7 +244,7 @@ class ManagerChainResolution:
 
 
 def resolve_manager_chain(user: UserMirror) -> ManagerChainResolution:
-    """沿 manager_chain 取第一个可用主管; 链不可用时回退 manager_userid 直属字段。
+    """严格沿租户范围内 manager_chain 取第一个可用主管。
 
     - ``degraded=True``: 目录上下文缺失/陈旧/绑定不全 → routing_reason=no_active_manager
     - ``degraded=False`` 且 ids 空: 链被 walk 到尽头 → routing_reason=chain_exhausted
@@ -233,30 +257,11 @@ def resolve_manager_chain(user: UserMirror) -> ManagerChainResolution:
             (resolution.user.authentik_user_id,),
             degraded=False,
         )
-    # 回退: 部分同步路径只写 manager_userid、尚未有完整 manager_chain 行。
-    manager_userid = (user.manager_userid or "").strip()
-    if manager_userid:
-        manager = UserMirror.objects.filter(
-            authentik_user_id=manager_userid,
-            status=USER_STATUS_ACTIVE,
-        ).first()
-        if manager is None and user.dingtalk_source_slug and user.dingtalk_corp_id:
-            manager = UserMirror.objects.filter(
-                dingtalk_source_slug=user.dingtalk_source_slug,
-                dingtalk_corp_id=user.dingtalk_corp_id,
-                dingtalk_userid=manager_userid,
-                status=USER_STATUS_ACTIVE,
-            ).first()
-        if manager is not None:
-            return ManagerChainResolution(
-                (manager.authentik_user_id,),
-                degraded=False,
-            )
     return ManagerChainResolution((), degraded=resolution.degraded)
 
 
 def active_manager_chain_user_ids(user: UserMirror) -> tuple[str, ...]:
-    """沿 manager_chain 取第一个可用主管; 链不可用时回退 manager_userid 直属字段。"""
+    """沿 manager_chain 取第一个可用主管。"""
     return resolve_manager_chain(user).user_ids
 
 

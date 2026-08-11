@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
 from django.db import transaction
 from django.utils import timezone
 
 from easyauth.access_requests.approvals import (
     access_request_approver_user_ids,
-    reassign_access_request,
+    reassign_locked_access_request,
 )
 from easyauth.access_requests.models import (
     REQUEST_STATUS_SUBMITTED,
@@ -21,12 +21,13 @@ from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.applications.models import ApprovalRule
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.lifecycle.assignee import resolve_assignee
-from easyauth.lifecycle.core import LIFECYCLE_ACTOR_ID, record_task_event
-from easyauth.lifecycle.models import ApprovalRuleReplacementRequired, HandoverAppAction, HandoverTask
+from easyauth.lifecycle.core import LIFECYCLE_ACTOR_ID
+from easyauth.lifecycle.models import (
+    ApprovalRuleReplacementRequired,
+    HandoverAppAction,
+    HandoverTask,
+)
 from easyauth.workflows.models import ApprovalInstance
-
-if TYPE_CHECKING:
-    from easyauth.applications.ops_models import JsonValue
 
 APPROVAL_ROUTING_NORMAL: Final = "normal"
 APPROVAL_ROUTING_SUPERUSER_POOL: Final = "superuser_pool"
@@ -85,21 +86,13 @@ def reassign_access_request_approvers(
         except ApprovalActionError:
             # 单条不可改派不得回滚建单事务(§4.5 / 铁律一)。
             # 仅 submitted 可进超管池: 已决定(approved/rejected/…)的申请不得改路由/审批人。
-            access_request = AccessRequest.objects.filter(
-                pk=request_id,
-                status=REQUEST_STATUS_SUBMITTED,
-            ).first()
-            if access_request is not None:
-                _route_request_to_superuser_pool(
-                    access_request,
-                    reason=ROUTING_NO_ACTIVE_MANAGER,
-                    subject=subject,
-                    actor_id=actor_id,
-                    remove_subject=True,
-                )
-                reassigned = True
-            else:
-                reassigned = False
+            reassigned = _route_request_to_superuser_pool(
+                request_id=request_id,
+                reason=ROUTING_NO_ACTIVE_MANAGER,
+                subject=subject,
+                actor_id=actor_id,
+                remove_subject=True,
+            )
         if reassigned:
             count += 1
     return count
@@ -112,84 +105,112 @@ def _reassign_one_access_request(
     subject_pk: int,
     actor_id: str,
 ) -> bool:
-    access_request = (
-        AccessRequest.objects.select_related("user")
-        .filter(pk=request_id, status=REQUEST_STATUS_SUBMITTED)
-        .first()
-    )
-    if access_request is None:
-        return False
-    previous = access_request_approver_user_ids(access_request)
-    # 去掉离职者; 再过滤非 active / 本地管理员, 避免 reassign 因共审人失效而抛错
-    survivor_ids = [uid for uid in previous if uid != subject.authentik_user_id]
-    active_survivors = list(
-        UserMirror.objects.filter(
-            authentik_user_id__in=survivor_ids,
-            status=USER_STATUS_ACTIVE,
+    with transaction.atomic():
+        access_request = (
+            AccessRequest.objects.select_for_update()
+            .select_related("user", "app")
+            .filter(pk=request_id)
+            .first()
         )
-        .exclude(authentik_user_id__startswith=LOCAL_ADMIN_SUBJECT_PREFIX)
-        .values_list("authentik_user_id", flat=True),
-    )
-    desired = list(dict.fromkeys(active_survivors))
-
-    # 解析申请人主管; 不得把离职者本人(仍 active 的手动建单窗口)回填为审批人
-    resolution = resolve_assignee(access_request.user, start_level=0)
-    new_approver = resolution.user
-    if new_approver is not None:
-        same_as_applicant = int(new_approver.pk) == int(access_request.user_id)  # type: ignore[arg-type]
-        same_as_subject = int(new_approver.pk) == subject_pk
-        if (
-            not same_as_applicant
-            and not same_as_subject
-            and new_approver.status == USER_STATUS_ACTIVE
-            and new_approver.authentik_user_id not in desired
-        ):
-            desired.append(new_approver.authentik_user_id)
-
-    if desired:
-        previous_set = set(previous)
-        new_set = set(desired)
-        reassign_access_request(
-            request_id=int(access_request.id),
-            approver_user_ids=desired,
-            actor_id=actor_id,
-        )
-        access_request.approval_routing_state = APPROVAL_ROUTING_NORMAL
-        access_request.routing_reason = ""
-        access_request.save(
-            update_fields=["approval_routing_state", "routing_reason"],
-        )
-        # 仅当审批人集合真的变化时写 reassigned 审计
-        if previous_set != new_set:
-            _ = AuditService.record(
-                AuditRecord(
-                    actor_type="system",
-                    actor_id=actor_id,
-                    action="handover_approver_reassigned",
-                    target_type="access_request",
-                    target_id=str(access_request.id),
-                    metadata={
-                        "departed_user_id": subject.authentik_user_id,
-                        "approver_user_ids": desired,
-                    },
-                ),
+        if access_request is None or access_request.status != REQUEST_STATUS_SUBMITTED:
+            return False
+        previous = access_request_approver_user_ids(access_request)
+        # 去掉离职者; 再过滤非 active / 本地管理员, 避免共审人失效阻断改派。
+        survivor_ids = [uid for uid in previous if uid != subject.authentik_user_id]
+        active_survivor_set = set(
+            UserMirror.objects.filter(
+                authentik_user_id__in=survivor_ids,
+                status=USER_STATUS_ACTIVE,
             )
-        return True
+            .exclude(authentik_user_id__startswith=LOCAL_ADMIN_SUBJECT_PREFIX)
+            .values_list("authentik_user_id", flat=True),
+        )
+        desired = [uid for uid in survivor_ids if uid in active_survivor_set]
+        desired = list(dict.fromkeys(desired))
 
-    reason = (
-        ROUTING_NO_ACTIVE_MANAGER if resolution.degraded else ROUTING_CHAIN_EXHAUSTED
-    )
-    _route_request_to_superuser_pool(
-        access_request,
-        reason=reason,
-        subject=subject,
-        actor_id=actor_id,
-        remove_subject=True,
-    )
-    return True
+        # 解析申请人主管; 不得把离职者本人(仍 active 的手动建单窗口)回填为审批人。
+        resolution = resolve_assignee(access_request.user, start_level=0)
+        new_approver = resolution.user
+        if new_approver is not None:
+            same_as_applicant = int(new_approver.pk) == int(access_request.user_id)  # type: ignore[arg-type]
+            same_as_subject = int(new_approver.pk) == subject_pk
+            if (
+                not same_as_applicant
+                and not same_as_subject
+                and new_approver.status == USER_STATUS_ACTIVE
+                and new_approver.authentik_user_id not in desired
+            ):
+                desired.append(new_approver.authentik_user_id)
+
+        if desired:
+            previous_set = set(previous)
+            new_set = set(desired)
+            reassign_locked_access_request(
+                access_request=access_request,
+                approver_user_ids=desired,
+                actor_id=actor_id,
+            )
+            access_request.approval_routing_state = APPROVAL_ROUTING_NORMAL
+            access_request.routing_reason = ""
+            access_request.save(
+                update_fields=["approval_routing_state", "routing_reason"],
+            )
+            if previous_set != new_set:
+                _ = AuditService.record(
+                    AuditRecord(
+                        actor_type="system",
+                        actor_id=actor_id,
+                        action="handover_approver_reassigned",
+                        target_type="access_request",
+                        target_id=str(access_request.id),
+                        metadata={
+                            "departed_user_id": subject.authentik_user_id,
+                            "approver_user_ids": desired,
+                        },
+                    ),
+                )
+            return True
+
+        reason = (
+            ROUTING_NO_ACTIVE_MANAGER if resolution.degraded else ROUTING_CHAIN_EXHAUSTED
+        )
+        _route_locked_request_to_superuser_pool(
+            access_request,
+            reason=reason,
+            subject=subject,
+            actor_id=actor_id,
+            remove_subject=True,
+        )
+        return True
 
 
 def _route_request_to_superuser_pool(
+    *,
+    request_id: int,
+    reason: str,
+    subject: UserMirror,
+    actor_id: str,
+    remove_subject: bool,
+) -> bool:
+    with transaction.atomic():
+        access_request = (
+            AccessRequest.objects.select_for_update()
+            .filter(pk=request_id)
+            .first()
+        )
+        if access_request is None or access_request.status != REQUEST_STATUS_SUBMITTED:
+            return False
+        _route_locked_request_to_superuser_pool(
+            access_request,
+            reason=reason,
+            subject=subject,
+            actor_id=actor_id,
+            remove_subject=remove_subject,
+        )
+        return True
+
+
+def _route_locked_request_to_superuser_pool(
     access_request: AccessRequest,
     *,
     reason: str,
@@ -244,60 +265,62 @@ def replace_approval_rule_approvers(
             resolution = resolve_assignee(subject, start_level=0)
         return resolution
 
-    rules = list(ApprovalRule.objects.filter(is_active=True))
     changed = 0
-    for rule in rules:
-        raw = rule.approver_userids
-        if not isinstance(raw, list) or subject_uid not in raw:
-            continue
-        resolved = _resolution()
-        new_approver = resolved.user
-        new_list = [uid for uid in raw if uid != subject_uid]
-        if (
-            new_approver is not None
-            and int(new_approver.pk) != int(subject.pk)  # type: ignore[arg-type]
-            and new_approver.authentik_user_id not in new_list
-        ):
-            new_list.append(new_approver.authentik_user_id)
+    with transaction.atomic():
+        # JSON 列表在支持的数据库间无法用同一查询精确过滤，先锁 active 规则再逐条判定。
+        rules = list(ApprovalRule.objects.select_for_update().filter(is_active=True))
+        for rule in rules:
+            raw = rule.approver_userids
+            if not isinstance(raw, list) or subject_uid not in raw:
+                continue
+            resolved = _resolution()
+            new_approver = resolved.user
+            new_list = [uid for uid in raw if uid != subject_uid]
+            if (
+                new_approver is not None
+                and int(new_approver.pk) != int(subject.pk)  # type: ignore[arg-type]
+                and new_approver.authentik_user_id not in new_list
+            ):
+                new_list.append(new_approver.authentik_user_id)
 
-        if not new_list:
-            # 规则不动, 写待办(条件唯一: 同一规则+离职者仅一条未解决)
-            exists = ApprovalRuleReplacementRequired.objects.filter(
-                approval_rule=rule,
-                departed_user=subject,
-                resolved_at__isnull=True,
-            ).exists()
-            if not exists:
-                _ = ApprovalRuleReplacementRequired.objects.create(
+            if not new_list:
+                # 规则不动, 写待办(条件唯一: 同一规则+离职者仅一条未解决)
+                exists = ApprovalRuleReplacementRequired.objects.filter(
                     approval_rule=rule,
                     departed_user=subject,
-                    task=task,
-                    task_id_snapshot=int(task.pk),
-                    reason=(
-                        ROUTING_NO_ACTIVE_MANAGER
-                        if resolved.degraded
-                        else ROUTING_CHAIN_EXHAUSTED
-                    ),
-                )
-            continue
+                    resolved_at__isnull=True,
+                ).exists()
+                if not exists:
+                    _ = ApprovalRuleReplacementRequired.objects.create(
+                        approval_rule=rule,
+                        departed_user=subject,
+                        task=task,
+                        task_id_snapshot=int(task.pk),
+                        reason=(
+                            ROUTING_NO_ACTIVE_MANAGER
+                            if resolved.degraded
+                            else ROUTING_CHAIN_EXHAUSTED
+                        ),
+                    )
+                continue
 
-        rule.approver_userids = new_list
-        rule.save(update_fields=["approver_userids", "updated_at"])
-        _ = AuditService.record(
-            AuditRecord(
-                actor_type="system",
-                actor_id=actor_id,
-                action="handover_approval_rule_approver_replaced",
-                target_type="approval_rule",
-                target_id=str(rule.id),
-                metadata={
-                    "departed_user_id": subject_uid,
-                    "approver_userids": new_list,
-                    "task_id": task.id,
-                },
-            ),
-        )
-        changed += 1
+            rule.approver_userids = new_list
+            rule.save(update_fields=["approver_userids", "updated_at"])
+            _ = AuditService.record(
+                AuditRecord(
+                    actor_type="system",
+                    actor_id=actor_id,
+                    action="handover_approval_rule_approver_replaced",
+                    target_type="approval_rule",
+                    target_id=str(rule.id),
+                    metadata={
+                        "departed_user_id": subject_uid,
+                        "approver_userids": new_list,
+                        "task_id": task.id,
+                    },
+                ),
+            )
+            changed += 1
     return changed
 
 

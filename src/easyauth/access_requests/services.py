@@ -106,14 +106,6 @@ def _submit_access_request(
             )
             if existing is not None:
                 return existing
-            validate_submission_scope(
-                input_data,
-                parsed_request_type,
-                authorization_groups,
-                direct_grants,
-                lock_base_grant=True,
-            )
-            # 空审批人仅在 MANAGED_USERS 链耗尽/目录缺失时由 ADR-002 §36 放行。
             is_managed_users = contains_managed_users_target(
                 authorization_groups,
                 direct_grants,
@@ -123,6 +115,15 @@ def _submit_access_request(
                 if is_managed_users
                 else None
             )
+            validate_submission_scope(
+                input_data,
+                parsed_request_type,
+                authorization_groups,
+                direct_grants,
+                lock_base_grant=True,
+                manager_chain_resolution=chain_resolution,
+            )
+            # 空审批人仅在 MANAGED_USERS 链耗尽/目录缺失时由 ADR-002 §36 放行。
             chain_ids = chain_resolution.user_ids if chain_resolution is not None else ()
             allow_empty_approvers = (
                 is_managed_users

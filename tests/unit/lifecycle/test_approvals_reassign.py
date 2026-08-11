@@ -151,6 +151,47 @@ def test_approval_rule_replacement_todo_when_no_manager() -> None:
     ).exists()
 
 
+def test_approval_rule_replacement_preserves_all_other_locked_approvers() -> None:
+    from easyauth.applications.models import AuthorizationGroup
+
+    departed = _u("dep-rule-current", dtuid="drc", status=USER_STATUS_DEPARTED)
+    manager = _u("mgr-rule-current", dtuid="mrc")
+    finance = _u("fin-rule-current", dtuid="frc")
+    legal = _u("legal-rule-current", dtuid="lrc")
+    _ = DingTalkUserOrgContext.objects.create(
+        source_slug=SOURCE,
+        corp_id=CORP,
+        user_id=departed.dingtalk_userid,
+        manager_chain=[{"user_id": manager.dingtalk_userid}],
+        stale=False,
+    )
+    app = App.objects.create(app_key="rule-current-app", name="rule")
+    group = AuthorizationGroup.objects.create(app=app, key="g-current", name="g", kind="role")
+    rule = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=group,
+        approver_userids=[
+            departed.authentik_user_id,
+            finance.authentik_user_id,
+            legal.authentik_user_id,
+        ],
+        is_active=True,
+    )
+    task = HandoverTask.objects.create(
+        kind=HANDOVER_KIND_OFFBOARD,
+        subject_user=departed,
+    )
+
+    assert replace_approval_rule_approvers(subject=departed, task=task) == 1
+
+    rule.refresh_from_db()
+    assert rule.approver_userids == [
+        finance.authentik_user_id,
+        legal.authentik_user_id,
+        manager.authentik_user_id,
+    ]
+
+
 def test_in_flight_warning_existence_only() -> None:
     subject = _u("dep3", dtuid="d3")
     app = App.objects.create(app_key="wf-app", name="wf")
