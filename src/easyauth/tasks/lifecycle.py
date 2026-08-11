@@ -12,6 +12,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from easyauth.accounts.models import UserMirror
+from easyauth.applications.models import CAPABILITY_NOTIFY, App, AppCredential
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.integrations.authentik.admin_client import (
     AuthentikAdminClient,
@@ -40,6 +41,8 @@ from easyauth.lifecycle.tasks import (
     DISABLE_ACCOUNT_TASK_NAME,
     RETRY_OFFBOARDING_TASK_NAME,
 )
+from easyauth.notify.acceptance import accept_notify_message
+from easyauth.notify.models import NOTIFY_TEMPLATE_TEXT
 
 logger = logging.getLogger(__name__)
 
@@ -190,6 +193,38 @@ def lifecycle_send_reminder_task(
     task = HandoverTask.objects.filter(pk=task_id).first()
     if task is None:
         return "task_missing"
+    identity = App.objects.filter(app_key="easyauth-lifecycle", is_active=True).first()
+    credential = None
+    if identity is not None:
+        credential = next(
+            (
+                item
+                for item in AppCredential.objects.filter(app=identity, is_active=True).order_by("id")
+                if CAPABILITY_NOTIFY in item.capabilities
+            ),
+            None,
+        )
+    channel_ready = (
+        identity is not None and identity.notification_channels.filter(is_active=True).exists()
+    )
+    if identity is not None and credential is not None and channel_ready:
+        content = (
+            f"交接单 {task_id} 即将到期，请尽快处理。"
+            if kind == "deadline_soon"
+            else f"交接单 {task_id} 尚未完成，请及时处理。"
+        )
+        result = accept_notify_message(
+            app=identity,
+            recipients=[assignee_user_id],
+            template=NOTIFY_TEMPLATE_TEXT,
+            content=content,
+            dedup_key=f"lifecycle:{task_id}:{task.last_reminded_on}:{kind}",
+            biz_tag="lifecycle.reminder",
+            requested_credential_type=credential.credential_type,
+            requested_credential_id=credential.id,
+        )
+        return "accepted" if result.accepted else "duplicate"
+
     # 完整钉钉发送依赖 §7 easyauth-lifecycle 身份; 缺身份不得冒充成功消费 outbox。
     _ = AuditService.record(
         AuditRecord(
