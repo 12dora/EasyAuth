@@ -59,7 +59,8 @@ DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,host.docker.internal
 
 `manage.py` 会读 `.env.local`,但**不会覆盖进程环境中已存在的同名变量**——用进程管理器
 (launchd/systemd)守护 dev 服务时,以启动命令里的 export 为准,改 allowlist 要同步改那里
-并重启任务。
+并重启任务。反代部署同理:`docker-compose.deploy.yml` 的 `environment:` 优先于
+`env_file: .env.local`,`DJANGO_ALLOWED_HOSTS` 等键改 `.env.local` 不会生效,要改 compose。
 
 dev 服务监听 `0.0.0.0:8001`,下游容器内配置 `EASYAUTH_BASE_URL=http://host.docker.internal:8001`,
 凭据用控制台或向导第 4 步签发的静态 token(`Authorization: Bearer eat_...`)。
