@@ -8,6 +8,7 @@ from django.db.models import Count, Q, Sum
 from django.utils import timezone
 
 from easyauth.api.datetime_json import datetime_value
+from easyauth.audit.models import AuditLog
 from easyauth.lifecycle.lease import action_execution_in_flight
 from easyauth.lifecycle.models import (
     ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
@@ -330,9 +331,32 @@ def aggregated_summary(action: HandoverAppAction) -> JsonObject | None:
     ``_merge_result_summary`` 在 complete_data_phase 中维护, 是 API 侧真相源。
     """
     stored = getattr(action, "result_summary", None)
-    if isinstance(stored, dict) and stored:
-        return stored  # type: ignore[return-value]
-    return None
+    if not isinstance(stored, dict) or not stored:
+        return None
+    # 某一批由管理员确认完成但未提供计数后, 后续批次即使有 summary, 也无法再构成
+    # 冻结契约要求的全量累计值。人工处置事实留在审计 metadata, API summary 保持 null。
+    if AuditLog.objects.filter(
+        event_type="handover_action_executed",
+        target_type="handover_task",
+        target_id=str(action.task_id),
+        metadata__manual_resolution=True,
+        metadata__summary_provided=False,
+        metadata__action_id=int(action.pk),
+        metadata__generation=action.generation,
+    ).exists():
+        return None
+    fields = {"transferred", "released", "skipped", "merged", "failed"}
+    for type_key, row in stored.items():
+        if not isinstance(type_key, str) or not type_key or not isinstance(row, dict):
+            return None
+        if set(row) != fields:
+            return None
+        if any(
+            not isinstance(value, int) or isinstance(value, bool) or value < 0
+            for value in row.values()
+        ):
+            return None
+    return stored  # type: ignore[return-value]
 
 
 def allowed_actions_for(action: HandoverAppAction, *, surface: str) -> list[str]:
