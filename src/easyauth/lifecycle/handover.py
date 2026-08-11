@@ -2232,8 +2232,11 @@ def takeover_expired_lease(
                 update_fields=["outcome", "http_status", "error_text", "response_payload"],
             )
             action.status = ACTION_STATUS_ASYNC_ATTENTION_REQUIRED
-            action.last_error = "恢复重放与下游幂等记录冲突, 请人工确认真实结局"
-            action.last_error_raw = "takeover_payload_conflict"
+            _set_action_error(
+                action,
+                "takeover_payload_conflict",
+                stable_message="恢复重放与下游幂等记录冲突, 请人工确认真实结局",
+            )
             action.save(
                 update_fields=["status", "last_error", "last_error_raw", "updated_at"],
             )
