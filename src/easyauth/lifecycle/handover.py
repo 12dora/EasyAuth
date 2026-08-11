@@ -128,6 +128,7 @@ DECLARED_WITHOUT_URL_MESSAGE: Final = "declared 能力与 webhook 配置不一�
 POLICY_REMOVED_MESSAGE: Final = (
     "policy / release_to_pool 已移除; 权限接收人请用 grant_receiver, 数据接收人请用资产级分配。"
 )
+UNSHARDABLE_BATCH_MESSAGE: Final = "单独指定的条目过多，请减少逐条指定后重新预演"
 RATE_LIMITED_MESSAGE: Final = "rate_limited"
 ITEMS_RATE_LIMIT_NAMESPACE: Final = "handover-items"
 
@@ -157,6 +158,13 @@ def update_grant_receiver(
         ensure_task_open(locked.task)
         if action_execution_in_flight(locked):
             raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
+        if HandoverBatchPlan.objects.filter(
+            action=locked,
+            generation=locked.generation,
+            status=BATCH_PLAN_STATUS_ACTIVE,
+            completed_batches__gt=0,
+        ).exists():
+            raise HandoverConflictError("batch_plan_in_progress")
         if grant_receiver is not None and locked.task.kind != HANDOVER_KIND_OFFBOARD:
             raise HandoverError("grant_receiver_not_allowed")
         if (
@@ -406,11 +414,12 @@ def complete_data_phase(
         require_cas(handle)
         batch = HandoverExecutionBatch.objects.select_for_update().get(pk=batch.pk)
         now = timezone.now()
+        first_data_completion = batch.data_completed_at is None
 
         action: HandoverAppAction | None = None
         if action_id is not None:
             action = _locked_action_after_task(int(action_id))
-            if enforce_conservation:
+            if enforce_conservation and first_data_completion:
                 conservation_error = validate_execute_summary_conservation(
                     action,
                     response_payload=response_payload,
@@ -437,11 +446,12 @@ def complete_data_phase(
                     conservation_fail = "summary_conservation_failed"
 
         if conservation_fail is None:
-            batch.status = BATCH_STATUS_DATA_COMPLETED
-            batch.data_completed_at = now
-            batch.save(update_fields=["status", "data_completed_at"])
+            if first_data_completion:
+                batch.status = BATCH_STATUS_DATA_COMPLETED
+                batch.data_completed_at = now
+                batch.save(update_fields=["status", "data_completed_at"])
 
-            if action is not None and response_payload is not None:
+            if action is not None and response_payload is not None and first_data_completion:
                 _merge_result_summary(action, response_payload)
 
             if not is_final:
@@ -466,12 +476,15 @@ def complete_data_phase(
                                 "updated_at",
                             ],
                         )
-                    _bump_plan_progress(action)
+                    if first_data_completion:
+                        _bump_plan_progress(action)
                 must_cas_release(handle)
                 return
 
             if action is not None:
-                action.data_completed_at = now
+                action.data_completed_at = (
+                    action.data_completed_at or batch.data_completed_at or now
+                )
                 action.save(
                     update_fields=["data_completed_at", "result_summary", "updated_at"],
                 )
@@ -827,15 +840,18 @@ def validate_execute_summary_conservation(
         )
     }
     fields = ("transferred", "released", "skipped", "merged", "failed")
+    frozen_fields = set(fields)
     for type_key, row in raw_summary.items():
         if not isinstance(type_key, str) or not isinstance(row, dict):
             return f"summary[{type_key!r}] 形状非法"
         if type_key not in types:
             return f"summary 含未知资产类型 {type_key}"
+        if set(row) != frozen_fields:
+            return f"summary[{type_key}] 必须且只能包含冻结五元组"
         counts: list[int] = []
         for field in fields:
-            val = row.get(field, 0)
-            if not isinstance(val, int) or val < 0:
+            val = row[field]
+            if type(val) is not int or val < 0:
                 return f"summary[{type_key}].{field} 非法"
             counts.append(val)
         transferred, released, skipped, merged, failed = counts
@@ -1163,6 +1179,22 @@ def _execute_action(
                 require_cas(handle)
                 if action.task.kind in ACTION_GRANT_TRANSFER_KINDS:
                     _ = transfer_selected_grants(action)
+                final_batch = (
+                    HandoverExecutionBatch.objects.select_for_update()
+                    .filter(
+                        action=action,
+                        generation=action.generation,
+                        is_final=True,
+                        data_completed_at__isnull=False,
+                    )
+                    .order_by("-batch_seq")
+                    .first()
+                )
+                if final_batch is None:
+                    raise HandoverConflictError(ACTION_NOT_OPERABLE_MESSAGE)
+                final_batch.status = BATCH_STATUS_DONE
+                final_batch.save(update_fields=["status"])
+                _complete_active_plan(action)
                 action.status = ACTION_STATUS_DONE
                 action.last_error = ""
                 action.snapshot_token = ""
@@ -1361,7 +1393,18 @@ def _handle_execute_response(
 ) -> HandoverAppAction:
     status = response.status_code
     if status == HTTPStatus.ACCEPTED:
-        _ensure_accepted_location(response, message=EXECUTE_ACCEPTED_LOCATION_REQUIRED_MESSAGE)
+        if not response.location:
+            error = HandoverError(EXECUTE_ACCEPTED_LOCATION_REQUIRED_MESSAGE)
+            _finish_delivery_failure(
+                action_id=action_id,
+                batch_id=batch_id,
+                delivery_id=delivery_id,
+                handle=handle,
+                error=error,
+                http_status=status,
+                response_payload=response.payload,
+            )
+            raise error
         with transaction.atomic():
             require_cas(handle)
             action = _locked_action(action_id)
@@ -1466,7 +1509,11 @@ def _finish_delivery_failure(
                 batch.status = BATCH_STATUS_FAILED
                 action.status = ACTION_STATUS_PREVIEWED
                 action.snapshot_token = ""
-                _ensure_batch_plan_on_413(action)
+                plan = _active_batch_plan(action)
+                if plan is not None and plan.completed_batches > 0:
+                    error = HandoverError(UNSHARDABLE_BATCH_MESSAGE)
+                else:
+                    _ensure_batch_plan_on_413(action)
             elif http_status in {HTTPStatus.PRECONDITION_FAILED, HTTPStatus.LOCKED}:
                 batch.status = BATCH_STATUS_FAILED
                 action.status = ACTION_STATUS_PENDING
@@ -1739,6 +1786,8 @@ def _build_execute_payload_for_plan(
             True,
             None,
         )
+    if plan.assignment_hash != _assignment_hash(action, plan=plan):
+        raise HandoverConflictError("batch_plan_in_progress")
     next_no = int(plan.completed_batches) + 1
     if next_no > int(plan.total):
         raise HandoverConflictError("batch_plan_exhausted")
@@ -2066,14 +2115,14 @@ def _active_batch_plan(action: HandoverAppAction) -> HandoverBatchPlan | None:
 def _ensure_batch_plan_on_413(action: HandoverAppAction) -> HandoverBatchPlan:
     """413: 一次性算好分片计划, 下次 execute 按 chunk 发送。"""
     existing = _active_batch_plan(action)
+    if existing is not None and existing.completed_batches > 0:
+        return existing
     if existing is not None and existing.completed_batches == 0:
         existing.status = "abandoned"
         existing.save(update_fields=["status"])
     assignments = _full_assignments(action)
     chunks = _split_assignments_into_chunks(assignments)
-    assignment_hash = hashlib.sha256(
-        json.dumps(assignments, sort_keys=True, separators=(",", ":")).encode("utf-8"),
-    ).hexdigest()
+    assignment_hash = _assignment_hash(action, assignments=assignments)
     return HandoverBatchPlan.objects.create(
         action=action,
         action_snapshot_id=int(action.id),
@@ -2084,6 +2133,71 @@ def _ensure_batch_plan_on_413(action: HandoverAppAction) -> HandoverBatchPlan:
         status=BATCH_PLAN_STATUS_ACTIVE,
         completed_batches=0,
     )
+
+
+def _assignment_hash(
+    action: HandoverAppAction,
+    *,
+    assignments: list[dict[str, JsonValue]] | None = None,
+    plan: HandoverBatchPlan | None = None,
+) -> str:
+    """固化剩余数据分配与权限接收人的 canonical 意图(01 §2.4.1.1)。"""
+    canonical_assignments = assignments if assignments is not None else _full_assignments(action)
+    if plan is not None and plan.completed_batches > 0:
+        completed_rows = HandoverExecutionBatch.objects.filter(
+            plan=plan,
+            plan_batch_no__lte=plan.completed_batches,
+            data_completed_at__isnull=False,
+        ).order_by("plan_batch_no")
+        completed_by_type: dict[str, dict[str, dict[str, JsonValue]]] = {}
+        for completed_batch in completed_rows:
+            batch_assignments = completed_batch.request_payload.get("assignments", [])
+            if not isinstance(batch_assignments, list):
+                continue
+            for row in batch_assignments:
+                if not isinstance(row, dict):
+                    continue
+                type_key = row.get("asset_type")
+                overrides = row.get("overrides", [])
+                if not isinstance(type_key, str) or not isinstance(overrides, list):
+                    continue
+                saved = completed_by_type.setdefault(type_key, {})
+                for override in overrides:
+                    if not isinstance(override, dict) or override.get("action") == ASSET_ACTION_SKIP:
+                        continue
+                    asset_id = override.get("id")
+                    if isinstance(asset_id, str):
+                        saved[asset_id] = dict(override)
+
+        restored: list[dict[str, JsonValue]] = []
+        for row in canonical_assignments:
+            type_key = row.get("asset_type")
+            current_overrides = row.get("overrides", [])
+            completed = completed_by_type.get(str(type_key), {})
+            remaining = [
+                override
+                for override in current_overrides
+                if isinstance(override, dict) and override.get("id") not in completed
+            ]
+            remaining.extend(completed.values())
+            normalized = dict(row)
+            normalized["overrides"] = sorted(
+                remaining,
+                key=lambda override: str(override.get("id", "")),
+            )
+            restored.append(normalized)
+        canonical_assignments = restored
+    intent = {
+        "assignments": canonical_assignments,
+        "grant_receiver_user_id": (
+            action.grant_receiver.authentik_user_id
+            if action.grant_receiver is not None
+            else None
+        ),
+    }
+    return hashlib.sha256(
+        json.dumps(intent, sort_keys=True, separators=(",", ":")).encode("utf-8"),
+    ).hexdigest()
 
 
 def _split_assignments_into_chunks(
@@ -2167,6 +2281,3 @@ def _redact_response_payload(payload: dict[str, JsonValue] | None) -> dict[str, 
 
 def _redact_error_text(text: str) -> str:
     return text[:512]
-
-
-
