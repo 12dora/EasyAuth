@@ -11,18 +11,20 @@ from django.utils import timezone
 
 from easyauth.accounts.models import USER_STATUS_ACTIVE, USER_STATUS_DEPARTED, UserMirror
 from easyauth.applications.models import App
-from easyauth.lifecycle.errors import HandoverError
+from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
 from easyauth.lifecycle.handover import (
     _ensure_batch_plan_on_413,
     _handle_execute_response,
     async_abandon_action,
     complete_data_phase,
     execute_action,
+    poll_async_action,
     retry_action,
+    takeover_expired_lease,
     update_grant_receiver,
     validate_execute_summary_conservation,
 )
-from easyauth.lifecycle.lease import LeaseHandle, take_lease
+from easyauth.lifecycle.lease import LeaseHandle, require_cas, take_lease
 from easyauth.lifecycle.models import (
     ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
     ACTION_STATUS_DONE,
@@ -170,13 +172,258 @@ def test_async_abandon_done_without_summary_no_fabricated_skips() -> None:
     result.refresh_from_db()
     assert result.status == "done"
     # 禁止合成 skipped==count
-    summary = result.result_summary or {}
-    customer = summary.get("customer")
-    if isinstance(customer, dict):
-        assert customer.get("skipped") != 187
-    else:
-        assert summary.get("manual_resolution") is True
+    assert result.result_summary is None
     lease.refresh_from_db()
+    assert lease.released_at is not None
+
+
+def test_async_abandon_preserves_non_final_batch_progress() -> None:
+    _subject, _app, _task, action = _subject_app_action(
+        status=ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
+        count=0,
+    )
+    action.result_summary = {
+        "customer": {
+            "transferred": 1,
+            "released": 0,
+            "skipped": 0,
+            "merged": 0,
+            "failed": 0,
+        },
+    }
+    action.save(update_fields=["result_summary", "updated_at"])
+    plan = HandoverBatchPlan.objects.create(
+        action=action,
+        action_snapshot_id=int(action.id),
+        generation=1,
+        total=2,
+        chunks=[["asset-1"], ["asset-2"]],
+        assignment_hash="b" * 64,
+        status=BATCH_PLAN_STATUS_ACTIVE,
+        completed_batches=0,
+    )
+    handle = take_lease(action=action, owner="async:prep", batch_seq=1)
+    batch = HandoverExecutionBatch.objects.create(
+        action=action,
+        action_snapshot_id=int(action.id),
+        generation=1,
+        batch_seq=1,
+        status=BATCH_STATUS_ASYNC_PENDING,
+        is_final=False,
+        plan=plan,
+        plan_batch_no=1,
+        snapshot_token="tok",
+        request_payload={},
+        request_hash="c" * 64,
+    )
+    lease = HandoverExecutionLease.objects.get(pk=handle.lease_id)
+    lease.owner = f"async:{batch.pk}"
+    lease.save(update_fields=["owner"])
+
+    result = async_abandon_action(
+        action,
+        outcome="done",
+        reason="已在下游人工确认本批执行完成",
+        summary=None,
+        actor_id="superuser-1",
+    )
+
+    batch.refresh_from_db()
+    plan.refresh_from_db()
+    lease.refresh_from_db()
+    assert result.status == ACTION_STATUS_PREVIEWED
+    assert batch.is_final is False
+    assert batch.status == BATCH_STATUS_DONE
+    assert plan.status == BATCH_PLAN_STATUS_ACTIVE
+    assert plan.completed_batches == 1
+    assert result.result_summary is None
+    assert lease.released_at is not None
+
+    # 后续批次即使提供计数, 也不能把缺少本批计数的部分总数伪装成全量 summary。
+    from easyauth.lifecycle.api_payloads import aggregated_summary
+
+    result.result_summary = {
+        "customer": {
+            "transferred": 1,
+            "released": 0,
+            "skipped": 0,
+            "merged": 0,
+            "failed": 0,
+        },
+    }
+    result.save(update_fields=["result_summary", "updated_at"])
+    assert aggregated_summary(result) is None
+
+
+def test_async_abandon_claims_unique_fence_before_summary_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _subject, _app, _task, action = _subject_app_action(
+        status=ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
+        count=0,
+    )
+    handle = take_lease(action=action, owner="async:prep", batch_seq=1)
+    batch = HandoverExecutionBatch.objects.create(
+        action=action,
+        action_snapshot_id=int(action.id),
+        generation=1,
+        batch_seq=1,
+        status=BATCH_STATUS_ASYNC_PENDING,
+        is_final=True,
+        snapshot_token="tok",
+        request_payload={},
+        request_hash="d" * 64,
+    )
+    lease = HandoverExecutionLease.objects.get(pk=handle.lease_id)
+    lease.owner = f"async:{batch.pk}"
+    lease.save(update_fields=["owner"])
+    stale = LeaseHandle(
+        lease_id=int(lease.pk),
+        owner=lease.owner,
+        fence=int(lease.fence),
+        expires_at=lease.lease_expires_at,
+    )
+    observed: dict[str, object] = {}
+
+    def assert_manual_claim(_action: HandoverAppAction) -> None:
+        active = HandoverExecutionLease.objects.get(pk=lease.pk)
+        observed["owner"] = active.owner
+        observed["fence"] = active.fence
+        with pytest.raises(HandoverConflictError):
+            require_cas(stale)
+        with pytest.raises(HandoverConflictError):
+            async_abandon_action(
+                action,
+                outcome="done",
+                reason="另一个管理员同时确认同一异步结果",
+                summary={
+                    "customer": {
+                        "transferred": 0,
+                        "released": 0,
+                        "skipped": 0,
+                        "merged": 0,
+                        "failed": 0,
+                    },
+                },
+                actor_id="superuser-2",
+            )
+        observed["competing_request_rejected"] = True
+
+    monkeypatch.setattr(
+        "easyauth.lifecycle.handover.transfer_selected_grants",
+        assert_manual_claim,
+    )
+
+    result = async_abandon_action(
+        action,
+        outcome="done",
+        reason="已在下游人工确认执行完成并核验",
+        summary={
+            "customer": {
+                "transferred": 0,
+                "released": 0,
+                "skipped": 0,
+                "merged": 0,
+                "failed": 0,
+            },
+        },
+        actor_id="superuser-1",
+    )
+
+    assert result.status == ACTION_STATUS_DONE
+    assert str(observed["owner"]).startswith("manual:")
+    assert observed["fence"] != stale.fence
+    assert observed["competing_request_rejected"] is True
+
+
+def test_poll_attention_action_enforces_30_minute_gate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _subject, _app, _task, action = _subject_app_action(
+        status=ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
+    )
+    action.async_status_url = "https://example.test/status/attention"
+    action.save(update_fields=["async_status_url", "updated_at"])
+    handle = take_lease(action=action, owner="async:prep", batch_seq=1)
+    batch = HandoverExecutionBatch.objects.create(
+        action=action,
+        action_snapshot_id=int(action.id),
+        generation=1,
+        batch_seq=1,
+        status=BATCH_STATUS_ASYNC_PENDING,
+        is_final=True,
+        snapshot_token="tok",
+        request_payload={},
+        request_hash="e" * 64,
+    )
+    lease = HandoverExecutionLease.objects.get(pk=handle.lease_id)
+    lease.owner = f"async:{batch.pk}"
+    lease.renewed_at = timezone.now()
+    lease.save(update_fields=["owner", "renewed_at"])
+    fence_before = lease.fence
+
+    def unexpected_get(**_kwargs: object) -> HookResponse:
+        raise AssertionError("30 分钟内不得发起状态查询")
+
+    monkeypatch.setattr("easyauth.lifecycle.handover.signed_hook_get", unexpected_get)
+
+    result = poll_async_action(action, worker_id="poller:manual-console")
+
+    lease.refresh_from_db()
+    assert result.status == ACTION_STATUS_ASYNC_ATTENTION_REQUIRED
+    assert lease.fence == fence_before
+    assert lease.owner == f"async:{batch.pk}"
+
+
+def test_takeover_payload_conflict_enters_manual_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _subject, _app, _task, action = _subject_app_action(
+        status=ACTION_STATUS_EXECUTING,
+    )
+    handle = take_lease(action=action, owner="sender:crashed", batch_seq=1)
+    batch = HandoverExecutionBatch.objects.create(
+        action=action,
+        action_snapshot_id=int(action.id),
+        generation=1,
+        batch_seq=1,
+        status=BATCH_STATUS_EXECUTING,
+        is_final=True,
+        snapshot_token="tok",
+        request_payload={"generation": 1, "batch_seq": 1},
+        request_hash="f" * 64,
+    )
+    lease = HandoverExecutionLease.objects.get(pk=handle.lease_id)
+    lease.lease_expires_at = timezone.now() - timedelta(seconds=1)
+    lease.save(update_fields=["lease_expires_at"])
+
+    monkeypatch.setattr(
+        "easyauth.lifecycle.handover.signed_hook_post",
+        lambda **_kwargs: HookResponse(status_code=409, location="", payload={"conflict": True}),
+    )
+
+    result = takeover_expired_lease(lease, owner="recover:conflict")
+
+    assert result is not None
+    result.refresh_from_db()
+    lease.refresh_from_db()
+    delivery = HandoverDeliveryAttempt.objects.get(batch=batch)
+    assert result.status == ACTION_STATUS_ASYNC_ATTENTION_REQUIRED
+    assert result.last_error_raw == "takeover_payload_conflict"
+    assert lease.owner == f"async:{batch.pk}"
+    assert lease.released_at is None
+    assert delivery.outcome == DELIVERY_OUTCOME_FAILED
+    assert delivery.http_status == 409
+
+    resolved = async_abandon_action(
+        result,
+        outcome="failed",
+        reason="下游确认幂等载荷冲突，人工终止",
+        summary=None,
+        actor_id="superuser-1",
+    )
+    lease.refresh_from_db()
+    assert resolved.status == ACTION_STATUS_FAILED
     assert lease.released_at is not None
 
 

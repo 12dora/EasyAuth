@@ -8,6 +8,7 @@ import logging
 import re
 import uuid
 from dataclasses import dataclass
+from datetime import timedelta
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Final, cast
 
@@ -27,6 +28,7 @@ from easyauth.lifecycle.core import (
     ACTION_NOT_OPERABLE_MESSAGE,
     ACTION_SELF_RECEIVER_MESSAGE,
     ASYNC_ACCEPTED_LOCATION_REQUIRED_MESSAGE,
+    ASYNC_ATTENTION_POLL_INTERVAL_SECONDS,
     ASYNC_POLL_LIMIT_MESSAGE,
     ASYNC_POLL_MAX_ATTEMPTS,
     ASYNC_STATUS_URL_REQUIRED_MESSAGE,
@@ -274,6 +276,12 @@ def poll_async_action(action: HandoverAppAction, *, worker_id: str | None = None
         )
         if lease is None:
             raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
+        if action.status == ACTION_STATUS_ASYNC_ATTENTION_REQUIRED:
+            cutoff = timezone.now() - timedelta(
+                seconds=ASYNC_ATTENTION_POLL_INTERVAL_SECONDS,
+            )
+            if action.updated_at > cutoff:
+                return action
         batch = (
             HandoverExecutionBatch.objects.filter(
                 action=action,
@@ -310,6 +318,11 @@ def poll_async_action(action: HandoverAppAction, *, worker_id: str | None = None
             )
         else:
             raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
+
+        if action.status == ACTION_STATUS_ASYNC_ATTENTION_REQUIRED:
+            # updated_at 在 attention 状态下作为权威 last_polled_at; claim 后、发网前落库,
+            # worker 随后崩溃也不会让 recovery 在 30 分钟内重复 GET。
+            action.save(update_fields=["updated_at"])
 
         if action.status == ACTION_STATUS_ASYNC_PENDING:
             if action.async_poll_attempts >= ASYNC_POLL_MAX_ATTEMPTS:
@@ -398,6 +411,7 @@ def complete_data_phase(
     handle: LeaseHandle,
     response_payload: dict[str, JsonValue] | None = None,
     enforce_conservation: bool = True,
+    summary_unknown: bool = False,
 ) -> None:
     """同步 200 与异步终态汇合的收尾(01 §5.5)。A/B/C 必须各自 commit。
 
@@ -453,6 +467,8 @@ def complete_data_phase(
 
             if action is not None and response_payload is not None and first_data_completion:
                 _merge_result_summary(action, response_payload)
+            elif action is not None and summary_unknown and first_data_completion:
+                action.result_summary = None
 
             if not is_final:
                 batch.status = BATCH_STATUS_DONE
@@ -936,7 +952,16 @@ def async_abandon_action(
             fence=int(lease.fence),
             expires_at=lease.lease_expires_at,
         )
-        require_cas(handle)
+        if lease.owner.startswith("manual:"):
+            raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
+        claimed = cas_update_owner(
+            handle,
+            new_owner=f"manual:{uuid.uuid4().hex}",
+            renew=True,
+        )
+        if claimed is None:
+            raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
+        handle = claimed
         batch = (
             HandoverExecutionBatch.objects.select_for_update()
             .filter(
@@ -950,8 +975,6 @@ def async_abandon_action(
         action_id = int(locked.id)
         batch_id = int(batch.pk) if batch is not None else None
         app_key = locked.app.app_key
-        subject_user_id = int(locked.task.subject_user_id)  # type: ignore[arg-type]
-        app_pk = int(locked.app_id)  # type: ignore[arg-type]
 
         if outcome == "failed":
             locked.status = ACTION_STATUS_FAILED
@@ -974,6 +997,9 @@ def async_abandon_action(
                 extra={
                     "app_key": app_key,
                     "manual_resolution": True,
+                    "summary_provided": bool(summary),
+                    "action_id": action_id,
+                    "generation": locked.generation,
                     "reason": reason_stripped,
                 },
             )
@@ -987,8 +1013,7 @@ def async_abandon_action(
             if summary:
                 locked.result_summary = summary
             else:
-                # 人工确认无计数: 显式标记, 不把 skipped==count 写进史料
-                locked.result_summary = {"manual_resolution": True}
+                locked.result_summary = None
             locked.data_completed_at = locked.data_completed_at or timezone.now()
             locked.save(
                 update_fields=[
@@ -1028,48 +1053,32 @@ def async_abandon_action(
                 extra={
                     "app_key": app_key,
                     "manual_resolution": True,
+                    "summary_provided": bool(summary),
+                    "action_id": action_id,
+                    "generation": locked.generation,
                     "reason": reason_stripped,
                 },
             )
             return locked
 
-        # done + 有 batch: 保持租约, 退出本事务后走 complete_data_phase
-        # batch 标记 is_final 以便走授权路径
-        if not batch.is_final:
-            batch.is_final = True
-            batch.save(update_fields=["is_final"])
+        # done + 有 batch: 保持人工 owner/fence, 退出本事务后走 complete_data_phase。
+        # is_final 是批次计划事实, 人工确认不得篡改。
 
     # 人工结案: 有 summary 则落库; 无则不伪造 skipped==count
     payload: dict[str, JsonValue] | None
     if summary:
         payload = {"summary": cast("JsonValue", summary)}
     else:
-        payload = {"manual_resolution": True}
-
-    lease_row = HandoverExecutionLease.objects.filter(
-        subject_user_id=subject_user_id,
-        app_id=app_pk,
-        released_at__isnull=True,
-    ).first()
-    if lease_row is None:
-        raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
-    handle = LeaseHandle(
-        lease_id=int(lease_row.pk),  # type: ignore[arg-type]
-        owner=lease_row.owner,
-        fence=int(lease_row.fence),
-        expires_at=lease_row.lease_expires_at,
-    )
+        payload = None
     assert batch_id is not None
     complete_data_phase(
         HandoverExecutionBatch.objects.get(pk=batch_id),
         handle=handle,
         response_payload=payload,
         enforce_conservation=False,
+        summary_unknown=not bool(summary),
     )
     locked = HandoverAppAction.objects.select_related("app", "task").get(pk=action_id)
-    if not summary and not locked.result_summary:
-        locked.result_summary = {"manual_resolution": True}
-        locked.save(update_fields=["result_summary", "updated_at"])
     record_task_event(
         locked.task,
         action="handover_action_executed",
@@ -1078,6 +1087,9 @@ def async_abandon_action(
         extra={
             "app_key": locked.app.app_key,
             "manual_resolution": True,
+            "summary_provided": bool(summary),
+            "action_id": action_id,
+            "generation": locked.generation,
             "reason": reason_stripped,
         },
     )
@@ -2001,9 +2013,6 @@ def takeover_expired_lease(
     owner: str | None = None,
 ) -> HandoverAppAction | None:
     """§2.4.2 先抢占后查证: 用原 canonical body 重放 execute。"""
-    from datetime import timedelta
-
-    from easyauth.lifecycle.core import ASYNC_ATTENTION_POLL_INTERVAL_SECONDS
     from easyauth.lifecycle.lease import preempt_expired_lease
 
     worker = owner or f"recover:{uuid.uuid4().hex[:12]}"
@@ -2047,7 +2056,7 @@ def takeover_expired_lease(
         _ = cas_update_owner(handle, new_owner=f"async:{batch.pk}", renew=True)
         return poll_async_action(action, worker_id=worker)
     if action.status == ACTION_STATUS_ASYNC_ATTENTION_REQUIRED:
-        # 已越过 30 分钟门禁(抢占前未 return): 续约并 poll 作为 beat 兜底
+        # 已越过 30 分钟门禁: 先抢占过期租约, 再交回 sentinel 由 poll 权威入口 claim。
         _ = cas_update_owner(handle, new_owner=f"async:{batch.pk}", renew=True)
         return poll_async_action(action, worker_id=worker)
     hook_url = _handover_hook_url(action.app)
@@ -2083,14 +2092,34 @@ def takeover_expired_lease(
             action.id,
             batch.id,
         )
-        record_task_event(
-            action.task,
-            action="handover_takeover_payload_conflict",
-            actor_id=LIFECYCLE_ACTOR_ID,
-            actor_type="system",
-            extra={"app_key": action.app_key_snapshot, "batch_id": batch.id},
-        )
-        return None
+        with transaction.atomic():
+            require_cas(handle)
+            action = _locked_action(int(action.id))
+            delivery = HandoverDeliveryAttempt.objects.select_for_update().get(pk=delivery.pk)
+            delivery.outcome = DELIVERY_OUTCOME_FAILED
+            delivery.http_status = int(HTTPStatus.CONFLICT)
+            delivery.error_text = "takeover_payload_conflict"
+            delivery.response_payload = _redact_response_payload(response.payload)
+            delivery.save(
+                update_fields=["outcome", "http_status", "error_text", "response_payload"],
+            )
+            action.status = ACTION_STATUS_ASYNC_ATTENTION_REQUIRED
+            action.last_error = "恢复重放与下游幂等记录冲突, 请人工确认真实结局"
+            action.last_error_raw = "takeover_payload_conflict"
+            action.save(
+                update_fields=["status", "last_error", "last_error_raw", "updated_at"],
+            )
+            handed = cas_update_owner(handle, new_owner=f"async:{batch.pk}", renew=True)
+            if handed is None:
+                raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
+            record_task_event(
+                action.task,
+                action="handover_takeover_payload_conflict",
+                actor_id=LIFECYCLE_ACTOR_ID,
+                actor_type="system",
+                extra={"app_key": action.app_key_snapshot, "batch_id": batch.id},
+            )
+        return action
     return _handle_execute_response(
         action_id=action.id,
         batch_id=batch.id,
