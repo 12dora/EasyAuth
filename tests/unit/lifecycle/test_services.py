@@ -568,6 +568,57 @@ def test_execute_action_requires_receiver_or_release_policy(
     assert done.status == "done"
 
 
+def test_execute_429_schedules_new_delivery_after_retry_after(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app, group, _permission = _app_with_catalog("lc-rate-limited-app")
+    subject = _granted_user("lc-rate-limited-user", app, group)
+    task, _created = ensure_handover_task(
+        subject=subject,
+        kind="offboard",
+        created_by="admin-a",
+    )
+    action = HandoverAppAction.objects.get(task=task, app=app)
+
+    def fake_hook(*, event_type: str, **_kwargs: object) -> HookResponse:
+        if event_type == "lifecycle.handover.preview":
+            return HookResponse(status_code=200, location="", payload=_preview_ok_payload())
+        raise lifecycle_services.HookCallError(
+            "rate limited",
+            status_code=429,
+            payload={
+                "detail": {
+                    "code": "RATE_LIMITED",
+                    "message": "later",
+                    "traceId": "trace-1",
+                    "token": "sk-secret-value",
+                },
+            },
+            raw_body=(
+                '{"detail":{"code":"RATE_LIMITED","message":"later",'
+                '"traceId":"trace-1","token":"sk-secret-value"}}'
+            ),
+            retry_after_seconds=120,
+        )
+
+    monkeypatch.setattr(lifecycle_services, "signed_hook_post", fake_hook)
+    action = preview_action(action)
+    before = timezone.now()
+    with pytest.raises(lifecycle_services.HookCallError):
+        _ = execute_action(action)
+
+    action.refresh_from_db()
+    assert action.status == "previewed"
+    event = OutboxEvent.objects.get(task_name="easyauth.lifecycle.retry_rate_limited_execute")
+    assert event.args == [action.id, action.generation]
+    assert event.available_at >= before + timedelta(seconds=119)
+    attempt = lifecycle_services.HandoverDeliveryAttempt.objects.get(batch__action=action)
+    assert attempt.response_payload["byte_length"] > 0
+    assert len(str(attempt.response_payload["sha256"])) == 64
+    assert "RATE_LIMITED" in str(attempt.response_payload["error_summary"])
+    assert "sk-secret-value" not in str(attempt.response_payload)
+
+
 def test_failed_execution_locks_receiver_and_retry_uses_execution_receiver(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -22,7 +22,12 @@ from easyauth.integrations.authentik.admin_client import (
 )
 from easyauth.lifecycle.escalation import escalate_overdue_task
 from easyauth.lifecycle.errors import HandoverConflictError
-from easyauth.lifecycle.handover import poll_async_action, takeover_expired_lease
+from easyauth.lifecycle.handover import (
+    RATE_LIMITED_EXECUTE_RETRY_TASK,
+    execute_action,
+    poll_async_action,
+    takeover_expired_lease,
+)
 from easyauth.lifecycle.models import (
     ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
     ACTION_STATUS_ASYNC_PENDING,
@@ -146,6 +151,19 @@ LIFECYCLE_REMINDER_BATCH_SIZE: Final = 200
 
 class LifecycleNotifyIdentityMissingError(RuntimeError):
     """生命周期通知身份尚未就绪，必须由 Celery 持续退避重试。"""
+
+
+@shared_task(name=RATE_LIMITED_EXECUTE_RETRY_TASK, acks_late=True)
+def retry_rate_limited_execute_task(action_id: int, generation: int) -> str:
+    action = HandoverAppAction.objects.filter(
+        pk=action_id,
+        generation=generation,
+        status="previewed",
+    ).first()
+    if action is None:
+        return "stale"
+    _ = execute_action(action, confirm_version=action.confirm_version)
+    return "executed"
 
 
 @shared_task(

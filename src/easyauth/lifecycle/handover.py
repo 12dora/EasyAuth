@@ -108,6 +108,7 @@ from easyauth.lifecycle.models import (
     HandoverTeamItem,
 )
 from easyauth.lifecycle.transfer import transfer_selected_grants
+from easyauth.outbox.services import enqueue_task
 from easyauth.teams.models import TEAM_MEMBER_ROLE_LEADER, TeamMember
 from easyauth.webhooks.hooks import HookCallError, HookResponse, signed_hook_get, signed_hook_post
 from easyauth.webhooks.models import AppWebhookConfig
@@ -138,6 +139,8 @@ POLICY_REMOVED_MESSAGE: Final = (
 )
 UNSHARDABLE_BATCH_MESSAGE: Final = "单独指定的条目过多，请减少逐条指定后重新预演"
 RATE_LIMITED_MESSAGE: Final = "rate_limited"
+RATE_LIMITED_EXECUTE_RETRY_TASK: Final = "easyauth.lifecycle.retry_rate_limited_execute"
+DEFAULT_RETRY_AFTER_SECONDS: Final = 60
 ITEMS_RATE_LIMIT_NAMESPACE: Final = "handover-items"
 
 
@@ -1432,6 +1435,7 @@ def _execute_action(
             http_status=error.status_code,
             response_payload=error.payload,
             raw_body=error.raw_body,
+            retry_after_seconds=error.retry_after_seconds,
         )
         raise
 
@@ -1545,6 +1549,7 @@ def _finish_delivery_failure(
     http_status: int | None,
     response_payload: dict[str, JsonValue] | None = None,
     raw_body: str = "",
+    retry_after_seconds: int | None = None,
 ) -> None:
     with transaction.atomic():
         require_cas(handle)
@@ -1554,8 +1559,10 @@ def _finish_delivery_failure(
         delivery.outcome = DELIVERY_OUTCOME_FAILED
         delivery.http_status = http_status
         delivery.error_text = _redact_error_text(str(error))
-        if response_payload is not None:
-            delivery.response_payload = _redact_response_payload(response_payload)
+        delivery.response_payload = _error_response_evidence(
+            response_payload,
+            raw_body=raw_body,
+        )
         delivery.save(
             update_fields=["outcome", "http_status", "error_text", "response_payload"],
         )
@@ -1605,6 +1612,14 @@ def _finish_delivery_failure(
                 ],
             )
             batch.save(update_fields=["status"])
+            if http_status == HTTPStatus.TOO_MANY_REQUESTS:
+                delay = retry_after_seconds or DEFAULT_RETRY_AFTER_SECONDS
+                enqueue_task(
+                    event_key=f"handover-rate-limited-execute:{delivery.id}",
+                    task_name=RATE_LIMITED_EXECUTE_RETRY_TASK,
+                    args=[action.id, action.generation],
+                    countdown=delay,
+                )
             must_cas_release(handle)
             return
         batch.status = BATCH_STATUS_FAILED
@@ -2445,6 +2460,35 @@ def _redact_response_payload(payload: dict[str, JsonValue] | None) -> dict[str, 
                     safe[key] = row
         summary["summary"] = cast("JsonValue", safe)
     return summary
+
+
+def _error_response_evidence(
+    payload: dict[str, JsonValue] | None,
+    *,
+    raw_body: str,
+) -> dict[str, JsonValue]:
+    if raw_body:
+        evidence_bytes = raw_body.encode("utf-8")
+    elif payload is not None:
+        evidence_bytes = json.dumps(
+            payload,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ).encode("utf-8")
+    else:
+        return {}
+    projection = project_handover_error(
+        error="downstream_error",
+        payload=payload,
+        raw_body=raw_body,
+    )
+    return {
+        "sha256": hashlib.sha256(evidence_bytes).hexdigest(),
+        "byte_length": len(evidence_bytes),
+        "error_summary": projection.public,
+        "raw_projection": projection.raw,
+    }
 
 
 def _redact_error_text(text: str) -> str:
