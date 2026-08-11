@@ -6,6 +6,7 @@ import json
 import logging
 import time
 
+import pytest
 from easyauth_app_sdk import (
     HandoverBusinessError,
     WebhookEvent,
@@ -16,7 +17,11 @@ from easyauth_app_sdk.lifecycle import (
     DEFAULT_MAX_BODY_BYTES,
     HANDOVER_ITEMS_EVENT,
 )
-from easyauth_app_sdk.webhook import REASON_SIGNATURE_MISMATCH, REASON_TIMESTAMP_SKEW
+from easyauth_app_sdk.webhook import (
+    REASON_INVALID_PAYLOAD,
+    REASON_SIGNATURE_MISMATCH,
+    REASON_TIMESTAMP_SKEW,
+)
 
 SECRET = "whsec_lifecycle"  # noqa: S105 - 测试用密钥。
 
@@ -232,6 +237,15 @@ def test_signature_failure_status_knob_returns_401() -> None:
     assert payload["error"]["reason"] == REASON_SIGNATURE_MISMATCH
 
 
+def test_signature_failure_status_rejects_success_status() -> None:
+    body = _handover_body(mode="preview", event_type="lifecycle.handover.preview")
+    headers = _signed_headers(body, event_type="lifecycle.handover.preview")
+    headers["X-EasyAuth-Signature"] = "0" * 64
+
+    with pytest.raises(ValueError, match="只能是 401 或 403"):
+        _respond(body, headers, signature_failure_status=200)
+
+
 def test_stale_timestamp_returns_400_ignoring_signature_failure_status() -> None:
     body = _handover_body(mode="preview", event_type="lifecycle.handover.preview")
     headers = _signed_headers(
@@ -247,6 +261,18 @@ def test_stale_timestamp_returns_400_ignoring_signature_failure_status() -> None
     assert status_code == 400
     assert payload["error"]["code"] == "webhook_timestamp_invalid"
     assert payload["error"]["reason"] == REASON_TIMESTAMP_SKEW
+
+
+@pytest.mark.parametrize("body", [b"{", b"[]"])
+def test_valid_signature_with_invalid_payload_returns_400(body: bytes) -> None:
+    status_code, _headers, payload = _respond(
+        body,
+        _signed_headers(body, event_type="lifecycle.handover.preview"),
+    )
+
+    assert status_code == 400
+    assert payload["error"]["code"] == "webhook_payload_invalid"
+    assert payload["error"]["reason"] == REASON_INVALID_PAYLOAD
 
 
 def test_unknown_event_returns_422() -> None:
@@ -281,6 +307,36 @@ def test_callback_exception_returns_500_with_fixed_message(
     assert payload["error"]["message"] == CALLBACK_FAILED_MESSAGE
     assert "业务回调爆炸" not in payload["error"]["message"]
     assert any("handover callback failed" in record.message for record in caplog.records)
+
+
+@pytest.mark.parametrize(
+    "callback_result",
+    [None, ["不是对象"], {"value": object()}],
+)
+def test_invalid_callback_result_returns_fixed_500(
+    callback_result: object,
+    caplog: logging.LogCaptureFixture,
+) -> None:
+    body = _handover_body(mode="preview", event_type="lifecycle.handover.preview")
+
+    with caplog.at_level(logging.ERROR, logger="easyauth_app_sdk.lifecycle"):
+        status_code, _headers, payload = _respond(
+            body,
+            _signed_headers(body, event_type="lifecycle.handover.preview"),
+            on_preview=lambda _event: callback_result,
+        )
+
+    assert status_code == 500
+    assert payload == {
+        "error": {
+            "code": "handover_callback_failed",
+            "message": CALLBACK_FAILED_MESSAGE,
+        },
+    }
+    assert any(
+        "non-dict result" in record.message or "callback failed" in record.message
+        for record in caplog.records
+    )
 
 
 def test_business_error_returns_declared_status() -> None:

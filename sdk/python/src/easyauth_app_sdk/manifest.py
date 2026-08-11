@@ -116,9 +116,9 @@ def _validate_lifecycle(lifecycle: Any) -> None:
             not isinstance(capability, str) for capability in capabilities
         ):
             raise ManifestValidationError("lifecycle.capabilities 必须是字符串数组")
-    asset_types = lifecycle.get("handover_asset_types")
-    if asset_types is None:
+    if "handover_asset_types" not in lifecycle:
         return
+    asset_types = lifecycle["handover_asset_types"]
     if not isinstance(asset_types, list):
         raise ManifestValidationError("lifecycle.handover_asset_types 必须是数组")
     for index, item in enumerate(asset_types):

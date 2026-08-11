@@ -200,6 +200,13 @@ def test_validate_manifest_rejects_handover_asset_types_not_list() -> None:
         validate_manifest(manifest)
 
 
+def test_validate_manifest_rejects_null_handover_asset_types() -> None:
+    manifest = _manifest()
+    manifest["lifecycle"] = {"handover_asset_types": None}
+    with pytest.raises(ManifestValidationError, match="handover_asset_types 必须是数组"):
+        validate_manifest(manifest)
+
+
 def test_validate_manifest_rejects_handover_asset_type_item_not_object() -> None:
     manifest = _manifest()
     manifest["lifecycle"] = {"handover_asset_types": ["customer"]}

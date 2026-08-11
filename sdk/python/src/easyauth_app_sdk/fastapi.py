@@ -19,6 +19,7 @@ from easyauth_app_sdk.lifecycle import (
     BodyTooLargeError,
     HandoverCallback,
     SecretProvider,
+    _validate_signature_failure_status,
     body_too_large_response,
     lifecycle_http_response,
     read_bounded_body,
@@ -83,6 +84,8 @@ def easyauth_lifecycle_router(
     业务错误若带 ``retry_after``, 会透传为响应头 ``Retry-After``。
     """
     from fastapi import APIRouter, Request, Response
+
+    _validate_signature_failure_status(signature_failure_status)
 
     router = APIRouter()
 

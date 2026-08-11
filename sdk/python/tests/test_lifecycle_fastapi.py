@@ -188,5 +188,16 @@ def test_router_signature_failure_status_knob() -> None:
     assert response.json()["error"]["code"] == "webhook_verification_failed"
 
 
+def test_router_rejects_invalid_signature_failure_status_at_construction() -> None:
+    with pytest.raises(ValueError, match="只能是 401 或 403"):
+        easyauth_lifecycle_router(
+            lambda: SECRET,
+            lambda _event: {"assets": []},
+            lambda _event: {"summary": {}},
+            lambda _event: {"items": [], "page": 1, "page_size": 50, "total": 0},
+            signature_failure_status=200,
+        )
+
+
 def test_router_default_max_body_is_256_kib() -> None:
     assert DEFAULT_MAX_BODY_BYTES == 256 * 1024

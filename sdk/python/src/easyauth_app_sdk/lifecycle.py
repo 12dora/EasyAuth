@@ -19,6 +19,7 @@ from collections.abc import Callable
 from typing import Any, Final, Protocol
 
 from easyauth_app_sdk.webhook import (
+    REASON_INVALID_PAYLOAD,
     WebhookEvent,
     WebhookVerificationError,
     verify_webhook,
@@ -39,6 +40,9 @@ EVENT_TYPE_MISMATCH_CODE: Final = "event_type_mismatch"
 EVENT_TYPE_MISMATCH_MESSAGE: Final = "body.event_type 与 X-EasyAuth-Event 不一致。"
 CALLBACK_FAILED_CODE: Final = "handover_callback_failed"
 CALLBACK_FAILED_MESSAGE: Final = "交接回调执行失败，请查看应用日志"
+PAYLOAD_INVALID_CODE: Final = "webhook_payload_invalid"
+PAYLOAD_INVALID_MESSAGE: Final = "webhook 载荷不是有效的 JSON 对象。"
+ALLOWED_SIGNATURE_FAILURE_STATUS: Final = frozenset({401, 403})
 # 业务回调允许表达的 HTTP 状态码白名单(契约 §10.6)。白名单外一律按 500 处理。
 ALLOWED_BUSINESS_STATUS: Final = frozenset({400, 409, 412, 413, 422, 423, 429})
 # 时间戳超窗等可重试类验签失败的 reason(契约 §10.6: 400 可重试, 403 不可重试)。
@@ -93,6 +97,71 @@ class _RequestLike(Protocol):
 def _json_response(status_code: int, payload: dict[str, Any]) -> tuple[int, dict[str, str], bytes]:
     headers = {"Content-Type": JSON_CONTENT_TYPE}
     return status_code, headers, json.dumps(payload, ensure_ascii=False).encode("utf-8")
+
+
+def _validate_signature_failure_status(signature_failure_status: int) -> None:
+    if signature_failure_status not in ALLOWED_SIGNATURE_FAILURE_STATUS:
+        raise ValueError("signature_failure_status 只能是 401 或 403")
+
+
+def _verification_error_response(
+    error: WebhookVerificationError,
+    *,
+    signature_failure_status: int,
+) -> tuple[int, dict[str, str], bytes]:
+    if error.reason in _TIMESTAMP_REASONS:
+        return _error_response(
+            400,
+            "webhook_timestamp_invalid",
+            str(error),
+            reason=error.reason,
+        )
+    if error.reason == REASON_INVALID_PAYLOAD:
+        return _error_response(
+            400,
+            PAYLOAD_INVALID_CODE,
+            PAYLOAD_INVALID_MESSAGE,
+            reason=error.reason,
+        )
+    return _error_response(
+        signature_failure_status,
+        "webhook_verification_failed",
+        str(error),
+        reason=error.reason,
+    )
+
+
+def _callback_response(
+    callback: HandoverCallback,
+    event: WebhookEvent,
+) -> tuple[int, dict[str, str], bytes]:
+    try:
+        result = callback(event)
+        if not isinstance(result, dict):
+            logger.error(
+                "handover callback returned non-dict result type=%s",
+                type(result).__name__,
+            )
+            return _error_response(500, CALLBACK_FAILED_CODE, CALLBACK_FAILED_MESSAGE)
+        return _json_response(200, result)
+    except HandoverBusinessError as error:
+        if error.status_code not in ALLOWED_BUSINESS_STATUS:
+            logger.warning(
+                "HandoverBusinessError status_code=%s outside ALLOWED_BUSINESS_STATUS; "
+                "degrading to 500 (code=%s)",
+                error.status_code,
+                error.code,
+            )
+            return _error_response(500, CALLBACK_FAILED_CODE, CALLBACK_FAILED_MESSAGE)
+        return _error_response(
+            error.status_code,
+            error.code,
+            error.message,
+            retry_after=error.retry_after,
+        )
+    except Exception:
+        logger.exception("handover callback failed with unexpected exception")
+        return _error_response(500, CALLBACK_FAILED_CODE, CALLBACK_FAILED_MESSAGE)
 
 
 def _error_response(
@@ -167,22 +236,13 @@ def lifecycle_http_response(
     未知事件返回 422; ``HandoverBusinessError`` 按白名单状态码渲染;
     其它回调异常统一转 500 固定文案(不回显 ``str(error)``)。
     """
+    _validate_signature_failure_status(signature_failure_status)
     try:
         event = verify_webhook(secret=secret_provider(), headers=headers, raw_body=raw_body)
     except WebhookVerificationError as error:
-        if error.reason in _TIMESTAMP_REASONS:
-            return _error_response(
-                400,
-                "webhook_timestamp_invalid",
-                str(error),
-                reason=error.reason,
-            )
-        # 签名不匹配/鉴权头缺失等: 状态码由下游约定(403 或 401), 非时间戳类。
-        return _error_response(
-            signature_failure_status,
-            "webhook_verification_failed",
-            str(error),
-            reason=error.reason,
+        return _verification_error_response(
+            error,
+            signature_failure_status=signature_failure_status,
         )
 
     # 契约 §10.1: 必须在 webhook.test 短路之前比对 body.event_type 与事件头。
@@ -200,25 +260,4 @@ def lifecycle_http_response(
         callback = on_handover_execute
     else:
         return _error_response(422, "unsupported_event", f"不支持的事件类型: {event.event_type}")
-    try:
-        result = callback(event)
-    except HandoverBusinessError as error:
-        if error.status_code not in ALLOWED_BUSINESS_STATUS:
-            # 01 §8 item 6.1: 白名单外状态码降级 500 时必须写 SDK 侧告警。
-            logger.warning(
-                "HandoverBusinessError status_code=%s outside ALLOWED_BUSINESS_STATUS; "
-                "degrading to 500 (code=%s)",
-                error.status_code,
-                error.code,
-            )
-            return _error_response(500, CALLBACK_FAILED_CODE, CALLBACK_FAILED_MESSAGE)
-        return _error_response(
-            error.status_code,
-            error.code,
-            error.message,
-            retry_after=error.retry_after,
-        )
-    except Exception:  # noqa: BLE001 - 回调异常边界: 固定文案, 不回显异常细节。
-        logger.exception("handover callback failed with unexpected exception")
-        return _error_response(500, CALLBACK_FAILED_CODE, CALLBACK_FAILED_MESSAGE)
-    return _json_response(200, result)
+    return _callback_response(callback, event)
