@@ -4,6 +4,7 @@ import secrets
 from http import HTTPStatus
 from typing import TYPE_CHECKING, ClassVar, Final
 
+from django.db import transaction
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -119,6 +120,7 @@ def console_app_webhook_test(request: HttpRequest, app_key: str) -> JsonResponse
     return json_response({"delivery_id": delivery.delivery_id, "status": delivery.status})
 
 
+@transaction.atomic
 def _update_config(request: HttpRequest, app: App, actor: ConsoleActor) -> JsonResponse:
     try:
         payload = WebhookConfigPayload.model_validate_json(request.body)
@@ -137,7 +139,11 @@ def _update_config(request: HttpRequest, app: App, actor: ConsoleActor) -> JsonR
                 )
     except (BlockedHostError, InvalidWebhookUrlError) as exc:
         return _validation_error(str(exc))
-    config, _created = AppWebhookConfig.objects.get_or_create(app=app)
+    locked_app = App.objects.select_for_update().get(pk=app.pk)
+    try:
+        config = AppWebhookConfig.objects.select_for_update().get(app=locked_app)
+    except AppWebhookConfig.DoesNotExist:
+        config = AppWebhookConfig(app=locked_app)
     config.enabled = payload.enabled
     config.approval_callback_url = payload.approval_callback_url
     config.handover_url = payload.handover_url

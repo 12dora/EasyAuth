@@ -6,9 +6,17 @@ from typing import Final
 
 import pytest
 from django.test import Client
+from django.utils import timezone
 
-from easyauth.applications.models import App, PermissionTemplateVersion
+from easyauth.applications.models import (
+    HANDOVER_CAPABILITY_DECLARED,
+    HANDOVER_CAPABILITY_NONE,
+    HANDOVER_CAPABILITY_UNDECLARED,
+    App,
+    PermissionTemplateVersion,
+)
 from easyauth.applications.services import AppCredentialService
+from easyauth.audit.models import AuditLog
 from easyauth.webhooks.models import AppWebhookConfig
 
 pytestmark = pytest.mark.django_db
@@ -148,18 +156,30 @@ def test_manifest_sync_clears_manifest_managed_lifecycle_urls(
     )
     app, token = _app_with_token("sync-lifecycle-snapshot")
     client = Client()
+    initial_manifest = _manifest(app.app_key, 1)
+    initial_manifest["lifecycle"]["capabilities"] = ["handover.v2"]
+    initial_manifest["lifecycle"]["handover_asset_types"] = [
+        {
+            "type": "order",
+            "label": "订单",
+            "detail_supported": False,
+            "releasable": False,
+        },
+    ]
     assert (
         _post(
             client,
             app.app_key,
             token,
             {
-                "manifest": _manifest(app.app_key, 1),
+                "manifest": initial_manifest,
                 "base_url": "https://etrade.example.com",
             },
         ).status_code
         == HTTPStatus.OK
     )
+    app.refresh_from_db()
+    assert app.handover_capability == HANDOVER_CAPABILITY_DECLARED
 
     manifest_without_lifecycle = _manifest(app.app_key, UPGRADED_MANIFEST_VERSION)
     del manifest_without_lifecycle["lifecycle"]
@@ -175,6 +195,66 @@ def test_manifest_sync_clears_manifest_managed_lifecycle_urls(
     assert config.handover_url == ""
     assert config.onboard_url == ""
     assert config.updated_by == "manifest"
+    app.refresh_from_db()
+    assert app.handover_capability == HANDOVER_CAPABILITY_UNDECLARED
+
+
+def test_manifest_sync_does_not_overwrite_console_owned_webhook(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "easyauth.config.net.resolve_public_addresses",
+        lambda _hostname, *, port, **_kwargs: (("93.184.216.34",) if port == HTTPS_PORT else ()),
+    )
+    app, token = _app_with_token("sync-console-owned")
+    _ = AppWebhookConfig.objects.create(
+        app=app,
+        handover_url="https://admin.example.com/handover",
+        enabled=False,
+        updated_by="admin-1",
+    )
+    manifest = _manifest(app.app_key, 1)
+    manifest["lifecycle"]["capabilities"] = ["handover.v2"]
+    manifest["lifecycle"]["handover_asset_types"] = []
+
+    response = _post(
+        Client(),
+        app.app_key,
+        token,
+        {"manifest": manifest, "base_url": "https://manifest.example.com"},
+    )
+
+    assert response.status_code == HTTPStatus.OK
+    config = AppWebhookConfig.objects.get(app=app)
+    assert config.handover_url == "https://admin.example.com/handover"
+    assert config.enabled is False
+    assert config.updated_by == "admin-1"
+
+
+def test_conflicting_manifest_overrides_operational_none_to_undeclared() -> None:
+    app, token = _app_with_token("sync-conflicting-none")
+    app.handover_capability = HANDOVER_CAPABILITY_NONE
+    app.handover_capability_declared_by = "admin-1"
+    app.handover_capability_declared_at = timezone.now()
+    app.save(
+        update_fields=[
+            "handover_capability",
+            "handover_capability_declared_by",
+            "handover_capability_declared_at",
+            "updated_at",
+        ],
+    )
+    manifest = _manifest(app.app_key, 1)
+    manifest["lifecycle"]["capabilities"] = ["handover.v2", "handover.none"]
+    manifest["lifecycle"]["handover_asset_types"] = []
+
+    response = _post(Client(), app.app_key, token, {"manifest": manifest})
+
+    assert response.status_code == HTTPStatus.OK
+    app.refresh_from_db()
+    assert app.handover_capability == HANDOVER_CAPABILITY_UNDECLARED
+    audit = AuditLog.objects.get(event_type="handover_capability_conflict")
+    assert audit.actor_type == "system"
 
 
 def test_manifest_sync_rejects_wrong_app_key() -> None:

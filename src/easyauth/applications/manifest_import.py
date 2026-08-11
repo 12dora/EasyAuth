@@ -9,12 +9,15 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from django.db import transaction
+
 from easyauth.applications.manifest_hashing import (
     canonical_manifest_hash,
     canonical_manifest_template,
 )
-from easyauth.applications.models import PermissionTemplateVersion
+from easyauth.applications.models import App, PermissionTemplateVersion
 from easyauth.applications.permission_templates import (
+    _sync_manifest_lifecycle,
     apply_permission_template,
     parse_permission_template,
     parse_template_format,
@@ -22,7 +25,6 @@ from easyauth.applications.permission_templates import (
 
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
-    from easyauth.applications.models import App
 
 
 class ManifestVersionConflictError(Exception):
@@ -47,21 +49,26 @@ class ManifestSyncOutcome:
     template_version: int
 
 
+@transaction.atomic
 def sync_app_manifest(
     *,
     app: App,
     manifest: dict[str, JsonValue],
     actor_id: str,
     downstream_base_url: str | None = None,
+    actor_type: str = "system",
 ) -> ManifestSyncOutcome:
-    """按幂等语义导入 manifest; 调用方需持有事务(与 App 创建同一原子域)。
+    """按幂等语义导入 manifest，并在 App 行锁内完成版本判定。
 
     可能抛出:
     - ManifestVersionConflictError: 版本未递增且内容不同。
     - PermissionTemplateImportError: 解析/语义校验失败(由调用方映射响应码)。
     """
+    locked_app = App.objects.select_for_update().get(pk=app.pk)
     canonical_template = canonical_manifest_template(manifest)
-    latest = PermissionTemplateVersion.objects.filter(app=app).order_by("-version").first()
+    latest = (
+        PermissionTemplateVersion.objects.filter(app=locked_app).order_by("-version").first()
+    )
     raw_schema_version = manifest["schema_version"]
     if not isinstance(raw_schema_version, int) or isinstance(raw_schema_version, bool):
         msg = "App manifest schema_version 必须是整数。"
@@ -69,21 +76,34 @@ def sync_app_manifest(
     incoming_version = raw_schema_version
     if latest is not None and incoming_version <= latest.version:
         if canonical_manifest_hash(manifest) == latest.content_hash:
+            template = parse_permission_template(
+                app_key=locked_app.app_key,
+                raw_template=canonical_template,
+                template_format=parse_template_format("json"),
+                imported_by=actor_id,
+            )
+            _sync_manifest_lifecycle(
+                app=locked_app,
+                template=template,
+                downstream_base_url=downstream_base_url,
+                actor_type=actor_type,
+            )
             return ManifestSyncOutcome(
                 already_up_to_date=True,
                 template_version=latest.version,
             )
         raise ManifestVersionConflictError(incoming_version, latest.version)
     template = parse_permission_template(
-        app_key=app.app_key,
+        app_key=locked_app.app_key,
         raw_template=canonical_template,
         template_format=parse_template_format("json"),
         imported_by=actor_id,
     )
     result = apply_permission_template(
-        app=app,
+        app=locked_app,
         template=template,
         downstream_base_url=downstream_base_url,
+        actor_type=actor_type,
     )
     return ManifestSyncOutcome(
         already_up_to_date=False,

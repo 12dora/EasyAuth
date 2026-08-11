@@ -18,13 +18,11 @@ from easyauth.lifecycle.core import LIFECYCLE_ACTOR_ID, record_task_event, refre
 from easyauth.lifecycle.models import (
     ACTION_STATUS_BLOCKED,
     ACTION_STATUS_PENDING,
-    BLOCKED_REASON_CAPABILITY_UNDECLARED,
     TASK_OPEN_STATUSES,
     HandoverAppAction,
     HandoverAssetType,
     HandoverTask,
 )
-from easyauth.webhooks.models import AppWebhookConfig
 
 if TYPE_CHECKING:
     from easyauth.applications.ops_models import JsonValue
@@ -38,8 +36,12 @@ def sync_handover_capability_from_manifest(
     lifecycle: object,
     *,
     actor_id: str,
+    actor_type: str = "system",
 ) -> None:
-    """在既有 manifest push 事务内调用。lifecycle 需提供 capabilities / handover_url / handover_asset_types。"""
+    """在既有 manifest push 事务内调用。
+
+    lifecycle 需提供 capabilities / handover_url / handover_asset_types。
+    """
     capabilities = list(getattr(lifecycle, "capabilities", ()) or ())
     handover_url = str(getattr(lifecycle, "handover_url", "") or "")
     raw_types = list(getattr(lifecycle, "handover_asset_types", ()) or ())
@@ -50,7 +52,7 @@ def sync_handover_capability_from_manifest(
     if has_v2 and has_none:
         _ = AuditService.record(
             AuditRecord(
-                actor_type="system",
+                actor_type=actor_type,
                 actor_id=actor_id or LIFECYCLE_ACTOR_ID,
                 action="handover_capability_conflict",
                 target_type="app",
@@ -58,16 +60,17 @@ def sync_handover_capability_from_manifest(
                 metadata={"capabilities": capabilities},
             ),
         )
-        if previous != HANDOVER_CAPABILITY_NONE:
-            app.handover_capability = HANDOVER_CAPABILITY_UNDECLARED
-            app.handover_capability_synced_at = timezone.now()
-            app.save(
-                update_fields=[
-                    "handover_capability",
-                    "handover_capability_synced_at",
-                    "updated_at",
-                ],
-            )
+        app.handover_capability = HANDOVER_CAPABILITY_UNDECLARED
+        app.handover_asset_types = []
+        app.handover_capability_synced_at = timezone.now()
+        app.save(
+            update_fields=[
+                "handover_capability",
+                "handover_asset_types",
+                "handover_capability_synced_at",
+                "updated_at",
+            ],
+        )
         return
 
     if has_v2 and handover_url:
@@ -83,13 +86,8 @@ def sync_handover_capability_from_manifest(
                 "updated_at",
             ],
         )
-        config, _created = AppWebhookConfig.objects.get_or_create(app=app)
-        if config.handover_url != handover_url:
-            config.handover_url = handover_url
-            config.enabled = True
-            config.save(update_fields=["handover_url", "enabled", "updated_at"])
         if previous == HANDOVER_CAPABILITY_UNDECLARED:
-            reconcile_blocked_actions(app, actor_id=actor_id)
+            reconcile_blocked_actions(app, actor_id=actor_id, actor_type=actor_type)
         return
 
     if has_none and not raw_types:
@@ -124,7 +122,12 @@ def sync_handover_capability_from_manifest(
     )
 
 
-def reconcile_blocked_actions(app: App, *, actor_id: str) -> None:
+def reconcile_blocked_actions(
+    app: App,
+    *,
+    actor_id: str,
+    actor_type: str = "system",
+) -> None:
     """undeclared → declared 后, 同事务 reconcile open task 上的 blocked action。"""
     with transaction.atomic():
         actions = list(
@@ -154,7 +157,7 @@ def reconcile_blocked_actions(app: App, *, actor_id: str) -> None:
                 action.task,
                 action="handover_action_unblocked",
                 actor_id=actor_id or LIFECYCLE_ACTOR_ID,
-                actor_type="system",
+                actor_type=actor_type,
                 extra={"app_key": app.app_key},
             )
             touched_tasks.add(int(action.task_id))

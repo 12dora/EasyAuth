@@ -150,6 +150,14 @@ class App(models.Model):
         str | date | datetime | None,
         datetime | None,
     ] = models.DateTimeField(blank=True, null=True)
+    descriptor_base_url: models.CharField[str, str] = models.CharField(
+        max_length=512,
+        blank=True,
+    )
+    descriptor_token: EncryptedCharField = EncryptedCharField(
+        max_length=1024,
+        blank=True,
+    )
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
     )

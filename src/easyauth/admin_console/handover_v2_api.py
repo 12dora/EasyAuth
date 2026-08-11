@@ -835,37 +835,17 @@ def console_handover_capability_sync(request: HttpRequest, app_key: str) -> Json
     app = App.objects.filter(app_key=app_key).first()
     if app is None:
         return _not_found()
-    # §5.2 / §6.3: 走既有 manifest 拉取路径, 禁止用本地 webhook 配置伪造 capability
-    config = AppWebhookConfig.objects.filter(app=app).first()
-    base_url = _derive_app_base_url(config)
-    if not base_url:
-        return error_response(
-            ErrorCode.SEMANTIC_VALIDATION_ERROR,
-            "应用未配置可拉取的 base_url(handover/onboard/callback URL 均缺失)。",
-            {"reason": "base_url_required"},
-            status=HTTPStatus.UNPROCESSABLE_ENTITY,
-        )
     try:
         from easyauth.admin_console.auto_onboarding_api import (
             AutoOnboardingError,
-            _fetch_descriptor,
-            _validated_manifest,
+            repull_app_descriptor,
         )
         from easyauth.applications.manifest_import import (
             ManifestVersionConflictError,
-            sync_app_manifest,
         )
         from easyauth.applications.permission_templates import PermissionTemplateImportError
 
-        descriptor = _fetch_descriptor(base_url, None)
-        manifest = _validated_manifest(descriptor, app.app_key)
-        with transaction.atomic():
-            _ = sync_app_manifest(
-                app=app,
-                manifest=manifest,
-                actor_id=actor_id,
-                downstream_base_url=base_url,
-            )
+        _ = repull_app_descriptor(app=app, actor_id=actor_id)
     except AutoOnboardingError as exc:
         return error_response(exc.code, exc.message, status=exc.status)
     except ManifestVersionConflictError as exc:
@@ -898,26 +878,6 @@ def console_handover_capability_sync(request: HttpRequest, app_key: str) -> Json
             "synced_at": datetime_value(app.handover_capability_synced_at),
         },
     )
-
-
-def _derive_app_base_url(config: AppWebhookConfig | None) -> str:
-    """从已配置的下游 URL 反推 origin 作为 descriptor 拉取 base_url。"""
-    if config is None:
-        return ""
-    from urllib.parse import urlparse
-
-    for raw in (
-        config.handover_url,
-        config.onboard_url,
-        config.approval_callback_url,
-    ):
-        value = (raw or "").strip()
-        if not value:
-            continue
-        parsed = urlparse(value)
-        if parsed.scheme in {"http", "https"} and parsed.netloc:
-            return f"{parsed.scheme}://{parsed.netloc}"
-    return ""
 
 
 def _action_or_none(task_id: int, app_key: str) -> HandoverAppAction | None:

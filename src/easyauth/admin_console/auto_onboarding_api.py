@@ -20,6 +20,7 @@ from easyauth.admin_console.authz import require_superuser
 from easyauth.admin_console.permission_template_handlers import CONFLICT_TEMPLATE_CODES
 from easyauth.api.errors import ErrorCode
 from easyauth.applications.manifest_import import (
+    ManifestSyncOutcome,
     ManifestVersionConflictError,
     sync_app_manifest,
 )
@@ -130,12 +131,19 @@ def _auto_onboard(*, payload: AutoOnboardingPayload, actor_id: str) -> dict[str,
     descriptor_app = _required_object(descriptor, "app")
     with transaction.atomic():
         app, created = _ensure_app(payload.app_key, descriptor_app, actor_id=actor_id)
+        app = App.objects.select_for_update().get(pk=app.pk)
+        app.descriptor_base_url = payload.base_url
+        app.descriptor_token = payload.descriptor_token or ""
+        app.save(
+            update_fields=["descriptor_base_url", "descriptor_token", "updated_at"],
+        )
         try:
             outcome = sync_app_manifest(
                 app=app,
                 manifest=manifest,
                 actor_id=actor_id,
                 downstream_base_url=payload.base_url,
+                actor_type="admin",
             )
         except ManifestVersionConflictError as exc:
             raise AutoOnboardingError(
@@ -156,6 +164,26 @@ def _auto_onboard(*, payload: AutoOnboardingPayload, actor_id: str) -> dict[str,
             already_up_to_date=outcome.already_up_to_date,
             template_version=outcome.template_version,
         )
+
+
+def repull_app_descriptor(*, app: App, actor_id: str) -> ManifestSyncOutcome:
+    """复用自动接入时持久化的 base URL 与 bearer 凭据重新拉取 descriptor。"""
+    base_url = app.descriptor_base_url.strip().rstrip("/")
+    if not base_url:
+        raise AutoOnboardingError(
+            ErrorCode.SEMANTIC_VALIDATION_ERROR,
+            "应用未配置 descriptor 拉取地址。",
+            HTTPStatus.UNPROCESSABLE_ENTITY,
+        )
+    descriptor = _fetch_descriptor(base_url, app.descriptor_token or None)
+    manifest = _validated_manifest(descriptor, app.app_key)
+    return sync_app_manifest(
+        app=app,
+        manifest=manifest,
+        actor_id=actor_id,
+        downstream_base_url=base_url,
+        actor_type="admin",
+    )
 
 
 def _ensure_app(

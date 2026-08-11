@@ -58,6 +58,7 @@ def apply_permission_template(
     app: App,
     template: AppManifestInput,
     downstream_base_url: str | None = None,
+    actor_type: str = "system",
 ) -> PermissionTemplateImportResult:
     # 锁住 App 行串行化同一 App 的并发导入; 版本检查和写入在同一把锁内完成,
     # 消除"两个导入都读到 latest=1 然后交错落库"的 TOCTOU。
@@ -69,35 +70,12 @@ def apply_permission_template(
     template_version = record_template_version(locked_app, template, actions)
     record_import_event(locked_app, template, template_version, actions)
     bump_manifest_catalog_version(locked_app, template, actions)
-    _sync_webhook_config_from_manifest(
+    _sync_manifest_lifecycle(
         app=locked_app,
         template=template,
         downstream_base_url=downstream_base_url,
+        actor_type=actor_type,
     )
-    if template.lifecycle is not None:
-        from easyauth.applications.handover_capability import (
-            sync_handover_capability_from_manifest,
-        )
-
-        # 用解析后的绝对 URL 写能力态, 避免相对路径无法 declared。
-        lifecycle_for_cap = template.lifecycle
-        if downstream_base_url:
-            resolved_url = _resolve_manifest_url(
-                template.lifecycle.handover_url,
-                downstream_base_url,
-            )
-            if resolved_url:
-                from dataclasses import replace
-
-                lifecycle_for_cap = replace(
-                    template.lifecycle,
-                    handover_url=resolved_url,
-                )
-        sync_handover_capability_from_manifest(
-            locked_app,
-            lifecycle_for_cap,
-            actor_id=template.imported_by or _MANIFEST_ACTOR,
-        )
     return PermissionTemplateImportResult(template_version=template_version, actions=actions)
 
 
@@ -105,6 +83,40 @@ def apply_permission_template(
 # 只有配置从未被控制台管理员改过(updated_by 为空或 manifest)时才回填, 避免覆盖人工设置。
 _MANIFEST_ACTOR = "manifest"
 _MANIFEST_DNS_TIMEOUT_SECONDS = 5.0
+
+
+def _sync_manifest_lifecycle(
+    *,
+    app: App,
+    template: AppManifestInput,
+    downstream_base_url: str | None,
+    actor_type: str,
+) -> None:
+    from dataclasses import replace
+
+    from easyauth.applications.handover_capability import (
+        sync_handover_capability_from_manifest,
+    )
+
+    _sync_webhook_config_from_manifest(
+        app=app,
+        template=template,
+        downstream_base_url=downstream_base_url,
+    )
+    lifecycle_for_cap = template.lifecycle
+    if lifecycle_for_cap is not None and downstream_base_url:
+        resolved_url = _resolve_manifest_url(
+            lifecycle_for_cap.handover_url,
+            downstream_base_url,
+        )
+        if resolved_url:
+            lifecycle_for_cap = replace(lifecycle_for_cap, handover_url=resolved_url)
+    sync_handover_capability_from_manifest(
+        app,
+        lifecycle_for_cap,
+        actor_id=template.imported_by or _MANIFEST_ACTOR,
+        actor_type=actor_type,
+    )
 
 
 def _sync_webhook_config_from_manifest(
@@ -116,7 +128,7 @@ def _sync_webhook_config_from_manifest(
     from easyauth.webhooks.models import AppWebhookConfig  # noqa: PLC0415
 
     try:
-        config = AppWebhookConfig.objects.get(app=app)
+        config = AppWebhookConfig.objects.select_for_update().get(app=app)
         config_is_new = False
     except AppWebhookConfig.DoesNotExist:
         if template.lifecycle is None:

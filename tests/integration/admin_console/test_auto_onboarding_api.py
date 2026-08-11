@@ -128,7 +128,11 @@ def test_auto_onboarding_creates_app_and_imports_manifest(
 
     response = client.post(
         AUTO_ONBOARDING_URL,
-        data={"base_url": "https://downstream.example", "app_key": "demoapp"},
+        data={
+            "base_url": "https://downstream.example",
+            "app_key": "demoapp",
+            "descriptor_token": "descriptor-test-token",
+        },
         content_type="application/json",
     )
 
@@ -140,6 +144,8 @@ def test_auto_onboarding_creates_app_and_imports_manifest(
 
     app = App.objects.get(app_key="demoapp")
     assert app.name == "Demo App"
+    assert app.descriptor_base_url == "https://downstream.example"
+    assert app.descriptor_token == "descriptor-test-token"
     permission = Permission.objects.get(app=app, key="demo.item.view")
     # 权限双语显示名来自下游 manifest, 不允许 EasyAuth 硬编码。
     assert permission.name == "查看演示对象"
