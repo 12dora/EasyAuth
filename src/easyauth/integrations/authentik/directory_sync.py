@@ -252,13 +252,12 @@ def _status_contract(
     return source_slug, contracts
 
 
-def _assert_directory_payloads(
+def _assert_department_payloads(
     *,
     source_slug: str,
     contracts: dict[str, _CorpSnapshotContract],
     departments: tuple[DirectoryJson, ...],
-    users: tuple[DirectoryJson, ...],
-) -> None:
+) -> dict[str, set[str]]:
     seen_departments: dict[str, set[str]] = {corp_id: set() for corp_id in contracts}
     for department in departments:
         corp_id = _string(department.get("corp_id"))
@@ -272,7 +271,15 @@ def _assert_directory_payloads(
         ):
             raise AuthentikDirectoryUnavailableError(DIRECTORY_CONTRACT_MESSAGE)
         seen_departments[corp_id].add(dept_id)
+    return seen_departments
 
+
+def _assert_user_payloads(
+    *,
+    source_slug: str,
+    contracts: dict[str, _CorpSnapshotContract],
+    users: tuple[DirectoryJson, ...],
+) -> dict[str, set[str]]:
     seen_users: dict[str, set[str]] = {corp_id: set() for corp_id in contracts}
     for user in users:
         corp_id, user_id = _directory_user_key(user)
@@ -286,7 +293,26 @@ def _assert_directory_payloads(
             raise AuthentikDirectoryUnavailableError(DIRECTORY_CONTRACT_MESSAGE)
         _ = _directory_user_status(user)
         seen_users[corp_id].add(user_id)
+    return seen_users
 
+
+def _assert_directory_payloads(
+    *,
+    source_slug: str,
+    contracts: dict[str, _CorpSnapshotContract],
+    departments: tuple[DirectoryJson, ...],
+    users: tuple[DirectoryJson, ...],
+) -> None:
+    seen_departments = _assert_department_payloads(
+        source_slug=source_slug,
+        contracts=contracts,
+        departments=departments,
+    )
+    seen_users = _assert_user_payloads(
+        source_slug=source_slug,
+        contracts=contracts,
+        users=users,
+    )
     for corp_id, contract in contracts.items():
         if (
             len(seen_users[corp_id]) != contract.user_count

@@ -118,6 +118,89 @@ def build_transfer_grant_diff(
         return plan
 
 
+def _confirmed_plan_or_conflict(
+    plan: TransferPlan,
+    *,
+    canonical_revoke: list[str],
+    canonical_add: list[str],
+) -> TransferPlan:
+    """已确认方案: 勾选完全一致时幂等返回, 否则判冲突。"""
+    if (
+        plan.confirmed_revoke_keys == canonical_revoke
+        and plan.confirmed_add_keys == canonical_add
+    ):
+        return plan
+    raise HandoverConflictError(TRANSFER_CONFIRMATION_CONFLICT_MESSAGE)
+
+
+def _ensure_data_phase_settled(task: HandoverTask) -> None:
+    """全部数据 action 收敛且无在途租约后才允许改权限(01 §5.5)。"""
+    from easyauth.lifecycle.core import HANDOVER_DATA_NOT_COMPLETED_MESSAGE
+    from easyauth.lifecycle.lease import action_execution_in_flight
+    from easyauth.lifecycle.models import ACTION_FINISHED_STATUSES, HandoverAppAction
+
+    open_actions = list(HandoverAppAction.objects.filter(task=task))
+    if any(a.status not in ACTION_FINISHED_STATUSES for a in open_actions):
+        raise HandoverConflictError(HANDOVER_DATA_NOT_COMPLETED_MESSAGE)
+    if any(action_execution_in_flight(a) for a in open_actions):
+        raise HandoverConflictError(HANDOVER_DATA_NOT_COMPLETED_MESSAGE)
+
+
+@dataclass(frozen=True, slots=True)
+class _TransferSelection:
+    revoke_set: set[str]
+    add_set: set[str]
+    frozen_add_items: dict[str, _FrozenTransferAddItem]
+    apps: set[str]
+
+
+def _resolve_transfer_selection(
+    plan: TransferPlan,
+    *,
+    canonical_revoke: list[str],
+    canonical_add: list[str],
+) -> _TransferSelection:
+    diff = plan.grant_diff
+    add_entries = diff_entries_by_key(diff, "add")
+    allowed_revoke = set(diff_entries_by_key(diff, "revoke"))
+    allowed_add = set(add_entries)
+    unknown = (set(canonical_revoke) - allowed_revoke) | (set(canonical_add) - allowed_add)
+    if unknown:
+        message = f"差异项不存在: {sorted(unknown)[0]}。"
+        raise HandoverError(message)
+    revoke_set = set(canonical_revoke)
+    add_set = set(canonical_add)
+    frozen_add_items = {key: frozen_add_item_from_diff_entry(add_entries[key]) for key in add_set}
+    return _TransferSelection(
+        revoke_set=revoke_set,
+        add_set=add_set,
+        frozen_add_items=frozen_add_items,
+        apps={key.split(":", 1)[0] for key in revoke_set | add_set},
+    )
+
+
+def _apply_transfer_selection(
+    task: HandoverTask,
+    *,
+    selection: _TransferSelection,
+    actor_id: str,
+) -> None:
+    for app_key in sorted(selection.apps):
+        apply_transfer_diff_for_app(
+            subject=task.subject_user,
+            app_key=app_key,
+            revoke_keys={
+                key for key in selection.revoke_set if key.startswith(f"{app_key}:")
+            },
+            add_items=[
+                item
+                for key, item in selection.frozen_add_items.items()
+                if key in selection.add_set and key.startswith(f"{app_key}:")
+            ],
+            actor_id=actor_id,
+        )
+
+
 def confirm_transfer_grant_diff(
     *,
     task: HandoverTask,
@@ -143,53 +226,23 @@ def confirm_transfer_grant_diff(
         if plan.revision != plan_revision:
             raise HandoverConflictError(TRANSFER_PLAN_REVISION_CONFLICT_MESSAGE)
         if plan.confirmed_at is not None:
-            if (
-                plan.confirmed_revoke_keys == canonical_revoke
-                and plan.confirmed_add_keys == canonical_add
-            ):
-                return plan
-            raise HandoverConflictError(TRANSFER_CONFIRMATION_CONFLICT_MESSAGE)
+            return _confirmed_plan_or_conflict(
+                plan,
+                canonical_revoke=canonical_revoke,
+                canonical_add=canonical_add,
+            )
         ensure_task_open(task)
-        # 全部数据 action 收敛且无在途租约后才允许改权限(01 §5.5)。
-        from easyauth.lifecycle.core import HANDOVER_DATA_NOT_COMPLETED_MESSAGE
-        from easyauth.lifecycle.lease import action_execution_in_flight
-        from easyauth.lifecycle.models import ACTION_FINISHED_STATUSES, HandoverAppAction
-
-        open_actions = list(HandoverAppAction.objects.filter(task=task))
-        if any(a.status not in ACTION_FINISHED_STATUSES for a in open_actions):
-            raise HandoverConflictError(HANDOVER_DATA_NOT_COMPLETED_MESSAGE)
-        if any(action_execution_in_flight(a) for a in open_actions):
-            raise HandoverConflictError(HANDOVER_DATA_NOT_COMPLETED_MESSAGE)
+        _ensure_data_phase_settled(task)
         if plan.new_template is None or plan.new_template_revision is None:
             message = "请先选择新岗位模板并生成差异清单; 当前方案缺少绑定模板修订。"
             raise HandoverError(message)
-        diff = plan.grant_diff
-        add_entries = diff_entries_by_key(diff, "add")
-        allowed_revoke = set(diff_entries_by_key(diff, "revoke"))
-        allowed_add = set(add_entries)
-        unknown = (set(canonical_revoke) - allowed_revoke) | (set(canonical_add) - allowed_add)
-        if unknown:
-            message = f"差异项不存在: {sorted(unknown)[0]}。"
-            raise HandoverError(message)
-        revoke_set = set(canonical_revoke)
-        add_set = set(canonical_add)
-        frozen_add_items = {
-            key: frozen_add_item_from_diff_entry(add_entries[key]) for key in add_set
-        }
-        apps = {key.split(":", 1)[0] for key in revoke_set | add_set}
-        lock_and_validate_transfer_grant_versions(task=task, app_keys=apps)
-        for app_key in sorted(apps):
-            apply_transfer_diff_for_app(
-                subject=task.subject_user,
-                app_key=app_key,
-                revoke_keys={key for key in revoke_set if key.startswith(f"{app_key}:")},
-                add_items=[
-                    item
-                    for key, item in frozen_add_items.items()
-                    if key in add_set and key.startswith(f"{app_key}:")
-                ],
-                actor_id=actor_id,
-            )
+        selection = _resolve_transfer_selection(
+            plan,
+            canonical_revoke=canonical_revoke,
+            canonical_add=canonical_add,
+        )
+        lock_and_validate_transfer_grant_versions(task=task, app_keys=selection.apps)
+        _apply_transfer_selection(task, selection=selection, actor_id=actor_id)
         plan.confirmed_at = timezone.now()
         plan.confirmed_revoke_keys = canonical_revoke
         plan.confirmed_add_keys = canonical_add

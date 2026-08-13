@@ -275,9 +275,75 @@ def retry_action(
     )
 
 
-def poll_async_action(action: HandoverAppAction, *, worker_id: str | None = None) -> HandoverAppAction:
-    """异步轮询: claim → GET → 终态走 complete_data_phase; 超次数 → async_attention_required。"""
-    poller = worker_id or f"poller:{uuid.uuid4().hex[:12]}"
+@dataclass(frozen=True, slots=True)
+class _AsyncPollClaim:
+    """已 claim 到轮询者名下的租约上下文, 供发网后的三条回写路径复用。"""
+
+    batch: HandoverExecutionBatch
+    handle: LeaseHandle
+
+
+def _claim_async_poll_lease(
+    lease: HandoverExecutionLease,
+    *,
+    poller: str,
+    sentinel_owner: str,
+) -> LeaseHandle:
+    """从 async sentinel claim; 已被其他 poller 持有或属主异常均判在途冲突。"""
+    handle = LeaseHandle(
+        lease_id=int(lease.pk),  # type: ignore[arg-type]
+        owner=lease.owner,
+        fence=int(lease.fence),
+        expires_at=lease.lease_expires_at,
+    )
+    if lease.owner.startswith("async:") or lease.owner == sentinel_owner:
+        claimed = cas_update_owner(handle, new_owner=poller, renew=True)
+        if claimed is None:
+            raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
+        return claimed
+    if lease.owner.startswith("poller:"):
+        # 已被其他 poller 持有
+        if lease.owner != poller:
+            raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
+        return handle
+    raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
+
+
+def _exhaust_async_poll_attempts(
+    action: HandoverAppAction,
+    *,
+    handle: LeaseHandle,
+    batch: HandoverExecutionBatch,
+) -> None:
+    action.status = ACTION_STATUS_ASYNC_ATTENTION_REQUIRED
+    action.save(update_fields=["status", "updated_at"])
+    # 移回 sentinel 并续租, 不释放
+    _ = cas_update_owner(handle, new_owner=f"async:{batch.pk}", renew=True)
+    logger.warning(
+        "async poll limit reached: action_id=%s app=%s attempts=%s",
+        action.id,
+        action.app_key_snapshot,
+        action.async_poll_attempts,
+    )
+    record_task_event(
+        action.task,
+        action="handover_async_attention_required",
+        actor_id=LIFECYCLE_ACTOR_ID,
+        actor_type="system",
+        extra={
+            "app_key": action.app_key_snapshot,
+            "async_poll_attempts": action.async_poll_attempts,
+            "message": ASYNC_POLL_LIMIT_MESSAGE,
+        },
+    )
+
+
+def _open_async_poll(
+    action: HandoverAppAction,
+    *,
+    poller: str,
+) -> tuple[HandoverAppAction, _AsyncPollClaim | None]:
+    """事务 A: 校验状态、claim 租约并记账轮询次数。claim 为 None 表示本轮不发网。"""
     with transaction.atomic():
         action = _locked_action(action.id)
         ensure_action_status(
@@ -302,7 +368,7 @@ def poll_async_action(action: HandoverAppAction, *, worker_id: str | None = None
                 seconds=ASYNC_ATTENTION_POLL_INTERVAL_SECONDS,
             )
             if action.updated_at > cutoff:
-                return action
+                return action, None
         batch = (
             HandoverExecutionBatch.objects.filter(
                 action=action,
@@ -314,31 +380,11 @@ def poll_async_action(action: HandoverAppAction, *, worker_id: str | None = None
         )
         if batch is None:
             raise HandoverConflictError(ACTION_NOT_OPERABLE_MESSAGE)
-        # 从 async sentinel claim
-        sentinel_owner = f"async:{batch.pk}"
-        handle = LeaseHandle(
-            lease_id=int(lease.pk),  # type: ignore[arg-type]
-            owner=lease.owner,
-            fence=int(lease.fence),
-            expires_at=lease.lease_expires_at,
+        handle = _claim_async_poll_lease(
+            lease,
+            poller=poller,
+            sentinel_owner=f"async:{batch.pk}",
         )
-        if lease.owner.startswith("async:") or lease.owner == sentinel_owner:
-            claimed = cas_update_owner(handle, new_owner=poller, renew=True)
-            if claimed is None:
-                raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
-            handle = claimed
-        elif lease.owner.startswith("poller:"):
-            # 已被其他 poller 持有
-            if lease.owner != poller:
-                raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
-            handle = LeaseHandle(
-                lease_id=int(lease.pk),  # type: ignore[arg-type]
-                owner=lease.owner,
-                fence=int(lease.fence),
-                expires_at=lease.lease_expires_at,
-            )
-        else:
-            raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
 
         if action.status == ACTION_STATUS_ASYNC_ATTENTION_REQUIRED:
             # updated_at 在 attention 状态下作为权威 last_polled_at; claim 后、发网前落库,
@@ -347,30 +393,58 @@ def poll_async_action(action: HandoverAppAction, *, worker_id: str | None = None
 
         if action.status == ACTION_STATUS_ASYNC_PENDING:
             if action.async_poll_attempts >= ASYNC_POLL_MAX_ATTEMPTS:
-                action.status = ACTION_STATUS_ASYNC_ATTENTION_REQUIRED
-                action.save(update_fields=["status", "updated_at"])
-                # 移回 sentinel 并续租, 不释放
-                _ = cas_update_owner(handle, new_owner=f"async:{batch.pk}", renew=True)
-                logger.warning(
-                    "async poll limit reached: action_id=%s app=%s attempts=%s",
-                    action.id,
-                    action.app_key_snapshot,
-                    action.async_poll_attempts,
-                )
-                record_task_event(
-                    action.task,
-                    action="handover_async_attention_required",
-                    actor_id=LIFECYCLE_ACTOR_ID,
-                    actor_type="system",
-                    extra={
-                        "app_key": action.app_key_snapshot,
-                        "async_poll_attempts": action.async_poll_attempts,
-                        "message": ASYNC_POLL_LIMIT_MESSAGE,
-                    },
-                )
-                return action
+                _exhaust_async_poll_attempts(action, handle=handle, batch=batch)
+                return action, None
             action.async_poll_attempts += 1
             action.save(update_fields=["async_poll_attempts", "updated_at"])
+    return action, _AsyncPollClaim(batch=batch, handle=handle)
+
+
+def _record_async_poll_failure(
+    action_id: int,
+    *,
+    error: Exception,
+    claim: _AsyncPollClaim,
+) -> None:
+    with transaction.atomic():
+        action = _locked_action(action_id)
+        if action.status in {
+            ACTION_STATUS_ASYNC_PENDING,
+            ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
+        }:
+            _set_action_error(action, error)
+            action.save(update_fields=["last_error", "last_error_raw", "updated_at"])
+        # 移回 sentinel
+        _handoff_to_async_sentinel(action, claim.handle, batch_id=claim.batch.pk)
+
+
+def _accept_async_poll_progress(
+    action_id: int,
+    *,
+    response: HookResponse,
+    claim: _AsyncPollClaim,
+) -> HandoverAppAction:
+    with transaction.atomic():
+        action = _locked_action(action_id)
+        require_cas(claim.handle)
+        if action.status not in {
+            ACTION_STATUS_ASYNC_PENDING,
+            ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
+        }:
+            raise HandoverConflictError(ACTION_NOT_OPERABLE_MESSAGE)
+        action.async_status_url = response.location
+        action.last_error = ""
+        action.save(update_fields=["async_status_url", "last_error", "updated_at"])
+        _handoff_to_async_sentinel(action, claim.handle, batch_id=claim.batch.pk)
+    return action
+
+
+def poll_async_action(action: HandoverAppAction, *, worker_id: str | None = None) -> HandoverAppAction:
+    """异步轮询: claim → GET → 终态走 complete_data_phase; 超次数 → async_attention_required。"""
+    poller = worker_id or f"poller:{uuid.uuid4().hex[:12]}"
+    action, claim = _open_async_poll(action, poller=poller)
+    if claim is None:
+        return action
 
     try:
         response = signed_hook_get(
@@ -381,37 +455,16 @@ def poll_async_action(action: HandoverAppAction, *, worker_id: str | None = None
         )
         _validate_poll_response(response)
     except (HookCallError, HandoverError) as error:
-        with transaction.atomic():
-            action = _locked_action(action.id)
-            if action.status in {
-                ACTION_STATUS_ASYNC_PENDING,
-                ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
-            }:
-                _set_action_error(action, error)
-                action.save(update_fields=["last_error", "last_error_raw", "updated_at"])
-            # 移回 sentinel
-            _handoff_to_async_sentinel(action, handle, batch_id=batch.pk)
+        _record_async_poll_failure(action.id, error=error, claim=claim)
         raise
 
     if response.status_code == HTTPStatus.ACCEPTED:
-        with transaction.atomic():
-            action = _locked_action(action.id)
-            require_cas(handle)
-            if action.status not in {
-                ACTION_STATUS_ASYNC_PENDING,
-                ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
-            }:
-                raise HandoverConflictError(ACTION_NOT_OPERABLE_MESSAGE)
-            action.async_status_url = response.location
-            action.last_error = ""
-            action.save(update_fields=["async_status_url", "last_error", "updated_at"])
-            _handoff_to_async_sentinel(action, handle, batch_id=batch.pk)
-        return action
+        return _accept_async_poll_progress(action.id, response=response, claim=claim)
 
     # 终态 200: complete_data_phase 自管 A/B/C 事务, 调用方不得再包 atomic。
     complete_data_phase(
-        HandoverExecutionBatch.objects.get(pk=batch.pk),
-        handle=handle,
+        HandoverExecutionBatch.objects.get(pk=claim.batch.pk),
+        handle=claim.handle,
         response_payload=response.payload,
     )
     action = HandoverAppAction.objects.get(pk=action.id)
@@ -985,6 +1038,68 @@ def fetch_action_items(
     }
 
 
+_SUMMARY_CONSERVATION_FIELDS: Final = ("transferred", "released", "skipped", "merged", "failed")
+
+
+def _missing_summary_error(action: HandoverAppAction) -> str | None:
+    """无 summary 键: 仅当全部类型 count=0 时允许(零资产 no-op)。"""
+    types_all = list(
+        HandoverAssetType.objects.filter(
+            action=action,
+            generation=action.generation,
+        ),
+    )
+    if any(int(at.count) > 0 for at in types_all):
+        return "execute 响应缺少 summary"
+    return None
+
+
+def _summary_row_shape_error(
+    type_key: str,
+    row: dict[str, JsonValue],
+    *,
+    types: dict[str, HandoverAssetType],
+) -> str | None:
+    """校验 summary 行: 必须命中已知资产类型, 且恰好携带冻结五元组的非负整数。"""
+    frozen_fields = set(_SUMMARY_CONSERVATION_FIELDS)
+    if type_key not in types:
+        return f"summary 含未知资产类型 {type_key}"
+    if set(row) != frozen_fields:
+        return f"summary[{type_key}] 必须且只能包含冻结五元组"
+    for field in _SUMMARY_CONSERVATION_FIELDS:
+        val = row[field]
+        if type(val) is not int or val < 0:
+            return f"summary[{type_key}].{field} 非法"
+    return None
+
+
+def _summary_row_error(
+    type_key: object,
+    row: object,
+    *,
+    types: dict[str, HandoverAssetType],
+) -> str | None:
+    """单个资产类型的 summary 行形状 / failed / 守恒校验; 通过返回 None。"""
+    if not isinstance(type_key, str) or not isinstance(row, dict):
+        return f"summary[{type_key!r}] 形状非法"
+    summary_row = cast("dict[str, JsonValue]", row)
+    shape_error = _summary_row_shape_error(type_key, summary_row, types=types)
+    if shape_error is not None:
+        return shape_error
+    counts = [cast("int", summary_row[field]) for field in _SUMMARY_CONSERVATION_FIELDS]
+    transferred, released, skipped, merged, failed = counts
+    if failed > 0:
+        return f"summary[{type_key}].failed={failed} (部分成功视为失败)"
+    total = transferred + released + skipped + merged + failed
+    expected = int(types[type_key].count)
+    if total != expected:
+        return (
+            f"summary[{type_key}] 不守恒: "
+            f"{transferred}+{released}+{skipped}+{merged}+{failed}={total} != count={expected}"
+        )
+    return None
+
+
 def validate_execute_summary_conservation(
     action: HandoverAppAction,
     *,
@@ -998,16 +1113,7 @@ def validate_execute_summary_conservation(
         return "execute 响应缺少 payload"
     raw_summary = response_payload.get("summary")
     if raw_summary is None:
-        # 无 summary 键: 仅当全部类型 count=0 时允许(零资产 no-op)
-        types_all = list(
-            HandoverAssetType.objects.filter(
-                action=action,
-                generation=action.generation,
-            ),
-        )
-        if any(int(at.count) > 0 for at in types_all):
-            return "execute 响应缺少 summary"
-        return None
+        return _missing_summary_error(action)
     if not isinstance(raw_summary, dict):
         return "execute 响应 summary 形状非法"
     types = {
@@ -1017,31 +1123,10 @@ def validate_execute_summary_conservation(
             generation=action.generation,
         )
     }
-    fields = ("transferred", "released", "skipped", "merged", "failed")
-    frozen_fields = set(fields)
     for type_key, row in raw_summary.items():
-        if not isinstance(type_key, str) or not isinstance(row, dict):
-            return f"summary[{type_key!r}] 形状非法"
-        if type_key not in types:
-            return f"summary 含未知资产类型 {type_key}"
-        if set(row) != frozen_fields:
-            return f"summary[{type_key}] 必须且只能包含冻结五元组"
-        counts: list[int] = []
-        for field in fields:
-            val = row[field]
-            if type(val) is not int or val < 0:
-                return f"summary[{type_key}].{field} 非法"
-            counts.append(val)
-        transferred, released, skipped, merged, failed = counts
-        if failed > 0:
-            return f"summary[{type_key}].failed={failed} (部分成功视为失败)"
-        total = transferred + released + skipped + merged + failed
-        expected = int(types[type_key].count)
-        if total != expected:
-            return (
-                f"summary[{type_key}] 不守恒: "
-                f"{transferred}+{released}+{skipped}+{merged}+{failed}={total} != count={expected}"
-            )
+        error = _summary_row_error(type_key, row, types=types)
+        if error is not None:
+            return error
     # preview 有 count>0 的类型必须出现在 summary
     for type_key, asset in types.items():
         if asset.count > 0 and type_key not in raw_summary:
@@ -2228,13 +2313,8 @@ def _audit_result_summary(summary: dict[str, JsonValue] | None) -> dict[str, Jso
     return safe
 
 
-def _chunk_assignments(
-    action: HandoverAppAction,
-    *,
-    chunk: object,
-    is_final: bool,
-) -> list[dict[str, JsonValue]]:
-    """§2.4.1.1: 非最终批 default_action 强制 skip; 最终批带真实 default + 全部 skip override。"""
+def _chunk_allowed_ids(chunk: object) -> dict[str, set[str]]:
+    """把批次描述解析成 asset_type → 本批允许携带的 asset id 集合。"""
     allowed_ids_by_type: dict[str, set[str]] = {}
     if isinstance(chunk, list):
         for entry in chunk:
@@ -2247,6 +2327,44 @@ def _chunk_assignments(
             allowed_ids_by_type[type_key] = {
                 str(i) for i in ids if isinstance(i, str | int)
             }
+    return allowed_ids_by_type
+
+
+def _chunk_type_overrides(
+    asset_type: HandoverAssetType,
+    *,
+    allowed: set[str],
+    is_final: bool,
+) -> list[dict[str, JsonValue]]:
+    overrides: list[dict[str, JsonValue]] = []
+    for ov in asset_type.overrides.all():
+        if not is_final and ov.asset_id not in allowed:
+            continue
+        if is_final:
+            # 最终批: 本批 remaining transfer/release + 全部 skip
+            if ov.action != ASSET_ACTION_SKIP and ov.asset_id not in allowed:
+                # 已在前序批消耗的 transfer/release 不再带
+                continue
+        overrides.append(
+            {
+                "id": ov.asset_id,
+                "action": ov.action,
+                "to_user_id": (
+                    ov.to_user.authentik_user_id if ov.to_user is not None else None
+                ),
+            },
+        )
+    return overrides
+
+
+def _chunk_assignments(
+    action: HandoverAppAction,
+    *,
+    chunk: object,
+    is_final: bool,
+) -> list[dict[str, JsonValue]]:
+    """§2.4.1.1: 非最终批 default_action 强制 skip; 最终批带真实 default + 全部 skip override。"""
+    allowed_ids_by_type = _chunk_allowed_ids(chunk)
     result: list[dict[str, JsonValue]] = []
     types = HandoverAssetType.objects.filter(
         action=action,
@@ -2254,25 +2372,11 @@ def _chunk_assignments(
     ).prefetch_related("overrides", "default_to_user", "overrides__to_user")
     for asset_type in types:
         type_key = asset_type.type_key
-        allowed = allowed_ids_by_type.get(type_key, set())
-        overrides: list[dict[str, JsonValue]] = []
-        for ov in asset_type.overrides.all():
-            if not is_final and ov.asset_id not in allowed:
-                continue
-            if is_final:
-                # 最终批: 本批 remaining transfer/release + 全部 skip
-                if ov.action != ASSET_ACTION_SKIP and ov.asset_id not in allowed:
-                    # 已在前序批消耗的 transfer/release 不再带
-                    continue
-            overrides.append(
-                {
-                    "id": ov.asset_id,
-                    "action": ov.action,
-                    "to_user_id": (
-                        ov.to_user.authentik_user_id if ov.to_user is not None else None
-                    ),
-                },
-            )
+        overrides = _chunk_type_overrides(
+            asset_type,
+            allowed=allowed_ids_by_type.get(type_key, set()),
+            is_final=is_final,
+        )
         default_action = (
             asset_type.default_action if is_final else ASSET_ACTION_SKIP
         )
@@ -2541,6 +2645,78 @@ def _ensure_batch_plan_on_413(action: HandoverAppAction) -> HandoverBatchPlan:
     )
 
 
+def _merge_completed_batch_row(
+    completed_by_type: dict[str, dict[str, dict[str, JsonValue]]],
+    row: object,
+) -> None:
+    """把某已完成批次里一个资产类型的非 skip override 记入 completed_by_type。"""
+    if not isinstance(row, dict):
+        return
+    entry = cast("dict[str, JsonValue]", row)
+    type_key = entry.get("asset_type")
+    overrides = entry.get("overrides", [])
+    if not isinstance(type_key, str) or not isinstance(overrides, list):
+        return
+    saved = completed_by_type.setdefault(type_key, {})
+    for override in overrides:
+        if not isinstance(override, dict) or override.get("action") == ASSET_ACTION_SKIP:
+            continue
+        asset_id = override.get("id")
+        if isinstance(asset_id, str):
+            saved[asset_id] = dict(override)
+
+
+def _completed_overrides_by_type(
+    plan: HandoverBatchPlan,
+) -> dict[str, dict[str, dict[str, JsonValue]]]:
+    completed_rows = HandoverExecutionBatch.objects.filter(
+        plan=plan,
+        plan_batch_no__lte=plan.completed_batches,
+        data_completed_at__isnull=False,
+    ).order_by("plan_batch_no")
+    completed_by_type: dict[str, dict[str, dict[str, JsonValue]]] = {}
+    for completed_batch in completed_rows:
+        batch_assignments = completed_batch.request_payload.get("assignments", [])
+        if not isinstance(batch_assignments, list):
+            continue
+        for row in batch_assignments:
+            _merge_completed_batch_row(completed_by_type, row)
+    return completed_by_type
+
+
+def _restore_completed_overrides(
+    canonical_assignments: list[dict[str, JsonValue]],
+    completed_by_type: dict[str, dict[str, dict[str, JsonValue]]],
+) -> list[dict[str, JsonValue]]:
+    """把已完成批次固化的 override 覆盖回当前分配, 按 asset id 排序稳定化。"""
+    restored: list[dict[str, JsonValue]] = []
+    for row in canonical_assignments:
+        type_key = row.get("asset_type")
+        raw_overrides = row.get("overrides", [])
+        current_overrides: list[dict[str, JsonValue]] = []
+        if isinstance(raw_overrides, list):
+            current_overrides = [
+                dict(override) for override in raw_overrides if isinstance(override, dict)
+            ]
+        completed = completed_by_type.get(str(type_key), {})
+        remaining: list[dict[str, JsonValue]] = [
+            override
+            for override in current_overrides
+            if override.get("id") not in completed
+        ]
+        remaining.extend(completed.values())
+        normalized = dict(row)
+        normalized["overrides"] = cast(
+            "JsonValue",
+            sorted(
+                remaining,
+                key=lambda override: str(override.get("id", "")),
+            ),
+        )
+        restored.append(normalized)
+    return restored
+
+
 def _assignment_hash(
     action: HandoverAppAction,
     *,
@@ -2550,57 +2726,10 @@ def _assignment_hash(
     """固化剩余数据分配与权限接收人的 canonical 意图(01 §2.4.1.1)。"""
     canonical_assignments = assignments if assignments is not None else _full_assignments(action)
     if plan is not None and plan.completed_batches > 0:
-        completed_rows = HandoverExecutionBatch.objects.filter(
-            plan=plan,
-            plan_batch_no__lte=plan.completed_batches,
-            data_completed_at__isnull=False,
-        ).order_by("plan_batch_no")
-        completed_by_type: dict[str, dict[str, dict[str, JsonValue]]] = {}
-        for completed_batch in completed_rows:
-            batch_assignments = completed_batch.request_payload.get("assignments", [])
-            if not isinstance(batch_assignments, list):
-                continue
-            for row in batch_assignments:
-                if not isinstance(row, dict):
-                    continue
-                type_key = row.get("asset_type")
-                overrides = row.get("overrides", [])
-                if not isinstance(type_key, str) or not isinstance(overrides, list):
-                    continue
-                saved = completed_by_type.setdefault(type_key, {})
-                for override in overrides:
-                    if not isinstance(override, dict) or override.get("action") == ASSET_ACTION_SKIP:
-                        continue
-                    asset_id = override.get("id")
-                    if isinstance(asset_id, str):
-                        saved[asset_id] = dict(override)
-
-        restored: list[dict[str, JsonValue]] = []
-        for row in canonical_assignments:
-            type_key = row.get("asset_type")
-            raw_overrides = row.get("overrides", [])
-            current_overrides: list[dict[str, JsonValue]] = []
-            if isinstance(raw_overrides, list):
-                current_overrides = [
-                    dict(override) for override in raw_overrides if isinstance(override, dict)
-                ]
-            completed = completed_by_type.get(str(type_key), {})
-            remaining: list[dict[str, JsonValue]] = [
-                override
-                for override in current_overrides
-                if override.get("id") not in completed
-            ]
-            remaining.extend(completed.values())
-            normalized = dict(row)
-            normalized["overrides"] = cast(
-                "JsonValue",
-                sorted(
-                    remaining,
-                    key=lambda override: str(override.get("id", "")),
-                ),
-            )
-            restored.append(normalized)
-        canonical_assignments = restored
+        canonical_assignments = _restore_completed_overrides(
+            canonical_assignments,
+            _completed_overrides_by_type(plan),
+        )
     intent = {
         "assignments": canonical_assignments,
         "grant_receiver_user_id": (

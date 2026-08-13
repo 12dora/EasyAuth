@@ -38,8 +38,11 @@ from easyauth.integrations.authentik.directory_client import (
 from easyauth.integrations.authentik.liveness import check_authentik_liveness
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from easyauth.applications.dependency_health import DependencyHealthItem
     from easyauth.applications.integration_settings import AuthentikRuntimeConfig
+    from easyauth.connectors.models import ConnectorConfigError, ConnectorInstance
 
 
 class _CeleryControl(Protocol):
@@ -157,7 +160,35 @@ def _check_authentik_directory(config: AuthentikRuntimeConfig) -> DependencyChec
     )
 
 
-def _directory_status_contract_error(  # noqa: PLR0911 - 按字段返回首个明确契约错误。
+def _directory_counters_error(counters: object) -> str:
+    if not isinstance(counters, dict):
+        return "sync 条目 counters 缺失。"
+    counters_map = cast("dict[str, object]", counters)
+    users = counters_map.get("users")
+    departments = counters_map.get("departments")
+    if (
+        isinstance(users, bool)
+        or not isinstance(users, int)
+        or users < 0
+        or isinstance(departments, bool)
+        or not isinstance(departments, int)
+        or departments < 0
+    ):
+        return "sync 条目 counters 无效。"
+    return ""
+
+
+def _directory_sync_item_error(item: dict[str, object]) -> str:
+    """单条 sync 记录的状态 / generation / counters 契约, 按字段返回首个明确错误。"""
+    generation = item.get("generation")
+    if item.get("status") != "success":
+        return "sync 条目状态不是 success。"
+    if isinstance(generation, bool) or not isinstance(generation, int) or generation < 0:
+        return "sync 条目 generation 无效。"
+    return _directory_counters_error(item.get("counters"))
+
+
+def _directory_status_contract_error(
     status: object,
     *,
     expected_source: str,
@@ -175,28 +206,10 @@ def _directory_status_contract_error(  # noqa: PLR0911 - 按字段返回首个�
             return "sync 条目必须为对象。"
         item = cast("dict[str, object]", raw_item)
         corp_id = item.get("corp_id")
-        generation = item.get("generation")
-        counters = item.get("counters")
         if not isinstance(corp_id, str) or not corp_id or corp_id in seen_corps:
             return "sync 条目 corp_id 缺失或重复。"
-        if item.get("status") != "success":
-            return "sync 条目状态不是 success。"
-        if isinstance(generation, bool) or not isinstance(generation, int) or generation < 0:
-            return "sync 条目 generation 无效。"
-        if not isinstance(counters, dict):
-            return "sync 条目 counters 缺失。"
-        counters_map = cast("dict[str, object]", counters)
-        users = counters_map.get("users")
-        departments = counters_map.get("departments")
-        if (
-            isinstance(users, bool)
-            or not isinstance(users, int)
-            or users < 0
-            or isinstance(departments, bool)
-            or not isinstance(departments, int)
-            or departments < 0
-        ):
-            return "sync 条目 counters 无效。"
+        if item_error := _directory_sync_item_error(item):
+            return item_error
         seen_corps.add(corp_id)
     return ""
 
@@ -316,13 +329,47 @@ def check_dingtalk_notify() -> DependencyCheckResult:
     )
 
 
+def _connector_names(instances: Iterable[ConnectorInstance]) -> str:
+    return ", ".join(f"{item.app.app_key}:{item.connector_key}" for item in instances)
+
+
+def _connector_last_errors(instances: Iterable[ConnectorInstance]) -> str:
+    return "; ".join(item.last_error for item in instances if item.last_error)
+
+
+def _connector_config_errors(
+    instances: tuple[ConnectorInstance, ...],
+) -> list[tuple[ConnectorInstance, ConnectorConfigError]]:
+    # 函数内导入: 避免 applications ← connectors 模块级互赖(connectors 依赖 applications)。
+    from easyauth.connectors.models import ConnectorConfigError  # noqa: PLC0415
+
+    config_errors: list[tuple[ConnectorInstance, ConnectorConfigError]] = []
+    for instance in instances:
+        try:
+            _ = instance.config
+        except ConnectorConfigError as error:
+            config_errors.append((instance, error))
+    return config_errors
+
+
+def _connector_config_error_result(
+    config_errors: list[tuple[ConnectorInstance, ConnectorConfigError]],
+) -> DependencyCheckResult:
+    names = _connector_names(item for item, _error in config_errors)
+    return DependencyCheckResult(
+        dependency=DEPENDENCY_CONNECTORS,
+        status=DEPENDENCY_HEALTH_STATUS_UNHEALTHY,
+        summary=f"连接器实例配置损坏({names})。",
+        error_summary="; ".join(str(error) for _item, error in config_errors),
+    )
+
+
 def _check_connectors() -> DependencyCheckResult:
     # 供给连接器不做主动探测(对账任务已在真实调用外部 API), 只汇总实例健康字段:
     # 连续失败达到阈值判不健康(方案 §3.6), 单次失败先给 warning。
     # 函数内导入: 避免 applications ← connectors 模块级互赖(connectors 依赖 applications)。
     from easyauth.connectors.models import (  # noqa: PLC0415
         SYNC_RUN_STATUS_FAILED,
-        ConnectorConfigError,
         ConnectorInstance,
     )
     from easyauth.connectors.services import (  # noqa: PLC0415
@@ -337,43 +384,28 @@ def _check_connectors() -> DependencyCheckResult:
             summary="无启用的供给连接器实例。",
             error_summary="",
         )
-    config_errors: list[tuple[ConnectorInstance, ConnectorConfigError]] = []
-    for instance in instances:
-        try:
-            _ = instance.config
-        except ConnectorConfigError as error:
-            config_errors.append((instance, error))
+    config_errors = _connector_config_errors(instances)
     if config_errors:
-        names = ", ".join(
-            f"{item.app.app_key}:{item.connector_key}" for item, _error in config_errors
-        )
-        return DependencyCheckResult(
-            dependency=DEPENDENCY_CONNECTORS,
-            status=DEPENDENCY_HEALTH_STATUS_UNHEALTHY,
-            summary=f"连接器实例配置损坏({names})。",
-            error_summary="; ".join(str(error) for _item, error in config_errors),
-        )
+        return _connector_config_error_result(config_errors)
     failing = [
         instance
         for instance in instances
         if instance.consecutive_failures >= CONNECTOR_UNHEALTHY_FAILURE_THRESHOLD
     ]
     if failing:
-        names = ", ".join(f"{item.app.app_key}:{item.connector_key}" for item in failing)
         return DependencyCheckResult(
             dependency=DEPENDENCY_CONNECTORS,
             status=DEPENDENCY_HEALTH_STATUS_UNHEALTHY,
-            summary=f"连接器实例连续对账失败({names})。",
-            error_summary="; ".join(item.last_error for item in failing if item.last_error),
+            summary=f"连接器实例连续对账失败({_connector_names(failing)})。",
+            error_summary=_connector_last_errors(failing),
         )
     warning = [instance for instance in instances if instance.last_status == SYNC_RUN_STATUS_FAILED]
     if warning:
-        names = ", ".join(f"{item.app.app_key}:{item.connector_key}" for item in warning)
         return DependencyCheckResult(
             dependency=DEPENDENCY_CONNECTORS,
             status=DEPENDENCY_HEALTH_STATUS_WARNING,
-            summary=f"连接器实例最近一轮对账失败({names}), 等待下轮重试。",
-            error_summary="; ".join(item.last_error for item in warning if item.last_error),
+            summary=f"连接器实例最近一轮对账失败({_connector_names(warning)}), 等待下轮重试。",
+            error_summary=_connector_last_errors(warning),
         )
     return DependencyCheckResult(
         dependency=DEPENDENCY_CONNECTORS,

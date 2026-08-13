@@ -486,15 +486,20 @@ def _delete_instance(instance: ConnectorInstance, actor: ConsoleActor) -> HttpRe
     return HttpResponse(status=HTTPStatus.NO_CONTENT)
 
 
-def _replace_mappings(  # noqa: C901
-    request: HttpRequest,
+class _MappingRejectedError(Exception):
+    """内部信号: 携带映射解析阶段的失败响应, 仅在事务外抛出。"""
+
+    response: JsonResponse
+
+    def __init__(self, response: JsonResponse) -> None:
+        super().__init__("mapping rejected")
+        self.response = response
+
+
+def _resolve_mapping_entries(
+    payload: MappingsPutPayload,
     instance: ConnectorInstance,
-    actor: ConsoleActor,
-) -> JsonResponse:
-    try:
-        payload = MappingsPutPayload.model_validate_json(request.body)
-    except ValidationError as exc:
-        return _validation_error("映射参数无效。", {"errors": str(exc)})
+) -> list[tuple[AuthorizationGroup, MappingEntryPayload]]:
     groups_by_key = {
         group.key: group
         for group in AuthorizationGroup.objects.filter(app_id=instance.app_id)
@@ -504,16 +509,87 @@ def _replace_mappings(  # noqa: C901
     for entry in payload.mappings:
         group = groups_by_key.get(entry.authorization_group_key)
         if group is None:
-            return _validation_error(
-                AUTHORIZATION_GROUP_UNKNOWN_TEMPLATE.format(key=entry.authorization_group_key),
+            raise _MappingRejectedError(
+                _validation_error(
+                    AUTHORIZATION_GROUP_UNKNOWN_TEMPLATE.format(key=entry.authorization_group_key),
+                ),
             )
         if entry.authorization_group_key in seen_keys:
-            return _validation_error(
-                AUTHORIZATION_GROUP_DUPLICATE_TEMPLATE.format(key=entry.authorization_group_key),
-                {"authorization_group_key": entry.authorization_group_key},
+            raise _MappingRejectedError(
+                _validation_error(
+                    AUTHORIZATION_GROUP_DUPLICATE_TEMPLATE.format(
+                        key=entry.authorization_group_key,
+                    ),
+                    {"authorization_group_key": entry.authorization_group_key},
+                ),
             )
         seen_keys.add(entry.authorization_group_key)
         resolved.append((group, entry))
+    return resolved
+
+
+def _live_mappings_by_group_id(
+    current_mappings: list[ConnectorMapping],
+) -> dict[int | None, ConnectorMapping]:
+    return {
+        mapping.authorization_group_id: mapping
+        for mapping in current_mappings
+        if mapping.authorization_group is not None and not mapping.tombstoned
+    }
+
+
+def _plan_mapping_changes(
+    instance: ConnectorInstance,
+    *,
+    resolved: list[tuple[AuthorizationGroup, MappingEntryPayload]],
+    current_by_group_id: dict[int | None, ConnectorMapping],
+) -> tuple[list[ConnectorMapping], list[ConnectorMapping]]:
+    """就地更新可复用的映射, 并返回待墓碑 / 待新建两批(顺序与原实现一致)。"""
+    next_group_ids = {group.id for group, _entry in resolved}
+    tombstones: list[ConnectorMapping] = []
+    creates: list[ConnectorMapping] = []
+    for group, entry in resolved:
+        existing = current_by_group_id.get(group.id)
+        if existing is not None and existing.external_ref == entry.external_ref:
+            existing.auto_create = entry.auto_create
+            existing.external_name = existing.external_name or entry.external_ref
+            existing.save(update_fields=["auto_create", "external_name", "updated_at"])
+            continue
+        if existing is not None:
+            existing.authorization_group = None
+            existing.tombstoned = True
+            tombstones.append(existing)
+        creates.append(
+            ConnectorMapping(
+                instance=instance,
+                authorization_group=group,
+                external_ref=entry.external_ref,
+                external_name=entry.external_ref,
+                auto_create=entry.auto_create,
+            )
+        )
+    for group_id, existing in current_by_group_id.items():
+        if group_id in next_group_ids:
+            continue
+        existing.authorization_group = None
+        existing.tombstoned = True
+        tombstones.append(existing)
+    return tombstones, creates
+
+
+def _replace_mappings(
+    request: HttpRequest,
+    instance: ConnectorInstance,
+    actor: ConsoleActor,
+) -> JsonResponse:
+    try:
+        payload = MappingsPutPayload.model_validate_json(request.body)
+    except ValidationError as exc:
+        return _validation_error("映射参数无效。", {"errors": str(exc)})
+    try:
+        resolved = _resolve_mapping_entries(payload, instance)
+    except _MappingRejectedError as rejected:
+        return rejected.response
     with transaction.atomic():
         _ = ConnectorInstance.objects.select_for_update().get(id=instance.id)
         current_mappings = list(
@@ -527,40 +603,11 @@ def _replace_mappings(  # noqa: C901
                 MAPPINGS_CHANGED_MESSAGE,
                 status=HTTPStatus.CONFLICT,
             )
-        current_by_group_id = {
-            mapping.authorization_group_id: mapping
-            for mapping in current_mappings
-            if mapping.authorization_group is not None and not mapping.tombstoned
-        }
-        next_group_ids = {group.id for group, _entry in resolved}
-        tombstones: list[ConnectorMapping] = []
-        creates: list[ConnectorMapping] = []
-        for group, entry in resolved:
-            existing = current_by_group_id.get(group.id)
-            if existing is not None and existing.external_ref == entry.external_ref:
-                existing.auto_create = entry.auto_create
-                existing.external_name = existing.external_name or entry.external_ref
-                existing.save(update_fields=["auto_create", "external_name", "updated_at"])
-                continue
-            if existing is not None:
-                existing.authorization_group = None
-                existing.tombstoned = True
-                tombstones.append(existing)
-            creates.append(
-                ConnectorMapping(
-                    instance=instance,
-                    authorization_group=group,
-                    external_ref=entry.external_ref,
-                    external_name=entry.external_ref,
-                    auto_create=entry.auto_create,
-                )
-            )
-        for group_id, existing in current_by_group_id.items():
-            if group_id in next_group_ids:
-                continue
-            existing.authorization_group = None
-            existing.tombstoned = True
-            tombstones.append(existing)
+        tombstones, creates = _plan_mapping_changes(
+            instance,
+            resolved=resolved,
+            current_by_group_id=_live_mappings_by_group_id(current_mappings),
+        )
         if tombstones:
             _ = ConnectorMapping.objects.bulk_update(
                 tombstones,
