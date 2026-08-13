@@ -15,6 +15,7 @@ from urllib.parse import quote, urlparse, urlsplit
 if TYPE_CHECKING:
     from collections.abc import Callable, Collection, Mapping
     from types import TracebackType
+    from urllib.parse import SplitResult
 
 INSECURE_URL_MESSAGE = "URL 必须使用 https(仅本地开发允许 http://localhost)。"
 BLOCKED_HOST_MESSAGE = "目标主机解析到被禁止的内网/环回/保留地址。"
@@ -370,6 +371,25 @@ def parse_https_url(
     *,
     allowed_hosts: Collection[str] | None = None,
 ) -> ValidatedHttpsUrl:
+    parsed, raw_hostname, declared_port = _split_webhook_url(url)
+    hostname = normalize_hostname(raw_hostname)
+    port, allow_insecure_http = _resolve_scheme_and_port(
+        scheme=parsed.scheme.lower(),
+        hostname=hostname,
+        declared_port=declared_port,
+    )
+    _reject_host_not_allowed(hostname, allowed_hosts=allowed_hosts)
+    return ValidatedHttpsUrl(
+        hostname=hostname,
+        port=port,
+        request_target=_request_target(parsed),
+        addresses=(),
+        allow_insecure_http=allow_insecure_http,
+    )
+
+
+def _split_webhook_url(url: str) -> tuple[SplitResult, str, int | None]:
+    """拆出 URL 各部件并拒绝空白/控制字符、userinfo、fragment 与无主机名的形态。"""
     if not url or any(
         character.isspace() or ord(character) < CONTROL_CHARACTER_LIMIT for character in url
     ):
@@ -386,46 +406,65 @@ def parse_https_url(
         or parsed.fragment
     ):
         raise InvalidWebhookUrlError
-    hostname = normalize_hostname(parsed.hostname)
-    e2e_host = hostname in e2e_allowed_insecure_webhook_hosts()
-    scheme = parsed.scheme.lower()
-    if e2e_host:
-        # E2E-only: 允许 http/https + 任意端口 + 环回字面 IP; 仍拒绝 userinfo/fragment。
-        if scheme not in {"http", "https"}:
-            raise InvalidWebhookUrlError
-        if port is None:
-            port = 80 if scheme == "http" else 443
-        if port < 1 or port > 65535:
-            raise InvalidWebhookUrlError
-        allow_insecure_http = scheme == "http"
-    else:
-        if (
-            scheme != "https"
-            or port not in (None, 443)
-        ):
-            raise InvalidWebhookUrlError
-        port = 443
-        allow_insecure_http = False
-        try:
-            literal_ip = ipaddress.ip_address(hostname)
-        except ValueError:
-            literal_ip = None
-        if literal_ip is not None and not literal_ip.is_global:
-            raise BlockedHostError
-    if allowed_hosts is not None:
-        normalized_allowed_hosts = {normalize_hostname(host) for host in allowed_hosts}
-        if hostname not in normalized_allowed_hosts:
-            raise InvalidWebhookUrlError(WEBHOOK_HOST_NOT_ALLOWED_MESSAGE)
+    return parsed, parsed.hostname, port
+
+
+def _resolve_scheme_and_port(
+    *,
+    scheme: str,
+    hostname: str,
+    declared_port: int | None,
+) -> tuple[int, bool]:
+    """返回 (最终端口, 是否允许明文 http)。E2E 放行名单是唯一的明文窄门。"""
+    if hostname in e2e_allowed_insecure_webhook_hosts():
+        return _e2e_scheme_and_port(scheme=scheme, declared_port=declared_port)
+    return _public_https_scheme_and_port(scheme=scheme, hostname=hostname, port=declared_port)
+
+
+def _e2e_scheme_and_port(*, scheme: str, declared_port: int | None) -> tuple[int, bool]:
+    # E2E-only: 允许 http/https + 任意端口 + 环回字面 IP; 仍拒绝 userinfo/fragment。
+    if scheme not in {"http", "https"}:
+        raise InvalidWebhookUrlError
+    port = declared_port
+    if port is None:
+        port = 80 if scheme == "http" else 443
+    if port < 1 or port > 65535:
+        raise InvalidWebhookUrlError
+    return port, scheme == "http"
+
+
+def _public_https_scheme_and_port(
+    *,
+    scheme: str,
+    hostname: str,
+    port: int | None,
+) -> tuple[int, bool]:
+    if (
+        scheme != "https"
+        or port not in (None, 443)
+    ):
+        raise InvalidWebhookUrlError
+    try:
+        literal_ip = ipaddress.ip_address(hostname)
+    except ValueError:
+        literal_ip = None
+    if literal_ip is not None and not literal_ip.is_global:
+        raise BlockedHostError
+    return 443, False
+
+
+def _reject_host_not_allowed(hostname: str, *, allowed_hosts: Collection[str] | None) -> None:
+    if allowed_hosts is None:
+        return
+    normalized_allowed_hosts = {normalize_hostname(host) for host in allowed_hosts}
+    if hostname not in normalized_allowed_hosts:
+        raise InvalidWebhookUrlError(WEBHOOK_HOST_NOT_ALLOWED_MESSAGE)
+
+
+def _request_target(parsed: SplitResult) -> str:
     path = _request_target_path(parsed.path or "/")
     query = _request_target_query(parsed.query)
-    request_target = f"{path}?{query}" if query else path
-    return ValidatedHttpsUrl(
-        hostname=hostname,
-        port=port,
-        request_target=request_target,
-        addresses=(),
-        allow_insecure_http=allow_insecure_http,
-    )
+    return f"{path}?{query}" if query else path
 
 
 def _e2e_resolve_addresses(hostname: str, *, port: int) -> tuple[str, ...]:

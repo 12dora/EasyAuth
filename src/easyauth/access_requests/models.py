@@ -76,6 +76,18 @@ DECISION_ACTOR_CHOICES: Final[tuple[tuple[str, str], ...]] = (
 )
 PAYLOAD_DIGEST_LENGTH: Final = 64
 
+# 已产生审批决定的状态集合: 这些状态必须带齐 decided_* 字段。
+_DECIDED_REQUEST_STATUSES: Final[frozenset[str]] = frozenset(
+    {
+        REQUEST_STATUS_APPROVED,
+        REQUEST_STATUS_REJECTED,
+        REQUEST_STATUS_GRANT_APPLIED,
+        REQUEST_STATUS_GRANT_FAILED,
+        REQUEST_STATUS_GRANT_CONFLICT,
+        REQUEST_STATUS_GRANT_EXPIRED,
+    },
+)
+
 
 class AccessRequest(models.Model):
     if TYPE_CHECKING:
@@ -282,58 +294,95 @@ class AccessRequest(models.Model):
         return f"{self.user.authentik_user_id}:{self.app.app_key}:{self.request_type}"
 
     @override
-    def clean(self) -> None:  # noqa: C901, PLR0912
+    def clean(self) -> None:
         super().clean()
+        # 每个分组只负责互不重叠的字段键; 组内保留原有的"后写覆盖先写"顺序。
         errors: dict[str, str] = {}
-        if self.grant_type == GRANT_TYPE_TIMED and self.grant_expires_at is None:
-            errors["grant_expires_at"] = "Timed access requests must include an expiration."
-        if self.grant_type == GRANT_TYPE_PERMANENT and self.grant_expires_at is not None:
-            errors["grant_expires_at"] = "Permanent access requests must not include an expiration."
-        if self.status == REQUEST_STATUS_GRANT_APPLIED and self.applied_at is None:
-            errors["applied_at"] = "Grant-applied access requests must include applied_at."
-        if self.status != REQUEST_STATUS_GRANT_APPLIED and self.applied_at is not None:
-            errors["applied_at"] = "Only grant-applied access requests may include applied_at."
-        if self.request_type == REQUEST_TYPE_GRANT:
-            if self.base_grant_id is not None or self.base_grant_revision is not None:
-                errors["base_grant"] = "Grant requests must not include a base grant."
-        elif self.base_grant_id is None or self.base_grant_revision is None:
-            errors["base_grant"] = "Lifecycle access requests must include a base grant revision."
-        if (
-            self.base_grant_id is not None
-            and self.base_grant is not None
-            and (self.base_grant.user_id != self.user_id or self.base_grant.app_id != self.app_id)
-        ):
-            errors["base_grant"] = "Base grant must belong to the request user and app."
-        if self.status == REQUEST_STATUS_APPROVED and self.approved_at is None:
-            errors["approved_at"] = "Approved access requests must include approved_at."
-        if self.status in {
-            REQUEST_STATUS_APPROVED,
-            REQUEST_STATUS_REJECTED,
-            REQUEST_STATUS_GRANT_APPLIED,
-            REQUEST_STATUS_GRANT_FAILED,
-            REQUEST_STATUS_GRANT_CONFLICT,
-            REQUEST_STATUS_GRANT_EXPIRED,
-        }:
-            if self.decided_at is None:
-                errors["decided_at"] = "Decided access requests must include decided_at."
-            if not self.decided_by:
-                errors["decided_by"] = "Decided access requests must include decided_by."
-            if self.decision_actor_type not in {DECISION_ACTOR_USER, DECISION_ACTOR_CONSOLE_ADMIN}:
-                errors["decision_actor_type"] = (
-                    "Decided access requests must include decision_actor_type."
-                )
-        elif self.decided_at is not None or self.decided_by or self.decision_actor_type:
-            errors["decided_at"] = "Undecided access requests must not include decision fields."
-        if self.status == REQUEST_STATUS_REJECTED and not self.decision_comment:
-            errors["decision_comment"] = "Rejected access requests must include decision_comment."
-        if not self.idempotency_key or self.idempotency_key != self.idempotency_key.strip():
-            errors["idempotency_key"] = "A non-empty opaque idempotency key is required."
-        if len(self.payload_digest) != PAYLOAD_DIGEST_LENGTH or any(
-            character not in "0123456789abcdef" for character in self.payload_digest
-        ):
-            errors["payload_digest"] = "Payload digest must be a lowercase SHA-256 digest."
+        errors.update(_grant_window_errors(self))
+        errors.update(_applied_state_errors(self))
+        errors.update(_base_grant_errors(self))
+        errors.update(_decision_errors(self))
+        errors.update(_payload_identity_errors(self))
         if errors:
             raise ValidationError(errors)
+
+
+def _grant_window_errors(request: AccessRequest) -> dict[str, str]:
+    """grant_expires_at 必须与 grant_type 一致。"""
+    if request.grant_type == GRANT_TYPE_TIMED and request.grant_expires_at is None:
+        return {"grant_expires_at": "Timed access requests must include an expiration."}
+    if request.grant_type == GRANT_TYPE_PERMANENT and request.grant_expires_at is not None:
+        return {
+            "grant_expires_at": "Permanent access requests must not include an expiration.",
+        }
+    return {}
+
+
+def _applied_state_errors(request: AccessRequest) -> dict[str, str]:
+    """applied_at 只能出现在 grant_applied 状态上。"""
+    if request.status == REQUEST_STATUS_GRANT_APPLIED and request.applied_at is None:
+        return {"applied_at": "Grant-applied access requests must include applied_at."}
+    if request.status != REQUEST_STATUS_GRANT_APPLIED and request.applied_at is not None:
+        return {"applied_at": "Only grant-applied access requests may include applied_at."}
+    return {}
+
+
+def _base_grant_errors(request: AccessRequest) -> dict[str, str]:
+    """base_grant 的存在性与归属校验; 归属错误覆盖存在性错误(原顺序)。"""
+    errors: dict[str, str] = {}
+    if request.request_type == REQUEST_TYPE_GRANT:
+        if request.base_grant_id is not None or request.base_grant_revision is not None:
+            errors["base_grant"] = "Grant requests must not include a base grant."
+    elif request.base_grant_id is None or request.base_grant_revision is None:
+        errors["base_grant"] = "Lifecycle access requests must include a base grant revision."
+    if (
+        request.base_grant_id is not None
+        and request.base_grant is not None
+        and (
+            request.base_grant.user_id != request.user_id
+            or request.base_grant.app_id != request.app_id
+        )
+    ):
+        errors["base_grant"] = "Base grant must belong to the request user and app."
+    return errors
+
+
+def _decision_errors(request: AccessRequest) -> dict[str, str]:
+    """审批决定字段: 终态必须齐全, 未决态必须为空; 驳回必须写理由。"""
+    errors: dict[str, str] = {}
+    if request.status == REQUEST_STATUS_APPROVED and request.approved_at is None:
+        errors["approved_at"] = "Approved access requests must include approved_at."
+    if request.status in _DECIDED_REQUEST_STATUSES:
+        errors.update(_decided_field_errors(request))
+    elif request.decided_at is not None or request.decided_by or request.decision_actor_type:
+        errors["decided_at"] = "Undecided access requests must not include decision fields."
+    if request.status == REQUEST_STATUS_REJECTED and not request.decision_comment:
+        errors["decision_comment"] = "Rejected access requests must include decision_comment."
+    return errors
+
+
+def _decided_field_errors(request: AccessRequest) -> dict[str, str]:
+    """已决状态必须带齐 decided_at / decided_by / decision_actor_type。"""
+    errors: dict[str, str] = {}
+    if request.decided_at is None:
+        errors["decided_at"] = "Decided access requests must include decided_at."
+    if not request.decided_by:
+        errors["decided_by"] = "Decided access requests must include decided_by."
+    if request.decision_actor_type not in {DECISION_ACTOR_USER, DECISION_ACTOR_CONSOLE_ADMIN}:
+        errors["decision_actor_type"] = "Decided access requests must include decision_actor_type."
+    return errors
+
+
+def _payload_identity_errors(request: AccessRequest) -> dict[str, str]:
+    """幂等键与 payload 摘要的形态校验。"""
+    errors: dict[str, str] = {}
+    if not request.idempotency_key or request.idempotency_key != request.idempotency_key.strip():
+        errors["idempotency_key"] = "A non-empty opaque idempotency key is required."
+    if len(request.payload_digest) != PAYLOAD_DIGEST_LENGTH or any(
+        character not in "0123456789abcdef" for character in request.payload_digest
+    ):
+        errors["payload_digest"] = "Payload digest must be a lowercase SHA-256 digest."
+    return errors
 
 
 class AccessRequestApprover(models.Model):

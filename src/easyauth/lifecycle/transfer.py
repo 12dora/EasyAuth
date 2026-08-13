@@ -231,32 +231,67 @@ def transfer_selected_grants(action: HandoverAppAction) -> int:
     )
     if not items:
         return 0
+    partition = _partition_pending_grant_items(items, now=timezone.now())
+    _assert_transfer_targets_exist(partition.selected)
+    _mark_grant_items(partition.unselected, status=ITEM_STATUS_SKIPPED)
+    _mark_grant_items(partition.expired, status=ITEM_STATUS_SKIPPED)
+    receiver = action.grant_receiver
+    if receiver is None or not partition.selected:
+        _mark_grant_items(partition.selected, status=ITEM_STATUS_SKIPPED)
+        return 0
+    groups, direct_grants = _transfer_grant_inputs(partition.selected)
+    _ = merge_into_current_grant(
+        user=receiver,
+        app=action.app,
+        groups=groups,
+        direct_grants=direct_grants,
+        actor_id=f"handover_task:{action.task_id}",
+    )
+    _mark_grant_items(partition.selected, status=ITEM_STATUS_DONE)
+    return len(partition.selected)
+
+
+@dataclass(frozen=True, slots=True)
+class _PendingGrantItems:
+    """pending 授权快照按处置去向的三分: 未勾选 / 已过期 / 待转授。"""
+
+    unselected: list[HandoverGrantItem]
+    expired: list[HandoverGrantItem]
+    selected: list[HandoverGrantItem]
+
+
+def _partition_pending_grant_items(
+    items: list[HandoverGrantItem],
+    *,
+    now: datetime,
+) -> _PendingGrantItems:
     unselected = [item for item in items if not item.selected]
-    now = timezone.now()
     expired = [
         item
         for item in items
         if item.selected and item.grant_expires_at is not None and item.grant_expires_at <= now
     ]
     selected = [item for item in items if item.selected and item not in expired]
+    return _PendingGrantItems(unselected=unselected, expired=expired, selected=selected)
+
+
+def _assert_transfer_targets_exist(selected: list[HandoverGrantItem]) -> None:
+    """勾选项引用的目录对象被删除时快速失败, 不得静默跳过。"""
     if any(
         (item.target_kind_snapshot == "group" and item.authorization_group is None)
         or (item.target_kind_snapshot == "permission" and item.permission is None)
         for item in selected
     ):
         raise HandoverError(CATALOG_TARGET_DELETED_MESSAGE)
-    _ = HandoverGrantItem.objects.filter(id__in=[i.id for i in unselected]).update(
-        status=ITEM_STATUS_SKIPPED,
-    )
-    _ = HandoverGrantItem.objects.filter(id__in=[i.id for i in expired]).update(
-        status=ITEM_STATUS_SKIPPED,
-    )
-    receiver = action.grant_receiver
-    if receiver is None or not selected:
-        _ = HandoverGrantItem.objects.filter(id__in=[i.id for i in selected]).update(
-            status=ITEM_STATUS_SKIPPED,
-        )
-        return 0
+
+
+def _mark_grant_items(items: list[HandoverGrantItem], *, status: str) -> None:
+    _ = HandoverGrantItem.objects.filter(id__in=[i.id for i in items]).update(status=status)
+
+
+def _transfer_grant_inputs(
+    selected: list[HandoverGrantItem],
+) -> tuple[list[AuthorizationGroupGrantInput], list[ScopedDirectGrantInput]]:
     groups = [
         AuthorizationGroupGrantInput(
             authorization_group=item.authorization_group,
@@ -274,17 +309,7 @@ def transfer_selected_grants(action: HandoverAppAction) -> int:
         for item in selected
         if item.permission is not None
     ]
-    _ = merge_into_current_grant(
-        user=receiver,
-        app=action.app,
-        groups=groups,
-        direct_grants=direct_grants,
-        actor_id=f"handover_task:{action.task_id}",
-    )
-    _ = HandoverGrantItem.objects.filter(id__in=[i.id for i in selected]).update(
-        status=ITEM_STATUS_DONE,
-    )
-    return len(selected)
+    return groups, direct_grants
 
 
 def merge_into_current_grant(

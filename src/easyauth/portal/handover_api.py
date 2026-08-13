@@ -34,6 +34,7 @@ from easyauth.lifecycle.assignments import (
 )
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
 from easyauth.lifecycle.handover import (
+    MutationGuard,
     execute_action,
     fetch_action_items,
     preview_action,
@@ -556,70 +557,111 @@ def portal_handover_action_operation(
         return reason_error("action_blocked")
     mutation_guard = _portal_mutation_guard(user)
     try:
-        if operation == "preview":
-            action = preview_action(action, mutation_guard=mutation_guard)
-        elif operation == "execute":
-            try:
-                body = ExecutePayload.model_validate_json(request.body or b"{}")
-            except ValidationError:
-                return error_response(
-                    ErrorCode.VALIDATION_ERROR,
-                    "confirm_version 必填。",
-                    status=HTTPStatus.UNPROCESSABLE_ENTITY,
-                )
-            action = execute_action(
-                action,
-                confirm_version=body.confirm_version,
-                mutation_guard=mutation_guard,
-            )
-        elif operation == "retry":
-            action = retry_action(action, mutation_guard=mutation_guard)
-        else:
+        outcome = _dispatch_portal_action(
+            action,
+            operation=operation,
+            request=request,
+            mutation_guard=mutation_guard,
+        )
+    except (HandoverConflictError, HandoverError, HookCallError) as error:
+        return _portal_action_error_response(error, action=action, task_id=task_id, user=user)
+    if isinstance(outcome, JsonResponse):
+        return outcome
+    return json_response({"action": action_item(outcome, surface=SURFACE_PORTAL)})
+
+
+def _dispatch_portal_action(
+    action: HandoverAppAction,
+    *,
+    operation: str,
+    request: HttpRequest,
+    mutation_guard: MutationGuard,
+) -> HandoverAppAction | JsonResponse:
+    """把 operation 派发到对应的领域调用; 返回 JsonResponse 表示入参已判负。"""
+    if operation == "preview":
+        return preview_action(action, mutation_guard=mutation_guard)
+    if operation == "execute":
+        try:
+            body = ExecutePayload.model_validate_json(request.body or b"{}")
+        except ValidationError:
             return error_response(
                 ErrorCode.VALIDATION_ERROR,
-                "操作必须为 preview、execute 或 retry。",
-                status=HTTPStatus.BAD_REQUEST,
+                "confirm_version 必填。",
+                status=HTTPStatus.UNPROCESSABLE_ENTITY,
             )
-    except (HandoverConflictError, HandoverError, HookCallError) as error:
-        if str(error) == PORTAL_ASSIGNEE_REQUIRED:
-            return _not_found()
-        if str(error) in {"out_of_managed_scope", "directory_unavailable"}:
-            revoked = _recheck_reassign_scope_locked(task_id, user)
-            if isinstance(revoked, JsonResponse):
-                return revoked
-        from easyauth.lifecycle.api_payloads import batch_progress
-
-        extra_details: dict[str, JsonValue] | None = None
-        if (
-            isinstance(error, HookCallError)
-            and error.status_code == HTTPStatus.REQUEST_ENTITY_TOO_LARGE
-        ):
-            action.refresh_from_db()
-            extra_details = {"batch_progress": batch_progress(action)}
-        elif "413" in str(error):
-            action.refresh_from_db()
-            extra_details = {"batch_progress": batch_progress(action)}
-        mapped = map_handover_exception(error, details=extra_details)
-        if mapped is not None:
-            return mapped
-        text = str(error)
-        # 412/413/423 from downstream may surface as HandoverError with HTTP hint
-        if "412" in text:
-            return reason_error("snapshot_stale")
-        if "413" in text:
-            action.refresh_from_db()
-            return reason_error(
-                "payload_too_large",
-                details={"batch_progress": batch_progress(action)},
-            )
-        if "423" in text:
-            return reason_error("downstream_locked")
-        return error_response(
-            ErrorCode.VALIDATION_ERROR,
-            text,
-            status=HTTPStatus.BAD_REQUEST,
+        return execute_action(
+            action,
+            confirm_version=body.confirm_version,
+            mutation_guard=mutation_guard,
         )
-    return json_response({"action": action_item(action, surface=SURFACE_PORTAL)})
+    if operation == "retry":
+        return retry_action(action, mutation_guard=mutation_guard)
+    return error_response(
+        ErrorCode.VALIDATION_ERROR,
+        "操作必须为 preview、execute 或 retry。",
+        status=HTTPStatus.BAD_REQUEST,
+    )
+
+
+def _portal_scope_error_response(
+    error: HandoverError | HookCallError,
+    *,
+    task_id: int,
+    user: UserMirror,
+) -> JsonResponse | None:
+    """门户特有的前置映射: 非受理人一律 404; 管辖权失效要先复核并可能回收 reassign。"""
+    if str(error) == PORTAL_ASSIGNEE_REQUIRED:
+        return _not_found()
+    if str(error) in {"out_of_managed_scope", "directory_unavailable"}:
+        revoked = _recheck_reassign_scope_locked(task_id, user)
+        if isinstance(revoked, JsonResponse):
+            return revoked
+    return None
+
+
+def _portal_action_error_response(
+    error: HandoverError | HookCallError,
+    *,
+    action: HandoverAppAction,
+    task_id: int,
+    user: UserMirror,
+) -> JsonResponse:
+    """管辖权失效要先复核 reassign 授权; 下游 412/413/423 映射成稳定 reason。"""
+    scoped = _portal_scope_error_response(error, task_id=task_id, user=user)
+    if scoped is not None:
+        return scoped
+    from easyauth.lifecycle.api_payloads import batch_progress
+
+    extra_details: dict[str, JsonValue] | None = None
+    if (
+        isinstance(error, HookCallError)
+        and error.status_code == HTTPStatus.REQUEST_ENTITY_TOO_LARGE
+    ):
+        action.refresh_from_db()
+        extra_details = {"batch_progress": batch_progress(action)}
+    elif "413" in str(error):
+        action.refresh_from_db()
+        extra_details = {"batch_progress": batch_progress(action)}
+    mapped = map_handover_exception(error, details=extra_details)
+    if mapped is not None:
+        return mapped
+    text = str(error)
+    # 412/413/423 from downstream may surface as HandoverError with HTTP hint
+    if "412" in text:
+        return reason_error("snapshot_stale")
+    if "413" in text:
+        action.refresh_from_db()
+        return reason_error(
+            "payload_too_large",
+            details={"batch_progress": batch_progress(action)},
+        )
+    if "423" in text:
+        return reason_error("downstream_locked")
+    return error_response(
+        ErrorCode.VALIDATION_ERROR,
+        text,
+        status=HTTPStatus.BAD_REQUEST,
+    )
 
 
 def portal_handover_app_options(request: HttpRequest) -> JsonResponse:

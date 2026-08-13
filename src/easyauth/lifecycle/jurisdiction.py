@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
 from easyauth.accounts.models import (
@@ -11,6 +11,9 @@ from easyauth.accounts.models import (
     DingTalkUserOrgContext,
     UserMirror,
 )
+
+if TYPE_CHECKING:
+    from easyauth.applications.ops_models import JsonValue
 
 REASON_OUT_OF_SCOPE: Final = "out_of_managed_scope"
 REASON_DIRECTORY_UNAVAILABLE: Final = "directory_unavailable"
@@ -33,25 +36,28 @@ def assert_manager_of(
     - 目录缺失 / stale / 链畸形 → directory_unavailable (503)
     - 目录健康但 actor 不在链上 → out_of_managed_scope (403)
     """
-    if actor.authentik_user_id.startswith(LOCAL_ADMIN_SUBJECT_PREFIX):
-        return JurisdictionResult(allowed=False, reason=REASON_OUT_OF_SCOPE)
-    if subject.authentik_user_id.startswith(LOCAL_ADMIN_SUBJECT_PREFIX):
-        return JurisdictionResult(allowed=False, reason=REASON_OUT_OF_SCOPE)
-    if actor.status != USER_STATUS_ACTIVE or subject.status != USER_STATUS_ACTIVE:
-        return JurisdictionResult(allowed=False, reason=REASON_OUT_OF_SCOPE)
-    if int(actor.pk) == int(subject.pk):  # type: ignore[arg-type]
-        return JurisdictionResult(allowed=False, reason=REASON_OUT_OF_SCOPE)
-    if (
-        not subject.dingtalk_source_slug
-        or not subject.dingtalk_corp_id
-        or not subject.dingtalk_userid
-    ):
+    rejection = _reject_ineligible_pair(actor, subject)
+    if rejection is not None:
+        return rejection
+
+    context = _subject_org_context(subject, lock_context=lock_context)
+    if context is None or context.stale:
         return JurisdictionResult(allowed=False, reason=REASON_DIRECTORY_UNAVAILABLE)
+    chain = context.manager_chain
+    if not isinstance(chain, list):
+        return JurisdictionResult(allowed=False, reason=REASON_DIRECTORY_UNAVAILABLE)
+    return _chain_contains_manager(chain, actor_dtuid=actor.dingtalk_userid)
+
+
+def _reject_ineligible_pair(actor: UserMirror, subject: UserMirror) -> JurisdictionResult | None:
+    """还没轮到查目录就能判负的形态; 返回 None 表示可以继续查 manager_chain。"""
     if (
-        not actor.dingtalk_source_slug
-        or not actor.dingtalk_corp_id
-        or not actor.dingtalk_userid
+        _is_ineligible_principal(actor)
+        or _is_ineligible_principal(subject)
+        or int(actor.pk) == int(subject.pk)  # type: ignore[arg-type]
     ):
+        return JurisdictionResult(allowed=False, reason=REASON_OUT_OF_SCOPE)
+    if not _has_directory_identity(subject) or not _has_directory_identity(actor):
         return JurisdictionResult(allowed=False, reason=REASON_DIRECTORY_UNAVAILABLE)
     # 必须同 (source, corp)
     if (
@@ -59,22 +65,37 @@ def assert_manager_of(
         or actor.dingtalk_corp_id != subject.dingtalk_corp_id
     ):
         return JurisdictionResult(allowed=False, reason=REASON_OUT_OF_SCOPE)
+    return None
 
+
+def _is_ineligible_principal(user: UserMirror) -> bool:
+    return (
+        user.authentik_user_id.startswith(LOCAL_ADMIN_SUBJECT_PREFIX)
+        or user.status != USER_STATUS_ACTIVE
+    )
+
+
+def _has_directory_identity(user: UserMirror) -> bool:
+    return bool(user.dingtalk_source_slug and user.dingtalk_corp_id and user.dingtalk_userid)
+
+
+def _subject_org_context(
+    subject: UserMirror,
+    *,
+    lock_context: bool,
+) -> DingTalkUserOrgContext | None:
     contexts = DingTalkUserOrgContext.objects
     if lock_context:
         contexts = contexts.select_for_update()
-    context = contexts.filter(
+    return contexts.filter(
         source_slug=subject.dingtalk_source_slug,
         corp_id=subject.dingtalk_corp_id,
         user_id=subject.dingtalk_userid,
     ).first()
-    if context is None or context.stale:
-        return JurisdictionResult(allowed=False, reason=REASON_DIRECTORY_UNAVAILABLE)
-    chain = context.manager_chain
-    if not isinstance(chain, list):
-        return JurisdictionResult(allowed=False, reason=REASON_DIRECTORY_UNAVAILABLE)
 
-    actor_dtuid = actor.dingtalk_userid
+
+def _chain_contains_manager(chain: list[JsonValue], *, actor_dtuid: str) -> JurisdictionResult:
+    """链上任一条目畸形即判 directory_unavailable, 不得跳过继续扫。"""
     for entry in chain:
         if not isinstance(entry, dict):
             return JurisdictionResult(allowed=False, reason=REASON_DIRECTORY_UNAVAILABLE)

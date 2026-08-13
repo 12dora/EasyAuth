@@ -114,6 +114,8 @@ from easyauth.webhooks.hooks import HookCallError, HookResponse, signed_hook_get
 from easyauth.webhooks.models import AppWebhookConfig
 
 if TYPE_CHECKING:
+    from datetime import datetime
+
     from easyauth.accounts.models import UserMirror
     from easyauth.applications.ops_models import JsonValue
 
@@ -439,132 +441,258 @@ def complete_data_phase(
     ``enforce_conservation=False`` 仅用于 async-abandon 人工确认路径:
     超管已在下游确认结局, 不得再被陈旧 preview count 挡住唯一出口。
     """
+    audit = _DataPhaseAudit(
+        actor_id=audit_actor_id,
+        actor_type=audit_actor_type,
+        extra=audit_extra,
+    )
     action_id = batch.action_id
-    is_final = batch.is_final
-    needs_grant = False
-    conservation_fail: str | None = None
+    batch_pk = cast("int", batch.pk)
 
     # —— 事务 A: 守恒校验 + data_completed 标记必须先提交, 授权失败也不能丢 ——
+    gate = _commit_data_completion(
+        batch,
+        handle=handle,
+        response_payload=response_payload,
+        enforce_conservation=enforce_conservation,
+        summary_unknown=summary_unknown,
+        audit=audit,
+    )
+    if gate.conservation_fail is not None:
+        # 与事务 B 一致: 先提交 failed + 释放, 再在 atomic 外 raise,
+        # 避免守恒失败状态被 Django 回滚(01 §7 / 00 §10.5)。
+        raise HandoverError(gate.conservation_fail)
+    if gate.settled_non_final:
+        return
+
+    # —— 事务 B: 仅 offboard 转授权; 失败写 failed+释放并提交, 再 raise ——
+    if gate.needs_grant and action_id is not None:
+        _transfer_grants_for_data_phase(batch_pk=batch_pk, action_id=int(action_id), handle=handle)
+
+    # —— 事务 C: done + 清空 snapshot_token + 释放 ——
+    _finalize_data_phase(batch_pk=batch_pk, action_id=action_id, handle=handle, audit=audit)
+
+
+@dataclass(frozen=True, slots=True)
+class _DataPhaseAudit:
+    """收尾审计三元组; actor_id 与 extra 同时给出才落审计事件。"""
+
+    actor_id: str | None
+    actor_type: str
+    extra: dict[str, JsonValue] | None
+
+
+@dataclass(frozen=True, slots=True)
+class _DataPhaseGate:
+    """事务 A 的出口: 守恒失败原因 / 非最终批已就地收尾 / 是否还要转授权。"""
+
+    conservation_fail: str | None = None
+    settled_non_final: bool = False
+    needs_grant: bool = False
+
+
+def _record_data_phase_audit(action: HandoverAppAction, audit: _DataPhaseAudit) -> None:
+    if audit.actor_id is None or audit.extra is None:
+        return
+    record_task_event(
+        action.task,
+        action="handover_action_executed",
+        actor_id=audit.actor_id,
+        actor_type=audit.actor_type,
+        extra=audit.extra,
+    )
+
+
+def _commit_data_completion(
+    batch: HandoverExecutionBatch,
+    *,
+    handle: LeaseHandle,
+    response_payload: dict[str, JsonValue] | None,
+    enforce_conservation: bool,
+    summary_unknown: bool,
+    audit: _DataPhaseAudit,
+) -> _DataPhaseGate:
+    action_id = batch.action_id
+    is_final = batch.is_final
     with transaction.atomic():
         require_cas(handle)
         batch = HandoverExecutionBatch.objects.select_for_update().get(pk=batch.pk)
         now = timezone.now()
         first_data_completion = batch.data_completed_at is None
 
-        action: HandoverAppAction | None = None
-        if action_id is not None:
-            action = _locked_action_after_task(int(action_id))
-            if enforce_conservation and first_data_completion:
-                conservation_error = validate_execute_summary_conservation(
+        action = _locked_action_after_task(int(action_id)) if action_id is not None else None
+        if (
+            action is not None
+            and enforce_conservation
+            and first_data_completion
+            and _fail_batch_on_conservation_breach(
+                action,
+                batch,
+                handle=handle,
+                response_payload=response_payload,
+            )
+        ):
+            return _DataPhaseGate(conservation_fail="summary_conservation_failed")
+
+        if first_data_completion:
+            batch.status = BATCH_STATUS_DATA_COMPLETED
+            batch.data_completed_at = now
+            batch.save(update_fields=["status", "data_completed_at"])
+            if action is not None:
+                _apply_result_summary(
                     action,
                     response_payload=response_payload,
+                    summary_unknown=summary_unknown,
                 )
-                if conservation_error is not None:
-                    action.status = ACTION_STATUS_FAILED
-                    _set_action_error(action, conservation_error)
-                    action.save(
-                        update_fields=[
-                            "status",
-                            "last_error",
-                            "last_error_raw",
-                            "updated_at",
-                        ],
-                    )
-                    batch.status = BATCH_STATUS_FAILED
-                    batch.save(update_fields=["status"])
-                    must_cas_release(handle)
-                    task = HandoverTask.objects.select_for_update().get(pk=action.task_id)
-                    _ = refresh_task_status_locked(task)
-                    # 与事务 B 一致: 先提交 failed + 释放, 再在 atomic 外 raise,
-                    # 避免守恒失败状态被 Django 回滚(01 §7 / 00 §10.5)。
-                    conservation_fail = "summary_conservation_failed"
 
-        if conservation_fail is None:
-            if first_data_completion:
-                batch.status = BATCH_STATUS_DATA_COMPLETED
-                batch.data_completed_at = now
-                batch.save(update_fields=["status", "data_completed_at"])
+        if not is_final:
+            _settle_non_final_batch(
+                batch,
+                action,
+                handle=handle,
+                first_data_completion=first_data_completion,
+                audit=audit,
+            )
+            return _DataPhaseGate(settled_non_final=True)
 
-            if action is not None and response_payload is not None and first_data_completion:
-                _merge_result_summary(action, response_payload)
-            elif action is not None and summary_unknown and first_data_completion:
-                action.result_summary = None
+        needs_grant = _mark_action_data_completed(action, batch=batch, now=now)
+    return _DataPhaseGate(needs_grant=needs_grant)
 
-            if not is_final:
-                batch.status = BATCH_STATUS_DONE
-                batch.save(update_fields=["status"])
-                if action is not None:
-                    # 非最终批: 同步 executing 与异步 async_* 都要退回 previewed 并释放租约。
-                    if action.status in {
-                        ACTION_STATUS_EXECUTING,
-                        ACTION_STATUS_ASYNC_PENDING,
-                        ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
-                    }:
-                        action.status = ACTION_STATUS_PREVIEWED
-                        action.snapshot_token = ""
-                        action.async_status_url = ""
-                        action.save(
-                            update_fields=[
-                                "status",
-                                "snapshot_token",
-                                "async_status_url",
-                                "result_summary",
-                                "updated_at",
-                            ],
-                        )
-                    if first_data_completion:
-                        _bump_plan_progress(action)
-                    if audit_actor_id is not None and audit_extra is not None:
-                        record_task_event(
-                            action.task,
-                            action="handover_action_executed",
-                            actor_id=audit_actor_id,
-                            actor_type=audit_actor_type,
-                            extra=audit_extra,
-                        )
-                must_cas_release(handle)
-                return
 
-            if action is not None:
-                action.data_completed_at = (
-                    action.data_completed_at or batch.data_completed_at or now
-                )
-                action.save(
-                    update_fields=["data_completed_at", "result_summary", "updated_at"],
-                )
-                needs_grant = action.task.kind in ACTION_GRANT_TRANSFER_KINDS
+def _fail_batch_on_conservation_breach(
+    action: HandoverAppAction,
+    batch: HandoverExecutionBatch,
+    *,
+    handle: LeaseHandle,
+    response_payload: dict[str, JsonValue] | None,
+) -> bool:
+    """守恒不成立时就地写 failed + 释放租约并返回 True; 由调用方在 atomic 外 raise。"""
+    conservation_error = validate_execute_summary_conservation(
+        action,
+        response_payload=response_payload,
+    )
+    if conservation_error is None:
+        return False
+    action.status = ACTION_STATUS_FAILED
+    _set_action_error(action, conservation_error)
+    action.save(
+        update_fields=[
+            "status",
+            "last_error",
+            "last_error_raw",
+            "updated_at",
+        ],
+    )
+    batch.status = BATCH_STATUS_FAILED
+    batch.save(update_fields=["status"])
+    must_cas_release(handle)
+    task = HandoverTask.objects.select_for_update().get(pk=action.task_id)
+    _ = refresh_task_status_locked(task)
+    return True
 
-    if conservation_fail is not None:
-        raise HandoverError(conservation_fail)
 
-    # —— 事务 B: 仅 offboard 转授权; 失败写 failed+释放并提交, 再 raise ——
+def _mark_action_data_completed(
+    action: HandoverAppAction | None,
+    *,
+    batch: HandoverExecutionBatch,
+    now: datetime,
+) -> bool:
+    """最终批: 记下 action 的 data_completed_at, 返回是否还需要转授权。"""
+    if action is None:
+        return False
+    action.data_completed_at = action.data_completed_at or batch.data_completed_at or now
+    action.save(
+        update_fields=["data_completed_at", "result_summary", "updated_at"],
+    )
+    return action.task.kind in ACTION_GRANT_TRANSFER_KINDS
+
+
+def _apply_result_summary(
+    action: HandoverAppAction,
+    *,
+    response_payload: dict[str, JsonValue] | None,
+    summary_unknown: bool,
+) -> None:
+    if response_payload is not None:
+        _merge_result_summary(action, response_payload)
+    elif summary_unknown:
+        action.result_summary = None
+
+
+def _settle_non_final_batch(
+    batch: HandoverExecutionBatch,
+    action: HandoverAppAction | None,
+    *,
+    handle: LeaseHandle,
+    first_data_completion: bool,
+    audit: _DataPhaseAudit,
+) -> None:
+    batch.status = BATCH_STATUS_DONE
+    batch.save(update_fields=["status"])
+    if action is not None:
+        # 非最终批: 同步 executing 与异步 async_* 都要退回 previewed 并释放租约。
+        if action.status in {
+            ACTION_STATUS_EXECUTING,
+            ACTION_STATUS_ASYNC_PENDING,
+            ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
+        }:
+            action.status = ACTION_STATUS_PREVIEWED
+            action.snapshot_token = ""
+            action.async_status_url = ""
+            action.save(
+                update_fields=[
+                    "status",
+                    "snapshot_token",
+                    "async_status_url",
+                    "result_summary",
+                    "updated_at",
+                ],
+            )
+        if first_data_completion:
+            _bump_plan_progress(action)
+        _record_data_phase_audit(action, audit)
+    must_cas_release(handle)
+
+
+def _transfer_grants_for_data_phase(
+    *,
+    batch_pk: int,
+    action_id: int,
+    handle: LeaseHandle,
+) -> None:
     grant_error: Exception | None = None
-    if needs_grant and action_id is not None:
-        with transaction.atomic():
-            require_cas(handle)
-            action = _locked_action_after_task(int(action_id))
-            batch = HandoverExecutionBatch.objects.select_for_update().get(pk=batch.pk)
-            try:
-                _ = transfer_selected_grants(action)
-            except Exception as error:
-                action.status = ACTION_STATUS_FAILED
-                _set_action_error(action, error, stable_message="授权转移失败")
-                action.save(
-                    update_fields=["status", "last_error", "last_error_raw", "updated_at"],
-                )
-                batch.status = BATCH_STATUS_FAILED
-                batch.save(update_fields=["status"])
-                must_cas_release(handle)
-                task = HandoverTask.objects.select_for_update().get(pk=action.task_id)
-                _ = refresh_task_status_locked(task)
-                grant_error = error
-        if grant_error is not None:
-            raise HandoverError("授权转移失败") from grant_error
-
-    # —— 事务 C: done + 清空 snapshot_token + 释放 ——
     with transaction.atomic():
         require_cas(handle)
-        batch = HandoverExecutionBatch.objects.select_for_update().get(pk=batch.pk)
+        action = _locked_action_after_task(action_id)
+        batch = HandoverExecutionBatch.objects.select_for_update().get(pk=batch_pk)
+        try:
+            _ = transfer_selected_grants(action)
+        except Exception as error:
+            action.status = ACTION_STATUS_FAILED
+            _set_action_error(action, error, stable_message="授权转移失败")
+            action.save(
+                update_fields=["status", "last_error", "last_error_raw", "updated_at"],
+            )
+            batch.status = BATCH_STATUS_FAILED
+            batch.save(update_fields=["status"])
+            must_cas_release(handle)
+            task = HandoverTask.objects.select_for_update().get(pk=action.task_id)
+            _ = refresh_task_status_locked(task)
+            grant_error = error
+    if grant_error is not None:
+        raise HandoverError("授权转移失败") from grant_error
+
+
+def _finalize_data_phase(
+    *,
+    batch_pk: int,
+    action_id: int | None,
+    handle: LeaseHandle,
+    audit: _DataPhaseAudit,
+) -> None:
+    with transaction.atomic():
+        require_cas(handle)
+        batch = HandoverExecutionBatch.objects.select_for_update().get(pk=batch_pk)
         if action_id is not None:
             action = _locked_action_after_task(int(action_id))
             action.status = ACTION_STATUS_DONE
@@ -583,14 +711,7 @@ def complete_data_phase(
             _complete_active_plan(action)
             task = HandoverTask.objects.select_for_update().get(pk=action.task_id)
             _ = refresh_task_status_locked(task)
-            if audit_actor_id is not None and audit_extra is not None:
-                record_task_event(
-                    action.task,
-                    action="handover_action_executed",
-                    actor_id=audit_actor_id,
-                    actor_type=audit_actor_type,
-                    extra=audit_extra,
-                )
+            _record_data_phase_audit(action, audit)
         batch.status = BATCH_STATUS_DONE
         batch.save(update_fields=["status"])
         must_cas_release(handle)
@@ -1205,232 +1326,315 @@ def _execute_action(
     mutation_guard: MutationGuard | None,
 ) -> HandoverAppAction:
     worker_owner = owner or f"http:{uuid.uuid4().hex[:12]}"
-    grant_only_error: Exception | None = None
-    grant_only_done_id: int | None = None
-    action_id: int | None = None
-    batch_id: int | None = None
-    delivery_id: int | None = None
-    handle: LeaseHandle | None = None
-    app: App | None = None
-    url = ""
-    body: dict[str, JsonValue] = {}
+    grant_only: _GrantOnlyRetryOutcome | None = None
+    outbound: _OutboundExecution | None = None
 
     with transaction.atomic():
         action = _locked_action_after_task(action.id)
-        if mutation_guard is not None:
-            mutation_guard(action)
-        if is_retry and action.status != ACTION_STATUS_FAILED:
-            # 01 §6.1: 对非 failed 调 retry → action_not_retryable(非泛化 action_not_operable)
-            raise HandoverConflictError("action_not_retryable")
-        ensure_action_status(action, allowed={allowed_status})
-        if confirm_version is not None and confirm_version != action.confirm_version:
-            raise HandoverConflictError("confirm_version_stale")
-        validate_assignments(action)
-
+        _assert_action_executable(
+            action,
+            allowed_status=allowed_status,
+            confirm_version=confirm_version,
+            is_retry=is_retry,
+            mutation_guard=mutation_guard,
+        )
         # 纯授权重试: data_completed_at 非空 — 失败态提交后在 atomic 外 raise
         if is_retry and action.data_completed_at is not None:
-            handle = take_lease(
-                action=action,
-                owner=worker_owner,
-                batch_seq=action.batch_seq or 1,
-            )
-            action.status = ACTION_STATUS_EXECUTING
-            action.attempts += 1
-            action.save(update_fields=["status", "attempts", "updated_at"])
-            action_id_grant = action.id
-            try:
-                require_cas(handle)
-                if action.task.kind in ACTION_GRANT_TRANSFER_KINDS:
-                    _ = transfer_selected_grants(action)
-                final_batch = (
-                    HandoverExecutionBatch.objects.select_for_update()
-                    .filter(
-                        action=action,
-                        generation=action.generation,
-                        is_final=True,
-                        data_completed_at__isnull=False,
-                    )
-                    .order_by("-batch_seq")
-                    .first()
-                )
-                if final_batch is None:
-                    raise HandoverConflictError(ACTION_NOT_OPERABLE_MESSAGE)
-                final_batch.status = BATCH_STATUS_DONE
-                final_batch.save(update_fields=["status"])
-                _complete_active_plan(action)
-                action.status = ACTION_STATUS_DONE
-                action.last_error = ""
-                action.snapshot_token = ""
-                action.save(
-                    update_fields=["status", "last_error", "snapshot_token", "updated_at"],
-                )
-                task = HandoverTask.objects.select_for_update().get(pk=action.task_id)
-                _ = refresh_task_status_locked(task)
-                must_cas_release(handle)
-                grant_only_done_id = action_id_grant
-            except Exception as error:
-                action = HandoverAppAction.objects.select_for_update(of=("self",)).get(
-                    pk=action_id_grant,
-                )
-                action.status = ACTION_STATUS_FAILED
-                _set_action_error(action, error)
-                action.save(
-                    update_fields=["status", "last_error", "last_error_raw", "updated_at"],
-                )
-                _ = cas_release(handle)
-                grant_only_error = error
+            grant_only = _retry_grant_transfer_only(action, worker_owner=worker_owner)
         else:
-            hook_url = _handover_hook_url(action.app)
-            if not hook_url:
-                raise HandoverError(DECLARED_WITHOUT_URL_MESSAGE)
+            outbound = _open_execution_batch(action, worker_owner=worker_owner, is_retry=is_retry)
 
-            plan = _active_batch_plan(action)
-            payload, is_final, plan_batch_no = _build_execute_payload_for_plan(action, plan)
-            payload_bytes = json.dumps(
-                payload,
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode("utf-8")
-            request_hash = hashlib.sha256(payload_bytes).hexdigest()
+    if grant_only is not None:
+        return _settle_grant_only_retry(grant_only)
 
-            if is_retry:
-                batch = (
-                    HandoverExecutionBatch.objects.select_for_update()
-                    .filter(
-                        action=action,
-                        generation=action.generation,
-                        status=BATCH_STATUS_FAILED,
-                    )
-                    .order_by("-batch_seq")
-                    .first()
-                )
-                if batch is None:
-                    raise HandoverConflictError("action_not_retryable")
-                # 失败重试必须用原 canonical body, 不得改写 request_payload。
-                handle = take_lease(
-                    action=action,
-                    owner=worker_owner,
-                    batch_seq=batch.batch_seq,
-                )
-                batch.status = BATCH_STATUS_EXECUTING
-                batch.save(update_fields=["status"])
-                next_seq = HandoverDeliveryAttempt.objects.filter(batch=batch).count() + 1
-                delivery = HandoverDeliveryAttempt.objects.create(
-                    batch=batch,
-                    delivery_seq=next_seq,
-                    lease_fence=handle.fence,
-                    outcome=DELIVERY_OUTCOME_SENT,
-                )
-            else:
-                next_batch_seq = action.batch_seq + 1
-                handle = take_lease(
-                    action=action,
-                    owner=worker_owner,
-                    batch_seq=next_batch_seq,
-                )
-                action.batch_seq = next_batch_seq
-                action.status = ACTION_STATUS_EXECUTING
-                action.attempts += 1
-                action.last_error = ""
-                action.save(
-                    update_fields=[
-                        "batch_seq",
-                        "status",
-                        "attempts",
-                        "last_error",
-                        "updated_at",
-                    ],
-                )
-                batch = HandoverExecutionBatch.objects.create(
-                    action=action,
-                    action_snapshot_id=int(action.id),
-                    generation=action.generation,
-                    batch_seq=next_batch_seq,
-                    is_final=is_final,
-                    plan=plan,
-                    plan_batch_no=plan_batch_no,
-                    snapshot_token=action.snapshot_token,
-                    request_payload=payload,
-                    request_hash=request_hash,
-                    status=BATCH_STATUS_EXECUTING,
-                    task_snapshot={
-                        "task_id": action.task_id,
-                        "kind": action.task.kind,
-                        "app_key": action.app.app_key,
-                        "subject_user_id": action.task.subject_user.authentik_user_id,
-                    },
-                )
-                delivery = HandoverDeliveryAttempt.objects.create(
-                    batch=batch,
-                    delivery_seq=1,
-                    lease_fence=handle.fence,
-                    outcome=DELIVERY_OUTCOME_SENT,
-                )
+    assert outbound is not None
+    return _deliver_execute_request(outbound)
 
-            delivery_owner = f"delivery:{delivery.pk}"
-            handed = cas_update_owner(handle, new_owner=delivery_owner, renew=True)
-            if handed is None:
-                raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
-            handle = handed
-            sender_owner = f"sender:{worker_owner}"
-            claimed = cas_update_owner(handle, new_owner=sender_owner, renew=True)
-            if claimed is None:
-                raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
-            handle = claimed
-            action_id = action.id
-            batch_id = batch.id
-            delivery_id = delivery.id
-            app = action.app
-            url = hook_url
-            body = dict(batch.request_payload)
 
-    if grant_only_error is not None:
-        raise HandoverError(str(grant_only_error)[:500]) from grant_only_error
-    if grant_only_done_id is not None:
-        return HandoverAppAction.objects.get(pk=grant_only_done_id)
+def _assert_action_executable(
+    action: HandoverAppAction,
+    *,
+    allowed_status: str,
+    confirm_version: int | None,
+    is_retry: bool,
+    mutation_guard: MutationGuard | None,
+) -> None:
+    if mutation_guard is not None:
+        mutation_guard(action)
+    if is_retry and action.status != ACTION_STATUS_FAILED:
+        # 01 §6.1: 对非 failed 调 retry → action_not_retryable(非泛化 action_not_operable)
+        raise HandoverConflictError("action_not_retryable")
+    ensure_action_status(action, allowed={allowed_status})
+    if confirm_version is not None and confirm_version != action.confirm_version:
+        raise HandoverConflictError("confirm_version_stale")
+    validate_assignments(action)
 
-    assert action_id is not None and batch_id is not None and delivery_id is not None
-    assert handle is not None and app is not None
 
-    # 网络调用在事务外
-    superseded = False
+@dataclass(frozen=True, slots=True)
+class _GrantOnlyRetryOutcome:
+    """纯授权重试的事务内结局; 失败态已提交, 由调用方在 atomic 外 raise。"""
+
+    done_id: int | None = None
+    error: Exception | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _OutboundExecution:
+    """事务内备好、事务外才发的一次 execute 投递。"""
+
+    action_id: int
+    batch_id: int
+    delivery_id: int
+    handle: LeaseHandle
+    app: App
+    url: str
+    body: dict[str, JsonValue]
+
+
+@dataclass(frozen=True, slots=True)
+class _ExecuteRequestBody:
+    """一次执行请求的 canonical body 及其在批计划中的位置。"""
+
+    payload: dict[str, JsonValue]
+    request_hash: str
+    is_final: bool
+    plan: HandoverBatchPlan | None
+    plan_batch_no: int | None
+
+
+def _retry_grant_transfer_only(
+    action: HandoverAppAction,
+    *,
+    worker_owner: str,
+) -> _GrantOnlyRetryOutcome:
+    handle = take_lease(
+        action=action,
+        owner=worker_owner,
+        batch_seq=action.batch_seq or 1,
+    )
+    action.status = ACTION_STATUS_EXECUTING
+    action.attempts += 1
+    action.save(update_fields=["status", "attempts", "updated_at"])
+    action_id_grant = action.id
     try:
-        with transaction.atomic():
-            action = _locked_action(action_id)
-            batch = HandoverExecutionBatch.objects.select_for_update().get(pk=batch_id)
-            if batch.generation != action.generation or batch.generation != action.task.generation:
-                delivery = HandoverDeliveryAttempt.objects.select_for_update().get(
-                    pk=delivery_id,
-                )
-                delivery.outcome = DELIVERY_OUTCOME_SUPERSEDED
-                delivery.error_text = "generation_superseded"
-                delivery.save(update_fields=["outcome", "error_text"])
-                batch.status = BATCH_STATUS_FAILED
-                batch.save(update_fields=["status"])
-                must_cas_release(handle)
-                superseded = True
-                record_task_event(
-                    action.task,
-                    action="handover_delivery_superseded",
-                    actor_id=LIFECYCLE_ACTOR_ID,
-                    actor_type="system",
-                    extra={"app_key": action.app_key_snapshot, "batch_id": batch_id},
-                )
-        if superseded:
-            raise HandoverConflictError("generation_superseded")
+        require_cas(handle)
+        if action.task.kind in ACTION_GRANT_TRANSFER_KINDS:
+            _ = transfer_selected_grants(action)
+        final_batch = (
+            HandoverExecutionBatch.objects.select_for_update()
+            .filter(
+                action=action,
+                generation=action.generation,
+                is_final=True,
+                data_completed_at__isnull=False,
+            )
+            .order_by("-batch_seq")
+            .first()
+        )
+        if final_batch is None:
+            raise HandoverConflictError(ACTION_NOT_OPERABLE_MESSAGE)
+        final_batch.status = BATCH_STATUS_DONE
+        final_batch.save(update_fields=["status"])
+        _complete_active_plan(action)
+        action.status = ACTION_STATUS_DONE
+        action.last_error = ""
+        action.snapshot_token = ""
+        action.save(
+            update_fields=["status", "last_error", "snapshot_token", "updated_at"],
+        )
+        task = HandoverTask.objects.select_for_update().get(pk=action.task_id)
+        _ = refresh_task_status_locked(task)
+        must_cas_release(handle)
+    except Exception as error:
+        action = HandoverAppAction.objects.select_for_update(of=("self",)).get(
+            pk=action_id_grant,
+        )
+        action.status = ACTION_STATUS_FAILED
+        _set_action_error(action, error)
+        action.save(
+            update_fields=["status", "last_error", "last_error_raw", "updated_at"],
+        )
+        _ = cas_release(handle)
+        return _GrantOnlyRetryOutcome(error=error)
+    return _GrantOnlyRetryOutcome(done_id=action_id_grant)
+
+
+def _settle_grant_only_retry(outcome: _GrantOnlyRetryOutcome) -> HandoverAppAction:
+    if outcome.error is not None:
+        raise HandoverError(str(outcome.error)[:500]) from outcome.error
+    assert outcome.done_id is not None
+    return HandoverAppAction.objects.get(pk=outcome.done_id)
+
+
+def _open_execution_batch(
+    action: HandoverAppAction,
+    *,
+    worker_owner: str,
+    is_retry: bool,
+) -> _OutboundExecution:
+    hook_url = _handover_hook_url(action.app)
+    if not hook_url:
+        raise HandoverError(DECLARED_WITHOUT_URL_MESSAGE)
+
+    plan = _active_batch_plan(action)
+    payload, is_final, plan_batch_no = _build_execute_payload_for_plan(action, plan)
+    payload_bytes = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    request_body = _ExecuteRequestBody(
+        payload=payload,
+        request_hash=hashlib.sha256(payload_bytes).hexdigest(),
+        is_final=is_final,
+        plan=plan,
+        plan_batch_no=plan_batch_no,
+    )
+
+    if is_retry:
+        handle, batch, delivery = _reopen_failed_batch(action, worker_owner=worker_owner)
+    else:
+        handle, batch, delivery = _start_execution_batch(
+            action,
+            worker_owner=worker_owner,
+            request_body=request_body,
+        )
+
+    handle = _hand_lease_to_sender(handle, delivery=delivery, worker_owner=worker_owner)
+    return _OutboundExecution(
+        action_id=action.id,
+        batch_id=batch.id,
+        delivery_id=delivery.id,
+        handle=handle,
+        app=action.app,
+        url=hook_url,
+        body=dict(batch.request_payload),
+    )
+
+
+def _reopen_failed_batch(
+    action: HandoverAppAction,
+    *,
+    worker_owner: str,
+) -> tuple[LeaseHandle, HandoverExecutionBatch, HandoverDeliveryAttempt]:
+    batch = (
+        HandoverExecutionBatch.objects.select_for_update()
+        .filter(
+            action=action,
+            generation=action.generation,
+            status=BATCH_STATUS_FAILED,
+        )
+        .order_by("-batch_seq")
+        .first()
+    )
+    if batch is None:
+        raise HandoverConflictError("action_not_retryable")
+    # 失败重试必须用原 canonical body, 不得改写 request_payload。
+    handle = take_lease(
+        action=action,
+        owner=worker_owner,
+        batch_seq=batch.batch_seq,
+    )
+    batch.status = BATCH_STATUS_EXECUTING
+    batch.save(update_fields=["status"])
+    next_seq = HandoverDeliveryAttempt.objects.filter(batch=batch).count() + 1
+    delivery = HandoverDeliveryAttempt.objects.create(
+        batch=batch,
+        delivery_seq=next_seq,
+        lease_fence=handle.fence,
+        outcome=DELIVERY_OUTCOME_SENT,
+    )
+    return handle, batch, delivery
+
+
+def _start_execution_batch(
+    action: HandoverAppAction,
+    *,
+    worker_owner: str,
+    request_body: _ExecuteRequestBody,
+) -> tuple[LeaseHandle, HandoverExecutionBatch, HandoverDeliveryAttempt]:
+    next_batch_seq = action.batch_seq + 1
+    handle = take_lease(
+        action=action,
+        owner=worker_owner,
+        batch_seq=next_batch_seq,
+    )
+    action.batch_seq = next_batch_seq
+    action.status = ACTION_STATUS_EXECUTING
+    action.attempts += 1
+    action.last_error = ""
+    action.save(
+        update_fields=[
+            "batch_seq",
+            "status",
+            "attempts",
+            "last_error",
+            "updated_at",
+        ],
+    )
+    batch = HandoverExecutionBatch.objects.create(
+        action=action,
+        action_snapshot_id=int(action.id),
+        generation=action.generation,
+        batch_seq=next_batch_seq,
+        is_final=request_body.is_final,
+        plan=request_body.plan,
+        plan_batch_no=request_body.plan_batch_no,
+        snapshot_token=action.snapshot_token,
+        request_payload=request_body.payload,
+        request_hash=request_body.request_hash,
+        status=BATCH_STATUS_EXECUTING,
+        task_snapshot={
+            "task_id": action.task_id,
+            "kind": action.task.kind,
+            "app_key": action.app.app_key,
+            "subject_user_id": action.task.subject_user.authentik_user_id,
+        },
+    )
+    delivery = HandoverDeliveryAttempt.objects.create(
+        batch=batch,
+        delivery_seq=1,
+        lease_fence=handle.fence,
+        outcome=DELIVERY_OUTCOME_SENT,
+    )
+    return handle, batch, delivery
+
+
+def _hand_lease_to_sender(
+    handle: LeaseHandle,
+    *,
+    delivery: HandoverDeliveryAttempt,
+    worker_owner: str,
+) -> LeaseHandle:
+    delivery_owner = f"delivery:{delivery.pk}"
+    handed = cas_update_owner(handle, new_owner=delivery_owner, renew=True)
+    if handed is None:
+        raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
+    sender_owner = f"sender:{worker_owner}"
+    claimed = cas_update_owner(handed, new_owner=sender_owner, renew=True)
+    if claimed is None:
+        raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
+    return claimed
+
+
+def _deliver_execute_request(outbound: _OutboundExecution) -> HandoverAppAction:
+    # 网络调用在事务外
+    if _release_superseded_delivery(outbound):
+        raise HandoverConflictError("generation_superseded")
+    try:
         response = signed_hook_post(
-            app=app,
-            url=url,
+            app=outbound.app,
+            url=outbound.url,
             event_type=HOOK_EVENT_EXECUTE,
             delivery_id=uuid.uuid4().hex,
-            payload=body,
+            payload=outbound.body,
         )
     except HookCallError as error:
         _finish_delivery_failure(
-            action_id=action_id,
-            batch_id=batch_id,
-            delivery_id=delivery_id,
-            handle=handle,
+            action_id=outbound.action_id,
+            batch_id=outbound.batch_id,
+            delivery_id=outbound.delivery_id,
+            handle=outbound.handle,
             error=error,
             http_status=error.status_code,
             response_payload=error.payload,
@@ -1440,12 +1644,39 @@ def _execute_action(
         raise
 
     return _handle_execute_response(
-        action_id=action_id,
-        batch_id=batch_id,
-        delivery_id=delivery_id,
-        handle=handle,
+        action_id=outbound.action_id,
+        batch_id=outbound.batch_id,
+        delivery_id=outbound.delivery_id,
+        handle=outbound.handle,
         response=response,
     )
+
+
+def _release_superseded_delivery(outbound: _OutboundExecution) -> bool:
+    """代次已被推进时把该次投递标记 superseded 并释放租约。"""
+    superseded = False
+    with transaction.atomic():
+        action = _locked_action(outbound.action_id)
+        batch = HandoverExecutionBatch.objects.select_for_update().get(pk=outbound.batch_id)
+        if batch.generation != action.generation or batch.generation != action.task.generation:
+            delivery = HandoverDeliveryAttempt.objects.select_for_update().get(
+                pk=outbound.delivery_id,
+            )
+            delivery.outcome = DELIVERY_OUTCOME_SUPERSEDED
+            delivery.error_text = "generation_superseded"
+            delivery.save(update_fields=["outcome", "error_text"])
+            batch.status = BATCH_STATUS_FAILED
+            batch.save(update_fields=["status"])
+            must_cas_release(outbound.handle)
+            superseded = True
+            record_task_event(
+                action.task,
+                action="handover_delivery_superseded",
+                actor_id=LIFECYCLE_ACTOR_ID,
+                actor_type="system",
+                extra={"app_key": action.app_key_snapshot, "batch_id": outbound.batch_id},
+            )
+    return superseded
 
 
 def _handle_execute_response(

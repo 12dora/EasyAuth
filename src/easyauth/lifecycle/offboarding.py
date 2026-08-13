@@ -81,76 +81,36 @@ def ensure_handover_task(
     offboard 遇到 open pre_offboard → 升级(00 §8.3 / 01 §5.1.2)。
     ``raise_on_existing=True`` 时同 kind open 单抛 open_task_exists(门户自助)。
     """
-    from easyauth.lifecycle.models import (
-        AUTHORITY_SOURCE_MANAGER_CHAIN,
-        AUTHORITY_SOURCE_SUBJECT,
-        AUTHORITY_SOURCE_SUPERUSER,
-    )
-
     _assert_lifecycle_subject(subject)
+    idempotency = _CreationIdempotency(
+        key=creation_idempotency_key,
+        payload_sha256=creation_payload_sha256,
+    )
     subject_pk = cast("int", subject.pk)
     with transaction.atomic():
         subject = UserMirror.objects.select_for_update().get(pk=subject_pk)
 
         # 幂等键命中: 同 initiator + key
-        if creation_idempotency_key:
-            existing_by_key = (
-                HandoverTask.objects.select_for_update()
-                .filter(
-                    created_by=created_by,
-                    creation_idempotency_key=creation_idempotency_key,
-                )
-                .first()
-            )
-            if existing_by_key is not None:
-                if existing_by_key.creation_payload_sha256 != creation_payload_sha256:
-                    raise HandoverConflictError("idempotency_conflict")
-                return existing_by_key, False
+        existing_by_key = _task_by_idempotency_key(created_by=created_by, idempotency=idempotency)
+        if existing_by_key is not None:
+            return existing_by_key, False
 
-        # reassign 可与其他 open 单并存; 生命周期类单据一人一张。
-        if kind == HANDOVER_KIND_REASSIGN:
-            existing = None
-        else:
-            existing = (
-                HandoverTask.objects.select_for_update()
-                .filter(
-                    subject_user=subject,
-                    status__in=TASK_OPEN_STATUSES,
-                    kind__in=(
-                        HANDOVER_KIND_OFFBOARD,
-                        HANDOVER_KIND_TRANSFER,
-                        HANDOVER_KIND_PRE_OFFBOARD,
-                    ),
-                )
-                .first()
-            )
+        existing = _open_lifecycle_task(subject, kind=kind)
         if existing is not None:
-            # pre_offboard → offboard 升级是唯一允许的 kind 变更
-            if (
-                existing.kind == HANDOVER_KIND_PRE_OFFBOARD
-                and kind == HANDOVER_KIND_OFFBOARD
-            ):
-                upgraded = upgrade_pre_offboard_to_offboard(
-                    existing,
-                    created_by=created_by,
-                    reason=reason or "目录同步检出离职",
-                    snapshot_grant_ids=snapshot_grant_ids,
-                )
-                return upgraded, False
-            if existing.kind != kind:
-                raise HandoverConflictError(TASK_KIND_CONFLICT_MESSAGE)
-            # 同 kind open 单: 内部/系统调用可幂等返回; 门户自助建单要求 409 open_task_exists
-            # (01 §6.1), 由 raise_on_existing 区分。
-            if raise_on_existing:
-                raise HandoverConflictError("open_task_exists")
-            return existing, False
+            return _reuse_or_upgrade_existing(
+                existing,
+                kind=kind,
+                created_by=created_by,
+                reason=reason,
+                snapshot_grant_ids=snapshot_grant_ids,
+                raise_on_existing=raise_on_existing,
+            ), False
 
-        resolved_authority = authority_source
-        if not resolved_authority:
-            if kind == HANDOVER_KIND_PRE_OFFBOARD and created_by == subject.authentik_user_id:
-                resolved_authority = AUTHORITY_SOURCE_SUBJECT
-            else:
-                resolved_authority = AUTHORITY_SOURCE_MANAGER_CHAIN
+        self_service = _is_subject_self_pre_offboard(subject, kind=kind, created_by=created_by)
+        resolved_authority = _resolved_authority_source(
+            authority_source=authority_source,
+            self_service=self_service,
+        )
 
         snapshot_grants = _snapshot_grants(
             subject=subject,
@@ -162,45 +122,18 @@ def ensure_handover_task(
             created_by=created_by,
             reason=reason,
             authority_source=resolved_authority,
-            creation_idempotency_key=creation_idempotency_key,
-            creation_payload_sha256=creation_payload_sha256,
+            creation_idempotency_key=idempotency.key,
+            creation_payload_sha256=idempotency.payload_sha256,
         )
         if not won_create:
             return task, False
-        if kind == HANDOVER_KIND_PRE_OFFBOARD and created_by == subject.authentik_user_id:
-            from easyauth.lifecycle.models import ASSIGNEE_STATE_SUBJECT
-
-            # 自助 pre_offboard 不走 resolve_assignee, 避免伪造 degraded 审计。
-            task.assignee = subject
-            task.assignee_state = ASSIGNEE_STATE_SUBJECT
-            task.escalation_level = 0
-            task.escalation_deadline = timezone.now() + timedelta(
-                days=HANDOVER_ESCALATION_DAYS,
-            )
-            task.save(
-                update_fields=[
-                    "assignee",
-                    "assignee_state",
-                    "escalation_level",
-                    "escalation_deadline",
-                    "updated_at",
-                ],
-            )
-            record_task_event(
-                task,
-                action="handover_assignee_assigned",
-                actor_id=created_by,
-                actor_type="user",
-                extra={"assignee_state": ASSIGNEE_STATE_SUBJECT},
-            )
-        else:
-            resolution = assignee_resolution or resolve_assignee(subject)
-            _ = apply_assignee(
-                task,
-                resolution,
-                actor_id=created_by,
-                reason="task_created",
-            )
+        _assign_initial_assignee(
+            task,
+            subject=subject,
+            created_by=created_by,
+            assignee_resolution=assignee_resolution,
+            self_service=self_service,
+        )
         _snapshot_grant_items(task, grants=snapshot_grants)
         _snapshot_app_actions(task, grants=snapshot_grants, app_keys=app_keys)
         _snapshot_leader_teams(task)
@@ -214,31 +147,186 @@ def ensure_handover_task(
                 task=task,
                 actor_id=created_by,
             )
-        record_task_event(
+        _record_task_creation_events(
             task,
-            action="handover_task_created",
-            actor_id=created_by,
-            actor_type=(
-                "user"
-                if resolved_authority
-                in {AUTHORITY_SOURCE_SUBJECT, AUTHORITY_SOURCE_MANAGER_CHAIN}
-                and created_by not in {"directory_sync", LIFECYCLE_ACTOR_ID}
-                else None
+            kind=kind,
+            created_by=created_by,
+            resolved_authority=resolved_authority,
+            app_keys=app_keys,
+        )
+        return refresh_task_status(task), True
+
+
+@dataclass(frozen=True, slots=True)
+class _CreationIdempotency:
+    """建单幂等键与冻结 body 摘要; 同 key 不同摘要一律 409。"""
+
+    key: str
+    payload_sha256: str
+
+
+def _task_by_idempotency_key(
+    *,
+    created_by: str,
+    idempotency: _CreationIdempotency,
+) -> HandoverTask | None:
+    if not idempotency.key:
+        return None
+    existing_by_key = (
+        HandoverTask.objects.select_for_update()
+        .filter(
+            created_by=created_by,
+            creation_idempotency_key=idempotency.key,
+        )
+        .first()
+    )
+    if existing_by_key is None:
+        return None
+    if existing_by_key.creation_payload_sha256 != idempotency.payload_sha256:
+        raise HandoverConflictError("idempotency_conflict")
+    return existing_by_key
+
+
+def _open_lifecycle_task(subject: UserMirror, *, kind: str) -> HandoverTask | None:
+    # reassign 可与其他 open 单并存; 生命周期类单据一人一张。
+    if kind == HANDOVER_KIND_REASSIGN:
+        return None
+    return (
+        HandoverTask.objects.select_for_update()
+        .filter(
+            subject_user=subject,
+            status__in=TASK_OPEN_STATUSES,
+            kind__in=(
+                HANDOVER_KIND_OFFBOARD,
+                HANDOVER_KIND_TRANSFER,
+                HANDOVER_KIND_PRE_OFFBOARD,
             ),
         )
-        if kind == HANDOVER_KIND_REASSIGN:
-            record_task_event(
-                task,
-                action="handover_reassign_created",
-                actor_id=created_by,
-                actor_type=(
-                    "admin"
-                    if resolved_authority == AUTHORITY_SOURCE_SUPERUSER
-                    else "user"
-                ),
-                extra={"app_keys": list(app_keys or ())},
-            )
-        return refresh_task_status(task), True
+        .first()
+    )
+
+
+def _reuse_or_upgrade_existing(
+    existing: HandoverTask,
+    *,
+    kind: str,
+    created_by: str,
+    reason: str,
+    snapshot_grant_ids: tuple[int, ...] | None,
+    raise_on_existing: bool,
+) -> HandoverTask:
+    # pre_offboard → offboard 升级是唯一允许的 kind 变更
+    if existing.kind == HANDOVER_KIND_PRE_OFFBOARD and kind == HANDOVER_KIND_OFFBOARD:
+        return upgrade_pre_offboard_to_offboard(
+            existing,
+            created_by=created_by,
+            reason=reason or "目录同步检出离职",
+            snapshot_grant_ids=snapshot_grant_ids,
+        )
+    if existing.kind != kind:
+        raise HandoverConflictError(TASK_KIND_CONFLICT_MESSAGE)
+    # 同 kind open 单: 内部/系统调用可幂等返回; 门户自助建单要求 409 open_task_exists
+    # (01 §6.1), 由 raise_on_existing 区分。
+    if raise_on_existing:
+        raise HandoverConflictError("open_task_exists")
+    return existing
+
+
+def _is_subject_self_pre_offboard(subject: UserMirror, *, kind: str, created_by: str) -> bool:
+    return kind == HANDOVER_KIND_PRE_OFFBOARD and created_by == subject.authentik_user_id
+
+
+def _resolved_authority_source(*, authority_source: str, self_service: bool) -> str:
+    from easyauth.lifecycle.models import (
+        AUTHORITY_SOURCE_MANAGER_CHAIN,
+        AUTHORITY_SOURCE_SUBJECT,
+    )
+
+    if authority_source:
+        return authority_source
+    return AUTHORITY_SOURCE_SUBJECT if self_service else AUTHORITY_SOURCE_MANAGER_CHAIN
+
+
+def _assign_initial_assignee(
+    task: HandoverTask,
+    *,
+    subject: UserMirror,
+    created_by: str,
+    assignee_resolution: AssigneeResolution | None,
+    self_service: bool,
+) -> None:
+    if not self_service:
+        resolution = assignee_resolution or resolve_assignee(subject)
+        _ = apply_assignee(
+            task,
+            resolution,
+            actor_id=created_by,
+            reason="task_created",
+        )
+        return
+
+    from easyauth.lifecycle.models import ASSIGNEE_STATE_SUBJECT
+
+    # 自助 pre_offboard 不走 resolve_assignee, 避免伪造 degraded 审计。
+    task.assignee = subject
+    task.assignee_state = ASSIGNEE_STATE_SUBJECT
+    task.escalation_level = 0
+    task.escalation_deadline = timezone.now() + timedelta(
+        days=HANDOVER_ESCALATION_DAYS,
+    )
+    task.save(
+        update_fields=[
+            "assignee",
+            "assignee_state",
+            "escalation_level",
+            "escalation_deadline",
+            "updated_at",
+        ],
+    )
+    record_task_event(
+        task,
+        action="handover_assignee_assigned",
+        actor_id=created_by,
+        actor_type="user",
+        extra={"assignee_state": ASSIGNEE_STATE_SUBJECT},
+    )
+
+
+def _record_task_creation_events(
+    task: HandoverTask,
+    *,
+    kind: str,
+    created_by: str,
+    resolved_authority: str,
+    app_keys: tuple[str, ...] | None,
+) -> None:
+    from easyauth.lifecycle.models import (
+        AUTHORITY_SOURCE_MANAGER_CHAIN,
+        AUTHORITY_SOURCE_SUBJECT,
+        AUTHORITY_SOURCE_SUPERUSER,
+    )
+
+    record_task_event(
+        task,
+        action="handover_task_created",
+        actor_id=created_by,
+        actor_type=(
+            "user"
+            if resolved_authority in {AUTHORITY_SOURCE_SUBJECT, AUTHORITY_SOURCE_MANAGER_CHAIN}
+            and created_by not in {"directory_sync", LIFECYCLE_ACTOR_ID}
+            else None
+        ),
+    )
+    if kind == HANDOVER_KIND_REASSIGN:
+        record_task_event(
+            task,
+            action="handover_reassign_created",
+            actor_id=created_by,
+            actor_type=(
+                "admin" if resolved_authority == AUTHORITY_SOURCE_SUPERUSER else "user"
+            ),
+            extra={"app_keys": list(app_keys or ())},
+        )
 
 
 def _create_task_with_idempotency_constraint(
