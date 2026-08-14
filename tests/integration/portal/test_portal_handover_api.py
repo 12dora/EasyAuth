@@ -28,7 +28,7 @@ from easyauth.lifecycle.models import (
     HandoverAssetType,
     HandoverTask,
 )
-from easyauth.lifecycle.offboarding import ensure_handover_task
+from easyauth.lifecycle.offboarding import HandoverCreationSpec, ensure_handover_task
 from easyauth.webhooks.models import AppWebhookConfig
 
 pytestmark = pytest.mark.django_db
@@ -133,7 +133,7 @@ def test_non_assignee_gets_404_on_detail() -> None:
         subject=subject,
         kind=HANDOVER_KIND_PRE_OFFBOARD,
         created_by=subject.authentik_user_id,
-        app_keys=(app.app_key,),
+        spec=HandoverCreationSpec(app_keys=(app.app_key,)),
     )
     client = _login(Client(), other)
     resp = client.get(f"/portal/api/v1/handover-tasks/{task.id}")
@@ -479,7 +479,7 @@ def test_action_blocked_on_preview() -> None:
         subject=subject,
         kind=HANDOVER_KIND_PRE_OFFBOARD,
         created_by=subject.authentik_user_id,
-        app_keys=(app.app_key,),
+        spec=HandoverCreationSpec(app_keys=(app.app_key,)),
     )
     action = HandoverAppAction.objects.get(task=task, app=app)
     assert action.status == "blocked"

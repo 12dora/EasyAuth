@@ -60,7 +60,11 @@ from easyauth.lifecycle.models import (
     OnboardingTemplateRevisionItem,
     TransferPlan,
 )
-from easyauth.lifecycle.offboarding import ensure_handover_task, start_offboarding
+from easyauth.lifecycle.offboarding import (
+    HandoverCreationSpec,
+    ensure_handover_task,
+    start_offboarding,
+)
 from easyauth.lifecycle.onboarding import onboard_user
 from easyauth.lifecycle.transfer import build_transfer_grant_diff, confirm_transfer_grant_diff
 from easyauth.webhooks.hooks import HookCallError
@@ -798,7 +802,7 @@ def _create_task(request: HttpRequest, actor_id: str) -> JsonResponse:
                 subject=subject,
                 kind=payload.kind,
                 created_by=actor_id,
-                reason=payload.reason,
+                spec=HandoverCreationSpec(reason=payload.reason),
             )
         else:
             result = start_offboarding(subject, created_by=actor_id)
@@ -808,7 +812,7 @@ def _create_task(request: HttpRequest, actor_id: str) -> JsonResponse:
             subject=subject,
             kind=payload.kind,
             created_by=actor_id,
-            reason=payload.reason,
+            spec=HandoverCreationSpec(reason=payload.reason),
         )
     status = HTTPStatus.CREATED if created else HTTPStatus.OK
     return json_response(

@@ -28,7 +28,10 @@ from easyauth.lifecycle.models import (
     HandoverExecutionBatch,
     HandoverTask,
 )
-from easyauth.lifecycle.offboarding import _create_task_with_idempotency_constraint
+from easyauth.lifecycle.offboarding import (
+    HandoverCreationSpec,
+    _create_task_with_idempotency_constraint,
+)
 
 pytestmark = pytest.mark.django_db
 
@@ -174,10 +177,12 @@ def test_idempotency_unique_constraint_loser_returns_conflict_for_different_body
             kind=HANDOVER_KIND_REASSIGN,
             subject=second,
             created_by="manager-r4",
-            reason="不同请求体",
-            authority_source="manager_chain",
-            creation_idempotency_key="same-key",
-            creation_payload_sha256="2" * 64,
+            spec=HandoverCreationSpec(
+                reason="不同请求体",
+                creation_idempotency_key="same-key",
+                creation_payload_sha256="2" * 64,
+            ),
+            resolved_authority="manager_chain",
         )
 
     assert (

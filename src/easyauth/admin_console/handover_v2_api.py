@@ -8,7 +8,7 @@ from http import HTTPStatus
 from typing import TYPE_CHECKING, ClassVar, Final
 
 from django.db import transaction
-from django.db.models import Count, Q
+from django.db.models import Count
 from django.http import HttpRequest, JsonResponse
 from django.utils import timezone
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -39,12 +39,11 @@ from easyauth.lifecycle.assignments import (
     put_overrides,
 )
 from easyauth.lifecycle.assignee import AssigneeResolution, apply_assignee
-from easyauth.lifecycle.core import LIFECYCLE_ACTOR_ID, record_task_event
+from easyauth.lifecycle.core import record_task_event
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
 from easyauth.lifecycle.handover import (
     async_abandon_action,
     fetch_action_items,
-    skip_action,
     update_grant_receiver,
 )
 from easyauth.lifecycle.jurisdiction import list_receiver_candidates
@@ -60,7 +59,7 @@ from easyauth.lifecycle.models import (
     ApprovalRuleReplacementRequired,
     TASK_OPEN_STATUSES,
 )
-from easyauth.lifecycle.offboarding import ensure_handover_task
+from easyauth.lifecycle.offboarding import HandoverCreationSpec, ensure_handover_task
 from easyauth.webhooks.hooks import HookCallError
 from easyauth.webhooks.models import AppWebhookConfig
 
@@ -264,11 +263,13 @@ def console_handover_reassign(request: HttpRequest) -> JsonResponse:
             subject=subject,
             kind=HANDOVER_KIND_REASSIGN,
             created_by=actor_id,
-            reason=payload.reason.strip(),
-            app_keys=tuple(payload.app_keys),
-            authority_source=AUTHORITY_SOURCE_SUPERUSER,
-            creation_idempotency_key=idem,
-            creation_payload_sha256=body_hash,
+            spec=HandoverCreationSpec(
+                reason=payload.reason.strip(),
+                app_keys=tuple(payload.app_keys),
+                authority_source=AUTHORITY_SOURCE_SUPERUSER,
+                creation_idempotency_key=idem,
+                creation_payload_sha256=body_hash,
+            ),
         )
     except (HandoverConflictError, HandoverError) as error:
         mapped = map_handover_exception(error)

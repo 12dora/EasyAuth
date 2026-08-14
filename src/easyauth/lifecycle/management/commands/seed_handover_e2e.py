@@ -30,7 +30,7 @@ from easyauth.grants.inputs import AuthorizationGroupGrantInput
 from easyauth.grants.models import AccessGrant
 from easyauth.grants.services import GrantMutationInput, GrantService
 from easyauth.lifecycle.models import HANDOVER_KIND_OFFBOARD, HandoverAppAction, HandoverTask
-from easyauth.lifecycle.offboarding import ensure_handover_task
+from easyauth.lifecycle.offboarding import HandoverCreationSpec, ensure_handover_task
 from easyauth.webhooks.models import AppWebhookConfig
 
 SOURCE_SLUG = "e2e-src"
@@ -116,8 +116,10 @@ class Command(BaseCommand):
                 subject=subject,
                 kind=HANDOVER_KIND_OFFBOARD,
                 created_by="seed_handover_e2e",
-                reason="全栈 E2E 交接试点",
-                app_keys=(app.app_key,),
+                spec=HandoverCreationSpec(
+                    reason="全栈 E2E 交接试点",
+                    app_keys=(app.app_key,),
+                ),
             )
             # peer 仅作接收人候选; 确保 seed 路径引用到 peer 防止未使用
             _ = peer.authentik_user_id

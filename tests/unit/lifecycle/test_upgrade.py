@@ -7,7 +7,6 @@ from django.utils import timezone
 
 from easyauth.accounts.models import USER_STATUS_ACTIVE, USER_STATUS_DEPARTED, UserMirror
 from easyauth.applications.models import App
-from easyauth.lifecycle.errors import HandoverConflictError
 from easyauth.lifecycle.models import (
     ACTION_STATUS_BLOCKED,
     ACTION_STATUS_PENDING,
@@ -15,9 +14,12 @@ from easyauth.lifecycle.models import (
     HANDOVER_KIND_OFFBOARD,
     HANDOVER_KIND_PRE_OFFBOARD,
     HandoverAppAction,
-    HandoverTask,
 )
-from easyauth.lifecycle.offboarding import ensure_handover_task, upgrade_pre_offboard_to_offboard
+from easyauth.lifecycle.offboarding import (
+    HandoverCreationSpec,
+    ensure_handover_task,
+    upgrade_pre_offboard_to_offboard,
+)
 from easyauth.webhooks.models import AppWebhookConfig
 
 pytestmark = pytest.mark.django_db
@@ -61,8 +63,10 @@ def test_upgrade_pre_offboard_to_offboard_resets_fields() -> None:
         subject=subject,
         kind=HANDOVER_KIND_PRE_OFFBOARD,
         created_by=subject.authentik_user_id,
-        reason="提前交接测试",
-        app_keys=(app.app_key,),
+        spec=HandoverCreationSpec(
+            reason="提前交接测试",
+            app_keys=(app.app_key,),
+        ),
     )
     assert created
     action = HandoverAppAction.objects.get(task=task, app=app)
@@ -107,7 +111,7 @@ def test_upgrade_blocked_stays_blocked_not_skipped() -> None:
         subject=subject,
         kind=HANDOVER_KIND_PRE_OFFBOARD,
         created_by=subject.authentik_user_id,
-        app_keys=(app.app_key,),
+        spec=HandoverCreationSpec(app_keys=(app.app_key,)),
     )
     action = HandoverAppAction.objects.get(task=task, app=app)
     action.status = ACTION_STATUS_SKIPPED
@@ -139,7 +143,7 @@ def test_ensure_offboard_upgrades_open_pre_offboard() -> None:
         subject=subject,
         kind=HANDOVER_KIND_OFFBOARD,
         created_by="directory_sync",
-        reason="目录同步检出离职",
+        spec=HandoverCreationSpec(reason="目录同步检出离职"),
     )
     assert created is False
     assert upgraded.pk == task.pk
@@ -158,8 +162,10 @@ def test_upgrade_reinvents_new_app_action_granted_during_window() -> None:
         subject=subject,
         kind=HANDOVER_KIND_PRE_OFFBOARD,
         created_by=subject.authentik_user_id,
-        reason="提前交接",
-        app_keys=(app_a.app_key,),
+        spec=HandoverCreationSpec(
+            reason="提前交接",
+            app_keys=(app_a.app_key,),
+        ),
     )
     assert created
     assert HandoverAppAction.objects.filter(task=task).count() == 1

@@ -58,7 +58,7 @@ from easyauth.lifecycle.models import (
     HandoverAppAction,
     HandoverTask,
 )
-from easyauth.lifecycle.offboarding import ensure_handover_task
+from easyauth.lifecycle.offboarding import HandoverCreationSpec, ensure_handover_task
 from easyauth.webhooks.hooks import HookCallError
 
 type PortalApiResult = UserMirror | JsonResponse
@@ -198,10 +198,12 @@ def portal_handover_pre_offboard(request: HttpRequest) -> JsonResponse:
             subject=user,
             kind=HANDOVER_KIND_PRE_OFFBOARD,
             created_by=user.authentik_user_id,
-            reason=payload.reason,
-            creation_idempotency_key=idem,
-            creation_payload_sha256=body_hash,
-            raise_on_existing=True,
+            spec=HandoverCreationSpec(
+                reason=payload.reason,
+                creation_idempotency_key=idem,
+                creation_payload_sha256=body_hash,
+                raise_on_existing=True,
+            ),
         )
     except (HandoverConflictError, HandoverError) as error:
         text = str(error)
@@ -269,16 +271,18 @@ def portal_handover_reassign(request: HttpRequest) -> JsonResponse:
             subject=subject,
             kind=HANDOVER_KIND_REASSIGN,
             created_by=user.authentik_user_id,
-            reason=payload.reason.strip(),
-            app_keys=tuple(payload.app_keys),
-            authority_source=AUTHORITY_SOURCE_MANAGER_CHAIN,
-            creation_idempotency_key=idem,
-            creation_payload_sha256=body_hash,
-            assignee_resolution=AssigneeResolution(
-                user=user,
-                state=ASSIGNEE_STATE_MANAGER,
-                level=0,
-                degraded=False,
+            spec=HandoverCreationSpec(
+                reason=payload.reason.strip(),
+                app_keys=tuple(payload.app_keys),
+                authority_source=AUTHORITY_SOURCE_MANAGER_CHAIN,
+                creation_idempotency_key=idem,
+                creation_payload_sha256=body_hash,
+                assignee_resolution=AssigneeResolution(
+                    user=user,
+                    state=ASSIGNEE_STATE_MANAGER,
+                    level=0,
+                    degraded=False,
+                ),
             ),
         )
     except (HandoverConflictError, HandoverError) as error:

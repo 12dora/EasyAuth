@@ -49,6 +49,23 @@ from easyauth.teams.models import TEAM_MEMBER_ROLE_LEADER, TeamMember
 
 
 @dataclass(frozen=True, slots=True)
+class HandoverCreationSpec:
+    """建单幂等键与冻结 body 摘要; 同 key 不同摘要一律 409。"""
+
+    reason: str = ""
+    snapshot_grant_ids: tuple[int, ...] | None = None
+    app_keys: tuple[str, ...] | None = None
+    authority_source: str = ""
+    creation_idempotency_key: str = ""
+    creation_payload_sha256: str = ""
+    assignee_resolution: AssigneeResolution | None = None
+    raise_on_existing: bool = False
+
+
+_DEFAULT_HANDOVER_CREATION_SPEC: Final = HandoverCreationSpec()
+
+
+@dataclass(frozen=True, slots=True)
 class OffboardingStartResult:
     task: HandoverTask
     created: bool
@@ -67,31 +84,20 @@ def ensure_handover_task(
     subject: UserMirror,
     kind: str,
     created_by: str,
-    reason: str = "",
-    snapshot_grant_ids: tuple[int, ...] | None = None,
-    app_keys: tuple[str, ...] | None = None,
-    authority_source: str = "",
-    creation_idempotency_key: str = "",
-    creation_payload_sha256: str = "",
-    assignee_resolution: AssigneeResolution | None = None,
-    raise_on_existing: bool = False,
+    spec: HandoverCreationSpec = _DEFAULT_HANDOVER_CREATION_SPEC,
 ) -> tuple[HandoverTask, bool]:
     """建单(幂等): 同一当事人已有进行中交接单时直接返回既有单。
 
     offboard 遇到 open pre_offboard → 升级(00 §8.3 / 01 §5.1.2)。
-    ``raise_on_existing=True`` 时同 kind open 单抛 open_task_exists(门户自助)。
+    ``spec.raise_on_existing=True`` 时同 kind open 单抛 open_task_exists(门户自助)。
     """
     _assert_lifecycle_subject(subject)
-    idempotency = _CreationIdempotency(
-        key=creation_idempotency_key,
-        payload_sha256=creation_payload_sha256,
-    )
     subject_pk = cast("int", subject.pk)
     with transaction.atomic():
         subject = UserMirror.objects.select_for_update().get(pk=subject_pk)
 
         # 幂等键命中: 同 initiator + key
-        existing_by_key = _task_by_idempotency_key(created_by=created_by, idempotency=idempotency)
+        existing_by_key = _task_by_idempotency_key(created_by=created_by, spec=spec)
         if existing_by_key is not None:
             return existing_by_key, False
 
@@ -101,29 +107,25 @@ def ensure_handover_task(
                 existing,
                 kind=kind,
                 created_by=created_by,
-                reason=reason,
-                snapshot_grant_ids=snapshot_grant_ids,
-                raise_on_existing=raise_on_existing,
+                spec=spec,
             ), False
 
         self_service = _is_subject_self_pre_offboard(subject, kind=kind, created_by=created_by)
         resolved_authority = _resolved_authority_source(
-            authority_source=authority_source,
+            authority_source=spec.authority_source,
             self_service=self_service,
         )
 
         snapshot_grants = _snapshot_grants(
             subject=subject,
-            explicit_grant_ids=snapshot_grant_ids,
+            explicit_grant_ids=spec.snapshot_grant_ids,
         )
         task, won_create = _create_task_with_idempotency_constraint(
             kind=kind,
             subject=subject,
             created_by=created_by,
-            reason=reason,
-            authority_source=resolved_authority,
-            creation_idempotency_key=idempotency.key,
-            creation_payload_sha256=idempotency.payload_sha256,
+            spec=spec,
+            resolved_authority=resolved_authority,
         )
         if not won_create:
             return task, False
@@ -131,11 +133,11 @@ def ensure_handover_task(
             task,
             subject=subject,
             created_by=created_by,
-            assignee_resolution=assignee_resolution,
+            assignee_resolution=spec.assignee_resolution,
             self_service=self_service,
         )
         _snapshot_grant_items(task, grants=snapshot_grants)
-        _snapshot_app_actions(task, grants=snapshot_grants, app_keys=app_keys)
+        _snapshot_app_actions(task, grants=snapshot_grants, app_keys=spec.app_keys)
         _snapshot_leader_teams(task)
         if kind == HANDOVER_KIND_TRANSFER:
             _ = TransferPlan.objects.create(task=task)
@@ -152,37 +154,29 @@ def ensure_handover_task(
             kind=kind,
             created_by=created_by,
             resolved_authority=resolved_authority,
-            app_keys=app_keys,
+            app_keys=spec.app_keys,
         )
         return refresh_task_status(task), True
-
-
-@dataclass(frozen=True, slots=True)
-class _CreationIdempotency:
-    """建单幂等键与冻结 body 摘要; 同 key 不同摘要一律 409。"""
-
-    key: str
-    payload_sha256: str
 
 
 def _task_by_idempotency_key(
     *,
     created_by: str,
-    idempotency: _CreationIdempotency,
+    spec: HandoverCreationSpec,
 ) -> HandoverTask | None:
-    if not idempotency.key:
+    if not spec.creation_idempotency_key:
         return None
     existing_by_key = (
         HandoverTask.objects.select_for_update()
         .filter(
             created_by=created_by,
-            creation_idempotency_key=idempotency.key,
+            creation_idempotency_key=spec.creation_idempotency_key,
         )
         .first()
     )
     if existing_by_key is None:
         return None
-    if existing_by_key.creation_payload_sha256 != idempotency.payload_sha256:
+    if existing_by_key.creation_payload_sha256 != spec.creation_payload_sha256:
         raise HandoverConflictError("idempotency_conflict")
     return existing_by_key
 
@@ -211,23 +205,21 @@ def _reuse_or_upgrade_existing(
     *,
     kind: str,
     created_by: str,
-    reason: str,
-    snapshot_grant_ids: tuple[int, ...] | None,
-    raise_on_existing: bool,
+    spec: HandoverCreationSpec,
 ) -> HandoverTask:
     # pre_offboard → offboard 升级是唯一允许的 kind 变更
     if existing.kind == HANDOVER_KIND_PRE_OFFBOARD and kind == HANDOVER_KIND_OFFBOARD:
         return upgrade_pre_offboard_to_offboard(
             existing,
             created_by=created_by,
-            reason=reason or "目录同步检出离职",
-            snapshot_grant_ids=snapshot_grant_ids,
+            reason=spec.reason or "目录同步检出离职",
+            snapshot_grant_ids=spec.snapshot_grant_ids,
         )
     if existing.kind != kind:
         raise HandoverConflictError(TASK_KIND_CONFLICT_MESSAGE)
     # 同 kind open 单: 内部/系统调用可幂等返回; 门户自助建单要求 409 open_task_exists
     # (01 §6.1), 由 raise_on_existing 区分。
-    if raise_on_existing:
+    if spec.raise_on_existing:
         raise HandoverConflictError("open_task_exists")
     return existing
 
@@ -334,10 +326,8 @@ def _create_task_with_idempotency_constraint(
     kind: str,
     subject: UserMirror,
     created_by: str,
-    reason: str,
-    authority_source: str,
-    creation_idempotency_key: str,
-    creation_payload_sha256: str,
+    spec: HandoverCreationSpec,
+    resolved_authority: str,
 ) -> tuple[HandoverTask, bool]:
     try:
         # savepoint 让唯一键竞态只回滚 INSERT，本事务仍可读取赢家并按冻结 body 判定。
@@ -346,27 +336,28 @@ def _create_task_with_idempotency_constraint(
                 kind=kind,
                 subject_user=subject,
                 created_by=created_by,
-                reason=reason,
+                reason=spec.reason,
                 generation=1,
-                authority_source=authority_source,
-                creation_idempotency_key=creation_idempotency_key,
-                creation_payload_sha256=creation_payload_sha256,
+                # 解析完成后刻意不再使用 spec.authority_source，避免绕过自助建单来源解析。
+                authority_source=resolved_authority,
+                creation_idempotency_key=spec.creation_idempotency_key,
+                creation_payload_sha256=spec.creation_payload_sha256,
             )
         return task, True
     except IntegrityError:
-        if not creation_idempotency_key:
+        if not spec.creation_idempotency_key:
             raise
         existing_by_key = (
             HandoverTask.objects.select_for_update()
             .filter(
                 created_by=created_by,
-                creation_idempotency_key=creation_idempotency_key,
+                creation_idempotency_key=spec.creation_idempotency_key,
             )
             .first()
         )
         if existing_by_key is None:
             raise
-        if existing_by_key.creation_payload_sha256 != creation_payload_sha256:
+        if existing_by_key.creation_payload_sha256 != spec.creation_payload_sha256:
             raise HandoverConflictError("idempotency_conflict")
         return existing_by_key, False
 
@@ -457,8 +448,10 @@ def start_offboarding(
             subject=subject,
             kind=HANDOVER_KIND_OFFBOARD,
             created_by=created_by,
-            reason="目录同步检出离职" if created_by == "directory_sync" else "",
-            snapshot_grant_ids=snapshot_grant_ids,
+            spec=HandoverCreationSpec(
+                reason="目录同步检出离职" if created_by == "directory_sync" else "",
+                snapshot_grant_ids=snapshot_grant_ids,
+            ),
         )
         removed = _remove_team_memberships(subject, task)
         _schedule_account_disable(subject, task=task)

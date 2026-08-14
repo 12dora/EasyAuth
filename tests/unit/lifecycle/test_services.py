@@ -48,7 +48,11 @@ from easyauth.lifecycle.models import (
 
 # re-export for transfer helpers
 assert ACTION_STATUS_SKIPPED
-from easyauth.lifecycle.offboarding import ensure_handover_task, start_offboarding
+from easyauth.lifecycle.offboarding import (
+    HandoverCreationSpec,
+    ensure_handover_task,
+    start_offboarding,
+)
 from easyauth.lifecycle.onboarding import onboard_user
 from easyauth.lifecycle.transfer import build_transfer_grant_diff, confirm_transfer_grant_diff
 from easyauth.outbox.models import OutboxEvent
@@ -1274,7 +1278,7 @@ def test_manual_offboard_task_for_active_user_keeps_account_active() -> None:
         subject=subject,
         kind="offboard",
         created_by="admin-a",
-        reason="离职前主动交接",
+        spec=HandoverCreationSpec(reason="离职前主动交接"),
     )
 
     # Then: 建单成功, 账号与授权不受影响。
