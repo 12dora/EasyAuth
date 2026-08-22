@@ -223,8 +223,8 @@ reports = directory_client.search_directory_users(
 
 | 方法 | 用途 |
 |---|---|
-| `search_directory_users` | 搜索/分页用户(`q`/`department_id`/`manager_id`/`include_inactive`) |
-| `get_directory_user` | 用户详情(含主管摘要) |
+| `search_directory_users` | 搜索/分页用户(`q`/`department_id`/`manager_id`/`include_inactive`)；每条含 `manager` 主管摘要 |
+| `get_directory_user` | 用户详情(含主管摘要, 与列表条目同形) |
 | `get_directory_user_manager` | 直接主管;无主管时服务端 `404` |
 | `list_directory_user_subordinates` | 直接下属(不分页全量) |
 | `list_directory_departments` | 部门列表(`parent_id` 省略=全量扁平列表,树由消费方自建) |

@@ -32,6 +32,8 @@ _HTTP_SERVER_ERROR_MAX: Final = 600
 NOTIFY_TEMPLATE_TEXT: Final = "text"
 NOTIFY_TEMPLATE_MARKDOWN: Final = "markdown"
 NOTIFY_TEMPLATE_ACTION_CARD: Final = "action_card"
+
+
 class EasyAuthClientError(RuntimeError):
     """EasyAuth API 调用失败。"""
 
@@ -176,6 +178,9 @@ class EasyAuthAppClient:
         manager_id 参数应传目录条目返回的 opaque user_ref, 不得自行构造。
         首屏省略 snapshot_id, 后续页传首屏 directory_snapshot.snapshot_id 以固定快照;
         快照变化时服务端返回 409 CONFLICT, 客户端不会自动重试。
+        每条 data[] 含 manager: 直接主管摘要, 形状与 get_directory_user 的 manager
+        字段相同; 无主管或主管镜像不存在时为 null。刷新目录缓存时不必再对每人调用
+        get_directory_user_manager。
         """
         params: dict[str, str] = {
             "page": str(page),
@@ -234,6 +239,7 @@ class EasyAuthAppClient:
 
         user_ref 使用目录响应返回的 opaque user_ref, 不得自行构造。
         GET {app_base}/directory/users/{user_ref}/subordinates
+        data[] 条目形状与 search_directory_users 相同(含 manager 主管摘要)。
         """
         url = f"{self._app_base()}/directory/users/{quote(user_ref, safe='')}/subordinates"
         return self._request_json(url, method="GET")

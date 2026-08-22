@@ -205,11 +205,56 @@ def load_authentik_ids_by_dingtalk(
     }
 
 
+def load_dingtalk_users_by_key(
+    pairs: set[tuple[str, str, str]],
+) -> dict[tuple[str, str, str], DingTalkUserMirror]:
+    """(source_slug, corp_id, user_id) → 钉钉用户镜像; 一对最多一行。"""
+    if not pairs:
+        return {}
+    query = Q()
+    for source_slug, corp_id, user_id in pairs:
+        query |= Q(
+            source_slug=source_slug,
+            corp_id=corp_id,
+            user_id=user_id,
+        )
+    return {
+        (row.source_slug, row.corp_id, row.user_id): row
+        for row in DingTalkUserMirror.objects.filter(query)
+    }
+
+
+def _direct_manager_userid(dingtalk_user: DingTalkUserMirror) -> str:
+    return (dingtalk_user.manager_userid or "").strip()
+
+
+def _direct_manager_summary(
+    *,
+    dingtalk_user: DingTalkUserMirror,
+    managers_by_key: dict[tuple[str, str, str], DingTalkUserMirror],
+    authentik_ids: dict[tuple[str, str, str], str],
+) -> JsonValue:
+    manager_userid = _direct_manager_userid(dingtalk_user)
+    if not manager_userid:
+        return None
+    manager = managers_by_key.get(
+        (dingtalk_user.source_slug, dingtalk_user.corp_id, manager_userid),
+    )
+    if manager is None:
+        return None
+    return manager_summary_item(
+        dingtalk_user=manager,
+        authentik_user_id=authentik_ids.get(
+            (manager.source_slug, manager.corp_id, manager.user_id),
+        ),
+    )
+
+
 def build_user_list_items(
     dingtalk_users: list[DingTalkUserMirror],
 ) -> list[JsonValue]:
     pairs = {(row.source_slug, row.corp_id, row.user_id) for row in dingtalk_users}
-    authentik_ids = load_authentik_ids_by_dingtalk(pairs)
+    manager_pairs: set[tuple[str, str, str]] = set()
     department_ids: set[str] = set()
     source_slugs: set[str] = set()
     corp_ids: set[str] = set()
@@ -217,13 +262,19 @@ def build_user_list_items(
         source_slugs.add(row.source_slug)
         corp_ids.add(row.corp_id)
         department_ids.update(department_ids_sorted(row.department_ids))
+        manager_userid = _direct_manager_userid(row)
+        if manager_userid:
+            manager_pairs.add((row.source_slug, row.corp_id, manager_userid))
+    authentik_ids = load_authentik_ids_by_dingtalk(pairs | manager_pairs)
     names = load_department_names(
         source_slugs=source_slugs,
         corp_ids=corp_ids,
         department_ids=department_ids,
     )
-    return [
-        user_list_item(
+    managers_by_key = load_dingtalk_users_by_key(manager_pairs)
+    items: list[JsonValue] = []
+    for row in dingtalk_users:
+        item = user_list_item(
             dingtalk_user=row,
             authentik_user_id=authentik_ids.get((row.source_slug, row.corp_id, row.user_id)),
             departments=build_departments_payload(
@@ -233,41 +284,20 @@ def build_user_list_items(
                 corp_id=row.corp_id,
             ),
         )
-        for row in dingtalk_users
-    ]
+        item["manager"] = _direct_manager_summary(
+            dingtalk_user=row,
+            managers_by_key=managers_by_key,
+            authentik_ids=authentik_ids,
+        )
+        items.append(item)
+    return items
 
 
 def build_user_detail(
     dingtalk_user: DingTalkUserMirror,
 ) -> dict[str, JsonValue]:
-    # build_user_list_items 恒返回 dict 条目。
-    detail = dict(cast("dict[str, JsonValue]", build_user_list_items([dingtalk_user])[0]))
-    manager_userid = (dingtalk_user.manager_userid or "").strip()
-    if not manager_userid:
-        detail["manager"] = None
-        return detail
-    manager = (
-        DingTalkUserMirror.objects.filter(
-            source_slug=dingtalk_user.source_slug,
-            corp_id=dingtalk_user.corp_id,
-            user_id=manager_userid,
-        )
-        .order_by("source_slug")
-        .first()
-    )
-    if manager is None:
-        detail["manager"] = None
-        return detail
-    authentik_ids = load_authentik_ids_by_dingtalk(
-        {(manager.source_slug, manager.corp_id, manager.user_id)},
-    )
-    detail["manager"] = manager_summary_item(
-        dingtalk_user=manager,
-        authentik_user_id=authentik_ids.get(
-            (manager.source_slug, manager.corp_id, manager.user_id),
-        ),
-    )
-    return detail
+    # 列表条目已含与详情相同的 manager 摘要; 单用户详情不再二次查询。
+    return dict(cast("dict[str, JsonValue]", build_user_list_items([dingtalk_user])[0]))
 
 
 def build_manager_full_item(manager: DingTalkUserMirror) -> dict[str, JsonValue]:

@@ -346,6 +346,10 @@ credential capability；App owner 必须对每条 credential 显式授予所需 
 
 稳定排序：`name`、`source_slug`、`corp_id`、`dingtalk_user_id` 依次升序。
 
+每条用户记录含 `manager`：直接主管摘要，形状与详情接口的 `manager` 字段相同
+（不含 `departments` / `avatar_url`）；`manager_userid` 为空或主管镜像行不存在时为
+`null`。消费方刷新目录缓存时不必再对每人调用 `/manager`。
+
 **成功响应（200）：**
 
 ```json
@@ -373,7 +377,21 @@ credential capability；App owner 必须对每条 credential 显式授予所需 
           "name": "研发部"
         }
       ],
-      "active": true
+      "active": true,
+      "manager": {
+        "user_id": null,
+        "dingtalk_user_id": "manager8836",
+        "source_slug": "dingtalk",
+        "corp_id": "corp-demo",
+        "user_ref": "dt:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:bWFuYWdlcjg4MzY",
+        "name": "张主管",
+        "title": "研发经理",
+        "email": "manager@example.com",
+        "mobile": "13900000000",
+        "employee_number": "ET-00008",
+        "status": "active",
+        "active": true
+      }
     },
     {
       "user_id": null,
@@ -392,7 +410,8 @@ credential capability；App owner 必须对每条 credential 显式授予所需 
         {"department_id": "460001", "source_slug": "dingtalk", "corp_id": "corp-demo", "department_ref": "dept:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:NDYwMDAx", "name": "研发部"},
         {"department_id": "470001", "source_slug": "dingtalk", "corp_id": "corp-demo", "department_ref": "dept:v1:ZGluZ3RhbGs:Y29ycC1kZW1v:NDcwMDAx", "name": "质量委员会"}
       ],
-      "active": true
+      "active": true,
+      "manager": null
     }
   ],
   "pagination": {"page": 1, "page_size": 20, "total_items": 2, "total_pages": 1},
@@ -443,7 +462,7 @@ EasyAuth 保留其身份与联系字段，设置 `status: "departed"`、`active:
 
 ### `GET /api/v1/apps/{app_key}/directory/users/{user_ref}`
 
-详情：D1 条目字段 + `manager`（直接主管摘要；无主管时为 `null`）。
+详情：与列表相同的 D1 条目形状（含 `manager` 直接主管摘要；无主管或主管镜像不存在时为 `null`）。
 根对象同时含上文定义的 `directory_snapshot`（下例省略该通用块）。
 引用不存在 → `404 NOT_FOUND`。
 
@@ -487,7 +506,7 @@ EasyAuth 保留其身份与联系字段，设置 `status: "departed"`、`active:
 
 ### `GET /api/v1/apps/{app_key}/directory/users/{user_ref}/manager`
 
-直接主管，响应为完整 D1 条目形状（含 `departments` 与 `avatar_url`）。
+直接主管，响应为完整 D1 条目形状（含 `departments`、`avatar_url` 以及该主管自己的 `manager` 摘要）。
 
 | 情形 | 响应 |
 | --- | --- |

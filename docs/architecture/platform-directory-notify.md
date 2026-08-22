@@ -42,8 +42,9 @@ manifest 顶层 `capabilities: ["directory", "notify"]` 只表达应用的需求
 ### 字段暴露口径
 
 暴露：`user_id`（可空）、`dingtalk_user_id`、`name`、`avatar_url`、`title`、`departments`、
-`email`、`mobile`、`employee_number`、`status`、`active`、`source_slug`、`corp_id`、以及详情/
-manager 端点的直接主管摘要。
+`email`、`mobile`、`employee_number`、`status`、`active`、`source_slug`、`corp_id`、以及列表/
+详情条目上的直接主管摘要（`manager`；无主管或主管镜像不存在时为 `null`）。`/manager`
+端点仍返回完整 D1 条目（含该主管自己的 `manager` 摘要）。
 
 不暴露：
 

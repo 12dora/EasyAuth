@@ -186,6 +186,8 @@ second_page = directory_client.search_directory_users(
 )
 
 stored_user_ref = first_page["data"][0]["user_ref"]
+# 列表条目已含 manager 主管摘要（与 get_directory_user 的 manager 同形），
+# 刷新目录缓存时不必再对每人调用 get_directory_user_manager。
 detail = directory_client.get_directory_user(stored_user_ref)
 manager = directory_client.get_directory_user_manager(stored_user_ref)
 subordinates = directory_client.list_directory_user_subordinates(manager["user_ref"])

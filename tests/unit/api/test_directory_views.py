@@ -294,6 +294,39 @@ def test_directory_users_include_null_user_id_entry(
     assert null_by_id["user0456"]["dingtalk_user_id"] == "user0456"
 
 
+def test_directory_users_list_includes_manager_summary(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = App.objects.create(app_key=_APP_KEY, name="EasyProject")
+    _enable_directory(app)
+    _auth(monkeypatch, app)
+    _seed_contract_directory()
+    request = RequestFactory().get("/", HTTP_AUTHORIZATION=_AUTH_HEADER)
+
+    payload = loads(directory_users(request, _APP_KEY).content)
+    by_id = {item["dingtalk_user_id"]: item for item in payload["data"]}
+
+    assert by_id["user0123"]["manager"] == {
+        "user_id": None,
+        "dingtalk_user_id": "manager8836",
+        "source_slug": _SOURCE,
+        "corp_id": _CORP_ID,
+        "user_ref": build_dingtalk_user_ref(
+            source_slug=_SOURCE,
+            corp_id=_CORP_ID,
+            user_id="manager8836",
+        ),
+        "name": "张主管",
+        "title": "研发经理",
+        "email": "manager@example.com",
+        "mobile": "13800000001",
+        "employee_number": "E0001",
+        "status": "active",
+        "active": True,
+    }
+    assert by_id["manager8836"]["manager"] is None
+
+
 def test_directory_users_include_inactive(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
