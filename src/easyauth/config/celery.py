@@ -12,6 +12,7 @@ from easyauth.config.runtime_health import (
     NOTIFY_DELIVERY_SUCCESS,
     mark_heartbeat,
 )
+from easyauth.config.worker_health import connect_worker_health_signals
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -41,3 +42,4 @@ def _record_critical_task_success(sender: object | None = None, **_kwargs: objec
 
 _connect_task_success = cast("Callable[[Callable[..., object]], object]", task_success.connect)
 _ = _connect_task_success(_record_critical_task_success)
+connect_worker_health_signals()

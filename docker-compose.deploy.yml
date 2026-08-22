@@ -39,6 +39,9 @@ x-easyauth-common: &easyauth-common
     # 默认值是 localhost:6379, 在容器内连不到 redis —— 不覆盖则 web 连 enqueue 都会失败。
     CELERY_BROKER_URL: "redis://redis:6379/0"
     CELERY_RESULT_BACKEND: "redis://redis:6379/1"
+    # worker 进程内 HTTP /health 端口(仅绑 127.0.0.1); Compose 探针用 urllib 打这个端口,
+    # 不再每次拉起 celery inspect ping.
+    EASYAUTH_WORKER_HEALTH_PORT: "8002"
     EASYAUTH_HEALTH_REQUIRE_BACKGROUND: "1"
     # 容器内 localhost 不是宿主; Authentik 在宿主 :19000(worker 的目录同步/离职禁号也要用)。
     EASYAUTH_AUTHENTIK_BASE_URL: "http://host.docker.internal:19000"
@@ -67,6 +70,24 @@ x-easyauth-common: &easyauth-common
     - redis
   networks: [easyauth]
 
+# worker / webhook-worker / notify-worker 共用: 打进程内 127.0.0.1:8002/health
+# (worker_ready 后起的 ThreadingHTTPServer). 探针只是一次 urllib, 不启动
+# Python/Django/Celery 新进程、也不做 broker 广播; 原先 celery inspect ping
+# 每次探针都冷启动完整进程, 空闲 worker 也会被打到 20–55% CPU.
+# webhook-worker 入口脚本已放行 lo(-o lo ACCEPT), 环回探针不受出站防火墙影响.
+x-worker-healthcheck: &worker-healthcheck
+  test:
+    [
+      "CMD",
+      "python",
+      "-c",
+      "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8002/health', timeout=5)",
+    ]
+  interval: 30s
+  timeout: 10s
+  start_period: 20s
+  retries: 3
+
 services:
   redis:
     image: redis:7-alpine@sha256:6ab0b6e7381779332f97b8ca76193e45b0756f38d4c0dcda72dbb3c32061ab99
@@ -90,14 +111,10 @@ services:
       - "worker"
       - "--loglevel=info"
       - "--concurrency=2"
-    # 覆盖镜像里 curl :8001 的 web healthcheck(worker 不监听该端口):
-    # 用 celery inspect ping 真实反映 worker 存活 + broker 连通。
+    # 覆盖镜像里 curl :8001 的 web healthcheck(worker 不监听该端口)。
+    # 进程内 /health 在 broker 连通时返回 200; 探针只做本机 urllib, 不拉起 Celery.
     healthcheck:
-      test: ["CMD-SHELL", "celery -A easyauth.config.celery:app inspect ping -t 5 >/dev/null 2>&1 || exit 1"]
-      interval: 30s
-      timeout: 10s
-      start_period: 20s
-      retries: 3
+      <<: *worker-healthcheck
 
   webhook-worker:
     <<: *easyauth-common
@@ -120,11 +137,7 @@ services:
       - "--queues=webhooks"
       - "--hostname=webhooks@%h"
     healthcheck:
-      test: ["CMD-SHELL", "celery -A easyauth.config.celery:app inspect ping --destination=webhooks@$$(hostname) -t 5 >/dev/null 2>&1 || exit 1"]
-      interval: 30s
-      timeout: 10s
-      start_period: 20s
-      retries: 3
+      <<: *worker-healthcheck
 
   # notify 队列专属 worker(钉钉工作通知投递)。出站特征与 webhook-worker 相同
   # (业务面只出公网 443: oapi.dingtalk.com; 另需 redis broker/cache), 复用同一防火墙入口脚本。
@@ -149,11 +162,7 @@ services:
       - "--queues=notify"
       - "--hostname=notify@%h"
     healthcheck:
-      test: ["CMD-SHELL", "celery -A easyauth.config.celery:app inspect ping --destination=notify@$$(hostname) -t 5 >/dev/null 2>&1 || exit 1"]
-      interval: 30s
-      timeout: 10s
-      start_period: 20s
-      retries: 3
+      <<: *worker-healthcheck
 
   beat:
     <<: *easyauth-common
@@ -165,7 +174,7 @@ services:
       - "--loglevel=info"
       # schedule 落 /tmp(容器内必可写), 避免 /app 权限问题; 只跑单实例, 不要 scale。
       - "--schedule=/tmp/celerybeat-schedule"
-    # beat 无 inspect 接口; 进程崩溃会让 command 退出并由 restart 拉起, 无需 healthcheck。
+    # beat 无消费循环, 进程崩溃会让 command 退出并由 restart 拉起, 无需 healthcheck。
     healthcheck:
       disable: true
 
