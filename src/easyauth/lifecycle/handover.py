@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from django.db import transaction
 
@@ -14,17 +15,19 @@ from easyauth.lifecycle.handover_execution import (
     retry_grant_transfer_only,
     settle_grant_only_retry,
 )
-from easyauth.lifecycle.handover_shared import (
-    GrantOnlyRetryOutcome,
-    MutationGuard,
-    OutboundExecution,
-    locked_action_after_task,
-)
+from easyauth.lifecycle.handover_shared import locked_action_after_task
 from easyauth.lifecycle.models import (
     ACTION_STATUS_FAILED,
     ACTION_STATUS_PREVIEWED,
     HandoverAppAction,
 )
+
+if TYPE_CHECKING:
+    from easyauth.lifecycle.handover_shared import (
+        GrantOnlyRetryOutcome,
+        MutationGuard,
+        OutboundExecution,
+    )
 
 
 def execute_action(

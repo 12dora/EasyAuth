@@ -23,6 +23,7 @@ from easyauth.lifecycle.core import (
 )
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
 from easyauth.lifecycle.handover_data import (
+    CompleteDataPhaseSpec,
     complete_data_phase,
 )
 from easyauth.lifecycle.handover_shared import (
@@ -230,8 +231,10 @@ def poll_async_action(
     # 终态 200: complete_data_phase 自管 A/B/C 事务, 调用方不得再包 atomic。
     complete_data_phase(
         HandoverExecutionBatch.objects.get(pk=claim.batch.pk),
-        handle=claim.handle,
-        response_payload=response.payload,
+        CompleteDataPhaseSpec(
+            handle=claim.handle,
+            response_payload=response.payload,
+        ),
     )
     action = HandoverAppAction.objects.get(pk=action.id)
     record_task_event(

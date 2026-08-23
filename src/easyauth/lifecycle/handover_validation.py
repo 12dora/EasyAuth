@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Final, NotRequired, Required, TypedDict, Unpack, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from easyauth.accounts.models import USER_STATUS_ACTIVE
 from easyauth.config.rate_limit import rate_limit_exceeded
@@ -143,29 +144,30 @@ def _items_response_body(response: HookResponse) -> dict[str, JsonValue]:
     return response.payload
 
 
-class _FetchItemsOptions(TypedDict):
-    asset_type: Required[str]
-    page: Required[int]
-    page_size: Required[int]
-    q: Required[str]
-    actor_id: NotRequired[str]
+@dataclass(frozen=True, slots=True)
+class FetchActionItemsSpec:
+    """条目查询所需参数。"""
+
+    asset_type: str
+    page: int
+    page_size: int
+    q: str
+    actor_id: str = LIFECYCLE_ACTOR_ID
 
 
 def fetch_action_items(
     action: HandoverAppAction,
-    **options: Unpack[_FetchItemsOptions],
+    spec: FetchActionItemsSpec,
 ) -> dict[str, JsonValue]:
     """透传 items; 参数上界与限流(01 §5.6)。"""
-    asset_type = options["asset_type"]
-    page = options["page"]
     page_size, q_stripped = _validate_items_request(
         action,
-        page=page,
-        page_size=options["page_size"],
-        q=options["q"],
-        actor_id=options.get("actor_id", LIFECYCLE_ACTOR_ID),
+        page=spec.page,
+        page_size=spec.page_size,
+        q=spec.q,
+        actor_id=spec.actor_id,
     )
-    asset = _items_asset(action, asset_type)
+    asset = _items_asset(action, spec.asset_type)
     hook_url = handover_hook_url(action.app)
     if not hook_url:
         raise HandoverError(DECLARED_WITHOUT_URL_MESSAGE)
@@ -176,8 +178,8 @@ def fetch_action_items(
         "from_user_id": action.task.subject_user.authentik_user_id,
         "generation": action.generation,
         "snapshot_token": action.snapshot_token,
-        "asset_type": asset_type,
-        "page": page,
+        "asset_type": spec.asset_type,
+        "page": spec.page,
         "page_size": page_size,
         "q": q_stripped,
     }
@@ -198,7 +200,7 @@ def fetch_action_items(
         stale = True
     return {
         "items": body.get("items", []),
-        "page": page,
+        "page": spec.page,
         "page_size": page_size,
         "total": total,
         "unfiltered_total": unfiltered,

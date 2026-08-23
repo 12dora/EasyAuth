@@ -38,7 +38,7 @@ from easyauth.lifecycle.handover import execute_action, retry_action
 from easyauth.lifecycle.handover_actions import update_grant_receiver
 from easyauth.lifecycle.handover_preview import preview_action
 from easyauth.lifecycle.handover_shared import MutationGuard
-from easyauth.lifecycle.handover_validation import fetch_action_items
+from easyauth.lifecycle.handover_validation import FetchActionItemsSpec, fetch_action_items
 from easyauth.lifecycle.jurisdiction import (
     assert_manager_of,
     list_reassign_subject_candidates,
@@ -309,11 +309,13 @@ def portal_handover_items(
     try:
         result = fetch_action_items(
             action,
-            asset_type=asset_type,
-            page=page,
-            page_size=page_size,
-            q=q,
-            actor_id=user.authentik_user_id,
+            FetchActionItemsSpec(
+                asset_type=asset_type,
+                page=page,
+                page_size=page_size,
+                q=q,
+                actor_id=user.authentik_user_id,
+            ),
         )
     except (HandoverConflictError, HandoverError, HookCallError) as error:
         mapped = map_handover_exception(error)

@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, NotRequired, Required, TypedDict, Unpack, cast
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, cast
 
 from django.db import transaction
 from django.utils import timezone
@@ -57,46 +57,37 @@ from easyauth.lifecycle.handover_validation import (
 )
 
 
-class _CompleteDataPhaseOptions(TypedDict):
-    handle: Required[LeaseHandle]
-    response_payload: NotRequired[dict[str, JsonValue] | None]
-    enforce_conservation: NotRequired[bool]
-    summary_unknown: NotRequired[bool]
-    audit_actor_id: NotRequired[str | None]
-    audit_actor_type: NotRequired[str]
-    audit_extra: NotRequired[dict[str, JsonValue] | None]
+@dataclass(frozen=True, slots=True)
+class CompleteDataPhaseSpec:
+    """数据阶段收尾所需参数。"""
+
+    handle: LeaseHandle
+    response_payload: dict[str, JsonValue] | None = None
+    enforce_conservation: bool = True
+    summary_unknown: bool = False
+    audit: DataPhaseAudit = field(
+        default_factory=lambda: DataPhaseAudit(
+            actor_id=None,
+            actor_type="system",
+            extra=None,
+        ),
+    )
 
 
 def complete_data_phase(
     batch: HandoverExecutionBatch,
-    **options: Unpack[_CompleteDataPhaseOptions],
+    spec: CompleteDataPhaseSpec,
 ) -> None:
     """同步 200 与异步终态汇合的收尾(01 §5.5)。A/B/C 必须各自 commit。
 
     ``enforce_conservation=False`` 仅用于 async-abandon 人工确认路径:
     超管已在下游确认结局, 不得再被陈旧 preview count 挡住唯一出口。
     """
-    handle = options["handle"]
-    response_payload = options.get("response_payload")
-    audit = DataPhaseAudit(
-        actor_id=options.get("audit_actor_id"),
-        actor_type=options.get("audit_actor_type", "system"),
-        extra=options.get("audit_extra"),
-    )
     action_id = batch.action_id
     batch_pk = cast("int", batch.pk)
 
     # —— 事务 A: 守恒校验 + data_completed 标记必须先提交, 授权失败也不能丢 ——
-    gate = _commit_data_completion(
-        batch,
-        _DataCompletionSpec(
-            handle=handle,
-            response_payload=response_payload,
-            enforce_conservation=options.get("enforce_conservation", True),
-            summary_unknown=options.get("summary_unknown", False),
-            audit=audit,
-        ),
-    )
+    gate = _commit_data_completion(batch, spec)
     if gate.conservation_fail is not None:
         # 与事务 B 一致: 先提交 failed + 释放, 再在 atomic 外 raise,
         # 避免守恒失败状态被 Django 回滚(01 §7 / 00 §10.5)。
@@ -106,10 +97,19 @@ def complete_data_phase(
 
     # —— 事务 B: 仅 offboard 转授权; 失败写 failed+释放并提交, 再 raise ——
     if gate.needs_grant and action_id is not None:
-        _transfer_grants_for_data_phase(batch_pk=batch_pk, action_id=int(action_id), handle=handle)
+        _transfer_grants_for_data_phase(
+            batch_pk=batch_pk,
+            action_id=int(action_id),
+            handle=spec.handle,
+        )
 
     # —— 事务 C: done + 清空 snapshot_token + 释放 ——
-    _finalize_data_phase(batch_pk=batch_pk, action_id=action_id, handle=handle, audit=audit)
+    _finalize_data_phase(
+        batch_pk=batch_pk,
+        action_id=action_id,
+        handle=spec.handle,
+        audit=spec.audit,
+    )
 
 
 def _record_data_phase_audit(action: HandoverAppAction, audit: DataPhaseAudit) -> None:
@@ -124,18 +124,9 @@ def _record_data_phase_audit(action: HandoverAppAction, audit: DataPhaseAudit) -
     )
 
 
-@dataclass(frozen=True, slots=True)
-class _DataCompletionSpec:
-    handle: LeaseHandle
-    response_payload: dict[str, JsonValue] | None
-    enforce_conservation: bool
-    summary_unknown: bool
-    audit: DataPhaseAudit
-
-
 def _commit_data_completion(
     batch: HandoverExecutionBatch,
-    spec: _DataCompletionSpec,
+    spec: CompleteDataPhaseSpec,
 ) -> DataPhaseGate:
     action_id = batch.action_id
     is_final = batch.is_final

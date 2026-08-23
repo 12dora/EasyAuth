@@ -39,6 +39,7 @@ if TYPE_CHECKING:
     from easyauth.applications.ops_models import JsonValue
 
 from easyauth.lifecycle.handover_data import (
+    CompleteDataPhaseSpec,
     complete_data_phase,
 )
 from easyauth.lifecycle.handover_payloads import (
@@ -47,6 +48,7 @@ from easyauth.lifecycle.handover_payloads import (
 )
 from easyauth.lifecycle.handover_shared import (
     ActionErrorContext,
+    DataPhaseAudit,
     locked_action,
     set_action_error,
 )
@@ -278,21 +280,25 @@ def async_abandon_action(
     assert claim.batch_id is not None
     complete_data_phase(
         HandoverExecutionBatch.objects.get(pk=claim.batch_id),
-        handle=claim.handle,
-        response_payload=payload,
-        enforce_conservation=False,
-        summary_unknown=not bool(summary),
-        audit_actor_id=actor_id,
-        audit_actor_type="admin",
-        audit_extra={
-            **_manual_resolution_audit_extra(
-                action,
-                app_key=claim.app_key,
-                summary=summary,
-                reason=reason_stripped,
-                generation=action.generation,
+        CompleteDataPhaseSpec(
+            handle=claim.handle,
+            response_payload=payload,
+            enforce_conservation=False,
+            summary_unknown=not bool(summary),
+            audit=DataPhaseAudit(
+                actor_id=actor_id,
+                actor_type="admin",
+                extra={
+                    **_manual_resolution_audit_extra(
+                        action,
+                        app_key=claim.app_key,
+                        summary=summary,
+                        reason=reason_stripped,
+                        generation=action.generation,
+                    ),
+                },
             ),
-        },
+        ),
     )
     locked = HandoverAppAction.objects.select_related("app", "task").get(pk=claim.action_id)
     return locked

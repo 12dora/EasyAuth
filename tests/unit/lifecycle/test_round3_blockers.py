@@ -16,7 +16,7 @@ from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
 from easyauth.lifecycle.handover import execute_action, retry_action
 from easyauth.lifecycle.handover_actions import update_grant_receiver
 from easyauth.lifecycle.handover_async import poll_async_action
-from easyauth.lifecycle.handover_data import complete_data_phase
+from easyauth.lifecycle.handover_data import CompleteDataPhaseSpec, complete_data_phase
 from easyauth.lifecycle.handover_delivery import handle_execute_response
 from easyauth.lifecycle.handover_manual import async_abandon_action
 from easyauth.lifecycle.handover_payloads import ensure_batch_plan_on_413
@@ -469,7 +469,10 @@ def test_conservation_failure_persists_failed_and_releases_lease() -> None:
         },
     }
     with pytest.raises(HandoverError, match="summary_conservation_failed"):
-        complete_data_phase(batch, handle=handle, response_payload=bad_payload)
+        complete_data_phase(
+            batch,
+            CompleteDataPhaseSpec(handle=handle, response_payload=bad_payload),
+        )
 
     action.refresh_from_db()
     batch.refresh_from_db()
@@ -518,7 +521,10 @@ def test_replayed_data_completion_does_not_merge_summary_twice() -> None:
         },
     }
 
-    complete_data_phase(batch, handle=handle, response_payload=payload)
+    complete_data_phase(
+        batch,
+        CompleteDataPhaseSpec(handle=handle, response_payload=payload),
+    )
 
     action.refresh_from_db()
     assert action.status == ACTION_STATUS_DONE

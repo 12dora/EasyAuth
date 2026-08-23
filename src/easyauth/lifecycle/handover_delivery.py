@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from easyauth.webhooks.hooks import HookResponse
 
 from easyauth.lifecycle.handover_data import (
+    CompleteDataPhaseSpec,
     complete_data_phase,
 )
 from easyauth.lifecycle.handover_payloads import (
@@ -173,8 +174,10 @@ def _complete_execute_response(
         delivery.save(update_fields=["outcome", "http_status", "response_payload"])
     complete_data_phase(
         HandoverExecutionBatch.objects.get(pk=batch_id),
-        handle=handle,
-        response_payload=response.payload,
+        CompleteDataPhaseSpec(
+            handle=handle,
+            response_payload=response.payload,
+        ),
     )
     action = HandoverAppAction.objects.get(pk=action_id)
     record_task_event(

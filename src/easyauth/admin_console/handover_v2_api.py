@@ -43,7 +43,7 @@ from easyauth.lifecycle.core import record_task_event
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
 from easyauth.lifecycle.handover_actions import update_grant_receiver
 from easyauth.lifecycle.handover_manual import async_abandon_action
-from easyauth.lifecycle.handover_validation import fetch_action_items
+from easyauth.lifecycle.handover_validation import FetchActionItemsSpec, fetch_action_items
 from easyauth.lifecycle.jurisdiction import list_receiver_candidates
 from easyauth.lifecycle.models import (
     ACTION_STATUS_BLOCKED,
@@ -613,11 +613,13 @@ def console_handover_items(
     try:
         result = fetch_action_items(
             action,
-            asset_type=asset_type,
-            page=page,
-            page_size=page_size,
-            q=request.GET.get("q", ""),
-            actor_id=actor_id,
+            FetchActionItemsSpec(
+                asset_type=asset_type,
+                page=page,
+                page_size=page_size,
+                q=request.GET.get("q", ""),
+                actor_id=actor_id,
+            ),
         )
     except (HandoverConflictError, HandoverError, HookCallError) as error:
         mapped = map_handover_exception(error)
