@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from datetime import UTC
 from typing import TYPE_CHECKING, cast, final
 
@@ -31,6 +32,7 @@ from easyauth.access_requests.submission_types import (
     ScopedAccessRequestGrant,
 )
 from easyauth.access_requests.submission_validation import (
+    SubmissionScopeValidation,
     contains_managed_users_target,
     resolve_manager_chain,
     unique_authorization_groups,
@@ -82,6 +84,43 @@ def _submit_access_request(
     *,
     request_type: str,
 ) -> AccessRequest:
+    submission = _prepared_submission(input_data, request_type=request_type)
+    existing = _idempotent_request(
+        input_data,
+        submission.idempotency_key,
+        submission.payload_digest,
+    )
+    if existing is not None:
+        return existing
+    try:
+        return _submit_prepared_request(submission)
+    except IntegrityError:
+        existing = _idempotent_request(
+            input_data,
+            submission.idempotency_key,
+            submission.payload_digest,
+        )
+        if existing is None:
+            raise
+        return existing
+
+
+@dataclass(frozen=True, slots=True)
+class _PreparedSubmission:
+    input_data: AccessRequestSubmission
+    request_type: AccessRequestType
+    authorization_groups: tuple[AuthorizationGroup, ...]
+    direct_grants: tuple[ScopedAccessRequestGrant, ...]
+    submitted_approver_user_ids: tuple[str, ...]
+    idempotency_key: str
+    payload_digest: str
+
+
+def _prepared_submission(
+    input_data: AccessRequestSubmission,
+    *,
+    request_type: str,
+) -> _PreparedSubmission:
     parsed_request_type = validated_request_type(request_type)
     authorization_groups = unique_authorization_groups(input_data.authorization_groups)
     direct_grants = unique_direct_grants(input_data.direct_grants)
@@ -94,95 +133,124 @@ def _submit_access_request(
         direct_grants=direct_grants,
         approver_user_ids=submitted_approver_user_ids,
     )
-    existing = _idempotent_request(input_data, idempotency_key, payload_digest)
-    if existing is not None:
-        return existing
-    try:
-        with transaction.atomic():
-            existing = _locked_idempotent_request(
-                input_data,
-                idempotency_key,
-                payload_digest,
-            )
-            if existing is not None:
-                return existing
-            is_managed_users = contains_managed_users_target(
-                authorization_groups,
-                direct_grants,
-            )
-            chain_resolution = (
-                resolve_manager_chain(input_data.user)
-                if is_managed_users
-                else None
-            )
-            validate_submission_scope(
-                input_data,
-                parsed_request_type,
-                authorization_groups,
-                direct_grants,
-                lock_base_grant=True,
-                manager_chain_resolution=chain_resolution,
-            )
-            # 空审批人仅在 MANAGED_USERS 链耗尽/目录缺失时由 ADR-002 §36 放行。
-            chain_ids = chain_resolution.user_ids if chain_resolution is not None else ()
-            allow_empty_approvers = (
-                is_managed_users
-                and not chain_ids
-                and not submitted_approver_user_ids
-            )
-            approver_user_ids = validated_approver_user_ids(
-                submitted_approver_user_ids,
-                applicant_user_id=input_data.user.authentik_user_id,
-                allow_empty=allow_empty_approvers,
-            )
-            routing_state = "normal"
-            routing_reason = ""
-            if not approver_user_ids and allow_empty_approvers:
-                routing_state = "superuser_pool"
-                # 目录缺失/陈旧 → no_active_manager; 链 walk 到尽头 → chain_exhausted
-                routing_reason = (
-                    "no_active_manager"
-                    if chain_resolution is not None and chain_resolution.degraded
-                    else "chain_exhausted"
-                )
-            access_request = AccessRequest(
-                user=input_data.user,
-                app=input_data.app,
-                request_type=parsed_request_type,
-                status=REQUEST_STATUS_SUBMITTED,
-                grant_type=input_data.grant_type,
-                grant_expires_at=input_data.grant_expires_at,
-                reason=input_data.reason,
-                idempotency_key=idempotency_key,
-                payload_digest=payload_digest,
-                base_grant_id=input_data.base_grant_id,
-                base_grant_revision=input_data.base_grant_revision,
-                approval_routing_state=routing_state,
-                routing_reason=routing_reason,
-            )
-            access_request.full_clean(validate_constraints=False)
-            access_request.save()
-            _create_approver_links(access_request, approver_user_ids)
-            _create_group_links(access_request, authorization_groups)
-            _create_direct_grant_links(access_request, direct_grants)
-            group_grant_snapshot = _create_group_grant_snapshots(
-                access_request,
-                authorization_groups,
-            )
-            _record_submitted_event(
-                input_data,
-                access_request,
-                authorization_groups,
-                direct_grants,
-                approver_user_ids,
-                group_grant_snapshot,
-            )
-            return access_request
-    except IntegrityError:
-        existing = _idempotent_request(input_data, idempotency_key, payload_digest)
-        if existing is None:
-            raise
-        return existing
+    return _PreparedSubmission(
+        input_data=input_data,
+        request_type=parsed_request_type,
+        authorization_groups=authorization_groups,
+        direct_grants=direct_grants,
+        submitted_approver_user_ids=submitted_approver_user_ids,
+        idempotency_key=idempotency_key,
+        payload_digest=payload_digest,
+    )
+
+
+def _submit_prepared_request(submission: _PreparedSubmission) -> AccessRequest:
+    with transaction.atomic():
+        existing = _locked_idempotent_request(
+            submission.input_data,
+            submission.idempotency_key,
+            submission.payload_digest,
+        )
+        if existing is not None:
+            return existing
+        approver_user_ids, routing_state, routing_reason = _validated_routing(submission)
+        access_request = _create_request(
+            submission,
+            approver_user_ids,
+            routing_state=routing_state,
+            routing_reason=routing_reason,
+        )
+        _persist_request_relations(submission, access_request, approver_user_ids)
+        return access_request
+
+
+def _validated_routing(
+    submission: _PreparedSubmission,
+) -> tuple[tuple[str, ...], str, str]:
+    is_managed_users = contains_managed_users_target(
+        submission.authorization_groups,
+        submission.direct_grants,
+    )
+    chain_resolution = (
+        resolve_manager_chain(submission.input_data.user) if is_managed_users else None
+    )
+    validate_submission_scope(
+        submission.input_data,
+        SubmissionScopeValidation(
+            request_type=submission.request_type,
+            authorization_groups=submission.authorization_groups,
+            direct_grants=submission.direct_grants,
+            lock_base_grant=True,
+            manager_chain_resolution=chain_resolution,
+        ),
+    )
+    # 空审批人仅在 MANAGED_USERS 链耗尽/目录缺失时由 ADR-002 §36 放行。
+    chain_ids = chain_resolution.user_ids if chain_resolution is not None else ()
+    allow_empty_approvers = (
+        is_managed_users and not chain_ids and not submission.submitted_approver_user_ids
+    )
+    approver_user_ids = validated_approver_user_ids(
+        submission.submitted_approver_user_ids,
+        applicant_user_id=submission.input_data.user.authentik_user_id,
+        allow_empty=allow_empty_approvers,
+    )
+    if approver_user_ids or not allow_empty_approvers:
+        return approver_user_ids, "normal", ""
+    # 目录缺失/陈旧 → no_active_manager; 链 walk 到尽头 → chain_exhausted
+    routing_reason = (
+        "no_active_manager"
+        if chain_resolution is not None and chain_resolution.degraded
+        else "chain_exhausted"
+    )
+    return approver_user_ids, "superuser_pool", routing_reason
+
+
+def _create_request(
+    submission: _PreparedSubmission,
+    approver_user_ids: tuple[str, ...],
+    *,
+    routing_state: str,
+    routing_reason: str,
+) -> AccessRequest:
+    input_data = submission.input_data
+    access_request = AccessRequest(
+        user=input_data.user,
+        app=input_data.app,
+        request_type=submission.request_type,
+        status=REQUEST_STATUS_SUBMITTED,
+        grant_type=input_data.grant_type,
+        grant_expires_at=input_data.grant_expires_at,
+        reason=input_data.reason,
+        idempotency_key=submission.idempotency_key,
+        payload_digest=submission.payload_digest,
+        base_grant_id=input_data.base_grant_id,
+        base_grant_revision=input_data.base_grant_revision,
+        approval_routing_state=routing_state,
+        routing_reason=routing_reason,
+    )
+    access_request.full_clean(validate_constraints=False)
+    access_request.save()
+    _create_approver_links(access_request, approver_user_ids)
+    return access_request
+
+
+def _persist_request_relations(
+    submission: _PreparedSubmission,
+    access_request: AccessRequest,
+    approver_user_ids: tuple[str, ...],
+) -> None:
+    _create_group_links(access_request, submission.authorization_groups)
+    _create_direct_grant_links(access_request, submission.direct_grants)
+    group_grant_snapshot = _create_group_grant_snapshots(
+        access_request,
+        submission.authorization_groups,
+    )
+    _record_submitted_event(
+        submission,
+        access_request,
+        approver_user_ids,
+        group_grant_snapshot,
+    )
 
 
 def _create_approver_links(
@@ -337,32 +405,15 @@ def _create_group_grant_snapshots(
     for row in rows:
         group = group_by_id[row.authorization_group_id]
         seen_group_ids.add(row.authorization_group_id)
-        snapshot = AccessRequestGroupGrantSnapshot(
-            access_request=access_request,
-            authorization_group_id_snapshot=group.id,
-            authorization_group_key=group.key,
-            authorization_group_kind=group.kind,
-            authorization_group_name=group.name,
-            permission_key=row.permission.key,
-            permission_name=row.permission.name,
-            scope_key=row.scope_key,
+        snapshot, audit_item = _group_grant_snapshot_item(
+            access_request,
+            group,
+            row,
         )
         snapshots.append(snapshot)
-        audit_items.append(
-            {
-                "authorization_group_id_snapshot": group.id,
-                "authorization_group_key": group.key,
-                "authorization_group_kind": group.kind,
-                "authorization_group_name": group.name,
-                "permission": row.permission.key,
-                "permission_name": row.permission.name,
-                "scope": row.scope_key,
-            },
-        )
+        audit_items.append(audit_item)
     missing_group_keys = tuple(
-        group.key
-        for group_id, group in group_by_id.items()
-        if group_id not in seen_group_ids
+        group.key for group_id, group in group_by_id.items() if group_id not in seen_group_ids
     )
     if missing_group_keys:
         missing = ", ".join(sorted(missing_group_keys))
@@ -373,14 +424,41 @@ def _create_group_grant_snapshots(
     return tuple(audit_items)
 
 
-def _record_submitted_event(  # noqa: PLR0913
-    input_data: AccessRequestSubmission,
+def _group_grant_snapshot_item(
     access_request: AccessRequest,
-    authorization_groups: tuple[AuthorizationGroup, ...],
-    direct_grants: tuple[ScopedAccessRequestGrant, ...],
+    group: AuthorizationGroup,
+    row: AuthorizationGroupGrant,
+) -> tuple[AccessRequestGroupGrantSnapshot, dict[str, JsonValue]]:
+    """构造一条授权组 grant 快照及其审计表示。"""
+    snapshot = AccessRequestGroupGrantSnapshot(
+        access_request=access_request,
+        authorization_group_id_snapshot=group.id,
+        authorization_group_key=group.key,
+        authorization_group_kind=group.kind,
+        authorization_group_name=group.name,
+        permission_key=row.permission.key,
+        permission_name=row.permission.name,
+        scope_key=row.scope_key,
+    )
+    audit_item: dict[str, JsonValue] = {
+        "authorization_group_id_snapshot": group.id,
+        "authorization_group_key": group.key,
+        "authorization_group_kind": group.kind,
+        "authorization_group_name": group.name,
+        "permission": row.permission.key,
+        "permission_name": row.permission.name,
+        "scope": row.scope_key,
+    }
+    return snapshot, audit_item
+
+
+def _record_submitted_event(
+    submission: _PreparedSubmission,
+    access_request: AccessRequest,
     approver_user_ids: tuple[str, ...],
     group_grant_snapshot: tuple[dict[str, JsonValue], ...],
 ) -> None:
+    input_data = submission.input_data
     _ = AuditService.record(
         AuditRecord(
             actor_type=input_data.actor_type,
@@ -389,10 +467,8 @@ def _record_submitted_event(  # noqa: PLR0913
             target_type="access_request",
             target_id=_request_target_id(access_request),
             metadata=_audit_metadata(
-                input_data,
+                submission,
                 access_request,
-                authorization_groups,
-                direct_grants,
                 approver_user_ids,
                 group_grant_snapshot,
             ),
@@ -400,18 +476,19 @@ def _record_submitted_event(  # noqa: PLR0913
     )
 
 
-def _audit_metadata(  # noqa: PLR0913
-    input_data: AccessRequestSubmission,
+def _audit_metadata(
+    submission: _PreparedSubmission,
     access_request: AccessRequest,
-    authorization_groups: tuple[AuthorizationGroup, ...],
-    direct_grants: tuple[ScopedAccessRequestGrant, ...],
     approver_user_ids: tuple[str, ...],
     group_grant_snapshot: tuple[dict[str, JsonValue], ...],
 ) -> dict[str, JsonValue]:
-    authorization_group_keys: list[JsonValue] = [group.key for group in authorization_groups]
+    input_data = submission.input_data
+    authorization_group_keys: list[JsonValue] = [
+        group.key for group in submission.authorization_groups
+    ]
     direct_grant_items: list[JsonValue] = [
         {"permission": direct_grant.permission.key, "scope": direct_grant.scope_key}
-        for direct_grant in direct_grants
+        for direct_grant in submission.direct_grants
     ]
     group_grant_items: list[JsonValue] = list(group_grant_snapshot)
     approver_user_id_items: list[JsonValue] = list(approver_user_ids)

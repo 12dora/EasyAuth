@@ -96,6 +96,16 @@ class ApprovalInstanceNotFoundError(LookupError):
         super().__init__(INSTANCE_NOT_FOUND_MESSAGE)
 
 
+@dataclass(frozen=True, slots=True)
+class _ApprovalSubmission:
+    app: App
+    template: ApprovalTemplate
+    originator: UserMirror
+    normalized_form: dict[str, JsonValue]
+    form_components: tuple[DingTalkFormComponent, ...]
+    payload_hash: str
+
+
 def create_approval_instance(  # noqa: PLR0913 - 发起审批的完整业务事实, 拆包装反而失真。
     *,
     app: App,
@@ -108,6 +118,32 @@ def create_approval_instance(  # noqa: PLR0913 - 发起审批的完整业务事�
     retry_failed: bool = False,
 ) -> tuple[ApprovalInstance, bool]:
     """发起一笔钉钉审批; 同 biz_key 幂等返回既有实例。返回 (instance, created)。"""
+    submission = _validated_approval_submission(
+        app=app,
+        template_key=template_key,
+        originator_user_id=originator_user_id,
+        form=form,
+        selected_template=selected_template,
+    )
+    instance, created, should_submit = _lock_or_create_approval_instance(
+        submission,
+        biz_key=biz_key,
+        retry_failed=retry_failed,
+    )
+    if not should_submit:
+        return instance, False
+    _submit_approval_instance(submission, instance=instance, actor_id=actor_id)
+    return instance, created
+
+
+def _validated_approval_submission(
+    *,
+    app: App,
+    template_key: str,
+    originator_user_id: str,
+    form: Mapping[str, JsonValue],
+    selected_template: ApprovalTemplate | None,
+) -> _ApprovalSubmission:
     template = (
         _active_template(app, template_key)
         if selected_template is None
@@ -116,62 +152,91 @@ def create_approval_instance(  # noqa: PLR0913 - 发起审批的完整业务事�
     originator = _valid_originator(originator_user_id)
     normalized_form, form_components = _validated_form(template, form)
     payload_hash = _payload_hash(originator_user_id=originator_user_id, form=normalized_form)
-    existing = ApprovalInstance.objects.filter(
+    return _ApprovalSubmission(
         app=app,
         template=template,
+        originator=originator,
+        normalized_form=normalized_form,
+        form_components=form_components,
+        payload_hash=payload_hash,
+    )
+
+
+def _lock_or_create_approval_instance(
+    submission: _ApprovalSubmission,
+    *,
+    biz_key: str,
+    retry_failed: bool,
+) -> tuple[ApprovalInstance, bool, bool]:
+    _recover_existing_approval_submission(submission, biz_key=biz_key)
+    try:
+        with transaction.atomic():
+            instance = (
+                ApprovalInstance.objects.select_for_update()
+                .filter(
+                    app=submission.app,
+                    template=submission.template,
+                    biz_key=biz_key,
+                )
+                .first()
+            )
+            if instance is None:
+                instance = ApprovalInstance.objects.create(
+                    app=submission.app,
+                    template=submission.template,
+                    biz_key=biz_key,
+                    originator_user=submission.originator,
+                    form_values=submission.normalized_form,
+                    payload_hash=submission.payload_hash,
+                )
+                return instance, True, True
+            should_submit = _prepare_existing_instance(
+                instance,
+                payload_hash=submission.payload_hash,
+                retry_failed=retry_failed,
+            )
+            return instance, False, should_submit
+    except IntegrityError:
+        with transaction.atomic():
+            winner = ApprovalInstance.objects.select_for_update().get(
+                app=submission.app,
+                template=submission.template,
+                biz_key=biz_key,
+            )
+            should_submit = _prepare_existing_instance(
+                winner,
+                payload_hash=submission.payload_hash,
+                retry_failed=retry_failed,
+            )
+            return winner, False, should_submit
+
+
+def _recover_existing_approval_submission(
+    submission: _ApprovalSubmission,
+    *,
+    biz_key: str,
+) -> None:
+    existing = ApprovalInstance.objects.filter(
+        app=submission.app,
+        template=submission.template,
         biz_key=biz_key,
     ).first()
     if existing is not None:
         _ = recover_stale_submission(existing)
 
-    created = False
-    try:
-        with transaction.atomic():
-            instance = (
-                ApprovalInstance.objects.select_for_update()
-                .filter(app=app, template=template, biz_key=biz_key)
-                .first()
-            )
-            if instance is None:
-                instance = ApprovalInstance.objects.create(
-                    app=app,
-                    template=template,
-                    biz_key=biz_key,
-                    originator_user=originator,
-                    form_values=normalized_form,
-                    payload_hash=payload_hash,
-                )
-                created = True
-            else:
-                should_submit = _prepare_existing_instance(
-                    instance,
-                    payload_hash=payload_hash,
-                    retry_failed=retry_failed,
-                )
-                if not should_submit:
-                    return instance, False
-    except IntegrityError:
-        with transaction.atomic():
-            winner = ApprovalInstance.objects.select_for_update().get(
-                app=app,
-                template=template,
-                biz_key=biz_key,
-            )
-            should_submit = _prepare_existing_instance(
-                winner,
-                payload_hash=payload_hash,
-                retry_failed=retry_failed,
-            )
-            if not should_submit:
-                return winner, False
-            instance = winner
 
+def _submit_approval_instance(
+    submission: _ApprovalSubmission,
+    *,
+    instance: ApprovalInstance,
+    actor_id: str,
+) -> None:
     _mark_submitting(instance)
     try:
         process_instance_id = DingTalkApiClient.from_settings().create_process_instance(
-            process_code=template.dingtalk_process_code,
-            originator_userid=originator.dingtalk_userid,
-            form_components=form_components,
+            process_code=submission.template.dingtalk_process_code,
+            originator_userid=submission.originator.dingtalk_userid,
+            form_components=submission.form_components,
         )
     except DingTalkApiError as error:
         ambiguous = _submission_result_is_ambiguous(error)
@@ -187,9 +252,8 @@ def create_approval_instance(  # noqa: PLR0913 - 发起审批的完整业务事�
         )
         raise ApprovalCreateError(kind="dependency_unavailable", message=str(error)) from error
 
-    _callback_applied = _mark_submitted(instance, process_instance_id=process_instance_id)
+    _ = _mark_submitted(instance, process_instance_id=process_instance_id)
     _record_instance_event(instance, action="approval_instance_submitted", actor_id=actor_id)
-    return instance, created
 
 
 def apply_instance_callback(

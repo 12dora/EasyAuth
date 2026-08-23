@@ -31,6 +31,7 @@ from easyauth.connectors.registry import get_connector
 from easyauth.grants.models import GRANT_STATUS_ACTIVE, AccessGrantGroup
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
     from datetime import datetime
 
 CONNECTOR_NOT_REGISTERED_TEMPLATE: Final = "连接器类型 {key} 未在 EASYAUTH_CONNECTORS 注册。"
@@ -66,16 +67,7 @@ def build_desired_state(instance: ConnectorInstance) -> DesiredState:
     mappings = tuple(
         ConnectorMapping.objects.filter(instance=instance).select_related("authorization_group"),
     )
-    # 仅 active 且未 tombstone 的映射参与扩权; tombstone/缺组映射仍进入 managed 以便收缩清理。
-    active_mappings = tuple(
-        mapping
-        for mapping in mappings
-        if (
-            not mapping.tombstoned
-            and mapping.authorization_group is not None
-            and mapping.authorization_group.is_active
-        )
-    )
+    active_mappings = _active_connector_mappings(mappings)
     external_ref_by_group_id = {
         mapping.authorization_group_id: mapping.external_ref for mapping in active_mappings
     }
@@ -92,18 +84,11 @@ def build_desired_state(instance: ConnectorInstance) -> DesiredState:
         .select_related("grant__user", "authorization_group")
         .order_by("id")
     )
-    user_group_refs: dict[str, set[str]] = {}
-    profiles: dict[str, DesiredUserProfile] = {}
-    if not instance.tombstoned:
-        for row in membership_rows:
-            user = row.grant.user
-            refs = user_group_refs.setdefault(user.authentik_user_id, set())
-            refs.add(external_ref_by_group_id[row.authorization_group_id])
-            profiles[user.authentik_user_id] = DesiredUserProfile(
-                user_id=user.authentik_user_id,
-                name=user.name,
-                email=user.email,
-            )
+    user_group_refs, profiles = _project_memberships(
+        instance,
+        membership_rows,
+        external_ref_by_group_id,
+    )
     return DesiredState(
         user_groups={user_id: frozenset(refs) for user_id, refs in user_group_refs.items()},
         profiles=profiles,
@@ -111,6 +96,42 @@ def build_desired_state(instance: ConnectorInstance) -> DesiredState:
         # external_ref 是不可变外部组 ID, 不支持按名称自动创建; 字段保留为空以消除死配置假成功。
         auto_create_group_refs=frozenset(),
     )
+
+
+def _active_connector_mappings(
+    mappings: tuple[ConnectorMapping, ...],
+) -> tuple[ConnectorMapping, ...]:
+    # 仅 active 且未 tombstone 的映射参与扩权; tombstone/缺组映射仍进入 managed 以便收缩清理。
+    return tuple(
+        mapping
+        for mapping in mappings
+        if (
+            not mapping.tombstoned
+            and mapping.authorization_group is not None
+            and mapping.authorization_group.is_active
+        )
+    )
+
+
+def _project_memberships(
+    instance: ConnectorInstance,
+    membership_rows: Iterable[AccessGrantGroup],
+    external_ref_by_group_id: dict[int | None, str],
+) -> tuple[dict[str, set[str]], dict[str, DesiredUserProfile]]:
+    user_group_refs: dict[str, set[str]] = {}
+    profiles: dict[str, DesiredUserProfile] = {}
+    if instance.tombstoned:
+        return user_group_refs, profiles
+    for row in membership_rows:
+        user = row.grant.user
+        refs = user_group_refs.setdefault(user.authentik_user_id, set())
+        refs.add(external_ref_by_group_id[row.authorization_group_id])
+        profiles[user.authentik_user_id] = DesiredUserProfile(
+            user_id=user.authentik_user_id,
+            name=user.name,
+            email=user.email,
+        )
+    return user_group_refs, profiles
 
 
 def refresh_external_groups(instance_id: int) -> ExternalGroupRefreshResult:
@@ -127,6 +148,29 @@ def refresh_external_groups(instance_id: int) -> ExternalGroupRefreshResult:
         _mark_instance_external_group_refresh_failed(instance, message)
         raise ConnectorError(message)
     started_at = timezone.now()
+    _start_external_group_refresh(instance)
+    try:
+        active_count, last_cursor = _consume_external_group_pages(
+            instance,
+            connector,
+            started_at,
+        )
+    except ConnectorError as error:
+        _mark_instance_external_group_refresh_failed(instance, str(error))
+        raise
+    deactivated_count = _finish_external_group_refresh(
+        instance,
+        started_at=started_at,
+        last_cursor=last_cursor,
+    )
+    return ExternalGroupRefreshResult(
+        active_count=active_count,
+        deactivated_count=deactivated_count,
+        refreshed_at=started_at,
+    )
+
+
+def _start_external_group_refresh(instance: ConnectorInstance) -> None:
     instance.external_groups_refresh_status = EXTERNAL_GROUP_REFRESH_STATUS_RUNNING
     instance.external_groups_refresh_cursor = ""
     instance.save(
@@ -136,22 +180,34 @@ def refresh_external_groups(instance_id: int) -> ExternalGroupRefreshResult:
             "updated_at",
         ]
     )
+
+
+def _consume_external_group_pages(
+    instance: ConnectorInstance,
+    connector: BaseConnector,
+    started_at: datetime,
+) -> tuple[int, str]:
     active_count = 0
     last_cursor = ""
-    try:
-        for page in connector.iter_external_group_pages(instance.config):
-            groups = page.groups
-            last_cursor = page.cursor
-            active_count += len(groups)
-            _upsert_external_group_page(
-                instance=instance,
-                groups=groups,
-                seen_at=started_at,
-                cursor=last_cursor,
-            )
-    except ConnectorError as error:
-        _mark_instance_external_group_refresh_failed(instance, str(error))
-        raise
+    for page in connector.iter_external_group_pages(instance.config):
+        groups = page.groups
+        last_cursor = page.cursor
+        active_count += len(groups)
+        _upsert_external_group_page(
+            instance=instance,
+            groups=groups,
+            seen_at=started_at,
+            cursor=last_cursor,
+        )
+    return active_count, last_cursor
+
+
+def _finish_external_group_refresh(
+    instance: ConnectorInstance,
+    *,
+    started_at: datetime,
+    last_cursor: str,
+) -> int:
     with transaction.atomic():
         deactivated_count = ConnectorExternalGroup.objects.filter(
             instance=instance,
@@ -171,11 +227,7 @@ def refresh_external_groups(instance_id: int) -> ExternalGroupRefreshResult:
                 "updated_at",
             ]
         )
-    return ExternalGroupRefreshResult(
-        active_count=active_count,
-        deactivated_count=deactivated_count,
-        refreshed_at=started_at,
-    )
+    return deactivated_count
 
 
 def _upsert_external_group_page(
@@ -241,18 +293,9 @@ def mark_reconcile_dirty(instance_id: int, *, trigger: str) -> bool:
             or instance.reconcile_pending_trigger != SYNC_TRIGGER_OFFBOARD
         ):
             instance.reconcile_pending_trigger = trigger
-        lease_active = (
-            instance.reconcile_lease_token is not None
-            and instance.reconcile_lease_expires_at is not None
-            and instance.reconcile_lease_expires_at > now
-        )
-        queue_stale = (
-            instance.reconcile_worker_queued_at is None
-            or instance.reconcile_worker_queued_at
-            <= now - timedelta(seconds=RECONCILE_QUEUE_CLAIM_TIMEOUT_SECONDS)
-        )
-        should_queue = not lease_active and (
-            not instance.reconcile_worker_queued or queue_stale
+        should_queue = not _reconcile_lease_is_active(instance, now) and (
+            not instance.reconcile_worker_queued
+            or _reconcile_queue_is_stale(instance, now)
         )
         if should_queue:
             instance.reconcile_worker_queued = True
@@ -268,6 +311,22 @@ def mark_reconcile_dirty(instance_id: int, *, trigger: str) -> bool:
             ],
         )
     return should_queue
+
+
+def _reconcile_lease_is_active(instance: ConnectorInstance, now: datetime) -> bool:
+    return (
+        instance.reconcile_lease_token is not None
+        and instance.reconcile_lease_expires_at is not None
+        and instance.reconcile_lease_expires_at > now
+    )
+
+
+def _reconcile_queue_is_stale(instance: ConnectorInstance, now: datetime) -> bool:
+    return (
+        instance.reconcile_worker_queued_at is None
+        or instance.reconcile_worker_queued_at
+        <= now - timedelta(seconds=RECONCILE_QUEUE_CLAIM_TIMEOUT_SECONDS)
+    )
 
 
 def reconcile_instance(instance_id: int, *, trigger: str | None = None) -> ConnectorSyncRun | None:
@@ -421,42 +480,56 @@ def _finish_generation(instance: ConnectorInstance, *, report: ReconcileReport) 
             locked.save(update_fields=["reconcile_dirty", "updated_at"])
             return False
         if locked.reconcile_generation != instance.reconcile_generation:
-            locked.reconcile_dirty = True
-            locked.reconcile_lease_token = None
-            locked.reconcile_lease_expires_at = None
-            locked.save(
-                update_fields=[
-                    "reconcile_dirty",
-                    "reconcile_lease_token",
-                    "reconcile_lease_expires_at",
-                    "updated_at",
-                ],
-            )
+            _release_advanced_generation(locked)
             return True
-        success = report.status == SYNC_RUN_STATUS_SUCCESS
-        if success:
-            locked.reconciled_generation = instance.reconcile_generation
-        else:
-            locked.reconcile_dirty = True
-        locked.reconcile_lease_token = None
-        locked.reconcile_lease_expires_at = None
-        locked.save(
-            update_fields=[
-                "reconciled_generation",
-                "reconcile_dirty",
-                "reconcile_lease_token",
-                "reconcile_lease_expires_at",
-                "updated_at",
-            ],
-        )
-        if success:
-            _ = ConnectorMapping.objects.filter(instance=locked).filter(
-                Q(tombstoned=True) | Q(authorization_group__isnull=True),
-            ).delete()
-            if locked.tombstoned:
-                _ = locked.delete()
-                return False
-        return success and locked.reconcile_dirty
+        return _complete_generation(instance, locked, report=report)
+
+
+def _release_advanced_generation(instance: ConnectorInstance) -> None:
+    instance.reconcile_dirty = True
+    instance.reconcile_lease_token = None
+    instance.reconcile_lease_expires_at = None
+    instance.save(
+        update_fields=[
+            "reconcile_dirty",
+            "reconcile_lease_token",
+            "reconcile_lease_expires_at",
+            "updated_at",
+        ],
+    )
+
+
+def _complete_generation(
+    claimed: ConnectorInstance,
+    locked: ConnectorInstance,
+    *,
+    report: ReconcileReport,
+) -> bool:
+    success = report.status == SYNC_RUN_STATUS_SUCCESS
+    if success:
+        locked.reconciled_generation = claimed.reconcile_generation
+    else:
+        locked.reconcile_dirty = True
+    locked.reconcile_lease_token = None
+    locked.reconcile_lease_expires_at = None
+    locked.save(
+        update_fields=[
+            "reconciled_generation",
+            "reconcile_dirty",
+            "reconcile_lease_token",
+            "reconcile_lease_expires_at",
+            "updated_at",
+        ],
+    )
+    if not success:
+        return False
+    _ = ConnectorMapping.objects.filter(instance=locked).filter(
+        Q(tombstoned=True) | Q(authorization_group__isnull=True),
+    ).delete()
+    if locked.tombstoned:
+        _ = locked.delete()
+        return False
+    return locked.reconcile_dirty
 
 
 def record_sync_run(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from django.utils import timezone
@@ -92,62 +93,104 @@ def validated_approver_user_ids(
     return user_ids
 
 
+@dataclass(frozen=True, slots=True)
+class SubmissionScopeValidation:
+    """提交范围校验所需的规范化上下文。"""
+
+    request_type: AccessRequestType
+    authorization_groups: tuple[AuthorizationGroup, ...]
+    direct_grants: tuple[ScopedAccessRequestGrant, ...]
+    lock_base_grant: bool = False
+    manager_chain_resolution: ManagerChainResolution | None = None
+
+
 def validate_submission_scope(
     input_data: AccessRequestSubmission,
-    request_type: AccessRequestType,
-    authorization_groups: tuple[AuthorizationGroup, ...],
-    direct_grants: tuple[ScopedAccessRequestGrant, ...],
-    *,
-    lock_base_grant: bool = False,
-    manager_chain_resolution: ManagerChainResolution | None = None,
+    validation: SubmissionScopeValidation,
 ) -> None:
     _validate_user(input_data.user)
     _validate_expiration_shape(input_data.grant_type, input_data.grant_expires_at)
     _validate_app(input_data.app)
 
-    match request_type:
+    match validation.request_type:
         case "grant":
-            _validate_no_base_grant(input_data)
-            _validate_no_current_grant(input_data.user, input_data.app)
-            _validate_targets_present(authorization_groups, direct_grants)
-            _validate_targets(input_data.app, authorization_groups, direct_grants)
-            _validate_managed_users_approver(
-                input_data,
-                authorization_groups,
-                direct_grants,
-                manager_chain_resolution=manager_chain_resolution,
-            )
+            _validate_grant_submission(input_data, validation)
         case "change":
-            _ = base_lifecycle_grant_snapshot(input_data, for_update=lock_base_grant)
-            _validate_targets_present(authorization_groups, direct_grants)
-            _validate_targets(input_data.app, authorization_groups, direct_grants)
-            _validate_managed_users_approver(
-                input_data,
-                authorization_groups,
-                direct_grants,
-                manager_chain_resolution=manager_chain_resolution,
-            )
+            _validate_change_submission(input_data, validation)
         case "revoke":
-            snapshot = base_lifecycle_grant_snapshot(input_data, for_update=lock_base_grant)
-            _validate_targets_belong_to_app(input_data.app, authorization_groups, direct_grants)
-            _validate_revoke_subset(snapshot, authorization_groups, direct_grants)
-            _validate_managed_users_approver(
-                input_data,
-                authorization_groups,
-                direct_grants,
-                manager_chain_resolution=manager_chain_resolution,
-            )
+            _validate_revoke_submission(input_data, validation)
         case "renew":
-            snapshot = base_lifecycle_grant_snapshot(input_data, for_update=lock_base_grant)
-            _validate_renew_request(input_data.grant_type, input_data.grant_expires_at, snapshot)
-            _validate_targets_belong_to_app(input_data.app, authorization_groups, direct_grants)
-            _validate_renew_targets(snapshot, authorization_groups, direct_grants)
-            _validate_managed_users_approver(
-                input_data,
-                authorization_groups,
-                direct_grants,
-                manager_chain_resolution=manager_chain_resolution,
-            )
+            _validate_renew_submission(input_data, validation)
+
+
+def _validate_grant_submission(
+    input_data: AccessRequestSubmission,
+    validation: SubmissionScopeValidation,
+) -> None:
+    _validate_no_base_grant(input_data)
+    _validate_no_current_grant(input_data.user, input_data.app)
+    _validate_targets_present(validation.authorization_groups, validation.direct_grants)
+    _validate_targets(input_data.app, validation.authorization_groups, validation.direct_grants)
+    _validate_submission_approver(input_data, validation)
+
+
+def _validate_change_submission(
+    input_data: AccessRequestSubmission,
+    validation: SubmissionScopeValidation,
+) -> None:
+    _ = base_lifecycle_grant_snapshot(input_data, for_update=validation.lock_base_grant)
+    _validate_targets_present(validation.authorization_groups, validation.direct_grants)
+    _validate_targets(input_data.app, validation.authorization_groups, validation.direct_grants)
+    _validate_submission_approver(input_data, validation)
+
+
+def _validate_revoke_submission(
+    input_data: AccessRequestSubmission,
+    validation: SubmissionScopeValidation,
+) -> None:
+    snapshot = base_lifecycle_grant_snapshot(input_data, for_update=validation.lock_base_grant)
+    _validate_targets_belong_to_app(
+        input_data.app,
+        validation.authorization_groups,
+        validation.direct_grants,
+    )
+    _validate_revoke_subset(
+        snapshot,
+        validation.authorization_groups,
+        validation.direct_grants,
+    )
+    _validate_submission_approver(input_data, validation)
+
+
+def _validate_renew_submission(
+    input_data: AccessRequestSubmission,
+    validation: SubmissionScopeValidation,
+) -> None:
+    snapshot = base_lifecycle_grant_snapshot(input_data, for_update=validation.lock_base_grant)
+    _validate_renew_request(input_data.grant_type, input_data.grant_expires_at, snapshot)
+    _validate_targets_belong_to_app(
+        input_data.app,
+        validation.authorization_groups,
+        validation.direct_grants,
+    )
+    _validate_renew_targets(
+        snapshot,
+        validation.authorization_groups,
+        validation.direct_grants,
+    )
+    _validate_submission_approver(input_data, validation)
+
+
+def _validate_submission_approver(
+    input_data: AccessRequestSubmission,
+    validation: SubmissionScopeValidation,
+) -> None:
+    _validate_managed_users_approver(
+        input_data,
+        validation.authorization_groups,
+        validation.direct_grants,
+        manager_chain_resolution=validation.manager_chain_resolution,
+    )
 
 
 def _unique_non_empty_strings(values: Iterable[str]) -> tuple[str, ...]:
@@ -338,21 +381,28 @@ def _validate_renew_request(
 ) -> None:
     match grant_type:
         case "timed":
-            current_expirations = snapshot.membership_expirations
-            if (
-                grant_expires_at is None
-                or not current_expirations
-                or any(expiration is None for expiration in current_expirations)
-            ):
-                raise AccessRequestSubmissionError(("renew requires a timed grant expiration",))
-            if any(
-                grant_expires_at <= expiration
-                for expiration in current_expirations
-                if expiration is not None
-            ):
-                raise AccessRequestSubmissionError(("renew expiration must extend current grant",))
+            _validate_renew_expiration(grant_expires_at, snapshot.membership_expirations)
         case "permanent":
             raise AccessRequestSubmissionError(("renew requires a timed grant",))
+
+
+def _validate_renew_expiration(
+    grant_expires_at: datetime | None,
+    current_expirations: tuple[datetime | None, ...],
+) -> None:
+    """校验续期目标及新期限均为限时授权。"""
+    if (
+        grant_expires_at is None
+        or not current_expirations
+        or any(expiration is None for expiration in current_expirations)
+    ):
+        raise AccessRequestSubmissionError(("renew requires a timed grant expiration",))
+    if any(
+        grant_expires_at <= expiration
+        for expiration in current_expirations
+        if expiration is not None
+    ):
+        raise AccessRequestSubmissionError(("renew expiration must extend current grant",))
 
 
 def _validate_revoke_subset(

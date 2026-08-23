@@ -312,7 +312,14 @@ def _validate_renew_target(
         raise GrantBaseRevisionConflictError
     if _target_direct_grants(direct_grants) != set(current.direct_grants):
         raise GrantBaseRevisionConflictError
-    current_expirations = current.membership_expirations
+    _validate_renew_expiration(current.membership_expirations, requested_expires_at)
+
+
+def _validate_renew_expiration(
+    current_expirations: tuple[datetime | None, ...],
+    requested_expires_at: datetime | None,
+) -> None:
+    """校验当前授权和续期目标均具有可延长的期限。"""
     if not current_expirations or requested_expires_at is None:
         raise GrantApplyFailureError(CURRENT_GRANT_REQUIRED_MESSAGE)
     if any(expires_at is None for expires_at in current_expirations):
@@ -357,44 +364,14 @@ def _current_membership_mutation_input(
     current: EffectiveGrantSnapshot,
 ) -> GrantMutationInput:
     _validate_group_snapshot_present(access_request, authorization_group_ids)
-    group_expiration_rows = cast(
-        "tuple[tuple[int, datetime | None], ...]",
-        tuple(
-            AccessGrantGroup.objects.filter(grant=current.grant)
-            .values_list(
-                "authorization_group_id",
-                "expires_at",
-            )
-        ),
-    )
-    group_expirations = dict(group_expiration_rows)
-    direct_expiration_rows = cast(
-        "tuple[tuple[int, str, datetime | None], ...]",
-        tuple(
-            AccessGrantPermission.objects.filter(grant=current.grant).values_list(
-                "permission_id",
-                "scope_key",
-                "expires_at",
-            ),
-        ),
-    )
-    direct_expirations = {
-        (permission_id, scope_key): expires_at
-        for permission_id, scope_key, expires_at in direct_expiration_rows
-    }
+    group_expirations = _current_group_expirations(current.grant)
+    direct_expirations = _current_direct_expirations(current.grant)
     snapshot_direct_grants = _snapshot_direct_grant_inputs(
         access_request,
         group_expirations,
         authorization_group_ids,
     )
-    selected_direct_grants = tuple(
-        ScopedDirectGrantInput(
-            direct_grant.permission,
-            direct_grant.scope_key,
-            direct_expirations[(direct_grant.permission.id, direct_grant.scope_key)],
-        )
-        for direct_grant in direct_grants
-    )
+    selected_direct_grants = _selected_direct_grant_inputs(direct_grants, direct_expirations)
     direct_inputs = {
         (item.permission.id, item.scope_key): item
         for item in (*snapshot_direct_grants, *selected_direct_grants)
@@ -406,6 +383,55 @@ def _current_membership_mutation_input(
         direct_grants=tuple(direct_inputs.values()),
         actor_type=input_data.actor_type,
         actor_id=input_data.actor_id,
+    )
+
+
+def _current_group_expirations(grant: AccessGrant) -> dict[int, datetime | None]:
+    """读取当前授权组成员的期限。"""
+    group_expiration_rows = cast(
+        "tuple[tuple[int, datetime | None], ...]",
+        tuple(
+            AccessGrantGroup.objects.filter(grant=grant).values_list(
+                "authorization_group_id",
+                "expires_at",
+            )
+        ),
+    )
+    return dict(group_expiration_rows)
+
+
+def _current_direct_expirations(
+    grant: AccessGrant,
+) -> dict[tuple[int, str], datetime | None]:
+    """读取当前 direct grant 成员的期限。"""
+    direct_expiration_rows = cast(
+        "tuple[tuple[int, str, datetime | None], ...]",
+        tuple(
+            AccessGrantPermission.objects.filter(grant=grant).values_list(
+                "permission_id",
+                "scope_key",
+                "expires_at",
+            ),
+        ),
+    )
+    return {
+        (permission_id, scope_key): expires_at
+        for permission_id, scope_key, expires_at in direct_expiration_rows
+    }
+
+
+def _selected_direct_grant_inputs(
+    direct_grants: tuple[ScopedAccessRequestGrant, ...],
+    direct_expirations: dict[tuple[int, str], datetime | None],
+) -> tuple[ScopedDirectGrantInput, ...]:
+    """按申请目标保留当前 direct grant 期限。"""
+    return tuple(
+        ScopedDirectGrantInput(
+            direct_grant.permission,
+            direct_grant.scope_key,
+            direct_expirations[(direct_grant.permission.id, direct_grant.scope_key)],
+        )
+        for direct_grant in direct_grants
     )
 
 

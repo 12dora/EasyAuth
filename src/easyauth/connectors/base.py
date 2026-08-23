@@ -124,18 +124,8 @@ def validate_config_against_schema(
 ) -> list[str]:
     # 轻量校验(v1 只覆盖 required 与标量类型), 足够挡住控制台的手误输入;
     # 不引入完整 JSON Schema 校验器依赖。
-    problems: list[str] = []
-    properties = schema.get("properties")
-    property_specs = properties if isinstance(properties, dict) else {}
-    required = schema.get("required")
-    required_names = [name for name in required if isinstance(name, str)] if isinstance(
-        required,
-        list,
-    ) else []
-    for name in required_names:
-        value = config.get(name)
-        if value is None or value == "":
-            problems.append(f"缺少必填配置项 {name}。")
+    property_specs = _property_specs(schema)
+    problems = _required_problems(schema, config)
     for name, value in config.items():
         spec = property_specs.get(name)
         if not isinstance(spec, dict):
@@ -145,19 +135,45 @@ def validate_config_against_schema(
     return problems
 
 
+def _property_specs(schema: dict[str, JsonValue]) -> dict[str, JsonValue]:
+    properties = schema.get("properties")
+    return properties if isinstance(properties, dict) else {}
+
+
+def _required_problems(
+    schema: dict[str, JsonValue],
+    config: dict[str, JsonValue],
+) -> list[str]:
+    required = schema.get("required")
+    if not isinstance(required, list):
+        return []
+    problems: list[str] = []
+    for name in required:
+        if not isinstance(name, str):
+            continue
+        value = config.get(name)
+        if value is None or value == "":
+            problems.append(f"缺少必填配置项 {name}。")
+    return problems
+
+
 def _type_problems(name: str, spec: dict[str, JsonValue], value: JsonValue) -> list[str]:
     if value is None:
         return []
-    expected = spec.get("type")
     enum_values = spec.get("enum")
     if isinstance(enum_values, list) and value not in enum_values:
         return [f"配置项 {name} 不在允许的取值内。"]
+    problem = _expected_type_problem(name, spec.get("type"), value)
+    return [problem] if problem else []
+
+
+def _expected_type_problem(name: str, expected: JsonValue, value: JsonValue) -> str:
     match expected:
         case "string" if not isinstance(value, str):
-            return [f"配置项 {name} 必须是字符串。"]
+            return f"配置项 {name} 必须是字符串。"
         case "boolean" if not isinstance(value, bool):
-            return [f"配置项 {name} 必须是布尔值。"]
+            return f"配置项 {name} 必须是布尔值。"
         case "number" if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return [f"配置项 {name} 必须是数字。"]
+            return f"配置项 {name} 必须是数字。"
         case _:
-            return []
+            return ""

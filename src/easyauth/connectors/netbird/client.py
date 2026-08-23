@@ -78,6 +78,14 @@ class NetBirdGroup:
     name: str
 
 
+@dataclass(frozen=True, slots=True)
+class _RequestExecution:
+    method: str
+    path: str
+    deadline: float
+    max_attempts: int
+
+
 class NetBirdClient:
     def __init__(
         self,
@@ -200,12 +208,31 @@ class NetBirdClient:
             headers["Content-Type"] = "application/json"
         request = Request(url, data=data, headers=headers, method=method)  # noqa: S310 - URL 来自控制台超管配置。
         deadline = monotonic() + self._total_timeout_seconds
-        max_attempts = (
-            MAX_TRANSIENT_IDEMPOTENT_ATTEMPTS if method in {"GET", "PUT"} else 1
+        execution = _RequestExecution(
+            method=method,
+            path=path,
+            deadline=deadline,
+            max_attempts=(
+                MAX_TRANSIENT_IDEMPOTENT_ATTEMPTS if method in {"GET", "PUT"} else 1
+            ),
         )
+        raw = self._send_with_retries(request, execution)
+        if not raw:
+            return None
+        try:
+            return cast("JsonValue", loads(raw.decode("utf-8")))
+        except (JSONDecodeError, UnicodeDecodeError) as error:
+            message = f"NetBird API {method} {path} 响应不是有效 JSON。"
+            raise NetBirdApiError(message) from error
+
+    def _send_with_retries(
+        self,
+        request: Request,
+        execution: _RequestExecution,
+    ) -> bytes:
         raw = b""
-        for attempt in range(max_attempts):
-            remaining = deadline - monotonic()
+        for attempt in range(execution.max_attempts):
+            remaining = execution.deadline - monotonic()
             if remaining <= 0:
                 raise NetBirdApiError(TOTAL_TIMEOUT_MESSAGE)
             try:
@@ -216,23 +243,23 @@ class NetBirdClient:
                         timeout=min(self._timeout_seconds, remaining),
                     ),
                 ) as response:
-                    raw = _read_bounded(response, deadline=deadline)
+                    raw = _read_bounded(response, deadline=execution.deadline)
                 break
             except HTTPError as error:
-                message = f"NetBird API {method} {path} 返回 HTTP {error.code}。"
+                message = (
+                    f"NetBird API {execution.method} {execution.path} "
+                    f"返回 HTTP {error.code}。"
+                )
                 raise NetBirdApiError(message, status_code=error.code) from error
             except (URLError, TimeoutError) as error:
-                if attempt + 1 < max_attempts and monotonic() < deadline:
+                if (
+                    attempt + 1 < execution.max_attempts
+                    and monotonic() < execution.deadline
+                ):
                     continue
                 message = f"NetBird API 不可达: {error}"
                 raise NetBirdApiError(message) from error
-        if not raw:
-            return None
-        try:
-            return cast("JsonValue", loads(raw.decode("utf-8")))
-        except (JSONDecodeError, UnicodeDecodeError) as error:
-            message = f"NetBird API {method} {path} 响应不是有效 JSON。"
-            raise NetBirdApiError(message) from error
+        return raw
 
 
 def _read_bounded(response: _ReadableResponse, *, deadline: float) -> bytes:

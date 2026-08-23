@@ -329,22 +329,35 @@ def _applied_state_errors(request: AccessRequest) -> dict[str, str]:
 
 def _base_grant_errors(request: AccessRequest) -> dict[str, str]:
     """base_grant 的存在性与归属校验; 归属错误覆盖存在性错误(原顺序)。"""
-    errors: dict[str, str] = {}
+    errors = _base_grant_shape_errors(request)
+    if _base_grant_belongs_to_other_subject(request):
+        errors["base_grant"] = "Base grant must belong to the request user and app."
+    return errors
+
+
+def _base_grant_shape_errors(request: AccessRequest) -> dict[str, str]:
+    """校验申请类型与 base grant 字段形态。"""
     if request.request_type == REQUEST_TYPE_GRANT:
         if request.base_grant_id is not None or request.base_grant_revision is not None:
-            errors["base_grant"] = "Grant requests must not include a base grant."
-    elif request.base_grant_id is None or request.base_grant_revision is None:
-        errors["base_grant"] = "Lifecycle access requests must include a base grant revision."
-    if (
+            return {"base_grant": "Grant requests must not include a base grant."}
+        return {}
+    if request.base_grant_id is None or request.base_grant_revision is None:
+        return {
+            "base_grant": "Lifecycle access requests must include a base grant revision.",
+        }
+    return {}
+
+
+def _base_grant_belongs_to_other_subject(request: AccessRequest) -> bool:
+    """判断 base grant 是否属于其他用户或应用。"""
+    return (
         request.base_grant_id is not None
         and request.base_grant is not None
         and (
             request.base_grant.user_id != request.user_id
             or request.base_grant.app_id != request.app_id
         )
-    ):
-        errors["base_grant"] = "Base grant must belong to the request user and app."
-    return errors
+    )
 
 
 def _decision_errors(request: AccessRequest) -> dict[str, str]:

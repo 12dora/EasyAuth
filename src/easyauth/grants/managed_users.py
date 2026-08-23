@@ -50,6 +50,48 @@ def resolve_managed_users(
     authorization_group_grant: AuthorizationGroupGrant | None = None,
     directory_cache: ManagedUsersDirectoryCache | None = None,
 ) -> ResolvedManagedUsers | None:
+    resolver = _effective_resolver(app, authorization_group_grant)
+    if resolver is None:
+        return None
+    if resolver == MANAGED_SCOPE_POLICY_RESOLVER_EASYAUTH_TEAM:
+        return team_resolved_managed_users(user, resolver=resolver)
+
+    # dingtalk_manager_chain / union 都需要钉钉主管链。
+    team_resolution = (
+        team_resolved_managed_users(user, resolver=resolver)
+        if resolver == MANAGED_SCOPE_POLICY_RESOLVER_UNION
+        else None
+    )
+    if not user.dingtalk_source_slug or not user.dingtalk_corp_id or not user.dingtalk_userid:
+        _record_resolution_failed(
+            app=app,
+            authorization_group_grant=authorization_group_grant,
+            resolver=resolver,
+            error_code="managed_scope_user_dingtalk_binding_missing",
+        )
+        # 绑定缺失是稳定事实(非瞬时故障): union 下团队侧照常返回,
+        # dingtalk_manager_chain 下与既有语义一致地丢弃该 grant 的解析。
+        return team_resolution
+
+    managed_users = _available_managed_users(
+        user=user,
+        app=app,
+        authorization_group_grant=authorization_group_grant,
+        resolver=resolver,
+        directory_cache=directory_cache,
+    )
+    return _resolved_directory_users(
+        user=user,
+        resolver=resolver,
+        managed_users=managed_users,
+        team_resolution=team_resolution,
+    )
+
+
+def _effective_resolver(
+    app: App,
+    authorization_group_grant: AuthorizationGroupGrant | None,
+) -> str | None:
     effective_policy = ManagedScopePolicyService.get_effective_policy(
         app=app,
         grant=authorization_group_grant,
@@ -71,27 +113,17 @@ def resolve_managed_users(
             error_code="managed_scope_resolver_unsupported",
         )
         return None
+    return resolver
 
-    if resolver == MANAGED_SCOPE_POLICY_RESOLVER_EASYAUTH_TEAM:
-        return team_resolved_managed_users(user, resolver=resolver)
 
-    # dingtalk_manager_chain / union 都需要钉钉主管链。
-    team_resolution = (
-        team_resolved_managed_users(user, resolver=resolver)
-        if resolver == MANAGED_SCOPE_POLICY_RESOLVER_UNION
-        else None
-    )
-    if not user.dingtalk_source_slug or not user.dingtalk_corp_id or not user.dingtalk_userid:
-        _record_resolution_failed(
-            app=app,
-            authorization_group_grant=authorization_group_grant,
-            resolver=resolver,
-            error_code="managed_scope_user_dingtalk_binding_missing",
-        )
-        # 绑定缺失是稳定事实(非瞬时故障): union 下团队侧照常返回,
-        # dingtalk_manager_chain 下与既有语义一致地丢弃该 grant 的解析。
-        return team_resolution
-
+def _available_managed_users(
+    *,
+    user: UserMirror,
+    app: App,
+    authorization_group_grant: AuthorizationGroupGrant | None,
+    resolver: str,
+    directory_cache: ManagedUsersDirectoryCache | None,
+) -> DingTalkManagedUsers:
     try:
         managed_users = _managed_users_from_directory(user, directory_cache)
     except AuthentikDirectoryError as error:
@@ -112,7 +144,16 @@ def resolve_managed_users(
             error_code="managed_scope_directory_stale",
         )
         raise ManagedUsersResolutionUnavailableError
+    return managed_users
 
+
+def _resolved_directory_users(
+    *,
+    user: UserMirror,
+    resolver: str,
+    managed_users: DingTalkManagedUsers,
+    team_resolution: ResolvedManagedUsers | None,
+) -> ResolvedManagedUsers:
     chain_user_ids = tuple(
         user_id
         for user_id in managed_users.active_authentik_user_ids

@@ -141,26 +141,13 @@ class GrantService:
 def _validated_mutation_input(input_data: GrantMutationInput) -> GrantMutationInput:
     authorization_groups = tuple(input_data.authorization_groups)
     direct_grants = tuple(input_data.direct_grants)
-    if not authorization_groups and not direct_grants:
-        message = "grant mutation requires at least one membership"
-        raise ValueError(message)
+    _validate_memberships_present(authorization_groups, direct_grants)
 
     group_ids = [item.authorization_group.id for item in authorization_groups]
+    _validate_unique_authorization_groups(group_ids)
     direct_identities = [(item.permission.id, item.scope_key) for item in direct_grants]
-    if len(group_ids) != len(set(group_ids)):
-        message = "grant mutation contains duplicate authorization groups"
-        raise ValueError(message)
-    if len(direct_identities) != len(set(direct_identities)):
-        message = "grant mutation contains duplicate direct grants"
-        raise ValueError(message)
-
-    now = timezone.now()
-    expirations = [
-        *(item.expires_at for item in authorization_groups),
-        *(item.expires_at for item in direct_grants),
-    ]
-    if any(expires_at is not None and expires_at <= now for expires_at in expirations):
-        raise GrantMutationExpiredError
+    _validate_unique_direct_grants(direct_identities)
+    _validate_future_expirations(authorization_groups, direct_grants)
 
     return GrantMutationInput(
         user=input_data.user,
@@ -170,3 +157,37 @@ def _validated_mutation_input(input_data: GrantMutationInput) -> GrantMutationIn
         actor_type=input_data.actor_type,
         actor_id=input_data.actor_id,
     )
+
+
+def _validate_memberships_present(
+    authorization_groups: tuple[AuthorizationGroupGrantInput, ...],
+    direct_grants: tuple[ScopedDirectGrantInput, ...],
+) -> None:
+    if not authorization_groups and not direct_grants:
+        message = "grant mutation requires at least one membership"
+        raise ValueError(message)
+
+
+def _validate_unique_authorization_groups(group_ids: list[int]) -> None:
+    if len(group_ids) != len(set(group_ids)):
+        message = "grant mutation contains duplicate authorization groups"
+        raise ValueError(message)
+
+
+def _validate_unique_direct_grants(direct_identities: list[tuple[int, str]]) -> None:
+    if len(direct_identities) != len(set(direct_identities)):
+        message = "grant mutation contains duplicate direct grants"
+        raise ValueError(message)
+
+
+def _validate_future_expirations(
+    authorization_groups: tuple[AuthorizationGroupGrantInput, ...],
+    direct_grants: tuple[ScopedDirectGrantInput, ...],
+) -> None:
+    now = timezone.now()
+    expirations = [
+        *(item.expires_at for item in authorization_groups),
+        *(item.expires_at for item in direct_grants),
+    ]
+    if any(expires_at is not None and expires_at <= now for expires_at in expirations):
+        raise GrantMutationExpiredError
