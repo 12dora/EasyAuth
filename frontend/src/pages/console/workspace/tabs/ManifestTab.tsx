@@ -1,11 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { flexRender, getCoreRowModel, getPaginationRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
+import { getCoreRowModel, getPaginationRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
 import { Download, Eye, FileUp, Pencil, RefreshCcw, Save, UploadCloud, X } from "lucide-react";
 import { useRef, useState } from "react";
-import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../../../components/ui/TablePrimitives";
 import { EmptyState } from "../../../../components/ui/EmptyState";
+import { WorkspaceTable } from "../table/WorkspaceTable";
 import { PanelSurface } from "../../../../components/ui/PanelSurface";
-import { TablePagination } from "../../../../components/ui/TablePagination";
 
 import { Badge } from "../../../../components/Badge";
 import { Button } from "../../../../components/Button";
@@ -241,37 +240,12 @@ export function ManifestTab({ appKey }: { appKey: string }) {
       {currentPreview ? <ManifestDiffView preview={currentPreview.payload} /> : null}
       <div className="space-y-3">
         <h2 className="text-base font-semibold text-ink">版本历史</h2>
-        <TableFrame>
-        <TableRoot>
-          <TableHead>
-            {versionsTable.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <TableHeaderCell key={header.id}>{header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}</TableHeaderCell>
-                ))}
-              </TableRow>
-            ))}
-          </TableHead>
-          <TableBody>
-            {versionsQuery.isLoading ? (
-              <TableSkeletonRows columns={versionColumns.length} />
-            ) : versionsTable.getRowModel().rows.length > 0 ? (
-              versionsTable.getRowModel().rows.map((row) => (
-                <TableRow key={row.id}>
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                  ))}
-                </TableRow>
-              ))
-            ) : (
-              <TableEmptyRow colSpan={versionColumns.length}>
-                <EmptyState title="暂无版本历史" description="确认导入清单后会在这里记录版本。" />
-              </TableEmptyRow>
-            )}
-          </TableBody>
-        </TableRoot>
-          <TablePagination table={versionsTable} totalItems={versionsQuery.data?.pagination?.total_items ?? 0} />
-        </TableFrame>
+        <WorkspaceTable
+          table={versionsTable}
+          totalItems={versionsQuery.data?.pagination?.total_items ?? 0}
+          isLoading={versionsQuery.isLoading}
+          empty={<EmptyState title="暂无版本历史" description="确认导入清单后会在这里记录版本。" />}
+        />
       </div>
     </section>
   );
@@ -444,35 +418,7 @@ function ManifestDiffTable({ items }: { items: ManifestDiffItem[] }) {
   });
 
   return (
-    <TableFrame>
-      <TableRoot>
-        <TableHead>
-          {table.getHeaderGroups().map((headerGroup) => (
-            <TableRow key={headerGroup.id}>
-              {headerGroup.headers.map((header) => (
-                <TableHeaderCell key={header.id}>{header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}</TableHeaderCell>
-              ))}
-            </TableRow>
-          ))}
-        </TableHead>
-        <TableBody>
-          {table.getRowModel().rows.length > 0 ? (
-            table.getRowModel().rows.map((row) => (
-              <TableRow key={row.id}>
-                {row.getVisibleCells().map((cell) => (
-                  <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                ))}
-              </TableRow>
-            ))
-          ) : (
-            <TableEmptyRow colSpan={columns.length}>
-                无差异
-              </TableEmptyRow>
-          )}
-        </TableBody>
-      </TableRoot>
-      <TablePagination table={table} totalItems={items.length} />
-    </TableFrame>
+    <WorkspaceTable table={table} totalItems={items.length} empty="无差异" />
   );
 }
 

@@ -65,43 +65,6 @@ export function handoverKindLabel(t: Translator, kind: string): string {
   return key ? t(key) : kind || "-";
 }
 
-const ACTION_STATUS_KEYS: Record<string, MessageKey> = {
-  pending: "handover.actionStatus.pending",
-  previewed: "handover.actionStatus.previewed",
-  executing: "handover.actionStatus.executing",
-  async_pending: "handover.actionStatus.asyncPending",
-  done: "handover.actionStatus.done",
-  failed: "handover.actionStatus.failed",
-  skipped: "handover.actionStatus.skipped",
-  blocked: "handover.actionStatus.blocked",
-  async_attention_required: "handover.actionStatus.asyncAttentionRequired",
-};
-
-export function handoverActionStatusLabel(t: Translator, status: string): string {
-  const key = ACTION_STATUS_KEYS[status];
-  return key ? t(key) : status || "-";
-}
-
-export function handoverActionStatusTone(status: string): BadgeTone {
-  switch (status) {
-    case "done":
-      return "evergreen";
-    case "failed":
-    case "blocked":
-      return "signal";
-    case "executing":
-    case "async_pending":
-    case "async_attention_required":
-      return "amber";
-    case "previewed":
-      return "bond";
-    case "skipped":
-      return "faint";
-    default:
-      return "neutral";
-  }
-}
-
 const ASSIGNEE_STATE_KEYS: Record<string, MessageKey> = {
   manager: "handover.assigneeState.manager",
   subject: "handover.assigneeState.subject",
@@ -113,29 +76,25 @@ export function handoverAssigneeStateLabel(t: Translator, state: string): string
   return key ? t(key) : state || "-";
 }
 
+/** done 以外的状态直接查表; 表里没有的(pending)落到等待文案。 */
+const CARD_SUMMARY_KEYS: Record<string, MessageKey> = {
+  failed: "handover.card.failed",
+  executing: "handover.card.executing",
+  async_pending: "handover.card.asyncPending",
+  skipped: "handover.card.skipped",
+  blocked: "handover.actionStatus.blocked",
+  async_attention_required: "handover.actionStatus.asyncAttentionRequired",
+  previewed: "handover.card.previewed",
+};
+
 /** 应用交接卡的一句人话描述。 */
 export function handoverActionSummary(t: Translator, action: HandoverAction): string {
-  const grantName = action.grant_receiver?.name || action.grant_receiver?.user_id || "";
-  switch (action.status) {
-    case "done":
-      return grantName ? t("handover.card.doneTo", { name: grantName }) : t("handover.card.done");
-    case "failed":
-      return t("handover.card.failed");
-    case "executing":
-      return t("handover.card.executing");
-    case "async_pending":
-      return t("handover.card.asyncPending");
-    case "skipped":
-      return t("handover.card.skipped");
-    case "blocked":
-      return t("handover.actionStatus.blocked");
-    case "async_attention_required":
-      return t("handover.actionStatus.asyncAttentionRequired");
-    case "previewed":
-      return t("handover.card.previewed");
-    default:
-      return t("handover.card.waiting");
+  if (action.status === "done") {
+    const grantName = action.grant_receiver?.name || action.grant_receiver?.user_id || "";
+    return grantName ? t("handover.card.doneTo", { name: grantName }) : t("handover.card.done");
   }
+  const key = CARD_SUMMARY_KEYS[action.status];
+  return key ? t(key) : t("handover.card.waiting");
 }
 
 export interface ParsedGrantKey {

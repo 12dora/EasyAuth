@@ -1,10 +1,10 @@
 import { Badge } from "../../../components/Badge";
+import { actionStatusBadgeTone, actionStatusLabel } from "../../../features/handover/handoverActionPanelModel";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { cn } from "../../../lib/cn";
 import type { HandoverAction } from "../../../lib/domain";
 import { canSelectActionForWizard } from "./handoverWizardController";
 import { StepSection } from "./HandoverWizardChrome";
-import { handoverActionStatusLabel, handoverActionStatusTone } from "./lifecycleLabels";
 
 export interface HandoverWizardAppsStepProps {
   batchActions: HandoverAction[];
@@ -46,8 +46,8 @@ export function HandoverWizardAppsStep({
                   {blocked ? (
                     <span className="text-caption">{t("handover.wizard.apps.blocked")}</span>
                   ) : (
-                    <Badge tone={handoverActionStatusTone(action.status)}>
-                      {handoverActionStatusLabel(t, action.status)}
+                    <Badge tone={actionStatusBadgeTone(action.status)}>
+                      {actionStatusLabel(t, action.status)}
                     </Badge>
                   )}
                 </label>

@@ -1,10 +1,10 @@
 import { Badge } from "../../../components/Badge";
 import { StatusBanner } from "../../../components/StatusBanner";
+import { actionStatusBadgeTone, actionStatusLabel } from "../../../features/handover/handoverActionPanelModel";
 import { useI18n } from "../../../i18n/I18nProvider";
 import type { HandoverAction } from "../../../lib/domain";
 import type { WizardExecuteState } from "./handoverWizardModel";
 import { StepSection } from "./HandoverWizardChrome";
-import { handoverActionStatusLabel, handoverActionStatusTone } from "./lifecycleLabels";
 
 export interface HandoverWizardExecuteStepProps {
   selectedApps: HandoverAction[];
@@ -63,5 +63,5 @@ function ExecuteStateBadge({ state, action }: { state: WizardExecuteState | unde
   if (state === "async_pending") {
     return <Badge tone="amber">{t("handover.actionStatus.asyncPending")}</Badge>;
   }
-  return <Badge tone={handoverActionStatusTone(action.status)}>{handoverActionStatusLabel(t, action.status)}</Badge>;
+  return <Badge tone={actionStatusBadgeTone(action.status)}>{actionStatusLabel(t, action.status)}</Badge>;
 }

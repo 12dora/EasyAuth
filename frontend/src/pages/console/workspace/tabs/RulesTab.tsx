@@ -1,5 +1,4 @@
 import {
-  flexRender,
   getCoreRowModel,
   getPaginationRowModel,
   useReactTable,
@@ -7,11 +6,10 @@ import {
 } from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
-import { Fragment, useState } from "react";
-import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../../../components/ui/TablePrimitives";
+import { useState } from "react";
 import { EmptyState } from "../../../../components/ui/EmptyState";
+import { WorkspaceTable } from "../table/WorkspaceTable";
 import { TableActionCell, TableRowActionButton } from "../../../../components/ui/TableActions";
-import { TablePagination } from "../../../../components/ui/TablePagination";
 
 import { Badge } from "../../../../components/Badge";
 import { Button } from "../../../../components/Button";
@@ -157,43 +155,12 @@ export function RulesTab({ appKey }: { appKey: string }) {
         </Button>
       </div>
       {rulesQuery.error ? <StatusBanner live="alert" tone="signal" title={t("console.rules.loadFailed")} message={(rulesQuery.error as Error).message} /> : null}
-      <TableFrame>
-        <TableRoot>
-          <TableHead>
-            {ruleTable.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <TableHeaderCell key={header.id}>
-                    {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                  </TableHeaderCell>
-                ))}
-              </TableRow>
-            ))}
-          </TableHead>
-          <TableBody>
-            {rulesQuery.isLoading ? (
-              <TableSkeletonRows columns={ruleTable.getAllLeafColumns().length} />
-            ) : ruleTable.getRowModel().rows.length > 0 ? (
-              ruleTable.getRowModel().rows.map((row) => (
-                <TableRow key={row.id}>
-                  {row.getVisibleCells().map((cell) => (
-                    cell.column.id === "actions" ? (
-                      <Fragment key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Fragment>
-                    ) : (
-                      <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                    )
-                  ))}
-                </TableRow>
-              ))
-            ) : (
-              <TableEmptyRow colSpan={ruleTable.getAllLeafColumns().length}>
-                <EmptyState title={t("console.rules.empty")} description={t("console.rules.emptyDescription")} />
-              </TableEmptyRow>
-            )}
-          </TableBody>
-        </TableRoot>
-        <TablePagination table={ruleTable} totalItems={rules.length} />
-      </TableFrame>
+      <WorkspaceTable
+        table={ruleTable}
+        totalItems={rules.length}
+        isLoading={rulesQuery.isLoading}
+        empty={<EmptyState title={t("console.rules.empty")} description={t("console.rules.emptyDescription")} />}
+      />
       {dialogOpen ? (
         <Dialog title={editingRuleId ? t("console.rules.editTitle") : t("console.rules.createTitle")} onClose={() => setDialogOpen(false)} footer={
           <>

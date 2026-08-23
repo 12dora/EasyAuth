@@ -1,18 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  flexRender,
   getCoreRowModel,
   getPaginationRowModel,
   useReactTable,
   type ColumnDef,
 } from "@tanstack/react-table";
-import { Fragment } from "react";
 import { Pencil, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
-import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../../../components/ui/TablePrimitives";
 import { EmptyState } from "../../../../components/ui/EmptyState";
+import { WorkspaceTable } from "../table/WorkspaceTable";
 import { TableActionCell, TableRowActionButton } from "../../../../components/ui/TableActions";
-import { TablePagination } from "../../../../components/ui/TablePagination";
 
 import { Badge } from "../../../../components/Badge";
 import { Button } from "../../../../components/Button";
@@ -161,43 +158,12 @@ export function CredentialsTab({ appKey, canManage }: { appKey: string; canManag
       {credentialsQuery.error ? (
         <StatusBanner live="alert" tone="signal" title={t("console.credentials.loadFailed")} message={(credentialsQuery.error as Error).message} />
       ) : null}
-      <TableFrame>
-        <TableRoot>
-          <TableHead>
-            {credentialTable.getHeaderGroups().map((headerGroup) => (
-              <TableRow key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <TableHeaderCell key={header.id}>
-                    {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                  </TableHeaderCell>
-                ))}
-              </TableRow>
-            ))}
-          </TableHead>
-          <TableBody>
-            {credentialsQuery.isLoading ? (
-              <TableSkeletonRows columns={credentialColumns.length} />
-            ) : credentialTable.getRowModel().rows.length > 0 ? (
-              credentialTable.getRowModel().rows.map((row) => (
-                <TableRow key={row.id}>
-                  {row.getVisibleCells().map((cell) => (
-                    cell.column.id === "actions" ? (
-                      <Fragment key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Fragment>
-                    ) : (
-                      <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                    )
-                  ))}
-                </TableRow>
-              ))
-            ) : (
-              <TableEmptyRow colSpan={credentialColumns.length}>
-                <EmptyState title={t("console.credentials.empty")} description={t("console.credentials.emptyDescription")} />
-              </TableEmptyRow>
-            )}
-          </TableBody>
-        </TableRoot>
-        <TablePagination table={credentialTable} totalItems={credentials.length} />
-      </TableFrame>
+      <WorkspaceTable
+        table={credentialTable}
+        totalItems={credentials.length}
+        isLoading={credentialsQuery.isLoading}
+        empty={<EmptyState title={t("console.credentials.empty")} description={t("console.credentials.emptyDescription")} />}
+      />
       {createDialogOpen ? (
         <Dialog title={t("console.credentials.createTitle")} onClose={() => setCreateDialogOpen(false)}>
           <CreateCredentialForm

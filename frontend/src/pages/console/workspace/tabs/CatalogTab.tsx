@@ -1,5 +1,4 @@
 import {
-  flexRender,
   getCoreRowModel,
   getPaginationRowModel,
   useReactTable,
@@ -7,11 +6,10 @@ import {
 } from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
-import { Fragment, FormEvent, useMemo, useState } from "react";
-import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../../../components/ui/TablePrimitives";
+import { FormEvent, useMemo, useState } from "react";
 import { EmptyState } from "../../../../components/ui/EmptyState";
+import { WorkspaceTable } from "../table/WorkspaceTable";
 import { TableActionCell, TableRowActionButton } from "../../../../components/ui/TableActions";
-import { TablePagination } from "../../../../components/ui/TablePagination";
 
 import { Badge } from "../../../../components/Badge";
 import { Button } from "../../../../components/Button";
@@ -263,43 +261,12 @@ export function CatalogTab({ appKey }: { appKey: string }) {
               {t("common.new")}
             </Button>
           </div>
-          <TableFrame>
-          <TableRoot>
-            <TableHead>
-              {groupTable.getHeaderGroups().map((headerGroup) => (
-                <TableRow key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => (
-                    <TableHeaderCell key={header.id}>
-                      {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                    </TableHeaderCell>
-                  ))}
-                </TableRow>
-              ))}
-            </TableHead>
-            <TableBody>
-              {treeQuery.isLoading || groupsQuery.isLoading ? (
-                <TableSkeletonRows columns={groupTable.getAllLeafColumns().length} />
-              ) : groupTable.getRowModel().rows.length > 0 ? (
-                groupTable.getRowModel().rows.map((row) => (
-                  <TableRow key={row.id}>
-                    {row.getVisibleCells().map((cell) => (
-                      cell.column.id === "actions" ? (
-                        <Fragment key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Fragment>
-                      ) : (
-                        <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                      )
-                    ))}
-                  </TableRow>
-                ))
-              ) : (
-                <TableEmptyRow colSpan={groupTable.getAllLeafColumns().length}>
-                  <EmptyState title={t("console.catalog.groupsEmpty")} description={t("console.catalog.groupsEmptyDescription")} />
-                </TableEmptyRow>
-              )}
-            </TableBody>
-          </TableRoot>
-          <TablePagination table={groupTable} totalItems={groupRows.length} />
-          </TableFrame>
+          <WorkspaceTable
+            table={groupTable}
+            totalItems={groupRows.length}
+            isLoading={treeQuery.isLoading || groupsQuery.isLoading}
+            empty={<EmptyState title={t("console.catalog.groupsEmpty")} description={t("console.catalog.groupsEmptyDescription")} />}
+          />
         </section>
         <section className="space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -312,43 +279,12 @@ export function CatalogTab({ appKey }: { appKey: string }) {
               {t("common.new")}
             </Button>
           </div>
-          <TableFrame>
-          <TableRoot>
-            <TableHead>
-              {scopeTable.getHeaderGroups().map((headerGroup) => (
-                <TableRow key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => (
-                    <TableHeaderCell key={header.id}>
-                      {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                    </TableHeaderCell>
-                  ))}
-                </TableRow>
-              ))}
-            </TableHead>
-            <TableBody>
-              {scopesQuery.isLoading ? (
-                <TableSkeletonRows columns={scopeTable.getAllLeafColumns().length} />
-              ) : scopeTable.getRowModel().rows.length > 0 ? (
-                scopeTable.getRowModel().rows.map((row) => (
-                  <TableRow key={row.id}>
-                    {row.getVisibleCells().map((cell) => (
-                      cell.column.id === "actions" ? (
-                        <Fragment key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Fragment>
-                      ) : (
-                        <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                      )
-                    ))}
-                  </TableRow>
-                ))
-              ) : (
-                <TableEmptyRow colSpan={scopeTable.getAllLeafColumns().length}>
-                  <EmptyState title={t("console.catalog.scopesEmpty")} description={t("console.catalog.scopesEmptyDescription")} />
-                </TableEmptyRow>
-              )}
-            </TableBody>
-          </TableRoot>
-          <TablePagination table={scopeTable} totalItems={scopes.length} />
-          </TableFrame>
+          <WorkspaceTable
+            table={scopeTable}
+            totalItems={scopes.length}
+            isLoading={scopesQuery.isLoading}
+            empty={<EmptyState title={t("console.catalog.scopesEmpty")} description={t("console.catalog.scopesEmptyDescription")} />}
+          />
         </section>
       </div>
 
@@ -363,43 +299,12 @@ export function CatalogTab({ appKey }: { appKey: string }) {
             {t("common.new")}
           </Button>
         </div>
-        <TableFrame>
-          <TableRoot>
-            <TableHead>
-              {permissionTable.getHeaderGroups().map((headerGroup) => (
-                <TableRow key={headerGroup.id}>
-                  {headerGroup.headers.map((header) => (
-                    <TableHeaderCell key={header.id}>
-                      {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                    </TableHeaderCell>
-                  ))}
-                </TableRow>
-              ))}
-            </TableHead>
-            <TableBody>
-              {permissionsQuery.isLoading ? (
-                <TableSkeletonRows columns={permissionTable.getAllLeafColumns().length} />
-              ) : permissionTable.getRowModel().rows.length > 0 ? (
-                permissionTable.getRowModel().rows.map((row) => (
-                  <TableRow key={row.id}>
-                    {row.getVisibleCells().map((cell) => (
-                      cell.column.id === "actions" ? (
-                        <Fragment key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Fragment>
-                      ) : (
-                        <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                      )
-                    ))}
-                  </TableRow>
-                ))
-              ) : (
-                <TableEmptyRow colSpan={permissionTable.getAllLeafColumns().length}>
-                  <EmptyState title={t("console.catalog.permissionsEmpty")} description={t("console.catalog.permissionsEmptyDescription")} />
-                </TableEmptyRow>
-              )}
-            </TableBody>
-          </TableRoot>
-          <TablePagination table={permissionTable} totalItems={permissions.length} />
-        </TableFrame>
+        <WorkspaceTable
+          table={permissionTable}
+          totalItems={permissions.length}
+          isLoading={permissionsQuery.isLoading}
+          empty={<EmptyState title={t("console.catalog.permissionsEmpty")} description={t("console.catalog.permissionsEmptyDescription")} />}
+        />
       </section>
 
       {activeDialog === "scope" ? (
