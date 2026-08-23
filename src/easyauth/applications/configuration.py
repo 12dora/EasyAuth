@@ -62,8 +62,23 @@ def configuration_readiness_statuses_for_apps(
     app_ids = tuple(app.id for app in app_items)
     if not app_ids:
         return {}
-    blocking_ids: set[int] = {app.id for app in app_items if not app.is_active}
-    warning_ids: set[int] = set()
+    blocking_ids = _required_configuration_blocking_app_ids(app_items, app_ids)
+    blocking_ids.update(_requestable_group_missing_rule_app_ids(app_ids))
+    blocking_ids.update(_invalid_active_grant_app_ids(app_ids))
+    blocking_ids.update(_managed_scope_blocking_app_ids(app_ids))
+    warning_ids = _permission_warning_app_ids(app_ids)
+
+    return {
+        app_id: _summary_status(app_id, blocking_ids=blocking_ids, warning_ids=warning_ids)
+        for app_id in app_ids
+    }
+
+
+def _required_configuration_blocking_app_ids(
+    apps: tuple[App, ...],
+    app_ids: tuple[int, ...],
+) -> set[int]:
+    blocking_ids = {app.id for app in apps if not app.is_active}
 
     active_permission_counts = _counts_by_app(
         Permission.objects.filter(
@@ -100,16 +115,7 @@ def configuration_readiness_statuses_for_apps(
             and active_oauth_counts.get(app_id, 0) == 0
         ):
             blocking_ids.add(app_id)
-
-    blocking_ids.update(_requestable_group_missing_rule_app_ids(app_ids))
-    blocking_ids.update(_invalid_active_grant_app_ids(app_ids))
-    blocking_ids.update(_managed_scope_blocking_app_ids(app_ids))
-    warning_ids.update(_permission_warning_app_ids(app_ids))
-
-    return {
-        app_id: _summary_status(app_id, blocking_ids=blocking_ids, warning_ids=warning_ids)
-        for app_id in app_ids
-    }
+    return blocking_ids
 
 
 def _counts_by_app(queryset: QuerySet[Model]) -> dict[int, int]:

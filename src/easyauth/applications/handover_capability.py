@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Final
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Final, cast
 
 from django.db import transaction
 from django.utils import timezone
@@ -25,10 +26,33 @@ from easyauth.lifecycle.models import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from easyauth.applications.ops_models import JsonValue
 
 CAPABILITY_HANDOVER_V2: Final = "handover.v2"
 CAPABILITY_HANDOVER_NONE: Final = "handover.none"
+
+
+@dataclass(frozen=True, slots=True)
+class _ManifestHandoverDeclaration:
+    capabilities: list[JsonValue]
+    handover_url: str
+    raw_types: list[object]
+    has_v2: bool
+    has_none: bool
+
+    @property
+    def has_conflict(self) -> bool:
+        return self.has_v2 and self.has_none
+
+    @property
+    def has_usable_v2(self) -> bool:
+        return self.has_v2 and bool(self.handover_url)
+
+    @property
+    def has_empty_none(self) -> bool:
+        return self.has_none and not self.raw_types
 
 
 def sync_handover_capability_from_manifest(
@@ -42,75 +66,104 @@ def sync_handover_capability_from_manifest(
 
     lifecycle 需提供 capabilities / handover_url / handover_asset_types。
     """
-    capabilities = list(getattr(lifecycle, "capabilities", ()) or ())
-    handover_url = str(getattr(lifecycle, "handover_url", "") or "")
-    raw_types = list(getattr(lifecycle, "handover_asset_types", ()) or ())
-    has_v2 = CAPABILITY_HANDOVER_V2 in capabilities
-    has_none = CAPABILITY_HANDOVER_NONE in capabilities
+    declaration = _manifest_handover_declaration(lifecycle)
     previous = app.handover_capability
 
-    if has_v2 and has_none:
-        _ = AuditService.record(
-            AuditRecord(
-                actor_type=actor_type,
-                actor_id=actor_id or LIFECYCLE_ACTOR_ID,
-                action="handover_capability_conflict",
-                target_type="app",
-                target_id=app.app_key,
-                metadata={"capabilities": capabilities},
-            ),
+    if declaration.has_conflict:
+        _record_capability_conflict(
+            app,
+            capabilities=declaration.capabilities,
+            actor_id=actor_id,
+            actor_type=actor_type,
         )
-        app.handover_capability = HANDOVER_CAPABILITY_UNDECLARED
-        app.handover_asset_types = []
-        app.handover_capability_synced_at = timezone.now()
-        app.save(
-            update_fields=[
-                "handover_capability",
-                "handover_asset_types",
-                "handover_capability_synced_at",
-                "updated_at",
-            ],
-        )
+        _save_manifest_capability(app, HANDOVER_CAPABILITY_UNDECLARED, [])
         return
 
-    if has_v2 and handover_url:
-        asset_types = [_normalize_asset_type(item) for item in raw_types]
-        app.handover_capability = HANDOVER_CAPABILITY_DECLARED
-        app.handover_asset_types = asset_types
-        app.handover_capability_synced_at = timezone.now()
-        app.save(
-            update_fields=[
-                "handover_capability",
-                "handover_asset_types",
-                "handover_capability_synced_at",
-                "updated_at",
-            ],
+    if declaration.has_usable_v2:
+        _save_manifest_capability(
+            app,
+            HANDOVER_CAPABILITY_DECLARED,
+            [_normalize_asset_type(item) for item in declaration.raw_types],
         )
         if previous == HANDOVER_CAPABILITY_UNDECLARED:
             reconcile_blocked_actions(app, actor_id=actor_id, actor_type=actor_type)
         return
 
-    if has_none and not raw_types:
+    if declaration.has_empty_none:
         # none 必须由超管声明人或 manifest 路径带 declared_by; 此处仅当已是 none 时刷新时间。
         if previous == HANDOVER_CAPABILITY_NONE:
-            app.handover_capability_synced_at = timezone.now()
-            app.save(update_fields=["handover_capability_synced_at", "updated_at"])
-        elif previous != HANDOVER_CAPABILITY_NONE:
+            _refresh_capability_sync_time(app)
+        else:
             # manifest 声明 none 但无运营声明人 → undeclared(不静默写 none)。
-            app.handover_capability = HANDOVER_CAPABILITY_UNDECLARED
-            app.handover_capability_synced_at = timezone.now()
-            app.save(
-                update_fields=[
-                    "handover_capability",
-                    "handover_capability_synced_at",
-                    "updated_at",
-                ],
-            )
+            _save_undeclared_capability(app)
         return
 
     # 拉取失败 / 无能力串: 不覆盖已有 none。
     if previous == HANDOVER_CAPABILITY_NONE:
         return
+    _save_undeclared_capability(app)
+
+
+def _manifest_handover_declaration(lifecycle: object) -> _ManifestHandoverDeclaration:
+    capabilities = list(
+        cast("Iterable[JsonValue]", getattr(lifecycle, "capabilities", ()) or ()),
+    )
+    handover_url = str(getattr(lifecycle, "handover_url", "") or "")
+    raw_types = list(
+        cast("Iterable[object]", getattr(lifecycle, "handover_asset_types", ()) or ()),
+    )
+    return _ManifestHandoverDeclaration(
+        capabilities=capabilities,
+        handover_url=handover_url,
+        raw_types=raw_types,
+        has_v2=CAPABILITY_HANDOVER_V2 in capabilities,
+        has_none=CAPABILITY_HANDOVER_NONE in capabilities,
+    )
+
+
+def _record_capability_conflict(
+    app: App,
+    *,
+    capabilities: list[JsonValue],
+    actor_id: str,
+    actor_type: str,
+) -> None:
+    _ = AuditService.record(
+        AuditRecord(
+            actor_type=actor_type,
+            actor_id=actor_id or LIFECYCLE_ACTOR_ID,
+            action="handover_capability_conflict",
+            target_type="app",
+            target_id=app.app_key,
+            metadata={"capabilities": capabilities},
+        ),
+    )
+
+
+def _save_manifest_capability(
+    app: App,
+    capability: str,
+    asset_types: list[JsonValue],
+) -> None:
+    app.handover_capability = capability
+    app.handover_asset_types = asset_types
+    app.handover_capability_synced_at = timezone.now()
+    app.save(
+        update_fields=[
+            "handover_capability",
+            "handover_asset_types",
+            "handover_capability_synced_at",
+            "updated_at",
+        ],
+    )
+
+
+def _refresh_capability_sync_time(app: App) -> None:
+    app.handover_capability_synced_at = timezone.now()
+    app.save(update_fields=["handover_capability_synced_at", "updated_at"])
+
+
+def _save_undeclared_capability(app: App) -> None:
     app.handover_capability = HANDOVER_CAPABILITY_UNDECLARED
     app.handover_capability_synced_at = timezone.now()
     app.save(
@@ -128,7 +181,7 @@ def reconcile_blocked_actions(
     actor_id: str,
     actor_type: str = "system",
 ) -> None:
-    """undeclared → declared 后, 同事务 reconcile open task 上的 blocked action。"""
+    """从 undeclared → declared 后, 同事务 reconcile open task 上的 blocked action。"""
     with transaction.atomic():
         actions = list(
             HandoverAppAction.objects.select_for_update()
@@ -188,11 +241,12 @@ def declare_handover_none(app: App, *, actor_id: str, reason: str) -> App:
 
 def _normalize_asset_type(item: object) -> dict[str, JsonValue]:
     if isinstance(item, dict):
+        values = cast("dict[str, object]", item)
         return {
-            "type": str(item.get("type", "")),
-            "label": str(item.get("label", "")),
-            "detail_supported": bool(item.get("detail_supported", False)),
-            "releasable": bool(item.get("releasable", False)),
+            "type": str(values.get("type", "")),
+            "label": str(values.get("label", "")),
+            "detail_supported": bool(values.get("detail_supported", False)),
+            "releasable": bool(values.get("releasable", False)),
         }
     type_key = str(getattr(item, "type", "") or getattr(item, "type_key", ""))
     return {

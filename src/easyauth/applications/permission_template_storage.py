@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from django.utils import timezone
@@ -17,11 +18,24 @@ from easyauth.applications.models import (
     PermissionTemplateVersion,
 )
 from easyauth.applications.ops_models import TEMPLATE_STATUS_IMPORTED
+from easyauth.applications.permission_template_exporting import (
+    export_app,
+    export_approval_rules,
+    export_authorization_groups,
+    export_permission_groups,
+    export_permissions,
+    export_scopes,
+    group_parent_key,
+    latest_manifest_schema_version,
+    permission_group_key,
+)
 from easyauth.applications.permission_template_types import (
     AppManifestApprovalRuleInput,
     AppManifestAuthorizationGroupInput,
     AppManifestInput,
     AppManifestPermissionGroupInput,
+    AppManifestPermissionInput,
+    AppManifestScopeInput,
     FlattenedTemplate,
     PermissionTemplateImportError,
     TemplateAction,
@@ -29,6 +43,8 @@ from easyauth.applications.permission_template_types import (
 from easyauth.audit.services import AuditRecord, AuditService
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Mapping
+
     from easyauth.applications.models import JsonValue
 
 PERMISSION_TEMPLATE_IMPORTED_EVENT = "app_manifest_imported"
@@ -126,185 +142,172 @@ def bump_manifest_catalog_version(
 
 def export_manifest(app: App) -> dict[str, JsonValue]:
     return {
-        "schema_version": _latest_manifest_schema_version(app),
-        "app": {
-            "app_key": app.app_key,
-            "name": app.name,
-            "description": app.description,
-            "is_active": app.is_active,
-        },
-        "scopes": [
-            {
-                "key": scope.key,
-                "name": scope.name,
-                "description": scope.description,
-                **_bilingual_export_fields(
-                    name_en=scope.name_en,
-                    description_en=scope.description_en,
-                ),
-                "is_active": scope.is_active,
-                "display_order": scope.display_order,
-            }
-            for scope in AppScope.objects.filter(app=app).order_by("display_order", "key")
-        ],
-        "permission_groups": [
-            {
-                "key": group.key,
-                "name": group.name,
-                "description": group.description,
-                **_bilingual_export_fields(
-                    name_en=group.name_en,
-                    description_en=group.description_en,
-                ),
-                "parent_key": _group_parent_key(group),
-                "display_order": group.display_order,
-                "is_active": group.is_active,
-            }
-            for group in PermissionGroup.objects.filter(app=app)
-            .select_related("parent")
-            .order_by("display_order", "key")
-        ],
-        "permissions": [
-            {
-                "key": permission.key,
-                "name": permission.name,
-                "description": permission.description,
-                **_bilingual_export_fields(
-                    name_en=permission.name_en,
-                    description_en=permission.description_en,
-                ),
-                "group_key": _permission_group_key(permission),
-                "supported_scopes": permission.supported_scopes,
-                "risk_level": permission.risk_level,
-                "is_active": permission.is_active,
-            }
-            for permission in Permission.objects.filter(app=app)
-            .select_related("group")
-            .order_by("key")
-        ],
-        "authorization_groups": [
-            _export_authorization_group(authorization_group)
-            for authorization_group in AuthorizationGroup.objects.filter(app=app).order_by(
-                "kind",
-                "key",
-            )
-        ],
-        "approval_rules": [
-            _export_approval_rule(rule)
-            for rule in ApprovalRule.objects.filter(app=app)
-            .select_related("authorization_group", "permission")
-            .order_by("id")
-            if _export_approval_rule(rule) is not None
-        ],
+        "schema_version": latest_manifest_schema_version(app),
+        "app": export_app(app),
+        "scopes": export_scopes(app),
+        "permission_groups": export_permission_groups(app),
+        "permissions": export_permissions(app),
+        "authorization_groups": export_authorization_groups(app),
+        "approval_rules": export_approval_rules(app),
     }
 
 
-def _scope_actions(app: App, manifest: AppManifestInput) -> list[TemplateAction]:
+@dataclass(frozen=True, slots=True)
+class _ActionDiffSpec[ExistingT, IncomingT]:
+    create: str
+    update: str
+    deactivate: str
+    changed: Callable[[ExistingT, IncomingT], bool]
+    active: Callable[[ExistingT], bool]
+    detail: Callable[[IncomingT], str] | None = None
+
+
+def _diff_actions[ExistingT, IncomingT](
+    existing: Mapping[str, ExistingT],
+    incoming: Mapping[str, IncomingT],
+    spec: _ActionDiffSpec[ExistingT, IncomingT],
+) -> list[TemplateAction]:
     actions: list[TemplateAction] = []
-    existing = {scope.key: scope for scope in AppScope.objects.filter(app=app)}
-    incoming = {scope.key: scope for scope in manifest.scopes}
-    for key, scope in incoming.items():
+    for key, item in incoming.items():
         current = existing.get(key)
+        detail = spec.detail(item) if spec.detail is not None else ""
         if current is None:
-            actions.append(TemplateAction("create_scope", key))
-        elif (
-            current.name != scope.name
-            or current.name_en != scope.name_en
-            or current.description != scope.description
-            or current.description_en != scope.description_en
-            or current.is_active != scope.is_active
-            or current.display_order != scope.display_order
-        ):
-            actions.append(TemplateAction("update_scope", key))
+            actions.append(TemplateAction(spec.create, key, detail))
+        elif spec.changed(current, item):
+            actions.append(TemplateAction(spec.update, key, detail))
     actions.extend(
-        TemplateAction("deactivate_scope", key)
+        TemplateAction(spec.deactivate, key)
         for key, current in sorted(existing.items())
-        if key not in incoming and current.is_active
+        if key not in incoming and spec.active(current)
     )
     return actions
+
+
+def _scope_changed(current: AppScope, scope: AppManifestScopeInput) -> bool:
+    return (
+        current.name != scope.name
+        or current.name_en != scope.name_en
+        or current.description != scope.description
+        or current.description_en != scope.description_en
+        or current.is_active != scope.is_active
+        or current.display_order != scope.display_order
+    )
+
+
+def _permission_group_changed(
+    current: PermissionGroup,
+    group: AppManifestPermissionGroupInput,
+) -> bool:
+    return (
+        current.name != group.name
+        or current.name_en != group.name_en
+        or current.description != group.description
+        or current.description_en != group.description_en
+        or group_parent_key(current) != group.parent_key
+        or current.display_order != group.display_order
+        or current.is_active != group.is_active
+    )
+
+
+def _permission_changed(
+    current: Permission,
+    permission: AppManifestPermissionInput,
+) -> bool:
+    return (
+        current.name != permission.name
+        or current.name_en != permission.name_en
+        or current.description != permission.description
+        or current.description_en != permission.description_en
+        or permission_group_key(current) != permission.group_key
+        or current.supported_scopes != list(permission.supported_scopes)
+        or current.risk_level != permission.risk_level
+        or current.is_active != permission.is_active
+    )
+
+
+def _authorization_group_changed(
+    current: AuthorizationGroup,
+    group: AppManifestAuthorizationGroupInput,
+) -> bool:
+    return (
+        current.kind != group.kind
+        or current.name != group.name
+        or current.name_en != group.name_en
+        or current.description != group.description
+        or current.description_en != group.description_en
+        or current.requestable != group.requestable
+        or current.is_active != group.is_active
+        or _grant_set(current) != _incoming_grant_set(group)
+    )
+
+
+def _scope_actions(app: App, manifest: AppManifestInput) -> list[TemplateAction]:
+    existing = {scope.key: scope for scope in AppScope.objects.filter(app=app)}
+    incoming = {scope.key: scope for scope in manifest.scopes}
+    return _diff_actions(
+        existing,
+        incoming,
+        _ActionDiffSpec(
+            create="create_scope",
+            update="update_scope",
+            deactivate="deactivate_scope",
+            changed=_scope_changed,
+            active=lambda scope: scope.is_active,
+        ),
+    )
 
 
 def _permission_group_actions(app: App, manifest: AppManifestInput) -> list[TemplateAction]:
-    actions: list[TemplateAction] = []
     existing = {group.key: group for group in PermissionGroup.objects.filter(app=app)}
     incoming = {group.key: group for group in manifest.permission_groups}
-    for key, group in incoming.items():
-        current = existing.get(key)
-        if current is None:
-            actions.append(TemplateAction("create_permission_group", key, group.parent_key))
-        elif (
-            current.name != group.name
-            or current.name_en != group.name_en
-            or current.description != group.description
-            or current.description_en != group.description_en
-            or _group_parent_key(current) != group.parent_key
-            or current.display_order != group.display_order
-            or current.is_active != group.is_active
-        ):
-            actions.append(TemplateAction("update_permission_group", key, group.parent_key))
-    actions.extend(
-        TemplateAction("deactivate_permission_group", key)
-        for key, current in sorted(existing.items())
-        if key not in incoming and current.is_active
+    return _diff_actions(
+        existing,
+        incoming,
+        _ActionDiffSpec(
+            create="create_permission_group",
+            update="update_permission_group",
+            deactivate="deactivate_permission_group",
+            changed=_permission_group_changed,
+            active=lambda group: group.is_active,
+            detail=lambda group: group.parent_key,
+        ),
     )
-    return actions
 
 
 def _permission_actions(app: App, manifest: AppManifestInput) -> list[TemplateAction]:
-    actions: list[TemplateAction] = []
     existing = {permission.key: permission for permission in Permission.objects.filter(app=app)}
     incoming = {permission.key: permission for permission in manifest.permissions}
-    for key, permission in incoming.items():
-        current = existing.get(key)
-        if current is None:
-            actions.append(TemplateAction("create_permission", key, permission.group_key))
-        elif (
-            current.name != permission.name
-            or current.name_en != permission.name_en
-            or current.description != permission.description
-            or current.description_en != permission.description_en
-            or _permission_group_key(current) != permission.group_key
-            or current.supported_scopes != list(permission.supported_scopes)
-            or current.risk_level != permission.risk_level
-            or current.is_active != permission.is_active
-        ):
-            actions.append(TemplateAction("update_permission", key, permission.group_key))
-    actions.extend(
-        TemplateAction("deactivate_permission", key)
-        for key, current in sorted(existing.items())
-        if key not in incoming and current.is_active
+    return _diff_actions(
+        existing,
+        incoming,
+        _ActionDiffSpec(
+            create="create_permission",
+            update="update_permission",
+            deactivate="deactivate_permission",
+            changed=_permission_changed,
+            active=lambda permission: permission.is_active,
+            detail=lambda permission: permission.group_key,
+        ),
     )
-    return actions
 
 
 def _authorization_group_actions(app: App, manifest: AppManifestInput) -> list[TemplateAction]:
-    actions: list[TemplateAction] = []
     existing = {
         authorization_group.key: authorization_group
         for authorization_group in AuthorizationGroup.objects.filter(app=app)
     }
     incoming = {group.key: group for group in manifest.authorization_groups}
-    for key, group in incoming.items():
-        current = existing.get(key)
-        if current is None:
-            actions.append(TemplateAction("create_authorization_group", key))
-        elif (
-            current.kind != group.kind
-            or current.name != group.name
-            or current.name_en != group.name_en
-            or current.description != group.description
-            or current.description_en != group.description_en
-            or current.requestable != group.requestable
-            or current.is_active != group.is_active
-            or _grant_set(current) != _incoming_grant_set(group)
-        ):
-            actions.append(TemplateAction("update_authorization_group", key))
-    actions.extend(
-        TemplateAction("deactivate_authorization_group", key)
-        for key, current in sorted(existing.items())
-        if key not in incoming and current.is_active
+    return _diff_actions(
+        existing,
+        incoming,
+        _ActionDiffSpec(
+            create="create_authorization_group",
+            update="update_authorization_group",
+            deactivate="deactivate_authorization_group",
+            changed=_authorization_group_changed,
+            active=lambda group: group.is_active,
+        ),
     )
-    return actions
 
 
 def _approval_rule_actions(app: App, manifest: AppManifestInput) -> list[TemplateAction]:
@@ -586,70 +589,6 @@ def _detach_missing_permission_group_roots(app: App, incoming_keys: set[str]) ->
         group.save(update_fields=["parent", "depth", "updated_at"])
 
 
-def _latest_manifest_schema_version(app: App) -> int:
-    latest = PermissionTemplateVersion.objects.filter(app=app).order_by("-version").first()
-    return latest.version if latest is not None else 1
-
-
-def _bilingual_export_fields(*, name_en: str, description_en: str) -> dict[str, str]:
-    # 导出的 manifest 只在双语字段非空时输出对应键, 保持导出干净且可直接回放导入。
-    fields: dict[str, str] = {}
-    if name_en:
-        fields["name_en"] = name_en
-    if description_en:
-        fields["description_en"] = description_en
-    return fields
-
-
-def _export_authorization_group(group: AuthorizationGroup) -> dict[str, JsonValue]:
-    return {
-        "key": group.key,
-        "kind": group.kind,
-        "name": group.name,
-        "description": group.description,
-        **_bilingual_export_fields(name_en=group.name_en, description_en=group.description_en),
-        "requestable": group.requestable,
-        "is_active": group.is_active,
-        "grants": [
-            {
-                "permission": grant.permission.key,
-                "scope": grant.scope_key,
-                "is_active": grant.is_active,
-            }
-            for grant in AuthorizationGroupGrant.objects.filter(authorization_group=group)
-            .select_related("permission")
-            .order_by(
-                "permission__key",
-                "scope_key",
-            )
-        ],
-    }
-
-
-def _export_approval_rule(rule: ApprovalRule) -> dict[str, JsonValue] | None:
-    if rule.authorization_group_id:
-        authorization_group = rule.authorization_group
-        if authorization_group is None:
-            return None
-        return {
-            "target_type": "authorization_group",
-            "target_key": authorization_group.key,
-            "approver_userids": rule.approver_userids,
-            "is_active": rule.is_active,
-        }
-    if rule.permission_id:
-        permission = rule.permission
-        if permission is None:
-            return None
-        return {
-            "target_type": "permission",
-            "target_key": permission.key,
-            "approver_userids": rule.approver_userids,
-            "is_active": rule.is_active,
-        }
-    return None
-
-
 def _grant_set(group: AuthorizationGroup) -> set[tuple[str, str, bool]]:
     grants = AuthorizationGroupGrant.objects.filter(authorization_group=group).select_related(
         "permission",
@@ -680,13 +619,3 @@ def _approval_rule_key(rule: ApprovalRule) -> str:
 
 def _approval_rule_input_key(rule: AppManifestApprovalRuleInput) -> str:
     return f"{rule.target_type}:{rule.target_key}"
-
-
-def _group_parent_key(group: PermissionGroup) -> str:
-    parent = group.parent
-    return parent.key if parent is not None else ""
-
-
-def _permission_group_key(permission: Permission) -> str:
-    group = permission.group
-    return group.key if group is not None else ""

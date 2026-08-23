@@ -229,26 +229,11 @@ def _check_dingtalk() -> DependencyCheckResult:
     now = timezone.now()
     errored = [state for state in states if state.error or state.status != "success"]
     if errored:
-        corps = ", ".join(f"{state.source_slug}:{state.corp_id}" for state in errored)
-        return DependencyCheckResult(
-            dependency=DEPENDENCY_DINGTALK,
-            status=DEPENDENCY_HEALTH_STATUS_UNHEALTHY,
-            summary=f"钉钉目录同步存在失败的 corp({corps})。",
-            error_summary="; ".join(state.error or state.status for state in errored),
-        )
+        return _dingtalk_error_result(errored)
 
     stale = [state for state in states if is_sync_state_stale(state, now=now)]
     if stale:
-        corps = ", ".join(
-            f"{state.source_slug}:{state.corp_id}@{sync_state_freshness_at(state).isoformat()}"
-            for state in stale
-        )
-        return DependencyCheckResult(
-            dependency=DEPENDENCY_DINGTALK,
-            status=DEPENDENCY_HEALTH_STATUS_WARNING,
-            summary=f"钉钉目录同步结果已过期({corps})。",
-            error_summary="",
-        )
+        return _dingtalk_stale_result(stale)
 
     oldest = min(sync_state_freshness_at(state) for state in states)
     return DependencyCheckResult(
@@ -259,8 +244,35 @@ def _check_dingtalk() -> DependencyCheckResult:
     )
 
 
-def check_dingtalk_notify() -> DependencyCheckResult:
-    enabled_rows = cast(
+def _dingtalk_error_result(
+    states: list[DingTalkDirectorySyncState],
+) -> DependencyCheckResult:
+    corps = ", ".join(f"{state.source_slug}:{state.corp_id}" for state in states)
+    return DependencyCheckResult(
+        dependency=DEPENDENCY_DINGTALK,
+        status=DEPENDENCY_HEALTH_STATUS_UNHEALTHY,
+        summary=f"钉钉目录同步存在失败的 corp({corps})。",
+        error_summary="; ".join(state.error or state.status for state in states),
+    )
+
+
+def _dingtalk_stale_result(
+    states: list[DingTalkDirectorySyncState],
+) -> DependencyCheckResult:
+    corps = ", ".join(
+        f"{state.source_slug}:{state.corp_id}@{sync_state_freshness_at(state).isoformat()}"
+        for state in states
+    )
+    return DependencyCheckResult(
+        dependency=DEPENDENCY_DINGTALK,
+        status=DEPENDENCY_HEALTH_STATUS_WARNING,
+        summary=f"钉钉目录同步结果已过期({corps})。",
+        error_summary="",
+    )
+
+
+def _enabled_notify_apps() -> dict[int, str]:
+    rows = cast(
         "list[tuple[int, str]]",
         list(
             AppCapability.objects.filter(
@@ -270,15 +282,13 @@ def check_dingtalk_notify() -> DependencyCheckResult:
             ).values_list("app_id", "app__app_key"),
         ),
     )
-    enabled_apps = dict(enabled_rows)
-    if not enabled_apps:
-        return DependencyCheckResult(
-            dependency=DEPENDENCY_DINGTALK_NOTIFY,
-            status=DEPENDENCY_HEALTH_STATUS_HEALTHY,
-            summary="当前无 active 应用开通通知能力。",
-            error_summary="",
-        )
-    configured_channels = cast(
+    return dict(rows)
+
+
+def _configured_notify_channels(
+    enabled_apps: dict[int, str],
+) -> list[tuple[int, str, str]]:
+    return cast(
         "list[tuple[int, str, str]]",
         list(
             AppNotificationChannel.objects.filter(
@@ -293,7 +303,44 @@ def check_dingtalk_notify() -> DependencyCheckResult:
             .values_list("app_id", "directory_source_slug", "corp_id"),
         ),
     )
+
+
+def check_dingtalk_notify() -> DependencyCheckResult:
+    enabled_apps = _enabled_notify_apps()
+    if not enabled_apps:
+        return DependencyCheckResult(
+            dependency=DEPENDENCY_DINGTALK_NOTIFY,
+            status=DEPENDENCY_HEALTH_STATUS_HEALTHY,
+            summary="当前无 active 应用开通通知能力。",
+            error_summary="",
+        )
+    configured_channels = _configured_notify_channels(enabled_apps)
     available_scopes = set(directory_scope_keys())
+    problems = _notify_channel_problems(
+        enabled_apps,
+        configured_channels,
+        available_scopes,
+    )
+    if not problems:
+        return DependencyCheckResult(
+            dependency=DEPENDENCY_DINGTALK_NOTIFY,
+            status=DEPENDENCY_HEALTH_STATUS_HEALTHY,
+            summary=f"{len(enabled_apps)} 个通知应用均已配置 active 专属通道。",
+            error_summary="",
+        )
+    return DependencyCheckResult(
+        dependency=DEPENDENCY_DINGTALK_NOTIFY,
+        status=DEPENDENCY_HEALTH_STATUS_UNHEALTHY,
+        summary="; ".join(problems) + "。",
+        error_summary="",
+    )
+
+
+def _notify_channel_problems(
+    enabled_apps: dict[int, str],
+    configured_channels: list[tuple[int, str, str]],
+    available_scopes: set[tuple[str, str]],
+) -> list[str]:
     invalid_channels = [
         (app_id, source_slug, corp_id)
         for app_id, source_slug, corp_id in configured_channels
@@ -303,13 +350,6 @@ def check_dingtalk_notify() -> DependencyCheckResult:
     missing = [
         app_key for app_id, app_key in enabled_apps.items() if app_id not in configured_app_ids
     ]
-    if not missing and not invalid_channels:
-        return DependencyCheckResult(
-            dependency=DEPENDENCY_DINGTALK_NOTIFY,
-            status=DEPENDENCY_HEALTH_STATUS_HEALTHY,
-            summary=f"{len(enabled_apps)} 个通知应用均已配置 active 专属通道。",
-            error_summary="",
-        )
     problems: list[str] = []
     if missing:
         problems.append(f"通知应用缺少 active 完整通道: {', '.join(sorted(missing))}")
@@ -321,12 +361,7 @@ def check_dingtalk_notify() -> DependencyCheckResult:
             ),
         )
         problems.append(f"通知应用通道目录作用域不存在: {invalid}")
-    return DependencyCheckResult(
-        dependency=DEPENDENCY_DINGTALK_NOTIFY,
-        status=DEPENDENCY_HEALTH_STATUS_UNHEALTHY,
-        summary="; ".join(problems) + "。",
-        error_summary="",
-    )
+    return problems
 
 
 def _connector_names(instances: Iterable[ConnectorInstance]) -> str:
