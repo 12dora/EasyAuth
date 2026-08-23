@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from django.db import transaction
 from django.utils import timezone
@@ -14,6 +14,20 @@ from easyauth.lifecycle.core import (
     refresh_task_status_locked,
 )
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
+from easyauth.lifecycle.handover_data import (
+    CompleteDataPhaseSpec,
+    complete_data_phase,
+)
+from easyauth.lifecycle.handover_payloads import (
+    audit_assignment_summary,
+    audit_result_summary,
+)
+from easyauth.lifecycle.handover_shared import (
+    ActionErrorContext,
+    DataPhaseAudit,
+    locked_action,
+    set_action_error,
+)
 from easyauth.lifecycle.lease import (
     HANDOVER_EXECUTION_IN_FLIGHT,
     LeaseHandle,
@@ -38,20 +52,13 @@ from easyauth.lifecycle.transfer import transfer_selected_grants
 if TYPE_CHECKING:
     from easyauth.applications.ops_models import JsonValue
 
-from easyauth.lifecycle.handover_data import (
-    CompleteDataPhaseSpec,
-    complete_data_phase,
-)
-from easyauth.lifecycle.handover_payloads import (
-    audit_assignment_summary,
-    audit_result_summary,
-)
-from easyauth.lifecycle.handover_shared import (
-    ActionErrorContext,
-    DataPhaseAudit,
-    locked_action,
-    set_action_error,
-)
+
+_MIN_ABANDON_REASON_LENGTH: Final = 10
+_REASON_REQUIRED_MESSAGE: Final = "reason_required"
+_INVALID_OUTCOME_MESSAGE: Final = "outcome 必须为 done 或 failed"
+_ACTION_NOT_OPERABLE_MESSAGE: Final = "action_not_operable"
+_GRANT_TRANSFER_FAILED_MESSAGE: Final = "授权转移失败"
+_BATCH_ID_MISSING_MESSAGE: Final = "人工结案批次缺少批次标识。"
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,17 +73,17 @@ class _ManualClaim:
 
 def _validate_async_abandon_input(*, outcome: str, reason: str) -> str:
     reason_stripped = reason.strip()
-    if len(reason_stripped) < 10:
-        raise HandoverError("reason_required")
+    if len(reason_stripped) < _MIN_ABANDON_REASON_LENGTH:
+        raise HandoverError(_REASON_REQUIRED_MESSAGE)
     if outcome not in {"done", "failed"}:
-        raise HandoverError("outcome 必须为 done 或 failed")
+        raise HandoverError(_INVALID_OUTCOME_MESSAGE)
     return reason_stripped
 
 
 def _claim_async_abandon_locked(action_id: int) -> _ManualClaim:
     locked = locked_action(action_id)
     if locked.status != ACTION_STATUS_ASYNC_ATTENTION_REQUIRED:
-        raise HandoverConflictError("action_not_operable")
+        raise HandoverConflictError(_ACTION_NOT_OPERABLE_MESSAGE)
     lease = (
         HandoverExecutionLease.objects.select_for_update()
         .filter(
@@ -181,6 +188,7 @@ def _transfer_grants_without_batch(claim: _ManualClaim) -> None:
         return
     try:
         _ = transfer_selected_grants(locked)
+    # 失败收敛边界: 任何异常都必须先把 action 置失败落库, 再统一抛授权转移失败。
     except Exception as error:
         locked.status = ACTION_STATUS_FAILED
         set_action_error(
@@ -192,7 +200,7 @@ def _transfer_grants_without_batch(claim: _ManualClaim) -> None:
             update_fields=["status", "last_error", "last_error_raw", "updated_at"],
         )
         must_cas_release(claim.handle)
-        raise HandoverError("授权转移失败") from error
+        raise HandoverError(_GRANT_TRANSFER_FAILED_MESSAGE) from error
 
 
 def _finish_async_abandon_done_without_batch(
@@ -272,12 +280,11 @@ def async_abandon_action(
         # is_final 是批次计划事实, 人工确认不得篡改。
 
     # 人工结案: 有 summary 则落库; 无则不伪造 skipped==count
-    payload: dict[str, JsonValue] | None
-    if summary:
-        payload = {"summary": cast("JsonValue", summary)}
-    else:
-        payload = None
-    assert claim.batch_id is not None
+    payload: dict[str, JsonValue] | None = (
+        {"summary": cast("JsonValue", summary)} if summary else None
+    )
+    if claim.batch_id is None:
+        raise AssertionError(_BATCH_ID_MISSING_MESSAGE)
     complete_data_phase(
         HandoverExecutionBatch.objects.get(pk=claim.batch_id),
         CompleteDataPhaseSpec(
@@ -300,5 +307,4 @@ def async_abandon_action(
             ),
         ),
     )
-    locked = HandoverAppAction.objects.select_related("app", "task").get(pk=claim.action_id)
-    return locked
+    return HandoverAppAction.objects.select_related("app", "task").get(pk=claim.action_id)

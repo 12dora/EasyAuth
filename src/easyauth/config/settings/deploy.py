@@ -7,11 +7,16 @@
 """
 
 import os
+from typing import Final
 
+_E2E_WEBHOOK_FORBIDDEN_MESSAGE: Final = "部署设置禁止启用 E2E 明文 webhook 窄门。"
+
+# 窄门必须在 base 之前判定: base 的初始化会先抛 ImproperlyConfigured,
+# 那样会把"部署环境误开 E2E 明文 webhook"这条更准确的失败原因掩盖掉。
 if os.environ.get("EASYAUTH_E2E_ALLOW_INSECURE_WEBHOOK_HOSTS", "").strip():
-    raise RuntimeError("部署设置禁止启用 E2E 明文 webhook 窄门。")
+    raise RuntimeError(_E2E_WEBHOOK_FORBIDDEN_MESSAGE)
 
-from .base import *  # noqa: F403
+from .base import *  # noqa: E402,F403
 
 # frpc 已注入 x-forwarded-proto=https; 让 Django 据此识别 https 请求。
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")

@@ -9,19 +9,21 @@ from django.db import connection, transaction
 from django.db.utils import IntegrityError
 from django.utils import timezone
 
+from easyauth.accounts.models import UserMirror
+from easyauth.applications.models import App
 from easyauth.lifecycle.errors import HandoverConflictError
 from easyauth.lifecycle.models import (
+    ASSIGNMENT_MUTATION_IN_FLIGHT_STATUSES,
+    BATCH_IN_FLIGHT_STATUSES,
     LEASE_TTL,
+    HandoverAppAction,
+    HandoverExecutionBatch,
     HandoverExecutionLease,
     HandoverLeaseFence,
 )
 
 if TYPE_CHECKING:
     from datetime import datetime
-
-    from easyauth.accounts.models import UserMirror
-    from easyauth.applications.models import App
-    from easyauth.lifecycle.models import HandoverAppAction
 
 HANDOVER_EXECUTION_IN_FLIGHT: Final = "handover_execution_in_flight"
 LEASE_CAS_FAILED_MESSAGE: Final = "执行租约 CAS 失败, 丢弃本次写回。"
@@ -72,13 +74,14 @@ def allocate_fence(*, subject_user: UserMirror, app: App) -> int:
                         app_id=app_pk,
                         next_fence=2,
                     )
-                return 1
             except IntegrityError:
                 fence_row = (
                     HandoverLeaseFence.objects.select_for_update()
                     .filter(subject_user_id=subject_pk, app_id=app_pk)
                     .get()
                 )
+            else:
+                return 1
         fence = int(fence_row.next_fence)
         fence_row.next_fence = fence + 1
         fence_row.save(update_fields=["next_fence"])
@@ -182,9 +185,6 @@ def cas_update_owner(
     if subject_user_id is None or app_id is None:
         return None
     # 取新 fence 与 CAS 必须同事务; 调用方应已在 atomic 内。
-    from easyauth.accounts.models import UserMirror
-    from easyauth.applications.models import App
-
     subject = UserMirror.objects.get(pk=subject_user_id)
     app = App.objects.get(pk=app_id)
     new_fence = allocate_fence(subject_user=subject, app=app)
@@ -291,11 +291,6 @@ def has_active_lease(*, subject_user_id: int, app_id: int) -> bool:
 
 def action_execution_in_flight(action: HandoverAppAction) -> bool:
     """§5.5.1 skip/cancel: 未释放租约或在途 batch(executing/async_pending)。"""
-    from easyauth.lifecycle.models import (
-        BATCH_IN_FLIGHT_STATUSES,
-        HandoverExecutionBatch,
-    )
-
     if has_active_lease(
         subject_user_id=int(action.task.subject_user_id),  # type: ignore[arg-type]
         app_id=int(action.app_id),  # type: ignore[arg-type]
@@ -310,11 +305,6 @@ def action_execution_in_flight(action: HandoverAppAction) -> bool:
 
 def assignment_mutation_in_flight(action: HandoverAppAction) -> bool:
     """§2.4.1.1 改分配三端点: 含 pending batch(429 重排队中)。"""
-    from easyauth.lifecycle.models import (
-        ASSIGNMENT_MUTATION_IN_FLIGHT_STATUSES,
-        HandoverExecutionBatch,
-    )
-
     if has_active_lease(
         subject_user_id=int(action.task.subject_user_id),  # type: ignore[arg-type]
         app_id=int(action.app_id),  # type: ignore[arg-type]

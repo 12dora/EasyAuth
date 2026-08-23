@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import timedelta
 from typing import Final
 
 from celery import shared_task
@@ -21,6 +22,7 @@ from easyauth.integrations.authentik.admin_client import (
     AuthentikAdminPaginationLimitError,
     AuthentikAdminUserNotFoundError,
 )
+from easyauth.lifecycle.core import ASYNC_ATTENTION_POLL_INTERVAL_SECONDS
 from easyauth.lifecycle.errors import HandoverConflictError
 from easyauth.lifecycle.escalation import escalate_overdue_task
 from easyauth.lifecycle.handover import execute_action
@@ -35,12 +37,14 @@ from easyauth.lifecycle.models import (
     HandoverExecutionLease,
     HandoverTask,
 )
+from easyauth.lifecycle.offboarding import start_offboarding
 from easyauth.lifecycle.tasks import (
     DISABLE_ACCOUNT_TASK_NAME,
     RETRY_OFFBOARDING_TASK_NAME,
 )
 from easyauth.notify.acceptance import accept_notify_message
 from easyauth.notify.models import NOTIFY_TEMPLATE_TEXT
+from easyauth.outbox.services import enqueue_task
 
 logger = logging.getLogger(__name__)
 
@@ -99,8 +103,6 @@ def retry_departed_offboarding_task(
     snapshot_grant_ids: list[int],
 ) -> str:
     """重试被单据 kind 冲突隔离的单个离职身份编排。"""
-    from easyauth.lifecycle.offboarding import start_offboarding
-
     user = UserMirror.objects.filter(id=user_mirror_id).first()
     if user is None:
         return "user_missing"
@@ -111,8 +113,6 @@ def retry_departed_offboarding_task(
 @shared_task(name=LIFECYCLE_ESCALATION_TASK)
 def lifecycle_escalation_task() -> dict[str, int]:
     """Beat 每 10 分钟: 扫到期交接单逐个 escalate。"""
-    from django.db import connection
-
     now = timezone.now()
     qs = (
         HandoverTask.objects.filter(
@@ -151,7 +151,7 @@ LIFECYCLE_REMINDER_BATCH_SIZE: Final = 200
 
 
 class LifecycleNotifyIdentityMissingError(RuntimeError):
-    """生命周期通知身份尚未就绪，必须由 Celery 持续退避重试。"""
+    """生命周期通知身份尚未就绪, 必须由 Celery 持续退避重试。"""
 
 
 @shared_task(name=RATE_LIMITED_EXECUTE_RETRY_TASK, acks_late=True)
@@ -186,8 +186,6 @@ def lifecycle_send_reminder_task(
     notify 身份(easyauth-lifecycle) 尚未落地时: 记审计后抛错, 使 outbox 保持未发布
     并在身份就绪后重试(测试 eager 模式下 send_task 会传播异常)。
     """
-    from easyauth.audit.services import AuditRecord, AuditService
-
     task = HandoverTask.objects.filter(pk=task_id).first()
     if task is None:
         return "task_missing"
@@ -197,7 +195,10 @@ def lifecycle_send_reminder_task(
         credential = next(
             (
                 item
-                for item in AppCredential.objects.filter(app=identity, is_active=True).order_by("id")
+                for item in AppCredential.objects.filter(
+                    app=identity,
+                    is_active=True,
+                ).order_by("id")
                 if CAPABILITY_NOTIFY in item.capabilities
             ),
             None,
@@ -207,9 +208,9 @@ def lifecycle_send_reminder_task(
     )
     if identity is not None and credential is not None and channel_ready:
         content = (
-            f"交接单 {task_id} 即将到期，请尽快处理。"
+            f"交接单 {task_id} 即将到期, 请尽快处理。"
             if kind == "deadline_soon"
-            else f"交接单 {task_id} 尚未完成，请及时处理。"
+            else f"交接单 {task_id} 尚未完成, 请及时处理。"
         )
         result = accept_notify_message(
             app=identity,
@@ -254,10 +255,6 @@ def lifecycle_send_reminder_task(
 @shared_task(name=LIFECYCLE_DAILY_REMINDER_TASK)
 def lifecycle_daily_reminder_task() -> dict[str, int]:
     """Beat 每天 09:00: 未完成且有 assignee 的单发提醒(网络副作用走 outbox)。"""
-    from datetime import timedelta
-
-    from easyauth.outbox.services import enqueue_task
-
     now = timezone.now()
     business_date = timezone.localdate()
     claimed = 0
@@ -337,10 +334,6 @@ def lifecycle_poll_async_actions_task() -> dict[str, int]:
 
     async_attention_required 用 ASYNC_ATTENTION_POLL_INTERVAL_SECONDS(30 分钟) 退避。
     """
-    from datetime import timedelta
-
-    from easyauth.lifecycle.core import ASYNC_ATTENTION_POLL_INTERVAL_SECONDS
-
     now = timezone.now()
     attention_cutoff = now - timedelta(seconds=ASYNC_ATTENTION_POLL_INTERVAL_SECONDS)
     pending_ids = list(

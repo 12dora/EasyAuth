@@ -1,4 +1,4 @@
-"""交接错误的统一脱敏与 UTF-8 字节限长投影（冻结契约 00 §10.6）。"""
+"""交接错误的统一脱敏与 UTF-8 字节限长投影(冻结契约 00 §10.6)。"""
 
 from __future__ import annotations
 
@@ -22,17 +22,17 @@ _SENSITIVE_FIELD_RE = re.compile(
 _EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 _OPAQUE_SECRET_RE = re.compile(r"\b(?:sk|ak|eat)-[A-Za-z0-9_-]{8,}|\bwhsec_[A-Za-z0-9_-]{8,}")
 _WHITELIST_KEYS: Final = frozenset({"code", "message", "traceId"})
-_SIGNATURE_FAILURE_MESSAGE: Final = "签名校验失败，请检查该应用的 webhook 密钥"
+_SIGNATURE_FAILURE_MESSAGE: Final = "签名校验失败, 请检查该应用的 webhook 密钥"
 _STABLE_STATUS_MESSAGES: Final[dict[int, str]] = {
     HTTPStatus.BAD_REQUEST: "请求被应用拒绝",
     HTTPStatus.UNAUTHORIZED: _SIGNATURE_FAILURE_MESSAGE,
     HTTPStatus.FORBIDDEN: _SIGNATURE_FAILURE_MESSAGE,
     HTTPStatus.CONFLICT: "应用拒绝了本次交接",
-    HTTPStatus.PRECONDITION_FAILED: "清单已变化，请重新预演",
-    HTTPStatus.REQUEST_ENTITY_TOO_LARGE: "请求体过大，请分批执行",
+    HTTPStatus.PRECONDITION_FAILED: "清单已变化, 请重新预演",
+    HTTPStatus.REQUEST_ENTITY_TOO_LARGE: "请求体过大, 请分批执行",
     HTTPStatus.UNPROCESSABLE_ENTITY: "应用声明与实现不一致",
-    HTTPStatus.LOCKED: "该应用中部分对象正在审批或锁定，解除后请重新预演",
-    HTTPStatus.TOO_MANY_REQUESTS: "应用侧限流，请稍后重试",
+    HTTPStatus.LOCKED: "该应用中部分对象正在审批或锁定, 解除后请重新预演",
+    HTTPStatus.TOO_MANY_REQUESTS: "应用侧限流, 请稍后重试",
 }
 
 
@@ -69,7 +69,7 @@ def project_handover_error(
     if status_code is not None:
         base = f"HTTP {status_code} {base}"
     details = _whitelisted_details(payload)
-    public_source = base if not details else f"{base}；{details}"
+    public_source = base if not details else f"{base}; {details}"
     raw_source = raw_body
     if not raw_source and payload is not None:
         raw_source = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -106,7 +106,7 @@ def _whitelisted_details(payload: dict[str, JsonValue] | None) -> str:
 
     visit(payload)
     keys = ("code", "message", "traceId")
-    return "；".join(f"{key}={found[key]}" for key in keys if key in found)
+    return "; ".join(f"{key}={found[key]}" for key in keys if key in found)
 
 
 def _stable_status_message(status_code: int | None) -> str:

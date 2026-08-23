@@ -15,6 +15,18 @@ from easyauth.lifecycle.core import (
     ensure_task_open,
 )
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
+from easyauth.lifecycle.handover_shared import (
+    DECLARED_WITHOUT_URL_MESSAGE,
+    ITEMS_PAGE_MAX,
+    ITEMS_PAGE_SIZE_MAX,
+    ITEMS_QUERY_MAX_BYTES,
+    ITEMS_RATE_LIMIT_MAX,
+    ITEMS_RATE_LIMIT_NAMESPACE,
+    ITEMS_RATE_LIMIT_WINDOW_SECONDS,
+    RATE_LIMITED_MESSAGE,
+    handover_hook_url,
+    task_id,
+)
 from easyauth.lifecycle.models import (
     ACTION_FINISHED_STATUSES,
     ASSET_ACTION_RELEASE,
@@ -30,18 +42,16 @@ if TYPE_CHECKING:
     from easyauth.accounts.models import UserMirror
     from easyauth.applications.ops_models import JsonValue
 
-from easyauth.lifecycle.handover_shared import (
-    DECLARED_WITHOUT_URL_MESSAGE,
-    ITEMS_PAGE_MAX,
-    ITEMS_PAGE_SIZE_MAX,
-    ITEMS_QUERY_MAX_BYTES,
-    ITEMS_RATE_LIMIT_MAX,
-    ITEMS_RATE_LIMIT_NAMESPACE,
-    ITEMS_RATE_LIMIT_WINDOW_SECONDS,
-    RATE_LIMITED_MESSAGE,
-    handover_hook_url,
-    task_id,
-)
+
+_DUPLICATE_ASSIGNMENT_MESSAGE: Final = "duplicate_assignment"
+_ASSET_TYPE_NOT_RELEASABLE_MESSAGE: Final = "asset_type_not_releasable"
+_RECEIVER_REQUIRED_MESSAGE: Final = "receiver_required"
+_ITEMS_NOT_AVAILABLE_MESSAGE: Final = "items_not_available"
+_ITEMS_PAGE_OUT_OF_RANGE_MESSAGE: Final = "items_page_out_of_range"
+_ITEMS_QUERY_TOO_LONG_MESSAGE: Final = "items_query_too_long"
+_DETAIL_NOT_SUPPORTED_MESSAGE: Final = "detail_not_supported"
+_RECEIVER_NOT_ACTIVE_MESSAGE: Final = "receiver_not_active"
+_RECEIVER_IS_SUBJECT_MESSAGE: Final = "receiver_is_subject"
 
 
 def validate_assignments(action: HandoverAppAction) -> None:
@@ -55,7 +65,7 @@ def validate_assignments(action: HandoverAppAction) -> None:
     seen_type_keys: set[str] = set()
     for asset_type in types:
         if asset_type.type_key in seen_type_keys:
-            raise HandoverError("duplicate_assignment")
+            raise HandoverError(_DUPLICATE_ASSIGNMENT_MESSAGE)
         seen_type_keys.add(asset_type.type_key)
         _validate_asset_type_assignment(action, asset_type)
     if action.task.kind == HANDOVER_KIND_OFFBOARD and action.grant_receiver is not None:
@@ -67,15 +77,15 @@ def _validate_asset_type_assignment(
     asset_type: HandoverAssetType,
 ) -> None:
     if asset_type.default_action == ASSET_ACTION_RELEASE and not asset_type.releasable:
-        raise HandoverError("asset_type_not_releasable")
+        raise HandoverError(_ASSET_TYPE_NOT_RELEASABLE_MESSAGE)
     if asset_type.default_action == ASSET_ACTION_TRANSFER:
         if asset_type.default_to_user is None:
-            raise HandoverError("receiver_required")
+            raise HandoverError(_RECEIVER_REQUIRED_MESSAGE)
         _assert_receiver_ok(action, asset_type.default_to_user)
     seen_ids: set[str] = set()
     for override in asset_type.overrides.all():
         if override.asset_id in seen_ids:
-            raise HandoverError("duplicate_assignment")
+            raise HandoverError(_DUPLICATE_ASSIGNMENT_MESSAGE)
         seen_ids.add(override.asset_id)
         _validate_override_assignment(action, asset_type, override)
 
@@ -86,10 +96,10 @@ def _validate_override_assignment(
     override: HandoverAssetOverride,
 ) -> None:
     if override.action == ASSET_ACTION_RELEASE and not asset_type.releasable:
-        raise HandoverError("asset_type_not_releasable")
+        raise HandoverError(_ASSET_TYPE_NOT_RELEASABLE_MESSAGE)
     if override.action == ASSET_ACTION_TRANSFER:
         if override.to_user is None:
-            raise HandoverError("receiver_required")
+            raise HandoverError(_RECEIVER_REQUIRED_MESSAGE)
         _assert_receiver_ok(action, override.to_user)
 
 
@@ -103,13 +113,13 @@ def _validate_items_request(
 ) -> tuple[int, str]:
     ensure_task_open(action.task)
     if action.status in ACTION_FINISHED_STATUSES or action.data_completed_at is not None:
-        raise HandoverConflictError("items_not_available")
+        raise HandoverConflictError(_ITEMS_NOT_AVAILABLE_MESSAGE)
     if page < 1 or page > ITEMS_PAGE_MAX:
-        raise HandoverError("items_page_out_of_range")
+        raise HandoverError(_ITEMS_PAGE_OUT_OF_RANGE_MESSAGE)
     page_size = min(max(page_size, 1), ITEMS_PAGE_SIZE_MAX)
     q_stripped = q.strip()
     if len(q_stripped.encode("utf-8")) > ITEMS_QUERY_MAX_BYTES:
-        raise HandoverError("items_query_too_long")
+        raise HandoverError(_ITEMS_QUERY_TOO_LONG_MESSAGE)
     rate_identity = f"{actor_id}:{action.task_id}:{action.app_id}"
     if rate_limit_exceeded(
         ITEMS_RATE_LIMIT_NAMESPACE,
@@ -128,14 +138,15 @@ def _items_asset(action: HandoverAppAction, asset_type: str) -> HandoverAssetTyp
         type_key=asset_type,
     ).first()
     if asset is None or not asset.detail_supported:
-        raise HandoverError("detail_not_supported")
+        raise HandoverError(_DETAIL_NOT_SUPPORTED_MESSAGE)
     return asset
 
 
 def _items_response_body(response: HookResponse) -> dict[str, JsonValue]:
     if response.status_code != HTTPStatus.OK:
+        message = f"items 接口返回 {response.status_code}"
         raise HookCallError(
-            f"items 接口返回 {response.status_code}",
+            message,
             status_code=response.status_code,
             payload=response.payload,
             raw_body=response.raw_body,
@@ -193,9 +204,11 @@ def fetch_action_items(
     body = _items_response_body(response)
     total = int(body.get("total", 0) or 0)
     unfiltered = body.get("unfiltered_total")
-    stale = False
-    if (q_stripped == "" and total != asset.count) or (q_stripped and unfiltered is not None and int(unfiltered) != asset.count):
-        stale = True
+    stale = (q_stripped == "" and total != asset.count) or (
+        bool(q_stripped)
+        and unfiltered is not None
+        and int(unfiltered) != asset.count
+    )
     return {
         "items": body.get("items", []),
         "page": spec.page,
@@ -332,6 +345,6 @@ def merge_result_summary(
 
 def _assert_receiver_ok(action: HandoverAppAction, user: UserMirror) -> None:
     if user.status != USER_STATUS_ACTIVE:
-        raise HandoverError("receiver_not_active")
+        raise HandoverError(_RECEIVER_NOT_ACTIVE_MESSAGE)
     if cast("int", user.pk) == action.task.subject_user_id:
-        raise HandoverError("receiver_is_subject")
+        raise HandoverError(_RECEIVER_IS_SUBJECT_MESSAGE)

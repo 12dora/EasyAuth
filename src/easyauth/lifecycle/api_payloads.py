@@ -28,6 +28,7 @@ from easyauth.lifecycle.models import (
     HandoverBatchPlan,
     HandoverTask,
     HandoverTeamItem,
+    TransferPlan,
 )
 
 if TYPE_CHECKING:
@@ -92,8 +93,6 @@ def escalation_payload(
 
 def _defer_history_for_task(task: HandoverTask) -> list[JsonObject]:
     """从审计事件还原顺延责任链(01 §6.2 / §6.3)。"""
-    from easyauth.audit.models import AuditLog
-
     rows = AuditLog.objects.filter(
         event_type="handover_task_deferred",
         target_type="handover_task",
@@ -129,7 +128,7 @@ def task_list_item(task: HandoverTask) -> JsonObject:
     asset_count = (
         HandoverAssetType.objects.filter(
             action__task=task,
-            generation=models_F_generation(actions),
+            generation=_latest_action_generation(actions),
         )
         .aggregate(total=Sum("count"))
         .get("total")
@@ -180,7 +179,7 @@ def _current_generation_asset_count(actions: list[HandoverAppAction]) -> int:
     return total
 
 
-def models_F_generation(actions: list[HandoverAppAction]) -> int:
+def _latest_action_generation(actions: list[HandoverAppAction]) -> int:
     if not actions:
         return 1
     return max(a.generation for a in actions)
@@ -236,8 +235,6 @@ def _task_team_items_payload(task: HandoverTask) -> list[JsonValue]:
 
 def _transfer_plan_payload(task: HandoverTask) -> JsonObject | None:
     # transfer_plan: 控制台向导仍需要; 门户详情可空。
-    from easyauth.lifecycle.models import TransferPlan
-
     plan = (
         TransferPlan.objects.select_related("new_template", "new_template_revision")
         .filter(task=task)

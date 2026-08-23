@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from django.db import transaction
 from django.utils import timezone
@@ -13,6 +13,21 @@ from easyauth.lifecycle.core import (
     refresh_task_status_locked,
 )
 from easyauth.lifecycle.errors import HandoverError
+from easyauth.lifecycle.handover_payloads import (
+    bump_plan_progress,
+    complete_active_plan,
+)
+from easyauth.lifecycle.handover_shared import (
+    ActionErrorContext,
+    DataPhaseAudit,
+    DataPhaseGate,
+    locked_action_after_task,
+    set_action_error,
+)
+from easyauth.lifecycle.handover_validation import (
+    merge_result_summary,
+    validate_execute_summary_conservation,
+)
 from easyauth.lifecycle.lease import (
     LeaseHandle,
     must_cas_release,
@@ -40,21 +55,8 @@ if TYPE_CHECKING:
 
     from easyauth.applications.ops_models import JsonValue
 
-from easyauth.lifecycle.handover_payloads import (
-    bump_plan_progress,
-    complete_active_plan,
-)
-from easyauth.lifecycle.handover_shared import (
-    ActionErrorContext,
-    DataPhaseAudit,
-    DataPhaseGate,
-    locked_action_after_task,
-    set_action_error,
-)
-from easyauth.lifecycle.handover_validation import (
-    merge_result_summary,
-    validate_execute_summary_conservation,
-)
+
+_GRANT_TRANSFER_FAILED_MESSAGE: Final = "授权转移失败"
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,7 +285,9 @@ def _transfer_grants_for_data_phase(
         batch = HandoverExecutionBatch.objects.select_for_update().get(pk=batch_pk)
         try:
             _ = transfer_selected_grants(action)
-        except Exception as error:
+        # 失败收敛边界: 任何异常都必须先把 action/batch 置失败并释放租约, 再向上抛,
+        # 否则交接会卡在 running 且租约不释放。
+        except Exception as error:  # noqa: BLE001
             action.status = ACTION_STATUS_FAILED
             set_action_error(
                 action,
@@ -300,7 +304,7 @@ def _transfer_grants_for_data_phase(
             _ = refresh_task_status_locked(task)
             grant_error = error
     if grant_error is not None:
-        raise HandoverError("授权转移失败") from grant_error
+        raise HandoverError(_GRANT_TRANSFER_FAILED_MESSAGE) from grant_error
 
 
 def _finalize_data_phase(

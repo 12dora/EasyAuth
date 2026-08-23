@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from django.db import transaction
 
 from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
+from easyauth.lifecycle.core import ensure_task_open
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
+from easyauth.lifecycle.handover_payloads import ensure_batch_plan_on_413
 from easyauth.lifecycle.lease import (
     HANDOVER_EXECUTION_IN_FLIGHT,
     assignment_mutation_in_flight,
@@ -30,6 +32,20 @@ from easyauth.lifecycle.models import (
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+
+
+_DEFAULT_ACTION_INVALID_MESSAGE: Final = "default_action 无效。"
+_ASSET_TYPE_NOT_FOUND_MESSAGE: Final = "资产类型不存在。"
+_RECEIVER_NOT_ALLOWED_MESSAGE: Final = "receiver_not_allowed"
+_ASSET_TYPE_NOT_RELEASABLE_MESSAGE: Final = "asset_type_not_releasable"
+_OVERRIDES_VERSION_STALE_MESSAGE: Final = "overrides_version_stale"
+_DUPLICATE_ASSIGNMENT_MESSAGE: Final = "duplicate_assignment"
+_INVALID_ASSIGNMENT_ACTION_MESSAGE: Final = "invalid_assignment_action"
+_RECEIVER_REQUIRED_MESSAGE: Final = "receiver_required"
+_ACTION_NOT_OPERABLE_MESSAGE: Final = "action_not_operable"
+_BATCH_PLAN_IN_PROGRESS_MESSAGE: Final = "batch_plan_in_progress"
+_RECEIVER_NOT_ACTIVE_MESSAGE: Final = "receiver_not_active"
+_RECEIVER_IS_SUBJECT_MESSAGE: Final = "receiver_is_subject"
 
 
 @dataclass(frozen=True, slots=True)
@@ -57,7 +73,7 @@ def patch_asset_type_defaults(
 ) -> tuple[HandoverAssetType, int]:
     """改类型级 default; 原子 CAS confirm_version +1。返回 (asset_type, new confirm_version)。"""
     if default_action not in ASSET_ACTION_VALUES:
-        raise HandoverError("default_action 无效。")
+        raise HandoverError(_DEFAULT_ACTION_INVALID_MESSAGE)
     with transaction.atomic():
         locked = (
             HandoverAppAction.objects.select_for_update(of=("self",))
@@ -71,16 +87,16 @@ def patch_asset_type_defaults(
             .first()
         )
         if asset is None:
-            raise HandoverError("资产类型不存在。")
+            raise HandoverError(_ASSET_TYPE_NOT_FOUND_MESSAGE)
         if default_action != ASSET_ACTION_TRANSFER and default_to_user_id:
-            raise HandoverError("receiver_not_allowed")
+            raise HandoverError(_RECEIVER_NOT_ALLOWED_MESSAGE)
         default_to_user = _resolve_receiver(
             locked,
             default_to_user_id,
             required=default_action == ASSET_ACTION_TRANSFER,
         )
         if default_action == ASSET_ACTION_RELEASE and not asset.releasable:
-            raise HandoverError("asset_type_not_releasable")
+            raise HandoverError(_ASSET_TYPE_NOT_RELEASABLE_MESSAGE)
         asset.default_action = default_action
         asset.default_to_user = default_to_user
         asset.save(update_fields=["default_action", "default_to_user"])
@@ -105,14 +121,14 @@ def put_overrides(
         locked = locked_action_after_task(action)
         plan = _assert_mutable(locked)
         if overrides_version != locked.overrides_version:
-            raise HandoverConflictError("overrides_version_stale")
+            raise HandoverConflictError(_OVERRIDES_VERSION_STALE_MESSAGE)
         asset = (
             HandoverAssetType.objects.select_for_update()
             .filter(action=locked, generation=locked.generation, type_key=type_key)
             .first()
         )
         if asset is None:
-            raise HandoverError("资产类型不存在。")
+            raise HandoverError(_ASSET_TYPE_NOT_FOUND_MESSAGE)
         _validate_overrides(locked, asset=asset, overrides=overrides)
         kept = _replace_overrides(locked, asset=asset, overrides=overrides)
 
@@ -147,20 +163,20 @@ def _validate_override(
     seen_ids: set[str],
 ) -> None:
     if entry.asset_id in seen_ids:
-        raise HandoverError("duplicate_assignment")
+        raise HandoverError(_DUPLICATE_ASSIGNMENT_MESSAGE)
     seen_ids.add(entry.asset_id)
     if not entry.asset_id:
-        raise HandoverError("duplicate_assignment")
+        raise HandoverError(_DUPLICATE_ASSIGNMENT_MESSAGE)
     if entry.action not in ASSET_ACTION_VALUES:
-        raise HandoverError("invalid_assignment_action")
+        raise HandoverError(_INVALID_ASSIGNMENT_ACTION_MESSAGE)
     if entry.action == ASSET_ACTION_RELEASE and not asset.releasable:
-        raise HandoverError("asset_type_not_releasable")
+        raise HandoverError(_ASSET_TYPE_NOT_RELEASABLE_MESSAGE)
     if entry.action == ASSET_ACTION_TRANSFER:
         if not entry.to_user_id:
-            raise HandoverError("receiver_required")
+            raise HandoverError(_RECEIVER_REQUIRED_MESSAGE)
         _ = _resolve_receiver(action, entry.to_user_id, required=True)
     elif entry.to_user_id:
-        raise HandoverError("receiver_not_allowed")
+        raise HandoverError(_RECEIVER_NOT_ALLOWED_MESSAGE)
 
 
 def _replace_overrides(
@@ -206,26 +222,25 @@ def list_overrides(action: HandoverAppAction, *, type_key: str) -> dict[str, obj
             type_key=type_key,
         ).first()
         if asset is None:
-            raise HandoverError("资产类型不存在。")
-        rows = []
-        for ov in HandoverAssetOverride.objects.select_related("to_user").filter(
-            asset_type=asset,
-        ):
-            rows.append(
-                {
-                    "asset_id": ov.asset_id,
-                    "action": ov.action,
-                    "to_user": (
-                        {
-                            "user_id": ov.to_user.authentik_user_id,
-                            "name": ov.to_user.name,
-                        }
-                        if ov.to_user is not None
-                        else None
-                    ),
-                    "label": ov.label_snapshot,
-                },
+            raise HandoverError(_ASSET_TYPE_NOT_FOUND_MESSAGE)
+        rows = [
+            {
+                "asset_id": ov.asset_id,
+                "action": ov.action,
+                "to_user": (
+                    {
+                        "user_id": ov.to_user.authentik_user_id,
+                        "name": ov.to_user.name,
+                    }
+                    if ov.to_user is not None
+                    else None
+                ),
+                "label": ov.label_snapshot,
+            }
+            for ov in HandoverAssetOverride.objects.select_related("to_user").filter(
+                asset_type=asset,
             )
+        ]
         return {
             "overrides_version": locked.overrides_version,
             "overrides": rows,
@@ -243,15 +258,13 @@ def locked_action_after_task(action: HandoverAppAction) -> HandoverAppAction:
 
 
 def _assert_mutable(action: HandoverAppAction) -> HandoverBatchPlan | None:
-    from easyauth.lifecycle.core import ensure_task_open
-
     ensure_task_open(action.task)
     if assignment_mutation_in_flight(action):
         raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
     if action.status in {ACTION_STATUS_PENDING, ACTION_STATUS_PREVIEWED, "failed", "blocked"}:
         pass
     else:
-        raise HandoverConflictError("action_not_operable")
+        raise HandoverConflictError(_ACTION_NOT_OPERABLE_MESSAGE)
     plan = (
         HandoverBatchPlan.objects.select_for_update()
         .filter(
@@ -262,7 +275,7 @@ def _assert_mutable(action: HandoverAppAction) -> HandoverBatchPlan | None:
         .first()
     )
     if plan is not None and plan.completed_batches > 0:
-        raise HandoverConflictError("batch_plan_in_progress")
+        raise HandoverConflictError(_BATCH_PLAN_IN_PROGRESS_MESSAGE)
     return plan
 
 
@@ -273,8 +286,6 @@ def _replan_zero_progress_batch(
     if plan is None:
         return
     # 01 §2.4.1.1: 修改与旧计划废弃、新 canonical assignment 重新规划同事务提交。
-    from easyauth.lifecycle.handover_payloads import ensure_batch_plan_on_413
-
     _ = ensure_batch_plan_on_413(action)
 
 
@@ -286,7 +297,7 @@ def _resolve_receiver(
 ) -> UserMirror | None:
     if not user_id:
         if required:
-            raise HandoverError("receiver_required")
+            raise HandoverError(_RECEIVER_REQUIRED_MESSAGE)
         return None
     user = (
         UserMirror.objects.filter(authentik_user_id=user_id)
@@ -294,7 +305,7 @@ def _resolve_receiver(
         .first()
     )
     if user is None or user.status != USER_STATUS_ACTIVE:
-        raise HandoverError("receiver_not_active")
+        raise HandoverError(_RECEIVER_NOT_ACTIVE_MESSAGE)
     if int(user.pk) == int(action.task.subject_user_id):  # type: ignore[arg-type]
-        raise HandoverError("receiver_is_subject")
+        raise HandoverError(_RECEIVER_IS_SUBJECT_MESSAGE)
     return user

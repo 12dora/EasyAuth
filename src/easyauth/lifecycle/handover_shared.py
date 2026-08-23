@@ -35,6 +35,12 @@ logger = logging.getLogger(__name__)
 TASK_ID_PATTERN: Final = re.compile(r"\A[0-9]+:[0-9]+\Z")
 
 
+TASK_ID_MAX_LENGTH: Final = 64
+
+
+RESPONSE_SUMMARY_KEY_LENGTH_LIMIT: Final = 64
+
+
 ITEMS_PAGE_MAX: Final = 100_000
 
 
@@ -70,7 +76,7 @@ POLICY_REMOVED_MESSAGE: Final = (
 )
 
 
-UNSHARDABLE_BATCH_MESSAGE: Final = "单独指定的条目过多，请减少逐条指定后重新预演"
+UNSHARDABLE_BATCH_MESSAGE: Final = "单独指定的条目过多, 请减少逐条指定后重新预演"
 
 
 RATE_LIMITED_MESSAGE: Final = "rate_limited"
@@ -185,7 +191,7 @@ def locked_action_after_task(action_id: int) -> HandoverAppAction:
 
 def task_id(action: HandoverAppAction) -> str:
     value = f"{action.task_id}:{action.app_id}"
-    if not TASK_ID_PATTERN.fullmatch(value) or len(value) > 64:
+    if not TASK_ID_PATTERN.fullmatch(value) or len(value) > TASK_ID_MAX_LENGTH:
         message = f"非法 task_id: {value!r}"
         raise HandoverError(message)
     return value
@@ -216,7 +222,7 @@ def _safe_response_summary(payload_summary: dict[str, JsonValue]) -> dict[str, J
     counter_fields = ("transferred", "released", "skipped", "merged", "failed")
     safe: dict[str, JsonValue] = {}
     for key, value in payload_summary.items():
-        if not isinstance(key, str) or len(key) >= 64:
+        if not isinstance(key, str) or len(key) >= RESPONSE_SUMMARY_KEY_LENGTH_LIMIT:
             continue
         if isinstance(value, int | float | str | bool):
             safe[key] = value

@@ -12,6 +12,9 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Protocol, Self, cast
 from urllib.parse import quote, urlparse, urlsplit
 
+from django.conf import settings as django_settings
+from django.core.exceptions import ImproperlyConfigured
+
 if TYPE_CHECKING:
     from collections.abc import Callable, Collection, Mapping
     from types import TracebackType
@@ -33,6 +36,7 @@ CONTROL_CHARACTER_LIMIT: Final = 0x20
 IPV6_VERSION: Final = 6
 DNS_RESOLVER_MAX_IN_FLIGHT: Final = 32
 HTTP_READ_CHUNK_BYTES: Final = 64 * 1024
+MAX_NETWORK_PORT: Final = 65_535
 DNS_RESOLVER_TERMINATE_GRACE_SECONDS: Final = 0.2
 DNS_RESOLVER_OUTPUT_MAX_BYTES: Final = 64 * 1024
 # 仅全栈 E2E(DEBUG=1)可放行的环回 webhook 主机列表; 默认空=不放行任何主机。
@@ -134,14 +138,12 @@ def e2e_allowed_insecure_webhook_hosts() -> frozenset[str]:
     默认路径(未设环境变量或 DEBUG=false)不得放宽任何公网 https 校验。
     """
     try:
-        from django.conf import settings as django_settings
-
         if (
             not bool(getattr(django_settings, "DEBUG", False))
             or os.environ.get("DJANGO_SETTINGS_MODULE") != E2E_RUNTIME_SETTINGS_MODULE
         ):
             return frozenset()
-    except Exception:
+    except ImproperlyConfigured:
         # Django 尚未配置时不允许任何 E2E 放宽(单元测试未 setup 时走严格路径)。
         return frozenset()
     raw = os.environ.get(E2E_ALLOW_INSECURE_WEBHOOK_HOSTS_ENV, "").strip()
@@ -428,7 +430,7 @@ def _e2e_scheme_and_port(*, scheme: str, declared_port: int | None) -> tuple[int
     port = declared_port
     if port is None:
         port = 80 if scheme == "http" else 443
-    if port < 1 or port > 65535:
+    if port < 1 or port > MAX_NETWORK_PORT:
         raise InvalidWebhookUrlError
     return port, scheme == "http"
 

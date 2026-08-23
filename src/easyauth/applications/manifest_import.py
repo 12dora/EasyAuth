@@ -58,7 +58,7 @@ def sync_app_manifest(
     downstream_base_url: str | None = None,
     actor_type: str = "system",
 ) -> ManifestSyncOutcome:
-    """按幂等语义导入 manifest，并在 App 行锁内完成版本判定。
+    """按幂等语义导入 manifest, 并在 App 行锁内完成版本判定。
 
     可能抛出:
     - ManifestVersionConflictError: 版本未递增且内容不同。

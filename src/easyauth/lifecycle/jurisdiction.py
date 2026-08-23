@@ -61,7 +61,6 @@ def _reject_ineligible_pair(actor: UserMirror, subject: UserMirror) -> Jurisdict
         return JurisdictionResult(allowed=False, reason=REASON_OUT_OF_SCOPE)
     if not _has_directory_identity(subject) or not _has_directory_identity(actor):
         return JurisdictionResult(allowed=False, reason=REASON_DIRECTORY_UNAVAILABLE)
-    # 必须同 (source, corp)
     if (
         actor.dingtalk_source_slug != subject.dingtalk_source_slug
         or actor.dingtalk_corp_id != subject.dingtalk_corp_id

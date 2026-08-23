@@ -37,7 +37,9 @@ class AssigneeResolution:
 
 @dataclass(frozen=True, slots=True)
 class AssigneeApplyOptions:
-    """apply_assignee 的可选写入项。冻结 dataclass 而非 TypedDict+Unpack:
+    """apply_assignee 的可选写入项。
+
+    冻结 dataclass 而非 TypedDict+Unpack:
     后者是纯静态构造, 运行时拼错的关键字会被静默忽略。
     """
 
@@ -52,7 +54,11 @@ _DEFAULT_ASSIGNEE_APPLY_OPTIONS = AssigneeApplyOptions()
 
 def resolve_assignee(subject: UserMirror, *, start_level: int = 0) -> AssigneeResolution:
     """沿 manager_chain 自 start_level 向上找第一个可用主管。"""
-    if not subject.dingtalk_source_slug or not subject.dingtalk_corp_id or not subject.dingtalk_userid:
+    if (
+        not subject.dingtalk_source_slug
+        or not subject.dingtalk_corp_id
+        or not subject.dingtalk_userid
+    ):
         _audit_subject(
             subject,
             action="handover_assignee_resolution_degraded",

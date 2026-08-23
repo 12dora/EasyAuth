@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""全栈 E2E 下游交接 stub: 基于 vendored easyauth-app-sdk 内核, 无 FastAPI 依赖。
+r"""全栈 E2E 下游交接 stub: 基于 vendored easyauth-app-sdk 内核, 无 FastAPI 依赖。
 
 EasyAuth 经签名 webhook 调用本进程的 ``/api/v1/easyauth/lifecycle/handover``。
 返回确定性 preview / items / execute 载荷, 供门户自助交接 e2e 走真实链路。
@@ -30,9 +30,12 @@ if str(SDK_SRC) not in sys.path:
 from easyauth_app_sdk.lifecycle import (  # noqa: E402
     DEFAULT_HANDOVER_PATH,
     HandoverBusinessError,
+    LifecycleCallbacks,
+    WebhookEvent,
     lifecycle_http_response,
 )
-from easyauth_app_sdk.webhook import WebhookEvent  # noqa: E402
+
+__all__ = ["HandoverBusinessError", "WebhookEvent", "on_execute"]
 
 ASSET_TYPE = "document"
 ASSET_LABEL = "文档"
@@ -147,8 +150,10 @@ def on_execute(event: WebhookEvent) -> dict[str, Any]:
 class HandoverStubHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
-    def log_message(self, format: str, *args: object) -> None:
-        sys.stderr.write(f"[e2e-downstream] {self.address_string()} {format % args}\n")
+    def log_message(self, format_string: str, *args: object) -> None:
+        sys.stderr.write(
+            f"[e2e-downstream] {self.address_string()} {format_string % args}\n",
+        )
 
     def do_GET(self) -> None:
         if self.path.split("?", 1)[0] == HEALTH_PATH:
@@ -174,11 +179,13 @@ class HandoverStubHandler(BaseHTTPRequestHandler):
         raw_body = self.rfile.read(length) if length > 0 else b""
         status, headers, body = lifecycle_http_response(
             secret_provider=_secret,
-            headers={key: value for key, value in self.headers.items()},
+            headers=dict(self.headers.items()),
             raw_body=raw_body,
-            on_handover_preview=on_preview,
-            on_handover_execute=on_execute,
-            on_handover_items=on_items,
+            callbacks=LifecycleCallbacks(
+                on_handover_preview=on_preview,
+                on_handover_execute=on_execute,
+                on_handover_items=on_items,
+            ),
         )
         self.send_response(status)
         for key, value in headers.items():

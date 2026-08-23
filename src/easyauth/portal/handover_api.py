@@ -6,9 +6,10 @@ import hashlib
 import json
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import ClassVar, Final, Literal, cast
+from typing import TYPE_CHECKING, ClassVar, Final, Literal, cast
 
 from django.db import transaction
+from django.db.models import Q
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -23,21 +24,22 @@ from easyauth.lifecycle.api_payloads import (
     SURFACE_PORTAL,
     action_item,
     asset_type_item,
+    batch_progress,
     task_detail,
     task_list_item,
 )
-from easyauth.lifecycle.assignee import AssigneeResolution
+from easyauth.lifecycle.assignee import AssigneeApplyOptions, AssigneeResolution, apply_assignee
 from easyauth.lifecycle.assignments import (
     OverrideEntry,
     list_overrides,
     patch_asset_type_defaults,
     put_overrides,
 )
+from easyauth.lifecycle.core import TASK_KIND_CONFLICT_MESSAGE, record_task_event
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
 from easyauth.lifecycle.handover import execute_action, retry_action
 from easyauth.lifecycle.handover_actions import update_grant_receiver
 from easyauth.lifecycle.handover_preview import preview_action
-from easyauth.lifecycle.handover_shared import MutationGuard
 from easyauth.lifecycle.handover_validation import FetchActionItemsSpec, fetch_action_items
 from easyauth.lifecycle.jurisdiction import (
     assert_manager_of,
@@ -58,6 +60,9 @@ from easyauth.lifecycle.models import (
 )
 from easyauth.lifecycle.offboarding import HandoverCreationSpec, ensure_handover_task
 from easyauth.webhooks.hooks import HookCallError
+
+if TYPE_CHECKING:
+    from easyauth.lifecycle.handover_shared import MutationGuard
 
 type PortalApiResult = UserMirror | JsonResponse
 type ReassignRequest = tuple[str, ReassignPayload, UserMirror]
@@ -527,8 +532,6 @@ def _portal_action_error_response(
     scoped = _portal_scope_error_response(error, task_id=task_id, user=user)
     if scoped is not None:
         return scoped
-    from easyauth.lifecycle.api_payloads import batch_progress
-
     extra_details: dict[str, JsonValue] | None = None
     if (
         isinstance(error, HookCallError)
@@ -660,9 +663,7 @@ def _pre_offboard_error_response(error: HandoverConflictError | HandoverError) -
     if text == "idempotency_conflict":
         return reason_error("idempotency_conflict")
     # 已有其他类型 open 生命周期单 → 门户语义 open_task_exists
-    from easyauth.lifecycle.core import TASK_KIND_CONFLICT_MESSAGE
-
-    if text == TASK_KIND_CONFLICT_MESSAGE or text == "task_kind_conflict":
+    if text in {TASK_KIND_CONFLICT_MESSAGE, "task_kind_conflict"}:
         return reason_error("open_task_exists")
     mapped = map_handover_exception(error)
     return mapped or reason_error("open_task_exists", text)
@@ -853,15 +854,13 @@ def _task_visible_to(user: UserMirror, task_id: int) -> HandoverTask | None:
         .filter(pk=task_id)
         .filter(
             # assignee 或 subject
-            models_Q_assignee_or_subject(user),
+            _assignee_or_subject_query(user),
         )
         .first()
     )
 
 
-def models_Q_assignee_or_subject(user: UserMirror):  # noqa: ANN201
-    from django.db.models import Q
-
+def _assignee_or_subject_query(user: UserMirror) -> Q:
     return Q(assignee=user) | Q(subject_user=user)
 
 
@@ -878,7 +877,7 @@ def _action_for_user(
             HandoverTask.objects.select_for_update(of=("self",))
             .select_related("subject_user", "assignee")
             .filter(pk=task_id)
-            .filter(models_Q_assignee_or_subject(user))
+            .filter(_assignee_or_subject_query(user))
             .first()
         )
     else:
@@ -936,13 +935,6 @@ def _recheck_reassign_scope(
     if result.allowed:
         return None
     # 失权: 移交 superuser_pool
-    from easyauth.lifecycle.assignee import (
-        AssigneeApplyOptions,
-        AssigneeResolution,
-        apply_assignee,
-    )
-    from easyauth.lifecycle.core import record_task_event
-
     if task.status in TASK_OPEN_STATUSES:
         _ = apply_assignee(
             task,

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from http import HTTPStatus
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from django.db import transaction
 
@@ -21,19 +21,6 @@ from easyauth.lifecycle.core import (
     refresh_task_status_locked,
 )
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
-from easyauth.lifecycle.models import (
-    ACTION_STATUS_FAILED,
-    ACTION_STATUS_PENDING,
-    ACTION_STATUS_PREVIEWED,
-    HandoverAppAction,
-    HandoverAssetType,
-    HandoverTask,
-)
-from easyauth.webhooks.hooks import HookCallError, HookResponse, signed_hook_post
-
-if TYPE_CHECKING:
-    from easyauth.applications.ops_models import JsonValue
-
 from easyauth.lifecycle.handover_payloads import (
     build_preview_payload,
 )
@@ -47,6 +34,23 @@ from easyauth.lifecycle.handover_shared import (
     locked_action_after_task,
     set_action_error,
 )
+from easyauth.lifecycle.models import (
+    ACTION_STATUS_FAILED,
+    ACTION_STATUS_PENDING,
+    ACTION_STATUS_PREVIEWED,
+    HandoverAppAction,
+    HandoverAssetType,
+    HandoverTask,
+)
+from easyauth.webhooks.hooks import HookCallError, HookResponse, signed_hook_post
+
+if TYPE_CHECKING:
+    from easyauth.applications.ops_models import JsonValue
+
+
+_ACTION_BLOCKED_MESSAGE: Final = "action_blocked"
+_PREVIEW_RESULT_MISSING_MESSAGE: Final = "预演完成后缺少动作结果。"
+_PREVIEW_ASSETS_MISSING_MESSAGE: Final = "preview 响应缺少 assets"
 
 
 def preview_action(
@@ -86,7 +90,7 @@ def _reserve_preview_request(
             allowed={ACTION_STATUS_PENDING, ACTION_STATUS_PREVIEWED},
         )
         if action.app.handover_capability != HANDOVER_CAPABILITY_DECLARED:
-            raise HandoverConflictError("action_blocked")
+            raise HandoverConflictError(_ACTION_BLOCKED_MESSAGE)
         action.preview_generation += 1
         action.save(update_fields=["preview_generation", "updated_at"])
         hook_url = handover_hook_url(action.app)
@@ -141,7 +145,8 @@ def _complete_preview_request(
             preview_error = error
     if preview_error is not None:
         raise preview_error
-    assert result is not None
+    if result is None:
+        raise AssertionError(_PREVIEW_RESULT_MISSING_MESSAGE)
     return result
 
 
@@ -152,7 +157,8 @@ def _apply_preview_success(
     _apply_preview_assets(action, payload)
     token = str(payload.get("snapshot_token", "") or "")
     if len(token) > SNAPSHOT_TOKEN_MAX_LEN:
-        raise HandoverError(f"snapshot_token 超过 {SNAPSHOT_TOKEN_MAX_LEN} 字节上限")
+        message = f"snapshot_token 超过 {SNAPSHOT_TOKEN_MAX_LEN} 字节上限"
+        raise HandoverError(message)
     action.snapshot_token = token
     action.status = ACTION_STATUS_PREVIEWED
     action.last_error = ""
@@ -204,7 +210,7 @@ def _locked_preview_action(request: PreviewRequest) -> HandoverAppAction | None:
 def _apply_preview_assets(action: HandoverAppAction, payload: dict[str, JsonValue]) -> None:
     assets = payload.get("assets")
     if not isinstance(assets, list):
-        raise HandoverError("preview 响应缺少 assets")
+        raise HandoverError(_PREVIEW_ASSETS_MISSING_MESSAGE)
     declared = {
         str(item.get("type", "")): item
         for item in (action.app.handover_asset_types or [])
@@ -218,12 +224,14 @@ def _apply_preview_assets(action: HandoverAppAction, payload: dict[str, JsonValu
         if not type_key:
             continue
         if type_key not in declared:
-            raise HandoverError(f"undeclared_asset_type: {type_key}")
+            message = f"undeclared_asset_type: {type_key}"
+            raise HandoverError(message)
         seen.add(type_key)
         _apply_preview_asset_row(action, raw, type_key=type_key, declared=declared[type_key])
     missing = set(declared) - seen
     if missing:
-        raise HandoverError(f"preview 缺少已声明类型: {', '.join(sorted(missing))}")
+        message = f"preview 缺少已声明类型: {', '.join(sorted(missing))}"
+        raise HandoverError(message)
 
 
 def _apply_preview_asset_row(
@@ -239,12 +247,13 @@ def _apply_preview_asset_row(
         type_key=type_key,
     ).first()
     label = str(raw.get("label", type_key))[:120]
+    invalid_count_message = f"invalid_asset_count: {type_key}"
     try:
         count = int(raw.get("count", 0) or 0)
     except (TypeError, ValueError) as error:
-        raise HandoverError(f"invalid_asset_count: {type_key}") from error
+        raise HandoverError(invalid_count_message) from error
     if count < 0:
-        raise HandoverError(f"invalid_asset_count: {type_key}")
+        raise HandoverError(invalid_count_message)
     detail = bool(raw.get("detail_supported", declared.get("detail_supported", False)))
     releasable = bool(raw.get("releasable", declared.get("releasable", False)))
     if existing is None:

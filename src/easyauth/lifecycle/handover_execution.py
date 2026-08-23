@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from typing import Final
 
 from django.db import transaction
 
@@ -67,6 +68,11 @@ from easyauth.lifecycle.models import (
 from easyauth.lifecycle.transfer import transfer_selected_grants
 from easyauth.webhooks.hooks import HookCallError, signed_hook_post
 
+_ACTION_NOT_RETRYABLE_MESSAGE: Final = "action_not_retryable"
+_CONFIRM_VERSION_STALE_MESSAGE: Final = "confirm_version_stale"
+_DONE_ID_MISSING_MESSAGE: Final = "授权重试完成后缺少动作标识。"
+_GENERATION_SUPERSEDED_MESSAGE: Final = "generation_superseded"
+
 
 def assert_action_executable(
     action: HandoverAppAction,
@@ -80,10 +86,10 @@ def assert_action_executable(
         mutation_guard(action)
     if is_retry and action.status != ACTION_STATUS_FAILED:
         # 01 §6.1: 对非 failed 调 retry → action_not_retryable(非泛化 action_not_operable)
-        raise HandoverConflictError("action_not_retryable")
+        raise HandoverConflictError(_ACTION_NOT_RETRYABLE_MESSAGE)
     ensure_action_status(action, allowed={allowed_status})
     if confirm_version is not None and confirm_version != action.confirm_version:
-        raise HandoverConflictError("confirm_version_stale")
+        raise HandoverConflictError(_CONFIRM_VERSION_STALE_MESSAGE)
     validate_assignments(action)
 
 
@@ -105,19 +111,7 @@ def retry_grant_transfer_only(
         require_cas(handle)
         if action.task.kind in ACTION_GRANT_TRANSFER_KINDS:
             _ = transfer_selected_grants(action)
-        final_batch = (
-            HandoverExecutionBatch.objects.select_for_update()
-            .filter(
-                action=action,
-                generation=action.generation,
-                is_final=True,
-                data_completed_at__isnull=False,
-            )
-            .order_by("-batch_seq")
-            .first()
-        )
-        if final_batch is None:
-            raise HandoverConflictError(ACTION_NOT_OPERABLE_MESSAGE)
+        final_batch = _final_completed_batch(action)
         final_batch.status = BATCH_STATUS_DONE
         final_batch.save(update_fields=["status"])
         complete_active_plan(action)
@@ -130,7 +124,8 @@ def retry_grant_transfer_only(
         task = HandoverTask.objects.select_for_update().get(pk=action.task_id)
         _ = refresh_task_status_locked(task)
         must_cas_release(handle)
-    except Exception as error:
+    # 失败收敛边界: 任何异常都必须先把 action 置失败并 CAS 释放租约, 再向上抛。
+    except Exception as error:  # noqa: BLE001
         action = HandoverAppAction.objects.select_for_update(of=("self",)).get(
             pk=action_id_grant,
         )
@@ -144,10 +139,28 @@ def retry_grant_transfer_only(
     return GrantOnlyRetryOutcome(done_id=action_id_grant)
 
 
+def _final_completed_batch(action: HandoverAppAction) -> HandoverExecutionBatch:
+    final_batch = (
+        HandoverExecutionBatch.objects.select_for_update()
+        .filter(
+            action=action,
+            generation=action.generation,
+            is_final=True,
+            data_completed_at__isnull=False,
+        )
+        .order_by("-batch_seq")
+        .first()
+    )
+    if final_batch is None:
+        raise HandoverConflictError(ACTION_NOT_OPERABLE_MESSAGE)
+    return final_batch
+
+
 def settle_grant_only_retry(outcome: GrantOnlyRetryOutcome) -> HandoverAppAction:
     if outcome.error is not None:
         raise HandoverError(str(outcome.error)[:500]) from outcome.error
-    assert outcome.done_id is not None
+    if outcome.done_id is None:
+        raise AssertionError(_DONE_ID_MISSING_MESSAGE)
     return HandoverAppAction.objects.get(pk=outcome.done_id)
 
 
@@ -213,7 +226,7 @@ def _reopen_failed_batch(
         .first()
     )
     if batch is None:
-        raise HandoverConflictError("action_not_retryable")
+        raise HandoverConflictError(_ACTION_NOT_RETRYABLE_MESSAGE)
     # 失败重试必须用原 canonical body, 不得改写 request_payload。
     handle = take_lease(
         action=action,
@@ -305,7 +318,7 @@ def _hand_lease_to_sender(
 def deliver_execute_request(outbound: OutboundExecution) -> HandoverAppAction:
     # 网络调用在事务外
     if _release_superseded_delivery(outbound):
-        raise HandoverConflictError("generation_superseded")
+        raise HandoverConflictError(_GENERATION_SUPERSEDED_MESSAGE)
     try:
         response = signed_hook_post(
             app=outbound.app,

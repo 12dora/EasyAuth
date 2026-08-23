@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from django.db import transaction
 
@@ -28,6 +28,9 @@ if TYPE_CHECKING:
         MutationGuard,
         OutboundExecution,
     )
+
+
+_OUTBOUND_MISSING_MESSAGE: Final = "执行请求未生成。"
 
 
 def execute_action(
@@ -110,5 +113,6 @@ def _execute_action(
     if grant_only is not None:
         return settle_grant_only_retry(grant_only)
 
-    assert outbound is not None
+    if outbound is None:
+        raise AssertionError(_OUTBOUND_MISSING_MESSAGE)
     return deliver_execute_request(outbound)

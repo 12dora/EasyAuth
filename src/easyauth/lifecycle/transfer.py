@@ -13,6 +13,7 @@ from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPer
 from easyauth.grants.services import GrantExpirationInput, GrantMutationInput, GrantService
 from easyauth.lifecycle.core import (
     CATALOG_TARGET_DELETED_MESSAGE,
+    HANDOVER_DATA_NOT_COMPLETED_MESSAGE,
     TEMPLATE_TERM_INVALID_MESSAGE,
     TRANSFER_CONFIRMATION_CONFLICT_MESSAGE,
     TRANSFER_PLAN_REVISION_CONFLICT_MESSAGE,
@@ -25,7 +26,9 @@ from easyauth.lifecycle.core import (
     refresh_task_status,
 )
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
+from easyauth.lifecycle.lease import action_execution_in_flight
 from easyauth.lifecycle.models import (
+    ACTION_FINISHED_STATUSES,
     HANDOVER_KIND_TRANSFER,
     ITEM_STATUS_DONE,
     ITEM_STATUS_PENDING,
@@ -151,10 +154,6 @@ def _confirmed_plan_or_conflict(
 
 def _ensure_data_phase_settled(task: HandoverTask) -> None:
     """全部数据 action 收敛且无在途租约后才允许改权限(01 §5.5)。"""
-    from easyauth.lifecycle.core import HANDOVER_DATA_NOT_COMPLETED_MESSAGE
-    from easyauth.lifecycle.lease import action_execution_in_flight
-    from easyauth.lifecycle.models import ACTION_FINISHED_STATUSES, HandoverAppAction
-
     open_actions = list(HandoverAppAction.objects.filter(task=task))
     if any(a.status not in ACTION_FINISHED_STATUSES for a in open_actions):
         raise HandoverConflictError(HANDOVER_DATA_NOT_COMPLETED_MESSAGE)

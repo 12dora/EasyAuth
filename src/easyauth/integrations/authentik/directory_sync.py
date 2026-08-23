@@ -612,7 +612,7 @@ def _start_user_offboarding(
     # 首次检出离职: 撤权已由 apply_directory_status 完成,
     # 这里补齐生命周期立即项(自动建交接单+禁号+移出团队, §2.4)。
     try:
-        # start_offboarding 自带 atomic(savepoint)；单个身份冲突不得污染外层同步事务。
+        # start_offboarding 自带 atomic(savepoint); 单个身份冲突不得污染外层同步事务。
         _ = start_offboarding(user, snapshot_grant_ids=grant_ids)
     except HandoverConflictError:
         user_pk = cast("int", user.pk)

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from django.db import transaction
 from django.utils import timezone
 
+from easyauth.applications.handover_capability import _seed_asset_type_placeholders
 from easyauth.applications.models import (
     HANDOVER_CAPABILITY_DECLARED,
     HANDOVER_CAPABILITY_NONE,
@@ -22,10 +23,21 @@ from easyauth.lifecycle.core import (
     refresh_task_status_locked,
 )
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
+from easyauth.lifecycle.handover_payloads import (
+    ensure_batch_plan_on_413,
+)
+from easyauth.lifecycle.handover_shared import (
+    DECLARED_WITHOUT_URL_MESSAGE,
+    POLICY_REMOVED_MESSAGE,
+    SKIP_REASON_CAPABILITY_NONE,
+    handover_hook_url,
+    locked_action,
+)
 from easyauth.lifecycle.lease import (
     HANDOVER_EXECUTION_IN_FLIGHT,
     action_execution_in_flight,
     assignment_mutation_in_flight,
+    has_active_lease,
 )
 from easyauth.lifecycle.models import (
     ACTION_STATUS_ASYNC_PENDING,
@@ -58,16 +70,10 @@ if TYPE_CHECKING:
     from easyauth.accounts.models import UserMirror
     from easyauth.applications.ops_models import JsonValue
 
-from easyauth.lifecycle.handover_payloads import (
-    ensure_batch_plan_on_413,
-)
-from easyauth.lifecycle.handover_shared import (
-    DECLARED_WITHOUT_URL_MESSAGE,
-    POLICY_REMOVED_MESSAGE,
-    SKIP_REASON_CAPABILITY_NONE,
-    handover_hook_url,
-    locked_action,
-)
+
+_BATCH_PLAN_IN_PROGRESS_MESSAGE: Final = "batch_plan_in_progress"
+_GRANT_RECEIVER_NOT_ALLOWED_MESSAGE: Final = "grant_receiver_not_allowed"
+_RECEIVER_IS_SUBJECT_MESSAGE: Final = "receiver_is_subject"
 
 # ---------------------------------------------------------------------------
 # 公开 API
@@ -94,14 +100,14 @@ def update_grant_receiver(
             .first()
         )
         if plan is not None and plan.completed_batches > 0:
-            raise HandoverConflictError("batch_plan_in_progress")
+            raise HandoverConflictError(_BATCH_PLAN_IN_PROGRESS_MESSAGE)
         if grant_receiver is not None and locked.task.kind != HANDOVER_KIND_OFFBOARD:
-            raise HandoverError("grant_receiver_not_allowed")
+            raise HandoverError(_GRANT_RECEIVER_NOT_ALLOWED_MESSAGE)
         if (
             grant_receiver is not None
             and cast("int", grant_receiver.pk) == locked.task.subject_user_id
         ):
-            raise HandoverError("receiver_is_subject")
+            raise HandoverError(_RECEIVER_IS_SUBJECT_MESSAGE)
         locked.grant_receiver = grant_receiver
         locked.confirm_version += 1
         if locked.status in {ACTION_STATUS_FAILED, ACTION_STATUS_PREVIEWED}:
@@ -290,9 +296,6 @@ def delete_task(task: HandoverTask, *, actor_id: str) -> None:
 
 def reset_action_for_upgrade(action: HandoverAppAction, *, task: HandoverTask) -> HandoverAppAction:
     """§5.1.2 升级字段重置。调用方已锁 task → action; 有未释放租约则 409。"""
-    from easyauth.applications.handover_capability import _seed_asset_type_placeholders
-    from easyauth.lifecycle.lease import has_active_lease
-
     if has_active_lease(
         subject_user_id=int(task.subject_user_id),  # type: ignore[arg-type]
         app_id=int(action.app_id),  # type: ignore[arg-type]

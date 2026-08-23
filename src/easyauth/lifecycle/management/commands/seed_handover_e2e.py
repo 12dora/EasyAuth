@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Final
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
@@ -49,14 +49,15 @@ ASSET_TYPES: list[dict[str, object]] = [
         "releasable": False,
     },
 ]
+_DEBUG_REQUIRED_MESSAGE: Final = "seed_handover_e2e 仅允许在 DJANGO_DEBUG=1 下运行。"
 
 
 class Command(BaseCommand):
     help = "播种全栈 E2E 交接场景(manager / subject / declared app / offboard task)。"
 
-    def handle(self, *args: Any, **options: Any) -> None:
+    def handle(self, *_args: str, **_options: object) -> None:
         if not settings.DEBUG:
-            raise CommandError("seed_handover_e2e 仅允许在 DJANGO_DEBUG=1 下运行。")
+            raise CommandError(_DEBUG_REQUIRED_MESSAGE)
 
         manager_username = (
             os.environ.get("EASYAUTH_E2E_MANAGER_USER", DEFAULT_MANAGER_USER).strip()

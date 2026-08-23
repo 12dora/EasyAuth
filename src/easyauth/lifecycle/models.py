@@ -537,6 +537,10 @@ class HandoverActionSkipRecord(models.Model):
             models.Index(fields=["task_id_snapshot"], name="lifecycle_skip_task_snap_idx"),
         ]
 
+    @override
+    def __str__(self) -> str:
+        return f"skip:{self.task_id_snapshot}:{self.action_snapshot_id}:{self.generation}"
+
 
 class HandoverAssetType(models.Model):
     if TYPE_CHECKING:

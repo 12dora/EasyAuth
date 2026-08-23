@@ -18,6 +18,7 @@ from easyauth.applications.models import (
     AppScope,
 )
 from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
+from easyauth.lifecycle.approvals import reassign_approvals_for_departed
 from easyauth.lifecycle.assignee import (
     AssigneeApplyOptions,
     AssigneeResolution,
@@ -31,11 +32,19 @@ from easyauth.lifecycle.core import (
     refresh_task_status,
 )
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
-from easyauth.lifecycle.handover_actions import initial_action_status_for_app
+from easyauth.lifecycle.handover_actions import (
+    initial_action_status_for_app,
+    reset_action_for_upgrade,
+)
+from easyauth.lifecycle.lease import HANDOVER_EXECUTION_IN_FLIGHT, has_active_lease
 from easyauth.lifecycle.models import (
     ACTION_STATUS_BLOCKED,
     ACTION_STATUS_PENDING,
     ACTION_STATUS_SKIPPED,
+    ASSIGNEE_STATE_SUBJECT,
+    AUTHORITY_SOURCE_MANAGER_CHAIN,
+    AUTHORITY_SOURCE_SUBJECT,
+    AUTHORITY_SOURCE_SUPERUSER,
     HANDOVER_ESCALATION_DAYS,
     HANDOVER_KIND_OFFBOARD,
     HANDOVER_KIND_PRE_OFFBOARD,
@@ -68,6 +77,8 @@ class HandoverCreationSpec:
 
 
 _DEFAULT_HANDOVER_CREATION_SPEC: Final = HandoverCreationSpec()
+_IDEMPOTENCY_CONFLICT_MESSAGE: Final = "idempotency_conflict"
+_OPEN_TASK_EXISTS_MESSAGE: Final = "open_task_exists"
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,8 +158,6 @@ def ensure_handover_task(
         if kind == HANDOVER_KIND_TRANSFER:
             _ = TransferPlan.objects.create(task=task)
         if kind == HANDOVER_KIND_OFFBOARD:
-            from easyauth.lifecycle.approvals import reassign_approvals_for_departed
-
             reassign_approvals_for_departed(
                 subject=subject,
                 task=task,
@@ -182,7 +191,7 @@ def _task_by_idempotency_key(
     if existing_by_key is None:
         return None
     if existing_by_key.creation_payload_sha256 != spec.creation_payload_sha256:
-        raise HandoverConflictError("idempotency_conflict")
+        raise HandoverConflictError(_IDEMPOTENCY_CONFLICT_MESSAGE)
     return existing_by_key
 
 
@@ -225,7 +234,7 @@ def _reuse_or_upgrade_existing(
     # 同 kind open 单: 内部/系统调用可幂等返回; 门户自助建单要求 409 open_task_exists
     # (01 §6.1), 由 raise_on_existing 区分。
     if spec.raise_on_existing:
-        raise HandoverConflictError("open_task_exists")
+        raise HandoverConflictError(_OPEN_TASK_EXISTS_MESSAGE)
     return existing
 
 
@@ -234,11 +243,6 @@ def _is_subject_self_pre_offboard(subject: UserMirror, *, kind: str, created_by:
 
 
 def _resolved_authority_source(*, authority_source: str, self_service: bool) -> str:
-    from easyauth.lifecycle.models import (
-        AUTHORITY_SOURCE_MANAGER_CHAIN,
-        AUTHORITY_SOURCE_SUBJECT,
-    )
-
     if authority_source:
         return authority_source
     return AUTHORITY_SOURCE_SUBJECT if self_service else AUTHORITY_SOURCE_MANAGER_CHAIN
@@ -261,8 +265,6 @@ def _assign_initial_assignee(
             options=AssigneeApplyOptions(reason="task_created"),
         )
         return
-
-    from easyauth.lifecycle.models import ASSIGNEE_STATE_SUBJECT
 
     # 自助 pre_offboard 不走 resolve_assignee, 避免伪造 degraded 审计。
     task.assignee = subject
@@ -297,12 +299,6 @@ def _record_task_creation_events(
     resolved_authority: str,
     app_keys: tuple[str, ...] | None,
 ) -> None:
-    from easyauth.lifecycle.models import (
-        AUTHORITY_SOURCE_MANAGER_CHAIN,
-        AUTHORITY_SOURCE_SUBJECT,
-        AUTHORITY_SOURCE_SUPERUSER,
-    )
-
     record_task_event(
         task,
         action="handover_task_created",
@@ -335,7 +331,7 @@ def _create_task_with_idempotency_constraint(
     resolved_authority: str,
 ) -> tuple[HandoverTask, bool]:
     try:
-        # savepoint 让唯一键竞态只回滚 INSERT，本事务仍可读取赢家并按冻结 body 判定。
+        # savepoint 让唯一键竞态只回滚 INSERT, 本事务仍可读取赢家并按冻结 body 判定。
         with transaction.atomic():
             task = HandoverTask.objects.create(
                 kind=kind,
@@ -343,13 +339,12 @@ def _create_task_with_idempotency_constraint(
                 created_by=created_by,
                 reason=spec.reason,
                 generation=1,
-                # 解析完成后刻意不再使用 spec.authority_source，避免绕过自助建单来源解析。
+                # 解析完成后刻意不再使用 spec.authority_source, 避免绕过自助建单来源解析。
                 authority_source=resolved_authority,
                 creation_idempotency_key=spec.creation_idempotency_key,
                 creation_payload_sha256=spec.creation_payload_sha256,
             )
-        return task, True
-    except IntegrityError:
+    except IntegrityError as exc:
         if not spec.creation_idempotency_key:
             raise
         existing_by_key = (
@@ -363,8 +358,10 @@ def _create_task_with_idempotency_constraint(
         if existing_by_key is None:
             raise
         if existing_by_key.creation_payload_sha256 != spec.creation_payload_sha256:
-            raise HandoverConflictError("idempotency_conflict")
+            raise HandoverConflictError(_IDEMPOTENCY_CONFLICT_MESSAGE) from exc
         return existing_by_key, False
+    else:
+        return task, True
 
 
 def upgrade_pre_offboard_to_offboard(
@@ -375,10 +372,6 @@ def upgrade_pre_offboard_to_offboard(
     snapshot_grant_ids: tuple[int, ...] | None = None,
 ) -> HandoverTask:
     """00 §8.3 / 01 §5.1.2: pre_offboard → offboard 升级。调用方须已锁 task。"""
-    from easyauth.lifecycle.approvals import reassign_approvals_for_departed
-    from easyauth.lifecycle.handover_actions import reset_action_for_upgrade
-    from easyauth.lifecycle.lease import has_active_lease
-
     if task.kind != HANDOVER_KIND_PRE_OFFBOARD:
         raise HandoverConflictError(TASK_KIND_CONFLICT_MESSAGE)
     if task.status not in TASK_OPEN_STATUSES:
@@ -391,8 +384,6 @@ def upgrade_pre_offboard_to_offboard(
             subject_user_id=int(task.subject_user_id),  # type: ignore[arg-type]
             app_id=int(action.app_id),  # type: ignore[arg-type]
         ):
-            from easyauth.lifecycle.lease import HANDOVER_EXECUTION_IN_FLIGHT
-
             raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
 
     old_kind = task.kind

@@ -4,13 +4,16 @@ from __future__ import annotations
 
 import hashlib
 import json
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from easyauth.lifecycle.core import (
     HOOK_EVENT_EXECUTE,
     HOOK_EVENT_PREVIEW,
 )
 from easyauth.lifecycle.errors import HandoverConflictError
+from easyauth.lifecycle.handover_shared import (
+    task_id,
+)
 from easyauth.lifecycle.models import (
     ASSET_ACTION_RELEASE,
     ASSET_ACTION_SKIP,
@@ -26,9 +29,9 @@ from easyauth.lifecycle.models import (
 if TYPE_CHECKING:
     from easyauth.applications.ops_models import JsonValue
 
-from easyauth.lifecycle.handover_shared import (
-    task_id,
-)
+
+_BATCH_PLAN_IN_PROGRESS_MESSAGE: Final = "batch_plan_in_progress"
+_BATCH_PLAN_EXHAUSTED_MESSAGE: Final = "batch_plan_exhausted"
 
 # ---------------------------------------------------------------------------
 # payload / helpers
@@ -64,10 +67,10 @@ def build_execute_payload_for_plan(
             None,
         )
     if plan.assignment_hash != _assignment_hash(action, plan=plan):
-        raise HandoverConflictError("batch_plan_in_progress")
+        raise HandoverConflictError(_BATCH_PLAN_IN_PROGRESS_MESSAGE)
     next_no = int(plan.completed_batches) + 1
     if next_no > int(plan.total):
-        raise HandoverConflictError("batch_plan_exhausted")
+        raise HandoverConflictError(_BATCH_PLAN_EXHAUSTED_MESSAGE)
     chunks = plan.chunks if isinstance(plan.chunks, list) else []
     chunk = chunks[next_no - 1] if next_no - 1 < len(chunks) else []
     is_final = next_no >= int(plan.total)
@@ -105,17 +108,16 @@ def _full_assignments(action: HandoverAppAction) -> list[dict[str, JsonValue]]:
         generation=action.generation,
     ).prefetch_related("overrides", "default_to_user", "overrides__to_user")
     for asset_type in types:
-        overrides: list[dict[str, JsonValue]] = []
-        for ov in asset_type.overrides.all():
-            overrides.append(
-                {
-                    "id": ov.asset_id,
-                    "action": ov.action,
-                    "to_user_id": (
-                        ov.to_user.authentik_user_id if ov.to_user is not None else None
-                    ),
-                },
-            )
+        overrides: list[dict[str, JsonValue]] = [
+            {
+                "id": ov.asset_id,
+                "action": ov.action,
+                "to_user_id": (
+                    ov.to_user.authentik_user_id if ov.to_user is not None else None
+                ),
+            }
+            for ov in asset_type.overrides.all()
+        ]
         assignments.append(
             {
                 "asset_type": asset_type.type_key,
@@ -132,21 +134,19 @@ def _full_assignments(action: HandoverAppAction) -> list[dict[str, JsonValue]]:
 
 
 def audit_assignment_summary(action: HandoverAppAction) -> list[JsonValue]:
-    """审计只保留分配策略与覆盖数量，不写人员标识或资产 ID。"""
-    result: list[JsonValue] = []
+    """审计只保留分配策略与覆盖数量, 不写人员标识或资产 ID。"""
     types = HandoverAssetType.objects.filter(
         action=action,
         generation=action.generation,
     ).prefetch_related("overrides")
-    for asset_type in types:
-        result.append(
-            {
-                "asset_type": str(asset_type.type_key)[:64],
-                "default_action": asset_type.default_action,
-                "override_count": asset_type.overrides.count(),
-            },
-        )
-    return result
+    return [
+        {
+            "asset_type": str(asset_type.type_key)[:64],
+            "default_action": asset_type.default_action,
+            "override_count": asset_type.overrides.count(),
+        }
+        for asset_type in types
+    ]
 
 
 def audit_result_summary(summary: dict[str, JsonValue] | None) -> dict[str, JsonValue]:
@@ -190,11 +190,10 @@ def _chunk_type_overrides(
     for ov in asset_type.overrides.all():
         if not is_final and ov.asset_id not in allowed:
             continue
-        if is_final:
-            # 最终批: 本批 remaining transfer/release + 全部 skip
-            if ov.action != ASSET_ACTION_SKIP and ov.asset_id not in allowed:
-                # 已在前序批消耗的 transfer/release 不再带
-                continue
+        if is_final and ov.action != ASSET_ACTION_SKIP and ov.asset_id not in allowed:
+            # 最终批: 本批 remaining transfer/release + 全部 skip。
+            # 已在前序批消耗的 transfer/release 不再带。
+            continue
         overrides.append(
             {
                 "id": ov.asset_id,

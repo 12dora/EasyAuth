@@ -36,6 +36,7 @@ from easyauth.lifecycle.lease import (
     LeaseHandle,
     cas_release,
     cas_update_owner,
+    preempt_expired_lease,
     require_cas,
 )
 from easyauth.lifecycle.models import (
@@ -203,8 +204,6 @@ def takeover_expired_lease(
     owner: str | None = None,
 ) -> HandoverAppAction | None:
     """§2.4.2 先抢占后查证: 用原 canonical body 重放 execute。"""
-    from easyauth.lifecycle.lease import preempt_expired_lease
-
     worker = owner or f"recover:{uuid.uuid4().hex[:12]}"
 
     # async_attention_required 的 30 分钟退避必须在抢占前生效, 否则 60s recovery

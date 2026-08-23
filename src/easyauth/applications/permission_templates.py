@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from django.db import transaction
 
+from easyauth.applications.handover_capability import (
+    sync_handover_capability_from_manifest,
+)
 from easyauth.applications.models import App, PermissionTemplateVersion
 from easyauth.applications.permission_template_flattening import flatten_template
 from easyauth.applications.permission_template_parsing import (
@@ -92,12 +97,6 @@ def _sync_manifest_lifecycle(
     downstream_base_url: str | None,
     actor_type: str,
 ) -> None:
-    from dataclasses import replace
-
-    from easyauth.applications.handover_capability import (
-        sync_handover_capability_from_manifest,
-    )
-
     _sync_webhook_config_from_manifest(
         app=app,
         template=template,

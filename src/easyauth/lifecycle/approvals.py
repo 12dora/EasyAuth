@@ -8,6 +8,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from easyauth.access_requests.approvals import (
+    ApprovalActionError,
     access_request_approver_user_ids,
     reassign_locked_access_request,
 )
@@ -22,12 +23,13 @@ from easyauth.applications.models import ApprovalRule
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.lifecycle.assignee import AssigneeResolution, resolve_assignee
 from easyauth.lifecycle.core import LIFECYCLE_ACTOR_ID
+from easyauth.lifecycle.errors import HandoverConflictError
 from easyauth.lifecycle.models import (
     ApprovalRuleReplacementRequired,
     HandoverAppAction,
     HandoverTask,
 )
-from easyauth.workflows.models import ApprovalInstance
+from easyauth.workflows.models import APPROVAL_TERMINAL_STATUSES, ApprovalInstance
 
 if TYPE_CHECKING:
     from easyauth.applications.ops_models import JsonValue
@@ -36,6 +38,10 @@ APPROVAL_ROUTING_NORMAL: Final = "normal"
 APPROVAL_ROUTING_SUPERUSER_POOL: Final = "superuser_pool"
 ROUTING_NO_ACTIVE_MANAGER: Final = "no_active_manager"
 ROUTING_CHAIN_EXHAUSTED: Final = "chain_exhausted"
+_APPROVER_USER_IDS_REQUIRED_MESSAGE: Final = "approver_user_ids 不能为空"
+_REPLACEMENT_NOT_FOUND_MESSAGE: Final = "not_found"
+_REPLACEMENT_ALREADY_RESOLVED_MESSAGE: Final = "already_resolved"
+_INVALID_APPROVER_MESSAGE: Final = "存在无效或未激活的审批人"
 
 IN_FLIGHT_INSTANCE_STATUSES: Final[frozenset[str]] = frozenset(
     {
@@ -66,8 +72,6 @@ def reassign_access_request_approvers(
     actor_id: str = LIFECYCLE_ACTOR_ID,
 ) -> int:
     """§4.5.1: submitted 申请中, 审批人是 subject 的行 → 替换为申请人主管链解析结果。"""
-    from easyauth.access_requests.approvals import ApprovalActionError
-
     subject_pk = int(subject.pk)  # type: ignore[arg-type]
     assignment_ids = list(
         AccessRequestApprover.objects.filter(
@@ -300,7 +304,7 @@ def replace_approval_rule_approvers(
 
     changed = 0
     with transaction.atomic():
-        # JSON 列表在支持的数据库间无法用同一查询精确过滤，先锁 active 规则再逐条判定。
+        # JSON 列表在支持的数据库间无法用同一查询精确过滤, 先锁 active 规则再逐条判定。
         rules = list(ApprovalRule.objects.select_for_update().filter(is_active=True))
         for rule in rules:
             raw = rule.approver_userids
@@ -402,8 +406,6 @@ def write_in_flight_approval_warnings(
     subject: UserMirror,
 ) -> None:
     """§4.5.3: 存在性提示 only — 不列条数、不按审批人过滤。"""
-    from easyauth.workflows.models import APPROVAL_TERMINAL_STATUSES
-
     now = timezone.now().isoformat()
     actions = HandoverAppAction.objects.select_related("app").filter(task=task)
     for action in actions:
@@ -414,15 +416,14 @@ def write_in_flight_approval_warnings(
         )
         if not has_open:
             continue
-        # 已有持久化警示不覆盖(升级也不清)
         if action.approval_instance_warning:
             continue
         # §4.5.3 要求 link 字段存在; 平台尚未存 APP 钉钉审批入口时显式标注缺口,
         # 禁止静默空串让前端当成"无链接"。
         action.approval_instance_warning = {
             "message": (
-                f"本应用存在未终结的钉钉审批，无法确认其中是否有由 "
-                f"{subject.name or subject.authentik_user_id} 审批的条目，"
+                f"本应用存在未终结的钉钉审批, 无法确认其中是否有由 "
+                f"{subject.name or subject.authentik_user_id} 审批的条目, "
                 f"请到钉钉中检查并人工转办。"
             ),
             "link": f"unavailable:app={action.app.app_key}",
@@ -439,7 +440,7 @@ def resolve_approval_rule_replacement(
 ) -> ApprovalRuleReplacementRequired:
     """控制台解决待办: 同事务锁 + 替换 + resolved。"""
     if not approver_user_ids:
-        raise ValueError("approver_user_ids 不能为空")
+        raise ValueError(_APPROVER_USER_IDS_REQUIRED_MESSAGE)
     with transaction.atomic():
         row = (
             ApprovalRuleReplacementRequired.objects.select_for_update()
@@ -448,11 +449,9 @@ def resolve_approval_rule_replacement(
             .first()
         )
         if row is None:
-            raise LookupError("not_found")
+            raise LookupError(_REPLACEMENT_NOT_FOUND_MESSAGE)
         if row.resolved_at is not None:
-            from easyauth.lifecycle.errors import HandoverConflictError
-
-            raise HandoverConflictError("already_resolved")
+            raise HandoverConflictError(_REPLACEMENT_ALREADY_RESOLVED_MESSAGE)
         # 校验审批人 active
         users = {
             u.authentik_user_id: u
@@ -462,7 +461,7 @@ def resolve_approval_rule_replacement(
             )
         }
         if len(users) != len(set(approver_user_ids)):
-            raise ValueError("存在无效或未激活的审批人")
+            raise ValueError(_INVALID_APPROVER_MESSAGE)
         rule = ApprovalRule.objects.select_for_update().get(pk=row.approval_rule_id)
         rule.approver_userids = list(dict.fromkeys(approver_user_ids))
         rule.save(update_fields=["approver_userids", "updated_at"])

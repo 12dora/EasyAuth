@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import timedelta
 from http import HTTPStatus
 from typing import ClassVar, Final
 
@@ -21,10 +22,16 @@ from easyauth.admin_console.api_responses import (
     method_not_allowed_response,
 )
 from easyauth.admin_console.authz import require_superuser
+from easyauth.admin_console.auto_onboarding_api import (
+    AutoOnboardingError,
+    repull_app_descriptor,
+)
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.handover_capability import declare_handover_none
+from easyauth.applications.manifest_import import ManifestVersionConflictError
 from easyauth.applications.models import App
+from easyauth.applications.permission_templates import PermissionTemplateImportError
 from easyauth.lifecycle.api_errors import map_handover_exception, reason_error
 from easyauth.lifecycle.api_payloads import (
     SURFACE_CONSOLE,
@@ -32,6 +39,7 @@ from easyauth.lifecycle.api_payloads import (
     asset_type_item,
     task_detail,
 )
+from easyauth.lifecycle.approvals import resolve_approval_rule_replacement
 from easyauth.lifecycle.assignee import AssigneeApplyOptions, AssigneeResolution, apply_assignee
 from easyauth.lifecycle.assignments import (
     OverrideEntry,
@@ -62,6 +70,7 @@ from easyauth.webhooks.hooks import HookCallError
 from easyauth.webhooks.models import AppWebhookConfig
 
 REASON_MIN: Final = 10
+IDEMPOTENCY_KEY_MAX_LENGTH: Final = 128
 ITEMS_DEFAULT_PAGE_SIZE: Final = 50
 ITEMS_MAX_PAGE_SIZE: Final = 200
 
@@ -225,7 +234,7 @@ def console_handover_reassign(request: HttpRequest) -> JsonResponse:
 
 def _create_reassign_handover(request: HttpRequest, *, actor_id: str) -> JsonResponse:
     idem = request.headers.get("Idempotency-Key", "").strip()
-    if not idem or len(idem) > 128:
+    if not idem or len(idem) > IDEMPOTENCY_KEY_MAX_LENGTH:
         return reason_error("idempotency_key_required")
     try:
         payload = ReassignPayload.model_validate_json(request.body)
@@ -322,8 +331,6 @@ def _defer_handover_task(
             return reason_error("already_deferred")
         if locked.escalation_deadline is None:
             return reason_error("action_not_operable", "超管池单据无需顺延。")
-        from datetime import timedelta
-
         locked.escalation_deadline = locked.escalation_deadline + timedelta(
             days=HANDOVER_ESCALATION_DAYS,
         )
@@ -405,23 +412,22 @@ def console_approval_rule_replacements(request: HttpRequest) -> JsonResponse:
     elif resolved_raw in {"true", "1"}:
         qs = qs.filter(resolved_at__isnull=False)
     total = qs.count()
-    items = []
-    for row in qs.order_by("-created_at", "-id")[:200]:
-        items.append(
-            {
-                "id": row.id,
-                "approval_rule": {
-                    "id": row.approval_rule_id,
-                    "app_id": row.approval_rule.app_id,
-                },
-                "departed_user": {
-                    "user_id": row.departed_user.authentik_user_id,
-                    "name": row.departed_user.name,
-                },
-                "reason": row.reason,
-                "created_at": datetime_value(row.created_at),
+    items = [
+        {
+            "id": row.id,
+            "approval_rule": {
+                "id": row.approval_rule_id,
+                "app_id": row.approval_rule.app_id,
             },
-        )
+            "departed_user": {
+                "user_id": row.departed_user.authentik_user_id,
+                "name": row.departed_user.name,
+            },
+            "reason": row.reason,
+            "created_at": datetime_value(row.created_at),
+        }
+        for row in qs.order_by("-created_at", "-id")[:200]
+    ]
     return json_response({"items": items, "total": total})
 
 
@@ -454,8 +460,6 @@ def _resolve_approval_rule_replacement(
             {"errors": str(exc)},
             status=HTTPStatus.UNPROCESSABLE_ENTITY,
         )
-    from easyauth.lifecycle.approvals import resolve_approval_rule_replacement
-
     try:
         row = resolve_approval_rule_replacement(
             replacement_id,
@@ -901,15 +905,6 @@ def _sync_handover_capability(app_key: str, *, actor_id: str) -> JsonResponse:
     if app is None:
         return _not_found()
     try:
-        from easyauth.admin_console.auto_onboarding_api import (
-            AutoOnboardingError,
-            repull_app_descriptor,
-        )
-        from easyauth.applications.manifest_import import (
-            ManifestVersionConflictError,
-        )
-        from easyauth.applications.permission_templates import PermissionTemplateImportError
-
         _ = repull_app_descriptor(app=app, actor_id=actor_id)
     except AutoOnboardingError as exc:
         return error_response(exc.code, exc.message, status=exc.status)

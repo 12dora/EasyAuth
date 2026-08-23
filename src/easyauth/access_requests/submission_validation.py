@@ -23,6 +23,7 @@ from easyauth.grants.effective_snapshot import (
     current_effective_grant_snapshot,
 )
 from easyauth.grants.models import AccessGrant
+from easyauth.lifecycle.assignee import resolve_assignee
 
 MANAGED_USERS_SCOPE = "MANAGED_USERS"
 MANAGED_USERS_APPROVER_REQUIRED_MESSAGE = (
@@ -292,8 +293,6 @@ def resolve_manager_chain(user: UserMirror) -> ManagerChainResolution:
     - ``degraded=True``: 目录上下文缺失/陈旧/绑定不全 → routing_reason=no_active_manager
     - ``degraded=False`` 且 ids 空: 链被 walk 到尽头 → routing_reason=chain_exhausted
     """
-    from easyauth.lifecycle.assignee import resolve_assignee
-
     resolution = resolve_assignee(user, start_level=0)
     if resolution.user is not None:
         return ManagerChainResolution(
