@@ -4,7 +4,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { HandoverAction } from "../../lib/domain";
-import { AssetAllocator, countArrangedAssetTypes } from "./AssetAllocator";
+import { AssetAllocator } from "./AssetAllocator";
+import { countArrangedAssetTypes } from "./assetAllocatorModel";
 
 function actionFixture(overrides: Partial<HandoverAction> = {}): HandoverAction {
   return {
