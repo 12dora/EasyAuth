@@ -27,7 +27,7 @@ EVENT_HEADER = "X-EasyAuth-Event"
 TIMESTAMP_WINDOW_SECONDS = 300
 
 # 稳定 reason, 供调用方按契约 §10.6 映射 HTTP 状态(禁止解析异常文案)。
-REASON_MISSING_SECRET: Final = "MISSING_SECRET"
+REASON_MISSING_SIGNING_KEY: Final = "MISSING_SECRET"
 REASON_MISSING_HEADERS: Final = "MISSING_HEADERS"
 REASON_INVALID_TIMESTAMP: Final = "INVALID_TIMESTAMP"
 REASON_TIMESTAMP_SKEW: Final = "TIMESTAMP_SKEW"
@@ -59,6 +59,14 @@ class WebhookEvent:
     payload: dict[str, Any]
 
 
+@dataclass(frozen=True)
+class _RequiredHeaders:
+    event_type: str
+    delivery_id: str
+    timestamp: str
+    signature: str
+
+
 def verify_webhook(
     *,
     secret: str,
@@ -72,7 +80,28 @@ def verify_webhook(
     (签名仍校验 ``timestamp + "." + b""``)。
     """
     if not secret:
-        raise WebhookVerificationError("webhook secret 未配置。", reason=REASON_MISSING_SECRET)
+        raise WebhookVerificationError(
+            "webhook secret 未配置。",
+            reason=REASON_MISSING_SIGNING_KEY,
+        )
+    required_headers = _required_headers(headers)
+    timestamp = _validate_timestamp(required_headers.timestamp, now=now)
+    _validate_signature(
+        secret,
+        timestamp_raw=required_headers.timestamp,
+        signature=required_headers.signature,
+        raw_body=raw_body,
+    )
+    payload = _parse_payload(raw_body)
+    return WebhookEvent(
+        event_type=required_headers.event_type,
+        delivery_id=required_headers.delivery_id,
+        timestamp=timestamp,
+        payload=payload,
+    )
+
+
+def _required_headers(headers: Mapping[str, str]) -> _RequiredHeaders:
     normalized = {key.lower(): value for key, value in headers.items()}
     event_type = normalized.get(EVENT_HEADER.lower(), "")
     delivery_id = normalized.get(DELIVERY_HEADER.lower(), "")
@@ -83,6 +112,10 @@ def verify_webhook(
             "webhook 请求头不完整。",
             reason=REASON_MISSING_HEADERS,
         )
+    return _RequiredHeaders(event_type, delivery_id, timestamp_raw, signature)
+
+
+def _validate_timestamp(timestamp_raw: str, *, now: int | None) -> int:
     if not timestamp_raw.isdecimal():
         raise WebhookVerificationError(
             "webhook 时间戳无效。",
@@ -95,6 +128,16 @@ def verify_webhook(
             "webhook 时间戳超出允许窗口。",
             reason=REASON_TIMESTAMP_SKEW,
         )
+    return timestamp
+
+
+def _validate_signature(
+    secret: str,
+    *,
+    timestamp_raw: str,
+    signature: str,
+    raw_body: bytes,
+) -> None:
     expected = hmac.new(
         secret.encode("utf-8"),
         timestamp_raw.encode("utf-8") + b"." + raw_body,
@@ -105,25 +148,21 @@ def verify_webhook(
             "webhook 签名不匹配。",
             reason=REASON_SIGNATURE_MISMATCH,
         )
+
+
+def _parse_payload(raw_body: bytes) -> dict[str, Any]:
     if raw_body == b"":
-        payload: dict[str, Any] = {}
-    else:
-        try:
-            parsed = json.loads(raw_body.decode("utf-8"))
-        except (json.JSONDecodeError, UnicodeDecodeError) as error:
-            raise WebhookVerificationError(
-                "webhook 载荷不是有效 JSON。",
-                reason=REASON_INVALID_PAYLOAD,
-            ) from error
-        if not isinstance(parsed, dict):
-            raise WebhookVerificationError(
-                "webhook 载荷必须是 JSON 对象。",
-                reason=REASON_INVALID_PAYLOAD,
-            )
-        payload = parsed
-    return WebhookEvent(
-        event_type=event_type,
-        delivery_id=delivery_id,
-        timestamp=timestamp,
-        payload=payload,
-    )
+        return {}
+    try:
+        parsed = json.loads(raw_body.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as error:
+        raise WebhookVerificationError(
+            "webhook 载荷不是有效 JSON。",
+            reason=REASON_INVALID_PAYLOAD,
+        ) from error
+    if not isinstance(parsed, dict):
+        raise WebhookVerificationError(
+            "webhook 载荷必须是 JSON 对象。",
+            reason=REASON_INVALID_PAYLOAD,
+        )
+    return parsed

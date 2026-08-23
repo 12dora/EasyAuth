@@ -1,0 +1,5 @@
+
+[fastapi]
+fastapi<0.141,>=0.140
+httpx<1,>=0.28
+httpx2<3,>=2.9

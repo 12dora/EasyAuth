@@ -10,7 +10,7 @@ import pytest
 pytest.importorskip("fastapi", reason="fastapi 是可选集成 extra, 未安装时跳过。")
 pytest.importorskip("starlette", reason="TestClient 依赖 starlette。")
 
-from easyauth_app_sdk import WebhookEvent, easyauth_lifecycle_router
+from easyauth_app_sdk import LifecycleCallbacks, WebhookEvent, easyauth_lifecycle_router
 from easyauth_app_sdk.lifecycle import DEFAULT_HANDOVER_PATH, DEFAULT_MAX_BODY_BYTES
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -53,9 +53,7 @@ def _client() -> TestClient:
     api.include_router(
         easyauth_lifecycle_router(
             lambda: SECRET,
-            on_preview,
-            on_execute,
-            on_items,
+            LifecycleCallbacks(on_preview, on_execute, on_items),
         )
     )
     return TestClient(api)
@@ -151,9 +149,11 @@ def test_router_rejects_oversized_unsigned_body() -> None:
     api.include_router(
         easyauth_lifecycle_router(
             lambda: SECRET,
-            lambda _event: {"assets": []},
-            lambda _event: {"summary": {}},
-            lambda _event: {"items": [], "page": 1, "page_size": 50, "total": 0},
+            LifecycleCallbacks(
+                lambda _event: {"assets": []},
+                lambda _event: {"summary": {}},
+                lambda _event: {"items": [], "page": 1, "page_size": 50, "total": 0},
+            ),
             max_body_bytes=32,
         )
     )
@@ -172,9 +172,11 @@ def test_router_signature_failure_status_knob() -> None:
     api.include_router(
         easyauth_lifecycle_router(
             lambda: SECRET,
-            lambda _event: {"assets": []},
-            lambda _event: {"summary": {}},
-            lambda _event: {"items": [], "page": 1, "page_size": 50, "total": 0},
+            LifecycleCallbacks(
+                lambda _event: {"assets": []},
+                lambda _event: {"summary": {}},
+                lambda _event: {"items": [], "page": 1, "page_size": 50, "total": 0},
+            ),
             signature_failure_status=401,
         )
     )
@@ -192,9 +194,11 @@ def test_router_rejects_invalid_signature_failure_status_at_construction() -> No
     with pytest.raises(ValueError, match="只能是 401 或 403"):
         easyauth_lifecycle_router(
             lambda: SECRET,
-            lambda _event: {"assets": []},
-            lambda _event: {"summary": {}},
-            lambda _event: {"items": [], "page": 1, "page_size": 50, "total": 0},
+            LifecycleCallbacks(
+                lambda _event: {"assets": []},
+                lambda _event: {"summary": {}},
+                lambda _event: {"items": [], "page": 1, "page_size": 50, "total": 0},
+            ),
             signature_failure_status=200,
         )
 

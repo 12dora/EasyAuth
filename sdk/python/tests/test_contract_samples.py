@@ -7,8 +7,12 @@ from __future__ import annotations
 
 import json
 from importlib import resources
+from typing import TYPE_CHECKING
 
 import pytest
+
+if TYPE_CHECKING:
+    from importlib.resources.abc import Traversable
 
 _REQUIRED_SAMPLES = (
     "preview_request.json",
@@ -20,7 +24,7 @@ _REQUIRED_SAMPLES = (
 )
 
 
-def _package():
+def _package() -> Traversable:
     return resources.files("easyauth_app_sdk.contract_samples.handover_v2")
 
 
@@ -45,7 +49,8 @@ def test_request_samples_include_event_type() -> None:
 
 def test_preview_response_has_snapshot_token_and_eight_assets() -> None:
     payload = json.loads(_package().joinpath("preview_response.json").read_text(encoding="utf-8"))
-    assert isinstance(payload["snapshot_token"], str) and payload["snapshot_token"]
+    assert isinstance(payload["snapshot_token"], str)
+    assert payload["snapshot_token"]
     assert len(payload["assets"]) == 8
     types = [asset["type"] for asset in payload["assets"]]
     assert types[0] == "customer"

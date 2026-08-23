@@ -17,7 +17,7 @@ from easyauth_app_sdk.lifecycle import (
     DEFAULT_HANDOVER_PATH,
     DEFAULT_MAX_BODY_BYTES,
     BodyTooLargeError,
-    HandoverCallback,
+    LifecycleCallbacks,
     SecretProvider,
     _validate_signature_failure_status,
     body_too_large_response,
@@ -26,7 +26,7 @@ from easyauth_app_sdk.lifecycle import (
 )
 
 if TYPE_CHECKING:
-    from fastapi import APIRouter
+    from fastapi import APIRouter, Response
 
 
 def create_descriptor_router(
@@ -60,9 +60,7 @@ def create_descriptor_router(
 
 def easyauth_lifecycle_router(
     secret_provider: SecretProvider,
-    on_handover_preview: HandoverCallback,
-    on_handover_execute: HandoverCallback,
-    on_handover_items: HandoverCallback,
+    callbacks: LifecycleCallbacks,
     *,
     path: str = DEFAULT_HANDOVER_PATH,
     max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
@@ -71,9 +69,11 @@ def easyauth_lifecycle_router(
     """创建接收 EasyAuth 生命周期交接 webhook 的 FastAPI router。
 
     验签/事件分发/异常边界均由 SDK 承担, APP 实现业务回调:
-    ``on_handover_preview`` 返回 preview 响应体(``{"snapshot_token", "assets": [...]}``, 不落库),
-    ``on_handover_items`` 返回 items 响应体(明细分页; **必填**, 接线期失败优于运行时 422),
-    ``on_handover_execute`` 返回 execute 响应体(``{"summary": {...}}``, 按
+    ``callbacks.on_handover_preview`` 返回 preview 响应体
+    (``{"snapshot_token", "assets": [...]}``, 不落库),
+    ``callbacks.on_handover_items`` 返回 items 响应体
+    (明细分页; **必填**, 接线期失败优于运行时 422),
+    ``callbacks.on_handover_execute`` 返回 execute 响应体(``{"summary": {...}}``, 按
     ``(task_id, generation, batch_id)`` 幂等)。``secret_provider`` 在每次请求时取密钥,
     避免 import 期读配置。
 
@@ -100,9 +100,7 @@ def easyauth_lifecycle_router(
             secret_provider=secret_provider,
             headers=dict(request.headers),
             raw_body=raw_body,
-            on_handover_preview=on_handover_preview,
-            on_handover_execute=on_handover_execute,
-            on_handover_items=on_handover_items,
+            callbacks=callbacks,
             signature_failure_status=signature_failure_status,
         )
         return _as_response(status_code, headers, body)

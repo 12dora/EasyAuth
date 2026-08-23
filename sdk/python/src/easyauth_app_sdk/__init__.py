@@ -43,6 +43,7 @@ from easyauth_app_sdk.lifecycle import (
     WEBHOOK_TEST_EVENT,
     HandoverBusinessError,
     HandoverCallback,
+    LifecycleCallbacks,
     SecretProvider,
     lifecycle_http_response,
 )
@@ -73,6 +74,7 @@ __all__ = [
     "EasyAuthClientError",
     "HandoverBusinessError",
     "HandoverCallback",
+    "LifecycleCallbacks",
     "ManifestValidationError",
     "SecretProvider",
     "TokenValidator",

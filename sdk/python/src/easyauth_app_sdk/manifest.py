@@ -39,26 +39,10 @@ OPTIONAL_TOP_SECTIONS = frozenset({"lifecycle", "webhook", "capabilities"})
 
 def validate_manifest(manifest: Any) -> dict[str, Any]:
     """校验 manifest 结构并原样返回; 不满足契约时抛 ManifestValidationError。"""
-    if not isinstance(manifest, dict):
-        raise ManifestValidationError("manifest 必须是 JSON object")
-    unknown_top = sorted(set(manifest) - set(REQUIRED_SECTIONS) - OPTIONAL_TOP_SECTIONS)
-    if unknown_top:
-        raise ManifestValidationError(f"manifest 含未知顶层字段: {unknown_top}")
-    missing = [section for section in REQUIRED_SECTIONS if section not in manifest]
-    if missing:
-        raise ManifestValidationError(f"manifest 缺少字段: {missing}")
-    schema_version = manifest["schema_version"]
-    version_invalid = (
-        not isinstance(schema_version, int)
-        or isinstance(schema_version, bool)
-        or schema_version < 1
-    )
-    if version_invalid:
-        raise ManifestValidationError("schema_version 必须是 >=1 的整数")
+    manifest = _validate_manifest_root(manifest)
+    _validate_schema_version(manifest["schema_version"])
     _validate_app(manifest["app"])
-    for section in LIST_SECTIONS:
-        if not isinstance(manifest[section], list):
-            raise ManifestValidationError(f"{section} 必须是 JSON array")
+    _validate_list_sections(manifest)
     scope_keys = _validate_scopes(manifest["scopes"])
     group_keys = _validate_permission_groups(manifest["permission_groups"])
     permission_keys = _validate_permissions(manifest["permissions"], scope_keys, group_keys)
@@ -72,13 +56,45 @@ def validate_manifest(manifest: Any) -> dict[str, Any]:
         permission_keys=permission_keys,
         authorization_group_keys=auth_group_keys,
     )
+    _validate_optional_sections(manifest)
+    return manifest
+
+
+def _validate_manifest_root(manifest: Any) -> dict[str, Any]:
+    if not isinstance(manifest, dict):
+        raise ManifestValidationError("manifest 必须是 JSON object")
+    unknown_top = sorted(set(manifest) - set(REQUIRED_SECTIONS) - OPTIONAL_TOP_SECTIONS)
+    if unknown_top:
+        raise ManifestValidationError(f"manifest 含未知顶层字段: {unknown_top}")
+    missing = [section for section in REQUIRED_SECTIONS if section not in manifest]
+    if missing:
+        raise ManifestValidationError(f"manifest 缺少字段: {missing}")
+    return manifest
+
+
+def _validate_schema_version(schema_version: Any) -> None:
+    version_invalid = (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version < 1
+    )
+    if version_invalid:
+        raise ManifestValidationError("schema_version 必须是 >=1 的整数")
+
+
+def _validate_list_sections(manifest: dict[str, Any]) -> None:
+    for section in LIST_SECTIONS:
+        if not isinstance(manifest[section], list):
+            raise ManifestValidationError(f"{section} 必须是 JSON array")
+
+
+def _validate_optional_sections(manifest: dict[str, Any]) -> None:
     if "lifecycle" in manifest:
         _validate_lifecycle(manifest["lifecycle"])
     if "webhook" in manifest:
         _validate_webhook(manifest["webhook"])
     if "capabilities" in manifest:
         _validate_capabilities(manifest["capabilities"])
-    return manifest
 
 
 def _validate_capabilities(capabilities: Any) -> None:
@@ -110,32 +126,44 @@ def _validate_lifecycle(lifecycle: Any) -> None:
         value = lifecycle.get(field)
         if value is not None and not isinstance(value, str):
             raise ManifestValidationError(f"lifecycle.{field} 必须是字符串或 null")
-    capabilities = lifecycle.get("capabilities")
-    if capabilities is not None:
-        if not isinstance(capabilities, list) or any(
-            not isinstance(capability, str) for capability in capabilities
-        ):
-            raise ManifestValidationError("lifecycle.capabilities 必须是字符串数组")
-    if "handover_asset_types" not in lifecycle:
-        return
-    asset_types = lifecycle["handover_asset_types"]
+    _validate_lifecycle_capabilities(lifecycle.get("capabilities"))
+    if "handover_asset_types" in lifecycle:
+        _validate_handover_asset_types(lifecycle["handover_asset_types"])
+
+
+def _validate_lifecycle_capabilities(capabilities: Any) -> None:
+    if capabilities is not None and (
+        not isinstance(capabilities, list)
+        or any(not isinstance(capability, str) for capability in capabilities)
+    ):
+        raise ManifestValidationError("lifecycle.capabilities 必须是字符串数组")
+
+
+def _validate_handover_asset_types(asset_types: Any) -> None:
     if not isinstance(asset_types, list):
         raise ManifestValidationError("lifecycle.handover_asset_types 必须是数组")
     for index, item in enumerate(asset_types):
-        label = f"lifecycle.handover_asset_types[{index}]"
-        if not isinstance(item, dict):
-            raise ManifestValidationError(f"{label} 必须是 JSON object")
-        for field in ("type", "label"):
-            value = item.get(field)
-            if not isinstance(value, str) or not value:
-                raise ManifestValidationError(f"{label}.{field} 必须是非空字符串")
-        # 契约 §9.1: detail_supported / releasable 为声明形状必填布尔, 不得缺省或非 bool。
-        for field in ("detail_supported", "releasable"):
-            if field not in item:
-                raise ManifestValidationError(f"{label}.{field} 必须是布尔值")
-            value = item[field]
-            if not isinstance(value, bool):
-                raise ManifestValidationError(f"{label}.{field} 必须是布尔值")
+        _validate_handover_asset_type(item, f"lifecycle.handover_asset_types[{index}]")
+
+
+def _validate_handover_asset_type(item: Any, label: str) -> None:
+    if not isinstance(item, dict):
+        raise ManifestValidationError(f"{label} 必须是 JSON object")
+    for field in ("type", "label"):
+        value = item.get(field)
+        if not isinstance(value, str) or not value:
+            raise ManifestValidationError(f"{label}.{field} 必须是非空字符串")
+    _validate_handover_asset_flags(item, label)
+
+
+def _validate_handover_asset_flags(item: dict[str, Any], label: str) -> None:
+    # 契约 §9.1: detail_supported / releasable 为声明形状必填布尔, 不得缺省或非 bool。
+    for field in ("detail_supported", "releasable"):
+        if field not in item:
+            raise ManifestValidationError(f"{label}.{field} 必须是布尔值")
+        value = item[field]
+        if not isinstance(value, bool):
+            raise ManifestValidationError(f"{label}.{field} 必须是布尔值")
 
 
 def _validate_webhook(webhook: Any) -> None:
@@ -174,17 +202,7 @@ def _validate_permission_groups(groups: list[Any]) -> set[str]:
     group_keys: set[str] = set()
     for index, group in enumerate(groups):
         label = f"permission_groups[{index}]"
-        if not isinstance(group, dict):
-            raise ManifestValidationError(f"{label} 必须是 JSON object")
-        key = group.get("key")
-        if not isinstance(key, str) or not key:
-            raise ManifestValidationError(f"{label}.key 必须是非空字符串")
-        if key in group_keys:
-            raise ManifestValidationError(f"permission_groups 存在重复 key: {key}")
-        group_keys.add(key)
-        parent_key = group.get("parent_key")
-        if parent_key is not None and not isinstance(parent_key, str):
-            raise ManifestValidationError(f"{label}.parent_key 必须是字符串")
+        _validate_permission_group_entry(group, label, group_keys)
     for index, group in enumerate(groups):
         parent_key = group.get("parent_key") or ""
         if parent_key and parent_key not in group_keys:
@@ -192,6 +210,24 @@ def _validate_permission_groups(groups: list[Any]) -> set[str]:
                 f"permission_groups[{index}].parent_key 引用了未知组: {parent_key}",
             )
     return group_keys
+
+
+def _validate_permission_group_entry(
+    group: Any,
+    label: str,
+    group_keys: set[str],
+) -> None:
+    if not isinstance(group, dict):
+        raise ManifestValidationError(f"{label} 必须是 JSON object")
+    key = group.get("key")
+    if not isinstance(key, str) or not key:
+        raise ManifestValidationError(f"{label}.key 必须是非空字符串")
+    if key in group_keys:
+        raise ManifestValidationError(f"permission_groups 存在重复 key: {key}")
+    group_keys.add(key)
+    parent_key = group.get("parent_key")
+    if parent_key is not None and not isinstance(parent_key, str):
+        raise ManifestValidationError(f"{label}.parent_key 必须是字符串")
 
 
 def _validate_app(app: Any) -> None:
@@ -204,101 +240,112 @@ def _validate_app(app: Any) -> None:
         raise ManifestValidationError("app.app_key 必须是非空字符串")
 
 
-def _validate_permissions(  # noqa: C901, PLR0912 - 字段校验分支与契约字段一一对应
+def _validate_permissions(
     permissions: list[Any],
     scope_keys: set[str],
     group_keys: set[str],
 ) -> set[str]:
     permission_keys: set[str] = set()
-    for index, permission in enumerate(permissions):
+    for index, raw_permission in enumerate(permissions):
         label = f"permissions[{index}]"
-        if not isinstance(permission, dict):
-            raise ManifestValidationError(f"{label} 必须是 JSON object")
-        key = permission.get("key")
-        if not isinstance(key, str) or not key:
-            raise ManifestValidationError(f"{label}.key 必须是非空字符串")
-        if key in permission_keys:
-            raise ManifestValidationError(f"permissions 存在重复 key: {key}")
-        permission_keys.add(key)
-        name = permission.get("name")
-        if not isinstance(name, str) or not name:
-            raise ManifestValidationError(
-                f"{label}.name 必须是非空字符串(权限显示名由下游提供)",
-            )
-        name_en = permission.get("name_en")
-        if name_en is not None and (not isinstance(name_en, str) or not name_en):
-            raise ManifestValidationError(f"{label}.name_en 存在时必须是非空字符串")
-        group_key = permission.get("group_key")
-        if group_key is not None:
-            if not isinstance(group_key, str) or not group_key:
-                raise ManifestValidationError(f"{label}.group_key 必须是非空字符串")
-            if group_keys and group_key not in group_keys:
-                raise ManifestValidationError(
-                    f"{label}.group_key 引用了未知组: {group_key}",
-                )
-        supported_scopes = permission.get("supported_scopes")
-        if not isinstance(supported_scopes, list) or not supported_scopes:
-            raise ManifestValidationError(f"{label}.supported_scopes 必须是非空数组")
-        if len(supported_scopes) != len(set(supported_scopes)):
-            raise ManifestValidationError(f"{label}.supported_scopes 存在重复值")
-        unknown_scopes = [scope for scope in supported_scopes if scope not in scope_keys]
-        if unknown_scopes:
-            raise ManifestValidationError(
-                f"{label}.supported_scopes 引用了未声明的 scope: {unknown_scopes}",
-            )
-        risk_level = permission.get("risk_level")
-        if risk_level is not None and risk_level not in ALLOWED_RISK_LEVELS:
-            raise ManifestValidationError(
-                f"{label}.risk_level 必须是 {sorted(ALLOWED_RISK_LEVELS)} 之一",
-            )
+        permission = _validate_permission_identity(raw_permission, label, permission_keys)
+        _validate_permission_names(permission, label)
+        _validate_permission_group(permission, label, group_keys)
+        _validate_supported_scopes(permission, label, scope_keys)
+        _validate_permission_risk(permission, label)
     return permission_keys
 
 
-def _validate_authorization_groups(  # noqa: C901, PLR0912 - 字段校验分支与契约字段一一对应
+def _validate_permission_identity(
+    permission: Any,
+    label: str,
+    permission_keys: set[str],
+) -> dict[str, Any]:
+    if not isinstance(permission, dict):
+        raise ManifestValidationError(f"{label} 必须是 JSON object")
+    key = permission.get("key")
+    if not isinstance(key, str) or not key:
+        raise ManifestValidationError(f"{label}.key 必须是非空字符串")
+    if key in permission_keys:
+        raise ManifestValidationError(f"permissions 存在重复 key: {key}")
+    permission_keys.add(key)
+    return permission
+
+
+def _validate_permission_names(permission: dict[str, Any], label: str) -> None:
+    name = permission.get("name")
+    if not isinstance(name, str) or not name:
+        raise ManifestValidationError(
+            f"{label}.name 必须是非空字符串(权限显示名由下游提供)",
+        )
+    name_en = permission.get("name_en")
+    if name_en is not None and (not isinstance(name_en, str) or not name_en):
+        raise ManifestValidationError(f"{label}.name_en 存在时必须是非空字符串")
+
+
+def _validate_permission_group(
+    permission: dict[str, Any],
+    label: str,
+    group_keys: set[str],
+) -> None:
+    group_key = permission.get("group_key")
+    if group_key is None:
+        return
+    if not isinstance(group_key, str) or not group_key:
+        raise ManifestValidationError(f"{label}.group_key 必须是非空字符串")
+    if group_keys and group_key not in group_keys:
+        raise ManifestValidationError(f"{label}.group_key 引用了未知组: {group_key}")
+
+
+def _validate_supported_scopes(
+    permission: dict[str, Any],
+    label: str,
+    scope_keys: set[str],
+) -> None:
+    supported_scopes = permission.get("supported_scopes")
+    if not isinstance(supported_scopes, list) or not supported_scopes:
+        raise ManifestValidationError(f"{label}.supported_scopes 必须是非空数组")
+    if len(supported_scopes) != len(set(supported_scopes)):
+        raise ManifestValidationError(f"{label}.supported_scopes 存在重复值")
+    unknown_scopes = [scope for scope in supported_scopes if scope not in scope_keys]
+    if unknown_scopes:
+        raise ManifestValidationError(
+            f"{label}.supported_scopes 引用了未声明的 scope: {unknown_scopes}",
+        )
+
+
+def _validate_permission_risk(permission: dict[str, Any], label: str) -> None:
+    risk_level = permission.get("risk_level")
+    if risk_level is not None and risk_level not in ALLOWED_RISK_LEVELS:
+        raise ManifestValidationError(
+            f"{label}.risk_level 必须是 {sorted(ALLOWED_RISK_LEVELS)} 之一",
+        )
+
+
+def _validate_authorization_groups(
     groups: list[Any],
     permission_keys: set[str],
     scope_keys: set[str],
 ) -> set[str]:
     auth_group_keys: set[str] = set()
-    for index, group in enumerate(groups):
+    for index, raw_group in enumerate(groups):
         label = f"authorization_groups[{index}]"
-        if not isinstance(group, dict):
-            raise ManifestValidationError(f"{label} 必须是 JSON object")
-        key = group.get("key")
-        if not isinstance(key, str) or not key:
-            raise ManifestValidationError(f"{label}.key 必须是非空字符串")
-        if key in auth_group_keys:
-            raise ManifestValidationError(f"authorization_groups 存在重复 key: {key}")
-        auth_group_keys.add(key)
-        kind = group.get("kind")
-        if kind is not None and kind not in ALLOWED_AUTH_GROUP_KINDS:
-            raise ManifestValidationError(
-                f"{label}.kind 必须是 {sorted(ALLOWED_AUTH_GROUP_KINDS)} 之一",
-            )
+        group = _validate_authorization_group_identity(raw_group, label, auth_group_keys)
+        _validate_authorization_group_kind(group, label)
         grants = group.get("grants", [])
         if not isinstance(grants, list):
             raise ManifestValidationError(f"{label}.grants 必须是数组")
         seen_grants: set[tuple[str, str]] = set()
         for grant_index, grant in enumerate(grants):
             grant_label = f"{label}.grants[{grant_index}]"
-            if not isinstance(grant, dict):
-                raise ManifestValidationError(f"{grant_label} 必须是 JSON object")
-            permission = grant.get("permission")
-            scope = grant.get("scope")
-            if not isinstance(permission, str) or not permission:
-                raise ManifestValidationError(
-                    f"{grant_label}.permission 必须是非空字符串",
-                )
-            if not isinstance(scope, str) or not scope:
-                raise ManifestValidationError(f"{grant_label}.scope 必须是非空字符串")
-            if permission_keys and permission not in permission_keys:
-                raise ManifestValidationError(
-                    f"{grant_label}.permission 引用了未知权限: {permission}",
-                )
-            if scope not in scope_keys:
-                raise ManifestValidationError(
-                    f"{grant_label}.scope 引用了未知 scope: {scope}",
-                )
+            permission, scope = _validate_grant_shape(grant, grant_label)
+            _validate_grant_references(
+                permission,
+                scope,
+                grant_label,
+                permission_keys,
+                scope_keys,
+            )
             grant_key = (permission, scope)
             if grant_key in seen_grants:
                 raise ManifestValidationError(
@@ -308,6 +355,55 @@ def _validate_authorization_groups(  # noqa: C901, PLR0912 - 字段校验分支�
     return auth_group_keys
 
 
+def _validate_authorization_group_identity(
+    group: Any,
+    label: str,
+    auth_group_keys: set[str],
+) -> dict[str, Any]:
+    if not isinstance(group, dict):
+        raise ManifestValidationError(f"{label} 必须是 JSON object")
+    key = group.get("key")
+    if not isinstance(key, str) or not key:
+        raise ManifestValidationError(f"{label}.key 必须是非空字符串")
+    if key in auth_group_keys:
+        raise ManifestValidationError(f"authorization_groups 存在重复 key: {key}")
+    auth_group_keys.add(key)
+    return group
+
+
+def _validate_authorization_group_kind(group: dict[str, Any], label: str) -> None:
+    kind = group.get("kind")
+    if kind is not None and kind not in ALLOWED_AUTH_GROUP_KINDS:
+        raise ManifestValidationError(
+            f"{label}.kind 必须是 {sorted(ALLOWED_AUTH_GROUP_KINDS)} 之一",
+        )
+
+
+def _validate_grant_shape(grant: Any, label: str) -> tuple[str, str]:
+    if not isinstance(grant, dict):
+        raise ManifestValidationError(f"{label} 必须是 JSON object")
+    permission = grant.get("permission")
+    scope = grant.get("scope")
+    if not isinstance(permission, str) or not permission:
+        raise ManifestValidationError(f"{label}.permission 必须是非空字符串")
+    if not isinstance(scope, str) or not scope:
+        raise ManifestValidationError(f"{label}.scope 必须是非空字符串")
+    return permission, scope
+
+
+def _validate_grant_references(
+    permission: str,
+    scope: str,
+    label: str,
+    permission_keys: set[str],
+    scope_keys: set[str],
+) -> None:
+    if permission_keys and permission not in permission_keys:
+        raise ManifestValidationError(f"{label}.permission 引用了未知权限: {permission}")
+    if scope not in scope_keys:
+        raise ManifestValidationError(f"{label}.scope 引用了未知 scope: {scope}")
+
+
 def _validate_approval_rules(
     rules: list[Any],
     *,
@@ -315,34 +411,67 @@ def _validate_approval_rules(
     authorization_group_keys: set[str],
 ) -> None:
     seen_targets: set[tuple[str, str]] = set()
-    for index, rule in enumerate(rules):
+    for index, raw_rule in enumerate(rules):
         label = f"approval_rules[{index}]"
-        if not isinstance(rule, dict):
-            raise ManifestValidationError(f"{label} 必须是 JSON object")
-        target_type = rule.get("target_type")
-        target_key = rule.get("target_key")
-        if target_type not in ALLOWED_APPROVAL_TARGET_TYPES:
-            raise ManifestValidationError(
-                f"{label}.target_type 必须是 {sorted(ALLOWED_APPROVAL_TARGET_TYPES)} 之一",
-            )
-        if not isinstance(target_key, str) or not target_key:
-            raise ManifestValidationError(f"{label}.target_key 必须是非空字符串")
-        target = (str(target_type), target_key)
-        if target in seen_targets:
-            raise ManifestValidationError(
-                f"approval_rules 存在重复 target: {target_type}/{target_key}",
-            )
-        seen_targets.add(target)
-        if target_type == "permission" and permission_keys and target_key not in permission_keys:
-            raise ManifestValidationError(f"{label}.target_key 引用了未知权限: {target_key}")
-        if (
-            target_type == "authorization_group"
-            and authorization_group_keys
-            and target_key not in authorization_group_keys
-        ):
-            raise ManifestValidationError(f"{label}.target_key 引用了未知授权组: {target_key}")
-        approvers = rule.get("approver_userids")
-        if not isinstance(approvers, list) or not approvers:
-            raise ManifestValidationError(f"{label}.approver_userids 必须是非空数组")
-        if any(not isinstance(item, str) or not item for item in approvers):
-            raise ManifestValidationError(f"{label}.approver_userids 只能包含非空字符串")
+        rule, target_type, target_key = _validate_approval_target(
+            raw_rule,
+            label,
+            seen_targets,
+        )
+        _validate_approval_target_reference(
+            target_type,
+            target_key,
+            label,
+            permission_keys,
+            authorization_group_keys,
+        )
+        _validate_approvers(rule, label)
+
+
+def _validate_approval_target(
+    rule: Any,
+    label: str,
+    seen_targets: set[tuple[str, str]],
+) -> tuple[dict[str, Any], str, str]:
+    if not isinstance(rule, dict):
+        raise ManifestValidationError(f"{label} 必须是 JSON object")
+    target_type = rule.get("target_type")
+    target_key = rule.get("target_key")
+    if target_type not in ALLOWED_APPROVAL_TARGET_TYPES:
+        raise ManifestValidationError(
+            f"{label}.target_type 必须是 {sorted(ALLOWED_APPROVAL_TARGET_TYPES)} 之一",
+        )
+    if not isinstance(target_key, str) or not target_key:
+        raise ManifestValidationError(f"{label}.target_key 必须是非空字符串")
+    target = (str(target_type), target_key)
+    if target in seen_targets:
+        raise ManifestValidationError(
+            f"approval_rules 存在重复 target: {target_type}/{target_key}",
+        )
+    seen_targets.add(target)
+    return rule, str(target_type), target_key
+
+
+def _validate_approval_target_reference(
+    target_type: str,
+    target_key: str,
+    label: str,
+    permission_keys: set[str],
+    authorization_group_keys: set[str],
+) -> None:
+    if target_type == "permission" and permission_keys and target_key not in permission_keys:
+        raise ManifestValidationError(f"{label}.target_key 引用了未知权限: {target_key}")
+    if (
+        target_type == "authorization_group"
+        and authorization_group_keys
+        and target_key not in authorization_group_keys
+    ):
+        raise ManifestValidationError(f"{label}.target_key 引用了未知授权组: {target_key}")
+
+
+def _validate_approvers(rule: dict[str, Any], label: str) -> None:
+    approvers = rule.get("approver_userids")
+    if not isinstance(approvers, list) or not approvers:
+        raise ManifestValidationError(f"{label}.approver_userids 必须是非空数组")
+    if any(not isinstance(item, str) or not item for item in approvers):
+        raise ManifestValidationError(f"{label}.approver_userids 只能包含非空字符串")

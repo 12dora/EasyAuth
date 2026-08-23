@@ -5,10 +5,12 @@ import hmac
 import json
 import logging
 import time
+from dataclasses import dataclass
 
 import pytest
 from easyauth_app_sdk import (
     HandoverBusinessError,
+    LifecycleCallbacks,
     WebhookEvent,
     lifecycle_http_response,
 )
@@ -24,6 +26,16 @@ from easyauth_app_sdk.webhook import (
 )
 
 SECRET = "whsec_lifecycle"  # noqa: S105 - 测试用密钥。
+
+
+@dataclass(frozen=True)
+class _Callbacks:
+    preview: object = None
+    execute: object = None
+    items: object = None
+
+
+_DEFAULT_CALLBACKS = _Callbacks()
 
 
 def _signed_headers(
@@ -63,9 +75,7 @@ def _respond(
     body: bytes,
     headers: dict[str, str],
     *,
-    on_preview: object = None,
-    on_execute: object = None,
-    on_items: object = None,
+    callbacks: _Callbacks = _DEFAULT_CALLBACKS,
     signature_failure_status: int = 403,
 ) -> tuple[int, dict[str, str], dict]:
     def _unexpected(event: WebhookEvent) -> dict:
@@ -75,9 +85,11 @@ def _respond(
         secret_provider=lambda: SECRET,
         headers=headers,
         raw_body=body,
-        on_handover_preview=on_preview or _unexpected,  # type: ignore[arg-type]
-        on_handover_execute=on_execute or _unexpected,  # type: ignore[arg-type]
-        on_handover_items=on_items or _unexpected,  # type: ignore[arg-type]
+        callbacks=LifecycleCallbacks(
+            on_handover_preview=callbacks.preview or _unexpected,  # type: ignore[arg-type]
+            on_handover_execute=callbacks.execute or _unexpected,  # type: ignore[arg-type]
+            on_handover_items=callbacks.items or _unexpected,  # type: ignore[arg-type]
+        ),
         signature_failure_status=signature_failure_status,
     )
     return status_code, resp_headers, json.loads(raw.decode("utf-8"))
@@ -101,7 +113,7 @@ def test_dispatches_preview_event_to_preview_callback() -> None:
     status_code, _headers, payload = _respond(
         body,
         _signed_headers(body, event_type="lifecycle.handover.preview"),
-        on_preview=on_preview,
+        callbacks=_Callbacks(preview=on_preview),
     )
 
     assert status_code == 200
@@ -137,7 +149,7 @@ def test_dispatches_items_event_to_items_callback() -> None:
     status_code, _headers, response = _respond(
         body,
         _signed_headers(body, event_type=HANDOVER_ITEMS_EVENT),
-        on_items=on_items,
+        callbacks=_Callbacks(items=on_items),
     )
 
     assert status_code == 200
@@ -157,17 +169,19 @@ def test_dispatches_execute_event_to_execute_callback() -> None:
     status_code, _headers, payload = _respond(
         body,
         _signed_headers(body, event_type="lifecycle.handover.execute"),
-        on_execute=lambda event: {  # noqa: ARG005
-            "summary": {
-                "customer": {
-                    "transferred": 5,
-                    "released": 0,
-                    "skipped": 0,
-                    "merged": 0,
-                    "failed": 0,
+        callbacks=_Callbacks(
+            execute=lambda event: {  # noqa: ARG005
+                "summary": {
+                    "customer": {
+                        "transferred": 5,
+                        "released": 0,
+                        "skipped": 0,
+                        "merged": 0,
+                        "failed": 0,
+                    }
                 }
-            }
-        },
+            },
+        ),
     )
 
     assert status_code == 200
@@ -299,7 +313,7 @@ def test_callback_exception_returns_500_with_fixed_message(
         status_code, _headers, payload = _respond(
             body,
             _signed_headers(body, event_type="lifecycle.handover.execute"),
-            on_execute=on_execute,
+            callbacks=_Callbacks(execute=on_execute),
         )
 
     assert status_code == 500
@@ -323,7 +337,7 @@ def test_invalid_callback_result_returns_fixed_500(
         status_code, _headers, payload = _respond(
             body,
             _signed_headers(body, event_type="lifecycle.handover.preview"),
-            on_preview=lambda _event: callback_result,
+            callbacks=_Callbacks(preview=lambda _event: callback_result),
         )
 
     assert status_code == 500
@@ -352,7 +366,7 @@ def test_business_error_returns_declared_status() -> None:
     status_code, _headers, payload = _respond(
         body,
         _signed_headers(body, event_type="lifecycle.handover.execute"),
-        on_execute=on_execute,
+        callbacks=_Callbacks(execute=on_execute),
     )
 
     assert status_code == 412
@@ -374,7 +388,7 @@ def test_business_error_retry_after_renders_header() -> None:
     status_code, headers, response = _respond(
         body,
         _signed_headers(body, event_type=HANDOVER_ITEMS_EVENT),
-        on_items=on_items,
+        callbacks=_Callbacks(items=on_items),
     )
 
     assert status_code == 429
@@ -394,7 +408,7 @@ def test_business_error_outside_whitelist_becomes_500(
         status_code, _headers, payload = _respond(
             body,
             _signed_headers(body, event_type="lifecycle.handover.preview"),
-            on_preview=on_preview,
+            callbacks=_Callbacks(preview=on_preview),
         )
 
     assert status_code == 500

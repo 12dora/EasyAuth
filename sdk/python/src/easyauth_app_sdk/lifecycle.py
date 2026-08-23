@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any, Final, Protocol
 
 from easyauth_app_sdk.webhook import (
@@ -39,7 +40,7 @@ BODY_TOO_LARGE_MESSAGE: Final = "请求体超过大小上限。"
 EVENT_TYPE_MISMATCH_CODE: Final = "event_type_mismatch"
 EVENT_TYPE_MISMATCH_MESSAGE: Final = "body.event_type 与 X-EasyAuth-Event 不一致。"
 CALLBACK_FAILED_CODE: Final = "handover_callback_failed"
-CALLBACK_FAILED_MESSAGE: Final = "交接回调执行失败，请查看应用日志"
+CALLBACK_FAILED_MESSAGE: Final = "交接回调执行失败, 请查看应用日志"
 PAYLOAD_INVALID_CODE: Final = "webhook_payload_invalid"
 PAYLOAD_INVALID_MESSAGE: Final = "webhook 载荷不是有效的 JSON 对象。"
 ALLOWED_SIGNATURE_FAILURE_STATUS: Final = frozenset({401, 403})
@@ -56,6 +57,15 @@ SecretProvider = Callable[[], str]
 # preview 返回 {"snapshot_token", "assets": [...]}, items 返回 {"items", "page", ...},
 # execute 返回 {"summary": {...}}。
 HandoverCallback = Callable[[WebhookEvent], "dict[str, Any]"]
+
+
+@dataclass(frozen=True)
+class LifecycleCallbacks:
+    """生命周期交接事件的三个必需回调。"""
+
+    on_handover_preview: HandoverCallback
+    on_handover_execute: HandoverCallback
+    on_handover_items: HandoverCallback
 
 
 class BodyTooLargeError(Exception):
@@ -222,9 +232,7 @@ def lifecycle_http_response(
     secret_provider: SecretProvider,
     headers: dict[str, str],
     raw_body: bytes,
-    on_handover_preview: HandoverCallback,
-    on_handover_execute: HandoverCallback,
-    on_handover_items: HandoverCallback,
+    callbacks: LifecycleCallbacks,
     signature_failure_status: int = 403,
 ) -> tuple[int, dict[str, str], bytes]:
     """构建生命周期 webhook 端点响应 ``(status, headers, body)``。
@@ -253,11 +261,11 @@ def lifecycle_http_response(
     if event.event_type == WEBHOOK_TEST_EVENT:
         return _json_response(200, {"ok": True})
     if event.event_type == HANDOVER_PREVIEW_EVENT:
-        callback = on_handover_preview
+        callback = callbacks.on_handover_preview
     elif event.event_type == HANDOVER_ITEMS_EVENT:
-        callback = on_handover_items
+        callback = callbacks.on_handover_items
     elif event.event_type == HANDOVER_EXECUTE_EVENT:
-        callback = on_handover_execute
+        callback = callbacks.on_handover_execute
     else:
         return _error_response(422, "unsupported_event", f"不支持的事件类型: {event.event_type}")
     return _callback_response(callback, event)
