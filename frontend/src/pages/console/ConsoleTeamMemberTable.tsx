@@ -1,25 +1,13 @@
 import {
-  flexRender,
   getCoreRowModel,
   useReactTable,
   type ColumnDef,
 } from "@tanstack/react-table";
-import { Fragment } from "react";
 
 import { Badge } from "../../components/Badge";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { TableActionCell, TableRowActionButton } from "../../components/ui/TableActions";
-import {
-  TableBody,
-  TableCell,
-  TableEmptyRow,
-  TableFrame,
-  TableHead,
-  TableHeaderCell,
-  TableRoot,
-  TableRow,
-  TableSkeletonRows,
-} from "../../components/ui/TablePrimitives";
+import { TableView } from "../../components/ui/TableView";
 import { MONO_TEXT_CLASS } from "../../components/ui/tableStyles";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { TeamMemberItem } from "../../lib/domain";
@@ -50,42 +38,11 @@ export function ConsoleTeamMemberTable({
   });
 
   return (
-    <TableFrame>
-      <TableRoot>
-        <TableHead>
-          {table.getHeaderGroups().map((headerGroup) => (
-            <TableRow key={headerGroup.id}>
-              {headerGroup.headers.map((header) => (
-                <TableHeaderCell key={header.id}>
-                  {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                </TableHeaderCell>
-              ))}
-            </TableRow>
-          ))}
-        </TableHead>
-        <TableBody>
-          {isLoading ? (
-            <TableSkeletonRows columns={table.getAllLeafColumns().length} />
-          ) : table.getRowModel().rows.length > 0 ? (
-            table.getRowModel().rows.map((row) => (
-              <TableRow key={row.id}>
-                {row.getVisibleCells().map((cell) =>
-                  cell.column.id === "actions" ? (
-                    <Fragment key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Fragment>
-                  ) : (
-                    <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                  ),
-                )}
-              </TableRow>
-            ))
-          ) : (
-            <TableEmptyRow colSpan={table.getAllLeafColumns().length}>
-              <EmptyState title={t("console.teams.membersEmpty")} description={t("console.teams.membersEmptyDescription")} />
-            </TableEmptyRow>
-          )}
-        </TableBody>
-      </TableRoot>
-    </TableFrame>
+    <TableView
+      table={table}
+      isLoading={isLoading}
+      empty={<EmptyState title={t("console.teams.membersEmpty")} description={t("console.teams.membersEmptyDescription")} />}
+    />
   );
 }
 

@@ -9,7 +9,7 @@ import { AuthorizationGroupDialog } from "../matrix/AuthorizationGroupDialog";
 import { authorizationGroupColumns } from "../matrix/matrixColumns";
 import { useAuthorizationGroupDraft } from "../matrix/useAuthorizationGroupDraft";
 import { useMatrixQueries } from "../matrix/useMatrixQueries";
-import { WorkspaceTable } from "../table/WorkspaceTable";
+import { TableView } from "../../../../components/ui/TableView";
 
 export function MatrixTab({ appKey, canManage = true }: { appKey: string; canManage?: boolean }) {
   const { t } = useI18n();
@@ -33,7 +33,7 @@ export function MatrixTab({ appKey, canManage = true }: { appKey: string; canMan
       {groupsQuery.error ? <StatusBanner live="alert" tone="signal" title={t("console.matrix.groupsLoadFailed")} message={groupsQuery.error.message} /> : null}
       {permissionsQuery.error ? <StatusBanner live="alert" tone="signal" title={t("console.matrix.permissionsLoadFailed")} message={permissionsQuery.error.message} /> : null}
       {scopesQuery.error ? <StatusBanner live="alert" tone="signal" title={t("console.matrix.scopesLoadFailed")} message={scopesQuery.error.message} /> : null}
-      <WorkspaceTable
+      <TableView
         table={authorizationGroupTable}
         totalItems={authorizationGroups.length}
         isLoading={groupsQuery.isLoading}

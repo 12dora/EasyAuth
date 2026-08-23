@@ -1,6 +1,7 @@
 import { flexRender, type Table } from "@tanstack/react-table";
 import { Fragment, type ReactNode } from "react";
 
+import { TablePagination } from "./TablePagination";
 import {
   TableBody,
   TableCell,
@@ -11,29 +12,37 @@ import {
   TableRoot,
   TableRow,
   TableSkeletonRows,
-} from "../../../../components/ui/TablePrimitives";
-import { TablePagination } from "../../../../components/ui/TablePagination";
+} from "./TablePrimitives";
 
-interface WorkspaceTableProps<T> {
+interface TableViewProps<T> {
   table: Table<T>;
-  totalItems: number;
   empty: ReactNode;
   /** 为真时表体渲染骨架行, 与行数据/空态互斥。 */
   isLoading?: boolean;
+  /** 传入总条目数时渲染分页栏。 */
+  totalItems?: number;
+  ariaLabel?: string;
+  getCellClassName?: (columnId: string) => string | undefined;
 }
 
 /**
- * 工作台各页签共用的 TanStack 表格渲染骨架:
- * 表头 + (骨架行 | 数据行 | 空行) + 分页。
- * id 为 actions 的列由 cell 自行渲染 td(TableActionCell), 因此不再包一层 TableCell。
+ * TanStack 表格共用渲染骨架: 表头 + (骨架行 | 数据行 | 空行) + 可选分页。
+ * id 为 actions 的列由 cell 自行渲染 td, 因此不再包一层 TableCell。
  */
-export function WorkspaceTable<T>({ table, totalItems, empty, isLoading = false }: WorkspaceTableProps<T>) {
+export function TableView<T>({
+  table,
+  empty,
+  isLoading = false,
+  totalItems,
+  ariaLabel,
+  getCellClassName,
+}: TableViewProps<T>) {
   const columnCount = table.getAllLeafColumns().length;
   const rows = table.getRowModel().rows;
 
   return (
     <TableFrame>
-      <TableRoot>
+      <TableRoot aria-label={ariaLabel}>
         <TableHead>
           {table.getHeaderGroups().map((headerGroup) => (
             <TableRow key={headerGroup.id}>
@@ -51,13 +60,15 @@ export function WorkspaceTable<T>({ table, totalItems, empty, isLoading = false 
           ) : rows.length > 0 ? (
             rows.map((row) => (
               <TableRow key={row.id}>
-                {row.getVisibleCells().map((cell) => (
+                {row.getVisibleCells().map((cell) =>
                   cell.column.id === "actions" ? (
                     <Fragment key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Fragment>
                   ) : (
-                    <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                  )
-                ))}
+                    <TableCell key={cell.id} className={getCellClassName?.(cell.column.id)}>
+                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                    </TableCell>
+                  ),
+                )}
               </TableRow>
             ))
           ) : (
@@ -65,7 +76,7 @@ export function WorkspaceTable<T>({ table, totalItems, empty, isLoading = false 
           )}
         </TableBody>
       </TableRoot>
-      <TablePagination table={table} totalItems={totalItems} />
+      {totalItems === undefined ? null : <TablePagination table={table} totalItems={totalItems} />}
     </TableFrame>
   );
 }

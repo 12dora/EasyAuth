@@ -1,5 +1,4 @@
 import {
-  flexRender,
   getCoreRowModel,
   useReactTable,
   type ColumnDef,
@@ -11,18 +10,7 @@ import { ArrowRight } from "lucide-react";
 import { Badge } from "../../../components/Badge";
 import { EmptyState } from "../../../components/ui/EmptyState";
 import { TableActionCell, TableRowActionButton, TableRowActionLink } from "../../../components/ui/TableActions";
-import { TablePagination } from "../../../components/ui/TablePagination";
-import {
-  TableBody,
-  TableCell,
-  TableEmptyRow,
-  TableFrame,
-  TableHead,
-  TableHeaderCell,
-  TableRoot,
-  TableRow,
-  TableSkeletonRows,
-} from "../../../components/ui/TablePrimitives";
+import { TableView } from "../../../components/ui/TableView";
 import { daysLeftTone } from "../../../features/handover/surface";
 import { useI18n } from "../../../i18n/I18nProvider";
 import type { HandoverTaskRow } from "../../../lib/domain";
@@ -64,45 +52,12 @@ export function HandoverTaskTable({
   });
 
   return (
-    <TableFrame>
-      <TableRoot>
-        <TableHead>
-          {table.getHeaderGroups().map((headerGroup) => (
-            <TableRow key={headerGroup.id}>
-              {headerGroup.headers.map((header) => (
-                <TableHeaderCell key={header.id}>
-                  {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                </TableHeaderCell>
-              ))}
-            </TableRow>
-          ))}
-        </TableHead>
-        <TableBody>
-          {isLoading ? (
-            <TableSkeletonRows columns={table.getAllLeafColumns().length} />
-          ) : table.getRowModel().rows.length > 0 ? (
-            table.getRowModel().rows.map((row) => (
-              <TableRow key={row.id}>
-                {row.getVisibleCells().map((cell) =>
-                  cell.column.id === "actions" ? (
-                    <TableActionCell key={cell.id}>
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </TableActionCell>
-                  ) : (
-                    <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                  ),
-                )}
-              </TableRow>
-            ))
-          ) : (
-            <TableEmptyRow colSpan={table.getAllLeafColumns().length}>
-              <EmptyState title={t("handover.list.empty.title")} description={t("handover.list.empty.description")} />
-            </TableEmptyRow>
-          )}
-        </TableBody>
-      </TableRoot>
-      <TablePagination table={table} totalItems={totalItems} />
-    </TableFrame>
+    <TableView
+      table={table}
+      isLoading={isLoading}
+      totalItems={totalItems}
+      empty={<EmptyState title={t("handover.list.empty.title")} description={t("handover.list.empty.description")} />}
+    />
   );
 }
 
@@ -145,7 +100,7 @@ function taskColumns(t: Translator, actions: HandoverTaskRowActions): ColumnDef<
       id: "actions",
       header: t("common.actions"),
       cell: ({ row }) => (
-        <>
+        <TableActionCell>
           <TableRowActionLink
             href={`/console/lifecycle/handover-tasks/${row.original.id}`}
             icon={<ArrowRight size={15} />}
@@ -161,7 +116,7 @@ function taskColumns(t: Translator, actions: HandoverTaskRowActions): ColumnDef<
               {t("common.delete")}
             </TableRowActionButton>
           ) : null}
-        </>
+        </TableActionCell>
       ),
     },
   ];

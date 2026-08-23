@@ -1,5 +1,4 @@
 import {
-  flexRender,
   getCoreRowModel,
   useReactTable,
   type ColumnDef,
@@ -10,8 +9,8 @@ import { useEffect, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 
 import type { AppShellOutletContext } from "../../components/AppShell";
-import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../components/ui/TablePrimitives";
-import { TablePagination } from "../../components/ui/TablePagination";
+import { TableCell } from "../../components/ui/TablePrimitives";
+import { TableView } from "../../components/ui/TableView";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { PageState } from "../../components/ui/PageState";
 import { MONO_TEXT_CLASS } from "../../components/ui/tableStyles";
@@ -122,7 +121,6 @@ function PortalGrantSection({ endpoint, emptyText }: { endpoint: string; emptyTe
       ) : (
         <PortalTable
           table={table}
-          columns={columns}
           ariaLabel={t("portal.grants.ariaLabel")}
           isLoading={query.isLoading}
           emptyTitle={emptyText}
@@ -191,19 +189,21 @@ function PortalRequestSection() {
       cell: ({ row }) => {
         const requestId = row.original.id;
         if (row.original.status !== "submitted" || typeof requestId !== "number") {
-          return "-";
+          return <TableCell>-</TableCell>;
         }
         return (
-          <Button
-            type="button"
-            size="sm"
-            variant="ghost-danger"
-            loading={withdrawMutation.isPending && withdrawMutation.variables === requestId}
-            disabled={withdrawMutation.isPending}
-            onClick={() => withdrawMutation.mutate(requestId)}
-          >
-            {t("portal.requests.withdraw")}
-          </Button>
+          <TableCell>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost-danger"
+              loading={withdrawMutation.isPending && withdrawMutation.variables === requestId}
+              disabled={withdrawMutation.isPending}
+              onClick={() => withdrawMutation.mutate(requestId)}
+            >
+              {t("portal.requests.withdraw")}
+            </Button>
+          </TableCell>
         );
       },
     },
@@ -231,7 +231,6 @@ function PortalRequestSection() {
       ) : (
         <PortalTable
           table={table}
-          columns={columns}
           ariaLabel={t("nav.portal.myRequests")}
           isLoading={query.isLoading}
           emptyTitle={t("portal.requests.empty")}
@@ -245,7 +244,6 @@ function PortalRequestSection() {
 
 function PortalTable<T>({
   table,
-  columns,
   ariaLabel,
   isLoading,
   emptyTitle,
@@ -253,7 +251,6 @@ function PortalTable<T>({
   totalRows,
 }: {
   table: ReturnType<typeof useReactTable<T>>;
-  columns: ColumnDef<T>[];
   ariaLabel: string;
   isLoading: boolean;
   emptyTitle: string;
@@ -261,41 +258,14 @@ function PortalTable<T>({
   totalRows: number;
 }) {
   return (
-    <TableFrame>
-      <TableRoot aria-label={ariaLabel}>
-        <TableHead>
-          {table.getHeaderGroups().map((headerGroup) => (
-            <TableRow key={headerGroup.id}>
-              {headerGroup.headers.map((header) => (
-                <TableHeaderCell key={header.id}>
-                  {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                </TableHeaderCell>
-              ))}
-            </TableRow>
-          ))}
-        </TableHead>
-        <TableBody>
-          {isLoading ? (
-            <TableSkeletonRows columns={columns.length} />
-          ) : table.getRowModel().rows.length > 0 ? (
-            table.getRowModel().rows.map((row) => (
-              <TableRow key={row.id}>
-                {row.getVisibleCells().map((cell) => (
-                  <TableCell key={cell.id} className={isMonoPortalColumn(cell.column.id) ? MONO_TEXT_CLASS : undefined}>
-                    {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                  </TableCell>
-                ))}
-              </TableRow>
-            ))
-          ) : (
-            <TableEmptyRow colSpan={columns.length}>
-              <EmptyState title={emptyTitle} description={emptyDescription} />
-            </TableEmptyRow>
-          )}
-        </TableBody>
-      </TableRoot>
-      <TablePagination table={table} totalItems={totalRows} />
-    </TableFrame>
+    <TableView
+      table={table}
+      ariaLabel={ariaLabel}
+      isLoading={isLoading}
+      totalItems={totalRows}
+      getCellClassName={(columnId) => isMonoPortalColumn(columnId) ? MONO_TEXT_CLASS : undefined}
+      empty={<EmptyState title={emptyTitle} description={emptyDescription} />}
+    />
   );
 }
 

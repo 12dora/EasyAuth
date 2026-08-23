@@ -8,7 +8,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { FormEvent, useMemo, useState } from "react";
 import { EmptyState } from "../../../../components/ui/EmptyState";
-import { WorkspaceTable } from "../table/WorkspaceTable";
+import { TableView } from "../../../../components/ui/TableView";
 import { TableActionCell, TableRowActionButton } from "../../../../components/ui/TableActions";
 
 import { Badge } from "../../../../components/Badge";
@@ -261,7 +261,7 @@ export function CatalogTab({ appKey }: { appKey: string }) {
               {t("common.new")}
             </Button>
           </div>
-          <WorkspaceTable
+          <TableView
             table={groupTable}
             totalItems={groupRows.length}
             isLoading={treeQuery.isLoading || groupsQuery.isLoading}
@@ -279,7 +279,7 @@ export function CatalogTab({ appKey }: { appKey: string }) {
               {t("common.new")}
             </Button>
           </div>
-          <WorkspaceTable
+          <TableView
             table={scopeTable}
             totalItems={scopes.length}
             isLoading={scopesQuery.isLoading}
@@ -299,7 +299,7 @@ export function CatalogTab({ appKey }: { appKey: string }) {
             {t("common.new")}
           </Button>
         </div>
-        <WorkspaceTable
+        <TableView
           table={permissionTable}
           totalItems={permissions.length}
           isLoading={permissionsQuery.isLoading}

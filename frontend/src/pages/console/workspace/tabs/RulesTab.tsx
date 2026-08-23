@@ -8,7 +8,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { useState } from "react";
 import { EmptyState } from "../../../../components/ui/EmptyState";
-import { WorkspaceTable } from "../table/WorkspaceTable";
+import { TableView } from "../../../../components/ui/TableView";
 import { TableActionCell, TableRowActionButton } from "../../../../components/ui/TableActions";
 
 import { Badge } from "../../../../components/Badge";
@@ -155,7 +155,7 @@ export function RulesTab({ appKey }: { appKey: string }) {
         </Button>
       </div>
       {rulesQuery.error ? <StatusBanner live="alert" tone="signal" title={t("console.rules.loadFailed")} message={(rulesQuery.error as Error).message} /> : null}
-      <WorkspaceTable
+      <TableView
         table={ruleTable}
         totalItems={rules.length}
         isLoading={rulesQuery.isLoading}

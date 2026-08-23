@@ -1,5 +1,4 @@
 import {
-  flexRender,
   getCoreRowModel,
   useReactTable,
   type ColumnDef,
@@ -11,18 +10,7 @@ import { ArrowRight } from "lucide-react";
 import { Badge } from "../../../components/Badge";
 import { EmptyState } from "../../../components/ui/EmptyState";
 import { TableActionCell, TableRowActionButton, TableRowActionLink } from "../../../components/ui/TableActions";
-import { TablePagination } from "../../../components/ui/TablePagination";
-import {
-  TableBody,
-  TableCell,
-  TableEmptyRow,
-  TableFrame,
-  TableHead,
-  TableHeaderCell,
-  TableRoot,
-  TableRow,
-  TableSkeletonRows,
-} from "../../../components/ui/TablePrimitives";
+import { TableView } from "../../../components/ui/TableView";
 import { MONO_TEXT_CLASS } from "../../../components/ui/tableStyles";
 import { useI18n } from "../../../i18n/I18nProvider";
 import type { PersonRow } from "../../../lib/domain";
@@ -64,45 +52,12 @@ export function ConsolePeopleTable({
   });
 
   return (
-    <TableFrame>
-      <TableRoot>
-        <TableHead>
-          {table.getHeaderGroups().map((headerGroup) => (
-            <TableRow key={headerGroup.id}>
-              {headerGroup.headers.map((header) => (
-                <TableHeaderCell key={header.id}>
-                  {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                </TableHeaderCell>
-              ))}
-            </TableRow>
-          ))}
-        </TableHead>
-        <TableBody>
-          {isLoading ? (
-            <TableSkeletonRows columns={table.getAllLeafColumns().length} />
-          ) : table.getRowModel().rows.length > 0 ? (
-            table.getRowModel().rows.map((row) => (
-              <TableRow key={row.id}>
-                {row.getVisibleCells().map((cell) =>
-                  cell.column.id === "actions" ? (
-                    <TableActionCell key={cell.id}>
-                      {flexRender(cell.column.columnDef.cell, cell.getContext())}
-                    </TableActionCell>
-                  ) : (
-                    <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                  ),
-                )}
-              </TableRow>
-            ))
-          ) : (
-            <TableEmptyRow colSpan={table.getAllLeafColumns().length}>
-              <EmptyState title={t("people.empty.title")} description={t("people.empty.description")} />
-            </TableEmptyRow>
-          )}
-        </TableBody>
-      </TableRoot>
-      <TablePagination table={table} totalItems={totalItems} />
-    </TableFrame>
+    <TableView
+      table={table}
+      isLoading={isLoading}
+      totalItems={totalItems}
+      empty={<EmptyState title={t("people.empty.title")} description={t("people.empty.description")} />}
+    />
   );
 }
 
@@ -132,7 +87,11 @@ function peopleColumns(t: Translator, actions: PeopleRowActions): ColumnDef<Pers
     {
       id: "actions",
       header: t("common.actions"),
-      cell: ({ row }) => <PeopleRowActionsCell person={row.original} actions={actions} />,
+      cell: ({ row }) => (
+        <TableActionCell>
+          <PeopleRowActionsCell person={row.original} actions={actions} />
+        </TableActionCell>
+      ),
     },
   ];
 }

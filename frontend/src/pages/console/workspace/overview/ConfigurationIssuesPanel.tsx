@@ -4,7 +4,7 @@ import { EmptyState } from "../../../../components/ui/EmptyState";
 import { PanelSurface } from "../../../../components/ui/PanelSurface";
 import { useI18n } from "../../../../i18n/I18nProvider";
 import type { ConfigurationIssue } from "../../../../lib/domain";
-import { WorkspaceTable } from "../table/WorkspaceTable";
+import { TableView } from "../../../../components/ui/TableView";
 import { configurationIssueColumns } from "./overviewColumns";
 
 export function ConfigurationIssuesPanel({ issues, isLoading }: { issues: ConfigurationIssue[]; isLoading: boolean }) {
@@ -21,7 +21,7 @@ export function ConfigurationIssuesPanel({ issues, isLoading }: { issues: Config
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h2 className="text-base font-semibold text-ink">{t("console.overview.issues")}</h2>
       </div>
-      <WorkspaceTable
+      <TableView
         table={table}
         totalItems={issues.length}
         isLoading={isLoading}

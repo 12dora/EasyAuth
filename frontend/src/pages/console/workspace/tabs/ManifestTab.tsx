@@ -3,7 +3,7 @@ import { getCoreRowModel, getPaginationRowModel, useReactTable, type ColumnDef }
 import { Download, Eye, FileUp, Pencil, RefreshCcw, Save, UploadCloud, X } from "lucide-react";
 import { useRef, useState } from "react";
 import { EmptyState } from "../../../../components/ui/EmptyState";
-import { WorkspaceTable } from "../table/WorkspaceTable";
+import { TableView } from "../../../../components/ui/TableView";
 import { PanelSurface } from "../../../../components/ui/PanelSurface";
 
 import { Badge } from "../../../../components/Badge";
@@ -240,7 +240,7 @@ export function ManifestTab({ appKey }: { appKey: string }) {
       {currentPreview ? <ManifestDiffView preview={currentPreview.payload} /> : null}
       <div className="space-y-3">
         <h2 className="text-base font-semibold text-ink">版本历史</h2>
-        <WorkspaceTable
+        <TableView
           table={versionsTable}
           totalItems={versionsQuery.data?.pagination?.total_items ?? 0}
           isLoading={versionsQuery.isLoading}
@@ -418,7 +418,7 @@ function ManifestDiffTable({ items }: { items: ManifestDiffItem[] }) {
   });
 
   return (
-    <WorkspaceTable table={table} totalItems={items.length} empty="无差异" />
+    <TableView table={table} totalItems={items.length} empty="无差异" />
   );
 }
 

@@ -1,19 +1,18 @@
 import {
-  flexRender,
   getCoreRowModel,
   useReactTable,
   type ColumnDef,
 } from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Plus, RefreshCcw } from "lucide-react";
-import { Fragment, type FormEvent } from "react";
-import { useState } from "react";
+import type { FormEvent } from "react";
+import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { TableBody, TableCell, TableEmptyRow, TableFrame, TableHead, TableHeaderCell, TableRoot, TableRow, TableSkeletonRows } from "../../components/ui/TablePrimitives";
 import { TableActionCell, TableRowActionButton, TableRowActionLink } from "../../components/ui/TableActions";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { EmptyState } from "../../components/ui/EmptyState";
 import { PageState } from "../../components/ui/PageState";
+import { TableView } from "../../components/ui/TableView";
 import { useToast } from "../../components/ui/Toast";
 
 import { Badge } from "../../components/Badge";
@@ -73,7 +72,7 @@ export function ConsoleTeamList() {
     },
   });
 
-  const columns: ColumnDef<TeamSummary>[] = [
+  const columns = useMemo<ColumnDef<TeamSummary>[]>(() => [
     {
       header: t("console.teams.column.name"),
       cell: ({ row }) => <strong>{row.original.name}</strong>,
@@ -119,7 +118,7 @@ export function ConsoleTeamList() {
         </TableActionCell>
       ),
     },
-  ];
+  ], [navigate, t]);
   const table = useReactTable({
     data: teams,
     columns,
@@ -159,42 +158,11 @@ export function ConsoleTeamList() {
         />
       ) : (
         <section className="space-y-3">
-          <TableFrame>
-            <TableRoot>
-              <TableHead>
-                {table.getHeaderGroups().map((headerGroup) => (
-                  <TableRow key={headerGroup.id}>
-                    {headerGroup.headers.map((header) => (
-                      <TableHeaderCell key={header.id}>
-                        {header.isPlaceholder ? null : flexRender(header.column.columnDef.header, header.getContext())}
-                      </TableHeaderCell>
-                    ))}
-                  </TableRow>
-                ))}
-              </TableHead>
-              <TableBody>
-                {teamsQuery.isLoading ? (
-                  <TableSkeletonRows columns={table.getAllLeafColumns().length} />
-                ) : table.getRowModel().rows.length > 0 ? (
-                  table.getRowModel().rows.map((row) => (
-                    <TableRow key={row.id}>
-                      {row.getVisibleCells().map((cell) => (
-                        cell.column.id === "actions" ? (
-                          <Fragment key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</Fragment>
-                        ) : (
-                          <TableCell key={cell.id}>{flexRender(cell.column.columnDef.cell, cell.getContext())}</TableCell>
-                        )
-                      ))}
-                    </TableRow>
-                  ))
-                ) : (
-                  <TableEmptyRow colSpan={table.getAllLeafColumns().length}>
-                    <EmptyState title={t("console.teams.empty.title")} description={t("console.teams.empty.description")} />
-                  </TableEmptyRow>
-                )}
-              </TableBody>
-            </TableRoot>
-          </TableFrame>
+          <TableView
+            table={table}
+            isLoading={teamsQuery.isLoading}
+            empty={<EmptyState title={t("console.teams.empty.title")} description={t("console.teams.empty.description")} />}
+          />
         </section>
       )}
       {createDialogOpen ? (

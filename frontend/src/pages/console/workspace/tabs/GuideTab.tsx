@@ -6,7 +6,7 @@ import { CodeBlock } from "../../../../components/CodeBlock";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { apiRequest } from "../../../../lib/api";
 import type { IntegrationGuide } from "../../../../lib/domain";
-import { WorkspaceTable } from "../table/WorkspaceTable";
+import { TableView } from "../../../../components/ui/TableView";
 
 type CredentialModeRow = NonNullable<IntegrationGuide["credential_modes"]>[number];
 
@@ -38,7 +38,7 @@ export function GuideTab({ appKey }: { appKey: string }) {
       ) : null}
       <div className="space-y-3">
         <h2 className="text-base font-semibold text-ink">凭据模式</h2>
-        <WorkspaceTable
+        <TableView
           table={credentialModeTable}
           totalItems={credentialModes.length}
           isLoading={guideQuery.isLoading}

@@ -4,7 +4,7 @@ import { CodeBlock } from "../../../../components/CodeBlock";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { PanelSurface } from "../../../../components/ui/PanelSurface";
 import { useI18n } from "../../../../i18n/I18nProvider";
-import { WorkspaceTable } from "../table/WorkspaceTable";
+import { TableView } from "../../../../components/ui/TableView";
 import { queryTestGrantColumns, queryTestGroupColumns } from "./queryTestColumns";
 import type { StructuredQueryTestResult } from "./queryTestModel";
 
@@ -33,8 +33,8 @@ export function QueryTestResultView({ result }: { result: StructuredQueryTestRes
         title={result.allowed ? t("wizard.verify.hit") : t("wizard.verify.noHit")}
       />
       <QueryTestSummaryTiles result={result} />
-      <WorkspaceTable table={groupTable} totalItems={groups.length} empty={t("console.queryTest.groupsEmpty")} />
-      <WorkspaceTable table={grantTable} totalItems={grants.length} empty={t("console.queryTest.grantsEmpty")} />
+      <TableView table={groupTable} totalItems={groups.length} empty={t("console.queryTest.groupsEmpty")} />
+      <TableView table={grantTable} totalItems={grants.length} empty={t("console.queryTest.grantsEmpty")} />
       <CodeBlock language="json" code={JSON.stringify(result, null, 2)} />
     </>
   );

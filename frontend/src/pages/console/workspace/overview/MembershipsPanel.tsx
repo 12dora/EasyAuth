@@ -6,7 +6,7 @@ import { StatusBanner } from "../../../../components/StatusBanner";
 import { EmptyState } from "../../../../components/ui/EmptyState";
 import { PanelSurface } from "../../../../components/ui/PanelSurface";
 import { useI18n } from "../../../../i18n/I18nProvider";
-import { WorkspaceTable } from "../table/WorkspaceTable";
+import { TableView } from "../../../../components/ui/TableView";
 import { membershipTableColumns } from "./overviewColumns";
 import type { MembershipItem } from "./overviewModel";
 
@@ -52,7 +52,7 @@ export function MembershipsPanel({
       {operationError ? (
         <StatusBanner live="alert" tone="signal" title={t("console.overview.membersOperationFailed")} message={operationError.message} />
       ) : null}
-      <WorkspaceTable
+      <TableView
         table={table}
         totalItems={memberships.length}
         isLoading={isLoading}

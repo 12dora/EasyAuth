@@ -7,7 +7,7 @@ import { Field, SelectInput } from "../../../../components/Field";
 import { PanelSurface } from "../../../../components/ui/PanelSurface";
 import { useI18n } from "../../../../i18n/I18nProvider";
 import type { AppScopeItem, PermissionItem } from "../../../../lib/domain";
-import { WorkspaceTable } from "../table/WorkspaceTable";
+import { TableView } from "../../../../components/ui/TableView";
 import type { AuthorizationGroupForm } from "./grantFormUpdates";
 import { authorizationGroupGrantColumns } from "./matrixColumns";
 
@@ -63,7 +63,7 @@ export function GrantDraftPanel({
           {t("console.matrix.addGrant")}
         </Button>
       </PanelSurface>
-      <WorkspaceTable table={grantTable} totalItems={form.grants.length} empty={t("console.matrix.grant.empty")} />
+      <TableView table={grantTable} totalItems={form.grants.length} empty={t("console.matrix.grant.empty")} />
       <PanelSurface className="flex flex-wrap items-center justify-between gap-3 bg-paper-deep">
         <span className="min-w-0 text-sm text-ink-soft">{t("console.matrix.grantPreview", { value: form.grants.map((grant) => `${grant.permission} / ${grant.scope}`).join("，") || "-" })}</span>
       </PanelSurface>

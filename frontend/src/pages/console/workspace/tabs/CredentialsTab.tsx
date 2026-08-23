@@ -8,7 +8,7 @@ import {
 import { Pencil, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { EmptyState } from "../../../../components/ui/EmptyState";
-import { WorkspaceTable } from "../table/WorkspaceTable";
+import { TableView } from "../../../../components/ui/TableView";
 import { TableActionCell, TableRowActionButton } from "../../../../components/ui/TableActions";
 
 import { Badge } from "../../../../components/Badge";
@@ -158,7 +158,7 @@ export function CredentialsTab({ appKey, canManage }: { appKey: string; canManag
       {credentialsQuery.error ? (
         <StatusBanner live="alert" tone="signal" title={t("console.credentials.loadFailed")} message={(credentialsQuery.error as Error).message} />
       ) : null}
-      <WorkspaceTable
+      <TableView
         table={credentialTable}
         totalItems={credentials.length}
         isLoading={credentialsQuery.isLoading}
