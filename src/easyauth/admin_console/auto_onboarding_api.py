@@ -131,7 +131,7 @@ def _auto_onboard(*, payload: AutoOnboardingPayload, actor_id: str) -> dict[str,
     descriptor_app = _required_object(descriptor, "app")
     with transaction.atomic():
         app, created = _ensure_app(payload.app_key, descriptor_app, actor_id=actor_id)
-        app = App.objects.select_for_update().get(pk=app.pk)
+        app = App.objects.select_for_update().get(pk=app.id)
         app.descriptor_base_url = payload.base_url
         app.descriptor_token = payload.descriptor_token or ""
         app.save(
@@ -235,6 +235,26 @@ def _result(
 def _fetch_descriptor(base_url: str, descriptor_token: str | None) -> dict[str, JsonValue]:
     # 取回前在 fetch 边界(而非仅解析边界)校验主机, 关闭 DNS-rebinding 的 TOCTOU 窗口:
     # 拒绝解析到内网/环回/链路本地(含云元数据)的目标, 防止 SSRF。
+    _assert_descriptor_host(base_url)
+    headers = {"Accept": "application/json"}
+    if descriptor_token:
+        headers["Authorization"] = f"Bearer {descriptor_token}"
+    request = Request(  # noqa: S310 - URL 由管理员显式提供且限定 http(s)。
+        f"{base_url}{DESCRIPTOR_WELL_KNOWN_PATH}",
+        headers=headers,
+        method="GET",
+    )
+    raw_body = _read_descriptor(request)
+    if len(raw_body) > DESCRIPTOR_MAX_BYTES:
+        raise AutoOnboardingError(
+            ErrorCode.SEMANTIC_VALIDATION_ERROR,
+            "集成描述符超过大小限制。",
+            HTTPStatus.UNPROCESSABLE_ENTITY,
+        )
+    return _parse_descriptor(raw_body)
+
+
+def _assert_descriptor_host(base_url: str) -> None:
     hostname = urlparse(base_url).hostname or ""
     try:
         assert_public_host(hostname, allow_local=_settings_debug())
@@ -244,18 +264,13 @@ def _fetch_descriptor(base_url: str, descriptor_token: str | None) -> dict[str, 
             str(error),
             HTTPStatus.UNPROCESSABLE_ENTITY,
         ) from error
-    headers = {"Accept": "application/json"}
-    if descriptor_token:
-        headers["Authorization"] = f"Bearer {descriptor_token}"
-    request = Request(  # noqa: S310 - URL 由管理员显式提供且限定 http(s)。
-        f"{base_url}{DESCRIPTOR_WELL_KNOWN_PATH}",
-        headers=headers,
-        method="GET",
-    )
+
+
+def _read_descriptor(request: Request) -> bytes:
     try:
         with urlopen(request, timeout=DESCRIPTOR_FETCH_TIMEOUT_SECONDS) as response:  # noqa: S310  # pyright: ignore[reportAny]
             reader: _ReadableResponse = response  # pyright: ignore[reportAny]
-            raw_body = reader.read(DESCRIPTOR_MAX_BYTES + 1)
+            return reader.read(DESCRIPTOR_MAX_BYTES + 1)
     except HTTPError as error:
         status = (
             HTTPStatus.UNAUTHORIZED
@@ -273,12 +288,9 @@ def _fetch_descriptor(base_url: str, descriptor_token: str | None) -> dict[str, 
             f"无法连接下游应用: {getattr(error, 'reason', error)}",
             HTTPStatus.BAD_GATEWAY,
         ) from error
-    if len(raw_body) > DESCRIPTOR_MAX_BYTES:
-        raise AutoOnboardingError(
-            ErrorCode.SEMANTIC_VALIDATION_ERROR,
-            "集成描述符超过大小限制。",
-            HTTPStatus.UNPROCESSABLE_ENTITY,
-        )
+
+
+def _parse_descriptor(raw_body: bytes) -> dict[str, JsonValue]:
     try:
         parsed: object = json.loads(raw_body.decode("utf-8"))  # pyright: ignore[reportAny]
     except (JSONDecodeError, UnicodeDecodeError) as error:
@@ -307,13 +319,7 @@ def _validated_manifest(
             f"不支持的 descriptor_version: {descriptor.get('descriptor_version')!r}。",
             HTTPStatus.UNPROCESSABLE_ENTITY,
         )
-    descriptor_app = _json_object(descriptor.get("app"))
-    if descriptor_app is None or descriptor_app.get("app_key") != expected_app_key:
-        raise AutoOnboardingError(
-            ErrorCode.SEMANTIC_VALIDATION_ERROR,
-            "描述符 app_key 与请求不一致。",
-            HTTPStatus.UNPROCESSABLE_ENTITY,
-        )
+    _validate_app_key(descriptor.get("app"), expected_app_key, "描述符 app_key 与请求不一致。")
     manifest = _json_object(descriptor.get("manifest"))
     if manifest is None:
         raise AutoOnboardingError(
@@ -321,26 +327,36 @@ def _validated_manifest(
             "描述符缺少 manifest。",
             HTTPStatus.UNPROCESSABLE_ENTITY,
         )
-    manifest_app = _json_object(manifest.get("app"))
-    if manifest_app is None or manifest_app.get("app_key") != expected_app_key:
+    _validate_app_key(
+        manifest.get("app"),
+        expected_app_key,
+        "manifest.app.app_key 与请求不一致。",
+    )
+    _validate_schema_version(manifest.get("schema_version"))
+    return manifest
+
+
+def _validate_app_key(value: JsonValue, expected_app_key: str, message: str) -> None:
+    app = _json_object(value)
+    if app is None or app.get("app_key") != expected_app_key:
         raise AutoOnboardingError(
             ErrorCode.SEMANTIC_VALIDATION_ERROR,
-            "manifest.app.app_key 与请求不一致。",
+            message,
             HTTPStatus.UNPROCESSABLE_ENTITY,
         )
-    schema_version = manifest.get("schema_version")
-    version_invalid = (
+
+
+def _validate_schema_version(schema_version: JsonValue) -> None:
+    if (
         not isinstance(schema_version, int)
         or isinstance(schema_version, bool)
         or schema_version < 1
-    )
-    if version_invalid:
+    ):
         raise AutoOnboardingError(
             ErrorCode.SEMANTIC_VALIDATION_ERROR,
             "manifest.schema_version 必须是 >=1 的整数。",
             HTTPStatus.UNPROCESSABLE_ENTITY,
         )
-    return manifest
 
 
 def _record_auto_onboarding(*, actor_id: str, result: dict[str, JsonValue]) -> None:

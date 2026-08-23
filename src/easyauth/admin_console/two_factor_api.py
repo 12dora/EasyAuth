@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from http import HTTPStatus
 from typing import TYPE_CHECKING, cast
 
@@ -53,6 +54,14 @@ TOTP_CONFIRM_INVALID_MESSAGE = "验证码不正确, 未能启用验证器。"
 TOTP_DISABLE_INVALID_MESSAGE = "验证码不正确, 未能停用验证器。"
 STEP_UP_INVALID_MESSAGE = "当前密码不正确。"
 THROTTLED_MESSAGE = "尝试次数过多, 请稍后再试。"
+
+
+@dataclass(frozen=True, slots=True)
+class _PasskeyRegistrationPayload:
+    credential: dict[str, object]
+    state_token: str
+    name: str
+    current_password: str
 
 
 @require_http_methods(["GET"])
@@ -186,33 +195,23 @@ def passkey_register_complete(request: HttpRequest) -> JsonResponse:
     account = current_local_admin(request)
     if account is None:
         return _forbidden()
-    payload = _json_body(request)
-    credential = payload.get("credential") if payload else None
-    state_token = payload.get("state_token") if payload else None
-    name = payload.get("name") if payload else ""
-    current_password = payload.get("current_password") if payload else ""
-    credential_payload = _json_mapping(credential)
-    if credential_payload is None or not isinstance(state_token, str):
+    payload = _passkey_registration_payload(request)
+    if payload is None:
         return error_response(
             ErrorCode.VALIDATION_ERROR,
             INVALID_PAYLOAD_MESSAGE,
             status=HTTPStatus.UNPROCESSABLE_ENTITY,
         )
-    if not isinstance(name, str):
-        name = ""
-    step_up_error = _step_up_error(
-        account,
-        current_password if isinstance(current_password, str) else "",
-    )
+    step_up_error = _step_up_error(account, payload.current_password)
     if step_up_error is not None:
         return step_up_error
     try:
         passkey = register_passkey(
             request,
             account,
-            credential_payload,
-            state_token=state_token,
-            name=name.strip(),
+            payload.credential,
+            state_token=payload.state_token,
+            name=payload.name.strip(),
         )
     except PasskeyVerificationError as error:
         return error_response(
@@ -224,6 +223,25 @@ def passkey_register_complete(request: HttpRequest) -> JsonResponse:
     record_passkey_registered(account.username, name=passkey.name)
     rotate_local_admin_session(request, account)
     return json_response(_status_payload(account))
+
+
+def _passkey_registration_payload(
+    request: HttpRequest,
+) -> _PasskeyRegistrationPayload | None:
+    payload = _json_body(request)
+    credential = payload.get("credential") if payload else None
+    state_token = payload.get("state_token") if payload else None
+    name = payload.get("name") if payload else ""
+    current_password = payload.get("current_password") if payload else ""
+    credential_payload = _json_mapping(credential)
+    if credential_payload is None or not isinstance(state_token, str):
+        return None
+    return _PasskeyRegistrationPayload(
+        credential=credential_payload,
+        state_token=state_token,
+        name=name if isinstance(name, str) else "",
+        current_password=current_password if isinstance(current_password, str) else "",
+    )
 
 
 @require_http_methods(["DELETE"])

@@ -101,31 +101,12 @@ def _update_settings(request: HttpRequest, *, actor_id: str) -> JsonResponse:
         )
         # 必须在锁内读取当前生效凭证, 避免并发 PATCH 失效另一个请求之前的陈旧缓存键。
         previous_dingtalk = dingtalk_runtime_config()
-        update_fields: list[str] = []
-        if "authentik_base_url" in fields_set:
-            row.authentik_base_url = payload.authentik_base_url
-            update_fields.append("authentik_base_url")
-        api_token_changed = False
-        if "authentik_api_token" in fields_set:
-            api_token_changed = payload.authentik_api_token != row.authentik_api_token
-            row.authentik_api_token = payload.authentik_api_token
-            update_fields.append("authentik_api_token")
-        dingtalk_secret_changed = False
-        dingtalk_credentials_changed = False
-        if "dingtalk_app_key" in fields_set:
-            dingtalk_credentials_changed = payload.dingtalk_app_key != row.dingtalk_app_key
-            row.dingtalk_app_key = payload.dingtalk_app_key
-            update_fields.append("dingtalk_app_key")
-        if "dingtalk_app_secret" in fields_set:
-            dingtalk_secret_changed = payload.dingtalk_app_secret != row.dingtalk_app_secret
-            dingtalk_credentials_changed = (
-                dingtalk_credentials_changed or dingtalk_secret_changed
-            )
-            row.dingtalk_app_secret = payload.dingtalk_app_secret
-            update_fields.append("dingtalk_app_secret")
-        if "dingtalk_agent_id" in fields_set:
-            row.dingtalk_agent_id = payload.dingtalk_agent_id
-            update_fields.append("dingtalk_agent_id")
+        (
+            update_fields,
+            api_token_changed,
+            dingtalk_secret_changed,
+            dingtalk_credentials_changed,
+        ) = _apply_settings_patch(row, payload)
         row.updated_by = actor_id
         row.save(update_fields=[*update_fields, "updated_by", "updated_at"])
         _record_settings_update(
@@ -142,6 +123,42 @@ def _update_settings(request: HttpRequest, *, actor_id: str) -> JsonResponse:
                 ),
             )
     return _settings_response()
+
+
+def _apply_settings_patch(
+    row: IntegrationSettings,
+    payload: IntegrationSettingsPatch,
+) -> tuple[list[str], bool, bool, bool]:
+    fields_set = payload.model_fields_set
+    update_fields: list[str] = []
+    if "authentik_base_url" in fields_set:
+        row.authentik_base_url = payload.authentik_base_url
+        update_fields.append("authentik_base_url")
+    api_token_changed = False
+    if "authentik_api_token" in fields_set:
+        api_token_changed = payload.authentik_api_token != row.authentik_api_token
+        row.authentik_api_token = payload.authentik_api_token
+        update_fields.append("authentik_api_token")
+    dingtalk_secret_changed = False
+    dingtalk_credentials_changed = False
+    if "dingtalk_app_key" in fields_set:
+        dingtalk_credentials_changed = payload.dingtalk_app_key != row.dingtalk_app_key
+        row.dingtalk_app_key = payload.dingtalk_app_key
+        update_fields.append("dingtalk_app_key")
+    if "dingtalk_app_secret" in fields_set:
+        dingtalk_secret_changed = payload.dingtalk_app_secret != row.dingtalk_app_secret
+        dingtalk_credentials_changed = dingtalk_credentials_changed or dingtalk_secret_changed
+        row.dingtalk_app_secret = payload.dingtalk_app_secret
+        update_fields.append("dingtalk_app_secret")
+    if "dingtalk_agent_id" in fields_set:
+        row.dingtalk_agent_id = payload.dingtalk_agent_id
+        update_fields.append("dingtalk_agent_id")
+    return (
+        update_fields,
+        api_token_changed,
+        dingtalk_secret_changed,
+        dingtalk_credentials_changed,
+    )
 
 
 def console_dingtalk_connectivity_test(request: HttpRequest) -> JsonResponse:

@@ -211,6 +211,10 @@ def _create_app(request: HttpRequest) -> JsonResponse:
         case JsonResponse() as response:
             return response
 
+    return _create_app_for_actor(request, actor)
+
+
+def _create_app_for_actor(request: HttpRequest, actor: ConsoleActor) -> JsonResponse:
     if not actor.is_superuser:
         return _error_response(
             ErrorCode.PERMISSION_DENIED,
@@ -230,41 +234,10 @@ def _create_app(request: HttpRequest) -> JsonResponse:
             status=HTTPStatus.CONFLICT,
         )
 
-    owner_user_ids = payload.owner_user_ids or [actor.user_id]
-    developer_user_ids = [
-        user_id for user_id in payload.developer_user_ids if user_id not in set(owner_user_ids)
-    ]
+    owner_user_ids, developer_user_ids = _create_app_member_ids(payload, actor)
 
     try:
-        with transaction.atomic():
-            app = App.objects.create(
-                app_key=payload.app_key,
-                name=payload.name,
-                description=payload.description,
-                is_active=payload.is_active,
-            )
-            memberships = [
-                AppMembership(app=app, user_id=user_id, role="owner")
-                for user_id in owner_user_ids
-            ]
-            memberships.extend(
-                AppMembership(app=app, user_id=user_id, role="developer")
-                for user_id in developer_user_ids
-            )
-            _ = AppMembership.objects.bulk_create(memberships)
-            owner_metadata: list[JsonValue] = list(owner_user_ids)
-            developer_metadata: list[JsonValue] = list(developer_user_ids)
-            _record_app_event(
-                app,
-                actor,
-                "console_app_created",
-                {
-                    "app_key": app.app_key,
-                    "owner_user_ids": owner_metadata,
-                    "developer_user_ids": developer_metadata,
-                    "is_active": app.is_active,
-                },
-            )
+        app = _save_created_app(payload, actor, owner_user_ids, developer_user_ids)
     except IntegrityError:
         return _error_response(
             ErrorCode.CONFLICT,
@@ -273,6 +246,55 @@ def _create_app(request: HttpRequest) -> JsonResponse:
         )
 
     return _json_response({"app": _app_detail_item(actor, app)}, status=HTTPStatus.CREATED)
+
+
+def _create_app_member_ids(
+    payload: AppCreatePayload,
+    actor: ConsoleActor,
+) -> tuple[list[str], list[str]]:
+    owner_user_ids = payload.owner_user_ids or [actor.user_id]
+    developer_user_ids = [
+        user_id for user_id in payload.developer_user_ids if user_id not in set(owner_user_ids)
+    ]
+    return owner_user_ids, developer_user_ids
+
+
+def _save_created_app(
+    payload: AppCreatePayload,
+    actor: ConsoleActor,
+    owner_user_ids: list[str],
+    developer_user_ids: list[str],
+) -> App:
+    with transaction.atomic():
+        app = App.objects.create(
+            app_key=payload.app_key,
+            name=payload.name,
+            description=payload.description,
+            is_active=payload.is_active,
+        )
+        memberships = [
+            AppMembership(app=app, user_id=user_id, role="owner")
+            for user_id in owner_user_ids
+        ]
+        memberships.extend(
+            AppMembership(app=app, user_id=user_id, role="developer")
+            for user_id in developer_user_ids
+        )
+        _ = AppMembership.objects.bulk_create(memberships)
+        owner_metadata: list[JsonValue] = list(owner_user_ids)
+        developer_metadata: list[JsonValue] = list(developer_user_ids)
+        _record_app_event(
+            app,
+            actor,
+            "console_app_created",
+            {
+                "app_key": app.app_key,
+                "owner_user_ids": owner_metadata,
+                "developer_user_ids": developer_metadata,
+                "is_active": app.is_active,
+            },
+        )
+    return app
 
 
 def _patch_app(request: HttpRequest, app_key: str) -> JsonResponse:

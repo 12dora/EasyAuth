@@ -86,6 +86,14 @@ def _create_permission(request: HttpRequest, app_key: str) -> JsonResponse:
         is_active=permission.is_active,
     ):
         return response
+    return _save_new_permission(app, actor, permission)
+
+
+def _save_new_permission(
+    app: App,
+    actor: ConsoleActor,
+    permission: Permission,
+) -> JsonResponse:
     with transaction.atomic():
         match save_model(permission):
             case None:
@@ -125,33 +133,23 @@ def _new_permission(
             return response
     match permission_group(group_id=group_id, app_id=app_id):
         case PermissionGroup() as group:
-            permission = Permission(
-                app_id=app_id,
-                group=group,
-                key=payload.key,
-                name=payload.name,
-                name_en=payload.name_en,
-                description=payload.description,
-                description_en=payload.description_en,
-                is_active=payload.is_active,
-                supported_scopes=payload.supported_scopes,
-                risk_level=payload.risk_level,
-            )
+            pass
         case None:
-            permission = Permission(
-                app_id=app_id,
-                group=None,
-                key=payload.key,
-                name=payload.name,
-                name_en=payload.name_en,
-                description=payload.description,
-                description_en=payload.description_en,
-                is_active=payload.is_active,
-                supported_scopes=payload.supported_scopes,
-                risk_level=payload.risk_level,
-            )
+            group = None
         case JsonResponse() as response:
             return response
+    permission = Permission(
+        app_id=app_id,
+        group=group,
+        key=payload.key,
+        name=payload.name,
+        name_en=payload.name_en,
+        description=payload.description,
+        description_en=payload.description_en,
+        is_active=payload.is_active,
+        supported_scopes=payload.supported_scopes,
+        risk_level=payload.risk_level,
+    )
     apply_permission_deprecation(permission, payload)
     return permission
 

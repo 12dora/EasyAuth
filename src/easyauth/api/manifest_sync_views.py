@@ -20,6 +20,7 @@ from rest_framework.exceptions import AuthenticationFailed, PermissionDenied
 from easyauth.api.errors import ErrorCode, JsonValue, build_error_response
 from easyauth.api.permission_query_auth import authenticate_permission_query_token
 from easyauth.applications.manifest_import import (
+    ManifestSyncOutcome,
     ManifestVersionConflictError,
     sync_app_manifest,
 )
@@ -72,7 +73,7 @@ class _ManifestSyncPayload(BaseModel):
 
 
 @csrf_exempt
-def app_manifest_sync(request: HttpRequest, app_key: str) -> JsonResponse:  # noqa: PLR0911
+def app_manifest_sync(request: HttpRequest, app_key: str) -> JsonResponse:
     if request.method != "POST":
         return _error(ErrorCode.VALIDATION_ERROR, "请求方法无效。", HTTPStatus.METHOD_NOT_ALLOWED)
     match _authenticated_app(request, app_key):
@@ -80,6 +81,36 @@ def app_manifest_sync(request: HttpRequest, app_key: str) -> JsonResponse:  # no
             pass
         case JsonResponse() as response:
             return response
+    match _manifest_payload(request):
+        case _ManifestSyncPayload() as payload:
+            pass
+        case JsonResponse() as response:
+            return response
+    manifest_error = _validate_manifest_shape(payload.manifest, app_key)
+    if manifest_error is not None:
+        return manifest_error
+    match _sync_manifest(app, payload):
+        case ManifestSyncOutcome() as outcome:
+            pass
+        case JsonResponse() as response:
+            return response
+    app.refresh_from_db()
+    _record_manifest_sync(
+        app=app,
+        outcome_up_to_date=outcome.already_up_to_date,
+        version=outcome.template_version,
+    )
+    return JsonResponse(
+        {
+            "app_key": app.app_key,
+            "already_up_to_date": outcome.already_up_to_date,
+            "template_version": outcome.template_version,
+            "catalog_version": app.catalog_version,
+        },
+    )
+
+
+def _manifest_payload(request: HttpRequest) -> _ManifestSyncPayload | JsonResponse:
     if len(request.body) > _MANIFEST_MAX_BODY_BYTES:
         return _error(
             ErrorCode.SEMANTIC_VALIDATION_ERROR,
@@ -87,7 +118,7 @@ def app_manifest_sync(request: HttpRequest, app_key: str) -> JsonResponse:  # no
             HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
         )
     try:
-        payload = _ManifestSyncPayload.model_validate_json(request.body)
+        return _ManifestSyncPayload.model_validate_json(request.body)
     except ValidationError as exc:
         return _error(
             ErrorCode.VALIDATION_ERROR,
@@ -95,12 +126,15 @@ def app_manifest_sync(request: HttpRequest, app_key: str) -> JsonResponse:  # no
             HTTPStatus.UNPROCESSABLE_ENTITY,
             {"errors": str(exc)},
         )
-    manifest_error = _validate_manifest_shape(payload.manifest, app_key)
-    if manifest_error is not None:
-        return manifest_error
+
+
+def _sync_manifest(
+    app: App,
+    payload: _ManifestSyncPayload,
+) -> ManifestSyncOutcome | JsonResponse:
     try:
         with transaction.atomic():
-            outcome = sync_app_manifest(
+            return sync_app_manifest(
                 app=app,
                 manifest=payload.manifest,
                 actor_id=f"app:{app.app_key}",
@@ -121,20 +155,6 @@ def app_manifest_sync(request: HttpRequest, app_key: str) -> JsonResponse:  # no
             str(exc),
             HTTPStatus.UNPROCESSABLE_ENTITY,
         )
-    app.refresh_from_db()
-    _record_manifest_sync(
-        app=app,
-        outcome_up_to_date=outcome.already_up_to_date,
-        version=outcome.template_version,
-    )
-    return JsonResponse(
-        {
-            "app_key": app.app_key,
-            "already_up_to_date": outcome.already_up_to_date,
-            "template_version": outcome.template_version,
-            "catalog_version": app.catalog_version,
-        },
-    )
 
 
 def _validate_manifest_shape(manifest: dict[str, JsonValue], app_key: str) -> JsonResponse | None:

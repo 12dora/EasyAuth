@@ -406,6 +406,11 @@ def _access_request_failure_reasons(
     }
     if not failed_request_ids:
         return {}
+    latest_events = _latest_failure_events(failed_request_ids)
+    return _validated_failure_reasons(failed_request_ids, latest_events)
+
+
+def _latest_failure_events(failed_request_ids: set[int]) -> dict[int, AuditLog]:
     latest_events: dict[int, AuditLog] = {}
     events = AuditLog.objects.filter(
         event_type="grant_apply_failed",
@@ -416,6 +421,13 @@ def _access_request_failure_reasons(
         request_id = int(event.target_id)
         if request_id not in latest_events:
             latest_events[request_id] = event
+    return latest_events
+
+
+def _validated_failure_reasons(
+    failed_request_ids: set[int],
+    latest_events: dict[int, AuditLog],
+) -> dict[int, str]:
     reasons: dict[int, str] = {}
     for request_id in failed_request_ids:
         event = latest_events.get(request_id)
