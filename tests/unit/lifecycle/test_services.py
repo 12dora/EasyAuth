@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 import pytest
 from django.core.exceptions import ValidationError
@@ -32,11 +32,17 @@ from easyauth.lifecycle.handover_actions import (
 )
 from easyauth.lifecycle.handover_async import poll_async_action
 from easyauth.lifecycle.handover_preview import preview_action
+from easyauth.lifecycle.lease import cas_update_owner, take_lease
 from easyauth.lifecycle.models import (
+    ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
+    ACTION_STATUS_ASYNC_PENDING,
     ACTION_STATUS_SKIPPED,
+    BATCH_STATUS_ASYNC_PENDING,
     HANDOVER_KIND_TRANSFER,
     HandoverAppAction,
     HandoverDeliveryAttempt,
+    HandoverExecutionBatch,
+    HandoverExecutionLease,
     HandoverGrantItem,
     HandoverTask,
     HandoverTeamItem,
@@ -45,9 +51,6 @@ from easyauth.lifecycle.models import (
     OnboardingTemplateRevisionItem,
     TransferPlan,
 )
-
-# re-export for transfer helpers
-assert ACTION_STATUS_SKIPPED
 from easyauth.lifecycle.offboarding import (
     HandoverCreationSpec,
     ensure_handover_task,
@@ -64,6 +67,8 @@ if TYPE_CHECKING:
     from easyauth.applications.ops_models import JsonValue
 
 pytestmark = pytest.mark.django_db
+
+_RATE_LIMITED_MESSAGE: Final = "rate limited"
 
 
 def _app_with_catalog(app_key: str) -> tuple[App, AuthorizationGroup, Permission]:
@@ -264,7 +269,11 @@ def test_execute_action_transfers_selected_grants_and_calls_hook(
         ),
     )
     receiver = UserMirror.objects.create(authentik_user_id="lc-exec-receiver")
-    _ = AppWebhookConfig.objects.filter(app=app).update(secret="whsec-lc", handover_url="https://etrade.example.com/api/v1/easyauth/lifecycle/handover", enabled=True)
+    _ = AppWebhookConfig.objects.filter(app=app).update(
+        secret="whsec-lc",
+        handover_url="https://etrade.example.com/api/v1/easyauth/lifecycle/handover",
+        enabled=True,
+    )
     task, _created = ensure_handover_task(
         subject=subject,
         kind="offboard",
@@ -342,7 +351,11 @@ def test_preview_action_rejects_stale_hook_response(
     # Given: 预览 hook 请求发出后, 另一个预览/改接收人事务已经推进 generation。
     app, group, _permission = _app_with_catalog("lc-preview-stale-app")
     subject = _granted_user("lc-preview-stale-user", app, group)
-    _ = AppWebhookConfig.objects.filter(app=app).update(secret="whsec-preview-stale", handover_url="https://etrade.example.com/api/v1/easyauth/lifecycle/handover", enabled=True)
+    _ = AppWebhookConfig.objects.filter(app=app).update(
+        secret="whsec-preview-stale",
+        handover_url="https://etrade.example.com/api/v1/easyauth/lifecycle/handover",
+        enabled=True,
+    )
     task, _created = ensure_handover_task(
         subject=subject,
         kind="offboard",
@@ -355,7 +368,22 @@ def test_preview_action_rejects_stale_hook_response(
         stale_action = HandoverAppAction.objects.get(pk=action.pk)
         stale_action.preview_generation += 1
         stale_action.save(update_fields=["preview_generation", "updated_at"])
-        return HookResponse(status_code=200, location="", payload={**_preview_ok_payload(), "assets": [{"type": "customer", "label": "客户", "count": 1, "detail_supported": False, "releasable": False}]})
+        return HookResponse(
+            status_code=200,
+            location="",
+            payload={
+                **_preview_ok_payload(),
+                "assets": [
+                    {
+                        "type": "customer",
+                        "label": "客户",
+                        "count": 1,
+                        "detail_supported": False,
+                        "releasable": False,
+                    },
+                ],
+            },
+        )
 
     monkeypatch.setattr(handover_preview, "signed_hook_post", stale_hook)
 
@@ -375,7 +403,11 @@ def test_execute_action_keeps_accepted_hook_pending(
     app, group, _permission = _app_with_catalog("lc-async-hook-app")
     subject = _granted_user("lc-async-hook-user", app, group)
     receiver = UserMirror.objects.create(authentik_user_id="lc-async-hook-receiver")
-    _ = AppWebhookConfig.objects.filter(app=app).update(secret="whsec-async", handover_url="https://etrade.example.com/api/v1/easyauth/lifecycle/handover", enabled=True)
+    _ = AppWebhookConfig.objects.filter(app=app).update(
+        secret="whsec-async",
+        handover_url="https://etrade.example.com/api/v1/easyauth/lifecycle/handover",
+        enabled=True,
+    )
     task, _created = ensure_handover_task(
         subject=subject,
         kind="offboard",
@@ -423,7 +455,11 @@ def test_poll_async_action_completes_action_and_task(
     app, group, _permission = _app_with_catalog("lc-async-poll-app")
     subject = _granted_user("lc-async-poll-user", app, group)
     receiver = UserMirror.objects.create(authentik_user_id="lc-async-poll-receiver")
-    _ = AppWebhookConfig.objects.filter(app=app).update(secret="whsec-async-poll", handover_url="https://etrade.example.com/api/v1/easyauth/lifecycle/handover", enabled=True)
+    _ = AppWebhookConfig.objects.filter(app=app).update(
+        secret="whsec-async-poll",
+        handover_url="https://etrade.example.com/api/v1/easyauth/lifecycle/handover",
+        enabled=True,
+    )
     task, _created = ensure_handover_task(
         subject=subject,
         kind="offboard",
@@ -481,14 +517,6 @@ def test_poll_async_action_at_limit_sets_attention_required(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Given: 异步轮询达上限, 仍持有租约。
-    from easyauth.lifecycle.lease import take_lease
-    from easyauth.lifecycle.models import (
-        ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
-        ACTION_STATUS_ASYNC_PENDING,
-        BATCH_STATUS_ASYNC_PENDING,
-        HandoverExecutionBatch,
-    )
-
     app, group, _permission = _app_with_catalog("lc-async-limit-app")
     subject = _granted_user("lc-async-limit-user", app, group)
     receiver = UserMirror.objects.create(authentik_user_id="lc-async-limit-receiver")
@@ -525,8 +553,6 @@ def test_poll_async_action_at_limit_sets_attention_required(
         request_hash="x" * 64,
         status=BATCH_STATUS_ASYNC_PENDING,
     )
-    from easyauth.lifecycle.lease import cas_update_owner
-
     _ = cas_update_owner(handle, new_owner=f"async:{batch.pk}", renew=True)
     called = False
 
@@ -540,8 +566,6 @@ def test_poll_async_action_at_limit_sets_attention_required(
     result = poll_async_action(action)
     assert called is False
     assert result.status == ACTION_STATUS_ASYNC_ATTENTION_REQUIRED
-    from easyauth.lifecycle.models import HandoverExecutionLease
-
     lease = HandoverExecutionLease.objects.get(action=action, released_at__isnull=True)
     assert lease.released_at is None
     assert AuditLog.objects.filter(event_type="handover_async_attention_required").exists()
@@ -592,7 +616,7 @@ def test_execute_429_schedules_new_delivery_after_retry_after(
         if event_type == "lifecycle.handover.preview":
             return HookResponse(status_code=200, location="", payload=_preview_ok_payload())
         raise HookCallError(
-            "rate limited",
+            _RATE_LIMITED_MESSAGE,
             status_code=429,
             payload={
                 "detail": {
@@ -636,7 +660,11 @@ def test_failed_execution_locks_receiver_and_retry_uses_execution_receiver(
     subject = _granted_user("lc-fixed-receiver-user", app, group)
     receiver_a = UserMirror.objects.create(authentik_user_id="lc-receiver-a")
     receiver_b = UserMirror.objects.create(authentik_user_id="lc-receiver-b")
-    _ = AppWebhookConfig.objects.filter(app=app).update(secret="whsec-fixed-receiver", handover_url="https://etrade.example.com/api/v1/easyauth/lifecycle/handover", enabled=True)
+    _ = AppWebhookConfig.objects.filter(app=app).update(
+        secret="whsec-fixed-receiver",
+        handover_url="https://etrade.example.com/api/v1/easyauth/lifecycle/handover",
+        enabled=True,
+    )
     task, _created = ensure_handover_task(
         subject=subject,
         kind="offboard",
@@ -895,8 +923,8 @@ def test_transfer_diff_confirmation_rejects_terminal_task(
     add_keys = _plan_diff_keys(plan, "add")
 
     # When / Then: 终态后不得再改写授权。
+    _finish_actions_for_transfer(task)
     with pytest.raises(HandoverConflictError):
-        _finish_actions_for_transfer(task)
         _ = confirm_transfer_grant_diff(
             task=HandoverTask.objects.get(pk=task.pk),
             revoke_keys=revoke_keys,
@@ -963,8 +991,8 @@ def test_transfer_diff_confirmation_conflicts_for_different_payload() -> None:
     )
 
     # When / Then: 相同 plan 上的异载荷不能被当作幂等重试。
+    _finish_actions_for_transfer(task)
     with pytest.raises(HandoverConflictError):
-        _finish_actions_for_transfer(task)
         _ = confirm_transfer_grant_diff(
             task=HandoverTask.objects.get(pk=task.pk),
             revoke_keys=[],
@@ -980,8 +1008,8 @@ def test_transfer_diff_confirmation_rejects_unknown_keys() -> None:
     add_keys = _plan_diff_keys(plan, "add")
 
     # When / Then: 任何未知 key 都快速失败, 不能静默过滤后部分执行。
+    _finish_actions_for_transfer(task)
     with pytest.raises(HandoverError):
-        _finish_actions_for_transfer(task)
         _ = confirm_transfer_grant_diff(
             task=task,
             revoke_keys=["unknown-app:group:unknown"],
@@ -1099,8 +1127,8 @@ def test_transfer_diff_confirmation_rejects_legacy_unfrozen_add_entry() -> None:
     plan.save(update_fields=["grant_diff", "updated_at"])
 
     # When / Then: 确认必须失败, 不能回读当前模板推断缺失事实。
+    _finish_actions_for_transfer(task)
     with pytest.raises(HandoverError, match="app_key"):
-        _finish_actions_for_transfer(task)
         _ = confirm_transfer_grant_diff(
             task=task,
             revoke_keys=[],
@@ -1165,8 +1193,8 @@ def test_transfer_diff_confirmation_rolls_back_all_apps(
     monkeypatch.setattr(GrantService, "revoke_grant", staticmethod(fail_second_revoke))
 
     # When: 第二个 App 变更失败。
+    _finish_actions_for_transfer(task)
     with pytest.raises(RuntimeError, match="第二个 App"):
-        _finish_actions_for_transfer(task)
         _ = confirm_transfer_grant_diff(
             task=task,
             revoke_keys=revoke_keys,

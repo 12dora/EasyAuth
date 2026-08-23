@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import pytest
+from django.utils import timezone
 
+from easyauth.access_requests.approvals import ApprovalActionError
 from easyauth.access_requests.models import (
+    REQUEST_STATUS_APPROVED,
     REQUEST_STATUS_SUBMITTED,
     AccessRequest,
     AccessRequestApprover,
@@ -44,7 +47,7 @@ def test_disabled_co_approver_does_not_abort_reassignment() -> None:
     """非 active 共审人不得让整次离职建单的审批改派抛错。"""
     departed = _u("dep-r3", dtuid="d1", status=USER_STATUS_DEPARTED)
     applicant = _u("app-r3", dtuid="a1")
-    new_mgr = _u("mgr-r3", dtuid="m1")
+    _ = _u("mgr-r3", dtuid="m1")
     finance = _u("fin-r3", dtuid="f1", status=USER_STATUS_DISABLED)
     _ = DingTalkUserOrgContext.objects.create(
         source_slug=SOURCE,
@@ -114,12 +117,10 @@ def test_still_active_subject_not_reinstated_as_approver() -> None:
     assert ar.approval_routing_state == "superuser_pool"
 
 
-def test_already_approved_request_not_routed_to_pool_on_reassign_conflict() -> None:
+def test_already_approved_request_not_routed_to_pool_on_reassign_conflict(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """并发审批通过后, ApprovalActionError 回落不得改写已决定申请的路由/审批人。"""
-    from easyauth.access_requests.approvals import ApprovalActionError
-    from easyauth.access_requests.models import REQUEST_STATUS_APPROVED
-    from easyauth.lifecycle import approvals as approvals_mod
-
     departed = _u("dep-approved", dtuid="da", status=USER_STATUS_DEPARTED)
     applicant = _u("app-approved", dtuid="aa")
     co_approver = _u("co-approved", dtuid="ca")
@@ -138,8 +139,6 @@ def test_already_approved_request_not_routed_to_pool_on_reassign_conflict() -> N
 
     # 模拟竞态: 扫描时仍 submitted, 锁内改派瞬间已被并发批准
     def _flip_and_conflict(**_kwargs: object) -> bool:
-        from django.utils import timezone
-
         now = timezone.now()
         AccessRequest.objects.filter(pk=ar.pk).update(
             status=REQUEST_STATUS_APPROVED,
@@ -155,12 +154,11 @@ def test_already_approved_request_not_routed_to_pool_on_reassign_conflict() -> N
             details={"request_id": ar.id, "status": REQUEST_STATUS_APPROVED},
         )
 
-    original = approvals_mod._reassign_one_access_request
-    approvals_mod._reassign_one_access_request = _flip_and_conflict  # type: ignore[assignment]
-    try:
-        n = reassign_access_request_approvers(subject=departed)
-    finally:
-        approvals_mod._reassign_one_access_request = original  # type: ignore[assignment]
+    monkeypatch.setattr(
+        "easyauth.lifecycle.approvals._reassign_one_access_request",
+        _flip_and_conflict,
+    )
+    n = reassign_access_request_approvers(subject=departed)
 
     assert n == 0
     ar.refresh_from_db()
@@ -178,8 +176,6 @@ def test_already_approved_request_not_routed_to_pool_on_reassign_conflict() -> N
 
 def test_pool_route_rechecks_decided_status_under_request_lock() -> None:
     """扫描后已批准的申请不得删除审批历史或改写路由。"""
-    from easyauth.access_requests.models import REQUEST_STATUS_APPROVED
-
     departed = _u("dep-pool-lock", dtuid="dpl", status=USER_STATUS_DEPARTED)
     applicant = _u("app-pool-lock", dtuid="apl")
     app = App.objects.create(app_key="req-pool-lock", name="req")
@@ -192,8 +188,6 @@ def test_pool_route_rechecks_decided_status_under_request_lock() -> None:
         approval_routing_state="normal",
     )
     _ = AccessRequestApprover.objects.create(access_request=ar, approver=departed)
-    from django.utils import timezone
-
     decided_at = timezone.now()
     AccessRequest.objects.filter(pk=ar.pk).update(
         status=REQUEST_STATUS_APPROVED,

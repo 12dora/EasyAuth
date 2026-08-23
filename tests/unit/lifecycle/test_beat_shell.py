@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import os
 from datetime import timedelta
 
 import pytest
 from celery.exceptions import Retry
+from celery.schedules import crontab
+from django.conf import settings
 from django.utils import timezone
 
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
@@ -195,11 +198,6 @@ def test_beat_schedule_registers_lifecycle_entries() -> None:
     不得写成 ``isinstance(daily, (float, crontab))`` 这种两边都过的假钉扎:
     若默认退回 float(86400), 本用例必须红。
     """
-    import os
-
-    from celery.schedules import crontab
-    from django.conf import settings
-
     assert not os.environ.get(
         "EASYAUTH_LIFECYCLE_DAILY_REMINDER_SECONDS",
     ), "测试进程不得设置 EASYAUTH_LIFECYCLE_DAILY_REMINDER_SECONDS, 否则无法钉扎默认 crontab"

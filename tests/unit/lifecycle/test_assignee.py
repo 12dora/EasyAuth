@@ -47,7 +47,7 @@ def _chain(subject: UserMirror, manager_dtuids: list[str], *, stale: bool = Fals
 def test_resolve_assignee_picks_first_active_manager() -> None:
     subject = _user("sub-1", dtuid="s1")
     mgr0 = _user("mgr-0", dtuid="m0", status=USER_STATUS_DEPARTED)
-    mgr1 = _user("mgr-1", dtuid="m1")
+    _ = _user("mgr-1", dtuid="m1")
     _ = mgr0
     _chain(subject, ["m0", "m1"])
     res = resolve_assignee(subject)

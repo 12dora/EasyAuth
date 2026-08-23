@@ -6,7 +6,8 @@ import pytest
 from django.utils import timezone
 
 from easyauth.accounts.models import USER_STATUS_ACTIVE, USER_STATUS_DEPARTED, UserMirror
-from easyauth.applications.models import App
+from easyauth.applications.models import App, AppScope, Permission
+from easyauth.grants.models import AccessGrant, AccessGrantPermission
 from easyauth.lifecycle.models import (
     ACTION_STATUS_BLOCKED,
     ACTION_STATUS_PENDING,
@@ -153,9 +154,6 @@ def test_ensure_offboard_upgrades_open_pre_offboard() -> None:
 
 def test_upgrade_reinvents_new_app_action_granted_during_window() -> None:
     """pre_offboard 窗口内新获授权的 undeclared APP 必须在升级时出现 blocked action。"""
-    from easyauth.applications.models import AppScope, Permission
-    from easyauth.grants.models import AccessGrant, AccessGrantPermission
-
     subject = _subject("up-new-app")
     app_a = _app("easytrade-a", capability="declared")
     task, created = ensure_handover_task(

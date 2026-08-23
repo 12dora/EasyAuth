@@ -127,15 +127,16 @@ def test_non_transfer_assignment_rejects_receiver_before_database_constraint(
 ) -> None:
     action, asset_type, receiver = _action()
 
-    with pytest.raises(HandoverError, match="receiver_not_allowed"):
-        if mutation == "default":
+    if mutation == "default":
+        with pytest.raises(HandoverError, match="receiver_not_allowed"):
             patch_asset_type_defaults(
                 action,
                 type_key=asset_type.type_key,
                 default_action="skip",
                 default_to_user_id=receiver.authentik_user_id,
             )
-        else:
+    else:
+        with pytest.raises(HandoverError, match="receiver_not_allowed"):
             put_overrides(
                 action,
                 type_key=asset_type.type_key,

@@ -15,7 +15,8 @@ from easyauth.accounts.models import (
     DingTalkUserOrgContext,
     UserMirror,
 )
-from easyauth.applications.models import App, ApprovalRule
+from easyauth.applications.models import App, ApprovalRule, AuthorizationGroup
+from easyauth.audit.models import AuditLog
 from easyauth.lifecycle.approvals import (
     reassign_access_request_approvers,
     replace_approval_rule_approvers,
@@ -53,7 +54,7 @@ def _u(uid: str, *, dtuid: str, status: str = USER_STATUS_ACTIVE) -> UserMirror:
 def test_reassign_access_request_approver_to_new_manager() -> None:
     departed = _u("dep", dtuid="d1", status=USER_STATUS_DEPARTED)
     applicant = _u("app", dtuid="a1")
-    new_mgr = _u("mgr", dtuid="m1")
+    _ = _u("mgr", dtuid="m1")
     finance = _u("fin", dtuid="f1")
     _ = DingTalkUserOrgContext.objects.create(
         source_slug=SOURCE,
@@ -88,9 +89,6 @@ def test_reassign_access_request_approver_to_new_manager() -> None:
 
 def test_zero_matching_rules_skips_assignee_resolution_and_degraded_audit() -> None:
     """V-07: 离职者未出现在任何规则时, 不得 resolve_assignee / 写 degraded 审计。"""
-    from easyauth.applications.models import AuthorizationGroup
-    from easyauth.audit.models import AuditLog
-
     departed = _u("dep-zero", dtuid="dz", status=USER_STATUS_DEPARTED)
     # 无钉钉完整绑定 → 若误 resolve 会写 handover_assignee_resolution_degraded
     departed.dingtalk_source_slug = ""
@@ -123,8 +121,6 @@ def test_zero_matching_rules_skips_assignee_resolution_and_degraded_audit() -> N
 
 
 def test_approval_rule_replacement_todo_when_no_manager() -> None:
-    from easyauth.applications.models import AuthorizationGroup
-
     departed = _u("dep2", dtuid="d2", status=USER_STATUS_DEPARTED)
     app = App.objects.create(app_key="rule-app", name="rule")
     group = AuthorizationGroup.objects.create(app=app, key="g1", name="g1", kind="role")
@@ -152,8 +148,6 @@ def test_approval_rule_replacement_todo_when_no_manager() -> None:
 
 
 def test_approval_rule_replacement_preserves_all_other_locked_approvers() -> None:
-    from easyauth.applications.models import AuthorizationGroup
-
     departed = _u("dep-rule-current", dtuid="drc", status=USER_STATUS_DEPARTED)
     manager = _u("mgr-rule-current", dtuid="mrc")
     finance = _u("fin-rule-current", dtuid="frc")

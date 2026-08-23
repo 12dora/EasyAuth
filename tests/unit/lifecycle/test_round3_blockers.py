@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import timedelta
-from typing import Any
+from typing import Any, Final
 
 import pytest
 from django.utils import timezone
@@ -12,6 +12,8 @@ from django.utils import timezone
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.applications.models import App
 from easyauth.audit.models import AuditLog
+from easyauth.lifecycle.api_errors import map_handover_exception
+from easyauth.lifecycle.api_payloads import aggregated_summary
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
 from easyauth.lifecycle.handover import execute_action, retry_action
 from easyauth.lifecycle.handover_actions import update_grant_receiver
@@ -44,12 +46,19 @@ from easyauth.lifecycle.models import (
     HandoverDeliveryAttempt,
     HandoverExecutionBatch,
     HandoverExecutionLease,
+    HandoverLeaseFence,
     HandoverTask,
 )
-from easyauth.webhooks.hooks import HookResponse
+from easyauth.tasks.lifecycle import lifecycle_recover_expired_execution_leases_task
+from easyauth.webhooks.hooks import HookCallError, HookResponse
 from easyauth.webhooks.models import AppWebhookConfig
 
 pytestmark = pytest.mark.django_db
+
+_ATTENTION_POLL_ASSERTION_MESSAGE: Final = "30 分钟内不得发起状态查询"
+_ATTENTION_GATE_ASSERTION_MESSAGE: Final = (
+    "signed_hook_get must not run within 30min attention gate"
+)
 
 
 def _subject_app_action(
@@ -110,7 +119,7 @@ def _subject_app_action(
 
 def test_async_abandon_releases_lease_on_failed_outcome() -> None:
     """LeaseHandle kwargs bug: async-abandon must not TypeError."""
-    _subject, app, task, action = _subject_app_action(
+    _subject, _app, _task, action = _subject_app_action(
         status=ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
     )
     handle = take_lease(action=action, owner="async:1", batch_seq=1)
@@ -122,7 +131,7 @@ def test_async_abandon_releases_lease_on_failed_outcome() -> None:
     result = async_abandon_action(
         action,
         outcome="failed",
-        reason="downstream 确认不可恢复，人工失败",
+        reason="downstream 确认不可恢复, 人工失败",
         summary=None,
         actor_id="superuser-1",
     )
@@ -132,7 +141,7 @@ def test_async_abandon_releases_lease_on_failed_outcome() -> None:
 
 
 def test_async_abandon_done_without_summary_no_fabricated_skips() -> None:
-    _subject, app, task, action = _subject_app_action(
+    _subject, _app, _task, action = _subject_app_action(
         status=ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
         count=187,
     )
@@ -237,8 +246,6 @@ def test_async_abandon_preserves_non_final_batch_progress() -> None:
     assert lease.released_at is not None
 
     # 后续批次即使提供计数, 也不能把缺少本批计数的部分总数伪装成全量 summary。
-    from easyauth.lifecycle.api_payloads import aggregated_summary
-
     result.result_summary = {
         "customer": {
             "transferred": 1,
@@ -375,7 +382,7 @@ def test_poll_attention_action_enforces_30_minute_gate(
     fence_before = lease.fence
 
     def unexpected_get(**_kwargs: object) -> HookResponse:
-        raise AssertionError("30 分钟内不得发起状态查询")
+        raise AssertionError(_ATTENTION_POLL_ASSERTION_MESSAGE)
 
     monkeypatch.setattr("easyauth.lifecycle.handover_async.signed_hook_get", unexpected_get)
 
@@ -430,7 +437,7 @@ def test_takeover_payload_conflict_enters_manual_resolution(
     resolved = async_abandon_action(
         result,
         outcome="failed",
-        reason="下游确认幂等载荷冲突，人工终止",
+        reason="下游确认幂等载荷冲突, 人工终止",
         summary=None,
         actor_id="superuser-1",
     )
@@ -441,7 +448,7 @@ def test_takeover_payload_conflict_enters_manual_resolution(
 
 def test_conservation_failure_persists_failed_and_releases_lease() -> None:
     """守恒失败必须提交 failed + 释放, 不得被 atomic 回滚。"""
-    _subject, app, task, action = _subject_app_action(count=10)
+    _subject, _app, _task, action = _subject_app_action(count=10)
     handle = take_lease(action=action, owner="http:worker", batch_seq=1)
     batch = HandoverExecutionBatch.objects.create(
         action=action,
@@ -623,7 +630,7 @@ def test_later_413_keeps_partial_plan_and_releases_lease() -> None:
     plan.refresh_from_db()
     lease = HandoverExecutionLease.objects.get(pk=handle.lease_id)
     assert action.status == ACTION_STATUS_PREVIEWED
-    assert action.last_error == "单独指定的条目过多，请减少逐条指定后重新预演"
+    assert action.last_error == "单独指定的条目过多, 请减少逐条指定后重新预演"
     assert batch.status == BATCH_STATUS_FAILED
     assert plan.status == BATCH_PLAN_STATUS_ACTIVE
     assert plan.completed_batches == 1
@@ -773,9 +780,7 @@ def test_grant_only_retry_completes_final_batch_and_plan() -> None:
 
 
 def test_aggregated_summary_reads_result_summary() -> None:
-    from easyauth.lifecycle.api_payloads import aggregated_summary
-
-    _subject, app, task, action = _subject_app_action()
+    _subject, _app, _task, action = _subject_app_action()
     action.status = "done"
     action.result_summary = {
         "customer": {
@@ -793,9 +798,6 @@ def test_aggregated_summary_reads_result_summary() -> None:
 
 
 def test_map_hook_call_error_snapshot_stale() -> None:
-    from easyauth.lifecycle.api_errors import map_handover_exception
-    from easyauth.webhooks.hooks import HookCallError
-
     mapped = map_handover_exception(HookCallError("应用交接接口返回 HTTP 412。", status_code=412))
     assert mapped is not None
     assert mapped.status_code == 412
@@ -818,17 +820,12 @@ def test_map_hook_call_error_snapshot_stale() -> None:
 
 
 def test_map_hook_call_error_413_preserves_batch_progress_details() -> None:
-    from easyauth.lifecycle.api_errors import map_handover_exception
-    from easyauth.webhooks.hooks import HookCallError
-
     mapped = map_handover_exception(
         HookCallError("too large", status_code=413),
         details={"batch_progress": {"completed": 1, "total": 3, "current_batch_seq": 2}},
     )
     assert mapped is not None
     assert mapped.status_code == 413
-    import json
-
     body = json.loads(mapped.content.decode())
     assert body["error"]["details"]["reason"] == "payload_too_large"
     assert body["error"]["details"]["batch_progress"]["completed"] == 1
@@ -838,10 +835,6 @@ def test_attention_lease_recovery_respects_30min_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """V-01: 30 分钟内 recovery beat 不得 poll / 不得烧 fence。"""
-    from easyauth.lifecycle.handover_recovery import takeover_expired_lease
-    from easyauth.lifecycle.models import HandoverLeaseFence
-    from easyauth.tasks.lifecycle import lifecycle_recover_expired_execution_leases_task
-
     _subject, app, _task, action = _subject_app_action(
         status=ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
     )
@@ -873,7 +866,7 @@ def test_attention_lease_recovery_respects_30min_gate(
 
     def unexpected_get(**_kwargs: object) -> object:
         get_calls["n"] += 1
-        raise AssertionError("signed_hook_get must not run within 30min attention gate")
+        raise AssertionError(_ATTENTION_GATE_ASSERTION_MESSAGE)
 
     monkeypatch.setattr("easyauth.lifecycle.handover_async.signed_hook_get", unexpected_get)
 
