@@ -1471,7 +1471,7 @@ def test_handover_without_actions_converges_to_completed() -> None:
     assert not HandoverAppAction.objects.filter(task=task).exists()
 
     # When
-    refreshed = lifecycle_services.refresh_task_status(task)
+    refreshed = refresh_task_status(task)
 
     # Then: 空 action 集合按真空收敛, 不会永久停在 pending。
     assert refreshed.status == "completed"
