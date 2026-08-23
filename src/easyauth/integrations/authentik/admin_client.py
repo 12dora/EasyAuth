@@ -146,22 +146,10 @@ class AuthentikAdminClient:
             results = payload.get("results")
             if not isinstance(results, list):
                 raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
-            for item in cast("list[object]", results):
-                if not isinstance(item, dict):
-                    raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
-                entry = cast("AdminJson", item)
-                entry_uid = entry.get("uid")
-                entry_pk = entry.get("pk")
-                if not isinstance(entry_uid, str) or type(entry_pk) is not int:
-                    raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
-                if entry_uid == uid:
-                    return cast("int", entry["pk"])
-            pagination = payload.get("pagination")
-            if not isinstance(pagination, dict):
-                raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
-            total_pages = cast("AdminJson", pagination).get("total_pages")
-            if type(total_pages) is not int or total_pages < 1 or page > total_pages:
-                raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
+            user_pk = _user_pk_in_results(cast("list[object]", results), uid=uid)
+            if user_pk is not None:
+                return user_pk
+            total_pages = _user_total_pages(payload, current_page=page)
             if page == total_pages:
                 break
             page += 1
@@ -237,29 +225,25 @@ class AuthentikAdminClient:
             headers["Content-Type"] = "application/json"
             data = dumps(body).encode("utf-8")
         request = Request(url, data=data, headers=headers, method=method)  # noqa: S310 - base_url 由管理员配置。
+        raw = self._send_request(request, remaining=remaining, deadline=effective_deadline)
+        if not raw and method == "DELETE":
+            return {}
+        if not raw:
+            raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
+        return _parse_admin_json(raw)
+
+    def _send_request(self, request: Request, *, remaining: float, deadline: float) -> bytes:
         try:
             with cast(
                 "_ReadableResponse",
                 urlopen(request, timeout=min(self._timeout_seconds, remaining)),  # noqa: S310
             ) as response:
-                raw = self._read_response(response, deadline=effective_deadline)
+                return self._read_response(response, deadline=deadline)
         except HTTPError as error:
             message = f"Authentik 管理 API 请求失败(HTTP {error.code})。"
             raise AuthentikAdminError(message) from error
         except (URLError, TimeoutError) as error:
             raise AuthentikAdminError(ADMIN_API_UNAVAILABLE_MESSAGE) from error
-        if not raw and method == "DELETE":
-            return {}
-        if not raw:
-            raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
-        try:
-            parsed = cast("object", loads(raw.decode("utf-8")))
-        except (JSONDecodeError, UnicodeDecodeError) as error:
-            message = "Authentik 管理 API 响应不是有效 JSON。"
-            raise AuthentikAdminError(message) from error
-        if not isinstance(parsed, dict):
-            raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
-        return cast("AdminJson", parsed)
 
     def _read_response(self, response: _ReadableResponse, *, deadline: float) -> bytes:
         content_length = response.getheader("Content-Length")
@@ -292,25 +276,77 @@ def _session_page(payload: AdminJson, *, expected_page: int) -> tuple[list[Admin
     pagination = payload.get("pagination")
     if not isinstance(results, list) or not isinstance(pagination, dict):
         raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
+    entries = _mapping_entries(cast("list[object]", results))
+    next_page = _validated_session_next_page(
+        cast("AdminJson", pagination),
+        expected_page=expected_page,
+        has_entries=bool(entries),
+    )
+    return entries, next_page
+
+
+def _mapping_entries(results: list[object]) -> list[AdminJson]:
     entries: list[AdminJson] = []
-    for item in cast("list[object]", results):
+    for item in results:
         if not isinstance(item, dict):
             raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
         entries.append(cast("AdminJson", item))
+    return entries
 
-    pagination_json = cast("AdminJson", pagination)
-    current = pagination_json.get("current")
-    next_page = pagination_json.get("next")
+
+def _validated_session_next_page(
+    pagination: AdminJson,
+    *,
+    expected_page: int,
+    has_entries: bool,
+) -> int:
+    current = pagination.get("current")
+    next_page = pagination.get("next")
     if (
         type(current) is not int
         or current != expected_page
         or type(next_page) is not int
         or next_page < 0
         or (next_page != 0 and next_page != expected_page + 1)
-        or (next_page != 0 and not entries)
+        or (next_page != 0 and not has_entries)
     ):
         raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
-    return entries, next_page
+    return next_page
+
+
+def _user_pk_in_results(results: list[object], *, uid: str) -> int | None:
+    for item in results:
+        if not isinstance(item, dict):
+            raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
+        entry = cast("AdminJson", item)
+        entry_uid = entry.get("uid")
+        entry_pk = entry.get("pk")
+        if not isinstance(entry_uid, str) or type(entry_pk) is not int:
+            raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
+        if entry_uid == uid:
+            return cast("int", entry["pk"])
+    return None
+
+
+def _user_total_pages(payload: AdminJson, *, current_page: int) -> int:
+    pagination = payload.get("pagination")
+    if not isinstance(pagination, dict):
+        raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
+    total_pages = cast("AdminJson", pagination).get("total_pages")
+    if type(total_pages) is not int or total_pages < 1 or current_page > total_pages:
+        raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
+    return total_pages
+
+
+def _parse_admin_json(raw: bytes) -> AdminJson:
+    try:
+        parsed = cast("object", loads(raw.decode("utf-8")))
+    except (JSONDecodeError, UnicodeDecodeError) as error:
+        message = "Authentik 管理 API 响应不是有效 JSON。"
+        raise AuthentikAdminError(message) from error
+    if not isinstance(parsed, dict):
+        raise AuthentikAdminError(INVALID_RESPONSE_MESSAGE)
+    return cast("AdminJson", parsed)
 
 
 def _user_group_names(payload: AdminJson) -> tuple[str, ...]:

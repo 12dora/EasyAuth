@@ -30,6 +30,14 @@ from easyauth.integrations.authentik.directory_client import (
     AuthentikDirectoryError,
     AuthentikDirectoryUnavailableError,
 )
+from easyauth.integrations.authentik.directory_contract import (
+    DIRECTORY_CONTRACT_MESSAGE,
+    CorpSnapshotContract,
+    assert_directory_payloads,
+    assert_org_context,
+    directory_user_key,
+    status_contract,
+)
 from easyauth.lifecycle.errors import HandoverConflictError
 from easyauth.lifecycle.offboarding import start_offboarding
 from easyauth.lifecycle.tasks import RETRY_OFFBOARDING_TASK_NAME
@@ -48,7 +56,6 @@ DIRECTORY_STATUS_TO_USER_STATUS: Final[dict[str, str]] = {
 }
 UNSUPPORTED_DIRECTORY_STATUS_ERROR: Final = "钉钉目录用户状态无法识别。"
 DIRECTORY_ORG_CONTEXT_UNAVAILABLE_MESSAGE: Final = "钉钉目录组织上下文拉取失败。"
-DIRECTORY_CONTRACT_MESSAGE: Final = "钉钉目录响应不满足权威快照契约。"
 DIRECTORY_GENERATION_CHANGED_MESSAGE: Final = "钉钉目录 generation 在快照拉取期间发生变化。"
 DIRECTORY_STALE_GENERATION_MESSAGE: Final = "钉钉目录旧 generation 已被 fencing 拒绝。"
 
@@ -85,17 +92,10 @@ class AuthentikDirectorySyncResult:
 
 
 @dataclass(frozen=True, slots=True)
-class _CorpSnapshotContract:
-    generation: int
-    user_count: int
-    department_count: int
-
-
-@dataclass(frozen=True, slots=True)
 class _DirectorySnapshot:
     source_slug: str
     status: DirectoryJson
-    contracts: dict[str, _CorpSnapshotContract]
+    contracts: dict[str, CorpSnapshotContract]
     departments: tuple[DirectoryJson, ...]
     users: tuple[DirectoryJson, ...]
     org_contexts: dict[tuple[str, str], DirectoryJson]
@@ -140,7 +140,7 @@ def sync_authentik_dingtalk_directory(
                 user_payload,
                 generation=writable_snapshot.contracts[corp_id].generation,
             )
-            org_context = writable_snapshot.org_contexts.get(_directory_user_key(user_payload))
+            org_context = writable_snapshot.org_contexts.get(directory_user_key(user_payload))
             if org_context is not None:
                 _upsert_org_context(org_context)
                 _update_user_mirror_summary(org_context)
@@ -169,26 +169,27 @@ def sync_authentik_dingtalk_directory(
 
 def _fetch_directory_snapshot(client: AuthentikDirectorySyncClient) -> _DirectorySnapshot:
     status = _mapping(client.get_status())
-    source_slug, contracts = _status_contract(status)
+    source_slug, contracts = status_contract(status)
     departments = tuple(_mapping(item) for item in _iter_objects(client.iter_departments()))
     users = tuple(_mapping(item) for item in _iter_objects(client.iter_users()))
-    _assert_directory_payloads(
+    assert_directory_payloads(
         source_slug=source_slug,
         contracts=contracts,
         departments=departments,
         users=users,
+        status_validator=_directory_user_status,
     )
     org_contexts: dict[tuple[str, str], DirectoryJson] = {}
     org_fetch_failures: list[tuple[str, str]] = []
     attempted = 0
     for user_payload in users:
-        corp_id, user_id = _directory_user_key(user_payload)
+        corp_id, user_id = directory_user_key(user_payload)
         if not (corp_id and user_id):
             continue
         attempted += 1
         try:
             org_context = _mapping(client.get_user_org(corp_id, user_id))
-            _assert_org_context(org_context, source_slug=source_slug, key=(corp_id, user_id))
+            assert_org_context(org_context, source_slug=source_slug, key=(corp_id, user_id))
             org_contexts[(corp_id, user_id)] = org_context
         except AuthentikDirectoryError:
             # 单个用户的 org 拉取失败不得中止整轮同步; 隔离该用户、聚合失败并继续。
@@ -197,7 +198,7 @@ def _fetch_directory_snapshot(client: AuthentikDirectorySyncClient) -> _Director
         # 组织上下文是主管链和管理范围解析的必需事实; 任何用户缺失都不得推进整代 generation。
         raise AuthentikDirectoryUnavailableError(DIRECTORY_ORG_CONTEXT_UNAVAILABLE_MESSAGE)
     final_status = _mapping(client.get_status())
-    final_source_slug, final_contracts = _status_contract(final_status)
+    final_source_slug, final_contracts = status_contract(final_status)
     if final_source_slug != source_slug or final_contracts != contracts:
         raise AuthentikDirectoryUnavailableError(DIRECTORY_GENERATION_CHANGED_MESSAGE)
     return _DirectorySnapshot(
@@ -209,135 +210,6 @@ def _fetch_directory_snapshot(client: AuthentikDirectorySyncClient) -> _Director
         org_contexts=org_contexts,
         org_fetch_failures=tuple(org_fetch_failures),
     )
-
-
-def _directory_user_key(payload: DirectoryJson) -> tuple[str, str]:
-    return (_string(payload.get("corp_id")), _string(payload.get("user_id")))
-
-
-def _status_contract(
-    status: DirectoryJson,
-) -> tuple[str, dict[str, _CorpSnapshotContract]]:
-    source_slug = _string(status.get("source_slug"))
-    sync_items = status.get("sync")
-    if source_slug == "" or not isinstance(sync_items, list | tuple) or not sync_items:
-        raise AuthentikDirectoryUnavailableError(DIRECTORY_CONTRACT_MESSAGE)
-
-    contracts: dict[str, _CorpSnapshotContract] = {}
-    for raw_item in sync_items:
-        if not isinstance(raw_item, dict):
-            raise AuthentikDirectoryUnavailableError(DIRECTORY_CONTRACT_MESSAGE)
-        sync = cast("DirectoryJson", raw_item)
-        corp_id = _string(sync.get("corp_id"))
-        generation = sync.get("generation")
-        counters = sync.get("counters")
-        if (
-            corp_id == ""
-            or corp_id in contracts
-            or sync.get("status") != "success"
-            or type(generation) is not int
-            or generation < 0
-            or not isinstance(counters, dict)
-        ):
-            raise AuthentikDirectoryUnavailableError(DIRECTORY_CONTRACT_MESSAGE)
-        users = counters.get("users")
-        departments = counters.get("departments")
-        if type(users) is not int or users < 0 or type(departments) is not int or departments < 0:
-            raise AuthentikDirectoryUnavailableError(DIRECTORY_CONTRACT_MESSAGE)
-        contracts[corp_id] = _CorpSnapshotContract(
-            generation=generation,
-            user_count=users,
-            department_count=departments,
-        )
-    return source_slug, contracts
-
-
-def _assert_department_payloads(
-    *,
-    source_slug: str,
-    contracts: dict[str, _CorpSnapshotContract],
-    departments: tuple[DirectoryJson, ...],
-) -> dict[str, set[str]]:
-    seen_departments: dict[str, set[str]] = {corp_id: set() for corp_id in contracts}
-    for department in departments:
-        corp_id = _string(department.get("corp_id"))
-        dept_id = _string(department.get("dept_id"))
-        item_source_slug = _string(department.get("source_slug"))
-        if (
-            corp_id not in contracts
-            or dept_id == ""
-            or (item_source_slug and item_source_slug != source_slug)
-            or dept_id in seen_departments[corp_id]
-        ):
-            raise AuthentikDirectoryUnavailableError(DIRECTORY_CONTRACT_MESSAGE)
-        seen_departments[corp_id].add(dept_id)
-    return seen_departments
-
-
-def _assert_user_payloads(
-    *,
-    source_slug: str,
-    contracts: dict[str, _CorpSnapshotContract],
-    users: tuple[DirectoryJson, ...],
-) -> dict[str, set[str]]:
-    seen_users: dict[str, set[str]] = {corp_id: set() for corp_id in contracts}
-    for user in users:
-        corp_id, user_id = _directory_user_key(user)
-        item_source_slug = _string(user.get("source_slug"))
-        if (
-            corp_id not in contracts
-            or user_id == ""
-            or (item_source_slug and item_source_slug != source_slug)
-            or user_id in seen_users[corp_id]
-        ):
-            raise AuthentikDirectoryUnavailableError(DIRECTORY_CONTRACT_MESSAGE)
-        _ = _directory_user_status(user)
-        seen_users[corp_id].add(user_id)
-    return seen_users
-
-
-def _assert_directory_payloads(
-    *,
-    source_slug: str,
-    contracts: dict[str, _CorpSnapshotContract],
-    departments: tuple[DirectoryJson, ...],
-    users: tuple[DirectoryJson, ...],
-) -> None:
-    seen_departments = _assert_department_payloads(
-        source_slug=source_slug,
-        contracts=contracts,
-        departments=departments,
-    )
-    seen_users = _assert_user_payloads(
-        source_slug=source_slug,
-        contracts=contracts,
-        users=users,
-    )
-    for corp_id, contract in contracts.items():
-        if (
-            len(seen_users[corp_id]) != contract.user_count
-            or len(seen_departments[corp_id]) != contract.department_count
-        ):
-            raise AuthentikDirectoryUnavailableError(DIRECTORY_CONTRACT_MESSAGE)
-
-
-def _assert_org_context(
-    payload: DirectoryJson,
-    *,
-    source_slug: str,
-    key: tuple[str, str],
-) -> None:
-    item_source_slug = _string(payload.get("source_slug"))
-    if (
-        _directory_user_key(payload) != key
-        or (item_source_slug and item_source_slug != source_slug)
-        or not isinstance(payload.get("departments"), list | tuple)
-        or not isinstance(payload.get("manager"), dict)
-        or not isinstance(payload.get("manager_chain"), list | tuple)
-        or type(payload.get("stale")) is not bool
-    ):
-        raise AuthentikDirectoryUnavailableError(DIRECTORY_CONTRACT_MESSAGE)
-
 
 def _lock_sync_states(
     snapshot: _DirectorySnapshot,
@@ -380,7 +252,7 @@ def _snapshot_for_corps(
     sync_items = [
         item
         for item in _list(snapshot.status.get("sync"))
-        if _string(_mapping(item).get("corp_id")) in corp_ids
+        if _object_corp_id(item) in corp_ids
     ]
     return _DirectorySnapshot(
         source_slug=snapshot.source_slug,
@@ -389,15 +261,36 @@ def _snapshot_for_corps(
             {"source_slug": snapshot.source_slug, "sync": sync_items},
         ),
         contracts={corp_id: snapshot.contracts[corp_id] for corp_id in corp_ids},
-        departments=tuple(
-            item for item in snapshot.departments if _string(item.get("corp_id")) in corp_ids
-        ),
-        users=tuple(item for item in snapshot.users if _string(item.get("corp_id")) in corp_ids),
-        org_contexts={
-            key: value for key, value in snapshot.org_contexts.items() if key[0] in corp_ids
-        },
-        org_fetch_failures=tuple(key for key in snapshot.org_fetch_failures if key[0] in corp_ids),
+        departments=_payloads_for_corps(snapshot.departments, corp_ids),
+        users=_payloads_for_corps(snapshot.users, corp_ids),
+        org_contexts=_org_contexts_for_corps(snapshot.org_contexts, corp_ids),
+        org_fetch_failures=_keys_for_corps(snapshot.org_fetch_failures, corp_ids),
     )
+
+
+def _object_corp_id(item: object) -> str:
+    return _string(_mapping(item).get("corp_id"))
+
+
+def _payloads_for_corps(
+    payloads: tuple[DirectoryJson, ...],
+    corp_ids: frozenset[str],
+) -> tuple[DirectoryJson, ...]:
+    return tuple(item for item in payloads if _string(item.get("corp_id")) in corp_ids)
+
+
+def _org_contexts_for_corps(
+    contexts: dict[tuple[str, str], DirectoryJson],
+    corp_ids: frozenset[str],
+) -> dict[tuple[str, str], DirectoryJson]:
+    return {key: value for key, value in contexts.items() if key[0] in corp_ids}
+
+
+def _keys_for_corps(
+    keys: tuple[tuple[str, str], ...],
+    corp_ids: frozenset[str],
+) -> tuple[tuple[str, str], ...]:
+    return tuple(key for key in keys if key[0] in corp_ids)
 
 
 def _apply_sync_states(
@@ -566,7 +459,7 @@ def _reconcile_missing_rows(snapshot: _DirectorySnapshot) -> tuple[int, int]:
         (_string(item.get("corp_id")), _string(item.get("dept_id")))
         for item in snapshot.departments
     }
-    seen_users = {_directory_user_key(item) for item in snapshot.users}
+    seen_users = {directory_user_key(item) for item in snapshot.users}
 
     pruned_departments = 0
     for department in DingTalkDepartmentMirror.objects.filter(
@@ -611,18 +504,10 @@ def _reconcile_missing_rows(snapshot: _DirectorySnapshot) -> tuple[int, int]:
 def _reconcile_user_mirror_status(snapshot: _DirectorySnapshot) -> _StatusReconciliation:
     corp_ids = _synced_corp_ids(snapshot)
     if not corp_ids:
-        return _StatusReconciliation(
-            applied_count=0,
-            departed_count=0,
-            revoked_count=0,
-            offboarding_deferred_count=0,
-        )
+        return _empty_status_reconciliation()
 
     # 状态已在任何写入前完成契约校验, 这里仅把权威快照映射为本地域状态。
-    status_by_key: dict[tuple[str, str, str], UserStatus] = {
-        (snapshot.source_slug, *_directory_user_key(payload)): _directory_user_status(payload)
-        for payload in snapshot.users
-    }
+    status_by_key = _directory_status_by_user(snapshot)
 
     applied_count = 0
     departed_count = 0
@@ -635,56 +520,11 @@ def _reconcile_user_mirror_status(snapshot: _DirectorySnapshot) -> _StatusReconc
         dingtalk_userid="",
     )
     for user in bound_users:
-        key = (user.dingtalk_source_slug, user.dingtalk_corp_id, user.dingtalk_userid)
-        # 目录里已经不存在的绑定用户按离职处理, 与上游硬删除口径一致。
-        target_status = status_by_key.get(key, cast("UserStatus", USER_STATUS_DEPARTED))
-        was_departed = user.status == USER_STATUS_DEPARTED
-        grant_ids: tuple[int, ...] = ()
-        if target_status == USER_STATUS_DEPARTED and not was_departed:
-            now = timezone.now()
-            effective_groups = AccessGrantGroup.objects.filter(grant_id=OuterRef("pk")).filter(
-                Q(expires_at__isnull=True) | Q(expires_at__gt=now),
-            )
-            effective_permissions = AccessGrantPermission.objects.filter(
-                grant_id=OuterRef("pk"),
-            ).filter(
-                Q(expires_at__isnull=True) | Q(expires_at__gt=now),
-            )
-            grant_ids = tuple(
-                AccessGrant.objects.filter(
-                    user=user,
-                    is_current=True,
-                    status=GRANT_STATUS_ACTIVE,
-                )
-                .annotate(
-                    has_effective_group=Exists(effective_groups),
-                    has_effective_permission=Exists(effective_permissions),
-                )
-                .filter(Q(has_effective_group=True) | Q(has_effective_permission=True))
-                .order_by("id")
-                .values_list("id", flat=True),
-            )
-        result = AuthentikSyncService.apply_directory_status(user, target_status)
-        applied_count += 1
-        revoked_count += result.revoked_count
-        if result.user.status == USER_STATUS_DEPARTED:
-            departed_count += 1
-            if not was_departed:
-                # 首次检出离职: 撤权已由 apply_directory_status 完成,
-                # 这里补齐生命周期立即项(自动建交接单+禁号+移出团队, §2.4)。
-                try:
-                    # start_offboarding 自带 atomic(savepoint)；单个身份冲突不得污染外层同步事务。
-                    _ = start_offboarding(result.user, snapshot_grant_ids=grant_ids)
-                except HandoverConflictError:
-                    _ = enqueue_task(
-                        event_key=(
-                            f"lifecycle-retry-offboarding:{result.user.pk}:"
-                            f"{_writable_generation_for_user(snapshot, result.user)}"
-                        ),
-                        task_name=RETRY_OFFBOARDING_TASK_NAME,
-                        args=[int(result.user.pk), list(grant_ids)],
-                    )
-                    offboarding_deferred_count += 1
+        reconciliation = _reconcile_bound_user(snapshot, user, status_by_key=status_by_key)
+        applied_count += reconciliation.applied_count
+        departed_count += reconciliation.departed_count
+        revoked_count += reconciliation.revoked_count
+        offboarding_deferred_count += reconciliation.offboarding_deferred_count
 
     return _StatusReconciliation(
         applied_count=applied_count,
@@ -692,6 +532,100 @@ def _reconcile_user_mirror_status(snapshot: _DirectorySnapshot) -> _StatusReconc
         revoked_count=revoked_count,
         offboarding_deferred_count=offboarding_deferred_count,
     )
+
+
+def _empty_status_reconciliation() -> _StatusReconciliation:
+    return _StatusReconciliation(
+        applied_count=0,
+        departed_count=0,
+        revoked_count=0,
+        offboarding_deferred_count=0,
+    )
+
+
+def _directory_status_by_user(
+    snapshot: _DirectorySnapshot,
+) -> dict[tuple[str, str, str], UserStatus]:
+    return {
+        (snapshot.source_slug, *directory_user_key(payload)): _directory_user_status(payload)
+        for payload in snapshot.users
+    }
+
+
+def _reconcile_bound_user(
+    snapshot: _DirectorySnapshot,
+    user: UserMirror,
+    *,
+    status_by_key: dict[tuple[str, str, str], UserStatus],
+) -> _StatusReconciliation:
+    key = (user.dingtalk_source_slug, user.dingtalk_corp_id, user.dingtalk_userid)
+    # 目录里已经不存在的绑定用户按离职处理, 与上游硬删除口径一致。
+    target_status = status_by_key.get(key, cast("UserStatus", USER_STATUS_DEPARTED))
+    was_departed = user.status == USER_STATUS_DEPARTED
+    grant_ids = _active_grant_ids_for_departure(user) if (
+        target_status == USER_STATUS_DEPARTED and not was_departed
+    ) else ()
+    result = AuthentikSyncService.apply_directory_status(user, target_status)
+    departed = result.user.status == USER_STATUS_DEPARTED
+    deferred = (
+        departed
+        and not was_departed
+        and _start_user_offboarding(snapshot, result.user, grant_ids)
+    )
+    return _StatusReconciliation(
+        applied_count=1,
+        departed_count=int(departed),
+        revoked_count=result.revoked_count,
+        offboarding_deferred_count=int(deferred),
+    )
+
+
+def _active_grant_ids_for_departure(user: UserMirror) -> tuple[int, ...]:
+    now = timezone.now()
+    effective_groups = AccessGrantGroup.objects.filter(grant_id=OuterRef("pk")).filter(
+        Q(expires_at__isnull=True) | Q(expires_at__gt=now),
+    )
+    effective_permissions = AccessGrantPermission.objects.filter(grant_id=OuterRef("pk")).filter(
+        Q(expires_at__isnull=True) | Q(expires_at__gt=now),
+    )
+    return tuple(
+        AccessGrant.objects.filter(
+            user=user,
+            is_current=True,
+            status=GRANT_STATUS_ACTIVE,
+        )
+        .annotate(
+            has_effective_group=Exists(effective_groups),
+            has_effective_permission=Exists(effective_permissions),
+        )
+        .filter(Q(has_effective_group=True) | Q(has_effective_permission=True))
+        .order_by("id")
+        .values_list("id", flat=True),
+    )
+
+
+def _start_user_offboarding(
+    snapshot: _DirectorySnapshot,
+    user: UserMirror,
+    grant_ids: tuple[int, ...],
+) -> bool:
+    # 首次检出离职: 撤权已由 apply_directory_status 完成,
+    # 这里补齐生命周期立即项(自动建交接单+禁号+移出团队, §2.4)。
+    try:
+        # start_offboarding 自带 atomic(savepoint)；单个身份冲突不得污染外层同步事务。
+        _ = start_offboarding(user, snapshot_grant_ids=grant_ids)
+    except HandoverConflictError:
+        user_pk = cast("int", user.pk)
+        _ = enqueue_task(
+            event_key=(
+                f"lifecycle-retry-offboarding:{user_pk}:"
+                f"{_writable_generation_for_user(snapshot, user)}"
+            ),
+            task_name=RETRY_OFFBOARDING_TASK_NAME,
+            args=[user_pk, list(grant_ids)],
+        )
+        return True
+    return False
 
 
 def _writable_generation_for_user(snapshot: _DirectorySnapshot, user: UserMirror) -> int:

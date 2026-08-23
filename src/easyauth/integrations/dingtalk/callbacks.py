@@ -47,17 +47,31 @@ class _DingTalkCallbackPayload(BaseModel):
 def dingtalk_callback(request: HttpRequest) -> JsonResponse:
     body = request.body
     if not _request_signature_is_valid(request, body):
-        _record_preauth_security_event(
-            request,
-            event_type="dingtalk_callback_signature_rejected",
-            target_id="unknown",
-            metadata={"reason": "invalid_signature"},
-        )
-        return _error_response(
-            ErrorCode.PERMISSION_DENIED,
-            "DingTalk 回调签名无效。",
-            status=HTTPStatus.FORBIDDEN,
-        )
+        return _signature_rejected_response(request)
+    payload, rejection = _validate_callback_payload(request, body)
+    if payload is None:
+        return cast("JsonResponse", rejection)
+    return _apply_callback_payload(payload)
+
+
+def _signature_rejected_response(request: HttpRequest) -> JsonResponse:
+    _record_preauth_security_event(
+        request,
+        event_type="dingtalk_callback_signature_rejected",
+        target_id="unknown",
+        metadata={"reason": "invalid_signature"},
+    )
+    return _error_response(
+        ErrorCode.PERMISSION_DENIED,
+        "DingTalk 回调签名无效。",
+        status=HTTPStatus.FORBIDDEN,
+    )
+
+
+def _validate_callback_payload(
+    request: HttpRequest,
+    body: bytes,
+) -> tuple[_DingTalkCallbackPayload | None, JsonResponse | None]:
     try:
         payload = _DingTalkCallbackPayload.model_validate_json(body)
     except ValidationError as exc:
@@ -67,13 +81,16 @@ def dingtalk_callback(request: HttpRequest) -> JsonResponse:
             target_id="unknown",
             metadata=_payload_rejected_metadata(body, exc),
         )
-        return _error_response(
+        return None, _error_response(
             ErrorCode.VALIDATION_ERROR,
             "DingTalk 回调参数无效。",
             {"errors": str(exc)},
             status=HTTPStatus.UNPROCESSABLE_ENTITY,
         )
+    return payload, None
 
+
+def _apply_callback_payload(payload: _DingTalkCallbackPayload) -> JsonResponse:
     try:
         instance = apply_instance_callback(
             process_instance_id=payload.process_instance_id,

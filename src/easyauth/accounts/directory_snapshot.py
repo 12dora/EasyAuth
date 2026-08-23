@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from hashlib import sha256
 from json import dumps
@@ -16,6 +17,12 @@ from easyauth.accounts.models import (
 
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
+
+
+@dataclass(frozen=True, slots=True)
+class _ScopeSnapshot:
+    payload: JsonValue
+    identity_row: list[JsonValue]
 
 
 def directory_scope_keys() -> tuple[tuple[str, str], ...]:
@@ -102,46 +109,17 @@ def build_directory_snapshot(*, now: datetime | None = None) -> dict[str, JsonVa
     snapshots: list[JsonValue] = []
     identity_rows: list[list[JsonValue]] = []
     for source_slug, corp_id in keys:
-        state = states.get((source_slug, corp_id))
-        if state is None:
-            status = "missing"
-            generation = -1
-            snapshot_at: str | None = None
-            snapshot_at_status = "missing"
-            stale = True
-        else:
-            status = "error" if state.error else state.status or "unknown"
-            generation = state.generation
-            snapshot_at, snapshot_at_status = upstream_snapshot_metadata(
-                state,
-                now=reference,
-            )
-            stale = status != "success" or is_sync_state_stale(state, now=reference)
-        snapshots.append(
-            {
-                "source_slug": source_slug,
-                "corp_id": corp_id,
-                "generation": generation,
-                "status": status,
-                "snapshot_at": snapshot_at,
-                "snapshot_at_status": snapshot_at_status,
-                "stale": stale,
-            },
+        scope_snapshot = _build_scope_snapshot(
+            source_slug,
+            corp_id,
+            state=states.get((source_slug, corp_id)),
+            now=reference,
         )
-        identity_rows.append(
-            [source_slug, corp_id, generation, status, snapshot_at, snapshot_at_status],
-        )
+        snapshots.append(scope_snapshot.payload)
+        identity_rows.append(scope_snapshot.identity_row)
 
-    complete = bool(snapshots) and all(
-        isinstance(item, dict)
-        and item.get("status") == "success"
-        and isinstance(item.get("generation"), int)
-        and cast("int", item["generation"]) >= 0
-        for item in snapshots
-    )
-    stale = not snapshots or any(
-        isinstance(item, dict) and item.get("stale") is True for item in snapshots
-    )
+    complete = bool(snapshots) and all(_scope_is_complete(item) for item in snapshots)
+    stale = not snapshots or any(_scope_is_stale(item) for item in snapshots)
     encoded = dumps(identity_rows, ensure_ascii=False, separators=(",", ":")).encode()
     return {
         "snapshot_id": sha256(encoded).hexdigest(),
@@ -150,3 +128,55 @@ def build_directory_snapshot(*, now: datetime | None = None) -> dict[str, JsonVa
         "complete": complete,
         "authoritative": complete and not stale,
     }
+
+
+def _build_scope_snapshot(
+    source_slug: str,
+    corp_id: str,
+    *,
+    state: DingTalkDirectorySyncState | None,
+    now: datetime,
+) -> _ScopeSnapshot:
+    if state is None:
+        status = "missing"
+        generation = -1
+        snapshot_at: str | None = None
+        snapshot_at_status = "missing"
+        stale = True
+    else:
+        status = "error" if state.error else state.status or "unknown"
+        generation = state.generation
+        snapshot_at, snapshot_at_status = upstream_snapshot_metadata(state, now=now)
+        stale = status != "success" or is_sync_state_stale(state, now=now)
+    return _ScopeSnapshot(
+        payload={
+            "source_slug": source_slug,
+            "corp_id": corp_id,
+            "generation": generation,
+            "status": status,
+            "snapshot_at": snapshot_at,
+            "snapshot_at_status": snapshot_at_status,
+            "stale": stale,
+        },
+        identity_row=[
+            source_slug,
+            corp_id,
+            generation,
+            status,
+            snapshot_at,
+            snapshot_at_status,
+        ],
+    )
+
+
+def _scope_is_complete(item: JsonValue) -> bool:
+    return (
+        isinstance(item, dict)
+        and item.get("status") == "success"
+        and isinstance(item.get("generation"), int)
+        and cast("int", item["generation"]) >= 0
+    )
+
+
+def _scope_is_stale(item: JsonValue) -> bool:
+    return isinstance(item, dict) and item.get("stale") is True

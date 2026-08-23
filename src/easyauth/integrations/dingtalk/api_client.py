@@ -110,6 +110,17 @@ class DingTalkSendResult:
     forbidden_receipts: tuple[DingTalkForbiddenReceipt, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class _JsonRequestOptions:
+    body: DingTalkJson | None = None
+    query: dict[str, str] | None = None
+    authenticated: bool = True
+    deadline: float | None = None
+
+
+_DEFAULT_JSON_REQUEST_OPTIONS: Final = _JsonRequestOptions()
+
+
 class DingTalkApiClient:
     _app_key: str
     _app_secret: str
@@ -144,9 +155,11 @@ class DingTalkApiClient:
         payload = self._request_json(
             "POST",
             "/v1.0/oauth2/accessToken",
-            body={"appKey": self._app_key, "appSecret": self._app_secret},
-            authenticated=False,
-            _deadline=_deadline,
+            options=_JsonRequestOptions(
+                body={"appKey": self._app_key, "appSecret": self._app_secret},
+                authenticated=False,
+                deadline=_deadline,
+            ),
         )
         token = payload.get("accessToken")
         expire_in = payload.get("expireIn")
@@ -180,15 +193,17 @@ class DingTalkApiClient:
         payload = self._request_json(
             "POST",
             "/v1.0/workflow/processInstances",
-            body={
-                "processCode": process_code,
-                "originatorUserId": originator_userid,
-                "deptId": dept_id,
-                "formComponentValues": [
-                    {"name": component.name, "value": component.value}
-                    for component in form_components
-                ],
-            },
+            options=_JsonRequestOptions(
+                body={
+                    "processCode": process_code,
+                    "originatorUserId": originator_userid,
+                    "deptId": dept_id,
+                    "formComponentValues": [
+                        {"name": component.name, "value": component.value}
+                        for component in form_components
+                    ],
+                },
+            ),
         )
         instance_id = payload.get("instanceId")
         if not isinstance(instance_id, str) or not instance_id:
@@ -200,7 +215,7 @@ class DingTalkApiClient:
         payload = self._request_json(
             "GET",
             "/v1.0/workflow/processInstances",
-            query={"processInstanceId": process_instance_id},
+            options=_JsonRequestOptions(query={"processInstanceId": process_instance_id}),
         )
         result = payload.get("result")
         if not isinstance(result, dict):
@@ -270,23 +285,24 @@ class DingTalkApiClient:
         method: str,
         path: str,
         *,
-        body: DingTalkJson | None = None,
-        query: dict[str, str] | None = None,
-        authenticated: bool = True,
-        _deadline: float | None = None,
+        options: _JsonRequestOptions = _DEFAULT_JSON_REQUEST_OPTIONS,
     ) -> DingTalkJson:
-        deadline = monotonic() + self._timeout_seconds if _deadline is None else _deadline
+        deadline = (
+            monotonic() + self._timeout_seconds
+            if options.deadline is None
+            else options.deadline
+        )
         url = f"{DINGTALK_API_BASE_URL}{path}"
-        if query:
-            url = f"{url}?{urlencode(query)}"
+        if options.query:
+            url = f"{url}?{urlencode(options.query)}"
         headers = {"Content-Type": "application/json"}
-        if authenticated:
+        if options.authenticated:
             headers["x-acs-dingtalk-access-token"] = self.get_access_token(_deadline=deadline)
         return self._execute_json_request(
             method,
             url,
             headers=headers,
-            body=body,
+            body=options.body,
             deadline=deadline,
         )
 
