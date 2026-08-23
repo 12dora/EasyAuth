@@ -28,6 +28,12 @@ const GUARDED_FILES = [
   "pages/console/workspace/tabs/WebhookTab.tsx",
   "pages/console/workspace/tabs/MatrixTab.tsx",
   "pages/console/workspace/tabs/CatalogTab.tsx",
+  // CatalogTab 拆分后的渲染层, 护栏必须跟着走, 否则中文字面量会从 tabs/ 漏到 catalog/。
+  "pages/console/workspace/catalog/CatalogPanels.tsx",
+  "pages/console/workspace/catalog/CatalogDialogs.tsx",
+  "pages/console/workspace/catalog/catalogModel.ts",
+  "pages/console/workspace/catalog/useCatalogData.ts",
+  "pages/console/workspace/catalog/useCatalogForms.ts",
   "pages/console/workspace/tabs/RulesTab.tsx",
   "pages/console/workspace/tabs/CredentialsTab.tsx",
   "pages/console/workspace/tabs/IntegrationTab.tsx",

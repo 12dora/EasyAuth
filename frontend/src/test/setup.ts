@@ -1,5 +1,9 @@
+import { configure } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { beforeEach } from "vitest";
+
+// 控制台路由经 React.lazy 加载, 整套用例并行跑时首屏解析会超过 RTL 默认的 1s findBy 等待。
+configure({ asyncUtilTimeout: 5000 });
 
 // jsdom 不实现 ResizeObserver; 侧边栏指示灯等布局测量逻辑依赖它。
 class ResizeObserverStub {

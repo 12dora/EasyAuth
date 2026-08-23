@@ -1,130 +1,13 @@
-import { useQuery } from "@tanstack/react-query";
 import { X } from "lucide-react";
-import { useEffect, useId, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent, ReactNode } from "react";
+import { useId, useState } from "react";
+import type { ReactNode } from "react";
 
 import { useI18n } from "../i18n/I18nProvider";
-import { apiRequest, itemsFromPayload } from "../lib/api";
-import type { ListPayload } from "../lib/api";
-import { cn } from "../lib/cn";
 import { TextInput } from "./Field";
+import { UserOptionList, useUserCombobox } from "./UserCombobox";
+import type { UserOption, UserSearchPurpose } from "./UserCombobox";
 
-export interface UserOption {
-  user_id: string;
-  name: string;
-}
-
-type UserSearchPurpose = "employee" | "approver";
-
-const OPTION_BASE_CLASS =
-  "flex w-full cursor-pointer flex-col items-start gap-0.5 rounded-[2px] px-2.5 py-1.5 text-left transition-colors";
-
-function useUserOptions(query: string, enabled: boolean, purpose: UserSearchPurpose) {
-  const [debouncedQuery, setDebouncedQuery] = useState(query);
-
-  useEffect(() => {
-    const timer = window.setTimeout(() => setDebouncedQuery(query), 250);
-    return () => window.clearTimeout(timer);
-  }, [query]);
-
-  return useQuery({
-    queryKey: ["console", "user-search", purpose, debouncedQuery],
-    queryFn: () =>
-      apiRequest<ListPayload<UserOption>>(
-        `/console/api/v1/user-options?q=${encodeURIComponent(debouncedQuery)}&purpose=${purpose}`,
-      ),
-    enabled: enabled && debouncedQuery !== "",
-    select: (payload) => itemsFromPayload<UserOption>(payload),
-    placeholderData: (previous) => previous,
-  });
-}
-
-function useCloseOnOutsidePointerDown(onClose: () => void) {
-  const containerRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    function closeOnOutsidePointerDown(event: PointerEvent) {
-      if (!containerRef.current?.contains(event.target as Node)) {
-        onClose();
-      }
-    }
-    document.addEventListener("pointerdown", closeOnOutsidePointerDown);
-    return () => document.removeEventListener("pointerdown", closeOnOutsidePointerDown);
-  }, [onClose]);
-
-  return containerRef;
-}
-
-function OptionList({
-  listId,
-  options,
-  isLoading,
-  error,
-  highlightIndex,
-  getOptionId,
-  onPick,
-  onRetry,
-}: {
-  listId: string;
-  options: UserOption[];
-  isLoading: boolean;
-  error: Error | null;
-  highlightIndex: number;
-  getOptionId: (option: UserOption) => string;
-  onPick: (option: UserOption) => void;
-  onRetry: () => void;
-}) {
-  const { t } = useI18n();
-
-  return (
-    <div
-      id={listId}
-      role="listbox"
-      className="absolute left-0 right-0 top-full z-30 mt-1 max-h-64 overflow-y-auto rounded-[3px] border border-ink/12 bg-paper p-1 shadow-lg"
-    >
-      {error ? (
-        <div className="space-y-1 px-2.5 py-1.5 text-body text-signal">
-          <p>{t("userSelect.loadFailed")}</p>
-          <button
-            type="button"
-            className="text-xs font-semibold underline"
-            onPointerDown={(event) => event.preventDefault()}
-            onClick={onRetry}
-          >
-            {t("common.retry")}
-          </button>
-        </div>
-      ) : null}
-      {!error && isLoading && options.length === 0 ? (
-        <p className="px-2.5 py-1.5 text-body text-ink-faint">{t("userSelect.loading")}</p>
-      ) : null}
-      {!error && !isLoading && options.length === 0 ? (
-        <p className="px-2.5 py-1.5 text-body text-ink-faint">{t("userSelect.empty")}</p>
-      ) : null}
-      {!error ? options.map((option, index) => (
-        <div
-          key={option.user_id}
-          id={getOptionId(option)}
-          role="option"
-          aria-selected={index === highlightIndex}
-          className={cn(
-            OPTION_BASE_CLASS,
-            index === highlightIndex ? "bg-paper-deep text-ink" : "text-ink-soft hover:bg-paper-deep hover:text-ink",
-          )}
-          onPointerDown={(event) => {
-            event.preventDefault();
-            onPick(option);
-          }}
-        >
-          <span className="text-body font-medium">{option.name || option.user_id}</span>
-          <span className="flex flex-wrap items-center gap-x-2 text-xs text-ink-faint">
-            <code>{option.user_id}</code>
-          </span>
-        </div>
-      )) : null}
-    </div>
-  );
-}
+export type { UserOption } from "./UserCombobox";
 
 interface UserSearchInputProps {
   id?: string;
@@ -141,42 +24,15 @@ export function UserSearchInput({ id, value, onChange, placeholder, required, ..
   const { t } = useI18n();
   const generatedId = useId();
   const listId = `${id ?? generatedId}-listbox`;
-  const [open, setOpen] = useState(false);
-  const [highlightIndex, setHighlightIndex] = useState(0);
-  const containerRef = useCloseOnOutsidePointerDown(() => setOpen(false));
-  const optionsQuery = useUserOptions(value.trim(), open, "employee");
-  const options = useMemo(() => optionsQuery.data ?? [], [optionsQuery.data]);
-
-  useEffect(() => {
-    setHighlightIndex(0);
-  }, [options]);
-
-  const pick = (option: UserOption) => {
-    onChange(option.user_id);
-    setOpen(false);
-  };
-  const activeOption = open ? options[highlightIndex] : undefined;
+  const { open, setOpen, options, optionsQuery, highlightIndex, activeOption, containerRef, onKeyDown, pick } = useUserCombobox({
+    query: value.trim(),
+    purpose: "employee",
+    navigateWhenClosed: false,
+    openOnArrowDown: false,
+    closeOnPick: true,
+    onPick: (option) => onChange(option.user_id),
+  });
   const getOptionId = (option: UserOption) => `${listId}-option-${encodeURIComponent(option.user_id)}`;
-
-  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Escape") {
-      setOpen(false);
-      return;
-    }
-    if (!open) {
-      return;
-    }
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      setHighlightIndex((index) => Math.min(index + 1, options.length - 1));
-    } else if (event.key === "ArrowUp") {
-      event.preventDefault();
-      setHighlightIndex((index) => Math.max(index - 1, 0));
-    } else if (event.key === "Enter" && options[highlightIndex]) {
-      event.preventDefault();
-      pick(options[highlightIndex]);
-    }
-  };
 
   return (
     <div className="relative" ref={containerRef}>
@@ -200,7 +56,7 @@ export function UserSearchInput({ id, value, onChange, placeholder, required, ..
         {...aria}
       />
       {open ? (
-        <OptionList
+        <UserOptionList
           listId={listId}
           options={options}
           isLoading={optionsQuery.isLoading || optionsQuery.isFetching}
@@ -232,19 +88,6 @@ export function UserMultiSelect({ id, value, onChange, placeholder, searchPurpos
   const generatedId = useId();
   const listId = `${id ?? generatedId}-listbox`;
   const [inputValue, setInputValue] = useState("");
-  const [open, setOpen] = useState(false);
-  const [highlightIndex, setHighlightIndex] = useState(0);
-  const containerRef = useCloseOnOutsidePointerDown(() => setOpen(false));
-  const optionsQuery = useUserOptions(inputValue.trim(), open, searchPurpose);
-  const options = useMemo(
-    () => (optionsQuery.data ?? []).filter((option) => !value.includes(option.user_id)),
-    [optionsQuery.data, value],
-  );
-
-  useEffect(() => {
-    setHighlightIndex(0);
-  }, [options]);
-
   const add = (raw: string) => {
     // 手输内容沿用逗号/换行分隔语义, 与字段提示保持一致。
     const ids = raw
@@ -265,35 +108,18 @@ export function UserMultiSelect({ id, value, onChange, placeholder, searchPurpos
   const remove = (userId: string) => {
     onChange(value.filter((item) => item !== userId));
   };
-  const activeOption = open ? options[highlightIndex] : undefined;
+  const { open, setOpen, options, optionsQuery, highlightIndex, activeOption, containerRef, onKeyDown, pick } = useUserCombobox({
+    query: inputValue.trim(),
+    purpose: searchPurpose,
+    excludedUserIds: value,
+    navigateWhenClosed: true,
+    openOnArrowDown: true,
+    closeOnPick: false,
+    onPick: (option) => add(option.user_id),
+    onEnterWithoutOption: () => add(inputValue),
+    onEmptyBackspace: inputValue === "" && value.length > 0 ? () => remove(value[value.length - 1]) : undefined,
+  });
   const getOptionId = (option: UserOption) => `${listId}-option-${encodeURIComponent(option.user_id)}`;
-
-  const onKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "Escape") {
-      setOpen(false);
-      return;
-    }
-    if (event.key === "Backspace" && inputValue === "" && value.length > 0) {
-      remove(value[value.length - 1]);
-      return;
-    }
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      setOpen(true);
-      setHighlightIndex((index) => Math.min(index + 1, options.length - 1));
-    } else if (event.key === "ArrowUp") {
-      event.preventDefault();
-      setHighlightIndex((index) => Math.max(index - 1, 0));
-    } else if (event.key === "Enter") {
-      event.preventDefault();
-      const highlighted = open ? options[highlightIndex] : undefined;
-      if (highlighted) {
-        add(highlighted.user_id);
-      } else {
-        add(inputValue);
-      }
-    }
-  };
 
   return (
     <div className="relative" ref={containerRef}>
@@ -328,14 +154,14 @@ export function UserMultiSelect({ id, value, onChange, placeholder, searchPurpos
         {...aria}
       />
       {open ? (
-        <OptionList
+        <UserOptionList
           listId={listId}
           options={options}
           isLoading={optionsQuery.isLoading || optionsQuery.isFetching}
           error={optionsQuery.error as Error | null}
           highlightIndex={highlightIndex}
           getOptionId={getOptionId}
-          onPick={(option) => add(option.user_id)}
+          onPick={pick}
           onRetry={() => void optionsQuery.refetch()}
         />
       ) : null}
