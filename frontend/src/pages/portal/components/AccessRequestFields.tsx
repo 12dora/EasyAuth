@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 
 import { Field, SelectInput, TextArea, TextInput } from "../../../components/Field";
 import { useI18n } from "../../../i18n/I18nProvider";
-import type { AccessGrantType, AccessRequestType, ApproverOption } from "../hooks/useAccessRequestForm";
+import type { AccessGrantType, AccessRequestType, ApproverOption } from "../hooks/accessRequestTypes";
 import type { PortalGrantRow } from "../portalListPayload";
 
 interface AccessRequestFieldsProps {

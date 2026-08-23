@@ -26,8 +26,8 @@ import { isPermissionGroupItem } from "../permissionTree";
 import {
   directGrantSelectionKey,
   directGrantSelectionPermissionKey,
-} from "../hooks/useAccessRequestForm";
-import type { ScopedPermissionGroupItem, ScopedPermissionItem } from "../hooks/useAccessRequestForm";
+} from "../hooks/accessRequestSelection";
+import type { ScopedPermissionGroupItem, ScopedPermissionItem } from "../hooks/accessRequestTypes";
 
 interface PermissionSelectorProps {
   appKey: string;

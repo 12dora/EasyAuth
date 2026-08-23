@@ -1,7 +1,7 @@
 import { Field, SelectInput } from "../../../components/Field";
 import { useI18n, localizedField } from "../../../i18n/I18nProvider";
 import type { PortalCatalogApp } from "../../../lib/domain";
-import type { AuthorizationGroupItem, ScopedPermissionGroupItem, ScopedPermissionItem } from "../hooks/useAccessRequestForm";
+import type { AuthorizationGroupItem, ScopedPermissionGroupItem, ScopedPermissionItem } from "../hooks/accessRequestTypes";
 import { PermissionSelector } from "./PermissionSelector";
 
 interface RequestTargetPickerProps {

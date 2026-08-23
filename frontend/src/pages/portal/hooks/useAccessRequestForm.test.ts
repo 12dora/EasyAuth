@@ -3,12 +3,9 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import {
-  ACCESS_REQUEST_MAX_APPROVERS,
-  ACCESS_REQUEST_MAX_REASON_LENGTH,
-  directGrantSelectionKey,
-  useAccessRequestForm,
-} from "./useAccessRequestForm";
+import { directGrantSelectionKey } from "./accessRequestSelection";
+import { ACCESS_REQUEST_MAX_APPROVERS, ACCESS_REQUEST_MAX_REASON_LENGTH } from "./accessRequestTypes";
+import { useAccessRequestForm } from "./useAccessRequestForm";
 
 function catalogResponse() {
   return jsonResponse(

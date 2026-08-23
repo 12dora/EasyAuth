@@ -4,7 +4,7 @@ import type {
   PortalRequestCatalogView,
   ScopedPermissionGroupItem,
   ScopedPermissionItem,
-} from "./hooks/useAccessRequestForm";
+} from "./hooks/accessRequestTypes";
 
 export function parsePortalRequestCatalog(value: unknown): PortalRequestCatalogView {
   const catalog = contractRecord(value, "申请目录");
