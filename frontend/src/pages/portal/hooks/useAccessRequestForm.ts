@@ -8,7 +8,11 @@ import { buildAccessRequestActions } from "./accessRequestActions";
 import { buildCatalogView } from "./accessRequestCatalog";
 import { buildAccessRequestFormResult } from "./accessRequestFormResult";
 import type { AccessRequestFormResult } from "./accessRequestTypes";
-import { accessRequestCanSubmit, accessRequestExpiresAtError } from "./accessRequestValidation";
+import {
+  accessRequestCanSubmit,
+  accessRequestExpiresAtError,
+  accessRequestExpiresAtIsFuture,
+} from "./accessRequestValidation";
 import { useAccessRequestFields } from "./useAccessRequestFields";
 import {
   useDefaultApprovers,
@@ -45,6 +49,9 @@ export function useAccessRequestForm(currentUserId = ""): AccessRequestFormResul
   const lifecycleSelectorActive = fields.requestType !== "grant";
   const currentGrantsTruncated = Boolean(currentGrantsQuery.data && currentGrantsQuery.data.pagination.total_pages > 1);
   const catalogIsLoading = catalogQuery.isLoading || (lifecycleSelectorActive && currentGrantsQuery.isLoading);
+  // 只读一次时钟: canSubmit 与 expiresAtError 必须基于同一瞬间判断限时授权是否已过期,
+  // 否则同一次 render 可能同时给出"可提交"和"已过期"。
+  const grantTermIsFuture = accessRequestExpiresAtIsFuture(fields);
 
   return buildAccessRequestFormResult({
     fields,
@@ -54,6 +61,7 @@ export function useAccessRequestForm(currentUserId = ""): AccessRequestFormResul
     catalogError: catalogQuery.error ?? (lifecycleSelectorActive ? currentGrantsQuery.error : null),
     submitMutation,
     canSubmit: accessRequestCanSubmit({
+      grantTermIsFuture,
       values: fields,
       catalogView,
       selectedBaseGrant,
@@ -61,7 +69,7 @@ export function useAccessRequestForm(currentUserId = ""): AccessRequestFormResul
       isSubmitting: submitMutation.isPending,
       currentUserId,
     }),
-    expiresAtError: accessRequestExpiresAtError(fields),
+    expiresAtError: accessRequestExpiresAtError(fields, grantTermIsFuture),
     actions,
     currentGrantsTruncated,
   });

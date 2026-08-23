@@ -16,6 +16,8 @@ export interface AccessRequestSubmitGate {
   currentGrantsTruncated: boolean;
   isSubmitting: boolean;
   currentUserId: string;
+  /** 与 accessRequestExpiresAtError 共享的同一次时钟读数, 避免两者对"是否已过期"给出互相矛盾的结论。 */
+  grantTermIsFuture: boolean;
 }
 
 export function accessRequestCanSubmit(gate: AccessRequestSubmitGate): boolean {
@@ -32,13 +34,16 @@ export function accessRequestCanSubmit(gate: AccessRequestSubmitGate): boolean {
     && !managedUsersTargetHasMissingDirectManager
     && approverSelectionIsValid(gate.values, gate.currentUserId)
     && reasonIsValid(gate.values)
-    && grantTermIsValid(gate.values)
+    && grantTermIsValid(gate.values, gate.grantTermIsFuture)
     && !gate.isSubmitting
   );
 }
 
-export function accessRequestExpiresAtError(values: AccessRequestPayloadValues): boolean {
-  return values.grantType === "timed" && Boolean(values.expiresAt) && !expiresAtIsFuture(values);
+export function accessRequestExpiresAtError(
+  values: AccessRequestPayloadValues,
+  grantTermIsFuture: boolean,
+): boolean {
+  return values.grantType === "timed" && Boolean(values.expiresAt) && !grantTermIsFuture;
 }
 
 export function accessRequestToastMessageKey(
@@ -93,11 +98,11 @@ function reasonIsValid(values: AccessRequestPayloadValues): boolean {
   return values.reason.trim().length > 0 && values.reason.length <= ACCESS_REQUEST_MAX_REASON_LENGTH;
 }
 
-function grantTermIsValid(values: AccessRequestPayloadValues): boolean {
-  return values.grantType === "permanent" || expiresAtIsFuture(values);
+function grantTermIsValid(values: AccessRequestPayloadValues, grantTermIsFuture: boolean): boolean {
+  return values.grantType === "permanent" || grantTermIsFuture;
 }
 
 // 限时授权必须选择"未来"的过期时间, 否则后端会视为已过期而白跑一次审批。
-function expiresAtIsFuture(values: AccessRequestPayloadValues): boolean {
+export function accessRequestExpiresAtIsFuture(values: AccessRequestPayloadValues): boolean {
   return Boolean(values.expiresAt) && new Date(values.expiresAt) > new Date();
 }
