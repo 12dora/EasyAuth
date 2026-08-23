@@ -477,7 +477,7 @@ APP 在 descriptor（`/.well-known/easyauth-app.json`）中声明。
   |---|---|---|
   | EasyTrade `easyauth_manifest_export.py:109,117-121` 的 `_lifecycle()` | `_require_fields` 只传了 `required`、没传 `optional`（`:409-420`），返回字典也只有三个键 | 多一个键**直接抛 `EasyAuthManifestExportError`**，manifest 导出整体失败（即使绕过它，返回字典也只保留三个键） |
   | **SDK `easyauth_app_sdk/manifest.py` 的 `_validate_lifecycle()`** | `allowed = {"handover_url","onboard_url","capabilities"}`，未知字段直接 `raise ManifestValidationError` | descriptor **连生成都生成不出来**，直接抛异常 |
-  | **EasyAuth 自己的 `applications/permission_template_parsing.py:116-123` 的 `_LifecyclePayload`** | `ConfigDict(extra="forbid")`，只有三个字段；承接它的 `permission_template_types.py:87-93` `AppManifestLifecycleInput` 同样 | 下游发出的合法 descriptor 一推到 manifest 导入/自动接入就被 Pydantic 拒掉，**整份 manifest 报错、应用接不进来**——不是「少了资产声明」那么轻 |
+  | **EasyAuth 自己的 `applications/permission_template_payloads.py:107-114` 的 `LifecyclePayload`** | `ConfigDict(extra="forbid")`，只有三个字段；承接它的 `permission_template_types.py:96-102` `AppManifestLifecycleInput` 同样 | 下游发出的合法 descriptor 一推到 manifest 导入/自动接入就被 Pydantic 拒掉，**整份 manifest 报错、应用接不进来**——不是「少了资产声明」那么轻 |
 
   SDK 那一处属于 **SDK vNext 的交付内容（A1 第 0 步）**，是 A3/A5 的前置依赖 ——
   它没发布，两个下游连 descriptor 都发不出来。这条必须写进 SDK 的 CHANGELOG。

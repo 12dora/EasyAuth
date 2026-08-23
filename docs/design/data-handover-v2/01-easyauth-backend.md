@@ -1259,7 +1259,7 @@ def sync_handover_capability(app: App) -> None: ...
 - 挂到既有 manifest 同步入口（`api/manifest_sync_views.py`）与控制台"重新同步"按钮。
 
 > **⚠ EasyAuth 自己的解析模型会先把这个新字段扔掉。**
-> `applications/permission_template_parsing.py` 的 `_LifecyclePayload` 是
+> `applications/permission_template_payloads.py` 的 `LifecyclePayload` 是
 > `ConfigDict(extra="forbid", frozen=True)`，字段只有
 > `handover_url` / `onboard_url` / `capabilities`（`:116-124`）——
 > 下游带着 `handover_asset_types` 推 manifest 上来，**这一层直接抛校验错误**。

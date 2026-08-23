@@ -167,7 +167,7 @@ COA 档案/批次创建人、需求进展与附件创建人、文档与产品上
 > |---|---|---|
 > | `backend/app/domain/authz/easyauth_manifest_export.py:109` | `_require_fields(lifecycle, ..., {"handover_url","onboard_url","capabilities"})` —— **没传 `optional`**（`:409-420`），多一个键直接抛 `EasyAuthManifestExportError`；即便绕过它，返回字典（`:117-121`）也只重建这三个键 | A3（本仓） |
 > | `backend/vendor/easyauth-app-sdk/.../manifest.py:101-107` | `_validate_lifecycle()` 的 `allowed = {"handover_url","onboard_url","capabilities"}`，未知字段直接 `raise ManifestValidationError` | A1a（SDK 0.4.0） |
-> | **EasyAuth `applications/permission_template_parsing.py:116-123` 的 `_LifecyclePayload`** | `ConfigDict(extra="forbid")`，只有三个字段；承接它的 `permission_template_types.py:87-93` `AppManifestLifecycleInput` 同样 | **A1（EasyAuth 仓，`01` §5.2）—— 本仓改不了，只能依赖** |
+> | **EasyAuth `applications/permission_template_payloads.py:107-114` 的 `LifecyclePayload`** | `ConfigDict(extra="forbid")`，只有三个字段；承接它的 `permission_template_types.py:96-102` `AppManifestLifecycleInput` 同样 | **A1（EasyAuth 仓，`01` §5.2）—— 本仓改不了，只能依赖** |
 >
 > **第三道最容易漏，而漏了它本仓这一步会假绿。** EasyTrade 把自己两处扩完之后，
 > 本地 `/.well-known/easyauth-app.json` 生成正常、单测全绿，§6 步骤 2 看上去就交付完成了；
