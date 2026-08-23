@@ -18,7 +18,12 @@ from easyauth.applications.models import (
     AppScope,
 )
 from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
-from easyauth.lifecycle.assignee import AssigneeResolution, apply_assignee, resolve_assignee
+from easyauth.lifecycle.assignee import (
+    AssigneeApplyOptions,
+    AssigneeResolution,
+    apply_assignee,
+    resolve_assignee,
+)
 from easyauth.lifecycle.core import (
     LIFECYCLE_ACTOR_ID,
     TASK_KIND_CONFLICT_MESSAGE,
@@ -253,7 +258,7 @@ def _assign_initial_assignee(
             task,
             resolution,
             actor_id=created_by,
-            reason="task_created",
+            options=AssigneeApplyOptions(reason="task_created"),
         )
         return
 
@@ -403,7 +408,7 @@ def upgrade_pre_offboard_to_offboard(
         task,
         resolution,
         actor_id=created_by,
-        reason="pre_offboard_upgraded",
+        options=AssigneeApplyOptions(reason="pre_offboard_upgraded"),
     )
 
     for action in actions:

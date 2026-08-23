@@ -32,7 +32,7 @@ from easyauth.lifecycle.api_payloads import (
     asset_type_item,
     task_detail,
 )
-from easyauth.lifecycle.assignee import AssigneeResolution, apply_assignee
+from easyauth.lifecycle.assignee import AssigneeApplyOptions, AssigneeResolution, apply_assignee
 from easyauth.lifecycle.assignments import (
     OverrideEntry,
     list_overrides,
@@ -202,10 +202,12 @@ def _claim_handover_task(task_id: int, *, actor_id: str) -> JsonResponse:
                 degraded=False,
             ),
             actor_id=actor_id,
-            actor_type="admin",
-            reason="superuser_claim",
-            set_deadline=True,
-            escalation_days=HANDOVER_ESCALATION_DAYS,
+            options=AssigneeApplyOptions(
+                actor_type="admin",
+                reason="superuser_claim",
+                set_deadline=True,
+                escalation_days=HANDOVER_ESCALATION_DAYS,
+            ),
         )
         locked.authority_source = AUTHORITY_SOURCE_SUPERUSER
         locked.save(update_fields=["authority_source", "updated_at"])

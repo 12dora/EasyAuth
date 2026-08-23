@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import TYPE_CHECKING, NotRequired, TypedDict, Unpack
+from typing import TYPE_CHECKING
 
 from django.utils import timezone
 
@@ -35,14 +35,19 @@ class AssigneeResolution:
     degraded: bool
 
 
-class _ApplyAssigneeOptions(TypedDict):
-    actor_type: NotRequired[str]
-    reason: NotRequired[str]
-    set_deadline: NotRequired[bool]
-    escalation_days: NotRequired[int]
+@dataclass(frozen=True, slots=True)
+class AssigneeApplyOptions:
+    """apply_assignee 的可选写入项。冻结 dataclass 而非 TypedDict+Unpack:
+    后者是纯静态构造, 运行时拼错的关键字会被静默忽略。
+    """
+
+    actor_type: str = "system"
+    reason: str = ""
+    set_deadline: bool = True
+    escalation_days: int = HANDOVER_ESCALATION_DAYS
 
 
-_APPLY_ASSIGNEE_OPTION_NAMES = frozenset(_ApplyAssigneeOptions.__annotations__)
+_DEFAULT_ASSIGNEE_APPLY_OPTIONS = AssigneeApplyOptions()
 
 
 def resolve_assignee(subject: UserMirror, *, start_level: int = 0) -> AssigneeResolution:
@@ -147,17 +152,13 @@ def apply_assignee(
     resolution: AssigneeResolution,
     *,
     actor_id: str,
-    **options: Unpack[_ApplyAssigneeOptions],
+    options: AssigneeApplyOptions = _DEFAULT_ASSIGNEE_APPLY_OPTIONS,
 ) -> HandoverTask:
     """写 assignee 字段 + 审计。调用方须已在同一事务内锁住 task。"""
-    unknown_options = (key for key in options if key not in _APPLY_ASSIGNEE_OPTION_NAMES)
-    if (option := next(unknown_options, None)) is not None:
-        message = f"apply_assignee() got an unexpected keyword argument '{option}'"
-        raise TypeError(message)
-    actor_type = options.get("actor_type", "system")
-    reason = options.get("reason", "")
-    set_deadline = options.get("set_deadline", True)
-    escalation_days = options.get("escalation_days", HANDOVER_ESCALATION_DAYS)
+    actor_type = options.actor_type
+    reason = options.reason
+    set_deadline = options.set_deadline
+    escalation_days = options.escalation_days
     task.assignee = resolution.user
     task.assignee_state = resolution.state
     task.escalation_level = resolution.level

@@ -5,7 +5,7 @@ from __future__ import annotations
 from django.db import transaction
 from django.utils import timezone
 
-from easyauth.lifecycle.assignee import apply_assignee, resolve_assignee
+from easyauth.lifecycle.assignee import AssigneeApplyOptions, apply_assignee, resolve_assignee
 from easyauth.lifecycle.core import LIFECYCLE_ACTOR_ID, ensure_task_open, record_task_event
 from easyauth.lifecycle.models import (
     ASSIGNEE_STATE_SUBJECT,
@@ -36,10 +36,12 @@ def escalate_overdue_task(task: HandoverTask) -> HandoverTask:
                 locked,
                 res,
                 actor_id=LIFECYCLE_ACTOR_ID,
-                actor_type="system",
-                reason="escalation",
-                set_deadline=True,
-                escalation_days=HANDOVER_ESCALATION_DAYS,
+                options=AssigneeApplyOptions(
+                    actor_type="system",
+                    reason="escalation",
+                    set_deadline=True,
+                    escalation_days=HANDOVER_ESCALATION_DAYS,
+                ),
             )
         else:
             locked.assignee = None

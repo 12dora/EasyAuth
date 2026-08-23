@@ -939,7 +939,11 @@ def _recheck_reassign_scope(
     if result.allowed:
         return None
     # 失权: 移交 superuser_pool
-    from easyauth.lifecycle.assignee import AssigneeResolution, apply_assignee
+    from easyauth.lifecycle.assignee import (
+        AssigneeApplyOptions,
+        AssigneeResolution,
+        apply_assignee,
+    )
     from easyauth.lifecycle.core import record_task_event
 
     if task.status in TASK_OPEN_STATUSES:
@@ -952,8 +956,7 @@ def _recheck_reassign_scope(
                 degraded=True,
             ),
             actor_id=actor.authentik_user_id,
-            actor_type="user",
-            reason="reassign_scope_revoked",
+            options=AssigneeApplyOptions(actor_type="user", reason="reassign_scope_revoked"),
         )
         record_task_event(
             task,
