@@ -17,7 +17,7 @@ from tests.integration.admin_console.auth_helpers import authenticate_console_ad
 
 pytestmark = pytest.mark.django_db
 
-LOGIN_PASSWORD = "console-login"  # noqa: S105 - 测试登录口令。
+LOGIN_PASSWORD = "console-login"
 
 
 @pytest.mark.parametrize(

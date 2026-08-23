@@ -92,7 +92,7 @@ def take_lease(
     batch_seq: int,
     generation: int | None = None,
 ) -> LeaseHandle:
-    """execute 入口事务内取租约。条件唯一冲突 → 409 handover_execution_in_flight。"""
+    """Execute 入口事务内取租约。条件唯一冲突 → 409 handover_execution_in_flight。"""
     subject = action.task.subject_user
     app = action.app
     gen = generation if generation is not None else action.generation

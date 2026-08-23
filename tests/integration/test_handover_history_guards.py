@@ -49,7 +49,7 @@ def test_delivery_attempt_allows_one_transition_then_rejects_terminal_update() -
         action_snapshot_id=action.id,
         generation=1,
         batch_seq=1,
-        snapshot_token="snapshot",  # noqa: S106 -- 这是预演快照标识。
+        snapshot_token="snapshot",
         request_payload={"assignments": []},
         request_hash="0" * 64,
         status=BATCH_STATUS_EXECUTING,

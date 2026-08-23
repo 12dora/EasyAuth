@@ -81,7 +81,7 @@ def _setup() -> tuple[HandoverAppAction, HandoverAppAction]:
 
 
 def test_lease_ttl_constants() -> None:
-    assert LEASE_TTL == timedelta(minutes=5)
+    assert timedelta(minutes=5) == LEASE_TTL
     assert LEASE_RENEW_INTERVAL == LEASE_TTL / 3
 
 
@@ -89,9 +89,8 @@ def test_concurrent_take_lease_only_one_wins() -> None:
     action1, action2 = _setup()
     with transaction.atomic():
         h1 = take_lease(action=action1, owner="w1", batch_seq=1)
-    with pytest.raises(HandoverConflictError) as exc:
-        with transaction.atomic():
-            _ = take_lease(action=action2, owner="w2", batch_seq=1)
+    with pytest.raises(HandoverConflictError) as exc, transaction.atomic():
+        _ = take_lease(action=action2, owner="w2", batch_seq=1)
     assert str(exc.value) == HANDOVER_EXECUTION_IN_FLIGHT
     assert HandoverExecutionLease.objects.filter(released_at__isnull=True).count() == 1
     assert cas_release(h1)

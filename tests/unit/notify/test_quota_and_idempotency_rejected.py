@@ -90,7 +90,7 @@ def test_idempotent_replay_recipient_rejected_only_accept_time_failures() -> Non
     )
     assert first.accepted is True
     assert first.recipient_rejected == 1
-    assert first.recipient_total == 2  # noqa: PLR2004
+    assert first.recipient_total == 2
 
     # 模拟投递成功后再把另一收件人标为投递期失败。
     pending = NotifyRecipient.objects.get(
@@ -121,7 +121,7 @@ def test_idempotent_replay_recipient_rejected_only_accept_time_failures() -> Non
         message=first.message,
         status=NOTIFY_RECIPIENT_STATUS_FAILED,
     ).count()
-    assert failed_all == 2  # noqa: PLR2004 - 受理失败 1 + 投递失败 1
+    assert failed_all == 2
 
     second = accept_notify_message(
         app=app,

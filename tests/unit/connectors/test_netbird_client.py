@@ -57,7 +57,7 @@ class _Response:
 def _client(**kwargs: float) -> NetBirdClient:
     return NetBirdClient(
         api_url="https://netbird.example.com",
-        api_token="token",  # noqa: S106 - 测试专用固定值。
+        api_token="token",
         **kwargs,
     )
 

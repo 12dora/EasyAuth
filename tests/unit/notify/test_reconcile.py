@@ -163,7 +163,7 @@ def test_reconcile_maps_four_list_types(monkeypatch: pytest.MonkeyPatch) -> None
 
     message.refresh_from_db()
     assert message.status == NOTIFY_MESSAGE_STATUS_PARTIALLY_FAILED
-    assert message.recipient_failed == 3  # noqa: PLR2004
+    assert message.recipient_failed == 3
     assert message.recipient_sent == 1
 
 
@@ -274,7 +274,7 @@ def test_reconcile_fairly_rotates_beyond_first_fifty_tasks(
     with CaptureQueriesContext(connection) as queries:
         selected = select_reconcile_tasks(window_start)
     assert len(queries) == 1
-    assert len(selected) == 50  # noqa: PLR2004
+    assert len(selected) == 50
     assert (channel.id, "task-050") not in selected
 
     client = _FairnessDingTalkClient()
@@ -290,7 +290,7 @@ def test_reconcile_fairly_rotates_beyond_first_fifty_tasks(
     )
     assert reconcile_send_results() == 0
     assert "task-050" not in client.task_ids
-    assert NotifyRecipient.objects.filter(last_reconciled_at__isnull=False).count() == 50  # noqa: PLR2004
+    assert NotifyRecipient.objects.filter(last_reconciled_at__isnull=False).count() == 50
 
     client.task_ids.clear()
     assert reconcile_send_results() == 1

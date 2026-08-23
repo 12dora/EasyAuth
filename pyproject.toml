@@ -73,7 +73,9 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**/*.py" = ["S101", "S603"]
+# 测试代码的断言、子进程调用、夹具口令串和期望值字面量不是生产风险,
+# 与下方 sdk 测试的豁免口径保持一致。
+"tests/**/*.py" = ["S101", "S105", "S106", "S603", "PLR2004"]
 "src/easyauth/config/settings/test.py" = ["F403"]
 # SDK 是独立发布的零依赖包: 面向集成方的异常信息内联可读,
 # 校验入口接受 Any, 可选框架依赖在函数内导入。

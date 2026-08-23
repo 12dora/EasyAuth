@@ -20,14 +20,14 @@ from easyauth.lifecycle.models import (
     ACTION_STATUS_PREVIEWED,
     ASSIGNEE_STATE_SUPERUSER_POOL,
     BATCH_PLAN_STATUS_ACTIVE,
+    TASK_STATUS_CANCELLED,
+    TASK_STATUS_COMPLETED,
     HandoverActionSkipRecord,
     HandoverAppAction,
     HandoverAssetType,
     HandoverBatchPlan,
     HandoverTask,
     HandoverTeamItem,
-    TASK_STATUS_CANCELLED,
-    TASK_STATUS_COMPLETED,
 )
 
 if TYPE_CHECKING:

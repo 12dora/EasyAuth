@@ -69,12 +69,12 @@ def _client(*, monotonic: Callable[[], float] | None = None) -> AuthentikAdminCl
     if monotonic is None:
         return AuthentikAdminClient(
             base_url="https://authentik.test",
-            api_token="test-token",  # noqa: S106 - 测试假 token.
+            api_token="test-token",
             timeout_seconds=5,
         )
     return AuthentikAdminClient(
         base_url="https://authentik.test",
-        api_token="test-token",  # noqa: S106 - 测试假 token.
+        api_token="test-token",
         timeout_seconds=5,
         monotonic=monotonic,
     )

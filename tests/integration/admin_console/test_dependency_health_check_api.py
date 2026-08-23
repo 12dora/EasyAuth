@@ -106,7 +106,7 @@ def test_dependency_health_check_writes_snapshots(monkeypatch: pytest.MonkeyPatc
         ),
     )
     settings_row = IntegrationSettings.load()
-    settings_row.authentik_api_token = "test-token"  # noqa: S105 - 测试用假 token.
+    settings_row.authentik_api_token = "test-token"
     settings_row.save()
 
     # When: POST 触发探测。
@@ -170,7 +170,7 @@ def test_dependency_health_check_marks_empty_directory_status_unhealthy(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings_row = IntegrationSettings.load()
-    settings_row.authentik_api_token = "test-token"  # noqa: S105 - 测试用假 token.
+    settings_row.authentik_api_token = "test-token"
     settings_row.save()
     monkeypatch.setattr(
         AuthentikDirectoryClient,

@@ -88,8 +88,8 @@ def test_reassign_access_request_approver_to_new_manager() -> None:
 
 def test_zero_matching_rules_skips_assignee_resolution_and_degraded_audit() -> None:
     """V-07: 离职者未出现在任何规则时, 不得 resolve_assignee / 写 degraded 审计。"""
-    from easyauth.audit.models import AuditLog
     from easyauth.applications.models import AuthorizationGroup
+    from easyauth.audit.models import AuditLog
 
     departed = _u("dep-zero", dtuid="dz", status=USER_STATUS_DEPARTED)
     # 无钉钉完整绑定 → 若误 resolve 会写 handover_assignee_resolution_degraded

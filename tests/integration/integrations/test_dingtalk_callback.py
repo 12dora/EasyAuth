@@ -62,7 +62,7 @@ def test_callback_approves_instance_and_enqueues_webhook() -> None:
     instance = _submitted_instance("cb-approve-app", "proc-approve")
     _ = AppWebhookConfig.objects.create(
         app=instance.app,
-        secret="whsec-test",  # noqa: S106 - 测试用密钥。
+        secret="whsec-test",
         approval_callback_url="https://app.example.com/easyauth/approvals",
     )
     body = _callback_body("proc-approve", "approved")

@@ -45,7 +45,7 @@ from easyauth.lifecycle.handover_shared import (
 
 
 def validate_assignments(action: HandoverAppAction) -> None:
-    """execute 前置校验(01 §5.4)。不通过即 422, 不发 webhook。"""
+    """Execute 前置校验(01 §5.4)。不通过即 422, 不发 webhook。"""
     types = list(
         HandoverAssetType.objects.filter(
             action=action,
@@ -194,9 +194,7 @@ def fetch_action_items(
     total = int(body.get("total", 0) or 0)
     unfiltered = body.get("unfiltered_total")
     stale = False
-    if q_stripped == "" and total != asset.count:
-        stale = True
-    elif q_stripped and unfiltered is not None and int(unfiltered) != asset.count:
+    if (q_stripped == "" and total != asset.count) or (q_stripped and unfiltered is not None and int(unfiltered) != asset.count):
         stale = True
     return {
         "items": body.get("items", []),

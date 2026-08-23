@@ -7,4 +7,4 @@ import os
 if os.environ.get("DJANGO_DEBUG") != "1":
     raise RuntimeError("E2E 设置必须显式启用 DJANGO_DEBUG=1。")
 
-from .base import *  # noqa: E402,F403
+from .base import *  # noqa: F403

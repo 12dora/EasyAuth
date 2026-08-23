@@ -33,7 +33,7 @@ def assert_manager_of(
     *,
     lock_context: bool = False,
 ) -> JurisdictionResult:
-    """actor 是否在 subject 当前 manager_chain 上(契约 §4)。
+    """Actor 是否在 subject 当前 manager_chain 上(契约 §4)。
 
     - 目录缺失 / stale / 链畸形 → directory_unavailable (503)
     - 目录健康但 actor 不在链上 → out_of_managed_scope (403)

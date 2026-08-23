@@ -63,7 +63,7 @@ def _channel(app: App) -> AppNotificationChannel:
         app=app,
         name="API 测试通知通道",
         dingtalk_app_key="api-test-key",
-        dingtalk_app_secret="api-test-secret",  # noqa: S106 - 测试专用固定值。
+        dingtalk_app_secret="api-test-secret",
         agent_id="1001",
         directory_source_slug=_SOURCE,
         corp_id=_CORP,
@@ -135,7 +135,7 @@ def test_post_202_new_accept(monkeypatch: pytest.MonkeyPatch) -> None:
     assert set(payload.keys()) == set(sample.keys())
     assert payload["accepted"] is True
     assert payload["status"] == "pending"
-    assert payload["recipient_total"] == 2  # noqa: PLR2004
+    assert payload["recipient_total"] == 2
     assert payload["recipient_rejected"] == 0
     assert payload["message_id"]
 
@@ -249,7 +249,7 @@ def test_get_status_contract_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     assert payload["recipient_total"] == sample["recipient_total"]
     assert payload["recipient_sent"] == sample["recipient_sent"]
     assert payload["recipient_failed"] == sample["recipient_failed"]
-    assert len(payload["recipients"]) == 2  # noqa: PLR2004
+    assert len(payload["recipients"]) == 2
     keys = set(sample["recipients"][0].keys())
     assert set(payload["recipients"][0].keys()) == keys
     assert payload["recipients"][1]["error_code"] == "USER_INACTIVE"

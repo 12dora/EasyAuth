@@ -75,7 +75,7 @@ def test_console_resync_reuses_credential_and_reconciles_unchanged_manifest(
         app_key="console-resync",
         name="控制台重同步",
         descriptor_base_url="https://downstream.example",
-        descriptor_token="descriptor-secret-token",  # noqa: S106 - 测试 bearer。
+        descriptor_token="descriptor-secret-token",
     )
     manifest = _manifest(app.app_key)
     _ = sync_app_manifest(

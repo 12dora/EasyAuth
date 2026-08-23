@@ -28,7 +28,7 @@ def notification_channel_for_apps(db: None) -> Iterator[None]:
             app=instance,
             name="测试通知通道",
             dingtalk_app_key=f"key-{instance.app_key}",
-            dingtalk_app_secret="test-secret",  # noqa: S106 - 测试专用固定值。
+            dingtalk_app_secret="test-secret",
             agent_id="1001",
             directory_source_slug=source_slug,
             corp_id=corp_id,

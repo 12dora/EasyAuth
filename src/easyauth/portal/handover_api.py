@@ -533,10 +533,7 @@ def _portal_action_error_response(
     if (
         isinstance(error, HookCallError)
         and error.status_code == HTTPStatus.REQUEST_ENTITY_TOO_LARGE
-    ):
-        action.refresh_from_db()
-        extra_details = {"batch_progress": batch_progress(action)}
-    elif "413" in str(error):
+    ) or "413" in str(error):
         action.refresh_from_db()
         extra_details = {"batch_progress": batch_progress(action)}
     mapped = map_handover_exception(error, details=extra_details)
@@ -917,7 +914,7 @@ def _recheck_reassign_scope(
     *,
     lock_context: bool = False,
 ) -> JsonResponse | None:
-    """reassign 单持续复核管辖权; 失权 → 403 + 移交超管池。"""
+    """Reassign 单持续复核管辖权; 失权 → 403 + 移交超管池。"""
     if task.kind != HANDOVER_KIND_REASSIGN:
         return None
     if task.authority_source == AUTHORITY_SOURCE_SUPERUSER:

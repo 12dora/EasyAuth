@@ -110,7 +110,7 @@ def retry_departed_offboarding_task(
 
 @shared_task(name=LIFECYCLE_ESCALATION_TASK)
 def lifecycle_escalation_task() -> dict[str, int]:
-    """beat 每 10 分钟: 扫到期交接单逐个 escalate。"""
+    """Beat 每 10 分钟: 扫到期交接单逐个 escalate。"""
     from django.db import connection
 
     now = timezone.now()
@@ -181,7 +181,7 @@ def lifecycle_send_reminder_task(
     kind: str,
     assignee_user_id: str = "",
 ) -> str:
-    """outbox 消费者: 发送交接提醒。
+    """Outbox 消费者: 发送交接提醒。
 
     notify 身份(easyauth-lifecycle) 尚未落地时: 记审计后抛错, 使 outbox 保持未发布
     并在身份就绪后重试(测试 eager 模式下 send_task 会传播异常)。
@@ -253,7 +253,7 @@ def lifecycle_send_reminder_task(
 
 @shared_task(name=LIFECYCLE_DAILY_REMINDER_TASK)
 def lifecycle_daily_reminder_task() -> dict[str, int]:
-    """beat 每天 09:00: 未完成且有 assignee 的单发提醒(网络副作用走 outbox)。"""
+    """Beat 每天 09:00: 未完成且有 assignee 的单发提醒(网络副作用走 outbox)。"""
     from datetime import timedelta
 
     from easyauth.outbox.services import enqueue_task
@@ -307,7 +307,7 @@ def lifecycle_daily_reminder_task() -> dict[str, int]:
 
 @shared_task(name=LIFECYCLE_RECOVER_LEASES_TASK)
 def lifecycle_recover_expired_execution_leases_task() -> dict[str, int]:
-    """beat 每 1 分钟: 过期租约先抢占后查证。"""
+    """Beat 每 1 分钟: 过期租约先抢占后查证。"""
     now = timezone.now()
     expired = list(
         HandoverExecutionLease.objects.filter(
@@ -333,7 +333,7 @@ def lifecycle_recover_expired_execution_leases_task() -> dict[str, int]:
 
 @shared_task(name=LIFECYCLE_POLL_ASYNC_TASK)
 def lifecycle_poll_async_actions_task() -> dict[str, int]:
-    """beat 每 1 分钟: 扫 async_pending / async_attention_required 并 poll。
+    """Beat 每 1 分钟: 扫 async_pending / async_attention_required 并 poll。
 
     async_attention_required 用 ASYNC_ATTENTION_POLL_INTERVAL_SECONDS(30 分钟) 退避。
     """

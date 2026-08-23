@@ -159,7 +159,7 @@ def test_accept_empty_dedup_key_always_creates() -> None:
     assert first.accepted is True
     assert second.accepted is True
     assert first.message.id != second.message.id
-    assert NotifyMessage.objects.filter(app=app).count() == 2  # noqa: PLR2004
+    assert NotifyMessage.objects.filter(app=app).count() == 2
 
 
 def test_accept_all_recipients_failed_enters_failed_without_outbox() -> None:

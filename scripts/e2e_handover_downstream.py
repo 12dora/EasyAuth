@@ -147,10 +147,10 @@ def on_execute(event: WebhookEvent) -> dict[str, Any]:
 class HandoverStubHandler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
-    def log_message(self, format: str, *args: object) -> None:  # noqa: A003 - stdlib API
+    def log_message(self, format: str, *args: object) -> None:
         sys.stderr.write(f"[e2e-downstream] {self.address_string()} {format % args}\n")
 
-    def do_GET(self) -> None:  # noqa: N802 - stdlib API
+    def do_GET(self) -> None:
         if self.path.split("?", 1)[0] == HEALTH_PATH:
             body = b'{"ok":true}\n'
             self.send_response(200)
@@ -161,7 +161,7 @@ class HandoverStubHandler(BaseHTTPRequestHandler):
             return
         self.send_error(404, "Not Found")
 
-    def do_POST(self) -> None:  # noqa: N802 - stdlib API
+    def do_POST(self) -> None:
         path = self.path.split("?", 1)[0]
         if path != DEFAULT_HANDOVER_PATH:
             self.send_error(404, "Not Found")

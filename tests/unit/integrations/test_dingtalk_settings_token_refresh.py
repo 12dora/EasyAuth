@@ -58,12 +58,12 @@ def test_credential_update_invalidates_previous_token(monkeypatch: pytest.Monkey
     _ = IntegrationSettings.objects.create(
         pk=1,
         dingtalk_app_key="old-app",
-        dingtalk_app_secret="old-secret",  # noqa: S106 - 测试用假凭证。
+        dingtalk_app_secret="old-secret",
     )
     invalidated: list[tuple[str, str]] = []
     previous = DingTalkRuntimeConfig(
         app_key="old-app",
-        app_secret="old-secret",  # noqa: S106 - 测试用假凭证。
+        app_secret="old-secret",
         agent_id="",
         timeout_seconds=5,
     )

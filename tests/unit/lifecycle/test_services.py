@@ -513,7 +513,7 @@ def test_poll_async_action_at_limit_sets_attention_required(
     action.generation = 1
     action.batch_seq = 1
     action.save()
-    handle = take_lease(action=action, owner=f"async:prep", batch_seq=1)
+    handle = take_lease(action=action, owner="async:prep", batch_seq=1)
     batch = HandoverExecutionBatch.objects.create(
         action=action,
         action_snapshot_id=int(action.id),

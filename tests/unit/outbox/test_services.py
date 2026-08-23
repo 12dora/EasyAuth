@@ -130,7 +130,7 @@ def test_dispatch_recovers_expired_in_flight_lease() -> None:
         task_name="task.recover",
         status=OUTBOX_STATUS_IN_FLIGHT,
         attempts=1,
-        lease_token="dead-worker",  # noqa: S106 - outbox claim token, 不是密码。
+        lease_token="dead-worker",
         lease_expires_at=now - timedelta(seconds=1),
     )
     sent: list[str] = []
@@ -160,7 +160,7 @@ def test_dispatch_does_not_reclaim_active_lease_or_future_event() -> None:
         event_key="test:active-lease",
         task_name="task.active",
         status=OUTBOX_STATUS_IN_FLIGHT,
-        lease_token="live-worker",  # noqa: S106 - outbox claim token, 不是密码。
+        lease_token="live-worker",
         lease_expires_at=now + timedelta(seconds=1),
     )
     _ = OutboxEvent.objects.create(

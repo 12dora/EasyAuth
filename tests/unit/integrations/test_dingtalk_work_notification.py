@@ -20,13 +20,13 @@ if TYPE_CHECKING:
     from types import TracebackType
     from urllib.request import Request
 
-TEST_APP_SECRET = "app-secret"  # noqa: S105 - 测试用假凭证。
+TEST_APP_SECRET = "app-secret"
 TEST_AGENT_ID = 12345
 TEST_OAPI_ERRCODE = 88
 PROGRESS_STATUS_DONE = 2
 EXPECTED_PROGRESS_AND_RESULT_CALLS = 2
 EXPECTED_TOKEN_PLUS_TWO_SENDS = 3
-CACHED_TOKEN = "cached-token"  # noqa: S105 - 测试用假 token。
+CACHED_TOKEN = "cached-token"
 
 
 class _Response:

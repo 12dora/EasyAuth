@@ -384,7 +384,7 @@ def test_completion_and_unique_delivery_event_are_repaired_idempotently() -> Non
     originator = _originator("wf-completion-user")
     _ = AppWebhookConfig.objects.create(
         app=app,
-        secret="whsec_test",  # noqa: S106 - 测试专用 Webhook 密钥。
+        secret="whsec_test",
         approval_callback_url="https://app.example.com/hook",
     )
     instance = ApprovalInstance.objects.create(

@@ -16,7 +16,7 @@ if TYPE_CHECKING:
     from types import TracebackType
     from urllib.request import Request
 
-TEST_APP_SECRET = "app-secret"  # noqa: S105 - 测试用假凭证。
+TEST_APP_SECRET = "app-secret"
 
 
 class _Response:
@@ -91,11 +91,11 @@ def test_token_cache_is_scoped_by_credential_fingerprint(
     )
 
     assert (
-        _client(app_key="app-a", app_secret="secret-a").get_access_token()  # noqa: S106
+        _client(app_key="app-a", app_secret="secret-a").get_access_token()
         == "token-a"
     )
     assert (
-        _client(app_key="app-b", app_secret="secret-b").get_access_token()  # noqa: S106
+        _client(app_key="app-b", app_secret="secret-b").get_access_token()
         == "token-b"
     )
     keys = [call[0] for call in fake_cache.set_calls]

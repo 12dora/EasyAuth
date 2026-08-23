@@ -122,14 +122,14 @@ def test_deliver_all_success_completed(monkeypatch: pytest.MonkeyPatch) -> None:
 
     message.refresh_from_db()
     assert message.status == NOTIFY_MESSAGE_STATUS_COMPLETED
-    assert message.recipient_sent == 2  # noqa: PLR2004
+    assert message.recipient_sent == 2
     assert message.recipient_failed == 0
     assert message.claim_token == ""
     assert message.completed_at is not None
     assert NotifyRecipient.objects.filter(
         message=message,
         status=NOTIFY_RECIPIENT_STATUS_SENT,
-    ).count() == 2  # noqa: PLR2004
+    ).count() == 2
 
 
 def test_delivery_uses_channel_frozen_at_accept_time(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -143,7 +143,7 @@ def test_delivery_uses_channel_frozen_at_accept_time(monkeypatch: pytest.MonkeyP
         app=app,
         name="轮换后通道",
         dingtalk_app_key="new-key",
-        dingtalk_app_secret="new-secret",  # noqa: S106 - 测试专用固定值。
+        dingtalk_app_secret="new-secret",
         agent_id="2002",
         directory_source_slug=original.directory_source_slug,
         corp_id=original.corp_id,
@@ -186,11 +186,11 @@ def test_deliver_partial_batch_failure(monkeypatch: pytest.MonkeyPatch) -> None:
 
     message.refresh_from_db()
     assert message.status == NOTIFY_MESSAGE_STATUS_FAILED
-    assert message.recipient_failed == 2  # noqa: PLR2004
+    assert message.recipient_failed == 2
     assert NotifyRecipient.objects.filter(
         message=message,
         error_code=NOTIFY_ERROR_DINGTALK_REJECTED,
-    ).count() == 2  # noqa: PLR2004
+    ).count() == 2
 
 
 def test_deliver_throttle_marks_throttled_and_reschedules(
@@ -238,7 +238,7 @@ def test_deliver_network_interrupt_keeps_pending(
     # 首轮 attempts=1 → 退避 delays[0]=60s
     assert event.available_at is not None
     delta = (event.available_at - before).total_seconds()
-    assert 55 <= delta <= 70  # noqa: PLR2004
+    assert 55 <= delta <= 70
 
 
 def test_deliver_http_5xx_keeps_pending_and_reschedules(
@@ -263,7 +263,7 @@ def test_deliver_http_5xx_keeps_pending_and_reschedules(
     assert recipient.error_code == ""
     event = OutboxEvent.objects.get(event_key=f"notify-delivery:{message.id}:2")
     delta = (event.available_at - before).total_seconds()
-    assert 55 <= delta <= 70  # noqa: PLR2004
+    assert 55 <= delta <= 70
 
 
 def test_deliver_http_4xx_is_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -311,7 +311,7 @@ def test_mixed_accept_fail_and_deliver_partial(
     _seed_user(authentik="m1", dingtalk="dt-m1")
     message = _accept(app, ["m1", "dt:nobody"])
     assert message.status == NOTIFY_MESSAGE_STATUS_PENDING
-    assert message.recipient_total == 2  # noqa: PLR2004
+    assert message.recipient_total == 2
     _patch_dingtalk(monkeypatch, task_ids=["t-mixed"])
 
     deliver_message(str(message.id), 1)

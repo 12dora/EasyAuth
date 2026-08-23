@@ -18,7 +18,7 @@ if TYPE_CHECKING:
     from types import TracebackType
     from urllib.request import Request
 
-TEST_API_TOKEN = "token-value"  # noqa: S105 - 测试用假 token.
+TEST_API_TOKEN = "token-value"
 TIMEOUT_SECONDS = 3
 
 

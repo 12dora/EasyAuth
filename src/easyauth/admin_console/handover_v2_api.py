@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 from http import HTTPStatus
-from typing import TYPE_CHECKING, ClassVar, Final
+from typing import ClassVar, Final
 
 from django.db import transaction
 from django.db.models import Count
@@ -60,9 +60,6 @@ from easyauth.lifecycle.models import (
 from easyauth.lifecycle.offboarding import HandoverCreationSpec, ensure_handover_task
 from easyauth.webhooks.hooks import HookCallError
 from easyauth.webhooks.models import AppWebhookConfig
-
-if TYPE_CHECKING:
-    pass
 
 REASON_MIN: Final = 10
 ITEMS_DEFAULT_PAGE_SIZE: Final = 50

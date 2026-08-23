@@ -279,7 +279,7 @@ def _validate_managed_users_approver(
 class ManagerChainResolution:
     """主管链解析结果: ids 为空时用 degraded 区分目录缺失与链耗尽。"""
 
-    __slots__ = ("user_ids", "degraded")
+    __slots__ = ("degraded", "user_ids")
 
     def __init__(self, user_ids: tuple[str, ...], *, degraded: bool) -> None:
         self.user_ids = user_ids

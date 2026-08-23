@@ -52,13 +52,13 @@ def test_integration_settings_patch_sets_override_and_hides_token() -> None:
     assert payload["authentik_base_url_effective"] == "https://auth.jiefakj.com"
     assert payload["authentik_base_url_source"] == "override"
     assert payload["authentik_api_token_configured"] is True
-    assert payload["authentik_api_token_source"] == "override"  # noqa: S105 - 配置来源标记, 非凭据.
+    assert payload["authentik_api_token_source"] == "override"
     assert payload["updated_by"] == "settings-patch-admin"
     assert "ak-secret-token" not in body
 
     row = IntegrationSettings.objects.get(pk=1)
     assert row.authentik_base_url == "https://auth.jiefakj.com"
-    assert row.authentik_api_token == "ak-secret-token"  # noqa: S105 - 测试用假 token.
+    assert row.authentik_api_token == "ak-secret-token"
 
 
 def test_integration_settings_token_is_encrypted_at_rest() -> None:
@@ -106,7 +106,7 @@ def test_integration_settings_rejects_plaintext_http_base_url() -> None:
 def test_integration_settings_patch_keeps_token_when_omitted() -> None:
     client = _logged_in_superuser("settings-keep-admin")
     row = IntegrationSettings.load()
-    row.authentik_api_token = "existing-token"  # noqa: S105 - 测试用假 token.
+    row.authentik_api_token = "existing-token"
     row.save()
 
     response = client.patch(
@@ -117,7 +117,7 @@ def test_integration_settings_patch_keeps_token_when_omitted() -> None:
 
     assert response.status_code == HTTPStatus.OK
     row.refresh_from_db()
-    assert row.authentik_api_token == "existing-token"  # noqa: S105 - 测试用假 token.
+    assert row.authentik_api_token == "existing-token"
     assert row.authentik_base_url == "https://auth.example.com"
 
 
@@ -125,7 +125,7 @@ def test_integration_settings_patch_keeps_authentik_when_only_dingtalk_fields_ar
     client = _logged_in_superuser("settings-dingtalk-admin")
     row = IntegrationSettings.load()
     row.authentik_base_url = "https://auth.example.com"
-    row.authentik_api_token = "existing-token"  # noqa: S105 - 测试用假 token.
+    row.authentik_api_token = "existing-token"
     row.save()
 
     response = client.patch(
@@ -137,7 +137,7 @@ def test_integration_settings_patch_keeps_authentik_when_only_dingtalk_fields_ar
     assert response.status_code == HTTPStatus.OK
     row.refresh_from_db()
     assert row.authentik_base_url == "https://auth.example.com"
-    assert row.authentik_api_token == "existing-token"  # noqa: S105 - 测试用假 token.
+    assert row.authentik_api_token == "existing-token"
     assert row.dingtalk_app_key == "ding-app"
     assert row.dingtalk_agent_id == "12345"
 
@@ -146,9 +146,9 @@ def test_integration_settings_patch_can_explicitly_clear_fields() -> None:
     client = _logged_in_superuser("settings-clear-base-url-admin")
     row = IntegrationSettings.load()
     row.authentik_base_url = "https://auth.example.com"
-    row.authentik_api_token = "existing-token"  # noqa: S105 - 测试用假 token.
+    row.authentik_api_token = "existing-token"
     row.dingtalk_app_key = "ding-app"
-    row.dingtalk_app_secret = "ding-secret"  # noqa: S105 - 测试用假 secret.
+    row.dingtalk_app_secret = "ding-secret"
     row.dingtalk_agent_id = "12345"
     row.save()
 

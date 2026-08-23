@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-
 from celery import shared_task
 
 from easyauth.webhooks.delivery import (
@@ -12,6 +11,7 @@ from easyauth.webhooks.delivery import (
     mark_delivery_exhausted,
     recover_expired_delivery_leases,
 )
+
 
 @shared_task(
     name=WEBHOOK_DELIVERY_TASK_NAME,

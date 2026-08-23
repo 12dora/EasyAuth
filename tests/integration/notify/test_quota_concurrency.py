@@ -38,7 +38,7 @@ def test_daily_quota_is_atomic_across_concurrent_accepts() -> None:
         app=app,
         name="Quota Channel",
         dingtalk_app_key="quota-key",
-        dingtalk_app_secret="quota-secret",  # noqa: S106
+        dingtalk_app_secret="quota-secret",
         agent_id="1001",
         directory_source_slug="dingtalk",
         corp_id="quota-corp",

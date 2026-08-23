@@ -117,7 +117,7 @@ def test_create_list_and_redact_secret() -> None:
     assert instance_item["configured_secrets"] == ["token"]
     # 密文静态加密落库。
     instance = ConnectorInstance.objects.get(app=app)
-    assert instance.config["token"] == "s3cret"  # noqa: S105 - 测试用假密钥.
+    assert instance.config["token"] == "s3cret"
 
 
 def test_list_surfaces_corrupted_connector_config() -> None:

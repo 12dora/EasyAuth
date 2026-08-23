@@ -22,7 +22,7 @@ def configured_app() -> App:
     app = App.objects.create(app_key="hooks-response-app", name="Hooks")
     _ = AppWebhookConfig.objects.create(
         app=app,
-        secret="whsec_hooks_test",  # noqa: S106 - 测试签名密钥。
+        secret="whsec_hooks_test",
         handover_url="https://hooks.example.com/handover",
     )
 

@@ -36,9 +36,9 @@ pytestmark = pytest.mark.django_db
 
 AUTHENTIK_ISSUER: Final = "https://authentik.example.test/application/o/easyauth/"
 CLIENT_ID: Final = "easyauth-portal-client"
-CLIENT_SECRET: Final = "s12-client-secret"  # noqa: S105 - 测试夹具密钥值.
+CLIENT_SECRET: Final = "s12-client-secret"
 REDIRECT_URI: Final = "http://testserver/auth/callback/"
-TOKEN_ENDPOINT: Final = "https://authentik.example.test/application/o/token/"  # noqa: S105 - 测试 URL, 不是密钥值.
+TOKEN_ENDPOINT: Final = "https://authentik.example.test/application/o/token/"
 JWKS_URL: Final = "https://authentik.example.test/application/o/easyauth/jwks/"
 SESSION_KEY: Final = AUTHENTIK_SESSION_KEY
 ID_TOKEN_SESSION_KEY: Final = OIDC_ID_TOKEN_SESSION_KEY

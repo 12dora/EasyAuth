@@ -70,8 +70,8 @@ def _payload(
 def test_owner_versions_channel_without_exposing_or_auditing_secret() -> None:
     app = _app()
     owner = _client("channel-owner")
-    first_secret = "first-channel-secret"  # noqa: S105 - 测试专用固定值。
-    second_secret = "second-channel-secret"  # noqa: S105 - 测试专用固定值。
+    first_secret = "first-channel-secret"
+    second_secret = "second-channel-secret"
 
     first = owner.put(
         _url(app),
@@ -90,7 +90,7 @@ def test_owner_versions_channel_without_exposing_or_auditing_secret() -> None:
     body = listed.content.decode()
     decoded = cast("dict[str, object]", loads(body))
     payload = cast("dict[str, object]", decoded["notification_channel"])
-    assert payload["version"] == 2  # noqa: PLR2004
+    assert payload["version"] == 2
     assert payload["agent_id"] == "1002"
     assert payload["app_secret_configured"] is True
     assert payload["directory_source_slug"] == "dingtalk"
@@ -115,14 +115,14 @@ def test_developer_can_read_but_cannot_write_or_test_channel() -> None:
     developer = _client("channel-developer")
     _ = owner.put(
         _url(app),
-        data=dumps(_payload(secret="developer-read-secret")),  # noqa: S106
+        data=dumps(_payload(secret="developer-read-secret")),
         content_type="application/json",
     )
 
     assert developer.get(_url(app)).status_code == HTTPStatus.OK
     denied_put = developer.put(
         _url(app),
-        data=dumps(_payload(secret="denied-secret")),  # noqa: S106
+        data=dumps(_payload(secret="denied-secret")),
         content_type="application/json",
     )
     denied_test = developer.post(_url(app, "test"), content_type="application/json")
@@ -141,7 +141,7 @@ def test_first_create_requires_secret_and_update_can_reuse_it() -> None:
     assert missing.status_code == HTTPStatus.BAD_REQUEST
     assert AppNotificationChannel.objects.filter(app=app).exists() is False
 
-    original_secret = "reuse-channel-secret"  # noqa: S105 - 测试专用固定值。
+    original_secret = "reuse-channel-secret"
     created = owner.put(
         _url(app),
         data=dumps(_payload(secret=original_secret)),
@@ -170,7 +170,7 @@ def test_first_create_requires_secret_and_update_can_reuse_it() -> None:
 def test_validation_error_does_not_echo_secret_input() -> None:
     app = _app()
     owner = _client("channel-owner")
-    secret_marker = "secret-must-not-echo"  # noqa: S105 - 测试专用固定值。
+    secret_marker = "secret-must-not-echo"
     payload = cast("dict[str, object]", cast("object", _payload(secret=None)))
     payload["dingtalk_app_secret"] = {"unexpected": secret_marker}
 
@@ -191,7 +191,7 @@ def test_nonexistent_directory_scope_is_rejected_without_rotating_channel() -> N
     owner = _client("channel-owner")
     created = owner.put(
         _url(app),
-        data=dumps(_payload(secret="existing-secret")),  # noqa: S106
+        data=dumps(_payload(secret="existing-secret")),
         content_type="application/json",
     )
     rejected = owner.put(
@@ -237,7 +237,7 @@ def test_mirror_only_scopes_are_accepted_and_listed_in_stable_order() -> None:
         _url(app),
         data=dumps(
             _payload(
-                secret="mirror-only-secret",  # noqa: S106
+                secret="mirror-only-secret",
                 source_slug="a-source",
                 corp_id="user-corp",
             ),
@@ -260,7 +260,7 @@ def test_owner_connectivity_test_uses_active_channel() -> None:
     owner = _client("channel-owner")
     _ = owner.put(
         _url(app),
-        data=dumps(_payload(secret="connectivity-secret")),  # noqa: S106
+        data=dumps(_payload(secret="connectivity-secret")),
         content_type="application/json",
     )
     with patch(
@@ -276,7 +276,7 @@ def test_owner_connectivity_test_uses_active_channel() -> None:
 def test_connectivity_error_does_not_echo_upstream_body() -> None:
     app = _app()
     owner = _client("channel-owner")
-    secret = "connectivity-hidden-secret"  # noqa: S105 - 测试专用固定值。
+    secret = "connectivity-hidden-secret"
     _ = owner.put(
         _url(app),
         data=dumps(_payload(secret=secret)),

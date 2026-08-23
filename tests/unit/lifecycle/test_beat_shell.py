@@ -12,8 +12,8 @@ from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.lifecycle.models import (
     ASSIGNEE_STATE_MANAGER,
     HANDOVER_KIND_OFFBOARD,
-    HandoverTask,
     TASK_STATUS_PENDING,
+    HandoverTask,
 )
 from easyauth.outbox.models import OutboxEvent
 from easyauth.tasks.lifecycle import (

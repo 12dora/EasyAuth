@@ -59,7 +59,7 @@ def test_concurrent_claim_only_one_wins(monkeypatch: pytest.MonkeyPatch) -> None
     message = _accept(app)
 
     # 第一个执行体抢到租约后不释放(模拟进行中); 第二个应抢不到。
-    held_token = "held-token-aaaaaaaaaaaaaaaaaa"  # noqa: S105 - 测试 claim token。
+    held_token = "held-token-aaaaaaaaaaaaaaaaaa"
     _ = NotifyMessage.objects.filter(id=message.id).update(
         status=NOTIFY_MESSAGE_STATUS_SENDING,
         claim_token=held_token,
@@ -98,7 +98,7 @@ def test_expired_lease_can_be_taken_over(monkeypatch: pytest.MonkeyPatch) -> Non
     message = result.message
     _ = NotifyMessage.objects.filter(id=message.id).update(
         status=NOTIFY_MESSAGE_STATUS_SENDING,
-        claim_token="old-token",  # noqa: S106
+        claim_token="old-token",
         lease_expires_at=timezone.now() - timedelta(seconds=1),
         attempts=1,
     )

@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from celery.exceptions import Retry
 import pytest
+from celery.exceptions import Retry
 
 from easyauth.accounts.models import USER_STATUS_ACTIVE, DingTalkUserMirror, UserMirror
 from easyauth.applications.models import App, AppCredential, AppNotificationChannel
 from easyauth.lifecycle.models import (
     ASSIGNEE_STATE_MANAGER,
     HANDOVER_KIND_OFFBOARD,
-    HandoverTask,
     TASK_STATUS_PENDING,
+    HandoverTask,
 )
 from easyauth.notify.models import NotifyMessage
 from easyauth.outbox.models import OUTBOX_STATUS_PUBLISHED, OutboxEvent

@@ -34,12 +34,12 @@ from easyauth.webhooks.transport import WebhookHttpResponse, WebhookTransportErr
 
 pytestmark = pytest.mark.django_db
 
-SECRET = "whsec_unit"  # noqa: S105 - 测试用密钥。
+SECRET = "whsec_unit"
 NEXT_GENERATION = 2
 OLD_LEASE_GENERATION = 3
 WATCHDOG_RECOVERY_GENERATION = 4
 CONNECTION_REFUSED = "connection refused"
-OLD_CLAIM_TOKEN = "old-claim"  # noqa: S105 - 测试租约令牌。
+OLD_CLAIM_TOKEN = "old-claim"
 UNEXPECTED_FAILURE_MESSAGE = "boom"
 
 
