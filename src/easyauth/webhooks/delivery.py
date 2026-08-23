@@ -33,6 +33,7 @@ from easyauth.webhooks.signing import (
     sign_webhook_body,
 )
 from easyauth.webhooks.transport import (
+    WebhookHttpResponse,
     WebhookRequestPolicy,
     WebhookTransportError,
     post_webhook,
@@ -77,6 +78,7 @@ class WebhookEndpointRejectedError(WebhookNotConfiguredError):
 
 class WebhookDeliveryAttemptError(RuntimeError):
     attempts: int
+    retry_scheduled: bool
 
     def __init__(self, message: str, *, attempts: int, retry_scheduled: bool) -> None:
         super().__init__(message)
@@ -130,81 +132,130 @@ def enqueue_delivery(
     return delivery
 
 
-def attempt_delivery(delivery_id: int, generation: int, expected_attempt: int = 1) -> WebhookDelivery:
+def attempt_delivery(
+    delivery_id: int, generation: int, expected_attempt: int = 1
+) -> WebhookDelivery:
     """执行一次投递尝试; 失败时抛 WebhookDeliveryAttemptError 交由任务层重试。"""
     delivery, claim_token = _claim_delivery(delivery_id, generation, expected_attempt)
     if claim_token is None:
         return delivery
     try:
-        endpoint = resolve_endpoint(delivery.app, url=delivery.target_url)
-        # 复制 payload 后强制注入 event_type, 再序列化签名(契约 §10.1 / 01 §8.1)。
-        # webhook.test 等经 enqueue_delivery 落库的 body 原先不含该字段; 若不在此注入,
-        # 下游 SDK 会在 webhook.test 短路前因 event_type 缺失返回 422。
-        signed_payload = dict(delivery.payload)
-        signed_payload["event_type"] = delivery.event_type
-        body = dumps(signed_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
-        timestamp = str(int(timezone.now().timestamp()))
-        headers = {
-            "Content-Type": "application/json; charset=utf-8",
-            EVENT_HEADER: delivery.event_type,
-            DELIVERY_HEADER: delivery.delivery_id,
-            TIMESTAMP_HEADER: timestamp,
-            SIGNATURE_HEADER: sign_webhook_body(
-                secret=endpoint.config.secret,
-                timestamp=timestamp,
-                body=body,
-            ),
-        }
-        response = post_webhook(
-            url=endpoint.url,
-            allowed_hosts=endpoint.allowed_hosts,
-            body=body,
-            headers=headers,
-            policy=DELIVERY_REQUEST_POLICY,
-        )
+        response = _post_delivery(delivery)
     except WebhookNotConfiguredError:
         raise
     except WebhookTransportError as error:
-        retry_scheduled = _mark_attempt_failed(delivery, claim_token, str(error))
-        if retry_scheduled is None:
-            return _current_delivery(delivery_id)
-        message = "webhook 投递失败: 目标不可达。"
-        raise WebhookDeliveryAttemptError(
-            message, attempts=delivery.attempts, retry_scheduled=retry_scheduled
-        ) from error
-    except Exception as error:
-        retry_scheduled = _mark_attempt_failed(
-            delivery,
-            claim_token,
-            f"{WEBHOOK_UNEXPECTED_ERROR_PREFIX}: {type(error).__name__}: {error}",
-        )
-        if retry_scheduled is None:
-            return _current_delivery(delivery_id)
-        message = "webhook 投递失败: 非预期异常已记录并等待恢复。"
-        raise WebhookDeliveryAttemptError(
-            message, attempts=delivery.attempts, retry_scheduled=retry_scheduled
-        ) from error
-    if not HTTPStatus.OK <= response.status_code < HTTPStatus.MULTIPLE_CHOICES:
-        error = f"HTTP {response.status_code}"
-        retryable = _is_retryable_status(response.status_code)
-        retry_delay = (
-            _retry_after_seconds(response.retry_after)
-            if response.status_code == HTTPStatus.TOO_MANY_REQUESTS
-            else None
-        )
-        retry_scheduled = _mark_attempt_failed(
-            delivery,
-            claim_token,
-            error,
-            retryable=retryable,
-            retry_delay_seconds=retry_delay,
-        )
-        if retry_scheduled is None:
-            return _current_delivery(delivery_id)
-        message = f"webhook 投递失败: {error}"
-        raise WebhookDeliveryAttemptError(
-            message, attempts=delivery.attempts, retry_scheduled=retry_scheduled
-        )
+        return _handle_transport_failure(delivery, claim_token, error)
+    except BaseException as error:
+        if not isinstance(error, Exception):
+            raise
+        return _handle_unexpected_failure(delivery, claim_token, error)
+    return _handle_delivery_response(delivery, claim_token, response)
+
+
+def _post_delivery(delivery: WebhookDelivery) -> WebhookHttpResponse:
+    endpoint = resolve_endpoint(delivery.app, url=delivery.target_url)
+    # 复制 payload 后强制注入 event_type, 再序列化签名(契约 §10.1 / 01 §8.1)。
+    # webhook.test 等经 enqueue_delivery 落库的 body 原先不含该字段; 若不在此注入,
+    # 下游 SDK 会在 webhook.test 短路前因 event_type 缺失返回 422。
+    signed_payload = dict(delivery.payload)
+    signed_payload["event_type"] = delivery.event_type
+    body = dumps(signed_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    timestamp = str(int(timezone.now().timestamp()))
+    headers = {
+        "Content-Type": "application/json; charset=utf-8",
+        EVENT_HEADER: delivery.event_type,
+        DELIVERY_HEADER: delivery.delivery_id,
+        TIMESTAMP_HEADER: timestamp,
+        SIGNATURE_HEADER: sign_webhook_body(
+            secret=endpoint.config.secret,
+            timestamp=timestamp,
+            body=body,
+        ),
+    }
+    return post_webhook(
+        url=endpoint.url,
+        allowed_hosts=endpoint.allowed_hosts,
+        body=body,
+        headers=headers,
+        policy=DELIVERY_REQUEST_POLICY,
+    )
+
+
+def _handle_transport_failure(
+    delivery: WebhookDelivery,
+    claim_token: str,
+    error: WebhookTransportError,
+) -> WebhookDelivery:
+    retry_scheduled = _mark_attempt_failed(delivery, claim_token, str(error))
+    if retry_scheduled is None:
+        return _current_delivery(delivery.id)
+    message = "webhook 投递失败: 目标不可达。"
+    raise WebhookDeliveryAttemptError(
+        message,
+        attempts=delivery.attempts,
+        retry_scheduled=retry_scheduled,
+    ) from error
+
+
+def _handle_unexpected_failure(
+    delivery: WebhookDelivery,
+    claim_token: str,
+    error: Exception,
+) -> WebhookDelivery:
+    retry_scheduled = _mark_attempt_failed(
+        delivery,
+        claim_token,
+        f"{WEBHOOK_UNEXPECTED_ERROR_PREFIX}: {type(error).__name__}: {error}",
+    )
+    if retry_scheduled is None:
+        return _current_delivery(delivery.id)
+    message = "webhook 投递失败: 非预期异常已记录并等待恢复。"
+    raise WebhookDeliveryAttemptError(
+        message,
+        attempts=delivery.attempts,
+        retry_scheduled=retry_scheduled,
+    ) from error
+
+
+def _handle_delivery_response(
+    delivery: WebhookDelivery,
+    claim_token: str,
+    response: WebhookHttpResponse,
+) -> WebhookDelivery:
+    if HTTPStatus.OK <= response.status_code < HTTPStatus.MULTIPLE_CHOICES:
+        return _mark_attempt_delivered(delivery, claim_token)
+    return _handle_http_failure(delivery, claim_token, response)
+
+
+def _handle_http_failure(
+    delivery: WebhookDelivery,
+    claim_token: str,
+    response: WebhookHttpResponse,
+) -> WebhookDelivery:
+    error = f"HTTP {response.status_code}"
+    retry_delay = (
+        _retry_after_seconds(response.retry_after)
+        if response.status_code == HTTPStatus.TOO_MANY_REQUESTS
+        else None
+    )
+    retry_scheduled = _mark_attempt_failed(
+        delivery,
+        claim_token,
+        error,
+        retryable=_is_retryable_status(response.status_code),
+        retry_delay_seconds=retry_delay,
+    )
+    if retry_scheduled is None:
+        return _current_delivery(delivery.id)
+    message = f"webhook 投递失败: {error}"
+    raise WebhookDeliveryAttemptError(
+        message,
+        attempts=delivery.attempts,
+        retry_scheduled=retry_scheduled,
+    )
+
+
+def _mark_attempt_delivered(delivery: WebhookDelivery, claim_token: str) -> WebhookDelivery:
     updated = WebhookDelivery.objects.filter(
         id=delivery.id,
         status=DELIVERY_STATUS_PENDING,
@@ -218,7 +269,7 @@ def attempt_delivery(delivery_id: int, generation: int, expected_attempt: int = 
         next_attempt_at=timezone.now(),
         updated_at=timezone.now(),
     )
-    current = _current_delivery(delivery_id)
+    current = _current_delivery(delivery.id)
     if updated == 1:
         _record_delivery_event(current, action="webhook_delivered")
     return current
@@ -323,22 +374,19 @@ def _claim_delivery(
 ) -> tuple[WebhookDelivery, str | None]:
     now = timezone.now()
     claim_token = uuid.uuid4().hex
-    updated = (
-        WebhookDelivery.objects.filter(
-            id=delivery_id,
-            status=DELIVERY_STATUS_PENDING,
-            generation=generation,
-            attempts=expected_attempt - 1,
-            next_attempt_at__lte=now,
-            claim_token="",
-            lease_expires_at__isnull=True,
-        )
-        .update(
-            attempts=F("attempts") + 1,
-            claim_token=claim_token,
-            lease_expires_at=now + timedelta(seconds=DELIVERY_LEASE_SECONDS),
-            updated_at=now,
-        )
+    updated = WebhookDelivery.objects.filter(
+        id=delivery_id,
+        status=DELIVERY_STATUS_PENDING,
+        generation=generation,
+        attempts=expected_attempt - 1,
+        next_attempt_at__lte=now,
+        claim_token="",
+        lease_expires_at__isnull=True,
+    ).update(
+        attempts=F("attempts") + 1,
+        claim_token=claim_token,
+        lease_expires_at=now + timedelta(seconds=DELIVERY_LEASE_SECONDS),
+        updated_at=now,
     )
     delivery = _current_delivery(delivery_id)
     return delivery, claim_token if updated == 1 else None
@@ -395,9 +443,11 @@ def _mark_attempt_failed(
 
 
 def _is_retryable_status(status_code: int) -> bool:
-    return status_code in {HTTPStatus.BAD_REQUEST, HTTPStatus.LOCKED, HTTPStatus.TOO_MANY_REQUESTS} or (
-        status_code >= HTTPStatus.INTERNAL_SERVER_ERROR
-    )
+    return status_code in {
+        HTTPStatus.BAD_REQUEST,
+        HTTPStatus.LOCKED,
+        HTTPStatus.TOO_MANY_REQUESTS,
+    } or (status_code >= HTTPStatus.INTERNAL_SERVER_ERROR)
 
 
 def _retry_after_seconds(value: str) -> int | None:

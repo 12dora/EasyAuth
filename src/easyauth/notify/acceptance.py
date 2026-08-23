@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 from django.db import IntegrityError, transaction
@@ -39,8 +40,23 @@ from easyauth.outbox.services import enqueue_task
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from datetime import datetime
 
     from easyauth.applications.models import AppNotificationChannel
+
+
+@dataclass(frozen=True, slots=True)
+class _AcceptanceInput:
+    recipients: Sequence[str]
+    template: str
+    title: str
+    content: str
+    deeplink_url: str
+    deeplink_title: str
+    dedup_key: str
+    biz_tag: str
+    requested_credential_type: str
+    requested_credential_id: int
 
 
 def accept_notify_message(  # noqa: PLR0913 - 受理入口完整业务事实。
@@ -58,14 +74,59 @@ def accept_notify_message(  # noqa: PLR0913 - 受理入口完整业务事实。
     requested_credential_id: int,
 ) -> AcceptNotifyResult:
     """受理一则通知: 校验/组装/解析/幂等/配额/落库/入队。返回 (result)。"""
+    prepared = _prepare_acceptance(
+        _AcceptanceInput(
+            recipients=recipients,
+            template=template,
+            title=title,
+            content=content,
+            deeplink_url=deeplink_url,
+            deeplink_title=deeplink_title,
+            dedup_key=dedup_key,
+            biz_tag=biz_tag,
+            requested_credential_type=requested_credential_type,
+            requested_credential_id=requested_credential_id,
+        ),
+    )
+    existing = _existing_result(app, prepared)
+    if existing is not None:
+        return existing
+
+    channel, scoped = _scope_acceptance(app, prepared)
+    try:
+        message = _persist_acceptance(app, channel, scoped)
+    except IntegrityError:
+        if not scoped.normalized.dedup_key:
+            raise
+        return _concurrent_winner_result(app, scoped)
+
+    rejected = _rejected_count(scoped.resolved)
+    return AcceptNotifyResult(
+        message=message,
+        accepted=True,
+        recipient_total=len(scoped.resolved),
+        recipient_rejected=rejected,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _AcceptanceData:
+    normalized: NormalizedInput
+    payload_hash: str
+    resolved: list[ResolvedRecipient]
+    requested_credential_type: str
+    requested_credential_id: int
+
+
+def _prepare_acceptance(input_data: _AcceptanceInput) -> _AcceptanceData:
     normalized = normalize_and_validate(
-        template=template,
-        title=title,
-        content=content,
-        deeplink_url=deeplink_url,
-        deeplink_title=deeplink_title,
-        dedup_key=dedup_key,
-        biz_tag=biz_tag,
+        template=input_data.template,
+        title=input_data.title,
+        content=input_data.content,
+        deeplink_url=input_data.deeplink_url,
+        deeplink_title=input_data.deeplink_title,
+        dedup_key=input_data.dedup_key,
+        biz_tag=input_data.biz_tag,
     )
     msg = build_dingtalk_msg(
         template=normalized.template,
@@ -81,7 +142,7 @@ def accept_notify_message(  # noqa: PLR0913 - 受理入口完整业务事实。
             field="content",
         )
 
-    resolved = resolve_recipients(recipients)
+    resolved = resolve_recipients(input_data.recipients)
     payload_hash = compute_payload_hash(
         template=normalized.template,
         title=normalized.title,
@@ -89,128 +150,133 @@ def accept_notify_message(  # noqa: PLR0913 - 受理入口完整业务事实。
         deeplink_url=normalized.deeplink_url,
         deeplink_title=normalized.deeplink_title,
         biz_tag=normalized.biz_tag,
-        recipients=list(recipients),
+        recipients=list(input_data.recipients),
     )
 
-    if normalized.dedup_key:
-        existing = NotifyMessage.objects.filter(
-            app=app,
-            dedup_key=normalized.dedup_key,
-        ).first()
-        if existing is not None:
-            if existing.payload_hash != payload_hash:
-                raise NotifyAcceptError(
-                    kind="conflict",
-                    message=IDEMPOTENCY_PAYLOAD_CONFLICT_MESSAGE,
-                )
-            return AcceptNotifyResult(
-                message=existing,
-                accepted=False,
-                recipient_total=existing.recipient_total,
-                recipient_rejected=accept_time_rejected_count(existing),
-            )
+    return _AcceptanceData(
+        normalized=normalized,
+        payload_hash=payload_hash,
+        resolved=resolved,
+        requested_credential_type=input_data.requested_credential_type,
+        requested_credential_id=input_data.requested_credential_id,
+    )
 
+
+def _existing_result(app: App, data: _AcceptanceData) -> AcceptNotifyResult | None:
+    if not data.normalized.dedup_key:
+        return None
+    existing = NotifyMessage.objects.filter(
+        app=app,
+        dedup_key=data.normalized.dedup_key,
+    ).first()
+    if existing is None:
+        return None
+    _assert_matching_payload(existing, data.payload_hash)
+    return _deduplicated_result(existing)
+
+
+def _scope_acceptance(
+    app: App,
+    data: _AcceptanceData,
+) -> tuple[AppNotificationChannel, _AcceptanceData]:
     channel = active_notification_channel(app.id)
     if channel is None:
         raise NotifyAcceptError(
             kind="dependency_unavailable",
             message=NOTIFY_CHANNEL_MISSING_MESSAGE,
         )
-    resolved = enforce_channel_scope(channel, resolved)
+    scoped = _AcceptanceData(
+        normalized=data.normalized,
+        payload_hash=data.payload_hash,
+        resolved=enforce_channel_scope(channel, data.resolved),
+        requested_credential_type=data.requested_credential_type,
+        requested_credential_id=data.requested_credential_id,
+    )
+    return channel, scoped
 
-    try:
-        with transaction.atomic():
-            locked_app = App.objects.select_for_update().get(id=app.id)
-            # 日配额: 事务内先查后写。
-            assert_daily_quota(app_id=locked_app.id, additional=len(resolved))
-            message = _create_message_with_recipients(
-                app=locked_app,
-                channel=channel,
-                normalized=normalized,
-                payload_hash=payload_hash,
-                resolved=resolved,
-                requested_credential_type=requested_credential_type,
-                requested_credential_id=requested_credential_id,
-            )
-    except IntegrityError:
-        # 并发双写靠唯一约束兜底, 命中后按幂等语义返回。
-        if not normalized.dedup_key:
-            raise
-        winner = NotifyMessage.objects.get(app=app, dedup_key=normalized.dedup_key)
-        if winner.payload_hash != payload_hash:
-            raise NotifyAcceptError(
-                kind="conflict",
-                message=IDEMPOTENCY_PAYLOAD_CONFLICT_MESSAGE,
-            ) from None
-        return AcceptNotifyResult(
-            message=winner,
-            accepted=False,
-            recipient_total=winner.recipient_total,
-            recipient_rejected=accept_time_rejected_count(winner),
+
+def _persist_acceptance(
+    app: App,
+    channel: AppNotificationChannel,
+    data: _AcceptanceData,
+) -> NotifyMessage:
+    with transaction.atomic():
+        locked_app = App.objects.select_for_update().get(id=app.id)
+        # 日配额: 事务内先查后写。
+        assert_daily_quota(app_id=locked_app.id, additional=len(data.resolved))
+        return _create_message_with_recipients(
+            app=locked_app,
+            channel=channel,
+            data=data,
         )
 
-    rejected = sum(1 for item in resolved if item.status == NOTIFY_RECIPIENT_STATUS_FAILED)
+
+def _concurrent_winner_result(app: App, data: _AcceptanceData) -> AcceptNotifyResult:
+    # 并发双写靠唯一约束兜底, 命中后按幂等语义返回。
+    winner = NotifyMessage.objects.get(app=app, dedup_key=data.normalized.dedup_key)
+    _assert_matching_payload(winner, data.payload_hash, suppress_context=True)
+    return _deduplicated_result(winner)
+
+
+def _assert_matching_payload(
+    message: NotifyMessage,
+    payload_hash: str,
+    *,
+    suppress_context: bool = False,
+) -> None:
+    if message.payload_hash == payload_hash:
+        return
+    error = NotifyAcceptError(
+        kind="conflict",
+        message=IDEMPOTENCY_PAYLOAD_CONFLICT_MESSAGE,
+    )
+    if suppress_context:
+        raise error from None
+    raise error
+
+
+def _deduplicated_result(message: NotifyMessage) -> AcceptNotifyResult:
     return AcceptNotifyResult(
         message=message,
-        accepted=True,
-        recipient_total=len(resolved),
-        recipient_rejected=rejected,
+        accepted=False,
+        recipient_total=message.recipient_total,
+        recipient_rejected=accept_time_rejected_count(message),
     )
 
 
-def _create_message_with_recipients(  # noqa: PLR0913 - 落库字段全集。
+def _rejected_count(resolved: list[ResolvedRecipient]) -> int:
+    return sum(1 for item in resolved if item.status == NOTIFY_RECIPIENT_STATUS_FAILED)
+
+
+def _create_message_with_recipients(
     *,
     app: App,
     channel: AppNotificationChannel,
-    normalized: NormalizedInput,
-    payload_hash: str,
-    resolved: list[ResolvedRecipient],
-    requested_credential_type: str,
-    requested_credential_id: int,
+    data: _AcceptanceData,
 ) -> NotifyMessage:
-    rejected = sum(1 for item in resolved if item.status == NOTIFY_RECIPIENT_STATUS_FAILED)
-    pending_count = len(resolved) - rejected
-    if pending_count == 0:
-        status = NOTIFY_MESSAGE_STATUS_FAILED
-        completed_at = timezone.now()
-    else:
-        status = NOTIFY_MESSAGE_STATUS_PENDING
-        completed_at = None
+    status, completed_at, rejected, pending_count = _initial_message_state(data.resolved)
 
     message = NotifyMessage.objects.create(
         app=app,
         channel=channel,
-        template=normalized.template,
-        title=normalized.title,
-        content=normalized.content,
-        deeplink_url=normalized.deeplink_url,
-        deeplink_title=normalized.deeplink_title,
-        dedup_key=normalized.dedup_key,
-        payload_hash=payload_hash,
-        biz_tag=normalized.biz_tag,
+        template=data.normalized.template,
+        title=data.normalized.title,
+        content=data.normalized.content,
+        deeplink_url=data.normalized.deeplink_url,
+        deeplink_title=data.normalized.deeplink_title,
+        dedup_key=data.normalized.dedup_key,
+        payload_hash=data.payload_hash,
+        biz_tag=data.normalized.biz_tag,
         status=status,
-        recipient_total=len(resolved),
+        recipient_total=len(data.resolved),
         recipient_sent=0,
         recipient_failed=rejected,
-        requested_credential_type=requested_credential_type,
-        requested_credential_id=requested_credential_id,
+        requested_credential_type=data.requested_credential_type,
+        requested_credential_id=data.requested_credential_id,
         completed_at=completed_at,
     )
     _ = NotifyRecipient.objects.bulk_create(
-        [
-            NotifyRecipient(
-                message=message,
-                raw_ref=item.raw_ref,
-                user=item.user,
-                dingtalk_corp_id=item.dingtalk_corp_id,
-                dingtalk_source_slug=item.dingtalk_source_slug,
-                dingtalk_userid=item.dingtalk_userid,
-                status=item.status,
-                error_code=item.error_code,
-                error=item.error,
-            )
-            for item in resolved
-        ],
+        [_recipient_row(message, item) for item in data.resolved],
     )
     if pending_count > 0:
         _ = enqueue_task(
@@ -219,3 +285,30 @@ def _create_message_with_recipients(  # noqa: PLR0913 - 落库字段全集。
             args=[str(message.id), 1],
         )
     return message
+
+
+def _initial_message_state(
+    resolved: list[ResolvedRecipient],
+) -> tuple[str, datetime | None, int, int]:
+    rejected = _rejected_count(resolved)
+    pending_count = len(resolved) - rejected
+    if pending_count == 0:
+        return NOTIFY_MESSAGE_STATUS_FAILED, timezone.now(), rejected, pending_count
+    return NOTIFY_MESSAGE_STATUS_PENDING, None, rejected, pending_count
+
+
+def _recipient_row(
+    message: NotifyMessage,
+    recipient: ResolvedRecipient,
+) -> NotifyRecipient:
+    return NotifyRecipient(
+        message=message,
+        raw_ref=recipient.raw_ref,
+        user=recipient.user,
+        dingtalk_corp_id=recipient.dingtalk_corp_id,
+        dingtalk_source_slug=recipient.dingtalk_source_slug,
+        dingtalk_userid=recipient.dingtalk_userid,
+        status=recipient.status,
+        error_code=recipient.error_code,
+        error=recipient.error,
+    )

@@ -12,6 +12,7 @@ from django.utils import timezone
 
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.integrations.dingtalk.api_client import (
+    DingTalkApiClient,
     DingTalkApiRequestError,
     DingTalkApiUnavailableError,
     DingTalkNotConfiguredError,
@@ -51,6 +52,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
 def deliver_message(message_id: str, generation: int) -> None:
     """单条消息一轮投递: 抢租约 → 分批调钉钉 → 推进状态 → 排程下一轮或收敛。"""
     claimed = _claim_message(message_id)
@@ -59,27 +61,13 @@ def deliver_message(message_id: str, generation: int) -> None:
     message = claimed.message
     claim_token = claimed.claim_token
 
-    open_recipients = list(
-        NotifyRecipient.objects.filter(
-            message_id=message.id,
-            status__in=(NOTIFY_RECIPIENT_STATUS_PENDING, NOTIFY_RECIPIENT_STATUS_THROTTLED),
-        )
-        .order_by("id")
-        .all()[: NOTIFY_BATCH_SIZE * NOTIFY_MAX_CHUNKS_PER_RUN],
-    )
+    open_recipients = _open_recipients(message)
     if not open_recipients:
         _refresh_and_maybe_finalize(message, claim_token=claim_token)
         return
 
-    network_interrupted = False
-    try:
-        client, agent_id = channel_config.dingtalk_client_and_agent(message.channel)
-    except (DingTalkNotConfiguredError, ValueError) as error:
-        # 配置缺失视为可恢复: 保持 pending, 走常规退避; 健康探测补齐后自动恢复。
-        network_interrupted = True
-        _ = NotifyMessage.objects.filter(id=message.id, claim_token=claim_token).update(
-            last_error=str(error)[:NOTIFY_ERROR_MAX_CHARS],
-        )
+    delivery = _delivery_context(message, claim_token)
+    if delivery is None:
         _schedule_or_finalize(
             message,
             claim_token=claim_token,
@@ -88,6 +76,42 @@ def deliver_message(message_id: str, generation: int) -> None:
         )
         return
 
+    network_interrupted = _send_recipient_chunks(delivery, open_recipients)
+    _complete_delivery_round(
+        message,
+        claim_token=claim_token,
+        generation=generation,
+        network_interrupted=network_interrupted,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _DeliveryContext:
+    message: NotifyMessage
+    claim_token: str
+    client: DingTalkApiClient
+    agent_id: str | int
+    msg: dict[str, object]
+
+
+def _open_recipients(message: NotifyMessage) -> list[NotifyRecipient]:
+    return list(
+        NotifyRecipient.objects.filter(
+            message_id=message.id,
+            status__in=(NOTIFY_RECIPIENT_STATUS_PENDING, NOTIFY_RECIPIENT_STATUS_THROTTLED),
+        )
+        .order_by("id")
+        .all()[: NOTIFY_BATCH_SIZE * NOTIFY_MAX_CHUNKS_PER_RUN],
+    )
+
+
+def _delivery_context(message: NotifyMessage, claim_token: str) -> _DeliveryContext | None:
+    try:
+        client, agent_id = channel_config.dingtalk_client_and_agent(message.channel)
+    except (DingTalkNotConfiguredError, ValueError) as error:
+        # 配置缺失视为可恢复: 保持 pending, 走常规退避; 健康探测补齐后自动恢复。
+        _record_network_error(message, claim_token, error)
+        return None
     msg = build_dingtalk_msg(
         template=message.template,
         title=message.title,
@@ -95,45 +119,85 @@ def deliver_message(message_id: str, generation: int) -> None:
         deeplink_url=message.deeplink_url,
         deeplink_title=message.deeplink_title or DEFAULT_DEEPLINK_TITLE,
     )
+    return _DeliveryContext(
+        message=message,
+        claim_token=claim_token,
+        client=client,
+        agent_id=agent_id,
+        msg=msg,
+    )
+
+
+def _send_recipient_chunks(
+    delivery: _DeliveryContext,
+    open_recipients: list[NotifyRecipient],
+) -> bool:
     chunks = [
         open_recipients[i : i + NOTIFY_BATCH_SIZE]
         for i in range(0, len(open_recipients), NOTIFY_BATCH_SIZE)
     ]
-    for chunk in chunks:
-        userids = [row.dingtalk_userid for row in chunk if row.dingtalk_userid]
-        if not userids:
-            continue
-        try:
-            task_id = client.send_work_notification(
-                agent_id=agent_id,
-                userid_list=userids,
-                msg=msg,
-            )
-        except DingTalkApiUnavailableError as error:
-            network_interrupted = True
-            _ = NotifyMessage.objects.filter(id=message.id, claim_token=claim_token).update(
-                last_error=str(error)[:NOTIFY_ERROR_MAX_CHARS],
-            )
-            break
-        except DingTalkApiRequestError as error:
-            if error.errcode is not None and error.errcode in DINGTALK_THROTTLE_ERRCODES:
-                _mark_chunk_throttled(chunk, error=str(error)[:NOTIFY_ERROR_MAX_CHARS])
-                continue
-            if _is_retryable_request_error(error):
-                # 钉钉 5xx / 无业务 errcode 的 HTTP 层故障: 保持原状态, 常规退避。
-                network_interrupted = True
-                _ = NotifyMessage.objects.filter(id=message.id, claim_token=claim_token).update(
-                    last_error=str(error)[:NOTIFY_ERROR_MAX_CHARS],
-                )
-                break
-            _fail_open_recipients(
-                chunk,
-                error_code=NOTIFY_ERROR_DINGTALK_REJECTED,
-                error=str(error)[:NOTIFY_ERROR_MAX_CHARS],
-            )
-            continue
-        _mark_chunk_sent(chunk, task_id=task_id)
+    return any(_send_recipient_chunk(delivery, chunk) for chunk in chunks)
 
+
+def _send_recipient_chunk(
+    delivery: _DeliveryContext,
+    chunk: Sequence[NotifyRecipient],
+) -> bool:
+    userids = [row.dingtalk_userid for row in chunk if row.dingtalk_userid]
+    if not userids:
+        return False
+    try:
+        task_id = delivery.client.send_work_notification(
+            agent_id=delivery.agent_id,
+            userid_list=userids,
+            msg=delivery.msg,
+        )
+    except DingTalkApiUnavailableError as error:
+        _record_network_error(delivery.message, delivery.claim_token, error)
+        return True
+    except DingTalkApiRequestError as error:
+        return _handle_request_error(delivery, chunk, error)
+    _mark_chunk_sent(chunk, task_id=task_id)
+    return False
+
+
+def _handle_request_error(
+    delivery: _DeliveryContext,
+    chunk: Sequence[NotifyRecipient],
+    error: DingTalkApiRequestError,
+) -> bool:
+    if error.errcode is not None and error.errcode in DINGTALK_THROTTLE_ERRCODES:
+        _mark_chunk_throttled(chunk, error=str(error)[:NOTIFY_ERROR_MAX_CHARS])
+        return False
+    if _is_retryable_request_error(error):
+        # 钉钉 5xx / 无业务 errcode 的 HTTP 层故障: 保持原状态, 常规退避。
+        _record_network_error(delivery.message, delivery.claim_token, error)
+        return True
+    _fail_open_recipients(
+        chunk,
+        error_code=NOTIFY_ERROR_DINGTALK_REJECTED,
+        error=str(error)[:NOTIFY_ERROR_MAX_CHARS],
+    )
+    return False
+
+
+def _record_network_error(
+    message: NotifyMessage,
+    claim_token: str,
+    error: Exception,
+) -> None:
+    _ = NotifyMessage.objects.filter(id=message.id, claim_token=claim_token).update(
+        last_error=str(error)[:NOTIFY_ERROR_MAX_CHARS],
+    )
+
+
+def _complete_delivery_round(
+    message: NotifyMessage,
+    *,
+    claim_token: str,
+    generation: int,
+    network_interrupted: bool,
+) -> None:
     message.refresh_from_db()
     refresh_message_counts(message)
     message.refresh_from_db()

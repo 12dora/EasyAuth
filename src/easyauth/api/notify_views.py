@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Final, TypedDict, cast
 from uuid import UUID
@@ -25,7 +26,11 @@ from easyauth.applications.services import AppPrincipal
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.config.rate_limit import client_ip, over_limit, rate_limit_exceeded
 from easyauth.notify.acceptance import accept_notify_message
-from easyauth.notify.contracts import DEFAULT_DEEPLINK_TITLE, NotifyAcceptError
+from easyauth.notify.contracts import (
+    DEFAULT_DEEPLINK_TITLE,
+    AcceptNotifyResult,
+    NotifyAcceptError,
+)
 from easyauth.notify.models import NotifyMessage, NotifyRecipient
 
 _AUTHENTICATION_FAILED_MESSAGE: Final = "应用认证凭据无效。"
@@ -52,7 +57,7 @@ _NOTIFY_REJECTED_ACTION: Final = "app_notify_rejected"
 # Bearer 鉴权的服务端到服务端接口, 无浏览器会话, 豁免 CSRF(对齐 approval_views 的 POST 端点)。
 @csrf_exempt
 @require_http_methods(["POST"])
-def notify_messages_create(request: HttpRequest, app_key: str) -> JsonResponse:  # noqa: PLR0911
+def notify_messages_create(request: HttpRequest, app_key: str) -> JsonResponse:
     match _authenticate_notify_capability(request, app_key):
         case (App() as app, AppPrincipal() as principal):
             pass
@@ -68,21 +73,50 @@ def notify_messages_create(request: HttpRequest, app_key: str) -> JsonResponse: 
     ):
         return _too_many_requests_response(_POST_RATE_WINDOW_SECONDS)
 
+    match _parse_create_request(request, principal):
+        case _ParsedCreateRequest() as parsed:
+            pass
+        case JsonResponse() as response:
+            return response
+    match _accept_create_request(app, principal, parsed):
+        case AcceptNotifyResult() as result:
+            return _accepted_response(result, principal)
+        case JsonResponse() as response:
+            return response
+
+
+@dataclass(frozen=True, slots=True)
+class _ParsedCreateRequest:
+    body: dict[str, object]
+    payload: NotifyCreatePayload
+
+
+def _parse_create_request(
+    request: HttpRequest,
+    principal: AppPrincipal,
+) -> _ParsedCreateRequest | JsonResponse:
     body = _json_object_body(request)
     if isinstance(body, JsonResponse):
         return body
-    parsed_payload = _notify_create_payload(body)
-    if isinstance(parsed_payload, JsonResponse):
+    payload = _notify_create_payload(body)
+    if isinstance(payload, JsonResponse):
         _record_notify_rejected(
             principal=principal,
             error_code=ErrorCode.VALIDATION_ERROR.value,
             recipient_count=_recipient_count_from_body(body),
         )
-        return parsed_payload
-    create_payload: NotifyCreatePayload = parsed_payload
+        return payload
+    return _ParsedCreateRequest(body=body, payload=payload)
 
+
+def _accept_create_request(
+    app: App,
+    principal: AppPrincipal,
+    parsed: _ParsedCreateRequest,
+) -> AcceptNotifyResult | JsonResponse:
+    create_payload = parsed.payload
     try:
-        result = accept_notify_message(
+        return accept_notify_message(
             app=app,
             recipients=create_payload["recipients"],
             template=create_payload["template"],
@@ -96,12 +130,12 @@ def notify_messages_create(request: HttpRequest, app_key: str) -> JsonResponse: 
             requested_credential_id=principal.credential_id,
         )
     except NotifyAcceptError as exc:
-        return _accept_error_response(principal=principal, exc=exc, body=body)
+        return _accept_error_response(principal=principal, exc=exc, body=parsed.body)
     except TypeError:
         _record_notify_rejected(
             principal=principal,
             error_code=ErrorCode.VALIDATION_ERROR.value,
-            recipient_count=_recipient_count_from_body(body),
+            recipient_count=_recipient_count_from_body(parsed.body),
         )
         return error_response(
             ErrorCode.VALIDATION_ERROR,
@@ -110,6 +144,8 @@ def notify_messages_create(request: HttpRequest, app_key: str) -> JsonResponse: 
             status=HTTPStatus.UNPROCESSABLE_ENTITY,
         )
 
+
+def _accepted_response(result: AcceptNotifyResult, principal: AppPrincipal) -> JsonResponse:
     _ = AuditService.record(
         AuditRecord(
             actor_type="app",

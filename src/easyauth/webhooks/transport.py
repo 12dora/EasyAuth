@@ -54,6 +54,13 @@ class _OutboundRequest:
     headers: dict[str, str]
 
 
+@dataclass(frozen=True, slots=True)
+class _PreparedRequest:
+    target: ValidatedHttpsUrl
+    connection: HTTPConnection
+    remaining_seconds: float
+
+
 @final
 class _PinnedHttpsConnection(HTTPSConnection):
     def __init__(
@@ -127,35 +134,17 @@ def _request_webhook(
     policy: WebhookRequestPolicy,
 ) -> WebhookHttpResponse:
     started_at = time.monotonic()
-    try:
-        target = validate_public_https_url(
-            request.url,
-            allowed_hosts=request.allowed_hosts,
-            dns_timeout_seconds=_remaining_seconds(started_at, policy.total_timeout_seconds),
-        )
-    except ValueError as error:
-        raise WebhookTransportError(str(error)) from error
-    remaining = _remaining_seconds(started_at, policy.total_timeout_seconds)
-    connect_timeout = min(policy.connect_timeout_seconds, remaining)
-    if target.allow_insecure_http:
-        # E2E 窄门: 仅 DEBUG + 显式 allowlist 时 validate 才置 allow_insecure_http。
-        connection: HTTPConnection = HTTPConnection(
-            target.addresses[0],
-            port=target.port,
-            timeout=connect_timeout,
-        )
-    else:
-        connection = _PinnedHttpsConnection(
-            target=target,
-            address=target.addresses[0],
-            timeout=connect_timeout,
-        )
-    deadline_reached, deadline_timer = _start_deadline_timer(connection, remaining)
+    prepared = _prepare_request(request, policy, started_at)
+    connection = prepared.connection
+    deadline_reached, deadline_timer = _start_deadline_timer(
+        connection,
+        prepared.remaining_seconds,
+    )
     response: HTTPResponse | None = None
     try:
         connection.request(
             request.method,
-            target.request_target,
+            prepared.target.request_target,
             body=request.body,
             headers=request.headers,
         )
@@ -189,6 +178,41 @@ def _request_webhook(
         if response is not None:
             response.close()
         connection.close()
+
+
+def _prepare_request(
+    request: _OutboundRequest,
+    policy: WebhookRequestPolicy,
+    started_at: float,
+) -> _PreparedRequest:
+    try:
+        target = validate_public_https_url(
+            request.url,
+            allowed_hosts=request.allowed_hosts,
+            dns_timeout_seconds=_remaining_seconds(started_at, policy.total_timeout_seconds),
+        )
+    except ValueError as error:
+        raise WebhookTransportError(str(error)) from error
+    remaining = _remaining_seconds(started_at, policy.total_timeout_seconds)
+    connect_timeout = min(policy.connect_timeout_seconds, remaining)
+    if target.allow_insecure_http:
+        # E2E 窄门: 仅 DEBUG + 显式 allowlist 时 validate 才置 allow_insecure_http。
+        connection: HTTPConnection = HTTPConnection(
+            target.addresses[0],
+            port=target.port,
+            timeout=connect_timeout,
+        )
+    else:
+        connection = _PinnedHttpsConnection(
+            target=target,
+            address=target.addresses[0],
+            timeout=connect_timeout,
+        )
+    return _PreparedRequest(
+        target=target,
+        connection=connection,
+        remaining_seconds=remaining,
+    )
 
 
 def _start_deadline_timer(
