@@ -38,7 +38,11 @@ def _logged_in_superuser(username: str) -> Client:
     return client
 
 
-def _attention_fixture(*, app_key: str, detail_supported: bool = False):
+def _attention_fixture(
+    *,
+    app_key: str,
+    detail_supported: bool = False,
+) -> tuple[UserMirror, App, HandoverTask, HandoverAppAction]:
     subject = UserMirror.objects.create(
         authentik_user_id=f"r35-{app_key}-sub",
         name="s",
@@ -93,7 +97,10 @@ def _attention_fixture(*, app_key: str, detail_supported: bool = False):
     return subject, app, task, action
 
 
-@pytest.mark.parametrize("outcome,expected_status", [("failed", ACTION_STATUS_FAILED), ("done", "done")])
+@pytest.mark.parametrize(
+    ("outcome", "expected_status"),
+    [("failed", ACTION_STATUS_FAILED), ("done", "done")],
+)
 def test_console_async_abandon_endpoint_releases_lease(
     outcome: str,
     expected_status: str,
@@ -122,7 +129,10 @@ def test_console_async_abandon_endpoint_releases_lease(
     assert lease.released_at is not None
 
 
-@pytest.mark.parametrize("status_code,reason", [(412, "snapshot_stale"), (423, "downstream_locked")])
+@pytest.mark.parametrize(
+    ("status_code", "reason"),
+    [(412, "snapshot_stale"), (423, "downstream_locked")],
+)
 def test_console_items_maps_hook_status_to_reason(status_code: int, reason: str) -> None:
     client = _logged_in_superuser(f"r35-items-{status_code}")
     _subject, app, task, action = _attention_fixture(

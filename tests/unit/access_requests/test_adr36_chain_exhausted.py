@@ -11,7 +11,12 @@ from easyauth.access_requests.submission_types import (
     AccessRequestSubmissionError,
     ScopedAccessRequestGrant,
 )
-from easyauth.accounts.models import USER_STATUS_ACTIVE, USER_STATUS_DEPARTED, UserMirror
+from easyauth.accounts.models import (
+    USER_STATUS_ACTIVE,
+    USER_STATUS_DEPARTED,
+    DingTalkUserOrgContext,
+    UserMirror,
+)
 from easyauth.applications.models import App, AppScope, Permission
 from easyauth.audit.models import AuditLog
 
@@ -60,7 +65,7 @@ def test_no_active_manager_empty_approver_succeeds_superuser_pool() -> None:
 
 
 def test_missing_manager_chain_does_not_fallback_to_legacy_manager_field() -> None:
-    """目录上下文缺失时，旧 manager_userid 即使指向 active 用户也必须进池。"""
+    """目录上下文缺失时, 旧 manager_userid 即使指向 active 用户也必须进池。"""
     legacy_manager = UserMirror.objects.create(
         authentik_user_id="adr36-legacy-manager",
         status=USER_STATUS_ACTIVE,
@@ -102,8 +107,6 @@ def test_missing_manager_chain_does_not_fallback_to_legacy_manager_field() -> No
 
 def test_chain_exhausted_when_manager_chain_walked_to_end() -> None:
     """链被 walk 到尽头(全部 departed) → routing_reason=chain_exhausted。"""
-    from easyauth.accounts.models import DingTalkUserOrgContext
-
     departed_mgr = UserMirror.objects.create(
         authentik_user_id="adr36-dep-mgr",
         name="dm",
@@ -201,8 +204,6 @@ def test_chain_exhausted_non_manager_approver_still_rejected() -> None:
 
 
 def test_active_manager_only_first_accepted() -> None:
-    from easyauth.accounts.models import DingTalkUserOrgContext
-
     mgr = UserMirror.objects.create(
         authentik_user_id="adr36-mgr",
         name="m",

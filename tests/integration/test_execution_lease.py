@@ -49,7 +49,9 @@ def _setup() -> tuple[HandoverAppAction, HandoverAppAction]:
         app_key="lease-app",
         name="lease",
         handover_capability=HANDOVER_CAPABILITY_DECLARED,
-        handover_asset_types=[{"type": "x", "label": "X", "detail_supported": False, "releasable": False}],
+        handover_asset_types=[
+            {"type": "x", "label": "X", "detail_supported": False, "releasable": False},
+        ],
     )
     task1 = HandoverTask.objects.create(
         kind=HANDOVER_KIND_OFFBOARD,

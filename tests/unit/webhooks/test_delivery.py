@@ -269,7 +269,9 @@ def test_contractually_terminal_http_status_is_not_retried(
     delivery.refresh_from_db()
     assert exc_info.value.retry_scheduled is False
     assert delivery.status == "failed"
-    assert not OutboxEvent.objects.filter(event_key__contains=f"{delivery.delivery_id}:1:attempt").exists()
+    assert not OutboxEvent.objects.filter(
+        event_key__contains=f"{delivery.delivery_id}:1:attempt",
+    ).exists()
 
 
 def test_429_uses_retry_after_and_stale_redelivery_cannot_bypass_backoff(

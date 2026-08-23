@@ -28,7 +28,7 @@ from easyauth.access_requests.submission_types import (
     AccessRequestSubmissionError,
     ScopedAccessRequestGrant,
 )
-from easyauth.accounts.models import UserMirror
+from easyauth.accounts.models import DingTalkUserOrgContext, UserMirror
 from easyauth.applications.models import (
     App,
     ApprovalRule,
@@ -310,6 +310,7 @@ def test_s14_portal_timed_request_creates_request_with_expiration() -> None:
 
 def test_s14_submission_validation_requires_approver_for_managed_users_target() -> None:
     """ADR-002 §36: 链耗尽 + 空审批人 → 提交成功进 superuser_pool;
+
     非首个可用主管的手填审批人仍拒绝。
     """
     # Given: 员工无可用主管链, 提交 MANAGED_USERS scope 申请。
@@ -348,7 +349,6 @@ def test_s14_submission_validation_requires_approver_for_managed_users_target() 
     assert created.routing_reason == "no_active_manager"
     assert AccessRequest.objects.filter(pk=created.pk).exists()
 
-    # And: 手填非主管审批人仍拒绝
     other, _ = UserMirror.objects.get_or_create(
         authentik_user_id="s14-random-approver",
         defaults={"name": "random", "status": "active"},
@@ -378,8 +378,6 @@ def test_s14_submission_validation_requires_approver_for_managed_users_target() 
 
 def test_s14_managed_users_accepts_first_active_manager_only() -> None:
     """链上有 active 主管时, 仅该主管可作为审批人。"""
-    from easyauth.accounts.models import DingTalkUserOrgContext
-
     _client, user = logged_in_client("s14-managed-users-with-manager")
     user.dingtalk_source_slug = "s14"
     user.dingtalk_corp_id = "corp"

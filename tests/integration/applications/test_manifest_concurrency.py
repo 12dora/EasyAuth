@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import suppress
+from typing import TYPE_CHECKING
 
 import pytest
 from django.db import close_old_connections, connection
@@ -14,6 +16,9 @@ from easyauth.applications.manifest_import import sync_app_manifest
 from easyauth.applications.models import App
 from easyauth.applications.ownership import ConsoleActor
 from easyauth.webhooks.models import AppWebhookConfig
+
+if TYPE_CHECKING:
+    from easyauth.applications.permission_template_types import AppManifestInput
 
 pytestmark = pytest.mark.django_db(transaction=True)
 
@@ -59,11 +64,9 @@ def test_concurrent_identical_same_version_imports_are_idempotent(
     barrier = threading.Barrier(2)
     original_parse = manifest_import.parse_permission_template
 
-    def synchronized_parse(*args: object, **kwargs: object):
-        try:
+    def synchronized_parse(*args: object, **kwargs: object) -> AppManifestInput:
+        with suppress(threading.BrokenBarrierError):
             barrier.wait(timeout=0.5)
-        except threading.BrokenBarrierError:
-            pass
         return original_parse(*args, **kwargs)
 
     monkeypatch.setattr(manifest_import, "parse_permission_template", synchronized_parse)

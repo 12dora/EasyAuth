@@ -12,6 +12,7 @@ from pydantic import TypeAdapter
 from easyauth.accounts.models import UserMirror
 from easyauth.api.errors import JsonValue
 from easyauth.applications.models import (
+    HANDOVER_CAPABILITY_DECLARED,
     App,
     AppScope,
     AuthorizationGroup,
@@ -34,6 +35,8 @@ from easyauth.lifecycle.models import (
     OnboardingTemplateRevisionItem,
     TransferPlan,
 )
+from easyauth.webhooks.hooks import HookResponse
+from easyauth.webhooks.models import AppWebhookConfig
 from tests.integration.admin_console.auth_helpers import authenticate_console_admin
 
 pytestmark = pytest.mark.django_db
@@ -232,10 +235,6 @@ def test_grant_selection_patch_invalidates_related_preview(
         ),
     )
     receiver = UserMirror.objects.create(authentik_user_id="handover-selection-preview-receiver")
-    from easyauth.applications.models import HANDOVER_CAPABILITY_DECLARED
-    from easyauth.webhooks.hooks import HookResponse
-    from easyauth.webhooks.models import AppWebhookConfig
-
     app.handover_capability = HANDOVER_CAPABILITY_DECLARED
     app.handover_asset_types = [
         {"type": "customer", "label": "客户", "detail_supported": False, "releasable": False},

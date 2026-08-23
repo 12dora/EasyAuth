@@ -30,7 +30,10 @@ def _login(client: Client, user: UserMirror) -> Client:
     return client
 
 
-@pytest.mark.parametrize("status_code,reason", [(412, "snapshot_stale"), (423, "downstream_locked")])
+@pytest.mark.parametrize(
+    ("status_code", "reason"),
+    [(412, "snapshot_stale"), (423, "downstream_locked")],
+)
 def test_portal_items_maps_hook_status_to_reason(status_code: int, reason: str) -> None:
     assignee = UserMirror.objects.create(
         authentik_user_id=f"portal-items-{status_code}",

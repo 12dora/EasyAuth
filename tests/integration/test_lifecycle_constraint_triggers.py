@@ -44,8 +44,8 @@ def test_grant_receiver_offboard_trigger_rejects_reassign() -> None:
         app=app,
         status=ACTION_STATUS_PENDING,
     )
+    action.grant_receiver = receiver
     with pytest.raises((InternalError, ProgrammingError)), transaction.atomic():
-        action.grant_receiver = receiver
         action.save(update_fields=["grant_receiver", "updated_at"])
 
 
