@@ -21,21 +21,19 @@ from easyauth.integrations.authentik.admin_client import (
     AuthentikAdminPaginationLimitError,
     AuthentikAdminUserNotFoundError,
 )
-from easyauth.lifecycle.escalation import escalate_overdue_task
 from easyauth.lifecycle.errors import HandoverConflictError
-from easyauth.lifecycle.handover import (
-    RATE_LIMITED_EXECUTE_RETRY_TASK,
-    execute_action,
-    poll_async_action,
-    takeover_expired_lease,
-)
+from easyauth.lifecycle.escalation import escalate_overdue_task
+from easyauth.lifecycle.handover import execute_action
+from easyauth.lifecycle.handover_async import poll_async_action
+from easyauth.lifecycle.handover_recovery import takeover_expired_lease
+from easyauth.lifecycle.handover_shared import RATE_LIMITED_EXECUTE_RETRY_TASK
 from easyauth.lifecycle.models import (
     ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
     ACTION_STATUS_ASYNC_PENDING,
+    TASK_OPEN_STATUSES,
     HandoverAppAction,
     HandoverExecutionLease,
     HandoverTask,
-    TASK_OPEN_STATUSES,
 )
 from easyauth.lifecycle.tasks import (
     DISABLE_ACCOUNT_TASK_NAME,

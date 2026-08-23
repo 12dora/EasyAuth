@@ -6,7 +6,7 @@ import pytest
 
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.applications.models import App
-from easyauth.lifecycle.handover import validate_execute_summary_conservation
+from easyauth.lifecycle.handover_validation import validate_execute_summary_conservation
 from easyauth.lifecycle.models import (
     HANDOVER_KIND_OFFBOARD,
     HandoverAppAction,

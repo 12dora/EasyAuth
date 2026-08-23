@@ -133,7 +133,7 @@ def test_console_items_maps_hook_status_to_reason(status_code: int, reason: str)
     action.save(update_fields=["status", "updated_at"])
 
     with patch(
-        "easyauth.lifecycle.handover.signed_hook_post",
+        "easyauth.lifecycle.handover_validation.signed_hook_post",
         side_effect=HookCallError(f"HTTP {status_code}", status_code=status_code),
     ):
         resp = client.get(

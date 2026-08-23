@@ -5,27 +5,22 @@ from __future__ import annotations
 import json
 from datetime import timedelta
 from typing import Any
-from unittest.mock import patch
 
 import pytest
 from django.utils import timezone
 
-from easyauth.accounts.models import USER_STATUS_ACTIVE, USER_STATUS_DEPARTED, UserMirror
+from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.applications.models import App
 from easyauth.audit.models import AuditLog
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
-from easyauth.lifecycle.handover import (
-    _ensure_batch_plan_on_413,
-    _handle_execute_response,
-    async_abandon_action,
-    complete_data_phase,
-    execute_action,
-    poll_async_action,
-    retry_action,
-    takeover_expired_lease,
-    update_grant_receiver,
-    validate_execute_summary_conservation,
-)
+from easyauth.lifecycle.handover import execute_action, retry_action
+from easyauth.lifecycle.handover_actions import update_grant_receiver
+from easyauth.lifecycle.handover_async import poll_async_action
+from easyauth.lifecycle.handover_data import complete_data_phase
+from easyauth.lifecycle.handover_delivery import handle_execute_response
+from easyauth.lifecycle.handover_manual import async_abandon_action
+from easyauth.lifecycle.handover_payloads import ensure_batch_plan_on_413
+from easyauth.lifecycle.handover_recovery import takeover_expired_lease
 from easyauth.lifecycle.lease import LeaseHandle, require_cas, take_lease
 from easyauth.lifecycle.models import (
     ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
@@ -312,7 +307,7 @@ def test_async_abandon_claims_unique_fence_before_summary_write(
         observed["competing_request_rejected"] = True
 
     monkeypatch.setattr(
-        "easyauth.lifecycle.handover.transfer_selected_grants",
+        "easyauth.lifecycle.handover_data.transfer_selected_grants",
         assert_manual_claim,
     )
 
@@ -382,7 +377,7 @@ def test_poll_attention_action_enforces_30_minute_gate(
     def unexpected_get(**_kwargs: object) -> HookResponse:
         raise AssertionError("30 分钟内不得发起状态查询")
 
-    monkeypatch.setattr("easyauth.lifecycle.handover.signed_hook_get", unexpected_get)
+    monkeypatch.setattr("easyauth.lifecycle.handover_async.signed_hook_get", unexpected_get)
 
     result = poll_async_action(action, worker_id="poller:manual-console")
 
@@ -415,7 +410,7 @@ def test_takeover_payload_conflict_enters_manual_resolution(
     lease.save(update_fields=["lease_expires_at"])
 
     monkeypatch.setattr(
-        "easyauth.lifecycle.handover.signed_hook_post",
+        "easyauth.lifecycle.handover_recovery.signed_hook_post",
         lambda **_kwargs: HookResponse(status_code=409, location="", payload={"conflict": True}),
     )
 
@@ -554,7 +549,7 @@ def test_accepted_without_location_fails_delivery_and_releases_lease() -> None:
     )
 
     with pytest.raises(HandoverError, match="状态查询 URL"):
-        _handle_execute_response(
+        handle_execute_response(
             action_id=int(action.id),
             batch_id=int(batch.id),
             delivery_id=int(delivery.id),
@@ -609,7 +604,7 @@ def test_later_413_keeps_partial_plan_and_releases_lease() -> None:
     )
 
     with pytest.raises(HandoverError, match="单独指定的条目过多"):
-        _handle_execute_response(
+        handle_execute_response(
             action_id=int(action.id),
             batch_id=int(batch.id),
             delivery_id=int(delivery.id),
@@ -663,7 +658,7 @@ def test_execute_error_body_is_whitelisted_redacted_and_utf8_bounded() -> None:
     }
 
     with pytest.raises(HandoverError):
-        _handle_execute_response(
+        handle_execute_response(
             action_id=int(action.id),
             batch_id=int(batch.id),
             delivery_id=int(delivery.id),
@@ -718,7 +713,7 @@ def test_planned_execute_validates_grant_receiver_in_assignment_hash() -> None:
     )
     action.snapshot_token = "tok"
     action.save(update_fields=["snapshot_token", "updated_at"])
-    _ = _ensure_batch_plan_on_413(action)
+    _ = ensure_batch_plan_on_413(action)
     HandoverAppAction.objects.filter(pk=action.pk).update(grant_receiver=receiver)
     action.refresh_from_db()
 
@@ -837,7 +832,7 @@ def test_attention_lease_recovery_respects_30min_gate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """V-01: 30 分钟内 recovery beat 不得 poll / 不得烧 fence。"""
-    from easyauth.lifecycle.handover import takeover_expired_lease
+    from easyauth.lifecycle.handover_recovery import takeover_expired_lease
     from easyauth.lifecycle.models import HandoverLeaseFence
     from easyauth.tasks.lifecycle import lifecycle_recover_expired_execution_leases_task
 
@@ -874,7 +869,7 @@ def test_attention_lease_recovery_respects_30min_gate(
         get_calls["n"] += 1
         raise AssertionError("signed_hook_get must not run within 30min attention gate")
 
-    monkeypatch.setattr("easyauth.lifecycle.handover.signed_hook_get", unexpected_get)
+    monkeypatch.setattr("easyauth.lifecycle.handover_async.signed_hook_get", unexpected_get)
 
     first = lifecycle_recover_expired_execution_leases_task()
     second = lifecycle_recover_expired_execution_leases_task()

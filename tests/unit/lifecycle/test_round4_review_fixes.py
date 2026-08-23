@@ -13,7 +13,7 @@ from easyauth.lifecycle.assignments import (
     put_overrides,
 )
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
-from easyauth.lifecycle.handover import _ensure_batch_plan_on_413
+from easyauth.lifecycle.handover_payloads import ensure_batch_plan_on_413
 from easyauth.lifecycle.models import (
     ACTION_STATUS_PREVIEWED,
     BATCH_PLAN_STATUS_ABANDONED,
@@ -100,7 +100,7 @@ def test_pending_retry_batch_blocks_assignment_mutation_without_writes() -> None
 
 def test_zero_progress_plan_is_atomically_replanned_after_assignment_change() -> None:
     action, asset_type, receiver = _action()
-    old_plan = _ensure_batch_plan_on_413(action)
+    old_plan = ensure_batch_plan_on_413(action)
 
     _asset, confirm_version = patch_asset_type_defaults(
         action,

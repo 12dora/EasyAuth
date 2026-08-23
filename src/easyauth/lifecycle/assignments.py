@@ -102,7 +102,7 @@ def put_overrides(
 ) -> PutOverridesResult:
     """校验完整集合后整体替换 overrides。"""
     with transaction.atomic():
-        locked = _locked_action_after_task(action)
+        locked = locked_action_after_task(action)
         plan = _assert_mutable(locked)
         if overrides_version != locked.overrides_version:
             raise HandoverConflictError("overrides_version_stale")
@@ -163,7 +163,7 @@ def put_overrides(
 
 def list_overrides(action: HandoverAppAction, *, type_key: str) -> dict[str, object]:
     with transaction.atomic():
-        locked = _locked_action_after_task(action)
+        locked = locked_action_after_task(action)
         asset = HandoverAssetType.objects.filter(
             action=locked,
             generation=locked.generation,
@@ -196,7 +196,7 @@ def list_overrides(action: HandoverAppAction, *, type_key: str) -> dict[str, obj
         }
 
 
-def _locked_action_after_task(action: HandoverAppAction) -> HandoverAppAction:
+def locked_action_after_task(action: HandoverAppAction) -> HandoverAppAction:
     _ = action.task_id
     _ = HandoverTask.objects.select_for_update().get(pk=action.task_id)
     return (
@@ -237,9 +237,9 @@ def _replan_zero_progress_batch(
     if plan is None:
         return
     # 01 §2.4.1.1: 修改与旧计划废弃、新 canonical assignment 重新规划同事务提交。
-    from easyauth.lifecycle.handover import _ensure_batch_plan_on_413
+    from easyauth.lifecycle.handover_payloads import ensure_batch_plan_on_413
 
-    _ = _ensure_batch_plan_on_413(action)
+    _ = ensure_batch_plan_on_413(action)
 
 
 def _resolve_receiver(

@@ -26,7 +26,7 @@ from easyauth.lifecycle.core import (
     refresh_task_status,
 )
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
-from easyauth.lifecycle.handover import initial_action_status_for_app
+from easyauth.lifecycle.handover_actions import initial_action_status_for_app
 from easyauth.lifecycle.models import (
     ACTION_STATUS_BLOCKED,
     ACTION_STATUS_PENDING,
@@ -370,9 +370,9 @@ def upgrade_pre_offboard_to_offboard(
     snapshot_grant_ids: tuple[int, ...] | None = None,
 ) -> HandoverTask:
     """00 §8.3 / 01 §5.1.2: pre_offboard → offboard 升级。调用方须已锁 task。"""
-    from easyauth.lifecycle.handover import reset_action_for_upgrade
-    from easyauth.lifecycle.lease import has_active_lease
     from easyauth.lifecycle.approvals import reassign_approvals_for_departed
+    from easyauth.lifecycle.handover_actions import reset_action_for_upgrade
+    from easyauth.lifecycle.lease import has_active_lease
 
     if task.kind != HANDOVER_KIND_PRE_OFFBOARD:
         raise HandoverConflictError(TASK_KIND_CONFLICT_MESSAGE)

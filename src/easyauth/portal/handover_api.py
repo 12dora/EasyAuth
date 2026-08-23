@@ -33,14 +33,11 @@ from easyauth.lifecycle.assignments import (
     put_overrides,
 )
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
-from easyauth.lifecycle.handover import (
-    MutationGuard,
-    execute_action,
-    fetch_action_items,
-    preview_action,
-    retry_action,
-    update_grant_receiver,
-)
+from easyauth.lifecycle.handover import execute_action, retry_action
+from easyauth.lifecycle.handover_actions import update_grant_receiver
+from easyauth.lifecycle.handover_preview import preview_action
+from easyauth.lifecycle.handover_shared import MutationGuard
+from easyauth.lifecycle.handover_validation import fetch_action_items
 from easyauth.lifecycle.jurisdiction import (
     assert_manager_of,
     list_reassign_subject_candidates,

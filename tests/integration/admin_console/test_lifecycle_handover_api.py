@@ -21,10 +21,10 @@ from easyauth.applications.models import (
 from easyauth.grants.inputs import AuthorizationGroupGrantInput
 from easyauth.grants.models import AccessGrant
 from easyauth.grants.services import GrantMutationInput, GrantService
-from easyauth.lifecycle import handover as handover_services
+from easyauth.lifecycle import handover_preview
 from easyauth.lifecycle import offboarding as offboarding_services
-from easyauth.lifecycle.errors import HandoverConflictError
-from easyauth.lifecycle.handover import update_action_receiver
+from easyauth.lifecycle.handover_actions import update_action_receiver
+from easyauth.lifecycle.handover_preview import preview_action
 from easyauth.lifecycle.models import (
     HandoverAppAction,
     HandoverGrantItem,
@@ -283,8 +283,8 @@ def test_grant_selection_patch_invalidates_related_preview(
             },
         )
 
-    monkeypatch.setattr(handover_services, "signed_hook_post", fake_preview)
-    action = handover_services.preview_action(action)
+    monkeypatch.setattr(handover_preview, "signed_hook_post", fake_preview)
+    action = preview_action(action)
     item = HandoverGrantItem.objects.get(task=task, app=app)
 
     response = client.patch(

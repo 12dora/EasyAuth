@@ -21,22 +21,22 @@ from easyauth.audit.models import AuditLog
 from easyauth.grants.inputs import AuthorizationGroupGrantInput, ScopedDirectGrantInput
 from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
 from easyauth.grants.services import GrantMutationInput, GrantService
-from easyauth.lifecycle import handover as lifecycle_services
+from easyauth.lifecycle import handover_async, handover_execution, handover_preview
 from easyauth.lifecycle.core import refresh_task_status
-from easyauth.lifecycle.errors import HandoverConflictError
-from easyauth.lifecycle.handover import (
+from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
+from easyauth.lifecycle.handover import execute_action, retry_action
+from easyauth.lifecycle.handover_actions import (
     cancel_task,
     delete_task,
-    execute_action,
-    poll_async_action,
-    preview_action,
-    retry_action,
     update_action_receiver,
 )
+from easyauth.lifecycle.handover_async import poll_async_action
+from easyauth.lifecycle.handover_preview import preview_action
 from easyauth.lifecycle.models import (
     ACTION_STATUS_SKIPPED,
     HANDOVER_KIND_TRANSFER,
     HandoverAppAction,
+    HandoverDeliveryAttempt,
     HandoverGrantItem,
     HandoverTask,
     HandoverTeamItem,
@@ -57,7 +57,7 @@ from easyauth.lifecycle.onboarding import onboard_user
 from easyauth.lifecycle.transfer import build_transfer_grant_diff, confirm_transfer_grant_diff
 from easyauth.outbox.models import OutboxEvent
 from easyauth.teams.models import Team, TeamMember
-from easyauth.webhooks.hooks import HookResponse
+from easyauth.webhooks.hooks import HookCallError, HookResponse
 from easyauth.webhooks.models import AppWebhookConfig
 
 if TYPE_CHECKING:
@@ -309,7 +309,8 @@ def test_execute_action_transfers_selected_grants_and_calls_hook(
             },
         )
 
-    monkeypatch.setattr(lifecycle_services, "signed_hook_post", fake_hook)
+    monkeypatch.setattr(handover_preview, "signed_hook_post", fake_hook)
+    monkeypatch.setattr(handover_execution, "signed_hook_post", fake_hook)
 
     # When
     action = preview_action(action)
@@ -356,7 +357,7 @@ def test_preview_action_rejects_stale_hook_response(
         stale_action.save(update_fields=["preview_generation", "updated_at"])
         return HookResponse(status_code=200, location="", payload={**_preview_ok_payload(), "assets": [{"type": "customer", "label": "客户", "count": 1, "detail_supported": False, "releasable": False}]})
 
-    monkeypatch.setattr(lifecycle_services, "signed_hook_post", stale_hook)
+    monkeypatch.setattr(handover_preview, "signed_hook_post", stale_hook)
 
     # When / Then: 旧 hook 响应不得覆盖新 generation 的预览结果。
     with pytest.raises(HandoverConflictError):
@@ -401,7 +402,8 @@ def test_execute_action_keeps_accepted_hook_pending(
             payload={"accepted": True},
         )
 
-    monkeypatch.setattr(lifecycle_services, "signed_hook_post", accepted_hook)
+    monkeypatch.setattr(handover_preview, "signed_hook_post", accepted_hook)
+    monkeypatch.setattr(handover_execution, "signed_hook_post", accepted_hook)
 
     # When
     action = preview_action(action)
@@ -437,7 +439,8 @@ def test_poll_async_action_completes_action_and_task(
             return HookResponse(status_code=200, location="", payload=_preview_ok_payload())
         return HookResponse(status_code=202, location=status_url, payload={"accepted": True})
 
-    monkeypatch.setattr(lifecycle_services, "signed_hook_post", accepted_hook)
+    monkeypatch.setattr(handover_preview, "signed_hook_post", accepted_hook)
+    monkeypatch.setattr(handover_execution, "signed_hook_post", accepted_hook)
     action = preview_action(action)
     pending = execute_action(action)
     assert pending.status == "async_pending"
@@ -459,7 +462,7 @@ def test_poll_async_action_completes_action_and_task(
             },
         )
 
-    monkeypatch.setattr(lifecycle_services, "signed_hook_get", completed_hook)
+    monkeypatch.setattr(handover_async, "signed_hook_get", completed_hook)
 
     # When
     completed = poll_async_action(pending)
@@ -532,7 +535,7 @@ def test_poll_async_action_at_limit_sets_attention_required(
         called = True
         return HookResponse(status_code=200, location="", payload={})
 
-    monkeypatch.setattr(lifecycle_services, "signed_hook_get", unexpected_hook)
+    monkeypatch.setattr(handover_async, "signed_hook_get", unexpected_hook)
 
     result = poll_async_action(action)
     assert called is False
@@ -566,7 +569,8 @@ def test_execute_action_requires_receiver_or_release_policy(
             )
         return HookResponse(status_code=200, location="", payload={"summary": {}})
 
-    monkeypatch.setattr(lifecycle_services, "signed_hook_post", fake_hook)
+    monkeypatch.setattr(handover_preview, "signed_hook_post", fake_hook)
+    monkeypatch.setattr(handover_execution, "signed_hook_post", fake_hook)
     action = preview_action(action)
     done = execute_action(action)
     assert done.status == "done"
@@ -587,7 +591,7 @@ def test_execute_429_schedules_new_delivery_after_retry_after(
     def fake_hook(*, event_type: str, **_kwargs: object) -> HookResponse:
         if event_type == "lifecycle.handover.preview":
             return HookResponse(status_code=200, location="", payload=_preview_ok_payload())
-        raise lifecycle_services.HookCallError(
+        raise HookCallError(
             "rate limited",
             status_code=429,
             payload={
@@ -605,10 +609,11 @@ def test_execute_429_schedules_new_delivery_after_retry_after(
             retry_after_seconds=120,
         )
 
-    monkeypatch.setattr(lifecycle_services, "signed_hook_post", fake_hook)
+    monkeypatch.setattr(handover_preview, "signed_hook_post", fake_hook)
+    monkeypatch.setattr(handover_execution, "signed_hook_post", fake_hook)
     action = preview_action(action)
     before = timezone.now()
-    with pytest.raises(lifecycle_services.HookCallError):
+    with pytest.raises(HookCallError):
         _ = execute_action(action)
 
     action.refresh_from_db()
@@ -616,7 +621,7 @@ def test_execute_429_schedules_new_delivery_after_retry_after(
     event = OutboxEvent.objects.get(task_name="easyauth.lifecycle.retry_rate_limited_execute")
     assert event.args == [action.id, action.generation]
     assert event.available_at >= before + timedelta(seconds=119)
-    attempt = lifecycle_services.HandoverDeliveryAttempt.objects.get(batch__action=action)
+    attempt = HandoverDeliveryAttempt.objects.get(batch__action=action)
     assert attempt.response_payload["byte_length"] > 0
     assert len(str(attempt.response_payload["sha256"])) == 64
     assert "RATE_LIMITED" in str(attempt.response_payload["error_summary"])
@@ -655,12 +660,13 @@ def test_failed_execution_locks_receiver_and_retry_uses_execution_receiver(
         hook_receivers.append(payload.get("from_user_id"))
         if len(hook_receivers) == 1:
             message = "首次 hook 失败"
-            raise lifecycle_services.HookCallError(message)
+            raise HookCallError(message)
         return HookResponse(status_code=200, location="", payload={"ok": True})
 
-    monkeypatch.setattr(lifecycle_services, "signed_hook_post", flaky_hook)
+    monkeypatch.setattr(handover_preview, "signed_hook_post", flaky_hook)
+    monkeypatch.setattr(handover_execution, "signed_hook_post", flaky_hook)
     action = preview_action(action)
-    with pytest.raises(lifecycle_services.HookCallError):
+    with pytest.raises(HookCallError):
         _ = execute_action(action)
     action.refresh_from_db()
     assert action.grant_receiver_id == receiver_a.id
@@ -703,7 +709,7 @@ def test_action_receiver_cannot_be_handover_subject() -> None:
     action = HandoverAppAction.objects.get(task=task, app=app)
 
     # Then: 交接对象不能把授权转授给自己。
-    with pytest.raises(lifecycle_services.HandoverError):
+    with pytest.raises(HandoverError):
         _ = update_action_receiver(action=action, to_user=subject)
 
 
@@ -757,7 +763,8 @@ def test_expired_receiver_grant_is_not_merged_or_revived(
             )
         return HookResponse(status_code=200, location="", payload={"summary": {}})
 
-    monkeypatch.setattr(lifecycle_services, "signed_hook_post", fake_hook)
+    monkeypatch.setattr(handover_preview, "signed_hook_post", fake_hook)
+    monkeypatch.setattr(handover_execution, "signed_hook_post", fake_hook)
     action = preview_action(action)
 
     # When
@@ -791,7 +798,7 @@ def test_execute_action_rejects_non_operable_status(status: str) -> None:
     action.save(update_fields=["status", "updated_at"])
 
     # When / Then: 状态机拒绝不可操作状态, 不会二次执行。
-    with pytest.raises(lifecycle_services.HandoverConflictError):
+    with pytest.raises(HandoverConflictError):
         _ = execute_action(action)
     assert HandoverAppAction.objects.get(pk=action.pk).status == status
 
@@ -888,7 +895,7 @@ def test_transfer_diff_confirmation_rejects_terminal_task(
     add_keys = _plan_diff_keys(plan, "add")
 
     # When / Then: 终态后不得再改写授权。
-    with pytest.raises(lifecycle_services.HandoverConflictError):
+    with pytest.raises(HandoverConflictError):
         _finish_actions_for_transfer(task)
         _ = confirm_transfer_grant_diff(
             task=HandoverTask.objects.get(pk=task.pk),
@@ -956,7 +963,7 @@ def test_transfer_diff_confirmation_conflicts_for_different_payload() -> None:
     )
 
     # When / Then: 相同 plan 上的异载荷不能被当作幂等重试。
-    with pytest.raises(lifecycle_services.HandoverConflictError):
+    with pytest.raises(HandoverConflictError):
         _finish_actions_for_transfer(task)
         _ = confirm_transfer_grant_diff(
             task=HandoverTask.objects.get(pk=task.pk),
@@ -973,7 +980,7 @@ def test_transfer_diff_confirmation_rejects_unknown_keys() -> None:
     add_keys = _plan_diff_keys(plan, "add")
 
     # When / Then: 任何未知 key 都快速失败, 不能静默过滤后部分执行。
-    with pytest.raises(lifecycle_services.HandoverError):
+    with pytest.raises(HandoverError):
         _finish_actions_for_transfer(task)
         _ = confirm_transfer_grant_diff(
             task=task,
@@ -1092,7 +1099,7 @@ def test_transfer_diff_confirmation_rejects_legacy_unfrozen_add_entry() -> None:
     plan.save(update_fields=["grant_diff", "updated_at"])
 
     # When / Then: 确认必须失败, 不能回读当前模板推断缺失事实。
-    with pytest.raises(lifecycle_services.HandoverError, match="app_key"):
+    with pytest.raises(HandoverError, match="app_key"):
         _finish_actions_for_transfer(task)
         _ = confirm_transfer_grant_diff(
             task=task,
@@ -1402,7 +1409,7 @@ def test_open_task_with_different_kind_conflicts() -> None:
     )
 
     # When / Then: 转岗单不能将离职单当作幂等结果。
-    with pytest.raises(lifecycle_services.HandoverConflictError):
+    with pytest.raises(HandoverConflictError):
         _ = ensure_handover_task(subject=subject, kind="transfer", created_by="a")
     assert HandoverTask.objects.filter(subject_user=subject).count() == 1
     assert HandoverTask.objects.get(subject_user=subject).id == first.id

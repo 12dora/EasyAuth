@@ -32,20 +32,18 @@ from easyauth.lifecycle.api_payloads import (
     asset_type_item,
     task_detail,
 )
+from easyauth.lifecycle.assignee import AssigneeResolution, apply_assignee
 from easyauth.lifecycle.assignments import (
     OverrideEntry,
     list_overrides,
     patch_asset_type_defaults,
     put_overrides,
 )
-from easyauth.lifecycle.assignee import AssigneeResolution, apply_assignee
 from easyauth.lifecycle.core import record_task_event
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
-from easyauth.lifecycle.handover import (
-    async_abandon_action,
-    fetch_action_items,
-    update_grant_receiver,
-)
+from easyauth.lifecycle.handover_actions import update_grant_receiver
+from easyauth.lifecycle.handover_manual import async_abandon_action
+from easyauth.lifecycle.handover_validation import fetch_action_items
 from easyauth.lifecycle.jurisdiction import list_receiver_candidates
 from easyauth.lifecycle.models import (
     ACTION_STATUS_BLOCKED,
@@ -54,10 +52,10 @@ from easyauth.lifecycle.models import (
     AUTHORITY_SOURCE_SUPERUSER,
     HANDOVER_ESCALATION_DAYS,
     HANDOVER_KIND_REASSIGN,
+    TASK_OPEN_STATUSES,
+    ApprovalRuleReplacementRequired,
     HandoverAppAction,
     HandoverTask,
-    ApprovalRuleReplacementRequired,
-    TASK_OPEN_STATUSES,
 )
 from easyauth.lifecycle.offboarding import HandoverCreationSpec, ensure_handover_task
 from easyauth.webhooks.hooks import HookCallError

@@ -93,7 +93,7 @@ def test_portal_items_maps_hook_status_to_reason(status_code: int, reason: str) 
     )
     client = _login(Client(), assignee)
     with patch(
-        "easyauth.lifecycle.handover.signed_hook_post",
+        "easyauth.lifecycle.handover_validation.signed_hook_post",
         side_effect=HookCallError(f"HTTP {status_code}", status_code=status_code),
     ):
         resp = client.get(
