@@ -1,10 +1,16 @@
 import { afterEach, describe, expect, test, vi } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 import { API_SESSION_EXPIRED_EVENT, apiRequest, itemsFromPayload, readCsrfToken } from "./api";
 
-const domainSource = readFileSync(resolve(process.cwd(), "src/lib/domain.ts"), "utf8");
+// domain.ts 已拆成 domain/ 下的六个领域契约文件, 它自身只做再导出。
+// 这里把整个目录拼起来读, 护栏才不会因为声明换了文件就失效。
+const DOMAIN_DIR = resolve(process.cwd(), "src/lib/domain");
+const domainSource = readdirSync(DOMAIN_DIR)
+  .filter((name) => name.endsWith(".ts"))
+  .map((name) => readFileSync(resolve(DOMAIN_DIR, name), "utf8"))
+  .join("\n");
 
 function interfaceBody(interfaceName: string): string {
   const match = domainSource.match(
