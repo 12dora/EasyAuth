@@ -1,0 +1,257 @@
+import { ApiError } from "../../../lib/api";
+import type { Pagination } from "../../../lib/api";
+import type { PortalApprovalApplicant } from "../../../lib/domain";
+
+import type {
+  ApprovalAuthorizationGroup,
+  ApprovalGrantFact,
+  ApprovalListPayload,
+  CommittedGrantStatus,
+  PortalApprovalRow,
+} from "./portalApprovalTypes";
+
+const APPROVAL_REQUEST_TYPES = new Set(["grant", "change", "revoke", "renew"]);
+const APPROVAL_STATUSES = new Set([
+  "submitted",
+  "approved",
+  "rejected",
+  "grant_applied",
+  "grant_failed",
+  "grant_conflict",
+  "grant_expired",
+]);
+const APPROVAL_GRANT_TYPES = new Set(["permanent", "timed"]);
+const APPROVAL_ROW_KEYS = [
+  "id",
+  "app_key",
+  "app_name",
+  "request_type",
+  "base_grant_id",
+  "base_grant_revision",
+  "status",
+  "status_label",
+  "grant_type",
+  "grant_expires_at",
+  "reason",
+  "submitted_at",
+  "authorization_groups",
+  "direct_grants",
+  "decided_at",
+  "decision_comment",
+  "applicant",
+  "approver_user_ids",
+  "decided_by",
+] as const;
+
+export function committedGrantStatus(error: unknown, expectedApprovalId: number): CommittedGrantStatus | null {
+  if (!(error instanceof ApiError) || error.status !== 422 || !isRecord(error.details)) {
+    return null;
+  }
+  const status = error.details.status;
+  if (status !== "grant_failed" && status !== "grant_expired") {
+    return null;
+  }
+  const approval = error.details.approval;
+  return (
+    error.details.decision_committed === true &&
+    isPortalApprovalRow(approval) &&
+    approval.id === expectedApprovalId &&
+    approval.status === status
+  )
+    ? status
+    : null;
+}
+
+export function applicationConflictRequiresResubmit(error: ApiError): boolean {
+  if (!isRecord(error.details)) {
+    return false;
+  }
+  return (
+    error.details.reason === "base_grant_revision_conflict" ||
+    error.details.reason === "request_expired"
+  );
+}
+
+export function parseApprovalListPayload(payload: unknown, errorMessage: string): ApprovalListPayload {
+  if (
+    !isRecord(payload) ||
+    !hasExactKeys(payload, ["data", "pagination"]) ||
+    !Array.isArray(payload.data) ||
+    !isPagination(payload.pagination)
+  ) {
+    throw new Error(errorMessage);
+  }
+  const expectedTotalPages = Math.ceil(payload.pagination.total_items / payload.pagination.page_size);
+  if (
+    payload.pagination.total_pages !== expectedTotalPages ||
+    payload.pagination.page > Math.max(payload.pagination.total_pages, 1) ||
+    payload.data.length > payload.pagination.page_size ||
+    !payload.data.every(isPortalApprovalRow)
+  ) {
+    throw new Error(errorMessage);
+  }
+  return { data: payload.data, pagination: payload.pagination };
+}
+
+export function parseApprovalDetailPayload(
+  payload: unknown,
+  errorMessage: string,
+  expectedApprovalId: number,
+): { approval: PortalApprovalRow } {
+  if (
+    !isRecord(payload) ||
+    !hasExactKeys(payload, ["approval"]) ||
+    !isPortalApprovalRow(payload.approval) ||
+    payload.approval.id !== expectedApprovalId
+  ) {
+    throw new Error(errorMessage);
+  }
+  return { approval: payload.approval };
+}
+
+function isPortalApprovalRow(value: unknown): value is PortalApprovalRow {
+  if (!isRecord(value) || !hasExactKeys(value, APPROVAL_ROW_KEYS)) {
+    return false;
+  }
+  return (
+    hasApprovalIdentity(value) &&
+    hasApprovalLifecycleShape(value) &&
+    hasApprovalTargets(value) &&
+    hasApprovalDecisionShape(value)
+  );
+}
+
+function hasApprovalIdentity(value: Record<string, unknown>): boolean {
+  const requiredStrings = [
+    value.app_key,
+    value.app_name,
+    value.request_type,
+    value.status,
+    value.status_label,
+    value.grant_type,
+    value.reason,
+    value.submitted_at,
+  ];
+  return (
+    Number.isInteger(value.id) &&
+    typeof value.id === "number" &&
+    value.id > 0 &&
+    requiredStrings.every(isNonEmptyString)
+  );
+}
+
+function hasApprovalLifecycleShape(value: Record<string, unknown>): boolean {
+  return (
+    APPROVAL_REQUEST_TYPES.has(value.request_type as string) &&
+    isLifecycleBaseGrantShape(value.request_type as string, value.base_grant_id, value.base_grant_revision) &&
+    APPROVAL_STATUSES.has(value.status as string) &&
+    APPROVAL_GRANT_TYPES.has(value.grant_type as string) &&
+    isNullableDateTimeString(value.grant_expires_at) &&
+    (value.grant_type === "timed" ? value.grant_expires_at !== null : value.grant_expires_at === null) &&
+    isDateTimeString(value.submitted_at)
+  );
+}
+
+function hasApprovalTargets(value: Record<string, unknown>): boolean {
+  return (
+    Array.isArray(value.authorization_groups) &&
+    value.authorization_groups.every(isApprovalAuthorizationGroup) &&
+    Array.isArray(value.direct_grants) &&
+    value.direct_grants.every(isApprovalGrantFact)
+  );
+}
+
+function hasApprovalDecisionShape(value: Record<string, unknown>): boolean {
+  return (
+    isNullableDateTimeString(value.decided_at) &&
+    isNullableString(value.decision_comment) &&
+    isApprovalApplicant(value.applicant) &&
+    Array.isArray(value.approver_user_ids) &&
+    value.approver_user_ids.every((item) => typeof item === "string") &&
+    isNullableString(value.decided_by)
+  );
+}
+
+function isLifecycleBaseGrantShape(
+  requestType: string,
+  baseGrantId: unknown,
+  baseGrantRevision: unknown,
+): boolean {
+  if (requestType === "grant") {
+    return baseGrantId === null && baseGrantRevision === null;
+  }
+  return isIntegerAtLeast(baseGrantId, 1) && isIntegerAtLeast(baseGrantRevision, 1);
+}
+
+function isApprovalAuthorizationGroup(value: unknown): value is ApprovalAuthorizationGroup {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["key", "kind", "name", "grants"]) &&
+    isNonEmptyString(value.key) &&
+    (value.kind === "role" || value.kind === "bundle") &&
+    typeof value.name === "string" &&
+    Array.isArray(value.grants) &&
+    value.grants.every(isApprovalGrantFact)
+  );
+}
+
+function isApprovalGrantFact(value: unknown): value is ApprovalGrantFact {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["permission", "permission_name", "scope"]) &&
+    isNonEmptyString(value.permission) &&
+    typeof value.permission_name === "string" &&
+    isNonEmptyString(value.scope)
+  );
+}
+
+function isApprovalApplicant(value: unknown): value is Required<PortalApprovalApplicant> {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["user_id", "name", "email", "department"]) &&
+    isNonEmptyString(value.user_id) &&
+    typeof value.name === "string" &&
+    typeof value.email === "string" &&
+    typeof value.department === "string"
+  );
+}
+
+function isPagination(value: unknown): value is Pagination {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["page", "page_size", "total_items", "total_pages"]) &&
+    isIntegerAtLeast(value.page, 1) &&
+    isIntegerAtLeast(value.page_size, 1) &&
+    isIntegerAtLeast(value.total_items, 0) &&
+    isIntegerAtLeast(value.total_pages, 0)
+  );
+}
+
+function isIntegerAtLeast(value: unknown, minimum: number): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= minimum;
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isDateTimeString(value: unknown): value is string {
+  return typeof value === "string" && value.includes("T") && !Number.isNaN(Date.parse(value));
+}
+
+function isNullableDateTimeString(value: unknown): value is string | null {
+  return value === null || isDateTimeString(value);
+}
+
+function hasExactKeys(value: Record<string, unknown>, expectedKeys: readonly string[]): boolean {
+  const keys = Object.keys(value);
+  return keys.length === expectedKeys.length && expectedKeys.every((key) => key in value);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
