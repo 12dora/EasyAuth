@@ -73,7 +73,11 @@ A1c 已核验：SQLite lane 89 绿、PG lane 7 绿（租约+触发器）、`mana
 | wheel | `sdk/python/dist/easyauth_app_sdk-0.4.0-py3-none-any.whl` |
 | wheel SHA-256 | `655f55b65d88b6e1be45eb125632d89b1f76c342b9aa61d83270780d951594ac` |
 
-两个下游均已按此 re-vendor（VENDORED.md 四项一致）。API 要点：`on_handover_items` 必填；`signature_failure_status`（EasyProject=401，EasyTrade=默认 403）；`HandoverBusinessError.retry_after`。
+两个下游均已按此 re-vendor（VENDORED.md 四项一致）；这是 `0.4.0` 发布物的历史记录。
+当前工作树的 `Unreleased` API 已再次发生破坏性变更：`lifecycle_http_response` /
+`easyauth_lifecycle_router` 的必填参数 `callbacks: LifecycleCallbacks` 是 frozen dataclass，
+三个回调字段均必填。`signature_failure_status`（EasyProject=401，EasyTrade=默认 403）与
+`HandoverBusinessError.retry_after` 仍保留。
 
 ## 3. 下一班工作清单（按序）
 

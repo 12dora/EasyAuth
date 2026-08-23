@@ -72,6 +72,7 @@ EasyAuth 会向 manifest `lifecycle.handover_url` 声明的地址发同步 POST(
 ```python
 from easyauth_app_sdk import (
     HandoverBusinessError,
+    LifecycleCallbacks,
     WebhookEvent,
     easyauth_lifecycle_router,
 )
@@ -93,12 +94,17 @@ def on_execute(event: WebhookEvent) -> dict:
 app.include_router(
     easyauth_lifecycle_router(
         lambda: settings.easyauth_webhook_secret,
-        on_preview,
-        on_execute,
-        on_items,  # 必填; EasyProject 可再传 signature_failure_status=401
+        LifecycleCallbacks(
+            on_handover_preview=on_preview,
+            on_handover_execute=on_execute,
+            on_handover_items=on_items,
+        ),
+        # EasyProject 可再传 signature_failure_status=401
     )
 )
 ```
+
+三个回调都通过 frozen dataclass `LifecycleCallbacks` 提供，三个字段均为必填项。
 
 状态码约定:
 
@@ -121,7 +127,7 @@ sample = resources.files("easyauth_app_sdk.contract_samples.handover_v2").joinpa
 ```
 
 `secret_provider` 在每次请求时取密钥。不使用 FastAPI 时可直接调用纯函数内核
-`lifecycle_http_response`。
+`lifecycle_http_response`，并同样通过 `callbacks=LifecycleCallbacks(...)` 提供三个回调。
 
 manifest 可选顶层节(结构由 `validate_manifest` 校验, 描述符 build/parse 原样携带):
 

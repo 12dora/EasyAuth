@@ -646,7 +646,7 @@ execute 每一批同时校验**两样**：最新的 `confirm_version`（用户�
 > 要么被版本校验挡住而**没有任何重建计划的入口**，剩下两批就此卡死。
 
 > **残留限制要如实说出来**：如果单是这些 `skip` 逐条项就撑爆了 256 KiB，本方案无解。
-> 这时 execute 返回 `413`，界面提示「单独指定的条目过多，请减少逐条指定后重新预演」，
+> 这时 execute 返回 `413`，界面提示「单独指定的条目过多, 请减少逐条指定后重新预演」，
 > **不要再自动分片**。这是一个真实的能力边界，不要假装它不存在。
 > （彻底的解法是给线上契约加一个签名覆盖的 `batch_scope`，那是一次跨系统契约变更，本期不做。）
 
@@ -1147,7 +1147,7 @@ def escalate_overdue_task(task: HandoverTask) -> HandoverTask:
 因此本期只做**存在性提示**：
 
 - 建单时判定：**该 APP 存在 `status` 未终结的 `ApprovalInstance`** → 在交接单上显示警示区块：
-  「本应用存在未终结的钉钉审批，无法确认其中是否有由 {离职者} 审批的条目，请到钉钉中检查并人工转办。」
+  「本应用存在未终结的钉钉审批, 无法确认其中是否有由 {离职者} 审批的条目, 请到钉钉中检查并人工转办。」
   附该 APP 的钉钉审批入口链接；
 - **判定条件里不要加「离职者在 `ApprovalRule.approver_userids` 里」**：钉钉审批模板可以把他配成
   审批人而本地权限规则里根本没有他，那样会**漏报**；而本地有他、钉钉实例却与他无关又会**误报**。
@@ -1631,7 +1631,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 **因此下表的细码一律落在 `details.reason`，不落在 `error.code`。**
 
 ```json
-{"error": {"code": "CONFLICT", "message": "清单已变化，请重新预演。",
+{"error": {"code": "CONFLICT", "message": "清单已变化, 请重新预演。",
            "details": {"reason": "snapshot_stale"}}}
 ```
 
@@ -1977,9 +1977,10 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 
 1. 新增事件常量 `HANDOVER_ITEMS_EVENT: Final = "lifecycle.handover.items"`。
 2. `lifecycle_http_response()` / `easyauth_lifecycle_router()` **必填**
-   `on_handover_items: HandoverCallback`（无默认值；接线期失败优于运行时 422），按事件分发。
+   `callbacks: LifecycleCallbacks`；它是 frozen dataclass，必填字段为 `on_handover_preview`、
+   `on_handover_execute`、`on_handover_items`，由 SDK 按事件分发。
 3. `DEFAULT_MAX_BODY_BYTES` 由 `64 * 1024` 改为 `256 * 1024`（契约 §10.1）。
-4. `fastapi.py` 的挂载 helper 同步把 items 回调列为必填位置参数，并透传
+4. `fastapi.py` 的挂载 helper 同步把 `callbacks: LifecycleCallbacks` 列为必填参数，并透传
    `signature_failure_status` 与响应头（含 `Retry-After`）。
 5. 新增 `easyauth_app_sdk/handover_payloads.py`：v2 请求/响应的 `TypedDict` 定义
    （`PreviewRequest`/`PreviewResponse`/`ItemsRequest`/`ItemsResponse`/`ExecuteRequest`/`ExecuteResponse`），
@@ -2057,7 +2058,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 6.2 **`WebhookVerificationError` 必须带稳定 reason，时间戳超窗与签名不匹配要分开**。
    现在 SDK 把两者一律当验签失败（`webhook.py:61-73` → `lifecycle.py:108-111` 统一 403），
    而契约 §10.6 里 **400 可重试、401/403 不可重试**：
-   一次时钟偏差或请求延迟超过 300 秒，会被 EasyAuth 判成"签名校验失败，请检查该应用的
+   一次时钟偏差或请求延迟超过 300 秒，会被 EasyAuth 判成"签名校验失败, 请检查该应用的
    webhook 密钥"、隐藏重试按钮 —— 时钟恢复之后也重投不了，只能强行 skip 或取消整单，
    而数据其实一条都没交接。
 
@@ -2074,7 +2075,7 @@ def fetch_action_items(action, *, asset_type: str, page: int, page_size: int, q:
 
 7. **回调异常边界不得回显异常文本**（契约 §10.6）：现有
    `_error_response(500, "handover_callback_failed", f"交接回调执行失败: {error}")`
-   会把 `str(error)` 拼进响应体。改为固定通用文案（如「交接回调执行失败，请查看应用日志」），
+   会把 `str(error)` 拼进响应体。改为固定通用文案（「交接回调执行失败, 请查看应用日志」），
    真实异常由 APP 自己记日志；SDK 侧对意外异常调用 ``logger.exception``。
    理由：该响应体会被 EasyAuth 存下并展示给主管（普通员工）。
 8. 新增 `easyauth_app_sdk/manifest.py` 的 `_validate_lifecycle()` 白名单加 `handover_asset_types`

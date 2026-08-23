@@ -238,34 +238,38 @@ reports = directory_client.search_directory_users(
 
 | 事件 | 回调 | 语义 |
 |---|---|---|
-| `lifecycle.handover.preview` | `on_handover_preview` | 预演统计，**不落库** |
-| `lifecycle.handover.items` | `on_handover_items` | 明细分页，**不落库** |
-| `lifecycle.handover.execute` | `on_handover_execute` | 真正执行交接 |
+| `lifecycle.handover.preview` | `callbacks.on_handover_preview` | 预演统计，**不落库** |
+| `lifecycle.handover.items` | `callbacks.on_handover_items` | 明细分页，**不落库** |
+| `lifecycle.handover.execute` | `callbacks.on_handover_execute` | 真正执行交接 |
 
 ```python
-from easyauth_app_sdk.fastapi import easyauth_lifecycle_router
+from easyauth_app_sdk import LifecycleCallbacks, easyauth_lifecycle_router
 
 app.include_router(
     easyauth_lifecycle_router(
         secret_provider,
-        on_handover_preview=...,
-        on_handover_execute=...,
-        on_handover_items=...,   # 0.4.0 起必填, 无默认值
+        callbacks=LifecycleCallbacks(
+            on_handover_preview=...,
+            on_handover_execute=...,
+            on_handover_items=...,
+        ),
     )
 )
 ```
 
+`callbacks` 接受 frozen dataclass `LifecycleCallbacks`；其中三个回调字段均为必填项。
+
 从 `0.3.x` 升级时要注意的破坏性变更：
 
-- `on_handover_items` 在 `easyauth_lifecycle_router` / `lifecycle_http_response` 上**必填**——
-  接线期失败优于运行时 422。
+- `easyauth_lifecycle_router` / `lifecycle_http_response` 不再分别接收三个平铺回调参数，
+  改为接收必填的 `callbacks: LifecycleCallbacks`；三个字段缺一不可，接线期失败优于运行时 422。
 - 所有 body 必须含 `event_type` 且与 `X-EasyAuth-Event` 一致；不一致返回 `422`，
   该校验在 `webhook.test` 短路**之前**执行。默认 body 上限由 64 KiB 提升至 **256 KiB**。
 - 验签失败分成两类：时间戳超窗返回 `400`（`TIMESTAMP_SKEW` / `INVALID_TIMESTAMP`），
   签名或鉴权头失败返回 `signature_failure_status`（默认 `403`，可传 `401`）。
 - 业务回调用 `HandoverBusinessError` 表达 400/409/412/413/422/423/429，可带 `retry_after`；
   白名单外的状态码会降级为 500 并写 SDK warning。
-- 回调异常边界改为固定文案「交接回调执行失败，请查看应用日志」，不再拼接原始异常字符串。
+- 回调异常边界改为固定文案「交接回调执行失败, 请查看应用日志」，不再拼接原始异常字符串。
 - manifest `lifecycle.handover_asset_types[]` 的 `detail_supported` / `releasable`
   改为**必填布尔**，缺省或非 bool 会被拒绝。
 

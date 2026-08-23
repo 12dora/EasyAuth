@@ -856,7 +856,7 @@ transferred + released + skipped + merged + failed == 该类型在本轮 assignm
    > 而那正是被禁止的。412 的语义（前置条件不满足）也恰好就是这件事。
    >
    > `items` 事件的 token 校验失败同样返回 412。
-   EasyAuth 把 action 打回 `previewed` 之前并提示"清单已变化，请重新预演"。
+   EasyAuth 把 action 打回 `previewed` 之前并提示"清单已变化, 请重新预演"。
    preview 的 `count`、items 的基础集合、execute 的摘要必须来自**同一份一致性快照定义**（同一个选择器）。
 4. 逐条校验同样是硬要求：每个被改写的条目必须**当前仍属于 `from_user_id`** 且**仍属于该 `asset_type`**；
    否则整体失败，**不允许**跳过该条继续处理其余条目（那是静默兜底）。
@@ -1004,13 +1004,13 @@ APP 侧仍应保留自己的行锁作为第二道防线。
 | 200 | 成功 | **非最终批 → 保持 `previewed`**；最终批数据成功且授权步骤成功 → `done` | — | 分批时显示「已完成 N/M 批」 |
 | 202 | 异步受理 | `async_pending`；轮询到 `ASYNC_POLL_MAX_ATTEMPTS` 仍非终态 → **`async_attention_required`** | — | 轮询中；转 `async_attention_required` 后提示「需要管理员在下游确认后手动了结」 |
 | 400 | 请求不合法（如时间戳超窗） | `failed` | 是 | 请求被应用拒绝 |
-| 401 / 403 | 验签失败 | `failed` | 否 | 签名校验失败，请检查该应用的 webhook 密钥 |
+| 401 / 403 | 验签失败 | `failed` | 否 | 签名校验失败, 请检查该应用的 webhook 密钥 |
 | 409 | **请求本身与 APP 的现实对不上**：人员无法识别、`overrides` 引用了快照外的 `asset_id`、投递冲突、迟到的旧 generation。**不含**「归属在 preview 之后变了」——那是 412（§10.5.1 第 4 条） | `failed` | 否 | 「应用拒绝了本次交接」 |
-| **412** | **快照已失效**（`snapshot_token` 与当前数据不一致） | 退回 `pending` | 否 | 「清单已变化，请重新预演」 |
+| **412** | **快照已失效**（`snapshot_token` 与当前数据不一致） | 退回 `pending` | 否 | 「清单已变化, 请重新预演」 |
 | 413 | 请求体过大 | **原超大 batch 记 `failed`；action 保持 `previewed`** | 否（不显示 [重试]） | 转入分批：创建 `HandoverBatchPlan`、返回 `batch_progress`，引导「重新预演 → 执行下一批」（`01` §2.4.1.1） |
 | 422 | 载荷不被支持（未声明的资产类型、不支持的事件） | `failed` | 否 | 应用声明与实现不一致 |
 | **423** | **对象被临时锁住**（如 EasyProject 的项目审批锁 `PROJECT_LOCKED`） | 退回 `pending` | **是**（人解除锁之后） | 「该应用中部分对象正在审批/锁定，解除后请重新预演」 |
-| **429** | **APP 侧限流**（`items` 的重放/读放大防护，§10.4） | **按事件分**：`items` / `preview` 是只读，不改任何 action 状态；**`execute` 保持 `previewed`，并且必须在同一次 fence CAS 里释放租约** | **是** —— 按 `Retry-After` 退避 | `items`/`preview` 不向用户报错，退避后重试即可；`execute` 显示 [重试] 与「应用侧限流，请稍后重试」 |
+| **429** | **APP 侧限流**（`items` 的重放/读放大防护，§10.4） | **按事件分**：`items` / `preview` 是只读，不改任何 action 状态；**`execute` 保持 `previewed`，并且必须在同一次 fence CAS 里释放租约** | **是** —— 按 `Retry-After` 退避 | `items`/`preview` 不向用户报错，退避后重试即可；`execute` 显示 [重试] 与「应用侧限流, 请稍后重试」 |
 | 5xx | 应用内部错误 | `failed` | 是 | 可重试 |
 
 > 「界面提示」列是**本地稳定文案**，与下游返回什么无关。下游的 `code`/`message`

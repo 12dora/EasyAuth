@@ -3,6 +3,51 @@
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，
 版本号遵循 [Semantic Versioning](https://semver.org/lang/zh-CN/)。
 
+## [Unreleased]
+
+### Breaking
+
+- `lifecycle_http_response` / `easyauth_lifecycle_router` 原有的
+  `on_handover_preview`、`on_handover_execute`、`on_handover_items` 三个平铺回调参数，
+  收敛为一个必填参数 `callbacks: LifecycleCallbacks`。`LifecycleCallbacks` 是 frozen dataclass，
+  三个同名字段均为必填项，并已从 `easyauth_app_sdk` 包根导出。
+
+  迁移前：
+
+  ```python
+  easyauth_lifecycle_router(
+      secret_provider,
+      on_handover_preview=on_preview,
+      on_handover_execute=on_execute,
+      on_handover_items=on_items,
+  )
+  ```
+
+  迁移后：
+
+  ```python
+  from easyauth_app_sdk import LifecycleCallbacks
+
+  easyauth_lifecycle_router(
+      secret_provider,
+      callbacks=LifecycleCallbacks(
+          on_handover_preview=on_preview,
+          on_handover_execute=on_execute,
+          on_handover_items=on_items,
+      ),
+  )
+  ```
+
+  直接调用 `lifecycle_http_response` 时采用相同迁移方式，将三个旧关键字参数替换为
+  `callbacks=LifecycleCallbacks(...)`。
+
+### Changed
+
+- Python 源码中的中文文案标点统一使用半角逗号加空格，包括
+  `CALLBACK_FAILED_MESSAGE = "交接回调执行失败, 请查看应用日志"`。
+- webhook 缺少签名密钥的 reason 常量标识符由 `REASON_MISSING_SECRET` 改名为
+  `REASON_MISSING_SIGNING_KEY`；对外 reason 值仍为 `"MISSING_SECRET"`。
+
 ## [0.4.0] - 2026-08-10
 
 ### Breaking
@@ -12,7 +57,7 @@
   上为必填参数**(无默认值; 接线期失败优于运行时 422)。
 - 所有 body 必须含 `event_type` 且与 `X-EasyAuth-Event` 一致(校验在 `webhook.test`
   短路之前); 默认 body 上限由 64 KiB 提升至 **256 KiB**。
-- 回调异常边界改为固定文案「交接回调执行失败，请查看应用日志」, **不再**拼接
+- 回调异常边界改为固定文案「交接回调执行失败, 请查看应用日志」，**不再**拼接
   `str(error)`。
 - 时间戳超窗验签失败映射为 **HTTP 400**(`TIMESTAMP_SKEW` / `INVALID_TIMESTAMP`),
   与签名/鉴权头失败分离; `WebhookVerificationError` 增加结构化 `reason` 字段。

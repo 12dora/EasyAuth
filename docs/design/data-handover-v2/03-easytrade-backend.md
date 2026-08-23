@@ -273,7 +273,7 @@ def snapshot_token(db, *, from_user_id: uuid.UUID) -> str:
 ```
 
 - `execute` 在**任何写入之前**重算一次；与请求携带的 token 不一致 → 整体 **`412`**（不是 409），
-  EasyAuth 侧按契约 §10.6 把 action 退回 `pending` 并提示「清单已变化，请重新预演」。
+  EasyAuth 侧按契约 §10.6 把 action 退回 `pending` 并提示「清单已变化, 请重新预演」。
   **412 与 409 必须分开**：409 会被判 `failed`，只有 412 才退回重预演。
 - `items` 也校验：不一致时同样 **412**，让前端立刻重新 preview，而不是翻着一份已经过期的清单做决定。
 - **逐条校验是独立的第二层**：每个被改写的 id 必须当前仍属于 `from_user_id` 且仍满足该类型谓词，
@@ -588,7 +588,8 @@ easyauth_handover_generation_watermarks(task_id VARCHAR(64) PRIMARY KEY,
   >    必须改用 SDK 的 `read_bounded_body()`（先看 `Content-Length` 预拒，再流式读到 N+1 截断）。
   >    测试要同时覆盖**伪造 `Content-Length`** 与 **chunked 超限**两种。
 
-- 增加 `on_handover_items` 回调
+- 构造必填的 `LifecycleCallbacks`，提供 `on_handover_preview`、`on_handover_execute`、
+  `on_handover_items` 三个回调字段
 - 请求体上限跟随 SDK 提升到 256 KiB
 - 直接使用 SDK 的 `handover_payloads` TypedDict，**禁止**在 EasyTrade 内手抄字段名
 - **业务错误一律抛 SDK 的 `HandoverBusinessError(status_code, code, message)`**（`01` §8 第 6.1 条）。
