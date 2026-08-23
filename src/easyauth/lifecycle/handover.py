@@ -21,7 +21,6 @@ from easyauth.accounts.models import USER_STATUS_ACTIVE
 from easyauth.applications.models import (
     HANDOVER_CAPABILITY_DECLARED,
     HANDOVER_CAPABILITY_NONE,
-    HANDOVER_CAPABILITY_UNDECLARED,
     App,
 )
 from easyauth.lifecycle.core import (
@@ -43,7 +42,6 @@ from easyauth.lifecycle.core import (
     ensure_action_status,
     ensure_task_open,
     record_task_event,
-    refresh_task_status,
     refresh_task_status_locked,
 )
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
@@ -97,7 +95,6 @@ from easyauth.lifecycle.models import (
     BATCH_PLAN_STATUS_DONE,
     HandoverActionSkipRecord,
     HandoverAppAction,
-    HandoverAssetOverride,
     HandoverAssetType,
     HandoverBatchPlan,
     HandoverDeliveryAttempt,

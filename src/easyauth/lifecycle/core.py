@@ -10,7 +10,6 @@ from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
 from easyauth.lifecycle.models import (
     ACTION_FINISHED_STATUSES,
     ACTION_INITIAL_STATUSES,
-    ACTION_STATUS_PENDING,
     HANDOVER_KIND_TRANSFER,
     ITEM_STATUS_PENDING,
     TASK_OPEN_STATUSES,

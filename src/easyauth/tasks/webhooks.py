@@ -1,11 +1,9 @@
 from __future__ import annotations
 
-from typing import Final
 
 from celery import shared_task
 
 from easyauth.webhooks.delivery import (
-    MAX_DELIVERY_ATTEMPTS,
     WEBHOOK_DELIVERY_TASK_NAME,
     WEBHOOK_DELIVERY_WATCHDOG_TASK_NAME,
     WebhookDeliveryAttemptError,
