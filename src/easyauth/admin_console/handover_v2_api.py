@@ -168,6 +168,10 @@ def console_handover_claim(request: HttpRequest, task_id: int) -> JsonResponse:
             return response
     if request.method != "POST":
         return method_not_allowed_response()
+    return _claim_handover_task(task_id, actor_id=actor_id)
+
+
+def _claim_handover_task(task_id: int, *, actor_id: str) -> JsonResponse:
     if actor_id.startswith(LOCAL_ADMIN_SUBJECT_PREFIX):
         return reason_error("local_admin_cannot_claim")
     actor = UserMirror.objects.filter(
@@ -180,11 +184,7 @@ def console_handover_claim(request: HttpRequest, task_id: int) -> JsonResponse:
     if task is None:
         return _not_found()
     with transaction.atomic():
-        locked = (
-            HandoverTask.objects.select_for_update()
-            .filter(pk=task.pk)
-            .first()
-        )
+        locked = HandoverTask.objects.select_for_update().filter(pk=task.pk).first()
         if locked is None:
             return _not_found()
         # 状态校验必须在行锁内, 防止双超管抢领/认领已关闭单(§6.3)
@@ -221,6 +221,10 @@ def console_handover_reassign(request: HttpRequest) -> JsonResponse:
             return response
     if request.method != "POST":
         return method_not_allowed_response()
+    return _create_reassign_handover(request, actor_id=actor_id)
+
+
+def _create_reassign_handover(request: HttpRequest, *, actor_id: str) -> JsonResponse:
     idem = request.headers.get("Idempotency-Key", "").strip()
     if not idem or len(idem) > 128:
         return reason_error("idempotency_key_required")
@@ -235,27 +239,21 @@ def console_handover_reassign(request: HttpRequest) -> JsonResponse:
         )
     if len(payload.reason.strip()) < REASON_MIN:
         return reason_error("reason_required")
-    subject = UserMirror.objects.filter(
-        authentik_user_id=payload.subject_user_id,
-        status=USER_STATUS_ACTIVE,
-    ).exclude(authentik_user_id__startswith=LOCAL_ADMIN_SUBJECT_PREFIX).first()
+    subject = (
+        UserMirror.objects.filter(
+            authentik_user_id=payload.subject_user_id,
+            status=USER_STATUS_ACTIVE,
+        )
+        .exclude(authentik_user_id__startswith=LOCAL_ADMIN_SUBJECT_PREFIX)
+        .first()
+    )
     if subject is None:
         return error_response(
             ErrorCode.VALIDATION_ERROR,
             "当事人不存在或已停用。",
             status=HTTPStatus.UNPROCESSABLE_ENTITY,
         )
-    body_hash = hashlib.sha256(
-        json.dumps(
-            {
-                "subject_user_id": payload.subject_user_id,
-                "app_keys": sorted(payload.app_keys),
-                "reason": payload.reason,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode(),
-    ).hexdigest()
+    body_hash = _reassign_body_hash(payload)
     try:
         task, created = ensure_handover_task(
             subject=subject,
@@ -282,6 +280,17 @@ def console_handover_reassign(request: HttpRequest) -> JsonResponse:
     )
 
 
+def _reassign_body_hash(payload: ReassignPayload) -> str:
+    body = {
+        "subject_user_id": payload.subject_user_id,
+        "app_keys": sorted(payload.app_keys),
+        "reason": payload.reason,
+    }
+    return hashlib.sha256(
+        json.dumps(body, sort_keys=True, separators=(",", ":")).encode(),
+    ).hexdigest()
+
+
 def console_handover_defer(request: HttpRequest, task_id: int) -> JsonResponse:
     match require_superuser(request):
         case str() as actor_id:
@@ -290,6 +299,15 @@ def console_handover_defer(request: HttpRequest, task_id: int) -> JsonResponse:
             return response
     if request.method != "POST":
         return method_not_allowed_response()
+    return _defer_handover_task(request, task_id, actor_id=actor_id)
+
+
+def _defer_handover_task(
+    request: HttpRequest,
+    task_id: int,
+    *,
+    actor_id: str,
+) -> JsonResponse:
     try:
         payload = ReasonPayload.model_validate_json(request.body or b"{}")
     except ValidationError:
@@ -419,6 +437,15 @@ def console_approval_rule_replacement_resolve(
             return response
     if request.method != "POST":
         return method_not_allowed_response()
+    return _resolve_approval_rule_replacement(request, replacement_id, actor_id=actor_id)
+
+
+def _resolve_approval_rule_replacement(
+    request: HttpRequest,
+    replacement_id: int,
+    *,
+    actor_id: str,
+) -> JsonResponse:
     try:
         payload = ResolveReplacementPayload.model_validate_json(request.body)
     except ValidationError as exc:
@@ -613,55 +640,81 @@ def console_handover_overrides(
             pass
         case JsonResponse() as response:
             return response
+    return _handle_handover_overrides(request, task_id, app_key, asset_type)
+
+
+def _handle_handover_overrides(
+    request: HttpRequest,
+    task_id: int,
+    app_key: str,
+    asset_type: str,
+) -> JsonResponse:
     action = _action_or_none(task_id, app_key)
     if action is None:
         return _not_found()
     if request.method == "GET":
-        try:
-            return json_response(list_overrides(action, type_key=asset_type))  # type: ignore[arg-type]
-        except HandoverError as error:
-            return error_response(ErrorCode.NOT_FOUND, str(error), status=HTTPStatus.NOT_FOUND)
+        return _list_handover_overrides(action, asset_type=asset_type)
     if request.method == "PUT":
-        try:
-            payload = OverridesPutPayload.model_validate_json(request.body)
-        except ValidationError as exc:
-            return error_response(
-                ErrorCode.VALIDATION_ERROR,
-                "参数无效。",
-                {"errors": str(exc)},
-                status=HTTPStatus.UNPROCESSABLE_ENTITY,
-            )
-        try:
-            result = put_overrides(
-                action,
-                type_key=asset_type,
-                overrides_version=payload.overrides_version,
-                overrides=[
-                    OverrideEntry(
-                        asset_id=i.asset_id,
-                        action=i.action,
-                        to_user_id=i.to_user_id,
-                        label=i.label,
-                    )
-                    for i in payload.overrides
-                ],
-            )
-        except (HandoverConflictError, HandoverError) as error:
-            mapped = map_handover_exception(error)
-            return mapped or error_response(
-                ErrorCode.VALIDATION_ERROR,
-                str(error),
-                status=HTTPStatus.BAD_REQUEST,
-            )
-        return json_response(
-            {
-                "overrides_version": result.overrides_version,
-                "confirm_version": result.confirm_version,
-                "override_count": result.override_count,
-                "dropped_invalid": result.dropped_invalid,
-            },
-        )
+        return _put_handover_overrides(request, action, asset_type=asset_type)
     return method_not_allowed_response()
+
+
+def _list_handover_overrides(
+    action: HandoverAppAction,
+    *,
+    asset_type: str,
+) -> JsonResponse:
+    try:
+        return json_response(list_overrides(action, type_key=asset_type))  # type: ignore[arg-type]
+    except HandoverError as error:
+        return error_response(ErrorCode.NOT_FOUND, str(error), status=HTTPStatus.NOT_FOUND)
+
+
+def _put_handover_overrides(
+    request: HttpRequest,
+    action: HandoverAppAction,
+    *,
+    asset_type: str,
+) -> JsonResponse:
+    try:
+        payload = OverridesPutPayload.model_validate_json(request.body)
+    except ValidationError as exc:
+        return error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "参数无效。",
+            {"errors": str(exc)},
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+        )
+    try:
+        result = put_overrides(
+            action,
+            type_key=asset_type,
+            overrides_version=payload.overrides_version,
+            overrides=[
+                OverrideEntry(
+                    asset_id=i.asset_id,
+                    action=i.action,
+                    to_user_id=i.to_user_id,
+                    label=i.label,
+                )
+                for i in payload.overrides
+            ],
+        )
+    except (HandoverConflictError, HandoverError) as error:
+        mapped = map_handover_exception(error)
+        return mapped or error_response(
+            ErrorCode.VALIDATION_ERROR,
+            str(error),
+            status=HTTPStatus.BAD_REQUEST,
+        )
+    return json_response(
+        {
+            "overrides_version": result.overrides_version,
+            "confirm_version": result.confirm_version,
+            "override_count": result.override_count,
+            "dropped_invalid": result.dropped_invalid,
+        },
+    )
 
 
 def console_handover_asset_type(
@@ -746,6 +799,14 @@ def console_handover_action_patch(
             return response
     if request.method != "PATCH":
         return method_not_allowed_response()
+    return _patch_handover_action(request, task_id, app_key)
+
+
+def _patch_handover_action(
+    request: HttpRequest,
+    task_id: int,
+    app_key: str,
+) -> JsonResponse:
     action = _action_or_none(task_id, app_key)
     if action is None:
         return _not_found()
@@ -831,6 +892,10 @@ def console_handover_capability_sync(request: HttpRequest, app_key: str) -> Json
             return response
     if request.method != "POST":
         return method_not_allowed_response()
+    return _sync_handover_capability(app_key, actor_id=actor_id)
+
+
+def _sync_handover_capability(app_key: str, *, actor_id: str) -> JsonResponse:
     app = App.objects.filter(app_key=app_key).first()
     if app is None:
         return _not_found()

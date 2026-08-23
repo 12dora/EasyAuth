@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, NotRequired, TypedDict, Unpack
 
 from django.utils import timezone
 
@@ -35,6 +35,16 @@ class AssigneeResolution:
     degraded: bool
 
 
+class _ApplyAssigneeOptions(TypedDict):
+    actor_type: NotRequired[str]
+    reason: NotRequired[str]
+    set_deadline: NotRequired[bool]
+    escalation_days: NotRequired[int]
+
+
+_APPLY_ASSIGNEE_OPTION_NAMES = frozenset(_ApplyAssigneeOptions.__annotations__)
+
+
 def resolve_assignee(subject: UserMirror, *, start_level: int = 0) -> AssigneeResolution:
     """沿 manager_chain 自 start_level 向上找第一个可用主管。"""
     if not subject.dingtalk_source_slug or not subject.dingtalk_corp_id or not subject.dingtalk_userid:
@@ -43,12 +53,7 @@ def resolve_assignee(subject: UserMirror, *, start_level: int = 0) -> AssigneeRe
             action="handover_assignee_resolution_degraded",
             extra={"reason": "missing_dingtalk_binding"},
         )
-        return AssigneeResolution(
-            user=None,
-            state=ASSIGNEE_STATE_SUPERUSER_POOL,
-            level=0,
-            degraded=True,
-        )
+        return _superuser_pool_resolution(degraded=True)
     context = DingTalkUserOrgContext.objects.filter(
         source_slug=subject.dingtalk_source_slug,
         corp_id=subject.dingtalk_corp_id,
@@ -60,12 +65,7 @@ def resolve_assignee(subject: UserMirror, *, start_level: int = 0) -> AssigneeRe
             action="handover_assignee_resolution_degraded",
             extra={"reason": "directory_unavailable_or_stale"},
         )
-        return AssigneeResolution(
-            user=None,
-            state=ASSIGNEE_STATE_SUPERUSER_POOL,
-            level=0,
-            degraded=True,
-        )
+        return _superuser_pool_resolution(degraded=True)
     chain = context.manager_chain
     if not isinstance(chain, list):
         _audit_subject(
@@ -73,12 +73,16 @@ def resolve_assignee(subject: UserMirror, *, start_level: int = 0) -> AssigneeRe
             action="handover_assignee_resolution_degraded",
             extra={"reason": "manager_chain_not_list"},
         )
-        return AssigneeResolution(
-            user=None,
-            state=ASSIGNEE_STATE_SUPERUSER_POOL,
-            level=0,
-            degraded=True,
-        )
+        return _superuser_pool_resolution(degraded=True)
+    return _resolve_from_manager_chain(subject, chain=chain, start_level=start_level)
+
+
+def _resolve_from_manager_chain(
+    subject: UserMirror,
+    *,
+    chain: list[JsonValue],
+    start_level: int,
+) -> AssigneeResolution:
     level = max(0, start_level)
     while level < len(chain):
         entry = chain[level]
@@ -104,12 +108,7 @@ def resolve_assignee(subject: UserMirror, *, start_level: int = 0) -> AssigneeRe
             dingtalk_corp_id=subject.dingtalk_corp_id,
             dingtalk_userid=manager_userid,
         ).first()
-        if (
-            manager is None
-            or manager.status != USER_STATUS_ACTIVE
-            or manager.authentik_user_id.startswith(LOCAL_ADMIN_SUBJECT_PREFIX)
-            or int(manager.pk) == int(subject.pk)  # type: ignore[arg-type]
-        ):
+        if not _is_eligible_manager(manager, subject=subject):
             level += 1
             continue
         return AssigneeResolution(
@@ -118,11 +117,28 @@ def resolve_assignee(subject: UserMirror, *, start_level: int = 0) -> AssigneeRe
             level=level,
             degraded=False,
         )
+    return _superuser_pool_resolution(level=len(chain), degraded=False)
+
+
+def _is_eligible_manager(manager: UserMirror | None, *, subject: UserMirror) -> bool:
+    return bool(
+        manager is not None
+        and manager.status == USER_STATUS_ACTIVE
+        and not manager.authentik_user_id.startswith(LOCAL_ADMIN_SUBJECT_PREFIX)
+        and int(manager.pk) != int(subject.pk)  # type: ignore[arg-type]
+    )
+
+
+def _superuser_pool_resolution(
+    *,
+    level: int = 0,
+    degraded: bool,
+) -> AssigneeResolution:
     return AssigneeResolution(
         user=None,
         state=ASSIGNEE_STATE_SUPERUSER_POOL,
-        level=len(chain),
-        degraded=False,
+        level=level,
+        degraded=degraded,
     )
 
 
@@ -131,12 +147,17 @@ def apply_assignee(
     resolution: AssigneeResolution,
     *,
     actor_id: str,
-    actor_type: str = "system",
-    reason: str = "",
-    set_deadline: bool = True,
-    escalation_days: int = HANDOVER_ESCALATION_DAYS,
+    **options: Unpack[_ApplyAssigneeOptions],
 ) -> HandoverTask:
     """写 assignee 字段 + 审计。调用方须已在同一事务内锁住 task。"""
+    unknown_options = (key for key in options if key not in _APPLY_ASSIGNEE_OPTION_NAMES)
+    if (option := next(unknown_options, None)) is not None:
+        message = f"apply_assignee() got an unexpected keyword argument '{option}'"
+        raise TypeError(message)
+    actor_type = options.get("actor_type", "system")
+    reason = options.get("reason", "")
+    set_deadline = options.get("set_deadline", True)
+    escalation_days = options.get("escalation_days", HANDOVER_ESCALATION_DAYS)
     task.assignee = resolution.user
     task.assignee_state = resolution.state
     task.escalation_level = resolution.level

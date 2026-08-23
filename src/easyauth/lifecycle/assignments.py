@@ -113,41 +113,8 @@ def put_overrides(
         )
         if asset is None:
             raise HandoverError("资产类型不存在。")
-
-        seen_ids: set[str] = set()
-        for entry in overrides:
-            if entry.asset_id in seen_ids:
-                raise HandoverError("duplicate_assignment")
-            seen_ids.add(entry.asset_id)
-            if not entry.asset_id:
-                raise HandoverError("duplicate_assignment")
-            if entry.action not in ASSET_ACTION_VALUES:
-                raise HandoverError("invalid_assignment_action")
-            if entry.action == ASSET_ACTION_RELEASE and not asset.releasable:
-                raise HandoverError("asset_type_not_releasable")
-            if entry.action == ASSET_ACTION_TRANSFER:
-                if not entry.to_user_id:
-                    raise HandoverError("receiver_required")
-                _ = _resolve_receiver(locked, entry.to_user_id, required=True)
-            elif entry.to_user_id:
-                raise HandoverError("receiver_not_allowed")
-
-        # 只有完整请求通过校验后才删除旧集合。
-        _ = HandoverAssetOverride.objects.filter(asset_type=asset).delete()
-        kept = 0
-        for entry in overrides:
-            to_user = None
-            if entry.action == ASSET_ACTION_TRANSFER:
-                to_user = _resolve_receiver(locked, entry.to_user_id, required=True)
-            # 无明细时无法校验 asset_id 是否在下游存在; 整批保存, 失效在 execute 由下游 409。
-            _ = HandoverAssetOverride.objects.create(
-                asset_type=asset,
-                asset_id=entry.asset_id[:128],
-                label_snapshot=(entry.label or "")[:120],
-                action=entry.action,
-                to_user=to_user,
-            )
-            kept += 1
+        _validate_overrides(locked, asset=asset, overrides=overrides)
+        kept = _replace_overrides(locked, asset=asset, overrides=overrides)
 
         locked.overrides_version += 1
         locked.confirm_version += 1
@@ -159,6 +126,75 @@ def put_overrides(
             override_count=kept,
             dropped_invalid=0,
         )
+
+
+def _validate_overrides(
+    action: HandoverAppAction,
+    *,
+    asset: HandoverAssetType,
+    overrides: Sequence[OverrideEntry],
+) -> None:
+    seen_ids: set[str] = set()
+    for entry in overrides:
+        _validate_override(action, asset=asset, entry=entry, seen_ids=seen_ids)
+
+
+def _validate_override(
+    action: HandoverAppAction,
+    *,
+    asset: HandoverAssetType,
+    entry: OverrideEntry,
+    seen_ids: set[str],
+) -> None:
+    if entry.asset_id in seen_ids:
+        raise HandoverError("duplicate_assignment")
+    seen_ids.add(entry.asset_id)
+    if not entry.asset_id:
+        raise HandoverError("duplicate_assignment")
+    if entry.action not in ASSET_ACTION_VALUES:
+        raise HandoverError("invalid_assignment_action")
+    if entry.action == ASSET_ACTION_RELEASE and not asset.releasable:
+        raise HandoverError("asset_type_not_releasable")
+    if entry.action == ASSET_ACTION_TRANSFER:
+        if not entry.to_user_id:
+            raise HandoverError("receiver_required")
+        _ = _resolve_receiver(action, entry.to_user_id, required=True)
+    elif entry.to_user_id:
+        raise HandoverError("receiver_not_allowed")
+
+
+def _replace_overrides(
+    action: HandoverAppAction,
+    *,
+    asset: HandoverAssetType,
+    overrides: Sequence[OverrideEntry],
+) -> int:
+    # 只有完整请求通过校验后才删除旧集合。
+    _ = HandoverAssetOverride.objects.filter(asset_type=asset).delete()
+    kept = 0
+    for entry in overrides:
+        _create_override(action, asset=asset, entry=entry)
+        kept += 1
+    return kept
+
+
+def _create_override(
+    action: HandoverAppAction,
+    *,
+    asset: HandoverAssetType,
+    entry: OverrideEntry,
+) -> None:
+    to_user = None
+    if entry.action == ASSET_ACTION_TRANSFER:
+        to_user = _resolve_receiver(action, entry.to_user_id, required=True)
+    # 无明细时无法校验 asset_id 是否在下游存在; 整批保存, 失效在 execute 由下游 409。
+    _ = HandoverAssetOverride.objects.create(
+        asset_type=asset,
+        asset_id=entry.asset_id[:128],
+        label_snapshot=(entry.label or "")[:120],
+        action=entry.action,
+        to_user=to_user,
+    )
 
 
 def list_overrides(action: HandoverAppAction, *, type_key: str) -> dict[str, object]:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from http import HTTPStatus
 from typing import TYPE_CHECKING, ClassVar, cast
 
@@ -30,6 +31,7 @@ from easyauth.applications.models import App, AuthorizationGroup, Permission
 from easyauth.lifecycle.api_errors import map_handover_exception, reason_error
 from easyauth.lifecycle.api_payloads import (
     SURFACE_CONSOLE,
+    batch_progress,
     console_task_list_item,
 )
 from easyauth.lifecycle.api_payloads import (
@@ -79,6 +81,10 @@ if TYPE_CHECKING:
     from easyauth.api.pagination import Pagination
 
 type JsonObject = dict[str, "JsonValue"]
+type ActionOperation = Callable[
+    [HandoverAppAction, str, HttpRequest | None],
+    HandoverAppAction | JsonResponse,
+]
 
 ONBOARDING_TEMPLATE_DELETE_BLOCKED_MESSAGE = (
     "岗位模板包含不可变修订, 不支持删除; 请改为停用。"
@@ -313,7 +319,7 @@ def lifecycle_handover_task_detail(  # noqa: PLR0911 - HTTP 分支在入口显�
     return method_not_allowed_response()
 
 
-def lifecycle_grant_items(  # noqa: C901, PLR0911, PLR0912 - HTTP 校验失败需逐项返回明确响应。
+def lifecycle_grant_items(
     request: HttpRequest,
     task_id: int,
 ) -> JsonResponse:
@@ -326,67 +332,88 @@ def lifecycle_grant_items(  # noqa: C901, PLR0911, PLR0912 - HTTP 校验失败�
     if task is None:
         return _not_found("交接单不存在。")
     if request.method == "GET":
-        items: list[JsonValue] = [
-            _grant_item(item)
-            for item in HandoverGrantItem.objects.select_related(
-                "app",
-                "authorization_group",
-                "permission",
-            ).filter(task=task)
-        ]
-        return json_response({"data": items})
-    if request.method == "PATCH":
-        try:
-            payload = GrantItemsPatchPayload.model_validate_json(request.body)
-        except ValidationError as exc:
-            return _validation_error("勾选参数无效。", {"errors": str(exc)})
-        selection = {entry.id: entry.selected for entry in payload.items}
-        if len(selection) != len(payload.items):
-            return _validation_error("同一授权快照项不能重复提交。")
-        with transaction.atomic():
-            locked_task = HandoverTask.objects.select_for_update().get(pk=task.id)
-            if locked_task.status not in {"pending", "in_progress"}:
-                return error_response(
-                    ErrorCode.SEMANTIC_VALIDATION_ERROR,
-                    "交接单不在进行中状态。",
-                    status=HTTPStatus.CONFLICT,
-                )
-            editable = list(
-                HandoverGrantItem.objects.select_for_update().filter(
-                    task=locked_task,
-                    id__in=selection,
-                    status="pending",
-                ),
-            )
-            if len(editable) != len(selection):
-                return error_response(
-                    ErrorCode.SEMANTIC_VALIDATION_ERROR,
-                    "授权快照项不存在或已处理。",
-                    status=HTTPStatus.CONFLICT,
-                )
-            changed_app_ids: set[int] = set()
-            for item in editable:
-                selected = selection[item.id]
-                if item.selected == selected:
-                    continue
-                item.selected = selected
-                item.save(update_fields=["selected"])
-                changed_app_ids.add(item.app_id)
-            if changed_app_ids:
-                actions = HandoverAppAction.objects.select_for_update().filter(
-                    task=locked_task,
-                    app_id__in=changed_app_ids,
-                    status="previewed",
-                )
-                for action in actions:
-                    action.status = "pending"
-                    action.snapshot_token = ""
-                    action.last_error = ""
-                    action.save(
-                        update_fields=["status", "snapshot_token", "last_error", "updated_at"],
-                    )
         return lifecycle_grant_items_readback(task)
+    if request.method == "PATCH":
+        return _patch_grant_items(request, task)
     return method_not_allowed_response()
+
+
+def _patch_grant_items(request: HttpRequest, task: HandoverTask) -> JsonResponse:
+    try:
+        payload = GrantItemsPatchPayload.model_validate_json(request.body)
+    except ValidationError as exc:
+        return _validation_error("勾选参数无效。", {"errors": str(exc)})
+    selection = {entry.id: entry.selected for entry in payload.items}
+    if len(selection) != len(payload.items):
+        return _validation_error("同一授权快照项不能重复提交。")
+    with transaction.atomic():
+        error = _apply_grant_item_selection(task, selection)
+        if error is not None:
+            return error
+    return lifecycle_grant_items_readback(task)
+
+
+def _apply_grant_item_selection(
+    task: HandoverTask,
+    selection: dict[int, bool],
+) -> JsonResponse | None:
+    locked_task = HandoverTask.objects.select_for_update().get(pk=task.id)
+    if locked_task.status not in {"pending", "in_progress"}:
+        return error_response(
+            ErrorCode.SEMANTIC_VALIDATION_ERROR,
+            "交接单不在进行中状态。",
+            status=HTTPStatus.CONFLICT,
+        )
+    editable = list(
+        HandoverGrantItem.objects.select_for_update().filter(
+            task=locked_task,
+            id__in=selection,
+            status="pending",
+        ),
+    )
+    if len(editable) != len(selection):
+        return error_response(
+            ErrorCode.SEMANTIC_VALIDATION_ERROR,
+            "授权快照项不存在或已处理。",
+            status=HTTPStatus.CONFLICT,
+        )
+    changed_app_ids = _update_grant_item_selection(editable, selection)
+    if changed_app_ids:
+        _reset_changed_grant_actions(locked_task, changed_app_ids)
+    return None
+
+
+def _update_grant_item_selection(
+    editable: list[HandoverGrantItem],
+    selection: dict[int, bool],
+) -> set[int]:
+    changed_app_ids: set[int] = set()
+    for item in editable:
+        selected = selection[item.id]
+        if item.selected == selected:
+            continue
+        item.selected = selected
+        item.save(update_fields=["selected"])
+        changed_app_ids.add(item.app_id)
+    return changed_app_ids
+
+
+def _reset_changed_grant_actions(
+    task: HandoverTask,
+    changed_app_ids: set[int],
+) -> None:
+    actions = HandoverAppAction.objects.select_for_update().filter(
+        task=task,
+        app_id__in=changed_app_ids,
+        status="previewed",
+    )
+    for action in actions:
+        action.status = "pending"
+        action.snapshot_token = ""
+        action.last_error = ""
+        action.save(
+            update_fields=["status", "snapshot_token", "last_error", "updated_at"],
+        )
 
 
 def lifecycle_grant_items_readback(task: HandoverTask) -> JsonResponse:
@@ -474,27 +501,60 @@ def _dispatch_action_operation(
     request: HttpRequest | None,
 ) -> HandoverAppAction | JsonResponse:
     """把 operation 派发到对应的领域调用; 返回 JsonResponse 表示入参已判负。"""
-    if operation == "preview":
-        if action.status == ACTION_STATUS_BLOCKED:
-            return reason_error("action_blocked")
-        return preview_action(action)
-    if operation == "retry" and action.status == "async_pending":
+    handlers: dict[str, ActionOperation] = {
+        "preview": _preview_action_operation,
+        "execute": _execute_action_operation,
+        "retry": _retry_action_operation,
+        "skip": _skip_action_operation,
+    }
+    handler = handlers.get(operation)
+    if handler is None:
+        return _validation_error("操作必须为 preview、execute、retry 或 skip。")
+    return handler(action, actor_id, request)
+
+
+def _preview_action_operation(
+    action: HandoverAppAction,
+    _actor_id: str,
+    _request: HttpRequest | None,
+) -> HandoverAppAction | JsonResponse:
+    if action.status == ACTION_STATUS_BLOCKED:
+        return reason_error("action_blocked")
+    return preview_action(action)
+
+
+def _retry_action_operation(
+    action: HandoverAppAction,
+    _actor_id: str,
+    _request: HttpRequest | None,
+) -> HandoverAppAction:
+    if action.status == "async_pending":
         return poll_async_action(action)
-    if operation == "execute":
-        if action.status == ACTION_STATUS_BLOCKED:
-            return reason_error("action_blocked")
-        confirm_version = _confirm_version_from_body(request)
-        if isinstance(confirm_version, JsonResponse):
-            return confirm_version
-        return execute_action(action, confirm_version=confirm_version)
-    if operation == "retry":
-        return retry_action(action)
-    if operation == "skip":
-        reason = _skip_reason_from_body(request)
-        if isinstance(reason, JsonResponse):
-            return reason
-        return skip_action(action, actor_id=actor_id, reason=reason)
-    return _validation_error("操作必须为 preview、execute、retry 或 skip。")
+    return retry_action(action)
+
+
+def _execute_action_operation(
+    action: HandoverAppAction,
+    _actor_id: str,
+    request: HttpRequest | None,
+) -> HandoverAppAction | JsonResponse:
+    if action.status == ACTION_STATUS_BLOCKED:
+        return reason_error("action_blocked")
+    confirm_version = _confirm_version_from_body(request)
+    if isinstance(confirm_version, JsonResponse):
+        return confirm_version
+    return execute_action(action, confirm_version=confirm_version)
+
+
+def _skip_action_operation(
+    action: HandoverAppAction,
+    actor_id: str,
+    request: HttpRequest | None,
+) -> HandoverAppAction | JsonResponse:
+    reason = _skip_reason_from_body(request)
+    if isinstance(reason, JsonResponse):
+        return reason
+    return skip_action(action, actor_id=actor_id, reason=reason)
 
 
 def _confirm_version_from_body(request: HttpRequest | None) -> int | None | JsonResponse:
@@ -534,13 +594,12 @@ def _handover_failure_response(
     action: HandoverAppAction,
 ) -> JsonResponse:
     """下游 412/413/423 会以 HandoverError 文本形态冒上来, 这里映射成稳定 reason。"""
-    from easyauth.lifecycle.api_payloads import batch_progress
-
     extra_details: dict[str, JsonValue] | None = None
-    if isinstance(error, HookCallError) and error.status_code == HTTPStatus.REQUEST_ENTITY_TOO_LARGE:
-        action.refresh_from_db()
-        extra_details = {"batch_progress": batch_progress(action)}
-    elif "413" in str(error):
+    is_payload_too_large = (
+        isinstance(error, HookCallError)
+        and error.status_code == HTTPStatus.REQUEST_ENTITY_TOO_LARGE
+    )
+    if is_payload_too_large or "413" in str(error):
         action.refresh_from_db()
         extra_details = {"batch_progress": batch_progress(action)}
     mapped = map_handover_exception(error, details=extra_details)
@@ -847,65 +906,6 @@ def _patch_task(request: HttpRequest, task: HandoverTask, actor_id: str) -> Json
     )
 
 
-def _patch_receiver_batch(
-    task: HandoverTask,
-    entries: list[ActionReceiverPayload],
-) -> JsonResponse:
-    try:
-        with transaction.atomic():
-            locked_task = HandoverTask.objects.select_for_update().get(id=task.id)
-            entries_by_app = {entry.app_key: entry for entry in entries}
-            if len(entries_by_app) != len(entries):
-                return _validation_error("同一应用不能重复指定接收人。")
-
-            actions = tuple(
-                HandoverAppAction.objects.select_for_update()
-                .select_related("task", "app")
-                .filter(task=locked_task, app__app_key__in=entries_by_app)
-            )
-            actions_by_app = {action.app.app_key: action for action in actions}
-            missing_apps = entries_by_app.keys() - actions_by_app.keys()
-            if missing_apps:
-                return _validation_error(f"交接单中不存在应用 {sorted(missing_apps)[0]}。")
-
-            receiver_ids = {entry.to_user_id for entry in entries if entry.to_user_id}
-            receivers = {
-                user.authentik_user_id: user
-                for user in UserMirror.objects.filter(
-                    authentik_user_id__in=receiver_ids,
-                    status=USER_STATUS_ACTIVE,
-                )
-            }
-            if receiver_ids - receivers.keys():
-                return _validation_error("接收人不存在或已停用。")
-
-            for app_key, entry in entries_by_app.items():
-                # v2: release_to_pool / policy 已废弃, 仍传入则 400, 禁止静默丢弃。
-                if entry.release_to_pool:
-                    return _validation_error(
-                        "release_to_pool 已移除; 权限接收人请设置 to_user_id, "
-                        "数据接收人请在资产级分配中配置。",
-                    )
-                if not entry.to_user_id:
-                    return _validation_error(
-                        "必须指定 to_user_id 作为权限接收人。",
-                    )
-                _ = update_action_receiver(
-                    action=actions_by_app[app_key],
-                    to_user=receivers.get(entry.to_user_id or ""),
-                )
-    except HandoverConflictError as error:
-        return error_response(
-            ErrorCode.SEMANTIC_VALIDATION_ERROR,
-            str(error),
-            status=HTTPStatus.CONFLICT,
-        )
-    except HandoverError as error:
-        return _validation_error(str(error))
-    refreshed_task = _task_or_none(task.id) or task
-    return json_response({"handover_task": _task_detail(refreshed_task)})
-
-
 def _write_template(
     request: HttpRequest,
     *,
@@ -1009,87 +1009,6 @@ def _active_user_or_none(user_id: str) -> UserMirror | None:
         .exclude(authentik_user_id__startswith=LOCAL_ADMIN_SUBJECT_PREFIX)
         .first()
     )
-
-
-def _task_item(task: HandoverTask) -> JsonObject:
-    subject = task.subject_user
-    return {
-        "id": task.id,
-        "kind": task.kind,
-        "status": task.status,
-        "allowed_actions": _task_allowed_actions(task),
-        "subject": {
-            "user_id": subject.authentik_user_id,
-            "name": subject.name,
-            "email": subject.email,
-            "department": subject.department,
-            "status": subject.status,
-        },
-        "reason": task.reason,
-        "created_by": task.created_by,
-        "created_at": task.created_at.isoformat(),
-        "updated_at": task.updated_at.isoformat(),
-    }
-
-
-def _task_allowed_actions(task: HandoverTask) -> list[JsonValue]:
-    actions: list[JsonValue] = []
-    if task.status == "cancelled":
-        actions.append("delete")
-    return actions
-
-
-def _task_detail(task: HandoverTask) -> JsonObject:
-    item = _task_item(task)
-    actions: list[JsonValue] = [
-        _action_item(action)
-        for action in HandoverAppAction.objects.select_related("app", "grant_receiver").filter(
-            task=task,
-        )
-    ]
-    team_items: list[JsonValue] = [
-        _team_item(entry)
-        for entry in HandoverTeamItem.objects.select_related("team", "to_user").filter(task=task)
-    ]
-    item["app_actions"] = actions
-    item["team_items"] = team_items
-    plan = (
-        TransferPlan.objects.select_related("new_template", "new_template_revision")
-        .filter(task=task)
-        .first()
-    )
-    item["transfer_plan"] = _plan_item(plan) if plan is not None else None
-    return item
-
-
-def _action_item(action: HandoverAppAction) -> JsonObject:
-    grant_receiver = action.grant_receiver
-    return {
-        "id": action.id,
-        "app_key": action.app_key_snapshot,
-        "app_name": action.app_name_snapshot,
-        "app_catalog_version": action.app_catalog_version_snapshot,
-        "status": action.status,
-        "grant_receiver": (
-            {
-                "user_id": grant_receiver.authentik_user_id,
-                "name": grant_receiver.name,
-            }
-            if grant_receiver is not None
-            else None
-        ),
-        "blocked_reason": action.blocked_reason,
-        "skip_reason": action.skip_reason,
-        "confirm_version": action.confirm_version,
-        "overrides_version": action.overrides_version,
-        "data_completed_at": (
-            action.data_completed_at.isoformat() if action.data_completed_at else None
-        ),
-        "async_status_url": action.async_status_url,
-        "async_poll_attempts": action.async_poll_attempts,
-        "attempts": action.attempts,
-        "last_error": action.last_error,
-    }
 
 
 def _team_item(entry: HandoverTeamItem) -> JsonObject:

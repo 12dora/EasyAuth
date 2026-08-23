@@ -22,6 +22,18 @@ _SENSITIVE_FIELD_RE = re.compile(
 _EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 _OPAQUE_SECRET_RE = re.compile(r"\b(?:sk|ak|eat)-[A-Za-z0-9_-]{8,}|\bwhsec_[A-Za-z0-9_-]{8,}")
 _WHITELIST_KEYS: Final = frozenset({"code", "message", "traceId"})
+_SIGNATURE_FAILURE_MESSAGE: Final = "签名校验失败，请检查该应用的 webhook 密钥"
+_STABLE_STATUS_MESSAGES: Final[dict[int, str]] = {
+    HTTPStatus.BAD_REQUEST: "请求被应用拒绝",
+    HTTPStatus.UNAUTHORIZED: _SIGNATURE_FAILURE_MESSAGE,
+    HTTPStatus.FORBIDDEN: _SIGNATURE_FAILURE_MESSAGE,
+    HTTPStatus.CONFLICT: "应用拒绝了本次交接",
+    HTTPStatus.PRECONDITION_FAILED: "清单已变化，请重新预演",
+    HTTPStatus.REQUEST_ENTITY_TOO_LARGE: "请求体过大，请分批执行",
+    HTTPStatus.UNPROCESSABLE_ENTITY: "应用声明与实现不一致",
+    HTTPStatus.LOCKED: "该应用中部分对象正在审批或锁定，解除后请重新预演",
+    HTTPStatus.TOO_MANY_REQUESTS: "应用侧限流，请稍后重试",
+}
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,9 +89,13 @@ def _whitelisted_details(payload: dict[str, JsonValue] | None) -> str:
     def visit(value: JsonValue) -> None:
         if isinstance(value, dict):
             for key, child in value.items():
-                if key in _WHITELIST_KEYS and key not in found and isinstance(
-                    child,
-                    str | int | float | bool,
+                if (
+                    key in _WHITELIST_KEYS
+                    and key not in found
+                    and isinstance(
+                        child,
+                        str | int | float | bool,
+                    )
                 ):
                     found[key] = truncate_utf8(str(child), PUBLIC_ERROR_MAX_BYTES)
                 elif isinstance(child, dict | list):
@@ -94,22 +110,8 @@ def _whitelisted_details(payload: dict[str, JsonValue] | None) -> str:
 
 
 def _stable_status_message(status_code: int | None) -> str:
-    if status_code == HTTPStatus.BAD_REQUEST:
-        return "请求被应用拒绝"
-    if status_code in {HTTPStatus.UNAUTHORIZED, HTTPStatus.FORBIDDEN}:
-        return "签名校验失败，请检查该应用的 webhook 密钥"
-    if status_code == HTTPStatus.CONFLICT:
-        return "应用拒绝了本次交接"
-    if status_code == HTTPStatus.PRECONDITION_FAILED:
-        return "清单已变化，请重新预演"
-    if status_code == HTTPStatus.REQUEST_ENTITY_TOO_LARGE:
-        return "请求体过大，请分批执行"
-    if status_code == HTTPStatus.UNPROCESSABLE_ENTITY:
-        return "应用声明与实现不一致"
-    if status_code == HTTPStatus.LOCKED:
-        return "该应用中部分对象正在审批或锁定，解除后请重新预演"
-    if status_code == HTTPStatus.TOO_MANY_REQUESTS:
-        return "应用侧限流，请稍后重试"
-    if status_code is not None and status_code >= HTTPStatus.INTERNAL_SERVER_ERROR:
+    if status_code is None:
+        return ""
+    if status_code >= HTTPStatus.INTERNAL_SERVER_ERROR:
         return "应用内部错误"
-    return ""
+    return _STABLE_STATUS_MESSAGES.get(status_code, "")

@@ -13,6 +13,8 @@ from easyauth.accounts.models import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from easyauth.applications.ops_models import JsonValue
 
 REASON_OUT_OF_SCOPE: Final = "out_of_managed_scope"
@@ -130,24 +132,50 @@ def list_reassign_subject_candidates(
         corp_id=actor.dingtalk_corp_id,
         stale=False,
     )
-    matching_dtuids: list[str] = []
-    for ctx in contexts.iterator():
-        chain = ctx.manager_chain
-        if not isinstance(chain, list):
-            continue
-        for entry in chain:
-            if not isinstance(entry, dict):
-                break
-            mid = entry.get("user_id")
-            if not isinstance(mid, str) or not mid:
-                break
-            if mid == actor.dingtalk_userid:
-                matching_dtuids.append(ctx.user_id)
-                break
+    matching_dtuids = _managed_subject_userids(
+        contexts.iterator(),
+        actor_dtuid=actor.dingtalk_userid,
+    )
 
     if not matching_dtuids:
         return []
 
+    return _reassign_candidate_users(actor, matching_dtuids=matching_dtuids, q=q, limit=limit)
+
+
+def _managed_subject_userids(
+    contexts: Iterable[DingTalkUserOrgContext],
+    *,
+    actor_dtuid: str,
+) -> list[str]:
+    return [
+        context.user_id
+        for context in contexts
+        if _chain_is_managed_by(context.manager_chain, actor_dtuid=actor_dtuid)
+    ]
+
+
+def _chain_is_managed_by(chain: JsonValue, *, actor_dtuid: str) -> bool:
+    if not isinstance(chain, list):
+        return False
+    for entry in chain:
+        if not isinstance(entry, dict):
+            return False
+        manager_userid = entry.get("user_id")
+        if not isinstance(manager_userid, str) or not manager_userid:
+            return False
+        if manager_userid == actor_dtuid:
+            return True
+    return False
+
+
+def _reassign_candidate_users(
+    actor: UserMirror,
+    *,
+    matching_dtuids: list[str],
+    q: str,
+    limit: int,
+) -> list[UserMirror]:
     qs = UserMirror.objects.filter(
         status=USER_STATUS_ACTIVE,
         dingtalk_source_slug=actor.dingtalk_source_slug,

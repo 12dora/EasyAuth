@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import dataclass
 from http import HTTPStatus
-from typing import ClassVar, Final, Literal
+from typing import ClassVar, Final, Literal, cast
 
 from django.db import transaction
 from django.http import HttpRequest, JsonResponse
@@ -59,6 +60,7 @@ from easyauth.lifecycle.offboarding import HandoverCreationSpec, ensure_handover
 from easyauth.webhooks.hooks import HookCallError
 
 type PortalApiResult = UserMirror | JsonResponse
+type ReassignRequest = tuple[str, ReassignPayload, UserMirror]
 
 IDEMPOTENCY_KEY_MAX: Final = 128
 REASON_MIN_LEN: Final = 10
@@ -137,6 +139,14 @@ class ExecutePayload(BaseModel):
     confirm_version: int = Field(ge=0)
 
 
+@dataclass(frozen=True, slots=True)
+class _OverrideRequest:
+    user: UserMirror
+    task_id: int
+    app_key: str
+    asset_type: str
+
+
 # ---------------------------------------------------------------------------
 # 入口
 # ---------------------------------------------------------------------------
@@ -168,13 +178,11 @@ def portal_me_handover_tasks(request: HttpRequest) -> JsonResponse:
 
 
 def portal_handover_pre_offboard(request: HttpRequest) -> JsonResponse:
-    match _portal_user(request):
+    match _portal_user_for_method(request, "POST"):
         case UserMirror() as user:
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return _method_not_allowed()
     idem = _idempotency_key(request)
     if isinstance(idem, JsonResponse):
         return idem
@@ -203,16 +211,7 @@ def portal_handover_pre_offboard(request: HttpRequest) -> JsonResponse:
             ),
         )
     except (HandoverConflictError, HandoverError) as error:
-        text = str(error)
-        if text in {"idempotency_conflict"}:
-            return reason_error("idempotency_conflict")
-        # 已有其他类型 open 生命周期单 → 门户语义 open_task_exists
-        from easyauth.lifecycle.core import TASK_KIND_CONFLICT_MESSAGE
-
-        if text == TASK_KIND_CONFLICT_MESSAGE or text == "task_kind_conflict":
-            return reason_error("open_task_exists")
-        mapped = map_handover_exception(error)
-        return mapped or reason_error("open_task_exists", text)
+        return _pre_offboard_error_response(error)
     return json_response(
         {"handover_task": task_detail(task, surface=SURFACE_PORTAL)},
         status=HTTPStatus.CREATED,
@@ -220,42 +219,15 @@ def portal_handover_pre_offboard(request: HttpRequest) -> JsonResponse:
 
 
 def portal_handover_reassign(request: HttpRequest) -> JsonResponse:
-    match _portal_user(request):
+    match _portal_user_for_method(request, "POST"):
         case UserMirror() as user:
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return _method_not_allowed()
-    idem = _idempotency_key(request)
-    if isinstance(idem, JsonResponse):
-        return idem
-    try:
-        payload = ReassignPayload.model_validate_json(request.body)
-    except ValidationError as exc:
-        return error_response(
-            ErrorCode.VALIDATION_ERROR,
-            "请求参数无效。",
-            {"errors": str(exc)},
-            status=HTTPStatus.UNPROCESSABLE_ENTITY,
-        )
-    if len(payload.reason.strip()) < REASON_MIN_LEN:
-        return reason_error("reason_required")
-    if not payload.app_keys:
-        return error_response(
-            ErrorCode.VALIDATION_ERROR,
-            "app_keys 必填且非空。",
-            status=HTTPStatus.UNPROCESSABLE_ENTITY,
-        )
-    subject = UserMirror.objects.filter(
-        authentik_user_id=payload.subject_user_id,
-        status=USER_STATUS_ACTIVE,
-    ).first()
-    if subject is None:
-        return reason_error("out_of_managed_scope")
-    jurisdiction = assert_manager_of(user, subject)
-    if not jurisdiction.allowed:
-        return reason_error(jurisdiction.reason)
+    prepared = _prepare_reassign_request(request, user)
+    if isinstance(prepared, JsonResponse):
+        return prepared
+    idem, payload, subject = prepared
     body_hash = _payload_sha256(
         {
             "subject_user_id": payload.subject_user_id,
@@ -365,71 +337,11 @@ def portal_handover_overrides(
             pass
         case JsonResponse() as response:
             return response
+    override_request = _OverrideRequest(user, task_id, app_key, asset_type)
     if request.method == "GET":
-        try:
-            action = _action_for_user(user, task_id, app_key, require_assignee=False)
-            if isinstance(action, JsonResponse):
-                return action
-            return json_response(list_overrides(action, type_key=asset_type))  # type: ignore[arg-type]
-        except HandoverError as error:
-            return error_response(
-                ErrorCode.NOT_FOUND,
-                str(error),
-                status=HTTPStatus.NOT_FOUND,
-            )
+        return _get_portal_overrides(override_request)
     if request.method == "PUT":
-        try:
-            payload = OverridesPutPayload.model_validate_json(request.body)
-        except ValidationError as exc:
-            return error_response(
-                ErrorCode.VALIDATION_ERROR,
-                "参数无效。",
-                {"errors": str(exc)},
-                status=HTTPStatus.UNPROCESSABLE_ENTITY,
-            )
-        asset_ids = [item.asset_id for item in payload.overrides]
-        if len(asset_ids) != len(set(asset_ids)):
-            return reason_error("duplicate_assignment")
-        try:
-            with transaction.atomic():
-                action = _action_for_user(
-                    user,
-                    task_id,
-                    app_key,
-                    require_assignee=True,
-                    lock_for_mutation=True,
-                )
-                if isinstance(action, JsonResponse):
-                    return action
-                result = put_overrides(
-                    action,
-                    type_key=asset_type,
-                    overrides_version=payload.overrides_version,
-                    overrides=[
-                        OverrideEntry(
-                            asset_id=item.asset_id,
-                            action=item.action,
-                            to_user_id=item.to_user_id,
-                            label=item.label,
-                        )
-                        for item in payload.overrides
-                    ],
-                )
-        except (HandoverConflictError, HandoverError) as error:
-            mapped = map_handover_exception(error)
-            return mapped or error_response(
-                ErrorCode.VALIDATION_ERROR,
-                str(error),
-                status=HTTPStatus.BAD_REQUEST,
-            )
-        return json_response(
-            {
-                "overrides_version": result.overrides_version,
-                "confirm_version": result.confirm_version,
-                "override_count": result.override_count,
-                "dropped_invalid": result.dropped_invalid,
-            },
-        )
+        return _put_portal_overrides(request, override_request)
     return _method_not_allowed()
 
 
@@ -492,30 +404,14 @@ def portal_handover_action_patch(
     task_id: int,
     app_key: str,
 ) -> JsonResponse:
-    match _portal_user(request):
+    match _portal_user_for_method(request, "PATCH"):
         case UserMirror() as user:
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "PATCH":
-        return _method_not_allowed()
-    try:
-        payload = GrantReceiverPayload.model_validate_json(request.body)
-    except ValidationError as exc:
-        return error_response(
-            ErrorCode.VALIDATION_ERROR,
-            "参数无效。",
-            {"errors": str(exc)},
-            status=HTTPStatus.UNPROCESSABLE_ENTITY,
-        )
-    receiver = None
-    if payload.grant_receiver_user_id:
-        receiver = UserMirror.objects.filter(
-            authentik_user_id=payload.grant_receiver_user_id,
-            status=USER_STATUS_ACTIVE,
-        ).first()
-        if receiver is None:
-            return reason_error("receiver_not_active")
+    receiver = _grant_receiver_from_request(request)
+    if isinstance(receiver, JsonResponse):
+        return receiver
     try:
         with transaction.atomic():
             action = _action_for_user(
@@ -544,13 +440,11 @@ def portal_handover_action_operation(
     app_key: str,
     operation: str,
 ) -> JsonResponse:
-    match _portal_user(request):
+    match _portal_user_for_method(request, "POST"):
         case UserMirror() as user:
             pass
         case JsonResponse() as response:
             return response
-    if request.method != "POST":
-        return _method_not_allowed()
     action = _action_for_user(user, task_id, app_key, require_assignee=True)
     if isinstance(action, JsonResponse):
         return action
@@ -751,6 +645,167 @@ def portal_handover_candidates(request: HttpRequest) -> JsonResponse:
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
+
+
+def _portal_user_for_method(request: HttpRequest, method: str) -> PortalApiResult:
+    user = _portal_user(request)
+    if isinstance(user, JsonResponse):
+        return user
+    if request.method != method:
+        return _method_not_allowed()
+    return user
+
+
+def _pre_offboard_error_response(error: HandoverConflictError | HandoverError) -> JsonResponse:
+    text = str(error)
+    if text == "idempotency_conflict":
+        return reason_error("idempotency_conflict")
+    # 已有其他类型 open 生命周期单 → 门户语义 open_task_exists
+    from easyauth.lifecycle.core import TASK_KIND_CONFLICT_MESSAGE
+
+    if text == TASK_KIND_CONFLICT_MESSAGE or text == "task_kind_conflict":
+        return reason_error("open_task_exists")
+    mapped = map_handover_exception(error)
+    return mapped or reason_error("open_task_exists", text)
+
+
+def _prepare_reassign_request(
+    request: HttpRequest,
+    user: UserMirror,
+) -> ReassignRequest | JsonResponse:
+    idem = _idempotency_key(request)
+    if isinstance(idem, JsonResponse):
+        return idem
+    payload = _parse_reassign_payload(request)
+    if isinstance(payload, JsonResponse):
+        return payload
+    subject = UserMirror.objects.filter(
+        authentik_user_id=payload.subject_user_id,
+        status=USER_STATUS_ACTIVE,
+    ).first()
+    if subject is None:
+        return reason_error("out_of_managed_scope")
+    jurisdiction = assert_manager_of(user, subject)
+    if not jurisdiction.allowed:
+        return reason_error(jurisdiction.reason)
+    return idem, payload, subject
+
+
+def _parse_reassign_payload(request: HttpRequest) -> ReassignPayload | JsonResponse:
+    try:
+        payload = ReassignPayload.model_validate_json(request.body)
+    except ValidationError as exc:
+        return error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "请求参数无效。",
+            {"errors": str(exc)},
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+        )
+    if len(payload.reason.strip()) < REASON_MIN_LEN:
+        return reason_error("reason_required")
+    if not payload.app_keys:
+        return error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "app_keys 必填且非空。",
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+        )
+    return payload
+
+
+def _get_portal_overrides(spec: _OverrideRequest) -> JsonResponse:
+    try:
+        action = _action_for_user(
+            spec.user,
+            spec.task_id,
+            spec.app_key,
+            require_assignee=False,
+        )
+        if isinstance(action, JsonResponse):
+            return action
+        payload = cast("dict[str, JsonValue]", list_overrides(action, type_key=spec.asset_type))
+        return json_response(payload)
+    except HandoverError as error:
+        return error_response(
+            ErrorCode.NOT_FOUND,
+            str(error),
+            status=HTTPStatus.NOT_FOUND,
+        )
+
+
+def _put_portal_overrides(request: HttpRequest, spec: _OverrideRequest) -> JsonResponse:
+    try:
+        payload = OverridesPutPayload.model_validate_json(request.body)
+    except ValidationError as exc:
+        return error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "参数无效。",
+            {"errors": str(exc)},
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+        )
+    asset_ids = [item.asset_id for item in payload.overrides]
+    if len(asset_ids) != len(set(asset_ids)):
+        return reason_error("duplicate_assignment")
+    try:
+        with transaction.atomic():
+            action = _action_for_user(
+                spec.user,
+                spec.task_id,
+                spec.app_key,
+                require_assignee=True,
+                lock_for_mutation=True,
+            )
+            if isinstance(action, JsonResponse):
+                return action
+            result = put_overrides(
+                action,
+                type_key=spec.asset_type,
+                overrides_version=payload.overrides_version,
+                overrides=[
+                    OverrideEntry(
+                        asset_id=item.asset_id,
+                        action=item.action,
+                        to_user_id=item.to_user_id,
+                        label=item.label,
+                    )
+                    for item in payload.overrides
+                ],
+            )
+    except (HandoverConflictError, HandoverError) as error:
+        mapped = map_handover_exception(error)
+        return mapped or error_response(
+            ErrorCode.VALIDATION_ERROR,
+            str(error),
+            status=HTTPStatus.BAD_REQUEST,
+        )
+    return json_response(
+        {
+            "overrides_version": result.overrides_version,
+            "confirm_version": result.confirm_version,
+            "override_count": result.override_count,
+            "dropped_invalid": result.dropped_invalid,
+        },
+    )
+
+
+def _grant_receiver_from_request(request: HttpRequest) -> UserMirror | JsonResponse | None:
+    try:
+        payload = GrantReceiverPayload.model_validate_json(request.body)
+    except ValidationError as exc:
+        return error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "参数无效。",
+            {"errors": str(exc)},
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+        )
+    if not payload.grant_receiver_user_id:
+        return None
+    receiver = UserMirror.objects.filter(
+        authentik_user_id=payload.grant_receiver_user_id,
+        status=USER_STATUS_ACTIVE,
+    ).first()
+    if receiver is None:
+        return reason_error("receiver_not_active")
+    return receiver
 
 
 def _portal_user(request: HttpRequest) -> PortalApiResult:

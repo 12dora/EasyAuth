@@ -45,6 +45,7 @@ if TYPE_CHECKING:
     from easyauth.accounts.models import UserMirror
     from easyauth.applications.ops_models import JsonValue
 
+
 @dataclass(frozen=True, slots=True)
 class _FrozenTransferAddItem:
     app: App
@@ -53,6 +54,14 @@ class _FrozenTransferAddItem:
     scope_key: str
     grant_type: str
     duration_days: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class _TransferDiffKeys:
+    revoke: list[str]
+    add: list[str]
+    keep: list[str]
+
 
 def build_transfer_grant_diff(
     *,
@@ -77,7 +86,6 @@ def build_transfer_grant_diff(
         current_entries = {
             grant_item_key(item): item for item in HandoverGrantItem.objects.filter(task=task)
         }
-        current_keys = set(current_entries)
         template_entries = {
             template_item_key(item): item
             for item in OnboardingTemplateRevisionItem.objects.select_related(
@@ -86,24 +94,13 @@ def build_transfer_grant_diff(
                 "permission",
             ).filter(revision=template_revision)
         }
-        common = current_keys & set(template_entries)
-        term_changes = {
-            key
-            for key in common
-            if template_term_replaces_snapshot(
-                template_entries[key],
-                current_entries[key],
-            )
-        }
-        revoke = sorted(current_keys - set(template_entries))
-        add = sorted((set(template_entries) - current_keys) | term_changes)
-        keep = sorted(common - term_changes)
+        diff_keys = _transfer_diff_keys(current_entries, template_entries)
         plan.new_template = template
         plan.new_template_revision = template_revision
         plan.grant_diff = {
-            "revoke": [grant_diff_entry(current_entries[key]) for key in revoke],
-            "add": [template_diff_entry(template_entries[key]) for key in add],
-            "keep": [grant_diff_entry(current_entries[key]) for key in keep],
+            "revoke": [grant_diff_entry(current_entries[key]) for key in diff_keys.revoke],
+            "add": [template_diff_entry(template_entries[key]) for key in diff_keys.add],
+            "keep": [grant_diff_entry(current_entries[key]) for key in diff_keys.keep],
         }
         plan.revision += 1
         plan.save(
@@ -118,6 +115,28 @@ def build_transfer_grant_diff(
         return plan
 
 
+def _transfer_diff_keys(
+    current_entries: dict[str, HandoverGrantItem],
+    template_entries: dict[str, OnboardingTemplateRevisionItem],
+) -> _TransferDiffKeys:
+    current_keys = set(current_entries)
+    template_keys = set(template_entries)
+    common = current_keys & template_keys
+    term_changes = {
+        key
+        for key in common
+        if template_term_replaces_snapshot(
+            template_entries[key],
+            current_entries[key],
+        )
+    }
+    return _TransferDiffKeys(
+        revoke=sorted(current_keys - template_keys),
+        add=sorted((template_keys - current_keys) | term_changes),
+        keep=sorted(common - term_changes),
+    )
+
+
 def _confirmed_plan_or_conflict(
     plan: TransferPlan,
     *,
@@ -125,10 +144,7 @@ def _confirmed_plan_or_conflict(
     canonical_add: list[str],
 ) -> TransferPlan:
     """已确认方案: 勾选完全一致时幂等返回, 否则判冲突。"""
-    if (
-        plan.confirmed_revoke_keys == canonical_revoke
-        and plan.confirmed_add_keys == canonical_add
-    ):
+    if plan.confirmed_revoke_keys == canonical_revoke and plan.confirmed_add_keys == canonical_add:
         return plan
     raise HandoverConflictError(TRANSFER_CONFIRMATION_CONFLICT_MESSAGE)
 
@@ -189,9 +205,7 @@ def _apply_transfer_selection(
         apply_transfer_diff_for_app(
             subject=task.subject_user,
             app_key=app_key,
-            revoke_keys={
-                key for key in selection.revoke_set if key.startswith(f"{app_key}:")
-            },
+            revoke_keys={key for key in selection.revoke_set if key.startswith(f"{app_key}:")},
             add_items=[
                 item
                 for key, item in selection.frozen_add_items.items()
@@ -243,28 +257,45 @@ def confirm_transfer_grant_diff(
         )
         lock_and_validate_transfer_grant_versions(task=task, app_keys=selection.apps)
         _apply_transfer_selection(task, selection=selection, actor_id=actor_id)
-        plan.confirmed_at = timezone.now()
-        plan.confirmed_revoke_keys = canonical_revoke
-        plan.confirmed_add_keys = canonical_add
-        plan.save(
-            update_fields=[
-                "confirmed_at",
-                "confirmed_revoke_keys",
-                "confirmed_add_keys",
-                "updated_at",
-            ],
-        )
-        record_task_event(
+        return _finalize_transfer_plan(
             task,
-            action="handover_grant_diff_confirmed",
+            plan,
+            canonical_revoke=canonical_revoke,
+            canonical_add=canonical_add,
             actor_id=actor_id,
-            extra={
-                "revoked": cast("JsonValue", canonical_revoke),
-                "added": cast("JsonValue", canonical_add),
-            },
         )
-        _ = refresh_task_status(task)
-        return plan
+
+
+def _finalize_transfer_plan(
+    task: HandoverTask,
+    plan: TransferPlan,
+    *,
+    canonical_revoke: list[str],
+    canonical_add: list[str],
+    actor_id: str,
+) -> TransferPlan:
+    plan.confirmed_at = timezone.now()
+    plan.confirmed_revoke_keys = canonical_revoke
+    plan.confirmed_add_keys = canonical_add
+    plan.save(
+        update_fields=[
+            "confirmed_at",
+            "confirmed_revoke_keys",
+            "confirmed_add_keys",
+            "updated_at",
+        ],
+    )
+    record_task_event(
+        task,
+        action="handover_grant_diff_confirmed",
+        actor_id=actor_id,
+        extra={
+            "revoked": cast("JsonValue", canonical_revoke),
+            "added": cast("JsonValue", canonical_add),
+        },
+    )
+    _ = refresh_task_status(task)
+    return plan
 
 
 def transfer_selected_grants(action: HandoverAppAction) -> int:
@@ -375,17 +406,13 @@ def merge_into_current_grant(
 ) -> AccessGrant:
     # 接收人已有 current 授权时合并(change), 否则新建; 授权来源经审计 actor_id 可溯源到交接单。
     existing = AccessGrant.objects.filter(user=user, app=app, is_current=True).first()
-    if existing is not None and existing.status == "active":
-        _ = GrantService.expire_grant(
-            GrantExpirationInput(
-                user=user,
-                app=app,
-                actor_type="system",
-                actor_id=actor_id,
-                reason="生命周期写入前过期化",
-            ),
-        )
-        existing = AccessGrant.objects.filter(user=user, app=app, is_current=True).first()
+    existing = _expire_active_grant(
+        existing,
+        user=user,
+        app=app,
+        actor_id=actor_id,
+        reason="生命周期写入前过期化",
+    )
     merged_groups: dict[int, AuthorizationGroupGrantInput] = {
         item.authorization_group.id: item for item in groups
     }
@@ -393,32 +420,11 @@ def merge_into_current_grant(
         (direct.permission.id, direct.scope_key): direct for direct in direct_grants
     }
     if existing is not None and existing.status == "active":
-        for link in AccessGrantGroup.objects.select_related("authorization_group").filter(
-            grant=existing,
-        ):
-            incoming = merged_groups.get(link.authorization_group.id)
-            merged_groups[link.authorization_group.id] = AuthorizationGroupGrantInput(
-                authorization_group=link.authorization_group,
-                expires_at=(
-                    link.expires_at
-                    if incoming is None
-                    else later_expiry(link.expires_at, incoming.expires_at)
-                ),
-            )
-        for permission_link in AccessGrantPermission.objects.select_related("permission").filter(
-            grant=existing,
-        ):
-            key = (permission_link.permission.id, permission_link.scope_key)
-            incoming = merged_direct.get(key)
-            merged_direct[key] = ScopedDirectGrantInput(
-                permission=permission_link.permission,
-                scope_key=permission_link.scope_key,
-                expires_at=(
-                    permission_link.expires_at
-                    if incoming is None
-                    else later_expiry(permission_link.expires_at, incoming.expires_at)
-                ),
-            )
+        _merge_existing_grant_targets(
+            existing,
+            groups=merged_groups,
+            direct=merged_direct,
+        )
     input_data = GrantMutationInput(
         user=user,
         app=app,
@@ -430,6 +436,62 @@ def merge_into_current_grant(
     if existing is not None:
         return GrantService.change_grant(input_data)
     return GrantService.create_grant(input_data)
+
+
+def _expire_active_grant(
+    existing: AccessGrant | None,
+    *,
+    user: UserMirror,
+    app: App,
+    actor_id: str,
+    reason: str,
+) -> AccessGrant | None:
+    if existing is None or existing.status != "active":
+        return existing
+    _ = GrantService.expire_grant(
+        GrantExpirationInput(
+            user=user,
+            app=app,
+            actor_type="system",
+            actor_id=actor_id,
+            reason=reason,
+        ),
+    )
+    return AccessGrant.objects.filter(user=user, app=app, is_current=True).first()
+
+
+def _merge_existing_grant_targets(
+    existing: AccessGrant,
+    *,
+    groups: dict[int, AuthorizationGroupGrantInput],
+    direct: dict[tuple[int, str], ScopedDirectGrantInput],
+) -> None:
+    for link in AccessGrantGroup.objects.select_related("authorization_group").filter(
+        grant=existing,
+    ):
+        incoming = groups.get(link.authorization_group.id)
+        groups[link.authorization_group.id] = AuthorizationGroupGrantInput(
+            authorization_group=link.authorization_group,
+            expires_at=(
+                link.expires_at
+                if incoming is None
+                else later_expiry(link.expires_at, incoming.expires_at)
+            ),
+        )
+    for permission_link in AccessGrantPermission.objects.select_related("permission").filter(
+        grant=existing,
+    ):
+        key = (permission_link.permission.id, permission_link.scope_key)
+        incoming = direct.get(key)
+        direct[key] = ScopedDirectGrantInput(
+            permission=permission_link.permission,
+            scope_key=permission_link.scope_key,
+            expires_at=(
+                permission_link.expires_at
+                if incoming is None
+                else later_expiry(permission_link.expires_at, incoming.expires_at)
+            ),
+        )
 
 
 def apply_transfer_diff_for_app(
@@ -444,17 +506,13 @@ def apply_transfer_diff_for_app(
     existing = AccessGrant.objects.filter(user=subject, app=app, is_current=True).first()
     groups: dict[int, AuthorizationGroupGrantInput] = {}
     direct: dict[tuple[int, str], ScopedDirectGrantInput] = {}
-    if existing is not None and existing.status == "active":
-        _ = GrantService.expire_grant(
-            GrantExpirationInput(
-                user=subject,
-                app=app,
-                actor_type="system",
-                actor_id=actor_id,
-                reason="转岗差异确认前过期化",
-            ),
-        )
-        existing = AccessGrant.objects.filter(user=subject, app=app, is_current=True).first()
+    existing = _expire_active_grant(
+        existing,
+        user=subject,
+        app=app,
+        actor_id=actor_id,
+        reason="转岗差异确认前过期化",
+    )
     if existing is not None and existing.status == "active":
         collect_kept_targets(
             existing=existing,
@@ -463,22 +521,7 @@ def apply_transfer_diff_for_app(
             groups=groups,
             direct=direct,
         )
-    for item in add_items:
-        item_expiry = template_item_expiry(
-            grant_type=item.grant_type,
-            duration_days=item.duration_days,
-        )
-        if item.authorization_group is not None:
-            groups[item.authorization_group.id] = AuthorizationGroupGrantInput(
-                authorization_group=item.authorization_group,
-                expires_at=item_expiry,
-            )
-        if item.permission is not None:
-            direct[(item.permission.id, item.scope_key)] = ScopedDirectGrantInput(
-                permission=item.permission,
-                scope_key=item.scope_key,
-                expires_at=item_expiry,
-            )
+    _add_transfer_targets(add_items, groups=groups, direct=direct)
     input_data = GrantMutationInput(
         user=subject,
         app=app,
@@ -501,6 +544,30 @@ def apply_transfer_diff_for_app(
         _ = GrantService.change_grant(input_data)
     else:
         _ = GrantService.create_grant(input_data)
+
+
+def _add_transfer_targets(
+    add_items: list[_FrozenTransferAddItem],
+    *,
+    groups: dict[int, AuthorizationGroupGrantInput],
+    direct: dict[tuple[int, str], ScopedDirectGrantInput],
+) -> None:
+    for item in add_items:
+        item_expiry = template_item_expiry(
+            grant_type=item.grant_type,
+            duration_days=item.duration_days,
+        )
+        if item.authorization_group is not None:
+            groups[item.authorization_group.id] = AuthorizationGroupGrantInput(
+                authorization_group=item.authorization_group,
+                expires_at=item_expiry,
+            )
+        if item.permission is not None:
+            direct[(item.permission.id, item.scope_key)] = ScopedDirectGrantInput(
+                permission=item.permission,
+                scope_key=item.scope_key,
+                expires_at=item_expiry,
+            )
 
 
 def lock_and_validate_transfer_grant_versions(

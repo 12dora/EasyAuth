@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
 from django.http import JsonResponse
 
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.responses import error_response
+
+if TYPE_CHECKING:
+    from easyauth.webhooks.hooks import HookCallError
 
 # HTTPStatus already imported for reason table + HookCallError mapping
 
@@ -222,42 +225,72 @@ def map_handover_exception(
     from easyauth.webhooks.hooks import HookCallError
 
     if isinstance(error, HookCallError):
-        # 按 status_code 映射, 不用字符串子串(items / execute / preview 共用)
-        status = error.status_code
-        if status == HTTPStatus.PRECONDITION_FAILED:  # 412
-            return reason_error("snapshot_stale", details=details)
-        if status == HTTPStatus.REQUEST_ENTITY_TOO_LARGE:  # 413
-            return reason_error("payload_too_large", details=details)
-        if status == HTTPStatus.LOCKED:  # 423
-            return reason_error("downstream_locked", details=details)
-        if status == HTTPStatus.TOO_MANY_REQUESTS:  # 429
-            response = reason_error("rate_limited", details=details)
-            if error.retry_after_seconds is not None:
-                response["Retry-After"] = str(error.retry_after_seconds)
-            return response
-        return None
+        return _map_hook_call_error(error, details=details)
 
     text = str(error).strip()
     if isinstance(error, HandoverConflictError):
-        if text == HANDOVER_EXECUTION_IN_FLIGHT or "in_flight" in text:
-            return reason_error("handover_execution_in_flight", details=details)
-        if text in _REASON_TABLE:
-            return reason_error(text, details=details)
-        # 兼容既有中文冲突消息
-        from easyauth.lifecycle.core import TASK_KIND_CONFLICT_MESSAGE
-
-        if text == TASK_KIND_CONFLICT_MESSAGE:
-            return reason_error("task_kind_conflict", text, details=details)
-        return reason_error("action_not_operable", text, details=details)
+        return _map_conflict_error(
+            text,
+            execution_in_flight=HANDOVER_EXECUTION_IN_FLIGHT,
+            details=details,
+        )
     if isinstance(error, HandoverError):
-        if text in _REASON_TABLE:
-            return reason_error(text, details=details)
-        # 中文消息回落: 下游 HTTP 提示
-        if "412" in text:
-            return reason_error("snapshot_stale", details=details)
-        if "413" in text:
-            return reason_error("payload_too_large", details=details)
-        if "423" in text:
-            return reason_error("downstream_locked", details=details)
-        return None
+        return _map_handover_error(text, details=details)
     return None
+
+
+def _map_hook_call_error(
+    error: HookCallError,
+    *,
+    details: dict[str, JsonValue] | None,
+) -> JsonResponse | None:
+    # 按 status_code 映射, 不用字符串子串(items / execute / preview 共用)
+    status = error.status_code
+    reasons: dict[int, str] = {
+        HTTPStatus.PRECONDITION_FAILED: "snapshot_stale",
+        HTTPStatus.REQUEST_ENTITY_TOO_LARGE: "payload_too_large",
+        HTTPStatus.LOCKED: "downstream_locked",
+    }
+    reason = reasons.get(status) if status is not None else None
+    if reason is not None:
+        return reason_error(reason, details=details)
+    if status != HTTPStatus.TOO_MANY_REQUESTS:
+        return None
+    response = reason_error("rate_limited", details=details)
+    if error.retry_after_seconds is not None:
+        response["Retry-After"] = str(error.retry_after_seconds)
+    return response
+
+
+def _map_conflict_error(
+    text: str,
+    *,
+    execution_in_flight: str,
+    details: dict[str, JsonValue] | None,
+) -> JsonResponse:
+    if text == execution_in_flight or "in_flight" in text:
+        return reason_error("handover_execution_in_flight", details=details)
+    if text in _REASON_TABLE:
+        return reason_error(text, details=details)
+    # 兼容既有中文冲突消息
+    from easyauth.lifecycle.core import TASK_KIND_CONFLICT_MESSAGE
+
+    reason = "task_kind_conflict" if text == TASK_KIND_CONFLICT_MESSAGE else "action_not_operable"
+    return reason_error(reason, text, details=details)
+
+
+def _map_handover_error(
+    text: str,
+    *,
+    details: dict[str, JsonValue] | None,
+) -> JsonResponse | None:
+    if text in _REASON_TABLE:
+        return reason_error(text, details=details)
+    # 中文消息回落: 下游 HTTP 提示
+    status_reasons = {
+        "412": "snapshot_stale",
+        "413": "payload_too_large",
+        "423": "downstream_locked",
+    }
+    reason = next((reason for marker, reason in status_reasons.items() if marker in text), None)
+    return reason_error(reason, details=details) if reason is not None else None

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
 from django.db.models import Count, Q, Sum
 from django.utils import timezone
@@ -38,6 +38,20 @@ type JsonObject = dict[str, "JsonValue"]
 
 SURFACE_PORTAL: Final = "portal"
 SURFACE_CONSOLE: Final = "console"
+
+_BASE_ALLOWED_ACTIONS: Final[dict[str, tuple[str, ...]]] = {
+    ACTION_STATUS_PENDING: ("preview",),
+    ACTION_STATUS_PREVIEWED: ("preview", "execute"),
+    ACTION_STATUS_FAILED: ("retry",),
+}
+_CONSOLE_SKIPPABLE_STATUSES: Final = frozenset(
+    {
+        ACTION_STATUS_BLOCKED,
+        ACTION_STATUS_PENDING,
+        ACTION_STATUS_PREVIEWED,
+        ACTION_STATUS_FAILED,
+    },
+)
 
 
 def user_ref(user: UserMirror | None, *, include_status: bool = False) -> JsonObject | None:
@@ -106,9 +120,7 @@ def _defer_history_for_task(task: HandoverTask) -> list[JsonObject]:
 
 
 def task_list_item(task: HandoverTask) -> JsonObject:
-    actions = list(task.app_actions.all()) if hasattr(task, "_prefetched_objects_cache") else list(
-        HandoverAppAction.objects.filter(task=task),
-    )
+    actions = _task_actions(task)
     # 若未 prefetch, 再查一次聚合
     if not actions:
         actions = list(HandoverAppAction.objects.filter(task=task))
@@ -123,18 +135,7 @@ def task_list_item(task: HandoverTask) -> JsonObject:
         .get("total")
         or 0
     )
-    # 按各 action 当前 generation 汇总更准
-    total_asset = 0
-    for action in actions:
-        total_asset += (
-            HandoverAssetType.objects.filter(
-                action=action,
-                generation=action.generation,
-            )
-            .aggregate(total=Sum("count"))
-            .get("total")
-            or 0
-        )
+    total_asset = _current_generation_asset_count(actions)
     allowed: list[str] = []
     if task.status == TASK_STATUS_CANCELLED:
         allowed.append("delete")
@@ -157,6 +158,28 @@ def task_list_item(task: HandoverTask) -> JsonObject:
     }
 
 
+def _task_actions(task: HandoverTask) -> list[HandoverAppAction]:
+    if hasattr(task, "_prefetched_objects_cache"):
+        return list(task.app_actions.all())
+    return list(HandoverAppAction.objects.filter(task=task))
+
+
+def _current_generation_asset_count(actions: list[HandoverAppAction]) -> int:
+    """按各 action 当前 generation 汇总资产数。"""
+    total = 0
+    for action in actions:
+        total += (
+            HandoverAssetType.objects.filter(
+                action=action,
+                generation=action.generation,
+            )
+            .aggregate(total=Sum("count"))
+            .get("total")
+            or 0
+        )
+    return total
+
+
 def models_F_generation(actions: list[HandoverAppAction]) -> int:
     if not actions:
         return 1
@@ -164,67 +187,9 @@ def models_F_generation(actions: list[HandoverAppAction]) -> int:
 
 
 def task_detail(task: HandoverTask, *, surface: str = SURFACE_CONSOLE) -> JsonObject:
-    actions_qs = HandoverAppAction.objects.select_related(
-        "app",
-        "grant_receiver",
-        "task",
-        "task__subject_user",
-    ).filter(task=task)
-    actions_payload: list[JsonValue] = [
-        action_item(action, surface=surface) for action in actions_qs
-    ]
-    team_items: list[JsonValue] = [
-        {
-            "id": entry.id,
-            "team_id": entry.team_id,
-            "team_name": entry.team.name,
-            "action": entry.action,
-            "status": entry.status,
-            "to_user": user_ref(entry.to_user),
-        }
-        for entry in HandoverTeamItem.objects.select_related("team", "to_user").filter(task=task)
-    ]
-    # transfer_plan: 控制台向导仍需要; 门户详情可空。
-    transfer_plan: JsonObject | None = None
-    from easyauth.lifecycle.models import TransferPlan
-
-    plan = (
-        TransferPlan.objects.select_related("new_template", "new_template_revision")
-        .filter(task=task)
-        .first()
-    )
-    if plan is not None:
-        template = plan.new_template
-        template_revision = plan.new_template_revision
-        grant_diff: dict[str, JsonValue] = dict(plan.grant_diff)
-        if plan.confirmed_at is not None:
-            confirmed_by_name = {
-                "revoke": set(plan.confirmed_revoke_keys),
-                "add": set(plan.confirmed_add_keys),
-            }
-            for name, confirmed_keys in confirmed_by_name.items():
-                entries = grant_diff.get(name)
-                if not isinstance(entries, list):
-                    continue
-                serialized: list[JsonValue] = [
-                    {**entry, "selected": entry.get("key") in confirmed_keys}
-                    for entry in entries
-                    if isinstance(entry, dict)
-                ]
-                grant_diff[name] = serialized
-        transfer_plan = {
-            "template_id": template.id if template is not None else None,
-            "template_name": template.name if template is not None else "",
-            "template_revision_id": (
-                template_revision.id if template_revision is not None else None
-            ),
-            "template_revision": (
-                template_revision.revision if template_revision is not None else None
-            ),
-            "grant_diff": grant_diff,
-            "revision": plan.revision,
-            "confirmed_at": datetime_value(plan.confirmed_at),
-        }
+    actions_payload = _task_actions_payload(task, surface=surface)
+    team_items = _task_team_items_payload(task)
+    transfer_plan = _transfer_plan_payload(task)
     return {
         "id": task.id,
         "kind": task.kind,
@@ -243,6 +208,85 @@ def task_detail(task: HandoverTask, *, surface: str = SURFACE_CONSOLE) -> JsonOb
         "created_by": task.created_by,
         "updated_at": datetime_value(task.updated_at),
     }
+
+
+def _task_actions_payload(task: HandoverTask, *, surface: str) -> list[JsonValue]:
+    actions = HandoverAppAction.objects.select_related(
+        "app",
+        "grant_receiver",
+        "task",
+        "task__subject_user",
+    ).filter(task=task)
+    return [action_item(action, surface=surface) for action in actions]
+
+
+def _task_team_items_payload(task: HandoverTask) -> list[JsonValue]:
+    return [
+        {
+            "id": entry.id,
+            "team_id": entry.team_id,
+            "team_name": entry.team.name,
+            "action": entry.action,
+            "status": entry.status,
+            "to_user": user_ref(entry.to_user),
+        }
+        for entry in HandoverTeamItem.objects.select_related("team", "to_user").filter(task=task)
+    ]
+
+
+def _transfer_plan_payload(task: HandoverTask) -> JsonObject | None:
+    # transfer_plan: 控制台向导仍需要; 门户详情可空。
+    from easyauth.lifecycle.models import TransferPlan
+
+    plan = (
+        TransferPlan.objects.select_related("new_template", "new_template_revision")
+        .filter(task=task)
+        .first()
+    )
+    if plan is None:
+        return None
+    template = plan.new_template
+    template_revision = plan.new_template_revision
+    grant_diff: dict[str, JsonValue] = dict(plan.grant_diff)
+    if plan.confirmed_at is not None:
+        _mark_selected_grants(
+            grant_diff,
+            confirmed_revoke_keys=set(plan.confirmed_revoke_keys),
+            confirmed_add_keys=set(plan.confirmed_add_keys),
+        )
+    return {
+        "template_id": template.id if template is not None else None,
+        "template_name": template.name if template is not None else "",
+        "template_revision_id": template_revision.id if template_revision is not None else None,
+        "template_revision": (
+            template_revision.revision if template_revision is not None else None
+        ),
+        "grant_diff": grant_diff,
+        "revision": plan.revision,
+        "confirmed_at": datetime_value(plan.confirmed_at),
+    }
+
+
+def _mark_selected_grants(
+    grant_diff: dict[str, JsonValue],
+    *,
+    confirmed_revoke_keys: set[str],
+    confirmed_add_keys: set[str],
+) -> None:
+    confirmed_by_name = {
+        "revoke": confirmed_revoke_keys,
+        "add": confirmed_add_keys,
+    }
+    for name, confirmed_keys in confirmed_by_name.items():
+        entries = grant_diff.get(name)
+        if not isinstance(entries, list):
+            continue
+        serialized: list[JsonValue] = [
+            {**entry, "selected": entry.get("key") in confirmed_keys}
+            for entry in entries
+            if isinstance(entry, dict)
+        ]
+        grant_diff[name] = serialized
 
 
 def action_item(action: HandoverAppAction, *, surface: str = SURFACE_CONSOLE) -> JsonObject:
@@ -341,18 +385,31 @@ def aggregated_summary(action: HandoverAppAction) -> JsonObject | None:
         metadata__generation=action.generation,
     ).exists():
         return None
+    if not _is_contract_summary(cast("dict[object, object]", stored)):
+        return None
+    return cast("JsonObject", stored)
+
+
+def _is_contract_summary(summary: dict[object, object]) -> bool:
     fields = {"transferred", "released", "skipped", "merged", "failed"}
-    for type_key, row in stored.items():
-        if not isinstance(type_key, str) or not type_key or not isinstance(row, dict):
-            return None
-        if set(row) != fields:
-            return None
-        if any(
-            not isinstance(value, int) or isinstance(value, bool) or value < 0
-            for value in row.values()
-        ):
-            return None
-    return stored  # type: ignore[return-value]
+    return all(
+        isinstance(type_key, str)
+        and bool(type_key)
+        and _is_contract_summary_row(row, fields=fields)
+        for type_key, row in summary.items()
+    )
+
+
+def _is_contract_summary_row(row: object, *, fields: set[str]) -> bool:
+    if not isinstance(row, dict):
+        return False
+    typed_row = cast("dict[object, object]", row)
+    if set(typed_row) != fields:
+        return False
+    values = typed_row.values()
+    return all(
+        isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in values
+    )
 
 
 def allowed_actions_for(action: HandoverAppAction, *, surface: str) -> list[str]:
@@ -364,29 +421,15 @@ def allowed_actions_for(action: HandoverAppAction, *, surface: str) -> list[str]
         ACTION_STATUS_ASYNC_PENDING,
         ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
     }
-    allowed: list[str] = []
-    if action.status == ACTION_STATUS_BLOCKED:
-        if surface == SURFACE_CONSOLE and not in_flight:
-            allowed.append("skip")
-        return allowed
-    if action.status == ACTION_STATUS_PENDING:
-        allowed.append("preview")
-        if surface == SURFACE_CONSOLE and not in_flight:
-            allowed.append("skip")
-        return allowed
-    if action.status == ACTION_STATUS_PREVIEWED:
-        allowed.extend(["preview", "execute"])
-        if surface == SURFACE_CONSOLE and not in_flight:
-            allowed.append("skip")
-        return allowed
-    if action.status == ACTION_STATUS_FAILED and not in_flight:
-        allowed.append("retry")
-        if surface == SURFACE_CONSOLE:
-            allowed.append("skip")
-        return allowed
-    if action.status == ACTION_STATUS_ASYNC_ATTENTION_REQUIRED and surface == SURFACE_CONSOLE:
-        # async-abandon 是独立端点, 不进 allowed_actions 四元组
-        return []
+    allowed = list(_BASE_ALLOWED_ACTIONS.get(action.status, ()))
+    if action.status == ACTION_STATUS_FAILED and in_flight:
+        allowed.clear()
+    if (
+        surface == SURFACE_CONSOLE
+        and not in_flight
+        and action.status in _CONSOLE_SKIPPABLE_STATUSES
+    ):
+        allowed.append("skip")
     return allowed
 
 
