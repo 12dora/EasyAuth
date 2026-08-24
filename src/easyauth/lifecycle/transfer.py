@@ -1,23 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import timedelta
 from typing import TYPE_CHECKING, cast
 
 from django.db import transaction
 from django.utils import timezone
 
-from easyauth.applications.models import App, AuthorizationGroup, Permission
-from easyauth.grants.inputs import AuthorizationGroupGrantInput, ScopedDirectGrantInput
-from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
-from easyauth.grants.services import GrantExpirationInput, GrantMutationInput, GrantService
+from easyauth.lifecycle import grant_transfer as _grant_transfer
+from easyauth.lifecycle import transfer_diff as _transfer_diff
 from easyauth.lifecycle.core import (
-    CATALOG_TARGET_DELETED_MESSAGE,
     HANDOVER_DATA_NOT_COMPLETED_MESSAGE,
-    TEMPLATE_TERM_INVALID_MESSAGE,
     TRANSFER_CONFIRMATION_CONFLICT_MESSAGE,
     TRANSFER_PLAN_REVISION_CONFLICT_MESSAGE,
-    TRANSFER_PLAN_STALE_MESSAGE,
     TRANSFER_TASK_REQUIRED_MESSAGE,
     TRANSFER_TEMPLATE_REVISION_MISSING_MESSAGE,
     ensure_task_open,
@@ -30,9 +24,6 @@ from easyauth.lifecycle.lease import action_execution_in_flight
 from easyauth.lifecycle.models import (
     ACTION_FINISHED_STATUSES,
     HANDOVER_KIND_TRANSFER,
-    ITEM_STATUS_DONE,
-    ITEM_STATUS_PENDING,
-    ITEM_STATUS_SKIPPED,
     HandoverAppAction,
     HandoverGrantItem,
     HandoverTask,
@@ -42,28 +33,34 @@ from easyauth.lifecycle.models import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
-    from datetime import datetime
-
-    from easyauth.accounts.models import UserMirror
     from easyauth.applications.ops_models import JsonValue
 
+apply_transfer_diff_for_app = _grant_transfer.apply_transfer_diff_for_app
+collect_kept_targets = _grant_transfer.collect_kept_targets
+lock_and_validate_transfer_grant_versions = (
+    _grant_transfer.lock_and_validate_transfer_grant_versions
+)
+merge_into_current_grant = _grant_transfer.merge_into_current_grant
+transfer_selected_grants = _grant_transfer.transfer_selected_grants
 
-@dataclass(frozen=True, slots=True)
-class _FrozenTransferAddItem:
-    app: App
-    authorization_group: AuthorizationGroup | None
-    permission: Permission | None
-    scope_key: str
-    grant_type: str
-    duration_days: int | None
+diff_entries_by_key = _transfer_diff.diff_entries_by_key
+diff_list = _transfer_diff.diff_list
+entry_key = _transfer_diff.entry_key
+frozen_add_item_from_diff_entry = _transfer_diff.frozen_add_item_from_diff_entry
+grant_diff_entry = _transfer_diff.grant_diff_entry
+grant_item_key = _transfer_diff.grant_item_key
+later_expiry = _transfer_diff.later_expiry
+optional_diff_int = _transfer_diff.optional_diff_int
+optional_diff_text = _transfer_diff.optional_diff_text
+required_diff_text = _transfer_diff.required_diff_text
+revision_item_expiry = _transfer_diff.revision_item_expiry
+template_diff_entry = _transfer_diff.template_diff_entry
+template_item_expiry = _transfer_diff.template_item_expiry
+template_item_key = _transfer_diff.template_item_key
+template_term_replaces_snapshot = _transfer_diff.template_term_replaces_snapshot
 
-
-@dataclass(frozen=True, slots=True)
-class _TransferDiffKeys:
-    revoke: list[str]
-    add: list[str]
-    keep: list[str]
+_FrozenTransferAddItem = _transfer_diff.FrozenTransferAddItem
+_transfer_diff_keys = _transfer_diff.transfer_diff_keys
 
 
 def build_transfer_grant_diff(
@@ -116,28 +113,6 @@ def build_transfer_grant_diff(
             ],
         )
         return plan
-
-
-def _transfer_diff_keys(
-    current_entries: dict[str, HandoverGrantItem],
-    template_entries: dict[str, OnboardingTemplateRevisionItem],
-) -> _TransferDiffKeys:
-    current_keys = set(current_entries)
-    template_keys = set(template_entries)
-    common = current_keys & template_keys
-    term_changes = {
-        key
-        for key in common
-        if template_term_replaces_snapshot(
-            template_entries[key],
-            current_entries[key],
-        )
-    }
-    return _TransferDiffKeys(
-        revoke=sorted(current_keys - template_keys),
-        add=sorted((template_keys - current_keys) | term_changes),
-        keep=sorted(common - term_changes),
-    )
 
 
 def _confirmed_plan_or_conflict(
@@ -295,501 +270,3 @@ def _finalize_transfer_plan(
     )
     _ = refresh_task_status(task)
     return plan
-
-
-def transfer_selected_grants(action: HandoverAppAction) -> int:
-    """把该 APP 勾选的授权快照转授给接收人; 未勾选的标 skipped(§7 决策 12)。
-
-    同一事务内锁 action 与 grant items, 变更 grant 与 item 状态一起提交。
-    """
-    items = list(
-        HandoverGrantItem.objects.select_for_update(of=("self",))
-        .select_related("authorization_group", "permission")
-        .filter(
-            task=action.task,
-            app=action.app,
-            generation=action.generation,
-            status=ITEM_STATUS_PENDING,
-        ),
-    )
-    if not items:
-        return 0
-    partition = _partition_pending_grant_items(items, now=timezone.now())
-    _assert_transfer_targets_exist(partition.selected)
-    _mark_grant_items(partition.unselected, status=ITEM_STATUS_SKIPPED)
-    _mark_grant_items(partition.expired, status=ITEM_STATUS_SKIPPED)
-    receiver = action.grant_receiver
-    if receiver is None or not partition.selected:
-        _mark_grant_items(partition.selected, status=ITEM_STATUS_SKIPPED)
-        return 0
-    groups, direct_grants = _transfer_grant_inputs(partition.selected)
-    _ = merge_into_current_grant(
-        user=receiver,
-        app=action.app,
-        groups=groups,
-        direct_grants=direct_grants,
-        actor_id=f"handover_task:{action.task_id}",
-    )
-    _mark_grant_items(partition.selected, status=ITEM_STATUS_DONE)
-    return len(partition.selected)
-
-
-@dataclass(frozen=True, slots=True)
-class _PendingGrantItems:
-    """pending 授权快照按处置去向的三分: 未勾选 / 已过期 / 待转授。"""
-
-    unselected: list[HandoverGrantItem]
-    expired: list[HandoverGrantItem]
-    selected: list[HandoverGrantItem]
-
-
-def _partition_pending_grant_items(
-    items: list[HandoverGrantItem],
-    *,
-    now: datetime,
-) -> _PendingGrantItems:
-    unselected = [item for item in items if not item.selected]
-    expired = [
-        item
-        for item in items
-        if item.selected and item.grant_expires_at is not None and item.grant_expires_at <= now
-    ]
-    selected = [item for item in items if item.selected and item not in expired]
-    return _PendingGrantItems(unselected=unselected, expired=expired, selected=selected)
-
-
-def _assert_transfer_targets_exist(selected: list[HandoverGrantItem]) -> None:
-    """勾选项引用的目录对象被删除时快速失败, 不得静默跳过。"""
-    if any(
-        (item.target_kind_snapshot == "group" and item.authorization_group is None)
-        or (item.target_kind_snapshot == "permission" and item.permission is None)
-        for item in selected
-    ):
-        raise HandoverError(CATALOG_TARGET_DELETED_MESSAGE)
-
-
-def _mark_grant_items(items: list[HandoverGrantItem], *, status: str) -> None:
-    _ = HandoverGrantItem.objects.filter(id__in=[i.id for i in items]).update(status=status)
-
-
-def _transfer_grant_inputs(
-    selected: list[HandoverGrantItem],
-) -> tuple[list[AuthorizationGroupGrantInput], list[ScopedDirectGrantInput]]:
-    groups = [
-        AuthorizationGroupGrantInput(
-            authorization_group=item.authorization_group,
-            expires_at=item.grant_expires_at,
-        )
-        for item in selected
-        if item.authorization_group is not None
-    ]
-    direct_grants = [
-        ScopedDirectGrantInput(
-            permission=item.permission,
-            scope_key=item.scope_key,
-            expires_at=item.grant_expires_at,
-        )
-        for item in selected
-        if item.permission is not None
-    ]
-    return groups, direct_grants
-
-
-def merge_into_current_grant(
-    *,
-    user: UserMirror,
-    app: App,
-    groups: list[AuthorizationGroupGrantInput],
-    direct_grants: list[ScopedDirectGrantInput],
-    actor_id: str,
-) -> AccessGrant:
-    # 接收人已有 current 授权时合并(change), 否则新建; 授权来源经审计 actor_id 可溯源到交接单。
-    existing = AccessGrant.objects.filter(user=user, app=app, is_current=True).first()
-    existing = _expire_active_grant(
-        existing,
-        user=user,
-        app=app,
-        actor_id=actor_id,
-        reason="生命周期写入前过期化",
-    )
-    merged_groups: dict[int, AuthorizationGroupGrantInput] = {
-        item.authorization_group.id: item for item in groups
-    }
-    merged_direct: dict[tuple[int, str], ScopedDirectGrantInput] = {
-        (direct.permission.id, direct.scope_key): direct for direct in direct_grants
-    }
-    if existing is not None and existing.status == "active":
-        _merge_existing_grant_targets(
-            existing,
-            groups=merged_groups,
-            direct=merged_direct,
-        )
-    input_data = GrantMutationInput(
-        user=user,
-        app=app,
-        authorization_groups=tuple(merged_groups.values()),
-        direct_grants=tuple(merged_direct.values()),
-        actor_type="system",
-        actor_id=actor_id,
-    )
-    if existing is not None:
-        return GrantService.change_grant(input_data)
-    return GrantService.create_grant(input_data)
-
-
-def _expire_active_grant(
-    existing: AccessGrant | None,
-    *,
-    user: UserMirror,
-    app: App,
-    actor_id: str,
-    reason: str,
-) -> AccessGrant | None:
-    if existing is None or existing.status != "active":
-        return existing
-    _ = GrantService.expire_grant(
-        GrantExpirationInput(
-            user=user,
-            app=app,
-            actor_type="system",
-            actor_id=actor_id,
-            reason=reason,
-        ),
-    )
-    return AccessGrant.objects.filter(user=user, app=app, is_current=True).first()
-
-
-def _merge_existing_grant_targets(
-    existing: AccessGrant,
-    *,
-    groups: dict[int, AuthorizationGroupGrantInput],
-    direct: dict[tuple[int, str], ScopedDirectGrantInput],
-) -> None:
-    for link in AccessGrantGroup.objects.select_related("authorization_group").filter(
-        grant=existing,
-    ):
-        incoming = groups.get(link.authorization_group.id)
-        groups[link.authorization_group.id] = AuthorizationGroupGrantInput(
-            authorization_group=link.authorization_group,
-            expires_at=(
-                link.expires_at
-                if incoming is None
-                else later_expiry(link.expires_at, incoming.expires_at)
-            ),
-        )
-    for permission_link in AccessGrantPermission.objects.select_related("permission").filter(
-        grant=existing,
-    ):
-        key = (permission_link.permission.id, permission_link.scope_key)
-        incoming = direct.get(key)
-        direct[key] = ScopedDirectGrantInput(
-            permission=permission_link.permission,
-            scope_key=permission_link.scope_key,
-            expires_at=(
-                permission_link.expires_at
-                if incoming is None
-                else later_expiry(permission_link.expires_at, incoming.expires_at)
-            ),
-        )
-
-
-def apply_transfer_diff_for_app(
-    *,
-    subject: UserMirror,
-    app_key: str,
-    revoke_keys: set[str],
-    add_items: list[_FrozenTransferAddItem],
-    actor_id: str,
-) -> None:
-    app = App.objects.get(app_key=app_key)
-    existing = AccessGrant.objects.filter(user=subject, app=app, is_current=True).first()
-    groups: dict[int, AuthorizationGroupGrantInput] = {}
-    direct: dict[tuple[int, str], ScopedDirectGrantInput] = {}
-    existing = _expire_active_grant(
-        existing,
-        user=subject,
-        app=app,
-        actor_id=actor_id,
-        reason="转岗差异确认前过期化",
-    )
-    if existing is not None and existing.status == "active":
-        collect_kept_targets(
-            existing=existing,
-            app_key=app_key,
-            revoke_keys=revoke_keys,
-            groups=groups,
-            direct=direct,
-        )
-    _add_transfer_targets(add_items, groups=groups, direct=direct)
-    input_data = GrantMutationInput(
-        user=subject,
-        app=app,
-        authorization_groups=tuple(groups.values()),
-        direct_grants=tuple(direct.values()),
-        actor_type="system",
-        actor_id=actor_id,
-    )
-    if not groups and not direct:
-        if existing is not None:
-            _ = GrantService.revoke_grant(
-                user=subject,
-                app=app,
-                actor_type="system",
-                actor_id=actor_id,
-                reason="转岗权限调整",
-            )
-        return
-    if existing is not None:
-        _ = GrantService.change_grant(input_data)
-    else:
-        _ = GrantService.create_grant(input_data)
-
-
-def _add_transfer_targets(
-    add_items: list[_FrozenTransferAddItem],
-    *,
-    groups: dict[int, AuthorizationGroupGrantInput],
-    direct: dict[tuple[int, str], ScopedDirectGrantInput],
-) -> None:
-    for item in add_items:
-        item_expiry = template_item_expiry(
-            grant_type=item.grant_type,
-            duration_days=item.duration_days,
-        )
-        if item.authorization_group is not None:
-            groups[item.authorization_group.id] = AuthorizationGroupGrantInput(
-                authorization_group=item.authorization_group,
-                expires_at=item_expiry,
-            )
-        if item.permission is not None:
-            direct[(item.permission.id, item.scope_key)] = ScopedDirectGrantInput(
-                permission=item.permission,
-                scope_key=item.scope_key,
-                expires_at=item_expiry,
-            )
-
-
-def lock_and_validate_transfer_grant_versions(
-    *,
-    task: HandoverTask,
-    app_keys: set[str],
-) -> None:
-    current_by_app = {
-        grant.app.app_key: grant
-        for grant in AccessGrant.objects.select_for_update()
-        .select_related("app")
-        .filter(user=task.subject_user, app__app_key__in=app_keys, is_current=True)
-    }
-    expected_by_app: dict[str, set[int]] = {}
-    snapshot_versions = HandoverGrantItem.objects.filter(
-        task=task,
-        app_key_snapshot__in=app_keys,
-    ).values_list("app_key_snapshot", "source_grant_version")
-    for app_key, version in cast("Iterable[tuple[str, int]]", snapshot_versions):
-        expected_by_app.setdefault(app_key, set()).add(version)
-    for app_key, expected_versions in expected_by_app.items():
-        current = current_by_app.get(app_key)
-        if (
-            len(expected_versions) != 1
-            or current is None
-            or current.version not in expected_versions
-        ):
-            raise HandoverConflictError(TRANSFER_PLAN_STALE_MESSAGE)
-
-
-def collect_kept_targets(
-    *,
-    existing: AccessGrant,
-    app_key: str,
-    revoke_keys: set[str],
-    groups: dict[int, AuthorizationGroupGrantInput],
-    direct: dict[tuple[int, str], ScopedDirectGrantInput],
-) -> None:
-    for link in AccessGrantGroup.objects.select_related("authorization_group").filter(
-        grant=existing,
-    ):
-        key = f"{app_key}:group:{link.authorization_group.key}"
-        if key not in revoke_keys:
-            groups[link.authorization_group.id] = AuthorizationGroupGrantInput(
-                authorization_group=link.authorization_group,
-                expires_at=link.expires_at,
-            )
-    for permission_link in AccessGrantPermission.objects.select_related("permission").filter(
-        grant=existing,
-    ):
-        key = f"{app_key}:permission:{permission_link.permission.key}:{permission_link.scope_key}"
-        if key not in revoke_keys:
-            direct[(permission_link.permission.id, permission_link.scope_key)] = (
-                ScopedDirectGrantInput(
-                    permission=permission_link.permission,
-                    scope_key=permission_link.scope_key,
-                    expires_at=permission_link.expires_at,
-                )
-            )
-
-
-def grant_item_key(item: HandoverGrantItem) -> str:
-    base = f"{item.app_key_snapshot}:{item.target_kind_snapshot}:{item.target_key_snapshot}"
-    if item.target_kind_snapshot == "group":
-        return base
-    return f"{base}:{item.scope_key}"
-
-
-def template_item_key(item: OnboardingTemplateRevisionItem) -> str:
-    if item.authorization_group is not None:
-        return f"{item.app.app_key}:group:{item.authorization_group.key}"
-    permission = item.permission
-    permission_key = permission.key if permission is not None else ""
-    return f"{item.app.app_key}:permission:{permission_key}:{item.scope_key}"
-
-
-def grant_diff_entry(item: HandoverGrantItem) -> dict[str, JsonValue]:
-    return {
-        "key": grant_item_key(item),
-        "app_key": item.app_key_snapshot,
-        "kind": item.target_kind_snapshot,
-        "target_key": item.target_key_snapshot,
-        "name": item.target_name_snapshot,
-        "scope_key": item.scope_key,
-        "grant_type": item.grant_type,
-        "grant_expires_at": item.grant_expires_at.isoformat()
-        if item.grant_expires_at is not None
-        else None,
-        "selected": True,
-    }
-
-
-def template_diff_entry(item: OnboardingTemplateRevisionItem) -> dict[str, JsonValue]:
-    if item.authorization_group is not None:
-        kind = "group"
-        target_key = item.authorization_group.key
-        name = item.authorization_group.name
-    else:
-        permission = item.permission
-        kind = "permission"
-        target_key = permission.key if permission is not None else ""
-        name = permission.name if permission is not None else ""
-    return {
-        "key": template_item_key(item),
-        "app_key": item.app.app_key,
-        "kind": kind,
-        "target_key": target_key,
-        "name": name,
-        "scope_key": item.scope_key,
-        "grant_type": item.grant_type,
-        "duration_days": item.duration_days,
-        "selected": True,
-    }
-
-
-def diff_list(diff: dict[str, JsonValue], name: str) -> list[dict[str, JsonValue]]:
-    value = diff.get(name)
-    if not isinstance(value, list):
-        return []
-    return [element for element in value if isinstance(element, dict)]
-
-
-def diff_entries_by_key(
-    diff: dict[str, JsonValue],
-    name: str,
-) -> dict[str, dict[str, JsonValue]]:
-    entries: dict[str, dict[str, JsonValue]] = {}
-    for entry in diff_list(diff, name):
-        key = entry_key(entry)
-        if key:
-            entries[key] = entry
-    return entries
-
-
-def entry_key(entry: dict[str, JsonValue]) -> str:
-    key = entry.get("key")
-    return key if isinstance(key, str) else ""
-
-
-def template_item_expiry(*, grant_type: str, duration_days: int | None) -> datetime | None:
-    if grant_type == "permanent":
-        return None
-    if grant_type != "timed" or duration_days is None:
-        raise HandoverError(TEMPLATE_TERM_INVALID_MESSAGE)
-    return timezone.now() + timedelta(days=duration_days)
-
-
-def revision_item_expiry(item: OnboardingTemplateRevisionItem) -> datetime | None:
-    return template_item_expiry(grant_type=item.grant_type, duration_days=item.duration_days)
-
-
-def frozen_add_item_from_diff_entry(
-    entry: dict[str, JsonValue],
-) -> _FrozenTransferAddItem:
-    app_key = required_diff_text(entry, "app_key")
-    kind = required_diff_text(entry, "kind")
-    target_key = required_diff_text(entry, "target_key")
-    scope_key = optional_diff_text(entry, "scope_key")
-    grant_type = required_diff_text(entry, "grant_type")
-    duration_days = optional_diff_int(entry, "duration_days")
-    app = App.objects.get(app_key=app_key)
-    if kind == "group":
-        group = AuthorizationGroup.objects.get(app=app, key=target_key)
-        return _FrozenTransferAddItem(
-            app=app,
-            authorization_group=group,
-            permission=None,
-            scope_key="",
-            grant_type=grant_type,
-            duration_days=duration_days,
-        )
-    if kind == "permission":
-        permission = Permission.objects.get(app=app, key=target_key)
-        return _FrozenTransferAddItem(
-            app=app,
-            authorization_group=None,
-            permission=permission,
-            scope_key=scope_key,
-            grant_type=grant_type,
-            duration_days=duration_days,
-        )
-    message = f"冻结差异项类型无效: {kind}。"
-    raise HandoverError(message)
-
-
-def required_diff_text(entry: dict[str, JsonValue], field: str) -> str:
-    value = entry.get(field)
-    if not isinstance(value, str) or value == "":
-        message = f"冻结差异项缺少字段 {field}。"
-        raise HandoverError(message)
-    return value
-
-
-def optional_diff_text(entry: dict[str, JsonValue], field: str) -> str:
-    value = entry.get(field)
-    if value is None:
-        return ""
-    if not isinstance(value, str):
-        message = f"冻结差异项字段 {field} 无效。"
-        raise HandoverError(message)
-    return value
-
-
-def optional_diff_int(entry: dict[str, JsonValue], field: str) -> int | None:
-    value = entry.get(field)
-    if value is None:
-        return None
-    if not isinstance(value, int):
-        message = f"冻结差异项字段 {field} 无效。"
-        raise HandoverError(message)
-    return value
-
-
-def template_term_replaces_snapshot(
-    template_item: OnboardingTemplateRevisionItem,
-    snapshot_item: HandoverGrantItem,
-) -> bool:
-    if template_item.grant_type == "permanent":
-        return snapshot_item.grant_expires_at is not None
-    return True
-
-
-def later_expiry(left: datetime | None, right: datetime | None) -> datetime | None:
-    if left is None or right is None:
-        return None
-    return max(left, right)

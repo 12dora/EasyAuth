@@ -22,10 +22,13 @@ pytestmark = pytest.mark.django_db
 
 def test_application_model_modules_do_not_import_submodules_through_package_entrypoint() -> None:
     project_root = Path(__file__).resolve().parents[3]
+    # models 已拆成包, 护栏要覆盖包内每个模块, 否则换个文件写就绕过去了。
+    models_package = project_root / "src/easyauth/applications/models"
     model_sources = (
-        project_root / "src/easyauth/applications/models.py",
+        *sorted(models_package.glob("*.py")),
         project_root / "src/easyauth/applications/ops_models.py",
     )
+    assert len(model_sources) > 2, "applications.models 包内未发现模块, 护栏路径可能已失效"
 
     for source_path in model_sources:
         source = source_path.read_text()
