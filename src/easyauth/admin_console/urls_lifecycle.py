@@ -2,35 +2,49 @@ from __future__ import annotations
 
 from django.urls import path
 
-from easyauth.admin_console.handover_v2_api import (
+from easyauth.admin_console.handover_v2_action_api import (
+    console_handover_action_patch,
+    console_handover_errors_raw,
+)
+from easyauth.admin_console.handover_v2_approval_api import (
     console_approval_rule_replacement_resolve,
     console_approval_rule_replacements,
-    console_handover_action_patch,
+)
+from easyauth.admin_console.handover_v2_assets_api import (
     console_handover_app_options,
     console_handover_asset_type,
-    console_handover_async_abandon,
     console_handover_blocked_apps,
     console_handover_candidates,
-    console_handover_capability,
-    console_handover_capability_sync,
-    console_handover_claim,
-    console_handover_defer,
-    console_handover_errors_raw,
     console_handover_items,
     console_handover_overrides,
+)
+from easyauth.admin_console.handover_v2_capability_api import (
+    console_handover_capability,
+    console_handover_capability_sync,
+)
+from easyauth.admin_console.handover_v2_task_api import (
+    console_handover_async_abandon,
+    console_handover_claim,
+    console_handover_defer,
     console_handover_reassign,
 )
-from easyauth.admin_console.lifecycle_api import (
-    lifecycle_action_operation,
-    lifecycle_grant_diff,
-    lifecycle_grant_diff_confirm,
+from easyauth.admin_console.lifecycle_action_api import lifecycle_action_operation
+from easyauth.admin_console.lifecycle_items_api import (
     lifecycle_grant_items,
-    lifecycle_handover_task_detail,
-    lifecycle_handover_tasks,
+    lifecycle_team_item_detail,
+)
+from easyauth.admin_console.lifecycle_onboarding_api import (
     lifecycle_onboard,
     lifecycle_onboarding_template_detail,
     lifecycle_onboarding_templates,
-    lifecycle_team_item_detail,
+)
+from easyauth.admin_console.lifecycle_task_api import (
+    lifecycle_handover_task_detail,
+    lifecycle_handover_tasks,
+)
+from easyauth.admin_console.lifecycle_transfer_api import (
+    lifecycle_grant_diff,
+    lifecycle_grant_diff_confirm,
 )
 
 LIFECYCLE_URLPATTERNS = [
