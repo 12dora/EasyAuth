@@ -7,7 +7,7 @@
 from __future__ import annotations
 
 import os
-from typing import Final
+from typing import Final, cast, override
 
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
@@ -53,10 +53,11 @@ _DEBUG_REQUIRED_MESSAGE: Final = "seed_handover_e2e 仅允许在 DJANGO_DEBUG=1 
 
 
 class Command(BaseCommand):
-    help = "播种全栈 E2E 交接场景(manager / subject / declared app / offboard task)。"
+    help: str = "播种全栈 E2E 交接场景(manager / subject / declared app / offboard task)。"
 
+    @override
     def handle(self, *_args: str, **_options: object) -> None:
-        if not settings.DEBUG:
+        if not cast("bool", settings.DEBUG):
             raise CommandError(_DEBUG_REQUIRED_MESSAGE)
 
         manager_username = (
@@ -125,20 +126,25 @@ class Command(BaseCommand):
             # peer 仅作接收人候选; 确保 seed 路径引用到 peer 防止未使用
             _ = peer.authentik_user_id
             task = HandoverTask.objects.select_related("assignee", "subject_user").get(
-                pk=task.pk,
+                pk=task.id,
             )
             action_count = HandoverAppAction.objects.filter(task=task).count()
 
         self.stdout.write(
             self.style.SUCCESS(
-                "seed_handover_e2e ok: "
-                f"manager={manager.authentik_user_id} "
-                f"subject={subject.authentik_user_id} "
-                f"app={app.app_key} "
-                f"task={task.id} created={created} "
-                f"assignee={task.assignee.authentik_user_id if task.assignee else None} "
-                f"actions={action_count} "
-                f"handover_url={handover_url}",
+                "".join(
+                    (
+                        "seed_handover_e2e ok: ",
+                        f"manager={manager.authentik_user_id} ",
+                        f"subject={subject.authentik_user_id} ",
+                        f"app={app.app_key} ",
+                        f"task={task.id} created={created} ",
+                        "assignee=",
+                        f"{task.assignee.authentik_user_id if task.assignee else None} ",
+                        f"actions={action_count} ",
+                        f"handover_url={handover_url}",
+                    ),
+                ),
             ),
         )
 

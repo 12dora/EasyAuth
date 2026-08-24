@@ -164,19 +164,20 @@ DATABASES = database_config_from_env(os.environ)
 # DEBUG 且未设 EASYAUTH_CACHE_URL 时用进程内 LocMem, 便于单进程 runserver / 全栈 E2E。
 _cache_url = os.environ.get("EASYAUTH_CACHE_URL", "").strip()
 if DEBUG and not _cache_url:
-    CACHES = {
+    _cache_config = {
         "default": {
             "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
             "LOCATION": "easyauth-debug-cache",
         },
     }
 else:
-    CACHES = {
+    _cache_config = {
         "default": {
             "BACKEND": "django.core.cache.backends.redis.RedisCache",
             "LOCATION": _cache_url or "redis://localhost:6379/2",
         },
     }
+CACHES = _cache_config
 
 # 本地超管口令策略的单一事实源: 改密视图与建号命令都调用 validate_password。
 AUTH_PASSWORD_VALIDATORS: list[dict[str, object]] = [

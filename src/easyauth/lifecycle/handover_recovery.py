@@ -63,8 +63,6 @@ class _TakeoverDelivery:
 
 
 def _takeover_attention_backoff_active(lease: HandoverExecutionLease) -> bool:
-    if lease.action_id is None:
-        return False
     attention_action = (
         HandoverAppAction.objects.filter(
             pk=lease.action_id,
@@ -94,10 +92,10 @@ def _find_takeover_batch(
         .order_by("-id")
         .first()
     )
-    if batch is None or lease.action_id is None:
+    if batch is None:
         _ = cas_release(handle)
         return None
-    return batch, int(lease.action_id)
+    return batch, lease.action_id
 
 
 def _route_async_takeover(
@@ -107,7 +105,7 @@ def _route_async_takeover(
     *,
     worker: str,
 ) -> HandoverAppAction | None:
-    _ = cas_update_owner(handle, new_owner=f"async:{batch.pk}", renew=True)
+    _ = cas_update_owner(handle, new_owner=f"async:{batch.id}", renew=True)
     return poll_async_action(action, worker_id=worker)
 
 
@@ -162,10 +160,10 @@ def _mark_takeover_payload_conflict(
         batch.id,
     )
     with transaction.atomic():
-        require_cas(delivery_context.handle)
-        action = locked_action(int(action.id))
+        _ = require_cas(delivery_context.handle)
+        action = locked_action(action.id)
         delivery = HandoverDeliveryAttempt.objects.select_for_update().get(
-            pk=delivery_context.delivery.pk,
+            pk=delivery_context.delivery.id,
         )
         delivery.outcome = DELIVERY_OUTCOME_FAILED
         delivery.http_status = int(HTTPStatus.CONFLICT)
@@ -183,7 +181,7 @@ def _mark_takeover_payload_conflict(
         action.save(update_fields=["status", "last_error", "last_error_raw", "updated_at"])
         handed = cas_update_owner(
             delivery_context.handle,
-            new_owner=f"async:{batch.pk}",
+            new_owner=f"async:{batch.id}",
             renew=True,
         )
         if handed is None:

@@ -77,7 +77,19 @@ def resolve_assignee(subject: UserMirror, *, start_level: int = 0) -> AssigneeRe
             extra={"reason": "directory_unavailable_or_stale"},
         )
         return _superuser_pool_resolution(degraded=True)
-    chain = context.manager_chain
+    return _resolve_from_manager_chain(
+        subject,
+        chain=context.manager_chain,
+        start_level=start_level,
+    )
+
+
+def _resolve_from_manager_chain(
+    subject: UserMirror,
+    *,
+    chain: JsonValue,
+    start_level: int,
+) -> AssigneeResolution:
     if not isinstance(chain, list):
         _audit_subject(
             subject,
@@ -85,15 +97,6 @@ def resolve_assignee(subject: UserMirror, *, start_level: int = 0) -> AssigneeRe
             extra={"reason": "manager_chain_not_list"},
         )
         return _superuser_pool_resolution(degraded=True)
-    return _resolve_from_manager_chain(subject, chain=chain, start_level=start_level)
-
-
-def _resolve_from_manager_chain(
-    subject: UserMirror,
-    *,
-    chain: list[JsonValue],
-    start_level: int,
-) -> AssigneeResolution:
     level = max(0, start_level)
     while level < len(chain):
         entry = chain[level]
@@ -136,7 +139,7 @@ def _is_eligible_manager(manager: UserMirror | None, *, subject: UserMirror) -> 
         manager is not None
         and manager.status == USER_STATUS_ACTIVE
         and not manager.authentik_user_id.startswith(LOCAL_ADMIN_SUBJECT_PREFIX)
-        and int(manager.pk) != int(subject.pk)  # type: ignore[arg-type]
+        and manager.id != subject.id
     )
 
 

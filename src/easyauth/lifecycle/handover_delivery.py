@@ -133,7 +133,7 @@ def _accept_execute_response(
     response: HookResponse,
 ) -> HandoverAppAction:
     with transaction.atomic():
-        require_cas(handle)
+        _ = require_cas(handle)
         action = locked_action(action_id)
         batch = HandoverExecutionBatch.objects.select_for_update().get(pk=batch_id)
         delivery = HandoverDeliveryAttempt.objects.select_for_update().get(pk=delivery_id)
@@ -148,7 +148,7 @@ def _accept_execute_response(
         action.last_error = ""
         action.save(update_fields=["status", "async_status_url", "last_error", "updated_at"])
         # 202 不释放, 移交 async sentinel
-        handed = cas_update_owner(handle, new_owner=f"async:{batch.pk}", renew=True)
+        handed = cas_update_owner(handle, new_owner=f"async:{batch.id}", renew=True)
         if handed is None:
             raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
         task = HandoverTask.objects.select_for_update().get(pk=action.task_id)
@@ -166,7 +166,7 @@ def _complete_execute_response(
 ) -> HandoverAppAction:
     # delivery 成功标记与 complete_data_phase 分离, 避免 A/B/C 被外层 atomic 回滚。
     with transaction.atomic():
-        require_cas(handle)
+        _ = require_cas(handle)
         delivery = HandoverDeliveryAttempt.objects.select_for_update().get(pk=delivery_id)
         delivery.outcome = DELIVERY_OUTCOME_SUCCEEDED
         delivery.http_status = response.status_code
@@ -223,7 +223,7 @@ def _schedule_rate_limited_execute_retry(
     retry_after_seconds: int | None,
 ) -> None:
     delay = retry_after_seconds or DEFAULT_RETRY_AFTER_SECONDS
-    enqueue_task(
+    _ = enqueue_task(
         event_key=f"handover-rate-limited-execute:{delivery.id}",
         task_name=RATE_LIMITED_EXECUTE_RETRY_TASK,
         args=[action.id, action.generation],
@@ -318,7 +318,7 @@ def _record_delivery_failure_event(action: HandoverAppAction) -> None:
 
 def finish_delivery_failure(failure: DeliveryFailureSpec) -> None:
     with transaction.atomic():
-        require_cas(failure.handle)
+        _ = require_cas(failure.handle)
         action = locked_action(failure.action_id)
         batch = HandoverExecutionBatch.objects.select_for_update().get(pk=failure.batch_id)
         delivery = HandoverDeliveryAttempt.objects.select_for_update().get(pk=failure.delivery_id)

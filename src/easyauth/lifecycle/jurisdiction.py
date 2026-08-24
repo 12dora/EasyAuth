@@ -45,10 +45,10 @@ def assert_manager_of(
     context = _subject_org_context(subject, lock_context=lock_context)
     if context is None or context.stale:
         return JurisdictionResult(allowed=False, reason=REASON_DIRECTORY_UNAVAILABLE)
-    chain = context.manager_chain
-    if not isinstance(chain, list):
-        return JurisdictionResult(allowed=False, reason=REASON_DIRECTORY_UNAVAILABLE)
-    return _chain_contains_manager(chain, actor_dtuid=actor.dingtalk_userid)
+    return _chain_contains_manager(
+        context.manager_chain,
+        actor_dtuid=actor.dingtalk_userid,
+    )
 
 
 def _reject_ineligible_pair(actor: UserMirror, subject: UserMirror) -> JurisdictionResult | None:
@@ -56,7 +56,7 @@ def _reject_ineligible_pair(actor: UserMirror, subject: UserMirror) -> Jurisdict
     if (
         _is_ineligible_principal(actor)
         or _is_ineligible_principal(subject)
-        or int(actor.pk) == int(subject.pk)  # type: ignore[arg-type]
+        or actor.id == subject.id
     ):
         return JurisdictionResult(allowed=False, reason=REASON_OUT_OF_SCOPE)
     if not _has_directory_identity(subject) or not _has_directory_identity(actor):
@@ -95,8 +95,10 @@ def _subject_org_context(
     ).first()
 
 
-def _chain_contains_manager(chain: list[JsonValue], *, actor_dtuid: str) -> JurisdictionResult:
+def _chain_contains_manager(chain: JsonValue, *, actor_dtuid: str) -> JurisdictionResult:
     """链上任一条目畸形即判 directory_unavailable, 不得跳过继续扫。"""
+    if not isinstance(chain, list):
+        return JurisdictionResult(allowed=False, reason=REASON_DIRECTORY_UNAVAILABLE)
     for entry in chain:
         if not isinstance(entry, dict):
             return JurisdictionResult(allowed=False, reason=REASON_DIRECTORY_UNAVAILABLE)
@@ -208,7 +210,7 @@ def list_receiver_candidates(
     if exclude_actor:
         qs = qs.exclude(authentik_user_id=actor.authentik_user_id)
     if subject is not None:
-        qs = qs.exclude(pk=subject.pk)
+        qs = qs.exclude(pk=subject.id)
     q_stripped = q.strip()
     if q_stripped:
         qs = qs.filter(name__icontains=q_stripped)

@@ -53,6 +53,7 @@ _CONSOLE_SKIPPABLE_STATUSES: Final = frozenset(
         ACTION_STATUS_FAILED,
     },
 )
+_AUDIT_METADATA_TYPE_MESSAGE: Final = "审计 metadata 必须是 JSON 对象"
 
 
 def user_ref(user: UserMirror | None, *, include_status: bool = False) -> JsonObject | None:
@@ -79,33 +80,37 @@ def escalation_payload(
     if deadline is not None and task.assignee_state != ASSIGNEE_STATE_SUPERUSER_POOL:
         delta = deadline - timezone.now()
         days_left = max(0, int(delta.total_seconds() // 86400))
-    history: list[JsonObject] = []
+    history: list[JsonValue] = []
     if include_defer_history:
         history = _defer_history_for_task(task)
-    return {
+    payload: JsonObject = {
         "deadline": datetime_value(deadline),
         "days_left": days_left,
         "level": task.escalation_level,
         "deferred_at": datetime_value(task.escalation_deferred_at),
-        "defer_history": history,  # type: ignore[dict-item]
+        "defer_history": history,
     }
+    return payload
 
 
-def _defer_history_for_task(task: HandoverTask) -> list[JsonObject]:
+def _defer_history_for_task(task: HandoverTask) -> list[JsonValue]:
     """从审计事件还原顺延责任链(01 §6.2 / §6.3)。"""
     rows = AuditLog.objects.filter(
         event_type="handover_task_deferred",
         target_type="handover_task",
         target_id=str(task.id),
     ).order_by("created_at", "id")
-    history: list[JsonObject] = []
+    history: list[JsonValue] = []
     for row in rows:
-        meta = row.metadata if isinstance(row.metadata, dict) else {}
+        meta = _validated_audit_metadata(row.metadata)
         level = meta.get("escalation_level", task.escalation_level)
         if not isinstance(level, int):
-            try:
-                level = int(level)  # type: ignore[arg-type]
-            except (TypeError, ValueError):
+            if isinstance(level, (float, str)):
+                try:
+                    level = int(level)
+                except (TypeError, ValueError):
+                    level = task.escalation_level
+            else:
                 level = task.escalation_level
         history.append(
             {
@@ -116,6 +121,13 @@ def _defer_history_for_task(task: HandoverTask) -> list[JsonObject]:
             },
         )
     return history
+
+
+def _validated_audit_metadata(value: object) -> JsonObject:
+    """校验数据库 JSON 元数据, 破坏对象契约时快速失败。"""
+    if not isinstance(value, dict):
+        raise TypeError(_AUDIT_METADATA_TYPE_MESSAGE)
+    return cast("JsonObject", value)
 
 
 def task_list_item(task: HandoverTask) -> JsonObject:
@@ -135,10 +147,10 @@ def task_list_item(task: HandoverTask) -> JsonObject:
         or 0
     )
     total_asset = _current_generation_asset_count(actions)
-    allowed: list[str] = []
+    allowed: list[JsonValue] = []
     if task.status == TASK_STATUS_CANCELLED:
         allowed.append("delete")
-    return {
+    payload: JsonObject = {
         "id": task.id,
         "kind": task.kind,
         "status": task.status,
@@ -155,6 +167,7 @@ def task_list_item(task: HandoverTask) -> JsonObject:
         "total_asset_count": total_asset if total_asset else int(asset_count),
         "allowed_actions": allowed,
     }
+    return payload
 
 
 def _task_actions(task: HandoverTask) -> list[HandoverAppAction]:
@@ -292,7 +305,7 @@ def action_item(action: HandoverAppAction, *, surface: str = SURFACE_CONSOLE) ->
         .annotate(override_count=Count("overrides"))
         .filter(action=action, generation=action.generation),
     )
-    skip_history = [
+    skip_history: list[JsonValue] = [
         {
             "generation": rec.generation,
             "actor_id": rec.actor_id,
@@ -304,7 +317,9 @@ def action_item(action: HandoverAppAction, *, surface: str = SURFACE_CONSOLE) ->
             app_key=action.app_key_snapshot or action.app.app_key,
         ).order_by("skipped_at", "id")
     ]
-    return {
+    allowed_actions: list[JsonValue] = []
+    allowed_actions.extend(allowed_actions_for(action, surface=surface))
+    payload: JsonObject = {
         "app_key": action.app_key_snapshot or action.app.app_key,
         "app_name": action.app_name_snapshot or action.app.name,
         "status": action.status,
@@ -320,10 +335,11 @@ def action_item(action: HandoverAppAction, *, surface: str = SURFACE_CONSOLE) ->
         "skipped_at": datetime_value(action.skipped_at),
         "skip_history": skip_history,
         "approval_instance_warning": action.approval_instance_warning,
-        "allowed_actions": allowed_actions_for(action, surface=surface),
+        "allowed_actions": allowed_actions,
         "batch_progress": batch_progress(action),
         "asset_types": [asset_type_item(at) for at in asset_types],
     }
+    return payload
 
 
 def asset_type_item(asset_type: HandoverAssetType) -> JsonObject:
@@ -378,7 +394,7 @@ def aggregated_summary(action: HandoverAppAction) -> JsonObject | None:
         target_id=str(action.task_id),
         metadata__manual_resolution=True,
         metadata__summary_provided=False,
-        metadata__action_id=int(action.pk),
+        metadata__action_id=action.id,
         metadata__generation=action.generation,
     ).exists():
         return None

@@ -222,7 +222,7 @@ def _safe_response_summary(payload_summary: dict[str, JsonValue]) -> dict[str, J
     counter_fields = ("transferred", "released", "skipped", "merged", "failed")
     safe: dict[str, JsonValue] = {}
     for key, value in payload_summary.items():
-        if not isinstance(key, str) or len(key) >= RESPONSE_SUMMARY_KEY_LENGTH_LIMIT:
+        if len(key) >= RESPONSE_SUMMARY_KEY_LENGTH_LIMIT:
             continue
         if isinstance(value, int | float | str | bool):
             safe[key] = value

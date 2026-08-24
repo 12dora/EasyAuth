@@ -27,8 +27,9 @@ def escalate_overdue_task(task: HandoverTask) -> HandoverTask:
             if locked.assignee_state == ASSIGNEE_STATE_SUBJECT
             else locked.escalation_level + 1
         )
+        previous_assignee = locked.assignee
         previous_assignee_id = (
-            locked.assignee.authentik_user_id if locked.assignee_id is not None else ""
+            previous_assignee.authentik_user_id if previous_assignee is not None else ""
         )
         res = resolve_assignee(locked.subject_user, start_level=start)
         if res.user is not None:

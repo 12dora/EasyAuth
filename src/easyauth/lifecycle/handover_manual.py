@@ -96,7 +96,7 @@ def _claim_async_abandon_locked(action_id: int) -> _ManualClaim:
     if lease is None:
         raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)
     handle = LeaseHandle(
-        lease_id=int(lease.pk),  # type: ignore[arg-type]
+        lease_id=lease.id,
         owner=lease.owner,
         fence=int(lease.fence),
         expires_at=lease.lease_expires_at,
@@ -121,7 +121,7 @@ def _claim_async_abandon_locked(action_id: int) -> _ManualClaim:
         handle=claimed,
         batch=batch,
         action_id=int(locked.id),
-        batch_id=int(batch.pk) if batch is not None else None,
+        batch_id=batch.id if batch is not None else None,
         app_key=locked.app.app_key,
     )
 

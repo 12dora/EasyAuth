@@ -53,6 +53,17 @@ _PREVIEW_RESULT_MISSING_MESSAGE: Final = "预演完成后缺少动作结果。"
 _PREVIEW_ASSETS_MISSING_MESSAGE: Final = "preview 响应缺少 assets"
 
 
+def _json_value_to_int(value: JsonValue) -> int:
+    normalized = value or 0
+    if isinstance(normalized, bool | int | float | str):
+        return int(normalized)
+    message = (
+        "int() argument must be a string, a bytes-like object or a real number, "
+        f"not '{type(normalized).__name__}'"
+    )
+    raise TypeError(message)
+
+
 def preview_action(
     action: HandoverAppAction,
     *,
@@ -249,7 +260,7 @@ def _apply_preview_asset_row(
     label = str(raw.get("label", type_key))[:120]
     invalid_count_message = f"invalid_asset_count: {type_key}"
     try:
-        count = int(raw.get("count", 0) or 0)
+        count = _json_value_to_int(raw.get("count", 0))
     except (TypeError, ValueError) as error:
         raise HandoverError(invalid_count_message) from error
     if count < 0:

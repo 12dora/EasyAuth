@@ -280,7 +280,10 @@ def _validate_managed_users_approver(
 class ManagerChainResolution:
     """主管链解析结果: ids 为空时用 degraded 区分目录缺失与链耗尽。"""
 
-    __slots__ = ("degraded", "user_ids")
+    __slots__: tuple[str, ...] = ("degraded", "user_ids")
+
+    user_ids: tuple[str, ...]
+    degraded: bool
 
     def __init__(self, user_ids: tuple[str, ...], *, degraded: bool) -> None:
         self.user_ids = user_ids
@@ -307,13 +310,7 @@ def active_manager_chain_user_ids(user: UserMirror) -> tuple[str, ...]:
     return resolve_manager_chain(user).user_ids
 
 
-# 兼容内部调用名
 _active_manager_chain_user_ids = active_manager_chain_user_ids
-
-
-def _active_direct_manager_user_id(user: UserMirror) -> str | None:
-    ids = active_manager_chain_user_ids(user)
-    return ids[0] if ids else None
 
 
 def contains_managed_users_target(

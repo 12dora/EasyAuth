@@ -17,10 +17,10 @@ from easyauth.applications.manifest_hashing import (
 )
 from easyauth.applications.models import App, PermissionTemplateVersion
 from easyauth.applications.permission_templates import (
-    _sync_manifest_lifecycle,
     apply_permission_template,
     parse_permission_template,
     parse_template_format,
+    sync_manifest_lifecycle,
 )
 
 if TYPE_CHECKING:
@@ -64,7 +64,7 @@ def sync_app_manifest(
     - ManifestVersionConflictError: 版本未递增且内容不同。
     - PermissionTemplateImportError: 解析/语义校验失败(由调用方映射响应码)。
     """
-    locked_app = App.objects.select_for_update().get(pk=app.pk)
+    locked_app = App.objects.select_for_update().get(pk=app.id)
     canonical_template = canonical_manifest_template(manifest)
     latest = (
         PermissionTemplateVersion.objects.filter(app=locked_app).order_by("-version").first()
@@ -82,7 +82,7 @@ def sync_app_manifest(
                 template_format=parse_template_format("json"),
                 imported_by=actor_id,
             )
-            _sync_manifest_lifecycle(
+            sync_manifest_lifecycle(
                 app=locked_app,
                 template=template,
                 downstream_base_url=downstream_base_url,

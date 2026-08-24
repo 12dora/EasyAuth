@@ -139,7 +139,7 @@ def _update_config(request: HttpRequest, app: App, actor: ConsoleActor) -> JsonR
                 )
     except (BlockedHostError, InvalidWebhookUrlError) as exc:
         return _validation_error(str(exc))
-    locked_app = App.objects.select_for_update().get(pk=app.pk)
+    locked_app = App.objects.select_for_update().get(pk=app.id)
     try:
         config = AppWebhookConfig.objects.select_for_update().get(app=locked_app)
     except AppWebhookConfig.DoesNotExist:

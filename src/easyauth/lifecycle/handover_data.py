@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final
 
 from django.db import transaction
 from django.utils import timezone
@@ -86,7 +86,7 @@ def complete_data_phase(
     超管已在下游确认结局, 不得再被陈旧 preview count 挡住唯一出口。
     """
     action_id = batch.action_id
-    batch_pk = cast("int", batch.pk)
+    batch_pk = batch.id
 
     # —— 事务 A: 守恒校验 + data_completed 标记必须先提交, 授权失败也不能丢 ——
     gate = _commit_data_completion(batch, spec)
@@ -133,8 +133,8 @@ def _commit_data_completion(
     action_id = batch.action_id
     is_final = batch.is_final
     with transaction.atomic():
-        require_cas(spec.handle)
-        batch = HandoverExecutionBatch.objects.select_for_update().get(pk=batch.pk)
+        _ = require_cas(spec.handle)
+        batch = HandoverExecutionBatch.objects.select_for_update().get(pk=batch.id)
         now = timezone.now()
         first_data_completion = batch.data_completed_at is None
 
@@ -280,7 +280,7 @@ def _transfer_grants_for_data_phase(
 ) -> None:
     grant_error: Exception | None = None
     with transaction.atomic():
-        require_cas(handle)
+        _ = require_cas(handle)
         action = locked_action_after_task(action_id)
         batch = HandoverExecutionBatch.objects.select_for_update().get(pk=batch_pk)
         try:
@@ -315,7 +315,7 @@ def _finalize_data_phase(
     audit: DataPhaseAudit,
 ) -> None:
     with transaction.atomic():
-        require_cas(handle)
+        _ = require_cas(handle)
         batch = HandoverExecutionBatch.objects.select_for_update().get(pk=batch_pk)
         if action_id is not None:
             action = locked_action_after_task(int(action_id))

@@ -52,6 +52,7 @@ LIFECYCLE_ESCALATION_TASK: Final = "easyauth.lifecycle.escalation"
 LIFECYCLE_DAILY_REMINDER_TASK: Final = "easyauth.lifecycle.daily_reminder"
 LIFECYCLE_RECOVER_LEASES_TASK: Final = "easyauth.lifecycle.recover_expired_execution_leases"
 LIFECYCLE_POLL_ASYNC_TASK: Final = "easyauth.lifecycle.poll_async_actions"
+_TASK_ASSIGNEE_MISSING_MESSAGE: Final = "交接任务受理人不能为空"
 
 
 @shared_task(
@@ -125,7 +126,7 @@ def lifecycle_escalation_task() -> dict[str, int]:
     )
     processed = 0
     errors = 0
-    batch_ids = list(qs.values_list("id", flat=True)[:100])
+    batch_ids: list[int] = list(qs.values_list("id", flat=True)[:100])
     use_skip_locked = connection.features.has_select_for_update_skip_locked
     for task_id in batch_ids:
         try:
@@ -253,7 +254,7 @@ def lifecycle_send_reminder_task(
 
 
 @shared_task(name=LIFECYCLE_DAILY_REMINDER_TASK)
-def lifecycle_daily_reminder_task() -> dict[str, int]:
+def lifecycle_daily_reminder_task() -> dict[str, int | str]:
     """Beat 每天 09:00: 未完成且有 assignee 的单发提醒(网络副作用走 outbox)。"""
     now = timezone.now()
     business_date = timezone.localdate()
@@ -288,14 +289,17 @@ def lifecycle_daily_reminder_task() -> dict[str, int]:
                         kinds.append("deadline_soon")
                 for kind in kinds:
                     dedup = f"handover:{task.id}:{business_date.isoformat()}:{kind}"
-                    enqueue_task(
+                    assignee = task.assignee
+                    if assignee is None:
+                        raise RuntimeError(_TASK_ASSIGNEE_MISSING_MESSAGE)
+                    _ = enqueue_task(
                         event_key=dedup,
                         task_name=LIFECYCLE_SEND_REMINDER_TASK,
                         args=[],
                         kwargs={
                             "task_id": task.id,
                             "kind": kind,
-                            "assignee_user_id": task.assignee.authentik_user_id,
+                            "assignee_user_id": assignee.authentik_user_id,
                         },
                     )
                     enqueued += 1
@@ -306,7 +310,7 @@ def lifecycle_daily_reminder_task() -> dict[str, int]:
 def lifecycle_recover_expired_execution_leases_task() -> dict[str, int]:
     """Beat 每 1 分钟: 过期租约先抢占后查证。"""
     now = timezone.now()
-    expired = list(
+    expired: list[int] = list(
         HandoverExecutionLease.objects.filter(
             released_at__isnull=True,
             lease_expires_at__lte=now,
@@ -336,7 +340,7 @@ def lifecycle_poll_async_actions_task() -> dict[str, int]:
     """
     now = timezone.now()
     attention_cutoff = now - timedelta(seconds=ASYNC_ATTENTION_POLL_INTERVAL_SECONDS)
-    pending_ids = list(
+    pending_ids: list[int] = list(
         HandoverAppAction.objects.filter(
             status=ACTION_STATUS_ASYNC_PENDING,
         ).values_list("id", flat=True)[:50],
@@ -356,7 +360,7 @@ def lifecycle_poll_async_actions_task() -> dict[str, int]:
         if lease is not None:
             last = getattr(lease, "renewed_at", None) or lease.lease_expires_at
         if last is None or last <= attention_cutoff:
-            attention_ids.append(int(action.pk))
+            attention_ids.append(action.id)
 
     action_ids = pending_ids + attention_ids
     polled = 0

@@ -61,8 +61,8 @@ def reassign_approvals_for_departed(
     actor_id: str = LIFECYCLE_ACTOR_ID,
 ) -> None:
     """离职建单同事务内调用: §4.5.1 + §4.5.2 + §4.5.3 警示写入。"""
-    reassign_access_request_approvers(subject=subject, actor_id=actor_id)
-    replace_approval_rule_approvers(subject=subject, task=task, actor_id=actor_id)
+    _ = reassign_access_request_approvers(subject=subject, actor_id=actor_id)
+    _ = replace_approval_rule_approvers(subject=subject, task=task, actor_id=actor_id)
     write_in_flight_approval_warnings(task=task, subject=subject)
 
 
@@ -72,8 +72,8 @@ def reassign_access_request_approvers(
     actor_id: str = LIFECYCLE_ACTOR_ID,
 ) -> int:
     """§4.5.1: submitted 申请中, 审批人是 subject 的行 → 替换为申请人主管链解析结果。"""
-    subject_pk = int(subject.pk)  # type: ignore[arg-type]
-    assignment_ids = list(
+    subject_pk = subject.id
+    assignment_ids: list[int] = list(
         AccessRequestApprover.objects.filter(
             approver_id=subject_pk,
             access_request__status=REQUEST_STATUS_SUBMITTED,
@@ -182,7 +182,7 @@ def _append_resolved_approver(
     # 不得把申请人或离职者本人(仍 active 的手动建单窗口)回填为审批人。
     if new_approver is None:
         return
-    if int(new_approver.pk) in {applicant_id, subject_pk}:  # type: ignore[arg-type]
+    if new_approver.id in {applicant_id, subject_pk}:
         return
     if new_approver.status != USER_STATUS_ACTIVE:
         return
@@ -198,7 +198,7 @@ def _apply_normal_approval_routing(
     subject: UserMirror,
     actor_id: str,
 ) -> None:
-    reassign_locked_access_request(
+    _ = reassign_locked_access_request(
         access_request=access_request,
         approver_user_ids=desired,
         actor_id=actor_id,
@@ -208,6 +208,10 @@ def _apply_normal_approval_routing(
     access_request.save(update_fields=["approval_routing_state", "routing_reason"])
     if set(previous) == set(desired):
         return
+    metadata: dict[str, JsonValue] = {
+        "departed_user_id": subject.authentik_user_id,
+        "approver_user_ids": list(desired),
+    }
     _ = AuditService.record(
         AuditRecord(
             actor_type="system",
@@ -215,10 +219,7 @@ def _apply_normal_approval_routing(
             action="handover_approver_reassigned",
             target_type="access_request",
             target_id=str(access_request.id),
-            metadata={
-                "departed_user_id": subject.authentik_user_id,
-                "approver_user_ids": desired,
-            },
+            metadata=metadata,
         ),
     )
 
@@ -260,7 +261,7 @@ def _route_locked_request_to_superuser_pool(
     if remove_subject:
         _ = AccessRequestApprover.objects.filter(
             access_request=access_request,
-            approver_id=int(subject.pk),  # type: ignore[arg-type]
+            approver_id=subject.id,
         ).delete()
     # 清空残余非 active 审批人
     _ = AccessRequestApprover.objects.filter(access_request=access_request).exclude(
@@ -343,7 +344,7 @@ def _replacement_approver_ids(
     new_approver = resolved.user
     if (
         new_approver is not None
-        and int(new_approver.pk) != int(subject.pk)  # type: ignore[arg-type]
+        and new_approver.id != subject.id
         and new_approver.authentik_user_id not in new_list
     ):
         new_list.append(new_approver.authentik_user_id)
@@ -369,7 +370,7 @@ def _ensure_rule_replacement_required(
         approval_rule=rule,
         departed_user=subject,
         task=task,
-        task_id_snapshot=int(task.pk),
+        task_id_snapshot=task.id,
         reason=ROUTING_NO_ACTIVE_MANAGER if degraded else ROUTING_CHAIN_EXHAUSTED,
     )
 

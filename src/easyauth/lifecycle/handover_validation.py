@@ -54,6 +54,17 @@ _RECEIVER_NOT_ACTIVE_MESSAGE: Final = "receiver_not_active"
 _RECEIVER_IS_SUBJECT_MESSAGE: Final = "receiver_is_subject"
 
 
+def _json_value_to_int(value: JsonValue) -> int:
+    normalized = value or 0
+    if isinstance(normalized, bool | int | float | str):
+        return int(normalized)
+    message = (
+        "int() argument must be a string, a bytes-like object or a real number, "
+        f"not '{type(normalized).__name__}'"
+    )
+    raise TypeError(message)
+
+
 def validate_assignments(action: HandoverAppAction) -> None:
     """Execute 前置校验(01 §5.4)。不通过即 422, 不发 webhook。"""
     types = list(
@@ -202,12 +213,12 @@ def fetch_action_items(
         payload=payload,
     )
     body = _items_response_body(response)
-    total = int(body.get("total", 0) or 0)
+    total = _json_value_to_int(body.get("total", 0))
     unfiltered = body.get("unfiltered_total")
     stale = (q_stripped == "" and total != asset.count) or (
         bool(q_stripped)
         and unfiltered is not None
-        and int(unfiltered) != asset.count
+        and _json_value_to_int(unfiltered) != asset.count
     )
     return {
         "items": body.get("items", []),
@@ -325,7 +336,7 @@ def merge_result_summary(
     current = action.result_summary if isinstance(action.result_summary, dict) else {}
     merged: dict[str, JsonValue] = dict(current)
     for type_key, row in raw.items():
-        if not isinstance(type_key, str) or not isinstance(row, dict):
+        if not isinstance(row, dict):
             continue
         prev = merged.get(type_key)
         base = (

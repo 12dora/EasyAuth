@@ -56,7 +56,7 @@ def _claim_async_poll_lease(
 ) -> LeaseHandle:
     """从 async sentinel claim; 已被其他 poller 持有或属主异常均判在途冲突。"""
     handle = LeaseHandle(
-        lease_id=int(lease.pk),  # type: ignore[arg-type]
+        lease_id=lease.id,
         owner=lease.owner,
         fence=int(lease.fence),
         expires_at=lease.lease_expires_at,
@@ -83,7 +83,7 @@ def _exhaust_async_poll_attempts(
     action.status = ACTION_STATUS_ASYNC_ATTENTION_REQUIRED
     action.save(update_fields=["status", "updated_at"])
     # 移回 sentinel 并续租, 不释放
-    _ = cas_update_owner(handle, new_owner=f"async:{batch.pk}", renew=True)
+    _ = cas_update_owner(handle, new_owner=f"async:{batch.id}", renew=True)
     logger.warning(
         "async poll limit reached: action_id=%s app=%s attempts=%s",
         action.id,
@@ -148,7 +148,7 @@ def _open_async_poll(
         handle = _claim_async_poll_lease(
             lease,
             poller=poller,
-            sentinel_owner=f"async:{batch.pk}",
+            sentinel_owner=f"async:{batch.id}",
         )
 
         if action.status == ACTION_STATUS_ASYNC_ATTENTION_REQUIRED:
@@ -180,7 +180,7 @@ def _record_async_poll_failure(
             set_action_error(action, error)
             action.save(update_fields=["last_error", "last_error_raw", "updated_at"])
         # 移回 sentinel
-        _handoff_to_async_sentinel(action, claim.handle, batch_id=claim.batch.pk)
+        _handoff_to_async_sentinel(action, claim.handle, batch_id=claim.batch.id)
 
 
 def _accept_async_poll_progress(
@@ -191,7 +191,7 @@ def _accept_async_poll_progress(
 ) -> HandoverAppAction:
     with transaction.atomic():
         action = locked_action(action_id)
-        require_cas(claim.handle)
+        _ = require_cas(claim.handle)
         if action.status not in {
             ACTION_STATUS_ASYNC_PENDING,
             ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
@@ -200,7 +200,7 @@ def _accept_async_poll_progress(
         action.async_status_url = response.location
         action.last_error = ""
         action.save(update_fields=["async_status_url", "last_error", "updated_at"])
-        _handoff_to_async_sentinel(action, claim.handle, batch_id=claim.batch.pk)
+        _handoff_to_async_sentinel(action, claim.handle, batch_id=claim.batch.id)
     return action
 
 
@@ -230,7 +230,7 @@ def poll_async_action(
 
     # 终态 200: complete_data_phase 自管 A/B/C 事务, 调用方不得再包 atomic。
     complete_data_phase(
-        HandoverExecutionBatch.objects.get(pk=claim.batch.pk),
+        HandoverExecutionBatch.objects.get(pk=claim.batch.id),
         CompleteDataPhaseSpec(
             handle=claim.handle,
             response_payload=response.payload,

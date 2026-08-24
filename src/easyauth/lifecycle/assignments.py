@@ -78,7 +78,7 @@ def patch_asset_type_defaults(
         locked = (
             HandoverAppAction.objects.select_for_update(of=("self",))
             .select_related("task", "task__subject_user")
-            .get(pk=action.pk)
+            .get(pk=action.id)
         )
         plan = _assert_mutable(locked)
         asset = (
@@ -253,7 +253,7 @@ def locked_action_after_task(action: HandoverAppAction) -> HandoverAppAction:
     return (
         HandoverAppAction.objects.select_for_update(of=("self",))
         .select_related("task", "task__subject_user")
-        .get(pk=action.pk)
+        .get(pk=action.id)
     )
 
 
@@ -306,6 +306,6 @@ def _resolve_receiver(
     )
     if user is None or user.status != USER_STATUS_ACTIVE:
         raise HandoverError(_RECEIVER_NOT_ACTIVE_MESSAGE)
-    if int(user.pk) == int(action.task.subject_user_id):  # type: ignore[arg-type]
+    if user.id == action.task.subject_user_id:
         raise HandoverError(_RECEIVER_IS_SUBJECT_MESSAGE)
     return user

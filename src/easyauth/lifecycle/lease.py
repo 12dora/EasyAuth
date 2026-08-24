@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol, cast
 
 from django.db import connection, transaction
 from django.db.utils import IntegrityError
@@ -29,6 +29,10 @@ HANDOVER_EXECUTION_IN_FLIGHT: Final = "handover_execution_in_flight"
 LEASE_CAS_FAILED_MESSAGE: Final = "执行租约 CAS 失败, 丢弃本次写回。"
 
 
+class _FenceReturningCursor(Protocol):
+    def fetchone(self) -> tuple[int] | None: ...
+
+
 @dataclass(frozen=True, slots=True)
 class LeaseHandle:
     lease_id: int
@@ -39,8 +43,8 @@ class LeaseHandle:
 
 def allocate_fence(*, subject_user: UserMirror, app: App) -> int:
     """原子取新 fence。首行由本语句创建, 禁止 get_or_create + UPDATE。"""
-    subject_pk = int(subject_user.pk)  # type: ignore[arg-type]
-    app_pk = int(app.pk)  # type: ignore[arg-type]
+    subject_pk = subject_user.id
+    app_pk = app.id
     vendor = connection.vendor
     with connection.cursor() as cursor:
         if vendor == "postgresql":
@@ -55,7 +59,8 @@ def allocate_fence(*, subject_user: UserMirror, app: App) -> int:
                 """,
                 [subject_pk, app_pk],
             )
-            row = cursor.fetchone()
+            returning_cursor = cast("_FenceReturningCursor", cast("object", cursor))
+            row = returning_cursor.fetchone()
             if row is None:
                 message = "fence 取号失败。"
                 raise HandoverConflictError(message)
@@ -116,7 +121,7 @@ def take_lease(
     except IntegrityError as exc:
         raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT) from exc
     return LeaseHandle(
-        lease_id=int(lease.pk),  # type: ignore[arg-type]
+        lease_id=lease.id,
         owner=owner,
         fence=fence,
         expires_at=expires,
@@ -142,7 +147,8 @@ def renew_lease(handle: LeaseHandle) -> bool:
                 """,
                 [LEASE_TTL.total_seconds(), handle.lease_id, handle.owner, handle.fence],
             )
-            return cursor.rowcount == 1
+            affected = cast("int", cursor.rowcount)
+            return affected == 1
     updated = HandoverExecutionLease.objects.filter(
         pk=handle.lease_id,
         owner=handle.owner,
@@ -243,16 +249,17 @@ def preempt_expired_lease(
                     new_owner,
                     new_fence,
                     LEASE_TTL.total_seconds(),
-                    lease.pk,
+                    lease.id,
                     lease.owner,
                     lease.fence,
                 ],
             )
-            if cursor.rowcount != 1:
+            affected = cast("int", cursor.rowcount)
+            if affected != 1:
                 return None
-        refreshed = HandoverExecutionLease.objects.get(pk=lease.pk)
+        refreshed = HandoverExecutionLease.objects.get(pk=lease.id)
         return LeaseHandle(
-            lease_id=int(lease.pk),  # type: ignore[arg-type]
+            lease_id=lease.id,
             owner=new_owner,
             fence=new_fence,
             expires_at=refreshed.lease_expires_at,
@@ -260,7 +267,7 @@ def preempt_expired_lease(
     if lease.lease_expires_at > now:
         return None
     updated = HandoverExecutionLease.objects.filter(
-        pk=lease.pk,
+        pk=lease.id,
         owner=lease.owner,
         fence=lease.fence,
         released_at__isnull=True,
@@ -274,7 +281,7 @@ def preempt_expired_lease(
     if updated != 1:
         return None
     return LeaseHandle(
-        lease_id=int(lease.pk),  # type: ignore[arg-type]
+        lease_id=lease.id,
         owner=new_owner,
         fence=new_fence,
         expires_at=expires,

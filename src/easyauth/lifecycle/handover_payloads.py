@@ -27,6 +27,8 @@ from easyauth.lifecycle.models import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from easyauth.applications.ops_models import JsonValue
 
 
@@ -71,7 +73,7 @@ def build_execute_payload_for_plan(
     next_no = int(plan.completed_batches) + 1
     if next_no > int(plan.total):
         raise HandoverConflictError(_BATCH_PLAN_EXHAUSTED_MESSAGE)
-    chunks = plan.chunks if isinstance(plan.chunks, list) else []
+    chunks = plan.chunks
     chunk = chunks[next_no - 1] if next_no - 1 < len(chunks) else []
     is_final = next_no >= int(plan.total)
     assignments = _chunk_assignments(action, chunk=chunk, is_final=is_final)
@@ -88,7 +90,7 @@ def _execute_envelope(
     assignments: list[dict[str, JsonValue]],
     batch_id: int,
 ) -> dict[str, JsonValue]:
-    return {
+    payload: dict[str, JsonValue] = {
         "task_id": task_id(action),
         "event_type": HOOK_EVENT_EXECUTE,
         "kind": action.task.kind,
@@ -97,8 +99,9 @@ def _execute_envelope(
         "snapshot_token": action.snapshot_token,
         "mode": "execute",
         "batch_id": batch_id,
-        "assignments": assignments,
+        "assignments": list(assignments),
     }
+    return payload
 
 
 def _full_assignments(action: HandoverAppAction) -> list[dict[str, JsonValue]]:
@@ -108,7 +111,7 @@ def _full_assignments(action: HandoverAppAction) -> list[dict[str, JsonValue]]:
         generation=action.generation,
     ).prefetch_related("overrides", "default_to_user", "overrides__to_user")
     for asset_type in types:
-        overrides: list[dict[str, JsonValue]] = [
+        overrides: list[JsonValue] = [
             {
                 "id": ov.asset_id,
                 "action": ov.action,
@@ -118,18 +121,17 @@ def _full_assignments(action: HandoverAppAction) -> list[dict[str, JsonValue]]:
             }
             for ov in asset_type.overrides.all()
         ]
-        assignments.append(
-            {
-                "asset_type": asset_type.type_key,
-                "default_action": asset_type.default_action,
-                "default_to_user_id": (
-                    asset_type.default_to_user.authentik_user_id
-                    if asset_type.default_to_user is not None
-                    else None
-                ),
-                "overrides": overrides,
-            },
-        )
+        assignment: dict[str, JsonValue] = {
+            "asset_type": asset_type.type_key,
+            "default_action": asset_type.default_action,
+            "default_to_user_id": (
+                asset_type.default_to_user.authentik_user_id
+                if asset_type.default_to_user is not None
+                else None
+            ),
+            "overrides": overrides,
+        }
+        assignments.append(assignment)
     return assignments
 
 
@@ -154,7 +156,7 @@ def audit_result_summary(summary: dict[str, JsonValue] | None) -> dict[str, Json
         return {}
     safe: dict[str, JsonValue] = {}
     for type_key, value in summary.items():
-        if not isinstance(type_key, str) or not isinstance(value, dict):
+        if not isinstance(value, dict):
             continue
         counts: dict[str, JsonValue] = {}
         for field in ("transferred", "released", "skipped", "merged", "failed"):
@@ -165,7 +167,14 @@ def audit_result_summary(summary: dict[str, JsonValue] | None) -> dict[str, Json
     return safe
 
 
-def _chunk_allowed_ids(chunk: object) -> dict[str, set[str]]:
+def _json_iterable(value: JsonValue) -> Iterable[JsonValue]:
+    if isinstance(value, str | list | dict):
+        return value
+    message = f"'{type(value).__name__}' object is not iterable"
+    raise TypeError(message)
+
+
+def _chunk_allowed_ids(chunk: JsonValue) -> dict[str, set[str]]:
     """把批次描述解析成 asset_type → 本批允许携带的 asset id 集合。"""
     allowed_ids_by_type: dict[str, set[str]] = {}
     if isinstance(chunk, list):
@@ -176,7 +185,9 @@ def _chunk_allowed_ids(chunk: object) -> dict[str, set[str]]:
             ids = entry.get("ids", [])
             if not type_key:
                 continue
-            allowed_ids_by_type[type_key] = {str(i) for i in ids if isinstance(i, str | int)}
+            allowed_ids_by_type[type_key] = {
+                str(i) for i in _json_iterable(ids) if isinstance(i, str | int)
+            }
     return allowed_ids_by_type
 
 
@@ -185,8 +196,8 @@ def _chunk_type_overrides(
     *,
     allowed: set[str],
     is_final: bool,
-) -> list[dict[str, JsonValue]]:
-    overrides: list[dict[str, JsonValue]] = []
+) -> list[JsonValue]:
+    overrides: list[JsonValue] = []
     for ov in asset_type.overrides.all():
         if not is_final and ov.asset_id not in allowed:
             continue
@@ -207,7 +218,7 @@ def _chunk_type_overrides(
 def _chunk_assignments(
     action: HandoverAppAction,
     *,
-    chunk: object,
+    chunk: JsonValue,
     is_final: bool,
 ) -> list[dict[str, JsonValue]]:
     """§2.4.1.1: 非最终批 default_action 强制 skip; 最终批带真实 default + 全部 skip override。"""
@@ -230,14 +241,13 @@ def _chunk_assignments(
             if is_final and asset_type.default_to_user is not None
             else None
         )
-        result.append(
-            {
-                "asset_type": type_key,
-                "default_action": default_action,
-                "default_to_user_id": default_to,
-                "overrides": overrides,
-            },
-        )
+        assignment: dict[str, JsonValue] = {
+            "asset_type": type_key,
+            "default_action": default_action,
+            "default_to_user_id": default_to,
+            "overrides": overrides,
+        }
+        result.append(assignment)
     return result
 
 
@@ -386,7 +396,11 @@ def _split_assignments_into_chunks(
         by_type: dict[str, list[str]] = {}
         for item in group:
             by_type.setdefault(str(item["asset_type"]), []).append(str(item["id"]))
-        chunks.append([{"asset_type": k, "ids": v} for k, v in sorted(by_type.items())])
+        chunk: list[JsonValue] = []
+        for type_key, ids in sorted(by_type.items()):
+            chunk_row: dict[str, JsonValue] = {"asset_type": type_key, "ids": list(ids)}
+            chunk.append(chunk_row)
+        chunks.append(chunk)
     return chunks
 
 
@@ -396,7 +410,8 @@ def _assignment_work_items(
     work_items: list[dict[str, JsonValue]] = []
     for asn in assignments:
         type_key = str(asn.get("asset_type", ""))
-        for ov in asn.get("overrides", []) or []:
+        overrides = asn.get("overrides", []) or []
+        for ov in _json_iterable(overrides):
             if not isinstance(ov, dict):
                 continue
             if ov.get("action") in {ASSET_ACTION_TRANSFER, ASSET_ACTION_RELEASE}:

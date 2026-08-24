@@ -45,6 +45,7 @@ __all__ = [
     "parse_permission_template",
     "parse_template_format",
     "preview_permission_template",
+    "sync_manifest_lifecycle",
 ]
 
 
@@ -75,7 +76,7 @@ def apply_permission_template(
     template_version = record_template_version(locked_app, template, actions)
     record_import_event(locked_app, template, template_version, actions)
     bump_manifest_catalog_version(locked_app, template, actions)
-    _sync_manifest_lifecycle(
+    sync_manifest_lifecycle(
         app=locked_app,
         template=template,
         downstream_base_url=downstream_base_url,
@@ -90,7 +91,7 @@ _MANIFEST_ACTOR = "manifest"
 _MANIFEST_DNS_TIMEOUT_SECONDS = 5.0
 
 
-def _sync_manifest_lifecycle(
+def sync_manifest_lifecycle(
     *,
     app: App,
     template: AppManifestInput,

@@ -10,7 +10,6 @@ from django.utils import timezone
 
 from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.handover_capability import _seed_asset_type_placeholders
 from easyauth.applications.models import (
     HANDOVER_CAPABILITY_DECLARED,
     HANDOVER_CAPABILITY_NONE,
@@ -35,6 +34,7 @@ from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
 from easyauth.lifecycle.handover_actions import (
     initial_action_status_for_app,
     reset_action_for_upgrade,
+    seed_asset_type_placeholders,
 )
 from easyauth.lifecycle.lease import HANDOVER_EXECUTION_IN_FLIGHT, has_active_lease
 from easyauth.lifecycle.models import (
@@ -569,7 +569,7 @@ def _snapshot_app_actions(
                 extra={"app_key": app.app_key, "blocked_reason": blocked_reason},
             )
         if status == ACTION_STATUS_PENDING:
-            _seed_asset_type_placeholders(action)
+            seed_asset_type_placeholders(action)
 
 
 def _snapshot_grants(

@@ -108,7 +108,7 @@ def retry_grant_transfer_only(
     action.save(update_fields=["status", "attempts", "updated_at"])
     action_id_grant = action.id
     try:
-        require_cas(handle)
+        _ = require_cas(handle)
         if action.task.kind in ACTION_GRANT_TRANSFER_KINDS:
             _ = transfer_selected_grants(action)
         final_batch = _final_completed_batch(action)
@@ -304,7 +304,7 @@ def _hand_lease_to_sender(
     delivery: HandoverDeliveryAttempt,
     worker_owner: str,
 ) -> LeaseHandle:
-    delivery_owner = f"delivery:{delivery.pk}"
+    delivery_owner = f"delivery:{delivery.id}"
     handed = cas_update_owner(handle, new_owner=delivery_owner, renew=True)
     if handed is None:
         raise HandoverConflictError(HANDOVER_EXECUTION_IN_FLIGHT)

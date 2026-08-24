@@ -7,7 +7,6 @@ from typing import TYPE_CHECKING, Final, cast
 from django.db import transaction
 from django.utils import timezone
 
-from easyauth.applications.handover_capability import _seed_asset_type_placeholders
 from easyauth.applications.models import (
     HANDOVER_CAPABILITY_DECLARED,
     HANDOVER_CAPABILITY_NONE,
@@ -58,6 +57,7 @@ from easyauth.lifecycle.models import (
     TEAM_ITEM_ACTION_DEACTIVATE,
     HandoverActionSkipRecord,
     HandoverAppAction,
+    HandoverAssetType,
     HandoverBatchPlan,
     HandoverExecutionLease,
     HandoverGrantItem,
@@ -73,6 +73,27 @@ if TYPE_CHECKING:
 
 _BATCH_PLAN_IN_PROGRESS_MESSAGE: Final = "batch_plan_in_progress"
 _GRANT_RECEIVER_NOT_ALLOWED_MESSAGE: Final = "grant_receiver_not_allowed"
+
+
+def seed_asset_type_placeholders(action: HandoverAppAction) -> None:
+    """按应用声明为交接动作建立资产类型占位。"""
+    for item in action.app.handover_asset_types or []:
+        if not isinstance(item, dict):
+            continue
+        type_key = str(item.get("type", ""))
+        if not type_key:
+            continue
+        _ = HandoverAssetType.objects.get_or_create(
+            action=action,
+            generation=action.generation,
+            type_key=type_key,
+            defaults={
+                "label_snapshot": str(item.get("label", type_key))[:120],
+                "count": 0,
+                "detail_supported": bool(item.get("detail_supported", False)),
+                "releasable": bool(item.get("releasable", False)),
+            },
+        )
 _RECEIVER_IS_SUBJECT_MESSAGE: Final = "receiver_is_subject"
 
 # ---------------------------------------------------------------------------
@@ -333,7 +354,7 @@ def reset_action_for_upgrade(action: HandoverAppAction, *, task: HandoverTask) -
         action.blocked_reason = BLOCKED_REASON_CAPABILITY_UNDECLARED
     action.save()
     if action.status == ACTION_STATUS_PENDING:
-        _seed_asset_type_placeholders(action)
+        seed_asset_type_placeholders(action)
     return action
 
 
