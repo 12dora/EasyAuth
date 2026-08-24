@@ -27,6 +27,7 @@ class App(models.Model):
     if TYPE_CHECKING:
         id: ClassVar[int]
         app_id: ClassVar[int]
+        notification_channels: ClassVar[models.Manager[AppNotificationChannel]]
 
     app_key: models.CharField[str, str] = models.CharField(max_length=64, unique=True)
     name: models.CharField[str, str] = models.CharField(max_length=128)

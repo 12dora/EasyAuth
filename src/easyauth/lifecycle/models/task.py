@@ -43,6 +43,7 @@ class HandoverTask(models.Model):
         id: ClassVar[int]
         subject_user_id: ClassVar[int]
         assignee_id: ClassVar[int | None]
+        app_actions: ClassVar[models.Manager[HandoverAppAction]]
 
     kind: models.CharField[str, str] = models.CharField(
         max_length=16,

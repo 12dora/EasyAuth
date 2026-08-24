@@ -35,6 +35,7 @@ class HandoverAssetType(models.Model):
         id: ClassVar[int]
         action_id: ClassVar[int]
         default_to_user_id: ClassVar[int | None]
+        overrides: ClassVar[models.Manager[HandoverAssetOverride]]
 
     action: models.ForeignKey[HandoverAppAction, HandoverAppAction] = models.ForeignKey(
         HandoverAppAction,
