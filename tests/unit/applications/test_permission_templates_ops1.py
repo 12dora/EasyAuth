@@ -4,6 +4,8 @@ from json import dumps
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import pytest
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from pydantic import TypeAdapter
 
 from easyauth.api.errors import JsonValue
@@ -35,6 +37,9 @@ pytestmark = pytest.mark.django_db
 
 APP_KEY: Final = "ops1-manifest"
 JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
+# preview 对每个目录资源各 1 条 SELECT(含 grant 预加载与审批规则/权限组 parent/权限 group join),
+# 查询数不得随已有审批规则或授权组数量线性增长。
+PREVIEW_CATALOG_QUERY_COUNT: Final = 6
 
 
 def test_ops1_app_manifest_parses_pasted_json_and_yaml() -> None:
@@ -170,8 +175,10 @@ def test_ops1_app_manifest_preview_reports_manifest_diff_without_writing_databas
     app = App.objects.create(app_key=APP_KEY, name="旧名称")
     manifest = _parsed_manifest()
 
-    preview = preview_permission_template(app=app, template=manifest)
+    with CaptureQueriesContext(connection) as queries:
+        preview = preview_permission_template(app=app, template=manifest)
 
+    assert len(queries) == PREVIEW_CATALOG_QUERY_COUNT
     assert [(action.action, action.key) for action in preview.actions] == [
         ("update_app", APP_KEY),
         ("create_scope", "SELF"),
@@ -322,7 +329,10 @@ def test_app_manifest_bilingual_fields_import_export_roundtrip() -> None:
         template_format="json",
         imported_by="owner-001",
     )
-    assert preview_permission_template(app=app, template=replay).actions == ()
+    with CaptureQueriesContext(connection) as queries:
+        preview = preview_permission_template(app=app, template=replay)
+    assert preview.actions == ()
+    assert len(queries) == PREVIEW_CATALOG_QUERY_COUNT
 
 
 def test_app_manifest_without_bilingual_fields_imports_with_empty_defaults() -> None:

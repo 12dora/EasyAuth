@@ -169,7 +169,10 @@ def _scope_actions(app: App, manifest: AppManifestInput) -> list[TemplateAction]
 
 
 def _permission_group_actions(app: App, manifest: AppManifestInput) -> list[TemplateAction]:
-    existing = {group.key: group for group in PermissionGroup.objects.filter(app=app)}
+    existing = {
+        group.key: group
+        for group in PermissionGroup.objects.filter(app=app).select_related("parent")
+    }
     incoming = {group.key: group for group in manifest.permission_groups}
     return _diff_actions(
         existing,
@@ -186,7 +189,10 @@ def _permission_group_actions(app: App, manifest: AppManifestInput) -> list[Temp
 
 
 def _permission_actions(app: App, manifest: AppManifestInput) -> list[TemplateAction]:
-    existing = {permission.key: permission for permission in Permission.objects.filter(app=app)}
+    existing = {
+        permission.key: permission
+        for permission in Permission.objects.filter(app=app).select_related("group")
+    }
     incoming = {permission.key: permission for permission in manifest.permissions}
     return _diff_actions(
         existing,
@@ -235,7 +241,13 @@ def _authorization_group_actions(app: App, manifest: AppManifestInput) -> list[T
 
 def _approval_rule_actions(app: App, manifest: AppManifestInput) -> list[TemplateAction]:
     actions: list[TemplateAction] = []
-    existing = {_approval_rule_key(rule): rule for rule in ApprovalRule.objects.filter(app=app)}
+    existing = {
+        _approval_rule_key(rule): rule
+        for rule in ApprovalRule.objects.filter(app=app).select_related(
+            "authorization_group",
+            "permission",
+        )
+    }
     incoming = {_approval_rule_input_key(rule): rule for rule in manifest.approval_rules}
     for key, rule in incoming.items():
         current = existing.get(key)

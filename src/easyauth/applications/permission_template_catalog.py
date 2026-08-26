@@ -31,7 +31,7 @@ __all__ = ["upsert_manifest"]
 
 def upsert_manifest(app: App, manifest: AppManifestInput) -> None:
     _update_app(app, manifest)
-    scope_by_key = _upsert_scopes(app, manifest)
+    _ = _upsert_scopes(app, manifest)
     group_by_key = _upsert_permission_groups(app, manifest)
     permission_by_key = _upsert_permissions(app, manifest, group_by_key)
     authorization_group_by_key = _upsert_authorization_groups(app, manifest)
@@ -41,7 +41,6 @@ def upsert_manifest(app: App, manifest: AppManifestInput) -> None:
         permission_by_key=permission_by_key,
     )
     _upsert_approval_rules(app, manifest, permission_by_key, authorization_group_by_key)
-    _ = scope_by_key
 
 
 def _update_app(app: App, manifest: AppManifestInput) -> None:
@@ -144,7 +143,13 @@ def _upsert_approval_rules(
     authorization_group_by_key: dict[str, AuthorizationGroup],
 ) -> None:
     incoming = {_approval_rule_input_key(rule): rule for rule in manifest.approval_rules}
-    existing = {_approval_rule_key(rule): rule for rule in ApprovalRule.objects.filter(app=app)}
+    existing = {
+        _approval_rule_key(rule): rule
+        for rule in ApprovalRule.objects.filter(app=app).select_related(
+            "authorization_group",
+            "permission",
+        )
+    }
     for key, spec in incoming.items():
         rule = existing.get(key) or ApprovalRule(app=app)
         if spec.target_type == "authorization_group":
