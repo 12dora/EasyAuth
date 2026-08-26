@@ -16,11 +16,11 @@ from easyauth.applications.manifest_hashing import (
     canonical_manifest_template,
 )
 from easyauth.applications.models import App, PermissionTemplateVersion
+from easyauth.applications.permission_template_lifecycle import sync_manifest_lifecycle
 from easyauth.applications.permission_templates import (
     apply_permission_template,
     parse_permission_template,
     parse_template_format,
-    sync_manifest_lifecycle,
 )
 
 if TYPE_CHECKING:
@@ -66,9 +66,7 @@ def sync_app_manifest(
     """
     locked_app = App.objects.select_for_update().get(pk=app.id)
     canonical_template = canonical_manifest_template(manifest)
-    latest = (
-        PermissionTemplateVersion.objects.filter(app=locked_app).order_by("-version").first()
-    )
+    latest = PermissionTemplateVersion.objects.filter(app=locked_app).order_by("-version").first()
     raw_schema_version = manifest["schema_version"]
     if not isinstance(raw_schema_version, int) or isinstance(raw_schema_version, bool):
         msg = "App manifest schema_version 必须是整数。"

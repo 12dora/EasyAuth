@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import replace
-
 from django.db import transaction
 
-from easyauth.applications.handover_capability import (
-    sync_handover_capability_from_manifest,
-)
 from easyauth.applications.models import App, PermissionTemplateVersion
 from easyauth.applications.permission_template_flattening import flatten_template
+from easyauth.applications.permission_template_lifecycle import sync_manifest_lifecycle
 from easyauth.applications.permission_template_parsing import (
     TemplateFormat,
     parse_permission_template,
@@ -30,7 +26,6 @@ from easyauth.applications.permission_template_types import (
     PermissionTemplatePreview,
     TemplateAction,
 )
-from easyauth.config.net import validate_public_https_url
 
 __all__ = [
     "AppManifestInput",
@@ -85,97 +80,8 @@ def apply_permission_template(
     return PermissionTemplateImportResult(template_version=template_version, actions=actions)
 
 
-# webhook 事件 URL 的语义是"接入时从 manifest 读入、控制台可覆盖"(AppWebhookConfig 注释):
-# 只有配置从未被控制台管理员改过(updated_by 为空或 manifest)时才回填, 避免覆盖人工设置。
-_MANIFEST_ACTOR = "manifest"
-_MANIFEST_DNS_TIMEOUT_SECONDS = 5.0
-
-
-def sync_manifest_lifecycle(
-    *,
-    app: App,
-    template: AppManifestInput,
-    downstream_base_url: str | None,
-    actor_type: str,
-) -> None:
-    _sync_webhook_config_from_manifest(
-        app=app,
-        template=template,
-        downstream_base_url=downstream_base_url,
-    )
-    lifecycle_for_cap = template.lifecycle
-    if lifecycle_for_cap is not None and downstream_base_url:
-        resolved_url = _resolve_manifest_url(
-            lifecycle_for_cap.handover_url,
-            downstream_base_url,
-        )
-        if resolved_url:
-            lifecycle_for_cap = replace(lifecycle_for_cap, handover_url=resolved_url)
-    sync_handover_capability_from_manifest(
-        app,
-        lifecycle_for_cap,
-        actor_id=template.imported_by or _MANIFEST_ACTOR,
-        actor_type=actor_type,
-    )
-
-
-def _sync_webhook_config_from_manifest(
-    *,
-    app: App,
-    template: AppManifestInput,
-    downstream_base_url: str | None,
-) -> None:
-    from easyauth.webhooks.models import AppWebhookConfig  # noqa: PLC0415
-
-    try:
-        config = AppWebhookConfig.objects.select_for_update().get(app=app)
-        config_is_new = False
-    except AppWebhookConfig.DoesNotExist:
-        if template.lifecycle is None:
-            return
-        config = AppWebhookConfig(app=app)
-        config_is_new = True
-    if config.updated_by not in ("", _MANIFEST_ACTOR):
-        return
-    lifecycle_urls = (
-        ("", "")
-        if template.lifecycle is None
-        else (template.lifecycle.handover_url, template.lifecycle.onboard_url)
-    )
-    updates: list[str] = []
-    for field, raw_url in zip(("handover_url", "onboard_url"), lifecycle_urls, strict=True):
-        resolved = _resolve_manifest_url(raw_url, downstream_base_url)
-        if resolved is not None and getattr(config, field) != resolved:
-            if resolved:
-                _ = validate_public_https_url(
-                    resolved,
-                    dns_timeout_seconds=_MANIFEST_DNS_TIMEOUT_SECONDS,
-                )
-            setattr(config, field, resolved)
-            updates.append(field)
-    if updates:
-        config.updated_by = _MANIFEST_ACTOR
-        if config_is_new:
-            config.save()
-        else:
-            config.save(update_fields=[*updates, "updated_by", "updated_at"])
-
-
-def _resolve_manifest_url(raw_url: str, downstream_base_url: str | None) -> str | None:
-    # 绝对 http(s) URL 原样使用; 以 / 开头的站内路径需要下游 base_url(仅自动接入具备)。
-    if not raw_url:
-        return ""
-    if raw_url.startswith(("http://", "https://")):
-        return raw_url
-    if raw_url.startswith("/") and downstream_base_url:
-        return f"{downstream_base_url.rstrip('/')}{raw_url}"
-    return None
-
-
 def _reject_duplicate_template_version(*, app: App, version: int) -> None:
-    latest_template = (
-        PermissionTemplateVersion.objects.filter(app=app).order_by("-version").first()
-    )
+    latest_template = PermissionTemplateVersion.objects.filter(app=app).order_by("-version").first()
     if latest_template is None or version > latest_template.version:
         return
     if version < latest_template.version:
