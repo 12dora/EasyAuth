@@ -37,11 +37,16 @@
 
 查询参数：`page`（默认 1）、`page_size`（默认 20，最大 100）。
 
+可选 `ordering=<field>` 或 `ordering=-<field>`（单字段；`-` 表示降序）。未知字段返回
+`400 VALIDATION_ERROR`。省略时保持各列表原默认顺序，并附加稳定并列键 `pk`/`id`。
+
 ---
 
 ## GET /portal/api/v1/me/grants
 
 当前登录员工的有效授权列表（分页）。
+
+**排序字段：** `app_key`、`expires_at`、`created_at`。默认 `app_key, id`。
 
 目录解析不可用时返回 `503 DEPENDENCY_UNAVAILABLE`。
 
@@ -61,12 +66,15 @@
 | --- | --- |
 | `days` | 到期窗口天数，默认 14，范围 1–90 |
 | `page` / `page_size` | 分页 |
+| `ordering` | 单字段排序：`app_key` / `expires_at` / `created_at`（默认 `app_key, id`） |
 
 ---
 
 ## GET /portal/api/v1/me/access-requests
 
 当前员工提交过的授权申请列表（分页）。
+
+**排序字段：** `created_at`（映射 `submitted_at`）、`status`、`app_key`、`expires_at`（映射 `grant_expires_at`）。默认 `-submitted_at, id`。
 
 **单条字段（摘要）：**
 
@@ -179,6 +187,7 @@
 | --- | --- |
 | `status` | `pending`（默认，`submitted` 且本人是审批人）或 `processed`（本人已决定） |
 | `page` / `page_size` | 分页 |
+| `ordering` | 单字段排序：`created_at` / `decided_at` / `app_key` / `applicant`。`pending` 默认 `submitted_at, id`；`processed` 默认 `-decided_at, id` |
 
 审批条目在 access_request 基础上额外包含：
 

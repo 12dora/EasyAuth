@@ -855,6 +855,33 @@ def test_ops1_configuration_status_api_can_return_ready_status() -> None:
     assert response.json() == {"app_key": app.app_key, "status": "ready", "data": []}
 
 
+def test_ops1_apps_api_honors_ordering_and_rejects_unknown_field() -> None:
+    # Given: 两个 App, 默认按 app_key 升序会与 name 顺序相反。
+    client = _logged_in_superuser("ops1-apps-ordering-admin")
+    later = App.objects.create(app_key="ops1-order-z", name="Alpha", is_active=True)
+    earlier = App.objects.create(app_key="ops1-order-a", name="Zulu", is_active=False)
+
+    # When: 默认排序、按 name 升降序、以及非法 ordering。
+    default = client.get(APPS_API_URL)
+    by_name = client.get(APPS_API_URL, {"ordering": "name"})
+    by_name_desc = client.get(APPS_API_URL, {"ordering": "-name"})
+    invalid = client.get(APPS_API_URL, {"ordering": "not_a_field"})
+
+    # Then: 默认仍按 app_key; 指定字段生效; 未知字段 400。
+    assert [item["app_key"] for item in default.json()["data"]] == [
+        earlier.app_key,
+        later.app_key,
+    ]
+    assert [item["name"] for item in by_name.json()["data"]] == ["Alpha", "Zulu"]
+    assert [item["name"] for item in by_name_desc.json()["data"]] == ["Zulu", "Alpha"]
+    assert invalid.status_code == HTTPStatus.BAD_REQUEST
+    assert invalid.json()["error"]["code"] == ErrorCode.VALIDATION_ERROR
+    assert invalid.json()["error"]["details"] == {
+        "field": "ordering",
+        "value": "not_a_field",
+    }
+
+
 def _seed_list_query_app(index: int, owner_user_ids: tuple[str, ...]) -> list[str]:
     app = App.objects.create(app_key=f"ops1-list-nplusone-{index}", name=f"App {index}")
     for user_id in owner_user_ids:

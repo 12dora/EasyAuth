@@ -481,6 +481,55 @@ def test_sync_runs_use_standard_server_pagination() -> None:
     }
 
 
+def test_sync_runs_honors_ordering_and_rejects_unknown_field() -> None:
+    app = App.objects.create(app_key="conn-order", name="X")
+    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+    client = _logged_in_superuser("conn-order-admin")
+    now = timezone.now()
+    older = ConnectorSyncRun.objects.create(
+        instance=instance,
+        trigger="manual",
+        started_at=now - timedelta(hours=1),
+        finished_at=now - timedelta(hours=1) + timedelta(seconds=1),
+        status="success",
+    )
+    newer = ConnectorSyncRun.objects.create(
+        instance=instance,
+        trigger="periodic",
+        started_at=now,
+        finished_at=now + timedelta(seconds=1),
+        status="failed",
+    )
+    url = f"{_connectors_url('conn-order')}/{instance.id}/sync-runs"
+
+    default = client.get(url)
+    by_trigger = client.get(url, {"ordering": "trigger"})
+    by_trigger_desc = client.get(url, {"ordering": "-trigger"})
+    invalid = client.get(url, {"ordering": "unknown"})
+
+    assert _sync_run_ids(default) == [newer.id, older.id]
+    assert _sync_run_ids(by_trigger) == [older.id, newer.id]
+    assert _sync_run_ids(by_trigger_desc) == [newer.id, older.id]
+    assert invalid.status_code == HTTPStatus.BAD_REQUEST
+    payload = cast("dict[str, JsonValue]", invalid.json())
+    error = payload["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == "VALIDATION_ERROR"
+
+
+def _sync_run_ids(response: object) -> list[int]:
+    payload = cast("dict[str, JsonValue]", response.json())  # pyright: ignore[reportUnknownMemberType, reportAttributeAccessIssue]
+    data = payload["data"]
+    assert isinstance(data, list)
+    result: list[int] = []
+    for item in data:
+        assert isinstance(item, dict)
+        run_id = item["id"]
+        assert isinstance(run_id, int)
+        result.append(run_id)
+    return result
+
+
 def test_duplicate_connector_type_conflicts() -> None:
     # Given
     app = App.objects.create(app_key="conn-dup", name="X")

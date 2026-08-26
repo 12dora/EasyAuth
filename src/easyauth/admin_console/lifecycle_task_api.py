@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from django.http import HttpRequest, JsonResponse
 from pydantic import ValidationError
@@ -30,6 +30,7 @@ from easyauth.admin_console.operation_filters import (
     paginate_queryset,
 )
 from easyauth.api.errors import ErrorCode
+from easyauth.api.ordering import parse_ordering
 from easyauth.api.pagination import pagination_item
 from easyauth.lifecycle.api_payloads import SURFACE_CONSOLE, console_task_list_item
 from easyauth.lifecycle.api_payloads import task_detail as v2_task_detail
@@ -54,6 +55,14 @@ if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
     from easyauth.api.pagination import Pagination
 
+HANDOVER_TASK_ORDERING: Final[dict[str, str]] = {
+    "created_at": "created_at",
+    "status": "status",
+    "kind": "kind",
+    "subject": "subject_user__name",
+}
+HANDOVER_TASK_DEFAULT_ORDER: Final[tuple[str, ...]] = ("-created_at", "-id")
+
 
 def lifecycle_handover_tasks(request: HttpRequest) -> JsonResponse:
     match require_superuser(request):
@@ -62,28 +71,33 @@ def lifecycle_handover_tasks(request: HttpRequest) -> JsonResponse:
         case JsonResponse() as response:
             return response
     if request.method == "GET":
-        queryset = HandoverTask.objects.select_related("subject_user").order_by(
-            "-created_at",
-            "-id",
-        )
-        filtered_queryset = _filter_handover_tasks(queryset, request)
-        if isinstance(filtered_queryset, JsonResponse):
-            return filtered_queryset
-        queryset = filtered_queryset
-        try:
-            page = paginate_queryset(queryset, request.GET)
-        except OperationFilterValidationError as exc:
-            return operation_filter_error_response(exc)
-        items: list[JsonValue] = [console_task_list_item(task) for task in page.items]
-        return json_response(
-            paginated_list_payload(
-                items=items,
-                pagination=pagination_item(cast("Pagination", cast("object", page))),
-            ),
-        )
+        return _list_handover_tasks(request)
     if request.method == "POST":
         return _create_task(request, actor_id)
     return method_not_allowed_response()
+
+
+def _list_handover_tasks(request: HttpRequest) -> JsonResponse:
+    match parse_ordering(request, HANDOVER_TASK_ORDERING, HANDOVER_TASK_DEFAULT_ORDER):
+        case JsonResponse() as response:
+            return response
+        case tuple() as ordering:
+            pass
+    queryset = HandoverTask.objects.select_related("subject_user").order_by(*ordering)
+    filtered_queryset = _filter_handover_tasks(queryset, request)
+    if isinstance(filtered_queryset, JsonResponse):
+        return filtered_queryset
+    try:
+        page = paginate_queryset(filtered_queryset, request.GET)
+    except OperationFilterValidationError as exc:
+        return operation_filter_error_response(exc)
+    items: list[JsonValue] = [console_task_list_item(task) for task in page.items]
+    return json_response(
+        paginated_list_payload(
+            items=items,
+            pagination=pagination_item(cast("Pagination", cast("object", page))),
+        ),
+    )
 
 
 def _filter_handover_tasks(

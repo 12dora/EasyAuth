@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from http import HTTPStatus
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING, ClassVar, Final
 
 from django.db import models
 from django.db.models import Prefetch
@@ -28,6 +28,7 @@ from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue
+from easyauth.api.ordering import parse_ordering
 from easyauth.api.pagination import pagination_item, total_pages
 from easyauth.api.responses import error_response as _error_response
 from easyauth.api.responses import json_response as _json_response
@@ -41,6 +42,14 @@ type PortalApiResult = UserMirror | JsonResponse
 
 APPROVAL_STATUS_PENDING = "pending"
 APPROVAL_STATUS_PROCESSED = "processed"
+PORTAL_APPROVAL_ORDERING: Final[dict[str, str]] = {
+    "created_at": "submitted_at",
+    "decided_at": "decided_at",
+    "app_key": "app__app_key",
+    "applicant": "user__name",
+}
+PORTAL_APPROVAL_PENDING_DEFAULT_ORDER: Final[tuple[str, ...]] = ("submitted_at", "id")
+PORTAL_APPROVAL_PROCESSED_DEFAULT_ORDER: Final[tuple[str, ...]] = ("-decided_at", "id")
 
 APPROVER_PREFETCH = Prefetch(
     "approver_assignments",
@@ -75,7 +84,17 @@ def portal_approvals(request: HttpRequest) -> JsonResponse:
             {"status": status},
             status=HTTPStatus.UNPROCESSABLE_ENTITY,
         )
-    return _page_response(_approval_page(user, request, status=status))
+    default_order = (
+        PORTAL_APPROVAL_PENDING_DEFAULT_ORDER
+        if status == APPROVAL_STATUS_PENDING
+        else PORTAL_APPROVAL_PROCESSED_DEFAULT_ORDER
+    )
+    match parse_ordering(request, PORTAL_APPROVAL_ORDERING, default_order):
+        case JsonResponse() as response:
+            return response
+        case tuple() as ordering:
+            pass
+    return _page_response(_approval_page(user, request, status=status, ordering=ordering))
 
 
 def portal_approval_detail(request: HttpRequest, request_id: int) -> JsonResponse:
@@ -188,7 +207,13 @@ def _approval_error_response(error: ApprovalActionError) -> JsonResponse:
             )
 
 
-def _approval_page(user: UserMirror, request: HttpRequest, *, status: str) -> PortalPage:
+def _approval_page(
+    user: UserMirror,
+    request: HttpRequest,
+    *,
+    status: str,
+    ordering: tuple[str, ...],
+) -> PortalPage:
     page = page_request(request.GET)
     if status == APPROVAL_STATUS_PENDING:
         visible = (
@@ -199,15 +224,14 @@ def _approval_page(user: UserMirror, request: HttpRequest, *, status: str) -> Po
                 approver_assignments__approver=user,
             )
             .distinct()
-            .order_by("submitted_at", "id")
         )
     else:
         visible = (
             AccessRequest.objects.select_related("user", "app")
             .prefetch_related(APPROVER_PREFETCH)
             .filter(decided_by=user.authentik_user_id)
-            .order_by("-decided_at", "id")
         )
+    visible = visible.order_by(*ordering)
     total_items = visible.count()
     last_page = max(total_pages(total_items=total_items, page_size=page.page_size), 1)
     if page.page > last_page:

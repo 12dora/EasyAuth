@@ -76,6 +76,38 @@ def test_handover_task_list_uses_standard_server_pagination() -> None:
     }
 
 
+def test_handover_task_list_honors_ordering_and_rejects_unknown_field() -> None:
+    client = _logged_in_superuser("handover-ordering-admin")
+    bob = UserMirror.objects.create(authentik_user_id="handover-order-bob", name="Bob")
+    alice = UserMirror.objects.create(authentik_user_id="handover-order-alice", name="Alice")
+    older = HandoverTask.objects.create(kind="offboard", subject_user=bob, status="pending")
+    newer = HandoverTask.objects.create(kind="transfer", subject_user=alice, status="completed")
+
+    default = client.get(TASKS_URL)
+    by_subject = client.get(TASKS_URL, {"ordering": "subject"})
+    by_subject_desc = client.get(TASKS_URL, {"ordering": "-subject"})
+    invalid = client.get(TASKS_URL, {"ordering": "unknown"})
+
+    default_body = JSON_VALUE_ADAPTER.validate_json(default.content)
+    assert isinstance(default_body, dict)
+    default_ids = [item["id"] for item in default_body["data"] if isinstance(item, dict)]
+    assert default_ids == [newer.id, older.id]
+    subject_body = JSON_VALUE_ADAPTER.validate_json(by_subject.content)
+    assert isinstance(subject_body, dict)
+    subject_ids = [item["id"] for item in subject_body["data"] if isinstance(item, dict)]
+    assert subject_ids == [newer.id, older.id]
+    subject_desc_body = JSON_VALUE_ADAPTER.validate_json(by_subject_desc.content)
+    assert isinstance(subject_desc_body, dict)
+    subject_desc_ids = [item["id"] for item in subject_desc_body["data"] if isinstance(item, dict)]
+    assert subject_desc_ids == [older.id, newer.id]
+    assert invalid.status_code == HTTPStatus.BAD_REQUEST
+    invalid_body = JSON_VALUE_ADAPTER.validate_json(invalid.content)
+    assert isinstance(invalid_body, dict)
+    error = invalid_body["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == "VALIDATION_ERROR"
+
+
 def test_handover_task_list_exposes_delete_allowed_action_only_for_cancelled() -> None:
     client = _logged_in_superuser("handover-actions-admin")
     for status in ("pending", "in_progress", "completed", "cancelled"):

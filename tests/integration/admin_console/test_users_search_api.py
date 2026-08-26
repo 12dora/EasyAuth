@@ -141,6 +141,52 @@ def test_people_page_allows_superuser() -> None:
     assert any(item["user_id"] == person.authentik_user_id for item in items)
 
 
+def test_people_page_honors_ordering_and_rejects_unknown_field() -> None:
+    client = _logged_in_superuser("people-ordering-admin")
+    later_name = UserMirror.objects.create(
+        authentik_user_id="people-order-z",
+        name="Bob",
+        email="z@example.com",
+        department="B部",
+        status=USER_STATUS_DISABLED,
+    )
+    earlier_name = UserMirror.objects.create(
+        authentik_user_id="people-order-a",
+        name="Alice",
+        email="a@example.com",
+        department="A部",
+        status=USER_STATUS_DISABLED,
+    )
+
+    default = client.get(USERS_API_URL)
+    by_email = client.get(USERS_API_URL, {"ordering": "email"})
+    by_email_desc = client.get(USERS_API_URL, {"ordering": "-email"})
+    invalid = client.get(USERS_API_URL, {"ordering": "unknown"})
+
+    default_ids = _people_ids(cast("dict[str, JsonValue]", default.json()))
+    assert default_ids.index(earlier_name.authentik_user_id) < default_ids.index(
+        later_name.authentik_user_id,
+    )
+    email_ids = _people_ids(cast("dict[str, JsonValue]", by_email.json()))
+    assert email_ids.index(earlier_name.authentik_user_id) < email_ids.index(
+        later_name.authentik_user_id,
+    )
+    email_desc_ids = _people_ids(cast("dict[str, JsonValue]", by_email_desc.json()))
+    assert email_desc_ids.index(later_name.authentik_user_id) < email_desc_ids.index(
+        earlier_name.authentik_user_id,
+    )
+    assert invalid.status_code == HTTPStatus.BAD_REQUEST
+    payload = cast("dict[str, JsonValue]", invalid.json())
+    error = payload["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == "VALIDATION_ERROR"
+
+
+def _people_ids(payload: dict[str, JsonValue]) -> list[str]:
+    items = cast("list[dict[str, JsonValue]]", payload["data"])
+    return [str(item["user_id"]) for item in items]
+
+
 def test_user_search_rejects_non_superuser() -> None:
     client = _logged_in_console_user("user-search-ordinary-user")
 

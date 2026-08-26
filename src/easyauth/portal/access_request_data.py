@@ -50,9 +50,14 @@ def access_request_items_for_user(user: UserMirror) -> tuple[PortalJsonObject, .
     return _items_for_access_requests(tuple(_access_requests_queryset(user)))
 
 
-def access_request_page_for_user(user: UserMirror, query: QueryDict) -> PortalPage:
+def access_request_page_for_user(
+    user: UserMirror,
+    query: QueryDict,
+    *,
+    ordering: tuple[str, ...],
+) -> PortalPage:
     # 分页下推到 queryset: 先 count + 切片, 再只对当前页 hydrate, 不再全量载入内存(BF-6)。
-    queryset = _access_requests_queryset(user)
+    queryset = _access_requests_queryset(user).order_by(*ordering)
     request = page_request(query)
     total_items = queryset.count()
     access_requests = tuple(queryset[request.start : request.stop])

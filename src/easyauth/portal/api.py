@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from django.http import HttpRequest, JsonResponse
 from pydantic import ValidationError
@@ -21,6 +21,7 @@ from easyauth.access_requests.services import (
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.api.errors import ErrorCode, JsonValue
+from easyauth.api.ordering import parse_ordering
 from easyauth.api.pagination import pagination_item
 from easyauth.api.responses import error_response as _error_response
 from easyauth.api.responses import json_response as _json_response
@@ -47,6 +48,19 @@ type PortalApiResult = UserMirror | JsonResponse
 
 MIN_EXPIRING_DAYS = 1
 MAX_EXPIRING_DAYS = 90
+PORTAL_GRANT_ORDERING: Final[dict[str, str]] = {
+    "app_key": "app__app_key",
+    "expires_at": "expires_at",
+    "created_at": "created_at",
+}
+PORTAL_GRANT_DEFAULT_ORDER: Final[tuple[str, ...]] = ("app__app_key", "id")
+PORTAL_ACCESS_REQUEST_ORDERING: Final[dict[str, str]] = {
+    "created_at": "submitted_at",
+    "status": "status",
+    "app_key": "app__app_key",
+    "expires_at": "grant_expires_at",
+}
+PORTAL_ACCESS_REQUEST_DEFAULT_ORDER: Final[tuple[str, ...]] = ("-submitted_at", "id")
 
 
 @dataclass(frozen=True, slots=True)
@@ -63,8 +77,13 @@ def portal_grants(request: HttpRequest) -> JsonResponse:
             pass
         case JsonResponse() as response:
             return response
+    match parse_ordering(request, PORTAL_GRANT_ORDERING, PORTAL_GRANT_DEFAULT_ORDER):
+        case JsonResponse() as response:
+            return response
+        case tuple() as ordering:
+            pass
     try:
-        page = current_grant_page_for_user(user, request.GET)
+        page = current_grant_page_for_user(user, request.GET, ordering=ordering)
     except ManagedUsersResolutionUnavailableError as error:
         return _directory_unavailable_response(error)
     except ValueError as error:
@@ -83,8 +102,13 @@ def portal_expiring_grants(request: HttpRequest) -> JsonResponse:
             pass
         case JsonResponse() as response:
             return response
+    match parse_ordering(request, PORTAL_GRANT_ORDERING, PORTAL_GRANT_DEFAULT_ORDER):
+        case JsonResponse() as response:
+            return response
+        case tuple() as ordering:
+            pass
     try:
-        page = expiring_grant_page_for_user(user, request.GET, days=days)
+        page = expiring_grant_page_for_user(user, request.GET, days=days, ordering=ordering)
     except ManagedUsersResolutionUnavailableError as error:
         return _directory_unavailable_response(error)
     except ValueError as error:
@@ -116,8 +140,19 @@ def portal_access_requests(request: HttpRequest) -> JsonResponse:
             return response
     match request.method:
         case "GET":
+            match parse_ordering(
+                request,
+                PORTAL_ACCESS_REQUEST_ORDERING,
+                PORTAL_ACCESS_REQUEST_DEFAULT_ORDER,
+            ):
+                case JsonResponse() as response:
+                    return response
+                case tuple() as ordering:
+                    pass
             try:
-                return _page_response(access_request_page_for_user(user, request.GET))
+                return _page_response(
+                    access_request_page_for_user(user, request.GET, ordering=ordering),
+                )
             except ValueError as error:
                 return _query_validation_response(str(error))
         case "POST":

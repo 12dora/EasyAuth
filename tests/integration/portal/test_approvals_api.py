@@ -323,6 +323,50 @@ def test_non_approver_cannot_operate_or_view_detail() -> None:
     assert access_request.status == "submitted"
 
 
+def test_portal_approvals_honors_ordering_and_rejects_unknown_field() -> None:
+    client, approver = logged_in_client("portal-order-approver")
+    first = _submitted_request(
+        "portal-order-applicant-z",
+        "portal-order-app-z",
+        approver_id=approver.authentik_user_id,
+    )
+    second = _submitted_request(
+        "portal-order-applicant-a",
+        "portal-order-app-a",
+        approver_id=approver.authentik_user_id,
+    )
+    first.user.name = "Zoe"
+    first.user.save(update_fields=["name"])
+    second.user.name = "Ann"
+    second.user.save(update_fields=["name"])
+
+    default = client.get("/portal/api/v1/me/approvals")
+    by_app = client.get("/portal/api/v1/me/approvals", {"ordering": "app_key"})
+    by_applicant_desc = client.get("/portal/api/v1/me/approvals", {"ordering": "-applicant"})
+    invalid = client.get("/portal/api/v1/me/approvals", {"ordering": "unknown"})
+
+    assert _approval_ids(default.content) == [first.id, second.id]
+    assert _approval_ids(by_app.content) == [second.id, first.id]
+    assert _approval_ids(by_applicant_desc.content) == [first.id, second.id]
+    assert invalid.status_code == HTTPStatus.BAD_REQUEST
+    error = _json_object(invalid.content)["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == "VALIDATION_ERROR"
+
+
+def _approval_ids(content: bytes) -> list[int]:
+    body = _json_object(content)
+    data = body["data"]
+    assert isinstance(data, list)
+    result: list[int] = []
+    for item in data:
+        assert isinstance(item, dict)
+        request_id = item["id"]
+        assert isinstance(request_id, int)
+        result.append(request_id)
+    return result
+
+
 def test_processed_filter_returns_my_decisions() -> None:
     # Given: 审批人已驳回一条申请。
     client, approver = logged_in_client("portal-history-approver")

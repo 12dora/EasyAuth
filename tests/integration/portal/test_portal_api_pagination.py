@@ -147,6 +147,84 @@ def test_portal_access_requests_returns_requested_page_for_session_user() -> Non
     )
 
 
+def test_portal_grants_honors_ordering_and_rejects_unknown_field() -> None:
+    client, user = logged_in_client("portal-order-grants-user")
+    later = _create_grant(user=user, app_key="portal-order-z", expires_in_days=10)
+    earlier = _create_grant(user=user, app_key="portal-order-a", expires_in_days=2)
+
+    default = client.get(GRANTS_API_URL)
+    by_app_desc = client.get(GRANTS_API_URL, {"ordering": "-app_key"})
+    by_expires = client.get(GRANTS_API_URL, {"ordering": "expires_at"})
+    invalid = client.get(GRANTS_API_URL, {"ordering": "unknown"})
+
+    assert [item["app_key"] for item in _json_payload(default).data] == [
+        earlier.app.app_key,
+        later.app.app_key,
+    ]
+    assert [item["app_key"] for item in _json_payload(by_app_desc).data] == [
+        later.app.app_key,
+        earlier.app.app_key,
+    ]
+    assert [item["app_key"] for item in _json_payload(by_expires).data] == [
+        earlier.app.app_key,
+        later.app.app_key,
+    ]
+    assert invalid.status_code == HTTPStatus.BAD_REQUEST
+    assert invalid.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_portal_expiring_grants_honors_ordering_and_rejects_unknown_field() -> None:
+    client, user = logged_in_client("portal-order-expiring-user")
+    later = _create_grant(user=user, app_key="portal-order-exp-z", expires_in_days=8)
+    earlier = _create_grant(user=user, app_key="portal-order-exp-a", expires_in_days=3)
+
+    default = client.get(EXPIRING_API_URL)
+    by_app_desc = client.get(EXPIRING_API_URL, {"ordering": "-app_key"})
+    invalid = client.get(EXPIRING_API_URL, {"ordering": "unknown"})
+
+    assert [item["app_key"] for item in _json_payload(default).data] == [
+        earlier.app.app_key,
+        later.app.app_key,
+    ]
+    assert [item["app_key"] for item in _json_payload(by_app_desc).data] == [
+        later.app.app_key,
+        earlier.app.app_key,
+    ]
+    assert invalid.status_code == HTTPStatus.BAD_REQUEST
+    assert invalid.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
+def test_portal_access_requests_honors_ordering_and_rejects_unknown_field() -> None:
+    client, user = logged_in_client("portal-order-requests-user")
+    app_z = App.objects.create(app_key="portal-order-req-z", name="Z")
+    app_a = App.objects.create(app_key="portal-order-req-a", name="A")
+    older = AccessRequest.objects.create(
+        user=user,
+        app=app_z,
+        reason="旧申请",
+        idempotency_key="portal-order-req-old",
+        payload_digest="a" * 64,
+    )
+    newer = AccessRequest.objects.create(
+        user=user,
+        app=app_a,
+        reason="新申请",
+        idempotency_key="portal-order-req-new",
+        payload_digest="b" * 64,
+    )
+
+    default = client.get(REQUESTS_API_URL)
+    by_app = client.get(REQUESTS_API_URL, {"ordering": "app_key"})
+    by_app_desc = client.get(REQUESTS_API_URL, {"ordering": "-app_key"})
+    invalid = client.get(REQUESTS_API_URL, {"ordering": "unknown"})
+
+    assert [item["id"] for item in _json_payload(default).data] == [newer.id, older.id]
+    assert [item["id"] for item in _json_payload(by_app).data] == [newer.id, older.id]
+    assert [item["id"] for item in _json_payload(by_app_desc).data] == [older.id, newer.id]
+    assert invalid.status_code == HTTPStatus.BAD_REQUEST
+    assert invalid.json()["error"]["code"] == "VALIDATION_ERROR"
+
+
 @pytest.mark.parametrize(
     ("url", "query", "message"),
     [

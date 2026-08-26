@@ -194,6 +194,46 @@ def test_non_superuser_cannot_access_teams() -> None:
     assert not Team.objects.filter(name="越权新建组").exists()
 
 
+def test_teams_list_honors_ordering_and_rejects_unknown_field() -> None:
+    # Given: 两个团队, 成员数与名称顺序相反。
+    client = _logged_in_superuser("teams-ordering-admin")
+    small = Team.objects.create(name="A-排序组")
+    large = Team.objects.create(name="B-排序组")
+    member = UserMirror.objects.create(authentik_user_id="teams-order-member", name="成员")
+    _ = TeamMember.objects.create(team=large, user=member, role="member")
+
+    # When
+    default = client.get("/console/api/v1/teams")
+    by_count = client.get("/console/api/v1/teams", {"ordering": "-member_count"})
+    by_count_asc = client.get("/console/api/v1/teams", {"ordering": "member_count"})
+    invalid = client.get("/console/api/v1/teams", {"ordering": "unknown"})
+
+    # Then: 默认按 name; member_count 可排序; 未知字段 400。
+    assert [_team_name(item) for item in _response_json(default)["data"]] == [
+        small.name,
+        large.name,
+    ]
+    assert [_team_name(item) for item in _response_json(by_count)["data"]] == [
+        large.name,
+        small.name,
+    ]
+    assert [_team_name(item) for item in _response_json(by_count_asc)["data"]] == [
+        small.name,
+        large.name,
+    ]
+    assert invalid.status_code == HTTPStatus.BAD_REQUEST
+    error = _response_json(invalid)["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == "VALIDATION_ERROR"
+
+
+def _team_name(item: JsonValue) -> str:
+    assert isinstance(item, dict)
+    name = item["name"]
+    assert isinstance(name, str)
+    return name
+
+
 def _logged_in_superuser(username: str) -> Client:
     _ = User.objects.create_superuser(username=username, password=LOGIN_VALUE)
     client = Client(HTTP_HOST="localhost")

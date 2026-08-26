@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Final, cast
 
 from django.http import HttpRequest, JsonResponse
 
@@ -23,6 +23,7 @@ from easyauth.admin_console.operation_filters import (
 from easyauth.admin_console.permission_template_api_data import template_version_item
 from easyauth.admin_console.request_guards import require_console_actor
 from easyauth.api.errors import ErrorCode, JsonValue
+from easyauth.api.ordering import parse_ordering
 from easyauth.api.pagination import pagination_item
 from easyauth.applications.configuration import (
     ConfigurationIssue,
@@ -53,6 +54,14 @@ if TYPE_CHECKING:
 
 type VisibleAppResult = App | JsonResponse
 
+CONSOLE_APP_ORDERING: Final[dict[str, str]] = {
+    "app_key": "app_key",
+    "name": "name",
+    "status": "is_active",
+    "updated_at": "updated_at",
+}
+CONSOLE_APP_DEFAULT_ORDER: Final[tuple[str, ...]] = ("app_key",)
+
 
 def list_console_apps(request: HttpRequest) -> JsonResponse:
     if request.method != "GET":
@@ -64,8 +73,16 @@ def list_console_apps(request: HttpRequest) -> JsonResponse:
         case JsonResponse() as response:
             return response
 
+    match parse_ordering(request, CONSOLE_APP_ORDERING, CONSOLE_APP_DEFAULT_ORDER):
+        case JsonResponse() as response:
+            return response
+        case tuple() as ordering:
+            pass
     try:
-        page = paginate_queryset(_filter_apps(_visible_apps_queryset(actor), request), request.GET)
+        page = paginate_queryset(
+            _filter_apps(_visible_apps_queryset(actor), request).order_by(*ordering),
+            request.GET,
+        )
     except OperationFilterValidationError as exc:
         return operation_filter_error_response(exc)
     return _items_response(_listed_app_items(actor, page.items), page)

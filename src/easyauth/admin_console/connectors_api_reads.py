@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import TYPE_CHECKING, ClassVar, Final, cast
 
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -35,6 +35,7 @@ from easyauth.admin_console.operation_filters import (
     paginate_queryset,
 )
 from easyauth.api.errors import JsonValue
+from easyauth.api.ordering import parse_ordering
 from easyauth.api.pagination import pagination_item
 from easyauth.applications.models import App
 from easyauth.applications.ownership import ConsoleActor
@@ -54,6 +55,13 @@ if TYPE_CHECKING:
     from easyauth.connectors.base import ConnectorProbe
 
 type JsonObject = dict[str, JsonValue]
+
+SYNC_RUN_ORDERING: Final[dict[str, str]] = {
+    "started_at": "started_at",
+    "trigger": "trigger",
+    "status": "status",
+}
+SYNC_RUN_DEFAULT_ORDER: Final[tuple[str, ...]] = ("-started_at", "-id")
 
 
 class ConnectorTestPayload(BaseModel):
@@ -210,9 +218,14 @@ def console_app_connector_sync_runs(
             return response
     if request.method != "GET":
         return method_not_allowed_response()
+    match parse_ordering(request, SYNC_RUN_ORDERING, SYNC_RUN_DEFAULT_ORDER):
+        case JsonResponse() as response:
+            return response
+        case tuple() as ordering:
+            pass
     try:
         page = paginate_queryset(
-            ConnectorSyncRun.objects.filter(instance=instance),
+            ConnectorSyncRun.objects.filter(instance=instance).order_by(*ordering),
             request.GET,
         )
     except OperationFilterValidationError as exc:

@@ -26,6 +26,69 @@ class HttpResponseLike(Protocol):
     content: bytes
 
 
+def test_approval_instances_list_honors_ordering_and_rejects_unknown_field() -> None:
+    client = _logged_in_superuser("ops-approval-ordering-admin")
+    first = _make_instance("ops-order-a", "alpha", "ops-order-origin-a", "biz-a")
+    second = _make_instance("ops-order-z", "beta", "ops-order-origin-z", "biz-z")
+
+    default = client.get("/console/api/v1/operations/approval-instances")
+    by_app = client.get(
+        "/console/api/v1/operations/approval-instances",
+        {"ordering": "app_key"},
+    )
+    by_app_desc = client.get(
+        "/console/api/v1/operations/approval-instances",
+        {"ordering": "-app_key"},
+    )
+    invalid = client.get(
+        "/console/api/v1/operations/approval-instances",
+        {"ordering": "unknown"},
+    )
+
+    assert _instance_ids(default) == [str(second.id), str(first.id)]
+    assert _instance_ids(by_app) == [str(first.id), str(second.id)]
+    assert _instance_ids(by_app_desc) == [str(second.id), str(first.id)]
+    assert invalid.status_code == HTTPStatus.BAD_REQUEST
+    error = _response_json(invalid)["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == ErrorCode.VALIDATION_ERROR
+
+
+def _make_instance(
+    app_key: str,
+    template_key: str,
+    originator_id: str,
+    biz_key: str,
+) -> ApprovalInstance:
+    app = App.objects.create(app_key=app_key, name=app_key)
+    template = ApprovalTemplate.objects.create(
+        app=app,
+        key=template_key,
+        name=template_key,
+        dingtalk_process_code=f"PROC-{template_key}",
+    )
+    originator = UserMirror.objects.create(authentik_user_id=originator_id)
+    return ApprovalInstance.objects.create(
+        app=app,
+        template=template,
+        biz_key=biz_key,
+        originator_user=originator,
+        payload_hash="0" * 64,
+    )
+
+
+def _instance_ids(response: HttpResponseLike) -> list[str]:
+    data = _response_json(response)["data"]
+    assert isinstance(data, list)
+    result: list[str] = []
+    for item in data:
+        assert isinstance(item, dict)
+        instance_id = item["instance_id"]
+        assert isinstance(instance_id, str)
+        result.append(instance_id)
+    return result
+
+
 def test_redeliver_uses_atomic_failed_to_pending_transition() -> None:
     # Given: 两个请求都针对同一条失败的审批结果投递。
     client = _logged_in_superuser("ops-approval-redeliver-admin")

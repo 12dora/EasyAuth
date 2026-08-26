@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from django.http import HttpRequest, JsonResponse
 
@@ -17,6 +17,7 @@ from easyauth.admin_console.operation_filters import (
     paginate_queryset,
 )
 from easyauth.api.errors import ErrorCode
+from easyauth.api.ordering import parse_ordering
 from easyauth.api.pagination import pagination_item
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.webhooks.delivery import WebhookRedeliveryConflictError, redeliver
@@ -32,6 +33,14 @@ if TYPE_CHECKING:
 
 type JsonObject = dict[str, "JsonValue"]
 
+APPROVAL_INSTANCE_ORDERING: Final[dict[str, str]] = {
+    "created_at": "created_at",
+    "status": "status",
+    "app_key": "app__app_key",
+    "template": "template__key",
+}
+APPROVAL_INSTANCE_DEFAULT_ORDER: Final[tuple[str, ...]] = ("-created_at",)
+
 
 def operations_approval_instances(request: HttpRequest) -> JsonResponse:
     match require_superuser(request):
@@ -41,8 +50,13 @@ def operations_approval_instances(request: HttpRequest) -> JsonResponse:
             return response
     if request.method != "GET":
         return method_not_allowed_response()
+    match parse_ordering(request, APPROVAL_INSTANCE_ORDERING, APPROVAL_INSTANCE_DEFAULT_ORDER):
+        case JsonResponse() as response:
+            return response
+        case tuple() as ordering:
+            pass
     try:
-        page = paginate_queryset(_filtered_instances(request), request.GET)
+        page = paginate_queryset(_filtered_instances(request).order_by(*ordering), request.GET)
     except OperationFilterValidationError as exc:
         return operation_filter_error_response(exc)
     items: list[JsonValue] = [_instance_item(instance) for instance in page.items]
@@ -107,7 +121,7 @@ def _filtered_instances(request: HttpRequest) -> QuerySet[ApprovalInstance]:
         "template",
         "originator_user",
         "completion_delivery",
-    ).order_by("-created_at")
+    )
     status = request.GET.get("status", "").strip()
     if status and status in APPROVAL_STATUS_VALUES:
         queryset = queryset.filter(status=status)

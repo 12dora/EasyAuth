@@ -4,6 +4,7 @@ from http import HTTPStatus
 from typing import TYPE_CHECKING, ClassVar, Final
 
 from django.db import IntegrityError, transaction
+from django.db.models import Count
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
@@ -21,6 +22,7 @@ from easyauth.admin_console.operation_filters import (
 )
 from easyauth.admin_console.request_guards import require_console_actor
 from easyauth.api.errors import ErrorCode, JsonValue
+from easyauth.api.ordering import parse_ordering
 from easyauth.api.pagination import pagination_item
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.teams.models import (
@@ -39,6 +41,13 @@ type MemberLookupResult = TeamMember | JsonResponse
 
 INVALID_ROLE_MESSAGE: Final = "角色必须为 leader 或 member。"
 TEAMS_FORBIDDEN_MESSAGE: Final = "只有控制台超级管理员可以管理团队。"
+TEAM_LIST_ORDERING: Final[dict[str, str]] = {
+    "name": "name",
+    "status": "is_active",
+    "created_at": "created_at",
+    "member_count": "member_count",
+}
+TEAM_LIST_DEFAULT_ORDER: Final[tuple[str, ...]] = ("name",)
 
 
 class TeamCreatePayload(BaseModel):
@@ -108,8 +117,16 @@ def console_teams(request: HttpRequest) -> JsonResponse:
         case actor:
             pass
     if request.method == "GET":
+        match parse_ordering(request, TEAM_LIST_ORDERING, TEAM_LIST_DEFAULT_ORDER):
+            case JsonResponse() as response:
+                return response
+            case tuple() as ordering:
+                pass
         try:
-            page = paginate_queryset(Team.objects.order_by("name"), request.GET)
+            page = paginate_queryset(
+                Team.objects.annotate(member_count=Count("members")).order_by(*ordering),
+                request.GET,
+            )
         except OperationFilterValidationError as exc:
             return operation_filter_error_response(exc)
         teams = tuple(page.items)

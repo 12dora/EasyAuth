@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from http import HTTPStatus
 from json import dumps
 from typing import Any, Final, Protocol
@@ -7,6 +8,7 @@ from typing import Any, Final, Protocol
 import pytest
 from django.contrib.auth.models import User
 from django.test import Client
+from django.utils import timezone
 from pydantic import TypeAdapter
 
 from easyauth.api.errors import JsonValue
@@ -400,6 +402,43 @@ def test_ops1_template_confirm_api_rejects_developer_but_versions_are_readable()
     assert PermissionTemplateVersion.objects.filter(app=app).count() == 0
     assert PermissionGroup.objects.filter(app=app).count() == 0
     assert Permission.objects.filter(app=app).count() == 0
+
+
+def test_ops1_template_versions_api_honors_ordering_and_rejects_unknown_field() -> None:
+    client = _logged_in_client("ops1-manifest-ordering-owner")
+    app = _member_app("ops1-manifest-ordering", "ops1-manifest-ordering-owner", "owner")
+    older = timezone.now() - timedelta(days=1)
+    newer = timezone.now()
+    _ = PermissionTemplateVersion.objects.create(
+        app=app,
+        version=1,
+        source="manual",
+        content_hash="a" * 64,
+        imported_by="ops1-manifest-ordering-owner",
+        imported_at=older,
+    )
+    _ = PermissionTemplateVersion.objects.create(
+        app=app,
+        version=2,
+        source="manual",
+        content_hash="b" * 64,
+        imported_by="ops1-manifest-ordering-owner",
+        imported_at=newer,
+    )
+    url = f"/console/api/v1/apps/{app.app_key}/permission-template-versions"
+
+    default = client.get(url)
+    by_imported = client.get(url, {"ordering": "imported_at"})
+    by_imported_desc = client.get(url, {"ordering": "-imported_at"})
+    invalid = client.get(url, {"ordering": "unknown"})
+
+    assert [item["version"] for item in _json_object(default)["data"]] == [2, 1]
+    assert [item["version"] for item in _json_object(by_imported)["data"]] == [1, 2]
+    assert [item["version"] for item in _json_object(by_imported_desc)["data"]] == [2, 1]
+    assert invalid.status_code == HTTPStatus.BAD_REQUEST
+    error = _json_object(invalid)["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == "VALIDATION_ERROR"
 
 
 def test_ops1_manifest_export_api_returns_replayable_current_state_without_secrets() -> None:
