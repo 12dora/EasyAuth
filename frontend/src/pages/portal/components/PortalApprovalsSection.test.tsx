@@ -3,7 +3,12 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { AppConfigProvider } from "../../../components/antd/AppConfigProvider";
 import { PortalApprovalsSection } from "./PortalApprovalsSection";
+
+// antd Table 在 jsdom 里每次筛选/排序/翻页都要重建整棵表格, 比自研原语慢得多,
+// 整套用例并行跑时默认 5s 不够; 这里只放宽本文件的用例超时。
+vi.setConfig({ testTimeout: 20000 });
 
 const PENDING_LIST_URL = "/portal/api/v1/me/approvals?status=pending&page=1&page_size=20";
 const PROCESSED_LIST_URL = "/portal/api/v1/me/approvals?status=processed&page=1&page_size=20";
@@ -521,11 +526,13 @@ describe("PortalApprovalsSection", () => {
     const user = userEvent.setup();
 
     renderSection();
-    expect(await screen.findByText("第 1-1 条 / 共 21 条")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "下一页" }));
+    // antd 的区间文案按 page/page_size 推算, 不按当前页实际行数收窄。
+    expect(await screen.findByText("第 1-20 条 / 共 21 条")).toBeVisible();
+    await user.click(screen.getByTitle("下一页"));
 
     await waitFor(() => expect(fetchMock.mock.calls.some(([input]) => String(input) === pageTwoUrl)).toBe(true));
-    expect(await screen.findByText("1 / 1")).toBeVisible();
+    expect(await screen.findByText("第 1-1 条 / 共 1 条")).toBeVisible();
+    expect(screen.getByTitle("下一页")).toHaveClass("ant-pagination-disabled");
     await waitFor(() => {
       expect(fetchMock.mock.calls.filter(([input]) => String(input) === PENDING_LIST_URL).length).toBeGreaterThan(1);
     });
@@ -646,7 +653,9 @@ function renderSection(staleTime = 0) {
 
   render(
     <QueryClientProvider client={client}>
-      <PortalApprovalsSection />
+      <AppConfigProvider>
+        <PortalApprovalsSection />
+      </AppConfigProvider>
     </QueryClientProvider>,
   );
 }

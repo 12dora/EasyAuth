@@ -1,8 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UseQueryResult } from "@tanstack/react-query";
-import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import type { ApprovalDecisionMode } from "../../../components/ApprovalDecisionDialog";
+import { useServerTable, type UseServerTableResult } from "../../../components/antd/AppTable";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { ApiError, apiRequest } from "../../../lib/api";
 
@@ -22,18 +23,12 @@ import {
   type PortalApprovalRow,
 } from "./portalApprovalTypes";
 
-interface ApprovalPagination {
-  pageIndex: number;
-  pageSize: number;
-}
-
 export interface PortalApprovalsController {
   tab: ApprovalTab;
   switchTab: (nextTab: ApprovalTab) => void;
-  pagination: ApprovalPagination;
-  setPagination: Dispatch<SetStateAction<ApprovalPagination>>;
-  clampedPageIndex: number;
-  totalPages: number;
+  /** 分页状态与 antd onChange 的唯一容器; 排序/筛选在这张表上都是客户端行为。 */
+  serverTable: UseServerTableResult<PortalApprovalRow>;
+  totalItems: number;
   query: UseQueryResult<ApprovalListPayload, Error>;
   approvals: PortalApprovalRow[];
   detail: ApprovalDetailState;
@@ -51,7 +46,13 @@ export function usePortalApprovals(): PortalApprovalsController {
   const { t } = useI18n();
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<ApprovalTab>("pending");
-  const [pagination, setPagination] = useState<ApprovalPagination>({ pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE });
+  // 后端只认 status(由页签给出)+page+page_size: serializeSort 置空,
+  // 表头排序退化为 antd 对当前页的客户端排序。
+  const serverTable = useServerTable<PortalApprovalRow>({
+    defaultPageSize: DEFAULT_PAGE_SIZE,
+    serializeSort: () => ({}),
+  });
+  const { page, page_size: pageSize } = serverTable.params;
   const [pendingDecision, setPendingDecision] = useState<PendingDecision | null>(null);
   const [noticeKey, setNoticeKey] = useState<ApprovalNoticeKey>("");
   const [detailRequestVersion, setDetailRequestVersion] = useState(0);
@@ -59,11 +60,11 @@ export function usePortalApprovals(): PortalApprovalsController {
   const pendingApprovalId = pendingDecision?.approval.id;
 
   const query = useQuery({
-    queryKey: ["portal", "approvals", tab, pagination.pageIndex, pagination.pageSize],
+    queryKey: ["portal", "approvals", tab, page, pageSize],
     queryFn: async () =>
       parseApprovalListPayload(
         await apiRequest<unknown>(
-          `/portal/api/v1/me/approvals?status=${tab}&page=${pagination.pageIndex + 1}&page_size=${pagination.pageSize}`,
+          `/portal/api/v1/me/approvals?status=${tab}&page=${page}&page_size=${pageSize}`,
         ),
         t("portal.approvals.invalidPayload"),
       ),
@@ -121,16 +122,22 @@ export function usePortalApprovals(): PortalApprovalsController {
   };
   const switchTab = (nextTab: ApprovalTab) => {
     setTab(nextTab);
-    setPagination((current) => (current.pageIndex === 0 ? current : { ...current, pageIndex: 0 }));
+    serverTable.setPage(1);
   };
 
-  const totalPages = query.data?.pagination.total_pages ?? 0;
-  const clampedPageIndex = totalPages === 0 ? 0 : Math.min(pagination.pageIndex, totalPages - 1);
+  // 服务端总页数收缩时(别的审批人先处理掉了)当前页可能已越界, 钳回最后一页。
+  const totalPages = query.data?.pagination.total_pages;
+  const currentPage = serverTable.query.page;
+  const setPage = serverTable.setPage;
   useEffect(() => {
-    if (pagination.pageIndex !== clampedPageIndex) {
-      setPagination((current) => ({ ...current, pageIndex: clampedPageIndex }));
+    if (totalPages === undefined) {
+      return;
     }
-  }, [clampedPageIndex, pagination.pageIndex]);
+    const lastPage = Math.max(1, totalPages);
+    if (currentPage > lastPage) {
+      setPage(lastPage);
+    }
+  }, [currentPage, setPage, totalPages]);
 
   const dialogErrorMessage =
     decisionMutation.error && !(decisionMutation.error instanceof ApiError && decisionMutation.error.status === 409)
@@ -140,10 +147,8 @@ export function usePortalApprovals(): PortalApprovalsController {
   return {
     tab,
     switchTab,
-    pagination,
-    setPagination,
-    clampedPageIndex,
-    totalPages,
+    serverTable,
+    totalItems: query.data?.pagination.total_items ?? 0,
     query,
     approvals: query.data?.data ?? [],
     detail: {

@@ -1,10 +1,15 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { AppConfigProvider } from "../../../../components/antd/AppConfigProvider";
 import { ManifestTab } from "./ManifestTab";
+
+// antd Table 在 jsdom 里每次筛选/排序/翻页都要重建整棵表格, 比自研原语慢得多,
+// 整套用例并行跑时默认 5s 不够; 这里只放宽本文件的用例超时。
+vi.setConfig({ testTimeout: 20000 });
 
 describe("ManifestTab", () => {
   afterEach(() => {
@@ -233,8 +238,10 @@ describe("ManifestTab", () => {
     renderWithClient(<ManifestTab appKey="demo" />);
 
     expect(await screen.findByText("v21")).toBeInTheDocument();
-    expect(screen.getByText("第 1-1 条 / 共 21 条")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "下一页" }));
+    const history = screen.getByRole("heading", { name: "版本历史" }).parentElement as HTMLElement;
+    // antd 的区间文案按 page/page_size 推算, 不按当前页实际行数收窄。
+    expect(within(history).getByText("第 1-20 条 / 共 21 条")).toBeInTheDocument();
+    await user.click(within(history).getByTitle("下一页"));
 
     expect(await screen.findByText("v1")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
@@ -251,7 +258,11 @@ function renderWithClient(ui: ReactElement) {
       mutations: { retry: false },
     },
   });
-  render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+  render(
+    <QueryClientProvider client={client}>
+      <AppConfigProvider>{ui}</AppConfigProvider>
+    </QueryClientProvider>,
+  );
 }
 
 function versionsResponse(data: unknown[] = [], page = 1, totalItems = 0, totalPages = 1) {

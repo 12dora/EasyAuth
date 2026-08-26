@@ -5,20 +5,27 @@ import { StrictMode } from "react";
 import { MemoryRouter, Outlet, Route, Routes } from "react-router-dom";
 import { describe, expect, test, vi } from "vitest";
 
+import { AppConfigProvider } from "../../components/antd/AppConfigProvider";
 import { PortalPage } from "./PortalPage";
+
+// antd Table 在 jsdom 里每次筛选/排序/翻页都要重建整棵表格, 比自研原语慢得多,
+// 整套用例并行跑时默认 5s 不够; 这里只放宽本文件的用例超时。
+vi.setConfig({ testTimeout: 20000 });
 
 function renderPortalPageWithUser(currentUserId: string, initialEntry = "/portal/request") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[initialEntry]}>
-        <Routes>
-          <Route element={<Outlet context={{ currentUserId }} />}>
-            <Route path="/portal/request" element={<PortalPage view="request" />} />
-          </Route>
-        </Routes>
-      </MemoryRouter>
+      <AppConfigProvider>
+        <MemoryRouter initialEntries={[initialEntry]}>
+          <Routes>
+            <Route element={<Outlet context={{ currentUserId }} />}>
+              <Route path="/portal/request" element={<PortalPage view="request" />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </AppConfigProvider>
     </QueryClientProvider>,
   );
 }
@@ -34,14 +41,16 @@ function renderPortalPage(initialEntry = "/portal/request") {
 
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[initialEntry]}>
-        <Routes>
-          <Route path="/portal/request" element={<PortalPage view="request" />} />
-          <Route path="/portal/requests" element={<PortalPage view="requests" />} />
-          <Route path="/portal/expiring" element={<PortalPage view="expiring" />} />
-          <Route path="/portal" element={<PortalPage view="grants" />} />
-        </Routes>
-      </MemoryRouter>
+      <AppConfigProvider>
+        <MemoryRouter initialEntries={[initialEntry]}>
+          <Routes>
+            <Route path="/portal/request" element={<PortalPage view="request" />} />
+            <Route path="/portal/requests" element={<PortalPage view="requests" />} />
+            <Route path="/portal/expiring" element={<PortalPage view="expiring" />} />
+            <Route path="/portal" element={<PortalPage view="grants" />} />
+          </Routes>
+        </MemoryRouter>
+      </AppConfigProvider>
     </QueryClientProvider>,
   );
 }
@@ -58,11 +67,13 @@ function renderPortalPageStrict(initialEntry = "/portal/request") {
   render(
     <StrictMode>
       <QueryClientProvider client={client}>
-        <MemoryRouter initialEntries={[initialEntry]}>
-          <Routes>
-            <Route path="/portal/request" element={<PortalPage view="request" />} />
-          </Routes>
-        </MemoryRouter>
+        <AppConfigProvider>
+          <MemoryRouter initialEntries={[initialEntry]}>
+            <Routes>
+              <Route path="/portal/request" element={<PortalPage view="request" />} />
+            </Routes>
+          </MemoryRouter>
+        </AppConfigProvider>
       </QueryClientProvider>
     </StrictMode>,
   );
@@ -1702,10 +1713,11 @@ describe("PortalPage tables", () => {
       expect(screen.getByText(/dashboard\.view:GLOBAL/)).toBeVisible();
       expect(screen.getByText(/direct/)).toBeVisible();
       expect(screen.getByText("授权 3 / 目录 7 / 快照 3.7")).toBeVisible();
-      expect(screen.getByText("第 1-1 条 / 共 21 条")).toBeVisible();
+      // antd 的区间文案按 page/page_size 推算, 不按当前页实际行数收窄。
+      expect(screen.getByText("第 1-20 条 / 共 21 条")).toBeVisible();
 
-      const nextPage = screen.getByRole("button", { name: "下一页" });
-      expect(nextPage).toBeEnabled();
+      const nextPage = screen.getByTitle("下一页");
+      expect(nextPage).not.toHaveClass("ant-pagination-disabled");
       await userEvent.click(nextPage);
 
       expect(await screen.findByText("ERP")).toBeVisible();
@@ -1744,7 +1756,8 @@ describe("PortalPage tables", () => {
       expect(await screen.findByText("即将过期 CRM")).toBeVisible();
       expect(screen.getByRole("heading", { name: "即将过期" })).toBeVisible();
 
-      await userEvent.selectOptions(screen.getByLabelText("每页条目数"), "50");
+      await userEvent.click(document.querySelector(".ant-pagination-options .ant-select-selector") as HTMLElement);
+      await userEvent.click(await screen.findByTitle("50 条/页"));
 
       await waitFor(() =>
         expect(fetchMock).toHaveBeenCalledWith(
@@ -1786,13 +1799,13 @@ describe("PortalPage tables", () => {
       renderPortalPage("/portal");
       expect(await screen.findByText("初始第一页")).toBeVisible();
 
-      const nextPage = screen.getByRole("button", { name: "下一页" });
-      expect(nextPage).toBeEnabled();
+      const nextPage = screen.getByTitle("下一页");
+      expect(nextPage).not.toHaveClass("ant-pagination-disabled");
       await userEvent.click(nextPage);
 
       expect(await screen.findByText("收缩后第一页")).toBeVisible();
-      expect(screen.getByText("1 / 1")).toBeVisible();
-      expect(screen.getByRole("button", { name: "下一页" })).toBeDisabled();
+      expect(screen.getByText("第 1-1 条 / 共 1 条")).toBeVisible();
+      expect(screen.getByTitle("下一页")).toHaveClass("ant-pagination-disabled");
       expect(firstPageRequests).toBe(2);
     } finally {
       vi.unstubAllGlobals();
@@ -1843,8 +1856,8 @@ describe("PortalPage tables", () => {
       expect(screen.getByText(/审批意见：同意按期开放/)).toBeVisible();
       expect(screen.getAllByText(/2026/).length).toBeGreaterThanOrEqual(3);
 
-      const nextPage = screen.getByRole("button", { name: "下一页" });
-      expect(nextPage).toBeEnabled();
+      const nextPage = screen.getByTitle("下一页");
+      expect(nextPage).not.toHaveClass("ant-pagination-disabled");
       await userEvent.click(nextPage);
 
       expect(await screen.findByText("ERP")).toBeVisible();

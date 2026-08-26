@@ -1,17 +1,10 @@
-import {
-  getCoreRowModel,
-  useReactTable,
-  type ColumnDef,
-  type PaginationState,
-} from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 
 import type { AppShellOutletContext } from "../../components/AppShell";
-import { TableCell } from "../../components/ui/TablePrimitives";
-import { TableView } from "../../components/ui/TableView";
-import { EmptyState } from "../../components/ui/EmptyState";
+import { AppTable, useServerTable, type ColumnsType } from "../../components/antd/AppTable";
+import { actionsColumn, dateTimeColumn, textColumn } from "../../components/antd/columns";
 import { PageState } from "../../components/ui/PageState";
 import { MONO_TEXT_CLASS } from "../../components/ui/tableStyles";
 
@@ -74,42 +67,72 @@ export function PortalPage({ view }: { view: PortalView }) {
 
 function PortalGrantSection({ endpoint, emptyText }: { endpoint: string; emptyText: string }) {
   const { t } = useI18n();
-  const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE });
+  // 门户授权列表只支持 page/page_size: serializeSort 置空, 表头排序退化为
+  // antd 对当前页的客户端排序, 不冒充服务端排序。
+  const serverTable = useServerTable<PortalGrantRow>({
+    defaultPageSize: DEFAULT_PAGE_SIZE,
+    serializeSort: () => ({}),
+  });
+  const { page, page_size: pageSize } = serverTable.params;
   const query = useQuery({
-    queryKey: ["portal", endpoint, pagination.pageIndex, pagination.pageSize],
+    queryKey: ["portal", endpoint, page, pageSize],
     queryFn: async () =>
-      parsePortalGrantList(
-        await apiRequest<unknown>(`${endpoint}?page=${pagination.pageIndex + 1}&page_size=${pagination.pageSize}`),
-      ),
+      parsePortalGrantList(await apiRequest<unknown>(`${endpoint}?page=${page}&page_size=${pageSize}`)),
   });
   const grants = query.data?.data ?? [];
-  useClampPage(query.data, setPagination);
-  const columns: ColumnDef<PortalGrantRow>[] = [
-    {
-      header: t("common.app"),
-      cell: ({ row }) => (
-        <div className="flex min-w-0 flex-col gap-1">
-          <strong>{row.original.app_name ?? row.original.app_key ?? "-"}</strong>
-          <code className={MONO_TEXT_CLASS}>{row.original.app_key ?? "-"}</code>
-        </div>
-      ),
-    },
-    { header: t("portal.column.groups"), cell: ({ row }) => formatGroups(row.original.groups) },
-    { id: "expanded_grants", header: t("portal.column.expandedGrants"), cell: ({ row }) => formatExpandedGrants(row.original.grants) },
-    { id: "grant_sources", header: t("common.source"), cell: ({ row }) => formatSources(row.original.grants) },
-    { header: t("portal.column.term"), cell: ({ row }) => grantTypeLabel(t, row.original.grant_type) },
-    { id: "versions", header: t("portal.column.versions"), cell: ({ row }) => formatVersions(t, row.original) },
-    { header: t("portal.column.expiresAt"), cell: ({ row }) => formatDateTime(row.original.grant_expires_at) },
-  ];
-  const table = useReactTable({
-    data: grants,
-    columns,
-    getCoreRowModel: getCoreRowModel(),
-    manualPagination: true,
-    pageCount: query.data?.pagination.total_pages ?? 0,
-    state: { pagination },
-    onPaginationChange: setPagination,
-  });
+  useClampPage(query.data, serverTable.query.page, serverTable.setPage);
+  const columns = useMemo<ColumnsType<PortalGrantRow>>(
+    () => [
+      {
+        key: "app",
+        title: t("common.app"),
+        width: 200,
+        sorter: (left, right) => (left.app_name ?? "").localeCompare(right.app_name ?? ""),
+        render: (_value: unknown, row: PortalGrantRow) => (
+          <div className="flex min-w-0 flex-col gap-1">
+            <strong className="truncate">{row.app_name ?? row.app_key ?? "-"}</strong>
+            <code className={MONO_TEXT_CLASS}>{row.app_key ?? "-"}</code>
+          </div>
+        ),
+      },
+      textColumn<PortalGrantRow>({
+        key: "groups",
+        title: t("portal.column.groups"),
+        getValue: (row) => formatGroups(row.groups),
+        ellipsis: false,
+      }),
+      textColumn<PortalGrantRow>({
+        key: "expanded_grants",
+        title: t("portal.column.expandedGrants"),
+        getValue: (row) => formatExpandedGrants(row.grants),
+        ellipsis: false,
+        mono: true,
+      }),
+      textColumn<PortalGrantRow>({
+        key: "grant_sources",
+        title: t("common.source"),
+        getValue: (row) => formatSources(row.grants),
+        ellipsis: false,
+        mono: true,
+      }),
+      textColumn<PortalGrantRow>({
+        key: "term",
+        title: t("portal.column.term"),
+        getValue: (row) => grantTypeLabel(t, row.grant_type),
+        width: 110,
+      }),
+      textColumn<PortalGrantRow>({
+        key: "versions",
+        title: t("portal.column.versions"),
+        getValue: (row) => formatVersions(t, row),
+        ellipsis: false,
+        mono: true,
+        width: 220,
+      }),
+      dateTimeColumn<PortalGrantRow>({ key: "grant_expires_at", title: t("portal.column.expiresAt") }),
+    ],
+    [t],
+  );
 
   return (
     <>
@@ -119,13 +142,19 @@ function PortalGrantSection({ endpoint, emptyText }: { endpoint: string; emptyTe
       {query.error && grants.length === 0 ? (
         <PageState tone="signal" title={t("portal.grants.loadFailed")} description={(query.error as Error).message} />
       ) : (
-        <PortalTable
-          table={table}
-          ariaLabel={t("portal.grants.ariaLabel")}
-          isLoading={query.isLoading}
-          emptyTitle={emptyText}
+        <AppTable<PortalGrantRow>
+          {...serverTable.tableProps}
+          columns={columns}
+          dataSource={grants}
           emptyDescription={t("portal.grants.emptyDescription")}
-          totalRows={query.data?.pagination.total_items ?? 0}
+          emptyTitle={emptyText}
+          loading={query.isLoading}
+          pagination={{
+            current: serverTable.query.page,
+            pageSize: serverTable.query.pageSize,
+            total: query.data?.pagination.total_items ?? 0,
+          }}
+          rowKey="grant_id"
         />
       )}
     </>
@@ -135,14 +164,16 @@ function PortalGrantSection({ endpoint, emptyText }: { endpoint: string; emptyTe
 function PortalRequestSection() {
   const { t } = useI18n();
   const queryClient = useQueryClient();
-  const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE });
+  const serverTable = useServerTable<PortalRequestRow>({
+    defaultPageSize: DEFAULT_PAGE_SIZE,
+    serializeSort: () => ({}),
+  });
+  const { page, page_size: pageSize } = serverTable.params;
   const query = useQuery({
-    queryKey: ["portal", "requests", pagination.pageIndex, pagination.pageSize],
+    queryKey: ["portal", "requests", page, pageSize],
     queryFn: async () =>
       parsePortalRequestList(
-        await apiRequest<unknown>(
-          `/portal/api/v1/me/access-requests?page=${pagination.pageIndex + 1}&page_size=${pagination.pageSize}`,
-        ),
+        await apiRequest<unknown>(`/portal/api/v1/me/access-requests?page=${page}&page_size=${pageSize}`),
       ),
   });
   const withdrawMutation = useMutation({
@@ -157,66 +188,63 @@ function PortalRequestSection() {
     },
   });
   const requests = query.data?.data ?? [];
-  useClampPage(query.data, setPagination);
-  const columns: ColumnDef<PortalRequestRow>[] = [
-    {
-      header: t("common.status"),
-      cell: ({ row }) => (
-        <div className="flex min-w-0 flex-col gap-1">
-          <span>
-            <Badge tone={badgeToneForAccessRequestStatus(row.original.status)}>
-              {row.original.status_label ?? accessRequestStatusLabel(t, row.original.status)}
-            </Badge>
-          </span>
-          {row.original.decision_comment ? (
-            <span className="max-w-64 whitespace-normal text-xs leading-4 text-ink-faint">
-              {t("approvals.comment")}：{row.original.decision_comment}（{formatDateTime(row.original.decided_at)}）
+  useClampPage(query.data, serverTable.query.page, serverTable.setPage);
+  const columns = useMemo<ColumnsType<PortalRequestRow>>(
+    () => [
+      {
+        key: "status",
+        title: t("common.status"),
+        width: 200,
+        render: (_value: unknown, row: PortalRequestRow) => (
+          <div className="flex min-w-0 flex-col gap-1">
+            <span>
+              <Badge tone={badgeToneForAccessRequestStatus(row.status)}>
+                {row.status_label ?? accessRequestStatusLabel(t, row.status)}
+              </Badge>
             </span>
-          ) : null}
-        </div>
-      ),
-    },
-    { header: t("common.app"), cell: ({ row }) => row.original.app_name ?? row.original.app_key ?? "-" },
-    { header: t("portal.column.groups"), cell: ({ row }) => formatGroups(row.original.authorization_groups) },
-    { id: "direct_grants", header: t("portal.column.directGrants"), cell: ({ row }) => formatDirectGrants(row.original.direct_grants) },
-    { header: t("portal.column.term"), cell: ({ row }) => grantTypeLabel(t, row.original.grant_type) },
-    { header: t("portal.column.expiresAt"), cell: ({ row }) => formatDateTime(row.original.grant_expires_at) },
-    { header: t("portal.column.submittedAt"), cell: ({ row }) => formatDateTime(row.original.submitted_at) },
-    { header: t("portal.column.reason"), cell: ({ row }) => row.original.reason ?? "-" },
-    {
-      id: "actions",
-      header: t("common.actions"),
-      cell: ({ row }) => {
-        const requestId = row.original.id;
-        if (row.original.status !== "submitted" || typeof requestId !== "number") {
-          return <TableCell>-</TableCell>;
-        }
-        return (
-          <TableCell>
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost-danger"
-              loading={withdrawMutation.isPending && withdrawMutation.variables === requestId}
-              disabled={withdrawMutation.isPending}
-              onClick={() => withdrawMutation.mutate(requestId)}
-            >
-              {t("portal.requests.withdraw")}
-            </Button>
-          </TableCell>
-        );
+            {row.decision_comment ? (
+              <span className="whitespace-normal text-xs leading-4 text-ink-faint">
+                {t("approvals.comment")}：{row.decision_comment}（{formatDateTime(row.decided_at)}）
+              </span>
+            ) : null}
+          </div>
+        ),
       },
-    },
-  ];
-  const table = useReactTable({
-    data: requests,
-    columns,
-    getCoreRowModel: getCoreRowModel(),
-    manualPagination: true,
-    pageCount: query.data?.pagination.total_pages ?? 0,
-    state: { pagination },
-    onPaginationChange: setPagination,
-  });
+      textColumn<PortalRequestRow>({
+        key: "app",
+        title: t("common.app"),
+        getValue: (row) => row.app_name ?? row.app_key,
+        sorter: true,
+        width: 140,
+      }),
+      textColumn<PortalRequestRow>({
+        key: "groups",
+        title: t("portal.column.groups"),
+        getValue: (row) => formatGroups(row.authorization_groups),
+        ellipsis: false,
+      }),
+      textColumn<PortalRequestRow>({
+        key: "direct_grants",
+        title: t("portal.column.directGrants"),
+        getValue: (row) => formatDirectGrants(row.direct_grants),
+        ellipsis: false,
+        mono: true,
+      }),
+      textColumn<PortalRequestRow>({
+        key: "term",
+        title: t("portal.column.term"),
+        getValue: (row) => grantTypeLabel(t, row.grant_type),
+        width: 110,
+      }),
+      dateTimeColumn<PortalRequestRow>({ key: "grant_expires_at", title: t("portal.column.expiresAt") }),
+      dateTimeColumn<PortalRequestRow>({ key: "submitted_at", title: t("portal.column.submittedAt") }),
+      textColumn<PortalRequestRow>({ key: "reason", title: t("portal.column.reason"), ellipsis: false }),
+      actionsColumn<PortalRequestRow>({
+        render: (row) => <WithdrawAction mutation={withdrawMutation} row={row} />,
+      }),
+    ],
+    [t, withdrawMutation],
+  );
 
   return (
     <>
@@ -229,48 +257,51 @@ function PortalRequestSection() {
       {query.error && requests.length === 0 ? (
         <PageState tone="signal" title={t("portal.requests.loadFailed")} description={(query.error as Error).message} />
       ) : (
-        <PortalTable
-          table={table}
-          ariaLabel={t("nav.portal.myRequests")}
-          isLoading={query.isLoading}
-          emptyTitle={t("portal.requests.empty")}
+        <AppTable<PortalRequestRow>
+          {...serverTable.tableProps}
+          columns={columns}
+          dataSource={requests}
           emptyDescription={t("portal.requests.emptyDescription")}
-          totalRows={query.data?.pagination.total_items ?? 0}
+          emptyTitle={t("portal.requests.empty")}
+          loading={query.isLoading}
+          minWidth={1400}
+          pagination={{
+            current: serverTable.query.page,
+            pageSize: serverTable.query.pageSize,
+            total: query.data?.pagination.total_items ?? 0,
+          }}
+          rowKey="id"
         />
       )}
     </>
   );
 }
 
-function PortalTable<T>({
-  table,
-  ariaLabel,
-  isLoading,
-  emptyTitle,
-  emptyDescription,
-  totalRows,
+/** 只有 submitted 状态的申请可撤回, 其余行留 "-" 保持列宽稳定。 */
+function WithdrawAction({
+  mutation,
+  row,
 }: {
-  table: ReturnType<typeof useReactTable<T>>;
-  ariaLabel: string;
-  isLoading: boolean;
-  emptyTitle: string;
-  emptyDescription: string;
-  totalRows: number;
+  mutation: ReturnType<typeof useMutation<unknown, Error, number>>;
+  row: PortalRequestRow;
 }) {
+  const { t } = useI18n();
+  const requestId = row.id;
+  if (row.status !== "submitted" || typeof requestId !== "number") {
+    return <>-</>;
+  }
   return (
-    <TableView
-      table={table}
-      ariaLabel={ariaLabel}
-      isLoading={isLoading}
-      totalItems={totalRows}
-      getCellClassName={(columnId) => isMonoPortalColumn(columnId) ? MONO_TEXT_CLASS : undefined}
-      empty={<EmptyState title={emptyTitle} description={emptyDescription} />}
-    />
+    <Button
+      type="button"
+      size="sm"
+      variant="ghost-danger"
+      loading={mutation.isPending && mutation.variables === requestId}
+      disabled={mutation.isPending}
+      onClick={() => mutation.mutate(requestId)}
+    >
+      {t("portal.requests.withdraw")}
+    </Button>
   );
-}
-
-function isMonoPortalColumn(columnId: string): boolean {
-  return ["expanded_grants", "grant_sources", "versions", "direct_grants"].includes(columnId);
 }
 
 function viewTitle(t: Translator, view: PortalView): string {
@@ -288,17 +319,22 @@ function viewTitle(t: Translator, view: PortalView): string {
   }
 }
 
-function useClampPage<T>(payload: PortalListPayload<T> | undefined, setPagination: React.Dispatch<React.SetStateAction<PaginationState>>) {
+/** 服务端总页数收缩时把当前页钳制回最后一页, 否则会停在不存在的空页。 */
+function useClampPage<T>(
+  payload: PortalListPayload<T> | undefined,
+  page: number,
+  setPage: (page: number) => void,
+) {
   const totalPages = payload?.pagination.total_pages;
   useEffect(() => {
     if (totalPages === undefined) {
       return;
     }
-    const lastPageIndex = Math.max(0, totalPages - 1);
-    setPagination((current) =>
-      current.pageIndex > lastPageIndex ? { ...current, pageIndex: lastPageIndex } : current,
-    );
-  }, [setPagination, totalPages]);
+    const lastPage = Math.max(1, totalPages);
+    if (page > lastPage) {
+      setPage(lastPage);
+    }
+  }, [page, setPage, totalPages]);
 }
 
 function formatGroups(groups: PortalGrantRow["groups"] | PortalRequestRow["authorization_groups"] | undefined): string {

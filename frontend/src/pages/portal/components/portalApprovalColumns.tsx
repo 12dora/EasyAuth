@@ -1,8 +1,8 @@
-import type { ColumnDef } from "@tanstack/react-table";
-
 import type { ApprovalDecisionMode } from "../../../components/ApprovalDecisionDialog";
 import { Badge } from "../../../components/Badge";
-import { TableActionCell, TableRowActionButton } from "../../../components/ui/TableActions";
+import { Button } from "../../../components/Button";
+import type { ColumnsType, ColumnType } from "../../../components/antd/AppTable";
+import { actionsColumn, dateTimeColumn, textColumn } from "../../../components/antd/columns";
 import { MONO_TEXT_CLASS } from "../../../components/ui/tableStyles";
 import {
   accessRequestStatusLabel,
@@ -21,93 +21,118 @@ export function approvalColumns(
   tab: ApprovalTab,
   actionsDisabled: boolean,
   onDecision: (mode: ApprovalDecisionMode, approval: PortalApprovalRow) => void,
-): ColumnDef<PortalApprovalRow>[] {
+): ColumnsType<PortalApprovalRow> {
   return [
-    ...(tab === "processed" ? [statusColumn(t)] : []),
+    ...(tab === "processed" ? [approvalStatusColumn(t)] : []),
     ...requestColumns(t),
-    ...(tab === "pending" ? [actionsColumn(t, actionsDisabled, onDecision)] : decisionColumns(t)),
+    ...(tab === "pending" ? [decisionActionsColumn(t, actionsDisabled, onDecision)] : decisionColumns(t)),
   ];
 }
 
-function statusColumn(t: Translator): ColumnDef<PortalApprovalRow> {
+/**
+ * 状态列不用 statusColumn 预设: 后端会下发本地化好的 status_label,
+ * 预设只能按取值域映射, 会丢掉服务端文案。徽章色调仍走 lib/status。
+ * 页签本身就是后端的 status 过滤, 列内不再放只作用于当前页的过滤。
+ */
+function approvalStatusColumn(t: Translator): ColumnType<PortalApprovalRow> {
   return {
-    header: t("common.status"),
-    cell: ({ row }) => (
-      <Badge tone={badgeToneForAccessRequestStatus(row.original.status)}>
-        {row.original.status_label ?? accessRequestStatusLabel(t, row.original.status)}
+    key: "status",
+    title: t("common.status"),
+    width: 130,
+    render: (_value: unknown, approval: PortalApprovalRow) => (
+      <Badge tone={badgeToneForAccessRequestStatus(approval.status)}>
+        {approval.status_label ?? accessRequestStatusLabel(t, approval.status)}
       </Badge>
     ),
   };
 }
 
-function requestColumns(t: Translator): ColumnDef<PortalApprovalRow>[] {
+function requestColumns(t: Translator): ColumnsType<PortalApprovalRow> {
   return [
     {
-      header: t("portal.approvals.column.applicant"),
-      cell: ({ row }) => (
+      key: "applicant",
+      title: t("portal.approvals.column.applicant"),
+      width: 160,
+      sorter: (left, right) => applicantLabel(left).localeCompare(applicantLabel(right)),
+      render: (_value: unknown, approval: PortalApprovalRow) => (
         <div className="flex min-w-0 flex-col gap-1">
-          <strong>{applicantLabel(row.original)}</strong>
-          {row.original.applicant?.department ? (
-            <span className="text-xs leading-4 text-ink-faint">{row.original.applicant.department}</span>
+          <strong className="truncate">{applicantLabel(approval)}</strong>
+          {approval.applicant?.department ? (
+            <span className="text-xs leading-4 text-ink-faint">{approval.applicant.department}</span>
           ) : null}
         </div>
       ),
     },
     {
-      header: t("common.app"),
-      cell: ({ row }) => (
+      key: "app",
+      title: t("common.app"),
+      width: 160,
+      sorter: (left, right) => (left.app_name ?? "").localeCompare(right.app_name ?? ""),
+      render: (_value: unknown, approval: PortalApprovalRow) => (
         <div className="flex min-w-0 flex-col gap-1">
-          <strong>{row.original.app_name ?? row.original.app_key ?? "-"}</strong>
-          <code className={MONO_TEXT_CLASS}>{row.original.app_key ?? "-"}</code>
+          <strong className="truncate">{approval.app_name ?? approval.app_key ?? "-"}</strong>
+          <code className={MONO_TEXT_CLASS}>{approval.app_key ?? "-"}</code>
         </div>
       ),
     },
-    { header: t("portal.approvals.column.content"), cell: ({ row }) => approvalContentDetails(t, row.original) },
     {
-      header: t("portal.column.term"),
-      cell: ({ row }) => (
+      key: "content",
+      title: t("portal.approvals.column.content"),
+      render: (_value: unknown, approval: PortalApprovalRow) => approvalContentDetails(t, approval),
+    },
+    {
+      key: "term",
+      title: t("portal.column.term"),
+      width: 130,
+      render: (_value: unknown, approval: PortalApprovalRow) => (
         <div className="flex min-w-0 flex-col gap-1">
-          <span>{grantTypeLabel(t, row.original.grant_type)}</span>
-          {row.original.grant_expires_at ? (
-            <span className="text-xs leading-4 text-ink-faint">{formatDateTime(row.original.grant_expires_at)}</span>
+          <span>{grantTypeLabel(t, approval.grant_type)}</span>
+          {approval.grant_expires_at ? (
+            <span className="text-xs leading-4 text-ink-faint">{formatDateTime(approval.grant_expires_at)}</span>
           ) : null}
         </div>
       ),
     },
-    { header: t("portal.column.submittedAt"), cell: ({ row }) => formatDateTime(row.original.submitted_at) },
-    { header: t("portal.column.reason"), cell: ({ row }) => row.original.reason ?? "-" },
+    dateTimeColumn<PortalApprovalRow>({ key: "submitted_at", title: t("portal.column.submittedAt") }),
+    textColumn<PortalApprovalRow>({ key: "reason", title: t("portal.column.reason"), ellipsis: false }),
   ];
 }
 
-function actionsColumn(
+function decisionActionsColumn(
   t: Translator,
   actionsDisabled: boolean,
   onDecision: (mode: ApprovalDecisionMode, approval: PortalApprovalRow) => void,
-): ColumnDef<PortalApprovalRow> {
-  return {
-    id: "actions",
-    header: t("common.actions"),
-    cell: ({ row }) => (
-      <TableActionCell>
-        <TableRowActionButton type="button" disabled={actionsDisabled} onClick={() => onDecision("approve", row.original)}>
+): ColumnType<PortalApprovalRow> {
+  return actionsColumn<PortalApprovalRow>({
+    render: (approval) => (
+      <>
+        <Button type="button" size="sm" variant="ghost" disabled={actionsDisabled} onClick={() => onDecision("approve", approval)}>
           {t("approvals.approve")}
-        </TableRowActionButton>
-        <TableRowActionButton
+        </Button>
+        <Button
           type="button"
+          size="sm"
           variant="ghost-danger"
           disabled={actionsDisabled}
-          onClick={() => onDecision("reject", row.original)}
+          onClick={() => onDecision("reject", approval)}
         >
           {t("approvals.reject")}
-        </TableRowActionButton>
-      </TableActionCell>
+        </Button>
+      </>
     ),
-  };
+  });
 }
 
-function decisionColumns(t: Translator): ColumnDef<PortalApprovalRow>[] {
+function decisionColumns(t: Translator): ColumnsType<PortalApprovalRow> {
   return [
-    { header: t("portal.approvals.column.decidedAt"), cell: ({ row }) => formatDateTime(row.original.decided_at) },
-    { header: t("portal.approvals.column.myComment"), cell: ({ row }) => row.original.decision_comment || "-" },
+    dateTimeColumn<PortalApprovalRow>({
+      key: "decided_at",
+      title: t("portal.approvals.column.decidedAt"),
+    }),
+    textColumn<PortalApprovalRow>({
+      key: "decision_comment",
+      title: t("portal.approvals.column.myComment"),
+      ellipsis: false,
+    }),
   ];
 }

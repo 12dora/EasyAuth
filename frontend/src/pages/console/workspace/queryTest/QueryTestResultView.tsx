@@ -1,29 +1,26 @@
-import { getCoreRowModel, getPaginationRowModel, useReactTable } from "@tanstack/react-table";
+import { useMemo } from "react";
 
 import { CodeBlock } from "../../../../components/CodeBlock";
 import { StatusBanner } from "../../../../components/StatusBanner";
+import { AppTable } from "../../../../components/antd/AppTable";
 import { PanelSurface } from "../../../../components/ui/PanelSurface";
 import { useI18n } from "../../../../i18n/I18nProvider";
-import { TableView } from "../../../../components/ui/TableView";
 import { queryTestGrantColumns, queryTestGroupColumns } from "./queryTestColumns";
-import type { StructuredQueryTestResult } from "./queryTestModel";
+import type { QueryTestGrant, QueryTestGroup, StructuredQueryTestResult } from "./queryTestModel";
 
 export function QueryTestResultView({ result }: { result: StructuredQueryTestResult }) {
   const { t } = useI18n();
   const groups = result.groups ?? [];
   const grants = result.grants ?? [];
-  const groupTable = useReactTable({
-    data: groups,
-    columns: queryTestGroupColumns(t, result.snapshot_version),
-    getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-  });
-  const grantTable = useReactTable({
-    data: grants,
-    columns: queryTestGrantColumns(t, result.snapshot_version),
-    getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-  });
+  // 联调结果一次性返回全量, 因此两张表都是纯客户端表: 分页/筛选/排序都由 antd 完成。
+  const groupColumns = useMemo(
+    () => queryTestGroupColumns(t, result.snapshot_version),
+    [result.snapshot_version, t],
+  );
+  const grantColumns = useMemo(
+    () => queryTestGrantColumns(t, result.snapshot_version),
+    [result.snapshot_version, t],
+  );
 
   return (
     <>
@@ -33,8 +30,19 @@ export function QueryTestResultView({ result }: { result: StructuredQueryTestRes
         title={result.allowed ? t("wizard.verify.hit") : t("wizard.verify.noHit")}
       />
       <QueryTestSummaryTiles result={result} />
-      <TableView table={groupTable} totalItems={groups.length} empty={t("console.queryTest.groupsEmpty")} />
-      <TableView table={grantTable} totalItems={grants.length} empty={t("console.queryTest.grantsEmpty")} />
+      <AppTable<QueryTestGroup>
+        columns={groupColumns}
+        dataSource={groups}
+        emptyTitle={t("console.queryTest.groupsEmpty")}
+        rowKey={(group) => group.key ?? group.name ?? ""}
+      />
+      <AppTable<QueryTestGrant>
+        columns={grantColumns}
+        dataSource={grants}
+        emptyTitle={t("console.queryTest.grantsEmpty")}
+        minWidth={1400}
+        rowKey={(grant) => `${grant.permission ?? ""}:${grant.scope ?? ""}:${grant.source_key ?? ""}`}
+      />
       <CodeBlock language="json" code={JSON.stringify(result, null, 2)} />
     </>
   );

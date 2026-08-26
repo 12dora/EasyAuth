@@ -1,4 +1,4 @@
-import { getCoreRowModel, useReactTable } from "@tanstack/react-table";
+import { useMemo } from "react";
 
 import { StatusBanner } from "../../../components/StatusBanner";
 import { useI18n } from "../../../i18n/I18nProvider";
@@ -15,10 +15,8 @@ export function PortalApprovalsSection() {
   const {
     tab,
     switchTab,
-    pagination,
-    setPagination,
-    clampedPageIndex,
-    totalPages,
+    serverTable,
+    totalItems,
     query,
     approvals,
     detail,
@@ -30,15 +28,10 @@ export function PortalApprovalsSection() {
     isSubmitting,
     dialogErrorMessage,
   } = usePortalApprovals();
-  const table = useReactTable({
-    data: approvals,
-    columns: approvalColumns(t, tab, isSubmitting, openDecision),
-    getCoreRowModel: getCoreRowModel(),
-    manualPagination: true,
-    pageCount: totalPages,
-    state: { pagination: { ...pagination, pageIndex: clampedPageIndex } },
-    onPaginationChange: setPagination,
-  });
+  const columns = useMemo(
+    () => approvalColumns(t, tab, isSubmitting, openDecision),
+    [isSubmitting, openDecision, t, tab],
+  );
 
   return (
     <>
@@ -56,10 +49,12 @@ export function PortalApprovalsSection() {
           />
         ) : (
           <PortalApprovalsTable
-            table={table}
-            tab={tab}
+            columns={columns}
             isLoading={query.isLoading}
-            totalItems={query.data?.pagination.total_items ?? approvals.length}
+            rows={approvals}
+            serverTable={serverTable}
+            tab={tab}
+            totalItems={totalItems || approvals.length}
           />
         )}
       </div>

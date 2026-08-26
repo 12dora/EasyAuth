@@ -1,5 +1,5 @@
 import type { MessageKey } from "../../../../i18n/messages";
-import type { JsonObject, Pagination } from "../../../../lib/api";
+import type { JsonObject } from "../../../../lib/api";
 import type { Translator } from "../../../../lib/status";
 
 export const RUN_STATUS_TONES: Record<
@@ -24,15 +24,6 @@ const RUN_STATUS_LABEL_KEYS: Record<string, MessageKey> = {
   failed: "console.connector.status.failed",
 };
 
-export interface SyncRunsPageView {
-  totalRows: number;
-  pageIndex: number;
-  effectivePageSize: number;
-  pageCount: number;
-  pageStart: number;
-  pageEnd: number;
-}
-
 export function runStatusLabel(t: Translator, status: string): string {
   const labelKey = RUN_STATUS_LABEL_KEYS[status];
   return labelKey ? t(labelKey) : status;
@@ -49,24 +40,6 @@ export function formatRunStats(stats: Record<string, number>): string {
     return "-";
   }
   return entries.map(([key, count]) => `${key}=${count}`).join(" ");
-}
-
-/** 同步记录表格分页视图: 后端分页信息缺失时退回本地页码, 与旧口径一致。 */
-export function syncRunsPageView(
-  pagination: Pagination | undefined,
-  page: number,
-  pageSize: number,
-  rowCount: number,
-): SyncRunsPageView {
-  const totalRows = pagination?.total_items ?? rowCount;
-  const pageIndex = (pagination?.page ?? page) - 1;
-  const effectivePageSize = pagination?.page_size ?? pageSize;
-  const pageCount =
-    pagination?.total_pages ??
-    (totalRows === 0 ? 0 : Math.ceil(totalRows / effectivePageSize));
-  const pageStart = totalRows === 0 ? 0 : pageIndex * effectivePageSize + 1;
-  const pageEnd = totalRows === 0 ? 0 : pageStart + rowCount - 1;
-  return { totalRows, pageIndex, effectivePageSize, pageCount, pageStart, pageEnd };
 }
 
 export function connectorCandidateFingerprint(

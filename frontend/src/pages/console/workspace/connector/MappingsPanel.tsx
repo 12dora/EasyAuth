@@ -1,20 +1,12 @@
 import { Save } from "lucide-react";
+import { useMemo } from "react";
 
 import { Button } from "../../../../components/Button";
 import { TextInput } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
-import { EmptyState } from "../../../../components/ui/EmptyState";
+import { AppTable, textFilter, type ColumnsType } from "../../../../components/antd/AppTable";
 import { PanelSurface } from "../../../../components/ui/PanelSurface";
-import {
-  TableBody,
-  TableCell,
-  TableEmptyRow,
-  TableFrame,
-  TableHead,
-  TableHeaderCell,
-  TableRoot,
-  TableRow,
-} from "../../../../components/ui/TablePrimitives";
+import { MONO_TEXT_CLASS } from "../../../../components/ui/tableStyles";
 import { useI18n } from "../../../../i18n/I18nProvider";
 import type { AuthorizationGroupItem, ConnectorInstanceItem } from "../../../../lib/domain";
 import {
@@ -111,6 +103,10 @@ function MappingsLoadFailure({
   );
 }
 
+/**
+ * 授权组映射表: 整表数据在客户端(授权组一次拉全), 因此分页/筛选/排序都由
+ * antd 在本地完成; 单元格里的输入框与勾选框直接改 controller 的草稿, 与分页无关。
+ */
 function MappingsTable({
   controller,
   canManage,
@@ -120,45 +116,57 @@ function MappingsTable({
 }) {
   const { t } = useI18n();
   const { groups } = controller;
+  const columns = useMemo<ColumnsType<AuthorizationGroupItem>>(
+    () => [
+      {
+        key: "group",
+        title: t("console.connector.mappingsColumn.group"),
+        width: 280,
+        sorter: (left, right) => left.name.localeCompare(right.name),
+        render: (_value: unknown, group: AuthorizationGroupItem) => (
+          <div className="flex min-w-0 flex-col gap-1">
+            <span className="truncate font-medium text-ink">{group.name}</span>
+            <code className={MONO_TEXT_CLASS}>{group.key}</code>
+          </div>
+        ),
+        ...textFilter<AuthorizationGroupItem>("group", {
+          getValue: (group) => `${group.name} ${group.key}`,
+        }),
+      },
+      {
+        key: "external_ref",
+        title: t("console.connector.mappingsColumn.externalRef"),
+        render: (_value: unknown, group: AuthorizationGroupItem) => (
+          <MappingRefInput controller={controller} group={group} canManage={canManage} />
+        ),
+      },
+      {
+        key: "auto_create",
+        title: t("console.connector.mappingsColumn.autoCreate"),
+        width: 200,
+        render: (_value: unknown, group: AuthorizationGroupItem) => (
+          <MappingAutoCreateToggle controller={controller} group={group} canManage={canManage} />
+        ),
+      },
+    ],
+    [canManage, controller, t],
+  );
 
   return (
-    <TableFrame>
-      <TableRoot>
-        <TableHead>
-          <TableRow>
-            <TableHeaderCell>
-              {t("console.connector.mappingsColumn.group")}
-            </TableHeaderCell>
-            <TableHeaderCell>
-              {t("console.connector.mappingsColumn.externalRef")}
-            </TableHeaderCell>
-            <TableHeaderCell>
-              {t("console.connector.mappingsColumn.autoCreate")}
-            </TableHeaderCell>
-          </TableRow>
-        </TableHead>
-        <TableBody>
-          {groups.length === 0 ? (
-            <TableEmptyRow colSpan={3}>
-              <EmptyState title={t("console.connector.mappingsEmpty")} />
-            </TableEmptyRow>
-          ) : (
-            groups.map((group) => (
-              <MappingRow
-                key={group.key}
-                controller={controller}
-                group={group}
-                canManage={canManage}
-              />
-            ))
-          )}
-        </TableBody>
-      </TableRoot>
-    </TableFrame>
+    <AppTable<AuthorizationGroupItem>
+      columns={columns}
+      dataSource={groups}
+      emptyTitle={t("console.connector.mappingsEmpty")}
+      rowKey="key"
+    />
   );
 }
 
-function MappingRow({
+function mappingDraft(controller: ConnectorMappingsController, groupKey: string) {
+  return controller.drafts[groupKey] ?? { external_ref: "", auto_create: false };
+}
+
+function MappingRefInput({
   controller,
   group,
   canManage,
@@ -169,47 +177,43 @@ function MappingRow({
 }) {
   const { t } = useI18n();
   const { datalistId, authoritativeMappingsLoaded, setDraft } = controller;
-  const draft = controller.drafts[group.key] ?? {
-    external_ref: "",
-    auto_create: false,
-  };
+  const draft = mappingDraft(controller, group.key);
 
   return (
-    <TableRow>
-      <TableCell>
-        <span className="font-medium text-ink">{group.name}</span>{" "}
-        <code className="text-xs text-ink-faint">{group.key}</code>
-      </TableCell>
-      <TableCell>
-        <TextInput
-          list={datalistId}
-          className="max-w-72 font-mono"
-          aria-label={t("console.connector.mappingsColumn.externalRef")}
-          placeholder={t("console.connector.mappingsRefPlaceholder")}
-          value={draft.external_ref}
-          disabled={!authoritativeMappingsLoaded || !canManage}
-          onChange={(event) =>
-            setDraft(group.key, { external_ref: event.currentTarget.value })
-          }
-        />
-      </TableCell>
-      <TableCell>
-        <label className="inline-flex items-center gap-2 text-body text-ink">
-          <input
-            type="checkbox"
-            checked={draft.auto_create}
-            disabled={
-              !authoritativeMappingsLoaded ||
-              !canManage ||
-              draft.external_ref.trim() === ""
-            }
-            onChange={(event) =>
-              setDraft(group.key, { auto_create: event.currentTarget.checked })
-            }
-          />
-          <span>{t("console.connector.mappingsAutoCreateLabel")}</span>
-        </label>
-      </TableCell>
-    </TableRow>
+    <TextInput
+      list={datalistId}
+      className="max-w-72 font-mono"
+      aria-label={t("console.connector.mappingsColumn.externalRef")}
+      placeholder={t("console.connector.mappingsRefPlaceholder")}
+      value={draft.external_ref}
+      disabled={!authoritativeMappingsLoaded || !canManage}
+      onChange={(event) => setDraft(group.key, { external_ref: event.currentTarget.value })}
+    />
+  );
+}
+
+function MappingAutoCreateToggle({
+  controller,
+  group,
+  canManage,
+}: {
+  controller: ConnectorMappingsController;
+  group: AuthorizationGroupItem;
+  canManage: boolean;
+}) {
+  const { t } = useI18n();
+  const { authoritativeMappingsLoaded, setDraft } = controller;
+  const draft = mappingDraft(controller, group.key);
+
+  return (
+    <label className="inline-flex items-center gap-2 text-body text-ink">
+      <input
+        type="checkbox"
+        checked={draft.auto_create}
+        disabled={!authoritativeMappingsLoaded || !canManage || draft.external_ref.trim() === ""}
+        onChange={(event) => setDraft(group.key, { auto_create: event.currentTarget.checked })}
+      />
+      <span>{t("console.connector.mappingsAutoCreateLabel")}</span>
+    </label>
   );
 }

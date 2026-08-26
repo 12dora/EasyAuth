@@ -4,7 +4,12 @@ import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { AppConfigProvider } from "../../../../components/antd/AppConfigProvider";
 import { QueryTestTab } from "./QueryTestTab";
+
+// antd Table 在 jsdom 里每次筛选/排序/翻页都要重建整棵表格, 比自研原语慢得多,
+// 整套用例并行跑时默认 5s 不够; 这里只放宽本文件的用例超时。
+vi.setConfig({ testTimeout: 20000 });
 
 describe("QueryTestTab", () => {
   afterEach(() => {
@@ -93,6 +98,44 @@ describe("QueryTestTab", () => {
       );
     });
   });
+  test("授权明细用表头筛选按权限过滤结果", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/demo/permission-query-tests" && init?.method === "POST") {
+        return jsonResponse({
+          app_key: "demo",
+          user_id: "alice",
+          allowed: true,
+          source: "live",
+          snapshot_version: "snap-20260701",
+          groups: [],
+          grants: [
+            { permission: "invoice.read", scope: "SELF", source_type: "direct", source_key: "grant-1" },
+            { permission: "expense.approve", scope: "TEAM", source_type: "group", source_key: "manager" },
+          ],
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWithClient(<QueryTestTab appKey="demo" />);
+
+    await user.type(screen.getByLabelText("用户 ID"), "alice");
+    await user.type(screen.getByLabelText("Bearer token"), "secret-bearer-token");
+    await user.click(screen.getByRole("button", { name: "执行联调" }));
+
+    expect(await screen.findByText("invoice.read")).toBeVisible();
+    const grantsTable = screen.getByText("expense.approve").closest("table") as HTMLElement;
+
+    await user.click(grantsTable.querySelector(".ant-table-filter-trigger") as HTMLElement);
+    await user.type(await screen.findByLabelText("筛选关键字"), "expense");
+    await user.click(screen.getByRole("button", { name: "确定" }));
+
+    await waitFor(() => expect(screen.queryByText("invoice.read")).not.toBeInTheDocument());
+    expect(screen.getByText("expense.approve")).toBeVisible();
+  });
 });
 
 function renderWithClient(ui: ReactElement) {
@@ -107,7 +150,11 @@ function renderWithClient(ui: ReactElement) {
     },
   });
 
-  render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+  render(
+    <QueryClientProvider client={client}>
+      <AppConfigProvider>{ui}</AppConfigProvider>
+    </QueryClientProvider>,
+  );
 }
 
 function jsonResponse(payload: unknown) {

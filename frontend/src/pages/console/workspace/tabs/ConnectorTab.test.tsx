@@ -4,8 +4,13 @@ import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { AppConfigProvider } from "../../../../components/antd/AppConfigProvider";
 import { ToastProvider } from "../../../../components/ui/Toast";
 import { ConnectorTab } from "./ConnectorTab";
+
+// antd Table 在 jsdom 里每次筛选/排序/翻页都要重建整棵表格, 比自研原语慢得多,
+// 整套用例并行跑时默认 5s 不够; 这里只放宽本文件的用例超时。
+vi.setConfig({ testTimeout: 20000 });
 
 const connectorTypes = [
   {
@@ -277,10 +282,13 @@ describe("ConnectorTab", () => {
     const user = userEvent.setup();
     renderWithClient(<ConnectorTab appKey="demo" canManage={true} />);
 
+    const runsPanel = (await screen.findByRole("heading", { name: "运行历史" })).closest(
+      "section",
+    ) as HTMLElement;
     expect(
-      await screen.findByText("第 1-10 条 / 共 12 条"),
+      await within(runsPanel).findByText("第 1-10 条 / 共 12 条"),
     ).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "下一页" }));
+    await user.click(within(runsPanel).getByTitle("下一页"));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -289,8 +297,35 @@ describe("ConnectorTab", () => {
       );
     });
     expect(
-      await screen.findByText("第 11-12 条 / 共 12 条"),
+      await within(runsPanel).findByText("第 11-12 条 / 共 12 条"),
     ).toBeInTheDocument();
+  });
+
+  test("授权组映射用表头筛选按组名过滤当前数据", async () => {
+    installConnectorFetch({
+      instances: [instances[0]],
+      groupsPayload: {
+        data: [
+          { key: "vpn", kind: "role", name: "VPN", requestable: true, is_active: true, grants: [] },
+          { key: "crm", kind: "role", name: "CRM", requestable: true, is_active: true, grants: [] },
+        ],
+      },
+    });
+    const user = userEvent.setup();
+    renderWithClient(<ConnectorTab appKey="demo" canManage={true} />);
+
+    const mappingPanel = (await screen.findByRole("heading", { name: "授权组映射" })).closest(
+      "section",
+    ) as HTMLElement;
+    expect(await within(mappingPanel).findByText("VPN")).toBeVisible();
+    expect(within(mappingPanel).getByText("CRM")).toBeVisible();
+
+    await user.click(mappingPanel.querySelector(".ant-table-filter-trigger") as HTMLElement);
+    await user.type(await screen.findByLabelText("筛选关键字"), "crm");
+    await user.click(screen.getByRole("button", { name: "确定" }));
+
+    await waitFor(() => expect(within(mappingPanel).queryByText("VPN")).not.toBeInTheDocument());
+    expect(within(mappingPanel).getByText("CRM")).toBeVisible();
   });
 
   test("只读模式禁止连接器维护操作", async () => {
@@ -445,7 +480,9 @@ function renderWithClient(ui: ReactElement) {
   });
   render(
     <QueryClientProvider client={client}>
-      <ToastProvider>{ui}</ToastProvider>
+      <AppConfigProvider>
+        <ToastProvider>{ui}</ToastProvider>
+      </AppConfigProvider>
     </QueryClientProvider>,
   );
   return client;

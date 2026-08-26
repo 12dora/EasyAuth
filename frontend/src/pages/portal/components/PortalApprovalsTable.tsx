@@ -1,10 +1,8 @@
-import type { Table } from "@tanstack/react-table";
 import { RefreshCcw } from "lucide-react";
 
 import { Button } from "../../../components/Button";
-import { EmptyState } from "../../../components/ui/EmptyState";
+import { AppTable, type ColumnsType, type UseServerTableResult } from "../../../components/antd/AppTable";
 import { PageState } from "../../../components/ui/PageState";
-import { TableView } from "../../../components/ui/TableView";
 import { useI18n } from "../../../i18n/I18nProvider";
 
 import type { ApprovalTab, PortalApprovalRow } from "./portalApprovalTypes";
@@ -35,33 +33,40 @@ export function ApprovalsLoadFailure({
 }
 
 export function PortalApprovalsTable({
-  table,
+  columns,
+  rows,
+  serverTable,
   tab,
   isLoading,
   totalItems,
 }: {
-  table: Table<PortalApprovalRow>;
+  columns: ColumnsType<PortalApprovalRow>;
+  rows: PortalApprovalRow[];
+  serverTable: UseServerTableResult<PortalApprovalRow>;
   tab: ApprovalTab;
   isLoading: boolean;
   totalItems: number;
 }) {
   const { t } = useI18n();
   return (
-    <TableView
-      table={table}
-      ariaLabel={t("nav.portal.myApprovals")}
-      isLoading={isLoading}
-      totalItems={totalItems}
-      empty={
-        <EmptyState
-          title={tab === "pending" ? t("portal.approvals.empty.pending") : t("portal.approvals.empty.processed")}
-          description={
-            tab === "pending"
-              ? t("portal.approvals.empty.pendingDescription")
-              : t("portal.approvals.empty.processedDescription")
-          }
-        />
+    <AppTable<PortalApprovalRow>
+      {...serverTable.tableProps}
+      columns={columns}
+      dataSource={rows}
+      emptyDescription={
+        tab === "pending"
+          ? t("portal.approvals.empty.pendingDescription")
+          : t("portal.approvals.empty.processedDescription")
       }
+      emptyTitle={tab === "pending" ? t("portal.approvals.empty.pending") : t("portal.approvals.empty.processed")}
+      loading={isLoading}
+      minWidth={1200}
+      pagination={{
+        current: serverTable.query.page,
+        pageSize: serverTable.query.pageSize,
+        total: totalItems,
+      }}
+      rowKey="id"
     />
   );
 }
