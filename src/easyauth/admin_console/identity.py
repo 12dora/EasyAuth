@@ -40,8 +40,6 @@ def _local_admin_actor(request: HttpRequest, authentik_user_id: str) -> ConsoleA
     if account is None:
         _clear_console_session(request)
         return None
-    if not account.has_second_factor():
-        return None
     user = _active_user(authentik_user_id)
     if user is None:
         _clear_console_session(request)

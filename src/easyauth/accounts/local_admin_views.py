@@ -411,8 +411,6 @@ def _bind_and_redirect(
             status=HTTPStatus.BAD_REQUEST,
             content_type="text/plain",
         )
-    if second_factor == SECOND_FACTOR_NONE:
-        return HttpResponseRedirect(SECURITY_PATH)
     return HttpResponseRedirect(CONSOLE_PATH)
 
 

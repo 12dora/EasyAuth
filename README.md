@@ -309,7 +309,7 @@ DJANGO_DEBUG=1 .venv/bin/python manage.py runserver 0.0.0.0:8001
 session 快照。
 详见 [接入 Authentik](#接入-authentik)。
 
-### 2. 本地超级管理员（应急通道）—— 密码 + 二次验证
+### 2. 本地超级管理员（应急通道）—— 密码（二次验证可选）
 
 一条不依赖 Authentik 的兜底登录：**`/auth/local/`**。在 Authentik 尚未接好之前，用它来引导全新部署。
 
@@ -318,7 +318,7 @@ session 快照。
 | **默认开发用户名** | `admin` |
 | **默认开发密码** | `admin123` |
 | 登录页 | `/auth/local/` |
-| 二次验证 | `/auth/local/verify/`（TOTP 验证器或通行密钥；未绑定时必须先进入安全设置绑定） |
+| 二次验证 | `/auth/local/verify/`（已绑定 TOTP/通行密钥时必经；未绑定则可跳过，建议仍绑定） |
 | 强制改密 | `/auth/local/change-password/`（新建/重置后首次登录） |
 | 安全设置（2FA、改密） | `/auth/local/security/` |
 | 创建 / 重置 | `.venv/bin/python manage.py create_local_admin <用户名> --password <密码> [--update]` |
@@ -327,8 +327,8 @@ session 快照。
 
 - 新建账号默认带 **must-change-password** 标记：首次登录后所有页面都会跳转到改密页，直到设置新密码（≥ 8 位）；
   加 `--no-force-password-change` 可跳过。
-- 本地超级管理员不能长期单因素：账号没有 TOTP 或通行密钥时，密码验证后只进入 `/auth/local/security/`
-  绑定二次因子；控制台 actor 必须在请求期确认至少一种二次因子已存在。
+- 二次验证为可选但建议绑定：账号没有 TOTP 或通行密钥时，密码登录后直接进入控制台；已绑定任一方式时，
+  登录必须完成二次验证。
 - 改密要求：当前密码正确、≥ 8 位、与当前密码不同、两次一致。
 - 登录按用户名节流（5 次 / 5 分钟，含二次验证失败与改密时当前密码错误）。
 - 通行密钥（WebAuthn）开发时必须用 `http://localhost:8001` 访问——`127.0.0.1` 不属于 RP-ID `localhost` 会失败（TOTP 不受影响）。

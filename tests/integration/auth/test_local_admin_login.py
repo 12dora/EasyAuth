@@ -168,7 +168,7 @@ def test_login_rejects_disabled_account() -> None:
     assert AUTHENTIK_SESSION_KEY not in client.session
 
 
-def test_login_without_second_factor_requires_enrollment_before_console_actor() -> None:
+def test_login_without_second_factor_grants_console_actor() -> None:
     # Given
     _ = _create_account()
     client = Client()
@@ -176,9 +176,9 @@ def test_login_without_second_factor_requires_enrollment_before_console_actor() 
     # When
     response = _login(client)
 
-    # Then
+    # Then: 未绑定二次因子时密码登录即可进入控制台, 审计仍记录 second_factor=none。
     assert response.status_code == HTTPStatus.FOUND
-    assert response.headers["Location"] == "/auth/local/security/"
+    assert response.headers["Location"] == "/console/"
     _assert_session_bound(client)
     user = UserMirror.objects.get(authentik_user_id=LOCAL_ADMIN_SUBJECT)
     assert user.name == "本地管理员 admin"
@@ -186,7 +186,13 @@ def test_login_without_second_factor_requires_enrollment_before_console_actor() 
     request = RequestFactory().get("/console/")
     request.session = client.session
     actor = actor_from_request(request)
-    assert actor is None
+    assert actor is not None
+    assert actor.is_superuser is True
+    console = client.get("/console/")
+    html = console.content.decode()
+    assert console.status_code == HTTPStatus.OK
+    assert 'data-easyauth-react-shell="console"' in html
+    assert 'data-current-user-can-access-console="true"' in html
     succeeded = AuditLog.objects.get(event_type="admin_local_login_succeeded")
     assert succeeded.actor_type == "local_admin"
     assert succeeded.metadata == {"second_factor": "none"}
@@ -537,7 +543,7 @@ def test_change_password_happy_path_clears_flag_and_unblocks_navigation() -> Non
         },
     )
 
-    # Then: 密码更新、标记清除、审计落盘; 因尚未绑定二次因子, 只能继续进入安全设置绑定。
+    # Then: 密码更新、标记清除、审计落盘; 未绑定二次因子也可进入控制台。
     assert response.status_code == HTTPStatus.FOUND
     assert response.headers["Location"] == "/portal/"
     account.refresh_from_db()
@@ -550,8 +556,8 @@ def test_change_password_happy_path_clears_flag_and_unblocks_navigation() -> Non
     security = client.get("/auth/local/security/")
     console = client.get("/console/")
     assert security.status_code == HTTPStatus.OK
-    assert console.status_code == HTTPStatus.FOUND
-    assert console.headers["Location"].startswith("/auth/sign-in/")
+    assert console.status_code == HTTPStatus.OK
+    assert 'data-current-user-can-access-console="true"' in console.content.decode()
 
 
 def test_change_password_rejects_wrong_current_password() -> None:
