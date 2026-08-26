@@ -5,7 +5,12 @@ import type { ReactElement } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { ManifestTab } from "./ManifestTab";
-import { ANTD_TEST_TIMEOUT_MS, renderWithAntd } from "../../../../components/antd/testing";
+import {
+  ANTD_TEST_TIMEOUT_MS,
+  columnSortOrder,
+  renderWithAntd,
+  sortByColumn,
+} from "../../../../components/antd/testing";
 
 // antd Table 在 jsdom 里每次筛选/排序/翻页都要重建整棵表格, 比自研原语慢得多,
 // 整套用例并行跑时默认 5s 不够; 这里只放宽本文件的用例超时。
@@ -218,13 +223,65 @@ describe("ManifestTab", () => {
     });
   });
 
+  test("版本列表头排序是服务端排序: 带 ordering 请求、回到第 1 页, 指示器跟着走", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/demo/manifest") {
+        return jsonResponse({ schema_version: 1 });
+      }
+      if (!url.startsWith("/console/api/v1/apps/demo/permission-template-versions?")) {
+        throw new Error(`Unexpected fetch: ${url}`);
+      }
+      const page = new URLSearchParams(url.split("?")[1]).get("page") ?? "1";
+      return versionsResponse([{ version: `v${page}` }], Number(page), 21, 2);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWithClient(<ManifestTab appKey="demo" />);
+
+    // 首屏的 defaultSort 与后端默认序(-version)一致, 表头就带着指示器。
+    expect(await screen.findByText("v1")).toBeInTheDocument();
+    expect(columnSortOrder("版本")).toBe("descend");
+
+    const history = screen.getByRole("heading", { name: "版本历史" }).parentElement as HTMLElement;
+    await user.click(within(history).getByTitle("下一页"));
+    await screen.findByText("v2");
+
+    // 版本列已经是降序, antd 的三态循环下一档是「取消排序」: 不带 ordering,
+    // 后端回落到自己的默认序; 页码同样回到第 1 页。
+    await sortByColumn(user, "版本");
+    await waitFor(() =>
+      expect(lastVersionsUrl(fetchMock)).toBe(
+        "/console/api/v1/apps/demo/permission-template-versions?page=1&page_size=20",
+      ),
+    );
+    expect(columnSortOrder("版本")).toBeNull();
+
+    await sortByColumn(user, "版本");
+    await waitFor(() =>
+      expect(lastVersionsUrl(fetchMock)).toBe(
+        "/console/api/v1/apps/demo/permission-template-versions?page=1&page_size=20&ordering=version",
+      ),
+    );
+    expect(columnSortOrder("版本")).toBe("ascend");
+
+    await sortByColumn(user, "版本");
+    await waitFor(() =>
+      expect(lastVersionsUrl(fetchMock)).toBe(
+        "/console/api/v1/apps/demo/permission-template-versions?page=1&page_size=20&ordering=-version",
+      ),
+    );
+    expect(columnSortOrder("版本")).toBe("descend");
+  });
+
   test("版本历史使用服务端分页参数和总数", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
-      if (url === "/console/api/v1/apps/demo/permission-template-versions?page=1&page_size=20") {
+      if (url === "/console/api/v1/apps/demo/permission-template-versions?page=1&page_size=20&ordering=-version") {
         return versionsResponse([{ version: "v21" }], 1, 21, 2);
       }
-      if (url === "/console/api/v1/apps/demo/permission-template-versions?page=2&page_size=20") {
+      if (url === "/console/api/v1/apps/demo/permission-template-versions?page=2&page_size=20&ordering=-version") {
         return versionsResponse([{ version: "v1" }], 2, 21, 2);
       }
       if (url === "/console/api/v1/apps/demo/manifest") {
@@ -245,7 +302,7 @@ describe("ManifestTab", () => {
 
     expect(await screen.findByText("v1")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
-      "/console/api/v1/apps/demo/permission-template-versions?page=2&page_size=20",
+      "/console/api/v1/apps/demo/permission-template-versions?page=2&page_size=20&ordering=-version",
       expect.any(Object),
     );
   });
@@ -263,6 +320,13 @@ function renderWithClient(ui: ReactElement) {
       {ui}
     </QueryClientProvider>,
   );
+}
+
+function lastVersionsUrl(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>) {
+  return fetchMock.mock.calls
+    .map(([input]) => String(input))
+    .filter((url) => url.startsWith("/console/api/v1/apps/demo/permission-template-versions?"))
+    .at(-1);
 }
 
 function versionsResponse(data: unknown[] = [], page = 1, totalItems = 0, totalPages = 1) {

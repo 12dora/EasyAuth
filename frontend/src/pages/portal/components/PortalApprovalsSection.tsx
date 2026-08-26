@@ -27,9 +27,10 @@ export function PortalApprovalsSection() {
     isSubmitting,
     dialogErrorMessage,
   } = usePortalApprovals();
+  const sort = serverTable.query;
   const columns = useMemo(
-    () => approvalColumns(t, tab, isSubmitting, openDecision),
-    [isSubmitting, openDecision, t, tab],
+    () => approvalColumns(t, tab, sort, isSubmitting, openDecision),
+    [isSubmitting, openDecision, sort, t, tab],
   );
 
   return (

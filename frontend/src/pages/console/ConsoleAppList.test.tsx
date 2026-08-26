@@ -5,7 +5,13 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { ConsoleAppList } from "./ConsoleAppList";
-import { ANTD_TEST_TIMEOUT_MS, openHeaderFilter, renderWithAntd } from "../../components/antd/testing";
+import {
+  ANTD_TEST_TIMEOUT_MS,
+  columnSortOrder,
+  openHeaderFilter,
+  renderWithAntd,
+  sortByColumn,
+} from "../../components/antd/testing";
 
 // antd Table 在 jsdom 里每次筛选都要重建整棵表格, 默认 5s 不够。
 vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
@@ -97,15 +103,60 @@ describe("ConsoleAppList", () => {
 
     renderList();
 
-    await waitFor(() => expect(listRequestUrls(fetchMock)).toContain("/console/api/v1/apps?page=1&page_size=20"));
+    await waitFor(() => expect(listRequestUrls(fetchMock)).toContain("/console/api/v1/apps?page=1&page_size=20&ordering=app_key"));
 
     const dropdown = await openHeaderFilter(user, "状态");
     await user.click(within(dropdown).getByText("启用"));
     await user.click(within(dropdown).getByRole("button", { name: "确定" }));
 
     await waitFor(() =>
-      expect(listRequestUrls(fetchMock)).toContain("/console/api/v1/apps?page=1&page_size=20&status=active"),
+      expect(listRequestUrls(fetchMock)).toContain("/console/api/v1/apps?page=1&page_size=20&status=active&ordering=app_key"),
     );
+  });
+
+  test("表头排序是服务端排序: 带 ordering 请求、回到第 1 页, 指示器跟着走", async () => {
+    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const page = new URLSearchParams(String(input).split("?")[1]).get("page") ?? "1";
+      return jsonResponse({
+        data: [
+          {
+            id: 1,
+            app_key: `app-${page}`,
+            name: `应用${page}`,
+            owners: [],
+            is_active: true,
+            updated_at: "2026-07-01T09:00:00Z",
+            capabilities: {},
+          },
+        ],
+        pagination: { page: Number(page), page_size: 20, total_items: 40, total_pages: 2 },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderList();
+
+    // 首屏的 defaultSort 与后端默认序(app_key 升序)一致, 表头就带着指示器。
+    await screen.findByText("应用1");
+    expect(columnSortOrder("应用")).toBe("ascend");
+
+    await user.click(screen.getByTitle("下一页"));
+    await screen.findByText("应用2");
+
+    await sortByColumn(user, "更新时间");
+    await waitFor(() =>
+      expect(lastListUrl(fetchMock)).toBe("/console/api/v1/apps?page=1&page_size=20&ordering=updated_at"),
+    );
+    expect(columnSortOrder("更新时间")).toBe("ascend");
+    expect(columnSortOrder("应用")).toBeNull();
+
+    await sortByColumn(user, "更新时间");
+    await waitFor(() =>
+      expect(lastListUrl(fetchMock)).toBe("/console/api/v1/apps?page=1&page_size=20&ordering=-updated_at"),
+    );
+    expect(columnSortOrder("更新时间")).toBe("descend");
   });
 
   test("表头筛选是服务端筛选: 确定后图标保持高亮, 当前页不再被客户端筛一遍", async () => {
@@ -148,7 +199,7 @@ describe("ConsoleAppList", () => {
     await user.click(within(dropdown).getByRole("button", { name: "确定" }));
 
     await waitFor(() =>
-      expect(listRequestUrls(fetchMock)).toContain("/console/api/v1/apps?page=1&page_size=20&status=active"),
+      expect(listRequestUrls(fetchMock)).toContain("/console/api/v1/apps?page=1&page_size=20&status=active&ordering=app_key"),
     );
     // Billing 是「停用」, 与生效中的筛选值不符, 但它是后端这一页返回的行, 必须照常展示。
     expect(await screen.findByText("Billing")).toBeVisible();
@@ -232,6 +283,10 @@ function LocationProbe() {
 
 function listRequestUrls(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>) {
   return fetchMock.mock.calls.map(([input]) => String(input)).filter((url) => url.startsWith("/console/api/v1/apps?"));
+}
+
+function lastListUrl(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>) {
+  return listRequestUrls(fetchMock).at(-1);
 }
 
 function emptyPagination() {

@@ -5,7 +5,12 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { ConsoleTeamList } from "./ConsoleTeamList";
-import { ANTD_TEST_TIMEOUT_MS, renderWithAntd } from "../../components/antd/testing";
+import {
+  ANTD_TEST_TIMEOUT_MS,
+  columnSortOrder,
+  renderWithAntd,
+  sortByColumn,
+} from "../../components/antd/testing";
 
 // antd Table 在 jsdom 里每次翻页都要重建整棵表格, 默认 5s 不够。
 vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
@@ -94,8 +99,53 @@ describe("ConsoleTeamList", () => {
 
     expect(await screen.findByText("团队2")).toBeVisible();
     await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith("/console/api/v1/teams?page=2&page_size=10", expect.any(Object)),
+      expect(fetchMock).toHaveBeenCalledWith("/console/api/v1/teams?page=2&page_size=10&ordering=name", expect.any(Object)),
     );
+  });
+
+  test("表头排序是服务端排序: 带 ordering 请求、回到第 1 页, 指示器跟着走", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const page = new URLSearchParams(String(input).split("?")[1]).get("page") ?? "1";
+      return jsonResponse({
+        data: [
+          {
+            id: Number(page),
+            name: `团队${page}`,
+            description: "",
+            is_active: true,
+            leaders: [],
+            member_count: 0,
+            created_at: "2026-07-01T09:00:00Z",
+            updated_at: "2026-07-01T09:00:00Z",
+          },
+        ],
+        pagination: { page: Number(page), page_size: 10, total_items: 11, total_pages: 2 },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderList();
+
+    // 首屏的 defaultSort 与后端默认序(name 升序)一致, 表头就带着指示器。
+    await screen.findByText("团队1");
+    expect(columnSortOrder("团队名")).toBe("ascend");
+
+    await user.click(screen.getByTitle("2"));
+    await screen.findByText("团队2");
+
+    await sortByColumn(user, "成员数");
+    await waitFor(() =>
+      expect(lastListUrl(fetchMock)).toBe("/console/api/v1/teams?page=1&page_size=10&ordering=member_count"),
+    );
+    expect(columnSortOrder("成员数")).toBe("ascend");
+    expect(columnSortOrder("团队名")).toBeNull();
+
+    await sortByColumn(user, "成员数");
+    await waitFor(() =>
+      expect(lastListUrl(fetchMock)).toBe("/console/api/v1/teams?page=1&page_size=10&ordering=-member_count"),
+    );
+    expect(columnSortOrder("成员数")).toBe("descend");
   });
 
   test("新建团队成功后跳转到团队详情", async () => {
@@ -148,6 +198,13 @@ function renderList() {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+}
+
+function lastListUrl(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>) {
+  return fetchMock.mock.calls
+    .map(([input]) => String(input))
+    .filter((url) => url.startsWith("/console/api/v1/teams?"))
+    .at(-1);
 }
 
 function LocationProbe() {

@@ -163,13 +163,29 @@ export function AppTable<T extends object>({
 /* 服务端分页 / 排序 / 筛选                                             */
 /* ------------------------------------------------------------------ */
 
-export interface ServerTableQuery {
-  /** 1 基页码。 */
-  page: number;
-  pageSize: number;
+/** 后端排序参数名; DRF 风格, 降序前缀 "-"。 */
+export const ORDERING_PARAM = "ordering";
+
+/** 单字段排序; `field` 是列 key, 由 serializeSort 映射成后端公开字段名。 */
+export interface ServerSortValue {
+  field: string;
+  order: "ascend" | "descend";
+}
+
+/**
+ * 当前排序状态。列要显示排序指示器时把它交给 `serverSortColumn`,
+ * 表头图标就与实际请求参数同源(而不是 antd 自己的内部状态)。
+ */
+export interface ServerSortState {
   /** 当前排序列的 `key`(未设 key 时为 dataIndex); 无排序为 undefined。 */
   sortField?: string;
   sortOrder?: "ascend" | "descend";
+}
+
+export interface ServerTableQuery extends ServerSortState {
+  /** 1 基页码。 */
+  page: number;
+  pageSize: number;
   /** 列 key -> 选中值; 文本筛选为单元素数组。无筛选的列不出现。 */
   filters: Record<string, string[]>;
 }
@@ -199,7 +215,7 @@ export interface UseServerTableOptions {
    */
   total?: number;
   defaultPageSize?: number;
-  defaultSort?: { field: string; order: "ascend" | "descend" };
+  defaultSort?: ServerSortValue;
   /**
    * 列 key -> 后端查询参数。页面通常只写 `{ status: "status", appKey: "app_key" }`。
    * 未声明的列筛选不会进入 params(但仍留在 `query.filters` 里)。
@@ -207,8 +223,11 @@ export interface UseServerTableOptions {
   filterParams?: ServerFilterParamMap;
   /** 排序参数名; 默认 DRF 风格的 "ordering"(降序前缀 "-")。 */
   sortParam?: string;
-  /** 自定义排序序列化, 覆盖 sortParam 的默认拼法。 */
-  serializeSort?: (sort: { field: string; order: "ascend" | "descend" }) => ServerTableParams;
+  /**
+   * 自定义排序序列化, 覆盖 sortParam 的默认拼法。
+   * 列 key 与后端公开字段名不一致时用 `orderingSerializer(map)`, 不要各写各的拼法。
+   */
+  serializeSort?: (sort: ServerSortValue) => ServerTableParams;
 }
 
 export interface UseServerTableResult<T> {
@@ -221,6 +240,12 @@ export interface UseServerTableResult<T> {
   /** 当前生效的总条数(`options.total` 优先, 否则取最近一次 setTotal 的值)。 */
   total: number;
   setPage: (page: number, pageSize?: number) => void;
+  /**
+   * 直接改排序(并回到第 1 页)。表头点击不走这里, 它是给「默认排序随外部状态切换」
+   * 的场景用的: 门户审批的待办/已处理两个页签后端默认序不同(created_at / -decided_at),
+   * `defaultSort` 只在建 hook 时生效, 页签切换必须显式把排序改过去。
+   */
+  setSort: (sort: ServerSortValue | undefined) => void;
   /**
    * 回填后端返回的总条数, 之后 `tableProps.pagination.total` 就是它,
    * 页面不用再手工拼 `pagination={{ current, pageSize, total }}`。
@@ -247,7 +272,7 @@ export function useServerTable<T>(options: UseServerTableOptions = {}): UseServe
     defaultSort,
     filterParams,
     serializeSort,
-    sortParam = "ordering",
+    sortParam = ORDERING_PARAM,
     total,
   } = options;
 
@@ -284,6 +309,11 @@ export function useServerTable<T>(options: UseServerTableOptions = {}): UseServe
 
   const setPage = useCallback((page: number, pageSize?: number) => {
     setQuery((previous) => ({ ...previous, page, pageSize: pageSize ?? previous.pageSize }));
+  }, []);
+
+  const setSort = useCallback((sort: ServerSortValue | undefined) => {
+    // 换了排序键的旧页码可能已越界, 与表头排序一样回到第 1 页。
+    setQuery((previous) => ({ ...previous, page: 1, sortField: sort?.field, sortOrder: sort?.order }));
   }, []);
 
   const setTotal = useCallback(
@@ -326,7 +356,7 @@ export function useServerTable<T>(options: UseServerTableOptions = {}): UseServe
     [onChange, query.page, query.pageSize, effectiveTotal],
   );
 
-  return { query, params, tableProps, total: effectiveTotal, setPage, setTotal, reset };
+  return { query, params, tableProps, total: effectiveTotal, setPage, setSort, setTotal, reset };
 }
 
 /**
@@ -403,11 +433,37 @@ export function tablePropsWithTotal<T>(
   };
 }
 
-function defaultSortParams(
-  sortParam: string,
-  sort: { field: string; order: "ascend" | "descend" },
-): ServerTableParams {
+function defaultSortParams(sortParam: string, sort: ServerSortValue): ServerTableParams {
   return { [sortParam]: sort.order === "descend" ? `-${sort.field}` : sort.field };
+}
+
+/** 列 key -> 后端公开排序字段名。映射表里没有的列不产生排序参数。 */
+export type OrderingFieldMap = Readonly<Record<string, string>>;
+
+/**
+ * `useServerTable({ serializeSort })` 的唯一实现。
+ *
+ * 列 key 和后端公开字段名并不总是同一个词(门户申请的 `submitted_at` 列对应后端的
+ * `created_at`、审批实例的 `template_key` 列对应 `template`、应用/团队的 `status`
+ * 列对应库里的 `is_active`), 所以每张表要给一份小映射; 「asc/desc -> 有无 `-` 前缀」
+ * 的拼法则只写这一份, 页面不要各写各的。
+ *
+ * ```ts
+ * const serverTable = useServerTable<Row>({
+ *   sortParam: "ordering",
+ *   defaultSort: { field: "created_at", order: "descend" },   // 与后端默认序一致
+ *   serializeSort: orderingSerializer({ created_at: "created_at", app: "app_key" }),
+ * });
+ * ```
+ */
+export function orderingSerializer(
+  map: OrderingFieldMap,
+  sortParam: string = ORDERING_PARAM,
+): (sort: ServerSortValue) => ServerTableParams {
+  return ({ field, order }) => {
+    const backendField = map[field];
+    return backendField === undefined ? {} : defaultSortParams(sortParam, { field: backendField, order });
+  };
 }
 
 function normalizeSortOrder(order: SortOrder | undefined): "ascend" | "descend" | undefined {

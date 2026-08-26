@@ -5,7 +5,13 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { ConsolePeopleList } from "./ConsolePeopleList";
-import { ANTD_TEST_TIMEOUT_MS, openHeaderFilter, renderWithAntd } from "../../../components/antd/testing";
+import {
+  ANTD_TEST_TIMEOUT_MS,
+  columnSortOrder,
+  openHeaderFilter,
+  renderWithAntd,
+  sortByColumn,
+} from "../../../components/antd/testing";
 
 // antd Table 在 jsdom 里每次筛选都要重建整棵表格, 默认 5s 不够。
 vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
@@ -87,7 +93,7 @@ describe("ConsolePeopleList", () => {
     await user.click(within(dropdown).getByRole("button", { name: "确定" }));
 
     await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith("/console/api/v1/users?page=1&page_size=20&status=active", expect.any(Object)),
+      expect(fetchMock).toHaveBeenCalledWith("/console/api/v1/users?page=1&page_size=20&status=active&ordering=name", expect.any(Object)),
     );
   });
 
@@ -112,13 +118,61 @@ describe("ConsolePeopleList", () => {
     await user.click(within(dropdown).getByRole("button", { name: "确定" }));
 
     await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith("/console/api/v1/users?page=1&page_size=20&status=active", expect.any(Object)),
+      expect(fetchMock).toHaveBeenCalledWith("/console/api/v1/users?page=1&page_size=20&status=active&ordering=name", expect.any(Object)),
     );
     // 李四是「已离职」, 与生效中的筛选值不符, 但它是后端这一页返回的行, 必须照常展示。
     expect(await screen.findByText("李四")).toBeVisible();
     expect(screen.getByText("张三")).toBeVisible();
     // 受控 filteredValue: 表头图标与实际请求参数一致。
     await waitFor(() => expect(statusFilterTrigger()).toHaveClass("active"));
+  });
+
+  test("表头排序是服务端排序: 带 ordering 请求、回到第 1 页, 指示器跟着走", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (!url.startsWith("/console/api/v1/users?page=")) {
+        throw new Error(`Unexpected fetch: ${url}`);
+      }
+      const page = new URLSearchParams(url.split("?")[1]).get("page") ?? "1";
+      return jsonResponse({
+        data: [
+          {
+            user_id: `u-${page}`,
+            name: `员工${page}`,
+            email: `u${page}@example.com`,
+            department: "销售部",
+            status: "active",
+            open_handover_task_id: null,
+            open_handover_kind: "",
+          },
+        ],
+        pagination: { page: Number(page), page_size: 20, total_items: 40, total_pages: 2 },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderList();
+
+    // 首屏的 defaultSort 与后端默认序(name 升序)一致, 表头就带着指示器。
+    await screen.findByText("员工1");
+    expect(columnSortOrder("姓名")).toBe("ascend");
+
+    await user.click(screen.getByTitle("下一页"));
+    await screen.findByText("员工2");
+
+    await sortByColumn(user, "部门");
+    await waitFor(() =>
+      expect(lastListUrl(fetchMock)).toBe("/console/api/v1/users?page=1&page_size=20&ordering=department"),
+    );
+    expect(columnSortOrder("部门")).toBe("ascend");
+    expect(columnSortOrder("姓名")).toBeNull();
+
+    await sortByColumn(user, "部门");
+    await waitFor(() =>
+      expect(lastListUrl(fetchMock)).toBe("/console/api/v1/users?page=1&page_size=20&ordering=-department"),
+    );
+    expect(columnSortOrder("部门")).toBe("descend");
   });
 
   test("发起离职交接: 确认对话框提交后建单并跳转交接单详情", async () => {
@@ -172,6 +226,13 @@ describe("ConsolePeopleList", () => {
     expect(await screen.findByTestId("location")).toHaveTextContent("/console/lifecycle/handover-tasks/9");
   });
 });
+
+function lastListUrl(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>) {
+  return fetchMock.mock.calls
+    .map(([input]) => String(input))
+    .filter((url) => url.startsWith("/console/api/v1/users?"))
+    .at(-1);
+}
 
 /** 「状态」列表头上的筛选图标。 */
 function statusFilterTrigger(): HTMLElement {

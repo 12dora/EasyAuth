@@ -6,7 +6,12 @@ import { MemoryRouter, Outlet, Route, Routes } from "react-router-dom";
 import { describe, expect, test, vi } from "vitest";
 
 import { PortalPage } from "./PortalPage";
-import { ANTD_TEST_TIMEOUT_MS, renderWithAntd } from "../../components/antd/testing";
+import {
+  ANTD_TEST_TIMEOUT_MS,
+  columnSortOrder,
+  renderWithAntd,
+  sortByColumn,
+} from "../../components/antd/testing";
 
 // antd Table 在 jsdom 里每次筛选/排序/翻页都要重建整棵表格, 比自研原语慢得多,
 // 整套用例并行跑时默认 5s 不够; 这里只放宽本文件的用例超时。
@@ -1668,7 +1673,7 @@ describe("PortalPage tables", () => {
   test("我的权限使用服务端总数翻页，并展示 groups、expanded grants、source 和版本", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
-      if (url === "/portal/api/v1/me/grants?page=1&page_size=20") {
+      if (url === "/portal/api/v1/me/grants?page=1&page_size=20&ordering=app_key") {
         return jsonResponse({
           data: [
             portalGrantRow({
@@ -1687,7 +1692,7 @@ describe("PortalPage tables", () => {
           pagination: { page: 1, page_size: 20, total_items: 21, total_pages: 2 },
         });
       }
-      if (url === "/portal/api/v1/me/grants?page=2&page_size=20") {
+      if (url === "/portal/api/v1/me/grants?page=2&page_size=20&ordering=app_key") {
         return jsonResponse({
           data: [portalGrantRow({ app_key: "erp", app_name: "ERP" })],
           pagination: { page: 2, page_size: 20, total_items: 21, total_pages: 2 },
@@ -1716,9 +1721,97 @@ describe("PortalPage tables", () => {
 
       expect(await screen.findByText("ERP")).toBeVisible();
       expect(fetchMock).toHaveBeenCalledWith(
-        "/portal/api/v1/me/grants?page=2&page_size=20",
+        "/portal/api/v1/me/grants?page=2&page_size=20&ordering=app_key",
         expect.anything(),
       );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("我的权限表头排序是服务端排序: 带 ordering 请求、回到第 1 页, 指示器跟着走", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (!url.startsWith("/portal/api/v1/me/grants?")) {
+        throw new Error(`Unexpected fetch: ${url}`);
+      }
+      const page = new URLSearchParams(url.split("?")[1]).get("page") ?? "1";
+      return jsonResponse({
+        data: [portalGrantRow({ grant_id: Number(page), app_key: `app-${page}`, app_name: `应用${page}` })],
+        pagination: { page: Number(page), page_size: 20, total_items: 21, total_pages: 2 },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    try {
+      renderPortalPage("/portal");
+
+      // 首屏的 defaultSort 与后端默认序(app_key 升序)一致, 表头就带着指示器。
+      expect(await screen.findByText("应用1")).toBeVisible();
+      expect(columnSortOrder("应用")).toBe("ascend");
+
+      await user.click(screen.getByTitle("下一页"));
+      await screen.findByText("应用2");
+
+      await sortByColumn(user, "过期时间");
+      await waitFor(() =>
+        expect(lastFetchUrl(fetchMock)).toBe("/portal/api/v1/me/grants?page=1&page_size=20&ordering=expires_at"),
+      );
+      expect(columnSortOrder("过期时间")).toBe("ascend");
+      expect(columnSortOrder("应用")).toBeNull();
+
+      await sortByColumn(user, "过期时间");
+      await waitFor(() =>
+        expect(lastFetchUrl(fetchMock)).toBe("/portal/api/v1/me/grants?page=1&page_size=20&ordering=-expires_at"),
+      );
+      expect(columnSortOrder("过期时间")).toBe("descend");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("申请历史表头排序是服务端排序: 带 ordering 请求、回到第 1 页, 指示器跟着走", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (!url.startsWith("/portal/api/v1/me/access-requests?")) {
+        throw new Error(`Unexpected fetch: ${url}`);
+      }
+      const page = new URLSearchParams(url.split("?")[1]).get("page") ?? "1";
+      return jsonResponse({
+        data: [portalRequestRow({ id: Number(page), app_key: `app-${page}`, app_name: `应用${page}` })],
+        pagination: { page: Number(page), page_size: 20, total_items: 21, total_pages: 2 },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    try {
+      renderPortalPage("/portal/requests");
+
+      // 首屏的 defaultSort 与后端默认序(-created_at, 即按提交时间倒序)一致。
+      expect(await screen.findByText("应用1")).toBeVisible();
+      expect(columnSortOrder("提交时间")).toBe("descend");
+
+      await user.click(screen.getByTitle("下一页"));
+      await screen.findByText("应用2");
+
+      await sortByColumn(user, "状态");
+      await waitFor(() =>
+        expect(lastFetchUrl(fetchMock)).toBe(
+          "/portal/api/v1/me/access-requests?page=1&page_size=20&ordering=status",
+        ),
+      );
+      expect(columnSortOrder("状态")).toBe("ascend");
+      expect(columnSortOrder("提交时间")).toBeNull();
+
+      await sortByColumn(user, "状态");
+      await waitFor(() =>
+        expect(lastFetchUrl(fetchMock)).toBe(
+          "/portal/api/v1/me/access-requests?page=1&page_size=20&ordering=-status",
+        ),
+      );
+      expect(columnSortOrder("状态")).toBe("descend");
     } finally {
       vi.unstubAllGlobals();
     }
@@ -1727,13 +1820,13 @@ describe("PortalPage tables", () => {
   test("尾斜杠的即将过期视图保持显式 view，并把页大小发送给服务端", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
-      if (url === "/portal/api/v1/me/grants/expiring?page=1&page_size=20") {
+      if (url === "/portal/api/v1/me/grants/expiring?page=1&page_size=20&ordering=app_key") {
         return jsonResponse({
           data: [portalGrantRow({ app_key: "crm", app_name: "即将过期 CRM", grant_type: "timed", grant_expires_at: "2026-07-15T10:00:00Z" })],
           pagination: { page: 1, page_size: 20, total_items: 25, total_pages: 2 },
         });
       }
-      if (url === "/portal/api/v1/me/grants/expiring?page=1&page_size=50") {
+      if (url === "/portal/api/v1/me/grants/expiring?page=1&page_size=50&ordering=app_key") {
         return jsonResponse({
           data: [portalGrantRow({ app_key: "crm", app_name: "即将过期 CRM", grant_type: "timed", grant_expires_at: "2026-07-15T10:00:00Z" })],
           pagination: { page: 1, page_size: 50, total_items: 25, total_pages: 1 },
@@ -1755,7 +1848,7 @@ describe("PortalPage tables", () => {
 
       await waitFor(() =>
         expect(fetchMock).toHaveBeenCalledWith(
-          "/portal/api/v1/me/grants/expiring?page=1&page_size=50",
+          "/portal/api/v1/me/grants/expiring?page=1&page_size=50&ordering=app_key",
           expect.anything(),
         ),
       );
@@ -1768,7 +1861,7 @@ describe("PortalPage tables", () => {
     let firstPageRequests = 0;
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
-      if (url === "/portal/api/v1/me/grants?page=1&page_size=20") {
+      if (url === "/portal/api/v1/me/grants?page=1&page_size=20&ordering=app_key") {
         firstPageRequests += 1;
         return jsonResponse({
           data: [portalGrantRow({ app_name: firstPageRequests === 1 ? "初始第一页" : "收缩后第一页" })],
@@ -1778,7 +1871,7 @@ describe("PortalPage tables", () => {
               : { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
         });
       }
-      if (url === "/portal/api/v1/me/grants?page=2&page_size=20") {
+      if (url === "/portal/api/v1/me/grants?page=2&page_size=20&ordering=app_key") {
         return jsonResponse({
           data: [],
           pagination: { page: 2, page_size: 20, total_items: 1, total_pages: 1 },
@@ -1809,7 +1902,7 @@ describe("PortalPage tables", () => {
   test("申请历史展示同意意见、限时到期时间，并使用服务端分页", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
-      if (url === "/portal/api/v1/me/access-requests?page=1&page_size=20") {
+      if (url === "/portal/api/v1/me/access-requests?page=1&page_size=20&ordering=-created_at") {
         return jsonResponse({
           data: [
             portalRequestRow({
@@ -1831,7 +1924,7 @@ describe("PortalPage tables", () => {
           pagination: { page: 1, page_size: 20, total_items: 21, total_pages: 2 },
         });
       }
-      if (url === "/portal/api/v1/me/access-requests?page=2&page_size=20") {
+      if (url === "/portal/api/v1/me/access-requests?page=2&page_size=20&ordering=-created_at") {
         return jsonResponse({
           data: [portalRequestRow({ id: 21, app_key: "erp", app_name: "ERP", reason: "第二页申请" })],
           pagination: { page: 2, page_size: 20, total_items: 21, total_pages: 2 },
@@ -1856,7 +1949,7 @@ describe("PortalPage tables", () => {
 
       expect(await screen.findByText("ERP")).toBeVisible();
       expect(fetchMock).toHaveBeenCalledWith(
-        "/portal/api/v1/me/access-requests?page=2&page_size=20",
+        "/portal/api/v1/me/access-requests?page=2&page_size=20&ordering=-created_at",
         expect.anything(),
       );
     } finally {
@@ -1867,7 +1960,7 @@ describe("PortalPage tables", () => {
   test("申请历史对 submitted 申请显示撤回并调用撤回端点", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
-      if (url === "/portal/api/v1/me/access-requests?page=1&page_size=20") {
+      if (url === "/portal/api/v1/me/access-requests?page=1&page_size=20&ordering=-created_at") {
         return jsonResponse({
           data: [portalRequestRow({ id: 88, app_key: "crm", app_name: "CRM", status: "submitted", status_label: "已提交" })],
           pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
@@ -1951,6 +2044,10 @@ describe("PortalPage tables", () => {
     }
   });
 });
+
+function lastFetchUrl(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>) {
+  return String(fetchMock.mock.calls.at(-1)?.[0] ?? "");
+}
 
 function portalGrantRow(overrides: Record<string, unknown> = {}) {
   return {

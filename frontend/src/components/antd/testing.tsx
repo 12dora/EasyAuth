@@ -79,6 +79,57 @@ export function openFilterDropdown(): Promise<HTMLElement> {
   });
 }
 
+/**
+ * 点一次某列表头的排序区(不是整个 `th`: 带筛选的列上点 `th` 可能命中筛选图标)。
+ *
+ * 服务端排序的用例都是「点一下断言 `ordering=field`, 再点一下断言 `-field`」,
+ * 每个页面各写一遍 querySelector 太碎, 合并在这里。
+ *
+ * ```ts
+ * await sortByColumn(user, "状态");
+ * await sortByColumn(user, panel, "申请时间");
+ * ```
+ */
+export function sortByColumn(user: UserEvent, columnTitle: string): Promise<void>;
+export function sortByColumn(user: UserEvent, scope: HTMLElement, columnTitle: string): Promise<void>;
+export async function sortByColumn(
+  user: UserEvent,
+  scopeOrTitle: HTMLElement | string,
+  maybeColumnTitle?: string,
+): Promise<void> {
+  const scope: ParentNode = typeof scopeOrTitle === "string" ? document : scopeOrTitle;
+  const columnTitle = typeof scopeOrTitle === "string" ? scopeOrTitle : (maybeColumnTitle ?? "");
+  const header = findColumnHeader(scope, columnTitle);
+  const sorters = header.querySelector(".ant-table-column-sorters");
+  if (!(sorters instanceof HTMLElement)) {
+    throw new Error(`列「${columnTitle}」的表头上没有排序区, 该列没有开启排序?`);
+  }
+  await user.click(sorters);
+}
+
+/**
+ * 某列表头当前亮着的排序指示器; 未排序返回 null。
+ * 读的是 antd 的高亮箭头(`.ant-table-column-sorter-up/down.active`),
+ * 因此服务端排序下它同时验证了「受控 sortOrder 真的回填到了表头」。
+ */
+export function columnSortOrder(columnTitle: string): "ascend" | "descend" | null;
+export function columnSortOrder(scope: HTMLElement, columnTitle: string): "ascend" | "descend" | null;
+export function columnSortOrder(
+  scopeOrTitle: HTMLElement | string,
+  maybeColumnTitle?: string,
+): "ascend" | "descend" | null {
+  const scope: ParentNode = typeof scopeOrTitle === "string" ? document : scopeOrTitle;
+  const columnTitle = typeof scopeOrTitle === "string" ? scopeOrTitle : (maybeColumnTitle ?? "");
+  const header = findColumnHeader(scope, columnTitle);
+  if (header.querySelector(".ant-table-column-sorter-up.active")) {
+    return "ascend";
+  }
+  if (header.querySelector(".ant-table-column-sorter-down.active")) {
+    return "descend";
+  }
+  return null;
+}
+
 function findColumnHeader(scope: ParentNode, columnTitle: string): HTMLElement {
   const headers = [...scope.querySelectorAll("th.ant-table-cell")].filter(
     (cell): cell is HTMLElement => cell instanceof HTMLElement,

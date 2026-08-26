@@ -1,12 +1,18 @@
 import { ArrowRight } from "lucide-react";
 import { useMemo } from "react";
 
-import { AppTable, type ColumnsType, type UseServerTableResult } from "../../../components/antd/AppTable";
+import {
+  AppTable,
+  type ColumnsType,
+  type ServerSortState,
+  type UseServerTableResult,
+} from "../../../components/antd/AppTable";
 import {
   RowActionButton,
   RowActionLink,
   actionsColumn,
   serverColumn,
+  serverSortColumn,
   statusColumn,
   textColumn,
   userColumn,
@@ -27,6 +33,7 @@ export function ConsolePeopleTable({
   isLoading,
   tableProps,
   filters,
+  sort,
   actions,
 }: {
   people: PersonRow[];
@@ -34,10 +41,12 @@ export function ConsolePeopleTable({
   tableProps: UseServerTableResult<PersonRow>["tableProps"];
   /** 列 key -> 已选筛选值, 来自 useServerTable 的查询状态(status 在后端筛)。 */
   filters: Record<string, string[]>;
+  /** 当前排序, 来自同一份查询状态(四列都在后端排)。 */
+  sort: ServerSortState;
   actions: PeopleRowActions;
 }) {
   const { t } = useI18n();
-  const columns = useMemo(() => peopleColumns(t, filters, actions), [actions, filters, t]);
+  const columns = useMemo(() => peopleColumns(t, filters, sort, actions), [actions, filters, sort, t]);
 
   return (
     <AppTable<PersonRow>
@@ -53,35 +62,52 @@ export function ConsolePeopleTable({
   );
 }
 
+/**
+ * 四列(姓名/部门/邮箱/状态)都在后端排(`ordering=name|department|email|status`),
+ * 因此一律过 `serverSortColumn`: 客户端比较函数只会重排当前页, 与「共 N 条」矛盾。
+ */
 function peopleColumns(
   t: Translator,
   filters: Record<string, string[]>,
+  sort: ServerSortState,
   actions: PeopleRowActions,
 ): ColumnsType<PersonRow> {
   return [
-    userColumn<PersonRow>({
-      key: "name",
-      title: t("people.column.name"),
-      getName: (person) => person.name || person.user_id,
-      getUserId: (person) => person.user_id,
-    }),
-    // 部门与邮箱后端不支持单列过滤; 它们由工具栏的 q 一起做跨列搜索。
-    textColumn<PersonRow>({ key: "department", title: t("people.column.department"), width: 180 }),
-    textColumn<PersonRow>({ key: "email", title: t("people.column.email"), width: 240 }),
+    serverSortColumn(
+      userColumn<PersonRow>({
+        key: "name",
+        title: t("people.column.name"),
+        getName: (person) => person.name || person.user_id,
+        getUserId: (person) => person.user_id,
+      }),
+      sort,
+    ),
+    // 部门与邮箱后端不支持单列过滤(它们由工具栏的 q 一起做跨列搜索), 但支持排序。
+    serverSortColumn(
+      textColumn<PersonRow>({ key: "department", title: t("people.column.department"), width: 180 }),
+      sort,
+    ),
+    serverSortColumn(
+      textColumn<PersonRow>({ key: "email", title: t("people.column.email"), width: 240 }),
+      sort,
+    ),
     // status 在后端筛: serverColumn 去掉客户端 onFilter(否则 placeholderData 保留的
     // 上一页会被就地筛空)并受控 filteredValue; 默认单选, 与后端只认单个 status 一致。
-    serverColumn(
-      statusColumn<PersonRow>({
-        key: "status",
-        title: t("common.status"),
-        options: PERSON_STATUSES.map((status) => ({
-          value: status,
-          label: personStatusLabel(t, status),
-          tone: personStatusTone(status),
-        })),
-        width: 140,
-      }),
-      filters.status,
+    serverSortColumn(
+      serverColumn(
+        statusColumn<PersonRow>({
+          key: "status",
+          title: t("common.status"),
+          options: PERSON_STATUSES.map((status) => ({
+            value: status,
+            label: personStatusLabel(t, status),
+            tone: personStatusTone(status),
+          })),
+          width: 140,
+        }),
+        filters.status,
+      ),
+      sort,
     ),
     actionsColumn<PersonRow>({ render: (person) => <PeopleRowActionsCell person={person} actions={actions} /> }),
   ];

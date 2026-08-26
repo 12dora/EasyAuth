@@ -1,7 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 
-import { serverTableQuery, useServerTable } from "../../components/antd/AppTable";
+import {
+  ORDERING_PARAM,
+  orderingSerializer,
+  serverTableQuery,
+  useServerTable,
+} from "../../components/antd/AppTable";
 import { useToast } from "../../components/ui/Toast";
 import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../lib/api";
@@ -11,6 +16,20 @@ import type { ApprovalInstanceRow } from "../../lib/domain";
 export const INSTANCES_QUERY_PREFIX = ["console", "operations", "approval-instances"];
 const DEFAULT_PAGE_SIZE = 20;
 const LIST_ENDPOINT = "/console/api/v1/operations/approval-instances";
+
+/**
+ * 列 key -> 后端 `ordering` 字段(只认这四个)。
+ * 模板列的 key 是 template_key(payload 字段名), 后端公开的排序字段名叫 template。
+ */
+const INSTANCE_ORDERING_FIELDS = {
+  app_key: "app_key",
+  template_key: "template",
+  status: "status",
+  created_at: "created_at",
+} as const;
+
+/** 后端默认序是 -created_at; defaultSort 与它一致, 首屏表头就带排序指示器。 */
+const INSTANCE_DEFAULT_SORT = { field: "created_at", order: "descend" } as const;
 
 interface RedeliverPayload {
   approval_instance: ApprovalInstanceRow;
@@ -29,6 +48,9 @@ export function useApprovalInstances() {
   const serverTable = useServerTable<ApprovalInstanceRow>({
     defaultPageSize: DEFAULT_PAGE_SIZE,
     filterParams: { status: "status", app_key: "app_key" },
+    sortParam: ORDERING_PARAM,
+    defaultSort: INSTANCE_DEFAULT_SORT,
+    serializeSort: orderingSerializer(INSTANCE_ORDERING_FIELDS),
   });
   const queryString = serverTableQuery(serverTable.params);
 
@@ -79,6 +101,8 @@ export function useApprovalInstances() {
     tableProps: serverTable.tableProps,
     // 表头筛选的真相在 useServerTable 里, 列要用 serverColumn 受控回去。
     filters: serverTable.query.filters,
+    // 排序同理: 表头指示器要跟着 ordering 参数走, 列要用 serverSortColumn 受控回去。
+    sort: serverTable.query,
     isRedelivering: (row: ApprovalInstanceRow) => redeliveringInstanceIds.has(row.instance_id),
     redeliver: (row: ApprovalInstanceRow) => {
       if (redeliveringInstanceIdsRef.current.has(row.instance_id)) {

@@ -4,14 +4,19 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { PortalApprovalsSection } from "./PortalApprovalsSection";
-import { ANTD_TEST_TIMEOUT_MS, renderWithAntd } from "../../../components/antd/testing";
+import {
+  ANTD_TEST_TIMEOUT_MS,
+  columnSortOrder,
+  renderWithAntd,
+  sortByColumn,
+} from "../../../components/antd/testing";
 
 // antd Table 在 jsdom 里每次筛选/排序/翻页都要重建整棵表格, 比自研原语慢得多,
 // 整套用例并行跑时默认 5s 不够; 这里只放宽本文件的用例超时。
 vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
 
-const PENDING_LIST_URL = "/portal/api/v1/me/approvals?status=pending&page=1&page_size=20";
-const PROCESSED_LIST_URL = "/portal/api/v1/me/approvals?status=processed&page=1&page_size=20";
+const PENDING_LIST_URL = "/portal/api/v1/me/approvals?status=pending&page=1&page_size=20&ordering=created_at";
+const PROCESSED_LIST_URL = "/portal/api/v1/me/approvals?status=processed&page=1&page_size=20&ordering=-decided_at";
 const PENDING_DETAIL_URL = "/portal/api/v1/me/approvals/42";
 
 const pendingApproval = {
@@ -500,7 +505,7 @@ describe("PortalApprovalsSection", () => {
   );
 
   test("使用服务端总数并在服务端末页收缩时 clamp 页码", async () => {
-    const pageTwoUrl = "/portal/api/v1/me/approvals?status=pending&page=2&page_size=20";
+    const pageTwoUrl = "/portal/api/v1/me/approvals?status=pending&page=2&page_size=20&ordering=created_at";
     let pageOneCalls = 0;
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
@@ -538,8 +543,81 @@ describe("PortalApprovalsSection", () => {
     });
   });
 
+  test("表头排序是服务端排序: 带 ordering 请求、回到第 1 页, 指示器跟着走", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (!url.startsWith("/portal/api/v1/me/approvals?")) {
+        throw new Error(`Unexpected fetch: ${url}`);
+      }
+      const page = new URLSearchParams(url.split("?")[1]).get("page") ?? "1";
+      return jsonResponse({
+        data: [
+          {
+            ...pendingApproval,
+            id: Number(page),
+            applicant: { ...pendingApproval.applicant, user_id: `u-${page}`, name: `申请人${page}` },
+          },
+        ],
+        pagination: { page: Number(page), page_size: 20, total_items: 21, total_pages: 2 },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderSection();
+
+    // 待办页签的后端默认序是 created_at 正序(最早提交的先处理), defaultSort 与它一致。
+    expect(await screen.findByText("申请人1")).toBeVisible();
+    expect(columnSortOrder("提交时间")).toBe("ascend");
+
+    await user.click(screen.getByTitle("下一页"));
+    await screen.findByText("申请人2");
+
+    await sortByColumn(user, "申请人");
+    await waitFor(() =>
+      expect(lastApprovalsUrl(fetchMock)).toBe(
+        "/portal/api/v1/me/approvals?status=pending&page=1&page_size=20&ordering=applicant",
+      ),
+    );
+    expect(columnSortOrder("申请人")).toBe("ascend");
+    expect(columnSortOrder("提交时间")).toBeNull();
+
+    await sortByColumn(user, "申请人");
+    await waitFor(() =>
+      expect(lastApprovalsUrl(fetchMock)).toBe(
+        "/portal/api/v1/me/approvals?status=pending&page=1&page_size=20&ordering=-applicant",
+      ),
+    );
+    expect(columnSortOrder("申请人")).toBe("descend");
+  });
+
+  test("切到已处理页签时排序回到该页签的后端默认序 -decided_at", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === PENDING_LIST_URL) {
+        return pendingListResponse();
+      }
+      if (url === PROCESSED_LIST_URL) {
+        return jsonResponse({
+          data: [{ ...pendingApproval, status: "grant_applied", status_label: "已授权", decided_at: "2026-07-02T09:00:00Z" }],
+          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderSection();
+    await screen.findByText("张三");
+    await user.click(screen.getByRole("tab", { name: "已处理" }));
+
+    await waitFor(() => expect(lastApprovalsUrl(fetchMock)).toBe(PROCESSED_LIST_URL));
+    expect(columnSortOrder("处理时间")).toBe("descend");
+  });
+
   test("已处理列表展示同意意见和限时授权的具体到期时间", async () => {
-    const processedUrl = "/portal/api/v1/me/approvals?status=processed&page=1&page_size=20";
+    const processedUrl = "/portal/api/v1/me/approvals?status=processed&page=1&page_size=20&ordering=-decided_at";
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(async (input) => {
@@ -642,6 +720,13 @@ describe("PortalApprovalsSection", () => {
     expect(screen.queryByText("审批已通过，但授权未落地")).not.toBeInTheDocument();
   });
 });
+
+function lastApprovalsUrl(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>) {
+  return fetchMock.mock.calls
+    .map(([input]) => String(input))
+    .filter((url) => url.startsWith("/portal/api/v1/me/approvals?"))
+    .at(-1);
+}
 
 function renderSection(staleTime = 0) {
   const client = new QueryClient({

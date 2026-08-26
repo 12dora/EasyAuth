@@ -11,6 +11,7 @@ import {
   APP_TABLE_PAGINATION_CLASS,
   AppTable,
   dateRangeFilter,
+  orderingSerializer,
   decodeDateRange,
   encodeDateRange,
   enumFilter,
@@ -25,8 +26,16 @@ import {
   type SorterResult,
   type TableCurrentDataSource,
 } from "./AppTable";
-import { actionsColumn, dateTimeColumn, serverColumn, statusColumn, textColumn, userColumn } from "./columns";
-import { ANTD_TEST_TIMEOUT_MS, openHeaderFilter, renderWithAntd } from "./testing";
+import {
+  actionsColumn,
+  dateTimeColumn,
+  serverColumn,
+  serverSortColumn,
+  statusColumn,
+  textColumn,
+  userColumn,
+} from "./columns";
+import { ANTD_TEST_TIMEOUT_MS, columnSortOrder, openHeaderFilter, renderWithAntd, sortByColumn } from "./testing";
 
 // antd Table 在 jsdom 里每次筛选/排序都要重建整棵表格, 比自研原语慢得多,
 // 默认 5s 不够; 这里只放宽本文件的用例超时。
@@ -362,6 +371,66 @@ describe("useServerTable", () => {
 
     await user.click(columnHeader("Name"));
     await waitFor(() => expect(seen.at(-1)).toEqual({ page: 1, page_size: 10, ordering: "-name" }));
+  });
+});
+
+describe("orderingSerializer + serverSortColumn", () => {
+  test("列 key 按映射表翻成后端字段名, 降序加 - 前缀; 表里没有的列不产生参数", () => {
+    const serialize = orderingSerializer({ submitted_at: "created_at", app: "app_key" });
+
+    expect(serialize({ field: "submitted_at", order: "ascend" })).toEqual({ ordering: "created_at" });
+    expect(serialize({ field: "submitted_at", order: "descend" })).toEqual({ ordering: "-created_at" });
+    expect(serialize({ field: "app", order: "ascend" })).toEqual({ ordering: "app_key" });
+    // 后端排不了的列(页面也不该给它 sorter): 不带排序参数, 由后端用默认序。
+    expect(serialize({ field: "owners", order: "ascend" })).toEqual({});
+    // 参数名可改, 拼法只此一份。
+    expect(orderingSerializer({ name: "name" }, "sort")({ field: "name", order: "descend" })).toEqual({
+      sort: "-name",
+    });
+  });
+
+  test("serverSortColumn 去掉客户端比较函数, 指示器由查询状态受控", async () => {
+    const user = userEvent.setup({ delay: null });
+    const seen: Record<string, unknown>[] = [];
+
+    function SortedTable() {
+      const serverTable = useServerTable<Row>({
+        total: 42,
+        defaultSort: { field: "updated_at", order: "descend" },
+        serializeSort: orderingSerializer({ name: "name", updated_at: "updated_at" }),
+      });
+      seen.push(serverTable.params);
+      // dateTimeColumn 默认自带时间戳比较函数, serverSortColumn 必须把它换成服务端排序。
+      const columns: ColumnsType<Row> = [
+        serverSortColumn(textColumn<Row>({ key: "name", title: "Name", sorter: true }), serverTable.query),
+        serverSortColumn(dateTimeColumn<Row>({ key: "updated_at", title: "Updated" }), serverTable.query),
+      ];
+      expect(columns.every((column) => (column as ColumnType<Row>).sorter === true)).toBe(true);
+      return (
+        <AppTable<Row>
+          {...serverTable.tableProps}
+          columns={columns}
+          dataSource={ROWS.slice(0, 10)}
+          rowKey="id"
+        />
+      );
+    }
+
+    renderWithAntd(<SortedTable />);
+
+    // defaultSort 直接进请求参数, 表头也立刻带上指示器。
+    expect(seen[0]).toEqual({ page: 1, page_size: 10, ordering: "-updated_at" });
+    expect(columnSortOrder("Updated")).toBe("descend");
+
+    await sortByColumn(user, "Name");
+    await waitFor(() => expect(seen.at(-1)).toEqual({ page: 1, page_size: 10, ordering: "name" }));
+    // 另一列排序时本列必须显式回到未排序, 否则会同时亮两个指示器。
+    expect(columnSortOrder("Name")).toBe("ascend");
+    expect(columnSortOrder("Updated")).toBeNull();
+
+    await sortByColumn(user, "Name");
+    await waitFor(() => expect(seen.at(-1)).toEqual({ page: 1, page_size: 10, ordering: "-name" }));
+    expect(columnSortOrder("Name")).toBe("descend");
   });
 });
 

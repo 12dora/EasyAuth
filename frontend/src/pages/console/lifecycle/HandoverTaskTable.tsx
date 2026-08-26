@@ -1,13 +1,20 @@
 import { ArrowRight } from "lucide-react";
 import { useMemo } from "react";
 
-import { AppTable, enumFilter, type ColumnsType, type UseServerTableResult } from "../../../components/antd/AppTable";
+import {
+  AppTable,
+  enumFilter,
+  type ColumnsType,
+  type ServerSortState,
+  type UseServerTableResult,
+} from "../../../components/antd/AppTable";
 import {
   RowActionButton,
   RowActionLink,
   actionsColumn,
   dateTimeColumn,
   serverColumn,
+  serverSortColumn,
   statusColumn,
   textColumn,
   userColumn,
@@ -35,6 +42,7 @@ export function HandoverTaskTable({
   isLoading,
   tableProps,
   filters,
+  sort,
   actions,
 }: {
   tasks: HandoverTaskRow[];
@@ -42,10 +50,12 @@ export function HandoverTaskTable({
   tableProps: UseServerTableResult<HandoverTaskRow>["tableProps"];
   /** 列 key -> 已选筛选值, 来自 useServerTable 的查询状态(四个键全在后端筛)。 */
   filters: Record<string, string[]>;
+  /** 当前排序, 来自同一份查询状态(交接对象 / 类型 / 状态 / 创建时间四列在后端排)。 */
+  sort: ServerSortState;
   actions: HandoverTaskRowActions;
 }) {
   const { t } = useI18n();
-  const columns = useMemo(() => taskColumns(t, filters, actions), [actions, filters, t]);
+  const columns = useMemo(() => taskColumns(t, filters, sort, actions), [actions, filters, sort, t]);
 
   return (
     <AppTable<HandoverTaskRow>
@@ -69,51 +79,64 @@ export function HandoverTaskTable({
  * 当前页(翻页时还是 placeholderData 留下的上一页)按同一个值再筛一遍 ——
  * 负责人列显示的是人名、阻塞列显示的是计数, 都和筛选值对不上, 整页会被筛空。
  * serverColumn 默认 multiple: false, 与后端每个键只接受一个值一致。
+ *
+ * 排序同样发生在后端(`ordering=subject|kind|status|created_at`), 对应四列过
+ * `serverSortColumn`; 负责人与阻塞两列后端排不了, 因此不给 sorter。
  */
 function taskColumns(
   t: Translator,
   filters: Record<string, string[]>,
+  sort: ServerSortState,
   actions: HandoverTaskRowActions,
 ): ColumnsType<HandoverTaskRow> {
   return [
-    userColumn<HandoverTaskRow>({
-      key: "subject",
-      title: t("handover.list.column.subject"),
-      getName: (task) => task.subject.name || task.subject.user_id,
-      getUserId: (task) => task.subject.email ?? "",
-    }),
-    serverColumn(
-      {
-        key: "kind",
-        title: t("handover.list.column.kind"),
-        width: 180,
-        render: (_value: unknown, task: HandoverTaskRow) => (
-          <div className="flex flex-wrap items-center gap-1">
-            <span>{handoverKindLabel(t, task.kind)}</span>
-            {task.escalation?.days_left != null ? (
-              <Badge tone={daysLeftTone(task.escalation.days_left)}>{`${task.escalation.days_left}d`}</Badge>
-            ) : null}
-          </div>
-        ),
-        ...enumFilter<HandoverTaskRow>(
-          "kind",
-          TASK_KINDS.map((kind) => ({ value: kind, label: handoverKindLabel(t, kind) })),
-        ),
-      },
-      filters.kind,
-    ),
-    serverColumn(
-      statusColumn<HandoverTaskRow>({
-        key: "status",
-        title: t("common.status"),
-        options: TASK_STATUSES.map((status) => ({
-          value: status,
-          label: handoverTaskStatusLabel(t, status),
-          tone: handoverTaskStatusTone(status),
-        })),
-        width: 130,
+    serverSortColumn(
+      userColumn<HandoverTaskRow>({
+        key: "subject",
+        title: t("handover.list.column.subject"),
+        getName: (task) => task.subject.name || task.subject.user_id,
+        getUserId: (task) => task.subject.email ?? "",
       }),
-      filters.status,
+      sort,
+    ),
+    serverSortColumn(
+      serverColumn(
+        {
+          key: "kind",
+          title: t("handover.list.column.kind"),
+          width: 180,
+          render: (_value: unknown, task: HandoverTaskRow) => (
+            <div className="flex flex-wrap items-center gap-1">
+              <span>{handoverKindLabel(t, task.kind)}</span>
+              {task.escalation?.days_left != null ? (
+                <Badge tone={daysLeftTone(task.escalation.days_left)}>{`${task.escalation.days_left}d`}</Badge>
+              ) : null}
+            </div>
+          ),
+          ...enumFilter<HandoverTaskRow>(
+            "kind",
+            TASK_KINDS.map((kind) => ({ value: kind, label: handoverKindLabel(t, kind) })),
+          ),
+        },
+        filters.kind,
+      ),
+      sort,
+    ),
+    serverSortColumn(
+      serverColumn(
+        statusColumn<HandoverTaskRow>({
+          key: "status",
+          title: t("common.status"),
+          options: TASK_STATUSES.map((status) => ({
+            value: status,
+            label: handoverTaskStatusLabel(t, status),
+            tone: handoverTaskStatusTone(status),
+          })),
+          width: 130,
+        }),
+        filters.status,
+      ),
+      sort,
     ),
     serverColumn(
       {
@@ -149,11 +172,15 @@ function taskColumns(
       },
       filters.blocked,
     ),
-    dateTimeColumn<HandoverTaskRow>({
-      key: "created_at",
-      title: t("handover.list.column.createdAt"),
-      sorter: false,
-    }),
+    serverSortColumn(
+      // 预设自带的时间戳比较函数只会重排当前页, 由 serverSortColumn 换成服务端排序。
+      dateTimeColumn<HandoverTaskRow>({
+        key: "created_at",
+        title: t("handover.list.column.createdAt"),
+        sorter: false,
+      }),
+      sort,
+    ),
     actionsColumn<HandoverTaskRow>({
       render: (task) => (
         <>

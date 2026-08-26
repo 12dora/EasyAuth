@@ -6,7 +6,7 @@ import type { BadgeTone } from "../../lib/status";
 import { Badge } from "../Badge";
 import { Button } from "../Button";
 import { ButtonLink } from "../ButtonLink";
-import { enumFilter, readField, textFilter, type ColumnType } from "./AppTable";
+import { enumFilter, readField, textFilter, type ColumnType, type ServerSortState } from "./AppTable";
 
 /**
  * 表格里等宽文本(app_key / user_id / 版本号等标识符)的唯一样式出处。
@@ -61,6 +61,33 @@ export function serverColumn<T>(
     filteredValue: filteredValue !== undefined && filteredValue !== null && filteredValue.length > 0 ? [...filteredValue] : null,
     // filterMultiple 只影响 antd 内建下拉; 自定义 filterDropdown(文本/时间范围)不受它管。
     ...(column.filters ? { filterMultiple: multiple } : {}),
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* 服务端排序列                                                        */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 把任意列改造成「服务端排序」列。和 `serverColumn` 之于筛选是同一件事:
+ *
+ * 1. `sorter: true` —— 服务端模式的开关, **不带比较函数**。列预设自带的比较函数
+ *    (`dateTimeColumn` 默认按时间戳、`textColumn({ sorter: true })` 按 localeCompare)
+ *    只对「当前页那几行」生效, 在服务端分页表上是错的: 表头写着按时间倒序,
+ *    实际只是把第 2 页内部重排了一遍。传进来的列若还带着比较函数, 这里会覆盖掉。
+ * 2. `sortOrder` 受控 —— 排序的真相在 `useServerTable().query` 里(它就是请求参数的
+ *    来源), 交给 antd 内部状态会让表头指示器和实际 `ordering` 参数对不上;
+ *    别的列在排序时本列必须显式回到 `null`, 否则会同时亮起两个指示器。
+ *
+ * ```tsx
+ * serverSortColumn(dateTimeColumn<Row>({ key: "created_at", title: t("...") }), sort)
+ * ```
+ */
+export function serverSortColumn<T>(column: ColumnType<T>, sort: ServerSortState): ColumnType<T> {
+  return {
+    ...column,
+    sorter: true,
+    sortOrder: sort.sortField !== undefined && String(column.key) === sort.sortField ? (sort.sortOrder ?? null) : null,
   };
 }
 

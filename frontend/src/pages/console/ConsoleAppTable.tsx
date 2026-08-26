@@ -1,13 +1,19 @@
 import { ArrowRight, Compass } from "lucide-react";
 import { useMemo } from "react";
 
-import { AppTable, type ColumnsType, type UseServerTableResult } from "../../components/antd/AppTable";
+import {
+  AppTable,
+  type ColumnsType,
+  type ServerSortState,
+  type UseServerTableResult,
+} from "../../components/antd/AppTable";
 import {
   RowActionButton,
   RowActionLink,
   actionsColumn,
   dateTimeColumn,
   serverColumn,
+  serverSortColumn,
   statusColumn,
   textColumn,
   userColumn,
@@ -36,6 +42,7 @@ export function ConsoleAppTable({
   isLoading,
   tableProps,
   filters,
+  sort,
   actions,
 }: {
   apps: AppSummary[];
@@ -43,10 +50,12 @@ export function ConsoleAppTable({
   tableProps: UseServerTableResult<AppSummary>["tableProps"];
   /** 列 key -> 已选筛选值, 来自 useServerTable 的查询状态(owners / status 都在后端筛)。 */
   filters: Record<string, string[]>;
+  /** 当前排序, 来自同一份查询状态(排序也在后端做)。 */
+  sort: ServerSortState;
   actions: AppRowActions;
 }) {
   const { t } = useI18n();
-  const columns = useMemo(() => appColumns(t, filters, actions), [actions, filters, t]);
+  const columns = useMemo(() => appColumns(t, filters, sort, actions), [actions, filters, sort, t]);
 
   return (
     <AppTable<AppSummary>
@@ -62,19 +71,28 @@ export function ConsoleAppTable({
   );
 }
 
+/**
+ * 排序在后端做(`ordering=app_key|status|updated_at`), 因此三列一律过 `serverSortColumn`:
+ * `sorter: true` 只当开关、不带比较函数, 指示器由 useServerTable 的查询状态受控。
+ * owners / configuration_status 后端排不了, 不给 sorter。
+ */
 function appColumns(
   t: Translator,
   filters: Record<string, string[]>,
+  sort: ServerSortState,
   actions: AppRowActions,
 ): ColumnsType<AppSummary> {
   return [
-    // 应用名 + app_key 两行, 与成员单元格同一套排版。
-    userColumn<AppSummary>({
-      key: "app",
-      title: t("appList.column.app"),
-      getName: (app) => app.name,
-      getUserId: (app) => app.app_key,
-    }),
+    // 应用名 + app_key 两行, 与成员单元格同一套排版; 排序按后端默认序的 app_key。
+    serverSortColumn(
+      userColumn<AppSummary>({
+        key: "app",
+        title: t("appList.column.app"),
+        getName: (app) => app.name,
+        getUserId: (app) => app.app_key,
+      }),
+      sort,
+    ),
     // owners 存的是用户 ID, 后端按 owner_user_id 精确过滤; 单元格里显示的是拼接后的
     // 名字串, 客户端再按它筛一遍会把后端筛出来的行筛掉, 因此必须过 serverColumn。
     serverColumn(
@@ -100,21 +118,27 @@ function appColumns(
     }),
     // 后端只认单个 status, serverColumn 默认 multiple: false, 下拉即为单选,
     // 不给用户多选却只有一个生效的错觉。
-    serverColumn(
-      statusColumn<AppSummary>({
-        key: "status",
-        title: t("common.status"),
-        getValue: (app) => (app.is_active ? "active" : "inactive"),
-        options: APP_STATUS_VALUES.map((status) => ({
-          value: status,
-          label: status === "active" ? t("common.enabled") : t("common.disabled"),
-          tone: status === "active" ? "evergreen" : "neutral",
-        })),
-        width: 120,
-      }),
-      filters.status,
+    serverSortColumn(
+      serverColumn(
+        statusColumn<AppSummary>({
+          key: "status",
+          title: t("common.status"),
+          getValue: (app) => (app.is_active ? "active" : "inactive"),
+          options: APP_STATUS_VALUES.map((status) => ({
+            value: status,
+            label: status === "active" ? t("common.enabled") : t("common.disabled"),
+            tone: status === "active" ? "evergreen" : "neutral",
+          })),
+          width: 120,
+        }),
+        filters.status,
+      ),
+      sort,
     ),
-    dateTimeColumn<AppSummary>({ key: "updated_at", title: t("common.updatedAt"), sorter: false }),
+    serverSortColumn(
+      dateTimeColumn<AppSummary>({ key: "updated_at", title: t("common.updatedAt"), sorter: false }),
+      sort,
+    ),
     // 四个按钮(停用/删除/继续接入占位/进入)实测 277px, 加上单元格内边距取 300。
     actionsColumn<AppSummary>({ width: 300, render: (app) => <AppRowActionsCell app={app} actions={actions} /> }),
   ];

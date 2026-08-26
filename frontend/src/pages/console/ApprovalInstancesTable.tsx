@@ -2,11 +2,18 @@ import { Check } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { Badge } from "../../components/Badge";
-import { AppTable, type AppTableProps, type ColumnType, type ColumnsType } from "../../components/antd/AppTable";
+import {
+  AppTable,
+  type AppTableProps,
+  type ColumnType,
+  type ColumnsType,
+  type ServerSortState,
+} from "../../components/antd/AppTable";
 import {
   RowActionButton,
   dateTimeColumn,
   serverColumn,
+  serverSortColumn,
   statusColumn,
   textColumn,
   type StatusColumnOption,
@@ -26,6 +33,7 @@ export function ApprovalInstancesTable({
   isLoading,
   tableProps,
   filters,
+  sort,
   actions,
 }: {
   rows: ApprovalInstanceRow[];
@@ -33,6 +41,8 @@ export function ApprovalInstancesTable({
   tableProps: Pick<AppTableProps<ApprovalInstanceRow>, "pagination" | "onChange">;
   /** 列 key -> 已选筛选值, 来自 useServerTable 的查询状态。 */
   filters: Record<string, string[]>;
+  /** 当前排序, 来自同一份查询状态(应用/模板/状态/创建时间四列在后端排)。 */
+  sort: ServerSortState;
   actions: RedeliverActions;
 }) {
   const { t } = useI18n();
@@ -40,7 +50,7 @@ export function ApprovalInstancesTable({
   return (
     <AppTable<ApprovalInstanceRow>
       {...tableProps}
-      columns={instanceColumns(t, filters, actions)}
+      columns={instanceColumns(t, filters, sort, actions)}
       dataSource={rows}
       emptyTitle={t("console.operations.empty")}
       emptyDescription={t("console.operations.emptyDescription")}
@@ -51,28 +61,39 @@ export function ApprovalInstancesTable({
   );
 }
 
+/**
+ * 排序在后端(`ordering=app_key|template|status|created_at`), 对应四列过
+ * `serverSortColumn`; 业务键 / 发起人 / 钉钉实例 / 投递状态后端排不了, 不给 sorter。
+ */
 function instanceColumns(
   t: Translator,
   filters: Record<string, string[]>,
+  sort: ServerSortState,
   actions: RedeliverActions,
 ): ColumnsType<ApprovalInstanceRow> {
   return [
-    serverColumn(
+    serverSortColumn(
+      serverColumn(
+        textColumn<ApprovalInstanceRow>({
+          key: "app_key",
+          title: t("approvalInstances.column.app"),
+          mono: true,
+          filter: true,
+          width: 150,
+        }),
+        filters.app_key,
+      ),
+      sort,
+    ),
+    serverSortColumn(
       textColumn<ApprovalInstanceRow>({
-        key: "app_key",
-        title: t("approvalInstances.column.app"),
+        key: "template_key",
+        title: t("approvalInstances.column.template"),
         mono: true,
-        filter: true,
         width: 150,
       }),
-      filters.app_key,
+      sort,
     ),
-    textColumn<ApprovalInstanceRow>({
-      key: "template_key",
-      title: t("approvalInstances.column.template"),
-      mono: true,
-      width: 150,
-    }),
     textColumn<ApprovalInstanceRow>({ key: "biz_key", title: t("approvalInstances.column.bizKey"), mono: true }),
     textColumn<ApprovalInstanceRow>({
       key: "originator_user_id",
@@ -82,14 +103,17 @@ function instanceColumns(
     }),
     // 失败原因没有独立的列, 沿用旧表格挂在状态徽章上的 title 提示。
     withTitle(
-      serverColumn(
-        statusColumn<ApprovalInstanceRow>({
-          key: "status",
-          title: t("common.status"),
-          options: approvalStatusOptions(t),
-          width: 130,
-        }),
-        filters.status,
+      serverSortColumn(
+        serverColumn(
+          statusColumn<ApprovalInstanceRow>({
+            key: "status",
+            title: t("common.status"),
+            options: approvalStatusOptions(t),
+            width: 130,
+          }),
+          filters.status,
+        ),
+        sort,
       ),
       (row) => row.last_error || undefined,
     ),
@@ -105,12 +129,15 @@ function instanceColumns(
       width: 190,
       render: (_value: unknown, row: ApprovalInstanceRow) => <DeliveryCell t={t} row={row} actions={actions} />,
     },
-    dateTimeColumn<ApprovalInstanceRow>({
-      key: "created_at",
-      title: t("approvalInstances.column.createdAt"),
-      // 后端固定按 -created_at 排序, 没有 ordering 参数可用。
-      sorter: false,
-    }),
+    serverSortColumn(
+      dateTimeColumn<ApprovalInstanceRow>({
+        key: "created_at",
+        title: t("approvalInstances.column.createdAt"),
+        // 预设自带的时间戳比较函数只会重排当前页, 由 serverSortColumn 换成服务端排序。
+        sorter: false,
+      }),
+      sort,
+    ),
   ];
 }
 

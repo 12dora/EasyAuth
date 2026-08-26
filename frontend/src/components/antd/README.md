@@ -126,7 +126,14 @@ actionsColumn<T>({ render, title?, width? = ACTIONS_COLUMN_DEFAULT_WIDTH, fixed?
 
 serverColumn<T>(column, filteredValue?, { multiple? = false }): ColumnType<T>
 // 把任意列改造成「服务端筛选」列: 去掉 onFilter + 受控 filteredValue(见下)
+
+serverSortColumn<T>(column, sort: ServerSortState): ColumnType<T>
+// 把任意列改造成「服务端排序」列: sorter: true(不带比较函数) + 受控 sortOrder(见下)
 ```
+
+`dateTimeColumn` 默认自带时间戳比较函数、`textColumn({ sorter: true })` 默认按
+localeCompare 比较 —— **这两个默认值只在客户端表格上成立**。服务端分页表上一律
+过 `serverSortColumn`(它会覆盖掉传进来的比较函数); 后端排不了的列干脆不给 sorter。
 
 操作列里的按钮/链接只能用本目录的这两个预设(分别是仓库自研 `components/Button`
 与 `components/ButtonLink` 的 `size="sm"` 版本):
@@ -226,6 +233,32 @@ const column = serverColumn(
 // 请求参数: { ...serverTable.params, ...submitted.toParams(from, to) }
 ```
 
+## 服务端排序的列 — `serverSortColumn`
+
+**只要排序发生在后端, 列就必须过 `serverSortColumn`**, 否则表头会撒谎:
+
+```tsx
+serverSortColumn(
+  dateTimeColumn<Row>({ key: "created_at", title: t("...") }),
+  sort,                                          // = useServerTable().query
+)
+```
+
+它做两件事, 少一件都出错:
+
+1. **`sorter: true`, 不带比较函数**。列预设自带的客户端比较函数只对「当前页那几行」
+   生效: 表头写着按时间倒序, 实际只是把第 2 页内部重排了一遍, 与分页条的「共 N 条」
+   自相矛盾。传进来的列若还带着比较函数, `serverSortColumn` 会覆盖掉。
+2. **`sortOrder` 受控**。排序的真相在 `useServerTable().query` 里(它就是 `ordering`
+   参数的来源), 交给 antd 内部状态会让表头指示器和实际请求参数对不上; 而且别的列
+   排序时本列必须显式回到 `null`, 否则会同时亮起两个指示器。
+
+后端**排不了**的列一律不给 sorter(而不是留一个只作用于当前页的客户端排序):
+应用列表的负责人、交接单的负责人与阻塞、审批实例的业务单号、清单版本的导入人……
+
+各页的「列 key -> 后端公开字段名」映射表就写在对应的 hook 里(常量名 `*_ORDERING_FIELDS`),
+和 `defaultSort` 挨着, 改后端允许的排序字段时一处就能对齐。
+
 ## 服务端分页 — `useServerTable`
 
 分页状态、页长选项、「筛选/排序后回到第 1 页」、antd `onChange` → 后端查询参数，
@@ -236,8 +269,8 @@ const serverTable = useServerTable<Row>({
   defaultPageSize?: 10,
   defaultSort?: { field: "updated_at", order: "descend" },
   filterParams?: { status: "status", appKey: "app_key", name: { param: "q" } },
-  sortParam?: "ordering",                       // 默认 DRF 风格, 降序前缀 "-"
-  serializeSort?: (sort) => ({ ... }),          // 需要别的拼法时覆盖
+  sortParam?: ORDERING_PARAM,                   // "ordering"; DRF 风格, 降序前缀 "-"
+  serializeSort?: orderingSerializer({ ... }),  // 列 key 与后端字段名不一致时(见下)
 });
 
 serverTable.params      // { page, page_size, ...映射后的筛选, [ordering] } 直接拼请求
@@ -245,6 +278,7 @@ serverTable.query       // { page, pageSize, sortField, sortOrder, filters } 原
 serverTable.tableProps  // { pagination: { current, pageSize, total }, onChange }
 serverTable.total       // 当前生效的总条数
 serverTable.setPage(page, pageSize?)
+serverTable.setSort(sort | undefined)           // 直接改排序(并回到第 1 页), 见下
 serverTable.setTotal(total)                     // 拿到响应后回填总条数, 见下
 serverTable.reset()
 
@@ -270,6 +304,38 @@ serverTable.setTotal(query.data?.pagination.total_items);
 - 只拿得到 `tableProps`、拿不到 hook 本体时（某个自定义 hook 只透出 tableProps），
   用纯函数版本 `tablePropsWithTotal(tableProps, total)`。
 - `total` 选项仍然有效且优先级更高，老代码不用改。
+
+### 排序参数映射 `orderingSerializer`
+
+后端在所有服务端分页列表上统一收单字段的 `ordering=<field>` / `ordering=-<field>`
+(非法字段 400)。列 key 与后端公开字段名并不总是同一个词, 所以每张表给一份小映射,
+「asc/desc -> 有无 `-` 前缀」的拼法只在 `orderingSerializer` 里写一次:
+
+```ts
+const REQUEST_ORDERING_FIELDS = {
+  submitted_at: "created_at",     // 列 key 是 payload 字段名, 后端排序字段叫 created_at
+  status: "status",
+  app: "app_key",
+} as const;
+
+useServerTable<Row>({
+  sortParam: ORDERING_PARAM,
+  defaultSort: { field: "submitted_at", order: "descend" },   // = 后端默认序
+  serializeSort: orderingSerializer(REQUEST_ORDERING_FIELDS),
+});
+```
+
+映射表里没有的列不产生排序参数(那种列本来就不该有 sorter)。
+
+**`defaultSort` 必须等于后端的默认序**: 它既让首屏表头就带上排序指示器, 又保证首屏
+请求带的 `ordering` 与不带时的后端行为一致。`ordering` 也必须一起进查询串与查询键
+(`serverTableQuery(serverTable.params)`), 否则点了表头 react-query 命中旧缓存、不会重新请求。
+
+### 排序随外部状态切换 `setSort`
+
+`defaultSort` 只在建 hook 时生效。门户审批的两个页签后端默认序不同
+(待办 `created_at` 正序 / 已处理 `-decided_at`), 这种「默认序跟着别的状态变」的场景
+在切换时显式调 `setSort(...)`(它自带回到第 1 页), 表头点击仍然只走 `onChange`。
 
 ### 筛选参数映射 `filterParams`
 
@@ -309,6 +375,8 @@ AppTableTestProvider                          // I18nProvider + AppConfigProvide
 openHeaderFilter(user, columnTitle)           // 打开某列表头筛选下拉, 返回下拉面板
 openHeaderFilter(user, scope, columnTitle)    // 一个页面有多张表时限定在某个容器内
 openFilterDropdown()                          // 已经点开时, 等下拉可见并返回
+sortByColumn(user, [scope,] columnTitle)      // 点一次某列表头的排序区
+columnSortOrder([scope,] columnTitle)         // 该列亮着的排序指示器: ascend/descend/null
 ANTD_TEST_TIMEOUT_MS                          // 30_000
 ```
 
@@ -317,6 +385,11 @@ ANTD_TEST_TIMEOUT_MS                          // 30_000
   就不用每个文件再抄一遍。
 - antd Table 在 jsdom 里每次筛选/排序都要重建整棵表格，默认 5s 常常不够，
   在测试文件顶层写 `vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS })`。
+- `sortByColumn` 点的是 `.ant-table-column-sorters` 而不是整个 `th`: 同时带筛选的列上
+  点 `th` 可能命中筛选图标。`columnSortOrder` 读的是 antd 高亮的箭头, 因此服务端排序下
+  它同时验证了「受控 `sortOrder` 真的回填到了表头」。
+  注意 antd 的排序是三态循环(升 -> 降 -> 取消): 表头初始就是降序的列(`defaultSort`
+  为 descend), 第一次点击是**取消排序**, 不是转升序。
 - `openHeaderFilter` 会等下拉真正可见（`.ant-dropdown:not(.ant-dropdown-hidden)`）再返回：
   antd 的下拉延迟挂载、收起时带动画，直接查 `.ant-table-filter-dropdown` 会拿到上一个。
   列名按「先前缀、后包含」匹配表头（固定列会让同一个标题在 DOM 里出现两次）。

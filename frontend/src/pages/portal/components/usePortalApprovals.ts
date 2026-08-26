@@ -3,7 +3,14 @@ import type { UseQueryResult } from "@tanstack/react-query";
 import { useEffect, useRef, useState } from "react";
 
 import type { ApprovalDecisionMode } from "../../../components/ApprovalDecisionDialog";
-import { useServerTable, type UseServerTableResult } from "../../../components/antd/AppTable";
+import {
+  ORDERING_PARAM,
+  orderingSerializer,
+  serverTableQuery,
+  useServerTable,
+  type ServerSortValue,
+  type UseServerTableResult,
+} from "../../../components/antd/AppTable";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { ApiError, apiRequest } from "../../../lib/api";
 
@@ -23,10 +30,32 @@ import {
   type PortalApprovalRow,
 } from "./portalApprovalTypes";
 
+/**
+ * 列 key -> 后端 `ordering` 字段。
+ * 提交时间列的 key 是 payload 的 submitted_at, 后端公开的排序字段名叫 created_at;
+ * 申请人列的 key 就是 applicant。内容 / 期限 / 我的意见三列后端排不了。
+ */
+const APPROVAL_ORDERING_FIELDS = {
+  submitted_at: "created_at",
+  decided_at: "decided_at",
+  app: "app_key",
+  applicant: "applicant",
+} as const;
+
+/**
+ * 两个页签的后端默认序不同: 待办按提交时间正序(最早的先处理), 已处理按决定时间倒序。
+ * `defaultSort` 只在建 hook 时生效, 所以切页签时要显式把排序改到对应的默认值,
+ * 否则已处理页会沿用待办的 created_at 序, 与后端默认行为不一致。
+ */
+const APPROVAL_DEFAULT_SORT: Record<ApprovalTab, ServerSortValue> = {
+  pending: { field: "submitted_at", order: "ascend" },
+  processed: { field: "decided_at", order: "descend" },
+};
+
 export interface PortalApprovalsController {
   tab: ApprovalTab;
   switchTab: (nextTab: ApprovalTab) => void;
-  /** 分页状态与 antd onChange 的唯一容器; 排序/筛选在这张表上都是客户端行为。 */
+  /** 分页与排序状态、antd onChange 的唯一容器; 两者都映射成后端查询参数。 */
   serverTable: UseServerTableResult<PortalApprovalRow>;
   query: UseQueryResult<ApprovalListPayload, Error>;
   approvals: PortalApprovalRow[];
@@ -45,13 +74,15 @@ export function usePortalApprovals(): PortalApprovalsController {
   const { t } = useI18n();
   const queryClient = useQueryClient();
   const [tab, setTab] = useState<ApprovalTab>("pending");
-  // 后端只认 status(由页签给出)+page+page_size: serializeSort 置空,
-  // 表头排序退化为 antd 对当前页的客户端排序。
   const serverTable = useServerTable<PortalApprovalRow>({
     defaultPageSize: DEFAULT_PAGE_SIZE,
-    serializeSort: () => ({}),
+    sortParam: ORDERING_PARAM,
+    defaultSort: APPROVAL_DEFAULT_SORT.pending,
+    serializeSort: orderingSerializer(APPROVAL_ORDERING_FIELDS),
   });
-  const { page, page_size: pageSize } = serverTable.params;
+  // status 由页签给出, 不走表头筛选; ordering 必须一起进查询串和查询键,
+  // 否则点了表头也不会重新请求。
+  const approvalsSearch = serverTableQuery({ status: tab, ...serverTable.params });
   const [pendingDecision, setPendingDecision] = useState<PendingDecision | null>(null);
   const [noticeKey, setNoticeKey] = useState<ApprovalNoticeKey>("");
   const [detailRequestVersion, setDetailRequestVersion] = useState(0);
@@ -59,12 +90,10 @@ export function usePortalApprovals(): PortalApprovalsController {
   const pendingApprovalId = pendingDecision?.approval.id;
 
   const query = useQuery({
-    queryKey: ["portal", "approvals", tab, page, pageSize],
+    queryKey: ["portal", "approvals", approvalsSearch],
     queryFn: async () =>
       parseApprovalListPayload(
-        await apiRequest<unknown>(
-          `/portal/api/v1/me/approvals?status=${tab}&page=${page}&page_size=${pageSize}`,
-        ),
+        await apiRequest<unknown>(`/portal/api/v1/me/approvals?${approvalsSearch}`),
         t("portal.approvals.invalidPayload"),
       ),
   });
@@ -121,7 +150,8 @@ export function usePortalApprovals(): PortalApprovalsController {
   };
   const switchTab = (nextTab: ApprovalTab) => {
     setTab(nextTab);
-    serverTable.setPage(1);
+    // setSort 自带「回到第 1 页」, 因此不必再 setPage(1)。
+    serverTable.setSort(APPROVAL_DEFAULT_SORT[nextTab]);
   };
 
   // 服务端总页数收缩时(别的审批人先处理掉了)当前页可能已越界, 钳回最后一页。

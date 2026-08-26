@@ -3,26 +3,44 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
-import { AppTable, useServerTable, type ColumnsType } from "../../../../components/antd/AppTable";
-import { dateTimeColumn, textColumn } from "../../../../components/antd/columns";
+import {
+  AppTable,
+  ORDERING_PARAM,
+  orderingSerializer,
+  serverTableQuery,
+  useServerTable,
+  type ColumnsType,
+} from "../../../../components/antd/AppTable";
+import { dateTimeColumn, serverSortColumn, textColumn } from "../../../../components/antd/columns";
 import { apiRequest, itemsFromPayload } from "../../../../lib/api";
 import type { ListPayload } from "../../../../lib/api";
 import { manifestVersionsQueryPrefix, type ManifestVersion } from "./manifestImportModel";
 
+/**
+ * 列 key -> 后端 `ordering` 字段。接口另外允许 `imported_at`, 但版本项的 payload
+ * (`template_version_item`)根本不下发导入时间, 那一列永远是 "-", 排它没有意义,
+ * 因此只保留版本一列可排。导入人后端排不了。
+ */
+const MANIFEST_ORDERING_FIELDS = { version: "version" } as const;
+
+/** 后端默认序是 -version; defaultSort 与它一致, 首屏表头就带排序指示器。 */
+const MANIFEST_DEFAULT_SORT = { field: "version", order: "descend" } as const;
+
 export function useManifestHistory(appKey: string) {
-  // 版本历史接口只认 page/page_size, 没有排序参数: serializeSort 置空,
-  // 表头排序退化为 antd 对当前页的客户端排序。
   const serverTable = useServerTable<ManifestVersion>({
     defaultPageSize: 20,
-    serializeSort: () => ({}),
+    sortParam: ORDERING_PARAM,
+    defaultSort: MANIFEST_DEFAULT_SORT,
+    serializeSort: orderingSerializer(MANIFEST_ORDERING_FIELDS),
   });
-  const { page, page_size: pageSize } = serverTable.params;
   const queryPrefix = manifestVersionsQueryPrefix(appKey);
+  // ordering 必须一起进查询串和查询键, 否则点了表头也不会重新请求。
+  const versionsSearch = serverTableQuery(serverTable.params);
   const query = useQuery({
-    queryKey: [...queryPrefix, page, pageSize],
+    queryKey: [...queryPrefix, versionsSearch],
     queryFn: () =>
       apiRequest<ListPayload<ManifestVersion>>(
-        `/console/api/v1/apps/${appKey}/permission-template-versions?page=${page}&page_size=${pageSize}`,
+        `/console/api/v1/apps/${appKey}/permission-template-versions?${versionsSearch}`,
       ),
   });
   serverTable.setTotal(query.data?.pagination?.total_items);
@@ -31,24 +49,30 @@ export function useManifestHistory(appKey: string) {
 
 export function ManifestHistory({ state }: { state: ReturnType<typeof useManifestHistory> }) {
   const { query, serverTable } = state;
+  const sort = serverTable.query;
   const columns = useMemo<ColumnsType<ManifestVersion>>(
     () => [
-      textColumn<ManifestVersion>({
-        key: "version",
-        title: "版本",
-        getValue: (row) => row.catalog_version ?? row.version,
-        mono: true,
-        sorter: true,
-        width: 200,
-      }),
+      serverSortColumn(
+        textColumn<ManifestVersion>({
+          key: "version",
+          title: "版本",
+          getValue: (row) => row.catalog_version ?? row.version,
+          mono: true,
+          width: 200,
+        }),
+        sort,
+      ),
+      // 导入时间与导入人后端都排不了(前者 payload 里压根没有), 因此不给 sorter:
+      // 客户端比较函数只会重排当前页, 与「共 N 条」自相矛盾。
       dateTimeColumn<ManifestVersion>({
         key: "imported_at",
         title: "导入时间",
         getValue: (row) => row.imported_at ?? row.created_at,
+        sorter: false,
       }),
-      textColumn<ManifestVersion>({ key: "imported_by", title: "导入人", sorter: true }),
+      textColumn<ManifestVersion>({ key: "imported_by", title: "导入人" }),
     ],
-    [],
+    [sort],
   );
 
   return (

@@ -6,7 +6,12 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { ToastProvider } from "../../../../components/ui/Toast";
 import { ConnectorTab } from "./ConnectorTab";
-import { ANTD_TEST_TIMEOUT_MS, renderWithAntd } from "../../../../components/antd/testing";
+import {
+  ANTD_TEST_TIMEOUT_MS,
+  columnSortOrder,
+  renderWithAntd,
+  sortByColumn,
+} from "../../../../components/antd/testing";
 
 // antd Table 在 jsdom 里每次筛选/排序/翻页都要重建整棵表格, 比自研原语慢得多,
 // 整套用例并行跑时默认 5s 不够; 这里只放宽本文件的用例超时。
@@ -292,13 +297,46 @@ describe("ConnectorTab", () => {
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        "/console/api/v1/apps/demo/connectors/11/sync-runs?page=2&page_size=10",
+        "/console/api/v1/apps/demo/connectors/11/sync-runs?page=2&page_size=10&ordering=-started_at",
         expect.any(Object),
       );
     });
     expect(
       await within(runsPanel).findByText("第 11-12 条 / 共 12 条"),
     ).toBeInTheDocument();
+  });
+
+  test("运行历史表头排序是服务端排序: 带 ordering 请求、回到第 1 页, 指示器跟着走", async () => {
+    const fetchMock = installConnectorFetch({ instances: [instances[0]] });
+    const user = userEvent.setup();
+    renderWithClient(<ConnectorTab appKey="demo" canManage={true} />);
+
+    const runsPanel = (await screen.findByRole("heading", { name: "运行历史" })).closest(
+      "section",
+    ) as HTMLElement;
+    // 首屏的 defaultSort 与后端默认序(-started_at)一致, 表头就带着指示器。
+    await within(runsPanel).findByText("第 1-10 条 / 共 12 条");
+    expect(columnSortOrder(runsPanel, "开始时间")).toBe("descend");
+
+    await user.click(within(runsPanel).getByTitle("下一页"));
+    await within(runsPanel).findByText("第 11-12 条 / 共 12 条");
+
+    await sortByColumn(user, runsPanel, "触发方式");
+    await waitFor(() =>
+      expect(lastSyncRunsUrl(fetchMock)).toBe(
+        "/console/api/v1/apps/demo/connectors/11/sync-runs?page=1&page_size=10&ordering=trigger",
+      ),
+    );
+    expect(columnSortOrder(runsPanel, "触发方式")).toBe("ascend");
+    expect(columnSortOrder(runsPanel, "开始时间")).toBeNull();
+
+    await sortByColumn(user, runsPanel, "触发方式");
+    await waitFor(() =>
+      expect(lastSyncRunsUrl(fetchMock)).toBe(
+        "/console/api/v1/apps/demo/connectors/11/sync-runs?page=1&page_size=10&ordering=-trigger",
+      ),
+    );
+    expect(columnSortOrder(runsPanel, "触发方式")).toBe("descend");
   });
 
   test("授权组映射用表头筛选按组名过滤当前数据", async () => {
@@ -423,6 +461,13 @@ function installConnectorFetch({
   });
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+
+function lastSyncRunsUrl(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>) {
+  return fetchMock.mock.calls
+    .map(([input]) => String(input))
+    .filter((url) => url.includes("/sync-runs?"))
+    .at(-1);
 }
 
 function connectorInstance(

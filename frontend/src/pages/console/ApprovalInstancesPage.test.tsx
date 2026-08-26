@@ -6,12 +6,18 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { ToastProvider } from "../../components/ui/Toast";
 import { ApprovalInstancesPage } from "./ApprovalInstancesPage";
-import { ANTD_TEST_TIMEOUT_MS, openHeaderFilter, renderWithAntd } from "../../components/antd/testing";
+import {
+  ANTD_TEST_TIMEOUT_MS,
+  columnSortOrder,
+  openHeaderFilter,
+  renderWithAntd,
+  sortByColumn,
+} from "../../components/antd/testing";
 
 // antd Table 在 jsdom 里每次筛选/翻页都要重建整棵表格, 默认 5s 不够。
 vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
 
-const LIST_URL = "/console/api/v1/operations/approval-instances?page=1&page_size=20";
+const LIST_URL = "/console/api/v1/operations/approval-instances?page=1&page_size=20&ordering=-created_at";
 
 const INSTANCES = [
   {
@@ -197,7 +203,12 @@ describe("ApprovalInstancesPage", () => {
     await user.click(within(statusFilter).getByText("已通过"));
     await user.click(within(statusFilter).getByRole("button", { name: "确定" }));
     await waitFor(() => {
-      expect(lastListQuery(fetchMock)).toEqual({ page: "1", page_size: "20", status: "approved" });
+      expect(lastListQuery(fetchMock)).toEqual({
+        page: "1",
+        page_size: "20",
+        status: "approved",
+        ordering: "-created_at",
+      });
     });
     await screen.findByText("REQ-1");
 
@@ -210,8 +221,47 @@ describe("ApprovalInstancesPage", () => {
         page_size: "20",
         status: "approved",
         app_key: "crm",
+        ordering: "-created_at",
       });
     });
+  });
+
+  test("表头排序是服务端排序: 带 ordering 请求、回到第 1 页, 指示器跟着走", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (!url.startsWith("/console/api/v1/operations/approval-instances?")) {
+        throw new Error(`Unexpected fetch: ${url}`);
+      }
+      const page = new URLSearchParams(url.split("?")[1]).get("page") ?? "1";
+      return jsonResponse({
+        data: [{ ...INSTANCES[0], instance_id: `ai-p${page}`, biz_key: `P${page}` }],
+        pagination: { page: Number(page), page_size: 20, total_items: 40, total_pages: 2 },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup({ delay: null });
+
+    renderPage();
+
+    // 首屏的 defaultSort 与后端默认序(-created_at)一致, 表头就带着指示器。
+    await screen.findByText("P1");
+    expect(columnSortOrder("发起时间")).toBe("descend");
+
+    await user.click(screen.getByTitle("下一页"));
+    await screen.findByText("P2");
+
+    await sortByColumn(user, "模板");
+    await waitFor(() => {
+      expect(lastListQuery(fetchMock)).toEqual({ page: "1", page_size: "20", ordering: "template" });
+    });
+    expect(columnSortOrder("模板")).toBe("ascend");
+    expect(columnSortOrder("发起时间")).toBeNull();
+
+    await sortByColumn(user, "模板");
+    await waitFor(() => {
+      expect(lastListQuery(fetchMock)).toEqual({ page: "1", page_size: "20", ordering: "-template" });
+    });
+    expect(columnSortOrder("模板")).toBe("descend");
   });
 
   test("翻页请求下一页并保留筛选条件", async () => {
@@ -241,7 +291,7 @@ describe("ApprovalInstancesPage", () => {
     await user.click(screen.getByTitle("下一页"));
 
     await waitFor(() => {
-      expect(lastListQuery(fetchMock)).toEqual({ page: "2", page_size: "20" });
+      expect(lastListQuery(fetchMock)).toEqual({ page: "2", page_size: "20", ordering: "-created_at" });
     });
     expect(await screen.findByText("P2-0")).toBeVisible();
   });

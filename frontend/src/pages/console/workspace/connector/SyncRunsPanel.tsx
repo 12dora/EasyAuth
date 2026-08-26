@@ -1,8 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
 import { useMemo } from "react";
 
-import { AppTable, useServerTable, type ColumnsType } from "../../../../components/antd/AppTable";
-import { dateTimeColumn, statusColumn, textColumn } from "../../../../components/antd/columns";
+import {
+  AppTable,
+  ORDERING_PARAM,
+  orderingSerializer,
+  serverTableQuery,
+  useServerTable,
+  type ColumnsType,
+  type ServerSortState,
+} from "../../../../components/antd/AppTable";
+import { dateTimeColumn, serverSortColumn, statusColumn, textColumn } from "../../../../components/antd/columns";
 import { PanelSurface } from "../../../../components/ui/PanelSurface";
 import { useI18n } from "../../../../i18n/I18nProvider";
 import { apiRequest } from "../../../../lib/api";
@@ -20,6 +28,16 @@ import {
 
 const RUN_STATUSES = ["success", "partial", "failed"] as const;
 
+/** 列 key -> 后端 `ordering` 字段(同步记录接口只认这三个)。 */
+const SYNC_RUN_ORDERING_FIELDS = {
+  started_at: "started_at",
+  trigger: "trigger",
+  status: "status",
+} as const;
+
+/** 后端默认序是 -started_at; defaultSort 与它一致, 首屏表头就带排序指示器。 */
+const SYNC_RUN_DEFAULT_SORT = { field: "started_at", order: "descend" } as const;
+
 export function SyncRunsPanel({
   appKey,
   instance,
@@ -28,56 +46,61 @@ export function SyncRunsPanel({
   instance: ConnectorInstanceItem;
 }) {
   const { t } = useI18n();
-  // 后端只支持 page/page_size, 没有排序参数: serializeSort 置空,
-  // 表头排序退化为 antd 对当前页的客户端排序。
   const serverTable = useServerTable<ConnectorSyncRunItem>({
     defaultPageSize: 10,
-    serializeSort: () => ({}),
+    sortParam: ORDERING_PARAM,
+    defaultSort: SYNC_RUN_DEFAULT_SORT,
+    serializeSort: orderingSerializer(SYNC_RUN_ORDERING_FIELDS),
   });
-  const { page, page_size: pageSize } = serverTable.params;
+  const sort: ServerSortState = serverTable.query;
+  // ordering 必须一起进查询串和查询键, 否则点了表头也不会重新请求。
+  const runsSearch = serverTableQuery(serverTable.params);
   const runsQuery = useQuery({
-    queryKey: [
-      "console",
-      "app",
-      appKey,
-      "connector-sync-runs",
-      instance.id,
-      page,
-      pageSize,
-    ],
+    queryKey: ["console", "app", appKey, "connector-sync-runs", instance.id, runsSearch],
     queryFn: () =>
       apiRequest<ListPayload<ConnectorSyncRunItem>>(
-        `/console/api/v1/apps/${appKey}/connectors/${instance.id}/sync-runs?page=${page}&page_size=${pageSize}`,
+        `/console/api/v1/apps/${appKey}/connectors/${instance.id}/sync-runs?${runsSearch}`,
       ),
     refetchInterval: 30_000,
   });
   const runs = runsQuery.data?.data ?? [];
   serverTable.setTotal(runsQuery.data?.pagination?.total_items);
+  // 时间/触发/结果三列在后端排; 统计与错误两列后端排不了, 不给 sorter。
   const columns = useMemo<ColumnsType<ConnectorSyncRunItem>>(
     () => [
-      dateTimeColumn<ConnectorSyncRunItem>({
-        key: "started_at",
-        title: t("console.connector.runsColumn.time"),
-      }),
-      textColumn<ConnectorSyncRunItem>({
-        key: "trigger",
-        title: t("console.connector.runsColumn.trigger"),
-        getValue: (run) => runTriggerLabel(t, run.trigger),
-        sorter: true,
-        width: 120,
-      }),
-      statusColumn<ConnectorSyncRunItem>({
-        key: "status",
-        title: t("console.connector.runsColumn.status"),
-        options: RUN_STATUSES.map((status) => ({
-          value: status,
-          label: runStatusLabel(t, status),
-          tone: RUN_STATUS_TONES[status],
-        })),
-        // 后端不支持按结果过滤, 只对当前页过滤会与「共 N 条」自相矛盾。
-        filter: false,
-        width: 120,
-      }),
+      serverSortColumn(
+        dateTimeColumn<ConnectorSyncRunItem>({
+          key: "started_at",
+          title: t("console.connector.runsColumn.time"),
+          // 预设自带的时间戳比较函数只会重排当前页, 由 serverSortColumn 换成服务端排序。
+          sorter: false,
+        }),
+        sort,
+      ),
+      serverSortColumn(
+        textColumn<ConnectorSyncRunItem>({
+          key: "trigger",
+          title: t("console.connector.runsColumn.trigger"),
+          getValue: (run) => runTriggerLabel(t, run.trigger),
+          width: 120,
+        }),
+        sort,
+      ),
+      serverSortColumn(
+        statusColumn<ConnectorSyncRunItem>({
+          key: "status",
+          title: t("console.connector.runsColumn.status"),
+          options: RUN_STATUSES.map((status) => ({
+            value: status,
+            label: runStatusLabel(t, status),
+            tone: RUN_STATUS_TONES[status],
+          })),
+          // 后端不支持按结果过滤, 只对当前页过滤会与「共 N 条」自相矛盾。
+          filter: false,
+          width: 120,
+        }),
+        sort,
+      ),
       textColumn<ConnectorSyncRunItem>({
         key: "stats",
         title: t("console.connector.runsColumn.stats"),
@@ -90,7 +113,7 @@ export function SyncRunsPanel({
         title: t("console.connector.runsColumn.error"),
       }),
     ],
-    [t],
+    [sort, t],
   );
 
   return (

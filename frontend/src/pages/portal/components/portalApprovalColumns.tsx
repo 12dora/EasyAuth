@@ -1,11 +1,12 @@
 import type { ApprovalDecisionMode } from "../../../components/ApprovalDecisionDialog";
 import { Badge } from "../../../components/Badge";
-import type { ColumnsType, ColumnType } from "../../../components/antd/AppTable";
+import type { ColumnsType, ColumnType, ServerSortState } from "../../../components/antd/AppTable";
 import {
   MONO_TEXT_CLASS,
   RowActionButton,
   actionsColumn,
   dateTimeColumn,
+  serverSortColumn,
   textColumn,
 } from "../../../components/antd/columns";
 
@@ -21,16 +22,23 @@ import { approvalContentDetails } from "./PortalApprovalDetails";
 import { applicantLabel } from "./portalApprovalFacts";
 import type { ApprovalTab, PortalApprovalRow } from "./portalApprovalTypes";
 
+/**
+ * 排序发生在后端(`ordering=applicant|app_key|created_at|decided_at`), 因此这四列过
+ * `serverSortColumn`: `sorter: true` 只当开关、指示器由查询状态受控。
+ * 状态 / 内容 / 期限 / 我的意见后端排不了, 不给 sorter ——
+ * 客户端比较函数只会重排当前页, 与「共 N 条」自相矛盾。
+ */
 export function approvalColumns(
   t: Translator,
   tab: ApprovalTab,
+  sort: ServerSortState,
   actionsDisabled: boolean,
   onDecision: (mode: ApprovalDecisionMode, approval: PortalApprovalRow) => void,
 ): ColumnsType<PortalApprovalRow> {
   return [
     ...(tab === "processed" ? [approvalStatusColumn(t)] : []),
-    ...requestColumns(t),
-    ...(tab === "pending" ? [decisionActionsColumn(t, actionsDisabled, onDecision)] : decisionColumns(t)),
+    ...requestColumns(t, sort),
+    ...(tab === "pending" ? [decisionActionsColumn(t, actionsDisabled, onDecision)] : decisionColumns(t, sort)),
   ];
 }
 
@@ -52,34 +60,38 @@ function approvalStatusColumn(t: Translator): ColumnType<PortalApprovalRow> {
   };
 }
 
-function requestColumns(t: Translator): ColumnsType<PortalApprovalRow> {
+function requestColumns(t: Translator, sort: ServerSortState): ColumnsType<PortalApprovalRow> {
   return [
-    {
-      key: "applicant",
-      title: t("portal.approvals.column.applicant"),
-      width: 160,
-      sorter: (left, right) => applicantLabel(left).localeCompare(applicantLabel(right)),
-      render: (_value: unknown, approval: PortalApprovalRow) => (
-        <div className="flex min-w-0 flex-col gap-1">
-          <strong className="truncate">{applicantLabel(approval)}</strong>
-          {approval.applicant?.department ? (
-            <span className="text-xs leading-4 text-ink-faint">{approval.applicant.department}</span>
-          ) : null}
-        </div>
-      ),
-    },
-    {
-      key: "app",
-      title: t("common.app"),
-      width: 160,
-      sorter: (left, right) => (left.app_name ?? "").localeCompare(right.app_name ?? ""),
-      render: (_value: unknown, approval: PortalApprovalRow) => (
-        <div className="flex min-w-0 flex-col gap-1">
-          <strong className="truncate">{approval.app_name ?? approval.app_key ?? "-"}</strong>
-          <code className={MONO_TEXT_CLASS}>{approval.app_key ?? "-"}</code>
-        </div>
-      ),
-    },
+    serverSortColumn(
+      {
+        key: "applicant",
+        title: t("portal.approvals.column.applicant"),
+        width: 160,
+        render: (_value: unknown, approval: PortalApprovalRow) => (
+          <div className="flex min-w-0 flex-col gap-1">
+            <strong className="truncate">{applicantLabel(approval)}</strong>
+            {approval.applicant?.department ? (
+              <span className="text-xs leading-4 text-ink-faint">{approval.applicant.department}</span>
+            ) : null}
+          </div>
+        ),
+      },
+      sort,
+    ),
+    serverSortColumn(
+      {
+        key: "app",
+        title: t("common.app"),
+        width: 160,
+        render: (_value: unknown, approval: PortalApprovalRow) => (
+          <div className="flex min-w-0 flex-col gap-1">
+            <strong className="truncate">{approval.app_name ?? approval.app_key ?? "-"}</strong>
+            <code className={MONO_TEXT_CLASS}>{approval.app_key ?? "-"}</code>
+          </div>
+        ),
+      },
+      sort,
+    ),
     {
       key: "content",
       title: t("portal.approvals.column.content"),
@@ -98,7 +110,15 @@ function requestColumns(t: Translator): ColumnsType<PortalApprovalRow> {
         </div>
       ),
     },
-    dateTimeColumn<PortalApprovalRow>({ key: "submitted_at", title: t("portal.column.submittedAt") }),
+    serverSortColumn(
+      // 预设自带的时间戳比较函数只会重排当前页, 由 serverSortColumn 换成服务端排序。
+      dateTimeColumn<PortalApprovalRow>({
+        key: "submitted_at",
+        title: t("portal.column.submittedAt"),
+        sorter: false,
+      }),
+      sort,
+    ),
     textColumn<PortalApprovalRow>({ key: "reason", title: t("portal.column.reason"), ellipsis: false }),
   ];
 }
@@ -127,12 +147,16 @@ function decisionActionsColumn(
   });
 }
 
-function decisionColumns(t: Translator): ColumnsType<PortalApprovalRow> {
+function decisionColumns(t: Translator, sort: ServerSortState): ColumnsType<PortalApprovalRow> {
   return [
-    dateTimeColumn<PortalApprovalRow>({
-      key: "decided_at",
-      title: t("portal.approvals.column.decidedAt"),
-    }),
+    serverSortColumn(
+      dateTimeColumn<PortalApprovalRow>({
+        key: "decided_at",
+        title: t("portal.approvals.column.decidedAt"),
+        sorter: false,
+      }),
+      sort,
+    ),
     textColumn<PortalApprovalRow>({
       key: "decision_comment",
       title: t("portal.approvals.column.myComment"),

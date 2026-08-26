@@ -3,12 +3,20 @@ import { useEffect, useMemo, useState } from "react";
 import { useOutletContext } from "react-router-dom";
 
 import type { AppShellOutletContext } from "../../components/AppShell";
-import { AppTable, useServerTable, type ColumnsType } from "../../components/antd/AppTable";
+import {
+  AppTable,
+  ORDERING_PARAM,
+  orderingSerializer,
+  serverTableQuery,
+  useServerTable,
+  type ColumnsType,
+} from "../../components/antd/AppTable";
 import {
   MONO_TEXT_CLASS,
   RowActionButton,
   actionsColumn,
   dateTimeColumn,
+  serverSortColumn,
   textColumn,
 } from "../../components/antd/columns";
 import { PageState } from "../../components/ui/PageState";
@@ -41,6 +49,27 @@ import {
 export type PortalView = "grants" | "request" | "requests" | "expiring" | "approvals";
 
 const DEFAULT_PAGE_SIZE = 20;
+
+/**
+ * 授权表的列 key -> 后端 `ordering` 字段。
+ *
+ * 接口另外允许 `created_at`, 但表里没有「授权时间」这一列 —— 给一个看不见的字段
+ * 排序只会让人猜不到表格为什么变了顺序, 因此只映射展示得出来的两列。
+ * 应用列同时显示名字与 app_key, 排序按后端默认序的那一个(app_key)。
+ */
+const GRANT_ORDERING_FIELDS = { app: "app_key", grant_expires_at: "expires_at" } as const;
+/** 后端默认序是 app_key 升序; defaultSort 与它一致, 首屏表头就带排序指示器。 */
+const GRANT_DEFAULT_SORT = { field: "app", order: "ascend" } as const;
+
+/** 申请表: 提交时间列的 key 是 payload 的 submitted_at, 后端公开的排序字段名叫 created_at。 */
+const REQUEST_ORDERING_FIELDS = {
+  submitted_at: "created_at",
+  status: "status",
+  app: "app_key",
+  grant_expires_at: "expires_at",
+} as const;
+/** 后端默认序是 -created_at(即按提交时间倒序)。 */
+const REQUEST_DEFAULT_SORT = { field: "submitted_at", order: "descend" } as const;
 
 export function PortalPage({ view }: { view: PortalView }) {
   const { t } = useI18n();
@@ -94,35 +123,40 @@ function PortalGrantSection({
   emptyText: string;
 }) {
   const { t } = useI18n();
-  // 门户授权列表只支持 page/page_size: serializeSort 置空, 表头排序退化为
-  // antd 对当前页的客户端排序, 不冒充服务端排序。
   const serverTable = useServerTable<PortalGrantRow>({
     defaultPageSize: DEFAULT_PAGE_SIZE,
-    serializeSort: () => ({}),
+    sortParam: ORDERING_PARAM,
+    defaultSort: GRANT_DEFAULT_SORT,
+    serializeSort: orderingSerializer(GRANT_ORDERING_FIELDS),
   });
-  const { page, page_size: pageSize } = serverTable.params;
+  const sort = serverTable.query;
+  // ordering 必须一起进查询串和查询键, 否则点了表头也不会重新请求。
+  const grantsSearch = serverTableQuery(serverTable.params);
   const query = useQuery({
-    queryKey: ["portal", endpoint, page, pageSize],
-    queryFn: async () =>
-      parsePortalGrantList(await apiRequest<unknown>(`${endpoint}?page=${page}&page_size=${pageSize}`)),
+    queryKey: ["portal", endpoint, grantsSearch],
+    queryFn: async () => parsePortalGrantList(await apiRequest<unknown>(`${endpoint}?${grantsSearch}`)),
   });
   const grants = query.data?.data ?? [];
   serverTable.setTotal(query.data?.pagination.total_items);
   useClampPage(query.data, serverTable.query.page, serverTable.setPage);
   const columns = useMemo<ColumnsType<PortalGrantRow>>(
     () => [
-      {
-        key: "app",
-        title: t("common.app"),
-        width: 200,
-        sorter: (left, right) => (left.app_name ?? "").localeCompare(right.app_name ?? ""),
-        render: (_value: unknown, row: PortalGrantRow) => (
-          <div className="flex min-w-0 flex-col gap-1">
-            <strong className="truncate">{row.app_name ?? row.app_key ?? "-"}</strong>
-            <code className={MONO_TEXT_CLASS}>{row.app_key ?? "-"}</code>
-          </div>
-        ),
-      },
+      // 排序在后端(ordering=app_key): 原来挂在这列上的 localeCompare 只会重排当前页,
+      // 表头写着按应用排序, 实际只是把这 20 行内部换了个顺序。
+      serverSortColumn(
+        {
+          key: "app",
+          title: t("common.app"),
+          width: 200,
+          render: (_value: unknown, row: PortalGrantRow) => (
+            <div className="flex min-w-0 flex-col gap-1">
+              <strong className="truncate">{row.app_name ?? row.app_key ?? "-"}</strong>
+              <code className={MONO_TEXT_CLASS}>{row.app_key ?? "-"}</code>
+            </div>
+          ),
+        },
+        sort,
+      ),
       textColumn<PortalGrantRow>({
         key: "groups",
         title: t("portal.column.groups"),
@@ -157,9 +191,13 @@ function PortalGrantSection({
         mono: true,
         width: 220,
       }),
-      dateTimeColumn<PortalGrantRow>({ key: "grant_expires_at", title: t("portal.column.expiresAt") }),
+      serverSortColumn(
+        // 预设自带的时间戳比较函数只会重排当前页, 由 serverSortColumn 换成服务端排序。
+        dateTimeColumn<PortalGrantRow>({ key: "grant_expires_at", title: t("portal.column.expiresAt"), sorter: false }),
+        sort,
+      ),
     ],
-    [t],
+    [sort, t],
   );
 
   return (
@@ -193,15 +231,17 @@ function PortalRequestSection() {
   const queryClient = useQueryClient();
   const serverTable = useServerTable<PortalRequestRow>({
     defaultPageSize: DEFAULT_PAGE_SIZE,
-    serializeSort: () => ({}),
+    sortParam: ORDERING_PARAM,
+    defaultSort: REQUEST_DEFAULT_SORT,
+    serializeSort: orderingSerializer(REQUEST_ORDERING_FIELDS),
   });
-  const { page, page_size: pageSize } = serverTable.params;
+  const sort = serverTable.query;
+  // ordering 必须一起进查询串和查询键, 否则点了表头也不会重新请求。
+  const requestsSearch = serverTableQuery(serverTable.params);
   const query = useQuery({
-    queryKey: ["portal", "requests", page, pageSize],
+    queryKey: ["portal", "requests", requestsSearch],
     queryFn: async () =>
-      parsePortalRequestList(
-        await apiRequest<unknown>(`/portal/api/v1/me/access-requests?page=${page}&page_size=${pageSize}`),
-      ),
+      parsePortalRequestList(await apiRequest<unknown>(`/portal/api/v1/me/access-requests?${requestsSearch}`)),
   });
   const withdrawMutation = useMutation({
     mutationFn: (requestId: number) =>
@@ -219,32 +259,38 @@ function PortalRequestSection() {
   useClampPage(query.data, serverTable.query.page, serverTable.setPage);
   const columns = useMemo<ColumnsType<PortalRequestRow>>(
     () => [
-      {
-        key: "status",
-        title: t("common.status"),
-        width: 200,
-        render: (_value: unknown, row: PortalRequestRow) => (
-          <div className="flex min-w-0 flex-col gap-1">
-            <span>
-              <Badge tone={badgeToneForAccessRequestStatus(row.status)}>
-                {row.status_label ?? accessRequestStatusLabel(t, row.status)}
-              </Badge>
-            </span>
-            {row.decision_comment ? (
-              <span className="whitespace-normal text-xs leading-4 text-ink-faint">
-                {t("approvals.comment")}：{row.decision_comment}（{formatDateTime(row.decided_at)}）
+      serverSortColumn(
+        {
+          key: "status",
+          title: t("common.status"),
+          width: 200,
+          render: (_value: unknown, row: PortalRequestRow) => (
+            <div className="flex min-w-0 flex-col gap-1">
+              <span>
+                <Badge tone={badgeToneForAccessRequestStatus(row.status)}>
+                  {row.status_label ?? accessRequestStatusLabel(t, row.status)}
+                </Badge>
               </span>
-            ) : null}
-          </div>
-        ),
-      },
-      textColumn<PortalRequestRow>({
-        key: "app",
-        title: t("common.app"),
-        getValue: (row) => row.app_name ?? row.app_key,
-        sorter: true,
-        width: 140,
-      }),
+              {row.decision_comment ? (
+                <span className="whitespace-normal text-xs leading-4 text-ink-faint">
+                  {t("approvals.comment")}：{row.decision_comment}（{formatDateTime(row.decided_at)}）
+                </span>
+              ) : null}
+            </div>
+          ),
+        },
+        sort,
+      ),
+      // 排序在后端(ordering=app_key): 预设的 localeCompare 只会重排当前页。
+      serverSortColumn(
+        textColumn<PortalRequestRow>({
+          key: "app",
+          title: t("common.app"),
+          getValue: (row) => row.app_name ?? row.app_key,
+          width: 140,
+        }),
+        sort,
+      ),
       textColumn<PortalRequestRow>({
         key: "groups",
         title: t("portal.column.groups"),
@@ -264,14 +310,20 @@ function PortalRequestSection() {
         getValue: (row) => grantTypeLabel(t, row.grant_type),
         width: 110,
       }),
-      dateTimeColumn<PortalRequestRow>({ key: "grant_expires_at", title: t("portal.column.expiresAt") }),
-      dateTimeColumn<PortalRequestRow>({ key: "submitted_at", title: t("portal.column.submittedAt") }),
+      serverSortColumn(
+        dateTimeColumn<PortalRequestRow>({ key: "grant_expires_at", title: t("portal.column.expiresAt"), sorter: false }),
+        sort,
+      ),
+      serverSortColumn(
+        dateTimeColumn<PortalRequestRow>({ key: "submitted_at", title: t("portal.column.submittedAt"), sorter: false }),
+        sort,
+      ),
       textColumn<PortalRequestRow>({ key: "reason", title: t("portal.column.reason"), ellipsis: false }),
       actionsColumn<PortalRequestRow>({
         render: (row) => <WithdrawAction mutation={withdrawMutation} row={row} />,
       }),
     ],
-    [t, withdrawMutation],
+    [sort, t, withdrawMutation],
   );
 
   return (

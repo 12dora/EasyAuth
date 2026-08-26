@@ -2,11 +2,30 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { serverTableQuery, useServerTable } from "../../../components/antd/AppTable";
+import {
+  ORDERING_PARAM,
+  orderingSerializer,
+  serverTableQuery,
+  useServerTable,
+} from "../../../components/antd/AppTable";
 import { apiRequest, itemsFromPayload } from "../../../lib/api";
 import type { JsonObject, ListPayload } from "../../../lib/api";
 import type { HandoverTaskPayload, PersonRow } from "../../../lib/domain";
 import { DEFAULT_PAGE_SIZE, PEOPLE_QUERY_PREFIX, type HandoverStartTarget } from "./consolePeopleModel";
+
+/**
+ * 列 key -> 后端 `ordering` 字段(GET /console/api/v1/users 只认这四个)。
+ * 姓名列的 key 就是 name, 与后端字段同名。
+ */
+const PEOPLE_ORDERING_FIELDS = {
+  name: "name",
+  department: "department",
+  email: "email",
+  status: "status",
+} as const;
+
+/** 后端默认序是 name 升序; defaultSort 与它一致, 首屏表头就带排序指示器。 */
+const PEOPLE_DEFAULT_SORT = { field: "name", order: "ascend" } as const;
 
 /** 人员列表的过滤、分页与发起交接单。 */
 export function useConsolePeopleList() {
@@ -18,6 +37,9 @@ export function useConsolePeopleList() {
   const serverTable = useServerTable<PersonRow>({
     defaultPageSize: DEFAULT_PAGE_SIZE,
     filterParams: { status: "status" },
+    sortParam: ORDERING_PARAM,
+    defaultSort: PEOPLE_DEFAULT_SORT,
+    serializeSort: orderingSerializer(PEOPLE_ORDERING_FIELDS),
   });
   const { setPage } = serverTable;
 
@@ -64,6 +86,8 @@ export function useConsolePeopleList() {
     // 否则 antd 会拿当前页再跑一遍客户端 onFilter(placeholderData 保留的上一页会被筛空),
     // 表头的「已筛选」图标也会和实际请求参数对不上。
     filters: serverTable.query.filters,
+    // 排序同理: 表头指示器要跟着 ordering 参数走, 列必须用 serverSortColumn 受控回去。
+    sort: serverTable.query,
     searchInput,
     setSearchInput,
     startTarget,

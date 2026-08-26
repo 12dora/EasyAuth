@@ -1,12 +1,31 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { serverTableQuery, useServerTable } from "../../../components/antd/AppTable";
+import {
+  ORDERING_PARAM,
+  orderingSerializer,
+  serverTableQuery,
+  useServerTable,
+} from "../../../components/antd/AppTable";
 import { useToast } from "../../../components/ui/Toast";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../../lib/api";
 import type { ListPayload } from "../../../lib/api";
 import type { HandoverTaskRow } from "../../../lib/domain";
+
+/**
+ * 列 key -> 后端 `ordering` 字段(GET /console/api/v1/lifecycle/handover-tasks 只认这四个)。
+ * 负责人(assignee_state)与阻塞(blocked)两列只能筛不能排。
+ */
+const HANDOVER_ORDERING_FIELDS = {
+  subject: "subject",
+  kind: "kind",
+  status: "status",
+  created_at: "created_at",
+} as const;
+
+/** 后端默认序是 -created_at; defaultSort 与它一致, 首屏表头就带排序指示器。 */
+const HANDOVER_DEFAULT_SORT = { field: "created_at", order: "descend" } as const;
 
 /** 交接单列表的过滤、分页与删除。 */
 export function useHandoverTaskList() {
@@ -22,6 +41,9 @@ export function useHandoverTaskList() {
       assignee_state: "assignee_state",
       blocked: "blocked",
     },
+    sortParam: ORDERING_PARAM,
+    defaultSort: HANDOVER_DEFAULT_SORT,
+    serializeSort: orderingSerializer(HANDOVER_ORDERING_FIELDS),
   });
   const tasksSearch = serverTableQuery(serverTable.params);
 
@@ -54,6 +76,8 @@ export function useHandoverTaskList() {
     // 否则 antd 会拿当前页再跑一遍客户端 onFilter(placeholderData 保留的上一页会被筛空),
     // 表头的「已筛选」图标也会和实际请求参数对不上。
     filters: serverTable.query.filters,
+    // 排序同理: 表头指示器要跟着 ordering 参数走, 列必须用 serverSortColumn 受控回去。
+    sort: serverTable.query,
     deleteTarget,
     setDeleteTarget,
     deleteMutation,

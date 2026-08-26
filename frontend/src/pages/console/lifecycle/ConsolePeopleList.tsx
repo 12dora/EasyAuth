@@ -56,6 +56,7 @@ export function ConsolePeopleList() {
           isLoading={peopleQuery.isLoading || peopleQuery.isPlaceholderData}
           tableProps={page.tableProps}
           filters={page.filters}
+          sort={page.sort}
           actions={{
             onOpenHandover: page.openHandover,
             onStart: (person, kind) => page.startHandover({ person, kind }),

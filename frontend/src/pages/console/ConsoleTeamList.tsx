@@ -4,12 +4,21 @@ import type { FormEvent } from "react";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { AppTable, serverTableQuery, useServerTable, type ColumnsType } from "../../components/antd/AppTable";
+import {
+  AppTable,
+  ORDERING_PARAM,
+  orderingSerializer,
+  serverTableQuery,
+  useServerTable,
+  type ColumnsType,
+  type ServerSortState,
+} from "../../components/antd/AppTable";
 import {
   RowActionButton,
   RowActionLink,
   actionsColumn,
   dateTimeColumn,
+  serverSortColumn,
   statusColumn,
   textColumn,
 } from "../../components/antd/columns";
@@ -30,6 +39,20 @@ import type { TeamPayload, TeamSummary } from "../../lib/domain";
 /** 团队列表查询键前缀; 详情页失效列表时也用它。 */
 export const TEAMS_LIST_QUERY_KEY = ["console", "teams", "list"];
 
+/**
+ * 列 key -> 后端 `ordering` 字段(GET /console/api/v1/teams 只认这四个)。
+ * 负责人列后端排不了(它是聚合出来的名字串), 因此列上不给 sorter。
+ */
+const TEAM_ORDERING_FIELDS = {
+  name: "name",
+  status: "status",
+  created_at: "created_at",
+  member_count: "member_count",
+} as const;
+
+/** 后端默认序是 name 升序; defaultSort 与它一致, 首屏表头就带排序指示器。 */
+const TEAM_DEFAULT_SORT = { field: "name", order: "ascend" } as const;
+
 export function teamLeadersLabel(leaders: TeamSummary["leaders"] | undefined): string {
   const names = (leaders ?? []).map((leader) => leader.name || leader.user_id).filter(Boolean);
   return names.length > 0 ? names.join(", ") : "—";
@@ -42,8 +65,13 @@ export function ConsoleTeamList() {
   const queryClient = useQueryClient();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<TeamSummary | null>(null);
-  // 团队接口只支持 page/page_size, 没有任何过滤或排序参数, 因此列上不给表头筛选。
-  const serverTable = useServerTable<TeamSummary>();
+  // 团队接口没有过滤参数(因此列上不给表头筛选), 但支持单字段 ordering。
+  const serverTable = useServerTable<TeamSummary>({
+    sortParam: ORDERING_PARAM,
+    defaultSort: TEAM_DEFAULT_SORT,
+    serializeSort: orderingSerializer(TEAM_ORDERING_FIELDS),
+  });
+  const sort: ServerSortState = serverTable.query;
   const teamsSearch = serverTableQuery(serverTable.params);
   const teamsQuery = useQuery({
     // 列表键多带一段 "list": 详情键是 ["console","teams",teamId],
@@ -82,43 +110,57 @@ export function ConsoleTeamList() {
     },
   });
 
+  // 排序在后端做: 四列一律过 serverSortColumn(sorter 只当开关、指示器受控),
+  // 客户端比较函数会只对当前页重排, 与「共 N 条」自相矛盾。
   const columns = useMemo<ColumnsType<TeamSummary>>(
     () => [
-      {
-        key: "name",
-        dataIndex: "name",
-        title: t("console.teams.column.name"),
-        ellipsis: true,
-        render: (_value: unknown, team: TeamSummary) => <strong>{team.name}</strong>,
-      },
+      serverSortColumn(
+        {
+          key: "name",
+          dataIndex: "name",
+          title: t("console.teams.column.name"),
+          ellipsis: true,
+          render: (_value: unknown, team: TeamSummary) => <strong>{team.name}</strong>,
+        },
+        sort,
+      ),
       textColumn<TeamSummary>({
         key: "leaders",
         title: t("console.teams.column.leaders"),
         getValue: (team) => teamLeadersLabel(team.leaders),
         width: 220,
       }),
-      textColumn<TeamSummary>({
-        key: "member_count",
-        title: t("console.teams.column.memberCount"),
-        getValue: (team) => String(team.member_count ?? 0),
-        width: 110,
-      }),
-      statusColumn<TeamSummary>({
-        key: "status",
-        title: t("common.status"),
-        getValue: (team) => (team.is_active ? "active" : "inactive"),
-        filter: false,
-        options: [
-          { value: "active", label: t("common.enabled"), tone: "evergreen" },
-          { value: "inactive", label: t("common.disabled"), tone: "neutral" },
-        ],
-        width: 110,
-      }),
-      dateTimeColumn<TeamSummary>({
-        key: "created_at",
-        title: t("console.teams.column.createdAt"),
-        sorter: false,
-      }),
+      serverSortColumn(
+        textColumn<TeamSummary>({
+          key: "member_count",
+          title: t("console.teams.column.memberCount"),
+          getValue: (team) => String(team.member_count ?? 0),
+          width: 110,
+        }),
+        sort,
+      ),
+      serverSortColumn(
+        statusColumn<TeamSummary>({
+          key: "status",
+          title: t("common.status"),
+          getValue: (team) => (team.is_active ? "active" : "inactive"),
+          filter: false,
+          options: [
+            { value: "active", label: t("common.enabled"), tone: "evergreen" },
+            { value: "inactive", label: t("common.disabled"), tone: "neutral" },
+          ],
+          width: 110,
+        }),
+        sort,
+      ),
+      serverSortColumn(
+        dateTimeColumn<TeamSummary>({
+          key: "created_at",
+          title: t("console.teams.column.createdAt"),
+          sorter: false,
+        }),
+        sort,
+      ),
       actionsColumn<TeamSummary>({
         render: (team) => (
           <>
@@ -139,7 +181,7 @@ export function ConsoleTeamList() {
         ),
       }),
     ],
-    [navigate, t],
+    [navigate, sort, t],
   );
 
   return (

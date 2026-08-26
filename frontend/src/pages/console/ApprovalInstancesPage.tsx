@@ -45,6 +45,7 @@ export function ApprovalInstancesPage() {
           isLoading={query.isLoading}
           tableProps={page.tableProps}
           filters={page.filters}
+          sort={page.sort}
           actions={{ isDisabled: page.isRedelivering, onRedeliver: page.redeliver }}
         />
       )}

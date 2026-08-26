@@ -5,7 +5,13 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { HandoverTaskList } from "./HandoverTaskList";
-import { ANTD_TEST_TIMEOUT_MS, openHeaderFilter, renderWithAntd } from "../../../components/antd/testing";
+import {
+  ANTD_TEST_TIMEOUT_MS,
+  columnSortOrder,
+  openHeaderFilter,
+  renderWithAntd,
+  sortByColumn,
+} from "../../../components/antd/testing";
 
 // antd Table 在 jsdom 里每次筛选/翻页都要重建整棵表格, 默认 5s 不够。
 vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
@@ -87,7 +93,7 @@ describe("HandoverTaskList", () => {
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
-        "/console/api/v1/lifecycle/handover-tasks?page=1&page_size=10&status=cancelled",
+        "/console/api/v1/lifecycle/handover-tasks?page=1&page_size=10&status=cancelled&ordering=-created_at",
         expect.any(Object),
       ),
     );
@@ -116,7 +122,7 @@ describe("HandoverTaskList", () => {
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
-        "/console/api/v1/lifecycle/handover-tasks?page=1&page_size=10&blocked=true",
+        "/console/api/v1/lifecycle/handover-tasks?page=1&page_size=10&blocked=true&ordering=-created_at",
         expect.any(Object),
       ),
     );
@@ -124,6 +130,45 @@ describe("HandoverTaskList", () => {
     expect(await screen.findByText("人员待处理")).toBeVisible();
     // 受控 filteredValue: 表头图标与实际请求参数一致, 不因重渲染而丢。
     await waitFor(() => expect(blockedFilterTrigger()).toHaveClass("active"));
+  });
+
+  test("表头排序是服务端排序: 带 ordering 请求、回到第 1 页, 指示器跟着走", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      const page = new URLSearchParams(url.split("?")[1]).get("page") ?? "1";
+      return jsonResponse({
+        data: [taskRow(Number(page), `员工${page}`, "pending", [])],
+        pagination: { page: Number(page), page_size: 10, total_items: 11, total_pages: 2 },
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderList();
+
+    // 首屏的 defaultSort 与后端默认序(-created_at)一致, 表头就带着指示器。
+    await screen.findByText("员工1");
+    expect(columnSortOrder("创建时间")).toBe("descend");
+
+    await user.click(screen.getByTitle("下一页"));
+    await screen.findByText("员工2");
+
+    await sortByColumn(user, "类型");
+    await waitFor(() =>
+      expect(lastListUrl(fetchMock)).toBe(
+        "/console/api/v1/lifecycle/handover-tasks?page=1&page_size=10&ordering=kind",
+      ),
+    );
+    expect(columnSortOrder("类型")).toBe("ascend");
+    expect(columnSortOrder("创建时间")).toBeNull();
+
+    await sortByColumn(user, "类型");
+    await waitFor(() =>
+      expect(lastListUrl(fetchMock)).toBe(
+        "/console/api/v1/lifecycle/handover-tasks?page=1&page_size=10&ordering=-kind",
+      ),
+    );
+    expect(columnSortOrder("类型")).toBe("descend");
   });
 
   test("删除动作只按后端 allowed_actions 展示并执行", async () => {
@@ -185,6 +230,13 @@ function taskRow(id: number, name: string, status: string, allowedActions: strin
     created_at: "2026-07-10T00:00:00Z",
     updated_at: "2026-07-10T00:00:00Z",
   };
+}
+
+function lastListUrl(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>) {
+  return fetchMock.mock.calls
+    .map(([input]) => String(input))
+    .filter((url) => url.startsWith("/console/api/v1/lifecycle/handover-tasks?"))
+    .at(-1);
 }
 
 /** 「阻塞应用」列表头上的筛选图标; 固定列会让同名表头出现两次, 取第一个即可。 */
