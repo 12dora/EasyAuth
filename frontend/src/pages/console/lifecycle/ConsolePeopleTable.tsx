@@ -1,21 +1,14 @@
-import {
-  getCoreRowModel,
-  useReactTable,
-  type ColumnDef,
-  type OnChangeFn,
-  type PaginationState,
-} from "@tanstack/react-table";
 import { ArrowRight } from "lucide-react";
+import { useMemo } from "react";
 
-import { Badge } from "../../../components/Badge";
-import { EmptyState } from "../../../components/ui/EmptyState";
-import { TableActionCell, TableRowActionButton, TableRowActionLink } from "../../../components/ui/TableActions";
-import { TableView } from "../../../components/ui/TableView";
-import { MONO_TEXT_CLASS } from "../../../components/ui/tableStyles";
+import { AppTable, type ColumnsType, type UseServerTableResult } from "../../../components/antd/AppTable";
+import { actionsColumn, statusColumn, textColumn, userColumn } from "../../../components/antd/columns";
+import { Button } from "../../../components/Button";
+import { ButtonLink } from "../../../components/ButtonLink";
 import { useI18n } from "../../../i18n/I18nProvider";
 import type { PersonRow } from "../../../lib/domain";
 import type { Translator } from "../../../lib/status";
-import type { HandoverKind } from "./consolePeopleModel";
+import { PERSON_STATUSES, type HandoverKind } from "./consolePeopleModel";
 import { personStatusLabel, personStatusTone } from "./lifecycleLabels";
 
 export interface PeopleRowActions {
@@ -26,73 +19,57 @@ export interface PeopleRowActions {
 export function ConsolePeopleTable({
   people,
   isLoading,
-  pageCount,
-  totalItems,
-  pagination,
-  onPaginationChange,
+  tableProps,
   actions,
 }: {
   people: PersonRow[];
   isLoading: boolean;
-  pageCount: number;
-  totalItems: number;
-  pagination: PaginationState;
-  onPaginationChange: OnChangeFn<PaginationState>;
+  tableProps: UseServerTableResult<PersonRow>["tableProps"];
   actions: PeopleRowActions;
 }) {
   const { t } = useI18n();
-  const table = useReactTable({
-    data: people,
-    columns: peopleColumns(t, actions),
-    getCoreRowModel: getCoreRowModel(),
-    manualPagination: true,
-    pageCount,
-    state: { pagination },
-    onPaginationChange,
-  });
+  const columns = useMemo(() => peopleColumns(t, actions), [actions, t]);
 
   return (
-    <TableView
-      table={table}
-      isLoading={isLoading}
-      totalItems={totalItems}
-      empty={<EmptyState title={t("people.empty.title")} description={t("people.empty.description")} />}
+    <AppTable<PersonRow>
+      {...tableProps}
+      columns={columns}
+      dataSource={people}
+      emptyDescription={t("people.empty.description")}
+      emptyTitle={t("people.empty.title")}
+      loading={isLoading}
+      minWidth={960}
+      rowKey="user_id"
     />
   );
 }
 
-function peopleColumns(t: Translator, actions: PeopleRowActions): ColumnDef<PersonRow>[] {
+function peopleColumns(t: Translator, actions: PeopleRowActions): ColumnsType<PersonRow> {
   return [
+    userColumn<PersonRow>({
+      key: "name",
+      title: t("people.column.name"),
+      getName: (person) => person.name || person.user_id,
+      getUserId: (person) => person.user_id,
+    }),
+    // 部门与邮箱后端不支持单列过滤; 它们由工具栏的 q 一起做跨列搜索。
+    textColumn<PersonRow>({ key: "department", title: t("people.column.department"), width: 180 }),
+    textColumn<PersonRow>({ key: "email", title: t("people.column.email"), width: 240 }),
     {
-      header: t("people.column.name"),
-      cell: ({ row }) => (
-        <div className="flex min-w-0 flex-col gap-1">
-          <strong>{row.original.name || row.original.user_id}</strong>
-          <code className={MONO_TEXT_CLASS}>{row.original.user_id}</code>
-        </div>
-      ),
+      ...statusColumn<PersonRow>({
+        key: "status",
+        title: t("common.status"),
+        options: PERSON_STATUSES.map((status) => ({
+          value: status,
+          label: personStatusLabel(t, status),
+          tone: personStatusTone(status),
+        })),
+        width: 140,
+      }),
+      // 后端只认单个 status, 因此下拉限制为单选。
+      filterMultiple: false,
     },
-    {
-      header: t("people.column.department"),
-      cell: ({ row }) => row.original.department || "-",
-    },
-    {
-      header: t("people.column.email"),
-      cell: ({ row }) => row.original.email || "-",
-    },
-    {
-      header: t("common.status"),
-      cell: ({ row }) => <Badge tone={personStatusTone(row.original.status)}>{personStatusLabel(t, row.original.status)}</Badge>,
-    },
-    {
-      id: "actions",
-      header: t("common.actions"),
-      cell: ({ row }) => (
-        <TableActionCell>
-          <PeopleRowActionsCell person={row.original} actions={actions} />
-        </TableActionCell>
-      ),
-    },
+    actionsColumn<PersonRow>({ render: (person) => <PeopleRowActionsCell person={person} actions={actions} /> }),
   ];
 }
 
@@ -101,16 +78,18 @@ function PeopleRowActionsCell({ person, actions }: { person: PersonRow; actions:
   // 已有进行中的交接单(不限在职状态)直接进入交接, 避免重复建单的困惑。
   if (person.open_handover_task_id) {
     return (
-      <TableRowActionLink
+      <ButtonLink
         href={`/console/lifecycle/handover-tasks/${person.open_handover_task_id}`}
         icon={<ArrowRight size={15} />}
+        size="sm"
+        variant="ghost"
         onClick={(event) => {
           event.preventDefault();
           actions.onOpenHandover(person.open_handover_task_id as number);
         }}
       >
         {t("people.goHandover")}
-      </TableRowActionLink>
+      </ButtonLink>
     );
   }
   if (person.status !== "active") {
@@ -118,12 +97,12 @@ function PeopleRowActionsCell({ person, actions }: { person: PersonRow; actions:
   }
   return (
     <>
-      <TableRowActionButton type="button" onClick={() => actions.onStart(person, "offboard")}>
+      <Button type="button" size="sm" variant="ghost" onClick={() => actions.onStart(person, "offboard")}>
         {t("people.startOffboard")}
-      </TableRowActionButton>
-      <TableRowActionButton type="button" onClick={() => actions.onStart(person, "transfer")}>
+      </Button>
+      <Button type="button" size="sm" variant="ghost" onClick={() => actions.onStart(person, "transfer")}>
         {t("people.startTransfer")}
-      </TableRowActionButton>
+      </Button>
     </>
   );
 }

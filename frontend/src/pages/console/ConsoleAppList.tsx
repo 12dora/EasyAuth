@@ -55,11 +55,8 @@ export function ConsoleAppList() {
         <section className="space-y-3">
           <ConsoleAppTable
             apps={apps}
-            isLoading={appsQuery.isLoading}
-            pageCount={page.pageCount}
-            totalItems={page.totalItems}
-            pagination={page.pagination}
-            onPaginationChange={page.setPagination}
+            isLoading={appsQuery.isLoading || appsQuery.isPlaceholderData}
+            tableProps={page.tableProps}
             actions={{
               togglePending: page.updateStatusMutation.isPending,
               deletePending: deleteMutation.isPending,

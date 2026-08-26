@@ -1,17 +1,10 @@
-import {
-  getCoreRowModel,
-  useReactTable,
-  type ColumnDef,
-} from "@tanstack/react-table";
+import { useMemo } from "react";
 
-import { Badge } from "../../components/Badge";
-import { EmptyState } from "../../components/ui/EmptyState";
-import { TableActionCell, TableRowActionButton } from "../../components/ui/TableActions";
-import { TableView } from "../../components/ui/TableView";
-import { MONO_TEXT_CLASS } from "../../components/ui/tableStyles";
+import { AppTable, type ColumnsType } from "../../components/antd/AppTable";
+import { actionsColumn, dateTimeColumn, statusColumn, textColumn, userColumn } from "../../components/antd/columns";
+import { Button } from "../../components/Button";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { TeamMemberItem } from "../../lib/domain";
-import { formatDateTime } from "../../lib/status";
 import type { Translator } from "../../lib/status";
 import { teamMemberRoleLabel } from "./consoleTeamDetailModel";
 
@@ -31,61 +24,64 @@ export function ConsoleTeamMemberTable({
   actions: TeamMemberTableActions;
 }) {
   const { t } = useI18n();
-  const table = useReactTable({
-    data: members,
-    columns: teamMemberTableColumns(t, actions),
-    getCoreRowModel: getCoreRowModel(),
-  });
+  const columns = useMemo(() => teamMemberTableColumns(t, actions), [actions, t]);
 
   return (
-    <TableView
-      table={table}
-      isLoading={isLoading}
-      empty={<EmptyState title={t("console.teams.membersEmpty")} description={t("console.teams.membersEmptyDescription")} />}
+    // 成员由团队详情一次性返回, 因此分页/筛选/排序全部在客户端完成。
+    <AppTable<TeamMemberItem>
+      columns={columns}
+      dataSource={members}
+      emptyDescription={t("console.teams.membersEmptyDescription")}
+      emptyTitle={t("console.teams.membersEmpty")}
+      loading={isLoading}
+      minWidth={880}
+      rowKey="id"
     />
   );
 }
 
-function teamMemberTableColumns(t: Translator, actions: TeamMemberTableActions): ColumnDef<TeamMemberItem>[] {
+function teamMemberTableColumns(t: Translator, actions: TeamMemberTableActions): ColumnsType<TeamMemberItem> {
   return [
-    {
-      header: t("console.teams.column.member"),
-      cell: ({ row }) => (
-        <div className="flex min-w-0 flex-col gap-1">
-          <strong>{row.original.name || row.original.user_id}</strong>
-          <code className={MONO_TEXT_CLASS}>{row.original.user_id}</code>
-        </div>
-      ),
-    },
-    {
-      header: t("console.teams.column.department"),
-      cell: ({ row }) => row.original.department || "-",
-    },
-    {
-      header: t("common.role"),
-      cell: ({ row }) => (
-        <Badge tone={row.original.role === "leader" ? "bond" : "neutral"}>
-          {teamMemberRoleLabel(t, row.original.role)}
-        </Badge>
-      ),
-    },
-    {
-      header: t("console.teams.column.addedAt"),
-      cell: ({ row }) => formatDateTime(row.original.added_at),
-    },
-    {
-      id: "actions",
-      header: t("common.actions"),
-      cell: ({ row }) => (
-        <TableActionCell>
-          <TableRowActionButton type="button" disabled={actions.disabled} onClick={() => actions.onToggleRole(row.original)}>
-            {row.original.role === "leader" ? t("console.teams.setMember") : t("console.teams.setLeader")}
-          </TableRowActionButton>
-          <TableRowActionButton type="button" variant="ghost-danger" disabled={actions.disabled} onClick={() => actions.onRemove(row.original)}>
+    userColumn<TeamMemberItem>({
+      key: "member",
+      title: t("console.teams.column.member"),
+      getName: (member) => member.name || member.user_id,
+      getUserId: (member) => member.user_id,
+      filter: true,
+    }),
+    textColumn<TeamMemberItem>({
+      key: "department",
+      title: t("console.teams.column.department"),
+      filter: true,
+      width: 180,
+    }),
+    statusColumn<TeamMemberItem>({
+      key: "role",
+      title: t("common.role"),
+      options: [
+        { value: "leader", label: teamMemberRoleLabel(t, "leader"), tone: "bond" },
+        { value: "member", label: teamMemberRoleLabel(t, "member"), tone: "neutral" },
+      ],
+      width: 140,
+    }),
+    dateTimeColumn<TeamMemberItem>({ key: "added_at", title: t("console.teams.column.addedAt") }),
+    actionsColumn<TeamMemberItem>({
+      render: (member) => (
+        <>
+          <Button type="button" size="sm" variant="ghost" disabled={actions.disabled} onClick={() => actions.onToggleRole(member)}>
+            {member.role === "leader" ? t("console.teams.setMember") : t("console.teams.setLeader")}
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost-danger"
+            disabled={actions.disabled}
+            onClick={() => actions.onRemove(member)}
+          >
             {t("common.remove")}
-          </TableRowActionButton>
-        </TableActionCell>
+          </Button>
+        </>
       ),
-    },
+    }),
   ];
 }

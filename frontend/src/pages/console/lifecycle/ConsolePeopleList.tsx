@@ -35,12 +35,7 @@ export function ConsolePeopleList() {
           </div>
         }
       />
-      <ConsolePeopleFilters
-        statusFilter={page.statusFilter}
-        onStatusChange={page.setStatusFilter}
-        searchInput={page.searchInput}
-        onSearchChange={page.setSearchInput}
-      />
+      <ConsolePeopleFilters searchInput={page.searchInput} onSearchChange={page.setSearchInput} />
       {peopleQuery.error && people.length > 0 ? (
         <StatusBanner live="alert" tone="signal" title={t("people.loadFailed")} message={(peopleQuery.error as Error).message} />
       ) : null}
@@ -58,11 +53,8 @@ export function ConsolePeopleList() {
       ) : (
         <ConsolePeopleTable
           people={people}
-          isLoading={peopleQuery.isLoading}
-          pageCount={page.pageCount}
-          totalItems={page.totalItems}
-          pagination={page.pagination}
-          onPaginationChange={page.setPagination}
+          isLoading={peopleQuery.isLoading || peopleQuery.isPlaceholderData}
+          tableProps={page.tableProps}
           actions={{
             onOpenHandover: page.openHandover,
             onStart: (person, kind) => page.startHandover({ person, kind }),

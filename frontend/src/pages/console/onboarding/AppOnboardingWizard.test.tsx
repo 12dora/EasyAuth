@@ -1,10 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { AppConfigProvider } from "../../../components/antd/AppConfigProvider";
 import { AppOnboardingWizard } from "./AppOnboardingWizard";
+
+// antd Table 在 jsdom 里每次筛选都要重建整棵表格, 默认 5s 不够。
+vi.setConfig({ testTimeout: 20000 });
 
 describe("AppOnboardingWizard", () => {
   afterEach(() => {
@@ -260,6 +264,48 @@ describe("AppOnboardingWizard", () => {
     firstRead.resolve('{"source":"first"}');
 
     await waitFor(() => expect(screen.getByLabelText("Manifest 内容")).toHaveValue('{"source":"second"}'));
+  });
+
+  test("配置问题表格带表头级别筛选与分页", async () => {
+    const issues = Array.from({ length: 12 }, (_, index) => {
+      const severity = index % 2 === 0 ? "blocking" : "warning";
+      return {
+        code: `ISSUE_${index + 1}`,
+        severity,
+        level: severity,
+        message: `问题${index + 1}`,
+        subject: `perm-${index + 1}`,
+        target_type: "permission",
+        target_id: `perm-${index + 1}`,
+      };
+    });
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/billing") {
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing" } });
+      }
+      if (url.endsWith("/configuration-status")) {
+        return jsonResponse({ app_key: "billing", status: "blocking", data: issues });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWizard("/console/apps/new?app_key=billing&step=authz");
+
+    expect(await screen.findByText("问题1")).toBeVisible();
+    expect(screen.getByText("第 1-10 条 / 共 12 条")).toBeVisible();
+
+    const dropdown = await openHeaderFilter(user, "级别");
+    await user.click(within(dropdown).getByText("提醒"));
+    await user.click(within(dropdown).getByRole("button", { name: "确定" }));
+
+    await waitFor(() =>
+      expect(document.querySelectorAll(".ant-table-tbody tr.ant-table-row")).toHaveLength(6),
+    );
+    expect(screen.getByText("问题2")).toBeVisible();
+    expect(screen.queryByText("问题1")).not.toBeInTheDocument();
   });
 
   test("畸形 configuration-status 信封进入错误态而不是显示配置就绪", async () => {
@@ -535,11 +581,13 @@ function renderWizard(initialEntry: string) {
 
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[initialEntry]}>
-        <Routes>
-          <Route path="/console/apps/new" element={<AppOnboardingWizard />} />
-        </Routes>
-      </MemoryRouter>
+      <AppConfigProvider>
+        <MemoryRouter initialEntries={[initialEntry]}>
+          <Routes>
+            <Route path="/console/apps/new" element={<AppOnboardingWizard />} />
+          </Routes>
+        </MemoryRouter>
+      </AppConfigProvider>
     </QueryClientProvider>,
   );
 }
@@ -559,4 +607,17 @@ function deferred<T>() {
     reject = rejectPromise;
   });
   return { promise, resolve, reject };
+}
+
+async function openHeaderFilter(user: ReturnType<typeof userEvent.setup>, columnTitle: string) {
+  const header = [...document.querySelectorAll("th.ant-table-cell")].find((cell) =>
+    cell.textContent?.startsWith(columnTitle),
+  );
+  expect(header).toBeDefined();
+  await user.click((header as HTMLElement).querySelector(".ant-table-filter-trigger") as HTMLElement);
+  return await waitFor(() => {
+    const dropdown = document.querySelector(".ant-dropdown:not(.ant-dropdown-hidden) .ant-table-filter-dropdown");
+    expect(dropdown).not.toBeNull();
+    return dropdown as HTMLElement;
+  });
 }

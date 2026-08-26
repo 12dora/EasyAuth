@@ -1,44 +1,35 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { DEFAULT_TABLE_PAGE_SIZE } from "../../../components/ui/TablePagination";
+import { useServerTable } from "../../../components/antd/AppTable";
 import { useToast } from "../../../components/ui/Toast";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../../lib/api";
 import type { ListPayload } from "../../../lib/api";
 import type { HandoverTaskRow } from "../../../lib/domain";
-import type { HandoverTaskFilterValues } from "./handoverTaskListModel";
-import { handoverTaskListQuery } from "./handoverTaskListModel";
+import { serverTableProps, serverTableQuery } from "../serverTable";
 
 /** 交接单列表的过滤、分页与删除。 */
 export function useHandoverTaskList() {
   const { t } = useI18n();
   const toast = useToast();
   const queryClient = useQueryClient();
-  const [filters, setFilters] = useState<HandoverTaskFilterValues>({
-    status: "",
-    kind: "",
-    assigneeState: "",
-    blocked: "",
-  });
-  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: DEFAULT_TABLE_PAGE_SIZE });
   const [deleteTarget, setDeleteTarget] = useState<HandoverTaskRow | null>(null);
+  // 四个后端过滤键全部来自表头筛选; 未选中的键不进查询串, 与后端"不传即不过滤"一致。
+  const serverTable = useServerTable<HandoverTaskRow>({
+    filterParams: {
+      status: "status",
+      kind: "kind",
+      assignee_state: "assignee_state",
+      blocked: "blocked",
+    },
+  });
+  const tasksSearch = serverTableQuery(serverTable.params);
 
   const tasksQuery = useQuery({
-    queryKey: [
-      "console",
-      "handover-tasks",
-      filters.status,
-      filters.kind,
-      filters.assigneeState,
-      filters.blocked,
-      pagination.pageIndex,
-      pagination.pageSize,
-    ],
-    queryFn: () =>
-      apiRequest<ListPayload<HandoverTaskRow>>(
-        `/console/api/v1/lifecycle/handover-tasks?${handoverTaskListQuery(filters, pagination)}`,
-      ),
+    queryKey: ["console", "handover-tasks", tasksSearch],
+    queryFn: () => apiRequest<ListPayload<HandoverTaskRow>>(`/console/api/v1/lifecycle/handover-tasks?${tasksSearch}`),
+    placeholderData: (previous) => previous,
   });
   const deleteMutation = useMutation({
     mutationFn: (task: HandoverTaskRow) =>
@@ -53,19 +44,12 @@ export function useHandoverTaskList() {
     },
   });
 
+  const tasks = itemsFromPayload<HandoverTaskRow>(tasksQuery.data);
+
   return {
     tasksQuery,
-    tasks: itemsFromPayload<HandoverTaskRow>(tasksQuery.data),
-    pageCount: tasksQuery.data?.pagination?.total_pages ?? 0,
-    totalItems: tasksQuery.data?.pagination?.total_items ?? 0,
-    filters,
-    // 换过滤条件必须回到第一页, 否则会带着旧页码请求。
-    setFilter: (patch: Partial<HandoverTaskFilterValues>) => {
-      setFilters((current) => ({ ...current, ...patch }));
-      setPagination((current) => ({ ...current, pageIndex: 0 }));
-    },
-    pagination,
-    setPagination,
+    tasks,
+    tableProps: serverTableProps(serverTable.tableProps, tasksQuery.data?.pagination?.total_items ?? tasks.length),
     deleteTarget,
     setDeleteTarget,
     deleteMutation,

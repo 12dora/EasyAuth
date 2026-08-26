@@ -4,7 +4,11 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { AppConfigProvider } from "../../../components/antd/AppConfigProvider";
 import { ConsolePeopleList } from "./ConsolePeopleList";
+
+// antd Table 在 jsdom 里每次筛选都要重建整棵表格, 默认 5s 不够。
+vi.setConfig({ testTimeout: 20000 });
 
 const PEOPLE_PAYLOAD = {
   data: [
@@ -58,6 +62,33 @@ describe("ConsolePeopleList", () => {
     expect(screen.getByRole("link", { name: "去交接" })).toHaveAttribute("href", "/console/lifecycle/handover-tasks/12");
     expect(screen.getByRole("button", { name: "离职交接" })).toBeVisible();
     expect(screen.getByRole("button", { name: "转岗" })).toBeVisible();
+  });
+
+  test("在职状态迁到表头筛选, 选中后映射成 status 查询参数", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.startsWith("/console/api/v1/users?page=")) {
+        return jsonResponse(PEOPLE_PAYLOAD);
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderList();
+
+    await screen.findByText("张三");
+    // 工具栏只剩跨列搜索, 状态下拉已经不在表格外。
+    expect(screen.getByLabelText("搜索姓名 / 邮箱 / 用户 ID")).toBeVisible();
+    expect(screen.queryByLabelText("在职状态")).not.toBeInTheDocument();
+
+    const dropdown = await openHeaderFilter(user, "状态");
+    await user.click(within(dropdown).getByText("在职"));
+    await user.click(within(dropdown).getByRole("button", { name: "确定" }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("/console/api/v1/users?page=1&page_size=20&status=active", expect.any(Object)),
+    );
   });
 
   test("发起离职交接: 确认对话框提交后建单并跳转交接单详情", async () => {
@@ -122,12 +153,14 @@ function renderList() {
 
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={["/console/people"]}>
-        <Routes>
-          <Route path="/console/people" element={<ConsolePeopleList />} />
-          <Route path="/console/lifecycle/handover-tasks/:taskId" element={<LocationProbe />} />
-        </Routes>
-      </MemoryRouter>
+      <AppConfigProvider>
+        <MemoryRouter initialEntries={["/console/people"]}>
+          <Routes>
+            <Route path="/console/people" element={<ConsolePeopleList />} />
+            <Route path="/console/lifecycle/handover-tasks/:taskId" element={<LocationProbe />} />
+          </Routes>
+        </MemoryRouter>
+      </AppConfigProvider>
     </QueryClientProvider>,
   );
 }
@@ -141,5 +174,18 @@ function jsonResponse(payload: unknown, status = 200) {
   return new Response(JSON.stringify(payload), {
     status,
     headers: { "Content-Type": "application/json" },
+  });
+}
+
+async function openHeaderFilter(user: ReturnType<typeof userEvent.setup>, columnTitle: string) {
+  const header = [...document.querySelectorAll("th.ant-table-cell")].find((cell) =>
+    cell.textContent?.startsWith(columnTitle),
+  );
+  expect(header).toBeDefined();
+  await user.click((header as HTMLElement).querySelector(".ant-table-filter-trigger") as HTMLElement);
+  return await waitFor(() => {
+    const dropdown = document.querySelector(".ant-dropdown:not(.ant-dropdown-hidden) .ant-table-filter-dropdown");
+    expect(dropdown).not.toBeNull();
+    return dropdown as HTMLElement;
   });
 }

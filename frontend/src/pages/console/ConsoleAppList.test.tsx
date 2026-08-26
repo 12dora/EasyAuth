@@ -4,7 +4,11 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { AppConfigProvider } from "../../components/antd/AppConfigProvider";
 import { ConsoleAppList } from "./ConsoleAppList";
+
+// antd Table 在 jsdom 里每次筛选都要重建整棵表格, 默认 5s 不够。
+vi.setConfig({ testTimeout: 20000 });
 
 describe("ConsoleAppList", () => {
   afterEach(() => {
@@ -85,6 +89,25 @@ describe("ConsoleAppList", () => {
     });
   });
 
+  test("表头状态筛选映射成后端 status 查询参数并回到第 1 页", async () => {
+    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ data: [], pagination: emptyPagination() }));
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderList();
+
+    await waitFor(() => expect(listRequestUrls(fetchMock)).toContain("/console/api/v1/apps?page=1&page_size=20"));
+
+    const dropdown = await openHeaderFilter(user, "状态");
+    await user.click(within(dropdown).getByText("启用"));
+    await user.click(within(dropdown).getByRole("button", { name: "确定" }));
+
+    await waitFor(() =>
+      expect(listRequestUrls(fetchMock)).toContain("/console/api/v1/apps?page=1&page_size=20&status=active"),
+    );
+  });
+
   test("创建成功后跳转到新应用工作区", async () => {
     document.body.dataset.currentUserRole = "EasyAuth Admins";
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
@@ -134,12 +157,14 @@ function renderList() {
 
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={["/console"]}>
-        <Routes>
-          <Route path="/console" element={<ConsoleAppList />} />
-          <Route path="/console/apps/:appKey" element={<LocationProbe />} />
-        </Routes>
-      </MemoryRouter>
+      <AppConfigProvider>
+        <MemoryRouter initialEntries={["/console"]}>
+          <Routes>
+            <Route path="/console" element={<ConsoleAppList />} />
+            <Route path="/console/apps/:appKey" element={<LocationProbe />} />
+          </Routes>
+        </MemoryRouter>
+      </AppConfigProvider>
     </QueryClientProvider>,
   );
 }
@@ -147,6 +172,14 @@ function renderList() {
 function LocationProbe() {
   const location = useLocation();
   return <div data-testid="location">{location.pathname}</div>;
+}
+
+function listRequestUrls(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>) {
+  return fetchMock.mock.calls.map(([input]) => String(input)).filter((url) => url.startsWith("/console/api/v1/apps?"));
+}
+
+function emptyPagination() {
+  return { page: 1, page_size: 20, total_items: 0, total_pages: 1 };
 }
 
 function findFetchCall(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>, url: string, method: string) {
@@ -161,5 +194,18 @@ function jsonResponse(payload: unknown, status = 200) {
   return new Response(JSON.stringify(payload), {
     status,
     headers: { "Content-Type": "application/json" },
+  });
+}
+
+async function openHeaderFilter(user: ReturnType<typeof userEvent.setup>, columnTitle: string) {
+  const header = [...document.querySelectorAll("th.ant-table-cell")].find((cell) =>
+    cell.textContent?.startsWith(columnTitle),
+  );
+  expect(header).toBeDefined();
+  await user.click((header as HTMLElement).querySelector(".ant-table-filter-trigger") as HTMLElement);
+  return await waitFor(() => {
+    const dropdown = document.querySelector(".ant-dropdown:not(.ant-dropdown-hidden) .ant-table-filter-dropdown");
+    expect(dropdown).not.toBeNull();
+    return dropdown as HTMLElement;
   });
 }

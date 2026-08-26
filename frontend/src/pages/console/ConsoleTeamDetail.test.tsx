@@ -5,7 +5,11 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { TeamPayload } from "../../lib/domain";
+import { AppConfigProvider } from "../../components/antd/AppConfigProvider";
 import { ConsoleTeamDetail } from "./ConsoleTeamDetail";
+
+// antd Table 在 jsdom 里每次筛选/翻页都要重建整棵表格, 默认 5s 不够。
+vi.setConfig({ testTimeout: 20000 });
 
 const INITIAL_TEAM: TeamPayload = {
   team: {
@@ -24,6 +28,35 @@ const INITIAL_TEAM: TeamPayload = {
 describe("ConsoleTeamDetail", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  test("成员表格自带分页, 角色筛选在表头", async () => {
+    const members = Array.from({ length: 12 }, (_, index) => ({
+      id: index + 1,
+      user_id: `u-${index + 1}`,
+      name: `成员${index + 1}`,
+      email: `u${index + 1}@example.com`,
+      department: "销售部",
+      status: "active",
+      role: index % 3 === 0 ? "leader" : "member",
+      added_at: "2026-07-01T09:00:00Z",
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => jsonResponse(teamPayload({ members, member_count: members.length }))),
+    );
+    const user = userEvent.setup();
+    renderDetail();
+
+    expect(await screen.findByText("成员1")).toBeVisible();
+    expect(memberRowCount()).toBe(10);
+    expect(screen.getByText("第 1-10 条 / 共 12 条")).toBeVisible();
+
+    const dropdown = await openHeaderFilter(user, "角色");
+    await user.click(within(dropdown).getByText("负责人"));
+    await user.click(within(dropdown).getByRole("button", { name: "确定" }));
+
+    await waitFor(() => expect(memberRowCount()).toBe(4));
   });
 
   test("mutation 成功后取消在途详情查询，旧 GET 响应不能覆盖新状态", async () => {
@@ -154,14 +187,20 @@ function renderDetail(): QueryClient {
 
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={["/console/teams/7"]}>
-        <Routes>
-          <Route path="/console/teams/:teamId" element={<ConsoleTeamDetail />} />
-        </Routes>
-      </MemoryRouter>
+      <AppConfigProvider>
+        <MemoryRouter initialEntries={["/console/teams/7"]}>
+          <Routes>
+            <Route path="/console/teams/:teamId" element={<ConsoleTeamDetail />} />
+          </Routes>
+        </MemoryRouter>
+      </AppConfigProvider>
     </QueryClientProvider>,
   );
   return client;
+}
+
+function memberRowCount(): number {
+  return document.querySelectorAll(".ant-table-tbody tr.ant-table-row").length;
 }
 
 function patchCalls(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>) {
@@ -190,5 +229,18 @@ function jsonResponse(payload: unknown, status = 200) {
   return new Response(JSON.stringify(payload), {
     status,
     headers: { "Content-Type": "application/json" },
+  });
+}
+
+async function openHeaderFilter(user: ReturnType<typeof userEvent.setup>, columnTitle: string) {
+  const header = [...document.querySelectorAll("th.ant-table-cell")].find((cell) =>
+    cell.textContent?.startsWith(columnTitle),
+  );
+  expect(header).toBeDefined();
+  await user.click((header as HTMLElement).querySelector(".ant-table-filter-trigger") as HTMLElement);
+  return await waitFor(() => {
+    const dropdown = document.querySelector(".ant-dropdown:not(.ant-dropdown-hidden) .ant-table-filter-dropdown");
+    expect(dropdown).not.toBeNull();
+    return dropdown as HTMLElement;
   });
 }

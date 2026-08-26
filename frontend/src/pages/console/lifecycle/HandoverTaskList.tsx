@@ -7,7 +7,6 @@ import { StatusBanner } from "../../../components/StatusBanner";
 import { ConfirmDialog } from "../../../components/ui/ConfirmDialog";
 import { PageState } from "../../../components/ui/PageState";
 import { useI18n } from "../../../i18n/I18nProvider";
-import { HandoverTaskFilters } from "./HandoverTaskFilters";
 import { HandoverTaskTable } from "./HandoverTaskTable";
 import { useHandoverTaskList } from "./useHandoverTaskList";
 
@@ -29,7 +28,6 @@ export function HandoverTaskList() {
           </Button>
         }
       />
-      <HandoverTaskFilters filters={page.filters} onChange={page.setFilter} />
       {tasksQuery.error && tasks.length > 0 ? (
         <StatusBanner live="alert" tone="signal" title={t("handover.list.loadFailed")} message={(tasksQuery.error as Error).message} />
       ) : null}
@@ -47,11 +45,8 @@ export function HandoverTaskList() {
       ) : (
         <HandoverTaskTable
           tasks={tasks}
-          isLoading={tasksQuery.isLoading}
-          pageCount={page.pageCount}
-          totalItems={page.totalItems}
-          pagination={page.pagination}
-          onPaginationChange={page.setPagination}
+          isLoading={tasksQuery.isLoading || tasksQuery.isPlaceholderData}
+          tableProps={page.tableProps}
           actions={{
             onOpen: (taskId) => void navigate(`/console/lifecycle/handover-tasks/${taskId}`),
             onDelete: page.setDeleteTarget,

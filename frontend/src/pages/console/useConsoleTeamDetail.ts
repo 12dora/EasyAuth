@@ -7,6 +7,7 @@ import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest } from "../../lib/api";
 import type { JsonObject } from "../../lib/api";
 import type { TeamMemberItem, TeamPayload } from "../../lib/domain";
+import { TEAMS_LIST_QUERY_KEY } from "./ConsoleTeamList";
 import type { TeamInfoFormPayload, TeamMemberCreatePayload, TeamMemberRole } from "./consoleTeamDetailModel";
 
 /** 团队详情页的装载与全部变更(信息/启停/成员增删改角色)。 */
@@ -34,7 +35,7 @@ export function useConsoleTeamDetail() {
   const applyTeamPayload = async (payload: TeamPayload) => {
     await queryClient.cancelQueries({ queryKey: detailQueryKey, exact: true });
     queryClient.setQueryData(detailQueryKey, payload);
-    void queryClient.invalidateQueries({ queryKey: ["console", "teams"], exact: true });
+    void queryClient.invalidateQueries({ queryKey: TEAMS_LIST_QUERY_KEY });
   };
 
   const saveInfoMutation = useMutation({

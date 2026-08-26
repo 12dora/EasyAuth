@@ -2,10 +2,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import { useServerTable } from "../../components/antd/AppTable";
 import { apiRequest, itemsFromPayload } from "../../lib/api";
 import type { JsonObject } from "../../lib/api";
 import type { AppListPayload, AppSummary } from "../../lib/domain";
 import type { AppCreateFormPayload } from "./ConsoleAppCreateDialog";
+import { serverTableProps, serverTableQuery } from "./serverTable";
 
 /** 应用列表的装载、快速新建、行内启停与删除。 */
 export function useConsoleAppList() {
@@ -13,12 +15,18 @@ export function useConsoleAppList() {
   const queryClient = useQueryClient();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<AppSummary | null>(null);
-  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: 20 });
+  // 表头筛选映射到后端支持的两个查询键; 其余列后端无法过滤, 因此列上也不给筛选。
+  const serverTable = useServerTable<AppSummary>({
+    defaultPageSize: 20,
+    filterParams: { status: "status", owners: "owner_user_id" },
+  });
+  const appsSearch = serverTableQuery(serverTable.params);
 
   const appsQuery = useQuery({
-    queryKey: ["console", "apps", pagination.pageIndex, pagination.pageSize],
-    queryFn: () =>
-      apiRequest<AppListPayload>(`/console/api/v1/apps?page=${pagination.pageIndex + 1}&page_size=${pagination.pageSize}`),
+    queryKey: ["console", "apps", appsSearch],
+    queryFn: () => apiRequest<AppListPayload>(`/console/api/v1/apps?${appsSearch}`),
+    // 翻页时保留上一页数据, 分页条的总数与页码不会先塌回 0 再跳回来。
+    placeholderData: (previous) => previous,
   });
   const createMutation = useMutation({
     mutationFn: (payload: AppCreateFormPayload) =>
@@ -58,10 +66,7 @@ export function useConsoleAppList() {
   return {
     appsQuery,
     apps,
-    pageCount: appsQuery.data?.pagination?.total_pages ?? 1,
-    totalItems: appsQuery.data?.pagination?.total_items ?? apps.length,
-    pagination,
-    setPagination,
+    tableProps: serverTableProps(serverTable.tableProps, appsQuery.data?.pagination?.total_items ?? apps.length),
     createDialogOpen,
     setCreateDialogOpen,
     deleteTarget,

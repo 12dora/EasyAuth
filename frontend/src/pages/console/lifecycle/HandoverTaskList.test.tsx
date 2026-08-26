@@ -4,7 +4,11 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { AppConfigProvider } from "../../../components/antd/AppConfigProvider";
 import { HandoverTaskList } from "./HandoverTaskList";
+
+// antd Table 在 jsdom 里每次筛选/翻页都要重建整棵表格, 默认 5s 不够。
+vi.setConfig({ testTimeout: 20000 });
 
 describe("HandoverTaskList", () => {
   afterEach(() => {
@@ -44,8 +48,8 @@ describe("HandoverTaskList", () => {
     renderList();
 
     expect(await screen.findByText("员工1")).toBeVisible();
-    expect(screen.getByText("第 1-1 条 / 共 11 条")).toBeVisible();
-    await user.click(screen.getByRole("button", { name: "下一页" }));
+    expect(screen.getByText("第 1-10 条 / 共 11 条")).toBeVisible();
+    await user.click(screen.getByTitle("下一页"));
 
     expect(await screen.findByText("员工2")).toBeVisible();
     await waitFor(() =>
@@ -55,6 +59,38 @@ describe("HandoverTaskList", () => {
       ),
     );
     expect(screen.getByText("第 11-11 条 / 共 11 条")).toBeVisible();
+  });
+
+  test("四个过滤条件都在表头, 选中后映射成后端查询参数", async () => {
+    const rows = [taskRow(1, "人员待处理", "pending", [])];
+    const fetchMock = vi.fn<typeof fetch>(async (input) =>
+      jsonResponse({
+        data: String(input).includes("status=cancelled") ? [] : rows,
+        pagination: { page: 1, page_size: 10, total_items: 1, total_pages: 1 },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderList();
+
+    await screen.findByText("人员待处理");
+    // 表格外的四个过滤下拉已经删除, 全部改由表头承载。
+    expect(screen.queryByLabelText("交接状态")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("交接类型")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("负责人状态")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("是否阻塞")).not.toBeInTheDocument();
+
+    const dropdown = await openHeaderFilter(user, "状态");
+    await user.click(within(dropdown).getByText("已取消"));
+    await user.click(within(dropdown).getByRole("button", { name: "确定" }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/console/api/v1/lifecycle/handover-tasks?page=1&page_size=10&status=cancelled",
+        expect.any(Object),
+      ),
+    );
   });
 
   test("删除动作只按后端 allowed_actions 展示并执行", async () => {
@@ -133,9 +169,11 @@ function renderList() {
   });
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter>
-        <HandoverTaskList />
-      </MemoryRouter>
+      <AppConfigProvider>
+        <MemoryRouter>
+          <HandoverTaskList />
+        </MemoryRouter>
+      </AppConfigProvider>
     </QueryClientProvider>,
   );
 }
@@ -144,5 +182,18 @@ function jsonResponse(payload: unknown) {
   return new Response(JSON.stringify(payload), {
     status: 200,
     headers: { "Content-Type": "application/json" },
+  });
+}
+
+async function openHeaderFilter(user: ReturnType<typeof userEvent.setup>, columnTitle: string) {
+  const header = [...document.querySelectorAll("th.ant-table-cell")].find((cell) =>
+    cell.textContent?.startsWith(columnTitle),
+  );
+  expect(header).toBeDefined();
+  await user.click((header as HTMLElement).querySelector(".ant-table-filter-trigger") as HTMLElement);
+  return await waitFor(() => {
+    const dropdown = document.querySelector(".ant-dropdown:not(.ant-dropdown-hidden) .ant-table-filter-dropdown");
+    expect(dropdown).not.toBeNull();
+    return dropdown as HTMLElement;
   });
 }

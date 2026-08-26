@@ -1,20 +1,13 @@
-import {
-  getCoreRowModel,
-  useReactTable,
-  type ColumnDef,
-  type OnChangeFn,
-  type PaginationState,
-} from "@tanstack/react-table";
 import { ArrowRight, Compass } from "lucide-react";
+import { useMemo } from "react";
 
-import { Badge } from "../../components/Badge";
-import { EmptyState } from "../../components/ui/EmptyState";
-import { TableActionCell, TableRowActionButton, TableRowActionLink } from "../../components/ui/TableActions";
-import { TableView } from "../../components/ui/TableView";
-import { MONO_TEXT_CLASS } from "../../components/ui/tableStyles";
+import { AppTable, type ColumnsType, type UseServerTableResult } from "../../components/antd/AppTable";
+import { actionsColumn, dateTimeColumn, statusColumn, textColumn, userColumn } from "../../components/antd/columns";
+import { Button } from "../../components/Button";
+import { ButtonLink } from "../../components/ButtonLink";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { AppSummary } from "../../lib/domain";
-import { formatDateTime, readinessLabel, readinessTone } from "../../lib/status";
+import { readinessLabel, readinessTone } from "../../lib/status";
 import type { Translator } from "../../lib/status";
 import { safeJoin } from "./workspace/utils";
 
@@ -26,84 +19,84 @@ export interface AppRowActions {
   onNavigate: (path: string) => void;
 }
 
+/** 后端 `_filter_app_status` 只认 active / inactive 两个值。 */
+const APP_STATUS_VALUES = ["active", "inactive"] as const;
+/** configuration_readiness 的三个状态; 后端不支持按它过滤, 因此只做展示。 */
+const READINESS_VALUES = ["ready", "warning", "blocking"] as const;
+
 export function ConsoleAppTable({
   apps,
   isLoading,
-  pageCount,
-  totalItems,
-  pagination,
-  onPaginationChange,
+  tableProps,
   actions,
 }: {
   apps: AppSummary[];
   isLoading: boolean;
-  pageCount: number;
-  totalItems: number;
-  pagination: PaginationState;
-  onPaginationChange: OnChangeFn<PaginationState>;
+  tableProps: UseServerTableResult<AppSummary>["tableProps"];
   actions: AppRowActions;
 }) {
   const { t } = useI18n();
-  const table = useReactTable({
-    data: apps,
-    columns: appColumns(t, actions),
-    getCoreRowModel: getCoreRowModel(),
-    manualPagination: true,
-    pageCount,
-    state: { pagination },
-    onPaginationChange,
-  });
+  const columns = useMemo(() => appColumns(t, actions), [actions, t]);
 
   return (
-    <TableView
-      table={table}
-      isLoading={isLoading}
-      totalItems={totalItems}
-      empty={<EmptyState title={t("appList.empty.title")} description={t("appList.empty.description")} />}
+    <AppTable<AppSummary>
+      {...tableProps}
+      columns={columns}
+      dataSource={apps}
+      emptyDescription={t("appList.empty.description")}
+      emptyTitle={t("appList.empty.title")}
+      loading={isLoading}
+      minWidth={1080}
+      rowKey="app_key"
     />
   );
 }
 
-function appColumns(t: Translator, actions: AppRowActions): ColumnDef<AppSummary>[] {
+function appColumns(t: Translator, actions: AppRowActions): ColumnsType<AppSummary> {
   return [
+    // 应用名 + app_key 两行, 与成员单元格同一套排版。
+    userColumn<AppSummary>({
+      key: "app",
+      title: t("appList.column.app"),
+      getName: (app) => app.name,
+      getUserId: (app) => app.app_key,
+    }),
+    // owners 存的是用户 ID, 后端按 owner_user_id 精确过滤。
+    textColumn<AppSummary>({
+      key: "owners",
+      title: t("appList.column.owners"),
+      getValue: (app) => safeJoin(app.owners),
+      filter: true,
+      width: 200,
+    }),
+    statusColumn<AppSummary>({
+      key: "configuration_status",
+      title: t("appList.column.configuration"),
+      filter: false,
+      options: READINESS_VALUES.map((status) => ({
+        value: status,
+        label: readinessLabel(t, status),
+        tone: readinessTone(status),
+      })),
+      width: 130,
+    }),
     {
-      header: t("appList.column.app"),
-      cell: ({ row }) => (
-        <div className="flex min-w-0 flex-col gap-1">
-          <strong>{row.original.name}</strong>
-          <code className={MONO_TEXT_CLASS}>{row.original.app_key}</code>
-        </div>
-      ),
+      ...statusColumn<AppSummary>({
+        key: "status",
+        title: t("common.status"),
+        getValue: (app) => (app.is_active ? "active" : "inactive"),
+        options: APP_STATUS_VALUES.map((status) => ({
+          value: status,
+          label: status === "active" ? t("common.enabled") : t("common.disabled"),
+          tone: status === "active" ? "evergreen" : "neutral",
+        })),
+        width: 120,
+      }),
+      // 后端只认单个 status, 因此下拉限制为单选, 不给用户多选却只有一个生效的错觉。
+      filterMultiple: false,
     },
-    {
-      header: t("appList.column.owners"),
-      cell: ({ row }) => <span>{safeJoin(row.original.owners)}</span>,
-    },
-    {
-      header: t("appList.column.configuration"),
-      cell: ({ row }) => (
-        <Badge tone={readinessTone(row.original.configuration_status)}>
-          {readinessLabel(t, row.original.configuration_status)}
-        </Badge>
-      ),
-    },
-    {
-      header: t("common.status"),
-      cell: ({ row }) => (
-        <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>
-          {row.original.is_active ? t("common.enabled") : t("common.disabled")}
-        </Badge>
-      ),
-    },
-    {
-      header: t("common.updatedAt"),
-      cell: ({ row }) => formatDateTime(row.original.updated_at),
-    },
-    {
-      id: "actions",
-      header: t("common.actions"),
-      cell: ({ row }) => <AppRowActionsCell app={row.original} actions={actions} />,
-    },
+    dateTimeColumn<AppSummary>({ key: "updated_at", title: t("common.updatedAt"), sorter: false }),
+    actionsColumn<AppSummary>({ render: (app) => <AppRowActionsCell app={app} actions={actions} /> }),
   ];
 }
 
@@ -128,47 +121,53 @@ function AppRowActionsCell({ app, actions }: { app: AppSummary; actions: AppRowA
   const enterHref = `/console/apps/${app.app_key}`;
 
   return (
-    <TableActionCell>
-      <TableRowActionButton
+    <>
+      <Button
         type="button"
+        size="sm"
         variant={app.is_active ? "ghost-danger" : "ghost"}
         disabled={actions.togglePending || !canToggleActive(app)}
         onClick={() => actions.onToggleActive(app)}
       >
         {app.is_active ? t("common.disable") : t("common.enable")}
-      </TableRowActionButton>
-      <TableRowActionButton
+      </Button>
+      <Button
         type="button"
+        size="sm"
         variant="ghost-danger"
         disabled={actions.deletePending || !canDelete(app)}
         onClick={() => actions.onDelete(app)}
       >
         {t("common.delete")}
-      </TableRowActionButton>
+      </Button>
       {/* 已就绪的行以 invisible 占位保持每行操作按钮列对齐 */}
-      <TableRowActionLink
+      <ButtonLink
         className={resumeHidden ? "invisible" : undefined}
         aria-hidden={resumeHidden || undefined}
         tabIndex={resumeHidden ? -1 : undefined}
         href={resumeHref}
         icon={<Compass size={15} />}
+        size="sm"
+        variant="ghost"
         onClick={(event) => {
           event.preventDefault();
           actions.onNavigate(resumeHref);
         }}
       >
         {t("appList.resumeOnboarding")}
-      </TableRowActionLink>
-      <TableRowActionLink
+      </ButtonLink>
+      <ButtonLink
         href={enterHref}
         icon={<ArrowRight size={15} />}
+        size="sm"
+        variant="ghost"
         onClick={(event) => {
           event.preventDefault();
           actions.onNavigate(enterHref);
         }}
       >
         {t("common.enter")}
-      </TableRowActionLink>
-    </TableActionCell>
+      </ButtonLink>
+    </>
   );
 }

@@ -1,6 +1,7 @@
 import { RefreshCcw } from "lucide-react";
 
-import { Badge } from "../../../components/Badge";
+import { AppTable, type ColumnsType } from "../../../components/antd/AppTable";
+import { statusColumn, textColumn } from "../../../components/antd/columns";
 import { Button } from "../../../components/Button";
 import { ButtonLink } from "../../../components/ButtonLink";
 import { StatusBanner } from "../../../components/StatusBanner";
@@ -53,33 +54,39 @@ export function AuthzStep({ appKey, onBack, onContinue }: { appKey: string; onBa
 
 function ConfigurationIssueTable({ issues }: { issues: ConfigurationIssue[] }) {
   const { t } = useI18n();
+  const columns: ColumnsType<ConfigurationIssue> = [
+    statusColumn<ConfigurationIssue>({
+      key: "severity",
+      title: t("wizard.authz.issue.column.severity"),
+      getValue: (issue) => (isBlockingIssue(issue) ? "blocking" : "warning"),
+      options: [
+        { value: "blocking", label: t("wizard.authz.severity.blocking"), tone: "signal" },
+        { value: "warning", label: t("wizard.authz.severity.warning"), tone: "amber" },
+      ],
+      width: 140,
+    }),
+    textColumn<ConfigurationIssue>({
+      key: "message",
+      title: t("wizard.authz.issue.column.message"),
+      getValue: (issue) => issue.message ?? issue.code ?? "",
+      // 问题说明是整表最长的一列: 不省略, 让长文案换行展示完整。
+      ellipsis: false,
+      filter: true,
+    }),
+    textColumn<ConfigurationIssue>({
+      key: "subject",
+      title: t("wizard.authz.issue.column.subject"),
+      mono: true,
+      width: 260,
+    }),
+  ];
 
+  // 配置检查结果由 configuration-status 一次返回全量, 分页与筛选都在客户端完成。
   return (
-    <div className="overflow-x-auto rounded-[3px] border border-ink/10">
-      <table className="w-full text-body">
-        <thead className="bg-paper-soft text-left text-label uppercase tracking-caps-wide text-ink-soft">
-          <tr>
-            <th className="px-3 py-2">{t("wizard.authz.issue.column.severity")}</th>
-            <th className="px-3 py-2">{t("wizard.authz.issue.column.message")}</th>
-            <th className="px-3 py-2">{t("wizard.authz.issue.column.subject")}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {issues.map((issue, index) => (
-            <tr key={`${issue.code ?? "issue"}:${issue.subject ?? index}`} className="border-t border-ink/8">
-              <td className="px-3 py-2">
-                <Badge tone={isBlockingIssue(issue) ? "signal" : "amber"}>
-                  {isBlockingIssue(issue) ? t("wizard.authz.severity.blocking") : t("wizard.authz.severity.warning")}
-                </Badge>
-              </td>
-              <td className="px-3 py-2 text-ink">{issue.message ?? issue.code ?? "-"}</td>
-              <td className="px-3 py-2">
-                <code className="text-xs">{issue.subject || "-"}</code>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
+    <AppTable<ConfigurationIssue>
+      columns={columns}
+      dataSource={issues}
+      rowKey={(issue) => `${issue.code ?? "issue"}:${issue.subject ?? ""}:${issue.message ?? ""}`}
+    />
   );
 }

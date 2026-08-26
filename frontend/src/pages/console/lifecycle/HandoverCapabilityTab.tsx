@@ -1,6 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
+import { AppTable, type ColumnsType } from "../../../components/antd/AppTable";
+import { textColumn } from "../../../components/antd/columns";
 import { Badge } from "../../../components/Badge";
 import { Button } from "../../../components/Button";
 import { Dialog } from "../../../components/Dialog";
@@ -11,6 +13,8 @@ import { PanelSurface } from "../../../components/ui/PanelSurface";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { apiRequest } from "../../../lib/api";
 import type { HandoverCapabilityPayload } from "../../../lib/domain";
+
+type HandoverAssetTypeRow = HandoverCapabilityPayload["handover_asset_types"][number];
 
 export function HandoverCapabilityTab({ appKey }: { appKey: string }) {
   const { t } = useI18n();
@@ -91,26 +95,7 @@ export function HandoverCapabilityTab({ appKey }: { appKey: string }) {
       {state === "declared" && (data?.handover_asset_types?.length ?? 0) > 0 ? (
         <div className="space-y-2">
           <h3 className="text-body font-semibold text-ink">{t("handover.console.capability.assetTypes")}</h3>
-          <table className="w-full text-left text-body">
-            <thead>
-              <tr className="text-caption text-ink-faint">
-                <th className="py-1 pr-3 font-medium">{t("handover.console.capability.col.type")}</th>
-                <th className="py-1 pr-3 font-medium">{t("handover.console.capability.col.label")}</th>
-                <th className="py-1 pr-3 font-medium">{t("handover.console.capability.col.detail")}</th>
-                <th className="py-1 font-medium">{t("handover.console.capability.col.releasable")}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data!.handover_asset_types.map((row) => (
-                <tr key={row.type} className="border-t border-ink/8">
-                  <td className="py-1.5 pr-3 font-mono text-caption">{row.type}</td>
-                  <td className="py-1.5 pr-3">{row.label}</td>
-                  <td className="py-1.5 pr-3">{row.detail_supported ? "✓" : "—"}</td>
-                  <td className="py-1.5">{row.releasable ? "✓" : "—"}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <HandoverAssetTypeTable rows={data!.handover_asset_types} />
         </div>
       ) : null}
 
@@ -148,4 +133,37 @@ export function HandoverCapabilityTab({ appKey }: { appKey: string }) {
       ) : null}
     </PanelSurface>
   );
+}
+
+/** 资产类型由能力接口一次返回全量, 因此分页与筛选都在客户端完成。 */
+function HandoverAssetTypeTable({ rows }: { rows: HandoverAssetTypeRow[] }) {
+  const { t } = useI18n();
+  const columns: ColumnsType<HandoverAssetTypeRow> = [
+    textColumn<HandoverAssetTypeRow>({
+      key: "type",
+      title: t("handover.console.capability.col.type"),
+      mono: true,
+      filter: true,
+      width: 220,
+    }),
+    textColumn<HandoverAssetTypeRow>({ key: "label", title: t("handover.console.capability.col.label") }),
+    textColumn<HandoverAssetTypeRow>({
+      key: "detail_supported",
+      title: t("handover.console.capability.col.detail"),
+      getValue: (row) => supportMark(row.detail_supported),
+      width: 140,
+    }),
+    textColumn<HandoverAssetTypeRow>({
+      key: "releasable",
+      title: t("handover.console.capability.col.releasable"),
+      getValue: (row) => supportMark(row.releasable),
+      width: 140,
+    }),
+  ];
+
+  return <AppTable<HandoverAssetTypeRow> columns={columns} dataSource={rows} rowKey="type" />;
+}
+
+function supportMark(supported: boolean): string {
+  return supported ? "✓" : "—";
 }

@@ -1,12 +1,10 @@
-import { getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
+import { useMemo } from "react";
 
-import { Badge } from "../../../components/Badge";
-import { EmptyState } from "../../../components/ui/EmptyState";
-import { TableActionCell, TableRowActionButton } from "../../../components/ui/TableActions";
-import { TableView } from "../../../components/ui/TableView";
+import { AppTable, type ColumnsType } from "../../../components/antd/AppTable";
+import { actionsColumn, dateTimeColumn, statusColumn, textColumn } from "../../../components/antd/columns";
+import { Button } from "../../../components/Button";
 import { useI18n } from "../../../i18n/I18nProvider";
 import type { OnboardingTemplateRow } from "../../../lib/domain";
-import { formatDateTime } from "../../../lib/status";
 import type { Translator } from "../../../lib/status";
 
 export interface TemplateRowActions {
@@ -25,65 +23,67 @@ export function OnboardingTemplateTable({
   actions: TemplateRowActions;
 }) {
   const { t } = useI18n();
-  const table = useReactTable({
-    data: templates,
-    columns: templateColumns(t, actions),
-    getCoreRowModel: getCoreRowModel(),
-  });
+  const columns = useMemo(() => templateColumns(t, actions), [actions, t]);
 
   return (
-    <TableView
-      table={table}
-      isLoading={isLoading}
-      empty={
-        <EmptyState
-          title={t("onboarding.templates.empty.title")}
-          description={t("onboarding.templates.empty.description")}
-        />
-      }
+    // 模板接口一次返回全量, 因此分页/筛选/排序都在客户端完成。
+    <AppTable<OnboardingTemplateRow>
+      columns={columns}
+      dataSource={templates}
+      emptyDescription={t("onboarding.templates.empty.description")}
+      emptyTitle={t("onboarding.templates.empty.title")}
+      loading={isLoading}
+      minWidth={940}
+      rowKey="id"
     />
   );
 }
 
-function templateColumns(t: Translator, actions: TemplateRowActions): ColumnDef<OnboardingTemplateRow>[] {
+function templateColumns(t: Translator, actions: TemplateRowActions): ColumnsType<OnboardingTemplateRow> {
   return [
     {
-      header: t("common.name"),
-      cell: ({ row }) => <strong>{row.original.name}</strong>,
+      key: "name",
+      dataIndex: "name",
+      title: t("common.name"),
+      ellipsis: true,
+      width: 220,
+      render: (_value: unknown, template: OnboardingTemplateRow) => <strong>{template.name}</strong>,
     },
-    {
-      header: t("common.description"),
-      cell: ({ row }) => row.original.description || "-",
-    },
-    {
-      header: t("onboarding.templates.column.items"),
-      cell: ({ row }) => t("onboarding.templates.itemCount", { count: row.original.items.length }),
-    },
-    {
-      header: t("common.status"),
-      cell: ({ row }) => (
-        <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>
-          {row.original.is_active ? t("common.enabled") : t("common.disabled")}
-        </Badge>
-      ),
-    },
-    {
-      header: t("common.updatedAt"),
-      cell: ({ row }) => formatDateTime(row.original.updated_at),
-    },
-    {
-      id: "actions",
-      header: t("common.actions"),
-      cell: ({ row }) => (
-        <TableActionCell>
-          <TableRowActionButton type="button" onClick={() => actions.onEdit(row.original)}>
+    textColumn<OnboardingTemplateRow>({ key: "description", title: t("common.description"), filter: true }),
+    textColumn<OnboardingTemplateRow>({
+      key: "items",
+      title: t("onboarding.templates.column.items"),
+      getValue: (template) => t("onboarding.templates.itemCount", { count: template.items.length }),
+      width: 140,
+    }),
+    statusColumn<OnboardingTemplateRow>({
+      key: "status",
+      title: t("common.status"),
+      getValue: (template) => (template.is_active ? "active" : "inactive"),
+      options: [
+        { value: "active", label: t("common.enabled"), tone: "evergreen" },
+        { value: "inactive", label: t("common.disabled"), tone: "neutral" },
+      ],
+      width: 120,
+    }),
+    dateTimeColumn<OnboardingTemplateRow>({ key: "updated_at", title: t("common.updatedAt") }),
+    actionsColumn<OnboardingTemplateRow>({
+      render: (template) => (
+        <>
+          <Button type="button" size="sm" variant="ghost" onClick={() => actions.onEdit(template)}>
             {t("common.edit")}
-          </TableRowActionButton>
-          <TableRowActionButton type="button" disabled={actions.toggling} onClick={() => actions.onToggle(row.original)}>
-            {row.original.is_active ? t("common.disable") : t("common.enable")}
-          </TableRowActionButton>
-        </TableActionCell>
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="ghost"
+            disabled={actions.toggling}
+            onClick={() => actions.onToggle(template)}
+          >
+            {template.is_active ? t("common.disable") : t("common.enable")}
+          </Button>
+        </>
       ),
-    },
+    }),
   ];
 }

@@ -21,15 +21,6 @@ const ALLOWED_LEGACY_TABLE_FILES: string[] = [
   // 注意 portal/components/PermissionSelector.tsx 同时被 tableArchitecture.test.ts
   // 断言「必须用 TanStack + 原生 table 渲染」, 迁它时要一起改那条断言。
   "console/ApprovalTemplateTable.tsx",
-  "console/ConsoleAppTable.tsx",
-  "console/ConsoleTeamList.tsx",
-  "console/ConsoleTeamMemberTable.tsx",
-  "console/lifecycle/ConsolePeopleTable.tsx",
-  "console/lifecycle/HandoverCapabilityTab.tsx",
-  "console/lifecycle/HandoverTaskTable.tsx",
-  "console/lifecycle/OnboardingTemplateTable.tsx",
-  "console/lifecycle/useHandoverTaskList.ts",
-  "console/onboarding/AuthzStep.tsx",
   "console/workspace/catalog/CatalogPanels.tsx",
   "console/workspace/matrix/GrantDraftPanel.tsx",
   "console/workspace/matrix/matrixColumns.tsx",

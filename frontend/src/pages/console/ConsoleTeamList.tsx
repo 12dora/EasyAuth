@@ -1,22 +1,17 @@
-import {
-  getCoreRowModel,
-  useReactTable,
-  type ColumnDef,
-} from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ArrowRight, Plus, RefreshCcw } from "lucide-react";
 import type { FormEvent } from "react";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { TableActionCell, TableRowActionButton, TableRowActionLink } from "../../components/ui/TableActions";
+
+import { AppTable, useServerTable, type ColumnsType } from "../../components/antd/AppTable";
+import { actionsColumn, dateTimeColumn, statusColumn, textColumn } from "../../components/antd/columns";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
-import { EmptyState } from "../../components/ui/EmptyState";
 import { PageState } from "../../components/ui/PageState";
-import { TableView } from "../../components/ui/TableView";
 import { useToast } from "../../components/ui/Toast";
 
-import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
+import { ButtonLink } from "../../components/ButtonLink";
 import { Dialog } from "../../components/Dialog";
 import { Field, TextArea, TextInput } from "../../components/Field";
 import { PageHeader } from "../../components/PageHeader";
@@ -25,7 +20,10 @@ import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../lib/api";
 import type { JsonObject, ListPayload } from "../../lib/api";
 import type { TeamPayload, TeamSummary } from "../../lib/domain";
-import { formatDateTime } from "../../lib/status";
+import { serverTableProps, serverTableQuery } from "./serverTable";
+
+/** 团队列表查询键前缀; 详情页失效列表时也用它。 */
+export const TEAMS_LIST_QUERY_KEY = ["console", "teams", "list"];
 
 export function teamLeadersLabel(leaders: TeamSummary["leaders"] | undefined): string {
   const names = (leaders ?? []).map((leader) => leader.name || leader.user_id).filter(Boolean);
@@ -39,16 +37,22 @@ export function ConsoleTeamList() {
   const queryClient = useQueryClient();
   const [createDialogOpen, setCreateDialogOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<TeamSummary | null>(null);
+  // 团队接口只支持 page/page_size, 没有任何过滤或排序参数, 因此列上不给表头筛选。
+  const serverTable = useServerTable<TeamSummary>();
+  const teamsSearch = serverTableQuery(serverTable.params);
   const teamsQuery = useQuery({
-    queryKey: ["console", "teams"],
-    queryFn: () => apiRequest<ListPayload<TeamSummary>>("/console/api/v1/teams"),
+    // 列表键多带一段 "list": 详情键是 ["console","teams",teamId],
+    // 分成两支后详情页可以只失效列表而不牵动自己的详情缓存。
+    queryKey: [...TEAMS_LIST_QUERY_KEY, teamsSearch],
+    queryFn: () => apiRequest<ListPayload<TeamSummary>>(`/console/api/v1/teams?${teamsSearch}`),
+    placeholderData: (previous) => previous,
   });
   const teams = itemsFromPayload<TeamSummary>(teamsQuery.data);
   const deleteMutation = useMutation({
     mutationFn: (team: TeamSummary) =>
       apiRequest(`/console/api/v1/teams/${team.id}`, { method: "DELETE" }),
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["console", "teams"] });
+      void queryClient.invalidateQueries({ queryKey: TEAMS_LIST_QUERY_KEY });
       setDeleteTarget(null);
       toast.success(t("console.teams.deleteSuccess"));
     },
@@ -63,7 +67,7 @@ export function ConsoleTeamList() {
         body: { ...payload } satisfies JsonObject,
       }),
     onSuccess: (payload) => {
-      void queryClient.invalidateQueries({ queryKey: ["console", "teams"] });
+      void queryClient.invalidateQueries({ queryKey: TEAMS_LIST_QUERY_KEY });
       setCreateDialogOpen(false);
       const teamId = payload.team?.id;
       if (teamId) {
@@ -72,58 +76,67 @@ export function ConsoleTeamList() {
     },
   });
 
-  const columns = useMemo<ColumnDef<TeamSummary>[]>(() => [
-    {
-      header: t("console.teams.column.name"),
-      cell: ({ row }) => <strong>{row.original.name}</strong>,
-    },
-    {
-      header: t("console.teams.column.leaders"),
-      cell: ({ row }) => <span>{teamLeadersLabel(row.original.leaders)}</span>,
-    },
-    {
-      header: t("console.teams.column.memberCount"),
-      cell: ({ row }) => row.original.member_count ?? 0,
-    },
-    {
-      header: t("common.status"),
-      cell: ({ row }) => (
-        <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>
-          {row.original.is_active ? t("common.enabled") : t("common.disabled")}
-        </Badge>
-      ),
-    },
-    {
-      header: t("console.teams.column.createdAt"),
-      cell: ({ row }) => formatDateTime(row.original.created_at),
-    },
-    {
-      id: "actions",
-      header: t("common.actions"),
-      cell: ({ row }) => (
-        <TableActionCell>
-          <TableRowActionLink
-            href={`/console/teams/${row.original.id}`}
-            icon={<ArrowRight size={15} />}
-            onClick={(event) => {
-              event.preventDefault();
-              void navigate(`/console/teams/${row.original.id}`);
-            }}
-          >
-            {t("console.teams.view")}
-          </TableRowActionLink>
-          <TableRowActionButton type="button" variant="ghost-danger" onClick={() => setDeleteTarget(row.original)}>
-            {t("common.delete")}
-          </TableRowActionButton>
-        </TableActionCell>
-      ),
-    },
-  ], [navigate, t]);
-  const table = useReactTable({
-    data: teams,
-    columns,
-    getCoreRowModel: getCoreRowModel(),
-  });
+  const columns = useMemo<ColumnsType<TeamSummary>>(
+    () => [
+      {
+        key: "name",
+        dataIndex: "name",
+        title: t("console.teams.column.name"),
+        ellipsis: true,
+        render: (_value: unknown, team: TeamSummary) => <strong>{team.name}</strong>,
+      },
+      textColumn<TeamSummary>({
+        key: "leaders",
+        title: t("console.teams.column.leaders"),
+        getValue: (team) => teamLeadersLabel(team.leaders),
+        width: 220,
+      }),
+      textColumn<TeamSummary>({
+        key: "member_count",
+        title: t("console.teams.column.memberCount"),
+        getValue: (team) => String(team.member_count ?? 0),
+        width: 110,
+      }),
+      statusColumn<TeamSummary>({
+        key: "status",
+        title: t("common.status"),
+        getValue: (team) => (team.is_active ? "active" : "inactive"),
+        filter: false,
+        options: [
+          { value: "active", label: t("common.enabled"), tone: "evergreen" },
+          { value: "inactive", label: t("common.disabled"), tone: "neutral" },
+        ],
+        width: 110,
+      }),
+      dateTimeColumn<TeamSummary>({
+        key: "created_at",
+        title: t("console.teams.column.createdAt"),
+        sorter: false,
+      }),
+      actionsColumn<TeamSummary>({
+        render: (team) => (
+          <>
+            <ButtonLink
+              href={`/console/teams/${team.id}`}
+              icon={<ArrowRight size={15} />}
+              size="sm"
+              variant="ghost"
+              onClick={(event) => {
+                event.preventDefault();
+                void navigate(`/console/teams/${team.id}`);
+              }}
+            >
+              {t("console.teams.view")}
+            </ButtonLink>
+            <Button type="button" size="sm" variant="ghost-danger" onClick={() => setDeleteTarget(team)}>
+              {t("common.delete")}
+            </Button>
+          </>
+        ),
+      }),
+    ],
+    [navigate, t],
+  );
 
   return (
     <>
@@ -158,10 +171,15 @@ export function ConsoleTeamList() {
         />
       ) : (
         <section className="space-y-3">
-          <TableView
-            table={table}
-            isLoading={teamsQuery.isLoading}
-            empty={<EmptyState title={t("console.teams.empty.title")} description={t("console.teams.empty.description")} />}
+          <AppTable<TeamSummary>
+            {...serverTableProps(serverTable.tableProps, teamsQuery.data?.pagination?.total_items ?? teams.length)}
+            columns={columns}
+            dataSource={teams}
+            emptyDescription={t("console.teams.empty.description")}
+            emptyTitle={t("console.teams.empty.title")}
+            loading={teamsQuery.isLoading || teamsQuery.isPlaceholderData}
+            minWidth={960}
+            rowKey="id"
           />
         </section>
       )}
