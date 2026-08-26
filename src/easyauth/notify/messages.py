@@ -206,19 +206,31 @@ def _is_valid_deeplink_url(url: str) -> bool:
     if len(url) > NOTIFY_DEEPLINK_URL_MAX_CHARS:
         return False
     if url.startswith(HTTPS_PREFIX):
-        return _is_valid_https_url(url)
+        return _valid_https_authority(url)
     if url.startswith(DINGTALK_LINK_PREFIX):
         return _is_valid_dingtalk_deeplink(url)
     return False
 
 
-def _is_valid_https_url(url: str) -> bool:
+_TCP_PORT_MIN = 1
+_TCP_PORT_MAX = 65535
+
+
+def _valid_https_authority(url: str) -> bool:
+    """拒绝含空白或控制字符的 https URL, 并要求主机名与合法端口。"""
+    if any(ch.isspace() or not ch.isprintable() for ch in url):
+        return False
     try:
         parsed = urlparse(url)
         hostname = parsed.hostname
+        port = parsed.port
     except ValueError:
         return False
-    return parsed.scheme == "https" and bool(parsed.netloc) and bool(hostname)
+    if parsed.scheme != "https" or not parsed.netloc or not hostname:
+        return False
+    if port is None:
+        return True
+    return _TCP_PORT_MIN <= port <= _TCP_PORT_MAX
 
 
 def _is_valid_dingtalk_deeplink(url: str) -> bool:
@@ -226,4 +238,4 @@ def _is_valid_dingtalk_deeplink(url: str) -> bool:
     parsed = urlparse(url)
     query = parse_qs(parsed.query)
     embedded = query.get("url", [""])[0]
-    return _is_valid_https_url(embedded)
+    return _valid_https_authority(embedded)

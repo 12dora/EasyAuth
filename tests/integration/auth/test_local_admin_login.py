@@ -783,13 +783,48 @@ def test_passkey_registration_flow(monkeypatch: pytest.MonkeyPatch) -> None:
     assert AuditLog.objects.filter(event_type="admin_local_passkey_registered").exists()
 
 
-def test_passkey_registration_integrity_error_is_duplicate(
+def _raise_integrity_error(*_args: object, **_kwargs: object) -> LocalAdminPasskey:
+    error = IntegrityError()
+    raise error
+
+
+def _miss_first_credential_exists(monkeypatch: pytest.MonkeyPatch, credential_id: str) -> None:
+    # 模拟并发: 预检查未看到已提交行, 回滚后再查能看到。
+    original_filter = LocalAdminPasskey.objects.filter
+    skipped_precheck = {"done": False}
+
+    def filter_skip_first_match(*args: object, **kwargs: object) -> object:
+        queryset = original_filter(*args, **kwargs)
+        if kwargs.get("credential_id") != credential_id:
+            return queryset
+        if skipped_precheck["done"]:
+            return queryset
+        skipped_precheck["done"] = True
+
+        class _MissingRow:
+            def exists(self) -> bool:
+                return False
+
+        return _MissingRow()
+
+    monkeypatch.setattr(LocalAdminPasskey.objects, "filter", filter_skip_first_match)
+
+
+def test_passkey_registration_integrity_error_with_duplicate_row(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Given: 预检查未看到重复, 但插入时撞 unique(credential_id)(并发注册同一凭据)。
-    _ = _create_account()
+    # Given: 先无第二因子登录, 再写入并发胜者的 credential_id; 本请求预检查未命中, 插入撞约束。
+    account = _create_account()
     client = Client()
     _ = _login(client)
+    credential_id = bytes_to_base64url(REGISTERED_CREDENTIAL_ID_BYTES)
+    _ = LocalAdminPasskey.objects.create(
+        account=account,
+        credential_id=credential_id,
+        public_key=bytes_to_base64url(REGISTERED_PUBLIC_KEY_BYTES),
+        sign_count=0,
+        name="already-registered",
+    )
     begin = _post_json(client, "/auth/local/security/passkey/register/begin/", {}).json()
     monkeypatch.setattr(
         local_admin.webauthn,
@@ -800,12 +835,8 @@ def test_passkey_registration_integrity_error_is_duplicate(
             sign_count=0,
         ),
     )
-
-    def raise_duplicate(*_args: object, **_kwargs: object) -> LocalAdminPasskey:
-        duplicate = IntegrityError()
-        raise duplicate
-
-    monkeypatch.setattr(LocalAdminPasskey.objects, "create", raise_duplicate)
+    _miss_first_credential_exists(monkeypatch, credential_id)
+    monkeypatch.setattr(LocalAdminPasskey.objects, "create", _raise_integrity_error)
 
     # When
     response = _post_json(
@@ -823,12 +854,47 @@ def test_passkey_registration_integrity_error_is_duplicate(
         },
     )
 
-    # Then: 与显式重复检查同一校验错误, 而不是 500。
+    # Then: 回滚后能查到该 credential_id, 走与预检查相同的校验错误。
     assert response.status_code == HTTPStatus.BAD_REQUEST
     assert response.json() == {"error": local_admin.REASON_CREDENTIAL_DUPLICATE}
-    assert not LocalAdminPasskey.objects.filter(
-        credential_id=bytes_to_base64url(REGISTERED_CREDENTIAL_ID_BYTES),
-    ).exists()
+    assert LocalAdminPasskey.objects.filter(credential_id=credential_id).count() == 1
+
+
+def test_passkey_registration_integrity_error_without_duplicate_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: 插入 IntegrityError 但库中并无该 credential_id(其它约束失败)。
+    _ = _create_account()
+    client = Client()
+    _ = _login(client)
+    begin = _post_json(client, "/auth/local/security/passkey/register/begin/", {}).json()
+    monkeypatch.setattr(
+        local_admin.webauthn,
+        "verify_registration_response",
+        lambda **_kwargs: SimpleNamespace(
+            credential_id=REGISTERED_CREDENTIAL_ID_BYTES,
+            credential_public_key=REGISTERED_PUBLIC_KEY_BYTES,
+            sign_count=0,
+        ),
+    )
+    monkeypatch.setattr(LocalAdminPasskey.objects, "create", _raise_integrity_error)
+
+    # When / Then: 非重复约束失败原样抛出, 不伪装成"已注册"。
+    with pytest.raises(IntegrityError):
+        _ = _post_json(
+            client,
+            "/auth/local/security/passkey/register/complete/",
+            {
+                "state_token": begin["state_token"],
+                "name": "MacBook Touch ID",
+                "current_password": GOOD_CREDENTIAL,
+                "credential": {
+                    "id": "reg-cred",
+                    "rawId": "reg-cred",
+                    "response": {"transports": ["internal"]},
+                },
+            },
+        )
 
 
 def test_passkey_delete_removes_credential() -> None:

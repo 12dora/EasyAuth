@@ -209,6 +209,9 @@ def test_normalize_deeplink_https_and_dingtalk_protocol() -> None:
         "https:///x",
         "https://",
         "https://[",
+        "https://example.com:bad/path",
+        "https://example.com:99999/path",
+        "https://exa mple.com/path",
     ],
 )
 def test_normalize_rejects_malformed_https_deeplink(deeplink_url: str) -> None:
@@ -223,6 +226,19 @@ def test_normalize_rejects_malformed_https_deeplink(deeplink_url: str) -> None:
             ),
         )
     assert exc.value.field == "deeplink_url"
+
+
+def test_normalize_accepts_https_deeplink_with_explicit_port() -> None:
+    result = normalize_and_validate(
+        NotifyMessageInput(
+            template=NOTIFY_TEMPLATE_ACTION_CARD,
+            title="t",
+            content="c",
+            deeplink_url="https://example.com:8443/path",
+            deeplink_title="x",
+        ),
+    )
+    assert result.deeplink_url == "https://example.com:8443/path"
 
 
 def test_normalize_rejects_malformed_https_embedded_in_dingtalk() -> None:

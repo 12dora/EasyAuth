@@ -269,7 +269,7 @@ def _insert_registered_passkey(
     material: _VerifiedPasskeyMaterial,
 ) -> LocalAdminPasskey:
     # 预检查 + 插入包在同一事务里; 并发撞 unique(credential_id) 时 IntegrityError
-    # 走与预检查相同的"已注册"校验错误, 避免 500。
+    # 仅在回滚后确实已有该 credential_id 时才走"已注册"校验错误, 其它约束失败原样抛出。
     try:
         with transaction.atomic():
             if LocalAdminPasskey.objects.filter(credential_id=material.credential_id).exists():
@@ -283,7 +283,9 @@ def _insert_registered_passkey(
                 name=material.name,
             )
     except IntegrityError as error:
-        raise PasskeyVerificationError(REASON_CREDENTIAL_DUPLICATE) from error
+        if LocalAdminPasskey.objects.filter(credential_id=material.credential_id).exists():
+            raise PasskeyVerificationError(REASON_CREDENTIAL_DUPLICATE) from error
+        raise
 
 
 def _credential_id_from_payload(credential: Mapping[str, object]) -> str:
