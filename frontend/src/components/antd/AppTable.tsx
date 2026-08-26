@@ -32,10 +32,12 @@ export interface AppTableProps<T> extends Omit<TableProps<T>, "rowKey" | "pagina
   /** 必填: 行身份只能来自数据字段, 不允许回落数组下标。 */
   rowKey: NonNullable<TableProps<T>["rowKey"]>;
   /**
-   * 传入即开启横向滚动(写入 `scroll.x`)。
-   * 列多且宽度不定时传 "max-content"; 需要固定最小宽度时传像素数。
-   * 使用 `actionsColumn`(fixed: "right")时必须传, 否则 antd 无法固定列。
-   * 不传则完全不设 `scroll.x`, 表格随容器宽度收缩。
+   * 表格的最小宽度, 写进 `scroll.x`。列宽之和已经确定时传像素数。
+   *
+   * 不传也**始终**有 `scroll.x`(回落 "max-content"): 横向滚动必须落在 antd 自己的
+   * `.ant-table-content` 上, 否则超宽表格会把整页撑出横向滚动条; 而且 fixed 布局下
+   * 没有剩余宽度时无宽度列会被压到 0px, "max-content" 让它们退回内容宽度。
+   * 表格样式里的 `min-width: 100%` 由 antd 写死, 宽屏下仍然铺满容器。
    */
   minWidth?: number | "max-content";
   /**
@@ -96,12 +98,13 @@ export function AppTable<T extends object>({
     };
   }, [pagination, t]);
 
-  const mergedScroll = useMemo(() => {
-    if (minWidth === undefined) {
-      return scroll;
-    }
-    return { ...scroll, x: minWidth };
-  }, [minWidth, scroll]);
+  // scroll.x 一定要有值: 它既是 antd 给 `.ant-table-content` 挂 overflow-x:auto 的开关,
+  // 也是 fixed 布局下表格宽度的来源。页面显式传的 scroll.x 优先, 其次 minWidth,
+  // 都没有就用 "max-content"(列按内容取宽, 表格自身仍带 min-width:100%)。
+  const mergedScroll = useMemo(
+    () => ({ ...scroll, x: scroll?.x ?? minWidth ?? "max-content" }),
+    [minWidth, scroll],
+  );
 
   const locale = useMemo(
     () => ({

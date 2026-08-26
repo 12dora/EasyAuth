@@ -12,7 +12,8 @@ test("控制台 React shell 可以加载", async ({ page }) => {
   await page.goto("/console");
 
   await expect(page.getByText("EasyAuth").first()).toBeVisible();
-  await expect(page.getByRole("navigation").getByText("应用")).toBeVisible();
+  // 侧边栏里还有「未接入应用」, 子串匹配会撞上它 —— 只认整格文案。
+  await expect(page.getByRole("navigation").getByText("应用", { exact: true })).toBeVisible();
 });
 
 test("控制台和门户深链可以直接打开", async ({ page }) => {

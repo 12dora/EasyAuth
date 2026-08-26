@@ -46,7 +46,7 @@ export function ConsoleAppTable({
       emptyDescription={t("appList.empty.description")}
       emptyTitle={t("appList.empty.title")}
       loading={isLoading}
-      minWidth={1080}
+      minWidth={1180}
       rowKey="app_key"
     />
   );
@@ -96,7 +96,8 @@ function appColumns(t: Translator, actions: AppRowActions): ColumnsType<AppSumma
       filterMultiple: false,
     },
     dateTimeColumn<AppSummary>({ key: "updated_at", title: t("common.updatedAt"), sorter: false }),
-    actionsColumn<AppSummary>({ render: (app) => <AppRowActionsCell app={app} actions={actions} /> }),
+    // 四个按钮(停用/删除/继续接入占位/进入)实测 277px, 加上单元格内边距取 300。
+    actionsColumn<AppSummary>({ width: 300, render: (app) => <AppRowActionsCell app={app} actions={actions} /> }),
   ];
 }
 

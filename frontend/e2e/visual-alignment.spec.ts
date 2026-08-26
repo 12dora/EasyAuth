@@ -285,8 +285,18 @@ async function expectTablesUseLocalHorizontalScroll(page: Page) {
   expect(documentOverflow).toBeLessThanOrEqual(1);
 }
 
+/**
+ * 可见控件不能被别的元素盖住。
+ *
+ * antd 的 Select 是复合控件: 真正的点击面是 `.ant-select-selector`, 里面那个
+ * `input.ant-select-selection-search-input` 只负责键盘输入, 视觉上被同级的
+ * `.ant-select-selection-item`(当前选中项文案)压在下面 —— 那是 antd 的正常构造,
+ * 不是被遮挡。所以这里跳过那个内部 input, 改判它外层的点击面。
+ */
 async function expectVisibleControlsAreClickable(scope: Page | Locator) {
-  const controls = scope.locator("button:visible, a:visible, select:visible, input:visible, textarea:visible");
+  const controls = scope.locator(
+    "button:visible, a:visible, select:visible, input:not(.ant-select-selection-search-input):visible, textarea:visible, .ant-select-selector:visible",
+  );
   const count = Math.min(await controls.count(), 12);
   for (let index = 0; index < count; index += 1) {
     await expectNotCovered(controls.nth(index));

@@ -305,12 +305,23 @@ function UserColumnTitle() {
 /* 操作列                                                              */
 /* ------------------------------------------------------------------ */
 
+/**
+ * 操作列默认宽度: 三个两字 `size="sm"` 按钮(47px)+ 两道 6px 间距 + 单元格左右内边距(12+12)。
+ * `tableLayout: "fixed"` 下列宽只能来自 `<colgroup>`, 所以操作列必须有一个真实宽度,
+ * 不能再靠「收缩到内容」。
+ */
+export const ACTIONS_COLUMN_DEFAULT_WIDTH = 180;
+
 export interface ActionsColumnConfig<T> {
   render: (record: T, index: number) => ReactNode;
   title?: ReactNode;
   /**
-   * 列宽。默认 1: 配合单元格的 `whitespace-nowrap` 让列收缩到内容宽度,
-   * 与旧 TableActionCell 的 `w-0 whitespace-nowrap` 行为一致。
+   * 列宽; 默认 `ACTIONS_COLUMN_DEFAULT_WIDTH`(够放三个两字按钮)。
+   *
+   * AppTable 固定用 `tableLayout: "fixed"`, 列宽只认 `<colgroup>`,
+   * 旧的 `width: 1` + `w-0`(auto 布局下的「收缩到内容」写法)在 fixed 布局里
+   * 会被原样当成 1px, 于是操作按钮整列溢出到相邻单元格上。
+   * 按钮多于三个(或标签更长)时页面显式传实际宽度。
    */
   width?: number;
   /** 默认固定在右侧; 需要 AppTable 传 minWidth 才会生效。 */
@@ -328,7 +339,7 @@ export function actionsColumn<T>({
   key = "actions",
   render,
   title,
-  width = 1,
+  width = ACTIONS_COLUMN_DEFAULT_WIDTH,
 }: ActionsColumnConfig<T>): ColumnType<T> {
   return {
     key,
@@ -336,7 +347,7 @@ export function actionsColumn<T>({
     fixed,
     width,
     align: "right",
-    className: "w-0 whitespace-nowrap",
+    className: "whitespace-nowrap",
     render: (_value: unknown, record: T, index: number) => (
       <div className="flex items-center justify-end gap-1.5" onClick={stopRowClick} onDoubleClick={stopRowClick}>
         {render(record, index)}

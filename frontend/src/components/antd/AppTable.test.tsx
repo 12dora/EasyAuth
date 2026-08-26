@@ -69,6 +69,18 @@ function bodyRowNames(): string[] {
   return [...rows].map((row) => row.querySelector("td")?.textContent ?? "");
 }
 
+/**
+ * 表头里的列标题。
+ *
+ * 开了横向滚动(AppTable 恒设 `scroll.x`)的表格, rc-table 会在 tbody 里再渲染一行
+ * `tr.ant-table-measure-row` 量列宽, 里面是整份表头的副本(`aria-hidden`, 但
+ * `getByText` 照样能找到), 于是同一个列名在 DOM 里出现两次。
+ * 要点真正的表头就必须限定在 thead 内。
+ */
+function columnHeader(title: string): HTMLElement {
+  return within(document.querySelector("thead.ant-table-thead") as HTMLElement).getByText(title);
+}
+
 describe("AppTable 客户端模式", () => {
   test("默认每页 10 条并渲染 showTotal 区间文案", () => {
     renderTable(<AppTable<Row> columns={COLUMNS} dataSource={ROWS} rowKey="id" />);
@@ -138,7 +150,7 @@ describe("AppTable 客户端模式", () => {
     const user = userEvent.setup({ delay: null });
     renderTable(<AppTable<Row> columns={COLUMNS} dataSource={ROWS} rowKey="id" />);
 
-    await user.click(screen.getByText("Name"));
+    await user.click(columnHeader("Name"));
 
     await waitFor(() => expect(bodyRowNames()[0]).toBe("Alpha 1"));
     expect(document.querySelector("th.ant-table-column-sort")).not.toBeNull();
@@ -150,9 +162,16 @@ describe("AppTable 客户端模式", () => {
     expect(screen.getByText("暂无数据")).toBeInTheDocument();
   });
 
-  test("传 minWidth 才写入 scroll.x", () => {
+  test("scroll.x 恒有值: 不传 minWidth 回落 max-content, 传了就是像素数", () => {
+    // 缺省也必须有横向滚动容器: 没有 scroll.x 的表格一旦超宽会把整页撑出横向滚动条,
+    // 而且 fixed 布局下没有剩余宽度时无宽度列会被压到 0px。
     const { unmount } = renderTable(<AppTable<Row> columns={COLUMNS} dataSource={ROWS} rowKey="id" />);
-    expect(document.querySelector(".ant-table-scroll-horizontal")).toBeNull();
+    expect(document.querySelector(".ant-table-scroll-horizontal")).not.toBeNull();
+    expect(document.querySelector(".ant-table-content")).toHaveStyle({ overflowX: "auto" });
+    const defaultStyle = document.querySelector(".ant-table-content table")?.getAttribute("style");
+    expect(defaultStyle).toContain("width: max-content");
+    // 宽屏下仍然铺满容器。
+    expect(defaultStyle).toContain("min-width: 100%");
     expect(document.querySelector(".ant-table-wrapper")?.classList.contains("w-full")).toBe(true);
     unmount();
 
@@ -265,10 +284,10 @@ describe("useServerTable", () => {
     const seen: Record<string, unknown>[] = [];
     renderTable(<ServerTable onParams={(params) => seen.push(params)} />);
 
-    await user.click(screen.getByText("Name"));
+    await user.click(columnHeader("Name"));
     await waitFor(() => expect(seen.at(-1)).toEqual({ page: 1, page_size: 10, ordering: "name" }));
 
-    await user.click(screen.getByText("Name"));
+    await user.click(columnHeader("Name"));
     await waitFor(() => expect(seen.at(-1)).toEqual({ page: 1, page_size: 10, ordering: "-name" }));
   });
 });

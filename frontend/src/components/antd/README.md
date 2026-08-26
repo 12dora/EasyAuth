@@ -38,12 +38,25 @@ AppTable 独占的布局约定（**页面不要重复传**）：
 | 尺寸 | `size="middle"`（可覆盖） |
 | 布局 | `tableLayout="fixed"` |
 | 行高 / 单元格内边距 | 主题 `Table` token（`cellPaddingBlockMD: 10`、`cellPaddingInlineMD: 12`），等于旧 `TABLE_CELL_CLASS` 的 `px-3 py-2.5` |
-| 横向滚动 | 只有传 `minWidth` 才写 `scroll.x`；不传则随容器收缩 |
+| 横向滚动 | `scroll.x` 恒有值：页面传的 `scroll.x` > `minWidth` > `"max-content"` |
 | 空态 | 复用 `components/ui/EmptyState`，默认标题 `table.empty.title` |
 | 加载态 | 透传 `loading`，用 antd 自带 Spin |
 | 分页 | `position: ["bottomRight"]`、`size="small"`、`showSizeChanger`、`pageSizeOptions [10,20,50,100]`、`defaultPageSize 10`、`showTotal` = `第 x-y 条 / 共 z 条`；全部渲染在同一个 `ul.ant-pagination` 里 |
 
 用 `actionsColumn`（固定右列）时**必须**同时传 `minWidth`，否则 antd 无法固定列。
+
+### 为什么 `scroll.x` 永远有值
+
+`scroll.x` 一身两职：它既是 antd 给 `.ant-table-content` 挂 `overflow-x: auto` 的开关，
+也是 fixed 布局下表格宽度的来源。不设它的表格一旦列宽之和超过容器，
+**会把整页撑出横向滚动条**（`visual-alignment.spec.ts` 的
+`expectTablesUseLocalHorizontalScroll` 就是拦这个的）；而且 fixed 布局下没有剩余宽度时，
+不写 `width` 的列会被压到 0px，整列文字消失。
+
+所以缺省回落到 `"max-content"`：列按内容取宽，表格自身仍带 antd 写死的 `min-width: 100%`，
+宽屏下照常铺满容器。**列宽之和已经明确的表格仍然应该传 `minWidth` 像素数** ——
+那样列宽由你决定，`ellipsis` 也照旧生效；`"max-content"` 只是「没人声明」时的安全兜底
+（代价是 `ellipsis` 列不再截断，表格可能比容器宽）。
 
 常量：`APP_TABLE_PAGE_SIZE_OPTIONS`、`APP_TABLE_DEFAULT_PAGE_SIZE`。
 类型再导出：`ColumnsType`、`ColumnType`、`ColumnGroupType`、`TableProps`、`TablePaginationConfig`、
@@ -76,8 +89,11 @@ userColumn<T>({ getName, getUserId?, key? = "user", title?, filter? = false, wid
 // 显示名(粗体) + 等宽 user id 两行, 沿用 ConsoleTeamMemberTable 的成员单元格排版
 // 仓库里没有表格内头像的先例, 因此不渲染头像
 
-actionsColumn<T>({ render, title?, width? = 1, fixed? = "right", key? = "actions" }): ColumnType<T>
+actionsColumn<T>({ render, title?, width? = ACTIONS_COLUMN_DEFAULT_WIDTH, fixed? = "right", key? = "actions" }): ColumnType<T>
 // render: (record, index) => ReactNode, 右对齐 / 不换行 / 点击不冒泡到行
+// ACTIONS_COLUMN_DEFAULT_WIDTH = 180: 三个两字 size="sm" 按钮 + 间距 + 单元格内边距。
+// tableLayout: "fixed" 下列宽只认 <colgroup>, 没有「收缩到内容」这回事 ——
+// 按钮更多或标签更长时(如应用列表的四个按钮)页面必须显式传实际宽度, 否则整列会溢出到邻格上。
 
 serverColumn<T>(column, filteredValue?, { multiple? = false }): ColumnType<T>
 // 把任意列改造成「服务端筛选」列: 去掉 onFilter + 受控 filteredValue(见下)
@@ -267,6 +283,10 @@ ANTD_TEST_TIMEOUT_MS                          // 30_000
   antd 的下拉延迟挂载、收起时带动画，直接查 `.ant-table-filter-dropdown` 会拿到上一个。
   列名按「先前缀、后包含」匹配表头（固定列会让同一个标题在 DOM 里出现两次）。
 - `testing.tsx` 依赖 `@testing-library`（devDependencies），**只能被测试文件引用**。
+- 开了横向滚动的表格（现在是全部），rc-table 会在 `tbody` 里多渲染一行
+  `tr.ant-table-measure-row` 量列宽，内容是整份表头的副本。它带 `aria-hidden`，
+  `getByRole` 看不见，但 **`getByText` 会拿到两个**。断言列标题时限定在
+  `thead.ant-table-thead` 内（`openHeaderFilter` 已经处理过这件事）。
 
 ## 类型报错 TS2742
 
