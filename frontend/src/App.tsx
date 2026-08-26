@@ -71,6 +71,8 @@ export interface CurrentUser {
   role?: string;
   /** 权威超管能力; 不得用本地化 role 展示字符串做门禁。 */
   isSuperuser?: boolean;
+  /** 后端判定的控制台准入能力; 门户壳层据此展示「管理后台」入口。 */
+  canAccessConsole?: boolean;
 }
 
 export function App({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUser, currentUserId = "", shell }: AppProps) {

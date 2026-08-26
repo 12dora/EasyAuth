@@ -42,6 +42,8 @@ def test_console_home_serves_react_shell_for_authenticated_admin(
     assert 'data-current-user-id="react-console-admin"' in html
     assert 'data-current-user-display-name="控制台用户"' in html
     assert 'data-current-user-role="EasyAuth Admins"' in html
+    assert 'data-current-user-is-superuser="true"' in html
+    assert 'data-current-user-can-access-console="true"' in html
     assert (
         'data-current-user-avatar-url="https://authentik.example.test/media/avatars/admin.png"'
         in html
@@ -206,6 +208,7 @@ def test_portal_serves_react_shell_for_active_session_user() -> None:
     assert 'data-current-user-id="react-portal-user"' in html
     assert 'data-current-user-display-name="门户用户"' in html
     assert 'data-current-user-role="Member"' in html
+    assert 'data-current-user-can-access-console="false"' in html
     assert (
         'data-current-user-avatar-url="https://authentik.example.test/media/avatars/portal.png"'
         in html
@@ -237,6 +240,76 @@ def test_portal_shell_uses_placeholder_display_name_when_profile_name_is_missing
     assert 'data-current-user-display-name="当前用户"' in html
 
 
+@pytest.mark.parametrize("role", ["owner", "developer"])
+def test_portal_shell_marks_active_app_member_as_console_accessible(
+    role: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: 门户用户对某个 App 有 active owner/developer 成员关系, 但不是超管。
+    user_id = f"react-portal-{role}"
+    _mock_authentik_current_groups(monkeypatch, user_id, ())
+    client = _logged_in_console_user(user_id, name="应用成员")
+    app = App.objects.create(app_key=f"react-portal-{role}-crm", name="Portal CRM")
+    _ = AppMembership.objects.create(app=app, user_id=user_id, role=role)
+
+    # When: 打开员工门户。
+    response = client.get("/portal/")
+
+    # Then: 至少能看见一个 App 的人可以进控制台, 但不是超管。
+    html = response.content.decode()
+    assert response.status_code == HTTPStatus.OK
+    assert f'data-current-user-id="{user_id}"' in html
+    assert 'data-current-user-can-access-console="true"' in html
+    assert 'data-current-user-is-superuser="false"' in html
+    assert 'data-current-user-role="Member"' in html
+
+
+def test_portal_shell_marks_plain_member_as_not_console_accessible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: 已登录的普通成员, 没有任何 App 成员关系。
+    # actor 存在仍不足以露出入口: 空控制台对成员没有可操作 App。
+    _mock_authentik_current_groups(monkeypatch, "react-portal-plain-member", ())
+    client = _logged_in_console_user("react-portal-plain-member", name="普通成员")
+
+    # When: 打开员工门户。
+    response = client.get("/portal/")
+
+    # Then: 没有可见 App 时不声明可进控制台。
+    html = response.content.decode()
+    assert response.status_code == HTTPStatus.OK
+    assert 'data-current-user-id="react-portal-plain-member"' in html
+    assert 'data-current-user-can-access-console="false"' in html
+    assert 'data-current-user-is-superuser="false"' in html
+    assert 'data-current-user-role="Member"' in html
+
+
+def test_portal_shell_marks_inactive_membership_as_not_console_accessible(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: 门户用户只剩 inactive owner membership。
+    _mock_authentik_current_groups(monkeypatch, "react-portal-inactive-owner", ())
+    client = _logged_in_console_user("react-portal-inactive-owner", name="失效负责人")
+    app = App.objects.create(app_key="react-portal-inactive-crm", name="Inactive CRM")
+    _ = AppMembership.objects.create(
+        app=app,
+        user_id="react-portal-inactive-owner",
+        role="owner",
+        is_active=False,
+    )
+
+    # When: 打开员工门户。
+    response = client.get("/portal/")
+
+    # Then: inactive membership 不授予控制台入口。
+    html = response.content.decode()
+    assert response.status_code == HTTPStatus.OK
+    assert 'data-current-user-id="react-portal-inactive-owner"' in html
+    assert 'data-current-user-can-access-console="false"' in html
+    assert 'data-current-user-is-superuser="false"' in html
+    assert 'data-current-user-role="Member"' in html
+
+
 def test_logged_out_page_serves_portal_react_shell_without_current_user() -> None:
     # Given: 浏览器被登出重定向到本地登出页。
     client = Client()
@@ -254,6 +327,8 @@ def test_logged_out_page_serves_portal_react_shell_without_current_user() -> Non
     assert "data-current-user-id" not in html
     assert "data-current-user-display-name" not in html
     assert "data-current-user-role" not in html
+    assert "data-current-user-is-superuser" not in html
+    assert "data-current-user-can-access-console" not in html
     assert "data-current-user-avatar-url" not in html
 
 

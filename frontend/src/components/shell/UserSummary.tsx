@@ -1,4 +1,4 @@
-import { LogOut, ShieldCheck } from "lucide-react";
+import { LayoutDashboard, LogOut, ShieldCheck } from "lucide-react";
 import { useEffect, useId, useRef } from "react";
 import type { KeyboardEvent } from "react";
 import { Link } from "react-router-dom";
@@ -8,6 +8,8 @@ import { useI18n } from "../../i18n/I18nProvider";
 import { readCsrfToken } from "../../lib/api";
 
 const DEFAULT_LOGOUT_URL = "/auth/logout/";
+/** 壳层模式在 main.tsx 启动时定死, 门户↔控制台只能整页跳转, 不能走 react-router。 */
+const CONSOLE_HOME_URL = "/console/";
 
 interface UserSummaryProps {
   currentUser: CurrentUser;
@@ -31,6 +33,11 @@ export function UserSummary({ currentUser, mode, open, onOpenChange }: UserSumma
   const avatarUrl = safeAvatarUrl(currentUser.avatarUrl);
   const avatarLabel = userName.slice(0, 1).toUpperCase();
   const csrfToken = readCsrfToken();
+  const showSecuritySettings = mode === "console";
+  // 门户壳层的「管理后台」入口只信后端下发的准入能力, 不看本地化 role 字符串。
+  const showAdminConsoleEntry = mode === "portal" && currentUser.canAccessConsole === true;
+  // 菜单项按渲染顺序占位; 安全设置与管理后台互斥, 同占 0 号位。
+  const logoutItemIndex = showSecuritySettings || showAdminConsoleEntry ? 1 : 0;
 
   useEffect(() => {
     if (open) {
@@ -108,7 +115,7 @@ export function UserSummary({ currentUser, mode, open, onOpenChange }: UserSumma
       </button>
       {open ? (
         <div className="user-menu-popover topbar-popover" id={menuId} data-open="true" role="menu" onKeyDown={onMenuKeyDown}>
-          {mode === "console" ? (
+          {showSecuritySettings ? (
             <Link
               ref={(node) => {
                 menuItemRefs.current[0] = node;
@@ -122,11 +129,25 @@ export function UserSummary({ currentUser, mode, open, onOpenChange }: UserSumma
               <span>{t("shell.securitySettings")}</span>
             </Link>
           ) : null}
+          {showAdminConsoleEntry ? (
+            <a
+              ref={(node) => {
+                menuItemRefs.current[0] = node;
+              }}
+              className="user-menu-item"
+              href={CONSOLE_HOME_URL}
+              role="menuitem"
+              onClick={() => onOpenChange(false)}
+            >
+              <LayoutDashboard size={15} aria-hidden="true" />
+              <span>{t("shell.adminConsole")}</span>
+            </a>
+          ) : null}
           <form action={logoutUrl} aria-label={t("shell.logout")} method="post">
             {csrfToken ? <input type="hidden" name="csrfmiddlewaretoken" value={csrfToken} /> : null}
             <button
               ref={(node) => {
-                menuItemRefs.current[mode === "console" ? 1 : 0] = node;
+                menuItemRefs.current[logoutItemIndex] = node;
               }}
               type="submit"
               className="user-menu-item user-menu-item-danger"

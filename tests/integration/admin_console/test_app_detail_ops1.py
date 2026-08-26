@@ -122,9 +122,12 @@ def test_ops1_console_entry_serves_shell_for_non_admin_console_user() -> None:
     # When: 打开控制台首页。
     response = client.get("/console/")
 
-    # Then: 控制台壳对登录用户可用, App 级权限由成员角色控制。
+    # Then: 控制台壳对登录用户可用; 无可见 App 时不声明控制台入口。
+    html = response.content.decode()
     assert response.status_code == HTTPStatus.OK
-    assert 'data-easyauth-react-shell="console"' in response.content.decode()
+    assert 'data-easyauth-react-shell="console"' in html
+    assert 'data-current-user-can-access-console="false"' in html
+    assert 'data-current-user-is-superuser="false"' in html
 
 
 def test_ops1_console_app_detail_hides_app_from_non_member_user() -> None:

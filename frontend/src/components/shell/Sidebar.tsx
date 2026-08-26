@@ -76,6 +76,8 @@ const PORTAL_GROUPS: NavGroupSpec[] = [
 
 const PORTAL_APPROVALS_PATH = "/portal/approvals";
 const PORTAL_HANDOVERS_PATH = "/portal/handovers";
+/** 壳层模式在 main.tsx 启动时定死, 控制台↔门户只能整页跳转, 故用原生 <a> 而非 NavLink。 */
+const PORTAL_HOME_URL = "/portal/";
 
 /** 门户「待我审批」角标: 只取 pagination.total_items, 审批处理后由 ["portal","approvals"] 前缀失效自动刷新。 */
 function usePendingApprovalsBadge(enabled: boolean): string {
@@ -190,6 +192,9 @@ export function Sidebar({ mode, currentUser }: SidebarProps) {
           <NavLink to={settingsPath} data-nav-path={settingsPath}>
             <span>{t("shell.settings")}</span>
           </NavLink>
+          <a href={PORTAL_HOME_URL}>
+            <span>{t("shell.backToPortal")}</span>
+          </a>
         </div>
       ) : null}
     </aside>

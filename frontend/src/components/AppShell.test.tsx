@@ -28,9 +28,11 @@ function renderShell(
   mode: "console" | "portal" = "console",
   currentUserId = "",
   initialEntry?: string,
+  canAccessConsole?: boolean,
 ) {
   const currentUser = {
     avatarUrl: "https://authentik.example.test/media/avatars/alice.png",
+    canAccessConsole,
     displayName: mode === "console" ? "控制台用户" : "张三",
     id: currentUserId,
     isSuperuser: mode === "console",
@@ -260,6 +262,27 @@ describe("AppShell", () => {
     expect(within(logoutForm).getByRole("menuitem", { name: "退出登录" })).toBeVisible();
   });
 
+  test("门户用户具备控制台准入时头像菜单展示管理后台入口", async () => {
+    const user = userEvent.setup();
+    renderShell("portal", "alice@example.com", undefined, true);
+
+    await user.click(screen.getByRole("button", { name: "当前登录用户菜单" }));
+
+    const adminEntry = within(screen.getByRole("menu")).getByRole("menuitem", { name: "管理后台" });
+    // 壳层模式启动时定死, 必须整页跳转; react-router 的 Link 会渲染同样的 href, 故额外断言不走 SPA 导航。
+    expect(adminEntry).toHaveAttribute("href", "/console/");
+    expect(adminEntry).not.toHaveAttribute("data-discover");
+  });
+
+  test("门户用户没有控制台准入时不展示管理后台入口", async () => {
+    const user = userEvent.setup();
+    renderShell("portal", "alice@example.com");
+
+    await user.click(screen.getByRole("button", { name: "当前登录用户菜单" }));
+
+    expect(within(screen.getByRole("menu")).queryByRole("menuitem", { name: "管理后台" })).not.toBeInTheDocument();
+  });
+
   test("外部 logoutUrl 不会把登出表单带离 EasyAuth", async () => {
     const user = userEvent.setup();
     renderWithQueryClient(
@@ -297,6 +320,19 @@ describe("AppShell", () => {
     const footer = screen.getByLabelText("侧边栏底部操作");
     expect(within(footer).getByRole("separator")).toBeVisible();
     expect(within(footer).getByRole("link", { name: "设置" })).toHaveAttribute("href", "/console/settings");
+  });
+
+  test("控制台侧边栏底部展示返回员工门户的整页链接", () => {
+    renderShell("console");
+
+    const footer = screen.getByLabelText("侧边栏底部操作");
+    const backLink = within(footer).getByRole("link", { name: "返回员工门户" });
+    expect(backLink).toHaveAttribute("href", "/portal/");
+    // data-discover 是 react-router Link/NavLink 的标记; 同分组的设置项作为正对照, 确保下面这条断言非空转。
+    expect(within(footer).getByRole("link", { name: "设置" })).toHaveAttribute("data-discover", "true");
+    expect(backLink).not.toHaveAttribute("data-discover");
+    // 底部返回入口不参与侧边栏指示灯定位。
+    expect(backLink).not.toHaveAttribute("data-nav-path");
   });
 
   test("门户没有安全设置占位入口", () => {

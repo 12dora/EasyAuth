@@ -70,6 +70,7 @@ function readCurrentUser(root: HTMLElement, currentUserId: string): CurrentUser 
     logoutUrl: dataset.logoutUrl ?? "/auth/logout/",
     role: dataset.currentUserRole ?? "",
     isSuperuser: dataset.currentUserIsSuperuser === "true",
+    canAccessConsole: dataset.currentUserCanAccessConsole === "true",
   };
 }
 
