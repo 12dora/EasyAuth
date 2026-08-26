@@ -5,7 +5,6 @@ import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
 import { PageState } from "../../components/ui/PageState";
 import { useI18n } from "../../i18n/I18nProvider";
-import { ApprovalInstancesFilters } from "./ApprovalInstancesFilters";
 import { ApprovalInstancesTable } from "./ApprovalInstancesTable";
 import { useApprovalInstances } from "./useApprovalInstances";
 
@@ -26,12 +25,6 @@ export function ApprovalInstancesPage() {
           </Button>
         }
       />
-      <ApprovalInstancesFilters
-        statusFilter={page.statusFilter}
-        onStatusChange={page.setStatusFilter}
-        appKeyInput={page.appKeyInput}
-        onAppKeyChange={page.setAppKeyInput}
-      />
       {query.error && rows.length > 0 ? (
         <StatusBanner live="alert" tone="signal" title={t("console.operations.loadFailed")} message={(query.error as Error).message} />
       ) : null}
@@ -50,10 +43,7 @@ export function ApprovalInstancesPage() {
         <ApprovalInstancesTable
           rows={rows}
           isLoading={query.isLoading}
-          pageCount={page.pageCount}
-          totalItems={page.totalItems}
-          pagination={page.pagination}
-          onPaginationChange={page.setPagination}
+          tableProps={page.tableProps}
           actions={{ isDisabled: page.isRedelivering, onRedeliver: page.redeliver }}
         />
       )}

@@ -7,8 +7,8 @@ import { StatusBanner } from "../../components/StatusBanner";
 import { PageState } from "../../components/ui/PageState";
 import { useI18n } from "../../i18n/I18nProvider";
 import { BlockedAppsOperationsSection } from "./operations/BlockedAppsSection";
+import { GrantCreatedRangeFilter } from "./operations/DateRangeFilter";
 import { OperationDialogs } from "./operations/OperationDialogs";
-import { OperationFilters } from "./operations/OperationFilters";
 import { OperationsTable } from "./operations/OperationsTable";
 import { ENDPOINTS, type OperationSectionConfig } from "./operations/operationQuery";
 import {
@@ -53,9 +53,8 @@ function OperationsSectionPage({
         description={t("console.operations.description")}
         actions={<OperationsHeaderActions controller={controller} />}
       />
-      {controller.isPaginated ? (
-        <OperationFilters
-          section={section}
+      {section === "access-grants" ? (
+        <GrantCreatedRangeFilter
           searchParams={controller.searchParams}
           onChange={controller.updateSearchParam}
         />
@@ -110,13 +109,7 @@ function OperationsResult({
       />
     );
   }
-  return (
-    <OperationsTable
-      table={controller.table}
-      isLoading={query.isLoading}
-      totalItems={query.data?.pagination?.total_items ?? rows.length}
-    />
-  );
+  return <OperationsTable controller={controller} />;
 }
 
 function OperationsHeaderActions({

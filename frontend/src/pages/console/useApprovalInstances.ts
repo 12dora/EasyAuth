@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 
+import { useServerTable, type AppTableProps } from "../../components/antd/AppTable";
 import { useToast } from "../../components/ui/Toast";
 import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../lib/api";
@@ -9,6 +10,7 @@ import type { ApprovalInstanceRow } from "../../lib/domain";
 
 export const INSTANCES_QUERY_PREFIX = ["console", "operations", "approval-instances"];
 const DEFAULT_PAGE_SIZE = 20;
+const LIST_ENDPOINT = "/console/api/v1/operations/approval-instances";
 
 interface RedeliverPayload {
   approval_instance: ApprovalInstanceRow;
@@ -19,35 +21,27 @@ export function useApprovalInstances() {
   const { t } = useI18n();
   const toast = useToast();
   const queryClient = useQueryClient();
-  const [statusFilter, setStatusFilter] = useState("");
-  const [appKeyInput, setAppKeyInput] = useState("");
-  const [appKeyFilter, setAppKeyFilter] = useState("");
-  const [pagination, setPagination] = useState({ pageIndex: 0, pageSize: DEFAULT_PAGE_SIZE });
   const [redeliveringInstanceIds, setRedeliveringInstanceIds] = useState<ReadonlySet<string>>(new Set());
   const redeliveringInstanceIdsRef = useRef(new Set<string>());
 
-  // app_key 过滤输入去抖后生效, 避免每次按键都打后端。
-  useEffect(() => {
-    const timer = window.setTimeout(() => setAppKeyFilter(appKeyInput.trim()), 250);
-    return () => window.clearTimeout(timer);
-  }, [appKeyInput]);
-
-  // 过滤条件变化时回到第一页, 避免带着旧页码请求。
-  useEffect(() => {
-    setPagination((current) => (current.pageIndex === 0 ? current : { ...current, pageIndex: 0 }));
-  }, [statusFilter, appKeyFilter]);
+  // 表头筛选、分页、「筛选后回第 1 页」全部交给 useServerTable;
+  // 后端只支持 status 与 app_key 两个过滤参数。
+  const serverTable = useServerTable<ApprovalInstanceRow>({
+    defaultPageSize: DEFAULT_PAGE_SIZE,
+    filterParams: { status: "status", app_key: "app_key" },
+  });
+  const queryString = new URLSearchParams(
+    Object.entries(serverTable.params).map(([key, value]) => [key, String(value)]),
+  ).toString();
 
   const query = useQuery({
-    queryKey: [...INSTANCES_QUERY_PREFIX, statusFilter, appKeyFilter, pagination.pageIndex, pagination.pageSize],
+    queryKey: [...INSTANCES_QUERY_PREFIX, queryString],
     queryFn: ({ signal }) =>
-      apiRequest<ListPayload<ApprovalInstanceRow>>(
-        `/console/api/v1/operations/approval-instances?status=${encodeURIComponent(statusFilter)}&app_key=${encodeURIComponent(appKeyFilter)}&page=${pagination.pageIndex + 1}&page_size=${pagination.pageSize}`,
-        { signal },
-      ),
+      apiRequest<ListPayload<ApprovalInstanceRow>>(`${LIST_ENDPOINT}?${queryString}`, { signal }),
   });
   const redeliverMutation = useMutation({
     mutationFn: (row: ApprovalInstanceRow) =>
-      apiRequest<RedeliverPayload>(`/console/api/v1/operations/approval-instances/${row.instance_id}/redeliver`, {
+      apiRequest<RedeliverPayload>(`${LIST_ENDPOINT}/${row.instance_id}/redeliver`, {
         method: "POST",
         body: {},
       }),
@@ -78,18 +72,17 @@ export function useApprovalInstances() {
   });
 
   const rows = itemsFromPayload<ApprovalInstanceRow>(query.data);
+  // 总条数只有请求回来后才知道, 因此在 useServerTable 之外回填。
+  const total = query.data?.pagination?.total_items ?? rows.length;
+  const tableProps: Pick<AppTableProps<ApprovalInstanceRow>, "pagination" | "onChange"> = {
+    ...serverTable.tableProps,
+    pagination: { ...serverTable.tableProps.pagination, total },
+  };
 
   return {
     query,
     rows,
-    pageCount: query.data?.pagination?.total_pages ?? 1,
-    totalItems: query.data?.pagination?.total_items ?? rows.length,
-    statusFilter,
-    setStatusFilter,
-    appKeyInput,
-    setAppKeyInput,
-    pagination,
-    setPagination,
+    tableProps,
     isRedelivering: (row: ApprovalInstanceRow) => redeliveringInstanceIds.has(row.instance_id),
     redeliver: (row: ApprovalInstanceRow) => {
       if (redeliveringInstanceIdsRef.current.has(row.instance_id)) {

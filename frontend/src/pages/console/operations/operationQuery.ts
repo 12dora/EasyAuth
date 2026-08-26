@@ -1,5 +1,3 @@
-import type { PaginationState } from "@tanstack/react-table";
-
 import type { MessageKey } from "../../../i18n/messages";
 
 export interface OperationSectionConfig {
@@ -18,14 +16,21 @@ export const ENDPOINTS: Record<string, OperationSectionConfig> = {
   audit: { titleKey: "console.operations.title.audit", endpoint: "/console/api/v1/audit-logs" },
 };
 
-const DEFAULT_PAGE_SIZE = 20;
+/** 与后端 operation_filters.DEFAULT_PAGE_SIZE 保持一致。 */
+export const DEFAULT_PAGE_SIZE = 20;
+
+/** 1 基页码, 与 antd 分页一致。 */
+export interface OperationsPagination {
+  page: number;
+  pageSize: number;
+}
 
 export const ACCESS_REQUEST_STATUSES = ["submitted", "approved", "rejected", "grant_applied", "grant_failed"] as const;
 export const ACCESS_GRANT_STATUSES = ["active", "revoked", "expired"] as const;
 
-export function paginationFromSearchParams(searchParams: URLSearchParams): PaginationState {
+export function paginationFromSearchParams(searchParams: URLSearchParams): OperationsPagination {
   return {
-    pageIndex: positiveInteger(searchParams.get("page"), 1) - 1,
+    page: positiveInteger(searchParams.get("page"), 1),
     pageSize: positiveInteger(searchParams.get("page_size"), DEFAULT_PAGE_SIZE),
   };
 }
@@ -44,10 +49,10 @@ const SECTION_FILTER_KEYS: Record<string, string[]> = {
 export function operationQueryString(
   section: string,
   searchParams: URLSearchParams,
-  pagination: PaginationState,
+  pagination: OperationsPagination,
 ): string {
   const query = new URLSearchParams({
-    page: String(pagination.pageIndex + 1),
+    page: String(pagination.page),
     page_size: String(pagination.pageSize),
   });
   const filterKeys = SECTION_FILTER_KEYS[section] ?? [];

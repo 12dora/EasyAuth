@@ -1,13 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
-import { getCoreRowModel, getPaginationRowModel, useReactTable } from "@tanstack/react-table";
-import type { ColumnDef, PaginationState } from "@tanstack/react-table";
 import { useState } from "react";
 
+import type { AppTableProps, ColumnsType, TableProps } from "../../../components/antd/AppTable";
 import { useI18n } from "../../../i18n/I18nProvider";
 import type { Translator } from "../../../lib/status";
 import { apiRequest, itemsFromPayload } from "../../../lib/api";
 import type { ListPayload } from "../../../lib/api";
-import { operationColumns } from "./operationColumns";
+import { operationColumns, type OperationFilterValues } from "./operationColumns";
+import { SECTION_FILTER_MAPS, filterValuesFromSearchParams } from "./operationFilterMap";
 import {
   useAccessRequestMutations,
   useEmergencyRevokeMutation,
@@ -20,6 +20,12 @@ import type { AccessRequestAction, OperationNotice, OperationRow } from "./opera
 import { useOperationsSearchParams } from "./operationsSearchParams";
 
 export type OperationsSectionController = ReturnType<typeof useOperationsSection>;
+
+/** 带行内动作列的分区必须给 AppTable 传 minWidth, 否则 antd 无法固定右列。 */
+const SECTION_MIN_WIDTH: Record<string, number | undefined> = {
+  "access-requests": 1240,
+  "access-grants": 1360,
+};
 
 export function useOperationsSection(section: string, config: OperationSectionConfig) {
   const { t } = useI18n();
@@ -48,26 +54,55 @@ export function useOperationsSection(section: string, config: OperationSectionCo
   const { emergencyRevokeMutation, openEmergencyRevoke } = useEmergencyRevokeMutation(controls);
 
   const rows = itemsFromPayload<OperationRow>(query.data);
-  const table = useOperationsTable({
-    rows,
-    isPaginated,
-    pagination: params.pagination,
-    pageCount: query.data?.pagination?.total_pages ?? 1,
-    onPaginationChange: params.updatePagination,
-    columns: sectionColumns(section, t, accessRequestMutations, {
-      emergencyRevokeMutation,
-      openEmergencyRevoke,
-    }),
-  });
+  const filterMap = SECTION_FILTER_MAPS[section];
+  const filterValues: OperationFilterValues = filterMap
+    ? filterValuesFromSearchParams(params.searchParams, filterMap)
+    : {};
+  const totalItems = query.data?.pagination?.total_items ?? rows.length;
+
+  // 服务端分区: 分页与筛选状态都由 URL 承载(FF-21 深链), antd 只负责回传变更。
+  const onChange: NonNullable<TableProps<OperationRow>["onChange"]> = (
+    nextPagination,
+    nextFilters,
+    _sorter,
+    extra,
+  ) => {
+    if (extra.action === "paginate") {
+      params.updatePagination({
+        page: nextPagination.current ?? params.pagination.page,
+        pageSize: nextPagination.pageSize ?? params.pagination.pageSize,
+      });
+      return;
+    }
+    if (extra.action === "filter" && filterMap) {
+      params.updateFilters(normalizeFilters(nextFilters), filterMap);
+    }
+  };
+
+  const tableProps: Pick<AppTableProps<OperationRow>, "pagination" | "onChange"> = isPaginated
+    ? {
+        pagination: {
+          current: params.pagination.page,
+          pageSize: params.pagination.pageSize,
+          total: totalItems,
+        },
+        onChange,
+      }
+    : {};
 
   return {
     section,
-    isPaginated,
     searchParams: params.searchParams,
     updateSearchParam: params.updateSearchParam,
     query,
     rows,
-    table,
+    columns: sectionColumns(section, t, filterValues, accessRequestMutations, {
+      emergencyRevokeMutation,
+      openEmergencyRevoke,
+    }),
+    rowKey: sectionRowKey(section),
+    minWidth: SECTION_MIN_WIDTH[section],
+    tableProps,
     healthCheckMutation,
     operationNotice,
     pendingAction,
@@ -79,16 +114,29 @@ export function useOperationsSection(section: string, config: OperationSectionCo
   };
 }
 
+/** 行身份只能取自数据字段; 审计行没有 id, 用后端返回的事件要素组合。 */
+function sectionRowKey(section: string): (row: OperationRow) => string {
+  if (section === "dependency-health") {
+    return (row) => String(row.component);
+  }
+  if (section === "audit") {
+    return (row) => [row.created_at, row.event_type, row.actor_id, row.target_type, row.target_id].join("|");
+  }
+  return (row) => String(row.id);
+}
+
 /** 只有对应分区才注入行内动作列, 其余分区保持只读表格。 */
 function sectionColumns(
   section: string,
   t: Translator,
+  filters: OperationFilterValues,
   accessRequest: AccessRequestMutations,
   emergency: EmergencyRevokeControls,
-): ColumnDef<OperationRow>[] {
+): ColumnsType<OperationRow> {
   return operationColumns(
     section,
     t,
+    filters,
     section === "access-requests"
       ? {
           disabled:
@@ -107,31 +155,14 @@ function sectionColumns(
   );
 }
 
-interface OperationsTableInput {
-  rows: OperationRow[];
-  columns: ColumnDef<OperationRow>[];
-  isPaginated: boolean;
-  pagination: PaginationState;
-  pageCount: number;
-  onPaginationChange: (
-    updater: PaginationState | ((current: PaginationState) => PaginationState),
-  ) => void;
-}
+type TableFilterState = Parameters<NonNullable<TableProps<OperationRow>["onChange"]>>[1];
 
-function useOperationsTable(input: OperationsTableInput) {
-  return useReactTable({
-    data: input.rows,
-    columns: input.columns,
-    getCoreRowModel: getCoreRowModel(),
-    ...(input.isPaginated
-      ? {
-          manualPagination: true as const,
-          pageCount: input.pageCount,
-          state: { pagination: input.pagination },
-          onPaginationChange: input.onPaginationChange,
-        }
-      : {
-          getPaginationRowModel: getPaginationRowModel(),
-        }),
-  });
+function normalizeFilters(filters: TableFilterState): Record<string, string[]> {
+  const normalized: Record<string, string[]> = {};
+  for (const [key, value] of Object.entries(filters)) {
+    if (value && value.length > 0) {
+      normalized[key] = value.map(String);
+    }
+  }
+  return normalized;
 }

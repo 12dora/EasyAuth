@@ -1,10 +1,21 @@
-import type { ColumnDef } from "@tanstack/react-table";
-
-import { Badge } from "../../../components/Badge";
-import { TableActionCell, TableRowActionButton } from "../../../components/ui/TableActions";
-import { MONO_TEXT_CLASS } from "../../../components/ui/tableStyles";
+import { Button } from "../../../components/Button";
+import { enumFilter, type ColumnType, type ColumnsType } from "../../../components/antd/AppTable";
+import {
+  actionsColumn,
+  dateTimeColumn,
+  statusColumn,
+  textColumn,
+  type StatusColumnOption,
+} from "../../../components/antd/columns";
 import type { Translator } from "../../../lib/status";
-import { accessRequestStatusLabel, badgeToneForAccessRequestStatus, formatDateTime, grantStatusLabel, healthStatusLabel } from "../../../lib/status";
+import {
+  accessRequestStatusLabel,
+  badgeToneForAccessRequestStatus,
+  grantStatusLabel,
+  healthStatusLabel,
+} from "../../../lib/status";
+import { dateRangeFilter } from "./DateRangeFilter";
+import { ACCESS_GRANT_STATUSES, ACCESS_REQUEST_STATUSES } from "./operationQuery";
 import {
   auditAppKey,
   auditPair,
@@ -13,7 +24,6 @@ import {
   numberValue,
   operationAuthorizationGroupSummary,
   operationDirectGrantSummary,
-  stringValue,
   type AccessRequestActionType,
   type OperationRow,
 } from "./operationRow";
@@ -28,176 +38,305 @@ export interface AccessGrantColumnActions {
   onEmergencyRevoke: (row: OperationRow) => void;
 }
 
+/** 列 key -> 当前选中的筛选值(来自 URL), 交给 antd 做受控表头筛选。 */
+export type OperationFilterValues = Record<string, string[]>;
+
 export function operationColumns(
   section: string,
   t: Translator,
+  filters: OperationFilterValues,
   accessRequestActions?: AccessRequestColumnActions,
   accessGrantActions?: AccessGrantColumnActions,
-): ColumnDef<OperationRow>[] {
+): ColumnsType<OperationRow> {
   if (section === "dependency-health") {
     return dependencyHealthColumns(t);
   }
   if (section === "audit") {
-    return auditColumns(t);
+    return auditColumns(t, filters);
   }
   if (section === "access-grants") {
-    return accessGrantColumns(t, accessGrantActions);
+    return accessGrantColumns(t, filters, accessGrantActions);
   }
-  return accessRequestColumns(t, accessRequestActions);
+  return accessRequestColumns(t, filters, accessRequestActions);
 }
 
-function dependencyHealthColumns(t: Translator): ColumnDef<OperationRow>[] {
+/**
+ * 服务端筛选列: 筛选值受控于 URL, 并且必须去掉列预设自带的客户端 `onFilter` ——
+ * 否则 antd 会拿后端已经筛过的当前页再筛一次(审计的 app_key 藏在 metadata 里,
+ * 客户端再筛会把整页筛空)。
+ */
+function serverFiltered<T>(column: ColumnType<T>, values: string[] | undefined): ColumnType<T> {
+  return {
+    ...column,
+    onFilter: undefined,
+    filteredValue: values !== undefined && values.length > 0 ? values : null,
+  };
+}
+
+function dependencyHealthColumns(t: Translator): ColumnsType<OperationRow> {
+  // 依赖健康是一次性返回的数组, 筛选与排序都在客户端完成。
   return [
-    { header: t("console.operations.column.component"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.component)}</code> },
-    { header: t("common.status"), cell: ({ row }) => <Badge tone={healthTone(stringValue(row.original.status))}>{healthStatusLabel(t, stringValue(row.original.status))}</Badge> },
-    { header: t("console.operations.column.summary"), cell: ({ row }) => stringValue(row.original.summary) },
-    { header: t("console.operations.column.error"), cell: ({ row }) => stringValue(row.original.error_summary) },
-    { header: t("console.operations.column.checkedAt"), cell: ({ row }) => formatDateTime(stringValue(row.original.last_checked_at)) },
+    textColumn<OperationRow>({
+      key: "component",
+      title: t("console.operations.column.component"),
+      mono: true,
+      filter: true,
+      sorter: true,
+      width: 240,
+    }),
+    statusColumn<OperationRow>({
+      key: "status",
+      title: t("common.status"),
+      options: healthStatusOptions(t),
+      width: 130,
+    }),
+    textColumn<OperationRow>({ key: "summary", title: t("console.operations.column.summary") }),
+    textColumn<OperationRow>({ key: "error_summary", title: t("console.operations.column.error") }),
+    dateTimeColumn<OperationRow>({ key: "last_checked_at", title: t("console.operations.column.checkedAt") }),
   ];
 }
 
-function auditColumns(t: Translator): ColumnDef<OperationRow>[] {
+function auditColumns(t: Translator, filters: OperationFilterValues): ColumnsType<OperationRow> {
   // 审计行字段对齐后端 audit_api._audit_item; 审计行无 id, 故不展示 ID 列。
   return [
-    { header: t("console.operations.column.event"), cell: ({ row }) => stringValue(row.original.event_type) },
-    { header: t("console.operations.column.actor"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{auditPair(row.original.actor_type, row.original.actor_id)}</code> },
-    { header: t("console.operations.column.target"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{auditPair(row.original.target_type, row.original.target_id)}</code> },
-    { header: t("common.app"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{auditAppKey(row.original)}</code> },
-    { header: t("console.operations.column.time"), cell: ({ row }) => formatDateTime(stringValue(row.original.created_at)) },
+    textColumn<OperationRow>({ key: "event_type", title: t("console.operations.column.event"), width: 220 }),
+    serverFiltered(
+      textColumn<OperationRow>({
+        key: "actor",
+        title: t("console.operations.column.actor"),
+        getValue: (row) => auditPair(row.actor_type, row.actor_id),
+        mono: true,
+        filter: true,
+        width: 200,
+      }),
+      filters.actor,
+    ),
+    textColumn<OperationRow>({
+      key: "target",
+      title: t("console.operations.column.target"),
+      getValue: (row) => auditPair(row.target_type, row.target_id),
+      mono: true,
+    }),
+    serverFiltered(
+      textColumn<OperationRow>({
+        key: "app",
+        title: t("common.app"),
+        getValue: auditAppKey,
+        mono: true,
+        filter: true,
+        width: 160,
+      }),
+      filters.app,
+    ),
+    serverFiltered(
+      {
+        ...dateTimeColumn<OperationRow>({
+          key: "created_at",
+          title: t("console.operations.column.time"),
+          sorter: false,
+          width: 190,
+        }),
+        ...dateRangeFilter<OperationRow>(),
+      },
+      filters.created_at,
+    ),
   ];
 }
 
 function accessGrantColumns(
   t: Translator,
+  filters: OperationFilterValues,
   actions: AccessGrantColumnActions | undefined,
-): ColumnDef<OperationRow>[] {
-  const columns: ColumnDef<OperationRow>[] = [
-    { header: t("common.user"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.user_id)}</code> },
-    { header: t("common.app"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.app_key)}</code> },
-    { header: t("common.status"), cell: ({ row }) => <Badge tone={row.original.status === "active" ? "evergreen" : "neutral"}>{grantStatusLabel(t, stringValue(row.original.status))}</Badge> },
-    {
-      header: t("console.operations.column.authorizationGroups"),
-      cell: ({ row }) => operationAuthorizationGroupSummary(t, row.original.authorization_groups),
-    },
-    {
-      header: t("console.operations.column.directGrants"),
-      cell: ({ row }) => operationDirectGrantSummary(t, row.original.direct_grants),
-    },
-    {
-      header: t("console.operations.column.version"),
-      cell: ({ row }) => <code className={MONO_TEXT_CLASS}>v{numberValue(row.original.version)}</code>,
-    },
-    {
-      header: t("console.operations.column.isCurrent"),
-      cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{booleanValue(row.original.is_current)}</code>,
-    },
+): ColumnsType<OperationRow> {
+  const columns: ColumnsType<OperationRow> = [
+    serverFiltered(
+      textColumn<OperationRow>({ key: "user_id", title: t("common.user"), mono: true, filter: true, width: 170 }),
+      filters.user_id,
+    ),
+    serverFiltered(
+      textColumn<OperationRow>({ key: "app_key", title: t("common.app"), mono: true, filter: true, width: 150 }),
+      filters.app_key,
+    ),
+    serverFiltered(
+      statusColumn<OperationRow>({
+        key: "status",
+        title: t("common.status"),
+        options: grantStatusOptions(t),
+        width: 130,
+      }),
+      filters.status,
+    ),
+    textColumn<OperationRow>({
+      key: "authorization_groups",
+      title: t("console.operations.column.authorizationGroups"),
+      getValue: (row) => operationAuthorizationGroupSummary(t, row.authorization_groups),
+    }),
+    textColumn<OperationRow>({
+      key: "direct_grants",
+      title: t("console.operations.column.directGrants"),
+      getValue: (row) => operationDirectGrantSummary(t, row.direct_grants),
+    }),
+    serverFiltered(
+      textColumn<OperationRow>({
+        key: "version",
+        title: t("console.operations.column.version"),
+        getValue: (row) => `v${numberValue(row.version)}`,
+        mono: true,
+        filter: true,
+        width: 130,
+      }),
+      filters.version,
+    ),
+    serverFiltered(
+      {
+        ...textColumn<OperationRow>({
+          key: "is_current",
+          title: t("console.operations.column.isCurrent"),
+          getValue: (row) => booleanValue(row.is_current),
+          mono: true,
+          width: 140,
+        }),
+        ...enumFilter<OperationRow>("is_current", [
+          { label: t("console.operations.filter.currentOnly"), value: "true" },
+          { label: t("console.operations.filter.historyOnly"), value: "false" },
+        ]),
+      },
+      filters.is_current,
+    ),
   ];
   if (actions) {
-    columns.push({
-      id: "actions",
-      header: t("common.actions"),
-      cell: ({ row }) => renderAccessGrantActions(t, actions, row.original),
-    });
+    columns.push(
+      actionsColumn<OperationRow>({ render: (row) => renderAccessGrantActions(t, actions, row) }),
+    );
   }
   return columns;
 }
 
-function renderAccessGrantActions(
-  t: Translator,
-  actions: AccessGrantColumnActions,
-  row: OperationRow,
-) {
+function renderAccessGrantActions(t: Translator, actions: AccessGrantColumnActions, row: OperationRow) {
+  if (row.status !== "active" || row.is_current !== true) {
+    return <span className="text-caption text-ink-faint">{t("common.none")}</span>;
+  }
   return (
-    <TableActionCell>
-      {row.status === "active" && row.is_current === true ? (
-        <TableRowActionButton
-          type="button"
-          variant="ghost-danger"
-          disabled={actions.disabled}
-          onClick={() => actions.onEmergencyRevoke(row)}
-        >
-          {t("console.operations.emergencyRevoke")}
-        </TableRowActionButton>
-      ) : (
-        <span className="text-caption text-ink-faint">{t("common.none")}</span>
-      )}
-    </TableActionCell>
+    <Button
+      type="button"
+      size="sm"
+      variant="ghost-danger"
+      disabled={actions.disabled}
+      onClick={() => actions.onEmergencyRevoke(row)}
+    >
+      {t("console.operations.emergencyRevoke")}
+    </Button>
   );
 }
 
 function accessRequestColumns(
   t: Translator,
+  filters: OperationFilterValues,
   actions: AccessRequestColumnActions | undefined,
-): ColumnDef<OperationRow>[] {
-  const columns: ColumnDef<OperationRow>[] = [
-    { header: "ID", cell: ({ row }) => row.original.id ?? "-" },
-    { header: t("common.user"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.user_id)}</code> },
-    { header: t("common.app"), cell: ({ row }) => <code className={MONO_TEXT_CLASS}>{stringValue(row.original.app_key)}</code> },
-    { header: t("common.status"), cell: ({ row }) => <Badge tone={badgeToneForAccessRequestStatus(stringValue(row.original.status))}>{accessRequestStatusLabel(t, stringValue(row.original.status))}</Badge> },
-    { header: t("common.type"), cell: ({ row }) => stringValue(row.original.request_type) },
-    { header: t("console.operations.column.failureReason"), cell: ({ row }) => stringValue(row.original.failure_reason) },
-    { header: t("console.operations.column.submittedAt"), cell: ({ row }) => formatDateTime(stringValue(row.original.submitted_at)) },
+): ColumnsType<OperationRow> {
+  const columns: ColumnsType<OperationRow> = [
+    textColumn<OperationRow>({ key: "id", title: "ID", width: 90 }),
+    serverFiltered(
+      textColumn<OperationRow>({ key: "user_id", title: t("common.user"), mono: true, filter: true, width: 170 }),
+      filters.user_id,
+    ),
+    serverFiltered(
+      textColumn<OperationRow>({ key: "app_key", title: t("common.app"), mono: true, filter: true, width: 150 }),
+      filters.app_key,
+    ),
+    serverFiltered(
+      statusColumn<OperationRow>({
+        key: "status",
+        title: t("common.status"),
+        options: accessRequestStatusOptions(t),
+        width: 130,
+      }),
+      filters.status,
+    ),
+    textColumn<OperationRow>({ key: "request_type", title: t("common.type"), width: 120 }),
+    textColumn<OperationRow>({ key: "failure_reason", title: t("console.operations.column.failureReason") }),
+    serverFiltered(
+      {
+        ...dateTimeColumn<OperationRow>({
+          key: "submitted_at",
+          title: t("console.operations.column.submittedAt"),
+          sorter: false,
+          width: 190,
+        }),
+        ...dateRangeFilter<OperationRow>(),
+      },
+      filters.submitted_at,
+    ),
   ];
   if (actions) {
-    columns.push({
-      id: "actions",
-      header: t("common.actions"),
-      cell: ({ row }) => renderAccessRequestActions(t, actions, row.original),
-    });
+    columns.push(
+      actionsColumn<OperationRow>({ render: (row) => renderAccessRequestActions(t, actions, row) }),
+    );
   }
   return columns;
 }
 
 // 待处理申请走审批动作; 授权失败申请走显式重试, 其余状态只读。
-function renderAccessRequestActions(
-  t: Translator,
-  actions: AccessRequestColumnActions,
-  row: OperationRow,
-) {
+function renderAccessRequestActions(t: Translator, actions: AccessRequestColumnActions, row: OperationRow) {
   if (row.status === "submitted") {
     return (
-      <TableActionCell>
-        <TableRowActionButton
-          type="button"
-          disabled={actions.disabled}
-          onClick={() => actions.onAction("approve", row)}
-        >
+      <>
+        <Button type="button" size="sm" variant="ghost" disabled={actions.disabled} onClick={() => actions.onAction("approve", row)}>
           {t("approvals.approve")}
-        </TableRowActionButton>
-        <TableRowActionButton
+        </Button>
+        <Button
           type="button"
+          size="sm"
           variant="ghost-danger"
           disabled={actions.disabled}
           onClick={() => actions.onAction("reject", row)}
         >
           {t("approvals.reject")}
-        </TableRowActionButton>
-        <TableRowActionButton
-          type="button"
-          disabled={actions.disabled}
-          onClick={() => actions.onAction("reassign", row)}
-        >
+        </Button>
+        <Button type="button" size="sm" variant="ghost" disabled={actions.disabled} onClick={() => actions.onAction("reassign", row)}>
           {t("console.accessRequests.reassign")}
-        </TableRowActionButton>
-      </TableActionCell>
+        </Button>
+      </>
     );
   }
   if (row.status === "grant_failed") {
     return (
-      <TableActionCell>
-        <TableRowActionButton
-          type="button"
-          disabled={actions.disabled}
-          onClick={() => actions.onAction("retry-grant", row)}
-        >
-          {t("console.operations.retryGrant")}
-        </TableRowActionButton>
-      </TableActionCell>
+      <Button
+        type="button"
+        size="sm"
+        variant="ghost"
+        disabled={actions.disabled}
+        onClick={() => actions.onAction("retry-grant", row)}
+      >
+        {t("console.operations.retryGrant")}
+      </Button>
     );
   }
-  return (
-    <TableActionCell>
-      <span className="text-caption text-ink-faint">{t("common.none")}</span>
-    </TableActionCell>
-  );
+  return <span className="text-caption text-ink-faint">{t("common.none")}</span>;
+}
+
+function accessRequestStatusOptions(t: Translator): StatusColumnOption[] {
+  return ACCESS_REQUEST_STATUSES.map((status) => ({
+    value: status,
+    label: accessRequestStatusLabel(t, status),
+    tone: badgeToneForAccessRequestStatus(status),
+  }));
+}
+
+function grantStatusOptions(t: Translator): StatusColumnOption[] {
+  return ACCESS_GRANT_STATUSES.map((status) => ({
+    value: status,
+    label: grantStatusLabel(t, status),
+    tone: status === "active" ? "evergreen" : "neutral",
+  }));
+}
+
+const HEALTH_STATUSES = ["healthy", "warning", "unhealthy", "unknown"] as const;
+
+function healthStatusOptions(t: Translator): StatusColumnOption[] {
+  return HEALTH_STATUSES.map((status) => ({
+    value: status,
+    label: healthStatusLabel(t, status),
+    tone: healthTone(status),
+  }));
 }

@@ -1,26 +1,21 @@
-import type { Table } from "@tanstack/react-table";
-
-import { EmptyState } from "../../../components/ui/EmptyState";
-import { TableView } from "../../../components/ui/TableView";
+import { AppTable } from "../../../components/antd/AppTable";
 import { useI18n } from "../../../i18n/I18nProvider";
 import type { OperationRow } from "./operationRow";
+import type { OperationsSectionController } from "./useOperationsSection";
 
-export function OperationsTable({
-  table,
-  isLoading,
-  totalItems,
-}: {
-  table: Table<OperationRow>;
-  isLoading: boolean;
-  totalItems: number;
-}) {
+export function OperationsTable({ controller }: { controller: OperationsSectionController }) {
   const { t } = useI18n();
+
   return (
-    <TableView
-      table={table}
-      isLoading={isLoading}
-      totalItems={totalItems}
-      empty={<EmptyState title={t("console.operations.empty")} description={t("console.operations.emptyDescription")} />}
+    <AppTable<OperationRow>
+      columns={controller.columns}
+      dataSource={controller.rows}
+      emptyTitle={t("console.operations.empty")}
+      emptyDescription={t("console.operations.emptyDescription")}
+      loading={controller.query.isLoading}
+      minWidth={controller.minWidth}
+      rowKey={controller.rowKey}
+      {...controller.tableProps}
     />
   );
 }
