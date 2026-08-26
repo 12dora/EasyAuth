@@ -1,42 +1,60 @@
 # 本地超级管理员登录域逻辑: 密码 + 二次验证(TOTP / 通行密钥)。
 # 不经 Authentik, 验证通过后复用 bind_oidc_session 以 local-admin: 前缀 subject
 # 绑定会话, groups 取 EASYAUTH_CONSOLE_SUPERUSER_GROUPS, 因此天然是 console 超管。
+# TOTP / 通行密钥实现拆到 local_admin_totp.py 与 local_admin_passkeys.py; 本模块保留
+# 会话、节流、审计、配置, 并显式再导出原公共符号, 使既有 import 与 monkeypatch 路径不变。
 from __future__ import annotations
 
-import base64
-import io
 import time
 from collections.abc import Iterable, Mapping
-from secrets import compare_digest, token_urlsafe
 from typing import TYPE_CHECKING, Final, cast
 
-import pyotp
-import qrcode
-import qrcode.image.svg
 import webauthn
 from django.conf import settings as django_settings
-from django.contrib.auth import hashers
 from django.core.cache import cache
 from django.db import transaction
-from django.db.models import Q
-from django.utils import timezone
-from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
-from webauthn.helpers.exceptions import (
-    InvalidAuthenticationResponse,
-    InvalidRegistrationResponse,
-)
-from webauthn.helpers.structs import (
-    AuthenticatorSelectionCriteria,
-    PublicKeyCredentialDescriptor,
-    UserVerificationRequirement,
-)
 
+from easyauth.accounts import local_admin_passkeys as _passkeys
+from easyauth.accounts import local_admin_totp as _totp
 from easyauth.accounts.auth import (
     AUTHENTIK_SESSION_KEY,
     LOCAL_ADMIN_SESSION_FLAG,
     LOCAL_ADMIN_SESSION_VERSION_KEY,
     VerifiedOidcClaims,
     bind_oidc_session,
+)
+from easyauth.accounts.local_admin_passkeys import (
+    CHALLENGE_SESSION_KEY,
+    CHALLENGE_TTL_SECONDS,
+    REASON_CHALLENGE_MISSING,
+    REASON_CREDENTIAL_DUPLICATE,
+    REASON_CREDENTIAL_MALFORMED,
+    REASON_CREDENTIAL_UNKNOWN,
+    REASON_VERIFICATION_FAILED,
+    PasskeyRegistrationPayload,
+    PasskeyVerificationError,
+    WebAuthnLib,
+    WebAuthnRuntime,
+    parse_passkey_registration_payload,
+)
+from easyauth.accounts.local_admin_totp import (
+    STEP_UP_INVALID,
+    STEP_UP_OK,
+    STEP_UP_THROTTLED,
+    TOTP_CODE_LENGTH,
+    TOTP_SETUP_SESSION_KEY,
+    TOTP_SETUP_TTL_SECONDS,
+    clear_totp_setup_secret,
+    generate_totp_secret,
+    matched_totp_timestep,
+    run_dummy_password_hash,
+    store_totp_setup_secret,
+    totp_provisioning_uri,
+    totp_qr_data_uri,
+    totp_setup_nonce,
+    totp_setup_secret,
+    verify_and_consume_totp,
+    verify_totp_code,
 )
 from easyauth.accounts.models import LocalAdminAccount, LocalAdminPasskey
 from easyauth.audit.services import AuditRecord, AuditService
@@ -52,11 +70,6 @@ LOCAL_ADMIN_ACTOR_TYPE: Final = "local_admin"
 LOCAL_ADMIN_TARGET_TYPE: Final = "local_admin_account"
 PENDING_SESSION_KEY: Final = "easyauth_local_admin_pending"
 PENDING_TTL_SECONDS: Final = 600
-CHALLENGE_SESSION_KEY: Final = "easyauth_local_admin_webauthn_challenge"
-CHALLENGE_TTL_SECONDS: Final = 300
-TOTP_SETUP_SESSION_KEY: Final = "easyauth_local_admin_totp_setup"
-TOTP_SETUP_TTL_SECONDS: Final = 600
-TOTP_CODE_LENGTH: Final = 6
 LOGIN_FAILURE_LIMIT: Final = 5
 LOGIN_FAILURE_WINDOW_SECONDS: Final = 300
 SECOND_FACTOR_NONE: Final = "none"
@@ -75,18 +88,9 @@ SETTING_CONSOLE_SUPERUSER_GROUPS: Final = "EASYAUTH_CONSOLE_SUPERUSER_GROUPS"
 SETTING_WEBAUTHN_RP_ID: Final = "EASYAUTH_WEBAUTHN_RP_ID"
 SETTING_WEBAUTHN_RP_NAME: Final = "EASYAUTH_WEBAUTHN_RP_NAME"
 SETTING_WEBAUTHN_ORIGINS: Final = "EASYAUTH_WEBAUTHN_ORIGINS"
-REASON_CHALLENGE_MISSING: Final = "挑战已过期, 请重试。"
-REASON_CREDENTIAL_MALFORMED: Final = "凭据格式不正确。"
-REASON_CREDENTIAL_UNKNOWN: Final = "未找到匹配的通行密钥。"
-REASON_CREDENTIAL_DUPLICATE: Final = "该通行密钥已注册过。"
-REASON_VERIFICATION_FAILED: Final = "通行密钥验证失败。"
 
 
 class LocalAdminConfigurationError(RuntimeError):
-    pass
-
-
-class PasskeyVerificationError(ValueError):
     pass
 
 
@@ -225,138 +229,67 @@ def record_passkey_removed(username: str, *, name: str) -> None:
     _record_event(EVENT_PASSKEY_REMOVED, username, metadata={"name": name})
 
 
-def generate_totp_secret() -> str:
-    return pyotp.random_base32()
-
-
-# 用与真实账号相同的 hasher 预算一个 dummy 哈希, 让"账号不存在/停用"分支也跑一次常量时间校验,
-# 消除本地管理员用户名可经响应时序枚举的侧信道(BS-15)。
-_DUMMY_PASSWORD_HASH: Final = hashers.make_password("easyauth-timing-equalizer")
-
-
-def run_dummy_password_hash(password: str) -> None:
-    _ = hashers.check_password(password, _DUMMY_PASSWORD_HASH)  # pyright: ignore[reportUnknownMemberType]
-
-
-def matched_totp_timestep(secret: str, code: str) -> int | None:
-    # 返回命中的 timestep(counter), 未命中返回 None; 供一次性消费判定。
-    normalized = code.strip().replace(" ", "")
-    if secret == "" or len(normalized) != TOTP_CODE_LENGTH or not normalized.isdigit():
-        return None
-    totp = pyotp.TOTP(secret)
-    current_step = totp.timecode(timezone.now())
-    for offset in (-1, 0, 1):
-        step = current_step + offset
-        if compare_digest(totp.generate_otp(step), normalized):
-            return step
-    return None
-
-
-def verify_totp_code(secret: str, code: str) -> bool:
-    # 无状态校验(不消费 timestep): 仅用于对 session 中尚未落库的注册种子做确认。
-    return matched_totp_timestep(secret, code) is not None
-
-
-STEP_UP_OK: Final = "ok"
-STEP_UP_THROTTLED: Final = "throttled"
-STEP_UP_INVALID: Final = "invalid"
-
-
 def check_step_up(account: LocalAdminAccount, password: str) -> str:
-    # 因子变更(禁用 TOTP / 增删 passkey)前的 step-up 重认证, 复用登录节流计数,
-    # 关闭"任意已登录会话即可无限试探并改动第二因子"的会话内提权(BS-14)。
-    if login_is_throttled(account.username):
-        return STEP_UP_THROTTLED
-    if not password or not account.check_password(password):
-        record_login_failure(account.username)
-        return STEP_UP_INVALID
-    return STEP_UP_OK
-
-
-def verify_and_consume_totp(account: LocalAdminAccount, code: str) -> bool:
-    # 一次性消费: 拒绝 <= 已记录 timestep 的验证码, 成功后前移 totp_last_timestep,
-    # 防止窗口内(约 90s)重放满足第二因子(BS-7, RFC 6238 §5.2)。
-    step = matched_totp_timestep(account.totp_secret, code)
-    if step is None:
-        return False
-    # 用带条件的原子 UPDATE 前移 timestep, 避免"读-判-写"的 TOCTOU: 两个并发请求只有一个能
-    # 把 totp_last_timestep 推进到 step, 另一个 update 命中 0 行即判为重放。
-    consumed = (
-        LocalAdminAccount.objects.filter(pk=account.id)
-        .filter(Q(totp_last_timestep__isnull=True) | Q(totp_last_timestep__lt=step))
-        .update(totp_last_timestep=step)
-    )
-    if not consumed:
-        return False
-    account.totp_last_timestep = step
-    return True
-
-
-def totp_provisioning_uri(secret: str, username: str) -> str:
-    return pyotp.TOTP(secret).provisioning_uri(  # pyright: ignore[reportUnknownMemberType]
-        name=username,
-        issuer_name=_webauthn_rp_name(),
+    # 调用时注入节流函数, 使测试对 local_admin.login_is_throttled 的 patch 生效。
+    return _totp.check_step_up(
+        account,
+        password,
+        login_is_throttled=login_is_throttled,
+        record_login_failure=record_login_failure,
     )
 
 
-def totp_qr_data_uri(provisioning_uri: str) -> str:
-    image = qrcode.make(provisioning_uri, image_factory=qrcode.image.svg.SvgPathImage)
-    buffer = io.BytesIO()
-    image.save(buffer)
-    encoded = base64.b64encode(buffer.getvalue()).decode("ascii")
-    return f"data:image/svg+xml;base64,{encoded}"
-
-
-def store_totp_setup_secret(
+def passkey_authentication_options(
     request: HttpRequest,
     account: LocalAdminAccount,
-    secret: str,
-) -> str:
-    nonce = token_urlsafe(32)
-    request.session[TOTP_SETUP_SESSION_KEY] = {
-        "account_id": account.id,
-        "issued_at": time.time(),
-        "nonce": nonce,
-        "secret": secret,
-        "session_version": account.session_version,
-    }
-    return nonce
+) -> tuple[str, str]:
+    return _passkeys.passkey_authentication_options(request, account, runtime=_webauthn_runtime())
 
 
-def totp_setup_secret(
+def verify_passkey_authentication(
     request: HttpRequest,
     account: LocalAdminAccount,
+    credential: Mapping[str, object],
     *,
-    nonce: str | None = None,
-) -> str:
-    payload = _session_mapping(request.session.get(TOTP_SETUP_SESSION_KEY))
-    if payload is None:
-        return ""
-    secret = payload.get("secret")
-    issued_at = payload.get("issued_at")
-    stored_nonce = payload.get("nonce")
-    if (
-        not isinstance(secret, str)
-        or not isinstance(issued_at, (int, float))
-        or not isinstance(stored_nonce, str)
-        or payload.get("account_id") != account.id
-        or payload.get("session_version") != account.session_version
-        or (nonce is not None and not compare_digest(stored_nonce, nonce))
-    ):
-        clear_totp_setup_secret(request)
-        return ""
-    if time.time() - float(issued_at) > TOTP_SETUP_TTL_SECONDS:
-        clear_totp_setup_secret(request)
-        return ""
-    return secret
+    state_token: str,
+) -> None:
+    _passkeys.verify_passkey_authentication(
+        request,
+        account,
+        credential,
+        state_token=state_token,
+        runtime=_webauthn_runtime(),
+    )
 
 
-def totp_setup_nonce(request: HttpRequest, account: LocalAdminAccount) -> str:
-    if totp_setup_secret(request, account) == "":
-        return ""
-    payload = _session_mapping(request.session.get(TOTP_SETUP_SESSION_KEY))
-    nonce = payload.get("nonce") if payload is not None else None
-    return nonce if isinstance(nonce, str) else ""
+def passkey_registration_options(
+    request: HttpRequest,
+    account: LocalAdminAccount,
+) -> tuple[str, str]:
+    return _passkeys.passkey_registration_options(
+        request,
+        account,
+        runtime=_webauthn_runtime(),
+        user_id=local_admin_subject(account.username).encode("utf-8"),
+    )
+
+
+def register_passkey(
+    request: HttpRequest,
+    account: LocalAdminAccount,
+    credential: Mapping[str, object],
+    *,
+    state_token: str,
+    name: str,
+) -> LocalAdminPasskey:
+    return _passkeys.register_passkey(
+        request,
+        account,
+        credential,
+        state_token=state_token,
+        name=name,
+        runtime=_webauthn_runtime(),
+    )
 
 
 def rotate_local_admin_session(request: HttpRequest, account: LocalAdminAccount) -> None:
@@ -370,169 +303,15 @@ def rotate_local_admin_session(request: HttpRequest, account: LocalAdminAccount)
     request.session[LOCAL_ADMIN_SESSION_VERSION_KEY] = locked.session_version
 
 
-def clear_totp_setup_secret(request: HttpRequest) -> None:
-    request.session.pop(TOTP_SETUP_SESSION_KEY, None)
-
-
-def passkey_authentication_options(
+def finalize_passkey_registration(
     request: HttpRequest,
     account: LocalAdminAccount,
-) -> tuple[str, str]:
-    # 生成 WebAuthn 认证 options; 返回 (options JSON, state_token)。
-    allow_credentials = [
-        PublicKeyCredentialDescriptor(id=base64url_to_bytes(passkey.credential_id))
-        for passkey in account.passkeys.all()
-    ]
-    options = webauthn.generate_authentication_options(
-        rp_id=_webauthn_rp_id(),
-        allow_credentials=allow_credentials,
-        user_verification=UserVerificationRequirement.REQUIRED,
-    )
-    state_token = _store_challenge(request, options.challenge)
-    return webauthn.options_to_json(options), state_token
-
-
-def verify_passkey_authentication(
-    request: HttpRequest,
-    account: LocalAdminAccount,
-    credential: Mapping[str, object],
-    *,
-    state_token: str,
+    passkey: LocalAdminPasskey,
 ) -> None:
-    challenge = _pop_challenge(request, state_token)
-    if challenge is None:
-        raise PasskeyVerificationError(REASON_CHALLENGE_MISSING)
-    credential_id = _credential_id_from_payload(credential)
-    with transaction.atomic():
-        passkey = (
-            LocalAdminPasskey.objects.select_for_update()
-            .filter(account=account, credential_id=credential_id)
-            .first()
-        )
-        if passkey is None:
-            raise PasskeyVerificationError(REASON_CREDENTIAL_UNKNOWN)
-        try:
-            verified = webauthn.verify_authentication_response(
-                credential=_plain_payload(credential),
-                expected_challenge=challenge,
-                expected_rp_id=_webauthn_rp_id(),
-                expected_origin=list(_webauthn_origins()),
-                credential_public_key=base64url_to_bytes(passkey.public_key),
-                credential_current_sign_count=passkey.sign_count,
-                require_user_verification=True,
-            )
-        except InvalidAuthenticationResponse as error:
-            raise PasskeyVerificationError(REASON_VERIFICATION_FAILED) from error
-        passkey.sign_count = verified.new_sign_count
-        passkey.last_used_at = timezone.now()
-        passkey.save(update_fields=["sign_count", "last_used_at"])
-
-
-def passkey_registration_options(
-    request: HttpRequest,
-    account: LocalAdminAccount,
-) -> tuple[str, str]:
-    # 生成 WebAuthn 注册 options; 返回 (options JSON, state_token)。
-    exclude_credentials = [
-        PublicKeyCredentialDescriptor(id=base64url_to_bytes(passkey.credential_id))
-        for passkey in account.passkeys.all()
-    ]
-    options = webauthn.generate_registration_options(
-        rp_id=_webauthn_rp_id(),
-        rp_name=_webauthn_rp_name(),
-        user_name=account.username,
-        user_id=local_admin_subject(account.username).encode("utf-8"),
-        user_display_name=f"本地管理员 {account.username}",
-        exclude_credentials=exclude_credentials,
-        authenticator_selection=AuthenticatorSelectionCriteria(
-            user_verification=UserVerificationRequirement.REQUIRED,
-        ),
-    )
-    state_token = _store_challenge(request, options.challenge)
-    return webauthn.options_to_json(options), state_token
-
-
-def register_passkey(
-    request: HttpRequest,
-    account: LocalAdminAccount,
-    credential: Mapping[str, object],
-    *,
-    state_token: str,
-    name: str,
-) -> LocalAdminPasskey:
-    challenge = _pop_challenge(request, state_token)
-    if challenge is None:
-        raise PasskeyVerificationError(REASON_CHALLENGE_MISSING)
-    try:
-        verified = webauthn.verify_registration_response(
-            credential=_plain_payload(credential),
-            expected_challenge=challenge,
-            expected_rp_id=_webauthn_rp_id(),
-            expected_origin=list(_webauthn_origins()),
-            require_user_verification=True,
-        )
-    except InvalidRegistrationResponse as error:
-        raise PasskeyVerificationError(REASON_VERIFICATION_FAILED) from error
-    credential_id = bytes_to_base64url(verified.credential_id)
-    if LocalAdminPasskey.objects.filter(credential_id=credential_id).exists():
-        raise PasskeyVerificationError(REASON_CREDENTIAL_DUPLICATE)
-    return LocalAdminPasskey.objects.create(
-        account=account,
-        credential_id=credential_id,
-        public_key=bytes_to_base64url(verified.credential_public_key),
-        sign_count=verified.sign_count,
-        transports=_transports_from_payload(credential),
-        name=name[:100],
-    )
-
-
-def _credential_id_from_payload(credential: Mapping[str, object]) -> str:
-    raw_id = credential.get("rawId") or credential.get("id")
-    if not isinstance(raw_id, str) or raw_id == "":
-        raise PasskeyVerificationError(REASON_CREDENTIAL_MALFORMED)
-    return raw_id
-
-
-def _transports_from_payload(credential: Mapping[str, object]) -> list[str]:
-    response = _object_mapping(credential.get("response"))
-    if response is None:
-        return []
-    transports = response.get("transports")
-    if not isinstance(transports, list):
-        return []
-    items = cast("list[object]", transports)
-    return [item for item in items if isinstance(item, str)]
-
-
-def _store_challenge(request: HttpRequest, challenge: bytes) -> str:
-    state_token = token_urlsafe(16)
-    request.session[CHALLENGE_SESSION_KEY] = {
-        "challenge": bytes_to_base64url(challenge),
-        "state_token": state_token,
-        "issued_at": time.time(),
-    }
-    return state_token
-
-
-def _pop_challenge(request: HttpRequest, state_token: str) -> bytes | None:
-    raw_payload: object = request.session.pop(CHALLENGE_SESSION_KEY, None)  # pyright: ignore[reportAny]
-    payload = _session_mapping(raw_payload)
-    if payload is None:
-        return None
-    challenge = payload.get("challenge")
-    stored_token = payload.get("state_token")
-    issued_at = payload.get("issued_at")
-    if (
-        not isinstance(challenge, str)
-        or not isinstance(stored_token, str)
-        or not isinstance(issued_at, (int, float))
-    ):
-        return None
-    if time.time() - float(issued_at) > CHALLENGE_TTL_SECONDS:
-        return None
-    if state_token == "" or not compare_digest(stored_token, state_token):
-        return None
-    return base64url_to_bytes(challenge)
+    """通行密钥注册成功后清节流、写审计并轮换会话, 供表单端点与控制台 JSON API 共用。"""
+    reset_login_failures(account.username)
+    record_passkey_registered(account.username, name=passkey.name)
+    rotate_local_admin_session(request, account)
 
 
 def _record_event(
@@ -555,6 +334,20 @@ def _record_event(
 
 def _throttle_cache_key(username: str) -> str:
     return f"easyauth-local-admin-login-failures:{username}"
+
+
+def _webauthn_runtime() -> WebAuthnRuntime:
+    # webauthn 在调用时从本模块全局解析, 测试 monkeypatch local_admin.webauthn 会生效。
+    return WebAuthnRuntime(
+        lib=_webauthn_lib(),
+        rp_id=_webauthn_rp_id(),
+        rp_name=_webauthn_rp_name(),
+        origins=_webauthn_origins(),
+    )
+
+
+def _webauthn_lib() -> WebAuthnLib:
+    return webauthn  # pyright: ignore[reportReturnType]
 
 
 def _console_superuser_groups() -> tuple[str, ...]:
@@ -605,5 +398,81 @@ def _object_mapping(value: object) -> Mapping[str, object] | None:
     return cast("Mapping[str, object]", mapping)
 
 
-def _plain_payload(value: Mapping[str, object]) -> dict[str, object]:
-    return dict(value.items())
+__all__ = [
+    "CHALLENGE_SESSION_KEY",
+    "CHALLENGE_TTL_SECONDS",
+    "EVENT_LOGIN_FAILED",
+    "EVENT_LOGIN_SUCCEEDED",
+    "EVENT_PASSKEY_REGISTERED",
+    "EVENT_PASSKEY_REMOVED",
+    "EVENT_PASSWORD_CHANGED",
+    "EVENT_PASSWORD_CHANGE_FAILED",
+    "EVENT_SECOND_FACTOR_FAILED",
+    "EVENT_TOTP_DISABLED",
+    "EVENT_TOTP_ENABLED",
+    "LOCAL_ADMIN_ACTOR_TYPE",
+    "LOCAL_ADMIN_SUBJECT_PREFIX",
+    "LOCAL_ADMIN_TARGET_TYPE",
+    "LOGIN_FAILURE_LIMIT",
+    "LOGIN_FAILURE_WINDOW_SECONDS",
+    "PENDING_SESSION_KEY",
+    "PENDING_TTL_SECONDS",
+    "REASON_CHALLENGE_MISSING",
+    "REASON_CREDENTIAL_DUPLICATE",
+    "REASON_CREDENTIAL_MALFORMED",
+    "REASON_CREDENTIAL_UNKNOWN",
+    "REASON_VERIFICATION_FAILED",
+    "SECOND_FACTOR_NONE",
+    "SECOND_FACTOR_PASSKEY",
+    "SECOND_FACTOR_TOTP",
+    "SETTING_CONSOLE_SUPERUSER_GROUPS",
+    "SETTING_WEBAUTHN_ORIGINS",
+    "SETTING_WEBAUTHN_RP_ID",
+    "SETTING_WEBAUTHN_RP_NAME",
+    "STEP_UP_INVALID",
+    "STEP_UP_OK",
+    "STEP_UP_THROTTLED",
+    "TOTP_CODE_LENGTH",
+    "TOTP_SETUP_SESSION_KEY",
+    "TOTP_SETUP_TTL_SECONDS",
+    "LocalAdminConfigurationError",
+    "PasskeyRegistrationPayload",
+    "PasskeyVerificationError",
+    "bind_local_admin_session",
+    "check_step_up",
+    "clear_pending_verification",
+    "clear_totp_setup_secret",
+    "current_local_admin",
+    "finalize_passkey_registration",
+    "generate_totp_secret",
+    "local_admin_subject",
+    "login_is_throttled",
+    "matched_totp_timestep",
+    "parse_passkey_registration_payload",
+    "passkey_authentication_options",
+    "passkey_registration_options",
+    "pending_account",
+    "record_login_failed",
+    "record_login_failure",
+    "record_passkey_registered",
+    "record_passkey_removed",
+    "record_password_change_failed",
+    "record_password_changed",
+    "record_second_factor_failed",
+    "record_totp_disabled",
+    "record_totp_enabled",
+    "register_passkey",
+    "reset_login_failures",
+    "rotate_local_admin_session",
+    "run_dummy_password_hash",
+    "start_pending_verification",
+    "store_totp_setup_secret",
+    "totp_provisioning_uri",
+    "totp_qr_data_uri",
+    "totp_setup_nonce",
+    "totp_setup_secret",
+    "verify_and_consume_totp",
+    "verify_passkey_authentication",
+    "verify_totp_code",
+    "webauthn",
+]

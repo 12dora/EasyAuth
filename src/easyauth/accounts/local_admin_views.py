@@ -20,20 +20,22 @@ from easyauth.accounts.local_admin import (
     SECOND_FACTOR_TOTP,
     STEP_UP_OK,
     LocalAdminConfigurationError,
+    PasskeyRegistrationPayload,
     PasskeyVerificationError,
     bind_local_admin_session,
     check_step_up,
     clear_totp_setup_secret,
     current_local_admin,
+    finalize_passkey_registration,
     generate_totp_secret,
     login_is_throttled,
     matched_totp_timestep,
+    parse_passkey_registration_payload,
     passkey_authentication_options,
     passkey_registration_options,
     pending_account,
     record_login_failed,
     record_login_failure,
-    record_passkey_registered,
     record_passkey_removed,
     record_password_change_failed,
     record_password_changed,
@@ -320,33 +322,16 @@ def passkey_register_begin(request: HttpRequest) -> HttpResponse:
 @require_POST
 def passkey_register_complete(request: HttpRequest) -> HttpResponse:
     account = _require_local_admin(request)
-    payload = _json_body(request)
-    credential = payload.get("credential") if payload else None
-    state_token = payload.get("state_token") if payload else None
-    name = payload.get("name") if payload else ""
-    current_password = payload.get("current_password") if payload else ""
-    if not isinstance(credential, dict) or not isinstance(state_token, str):
+    parsed = parse_passkey_registration_payload(_json_body(request))
+    if parsed is None:
         return _json_error(JSON_ERROR_BAD_REQUEST, status=HTTPStatus.BAD_REQUEST)
-    if not isinstance(name, str):
-        name = ""
-    # 注册第二因子(改动因子)要求 step-up 重认证。
-    if check_step_up(account, current_password if isinstance(current_password, str) else "") != (
-        STEP_UP_OK
-    ):
-        return _json_error(ERROR_CURRENT_PASSWORD_WRONG, status=HTTPStatus.BAD_REQUEST)
-    try:
-        passkey = register_passkey(
-            request,
-            account,
-            cast("Mapping[str, object]", credential),
-            state_token=state_token,
-            name=name.strip(),
-        )
-    except PasskeyVerificationError as error:
-        return _json_error(str(error), status=HTTPStatus.BAD_REQUEST)
-    reset_login_failures(account.username)
-    record_passkey_registered(account.username, name=passkey.name)
-    rotate_local_admin_session(request, account)
+    step_up_error = _passkey_register_step_up_error(account, parsed.current_password)
+    if step_up_error is not None:
+        return step_up_error
+    registered = _register_passkey_from_payload(request, account, parsed)
+    if isinstance(registered, JsonResponse):
+        return registered
+    finalize_passkey_registration(request, account, registered)
     return JsonResponse({"redirect": f"{SECURITY_PATH}?notice=passkey_registered"})
 
 
@@ -365,6 +350,33 @@ def passkey_delete(request: HttpRequest, passkey_id: int) -> HttpResponse:
     reset_login_failures(account.username)
     record_passkey_removed(account.username, name=name)
     return HttpResponseRedirect(f"{SECURITY_PATH}?notice=passkey_removed")
+
+
+def _passkey_register_step_up_error(
+    account: LocalAdminAccount,
+    current_password: str,
+) -> JsonResponse | None:
+    # 注册第二因子(改动因子)要求 step-up 重认证。
+    if check_step_up(account, current_password) != STEP_UP_OK:
+        return _json_error(ERROR_CURRENT_PASSWORD_WRONG, status=HTTPStatus.BAD_REQUEST)
+    return None
+
+
+def _register_passkey_from_payload(
+    request: HttpRequest,
+    account: LocalAdminAccount,
+    parsed: PasskeyRegistrationPayload,
+) -> LocalAdminPasskey | JsonResponse:
+    try:
+        return register_passkey(
+            request,
+            account,
+            parsed.credential,
+            state_token=parsed.state_token,
+            name=parsed.name.strip(),
+        )
+    except PasskeyVerificationError as error:
+        return _json_error(str(error), status=HTTPStatus.BAD_REQUEST)
 
 
 def _authenticate_local_admin(username: str, password: str) -> LocalAdminAccount | None:

@@ -12,6 +12,7 @@ from django.contrib.sessions.backends.db import SessionStore
 from django.core.cache import cache
 from django.core.management import call_command
 from django.core.management.base import CommandError
+from django.db import IntegrityError
 from django.test import Client, RequestFactory
 from webauthn.helpers import bytes_to_base64url
 
@@ -780,6 +781,54 @@ def test_passkey_registration_flow(monkeypatch: pytest.MonkeyPatch) -> None:
     assert passkey.name == "MacBook Touch ID"
     assert passkey.transports == ["internal"]
     assert AuditLog.objects.filter(event_type="admin_local_passkey_registered").exists()
+
+
+def test_passkey_registration_integrity_error_is_duplicate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Given: 预检查未看到重复, 但插入时撞 unique(credential_id)(并发注册同一凭据)。
+    _ = _create_account()
+    client = Client()
+    _ = _login(client)
+    begin = _post_json(client, "/auth/local/security/passkey/register/begin/", {}).json()
+    monkeypatch.setattr(
+        local_admin.webauthn,
+        "verify_registration_response",
+        lambda **_kwargs: SimpleNamespace(
+            credential_id=REGISTERED_CREDENTIAL_ID_BYTES,
+            credential_public_key=REGISTERED_PUBLIC_KEY_BYTES,
+            sign_count=0,
+        ),
+    )
+
+    def raise_duplicate(*_args: object, **_kwargs: object) -> LocalAdminPasskey:
+        duplicate = IntegrityError()
+        raise duplicate
+
+    monkeypatch.setattr(LocalAdminPasskey.objects, "create", raise_duplicate)
+
+    # When
+    response = _post_json(
+        client,
+        "/auth/local/security/passkey/register/complete/",
+        {
+            "state_token": begin["state_token"],
+            "name": "MacBook Touch ID",
+            "current_password": GOOD_CREDENTIAL,
+            "credential": {
+                "id": "reg-cred",
+                "rawId": "reg-cred",
+                "response": {"transports": ["internal"]},
+            },
+        },
+    )
+
+    # Then: 与显式重复检查同一校验错误, 而不是 500。
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+    assert response.json() == {"error": local_admin.REASON_CREDENTIAL_DUPLICATE}
+    assert not LocalAdminPasskey.objects.filter(
+        credential_id=bytes_to_base64url(REGISTERED_CREDENTIAL_ID_BYTES),
+    ).exists()
 
 
 def test_passkey_delete_removes_credential() -> None:
