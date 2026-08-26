@@ -36,6 +36,10 @@ pytestmark = pytest.mark.django_db
 LOGIN_VALUE: Final = "console-ops1-api"
 APPS_API_URL: Final = "/console/api/v1/apps"
 APP_LIST_READINESS_MAX_QUERIES: Final = 25
+# 配置完整性批量聚合 1 次 + 列表 presenter 批量取 owner 1 次, 不得随 App 数线性增加。
+APP_LIST_MEMBERSHIP_MAX_QUERIES: Final = 2
+# 配置完整性批量聚合 static token + oauth binding, 列表不得再按 App 查凭据。
+APP_LIST_CREDENTIAL_MAX_QUERIES: Final = 2
 
 
 @pytest.fixture(autouse=True)
@@ -141,6 +145,50 @@ def test_ops1_apps_api_batches_list_readiness_statuses() -> None:
     ]
     assert statuses == ["ready"] * 5
     assert len(queries) <= APP_LIST_READINESS_MAX_QUERIES
+
+
+def test_ops1_apps_api_list_item_queries_do_not_scale_with_app_count() -> None:
+    # Given: 系统管理员面对 5 个带多个 owner 和凭据的 App。
+    client = _logged_in_superuser("ops1-apps-list-nplusone-admin")
+    expected_owners = [
+        _seed_list_query_app(index, owner_user_ids=(f"a-owner-{index}", f"z-owner-{index}"))
+        for index in range(5)
+    ]
+
+    # 预热登录态, 避免第一次请求的 session 查询干扰 1 条 vs 5 条对照。
+    warmup = client.get(APPS_API_URL, {"page_size": "1"})
+    assert warmup.status_code == HTTPStatus.OK
+
+    # When: 分别列出 1 个和 5 个 App。
+    with CaptureQueriesContext(connection) as small_queries:
+        small = client.get(APPS_API_URL, {"page_size": "1"})
+    with CaptureQueriesContext(connection) as large_queries:
+        large = client.get(APPS_API_URL, {"page_size": "5"})
+
+    # Then: owner 顺序与逐条查询一致, membership/凭据查询不随 App 数量增长。
+    small_items = cast("list[dict[str, JsonValue]]", small.json()["data"])
+    large_items = cast("list[dict[str, JsonValue]]", large.json()["data"])
+    assert small.status_code == HTTPStatus.OK
+    assert large.status_code == HTTPStatus.OK
+    assert len(small_items) == 1
+    assert len(large_items) == 5
+    assert [item["app_key"] for item in large_items] == [
+        f"ops1-list-nplusone-{index}" for index in range(5)
+    ]
+    assert [item["owners"] for item in large_items] == expected_owners
+    assert small_items[0]["owners"] == expected_owners[0]
+    assert len(large_queries) == len(small_queries)
+    assert _table_query_count(large_queries, "applications_appmembership") == (
+        _table_query_count(small_queries, "applications_appmembership")
+    )
+    assert _table_query_count(large_queries, "applications_appmembership") <= (
+        APP_LIST_MEMBERSHIP_MAX_QUERIES
+    )
+    credential_queries = _table_query_count(
+        large_queries,
+        "applications_appcredential",
+    ) + _table_query_count(large_queries, "applications_oauthclientbinding")
+    assert credential_queries <= APP_LIST_CREDENTIAL_MAX_QUERIES
 
 
 def test_ops1_apps_api_superuser_creates_app_with_memberships_and_audit() -> None:
@@ -486,10 +534,7 @@ def test_ops1_configuration_status_api_uses_app_readiness_service() -> None:
     assert "active_credential_missing" in body
     readiness_body = cast("dict[str, JsonValue]", response.json())
     issues = cast("list[dict[str, JsonValue]]", readiness_body["data"])
-    assert {
-        (issue["code"], issue["target_type"])
-        for issue in issues
-    } >= {
+    assert {(issue["code"], issue["target_type"]) for issue in issues} >= {
         ("active_permission_missing", "permission"),
         ("active_authorization_group_missing", "authorization_group"),
         ("active_owner_missing", "membership"),
@@ -808,6 +853,19 @@ def test_ops1_configuration_status_api_can_return_ready_status() -> None:
     # Then: API 返回 ready 状态且没有风险项。
     assert response.status_code == HTTPStatus.OK
     assert response.json() == {"app_key": app.app_key, "status": "ready", "data": []}
+
+
+def _seed_list_query_app(index: int, owner_user_ids: tuple[str, ...]) -> list[str]:
+    app = App.objects.create(app_key=f"ops1-list-nplusone-{index}", name=f"App {index}")
+    for user_id in owner_user_ids:
+        _ = AppMembership.objects.create(app=app, user_id=user_id, role="owner")
+    _ = AppCredentialService.create_static_token(app=app, name=f"token-{index}")
+    return list(owner_user_ids)
+
+
+def _table_query_count(queries: CaptureQueriesContext, table: str) -> int:
+    needle = table.lower()
+    return sum(1 for query in queries if needle in query["sql"].lower())
 
 
 def _logged_in_superuser(username: str) -> Client:

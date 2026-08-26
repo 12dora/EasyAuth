@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 from django.http import HttpRequest, JsonResponse
 
@@ -47,6 +47,8 @@ from easyauth.applications.ownership import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from django.db.models import QuerySet
 
 type VisibleAppResult = App | JsonResponse
@@ -66,11 +68,7 @@ def list_console_apps(request: HttpRequest) -> JsonResponse:
         page = paginate_queryset(_filter_apps(_visible_apps_queryset(actor), request), request.GET)
     except OperationFilterValidationError as exc:
         return operation_filter_error_response(exc)
-    readiness_statuses = configuration_readiness_statuses_for_apps(page.items)
-    return _items_response(
-        tuple(_app_item(actor, app, readiness_statuses.get(app.id)) for app in page.items),
-        page,
-    )
+    return _items_response(_listed_app_items(actor, page.items), page)
 
 
 def get_console_app_detail(request: HttpRequest, app_key: str) -> JsonResponse:
@@ -127,33 +125,55 @@ def visible_app(actor: ConsoleActor, app_key: str) -> VisibleAppResult:
 
 
 def app_detail_item(actor: ConsoleActor, app: App) -> dict[str, JsonValue]:
-    item = _app_item(actor, app)
+    # configuration_status 与 configuration_summary 共用一次 readiness, 避免重复扫配置。
+    readiness = configuration_readiness_for_app(app)
+    item = _app_item(actor, app, readiness.status)
     item["developers"] = _app_member_ids(app, "developer")
     item["authorization_group_count"] = AuthorizationGroup.objects.filter(app=app).count()
     item["permission_count"] = Permission.objects.filter(app=app).count()
     item["active_credential_count"] = _active_credential_count(app)
     item["latest_template_version"] = _latest_template_version_item(app)
-    item["configuration_summary"] = _configuration_summary(
-        configuration_readiness_for_app(app),
-    )
+    item["configuration_summary"] = _configuration_summary(readiness)
     return item
+
+
+def _listed_app_items(
+    actor: ConsoleActor,
+    apps: tuple[App, ...],
+) -> tuple[dict[str, JsonValue], ...]:
+    readiness_statuses = configuration_readiness_statuses_for_apps(apps)
+    # 列表只展示 owner; 一次查出可见集合, 再交给 item presenter, 避免按 App 打 membership。
+    owner_ids_by_app_id = _member_ids_by_app_id(apps, "owner")
+    return tuple(
+        _app_item(
+            actor,
+            app,
+            readiness_statuses.get(app.id),
+            owner_ids=owner_ids_by_app_id.get(app.id, []),
+        )
+        for app in apps
+    )
 
 
 def _app_item(
     actor: ConsoleActor,
     app: App,
     readiness_status: str | None = None,
+    *,
+    owner_ids: list[JsonValue] | None = None,
 ) -> dict[str, JsonValue]:
     if readiness_status is None:
         readiness_status = configuration_readiness_for_app(app).status
     capabilities = _app_capabilities(actor, app)
+    if owner_ids is None:
+        owner_ids = _app_owner_ids(app)
     return {
         "id": app.id,
         "app_key": app.app_key,
         "name": app.name,
         "description": app.description,
         "is_active": app.is_active,
-        "owners": _app_owner_ids(app),
+        "owners": owner_ids,
         "configuration_status": readiness_status,
         "updated_at": app.updated_at.isoformat(),
         "can_manage": capabilities["can_edit_basic_info"],
@@ -199,6 +219,26 @@ def _app_member_ids(app: App, role: str) -> list[JsonValue]:
     result: list[JsonValue] = []
     result.extend(memberships.values_list("user_id", flat=True))
     return result
+
+
+def _member_ids_by_app_id(apps: tuple[App, ...], role: str) -> dict[int, list[JsonValue]]:
+    app_ids = tuple(app.id for app in apps)
+    member_ids_by_app_id: dict[int, list[JsonValue]] = {app_id: [] for app_id in app_ids}
+    if not app_ids:
+        return member_ids_by_app_id
+    membership_rows = (
+        AppMembership.objects.filter(
+            app_id__in=app_ids,
+            role=role,
+            is_active=True,
+        )
+        .order_by("app_id", "user_id")
+        .values_list("app_id", "user_id")
+    )
+    for raw_app_id, raw_user_id in cast("Iterable[tuple[object, object]]", membership_rows):
+        app_id = cast("int", raw_app_id)
+        member_ids_by_app_id.setdefault(app_id, []).append(cast("str", raw_user_id))
+    return member_ids_by_app_id
 
 
 def _visible_apps_queryset(actor: ConsoleActor) -> QuerySet[App]:
