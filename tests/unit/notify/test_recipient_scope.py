@@ -7,7 +7,12 @@ from easyauth.accounts.directory_references import build_dingtalk_user_ref
 from easyauth.accounts.models import DingTalkUserMirror
 from easyauth.api.directory_payloads import user_list_item
 from easyauth.applications.models import App, AppNotificationChannel
-from easyauth.notify.acceptance import accept_notify_message
+from easyauth.notify.acceptance import (
+    NotifyAcceptanceInput,
+    NotifyCredentialInput,
+    NotifyMessageInput,
+    accept_notify_message,
+)
 from easyauth.notify.models import (
     CREDENTIAL_TYPE_STATIC_TOKEN,
     NOTIFY_ERROR_USER_NOT_FOUND,
@@ -22,6 +27,23 @@ from easyauth.notify.models import (
 from easyauth.notify.recipients import resolve_recipients
 
 pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("notification_channel_for_apps")]
+
+
+def _accept(app: App, recipients: list[str], content: str) -> object:
+    return accept_notify_message(
+        NotifyAcceptanceInput(
+            app=app,
+            message=NotifyMessageInput(
+                template=NOTIFY_TEMPLATE_TEXT,
+                content=content,
+                recipients=tuple(recipients),
+            ),
+            credential=NotifyCredentialInput(
+                credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
+                credential_id=1,
+            ),
+        ),
+    )
 
 
 def _directory_user(
@@ -78,14 +100,7 @@ def test_recipient_outside_channel_scope_is_rejected() -> None:
         user_id="other-corp-user",
     )
 
-    result = accept_notify_message(
-        app=app,
-        recipients=[reference],
-        template=NOTIFY_TEMPLATE_TEXT,
-        content="must not cross corp",
-        requested_credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
-        requested_credential_id=1,
-    )
+    result = _accept(app, [reference], "must not cross corp")
 
     recipient = NotifyRecipient.objects.get(message=result.message)
     assert recipient.status == NOTIFY_RECIPIENT_STATUS_FAILED
@@ -111,14 +126,7 @@ def test_same_userid_in_two_enterprises_persists_scoped_pending_and_rejection() 
         user_id="shared-user",
     )
 
-    result = accept_notify_message(
-        app=app,
-        recipients=[corp_a_ref, corp_b_ref],
-        template=NOTIFY_TEMPLATE_TEXT,
-        content="scoped recipients",
-        requested_credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
-        requested_credential_id=1,
-    )
+    result = _accept(app, [corp_a_ref, corp_b_ref], "scoped recipients")
 
     recipients = {
         row.dingtalk_corp_id: row for row in NotifyRecipient.objects.filter(message=result.message)
@@ -141,14 +149,7 @@ def test_same_scoped_recipient_is_deduplicated_and_database_protected() -> None:
         user_id="shared-user",
     )
 
-    result = accept_notify_message(
-        app=app,
-        recipients=[reference, reference],
-        template=NOTIFY_TEMPLATE_TEXT,
-        content="deduplicated",
-        requested_credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
-        requested_credential_id=1,
-    )
+    result = _accept(app, [reference, reference], "deduplicated")
 
     assert result.recipient_total == 1
     assert NotifyRecipient.objects.filter(message=result.message).count() == 1
@@ -184,14 +185,7 @@ def test_maximum_v1_directory_payload_reference_is_accepted_and_preserved() -> N
     channel.corp_id = component
     channel.save(update_fields=["directory_source_slug", "corp_id", "updated_at"])
 
-    result = accept_notify_message(
-        app=app,
-        recipients=[reference],
-        template=NOTIFY_TEMPLATE_TEXT,
-        content="maximum canonical reference",
-        requested_credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
-        requested_credential_id=1,
-    )
+    result = _accept(app, [reference], "maximum canonical reference")
 
     recipient = NotifyRecipient.objects.get(message=result.message)
     assert recipient.status == NOTIFY_RECIPIENT_STATUS_PENDING

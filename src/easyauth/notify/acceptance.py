@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING
 
 from django.db import IntegrityError, transaction
@@ -9,7 +9,6 @@ from django.utils import timezone
 from easyauth.applications.models import App
 from easyauth.notify.channel_config import active_notification_channel
 from easyauth.notify.contracts import (
-    DEFAULT_DEEPLINK_TITLE,
     IDEMPOTENCY_PAYLOAD_CONFLICT_MESSAGE,
     MSG_TOO_LARGE_MESSAGE,
     NOTIFY_CHANNEL_MISSING_MESSAGE,
@@ -24,6 +23,7 @@ from easyauth.notify.contracts import (
 )
 from easyauth.notify.messages import (
     NormalizedInput,
+    NotifyMessageInput,
     build_dingtalk_msg,
     compute_payload_hash,
     dingtalk_msg_utf8_size,
@@ -38,67 +38,50 @@ from easyauth.notify.recipients import (
 )
 from easyauth.outbox.services import enqueue_task
 
+__all__ = [
+    "NotifyAcceptanceInput",
+    "NotifyCredentialInput",
+    "NotifyMessageInput",
+    "accept_notify_message",
+]
+
 if TYPE_CHECKING:
-    from collections.abc import Sequence
     from datetime import datetime
 
     from easyauth.applications.models import AppNotificationChannel
 
 
 @dataclass(frozen=True, slots=True)
-class _AcceptanceInput:
-    recipients: Sequence[str]
-    template: str
-    title: str
-    content: str
-    deeplink_url: str
-    deeplink_title: str
-    dedup_key: str
-    biz_tag: str
-    requested_credential_type: str
-    requested_credential_id: int
+class NotifyCredentialInput:
+    """受理时绑定的应用凭据身份。"""
+
+    credential_type: str
+    credential_id: int
 
 
-def accept_notify_message(  # noqa: PLR0913 - 受理入口完整业务事实。
-    *,
-    app: App,
-    recipients: Sequence[str],
-    template: str,
-    title: str = "",
-    content: str,
-    deeplink_url: str = "",
-    deeplink_title: str = DEFAULT_DEEPLINK_TITLE,
-    dedup_key: str = "",
-    biz_tag: str = "",
-    requested_credential_type: str,
-    requested_credential_id: int,
-) -> AcceptNotifyResult:
+@dataclass(frozen=True, slots=True)
+class NotifyAcceptanceInput:
+    """通知受理入口: 应用 + 消息正文 + 请求凭据。"""
+
+    app: App
+    message: NotifyMessageInput
+    credential: NotifyCredentialInput
+
+
+def accept_notify_message(acceptance: NotifyAcceptanceInput) -> AcceptNotifyResult:
     """受理一则通知: 校验/组装/解析/幂等/配额/落库/入队。返回 (result)。"""
-    prepared = _prepare_acceptance(
-        _AcceptanceInput(
-            recipients=recipients,
-            template=template,
-            title=title,
-            content=content,
-            deeplink_url=deeplink_url,
-            deeplink_title=deeplink_title,
-            dedup_key=dedup_key,
-            biz_tag=biz_tag,
-            requested_credential_type=requested_credential_type,
-            requested_credential_id=requested_credential_id,
-        ),
-    )
-    existing = _existing_result(app, prepared)
+    prepared = _prepare_acceptance(acceptance)
+    existing = _existing_result(acceptance.app, prepared)
     if existing is not None:
         return existing
 
-    channel, scoped = _scope_acceptance(app, prepared)
+    channel, scoped = _scope_acceptance(acceptance.app, prepared)
     try:
-        message = _persist_acceptance(app, channel, scoped)
+        message = _persist_acceptance(acceptance.app, channel, scoped)
     except IntegrityError:
         if not scoped.normalized.dedup_key:
             raise
-        return _concurrent_winner_result(app, scoped)
+        return _concurrent_winner_result(acceptance.app, scoped)
 
     rejected = _rejected_count(scoped.resolved)
     return AcceptNotifyResult(
@@ -118,16 +101,9 @@ class _AcceptanceData:
     requested_credential_id: int
 
 
-def _prepare_acceptance(input_data: _AcceptanceInput) -> _AcceptanceData:
-    normalized = normalize_and_validate(
-        template=input_data.template,
-        title=input_data.title,
-        content=input_data.content,
-        deeplink_url=input_data.deeplink_url,
-        deeplink_title=input_data.deeplink_title,
-        dedup_key=input_data.dedup_key,
-        biz_tag=input_data.biz_tag,
-    )
+def _prepare_acceptance(acceptance: NotifyAcceptanceInput) -> _AcceptanceData:
+    message = acceptance.message
+    normalized = normalize_and_validate(message)
     msg = build_dingtalk_msg(
         template=normalized.template,
         title=normalized.title,
@@ -142,23 +118,25 @@ def _prepare_acceptance(input_data: _AcceptanceInput) -> _AcceptanceData:
             field="content",
         )
 
-    resolved = resolve_recipients(input_data.recipients)
+    resolved = resolve_recipients(message.recipients)
     payload_hash = compute_payload_hash(
-        template=normalized.template,
-        title=normalized.title,
-        content=normalized.content,
-        deeplink_url=normalized.deeplink_url,
-        deeplink_title=normalized.deeplink_title,
-        biz_tag=normalized.biz_tag,
-        recipients=list(input_data.recipients),
+        replace(
+            message,
+            template=normalized.template,
+            title=normalized.title,
+            content=normalized.content,
+            deeplink_url=normalized.deeplink_url,
+            deeplink_title=normalized.deeplink_title,
+            biz_tag=normalized.biz_tag,
+        ),
     )
 
     return _AcceptanceData(
         normalized=normalized,
         payload_hash=payload_hash,
         resolved=resolved,
-        requested_credential_type=input_data.requested_credential_type,
-        requested_credential_id=input_data.requested_credential_id,
+        requested_credential_type=acceptance.credential.credential_type,
+        requested_credential_id=acceptance.credential.credential_id,
     )
 
 

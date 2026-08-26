@@ -6,6 +6,7 @@ import pytest
 
 from easyauth.notify.contracts import NOTIFY_MSG_MAX_BYTES, NotifyAcceptError
 from easyauth.notify.messages import (
+    NotifyMessageInput,
     build_dingtalk_msg,
     dingtalk_msg_utf8_size,
     normalize_and_validate,
@@ -89,6 +90,7 @@ def test_msg_size_boundary_exactly_2048_ok_above_raises() -> None:
     # 构造刚好 ≤2048 与 >2048 的 content。
     prefix_msg = build_dingtalk_msg(template=NOTIFY_TEMPLATE_TEXT, title="", content="")
     overhead = dingtalk_msg_utf8_size(prefix_msg)  # content 为空串时的骨架
+
     # content 非空时骨架含 content 字段的引号对, 空 content 的 JSON 已含 "".
     # 更稳妥: 二分 content 长度。
     def size_for(n: int) -> int:
@@ -114,25 +116,25 @@ def test_msg_size_boundary_exactly_2048_ok_above_raises() -> None:
 def test_normalize_action_card_requires_title_and_deeplink() -> None:
     with pytest.raises(NotifyAcceptError, match="title") as exc:
         _ = normalize_and_validate(
-            template=NOTIFY_TEMPLATE_ACTION_CARD,
-            title="",
-            content="c",
-            deeplink_url="https://example.com",
-            deeplink_title="查看详情",
-            dedup_key="",
-            biz_tag="",
+            NotifyMessageInput(
+                template=NOTIFY_TEMPLATE_ACTION_CARD,
+                title="",
+                content="c",
+                deeplink_url="https://example.com",
+                deeplink_title="查看详情",
+            ),
         )
     assert exc.value.field == "title"
 
     with pytest.raises(NotifyAcceptError, match="deeplink_url") as exc2:
         _ = normalize_and_validate(
-            template=NOTIFY_TEMPLATE_ACTION_CARD,
-            title="t",
-            content="c",
-            deeplink_url="",
-            deeplink_title="查看详情",
-            dedup_key="",
-            biz_tag="",
+            NotifyMessageInput(
+                template=NOTIFY_TEMPLATE_ACTION_CARD,
+                title="t",
+                content="c",
+                deeplink_url="",
+                deeplink_title="查看详情",
+            ),
         )
     assert exc2.value.field == "deeplink_url"
 
@@ -140,51 +142,49 @@ def test_normalize_action_card_requires_title_and_deeplink() -> None:
 def test_normalize_markdown_requires_title() -> None:
     with pytest.raises(NotifyAcceptError) as exc:
         _ = normalize_and_validate(
-            template=NOTIFY_TEMPLATE_MARKDOWN,
-            title="",
-            content="c",
-            deeplink_url="",
-            deeplink_title="",
-            dedup_key="",
-            biz_tag="",
+            NotifyMessageInput(
+                template=NOTIFY_TEMPLATE_MARKDOWN,
+                title="",
+                content="c",
+            ),
         )
     assert exc.value.field == "title"
 
 
 def test_normalize_deeplink_https_and_dingtalk_protocol() -> None:
     ok_https = normalize_and_validate(
-        template=NOTIFY_TEMPLATE_ACTION_CARD,
-        title="t",
-        content="c",
-        deeplink_url="https://example.com/path",
-        deeplink_title="去看看",
-        dedup_key="",
-        biz_tag="",
+        NotifyMessageInput(
+            template=NOTIFY_TEMPLATE_ACTION_CARD,
+            title="t",
+            content="c",
+            deeplink_url="https://example.com/path",
+            deeplink_title="去看看",
+        ),
     )
     assert ok_https.deeplink_url == "https://example.com/path"
 
     embedded = quote("https://example.com/inner", safe="")
     dingtalk_url = f"dingtalk://dingtalkclient/page/link?url={embedded}&pc_slide=true"
     ok_dt = normalize_and_validate(
-        template=NOTIFY_TEMPLATE_ACTION_CARD,
-        title="t",
-        content="c",
-        deeplink_url=dingtalk_url,
-        deeplink_title="侧边栏",
-        dedup_key="",
-        biz_tag="",
+        NotifyMessageInput(
+            template=NOTIFY_TEMPLATE_ACTION_CARD,
+            title="t",
+            content="c",
+            deeplink_url=dingtalk_url,
+            deeplink_title="侧边栏",
+        ),
     )
     assert ok_dt.deeplink_url == dingtalk_url
 
     with pytest.raises(NotifyAcceptError) as exc:
         _ = normalize_and_validate(
-            template=NOTIFY_TEMPLATE_ACTION_CARD,
-            title="t",
-            content="c",
-            deeplink_url="http://insecure.example.com",
-            deeplink_title="x",
-            dedup_key="",
-            biz_tag="",
+            NotifyMessageInput(
+                template=NOTIFY_TEMPLATE_ACTION_CARD,
+                title="t",
+                content="c",
+                deeplink_url="http://insecure.example.com",
+                deeplink_title="x",
+            ),
         )
     assert exc.value.field == "deeplink_url"
 
@@ -192,25 +192,63 @@ def test_normalize_deeplink_https_and_dingtalk_protocol() -> None:
     bad_embedded = quote("http://insecure.example.com", safe="")
     with pytest.raises(NotifyAcceptError):
         _ = normalize_and_validate(
-            template=NOTIFY_TEMPLATE_ACTION_CARD,
-            title="t",
-            content="c",
-            deeplink_url=f"dingtalk://dingtalkclient/page/link?url={bad_embedded}",
-            deeplink_title="x",
-            dedup_key="",
-            biz_tag="",
+            NotifyMessageInput(
+                template=NOTIFY_TEMPLATE_ACTION_CARD,
+                title="t",
+                content="c",
+                deeplink_url=f"dingtalk://dingtalkclient/page/link?url={bad_embedded}",
+                deeplink_title="x",
+            ),
         )
+
+
+@pytest.mark.parametrize(
+    "deeplink_url",
+    [
+        "https://?",
+        "https:///x",
+        "https://",
+        "https://[",
+    ],
+)
+def test_normalize_rejects_malformed_https_deeplink(deeplink_url: str) -> None:
+    with pytest.raises(NotifyAcceptError) as exc:
+        _ = normalize_and_validate(
+            NotifyMessageInput(
+                template=NOTIFY_TEMPLATE_ACTION_CARD,
+                title="t",
+                content="c",
+                deeplink_url=deeplink_url,
+                deeplink_title="x",
+            ),
+        )
+    assert exc.value.field == "deeplink_url"
+
+
+def test_normalize_rejects_malformed_https_embedded_in_dingtalk() -> None:
+    embedded = quote("https://?", safe="")
+    with pytest.raises(NotifyAcceptError) as exc:
+        _ = normalize_and_validate(
+            NotifyMessageInput(
+                template=NOTIFY_TEMPLATE_ACTION_CARD,
+                title="t",
+                content="c",
+                deeplink_url=f"dingtalk://dingtalkclient/page/link?url={embedded}",
+                deeplink_title="x",
+            ),
+        )
+    assert exc.value.field == "deeplink_url"
 
 
 def test_normalize_text_ignores_title_and_deeplink() -> None:
     result = normalize_and_validate(
-        template=NOTIFY_TEMPLATE_TEXT,
-        title="will-be-cleared",
-        content="body",
-        deeplink_url="https://example.com",
-        deeplink_title="btn",
-        dedup_key="",
-        biz_tag="",
+        NotifyMessageInput(
+            template=NOTIFY_TEMPLATE_TEXT,
+            title="will-be-cleared",
+            content="body",
+            deeplink_url="https://example.com",
+            deeplink_title="btn",
+        ),
     )
     assert result.title == ""
     assert result.deeplink_url == ""

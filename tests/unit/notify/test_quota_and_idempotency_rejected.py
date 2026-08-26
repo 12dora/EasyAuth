@@ -5,7 +5,12 @@ from django.utils import timezone
 
 from easyauth.accounts.models import DingTalkUserMirror, UserMirror
 from easyauth.applications.models import CAPABILITY_NOTIFY, App, AppCapability
-from easyauth.notify.acceptance import accept_notify_message
+from easyauth.notify.acceptance import (
+    NotifyAcceptanceInput,
+    NotifyCredentialInput,
+    NotifyMessageInput,
+    accept_notify_message,
+)
 from easyauth.notify.contracts import NotifyAcceptError
 from easyauth.notify.models import (
     CREDENTIAL_TYPE_STATIC_TOKEN,
@@ -21,6 +26,19 @@ pytestmark = [pytest.mark.django_db, pytest.mark.usefixtures("notification_chann
 
 CORP_ID = "corp-quota"
 SOURCE = "dingtalk-quota"
+
+
+def _accept(app: App, message: NotifyMessageInput) -> object:
+    return accept_notify_message(
+        NotifyAcceptanceInput(
+            app=app,
+            message=message,
+            credential=NotifyCredentialInput(
+                credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
+                credential_id=1,
+            ),
+        ),
+    )
 
 
 def _seed(authentik: str, dingtalk: str) -> None:
@@ -50,24 +68,24 @@ def test_daily_quota_exceeded_raises_throttled() -> None:
     _seed("q1", "dt-q1")
     _seed("q2", "dt-q2")
 
-    first = accept_notify_message(
-        app=app,
-        recipients=["q1"],
-        template=NOTIFY_TEMPLATE_TEXT,
-        content="one",
-        requested_credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
-        requested_credential_id=1,
+    first = _accept(
+        app,
+        NotifyMessageInput(
+            template=NOTIFY_TEMPLATE_TEXT,
+            content="one",
+            recipients=("q1",),
+        ),
     )
     assert first.accepted is True
 
     with pytest.raises(NotifyAcceptError) as exc:
-        _ = accept_notify_message(
-            app=app,
-            recipients=["q2"],
-            template=NOTIFY_TEMPLATE_TEXT,
-            content="two",
-            requested_credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
-            requested_credential_id=1,
+        _ = _accept(
+            app,
+            NotifyMessageInput(
+                template=NOTIFY_TEMPLATE_TEXT,
+                content="two",
+                recipients=("q2",),
+            ),
         )
     assert exc.value.kind == "throttled"
     assert exc.value.retry_after_seconds is not None
@@ -79,14 +97,14 @@ def test_idempotent_replay_recipient_rejected_only_accept_time_failures() -> Non
     app = App.objects.create(app_key="notify-rej-count", name="Rej")
     _seed("r1", "dt-r1")
 
-    first = accept_notify_message(
-        app=app,
-        recipients=["r1", "dt:missing-user"],
-        template=NOTIFY_TEMPLATE_TEXT,
-        content="same-payload",
-        dedup_key="event:rej",
-        requested_credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
-        requested_credential_id=1,
+    first = _accept(
+        app,
+        NotifyMessageInput(
+            template=NOTIFY_TEMPLATE_TEXT,
+            content="same-payload",
+            recipients=("r1", "dt:missing-user"),
+            dedup_key="event:rej",
+        ),
     )
     assert first.accepted is True
     assert first.recipient_rejected == 1
@@ -123,53 +141,56 @@ def test_idempotent_replay_recipient_rejected_only_accept_time_failures() -> Non
     ).count()
     assert failed_all == 2
 
-    second = accept_notify_message(
-        app=app,
-        recipients=["r1", "dt:missing-user"],
-        template=NOTIFY_TEMPLATE_TEXT,
-        content="same-payload",
-        dedup_key="event:rej",
-        requested_credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
-        requested_credential_id=1,
+    second = _accept(
+        app,
+        NotifyMessageInput(
+            template=NOTIFY_TEMPLATE_TEXT,
+            content="same-payload",
+            recipients=("r1", "dt:missing-user"),
+            dedup_key="event:rej",
+        ),
     )
     assert second.accepted is False
     assert second.recipient_rejected == 1
-    assert NotifyRecipient.objects.filter(
-        message=first.message,
-        error_code=NOTIFY_ERROR_USER_NOT_FOUND,
-    ).count() == 1
+    assert (
+        NotifyRecipient.objects.filter(
+            message=first.message,
+            error_code=NOTIFY_ERROR_USER_NOT_FOUND,
+        ).count()
+        == 1
+    )
 
 
 def test_deeplink_title_persisted_and_in_payload_hash() -> None:
     app = App.objects.create(app_key="notify-deeplink-title", name="DL")
     _seed("d1", "dt-d1")
 
-    first = accept_notify_message(
-        app=app,
-        recipients=["d1"],
-        template="action_card",
-        title="标题",
-        content="正文",
-        deeplink_url="https://example.com/x",
-        deeplink_title="查看任务",
-        dedup_key="dl:1",
-        requested_credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
-        requested_credential_id=1,
+    first = _accept(
+        app,
+        NotifyMessageInput(
+            template="action_card",
+            title="标题",
+            content="正文",
+            deeplink_url="https://example.com/x",
+            deeplink_title="查看任务",
+            recipients=("d1",),
+            dedup_key="dl:1",
+        ),
     )
     assert first.message.deeplink_title == "查看任务"
 
     # 同 dedup 但不同 deeplink_title → 冲突。
     with pytest.raises(NotifyAcceptError) as exc:
-        _ = accept_notify_message(
-            app=app,
-            recipients=["d1"],
-            template="action_card",
-            title="标题",
-            content="正文",
-            deeplink_url="https://example.com/x",
-            deeplink_title="另一按钮",
-            dedup_key="dl:1",
-            requested_credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
-            requested_credential_id=1,
+        _ = _accept(
+            app,
+            NotifyMessageInput(
+                template="action_card",
+                title="标题",
+                content="正文",
+                deeplink_url="https://example.com/x",
+                deeplink_title="另一按钮",
+                recipients=("d1",),
+                dedup_key="dl:1",
+            ),
         )
     assert exc.value.kind == "conflict"

@@ -173,7 +173,8 @@ TITLE_TOO_LONG_MESSAGE: Final = "title 不得超过 100 字符。"
 CONTENT_REQUIRED_MESSAGE: Final = "content 不能为空。"
 DEEPLINK_REQUIRED_MESSAGE: Final = "action_card 模板必须提供 deeplink_url。"
 DEEPLINK_URL_INVALID_MESSAGE: Final = (
-    "deeplink_url 须以 https:// 或 dingtalk://dingtalkclient/page/link? 开头, 且长度 ≤500。"
+    "deeplink_url 须为含主机名的 https URL, 或以 "
+    "dingtalk://dingtalkclient/page/link? 开头且内嵌含主机名的 https URL, 且长度 ≤500。"
 )
 DEEPLINK_TITLE_TOO_LONG_MESSAGE: Final = "deeplink_title 不得超过 20 字符。"
 DEDUP_KEY_TOO_LONG_MESSAGE: Final = "dedup_key 不得超过 128 字符。"

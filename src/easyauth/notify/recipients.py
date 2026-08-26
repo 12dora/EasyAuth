@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
@@ -40,6 +40,7 @@ from easyauth.notify.models import NOTIFY_RAW_REF_MAX_CHARS, NotifyMessage, Noti
 if TYPE_CHECKING:
     from collections.abc import Sequence
     from datetime import datetime
+
 
 def resolve_recipients(raw_refs: Sequence[str]) -> list[ResolvedRecipient]:
     """解析并按目录作用域 + userid 去重; 解析失败不阻塞, 直接成为 failed 候选。"""
@@ -92,45 +93,55 @@ def _resolve_one_recipient(raw_ref: str) -> ResolvedRecipient:
     preferred_user = UserMirror.objects.filter(authentik_user_id=raw_ref).first()
     if preferred_user is not None and not preferred_user.dingtalk_userid:
         return _failed_recipient(
-            raw_ref=raw_ref,
-            user=preferred_user,
-            error_code=NOTIFY_ERROR_NO_DINGTALK_ID,
-            error="用户存在但无钉钉绑定。",
+            FailedRecipientInput(
+                raw_ref=raw_ref,
+                user=preferred_user,
+                error_code=NOTIFY_ERROR_NO_DINGTALK_ID,
+                error="用户存在但无钉钉绑定。",
+            ),
         )
     try:
         mirror = resolve_directory_user(raw_ref)
     except AmbiguousDirectoryReferenceError:
         return _failed_recipient(
-            raw_ref=raw_ref,
-            user=preferred_user,
-            error_code=NOTIFY_ERROR_USER_AMBIGUOUS,
-            error="用户引用匹配多个企业目录用户, 必须使用 scoped 引用。",
+            FailedRecipientInput(
+                raw_ref=raw_ref,
+                user=preferred_user,
+                error_code=NOTIFY_ERROR_USER_AMBIGUOUS,
+                error="用户引用匹配多个企业目录用户, 必须使用 scoped 引用。",
+            ),
         )
     except InvalidDirectoryReferenceError:
         return _failed_recipient(
-            raw_ref=raw_ref,
-            user=preferred_user,
-            error_code=NOTIFY_ERROR_USER_NOT_FOUND,
-            error="用户引用格式无效。",
+            FailedRecipientInput(
+                raw_ref=raw_ref,
+                user=preferred_user,
+                error_code=NOTIFY_ERROR_USER_NOT_FOUND,
+                error="用户引用格式无效。",
+            ),
         )
     if mirror is None:
         return _failed_recipient(
-            raw_ref=raw_ref,
-            user=preferred_user,
-            error_code=NOTIFY_ERROR_USER_NOT_FOUND,
-            error="用户引用无法解析到目录用户。",
+            FailedRecipientInput(
+                raw_ref=raw_ref,
+                user=preferred_user,
+                error_code=NOTIFY_ERROR_USER_NOT_FOUND,
+                error="用户引用无法解析到目录用户。",
+            ),
         )
     if mirror.status != DINGTALK_USER_STATUS_ACTIVE:
         status_label = mirror.status or "unknown"
         return _failed_recipient(
-            raw_ref=raw_ref,
-            user=preferred_user
-            or _lookup_user_mirror(mirror.source_slug, mirror.corp_id, mirror.user_id),
-            dingtalk_source_slug=mirror.source_slug,
-            dingtalk_corp_id=mirror.corp_id,
-            dingtalk_userid=mirror.user_id,
-            error_code=NOTIFY_ERROR_USER_INACTIVE,
-            error=f"目录状态为 {status_label}, 拒绝投递。",
+            FailedRecipientInput(
+                raw_ref=raw_ref,
+                user=preferred_user
+                or _lookup_user_mirror(mirror.source_slug, mirror.corp_id, mirror.user_id),
+                dingtalk_source_slug=mirror.source_slug,
+                dingtalk_corp_id=mirror.corp_id,
+                dingtalk_userid=mirror.user_id,
+                error_code=NOTIFY_ERROR_USER_INACTIVE,
+                error=f"目录状态为 {status_label}, 拒绝投递。",
+            ),
         )
     user = preferred_user or _lookup_user_mirror(mirror.source_slug, mirror.corp_id, mirror.user_id)
     return ResolvedRecipient(
@@ -188,33 +199,35 @@ def _lookup_user_mirror(
     if len(rows) > 1:
         raise NotifyAcceptError(
             kind="validation_error",
-            message=(
-                "钉钉身份绑定不唯一, 必须先修复 UserMirror 与目录来源作用域的绑定事实。"
-            ),
+            message=("钉钉身份绑定不唯一, 必须先修复 UserMirror 与目录来源作用域的绑定事实。"),
             field="recipients",
         )
     return rows[0] if rows else None
 
 
-def _failed_recipient(  # noqa: PLR0913 - 失败收件人字段全集。
-    *,
-    raw_ref: str,
-    error_code: str,
-    error: str,
-    user: UserMirror | None = None,
-    dingtalk_source_slug: str = "",
-    dingtalk_corp_id: str = "",
-    dingtalk_userid: str = "",
-) -> ResolvedRecipient:
+@dataclass(frozen=True, slots=True)
+class FailedRecipientInput:
+    """解析失败的收件人字段全集。"""
+
+    raw_ref: str
+    error_code: str
+    error: str
+    user: UserMirror | None = None
+    dingtalk_source_slug: str = ""
+    dingtalk_corp_id: str = ""
+    dingtalk_userid: str = ""
+
+
+def _failed_recipient(failed: FailedRecipientInput) -> ResolvedRecipient:
     return ResolvedRecipient(
-        raw_ref=raw_ref,
-        user=user,
-        dingtalk_source_slug=dingtalk_source_slug,
-        dingtalk_corp_id=dingtalk_corp_id,
-        dingtalk_userid=dingtalk_userid,
+        raw_ref=failed.raw_ref,
+        user=failed.user,
+        dingtalk_source_slug=failed.dingtalk_source_slug,
+        dingtalk_corp_id=failed.dingtalk_corp_id,
+        dingtalk_userid=failed.dingtalk_userid,
         status=NOTIFY_RECIPIENT_STATUS_FAILED,
-        error_code=error_code,
-        error=error,
+        error_code=failed.error_code,
+        error=failed.error,
     )
 
 

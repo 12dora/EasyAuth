@@ -43,7 +43,12 @@ from easyauth.lifecycle.tasks import (
     DISABLE_ACCOUNT_TASK_NAME,
     RETRY_OFFBOARDING_TASK_NAME,
 )
-from easyauth.notify.acceptance import accept_notify_message
+from easyauth.notify.acceptance import (
+    NotifyAcceptanceInput,
+    NotifyCredentialInput,
+    accept_notify_message,
+)
+from easyauth.notify.messages import NotifyMessageInput
 from easyauth.notify.models import NOTIFY_TEMPLATE_TEXT
 from easyauth.outbox.services import enqueue_task
 
@@ -428,14 +433,20 @@ def _accept_lifecycle_reminder(
 ) -> str:
     """受理生命周期提醒; 调用点集中在此, 便于 notify 受理签名迁移。"""
     result = accept_notify_message(
-        app=identity,
-        recipients=[assignee_user_id],
-        template=NOTIFY_TEMPLATE_TEXT,
-        content=content,
-        dedup_key=dedup_key,
-        biz_tag="lifecycle.reminder",
-        requested_credential_type=credential.credential_type,
-        requested_credential_id=credential.id,
+        NotifyAcceptanceInput(
+            app=identity,
+            message=NotifyMessageInput(
+                template=NOTIFY_TEMPLATE_TEXT,
+                content=content,
+                recipients=(assignee_user_id,),
+                dedup_key=dedup_key,
+                biz_tag="lifecycle.reminder",
+            ),
+            credential=NotifyCredentialInput(
+                credential_type=credential.credential_type,
+                credential_id=credential.id,
+            ),
+        ),
     )
     return "accepted" if result.accepted else "duplicate"
 

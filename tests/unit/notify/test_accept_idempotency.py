@@ -4,7 +4,12 @@ import pytest
 
 from easyauth.accounts.models import DingTalkUserMirror, UserMirror
 from easyauth.applications.models import App
-from easyauth.notify.acceptance import accept_notify_message
+from easyauth.notify.acceptance import (
+    NotifyAcceptanceInput,
+    NotifyCredentialInput,
+    NotifyMessageInput,
+    accept_notify_message,
+)
 from easyauth.notify.contracts import NotifyAcceptError
 from easyauth.notify.models import (
     CREDENTIAL_TYPE_STATIC_TOKEN,
@@ -49,14 +54,20 @@ def _accept(
     biz_tag: str = "",
 ) -> object:
     return accept_notify_message(
-        app=app,
-        recipients=recipients,
-        template=NOTIFY_TEMPLATE_TEXT,
-        content=content,
-        dedup_key=dedup_key,
-        biz_tag=biz_tag,
-        requested_credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
-        requested_credential_id=1,
+        NotifyAcceptanceInput(
+            app=app,
+            message=NotifyMessageInput(
+                template=NOTIFY_TEMPLATE_TEXT,
+                content=content,
+                recipients=tuple(recipients),
+                dedup_key=dedup_key,
+                biz_tag=biz_tag,
+            ),
+            credential=NotifyCredentialInput(
+                credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
+                credential_id=1,
+            ),
+        ),
     )
 
 
@@ -190,10 +201,13 @@ def test_accept_mixed_recipients_persists_rejected_summary_immediately() -> None
     assert result.message.status == NOTIFY_MESSAGE_STATUS_PENDING
     assert result.message.recipient_total == MIXED_RECIPIENT_TOTAL
     assert result.message.recipient_failed == 1
-    assert NotifyRecipient.objects.filter(
-        message=result.message,
-        status=NOTIFY_RECIPIENT_STATUS_FAILED,
-    ).count() == 1
+    assert (
+        NotifyRecipient.objects.filter(
+            message=result.message,
+            status=NOTIFY_RECIPIENT_STATUS_FAILED,
+        ).count()
+        == 1
+    )
 
 
 def _patch_dedup_precheck_miss(monkeypatch: pytest.MonkeyPatch) -> None:

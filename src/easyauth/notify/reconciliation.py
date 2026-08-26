@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import TYPE_CHECKING, cast
 
@@ -40,63 +41,109 @@ if TYPE_CHECKING:
     from datetime import datetime
     from uuid import UUID
 
+
+@dataclass(frozen=True, slots=True)
+class _ReconcileWindow:
+    now: datetime
+    channel_tasks: tuple[tuple[int, str], ...]
+
+
 def reconcile_send_results() -> int:
     """对 sent 收件人按 task_id 查钉钉回执, 升级 delivered/failed。返回处理的 task 数。"""
-    if not getattr(settings, "EASYAUTH_NOTIFY_RECONCILE_ENABLED", True):
+    window = _reconcile_run_window()
+    if window is None:
         return 0
+    processed, affected = _reconcile_selected_tasks(window)
+    _refresh_affected_messages(affected)
+    return processed
 
+
+def _reconcile_run_window() -> _ReconcileWindow | None:
+    if not getattr(settings, "EASYAUTH_NOTIFY_RECONCILE_ENABLED", True):
+        return None
     now = timezone.now()
     window_start = now - timedelta(hours=NOTIFY_RECONCILE_WINDOW_HOURS)
-
     channel_tasks = select_reconcile_tasks(window_start)
     if not channel_tasks:
-        return 0
+        return None
+    return _ReconcileWindow(now=now, channel_tasks=tuple(channel_tasks))
 
+
+def _reconcile_selected_tasks(window: _ReconcileWindow) -> tuple[int, set[UUID]]:
     processed = 0
-    affected_message_ids: set[UUID] = set()
-    for channel_id, task_id in channel_tasks:
-        channel = AppNotificationChannel.objects.filter(id=channel_id).first()
-        if channel is None:
-            _mark_task_reconciled(channel_id=channel_id, task_id=task_id, checked_at=now)
+    affected: set[UUID] = set()
+    for channel_id, task_id in window.channel_tasks:
+        message_ids = _reconcile_channel_task(
+            channel_id=channel_id,
+            task_id=task_id,
+            now=window.now,
+        )
+        if not message_ids:
             continue
-        try:
-            client, agent_id = channel_config.dingtalk_client_and_agent(channel)
-        except (DingTalkNotConfiguredError, ValueError) as error:
-            _mark_task_reconcile_failed(
-                channel_id=channel_id,
-                task_id=task_id,
-                checked_at=now,
-                error=str(error) or "钉钉通知通道未配置。",
-            )
-            continue
-        try:
-            mids = _reconcile_one_task(
-                client=client,
-                agent_id=agent_id,
-                channel_id=channel_id,
-                task_id=task_id,
-                now=now,
-            )
-        except (DingTalkApiRequestError, DingTalkApiUnavailableError) as error:
-            _mark_task_reconcile_failed(
-                channel_id=channel_id,
-                task_id=task_id,
-                checked_at=now,
-                error=str(error),
-            )
-            continue
-        _mark_task_reconciled(channel_id=channel_id, task_id=task_id, checked_at=now)
-        if not mids:
-            continue
-        affected_message_ids.update(mids)
+        affected.update(message_ids)
         processed += 1
+    return processed, affected
 
-    for mid in affected_message_ids:
+
+def _resolve_task_client(
+    *,
+    channel_id: int,
+    task_id: str,
+    now: datetime,
+) -> tuple[DingTalkApiClient, str | int] | None:
+    channel = AppNotificationChannel.objects.filter(id=channel_id).first()
+    if channel is None:
+        _mark_task_reconciled(channel_id=channel_id, task_id=task_id, checked_at=now)
+        return None
+    try:
+        return channel_config.dingtalk_client_and_agent(channel)
+    except (DingTalkNotConfiguredError, ValueError) as error:
+        _mark_task_reconcile_failed(
+            channel_id=channel_id,
+            task_id=task_id,
+            checked_at=now,
+            error=str(error) or "钉钉通知通道未配置。",
+        )
+        return None
+
+
+def _reconcile_channel_task(
+    *,
+    channel_id: int,
+    task_id: str,
+    now: datetime,
+) -> set[UUID] | None:
+    resolved = _resolve_task_client(channel_id=channel_id, task_id=task_id, now=now)
+    if resolved is None:
+        return None
+    client, agent_id = resolved
+    try:
+        message_ids = _reconcile_one_task(
+            client=client,
+            agent_id=agent_id,
+            channel_id=channel_id,
+            task_id=task_id,
+            now=now,
+        )
+    except (DingTalkApiRequestError, DingTalkApiUnavailableError) as error:
+        _mark_task_reconcile_failed(
+            channel_id=channel_id,
+            task_id=task_id,
+            checked_at=now,
+            error=str(error),
+        )
+        return None
+    _mark_task_reconciled(channel_id=channel_id, task_id=task_id, checked_at=now)
+    return message_ids
+
+
+def _refresh_affected_messages(message_ids: set[UUID]) -> None:
+    for mid in message_ids:
         msg = NotifyMessage.objects.filter(id=mid).first()
-        if msg is not None:
-            refresh_message_counts(msg)
-            _maybe_rewrite_aggregate_after_reconcile(msg)
-    return processed
+        if msg is None:
+            continue
+        refresh_message_counts(msg)
+        _maybe_rewrite_aggregate_after_reconcile(msg)
 
 
 def select_reconcile_tasks(window_start: datetime) -> list[tuple[int, str]]:
@@ -156,16 +203,31 @@ def _reconcile_one_task(
     task_id: str,
     now: datetime,
 ) -> set[UUID]:
-    progress = _send_progress(client.get_send_progress(agent_id=agent_id, task_id=task_id))
-    if progress.status != DINGTALK_PROGRESS_DONE:
+    send_result = _fetch_completed_send_result(
+        client=client,
+        agent_id=agent_id,
+        task_id=task_id,
+    )
+    if send_result is None:
         return set()
-    send_result = _send_result(client.get_send_result(agent_id=agent_id, task_id=task_id))
     return _apply_send_result(
         channel_id=channel_id,
         task_id=task_id,
         send_result=send_result,
         now=now,
     )
+
+
+def _fetch_completed_send_result(
+    *,
+    client: DingTalkApiClient,
+    agent_id: str | int,
+    task_id: str,
+) -> DingTalkSendResult | None:
+    progress = _send_progress(client.get_send_progress(agent_id=agent_id, task_id=task_id))
+    if progress.status != DINGTALK_PROGRESS_DONE:
+        return None
+    return _send_result(client.get_send_result(agent_id=agent_id, task_id=task_id))
 
 
 def _send_progress(raw: object) -> DingTalkSendProgress:

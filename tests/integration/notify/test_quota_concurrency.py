@@ -13,7 +13,12 @@ from easyauth.applications.models import (
     AppCapability,
     AppNotificationChannel,
 )
-from easyauth.notify.acceptance import accept_notify_message
+from easyauth.notify.acceptance import (
+    NotifyAcceptanceInput,
+    NotifyCredentialInput,
+    NotifyMessageInput,
+    accept_notify_message,
+)
 from easyauth.notify.contracts import NotifyAcceptError
 from easyauth.notify.models import CREDENTIAL_TYPE_STATIC_TOKEN, NOTIFY_TEMPLATE_TEXT
 
@@ -68,12 +73,18 @@ def test_daily_quota_is_atomic_across_concurrent_accepts() -> None:
             _ = barrier.wait(timeout=5)
             try:
                 result = accept_notify_message(
-                    app=App.objects.get(id=app.id),
-                    recipients=[f"quota-auth-{index}"],
-                    template=NOTIFY_TEMPLATE_TEXT,
-                    content=f"quota-{index}",
-                    requested_credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
-                    requested_credential_id=1,
+                    NotifyAcceptanceInput(
+                        app=App.objects.get(id=app.id),
+                        message=NotifyMessageInput(
+                            template=NOTIFY_TEMPLATE_TEXT,
+                            content=f"quota-{index}",
+                            recipients=(f"quota-auth-{index}",),
+                        ),
+                        credential=NotifyCredentialInput(
+                            credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
+                            credential_id=1,
+                        ),
+                    ),
                 )
             except NotifyAcceptError as error:
                 return error.kind

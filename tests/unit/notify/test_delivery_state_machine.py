@@ -12,7 +12,12 @@ from easyauth.integrations.dingtalk.api_client import (
     DingTalkApiRequestError,
     DingTalkApiUnavailableError,
 )
-from easyauth.notify.acceptance import accept_notify_message
+from easyauth.notify.acceptance import (
+    NotifyAcceptanceInput,
+    NotifyCredentialInput,
+    NotifyMessageInput,
+    accept_notify_message,
+)
 from easyauth.notify.contracts import MAX_DELIVERY_ATTEMPTS, NOTIFY_THROTTLE_RETRY_SECONDS
 from easyauth.notify.delivery import deliver_message
 from easyauth.notify.models import (
@@ -58,12 +63,18 @@ def _seed_user(*, authentik: str, dingtalk: str) -> None:
 
 def _accept(app: App, recipients: list[str]) -> NotifyMessage:
     result = accept_notify_message(
-        app=app,
-        recipients=recipients,
-        template=NOTIFY_TEMPLATE_TEXT,
-        content=f"body-{recipients[0]}",
-        requested_credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
-        requested_credential_id=1,
+        NotifyAcceptanceInput(
+            app=app,
+            message=NotifyMessageInput(
+                template=NOTIFY_TEMPLATE_TEXT,
+                content=f"body-{recipients[0]}",
+                recipients=tuple(recipients),
+            ),
+            credential=NotifyCredentialInput(
+                credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
+                credential_id=1,
+            ),
+        ),
     )
     return result.message
 
@@ -126,10 +137,13 @@ def test_deliver_all_success_completed(monkeypatch: pytest.MonkeyPatch) -> None:
     assert message.recipient_failed == 0
     assert message.claim_token == ""
     assert message.completed_at is not None
-    assert NotifyRecipient.objects.filter(
-        message=message,
-        status=NOTIFY_RECIPIENT_STATUS_SENT,
-    ).count() == 2
+    assert (
+        NotifyRecipient.objects.filter(
+            message=message,
+            status=NOTIFY_RECIPIENT_STATUS_SENT,
+        ).count()
+        == 2
+    )
 
 
 def test_delivery_uses_channel_frozen_at_accept_time(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -187,10 +201,13 @@ def test_deliver_partial_batch_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     message.refresh_from_db()
     assert message.status == NOTIFY_MESSAGE_STATUS_FAILED
     assert message.recipient_failed == 2
-    assert NotifyRecipient.objects.filter(
-        message=message,
-        error_code=NOTIFY_ERROR_DINGTALK_REJECTED,
-    ).count() == 2
+    assert (
+        NotifyRecipient.objects.filter(
+            message=message,
+            error_code=NOTIFY_ERROR_DINGTALK_REJECTED,
+        ).count()
+        == 2
+    )
 
 
 def test_deliver_throttle_marks_throttled_and_reschedules(

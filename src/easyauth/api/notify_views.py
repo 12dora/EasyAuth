@@ -25,12 +25,17 @@ from easyauth.applications.models import CAPABILITY_NOTIFY, App
 from easyauth.applications.services import AppPrincipal
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.config.rate_limit import client_ip, over_limit, rate_limit_exceeded
-from easyauth.notify.acceptance import accept_notify_message
+from easyauth.notify.acceptance import (
+    NotifyAcceptanceInput,
+    NotifyCredentialInput,
+    accept_notify_message,
+)
 from easyauth.notify.contracts import (
     DEFAULT_DEEPLINK_TITLE,
     AcceptNotifyResult,
     NotifyAcceptError,
 )
+from easyauth.notify.messages import NotifyMessageInput
 from easyauth.notify.models import NotifyMessage, NotifyRecipient
 
 _AUTHENTICATION_FAILED_MESSAGE: Final = "应用认证凭据无效。"
@@ -117,17 +122,23 @@ def _accept_create_request(
     create_payload = parsed.payload
     try:
         return accept_notify_message(
-            app=app,
-            recipients=create_payload["recipients"],
-            template=create_payload["template"],
-            title=create_payload["title"],
-            content=create_payload["content"],
-            deeplink_url=create_payload["deeplink_url"],
-            deeplink_title=create_payload["deeplink_title"],
-            dedup_key=create_payload["dedup_key"],
-            biz_tag=create_payload["biz_tag"],
-            requested_credential_type=principal.credential_type,
-            requested_credential_id=principal.credential_id,
+            NotifyAcceptanceInput(
+                app=app,
+                message=NotifyMessageInput(
+                    template=create_payload["template"],
+                    title=create_payload["title"],
+                    content=create_payload["content"],
+                    deeplink_url=create_payload["deeplink_url"],
+                    deeplink_title=create_payload["deeplink_title"],
+                    dedup_key=create_payload["dedup_key"],
+                    biz_tag=create_payload["biz_tag"],
+                    recipients=tuple(create_payload["recipients"]),
+                ),
+                credential=NotifyCredentialInput(
+                    credential_type=principal.credential_type,
+                    credential_id=principal.credential_id,
+                ),
+            ),
         )
     except NotifyAcceptError as exc:
         return _accept_error_response(principal=principal, exc=exc, body=parsed.body)

@@ -8,7 +8,12 @@ from django.utils import timezone
 
 from easyauth.accounts.models import DingTalkUserMirror, UserMirror
 from easyauth.applications.models import App, AppNotificationChannel
-from easyauth.notify.acceptance import accept_notify_message
+from easyauth.notify.acceptance import (
+    NotifyAcceptanceInput,
+    NotifyCredentialInput,
+    NotifyMessageInput,
+    accept_notify_message,
+)
 from easyauth.notify.contracts import NOTIFY_LEASE_SECONDS
 from easyauth.notify.delivery import deliver_message
 from easyauth.notify.models import (
@@ -43,12 +48,18 @@ def _seed(authentik: str = "c1", dingtalk: str = "dt-c1") -> None:
 
 def _accept(app: App) -> NotifyMessage:
     result = accept_notify_message(
-        app=app,
-        recipients=["c1"],
-        template=NOTIFY_TEMPLATE_TEXT,
-        content="claim-body",
-        requested_credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
-        requested_credential_id=1,
+        NotifyAcceptanceInput(
+            app=app,
+            message=NotifyMessageInput(
+                template=NOTIFY_TEMPLATE_TEXT,
+                content="claim-body",
+                recipients=("c1",),
+            ),
+            credential=NotifyCredentialInput(
+                credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
+                credential_id=1,
+            ),
+        ),
     )
     return result.message
 
@@ -88,12 +99,18 @@ def test_expired_lease_can_be_taken_over(monkeypatch: pytest.MonkeyPatch) -> Non
     app = App.objects.create(app_key="notify-claim-expire", name="Expire")
     _seed(authentik="c2", dingtalk="dt-c2")
     result = accept_notify_message(
-        app=app,
-        recipients=["c2"],
-        template=NOTIFY_TEMPLATE_TEXT,
-        content="expire-body",
-        requested_credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
-        requested_credential_id=1,
+        NotifyAcceptanceInput(
+            app=app,
+            message=NotifyMessageInput(
+                template=NOTIFY_TEMPLATE_TEXT,
+                content="expire-body",
+                recipients=("c2",),
+            ),
+            credential=NotifyCredentialInput(
+                credential_type=CREDENTIAL_TYPE_STATIC_TOKEN,
+                credential_id=1,
+            ),
+        ),
     )
     message = result.message
     _ = NotifyMessage.objects.filter(id=message.id).update(

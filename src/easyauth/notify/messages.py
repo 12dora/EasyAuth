@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
 from urllib.parse import parse_qs, urlparse
 
 from easyauth.notify.contracts import (
@@ -30,9 +29,6 @@ from easyauth.notify.contracts import (
     NotifyAcceptError,
 )
 from easyauth.notify.models import NOTIFY_TEMPLATE_VALUES
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
 
 
 def build_dingtalk_msg(
@@ -74,25 +70,31 @@ def dingtalk_msg_utf8_size(msg: dict[str, object]) -> int:
     return len(raw)
 
 
-def compute_payload_hash(  # noqa: PLR0913 - 幂等 hash 规范化字段全集(契约 §N2)。
-    *,
-    template: str,
-    title: str,
-    content: str,
-    deeplink_url: str,
-    deeplink_title: str,
-    biz_tag: str,
-    recipients: Sequence[str],
-) -> str:
+@dataclass(frozen=True, slots=True)
+class NotifyMessageInput:
+    """通知正文输入: 受理校验、幂等哈希与落库共用同一字段集。"""
+
+    template: str
+    content: str
+    title: str = ""
+    deeplink_url: str = ""
+    deeplink_title: str = DEFAULT_DEEPLINK_TITLE
+    dedup_key: str = ""
+    biz_tag: str = ""
+    recipients: tuple[str, ...] = ()
+
+
+def compute_payload_hash(message: NotifyMessageInput) -> str:
+    """按契约 §N2 对规范化字段全集做幂等哈希。"""
     canonical = json.dumps(
         {
-            "template": template,
-            "title": title,
-            "content": content,
-            "deeplink_url": deeplink_url,
-            "deeplink_title": deeplink_title,
-            "biz_tag": biz_tag,
-            "recipients": sorted(recipients),
+            "template": message.template,
+            "title": message.title,
+            "content": message.content,
+            "deeplink_url": message.deeplink_url,
+            "deeplink_title": message.deeplink_title,
+            "biz_tag": message.biz_tag,
+            "recipients": sorted(message.recipients),
         },
         ensure_ascii=False,
         allow_nan=False,
@@ -113,81 +115,52 @@ class NormalizedInput:
     biz_tag: str
 
 
-def normalize_and_validate(  # noqa: PLR0913 - 受理字段全集。
-    *,
-    template: str,
-    title: str,
-    content: str,
-    deeplink_url: str,
-    deeplink_title: str,
-    dedup_key: str,
-    biz_tag: str,
-) -> NormalizedInput:
-    _validate_common_fields(
-        template=template,
-        title=title,
-        content=content,
-        deeplink_title=deeplink_title,
-        dedup_key=dedup_key,
-        biz_tag=biz_tag,
-    )
-    effective_title, effective_deeplink, effective_deeplink_title = _template_fields(
-        template=template,
-        title=title,
-        deeplink_url=deeplink_url,
-        deeplink_title=deeplink_title,
-    )
+def normalize_and_validate(message: NotifyMessageInput) -> NormalizedInput:
+    _validate_common_fields(message)
+    effective_title, effective_deeplink, effective_deeplink_title = _template_fields(message)
     return NormalizedInput(
-        template=template,
+        template=message.template,
         title=effective_title,
-        content=content,
+        content=message.content,
         deeplink_url=effective_deeplink,
         deeplink_title=effective_deeplink_title,
-        dedup_key=dedup_key,
-        biz_tag=biz_tag,
+        dedup_key=message.dedup_key,
+        biz_tag=message.biz_tag,
     )
 
 
-def _validate_common_fields(  # noqa: PLR0913
-    *,
-    template: str,
-    title: str,
-    content: str,
-    deeplink_title: str,
-    dedup_key: str,
-    biz_tag: str,
-) -> None:
-    if template not in NOTIFY_TEMPLATE_VALUES:
+def _validate_common_fields(message: NotifyMessageInput) -> None:
+    if message.template not in NOTIFY_TEMPLATE_VALUES:
         raise NotifyAcceptError(
             kind="validation_error",
             message=TEMPLATE_INVALID_MESSAGE,
             field="template",
         )
-    if not content:
+    if not message.content:
         raise NotifyAcceptError(
             kind="validation_error",
             message=CONTENT_REQUIRED_MESSAGE,
             field="content",
         )
-    if len(title) > NOTIFY_TITLE_MAX_CHARS:
+    if len(message.title) > NOTIFY_TITLE_MAX_CHARS:
         raise NotifyAcceptError(
             kind="validation_error",
             message=TITLE_TOO_LONG_MESSAGE,
             field="title",
         )
-    if len(dedup_key) > NOTIFY_DEDUP_KEY_MAX_CHARS:
+    if len(message.dedup_key) > NOTIFY_DEDUP_KEY_MAX_CHARS:
         raise NotifyAcceptError(
             kind="validation_error",
             message=DEDUP_KEY_TOO_LONG_MESSAGE,
             field="dedup_key",
         )
-    if len(biz_tag) > NOTIFY_BIZ_TAG_MAX_CHARS:
+    if len(message.biz_tag) > NOTIFY_BIZ_TAG_MAX_CHARS:
         raise NotifyAcceptError(
             kind="validation_error",
             message=BIZ_TAG_TOO_LONG_MESSAGE,
             field="biz_tag",
         )
-    if len(deeplink_title) > NOTIFY_DEEPLINK_TITLE_MAX_CHARS:
+    if len(message.deeplink_title) > NOTIFY_DEEPLINK_TITLE_MAX_CHARS:
         raise NotifyAcceptError(
             kind="validation_error",
             message=DEEPLINK_TITLE_TOO_LONG_MESSAGE,
@@ -195,55 +168,62 @@ def _validate_common_fields(  # noqa: PLR0913
         )
 
 
-def _template_fields(
-    *,
-    template: str,
-    title: str,
-    deeplink_url: str,
-    deeplink_title: str,
-) -> tuple[str, str, str]:
-    if template == NOTIFY_TEMPLATE_TEXT:
+def _template_fields(message: NotifyMessageInput) -> tuple[str, str, str]:
+    if message.template == NOTIFY_TEMPLATE_TEXT:
         # text 模板忽略 title / deeplink。
         return "", "", DEFAULT_DEEPLINK_TITLE
-    if template == NOTIFY_TEMPLATE_MARKDOWN:
-        if not title:
+    if message.template == NOTIFY_TEMPLATE_MARKDOWN:
+        if not message.title:
             raise NotifyAcceptError(
                 kind="validation_error",
                 message=TITLE_REQUIRED_MESSAGE,
                 field="title",
             )
-        return title, "", DEFAULT_DEEPLINK_TITLE
+        return message.title, "", DEFAULT_DEEPLINK_TITLE
     # action_card
-    if not title:
+    if not message.title:
         raise NotifyAcceptError(
             kind="validation_error",
             message=TITLE_REQUIRED_MESSAGE,
             field="title",
         )
-    if not deeplink_url:
+    if not message.deeplink_url:
         raise NotifyAcceptError(
             kind="validation_error",
             message=DEEPLINK_REQUIRED_MESSAGE,
             field="deeplink_url",
         )
-    if not _is_valid_deeplink_url(deeplink_url):
+    if not _is_valid_deeplink_url(message.deeplink_url):
         raise NotifyAcceptError(
             kind="validation_error",
             message=DEEPLINK_URL_INVALID_MESSAGE,
             field="deeplink_url",
         )
-    return title, deeplink_url, deeplink_title or DEFAULT_DEEPLINK_TITLE
+    return message.title, message.deeplink_url, message.deeplink_title or DEFAULT_DEEPLINK_TITLE
 
 
 def _is_valid_deeplink_url(url: str) -> bool:
     if len(url) > NOTIFY_DEEPLINK_URL_MAX_CHARS:
         return False
     if url.startswith(HTTPS_PREFIX):
-        return len(url) > len(HTTPS_PREFIX)
+        return _is_valid_https_url(url)
     if url.startswith(DINGTALK_LINK_PREFIX):
-        # dingtalk:// 协议链内嵌 url 参数仍须 https。
-        parsed = urlparse(url)
-        query = parse_qs(parsed.query)
-        embedded = query.get("url", [""])[0]
-        return bool(embedded.startswith(HTTPS_PREFIX) and len(embedded) > len(HTTPS_PREFIX))
+        return _is_valid_dingtalk_deeplink(url)
     return False
+
+
+def _is_valid_https_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+    except ValueError:
+        return False
+    return parsed.scheme == "https" and bool(parsed.netloc) and bool(hostname)
+
+
+def _is_valid_dingtalk_deeplink(url: str) -> bool:
+    # dingtalk:// 协议链内嵌 url 参数仍须为含主机名的 https URL。
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query)
+    embedded = query.get("url", [""])[0]
+    return _is_valid_https_url(embedded)
