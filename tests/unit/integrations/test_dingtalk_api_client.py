@@ -90,14 +90,8 @@ def test_token_cache_is_scoped_by_credential_fingerprint(
         _Response(b'{"accessToken":"token-b","expireIn":7200}'),
     )
 
-    assert (
-        _client(app_key="app-a", app_secret="secret-a").get_access_token()
-        == "token-a"
-    )
-    assert (
-        _client(app_key="app-b", app_secret="secret-b").get_access_token()
-        == "token-b"
-    )
+    assert _client(app_key="app-a", app_secret="secret-a").get_access_token() == "token-a"
+    assert _client(app_key="app-b", app_secret="secret-b").get_access_token() == "token-b"
     keys = [call[0] for call in fake_cache.set_calls]
     assert len(set(keys)) == len(fake_cache.set_calls)
     assert all("app-a" not in key and "secret-a" not in key for key in keys)

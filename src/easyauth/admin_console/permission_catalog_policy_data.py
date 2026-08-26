@@ -39,9 +39,7 @@ def managed_scope_policy_context(
             "tuple[object, ...]",
             getattr(group, "_prefetched_grants", ()),
         )
-        grant_ids.extend(
-            grant.id for grant in grants if isinstance(grant, AuthorizationGroupGrant)
-        )
+        grant_ids.extend(grant.id for grant in grants if isinstance(grant, AuthorizationGroupGrant))
     app_default = ManagedScopePolicyService.get_app_default_policy(app=app)
     overrides_by_grant_id: dict[int, ManagedScopePolicy] = {}
     for policy in ManagedScopePolicy.objects.select_related("app").filter(

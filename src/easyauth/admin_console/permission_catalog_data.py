@@ -84,10 +84,7 @@ def authorization_groups_page_payload(
     payload: dict[str, JsonValue] = {
         "app_key": app.app_key,
         **list_payload(
-            [
-                authorization_group_item(group, policy_context=policy_context)
-                for group in groups
-            ],
+            [authorization_group_item(group, policy_context=policy_context) for group in groups],
         ),
         "catalog_version": app.catalog_version,
         "version": catalog_version(app),
@@ -231,8 +228,7 @@ def authorization_group_item(
         "requestable": group.requestable,
         "is_active": group.is_active,
         "grants": [
-            authorization_group_grant_item(grant, policy_context=policy_context)
-            for grant in grants
+            authorization_group_grant_item(grant, policy_context=policy_context) for grant in grants
         ],
     }
 

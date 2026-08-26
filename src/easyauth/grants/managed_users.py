@@ -23,9 +23,7 @@ from easyauth.teams.services import team_managed_user_ids
 
 MANAGED_USERS_SCOPE = "MANAGED_USERS"
 MANAGED_USERS_RESOLVER_ACTOR_ID = "managed_users_resolver"
-MANAGED_USERS_DIRECTORY_UNAVAILABLE_MESSAGE: Final = (
-    "MANAGED_USERS 解析依赖的组织目录暂不可用。"
-)
+MANAGED_USERS_DIRECTORY_UNAVAILABLE_MESSAGE: Final = "MANAGED_USERS 解析依赖的组织目录暂不可用。"
 
 if TYPE_CHECKING:
     from easyauth.accounts.models import UserMirror

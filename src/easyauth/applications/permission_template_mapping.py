@@ -46,15 +46,11 @@ def build_manifest_input(
         permission_groups=tuple(
             _permission_group_input(group) for group in payload.permission_groups
         ),
-        permissions=tuple(
-            _permission_input(permission) for permission in payload.permissions
-        ),
+        permissions=tuple(_permission_input(permission) for permission in payload.permissions),
         authorization_groups=tuple(
             _authorization_group_input(group) for group in payload.authorization_groups
         ),
-        approval_rules=tuple(
-            _approval_rule_input(rule) for rule in payload.approval_rules
-        ),
+        approval_rules=tuple(_approval_rule_input(rule) for rule in payload.approval_rules),
         lifecycle=_lifecycle_input(payload.lifecycle),
         capabilities=payload.capabilities,
     )

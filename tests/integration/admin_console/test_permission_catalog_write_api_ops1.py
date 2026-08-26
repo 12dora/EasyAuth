@@ -198,12 +198,15 @@ def test_ops1_owner_writes_authorization_group_grant_managed_scope_policy() -> N
     grant.refresh_from_db()
     assert inherited.status_code == HTTPStatus.OK
     assert grant.is_active is True
-    assert ManagedScopePolicy.objects.filter(
-        app=app,
-        target_type="authorization_group_grant",
-        authorization_group_grant=grant,
-        scope="MANAGED_USERS",
-    ).exists() is False
+    assert (
+        ManagedScopePolicy.objects.filter(
+            app=app,
+            target_type="authorization_group_grant",
+            authorization_group_grant=grant,
+            scope="MANAGED_USERS",
+        ).exists()
+        is False
+    )
     policy_audits = list(
         AuditLog.objects.filter(event_type="managed_scope_policy_updated").order_by("id"),
     )
@@ -252,12 +255,15 @@ def test_ops1_owner_writes_authorization_group_grant_managed_scope_policy() -> N
     grant.refresh_from_db()
     assert removed.status_code == HTTPStatus.OK
     assert grant.is_active is False
-    assert ManagedScopePolicy.objects.filter(
-        app=app,
-        target_type="authorization_group_grant",
-        authorization_group_grant=grant,
-        scope="MANAGED_USERS",
-    ).exists() is False
+    assert (
+        ManagedScopePolicy.objects.filter(
+            app=app,
+            target_type="authorization_group_grant",
+            authorization_group_grant=grant,
+            scope="MANAGED_USERS",
+        ).exists()
+        is False
+    )
 
 
 def test_ops1_catalog_writes_persist_bilingual_display_fields() -> None:

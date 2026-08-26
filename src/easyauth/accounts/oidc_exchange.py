@@ -238,11 +238,16 @@ def _refresh_jwks_singleflight(
 ) -> JsonObject:
     with _JWKS_CACHE_LOCK:
         entry = _JWKS_CACHE.get(cache_key)
-        if entry is not None and entry.expires_at > now and _public_key_from_jwks(
-            entry.jwks,
-            key_id=key_id,
-            algorithm=algorithm,
-        ) is not None:
+        if (
+            entry is not None
+            and entry.expires_at > now
+            and _public_key_from_jwks(
+                entry.jwks,
+                key_id=key_id,
+                algorithm=algorithm,
+            )
+            is not None
+        ):
             return entry.jwks
         jwks = _fetch_jwks(cache_key.jwks_url, timeout_seconds=timeout_seconds)
         _JWKS_CACHE[cache_key] = _JwksCacheEntry(

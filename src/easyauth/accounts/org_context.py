@@ -55,9 +55,7 @@ def _primary_department_name(value: object) -> str:
     # 使同一组部门始终解析出同一个首选值, 从源头消除假转岗。
     # 注: department_changed_at 目前不在前端展示(见 item 3), 仅作后端内部线索, 但仍需修对,
     # 以免污染数据与依赖它的转岗清除逻辑。
-    dept_dicts = [
-        cast("dict[str, object]", item) for item in departments if isinstance(item, dict)
-    ]
+    dept_dicts = [cast("dict[str, object]", item) for item in departments if isinstance(item, dict)]
     dept_dicts.sort(key=lambda dept: _string(dept.get("dept_id")))
     for department in dept_dicts:
         name = _string(department.get("name"))

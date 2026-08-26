@@ -239,9 +239,7 @@ def test_submit_rejects_direct_grant_covered_by_authorization_group() -> None:
                 user=user,
                 app=app,
                 authorization_groups=(group,),
-                direct_grants=(
-                    ScopedAccessRequestGrant(permission=permission, scope_key="SELF"),
-                ),
+                direct_grants=(ScopedAccessRequestGrant(permission=permission, scope_key="SELF"),),
                 grant_type=GRANT_TYPE_PERMANENT,
                 grant_expires_at=None,
                 reason="重复目标必须拒绝",
@@ -309,9 +307,7 @@ def test_managed_users_requires_resolved_direct_manager_as_approver() -> None:
             ),
         )
 
-    assert exc_info.value.messages == (
-        "MANAGED_USERS requests require a direct manager approver.",
-    )
+    assert exc_info.value.messages == ("MANAGED_USERS requests require a direct manager approver.",)
     assert AccessRequest.objects.count() == 0
     assert AuditLog.objects.count() == 0
 
@@ -382,8 +378,6 @@ def test_managed_users_manager_fallback_rejects_cross_source_dingtalk_userid() -
             ),
         )
 
-    assert exc_info.value.messages == (
-        "MANAGED_USERS requests require a direct manager approver.",
-    )
+    assert exc_info.value.messages == ("MANAGED_USERS requests require a direct manager approver.",)
     assert AccessRequest.objects.count() == 0
     assert AuditLog.objects.count() == 0

@@ -208,6 +208,7 @@ def test_session_revoke_rejects_malformed_envelope(
             _json_response(payload),
         ],
     )
+
     def fake_urlopen(_request: Request, *, timeout: float) -> _Response:
         _ = timeout
         return next(responses)

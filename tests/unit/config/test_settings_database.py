@@ -64,9 +64,7 @@ def test_required_env_fails_fast_for_missing_secret_key_in_production(
 def test_database_config_uses_postgresql_when_database_url_is_set() -> None:
     # Given: 本机模拟环境提供 PostgreSQL DATABASE_URL。
     environ = {
-        "DATABASE_URL": (
-            "postgresql://easyauth:easyauth_dev_password@127.0.0.1:15432/easyauth"
-        ),
+        "DATABASE_URL": ("postgresql://easyauth:easyauth_dev_password@127.0.0.1:15432/easyauth"),
     }
 
     # When: 生成 Django 数据库配置。

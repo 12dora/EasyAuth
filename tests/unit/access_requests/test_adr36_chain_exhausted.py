@@ -59,9 +59,12 @@ def test_no_active_manager_empty_approver_succeeds_superuser_pool() -> None:
     # 无钉钉绑定 / 无目录上下文 → no_active_manager(非伪造的 chain_exhausted)
     assert result.routing_reason == "no_active_manager"
     assert AccessRequest.objects.filter(pk=result.pk).exists()
-    assert AuditLog.objects.filter(
-        event_type="handover_assignee_resolution_degraded",
-    ).count() == 1
+    assert (
+        AuditLog.objects.filter(
+            event_type="handover_assignee_resolution_degraded",
+        ).count()
+        == 1
+    )
 
 
 def test_missing_manager_chain_does_not_fallback_to_legacy_manager_field() -> None:

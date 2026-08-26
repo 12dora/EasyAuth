@@ -66,8 +66,7 @@ def _resolve_mapping_entries(
     instance: ConnectorInstance,
 ) -> list[tuple[AuthorizationGroup, MappingEntryPayload]]:
     groups_by_key = {
-        group.key: group
-        for group in AuthorizationGroup.objects.filter(app_id=instance.app_id)
+        group.key: group for group in AuthorizationGroup.objects.filter(app_id=instance.app_id)
     }
     resolved: list[tuple[AuthorizationGroup, MappingEntryPayload]] = []
     seen_keys: set[str] = set()

@@ -388,8 +388,7 @@ def _access_request_page_response(page: Page[AccessRequest]) -> JsonResponse:
     failure_reasons = _access_request_failure_reasons(page.items)
     result: list[JsonValue] = []
     result.extend(
-        _access_request_item(access_request, failure_reasons)
-        for access_request in page.items
+        _access_request_item(access_request, failure_reasons) for access_request in page.items
     )
     return _json_response(
         paginated_list_payload(items=result, pagination=pagination_item(page)),

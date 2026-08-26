@@ -85,11 +85,7 @@ class UserMirror(models.Model):
         constraints: ClassVar[list[models.BaseConstraint]] = [
             models.CheckConstraint(
                 condition=(
-                    (
-                        Q(dingtalk_source_slug="")
-                        & Q(dingtalk_corp_id="")
-                        & Q(dingtalk_userid="")
-                    )
+                    (Q(dingtalk_source_slug="") & Q(dingtalk_corp_id="") & Q(dingtalk_userid=""))
                     | (
                         ~Q(dingtalk_source_slug="")
                         & ~Q(dingtalk_corp_id="")
@@ -101,9 +97,7 @@ class UserMirror(models.Model):
             models.UniqueConstraint(
                 fields=["dingtalk_source_slug", "dingtalk_corp_id", "dingtalk_userid"],
                 condition=(
-                    ~Q(dingtalk_source_slug="")
-                    & ~Q(dingtalk_corp_id="")
-                    & ~Q(dingtalk_userid="")
+                    ~Q(dingtalk_source_slug="") & ~Q(dingtalk_corp_id="") & ~Q(dingtalk_userid="")
                 ),
                 name="accounts_user_dingtalk_binding_unique",
             ),

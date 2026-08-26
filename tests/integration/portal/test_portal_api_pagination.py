@@ -177,9 +177,7 @@ def _create_grant(
 ) -> AccessGrant:
     app = App.objects.create(app_key=app_key, name=app_key)
     expires_at = (
-        timezone.now() + timedelta(days=expires_in_days)
-        if expires_in_days is not None
-        else None
+        timezone.now() + timedelta(days=expires_in_days) if expires_in_days is not None else None
     )
     grant = AccessGrant.objects.create(user=user, app=app)
     scope = AppScope.objects.create(app=app, key="GLOBAL", name="全局")

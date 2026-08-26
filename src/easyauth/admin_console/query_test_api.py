@@ -111,8 +111,7 @@ def _success_payload(
     result: PermissionQueryTestResult,
 ) -> dict[str, JsonValue]:
     groups: list[JsonValue] = [
-        {"key": group.key, "kind": group.kind, "name": group.name}
-        for group in result.groups
+        {"key": group.key, "kind": group.kind, "name": group.name} for group in result.groups
     ]
     grants: list[JsonValue] = []
     for grant in result.grants:

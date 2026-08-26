@@ -63,8 +63,7 @@ def readiness(request: HttpRequest) -> JsonResponse:
         ),
     )
     heartbeats = {
-        name: read_heartbeat(name, max_age_seconds=max_age)
-        for name, max_age in heartbeat_specs
+        name: read_heartbeat(name, max_age_seconds=max_age) for name, max_age in heartbeat_specs
     }
     checks.update({name: _heartbeat_payload(item) for name, item in heartbeats.items()})
 

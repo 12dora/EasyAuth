@@ -59,6 +59,7 @@ class PermissionSnapshot:
     catalog_version: int
     snapshot_version: str
 
+
 def resolve_user_permissions(
     *,
     user: UserSelector,

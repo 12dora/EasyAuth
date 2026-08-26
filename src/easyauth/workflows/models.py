@@ -144,6 +144,7 @@ class ApprovalTemplate(models.Model):
             )
         _validate_form_contract(self.form_schema, self.form_mapping)
 
+
 class ApprovalInstance(models.Model):
     if TYPE_CHECKING:
         app_id: ClassVar[int]

@@ -84,6 +84,7 @@ class _SendTaskRecorder:
         self.calls.append((task_name, tuple(args), countdown or None))
         return object()
 
+
 @pytest.fixture
 def sent_tasks(monkeypatch: pytest.MonkeyPatch) -> _SendTaskRecorder:
     recorder = _SendTaskRecorder()

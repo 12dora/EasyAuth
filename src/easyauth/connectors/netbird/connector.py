@@ -253,9 +253,7 @@ def _client_from_config(config: dict[str, JsonValue]) -> NetBirdClient:
 def _reconcile_options(config: dict[str, JsonValue]) -> _ReconcileOptions:
     return _ReconcileOptions(
         precreate_users=config.get("precreate_users", True) is not False,
-        block_users_without_grant=(
-            config.get("block_users_without_grant", True) is not False
-        ),
+        block_users_without_grant=(config.get("block_users_without_grant", True) is not False),
     )
 
 
@@ -281,9 +279,7 @@ def _prepare_reconcile_context(
             ),
         )
     budget.charge()
-    actual_users = {
-        user.user_id: user for user in client.list_users() if not user.is_service_user
-    }
+    actual_users = {user.user_id: user for user in client.list_users() if not user.is_service_user}
     return _ReconcileContext(
         client=client,
         budget=budget,

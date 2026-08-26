@@ -142,10 +142,7 @@ def _oidc_config_from_settings() -> OidcClientConfig:
 def _canonical_request_url(request: HttpRequest, canonical_absolute_url: str) -> str:
     current = urlsplit(request.build_absolute_uri())
     canonical = urlsplit(canonical_absolute_url)
-    if (
-        current.scheme == canonical.scheme
-        and current.netloc == canonical.netloc
-    ):
+    if current.scheme == canonical.scheme and current.netloc == canonical.netloc:
         return ""
     return urlunsplit(
         (
@@ -196,10 +193,10 @@ def _authentik_logout_url_from_issuer(issuer: str) -> str:
         return ""
     issuer_path = parsed.path.strip("/")
     issuer_segments = issuer_path.split("/")
-    if (
-        len(issuer_segments) < OIDC_ISSUER_PROVIDER_SLUG_SEGMENT_COUNT
-        or issuer_segments[:2] != ["application", "o"]
-    ):
+    if len(issuer_segments) < OIDC_ISSUER_PROVIDER_SLUG_SEGMENT_COUNT or issuer_segments[:2] != [
+        "application",
+        "o",
+    ]:
         return ""
     provider_slug = issuer_segments[2]
     if provider_slug == "":

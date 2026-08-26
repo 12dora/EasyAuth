@@ -311,9 +311,7 @@ def test_ops4_apply_grant_uses_group_snapshot_after_group_deleted() -> None:
     assert access_request.status == REQUEST_STATUS_GRANT_APPLIED
     assert AccessRequestGroup.objects.filter(access_request=access_request).count() == 0
     assert AccessGrantGroup.objects.filter(grant=grant).count() == 0
-    assert snapshot.grants == (
-        ExpandedGrant("invoice.read", "GLOBAL", "direct", "", None),
-    )
+    assert snapshot.grants == (ExpandedGrant("invoice.read", "GLOBAL", "direct", "", None),)
 
 
 def test_ops4_apply_change_uses_group_snapshot_after_target_group_deleted() -> None:
@@ -350,9 +348,7 @@ def test_ops4_apply_change_uses_group_snapshot_after_target_group_deleted() -> N
     assert grant.version == APPLIED_VERSION
     assert AccessRequestGroup.objects.filter(access_request=access_request).count() == 0
     assert AccessGrantGroup.objects.filter(grant=grant).count() == 0
-    assert snapshot.grants == (
-        ExpandedGrant("invoice.write", "GLOBAL", "direct", "", None),
-    )
+    assert snapshot.grants == (ExpandedGrant("invoice.write", "GLOBAL", "direct", "", None),)
 
 
 def test_ops4_apply_renew_deleted_target_group_enters_conflict_not_empty_mutation() -> None:

@@ -20,12 +20,8 @@ else:
     _CharFieldBase = models.CharField
     _TextFieldBase = models.TextField
 
-FIELD_ENCRYPTION_KEY_MISSING = (
-    "EASYAUTH_FIELD_ENCRYPTION_KEY 未配置, 无法加密敏感字段。"
-)
-FIELD_DECRYPTION_FAILED = (
-    "敏感字段解密失败: 密文与当前 EASYAUTH_FIELD_ENCRYPTION_KEY 不匹配。"
-)
+FIELD_ENCRYPTION_KEY_MISSING = "EASYAUTH_FIELD_ENCRYPTION_KEY 未配置, 无法加密敏感字段。"
+FIELD_DECRYPTION_FAILED = "敏感字段解密失败: 密文与当前 EASYAUTH_FIELD_ENCRYPTION_KEY 不匹配。"
 
 
 @lru_cache(maxsize=1)

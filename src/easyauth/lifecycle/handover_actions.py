@@ -94,6 +94,8 @@ def seed_asset_type_placeholders(action: HandoverAppAction) -> None:
                 "releasable": bool(item.get("releasable", False)),
             },
         )
+
+
 _RECEIVER_IS_SUBJECT_MESSAGE: Final = "receiver_is_subject"
 
 # ---------------------------------------------------------------------------

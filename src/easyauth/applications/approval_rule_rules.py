@@ -39,18 +39,14 @@ def _approval_target_errors(
     permission: _ApprovalTarget | None,
 ) -> dict[str, str]:
     errors: dict[str, str] = {}
-    target_count = sum(
-        target is not None for target in (authorization_group, permission)
-    )
+    target_count = sum(target is not None for target in (authorization_group, permission))
 
     if target_count != 1:
         message = "Approval rule must target exactly one authorization group or permission."
         errors["authorization_group"] = message
         errors["permission"] = message
     if authorization_group is not None and authorization_group.app != rule.app:
-        errors["authorization_group"] = (
-            "Authorization group must belong to the approval rule app."
-        )
+        errors["authorization_group"] = "Authorization group must belong to the approval rule app."
     if permission is not None and permission.app != rule.app:
         errors["permission"] = "Permission must belong to the approval rule app."
     return errors

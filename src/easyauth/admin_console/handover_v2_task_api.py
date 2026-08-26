@@ -102,11 +102,7 @@ def _claim_handover_task(task_id: int, *, actor_id: str) -> JsonResponse:
     if task is None:
         return not_found()
     with transaction.atomic():
-        locked = (
-            HandoverTask.objects.select_for_update()
-            .filter(pk=cast("int", task.pk))
-            .first()
-        )
+        locked = HandoverTask.objects.select_for_update().filter(pk=cast("int", task.pk)).first()
         if locked is None:
             return not_found()
         # 状态校验必须在行锁内, 防止双超管抢领/认领已关闭单(§6.3)

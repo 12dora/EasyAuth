@@ -96,9 +96,9 @@ def preview_template_import(app: App, body: bytes, imported_by: str) -> dict[str
 
 def confirm_template_import(app: App, preview_id: str, imported_by: str) -> dict[str, JsonValue]:
     match load_template_preview(preview_id):
-        case (
-            CachedTemplatePreview(app_key=cached_app_key) as cached
-        ) if cached_app_key == app.app_key:
+        case CachedTemplatePreview(app_key=cached_app_key) as cached if (
+            cached_app_key == app.app_key
+        ):
             pass
         case _:
             raise TemplateHandlerError(

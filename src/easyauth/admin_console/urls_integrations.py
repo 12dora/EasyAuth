@@ -105,4 +105,3 @@ INTEGRATION_URLPATTERNS = [
     ),
     path("api/v1/audit-logs", console_audit_logs, name="console-audit-logs"),
 ]
-

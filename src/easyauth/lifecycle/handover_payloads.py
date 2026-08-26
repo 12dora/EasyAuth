@@ -115,9 +115,7 @@ def _full_assignments(action: HandoverAppAction) -> list[dict[str, JsonValue]]:
             {
                 "id": ov.asset_id,
                 "action": ov.action,
-                "to_user_id": (
-                    ov.to_user.authentik_user_id if ov.to_user is not None else None
-                ),
+                "to_user_id": (ov.to_user.authentik_user_id if ov.to_user is not None else None),
             }
             for ov in asset_type.overrides.all()
         ]

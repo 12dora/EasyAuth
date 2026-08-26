@@ -27,9 +27,7 @@ def _is_scope_key_list(value: object) -> bool:
         return False
     items = cast("list[object]", value)
     scopes = [
-        item
-        for item in items
-        if isinstance(item, str) and APP_SCOPE_KEY_PATTERN.fullmatch(item)
+        item for item in items if isinstance(item, str) and APP_SCOPE_KEY_PATTERN.fullmatch(item)
     ]
     return len(scopes) == len(items) and len(set(scopes)) == len(scopes)
 
@@ -82,8 +80,7 @@ class AppScope(models.Model):
             raise ValidationError(
                 {
                     "key": (
-                        "App scope key must contain only uppercase letters, digits, "
-                        "or underscores."
+                        "App scope key must contain only uppercase letters, digits, or underscores."
                     ),
                 },
             )
@@ -100,14 +97,12 @@ class Permission(models.Model):
         on_delete=models.CASCADE,
         related_name="permissions",
     )
-    group: models.ForeignKey[PermissionGroup | None, PermissionGroup | None] = (
-        models.ForeignKey(
-            "applications.PermissionGroup",
-            on_delete=models.SET_NULL,
-            related_name="permissions",
-            blank=True,
-            null=True,
-        )
+    group: models.ForeignKey[PermissionGroup | None, PermissionGroup | None] = models.ForeignKey(
+        "applications.PermissionGroup",
+        on_delete=models.SET_NULL,
+        related_name="permissions",
+        blank=True,
+        null=True,
     )
     key: models.CharField[str, str] = models.CharField(max_length=128)
     name: models.CharField[str, str] = models.CharField(max_length=128)
@@ -164,9 +159,7 @@ class Permission(models.Model):
         # supported_scopes 必须是 scope key 列表; 存成字符串或字典会让
         # `scope_key in supported_scopes` 退化成子串/字典键语义("GLO" in "GLOBAL")。
         if not _is_scope_key_list(self.supported_scopes):
-            errors["supported_scopes"] = (
-                "Supported scopes must be a list of unique scope keys."
-            )
+            errors["supported_scopes"] = "Supported scopes must be a list of unique scope keys."
         elif self.is_active and not self.supported_scopes:
             errors["supported_scopes"] = "Active permission must support at least one scope."
         if errors:

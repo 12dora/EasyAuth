@@ -91,8 +91,7 @@ def test_portal_api_submits_all_direct_permissions_without_fixed_count_cap() -> 
     client, user = logged_in_client("portal-many-direct-permissions-user")
     app = App.objects.create(app_key="portal-many-direct-permissions", name="大量直接权限")
     permissions = tuple(
-        _requestable_permission(app=app, key=f"document.record.{index}")
-        for index in range(51)
+        _requestable_permission(app=app, key=f"document.record.{index}") for index in range(51)
     )
 
     # When: 员工一次申请该分类下全部权限。

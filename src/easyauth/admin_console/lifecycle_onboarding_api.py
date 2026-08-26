@@ -39,9 +39,7 @@ from easyauth.lifecycle.onboarding import onboard_user
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
 
-ONBOARDING_TEMPLATE_DELETE_BLOCKED_MESSAGE = (
-    "岗位模板包含不可变修订, 不支持删除; 请改为停用。"
-)
+ONBOARDING_TEMPLATE_DELETE_BLOCKED_MESSAGE = "岗位模板包含不可变修订, 不支持删除; 请改为停用。"
 
 
 def lifecycle_onboarding_templates(request: HttpRequest) -> JsonResponse:
@@ -51,17 +49,21 @@ def lifecycle_onboarding_templates(request: HttpRequest) -> JsonResponse:
         case JsonResponse() as response:
             return response
     if request.method == "GET":
-        templates = OnboardingTemplate.objects.select_related("current_revision").prefetch_related(
-            Prefetch(
-                "current_revision__items",
-                queryset=OnboardingTemplateRevisionItem.objects.select_related(
-                    "app",
-                    "authorization_group",
-                    "permission",
-                ).order_by("app__app_key", "id"),
-                to_attr="_prefetched_items",
-            ),
-        ).order_by("name")
+        templates = (
+            OnboardingTemplate.objects.select_related("current_revision")
+            .prefetch_related(
+                Prefetch(
+                    "current_revision__items",
+                    queryset=OnboardingTemplateRevisionItem.objects.select_related(
+                        "app",
+                        "authorization_group",
+                        "permission",
+                    ).order_by("app__app_key", "id"),
+                    to_attr="_prefetched_items",
+                ),
+            )
+            .order_by("name")
+        )
         items: list[JsonValue] = [template_item(t) for t in templates]
         return json_response({"data": items})
     if request.method == "POST":
@@ -180,9 +182,7 @@ def _write_template(
             template.description = payload.description
             template.is_active = payload.is_active
             template.save()
-        next_revision = (
-            OnboardingTemplateRevision.objects.filter(template=template).count() + 1
-        )
+        next_revision = OnboardingTemplateRevision.objects.filter(template=template).count() + 1
         revision = OnboardingTemplateRevision.objects.create(
             template=template,
             revision=next_revision,

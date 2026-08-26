@@ -155,4 +155,3 @@ CATALOG_URLPATTERNS = [
         name="console-oauth-client-create",
     ),
 ]
-

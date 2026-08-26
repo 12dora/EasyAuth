@@ -568,9 +568,7 @@ def test_test_connection_reports_probe_result(fake_client: _FakeNetBirdClient) -
 def test_external_groups_use_immutable_ids(fake_client: _FakeNetBirdClient) -> None:
     fake_client.groups = [NetBirdGroup(group_id="immutable-g1", name="VPN Users")]
 
-    groups = NetBirdConnector().list_external_groups(
-        {"api_url": "https://nb", "api_token": "t"}
-    )
+    groups = NetBirdConnector().list_external_groups({"api_url": "https://nb", "api_token": "t"})
 
     assert [(group.ref, group.name) for group in groups] == [("immutable-g1", "VPN Users")]
 

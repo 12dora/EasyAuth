@@ -21,6 +21,7 @@ from easyauth.integrations.authentik.admin_client import (
 if TYPE_CHECKING:
     from django.http import HttpRequest
 
+
 def actor_from_request(request: HttpRequest) -> ConsoleActor | None:
     authentik_user_id = _session_string(request, AUTHENTIK_SESSION_KEY)
     if authentik_user_id == "":
@@ -73,9 +74,11 @@ def _is_console_superuser(request: HttpRequest, user: UserMirror) -> bool:
     del request
     try:
         authority_groups = frozenset(
-            _string_values(AuthentikAdminClient.from_settings().user_group_names_by_uid(
-                user.authentik_user_id,
-            )),
+            _string_values(
+                AuthentikAdminClient.from_settings().user_group_names_by_uid(
+                    user.authentik_user_id,
+                )
+            ),
         )
     except AuthentikAdminError:
         return False

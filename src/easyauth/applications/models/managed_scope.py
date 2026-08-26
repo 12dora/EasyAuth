@@ -119,8 +119,7 @@ class ManagedScopePolicy(models.Model):
         errors: dict[str, str] = {}
         if self.target_type not in MANAGED_SCOPE_POLICY_TARGET_TYPES:
             errors["target_type"] = (
-                "Managed scope policy target type must be app_default "
-                "or authorization_group_grant."
+                "Managed scope policy target type must be app_default or authorization_group_grant."
             )
         elif self.target_type == MANAGED_SCOPE_POLICY_TARGET_APP_DEFAULT:
             if self.authorization_group_grant is not None:
@@ -130,9 +129,7 @@ class ManagedScopePolicy(models.Model):
         else:
             grant = self.authorization_group_grant
             if grant is None:
-                errors["authorization_group_grant"] = (
-                    "Authorization group grant target must exist."
-                )
+                errors["authorization_group_grant"] = "Authorization group grant target must exist."
             elif grant.authorization_group.app_id != self.app_id:
                 errors["authorization_group_grant"] = (
                     "Authorization group grant target must belong to the same app."

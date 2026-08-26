@@ -123,4 +123,3 @@ CORE_URLPATTERNS = [
     path("api/v1/users", console_users, name="console-users"),
     path("api/v1/user-options", console_user_options, name="console-user-options"),
 ]
-

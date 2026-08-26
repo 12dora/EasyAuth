@@ -74,8 +74,8 @@ class ConnectorInstance(models.Model):
     enabled: models.BooleanField[bool, bool] = models.BooleanField(default=False)
     # 完整配置 JSON(含 x-secret 字段)静态加密落库; 读接口不回显敏感字段。
     config_encrypted: EncryptedTextField = EncryptedTextField(blank=True, default="")
-    reconcile_interval_seconds: models.PositiveIntegerField[int, int] = (
-        models.PositiveIntegerField(default=DEFAULT_RECONCILE_INTERVAL_SECONDS)
+    reconcile_interval_seconds: models.PositiveIntegerField[int, int] = models.PositiveIntegerField(
+        default=DEFAULT_RECONCILE_INTERVAL_SECONDS
     )
     last_reconcile_at: models.DateTimeField[
         str | date | datetime | None,
@@ -105,8 +105,8 @@ class ConnectorInstance(models.Model):
         blank=True,
         default="",
     )
-    reconcile_generation: models.PositiveBigIntegerField[int, int] = (
-        models.PositiveBigIntegerField(default=0)
+    reconcile_generation: models.PositiveBigIntegerField[int, int] = models.PositiveBigIntegerField(
+        default=0
     )
     reconciled_generation: models.PositiveBigIntegerField[int, int] = (
         models.PositiveBigIntegerField(default=0)
@@ -209,14 +209,12 @@ class ConnectorMapping(models.Model):
     authorization_group: models.ForeignKey[
         AuthorizationGroup | None,
         AuthorizationGroup | None,
-    ] = (
-        models.ForeignKey(
-            AuthorizationGroup,
-            on_delete=models.SET_NULL,
-            related_name="connector_mappings",
-            blank=True,
-            null=True,
-        )
+    ] = models.ForeignKey(
+        AuthorizationGroup,
+        on_delete=models.SET_NULL,
+        related_name="connector_mappings",
+        blank=True,
+        null=True,
     )
     external_ref: models.CharField[str, str] = models.CharField(max_length=255)
     external_name: models.CharField[str, str] = models.CharField(max_length=255, blank=True)

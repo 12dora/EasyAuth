@@ -164,5 +164,6 @@ def assert_org_context(
     ):
         raise AuthentikDirectoryUnavailableError(DIRECTORY_CONTRACT_MESSAGE)
 
+
 def _string(value: object) -> str:
     return value if isinstance(value, str) else ""

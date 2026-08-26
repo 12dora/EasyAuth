@@ -187,8 +187,8 @@ def _managed_scope_blocking_app_ids(app_ids: tuple[int, ...]) -> set[int]:
     }
     overrides_by_grant_id: dict[int, ManagedScopePolicy] = {}
     for policy in ManagedScopePolicy.objects.filter(
-            app_id__in=app_ids,
-            target_type=MANAGED_SCOPE_POLICY_TARGET_AUTHORIZATION_GROUP_GRANT,
+        app_id__in=app_ids,
+        target_type=MANAGED_SCOPE_POLICY_TARGET_AUTHORIZATION_GROUP_GRANT,
     ):
         grant_id = cast("int | None", getattr(policy, "authorization_group_grant_id", None))
         if grant_id is not None:
@@ -342,11 +342,7 @@ def _authorization_group_grant_issues(app: App) -> list[ConfigurationIssue]:
 
 
 def _authorization_group_grant_subject(grant: AuthorizationGroupGrant) -> str:
-    return (
-        f"{grant.authorization_group.key}:"
-        f"{grant.permission.key}:"
-        f"{grant.scope_key}"
-    )
+    return f"{grant.authorization_group.key}:{grant.permission.key}:{grant.scope_key}"
 
 
 def _managed_scope_policy_issues(app: App) -> list[ConfigurationIssue]:

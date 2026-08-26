@@ -100,8 +100,7 @@ def test_portal_items_maps_hook_status_to_reason(status_code: int, reason: str) 
         side_effect=HookCallError(f"HTTP {status_code}", status_code=status_code),
     ):
         resp = client.get(
-            f"/portal/api/v1/handover-tasks/{task.id}/actions/{app.app_key}"
-            f"/assets/customer/items",
+            f"/portal/api/v1/handover-tasks/{task.id}/actions/{app.app_key}/assets/customer/items",
         )
     assert resp.status_code == status_code, resp.content.decode()
     body = resp.json()

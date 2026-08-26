@@ -466,8 +466,7 @@ def test_portal_request_catalog_returns_active_approver_options_and_defaults() -
     assert response.status_code == HTTPStatus.OK
     option_ids = {option["user_id"] for option in payload["approver_options"]}
     app_defaults = {
-        app_item["app_key"]: app_item["default_approver_user_ids"]
-        for app_item in payload["apps"]
+        app_item["app_key"]: app_item["default_approver_user_ids"] for app_item in payload["apps"]
     }
     group_defaults = {
         group_item["key"]: group_item["default_approver_user_ids"]
@@ -575,8 +574,7 @@ def test_portal_request_catalog_queries_only_candidate_approvers() -> None:
     candidate_queries = [
         query["sql"]
         for query in captured.captured_queries
-        if "accounts_usermirror" in query["sql"]
-        and rule_approver.authentik_user_id in query["sql"]
+        if "accounts_usermirror" in query["sql"] and rule_approver.authentik_user_id in query["sql"]
     ]
     assert response.status_code == HTTPStatus.OK
     assert len(candidate_queries) == 1

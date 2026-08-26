@@ -86,6 +86,8 @@ NOTIFY_ERROR_DINGTALK_DAILY_LIMIT: Final = "DINGTALK_DAILY_LIMIT"
 NOTIFY_ERROR_EXHAUSTED: Final = "EXHAUSTED"
 
 CREDENTIAL_TYPE_STATIC_TOKEN: Final = "static_token"  # noqa: S105 - 凭据类型枚举, 非密钥。
+
+
 class NotifyMessage(models.Model):
     # 一次 POST /notify/messages 调用 = 一行。公开 message_id 即 UUID 主键。
     if TYPE_CHECKING:
@@ -302,9 +304,7 @@ class NotifyRecipient(models.Model):
                     "dingtalk_userid",
                 ],
                 condition=(
-                    ~Q(dingtalk_userid="")
-                    & ~Q(dingtalk_source_slug="")
-                    & ~Q(dingtalk_corp_id="")
+                    ~Q(dingtalk_userid="") & ~Q(dingtalk_source_slug="") & ~Q(dingtalk_corp_id="")
                 ),
                 name="notify_recipient_scoped_target_unique",
             ),
@@ -322,10 +322,7 @@ class NotifyRecipient(models.Model):
             models.CheckConstraint(
                 condition=(
                     ~Q(status=NOTIFY_RECIPIENT_STATUS_FAILED)
-                    | (
-                        Q(status=NOTIFY_RECIPIENT_STATUS_FAILED)
-                        & ~Q(error_code="")
-                    )
+                    | (Q(status=NOTIFY_RECIPIENT_STATUS_FAILED) & ~Q(error_code=""))
                 ),
                 name="notify_recipient_failed_error_code_shape",
             ),

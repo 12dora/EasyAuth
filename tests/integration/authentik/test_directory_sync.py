@@ -524,10 +524,13 @@ def test_one_offboarding_kind_conflict_does_not_rollback_other_departures() -> N
     ).exists()
     deferred = OutboxEvent.objects.get(task_name=RETRY_OFFBOARDING_TASK_NAME)
     assert deferred.args[0] == conflicted.pk
-    assert DingTalkDirectorySyncState.objects.get(
-        source_slug="dingtalk",
-        corp_id="corp-1",
-    ).generation == client_stub.generation
+    assert (
+        DingTalkDirectorySyncState.objects.get(
+            source_slug="dingtalk",
+            corp_id="corp-1",
+        ).generation
+        == client_stub.generation
+    )
 
 
 def test_directory_sync_normalizes_inactive_user_to_disabled() -> None:

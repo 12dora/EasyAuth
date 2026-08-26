@@ -71,9 +71,7 @@ def test_superuser_creates_team_and_manages_members() -> None:
     assert first_team["member_count"] == EXPECTED_MEMBER_COUNT
     assert first_team["leaders"] == [{"user_id": "teams-leader", "name": "张三"}]
     assert AuditLog.objects.filter(event_type="team_created").exists()
-    assert (
-        AuditLog.objects.filter(event_type="team_member_added").count() == EXPECTED_MEMBER_COUNT
-    )
+    assert AuditLog.objects.filter(event_type="team_member_added").count() == EXPECTED_MEMBER_COUNT
 
 
 def test_superuser_updates_member_role_and_removes_member() -> None:

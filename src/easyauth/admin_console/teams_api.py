@@ -344,9 +344,7 @@ def _team_detail_payload(team: Team) -> dict[str, JsonValue]:
 
 def _team_item_from_members(team: Team, members: list[TeamMember]) -> dict[str, JsonValue]:
     leaders: list[JsonValue] = [
-        _member_user_summary(member)
-        for member in members
-        if member.role == TEAM_MEMBER_ROLE_LEADER
+        _member_user_summary(member) for member in members if member.role == TEAM_MEMBER_ROLE_LEADER
     ]
     return {
         "id": team.id,

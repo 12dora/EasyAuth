@@ -71,9 +71,7 @@ def _project_config(
     except ConnectorConfigError as error:
         config_error = error
         config = {}
-    redacted: JsonObject = {
-        key: ("" if key in secrets else value) for key, value in config.items()
-    }
+    redacted: JsonObject = {key: ("" if key in secrets else value) for key, value in config.items()}
     projected_error: JsonObject | None = (
         {"kind": config_error.kind, "message": str(config_error)}
         if config_error is not None

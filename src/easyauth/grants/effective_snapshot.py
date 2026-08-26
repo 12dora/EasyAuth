@@ -76,8 +76,7 @@ def effective_grant_snapshot(grant: AccessGrant) -> EffectiveGrantSnapshot:
         grant=grant,
         group_ids=frozenset(group_id for group_id, _expires_at in group_rows),
         direct_grants=frozenset(
-            (permission_id, scope_key)
-            for permission_id, scope_key, _expires_at in direct_rows
+            (permission_id, scope_key) for permission_id, scope_key, _expires_at in direct_rows
         ),
         membership_expirations=(
             *(_expires_at for _group_id, _expires_at in group_rows),

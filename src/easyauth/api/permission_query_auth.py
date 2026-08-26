@@ -12,8 +12,7 @@ from easyauth.applications.services import AppPrincipal
 _PERMISSION_QUERY_TTL_SETTING: Final = "EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS"
 _DEFAULT_PERMISSION_QUERY_TTL_SECONDS: Final = 300
 _INVALID_TTL_ERROR: Final = (
-    f"{_PERMISSION_QUERY_TTL_SETTING} 必须是正整数秒; "
-    "静默回退默认值会悄悄延长撤销窗口。"
+    f"{_PERMISSION_QUERY_TTL_SETTING} 必须是正整数秒; 静默回退默认值会悄悄延长撤销窗口。"
 )
 
 

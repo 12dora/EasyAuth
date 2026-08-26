@@ -76,9 +76,7 @@ class Command(BaseCommand):
             os.environ.get("EASYAUTH_E2E_DOWNSTREAM_SECRET", DEFAULT_SECRET).strip()
             or DEFAULT_SECRET
         )
-        handover_url = (
-            f"http://127.0.0.1:{downstream_port}/api/v1/easyauth/lifecycle/handover"
-        )
+        handover_url = f"http://127.0.0.1:{downstream_port}/api/v1/easyauth/lifecycle/handover"
 
         with transaction.atomic():
             manager = self._ensure_user(

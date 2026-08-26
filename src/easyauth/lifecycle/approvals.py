@@ -141,9 +141,7 @@ def _reassign_one_access_request(
             )
             return True
 
-        reason = (
-            ROUTING_NO_ACTIVE_MANAGER if resolution.degraded else ROUTING_CHAIN_EXHAUSTED
-        )
+        reason = ROUTING_NO_ACTIVE_MANAGER if resolution.degraded else ROUTING_CHAIN_EXHAUSTED
         _route_locked_request_to_superuser_pool(
             access_request,
             reason=reason,
@@ -233,11 +231,7 @@ def _route_request_to_superuser_pool(
     remove_subject: bool,
 ) -> bool:
     with transaction.atomic():
-        access_request = (
-            AccessRequest.objects.select_for_update()
-            .filter(pk=request_id)
-            .first()
-        )
+        access_request = AccessRequest.objects.select_for_update().filter(pk=request_id).first()
         if access_request is None or access_request.status != REQUEST_STATUS_SUBMITTED:
             return False
         _route_locked_request_to_superuser_pool(
@@ -264,9 +258,13 @@ def _route_locked_request_to_superuser_pool(
             approver_id=subject.id,
         ).delete()
     # 清空残余非 active 审批人
-    _ = AccessRequestApprover.objects.filter(access_request=access_request).exclude(
-        approver__status=USER_STATUS_ACTIVE,
-    ).delete()
+    _ = (
+        AccessRequestApprover.objects.filter(access_request=access_request)
+        .exclude(
+            approver__status=USER_STATUS_ACTIVE,
+        )
+        .delete()
+    )
     access_request.approval_routing_state = APPROVAL_ROUTING_SUPERUSER_POOL
     access_request.routing_reason = reason
     access_request.save(update_fields=["approval_routing_state", "routing_reason"])

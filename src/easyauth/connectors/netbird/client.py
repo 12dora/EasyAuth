@@ -212,9 +212,7 @@ class NetBirdClient:
             method=method,
             path=path,
             deadline=deadline,
-            max_attempts=(
-                MAX_TRANSIENT_IDEMPOTENT_ATTEMPTS if method in {"GET", "PUT"} else 1
-            ),
+            max_attempts=(MAX_TRANSIENT_IDEMPOTENT_ATTEMPTS if method in {"GET", "PUT"} else 1),
         )
         raw = self._send_with_retries(request, execution)
         if not raw:
@@ -247,15 +245,11 @@ class NetBirdClient:
                 break
             except HTTPError as error:
                 message = (
-                    f"NetBird API {execution.method} {execution.path} "
-                    f"返回 HTTP {error.code}。"
+                    f"NetBird API {execution.method} {execution.path} 返回 HTTP {error.code}。"
                 )
                 raise NetBirdApiError(message, status_code=error.code) from error
             except (URLError, TimeoutError) as error:
-                if (
-                    attempt + 1 < execution.max_attempts
-                    and monotonic() < execution.deadline
-                ):
+                if attempt + 1 < execution.max_attempts and monotonic() < execution.deadline:
                     continue
                 message = f"NetBird API 不可达: {error}"
                 raise NetBirdApiError(message) from error

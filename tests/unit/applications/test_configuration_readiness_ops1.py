@@ -24,8 +24,9 @@ from easyauth.applications.services import AppCredentialService
 pytestmark = pytest.mark.django_db
 
 
-def test_ops1_configuration_readiness_blocks_active_app_without_catalog_owner_or_credentials(
-) -> None:
+def test_ops1_configuration_readiness_blocks_active_app_without_catalog_owner_or_credentials() -> (
+    None
+):
     # Given: 一个 active App 还没有任何授权目录、负责人和可用凭据。
     app = App.objects.create(app_key="ops1-empty-app", name="OPS1 Empty App")
 
@@ -178,9 +179,7 @@ def test_ops1_configuration_readiness_blocks_inactive_grant_targets() -> None:
 
     # Then: readiness 暴露 grant 目标失效和缺少 active Permission。
     assert readiness.status == CONFIGURATION_STATUS_BLOCKING
-    assert "authorization_group_grant_target_inactive" in {
-        issue.code for issue in readiness.issues
-    }
+    assert "authorization_group_grant_target_inactive" in {issue.code for issue in readiness.issues}
 
 
 def test_ops1_configuration_readiness_warns_when_permission_group_inactive() -> None:

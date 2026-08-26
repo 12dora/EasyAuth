@@ -40,9 +40,7 @@ EXTERNAL_ACCOUNT_CONFLICT_MESSAGE: Final = "该外部账户已绑定到另一个
 RECONCILE_TASK_SOFT_TIME_LIMIT_SECONDS: Final = 840
 RECONCILE_TASK_TIME_LIMIT_SECONDS: Final = 900
 RECONCILE_LEASE_GRACE_SECONDS: Final = 120
-RECONCILE_LEASE_SECONDS: Final = (
-    RECONCILE_TASK_TIME_LIMIT_SECONDS + RECONCILE_LEASE_GRACE_SECONDS
-)
+RECONCILE_LEASE_SECONDS: Final = RECONCILE_TASK_TIME_LIMIT_SECONDS + RECONCILE_LEASE_GRACE_SECONDS
 RECONCILE_QUEUE_CLAIM_TIMEOUT_SECONDS: Final = RECONCILE_LEASE_SECONDS
 MAX_GENERATIONS_PER_WORKER: Final = 20
 
@@ -269,9 +267,7 @@ def _mark_instance_external_group_refresh_failed(
 ) -> None:
     instance.last_error = message
     instance.external_groups_refresh_status = EXTERNAL_GROUP_REFRESH_STATUS_FAILED
-    instance.save(
-        update_fields=["last_error", "external_groups_refresh_status", "updated_at"]
-    )
+    instance.save(update_fields=["last_error", "external_groups_refresh_status", "updated_at"])
 
 
 def mark_reconcile_dirty(instance_id: int, *, trigger: str) -> bool:
@@ -294,8 +290,7 @@ def mark_reconcile_dirty(instance_id: int, *, trigger: str) -> bool:
         ):
             instance.reconcile_pending_trigger = trigger
         should_queue = not _reconcile_lease_is_active(instance, now) and (
-            not instance.reconcile_worker_queued
-            or _reconcile_queue_is_stale(instance, now)
+            not instance.reconcile_worker_queued or _reconcile_queue_is_stale(instance, now)
         )
         if should_queue:
             instance.reconcile_worker_queued = True
@@ -439,10 +434,13 @@ def external_write_allowed(
     """外部写入前续租并检查 lease_token + generation fencing。"""
     if not UserMirror.objects.filter(authentik_user_id=user_id).exists():
         return False
-    if require_active_user and not UserMirror.objects.filter(
-        authentik_user_id=user_id,
-        status=USER_STATUS_ACTIVE,
-    ).exists():
+    if (
+        require_active_user
+        and not UserMirror.objects.filter(
+            authentik_user_id=user_id,
+            status=USER_STATUS_ACTIVE,
+        ).exists()
+    ):
         return False
     if instance.reconcile_lease_token is None:
         return False
@@ -470,10 +468,7 @@ def _finish_generation(instance: ConnectorInstance, *, report: ReconcileReport) 
     now = timezone.now()
     with transaction.atomic():
         locked = ConnectorInstance.objects.select_for_update().filter(id=instance.id).first()
-        if (
-            locked is None
-            or locked.reconcile_lease_token != instance.reconcile_lease_token
-        ):
+        if locked is None or locked.reconcile_lease_token != instance.reconcile_lease_token:
             return False
         if locked.reconcile_lease_expires_at is None or locked.reconcile_lease_expires_at <= now:
             locked.reconcile_dirty = True
@@ -523,9 +518,13 @@ def _complete_generation(
     )
     if not success:
         return False
-    _ = ConnectorMapping.objects.filter(instance=locked).filter(
-        Q(tombstoned=True) | Q(authorization_group__isnull=True),
-    ).delete()
+    _ = (
+        ConnectorMapping.objects.filter(instance=locked)
+        .filter(
+            Q(tombstoned=True) | Q(authorization_group__isnull=True),
+        )
+        .delete()
+    )
     if locked.tombstoned:
         _ = locked.delete()
         return False

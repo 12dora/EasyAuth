@@ -40,8 +40,7 @@ def authorization_group_target_errors(
     errors: list[str] = []
     for group in authorization_groups:
         errors.extend(
-            f"{group.key}: {message}"
-            for message in _authorization_group_error_messages(app, group)
+            f"{group.key}: {message}" for message in _authorization_group_error_messages(app, group)
         )
     return tuple(errors)
 
@@ -125,9 +124,7 @@ def _direct_grant_error_messages(
     errors: list[str] = []
     raw_supported_scopes = permission.supported_scopes
     supported_scope_values = raw_supported_scopes if isinstance(raw_supported_scopes, list) else []
-    supported_scopes = {
-        item for item in supported_scope_values if isinstance(item, str)
-    }
+    supported_scopes = {item for item in supported_scope_values if isinstance(item, str)}
     if permission.app_id != app.id:
         errors.append("Permission must belong to the access request app.")
     if not permission.is_active:

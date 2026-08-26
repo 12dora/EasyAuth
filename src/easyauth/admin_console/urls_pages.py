@@ -55,4 +55,3 @@ PAGE_URLPATTERNS = [
     path("apps/<str:app_key>", views.app_detail, name="app-detail-no-slash"),
     path("apps/<str:app_key>/", views.app_detail, name="app-detail"),
 ]
-

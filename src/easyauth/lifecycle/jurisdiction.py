@@ -120,11 +120,7 @@ def list_reassign_subject_candidates(
 
     返回 list 或 reason 字符串(directory_unavailable)。
     """
-    if (
-        not actor.dingtalk_source_slug
-        or not actor.dingtalk_corp_id
-        or not actor.dingtalk_userid
-    ):
+    if not actor.dingtalk_source_slug or not actor.dingtalk_corp_id or not actor.dingtalk_userid:
         return REASON_DIRECTORY_UNAVAILABLE
 
     # 扫描同企业 active 员工的组织上下文(非 stale)
@@ -177,13 +173,17 @@ def _reassign_candidate_users(
     q: str,
     limit: int,
 ) -> list[UserMirror]:
-    qs = UserMirror.objects.filter(
-        status=USER_STATUS_ACTIVE,
-        dingtalk_source_slug=actor.dingtalk_source_slug,
-        dingtalk_corp_id=actor.dingtalk_corp_id,
-        dingtalk_userid__in=matching_dtuids,
-    ).exclude(authentik_user_id=actor.authentik_user_id).exclude(
-        authentik_user_id__startswith=LOCAL_ADMIN_SUBJECT_PREFIX,
+    qs = (
+        UserMirror.objects.filter(
+            status=USER_STATUS_ACTIVE,
+            dingtalk_source_slug=actor.dingtalk_source_slug,
+            dingtalk_corp_id=actor.dingtalk_corp_id,
+            dingtalk_userid__in=matching_dtuids,
+        )
+        .exclude(authentik_user_id=actor.authentik_user_id)
+        .exclude(
+            authentik_user_id__startswith=LOCAL_ADMIN_SUBJECT_PREFIX,
+        )
     )
     q_stripped = q.strip()
     if q_stripped:

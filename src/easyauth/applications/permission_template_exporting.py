@@ -83,9 +83,7 @@ def export_permissions(app: App) -> list[JsonValue]:
             "risk_level": permission.risk_level,
             "is_active": permission.is_active,
         }
-        for permission in Permission.objects.filter(app=app)
-        .select_related("group")
-        .order_by("key")
+        for permission in Permission.objects.filter(app=app).select_related("group").order_by("key")
     ]
 
 

@@ -11,6 +11,8 @@ type PermissionQueryObject = Mapping[
     str,
     PermissionQueryScalar | list[str] | PermissionQueryResolvedObject,
 ]
+
+
 class PermissionQueryGroupPayload(TypedDict):
     key: str
     kind: str

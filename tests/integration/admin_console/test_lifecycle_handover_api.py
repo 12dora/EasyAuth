@@ -89,9 +89,7 @@ def test_handover_task_list_exposes_delete_allowed_action_only_for_cancelled() -
     data = body["data"]
     assert isinstance(data, list)
     actions_by_status = {
-        str(item["status"]): item["allowed_actions"]
-        for item in data
-        if isinstance(item, dict)
+        str(item["status"]): item["allowed_actions"] for item in data if isinstance(item, dict)
     }
     assert actions_by_status["pending"] == []
     assert actions_by_status["in_progress"] == []
@@ -535,12 +533,8 @@ def test_confirmed_transfer_diff_is_idempotent_and_conflicts_on_other_payload() 
     assert _int_field(response_plan, "revision") == plan.revision
     response_add_diff = _list_field(_object_field(response_plan, "grant_diff"), "add")
     detail_add_diff = _list_field(_object_field(detail_plan, "grant_diff"), "add")
-    assert _diff_selection_rows(response_add_diff) == [
-        (key, "订单查看", False) for key in add_keys
-    ]
-    assert _diff_selection_rows(detail_add_diff) == [
-        (key, "订单查看", False) for key in add_keys
-    ]
+    assert _diff_selection_rows(response_add_diff) == [(key, "订单查看", False) for key in add_keys]
+    assert _diff_selection_rows(detail_add_diff) == [(key, "订单查看", False) for key in add_keys]
     assert AccessGrant.objects.filter(user=subject, app=app).count() == grant_count_after_first
     assert conflicting_response.status_code == HTTPStatus.CONFLICT
 
