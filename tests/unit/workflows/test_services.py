@@ -29,6 +29,7 @@ from easyauth.workflows.models import (
 )
 from easyauth.workflows.services import (
     ApprovalCreateError,
+    ApprovalCreateRequest,
     ApprovalInstanceNotFoundError,
     apply_instance_callback,
     create_approval_instance,
@@ -99,6 +100,31 @@ def _originator(user_id: str) -> UserMirror:
     )
 
 
+def _create(  # noqa: PLR0913 - 测试夹具按原 create 参数铺开, 避免每处重复构造 request。
+    app: App,
+    *,
+    originator_user_id: str,
+    biz_key: str,
+    template_key: str = "expense",
+    form: dict[str, object] | None = None,
+    actor_id: str | None = None,
+    selected_template: ApprovalTemplate | None = None,
+    retry_failed: bool = False,
+) -> tuple[ApprovalInstance, bool]:
+    return create_approval_instance(
+        ApprovalCreateRequest(
+            app=app,
+            template_key=template_key,
+            originator_user_id=originator_user_id,
+            form={} if form is None else form,
+            biz_key=biz_key,
+            actor_id=app.app_key if actor_id is None else actor_id,
+            selected_template=selected_template,
+            retry_failed=retry_failed,
+        ),
+    )
+
+
 def test_create_approval_instance_submits_with_mapped_form(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -112,13 +138,11 @@ def test_create_approval_instance_submits_with_mapped_form(
     )
 
     # When
-    instance, created = create_approval_instance(
-        app=app,
-        template_key="expense",
+    instance, created = _create(
+        app,
         originator_user_id="wf-create-user",
         form={"amount": "1000", "备注": "差旅"},
         biz_key="order-1",
-        actor_id=app.app_key,
     )
 
     # Then: 表单按 form_mapping 换名, 未映射字段按原名透传; 实例进入 submitted。
@@ -144,23 +168,17 @@ def test_create_approval_instance_is_idempotent_per_biz_key(
         "easyauth.workflows.services.DingTalkApiClient.from_settings",
         lambda: fake,
     )
-    first, _ = create_approval_instance(
-        app=app,
-        template_key="expense",
+    first, _ = _create(
+        app,
         originator_user_id="wf-idem-user",
-        form={},
         biz_key="order-dup",
-        actor_id=app.app_key,
     )
 
     # When: 重复发起。
-    second, created = create_approval_instance(
-        app=app,
-        template_key="expense",
+    second, created = _create(
+        app,
         originator_user_id="wf-idem-user",
-        form={},
         biz_key="order-dup",
-        actor_id=app.app_key,
     )
 
     # Then: 只有一个实例, 钉钉只被调用一次。
@@ -183,13 +201,10 @@ def test_create_approval_instance_marks_ambiguous_when_dingtalk_unavailable(
 
     # When / Then: 网络失败无法判断远端是否创建, 必须落 ambiguous 并禁止盲目重试。
     with pytest.raises(ApprovalCreateError) as exc_info:
-        _ = create_approval_instance(
-            app=app,
-            template_key="expense",
+        _ = _create(
+            app,
             originator_user_id="wf-fail-user",
-            form={},
             biz_key="order-fail",
-            actor_id=app.app_key,
         )
     instance = ApprovalInstance.objects.get(app=app, biz_key="order-fail")
     assert exc_info.value.kind == "dependency_unavailable"
@@ -208,25 +223,19 @@ def test_failed_submission_requires_explicit_locked_retry(
         lambda: _RejectedDingTalkClient(),
     )
     with pytest.raises(ApprovalCreateError):
-        _ = create_approval_instance(
-            app=app,
-            template_key="expense",
+        _ = _create(
+            app,
             originator_user_id="wf-explicit-retry-user",
-            form={},
             biz_key="retry-1",
-            actor_id=app.app_key,
         )
     failed = ApprovalInstance.objects.get(app=app)
     assert failed.submission_state == SUBMISSION_STATE_FAILED
 
     with pytest.raises(ApprovalCreateError) as retry_required:
-        _ = create_approval_instance(
-            app=app,
-            template_key="expense",
+        _ = _create(
+            app,
             originator_user_id="wf-explicit-retry-user",
-            form={},
             biz_key="retry-1",
-            actor_id=app.app_key,
         )
     assert retry_required.value.kind == "conflict"
 
@@ -235,13 +244,10 @@ def test_failed_submission_requires_explicit_locked_retry(
         "easyauth.workflows.services.DingTalkApiClient.from_settings",
         lambda: fake,
     )
-    retried, created = create_approval_instance(
-        app=app,
-        template_key="expense",
+    retried, created = _create(
+        app,
         originator_user_id="wf-explicit-retry-user",
-        form={},
         biz_key="retry-1",
-        actor_id=app.app_key,
         retry_failed=True,
     )
     assert created is False
@@ -260,13 +266,11 @@ def test_idempotency_key_rejects_different_originator_or_form(
         "easyauth.workflows.services.DingTalkApiClient.from_settings",
         lambda: fake,
     )
-    _ = create_approval_instance(
-        app=app,
-        template_key="expense",
+    _ = _create(
+        app,
         originator_user_id="wf-payload-user-a",
         form={"amount": "100"},
         biz_key="same-key",
-        actor_id=app.app_key,
     )
 
     for originator_user_id, form in (
@@ -274,13 +278,11 @@ def test_idempotency_key_rejects_different_originator_or_form(
         ("wf-payload-user-a", {"amount": "200"}),
     ):
         with pytest.raises(ApprovalCreateError) as exc_info:
-            _ = create_approval_instance(
-                app=app,
-                template_key="expense",
+            _ = _create(
+                app,
                 originator_user_id=originator_user_id,
                 form=form,
                 biz_key="same-key",
-                actor_id=app.app_key,
             )
         assert exc_info.value.kind == "conflict"
     assert len(fake.created) == 1
@@ -304,13 +306,11 @@ def test_form_schema_rejects_missing_wrong_type_and_unknown_field(
     invalid_forms = ({}, {"amount": "100"}, {"amount": 100, "unknown": True})
     for index, form in enumerate(invalid_forms):
         with pytest.raises(ApprovalCreateError) as exc_info:
-            _ = create_approval_instance(
-                app=app,
-                template_key="expense",
+            _ = _create(
+                app,
                 originator_user_id="wf-form-schema-user",
                 form=form,
                 biz_key=f"invalid-{index}",
-                actor_id=app.app_key,
             )
         assert exc_info.value.kind == "validation_error"
     assert fake.created == []
@@ -334,13 +334,10 @@ def test_early_callback_is_persisted_and_applied_after_process_id_save(
         "easyauth.workflows.services.DingTalkApiClient.from_settings",
         lambda: _EarlyCallbackClient(),
     )
-    instance, _created = create_approval_instance(
-        app=app,
-        template_key="expense",
+    instance, _created = _create(
+        app,
         originator_user_id="wf-early-callback-user",
-        form={},
         biz_key="early-1",
-        actor_id=app.app_key,
     )
     pending.refresh_from_db()
     assert instance.status == APPROVAL_STATUS_APPROVED
@@ -405,9 +402,12 @@ def test_completion_and_unique_delivery_event_are_repaired_idempotently() -> Non
     assert instance.completion_delivery_id is not None
     delivery = WebhookDelivery.objects.get(id=instance.completion_delivery_id)
     assert WebhookDelivery.objects.filter(app=app).count() == 1
-    assert OutboxEvent.objects.filter(
-        event_key=f"webhook-delivery:{delivery.delivery_id}:{delivery.generation}",
-    ).count() == 1
+    assert (
+        OutboxEvent.objects.filter(
+            event_key=f"webhook-delivery:{delivery.delivery_id}:{delivery.generation}",
+        ).count()
+        == 1
+    )
 
 
 def test_stale_submitting_command_recovers_to_ambiguous(
@@ -420,13 +420,10 @@ def test_stale_submitting_command_recovers_to_ambiguous(
         "easyauth.workflows.services.DingTalkApiClient.from_settings",
         lambda: fake,
     )
-    instance, _created = create_approval_instance(
-        app=app,
-        template_key="expense",
+    instance, _created = _create(
+        app,
         originator_user_id="wf-stale-submission-user",
-        form={},
         biz_key="stale-1",
-        actor_id=app.app_key,
     )
     _ = ApprovalInstance.objects.filter(id=instance.id).update(
         dingtalk_process_instance_id="",
@@ -436,13 +433,10 @@ def test_stale_submitting_command_recovers_to_ambiguous(
     )
 
     with pytest.raises(ApprovalCreateError) as exc_info:
-        _ = create_approval_instance(
-            app=app,
-            template_key="expense",
+        _ = _create(
+            app,
             originator_user_id="wf-stale-submission-user",
-            form={},
             biz_key="stale-1",
-            actor_id=app.app_key,
         )
     instance.refresh_from_db()
     assert exc_info.value.kind == "conflict"
@@ -490,31 +484,23 @@ def test_create_approval_instance_validates_template_and_originator() -> None:
 
     # When / Then: 模板不存在、缺钉钉绑定、离职发起人都被明确拒绝。
     with pytest.raises(ApprovalCreateError) as missing_template:
-        _ = create_approval_instance(
-            app=app,
+        _ = _create(
+            app,
             template_key="missing",
             originator_user_id="wf-no-dingtalk",
-            form={},
             biz_key="b1",
-            actor_id=app.app_key,
         )
     with pytest.raises(ApprovalCreateError) as no_binding:
-        _ = create_approval_instance(
-            app=app,
-            template_key="expense",
+        _ = _create(
+            app,
             originator_user_id="wf-no-dingtalk",
-            form={},
             biz_key="b2",
-            actor_id=app.app_key,
         )
     with pytest.raises(ApprovalCreateError) as departed:
-        _ = create_approval_instance(
-            app=app,
-            template_key="expense",
+        _ = _create(
+            app,
             originator_user_id="wf-departed",
-            form={},
             biz_key="b3",
-            actor_id=app.app_key,
         )
     assert missing_template.value.kind == "template_not_found"
     assert no_binding.value.kind == "originator_invalid"
@@ -539,13 +525,11 @@ def test_platform_template_is_shared_across_apps(monkeypatch: pytest.MonkeyPatch
     )
 
     # When
-    instance, created = create_approval_instance(
-        app=app,
+    instance, created = _create(
+        app,
         template_key="generic",
         originator_user_id="wf-platform-user",
-        form={},
         biz_key="p1",
-        actor_id=app.app_key,
     )
 
     # Then
@@ -579,11 +563,10 @@ def test_selected_platform_template_is_not_replaced_by_app_template(
     )
 
     # When: 控制台明确指定平台模板发起测试。
-    instance, created = create_approval_instance(
-        app=app,
+    instance, created = _create(
+        app,
         template_key=platform_template.key,
         originator_user_id="wf-selected-platform-user",
-        form={},
         biz_key="selected-platform",
         actor_id="console:test-admin",
         selected_template=platform_template,
@@ -611,13 +594,12 @@ def test_create_approval_instance_rejects_non_string_form_mapping(
 
     # When / Then: 运行时快速失败, 不静默退回原字段名。
     with pytest.raises(ApprovalCreateError) as exc_info:
-        _ = create_approval_instance(
-            app=app,
+        _ = _create(
+            app,
             template_key=template.key,
             originator_user_id="wf-invalid-mapping-user",
             form={"amount": "100"},
             biz_key="invalid-mapping",
-            actor_id=app.app_key,
         )
     assert exc_info.value.kind == "validation_error"
     assert fake.created == []

@@ -18,6 +18,7 @@ from easyauth.config.rate_limit import client_ip, over_limit, rate_limit_exceede
 from easyauth.workflows.models import ApprovalInstance, ApprovalTemplate
 from easyauth.workflows.services import (
     ApprovalCreateError,
+    ApprovalCreateRequest,
     create_approval_instance,
     recover_stale_submission,
     recover_stale_submissions,
@@ -176,13 +177,15 @@ def _create_approval_instance(request: HttpRequest, app_key: str) -> JsonRespons
         )
     try:
         instance, created = create_approval_instance(
-            app=app,
-            template_key=payload.template_key,
-            originator_user_id=payload.originator_user_id,
-            form=dict(payload.form),
-            biz_key=payload.biz_key,
-            actor_id=app.app_key,
-            retry_failed=payload.retry,
+            ApprovalCreateRequest(
+                app=app,
+                template_key=payload.template_key,
+                originator_user_id=payload.originator_user_id,
+                form=dict(payload.form),
+                biz_key=payload.biz_key,
+                actor_id=app.app_key,
+                retry_failed=payload.retry,
+            ),
         )
     except ApprovalCreateError as exc:
         return _create_error_response(exc)

@@ -22,6 +22,7 @@ from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.workflows.models import ApprovalTemplate
 from easyauth.workflows.services import (
     ApprovalCreateError,
+    ApprovalCreateRequest,
     create_approval_instance,
 )
 
@@ -137,13 +138,15 @@ def _run_template_test(
             return response
     try:
         instance, _created = create_approval_instance(
-            app=app,
-            template_key=template.key,
-            originator_user_id=payload.originator_user_id,
-            form=dict(payload.form),
-            biz_key=f"console-test-{actor_id}-{template.id}-{uuid.uuid4().hex[:8]}",
-            actor_id=f"console:{actor_id}",
-            selected_template=template,
+            ApprovalCreateRequest(
+                app=app,
+                template_key=template.key,
+                originator_user_id=payload.originator_user_id,
+                form=dict(payload.form),
+                biz_key=f"console-test-{actor_id}-{template.id}-{uuid.uuid4().hex[:8]}",
+                actor_id=f"console:{actor_id}",
+                selected_template=template,
+            ),
         )
     except ApprovalCreateError as exc:
         return _validation_error(str(exc))
