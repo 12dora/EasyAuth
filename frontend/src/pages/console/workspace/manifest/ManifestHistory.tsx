@@ -61,6 +61,8 @@ export function ManifestHistory({ state }: { state: ReturnType<typeof useManifes
         emptyDescription="确认导入清单后会在这里记录版本。"
         emptyTitle="暂无版本历史"
         loading={query.isLoading}
+        // 固定列 200(版本) + 170(导入时间) = 370, 唯一的弹性列(导入人)留 240 -> 610。
+        minWidth={610}
         rowKey={(row) => `${row.catalog_version ?? row.version ?? ""}:${row.imported_at ?? row.created_at ?? ""}`}
       />
     </div>

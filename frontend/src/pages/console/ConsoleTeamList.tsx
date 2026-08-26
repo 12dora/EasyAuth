@@ -5,13 +5,19 @@ import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { AppTable, serverTableQuery, useServerTable, type ColumnsType } from "../../components/antd/AppTable";
-import { actionsColumn, dateTimeColumn, statusColumn, textColumn } from "../../components/antd/columns";
+import {
+  RowActionButton,
+  RowActionLink,
+  actionsColumn,
+  dateTimeColumn,
+  statusColumn,
+  textColumn,
+} from "../../components/antd/columns";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { PageState } from "../../components/ui/PageState";
 import { useToast } from "../../components/ui/Toast";
 
 import { Button } from "../../components/Button";
-import { ButtonLink } from "../../components/ButtonLink";
 import { Dialog } from "../../components/Dialog";
 import { Field, TextArea, TextInput } from "../../components/Field";
 import { PageHeader } from "../../components/PageHeader";
@@ -116,21 +122,19 @@ export function ConsoleTeamList() {
       actionsColumn<TeamSummary>({
         render: (team) => (
           <>
-            <ButtonLink
+            <RowActionLink
               href={`/console/teams/${team.id}`}
               icon={<ArrowRight size={15} />}
-              size="sm"
-              variant="ghost"
               onClick={(event) => {
                 event.preventDefault();
                 void navigate(`/console/teams/${team.id}`);
               }}
             >
               {t("console.teams.view")}
-            </ButtonLink>
-            <Button type="button" size="sm" variant="ghost-danger" onClick={() => setDeleteTarget(team)}>
+            </RowActionLink>
+            <RowActionButton type="button" variant="ghost-danger" onClick={() => setDeleteTarget(team)}>
               {t("common.delete")}
-            </Button>
+            </RowActionButton>
           </>
         ),
       }),

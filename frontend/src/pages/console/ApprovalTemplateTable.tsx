@@ -3,13 +3,13 @@ import { useMemo } from "react";
 import { AppTable, textFilter, type ColumnsType, type ColumnType } from "../../components/antd/AppTable";
 import {
   MONO_TEXT_CLASS,
+  RowActionButton,
   actionsColumn,
   dateTimeColumn,
   statusColumn,
   textColumn,
 } from "../../components/antd/columns";
 import { Badge } from "../../components/Badge";
-import { Button } from "../../components/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
 
 import { useI18n } from "../../i18n/I18nProvider";
@@ -80,15 +80,15 @@ function templateColumns(t: Translator, actions: ApprovalTemplateRowActions): Co
       width: 280,
       render: (template) => (
         <>
-          <Button type="button" size="sm" variant="ghost" onClick={() => actions.onEdit(template)}>
+          <RowActionButton type="button" onClick={() => actions.onEdit(template)}>
             {t("common.edit")}
-          </Button>
-          <Button type="button" size="sm" variant="ghost" onClick={() => actions.onTest(template)}>
+          </RowActionButton>
+          <RowActionButton type="button" onClick={() => actions.onTest(template)}>
             {t("approvalTemplates.test.action")}
-          </Button>
-          <Button type="button" size="sm" variant="ghost-danger" onClick={() => actions.onDelete(template)}>
+          </RowActionButton>
+          <RowActionButton type="button" variant="ghost-danger" onClick={() => actions.onDelete(template)}>
             {t("common.delete")}
-          </Button>
+          </RowActionButton>
         </>
       ),
     }),

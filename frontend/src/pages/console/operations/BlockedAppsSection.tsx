@@ -64,6 +64,8 @@ function BlockedAppsTable({ apps, isLoading }: { apps: BlockedApp[]; isLoading: 
       dataSource={apps}
       emptyTitle={t("handover.console.blockedApps.empty")}
       loading={isLoading}
+      // 固定列 220(阻塞交接单数) + 唯一的弹性列(应用)240 -> 460。
+      minWidth={460}
       rowKey="app_key"
     />
   );

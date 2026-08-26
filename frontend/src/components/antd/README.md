@@ -21,6 +21,7 @@
   dataSource={Row[]}
   rowKey="id"                    // 必填
   loading?={boolean}
+  ariaLabel?={string}            // 视觉隐藏的 <caption>, 即表格的可及名称
   minWidth?={number | "max-content"}
   sticky?={boolean | { offsetHeader?: number }}
   pagination?={TablePaginationConfig | false}
@@ -41,9 +42,32 @@ AppTable 独占的布局约定（**页面不要重复传**）：
 | 横向滚动 | `scroll.x` 恒有值：页面传的 `scroll.x` > `minWidth` > `"max-content"` |
 | 空态 | 复用 `components/ui/EmptyState`，默认标题 `table.empty.title` |
 | 加载态 | 透传 `loading`，用 antd 自带 Spin |
-| 分页 | `position: ["bottomRight"]`、`size="small"`、`showSizeChanger`、`pageSizeOptions [10,20,50,100]`、`defaultPageSize 10`、`showTotal` = `第 x-y 条 / 共 z 条`；全部渲染在同一个 `ul.ant-pagination` 里 |
+| 分页 | `position: ["bottomRight"]`、`size="small"`、`showSizeChanger`、`pageSizeOptions [10,20,50,100]`、`defaultPageSize 10`、`showTotal` = `第 x-y 条 / 共 z 条`；全部渲染在同一个 `ul.ant-pagination` 里，且**真的只有一行**（见下） |
+| 可及名称 | `ariaLabel` -> 视觉隐藏的原生 `<caption>` |
 
 用 `actionsColumn`（固定右列）时**必须**同时传 `minWidth`，否则 antd 无法固定列。
+
+### 单行分页与 `.ant-pagination`
+
+antd 给 `.ant-pagination` 写死 `flex-wrap: wrap`，容器一窄「共 x 条 / 页码 / 每页条数」
+就会折成两三行。AppTable 统一给分页挂 `APP_TABLE_PAGINATION_CLASS`
+（`app-table-pagination`），规则在 `src/styles/features/app-table.css`：
+`flex-wrap: nowrap` + 子项 `flex: none` + 分页条自身 `overflow-x: auto`
+（放不下时是分页条横向滚动，而不是换行或把文案挤成两行）。
+class 名与选择器必须成对存在，`AppTable.test.tsx` 会把那张样式表读进 jsdom，
+用 `getComputedStyle` 断言规则真的命中了元素。
+
+同一份样式表还负责隐藏 `.ant-table-caption`：用「视觉隐藏」（`position: absolute` +
+`clip-path`）而不是 `display: none`，否则 `ariaLabel` 的名字会一起从无障碍树里消失。
+
+### 表格的可及名称 `ariaLabel`
+
+一个页面上有多张结构相近的表（门户的授权 / 申请 / 审批）时，屏幕阅读器只会念
+"table"，用户无从分辨。`ariaLabel` 走 antd/rc-table 的 `caption` 属性渲染成原生
+`<caption>`——那是 HTML 给表格命名的方式，直接成为 `role="table"` 的可及名称，
+不需要额外的 `aria-label` 或包一层 `role="region"`。文案照常走 i18n
+（门户三张表是 `portal.grants.ariaLabel` / `portal.requests.ariaLabel` /
+`portal.approvals.ariaLabel`）。
 
 ### 为什么 `scroll.x` 永远有值
 
@@ -54,9 +78,14 @@ AppTable 独占的布局约定（**页面不要重复传**）：
 不写 `width` 的列会被压到 0px，整列文字消失。
 
 所以缺省回落到 `"max-content"`：列按内容取宽，表格自身仍带 antd 写死的 `min-width: 100%`，
-宽屏下照常铺满容器。**列宽之和已经明确的表格仍然应该传 `minWidth` 像素数** ——
-那样列宽由你决定，`ellipsis` 也照旧生效；`"max-content"` 只是「没人声明」时的安全兜底
-（代价是 `ellipsis` 列不再截断，表格可能比容器宽）。
+宽屏下照常铺满容器。**新表格一律要传 `minWidth` 像素数**，`"max-content"` 只是
+「没人声明」时的安全兜底，代价有两条：`ellipsis` 列不再截断（内容多宽列就多宽），
+表格也可能比卡片宽（门户授权表实测 1249px 挤在 960px 的卡片里）。
+
+取值口径：**所有定宽列的 `width` 之和 + 每个不定宽列约 240**。
+算出来比卡片窄时，`table { min-width: 100% }` 会把表格拉满，多出来的宽度落在
+不定宽列上——也就是「桌面端刚好铺满、窄屏才局部横向滚动」。
+（换行展示的列，即 `ellipsis: false`，按 180 估更贴近实际。）
 
 常量：`APP_TABLE_PAGE_SIZE_OPTIONS`、`APP_TABLE_DEFAULT_PAGE_SIZE`。
 类型再导出：`ColumnsType`、`ColumnType`、`ColumnGroupType`、`TableProps`、`TablePaginationConfig`、
@@ -99,7 +128,8 @@ serverColumn<T>(column, filteredValue?, { multiple? = false }): ColumnType<T>
 // 把任意列改造成「服务端筛选」列: 去掉 onFilter + 受控 filteredValue(见下)
 ```
 
-操作列里的按钮用本目录的 `RowActionButton`(仓库自研 `components/Button` 的 `size="sm"` 预设):
+操作列里的按钮/链接只能用本目录的这两个预设(分别是仓库自研 `components/Button`
+与 `components/ButtonLink` 的 `size="sm"` 版本):
 
 ```tsx
 actionsColumn<Row>({
@@ -107,15 +137,23 @@ actionsColumn<Row>({
     <>
       <RowActionButton type="button" onClick={...}>{t("common.edit")}</RowActionButton>
       <RowActionButton type="button" variant="ghost-danger" onClick={...}>{t("common.delete")}</RowActionButton>
+      <RowActionLink href={`/console/apps/${row.app_key}`} icon={<ArrowRight size={15} />} onClick={...}>
+        {t("common.enter")}
+      </RowActionLink>
     </>
   ),
 })
 ```
 
-`size="sm"`(h-7)与分页控件的 28px 对齐; 破坏性动作用 `variant="ghost-danger"`。
-「点击不冒泡到行」由 `actionsColumn` 的容器负责, 按钮本身不用再管。
-直接写 `<Button size="sm" variant="ghost">` 也等价, 但**不要**在页面里再包一层自己的
-`RowActionButton` —— 全站只有这一份。
+`size="sm"`(h-7)与分页控件的 28px 对齐; 破坏性动作用 `variant="ghost-danger"`
+(两者的 `variant` 都只收 `ghost` / `ghost-danger`, 默认 `ghost`)。
+「进入 / 查看 / 继续」这类跳转要用 `RowActionLink` 而不是按钮 —— 它渲染真正的
+`<a>`, 可以中键新开、复制地址; `to`(react-router `<Link>`)与
+`href` + `onClick(preventDefault)` 两种写法都原样透传给 `ButtonLink`。
+「点击不冒泡到行」由 `actionsColumn` 的容器负责, 两者都不用再管。
+
+**页面里不要再写裸的 `<Button size="sm" variant="ghost">` / `<ButtonLink size="sm">`**,
+也不要在页面里包一层自己的 RowAction* —— 全站只有这一份。
 
 同目录还导出 `MONO_TEXT_CLASS`: 表格内等宽标识符(app_key / user_id / 版本号)的唯一 class 出处。
 

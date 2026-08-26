@@ -4,7 +4,13 @@ import { useOutletContext } from "react-router-dom";
 
 import type { AppShellOutletContext } from "../../components/AppShell";
 import { AppTable, useServerTable, type ColumnsType } from "../../components/antd/AppTable";
-import { MONO_TEXT_CLASS, actionsColumn, dateTimeColumn, textColumn } from "../../components/antd/columns";
+import {
+  MONO_TEXT_CLASS,
+  RowActionButton,
+  actionsColumn,
+  dateTimeColumn,
+  textColumn,
+} from "../../components/antd/columns";
 import { PageState } from "../../components/ui/PageState";
 
 
@@ -55,8 +61,20 @@ export function PortalPage({ view }: { view: PortalView }) {
           ) : undefined
         }
       />
-      {view === "grants" ? <PortalGrantSection endpoint="/portal/api/v1/me/grants" emptyText={t("portal.grants.emptyCurrent")} /> : null}
-      {view === "expiring" ? <PortalGrantSection endpoint="/portal/api/v1/me/grants/expiring" emptyText={t("portal.grants.emptyExpiring")} /> : null}
+      {view === "grants" ? (
+        <PortalGrantSection
+          ariaLabel={t("portal.grants.ariaLabel")}
+          endpoint="/portal/api/v1/me/grants"
+          emptyText={t("portal.grants.emptyCurrent")}
+        />
+      ) : null}
+      {view === "expiring" ? (
+        <PortalGrantSection
+          ariaLabel={t("portal.grants.expiringAriaLabel")}
+          endpoint="/portal/api/v1/me/grants/expiring"
+          emptyText={t("portal.grants.emptyExpiring")}
+        />
+      ) : null}
       {view === "requests" ? <PortalRequestSection /> : null}
       {view === "request" ? <AccessRequestForm currentUserId={currentUserId} /> : null}
       {view === "approvals" ? <PortalApprovalsSection /> : null}
@@ -65,7 +83,16 @@ export function PortalPage({ view }: { view: PortalView }) {
   );
 }
 
-function PortalGrantSection({ endpoint, emptyText }: { endpoint: string; emptyText: string }) {
+function PortalGrantSection({
+  ariaLabel,
+  endpoint,
+  emptyText,
+}: {
+  /** 表格的无障碍名字; 当前授权与即将过期是两张不同的表, 名字也不同。 */
+  ariaLabel: string;
+  endpoint: string;
+  emptyText: string;
+}) {
   const { t } = useI18n();
   // 门户授权列表只支持 page/page_size: serializeSort 置空, 表头排序退化为
   // antd 对当前页的客户端排序, 不冒充服务端排序。
@@ -145,11 +172,15 @@ function PortalGrantSection({ endpoint, emptyText }: { endpoint: string; emptyTe
       ) : (
         <AppTable<PortalGrantRow>
           {...serverTable.tableProps}
+          ariaLabel={ariaLabel}
           columns={columns}
           dataSource={grants}
           emptyDescription={t("portal.grants.emptyDescription")}
           emptyTitle={emptyText}
           loading={query.isLoading}
+          // 固定列 200(应用) + 110(期限) + 220(版本) + 170(过期时间) = 700,
+          // 权限组 / 展开授权 / 来源三列不定宽(ellipsis: false, 长文本换行)各留 180 -> 1240。
+          minWidth={1240}
           rowKey="grant_id"
         />
       )}
@@ -256,6 +287,7 @@ function PortalRequestSection() {
       ) : (
         <AppTable<PortalRequestRow>
           {...serverTable.tableProps}
+          ariaLabel={t("portal.requests.ariaLabel")}
           columns={columns}
           dataSource={requests}
           emptyDescription={t("portal.requests.emptyDescription")}
@@ -283,16 +315,15 @@ function WithdrawAction({
     return <>-</>;
   }
   return (
-    <Button
+    <RowActionButton
       type="button"
-      size="sm"
       variant="ghost-danger"
       loading={mutation.isPending && mutation.variables === requestId}
       disabled={mutation.isPending}
       onClick={() => mutation.mutate(requestId)}
     >
       {t("portal.requests.withdraw")}
-    </Button>
+    </RowActionButton>
   );
 }
 

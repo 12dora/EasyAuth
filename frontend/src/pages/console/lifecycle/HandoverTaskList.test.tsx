@@ -93,6 +93,39 @@ describe("HandoverTaskList", () => {
     );
   });
 
+  test("表头筛选是服务端筛选: 确定后图标保持高亮, 当前页不再被客户端筛一遍", async () => {
+    // 「阻塞应用」列显示的是计数徽章, 筛选值却是 true/false —— 列上再留一份客户端
+    // onFilter, 后端按 blocked=true 返回的这一页会被就地筛空。serverColumn 去掉它。
+    const rows = [taskRow(1, "人员待处理", "pending", [])];
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        data: rows,
+        pagination: { page: 1, page_size: 10, total_items: 1, total_pages: 1 },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderList();
+
+    await screen.findByText("人员待处理");
+
+    const dropdown = await openHeaderFilter(user, "阻塞应用");
+    await user.click(within(dropdown).getByText("仅被阻塞"));
+    await user.click(within(dropdown).getByRole("button", { name: "确定" }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith(
+        "/console/api/v1/lifecycle/handover-tasks?page=1&page_size=10&blocked=true",
+        expect.any(Object),
+      ),
+    );
+    // 这一页的行 blocked_app_count 都是 0(单元格里是 "-"), 客户端再筛一遍就会消失。
+    expect(await screen.findByText("人员待处理")).toBeVisible();
+    // 受控 filteredValue: 表头图标与实际请求参数一致, 不因重渲染而丢。
+    await waitFor(() => expect(blockedFilterTrigger()).toHaveClass("active"));
+  });
+
   test("删除动作只按后端 allowed_actions 展示并执行", async () => {
     const rows = [
       taskRow(1, "人员待处理", "pending", []),
@@ -152,6 +185,15 @@ function taskRow(id: number, name: string, status: string, allowedActions: strin
     created_at: "2026-07-10T00:00:00Z",
     updated_at: "2026-07-10T00:00:00Z",
   };
+}
+
+/** 「阻塞应用」列表头上的筛选图标; 固定列会让同名表头出现两次, 取第一个即可。 */
+function blockedFilterTrigger(): HTMLElement {
+  const header = [...document.querySelectorAll("th.ant-table-cell")].find((cell) =>
+    (cell.textContent ?? "").trim().startsWith("阻塞应用"),
+  );
+  expect(header).toBeDefined();
+  return (header as HTMLElement).querySelector(".ant-table-filter-trigger") as HTMLElement;
 }
 
 function rowFor(name: string) {

@@ -21,6 +21,8 @@ export function ConfigurationIssuesPanel({ issues, isLoading }: { issues: Config
       <AppTable<ConfigurationIssue>
         columns={configurationIssueColumns(t)}
         dataSource={issues}
+        // 固定列 120(级别) + 220(对象) + 200(代码) = 540, 唯一的弹性列(说明)留 240 -> 780。
+        minWidth={780}
         rowKey={issueRowKey}
         loading={isLoading}
         empty={<EmptyState title={t("console.overview.issuesEmpty")} description={t("console.overview.issuesEmptyDescription")} />}

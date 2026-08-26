@@ -57,6 +57,7 @@ export function ConsoleAppList() {
             apps={apps}
             isLoading={appsQuery.isLoading || appsQuery.isPlaceholderData}
             tableProps={page.tableProps}
+            filters={page.filters}
             actions={{
               togglePending: page.updateStatusMutation.isPending,
               deletePending: deleteMutation.isPending,

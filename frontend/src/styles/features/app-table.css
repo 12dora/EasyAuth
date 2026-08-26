@@ -1,0 +1,50 @@
+/*
+ * components/antd/AppTable 的两条布局硬约定。
+ * antd v5 的样式走 CSS-in-JS, 不在 Tailwind 的 @layer 里, 优先级高于工具类,
+ * 因此这两件事只能用真实的 CSS 规则(选择器特异性高于 antd 自己的那条)来钉住。
+ */
+
+/*
+ * 单行分页。
+ *
+ * antd 给 `.ant-pagination` 写死 `flex-wrap: wrap`(特异性 0,1,0), 容器一窄
+ * 「共 x 条」「页码」「每页条数」就会折成两三行, 表格下沿被顶下去、
+ * 页面之间的间距也对不齐。这里用 `.ant-table-wrapper ul.ant-pagination.app-table-pagination`
+ * (0,3,1) 覆盖它: 永不换行, 真的放不下时让分页条自己横向滚动。
+ * class 名的唯一出处是 AppTable 的 APP_TABLE_PAGINATION_CLASS。
+ */
+.ant-table-wrapper ul.ant-pagination.app-table-pagination {
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+/*
+ * nowrap 之后子项不能再被压缩: 默认 `flex-shrink: 1` 会先把「共 x 条 / 每页条数」
+ * 挤成两行字, 那等于换行没消失只是换了个地方。统一 flex: none + 不换行。
+ */
+.ant-table-wrapper ul.ant-pagination.app-table-pagination > li,
+.ant-table-wrapper ul.ant-pagination.app-table-pagination > .ant-pagination-total-text,
+.ant-table-wrapper ul.ant-pagination.app-table-pagination > .ant-pagination-options {
+  flex: none;
+  white-space: nowrap;
+}
+
+/*
+ * 表格的无障碍名字(AppTable 的 ariaLabel -> 原生 <caption>)。
+ *
+ * 必须是「视觉隐藏」而不是 display:none / visibility:hidden ——
+ * 后两者会把名字一起从无障碍树里摘掉, 那这个 caption 就白写了。
+ */
+.ant-table-wrapper .ant-table-caption {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}

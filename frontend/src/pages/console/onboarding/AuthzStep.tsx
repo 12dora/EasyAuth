@@ -86,6 +86,8 @@ function ConfigurationIssueTable({ issues }: { issues: ConfigurationIssue[] }) {
     <AppTable<ConfigurationIssue>
       columns={columns}
       dataSource={issues}
+      // 固定列 140(级别) + 260(对象) = 400, 唯一的弹性列(说明)留 240 -> 640。
+      minWidth={640}
       rowKey={(issue) => `${issue.code ?? "issue"}:${issue.subject ?? ""}:${issue.message ?? ""}`}
     />
   );

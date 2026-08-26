@@ -50,6 +50,10 @@ export function useHandoverTaskList() {
     tasksQuery,
     tasks,
     tableProps: serverTable.tableProps,
+    // 表头筛选的真相在 useServerTable 里, 列必须用 serverColumn 受控回去:
+    // 否则 antd 会拿当前页再跑一遍客户端 onFilter(placeholderData 保留的上一页会被筛空),
+    // 表头的「已筛选」图标也会和实际请求参数对不上。
+    filters: serverTable.query.filters,
     deleteTarget,
     setDeleteTarget,
     deleteMutation,

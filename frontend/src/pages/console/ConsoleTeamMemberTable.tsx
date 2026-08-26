@@ -1,8 +1,14 @@
 import { useMemo } from "react";
 
 import { AppTable, type ColumnsType } from "../../components/antd/AppTable";
-import { actionsColumn, dateTimeColumn, statusColumn, textColumn, userColumn } from "../../components/antd/columns";
-import { Button } from "../../components/Button";
+import {
+  RowActionButton,
+  actionsColumn,
+  dateTimeColumn,
+  statusColumn,
+  textColumn,
+  userColumn,
+} from "../../components/antd/columns";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { TeamMemberItem } from "../../lib/domain";
 import type { Translator } from "../../lib/status";
@@ -68,18 +74,17 @@ function teamMemberTableColumns(t: Translator, actions: TeamMemberTableActions):
     actionsColumn<TeamMemberItem>({
       render: (member) => (
         <>
-          <Button type="button" size="sm" variant="ghost" disabled={actions.disabled} onClick={() => actions.onToggleRole(member)}>
+          <RowActionButton type="button" disabled={actions.disabled} onClick={() => actions.onToggleRole(member)}>
             {member.role === "leader" ? t("console.teams.setMember") : t("console.teams.setLeader")}
-          </Button>
-          <Button
+          </RowActionButton>
+          <RowActionButton
             type="button"
-            size="sm"
             variant="ghost-danger"
             disabled={actions.disabled}
             onClick={() => actions.onRemove(member)}
           >
             {t("common.remove")}
-          </Button>
+          </RowActionButton>
         </>
       ),
     }),

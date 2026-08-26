@@ -3,6 +3,7 @@
 @import "@fontsource-variable/geist-mono";
 @import "./layout-shell.css";
 @import "./responsive.css";
+@import "./features/app-table.css";
 @import "./features/permission-selector.css";
 
 :root {

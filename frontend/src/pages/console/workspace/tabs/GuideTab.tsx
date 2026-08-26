@@ -42,6 +42,8 @@ export function GuideTab({ appKey }: { appKey: string }) {
           columns={CREDENTIAL_MODE_COLUMNS}
           dataSource={credentialModes}
           rowKey="mode"
+          // 固定列 140(活跃数量) + 唯一的弹性列(模式)240 -> 380; 比卡片窄, 桌面端铺满。
+          minWidth={380}
           loading={guideQuery.isLoading}
           empty={<EmptyState title="暂无活跃凭据" description="先在「凭据」页签创建凭据，再回到这里查看接入方式。" />}
         />

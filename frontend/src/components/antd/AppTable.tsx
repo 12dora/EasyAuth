@@ -28,9 +28,29 @@ export type { FilterDropdownProps, FilterValue, SortOrder, SorterResult, TableCu
 export const APP_TABLE_PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const;
 export const APP_TABLE_DEFAULT_PAGE_SIZE = 10;
 
-export interface AppTableProps<T> extends Omit<TableProps<T>, "rowKey" | "pagination" | "locale"> {
+/**
+ * 分页条的「单行」约定 class; 样式在 `src/styles/features/app-table.css`。
+ *
+ * antd 的 `.ant-pagination` 是 `flex-wrap: wrap`, 容器一窄「共 x 条 / 页码 / 每页条数」
+ * 就会折成两三行, 把表格下沿顶下去。这个 class 把它钉成 `flex-wrap: nowrap`,
+ * 并让分页条自己横向滚动(而不是换行), 因此常量与选择器必须成对存在 ——
+ * `AppTable.test.tsx` 同时锁住「元素带这个 class」和「样式表里有对应规则」。
+ */
+export const APP_TABLE_PAGINATION_CLASS = "app-table-pagination";
+
+export interface AppTableProps<T> extends Omit<TableProps<T>, "rowKey" | "pagination" | "locale" | "caption"> {
   /** 必填: 行身份只能来自数据字段, 不允许回落数组下标。 */
   rowKey: NonNullable<TableProps<T>["rowKey"]>;
+  /**
+   * 表格的无障碍名字, 渲染成视觉隐藏的原生 `<caption>`。
+   *
+   * 一个页面上有多张表(门户的授权/申请/审批)时, 屏幕阅读器只会念 "table",
+   * 用户无从分辨; `<caption>` 是 HTML 给表格命名的原生方式, 直接成为
+   * `role="table"` 的可及名称, 不需要额外的 aria 属性。
+   * 隐藏样式在 `src/styles/features/app-table.css` 的 `.ant-table-caption`
+   * (用 clip 而不是 display:none, 否则名字会一起从无障碍树里消失)。
+   */
+  ariaLabel?: string;
   /**
    * 表格的最小宽度, 写进 `scroll.x`。列宽之和已经确定时传像素数。
    *
@@ -66,6 +86,7 @@ export interface AppTableProps<T> extends Omit<TableProps<T>, "rowKey" | "pagina
  * controlHeightSM(28px, 等于 Button size="sm" 的 h-7), 不依赖 antd 内部联动。
  */
 export function AppTable<T extends object>({
+  ariaLabel,
   className,
   empty,
   emptyAction,
@@ -95,6 +116,8 @@ export function AppTable<T extends object>({
       size: "small",
       showTotal: (total, range) => t("table.pagination.total", { start: range[0], end: range[1], total }),
       ...pagination,
+      // 页面即使自己传了 className 也不能丢掉「单行分页」约定, 因此合并在展开之后。
+      className: cn(APP_TABLE_PAGINATION_CLASS, pagination?.className),
     };
   }, [pagination, t]);
 
@@ -122,6 +145,7 @@ export function AppTable<T extends object>({
 
   return (
     <Table<T>
+      caption={ariaLabel}
       className={cn("w-full", className)}
       locale={locale}
       pagination={mergedPagination}

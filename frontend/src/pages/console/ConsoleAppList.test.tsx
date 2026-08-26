@@ -108,6 +108,55 @@ describe("ConsoleAppList", () => {
     );
   });
 
+  test("表头筛选是服务端筛选: 确定后图标保持高亮, 当前页不再被客户端筛一遍", async () => {
+    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    // 后端按 status=active 返回的这一页里混着一行 is_active: false —— 翻页时
+    // placeholderData 留下的上一页就是这样。客户端再筛一遍会把它静默丢掉。
+    const fetchMock = vi.fn<typeof fetch>(async () =>
+      jsonResponse({
+        data: [
+          {
+            id: 1,
+            app_key: "crm",
+            name: "CRM",
+            owners: ["owner-a"],
+            is_active: true,
+            updated_at: "2026-07-01T09:00:00Z",
+            capabilities: {},
+          },
+          {
+            id: 2,
+            app_key: "billing",
+            name: "Billing",
+            owners: ["owner-b"],
+            is_active: false,
+            updated_at: "2026-07-01T09:00:00Z",
+            capabilities: {},
+          },
+        ],
+        pagination: { page: 1, page_size: 20, total_items: 2, total_pages: 1 },
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderList();
+
+    await screen.findByText("CRM");
+    const dropdown = await openHeaderFilter(user, "状态");
+    await user.click(within(dropdown).getByText("启用"));
+    await user.click(within(dropdown).getByRole("button", { name: "确定" }));
+
+    await waitFor(() =>
+      expect(listRequestUrls(fetchMock)).toContain("/console/api/v1/apps?page=1&page_size=20&status=active"),
+    );
+    // Billing 是「停用」, 与生效中的筛选值不符, 但它是后端这一页返回的行, 必须照常展示。
+    expect(await screen.findByText("Billing")).toBeVisible();
+    expect(screen.getByText("CRM")).toBeVisible();
+    // 受控 filteredValue: 表头图标与实际请求参数一致。
+    await waitFor(() => expect(statusFilterTrigger()).toHaveClass("active"));
+  });
+
   test("创建成功后跳转到新应用工作区", async () => {
     document.body.dataset.currentUserRole = "EasyAuth Admins";
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
@@ -146,6 +195,15 @@ describe("ConsoleAppList", () => {
     expect(await screen.findByTestId("location")).toHaveTextContent("/console/apps/billing");
   });
 });
+
+/** 「状态」列表头上的筛选图标。 */
+function statusFilterTrigger(): HTMLElement {
+  const header = [...document.querySelectorAll("th.ant-table-cell")].find((cell) =>
+    (cell.textContent ?? "").trim().startsWith("状态"),
+  );
+  expect(header).toBeDefined();
+  return (header as HTMLElement).querySelector(".ant-table-filter-trigger") as HTMLElement;
+}
 
 function renderList() {
   const client = new QueryClient({

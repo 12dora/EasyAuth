@@ -61,6 +61,8 @@ function ManifestDiffTable({ items }: { items: ManifestDiffItem[] }) {
       columns={columns}
       dataSource={items}
       emptyTitle="无差异"
+      // 固定列 280(对象) + 200(名称) = 480, 唯一的弹性列(详情 JSON)留 240 -> 720。
+      minWidth={720}
       rowKey={(item) => `${item.type ?? ""}:${item.key ?? ""}`}
     />
   );

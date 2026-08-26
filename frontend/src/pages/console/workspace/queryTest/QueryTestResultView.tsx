@@ -34,6 +34,8 @@ export function QueryTestResultView({ result }: { result: StructuredQueryTestRes
         columns={groupColumns}
         dataSource={groups}
         emptyTitle={t("console.queryTest.groupsEmpty")}
+        // 固定列 160(来源) + 200(快照版本) = 360, 两个弹性列(组 key / 名称)各留 240 -> 840。
+        minWidth={840}
         rowKey={(group) => group.key ?? group.name ?? ""}
       />
       <AppTable<QueryTestGrant>

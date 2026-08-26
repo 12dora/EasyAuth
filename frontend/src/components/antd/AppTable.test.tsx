@@ -1,11 +1,14 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { useState } from "react";
 import { describe, expect, test, vi } from "vitest";
 
 import { I18nProvider } from "../../i18n/I18nProvider";
 import { AppConfigProvider } from "./AppConfigProvider";
 import {
+  APP_TABLE_PAGINATION_CLASS,
   AppTable,
   dateRangeFilter,
   decodeDateRange,
@@ -56,6 +59,23 @@ const COLUMNS: ColumnsType<Row> = [
   },
 ];
 
+/**
+ * AppTable 的两条布局约定(单行分页、视觉隐藏的 caption)只能由真实 CSS 表达:
+ * antd 的样式是 CSS-in-JS, 优先级高于 Tailwind 工具类, 主题 token 里也没有
+ * flex-wrap 这一项。样式表本身不参与打包进 jsdom, 因此用例把它读进来挂上,
+ * 再用 getComputedStyle 断言 —— 这样断的是「规则真的命中了这个元素」,
+ * 而不是「代码里写了一个 class 名」。
+ */
+const APP_TABLE_CSS = readFileSync(resolve(process.cwd(), "src/styles/features/app-table.css"), "utf8");
+
+function installAppTableStylesheet(): HTMLStyleElement {
+  const style = document.createElement("style");
+  style.dataset.testStylesheet = "app-table";
+  style.textContent = APP_TABLE_CSS;
+  document.head.append(style);
+  return style;
+}
+
 function renderTable(ui: React.ReactElement) {
   return render(
     <I18nProvider>
@@ -104,6 +124,59 @@ describe("AppTable 客户端模式", () => {
     // 位置约定 bottomRight: antd 5 用 ant-pagination-end 表达右对齐。
     expect(pagination?.classList.contains("ant-pagination-end")).toBe(true);
     expect(document.querySelector(".ant-table-pagination")).not.toBeNull();
+  });
+
+  test("分页条被钉成单行: flex-wrap 为 nowrap, 放不下时分页条自己横向滚动", () => {
+    // antd 给 .ant-pagination 写死 flex-wrap: wrap, 窄容器下「共 x 条 / 页码 / 每页条数」
+    // 会折成两三行。AppTable 统一挂 APP_TABLE_PAGINATION_CLASS, 样式表把它改回 nowrap。
+    const style = installAppTableStylesheet();
+    renderTable(<AppTable<Row> columns={COLUMNS} dataSource={ROWS} rowKey="id" />);
+
+    const pagination = document.querySelector("ul.ant-pagination") as HTMLElement;
+    expect(pagination.classList.contains(APP_TABLE_PAGINATION_CLASS)).toBe(true);
+
+    const computed = window.getComputedStyle(pagination);
+    expect(computed.flexWrap).toBe("nowrap");
+    // 换行没有变成「被挤扁」: 放不下时由分页条自己横向滚动。
+    expect(computed.overflowX).toBe("auto");
+
+    // 三块内容仍在同一个 ul 里, 而且各自 flex: none, 不会被压成两行字。
+    const total = pagination.querySelector(".ant-pagination-total-text") as HTMLElement;
+    const options = pagination.querySelector(".ant-pagination-options") as HTMLElement;
+    const pager = pagination.querySelector(".ant-pagination-item-1") as HTMLElement;
+    expect(total).not.toBeNull();
+    expect(options).not.toBeNull();
+    expect(pager).not.toBeNull();
+    for (const node of [total, options, pager]) {
+      expect(window.getComputedStyle(node).whiteSpace).toBe("nowrap");
+    }
+
+    style.remove();
+  });
+
+  test("ariaLabel 渲染成视觉隐藏的 <caption>, 成为表格的可及名称", () => {
+    const style = installAppTableStylesheet();
+    renderTable(<AppTable<Row> ariaLabel="我的授权列表" columns={COLUMNS} dataSource={ROWS} rowKey="id" />);
+
+    // <caption> 是 HTML 给表格命名的原生方式, 直接就是 role="table" 的可及名称。
+    expect(screen.getByRole("table", { name: "我的授权列表" })).toBeInTheDocument();
+
+    const caption = document.querySelector("caption.ant-table-caption") as HTMLElement;
+    expect(caption).not.toBeNull();
+    // 必须是「视觉隐藏」而不是 display:none —— 后者会把名字一起从无障碍树摘掉。
+    const computed = window.getComputedStyle(caption);
+    expect(computed.display).not.toBe("none");
+    expect(computed.visibility).not.toBe("hidden");
+    expect(computed.position).toBe("absolute");
+    expect(computed.width).toBe("1px");
+
+    style.remove();
+  });
+
+  test("不传 ariaLabel 时不渲染 caption", () => {
+    renderTable(<AppTable<Row> columns={COLUMNS} dataSource={ROWS} rowKey="id" />);
+
+    expect(document.querySelector("caption")).toBeNull();
   });
 
   test("切换每页条数后展示全部数据", async () => {

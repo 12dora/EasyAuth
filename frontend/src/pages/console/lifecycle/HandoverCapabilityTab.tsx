@@ -161,7 +161,9 @@ function HandoverAssetTypeTable({ rows }: { rows: HandoverAssetTypeRow[] }) {
     }),
   ];
 
-  return <AppTable<HandoverAssetTypeRow> columns={columns} dataSource={rows} rowKey="type" />;
+  // 固定列 220(类型) + 140(明细) + 140(可释放) = 500, 唯一的弹性列(名称)留 240 -> 740;
+  // 比卡片窄, 桌面端由 antd 的 min-width:100% 拉满, 名称列吃掉剩余宽度。
+  return <AppTable<HandoverAssetTypeRow> columns={columns} dataSource={rows} minWidth={740} rowKey="type" />;
 }
 
 function supportMark(supported: boolean): string {

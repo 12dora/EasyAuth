@@ -5,6 +5,10 @@ export const zhCN = {
   "portal.grants.emptyExpiring": "暂无即将过期授权",
   "portal.grants.loadFailed": "授权加载失败",
   "portal.grants.emptyDescription": "当前视图没有可展示的授权记录。",
+  // 表格的无障碍名字(AppTable 的 ariaLabel -> 视觉隐藏的 <caption>):
+  // 门户三张表结构相近, 只念「表格」无从分辨, 因此每张表都要有自己的名字。
+  "portal.grants.ariaLabel": "我的授权列表",
+  "portal.grants.expiringAriaLabel": "即将过期授权列表",
 
   "portal.column.groups": "权限组",
   "portal.column.expandedGrants": "展开授权",
@@ -20,6 +24,7 @@ export const zhCN = {
   "portal.requests.emptyDescription": "当前账号还没有提交过权限申请。",
   "portal.requests.withdraw": "撤回",
   "portal.requests.withdrawFailed": "撤回失败",
+  "portal.requests.ariaLabel": "我的申请记录列表",
 
   "portal.grant.versions": "授权 {grant} / 目录 {catalog} / 快照 {snapshot}",
 
@@ -70,6 +75,7 @@ export const zhCN = {
   "portal.approvals.empty.pendingDescription": "有申请指派给你审批时会显示在这里。",
   "portal.approvals.empty.processed": "暂无已处理的申请",
   "portal.approvals.empty.processedDescription": "你处理过的申请会显示在这里。",
+  "portal.approvals.ariaLabel": "我的审批列表",
   "portal.approvals.column.applicant": "申请人",
   "portal.approvals.column.content": "申请内容",
   "portal.approvals.column.decidedAt": "处理时间",
@@ -85,6 +91,8 @@ export const en: Record<keyof typeof zhCN, string> = {
   "portal.grants.emptyExpiring": "No expiring grants",
   "portal.grants.loadFailed": "Failed to load grants",
   "portal.grants.emptyDescription": "No grant records to show in this view.",
+  "portal.grants.ariaLabel": "My grants",
+  "portal.grants.expiringAriaLabel": "Expiring grants",
 
   "portal.column.groups": "Permission groups",
   "portal.column.expandedGrants": "Expanded grants",
@@ -100,6 +108,7 @@ export const en: Record<keyof typeof zhCN, string> = {
   "portal.requests.emptyDescription": "This account has not submitted any access requests yet.",
   "portal.requests.withdraw": "Withdraw",
   "portal.requests.withdrawFailed": "Withdraw failed",
+  "portal.requests.ariaLabel": "My access requests",
 
   "portal.grant.versions": "Grant {grant} / Catalog {catalog} / Snapshot {snapshot}",
 
@@ -150,6 +159,7 @@ export const en: Record<keyof typeof zhCN, string> = {
   "portal.approvals.empty.pendingDescription": "Requests assigned to you for approval will appear here.",
   "portal.approvals.empty.processed": "No processed requests yet",
   "portal.approvals.empty.processedDescription": "Requests you have processed will appear here.",
+  "portal.approvals.ariaLabel": "My approvals",
   "portal.approvals.column.applicant": "Applicant",
   "portal.approvals.column.content": "Requested access",
   "portal.approvals.column.decidedAt": "Processed at",

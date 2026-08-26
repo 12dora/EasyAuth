@@ -49,6 +49,7 @@ export function PortalApprovalsTable({
   return (
     <AppTable<PortalApprovalRow>
       {...serverTable.tableProps}
+      ariaLabel={t("portal.approvals.ariaLabel")}
       columns={columns}
       dataSource={rows}
       emptyDescription={

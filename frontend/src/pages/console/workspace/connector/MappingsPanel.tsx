@@ -158,6 +158,8 @@ function MappingsTable({
       columns={columns}
       dataSource={groups}
       emptyTitle={t("console.connector.mappingsEmpty")}
+      // 固定列 280(授权组) + 200(自动建组) = 480, 唯一的弹性列(外部标识输入框)留 240 -> 720。
+      minWidth={720}
       rowKey="key"
     />
   );

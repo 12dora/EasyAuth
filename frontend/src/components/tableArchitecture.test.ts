@@ -7,14 +7,16 @@ const sourceRoot = join(process.cwd(), "src");
 
 describe("表格架构", () => {
   test("不再保留旧 DataTable 包装组件和旧表格包装类名", () => {
-    // components/antd/** 与测试文件排除在外: 这里的禁用词是旧自研表格的类名, 而
-    // antd 自己的类名(ant-table-wrapper / ant-table-scroll-horizontal)会被
-    // table-wrap / table-scroll 误伤 —— 那是 antd 的 DOM 约定, 不是本仓库要清理的
-    // 历史包袱, 而断言这些类名的地方全在 *.test.tsx 里。
+    // components/antd/**、AppTable 的样式表与测试文件排除在外: 这里的禁用词是旧自研
+    // 表格的类名, 而 antd 自己的类名(ant-table-wrapper / ant-table-scroll-horizontal)
+    // 会被 table-wrap / table-scroll 误伤 —— 那是 antd 的 DOM 约定, 不是本仓库要清理的
+    // 历史包袱。写 antd 类名的地方只有三处: components/antd/**、*.test.tsx,
+    // 以及 AppTable 那两条只能用真实 CSS 表达的约定(单行分页 / 隐藏 caption)。
     const files = sourceFiles(sourceRoot).filter(
       (file) =>
         !file.endsWith("tableArchitecture.test.ts") &&
         !/\.test\.tsx?$/.test(file) &&
+        !file.endsWith(join("styles", "features", "app-table.css")) &&
         !file.includes(join("components", "antd")),
     );
     const violations = files.flatMap((file) => forbiddenMatches(file));

@@ -2,9 +2,9 @@ import { Check } from "lucide-react";
 import type { ReactNode } from "react";
 
 import { Badge } from "../../components/Badge";
-import { Button } from "../../components/Button";
 import { AppTable, type AppTableProps, type ColumnType, type ColumnsType } from "../../components/antd/AppTable";
 import {
+  RowActionButton,
   dateTimeColumn,
   serverColumn,
   statusColumn,
@@ -143,15 +143,13 @@ function DeliveryCell({ t, row, actions }: { t: Translator; row: ApprovalInstanc
           <span title={row.delivery_last_error || undefined}>
             <Badge tone="signal">{t("approvalInstances.delivery.failed")}</Badge>
           </span>
-          <Button
+          <RowActionButton
             type="button"
-            size="sm"
-            variant="ghost"
             disabled={actions.isDisabled(row)}
             onClick={() => actions.onRedeliver(row)}
           >
             {t("approvalInstances.redeliver")}
-          </Button>
+          </RowActionButton>
         </span>
       );
     case "skipped":

@@ -1,8 +1,13 @@
 import { useMemo } from "react";
 
 import { AppTable, type ColumnsType } from "../../../components/antd/AppTable";
-import { actionsColumn, dateTimeColumn, statusColumn, textColumn } from "../../../components/antd/columns";
-import { Button } from "../../../components/Button";
+import {
+  RowActionButton,
+  actionsColumn,
+  dateTimeColumn,
+  statusColumn,
+  textColumn,
+} from "../../../components/antd/columns";
 import { useI18n } from "../../../i18n/I18nProvider";
 import type { OnboardingTemplateRow } from "../../../lib/domain";
 import type { Translator } from "../../../lib/status";
@@ -70,18 +75,16 @@ function templateColumns(t: Translator, actions: TemplateRowActions): ColumnsTyp
     actionsColumn<OnboardingTemplateRow>({
       render: (template) => (
         <>
-          <Button type="button" size="sm" variant="ghost" onClick={() => actions.onEdit(template)}>
+          <RowActionButton type="button" onClick={() => actions.onEdit(template)}>
             {t("common.edit")}
-          </Button>
-          <Button
+          </RowActionButton>
+          <RowActionButton
             type="button"
-            size="sm"
-            variant="ghost"
             disabled={actions.toggling}
             onClick={() => actions.onToggle(template)}
           >
             {template.is_active ? t("common.disable") : t("common.enable")}
-          </Button>
+          </RowActionButton>
         </>
       ),
     }),

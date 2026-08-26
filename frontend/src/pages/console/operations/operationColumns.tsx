@@ -1,6 +1,6 @@
-import { Button } from "../../../components/Button";
 import { dateRangeFilter, enumFilter, type ColumnsType } from "../../../components/antd/AppTable";
 import {
+  RowActionButton,
   actionsColumn,
   dateTimeColumn,
   serverColumn,
@@ -204,15 +204,14 @@ function renderAccessGrantActions(t: Translator, actions: AccessGrantColumnActio
     return <span className="text-caption text-ink-faint">{t("common.none")}</span>;
   }
   return (
-    <Button
+    <RowActionButton
       type="button"
-      size="sm"
       variant="ghost-danger"
       disabled={actions.disabled}
       onClick={() => actions.onEmergencyRevoke(row)}
     >
       {t("console.operations.emergencyRevoke")}
-    </Button>
+    </RowActionButton>
   );
 }
 
@@ -268,35 +267,32 @@ function renderAccessRequestActions(t: Translator, actions: AccessRequestColumnA
   if (row.status === "submitted") {
     return (
       <>
-        <Button type="button" size="sm" variant="ghost" disabled={actions.disabled} onClick={() => actions.onAction("approve", row)}>
+        <RowActionButton type="button" disabled={actions.disabled} onClick={() => actions.onAction("approve", row)}>
           {t("approvals.approve")}
-        </Button>
-        <Button
+        </RowActionButton>
+        <RowActionButton
           type="button"
-          size="sm"
           variant="ghost-danger"
           disabled={actions.disabled}
           onClick={() => actions.onAction("reject", row)}
         >
           {t("approvals.reject")}
-        </Button>
-        <Button type="button" size="sm" variant="ghost" disabled={actions.disabled} onClick={() => actions.onAction("reassign", row)}>
+        </RowActionButton>
+        <RowActionButton type="button" disabled={actions.disabled} onClick={() => actions.onAction("reassign", row)}>
           {t("console.accessRequests.reassign")}
-        </Button>
+        </RowActionButton>
       </>
     );
   }
   if (row.status === "grant_failed") {
     return (
-      <Button
+      <RowActionButton
         type="button"
-        size="sm"
-        variant="ghost"
         disabled={actions.disabled}
         onClick={() => actions.onAction("retry-grant", row)}
       >
         {t("console.operations.retryGrant")}
-      </Button>
+      </RowActionButton>
     );
   }
   return <span className="text-caption text-ink-faint">{t("common.none")}</span>;

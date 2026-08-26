@@ -91,6 +91,36 @@ describe("ConsolePeopleList", () => {
     );
   });
 
+  test("状态筛选是服务端筛选: 确定后图标保持高亮, 当前页不再被客户端筛一遍", async () => {
+    // 后端按 status=active 返回的这一页里, 只要有一行的状态和筛选值对不上
+    // (翻页时 placeholderData 留下的上一页就是这样), 客户端再筛一遍就会把它筛掉。
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.startsWith("/console/api/v1/users?page=")) {
+        return jsonResponse(PEOPLE_PAYLOAD);
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderList();
+
+    await screen.findByText("张三");
+    const dropdown = await openHeaderFilter(user, "状态");
+    await user.click(within(dropdown).getByText("在职"));
+    await user.click(within(dropdown).getByRole("button", { name: "确定" }));
+
+    await waitFor(() =>
+      expect(fetchMock).toHaveBeenCalledWith("/console/api/v1/users?page=1&page_size=20&status=active", expect.any(Object)),
+    );
+    // 李四是「已离职」, 与生效中的筛选值不符, 但它是后端这一页返回的行, 必须照常展示。
+    expect(await screen.findByText("李四")).toBeVisible();
+    expect(screen.getByText("张三")).toBeVisible();
+    // 受控 filteredValue: 表头图标与实际请求参数一致。
+    await waitFor(() => expect(statusFilterTrigger()).toHaveClass("active"));
+  });
+
   test("发起离职交接: 确认对话框提交后建单并跳转交接单详情", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
@@ -142,6 +172,15 @@ describe("ConsolePeopleList", () => {
     expect(await screen.findByTestId("location")).toHaveTextContent("/console/lifecycle/handover-tasks/9");
   });
 });
+
+/** 「状态」列表头上的筛选图标。 */
+function statusFilterTrigger(): HTMLElement {
+  const header = [...document.querySelectorAll("th.ant-table-cell")].find((cell) =>
+    (cell.textContent ?? "").trim().startsWith("状态"),
+  );
+  expect(header).toBeDefined();
+  return (header as HTMLElement).querySelector(".ant-table-filter-trigger") as HTMLElement;
+}
 
 function renderList() {
   const client = new QueryClient({

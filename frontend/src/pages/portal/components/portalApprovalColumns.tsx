@@ -1,8 +1,13 @@
 import type { ApprovalDecisionMode } from "../../../components/ApprovalDecisionDialog";
 import { Badge } from "../../../components/Badge";
-import { Button } from "../../../components/Button";
 import type { ColumnsType, ColumnType } from "../../../components/antd/AppTable";
-import { MONO_TEXT_CLASS, actionsColumn, dateTimeColumn, textColumn } from "../../../components/antd/columns";
+import {
+  MONO_TEXT_CLASS,
+  RowActionButton,
+  actionsColumn,
+  dateTimeColumn,
+  textColumn,
+} from "../../../components/antd/columns";
 
 import {
   accessRequestStatusLabel,
@@ -106,18 +111,17 @@ function decisionActionsColumn(
   return actionsColumn<PortalApprovalRow>({
     render: (approval) => (
       <>
-        <Button type="button" size="sm" variant="ghost" disabled={actionsDisabled} onClick={() => onDecision("approve", approval)}>
+        <RowActionButton type="button" disabled={actionsDisabled} onClick={() => onDecision("approve", approval)}>
           {t("approvals.approve")}
-        </Button>
-        <Button
+        </RowActionButton>
+        <RowActionButton
           type="button"
-          size="sm"
           variant="ghost-danger"
           disabled={actionsDisabled}
           onClick={() => onDecision("reject", approval)}
         >
           {t("approvals.reject")}
-        </Button>
+        </RowActionButton>
       </>
     ),
   });

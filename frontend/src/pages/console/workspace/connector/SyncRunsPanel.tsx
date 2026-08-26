@@ -104,6 +104,9 @@ export function SyncRunsPanel({
         dataSource={runs}
         emptyTitle={t("console.connector.runsEmpty")}
         loading={runsQuery.isLoading}
+        // 固定列 170(时间) + 120(触发) + 120(结果) + 200(统计) = 610,
+        // 唯一的弹性列(错误)留 240 -> 850。
+        minWidth={850}
         rowKey="id"
       />
     </PanelSurface>

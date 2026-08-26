@@ -2,9 +2,16 @@ import { ArrowRight, Compass } from "lucide-react";
 import { useMemo } from "react";
 
 import { AppTable, type ColumnsType, type UseServerTableResult } from "../../components/antd/AppTable";
-import { actionsColumn, dateTimeColumn, statusColumn, textColumn, userColumn } from "../../components/antd/columns";
-import { Button } from "../../components/Button";
-import { ButtonLink } from "../../components/ButtonLink";
+import {
+  RowActionButton,
+  RowActionLink,
+  actionsColumn,
+  dateTimeColumn,
+  serverColumn,
+  statusColumn,
+  textColumn,
+  userColumn,
+} from "../../components/antd/columns";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { AppSummary } from "../../lib/domain";
 import { readinessLabel, readinessTone } from "../../lib/status";
@@ -28,15 +35,18 @@ export function ConsoleAppTable({
   apps,
   isLoading,
   tableProps,
+  filters,
   actions,
 }: {
   apps: AppSummary[];
   isLoading: boolean;
   tableProps: UseServerTableResult<AppSummary>["tableProps"];
+  /** 列 key -> 已选筛选值, 来自 useServerTable 的查询状态(owners / status 都在后端筛)。 */
+  filters: Record<string, string[]>;
   actions: AppRowActions;
 }) {
   const { t } = useI18n();
-  const columns = useMemo(() => appColumns(t, actions), [actions, t]);
+  const columns = useMemo(() => appColumns(t, filters, actions), [actions, filters, t]);
 
   return (
     <AppTable<AppSummary>
@@ -52,7 +62,11 @@ export function ConsoleAppTable({
   );
 }
 
-function appColumns(t: Translator, actions: AppRowActions): ColumnsType<AppSummary> {
+function appColumns(
+  t: Translator,
+  filters: Record<string, string[]>,
+  actions: AppRowActions,
+): ColumnsType<AppSummary> {
   return [
     // 应用名 + app_key 两行, 与成员单元格同一套排版。
     userColumn<AppSummary>({
@@ -61,14 +75,18 @@ function appColumns(t: Translator, actions: AppRowActions): ColumnsType<AppSumma
       getName: (app) => app.name,
       getUserId: (app) => app.app_key,
     }),
-    // owners 存的是用户 ID, 后端按 owner_user_id 精确过滤。
-    textColumn<AppSummary>({
-      key: "owners",
-      title: t("appList.column.owners"),
-      getValue: (app) => safeJoin(app.owners),
-      filter: true,
-      width: 200,
-    }),
+    // owners 存的是用户 ID, 后端按 owner_user_id 精确过滤; 单元格里显示的是拼接后的
+    // 名字串, 客户端再按它筛一遍会把后端筛出来的行筛掉, 因此必须过 serverColumn。
+    serverColumn(
+      textColumn<AppSummary>({
+        key: "owners",
+        title: t("appList.column.owners"),
+        getValue: (app) => safeJoin(app.owners),
+        filter: true,
+        width: 200,
+      }),
+      filters.owners,
+    ),
     statusColumn<AppSummary>({
       key: "configuration_status",
       title: t("appList.column.configuration"),
@@ -80,8 +98,10 @@ function appColumns(t: Translator, actions: AppRowActions): ColumnsType<AppSumma
       })),
       width: 130,
     }),
-    {
-      ...statusColumn<AppSummary>({
+    // 后端只认单个 status, serverColumn 默认 multiple: false, 下拉即为单选,
+    // 不给用户多选却只有一个生效的错觉。
+    serverColumn(
+      statusColumn<AppSummary>({
         key: "status",
         title: t("common.status"),
         getValue: (app) => (app.is_active ? "active" : "inactive"),
@@ -92,9 +112,8 @@ function appColumns(t: Translator, actions: AppRowActions): ColumnsType<AppSumma
         })),
         width: 120,
       }),
-      // 后端只认单个 status, 因此下拉限制为单选, 不给用户多选却只有一个生效的错觉。
-      filterMultiple: false,
-    },
+      filters.status,
+    ),
     dateTimeColumn<AppSummary>({ key: "updated_at", title: t("common.updatedAt"), sorter: false }),
     // 四个按钮(停用/删除/继续接入占位/进入)实测 277px, 加上单元格内边距取 300。
     actionsColumn<AppSummary>({ width: 300, render: (app) => <AppRowActionsCell app={app} actions={actions} /> }),
@@ -123,52 +142,46 @@ function AppRowActionsCell({ app, actions }: { app: AppSummary; actions: AppRowA
 
   return (
     <>
-      <Button
+      <RowActionButton
         type="button"
-        size="sm"
         variant={app.is_active ? "ghost-danger" : "ghost"}
         disabled={actions.togglePending || !canToggleActive(app)}
         onClick={() => actions.onToggleActive(app)}
       >
         {app.is_active ? t("common.disable") : t("common.enable")}
-      </Button>
-      <Button
+      </RowActionButton>
+      <RowActionButton
         type="button"
-        size="sm"
         variant="ghost-danger"
         disabled={actions.deletePending || !canDelete(app)}
         onClick={() => actions.onDelete(app)}
       >
         {t("common.delete")}
-      </Button>
+      </RowActionButton>
       {/* 已就绪的行以 invisible 占位保持每行操作按钮列对齐 */}
-      <ButtonLink
+      <RowActionLink
         className={resumeHidden ? "invisible" : undefined}
         aria-hidden={resumeHidden || undefined}
         tabIndex={resumeHidden ? -1 : undefined}
         href={resumeHref}
         icon={<Compass size={15} />}
-        size="sm"
-        variant="ghost"
         onClick={(event) => {
           event.preventDefault();
           actions.onNavigate(resumeHref);
         }}
       >
         {t("appList.resumeOnboarding")}
-      </ButtonLink>
-      <ButtonLink
+      </RowActionLink>
+      <RowActionLink
         href={enterHref}
         icon={<ArrowRight size={15} />}
-        size="sm"
-        variant="ghost"
         onClick={(event) => {
           event.preventDefault();
           actions.onNavigate(enterHref);
         }}
       >
         {t("common.enter")}
-      </ButtonLink>
+      </RowActionLink>
     </>
   );
 }

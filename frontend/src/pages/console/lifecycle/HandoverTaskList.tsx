@@ -47,6 +47,7 @@ export function HandoverTaskList() {
           tasks={tasks}
           isLoading={tasksQuery.isLoading || tasksQuery.isPlaceholderData}
           tableProps={page.tableProps}
+          filters={page.filters}
           actions={{
             onOpen: (taskId) => void navigate(`/console/lifecycle/handover-tasks/${taskId}`),
             onDelete: page.setDeleteTarget,

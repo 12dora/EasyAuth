@@ -5,6 +5,7 @@ import { cn } from "../../lib/cn";
 import type { BadgeTone } from "../../lib/status";
 import { Badge } from "../Badge";
 import { Button } from "../Button";
+import { ButtonLink } from "../ButtonLink";
 import { enumFilter, readField, textFilter, type ColumnType } from "./AppTable";
 
 /**
@@ -331,8 +332,8 @@ export interface ActionsColumnConfig<T> {
 
 /**
  * 操作列: 右对齐、不换行、固定右侧, 内部按钮点击不冒泡到行点击。
- * 按钮本身用 `RowActionButton`(见下), 也可以直接写
- * `<Button size="sm" variant="ghost|ghost-danger">`。
+ * 按钮本身用 `RowActionButton` / `RowActionLink`(见下), 页面里不要再写
+ * 裸的 `<Button size="sm" ...>` / `<ButtonLink size="sm" ...>`。
  */
 export function actionsColumn<T>({
   fixed = "right",
@@ -379,4 +380,19 @@ export function RowActionButton({
   ...props
 }: Omit<ComponentPropsWithoutRef<typeof Button>, "size" | "variant"> & { variant?: RowActionVariant }) {
   return <Button size="sm" variant={variant} {...props} />;
+}
+
+/**
+ * 表格行内操作链接: `RowActionButton` 的 `<a>` 版本(`components/ButtonLink` 的
+ * `size="sm"` 预设)。「进入 / 查看 / 继续」这类跳转必须是真链接, 才能中键新开、
+ * 复制地址、被爬到; 但它和同一格里的按钮共用 h-7 的尺寸与 ghost 语气。
+ *
+ * `href` + `onClick(preventDefault)` 的路由内跳转与 `to` 的 `<Link>` 两种写法
+ * ButtonLink 都支持, 这里原样透传, 只锁死 size 与 variant 的取值域。
+ */
+export function RowActionLink({
+  variant = "ghost",
+  ...props
+}: Omit<ComponentPropsWithoutRef<typeof ButtonLink>, "size" | "variant"> & { variant?: RowActionVariant }) {
+  return <ButtonLink size="sm" variant={variant} {...props} />;
 }
