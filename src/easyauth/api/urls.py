@@ -7,8 +7,8 @@ from easyauth.api.approval_views import (
     app_approval_instances,
     app_approval_templates,
 )
-from easyauth.api.directory_views import (
-    directory_departments,
+from easyauth.api.directory_department_views import directory_departments
+from easyauth.api.directory_user_views import (
     directory_user_detail,
     directory_user_manager,
     directory_user_subordinates,

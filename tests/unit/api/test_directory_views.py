@@ -21,9 +21,9 @@ from easyauth.accounts.models import (
     DingTalkUserMirror,
     UserMirror,
 )
+from easyauth.api.directory_department_views import directory_departments
 from easyauth.api.directory_payloads import build_user_list_items
-from easyauth.api.directory_views import (
-    directory_departments,
+from easyauth.api.directory_user_views import (
     directory_user_detail,
     directory_user_manager,
     directory_user_subordinates,
@@ -74,7 +74,7 @@ def _principal(app: App) -> AppPrincipal:
 def _auth(monkeypatch: pytest.MonkeyPatch, app: App) -> None:
     principal = _principal(app)
     monkeypatch.setattr(
-        "easyauth.api.directory_views.authenticate_permission_query_token",
+        "easyauth.api.directory_auth.authenticate_permission_query_token",
         lambda _token: principal,
     )
 
@@ -424,7 +424,7 @@ def test_directory_users_rejects_generation_change_during_query(
         ],
     )
     monkeypatch.setattr(
-        "easyauth.api.directory_views.build_directory_snapshot",
+        "easyauth.api.directory_user_views.build_directory_snapshot",
         lambda: next(snapshots),
     )
 
@@ -677,7 +677,7 @@ def test_directory_credential_capability_required(
         return principal
 
     monkeypatch.setattr(
-        "easyauth.api.directory_views.authenticate_permission_query_token",
+        "easyauth.api.directory_auth.authenticate_permission_query_token",
         authenticate,
     )
     request = RequestFactory().get("/", HTTP_AUTHORIZATION=_AUTH_HEADER)
@@ -695,7 +695,7 @@ def test_directory_rate_limit_returns_429_with_retry_after(
     _enable_directory(app)
     _auth(monkeypatch, app)
     monkeypatch.setattr(
-        "easyauth.api.directory_views.rate_limit_exceeded",
+        "easyauth.api.directory_auth.rate_limit_exceeded",
         lambda *_args, **_kwargs: True,
     )
     request = RequestFactory().get("/", HTTP_AUTHORIZATION=_AUTH_HEADER)
