@@ -4,7 +4,6 @@ export const zhCN = {
   "wizard.auto.baseUrl": "下游地址",
   "wizard.auto.appKey": "下游 app_key",
   "wizard.auto.token": "描述符访问 token（可选）",
-  "wizard.auto.tokenHint": "下游描述符端点配置了共享密钥时填写。",
   "wizard.auto.run": "自动接入",
   "wizard.auto.failed": "自动接入失败",
   "wizard.auto.success": "自动接入完成",
@@ -59,8 +58,6 @@ export const zhCN = {
   "wizard.catalog.diff.added": "新增",
   "wizard.catalog.diff.changed": "变更",
   "wizard.catalog.diff.removed": "移除",
-  "wizard.catalog.diff.object": "对象",
-  "wizard.catalog.diff.detail": "详情",
   "wizard.catalog.diff.empty": "无差异",
   "wizard.catalog.skipHint": "跳过后可以随时在应用工作台「清单」或「权限目录」页签补齐。",
 
@@ -126,7 +123,6 @@ export const en: Record<keyof typeof zhCN, string> = {
   "wizard.auto.baseUrl": "Downstream base URL",
   "wizard.auto.appKey": "Downstream app_key",
   "wizard.auto.token": "Descriptor token (optional)",
-  "wizard.auto.tokenHint": "Provide it when the downstream descriptor endpoint is protected by a shared secret.",
   "wizard.auto.run": "Auto onboard",
   "wizard.auto.failed": "Auto onboarding failed",
   "wizard.auto.success": "Auto onboarding completed",
@@ -181,8 +177,6 @@ export const en: Record<keyof typeof zhCN, string> = {
   "wizard.catalog.diff.added": "Added",
   "wizard.catalog.diff.changed": "Changed",
   "wizard.catalog.diff.removed": "Removed",
-  "wizard.catalog.diff.object": "Object",
-  "wizard.catalog.diff.detail": "Detail",
   "wizard.catalog.diff.empty": "No differences",
   "wizard.catalog.skipHint": "You can complete this later in the workspace Manifest or Permission Catalog tabs.",
 

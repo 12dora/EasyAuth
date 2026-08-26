@@ -3,14 +3,6 @@ export const zhCN = {
 
   "settingsPlaceholder.console.title": "控制台设置",
 
-  "settingsPlaceholder.portal.title": "门户设置",
-
-  "settingsPlaceholder.description": "设置入口已预留，后续版本会开放具体配置项。",
-
-  "settingsPlaceholder.emptyTitle": "暂无可配置项",
-
-  "settingsPlaceholder.emptyDescription": "该页面为设置功能预留位，当前版本还没有可调整的配置。",
-
   "settings.integration.title": "Authentik 集成",
   "settings.integration.description": "配置 Authentik 地址与 API token，留空回退到环境变量配置。修改后可在依赖健康页发起立即检测验证连通性。",
   "settings.integration.baseUrl": "Authentik Base URL",
@@ -45,7 +37,6 @@ export const zhCN = {
 
   "settings.twoFactor.title": "两步验证",
   "settings.twoFactor.loadFailed": "两步验证状态加载失败",
-  "settings.twoFactor.description": "启用后, 登录需在密码之外额外完成一步验证。验证器与通行密钥可同时启用, 登录时任选其一。",
   "settings.twoFactor.authenticator": "验证器",
   "settings.twoFactor.authenticatorHint": "使用 Authenticator 应用生成的动态验证码。",
   "settings.twoFactor.enabled": "已启用",
@@ -115,14 +106,6 @@ export const en: Record<keyof typeof zhCN, string> = {
 
   "settingsPlaceholder.console.title": "Console Settings",
 
-  "settingsPlaceholder.portal.title": "Portal Settings",
-
-  "settingsPlaceholder.description": "Settings are reserved here; configurable options will open up in a later release.",
-
-  "settingsPlaceholder.emptyTitle": "Nothing to configure yet",
-
-  "settingsPlaceholder.emptyDescription": "This page is reserved for settings; the current release has no adjustable options.",
-
   "settings.integration.title": "Authentik Integration",
   "settings.integration.description": "Configure the Authentik base URL and API token; empty fields fall back to environment variables. After changing, run an on-demand check on the dependency health page.",
   "settings.integration.baseUrl": "Authentik Base URL",
@@ -157,7 +140,6 @@ export const en: Record<keyof typeof zhCN, string> = {
 
   "settings.twoFactor.title": "Two-step verification",
   "settings.twoFactor.loadFailed": "Failed to load two-step verification status",
-  "settings.twoFactor.description": "Once enabled, signing in requires an extra step beyond your password. You can enable both an authenticator and passkeys, then choose either at sign-in.",
   "settings.twoFactor.authenticator": "Authenticator",
   "settings.twoFactor.authenticatorHint": "A rotating code from an authenticator app.",
   "settings.twoFactor.enabled": "Enabled",

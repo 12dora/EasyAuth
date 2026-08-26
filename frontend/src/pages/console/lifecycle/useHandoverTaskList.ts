@@ -1,13 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { useServerTable } from "../../../components/antd/AppTable";
+import { serverTableQuery, useServerTable } from "../../../components/antd/AppTable";
 import { useToast } from "../../../components/ui/Toast";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../../lib/api";
 import type { ListPayload } from "../../../lib/api";
 import type { HandoverTaskRow } from "../../../lib/domain";
-import { serverTableProps, serverTableQuery } from "../serverTable";
 
 /** 交接单列表的过滤、分页与删除。 */
 export function useHandoverTaskList() {
@@ -45,11 +44,12 @@ export function useHandoverTaskList() {
   });
 
   const tasks = itemsFromPayload<HandoverTaskRow>(tasksQuery.data);
+  serverTable.setTotal(tasksQuery.data?.pagination?.total_items);
 
   return {
     tasksQuery,
     tasks,
-    tableProps: serverTableProps(serverTable.tableProps, tasksQuery.data?.pagination?.total_items ?? tasks.length),
+    tableProps: serverTable.tableProps,
     deleteTarget,
     setDeleteTarget,
     deleteMutation,

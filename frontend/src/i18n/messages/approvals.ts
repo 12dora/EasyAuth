@@ -13,8 +13,6 @@ export const zhCN = {
 
   "approvalTemplates.deleteFailed": "删除审批模板失败",
 
-  "approvalTemplates.deleteBlocked": "该审批模板已被审批实例引用，不能删除；可改为停用。",
-
   "approvalTemplates.empty.title": "暂无审批模板",
   "approvalTemplates.empty.description": "新建模板并绑定钉钉流程码后，应用即可通过 EasyAuth 发起钉钉审批。",
 
@@ -69,10 +67,6 @@ export const zhCN = {
   "approvalInstances.column.dingtalkInstance": "钉钉实例号",
   "approvalInstances.column.delivery": "投递状态",
   "approvalInstances.column.createdAt": "发起时间",
-
-  "approvalInstances.filter.status": "审批状态",
-  "approvalInstances.filter.allStatuses": "全部状态",
-  "approvalInstances.filter.appKey": "按发起应用 app_key 过滤",
 
   "approvalInstances.status.created": "已创建",
   "approvalInstances.status.submitted": "审批中",
@@ -144,8 +138,6 @@ export const en: Record<keyof typeof zhCN, string> = {
 
   "approvalTemplates.deleteFailed": "Failed to delete the approval template",
 
-  "approvalTemplates.deleteBlocked": "This template is referenced by approval instances and cannot be deleted; disable it instead.",
-
   "approvalTemplates.empty.title": "No approval templates",
   "approvalTemplates.empty.description": "Create a template bound to a DingTalk process code so applications can start DingTalk approvals through EasyAuth.",
 
@@ -200,10 +192,6 @@ export const en: Record<keyof typeof zhCN, string> = {
   "approvalInstances.column.dingtalkInstance": "DingTalk instance ID",
   "approvalInstances.column.delivery": "Delivery",
   "approvalInstances.column.createdAt": "Started at",
-
-  "approvalInstances.filter.status": "Approval status",
-  "approvalInstances.filter.allStatuses": "All statuses",
-  "approvalInstances.filter.appKey": "Filter by originating app_key",
 
   "approvalInstances.status.created": "Created",
   "approvalInstances.status.submitted": "In review",

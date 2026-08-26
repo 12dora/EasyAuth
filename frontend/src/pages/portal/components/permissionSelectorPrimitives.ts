@@ -1,7 +1,11 @@
-// 表格视觉规格的唯一出处。TablePrimitives 与门户权限选择表格
-// (按架构约定直接渲染原生 table)都从这里取 class,避免两处字面量漂移。
-export const MONO_TEXT_CLASS = "font-mono text-body leading-5 text-ink-soft";
-
+/**
+ * 权限选择表格的视觉规格。
+ *
+ * 全站数据表格已统一到 components/antd/AppTable, 只有这张表按架构约定继续用
+ * TanStack + 原生表格元素(行内有可展开的权限组与下拉, antd Table 撑不住),
+ * 因此原来的 components/ui/tableStyles 只剩它一个消费方, 直接搬到它旁边,
+ * 地基目录里不再留一份没人用的表格原语。
+ */
 export const TABLE_ROOT_CLASS = "min-w-[48rem] border-separate border-spacing-0 text-body";
 
 export const TABLE_HEAD_CLASS = "bg-paper-deep/60";

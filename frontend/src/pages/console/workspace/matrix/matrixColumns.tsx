@@ -3,10 +3,9 @@ import type { Dispatch, SetStateAction } from "react";
 import { Badge } from "../../../../components/Badge";
 import { SelectInput } from "../../../../components/Field";
 import { enumFilter, type ColumnsType } from "../../../../components/antd/AppTable";
-import { actionsColumn, textColumn } from "../../../../components/antd/columns";
+import { RowActionButton, actionsColumn, textColumn } from "../../../../components/antd/columns";
 import type { AuthorizationGroupGrantItem, AuthorizationGroupItem } from "../../../../lib/domain";
 import type { Translator } from "../../../../lib/status";
-import { RowActionButton } from "../workspaceColumns";
 import { removeGrant, updateGrant, updateGrantManagedScopePolicy, type AuthorizationGroupForm } from "./grantFormUpdates";
 import {
   isManagedUsersGrant,

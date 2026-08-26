@@ -2,12 +2,12 @@ import { Activity, RefreshCcw } from "lucide-react";
 import { useParams } from "react-router-dom";
 
 import { Button } from "../../components/Button";
+import { TextInput } from "../../components/Field";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
 import { PageState } from "../../components/ui/PageState";
 import { useI18n } from "../../i18n/I18nProvider";
 import { BlockedAppsOperationsSection } from "./operations/BlockedAppsSection";
-import { GrantCreatedRangeFilter } from "./operations/DateRangeFilter";
 import { OperationDialogs } from "./operations/OperationDialogs";
 import { OperationsTable } from "./operations/OperationsTable";
 import { ENDPOINTS, type OperationSectionConfig } from "./operations/operationQuery";
@@ -136,5 +136,39 @@ function OperationsHeaderActions({
         {t("common.refresh")}
       </Button>
     </>
+  );
+}
+
+/**
+ * 授权列表的时间范围筛选。
+ *
+ * 全站唯一保留在表格上方的筛选控件: 后端支持 created_from/created_to,
+ * 但授权列表的载荷里没有 created_at 字段, 没有对应的列可以挂表头筛选
+ * (其余分区都走列上的共享 dateRangeFilter)。
+ */
+function GrantCreatedRangeFilter({
+  searchParams,
+  onChange,
+}: {
+  searchParams: URLSearchParams;
+  onChange: (key: string, value: string) => void;
+}) {
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-2">
+      <TextInput
+        aria-label="created_from"
+        className="w-56"
+        type="datetime-local"
+        value={searchParams.get("created_from") ?? ""}
+        onChange={(event) => onChange("created_from", event.currentTarget.value)}
+      />
+      <TextInput
+        aria-label="created_to"
+        className="w-56"
+        type="datetime-local"
+        value={searchParams.get("created_to") ?? ""}
+        onChange={(event) => onChange("created_to", event.currentTarget.value)}
+      />
+    </div>
   );
 }

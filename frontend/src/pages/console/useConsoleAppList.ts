@@ -2,12 +2,11 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { useServerTable } from "../../components/antd/AppTable";
+import { serverTableQuery, useServerTable } from "../../components/antd/AppTable";
 import { apiRequest, itemsFromPayload } from "../../lib/api";
 import type { JsonObject } from "../../lib/api";
 import type { AppListPayload, AppSummary } from "../../lib/domain";
 import type { AppCreateFormPayload } from "./ConsoleAppCreateDialog";
-import { serverTableProps, serverTableQuery } from "./serverTable";
 
 /** 应用列表的装载、快速新建、行内启停与删除。 */
 export function useConsoleAppList() {
@@ -62,11 +61,12 @@ export function useConsoleAppList() {
   });
 
   const apps = itemsFromPayload<AppSummary>(appsQuery.data);
+  serverTable.setTotal(appsQuery.data?.pagination?.total_items);
 
   return {
     appsQuery,
     apps,
-    tableProps: serverTableProps(serverTable.tableProps, appsQuery.data?.pagination?.total_items ?? apps.length),
+    tableProps: serverTable.tableProps,
     createDialogOpen,
     setCreateDialogOpen,
     deleteTarget,

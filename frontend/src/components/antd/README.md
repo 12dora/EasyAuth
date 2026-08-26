@@ -2,8 +2,11 @@
 
 全站数据表格统一走 Ant Design `Table`，页面**只允许**消费本目录导出的封装。
 `src/components/tableArchitecture.antd.test.ts` 是护栏：页面里直接 `import { Table } from "antd"`、
-手写 `<table>`、用 `useReactTable`、或引入自研表格原语（`components/ui/TableView` 等）都会让测试失败。
-未迁移的页面登记在该测试的 `ALLOWED_LEGACY_TABLE_FILES` 里，迁一个删一行。
+手写 `<table>`、用 `useReactTable`、或引入自研表格原语都会让测试失败。
+未迁移的页面登记在该测试的 `ALLOWED_LEGACY_TABLE_FILES` 里，迁一个删一行；
+现在只剩门户 `PermissionSelector` 一族（TanStack + 原生 table + PaginationBar，按设计保留），
+`components/ui/Table*` 自研原语已整体删除，它需要的表格 class 搬到了
+`pages/portal/components/permissionSelectorPrimitives.ts`。
 
 主题与 locale 由 `AppConfigProvider` 在 `src/main.tsx` 里全局挂载（在 `I18nProvider` 之内），
 页面不需要再包 `ConfigProvider`。
@@ -80,23 +83,25 @@ serverColumn<T>(column, filteredValue?, { multiple? = false }): ColumnType<T>
 // 把任意列改造成「服务端筛选」列: 去掉 onFilter + 受控 filteredValue(见下)
 ```
 
-操作列里的按钮用仓库自研 `components/Button`:
+操作列里的按钮用本目录的 `RowActionButton`(仓库自研 `components/Button` 的 `size="sm"` 预设):
 
 ```tsx
 actionsColumn<Row>({
   render: (row) => (
     <>
-      <Button type="button" size="sm" variant="ghost" onClick={...}>{t("common.edit")}</Button>
-      <Button type="button" size="sm" variant="ghost-danger" onClick={...}>{t("common.delete")}</Button>
+      <RowActionButton type="button" onClick={...}>{t("common.edit")}</RowActionButton>
+      <RowActionButton type="button" variant="ghost-danger" onClick={...}>{t("common.delete")}</RowActionButton>
     </>
   ),
 })
 ```
 
 `size="sm"`(h-7)与分页控件的 28px 对齐; 破坏性动作用 `variant="ghost-danger"`。
-**不要**用 `components/ui/TableActions` 的 `TableRowActionButton` / `TableRowActionLink` ——
-`tableArchitecture.antd.test.ts` 的 `FORBIDDEN_PRIMITIVE_IMPORT` 已经禁掉了这些原语,
-迁移完成后整个 `components/ui/Table*` 会被删除。
+「点击不冒泡到行」由 `actionsColumn` 的容器负责, 按钮本身不用再管。
+直接写 `<Button size="sm" variant="ghost">` 也等价, 但**不要**在页面里再包一层自己的
+`RowActionButton` —— 全站只有这一份。
+
+同目录还导出 `MONO_TEXT_CLASS`: 表格内等宽标识符(app_key / user_id / 版本号)的唯一 class 出处。
 
 ## 筛选助手 — `./AppTable`
 
@@ -250,7 +255,7 @@ AppTableTestProvider                          // I18nProvider + AppConfigProvide
 openHeaderFilter(user, columnTitle)           // 打开某列表头筛选下拉, 返回下拉面板
 openHeaderFilter(user, scope, columnTitle)    // 一个页面有多张表时限定在某个容器内
 openFilterDropdown()                          // 已经点开时, 等下拉可见并返回
-ANTD_TEST_TIMEOUT_MS                          // 20_000
+ANTD_TEST_TIMEOUT_MS                          // 30_000
 ```
 
 - 渲染 AppTable 的用例**必须**包 `AppConfigProvider`（主题与 locale 都在那），

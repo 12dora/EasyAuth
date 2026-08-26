@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 
-import { useServerTable, type AppTableProps } from "../../components/antd/AppTable";
+import { serverTableQuery, useServerTable } from "../../components/antd/AppTable";
 import { useToast } from "../../components/ui/Toast";
 import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../lib/api";
@@ -30,9 +30,7 @@ export function useApprovalInstances() {
     defaultPageSize: DEFAULT_PAGE_SIZE,
     filterParams: { status: "status", app_key: "app_key" },
   });
-  const queryString = new URLSearchParams(
-    Object.entries(serverTable.params).map(([key, value]) => [key, String(value)]),
-  ).toString();
+  const queryString = serverTableQuery(serverTable.params);
 
   const query = useQuery({
     queryKey: [...INSTANCES_QUERY_PREFIX, queryString],
@@ -72,17 +70,15 @@ export function useApprovalInstances() {
   });
 
   const rows = itemsFromPayload<ApprovalInstanceRow>(query.data);
-  // 总条数只有请求回来后才知道, 因此在 useServerTable 之外回填。
-  const total = query.data?.pagination?.total_items ?? rows.length;
-  const tableProps: Pick<AppTableProps<ApprovalInstanceRow>, "pagination" | "onChange"> = {
-    ...serverTable.tableProps,
-    pagination: { ...serverTable.tableProps.pagination, total },
-  };
+  // 总条数只有请求回来后才知道, 因此拿到响应再回填(setTotal 内部做等值短路)。
+  serverTable.setTotal(query.data?.pagination?.total_items);
 
   return {
     query,
     rows,
-    tableProps,
+    tableProps: serverTable.tableProps,
+    // 表头筛选的真相在 useServerTable 里, 列要用 serverColumn 受控回去。
+    filters: serverTable.query.filters,
     isRedelivering: (row: ApprovalInstanceRow) => redeliveringInstanceIds.has(row.instance_id),
     redeliver: (row: ApprovalInstanceRow) => {
       if (redeliveringInstanceIdsRef.current.has(row.instance_id)) {

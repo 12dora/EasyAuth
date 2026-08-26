@@ -1,19 +1,19 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { lazy, Suspense, type ReactElement } from "react";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { AppConfigProvider } from "../../components/antd/AppConfigProvider";
 import { ToastProvider } from "../../components/ui/Toast";
 import { ManifestTab } from "./workspace/tabs/ManifestTab";
 import { QueryTestTab } from "./workspace/tabs/QueryTestTab";
 import { RulesTab } from "./workspace/tabs/RulesTab";
+import { ANTD_TEST_TIMEOUT_MS, openHeaderFilter, renderWithAntd } from "../../components/antd/testing";
 
 // antd Table 在 jsdom 里每次筛选/排序都要重建整棵表格, 比自研原语慢得多,
 // 默认 5s 已经不够本文件的多表页签用例; 只放宽这里的超时。
-vi.setConfig({ testTimeout: 30000 });
+vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
 
 const LazyConsoleAppWorkspace = lazy(() =>
   import("./ConsoleAppWorkspace").then((module) => ({ default: module.ConsoleAppWorkspace })),
@@ -1039,32 +1039,14 @@ function renderWithClient(ui: ReactElement) {
     },
   });
 
-  render(
+  renderWithAntd(
     <QueryClientProvider client={client}>
-      <AppConfigProvider>
-        <ToastProvider>{ui}</ToastProvider>
-      </AppConfigProvider>
+      <ToastProvider>{ui}</ToastProvider>
     </QueryClientProvider>,
   );
 }
 
 /** 打开指定表头的筛选下拉, 返回当前展开的那个下拉面板。 */
-async function openHeaderFilter(
-  user: ReturnType<typeof userEvent.setup>,
-  scope: HTMLElement,
-  headerText: string,
-): Promise<HTMLElement> {
-  const header = within(scope).getAllByRole("columnheader").find((cell) => cell.textContent?.includes(headerText));
-  expect(header).toBeDefined();
-  const trigger = (header as HTMLElement).querySelector(".ant-table-filter-trigger");
-  expect(trigger).not.toBeNull();
-  await user.click(trigger as HTMLElement);
-  return waitFor(() => {
-    const dropdown = document.querySelector(".ant-dropdown:not(.ant-dropdown-hidden) .ant-table-filter-dropdown");
-    expect(dropdown).not.toBeNull();
-    return dropdown as HTMLElement;
-  });
-}
 
 function bodyRowKeys(scope: HTMLElement): string[] {
   return [...scope.querySelectorAll(".ant-table-tbody tr.ant-table-row")].map(

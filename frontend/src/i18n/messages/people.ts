@@ -76,9 +76,6 @@ export const zhCN = {
 
   "people.loadFailed": "人员加载失败",
 
-  "people.filter.status": "在职状态",
-  "people.filter.all": "全部",
-
   "people.status.active": "在职",
   "people.status.disabled": "已停用",
   "people.status.departed": "已离职",
@@ -186,9 +183,6 @@ export const en: Record<keyof typeof zhCN, string> = {
   "people.description": "Review everyone's employment status and start offboarding or transfer handovers.",
 
   "people.loadFailed": "Failed to load people",
-
-  "people.filter.status": "Employment status",
-  "people.filter.all": "All",
 
   "people.status.active": "Active",
   "people.status.disabled": "Disabled",

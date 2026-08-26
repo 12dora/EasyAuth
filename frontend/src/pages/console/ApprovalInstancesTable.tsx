@@ -4,7 +4,13 @@ import type { ReactNode } from "react";
 import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
 import { AppTable, type AppTableProps, type ColumnType, type ColumnsType } from "../../components/antd/AppTable";
-import { dateTimeColumn, statusColumn, textColumn, type StatusColumnOption } from "../../components/antd/columns";
+import {
+  dateTimeColumn,
+  serverColumn,
+  statusColumn,
+  textColumn,
+  type StatusColumnOption,
+} from "../../components/antd/columns";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { ApprovalInstanceRow } from "../../lib/domain";
 import { APPROVAL_STATUS_LABEL_KEYS } from "../../lib/status";
@@ -19,11 +25,14 @@ export function ApprovalInstancesTable({
   rows,
   isLoading,
   tableProps,
+  filters,
   actions,
 }: {
   rows: ApprovalInstanceRow[];
   isLoading: boolean;
   tableProps: Pick<AppTableProps<ApprovalInstanceRow>, "pagination" | "onChange">;
+  /** 列 key -> 已选筛选值, 来自 useServerTable 的查询状态。 */
+  filters: Record<string, string[]>;
   actions: RedeliverActions;
 }) {
   const { t } = useI18n();
@@ -31,7 +40,7 @@ export function ApprovalInstancesTable({
   return (
     <AppTable<ApprovalInstanceRow>
       {...tableProps}
-      columns={instanceColumns(t, actions)}
+      columns={instanceColumns(t, filters, actions)}
       dataSource={rows}
       emptyTitle={t("console.operations.empty")}
       emptyDescription={t("console.operations.emptyDescription")}
@@ -42,9 +51,13 @@ export function ApprovalInstancesTable({
   );
 }
 
-function instanceColumns(t: Translator, actions: RedeliverActions): ColumnsType<ApprovalInstanceRow> {
+function instanceColumns(
+  t: Translator,
+  filters: Record<string, string[]>,
+  actions: RedeliverActions,
+): ColumnsType<ApprovalInstanceRow> {
   return [
-    serverFiltered(
+    serverColumn(
       textColumn<ApprovalInstanceRow>({
         key: "app_key",
         title: t("approvalInstances.column.app"),
@@ -52,6 +65,7 @@ function instanceColumns(t: Translator, actions: RedeliverActions): ColumnsType<
         filter: true,
         width: 150,
       }),
+      filters.app_key,
     ),
     textColumn<ApprovalInstanceRow>({
       key: "template_key",
@@ -68,13 +82,14 @@ function instanceColumns(t: Translator, actions: RedeliverActions): ColumnsType<
     }),
     // 失败原因没有独立的列, 沿用旧表格挂在状态徽章上的 title 提示。
     withTitle(
-      serverFiltered(
+      serverColumn(
         statusColumn<ApprovalInstanceRow>({
           key: "status",
           title: t("common.status"),
           options: approvalStatusOptions(t),
           width: 130,
         }),
+        filters.status,
       ),
       (row) => row.last_error || undefined,
     ),
@@ -97,14 +112,6 @@ function instanceColumns(t: Translator, actions: RedeliverActions): ColumnsType<
       sorter: false,
     }),
   ];
-}
-
-/**
- * 服务端筛选列: 后端已按 status / app_key 过滤当前页, 必须去掉列预设自带的
- * 客户端 `onFilter`, 否则 antd 会拿当前页再筛一次。
- */
-function serverFiltered<T>(column: ColumnType<T>): ColumnType<T> {
-  return { ...column, onFilter: undefined };
 }
 
 /** 给列预设的单元格补一个原生 title 提示, 渲染仍走预设。 */

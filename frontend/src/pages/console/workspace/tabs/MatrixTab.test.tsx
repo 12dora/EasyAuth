@@ -1,15 +1,15 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { AppConfigProvider } from "../../../../components/antd/AppConfigProvider";
 import { MatrixTab } from "./MatrixTab";
+import { ANTD_TEST_TIMEOUT_MS, openHeaderFilter, renderWithAntd } from "../../../../components/antd/testing";
 
 // antd Table 每次筛选都要重建整棵表格, jsdom 下比自研原语慢;
 // 整套测试并行跑时表头筛选用例会逼近 20s, 因此本文件放宽到 30s。
-vi.setConfig({ testTimeout: 30000 });
+vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
 
 describe("MatrixTab", () => {
   afterEach(() => {
@@ -460,26 +460,14 @@ function renderWithClient(ui: ReactElement) {
     },
   });
 
-  render(
+  renderWithAntd(
     <QueryClientProvider client={client}>
-      <AppConfigProvider>{ui}</AppConfigProvider>
+      {ui}
     </QueryClientProvider>,
   );
 }
 
 /** 打开指定表头的筛选下拉, 返回当前展开的那个下拉面板。 */
-async function openHeaderFilter(user: ReturnType<typeof userEvent.setup>, headerText: string): Promise<HTMLElement> {
-  const header = screen.getAllByRole("columnheader").find((cell) => cell.textContent?.includes(headerText));
-  expect(header).toBeDefined();
-  const trigger = (header as HTMLElement).querySelector(".ant-table-filter-trigger");
-  expect(trigger).not.toBeNull();
-  await user.click(trigger as HTMLElement);
-  return waitFor(() => {
-    const dropdown = document.querySelector(".ant-dropdown:not(.ant-dropdown-hidden) .ant-table-filter-dropdown");
-    expect(dropdown).not.toBeNull();
-    return dropdown as HTMLElement;
-  });
-}
 
 function bodyRowKeys(): string[] {
   return [...document.querySelectorAll(".ant-table-tbody tr.ant-table-row")].map(

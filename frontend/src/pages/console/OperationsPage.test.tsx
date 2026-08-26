@@ -1,15 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { AppConfigProvider } from "../../components/antd/AppConfigProvider";
-import { I18nProvider } from "../../i18n/I18nProvider";
 import { OperationsPage } from "./OperationsPage";
+import { ANTD_TEST_TIMEOUT_MS, openFilterDropdown, openHeaderFilter, renderWithAntd } from "../../components/antd/testing";
 
 // antd Table 在 jsdom 里每次筛选/翻页都要重建整棵表格, 默认 5s 不够。
-vi.setConfig({ testTimeout: 20000 });
+vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
 
 describe("OperationsPage", () => {
   afterEach(() => {
@@ -547,38 +546,21 @@ function renderOperationsPage(section = "access-requests", search = "") {
     },
   });
 
-  render(
+  renderWithAntd(
     <QueryClientProvider client={client}>
-      <I18nProvider>
-        <AppConfigProvider>
-          <MemoryRouter initialEntries={[`/console/operations/${section}${search}`]}>
-            <LocationSearch />
-            <Routes>
-              <Route path="/console/operations/:section" element={<OperationsPage />} />
-            </Routes>
-          </MemoryRouter>
-        </AppConfigProvider>
-      </I18nProvider>
+      <MemoryRouter initialEntries={[`/console/operations/${section}${search}`]}>
+        <LocationSearch />
+        <Routes>
+          <Route path="/console/operations/:section" element={<OperationsPage />} />
+        </Routes>
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
 
-/** 打开某一列的表头筛选下拉, 返回当前可见的下拉内容。 */
-async function openHeaderFilter(user: ReturnType<typeof userEvent.setup>, columnTitle: string) {
-  const header = [...document.querySelectorAll("th.ant-table-cell")].find((cell) =>
-    cell.textContent?.startsWith(columnTitle),
-  );
-  expect(header).toBeDefined();
-  return await openFilterOf(user, header as HTMLElement);
-}
-
 async function openFilterOf(user: ReturnType<typeof userEvent.setup>, header: HTMLElement) {
   await user.click(header.querySelector(".ant-table-filter-trigger") as HTMLElement);
-  return await waitFor(() => {
-    const dropdown = document.querySelector(".ant-dropdown:not(.ant-dropdown-hidden) .ant-table-filter-dropdown");
-    expect(dropdown).not.toBeNull();
-    return dropdown as HTMLElement;
-  });
+  return await openFilterDropdown();
 }
 
 function columnHeader(columnTitle: string): HTMLElement {

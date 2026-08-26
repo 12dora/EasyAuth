@@ -2,11 +2,10 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { useServerTable } from "../../../components/antd/AppTable";
+import { serverTableQuery, useServerTable } from "../../../components/antd/AppTable";
 import { apiRequest, itemsFromPayload } from "../../../lib/api";
 import type { JsonObject, ListPayload } from "../../../lib/api";
 import type { HandoverTaskPayload, PersonRow } from "../../../lib/domain";
-import { serverTableProps, serverTableQuery } from "../serverTable";
 import { DEFAULT_PAGE_SIZE, PEOPLE_QUERY_PREFIX, type HandoverStartTarget } from "./consolePeopleModel";
 
 /** 人员列表的过滤、分页与发起交接单。 */
@@ -55,11 +54,12 @@ export function useConsolePeopleList() {
   });
 
   const people = itemsFromPayload<PersonRow>(peopleQuery.data);
+  serverTable.setTotal(peopleQuery.data?.pagination?.total_items);
 
   return {
     peopleQuery,
     people,
-    tableProps: serverTableProps(serverTable.tableProps, peopleQuery.data?.pagination?.total_items ?? people.length),
+    tableProps: serverTable.tableProps,
     searchInput,
     setSearchInput,
     startTarget,

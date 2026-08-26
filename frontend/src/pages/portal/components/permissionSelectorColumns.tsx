@@ -1,6 +1,6 @@
 import type { ColumnDef } from "@tanstack/react-table";
 
-import { MONO_TEXT_CLASS } from "../../../components/ui/tableStyles";
+import { MONO_TEXT_CLASS } from "../../../components/antd/columns";
 import type { Locale } from "../../../i18n/messages";
 import type { Translator } from "../../../lib/status";
 

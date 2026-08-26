@@ -28,10 +28,6 @@ export const zhCN = {
 
   "onboarding.templates.title": "岗位模板",
   "onboarding.templates.loadFailed": "岗位模板加载失败",
-  "onboarding.templates.deleteTitle": "删除岗位模板",
-  "onboarding.templates.deleteMessage": "确定删除岗位模板「{name}」吗？该操作不可恢复。",
-  "onboarding.templates.deleteSuccess": "岗位模板已删除",
-  "onboarding.templates.deleteFailed": "删除岗位模板失败",
   "onboarding.templates.enableSuccess": "岗位模板已启用",
   "onboarding.templates.disableSuccess": "岗位模板已停用",
   "onboarding.templates.toggleFailed": "更新岗位模板状态失败",
@@ -43,7 +39,6 @@ export const zhCN = {
 
   "onboarding.editor.createTitle": "新建岗位模板",
   "onboarding.editor.editTitle": "编辑岗位模板",
-  "onboarding.editor.isActive": "启用该模板",
   "onboarding.editor.items": "模板权限项",
   "onboarding.editor.itemsEmpty": "尚未添加权限项。",
   "onboarding.editor.app": "应用",
@@ -105,10 +100,6 @@ export const en: Record<keyof typeof zhCN, string> = {
 
   "onboarding.templates.title": "Position templates",
   "onboarding.templates.loadFailed": "Failed to load position templates",
-  "onboarding.templates.deleteTitle": "Delete position template",
-  "onboarding.templates.deleteMessage": "Delete position template “{name}”? This cannot be undone.",
-  "onboarding.templates.deleteSuccess": "Position template deleted",
-  "onboarding.templates.deleteFailed": "Failed to delete the position template",
   "onboarding.templates.enableSuccess": "Position template enabled",
   "onboarding.templates.disableSuccess": "Position template disabled",
   "onboarding.templates.toggleFailed": "Failed to update the template status",
@@ -120,7 +111,6 @@ export const en: Record<keyof typeof zhCN, string> = {
 
   "onboarding.editor.createTitle": "Create position template",
   "onboarding.editor.editTitle": "Edit position template",
-  "onboarding.editor.isActive": "Enable this template",
   "onboarding.editor.items": "Template access items",
   "onboarding.editor.itemsEmpty": "No access items added yet.",
   "onboarding.editor.app": "Application",

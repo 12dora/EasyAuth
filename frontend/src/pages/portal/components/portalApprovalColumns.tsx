@@ -2,8 +2,8 @@ import type { ApprovalDecisionMode } from "../../../components/ApprovalDecisionD
 import { Badge } from "../../../components/Badge";
 import { Button } from "../../../components/Button";
 import type { ColumnsType, ColumnType } from "../../../components/antd/AppTable";
-import { actionsColumn, dateTimeColumn, textColumn } from "../../../components/antd/columns";
-import { MONO_TEXT_CLASS } from "../../../components/ui/tableStyles";
+import { MONO_TEXT_CLASS, actionsColumn, dateTimeColumn, textColumn } from "../../../components/antd/columns";
+
 import {
   accessRequestStatusLabel,
   badgeToneForAccessRequestStatus,

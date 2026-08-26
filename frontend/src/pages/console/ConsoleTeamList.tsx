@@ -4,7 +4,7 @@ import type { FormEvent } from "react";
 import { useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
-import { AppTable, useServerTable, type ColumnsType } from "../../components/antd/AppTable";
+import { AppTable, serverTableQuery, useServerTable, type ColumnsType } from "../../components/antd/AppTable";
 import { actionsColumn, dateTimeColumn, statusColumn, textColumn } from "../../components/antd/columns";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { PageState } from "../../components/ui/PageState";
@@ -20,7 +20,6 @@ import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../lib/api";
 import type { JsonObject, ListPayload } from "../../lib/api";
 import type { TeamPayload, TeamSummary } from "../../lib/domain";
-import { serverTableProps, serverTableQuery } from "./serverTable";
 
 /** 团队列表查询键前缀; 详情页失效列表时也用它。 */
 export const TEAMS_LIST_QUERY_KEY = ["console", "teams", "list"];
@@ -48,6 +47,7 @@ export function ConsoleTeamList() {
     placeholderData: (previous) => previous,
   });
   const teams = itemsFromPayload<TeamSummary>(teamsQuery.data);
+  serverTable.setTotal(teamsQuery.data?.pagination?.total_items);
   const deleteMutation = useMutation({
     mutationFn: (team: TeamSummary) =>
       apiRequest(`/console/api/v1/teams/${team.id}`, { method: "DELETE" }),
@@ -172,7 +172,7 @@ export function ConsoleTeamList() {
       ) : (
         <section className="space-y-3">
           <AppTable<TeamSummary>
-            {...serverTableProps(serverTable.tableProps, teamsQuery.data?.pagination?.total_items ?? teams.length)}
+            {...serverTable.tableProps}
             columns={columns}
             dataSource={teams}
             emptyDescription={t("console.teams.empty.description")}

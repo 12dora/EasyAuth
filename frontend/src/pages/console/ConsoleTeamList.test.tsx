@@ -1,14 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { AppConfigProvider } from "../../components/antd/AppConfigProvider";
 import { ConsoleTeamList } from "./ConsoleTeamList";
+import { ANTD_TEST_TIMEOUT_MS, renderWithAntd } from "../../components/antd/testing";
 
 // antd Table 在 jsdom 里每次翻页都要重建整棵表格, 默认 5s 不够。
-vi.setConfig({ testTimeout: 20000 });
+vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
 
 describe("ConsoleTeamList", () => {
   afterEach(() => {
@@ -138,16 +138,14 @@ function renderList() {
     },
   });
 
-  render(
+  renderWithAntd(
     <QueryClientProvider client={client}>
-      <AppConfigProvider>
-        <MemoryRouter initialEntries={["/console/teams"]}>
-          <Routes>
-            <Route path="/console/teams" element={<ConsoleTeamList />} />
-            <Route path="/console/teams/:teamId" element={<LocationProbe />} />
-          </Routes>
-        </MemoryRouter>
-      </AppConfigProvider>
+      <MemoryRouter initialEntries={["/console/teams"]}>
+        <Routes>
+          <Route path="/console/teams" element={<ConsoleTeamList />} />
+          <Route path="/console/teams/:teamId" element={<LocationProbe />} />
+        </Routes>
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }

@@ -16,7 +16,6 @@ export function PortalApprovalsSection() {
     tab,
     switchTab,
     serverTable,
-    totalItems,
     query,
     approvals,
     detail,
@@ -54,7 +53,6 @@ export function PortalApprovalsSection() {
             rows={approvals}
             serverTable={serverTable}
             tab={tab}
-            totalItems={totalItems || approvals.length}
           />
         )}
       </div>

@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { useState } from "react";
 import { AppTable, enumFilter, type ColumnsType } from "../../../../components/antd/AppTable";
-import { actionsColumn, textColumn } from "../../../../components/antd/columns";
+import { RowActionButton, actionsColumn, textColumn } from "../../../../components/antd/columns";
 import { EmptyState } from "../../../../components/ui/EmptyState";
 
 import { Badge } from "../../../../components/Badge";
@@ -17,7 +17,6 @@ import type { ApprovalRuleItem } from "../../../../lib/domain";
 import { useI18n } from "../../../../i18n/I18nProvider";
 import type { Translator } from "../../../../lib/status";
 import { safeJoin } from "../utils";
-import { RowActionButton } from "../workspaceColumns";
 
 type RuleTargetType = "authorization_group" | "permission";
 type EditableApprovalRule = ApprovalRuleItem & { blocking?: boolean; status?: string };

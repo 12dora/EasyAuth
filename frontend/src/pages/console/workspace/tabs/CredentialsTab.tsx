@@ -2,7 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Pencil, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
 import { AppTable, enumFilter, type ColumnsType } from "../../../../components/antd/AppTable";
-import { actionsColumn, textColumn } from "../../../../components/antd/columns";
+import { RowActionButton, actionsColumn, textColumn } from "../../../../components/antd/columns";
 import { EmptyState } from "../../../../components/ui/EmptyState";
 
 import { Badge } from "../../../../components/Badge";
@@ -20,7 +20,7 @@ import { CreateCredentialForm } from "../credentials/CreateCredentialForm";
 import { useCredentialsActions } from "../credentials/useCredentialsActions";
 import { invalidateAppDerivedQueries } from "../invalidateAppQueries";
 import { credentialKindLabel } from "../utils";
-import { activeStatusColumn, RowActionButton } from "../workspaceColumns";
+import { activeStatusColumn } from "../workspaceColumns";
 
 export function CredentialsTab({ appKey, canManage }: { appKey: string; canManage: boolean }) {
   const { t } = useI18n();

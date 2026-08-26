@@ -1,8 +1,8 @@
-import { actionsColumn, textColumn } from "../../../../components/antd/columns";
+import { RowActionButton, actionsColumn, textColumn } from "../../../../components/antd/columns";
 import { enumFilter, type ColumnsType } from "../../../../components/antd/AppTable";
 import type { ConfigurationIssue } from "../../../../lib/domain";
 import type { Translator } from "../../../../lib/status";
-import { activeStatusColumn, RowActionButton } from "../workspaceColumns";
+import { activeStatusColumn } from "../workspaceColumns";
 import { roleLabel, type MembershipItem } from "./overviewModel";
 
 export function membershipTableColumns({

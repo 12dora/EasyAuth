@@ -4,9 +4,9 @@ import { useOutletContext } from "react-router-dom";
 
 import type { AppShellOutletContext } from "../../components/AppShell";
 import { AppTable, useServerTable, type ColumnsType } from "../../components/antd/AppTable";
-import { actionsColumn, dateTimeColumn, textColumn } from "../../components/antd/columns";
+import { MONO_TEXT_CLASS, actionsColumn, dateTimeColumn, textColumn } from "../../components/antd/columns";
 import { PageState } from "../../components/ui/PageState";
-import { MONO_TEXT_CLASS } from "../../components/ui/tableStyles";
+
 
 import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
@@ -80,6 +80,7 @@ function PortalGrantSection({ endpoint, emptyText }: { endpoint: string; emptyTe
       parsePortalGrantList(await apiRequest<unknown>(`${endpoint}?page=${page}&page_size=${pageSize}`)),
   });
   const grants = query.data?.data ?? [];
+  serverTable.setTotal(query.data?.pagination.total_items);
   useClampPage(query.data, serverTable.query.page, serverTable.setPage);
   const columns = useMemo<ColumnsType<PortalGrantRow>>(
     () => [
@@ -149,11 +150,6 @@ function PortalGrantSection({ endpoint, emptyText }: { endpoint: string; emptyTe
           emptyDescription={t("portal.grants.emptyDescription")}
           emptyTitle={emptyText}
           loading={query.isLoading}
-          pagination={{
-            current: serverTable.query.page,
-            pageSize: serverTable.query.pageSize,
-            total: query.data?.pagination.total_items ?? 0,
-          }}
           rowKey="grant_id"
         />
       )}
@@ -188,6 +184,7 @@ function PortalRequestSection() {
     },
   });
   const requests = query.data?.data ?? [];
+  serverTable.setTotal(query.data?.pagination.total_items);
   useClampPage(query.data, serverTable.query.page, serverTable.setPage);
   const columns = useMemo<ColumnsType<PortalRequestRow>>(
     () => [
@@ -265,11 +262,6 @@ function PortalRequestSection() {
           emptyTitle={t("portal.requests.empty")}
           loading={query.isLoading}
           minWidth={1400}
-          pagination={{
-            current: serverTable.query.page,
-            pageSize: serverTable.query.pageSize,
-            total: query.data?.pagination.total_items ?? 0,
-          }}
           rowKey="id"
         />
       )}

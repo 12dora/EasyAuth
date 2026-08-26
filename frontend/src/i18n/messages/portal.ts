@@ -4,7 +4,6 @@ export const zhCN = {
   "portal.grants.emptyCurrent": "暂无当前授权",
   "portal.grants.emptyExpiring": "暂无即将过期授权",
   "portal.grants.loadFailed": "授权加载失败",
-  "portal.grants.ariaLabel": "我的授权",
   "portal.grants.emptyDescription": "当前视图没有可展示的授权记录。",
 
   "portal.column.groups": "权限组",
@@ -19,7 +18,6 @@ export const zhCN = {
   "portal.requests.loadFailed": "申请记录加载失败",
   "portal.requests.empty": "暂无申请记录",
   "portal.requests.emptyDescription": "当前账号还没有提交过权限申请。",
-  "portal.requests.rejectedInfo": "驳回理由：{comment}（{time}）",
   "portal.requests.withdraw": "撤回",
   "portal.requests.withdrawFailed": "撤回失败",
 
@@ -76,7 +74,6 @@ export const zhCN = {
   "portal.approvals.column.content": "申请内容",
   "portal.approvals.column.decidedAt": "处理时间",
   "portal.approvals.column.myComment": "我的意见",
-  "portal.approvals.summary.directGrants": "直接权限 {count} 项",
   "portal.approvals.approveDescription": "同意后将按申请内容为「{applicant}」开通「{app}」的授权。",
   "portal.approvals.rejectDescription": "驳回「{applicant}」对「{app}」的申请，驳回理由会展示给申请人。",
 } as const;
@@ -87,7 +84,6 @@ export const en: Record<keyof typeof zhCN, string> = {
   "portal.grants.emptyCurrent": "No current grants",
   "portal.grants.emptyExpiring": "No expiring grants",
   "portal.grants.loadFailed": "Failed to load grants",
-  "portal.grants.ariaLabel": "My grants",
   "portal.grants.emptyDescription": "No grant records to show in this view.",
 
   "portal.column.groups": "Permission groups",
@@ -102,7 +98,6 @@ export const en: Record<keyof typeof zhCN, string> = {
   "portal.requests.loadFailed": "Failed to load requests",
   "portal.requests.empty": "No requests yet",
   "portal.requests.emptyDescription": "This account has not submitted any access requests yet.",
-  "portal.requests.rejectedInfo": "Rejection reason: {comment} ({time})",
   "portal.requests.withdraw": "Withdraw",
   "portal.requests.withdrawFailed": "Withdraw failed",
 
@@ -159,7 +154,6 @@ export const en: Record<keyof typeof zhCN, string> = {
   "portal.approvals.column.content": "Requested access",
   "portal.approvals.column.decidedAt": "Processed at",
   "portal.approvals.column.myComment": "My comment",
-  "portal.approvals.summary.directGrants": "{count} direct permission(s)",
   "portal.approvals.approveDescription": "Approving grants \"{applicant}\" the requested access to \"{app}\".",
   "portal.approvals.rejectDescription": "Reject \"{applicant}\"'s request for \"{app}\"; the reason will be shown to the applicant.",
 };

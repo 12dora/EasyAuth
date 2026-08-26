@@ -5,8 +5,9 @@ import { Button } from "../../../../components/Button";
 import { TextInput } from "../../../../components/Field";
 import { StatusBanner } from "../../../../components/StatusBanner";
 import { AppTable, textFilter, type ColumnsType } from "../../../../components/antd/AppTable";
+import { MONO_TEXT_CLASS } from "../../../../components/antd/columns";
 import { PanelSurface } from "../../../../components/ui/PanelSurface";
-import { MONO_TEXT_CLASS } from "../../../../components/ui/tableStyles";
+
 import { useI18n } from "../../../../i18n/I18nProvider";
 import type { AuthorizationGroupItem, ConnectorInstanceItem } from "../../../../lib/domain";
 import {

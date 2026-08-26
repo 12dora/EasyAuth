@@ -1,13 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, expect, test, vi } from "vitest";
 
-import { AppConfigProvider } from "../../../../components/antd/AppConfigProvider";
 import { OverviewTab } from "./OverviewTab";
+import { ANTD_TEST_TIMEOUT_MS, openHeaderFilter, renderWithAntd } from "../../../../components/antd/testing";
 
 // antd Table 每次筛选都要重建整棵表格, jsdom 下比自研原语慢, 放宽本文件超时。
-vi.setConfig({ testTimeout: 30000 });
+vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -31,19 +31,17 @@ test("概览显示权威授权组数量", async () => {
     defaultOptions: { queries: { retry: false } },
   });
 
-  render(
+  renderWithAntd(
     <QueryClientProvider client={client}>
-      <AppConfigProvider>
-        <OverviewTab
-          appKey="demo"
-          app={{
-            id: 1,
-            app_key: "demo",
-            name: "Demo",
-            authorization_group_count: 7,
-          }}
-        />
-      </AppConfigProvider>
+      <OverviewTab
+        appKey="demo"
+        app={{
+          id: 1,
+          app_key: "demo",
+          name: "Demo",
+          authorization_group_count: 7,
+        }}
+      />
     </QueryClientProvider>,
   );
 
@@ -73,14 +71,12 @@ test("使用真实成员序列化形状按 membership ID 停用成员", async ()
   vi.stubGlobal("fetch", fetchMock);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-  render(
+  renderWithAntd(
     <QueryClientProvider client={client}>
-      <AppConfigProvider>
-        <OverviewTab
-          appKey="demo"
-          app={{ id: 1, app_key: "demo", name: "Demo", capabilities: { can_manage_memberships: true } }}
-        />
-      </AppConfigProvider>
+      <OverviewTab
+        appKey="demo"
+        app={{ id: 1, app_key: "demo", name: "Demo", capabilities: { can_manage_memberships: true } }}
+      />
     </QueryClientProvider>,
   );
 
@@ -120,11 +116,9 @@ test("成员表头按角色筛选并保留 AppTable 分页", async () => {
   // antd 表格每次筛选都要整表重渲染, user-event 默认的事件间隔会让本用例逼近超时。
   const user = userEvent.setup({ delay: null });
 
-  render(
+  renderWithAntd(
     <QueryClientProvider client={client}>
-      <AppConfigProvider>
-        <OverviewTab appKey="demo" app={{ id: 1, app_key: "demo", name: "Demo" }} />
-      </AppConfigProvider>
+      <OverviewTab appKey="demo" app={{ id: 1, app_key: "demo", name: "Demo" }} />
     </QueryClientProvider>,
   );
 
@@ -141,22 +135,6 @@ test("成员表头按角色筛选并保留 AppTable 分页", async () => {
 });
 
 /** 打开指定表头的筛选下拉, 返回当前展开的那个下拉面板。 */
-async function openHeaderFilter(
-  user: ReturnType<typeof userEvent.setup>,
-  scope: HTMLElement,
-  headerText: string,
-): Promise<HTMLElement> {
-  const header = within(scope).getAllByRole("columnheader").find((cell) => cell.textContent?.includes(headerText));
-  expect(header).toBeDefined();
-  const trigger = (header as HTMLElement).querySelector(".ant-table-filter-trigger");
-  expect(trigger).not.toBeNull();
-  await user.click(trigger as HTMLElement);
-  return waitFor(() => {
-    const dropdown = document.querySelector(".ant-dropdown:not(.ant-dropdown-hidden) .ant-table-filter-dropdown");
-    expect(dropdown).not.toBeNull();
-    return dropdown as HTMLElement;
-  });
-}
 
 function membershipUserIds(scope: HTMLElement): string[] {
   return [...scope.querySelectorAll(".ant-table-tbody tr.ant-table-row")].map(

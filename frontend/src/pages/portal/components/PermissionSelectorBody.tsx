@@ -2,10 +2,10 @@ import { flexRender, type Row } from "@tanstack/react-table";
 import type { MouseEvent } from "react";
 
 import { EmptyState } from "../../../components/ui/EmptyState";
-import { TABLE_CELL_CLASS, TABLE_ROW_CLASS } from "../../../components/ui/tableStyles";
 import { cn } from "../../../lib/cn";
 import { useI18n } from "../../../i18n/I18nProvider";
 
+import { TABLE_CELL_CLASS, TABLE_ROW_CLASS } from "./permissionSelectorPrimitives";
 import type { PermissionSelectorRow } from "./permissionSelectorRows";
 
 export function PermissionSelectorBody({

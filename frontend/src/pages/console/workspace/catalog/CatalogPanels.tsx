@@ -4,11 +4,11 @@ import { Plus } from "lucide-react";
 
 import { Button } from "../../../../components/Button";
 import { AppTable, type ColumnsType } from "../../../../components/antd/AppTable";
-import { actionsColumn, statusColumn, textColumn } from "../../../../components/antd/columns";
+import { RowActionButton, actionsColumn, statusColumn, textColumn } from "../../../../components/antd/columns";
 import { EmptyState } from "../../../../components/ui/EmptyState";
 import type { AppScopeItem, PermissionGroupItem, PermissionItem } from "../../../../lib/domain";
 import { useI18n } from "../../../../i18n/I18nProvider";
-import { activeStatusColumn, RowActionButton } from "../workspaceColumns";
+import { activeStatusColumn } from "../workspaceColumns";
 
 /** 三张目录表都放在半宽栅格里, 列多于四列时给一个统一的最小宽度。 */
 const CATALOG_TABLE_MIN_WIDTH = 640;

@@ -3,16 +3,16 @@
 import { flexRender, type Table } from "@tanstack/react-table";
 
 import { PaginationBar } from "../../../components/ui/PaginationBar";
+import { useI18n } from "../../../i18n/I18nProvider";
+import { cn } from "../../../lib/cn";
+
+import { PermissionSelectorBody } from "./PermissionSelectorBody";
 import {
   TABLE_HEAD_CLASS,
   TABLE_HEADER_CELL_CLASS,
   TABLE_ROOT_CLASS,
   TABLE_ROW_CLASS,
-} from "../../../components/ui/tableStyles";
-import { useI18n } from "../../../i18n/I18nProvider";
-import { cn } from "../../../lib/cn";
-
-import { PermissionSelectorBody } from "./PermissionSelectorBody";
+} from "./permissionSelectorPrimitives";
 import type { PermissionSelectorRow } from "./permissionSelectorRows";
 
 export function PermissionSelectorTable({

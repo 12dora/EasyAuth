@@ -1,14 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { AppConfigProvider } from "../../components/antd/AppConfigProvider";
 import { ConsoleAppList } from "./ConsoleAppList";
+import { ANTD_TEST_TIMEOUT_MS, openHeaderFilter, renderWithAntd } from "../../components/antd/testing";
 
 // antd Table 在 jsdom 里每次筛选都要重建整棵表格, 默认 5s 不够。
-vi.setConfig({ testTimeout: 20000 });
+vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
 
 describe("ConsoleAppList", () => {
   afterEach(() => {
@@ -155,16 +155,14 @@ function renderList() {
     },
   });
 
-  render(
+  renderWithAntd(
     <QueryClientProvider client={client}>
-      <AppConfigProvider>
-        <MemoryRouter initialEntries={["/console"]}>
-          <Routes>
-            <Route path="/console" element={<ConsoleAppList />} />
-            <Route path="/console/apps/:appKey" element={<LocationProbe />} />
-          </Routes>
-        </MemoryRouter>
-      </AppConfigProvider>
+      <MemoryRouter initialEntries={["/console"]}>
+        <Routes>
+          <Route path="/console" element={<ConsoleAppList />} />
+          <Route path="/console/apps/:appKey" element={<LocationProbe />} />
+        </Routes>
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -197,15 +195,3 @@ function jsonResponse(payload: unknown, status = 200) {
   });
 }
 
-async function openHeaderFilter(user: ReturnType<typeof userEvent.setup>, columnTitle: string) {
-  const header = [...document.querySelectorAll("th.ant-table-cell")].find((cell) =>
-    cell.textContent?.startsWith(columnTitle),
-  );
-  expect(header).toBeDefined();
-  await user.click((header as HTMLElement).querySelector(".ant-table-filter-trigger") as HTMLElement);
-  return await waitFor(() => {
-    const dropdown = document.querySelector(".ant-dropdown:not(.ant-dropdown-hidden) .ant-table-filter-dropdown");
-    expect(dropdown).not.toBeNull();
-    return dropdown as HTMLElement;
-  });
-}

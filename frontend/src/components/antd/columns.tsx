@@ -1,11 +1,17 @@
-import type { MouseEvent, ReactNode } from "react";
+import type { ComponentPropsWithoutRef, MouseEvent, ReactNode } from "react";
 
 import { useI18n } from "../../i18n/I18nProvider";
 import { cn } from "../../lib/cn";
 import type { BadgeTone } from "../../lib/status";
 import { Badge } from "../Badge";
-import { MONO_TEXT_CLASS } from "../ui/tableStyles";
+import { Button } from "../Button";
 import { enumFilter, readField, textFilter, type ColumnType } from "./AppTable";
+
+/**
+ * 表格里等宽文本(app_key / user_id / 版本号等标识符)的唯一样式出处。
+ * 门户权限选择表格(按架构约定直接渲染原生 table)也从这里取, 避免两处字面量漂移。
+ */
+export const MONO_TEXT_CLASS = "font-mono text-body leading-5 text-ink-soft";
 
 /**
  * 共享列预设。页面只声明「这列是什么语义」, 渲染、筛选、排序、宽度、
@@ -314,8 +320,8 @@ export interface ActionsColumnConfig<T> {
 
 /**
  * 操作列: 右对齐、不换行、固定右侧, 内部按钮点击不冒泡到行点击。
- * 按钮本身继续用 components/ui/TableActions 的 TableRowActionButton /
- * TableRowActionLink, 视觉与迁移前一致。
+ * 按钮本身用 `RowActionButton`(见下), 也可以直接写
+ * `<Button size="sm" variant="ghost|ghost-danger">`。
  */
 export function actionsColumn<T>({
   fixed = "right",
@@ -346,4 +352,20 @@ function ActionsColumnTitle() {
 
 function stopRowClick(event: MouseEvent<HTMLElement>) {
   event.stopPropagation();
+}
+
+/** 行内操作按钮支持的两种语气: 普通与破坏性。 */
+export type RowActionVariant = "ghost" | "ghost-danger";
+
+/**
+ * 表格行内操作按钮: 仓库自研 Button 的 `size="sm"`(h-7, 与分页控件的 28px 对齐)预设。
+ *
+ * 「点击不冒泡到行」由 actionsColumn 的容器负责, 所以这里只固定尺寸与语气;
+ * 工作区四个页签包、矩阵、目录面板都用它, 页面里不要再各写一份。
+ */
+export function RowActionButton({
+  variant = "ghost",
+  ...props
+}: Omit<ComponentPropsWithoutRef<typeof Button>, "size" | "variant"> & { variant?: RowActionVariant }) {
+  return <Button size="sm" variant={variant} {...props} />;
 }

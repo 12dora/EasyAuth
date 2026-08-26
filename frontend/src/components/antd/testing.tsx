@@ -30,8 +30,11 @@ export function renderWithAntd(ui: ReactElement, options?: Omit<RenderOptions, "
  * antd Table 在 jsdom 里每次筛选/排序都要重建整棵表格, 比自研原语慢得多,
  * 默认 5s 常常不够。在测试文件顶层写:
  * `vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS })`。
+ *
+ * 取 30s: 工作区/矩阵/凭据这几个大页面本来就要 30s, 而模板页在整套用例并发跑时
+ * 会逼近 20s 上限而偶发超时 —— 全站统一到最大的那一档, 页面里不再各写各的数字。
  */
-export const ANTD_TEST_TIMEOUT_MS = 20_000;
+export const ANTD_TEST_TIMEOUT_MS = 30_000;
 
 /**
  * 打开某一列的表头筛选下拉, 返回下拉面板节点(可用 `within(dropdown)` 继续查询)。

@@ -1,11 +1,17 @@
 import { useMemo } from "react";
 
 import { AppTable, textFilter, type ColumnsType, type ColumnType } from "../../components/antd/AppTable";
-import { actionsColumn, dateTimeColumn, statusColumn, textColumn } from "../../components/antd/columns";
+import {
+  MONO_TEXT_CLASS,
+  actionsColumn,
+  dateTimeColumn,
+  statusColumn,
+  textColumn,
+} from "../../components/antd/columns";
 import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
 import { EmptyState } from "../../components/ui/EmptyState";
-import { MONO_TEXT_CLASS } from "../../components/ui/tableStyles";
+
 import { useI18n } from "../../i18n/I18nProvider";
 import type { ApprovalTemplateItem } from "../../lib/domain";
 import type { Translator } from "../../lib/status";

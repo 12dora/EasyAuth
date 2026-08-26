@@ -1,15 +1,15 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { AppConfigProvider } from "../../../../components/antd/AppConfigProvider";
 import { QueryTestTab } from "./QueryTestTab";
+import { ANTD_TEST_TIMEOUT_MS, renderWithAntd } from "../../../../components/antd/testing";
 
 // antd Table 在 jsdom 里每次筛选/排序/翻页都要重建整棵表格, 比自研原语慢得多,
 // 整套用例并行跑时默认 5s 不够; 这里只放宽本文件的用例超时。
-vi.setConfig({ testTimeout: 20000 });
+vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
 
 describe("QueryTestTab", () => {
   afterEach(() => {
@@ -150,9 +150,9 @@ function renderWithClient(ui: ReactElement) {
     },
   });
 
-  render(
+  renderWithAntd(
     <QueryClientProvider client={client}>
-      <AppConfigProvider>{ui}</AppConfigProvider>
+      {ui}
     </QueryClientProvider>,
   );
 }

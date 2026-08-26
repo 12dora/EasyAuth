@@ -52,6 +52,7 @@ export function SyncRunsPanel({
     refetchInterval: 30_000,
   });
   const runs = runsQuery.data?.data ?? [];
+  serverTable.setTotal(runsQuery.data?.pagination?.total_items);
   const columns = useMemo<ColumnsType<ConnectorSyncRunItem>>(
     () => [
       dateTimeColumn<ConnectorSyncRunItem>({
@@ -103,11 +104,6 @@ export function SyncRunsPanel({
         dataSource={runs}
         emptyTitle={t("console.connector.runsEmpty")}
         loading={runsQuery.isLoading}
-        pagination={{
-          current: serverTable.query.page,
-          pageSize: serverTable.query.pageSize,
-          total: runsQuery.data?.pagination?.total_items ?? runs.length,
-        }}
         rowKey="id"
       />
     </PanelSurface>

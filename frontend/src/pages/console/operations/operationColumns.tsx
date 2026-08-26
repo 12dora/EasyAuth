@@ -1,8 +1,9 @@
 import { Button } from "../../../components/Button";
-import { enumFilter, type ColumnType, type ColumnsType } from "../../../components/antd/AppTable";
+import { dateRangeFilter, enumFilter, type ColumnsType } from "../../../components/antd/AppTable";
 import {
   actionsColumn,
   dateTimeColumn,
+  serverColumn,
   statusColumn,
   textColumn,
   type StatusColumnOption,
@@ -14,7 +15,6 @@ import {
   grantStatusLabel,
   healthStatusLabel,
 } from "../../../lib/status";
-import { dateRangeFilter } from "./DateRangeFilter";
 import { ACCESS_GRANT_STATUSES, ACCESS_REQUEST_STATUSES } from "./operationQuery";
 import {
   auditAppKey,
@@ -60,19 +60,6 @@ export function operationColumns(
   return accessRequestColumns(t, filters, accessRequestActions);
 }
 
-/**
- * 服务端筛选列: 筛选值受控于 URL, 并且必须去掉列预设自带的客户端 `onFilter` ——
- * 否则 antd 会拿后端已经筛过的当前页再筛一次(审计的 app_key 藏在 metadata 里,
- * 客户端再筛会把整页筛空)。
- */
-function serverFiltered<T>(column: ColumnType<T>, values: string[] | undefined): ColumnType<T> {
-  return {
-    ...column,
-    onFilter: undefined,
-    filteredValue: values !== undefined && values.length > 0 ? values : null,
-  };
-}
-
 function dependencyHealthColumns(t: Translator): ColumnsType<OperationRow> {
   // 依赖健康是一次性返回的数组, 筛选与排序都在客户端完成。
   return [
@@ -100,7 +87,7 @@ function auditColumns(t: Translator, filters: OperationFilterValues): ColumnsTyp
   // 审计行字段对齐后端 audit_api._audit_item; 审计行无 id, 故不展示 ID 列。
   return [
     textColumn<OperationRow>({ key: "event_type", title: t("console.operations.column.event"), width: 220 }),
-    serverFiltered(
+    serverColumn(
       textColumn<OperationRow>({
         key: "actor",
         title: t("console.operations.column.actor"),
@@ -117,7 +104,7 @@ function auditColumns(t: Translator, filters: OperationFilterValues): ColumnsTyp
       getValue: (row) => auditPair(row.target_type, row.target_id),
       mono: true,
     }),
-    serverFiltered(
+    serverColumn(
       textColumn<OperationRow>({
         key: "app",
         title: t("common.app"),
@@ -128,7 +115,7 @@ function auditColumns(t: Translator, filters: OperationFilterValues): ColumnsTyp
       }),
       filters.app,
     ),
-    serverFiltered(
+    serverColumn(
       {
         ...dateTimeColumn<OperationRow>({
           key: "created_at",
@@ -149,15 +136,15 @@ function accessGrantColumns(
   actions: AccessGrantColumnActions | undefined,
 ): ColumnsType<OperationRow> {
   const columns: ColumnsType<OperationRow> = [
-    serverFiltered(
+    serverColumn(
       textColumn<OperationRow>({ key: "user_id", title: t("common.user"), mono: true, filter: true, width: 170 }),
       filters.user_id,
     ),
-    serverFiltered(
+    serverColumn(
       textColumn<OperationRow>({ key: "app_key", title: t("common.app"), mono: true, filter: true, width: 150 }),
       filters.app_key,
     ),
-    serverFiltered(
+    serverColumn(
       statusColumn<OperationRow>({
         key: "status",
         title: t("common.status"),
@@ -176,7 +163,7 @@ function accessGrantColumns(
       title: t("console.operations.column.directGrants"),
       getValue: (row) => operationDirectGrantSummary(t, row.direct_grants),
     }),
-    serverFiltered(
+    serverColumn(
       textColumn<OperationRow>({
         key: "version",
         title: t("console.operations.column.version"),
@@ -187,7 +174,7 @@ function accessGrantColumns(
       }),
       filters.version,
     ),
-    serverFiltered(
+    serverColumn(
       {
         ...textColumn<OperationRow>({
           key: "is_current",
@@ -236,15 +223,15 @@ function accessRequestColumns(
 ): ColumnsType<OperationRow> {
   const columns: ColumnsType<OperationRow> = [
     textColumn<OperationRow>({ key: "id", title: "ID", width: 90 }),
-    serverFiltered(
+    serverColumn(
       textColumn<OperationRow>({ key: "user_id", title: t("common.user"), mono: true, filter: true, width: 170 }),
       filters.user_id,
     ),
-    serverFiltered(
+    serverColumn(
       textColumn<OperationRow>({ key: "app_key", title: t("common.app"), mono: true, filter: true, width: 150 }),
       filters.app_key,
     ),
-    serverFiltered(
+    serverColumn(
       statusColumn<OperationRow>({
         key: "status",
         title: t("common.status"),
@@ -255,7 +242,7 @@ function accessRequestColumns(
     ),
     textColumn<OperationRow>({ key: "request_type", title: t("common.type"), width: 120 }),
     textColumn<OperationRow>({ key: "failure_reason", title: t("console.operations.column.failureReason") }),
-    serverFiltered(
+    serverColumn(
       {
         ...dateTimeColumn<OperationRow>({
           key: "submitted_at",

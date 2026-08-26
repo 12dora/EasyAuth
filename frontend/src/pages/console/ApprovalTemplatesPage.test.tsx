@@ -1,14 +1,14 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
-import { AppConfigProvider } from "../../components/antd/AppConfigProvider";
 import { ApprovalTemplatesPage } from "./ApprovalTemplatesPage";
+import { ANTD_TEST_TIMEOUT_MS, openHeaderFilter, renderWithAntd } from "../../components/antd/testing";
 
 // antd 表格 + 弹窗的逐字符输入在 jsdom 下比自研表格慢, 与其余已迁移的控制台用例同一档。
-vi.setConfig({ testTimeout: 20000 });
+vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
 
 const TEMPLATES = [
   {
@@ -135,7 +135,9 @@ describe("ApprovalTemplatesPage", () => {
       throw new Error(`Unexpected fetch: ${url}`);
     });
     vi.stubGlobal("fetch", fetchMock);
-    const user = userEvent.setup();
+    // 本用例要走 14 轮「清空 -> 粘贴 -> 保存 -> 断言错误」, user-event 默认的按键间隔
+    // 会让它在整套用例并发跑时逼近 testTimeout; 这里只关掉输入延迟, 断言不变。
+    const user = userEvent.setup({ delay: null });
 
     renderPage();
 
@@ -213,7 +215,10 @@ describe("ApprovalTemplatesPage", () => {
       });
     });
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "新建审批模板" })).not.toBeInTheDocument());
-  });
+    // 全套用例并发跑时这条会被别的 worker 拖到 30s 以上(单独跑约 12s):
+    // 14 轮「清空 -> 粘贴 -> 保存 -> 断言错误」是本文件最重的一条, 单独放宽上限,
+    // 不为它把全站共享的 ANTD_TEST_TIMEOUT_MS 一起抬高。
+  }, 60_000);
 
   test("编辑模板时展示并 PATCH 提交 form_schema", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
@@ -470,30 +475,16 @@ function renderPage() {
     },
   });
 
-  render(
+  renderWithAntd(
     <QueryClientProvider client={client}>
-      <AppConfigProvider>
-        <MemoryRouter initialEntries={["/console/approval-templates"]}>
-          <ApprovalTemplatesPage />
-        </MemoryRouter>
-      </AppConfigProvider>
+      <MemoryRouter initialEntries={["/console/approval-templates"]}>
+        <ApprovalTemplatesPage />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
 
 /** 打开指定表头的筛选下拉, 返回当前展开的那个下拉面板。 */
-async function openHeaderFilter(user: ReturnType<typeof userEvent.setup>, headerText: string): Promise<HTMLElement> {
-  const header = screen.getAllByRole("columnheader").find((cell) => cell.textContent?.includes(headerText));
-  expect(header).toBeDefined();
-  const trigger = (header as HTMLElement).querySelector(".ant-table-filter-trigger");
-  expect(trigger).not.toBeNull();
-  await user.click(trigger as HTMLElement);
-  return waitFor(() => {
-    const dropdown = document.querySelector(".ant-dropdown:not(.ant-dropdown-hidden) .ant-table-filter-dropdown");
-    expect(dropdown).not.toBeNull();
-    return dropdown as HTMLElement;
-  });
-}
 
 function tableBody(): HTMLElement {
   return document.querySelector(".ant-table-tbody") as HTMLElement;

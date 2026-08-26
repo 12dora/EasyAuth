@@ -38,14 +38,12 @@ export function PortalApprovalsTable({
   serverTable,
   tab,
   isLoading,
-  totalItems,
 }: {
   columns: ColumnsType<PortalApprovalRow>;
   rows: PortalApprovalRow[];
   serverTable: UseServerTableResult<PortalApprovalRow>;
   tab: ApprovalTab;
   isLoading: boolean;
-  totalItems: number;
 }) {
   const { t } = useI18n();
   return (
@@ -61,11 +59,6 @@ export function PortalApprovalsTable({
       emptyTitle={tab === "pending" ? t("portal.approvals.empty.pending") : t("portal.approvals.empty.processed")}
       loading={isLoading}
       minWidth={1200}
-      pagination={{
-        current: serverTable.query.page,
-        pageSize: serverTable.query.pageSize,
-        total: totalItems,
-      }}
       rowKey="id"
     />
   );

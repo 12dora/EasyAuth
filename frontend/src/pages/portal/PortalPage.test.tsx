@@ -1,31 +1,29 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { MemoryRouter, Outlet, Route, Routes } from "react-router-dom";
 import { describe, expect, test, vi } from "vitest";
 
-import { AppConfigProvider } from "../../components/antd/AppConfigProvider";
 import { PortalPage } from "./PortalPage";
+import { ANTD_TEST_TIMEOUT_MS, renderWithAntd } from "../../components/antd/testing";
 
 // antd Table 在 jsdom 里每次筛选/排序/翻页都要重建整棵表格, 比自研原语慢得多,
 // 整套用例并行跑时默认 5s 不够; 这里只放宽本文件的用例超时。
-vi.setConfig({ testTimeout: 20000 });
+vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
 
 function renderPortalPageWithUser(currentUserId: string, initialEntry = "/portal/request") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
-  render(
+  renderWithAntd(
     <QueryClientProvider client={client}>
-      <AppConfigProvider>
-        <MemoryRouter initialEntries={[initialEntry]}>
-          <Routes>
-            <Route element={<Outlet context={{ currentUserId }} />}>
-              <Route path="/portal/request" element={<PortalPage view="request" />} />
-            </Route>
-          </Routes>
-        </MemoryRouter>
-      </AppConfigProvider>
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <Routes>
+          <Route element={<Outlet context={{ currentUserId }} />}>
+            <Route path="/portal/request" element={<PortalPage view="request" />} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -39,18 +37,16 @@ function renderPortalPage(initialEntry = "/portal/request") {
     },
   });
 
-  render(
+  renderWithAntd(
     <QueryClientProvider client={client}>
-      <AppConfigProvider>
-        <MemoryRouter initialEntries={[initialEntry]}>
-          <Routes>
-            <Route path="/portal/request" element={<PortalPage view="request" />} />
-            <Route path="/portal/requests" element={<PortalPage view="requests" />} />
-            <Route path="/portal/expiring" element={<PortalPage view="expiring" />} />
-            <Route path="/portal" element={<PortalPage view="grants" />} />
-          </Routes>
-        </MemoryRouter>
-      </AppConfigProvider>
+      <MemoryRouter initialEntries={[initialEntry]}>
+        <Routes>
+          <Route path="/portal/request" element={<PortalPage view="request" />} />
+          <Route path="/portal/requests" element={<PortalPage view="requests" />} />
+          <Route path="/portal/expiring" element={<PortalPage view="expiring" />} />
+          <Route path="/portal" element={<PortalPage view="grants" />} />
+        </Routes>
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -64,16 +60,14 @@ function renderPortalPageStrict(initialEntry = "/portal/request") {
     },
   });
 
-  render(
+  renderWithAntd(
     <StrictMode>
       <QueryClientProvider client={client}>
-        <AppConfigProvider>
-          <MemoryRouter initialEntries={[initialEntry]}>
-            <Routes>
-              <Route path="/portal/request" element={<PortalPage view="request" />} />
-            </Routes>
-          </MemoryRouter>
-        </AppConfigProvider>
+        <MemoryRouter initialEntries={[initialEntry]}>
+          <Routes>
+            <Route path="/portal/request" element={<PortalPage view="request" />} />
+          </Routes>
+        </MemoryRouter>
       </QueryClientProvider>
     </StrictMode>,
   );

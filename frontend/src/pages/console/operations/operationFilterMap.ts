@@ -1,4 +1,9 @@
-import { filtersToParams, type ServerFilterParamMap } from "../../../components/antd/AppTable";
+import {
+  decodeDateRange,
+  encodeDateRange,
+  filtersToParams,
+  type ServerFilterParamMap,
+} from "../../../components/antd/AppTable";
 
 /**
  * 运营列表的「表头筛选 ↔ URL 查询参数」映射。
@@ -8,8 +13,7 @@ import { filtersToParams, type ServerFilterParamMap } from "../../../components/
  * 页面不自己拼参数名。
  */
 
-/** created_from / created_to 挂在同一个时间列上, 用分隔符编码成一个筛选值。 */
-const DATE_RANGE_SEPARATOR = "~";
+/** created_from / created_to 挂在同一个时间列上, 编解码复用共享的 encode/decodeDateRange。 */
 const DATE_FROM_PARAM = "created_from";
 const DATE_TO_PARAM = "created_to";
 
@@ -41,20 +45,6 @@ export const SECTION_FILTER_MAPS: Record<string, OperationFilterMap> = {
     dateColumnKey: "created_at",
   },
 };
-
-export interface DateRangeValue {
-  from: string;
-  to: string;
-}
-
-export function encodeDateRange({ from, to }: DateRangeValue): string[] {
-  return from === "" && to === "" ? [] : [`${from}${DATE_RANGE_SEPARATOR}${to}`];
-}
-
-export function decodeDateRange(values: readonly unknown[] | undefined): DateRangeValue {
-  const [from = "", to = ""] = String(values?.[0] ?? "").split(DATE_RANGE_SEPARATOR);
-  return { from, to };
-}
 
 /** URL -> antd 的受控筛选值(列 key -> 选中值)。 */
 export function filterValuesFromSearchParams(

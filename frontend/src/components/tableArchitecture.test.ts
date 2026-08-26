@@ -7,11 +7,15 @@ const sourceRoot = join(process.cwd(), "src");
 
 describe("表格架构", () => {
   test("不再保留旧 DataTable 包装组件和旧表格包装类名", () => {
-    // components/antd/** 排除在外: 这里的禁用词是旧自研表格的类名, 而 antd 自己的
-    // 类名(ant-table-wrapper / ant-table-scroll-horizontal)会被 table-wrap /
-    // table-scroll 误伤, 那是 antd 的 DOM 约定, 不是本仓库要清理的历史包袱。
+    // components/antd/** 与测试文件排除在外: 这里的禁用词是旧自研表格的类名, 而
+    // antd 自己的类名(ant-table-wrapper / ant-table-scroll-horizontal)会被
+    // table-wrap / table-scroll 误伤 —— 那是 antd 的 DOM 约定, 不是本仓库要清理的
+    // 历史包袱, 而断言这些类名的地方全在 *.test.tsx 里。
     const files = sourceFiles(sourceRoot).filter(
-      (file) => !file.endsWith("tableArchitecture.test.ts") && !file.includes(join("components", "antd")),
+      (file) =>
+        !file.endsWith("tableArchitecture.test.ts") &&
+        !/\.test\.tsx?$/.test(file) &&
+        !file.includes(join("components", "antd")),
     );
     const violations = files.flatMap((file) => forbiddenMatches(file));
 
@@ -93,10 +97,7 @@ function forbiddenMatches(file: string): string[] {
     /table-wrap/,
     /empty-row/,
   ];
-  const tablePrimitivePatterns =
-    relativePath === "components/ui/TablePrimitives.tsx" ? [/rounded-lg/, /slate-/, /shadow-slate/, /bg-white/] : [];
-
-  return [...forbiddenPatterns, ...tablePrimitivePatterns]
+  return forbiddenPatterns
     .filter((pattern) => pattern.test(content))
     .map((pattern) => `${relativePath}: ${pattern.source}`);
 }

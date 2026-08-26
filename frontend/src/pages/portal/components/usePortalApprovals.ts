@@ -28,7 +28,6 @@ export interface PortalApprovalsController {
   switchTab: (nextTab: ApprovalTab) => void;
   /** 分页状态与 antd onChange 的唯一容器; 排序/筛选在这张表上都是客户端行为。 */
   serverTable: UseServerTableResult<PortalApprovalRow>;
-  totalItems: number;
   query: UseQueryResult<ApprovalListPayload, Error>;
   approvals: PortalApprovalRow[];
   detail: ApprovalDetailState;
@@ -144,11 +143,13 @@ export function usePortalApprovals(): PortalApprovalsController {
       ? (decisionMutation.error as Error).message
       : "";
 
+  // 总条数拿到响应后回填进 serverTable.tableProps, 页面不再手工拼 pagination。
+  serverTable.setTotal(query.data?.pagination.total_items);
+
   return {
     tab,
     switchTab,
     serverTable,
-    totalItems: query.data?.pagination.total_items ?? 0,
     query,
     approvals: query.data?.data ?? [],
     detail: {

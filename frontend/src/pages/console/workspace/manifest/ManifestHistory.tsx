@@ -25,6 +25,7 @@ export function useManifestHistory(appKey: string) {
         `/console/api/v1/apps/${appKey}/permission-template-versions?page=${page}&page_size=${pageSize}`,
       ),
   });
+  serverTable.setTotal(query.data?.pagination?.total_items);
   return { query, serverTable };
 }
 
@@ -60,11 +61,6 @@ export function ManifestHistory({ state }: { state: ReturnType<typeof useManifes
         emptyDescription="确认导入清单后会在这里记录版本。"
         emptyTitle="暂无版本历史"
         loading={query.isLoading}
-        pagination={{
-          current: serverTable.query.page,
-          pageSize: serverTable.query.pageSize,
-          total: query.data?.pagination?.total_items ?? 0,
-        }}
         rowKey={(row) => `${row.catalog_version ?? row.version ?? ""}:${row.imported_at ?? row.created_at ?? ""}`}
       />
     </div>
