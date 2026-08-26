@@ -13,8 +13,20 @@ const DEFAULT_BUDGETS = {
   synchronousChunkGzipBytes: 110 * 1024,
   asyncChunkRawBytes: 140 * 1024,
   asyncChunkGzipBytes: 40 * 1024,
-  // 数据交接 v2 门户/共享组件落地后总量上调；见 docs/operations/frontend-build-budget.md
-  totalJavaScriptRawBytes: 960 * 1024,
+  // Ant Design 表格地基落地后总量上调；见 docs/operations/frontend-build-budget.md
+  totalJavaScriptRawBytes: 1700 * 1024,
+};
+
+/**
+ * 按 chunk 名的单独预算。antd 及其 rc-* 运行时天然远大于其余同步 chunk，
+ * 若为了容纳它把 synchronousChunk* 整体调高，vendor 就失去了门禁意义，
+ * 因此只给 antd 开单独额度，其他同步 chunk 仍守 360 KiB / 110 KiB。
+ */
+const CHUNK_BUDGET_OVERRIDES = {
+  antd: {
+    rawBytes: 720 * 1024,
+    gzipBytes: 230 * 1024,
+  },
 };
 
 const REQUIRED_DYNAMIC_ROUTE_KEYS = [
@@ -70,8 +82,19 @@ checkBudget(failures, "JavaScript 总原始体积", totalRawBytes, budgets.total
 
 for (const file of synchronousChunks) {
   const stats = assetStats(file);
-  checkBudget(failures, `同步 chunk 原始体积 ${file}`, stats.rawBytes, budgets.synchronousChunkRawBytes);
-  checkBudget(failures, `同步 chunk gzip 体积 ${file}`, stats.gzipBytes, budgets.synchronousChunkGzipBytes);
+  const override = CHUNK_BUDGET_OVERRIDES[chunkName(file)];
+  checkBudget(
+    failures,
+    `同步 chunk 原始体积 ${file}`,
+    stats.rawBytes,
+    override?.rawBytes ?? budgets.synchronousChunkRawBytes,
+  );
+  checkBudget(
+    failures,
+    `同步 chunk gzip 体积 ${file}`,
+    stats.gzipBytes,
+    override?.gzipBytes ?? budgets.synchronousChunkGzipBytes,
+  );
 }
 
 for (const file of asyncRouteChunks) {
@@ -148,6 +171,11 @@ function collectJavaScriptAssets(entries) {
     }
   }
   return [...files];
+}
+
+/** assets/antd-Cim9z-Th.js -> antd */
+function chunkName(file) {
+  return path.basename(file).replace(/-[A-Za-z0-9_-]+\.js$/, "");
 }
 
 function assetStats(file) {

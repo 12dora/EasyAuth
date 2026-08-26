@@ -188,6 +188,22 @@ export const zhCN = {
   "nav.portal.handovers": "我的交接",
 
   "nav.console.blockedApps": "未接入应用",
+
+  /* Ant Design 表格外壳(components/antd/*)专用文案。antd 自身的分页/筛选内建字符串
+     由 ConfigProvider 的 locale 提供, 这里只放房屋约定自己渲染的部分。 */
+  "table.pagination.total": "第 {start}-{end} 条 / 共 {total} 条",
+
+  "table.filter.placeholder": "输入关键字",
+
+  "table.filter.confirm": "确定",
+
+  "table.filter.reset": "重置",
+
+  "table.filter.inputLabel": "筛选关键字",
+
+  "table.empty.title": "暂无数据",
+
+  "table.column.user": "用户",
 } as const;
 
 export const en: Record<keyof typeof zhCN, string> = {
@@ -380,4 +396,18 @@ export const en: Record<keyof typeof zhCN, string> = {
   "nav.portal.handovers": "My handovers",
 
   "nav.console.blockedApps": "Blocked apps",
+
+  "table.pagination.total": "{start}-{end} of {total}",
+
+  "table.filter.placeholder": "Type a keyword",
+
+  "table.filter.confirm": "OK",
+
+  "table.filter.reset": "Reset",
+
+  "table.filter.inputLabel": "Filter keyword",
+
+  "table.empty.title": "No data",
+
+  "table.column.user": "User",
 };

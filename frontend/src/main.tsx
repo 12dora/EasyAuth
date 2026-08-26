@@ -6,6 +6,7 @@ import { BrowserRouter } from "react-router-dom";
 import { App } from "./App";
 import type { CurrentUser } from "./App";
 import { UnsupportedBrowserPage } from "./components/UnsupportedBrowserPage";
+import { AppConfigProvider } from "./components/antd/AppConfigProvider";
 import { ToastProvider } from "./components/ui/Toast";
 import { I18nProvider } from "./i18n/I18nProvider";
 import { checkBrowserSupport } from "./lib/browserSupport";
@@ -30,11 +31,13 @@ root.render(
     {browserSupport.supported ? (
       <QueryClientProvider client={queryClient}>
         <I18nProvider>
-          <ToastProvider>
-            <BrowserRouter>
-              <App brandLogoUrl={brandLogoUrl} currentUser={currentUser} currentUserId={currentUserId} shell={shell} />
-            </BrowserRouter>
-          </ToastProvider>
+          <AppConfigProvider>
+            <ToastProvider>
+              <BrowserRouter>
+                <App brandLogoUrl={brandLogoUrl} currentUser={currentUser} currentUserId={currentUserId} shell={shell} />
+              </BrowserRouter>
+            </ToastProvider>
+          </AppConfigProvider>
         </I18nProvider>
       </QueryClientProvider>
     ) : (

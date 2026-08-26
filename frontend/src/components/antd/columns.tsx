@@ -1,0 +1,307 @@
+import type { MouseEvent, ReactNode } from "react";
+
+import { useI18n } from "../../i18n/I18nProvider";
+import { cn } from "../../lib/cn";
+import type { BadgeTone } from "../../lib/status";
+import { Badge } from "../Badge";
+import { MONO_TEXT_CLASS } from "../ui/tableStyles";
+import { enumFilter, readField, textFilter, type ColumnType } from "./AppTable";
+
+/**
+ * 共享列预设。页面只声明「这列是什么语义」, 渲染、筛选、排序、宽度、
+ * 对齐全部由这里决定; 以后要改表格里的状态徽章或时间格式, 只改这个文件。
+ *
+ * 约定: `title` 由调用方传已本地化的节点(页面本来就有自己的列名文案);
+ * 预设自身需要的文案(操作列标题、筛选下拉、用户列兜底标题)走 `table.*` i18n。
+ */
+
+/* ------------------------------------------------------------------ */
+/* 状态列                                                              */
+/* ------------------------------------------------------------------ */
+
+export interface StatusColumnOption {
+  value: string;
+  /** 已本地化的展示文案。 */
+  label: ReactNode;
+  /** 复用 Badge 的色调; 缺省 neutral。 */
+  tone?: BadgeTone;
+}
+
+export interface StatusColumnConfig<T> {
+  /** 列 key, 同时作为默认取值字段。 */
+  key: string;
+  title: ReactNode;
+  options: readonly StatusColumnOption[];
+  /** 默认读 `record[key]`。 */
+  getValue?: (record: T) => string | null | undefined;
+  width?: number;
+  /** 关闭内建的枚举筛选(默认开启)。 */
+  filter?: boolean;
+}
+
+/**
+ * 状态列: Badge 渲染 + 内建 enumFilter。
+ * 未在 options 里出现的值按 neutral 原样展示, 空值展示 "-"。
+ */
+export function statusColumn<T>({
+  filter = true,
+  getValue,
+  key,
+  options,
+  title,
+  width,
+}: StatusColumnConfig<T>): ColumnType<T> {
+  const read = (record: T) => {
+    const raw = getValue ? getValue(record) : readField(record, key);
+    return raw === null || raw === undefined || raw === "" ? undefined : String(raw);
+  };
+
+  return {
+    key,
+    dataIndex: key,
+    title,
+    width,
+    render: (_value: unknown, record: T) => {
+      const value = read(record);
+      if (value === undefined) {
+        return "-";
+      }
+      const option = options.find((item) => item.value === value);
+      return <Badge tone={option?.tone ?? "neutral"}>{option?.label ?? value}</Badge>;
+    },
+    ...(filter
+      ? enumFilter<T>(
+          key,
+          options.map((option) => ({ label: option.label, value: option.value })),
+          { getValue: (record) => read(record) ?? null },
+        )
+      : {}),
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* 时间列                                                              */
+/* ------------------------------------------------------------------ */
+
+export interface DateTimeColumnConfig<T> {
+  key: string;
+  title: ReactNode;
+  /** 默认读 `record[key]`; 返回 ISO 字符串。 */
+  getValue?: (record: T) => string | null | undefined;
+  width?: number;
+  /** 关闭排序(默认开启, 按时间戳升降序)。 */
+  sorter?: boolean;
+}
+
+/** 时间列: 走 I18nProvider 的 formatDateTime(跟随界面语言) + 时间戳排序。 */
+export function dateTimeColumn<T>({
+  getValue,
+  key,
+  sorter = true,
+  title,
+  width = 170,
+}: DateTimeColumnConfig<T>): ColumnType<T> {
+  const read = (record: T) => {
+    const raw = getValue ? getValue(record) : readField(record, key);
+    return raw === null || raw === undefined ? undefined : String(raw);
+  };
+
+  return {
+    key,
+    dataIndex: key,
+    title,
+    width,
+    render: (_value: unknown, record: T) => <DateTimeCell value={read(record)} />,
+    ...(sorter ? { sorter: (a: T, b: T) => timestamp(read(a)) - timestamp(read(b)) } : {}),
+  };
+}
+
+function DateTimeCell({ value }: { value: string | undefined }) {
+  const { formatDateTime } = useI18n();
+  return <span className="whitespace-nowrap tabular">{formatDateTime(value)}</span>;
+}
+
+function timestamp(value: string | undefined): number {
+  if (!value) {
+    return 0;
+  }
+  const parsed = new Date(value).getTime();
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+/* ------------------------------------------------------------------ */
+/* 文本列                                                              */
+/* ------------------------------------------------------------------ */
+
+export interface TextColumnConfig<T> {
+  key: string;
+  title: ReactNode;
+  /** 默认读 `record[key]`。 */
+  getValue?: (record: T) => string | null | undefined;
+  /** 开启文本子串筛选。 */
+  filter?: boolean;
+  /** 开启本地化字符串排序。 */
+  sorter?: boolean;
+  /** 超宽省略(默认开启), 关闭后长文本会撑高行。 */
+  ellipsis?: boolean;
+  /** 等宽字体展示(应用 key、ID 之类)。 */
+  mono?: boolean;
+  width?: number;
+}
+
+/** 普通文本列; 空值统一展示 "-"。 */
+export function textColumn<T>({
+  ellipsis = true,
+  filter = false,
+  getValue,
+  key,
+  mono = false,
+  sorter = false,
+  title,
+  width,
+}: TextColumnConfig<T>): ColumnType<T> {
+  const read = (record: T) => {
+    const raw = getValue ? getValue(record) : readField(record, key);
+    return raw === null || raw === undefined ? "" : String(raw);
+  };
+
+  return {
+    key,
+    dataIndex: key,
+    title,
+    width,
+    ellipsis,
+    render: (_value: unknown, record: T) => {
+      const value = read(record);
+      if (value === "") {
+        return "-";
+      }
+      return mono ? <code className={MONO_TEXT_CLASS}>{value}</code> : value;
+    },
+    ...(filter ? textFilter<T>(key, { getValue: (record) => read(record) }) : {}),
+    ...(sorter ? { sorter: (a: T, b: T) => read(a).localeCompare(read(b)) } : {}),
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* 用户列                                                              */
+/* ------------------------------------------------------------------ */
+
+export interface UserColumnConfig<T> {
+  key?: string;
+  title?: ReactNode;
+  /** 主行: 显示名。 */
+  getName: (record: T) => string | null | undefined;
+  /** 次行: 用户 ID / 账号, 等宽展示; 不传则只渲染一行。 */
+  getUserId?: (record: T) => string | null | undefined;
+  /** 开启文本筛选(同时匹配显示名与 ID)。 */
+  filter?: boolean;
+  width?: number;
+}
+
+/**
+ * 用户列: 显示名 + 等宽 ID 两行。
+ * 沿用 ConsoleTeamMemberTable / MembershipsPanel 既有的成员单元格排版,
+ * 仓库里没有表格内头像的先例, 因此不渲染头像。
+ */
+export function userColumn<T>({
+  filter = false,
+  getName,
+  getUserId,
+  key = "user",
+  title,
+  width,
+}: UserColumnConfig<T>): ColumnType<T> {
+  const read = (record: T) => {
+    const name = getName(record);
+    const userId = getUserId?.(record);
+    return {
+      name: name === null || name === undefined ? "" : String(name),
+      userId: userId === null || userId === undefined ? "" : String(userId),
+    };
+  };
+
+  return {
+    key,
+    title: title ?? <UserColumnTitle />,
+    width,
+    render: (_value: unknown, record: T) => {
+      const { name, userId } = read(record);
+      if (name === "" && userId === "") {
+        return "-";
+      }
+      return (
+        <div className="flex min-w-0 flex-col gap-1">
+          <strong className="truncate">{name || userId}</strong>
+          {userId && name ? <code className={cn(MONO_TEXT_CLASS, "truncate")}>{userId}</code> : null}
+        </div>
+      );
+    },
+    ...(filter
+      ? textFilter<T>(key, {
+          getValue: (record) => {
+            const { name, userId } = read(record);
+            return `${name} ${userId}`;
+          },
+        })
+      : {}),
+  };
+}
+
+function UserColumnTitle() {
+  const { t } = useI18n();
+  return <>{t("table.column.user")}</>;
+}
+
+/* ------------------------------------------------------------------ */
+/* 操作列                                                              */
+/* ------------------------------------------------------------------ */
+
+export interface ActionsColumnConfig<T> {
+  render: (record: T, index: number) => ReactNode;
+  title?: ReactNode;
+  /**
+   * 列宽。默认 1: 配合单元格的 `whitespace-nowrap` 让列收缩到内容宽度,
+   * 与旧 TableActionCell 的 `w-0 whitespace-nowrap` 行为一致。
+   */
+  width?: number;
+  /** 默认固定在右侧; 需要 AppTable 传 minWidth 才会生效。 */
+  fixed?: ColumnType<T>["fixed"];
+  key?: string;
+}
+
+/**
+ * 操作列: 右对齐、不换行、固定右侧, 内部按钮点击不冒泡到行点击。
+ * 按钮本身继续用 components/ui/TableActions 的 TableRowActionButton /
+ * TableRowActionLink, 视觉与迁移前一致。
+ */
+export function actionsColumn<T>({
+  fixed = "right",
+  key = "actions",
+  render,
+  title,
+  width = 1,
+}: ActionsColumnConfig<T>): ColumnType<T> {
+  return {
+    key,
+    title: title ?? <ActionsColumnTitle />,
+    fixed,
+    width,
+    align: "right",
+    className: "w-0 whitespace-nowrap",
+    render: (_value: unknown, record: T, index: number) => (
+      <div className="flex items-center justify-end gap-1.5" onClick={stopRowClick} onDoubleClick={stopRowClick}>
+        {render(record, index)}
+      </div>
+    ),
+  };
+}
+
+function ActionsColumnTitle() {
+  const { t } = useI18n();
+  return <>{t("common.actions")}</>;
+}
+
+function stopRowClick(event: MouseEvent<HTMLElement>) {
+  event.stopPropagation();
+}
