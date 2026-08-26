@@ -20,7 +20,6 @@ const ALLOWED_LEGACY_TABLE_FILES: string[] = [
   // 2026-08-27 基线: 36 个待迁文件。每迁完一个就从这里删掉一行。
   // 注意 portal/components/PermissionSelector.tsx 同时被 tableArchitecture.test.ts
   // 断言「必须用 TanStack + 原生 table 渲染」, 迁它时要一起改那条断言。
-  "console/ApprovalTemplateTable.tsx",
   "portal/components/PermissionSelector.tsx",
   "portal/components/PermissionSelectorTable.tsx",
 ];

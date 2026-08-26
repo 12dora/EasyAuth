@@ -4,7 +4,11 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { AppConfigProvider } from "../../components/antd/AppConfigProvider";
 import { ApprovalTemplatesPage } from "./ApprovalTemplatesPage";
+
+// antd 表格 + 弹窗的逐字符输入在 jsdom 下比自研表格慢, 与其余已迁移的控制台用例同一档。
+vi.setConfig({ testTimeout: 20000 });
 
 const TEMPLATES = [
   {
@@ -51,10 +55,72 @@ describe("ApprovalTemplatesPage", () => {
     expect(screen.getByText("平台共用")).toBeVisible();
     expect(screen.getByText("purchase")).toBeVisible();
     expect(screen.getByText("crm")).toBeVisible();
-    expect(screen.getByText("启用")).toBeVisible();
-    expect(screen.getByText("停用")).toBeVisible();
+    // 「启用 / 停用」文案同时出现在状态列表头筛选下拉里, 徽章断言收敛到表格内。
+    expect(within(tableBody()).getByText("启用")).toBeVisible();
+    expect(within(tableBody()).getByText("停用")).toBeVisible();
     expect(screen.getByRole("button", { name: "新建模板" })).toBeVisible();
     expect(screen.getAllByRole("button", { name: "发起测试审批" })).toHaveLength(2);
+  });
+
+  test("表头文本筛选按模板 Key 收敛当前页", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => jsonResponse({ data: TEMPLATES })),
+    );
+    const user = userEvent.setup();
+
+    renderPage();
+
+    await screen.findByText("leave");
+    const dropdown = await openHeaderFilter(user, "模板 Key");
+    await user.type(within(dropdown).getByLabelText("筛选关键字"), "purch");
+    await user.click(within(dropdown).getByRole("button", { name: "确定" }));
+
+    await waitFor(() => expect(bodyRowKeys()).toEqual(["purchase"]));
+    expect(screen.queryByText("请假审批")).not.toBeInTheDocument();
+  });
+
+  test("表头状态筛选按启用/停用收敛当前页", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => jsonResponse({ data: TEMPLATES })),
+    );
+    const user = userEvent.setup();
+
+    renderPage();
+
+    await screen.findByText("leave");
+    const dropdown = await openHeaderFilter(user, "状态");
+    await user.click(within(dropdown).getByText("停用"));
+    await user.click(within(dropdown).getByRole("button", { name: "确定" }));
+
+    await waitFor(() => expect(bodyRowKeys()).toEqual(["purchase"]));
+    expect(within(tableBody()).queryByText("启用")).not.toBeInTheDocument();
+  });
+
+  test("模板超过一页时客户端分页, 第二页展示其余模板", async () => {
+    const manyTemplates = Array.from({ length: 12 }, (_, index) => ({
+      ...TEMPLATES[0],
+      id: 100 + index,
+      key: `tpl-${String(index).padStart(2, "0")}`,
+      name: `模板 ${index}`,
+    }));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => jsonResponse({ data: manyTemplates })),
+    );
+    const user = userEvent.setup();
+
+    renderPage();
+
+    await screen.findByText("tpl-00");
+    expect(bodyRowKeys()).toHaveLength(10);
+    expect(screen.getByText("第 1-10 条 / 共 12 条")).toBeVisible();
+    expect(screen.queryByText("tpl-10")).not.toBeInTheDocument();
+
+    await user.click(screen.getByTitle("下一页"));
+
+    await waitFor(() => expect(bodyRowKeys()).toEqual(["tpl-10", "tpl-11"]));
   });
 
   test("新建模板严格校验 form_schema 和 form_mapping 契约", async () => {
@@ -406,10 +472,37 @@ function renderPage() {
 
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={["/console/approval-templates"]}>
-        <ApprovalTemplatesPage />
-      </MemoryRouter>
+      <AppConfigProvider>
+        <MemoryRouter initialEntries={["/console/approval-templates"]}>
+          <ApprovalTemplatesPage />
+        </MemoryRouter>
+      </AppConfigProvider>
     </QueryClientProvider>,
+  );
+}
+
+/** 打开指定表头的筛选下拉, 返回当前展开的那个下拉面板。 */
+async function openHeaderFilter(user: ReturnType<typeof userEvent.setup>, headerText: string): Promise<HTMLElement> {
+  const header = screen.getAllByRole("columnheader").find((cell) => cell.textContent?.includes(headerText));
+  expect(header).toBeDefined();
+  const trigger = (header as HTMLElement).querySelector(".ant-table-filter-trigger");
+  expect(trigger).not.toBeNull();
+  await user.click(trigger as HTMLElement);
+  return waitFor(() => {
+    const dropdown = document.querySelector(".ant-dropdown:not(.ant-dropdown-hidden) .ant-table-filter-dropdown");
+    expect(dropdown).not.toBeNull();
+    return dropdown as HTMLElement;
+  });
+}
+
+function tableBody(): HTMLElement {
+  return document.querySelector(".ant-table-tbody") as HTMLElement;
+}
+
+/** 当前页每一行的第一列(模板 Key)。 */
+function bodyRowKeys(): string[] {
+  return [...document.querySelectorAll(".ant-table-tbody tr.ant-table-row")].map(
+    (row) => row.querySelector("td")?.textContent ?? "",
   );
 }
 
