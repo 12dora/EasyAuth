@@ -393,7 +393,7 @@ def test_test_endpoint_uses_candidate_config() -> None:
 
 def test_manual_reconcile_requires_enabled_instance(monkeypatch: pytest.MonkeyPatch) -> None:
     # Given: 拦截持久 generation 请求并断言参数。
-    from easyauth.admin_console import connectors_api as api_module  # noqa: PLC0415
+    from easyauth.admin_console import connectors_api_writes as api_module  # noqa: PLC0415
 
     sent: list[tuple[str, tuple[object, ...]]] = []
 
@@ -531,7 +531,7 @@ def test_delete_instance_keeps_tombstone_until_external_cleanup(
     app = App.objects.create(app_key="conn-del", name="X")
     instance = ConnectorInstance.objects.create(app=app, connector_key="fake")
     client = _logged_in_superuser("conn-del-admin")
-    from easyauth.admin_console import connectors_api as api_module  # noqa: PLC0415
+    from easyauth.admin_console import connectors_api_writes as api_module  # noqa: PLC0415
 
     monkeypatch.setattr(
         api_module,
