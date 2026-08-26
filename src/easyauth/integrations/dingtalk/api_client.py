@@ -149,10 +149,21 @@ class DingTalkApiClient:
         _deadline: float | None = None,
     ) -> str:
         cache_key = _access_token_cache_key(self._app_key, self._app_secret)
-        cached = None if force_refresh else cast("object", cache.get(cache_key))
-        if isinstance(cached, str) and cached:
+        cached = _read_cached_access_token(cache_key, force_refresh=force_refresh)
+        if cached is not None:
             return cached
-        payload = self._request_json(
+        payload = self._request_unauthenticated_access_token(_deadline=_deadline)
+        token, expire_seconds = _validated_access_token_payload(payload)
+        _cache_access_token(cache_key, token, expire_seconds)
+        return token
+
+    def _request_unauthenticated_access_token(
+        self,
+        *,
+        _deadline: float | None,
+    ) -> DingTalkJson:
+        """未认证换票: accessToken 接口本身不能再带 x-acs token。"""
+        return self._request_json(
             "POST",
             "/v1.0/oauth2/accessToken",
             options=_JsonRequestOptions(
@@ -161,26 +172,6 @@ class DingTalkApiClient:
                 deadline=_deadline,
             ),
         )
-        token = payload.get("accessToken")
-        expire_in = payload.get("expireIn")
-        if not isinstance(token, str) or not token:
-            message = "钉钉 accessToken 响应缺少 token。"
-            raise DingTalkApiRequestError(message)
-        if (
-            not isinstance(expire_in, (int, float))
-            or isinstance(expire_in, bool)
-            or not math.isfinite(expire_in)
-            or expire_in <= 0
-        ):
-            message = "钉钉 accessToken 响应缺少有效 expireIn。"
-            raise DingTalkApiRequestError(message)
-        expire_seconds = int(expire_in)
-        if expire_seconds <= 0:
-            message = "钉钉 accessToken 响应缺少有效 expireIn。"
-            raise DingTalkApiRequestError(message)
-        ttl = max(1, expire_seconds - ACCESS_TOKEN_EXPIRY_MARGIN_SECONDS)
-        cache.set(cache_key, token, timeout=ttl)
-        return token
 
     def create_process_instance(
         self,
@@ -238,9 +229,7 @@ class DingTalkApiClient:
             message = "工作通知 userid_list 不能为空。"
             raise DingTalkApiRequestError(message)
         if len(userid_list) > WORK_NOTIFICATION_MAX_USERIDS:
-            message = (
-                f"工作通知 userid_list 不得超过 {WORK_NOTIFICATION_MAX_USERIDS} 个。"
-            )
+            message = f"工作通知 userid_list 不得超过 {WORK_NOTIFICATION_MAX_USERIDS} 个。"
             raise DingTalkApiRequestError(message)
         payload = self._request_oapi_json(
             OAPI_ASYNC_SEND_PATH,
@@ -288,9 +277,7 @@ class DingTalkApiClient:
         options: _JsonRequestOptions = _DEFAULT_JSON_REQUEST_OPTIONS,
     ) -> DingTalkJson:
         deadline = (
-            monotonic() + self._timeout_seconds
-            if options.deadline is None
-            else options.deadline
+            monotonic() + self._timeout_seconds if options.deadline is None else options.deadline
         )
         url = f"{DINGTALK_API_BASE_URL}{path}"
         if options.query:
@@ -471,6 +458,44 @@ def _error_detail(error: HTTPError) -> str:
 def invalidate_access_token(*, app_key: str, app_secret: str) -> None:
     if app_key and app_secret:
         _ = cache.delete(_access_token_cache_key(app_key, app_secret))
+
+
+def _read_cached_access_token(cache_key: str, *, force_refresh: bool) -> str | None:
+    """读取缓存中的 access token; force_refresh 时跳过缓存且不碰 cache.get。"""
+    if force_refresh:
+        return None
+    cached = cast("object", cache.get(cache_key))
+    if isinstance(cached, str) and cached:
+        return cached
+    return None
+
+
+def _validated_access_token_payload(payload: DingTalkJson) -> tuple[str, int]:
+    """校验换票响应中的 accessToken 与 expireIn, 返回 (token, expire_seconds)。"""
+    token = payload.get("accessToken")
+    expire_in = payload.get("expireIn")
+    if not isinstance(token, str) or not token:
+        message = "钉钉 accessToken 响应缺少 token。"
+        raise DingTalkApiRequestError(message)
+    if (
+        not isinstance(expire_in, (int, float))
+        or isinstance(expire_in, bool)
+        or not math.isfinite(expire_in)
+        or expire_in <= 0
+    ):
+        message = "钉钉 accessToken 响应缺少有效 expireIn。"
+        raise DingTalkApiRequestError(message)
+    expire_seconds = int(expire_in)
+    if expire_seconds <= 0:
+        message = "钉钉 accessToken 响应缺少有效 expireIn。"
+        raise DingTalkApiRequestError(message)
+    return token, expire_seconds
+
+
+def _cache_access_token(cache_key: str, token: str, expire_seconds: int) -> None:
+    """按钉钉 expireIn 扣提前刷新窗口后写入缓存。"""
+    ttl = max(1, expire_seconds - ACCESS_TOKEN_EXPIRY_MARGIN_SECONDS)
+    cache.set(cache_key, token, timeout=ttl)
 
 
 def _access_token_cache_key(app_key: str, app_secret: str) -> str:

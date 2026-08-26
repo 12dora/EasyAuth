@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import timedelta
 from typing import Final
 
@@ -155,6 +156,12 @@ class LifecycleNotifyIdentityMissingError(RuntimeError):
     """生命周期通知身份尚未就绪, 必须由 Celery 持续退避重试。"""
 
 
+@dataclass(frozen=True, slots=True)
+class _LifecycleNotifyReady:
+    identity: App
+    credential: AppCredential
+
+
 @shared_task(name=RATE_LIMITED_EXECUTE_RETRY_TASK, acks_late=True)
 def retry_rate_limited_execute_task(action_id: int, generation: int) -> str:
     action = HandoverAppAction.objects.filter(
@@ -187,70 +194,24 @@ def lifecycle_send_reminder_task(
     notify 身份(easyauth-lifecycle) 尚未落地时: 记审计后抛错, 使 outbox 保持未发布
     并在身份就绪后重试(测试 eager 模式下 send_task 会传播异常)。
     """
-    task = HandoverTask.objects.filter(pk=task_id).first()
+    task = _lookup_handover_task(task_id)
     if task is None:
         return "task_missing"
-    identity = App.objects.filter(app_key="easyauth-lifecycle", is_active=True).first()
-    credential = None
-    if identity is not None:
-        credential = next(
-            (
-                item
-                for item in AppCredential.objects.filter(
-                    app=identity,
-                    is_active=True,
-                ).order_by("id")
-                if CAPABILITY_NOTIFY in item.capabilities
-            ),
-            None,
-        )
-    channel_ready = (
-        identity is not None and identity.notification_channels.filter(is_active=True).exists()
+    ready = _lifecycle_notify_ready()
+    if ready is None:
+        raise _deferred_lifecycle_reminder_error(task_id, kind, assignee_user_id)
+    content, dedup_key = _lifecycle_reminder_content_and_dedup(
+        task,
+        task_id=task_id,
+        kind=kind,
     )
-    if identity is not None and credential is not None and channel_ready:
-        content = (
-            f"交接单 {task_id} 即将到期, 请尽快处理。"
-            if kind == "deadline_soon"
-            else f"交接单 {task_id} 尚未完成, 请及时处理。"
-        )
-        result = accept_notify_message(
-            app=identity,
-            recipients=[assignee_user_id],
-            template=NOTIFY_TEMPLATE_TEXT,
-            content=content,
-            dedup_key=f"lifecycle:{task_id}:{task.last_reminded_on}:{kind}",
-            biz_tag="lifecycle.reminder",
-            requested_credential_type=credential.credential_type,
-            requested_credential_id=credential.id,
-        )
-        return "accepted" if result.accepted else "duplicate"
-
-    # 完整钉钉发送依赖 §7 easyauth-lifecycle 身份; 缺身份不得冒充成功消费 outbox。
-    _ = AuditService.record(
-        AuditRecord(
-            actor_type="system",
-            actor_id="lifecycle",
-            action="lifecycle_reminder_identity_missing",
-            target_type="handover_task",
-            target_id=str(task_id),
-            metadata={
-                "kind": kind,
-                "assignee_user_id": assignee_user_id,
-                "notify_identity": "pending",
-                "detail": "easyauth-lifecycle notify identity not provisioned; reminder not sent",
-            },
-        ),
+    return _accept_lifecycle_reminder(
+        identity=ready.identity,
+        credential=ready.credential,
+        assignee_user_id=assignee_user_id,
+        content=content,
+        dedup_key=dedup_key,
     )
-    logger.warning(
-        "lifecycle reminder blocked (notify identity pending): task_id=%s kind=%s",
-        task_id,
-        kind,
-    )
-    message = (
-        "easyauth-lifecycle notify identity not provisioned; "
-        f"reminder deferred task_id={task_id} kind={kind}"
-    )
-    raise LifecycleNotifyIdentityMissingError(message)
 
 
 @shared_task(name=LIFECYCLE_DAILY_REMINDER_TASK)
@@ -276,9 +237,13 @@ def lifecycle_daily_reminder_task() -> dict[str, int | str]:
             if not tasks:
                 break
             for task in tasks:
-                updated = HandoverTask.objects.filter(pk=task.id).filter(
-                    Q(last_reminded_on__isnull=True) | Q(last_reminded_on__lt=business_date),
-                ).update(last_reminded_on=business_date)
+                updated = (
+                    HandoverTask.objects.filter(pk=task.id)
+                    .filter(
+                        Q(last_reminded_on__isnull=True) | Q(last_reminded_on__lt=business_date),
+                    )
+                    .update(last_reminded_on=business_date)
+                )
                 if updated != 1:
                     continue
                 claimed += 1
@@ -406,3 +371,103 @@ def _record_disable_event(user: UserMirror, *, ok: bool, detail: str) -> None:
             metadata={"detail": detail},
         ),
     )
+
+
+def _lookup_handover_task(task_id: int) -> HandoverTask | None:
+    return HandoverTask.objects.filter(pk=task_id).first()
+
+
+def _lifecycle_notify_credential(identity: App) -> AppCredential | None:
+    return next(
+        (
+            item
+            for item in AppCredential.objects.filter(
+                app=identity,
+                is_active=True,
+            ).order_by("id")
+            if CAPABILITY_NOTIFY in item.capabilities
+        ),
+        None,
+    )
+
+
+def _lifecycle_notify_ready() -> _LifecycleNotifyReady | None:
+    """easyauth-lifecycle 身份、notify 凭据与活动通道均就绪时才可发送。"""
+    identity = App.objects.filter(app_key="easyauth-lifecycle", is_active=True).first()
+    if identity is None:
+        return None
+    credential = _lifecycle_notify_credential(identity)
+    channel_ready = identity.notification_channels.filter(is_active=True).exists()
+    if credential is None or not channel_ready:
+        return None
+    return _LifecycleNotifyReady(identity=identity, credential=credential)
+
+
+def _lifecycle_reminder_content_and_dedup(
+    task: HandoverTask,
+    *,
+    task_id: int,
+    kind: str,
+) -> tuple[str, str]:
+    content = (
+        f"交接单 {task_id} 即将到期, 请尽快处理。"
+        if kind == "deadline_soon"
+        else f"交接单 {task_id} 尚未完成, 请及时处理。"
+    )
+    dedup_key = f"lifecycle:{task_id}:{task.last_reminded_on}:{kind}"
+    return content, dedup_key
+
+
+def _accept_lifecycle_reminder(
+    *,
+    identity: App,
+    credential: AppCredential,
+    assignee_user_id: str,
+    content: str,
+    dedup_key: str,
+) -> str:
+    """受理生命周期提醒; 调用点集中在此, 便于 notify 受理签名迁移。"""
+    result = accept_notify_message(
+        app=identity,
+        recipients=[assignee_user_id],
+        template=NOTIFY_TEMPLATE_TEXT,
+        content=content,
+        dedup_key=dedup_key,
+        biz_tag="lifecycle.reminder",
+        requested_credential_type=credential.credential_type,
+        requested_credential_id=credential.id,
+    )
+    return "accepted" if result.accepted else "duplicate"
+
+
+def _deferred_lifecycle_reminder_error(
+    task_id: int,
+    kind: str,
+    assignee_user_id: str,
+) -> LifecycleNotifyIdentityMissingError:
+    """身份未就绪: 记审计后返回可重试错误, 不得冒充成功消费 outbox。"""
+    _ = AuditService.record(
+        AuditRecord(
+            actor_type="system",
+            actor_id="lifecycle",
+            action="lifecycle_reminder_identity_missing",
+            target_type="handover_task",
+            target_id=str(task_id),
+            metadata={
+                "kind": kind,
+                "assignee_user_id": assignee_user_id,
+                "notify_identity": "pending",
+                "detail": "easyauth-lifecycle notify identity not provisioned; reminder not sent",
+            },
+        ),
+    )
+    logger.warning(
+        "lifecycle reminder blocked (notify identity pending): task_id=%s kind=%s",
+        task_id,
+        kind,
+    )
+    message = (
+        "easyauth-lifecycle notify identity not provisioned; "
+        f"reminder deferred task_id={task_id} kind={kind}"
+    )
+    return LifecycleNotifyIdentityMissingError(message)
