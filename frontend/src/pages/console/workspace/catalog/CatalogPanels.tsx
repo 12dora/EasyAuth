@@ -1,16 +1,17 @@
 /** 渲染权限组、作用域和权限目录的表格区块。 */
 
-import { getCoreRowModel, getPaginationRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
 import { Plus } from "lucide-react";
 
-import { Badge } from "../../../../components/Badge";
 import { Button } from "../../../../components/Button";
+import { AppTable, type ColumnsType } from "../../../../components/antd/AppTable";
+import { actionsColumn, statusColumn, textColumn } from "../../../../components/antd/columns";
 import { EmptyState } from "../../../../components/ui/EmptyState";
-import { TableActionCell, TableRowActionButton } from "../../../../components/ui/TableActions";
-import { TableView } from "../../../../components/ui/TableView";
 import type { AppScopeItem, PermissionGroupItem, PermissionItem } from "../../../../lib/domain";
-import type { Translator } from "../../../../lib/status";
 import { useI18n } from "../../../../i18n/I18nProvider";
+import { activeStatusColumn, RowActionButton } from "../workspaceColumns";
+
+/** 三张目录表都放在半宽栅格里, 列多于四列时给一个统一的最小宽度。 */
+const CATALOG_TABLE_MIN_WIDTH = 640;
 
 export function CatalogGroupsPanel({ rows, isLoading, onCreate, onEdit }: {
   rows: PermissionGroupItem[];
@@ -19,31 +20,49 @@ export function CatalogGroupsPanel({ rows, isLoading, onCreate, onEdit }: {
   onEdit: (group: PermissionGroupItem) => void;
 }) {
   const { t } = useI18n();
-  const columns: ColumnDef<PermissionGroupItem>[] = [
-    { header: t("console.catalog.group.column.key"), cell: ({ row }) => <code>{row.original.key}</code> },
-    { header: t("common.name"), accessorKey: "name" },
-    { header: t("console.catalog.group.column.depth"), cell: ({ row }) => row.original.depth ?? "-" },
-    { header: t("console.catalog.group.column.permissionCount"), cell: ({ row }) => row.original.permissions?.length ?? 0 },
+  const columns: ColumnsType<PermissionGroupItem> = [
+    textColumn<PermissionGroupItem>({
+      key: "key",
+      title: t("console.catalog.group.column.key"),
+      mono: true,
+      filter: true,
+      width: 180,
+    }),
+    textColumn<PermissionGroupItem>({ key: "name", title: t("common.name"), filter: true, sorter: true }),
     {
-      id: "actions",
-      header: t("common.actions"),
-      cell: ({ row }) => (
-        <TableActionCell>
-          <TableRowActionButton type="button" onClick={() => onEdit(row.original)}>
-            {t("common.edit")}
-          </TableRowActionButton>
-        </TableActionCell>
-      ),
+      key: "depth",
+      dataIndex: "depth",
+      title: t("console.catalog.group.column.depth"),
+      width: 90,
+      sorter: (a, b) => (a.depth ?? 0) - (b.depth ?? 0),
+      render: (_value: unknown, group: PermissionGroupItem) => group.depth ?? "-",
     },
+    {
+      key: "permissionCount",
+      title: t("console.catalog.group.column.permissionCount"),
+      width: 110,
+      sorter: (a, b) => (a.permissions?.length ?? 0) - (b.permissions?.length ?? 0),
+      render: (_value: unknown, group: PermissionGroupItem) => group.permissions?.length ?? 0,
+    },
+    actionsColumn<PermissionGroupItem>({
+      title: t("common.actions"),
+      render: (group) => (
+        <RowActionButton type="button" onClick={() => onEdit(group)}>
+          {t("common.edit")}
+        </RowActionButton>
+      ),
+    }),
   ];
-  const table = useReactTable({ data: rows, columns, getCoreRowModel: getCoreRowModel(), getPaginationRowModel: getPaginationRowModel() });
+
   return (
     <section className="space-y-3">
       <CatalogPanelHeading title={t("console.catalog.groups")} onCreate={onCreate} />
-      <TableView
-        table={table}
-        totalItems={rows.length}
-        isLoading={isLoading}
+      <AppTable<PermissionGroupItem>
+        columns={columns}
+        dataSource={rows}
+        rowKey="key"
+        loading={isLoading}
+        minWidth={CATALOG_TABLE_MIN_WIDTH}
         empty={<EmptyState title={t("console.catalog.groupsEmpty")} description={t("console.catalog.groupsEmptyDescription")} />}
       />
     </section>
@@ -59,35 +78,50 @@ export function CatalogScopesPanel({ scopes, isLoading, togglePending, onCreate,
   onToggle: (scope: AppScopeItem) => void;
 }) {
   const { t } = useI18n();
-  const columns: ColumnDef<AppScopeItem>[] = [
-    { header: t("console.catalog.scope.column.key"), cell: ({ row }) => <code>{row.original.key}</code> },
-    { header: t("common.name"), accessorKey: "name" },
-    { header: t("console.catalog.scope.column.order"), accessorKey: "display_order" },
-    { header: t("common.status"), cell: ({ row }) => <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>{row.original.is_active ? t("common.enabled") : t("common.disabled")}</Badge> },
+  const columns: ColumnsType<AppScopeItem> = [
+    textColumn<AppScopeItem>({
+      key: "key",
+      title: t("console.catalog.scope.column.key"),
+      mono: true,
+      filter: true,
+      width: 180,
+    }),
+    textColumn<AppScopeItem>({ key: "name", title: t("common.name"), filter: true, sorter: true }),
     {
-      id: "actions", header: t("common.actions"), cell: ({ row }) => (
-        <TableActionCell>
-          <TableRowActionButton type="button" onClick={() => onEdit(row.original)}>{t("common.edit")}</TableRowActionButton>
-          <TableRowActionButton
-            type="button"
-            variant={row.original.is_active ? "ghost-danger" : "ghost"}
-            disabled={togglePending}
-            onClick={() => onToggle(row.original)}
-          >
-            {row.original.is_active ? t("common.disable") : t("common.enable")}
-          </TableRowActionButton>
-        </TableActionCell>
-      ),
+      key: "display_order",
+      dataIndex: "display_order",
+      title: t("console.catalog.scope.column.order"),
+      width: 90,
+      sorter: (a, b) => a.display_order - b.display_order,
     },
+    activeStatusColumn<AppScopeItem>({ t, getActive: (scope) => scope.is_active }),
+    actionsColumn<AppScopeItem>({
+      title: t("common.actions"),
+      render: (scope) => (
+        <>
+          <RowActionButton type="button" onClick={() => onEdit(scope)}>{t("common.edit")}</RowActionButton>
+          <RowActionButton
+            type="button"
+            variant={scope.is_active ? "ghost-danger" : "ghost"}
+            disabled={togglePending}
+            onClick={() => onToggle(scope)}
+          >
+            {scope.is_active ? t("common.disable") : t("common.enable")}
+          </RowActionButton>
+        </>
+      ),
+    }),
   ];
-  const table = useReactTable({ data: scopes, columns, getCoreRowModel: getCoreRowModel(), getPaginationRowModel: getPaginationRowModel() });
+
   return (
     <section className="space-y-3">
       <CatalogPanelHeading title={t("console.catalog.scopes")} onCreate={onCreate} />
-      <TableView
-        table={table}
-        totalItems={scopes.length}
-        isLoading={isLoading}
+      <AppTable<AppScopeItem>
+        columns={columns}
+        dataSource={scopes}
+        rowKey="key"
+        loading={isLoading}
+        minWidth={CATALOG_TABLE_MIN_WIDTH}
         empty={<EmptyState title={t("console.catalog.scopesEmpty")} description={t("console.catalog.scopesEmptyDescription")} />}
       />
     </section>
@@ -101,30 +135,58 @@ export function CatalogPermissionsPanel({ permissions, isLoading, onCreate, onEd
   onEdit: (permission: PermissionItem) => void;
 }) {
   const { t } = useI18n();
-  const columns: ColumnDef<PermissionItem>[] = [
-    { header: t("console.catalog.permission.column.key"), cell: ({ row }) => <code>{row.original.key}</code> },
-    { header: t("common.name"), accessorKey: "name" },
-    { header: t("console.catalog.permission.column.group"), cell: ({ row }) => row.original.group_key || "-" },
-    { header: t("console.catalog.permission.column.scopes"), cell: ({ row }) => (row.original.supported_scopes ?? []).join("、") || "-" },
-    { header: t("console.catalog.permission.column.risk"), cell: ({ row }) => <Badge tone={row.original.risk_level === "high" ? "signal" : "neutral"}>{riskLevelLabel(t, row.original.risk_level)}</Badge> },
-    {
-      id: "actions", header: t("common.actions"), cell: ({ row }) => (
-        <TableActionCell>
-          <TableRowActionButton type="button" onClick={() => onEdit(row.original)}>
-            {t("common.edit")}
-          </TableRowActionButton>
-        </TableActionCell>
+  const columns: ColumnsType<PermissionItem> = [
+    textColumn<PermissionItem>({
+      key: "key",
+      title: t("console.catalog.permission.column.key"),
+      mono: true,
+      filter: true,
+      width: 220,
+    }),
+    textColumn<PermissionItem>({ key: "name", title: t("common.name"), filter: true, sorter: true }),
+    textColumn<PermissionItem>({
+      key: "group_key",
+      title: t("console.catalog.permission.column.group"),
+      filter: true,
+      width: 160,
+    }),
+    textColumn<PermissionItem>({
+      key: "supported_scopes",
+      title: t("console.catalog.permission.column.scopes"),
+      getValue: (permission) => (permission.supported_scopes ?? []).join("、"),
+      filter: true,
+      width: 200,
+    }),
+    statusColumn<PermissionItem>({
+      key: "risk_level",
+      title: t("console.catalog.permission.column.risk"),
+      width: 120,
+      options: [
+        { value: "high", label: t("console.catalog.risk.high"), tone: "signal" },
+        { value: "standard", label: t("console.catalog.risk.standard"), tone: "neutral" },
+      ],
+      // 旧表把缺省风险级别视为「标准」, 迁移后保持同一口径。
+      getValue: (permission) => permission.risk_level || "standard",
+    }),
+    actionsColumn<PermissionItem>({
+      title: t("common.actions"),
+      render: (permission) => (
+        <RowActionButton type="button" onClick={() => onEdit(permission)}>
+          {t("common.edit")}
+        </RowActionButton>
       ),
-    },
+    }),
   ];
-  const table = useReactTable({ data: permissions, columns, getCoreRowModel: getCoreRowModel(), getPaginationRowModel: getPaginationRowModel() });
+
   return (
     <section className="space-y-3">
       <CatalogPanelHeading title={t("console.catalog.permissions")} onCreate={onCreate} />
-      <TableView
-        table={table}
-        totalItems={permissions.length}
-        isLoading={isLoading}
+      <AppTable<PermissionItem>
+        columns={columns}
+        dataSource={permissions}
+        rowKey="key"
+        loading={isLoading}
+        minWidth={960}
         empty={<EmptyState title={t("console.catalog.permissionsEmpty")} description={t("console.catalog.permissionsEmptyDescription")} />}
       />
     </section>
@@ -141,14 +203,4 @@ function CatalogPanelHeading({ title, onCreate }: { title: string; onCreate: () 
       </Button>
     </div>
   );
-}
-
-function riskLevelLabel(t: Translator, value: string | undefined): string {
-  if (value === "high") {
-    return t("console.catalog.risk.high");
-  }
-  if (value === "standard" || !value) {
-    return t("console.catalog.risk.standard");
-  }
-  return value;
 }

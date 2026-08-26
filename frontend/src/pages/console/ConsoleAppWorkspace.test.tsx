@@ -5,10 +5,15 @@ import { lazy, Suspense, type ReactElement } from "react";
 import { MemoryRouter, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { AppConfigProvider } from "../../components/antd/AppConfigProvider";
 import { ToastProvider } from "../../components/ui/Toast";
 import { ManifestTab } from "./workspace/tabs/ManifestTab";
 import { QueryTestTab } from "./workspace/tabs/QueryTestTab";
 import { RulesTab } from "./workspace/tabs/RulesTab";
+
+// antd Table 在 jsdom 里每次筛选/排序都要重建整棵表格, 比自研原语慢得多,
+// 默认 5s 已经不够本文件的多表页签用例; 只放宽这里的超时。
+vi.setConfig({ testTimeout: 30000 });
 
 const LazyConsoleAppWorkspace = lazy(() =>
   import("./ConsoleAppWorkspace").then((module) => ({ default: module.ConsoleAppWorkspace })),
@@ -96,6 +101,49 @@ describe("ConsoleAppWorkspace", () => {
     expect(screen.getByText("invoice.read")).toBeInTheDocument();
     expect(screen.getByText("SELF、TEAM")).toBeInTheDocument();
     expect(screen.getAllByText("高").length).toBeGreaterThan(0);
+  });
+
+  test("catalog 权限表按表头风险级别筛选", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/demo") {
+        return jsonResponse(appPayload);
+      }
+      if (url === "/console/api/v1/apps/demo/permission-tree") {
+        return jsonResponse({ groups: [] });
+      }
+      if (url === "/console/api/v1/apps/demo/permission-groups") {
+        return jsonResponse({ data: [] });
+      }
+      if (url === "/console/api/v1/apps/demo/permissions") {
+        return jsonResponse({
+          data: [
+            { id: 20, key: "invoice.read", name: "发票读取", group_key: "finance", supported_scopes: ["SELF"], risk_level: "standard", is_active: true },
+            { id: 21, key: "invoice.pay", name: "发票支付", group_key: "finance", supported_scopes: ["SELF"], risk_level: "high", is_active: true },
+          ],
+        });
+      }
+      if (url === "/console/api/v1/apps/demo/scopes") {
+        return jsonResponse({ data: [] });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    // antd 表格每次筛选都要整表重渲染, user-event 默认的事件间隔会让本用例逼近超时。
+    const user = userEvent.setup({ delay: null });
+
+    renderWorkspace("/console/apps/demo?tab=catalog");
+
+    const permissionsPanel = (await screen.findByRole("heading", { name: "权限" })).closest("section") as HTMLElement;
+    await waitFor(() => expect(bodyRowKeys(permissionsPanel)).toEqual(["invoice.read", "invoice.pay"]));
+    // 权限表原本没有任何筛选入口, 迁移后风险级别成为表头枚举筛选。
+    expect(permissionsPanel.querySelector("ul.ant-pagination .ant-pagination-total-text")).not.toBeNull();
+
+    const riskDropdown = await openHeaderFilter(user, permissionsPanel, "风险级别");
+    await user.click(within(riskDropdown).getByText("高"));
+    await user.click(within(riskDropdown).getByRole("button", { name: "确定" }));
+
+    await waitFor(() => expect(bodyRowKeys(permissionsPanel)).toEqual(["invoice.pay"]));
   });
 
   test("工作区 tabs 使用方向键 roving tabindex 切换并保持单一 Tab stop", async () => {
@@ -993,8 +1041,34 @@ function renderWithClient(ui: ReactElement) {
 
   render(
     <QueryClientProvider client={client}>
-      <ToastProvider>{ui}</ToastProvider>
+      <AppConfigProvider>
+        <ToastProvider>{ui}</ToastProvider>
+      </AppConfigProvider>
     </QueryClientProvider>,
+  );
+}
+
+/** 打开指定表头的筛选下拉, 返回当前展开的那个下拉面板。 */
+async function openHeaderFilter(
+  user: ReturnType<typeof userEvent.setup>,
+  scope: HTMLElement,
+  headerText: string,
+): Promise<HTMLElement> {
+  const header = within(scope).getAllByRole("columnheader").find((cell) => cell.textContent?.includes(headerText));
+  expect(header).toBeDefined();
+  const trigger = (header as HTMLElement).querySelector(".ant-table-filter-trigger");
+  expect(trigger).not.toBeNull();
+  await user.click(trigger as HTMLElement);
+  return waitFor(() => {
+    const dropdown = document.querySelector(".ant-dropdown:not(.ant-dropdown-hidden) .ant-table-filter-dropdown");
+    expect(dropdown).not.toBeNull();
+    return dropdown as HTMLElement;
+  });
+}
+
+function bodyRowKeys(scope: HTMLElement): string[] {
+  return [...scope.querySelectorAll(".ant-table-tbody tr.ant-table-row")].map(
+    (row) => row.querySelector("td")?.textContent ?? "",
   );
 }
 

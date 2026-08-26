@@ -1,18 +1,24 @@
 import { useQuery } from "@tanstack/react-query";
-import { getCoreRowModel, getPaginationRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
-import { EmptyState } from "../../../../components/ui/EmptyState";
 
 import { CodeBlock } from "../../../../components/CodeBlock";
 import { StatusBanner } from "../../../../components/StatusBanner";
+import { AppTable, type ColumnsType } from "../../../../components/antd/AppTable";
+import { textColumn } from "../../../../components/antd/columns";
+import { EmptyState } from "../../../../components/ui/EmptyState";
 import { apiRequest } from "../../../../lib/api";
 import type { IntegrationGuide } from "../../../../lib/domain";
-import { TableView } from "../../../../components/ui/TableView";
 
 type CredentialModeRow = NonNullable<IntegrationGuide["credential_modes"]>[number];
 
-const CREDENTIAL_MODE_COLUMNS: ColumnDef<CredentialModeRow>[] = [
-  { header: "模式", cell: ({ row }) => row.original.mode },
-  { header: "活跃数量", cell: ({ row }) => row.original.active_count },
+const CREDENTIAL_MODE_COLUMNS: ColumnsType<CredentialModeRow> = [
+  textColumn<CredentialModeRow>({ key: "mode", title: "模式", mono: true, filter: true, sorter: true }),
+  {
+    key: "active_count",
+    dataIndex: "active_count",
+    title: "活跃数量",
+    width: 140,
+    sorter: (a, b) => a.active_count - b.active_count,
+  },
 ];
 
 export function GuideTab({ appKey }: { appKey: string }) {
@@ -21,12 +27,6 @@ export function GuideTab({ appKey }: { appKey: string }) {
     queryFn: () => apiRequest<IntegrationGuide>(`/console/api/v1/apps/${appKey}/integration-guide`),
   });
   const credentialModes = guideQuery.data?.credential_modes ?? [];
-  const credentialModeTable = useReactTable({
-    data: credentialModes,
-    columns: CREDENTIAL_MODE_COLUMNS,
-    getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-  });
   const endpoint = guideQuery.data?.permission_query_endpoint ?? `/api/v1/apps/${appKey}/users/{user_id}/permissions`;
   const curl = `curl -H "Authorization: Bearer $APP_TOKEN" "${endpoint}"`;
   const ts = `await fetch("${endpoint}", {\n  headers: { Authorization: \`Bearer \${appToken}\` },\n});`;
@@ -38,10 +38,11 @@ export function GuideTab({ appKey }: { appKey: string }) {
       ) : null}
       <div className="space-y-3">
         <h2 className="text-base font-semibold text-ink">凭据模式</h2>
-        <TableView
-          table={credentialModeTable}
-          totalItems={credentialModes.length}
-          isLoading={guideQuery.isLoading}
+        <AppTable<CredentialModeRow>
+          columns={CREDENTIAL_MODE_COLUMNS}
+          dataSource={credentialModes}
+          rowKey="mode"
+          loading={guideQuery.isLoading}
           empty={<EmptyState title="暂无活跃凭据" description="先在「凭据」页签创建凭据，再回到这里查看接入方式。" />}
         />
       </div>

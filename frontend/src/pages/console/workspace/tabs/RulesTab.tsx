@@ -1,15 +1,9 @@
-import {
-  getCoreRowModel,
-  getPaginationRowModel,
-  useReactTable,
-  type ColumnDef,
-} from "@tanstack/react-table";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { useState } from "react";
+import { AppTable, enumFilter, type ColumnsType } from "../../../../components/antd/AppTable";
+import { actionsColumn, textColumn } from "../../../../components/antd/columns";
 import { EmptyState } from "../../../../components/ui/EmptyState";
-import { TableView } from "../../../../components/ui/TableView";
-import { TableActionCell, TableRowActionButton } from "../../../../components/ui/TableActions";
 
 import { Badge } from "../../../../components/Badge";
 import { Button } from "../../../../components/Button";
@@ -23,6 +17,7 @@ import type { ApprovalRuleItem } from "../../../../lib/domain";
 import { useI18n } from "../../../../i18n/I18nProvider";
 import type { Translator } from "../../../../lib/status";
 import { safeJoin } from "../utils";
+import { RowActionButton } from "../workspaceColumns";
 
 type RuleTargetType = "authorization_group" | "permission";
 type EditableApprovalRule = ApprovalRuleItem & { blocking?: boolean; status?: string };
@@ -87,55 +82,74 @@ export function RulesTab({ appKey }: { appKey: string }) {
       toast.error(t("console.rules.toggleFailed"), error.message);
     },
   });
-  const ruleColumns: ColumnDef<EditableApprovalRule>[] = [
-    { header: t("console.rules.column.target"), cell: ({ row }) => `${targetTypeLabel(t, row.original.target_type)}：${row.original.target_key ?? "-"}` },
-    { header: t("console.rules.column.approvers"), cell: ({ row }) => safeJoin(row.original.approver_userids) },
+  const ruleColumns: ColumnsType<EditableApprovalRule> = [
+    textColumn<EditableApprovalRule>({
+      key: "target",
+      title: t("console.rules.column.target"),
+      getValue: (rule) => `${targetTypeLabel(t, rule.target_type)}\uff1a${rule.target_key ?? "-"}`,
+      filter: true,
+      sorter: true,
+      width: 280,
+    }),
+    textColumn<EditableApprovalRule>({
+      key: "approvers",
+      title: t("console.rules.column.approvers"),
+      getValue: (rule) => safeJoin(rule.approver_userids),
+      filter: true,
+    }),
     {
-      header: t("common.status"),
-      cell: ({ row }) => (
+      key: "status",
+      title: t("common.status"),
+      width: 180,
+      render: (_value: unknown, rule: EditableApprovalRule) => (
         <div className="flex flex-wrap gap-2">
-          <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>{row.original.is_active ? t("common.enabled") : t("common.disabled")}</Badge>
-          {isBlocking(row.original) ? <Badge tone="signal">{t("console.rules.blocking")}</Badge> : null}
+          <Badge tone={rule.is_active ? "evergreen" : "neutral"}>{rule.is_active ? t("common.enabled") : t("common.disabled")}</Badge>
+          {isBlocking(rule) ? <Badge tone="signal">{t("console.rules.blocking")}</Badge> : null}
         </div>
       ),
+      // 单元格里可能同时有「启用」和「阻塞」两枚徽章, 因此筛选值是数组, 按「包含」匹配。
+      ...enumFilter<EditableApprovalRule>(
+        "status",
+        [
+          { label: t("common.enabled"), value: "active" },
+          { label: t("common.disabled"), value: "inactive" },
+          { label: t("console.rules.blocking"), value: "blocking" },
+        ],
+        {
+          getValue: (rule) => [rule.is_active ? "active" : "inactive", ...(isBlocking(rule) ? ["blocking"] : [])],
+        },
+      ),
     },
-    {
-      id: "actions",
-      header: t("common.actions"),
-      cell: ({ row }) => (
-        <TableActionCell>
-          <TableRowActionButton
+    actionsColumn<EditableApprovalRule>({
+      title: t("common.actions"),
+      render: (rule) => (
+        <>
+          <RowActionButton
             type="button"
             onClick={() => {
-              setEditingRuleId(row.original.id);
+              setEditingRuleId(rule.id);
               setForm({
-                target_type: normalizeTargetType(row.original.target_type),
-                target_key: row.original.target_key ?? "",
-                approverUserIds: row.original.approver_userids ?? [],
+                target_type: normalizeTargetType(rule.target_type),
+                target_key: rule.target_key ?? "",
+                approverUserIds: rule.approver_userids ?? [],
               });
               setDialogOpen(true);
             }}
           >
             {t("common.edit")}
-          </TableRowActionButton>
-          <TableRowActionButton
+          </RowActionButton>
+          <RowActionButton
             type="button"
-            variant={row.original.is_active ? "ghost-danger" : "ghost"}
-            onClick={() => toggleMutation.mutate(row.original)}
+            variant={rule.is_active ? "ghost-danger" : "ghost"}
+            onClick={() => toggleMutation.mutate(rule)}
             disabled={toggleMutation.isPending}
           >
-            {row.original.is_active ? t("common.disable") : t("common.enable")}
-          </TableRowActionButton>
-        </TableActionCell>
+            {rule.is_active ? t("common.disable") : t("common.enable")}
+          </RowActionButton>
+        </>
       ),
-    },
+    }),
   ];
-  const ruleTable = useReactTable({
-    data: rules,
-    columns: ruleColumns,
-    getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-  });
 
   return (
     <section className="space-y-6">
@@ -155,10 +169,12 @@ export function RulesTab({ appKey }: { appKey: string }) {
         </Button>
       </div>
       {rulesQuery.error ? <StatusBanner live="alert" tone="signal" title={t("console.rules.loadFailed")} message={(rulesQuery.error as Error).message} /> : null}
-      <TableView
-        table={ruleTable}
-        totalItems={rules.length}
-        isLoading={rulesQuery.isLoading}
+      <AppTable<EditableApprovalRule>
+        columns={ruleColumns}
+        dataSource={rules}
+        rowKey="id"
+        loading={rulesQuery.isLoading}
+        minWidth={880}
         empty={<EmptyState title={t("console.rules.empty")} description={t("console.rules.emptyDescription")} />}
       />
       {dialogOpen ? (

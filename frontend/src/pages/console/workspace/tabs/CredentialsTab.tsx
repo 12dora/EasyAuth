@@ -1,15 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import {
-  getCoreRowModel,
-  getPaginationRowModel,
-  useReactTable,
-  type ColumnDef,
-} from "@tanstack/react-table";
 import { Pencil, Plus } from "lucide-react";
 import { useEffect, useState } from "react";
+import { AppTable, enumFilter, type ColumnsType } from "../../../../components/antd/AppTable";
+import { actionsColumn, textColumn } from "../../../../components/antd/columns";
 import { EmptyState } from "../../../../components/ui/EmptyState";
-import { TableView } from "../../../../components/ui/TableView";
-import { TableActionCell, TableRowActionButton } from "../../../../components/ui/TableActions";
 
 import { Badge } from "../../../../components/Badge";
 import { Button } from "../../../../components/Button";
@@ -26,6 +20,7 @@ import { CreateCredentialForm } from "../credentials/CreateCredentialForm";
 import { useCredentialsActions } from "../credentials/useCredentialsActions";
 import { invalidateAppDerivedQueries } from "../invalidateAppQueries";
 import { credentialKindLabel } from "../utils";
+import { activeStatusColumn, RowActionButton } from "../workspaceColumns";
 
 export function CredentialsTab({ appKey, canManage }: { appKey: string; canManage: boolean }) {
   const { t } = useI18n();
@@ -63,79 +58,87 @@ export function CredentialsTab({ appKey, canManage }: { appKey: string; canManag
       toast.error(t("console.credentials.operationFailed"), operationError.message);
     }
   }, [operationError, toast, t]);
-  const credentialColumns: ColumnDef<CredentialItem>[] = [
-    { header: t("common.name"), accessorKey: "name" },
-    { header: t("common.type"), cell: ({ row }) => credentialKindLabel(row.original.kind) },
+  const credentialColumns: ColumnsType<CredentialItem> = [
+    textColumn<CredentialItem>({ key: "name", title: t("common.name"), filter: true, sorter: true }),
     {
-      header: "client_id",
-      cell: ({ row }) => (row.original.client_id ? <code>{row.original.client_id}</code> : "-"),
+      key: "kind",
+      dataIndex: "kind",
+      title: t("common.type"),
+      width: 140,
+      render: (_value: unknown, credential: CredentialItem) => credentialKindLabel(credential.kind),
+      ...enumFilter<CredentialItem>("kind", [
+        { label: credentialKindLabel("static_token"), value: "static_token" },
+        { label: credentialKindLabel("oauth_client"), value: "oauth_client" },
+      ]),
     },
+    textColumn<CredentialItem>({ key: "client_id", title: "client_id", mono: true, filter: true, width: 220 }),
     {
-      id: "capabilities",
-      header: t("console.credentials.capabilities"),
-      cell: ({ row }) => (
+      key: "capabilities",
+      title: t("console.credentials.capabilities"),
+      width: 200,
+      render: (_value: unknown, credential: CredentialItem) => (
         <div className="flex min-w-36 flex-wrap gap-1">
-          {(row.original.capabilities ?? []).length > 0 ? (
-            row.original.capabilities?.map((capability) => <Badge key={capability} tone="bond">{capability}</Badge>)
+          {(credential.capabilities ?? []).length > 0 ? (
+            credential.capabilities?.map((capability) => <Badge key={capability} tone="bond">{capability}</Badge>)
           ) : (
             <Badge tone="faint">{t("console.credentials.permissionOnly")}</Badge>
           )}
         </div>
       ),
-    },
-    {
-      header: t("common.status"),
-      cell: ({ row }) => (
-        <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>{row.original.is_active ? t("common.enabled") : t("common.disabled")}</Badge>
+      // 能力是多值, 未授予任何能力的凭据归到「仅权限查询」这一档。
+      ...enumFilter<CredentialItem>(
+        "capabilities",
+        [
+          { label: "directory", value: "directory" },
+          { label: "notify", value: "notify" },
+          { label: t("console.credentials.permissionOnly"), value: "none" },
+        ],
+        {
+          getValue: (credential) => ((credential.capabilities ?? []).length > 0 ? (credential.capabilities ?? []) : ["none"]),
+        },
       ),
     },
-    {
-      id: "actions",
-      header: t("common.actions"),
-      cell: ({ row }) => (
-        <TableActionCell>
+    activeStatusColumn<CredentialItem>({ t, getActive: (credential) => credential.is_active }),
+    actionsColumn<CredentialItem>({
+      title: t("common.actions"),
+      render: (credential) => (
+        <>
           {canManage ? (
-            <TableRowActionButton
+            <RowActionButton
               type="button"
-              disabled={isCredentialPending(row.original)}
+              disabled={isCredentialPending(credential)}
               onClick={() => {
-                setEditingCredential(row.original);
-                setEditingCapabilities(row.original.capabilities ?? []);
+                setEditingCredential(credential);
+                setEditingCapabilities(credential.capabilities ?? []);
               }}
             >
               <Pencil size={13} aria-hidden="true" />
               {t("console.credentials.editCapabilities")}
-            </TableRowActionButton>
+            </RowActionButton>
           ) : null}
-          {canManage && row.original.kind === "static_token" ? (
-            <TableRowActionButton
+          {canManage && credential.kind === "static_token" ? (
+            <RowActionButton
               type="button"
-              disabled={isCredentialPending(row.original)}
-              onClick={() => rotateCredential(row.original)}
+              disabled={isCredentialPending(credential)}
+              onClick={() => rotateCredential(credential)}
             >
               {t("console.credentials.rotate")}
-            </TableRowActionButton>
+            </RowActionButton>
           ) : null}
           {canManage ? (
-            <TableRowActionButton
+            <RowActionButton
               type="button"
               variant="ghost-danger"
-              disabled={isCredentialPending(row.original)}
-              onClick={() => disableCredential(row.original)}
+              disabled={isCredentialPending(credential)}
+              onClick={() => disableCredential(credential)}
             >
               {t("console.credentials.disable")}
-            </TableRowActionButton>
+            </RowActionButton>
           ) : <span className="text-xs text-ink-faint">{t("console.integration.readOnlyMode")}</span>}
-        </TableActionCell>
+        </>
       ),
-    },
+    }),
   ];
-  const credentialTable = useReactTable({
-    data: credentials,
-    columns: credentialColumns,
-    getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-  });
 
   return (
     <section className="space-y-6">
@@ -158,10 +161,12 @@ export function CredentialsTab({ appKey, canManage }: { appKey: string; canManag
       {credentialsQuery.error ? (
         <StatusBanner live="alert" tone="signal" title={t("console.credentials.loadFailed")} message={(credentialsQuery.error as Error).message} />
       ) : null}
-      <TableView
-        table={credentialTable}
-        totalItems={credentials.length}
-        isLoading={credentialsQuery.isLoading}
+      <AppTable<CredentialItem>
+        columns={credentialColumns}
+        dataSource={credentials}
+        rowKey={(credential) => `${credential.kind}:${credential.id}`}
+        loading={credentialsQuery.isLoading}
+        minWidth={1080}
         empty={<EmptyState title={t("console.credentials.empty")} description={t("console.credentials.emptyDescription")} />}
       />
       {createDialogOpen ? (

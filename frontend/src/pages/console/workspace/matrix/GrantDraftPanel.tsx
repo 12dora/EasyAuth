@@ -1,13 +1,13 @@
-import { getCoreRowModel, getPaginationRowModel, useReactTable } from "@tanstack/react-table";
 import { Plus } from "lucide-react";
 import type { Dispatch, SetStateAction } from "react";
 
 import { Button } from "../../../../components/Button";
 import { Field, SelectInput } from "../../../../components/Field";
+import { AppTable } from "../../../../components/antd/AppTable";
 import { PanelSurface } from "../../../../components/ui/PanelSurface";
 import { useI18n } from "../../../../i18n/I18nProvider";
-import type { AppScopeItem, PermissionItem } from "../../../../lib/domain";
-import { TableView } from "../../../../components/ui/TableView";
+import type { AppScopeItem, AuthorizationGroupGrantItem, PermissionItem } from "../../../../lib/domain";
+import { grantKey } from "./grantDraft";
 import type { AuthorizationGroupForm } from "./grantFormUpdates";
 import { authorizationGroupGrantColumns } from "./matrixColumns";
 
@@ -35,12 +35,6 @@ export function GrantDraftPanel({
   addGrant: () => void;
 }) {
   const { t } = useI18n();
-  const grantTable = useReactTable({
-    data: form.grants,
-    columns: authorizationGroupGrantColumns({ t, canManage, setForm }),
-    getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-  });
 
   return (
     <>
@@ -63,7 +57,13 @@ export function GrantDraftPanel({
           {t("console.matrix.addGrant")}
         </Button>
       </PanelSurface>
-      <TableView table={grantTable} totalItems={form.grants.length} empty={t("console.matrix.grant.empty")} />
+      <AppTable<AuthorizationGroupGrantItem>
+        columns={authorizationGroupGrantColumns({ t, canManage, setForm })}
+        dataSource={form.grants}
+        rowKey={(grant) => grantKey(grant.permission, grant.scope)}
+        minWidth={960}
+        empty={t("console.matrix.grant.empty")}
+      />
       <PanelSurface className="flex flex-wrap items-center justify-between gap-3 bg-paper-deep">
         <span className="min-w-0 text-sm text-ink-soft">{t("console.matrix.grantPreview", { value: form.grants.map((grant) => `${grant.permission} / ${grant.scope}`).join("，") || "-" })}</span>
       </PanelSurface>

@@ -4,7 +4,12 @@ import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { AppConfigProvider } from "../../../../components/antd/AppConfigProvider";
 import { MatrixTab } from "./MatrixTab";
+
+// antd Table 每次筛选都要重建整棵表格, jsdom 下比自研原语慢;
+// 整套测试并行跑时表头筛选用例会逼近 20s, 因此本文件放宽到 30s。
+vi.setConfig({ testTimeout: 30000 });
 
 describe("MatrixTab", () => {
   afterEach(() => {
@@ -387,6 +392,60 @@ describe("MatrixTab", () => {
       );
     });
   });
+
+  test("授权组表头按类型和状态筛选, 分页渲染在同一行", async () => {
+    const payload = {
+      data: [
+        { id: 70, key: "role-a", kind: "role", name: "角色甲", requestable: true, is_active: true, grants: [] },
+        { id: 71, key: "bundle-a", kind: "bundle", name: "权限包甲", requestable: false, is_active: false, grants: [] },
+      ],
+    };
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/demo/authorization-groups?include_inactive=true&page=1&page_size=100" && !init?.method) {
+        return jsonResponse(payload);
+      }
+      if (url === "/console/api/v1/apps/demo/permissions") {
+        return jsonResponse({ data: [] });
+      }
+      if (url === "/console/api/v1/apps/demo/scopes") {
+        return jsonResponse({ data: [] });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    // antd 表格每次筛选都要整表重渲染, user-event 默认的事件间隔会让本用例逼近超时。
+    const user = userEvent.setup({ delay: null });
+
+    renderWithClient(<MatrixTab appKey="demo" />);
+
+    await screen.findByText("角色甲");
+    expect(bodyRowKeys()).toEqual(["role-a", "bundle-a"]);
+
+    // 分页条: 区间文案 / 页码 / 每页条数必须在同一个 ul 里。
+    const pagination = document.querySelector("ul.ant-pagination");
+    expect(pagination).not.toBeNull();
+    expect(pagination?.querySelector(".ant-pagination-total-text")).not.toBeNull();
+    expect(pagination?.querySelector(".ant-pagination-options")).not.toBeNull();
+
+    const kindDropdown = await openHeaderFilter(user, "类型");
+    await user.click(within(kindDropdown).getByText("权限包"));
+    await user.click(within(kindDropdown).getByRole("button", { name: "确定" }));
+
+    await waitFor(() => expect(bodyRowKeys()).toEqual(["bundle-a"]));
+
+    await openHeaderFilter(user, "类型");
+    await user.click(within(kindDropdown).getByText("权限包"));
+    await user.click(within(kindDropdown).getByRole("button", { name: "确定" }));
+    await waitFor(() => expect(bodyRowKeys()).toHaveLength(2));
+
+    // 「可申请」与「启用」两枚徽章共用一个状态列, 筛选值按包含匹配。
+    const statusDropdown = await openHeaderFilter(user, "状态");
+    await user.click(within(statusDropdown).getByText("可申请"));
+    await user.click(within(statusDropdown).getByRole("button", { name: "确定" }));
+
+    await waitFor(() => expect(bodyRowKeys()).toEqual(["role-a"]));
+  });
 });
 
 function renderWithClient(ui: ReactElement) {
@@ -401,7 +460,31 @@ function renderWithClient(ui: ReactElement) {
     },
   });
 
-  render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+  render(
+    <QueryClientProvider client={client}>
+      <AppConfigProvider>{ui}</AppConfigProvider>
+    </QueryClientProvider>,
+  );
+}
+
+/** 打开指定表头的筛选下拉, 返回当前展开的那个下拉面板。 */
+async function openHeaderFilter(user: ReturnType<typeof userEvent.setup>, headerText: string): Promise<HTMLElement> {
+  const header = screen.getAllByRole("columnheader").find((cell) => cell.textContent?.includes(headerText));
+  expect(header).toBeDefined();
+  const trigger = (header as HTMLElement).querySelector(".ant-table-filter-trigger");
+  expect(trigger).not.toBeNull();
+  await user.click(trigger as HTMLElement);
+  return waitFor(() => {
+    const dropdown = document.querySelector(".ant-dropdown:not(.ant-dropdown-hidden) .ant-table-filter-dropdown");
+    expect(dropdown).not.toBeNull();
+    return dropdown as HTMLElement;
+  });
+}
+
+function bodyRowKeys(): string[] {
+  return [...document.querySelectorAll(".ant-table-tbody tr.ant-table-row")].map(
+    (row) => row.querySelector("td")?.textContent ?? "",
+  );
 }
 
 function jsonResponse(payload: unknown) {

@@ -4,7 +4,12 @@ import userEvent from "@testing-library/user-event";
 import type { ReactElement } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import { AppConfigProvider } from "../../../../components/antd/AppConfigProvider";
 import { CredentialsTab } from "./CredentialsTab";
+
+// antd Table 每次筛选都要重建整棵表格, jsdom 下比自研原语慢;
+// 整套测试并行跑时表头筛选用例会逼近 20s, 因此本文件放宽到 30s。
+vi.setConfig({ testTimeout: 30000 });
 
 describe("CredentialsTab(FF-4)", () => {
   afterEach(() => {
@@ -205,6 +210,50 @@ describe("CredentialsTab(FF-4)", () => {
     expect(screen.queryByRole("button", { name: "禁用" })).not.toBeInTheDocument();
     expect(fetchMock.mock.calls).toHaveLength(1);
   });
+
+  test("凭据表头按类型和能力筛选, 并渲染 AppTable 分页", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/demo/credentials" && !init?.method) {
+        return jsonResponse({
+          data: [
+            { id: 7, kind: "static_token", name: "生产凭据", is_active: true, capabilities: [] },
+            { id: 8, kind: "oauth_client", name: "通知 OAuth", is_active: true, capabilities: ["notify"], client_id: "client-8" },
+          ],
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    // antd 表格每次筛选都要整表重渲染, user-event 默认的事件间隔会让本用例逼近超时。
+    const user = userEvent.setup({ delay: null });
+
+    renderWithClient(<CredentialsTab appKey="demo" canManage />);
+
+    await screen.findByText("生产凭据");
+    expect(bodyRowNames()).toEqual(["生产凭据", "通知 OAuth"]);
+
+    const pagination = document.querySelector("ul.ant-pagination");
+    expect(pagination).not.toBeNull();
+    expect(pagination?.querySelector(".ant-pagination-total-text")).not.toBeNull();
+    expect(pagination?.querySelector(".ant-pagination-options")).not.toBeNull();
+
+    const kindDropdown = await openHeaderFilter(user, "类型");
+    await user.click(within(kindDropdown).getByText("OAuth client"));
+    await user.click(within(kindDropdown).getByRole("button", { name: "确定" }));
+    await waitFor(() => expect(bodyRowNames()).toEqual(["通知 OAuth"]));
+
+    await openHeaderFilter(user, "类型");
+    await user.click(within(kindDropdown).getByText("OAuth client"));
+    await user.click(within(kindDropdown).getByRole("button", { name: "确定" }));
+    await waitFor(() => expect(bodyRowNames()).toHaveLength(2));
+
+    // 没有任何能力的凭据归到「仅权限查询」这一档。
+    const capabilityDropdown = await openHeaderFilter(user, "平台能力");
+    await user.click(within(capabilityDropdown).getByText("仅权限查询"));
+    await user.click(within(capabilityDropdown).getByRole("button", { name: "确定" }));
+    await waitFor(() => expect(bodyRowNames()).toEqual(["生产凭据"]));
+  });
 });
 
 function renderWithClient(ui: ReactElement) {
@@ -214,7 +263,31 @@ function renderWithClient(ui: ReactElement) {
       mutations: { retry: false },
     },
   });
-  render(<QueryClientProvider client={client}>{ui}</QueryClientProvider>);
+  render(
+    <QueryClientProvider client={client}>
+      <AppConfigProvider>{ui}</AppConfigProvider>
+    </QueryClientProvider>,
+  );
+}
+
+/** 打开指定表头的筛选下拉, 返回当前展开的那个下拉面板。 */
+async function openHeaderFilter(user: ReturnType<typeof userEvent.setup>, headerText: string): Promise<HTMLElement> {
+  const header = screen.getAllByRole("columnheader").find((cell) => cell.textContent?.includes(headerText));
+  expect(header).toBeDefined();
+  const trigger = (header as HTMLElement).querySelector(".ant-table-filter-trigger");
+  expect(trigger).not.toBeNull();
+  await user.click(trigger as HTMLElement);
+  return waitFor(() => {
+    const dropdown = document.querySelector(".ant-dropdown:not(.ant-dropdown-hidden) .ant-table-filter-dropdown");
+    expect(dropdown).not.toBeNull();
+    return dropdown as HTMLElement;
+  });
+}
+
+function bodyRowNames(): string[] {
+  return [...document.querySelectorAll(".ant-table-tbody tr.ant-table-row")].map(
+    (row) => row.querySelector("td")?.textContent ?? "",
+  );
 }
 
 function jsonResponse(payload: unknown, status = 200) {

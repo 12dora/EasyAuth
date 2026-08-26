@@ -1,9 +1,8 @@
-import type { ColumnDef } from "@tanstack/react-table";
-
-import { Badge } from "../../../../components/Badge";
-import { TableActionCell, TableRowActionButton } from "../../../../components/ui/TableActions";
+import { actionsColumn, textColumn } from "../../../../components/antd/columns";
+import { enumFilter, type ColumnsType } from "../../../../components/antd/AppTable";
 import type { ConfigurationIssue } from "../../../../lib/domain";
 import type { Translator } from "../../../../lib/status";
+import { activeStatusColumn, RowActionButton } from "../workspaceColumns";
 import { roleLabel, type MembershipItem } from "./overviewModel";
 
 export function membershipTableColumns({
@@ -14,39 +13,57 @@ export function membershipTableColumns({
   t: Translator;
   canWrite: boolean;
   onDisable: (membershipId: number) => void;
-}): ColumnDef<MembershipItem>[] {
+}): ColumnsType<MembershipItem> {
   return [
-    { header: t("common.user"), cell: ({ row }) => <code>{row.original.user_id}</code> },
-    { header: t("common.role"), cell: ({ row }) => roleLabel(t, row.original.role) },
+    textColumn<MembershipItem>({ key: "user_id", title: t("common.user"), mono: true, filter: true }),
     {
-      header: t("common.status"),
-      cell: ({ row }) => (
-        <Badge tone={row.original.is_active ? "evergreen" : "neutral"}>
-          {row.original.is_active ? t("common.enabled") : t("common.disabled")}
-        </Badge>
-      ),
+      key: "role",
+      dataIndex: "role",
+      title: t("common.role"),
+      width: 140,
+      render: (_value: unknown, membership: MembershipItem) => roleLabel(t, membership.role),
+      ...enumFilter<MembershipItem>("role", [
+        { label: t("console.overview.role.owner"), value: "owner" },
+        { label: t("console.overview.role.developer"), value: "developer" },
+      ]),
     },
-    {
-      id: "actions",
-      header: t("common.actions"),
-      cell: ({ row }) => (
-        <TableActionCell>
-          {canWrite && row.original.is_active ? (
-            <TableRowActionButton type="button" variant="ghost-danger" onClick={() => onDisable(row.original.id)}>
-              {t("common.disable")}
-            </TableRowActionButton>
-          ) : null}
-        </TableActionCell>
-      ),
-    },
+    activeStatusColumn<MembershipItem>({ t, getActive: (membership) => membership.is_active }),
+    actionsColumn<MembershipItem>({
+      title: t("common.actions"),
+      render: (membership) =>
+        canWrite && membership.is_active ? (
+          <RowActionButton type="button" variant="ghost-danger" onClick={() => onDisable(membership.id)}>
+            {t("common.disable")}
+          </RowActionButton>
+        ) : null,
+    }),
   ];
 }
 
-export function configurationIssueColumns(t: Translator): ColumnDef<ConfigurationIssue>[] {
+export function configurationIssueColumns(t: Translator): ColumnsType<ConfigurationIssue> {
   return [
-    { header: t("console.overview.issue.severity"), cell: ({ row }) => row.original.severity ?? row.original.level ?? "-" },
-    { header: t("console.overview.issue.subject"), cell: ({ row }) => row.original.subject ?? row.original.target_id ?? "-" },
-    { header: t("console.overview.issue.message"), cell: ({ row }) => row.original.message ?? "-" },
-    { header: t("console.overview.issue.code"), cell: ({ row }) => <code>{row.original.code ?? "-"}</code> },
+    textColumn<ConfigurationIssue>({
+      key: "severity",
+      title: t("console.overview.issue.severity"),
+      getValue: (issue) => issue.severity ?? issue.level,
+      filter: true,
+      sorter: true,
+      width: 120,
+    }),
+    textColumn<ConfigurationIssue>({
+      key: "subject",
+      title: t("console.overview.issue.subject"),
+      getValue: (issue) => issue.subject ?? issue.target_id,
+      filter: true,
+      width: 220,
+    }),
+    textColumn<ConfigurationIssue>({ key: "message", title: t("console.overview.issue.message") }),
+    textColumn<ConfigurationIssue>({
+      key: "code",
+      title: t("console.overview.issue.code"),
+      mono: true,
+      filter: true,
+      width: 200,
+    }),
   ];
 }

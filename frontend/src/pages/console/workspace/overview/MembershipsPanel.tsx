@@ -1,12 +1,11 @@
-import { getCoreRowModel, getPaginationRowModel, useReactTable } from "@tanstack/react-table";
 import { Plus } from "lucide-react";
 
 import { Button } from "../../../../components/Button";
 import { StatusBanner } from "../../../../components/StatusBanner";
+import { AppTable } from "../../../../components/antd/AppTable";
 import { EmptyState } from "../../../../components/ui/EmptyState";
 import { PanelSurface } from "../../../../components/ui/PanelSurface";
 import { useI18n } from "../../../../i18n/I18nProvider";
-import { TableView } from "../../../../components/ui/TableView";
 import { membershipTableColumns } from "./overviewColumns";
 import type { MembershipItem } from "./overviewModel";
 
@@ -28,13 +27,6 @@ export function MembershipsPanel({
   onDisable: (membershipId: number) => void;
 }) {
   const { t } = useI18n();
-  const table = useReactTable({
-    data: memberships,
-    columns: membershipTableColumns({ t, canWrite, onDisable }),
-    getRowId: (membership) => String(membership.id),
-    getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
-  });
 
   return (
     <PanelSurface padding="lg" className="space-y-4">
@@ -52,10 +44,12 @@ export function MembershipsPanel({
       {operationError ? (
         <StatusBanner live="alert" tone="signal" title={t("console.overview.membersOperationFailed")} message={operationError.message} />
       ) : null}
-      <TableView
-        table={table}
-        totalItems={memberships.length}
-        isLoading={isLoading}
+      <AppTable<MembershipItem>
+        columns={membershipTableColumns({ t, canWrite, onDisable })}
+        dataSource={memberships}
+        rowKey="id"
+        loading={isLoading}
+        minWidth={640}
         empty={<EmptyState title={t("console.overview.membersEmpty")} description={t("console.overview.membersEmptyDescription")} />}
       />
     </PanelSurface>
