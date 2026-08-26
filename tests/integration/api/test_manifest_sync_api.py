@@ -69,10 +69,8 @@ def test_manifest_sync_applies_new_version_and_autofills_webhook(
 ) -> None:
     # Given: 已注册应用与静态 token。
     monkeypatch.setattr(
-        "easyauth.config.net.resolve_public_addresses",
-        lambda _hostname, *, port, **_kwargs: (
-            ("93.184.216.34",) if port == HTTPS_PORT else ()
-        ),
+        "easyauth.config.net_policy.resolve_public_addresses",
+        lambda _hostname, *, port, **_kwargs: (("93.184.216.34",) if port == HTTPS_PORT else ()),
     )
     app, token = _app_with_token("sync-crm")
 
@@ -149,10 +147,8 @@ def test_manifest_sync_clears_manifest_managed_lifecycle_urls(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "easyauth.config.net.resolve_public_addresses",
-        lambda _hostname, *, port, **_kwargs: (
-            ("93.184.216.34",) if port == HTTPS_PORT else ()
-        ),
+        "easyauth.config.net_policy.resolve_public_addresses",
+        lambda _hostname, *, port, **_kwargs: (("93.184.216.34",) if port == HTTPS_PORT else ()),
     )
     app, token = _app_with_token("sync-lifecycle-snapshot")
     client = Client()
@@ -203,7 +199,7 @@ def test_manifest_sync_does_not_overwrite_console_owned_webhook(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "easyauth.config.net.resolve_public_addresses",
+        "easyauth.config.net_policy.resolve_public_addresses",
         lambda _hostname, *, port, **_kwargs: (("93.184.216.34",) if port == HTTPS_PORT else ()),
     )
     app, token = _app_with_token("sync-console-owned")
@@ -299,9 +295,9 @@ def test_manifest_sync_rejects_non_https_lifecycle_webhook_url() -> None:
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
     payload = response.json()
     assert payload["error"]["code"] == "SEMANTIC_VALIDATION_ERROR"
-    assert "https" in payload["error"]["message"].lower() or "Webhook" in payload["error"][
-        "message"
-    ]
+    assert (
+        "https" in payload["error"]["message"].lower() or "Webhook" in payload["error"]["message"]
+    )
     assert not PermissionTemplateVersion.objects.filter(app=app).exists()
     assert not AppWebhookConfig.objects.filter(app=app).exists()
     app.refresh_from_db()

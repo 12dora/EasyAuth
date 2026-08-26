@@ -68,7 +68,7 @@ def test_console_resync_reuses_credential_and_reconciles_unchanged_manifest(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(
-        "easyauth.config.net.resolve_public_addresses",
+        "easyauth.config.net_policy.resolve_public_addresses",
         lambda _hostname, *, port, **_kwargs: (("93.184.216.34",) if port == 443 else ()),
     )
     app = App.objects.create(

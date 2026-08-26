@@ -288,7 +288,7 @@ def test_auto_onboarding_rejects_private_host_before_fetch(
         called["urlopen"] = True
         return None
 
-    monkeypatch.setattr("easyauth.config.net.socket.getaddrinfo", _fake_getaddrinfo)
+    monkeypatch.setattr("easyauth.config.net_policy.socket.getaddrinfo", _fake_getaddrinfo)
     monkeypatch.setattr(auto_onboarding_api, "urlopen", _fake_urlopen)
 
     # When: 触发自动接入。

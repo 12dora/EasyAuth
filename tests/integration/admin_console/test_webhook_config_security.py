@@ -10,7 +10,7 @@ from django.test import Client
 
 from easyauth.admin_console import webhook_config_api
 from easyauth.applications.models import App, AppMembership
-from easyauth.config import net
+from easyauth.config import net_dns
 from easyauth.config.net import ValidatedHttpsUrl
 from easyauth.webhooks.models import AppWebhookConfig
 from tests.integration.admin_console.auth_helpers import authenticate_console_admin
@@ -53,7 +53,7 @@ def test_webhook_config_rejects_hostname_resolving_to_private_address(
     def private_dns(*_args: object, **_kwargs: object) -> list[tuple[object, ...]]:
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.1.2.3", 443))]
 
-    monkeypatch.setattr(net.socket, "getaddrinfo", private_dns)
+    monkeypatch.setattr(net_dns.socket, "getaddrinfo", private_dns)
 
     response = client.put(
         _url(app),

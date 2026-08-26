@@ -114,7 +114,7 @@ def test_dns_resolver_rejects_when_supervised_capacity_is_full(
         def release(self) -> None:
             raise AssertionError
 
-    monkeypatch.setattr("easyauth.config.net._DNS_RESOLVER_CAPACITY", FullCapacity())
+    monkeypatch.setattr("easyauth.config.net_dns._DNS_RESOLVER_CAPACITY", FullCapacity())
 
     with pytest.raises(BlockedHostError, match="DNS resolver 队列已满"):
         _ = resolve_public_addresses("hooks.example.com", port=443, timeout_seconds=0.01)
@@ -124,13 +124,12 @@ def test_dns_timeouts_terminate_isolated_resolvers_and_release_capacity(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     outcomes: list[bytes | BaseException] = [
-        subprocess.TimeoutExpired(cmd="resolver", timeout=0.01)
-        for _ in range(DNS_TIMEOUT_ATTEMPTS)
+        subprocess.TimeoutExpired(cmd="resolver", timeout=0.01) for _ in range(DNS_TIMEOUT_ATTEMPTS)
     ]
     outcomes.append(DNS_PUBLIC_OUTPUT)
     _FakeResolverProcess.reset(outcomes)
 
-    monkeypatch.setattr("easyauth.config.net.subprocess.Popen", _FakeResolverProcess)
+    monkeypatch.setattr("easyauth.config.net_dns.subprocess.Popen", _FakeResolverProcess)
 
     for _ in range(DNS_TIMEOUT_ATTEMPTS):
         with pytest.raises(BlockedHostError, match="解析超时"):
@@ -153,7 +152,7 @@ def test_dns_resolver_uses_daemon_safe_subprocess_protocol(
 ) -> None:
     _FakeResolverProcess.reset([DNS_PUBLIC_OUTPUT])
 
-    monkeypatch.setattr("easyauth.config.net.subprocess.Popen", _FakeResolverProcess)
+    monkeypatch.setattr("easyauth.config.net_dns.subprocess.Popen", _FakeResolverProcess)
 
     result = resolve_public_addresses("hooks.example.com", port=443, timeout_seconds=0.01)
 
@@ -180,7 +179,7 @@ def test_dns_resolver_maps_subprocess_gaierror_to_unresolvable(
 ) -> None:
     _FakeResolverProcess.reset([b'{"gaierror":true}'])
 
-    monkeypatch.setattr("easyauth.config.net.subprocess.Popen", _FakeResolverProcess)
+    monkeypatch.setattr("easyauth.config.net_dns.subprocess.Popen", _FakeResolverProcess)
 
     with pytest.raises(BlockedHostError, match="无法解析"):
         _ = resolve_public_addresses("hooks.example.com", port=443, timeout_seconds=0.01)
