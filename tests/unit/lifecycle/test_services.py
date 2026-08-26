@@ -38,6 +38,7 @@ from easyauth.lifecycle.models import (
     ACTION_STATUS_ASYNC_PENDING,
     ACTION_STATUS_SKIPPED,
     BATCH_STATUS_ASYNC_PENDING,
+    HANDOVER_KIND_REASSIGN,
     HANDOVER_KIND_TRANSFER,
     HandoverAppAction,
     HandoverDeliveryAttempt,
@@ -414,8 +415,8 @@ def test_execute_action_keeps_accepted_hook_pending(
         created_by="admin-a",
     )
     action = update_action_receiver(
-        action=HandoverAppAction.objects.get(task=task, app=app),
-        to_user=receiver)
+        action=HandoverAppAction.objects.get(task=task, app=app), to_user=receiver
+    )
     status_url = "https://etrade.example.com/api/v1/easyauth/lifecycle/status/1"
 
     def accepted_hook(
@@ -466,8 +467,8 @@ def test_poll_async_action_completes_action_and_task(
         created_by="admin-a",
     )
     action = update_action_receiver(
-        action=HandoverAppAction.objects.get(task=task, app=app),
-        to_user=receiver)
+        action=HandoverAppAction.objects.get(task=task, app=app), to_user=receiver
+    )
     status_url = "https://etrade.example.com/api/v1/easyauth/lifecycle/status/2"
 
     def accepted_hook(*, event_type: str, **_kwargs: object) -> HookResponse:
@@ -671,8 +672,8 @@ def test_failed_execution_locks_receiver_and_retry_uses_execution_receiver(
         created_by="admin-a",
     )
     action = update_action_receiver(
-        action=HandoverAppAction.objects.get(task=task, app=app),
-        to_user=receiver_a)
+        action=HandoverAppAction.objects.get(task=task, app=app), to_user=receiver_a
+    )
     hook_receivers: list[JsonValue] = []
 
     def flaky_hook(
@@ -722,7 +723,6 @@ def test_action_receiver_and_release_policy_are_mutually_exclusive() -> None:
     action = HandoverAppAction.objects.get(task=task, app=app)
     updated = update_action_receiver(action=action, to_user=receiver)
     assert updated.grant_receiver_id == receiver.id
-
 
 
 def test_action_receiver_cannot_be_handover_subject() -> None:
@@ -1409,6 +1409,36 @@ def test_offboard_snapshot_uses_explicit_just_revoked_grant_ids_only() -> None:
     items = list(HandoverGrantItem.objects.filter(task=result.task))
     assert {item.source_grant_id for item in items} == {just_revoked.id}
     assert old_revoked.id not in {item.source_grant_id for item in items}
+
+
+def test_ensure_handover_task_rejects_unknown_or_inactive_app_keys() -> None:
+    """显式 app_keys 必须全部解析为在用 APP; 否则建单失败且不落单。
+
+    API 层将 HandoverError 映射为 400 VALIDATION_ERROR(见 map_handover_exception 回落)。
+    """
+    app, group, _permission = _app_with_catalog("lc-app-keys-active")
+    subject = _granted_user("lc-app-keys-user", app, group)
+    inactive = App.objects.create(
+        app_key="lc-app-keys-inactive",
+        name="停用应用",
+        is_active=False,
+    )
+
+    with pytest.raises(HandoverError, match="应用不存在或已停用"):
+        _ = ensure_handover_task(
+            subject=subject,
+            kind=HANDOVER_KIND_REASSIGN,
+            created_by="admin-a",
+            spec=HandoverCreationSpec(app_keys=(app.app_key, "lc-app-keys-unknown")),
+        )
+    with pytest.raises(HandoverError, match="应用不存在或已停用"):
+        _ = ensure_handover_task(
+            subject=subject,
+            kind=HANDOVER_KIND_REASSIGN,
+            created_by="admin-a",
+            spec=HandoverCreationSpec(app_keys=(app.app_key, inactive.app_key)),
+        )
+    assert not HandoverTask.objects.filter(subject_user=subject).exists()
 
 
 def test_open_task_is_idempotent_for_same_kind() -> None:

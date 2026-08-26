@@ -8,24 +8,18 @@ from easyauth.accounts.models import UserMirror
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
 from easyauth.lifecycle.models import (
-    ACTION_FINISHED_STATUSES,
-    ACTION_INITIAL_STATUSES,
     HANDOVER_KIND_TRANSFER,
-    ITEM_STATUS_PENDING,
     TASK_OPEN_STATUSES,
     TASK_STATUS_CANCELLED,
     TASK_STATUS_COMPLETED,
-    TASK_STATUS_IN_PROGRESS,
-    TASK_STATUS_PENDING,
     HandoverAppAction,
     HandoverTask,
     HandoverTeamItem,
     TransferPlan,
 )
+from easyauth.lifecycle.task_status import compute_task_status
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
-
     from easyauth.applications.ops_models import JsonValue
 
 LIFECYCLE_ACTOR_ID: Final = "lifecycle"
@@ -126,28 +120,6 @@ def record_task_event(
             metadata=metadata,
         ),
     )
-
-
-def compute_task_status(
-    task: HandoverTask,
-    actions: Iterable[HandoverAppAction],
-    team_items: Iterable[HandoverTeamItem],
-    *,
-    plan_confirmed: bool,
-) -> str:
-    """全量纯函数: 含 in_progress → pending 回退(01 §2.2)。"""
-    if task.status == TASK_STATUS_CANCELLED:
-        return TASK_STATUS_CANCELLED
-    action_list = list(actions)
-    team_list = list(team_items)
-    actions_finished = all(a.status in ACTION_FINISHED_STATUSES for a in action_list)
-    teams_finished = all(t.status != ITEM_STATUS_PENDING for t in team_list)
-    if actions_finished and teams_finished and plan_confirmed:
-        return TASK_STATUS_COMPLETED
-    started = any(a.status not in ACTION_INITIAL_STATUSES for a in action_list) or any(
-        t.status != ITEM_STATUS_PENDING for t in team_list
-    )
-    return TASK_STATUS_IN_PROGRESS if started else TASK_STATUS_PENDING
 
 
 def refresh_task_status_locked(task: HandoverTask) -> HandoverTask:

@@ -223,6 +223,36 @@ def test_pre_offboard_idempotent_replay_still_returns_created() -> None:
     assert replay.json()["handover_task"]["id"] == first.json()["handover_task"]["id"]
 
 
+def test_reassign_rejects_unknown_app_keys() -> None:
+    initiator = _user("reassign-unknown-mgr", dtuid="unk-mgr")
+    subject = _user("reassign-unknown-subj", dtuid="unk-subj")
+    _ = DingTalkUserOrgContext.objects.create(
+        source_slug=SOURCE,
+        corp_id=CORP,
+        user_id=subject.dingtalk_userid,
+        manager_chain=[{"user_id": "unk-mgr"}],
+        stale=False,
+    )
+    client = _login(Client(), initiator)
+
+    response = client.post(
+        "/portal/api/v1/handover-tasks/reassign",
+        data=json.dumps(
+            {
+                "subject_user_id": subject.authentik_user_id,
+                "app_keys": ["does-not-exist"],
+                "reason": "这是足够十个字符的在职移交理由",
+            },
+        ),
+        content_type="application/json",
+        HTTP_IDEMPOTENCY_KEY="reassign-unknown-app",
+    )
+
+    assert response.status_code == 400
+    assert "应用不存在或已停用" in response.json()["error"]["message"]
+    assert not HandoverTask.objects.filter(subject_user=subject).exists()
+
+
 def test_reassign_creation_assigns_initiator_in_original_transaction() -> None:
     direct_manager = _user("reassign-direct", dtuid="direct")
     initiator = _user("reassign-upper", dtuid="upper")

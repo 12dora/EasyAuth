@@ -4,7 +4,7 @@ import pytest
 
 from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import App
-from easyauth.lifecycle.core import compute_task_status, refresh_task_status
+from easyauth.lifecycle.core import refresh_task_status
 from easyauth.lifecycle.models import (
     ACTION_STATUS_BLOCKED,
     ACTION_STATUS_DONE,
@@ -16,6 +16,7 @@ from easyauth.lifecycle.models import (
     HandoverAppAction,
     HandoverTask,
 )
+from easyauth.lifecycle.task_status import compute_task_status
 
 pytestmark = pytest.mark.django_db
 
