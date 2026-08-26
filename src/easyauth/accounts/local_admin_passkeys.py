@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Mapping
 from dataclasses import dataclass
 from secrets import compare_digest, token_urlsafe
 from typing import TYPE_CHECKING, Final, Protocol, cast
@@ -22,9 +21,12 @@ from webauthn.helpers.structs import (
     UserVerificationRequirement,
 )
 
+from easyauth.accounts.local_admin_common import object_mapping, session_mapping
 from easyauth.accounts.models import LocalAdminAccount, LocalAdminPasskey
 
 if TYPE_CHECKING:
+    from collections.abc import Mapping
+
     from django.http import HttpRequest
 
 CHALLENGE_SESSION_KEY: Final = "easyauth_local_admin_webauthn_challenge"
@@ -292,7 +294,7 @@ def _credential_id_from_payload(credential: Mapping[str, object]) -> str:
 
 
 def _transports_from_payload(credential: Mapping[str, object]) -> list[str]:
-    response = _object_mapping(credential.get("response"))
+    response = object_mapping(credential.get("response"))
     if response is None:
         return []
     transports = response.get("transports")
@@ -314,7 +316,7 @@ def _store_challenge(request: HttpRequest, challenge: bytes) -> str:
 
 def _pop_challenge(request: HttpRequest, state_token: str) -> bytes | None:
     raw_payload: object = request.session.pop(CHALLENGE_SESSION_KEY, None)  # pyright: ignore[reportAny]
-    payload = _session_mapping(raw_payload)
+    payload = session_mapping(raw_payload)
     if payload is None:
         return None
     challenge = payload.get("challenge")
@@ -331,19 +333,6 @@ def _pop_challenge(request: HttpRequest, state_token: str) -> bytes | None:
     if state_token == "" or not compare_digest(stored_token, state_token):
         return None
     return base64url_to_bytes(challenge)
-
-
-def _session_mapping(value: object) -> Mapping[str, object] | None:
-    return _object_mapping(value)
-
-
-def _object_mapping(value: object) -> Mapping[str, object] | None:
-    if not isinstance(value, Mapping):
-        return None
-    mapping = cast("Mapping[object, object]", value)
-    if not all(isinstance(key, str) for key in mapping):
-        return None
-    return cast("Mapping[str, object]", mapping)
 
 
 def _plain_payload(value: Mapping[str, object]) -> dict[str, object]:

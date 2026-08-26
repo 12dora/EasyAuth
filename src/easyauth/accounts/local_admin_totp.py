@@ -5,21 +5,22 @@ from __future__ import annotations
 import base64
 import io
 import time
-from collections.abc import Callable, Mapping
 from secrets import compare_digest, token_urlsafe
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, Final
 
 import pyotp
 import qrcode
 import qrcode.image.svg
-from django.conf import settings as django_settings
 from django.contrib.auth import hashers
 from django.db.models import Q
 from django.utils import timezone
 
+from easyauth.accounts.local_admin_common import session_mapping, webauthn_rp_name
 from easyauth.accounts.models import LocalAdminAccount
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from django.http import HttpRequest
 
 TOTP_SETUP_SESSION_KEY: Final = "easyauth_local_admin_totp_setup"
@@ -28,7 +29,6 @@ TOTP_CODE_LENGTH: Final = 6
 STEP_UP_OK: Final = "ok"
 STEP_UP_THROTTLED: Final = "throttled"
 STEP_UP_INVALID: Final = "invalid"
-_SETTING_WEBAUTHN_RP_NAME: Final = "EASYAUTH_WEBAUTHN_RP_NAME"
 
 # 用与真实账号相同的 hasher 预算一个 dummy 哈希, 让"账号不存在/停用"分支也跑一次常量时间校验,
 # 消除本地管理员用户名可经响应时序枚举的侧信道(BS-15)。
@@ -101,7 +101,7 @@ def verify_and_consume_totp(account: LocalAdminAccount, code: str) -> bool:
 def totp_provisioning_uri(secret: str, username: str) -> str:
     return pyotp.TOTP(secret).provisioning_uri(  # pyright: ignore[reportUnknownMemberType]
         name=username,
-        issuer_name=_issuer_name(),
+        issuer_name=webauthn_rp_name(),
     )
 
 
@@ -135,7 +135,7 @@ def totp_setup_secret(
     *,
     nonce: str | None = None,
 ) -> str:
-    payload = _session_mapping(request.session.get(TOTP_SETUP_SESSION_KEY))
+    payload = session_mapping(request.session.get(TOTP_SETUP_SESSION_KEY))
     if payload is None:
         return ""
     secret = payload.get("secret")
@@ -160,24 +160,10 @@ def totp_setup_secret(
 def totp_setup_nonce(request: HttpRequest, account: LocalAdminAccount) -> str:
     if totp_setup_secret(request, account) == "":
         return ""
-    payload = _session_mapping(request.session.get(TOTP_SETUP_SESSION_KEY))
+    payload = session_mapping(request.session.get(TOTP_SETUP_SESSION_KEY))
     nonce = payload.get("nonce") if payload is not None else None
     return nonce if isinstance(nonce, str) else ""
 
 
 def clear_totp_setup_secret(request: HttpRequest) -> None:
     request.session.pop(TOTP_SETUP_SESSION_KEY, None)
-
-
-def _issuer_name() -> str:
-    value: object = getattr(django_settings, _SETTING_WEBAUTHN_RP_NAME, "EasyAuth")
-    return value if isinstance(value, str) and value else "EasyAuth"
-
-
-def _session_mapping(value: object) -> Mapping[str, object] | None:
-    if not isinstance(value, Mapping):
-        return None
-    mapping = cast("Mapping[object, object]", value)
-    if not all(isinstance(key, str) for key in mapping):
-        return None
-    return cast("Mapping[str, object]", mapping)

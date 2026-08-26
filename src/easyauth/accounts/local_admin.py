@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Final, cast
 
 import webauthn
@@ -22,6 +21,11 @@ from easyauth.accounts.auth import (
     LOCAL_ADMIN_SESSION_VERSION_KEY,
     VerifiedOidcClaims,
     bind_oidc_session,
+)
+from easyauth.accounts.local_admin_common import (
+    SETTING_WEBAUTHN_RP_NAME,
+    session_mapping,
+    webauthn_rp_name,
 )
 from easyauth.accounts.local_admin_passkeys import (
     CHALLENGE_SESSION_KEY,
@@ -60,6 +64,8 @@ from easyauth.accounts.models import LocalAdminAccount, LocalAdminPasskey
 from easyauth.audit.services import AuditRecord, AuditService
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable, Mapping
+
     from django.http import HttpRequest
 
     from easyauth.accounts.models import UserMirror
@@ -86,7 +92,6 @@ EVENT_PASSKEY_REGISTERED: Final = "admin_local_passkey_registered"
 EVENT_PASSKEY_REMOVED: Final = "admin_local_passkey_removed"
 SETTING_CONSOLE_SUPERUSER_GROUPS: Final = "EASYAUTH_CONSOLE_SUPERUSER_GROUPS"
 SETTING_WEBAUTHN_RP_ID: Final = "EASYAUTH_WEBAUTHN_RP_ID"
-SETTING_WEBAUTHN_RP_NAME: Final = "EASYAUTH_WEBAUTHN_RP_NAME"
 SETTING_WEBAUTHN_ORIGINS: Final = "EASYAUTH_WEBAUTHN_ORIGINS"
 
 
@@ -155,7 +160,7 @@ def start_pending_verification(request: HttpRequest, account: LocalAdminAccount)
 
 
 def pending_account(request: HttpRequest) -> LocalAdminAccount | None:
-    payload = _session_mapping(request.session.get(PENDING_SESSION_KEY))
+    payload = session_mapping(request.session.get(PENDING_SESSION_KEY))
     if payload is None:
         return None
     account_id = payload.get("account_id")
@@ -368,8 +373,7 @@ def _webauthn_rp_id() -> str:
 
 
 def _webauthn_rp_name() -> str:
-    value: object = getattr(django_settings, SETTING_WEBAUTHN_RP_NAME, "EasyAuth")
-    return value if isinstance(value, str) and value else "EasyAuth"
+    return webauthn_rp_name()
 
 
 def _webauthn_origins() -> tuple[str, ...]:
@@ -383,19 +387,6 @@ def _webauthn_origins() -> tuple[str, ...]:
         case _:
             origins = ()
     return origins if origins else ("http://localhost:8001",)
-
-
-def _session_mapping(value: object) -> Mapping[str, object] | None:
-    return _object_mapping(value)
-
-
-def _object_mapping(value: object) -> Mapping[str, object] | None:
-    if not isinstance(value, Mapping):
-        return None
-    mapping = cast("Mapping[object, object]", value)
-    if not all(isinstance(key, str) for key in mapping):
-        return None
-    return cast("Mapping[str, object]", mapping)
 
 
 __all__ = [
