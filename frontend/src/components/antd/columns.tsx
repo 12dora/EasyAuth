@@ -16,6 +16,48 @@ import { enumFilter, readField, textFilter, type ColumnType } from "./AppTable";
  */
 
 /* ------------------------------------------------------------------ */
+/* 服务端筛选列                                                        */
+/* ------------------------------------------------------------------ */
+
+export interface ServerColumnOptions {
+  /**
+   * 允许多选(仅对 antd 内建 `filters` 下拉有意义)。
+   * 默认 false: `filtersToParams` 默认只取第一个选中值, 多选会被静默丢弃,
+   * 因此下拉也应该只让选一个。后端确实支持多值(配 `ServerFilterParam.multiple`)时传 true。
+   */
+  multiple?: boolean;
+}
+
+/**
+ * 把任意列改造成「服务端筛选」列。
+ *
+ * 必须做两件事, 少一件都会出错:
+ * 1. 去掉列预设自带的客户端 `onFilter` —— antd 在受控筛选(`filteredValue`)下**依然**
+ *    会执行 `onFilter`, 于是后端已经筛过的当前页会被再筛一遍; 审计的 app_key 藏在
+ *    metadata 里、列上读不到, 客户端再筛会把整页筛空;
+ * 2. 用 `filteredValue` 受控 —— 筛选值的真相在 URL / 查询状态里, 不能留给 antd 内部
+ *    状态, 否则刷新或深链后表头筛选图标会与实际请求参数对不上(`null` 表示未筛选)。
+ *
+ * ```tsx
+ * serverColumn(textColumn<Row>({ key: "app_key", title: t("common.app"), filter: true }), filters.app_key)
+ * ```
+ */
+export function serverColumn<T>(
+  column: ColumnType<T>,
+  filteredValue?: readonly string[] | null,
+  options: ServerColumnOptions = {},
+): ColumnType<T> {
+  const { multiple = false } = options;
+  return {
+    ...column,
+    onFilter: undefined,
+    filteredValue: filteredValue !== undefined && filteredValue !== null && filteredValue.length > 0 ? [...filteredValue] : null,
+    // filterMultiple 只影响 antd 内建下拉; 自定义 filterDropdown(文本/时间范围)不受它管。
+    ...(column.filters ? { filterMultiple: multiple } : {}),
+  };
+}
+
+/* ------------------------------------------------------------------ */
 /* 状态列                                                              */
 /* ------------------------------------------------------------------ */
 

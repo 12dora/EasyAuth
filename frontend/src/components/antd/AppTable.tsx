@@ -8,6 +8,7 @@ import type {
   FilterValue,
   SorterResult,
   SortOrder,
+  TableCurrentDataSource,
 } from "antd/es/table/interface";
 import { useCallback, useMemo, useState, type Key, type ReactNode } from "react";
 
@@ -16,6 +17,12 @@ import { cn } from "../../lib/cn";
 import { EmptyState } from "../ui/EmptyState";
 
 export type { ColumnGroupType, ColumnType, ColumnsType, TablePaginationConfig, TableProps };
+/**
+ * antd 表格的「回调签名」类型。页面写自定义 filterDropdown 或 onChange 时需要它们,
+ * 但 `antd/es/table/*` 是内部路径(迁移护栏 FORBIDDEN_ANTD_TABLE_IMPORT 也禁止页面直接引),
+ * 所以统一从这里再导出。
+ */
+export type { FilterDropdownProps, FilterValue, SortOrder, SorterResult, TableCurrentDataSource };
 
 /** 分页尺寸选项与默认页长的唯一出处; 页面不要各自再造一套。 */
 export const APP_TABLE_PAGE_SIZE_OPTIONS = [10, 20, 50, 100] as const;
@@ -156,7 +163,13 @@ export interface ServerFilterParam {
 export type ServerTableParams = Record<string, string | string[] | number>;
 
 export interface UseServerTableOptions {
-  /** 后端返回的总条数; 缺省按 0 处理。 */
+  /**
+   * 后端返回的总条数; 缺省按 0 处理。
+   *
+   * 只有「建 hook 时就已知总数」的场景(例如总数来自另一个已完成的查询)才传这个。
+   * 常规服务端分页里总数来自 `params` 发出的那次请求, 声明顺序上拿不到 ——
+   * 那种情况改用 `setTotal(n)` 在拿到响应后回填, 不要传这个字段。
+   */
   total?: number;
   defaultPageSize?: number;
   defaultSort?: { field: string; order: "ascend" | "descend" };
@@ -178,7 +191,18 @@ export interface UseServerTableResult<T> {
   params: ServerTableParams;
   /** 展开到 AppTable 上: `<AppTable {...serverTable.tableProps} ... />` */
   tableProps: Pick<AppTableProps<T>, "pagination" | "onChange">;
+  /** 当前生效的总条数(`options.total` 优先, 否则取最近一次 setTotal 的值)。 */
+  total: number;
   setPage: (page: number, pageSize?: number) => void;
+  /**
+   * 回填后端返回的总条数, 之后 `tableProps.pagination.total` 就是它,
+   * 页面不用再手工拼 `pagination={{ current, pageSize, total }}`。
+   *
+   * 可以直接在渲染期调用(`serverTable.setTotal(data?.pagination.total_items)`):
+   * 内部对相同值做等值短路, 不会造成重渲染循环; 传 undefined / null 视为
+   * 「这次还不知道」, 保留上一次的总数, 避免请求刷新时分页条闪一下 0。
+   */
+  setTotal: (total: number | null | undefined) => void;
   reset: () => void;
 }
 
@@ -197,7 +221,7 @@ export function useServerTable<T>(options: UseServerTableOptions = {}): UseServe
     filterParams,
     serializeSort,
     sortParam = "ordering",
-    total = 0,
+    total,
   } = options;
 
   const initialQuery = useMemo<ServerTableQuery>(
@@ -212,6 +236,8 @@ export function useServerTable<T>(options: UseServerTableOptions = {}): UseServe
   );
 
   const [query, setQuery] = useState<ServerTableQuery>(initialQuery);
+  // 总条数只有请求回来后才知道, 因此和分页/排序/筛选状态分开存。
+  const [lateTotal, setLateTotal] = useState<number | undefined>(undefined);
 
   const onChange = useCallback<NonNullable<TableProps<T>["onChange"]>>(
     (nextPagination, nextFilters, nextSorter, extra) => {
@@ -233,6 +259,18 @@ export function useServerTable<T>(options: UseServerTableOptions = {}): UseServe
     setQuery((previous) => ({ ...previous, page, pageSize: pageSize ?? previous.pageSize }));
   }, []);
 
+  const setTotal = useCallback(
+    (next: number | null | undefined) => {
+      // 等值短路必须在调用 setState 之前: 渲染期的 setState 不看新旧值是否相同,
+      // 只要调用了就会再渲染一轮, 无条件调用会直接撞上 React 的 25 轮上限。
+      if (next === null || next === undefined || next === lateTotal) {
+        return;
+      }
+      setLateTotal(next);
+    },
+    [lateTotal],
+  );
+
   const reset = useCallback(() => {
     setQuery(initialQuery);
   }, [initialQuery]);
@@ -250,15 +288,18 @@ export function useServerTable<T>(options: UseServerTableOptions = {}): UseServe
     return next;
   }, [filterParams, query.filters, query.page, query.pageSize, query.sortField, query.sortOrder, serializeSort, sortParam]);
 
+  // options.total 优先(老用法), 否则用 setTotal 回填的值。
+  const effectiveTotal = total ?? lateTotal ?? 0;
+
   const tableProps = useMemo<Pick<AppTableProps<T>, "pagination" | "onChange">>(
     () => ({
-      pagination: { current: query.page, pageSize: query.pageSize, total },
+      pagination: { current: query.page, pageSize: query.pageSize, total: effectiveTotal },
       onChange,
     }),
-    [onChange, query.page, query.pageSize, total],
+    [onChange, query.page, query.pageSize, effectiveTotal],
   );
 
-  return { query, params, tableProps, setPage, reset };
+  return { query, params, tableProps, total: effectiveTotal, setPage, setTotal, reset };
 }
 
 /**
@@ -290,6 +331,49 @@ export function filtersToParams(
     }
   }
   return params;
+}
+
+/**
+ * `useServerTable().params` -> 查询串。
+ *
+ * 每张服务端分页表都要把同一份参数对象拼成 URL, 因此只在这里实现一次:
+ * 空值不进串(与后端「不传即不过滤」的口径一致), 数组按同名多值展开,
+ * 键顺序沿用参数对象的插入顺序(page / page_size 在前), 可直接当查询缓存键用。
+ */
+export function serverTableQuery(params: ServerTableParams, extra: Record<string, string> = {}): string {
+  const search = new URLSearchParams();
+  for (const [key, value] of Object.entries({ ...params, ...extra })) {
+    if (Array.isArray(value)) {
+      for (const item of value) {
+        if (item !== "") {
+          search.append(key, item);
+        }
+      }
+      continue;
+    }
+    const normalized = String(value);
+    if (normalized !== "") {
+      search.set(key, normalized);
+    }
+  }
+  return search.toString();
+}
+
+/**
+ * 把总条数补进一份现成的 `tableProps`。
+ *
+ * 常规写法是 `serverTable.setTotal(total)`(总数直接进 `tableProps`);
+ * 只有「拿不到 hook 本体、手里只有 tableProps」时(例如某个自定义 hook 只把
+ * tableProps 透出来)才需要这个纯函数版本。
+ */
+export function tablePropsWithTotal<T>(
+  tableProps: Pick<AppTableProps<T>, "pagination" | "onChange">,
+  total: number,
+): Pick<AppTableProps<T>, "pagination" | "onChange"> {
+  return {
+    ...tableProps,
+    pagination: tableProps.pagination === false ? false : { ...tableProps.pagination, total },
+  };
 }
 
 function defaultSortParams(
@@ -441,4 +525,134 @@ function TextFilterDropdown({
 
 function toSelectedKeys(value: string): Key[] {
   return value === "" ? [] : [value];
+}
+
+/* ------------------------------------------------------------------ */
+/* 时间范围筛选                                                        */
+/* ------------------------------------------------------------------ */
+
+/** 起止时间; 空字符串表示这一端不限。值格式跟随 `inputType`(默认 datetime-local)。 */
+export interface DateRangeValue {
+  from: string;
+  to: string;
+}
+
+/** 起止两端编码进同一个筛选值时的分隔符。 */
+const DATE_RANGE_SEPARATOR = "~";
+
+/** `{ from, to }` -> antd 的筛选值(空区间为 `[]`, 即「未筛选」)。 */
+export function encodeDateRange({ from, to }: DateRangeValue): string[] {
+  return from === "" && to === "" ? [] : [`${from}${DATE_RANGE_SEPARATOR}${to}`];
+}
+
+/** antd 的筛选值 -> `{ from, to }`; 无值时两端都是空字符串。 */
+export function decodeDateRange(values: readonly unknown[] | null | undefined): DateRangeValue {
+  const [from = "", to = ""] = String(values?.[0] ?? "").split(DATE_RANGE_SEPARATOR);
+  return { from, to };
+}
+
+export interface DateRangeFilterOptions {
+  /** 输入框类型; 默认 datetime-local, 只要日期时传 "date"。 */
+  inputType?: "datetime-local" | "date";
+  /** 覆盖两个输入框的 aria-label; 默认 `<paramKey>_from` / `<paramKey>_to`。 */
+  fromLabel?: string;
+  toLabel?: string;
+}
+
+/** dateRangeFilter 的返回值; 直接展开到列定义上(多出来的方法 antd 会忽略)。 */
+export interface DateRangeFilterColumn<T> extends Required<Pick<ColumnType<T>, "filterDropdown">> {
+  /** 筛选值 -> `{ from, to }`。 */
+  decode: (values: readonly unknown[] | null | undefined) => DateRangeValue;
+  /** `{ from, to }` -> 筛选值; 回填受控 `filteredValue` 时用。 */
+  encode: (range: DateRangeValue) => string[];
+  /** 起止 -> 后端参数 `<paramKey>_from` / `<paramKey>_to`; 空的一端不进参数。 */
+  toParams: (from: string, to: string) => Record<string, string>;
+}
+
+/**
+ * 时间范围筛选。antd 只内建「文本 / 枚举」两种筛选, 时间范围要自定义下拉,
+ * 这里沿用 textFilter 下拉的结构(输入区 + 重置/确定), 只把输入换成两个时间框。
+ *
+ * `paramKey` 决定后端参数名与输入框 aria-label(默认 "created" -> created_from /
+ * created_to)。起止两端编码进同一个筛选值, 因此一列只占 antd 的一个筛选槽。
+ *
+ * ```tsx
+ * const submittedRange = dateRangeFilter<Row>("submitted");
+ * const column = serverColumn(
+ *   { ...dateTimeColumn<Row>({ key: "submitted_at", title: t("...") }), ...submittedRange },
+ *   submittedRange.encode({ from, to }),
+ * );
+ * // 请求参数: submittedRange.toParams(from, to) -> { submitted_from, submitted_to }
+ * ```
+ */
+export function dateRangeFilter<T>(
+  paramKey = "created",
+  options: DateRangeFilterOptions = {},
+): DateRangeFilterColumn<T> {
+  const { fromLabel = `${paramKey}_from`, inputType = "datetime-local", toLabel = `${paramKey}_to` } = options;
+  return {
+    filterDropdown: (props: FilterDropdownProps) => (
+      <DateRangeFilterDropdown {...props} fromLabel={fromLabel} inputType={inputType} toLabel={toLabel} />
+    ),
+    decode: decodeDateRange,
+    encode: encodeDateRange,
+    toParams: (from, to) => {
+      const params: Record<string, string> = {};
+      if (from !== "") {
+        params[`${paramKey}_from`] = from;
+      }
+      if (to !== "") {
+        params[`${paramKey}_to`] = to;
+      }
+      return params;
+    },
+  };
+}
+
+function DateRangeFilterDropdown({
+  clearFilters,
+  confirm,
+  fromLabel,
+  inputType,
+  selectedKeys,
+  setSelectedKeys,
+  toLabel,
+}: FilterDropdownProps & { fromLabel: string; inputType: string; toLabel: string }) {
+  const { t } = useI18n();
+  const { from, to } = decodeDateRange(selectedKeys);
+
+  return (
+    // 下拉内部的键盘事件不能冒泡到表头, 否则空格/回车会触发排序。
+    <div className="flex w-64 flex-col gap-2 p-2" onKeyDown={(event) => event.stopPropagation()}>
+      <Input
+        aria-label={fromLabel}
+        onChange={(event) => setSelectedKeys(encodeDateRange({ from: event.target.value, to }))}
+        size="small"
+        type={inputType}
+        value={from}
+      />
+      <Input
+        aria-label={toLabel}
+        onChange={(event) => setSelectedKeys(encodeDateRange({ from, to: event.target.value }))}
+        size="small"
+        type={inputType}
+        value={to}
+      />
+      <div className="flex items-center justify-end gap-2">
+        <AntdButton
+          onClick={() => {
+            setSelectedKeys([]);
+            clearFilters?.({ confirm: true, closeDropdown: true });
+          }}
+          size="small"
+          type="text"
+        >
+          {t("table.filter.reset")}
+        </AntdButton>
+        <AntdButton onClick={() => confirm()} size="small" type="primary">
+          {t("table.filter.confirm")}
+        </AntdButton>
+      </div>
+    </div>
+  );
 }

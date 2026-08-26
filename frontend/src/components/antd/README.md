@@ -43,7 +43,15 @@ AppTable 独占的布局约定（**页面不要重复传**）：
 用 `actionsColumn`（固定右列）时**必须**同时传 `minWidth`，否则 antd 无法固定列。
 
 常量：`APP_TABLE_PAGE_SIZE_OPTIONS`、`APP_TABLE_DEFAULT_PAGE_SIZE`。
-类型再导出：`ColumnsType`、`ColumnType`、`ColumnGroupType`、`TableProps`、`TablePaginationConfig`。
+类型再导出：`ColumnsType`、`ColumnType`、`ColumnGroupType`、`TableProps`、`TablePaginationConfig`、
+`FilterDropdownProps`、`FilterValue`、`SortOrder`、`SorterResult`、`TableCurrentDataSource`。
+写自定义 `filterDropdown` 或 `onChange` 的签名时从这里取，**页面不要 import `antd/es/table/*`**
+（那是 antd 内部路径，迁移护栏 `FORBIDDEN_ANTD_TABLE_IMPORT` 也拦着）。
+
+`showTotal` 的区间不看当前页实际渲染了几行，而是 antd 按分页配置推出来的：
+`[(current - 1) * pageSize + 1, min(current * pageSize, total)]`——服务端分页下就是
+`page` / `page_size`，所以最后一页只剩 3 行也会正确显示 `第 41-43 条 / 共 43 条`。
+`total` 为 0 时 antd 回落到 `dataSource.length`（`setTotal` 还没回填的第一帧就是这样）。
 
 ## 列预设 — `./columns`
 
@@ -67,8 +75,28 @@ userColumn<T>({ getName, getUserId?, key? = "user", title?, filter? = false, wid
 
 actionsColumn<T>({ render, title?, width? = 1, fixed? = "right", key? = "actions" }): ColumnType<T>
 // render: (record, index) => ReactNode, 右对齐 / 不换行 / 点击不冒泡到行
-// 按钮继续用 components/ui/TableActions 的 TableRowActionButton / TableRowActionLink
+
+serverColumn<T>(column, filteredValue?, { multiple? = false }): ColumnType<T>
+// 把任意列改造成「服务端筛选」列: 去掉 onFilter + 受控 filteredValue(见下)
 ```
+
+操作列里的按钮用仓库自研 `components/Button`:
+
+```tsx
+actionsColumn<Row>({
+  render: (row) => (
+    <>
+      <Button type="button" size="sm" variant="ghost" onClick={...}>{t("common.edit")}</Button>
+      <Button type="button" size="sm" variant="ghost-danger" onClick={...}>{t("common.delete")}</Button>
+    </>
+  ),
+})
+```
+
+`size="sm"`(h-7)与分页控件的 28px 对齐; 破坏性动作用 `variant="ghost-danger"`。
+**不要**用 `components/ui/TableActions` 的 `TableRowActionButton` / `TableRowActionLink` ——
+`tableArchitecture.antd.test.ts` 的 `FORBIDDEN_PRIMITIVE_IMPORT` 已经禁掉了这些原语,
+迁移完成后整个 `components/ui/Table*` 会被删除。
 
 ## 筛选助手 — `./AppTable`
 
@@ -85,10 +113,58 @@ enumFilter<T>(columnKey: string, options: { label: ReactNode; value: string }[],
 // antd 内建复选下拉 + 精确匹配; getValue 返回数组时按「包含」匹配
 ```
 
-两者都直接展开到列定义上，列必须有 `key`（或 `dataIndex`），否则 antd 无法回传筛选状态：
+```ts
+dateRangeFilter<T>(paramKey? = "created", options?: {
+  inputType?: "datetime-local" | "date";      // 默认 datetime-local
+  fromLabel?: string; toLabel?: string;       // 默认 `<paramKey>_from` / `<paramKey>_to`
+}): { filterDropdown; decode; encode; toParams }
+// antd 只内建「文本 / 枚举」两种筛选, 时间范围要自定义下拉:
+// 两个时间输入 + 确定/重置, 起止编码进同一个筛选值("<from>~<to>"), 一列只占一个筛选槽。
+// toParams(from, to) -> { <paramKey>_from, <paramKey>_to }, 空的一端不进参数;
+// encode({from,to}) / decode(values) 用来在 URL <-> 受控 filteredValue 之间来回。
+```
+
+三者都直接展开到列定义上，列必须有 `key`（或 `dataIndex`），否则 antd 无法回传筛选状态：
 
 ```tsx
 { title: t("common.name"), dataIndex: "name", key: "name", ...textFilter<Row>("name") }
+```
+
+`encodeDateRange` / `decodeDateRange` 也单独导出，URL 驱动的页面用它们把
+`created_from` / `created_to` 拼成受控筛选值。
+
+## 服务端筛选的列 — `serverColumn`
+
+**只要筛选发生在后端，列就必须过一遍 `serverColumn`**，否则会静默丢数据：
+
+```tsx
+serverColumn(
+  textColumn<AuditRow>({ key: "app", title: t("common.app"), getValue: auditAppKey, filter: true }),
+  filters.app,                                  // 来自 URL / 查询状态, 未筛选传 undefined
+)
+```
+
+它做两件事，少一件都出错：
+
+1. **去掉列预设自带的 `onFilter`**：antd 在受控筛选（传了 `filteredValue`）下**依然**会执行
+   `onFilter`，于是后端已经筛过的当前页被客户端再筛一遍。审计行的 `app_key` 藏在
+   `metadata` 里、列上读不到，再筛一次会把整页筛空。`AppTable.test.tsx` 里有一条用例
+   专门锁住这个行为（不加 `serverColumn` 就会掉行）。
+2. **用 `filteredValue` 受控**：筛选值的真相在 URL / 查询状态里，`null` 表示未筛选；
+   交给 antd 内部状态会让刷新、深链后的表头图标与实际请求参数对不上。
+
+`{ multiple: true }` 才允许内建枚举下拉多选（默认单选，因为 `filtersToParams`
+默认只取第一个值，多选会被静默丢掉）；自定义下拉（文本 / 时间范围）不受这个开关影响。
+
+时间范围列的完整写法：
+
+```tsx
+const submitted = dateRangeFilter<Row>("submitted");
+const column = serverColumn(
+  { ...dateTimeColumn<Row>({ key: "submitted_at", title: t("..."), sorter: false }), ...submitted },
+  submitted.encode({ from, to }),
+);
+// 请求参数: { ...serverTable.params, ...submitted.toParams(from, to) }
 ```
 
 ## 服务端分页 — `useServerTable`
@@ -98,7 +174,6 @@ enumFilter<T>(columnKey: string, options: { label: ReactNode; value: string }[],
 
 ```ts
 const serverTable = useServerTable<Row>({
-  total: data?.pagination.total_items,          // 后端总条数
   defaultPageSize?: 10,
   defaultSort?: { field: "updated_at", order: "descend" },
   filterParams?: { status: "status", appKey: "app_key", name: { param: "q" } },
@@ -109,18 +184,50 @@ const serverTable = useServerTable<Row>({
 serverTable.params      // { page, page_size, ...映射后的筛选, [ordering] } 直接拼请求
 serverTable.query       // { page, pageSize, sortField, sortOrder, filters } 原始状态
 serverTable.tableProps  // { pagination: { current, pageSize, total }, onChange }
+serverTable.total       // 当前生效的总条数
 serverTable.setPage(page, pageSize?)
+serverTable.setTotal(total)                     // 拿到响应后回填总条数, 见下
 serverTable.reset()
 
+const query = useQuery({ queryKey: [..., serverTableQuery(serverTable.params)], ... });
+serverTable.setTotal(query.data?.pagination.total_items);
+
 <AppTable<Row> {...serverTable.tableProps} columns={columns} dataSource={rows}
-               loading={isLoading} rowKey="id" />
+               loading={query.isLoading} rowKey="id" />
 ```
+
+### 总条数 `setTotal`
+
+总条数只有请求回来后才知道，而那次请求正是用 `serverTable.params` 发出去的，
+所以**建 hook 时拿不到 total**（`total` 选项只适合总数来自另一个已完成查询的场景）。
+拿到响应后调 `setTotal(n)`，总数就进了 `tableProps.pagination`，
+页面不用再手工拼 `pagination={{ current, pageSize, total }}`。
+
+- 可以直接写在渲染期（`serverTable.setTotal(data?.pagination.total_items)`）：
+  内部先比值再 `setState`，值没变就不触发重渲染。**注意顺序不能反**——
+  渲染期的 `setState` 不看新旧值是否相同，无条件调用会直接撞上 React 的 25 轮上限。
+- 传 `undefined` / `null` 表示「这次还不知道」，保留上一次的总数，
+  刷新数据时分页条不会闪一下 0。
+- 只拿得到 `tableProps`、拿不到 hook 本体时（某个自定义 hook 只透出 tableProps），
+  用纯函数版本 `tablePropsWithTotal(tableProps, total)`。
+- `total` 选项仍然有效且优先级更高，老代码不用改。
+
+### 筛选参数映射 `filterParams`
 
 `filterParams` 的值可以是字符串（等价 `{ param }`）或
 `{ param, multiple?: boolean, serialize?: (values: string[]) => string | string[] | undefined }`。
 默认只取第一个选中值；`multiple: true` 保留数组。未声明的列筛选不会进 `params`，但仍在 `query.filters` 里。
 
 同名导出的 `filtersToParams(filters, map)` 可在需要手工拼参数时单独使用。
+
+### 参数拼串 `serverTableQuery`
+
+```ts
+serverTableQuery(serverTable.params, { app_key: "demo" })  // "page=1&page_size=10&app_key=demo"
+```
+
+空值不进串（与后端「不传即不过滤」的口径一致），数组按同名多值展开，
+键顺序沿用参数对象的插入顺序，可以直接当查询缓存键用。
 
 ## 主题 — `./theme` / `./AppConfigProvider`
 
@@ -134,6 +241,39 @@ antd 需要可解析的具体色值来派生 hover/active 色阶，所以那里�
 `button.autoInsertSpace: false`（否则 antd 会把两个汉字渲染成「确 定」）。
 
 应用没有深色主题，因此不配置 `theme.algorithm`；将来接入时在 `theme.ts` 里加 `algorithm`。
+
+## 测试脚手架 — `./testing`
+
+```ts
+renderWithAntd(ui, options?)                  // = render(ui, { wrapper: AppTableTestProvider })
+AppTableTestProvider                          // I18nProvider + AppConfigProvider
+openHeaderFilter(user, columnTitle)           // 打开某列表头筛选下拉, 返回下拉面板
+openHeaderFilter(user, scope, columnTitle)    // 一个页面有多张表时限定在某个容器内
+openFilterDropdown()                          // 已经点开时, 等下拉可见并返回
+ANTD_TEST_TIMEOUT_MS                          // 20_000
+```
+
+- 渲染 AppTable 的用例**必须**包 `AppConfigProvider`（主题与 locale 都在那），
+  而它自己要读 `I18nProvider` 的 locale，两层必须成对出现 —— 用 `renderWithAntd`
+  就不用每个文件再抄一遍。
+- antd Table 在 jsdom 里每次筛选/排序都要重建整棵表格，默认 5s 常常不够，
+  在测试文件顶层写 `vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS })`。
+- `openHeaderFilter` 会等下拉真正可见（`.ant-dropdown:not(.ant-dropdown-hidden)`）再返回：
+  antd 的下拉延迟挂载、收起时带动画，直接查 `.ant-table-filter-dropdown` 会拿到上一个。
+  列名按「先前缀、后包含」匹配表头（固定列会让同一个标题在 DOM 里出现两次）。
+- `testing.tsx` 依赖 `@testing-library`（devDependencies），**只能被测试文件引用**。
+
+## 类型报错 TS2742
+
+自定义 hook 把 `tableProps` 透出去时，如果不写返回类型，tsc 会报
+「The inferred type of ... cannot be named without a reference to `antd/es/table/interface`」。
+给 hook 的返回值显式标注即可：
+
+```ts
+function useThings(): { rows: Row[]; tableProps: Pick<AppTableProps<Row>, "pagination" | "onChange"> } {
+```
+
+整只 hook 结果原样透出时用 `UseServerTableResult<Row>`。
 
 ## 已知注意点
 

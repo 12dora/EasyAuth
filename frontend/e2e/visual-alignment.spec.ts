@@ -206,22 +206,83 @@ async function expectSeedDataIsVisible(page: Page, path: string) {
   }
 }
 
+interface TableScrollOffender {
+  columns: number;
+  reason: string;
+  scroller: string;
+  tableWidth: number;
+  visibleWidth: number;
+}
+
+/**
+ * 表格超宽时必须由表格自己的滚动容器吸收, 页面本身永远不横向滚动。
+ *
+ * antd 的滚动容器是 `.ant-table-content`(不设 `scroll.y` 时)或 `.ant-table-body`
+ * (设了 `scroll.y`, 表头单独一层时), AppTable 只有传 `minWidth` 才会写 `scroll.x`、
+ * 也才会有这一层滚动; 不传 minWidth 的表格用 `tableLayout: "fixed"` 随容器收缩,
+ * 本来就不会溢出。因此断言写成条件式: 溢出了就必须有 auto/scroll 的祖先容器,
+ * 并且那个容器得是 antd 自己的那两个(而不是外层 paper-card 顺手把整页撑开)。
+ */
 async function expectTablesUseLocalHorizontalScroll(page: Page) {
-  const tableFrames = page.locator(".paper-card:has(table)");
-  const count = await tableFrames.count();
-  expect(count).toBeGreaterThan(0);
-  for (let index = 0; index < count; index += 1) {
-    const frame = tableFrames.nth(index);
-    const hasLocalScroll = await frame.evaluate((element) => {
-      const scroller = element.firstElementChild;
-      const table = element.querySelector("table");
-      if (!(scroller instanceof HTMLElement) || !(table instanceof HTMLElement)) {
-        return false;
+  const tables = page.locator("main table");
+  expect(await tables.count()).toBeGreaterThan(0);
+
+  const offenders = await tables.evaluateAll<TableScrollOffender[], HTMLTableElement>((elements) => {
+    const SCROLLABLE = new Set(["auto", "scroll"]);
+    const describe = (element: Element) =>
+      `${element.tagName.toLowerCase()}${element.className ? `.${String(element.className).trim().split(/\s+/).join(".")}` : ""}`;
+
+    const nearestScroller = (table: HTMLElement): HTMLElement | null => {
+      let node = table.parentElement;
+      while (node) {
+        if (SCROLLABLE.has(window.getComputedStyle(node).overflowX)) {
+          return node;
+        }
+        if (node.tagName === "MAIN" || node === document.body) {
+          return null;
+        }
+        node = node.parentElement;
       }
-      return scroller.scrollWidth >= table.getBoundingClientRect().width && table.getBoundingClientRect().width >= 760;
-    });
-    expect(hasLocalScroll).toBe(true);
-  }
+      return null;
+    };
+
+    return elements
+      .map((table) => {
+        const wrapper = table.closest(".ant-table-wrapper");
+        const scroller = nearestScroller(table);
+        const viewport = scroller ?? table.parentElement ?? document.documentElement;
+        const tableWidth = Math.round(table.getBoundingClientRect().width);
+        const visibleWidth = Math.round(viewport.clientWidth);
+        const overflows = tableWidth > visibleWidth + 1;
+        const offender = (reason: string): TableScrollOffender => ({
+          columns: table.querySelectorAll("thead th").length,
+          reason,
+          scroller: scroller ? describe(scroller) : "<none>",
+          tableWidth,
+          visibleWidth,
+        });
+
+        if (overflows && !scroller) {
+          return offender("表格超宽但没有局部横向滚动容器, 会把整页撑出横向滚动条");
+        }
+        if (overflows && wrapper && !scroller?.matches(".ant-table-content, .ant-table-body")) {
+          return offender("横向滚动没有落在 antd 自己的 .ant-table-content / .ant-table-body 上");
+        }
+        if (scroller && Math.round(scroller.getBoundingClientRect().width) > Math.round(document.documentElement.clientWidth) + 1) {
+          return offender("滚动容器本身比视口还宽, 局部滚动没起作用");
+        }
+        return null;
+      })
+      .filter((entry): entry is TableScrollOffender => entry !== null);
+  });
+
+  expect(offenders).toEqual([]);
+
+  // 局部滚动的最终判据: 文档层面不存在横向滚动。
+  const documentOverflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+  );
+  expect(documentOverflow).toBeLessThanOrEqual(1);
 }
 
 async function expectVisibleControlsAreClickable(scope: Page | Locator) {
