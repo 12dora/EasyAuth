@@ -76,7 +76,7 @@ def _assert_safe_not_found_page(response: _TestResponse) -> None:
     html = response.content.decode()
     assert response.status_code == HTTPStatus.NOT_FOUND
     assert "页面没有找到" in html
-    assert 'href="/auth/login/?next=/portal/"' in html
+    assert 'href="/auth/sign-in/?next=/portal/"' in html
     assert 'href="/portal/"' in html
     assert "--faint: #64748b" in html
     assert "min-height: calc(100dvh - 57px)" in html

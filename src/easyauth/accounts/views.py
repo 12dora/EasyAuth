@@ -30,6 +30,7 @@ from easyauth.accounts.logout_state import (
     logged_out_response,
     mark_browser_logged_out,
 )
+from easyauth.accounts.next_path import safe_next_path
 from easyauth.accounts.oidc_exchange import exchange_authorization_code_for_claims
 
 FIELD_AUTHORIZATION_CODE = "code"
@@ -293,17 +294,7 @@ def _require_authorization_code(code: str) -> None:
 
 
 def _safe_auth_success_next(request: HttpRequest) -> str:
-    next_path = request.GET.get("next", DEFAULT_AUTH_SUCCESS_NEXT)
-    if _is_local_absolute_path(next_path):
-        return next_path
-    return DEFAULT_AUTH_SUCCESS_NEXT
-
-
-def _is_local_absolute_path(value: str) -> bool:
-    if not value.startswith("/") or value.startswith("//") or "\\" in value:
-        return False
-    parsed = urlsplit(value)
-    return parsed.scheme == "" and parsed.netloc == ""
+    return safe_next_path(request.GET.get("next"), default=DEFAULT_AUTH_SUCCESS_NEXT)
 
 
 def _session_string(request: HttpRequest, key: str) -> str:

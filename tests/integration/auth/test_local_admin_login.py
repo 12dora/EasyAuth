@@ -550,7 +550,7 @@ def test_change_password_happy_path_clears_flag_and_unblocks_navigation() -> Non
     console = client.get("/console/")
     assert security.status_code == HTTPStatus.OK
     assert console.status_code == HTTPStatus.FOUND
-    assert console.headers["Location"].startswith("/auth/login/")
+    assert console.headers["Location"].startswith("/auth/sign-in/")
 
 
 def test_change_password_rejects_wrong_current_password() -> None:

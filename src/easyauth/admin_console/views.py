@@ -62,4 +62,5 @@ def _visible_app(actor: ConsoleActor, app_key: str) -> App:
 def _login_redirect(request: HttpRequest) -> HttpResponseRedirect:
     if browser_is_marked_logged_out(request):
         return logged_out_redirect(request)
-    return HttpResponseRedirect(f"/auth/login/?next={quote(request.get_full_path())}")
+    # 与门户一致: 先落 EasyAuth 登录页, 不直接 302 去 Authentik。
+    return HttpResponseRedirect(f"/auth/sign-in/?next={quote(request.get_full_path())}")

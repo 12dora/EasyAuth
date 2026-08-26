@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlencode
 
 from django.conf import settings
 from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
 
+from easyauth.accounts.next_path import safe_next_path
 from easyauth.frontend_shell import render_public_react_shell
 
 LOGGED_OUT_COOKIE_NAME = "easyauth_logged_out"
@@ -39,10 +40,7 @@ def clear_browser_logged_out(response: HttpResponse) -> None:
 
 
 def logged_out_next_path(request: HttpRequest) -> str:
-    next_path = request.GET.get("next", DEFAULT_LOGGED_OUT_NEXT)
-    if _is_local_absolute_path(next_path):
-        return next_path
-    return DEFAULT_LOGGED_OUT_NEXT
+    return safe_next_path(request.GET.get("next"), default=DEFAULT_LOGGED_OUT_NEXT)
 
 
 def logged_out_response(request: HttpRequest) -> HttpResponse:
@@ -51,10 +49,3 @@ def logged_out_response(request: HttpRequest) -> HttpResponse:
         surface="portal",
         title="已登出 - EasyAuth",
     )
-
-
-def _is_local_absolute_path(value: str) -> bool:
-    if not value.startswith("/") or value.startswith("//") or "\\" in value:
-        return False
-    parsed = urlsplit(value)
-    return parsed.scheme == "" and parsed.netloc == ""

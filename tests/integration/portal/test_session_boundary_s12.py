@@ -13,7 +13,7 @@ pytestmark = pytest.mark.django_db
 
 PORTAL_URL: Final = "/portal/"
 GRANTS_API_URL: Final = "/portal/api/v1/me/grants"
-LOGIN_URL_PREFIX: Final = "/auth/login/"
+LOGIN_URL_PREFIX: Final = "/auth/sign-in/"
 
 
 def test_portal_redirects_to_login_when_session_has_no_authentik_user() -> None:

@@ -6,7 +6,6 @@ from __future__ import annotations
 import json
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Final, cast
-from urllib.parse import urlsplit
 
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
@@ -55,6 +54,7 @@ from easyauth.accounts.local_admin import (
     verify_passkey_authentication,
 )
 from easyauth.accounts.models import LocalAdminAccount, LocalAdminPasskey
+from easyauth.accounts.next_path import safe_next_path
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
@@ -482,16 +482,7 @@ def _safe_change_password_next(request: HttpRequest) -> str:
         next_path = _post_value(request, "next")
     else:
         next_path = request.GET.get("next", "")
-    if _is_local_absolute_path(next_path):
-        return next_path
-    return DEFAULT_CHANGE_PASSWORD_NEXT
-
-
-def _is_local_absolute_path(value: str) -> bool:
-    if not value.startswith("/") or value.startswith("//") or "\\" in value:
-        return False
-    parsed = urlsplit(value)
-    return parsed.scheme == "" and parsed.netloc == ""
+    return safe_next_path(next_path, default=DEFAULT_CHANGE_PASSWORD_NEXT)
 
 
 def _login_error(request: HttpRequest, message: str) -> HttpResponse:

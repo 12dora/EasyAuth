@@ -98,7 +98,7 @@ def test_ops1_console_entry_redirects_unauthenticated_user_to_authentik_login() 
 
     # Then: 控制台跳转到 OIDC 登录并携带当前本地路径。
     assert response.status_code == HTTPStatus.FOUND
-    assert response.headers["Location"] == "/auth/login/?next=/console/%3Ftab%3Droles"
+    assert response.headers["Location"] == "/auth/sign-in/?next=/console/%3Ftab%3Droles"
 
 
 @override_settings(DEBUG=True)
@@ -111,7 +111,7 @@ def test_ops1_console_entry_requires_login_even_in_debug_mode() -> None:
 
     # Then: 匿名访问一律跳转统一登录入口, 不产生任何会话。
     assert response.status_code == HTTPStatus.FOUND
-    assert response.headers["Location"] == "/auth/login/?next=/console/"
+    assert response.headers["Location"] == "/auth/sign-in/?next=/console/"
     assert AUTHENTIK_SESSION_KEY not in client.session
 
 

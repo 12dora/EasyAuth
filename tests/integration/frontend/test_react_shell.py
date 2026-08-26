@@ -179,7 +179,7 @@ def test_console_client_route_redirects_to_login_without_session() -> None:
     response = Client().get("/console/teams")
 
     assert response.status_code == HTTPStatus.FOUND
-    assert response.headers["Location"].startswith("/auth/login/")
+    assert response.headers["Location"].startswith("/auth/sign-in/")
 
 
 def test_portal_serves_react_shell_for_active_session_user() -> None:
@@ -293,7 +293,7 @@ def test_portal_client_route_redirects_to_login_without_session() -> None:
 
     # Then: 非 API 子路由仍保持门户登录边界。
     assert response.status_code == HTTPStatus.FOUND
-    assert response.headers["Location"].startswith("/auth/login/")
+    assert response.headers["Location"].startswith("/auth/sign-in/")
 
 
 def test_portal_api_route_is_not_captured_by_react_catch_all() -> None:

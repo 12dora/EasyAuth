@@ -10,7 +10,8 @@ from easyauth.accounts.logout_state import browser_is_marked_logged_out, logged_
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.frontend_shell import render_react_shell, shell_user_from_user
 
-LOGIN_URL: Final = "/auth/login/"
+# 未登录先落到 EasyAuth 自己的登录页, 由用户点「使用工作账号登录」再跳 Authentik。
+LOGIN_URL: Final = "/auth/sign-in/"
 
 
 def portal_home(request: HttpRequest) -> HttpResponse:

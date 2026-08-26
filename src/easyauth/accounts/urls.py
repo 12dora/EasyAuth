@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from django.urls import path
 
-from easyauth.accounts import local_admin_views, views
+from easyauth.accounts import local_admin_views, sign_in_views, views
 
 urlpatterns = [
+    path("sign-in/", sign_in_views.sign_in_page, name="sign-in"),
     path("logged-out/", views.logged_out, name="logged-out"),
     path("login/", views.oidc_login, name="oidc-login"),
     path("callback/", views.oidc_callback, name="oidc-callback"),

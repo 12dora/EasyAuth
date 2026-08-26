@@ -208,7 +208,7 @@ function LoggedOutPage() {
       <h1 id="logged-out-title">{t("loggedOut.title")}</h1>
       <p className="page-description">{t("loggedOut.description")}</p>
       <div className="logged-out-actions">
-        <ButtonLink variant="primary" href="/auth/local/">
+        <ButtonLink variant="primary" href="/auth/sign-in/">
           {t("loggedOut.login")}
         </ButtonLink>
         <ButtonLink href="/portal/">{t("loggedOut.backToPortal")}</ButtonLink>

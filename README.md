@@ -292,11 +292,17 @@ DJANGO_DEBUG=1 .venv/bin/python manage.py runserver 0.0.0.0:8001
 
 ## 登录与默认管理员凭据
 
-EasyAuth 有**两条**登录路径：
+未登录访问 `/portal/` 或 `/console/` 会先落到 EasyAuth 自己的登录页 **`/auth/sign-in/`**（带
+`?next=` 回跳目标），由用户点击「使用工作账号登录」再跳上游 —— 不直接 302 到 Authentik，
+用户需要先确认自己进的是 EasyAuth。`/auth/login/` 本身保持「立即跳上游」的语义，供下游应用
+与深链接直接使用。
+
+在此之后有**两条**登录路径：
 
 ### 1. 工作账号（生产路径）—— Authentik OIDC
 
-`/auth/login/` → Authentik（→ 钉钉扫码）→ `/auth/callback/`。OIDC callback 只绑定当前
+`/auth/sign-in/` →（点击「使用工作账号登录」）→ `/auth/login/` → Authentik（→ 钉钉扫码）
+→ `/auth/callback/`。OIDC callback 只绑定当前
 `sub` 对应的 active `UserMirror`；后续控制台请求必须通过 Authentik admin API 读取该用户
 当前组，并与 `EASYAUTH_CONSOLE_SUPERUSER_GROUPS`（默认 `EasyAuth Admins`）求交集判断
 **控制台超级管理员**。无法取得上游当前组时失败关闭，不信任登录时的 `groups` claim 或

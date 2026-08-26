@@ -212,7 +212,7 @@ describe("AppShell", () => {
     expect(screen.getByText("统一权限中心")).toBeVisible();
     expect(screen.queryByText("员工门户")).not.toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "已登出" })).toBeVisible();
-    expect(screen.getByRole("link", { name: "重新登录" })).toHaveAttribute("href", "/auth/local/");
+    expect(screen.getByRole("link", { name: "重新登录" })).toHaveAttribute("href", "/auth/sign-in/");
     expect(screen.queryByText("张三")).not.toBeInTheDocument();
     expect(screen.queryByRole("img", { name: "张三 的头像" })).not.toBeInTheDocument();
   });
@@ -224,7 +224,7 @@ describe("AppShell", () => {
       </MemoryRouter>,
     );
 
-    expect(screen.getByRole("link", { name: "重新登录" })).toHaveAttribute("href", "/auth/local/");
+    expect(screen.getByRole("link", { name: "重新登录" })).toHaveAttribute("href", "/auth/sign-in/");
   });
 
   test("语言菜单可切换界面语言", async () => {
@@ -351,7 +351,7 @@ describe("AppShell", () => {
     expect(screen.getByText("登录状态已失效")).toBeVisible();
     expect(screen.getByRole("link", { name: "重新登录" })).toHaveAttribute(
       "href",
-      "/auth/local/?next=%2Fconsole%2Foperations%2Faccess-requests%3Fstatus%3Dsubmitted",
+      "/auth/sign-in/?next=%2Fconsole%2Foperations%2Faccess-requests%3Fstatus%3Dsubmitted",
     );
     expect(client.getQueryData(["console", "operations", "access-requests"])).toBeUndefined();
   });

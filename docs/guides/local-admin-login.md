@@ -9,7 +9,7 @@ console 超管。
 
 | 页面 | URL |
 | --- | --- |
-| 登录 | `/auth/local/` |
+| 登录 | `/auth/local/`（也可从统一登录页 `/auth/sign-in/` 底部的「本地账号登录」进入） |
 | 二次验证 | `/auth/local/verify/`(登录后自动跳转,pending 10 分钟有效) |
 | 修改密码 | `/auth/local/change-password/`(仅本地管理员会话可用,匿名访问跳回登录页) |
 | 安全设置(绑定/停用 2FA、修改密码) | `/auth/local/security/`(仅本地管理员会话可见,其余 404) |
