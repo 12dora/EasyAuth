@@ -244,6 +244,25 @@ describe("AppTable 客户端模式", () => {
     expect(screen.getByText("暂无数据")).toBeInTheDocument();
   });
 
+  test("空表让 minWidth 让位给 scroll.x=true: 保留滚动容器, 但表格不再被撑宽到 minWidth", () => {
+    // 空态框由 antd 包在 `.ant-table-expanded-row-fixed` 里, 宽度写死成「容器宽度」并
+    // sticky 在可视区左侧。表格一旦被 minWidth 撑得比容器宽, 空态框就和表头不同宽:
+    // 一滚表头整排移动、空态框纹丝不动。空表没有行内容要靠 minWidth 保住列宽,
+    // 因此这里把宽度交回布局(x: true), 表头与空态框天然同宽。
+    const { unmount } = renderTable(<AppTable<Row> columns={COLUMNS} dataSource={[]} minWidth={900} rowKey="id" />);
+    const emptyStyle = document.querySelector(".ant-table-content table")?.getAttribute("style");
+    expect(emptyStyle).not.toContain("900px");
+    expect(emptyStyle).toContain("width: auto");
+    // 滚动容器仍在: 列宽之和放不下时溢出还是得由表格自己吸收, 不能撑出整页横向滚动条。
+    expect(document.querySelector(".ant-table-scroll-horizontal")).not.toBeNull();
+    expect(document.querySelector(".ant-table-content")).toHaveStyle({ overflowX: "auto" });
+    unmount();
+
+    // 有行数据时 minWidth 照旧生效。
+    renderTable(<AppTable<Row> columns={COLUMNS} dataSource={ROWS} minWidth={900} rowKey="id" />);
+    expect(document.querySelector(".ant-table-content table")?.getAttribute("style")).toContain("width: 900px");
+  });
+
   test("scroll.x 恒有值: 不传 minWidth 回落 max-content, 传了就是像素数", () => {
     // 缺省也必须有横向滚动容器: 没有 scroll.x 的表格一旦超宽会把整页撑出横向滚动条,
     // 而且 fixed 布局下没有剩余宽度时无宽度列会被压到 0px。

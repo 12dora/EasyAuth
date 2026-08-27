@@ -39,7 +39,7 @@ AppTable 独占的布局约定（**页面不要重复传**）：
 | 尺寸 | `size="middle"`（可覆盖） |
 | 布局 | `tableLayout="fixed"` |
 | 行高 / 单元格内边距 | 主题 `Table` token（`cellPaddingBlockMD: 10`、`cellPaddingInlineMD: 12`），等于旧 `TABLE_CELL_CLASS` 的 `px-3 py-2.5` |
-| 横向滚动 | `scroll.x` 恒有值：页面传的 `scroll.x` > `minWidth` > `"max-content"` |
+| 横向滚动 | `scroll.x` 恒有值：页面传的 `scroll.x` > `minWidth` > `"max-content"`；**空表例外**：无数据时 `minWidth` 让位给 `scroll.x: true`，否则表头按 minWidth 撑宽而空状态盒只有容器宽，两者错位 |
 | 空态 | 复用 `components/ui/EmptyState`，默认标题 `table.empty.title` |
 | 加载态 | 透传 `loading`，用 antd 自带 Spin |
 | 分页 | `position: ["bottomRight"]`、`size="small"`、`showSizeChanger`、`pageSizeOptions [10,20,50,100]`、`defaultPageSize 10`、`showTotal` = `第 x-y 条 / 共 z 条`；全部渲染在同一个 `ul.ant-pagination` 里，且**真的只有一行**（见下） |

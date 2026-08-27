@@ -54,10 +54,12 @@ export interface AppTableProps<T> extends Omit<TableProps<T>, "rowKey" | "pagina
   /**
    * 表格的最小宽度, 写进 `scroll.x`。列宽之和已经确定时传像素数。
    *
-   * 不传也**始终**有 `scroll.x`(回落 "max-content"): 横向滚动必须落在 antd 自己的
-   * `.ant-table-content` 上, 否则超宽表格会把整页撑出横向滚动条; 而且 fixed 布局下
+   * 有行数据时不传也**始终**有 `scroll.x`(回落 "max-content"): 横向滚动必须落在 antd
+   * 自己的 `.ant-table-content` 上, 否则超宽表格会把整页撑出横向滚动条; 而且 fixed 布局下
    * 没有剩余宽度时无宽度列会被压到 0px, "max-content" 让它们退回内容宽度。
    * 表格样式里的 `min-width: 100%` 由 antd 写死, 宽屏下仍然铺满容器。
+   *
+   * 空表例外, 见 `mergedScroll` 的注释。
    */
   minWidth?: number | "max-content";
   /**
@@ -88,6 +90,7 @@ export interface AppTableProps<T> extends Omit<TableProps<T>, "rowKey" | "pagina
 export function AppTable<T extends object>({
   ariaLabel,
   className,
+  dataSource,
   empty,
   emptyAction,
   emptyDescription,
@@ -121,13 +124,30 @@ export function AppTable<T extends object>({
     };
   }, [pagination, t]);
 
-  // scroll.x 一定要有值: 它既是 antd 给 `.ant-table-content` 挂 overflow-x:auto 的开关,
-  // 也是 fixed 布局下表格宽度的来源。页面显式传的 scroll.x 优先, 其次 minWidth,
-  // 都没有就用 "max-content"(列按内容取宽, 表格自身仍带 min-width:100%)。
-  const mergedScroll = useMemo(
-    () => ({ ...scroll, x: scroll?.x ?? minWidth ?? "max-content" }),
-    [minWidth, scroll],
-  );
+  const isEmpty = (dataSource?.length ?? 0) === 0;
+
+  /*
+   * scroll.x 一定要有值: 它是 antd 给 `.ant-table-content` 挂 overflow-x:auto 的开关,
+   * 少了它超宽表格会把整页撑出横向滚动条。有行数据时宽度取页面显式传的 scroll.x,
+   * 其次 minWidth, 都没有就用 "max-content"(列按内容取宽, 表格自身仍带 min-width:100%)。
+   *
+   * 空表是唯一例外: minWidth 要让位给 `true`(= 只要滚动容器, 表格宽度交给布局),
+   * 否则空态框会和表头错位。开了横向滚动后 rc-table 把空态包进
+   * `.ant-table-expanded-row-fixed`, 给它写死 `width: <容器宽度>px; position: sticky; left: 0`
+   * —— 空态框钉在可视区、宽度是容器宽, 而表头那张 `<table>` 被 minWidth 撑到更宽
+   * (人员管理: 容器 860 / 表头 960)。于是没有一行数据的表格也带一条横向滚动条,
+   * 一滚表头整排移动、空态框纹丝不动, 末尾的「操作」列还被 sticky 钉在右侧盖住相邻列。
+   * 而空表本来就没有行内容需要 minWidth 去保住列宽 —— 表头只是个图例。
+   * 换成 `x: true` 后表格按 `table-layout: fixed` 正好铺满容器, 表头与空态框同宽同起点;
+   * 容器窄到连各列声明的宽度都放不下时表格仍会溢出, 那时滚动容器还在,
+   * 「页面永不横向滚动」的约定不受影响。
+   */
+  const mergedScroll = useMemo<TableProps<T>["scroll"]>(() => {
+    if (isEmpty) {
+      return { ...scroll, x: true };
+    }
+    return { ...scroll, x: scroll?.x ?? minWidth ?? "max-content" };
+  }, [isEmpty, minWidth, scroll]);
 
   const locale = useMemo(
     () => ({
@@ -147,6 +167,7 @@ export function AppTable<T extends object>({
     <Table<T>
       caption={ariaLabel}
       className={cn("w-full", className)}
+      dataSource={dataSource}
       locale={locale}
       pagination={mergedPagination}
       rowKey={rowKey}
@@ -215,6 +236,10 @@ export interface UseServerTableOptions {
    */
   total?: number;
   defaultPageSize?: number;
+  /**
+   * 首屏排序。产品口径是「表格一律不设默认排序」(首屏表头不带排序指示器,
+   * 顺序交给后端的默认序), 所以页面不要传这个字段; 它只作为 hook 的能力保留。
+   */
   defaultSort?: ServerSortValue;
   /**
    * 列 key -> 后端查询参数。页面通常只写 `{ status: "status", appKey: "app_key" }`。
@@ -241,9 +266,9 @@ export interface UseServerTableResult<T> {
   total: number;
   setPage: (page: number, pageSize?: number) => void;
   /**
-   * 直接改排序(并回到第 1 页)。表头点击不走这里, 它是给「默认排序随外部状态切换」
-   * 的场景用的: 门户审批的待办/已处理两个页签后端默认序不同(created_at / -decided_at),
-   * `defaultSort` 只在建 hook 时生效, 页签切换必须显式把排序改过去。
+   * 直接改排序(并回到第 1 页); 传 undefined 表示清空排序, 顺序交回后端默认序。
+   * 表头点击不走这里, 它是给「排序随外部状态切换」的场景用的:
+   * 例如门户审批切换待办/已处理页签时把表头排序清掉。
    */
   setSort: (sort: ServerSortValue | undefined) => void;
   /**
@@ -451,7 +476,6 @@ export type OrderingFieldMap = Readonly<Record<string, string>>;
  * ```ts
  * const serverTable = useServerTable<Row>({
  *   sortParam: "ordering",
- *   defaultSort: { field: "created_at", order: "descend" },   // 与后端默认序一致
  *   serializeSort: orderingSerializer({ created_at: "created_at", app: "app_key" }),
  * });
  * ```
