@@ -79,9 +79,9 @@ export function ConsoleDingtalkSection({ settings }: { settings: IntegrationSett
     <PanelSurface padding="lg" className="space-y-5">
       <div className="space-y-1">
         <h2 className="text-base font-semibold text-ink">{t("settings.dingtalk.title")}</h2>
-        <p className="max-w-3xl text-body leading-5 text-ink-soft">{t("settings.dingtalk.description")}</p>
+        <p className="text-body leading-5 text-ink-soft">{t("settings.dingtalk.description")}</p>
       </div>
-      <form className="grid max-w-2xl gap-4" onSubmit={submit}>
+      <form className="grid gap-4" onSubmit={submit}>
         <Field label={t("settings.dingtalk.appKey")}>
           <TextInput autoComplete="off" value={appKey} onChange={(event) => setAppKey(event.currentTarget.value)} />
         </Field>

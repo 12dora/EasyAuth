@@ -29,8 +29,10 @@ export function ConsoleSettingsPage() {
       {settingsQuery.error ? (
         <StatusBanner live="alert" tone="signal" title={t("settings.integration.loadFailed")} message={(settingsQuery.error as Error).message} />
       ) : null}
-      <ConsoleAuthentikSection settings={settings} />
-      <ConsoleDingtalkSection settings={settings} />
+      <div className="grid items-start gap-6 lg:grid-cols-2">
+        <ConsoleAuthentikSection settings={settings} />
+        <ConsoleDingtalkSection settings={settings} />
+      </div>
       <TwoFactorSection />
     </div>
   );

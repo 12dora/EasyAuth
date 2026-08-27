@@ -66,7 +66,7 @@ export function ConsoleAuthentikSection({ settings }: { settings: IntegrationSet
           </p>
         ) : null}
       </div>
-      <form className="grid max-w-2xl gap-4" onSubmit={submit}>
+      <form className="grid gap-4" onSubmit={submit}>
         <Field label={t("settings.integration.baseUrl")} hint={t("settings.integration.baseUrlHint")}>
           <TextInput
             value={baseUrl}

@@ -53,13 +53,11 @@ export function TwoFactorSection() {
   };
 
   return (
-    <PanelSurface padding="lg" className="space-y-1" data-test-id="two-factor-card">
-      <div className="space-y-1">
-        <h2 className="text-base font-semibold text-ink" data-test-id="two-factor-title">
-          {t("settings.twoFactor.title")}
-        </h2>
-      </div>
-      <div className="mt-4 divide-y divide-ink/10 border-t border-ink/10">
+    <PanelSurface padding="lg" className="space-y-3" data-test-id="two-factor-card">
+      <h2 className="text-base font-semibold text-ink" data-test-id="two-factor-title">
+        {t("settings.twoFactor.title")}
+      </h2>
+      <div className="divide-y divide-ink/10 border-t border-ink/10">
         <TotpRow t={t} enabled={status.totp.enabled} onStatus={applyStatus} />
         <PasskeyRow t={t} passkeys={status.passkeys} onStatus={applyStatus} />
       </div>

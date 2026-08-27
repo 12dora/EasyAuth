@@ -23,7 +23,7 @@ export function PasskeyRow({
   const webAuthnAvailable = isWebAuthnAvailable();
 
   return (
-    <div className="py-4" data-test-id="passkeys-card">
+    <div className="py-4 last:pb-0" data-test-id="passkeys-card">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="min-w-0">
           <p className="text-body text-ink" data-test-id="passkeys-title">
@@ -71,7 +71,7 @@ export function PasskeyRow({
 function PasskeyListItem({ t, passkey, onRemove }: { t: Translate; passkey: PasskeyItem; onRemove: () => void }) {
   return (
     <li
-      className="flex flex-wrap items-center justify-between gap-2 py-2.5"
+      className="flex flex-wrap items-center justify-between gap-2 py-2.5 last:pb-0"
       data-test-id={`passkey-row-${passkey.id}`}
     >
       <div className="min-w-0">
