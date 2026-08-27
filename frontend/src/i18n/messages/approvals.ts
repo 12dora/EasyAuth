@@ -1,5 +1,5 @@
 export const zhCN = {
-  "approvalTemplates.description": "维护钉钉审批流程模板：绑定 process_code、配置表单映射，并可发起测试审批验证配置。",
+  "approvalTemplates.description": "把钉钉里的审批流程接进来：选好对应的审批流程、告诉系统各字段要填什么，再发一条测试审批确认能正常走通。",
 
   "approvalTemplates.loadFailed": "审批模板加载失败",
 
@@ -124,7 +124,7 @@ export const zhCN = {
 } as const;
 
 export const en: Record<keyof typeof zhCN, string> = {
-  "approvalTemplates.description": "Maintain DingTalk approval flow templates: bind a process_code, configure the form mapping, and start a test approval to verify the setup.",
+  "approvalTemplates.description": "Connect your DingTalk approval flows: pick the matching flow, tell the system what to fill into each form field, then send a test approval to confirm it works end to end.",
 
   "approvalTemplates.loadFailed": "Failed to load approval templates",
 
