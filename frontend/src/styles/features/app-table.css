@@ -48,3 +48,14 @@
   white-space: nowrap;
   border: 0;
 }
+
+/*
+ * 空态兜底: 开了横向滚动后 rc-table 把空态包进 `.ant-table-expanded-row-fixed`,
+ * 内联写死 `width: <容器宽>px; position: sticky`。dataSource 为空时 AppTable 已改用 scroll.x=true
+ * 让表格铺满容器; 但客户端筛选把行筛空时 dataSource 仍非空、表头按 minWidth 撑宽,
+ * 这里让空态盒放弃 sticky、撑满占位单元格(= 表头宽度), 与表头一起滚动而不是错位钉死。
+ */
+.ant-table-wrapper .ant-table-tbody > tr.ant-table-placeholder > td > .ant-table-expanded-row-fixed {
+  position: static;
+  width: auto !important;
+}
