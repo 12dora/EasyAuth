@@ -49,6 +49,8 @@ export const zhCN = {
 
   "common.none": "-",
 
+  "common.clear": "清除",
+
   "shell.console.title": "管理控制台",
 
   "shell.portal.title": "员工门户",
@@ -256,6 +258,8 @@ export const en: Record<keyof typeof zhCN, string> = {
   "common.updatedAt": "Updated at",
 
   "common.none": "-",
+
+  "common.clear": "Clear",
 
   "shell.console.title": "Admin Console",
 

@@ -472,9 +472,10 @@ describe("OperationsPage", () => {
         expect.objectContaining({ credentials: "include" }),
       );
     });
-    expect(screen.getByLabelText("created_from")).toHaveValue("2026-07-01T08:30");
+    expect(screen.getByText("创建时间")).toBeVisible();
+    expect(screen.getByLabelText("创建时间 起")).toHaveValue("2026-07-01T08:30");
 
-    await user.type(screen.getByLabelText("created_to"), "2026-07-10T18:00");
+    await user.type(screen.getByLabelText("创建时间 止"), "2026-07-10T18:00");
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenLastCalledWith(
@@ -482,6 +483,38 @@ describe("OperationsPage", () => {
         expect.objectContaining({ credentials: "include" }),
       );
     });
+  });
+
+  test("授权列表的创建时间范围可一键清除, 且没有值时不显示清除按钮", async () => {
+    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.startsWith("/console/api/v1/operations/access-grants?")) {
+        return jsonResponse({ data: [], pagination: { page: 1, page_size: 20, total_items: 0, total_pages: 1 } });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup({ delay: null });
+
+    const { unmount } = renderOperationsPage("access-grants");
+    expect(await screen.findByLabelText("创建时间 起")).toHaveValue("");
+    expect(screen.queryByRole("button", { name: "清除" })).not.toBeInTheDocument();
+    unmount();
+
+    renderOperationsPage(
+      "access-grants",
+      "?created_from=2026-07-01T08%3A30&created_to=2026-07-10T18%3A00",
+    );
+
+    await user.click(await screen.findByRole("button", { name: "清除" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("location-search")).not.toHaveTextContent("created_from");
+    });
+    expect(screen.getByTestId("location-search")).not.toHaveTextContent("created_to");
+    expect(screen.getByLabelText("创建时间 起")).toHaveValue("");
+    expect(screen.queryByRole("button", { name: "清除" })).not.toBeInTheDocument();
   });
 
   test("紧急撤权目标不存在时显示冲突并刷新授权列表", async () => {
@@ -546,7 +579,7 @@ function renderOperationsPage(section = "access-requests", search = "") {
     },
   });
 
-  renderWithAntd(
+  return renderWithAntd(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[`/console/operations/${section}${search}`]}>
         <LocationSearch />

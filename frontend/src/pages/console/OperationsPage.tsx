@@ -1,5 +1,6 @@
 import { Activity, RefreshCcw } from "lucide-react";
-import { useParams } from "react-router-dom";
+import { useId } from "react";
+import { useParams, useSearchParams } from "react-router-dom";
 
 import { Button } from "../../components/Button";
 import { TextInput } from "../../components/Field";
@@ -153,22 +154,58 @@ function GrantCreatedRangeFilter({
   searchParams: URLSearchParams;
   onChange: (key: string, value: string) => void;
 }) {
+  const { t } = useI18n();
+  const [, setSearchParams] = useSearchParams();
+  const labelId = useId();
+  const startLabelId = useId();
+  const endLabelId = useId();
+  const createdFrom = searchParams.get("created_from") ?? "";
+  const createdTo = searchParams.get("created_to") ?? "";
+
+  // 清空必须一次写回: onChange 逐个调用会各自基于同一份旧 searchParams, 后一次会把前一次的删除覆盖掉。
+  const clearRange = () => {
+    setSearchParams((previous) => {
+      const next = new URLSearchParams(previous);
+      next.delete("created_from");
+      next.delete("created_to");
+      next.set("page", "1");
+      return next;
+    });
+  };
+
   return (
-    <div className="mb-4 flex flex-wrap items-center gap-2">
+    <div className="mb-3 flex flex-wrap items-center gap-2 sm:flex-nowrap">
+      <span id={labelId} className="shrink-0 text-label uppercase tracking-caps-wide text-ink-soft font-medium">
+        {t("console.operations.grants.createdRange")}
+      </span>
+      <span id={startLabelId} className="sr-only">
+        {t("console.operations.grants.createdRangeStart")}
+      </span>
       <TextInput
-        aria-label="created_from"
-        className="w-56"
+        aria-labelledby={`${labelId} ${startLabelId}`}
+        className="w-52"
         type="datetime-local"
-        value={searchParams.get("created_from") ?? ""}
+        value={createdFrom}
         onChange={(event) => onChange("created_from", event.currentTarget.value)}
       />
+      <span aria-hidden="true" className="shrink-0 text-ink-faint">
+        &mdash;
+      </span>
+      <span id={endLabelId} className="sr-only">
+        {t("console.operations.grants.createdRangeEnd")}
+      </span>
       <TextInput
-        aria-label="created_to"
-        className="w-56"
+        aria-labelledby={`${labelId} ${endLabelId}`}
+        className="w-52"
         type="datetime-local"
-        value={searchParams.get("created_to") ?? ""}
+        value={createdTo}
         onChange={(event) => onChange("created_to", event.currentTarget.value)}
       />
+      {createdFrom || createdTo ? (
+        <Button size="sm" variant="ghost" onClick={clearRange}>
+          {t("common.clear")}
+        </Button>
+      ) : null}
     </div>
   );
 }

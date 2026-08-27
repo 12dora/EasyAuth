@@ -34,6 +34,9 @@ export const zhCN = {
   "console.operations.emergencyRevokeConflict": "当前授权已不存在",
   "console.operations.emergencyRevokeConflictDescription": "撤权目标没有可撤销的当前授权，授权列表已刷新，请核对最新状态。",
   "console.operations.reasonRequired": "请填写操作原因",
+  "console.operations.grants.createdRange": "创建时间",
+  "console.operations.grants.createdRangeStart": "起",
+  "console.operations.grants.createdRangeEnd": "止",
 
   "console.rules.heading": "审批规则",
   "console.rules.column.target": "对象",
@@ -142,6 +145,9 @@ export const en: Record<keyof typeof zhCN, string> = {
   "console.operations.emergencyRevokeConflict": "Current grant no longer exists",
   "console.operations.emergencyRevokeConflictDescription": "The revoke target has no current grant to revoke. The grant list was refreshed; check the latest state.",
   "console.operations.reasonRequired": "Enter an operation reason",
+  "console.operations.grants.createdRange": "Created between",
+  "console.operations.grants.createdRangeStart": "start",
+  "console.operations.grants.createdRangeEnd": "end",
 
   "console.rules.heading": "Approval rules",
   "console.rules.column.target": "Target",
