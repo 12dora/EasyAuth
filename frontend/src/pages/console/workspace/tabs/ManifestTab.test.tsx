@@ -240,24 +240,15 @@ describe("ManifestTab", () => {
 
     renderWithClient(<ManifestTab appKey="demo" />);
 
-    // 首屏的 defaultSort 与后端默认序(-version)一致, 表头就带着指示器。
+    // 表格不设默认排序: 首屏不带 ordering, 表头也没有指示器。
     expect(await screen.findByText("v1")).toBeInTheDocument();
-    expect(columnSortOrder("版本")).toBe("descend");
+    expect(columnSortOrder("版本")).toBeNull();
 
     const history = screen.getByRole("heading", { name: "版本历史" }).parentElement as HTMLElement;
     await user.click(within(history).getByTitle("下一页"));
     await screen.findByText("v2");
 
-    // 版本列已经是降序, antd 的三态循环下一档是「取消排序」: 不带 ordering,
-    // 后端回落到自己的默认序; 页码同样回到第 1 页。
-    await sortByColumn(user, "版本");
-    await waitFor(() =>
-      expect(lastVersionsUrl(fetchMock)).toBe(
-        "/console/api/v1/apps/demo/permission-template-versions?page=1&page_size=20",
-      ),
-    );
-    expect(columnSortOrder("版本")).toBeNull();
-
+    // 排序变了旧页码可能越界, 因此排序同时回到第 1 页。
     await sortByColumn(user, "版本");
     await waitFor(() =>
       expect(lastVersionsUrl(fetchMock)).toBe(
@@ -273,15 +264,24 @@ describe("ManifestTab", () => {
       ),
     );
     expect(columnSortOrder("版本")).toBe("descend");
+
+    // antd 的三态循环第三档是「取消排序」: 不带 ordering, 后端回落到自己的默认序。
+    await sortByColumn(user, "版本");
+    await waitFor(() =>
+      expect(lastVersionsUrl(fetchMock)).toBe(
+        "/console/api/v1/apps/demo/permission-template-versions?page=1&page_size=20",
+      ),
+    );
+    expect(columnSortOrder("版本")).toBeNull();
   });
 
   test("版本历史使用服务端分页参数和总数", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
-      if (url === "/console/api/v1/apps/demo/permission-template-versions?page=1&page_size=20&ordering=-version") {
+      if (url === "/console/api/v1/apps/demo/permission-template-versions?page=1&page_size=20") {
         return versionsResponse([{ version: "v21" }], 1, 21, 2);
       }
-      if (url === "/console/api/v1/apps/demo/permission-template-versions?page=2&page_size=20&ordering=-version") {
+      if (url === "/console/api/v1/apps/demo/permission-template-versions?page=2&page_size=20") {
         return versionsResponse([{ version: "v1" }], 2, 21, 2);
       }
       if (url === "/console/api/v1/apps/demo/manifest") {
@@ -302,7 +302,7 @@ describe("ManifestTab", () => {
 
     expect(await screen.findByText("v1")).toBeInTheDocument();
     expect(fetchMock).toHaveBeenCalledWith(
-      "/console/api/v1/apps/demo/permission-template-versions?page=2&page_size=20&ordering=-version",
+      "/console/api/v1/apps/demo/permission-template-versions?page=2&page_size=20",
       expect.any(Object),
     );
   });

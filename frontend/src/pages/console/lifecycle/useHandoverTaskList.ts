@@ -24,9 +24,6 @@ const HANDOVER_ORDERING_FIELDS = {
   created_at: "created_at",
 } as const;
 
-/** 后端默认序是 -created_at; defaultSort 与它一致, 首屏表头就带排序指示器。 */
-const HANDOVER_DEFAULT_SORT = { field: "created_at", order: "descend" } as const;
-
 /** 交接单列表的过滤、分页与删除。 */
 export function useHandoverTaskList() {
   const { t } = useI18n();
@@ -42,7 +39,6 @@ export function useHandoverTaskList() {
       blocked: "blocked",
     },
     sortParam: ORDERING_PARAM,
-    defaultSort: HANDOVER_DEFAULT_SORT,
     serializeSort: orderingSerializer(HANDOVER_ORDERING_FIELDS),
   });
   const tasksSearch = serverTableQuery(serverTable.params);

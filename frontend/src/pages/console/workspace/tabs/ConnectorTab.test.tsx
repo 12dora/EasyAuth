@@ -297,7 +297,7 @@ describe("ConnectorTab", () => {
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        "/console/api/v1/apps/demo/connectors/11/sync-runs?page=2&page_size=10&ordering=-started_at",
+        "/console/api/v1/apps/demo/connectors/11/sync-runs?page=2&page_size=10",
         expect.any(Object),
       );
     });
@@ -314,9 +314,9 @@ describe("ConnectorTab", () => {
     const runsPanel = (await screen.findByRole("heading", { name: "运行历史" })).closest(
       "section",
     ) as HTMLElement;
-    // 首屏的 defaultSort 与后端默认序(-started_at)一致, 表头就带着指示器。
+    // 表格不设默认排序: 首屏不带 ordering, 表头也没有指示器。
     await within(runsPanel).findByText("第 1-10 条 / 共 12 条");
-    expect(columnSortOrder(runsPanel, "开始时间")).toBe("descend");
+    expect(columnSortOrder(runsPanel, "开始时间")).toBeNull();
 
     await user.click(within(runsPanel).getByTitle("下一页"));
     await within(runsPanel).findByText("第 11-12 条 / 共 12 条");

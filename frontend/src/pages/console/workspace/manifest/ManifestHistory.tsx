@@ -23,14 +23,10 @@ import { manifestVersionsQueryPrefix, type ManifestVersion } from "./manifestImp
  */
 const MANIFEST_ORDERING_FIELDS = { version: "version" } as const;
 
-/** 后端默认序是 -version; defaultSort 与它一致, 首屏表头就带排序指示器。 */
-const MANIFEST_DEFAULT_SORT = { field: "version", order: "descend" } as const;
-
 export function useManifestHistory(appKey: string) {
   const serverTable = useServerTable<ManifestVersion>({
     defaultPageSize: 20,
     sortParam: ORDERING_PARAM,
-    defaultSort: MANIFEST_DEFAULT_SORT,
     serializeSort: orderingSerializer(MANIFEST_ORDERING_FIELDS),
   });
   const queryPrefix = manifestVersionsQueryPrefix(appKey);

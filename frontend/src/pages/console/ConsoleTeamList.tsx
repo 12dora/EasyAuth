@@ -50,9 +50,6 @@ const TEAM_ORDERING_FIELDS = {
   member_count: "member_count",
 } as const;
 
-/** 后端默认序是 name 升序; defaultSort 与它一致, 首屏表头就带排序指示器。 */
-const TEAM_DEFAULT_SORT = { field: "name", order: "ascend" } as const;
-
 export function teamLeadersLabel(leaders: TeamSummary["leaders"] | undefined): string {
   const names = (leaders ?? []).map((leader) => leader.name || leader.user_id).filter(Boolean);
   return names.length > 0 ? names.join(", ") : "—";
@@ -68,7 +65,6 @@ export function ConsoleTeamList() {
   // 团队接口没有过滤参数(因此列上不给表头筛选), 但支持单字段 ordering。
   const serverTable = useServerTable<TeamSummary>({
     sortParam: ORDERING_PARAM,
-    defaultSort: TEAM_DEFAULT_SORT,
     serializeSort: orderingSerializer(TEAM_ORDERING_FIELDS),
   });
   const sort: ServerSortState = serverTable.query;

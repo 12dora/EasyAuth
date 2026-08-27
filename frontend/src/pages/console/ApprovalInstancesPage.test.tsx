@@ -17,7 +17,7 @@ import {
 // antd Table 在 jsdom 里每次筛选/翻页都要重建整棵表格, 默认 5s 不够。
 vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
 
-const LIST_URL = "/console/api/v1/operations/approval-instances?page=1&page_size=20&ordering=-created_at";
+const LIST_URL = "/console/api/v1/operations/approval-instances?page=1&page_size=20";
 
 const INSTANCES = [
   {
@@ -207,7 +207,6 @@ describe("ApprovalInstancesPage", () => {
         page: "1",
         page_size: "20",
         status: "approved",
-        ordering: "-created_at",
       });
     });
     await screen.findByText("REQ-1");
@@ -221,7 +220,6 @@ describe("ApprovalInstancesPage", () => {
         page_size: "20",
         status: "approved",
         app_key: "crm",
-        ordering: "-created_at",
       });
     });
   });
@@ -243,9 +241,9 @@ describe("ApprovalInstancesPage", () => {
 
     renderPage();
 
-    // 首屏的 defaultSort 与后端默认序(-created_at)一致, 表头就带着指示器。
+    // 表格不设默认排序: 首屏不带 ordering, 表头也没有指示器。
     await screen.findByText("P1");
-    expect(columnSortOrder("发起时间")).toBe("descend");
+    expect(columnSortOrder("发起时间")).toBeNull();
 
     await user.click(screen.getByTitle("下一页"));
     await screen.findByText("P2");
@@ -291,7 +289,7 @@ describe("ApprovalInstancesPage", () => {
     await user.click(screen.getByTitle("下一页"));
 
     await waitFor(() => {
-      expect(lastListQuery(fetchMock)).toEqual({ page: "2", page_size: "20", ordering: "-created_at" });
+      expect(lastListQuery(fetchMock)).toEqual({ page: "2", page_size: "20" });
     });
     expect(await screen.findByText("P2-0")).toBeVisible();
   });

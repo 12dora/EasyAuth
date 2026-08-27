@@ -93,7 +93,7 @@ describe("HandoverTaskList", () => {
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
-        "/console/api/v1/lifecycle/handover-tasks?page=1&page_size=10&status=cancelled&ordering=-created_at",
+        "/console/api/v1/lifecycle/handover-tasks?page=1&page_size=10&status=cancelled",
         expect.any(Object),
       ),
     );
@@ -122,7 +122,7 @@ describe("HandoverTaskList", () => {
 
     await waitFor(() =>
       expect(fetchMock).toHaveBeenCalledWith(
-        "/console/api/v1/lifecycle/handover-tasks?page=1&page_size=10&blocked=true&ordering=-created_at",
+        "/console/api/v1/lifecycle/handover-tasks?page=1&page_size=10&blocked=true",
         expect.any(Object),
       ),
     );
@@ -146,9 +146,9 @@ describe("HandoverTaskList", () => {
 
     renderList();
 
-    // 首屏的 defaultSort 与后端默认序(-created_at)一致, 表头就带着指示器。
+    // 表格不设默认排序: 首屏不带 ordering, 表头也没有指示器。
     await screen.findByText("员工1");
-    expect(columnSortOrder("创建时间")).toBe("descend");
+    expect(columnSortOrder("创建时间")).toBeNull();
 
     await user.click(screen.getByTitle("下一页"));
     await screen.findByText("员工2");

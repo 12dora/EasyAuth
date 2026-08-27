@@ -99,7 +99,7 @@ describe("ConsoleTeamList", () => {
 
     expect(await screen.findByText("团队2")).toBeVisible();
     await waitFor(() =>
-      expect(fetchMock).toHaveBeenCalledWith("/console/api/v1/teams?page=2&page_size=10&ordering=name", expect.any(Object)),
+      expect(fetchMock).toHaveBeenCalledWith("/console/api/v1/teams?page=2&page_size=10", expect.any(Object)),
     );
   });
 
@@ -127,9 +127,9 @@ describe("ConsoleTeamList", () => {
 
     renderList();
 
-    // 首屏的 defaultSort 与后端默认序(name 升序)一致, 表头就带着指示器。
+    // 表格不设默认排序: 首屏不带 ordering, 表头也没有指示器。
     await screen.findByText("团队1");
-    expect(columnSortOrder("团队名")).toBe("ascend");
+    expect(columnSortOrder("团队名")).toBeNull();
 
     await user.click(screen.getByTitle("2"));
     await screen.findByText("团队2");

@@ -15,8 +15,8 @@ import {
 // 整套用例并行跑时默认 5s 不够; 这里只放宽本文件的用例超时。
 vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
 
-const PENDING_LIST_URL = "/portal/api/v1/me/approvals?status=pending&page=1&page_size=20&ordering=created_at";
-const PROCESSED_LIST_URL = "/portal/api/v1/me/approvals?status=processed&page=1&page_size=20&ordering=-decided_at";
+const PENDING_LIST_URL = "/portal/api/v1/me/approvals?status=pending&page=1&page_size=20";
+const PROCESSED_LIST_URL = "/portal/api/v1/me/approvals?status=processed&page=1&page_size=20";
 const PENDING_DETAIL_URL = "/portal/api/v1/me/approvals/42";
 
 const pendingApproval = {
@@ -505,7 +505,7 @@ describe("PortalApprovalsSection", () => {
   );
 
   test("使用服务端总数并在服务端末页收缩时 clamp 页码", async () => {
-    const pageTwoUrl = "/portal/api/v1/me/approvals?status=pending&page=2&page_size=20&ordering=created_at";
+    const pageTwoUrl = "/portal/api/v1/me/approvals?status=pending&page=2&page_size=20";
     let pageOneCalls = 0;
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
@@ -566,9 +566,9 @@ describe("PortalApprovalsSection", () => {
 
     renderSection();
 
-    // 待办页签的后端默认序是 created_at 正序(最早提交的先处理), defaultSort 与它一致。
+    // 表格不设默认排序: 首屏不带 ordering, 表头也没有指示器。
     expect(await screen.findByText("申请人1")).toBeVisible();
-    expect(columnSortOrder("提交时间")).toBe("ascend");
+    expect(columnSortOrder("提交时间")).toBeNull();
 
     await user.click(screen.getByTitle("下一页"));
     await screen.findByText("申请人2");
@@ -591,10 +591,11 @@ describe("PortalApprovalsSection", () => {
     expect(columnSortOrder("申请人")).toBe("descend");
   });
 
-  test("切到已处理页签时排序回到该页签的后端默认序 -decided_at", async () => {
+  test("切到已处理页签时清掉表头排序, 顺序交回后端默认序", async () => {
+    const sortedPendingUrl = "/portal/api/v1/me/approvals?status=pending&page=1&page_size=20&ordering=applicant";
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
-      if (url === PENDING_LIST_URL) {
+      if (url === PENDING_LIST_URL || url === sortedPendingUrl) {
         return pendingListResponse();
       }
       if (url === PROCESSED_LIST_URL) {
@@ -610,14 +611,21 @@ describe("PortalApprovalsSection", () => {
 
     renderSection();
     await screen.findByText("张三");
+
+    // 先在待办页签排一次序, 才看得出切页签是「清掉排序」而不是「本来就没排序」。
+    await sortByColumn(user, "申请人");
+    await waitFor(() => expect(lastApprovalsUrl(fetchMock)).toBe(sortedPendingUrl));
+    expect(columnSortOrder("申请人")).toBe("ascend");
+
     await user.click(screen.getByRole("tab", { name: "已处理" }));
 
     await waitFor(() => expect(lastApprovalsUrl(fetchMock)).toBe(PROCESSED_LIST_URL));
-    expect(columnSortOrder("处理时间")).toBe("descend");
+    expect(columnSortOrder("申请人")).toBeNull();
+    expect(columnSortOrder("处理时间")).toBeNull();
   });
 
   test("已处理列表展示同意意见和限时授权的具体到期时间", async () => {
-    const processedUrl = "/portal/api/v1/me/approvals?status=processed&page=1&page_size=20&ordering=-decided_at";
+    const processedUrl = "/portal/api/v1/me/approvals?status=processed&page=1&page_size=20";
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(async (input) => {

@@ -19,9 +19,6 @@ const APP_ORDERING_FIELDS = {
   updated_at: "updated_at",
 } as const;
 
-/** 后端默认序是 app_key 升序; defaultSort 与它一致, 首屏表头就带排序指示器。 */
-const APP_DEFAULT_SORT = { field: "app", order: "ascend" } as const;
-
 /** 应用列表的装载、快速新建、行内启停与删除。 */
 export function useConsoleAppList() {
   const navigate = useNavigate();
@@ -33,7 +30,6 @@ export function useConsoleAppList() {
     defaultPageSize: 20,
     filterParams: { status: "status", owners: "owner_user_id" },
     sortParam: ORDERING_PARAM,
-    defaultSort: APP_DEFAULT_SORT,
     serializeSort: orderingSerializer(APP_ORDERING_FIELDS),
   });
   const appsSearch = serverTableQuery(serverTable.params);

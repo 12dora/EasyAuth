@@ -257,7 +257,7 @@ serverSortColumn(
 应用列表的负责人、交接单的负责人与阻塞、审批实例的业务单号、清单版本的导入人……
 
 各页的「列 key -> 后端公开字段名」映射表就写在对应的 hook 里(常量名 `*_ORDERING_FIELDS`),
-和 `defaultSort` 挨着, 改后端允许的排序字段时一处就能对齐。
+和建表的 `useServerTable(...)` 挨着, 改后端允许的排序字段时一处就能对齐。
 
 ## 服务端分页 — `useServerTable`
 
@@ -267,7 +267,6 @@ serverSortColumn(
 ```ts
 const serverTable = useServerTable<Row>({
   defaultPageSize?: 10,
-  defaultSort?: { field: "updated_at", order: "descend" },
   filterParams?: { status: "status", appKey: "app_key", name: { param: "q" } },
   sortParam?: ORDERING_PARAM,                   // "ordering"; DRF 风格, 降序前缀 "-"
   serializeSort?: orderingSerializer({ ... }),  // 列 key 与后端字段名不一致时(见下)
@@ -320,22 +319,22 @@ const REQUEST_ORDERING_FIELDS = {
 
 useServerTable<Row>({
   sortParam: ORDERING_PARAM,
-  defaultSort: { field: "submitted_at", order: "descend" },   // = 后端默认序
   serializeSort: orderingSerializer(REQUEST_ORDERING_FIELDS),
 });
 ```
 
 映射表里没有的列不产生排序参数(那种列本来就不该有 sorter)。
 
-**`defaultSort` 必须等于后端的默认序**: 它既让首屏表头就带上排序指示器, 又保证首屏
-请求带的 `ordering` 与不带时的后端行为一致。`ordering` 也必须一起进查询串与查询键
-(`serverTableQuery(serverTable.params)`), 否则点了表头 react-query 命中旧缓存、不会重新请求。
+**表格一律不设默认排序**: 页面不要传 `defaultSort`(hook 上保留这个能力, 但没人用)。
+首屏不发 `ordering`, 顺序由后端的默认序决定, 表头也就不带排序指示器 —— 全站首屏一致。
+`ordering` 必须一起进查询串与查询键(`serverTableQuery(serverTable.params)`),
+否则点了表头 react-query 命中旧缓存、不会重新请求。
 
 ### 排序随外部状态切换 `setSort`
 
-`defaultSort` 只在建 hook 时生效。门户审批的两个页签后端默认序不同
-(待办 `created_at` 正序 / 已处理 `-decided_at`), 这种「默认序跟着别的状态变」的场景
-在切换时显式调 `setSort(...)`(它自带回到第 1 页), 表头点击仍然只走 `onChange`。
+「排序跟着别的状态变」的场景在切换时显式调 `setSort(...)`(它自带回到第 1 页),
+传 `undefined` 表示清掉排序、把顺序交回后端默认序 —— 门户审批切换待办/已处理页签
+就是这么做的。表头点击仍然只走 `onChange`。
 
 ### 筛选参数映射 `filterParams`
 
@@ -388,8 +387,8 @@ ANTD_TEST_TIMEOUT_MS                          // 30_000
 - `sortByColumn` 点的是 `.ant-table-column-sorters` 而不是整个 `th`: 同时带筛选的列上
   点 `th` 可能命中筛选图标。`columnSortOrder` 读的是 antd 高亮的箭头, 因此服务端排序下
   它同时验证了「受控 `sortOrder` 真的回填到了表头」。
-  注意 antd 的排序是三态循环(升 -> 降 -> 取消): 表头初始就是降序的列(`defaultSort`
-  为 descend), 第一次点击是**取消排序**, 不是转升序。
+  注意 antd 的排序是三态循环(升 -> 降 -> 取消): 表格没有默认排序, 所以首屏点一列
+  是升序、再点是降序、第三次才取消。
 - `openHeaderFilter` 会等下拉真正可见（`.ant-dropdown:not(.ant-dropdown-hidden)`）再返回：
   antd 的下拉延迟挂载、收起时带动画，直接查 `.ant-table-filter-dropdown` 会拿到上一个。
   列名按「先前缀、后包含」匹配表头（固定列会让同一个标题在 DOM 里出现两次）。

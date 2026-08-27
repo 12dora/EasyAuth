@@ -58,9 +58,6 @@ const DEFAULT_PAGE_SIZE = 20;
  * 应用列同时显示名字与 app_key, 排序按后端默认序的那一个(app_key)。
  */
 const GRANT_ORDERING_FIELDS = { app: "app_key", grant_expires_at: "expires_at" } as const;
-/** 后端默认序是 app_key 升序; defaultSort 与它一致, 首屏表头就带排序指示器。 */
-const GRANT_DEFAULT_SORT = { field: "app", order: "ascend" } as const;
-
 /** 申请表: 提交时间列的 key 是 payload 的 submitted_at, 后端公开的排序字段名叫 created_at。 */
 const REQUEST_ORDERING_FIELDS = {
   submitted_at: "created_at",
@@ -68,9 +65,6 @@ const REQUEST_ORDERING_FIELDS = {
   app: "app_key",
   grant_expires_at: "expires_at",
 } as const;
-/** 后端默认序是 -created_at(即按提交时间倒序)。 */
-const REQUEST_DEFAULT_SORT = { field: "submitted_at", order: "descend" } as const;
-
 export function PortalPage({ view }: { view: PortalView }) {
   const { t } = useI18n();
   const outletContext = useOutletContext<AppShellOutletContext | null>();
@@ -126,7 +120,6 @@ function PortalGrantSection({
   const serverTable = useServerTable<PortalGrantRow>({
     defaultPageSize: DEFAULT_PAGE_SIZE,
     sortParam: ORDERING_PARAM,
-    defaultSort: GRANT_DEFAULT_SORT,
     serializeSort: orderingSerializer(GRANT_ORDERING_FIELDS),
   });
   const sort = serverTable.query;
@@ -232,7 +225,6 @@ function PortalRequestSection() {
   const serverTable = useServerTable<PortalRequestRow>({
     defaultPageSize: DEFAULT_PAGE_SIZE,
     sortParam: ORDERING_PARAM,
-    defaultSort: REQUEST_DEFAULT_SORT,
     serializeSort: orderingSerializer(REQUEST_ORDERING_FIELDS),
   });
   const sort = serverTable.query;

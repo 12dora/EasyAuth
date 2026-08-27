@@ -35,9 +35,6 @@ const SYNC_RUN_ORDERING_FIELDS = {
   status: "status",
 } as const;
 
-/** 后端默认序是 -started_at; defaultSort 与它一致, 首屏表头就带排序指示器。 */
-const SYNC_RUN_DEFAULT_SORT = { field: "started_at", order: "descend" } as const;
-
 export function SyncRunsPanel({
   appKey,
   instance,
@@ -49,7 +46,6 @@ export function SyncRunsPanel({
   const serverTable = useServerTable<ConnectorSyncRunItem>({
     defaultPageSize: 10,
     sortParam: ORDERING_PARAM,
-    defaultSort: SYNC_RUN_DEFAULT_SORT,
     serializeSort: orderingSerializer(SYNC_RUN_ORDERING_FIELDS),
   });
   const sort: ServerSortState = serverTable.query;

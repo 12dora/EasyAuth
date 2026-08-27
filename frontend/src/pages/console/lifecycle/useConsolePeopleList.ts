@@ -24,9 +24,6 @@ const PEOPLE_ORDERING_FIELDS = {
   status: "status",
 } as const;
 
-/** 后端默认序是 name 升序; defaultSort 与它一致, 首屏表头就带排序指示器。 */
-const PEOPLE_DEFAULT_SORT = { field: "name", order: "ascend" } as const;
-
 /** 人员列表的过滤、分页与发起交接单。 */
 export function useConsolePeopleList() {
   const navigate = useNavigate();
@@ -38,7 +35,6 @@ export function useConsolePeopleList() {
     defaultPageSize: DEFAULT_PAGE_SIZE,
     filterParams: { status: "status" },
     sortParam: ORDERING_PARAM,
-    defaultSort: PEOPLE_DEFAULT_SORT,
     serializeSort: orderingSerializer(PEOPLE_ORDERING_FIELDS),
   });
   const { setPage } = serverTable;

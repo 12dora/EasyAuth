@@ -8,7 +8,6 @@ import {
   orderingSerializer,
   serverTableQuery,
   useServerTable,
-  type ServerSortValue,
   type UseServerTableResult,
 } from "../../../components/antd/AppTable";
 import { useI18n } from "../../../i18n/I18nProvider";
@@ -42,16 +41,6 @@ const APPROVAL_ORDERING_FIELDS = {
   applicant: "applicant",
 } as const;
 
-/**
- * 两个页签的后端默认序不同: 待办按提交时间正序(最早的先处理), 已处理按决定时间倒序。
- * `defaultSort` 只在建 hook 时生效, 所以切页签时要显式把排序改到对应的默认值,
- * 否则已处理页会沿用待办的 created_at 序, 与后端默认行为不一致。
- */
-const APPROVAL_DEFAULT_SORT: Record<ApprovalTab, ServerSortValue> = {
-  pending: { field: "submitted_at", order: "ascend" },
-  processed: { field: "decided_at", order: "descend" },
-};
-
 export interface PortalApprovalsController {
   tab: ApprovalTab;
   switchTab: (nextTab: ApprovalTab) => void;
@@ -77,7 +66,6 @@ export function usePortalApprovals(): PortalApprovalsController {
   const serverTable = useServerTable<PortalApprovalRow>({
     defaultPageSize: DEFAULT_PAGE_SIZE,
     sortParam: ORDERING_PARAM,
-    defaultSort: APPROVAL_DEFAULT_SORT.pending,
     serializeSort: orderingSerializer(APPROVAL_ORDERING_FIELDS),
   });
   // status 由页签给出, 不走表头筛选; ordering 必须一起进查询串和查询键,
@@ -150,8 +138,9 @@ export function usePortalApprovals(): PortalApprovalsController {
   };
   const switchTab = (nextTab: ApprovalTab) => {
     setTab(nextTab);
+    // 两个页签各自的顺序交给后端默认序, 切页签时清掉表头排序;
     // setSort 自带「回到第 1 页」, 因此不必再 setPage(1)。
-    serverTable.setSort(APPROVAL_DEFAULT_SORT[nextTab]);
+    serverTable.setSort(undefined);
   };
 
   // 服务端总页数收缩时(别的审批人先处理掉了)当前页可能已越界, 钳回最后一页。
