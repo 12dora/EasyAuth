@@ -92,14 +92,14 @@ async function setConsoleAdmin(page: Page) {
     await route.fulfill({
       response,
       body: html
-        .replace("<body", '<body data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001" data-current-user-is-superuser="true" data-current-user-can-access-console="true"')
+        .replace("<body", '<body data-current-user-role="admin" data-current-user-id="admin-001" data-current-user-is-superuser="true" data-current-user-can-access-console="true"')
         .replace(
           '<div id="root"',
-          '<div id="root" data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001" data-current-user-is-superuser="true" data-current-user-can-access-console="true"',
+          '<div id="root" data-current-user-role="admin" data-current-user-id="admin-001" data-current-user-is-superuser="true" data-current-user-can-access-console="true"',
         )
         .replace(
           '<div id="easyauth-root"',
-          '<div id="easyauth-root" data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001" data-current-user-is-superuser="true" data-current-user-can-access-console="true"',
+          '<div id="easyauth-root" data-current-user-role="admin" data-current-user-id="admin-001" data-current-user-is-superuser="true" data-current-user-can-access-console="true"',
         ),
       headers: { ...response.headers(), "content-type": "text/html" },
     });

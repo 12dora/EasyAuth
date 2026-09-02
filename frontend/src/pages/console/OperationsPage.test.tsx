@@ -18,7 +18,7 @@ describe("OperationsPage", () => {
   });
 
   test("系统管理员打开运营页时请求运营 API 并渲染数据", async () => {
-    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    document.body.dataset.currentUserRole = "admin";
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       if (String(input) === "/console/api/v1/operations/access-requests?page=1&page_size=20") {
         return jsonResponse({
@@ -51,7 +51,7 @@ describe("OperationsPage", () => {
   });
 
   test("审计分区按后端审计字段渲染列(FF-2)", async () => {
-    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    document.body.dataset.currentUserRole = "admin";
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       if (String(input) === "/console/api/v1/audit-logs?page=1&page_size=20") {
         return jsonResponse({
@@ -97,7 +97,7 @@ describe("OperationsPage", () => {
   });
 
   test("翻页触发服务端分页请求(FF-1)", async () => {
-    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    document.body.dataset.currentUserRole = "admin";
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
       if (url === "/console/api/v1/operations/access-requests?page=1&page_size=20") {
@@ -132,7 +132,7 @@ describe("OperationsPage", () => {
   });
 
   test("筛选由 URL 承载并传给运营 API(FF-21)", async () => {
-    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    document.body.dataset.currentUserRole = "admin";
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
       if (url.startsWith("/console/api/v1/operations/access-requests?")) {
@@ -178,7 +178,7 @@ describe("OperationsPage", () => {
   });
 
   test("表头的时间范围筛选写回 URL 的 created_from/created_to(FF-21)", async () => {
-    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    document.body.dataset.currentUserRole = "admin";
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
       if (url.startsWith("/console/api/v1/audit-logs?")) {
@@ -219,7 +219,7 @@ describe("OperationsPage", () => {
   });
 
   test("展示失败原因并通过带原因确认框重试授权(FF-21)", async () => {
-    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    document.body.dataset.currentUserRole = "admin";
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === "/console/api/v1/operations/access-requests?page=1&page_size=20") {
@@ -271,7 +271,7 @@ describe("OperationsPage", () => {
   });
 
   test("审批已提交但授权落地失败时关闭弹窗并刷新申请列表", async () => {
-    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    document.body.dataset.currentUserRole = "admin";
     let listCalls = 0;
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
@@ -323,7 +323,7 @@ describe("OperationsPage", () => {
   });
 
   test("授权列表展示版本状态并通过带原因确认框紧急撤权(FF-21)", async () => {
-    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    document.body.dataset.currentUserRole = "admin";
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url.startsWith("/console/api/v1/operations/access-grants?")) {
@@ -393,7 +393,7 @@ describe("OperationsPage", () => {
   });
 
   test("未接入应用清单走客户端分页(迁移前没有分页)", async () => {
-    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    document.body.dataset.currentUserRole = "admin";
     const apps = Array.from({ length: 12 }, (_, index) => ({
       app_key: `app-${index + 1}`,
       app_name: `应用 ${index + 1}`,
@@ -422,7 +422,7 @@ describe("OperationsPage", () => {
   });
 
   test("依赖健康分区在客户端筛选状态且不请求后端", async () => {
-    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    document.body.dataset.currentUserRole = "admin";
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       if (String(input) === "/console/api/v1/operations/dependency-health") {
         return jsonResponse({
@@ -453,7 +453,7 @@ describe("OperationsPage", () => {
   test("授权列表的创建时间范围仍由表格上方控件承载并写回 URL", async () => {
     // 授权列表载荷里没有 created_at 字段, 没有时间列可以挂表头筛选,
     // 因此这是全站唯一保留在表格上方的筛选控件。
-    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    document.body.dataset.currentUserRole = "admin";
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
       if (url.startsWith("/console/api/v1/operations/access-grants?")) {
@@ -486,7 +486,7 @@ describe("OperationsPage", () => {
   });
 
   test("授权列表的创建时间范围可一键清除, 且没有值时不显示清除按钮", async () => {
-    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    document.body.dataset.currentUserRole = "admin";
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
       if (url.startsWith("/console/api/v1/operations/access-grants?")) {
@@ -518,7 +518,7 @@ describe("OperationsPage", () => {
   });
 
   test("紧急撤权目标不存在时显示冲突并刷新授权列表", async () => {
-    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    document.body.dataset.currentUserRole = "admin";
     let listCalls = 0;
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);

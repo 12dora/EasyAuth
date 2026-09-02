@@ -37,7 +37,7 @@ function renderShell(
     id: currentUserId,
     isSuperuser: mode === "console",
     logoutUrl: "/auth/logout/",
-    role: mode === "console" ? "EasyAuth Admins" : "研发中心",
+    role: mode === "console" ? ("admin" as const) : ("member" as const),
   };
 
   renderWithQueryClient(
@@ -80,7 +80,7 @@ describe("AppShell", () => {
     expect(screen.getByRole("img", { name: "EasyAuth" })).toBeVisible();
     expect(screen.getByRole("button", { name: "切换语言" })).toBeVisible();
     expect(screen.getByText("控制台用户")).toBeVisible();
-    expect(screen.getByText("EasyAuth Admins")).toBeVisible();
+    expect(screen.getByText("EasyAuth 管理员")).toBeVisible();
     expect(screen.getByRole("img", { name: "控制台用户 的头像" })).toHaveAttribute(
       "src",
       "https://authentik.example.test/media/avatars/alice.png",
@@ -95,7 +95,7 @@ describe("AppShell", () => {
 
     expect(screen.getByLabelText("EasyAuth 员工门户")).toBeVisible();
     expect(screen.getByText("张三")).toBeVisible();
-    expect(screen.getByText("研发中心")).toBeVisible();
+    expect(screen.getByText("成员")).toBeVisible();
     expect(screen.queryByText("系统管理员")).not.toBeInTheDocument();
     expect(screen.queryByText("alice@example.com")).not.toBeInTheDocument();
     expect(within(screen.getByRole("navigation", { name: "主导航" })).getByText("我的权限")).toBeVisible();
@@ -109,7 +109,7 @@ describe("AppShell", () => {
             <Route
               element={
                 <AppShell
-                  currentUser={{ avatarUrl: "javascript:alert(1)", displayName: "张三", id: "u1", logoutUrl: "/auth/logout/" }}
+                  currentUser={{ avatarUrl: "javascript:alert(1)", displayName: "张三", id: "u1", logoutUrl: "/auth/logout/", role: "member" }}
                   mode="portal"
                 />
               }
@@ -133,7 +133,7 @@ describe("AppShell", () => {
             <Route
               element={
                 <AppShell
-                  currentUser={{ avatarUrl: "/media/avatars/alice.png", displayName: "张三", id: "u1", logoutUrl: "/auth/logout/" }}
+                  currentUser={{ avatarUrl: "/media/avatars/alice.png", displayName: "张三", id: "u1", logoutUrl: "/auth/logout/", role: "member" }}
                   mode="portal"
                 />
               }
@@ -158,6 +158,7 @@ describe("AppShell", () => {
                 currentUser={{
                   id: "dingmockcorp000000000000000000000000:100000000000000001",
                   logoutUrl: "/auth/logout/",
+                  role: "member",
                 }}
                 mode="portal"
               />
@@ -203,7 +204,7 @@ describe("AppShell", () => {
             displayName: "张三",
             id: "alice@example.com",
             logoutUrl: "/auth/logout/",
-            role: "研发中心",
+            role: "member",
           }}
           shell="portal"
         />
@@ -295,6 +296,7 @@ describe("AppShell", () => {
                   displayName: "张三",
                   id: "alice@example.com",
                   logoutUrl: "https://authentik.example.test/if/session-end/easyauth/",
+                  role: "member",
                 }}
                 mode="portal"
               />
@@ -364,7 +366,7 @@ describe("AppShell", () => {
             <Route
               element={
                 <AppShell
-                  currentUser={{ displayName: "控制台用户", id: "admin", isSuperuser: true, logoutUrl: "/auth/logout/" }}
+                  currentUser={{ displayName: "控制台用户", id: "admin", isSuperuser: true, logoutUrl: "/auth/logout/", role: "admin" }}
                   currentUserId="admin"
                   mode="console"
                 />

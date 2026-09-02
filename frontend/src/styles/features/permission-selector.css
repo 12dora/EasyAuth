@@ -206,21 +206,30 @@
   background-clip: padding-box;
 }
 
+/*
+ * 左侧粘住的这一列(以及它的表头)底色必须不透明: 横向滚动时右边的单元格会从它底下经过,
+ * 半透明底色一来会把滚过去的文字透上来叠成两层, 二来行自己的底色(row--selected /
+ * row--group-selected)还会再透一层, 粘住的这一格看起来比同一行的其它格更深。
+ * 因此这里都写成合成好的不透明色: tint 各自合成到这一列本来的底色上
+ * (普通行 --paper, 分组行 --paper-deep), 与 app-table.css 里 antd 固定列的处理同一个口径。
+ */
 .permission-selector__sticky-column--header {
   z-index: 24;
-  background: rgb(var(--paper-deep) / 0.98);
+  background: rgb(var(--paper-deep));
 }
 
 .permission-selector__row--group > .permission-selector__sticky-column {
   background: rgb(var(--paper-deep));
 }
 
+/* rgb(var(--accent) / 0.055) 合成到 --paper 之上。 */
 .permission-selector__row--selected > .permission-selector__sticky-column {
-  background: rgb(var(--accent) / 0.055);
+  background: rgb(243 246 254);
 }
 
+/* rgb(var(--accent) / 0.075) 合成到 --paper-deep 之上。 */
 .permission-selector__row--group-selected > .permission-selector__sticky-column {
-  background: rgb(var(--accent) / 0.075);
+  background: rgb(232 239 251);
 }
 
 .permission-selector__row--entering {

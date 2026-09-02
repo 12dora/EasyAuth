@@ -23,7 +23,7 @@ describe("ConsoleAppList", () => {
   });
 
   test("管理员看到快速新建和接入向导入口", async () => {
-    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    document.body.dataset.currentUserRole = "admin";
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => jsonResponse({ data: [] })));
 
     renderList();
@@ -33,7 +33,7 @@ describe("ConsoleAppList", () => {
   });
 
   test("管理员可以在列表行内启停，并在核对应用名称和 Key 后删除", async () => {
-    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    document.body.dataset.currentUserRole = "admin";
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url.startsWith("/console/api/v1/apps?") && !init?.method) {
@@ -96,7 +96,7 @@ describe("ConsoleAppList", () => {
   });
 
   test("表头状态筛选映射成后端 status 查询参数并回到第 1 页", async () => {
-    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    document.body.dataset.currentUserRole = "admin";
     const fetchMock = vi.fn<typeof fetch>(async () => jsonResponse({ data: [], pagination: emptyPagination() }));
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup();
@@ -115,7 +115,7 @@ describe("ConsoleAppList", () => {
   });
 
   test("表头排序是服务端排序: 带 ordering 请求、回到第 1 页, 指示器跟着走", async () => {
-    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    document.body.dataset.currentUserRole = "admin";
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const page = new URLSearchParams(String(input).split("?")[1]).get("page") ?? "1";
       return jsonResponse({
@@ -160,7 +160,7 @@ describe("ConsoleAppList", () => {
   });
 
   test("表头筛选是服务端筛选: 确定后图标保持高亮, 当前页不再被客户端筛一遍", async () => {
-    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    document.body.dataset.currentUserRole = "admin";
     // 后端按 status=active 返回的这一页里混着一行 is_active: false —— 翻页时
     // placeholderData 留下的上一页就是这样。客户端再筛一遍会把它静默丢掉。
     const fetchMock = vi.fn<typeof fetch>(async () =>
@@ -209,7 +209,7 @@ describe("ConsoleAppList", () => {
   });
 
   test("创建成功后跳转到新应用工作区", async () => {
-    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    document.body.dataset.currentUserRole = "admin";
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url.startsWith("/console/api/v1/apps?") && !init?.method) {

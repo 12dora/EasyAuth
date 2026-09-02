@@ -112,7 +112,7 @@ function renderTopbar(
         <Topbar
           brandLogoUrl="/assets/brand/jiefa_logo.webp"
           mode={mode}
-          currentUser={{ id: "admin", displayName: "管理员", role: "EasyAuth Admins", canAccessConsole }}
+          currentUser={{ id: "admin", displayName: "管理员", role: "admin", canAccessConsole }}
         />
       </I18nProvider>
     </MemoryRouter>,

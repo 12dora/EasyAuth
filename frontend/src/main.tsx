@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 
 import { App } from "./App";
-import type { CurrentUser } from "./App";
+import type { CurrentUser, CurrentUserRole } from "./App";
 import { UnsupportedBrowserPage } from "./components/UnsupportedBrowserPage";
 import { AppConfigProvider } from "./components/antd/AppConfigProvider";
 import { ToastProvider } from "./components/ui/Toast";
@@ -71,10 +71,21 @@ function readCurrentUser(root: HTMLElement, currentUserId: string): CurrentUser 
     displayName: dataset.currentUserDisplayName ?? "",
     id: currentUserId,
     logoutUrl: dataset.logoutUrl ?? "/auth/logout/",
-    role: dataset.currentUserRole ?? "",
+    role: readCurrentUserRole(dataset.currentUserRole),
     isSuperuser: dataset.currentUserIsSuperuser === "true",
     canAccessConsole: dataset.currentUserCanAccessConsole === "true",
   };
+}
+
+/**
+ * `data-current-user-role` 只接受后端 ShellRole 的两个 code。
+ * 认不出来说明后端契约变了, 必须当场炸掉: 静默给个默认角色只会让顶栏显示一个假身份。
+ */
+function readCurrentUserRole(value: string | undefined): CurrentUserRole {
+  if (value === "admin" || value === "member") {
+    return value;
+  }
+  throw new Error(`data-current-user-role 不是已知的角色 code: ${String(value)}`);
 }
 
 function readBrandLogoUrl(root: HTMLElement): string {

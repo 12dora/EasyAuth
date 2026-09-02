@@ -941,7 +941,7 @@ describe("ConsoleAppWorkspace", () => {
   });
 
   test("总览页支持成员查看、新增和停用", async () => {
-    document.body.dataset.currentUserRole = "EasyAuth Admins";
+    document.body.dataset.currentUserRole = "admin";
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === "/console/api/v1/apps/demo") {

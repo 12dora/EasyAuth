@@ -41,7 +41,7 @@ def test_console_home_serves_react_shell_for_authenticated_admin(
     assert 'data-brand-logo-url="/static/easyauth/frontend/assets/brand/jiefa_logo.webp"' in html
     assert 'data-current-user-id="react-console-admin"' in html
     assert 'data-current-user-display-name="控制台用户"' in html
-    assert 'data-current-user-role="EasyAuth Admins"' in html
+    assert 'data-current-user-role="admin"' in html
     assert 'data-current-user-is-superuser="true"' in html
     assert 'data-current-user-can-access-console="true"' in html
     assert (
@@ -207,7 +207,7 @@ def test_portal_serves_react_shell_for_active_session_user() -> None:
     assert 'data-easyauth-react-shell="portal"' in html
     assert 'data-current-user-id="react-portal-user"' in html
     assert 'data-current-user-display-name="门户用户"' in html
-    assert 'data-current-user-role="Member"' in html
+    assert 'data-current-user-role="member"' in html
     assert 'data-current-user-can-access-console="false"' in html
     assert (
         'data-current-user-avatar-url="https://authentik.example.test/media/avatars/portal.png"'
@@ -261,7 +261,7 @@ def test_portal_shell_marks_active_app_member_as_console_accessible(
     assert f'data-current-user-id="{user_id}"' in html
     assert 'data-current-user-can-access-console="true"' in html
     assert 'data-current-user-is-superuser="false"' in html
-    assert 'data-current-user-role="Member"' in html
+    assert 'data-current-user-role="member"' in html
 
 
 def test_portal_shell_marks_plain_member_as_not_console_accessible(
@@ -281,7 +281,7 @@ def test_portal_shell_marks_plain_member_as_not_console_accessible(
     assert 'data-current-user-id="react-portal-plain-member"' in html
     assert 'data-current-user-can-access-console="false"' in html
     assert 'data-current-user-is-superuser="false"' in html
-    assert 'data-current-user-role="Member"' in html
+    assert 'data-current-user-role="member"' in html
 
 
 def test_portal_shell_marks_inactive_membership_as_not_console_accessible(
@@ -307,7 +307,7 @@ def test_portal_shell_marks_inactive_membership_as_not_console_accessible(
     assert 'data-current-user-id="react-portal-inactive-owner"' in html
     assert 'data-current-user-can-access-console="false"' in html
     assert 'data-current-user-is-superuser="false"' in html
-    assert 'data-current-user-role="Member"' in html
+    assert 'data-current-user-role="member"' in html
 
 
 def test_logged_out_page_serves_portal_react_shell_without_current_user() -> None:

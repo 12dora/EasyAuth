@@ -28,7 +28,8 @@ export function UserSummary({ currentUser, mode, open, onOpenChange }: UserSumma
     currentUser.displayName,
     mode === "console" ? t("shell.user.consoleFallback") : t("shell.user.portalFallback"),
   );
-  const userRole = firstPresent(currentUser.role, t("shell.user.ungrouped"));
+  // role 是后端下发的 code, 展示名只在 i18n 里; 顶栏不得直接印 code。
+  const userRole = currentUser.role === "admin" ? t("shell.user.role.admin") : t("shell.user.role.member");
   const logoutUrl = localLogoutUrl(currentUser.logoutUrl);
   const avatarUrl = safeAvatarUrl(currentUser.avatarUrl);
   const avatarLabel = userName.slice(0, 1).toUpperCase();

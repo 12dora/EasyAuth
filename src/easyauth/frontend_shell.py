@@ -20,7 +20,11 @@ if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
 
 type ShellName = Literal["console", "portal"]
+# 壳层只下发角色 code, 展示名由前端 i18n 决定; 后端不再产出「Member」这类英文标签。
+type ShellRole = Literal["admin", "member"]
 
+SHELL_ROLE_ADMIN: Final[ShellRole] = "admin"
+SHELL_ROLE_MEMBER: Final[ShellRole] = "member"
 REACT_SHELL_TEMPLATE: Final = "easyauth/react_shell.html"
 VITE_ENTRY: Final = "src/main.tsx"
 VITE_MANIFEST_PATH: Final = Path("src/easyauth/static/easyauth/frontend/.vite/manifest.json")
@@ -46,7 +50,7 @@ class ViteEntryAssets:
 class ShellUser:
     user_id: str
     display_name: str
-    role: str
+    role: ShellRole
     # 门户「管理后台」入口: 超管, 或至少能看见一个 App 的 owner/developer。
     can_access_console: bool = False
     is_superuser: bool = False
@@ -140,7 +144,7 @@ def shell_user_from_user(request: HttpRequest, user: UserMirror) -> ShellUser:
     return ShellUser(
         user_id=user.authentik_user_id,
         display_name=_display_name(user),
-        role=_role_label(is_superuser=is_superuser),
+        role=_role_code(is_superuser=is_superuser),
         can_access_console=can_access_console,
         is_superuser=is_superuser,
         avatar_url=user.avatar_url,
@@ -211,11 +215,11 @@ def _display_name(user: UserMirror) -> str:
     return "当前用户"
 
 
-def _role_label(*, is_superuser: bool) -> str:
+def _role_code(*, is_superuser: bool) -> ShellRole:
     # role 仅作展示; 门禁以 can_access_console / is_superuser / 后端 membership 为准。
     if is_superuser:
-        return "EasyAuth Admins"
-    return "Member"
+        return SHELL_ROLE_ADMIN
+    return SHELL_ROLE_MEMBER
 
 
 def _session_string(request: HttpRequest, key: str) -> str:

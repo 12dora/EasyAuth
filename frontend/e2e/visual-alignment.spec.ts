@@ -69,27 +69,27 @@ async function setConsoleAdmin(page: Page) {
     await route.fulfill({
       response,
       body: html
-        .replace("<body", '<body data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001" data-current-user-is-superuser="true" data-current-user-can-access-console="true"')
+        .replace("<body", '<body data-current-user-role="admin" data-current-user-id="admin-001" data-current-user-is-superuser="true" data-current-user-can-access-console="true"')
         .replace(
           '<div id="root"',
-          '<div id="root" data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001" data-current-user-is-superuser="true" data-current-user-can-access-console="true"',
+          '<div id="root" data-current-user-role="admin" data-current-user-id="admin-001" data-current-user-is-superuser="true" data-current-user-can-access-console="true"',
         )
         .replace(
           '<div id="easyauth-root"',
-          '<div id="easyauth-root" data-current-user-role="EasyAuth Admins" data-current-user-id="admin-001" data-current-user-is-superuser="true" data-current-user-can-access-console="true"',
+          '<div id="easyauth-root" data-current-user-role="admin" data-current-user-id="admin-001" data-current-user-is-superuser="true" data-current-user-can-access-console="true"',
         ),
       headers: { ...response.headers(), "content-type": "text/html" },
     });
   });
   await page.addInitScript(() => {
-    document.documentElement.dataset.currentUserRole = "EasyAuth Admins";
+    document.documentElement.dataset.currentUserRole = "admin";
     document.addEventListener("DOMContentLoaded", () => {
-      document.body.dataset.currentUserRole = "EasyAuth Admins";
+      document.body.dataset.currentUserRole = "admin";
       document.body.dataset.currentUserId = "admin-001";
       document.body.dataset.currentUserIsSuperuser = "true";
       const root = document.getElementById("easyauth-root") ?? document.getElementById("root");
       if (root) {
-        root.dataset.currentUserRole = "EasyAuth Admins";
+        root.dataset.currentUserRole = "admin";
         root.dataset.currentUserId = "admin-001";
         root.dataset.currentUserIsSuperuser = "true";
       }

@@ -51,8 +51,14 @@ export const CONTROL_HEIGHT_SM = 28;
 export const CONTROL_HEIGHT = 36;
 export const CONTROL_HEIGHT_LG = 44;
 
-/** 行悬停底色 = Tailwind 的 `hover:bg-accent/5`(TABLE_ROW_CLASS)。 */
-const ROW_HOVER_BG = "rgba(37, 99, 235, 0.05)";
+/**
+ * 行悬停底色 = Tailwind 的 `hover:bg-accent/5`(TABLE_ROW_CLASS)。
+ *
+ * 半透明色对固定列(`fixed: "left"/"right"`)是不成立的: 横向滚动的单元格会从底下透上来。
+ * src/styles/features/app-table.css 把这个值合成到 colorBgContainer 之上、写成不透明的
+ * `#f4f7fe` 再钉给固定单元格; 改这里必须同改那边, AppTable.test.tsx 会断言两边一致。
+ */
+export const ROW_HOVER_BG = "rgba(37, 99, 235, 0.05)";
 
 /**
  * 应用尚无深色主题(index.css 固定 `color-scheme: light`, 全仓无 `dark:` 变体、

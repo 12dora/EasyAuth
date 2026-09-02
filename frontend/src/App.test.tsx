@@ -54,7 +54,7 @@ function renderApp(path: string, shell: "console" | "portal") {
           <MemoryRouter initialEntries={[path]}>
             <App
               shell={shell}
-              currentUser={{ id: "admin", displayName: "管理员", isSuperuser: true }}
+              currentUser={{ id: "admin", displayName: "管理员", isSuperuser: true, role: "admin" }}
               currentUserId="admin"
             />
           </MemoryRouter>

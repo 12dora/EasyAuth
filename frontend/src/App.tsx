@@ -63,12 +63,18 @@ interface AppProps {
   brandLogoUrl?: string;
 }
 
+/**
+ * 后端 `data-current-user-role` 下发的角色 code(src/easyauth/frontend_shell.py 的 ShellRole)。
+ * 只有两个取值, 展示名一律由 i18n 决定; 后端不下发、前端也不接受展示用的角色标签。
+ */
+export type CurrentUserRole = "admin" | "member";
+
 export interface CurrentUser {
   avatarUrl?: string;
   displayName?: string;
   id: string;
   logoutUrl?: string;
-  role?: string;
+  role: CurrentUserRole;
   /** 权威超管能力; 不得用本地化 role 展示字符串做门禁。 */
   isSuperuser?: boolean;
   /** 后端判定的控制台准入能力; 门户壳层据此展示「管理后台」入口。 */

@@ -1,3 +1,4 @@
+import { theme } from "antd";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { readFileSync } from "node:fs";
@@ -36,6 +37,7 @@ import {
   userColumn,
 } from "./columns";
 import { ANTD_TEST_TIMEOUT_MS, columnSortOrder, openHeaderFilter, renderWithAntd, sortByColumn } from "./testing";
+import { APP_ANTD_THEME, ROW_HOVER_BG } from "./theme";
 
 // antd Table 在 jsdom 里每次筛选/排序都要重建整棵表格, 比自研原语慢得多,
 // 默认 5s 不够; 这里只放宽本文件的用例超时。
@@ -722,5 +724,109 @@ describe("类型再导出", () => {
     expect(
       handleChange(undefined, { status: ["active"] }, { columnKey: "status" }, { currentDataSource: ROWS, action: "filter" }),
     ).toEqual({ filters: { status: ["active"] }, field: "status", action: "filter" });
+  });
+});
+
+describe("固定列的行态底色", () => {
+  const ANTD_TOKENS = theme.getDesignToken(APP_ANTD_THEME);
+  /** app-table.css 里三条固定单元格规则各自的判别式(选择器里出现哪些行态类)。 */
+  const FIXED_CELL_STATES = {
+    hover: (selector: string) =>
+      selector.includes(".ant-table-cell-row-hover") && !selector.includes(".ant-table-row-selected"),
+    selected: (selector: string) =>
+      selector.includes(".ant-table-row-selected") && !selector.includes(".ant-table-cell-row-hover"),
+    selectedHover: (selector: string) =>
+      selector.includes(".ant-table-row-selected") && selector.includes(".ant-table-cell-row-hover"),
+  } as const;
+
+  const FIXED_COLUMNS: ColumnsType<Row> = [
+    textColumn<Row>({ key: "name", title: "Name" }),
+    actionsColumn<Row>({ render: (row) => <button type="button">edit {row.id}</button> }),
+  ];
+
+  function fixedCellRule(state: keyof typeof FIXED_CELL_STATES): { selectors: string[]; background: string } {
+    // 只解析 background 一项: 用例断的就是「这三种行态的固定单元格底色是什么」。
+    const source = APP_TABLE_CSS.replace(/\/\*[\s\S]*?\*\//g, "");
+    const rules = [...source.matchAll(/([^{}]+)\{([^}]*)\}/g)]
+      .map(([, selectorList, body]) => ({
+        selectors: (selectorList ?? "").split(",").map((selector) => selector.trim()).filter(Boolean),
+        background: (/background:\s*([^;]+);/.exec(body ?? "")?.[1] ?? "").trim(),
+      }))
+      .filter((rule) => rule.selectors.every((selector) => selector.includes(".ant-table-cell-fix-")));
+    const matched = rules.filter((rule) => rule.selectors.every(FIXED_CELL_STATES[state]));
+    expect(matched).toHaveLength(1);
+    return matched[0] as { selectors: string[]; background: string };
+  }
+
+  /** 半透明底色画到不透明背景上的结果; 浏览器就是这么合成行悬停色的。 */
+  function compositeToHex(overlay: string, base: string): string {
+    const overlayChannels = /rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*,\s*([\d.]+)\s*\)/.exec(overlay);
+    if (!overlayChannels) {
+      throw new Error(`不是 rgba() 色值: ${overlay}`);
+    }
+    const alpha = Number(overlayChannels[4]);
+    const baseChannels = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(base);
+    if (!baseChannels) {
+      throw new Error(`不是 #rrggbb 色值: ${base}`);
+    }
+    const channels = [1, 2, 3].map((index) => {
+      const overlayChannel = Number(overlayChannels[index]);
+      const baseChannel = Number.parseInt(baseChannels[index] ?? "", 16);
+      return Math.round(overlayChannel * alpha + baseChannel * (1 - alpha));
+    });
+    return `#${channels.map((channel) => channel.toString(16).padStart(2, "0")).join("")}`;
+  }
+
+  test("样式表给三种行态都写了不透明底色, 色值与 theme.ts / antd 令牌一致", () => {
+    // 半透明的行悬停色是 bug 的来源, 也是不透明色的唯一出处。
+    expect(APP_ANTD_THEME.components?.Table?.rowHoverBg).toBe(ROW_HOVER_BG);
+
+    const expected = {
+      hover: compositeToHex(ROW_HOVER_BG, ANTD_TOKENS.colorBgContainer),
+      selected: ANTD_TOKENS.controlItemBgActive,
+      selectedHover: ANTD_TOKENS.controlItemBgActiveHover,
+    } as const;
+
+    for (const state of ["hover", "selected", "selectedHover"] as const) {
+      const rule = fixedCellRule(state);
+      // 现在只有操作列(fix-right)固定, 但左固定列是同一个 bug, 必须一起钉住。
+      expect(rule.selectors.some((selector) => selector.includes(".ant-table-cell-fix-left"))).toBe(true);
+      expect(rule.selectors.some((selector) => selector.includes(".ant-table-cell-fix-right"))).toBe(true);
+      // 不透明: 只要带 alpha, 从固定列底下滚过去的单元格就会透上来。
+      expect(rule.background).toMatch(/^#[0-9a-f]{6}$/i);
+      expect(rule.background.toLowerCase()).toBe(expected[state].toLowerCase());
+    }
+  });
+
+  test("hover 与选中态下, 固定列单元格算出来的底色确实是不透明色", () => {
+    const style = installAppTableStylesheet();
+    renderWithAntd(
+      <AppTable<Row>
+        columns={FIXED_COLUMNS}
+        dataSource={ROWS.slice(0, 3)}
+        minWidth={900}
+        pagination={false}
+        rowKey="id"
+        rowSelection={{ selectedRowKeys: ["row-2"] }}
+      />,
+    );
+
+    const rows = [...document.querySelectorAll(".ant-table-tbody > tr.ant-table-row")];
+    const fixedCell = (row: Element) => row.querySelector("td.ant-table-cell-fix-right") as HTMLElement;
+    const background = (cell: HTMLElement) => window.getComputedStyle(cell).backgroundColor;
+
+    // rc-table 的行 hover 是 JS 驱动的: mouseenter 给整行单元格挂 .ant-table-cell-row-hover。
+    fireEvent.mouseEnter(rows[0]?.querySelector("td") as HTMLElement);
+    expect(fixedCell(rows[0] as Element).classList.contains("ant-table-cell-row-hover")).toBe(true);
+    expect(background(fixedCell(rows[0] as Element))).toBe("rgb(244, 247, 254)");
+
+    // 选中行(未悬停)与「选中 + 悬停」各走各的底色, hover 规则不能把选中色盖掉。
+    expect(rows[1]?.classList.contains("ant-table-row-selected")).toBe(true);
+    expect(background(fixedCell(rows[1] as Element))).toBe("rgb(240, 247, 255)");
+
+    fireEvent.mouseEnter(rows[1]?.querySelector("td") as HTMLElement);
+    expect(background(fixedCell(rows[1] as Element))).toBe("rgb(204, 227, 255)");
+
+    style.remove();
   });
 });

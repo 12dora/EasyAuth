@@ -50,6 +50,41 @@
 }
 
 /*
+ * 固定列(actionsColumn 默认 `fixed: "right"`)的行态底色必须不透明。
+ *
+ * antd 只在 fixed.js 给 `.ant-table-cell-fix-left/right` 铺了一层不透明的 tableBg,
+ * 而行态那几条规则(hover / 选中 / 选中+hover)特异性更高, 会把行底色重新盖到固定单元格上;
+ * theme.ts 的 `Table.rowHoverBg`(ROW_HOVER_BG)是半透明的 accent 5%, 于是横向滚动时
+ * 从固定列底下经过的单元格会透上来, 文字叠成两层。这里按行态把不透明底色钉回去。
+ *
+ * 两个注意点:
+ * 1. antd 5 的行 hover 不走 `:hover`, 而是 rc-table 用 JS 给整行单元格挂
+ *    `.ant-table-cell-row-hover`(rc-table/es/Cell/index.js), 所以选择器必须跟着用这个类。
+ * 2. 选中态与「选中 + hover」必须跟着一起写: hover 那条的特异性(0,5,2)已经高过
+ *    antd 自己的选中底色(0,5,0), 不补这两条的话, 悬停一行选中行会退回 hover 色。
+ * 常态与表头的固定单元格不在这里重写: antd 给的 tableBg / headerBg 本来就不透明,
+ * 再压一条只会连带盖掉排序列的 bodySortBg / headerSortActiveBg 高亮。
+ *
+ * 三个色值是 theme.ts 的镜像(AppTable.test.tsx 会用 theme 令牌复算并断言一致):
+ * #f4f7fe = ROW_HOVER_BG(rgba(37, 99, 235, 0.05))合成到 colorBgContainer(#ffffff)之上;
+ * #f0f7ff / #cce3ff = antd 由 colorPrimary(#2563eb)派生的 rowSelectedBg / rowSelectedHoverBg。
+ */
+.ant-table-wrapper .ant-table-tbody > tr.ant-table-row > td.ant-table-cell-row-hover.ant-table-cell-fix-left,
+.ant-table-wrapper .ant-table-tbody > tr.ant-table-row > td.ant-table-cell-row-hover.ant-table-cell-fix-right {
+  background: #f4f7fe;
+}
+
+.ant-table-wrapper .ant-table-tbody > tr.ant-table-row.ant-table-row-selected > td.ant-table-cell-fix-left,
+.ant-table-wrapper .ant-table-tbody > tr.ant-table-row.ant-table-row-selected > td.ant-table-cell-fix-right {
+  background: #f0f7ff;
+}
+
+.ant-table-wrapper .ant-table-tbody > tr.ant-table-row.ant-table-row-selected > td.ant-table-cell-row-hover.ant-table-cell-fix-left,
+.ant-table-wrapper .ant-table-tbody > tr.ant-table-row.ant-table-row-selected > td.ant-table-cell-row-hover.ant-table-cell-fix-right {
+  background: #cce3ff;
+}
+
+/*
  * 空态兜底: 开了横向滚动后 rc-table 把空态包进 `.ant-table-expanded-row-fixed`,
  * 内联写死 `width: <容器宽>px; position: sticky`。dataSource 为空时 AppTable 已改用 scroll.x=true
  * 让表格铺满容器; 但客户端筛选把行筛空时 dataSource 仍非空、表头按 minWidth 撑宽,

@@ -85,7 +85,6 @@ export const zhCN = {
 
   "shell.user.consoleFallback": "控制台用户",
   "shell.user.portalFallback": "当前用户",
-  "shell.user.ungrouped": "未分组",
   "shell.user.avatarAlt": "{name} 的头像",
 
   "shell.sessionExpired.title": "登录状态已失效",
@@ -206,6 +205,10 @@ export const zhCN = {
   "table.empty.title": "暂无数据",
 
   "table.column.user": "用户",
+
+  /* 顶栏角色: 后端只下发 ShellRole code(admin / member), 展示名在这里。 */
+  "shell.user.role.admin": "EasyAuth 管理员",
+  "shell.user.role.member": "成员",
 } as const;
 
 export const en: Record<keyof typeof zhCN, string> = {
@@ -295,7 +298,6 @@ export const en: Record<keyof typeof zhCN, string> = {
 
   "shell.user.consoleFallback": "Console user",
   "shell.user.portalFallback": "Current user",
-  "shell.user.ungrouped": "Ungrouped",
   "shell.user.avatarAlt": "Avatar for {name}",
 
   "shell.sessionExpired.title": "Session expired",
@@ -414,4 +416,7 @@ export const en: Record<keyof typeof zhCN, string> = {
   "table.empty.title": "No data",
 
   "table.column.user": "User",
+
+  "shell.user.role.admin": "EasyAuth Admins",
+  "shell.user.role.member": "Member",
 };

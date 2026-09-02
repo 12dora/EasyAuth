@@ -32,7 +32,6 @@ export function AppShell({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", curre
   const { t } = useI18n();
   const location = useLocation();
   const queryClient = useQueryClient();
-  const shellUser = currentUser ?? (currentUserId ? { id: currentUserId } : undefined);
   const [sessionExpired, setSessionExpired] = useState(false);
   const sessionExpiredRef = useRef(false);
   const loginHref = useMemo(() => loginUrlForCurrentPage(), [location.pathname, location.search, location.hash]);
@@ -52,9 +51,9 @@ export function AppShell({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", curre
 
   return (
     <div className="app-shell">
-      <Topbar brandLogoUrl={brandLogoUrl} currentUser={shellUser} mode={mode} />
+      <Topbar brandLogoUrl={brandLogoUrl} currentUser={currentUser} mode={mode} />
       <div className="shell-body">
-        <Sidebar mode={mode} currentUser={shellUser} />
+        <Sidebar mode={mode} currentUser={currentUser} />
         <main className="content">
           {sessionExpired ? (
             <div className="mb-4">
@@ -71,13 +70,13 @@ export function AppShell({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", curre
               </div>
             </div>
           ) : null}
-          {mode === "console" && shellUser?.isSuperuser === true ? (
+          {mode === "console" && currentUser?.isSuperuser === true ? (
             <Suspense fallback={null}>
               <BlockedAppsBanner enabled />
             </Suspense>
           ) : null}
           <div className="route-transition" data-route-pathname={location.pathname} data-testid="route-transition" key={location.pathname}>
-            <Outlet context={{ currentUserId, isSuperuser: shellUser?.isSuperuser === true } satisfies AppShellOutletContext} />
+            <Outlet context={{ currentUserId, isSuperuser: currentUser?.isSuperuser === true } satisfies AppShellOutletContext} />
           </div>
         </main>
       </div>
