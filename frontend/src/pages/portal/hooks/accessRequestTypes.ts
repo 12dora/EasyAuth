@@ -2,6 +2,7 @@ import type { Dispatch, SetStateAction } from "react";
 
 import type { MessageKey } from "../../../i18n/messages";
 import type {
+  AuthorizationGroupKind,
   PermissionGroupItem,
   PermissionItem,
   PortalCatalogApp,
@@ -21,7 +22,7 @@ export interface AuthorizationGroupItem {
   id: number;
   app_key: string;
   key: string;
-  kind: "role" | "bundle" | string;
+  kind: AuthorizationGroupKind;
   name: string;
   name_en?: string;
   description?: string;

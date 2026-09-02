@@ -1,6 +1,6 @@
 import type { ApprovalDecisionMode } from "../../../components/ApprovalDecisionDialog";
 import type { Pagination } from "../../../lib/api";
-import type { PortalApprovalApplicant } from "../../../lib/domain";
+import type { AuthorizationGroupKind, PortalApprovalApplicant } from "../../../lib/domain";
 
 export type ApprovalTab = "pending" | "processed";
 export const APPROVAL_TAB_KEYS = ["pending", "processed"] as const satisfies readonly ApprovalTab[];
@@ -24,7 +24,7 @@ export interface ApprovalGrantFact {
 
 export interface ApprovalAuthorizationGroup {
   key: string;
-  kind: string;
+  kind: AuthorizationGroupKind;
   name: string;
   grants: ApprovalGrantFact[];
 }

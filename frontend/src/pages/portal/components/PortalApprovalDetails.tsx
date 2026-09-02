@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { StatusBanner } from "../../../components/StatusBanner";
 import type { Translator } from "../../../lib/status";
 import { formatDateTime, grantTypeLabel } from "../../../lib/status";
+import { formatAuthorizationGroupLabel } from "../authorizationGroupLabel";
 
 import {
   approvalFactsAreComplete,
@@ -38,7 +39,7 @@ function authorizationGroupFacts(t: Translator, group: ApprovalAuthorizationGrou
   return (
     <>
       <span className="font-semibold text-ink-soft">
-        {t("portal.column.groups")}: {group.name || group.key} [{group.kind}]
+        {t("portal.column.groups")}: {formatAuthorizationGroupLabel(group, t)}
       </span>
       {group.grants.length > 0 ? (
         grantList(group.grants)

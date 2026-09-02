@@ -19,6 +19,13 @@ export const zhCN = {
   "portal.column.submittedAt": "提交时间",
   "portal.column.reason": "原因",
 
+  // 与控制台授权组类型列(common.role / console.matrix.kindBundle)同文案。
+  "portal.authorizationGroup.kind.role": "角色",
+  "portal.authorizationGroup.kind.bundle": "权限包",
+
+  "portal.requests.columns.approver": "审批人",
+  // 审批人姓名之间的分隔符: 中文用顿号, 英文用逗号加空格。
+  "portal.requests.approverSeparator": "、",
   "portal.requests.loadFailed": "申请记录加载失败",
   "portal.requests.empty": "暂无申请记录",
   "portal.requests.emptyDescription": "当前账号还没有提交过权限申请。",
@@ -103,6 +110,11 @@ export const en: Record<keyof typeof zhCN, string> = {
   "portal.column.submittedAt": "Submitted at",
   "portal.column.reason": "Reason",
 
+  "portal.authorizationGroup.kind.role": "Role",
+  "portal.authorizationGroup.kind.bundle": "Bundle",
+
+  "portal.requests.columns.approver": "Approver",
+  "portal.requests.approverSeparator": ", ",
   "portal.requests.loadFailed": "Failed to load requests",
   "portal.requests.empty": "No requests yet",
   "portal.requests.emptyDescription": "This account has not submitted any access requests yet.",

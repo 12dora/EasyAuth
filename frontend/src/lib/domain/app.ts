@@ -293,9 +293,12 @@ export interface ExpandedGrantItem {
   resolved?: ResolvedManagedUsers;
 }
 
+/** 授权组类别, 对齐后端 `AUTHORIZATION_GROUP_KIND_CHOICES`; 没有第三种取值。 */
+export type AuthorizationGroupKind = "role" | "bundle";
+
 export interface PermissionQueryGroupItem {
   key: string;
-  kind: "role" | "bundle" | string;
+  kind: AuthorizationGroupKind;
   name: string;
 }
 

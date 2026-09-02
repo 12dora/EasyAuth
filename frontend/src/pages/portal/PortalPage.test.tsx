@@ -499,8 +499,8 @@ describe("PortalPage access request form", () => {
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       expect(screen.getByLabelText("选择审批人 app-owner")).toBeChecked();
       expect(screen.getByText("可申请权限组")).toBeVisible();
-      expect(screen.getByRole("option", { name: "销售只读 [role] (sales-reader)" })).toBeVisible();
-      expect(screen.getByRole("option", { name: "订单运营包 [bundle] (order-ops)" })).toBeVisible();
+      expect(screen.getByRole("option", { name: "销售只读 [角色] (sales-reader)" })).toBeVisible();
+      expect(screen.getByRole("option", { name: "订单运营包 [权限包] (order-ops)" })).toBeVisible();
 
       await user.selectOptions(screen.getByLabelText("可申请权限组"), "order-ops");
       expect(screen.getByLabelText("选择审批人 ops-owner")).toBeChecked();
@@ -1706,7 +1706,7 @@ describe("PortalPage tables", () => {
     try {
       renderPortalPage("/portal");
 
-      expect(await screen.findByText("销售只读 [role]")).toBeVisible();
+      expect(await screen.findByText("销售只读 [角色]")).toBeVisible();
       expect(screen.getByText(/orders\.read:SELF/)).toBeVisible();
       expect(screen.getByText(/group:sales-reader/)).toBeVisible();
       expect(screen.getByText(/dashboard\.view:GLOBAL/)).toBeVisible();
@@ -1916,6 +1916,9 @@ describe("PortalPage tables", () => {
               submitted_at: "2026-07-01T10:00:00Z",
               reason: "处理工单",
               decided_at: "2026-07-02T10:00:00Z",
+              decided_by: "manager-001",
+              decision_actor_type: "user",
+              decided_by_name: "张主管",
               decision_comment: "同意按期开放",
               authorization_groups: [{ key: "sales-reader", kind: "role", name: "销售只读" }],
               direct_grants: [{ permission: "orders.refund.approve", permission_name: "审批退款", scope: "TEAM" }],
@@ -1938,7 +1941,7 @@ describe("PortalPage tables", () => {
     try {
       renderPortalPage("/portal/requests");
 
-      expect(await screen.findByText("销售只读 [role]")).toBeVisible();
+      expect(await screen.findByText("销售只读 [角色]")).toBeVisible();
       expect(screen.getByText("审批退款 (orders.refund.approve):TEAM")).toBeVisible();
       expect(screen.getByText(/审批意见：同意按期开放/)).toBeVisible();
       expect(screen.getAllByText(/2026/).length).toBeGreaterThanOrEqual(3);
@@ -1957,12 +1960,81 @@ describe("PortalPage tables", () => {
     }
   });
 
+  test("申请历史审批人列: 待审批给当前审批人, 已决给决定人, 无姓名回退 actor id", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/me/access-requests?page=1&page_size=20") {
+        return jsonResponse({
+          data: [
+            portalRequestRow({
+              id: 1,
+              app_name: "待审应用",
+              status: "submitted",
+              status_label: "等待审批",
+              current_approvers: [
+                { user_id: "manager-001", name: "张主管" },
+                { user_id: "owner-002", name: "李负责人" },
+              ],
+            }),
+            portalRequestRow({
+              id: 2,
+              app_name: "已批准应用",
+              status: "approved",
+              status_label: "已批准",
+              decided_at: "2026-07-02T10:00:00Z",
+              decided_by: "manager-001",
+              decision_actor_type: "user",
+              decided_by_name: "张主管",
+            }),
+            portalRequestRow({
+              id: 3,
+              app_name: "代审应用",
+              status: "approved",
+              status_label: "已批准",
+              decided_at: "2026-07-02T10:00:00Z",
+              decided_by: "console-admin-9",
+              decision_actor_type: "console_admin",
+              decided_by_name: null,
+            }),
+            portalRequestRow({ id: 4, app_name: "已撤回应用", status: "withdrawn", status_label: "已撤回" }),
+          ],
+          pagination: { page: 1, page_size: 20, total_items: 4, total_pages: 1 },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage("/portal/requests");
+
+      expect(await screen.findByText("待审应用")).toBeVisible();
+      expect(screen.getByRole("columnheader", { name: "审批人" })).toBeVisible();
+      expect(approverCellText("待审应用")).toBe("张主管、李负责人");
+      expect(approverCellText("已批准应用")).toBe("张主管");
+      // 后端解析不出姓名时给 null, 前端展示 actor id 而不是空白。
+      expect(approverCellText("代审应用")).toBe("console-admin-9");
+      expect(approverCellText("已撤回应用")).toBe("-");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   test("申请历史对 submitted 申请显示撤回并调用撤回端点", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === "/portal/api/v1/me/access-requests?page=1&page_size=20") {
         return jsonResponse({
-          data: [portalRequestRow({ id: 88, app_key: "crm", app_name: "CRM", status: "submitted", status_label: "已提交" })],
+          data: [
+            portalRequestRow({
+              id: 88,
+              app_key: "crm",
+              app_name: "CRM",
+              status: "submitted",
+              status_label: "已提交",
+              current_approvers: [{ user_id: "manager-001", name: "张主管" }],
+            }),
+          ],
           pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
         });
       }
@@ -2045,6 +2117,15 @@ describe("PortalPage tables", () => {
   });
 });
 
+/** 申请表里某一行的「审批人」单元格文本; 该列固定紧跟在状态列之后。 */
+function approverCellText(appName: string): string {
+  const row = screen.getByText(appName).closest("tr");
+  if (row === null) {
+    throw new Error(`未找到应用 ${appName} 所在的表格行`);
+  }
+  return within(row).getAllByRole("cell")[1].textContent ?? "";
+}
+
 function lastFetchUrl(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>) {
   return String(fetchMock.mock.calls.at(-1)?.[0] ?? "");
 }
@@ -2082,6 +2163,10 @@ function portalRequestRow(overrides: Record<string, unknown> = {}) {
     submitted_at: "2026-07-01T10:00:00Z",
     authorization_groups: [],
     direct_grants: [],
+    current_approvers: [],
+    decided_by: "",
+    decision_actor_type: "",
+    decided_by_name: null,
     decided_at: null,
     decision_comment: "",
     ...overrides,

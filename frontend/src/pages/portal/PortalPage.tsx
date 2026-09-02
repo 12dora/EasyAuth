@@ -35,6 +35,7 @@ import {
 } from "../../lib/status";
 import type { Translator } from "../../lib/status";
 import { useI18n } from "../../i18n/I18nProvider";
+import { formatAuthorizationGroupLabel } from "./authorizationGroupLabel";
 import { AccessRequestForm } from "./components/AccessRequestForm";
 import { PortalApprovalsSection } from "./components/PortalApprovalsSection";
 import { PortalPreOffboardDialog } from "./PortalPreOffboardDialog";
@@ -153,7 +154,7 @@ function PortalGrantSection({
       textColumn<PortalGrantRow>({
         key: "groups",
         title: t("portal.column.groups"),
-        getValue: (row) => formatGroups(row.groups),
+        getValue: (row) => formatGroups(t, row.groups),
         ellipsis: false,
       }),
       textColumn<PortalGrantRow>({
@@ -273,6 +274,12 @@ function PortalRequestSection() {
         },
         sort,
       ),
+      textColumn<PortalRequestRow>({
+        key: "approver",
+        title: t("portal.requests.columns.approver"),
+        getValue: (row) => formatApprovers(t, row),
+        width: 140,
+      }),
       // 排序在后端(ordering=app_key): 预设的 localeCompare 只会重排当前页。
       serverSortColumn(
         textColumn<PortalRequestRow>({
@@ -286,7 +293,7 @@ function PortalRequestSection() {
       textColumn<PortalRequestRow>({
         key: "groups",
         title: t("portal.column.groups"),
-        getValue: (row) => formatGroups(row.authorization_groups),
+        getValue: (row) => formatGroups(t, row.authorization_groups),
         ellipsis: false,
       }),
       textColumn<PortalRequestRow>({
@@ -337,7 +344,9 @@ function PortalRequestSection() {
           emptyDescription={t("portal.requests.emptyDescription")}
           emptyTitle={t("portal.requests.empty")}
           loading={query.isLoading}
-          minWidth={1400}
+          // 原 1400 是「状态 200 + 应用 140 + 期限 110 + 过期 170 + 提交 170 + 操作 + 三列不定宽」的和,
+          // 新增的审批人列宽 140 要一并计入, 否则表格会把不定宽的几列继续压窄。
+          minWidth={1540}
           rowKey="id"
         />
       )}
@@ -404,11 +413,27 @@ function useClampPage<T>(
   }, [page, setPage, totalPages]);
 }
 
-function formatGroups(groups: PortalGrantRow["groups"] | PortalRequestRow["authorization_groups"] | undefined): string {
+function formatGroups(
+  t: Translator,
+  groups: PortalGrantRow["groups"] | PortalRequestRow["authorization_groups"] | undefined,
+): string {
   if (!groups || groups.length === 0) {
     return "-";
   }
-  return groups.map((group) => `${group.name ?? group.key ?? "-"} [${group.kind ?? "-"}]`).join("、");
+  return groups.map((group) => formatAuthorizationGroupLabel(group, t)).join("、");
+}
+
+/**
+ * 审批人列: 待审批的申请给出当前审批人, 已决的申请给出决定人。
+ *
+ * 决定人姓名由后端解析 UserMirror 得到, 解析不出时是 null —— 这时退回展示 actor id,
+ * 申请人至少还能看到是谁处理的; 已撤回 / 未决且无审批人的行由 textColumn 统一渲染 "-"。
+ */
+function formatApprovers(t: Translator, row: PortalRequestRow): string {
+  if (row.status === "submitted") {
+    return row.current_approvers.map((approver) => approver.name).join(t("portal.requests.approverSeparator"));
+  }
+  return row.decided_by_name ?? row.decided_by;
 }
 
 function formatExpandedGrants(grants: PortalGrantRow["grants"] | undefined): string {

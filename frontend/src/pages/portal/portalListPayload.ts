@@ -1,9 +1,14 @@
 import type { Pagination } from "../../lib/api";
-import type { PortalGrant, PortalRequest } from "../../lib/domain";
+import type {
+  AuthorizationGroupKind,
+  PortalGrant,
+  PortalRequest,
+  PortalRequestApprover,
+} from "../../lib/domain";
 
 interface PortalGrantGroup {
   key: string;
-  kind: string;
+  kind: AuthorizationGroupKind;
   name: string;
 }
 
@@ -26,7 +31,7 @@ export type PortalGrantRow = PortalGrant & {
 
 interface PortalRequestGroup {
   key: string;
-  kind: string;
+  kind: AuthorizationGroupKind;
   name: string;
 }
 
@@ -39,6 +44,10 @@ interface PortalRequestDirectGrant {
 export type PortalRequestRow = PortalRequest & {
   authorization_groups: PortalRequestGroup[];
   direct_grants: PortalRequestDirectGrant[];
+  current_approvers: PortalRequestApprover[];
+  decided_by: string;
+  decision_actor_type: string;
+  decided_by_name: string | null;
 };
 
 export interface PortalListPayload<T> {
@@ -96,7 +105,7 @@ function parsePortalGrantRow(value: unknown, index: number): PortalGrantRow {
     const itemLabel = `${label}.groups[${groupIndex}]`;
     const item = requireRecord(group, `${itemLabel} 必须是对象`);
     requireString(item.key, `${itemLabel}.key`);
-    requireString(item.kind, `${itemLabel}.kind`);
+    requireAuthorizationGroupKind(item.kind, `${itemLabel}.kind`);
     requireString(item.name, `${itemLabel}.name`);
   });
   requireArray(row.grants, `${label}.grants`).forEach((grant, grantIndex) => {
@@ -131,11 +140,14 @@ function parsePortalRequestRow(value: unknown, index: number): PortalRequestRow 
   requireNullableString(row.grant_expires_at, `${label}.grant_expires_at`);
   requireNullableString(row.decided_at, `${label}.decided_at`);
   requireString(row.decision_comment, `${label}.decision_comment`);
+  requireString(row.decided_by, `${label}.decided_by`);
+  requireString(row.decision_actor_type, `${label}.decision_actor_type`);
+  requireNullableString(row.decided_by_name, `${label}.decided_by_name`);
   requireArray(row.authorization_groups, `${label}.authorization_groups`).forEach((group, groupIndex) => {
     const itemLabel = `${label}.authorization_groups[${groupIndex}]`;
     const item = requireRecord(group, `${itemLabel} 必须是对象`);
     requireString(item.key, `${itemLabel}.key`);
-    requireString(item.kind, `${itemLabel}.kind`);
+    requireAuthorizationGroupKind(item.kind, `${itemLabel}.kind`);
     requireString(item.name, `${itemLabel}.name`);
   });
   requireArray(row.direct_grants, `${label}.direct_grants`).forEach((grant, grantIndex) => {
@@ -145,10 +157,20 @@ function parsePortalRequestRow(value: unknown, index: number): PortalRequestRow 
     requireString(item.permission_name, `${itemLabel}.permission_name`);
     requireString(item.scope, `${itemLabel}.scope`);
   });
+  requireArray(row.current_approvers, `${label}.current_approvers`).forEach((approver, approverIndex) => {
+    const itemLabel = `${label}.current_approvers[${approverIndex}]`;
+    const item = requireRecord(approver, `${itemLabel} 必须是对象`);
+    requireString(item.user_id, `${itemLabel}.user_id`);
+    requireString(item.name, `${itemLabel}.name`);
+  });
   return {
     ...row,
     authorization_groups: row.authorization_groups,
     direct_grants: row.direct_grants,
+    current_approvers: row.current_approvers,
+    decided_by: row.decided_by,
+    decision_actor_type: row.decision_actor_type,
+    decided_by_name: row.decided_by_name,
   } as PortalRequestRow;
 }
 
@@ -169,6 +191,12 @@ function requireArray(value: unknown, label: string): unknown[] {
 function requireString(value: unknown, label: string): asserts value is string {
   if (typeof value !== "string") {
     throw new Error(`${label} 必须是字符串`);
+  }
+}
+
+function requireAuthorizationGroupKind(value: unknown, label: string): asserts value is AuthorizationGroupKind {
+  if (value !== "role" && value !== "bundle") {
+    throw new Error(`${label} 必须是 role 或 bundle`);
   }
 }
 

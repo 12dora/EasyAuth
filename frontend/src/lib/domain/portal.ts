@@ -1,6 +1,7 @@
 /** 本模块定义 Portal 访问请求与审批视图领域契约。 */
 
 import type {
+  AuthorizationGroupKind,
   ExpandedGrantItem,
   PermissionGroupItem,
   PermissionItem,
@@ -27,6 +28,12 @@ export interface PortalDirectGrantItem {
   scope: string;
 }
 
+/** 申请行上的审批人: 仅 user_id + name, 与后端 `approver_option` 一致。 */
+export interface PortalRequestApprover {
+  user_id: string;
+  name: string;
+}
+
 export interface PortalRequest {
   id?: number;
   app_key?: string;
@@ -42,6 +49,14 @@ export interface PortalRequest {
   reason?: string;
   submitted_at?: string;
   grant_expires_at?: string | null;
+  /** 仅 status 为 submitted 时非空: 当前待处理的审批人分配。 */
+  current_approvers?: PortalRequestApprover[];
+  /** 决定人 actor id; 未决或已撤回时为空字符串。 */
+  decided_by?: string;
+  /** 决定人身份: user / console_admin; 未决或已撤回时为空字符串。 */
+  decision_actor_type?: string;
+  /** 决定人显示名; 后端解析不出姓名时为 null(此时只能回退展示 decided_by)。 */
+  decided_by_name?: string | null;
   decided_at?: string | null;
   decision_comment?: string | null;
 }
@@ -87,7 +102,7 @@ export interface PortalCatalogAuthorizationGroup {
   id: number;
   app_key: string;
   key: string;
-  kind: "role" | "bundle" | string;
+  kind: AuthorizationGroupKind;
   name: string;
   name_en?: string;
   description?: string;

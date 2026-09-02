@@ -1,6 +1,7 @@
 import { Field, SelectInput } from "../../../components/Field";
 import { useI18n, localizedField } from "../../../i18n/I18nProvider";
 import type { PortalCatalogApp } from "../../../lib/domain";
+import { authorizationGroupKindLabel } from "../authorizationGroupLabel";
 import type { AuthorizationGroupItem, ScopedPermissionGroupItem, ScopedPermissionItem } from "../hooks/accessRequestTypes";
 import { PermissionSelector } from "./PermissionSelector";
 
@@ -78,7 +79,7 @@ export function RequestTargetPicker({
             <option value="">{t("portal.request.authorizationGroupNone")}</option>
             {authorizationGroups.map((group) => (
               <option key={`${group.app_key}:${group.key}`} value={group.key}>
-                {localizedField(locale, group.name, group.name_en)} [{group.kind}] ({group.key})
+                {localizedField(locale, group.name, group.name_en)} [{authorizationGroupKindLabel(group.kind, t)}] ({group.key})
               </option>
             ))}
           </SelectInput>

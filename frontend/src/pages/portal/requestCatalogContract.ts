@@ -47,7 +47,7 @@ function validateAuthorizationGroup(
   contractNumber(item.id, `${path}.id`);
   contractNonEmptyString(item.app_key, `${path}.app_key`);
   contractNonEmptyString(item.key, `${path}.key`);
-  contractNonEmptyString(item.kind, `${path}.kind`);
+  contractAuthorizationGroupKind(item.kind, `${path}.kind`);
   contractNonEmptyString(item.name, `${path}.name`);
   contractOptionalBoolean(item.requestable, `${path}.requestable`);
   contractOptionalBoolean(item.requires_approval, `${path}.requires_approval`);
@@ -132,6 +132,12 @@ function contractNumber(value: unknown, path: string): void {
 function contractNonEmptyString(value: unknown, path: string): void {
   if (typeof value !== "string" || !value) {
     throw new Error(`${path} 必须为非空字符串`);
+  }
+}
+
+function contractAuthorizationGroupKind(value: unknown, path: string): void {
+  if (value !== "role" && value !== "bundle") {
+    throw new Error(`${path} 必须为 role 或 bundle`);
   }
 }
 
