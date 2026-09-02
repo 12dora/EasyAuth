@@ -57,6 +57,15 @@ class ShellUser:
     avatar_url: str = ""
 
 
+@dataclass(frozen=True, slots=True)
+class ShellPage:
+    """React shell 的页面身份: 渲染哪个 surface、标题以及初始 App。"""
+
+    surface: ShellName
+    title: str
+    initial_app_key: str = ""
+
+
 def render_react_shell(
     request: HttpRequest,
     *,
@@ -68,9 +77,7 @@ def render_react_shell(
     shell_user = current_user or shell_user_from_session(request)
     return _render_react_shell_response(
         request,
-        surface=surface,
-        title=title,
-        initial_app_key=initial_app_key,
+        page=ShellPage(surface=surface, title=title, initial_app_key=initial_app_key),
         shell_user=shell_user,
     )
 
@@ -85,9 +92,7 @@ def render_public_react_shell(
 ) -> HttpResponse:
     return _render_react_shell_response(
         request,
-        surface=surface,
-        title=title,
-        initial_app_key=initial_app_key,
+        page=ShellPage(surface=surface, title=title, initial_app_key=initial_app_key),
         shell_user=None,
         authentik_logout_frame_src=authentik_logout_frame_src,
     )
@@ -96,9 +101,7 @@ def render_public_react_shell(
 def _render_react_shell_response(
     request: HttpRequest,
     *,
-    surface: ShellName,
-    title: str,
-    initial_app_key: str,
+    page: ShellPage,
     shell_user: ShellUser | None,
     authentik_logout_frame_src: str = "",
 ) -> HttpResponse:
@@ -106,12 +109,12 @@ def _render_react_shell_response(
         request,
         REACT_SHELL_TEMPLATE,
         {
-            "initial_app_key": initial_app_key,
+            "initial_app_key": page.initial_app_key,
             "authentik_logout_frame_src": authentik_logout_frame_src,
             "current_user": shell_user,
             "logout_url": "/auth/logout/",
-            "shell": surface,
-            "title": title,
+            "shell": page.surface,
+            "title": page.title,
             "vite_assets": vite_entry_assets(),
         },
     )
