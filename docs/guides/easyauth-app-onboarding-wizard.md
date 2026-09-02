@@ -22,8 +22,8 @@
 | 1 基本信息 | 创建 App 与 Owner/Developer 成员 | `POST /console/api/v1/apps` |
 | 2 权限目录 | 粘贴/上传下游导出的 manifest,预览差异后确认导入;可跳过 | `POST .../permission-template-imports/preview`、`POST .../permission-template-imports/{preview_id}/confirm` |
 | 3 授权与审批 | 展示配置完整性检查结果,阻塞项跳转工作台对应页签处理 | `GET .../configuration-status` |
-| 4 接入凭据 | 创建 static token 或 OAuth client,明文只展示一次 | `POST .../credentials/static-tokens`、`POST .../credentials/oauth-clients` |
-| 5 联调验证 | 用刚签发的凭据发起真实公共权限查询 | `POST .../permission-query-tests` |
+| 4 接入凭据 | 创建 static token 或 OAuth client,明文只展示一次。仅入站拉取授权的应用需要这一步；由启用中 `ConnectorInstance` 出站供给的应用（如 NetBird）不把入站凭据列为配置完整性 blocking 项 | `POST .../credentials/static-tokens`、`POST .../credentials/oauth-clients` |
+| 5 联调验证 | 入站拉取授权的应用用刚签发的凭据发起真实公共权限查询;出站连接器供给的应用没有入站凭据,改在连接器页做连接测试并核对真实对账结果 | `POST .../permission-query-tests` |
 | 6 完成 | 输出下游接入参数(base URL、app_key、查询端点、curl 示例) | `GET .../configuration-status` |
 
 向导对任何企业应用通用:接入新应用只需要下游按 [`easyauth-app-sdk` 下游集成指南](easyauth-app-sdk-integration.md) 中的 manifest 契约导出权限目录,不需要在 EasyAuth 侧为单个应用写专用代码。

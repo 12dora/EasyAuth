@@ -3,13 +3,16 @@ from __future__ import annotations
 import pytest
 
 from easyauth.applications.configuration import (
+    ACTIVE_CREDENTIAL_MISSING_MESSAGE,
     CONFIGURATION_STATUS_BLOCKING,
     CONFIGURATION_STATUS_READY,
     CONFIGURATION_STATUS_WARNING,
     configuration_readiness_for_app,
+    configuration_readiness_statuses_for_apps,
 )
 from easyauth.applications.models import (
     App,
+    AppCredential,
     AppMembership,
     ApprovalRule,
     AppScope,
@@ -20,6 +23,7 @@ from easyauth.applications.models import (
     PermissionGroup,
 )
 from easyauth.applications.services import AppCredentialService
+from easyauth.connectors.models import ConnectorInstance
 
 pytestmark = pytest.mark.django_db
 
@@ -42,6 +46,63 @@ def test_ops1_configuration_readiness_blocks_active_app_without_catalog_owner_or
         "active_owner_missing",
     }
     assert {issue.severity for issue in readiness.issues} == {CONFIGURATION_STATUS_BLOCKING}
+    assert any(
+        issue.code == "active_credential_missing"
+        and issue.message == ACTIVE_CREDENTIAL_MISSING_MESSAGE
+        for issue in readiness.issues
+    )
+
+
+def test_ops1_configuration_readiness_skips_credential_when_connector_enabled() -> None:
+    # Given: 连接器供给的 App 已启用 ConnectorInstance, 但没有入站 API 凭据。
+    app = App.objects.create(app_key="ops1-connector-provisioned", name="OPS1 Connector")
+    _ = _ready_catalog(app, approval_rule=True)
+    _ = AppCredential.objects.filter(app=app).delete()
+    _ = ConnectorInstance.objects.create(app=app, connector_key="netbird", enabled=True)
+
+    # When: 应用负责人查看配置完整性。
+    readiness = configuration_readiness_for_app(app)
+
+    # Then: 出站供给不要求入站凭据, 配置完整性为 ready。
+    assert readiness.status == CONFIGURATION_STATUS_READY
+    assert "active_credential_missing" not in {issue.code for issue in readiness.issues}
+    assert readiness.issues == ()
+
+
+def test_ops1_configuration_readiness_blocks_credential_when_connector_disabled() -> None:
+    # Given: App 有 ConnectorInstance 但未启用, 且没有入站 API 凭据。
+    app = App.objects.create(app_key="ops1-connector-disabled", name="OPS1 Connector Disabled")
+    _ = _ready_catalog(app, approval_rule=True)
+    _ = AppCredential.objects.filter(app=app).delete()
+    _ = ConnectorInstance.objects.create(app=app, connector_key="netbird", enabled=False)
+
+    # When: 应用负责人查看配置完整性。
+    readiness = configuration_readiness_for_app(app)
+
+    # Then: 未启用的连接器不能替代入站凭据, 仍因缺少凭据阻塞。
+    assert readiness.status == CONFIGURATION_STATUS_BLOCKING
+    assert [issue.code for issue in readiness.issues] == ["active_credential_missing"]
+    assert readiness.issues[0].message == ACTIVE_CREDENTIAL_MISSING_MESSAGE
+
+
+def test_ops1_configuration_readiness_statuses_skip_credential_for_enabled_connector() -> None:
+    # Given: 三个其余配置齐全的 App, 分别是启用连接器、停用连接器、完全没有连接器。
+    provisioned = App.objects.create(app_key="ops1-bulk-connector-on", name="Bulk Connector On")
+    disabled = App.objects.create(app_key="ops1-bulk-connector-off", name="Bulk Connector Off")
+    pull_app = App.objects.create(app_key="ops1-bulk-no-connector", name="Bulk No Connector")
+    for app in (provisioned, disabled, pull_app):
+        _ = _ready_catalog(app, approval_rule=True)
+        _ = AppCredential.objects.filter(app=app).delete()
+    _ = ConnectorInstance.objects.create(app=provisioned, connector_key="netbird", enabled=True)
+    _ = ConnectorInstance.objects.create(app=disabled, connector_key="netbird", enabled=False)
+
+    # When: 列表批量计算配置完整性。
+    statuses = configuration_readiness_statuses_for_apps((provisioned, disabled, pull_app))
+
+    # Then: 只有启用连接器的 App 不因缺少入站凭据被标为 blocking。
+    assert statuses[provisioned.id] == CONFIGURATION_STATUS_READY
+    assert statuses[disabled.id] == CONFIGURATION_STATUS_BLOCKING
+    assert statuses[pull_app.id] == CONFIGURATION_STATUS_BLOCKING
 
 
 def test_ops1_configuration_readiness_blocks_requestable_authorization_group_without_rule() -> None:

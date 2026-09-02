@@ -26,11 +26,15 @@ from easyauth.applications.models import (
     Permission,
 )
 from easyauth.applications.services import APP_CREDENTIAL_STATIC_KIND
+from easyauth.connectors.models import ConnectorInstance
 
 CONFIGURATION_STATUS_BLOCKING: Final = "blocking"
 CONFIGURATION_STATUS_WARNING: Final = "warning"
 CONFIGURATION_STATUS_INFO: Final = "info"
 CONFIGURATION_STATUS_READY: Final = "ready"
+ACTIVE_CREDENTIAL_MISSING_MESSAGE: Final = (
+    "未接入连接器的 active App 至少需要一个 active 静态 token 或 OAuth2 client。"
+)
 
 type ConfigurationIssueSeverity = Literal["blocking", "warning", "info"]
 type ConfigurationReadinessStatus = Literal["blocking", "warning", "ready"]
@@ -103,6 +107,7 @@ def _required_configuration_blocking_app_ids(
     active_oauth_counts = _counts_by_app(
         OAuthClientBinding.objects.filter(app_id__in=app_ids, is_active=True),
     )
+    connector_provisioned_ids = _connector_provisioned_app_ids(app_ids)
     for app_id in app_ids:
         if active_permission_counts.get(app_id, 0) == 0:
             blocking_ids.add(app_id)
@@ -111,7 +116,8 @@ def _required_configuration_blocking_app_ids(
         if active_owner_counts.get(app_id, 0) == 0:
             blocking_ids.add(app_id)
         if (
-            active_static_credential_counts.get(app_id, 0) == 0
+            app_id not in connector_provisioned_ids
+            and active_static_credential_counts.get(app_id, 0) == 0
             and active_oauth_counts.get(app_id, 0) == 0
         ):
             blocking_ids.add(app_id)
@@ -274,11 +280,11 @@ def _blocking_issues(app: App) -> list[ConfigurationIssue]:
                 message="active App 至少需要一个 active owner。",
             ),
         )
-    if not _has_active_credential(app):
+    if not _has_active_credential(app) and not _is_connector_provisioned(app):
         issues.append(
             _blocking_issue(
                 code="active_credential_missing",
-                message="active App 至少需要一个 active 静态 token 或 OAuth2 client。",
+                message=ACTIVE_CREDENTIAL_MISSING_MESSAGE,
             ),
         )
     issues.extend(_requestable_authorization_group_issues(app))
@@ -428,6 +434,19 @@ def _has_active_credential(app: App) -> bool:
             is_active=True,
         ).exists()
         or OAuthClientBinding.objects.filter(app=app, is_active=True).exists()
+    )
+
+
+def _is_connector_provisioned(app: App) -> bool:
+    return ConnectorInstance.objects.filter(app=app, enabled=True).exists()
+
+
+def _connector_provisioned_app_ids(app_ids: tuple[int, ...]) -> set[int]:
+    return set(
+        ConnectorInstance.objects.filter(app_id__in=app_ids, enabled=True).values_list(
+            "app_id",
+            flat=True,
+        ),
     )
 
 

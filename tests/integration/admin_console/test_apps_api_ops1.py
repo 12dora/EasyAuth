@@ -23,6 +23,7 @@ from easyauth.applications.models import (
 )
 from easyauth.applications.services import AppCredentialService
 from easyauth.audit.models import AuditLog
+from easyauth.connectors.models import ConnectorInstance
 from tests.integration.admin_console.auth_helpers import (
     authenticate_console_admin,
     authenticate_console_user,
@@ -38,8 +39,9 @@ APPS_API_URL: Final = "/console/api/v1/apps"
 APP_LIST_READINESS_MAX_QUERIES: Final = 25
 # 配置完整性批量聚合 1 次 + 列表 presenter 批量取 owner 1 次, 不得随 App 数线性增加。
 APP_LIST_MEMBERSHIP_MAX_QUERIES: Final = 2
-# 配置完整性批量聚合 static token + oauth binding, 列表不得再按 App 查凭据。
+# 配置完整性批量聚合凭据与启用中连接器, 列表不得再按 App 查询。
 APP_LIST_CREDENTIAL_MAX_QUERIES: Final = 2
+APP_LIST_CONNECTOR_MAX_QUERIES: Final = 1
 
 
 @pytest.fixture(autouse=True)
@@ -189,6 +191,9 @@ def test_ops1_apps_api_list_item_queries_do_not_scale_with_app_count() -> None:
         "applications_appcredential",
     ) + _table_query_count(large_queries, "applications_oauthclientbinding")
     assert credential_queries <= APP_LIST_CREDENTIAL_MAX_QUERIES
+    assert _table_query_count(large_queries, "connectors_connectorinstance") <= (
+        APP_LIST_CONNECTOR_MAX_QUERIES
+    )
 
 
 def test_ops1_apps_api_superuser_creates_app_with_memberships_and_audit() -> None:
@@ -540,6 +545,76 @@ def test_ops1_configuration_status_api_uses_app_readiness_service() -> None:
         ("active_owner_missing", "membership"),
         ("active_credential_missing", "credential"),
     }
+
+
+def test_ops1_configuration_status_api_skips_credential_when_connector_enabled() -> None:
+    # Given: 连接器供给的 App 已启用 ConnectorInstance, 且授权目录齐全, 但没有入站凭据。
+    client = _logged_in_user("ops1-app-config-connector-developer")
+    app = App.objects.create(app_key="ops1-api-config-netbird", name="NetBird")
+    _ = AppMembership.objects.create(
+        app=app,
+        user_id="ops1-app-config-connector-developer",
+        role="developer",
+    )
+    _ = AppMembership.objects.create(app=app, user_id="ops1-connector-owner", role="owner")
+    _ = AppScope.objects.create(app=app, key="GLOBAL", name="Global")
+    permission_group = PermissionGroup.objects.create(app=app, key="VPN", name="VPN")
+    permission = Permission.objects.create(
+        app=app,
+        group=permission_group,
+        key="vpn.access",
+        name="VPN access",
+        supported_scopes=["GLOBAL"],
+    )
+    authorization_group = AuthorizationGroup.objects.create(
+        app=app,
+        key="member",
+        kind="role",
+        name="Member",
+        requestable=True,
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=authorization_group,
+        permission=permission,
+        scope_key="GLOBAL",
+    )
+    _ = ApprovalRule.objects.create(
+        app=app,
+        authorization_group=authorization_group,
+        approver_userids=["manager-001"],
+    )
+    _ = ConnectorInstance.objects.create(app=app, connector_key="netbird", enabled=True)
+
+    # When: developer 查询配置状态。
+    response = client.get(f"{APPS_API_URL}/{app.app_key}/configuration-status")
+
+    # Then: 出站供给不要求入站凭据, API 返回 ready 且不含 active_credential_missing。
+    assert response.status_code == HTTPStatus.OK
+    assert response.json() == {"app_key": app.app_key, "status": "ready", "data": []}
+
+
+def test_ops1_configuration_status_api_blocks_credential_when_connector_disabled() -> None:
+    # Given: App 有停用的 ConnectorInstance, 且没有入站凭据。
+    client = _logged_in_user("ops1-app-config-disabled-connector")
+    app = App.objects.create(
+        app_key="ops1-api-config-disabled-connector",
+        name="Disabled Connector",
+    )
+    _ = AppMembership.objects.create(
+        app=app,
+        user_id="ops1-app-config-disabled-connector",
+        role="developer",
+    )
+    _ = ConnectorInstance.objects.create(app=app, connector_key="netbird", enabled=False)
+
+    # When: developer 查询配置状态。
+    response = client.get(f"{APPS_API_URL}/{app.app_key}/configuration-status")
+
+    # Then: 未启用的连接器不能替代入站凭据, 仍返回 active_credential_missing。
+    body = response.content.decode()
+    assert response.status_code == HTTPStatus.OK
+    assert response.json()["status"] == "blocking"
+    assert "active_credential_missing" in body
 
 
 def test_ops1_configuration_status_api_exposes_managed_scope_policy_issue_fields() -> None:

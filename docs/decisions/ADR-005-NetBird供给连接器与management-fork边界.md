@@ -84,6 +84,9 @@ NetBird 是第一个由 EasyAuth 反向**供给**（provisioning）的外部系�
   `client.create_user()` 在 `POST /api/users` 的 body 里携带 `id`；
   连接器配置项为 `api_url`、`api_token`（service user PAT，加密落库）、
   `precreate_users`、`block_users_without_grant`。
+- NetBird 是出站推送供给，不是下游拉取授权。启用中的 `ConnectorInstance` 即表示该 App
+  已接入连接器；配置完整性不把入站静态 token / OAuth2 client 列为 blocking
+  （`active_credential_missing` 只约束未接入连接器的 App）。
 - `precreate_users=false` 时连接器退化为纯 JIT 收敛（等员工首次登录后下一轮对账），
   这是**对接官方原版 management 时的可用降级路径**——预创建能力依赖 fork 补丁。
 - PAT 只发给 EasyAuth 连接器，需定期轮换。

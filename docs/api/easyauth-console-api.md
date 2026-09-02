@@ -68,6 +68,32 @@
 `can_manage` 粗粒度字段自行推断。`can_manage` 仅作为 `can_edit_basic_info` 的旧字段别名保留在
 同一响应内，新增前端代码必须读取 `capabilities`。
 
+### 配置完整度
+
+`GET /apps/{app_key}/configuration-status` 返回该 App 的配置完整性：`status` 为
+`blocking` / `warning` / `ready`，`data` 为风险项列表（`code`、`severity`、`message`、
+`subject`、`target_type`）。应用列表的 `configuration_status` 使用同一套判定，只汇总状态、
+不展开风险项。
+
+凭据类 blocking 项只约束**入站拉取**场景：下游通过 SDK/公共 API 查询授权时，需要 active
+静态 token 或 OAuth2 client。EasyAuth 经启用中的 `ConnectorInstance` **出站推送**供给的应用
+（如 NetBird）不把入站凭据列为就绪条件；仅存在停用连接器实例时仍视为未接入连接器。
+
+| `code` | 严重程度 | 含义 |
+| --- | --- | --- |
+| `app_inactive` | blocking | App 已禁用。 |
+| `active_permission_missing` | blocking | active App 至少需要一个 active Permission。 |
+| `active_authorization_group_missing` | blocking | active App 至少需要一个 active AuthorizationGroup。 |
+| `active_owner_missing` | blocking | active App 至少需要一个 active owner。 |
+| `active_credential_missing` | blocking | 未接入连接器的 active App 至少需要一个 active 静态 token 或 OAuth2 client。 |
+| `requestable_authorization_group_approval_rule_missing` | blocking | requestable AuthorizationGroup 必须存在 active ApprovalRule。 |
+| `authorization_group_grant_target_inactive` | blocking | AuthorizationGroupGrant 不能指向 inactive 授权组或 Permission。 |
+| `authorization_group_grant_scope_inactive` | blocking | active AuthorizationGroupGrant 必须引用 active AppScope。 |
+| `managed_scope_app_default_policy_missing` | blocking | MANAGED_USERS grant 缺少 app default managed scope policy。 |
+| `managed_scope_policy_disabled` | blocking | MANAGED_USERS grant 的 managed scope policy 已禁用。 |
+| `permission_supported_scopes_missing` | warning | active Permission 必须声明 supported_scopes。 |
+| `permission_group_inactive` | warning | active Permission 不应归属 inactive PermissionGroup。 |
+
 ---
 
 ## 成员与凭据

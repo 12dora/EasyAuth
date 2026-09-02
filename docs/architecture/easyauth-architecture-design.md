@@ -93,8 +93,13 @@ src/easyauth/
 | `AuthorizationGroupGrant` | 授权组展开出的 `(permission, scope_key)` 条目 |
 | `ManagedScopePolicy` | `MANAGED_USERS` 的解析策略（第一版：钉钉主管链） |
 | `ApprovalRule` | 某个授权组或权限由谁审批；数据库约束保证目标二选一 |
-| `AppCredential` | 静态 token（hash 存储）与 OAuth2 client，各自绑定唯一 App |
+| `AppCredential` | 静态 token（hash 存储）与 OAuth2 client，各自绑定唯一 App；供下游经公共 API **拉取**授权 |
 | `AppCapability` | 应用级平台能力开关（`directory` / `notify`） |
+
+授权消费方向决定配置完整性对凭据的要求：未接入出站供给连接器的 active App 至少需要一个
+active 静态 token 或 OAuth2 client。NetBird 等由 EasyAuth 经启用中的 `ConnectorInstance`
+**推送**供给的应用（见 [ADR-005](../decisions/ADR-005-NetBird供给连接器与management-fork边界.md)）
+不把入站 API 凭据列为 blocking；停用的连接器实例不能替代凭据。
 
 权限目录只负责组织和展示，**不产生授权事实**。模板导入不能删除已被引用的 Permission
 （只能停用），也不能改变既有 key 的业务含义——含义变了就新增 key 并废弃旧 key。
