@@ -155,6 +155,10 @@ def test_ops2_portal_explains_request_status_before_grant_is_effective() -> None
     client, user = logged_in_client("ops2-status-guide-user")
     app = App.objects.create(app_key="ops2-status-guide-app", name="CRM")
     approved_at = timezone.now()
+    approver, _created = UserMirror.objects.get_or_create(
+        authentik_user_id="ops2-status-guide-approver",
+        defaults={"name": "OPS2 状态审批人"},
+    )
     _ = AccessRequest.objects.create(
         user=user,
         app=app,
@@ -163,7 +167,7 @@ def test_ops2_portal_explains_request_status_before_grant_is_effective() -> None
         payload_digest="a" * 64,
         approved_at=approved_at,
         decided_at=approved_at,
-        decided_by="approver",
+        decided_by=approver.authentik_user_id,
         decision_actor_type=DECISION_ACTOR_USER,
     )
     _ = AccessRequest.objects.create(
@@ -174,7 +178,7 @@ def test_ops2_portal_explains_request_status_before_grant_is_effective() -> None
         idempotency_key="ops2-status-applied",
         payload_digest="b" * 64,
         decided_at=approved_at,
-        decided_by="approver",
+        decided_by=approver.authentik_user_id,
         decision_actor_type=DECISION_ACTOR_USER,
         applied_at=timezone.now(),
     )
@@ -186,7 +190,7 @@ def test_ops2_portal_explains_request_status_before_grant_is_effective() -> None
         payload_digest="c" * 64,
         approved_at=approved_at,
         decided_at=approved_at,
-        decided_by="approver",
+        decided_by=approver.authentik_user_id,
         decision_actor_type=DECISION_ACTOR_USER,
     )
 

@@ -9,8 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from easyauth.access_requests.approvals import (
     ApprovalActionError,
     ApprovalDecision,
-    access_request_approver_user_ids,
     approve_access_request,
+    query_approver_user_ids,
     reassign_access_request,
     reject_access_request,
 )
@@ -106,7 +106,7 @@ def _admin_decide(request: HttpRequest, request_id: int, *, action: str) -> Json
 
 def _request_item(access_request: AccessRequest) -> dict[str, JsonValue]:
     approver_ids: list[JsonValue] = []
-    approver_ids.extend(access_request_approver_user_ids(access_request))
+    approver_ids.extend(query_approver_user_ids(access_request))
     return {
         "id": access_request.id,
         "user_id": access_request.user.authentik_user_id,

@@ -5,22 +5,20 @@ from http import HTTPStatus
 from typing import TYPE_CHECKING, ClassVar, Final
 
 from django.db import models
-from django.db.models import Prefetch
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from easyauth.access_requests.approvals import (
     ApprovalActionError,
     ApprovalDecision,
-    access_request_approver_user_ids,
     approve_access_request,
+    loaded_approver_user_ids,
     reject_access_request,
 )
 from easyauth.access_requests.models import (
     DECISION_ACTOR_USER,
     REQUEST_STATUS_SUBMITTED,
     AccessRequest,
-    AccessRequestApprover,
     AccessRequestGroup,
     AccessRequestGroupGrantSnapshot,
 )
@@ -32,7 +30,10 @@ from easyauth.api.ordering import parse_ordering
 from easyauth.api.pagination import pagination_item, total_pages
 from easyauth.api.responses import error_response as _error_response
 from easyauth.api.responses import json_response as _json_response
-from easyauth.portal.access_request_data import access_request_item
+from easyauth.portal.access_request_data import (
+    APPROVER_PREFETCH,
+    access_request_items,
+)
 from easyauth.portal.pagination import build_page, page_request
 
 if TYPE_CHECKING:
@@ -50,12 +51,6 @@ PORTAL_APPROVAL_ORDERING: Final[dict[str, str]] = {
 }
 PORTAL_APPROVAL_PENDING_DEFAULT_ORDER: Final[tuple[str, ...]] = ("submitted_at", "id")
 PORTAL_APPROVAL_PROCESSED_DEFAULT_ORDER: Final[tuple[str, ...]] = ("-decided_at", "id")
-
-APPROVER_PREFETCH = Prefetch(
-    "approver_assignments",
-    queryset=AccessRequestApprover.objects.select_related("approver"),
-    to_attr="loaded_approver_assignments",
-)
 
 
 class _ApprovalDecisionPayload(BaseModel):
@@ -187,6 +182,7 @@ def _approval_error_response(error: ApprovalActionError) -> JsonResponse:
             if isinstance(request_id, int):
                 access_request = (
                     AccessRequest.objects.select_related("user", "app")
+                    .prefetch_related(APPROVER_PREFETCH)
                     .filter(id=request_id)
                     .first()
                 )
@@ -236,8 +232,17 @@ def _approval_page(
     last_page = max(total_pages(total_items=total_items, page_size=page.page_size), 1)
     if page.page > last_page:
         page = replace(page, page=last_page)
-    page_rows = visible[page.start : page.stop]
-    items = tuple(_approval_item(access_request) for access_request in page_rows)
+    page_rows = tuple(visible[page.start : page.stop])
+    serialized_items = access_request_items(page_rows)
+    authorization_groups_by_id = _approval_authorization_groups_by_request_id(page_rows)
+    items = tuple(
+        _approval_item_from_serialized(
+            access_request,
+            item,
+            authorization_groups=authorization_groups_by_id[access_request.id],
+        )
+        for access_request, item in zip(page_rows, serialized_items, strict=True)
+    )
     return build_page(items, request=page, total_items=total_items)
 
 
@@ -256,8 +261,26 @@ def _visible_approval(user: UserMirror, request_id: int) -> AccessRequest | None
 
 
 def _approval_item(access_request: AccessRequest) -> dict[str, JsonValue]:
-    item = access_request_item(access_request)
-    item["authorization_groups"] = _approval_authorization_groups(access_request)
+    prefetched = (
+        AccessRequest.objects.select_related("user", "app")
+        .prefetch_related(APPROVER_PREFETCH)
+        .get(pk=access_request.id)
+    )
+    (item,) = access_request_items((prefetched,))
+    return _approval_item_from_serialized(
+        prefetched,
+        item,
+        authorization_groups=_approval_authorization_groups(prefetched),
+    )
+
+
+def _approval_item_from_serialized(
+    access_request: AccessRequest,
+    item: dict[str, JsonValue],
+    *,
+    authorization_groups: list[JsonValue],
+) -> dict[str, JsonValue]:
+    item["authorization_groups"] = authorization_groups
     applicant = access_request.user
     item["applicant"] = {
         "user_id": applicant.authentik_user_id,
@@ -266,7 +289,7 @@ def _approval_item(access_request: AccessRequest) -> dict[str, JsonValue]:
         "department": applicant.department,
     }
     approver_ids: list[JsonValue] = []
-    approver_ids.extend(access_request_approver_user_ids(access_request))
+    approver_ids.extend(loaded_approver_user_ids(access_request))
     item["approver_user_ids"] = approver_ids
     item["decided_by"] = access_request.decided_by
     item["decided_at"] = datetime_value(access_request.decided_at)
@@ -274,28 +297,73 @@ def _approval_item(access_request: AccessRequest) -> dict[str, JsonValue]:
 
 
 def _approval_authorization_groups(access_request: AccessRequest) -> list[JsonValue]:
-    snapshot_items = list(
-        AccessRequestGroupGrantSnapshot.objects.filter(
-            access_request=access_request,
-        ).order_by("authorization_group_key", "permission_key", "scope_key"),
-    )
-    if snapshot_items:
-        return _snapshot_authorization_groups(snapshot_items)
+    return _approval_authorization_groups_by_request_id((access_request,))[access_request.id]
 
-    group_items: dict[str, dict[str, JsonValue]] = {}
+
+def _approval_authorization_groups_by_request_id(
+    access_requests: tuple[AccessRequest, ...],
+) -> dict[int, list[JsonValue]]:
+    request_ids = tuple(access_request.id for access_request in access_requests)
+    snapshots_by_request_id = _snapshots_by_request_id(request_ids)
+    missing_snapshot_ids = tuple(
+        request_id for request_id in request_ids if not snapshots_by_request_id[request_id]
+    )
+    live_groups_by_request_id = _live_authorization_groups_by_request_id(missing_snapshot_ids)
+    groups: dict[int, list[JsonValue]] = {}
+    for request_id in request_ids:
+        snapshot_items = snapshots_by_request_id[request_id]
+        if snapshot_items:
+            groups[request_id] = _snapshot_authorization_groups(snapshot_items)
+        else:
+            groups[request_id] = live_groups_by_request_id.get(request_id, [])
+    return groups
+
+
+def _snapshots_by_request_id(
+    request_ids: tuple[int, ...],
+) -> dict[int, list[AccessRequestGroupGrantSnapshot]]:
+    snapshots_by_request_id: dict[int, list[AccessRequestGroupGrantSnapshot]] = {
+        request_id: [] for request_id in request_ids
+    }
+    if not request_ids:
+        return snapshots_by_request_id
+    snapshots = AccessRequestGroupGrantSnapshot.objects.filter(
+        access_request_id__in=request_ids,
+    ).order_by(
+        "access_request_id",
+        "authorization_group_key",
+        "permission_key",
+        "scope_key",
+    )
+    for snapshot in snapshots:
+        snapshots_by_request_id.setdefault(snapshot.access_request_id, []).append(snapshot)
+    return snapshots_by_request_id
+
+
+def _live_authorization_groups_by_request_id(
+    request_ids: tuple[int, ...],
+) -> dict[int, list[JsonValue]]:
+    if not request_ids:
+        return {}
+    group_items_by_request_id: dict[int, dict[str, dict[str, JsonValue]]] = {
+        request_id: {} for request_id in request_ids
+    }
     for link in (
         AccessRequestGroup.objects.select_related("authorization_group")
-        .filter(access_request=access_request)
-        .order_by("authorization_group__key")
+        .filter(access_request_id__in=request_ids)
+        .order_by("access_request_id", "authorization_group__key")
     ):
         group = link.authorization_group
-        group_items[group.key] = {
+        group_items_by_request_id.setdefault(link.access_request_id, {})[group.key] = {
             "key": group.key,
             "kind": group.kind,
             "name": group.name,
             "grants": [],
         }
-    return list(group_items.values())
+    return {
+        request_id: list(group_items.values())
+        for request_id, group_items in group_items_by_request_id.items()
+    }
 
 
 def _snapshot_authorization_groups(

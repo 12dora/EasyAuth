@@ -45,8 +45,9 @@ pytestmark = pytest.mark.django_db
 
 REQUESTS_API_URL: Final = "/portal/api/v1/me/access-requests"
 EXPECTED_REQUEST_ROW_COUNT: Final = 3
-# 真实 API 路径: 主查询 + 授权组批量 + direct grant 批量, 固定 3 条不随行数增长。
-EXPECTED_REQUEST_ROW_QUERIES: Final = 3
+# 真实 API 路径: 主查询 + 审批人 prefetch + 授权组批量 + direct grant 批量。
+# 本例全是 submitted 且无 decided_by, 不额外打 UserMirror 决定人查询; 固定 4 条不随行数增长。
+EXPECTED_REQUEST_ROW_QUERIES: Final = 4
 
 
 def test_s14_portal_api_accepts_only_requestable_authorization_groups() -> None:
@@ -515,9 +516,13 @@ def _decision_fields(status: str) -> dict[str, object]:
     if status == REQUEST_STATUS_SUBMITTED:
         return {}
     decided_at = timezone.now()
+    approver, _created = UserMirror.objects.get_or_create(
+        authentik_user_id="s14-status-approver",
+        defaults={"name": "S14 审批人"},
+    )
     fields: dict[str, object] = {
         "decided_at": decided_at,
-        "decided_by": "approver",
+        "decided_by": approver.authentik_user_id,
         "decision_actor_type": DECISION_ACTOR_USER,
     }
     if status in {

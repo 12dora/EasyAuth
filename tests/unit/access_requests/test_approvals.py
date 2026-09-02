@@ -6,8 +6,9 @@ from easyauth.access_requests.application_grants import GrantApplyFailureError
 from easyauth.access_requests.approvals import (
     ApprovalActionError,
     ApprovalDecision,
-    access_request_approver_user_ids,
     approve_access_request,
+    loaded_approver_user_ids,
+    query_approver_user_ids,
     reassign_access_request,
     reject_access_request,
 )
@@ -233,7 +234,7 @@ def test_reassign_replaces_approvers_with_validation() -> None:
         )
 
     # Then: 去重去空、审计包含新旧列表。
-    assert access_request_approver_user_ids(reassigned) == ["new-approver"]
+    assert query_approver_user_ids(reassigned) == ["new-approver"]
     assert departed_error.value.kind == "validation_error"
     assert applicant_error.value.kind == "validation_error"
     audit_log = AuditLog.objects.get(event_type="access_request_reassigned")
@@ -259,6 +260,15 @@ def test_reassign_rejects_non_submitted_request() -> None:
             actor_id="console-admin",
         )
     assert exc_info.value.kind == "conflict"
+
+
+def test_loaded_approver_user_ids_requires_prefetch() -> None:
+    # Given: 领域对象未经 APPROVER_PREFETCH, 序列化不能静默补查。
+    access_request = _submitted_request("loaded-ids-user", "loaded-ids-app")
+
+    # When / Then
+    with pytest.raises(AttributeError):
+        loaded_approver_user_ids(access_request)
 
 
 def _submitted_request(

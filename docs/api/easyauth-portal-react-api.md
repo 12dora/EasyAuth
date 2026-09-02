@@ -98,10 +98,20 @@
   "direct_grants": [
     {"permission": "order.view", "permission_name": "查看订单", "scope": "SELF"}
   ],
+  "current_approvers": [
+    {"user_id": "ak-manager-1", "name": "张三"}
+  ],
+  "decided_by": "",
+  "decision_actor_type": "",
+  "decided_by_name": null,
   "decided_at": null,
   "decision_comment": ""
 }
 ```
+
+- `current_approvers`：仅 `status == "submitted"` 时返回当前 `AccessRequestApprover` 分配（`user_id` + `name`），按分配记录 `id` 升序；其他状态固定为 `[]`。
+- `decided_by` / `decision_actor_type`：与申请上的决定字段一致（未决或已撤回时为空字符串）。
+- `decided_by_name`：当 `decision_actor_type` 为 `user` 时必须能解析到对应 `UserMirror.name`；找不到镜像视为数据损坏并失败，不返回 `null`。仅 `console_admin`（控制台代审）或尚未决定的申请为 `null`。前端可用 `decided_by` 作为无姓名时的回退展示。
 
 **状态枚举：** `submitted` / `approved` / `rejected` / `grant_applied` / `grant_failed` / `grant_conflict` / `grant_expired` / `withdrawn`。
 

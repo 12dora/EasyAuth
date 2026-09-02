@@ -100,6 +100,10 @@ def test_ops2_portal_api_lists_access_requests_for_session_user() -> None:
         name="审计员",
     )
     decided_at = timezone.now()
+    approver, _created = UserMirror.objects.get_or_create(
+        authentik_user_id="ops2-api-requests-approver",
+        defaults={"name": "OPS2 审批人", "status": USER_STATUS_ACTIVE},
+    )
     approved = AccessRequest.objects.create(
         user=user,
         app=app,
@@ -109,7 +113,7 @@ def test_ops2_portal_api_lists_access_requests_for_session_user() -> None:
         payload_digest="a" * 64,
         approved_at=decided_at,
         decided_at=decided_at,
-        decided_by="approver",
+        decided_by=approver.authentik_user_id,
         decision_actor_type=DECISION_ACTOR_USER,
     )
     applied = AccessRequest.objects.create(
@@ -122,7 +126,7 @@ def test_ops2_portal_api_lists_access_requests_for_session_user() -> None:
         payload_digest="b" * 64,
         approved_at=decided_at,
         decided_at=decided_at,
-        decided_by="approver",
+        decided_by=approver.authentik_user_id,
         decision_actor_type=DECISION_ACTOR_USER,
     )
     _ = AccessRequestGroup.objects.create(access_request=approved, authorization_group=group)

@@ -39,6 +39,14 @@ pytestmark = pytest.mark.django_db
 
 JSON_VALUE_ADAPTER: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 GRANT_FAILURE_MESSAGE: Final = "外部授权写入失败"
+EXPECTED_PROCESSED_ROW_COUNT: Final = 3
+# session + 当前用户 + COUNT + 页切片 + 审批人 prefetch + 授权组批量 + direct grant 批量
+# + 决定人 UserMirror 批量 + snapshot 批量; 固定 9 条不随行数增长。
+EXPECTED_PROCESSED_PAGE_QUERIES: Final = 9
+EXPECTED_PENDING_ROW_COUNT: Final = 3
+# session + 当前用户 + COUNT + 页切片 + 审批人 prefetch + 授权组批量 + direct grant 批量
+# + snapshot 批量; pending 无决定人批量查询, 固定 8 条不随行数增长。
+EXPECTED_PENDING_PAGE_QUERIES: Final = 8
 
 
 def test_approver_sees_pending_approvals_and_approves() -> None:
@@ -395,6 +403,80 @@ def test_processed_filter_returns_my_decisions() -> None:
     first = processed_data[0]
     assert isinstance(first, dict)
     assert first["decided_by"] == approver.authentik_user_id
+
+
+def test_pending_approvals_page_resolves_approvers_in_fixed_queries() -> None:
+    # Given: 审批人待办里有多条申请, 每条另挂一名 authentik_user_id 更小的审批人。
+    client, approver = logged_in_client("z-pending-query-approver")
+    earlier_id_approver = UserMirror.objects.create(
+        authentik_user_id="a-pending-query-other",
+        name="另一审批人",
+    )
+    for index in range(EXPECTED_PENDING_ROW_COUNT):
+        access_request = _submitted_request(
+            f"portal-pending-query-applicant-{index}",
+            f"portal-pending-query-app-{index}",
+            approver_id=approver.authentik_user_id,
+        )
+        _ = AccessRequestApprover.objects.create(
+            access_request=access_request,
+            approver=earlier_id_approver,
+        )
+
+    # When: 读取待办列表(真实 API 路径)。
+    with CaptureQueriesContext(connection) as captured_queries:
+        response = client.get("/portal/api/v1/me/approvals?status=pending")
+
+    # Then: 查询数固定, current_approvers 按分配 id, approver_user_ids 按 authentik_user_id。
+    assert response.status_code == HTTPStatus.OK
+    body = _json_object(response.content)
+    data = body["data"]
+    assert isinstance(data, list)
+    assert len(data) == EXPECTED_PENDING_ROW_COUNT
+    assert len(captured_queries) == EXPECTED_PENDING_PAGE_QUERIES
+    for item in data:
+        assert isinstance(item, dict)
+        assert item["current_approvers"] == [
+            {"user_id": approver.authentik_user_id, "name": "门户用户"},
+            {"user_id": earlier_id_approver.authentik_user_id, "name": "另一审批人"},
+        ]
+        assert item["approver_user_ids"] == [
+            earlier_id_approver.authentik_user_id,
+            approver.authentik_user_id,
+        ]
+
+
+def test_processed_approvals_page_resolves_deciders_in_fixed_queries() -> None:
+    # Given: 审批人已处理多条申请, 避免按行解析决定人。
+    client, approver = logged_in_client("portal-processed-query-approver")
+    for index in range(EXPECTED_PROCESSED_ROW_COUNT):
+        access_request = _submitted_request(
+            f"portal-processed-query-applicant-{index}",
+            f"portal-processed-query-app-{index}",
+            approver_id=approver.authentik_user_id,
+        )
+        rejected = client.post(
+            f"/portal/api/v1/me/approvals/{access_request.id}/reject",
+            data=dumps({"comment": "批量查询"}),
+            content_type="application/json",
+        )
+        assert rejected.status_code == HTTPStatus.OK
+
+    # When: 读取已办列表(真实 API 路径)。
+    with CaptureQueriesContext(connection) as captured_queries:
+        response = client.get("/portal/api/v1/me/approvals?status=processed")
+
+    # Then: 查询数固定, 每行都能解析决定人姓名。
+    assert response.status_code == HTTPStatus.OK
+    body = _json_object(response.content)
+    data = body["data"]
+    assert isinstance(data, list)
+    assert len(data) == EXPECTED_PROCESSED_ROW_COUNT
+    assert len(captured_queries) == EXPECTED_PROCESSED_PAGE_QUERIES
+    for item in data:
+        assert isinstance(item, dict)
+        assert item["decided_by"] == approver.authentik_user_id
+        assert item["decided_by_name"] == "门户用户"
 
 
 def test_processed_approvals_count_and_slice_in_database() -> None:

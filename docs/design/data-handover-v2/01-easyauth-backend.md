@@ -1039,7 +1039,7 @@ def escalate_overdue_task(task: HandoverTask) -> HandoverTask:
 > 因此必须先读全集再算差集：
 >
 > ```python
-> previous = access_request_approver_user_ids(access_request)      # 既有 helper
+> previous = query_approver_user_ids(access_request)      # 领域查询 helper
 > desired  = [u for u in previous if u != subject.authentik_user_id]
 > if new_approver and new_approver.authentik_user_id not in desired:
 >     desired.append(new_approver.authentik_user_id)               # 稳定去重, 保序

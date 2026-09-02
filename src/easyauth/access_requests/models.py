@@ -400,6 +400,7 @@ def _payload_identity_errors(request: AccessRequest) -> dict[str, str]:
 
 class AccessRequestApprover(models.Model):
     if TYPE_CHECKING:
+        id: ClassVar[int]
         access_request_id: ClassVar[int]
         approver_id: ClassVar[int]
 

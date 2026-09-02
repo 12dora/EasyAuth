@@ -9,7 +9,7 @@ from django.utils import timezone
 
 from easyauth.access_requests.approvals import (
     ApprovalActionError,
-    access_request_approver_user_ids,
+    query_approver_user_ids,
     reassign_locked_access_request,
 )
 from easyauth.access_requests.models import (
@@ -121,7 +121,7 @@ def _reassign_one_access_request(
         )
         if access_request is None or access_request.status != REQUEST_STATUS_SUBMITTED:
             return False
-        previous = access_request_approver_user_ids(access_request)
+        previous = query_approver_user_ids(access_request)
         desired = _active_surviving_approvers(previous, subject=subject)
         resolution = resolve_assignee(access_request.user, start_level=0)
         _append_resolved_approver(

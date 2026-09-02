@@ -203,7 +203,7 @@ def reassign_locked_access_request(
             details={"request_id": access_request.id, "status": access_request.status},
         )
     normalized = _validated_reassign_approvers(access_request, approver_user_ids)
-    previous = access_request_approver_user_ids(access_request)
+    previous = query_approver_user_ids(access_request)
     _ = AccessRequestApprover.objects.filter(access_request=access_request).delete()
     approvers = UserMirror.objects.in_bulk(normalized, field_name="authentik_user_id")
     _ = AccessRequestApprover.objects.bulk_create(
@@ -248,14 +248,19 @@ def approver_is_authorized(access_request: AccessRequest, approver_user_id: str)
     ).exists()
 
 
-def access_request_approver_user_ids(access_request: AccessRequest) -> list[str]:
-    assignments = getattr(access_request, "loaded_approver_assignments", None)
-    if assignments is None:
-        assignments = list(
-            AccessRequestApprover.objects.select_related("approver").filter(
-                access_request=access_request,
-            ),
-        )
+def loaded_approver_user_ids(access_request: AccessRequest) -> list[str]:
+    """序列化专用: 必须走带 APPROVER_PREFETCH 的 queryset, 缺 prefetch 即 AttributeError。"""
+    return [
+        assignment.approver.authentik_user_id
+        for assignment in access_request.loaded_approver_assignments
+    ]
+
+
+def query_approver_user_ids(access_request: AccessRequest) -> list[str]:
+    """领域操作主动加载审批人分配; 与序列化路径的 loaded_approver_user_ids 分开。"""
+    assignments = AccessRequestApprover.objects.select_related("approver").filter(
+        access_request=access_request,
+    )
     return [assignment.approver.authentik_user_id for assignment in assignments]
 
 

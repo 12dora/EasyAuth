@@ -8,7 +8,7 @@ from typing import Final
 import pytest
 from django.utils import timezone
 
-from easyauth.access_requests.approvals import access_request_approver_user_ids
+from easyauth.access_requests.approvals import query_approver_user_ids
 from easyauth.access_requests.models import AccessRequest, AccessRequestPermission
 from easyauth.accounts.models import UserMirror
 from easyauth.applications.models import (
@@ -81,7 +81,7 @@ def test_ops4_portal_api_submits_grant_request_with_direct_permission_without_ru
     )
     assert response.status_code == HTTPStatus.CREATED
     assert access_request.request_type == "grant"
-    assert access_request_approver_user_ids(access_request) == [_active_approver_user_id()]
+    assert query_approver_user_ids(access_request) == [_active_approver_user_id()]
     assert permission_keys == (permission.key,)
     assert scope_keys == (DEFAULT_SCOPE_KEY,)
 

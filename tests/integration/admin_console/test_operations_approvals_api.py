@@ -10,7 +10,7 @@ from django.test import Client
 from pydantic import TypeAdapter
 
 from easyauth.access_requests.application import AccessRequestApplicationError
-from easyauth.access_requests.approvals import access_request_approver_user_ids
+from easyauth.access_requests.approvals import query_approver_user_ids
 from easyauth.access_requests.models import (
     GRANT_TYPE_PERMANENT,
     AccessRequest,
@@ -113,7 +113,7 @@ def test_admin_reassigns_approvers() -> None:
     # Then
     access_request.refresh_from_db()
     assert response.status_code == HTTPStatus.OK
-    assert access_request_approver_user_ids(access_request) == ["ops-new-approver"]
+    assert query_approver_user_ids(access_request) == ["ops-new-approver"]
     assert AuditLog.objects.filter(event_type="access_request_reassigned").exists()
 
 
