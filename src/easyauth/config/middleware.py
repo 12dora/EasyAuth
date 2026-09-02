@@ -39,6 +39,7 @@ FORCED_PASSWORD_CHANGE_ALLOWED_PREFIXES: Final = (
     "/auth/local/change-password/",
     "/auth/logout/",
     "/auth/logged-out/",
+    "/auth/authentik-logout/",
     "/static/",
     "/assets/",
 )

@@ -378,22 +378,15 @@ ${AUTHENTIK_BASE_URL}/application/o/easyauth/end-session/
 export EASYAUTH_AUTHENTIK_LOGOUT_URL="${AUTHENTIK_BASE_URL}/application/o/easyauth/end-session/"
 ```
 
-如果 Authentik Provider 已登记完全一致的 `logout` 类型 Redirect URI，可设置：
-
-```bash
-export EASYAUTH_AUTHENTIK_POST_LOGOUT_REDIRECT_URI="${EASYAUTH_LOGGED_OUT_URL}"
-```
-
-如果没有登记 logout Redirect URI，不要设置 `EASYAUTH_AUTHENTIK_POST_LOGOUT_REDIRECT_URI`。否则 Authentik End Session 会返回 `Bad Request`。
+不要设置 `EASYAUTH_AUTHENTIK_POST_LOGOUT_REDIRECT_URI`。EasyAuth 退出后顶层窗口只跳 `/auth/logged-out/`，由隐藏 iframe 向 End Session POST `id_token_hint`，不带 `post_logout_redirect_uri`。
 
 自动化配置 Authentik Provider 时，Redirect URIs 至少要包含：
 
 ```text
 authorization：${EASYAUTH_CALLBACK}
-logout：${EASYAUTH_LOGGED_OUT_URL}
 ```
 
-EasyAuth 登出会先清理本地会话，再跳转到 Authentik Provider End Session。自动化配置 Authentik 时，确认 `default-provider-invalidation-flow` 绑定 `default-invalidation-logout` User Logout stage。
+EasyAuth 登出会先清理本地会话并展示已登出页，再在隐藏 iframe 中请求 Authentik Provider End Session。自动化配置 Authentik 时，确认 `default-provider-invalidation-flow` 绑定 `default-invalidation-logout` User Logout stage。
 
 如需目录 API：
 
@@ -512,17 +505,12 @@ ${AUTHENTIK_BASE_URL}/source/oauth/callback/dingtalk/
 
 预期：
 
-1. EasyAuth 响应 `302`。
-2. `Location` 指向：
-
-```text
-${AUTHENTIK_BASE_URL}/application/o/easyauth/end-session/
-```
-
-3. 如果本轮登录保存了 `id_token`，`Location` 包含 `id_token_hint`。
-4. 只有配置了 `EASYAUTH_AUTHENTIK_POST_LOGOUT_REDIRECT_URI` 时，`Location` 才包含 `post_logout_redirect_uri`。
-5. Authentik 不应返回 `Bad Request`。
-6. 再次点击钉钉登录时，应重新进入 Authentik/DingTalk 登录流程，不应凭旧 Authentik session 直接返回 EasyAuth。
+1. EasyAuth 响应 `302`，`Location` 为 `/auth/logged-out/?next=%2Fportal%2F`。
+2. 已登出页 HTML 含隐藏 iframe，`src` 为 `/auth/authentik-logout/`。
+3. `GET /auth/authentik-logout/` 返回自动 POST 表单，`action` 为 Authentik Provider End Session。
+4. 如果本轮登录保存了 `id_token`，表单含 `id_token_hint`，不含 `post_logout_redirect_uri`。
+5. 浏览器顶层窗口地址栏停在 EasyAuth 已登出页，而不是 Authentik `end-session`。
+6. 再次点击钉钉登录时，应重新进入 Authentik/DingTalk 登录流程；若 Authentik 会话因 iframe 登出失败而仍在，可能出现 SSO，这不影响已登出页展示。
 
 ## 回滚策略
 
@@ -553,19 +541,9 @@ curl -I "${AUTHENTIK_BASE_URL}/source/oauth/login/dingtalk/"
 
 两者必须逐字匹配，包括协议、host、端口和尾部斜杠。
 
-### Authentik End Session 报 Bad Request
+### 退出登录后浏览器停在 Authentik 空白页
 
-优先检查：
-
-1. EasyAuth 是否设置了 `EASYAUTH_AUTHENTIK_POST_LOGOUT_REDIRECT_URI`。
-2. Authentik Provider 是否登记了完全一致的 `logout` 类型 Redirect URI。
-3. EasyAuth 是否把登出目标错误配置成 `/if/flow/default-invalidation-flow/`。
-
-修复：
-
-1. 登出目标使用 Provider End Session：`${AUTHENTIK_BASE_URL}/application/o/easyauth/end-session/`。
-2. Provider `redirect_uris` 追加 `logout：${EASYAUTH_LOGGED_OUT_URL}`。
-3. 如果无法立刻登记 logout Redirect URI，先移除 EasyAuth 的 `EASYAUTH_AUTHENTIK_POST_LOGOUT_REDIRECT_URI`。
+当前 EasyAuth 不应把顶层窗口跳到 End Session。若地址栏仍是 `/application/o/easyauth/end-session/`，说明跑的是旧版本，需要重建并部署 EasyAuth 镜像。
 
 ### 钉钉登录后提示只能内部用户访问
 

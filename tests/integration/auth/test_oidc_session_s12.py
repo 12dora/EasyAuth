@@ -8,6 +8,11 @@ import pytest
 from django.test import Client, override_settings
 
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY, OIDC_ID_TOKEN_SESSION_KEY
+from easyauth.accounts.logout_state import (
+    AUTHENTIK_LOGOUT_FRAME_PATH,
+    LOGGED_OUT_LOCATION,
+    PENDING_AUTHENTIK_LOGOUT_SESSION_KEY,
+)
 from easyauth.accounts.models import USER_STATUS_DISABLED, UserMirror
 
 if TYPE_CHECKING:
@@ -378,7 +383,7 @@ def test_s12_callback_ignores_unsafe_authentik_picture_claim(
     EASYAUTH_AUTHENTIK_OIDC_CLIENT_ID=CLIENT_ID,
     EASYAUTH_AUTHENTIK_OIDC_REDIRECT_URI="http://localhost:8001/auth/callback/",
 )
-def test_s12_logout_clears_local_session_and_redirects_to_authentik_logout_flow() -> None:
+def test_s12_logout_clears_local_session_and_redirects_to_logged_out_page() -> None:
     client = Client()
     session = client.session
     session[SESSION_KEY] = OIDC_SUBJECT
@@ -388,14 +393,10 @@ def test_s12_logout_clears_local_session_and_redirects_to_authentik_logout_flow(
     response = client.post("/auth/logout/")
 
     assert response.status_code == HTTPStatus.FOUND
-    location = response.headers["Location"]
-    parsed = urlsplit(location)
-    assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == (
-        "https://authentik.example.test/application/o/easyauth/end-session/"
-    )
-    assert parse_qs(parsed.query) == {}
+    assert response.headers["Location"] == LOGGED_OUT_LOCATION
     assert SESSION_KEY not in client.session
     assert "unrelated_session_value" not in client.session
+    assert PENDING_AUTHENTIK_LOGOUT_SESSION_KEY in client.session
 
 
 @override_settings(
@@ -404,21 +405,21 @@ def test_s12_logout_clears_local_session_and_redirects_to_authentik_logout_flow(
     EASYAUTH_AUTHENTIK_OIDC_CLIENT_ID=CLIENT_ID,
     EASYAUTH_AUTHENTIK_OIDC_REDIRECT_URI=REDIRECT_URI,
 )
-def test_s12_logout_uses_configured_authentik_logout_endpoint() -> None:
+def test_s12_logout_uses_configured_authentik_logout_endpoint_in_hidden_frame() -> None:
     client = Client()
     session = client.session
     session[SESSION_KEY] = OIDC_SUBJECT
     session.save()
 
     response = client.post("/auth/logout/")
+    logged_out = client.get(LOGGED_OUT_LOCATION)
+    frame = client.get(AUTHENTIK_LOGOUT_FRAME_PATH)
 
     assert response.status_code == HTTPStatus.FOUND
-    location = response.headers["Location"]
-    parsed = urlsplit(location)
-    assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == (
-        "https://authentik.example.test/custom/end-session/"
-    )
-    assert parse_qs(parsed.query) == {}
+    assert response.headers["Location"] == LOGGED_OUT_LOCATION
+    assert f'src="{AUTHENTIK_LOGOUT_FRAME_PATH}"' in logged_out.content.decode()
+    assert frame.status_code == HTTPStatus.OK
+    assert 'action="https://authentik.example.test/custom/end-session/"' in frame.content.decode()
     assert SESSION_KEY not in client.session
 
 
@@ -427,24 +428,31 @@ def test_s12_logout_uses_configured_authentik_logout_endpoint() -> None:
     EASYAUTH_AUTHENTIK_OIDC_CLIENT_ID=CLIENT_ID,
     EASYAUTH_AUTHENTIK_OIDC_REDIRECT_URI="http://localhost:8001/auth/callback/",
 )
-def test_s12_logout_sends_id_token_hint_without_unregistered_redirect_by_default() -> None:
+def test_s12_logout_posts_id_token_hint_through_hidden_authentik_frame() -> None:
     client = Client(HTTP_HOST="localhost:8001")
     session = client.session
     session[SESSION_KEY] = OIDC_SUBJECT
     session[ID_TOKEN_SESSION_KEY] = "s12.id.token"
     session.save()
 
-    response = client.post("/auth/logout/")
+    logout_response = client.post("/auth/logout/")
+    logged_out = client.get(LOGGED_OUT_LOCATION)
+    frame = client.get(AUTHENTIK_LOGOUT_FRAME_PATH)
+    html = frame.content.decode()
 
-    assert response.status_code == HTTPStatus.FOUND
-    parsed = urlsplit(response.headers["Location"])
-    query = parse_qs(parsed.query)
-    assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == (
-        "https://authentik.example.test/application/o/easyauth/end-session/"
+    assert logout_response.headers["Location"] == LOGGED_OUT_LOCATION
+    assert f'src="{AUTHENTIK_LOGOUT_FRAME_PATH}"' in logged_out.content.decode()
+    assert frame.status_code == HTTPStatus.OK
+    assert frame.headers["X-Frame-Options"] == "SAMEORIGIN"
+    assert (
+        'action="https://authentik.example.test/application/o/easyauth/end-session/"' in html
     )
-    assert query == {"id_token_hint": ["s12.id.token"]}
+    assert 'name="id_token_hint"' in html
+    assert "s12.id.token" in html
+    assert "post_logout_redirect_uri" not in html
     assert SESSION_KEY not in client.session
     assert ID_TOKEN_SESSION_KEY not in client.session
+    assert PENDING_AUTHENTIK_LOGOUT_SESSION_KEY not in client.session
 
 
 @override_settings(
@@ -453,47 +461,37 @@ def test_s12_logout_sends_id_token_hint_without_unregistered_redirect_by_default
     EASYAUTH_AUTHENTIK_OIDC_REDIRECT_URI="http://localhost:8001/auth/callback/",
     EASYAUTH_AUTHENTIK_POST_LOGOUT_REDIRECT_URI="http://localhost:8001/auth/logged-out/?next=%2Fportal%2F",
 )
-def test_s12_logout_adds_configured_post_logout_redirect_with_id_token_hint() -> None:
+def test_s12_logout_does_not_send_post_logout_redirect_to_authentik() -> None:
     client = Client(HTTP_HOST="localhost:8001")
     session = client.session
     session[SESSION_KEY] = OIDC_SUBJECT
     session[ID_TOKEN_SESSION_KEY] = "s12.id.token"
     session.save()
 
-    response = client.post("/auth/logout/")
+    _ = client.post("/auth/logout/")
+    frame = client.get(AUTHENTIK_LOGOUT_FRAME_PATH)
 
-    assert response.status_code == HTTPStatus.FOUND
-    parsed = urlsplit(response.headers["Location"])
-    query = parse_qs(parsed.query)
-    assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == (
-        "https://authentik.example.test/application/o/easyauth/end-session/"
-    )
-    assert query == {
-        "id_token_hint": ["s12.id.token"],
-        "post_logout_redirect_uri": ["http://localhost:8001/auth/logged-out/?next=%2Fportal%2F"],
-    }
+    assert frame.status_code == HTTPStatus.OK
+    assert "post_logout_redirect_uri" not in frame.content.decode()
 
 
 @override_settings(
     EASYAUTH_AUTHENTIK_OIDC_ISSUER=AUTHENTIK_ISSUER,
     EASYAUTH_AUTHENTIK_OIDC_CLIENT_ID=CLIENT_ID,
     EASYAUTH_AUTHENTIK_OIDC_REDIRECT_URI="http://localhost:8001/auth/callback/",
-    EASYAUTH_AUTHENTIK_POST_LOGOUT_REDIRECT_URI="http://localhost:8001/auth/logged-out/?next=%2Fportal%2F",
 )
-def test_s12_logout_omits_post_logout_redirect_without_id_token_hint() -> None:
-    client = Client(HTTP_HOST="localhost:8001")
+def test_s12_authentik_logout_frame_is_single_use() -> None:
+    client = Client()
     session = client.session
     session[SESSION_KEY] = OIDC_SUBJECT
     session.save()
 
-    response = client.post("/auth/logout/")
+    _ = client.post("/auth/logout/")
+    first = client.get(AUTHENTIK_LOGOUT_FRAME_PATH)
+    second = client.get(AUTHENTIK_LOGOUT_FRAME_PATH)
 
-    assert response.status_code == HTTPStatus.FOUND
-    parsed = urlsplit(response.headers["Location"])
-    assert f"{parsed.scheme}://{parsed.netloc}{parsed.path}" == (
-        "https://authentik.example.test/application/o/easyauth/end-session/"
-    )
-    assert parse_qs(parsed.query) == {}
+    assert first.status_code == HTTPStatus.OK
+    assert second.status_code == HTTPStatus.NO_CONTENT
 
 
 @override_settings(
@@ -508,10 +506,13 @@ def test_s12_logout_clears_local_session_when_authentik_logout_url_cannot_be_der
     session.save()
 
     response = client.post("/auth/logout/")
+    logged_out = client.get(LOGGED_OUT_LOCATION)
 
     assert response.status_code == HTTPStatus.FOUND
-    assert response.headers["Location"] == "/auth/logged-out/?next=%2Fportal%2F"
+    assert response.headers["Location"] == LOGGED_OUT_LOCATION
     assert SESSION_KEY not in client.session
+    assert PENDING_AUTHENTIK_LOGOUT_SESSION_KEY not in client.session
+    assert f'src="{AUTHENTIK_LOGOUT_FRAME_PATH}"' not in logged_out.content.decode()
 
 
 @override_settings(
@@ -568,6 +569,7 @@ def test_s12_logged_out_page_serves_public_react_shell() -> None:
     html = response.content.decode()
     assert "已登出" in html
     assert 'data-easyauth-react-shell="portal"' in html
+    assert 'src="/auth/authentik-logout/"' not in html
     assert "data-current-user-id" not in html
     assert "authentik SSO" not in html
     assert "旧链接会停在这里" not in html

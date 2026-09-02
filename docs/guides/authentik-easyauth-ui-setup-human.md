@@ -198,13 +198,13 @@ authorization：http://127.0.0.1:8001/auth/callback/
 logout：http://127.0.0.1:8001/auth/logged-out/?next=%2Fportal%2F
 ```
 
-EasyAuth 登出会先清理本地会话，再跳转到 Authentik Provider 的 End Session 入口：
+EasyAuth 登出会先清理本地会话并跳到 `/auth/logged-out/`。隐藏 iframe 再向 Authentik Provider End Session POST：
 
 ```text
 https://auth.example.com/application/o/easyauth/end-session/
 ```
 
-如果 EasyAuth 配置了 `post_logout_redirect_uri`，Authentik Provider 必须登记完全一致的 `logout` 类型 Redirect URI。不要把 EasyAuth 登出入口配置成 `/if/flow/default-invalidation-flow/`，该地址不是 OIDC RP-Initiated Logout 入口。
+不要把 EasyAuth 登出入口配置成 `/if/flow/default-invalidation-flow/`，该地址不是 OIDC RP-Initiated Logout 入口。`logout` 类型 Redirect URI 不再被 EasyAuth 使用，可保留也可以不配。
 
 5. 在 Property mappings 或 Scope mappings 中选择：
 
@@ -321,16 +321,9 @@ https://auth.example.com/application/o/easyauth/end-session/
 EASYAUTH_AUTHENTIK_LOGOUT_URL=https://auth.example.com/application/o/easyauth/end-session/
 ```
 
-如果希望 Authentik End Session 完成后自动回到 EasyAuth 已登出页，还需要同时满足两点：
+点击 EasyAuth 的 logout 后会先清理本地 session，并立刻跳到 EasyAuth 已登出页 `/auth/logged-out/`。顶层窗口不会进入 Authentik。已登出页用隐藏 iframe 打开 `/auth/authentik-logout/`，由该页面向 Authentik Provider End Session 发起 POST（带 `id_token_hint`，不带 `post_logout_redirect_uri`）。Authentik 若因登录中切用户留下 flow plan 而返回空白，只影响 iframe，用户仍看到已登出页。
 
-1. Authentik Provider 已登记完全一致的 `logout` 类型 Redirect URI。
-2. EasyAuth 运行配置中填写：
-
-```text
-EASYAUTH_AUTHENTIK_POST_LOGOUT_REDIRECT_URI=https://easyauth.example.com/auth/logged-out/?next=%2Fportal%2F
-```
-
-点击 EasyAuth 的 logout 后会清理本地 session，并跳转到 Authentik Provider End Session。EasyAuth 会带上本次 OIDC 登录拿到的 `id_token_hint`；只有配置了 `EASYAUTH_AUTHENTIK_POST_LOGOUT_REDIRECT_URI` 且 Authentik 已登记对应 `logout` Redirect URI 时，才会附带 `post_logout_redirect_uri`。
+因此不再需要配置 `EASYAUTH_AUTHENTIK_POST_LOGOUT_REDIRECT_URI`，也不再要求 Authentik 为 EasyAuth 登记 `logout` 类型 Redirect URI 才能完成退出。
 
 如果当前 EasyAuth 版本没有 UI 配置入口，这些值需要由运维写入 EasyAuth 运行配置。该限制属于 EasyAuth 当前实现，不属于 Authentik UI 可配置范围。
 
@@ -395,20 +388,9 @@ https://easyauth.example.com/auth/callback/
 
 这是预期行为。Application Binding 只限制 Authentik Application 访问；EasyAuth 系统管理员来自 OIDC `groups` claim 中的 `EasyAuth Admins`。
 
-### 登出跳转到 Authentik 后提示 Bad Request
+### 退出登录后浏览器停在 Authentik 空白页
 
-通常是 EasyAuth 配置了 `EASYAUTH_AUTHENTIK_POST_LOGOUT_REDIRECT_URI`，但 Authentik Provider 没有登记完全一致的 `logout` 类型 Redirect URI。
-
-处理：
-
-1. 在 Provider Redirect URIs 中添加 `logout` 类型：
-
-```text
-https://easyauth.example.com/auth/logged-out/?next=%2Fportal%2F
-```
-
-2. 确认 EasyAuth 运行配置里的 `EASYAUTH_AUTHENTIK_POST_LOGOUT_REDIRECT_URI` 与 Authentik 中的值逐字一致。
-3. 如果暂时无法登记 logout Redirect URI，先移除 EasyAuth 里的 `EASYAUTH_AUTHENTIK_POST_LOGOUT_REDIRECT_URI`。EasyAuth 仍会跳 End Session，但不会附带 `post_logout_redirect_uri`。
+旧版本会把顶层窗口跳到 Authentik End Session。登录期间在 Authentik 切换用户后，End Session 可能返回空白页。当前实现顶层窗口只跳 EasyAuth `/auth/logged-out/`，Authentik 登出在隐藏 iframe 中完成。如果仍看到空白的 `end-session` 地址栏，说明浏览器还在用旧 EasyAuth 前端/后端。
 
 ### 钉钉登录后提示只能内部用户访问
 

@@ -11,6 +11,11 @@ from easyauth.frontend_shell import render_public_react_shell
 LOGGED_OUT_COOKIE_NAME = "easyauth_logged_out"
 LOGGED_OUT_COOKIE_MAX_AGE_SECONDS = 3600
 DEFAULT_LOGGED_OUT_NEXT = "/portal/"
+LOGGED_OUT_LOCATION = "/auth/logged-out/?next=%2Fportal%2F"
+AUTHENTIK_LOGOUT_FRAME_PATH = "/auth/authentik-logout/"
+# 登出后仍留在 session 里的 id_token_hint, 供隐藏 iframe POST 给 Authentik End Session。
+# 键存在即表示要发起 SLO; 值为空字符串表示不带 id_token_hint。
+PENDING_AUTHENTIK_LOGOUT_SESSION_KEY = "easyauth_pending_authentik_logout"
 
 
 def browser_is_marked_logged_out(request: HttpRequest) -> bool:
@@ -44,8 +49,12 @@ def logged_out_next_path(request: HttpRequest) -> str:
 
 
 def logged_out_response(request: HttpRequest) -> HttpResponse:
+    authentik_logout_frame_src = ""
+    if PENDING_AUTHENTIK_LOGOUT_SESSION_KEY in request.session:
+        authentik_logout_frame_src = AUTHENTIK_LOGOUT_FRAME_PATH
     return render_public_react_shell(
         request,
         surface="portal",
         title="已登出 - EasyAuth",
+        authentik_logout_frame_src=authentik_logout_frame_src,
     )

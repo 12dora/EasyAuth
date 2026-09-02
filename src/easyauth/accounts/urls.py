@@ -7,6 +7,7 @@ from easyauth.accounts import local_admin_views, sign_in_views, views
 urlpatterns = [
     path("sign-in/", sign_in_views.sign_in_page, name="sign-in"),
     path("logged-out/", views.logged_out, name="logged-out"),
+    path("authentik-logout/", views.authentik_logout_frame, name="authentik-logout"),
     path("login/", views.oidc_login, name="oidc-login"),
     path("callback/", views.oidc_callback, name="oidc-callback"),
     path("logout/", views.logout, name="logout"),

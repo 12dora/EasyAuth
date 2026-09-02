@@ -4,11 +4,13 @@ from dataclasses import replace
 from http import HTTPStatus
 from secrets import token_urlsafe
 from typing import Final
-from urllib.parse import SplitResult, parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 from django.conf import settings as django_settings
 from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
-from django.views.decorators.http import require_POST
+from django.shortcuts import render
+from django.views.decorators.clickjacking import xframe_options_sameorigin
+from django.views.decorators.http import require_GET, require_POST
 
 from easyauth.accounts.auth import (
     DEFAULT_AUTH_SUCCESS_NEXT,
@@ -26,6 +28,8 @@ from easyauth.accounts.auth import (
     verify_oidc_claims,
 )
 from easyauth.accounts.logout_state import (
+    LOGGED_OUT_LOCATION,
+    PENDING_AUTHENTIK_LOGOUT_SESSION_KEY,
     clear_browser_logged_out,
     logged_out_response,
     mark_browser_logged_out,
@@ -40,7 +44,6 @@ SETTING_CLIENT_ID = "EASYAUTH_AUTHENTIK_OIDC_CLIENT_ID"
 SETTING_CLIENT_SECRET = "EASYAUTH_AUTHENTIK_OIDC_CLIENT_SECRET"  # noqa: S105 - 配置键名, 不是密钥值.
 SETTING_AUTHORIZATION_ENDPOINT = "EASYAUTH_AUTHENTIK_OIDC_AUTHORIZATION_ENDPOINT"
 SETTING_AUTHENTIK_LOGOUT_URL = "EASYAUTH_AUTHENTIK_LOGOUT_URL"
-SETTING_POST_LOGOUT_REDIRECT_URI = "EASYAUTH_AUTHENTIK_POST_LOGOUT_REDIRECT_URI"
 SETTING_HTTP_TIMEOUT_SECONDS = "EASYAUTH_AUTHENTIK_OIDC_HTTP_TIMEOUT_SECONDS"
 SETTING_ISSUER = "EASYAUTH_AUTHENTIK_OIDC_ISSUER"
 SETTING_JWKS_URL = "EASYAUTH_AUTHENTIK_OIDC_JWKS_URL"
@@ -111,17 +114,34 @@ def oidc_callback(request: HttpRequest) -> HttpResponse:
 @require_POST
 def logout(request: HttpRequest) -> HttpResponseRedirect:
     id_token_hint = _session_string(request, OIDC_ID_TOKEN_SESSION_KEY)
+    authentik_endpoint = _authentik_logout_endpoint()
     request.session.flush()
-    redirect_url = _authentik_logout_url(id_token_hint=id_token_hint)
-    if redirect_url == "":
-        redirect_url = "/auth/logged-out/?next=%2Fportal%2F"
-    response = HttpResponseRedirect(redirect_url)
+    if authentik_endpoint != "":
+        request.session[PENDING_AUTHENTIK_LOGOUT_SESSION_KEY] = id_token_hint
+    response = HttpResponseRedirect(LOGGED_OUT_LOCATION)
     mark_browser_logged_out(response)
     return response
 
 
 def logged_out(request: HttpRequest) -> HttpResponse:
     return logged_out_response(request)
+
+
+@require_GET
+@xframe_options_sameorigin
+def authentik_logout_frame(request: HttpRequest) -> HttpResponse:
+    if PENDING_AUTHENTIK_LOGOUT_SESSION_KEY not in request.session:
+        return HttpResponse(status=HTTPStatus.NO_CONTENT)
+    id_token_hint = _session_string(request, PENDING_AUTHENTIK_LOGOUT_SESSION_KEY)
+    del request.session[PENDING_AUTHENTIK_LOGOUT_SESSION_KEY]
+    endpoint = _authentik_logout_endpoint()
+    if endpoint == "":
+        return HttpResponse(status=HTTPStatus.NO_CONTENT)
+    return render(
+        request,
+        "easyauth/authentik_logout_frame.html",
+        {"endpoint": endpoint, "id_token_hint": id_token_hint},
+    )
 
 
 def _oidc_config_from_settings() -> OidcClientConfig:
@@ -176,15 +196,18 @@ def _netloc_with_current_port(hostname: str, current: SplitResult) -> str:
     return f"{hostname}:{current.port}"
 
 
-def _authentik_logout_url(*, id_token_hint: str) -> str:
+def _authentik_logout_endpoint() -> str:
     configured_url = _optional_string_setting(SETTING_AUTHENTIK_LOGOUT_URL)
     if configured_url != "":
-        endpoint = configured_url
-    else:
-        endpoint = _authentik_logout_url_from_issuer(_optional_string_setting(SETTING_ISSUER))
-    if endpoint == "":
+        return _logout_endpoint_origin(configured_url)
+    return _authentik_logout_url_from_issuer(_optional_string_setting(SETTING_ISSUER))
+
+
+def _logout_endpoint_origin(url: str) -> str:
+    parsed = urlsplit(url)
+    if parsed.scheme == "" or parsed.netloc == "":
         return ""
-    return _with_logout_query(endpoint, id_token_hint=id_token_hint)
+    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, "", ""))
 
 
 def _authentik_logout_url_from_issuer(issuer: str) -> str:
@@ -210,20 +233,6 @@ def _authentik_logout_url_from_issuer(issuer: str) -> str:
             "",
         ),
     )
-
-
-def _with_logout_query(endpoint: str, *, id_token_hint: str) -> str:
-    parsed = urlsplit(endpoint)
-    query_params = dict(parse_qsl(parsed.query, keep_blank_values=True))
-    if id_token_hint != "":
-        _ = query_params.setdefault("id_token_hint", id_token_hint)
-        post_logout_redirect_uri = _optional_string_setting(SETTING_POST_LOGOUT_REDIRECT_URI)
-        if post_logout_redirect_uri != "":
-            _ = query_params.setdefault("post_logout_redirect_uri", post_logout_redirect_uri)
-    if not query_params:
-        return endpoint
-    query = urlencode(query_params)
-    return urlunsplit((parsed.scheme, parsed.netloc, parsed.path, query, ""))
 
 
 def _required_setting(name: str) -> str:

@@ -77,6 +77,7 @@ def render_public_react_shell(
     surface: ShellName,
     title: str,
     initial_app_key: str = "",
+    authentik_logout_frame_src: str = "",
 ) -> HttpResponse:
     return _render_react_shell_response(
         request,
@@ -84,6 +85,7 @@ def render_public_react_shell(
         title=title,
         initial_app_key=initial_app_key,
         shell_user=None,
+        authentik_logout_frame_src=authentik_logout_frame_src,
     )
 
 
@@ -94,12 +96,14 @@ def _render_react_shell_response(
     title: str,
     initial_app_key: str,
     shell_user: ShellUser | None,
+    authentik_logout_frame_src: str = "",
 ) -> HttpResponse:
     response = render(
         request,
         REACT_SHELL_TEMPLATE,
         {
             "initial_app_key": initial_app_key,
+            "authentik_logout_frame_src": authentik_logout_frame_src,
             "current_user": shell_user,
             "logout_url": "/auth/logout/",
             "shell": surface,

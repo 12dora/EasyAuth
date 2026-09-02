@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="utf-8">
+  <title>Authentik 登出</title>
+</head>
+<body>
+  <form method="post" action="{{ endpoint }}">
+    {% if id_token_hint %}
+    <input type="hidden" name="id_token_hint" value="{{ id_token_hint }}">
+    {% endif %}
+  </form>
+  <script>document.forms[0].submit();</script>
+</body>
+</html>

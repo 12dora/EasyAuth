@@ -330,6 +330,7 @@ def test_logged_out_page_serves_portal_react_shell_without_current_user() -> Non
     assert "data-current-user-is-superuser" not in html
     assert "data-current-user-can-access-console" not in html
     assert "data-current-user-avatar-url" not in html
+    assert 'src="/auth/authentik-logout/"' not in html
 
 
 @pytest.mark.parametrize(
