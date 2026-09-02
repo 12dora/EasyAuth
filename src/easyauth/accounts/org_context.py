@@ -22,6 +22,11 @@ def apply_dingtalk_org_context(user: UserMirror, org: object) -> list[str]:
         return []
     org_mapping = cast("dict[str, object]", org)
     parsed = parse_org_context(org_mapping)
+    # Authentik empty_org_context 在用户没有钉钉身份时仍返回 source_slug,
+    # corp_id/user_id 为 null。只写 source_slug 会违反
+    # accounts_user_dingtalk_binding_shape, 让 OIDC 回调 500。
+    if parsed.source_slug == "" or parsed.corp_id == "" or parsed.user_id == "":
+        return []
     changed_fields: list[str] = []
     changed_fields.extend(_set_if_changed(user, "dingtalk_source_slug", parsed.source_slug))
     changed_fields.extend(_set_if_changed(user, "dingtalk_corp_id", parsed.corp_id))

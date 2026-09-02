@@ -47,3 +47,36 @@ def test_bind_oidc_session_updates_dingtalk_org_context() -> None:
     stored = UserMirror.objects.get(authentik_user_id="ak-user")
     assert stored.dingtalk_source_slug == "dingtalk"
     assert stored.dingtalk_corp_id == "ding-corp"
+
+
+def test_bind_oidc_session_accepts_authentik_empty_org_context() -> None:
+    request = RequestFactory().get("/auth/callback/")
+    SessionMiddleware(lambda _request: HttpResponse()).process_request(request)
+    request.session.save()
+    claims = VerifiedOidcClaims(
+        subject="ak-admin",
+        name="akadmin",
+        email="akadmin@example.test",
+        dingtalk_org={
+            "corp_id": None,
+            "user_id": None,
+            "source_slug": "dingtalk",
+            "departments": [],
+            "manager": None,
+            "manager_chain": [],
+            "stale": True,
+            "last_synced_at": None,
+        },
+    )
+
+    user = bind_oidc_session(request, claims)
+
+    assert user.authentik_user_id == "ak-admin"
+    assert user.name == "akadmin"
+    assert user.email == "akadmin@example.test"
+    assert user.dingtalk_source_slug == ""
+    assert user.dingtalk_corp_id == ""
+    assert user.dingtalk_userid == ""
+    stored = UserMirror.objects.get(authentik_user_id="ak-admin")
+    assert stored.status == "active"
+    assert stored.dingtalk_source_slug == ""
