@@ -91,6 +91,19 @@ function peopleColumns(
       }),
       sort,
     ),
+    // 管理员是只读展示: 后端 GET /users 不支持按它筛选也不支持按它排序,
+    // 所以既不套 serverColumn 也不套 serverSortColumn, 并显式关掉内建筛选下拉;
+    // 写入只走行内「权限」弹窗。非管理员按 statusColumn 的空值约定展示 "-"。
+    // 位置紧跟姓名: 操作列是 fixed: "right" 的粘性列, 排在它前面的列在默认视口下会被
+    // 压在粘性列底下要横向滚动才看得见, 而这一列的意义正是「不点开就能一眼扫出谁是管理员」。
+    statusColumn<PersonRow>({
+      key: "is_console_admin",
+      title: t("people.column.consoleAdmin"),
+      getValue: (person) => (person.is_console_admin ? CONSOLE_ADMIN_VALUE : ""),
+      options: [{ value: CONSOLE_ADMIN_VALUE, label: t("people.consoleAdmin.yes"), tone: "bond" }],
+      filter: false,
+      width: 90,
+    }),
     // 部门与邮箱后端不支持单列过滤(它们由工具栏的 q 一起做跨列搜索), 但支持排序。
     serverSortColumn(
       textColumn<PersonRow>({ key: "department", title: t("people.column.department"), width: 180 }),
@@ -118,17 +131,6 @@ function peopleColumns(
       ),
       sort,
     ),
-    // 管理员是只读展示: 后端 GET /users 不支持按它筛选也不支持按它排序,
-    // 所以既不套 serverColumn 也不套 serverSortColumn, 并显式关掉内建筛选下拉;
-    // 写入只走行内「权限」弹窗。非管理员按 statusColumn 的空值约定展示 "-"。
-    statusColumn<PersonRow>({
-      key: "is_console_admin",
-      title: t("people.column.consoleAdmin"),
-      getValue: (person) => (person.is_console_admin ? CONSOLE_ADMIN_VALUE : ""),
-      options: [{ value: CONSOLE_ADMIN_VALUE, label: t("people.consoleAdmin.yes"), tone: "bond" }],
-      filter: false,
-      width: 90,
-    }),
     // 一行最多三个按钮(离职交接 / 转岗 / 权限)。宽度按英文实测取: 三个按钮 228px
     // + 两个间距 12px + 单元格左右内边距 24px = 264, 取 280 留余量;
     // 240 时英文标签会压到「管理员」列上(中文放得下, 只有英文会溢出)。
