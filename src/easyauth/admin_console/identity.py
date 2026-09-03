@@ -52,6 +52,7 @@ def _oidc_actor(request: HttpRequest, authentik_user_id: str) -> ConsoleActor | 
     if user is None:
         _clear_console_session(request)
         return None
+    # is_superuser 由本地 is_console_admin 与 Authentik 超管组取并集, 见 _is_console_superuser。
     return ConsoleActor(
         user_id=user.authentik_user_id,
         is_superuser=_is_console_superuser(request, user),
@@ -69,7 +70,16 @@ def _active_user(authentik_user_id: str) -> UserMirror | None:
 
 
 def _is_console_superuser(request: HttpRequest, user: UserMirror) -> bool:
+    # 控制台管理员 = UserMirror.is_console_admin 或 Authentik 超管组。
+    # 本地标志是 EasyAuth 内授予/撤销的唯一落库位; Authentik 组用于引导首位管理员
+    # (bootstrap) 以及组同步仍生效时的来源。Authentik 管理 API 失败只表示
+    # 「不是组超管」, 本地标志仍须生效: 它是本库数据, 不依赖外部 API。
     del request
+    # 本地标志为真时短路: 不必再打 Authentik 管理 API。门户每次渲染壳层都会走到这里,
+    # web 只有 4 个同步 worker, 省掉这次出站 HTTP 就是省掉一次可能的阻塞。
+    if user.is_console_admin:
+        return True
+    group_superuser = False
     try:
         authority_groups = frozenset(
             _string_values(
@@ -78,12 +88,15 @@ def _is_console_superuser(request: HttpRequest, user: UserMirror) -> bool:
                 )
             ),
         )
+        configured_groups = frozenset(
+            _string_values(_setting_value("EASYAUTH_CONSOLE_SUPERUSER_GROUPS")),
+        )
+        group_superuser = bool(
+            configured_groups and not configured_groups.isdisjoint(authority_groups),
+        )
     except AuthentikAdminError:
-        return False
-    configured_groups = frozenset(
-        _string_values(_setting_value("EASYAUTH_CONSOLE_SUPERUSER_GROUPS")),
-    )
-    return bool(configured_groups and not configured_groups.isdisjoint(authority_groups))
+        group_superuser = False
+    return group_superuser
 
 
 def _clear_console_session(request: HttpRequest) -> None:

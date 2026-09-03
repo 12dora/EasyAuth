@@ -241,11 +241,11 @@ def test_portal_shell_uses_placeholder_display_name_when_profile_name_is_missing
 
 
 @pytest.mark.parametrize("role", ["owner", "developer"])
-def test_portal_shell_marks_active_app_member_as_console_accessible(
+def test_portal_shell_hides_console_from_app_member_who_is_not_admin(
     role: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # Given: 门户用户对某个 App 有 active owner/developer 成员关系, 但不是超管。
+    # Given: 门户用户对某个 App 有 active owner/developer 成员关系, 但不是管理员。
     user_id = f"react-portal-{role}"
     _mock_authentik_current_groups(monkeypatch, user_id, ())
     client = _logged_in_console_user(user_id, name="应用成员")
@@ -255,11 +255,11 @@ def test_portal_shell_marks_active_app_member_as_console_accessible(
     # When: 打开员工门户。
     response = client.get("/portal/")
 
-    # Then: 至少能看见一个 App 的人可以进控制台, 但不是超管。
+    # Then: 「管理后台」入口只看管理员身份, App 成员关系不再授予入口。
     html = response.content.decode()
     assert response.status_code == HTTPStatus.OK
     assert f'data-current-user-id="{user_id}"' in html
-    assert 'data-current-user-can-access-console="true"' in html
+    assert 'data-current-user-can-access-console="false"' in html
     assert 'data-current-user-is-superuser="false"' in html
     assert 'data-current-user-role="member"' in html
 

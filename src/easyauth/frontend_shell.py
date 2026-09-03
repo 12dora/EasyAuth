@@ -11,7 +11,6 @@ from django.shortcuts import render
 from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.admin_console.identity import actor_from_request
-from easyauth.applications.ownership import apps_visible_to_actor_queryset
 from easyauth.config.settings.base import BASE_DIR
 
 if TYPE_CHECKING:
@@ -51,7 +50,7 @@ class ShellUser:
     user_id: str
     display_name: str
     role: ShellRole
-    # 门户「管理后台」入口: 超管, 或至少能看见一个 App 的 owner/developer。
+    # 门户「管理后台」入口: 仅控制台管理员(actor.is_superuser)可见, 与 App 成员无关。
     can_access_console: bool = False
     is_superuser: bool = False
     avatar_url: str = ""
@@ -140,15 +139,11 @@ def shell_user_from_user(request: HttpRequest, user: UserMirror) -> ShellUser:
     # 控制台准入与超管身份都来自同一份 actor, 只解析一次以免重复打 Authentik 管理 API。
     actor = actor_from_request(request)
     is_superuser = actor.is_superuser if actor is not None else False
-    # 超管短路, 不查 App; 否则只给至少能看见一个 App 的人入口, 避免空控制台。
-    can_access_console = actor is not None and (
-        actor.is_superuser or apps_visible_to_actor_queryset(actor).exists()
-    )
     return ShellUser(
         user_id=user.authentik_user_id,
         display_name=_display_name(user),
         role=_role_code(is_superuser=is_superuser),
-        can_access_console=can_access_console,
+        can_access_console=is_superuser,
         is_superuser=is_superuser,
         avatar_url=user.avatar_url,
     )

@@ -67,6 +67,12 @@ class UserMirror(models.Model):
     dingtalk_corp_id: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
     employee_number: models.CharField[str, str] = models.CharField(max_length=64, blank=True)
     manager_userid: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
+    # EasyAuth 内控制台管理员的唯一落库标志, 与 Authentik 超管组检查取并集。
+    # Authentik 组用于引导首位管理员; 本标志供管理员在控制台内授予/撤销。
+    is_console_admin: models.BooleanField[bool, bool] = models.BooleanField(
+        default=False,
+        help_text="EasyAuth 内控制台管理员的唯一落库标志; 与 Authentik 超管组检查取并集。",
+    )
     # 目录同步检出部门变更时置位, 供人员列表提示"部门已变更"(转岗线索, 不自动建单);
     # 转岗单确认后清除。
     department_changed_at: models.DateTimeField[

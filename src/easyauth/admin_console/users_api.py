@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import TYPE_CHECKING, Final, cast
+from typing import TYPE_CHECKING, ClassVar, Final, cast
 
+from django.db import transaction
 from django.db.models import Q
 from django.http import HttpRequest, JsonResponse
+from pydantic import BaseModel, ConfigDict, StrictBool, ValidationError
 
 from easyauth.accounts.local_admin import LOCAL_ADMIN_SUBJECT_PREFIX
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
@@ -19,6 +21,7 @@ from easyauth.admin_console.operation_filters import (
 from easyauth.api.errors import ErrorCode
 from easyauth.api.ordering import parse_ordering
 from easyauth.api.pagination import pagination_item
+from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.lifecycle.models import TASK_OPEN_STATUSES, HandoverTask
 
 if TYPE_CHECKING:
@@ -41,6 +44,16 @@ PEOPLE_LIST_ORDERING: Final[dict[str, str]] = {
     "status": "status",
 }
 PEOPLE_LIST_DEFAULT_ORDER: Final[tuple[str, ...]] = ("name", "authentik_user_id")
+SELF_REVOKE_ADMIN_MESSAGE: Final = "不能取消自己的管理员权限。"
+CONSOLE_ADMIN_UPDATED_ACTION: Final = "user_console_admin_updated"
+
+
+class _ConsoleAdminPayload(BaseModel):
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
+
+    # StrictBool: pydantic 默认会把 "yes" / "0" / 1 强转成布尔。管理员标志是权限位,
+    # 客户端发错类型必须 422 报错, 不能被静默强转成某个方向。
+    is_console_admin: StrictBool
 
 
 def console_users(request: HttpRequest) -> JsonResponse:
@@ -98,6 +111,21 @@ def console_user_options(request: HttpRequest) -> JsonResponse:
     return json_response(list_payload(items))
 
 
+def console_user_console_admin(request: HttpRequest, user_id: str) -> JsonResponse:
+    if request.method != "PUT":
+        return error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "请求方法无效。",
+            status=HTTPStatus.METHOD_NOT_ALLOWED,
+        )
+    match require_superuser(request):
+        case str() as actor_id:
+            pass
+        case JsonResponse() as response:
+            return response
+    return _set_console_admin(request, actor_id=actor_id, user_id=user_id)
+
+
 def _people_page(request: HttpRequest) -> JsonResponse:
     # 人员列表是员工目录: 内置本地管理员不展示(也就没有员工语义的离职/转岗入口)。
     match parse_ordering(request, PEOPLE_LIST_ORDERING, PEOPLE_LIST_DEFAULT_ORDER):
@@ -153,6 +181,7 @@ def _person_item(user: UserMirror) -> dict[str, JsonValue]:
         "department": user.department,
     }
     item["status"] = user.status
+    item["is_console_admin"] = user.is_console_admin
     open_task = (
         HandoverTask.objects.filter(
             subject_user=user,
@@ -164,6 +193,67 @@ def _person_item(user: UserMirror) -> dict[str, JsonValue]:
     item["open_handover_task_id"] = open_task.id if open_task is not None else None
     item["open_handover_kind"] = open_task.kind if open_task is not None else ""
     return item
+
+
+def _set_console_admin(
+    request: HttpRequest,
+    *,
+    actor_id: str,
+    user_id: str,
+) -> JsonResponse:
+    user = _directory_person(user_id)
+    if user is None:
+        return error_response(
+            ErrorCode.NOT_FOUND,
+            "用户不存在。",
+            status=HTTPStatus.NOT_FOUND,
+        )
+    try:
+        payload = _ConsoleAdminPayload.model_validate_json(request.body or b"{}")
+    except ValidationError as exc:
+        return error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "请求参数无效。",
+            {"errors": str(exc)},
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+        )
+    if (
+        not payload.is_console_admin
+        and user.is_console_admin
+        and user.authentik_user_id == actor_id
+    ):
+        return error_response(
+            ErrorCode.VALIDATION_ERROR,
+            SELF_REVOKE_ADMIN_MESSAGE,
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+        )
+    if user.is_console_admin == payload.is_console_admin:
+        return json_response({"user": _person_item(user)})
+    user.is_console_admin = payload.is_console_admin
+    with transaction.atomic():
+        user.save(update_fields=["is_console_admin", "updated_at"])
+        _record_console_admin_change(actor_id=actor_id, user=user)
+    return json_response({"user": _person_item(user)})
+
+
+def _directory_person(user_id: str) -> UserMirror | None:
+    # 人员管理目录不含 break-glass 本地管理员; 系统账号不可在此改管理员标志。
+    if user_id.startswith(LOCAL_ADMIN_SUBJECT_PREFIX):
+        return None
+    return UserMirror.objects.filter(authentik_user_id=user_id).first()
+
+
+def _record_console_admin_change(*, actor_id: str, user: UserMirror) -> None:
+    _ = AuditService.record(
+        AuditRecord(
+            actor_type="user",
+            actor_id=actor_id,
+            action=CONSOLE_ADMIN_UPDATED_ACTION,
+            target_type="user",
+            target_id=user.authentik_user_id,
+            metadata={"is_console_admin": user.is_console_admin},
+        ),
+    )
 
 
 def _limit(request: HttpRequest) -> int:

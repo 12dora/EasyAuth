@@ -32,6 +32,7 @@ from easyauth.admin_console.operations_api import (
 )
 from easyauth.admin_console.query_test_api import console_permission_query_test
 from easyauth.admin_console.users_api import (
+    console_user_console_admin,
     console_user_options,
     console_users,
 )
@@ -122,4 +123,9 @@ CORE_URLPATTERNS = [
     ),
     path("api/v1/users", console_users, name="console-users"),
     path("api/v1/user-options", console_user_options, name="console-user-options"),
+    path(
+        "api/v1/users/<str:user_id>/console-admin",
+        console_user_console_admin,
+        name="console-user-console-admin",
+    ),
 ]
