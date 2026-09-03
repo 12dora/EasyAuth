@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { PortalApprovalsSection } from "./PortalApprovalsSection";
+import { decidedApproval, pendingApproval } from "./portalApprovalTesting";
 import {
   ANTD_TEST_TIMEOUT_MS,
   columnSortOrder,
@@ -19,38 +20,6 @@ const PENDING_LIST_URL = "/portal/api/v1/me/approvals?status=pending&page=1&page
 const PROCESSED_LIST_URL = "/portal/api/v1/me/approvals?status=processed&page=1&page_size=20";
 const PENDING_DETAIL_URL = "/portal/api/v1/me/approvals/42";
 
-const pendingApproval = {
-  id: 42,
-  app_key: "crm",
-  app_name: "CRM",
-  request_type: "grant",
-  base_grant_id: null,
-  base_grant_revision: null,
-  status: "submitted",
-  status_label: "待审批",
-  grant_type: "permanent",
-  grant_expires_at: null,
-  reason: "处理跨部门工单",
-  submitted_at: "2026-07-01T09:00:00Z",
-  authorization_groups: [
-    {
-      key: "sales-reader",
-      kind: "role",
-      name: "销售只读",
-      grants: [{ permission: "orders.list", permission_name: "订单列表", scope: "SELF" }],
-    },
-  ],
-  direct_grants: [
-    { permission: "orders.read", permission_name: "查看订单", scope: "SELF" },
-    { permission: "orders.export", permission_name: "导出订单", scope: "SELF" },
-  ],
-  decided_at: null,
-  decision_comment: null,
-  applicant: { user_id: "u-1", name: "张三", email: "zhangsan@example.test", department: "销售部" },
-  approver_user_ids: ["me"],
-  decided_by: "",
-};
-
 function pendingListResponse() {
   return jsonResponse({
     data: [pendingApproval],
@@ -58,7 +27,7 @@ function pendingListResponse() {
   });
 }
 
-function pendingDetailResponse(approval: Record<string, unknown> = pendingApproval) {
+function pendingDetailResponse(approval: unknown = pendingApproval) {
   return jsonResponse({ approval });
 }
 
@@ -148,7 +117,13 @@ describe("PortalApprovalsSection", () => {
         return pendingDetailResponse();
       }
       if (url === "/portal/api/v1/me/approvals/42/reject" && init?.method === "POST") {
-        return jsonResponse({ approval: { ...pendingApproval, status: "rejected" } });
+        return jsonResponse({
+          approval: decidedApproval({
+            status: "rejected",
+            status_label: "已拒绝",
+            decision_comment: "范围过大，请缩小权限",
+          }),
+        });
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });
@@ -188,7 +163,13 @@ describe("PortalApprovalsSection", () => {
         return pendingDetailResponse();
       }
       if (url === "/portal/api/v1/me/approvals/42/approve" && init?.method === "POST") {
-        return jsonResponse({ approval: { ...pendingApproval, status: "grant_applied" } });
+        return jsonResponse({
+          approval: decidedApproval({
+            status: "grant_applied",
+            status_label: "授权已落库, 权限已生效",
+            decision_comment: "同意开通",
+          }),
+        });
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });
@@ -371,17 +352,19 @@ describe("PortalApprovalsSection", () => {
   test.each([
     {
       status: "grant_failed",
+      statusLabel: "授权落库失败",
       title: "审批已通过，但授权未落地",
       description: "请联系管理员重试授权落地",
     },
     {
       status: "grant_expired",
+      statusLabel: "授权期限已过, 未应用",
       title: "授权期限已过",
       description: "",
     },
   ])(
     "决定已提交且进入 $status 时关闭弹窗、刷新列表并展示准确终态",
-    async ({ status, title, description }) => {
+    async ({ status, statusLabel, title, description }) => {
       const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
         const url = String(input);
         if (url === PENDING_LIST_URL && !init?.method) {
@@ -399,13 +382,12 @@ describe("PortalApprovalsSection", () => {
                 details: {
                   decision_committed: true,
                   status,
-                  approval: {
-                    ...pendingApproval,
+                  approval: decidedApproval({
                     status,
+                    status_label: statusLabel,
                     decision_comment: "同意",
                     decided_at: "2026-07-10T08:00:00Z",
-                    decided_by: "me",
-                  },
+                  }),
                 },
               },
             },
@@ -466,7 +448,11 @@ describe("PortalApprovalsSection", () => {
     fireEvent.click(screen.getByRole("button", { name: "关闭弹窗遮罩" }));
     expect(dialog).toBeVisible();
 
-    resolveApproval(jsonResponse({ approval: { ...pendingApproval, status: "grant_applied" } }));
+    resolveApproval(
+      jsonResponse({
+        approval: decidedApproval({ status: "grant_applied", status_label: "授权已落库, 权限已生效" }),
+      }),
+    );
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
   });
 
@@ -600,7 +586,7 @@ describe("PortalApprovalsSection", () => {
       }
       if (url === PROCESSED_LIST_URL) {
         return jsonResponse({
-          data: [{ ...pendingApproval, status: "grant_applied", status_label: "已授权", decided_at: "2026-07-02T09:00:00Z" }],
+          data: [decidedApproval({ status: "grant_applied", status_label: "授权已落库, 权限已生效" })],
           pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
         });
       }
@@ -636,16 +622,13 @@ describe("PortalApprovalsSection", () => {
         if (url === processedUrl) {
           return jsonResponse({
             data: [
-              {
-                ...pendingApproval,
+              decidedApproval({
                 status: "grant_applied",
-                status_label: "已授权",
+                status_label: "授权已落库, 权限已生效",
                 grant_type: "timed",
                 grant_expires_at: "2026-08-15T10:30:00Z",
-                decided_at: "2026-07-02T09:00:00Z",
                 decision_comment: "同意限时开通",
-                decided_by: "me",
-              },
+              }),
             ],
             pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
           });
@@ -671,13 +654,15 @@ describe("PortalApprovalsSection", () => {
           return pendingListResponse();
         }
         if (url === PENDING_DETAIL_URL) {
-          return pendingDetailResponse({
-            ...pendingApproval,
-            status: "rejected",
-            decided_at: "2026-07-02T09:00:00Z",
-            decision_comment: "已由其他人驳回",
-            decided_by: "other-approver",
-          });
+          return pendingDetailResponse(
+            decidedApproval({
+              status: "rejected",
+              status_label: "已拒绝",
+              decision_comment: "已由其他人驳回",
+              decided_by: "other-approver",
+              decided_by_name: "其他审批人",
+            }),
+          );
         }
         throw new Error(`Unexpected fetch: ${url}`);
       }),

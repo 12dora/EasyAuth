@@ -1,6 +1,10 @@
 import type { ApprovalDecisionMode } from "../../../components/ApprovalDecisionDialog";
 import type { Pagination } from "../../../lib/api";
-import type { AuthorizationGroupKind, PortalApprovalApplicant } from "../../../lib/domain";
+import type {
+  AuthorizationGroupKind,
+  PortalApprovalApplicant,
+  PortalRequestApprover,
+} from "../../../lib/domain";
 
 export type ApprovalTab = "pending" | "processed";
 export const APPROVAL_TAB_KEYS = ["pending", "processed"] as const satisfies readonly ApprovalTab[];
@@ -44,11 +48,17 @@ export interface PortalApprovalRow {
   submitted_at: string;
   authorization_groups: ApprovalAuthorizationGroup[];
   direct_grants: ApprovalGrantFact[];
+  /** 仅 status 为 submitted 时非空: 当前待处理的审批人分配。 */
+  current_approvers: PortalRequestApprover[];
   decided_at: string | null;
   decision_comment: string | null;
   applicant: Required<PortalApprovalApplicant>;
   approver_user_ids: string[];
   decided_by: string | null;
+  /** 决定人身份: user / console_admin; 未决时为空字符串。 */
+  decision_actor_type: string;
+  /** 决定人显示名; 后端解析不出姓名时为 null(此时只能回退展示 decided_by)。 */
+  decided_by_name: string | null;
 }
 
 export interface ApprovalListPayload {

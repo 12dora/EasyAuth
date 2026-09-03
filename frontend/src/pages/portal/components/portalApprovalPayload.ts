@@ -1,6 +1,6 @@
 import { ApiError } from "../../../lib/api";
 import type { Pagination } from "../../../lib/api";
-import type { PortalApprovalApplicant } from "../../../lib/domain";
+import type { PortalApprovalApplicant, PortalRequestApprover } from "../../../lib/domain";
 
 import type {
   ApprovalAuthorizationGroup,
@@ -19,8 +19,13 @@ const APPROVAL_STATUSES = new Set([
   "grant_failed",
   "grant_conflict",
   "grant_expired",
+  // 申请人可在审批人打开详情之前撤回: 审批分配还在, 详情接口照样返回这条 withdrawn 行。
+  // 少了它详情会被判成非法载荷并重试到失败, 而不是落到「已处理」的冲突提示。
+  "withdrawn",
 ]);
 const APPROVAL_GRANT_TYPES = new Set(["permanent", "timed"]);
+// 未决时后端给空字符串, 决定后给 user / console_admin; 空串是合法取值而非缺失。
+const APPROVAL_DECISION_ACTOR_TYPES = new Set(["", "user", "console_admin"]);
 const APPROVAL_ROW_KEYS = [
   "id",
   "app_key",
@@ -36,11 +41,14 @@ const APPROVAL_ROW_KEYS = [
   "submitted_at",
   "authorization_groups",
   "direct_grants",
+  "current_approvers",
   "decided_at",
   "decision_comment",
   "applicant",
   "approver_user_ids",
   "decided_by",
+  "decision_actor_type",
+  "decided_by_name",
 ] as const;
 
 export function committedGrantStatus(error: unknown, expectedApprovalId: number): CommittedGrantStatus | null {
@@ -166,9 +174,47 @@ function hasApprovalDecisionShape(value: Record<string, unknown>): boolean {
     isNullableDateTimeString(value.decided_at) &&
     isNullableString(value.decision_comment) &&
     isApprovalApplicant(value.applicant) &&
+    hasApprovalActorShape(value) &&
+    hasApprovalApproverShape(value)
+  );
+}
+
+/**
+ * 决定人三件套: actor id、actor 身份、显示名。
+ * 未决时后端给 ""/""/null, 所以只能按可空字符串与枚举校验, 不能要求非空。
+ */
+function hasApprovalActorShape(value: Record<string, unknown>): boolean {
+  return (
+    isNullableString(value.decided_by) &&
+    isApprovalDecisionActorType(value.decision_actor_type) &&
+    isNullableString(value.decided_by_name)
+  );
+}
+
+/**
+ * approver_user_ids 是这条申请的全部审批人候选,
+ * current_approvers 是当前待处理的分配(仅 submitted 非空), 两者都必须逐项校验,
+ * 否则列表页会拿着不可信的审批人事实渲染。
+ */
+function hasApprovalApproverShape(value: Record<string, unknown>): boolean {
+  return (
     Array.isArray(value.approver_user_ids) &&
     value.approver_user_ids.every((item) => typeof item === "string") &&
-    isNullableString(value.decided_by)
+    Array.isArray(value.current_approvers) &&
+    value.current_approvers.every(isApprovalApprover)
+  );
+}
+
+function isApprovalDecisionActorType(value: unknown): value is string {
+  return typeof value === "string" && APPROVAL_DECISION_ACTOR_TYPES.has(value);
+}
+
+function isApprovalApprover(value: unknown): value is PortalRequestApprover {
+  return (
+    isRecord(value) &&
+    hasExactKeys(value, ["user_id", "name"]) &&
+    isNonEmptyString(value.user_id) &&
+    typeof value.name === "string"
   );
 }
 

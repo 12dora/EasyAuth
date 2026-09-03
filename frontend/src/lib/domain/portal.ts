@@ -28,7 +28,11 @@ export interface PortalDirectGrantItem {
   scope: string;
 }
 
-/** 申请行上的审批人: 仅 user_id + name, 与后端 `approver_option` 一致。 */
+/**
+ * 申请行与审批行上的审批人: 仅 user_id + name, 与后端 `approver_option` 一致。
+ * 「我的申请」和「待我审批」两条链路序列化的是同一个 `current_approvers`,
+ * 因此共用这一个类型, 不再各自声明一份, 免得两边契约再次漂移。
+ */
 export interface PortalRequestApprover {
   user_id: string;
   name: string;
@@ -84,11 +88,17 @@ export interface PortalApprovalItem {
   submitted_at?: string;
   authorization_groups?: PermissionQueryGroupItem[];
   direct_grants?: PortalDirectGrantItem[];
+  /** 仅 status 为 submitted 时非空: 当前待处理的审批人分配。 */
+  current_approvers?: PortalRequestApprover[];
   decided_at?: string | null;
   decision_comment?: string | null;
   applicant?: PortalApprovalApplicant;
   approver_user_ids?: string[];
   decided_by?: string | null;
+  /** 决定人身份: user / console_admin; 未决时为空字符串。 */
+  decision_actor_type?: string;
+  /** 决定人显示名; 后端解析不出姓名时为 null(此时只能回退展示 decided_by)。 */
+  decided_by_name?: string | null;
 }
 
 export interface PortalCatalogApp {
