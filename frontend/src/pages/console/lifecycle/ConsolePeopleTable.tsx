@@ -62,8 +62,8 @@ export function ConsolePeopleTable({
       loading={isLoading}
       // 固定布局下每列都必须声明宽度, minWidth 必须正好等于它们的和, 否则没宽度的列
       // 只能分摊剩余量, 剩余量不够时会被压成一个字宽。
-      // 姓名 260 + 部门 180 + 邮箱 240 + 状态 140 + 管理员 90 + 操作 240 = 1150。
-      minWidth={1150}
+      // 姓名 260 + 部门 180 + 邮箱 240 + 状态 140 + 管理员 90 + 操作 280 = 1190。
+      minWidth={1190}
       rowKey="user_id"
     />
   );
@@ -129,9 +129,11 @@ function peopleColumns(
       filter: false,
       width: 90,
     }),
-    // 一行最多三个按钮(离职交接 / 转岗 / 权限), 默认 180 只够两个, 这里显式加宽。
+    // 一行最多三个按钮(离职交接 / 转岗 / 权限)。宽度按英文实测取: 三个按钮 228px
+    // + 两个间距 12px + 单元格左右内边距 24px = 264, 取 280 留余量;
+    // 240 时英文标签会压到「管理员」列上(中文放得下, 只有英文会溢出)。
     actionsColumn<PersonRow>({
-      width: 240,
+      width: 280,
       render: (person) => <PeopleRowActionsCell person={person} actions={actions} />,
     }),
   ];

@@ -212,11 +212,11 @@ export const en: Record<keyof typeof zhCN, string> = {
   "people.empty.title": "No people",
   "people.empty.description": "No people match the current filters.",
 
-  "people.goHandover": "Open handover",
+  "people.goHandover": "Open",
 
-  "people.startOffboard": "Start offboarding",
+  "people.startOffboard": "Offboard",
 
-  "people.startTransfer": "Start transfer",
+  "people.startTransfer": "Transfer",
 
   "people.startDialog.offboardTitle": "Start offboarding handover",
   "people.startDialog.transferTitle": "Start transfer handover",
