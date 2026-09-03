@@ -3,16 +3,17 @@
 from __future__ import annotations
 
 import ipaddress
+import logging
 import os
 import socket
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 from urllib.parse import quote, urlparse, urlsplit
 
 from django.conf import settings as django_settings
 from django.core.exceptions import ImproperlyConfigured
 
-from easyauth.config.net_dns import resolve_public_addresses
+from easyauth.config.net_dns import ip_is_rfc1918_or_shared, resolve_public_addresses
 from easyauth.config.net_errors import UNRESOLVABLE_HOST_MESSAGE, BlockedHostError
 
 if TYPE_CHECKING:
@@ -51,11 +52,14 @@ __all__ = (
     "assert_public_host",
     "e2e_allowed_insecure_webhook_hosts",
     "is_e2e_insecure_webhook_host",
+    "is_trusted_webhook_host",
     "normalize_hostname",
     "parse_https_url",
     "require_secure_url",
     "validate_public_https_url",
 )
+
+logger = logging.getLogger(__name__)
 
 
 class InsecureUrlError(ValueError):
@@ -116,6 +120,21 @@ def is_e2e_insecure_webhook_host(hostname: str) -> bool:
     return normalized in e2e_allowed_insecure_webhook_hosts()
 
 
+def is_trusted_webhook_host(hostname: str) -> bool:
+    # 与 EASYAUTH_TRUSTED_WEBHOOK_HOSTS 精确、大小写不敏感匹配; 子域与通配不放行。
+    if not hostname:
+        return False
+    try:
+        raw_trusted: object = getattr(django_settings, "EASYAUTH_TRUSTED_WEBHOOK_HOSTS", ())
+    except ImproperlyConfigured:
+        return False
+    if not isinstance(raw_trusted, tuple | list):
+        return False
+    needle = hostname.strip().lower()
+    entries = cast("tuple[object, ...] | list[object]", raw_trusted)
+    return any(isinstance(entry, str) and entry.strip().lower() == needle for entry in entries)
+
+
 def require_secure_url(url: str, *, allow_local_http: bool) -> None:
     # https 一律放行; http 只在显式允许且主机是本地环回时放行, 否则快速失败。
     parsed = urlparse(url)
@@ -130,11 +149,15 @@ def require_secure_url(url: str, *, allow_local_http: bool) -> None:
 
 def assert_public_host(hostname: str, *, allow_local: bool) -> None:
     # 解析主机并拒绝内网/环回/链路本地/保留/多播地址, 防止 SSRF 打内网与云元数据端点。
+    # 可信 webhook 主机仅额外放行 RFC1918 与 100.64/10, 与 validate_public_https_url 同口径。
     if not hostname:
         raise BlockedHostError(UNRESOLVABLE_HOST_MESSAGE)
+    allow_private = is_trusted_webhook_host(hostname)
     for raw_ip in _resolved_host_ips(hostname):
-        if _host_ip_is_blocked(raw_ip, allow_local=allow_local):
+        if _host_ip_is_blocked(raw_ip, allow_local=allow_local, allow_private=allow_private):
             raise BlockedHostError
+        if allow_private:
+            _log_trusted_private_address(hostname, raw_ip)
 
 
 def _resolved_host_ips(hostname: str) -> tuple[str | int, ...]:
@@ -145,20 +168,25 @@ def _resolved_host_ips(hostname: str) -> tuple[str | int, ...]:
     return tuple(addr_info[4][0] for addr_info in addr_infos)
 
 
-def _host_ip_is_blocked(raw_ip: str | int, *, allow_local: bool) -> bool:
+def _host_ip_is_blocked(
+    raw_ip: str | int,
+    *,
+    allow_local: bool,
+    allow_private: bool,
+) -> bool:
     ip = ipaddress.ip_address(raw_ip)
     if _ip_is_always_blocked(ip):
         return True
-    return not allow_local and _ip_is_local_scope(ip)
+    if ip.is_loopback:
+        return not allow_local
+    if ip_is_rfc1918_or_shared(ip):
+        return not (allow_local or allow_private)
+    return not allow_local and ip.is_private
 
 
 def _ip_is_always_blocked(ip: IPAddress) -> bool:
     # 链路本地(含 169.254.169.254 云元数据)、多播、保留、未指定地址一律禁止。
     return ip.is_multicast or ip.is_reserved or ip.is_unspecified or ip.is_link_local
-
-
-def _ip_is_local_scope(ip: IPAddress) -> bool:
-    return ip.is_private or ip.is_loopback
 
 
 def normalize_hostname(hostname: str) -> str:
@@ -190,14 +218,23 @@ def validate_public_https_url(
             allow_insecure_http=True,
         )
     # 经本模块全局名查找, 测试替换 easyauth.config.net_policy.resolve_public_addresses 生效。
+    allow_private = is_trusted_webhook_host(parsed_url.hostname)
     if dns_timeout_seconds is None:
-        addresses = resolve_public_addresses(parsed_url.hostname, port=parsed_url.port)
+        addresses = resolve_public_addresses(
+            parsed_url.hostname,
+            port=parsed_url.port,
+            allow_private=allow_private,
+        )
     else:
         addresses = resolve_public_addresses(
             parsed_url.hostname,
             port=parsed_url.port,
             timeout_seconds=dns_timeout_seconds,
+            allow_private=allow_private,
         )
+    if allow_private:
+        for address in addresses:
+            _log_trusted_private_address(parsed_url.hostname, address)
     return ValidatedHttpsUrl(
         hostname=parsed_url.hostname,
         port=parsed_url.port,
@@ -289,6 +326,12 @@ def _public_https_scheme_and_port(
     if literal_ip is not None and not literal_ip.is_global:
         raise BlockedHostError
     return 443, False
+
+
+def _log_trusted_private_address(hostname: str, raw_ip: str | int) -> None:
+    ip = ipaddress.ip_address(raw_ip)
+    if ip_is_rfc1918_or_shared(ip):
+        logger.info("可信 webhook 主机 %s 解析到私网地址 %s", hostname, ip)
 
 
 def _reject_host_not_allowed(hostname: str, *, allowed_hosts: Collection[str] | None) -> None:

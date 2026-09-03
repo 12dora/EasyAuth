@@ -58,6 +58,9 @@
 3. `.env.local`：OIDC 端点指向公网 Authentik、`EASYAUTH_AUTHENTIK_API_TOKEN` 用上一步的
    bootstrap token、client secret 与 Authentik provider 一致。部署级覆盖（容器内地址、公网
    回调、WebAuthn RP）都在 `docker-compose.deploy.yml` 里。
+   若下游业务应用（如 `etrade.jiefakj.com`）只在内网、容器内解析到 RFC1918 地址，还要设
+   `EASYAUTH_TRUSTED_WEBHOOK_HOSTS` 为这些**精确**主机名——它只放宽私网/共享地址的 DNS
+   策略，TLS 校验与连接钉扎仍使用原始主机名。
 4. `docker compose -f docker-compose.deploy.yml up -d`——七个服务全起：
    web、worker、webhook-worker、notify-worker、beat、stream、redis。
    **worker 和 beat 不是可选增强**：beat 调度的目录同步是离职检出的信号源，缺了离职/转岗自动化
@@ -116,4 +119,4 @@
 | 申请页没有默认审批人 | 钉钉后台没维护「直属主管」/ 目录未同步 / 审批规则里是占位 userid | 后台补主管关系并触发目录同步；把审批规则换成真实 userid（钉钉 userid 或 `local-admin:<name>`） |
 | manifest 导入报"无法解析" | EasyAuth 版本落后于下游 manifest 契约（如 lifecycle / webhook 节） | 升级 EasyAuth 后重试 |
 | 本人申请提交不了 | 审批人不能选自己 | 规则里配第二审批人（如 `local-admin:admin`），由管理员代审 |
-| 改完代码公网没变化 | 源码构建进镜像，重启不重建无效 | 重建镜像再 `up -d` |
+| 交接 webhook / 自动接入报"被禁止的内网/环回/保留地址" | 下游域名在容器内解析到 RFC1918（如 `172.17.0.1`），出站校验默认拒绝私网 | 设置 `EASYAUTH_TRUSTED_WEBHOOK_HOSTS` 为精确主机名（不要写通配符或 IP）；TLS 与 IP 钉扎不变 |

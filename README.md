@@ -522,6 +522,7 @@ docker compose -f docker-compose.deploy.yml up -d
 | `EASYAUTH_DINGTALK_CALLBACK_SECRET` | 审批需要 | 校验钉钉审批回调。 |
 | `EASYAUTH_WEBAUTHN_RP_ID` / `_RP_NAME` / `_ORIGINS` | 通行密钥需要 | WebAuthn RP 配置；必须与浏览器地址栏完全一致。 |
 | `EASYAUTH_TRUSTED_PROXY_HOPS` | 反代后需要 | 可信反向代理层数，用于解析客户端 IP。 |
+| `EASYAUTH_TRUSTED_WEBHOOK_HOSTS` | 内网下游需要 | 逗号分隔的**精确**主机名。只放宽这些主机的 DNS 地址策略（允许 RFC1918 与 `100.64/10`），**不**放宽 http、非 443 端口、环回/链路本地，也不关闭 TLS 校验与 IP 钉扎。禁止通配符、IP 字面量和带 `/`、`:` 的条目；默认空=不放宽。 |
 | `DJANGO_SECURE_HSTS_SECONDS` | 可选 | `DEBUG=0` 时的 HSTS max-age（默认 3600）。 |
 
 其它可调项：`EASYAUTH_GRANT_EXPIRATION_CLEANUP_SECONDS`、

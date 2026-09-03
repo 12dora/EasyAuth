@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
@@ -292,6 +293,42 @@ EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS = 300
 # 限流/审计取客户端 IP 时信任的反代层数; 0 表示只用 REMOTE_ADDR(不信任 X-Forwarded-For)。
 # 生产若在 N 层可信反代后, 设为 N, 则从 XFF 右起第 N 跳取真实客户端 IP。
 EASYAUTH_TRUSTED_PROXY_HOPS = int(os.environ.get("EASYAUTH_TRUSTED_PROXY_HOPS", "0"))
+TRUSTED_WEBHOOK_HOSTS_INVALID_MESSAGE: Final = (
+    "EASYAUTH_TRUSTED_WEBHOOK_HOSTS 只接受精确主机名, "
+    "禁止通配符、IP 字面量以及含 '/' 或 ':' 的条目, 无效条目: {entry}"
+)
+
+
+def parse_trusted_webhook_hosts(raw: str) -> tuple[str, ...]:
+    # 逗号分隔的精确主机名; 通配符、IP 字面量、含 '/' 或 ':' 的条目在启动时拒绝。
+    hosts: list[str] = []
+    seen: set[str] = set()
+    for part in raw.split(","):
+        host = part.strip().lower()
+        if not host:
+            continue
+        _reject_invalid_trusted_webhook_host(host)
+        if host not in seen:
+            hosts.append(host)
+            seen.add(host)
+    return tuple(hosts)
+
+
+def _reject_invalid_trusted_webhook_host(host: str) -> None:
+    if "*" in host or "/" in host or ":" in host:
+        raise ImproperlyConfigured(TRUSTED_WEBHOOK_HOSTS_INVALID_MESSAGE.format(entry=host))
+    try:
+        _ = ipaddress.ip_address(host)
+    except ValueError:
+        return
+    raise ImproperlyConfigured(TRUSTED_WEBHOOK_HOSTS_INVALID_MESSAGE.format(entry=host))
+
+
+# 出站 webhook/lifecycle URL 的精确主机名白名单: 仅放宽 RFC1918 与 100.64/10 的 DNS 地址策略,
+# TLS 校验与连接钉扎仍使用原始主机名。默认空=不放宽任何主机。
+EASYAUTH_TRUSTED_WEBHOOK_HOSTS = parse_trusted_webhook_hosts(
+    os.environ.get("EASYAUTH_TRUSTED_WEBHOOK_HOSTS", ""),
+)
 # WebAuthn(通行密钥)配置: RP ID 必须是"域名"(不含协议与端口), 且浏览器地址栏的 host
 # 必须等于该域名或其子域, 否则 navigator.credentials 直接报 SecurityError。
 # 本地开发必须用 http://localhost:8001 访问(127.0.0.1 不属于 RP ID "localhost", 无法使用通行密钥)。

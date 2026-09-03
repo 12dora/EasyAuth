@@ -6,7 +6,7 @@ from http import HTTPStatus
 
 import pytest
 from django.contrib.auth.models import User
-from django.test import Client
+from django.test import Client, override_settings
 
 from easyauth.admin_console import webhook_config_api
 from easyauth.applications.models import App, AppMembership
@@ -49,11 +49,7 @@ def test_webhook_config_rejects_hostname_resolving_to_private_address(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client, app = _owner_client_and_app("webhook-config-private-dns")
-
-    def private_dns(*_args: object, **_kwargs: object) -> list[tuple[object, ...]]:
-        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.1.2.3", 443))]
-
-    monkeypatch.setattr(net_dns.socket, "getaddrinfo", private_dns)
+    _stub_dns(monkeypatch, "10.1.2.3")
 
     response = client.put(
         _url(app),
@@ -63,6 +59,26 @@ def test_webhook_config_rejects_hostname_resolving_to_private_address(
 
     assert response.status_code == HTTPStatus.BAD_REQUEST
     assert not AppWebhookConfig.objects.filter(app=app).exists()
+
+
+def test_webhook_config_accepts_trusted_host_resolving_to_private_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, app = _owner_client_and_app("webhook-config-trusted-dns")
+    _stub_dns(monkeypatch, "172.17.0.1")
+    url = "https://etrade.jiefakj.com/callback"
+
+    with override_settings(EASYAUTH_TRUSTED_WEBHOOK_HOSTS=("etrade.jiefakj.com",)):
+        response = client.put(
+            _url(app),
+            data=json.dumps(_payload(url)),
+            content_type="application/json",
+        )
+
+    assert response.status_code == HTTPStatus.OK
+    config = AppWebhookConfig.objects.get(app=app)
+    assert config.approval_callback_url == url
+    assert config.enabled is True
 
 
 def test_webhook_config_persists_exact_per_app_host_allowlist(
@@ -113,3 +129,20 @@ def _payload(approval_url: str) -> dict[str, object]:
         "onboard_url": "",
         "rotate_secret": False,
     }
+
+
+def _stub_dns(monkeypatch: pytest.MonkeyPatch, address: str) -> None:
+    def fake_dns(*_args: object, **_kwargs: object) -> list[tuple[object, ...]]:
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 443))]
+
+    def fake_resolve(
+        _hostname: str,
+        *,
+        port: int,
+        timeout_seconds: float | None,
+    ) -> tuple[tuple[object, ...], ...]:
+        _ = timeout_seconds
+        return ((socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port)),)
+
+    monkeypatch.setattr(net_dns.socket, "getaddrinfo", fake_dns)
+    monkeypatch.setattr(net_dns, "_resolve_addresses", fake_resolve)

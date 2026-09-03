@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import socket
 import threading
 from http import HTTPStatus
 from typing import TYPE_CHECKING, ClassVar, Self, override
 
 import pytest
+from django.test import override_settings
 
-from easyauth.config.net import ValidatedHttpsUrl
+from easyauth.config.net import ValidatedHttpsUrl, validate_public_https_url
 from easyauth.webhooks import transport
 from easyauth.webhooks.transport import (
     WebhookDeadlineExceededError,
@@ -200,3 +202,61 @@ def test_post_webhook_wraps_request_target_unicode_error(
             headers={},
             policy=_policy(),
         )
+
+
+def test_post_webhook_rejects_private_dns_when_allowlist_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(transport, "validate_public_https_url", validate_public_https_url)
+    _stub_resolved_private_address(monkeypatch, "172.17.0.1")
+
+    with (
+        override_settings(EASYAUTH_TRUSTED_WEBHOOK_HOSTS=()),
+        pytest.raises(WebhookTransportError),
+    ):
+        _ = post_webhook(
+            url="https://etrade.jiefakj.com/callback",
+            allowed_hosts=("etrade.jiefakj.com",),
+            body=b"{}",
+            headers={"Content-Type": "application/json"},
+            policy=_policy(),
+        )
+
+    assert _FakeConnection.instances == []
+
+
+def test_post_webhook_pins_trusted_host_private_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(transport, "validate_public_https_url", validate_public_https_url)
+    _stub_resolved_private_address(monkeypatch, "172.17.0.1")
+
+    with override_settings(EASYAUTH_TRUSTED_WEBHOOK_HOSTS=("etrade.jiefakj.com",)):
+        result = post_webhook(
+            url="https://etrade.jiefakj.com/callback",
+            allowed_hosts=("etrade.jiefakj.com",),
+            body=b"{}",
+            headers={"Content-Type": "application/json"},
+            policy=_policy(),
+        )
+
+    connection = _FakeConnection.instances[0]
+    assert connection.kwargs["address"] == "172.17.0.1"
+    target = connection.kwargs["target"]
+    assert isinstance(target, ValidatedHttpsUrl)
+    assert target.hostname == "etrade.jiefakj.com"
+    assert connection.request_args[:2] == ("POST", "/callback")
+    assert result.body == b"{}"
+
+
+def _stub_resolved_private_address(monkeypatch: pytest.MonkeyPatch, address: str) -> None:
+    def fake_resolve(
+        _hostname: str,
+        *,
+        port: int,
+        timeout_seconds: float | None,
+    ) -> tuple[tuple[object, ...], ...]:
+        _ = timeout_seconds
+        return ((socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port)),)
+
+    monkeypatch.setattr("easyauth.config.net_dns._resolve_addresses", fake_resolve)

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import socket
 from typing import Final
 
 import pytest
+from django.test import override_settings
 from django.utils import timezone
 
 from easyauth.applications.models import (
@@ -20,6 +22,7 @@ from easyauth.applications.permission_template_types import (
     AppManifestPermissionInput,
     AppManifestScopeInput,
 )
+from easyauth.config.net import BlockedHostError
 from easyauth.lifecycle.handover_actions import initial_action_status_for_app
 from easyauth.lifecycle.models import (
     ACTION_STATUS_BLOCKED,
@@ -34,6 +37,9 @@ RELATIVE_HANDOVER_PATH: Final = "/api/v1/easyauth/lifecycle/handover"
 PUBLIC_BASE_URL: Final = "https://etrade.example.com"
 ABSOLUTE_HANDOVER_URL: Final = f"{PUBLIC_BASE_URL}{RELATIVE_HANDOVER_PATH}"
 ADMIN_HANDOVER_URL: Final = "https://admin.example.com/handover"
+TRUSTED_BASE_URL: Final = "https://etrade.jiefakj.com"
+TRUSTED_HANDOVER_URL: Final = f"{TRUSTED_BASE_URL}{RELATIVE_HANDOVER_PATH}"
+PRIVATE_ADDRESS: Final = "172.17.0.1"
 
 
 def test_relative_handover_url_without_base_url_stays_undeclared() -> None:
@@ -186,6 +192,66 @@ def test_handover_none_does_not_depend_on_persisted_url() -> None:
     assert app.handover_capability_declared_by == "admin-1"
     assert app.handover_capability_declared_at == declared_at
     assert AppWebhookConfig.objects.get(app=app).handover_url == ADMIN_HANDOVER_URL
+
+
+def test_private_dns_blocks_lifecycle_sync_when_allowlist_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_dns(monkeypatch, PRIVATE_ADDRESS)
+    app = _app("life-private-blocked")
+
+    with (
+        override_settings(EASYAUTH_TRUSTED_WEBHOOK_HOSTS=()),
+        pytest.raises(BlockedHostError),
+    ):
+        sync_manifest_lifecycle(
+            app=app,
+            template=_v2_template(app.app_key, handover_url=TRUSTED_HANDOVER_URL),
+            downstream_base_url=None,
+            actor_type="system",
+        )
+
+    app.refresh_from_db()
+    assert app.handover_capability == HANDOVER_CAPABILITY_UNDECLARED
+    assert not AppWebhookConfig.objects.filter(app=app).exists()
+
+
+def test_trusted_host_private_dns_declares_lifecycle_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_dns(monkeypatch, PRIVATE_ADDRESS)
+    app = _app("life-trusted-private")
+
+    with override_settings(EASYAUTH_TRUSTED_WEBHOOK_HOSTS=("etrade.jiefakj.com",)):
+        sync_manifest_lifecycle(
+            app=app,
+            template=_v2_template(app.app_key, handover_url=TRUSTED_HANDOVER_URL),
+            downstream_base_url=None,
+            actor_type="system",
+        )
+
+    app.refresh_from_db()
+    assert app.handover_capability == HANDOVER_CAPABILITY_DECLARED
+    config = AppWebhookConfig.objects.get(app=app)
+    assert config.handover_url == TRUSTED_HANDOVER_URL
+    assert config.enabled is True
+
+
+def _stub_dns(monkeypatch: pytest.MonkeyPatch, address: str) -> None:
+    def fake_dns(*_args: object, **_kwargs: object) -> list[tuple[object, ...]]:
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, HTTPS_PORT))]
+
+    def fake_resolve(
+        _hostname: str,
+        *,
+        port: int,
+        timeout_seconds: float | None,
+    ) -> tuple[tuple[object, ...], ...]:
+        _ = timeout_seconds
+        return ((socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port)),)
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_dns)
+    monkeypatch.setattr("easyauth.config.net_dns._resolve_addresses", fake_resolve)
 
 
 def _allow_public_https(monkeypatch: pytest.MonkeyPatch) -> None:

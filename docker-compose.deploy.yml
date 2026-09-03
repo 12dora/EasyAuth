@@ -52,6 +52,9 @@ x-easyauth-common: &easyauth-common
     # (改 RP ID 会使旧 RP 下已注册凭据失效; 当前 accounts_localadminpasskey 为空, 无影响。)
     EASYAUTH_WEBAUTHN_RP_ID: "iam.jiefakj.com"
     EASYAUTH_WEBAUTHN_ORIGINS: "https://iam.jiefakj.com"
+    # 内网业务应用在容器内解析到 RFC1918; 仅对这些精确主机名放宽私网/共享地址 DNS 策略,
+    # TLS 校验与连接钉扎仍使用原始主机名。禁止通配符与 IP 字面量。
+    EASYAUTH_TRUSTED_WEBHOOK_HOSTS: "etrade.jiefakj.com,tradedata.jiefakj.com"
   volumes:
     - ./db.sqlite3:/app/db.sqlite3
     # 部署 settings 在镜像构建之后新增, 挂载进去省一次重建(重建时 COPY src/ 也会带上它)。

@@ -257,6 +257,7 @@ def _fetch_descriptor(base_url: str, descriptor_token: str | None) -> dict[str, 
 def _assert_descriptor_host(base_url: str) -> None:
     hostname = urlparse(base_url).hostname or ""
     try:
+        # 与 webhook URL 共用主机策略: 可信主机由 assert_public_host 放宽 RFC1918/100.64/10。
         assert_public_host(hostname, allow_local=_settings_debug())
     except BlockedHostError as error:
         raise AutoOnboardingError(

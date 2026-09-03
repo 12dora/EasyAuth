@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import json
 from http import HTTPStatus
 from typing import TYPE_CHECKING, Final, cast
 
 import pytest
-from django.test import Client
+from django.test import Client, override_settings
 
 from easyauth.admin_console import auto_onboarding_api
 from easyauth.applications.configuration import configuration_readiness_for_app
@@ -302,6 +303,62 @@ def test_auto_onboarding_rejects_private_host_before_fetch(
     assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
     assert called["urlopen"] is False
     assert not App.objects.filter(app_key="demoapp").exists()
+
+
+def test_auto_onboarding_rejects_rfc1918_host_when_allowlist_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _logged_in_superuser("auto-onboard-rfc1918-admin")
+    called = {"urlopen": False}
+
+    def _fake_getaddrinfo(_host: str, _port: object, *_args: object, **_kwargs: object) -> list:
+        return [(2, 1, 6, "", ("172.17.0.1", 0))]
+
+    def _fake_urlopen(*_args: object, **_kwargs: object) -> object:
+        called["urlopen"] = True
+        return None
+
+    monkeypatch.setattr("easyauth.config.net_policy.socket.getaddrinfo", _fake_getaddrinfo)
+    monkeypatch.setattr(auto_onboarding_api, "urlopen", _fake_urlopen)
+
+    with override_settings(EASYAUTH_TRUSTED_WEBHOOK_HOSTS=()):
+        response = client.post(
+            AUTO_ONBOARDING_URL,
+            data={"base_url": "https://etrade.jiefakj.com", "app_key": "demoapp"},
+            content_type="application/json",
+        )
+
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert called["urlopen"] is False
+    assert not App.objects.filter(app_key="demoapp").exists()
+
+
+def test_auto_onboarding_accepts_trusted_host_private_address(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _logged_in_superuser("auto-onboard-trusted-admin")
+    descriptor = _descriptor(_manifest())
+
+    def _fake_getaddrinfo(_host: str, _port: object, *_args: object, **_kwargs: object) -> list:
+        return [(2, 1, 6, "", ("172.17.0.1", 0))]
+
+    monkeypatch.setattr("easyauth.config.net_policy.socket.getaddrinfo", _fake_getaddrinfo)
+    monkeypatch.setattr(
+        auto_onboarding_api,
+        "_read_descriptor",
+        lambda _request: json.dumps(descriptor).encode(),
+    )
+
+    with override_settings(EASYAUTH_TRUSTED_WEBHOOK_HOSTS=("etrade.jiefakj.com",)):
+        response = client.post(
+            AUTO_ONBOARDING_URL,
+            data={"base_url": "https://etrade.jiefakj.com", "app_key": "demoapp"},
+            content_type="application/json",
+        )
+
+    assert response.status_code == HTTPStatus.OK, response.content
+    app = App.objects.get(app_key="demoapp")
+    assert app.descriptor_base_url == "https://etrade.jiefakj.com"
 
 
 def test_auto_onboarding_requires_superuser() -> None:

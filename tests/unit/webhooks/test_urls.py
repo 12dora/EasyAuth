@@ -4,6 +4,8 @@ import socket
 import threading
 
 import pytest
+from django.core.exceptions import ImproperlyConfigured
+from django.test import override_settings
 
 from easyauth.config.net import (
     BlockedHostError,
@@ -11,6 +13,28 @@ from easyauth.config.net import (
     parse_https_url,
     validate_public_https_url,
 )
+from easyauth.config.settings.base import parse_trusted_webhook_hosts
+
+TRUSTED_HOST = "etrade.jiefakj.com"
+PRIVATE_ADDRESS = "172.17.0.1"
+SHARED_ADDRESS = "100.64.0.1"
+
+
+def _stub_dns(monkeypatch: pytest.MonkeyPatch, address: str) -> None:
+    def fake_dns(*_args: object, **_kwargs: object) -> list[tuple[object, ...]]:
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 443))]
+
+    def fake_resolve(
+        _hostname: str,
+        *,
+        port: int,
+        timeout_seconds: float | None,
+    ) -> tuple[tuple[object, ...], ...]:
+        _ = (port, timeout_seconds)
+        return ((socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, 443)),)
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_dns)
+    monkeypatch.setattr("easyauth.config.net_dns._resolve_addresses", fake_resolve)
 
 
 @pytest.mark.parametrize(
@@ -106,3 +130,96 @@ def test_validate_public_https_url_bounds_dns_resolution_time(
             )
     finally:
         release_resolver.set()
+
+
+def test_validate_public_https_url_rejects_private_dns_when_allowlist_empty(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_dns(monkeypatch, PRIVATE_ADDRESS)
+
+    with (
+        override_settings(EASYAUTH_TRUSTED_WEBHOOK_HOSTS=()),
+        pytest.raises(BlockedHostError),
+    ):
+        _ = validate_public_https_url(f"https://{TRUSTED_HOST}/callback")
+
+
+@pytest.mark.parametrize("address", [PRIVATE_ADDRESS, SHARED_ADDRESS])
+def test_validate_public_https_url_accepts_trusted_host_private_address(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    address: str,
+) -> None:
+    _stub_dns(monkeypatch, address)
+
+    with (
+        override_settings(EASYAUTH_TRUSTED_WEBHOOK_HOSTS=(TRUSTED_HOST,)),
+        caplog.at_level("INFO", logger="easyauth.config.net_policy"),
+    ):
+        result = validate_public_https_url(f"https://{TRUSTED_HOST}/callback")
+
+    assert result.hostname == TRUSTED_HOST
+    assert result.addresses == (address,)
+    assert result.allow_insecure_http is False
+    assert result.port == 443
+    assert any(
+        TRUSTED_HOST in record.message and address in record.message for record in caplog.records
+    )
+
+
+def test_validate_public_https_url_accepts_trusted_host_case_insensitive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_dns(monkeypatch, PRIVATE_ADDRESS)
+
+    with override_settings(EASYAUTH_TRUSTED_WEBHOOK_HOSTS=(TRUSTED_HOST,)):
+        result = validate_public_https_url("https://ETRADE.JIEFAKJ.COM/callback")
+
+    assert result.hostname == TRUSTED_HOST
+    assert result.addresses == (PRIVATE_ADDRESS,)
+
+
+def test_validate_public_https_url_rejects_trusted_host_http_and_non_443_port() -> None:
+    with override_settings(EASYAUTH_TRUSTED_WEBHOOK_HOSTS=(TRUSTED_HOST,)):
+        with pytest.raises(InvalidWebhookUrlError):
+            _ = parse_https_url(f"http://{TRUSTED_HOST}/callback")
+        with pytest.raises(InvalidWebhookUrlError):
+            _ = parse_https_url(f"https://{TRUSTED_HOST}:8443/callback")
+
+
+def test_validate_public_https_url_rejects_trusted_host_loopback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_dns(monkeypatch, "127.0.0.1")
+
+    with (
+        override_settings(EASYAUTH_TRUSTED_WEBHOOK_HOSTS=(TRUSTED_HOST,)),
+        pytest.raises(BlockedHostError),
+    ):
+        _ = validate_public_https_url(f"https://{TRUSTED_HOST}/callback")
+
+
+def test_validate_public_https_url_rejects_subdomain_of_trusted_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _stub_dns(monkeypatch, PRIVATE_ADDRESS)
+
+    with (
+        override_settings(EASYAUTH_TRUSTED_WEBHOOK_HOSTS=(TRUSTED_HOST,)),
+        pytest.raises(BlockedHostError),
+    ):
+        _ = validate_public_https_url("https://api.etrade.jiefakj.com/callback")
+
+
+@pytest.mark.parametrize("raw", ["*.example.com", "10.0.0.1", "host:443"])
+def test_parse_trusted_webhook_hosts_rejects_wildcard_ip_and_port(raw: str) -> None:
+    with pytest.raises(ImproperlyConfigured, match="精确主机名"):
+        _ = parse_trusted_webhook_hosts(raw)
+
+
+def test_parse_trusted_webhook_hosts_normalises_and_drops_empties() -> None:
+    assert parse_trusted_webhook_hosts("") == ()
+    assert parse_trusted_webhook_hosts(" ETRADE.JIEFAKJ.COM , , tradedata.jiefakj.com ") == (
+        "etrade.jiefakj.com",
+        "tradedata.jiefakj.com",
+    )

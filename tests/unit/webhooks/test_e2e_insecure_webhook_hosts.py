@@ -88,3 +88,13 @@ def test_e2e_allowlist_does_not_open_other_hosts(
         assert public.hostname == "hooks.example.com"
         assert public.allow_insecure_http is False
         assert public.port == 443
+
+
+def test_trusted_webhook_hosts_do_not_open_e2e_insecure_http() -> None:
+    # 运维可信主机白名单只放宽私网 DNS, 不得并入 E2E 明文 http 窄门。
+    with override_settings(EASYAUTH_TRUSTED_WEBHOOK_HOSTS=("etrade.jiefakj.com",)):
+        assert e2e_allowed_insecure_webhook_hosts() == frozenset()
+        with pytest.raises((BlockedHostError, InvalidWebhookUrlError)):
+            _ = parse_https_url("http://etrade.jiefakj.com/hook")
+        with pytest.raises((BlockedHostError, InvalidWebhookUrlError)):
+            _ = parse_https_url("http://127.0.0.1:18010/hook")

@@ -15,6 +15,8 @@ from easyauth.config.net_errors import UNRESOLVABLE_HOST_MESSAGE, BlockedHostErr
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+type IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
+
 DNS_RESOLUTION_TIMEOUT_MESSAGE = "目标主机解析超时。"
 DNS_RESOLVER_QUEUE_FULL_MESSAGE = "DNS resolver 队列已满。"
 DNS_RESOLVER_MAX_IN_FLIGHT: Final = 32
@@ -50,11 +52,24 @@ __all__ = (
     "DNS_RESOLVER_MAX_IN_FLIGHT",
     "DNS_RESOLVER_QUEUE_FULL_MESSAGE",
     "DNS_RESOLVER_SCRIPT",
+    "ip_is_rfc1918_or_shared",
     "resolve_public_addresses",
+)
+
+# RFC1918 私网与 RFC6598 共享地址(CGNAT 100.64/10); 可信主机仅允许这两类非公网地址。
+_RFC1918_AND_SHARED_NETWORKS: Final = (
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("100.64.0.0/10"),
 )
 
 # 测试通过 easyauth.config.net_dns._DNS_RESOLVER_CAPACITY 替换并发闸。
 _DNS_RESOLVER_CAPACITY = threading.BoundedSemaphore(DNS_RESOLVER_MAX_IN_FLIGHT)
+
+
+def ip_is_rfc1918_or_shared(ip: IPAddress) -> bool:
+    return any(ip in network for network in _RFC1918_AND_SHARED_NETWORKS)
 
 
 def resolve_public_addresses(
@@ -62,6 +77,7 @@ def resolve_public_addresses(
     *,
     port: int,
     timeout_seconds: float | None = None,
+    allow_private: bool = False,
 ) -> tuple[str, ...]:
     if not hostname:
         raise BlockedHostError(UNRESOLVABLE_HOST_MESSAGE)
@@ -72,8 +88,7 @@ def resolve_public_addresses(
         if not isinstance(raw_ip, str):
             raise BlockedHostError(UNRESOLVABLE_HOST_MESSAGE)
         ip = ipaddress.ip_address(raw_ip)
-        # is_global 同时排除私网、环回、链路本地、保留、组播、未指定及共享地址。
-        if not ip.is_global:
+        if not _outbound_address_allowed(ip, allow_private=allow_private):
             raise BlockedHostError
         canonical = str(ip)
         if canonical not in addresses:
@@ -81,6 +96,14 @@ def resolve_public_addresses(
     if not addresses:
         raise BlockedHostError(UNRESOLVABLE_HOST_MESSAGE)
     return tuple(addresses)
+
+
+def _outbound_address_allowed(ip: IPAddress, *, allow_private: bool) -> bool:
+    # 默认只接受公网地址。allow_private 仅额外放行 RFC1918 与 100.64/10;
+    # 环回、链路本地、组播、未指定、保留仍拒绝。
+    if ip.is_global:
+        return True
+    return allow_private and ip_is_rfc1918_or_shared(ip)
 
 
 def _resolve_addresses(
