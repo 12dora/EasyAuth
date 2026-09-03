@@ -225,6 +225,10 @@ def test_manifest_sync_does_not_overwrite_console_owned_webhook(
     assert config.handover_url == "https://admin.example.com/handover"
     assert config.enabled is False
     assert config.updated_by == "admin-1"
+    app.refresh_from_db()
+    # 控制台已覆盖且未启用: handover_hook_url 读不到 URL, 能力必须跟存储口径走,
+    # 不得因 manifest 相对路径 + base_url 被标成 declared。
+    assert app.handover_capability == HANDOVER_CAPABILITY_UNDECLARED
 
 
 def test_conflicting_manifest_overrides_operational_none_to_undeclared() -> None:

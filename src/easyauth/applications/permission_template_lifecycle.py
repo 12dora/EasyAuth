@@ -37,19 +37,29 @@ def sync_manifest_lifecycle(
         downstream_base_url=downstream_base_url,
     )
     lifecycle_for_cap = template.lifecycle
-    if lifecycle_for_cap is not None and downstream_base_url:
-        resolved_url = _resolve_manifest_url(
-            lifecycle_for_cap.handover_url,
-            downstream_base_url,
+    if lifecycle_for_cap is not None:
+        # 交接能力必须以 webhook 配置里实际可调用的 URL 为准(与 handover_hook_url 同口径)。
+        # 相对路径无法补全时不会落库; 若把相对路径原样交给能力同步, App 会被标成
+        # declared, 但创建离职交接任务时因钩子为空而直接失败。
+        lifecycle_for_cap = replace(
+            lifecycle_for_cap,
+            handover_url=_persisted_handover_hook_url(app),
         )
-        if resolved_url:
-            lifecycle_for_cap = replace(lifecycle_for_cap, handover_url=resolved_url)
     sync_handover_capability_from_manifest(
         app,
         lifecycle_for_cap,
         actor_id=template.imported_by or _MANIFEST_ACTOR,
         actor_type=actor_type,
     )
+
+
+def _persisted_handover_hook_url(app: App) -> str:
+    # 必须与 easyauth.lifecycle.handover_shared.handover_hook_url 同口径:
+    # 只读 enabled=True 的配置行; 无行或未启用视为没有钩子。
+    config = AppWebhookConfig.objects.filter(app=app, enabled=True).first()
+    if config is None:
+        return ""
+    return config.handover_url
 
 
 def _sync_webhook_config_from_manifest(
