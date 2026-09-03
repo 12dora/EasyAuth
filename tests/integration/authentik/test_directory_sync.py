@@ -7,8 +7,13 @@ from threading import Event
 from typing import TYPE_CHECKING, cast
 
 import pytest
+from django.test import override_settings
 from django.utils import timezone
 
+from easyauth.accounts.directory_snapshot import (
+    build_directory_snapshot,
+    is_sync_state_stale,
+)
 from easyauth.accounts.models import (
     DingTalkDepartmentMirror,
     DingTalkDirectorySyncState,
@@ -27,6 +32,7 @@ from easyauth.integrations.authentik.directory_client import (
 )
 from easyauth.integrations.authentik.directory_payloads import parse_user
 from easyauth.integrations.authentik.directory_sync import (
+    DIRECTORY_STALE_GENERATION_MESSAGE,
     UnsupportedDirectoryStatusError,
     sync_authentik_dingtalk_directory,
 )
@@ -59,6 +65,7 @@ class _DirectoryClientStub:
     # 上游报告的每 corp 用户总数; 缺省时按实际返回用户数上报 (观测==报告)。
     reported_user_count: int | None = None
     generation: int = 1
+    finished_at: str = "2026-06-12T01:00:00+00:00"
     status_script: list[dict[str, object]] = field(default_factory=list)
     # 指定这些 (corp_id, user_id) 的 org 拉取抛错, 用于验证单用户失败被隔离。
     org_fetch_errors: set[tuple[str, str]] = field(default_factory=set)
@@ -82,7 +89,7 @@ class _DirectoryClientStub:
                     "corp_id": "corp-1",
                     "generation": self.generation,
                     "status": "success",
-                    "finished_at": "2026-06-12T01:00:00+00:00",
+                    "finished_at": self.finished_at,
                     "counters": {"users": reported, "departments": len(self.departments)},
                     "error": "",
                 }
@@ -1175,4 +1182,161 @@ def test_directory_sync_treats_equal_generation_as_idempotent_noop() -> None:
 
     user.refresh_from_db()
     assert result.status_applied_count == 0
+    assert result.sync_state_count == 0
+    assert result.confirmed_corp_count == 1
     assert user.status == "active"
+
+
+@override_settings(EASYAUTH_DIRECTORY_STALE_AFTER_SECONDS=600)
+def test_directory_sync_refreshes_freshness_when_generation_unchanged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    _ = UserMirror.objects.create(
+        authentik_user_id="ak-generation-fresh",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-fresh",
+        status="active",
+    )
+    initial = _stub_with_users(
+        [
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-fresh",
+                "name": "在职员工",
+                "status": "active",
+            }
+        ],
+    )
+    initial.generation = 3
+    _ = sync_authentik_dingtalk_directory(initial)
+
+    state = DingTalkDirectorySyncState.objects.get(corp_id="corp-1")
+    user_mirror = DingTalkUserMirror.objects.get(corp_id="corp-1", user_id="user-fresh")
+    stale_at = timezone.now() - timedelta(seconds=601)
+    DingTalkDirectorySyncState.objects.filter(pk=state.pk).update(last_synced_at=stale_at)
+    original_mirror_synced_at = user_mirror.last_synced_at
+    original_name = user_mirror.name
+    original_status = user_mirror.status
+    original_tombstone = user_mirror.is_tombstone
+
+    stale_snapshot = build_directory_snapshot()
+    assert stale_snapshot["stale"] is True
+    assert stale_snapshot["authoritative"] is False
+
+    confirmation = _stub_with_users(
+        [
+            {
+                "corp_id": "corp-1",
+                "user_id": "user-fresh",
+                "name": "应被忽略",
+                "status": "deleted",
+            }
+        ],
+    )
+    confirmation.generation = 3
+    confirmation.finished_at = "2026-06-12T02:00:00+00:00"
+    with caplog.at_level("INFO", logger="easyauth.integrations.authentik.directory_sync"):
+        result = sync_authentik_dingtalk_directory(confirmation)
+
+    assert result.confirmed_corp_count == 1
+    assert result.sync_state_count == 0
+    assert result.user_count == 0
+    assert result.status_applied_count == 0
+    assert result.tombstoned_user_count == 0
+    assert any(
+        "目录快照未变化, 已刷新新鲜度" in record.message
+        and "corp=corp-1" in record.message
+        and "generation=3" in record.message
+        for record in caplog.records
+    )
+
+    state.refresh_from_db()
+    user_mirror.refresh_from_db()
+    assert state.generation == 3
+    assert state.last_synced_at > stale_at
+    assert state.finished_at == confirmation.finished_at
+    assert user_mirror.status == original_status
+    assert user_mirror.name == original_name
+    assert user_mirror.is_tombstone == original_tombstone
+    assert user_mirror.last_synced_at == original_mirror_synced_at
+
+    snapshot = build_directory_snapshot()
+    assert snapshot["stale"] is False
+    assert snapshot["complete"] is True
+    assert snapshot["authoritative"] is True
+
+
+def test_directory_sync_rejects_lower_generation_without_refreshing_freshness() -> None:
+    _ = UserMirror.objects.create(
+        authentik_user_id="ak-generation-lower",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-lower",
+        status="active",
+    )
+    initial = _stub_with_users(
+        [{"corp_id": "corp-1", "user_id": "user-lower", "status": "active"}],
+    )
+    initial.generation = 5
+    _ = sync_authentik_dingtalk_directory(initial)
+
+    state = DingTalkDirectorySyncState.objects.get(corp_id="corp-1")
+    user_mirror = DingTalkUserMirror.objects.get(corp_id="corp-1", user_id="user-lower")
+    stale_at = timezone.now() - timedelta(seconds=601)
+    DingTalkDirectorySyncState.objects.filter(pk=state.pk).update(last_synced_at=stale_at)
+
+    older = _stub_with_users(
+        [{"corp_id": "corp-1", "user_id": "user-lower", "status": "deleted"}],
+    )
+    older.generation = 4
+    with pytest.raises(
+        AuthentikDirectoryUnavailableError,
+        match=DIRECTORY_STALE_GENERATION_MESSAGE,
+    ):
+        _ = sync_authentik_dingtalk_directory(older)
+
+    state.refresh_from_db()
+    user_mirror.refresh_from_db()
+    assert state.generation == 5
+    assert is_sync_state_stale(state)
+    assert user_mirror.status == "active"
+
+
+def test_directory_sync_applies_higher_generation_after_unchanged_confirmation() -> None:
+    _ = UserMirror.objects.create(
+        authentik_user_id="ak-generation-higher",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="user-higher",
+        status="active",
+    )
+    initial = _stub_with_users(
+        [{"corp_id": "corp-1", "user_id": "user-higher", "status": "active"}],
+    )
+    initial.generation = 3
+    _ = sync_authentik_dingtalk_directory(initial)
+
+    confirmation = _stub_with_users(
+        [{"corp_id": "corp-1", "user_id": "user-higher", "status": "active"}],
+    )
+    confirmation.generation = 3
+    confirmed = sync_authentik_dingtalk_directory(confirmation)
+    assert confirmed.confirmed_corp_count == 1
+    assert confirmed.sync_state_count == 0
+
+    newer = _stub_with_users(
+        [{"corp_id": "corp-1", "user_id": "user-higher", "status": "deleted"}],
+    )
+    newer.generation = 4
+    result = sync_authentik_dingtalk_directory(newer)
+
+    user = UserMirror.objects.get(authentik_user_id="ak-generation-higher")
+    state = DingTalkDirectorySyncState.objects.get(corp_id="corp-1")
+    user_mirror = DingTalkUserMirror.objects.get(corp_id="corp-1", user_id="user-higher")
+    assert result.sync_state_count == 1
+    assert result.confirmed_corp_count == 0
+    assert result.departed_count == 1
+    assert user.status == "departed"
+    assert user_mirror.status == "departed"
+    assert state.generation == 4

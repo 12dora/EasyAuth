@@ -70,6 +70,7 @@ def sync_dingtalk_directory_task() -> dict[str, int]:
         "user_count": result.user_count,
         "org_context_count": result.org_context_count,
         "sync_state_count": result.sync_state_count,
+        "confirmed_corp_count": result.confirmed_corp_count,
         "pruned_department_count": result.pruned_department_count,
         "tombstoned_user_count": result.tombstoned_user_count,
         "status_applied_count": result.status_applied_count,

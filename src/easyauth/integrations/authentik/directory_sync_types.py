@@ -49,6 +49,7 @@ class AuthentikDirectorySyncResult:
     revoked_count: int = 0
     org_fetch_failed_count: int = 0
     offboarding_deferred_count: int = 0
+    confirmed_corp_count: int = 0
 
 
 @dataclass(frozen=True, slots=True)

@@ -452,6 +452,7 @@ EasyAuth 保留其身份与联系字段，设置 `status: "departed"`、`active:
 - `snapshot_at` 是上游报告的快照时间，不参与新鲜度计算；
   `snapshot_at_status` 取 `valid` / `missing` / `invalid` / `future`；
 - 单个 source/corp 条目的 `stale` 以 EasyAuth 本地成功事务提交时间判定，而不信任上游时钟；
+  成功核对包括上游 generation 未变：此时只刷新本地 `last_synced_at`，不改写镜像或墓碑；
 - 顶层 `complete` 表示所有已知 source/corp 作用域都有成功且非负的 generation；
   顶层 `stale` 表示任一快照过期或缺失；
   `authoritative` 仅在 `complete && !stale` 时为 `true`。

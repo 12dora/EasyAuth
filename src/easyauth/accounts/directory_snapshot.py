@@ -66,6 +66,7 @@ def directory_stale_after() -> timedelta:
 def sync_state_freshness_at(state: DingTalkDirectorySyncState) -> datetime:
     # freshness 只能信任本服务在成功事务提交时写入的本地时间。finished_at 来自上游,
     # 可能受时钟漂移或错误 serializer 影响, 只能作为展示元数据。
+    # 成功包括应用更高 generation, 以及核对本世代与上游一致后刷新 last_synced_at。
     return state.last_synced_at
 
 

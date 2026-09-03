@@ -57,7 +57,9 @@ manifest 顶层 `capabilities: ["directory", "notify"]` 只表达应用的需求
 
 ### 目录新鲜度
 
-镜像同步目标周期 300 秒，故障时可能滞后更久。下游必须用响应里的
+镜像同步目标周期 300 秒，故障时可能滞后更久。beat 每次成功从上游取回权威快照后，即使
+generation 未变也会刷新本地 `last_synced_at`——新鲜度表示「已在该时刻核对镜像」，不是
+「上游上次发生变化的时间」。下游必须用响应里的
 `directory_snapshot.authoritative` / `stale` / `complete` 判断可信性，**不能靠调度周期推断**。
 `snapshots[]` 每个 `(source_slug, corp_id)` 作用域一项，不是每个 `corp_id` 一项。
 
