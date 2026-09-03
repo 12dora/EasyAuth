@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Final
 from easyauth.applications.handover_capability import (
     sync_handover_capability_from_manifest,
 )
+from easyauth.applications.permission_template_types import AppManifestLifecycleInput
 from easyauth.config.net import validate_public_https_url
 from easyauth.webhooks.models import AppWebhookConfig
 
@@ -37,7 +38,10 @@ def sync_manifest_lifecycle(
         downstream_base_url=downstream_base_url,
     )
     lifecycle_for_cap = template.lifecycle
-    if lifecycle_for_cap is not None:
+    if lifecycle_for_cap is None:
+        # 成功解析但无 lifecycle 段: 视为已处理的 undeclared, 不是拉取失败。
+        lifecycle_for_cap = AppManifestLifecycleInput()
+    else:
         # 交接能力必须以 webhook 配置里实际可调用的 URL 为准(与 handover_hook_url 同口径)。
         # 相对路径无法补全时不会落库; 若把相对路径原样交给能力同步, App 会被标成
         # declared, 但创建离职交接任务时因钩子为空而直接失败。
