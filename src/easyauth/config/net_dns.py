@@ -101,6 +101,9 @@ def resolve_public_addresses(
 def _outbound_address_allowed(ip: IPAddress, *, allow_private: bool) -> bool:
     # 默认只接受公网地址。allow_private 仅额外放行 RFC1918 与 100.64/10;
     # 环回、链路本地、组播、未指定、保留仍拒绝。
+    # CPython 里组播地址(224.0.0.1 / ff02::1)的 is_global 为 True, 必须先于公网快捷判断排除。
+    if ip.is_multicast or ip.is_unspecified or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+        return False
     if ip.is_global:
         return True
     return allow_private and ip_is_rfc1918_or_shared(ip)

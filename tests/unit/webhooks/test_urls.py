@@ -211,10 +211,44 @@ def test_validate_public_https_url_rejects_subdomain_of_trusted_host(
         _ = validate_public_https_url("https://api.etrade.jiefakj.com/callback")
 
 
-@pytest.mark.parametrize("raw", ["*.example.com", "10.0.0.1", "host:443"])
-def test_parse_trusted_webhook_hosts_rejects_wildcard_ip_and_port(raw: str) -> None:
-    with pytest.raises(ImproperlyConfigured, match="精确主机名"):
+@pytest.mark.parametrize(
+    "raw",
+    [
+        "*.example.com",
+        "10.0.0.1",
+        "host:443",
+        "[::1]",
+        "etrade.jiefakj.com/hook",
+        # 系统解析器会把这些非规范写法当 IPv4 字面量(10.0.0.1), 不能靠 ipaddress 识别
+        "10.1",
+        "167772161",
+        "0x0a000001",
+        # 单段名与顶级域纯数字一律拒绝
+        "localhost",
+        "etrade.123",
+        "-bad.example.com",
+    ],
+)
+def test_parse_trusted_webhook_hosts_rejects_non_dns_entries(raw: str) -> None:
+    with pytest.raises(ImproperlyConfigured, match="主机名"):
         _ = parse_trusted_webhook_hosts(raw)
+
+
+@pytest.mark.parametrize("address", ["224.0.0.1", "239.1.1.1", "ff02::1"])
+@pytest.mark.parametrize("trusted", [(), (TRUSTED_HOST,)])
+def test_validate_public_https_url_rejects_multicast_in_both_modes(
+    monkeypatch: pytest.MonkeyPatch,
+    address: str,
+    trusted: tuple[str, ...],
+) -> None:
+    # CPython 里组播地址的 is_global 为 True, 之前会被公网快捷判断放行
+    _stub_dns(monkeypatch, address)
+
+    with (
+        override_settings(EASYAUTH_TRUSTED_WEBHOOK_HOSTS=trusted),
+        pytest.raises(BlockedHostError),
+    ):
+        _ = validate_public_https_url(f"https://{TRUSTED_HOST}/callback")
 
 
 def test_parse_trusted_webhook_hosts_normalises_and_drops_empties() -> None:

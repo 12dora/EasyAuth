@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import ipaddress
 import os
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
 from urllib.parse import unquote, urlparse
@@ -294,13 +294,18 @@ EASYAUTH_PERMISSION_QUERY_CACHE_TTL_SECONDS = 300
 # 生产若在 N 层可信反代后, 设为 N, 则从 XFF 右起第 N 跳取真实客户端 IP。
 EASYAUTH_TRUSTED_PROXY_HOPS = int(os.environ.get("EASYAUTH_TRUSTED_PROXY_HOPS", "0"))
 TRUSTED_WEBHOOK_HOSTS_INVALID_MESSAGE: Final = (
-    "EASYAUTH_TRUSTED_WEBHOOK_HOSTS 只接受精确主机名, "
-    "禁止通配符、IP 字面量以及含 '/' 或 ':' 的条目, 无效条目: {entry}"
+    "EASYAUTH_TRUSTED_WEBHOOK_HOSTS 只接受精确的 DNS 主机名(至少两段、顶级域含字母), "
+    "禁止通配符、IP 字面量(含 10.1 / 167772161 / 0x0a000001 这类非规范写法)、端口与路径, "
+    "无效条目: {entry}"
 )
+_TRUSTED_WEBHOOK_HOST_LABEL: Final = re.compile(r"[a-z0-9](?:[a-z0-9-]*[a-z0-9])?")
+_TRUSTED_WEBHOOK_HOST_MAX_LENGTH: Final = 253
+_TRUSTED_WEBHOOK_HOST_MIN_LABELS: Final = 2
 
 
 def parse_trusted_webhook_hosts(raw: str) -> tuple[str, ...]:
-    # 逗号分隔的精确主机名; 通配符、IP 字面量、含 '/' 或 ':' 的条目在启动时拒绝。
+    # 逗号分隔的精确主机名; 只接受语法合法的 DNS 名,
+    # 其余(通配符、IP 字面量、端口、路径)在启动时拒绝。
     hosts: list[str] = []
     seen: set[str] = set()
     for part in raw.split(","):
@@ -315,13 +320,17 @@ def parse_trusted_webhook_hosts(raw: str) -> tuple[str, ...]:
 
 
 def _reject_invalid_trusted_webhook_host(host: str) -> None:
-    if "*" in host or "/" in host or ":" in host:
+    # 系统解析器会把 10.1 / 167772161 / 0x0a000001 当作 IPv4 字面量, 所以不能只靠 ipaddress 识别 IP;
+    # 要求每段都是合法 label、至少两段、且顶级域含字母, 这些非规范写法与单段名(localhost)一并拒绝。
+    labels = host.split(".")
+    valid = (
+        len(host) <= _TRUSTED_WEBHOOK_HOST_MAX_LENGTH
+        and len(labels) >= _TRUSTED_WEBHOOK_HOST_MIN_LABELS
+        and all(_TRUSTED_WEBHOOK_HOST_LABEL.fullmatch(label) is not None for label in labels)
+        and any(char.isalpha() for char in labels[-1])
+    )
+    if not valid:
         raise ImproperlyConfigured(TRUSTED_WEBHOOK_HOSTS_INVALID_MESSAGE.format(entry=host))
-    try:
-        _ = ipaddress.ip_address(host)
-    except ValueError:
-        return
-    raise ImproperlyConfigured(TRUSTED_WEBHOOK_HOSTS_INVALID_MESSAGE.format(entry=host))
 
 
 # 出站 webhook/lifecycle URL 的精确主机名白名单: 仅放宽 RFC1918 与 100.64/10 的 DNS 地址策略,

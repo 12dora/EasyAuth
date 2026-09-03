@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import socket
+import ssl
 import threading
 from http import HTTPStatus
 from typing import TYPE_CHECKING, ClassVar, Self, override
@@ -16,6 +17,11 @@ from easyauth.webhooks.transport import (
     WebhookResponseTooLargeError,
     WebhookTransportError,
     post_webhook,
+)
+
+# 在 autouse fixture 用 _FakeConnection 替换模块属性之前绑定真实类
+from easyauth.webhooks.transport import (
+    _PinnedHttpsConnection as PinnedHttpsConnection,
 )
 
 if TYPE_CHECKING:
@@ -260,3 +266,54 @@ def _stub_resolved_private_address(monkeypatch: pytest.MonkeyPatch, address: str
         return ((socket.AF_INET, socket.SOCK_STREAM, 6, "", (address, port)),)
 
     monkeypatch.setattr("easyauth.config.net_dns._resolve_addresses", fake_resolve)
+
+
+def test_pinned_connection_connects_to_pinned_address_with_original_sni(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 真实的 _PinnedHttpsConnection.connect(): socket 连校验得到的 IP, TLS SNI/证书校验仍用原域名
+    connections: list[tuple[tuple[str, int], float | None]] = []
+    wrapped: list[tuple[object, str | None]] = []
+
+    class _Sock:
+        pass
+
+    def fake_create_connection(
+        address: tuple[str, int],
+        timeout: float | None = None,
+        **_kwargs: object,
+    ) -> _Sock:
+        connections.append((address, timeout))
+        return _Sock()
+
+    def fake_wrap_socket(
+        self: ssl.SSLContext,
+        sock: object,
+        *args: object,
+        server_hostname: str | None = None,
+        **_kwargs: object,
+    ) -> object:
+        _ = (self, args)
+        wrapped.append((sock, server_hostname))
+        return sock
+
+    monkeypatch.setattr(socket, "create_connection", fake_create_connection)
+    monkeypatch.setattr(ssl.SSLContext, "wrap_socket", fake_wrap_socket)
+    target = ValidatedHttpsUrl(
+        hostname="etrade.jiefakj.com",
+        port=443,
+        request_target="/callback",
+        addresses=("172.17.0.1",),
+    )
+    connection = PinnedHttpsConnection(
+        target=target,
+        address="172.17.0.1",
+        timeout=3.0,
+    )
+
+    connection.connect()
+
+    assert connections == [(("172.17.0.1", 443), 3.0)]
+    assert len(wrapped) == 1
+    assert wrapped[0][1] == "etrade.jiefakj.com"
+    assert connection.sock is wrapped[0][0]
