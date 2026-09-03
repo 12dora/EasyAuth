@@ -15,6 +15,16 @@ import { enumFilter, readField, textFilter, type ColumnType, type ServerSortStat
 export const MONO_TEXT_CLASS = "font-mono text-body leading-5 text-ink-soft";
 
 /**
+ * 不省略(`ellipsis: false`)的等宽文本用这一份 class, 由 `textColumn` 自动选用。
+ *
+ * 这类列的内容是多值拼接的标识符(`审批退款 (orders.refund.approve):ALL、…`), 串里
+ * 没有空格也没有连字符, 浏览器找不到断行点; 而 AppTable 固定 `tableLayout: "fixed"`,
+ * 列宽由 `<colgroup>` 写死, 于是整串会溢出到相邻单元格上。`break-all` 允许在任意
+ * 字符处断开 —— 这类列本来就是「撑高行、不截断」的语义, 换行正是想要的结果。
+ */
+export const MONO_WRAP_TEXT_CLASS = cn(MONO_TEXT_CLASS, "whitespace-normal break-all");
+
+/**
  * 共享列预设。页面只声明「这列是什么语义」, 渲染、筛选、排序、宽度、
  * 对齐全部由这里决定; 以后要改表格里的状态徽章或时间格式, 只改这个文件。
  *
@@ -218,7 +228,10 @@ export interface TextColumnConfig<T> {
   filter?: boolean;
   /** 开启本地化字符串排序。 */
   sorter?: boolean;
-  /** 超宽省略(默认开启), 关闭后长文本会撑高行。 */
+  /**
+   * 超宽省略(默认开启), 关闭后长文本会撑高行。
+   * 关掉且 `mono` 为真时改用 `MONO_WRAP_TEXT_CLASS`, 否则无空格的标识符串会溢出列宽。
+   */
   ellipsis?: boolean;
   /** 等宽字体展示(应用 key、ID 之类)。 */
   mono?: boolean;
@@ -252,7 +265,10 @@ export function textColumn<T>({
       if (value === "") {
         return "-";
       }
-      return mono ? <code className={MONO_TEXT_CLASS}>{value}</code> : value;
+      if (!mono) {
+        return value;
+      }
+      return <code className={ellipsis ? MONO_TEXT_CLASS : MONO_WRAP_TEXT_CLASS}>{value}</code>;
     },
     ...(filter ? textFilter<T>(key, { getValue: (record) => read(record) }) : {}),
     ...(sorter ? { sorter: (a: T, b: T) => read(a).localeCompare(read(b)) } : {}),

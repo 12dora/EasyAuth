@@ -1960,6 +1960,111 @@ describe("PortalPage tables", () => {
     }
   });
 
+  /**
+   * 「我的申请」表格的列宽不变量。
+   *
+   * AppTable 固定 `tableLayout: "fixed"`, 列宽只认 `<colgroup>`: 没声明 width 的列只能去
+   * 分摊 `scroll.x`(= minWidth) 减掉定宽列之后的剩余量。线上就是这么坏掉的 —— 定宽列之和
+   * 逼近 minWidth 时剩余量趋近 0, 权限组 / 直接授权 / 原因被压成一个字宽, 中文表头竖排成
+   * 一列字、表头行被撑得极高。所以两件事必须一起锁住: 每列都声明宽度, 且 minWidth 恰好是
+   * 它们的和(有了这个和, 剩余量恒为 0, 布局不再依赖浏览器怎么分摊)。
+   */
+  test("我的申请表格每列都声明宽度, 且 minWidth 等于列宽之和", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/me/access-requests?page=1&page_size=20") {
+        return jsonResponse({
+          data: [portalRequestRow({ id: 1, app_name: "CRM" })],
+          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage("/portal/requests");
+      await screen.findByText("CRM");
+
+      const table = screen.getByRole("table", { name: "我的申请记录列表" });
+      const widths = declaredColumnWidths(table);
+
+      // 状态 / 审批人 / 应用 / 权限组 / 直接授权 / 期限 / 过期时间 / 提交时间 / 原因 / 操作。
+      expect(widths).toEqual([200, 140, 140, 200, 240, 110, 170, 170, 200, 180]);
+      expect(widths).toHaveLength(table.querySelectorAll("thead.ant-table-thead th").length);
+      expect(tableScrollWidth(table)).toBe(widths.reduce((sum, width) => sum + width, 0));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  /** 我的权限 / 即将过期两张表共用同一份列定义, 同一条不变量对它们同样成立。 */
+  test("我的权限表格每列都声明宽度, 且 minWidth 等于列宽之和", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/me/grants?page=1&page_size=20") {
+        return jsonResponse({
+          data: [portalGrantRow({ app_name: "CRM" })],
+          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage("/portal");
+      await screen.findByText("CRM");
+
+      const table = screen.getByRole("table", { name: "我的授权列表" });
+      const widths = declaredColumnWidths(table);
+
+      // 应用 / 权限组 / 展开授权 / 来源 / 期限 / 版本 / 过期时间。
+      expect(widths).toEqual([200, 200, 240, 240, 110, 220, 170]);
+      expect(widths).toHaveLength(table.querySelectorAll("thead.ant-table-thead th").length);
+      expect(tableScrollWidth(table)).toBe(widths.reduce((sum, width) => sum + width, 0));
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  /**
+   * 列宽写死之后, 等宽的多值列还要能断行。
+   *
+   * 直接授权 / 展开授权 / 来源渲染的是 `名称 (key):scope、…` 这种没有空格的串,
+   * 浏览器找不到断行点; 这几列又刻意关掉了 ellipsis(内容是多值文本, 该换行而不是截断),
+   * 所以必须由 `MONO_WRAP_TEXT_CLASS` 允许在任意字符处断开, 否则整串会溢出到邻格上。
+   */
+  test("申请历史的直接授权列在固定列宽下可任意断行", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/me/access-requests?page=1&page_size=20") {
+        return jsonResponse({
+          data: [
+            portalRequestRow({
+              id: 1,
+              app_name: "CRM",
+              direct_grants: [{ permission: "orders.refund.approve", permission_name: "审批退款", scope: "TEAM" }],
+            }),
+          ],
+          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage("/portal/requests");
+
+      const directGrantText = await screen.findByText("审批退款 (orders.refund.approve):TEAM");
+      expect(directGrantText.tagName).toBe("CODE");
+      expect(directGrantText).toHaveClass("whitespace-normal", "break-all");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   test("申请历史审批人列: 待审批给当前审批人, 已决给决定人, 无姓名回退 actor id", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
@@ -2116,6 +2221,31 @@ describe("PortalPage tables", () => {
     }
   });
 });
+
+/**
+ * 表格 `<colgroup>` 里各列声明的像素宽度, 按列序返回。
+ *
+ * 列上没写 width 时 rc-table 渲染出的 `<col>` 不带 `style.width`, 这里直接抛错 ——
+ * 「每列都声明了宽度」正是要锁住的不变量, 不能悄悄按 0 计入求和。
+ */
+function declaredColumnWidths(table: HTMLElement): number[] {
+  return Array.from(table.querySelectorAll<HTMLTableColElement>("colgroup > col")).map((col, index) => {
+    const width = col.style.width;
+    if (!width.endsWith("px")) {
+      throw new Error(`第 ${index + 1} 列没有声明像素列宽, 实际为 ${JSON.stringify(width)}`);
+    }
+    return Number.parseFloat(width);
+  });
+}
+
+/** AppTable 传下去的 minWidth(即 `scroll.x`)由 rc-table 写在滚动 `<table>` 的内联 width 上。 */
+function tableScrollWidth(table: HTMLElement): number {
+  const width = table.style.width;
+  if (!width.endsWith("px")) {
+    throw new Error(`表格没有把 minWidth 写成像素宽度, 实际为 ${JSON.stringify(width)}`);
+  }
+  return Number.parseFloat(width);
+}
 
 /** 申请表里某一行的「审批人」单元格文本; 该列固定紧跟在状态列之后。 */
 function approverCellText(appName: string): string {

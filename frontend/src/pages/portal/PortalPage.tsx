@@ -156,6 +156,7 @@ function PortalGrantSection({
         title: t("portal.column.groups"),
         getValue: (row) => formatGroups(t, row.groups),
         ellipsis: false,
+        width: 200,
       }),
       textColumn<PortalGrantRow>({
         key: "expanded_grants",
@@ -163,6 +164,7 @@ function PortalGrantSection({
         getValue: (row) => formatExpandedGrants(row.grants),
         ellipsis: false,
         mono: true,
+        width: 240,
       }),
       textColumn<PortalGrantRow>({
         key: "grant_sources",
@@ -170,6 +172,7 @@ function PortalGrantSection({
         getValue: (row) => formatSources(row.grants),
         ellipsis: false,
         mono: true,
+        width: 240,
       }),
       textColumn<PortalGrantRow>({
         key: "term",
@@ -210,9 +213,12 @@ function PortalGrantSection({
           emptyDescription={t("portal.grants.emptyDescription")}
           emptyTitle={emptyText}
           loading={query.isLoading}
-          // 固定列 200(应用) + 110(期限) + 220(版本) + 170(过期时间) = 700,
-          // 权限组 / 展开授权 / 来源三列不定宽(ellipsis: false, 长文本换行)各留 180 -> 1240。
-          minWidth={1240}
+          // 同「我的申请」: 每列都声明宽度, minWidth 正好等于它们的和。原来权限组 /
+          // 展开授权 / 来源三列只在注释里「各留 180」, 列上并没有 width, fixed 布局下
+          // 它们其实是在分摊剩余宽度, 一旦剩余量不够就会被压成一个字宽。
+          // 应用 200 + 权限组 200 + 展开授权 240 + 来源 240 + 期限 110 + 版本 220
+          // + 过期时间 170 = 1380。
+          minWidth={1380}
           rowKey="grant_id"
         />
       )}
@@ -295,6 +301,7 @@ function PortalRequestSection() {
         title: t("portal.column.groups"),
         getValue: (row) => formatGroups(t, row.authorization_groups),
         ellipsis: false,
+        width: 200,
       }),
       textColumn<PortalRequestRow>({
         key: "direct_grants",
@@ -302,6 +309,7 @@ function PortalRequestSection() {
         getValue: (row) => formatDirectGrants(row.direct_grants),
         ellipsis: false,
         mono: true,
+        width: 240,
       }),
       textColumn<PortalRequestRow>({
         key: "term",
@@ -317,7 +325,7 @@ function PortalRequestSection() {
         dateTimeColumn<PortalRequestRow>({ key: "submitted_at", title: t("portal.column.submittedAt"), sorter: false }),
         sort,
       ),
-      textColumn<PortalRequestRow>({ key: "reason", title: t("portal.column.reason"), ellipsis: false }),
+      textColumn<PortalRequestRow>({ key: "reason", title: t("portal.column.reason"), ellipsis: false, width: 200 }),
       actionsColumn<PortalRequestRow>({
         render: (row) => <WithdrawAction mutation={withdrawMutation} row={row} />,
       }),
@@ -344,9 +352,14 @@ function PortalRequestSection() {
           emptyDescription={t("portal.requests.emptyDescription")}
           emptyTitle={t("portal.requests.empty")}
           loading={query.isLoading}
-          // 原 1400 是「状态 200 + 应用 140 + 期限 110 + 过期 170 + 提交 170 + 操作 + 三列不定宽」的和,
-          // 新增的审批人列宽 140 要一并计入, 否则表格会把不定宽的几列继续压窄。
-          minWidth={1540}
+          // 每一列都必须显式声明宽度, minWidth 必须正好等于它们的和 ——
+          // AppTable 固定 `tableLayout: "fixed"`, 无宽度的列只能分摊 minWidth 的剩余量,
+          // 固定列一多剩余量就趋近 0, 权限组 / 直接授权 / 原因会被压成一个字宽,
+          // 表头竖排成一列字(线上 iam.jiefakj.com 的「我的申请」就这么坏掉的)。
+          // 状态 200 + 审批人 140 + 应用 140 + 权限组 200 + 直接授权 240 + 期限 110
+          // + 过期时间 170 + 提交时间 170 + 原因 200 + 操作 180 = 1750。
+          // 加列或改列宽时这个和要一起改, `PortalPage.test.tsx` 会拦住不一致。
+          minWidth={1750}
           rowKey="id"
         />
       )}
