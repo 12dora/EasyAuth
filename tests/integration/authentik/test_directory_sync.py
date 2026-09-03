@@ -1219,10 +1219,12 @@ def test_directory_sync_refreshes_freshness_when_generation_unchanged(
     original_name = user_mirror.name
     original_status = user_mirror.status
     original_tombstone = user_mirror.is_tombstone
+    original_finished_at = state.finished_at
 
     stale_snapshot = build_directory_snapshot()
     assert stale_snapshot["stale"] is True
     assert stale_snapshot["authoritative"] is False
+    stale_snapshot_id = stale_snapshot["snapshot_id"]
 
     confirmation = _stub_with_users(
         [
@@ -1255,13 +1257,14 @@ def test_directory_sync_refreshes_freshness_when_generation_unchanged(
     user_mirror.refresh_from_db()
     assert state.generation == 3
     assert state.last_synced_at > stale_at
-    assert state.finished_at == confirmation.finished_at
+    assert state.finished_at == original_finished_at
     assert user_mirror.status == original_status
     assert user_mirror.name == original_name
     assert user_mirror.is_tombstone == original_tombstone
     assert user_mirror.last_synced_at == original_mirror_synced_at
 
     snapshot = build_directory_snapshot()
+    assert snapshot["snapshot_id"] == stale_snapshot_id
     assert snapshot["stale"] is False
     assert snapshot["complete"] is True
     assert snapshot["authoritative"] is True
@@ -1301,6 +1304,92 @@ def test_directory_sync_rejects_lower_generation_without_refreshing_freshness() 
     assert state.generation == 5
     assert is_sync_state_stale(state)
     assert user_mirror.status == "active"
+
+
+def _seed_stale_same_generation_state(
+    user_ids: tuple[str, ...],
+    *,
+    generation: int = 3,
+) -> DingTalkDirectorySyncState:
+    for user_id in user_ids:
+        _ = UserMirror.objects.create(
+            authentik_user_id=f"ak-{user_id}",
+            dingtalk_source_slug="dingtalk",
+            dingtalk_corp_id="corp-1",
+            dingtalk_userid=user_id,
+            status="active",
+        )
+    initial = _stub_with_users(
+        [{"corp_id": "corp-1", "user_id": user_id, "status": "active"} for user_id in user_ids],
+    )
+    initial.generation = generation
+    _ = sync_authentik_dingtalk_directory(initial)
+    state = DingTalkDirectorySyncState.objects.get(corp_id="corp-1")
+    DingTalkDirectorySyncState.objects.filter(pk=state.pk).update(
+        last_synced_at=timezone.now() - timedelta(seconds=601),
+    )
+    state.refresh_from_db()
+    return state
+
+
+@override_settings(EASYAUTH_DIRECTORY_STALE_AFTER_SECONDS=600)
+def test_directory_sync_truncated_pagination_does_not_refresh_freshness() -> None:
+    state = _seed_stale_same_generation_state(("user-trunc-fresh",))
+    original_last_synced_at = state.last_synced_at
+
+    truncated = _stub_with_users(
+        [{"corp_id": "corp-1", "user_id": "user-trunc-fresh", "status": "active"}],
+    )
+    truncated.generation = 3
+    truncated.reported_user_count = 3
+    with pytest.raises(AuthentikDirectoryUnavailableError):
+        _ = sync_authentik_dingtalk_directory(truncated)
+
+    state.refresh_from_db()
+    assert state.last_synced_at == original_last_synced_at
+    assert is_sync_state_stale(state)
+
+
+@override_settings(EASYAUTH_DIRECTORY_STALE_AFTER_SECONDS=600)
+def test_directory_sync_partial_org_failure_does_not_refresh_freshness() -> None:
+    state = _seed_stale_same_generation_state(("user-org-ok-fresh", "user-org-broken-fresh"))
+    original_last_synced_at = state.last_synced_at
+
+    partial = _stub_with_users(
+        [
+            {"corp_id": "corp-1", "user_id": "user-org-ok-fresh", "status": "active"},
+            {"corp_id": "corp-1", "user_id": "user-org-broken-fresh", "status": "active"},
+        ],
+    )
+    partial.generation = 3
+    partial.org_fetch_errors = {("corp-1", "user-org-broken-fresh")}
+    with pytest.raises(AuthentikDirectoryUnavailableError):
+        _ = sync_authentik_dingtalk_directory(partial)
+
+    state.refresh_from_db()
+    assert state.last_synced_at == original_last_synced_at
+    assert is_sync_state_stale(state)
+
+
+@override_settings(EASYAUTH_DIRECTORY_STALE_AFTER_SECONDS=600)
+def test_directory_sync_final_status_validation_failure_does_not_refresh_freshness() -> None:
+    state = _seed_stale_same_generation_state(("user-final-status-fresh",))
+    original_last_synced_at = state.last_synced_at
+
+    mismatched = _stub_with_users(
+        [{"corp_id": "corp-1", "user_id": "user-final-status-fresh", "status": "active"}],
+    )
+    mismatched.generation = 3
+    mismatched.status_script = [
+        _authority_status(generation=3, users=1),
+        _authority_status(generation=4, users=1),
+    ]
+    with pytest.raises(AuthentikDirectoryUnavailableError):
+        _ = sync_authentik_dingtalk_directory(mismatched)
+
+    state.refresh_from_db()
+    assert state.last_synced_at == original_last_synced_at
+    assert is_sync_state_stale(state)
 
 
 def test_directory_sync_applies_higher_generation_after_unchanged_confirmation() -> None:

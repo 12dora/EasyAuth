@@ -159,6 +159,8 @@ def _build_scope_snapshot(
             "snapshot_at_status": snapshot_at_status,
             "stale": stale,
         },
+        # snapshot_id 标识目录世代与上游快照时刻, 不含 stale。
+        # 世代未变的新鲜度核对不得改写 finished_at, 否则 snapshot_id 会无数据变化却轮转。
         identity_row=[
             source_slug,
             corp_id,

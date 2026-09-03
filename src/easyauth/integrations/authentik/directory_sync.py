@@ -202,20 +202,11 @@ def _refresh_confirmed_sync_states(
 ) -> None:
     if not confirmed_corp_ids:
         return
-    finished_at_by_corp: dict[str, str] = {}
-    for item in _list(snapshot.status.get("sync")):
-        sync = _mapping(item)
-        corp_id = _string(sync.get("corp_id"))
-        if corp_id in confirmed_corp_ids:
-            finished_at_by_corp[corp_id] = _string(sync.get("finished_at"))
     for corp_id in sorted(confirmed_corp_ids):
         state = states[corp_id]
-        update_fields = ["last_synced_at"]
-        finished_at = finished_at_by_corp.get(corp_id, "")
-        if finished_at:
-            state.finished_at = finished_at
-            update_fields.append("finished_at")
-        state.save(update_fields=update_fields)
+        # 只刷新本地新鲜度。finished_at 进入 snapshot_at, 是 snapshot_id 的组成;
+        # 世代未变时改写它会让分页中途 409 snapshot_mismatch。
+        state.save(update_fields=["last_synced_at"])
         logger.info(
             "目录快照未变化, 已刷新新鲜度 corp=%s generation=%s",
             corp_id,
