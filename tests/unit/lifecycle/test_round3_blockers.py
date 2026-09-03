@@ -10,7 +10,7 @@ import pytest
 from django.utils import timezone
 
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
-from easyauth.applications.models import App
+from easyauth.applications.models import HANDOVER_CAPABILITY_UNDECLARED, App
 from easyauth.audit.models import AuditLog
 from easyauth.lifecycle.api_errors import map_handover_exception
 from easyauth.lifecycle.api_payloads import aggregated_summary
@@ -26,6 +26,7 @@ from easyauth.lifecycle.handover_recovery import takeover_expired_lease
 from easyauth.lifecycle.lease import LeaseHandle, require_cas, take_lease
 from easyauth.lifecycle.models import (
     ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
+    ACTION_STATUS_BLOCKED,
     ACTION_STATUS_DONE,
     ACTION_STATUS_EXECUTING,
     ACTION_STATUS_FAILED,
@@ -37,6 +38,7 @@ from easyauth.lifecycle.models import (
     BATCH_STATUS_DONE,
     BATCH_STATUS_EXECUTING,
     BATCH_STATUS_FAILED,
+    BLOCKED_REASON_CAPABILITY_UNDECLARED,
     DELIVERY_OUTCOME_FAILED,
     DELIVERY_OUTCOME_SENT,
     HANDOVER_KIND_OFFBOARD,
@@ -59,6 +61,7 @@ _ATTENTION_POLL_ASSERTION_MESSAGE: Final = "30 分钟内不得发起状态查询
 _ATTENTION_GATE_ASSERTION_MESSAGE: Final = (
     "signed_hook_get must not run within 30min attention gate"
 )
+_UNDECLARED_TAKEOVER_ASSERTION_MESSAGE: Final = "能力撤销后不得重放 execute"
 
 
 def _subject_app_action(
@@ -444,6 +447,75 @@ def test_takeover_payload_conflict_enters_manual_resolution(
     lease.refresh_from_db()
     assert resolved.status == ACTION_STATUS_FAILED
     assert lease.released_at is not None
+
+
+def _expired_executing_takeover(
+    action: HandoverAppAction,
+) -> tuple[HandoverExecutionLease, HandoverExecutionBatch]:
+    handle = take_lease(action=action, owner="sender:crashed", batch_seq=1)
+    batch = HandoverExecutionBatch.objects.create(
+        action=action,
+        action_snapshot_id=int(action.id),
+        generation=1,
+        batch_seq=1,
+        status=BATCH_STATUS_EXECUTING,
+        is_final=True,
+        snapshot_token="tok",
+        request_payload={"generation": 1, "batch_seq": 1},
+        request_hash="f" * 64,
+    )
+    lease = HandoverExecutionLease.objects.get(pk=handle.lease_id)
+    lease.lease_expires_at = timezone.now() - timedelta(seconds=1)
+    lease.save(update_fields=["lease_expires_at"])
+    return lease, batch
+
+
+def test_takeover_undeclared_capability_blocks_action_and_releases_lease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _subject, app, _task, action = _subject_app_action(status=ACTION_STATUS_EXECUTING)
+    lease, batch = _expired_executing_takeover(action)
+    app.handover_capability = HANDOVER_CAPABILITY_UNDECLARED
+    app.save(update_fields=["handover_capability", "updated_at"])
+
+    def unexpected_post(**_kwargs: object) -> HookResponse:
+        raise AssertionError(_UNDECLARED_TAKEOVER_ASSERTION_MESSAGE)
+
+    monkeypatch.setattr("easyauth.lifecycle.handover_recovery.signed_hook_post", unexpected_post)
+
+    result = takeover_expired_lease(lease, owner="recover:undeclared")
+
+    assert result is not None
+    result.refresh_from_db()
+    batch.refresh_from_db()
+    lease.refresh_from_db()
+    assert result.status == ACTION_STATUS_BLOCKED
+    assert result.blocked_reason == BLOCKED_REASON_CAPABILITY_UNDECLARED
+    assert batch.status == BATCH_STATUS_FAILED
+    assert lease.released_at is not None
+
+    second = takeover_expired_lease(lease, owner="recover:undeclared-2")
+    result.refresh_from_db()
+    lease.refresh_from_db()
+    assert second is None
+    assert result.status == ACTION_STATUS_BLOCKED
+    assert result.blocked_reason == BLOCKED_REASON_CAPABILITY_UNDECLARED
+    assert lease.released_at is not None
+
+
+def test_takeover_delivery_prepare_none_releases_lease() -> None:
+    _subject, app, _task, action = _subject_app_action(status=ACTION_STATUS_EXECUTING)
+    lease, batch = _expired_executing_takeover(action)
+    _ = AppWebhookConfig.objects.filter(app=app).update(enabled=False)
+
+    result = takeover_expired_lease(lease, owner="recover:no-hook")
+
+    lease.refresh_from_db()
+    action.refresh_from_db()
+    assert result is None
+    assert lease.released_at is not None
+    assert action.status == ACTION_STATUS_EXECUTING
+    assert not HandoverDeliveryAttempt.objects.filter(batch=batch).exists()
 
 
 def test_conservation_failure_persists_failed_and_releases_lease() -> None:

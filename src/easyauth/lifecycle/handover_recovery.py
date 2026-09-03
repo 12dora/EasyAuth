@@ -10,13 +10,16 @@ from http import HTTPStatus
 from django.db import transaction
 from django.utils import timezone
 
+from easyauth.applications.models import HANDOVER_CAPABILITY_DECLARED
 from easyauth.lifecycle.core import (
     ASYNC_ATTENTION_POLL_INTERVAL_SECONDS,
     HOOK_EVENT_EXECUTE,
     LIFECYCLE_ACTOR_ID,
     record_task_event,
+    refresh_task_status_locked,
 )
 from easyauth.lifecycle.errors import HandoverConflictError
+from easyauth.lifecycle.handover_actions import initial_action_status_for_app
 from easyauth.lifecycle.handover_async import (
     poll_async_action,
 )
@@ -42,12 +45,15 @@ from easyauth.lifecycle.lease import (
 from easyauth.lifecycle.models import (
     ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
     ACTION_STATUS_ASYNC_PENDING,
+    ACTION_STATUS_SKIPPED,
+    BATCH_STATUS_FAILED,
     DELIVERY_OUTCOME_FAILED,
     DELIVERY_OUTCOME_SENT,
     HandoverAppAction,
     HandoverDeliveryAttempt,
     HandoverExecutionBatch,
     HandoverExecutionLease,
+    HandoverTask,
 )
 from easyauth.webhooks.hooks import HookCallError, HookResponse, signed_hook_post
 
@@ -196,6 +202,45 @@ def _mark_takeover_payload_conflict(
     return action
 
 
+def _converge_undeclared_takeover(
+    action: HandoverAppAction,
+    batch: HandoverExecutionBatch,
+    handle: LeaseHandle,
+) -> HandoverAppAction:
+    """能力已撤销: 按建单口径收敛动作, 失败批次, CAS 释放租约。"""
+    status, blocked_reason, skip_reason, skipped_by = initial_action_status_for_app(action.app)
+    with transaction.atomic():
+        _ = require_cas(handle)
+        action = locked_action(action.id)
+        batch = HandoverExecutionBatch.objects.select_for_update().get(pk=batch.id)
+        action.status = status
+        action.blocked_reason = blocked_reason
+        update_fields = ["status", "blocked_reason", "updated_at"]
+        if status == ACTION_STATUS_SKIPPED:
+            action.skip_reason = skip_reason
+            action.skipped_by = skipped_by
+            action.skipped_at = timezone.now()
+            update_fields.extend(["skip_reason", "skipped_by", "skipped_at"])
+        action.save(update_fields=update_fields)
+        batch.status = BATCH_STATUS_FAILED
+        batch.save(update_fields=["status"])
+        _ = cas_release(handle)
+        task = HandoverTask.objects.select_for_update().get(pk=action.task_id)
+        _ = refresh_task_status_locked(task)
+        record_task_event(
+            action.task,
+            action="handover_action_blocked" if blocked_reason else "handover_action_skipped",
+            actor_id=LIFECYCLE_ACTOR_ID,
+            actor_type="system",
+            extra={
+                "app_key": action.app_key_snapshot,
+                "blocked_reason": blocked_reason,
+                "skip_reason": skip_reason,
+            },
+        )
+    return action
+
+
 def takeover_expired_lease(
     lease: HandoverExecutionLease,
     *,
@@ -227,14 +272,17 @@ def _resume_takeover(
     worker: str,
 ) -> HandoverAppAction | None:
     action = HandoverAppAction.objects.select_related("app", "task").get(pk=action_id)
-    if action.status == ACTION_STATUS_ASYNC_PENDING:
-        # 异步在途: 续约并交回 poll 路径, 禁止重放 execute(01 §7)
-        return _route_async_takeover(action, batch, handle, worker=worker)
-    if action.status == ACTION_STATUS_ASYNC_ATTENTION_REQUIRED:
-        # 已越过 30 分钟门禁: 先抢占过期租约, 再交回 sentinel 由 poll 权威入口 claim。
+    if action.app.handover_capability != HANDOVER_CAPABILITY_DECLARED:
+        return _converge_undeclared_takeover(action, batch, handle)
+    if action.status in {
+        ACTION_STATUS_ASYNC_PENDING,
+        ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
+    }:
+        # 异步在途或已过 30 分钟门禁: 续约并交回 poll, 禁止重放 execute(01 §7)
         return _route_async_takeover(action, batch, handle, worker=worker)
     delivery = _prepare_takeover_delivery(action, batch, handle, worker=worker)
     if delivery is None:
+        _ = cas_release(handle)
         return None
     response = _send_takeover_request(delivery)
     if response is None:
