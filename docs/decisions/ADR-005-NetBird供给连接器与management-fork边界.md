@@ -41,6 +41,11 @@ NetBird 是第一个由 EasyAuth 反向**供给**（provisioning）的外部系�
    - `UserApprovalRequired` 与 `GroupsPropagationEnabled` 都保持默认 `true`：
      前者让未经 EasyAuth 授权而自行登录的人天然落到 `Blocked+PendingApproval`（默认拒绝），
      后者让 auto_groups 变更回溯已注册设备并即时重推网络图。
+     在该设置下，员工若先于 EasyAuth 预创建通过 SSO 登录，management 会 JIT 创建用户并置
+     `blocked=true, pending_approval=true`。peer 注册在 `pending_approval` 期间一律拒绝，
+     与 `blocked` 无关；仅 `PUT /api/users/{id}` 把 `is_blocked` 置 false 不会清除待审批。
+     因此对账在目标用户仍 `pending_approval` 时先调用 `POST /api/users/{id}/approve`
+     （成功计入 `users_approved`），再按需 PUT 组。
    - 管理员在 NetBird 侧手工加进映射组的成员，会被下一轮对账矫正移除。
 
 4. **不依赖 NetBird 的事件 API。** 社区版无 webhook，事件 API 无游标；
@@ -82,6 +87,8 @@ NetBird 是第一个由 EasyAuth 反向**供给**（provisioning）的外部系�
 
 - EasyAuth 侧的实现落在 `src/easyauth/connectors/netbird/`：
   `client.create_user()` 在 `POST /api/users` 的 body 里携带 `id`；
+  `client.approve_user()` 调用 `POST /api/users/{id}/approve`，用于收敛 SSO 首登产生的
+  待审批用户（见上文 `UserApprovalRequired`）；对账统计含 `users_approved`。
   连接器配置项为 `api_url`、`api_token`（service user PAT，加密落库）、
   `precreate_users`、`block_users_without_grant`。
 - NetBird 是出站推送供给，不是下游拉取授权。启用中的 `ConnectorInstance` 即表示该 App

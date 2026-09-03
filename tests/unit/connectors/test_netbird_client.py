@@ -24,6 +24,8 @@ class _UrlRequest(Protocol):
     @property
     def full_url(self) -> str: ...
 
+    def get_method(self) -> str: ...
+
 
 class _UrlOpenStub(Protocol):
     def __call__(
@@ -79,7 +81,7 @@ def test_get_account_id_requires_one_immutable_id(monkeypatch: pytest.MonkeyPatc
 
 def test_list_users_rejects_non_object_elements(monkeypatch: pytest.MonkeyPatch) -> None:
     response = _Response(
-        [b'[{"id":"u1","role":"user","is_blocked":false,"is_service_user":false},1]'],
+        [b'[{"id":"u1","role":"user","is_blocked":false,"is_service_user":false,"pending_approval":false},1]'],
     )
     monkeypatch.setattr(client_module, "urlopen", _static_response(response))
 
@@ -92,7 +94,7 @@ def test_list_users_rejects_unknown_role_and_duplicate_ids(
 ) -> None:
     response = _Response(
         [
-            b'[{"id":"u1","role":"root","is_blocked":false,"is_service_user":false}]',
+            b'[{"id":"u1","role":"root","is_blocked":false,"is_service_user":false,"pending_approval":false}]',
         ]
     )
     monkeypatch.setattr(client_module, "urlopen", _static_response(response))
@@ -102,8 +104,8 @@ def test_list_users_rejects_unknown_role_and_duplicate_ids(
     dup = _Response(
         [
             (
-                b'[{"id":"u1","role":"user","is_blocked":false,"is_service_user":false},'
-                b'{"id":"u1","role":"user","is_blocked":false,"is_service_user":false}]'
+                b'[{"id":"u1","role":"user","is_blocked":false,"is_service_user":false,"pending_approval":false},'
+                b'{"id":"u1","role":"user","is_blocked":false,"is_service_user":false,"pending_approval":false}]'
             ),
         ]
     )
@@ -195,3 +197,41 @@ def test_iter_group_pages_fails_when_upstream_does_not_page(
 
     with pytest.raises(NetBirdApiError, match=str(MAX_GROUP_PAGES)):
         _ = _client().iter_group_pages()
+
+
+def test_list_users_requires_pending_approval(monkeypatch: pytest.MonkeyPatch) -> None:
+    response = _Response(
+        [b'[{"id":"u1","role":"user","is_blocked":false,"is_service_user":false}]'],
+    )
+    monkeypatch.setattr(client_module, "urlopen", _static_response(response))
+
+    with pytest.raises(NetBirdApiError, match="pending_approval"):
+        _ = _client().list_users()
+
+
+def test_approve_user_posts_to_approve_and_parses_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[tuple[str, str]] = []
+    payload = (
+        b'{"id":"u1","name":"Ada","email":"ada@example.com","role":"user",'
+        b'"is_blocked":false,"is_service_user":false,"pending_approval":false,'
+        b'"auto_groups":["g1"]}'
+    )
+
+    def open_response(request: _UrlRequest, *, timeout: float) -> _Response:
+        _ = timeout
+        seen.append((request.get_method(), request.full_url))
+        return _Response([payload])
+
+    monkeypatch.setattr(client_module, "urlopen", open_response)
+
+    user = _client().approve_user("u1")
+
+    assert seen == [("POST", "https://netbird.example.com/api/users/u1/approve")]
+    assert user.user_id == "u1"
+    assert user.name == "Ada"
+    assert user.email == "ada@example.com"
+    assert user.is_blocked is False
+    assert user.pending_approval is False
+    assert user.auto_group_ids == frozenset({"g1"})

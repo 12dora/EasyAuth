@@ -68,6 +68,7 @@ class NetBirdUser:
     email: str
     role: str
     is_blocked: bool
+    pending_approval: bool
     is_service_user: bool
     auto_group_ids: frozenset[str]
 
@@ -156,6 +157,10 @@ class NetBirdClient:
             "is_blocked": is_blocked,
         }
         _ = self._request("PUT", f"/api/users/{user_id}", body=body)
+
+    def approve_user(self, user_id: str) -> NetBirdUser:
+        payload = self._request("POST", f"/api/users/{user_id}/approve")
+        return _parse_user(payload)
 
     def list_groups(self) -> list[NetBirdGroup]:
         payload = self._request("GET", "/api/groups")
@@ -294,6 +299,7 @@ def _parse_user(item: JsonValue) -> NetBirdUser:
         message = f"NetBird /api/users 返回未知 role: {role}。"
         raise NetBirdApiError(message)
     is_blocked = _required_bool(item, "is_blocked", label="users")
+    pending_approval = _required_bool(item, "pending_approval", label="users")
     is_service_user = _required_bool(item, "is_service_user", label="users")
     return NetBirdUser(
         user_id=user_id,
@@ -301,6 +307,7 @@ def _parse_user(item: JsonValue) -> NetBirdUser:
         email=_optional_string(item, "email"),
         role=role,
         is_blocked=is_blocked,
+        pending_approval=pending_approval,
         is_service_user=is_service_user,
         auto_group_ids=_required_string_set(item.get("auto_groups"), label="users.auto_groups"),
     )

@@ -21,6 +21,7 @@ if TYPE_CHECKING:
 
 PERMANENT_CREATE_ERROR = "permanent create error"
 PERMANENT_UPDATE_ERROR = "permanent update error"
+PERMANENT_APPROVE_ERROR = "permanent approve error"
 
 
 def _allow_expansion(_instance: ConnectorInstance, _user_id: str) -> bool:
@@ -53,10 +54,12 @@ class _FakeNetBirdClient:
     groups: list[NetBirdGroup] = field(default_factory=list)
     created_users: list[dict[str, object]] = field(default_factory=list)
     updated_users: list[dict[str, object]] = field(default_factory=list)
+    approved_users: list[str] = field(default_factory=list)
     created_groups: list[str] = field(default_factory=list)
     fail_with: str = ""
     fail_create_user_ids: set[str] = field(default_factory=set)
     fail_update_user_ids: set[str] = field(default_factory=set)
+    fail_approve_user_ids: set[str] = field(default_factory=set)
 
     def list_users(self) -> list[NetBirdUser]:
         if self.fail_with:
@@ -98,6 +101,7 @@ class _FakeNetBirdClient:
             email=email,
             role="user",
             is_blocked=False,
+            pending_approval=False,
             is_service_user=False,
             auto_group_ids=frozenset(auto_group_ids),
         )
@@ -121,12 +125,31 @@ class _FakeNetBirdClient:
             },
         )
 
+    def approve_user(self, user_id: str) -> NetBirdUser:
+        if user_id in self.fail_approve_user_ids:
+            raise NetBirdApiError(PERMANENT_APPROVE_ERROR, status_code=400)
+        self.approved_users.append(user_id)
+        current = self.users[user_id]
+        updated = NetBirdUser(
+            user_id=current.user_id,
+            name=current.name,
+            email=current.email,
+            role=current.role,
+            is_blocked=False,
+            pending_approval=False,
+            is_service_user=current.is_service_user,
+            auto_group_ids=current.auto_group_ids,
+        )
+        self.users[user_id] = updated
+        return updated
 
-def _netbird_user(
+
+def _netbird_user(  # noqa: PLR0913 - 测试夹具按 NetBirdUser 字段铺开。
     user_id: str,
     *,
     role: str = "user",
     is_blocked: bool = False,
+    pending_approval: bool = False,
     is_service_user: bool = False,
     auto_group_ids: frozenset[str] | None = None,
 ) -> NetBirdUser:
@@ -136,6 +159,7 @@ def _netbird_user(
         email=f"{user_id}@example.com",
         role=role,
         is_blocked=is_blocked,
+        pending_approval=pending_approval,
         is_service_user=is_service_user,
         auto_group_ids=auto_group_ids or frozenset(),
     )
@@ -267,6 +291,7 @@ def test_reconcile_adopts_existing_user_and_preserves_unmanaged_groups(
     assert report.stats["groups_added"] == 1
     assert report.stats["groups_removed"] == 1
     assert report.stats["users_unblocked"] == 1
+    assert fake_client.approved_users == []
 
 
 def test_lost_lease_stops_group_shrink_before_external_write(
@@ -581,3 +606,103 @@ def test_validate_config_rejects_plain_http_and_unknown_fields() -> None:
     assert any("https" in problem for problem in problems)
     assert any("bogus" in problem for problem in problems)
     assert connector.validate_config({"api_url": "https://nb", "api_token": "t"}) == []
+
+
+def test_reconcile_approves_jit_pending_user_then_puts_groups(
+    fake_client: _FakeNetBirdClient,
+) -> None:
+    fake_client.groups = [NetBirdGroup(group_id="g1", name="vpn-users")]
+    fake_client.users = {
+        "u-1": _netbird_user("u-1", is_blocked=True, pending_approval=True),
+    }
+    desired = _desired({"u-1": frozenset({"g1"})}, managed=frozenset({"g1"}))
+
+    report = NetBirdConnector().reconcile(_instance(), desired)
+
+    assert fake_client.approved_users == ["u-1"]
+    assert fake_client.updated_users == [
+        {
+            "user_id": "u-1",
+            "role": "user",
+            "auto_group_ids": ["g1"],
+            "is_blocked": False,
+        },
+    ]
+    assert report.status == "success"
+    assert report.stats["users_approved"] == 1
+    assert report.stats["groups_added"] == 1
+    assert "users_unblocked" not in report.stats
+
+
+def test_reconcile_approves_pending_user_without_put_when_groups_match(
+    fake_client: _FakeNetBirdClient,
+) -> None:
+    fake_client.groups = [NetBirdGroup(group_id="g1", name="vpn-users")]
+    fake_client.users = {
+        "u-1": _netbird_user(
+            "u-1",
+            is_blocked=False,
+            pending_approval=True,
+            auto_group_ids=frozenset({"g1"}),
+        ),
+    }
+    desired = _desired({"u-1": frozenset({"g1"})}, managed=frozenset({"g1"}))
+
+    report = NetBirdConnector().reconcile(_instance(), desired)
+
+    assert fake_client.approved_users == ["u-1"]
+    assert fake_client.updated_users == []
+    assert report.status == "success"
+    assert report.stats["users_approved"] == 1
+    assert "groups_added" not in report.stats
+    assert "users_unblocked" not in report.stats
+
+
+def test_reconcile_records_approve_failure_without_put(
+    fake_client: _FakeNetBirdClient,
+) -> None:
+    fake_client.groups = [NetBirdGroup(group_id="g1", name="vpn-users")]
+    fake_client.users = {
+        "u-1": _netbird_user("u-1", is_blocked=True, pending_approval=True),
+    }
+    fake_client.fail_approve_user_ids = {"u-1"}
+    desired = _desired({"u-1": frozenset({"g1"})}, managed=frozenset({"g1"}))
+
+    report = NetBirdConnector().reconcile(_instance(), desired)
+
+    assert fake_client.approved_users == []
+    assert fake_client.updated_users == []
+    assert report.status == "partial"
+    assert "审批失败" in report.error
+    assert "users_approved" not in report.stats
+    assert "users_unblocked" not in report.stats
+
+
+def test_reconcile_unblocks_blocked_user_without_approve(
+    fake_client: _FakeNetBirdClient,
+) -> None:
+    fake_client.groups = [NetBirdGroup(group_id="g1", name="vpn-users")]
+    fake_client.users = {
+        "u-1": _netbird_user(
+            "u-1",
+            is_blocked=True,
+            pending_approval=False,
+            auto_group_ids=frozenset({"g1"}),
+        ),
+    }
+    desired = _desired({"u-1": frozenset({"g1"})}, managed=frozenset({"g1"}))
+
+    report = NetBirdConnector().reconcile(_instance(), desired)
+
+    assert fake_client.approved_users == []
+    assert fake_client.updated_users == [
+        {
+            "user_id": "u-1",
+            "role": "user",
+            "auto_group_ids": ["g1"],
+            "is_blocked": False,
+        },
+    ]
+    assert report.status == "success"
+    assert report.stats["users_unblocked"] == 1
+    assert "users_approved" not in report.stats

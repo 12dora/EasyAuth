@@ -368,7 +368,7 @@ def _expand_desired_user(
         _bump(context.stats, "users_exempt")
         return
     additions = want_group_ids - (current.auto_group_ids & context.managed_group_ids)
-    if not additions and not current.is_blocked:
+    if not additions and not current.is_blocked and not current.pending_approval:
         return
     if not _expansion_allowed(context.instance, user_id):
         _bump(context.stats, "users_fenced")
@@ -410,6 +410,20 @@ def _update_expanded_user(
     current: NetBirdUser,
     additions: frozenset[str],
 ) -> None:
+    # UserApprovalRequired 下 SSO 首登用户是 blocked+pending; PUT is_blocked=false
+    # 清不掉 pending_approval, peer 注册仍会被拒, 必须先走 approve。
+    if current.pending_approval:
+        context.budget.charge()
+        try:
+            approved = context.client.approve_user(current.user_id)
+        except NetBirdApiError as error:
+            context.object_errors.append(f"用户 {current.user_id} 审批失败: {error}")
+            return
+        context.actual_users[current.user_id] = approved
+        _bump(context.stats, "users_approved")
+    still_blocked = current.is_blocked and not current.pending_approval
+    if not additions and not still_blocked:
+        return
     context.budget.charge()
     try:
         context.client.update_user(
@@ -422,7 +436,7 @@ def _update_expanded_user(
         context.object_errors.append(f"用户 {current.user_id} 扩权失败: {error}")
         return
     _bump(context.stats, "groups_added", len(additions))
-    if current.is_blocked:
+    if still_blocked:
         _bump(context.stats, "users_unblocked")
 
 
@@ -467,6 +481,7 @@ def _shrink_desired_user(
         email=current.email,
         role=current.role,
         is_blocked=current.is_blocked,
+        pending_approval=current.pending_approval,
         is_service_user=current.is_service_user,
         auto_group_ids=current.auto_group_ids - removals,
     )
