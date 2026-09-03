@@ -44,8 +44,9 @@ NetBird 是第一个由 EasyAuth 反向**供给**（provisioning）的外部系�
      在该设置下，员工若先于 EasyAuth 预创建通过 SSO 登录，management 会 JIT 创建用户并置
      `blocked=true, pending_approval=true`。peer 注册在 `pending_approval` 期间一律拒绝，
      与 `blocked` 无关；仅 `PUT /api/users/{id}` 把 `is_blocked` 置 false 不会清除待审批。
-     因此对账在目标用户仍 `pending_approval` 时先调用 `POST /api/users/{id}/approve`
-     （成功计入 `users_approved`），再按需 PUT 组。
+     因此对账在目标用户仍 `pending_approval` 时先按需 PUT 组（pending 仍阻断 peer 注册），
+     最后才调用 `POST /api/users/{id}/approve`（成功计入 `users_approved`）。
+     审批是最后一次外部写；组未就绪不得激活用户。
    - 管理员在 NetBird 侧手工加进映射组的成员，会被下一轮对账矫正移除。
 
 4. **不依赖 NetBird 的事件 API。** 社区版无 webhook，事件 API 无游标；
