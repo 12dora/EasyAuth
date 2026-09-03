@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
@@ -24,12 +24,14 @@ const PEOPLE_ORDERING_FIELDS = {
   status: "status",
 } as const;
 
-/** 人员列表的过滤、分页与发起交接单。 */
+/** 人员列表的过滤、分页、发起交接单与管理员权限配置。 */
 export function useConsolePeopleList() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [searchInput, setSearchInput] = useState("");
   const [searchFilter, setSearchFilter] = useState("");
   const [startTarget, setStartTarget] = useState<HandoverStartTarget | null>(null);
+  const [permissionTarget, setPermissionTarget] = useState<PersonRow | null>(null);
   // status 走表头筛选; q 是真正的跨列搜索, 留在工具栏。
   const serverTable = useServerTable<PersonRow>({
     defaultPageSize: DEFAULT_PAGE_SIZE,
@@ -70,6 +72,19 @@ export function useConsolePeopleList() {
       }
     },
   });
+  const updateConsoleAdminMutation = useMutation({
+    mutationFn: ({ person, isConsoleAdmin }: { person: PersonRow; isConsoleAdmin: boolean }) =>
+      apiRequest<{ user: PersonRow }>(`/console/api/v1/users/${encodeURIComponent(person.user_id)}/console-admin`, {
+        method: "PUT",
+        body: { is_console_admin: isConsoleAdmin } satisfies JsonObject,
+      }),
+    // 不拿响应里的 user 就地改写当前页: 列表的真相是重新拉取的那一页,
+    // 后端拒绝(如取消自己的管理员权限)时弹窗要留在原地显示 error.message。
+    onSuccess: () => {
+      setPermissionTarget(null);
+      void queryClient.invalidateQueries({ queryKey: PEOPLE_QUERY_PREFIX });
+    },
+  });
 
   const people = itemsFromPayload<PersonRow>(peopleQuery.data);
   serverTable.setTotal(peopleQuery.data?.pagination?.total_items);
@@ -89,10 +104,18 @@ export function useConsolePeopleList() {
     startTarget,
     setStartTarget,
     createTaskMutation,
+    permissionTarget,
+    setPermissionTarget,
+    updateConsoleAdminMutation,
     openHandover: (taskId: number) => void navigate(`/console/lifecycle/handover-tasks/${taskId}`),
     startHandover: (target: HandoverStartTarget) => {
       createTaskMutation.reset();
       setStartTarget(target);
+    },
+    // reset 掉上一次的错误, 否则重开弹窗会带着旧的后端报错。
+    openPermissions: (person: PersonRow) => {
+      updateConsoleAdminMutation.reset();
+      setPermissionTarget(person);
     },
   };
 }

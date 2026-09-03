@@ -26,6 +26,7 @@ const PEOPLE_PAYLOAD = {
       status: "active",
       open_handover_task_id: null,
       open_handover_kind: "",
+      is_console_admin: false,
     },
     {
       user_id: "u-2",
@@ -35,6 +36,7 @@ const PEOPLE_PAYLOAD = {
       status: "departed",
       open_handover_task_id: 12,
       open_handover_kind: "offboard",
+      is_console_admin: true,
     },
   ],
   pagination: { page: 1, page_size: 20, total_items: 2, total_pages: 1 },
@@ -68,6 +70,92 @@ describe("ConsolePeopleList", () => {
     expect(screen.getByRole("link", { name: "去交接" })).toHaveAttribute("href", "/console/lifecycle/handover-tasks/12");
     expect(screen.getByRole("button", { name: "离职交接" })).toBeVisible();
     expect(screen.getByRole("button", { name: "转岗" })).toBeVisible();
+    // 管理员身份与在职状态无关, 因此「权限」入口每行都有(含已离职行)。
+    expect(within(personRow("张三")).getByRole("button", { name: "权限" })).toBeVisible();
+    expect(within(personRow("李四")).getByRole("button", { name: "权限" })).toBeVisible();
+    // 管理员列: 李四是管理员 → 徽章; 张三不是 → statusColumn 的空值占位。
+    expect(within(personRow("李四")).getByText("是")).toBeVisible();
+    expect(within(personRow("张三")).queryByText("是")).not.toBeInTheDocument();
+  });
+
+  test("权限弹窗: 勾选管理员后 PUT console-admin, 成功即关闭并重新拉列表", async () => {
+    // 保存成功后后端返回的那一页: 张三已经是管理员。列表刷新是唯一真相, 前端不就地改写。
+    const updatedPayload = {
+      ...PEOPLE_PAYLOAD,
+      data: [{ ...PEOPLE_PAYLOAD.data[0], is_console_admin: true }, PEOPLE_PAYLOAD.data[1]],
+    };
+    let saved = false;
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith("/console/api/v1/users?page=")) {
+        return jsonResponse(saved ? updatedPayload : PEOPLE_PAYLOAD);
+      }
+      if (url === "/console/api/v1/users/u-1/console-admin" && init?.method === "PUT") {
+        saved = true;
+        return jsonResponse({ user: updatedPayload.data[0] });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderList();
+
+    await screen.findByText("张三");
+    await user.click(within(personRow("张三")).getByRole("button", { name: "权限" }));
+
+    const dialog = await screen.findByRole("dialog");
+    const checkbox = within(dialog).getByRole("checkbox", { name: "设为管理员，可进入管理后台" });
+    expect(checkbox).not.toBeChecked();
+    await user.click(checkbox);
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      const putCall = fetchMock.mock.calls.find(
+        ([callInput, callInit]) =>
+          String(callInput) === "/console/api/v1/users/u-1/console-admin" && callInit?.method === "PUT",
+      );
+      expect(JSON.parse(String(putCall?.[1]?.body))).toEqual({ is_console_admin: true });
+    });
+    // 成功后弹窗关闭, 且列表被重新拉取(新的一页里张三带上了管理员徽章)。
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(within(personRow("张三")).getByText("是")).toBeVisible());
+  });
+
+  test("权限弹窗: 后端拒绝时原样展示后端文案, 弹窗保持打开", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith("/console/api/v1/users?page=")) {
+        return jsonResponse(PEOPLE_PAYLOAD);
+      }
+      if (url === "/console/api/v1/users/u-2/console-admin" && init?.method === "PUT") {
+        return jsonResponse(
+          { error: { code: "CONSOLE_ADMIN_SELF_REVOKE", message: "不能取消自己的管理员权限。" } },
+          422,
+        );
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderList();
+
+    await screen.findByText("李四");
+    await user.click(within(personRow("李四")).getByRole("button", { name: "权限" }));
+
+    const dialog = await screen.findByRole("dialog");
+    // 李四已是管理员, 弹窗初值就是勾选态; 取消勾选后保存。
+    const checkbox = within(dialog).getByRole("checkbox", { name: "设为管理员，可进入管理后台" });
+    expect(checkbox).toBeChecked();
+    await user.click(checkbox);
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    expect(await within(dialog).findByText("不能取消自己的管理员权限。")).toBeVisible();
+    expect(within(dialog).getByText("权限保存失败")).toBeVisible();
+    expect(screen.getByRole("dialog")).toBeVisible();
+    // 后端拒绝后列表不得出现「已生效」的假象: PUT 之后没有额外的列表请求。
+    expect(fetchMock.mock.calls.filter(([callInput]) => String(callInput).startsWith("/console/api/v1/users?")).length).toBe(1);
   });
 
   test("在职状态迁到表头筛选, 选中后映射成 status 查询参数", async () => {
@@ -144,6 +232,7 @@ describe("ConsolePeopleList", () => {
             status: "active",
             open_handover_task_id: null,
             open_handover_kind: "",
+            is_console_admin: false,
           },
         ],
         pagination: { page: Number(page), page_size: 20, total_items: 40, total_pages: 2 },
@@ -232,6 +321,13 @@ function lastListUrl(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>) {
     .map(([input]) => String(input))
     .filter((url) => url.startsWith("/console/api/v1/users?"))
     .at(-1);
+}
+
+/** 按姓名定位表格行, 用来把断言限定在某一行的单元格上。 */
+function personRow(name: string): HTMLElement {
+  const row = screen.getByText(name).closest("tr");
+  expect(row).not.toBeNull();
+  return row as HTMLElement;
 }
 
 /** 「状态」列表头上的筛选图标。 */

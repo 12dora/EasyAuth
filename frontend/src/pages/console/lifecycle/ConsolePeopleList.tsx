@@ -9,13 +9,14 @@ import { useI18n } from "../../../i18n/I18nProvider";
 import { ConsoleHandoverStartDialog } from "./ConsoleHandoverStartDialog";
 import { ConsolePeopleFilters } from "./ConsolePeopleFilters";
 import { ConsolePeopleTable } from "./ConsolePeopleTable";
+import { ConsolePersonPermissionsDialog } from "./ConsolePersonPermissionsDialog";
 import { ConsoleReassignDialog } from "./ConsoleReassignDialog";
 import { useConsolePeopleList } from "./useConsolePeopleList";
 
 export function ConsolePeopleList() {
   const { t } = useI18n();
   const page = useConsolePeopleList();
-  const { peopleQuery, people, startTarget, createTaskMutation } = page;
+  const { peopleQuery, people, startTarget, createTaskMutation, permissionTarget, updateConsoleAdminMutation } = page;
   const [reassignOpen, setReassignOpen] = useState(false);
 
   return (
@@ -60,6 +61,7 @@ export function ConsolePeopleList() {
           actions={{
             onOpenHandover: page.openHandover,
             onStart: (person, kind) => page.startHandover({ person, kind }),
+            onOpenPermissions: page.openPermissions,
           }}
         />
       )}
@@ -70,6 +72,17 @@ export function ConsolePeopleList() {
           isSubmitting={createTaskMutation.isPending}
           onClose={() => page.setStartTarget(null)}
           onSubmit={(reason) => createTaskMutation.mutate({ ...startTarget, reason })}
+        />
+      ) : null}
+      {permissionTarget ? (
+        <ConsolePersonPermissionsDialog
+          person={permissionTarget}
+          errorMessage={updateConsoleAdminMutation.error ? (updateConsoleAdminMutation.error as Error).message : ""}
+          isSubmitting={updateConsoleAdminMutation.isPending}
+          onClose={() => page.setPermissionTarget(null)}
+          onSubmit={(isConsoleAdmin) =>
+            updateConsoleAdminMutation.mutate({ person: permissionTarget, isConsoleAdmin })
+          }
         />
       ) : null}
       {reassignOpen ? <ConsoleReassignDialog onClose={() => setReassignOpen(false)} /> : null}

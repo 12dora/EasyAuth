@@ -26,7 +26,11 @@ import { personStatusLabel, personStatusTone } from "./lifecycleLabels";
 export interface PeopleRowActions {
   onOpenHandover: (taskId: number) => void;
   onStart: (person: PersonRow, kind: HandoverKind) => void;
+  onOpenPermissions: (person: PersonRow) => void;
 }
+
+/** 管理员列的枚举值; 只用于让 statusColumn 渲染徽章, 不是后端字段的取值。 */
+const CONSOLE_ADMIN_VALUE = "yes";
 
 export function ConsolePeopleTable({
   people,
@@ -56,7 +60,10 @@ export function ConsolePeopleTable({
       emptyDescription={t("people.empty.description")}
       emptyTitle={t("people.empty.title")}
       loading={isLoading}
-      minWidth={960}
+      // 固定布局下每列都必须声明宽度, minWidth 必须正好等于它们的和, 否则没宽度的列
+      // 只能分摊剩余量, 剩余量不够时会被压成一个字宽。
+      // 姓名 260 + 部门 180 + 邮箱 240 + 状态 140 + 管理员 90 + 操作 240 = 1150。
+      minWidth={1150}
       rowKey="user_id"
     />
   );
@@ -79,6 +86,8 @@ function peopleColumns(
         title: t("people.column.name"),
         getName: (person) => person.name || person.user_id,
         getUserId: (person) => person.user_id,
+        // 次行是 36 位 UUID(truncate 展示), 260 够放下姓名与一段可辨认的前缀。
+        width: 260,
       }),
       sort,
     ),
@@ -109,11 +118,39 @@ function peopleColumns(
       ),
       sort,
     ),
-    actionsColumn<PersonRow>({ render: (person) => <PeopleRowActionsCell person={person} actions={actions} /> }),
+    // 管理员是只读展示: 后端 GET /users 不支持按它筛选也不支持按它排序,
+    // 所以既不套 serverColumn 也不套 serverSortColumn, 并显式关掉内建筛选下拉;
+    // 写入只走行内「权限」弹窗。非管理员按 statusColumn 的空值约定展示 "-"。
+    statusColumn<PersonRow>({
+      key: "is_console_admin",
+      title: t("people.column.consoleAdmin"),
+      getValue: (person) => (person.is_console_admin ? CONSOLE_ADMIN_VALUE : ""),
+      options: [{ value: CONSOLE_ADMIN_VALUE, label: t("people.consoleAdmin.yes"), tone: "bond" }],
+      filter: false,
+      width: 90,
+    }),
+    // 一行最多三个按钮(离职交接 / 转岗 / 权限), 默认 180 只够两个, 这里显式加宽。
+    actionsColumn<PersonRow>({
+      width: 240,
+      render: (person) => <PeopleRowActionsCell person={person} actions={actions} />,
+    }),
   ];
 }
 
 function PeopleRowActionsCell({ person, actions }: { person: PersonRow; actions: PeopleRowActions }) {
+  const { t } = useI18n();
+  return (
+    <>
+      <PeopleHandoverAction person={person} actions={actions} />
+      {/* 管理员身份与在职状态无关(已停用/已离职的账号也可能仍挂着管理员), 因此每行都给「权限」入口。 */}
+      <RowActionButton type="button" onClick={() => actions.onOpenPermissions(person)}>
+        {t("people.permissions")}
+      </RowActionButton>
+    </>
+  );
+}
+
+function PeopleHandoverAction({ person, actions }: { person: PersonRow; actions: PeopleRowActions }) {
   const { t } = useI18n();
   // 已有进行中的交接单(不限在职状态)直接进入交接, 避免重复建单的困惑。
   if (person.open_handover_task_id) {

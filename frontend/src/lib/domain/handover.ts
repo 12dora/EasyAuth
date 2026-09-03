@@ -9,6 +9,8 @@ export interface PersonRow {
   status: "active" | "disabled" | "departed" | string;
   open_handover_task_id: number | null;
   open_handover_kind: "offboard" | "transfer" | "";
+  /** 是否控制台管理员; 它决定门户右上角的「管理后台」入口, 由 PUT /users/<id>/console-admin 写入。 */
+  is_console_admin: boolean;
 }
 
 /** 数据交接 v2: 严格对齐 docs/design/data-handover-v2/01-easyauth-backend.md §6.2 */
