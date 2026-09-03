@@ -95,13 +95,17 @@ def sync_handover_capability_from_manifest(
             _refresh_capability_sync_time(app)
         else:
             # manifest 声明 none 但无运营声明人 → undeclared(不静默写 none)。
-            _save_undeclared_capability(app)
+            _save_manifest_capability(app, HANDOVER_CAPABILITY_UNDECLARED, [])
         return
 
-    # 拉取失败 / 无能力串: 不覆盖已有 none。
+    # 无能力串或 webhook URL 不可用: 已成功处理的 manifest 视为撤销, 清空资产类型。
+    # lifecycle 为 None 表示拉取/解析失败, 保留上次已知的资产类型。
     if previous == HANDOVER_CAPABILITY_NONE:
         return
-    _save_undeclared_capability(app)
+    if lifecycle is None:
+        _save_undeclared_capability_keeping_asset_types(app)
+        return
+    _save_manifest_capability(app, HANDOVER_CAPABILITY_UNDECLARED, [])
 
 
 def _manifest_handover_declaration(lifecycle: object) -> _ManifestHandoverDeclaration:
@@ -163,7 +167,8 @@ def _refresh_capability_sync_time(app: App) -> None:
     app.save(update_fields=["handover_capability_synced_at", "updated_at"])
 
 
-def _save_undeclared_capability(app: App) -> None:
+def _save_undeclared_capability_keeping_asset_types(app: App) -> None:
+    """拉取或解析失败: 标 undeclared, 不覆盖上次已知的资产类型。"""
     app.handover_capability = HANDOVER_CAPABILITY_UNDECLARED
     app.handover_capability_synced_at = timezone.now()
     app.save(

@@ -10,11 +10,13 @@ from http import HTTPStatus
 from django.db import transaction
 from django.utils import timezone
 
+from easyauth.applications.models import HANDOVER_CAPABILITY_DECLARED, App
 from easyauth.lifecycle.core import (
     ASYNC_ATTENTION_POLL_INTERVAL_SECONDS,
     HOOK_EVENT_EXECUTE,
     LIFECYCLE_ACTOR_ID,
     record_task_event,
+    refresh_task_status_locked,
 )
 from easyauth.lifecycle.errors import HandoverConflictError
 from easyauth.lifecycle.handover_async import (
@@ -42,12 +44,16 @@ from easyauth.lifecycle.lease import (
 from easyauth.lifecycle.models import (
     ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
     ACTION_STATUS_ASYNC_PENDING,
+    ACTION_STATUS_BLOCKED,
+    BATCH_STATUS_FAILED,
+    BLOCKED_REASON_CAPABILITY_UNDECLARED,
     DELIVERY_OUTCOME_FAILED,
     DELIVERY_OUTCOME_SENT,
     HandoverAppAction,
     HandoverDeliveryAttempt,
     HandoverExecutionBatch,
     HandoverExecutionLease,
+    HandoverTask,
 )
 from easyauth.webhooks.hooks import HookCallError, HookResponse, signed_hook_post
 
@@ -196,6 +202,46 @@ def _mark_takeover_payload_conflict(
     return action
 
 
+def _converge_undeclared_takeover(
+    action: HandoverAppAction,
+    batch: HandoverExecutionBatch,
+    handle: LeaseHandle,
+) -> HandoverAppAction | None:
+    """能力已撤销: 锁内复核 App 后一律 blocked, 失败批次, CAS 释放租约。
+
+    执行中的动作下游结果未知, 即使能力改成 none 也不能收敛成 skipped(终态成功), 必须交人工确认。
+    复核在事务内加锁读 App: 若 manifest 同步已把能力改回 declared, 返回 None 让调用方按正常路径续跑,
+    否则会留下"declared 应用 + 永久 blocked 动作"的矛盾态。
+    """
+    with transaction.atomic():
+        _ = require_cas(handle)
+        app = App.objects.select_for_update().get(pk=action.app_id)
+        if app.handover_capability == HANDOVER_CAPABILITY_DECLARED:
+            return None
+        action = locked_action(action.id)
+        batch = HandoverExecutionBatch.objects.select_for_update().get(pk=batch.id)
+        action.status = ACTION_STATUS_BLOCKED
+        action.blocked_reason = BLOCKED_REASON_CAPABILITY_UNDECLARED
+        action.save(update_fields=["status", "blocked_reason", "updated_at"])
+        batch.status = BATCH_STATUS_FAILED
+        batch.save(update_fields=["status"])
+        _ = cas_release(handle)
+        task = HandoverTask.objects.select_for_update().get(pk=action.task_id)
+        _ = refresh_task_status_locked(task)
+        record_task_event(
+            action.task,
+            action="handover_action_blocked",
+            actor_id=LIFECYCLE_ACTOR_ID,
+            actor_type="system",
+            extra={
+                "app_key": action.app_key_snapshot,
+                "blocked_reason": BLOCKED_REASON_CAPABILITY_UNDECLARED,
+                "handover_capability": app.handover_capability,
+            },
+        )
+    return action
+
+
 def takeover_expired_lease(
     lease: HandoverExecutionLease,
     *,
@@ -227,14 +273,21 @@ def _resume_takeover(
     worker: str,
 ) -> HandoverAppAction | None:
     action = HandoverAppAction.objects.select_related("app", "task").get(pk=action_id)
-    if action.status == ACTION_STATUS_ASYNC_PENDING:
-        # 异步在途: 续约并交回 poll 路径, 禁止重放 execute(01 §7)
-        return _route_async_takeover(action, batch, handle, worker=worker)
-    if action.status == ACTION_STATUS_ASYNC_ATTENTION_REQUIRED:
-        # 已越过 30 分钟门禁: 先抢占过期租约, 再交回 sentinel 由 poll 权威入口 claim。
+    if action.app.handover_capability != HANDOVER_CAPABILITY_DECLARED:
+        converged = _converge_undeclared_takeover(action, batch, handle)
+        if converged is not None:
+            return converged
+        # 锁内复核时能力已恢复 declared: 重新读取后按正常路径续跑
+        action = HandoverAppAction.objects.select_related("app", "task").get(pk=action_id)
+    if action.status in {
+        ACTION_STATUS_ASYNC_PENDING,
+        ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
+    }:
+        # 异步在途或已过 30 分钟门禁: 续约并交回 poll, 禁止重放 execute(01 §7)
         return _route_async_takeover(action, batch, handle, worker=worker)
     delivery = _prepare_takeover_delivery(action, batch, handle, worker=worker)
     if delivery is None:
+        _ = cas_release(handle)
         return None
     response = _send_takeover_request(delivery)
     if response is None:

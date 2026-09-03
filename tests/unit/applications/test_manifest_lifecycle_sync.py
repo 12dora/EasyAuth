@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 import socket
+from http import HTTPStatus
 from typing import Final
 
 import pytest
 from django.test import override_settings
 from django.utils import timezone
 
+from easyauth.admin_console.auto_onboarding_api import (
+    AutoOnboardingError,
+    repull_app_descriptor,
+)
+from easyauth.api.errors import ErrorCode
+from easyauth.applications.handover_capability import sync_handover_capability_from_manifest
 from easyauth.applications.models import (
     HANDOVER_CAPABILITY_DECLARED,
     HANDOVER_CAPABILITY_NONE,
@@ -16,6 +23,7 @@ from easyauth.applications.models import (
 from easyauth.applications.permission_template_lifecycle import sync_manifest_lifecycle
 from easyauth.applications.permission_template_types import (
     AppManifestAppInput,
+    AppManifestHandoverAssetTypeInput,
     AppManifestInput,
     AppManifestLifecycleInput,
     AppManifestPermissionGroupInput,
@@ -40,6 +48,18 @@ ADMIN_HANDOVER_URL: Final = "https://admin.example.com/handover"
 TRUSTED_BASE_URL: Final = "https://etrade.jiefakj.com"
 TRUSTED_HANDOVER_URL: Final = f"{TRUSTED_BASE_URL}{RELATIVE_HANDOVER_PATH}"
 PRIVATE_ADDRESS: Final = "172.17.0.1"
+_CUSTOMER_ASSET: Final = AppManifestHandoverAssetTypeInput(
+    type="customer",
+    label="客户",
+    detail_supported=False,
+    releasable=False,
+)
+_CUSTOMER_ASSET_STORED: Final = {
+    "type": "customer",
+    "label": "客户",
+    "detail_supported": False,
+    "releasable": False,
+}
 
 
 def test_relative_handover_url_without_base_url_stays_undeclared() -> None:
@@ -254,6 +274,103 @@ def _stub_dns(monkeypatch: pytest.MonkeyPatch, address: str) -> None:
     monkeypatch.setattr("easyauth.config.net_dns._resolve_addresses", fake_resolve)
 
 
+def test_processed_undeclared_manifest_clears_stale_asset_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _declared_app_with_assets(monkeypatch, "life-clear-types")
+
+    sync_manifest_lifecycle(
+        app=app,
+        template=_template(app.app_key, lifecycle=AppManifestLifecycleInput()),
+        downstream_base_url=None,
+        actor_type="system",
+    )
+
+    app.refresh_from_db()
+    assert app.handover_capability == HANDOVER_CAPABILITY_UNDECLARED
+    assert app.handover_asset_types == []
+
+
+def test_missing_webhook_url_clears_stale_asset_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _declared_app_with_assets(monkeypatch, "life-clear-url")
+    config = AppWebhookConfig.objects.get(app=app)
+    config.handover_url = ""
+    config.updated_by = "admin-1"
+    config.save(update_fields=["handover_url", "updated_by", "updated_at"])
+
+    sync_manifest_lifecycle(
+        app=app,
+        template=_v2_template(app.app_key, handover_url=ABSOLUTE_HANDOVER_URL),
+        downstream_base_url=None,
+        actor_type="system",
+    )
+
+    app.refresh_from_db()
+    assert app.handover_capability == HANDOVER_CAPABILITY_UNDECLARED
+    assert app.handover_asset_types == []
+    assert AppWebhookConfig.objects.get(app=app).handover_url == ""
+
+
+def test_unavailable_manifest_keeps_previous_asset_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _declared_app_with_assets(monkeypatch, "life-keep-types")
+
+    sync_handover_capability_from_manifest(app, None, actor_id="system")
+
+    app.refresh_from_db()
+    assert app.handover_capability == HANDOVER_CAPABILITY_UNDECLARED
+    assert app.handover_asset_types == [_CUSTOMER_ASSET_STORED]
+
+
+def test_repull_fetch_failure_keeps_capability_and_asset_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 走真实的重拉入口: descriptor 拉不到时必须原样保留能力与资产类型
+    app = _declared_app_with_assets(monkeypatch, "life-repull-fail")
+    app.descriptor_base_url = "https://app.example.com"
+    app.save(update_fields=["descriptor_base_url", "updated_at"])
+
+    def failing_fetch(_base_url: str, _token: str | None) -> dict[str, object]:
+        raise AutoOnboardingError(
+            ErrorCode.SEMANTIC_VALIDATION_ERROR,
+            "descriptor 拉取失败",
+            HTTPStatus.BAD_GATEWAY,
+        )
+
+    monkeypatch.setattr(
+        "easyauth.admin_console.auto_onboarding_api._fetch_descriptor", failing_fetch
+    )
+
+    with pytest.raises(AutoOnboardingError):
+        _ = repull_app_descriptor(app=app, actor_id="admin-1")
+
+    app.refresh_from_db()
+    assert app.handover_capability == HANDOVER_CAPABILITY_DECLARED
+    assert app.handover_asset_types == [_CUSTOMER_ASSET_STORED]
+
+
+def test_repull_malformed_descriptor_keeps_capability_and_asset_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _declared_app_with_assets(monkeypatch, "life-repull-malformed")
+    app.descriptor_base_url = "https://app.example.com"
+    app.save(update_fields=["descriptor_base_url", "updated_at"])
+    monkeypatch.setattr(
+        "easyauth.admin_console.auto_onboarding_api._fetch_descriptor",
+        lambda _base_url, _token: {"schema_version": "nonsense", "lifecycle": []},
+    )
+
+    with pytest.raises(AutoOnboardingError):
+        _ = repull_app_descriptor(app=app, actor_id="admin-1")
+
+    app.refresh_from_db()
+    assert app.handover_capability == HANDOVER_CAPABILITY_DECLARED
+    assert app.handover_asset_types == [_CUSTOMER_ASSET_STORED]
+
+
 def _allow_public_https(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "easyauth.config.net_policy.resolve_public_addresses",
@@ -265,12 +382,37 @@ def _app(app_key: str) -> App:
     return App.objects.create(app_key=app_key, name=app_key)
 
 
-def _v2_template(app_key: str, *, handover_url: str) -> AppManifestInput:
+def _declared_app_with_assets(monkeypatch: pytest.MonkeyPatch, app_key: str) -> App:
+    _allow_public_https(monkeypatch)
+    app = _app(app_key)
+    sync_manifest_lifecycle(
+        app=app,
+        template=_v2_template(
+            app.app_key,
+            handover_url=ABSOLUTE_HANDOVER_URL,
+            asset_types=(_CUSTOMER_ASSET,),
+        ),
+        downstream_base_url=None,
+        actor_type="system",
+    )
+    app.refresh_from_db()
+    assert app.handover_capability == HANDOVER_CAPABILITY_DECLARED
+    assert app.handover_asset_types == [_CUSTOMER_ASSET_STORED]
+    return app
+
+
+def _v2_template(
+    app_key: str,
+    *,
+    handover_url: str,
+    asset_types: tuple[AppManifestHandoverAssetTypeInput, ...] = (),
+) -> AppManifestInput:
     return _template(
         app_key,
         lifecycle=AppManifestLifecycleInput(
             handover_url=handover_url,
             capabilities=("handover.v2",),
+            handover_asset_types=asset_types,
         ),
     )
 
