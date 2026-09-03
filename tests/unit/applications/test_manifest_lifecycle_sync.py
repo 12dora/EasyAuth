@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+from http import HTTPStatus
 from typing import Final
 
 import pytest
 from django.utils import timezone
 
+from easyauth.admin_console.auto_onboarding_api import (
+    AutoOnboardingError,
+    repull_app_descriptor,
+)
+from easyauth.api.errors import ErrorCode
 from easyauth.applications.handover_capability import sync_handover_capability_from_manifest
 from easyauth.applications.models import (
     HANDOVER_CAPABILITY_DECLARED,
@@ -250,6 +256,52 @@ def test_unavailable_manifest_keeps_previous_asset_types(
 
     app.refresh_from_db()
     assert app.handover_capability == HANDOVER_CAPABILITY_UNDECLARED
+    assert app.handover_asset_types == [_CUSTOMER_ASSET_STORED]
+
+
+def test_repull_fetch_failure_keeps_capability_and_asset_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 走真实的重拉入口: descriptor 拉不到时必须原样保留能力与资产类型
+    app = _declared_app_with_assets(monkeypatch, "life-repull-fail")
+    app.descriptor_base_url = "https://app.example.com"
+    app.save(update_fields=["descriptor_base_url", "updated_at"])
+
+    def failing_fetch(_base_url: str, _token: str | None) -> dict[str, object]:
+        raise AutoOnboardingError(
+            ErrorCode.SEMANTIC_VALIDATION_ERROR,
+            "descriptor 拉取失败",
+            HTTPStatus.BAD_GATEWAY,
+        )
+
+    monkeypatch.setattr(
+        "easyauth.admin_console.auto_onboarding_api._fetch_descriptor", failing_fetch
+    )
+
+    with pytest.raises(AutoOnboardingError):
+        _ = repull_app_descriptor(app=app, actor_id="admin-1")
+
+    app.refresh_from_db()
+    assert app.handover_capability == HANDOVER_CAPABILITY_DECLARED
+    assert app.handover_asset_types == [_CUSTOMER_ASSET_STORED]
+
+
+def test_repull_malformed_descriptor_keeps_capability_and_asset_types(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = _declared_app_with_assets(monkeypatch, "life-repull-malformed")
+    app.descriptor_base_url = "https://app.example.com"
+    app.save(update_fields=["descriptor_base_url", "updated_at"])
+    monkeypatch.setattr(
+        "easyauth.admin_console.auto_onboarding_api._fetch_descriptor",
+        lambda _base_url, _token: {"schema_version": "nonsense", "lifecycle": []},
+    )
+
+    with pytest.raises(AutoOnboardingError):
+        _ = repull_app_descriptor(app=app, actor_id="admin-1")
+
+    app.refresh_from_db()
+    assert app.handover_capability == HANDOVER_CAPABILITY_DECLARED
     assert app.handover_asset_types == [_CUSTOMER_ASSET_STORED]
 
 

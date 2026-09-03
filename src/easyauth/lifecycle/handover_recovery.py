@@ -10,7 +10,7 @@ from http import HTTPStatus
 from django.db import transaction
 from django.utils import timezone
 
-from easyauth.applications.models import HANDOVER_CAPABILITY_DECLARED
+from easyauth.applications.models import HANDOVER_CAPABILITY_DECLARED, App
 from easyauth.lifecycle.core import (
     ASYNC_ATTENTION_POLL_INTERVAL_SECONDS,
     HOOK_EVENT_EXECUTE,
@@ -19,7 +19,6 @@ from easyauth.lifecycle.core import (
     refresh_task_status_locked,
 )
 from easyauth.lifecycle.errors import HandoverConflictError
-from easyauth.lifecycle.handover_actions import initial_action_status_for_app
 from easyauth.lifecycle.handover_async import (
     poll_async_action,
 )
@@ -45,8 +44,9 @@ from easyauth.lifecycle.lease import (
 from easyauth.lifecycle.models import (
     ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,
     ACTION_STATUS_ASYNC_PENDING,
-    ACTION_STATUS_SKIPPED,
+    ACTION_STATUS_BLOCKED,
     BATCH_STATUS_FAILED,
+    BLOCKED_REASON_CAPABILITY_UNDECLARED,
     DELIVERY_OUTCOME_FAILED,
     DELIVERY_OUTCOME_SENT,
     HandoverAppAction,
@@ -206,22 +206,23 @@ def _converge_undeclared_takeover(
     action: HandoverAppAction,
     batch: HandoverExecutionBatch,
     handle: LeaseHandle,
-) -> HandoverAppAction:
-    """能力已撤销: 按建单口径收敛动作, 失败批次, CAS 释放租约。"""
-    status, blocked_reason, skip_reason, skipped_by = initial_action_status_for_app(action.app)
+) -> HandoverAppAction | None:
+    """能力已撤销: 锁内复核 App 后一律 blocked, 失败批次, CAS 释放租约。
+
+    执行中的动作下游结果未知, 即使能力改成 none 也不能收敛成 skipped(终态成功), 必须交人工确认。
+    复核在事务内加锁读 App: 若 manifest 同步已把能力改回 declared, 返回 None 让调用方按正常路径续跑,
+    否则会留下"declared 应用 + 永久 blocked 动作"的矛盾态。
+    """
     with transaction.atomic():
         _ = require_cas(handle)
+        app = App.objects.select_for_update().get(pk=action.app_id)
+        if app.handover_capability == HANDOVER_CAPABILITY_DECLARED:
+            return None
         action = locked_action(action.id)
         batch = HandoverExecutionBatch.objects.select_for_update().get(pk=batch.id)
-        action.status = status
-        action.blocked_reason = blocked_reason
-        update_fields = ["status", "blocked_reason", "updated_at"]
-        if status == ACTION_STATUS_SKIPPED:
-            action.skip_reason = skip_reason
-            action.skipped_by = skipped_by
-            action.skipped_at = timezone.now()
-            update_fields.extend(["skip_reason", "skipped_by", "skipped_at"])
-        action.save(update_fields=update_fields)
+        action.status = ACTION_STATUS_BLOCKED
+        action.blocked_reason = BLOCKED_REASON_CAPABILITY_UNDECLARED
+        action.save(update_fields=["status", "blocked_reason", "updated_at"])
         batch.status = BATCH_STATUS_FAILED
         batch.save(update_fields=["status"])
         _ = cas_release(handle)
@@ -229,13 +230,13 @@ def _converge_undeclared_takeover(
         _ = refresh_task_status_locked(task)
         record_task_event(
             action.task,
-            action="handover_action_blocked" if blocked_reason else "handover_action_skipped",
+            action="handover_action_blocked",
             actor_id=LIFECYCLE_ACTOR_ID,
             actor_type="system",
             extra={
                 "app_key": action.app_key_snapshot,
-                "blocked_reason": blocked_reason,
-                "skip_reason": skip_reason,
+                "blocked_reason": BLOCKED_REASON_CAPABILITY_UNDECLARED,
+                "handover_capability": app.handover_capability,
             },
         )
     return action
@@ -273,7 +274,11 @@ def _resume_takeover(
 ) -> HandoverAppAction | None:
     action = HandoverAppAction.objects.select_related("app", "task").get(pk=action_id)
     if action.app.handover_capability != HANDOVER_CAPABILITY_DECLARED:
-        return _converge_undeclared_takeover(action, batch, handle)
+        converged = _converge_undeclared_takeover(action, batch, handle)
+        if converged is not None:
+            return converged
+        # 锁内复核时能力已恢复 declared: 重新读取后按正常路径续跑
+        action = HandoverAppAction.objects.select_related("app", "task").get(pk=action_id)
     if action.status in {
         ACTION_STATUS_ASYNC_PENDING,
         ACTION_STATUS_ASYNC_ATTENTION_REQUIRED,

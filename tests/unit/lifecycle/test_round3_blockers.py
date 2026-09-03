@@ -10,8 +10,14 @@ import pytest
 from django.utils import timezone
 
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
-from easyauth.applications.models import HANDOVER_CAPABILITY_UNDECLARED, App
+from easyauth.applications.models import (
+    HANDOVER_CAPABILITY_DECLARED,
+    HANDOVER_CAPABILITY_NONE,
+    HANDOVER_CAPABILITY_UNDECLARED,
+    App,
+)
 from easyauth.audit.models import AuditLog
+from easyauth.lifecycle import handover_recovery
 from easyauth.lifecycle.api_errors import map_handover_exception
 from easyauth.lifecycle.api_payloads import aggregated_summary
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
@@ -501,6 +507,78 @@ def test_takeover_undeclared_capability_blocks_action_and_releases_lease(
     assert result.status == ACTION_STATUS_BLOCKED
     assert result.blocked_reason == BLOCKED_REASON_CAPABILITY_UNDECLARED
     assert lease.released_at is not None
+
+
+def test_takeover_capability_none_mid_execution_blocks_instead_of_skipping(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 执行中把能力改成 none: 下游结果未知, 不能按建单口径 skipped(终态成功), 必须 blocked 交人工
+    _subject, app, _task, action = _subject_app_action(status=ACTION_STATUS_EXECUTING)
+    lease, batch = _expired_executing_takeover(action)
+    app.handover_capability = HANDOVER_CAPABILITY_NONE
+    app.handover_capability_declared_by = "ops-1"
+    app.handover_capability_declared_at = timezone.now()
+    app.save(
+        update_fields=[
+            "handover_capability",
+            "handover_capability_declared_by",
+            "handover_capability_declared_at",
+            "updated_at",
+        ],
+    )
+
+    def unexpected_post(**_kwargs: object) -> HookResponse:
+        raise AssertionError(_UNDECLARED_TAKEOVER_ASSERTION_MESSAGE)
+
+    monkeypatch.setattr("easyauth.lifecycle.handover_recovery.signed_hook_post", unexpected_post)
+
+    result = takeover_expired_lease(lease, owner="recover:none")
+
+    assert result is not None
+    result.refresh_from_db()
+    batch.refresh_from_db()
+    lease.refresh_from_db()
+    assert result.status == ACTION_STATUS_BLOCKED
+    assert result.blocked_reason == BLOCKED_REASON_CAPABILITY_UNDECLARED
+    assert result.skip_reason == ""
+    assert batch.status == BATCH_STATUS_FAILED
+    assert lease.released_at is not None
+
+
+def test_takeover_capability_restored_before_lock_resumes_instead_of_blocking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # 初读 undeclared 与锁内复核之间 manifest 同步把能力改回 declared:
+    # 不得留下 declared 应用 + 永久 blocked 动作
+    _subject, app, _task, action = _subject_app_action(status=ACTION_STATUS_EXECUTING)
+    lease, batch = _expired_executing_takeover(action)
+    app.handover_capability = HANDOVER_CAPABILITY_UNDECLARED
+    app.save(update_fields=["handover_capability", "updated_at"])
+
+    original_require_cas = handover_recovery.require_cas
+
+    def restore_then_require(handle: LeaseHandle) -> object:
+        _ = App.objects.filter(pk=app.pk).update(handover_capability=HANDOVER_CAPABILITY_DECLARED)
+        return original_require_cas(handle)
+
+    monkeypatch.setattr(handover_recovery, "require_cas", restore_then_require)
+    posted: list[dict[str, object]] = []
+
+    def record_post(**kwargs: object) -> HookResponse:
+        posted.append(kwargs)
+        return HookResponse(status_code=409, location="", payload={"conflict": True})
+
+    monkeypatch.setattr(handover_recovery, "signed_hook_post", record_post)
+
+    result = takeover_expired_lease(lease, owner="recover:restored")
+
+    assert result is not None
+    result.refresh_from_db()
+    batch.refresh_from_db()
+    assert len(posted) == 1
+    assert result.status != ACTION_STATUS_BLOCKED
+    assert result.blocked_reason == ""
+    assert batch.status != BATCH_STATUS_FAILED
 
 
 def test_takeover_delivery_prepare_none_releases_lease() -> None:
