@@ -506,6 +506,7 @@ describe("PortalRequestsSection 详情弹窗", () => {
   });
 
   test("已授权的限时申请: 生效节点给生效时刻, 并多出一个尚未到达的到期节点", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-07-10T00:00:00Z") });
     stubRequests([
       requestRow({
         status: "grant_applied",
@@ -530,6 +531,35 @@ describe("PortalRequestsSection 详情弹窗", () => {
       expect(stepStatus("到期")).toBe("wait");
       expect(stepDescription("到期")).toMatch(/^2026\/08\/01/);
     } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("限时授权的到期时刻已过: 到期节点走完", async () => {
+    vi.useFakeTimers({ toFake: ["Date"], now: new Date("2026-09-01T00:00:00Z") });
+    stubRequests([
+      requestRow({
+        status: "grant_applied",
+        status_label: "已授权",
+        grant_type: "timed",
+        grant_expires_at: "2026-08-01T10:00:00Z",
+        decided_by: "manager-001",
+        decision_actor_type: "user",
+        decided_by_name: "张主管",
+        decided_at: "2026-07-02T10:00:00Z",
+        approved_at: "2026-07-02T10:00:00Z",
+        applied_at: "2026-07-02T10:05:00Z",
+      }),
+    ]);
+
+    try {
+      await openDetail();
+
+      expect(stepStatus("权限生效")).toBe("finish");
+      expect(stepStatus("到期")).toBe("finish");
+    } finally {
+      vi.useRealTimers();
       vi.unstubAllGlobals();
     }
   });

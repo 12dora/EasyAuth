@@ -62,10 +62,11 @@ export function accessRequestStatusColor(status: string | null | undefined): Acc
       return "processing";
     case "rejected":
     case "grant_failed":
+    // 后端语义是「授权期限已过, 未应用」: 审批通过却从未生效, 与失败同为错误态。
+    case "grant_expired":
       return "error";
     case "grant_conflict":
       return "warning";
-    case "grant_expired":
     case "withdrawn":
       return "secondary";
     default:

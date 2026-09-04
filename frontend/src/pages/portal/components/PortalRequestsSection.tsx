@@ -41,7 +41,8 @@ const REQUEST_ORDERING_FIELDS = {
 export function PortalRequestsSection() {
   const { t } = useI18n();
   const queryClient = useQueryClient();
-  const [detailRow, setDetailRow] = useState<PortalRequestRow | null>(null);
+  // 只记 id, 行内容始终取当前查询数据: 后台刷新后弹窗跟着更新, 该行翻页/消失时弹窗自动关闭。
+  const [detailRequestId, setDetailRequestId] = useState<number | null>(null);
   const serverTable = useServerTable<PortalRequestRow>({
     defaultPageSize: PORTAL_DEFAULT_PAGE_SIZE,
     sortParam: ORDERING_PARAM,
@@ -67,6 +68,7 @@ export function PortalRequestsSection() {
     },
   });
   const requests = query.data?.data ?? [];
+  const detailRow = detailRequestId === null ? null : (requests.find((row) => row.id === detailRequestId) ?? null);
   serverTable.setTotal(query.data?.pagination.total_items);
   useClampPage(query.data, serverTable.query.page, serverTable.setPage);
   const columns = useMemo<ColumnsType<PortalRequestRow>>(
@@ -128,7 +130,7 @@ export function PortalRequestsSection() {
       textColumn<PortalRequestRow>({ key: "reason", title: t("portal.column.reason"), ellipsis: false, width: 180 }),
       actionsColumn<PortalRequestRow>({
         width: 130,
-        render: (row) => <RequestRowActions mutation={withdrawMutation} row={row} onOpenDetail={setDetailRow} />,
+        render: (row) => <RequestRowActions mutation={withdrawMutation} row={row} onOpenDetail={(row) => setDetailRequestId(row.id)} />,
       }),
     ],
     [sort, t, withdrawMutation],
@@ -163,7 +165,7 @@ export function PortalRequestsSection() {
           rowKey="id"
         />
       )}
-      {detailRow ? <PortalRequestDetailDialog row={detailRow} onClose={() => setDetailRow(null)} /> : null}
+      {detailRow ? <PortalRequestDetailDialog row={detailRow} onClose={() => setDetailRequestId(null)} /> : null}
     </>
   );
 }

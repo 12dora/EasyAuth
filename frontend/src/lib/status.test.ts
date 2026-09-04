@@ -46,7 +46,7 @@ describe("accessRequestStatusColor", () => {
     ["rejected", "error"],
     ["grant_failed", "error"],
     ["grant_conflict", "warning"],
-    ["grant_expired", "secondary"],
+    ["grant_expired", "error"],
     ["withdrawn", "secondary"],
   ])("%s 归到 %s 语义色", (status, color) => {
     expect(accessRequestStatusColor(status)).toBe(color);

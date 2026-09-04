@@ -83,10 +83,12 @@ function flowSteps(row: PortalRequestRow, t: ReturnType<typeof useI18n>["t"], fo
   ];
   // grant_expired 表示审批通过后授权窗口已过、从未生效, 生效节点已经以错误态说明了原因, 不再挂一个到期节点。
   if (row.grant_expires_at && row.status !== "grant_expired") {
+    // 授权到期后改动的是 AccessGrant 而不是申请本身的状态, 因此到期节点只能按时刻判断。
+    const expired = new Date(row.grant_expires_at).getTime() <= Date.now();
     steps.push({
       title: t("portal.requests.flow.expiry"),
       description: formatDateTime(row.grant_expires_at),
-      status: "wait",
+      status: expired ? "finish" : "wait",
     });
   }
   return steps;
