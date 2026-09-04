@@ -172,7 +172,7 @@ def test_current_permission_api_reports_mixed_membership_lifecycles_without_prom
 
 
 def test_json_helpers_serialize_new_authorization_fact_shapes() -> None:
-    # Given: 新授权事实快照包含 groups 和 expanded grants。
+    # Given: 新授权事实快照包含 groups 和已挂上目录展示名的 expanded grants。
     groups = (GroupSnapshot(key="sales-reader", kind="role", name="销售只读", expires_at=None),)
     grants = (
         ExpandedGrant(
@@ -181,6 +181,10 @@ def test_json_helpers_serialize_new_authorization_fact_shapes() -> None:
             source_type="group",
             source_key="sales-reader",
             expires_at=None,
+            permission_name="读取订单",
+            permission_name_en="Read orders",
+            scope_name="本人",
+            scope_name_en="Self",
         ),
         ExpandedGrant(
             permission="dashboard.view",
@@ -188,6 +192,10 @@ def test_json_helpers_serialize_new_authorization_fact_shapes() -> None:
             source_type="direct",
             source_key="",
             expires_at=None,
+            permission_name="dashboard.view",
+            permission_name_en="",
+            scope_name="GLOBAL",
+            scope_name_en="",
         ),
     )
 
@@ -195,7 +203,7 @@ def test_json_helpers_serialize_new_authorization_fact_shapes() -> None:
     group_payload = json_groups(groups)
     grant_payload = json_expanded_grants(grants)
 
-    # Then: 输出字段与前端表格契约一致。
+    # Then: 输出字段与前端表格契约一致, 目录行缺失时的 key 回退由目录解析层给出、原样透传。
     assert group_payload == [{"key": "sales-reader", "kind": "role", "name": "销售只读"}]
     assert grant_payload == [
         {
@@ -203,10 +211,10 @@ def test_json_helpers_serialize_new_authorization_fact_shapes() -> None:
             "scope": "SELF",
             "source_type": "group",
             "source_key": "sales-reader",
-            "permission_name": "orders.read",
-            "permission_name_en": "",
-            "scope_name": "SELF",
-            "scope_name_en": "",
+            "permission_name": "读取订单",
+            "permission_name_en": "Read orders",
+            "scope_name": "本人",
+            "scope_name_en": "Self",
         },
         {
             "permission": "dashboard.view",
@@ -219,6 +227,21 @@ def test_json_helpers_serialize_new_authorization_fact_shapes() -> None:
             "scope_name_en": "",
         },
     ]
+
+
+def test_json_expanded_grant_rejects_snapshot_without_catalog_names() -> None:
+    # Given: 一条没有经过目录解析(展示名为空)的授权项。
+    grant = ExpandedGrant(
+        permission="orders.read",
+        scope="SELF",
+        source_type="direct",
+        source_key="",
+        expires_at=None,
+    )
+
+    # When / Then: 序列化必须快速失败, 不能用 key 糊成展示名。
+    with pytest.raises(ValueError, match="缺少目录展示名"):
+        json_expanded_grants((grant,))
 
 
 def test_json_expanded_grants_emit_attached_catalog_names() -> None:

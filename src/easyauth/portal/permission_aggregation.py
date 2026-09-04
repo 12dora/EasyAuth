@@ -34,13 +34,18 @@ def json_group(group: GroupSnapshot) -> dict[str, JsonValue]:
 
 
 def json_expanded_grant(grant: ExpandedGrant) -> dict[str, JsonValue]:
+    # 中文展示名由 grants.query._with_catalog_names 统一挂上(目录行缺失时已回退为 key);
+    # 到这里仍为空说明快照没走过目录解析, 是编程错误, 不能再用 key 糊过去。
+    if not grant.permission_name or not grant.scope_name:
+        message = f"授权项 {grant.permission}:{grant.scope} 缺少目录展示名, 快照未经过目录解析"
+        raise ValueError(message)
     return {
         "permission": grant.permission,
         "scope": grant.scope,
         "source_type": grant.source_type,
         "source_key": grant.source_key,
-        "permission_name": grant.permission_name or grant.permission,
+        "permission_name": grant.permission_name,
         "permission_name_en": grant.permission_name_en,
-        "scope_name": grant.scope_name or grant.scope,
+        "scope_name": grant.scope_name,
         "scope_name_en": grant.scope_name_en,
     }
