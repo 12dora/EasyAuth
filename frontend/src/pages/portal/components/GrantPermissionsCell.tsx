@@ -80,7 +80,6 @@ function HoverTooltip({ label, children }: { label: string; children: ReactNode 
         ref={triggerRef}
         type="button"
         aria-describedby={open ? tooltipId : undefined}
-        aria-expanded={open}
         className="cursor-help whitespace-nowrap underline decoration-dotted decoration-ink-faint underline-offset-4"
         onBlur={() => setOpen(false)}
         onFocus={() => setOpen(true)}
