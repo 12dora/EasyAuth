@@ -10,7 +10,7 @@ import { useAccessRequestForm } from "./useAccessRequestForm";
 function catalogResponse() {
   return jsonResponse(
     {
-      apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["me", "boss"] }],
+      apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: ["me", "boss"] }],
       approver_options: [
         { user_id: "me", name: "我" },
         { user_id: "boss", name: "老板" },
@@ -34,7 +34,7 @@ function jsonResponse(payload: unknown, status = 200) {
 
 function scopedCatalog(overrides: Record<string, unknown> = {}) {
   return {
-    apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["boss"] }],
+    apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: ["boss"] }],
     approver_options: [{ user_id: "boss", name: "老板" }],
     authorization_groups: [],
     permission_groups: [],
@@ -324,7 +324,7 @@ describe("useAccessRequestForm", () => {
 
   test("FF-23: catalog 行结构错误时拒绝消费", async () => {
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => jsonResponse(scopedCatalog({
-      apps: [{ id: "1", app_key: "crm", name: "CRM" }],
+      apps: [{ id: "1", app_key: "crm", name: "CRM", alias: "" }],
     }))));
     const { result } = renderHook(() => useAccessRequestForm(), { wrapper });
 
@@ -337,7 +337,7 @@ describe("useAccessRequestForm", () => {
       name: `审批人 ${index}`,
     }));
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => jsonResponse(scopedCatalog({
-      apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: [] }],
+      apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: [] }],
       approver_options: approverOptions,
       ungrouped_permissions: [],
     }))));
