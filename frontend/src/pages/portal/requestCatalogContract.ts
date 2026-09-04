@@ -27,6 +27,8 @@ function validateCatalogApp(value: unknown, path: string): void {
   contractNumber(item.id, `${path}.id`);
   contractNonEmptyString(item.app_key, `${path}.app_key`);
   contractNonEmptyString(item.name, `${path}.name`);
+  // 别名是可选配置项, 没配时后端下发空字符串; 字段本身必须存在。
+  contractString(item.alias, `${path}.alias`);
   contractOptionalStringArray(item.default_approver_user_ids, `${path}.default_approver_user_ids`);
   contractOptionalString(item.approver_resolution_status, `${path}.approver_resolution_status`);
 }
@@ -126,6 +128,12 @@ function contractArray(value: unknown, path: string): unknown[] {
 function contractNumber(value: unknown, path: string): void {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     throw new Error(`${path} 必须为有限数字`);
+  }
+}
+
+function contractString(value: unknown, path: string): void {
+  if (typeof value !== "string") {
+    throw new Error(`${path} 必须为字符串`);
   }
 }
 

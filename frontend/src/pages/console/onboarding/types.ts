@@ -16,6 +16,7 @@ export interface WizardStepDescriptor {
 export interface AppSummaryLike {
   app_key: string;
   name: string;
+  alias: string;
   description?: string;
   owners?: string[];
 }
@@ -23,6 +24,7 @@ export interface AppSummaryLike {
 export interface AutoOnboardingResult {
   app_key: string;
   app_name: string;
+  app_alias: string;
   created: boolean;
   already_up_to_date: boolean;
   template_version: number;

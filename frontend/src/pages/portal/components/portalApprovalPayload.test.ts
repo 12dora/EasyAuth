@@ -17,9 +17,9 @@ function parseRow(row: Record<string, unknown>) {
 }
 
 describe("parseApprovalListPayload", () => {
-  test("接受后端真实返回的完整待办行(22 个字段)", () => {
+  test("接受后端真实返回的完整待办行(23 个字段)", () => {
     // 这条断言就是契约本身: 后端加字段而校验器没跟上时, 这里第一时间红。
-    expect(Object.keys(pendingApproval)).toHaveLength(22);
+    expect(Object.keys(pendingApproval)).toHaveLength(23);
 
     const payload = parseRow({ ...pendingApproval });
 
@@ -64,6 +64,8 @@ describe("parseApprovalListPayload", () => {
 
   test.each([
     { label: "多出未知字段", row: { ...pendingApproval, unexpected: true } },
+    { label: "缺少 app_alias", row: rowWithout("app_alias") },
+    { label: "app_alias 不是字符串", row: { ...pendingApproval, app_alias: null } },
     { label: "缺少 current_approvers", row: rowWithout("current_approvers") },
     { label: "缺少 decision_actor_type", row: rowWithout("decision_actor_type") },
     { label: "缺少 decided_by_name", row: rowWithout("decided_by_name") },

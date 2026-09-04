@@ -37,6 +37,8 @@ export interface PortalApprovalRow {
   id: number;
   app_key: string;
   app_name: string;
+  /** 应用别名; 后端无别名时下发空字符串。 */
+  app_alias: string;
   request_type: string;
   base_grant_id: number | null;
   base_grant_revision: number | null;

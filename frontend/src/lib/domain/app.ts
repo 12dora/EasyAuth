@@ -6,6 +6,8 @@ export interface AppSummary {
   id: number;
   app_key: string;
   name: string;
+  /** 控制台维护的面向员工别名; 未设置时为空字符串, 展示一律走 formatAppDisplayName。 */
+  alias: string;
   description?: string;
   is_active?: boolean;
   owners?: string[];
@@ -46,6 +48,7 @@ export interface AppListPayload {
 export interface AppCreatePayload {
   app_key: string;
   name: string;
+  alias?: string;
   description?: string;
   owner_user_ids?: string[];
   developer_user_ids?: string[];
@@ -54,6 +57,7 @@ export interface AppCreatePayload {
 
 export interface AppUpdatePayload {
   name?: string;
+  alias?: string;
   description?: string;
   owner_user_ids?: string[];
   developer_user_ids?: string[];

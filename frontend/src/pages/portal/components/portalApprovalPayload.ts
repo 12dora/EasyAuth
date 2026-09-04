@@ -30,6 +30,7 @@ const APPROVAL_ROW_KEYS = [
   "id",
   "app_key",
   "app_name",
+  "app_alias",
   "request_type",
   "base_grant_id",
   "base_grant_revision",
@@ -144,7 +145,9 @@ function hasApprovalIdentity(value: Record<string, unknown>): boolean {
     Number.isInteger(value.id) &&
     typeof value.id === "number" &&
     value.id > 0 &&
-    requiredStrings.every(isNonEmptyString)
+    requiredStrings.every(isNonEmptyString) &&
+    // 别名是可选配置项, 没配时后端下发空字符串, 因此只校验类型不校验非空。
+    typeof value.app_alias === "string"
   );
 }
 

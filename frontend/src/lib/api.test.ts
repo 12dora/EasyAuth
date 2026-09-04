@@ -213,8 +213,9 @@ describe("itemsFromPayload", () => {
 
 describe("前端领域契约", () => {
   test("声明应用写入 payload 和授权目录核心类型", () => {
-    expectInterfaceFields("AppCreatePayload", ["app_key", "name", "description", "is_active"]);
-    expectInterfaceFields("AppUpdatePayload", ["name", "description", "is_active"]);
+    expectInterfaceFields("AppSummary", ["app_key", "name", "alias"]);
+    expectInterfaceFields("AppCreatePayload", ["app_key", "name", "alias", "description", "is_active"]);
+    expectInterfaceFields("AppUpdatePayload", ["name", "alias", "description", "is_active"]);
     expectInterfaceFields("AppMembershipItem", ["id", "user_id", "role", "is_active"]);
     expectInterfaceFields("AppScopeItem", ["key", "name", "description", "is_active", "display_order"]);
     expectInterfaceFields("AuthorizationGroupGrantItem", ["permission", "scope", "is_active"]);
@@ -247,5 +248,13 @@ describe("前端领域契约", () => {
       "snapshot_version",
     ]);
     expect(interfaceBody("PortalRequestCatalog")).not.toMatch(/\broles\??:/);
+  });
+
+  test("凡是带 app_name 的载荷都必须同时带 app_alias", () => {
+    expectInterfaceFields("PortalGrant", ["app_key", "app_name", "app_alias"]);
+    expectInterfaceFields("PortalRequest", ["app_key", "app_name", "app_alias"]);
+    expectInterfaceFields("PortalApprovalItem", ["app_key", "app_name", "app_alias"]);
+    expectInterfaceFields("HandoverAction", ["app_key", "app_name", "app_alias"]);
+    expectInterfaceFields("PortalCatalogApp", ["app_key", "name", "alias"]);
   });
 });

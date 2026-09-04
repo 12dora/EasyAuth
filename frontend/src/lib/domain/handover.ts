@@ -82,6 +82,8 @@ export interface HandoverSkipRecord {
 export interface HandoverAction {
   app_key: string;
   app_name: string;
+  /** 应用别名; 后端无别名时下发空字符串。 */
+  app_alias: string;
   status: HandoverActionStatus;
   blocked_reason: string;
   skip_reason: string;
@@ -174,7 +176,7 @@ export interface HandoverCapabilityPayload {
 export interface HandoverBlockedAppsPayload {
   app_count: number;
   task_count: number;
-  apps: Array<{ app_key: string; app_name: string; blocked_task_count: number }>;
+  apps: Array<{ app_key: string; app_name: string; app_alias: string; blocked_task_count: number }>;
 }
 
 /** 门户/控制台列表行: 详情去掉 actions/team_items，另加计数。 */

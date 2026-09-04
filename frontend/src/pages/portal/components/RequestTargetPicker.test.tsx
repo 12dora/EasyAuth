@@ -10,7 +10,7 @@ describe("RequestTargetPicker", () => {
       <I18nProvider>
         <RequestTargetPicker
           appKey="crm"
-          apps={[{ id: 1, app_key: "crm", name: "CRM" }]}
+          apps={[{ id: 1, app_key: "crm", name: "CRM", alias: "" }]}
           authorizationGroupKey=""
           authorizationGroups={[]}
           permissionGroups={[]}
@@ -43,7 +43,7 @@ describe("RequestTargetPicker", () => {
       <I18nProvider>
         <RequestTargetPicker
           appKey="crm"
-          apps={[{ id: 1, app_key: "crm", name: "CRM" }]}
+          apps={[{ id: 1, app_key: "crm", name: "CRM", alias: "" }]}
           authorizationGroupKey=""
           authorizationGroups={[
             { id: 11, app_key: "crm", key: "sales-reader", kind: "role", name: "销售只读" },

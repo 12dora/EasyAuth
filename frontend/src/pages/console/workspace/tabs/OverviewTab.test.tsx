@@ -39,6 +39,7 @@ test("概览显示权威授权组数量", async () => {
           id: 1,
           app_key: "demo",
           name: "Demo",
+          alias: "",
           authorization_group_count: 7,
         }}
       />
@@ -75,7 +76,7 @@ test("使用真实成员序列化形状按 membership ID 停用成员", async ()
     <QueryClientProvider client={client}>
       <OverviewTab
         appKey="demo"
-        app={{ id: 1, app_key: "demo", name: "Demo", capabilities: { can_manage_memberships: true } }}
+        app={{ id: 1, app_key: "demo", name: "Demo", alias: "", capabilities: { can_manage_memberships: true } }}
       />
     </QueryClientProvider>,
   );
@@ -118,7 +119,7 @@ test("成员表头按角色筛选并保留 AppTable 分页", async () => {
 
   renderWithAntd(
     <QueryClientProvider client={client}>
-      <OverviewTab appKey="demo" app={{ id: 1, app_key: "demo", name: "Demo" }} />
+      <OverviewTab appKey="demo" app={{ id: 1, app_key: "demo", name: "Demo", alias: "" }} />
     </QueryClientProvider>,
   );
 

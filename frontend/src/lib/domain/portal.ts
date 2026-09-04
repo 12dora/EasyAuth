@@ -13,6 +13,8 @@ export interface PortalGrant {
   grant_revision?: number;
   app_key?: string;
   app_name?: string;
+  /** 应用别名; 后端无别名时下发空字符串。 */
+  app_alias?: string;
   groups?: PermissionQueryGroupItem[];
   grants?: ExpandedGrantItem[];
   grant_version?: number;
@@ -42,6 +44,8 @@ export interface PortalRequest {
   id?: number;
   app_key?: string;
   app_name?: string;
+  /** 应用别名; 后端无别名时下发空字符串。 */
+  app_alias?: string;
   authorization_groups?: PermissionQueryGroupItem[];
   direct_grants?: PortalDirectGrantItem[];
   status?: string;
@@ -77,6 +81,8 @@ export interface PortalApprovalItem {
   id: number;
   app_key?: string;
   app_name?: string;
+  /** 应用别名; 后端无别名时下发空字符串。 */
+  app_alias?: string;
   request_type?: string;
   base_grant_id?: number | null;
   base_grant_revision?: number | null;
@@ -105,6 +111,8 @@ export interface PortalCatalogApp {
   id: number;
   app_key: string;
   name: string;
+  /** 控制台维护的面向员工别名; 未设置时为空字符串。 */
+  alias: string;
   description?: string;
 }
 

@@ -4,7 +4,7 @@ import type { PortalApprovalRow } from "./portalApprovalTypes";
  * 门户审批测试共用的行事实。
  *
  * 这里刻意逐字对齐后端 `/portal/api/v1/me/approvals` 的真实序列化字段
- * (`_access_request_item` + `_approval_item`, 共 22 个 key)。
+ * (`_access_request_item` + `_approval_item`, 共 23 个 key)。
  * `parseApprovalListPayload` 按 key 数量精确匹配, 所以夹具一旦少一个字段,
  * 用例就会在一份「后端根本不会返回的形状」上通过, 掩盖真实的契约漂移。
  *
@@ -15,6 +15,7 @@ export const pendingApproval = {
   id: 42,
   app_key: "crm",
   app_name: "CRM",
+  app_alias: "客户管理",
   request_type: "grant",
   base_grant_id: null,
   base_grant_revision: null,

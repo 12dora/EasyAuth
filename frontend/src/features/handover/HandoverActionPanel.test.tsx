@@ -10,6 +10,7 @@ function baseAction(patch: Partial<HandoverAction> = {}): HandoverAction {
   return {
     app_key: "easytrade",
     app_name: "EasyTrade",
+    app_alias: "易交易",
     status: "previewed",
     blocked_reason: "",
     skip_reason: "",

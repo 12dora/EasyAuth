@@ -41,6 +41,7 @@ describe("handoverWizardReducer", () => {
     const blocked: HandoverAction = {
       app_key: "x",
       app_name: "X",
+      app_alias: "",
       status: "blocked",
       blocked_reason: "capability_undeclared",
       skip_reason: "",

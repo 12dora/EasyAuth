@@ -28,6 +28,7 @@ function baseAction(status: HandoverActionStatus, patch: Partial<HandoverAction>
   return {
     app_key: status,
     app_name: `App-${status}`,
+    app_alias: "",
     status,
     blocked_reason: status === "blocked" ? "capability_undeclared" : "",
     skip_reason: status === "skipped" ? "人工跳过" : "",
