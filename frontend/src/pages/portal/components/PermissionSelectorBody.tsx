@@ -57,7 +57,16 @@ export function PermissionSelectorBody({
                 cell.column.id === "scope" && "permission-selector__scope-cell",
               )}
             >
-              {flexRender(cell.column.columnDef.cell, cell.getContext())}
+              {/*
+                * <tr> 的高度不能过渡, 因此每格内容再包一层可收拢的容器:
+                * 进出场时由 permission-selector.css 把它的 grid 行高在 1fr / 0fr 之间做动画,
+                * 表格高度与淡入淡出同步变化, 不再在动画结束的瞬间跳一下。
+                */}
+              <div className="permission-selector__cell-collapse">
+                <div className="permission-selector__cell-collapse-body">
+                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                </div>
+              </div>
             </td>
           ))}
         </tr>

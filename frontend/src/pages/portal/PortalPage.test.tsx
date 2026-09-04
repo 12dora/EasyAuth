@@ -882,12 +882,27 @@ describe("PortalPage access request form", () => {
       expect(within(permissionTable).getByText("退款")).toBeVisible();
       expect(within(permissionTable).queryByText("审批退款")).not.toBeInTheDocument();
 
-      await user.click(within(permissionTable).getByRole("button", { name: "收起 订单" }));
+      vi.useFakeTimers();
+      fireEvent.click(within(permissionTable).getByRole("button", { name: "收起 订单" }));
 
-      expect(within(permissionTable).getByText("查看订单")).toBeVisible();
-      expect(within(permissionTable).getByText("退款")).toBeVisible();
+      // 收起的第一次渲染: 已展开的子行原地进入退场态, 未展开子组的权限一次都不会被渲染出来。
+      expect(within(permissionTable).getByText("查看订单").closest("tr")).toHaveClass(
+        "permission-selector__row--exiting",
+      );
+      expect(within(permissionTable).getByText("退款").closest("tr")).toHaveClass(
+        "permission-selector__row--exiting",
+      );
+      expect(within(permissionTable).queryByText("审批退款")).not.toBeInTheDocument();
+
+      act(() => {
+        vi.advanceTimersByTime(200);
+      });
+
+      expect(within(permissionTable).queryByText("查看订单")).not.toBeInTheDocument();
+      expect(within(permissionTable).queryByText("退款")).not.toBeInTheDocument();
       expect(within(permissionTable).queryByText("审批退款")).not.toBeInTheDocument();
     } finally {
+      vi.useRealTimers();
       vi.unstubAllGlobals();
     }
   });
@@ -1293,8 +1308,11 @@ describe("PortalPage access request form", () => {
       vi.useFakeTimers();
       fireEvent.click(within(permissionTable).getByRole("button", { name: "收起 订单" }));
 
-      const exitingRows = permissionTable.querySelectorAll(".permission-selector__row--exiting");
-      expect(exitingRows.length).toBeGreaterThan(0);
+      // 收起的第一次渲染就要带上退场态: 子行既不能消失, 也不能先卸载再挂回来(会闪一下),
+      // 因此这里断言拿到的还是收起前那个 <tr> 节点。
+      const exitingPermissionRow = within(permissionTable).getByText("查看订单").closest("tr");
+      expect(exitingPermissionRow).toBe(enteringPermissionRow);
+      expect(exitingPermissionRow).toHaveClass("permission-selector__row--exiting");
       expect(within(permissionTable).getAllByText("查看订单")).toHaveLength(1);
 
       act(() => {

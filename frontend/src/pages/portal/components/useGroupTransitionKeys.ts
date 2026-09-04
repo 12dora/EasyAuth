@@ -1,40 +1,57 @@
 /** 权限组展开与收起动画的过渡 key 生命周期。 */
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import type { Dispatch, MutableRefObject, SetStateAction } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { Dispatch, SetStateAction } from "react";
 
-const EXIT_ANIMATION_MS = 160;
+const TRANSITION_ANIMATION_MS = 160;
 
 type TransitionDirection = "entering" | "exiting";
 type SetKeys = Dispatch<SetStateAction<string[]>>;
 
+/**
+ * 正在进场 / 退场的权限组 key。
+ *
+ * 过渡集合必须在渲染期同步推进, 不能等 useEffect: 收起的那一次渲染里 isExpanded 已经是 false,
+ * 若 exiting 集合晚一拍才出现, 子行会先被卸载、再带着退场动画重新挂上, 表现为收起时闪一下。
+ * 渲染期 setState 会让 React 立刻用新状态重跑本组件, 提交到 DOM 的只有最终结果。
+ */
 export function useGroupTransitionKeys(
   expandedGroupKeys: string[],
   direction: TransitionDirection,
 ): string[] {
-  const previousExpandedGroupKeys = useRef(expandedGroupKeys);
-  const timeoutIdsByKey = useRef(new Map<string, number>());
-  const generationByKey = useRef(new Map<string, number>());
+  const [previousExpandedGroupKeys, setPreviousExpandedGroupKeys] = useState(expandedGroupKeys);
   const [transitionKeys, setTransitionKeys] = useState<string[]>([]);
+  const timeoutIdsByKey = useRef(new Map<string, number>());
 
-  useEffect(() => {
-    const previousKeys = previousExpandedGroupKeys.current;
-    const changedKeys =
-      direction === "entering"
-        ? expandedGroupKeys.filter((key) => !previousKeys.includes(key))
-        : previousKeys.filter((key) => !expandedGroupKeys.includes(key));
-    previousExpandedGroupKeys.current = expandedGroupKeys;
-    if (direction === "entering") {
-      return updateEnteringKeys(expandedGroupKeys, changedKeys, setTransitionKeys);
-    }
-    updateExitingKeys(
-      expandedGroupKeys,
-      changedKeys,
-      setTransitionKeys,
-      timeoutIdsByKey,
-      generationByKey,
+  if (!stringListsAreEqual(previousExpandedGroupKeys, expandedGroupKeys)) {
+    setPreviousExpandedGroupKeys(expandedGroupKeys);
+    updateKeys(setTransitionKeys, (current) =>
+      nextTransitionKeys(current, previousExpandedGroupKeys, expandedGroupKeys, direction),
     );
-  }, [direction, expandedGroupKeys]);
+  }
+
+  // 每个过渡 key 一个计时器: 动画放完才把它从集合里摘掉(退场键摘掉即子行卸载)。
+  useEffect(() => {
+    const timeoutIds = timeoutIdsByKey.current;
+    for (const [key, timeoutId] of timeoutIds) {
+      if (!transitionKeys.includes(key)) {
+        window.clearTimeout(timeoutId);
+        timeoutIds.delete(key);
+      }
+    }
+    for (const key of transitionKeys) {
+      if (timeoutIds.has(key)) {
+        continue;
+      }
+      timeoutIds.set(
+        key,
+        window.setTimeout(() => {
+          timeoutIds.delete(key);
+          updateKeys(setTransitionKeys, (current) => current.filter((currentKey) => currentKey !== key));
+        }, motionDurationMs(TRANSITION_ANIMATION_MS)),
+      );
+    }
+  }, [transitionKeys]);
 
   useEffect(() => {
     const timeoutIds = timeoutIdsByKey.current;
@@ -46,71 +63,30 @@ export function useGroupTransitionKeys(
     };
   }, []);
 
-  return useMemo(
-    () =>
-      transitionKeys.filter((key) =>
-        direction === "entering" ? expandedGroupKeys.includes(key) : !expandedGroupKeys.includes(key),
-      ),
-    [direction, expandedGroupKeys, transitionKeys],
-  );
+  return transitionKeys;
 }
 
-function updateEnteringKeys(expandedGroupKeys: string[], addedGroupKeys: string[], setKeys: SetKeys) {
-  if (addedGroupKeys.length === 0) {
-    updateKeys(setKeys, (current) => current.filter((key) => expandedGroupKeys.includes(key)));
-    return;
-  }
-  updateKeys(setKeys, (current) => Array.from(new Set([...current, ...addedGroupKeys])));
-  const timeoutId = window.setTimeout(() => {
-    updateKeys(setKeys, (current) => current.filter((key) => !addedGroupKeys.includes(key)));
-  }, motionDurationMs(EXIT_ANIMATION_MS));
-  return () => window.clearTimeout(timeoutId);
-}
-
-function updateExitingKeys(
+function nextTransitionKeys(
+  current: string[],
+  previousExpandedGroupKeys: string[],
   expandedGroupKeys: string[],
-  removedGroupKeys: string[],
-  setKeys: SetKeys,
-  timeoutIdsByKey: MutableRefObject<Map<string, number>>,
-  generationByKey: MutableRefObject<Map<string, number>>,
-) {
-  cancelReexpandedKeys(expandedGroupKeys, timeoutIdsByKey.current, generationByKey.current);
-  if (removedGroupKeys.length === 0) {
-    updateKeys(setKeys, (current) => current.filter((key) => !expandedGroupKeys.includes(key)));
-    return;
-  }
-  updateKeys(setKeys, (current) => Array.from(new Set([...current, ...removedGroupKeys])));
-  for (const key of removedGroupKeys) {
-    startExitTimer(key, setKeys, timeoutIdsByKey.current, generationByKey.current);
-  }
+  direction: TransitionDirection,
+): string[] {
+  const changedKeys =
+    direction === "entering"
+      ? expandedGroupKeys.filter((key) => !previousExpandedGroupKeys.includes(key))
+      : previousExpandedGroupKeys.filter((key) => !expandedGroupKeys.includes(key));
+  // 反向操作立刻作废进行中的过渡: 重新展开的组不再退场, 重新收起的组不再进场。
+  const keptKeys = current.filter((key) => keyIsStillTransitioning(key, expandedGroupKeys, direction));
+  return Array.from(new Set([...keptKeys, ...changedKeys]));
 }
 
-function cancelReexpandedKeys(expandedKeys: string[], timers: Map<string, number>, generations: Map<string, number>) {
-  for (const key of expandedKeys) {
-    const existingTimer = timers.get(key);
-    if (existingTimer !== undefined) {
-      window.clearTimeout(existingTimer);
-      timers.delete(key);
-    }
-    generations.set(key, (generations.get(key) ?? 0) + 1);
-  }
-}
-
-function startExitTimer(key: string, setKeys: SetKeys, timers: Map<string, number>, generations: Map<string, number>) {
-  const generation = (generations.get(key) ?? 0) + 1;
-  generations.set(key, generation);
-  const existingTimer = timers.get(key);
-  if (existingTimer !== undefined) {
-    window.clearTimeout(existingTimer);
-  }
-  const timeoutId = window.setTimeout(() => {
-    timers.delete(key);
-    if (generations.get(key) !== generation) {
-      return;
-    }
-    updateKeys(setKeys, (current) => current.filter((currentKey) => currentKey !== key));
-  }, motionDurationMs(EXIT_ANIMATION_MS));
-  timers.set(key, timeoutId);
+function keyIsStillTransitioning(
+  key: string,
+  expandedGroupKeys: string[],
+  direction: TransitionDirection,
+): boolean {
+  return direction === "entering" ? expandedGroupKeys.includes(key) : !expandedGroupKeys.includes(key);
 }
 
 function updateKeys(setKeys: SetKeys, buildNext: (current: string[]) => string[]) {

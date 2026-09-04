@@ -62,11 +62,14 @@ describe("表格架构", () => {
     expect(content).not.toMatch(/已设置权限范围/);
   });
 
-  test("门户权限选择退出动画状态不会在每次渲染返回新数组", () => {
-    const file = join(sourceRoot, "pages/portal/components/PermissionSelector.tsx");
+  test("门户权限选择进出场动画状态在渲染期推进且不会每次渲染返回新数组", () => {
+    const file = join(sourceRoot, "pages/portal/components/useGroupTransitionKeys.ts");
     const content = readFileSync(file, "utf8");
 
-    expect(content).toMatch(/return useMemo\(\s*\(\) => exitingGroupKeys\.filter/);
+    // 收起时 exiting 集合必须与 isExpanded 同一次渲染就位(渲染期 setState),
+    // 放到 useEffect 里会让子行先卸载再挂回来, 收起动画就会闪一下。
+    expect(content).not.toMatch(/useEffect\(\(\) => \{[^}]*previousExpandedGroupKeys\.current/);
+    expect(content).toMatch(/if \(!stringListsAreEqual\(previousExpandedGroupKeys, expandedGroupKeys\)\)/);
     expect(content).toMatch(/stringListsAreEqual\(current, next\) \? current : next/);
   });
 });

@@ -56,7 +56,8 @@ export function PermissionSelector({
   disabled = false,
 }: PermissionSelectorProps) {
   const { locale, t } = useI18n();
-  const exitingGroupKeys = useExitingGroupKeys(expandedGroupKeys);
+  // 两个方向各自维护过渡集合, 都在渲染期同步推进(见 useGroupTransitionKeys)。
+  const exitingGroupKeys = useGroupTransitionKeys(expandedGroupKeys, "exiting");
   const enteringGroupKeys = useGroupTransitionKeys(expandedGroupKeys, "entering");
   const coveredKeySet = useMemo(() => new Set(coveredKeys), [coveredKeys]);
   // 展示态 = 直接勾选 ∪ 权限组覆盖; 提交载荷仍只用直接勾选(selectedKeys)。
@@ -136,14 +137,6 @@ export function PermissionSelector({
 
 /** 表格子组件内部继续用 flexRender 渲染 `<table aria-label={t("selector.ariaLabel")}>`。 */
 /** 工具栏子组件内部保留 `role="switch"` 与 `aria-label={t("selector.toolbar.showSelectedOnly")}`。 */
-function useExitingGroupKeys(expandedGroupKeys: string[]): string[] {
-  const exitingGroupKeys = useGroupTransitionKeys(expandedGroupKeys, "exiting");
-  // 参数化 hook 内部用 stringListsAreEqual(current, next) ? current : next 保持数组引用稳定。
-  return useMemo(
-    () => exitingGroupKeys.filter((key) => !expandedGroupKeys.includes(key)),
-    [expandedGroupKeys, exitingGroupKeys],
-  );
-}
 
 /** 无应用/加载中/加载失败/无数据四种占位态: 命中任一即整表让位给占位文案。 */
 function selectorPlaceholder(
