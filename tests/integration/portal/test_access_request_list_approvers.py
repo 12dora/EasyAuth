@@ -75,7 +75,7 @@ def test_my_requests_list_shows_current_approvers_for_submitted() -> None:
     # When: 员工读取「我的申请」列表。
     response = client.get(REQUESTS_API_URL)
 
-    # Then: submitted 行按分配 id 升序返回审批人姓名, 决定人为空。
+    # Then: submitted 行按分配 id 升序返回审批人姓名, 决定人为空, 三个时间戳均为 null。
     assert response.status_code == HTTPStatus.OK
     row = _row_by_id(response, access_request.id)
     assert first_assignment.id < second_assignment.id
@@ -86,6 +86,9 @@ def test_my_requests_list_shows_current_approvers_for_submitted() -> None:
     assert row["decided_by"] == ""
     assert row["decision_actor_type"] == ""
     assert row["decided_by_name"] is None
+    assert row["approved_at"] is None
+    assert row["applied_at"] is None
+    assert row["withdrawn_at"] is None
 
 
 def test_my_requests_list_hides_approvers_and_resolves_decided_by_name() -> None:
@@ -116,6 +119,9 @@ def test_my_requests_list_hides_approvers_and_resolves_decided_by_name() -> None
     assert row["decided_by"] == approver.authentik_user_id
     assert row["decision_actor_type"] == DECISION_ACTOR_USER
     assert row["decided_by_name"] == "已决审批人"
+    assert row["approved_at"] == access_request.approved_at.isoformat()
+    assert row["applied_at"] is None
+    assert row["withdrawn_at"] is None
 
 
 def test_my_requests_list_withdrawn_has_empty_approvers_and_null_decided_by_name() -> None:
@@ -145,6 +151,9 @@ def test_my_requests_list_withdrawn_has_empty_approvers_and_null_decided_by_name
     assert row["decided_by"] == ""
     assert row["decision_actor_type"] == ""
     assert row["decided_by_name"] is None
+    assert row["approved_at"] is None
+    assert row["applied_at"] is None
+    assert row["withdrawn_at"] == access_request.withdrawn_at.isoformat()
 
 
 def test_my_requests_list_resolves_approver_and_decider_names_in_fixed_queries() -> None:

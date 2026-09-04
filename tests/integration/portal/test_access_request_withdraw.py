@@ -53,6 +53,21 @@ def test_requester_can_withdraw_submitted_request_idempotently() -> None:
     assert first.json()["access_request"]["status_label"] == "已撤回"
     assert access_request.status == REQUEST_STATUS_WITHDRAWN
     assert access_request.withdrawn_at is not None
+    withdrawn_at = access_request.withdrawn_at.isoformat()
+    assert first.json()["access_request"]["withdrawn_at"] == withdrawn_at
+    assert second.json()["access_request"]["withdrawn_at"] == withdrawn_at
+    assert first.json()["access_request"]["approved_at"] is None
+    assert first.json()["access_request"]["applied_at"] is None
+    listed = client.get("/portal/api/v1/me/access-requests")
+    assert listed.status_code == HTTPStatus.OK
+    listed_row = next(
+        item
+        for item in listed.json()["data"]
+        if item["id"] == access_request.id
+    )
+    assert listed_row["withdrawn_at"] == withdrawn_at
+    assert listed_row["approved_at"] is None
+    assert listed_row["applied_at"] is None
     assert AuditLog.objects.filter(event_type="access_request_withdrawn").count() == 1
 
 

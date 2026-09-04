@@ -213,6 +213,9 @@ def _access_request_item(
         "decided_by_name": decided_by_name,
         "decided_at": datetime_value(access_request.decided_at),
         "decision_comment": access_request.decision_comment,
+        "approved_at": datetime_value(access_request.approved_at),
+        "applied_at": datetime_value(access_request.applied_at),
+        "withdrawn_at": datetime_value(access_request.withdrawn_at),
     }
 
 

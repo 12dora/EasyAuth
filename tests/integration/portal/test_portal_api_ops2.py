@@ -154,6 +154,15 @@ def test_ops2_portal_api_lists_access_requests_for_session_user() -> None:
     assert REQUEST_STATUS_APPROVED in body
     assert REQUEST_STATUS_GRANT_APPLIED in body
     assert "不应泄露" not in body
+    by_id = {item["id"]: item for item in items}
+    approved_row = by_id[approved.id]
+    applied_row = by_id[applied.id]
+    assert approved_row["approved_at"] == approved.approved_at.isoformat()
+    assert approved_row["applied_at"] is None
+    assert approved_row["withdrawn_at"] is None
+    assert applied_row["approved_at"] == applied.approved_at.isoformat()
+    assert applied_row["applied_at"] == applied.applied_at.isoformat()
+    assert applied_row["withdrawn_at"] is None
 
 
 def test_ops2_portal_api_post_access_request_uses_session_user_and_csrf() -> None:
