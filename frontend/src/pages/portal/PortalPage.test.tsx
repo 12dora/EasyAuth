@@ -381,7 +381,7 @@ describe("PortalPage access request form", () => {
     const fetchMock = permissionSelectorFetchMock({
       apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "" }],
       approver_options: [{ user_id: "app-owner", name: "应用负责人" }],
-      authorization_groups: [{ id: 11, app_key: "crm", key: "reader", kind: "role", name: "只读权限组" }],
+      authorization_groups: [{ id: 11, app_key: "crm", key: "reader", kind: "role", name: "只读权限组", grants: [] }],
       permission_groups: [],
       ungrouped_permissions: [],
     });
@@ -413,7 +413,7 @@ describe("PortalPage access request form", () => {
           apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: ["manager-001"] }],
           approver_options: [{ user_id: "manager-001", name: "直属主管" }],
           authorization_groups: [
-            { id: 11, app_key: "crm", key: "reader", kind: "role", name: "只读权限组", requestable: true, requires_approval: true },
+            { id: 11, app_key: "crm", key: "reader", kind: "role", name: "只读权限组", requestable: true, requires_approval: true, grants: [] },
           ],
           permission_groups: [],
           ungrouped_permissions: [],
@@ -497,7 +497,7 @@ describe("PortalPage access request form", () => {
             { user_id: "ops-owner", name: "运营负责人" },
           ],
           authorization_groups: [
-            { id: 11, app_key: "crm", key: "sales-reader", kind: "role", name: "销售只读", requestable: true, requires_approval: true },
+            { id: 11, app_key: "crm", key: "sales-reader", kind: "role", name: "销售只读", requestable: true, requires_approval: true, grants: [] },
             {
               id: 12,
               app_key: "crm",
@@ -507,6 +507,7 @@ describe("PortalPage access request form", () => {
               requestable: true,
               requires_approval: true,
               default_approver_user_ids: ["ops-owner"],
+              grants: [],
             },
           ],
           permission_groups: [],
@@ -967,6 +968,7 @@ describe("PortalPage access request form", () => {
               requestable: true,
               requires_approval: true,
               default_approver_user_ids: ["ops-owner"],
+              grants: [],
             },
           ],
           permission_groups: [],

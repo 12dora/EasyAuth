@@ -16,7 +16,7 @@ function catalogResponse() {
         { user_id: "boss", name: "老板" },
       ],
       authorization_groups: [
-        { id: 11, app_key: "crm", key: "reader", kind: "role", name: "只读", requestable: true, requires_approval: true },
+        { id: 11, app_key: "crm", key: "reader", kind: "role", name: "只读", requestable: true, requires_approval: true, grants: [] },
       ],
       permission_groups: [],
       // app_key 缺省 => 应用无关的未分组权限, FF-12 应在选定应用后仍然可见。

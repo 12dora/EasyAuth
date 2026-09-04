@@ -32,7 +32,8 @@ export interface AuthorizationGroupItem {
   default_approver_user_ids?: string[];
   approver_resolution_status?: string;
   scopes?: ScopeOption[];
-  grants?: AuthorizationGroupGrantRef[];
+  /** 权限组覆盖的权限范围, 由申请目录契约保证必然存在(没配置时是空数组)。 */
+  grants: AuthorizationGroupGrantRef[];
 }
 
 export interface ApproverOption {

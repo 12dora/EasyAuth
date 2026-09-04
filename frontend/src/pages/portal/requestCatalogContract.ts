@@ -55,13 +55,13 @@ function validateAuthorizationGroup(
   contractOptionalBoolean(item.requires_approval, `${path}.requires_approval`);
   contractOptionalStringArray(item.default_approver_user_ids, `${path}.default_approver_user_ids`);
   contractOptionalString(item.approver_resolution_status, `${path}.approver_resolution_status`);
-  if (item.grants !== undefined) {
-    contractArray(item.grants, `${path}.grants`).forEach((value, index) => {
-      const grant = contractRecord(value, `${path}.grants[${index}]`);
-      contractNonEmptyString(grant.permission_key, `${path}.grants[${index}].permission_key`);
-      contractNonEmptyString(grant.scope_key, `${path}.grants[${index}].scope_key`);
-    });
-  }
+  // 权限组覆盖范围是必答项: 后端 request_catalog_data 永远下发 grants(没有配置时是空数组),
+  // 缺了它前端会把"覆盖范围未知"当成"什么都不覆盖", 直接权限就会重复进载荷。
+  contractArray(item.grants, `${path}.grants`).forEach((value, index) => {
+    const grant = contractRecord(value, `${path}.grants[${index}]`);
+    contractNonEmptyString(grant.permission_key, `${path}.grants[${index}].permission_key`);
+    contractNonEmptyString(grant.scope_key, `${path}.grants[${index}].scope_key`);
+  });
 }
 
 function validatePermissionGroup(

@@ -51,7 +51,7 @@ function selectedManagedUsersTargets(
 ): Array<AuthorizationGroupItem | ScopedPermissionItem> {
   const targets: Array<AuthorizationGroupItem | ScopedPermissionItem> = [];
   for (const authorizationGroup of selectedAuthorizationGroups(values, catalogView)) {
-    if (authorizationGroup.grants?.some((grant) => grant.scope_key === "MANAGED_USERS")) {
+    if (authorizationGroup.grants.some((grant) => grant.scope_key === "MANAGED_USERS")) {
       targets.push(authorizationGroup);
     }
   }

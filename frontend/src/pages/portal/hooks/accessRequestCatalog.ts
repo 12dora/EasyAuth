@@ -60,7 +60,7 @@ export function groupCoveredSelectionKeys(groupKeys: string[], catalogView: Cata
   return uniqueStrings(
     groupKeys.flatMap((groupKey) => {
       const group = catalogView.authorizationGroups.find((item) => item.key === groupKey);
-      return (group?.grants ?? []).map((grant) => directGrantSelectionKey(grant.permission_key, grant.scope_key));
+      return group ? group.grants.map((grant) => directGrantSelectionKey(grant.permission_key, grant.scope_key)) : [];
     }),
   );
 }
