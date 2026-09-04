@@ -12,9 +12,12 @@ const SCOPE_SHORTCUTS: Array<{ scopeKey: string; labelKey: MessageKey }> = [
 
 /** 全选拆分按钮: 左半直接全选, 右半展开按范围全选的菜单。 */
 export function PermissionSelectorScopeMenu({
+  disabled,
   onSelectAll,
   onSelectScope,
 }: {
+  /** 两半都会往目标里加权限: 禁用时连菜单也不展开, 否则菜单项点下去动作层直接抛错。 */
+  disabled: boolean;
   onSelectAll: () => void;
   onSelectScope: (scopeKey: string) => void;
 }) {
@@ -54,7 +57,12 @@ export function PermissionSelectorScopeMenu({
 
   return (
     <div ref={selectScopeMenuRef} className="permission-selector__toolbar-split-button">
-      <button type="button" className="permission-selector__toolbar-button" onClick={onSelectAll}>
+      <button
+        type="button"
+        className="permission-selector__toolbar-button"
+        disabled={disabled}
+        onClick={onSelectAll}
+      >
         {t("selector.toolbar.selectAll")}
       </button>
       <button
@@ -63,11 +71,12 @@ export function PermissionSelectorScopeMenu({
         aria-label={t("selector.toolbar.selectScopeMenu")}
         aria-haspopup="menu"
         aria-expanded={selectScopeMenuIsOpen}
+        disabled={disabled}
         onClick={() => setSelectScopeMenuIsOpen((isOpen) => !isOpen)}
       >
         <ChevronDown size={15} aria-hidden="true" />
       </button>
-      {selectScopeMenuIsOpen ? (
+      {selectScopeMenuIsOpen && !disabled ? (
         <div role="menu" className="permission-selector__toolbar-menu">
           {SCOPE_SHORTCUTS.map((shortcut) => (
             <button
