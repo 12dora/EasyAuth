@@ -6,6 +6,7 @@ import { MemoryRouter, Outlet, Route, Routes, useLocation } from "react-router-d
 import { describe, expect, test, vi } from "vitest";
 
 import { PortalPage } from "./PortalPage";
+import { formatAppDisplayName } from "../../lib/appDisplayName";
 import {
   ANTD_TEST_TIMEOUT_MS,
   columnSortOrder,
@@ -1966,52 +1967,6 @@ describe("PortalPage tables", () => {
     }
   });
 
-  test("申请历史表头排序是服务端排序: 带 ordering 请求、回到第 1 页, 指示器跟着走", async () => {
-    const fetchMock = vi.fn<typeof fetch>(async (input) => {
-      const url = String(input);
-      if (!url.startsWith("/portal/api/v1/me/access-requests?")) {
-        throw new Error(`Unexpected fetch: ${url}`);
-      }
-      const page = new URLSearchParams(url.split("?")[1]).get("page") ?? "1";
-      return jsonResponse({
-        data: [portalRequestRow({ id: Number(page), app_key: `app-${page}`, app_name: `应用${page}` })],
-        pagination: { page: Number(page), page_size: 20, total_items: 21, total_pages: 2 },
-      });
-    });
-    vi.stubGlobal("fetch", fetchMock);
-    const user = userEvent.setup();
-
-    try {
-      renderPortalPage("/portal/requests");
-
-      // 表格不设默认排序: 首屏不带 ordering, 表头也没有指示器。
-      expect(await screen.findByText("应用1")).toBeVisible();
-      expect(columnSortOrder("提交时间")).toBeNull();
-
-      await user.click(screen.getByTitle("下一页"));
-      await screen.findByText("应用2");
-
-      await sortByColumn(user, "状态");
-      await waitFor(() =>
-        expect(lastFetchUrl(fetchMock)).toBe(
-          "/portal/api/v1/me/access-requests?page=1&page_size=20&ordering=status",
-        ),
-      );
-      expect(columnSortOrder("状态")).toBe("ascend");
-      expect(columnSortOrder("提交时间")).toBeNull();
-
-      await sortByColumn(user, "状态");
-      await waitFor(() =>
-        expect(lastFetchUrl(fetchMock)).toBe(
-          "/portal/api/v1/me/access-requests?page=1&page_size=20&ordering=-status",
-        ),
-      );
-      expect(columnSortOrder("状态")).toBe("descend");
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
   test("尾斜杠的即将过期视图保持显式 view，并把页大小发送给服务端", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
@@ -2094,105 +2049,6 @@ describe("PortalPage tables", () => {
     }
   });
 
-  test("申请历史展示同意意见、限时到期时间，并使用服务端分页", async () => {
-    const fetchMock = vi.fn<typeof fetch>(async (input) => {
-      const url = String(input);
-      if (url === "/portal/api/v1/me/access-requests?page=1&page_size=20") {
-        return jsonResponse({
-          data: [
-            portalRequestRow({
-              id: 9,
-              app_key: "crm",
-              app_name: "CRM",
-              status: "approved",
-              status_label: "已同意",
-              grant_type: "timed",
-              grant_expires_at: "2026-08-01T10:00:00Z",
-              submitted_at: "2026-07-01T10:00:00Z",
-              reason: "处理工单",
-              decided_at: "2026-07-02T10:00:00Z",
-              decided_by: "manager-001",
-              decision_actor_type: "user",
-              decided_by_name: "张主管",
-              decision_comment: "同意按期开放",
-              authorization_groups: [{ key: "sales-reader", kind: "role", name: "销售只读" }],
-              direct_grants: [{ permission: "orders.refund.approve", permission_name: "审批退款", scope: "TEAM" }],
-            }),
-          ],
-          pagination: { page: 1, page_size: 20, total_items: 21, total_pages: 2 },
-        });
-      }
-      if (url === "/portal/api/v1/me/access-requests?page=2&page_size=20") {
-        return jsonResponse({
-          data: [portalRequestRow({ id: 21, app_key: "erp", app_name: "ERP", reason: "第二页申请" })],
-          pagination: { page: 2, page_size: 20, total_items: 21, total_pages: 2 },
-        });
-      }
-      throw new Error(`Unexpected fetch: ${url}`);
-    });
-
-    vi.stubGlobal("fetch", fetchMock);
-
-    try {
-      renderPortalPage("/portal/requests");
-
-      expect(await screen.findByText("销售只读 [角色]")).toBeVisible();
-      expect(screen.getByText("审批退款 (orders.refund.approve):TEAM")).toBeVisible();
-      expect(screen.getByText(/审批意见：同意按期开放/)).toBeVisible();
-      expect(screen.getAllByText(/2026/).length).toBeGreaterThanOrEqual(3);
-
-      const nextPage = screen.getByTitle("下一页");
-      expect(nextPage).not.toHaveClass("ant-pagination-disabled");
-      await userEvent.click(nextPage);
-
-      expect(await screen.findByText("ERP")).toBeVisible();
-      expect(fetchMock).toHaveBeenCalledWith(
-        "/portal/api/v1/me/access-requests?page=2&page_size=20",
-        expect.anything(),
-      );
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  /**
-   * 「我的申请」表格的列宽不变量。
-   *
-   * AppTable 固定 `tableLayout: "fixed"`, 列宽只认 `<colgroup>`: 没声明 width 的列只能去
-   * 分摊 `scroll.x`(= minWidth) 减掉定宽列之后的剩余量。线上就是这么坏掉的 —— 定宽列之和
-   * 逼近 minWidth 时剩余量趋近 0, 权限组 / 直接授权 / 原因被压成一个字宽, 中文表头竖排成
-   * 一列字、表头行被撑得极高。所以两件事必须一起锁住: 每列都声明宽度, 且 minWidth 恰好是
-   * 它们的和(有了这个和, 剩余量恒为 0, 布局不再依赖浏览器怎么分摊)。
-   */
-  test("我的申请表格每列都声明宽度, 且 minWidth 等于列宽之和", async () => {
-    const fetchMock = vi.fn<typeof fetch>(async (input) => {
-      const url = String(input);
-      if (url === "/portal/api/v1/me/access-requests?page=1&page_size=20") {
-        return jsonResponse({
-          data: [portalRequestRow({ id: 1, app_name: "CRM" })],
-          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
-        });
-      }
-      throw new Error(`Unexpected fetch: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    try {
-      renderPortalPage("/portal/requests");
-      await screen.findByText("CRM");
-
-      const table = screen.getByRole("table", { name: "我的申请记录列表" });
-      const widths = declaredColumnWidths(table);
-
-      // 状态 / 审批人 / 应用 / 权限组 / 直接授权 / 期限 / 过期时间 / 提交时间 / 原因 / 操作。
-      expect(widths).toEqual([200, 140, 140, 200, 240, 110, 170, 170, 200, 180]);
-      expect(widths).toHaveLength(table.querySelectorAll("thead.ant-table-thead th").length);
-      expect(tableScrollWidth(table)).toBe(widths.reduce((sum, width) => sum + width, 0));
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
   /** 我的权限 / 即将过期两张表共用同一份列定义, 同一条不变量对它们同样成立。 */
   test("我的权限表格每列都声明宽度, 且 minWidth 等于列宽之和", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
@@ -2223,145 +2079,6 @@ describe("PortalPage tables", () => {
     }
   });
 
-  /**
-   * 列宽写死之后, 等宽的多值列还要能断行。
-   *
-   * 申请历史的直接授权列渲染的是 `名称 (key):scope、…` 这种没有空格的串,
-   * 浏览器找不到断行点; 这一列又刻意关掉了 ellipsis(内容是多值文本, 该换行而不是截断),
-   * 所以必须由 `MONO_WRAP_TEXT_CLASS` 允许在任意字符处断开, 否则整串会溢出到邻格上。
-   */
-  test("申请历史的直接授权列在固定列宽下可任意断行", async () => {
-    const fetchMock = vi.fn<typeof fetch>(async (input) => {
-      const url = String(input);
-      if (url === "/portal/api/v1/me/access-requests?page=1&page_size=20") {
-        return jsonResponse({
-          data: [
-            portalRequestRow({
-              id: 1,
-              app_name: "CRM",
-              direct_grants: [{ permission: "orders.refund.approve", permission_name: "审批退款", scope: "TEAM" }],
-            }),
-          ],
-          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
-        });
-      }
-      throw new Error(`Unexpected fetch: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    try {
-      renderPortalPage("/portal/requests");
-
-      const directGrantText = await screen.findByText("审批退款 (orders.refund.approve):TEAM");
-      expect(directGrantText.tagName).toBe("CODE");
-      expect(directGrantText).toHaveClass("whitespace-normal", "break-all");
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  test("申请历史审批人列: 待审批给当前审批人, 已决给决定人, 无姓名回退 actor id", async () => {
-    const fetchMock = vi.fn<typeof fetch>(async (input) => {
-      const url = String(input);
-      if (url === "/portal/api/v1/me/access-requests?page=1&page_size=20") {
-        return jsonResponse({
-          data: [
-            portalRequestRow({
-              id: 1,
-              app_name: "待审应用",
-              status: "submitted",
-              status_label: "等待审批",
-              current_approvers: [
-                { user_id: "manager-001", name: "张主管" },
-                { user_id: "owner-002", name: "李负责人" },
-              ],
-            }),
-            portalRequestRow({
-              id: 2,
-              app_name: "已批准应用",
-              status: "approved",
-              status_label: "已批准",
-              decided_at: "2026-07-02T10:00:00Z",
-              decided_by: "manager-001",
-              decision_actor_type: "user",
-              decided_by_name: "张主管",
-            }),
-            portalRequestRow({
-              id: 3,
-              app_name: "代审应用",
-              status: "approved",
-              status_label: "已批准",
-              decided_at: "2026-07-02T10:00:00Z",
-              decided_by: "console-admin-9",
-              decision_actor_type: "console_admin",
-              decided_by_name: null,
-            }),
-            portalRequestRow({ id: 4, app_name: "已撤回应用", status: "withdrawn", status_label: "已撤回" }),
-          ],
-          pagination: { page: 1, page_size: 20, total_items: 4, total_pages: 1 },
-        });
-      }
-      throw new Error(`Unexpected fetch: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    try {
-      renderPortalPage("/portal/requests");
-
-      expect(await screen.findByText("待审应用")).toBeVisible();
-      expect(screen.getByRole("columnheader", { name: "审批人" })).toBeVisible();
-      expect(approverCellText("待审应用")).toBe("张主管、李负责人");
-      expect(approverCellText("已批准应用")).toBe("张主管");
-      // 后端解析不出姓名时给 null, 前端展示 actor id 而不是空白。
-      expect(approverCellText("代审应用")).toBe("console-admin-9");
-      expect(approverCellText("已撤回应用")).toBe("-");
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  test("申请历史对 submitted 申请显示撤回并调用撤回端点", async () => {
-    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
-      const url = String(input);
-      if (url === "/portal/api/v1/me/access-requests?page=1&page_size=20") {
-        return jsonResponse({
-          data: [
-            portalRequestRow({
-              id: 88,
-              app_key: "crm",
-              app_name: "CRM",
-              status: "submitted",
-              status_label: "已提交",
-              current_approvers: [{ user_id: "manager-001", name: "张主管" }],
-            }),
-          ],
-          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
-        });
-      }
-      if (url === "/portal/api/v1/me/access-requests/88/withdraw" && init?.method === "POST") {
-        return jsonResponse({ access_request: portalRequestRow({ id: 88, status: "withdrawn", status_label: "已撤回" }) });
-      }
-      throw new Error(`Unexpected fetch: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    try {
-      renderPortalPage("/portal/requests");
-
-      await screen.findByText("CRM");
-      await userEvent.click(screen.getByRole("button", { name: "撤回" }));
-
-      await waitFor(() =>
-        expect(fetchMock).toHaveBeenCalledWith(
-          "/portal/api/v1/me/access-requests/88/withdraw",
-          expect.objectContaining({ method: "POST" }),
-        ),
-      );
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
   test.each([
     ["缺少 data", {}],
     ["data 为 null", { data: null, pagination: { page: 1, page_size: 20, total_items: 0, total_pages: 0 } }],
@@ -2379,80 +2096,43 @@ describe("PortalPage tables", () => {
     }
   });
 
-  test("申请历史在 data 为 null 时明确报错", async () => {
+  test("授权表的应用列按「别名 + 技术名」展示", async () => {
     vi.stubGlobal(
       "fetch",
       vi.fn<typeof fetch>(async () =>
-        jsonResponse({ data: null, pagination: { page: 1, page_size: 20, total_items: 0, total_pages: 0 } }),
+        jsonResponse({
+          data: [portalGrantRow({ app_key: "easycustoms", app_name: "EasyCustoms", app_alias: "海关数据" })],
+          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+        }),
       ),
     );
 
     try {
-      renderPortalPage("/portal/requests");
-
-      expect(await screen.findByText("申请记录加载失败")).toBeVisible();
-      expect(screen.getByText("申请记录列表响应格式无效：data 必须是数组")).toBeVisible();
-      expect(screen.queryByText("暂无申请记录")).not.toBeInTheDocument();
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  test("两张表的应用列都按「别名 (技术名)」展示", async () => {
-    const fetchMock = vi.fn<typeof fetch>(async (input) => {
-      const url = String(input);
-      if (url === "/portal/api/v1/me/grants?page=1&page_size=20") {
-        return jsonResponse({
-          data: [portalGrantRow({ app_key: "easycustoms", app_name: "EasyCustoms", app_alias: "海关数据" })],
-          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
-        });
-      }
-      if (url === "/portal/api/v1/me/access-requests?page=1&page_size=20") {
-        return jsonResponse({
-          data: [portalRequestRow({ app_key: "easycustoms", app_name: "EasyCustoms", app_alias: "海关数据" })],
-          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
-        });
-      }
-      throw new Error(`Unexpected fetch: ${url}`);
-    });
-    vi.stubGlobal("fetch", fetchMock);
-
-    try {
       renderPortalPage("/portal");
-      expect(await screen.findByText("海关数据 (EasyCustoms)")).toBeVisible();
+      // 展示名的拼法由 formatAppDisplayName 单点决定(它自己有用例), 这里只锁「这一列用它」。
+      expect(await screen.findByText(formatAppDisplayName({ name: "EasyCustoms", alias: "海关数据" }))).toBeVisible();
       // 技术名仍以等宽 app_key 的形式留在第二行, 供对接排查用。
       expect(screen.getByText("easycustoms")).toBeVisible();
     } finally {
       vi.unstubAllGlobals();
     }
-
-    vi.stubGlobal("fetch", fetchMock);
-    try {
-      renderPortalPage("/portal/requests");
-      expect(await screen.findByText("海关数据 (EasyCustoms)")).toBeVisible();
-    } finally {
-      vi.unstubAllGlobals();
-    }
   });
 
-  test.each([
-    ["授权", "/portal", "授权加载失败", "授权列表 data[0].app_alias 必须是字符串"],
-    ["申请", "/portal/requests", "申请记录加载失败", "申请记录列表 data[0].app_alias 必须是字符串"],
-  ])("%s列表缺少 app_alias 时明确报错", async (_caseName, entry, title, message) => {
+  test("授权列表缺少 app_alias 时明确报错", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn<typeof fetch>(async (input) => {
-        const row = String(input).includes("access-requests") ? portalRequestRow() : portalGrantRow();
+      vi.fn<typeof fetch>(async () => {
+        const row = portalGrantRow();
         delete (row as Record<string, unknown>).app_alias;
         return jsonResponse({ data: [row], pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 } });
       }),
     );
 
     try {
-      renderPortalPage(entry);
+      renderPortalPage("/portal");
 
-      expect(await screen.findByText(title)).toBeVisible();
-      expect(screen.getByText(message)).toBeVisible();
+      expect(await screen.findByText("授权加载失败")).toBeVisible();
+      expect(screen.getByText("授权列表 data[0].app_alias 必须是字符串")).toBeVisible();
     } finally {
       vi.unstubAllGlobals();
     }
@@ -2534,15 +2214,6 @@ function expiresAtCellText(appName: string): string {
   return within(row).getAllByRole("cell")[3].textContent ?? "";
 }
 
-/** 申请表里某一行的「审批人」单元格文本; 该列固定紧跟在状态列之后。 */
-function approverCellText(appName: string): string {
-  const row = screen.getByText(appName).closest("tr");
-  if (row === null) {
-    throw new Error(`未找到应用 ${appName} 所在的表格行`);
-  }
-  return within(row).getAllByRole("cell")[1].textContent ?? "";
-}
-
 function lastFetchUrl(fetchMock: ReturnType<typeof vi.fn<typeof fetch>>) {
   return String(fetchMock.mock.calls.at(-1)?.[0] ?? "");
 }
@@ -2576,36 +2247,6 @@ function portalExpandedGrant(overrides: Record<string, unknown> = {}) {
     scope_name_en: "Self",
     source_type: "direct",
     source_key: null,
-    ...overrides,
-  };
-}
-
-function portalRequestRow(overrides: Record<string, unknown> = {}) {
-  return {
-    id: 1,
-    app_key: "crm",
-    app_name: "CRM",
-    app_alias: "",
-    request_type: "grant",
-    base_grant_id: null,
-    base_grant_revision: null,
-    status: "pending",
-    status_label: "待审批",
-    grant_type: "permanent",
-    grant_expires_at: null,
-    reason: "申请权限",
-    submitted_at: "2026-07-01T10:00:00Z",
-    authorization_groups: [],
-    direct_grants: [],
-    current_approvers: [],
-    decided_by: "",
-    decision_actor_type: "",
-    decided_by_name: null,
-    decided_at: null,
-    decision_comment: "",
-    approved_at: null,
-    applied_at: null,
-    withdrawn_at: null,
     ...overrides,
   };
 }

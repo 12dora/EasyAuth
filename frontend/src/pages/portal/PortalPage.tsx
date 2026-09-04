@@ -1,5 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
 import { useNavigate, useOutletContext } from "react-router-dom";
 
 import type { AppShellOutletContext } from "../../components/AppShell";
@@ -15,43 +15,29 @@ import {
   MONO_TEXT_CLASS,
   RowActionButton,
   actionsColumn,
-  dateTimeColumn,
   serverSortColumn,
   textColumn,
 } from "../../components/antd/columns";
 import { PageState } from "../../components/ui/PageState";
 
-
-import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
 import { apiRequest } from "../../lib/api";
 import { formatAppDisplayName } from "../../lib/appDisplayName";
-import {
-  accessRequestStatusLabel,
-  badgeToneForAccessRequestStatus,
-  formatDateTime,
-  grantTypeLabel,
-} from "../../lib/status";
 import type { Translator } from "../../lib/status";
 import { useI18n } from "../../i18n/I18nProvider";
-import { formatAuthorizationGroupLabel } from "./authorizationGroupLabel";
 import { AccessRequestForm } from "./components/AccessRequestForm";
 import { GrantPermissionsCell } from "./components/GrantPermissionsCell";
 import { PortalApprovalsSection } from "./components/PortalApprovalsSection";
+import { PortalRequestsSection } from "./components/PortalRequestsSection";
 import { PortalPreOffboardDialog } from "./PortalPreOffboardDialog";
-import {
-  parsePortalGrantList,
-  parsePortalRequestList,
-  type PortalGrantRow,
-  type PortalListPayload,
-  type PortalRequestRow,
-} from "./portalListPayload";
+import { GrantExpiryCell } from "./grantExpiry";
+import { formatGrantGroupNames } from "./grantGroupNames";
+import { parsePortalGrantList, type PortalGrantRow } from "./portalListPayload";
+import { PORTAL_DEFAULT_PAGE_SIZE, useClampPage } from "./portalTable";
 
 export type PortalView = "grants" | "request" | "requests" | "expiring" | "approvals";
-
-const DEFAULT_PAGE_SIZE = 20;
 
 /**
  * 授权表的列 key -> 后端 `ordering` 字段。
@@ -61,13 +47,7 @@ const DEFAULT_PAGE_SIZE = 20;
  * 应用列同时显示名字与 app_key, 排序按后端默认序的那一个(app_key)。
  */
 const GRANT_ORDERING_FIELDS = { app: "app_key", grant_expires_at: "expires_at" } as const;
-/** 申请表: 提交时间列的 key 是 payload 的 submitted_at, 后端公开的排序字段名叫 created_at。 */
-const REQUEST_ORDERING_FIELDS = {
-  submitted_at: "created_at",
-  status: "status",
-  app: "app_key",
-  grant_expires_at: "expires_at",
-} as const;
+
 export function PortalPage({ view }: { view: PortalView }) {
   const { t } = useI18n();
   const outletContext = useOutletContext<AppShellOutletContext | null>();
@@ -101,7 +81,7 @@ export function PortalPage({ view }: { view: PortalView }) {
           emptyText={t("portal.grants.emptyExpiring")}
         />
       ) : null}
-      {view === "requests" ? <PortalRequestSection /> : null}
+      {view === "requests" ? <PortalRequestsSection /> : null}
       {view === "request" ? <AccessRequestForm currentUserId={currentUserId} /> : null}
       {view === "approvals" ? <PortalApprovalsSection /> : null}
       {preOffboardOpen ? <PortalPreOffboardDialog onClose={() => setPreOffboardOpen(false)} /> : null}
@@ -121,7 +101,7 @@ function PortalGrantSection({
 }) {
   const { t } = useI18n();
   const serverTable = useServerTable<PortalGrantRow>({
-    defaultPageSize: DEFAULT_PAGE_SIZE,
+    defaultPageSize: PORTAL_DEFAULT_PAGE_SIZE,
     sortParam: ORDERING_PARAM,
     serializeSort: orderingSerializer(GRANT_ORDERING_FIELDS),
   });
@@ -156,8 +136,6 @@ function PortalGrantSection({
       textColumn<PortalGrantRow>({
         key: "groups",
         title: t("portal.column.groups"),
-        // 这张表只给员工看「我在哪些权限组里」, 组名后面再挂一个 [角色] / [权限包]
-        // 是给管理员分辨模型用的, 与员工的问题无关, 因此只显示组名。
         getValue: (row) => formatGrantGroupNames(row.groups),
         ellipsis: false,
         width: 200,
@@ -173,7 +151,9 @@ function PortalGrantSection({
           key: "grant_expires_at",
           title: t("portal.column.expiresAt"),
           width: 220,
-          render: (_value: unknown, row: PortalGrantRow) => <GrantExpiryCell row={row} />,
+          render: (_value: unknown, row: PortalGrantRow) => (
+            <GrantExpiryCell grantType={row.grant_type} expiresAt={row.grant_expires_at} />
+          ),
         },
         sort,
       ),
@@ -212,166 +192,6 @@ function PortalGrantSection({
   );
 }
 
-function PortalRequestSection() {
-  const { t } = useI18n();
-  const queryClient = useQueryClient();
-  const serverTable = useServerTable<PortalRequestRow>({
-    defaultPageSize: DEFAULT_PAGE_SIZE,
-    sortParam: ORDERING_PARAM,
-    serializeSort: orderingSerializer(REQUEST_ORDERING_FIELDS),
-  });
-  const sort = serverTable.query;
-  // ordering 必须一起进查询串和查询键, 否则点了表头也不会重新请求。
-  const requestsSearch = serverTableQuery(serverTable.params);
-  const query = useQuery({
-    queryKey: ["portal", "requests", requestsSearch],
-    queryFn: async () =>
-      parsePortalRequestList(await apiRequest<unknown>(`/portal/api/v1/me/access-requests?${requestsSearch}`)),
-  });
-  const withdrawMutation = useMutation({
-    mutationFn: (requestId: number) =>
-      apiRequest(`/portal/api/v1/me/access-requests/${requestId}/withdraw`, {
-        method: "POST",
-        body: {},
-      }),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["portal", "requests"] });
-      void queryClient.invalidateQueries({ queryKey: ["portal", "approvals"] });
-    },
-  });
-  const requests = query.data?.data ?? [];
-  serverTable.setTotal(query.data?.pagination.total_items);
-  useClampPage(query.data, serverTable.query.page, serverTable.setPage);
-  const columns = useMemo<ColumnsType<PortalRequestRow>>(
-    () => [
-      serverSortColumn(
-        {
-          key: "status",
-          title: t("common.status"),
-          width: 200,
-          render: (_value: unknown, row: PortalRequestRow) => (
-            <div className="flex min-w-0 flex-col gap-1">
-              <span>
-                <Badge tone={badgeToneForAccessRequestStatus(row.status)}>
-                  {row.status_label ?? accessRequestStatusLabel(t, row.status)}
-                </Badge>
-              </span>
-              {row.decision_comment ? (
-                <span className="whitespace-normal text-xs leading-4 text-ink-faint">
-                  {t("approvals.comment")}：{row.decision_comment}（{formatDateTime(row.decided_at)}）
-                </span>
-              ) : null}
-            </div>
-          ),
-        },
-        sort,
-      ),
-      textColumn<PortalRequestRow>({
-        key: "approver",
-        title: t("portal.requests.columns.approver"),
-        getValue: (row) => formatApprovers(t, row),
-        width: 140,
-      }),
-      // 排序在后端(ordering=app_key): 预设的 localeCompare 只会重排当前页。
-      serverSortColumn(
-        textColumn<PortalRequestRow>({
-          key: "app",
-          title: t("common.app"),
-          getValue: (row) => formatAppDisplayName({ name: row.app_name, alias: row.app_alias }),
-          width: 140,
-        }),
-        sort,
-      ),
-      textColumn<PortalRequestRow>({
-        key: "groups",
-        title: t("portal.column.groups"),
-        getValue: (row) => formatGroups(t, row.authorization_groups),
-        ellipsis: false,
-        width: 200,
-      }),
-      textColumn<PortalRequestRow>({
-        key: "direct_grants",
-        title: t("portal.column.directGrants"),
-        getValue: (row) => formatDirectGrants(row.direct_grants),
-        ellipsis: false,
-        mono: true,
-        width: 240,
-      }),
-      textColumn<PortalRequestRow>({
-        key: "term",
-        title: t("portal.column.term"),
-        getValue: (row) => grantTypeLabel(t, row.grant_type),
-        width: 110,
-      }),
-      serverSortColumn(
-        dateTimeColumn<PortalRequestRow>({ key: "grant_expires_at", title: t("portal.column.expiresAt"), sorter: false }),
-        sort,
-      ),
-      serverSortColumn(
-        dateTimeColumn<PortalRequestRow>({ key: "submitted_at", title: t("portal.column.submittedAt"), sorter: false }),
-        sort,
-      ),
-      textColumn<PortalRequestRow>({ key: "reason", title: t("portal.column.reason"), ellipsis: false, width: 200 }),
-      actionsColumn<PortalRequestRow>({
-        render: (row) => <WithdrawAction mutation={withdrawMutation} row={row} />,
-      }),
-    ],
-    [sort, t, withdrawMutation],
-  );
-
-  return (
-    <>
-      {query.error && requests.length > 0 ? (
-        <StatusBanner live="alert" tone="signal" title={t("portal.requests.loadFailed")} message={(query.error as Error).message} />
-      ) : null}
-      {withdrawMutation.error ? (
-        <StatusBanner live="alert" tone="signal" title={t("portal.requests.withdrawFailed")} message={(withdrawMutation.error as Error).message} />
-      ) : null}
-      {query.error && requests.length === 0 ? (
-        <PageState tone="signal" title={t("portal.requests.loadFailed")} description={(query.error as Error).message} />
-      ) : (
-        <AppTable<PortalRequestRow>
-          {...serverTable.tableProps}
-          ariaLabel={t("portal.requests.ariaLabel")}
-          columns={columns}
-          dataSource={requests}
-          emptyDescription={t("portal.requests.emptyDescription")}
-          emptyTitle={t("portal.requests.empty")}
-          loading={query.isLoading}
-          // 每一列都必须显式声明宽度, minWidth 必须正好等于它们的和 ——
-          // AppTable 固定 `tableLayout: "fixed"`, 无宽度的列只能分摊 minWidth 的剩余量,
-          // 固定列一多剩余量就趋近 0, 权限组 / 直接授权 / 原因会被压成一个字宽,
-          // 表头竖排成一列字(线上 iam.jiefakj.com 的「我的申请」就这么坏掉的)。
-          // 状态 200 + 审批人 140 + 应用 140 + 权限组 200 + 直接授权 240 + 期限 110
-          // + 过期时间 170 + 提交时间 170 + 原因 200 + 操作 180 = 1750。
-          // 加列或改列宽时这个和要一起改, `PortalPage.test.tsx` 会拦住不一致。
-          minWidth={1750}
-          rowKey="id"
-        />
-      )}
-    </>
-  );
-}
-
-/**
- * 过期时间列合并了原来的「期限」列。
- *
- * 期限本身只有三种取值, 单独占一列却又和过期时间必然一起读(长期授权的过期时间恒为空、
- * 限时授权的期限恒为「限时」), 因此并到一格里: 长期给期限标签, 限时给到期时刻,
- * 混合期限在时刻后补上标签。
- */
-function GrantExpiryCell({ row }: { row: PortalGrantRow }) {
-  const { formatDateTime, t } = useI18n();
-  if (row.grant_type === "permanent") {
-    return <span className="whitespace-nowrap">{grantTypeLabel(t, row.grant_type)}</span>;
-  }
-  const expiresAt = formatDateTime(row.grant_expires_at);
-  if (row.grant_type === "mixed") {
-    return <span className="tabular">{t("portal.grants.expiresAtMixed", { expiresAt, term: grantTypeLabel(t, row.grant_type) })}</span>;
-  }
-  return <span className="whitespace-nowrap tabular">{expiresAt}</span>;
-}
-
 /**
  * 「更新权限」: 带着当前授权跳到申请页, 申请类型预置为变更。
  *
@@ -396,32 +216,6 @@ function UpdateGrantAction({ row }: { row: PortalGrantRow }) {
   );
 }
 
-/** 只有 submitted 状态的申请可撤回, 其余行留 "-" 保持列宽稳定。 */
-function WithdrawAction({
-  mutation,
-  row,
-}: {
-  mutation: ReturnType<typeof useMutation<unknown, Error, number>>;
-  row: PortalRequestRow;
-}) {
-  const { t } = useI18n();
-  const requestId = row.id;
-  if (row.status !== "submitted" || typeof requestId !== "number") {
-    return <>-</>;
-  }
-  return (
-    <RowActionButton
-      type="button"
-      variant="ghost-danger"
-      loading={mutation.isPending && mutation.variables === requestId}
-      disabled={mutation.isPending}
-      onClick={() => mutation.mutate(requestId)}
-    >
-      {t("portal.requests.withdraw")}
-    </RowActionButton>
-  );
-}
-
 function viewTitle(t: Translator, view: PortalView): string {
   switch (view) {
     case "request":
@@ -435,62 +229,4 @@ function viewTitle(t: Translator, view: PortalView): string {
     default:
       return t("nav.portal.myPermissions");
   }
-}
-
-/** 服务端总页数收缩时把当前页钳制回最后一页, 否则会停在不存在的空页。 */
-function useClampPage<T>(
-  payload: PortalListPayload<T> | undefined,
-  page: number,
-  setPage: (page: number) => void,
-) {
-  const totalPages = payload?.pagination.total_pages;
-  useEffect(() => {
-    if (totalPages === undefined) {
-      return;
-    }
-    const lastPage = Math.max(1, totalPages);
-    if (page > lastPage) {
-      setPage(lastPage);
-    }
-  }, [page, setPage, totalPages]);
-}
-
-function formatGroups(
-  t: Translator,
-  groups: PortalGrantRow["groups"] | PortalRequestRow["authorization_groups"] | undefined,
-): string {
-  if (!groups || groups.length === 0) {
-    return "-";
-  }
-  return groups.map((group) => formatAuthorizationGroupLabel(group, t)).join("、");
-}
-
-/** 「我的权限」的权限组列: 只有组名, 不带 [角色] / [权限包] 这类模型标签。 */
-function formatGrantGroupNames(groups: PortalGrantRow["groups"]): string {
-  if (groups.length === 0) {
-    return "-";
-  }
-  return groups.map((group) => group.name || group.key).join("、");
-}
-
-/**
- * 审批人列: 待审批的申请给出当前审批人, 已决的申请给出决定人。
- *
- * 决定人姓名由后端解析 UserMirror 得到, 解析不出时是 null —— 这时退回展示 actor id,
- * 申请人至少还能看到是谁处理的; 已撤回 / 未决且无审批人的行由 textColumn 统一渲染 "-"。
- */
-function formatApprovers(t: Translator, row: PortalRequestRow): string {
-  if (row.status === "submitted") {
-    return row.current_approvers.map((approver) => approver.name).join(t("portal.requests.approverSeparator"));
-  }
-  return row.decided_by_name ?? row.decided_by;
-}
-
-function formatDirectGrants(directGrants: PortalRequestRow["direct_grants"] | undefined): string {
-  if (!directGrants || directGrants.length === 0) {
-    return "-";
-  }
-  return directGrants
-    .map((grant) => `${grant.permission_name ?? grant.permission ?? "-"} (${grant.permission ?? "-"}):${grant.scope ?? "-"}`)
-    .join("、");
 }
