@@ -225,6 +225,28 @@ describe("PortalRequestsSection 表格", () => {
     }
   });
 
+  test("撤回按钮恒在: 只有等待审批可点, 其余行置灰并解释原因", async () => {
+    stubRequests([
+      requestRow({ id: 1, app_name: "待审应用", status: "submitted", status_label: "等待审批" }),
+      requestRow({ id: 2, app_name: "已授权应用", status: "grant_applied", status_label: "已授权", applied_at: "2026-07-02T10:05:00Z" }),
+    ]);
+    const user = userEvent.setup();
+
+    try {
+      renderRequests();
+      await screen.findByText("待审应用");
+
+      const [pending, applied] = screen.getAllByRole("button", { name: "撤回" });
+      expect(pending).toBeEnabled();
+      expect(applied).toBeDisabled();
+
+      await user.hover(applied);
+      expect(await screen.findByRole("tooltip")).toHaveTextContent("只有等待审批的申请可以撤回");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   test("对 submitted 申请点撤回会调用撤回端点", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
@@ -369,9 +391,269 @@ describe("PortalRequestsSection 表格", () => {
   });
 });
 
+describe("PortalRequestsSection 详情弹窗", () => {
+  test("摘要给出应用、权限组、直接授权、期限和原因", async () => {
+    stubRequests([
+      requestRow({
+        app_name: "CRM",
+        app_alias: "客户管理",
+        reason: "处理退款工单",
+        grant_type: "timed",
+        grant_expires_at: "2026-08-01T10:00:00Z",
+        authorization_groups: [{ key: "sales-reader", kind: "role", name: "销售只读" }],
+        direct_grants: [
+          { permission: "orders.refund.approve", permission_name: "审批退款", scope: "TEAM" },
+          { permission: "orders.export", permission_name: "导出订单", scope: "ALL" },
+        ],
+      }),
+    ]);
+
+    try {
+      await openDetail();
+
+      // antd 的入场动画在 jsdom 里永远走不完(没有 transitionend), 弹窗内的节点始终带着
+      // `ant-zoom-appear-prepare` 的 opacity: 0, 因此这里断言存在而不是可见。
+      // antd 的入场动画在 jsdom 里永远走不完(没有 transitionend), 弹窗内的节点始终带着
+      // `ant-zoom-appear-prepare` 的 opacity: 0, 因此这里断言存在而不是可见。
+      const summary = summaryList();
+      expect(within(summary).getByText(formatAppDisplayName({ name: "CRM", alias: "客户管理" }))).toBeInTheDocument();
+      expect(within(summary).getByText("销售只读")).toBeInTheDocument();
+      // 直接授权只在弹窗里展开, 格式是「权限名 · 范围」。
+      expect(within(summary).getByText("审批退款 · TEAM")).toBeInTheDocument();
+      expect(within(summary).getByText("导出订单 · ALL")).toBeInTheDocument();
+      expect(within(summary).getByText("处理退款工单")).toBeInTheDocument();
+      expect(within(summary).getByText(/^2026\/08\/01/)).toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("等待审批: 审批节点在进行中并列出当前审批人, 权限生效还没走到", async () => {
+    stubRequests([
+      requestRow({
+        status: "submitted",
+        status_label: "等待审批",
+        current_approvers: [
+          { user_id: "manager-001", name: "张主管" },
+          { user_id: "owner-002", name: "李负责人" },
+        ],
+      }),
+    ]);
+
+    try {
+      await openDetail();
+
+      expect(stepStatus("提交申请")).toBe("finish");
+      expect(stepDescription("提交申请")).toMatch(/^2026\/07\/01/);
+      expect(stepStatus("审批")).toBe("process");
+      expect(stepDescription("审批")).toBe("张主管、李负责人");
+      expect(stepStatus("权限生效")).toBe("wait");
+      // 长期授权没有到期这一步。
+      expect(stepTitles()).toEqual(["提交申请", "审批", "权限生效"]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("已批准未生效: 审批节点给决定人、时间和审批意见, 权限生效仍在等待", async () => {
+    stubRequests([
+      requestRow({
+        status: "approved",
+        status_label: "已批准",
+        decided_by: "manager-001",
+        decision_actor_type: "user",
+        decided_by_name: "张主管",
+        decided_at: "2026-07-02T10:00:00Z",
+        approved_at: "2026-07-02T10:00:00Z",
+        decision_comment: "同意按期开放",
+      }),
+    ]);
+
+    try {
+      await openDetail();
+
+      expect(stepStatus("审批")).toBe("finish");
+      expect(stepDescription("审批")).toContain("张主管");
+      expect(stepDescription("审批")).toMatch(/2026\/07\/02/);
+      expect(stepDescription("审批")).toContain("审批意见：同意按期开放");
+      expect(stepStatus("权限生效")).toBe("wait");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("已驳回: 审批节点是错误态并保留驳回理由", async () => {
+    stubRequests([
+      requestRow({
+        status: "rejected",
+        status_label: "已驳回",
+        decided_by: "manager-001",
+        decision_actor_type: "user",
+        decided_by_name: "张主管",
+        decided_at: "2026-07-02T10:00:00Z",
+        decision_comment: "权限范围过大",
+      }),
+    ]);
+
+    try {
+      await openDetail();
+
+      expect(stepStatus("审批")).toBe("error");
+      expect(stepDescription("审批")).toContain("权限范围过大");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("已授权的限时申请: 生效节点给生效时刻, 并多出一个尚未到达的到期节点", async () => {
+    stubRequests([
+      requestRow({
+        status: "grant_applied",
+        status_label: "已授权",
+        grant_type: "timed",
+        grant_expires_at: "2026-08-01T10:00:00Z",
+        decided_by: "manager-001",
+        decision_actor_type: "user",
+        decided_by_name: "张主管",
+        decided_at: "2026-07-02T10:00:00Z",
+        approved_at: "2026-07-02T10:00:00Z",
+        applied_at: "2026-07-02T10:05:00Z",
+      }),
+    ]);
+
+    try {
+      await openDetail();
+
+      expect(stepTitles()).toEqual(["提交申请", "审批", "权限生效", "到期"]);
+      expect(stepStatus("权限生效")).toBe("finish");
+      expect(stepDescription("权限生效")).toMatch(/^2026\/07\/02/);
+      expect(stepStatus("到期")).toBe("wait");
+      expect(stepDescription("到期")).toMatch(/^2026\/08\/01/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("授权已过期: 到期节点走完", async () => {
+    stubRequests([
+      requestRow({
+        status: "grant_expired",
+        status_label: "授权期限已过",
+        grant_type: "timed",
+        grant_expires_at: "2026-08-01T10:00:00Z",
+        decided_by: "manager-001",
+        decision_actor_type: "user",
+        decided_by_name: "张主管",
+        decided_at: "2026-07-02T10:00:00Z",
+        approved_at: "2026-07-02T10:00:00Z",
+        applied_at: "2026-07-02T10:05:00Z",
+      }),
+    ]);
+
+    try {
+      await openDetail();
+
+      expect(stepStatus("权限生效")).toBe("finish");
+      expect(stepStatus("到期")).toBe("finish");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("授权失败: 生效节点是错误态并给出后端状态文案", async () => {
+    stubRequests([
+      requestRow({
+        status: "grant_failed",
+        status_label: "授权失败",
+        decided_by: "manager-001",
+        decision_actor_type: "user",
+        decided_by_name: "张主管",
+        decided_at: "2026-07-02T10:00:00Z",
+        approved_at: "2026-07-02T10:00:00Z",
+      }),
+    ]);
+
+    try {
+      await openDetail();
+
+      expect(stepStatus("审批")).toBe("finish");
+      expect(stepStatus("权限生效")).toBe("error");
+      expect(stepDescription("权限生效")).toBe("授权失败");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("已撤回: 审批节点整个换成已撤回", async () => {
+    stubRequests([
+      requestRow({ status: "withdrawn", status_label: "已撤回", withdrawn_at: "2026-07-03T09:00:00Z" }),
+    ]);
+
+    try {
+      await openDetail();
+
+      expect(stepTitles()).toEqual(["提交申请", "已撤回", "权限生效"]);
+      expect(stepStatus("已撤回")).toBe("finish");
+      expect(stepDescription("已撤回")).toMatch(/^2026\/07\/03/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
 /* ------------------------------------------------------------------ */
 /* 测试脚手架                                                          */
 /* ------------------------------------------------------------------ */
+
+/** 渲染表格, 点开第一行的「详情」, 等弹窗出现。 */
+async function openDetail() {
+  renderRequests();
+  const user = userEvent.setup();
+  await user.click(await screen.findByRole("button", { name: "详情" }));
+  await screen.findByText("申请详情");
+}
+
+/** 弹窗上半部的申请内容摘要(下半部是流程图, 两处都会出现到期时刻)。 */
+function summaryList(): HTMLElement {
+  const list = screen.getByRole("dialog").querySelector("dl");
+  if (!(list instanceof HTMLElement)) {
+    throw new Error("详情弹窗里没有申请内容摘要");
+  }
+  return list;
+}
+
+const STEP_STATUSES = ["finish", "process", "wait", "error"] as const;
+
+function stepNodes(): HTMLElement[] {
+  return [...screen.getByRole("dialog").querySelectorAll<HTMLElement>(".ant-steps-item")];
+}
+
+function stepTitles(): string[] {
+  return stepNodes().map((item) => item.querySelector(".ant-steps-item-title")?.textContent?.trim() ?? "");
+}
+
+function stepNode(title: string): HTMLElement {
+  const node = stepNodes().find(
+    (item) => item.querySelector(".ant-steps-item-title")?.textContent?.trim() === title,
+  );
+  if (!node) {
+    throw new Error(`流程图里没有「${title}」节点, 现有节点: ${stepTitles().join(" | ")}`);
+  }
+  return node;
+}
+
+function stepStatus(title: string): string {
+  const node = stepNode(title);
+  const status = STEP_STATUSES.find((candidate) => node.classList.contains(`ant-steps-item-${candidate}`));
+  if (!status) {
+    throw new Error(`节点「${title}」没有 antd 的状态 class, 实际为 ${node.className}`);
+  }
+  return status;
+}
+
+function stepDescription(title: string): string {
+  return stepNode(title).querySelector(".ant-steps-item-description")?.textContent?.trim() ?? "";
+}
 
 function requestRow(overrides: Record<string, unknown> = {}) {
   return {

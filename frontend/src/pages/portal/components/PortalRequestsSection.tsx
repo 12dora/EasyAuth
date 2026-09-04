@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { theme } from "antd";
-import { useMemo } from "react";
+import { Tooltip, theme } from "antd";
+import { useMemo, useState } from "react";
 
 import {
   AppTable,
@@ -21,6 +21,7 @@ import { GrantExpiryCell } from "../grantExpiry";
 import { formatGrantGroupNames } from "../grantGroupNames";
 import { parsePortalRequestList, type PortalRequestRow } from "../portalListPayload";
 import { PORTAL_DEFAULT_PAGE_SIZE, useClampPage } from "../portalTable";
+import { PortalRequestDetailDialog } from "./PortalRequestDetailDialog";
 
 /** 申请表: 提交时间列的 key 是 payload 的 submitted_at, 后端公开的排序字段名叫 created_at。 */
 const REQUEST_ORDERING_FIELDS = {
@@ -40,6 +41,7 @@ const REQUEST_ORDERING_FIELDS = {
 export function PortalRequestsSection() {
   const { t } = useI18n();
   const queryClient = useQueryClient();
+  const [detailRow, setDetailRow] = useState<PortalRequestRow | null>(null);
   const serverTable = useServerTable<PortalRequestRow>({
     defaultPageSize: PORTAL_DEFAULT_PAGE_SIZE,
     sortParam: ORDERING_PARAM,
@@ -126,7 +128,7 @@ export function PortalRequestsSection() {
       textColumn<PortalRequestRow>({ key: "reason", title: t("portal.column.reason"), ellipsis: false, width: 180 }),
       actionsColumn<PortalRequestRow>({
         width: 130,
-        render: (row) => <WithdrawAction mutation={withdrawMutation} row={row} />,
+        render: (row) => <RequestRowActions mutation={withdrawMutation} row={row} onOpenDetail={setDetailRow} />,
       }),
     ],
     [sort, t, withdrawMutation],
@@ -161,6 +163,7 @@ export function PortalRequestsSection() {
           rowKey="id"
         />
       )}
+      {detailRow ? <PortalRequestDetailDialog row={detailRow} onClose={() => setDetailRow(null)} /> : null}
     </>
   );
 }
@@ -189,28 +192,43 @@ function RequestStatusText({ row }: { row: PortalRequestRow }) {
   );
 }
 
-/** 只有 submitted 状态的申请可撤回, 其余行留 "-" 保持列宽稳定。 */
-function WithdrawAction({
+/**
+ * 行内操作: 详情 + 撤回。
+ *
+ * 撤回恒在。只有 submitted 能撤回, 但把按钮整个藏起来会让员工以为功能没了或页面坏了 ——
+ * 置灰 + 一句为什么, 比一个时有时无的按钮诚实。
+ */
+function RequestRowActions({
   mutation,
   row,
+  onOpenDetail,
 }: {
   mutation: ReturnType<typeof useMutation<unknown, Error, number>>;
   row: PortalRequestRow;
+  onOpenDetail: (row: PortalRequestRow) => void;
 }) {
   const { t } = useI18n();
-  if (row.status !== "submitted") {
-    return <>-</>;
-  }
+  const withdrawable = row.status === "submitted";
   return (
-    <RowActionButton
-      type="button"
-      variant="ghost-danger"
-      loading={mutation.isPending && mutation.variables === row.id}
-      disabled={mutation.isPending}
-      onClick={() => mutation.mutate(row.id)}
-    >
-      {t("portal.requests.withdraw")}
-    </RowActionButton>
+    <>
+      <RowActionButton type="button" onClick={() => onOpenDetail(row)}>
+        {t("portal.requests.detail")}
+      </RowActionButton>
+      {/* 禁用的按钮自己收不到指针事件, 提示挂在外层 span 上才悬停得出来。 */}
+      <Tooltip title={withdrawable ? "" : t("portal.requests.withdrawOnlySubmitted")}>
+        <span>
+          <RowActionButton
+            type="button"
+            variant="ghost-danger"
+            loading={mutation.isPending && mutation.variables === row.id}
+            disabled={!withdrawable || mutation.isPending}
+            onClick={() => mutation.mutate(row.id)}
+          >
+            {t("portal.requests.withdraw")}
+          </RowActionButton>
+        </span>
+      </Tooltip>
+    </>
   );
 }
 
