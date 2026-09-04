@@ -50,7 +50,7 @@ def test_ops2_portal_lists_my_current_permissions_for_active_grants() -> None:
         app_name="CRM",
         version=3,
     )
-    _ = AppScope.objects.create(app=crm_app, key="SELF", name="本人")
+    _ = AppScope.objects.create(app=crm_app, key="SELF", name="本人", name_en="Self")
     crm_group = AuthorizationGroup.objects.create(
         app=crm_app,
         key="auditor",
@@ -61,12 +61,14 @@ def test_ops2_portal_lists_my_current_permissions_for_active_grants() -> None:
         app=crm_app,
         key="invoice.read",
         name="查看发票",
+        name_en="View invoices",
         supported_scopes=["SELF"],
     )
     approve_permission = Permission.objects.create(
         app=crm_app,
         key="invoice.approve",
         name="审批发票",
+        name_en="Approve invoices",
         supported_scopes=["SELF"],
     )
     _ = AuthorizationGroupGrant.objects.create(
@@ -103,6 +105,27 @@ def test_ops2_portal_lists_my_current_permissions_for_active_grants() -> None:
     assert GRANT_TYPE_PERMANENT in body
     assert "其他用户应用" not in body
     assert "已撤销应用" not in body
+    grants_by_permission = _expanded_grants_by_permission(response.json()["data"][0])
+    assert grants_by_permission["invoice.read"] == {
+        "permission": "invoice.read",
+        "scope": "SELF",
+        "source_type": "group",
+        "source_key": "auditor",
+        "permission_name": "查看发票",
+        "permission_name_en": "View invoices",
+        "scope_name": "本人",
+        "scope_name_en": "Self",
+    }
+    assert grants_by_permission["invoice.approve"] == {
+        "permission": "invoice.approve",
+        "scope": "SELF",
+        "source_type": "direct",
+        "source_key": "",
+        "permission_name": "审批发票",
+        "permission_name_en": "Approve invoices",
+        "scope_name": "本人",
+        "scope_name_en": "Self",
+    }
 
 
 def test_ops2_portal_lists_only_expiring_grants_within_fourteen_days() -> None:
@@ -133,6 +156,18 @@ def test_ops2_portal_lists_only_expiring_grants_within_fourteen_days() -> None:
     assert GRANT_TYPE_TIMED in body
     assert "暂不提醒应用" not in body
     assert "长期授权应用" not in body
+    row = response.json()["data"][0]
+    grants_by_permission = _expanded_grants_by_permission(row)
+    assert grants_by_permission["portal.fixture"] == {
+        "permission": "portal.fixture",
+        "scope": "GLOBAL",
+        "source_type": "direct",
+        "source_key": "",
+        "permission_name": "门户测试权限",
+        "permission_name_en": "Portal fixture permission",
+        "scope_name": "全局",
+        "scope_name_en": "Global",
+    }
 
 
 def test_ops2_portal_shows_empty_states_when_user_has_no_current_grants() -> None:
@@ -262,11 +297,17 @@ def _create_direct_grant_fact(
     grant: AccessGrant,
     expires_at: datetime | None = None,
 ) -> None:
-    scope = AppScope.objects.create(app=grant.app, key="GLOBAL", name="全局")
+    scope = AppScope.objects.create(
+        app=grant.app,
+        key="GLOBAL",
+        name="全局",
+        name_en="Global",
+    )
     permission = Permission.objects.create(
         app=grant.app,
         key="portal.fixture",
         name="门户测试权限",
+        name_en="Portal fixture permission",
         supported_scopes=[scope.key],
     )
     _ = AccessGrantPermission.objects.create(
@@ -275,3 +316,16 @@ def _create_direct_grant_fact(
         scope_key=scope.key,
         expires_at=expires_at,
     )
+
+
+def _expanded_grants_by_permission(row: object) -> dict[str, dict[str, object]]:
+    assert isinstance(row, dict)
+    grants = row["grants"]
+    assert isinstance(grants, list)
+    by_permission: dict[str, dict[str, object]] = {}
+    for item in grants:
+        assert isinstance(item, dict)
+        permission = item["permission"]
+        assert isinstance(permission, str)
+        by_permission[permission] = item
+    return by_permission

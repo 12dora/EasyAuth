@@ -25,10 +25,16 @@ pytestmark = pytest.mark.django_db
 def test_current_permission_api_returns_groups_and_expanded_scoped_grants() -> None:
     # Given: 当前授权同时包含授权组和 direct scoped grant。
     user, app, grant = _create_current_grant("portal-expanded-api")
-    self_scope = _create_scope(app, "SELF", "本人")
-    team_scope = _create_scope(app, "TEAM", "团队")
+    self_scope = _create_scope(app, "SELF", "本人", name_en="Self")
+    team_scope = _create_scope(app, "TEAM", "团队", name_en="Team")
     read_permission = _create_permission(app, "orders.read", self_scope.key)
+    read_permission.name = "读取订单"
+    read_permission.name_en = "Read orders"
+    read_permission.save(update_fields=["name", "name_en"])
     refund_permission = _create_permission(app, "orders.refund.approve", team_scope.key)
+    refund_permission.name = "审批退款"
+    refund_permission.name_en = "Approve refunds"
+    refund_permission.save(update_fields=["name", "name_en"])
     group = AuthorizationGroup.objects.create(
         app=app,
         key="sales-reader",
@@ -58,12 +64,20 @@ def test_current_permission_api_returns_groups_and_expanded_scoped_grants() -> N
             "scope": "SELF",
             "source_type": "group",
             "source_key": "sales-reader",
+            "permission_name": "读取订单",
+            "permission_name_en": "Read orders",
+            "scope_name": "本人",
+            "scope_name_en": "Self",
         },
         {
             "permission": "orders.refund.approve",
             "scope": "TEAM",
             "source_type": "direct",
             "source_key": "",
+            "permission_name": "审批退款",
+            "permission_name_en": "Approve refunds",
+            "scope_name": "团队",
+            "scope_name_en": "Team",
         },
     ]
     assert item["grant_version"] == grant.version
@@ -117,6 +131,10 @@ def test_current_permission_api_excludes_inactive_and_deprecated_permissions() -
             "scope": scope.key,
             "source_type": "direct",
             "source_key": "",
+            "permission_name": active_permission.key,
+            "permission_name_en": "",
+            "scope_name": "全局",
+            "scope_name_en": "",
         },
     ]
 
@@ -185,12 +203,51 @@ def test_json_helpers_serialize_new_authorization_fact_shapes() -> None:
             "scope": "SELF",
             "source_type": "group",
             "source_key": "sales-reader",
+            "permission_name": "orders.read",
+            "permission_name_en": "",
+            "scope_name": "SELF",
+            "scope_name_en": "",
         },
         {
             "permission": "dashboard.view",
             "scope": "GLOBAL",
             "source_type": "direct",
             "source_key": "",
+            "permission_name": "dashboard.view",
+            "permission_name_en": "",
+            "scope_name": "GLOBAL",
+            "scope_name_en": "",
+        },
+    ]
+
+
+def test_json_expanded_grants_emit_attached_catalog_names() -> None:
+    grants = (
+        ExpandedGrant(
+            permission="orders.read",
+            scope="SELF",
+            source_type="group",
+            source_key="sales-reader",
+            expires_at=None,
+            permission_name="读取订单",
+            permission_name_en="Read orders",
+            scope_name="本人",
+            scope_name_en="Self",
+        ),
+    )
+
+    payload = json_expanded_grants(grants)
+
+    assert payload == [
+        {
+            "permission": "orders.read",
+            "scope": "SELF",
+            "source_type": "group",
+            "source_key": "sales-reader",
+            "permission_name": "读取订单",
+            "permission_name_en": "Read orders",
+            "scope_name": "本人",
+            "scope_name_en": "Self",
         },
     ]
 
@@ -202,8 +259,8 @@ def _create_current_grant(key_suffix: str) -> tuple[UserMirror, App, AccessGrant
     return user, app, grant
 
 
-def _create_scope(app: App, key: str, name: str) -> AppScope:
-    return AppScope.objects.create(app=app, key=key, name=name)
+def _create_scope(app: App, key: str, name: str, *, name_en: str = "") -> AppScope:
+    return AppScope.objects.create(app=app, key=key, name=name, name_en=name_en)
 
 
 def _create_permission(

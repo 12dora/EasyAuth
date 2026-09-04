@@ -356,12 +356,20 @@ def test_ops4_portal_api_hides_inactive_group_and_derived_grants() -> None:
             "scope": DEFAULT_SCOPE_KEY,
             "source_type": "group",
             "source_key": active_group.key,
+            "permission_name": active_permission.name,
+            "permission_name_en": "",
+            "scope_name": "Global",
+            "scope_name_en": "",
         },
         {
             "permission": direct_permission.key,
             "scope": DEFAULT_SCOPE_KEY,
             "source_type": "direct",
             "source_key": "",
+            "permission_name": direct_permission.name,
+            "permission_name_en": "",
+            "scope_name": "Global",
+            "scope_name_en": "",
         },
     ]
 

@@ -39,4 +39,8 @@ def json_expanded_grant(grant: ExpandedGrant) -> dict[str, JsonValue]:
         "scope": grant.scope,
         "source_type": grant.source_type,
         "source_key": grant.source_key,
+        "permission_name": grant.permission_name or grant.permission,
+        "permission_name_en": grant.permission_name_en,
+        "scope_name": grant.scope_name or grant.scope,
+        "scope_name_en": grant.scope_name_en,
     }
