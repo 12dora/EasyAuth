@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
-import { useOutletContext } from "react-router-dom";
+import { useNavigate, useOutletContext } from "react-router-dom";
 
 import type { AppShellOutletContext } from "../../components/AppShell";
 import {
@@ -27,6 +27,7 @@ import { Button } from "../../components/Button";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
 import { apiRequest } from "../../lib/api";
+import { formatAppDisplayName } from "../../lib/appDisplayName";
 import {
   accessRequestStatusLabel,
   badgeToneForAccessRequestStatus,
@@ -37,6 +38,7 @@ import type { Translator } from "../../lib/status";
 import { useI18n } from "../../i18n/I18nProvider";
 import { formatAuthorizationGroupLabel } from "./authorizationGroupLabel";
 import { AccessRequestForm } from "./components/AccessRequestForm";
+import { GrantPermissionsCell } from "./components/GrantPermissionsCell";
 import { PortalApprovalsSection } from "./components/PortalApprovalsSection";
 import { PortalPreOffboardDialog } from "./PortalPreOffboardDialog";
 import {
@@ -144,7 +146,7 @@ function PortalGrantSection({
           width: 200,
           render: (_value: unknown, row: PortalGrantRow) => (
             <div className="flex min-w-0 flex-col gap-1">
-              <strong className="truncate">{row.app_name ?? row.app_key ?? "-"}</strong>
+              <strong className="truncate">{formatAppDisplayName({ name: row.app_name, alias: row.app_alias })}</strong>
               <code className={MONO_TEXT_CLASS}>{row.app_key ?? "-"}</code>
             </div>
           ),
@@ -154,45 +156,31 @@ function PortalGrantSection({
       textColumn<PortalGrantRow>({
         key: "groups",
         title: t("portal.column.groups"),
-        getValue: (row) => formatGroups(t, row.groups),
+        // 这张表只给员工看「我在哪些权限组里」, 组名后面再挂一个 [角色] / [权限包]
+        // 是给管理员分辨模型用的, 与员工的问题无关, 因此只显示组名。
+        getValue: (row) => formatGrantGroupNames(row.groups),
         ellipsis: false,
         width: 200,
       }),
-      textColumn<PortalGrantRow>({
-        key: "expanded_grants",
-        title: t("portal.column.expandedGrants"),
-        getValue: (row) => formatExpandedGrants(row.grants),
-        ellipsis: false,
-        mono: true,
-        width: 240,
-      }),
-      textColumn<PortalGrantRow>({
-        key: "grant_sources",
-        title: t("common.source"),
-        getValue: (row) => formatSources(row.grants),
-        ellipsis: false,
-        mono: true,
-        width: 240,
-      }),
-      textColumn<PortalGrantRow>({
-        key: "term",
-        title: t("portal.column.term"),
-        getValue: (row) => grantTypeLabel(t, row.grant_type),
-        width: 110,
-      }),
-      textColumn<PortalGrantRow>({
-        key: "versions",
-        title: t("portal.column.versions"),
-        getValue: (row) => formatVersions(t, row),
-        ellipsis: false,
-        mono: true,
-        width: 220,
-      }),
+      {
+        key: "permission_details",
+        title: t("portal.column.permissionDetails"),
+        width: 160,
+        render: (_value: unknown, row: PortalGrantRow) => <GrantPermissionsCell row={row} />,
+      },
       serverSortColumn(
-        // 预设自带的时间戳比较函数只会重排当前页, 由 serverSortColumn 换成服务端排序。
-        dateTimeColumn<PortalGrantRow>({ key: "grant_expires_at", title: t("portal.column.expiresAt"), sorter: false }),
+        {
+          key: "grant_expires_at",
+          title: t("portal.column.expiresAt"),
+          width: 220,
+          render: (_value: unknown, row: PortalGrantRow) => <GrantExpiryCell row={row} />,
+        },
         sort,
       ),
+      actionsColumn<PortalGrantRow>({
+        width: 160,
+        render: (row) => <UpdateGrantAction row={row} />,
+      }),
     ],
     [sort, t],
   );
@@ -213,12 +201,10 @@ function PortalGrantSection({
           emptyDescription={t("portal.grants.emptyDescription")}
           emptyTitle={emptyText}
           loading={query.isLoading}
-          // 同「我的申请」: 每列都声明宽度, minWidth 正好等于它们的和。原来权限组 /
-          // 展开授权 / 来源三列只在注释里「各留 180」, 列上并没有 width, fixed 布局下
-          // 它们其实是在分摊剩余宽度, 一旦剩余量不够就会被压成一个字宽。
-          // 应用 200 + 权限组 200 + 展开授权 240 + 来源 240 + 期限 110 + 版本 220
-          // + 过期时间 170 = 1380。
-          minWidth={1380}
+          // 同「我的申请」: 每列都声明宽度, minWidth 正好等于它们的和 —— fixed 布局下
+          // 无宽度的列只能分摊剩余量, 剩余量不够就会被压成一个字宽。
+          // 应用 200 + 权限组 200 + 权限详情 160 + 过期时间 220 + 操作 160 = 940。
+          minWidth={940}
           rowKey="grant_id"
         />
       )}
@@ -291,7 +277,7 @@ function PortalRequestSection() {
         textColumn<PortalRequestRow>({
           key: "app",
           title: t("common.app"),
-          getValue: (row) => row.app_name ?? row.app_key,
+          getValue: (row) => formatAppDisplayName({ name: row.app_name, alias: row.app_alias }),
           width: 140,
         }),
         sort,
@@ -367,6 +353,49 @@ function PortalRequestSection() {
   );
 }
 
+/**
+ * 过期时间列合并了原来的「期限」列。
+ *
+ * 期限本身只有三种取值, 单独占一列却又和过期时间必然一起读(长期授权的过期时间恒为空、
+ * 限时授权的期限恒为「限时」), 因此并到一格里: 长期给期限标签, 限时给到期时刻,
+ * 混合期限在时刻后补上标签。
+ */
+function GrantExpiryCell({ row }: { row: PortalGrantRow }) {
+  const { formatDateTime, t } = useI18n();
+  if (row.grant_type === "permanent") {
+    return <span className="whitespace-nowrap">{grantTypeLabel(t, row.grant_type)}</span>;
+  }
+  const expiresAt = formatDateTime(row.grant_expires_at);
+  if (row.grant_type === "mixed") {
+    return <span className="tabular">{t("portal.grants.expiresAtMixed", { expiresAt, term: grantTypeLabel(t, row.grant_type) })}</span>;
+  }
+  return <span className="whitespace-nowrap tabular">{expiresAt}</span>;
+}
+
+/**
+ * 「更新权限」: 带着当前授权跳到申请页, 申请类型预置为变更。
+ *
+ * 员工要调整已有权限时, 手动流程是「进申请页 -> 选变更 -> 在下拉里找回这条授权」;
+ * 这里把这三步压成一次点击, 路由 state 里的 baseGrantId 与表单的基础授权下拉同一个口径
+ * (字符串形式的 grant_id)。
+ */
+function UpdateGrantAction({ row }: { row: PortalGrantRow }) {
+  const { t } = useI18n();
+  const navigate = useNavigate();
+  return (
+    <RowActionButton
+      type="button"
+      onClick={() =>
+        navigate("/portal/request", {
+          state: { accessRequestPrefill: { requestType: "change", baseGrantId: String(row.grant_id) } },
+        })
+      }
+    >
+      {t("portal.grants.updatePermissions")}
+    </RowActionButton>
+  );
+}
+
 /** 只有 submitted 状态的申请可撤回, 其余行留 "-" 保持列宽稳定。 */
 function WithdrawAction({
   mutation,
@@ -436,6 +465,14 @@ function formatGroups(
   return groups.map((group) => formatAuthorizationGroupLabel(group, t)).join("、");
 }
 
+/** 「我的权限」的权限组列: 只有组名, 不带 [角色] / [权限包] 这类模型标签。 */
+function formatGrantGroupNames(groups: PortalGrantRow["groups"]): string {
+  if (groups.length === 0) {
+    return "-";
+  }
+  return groups.map((group) => group.name || group.key).join("、");
+}
+
 /**
  * 审批人列: 待审批的申请给出当前审批人, 已决的申请给出决定人。
  *
@@ -447,31 +484,6 @@ function formatApprovers(t: Translator, row: PortalRequestRow): string {
     return row.current_approvers.map((approver) => approver.name).join(t("portal.requests.approverSeparator"));
   }
   return row.decided_by_name ?? row.decided_by;
-}
-
-function formatExpandedGrants(grants: PortalGrantRow["grants"] | undefined): string {
-  if (!grants || grants.length === 0) {
-    return "-";
-  }
-  return grants.map((grant) => `${grant.permission ?? "-"}:${grant.scope ?? "-"}`).join("、");
-}
-
-function formatSources(grants: PortalGrantRow["grants"] | undefined): string {
-  if (!grants || grants.length === 0) {
-    return "-";
-  }
-  return grants.map((grant) => (grant.source_key ? `${grant.source_type ?? "-"}:${grant.source_key}` : grant.source_type ?? "-")).join("、");
-}
-
-function formatVersions(t: Translator, grant: PortalGrantRow): string {
-  if (grant.grant_version === undefined && grant.catalog_version === undefined && grant.snapshot_version === undefined) {
-    return "-";
-  }
-  return t("portal.grant.versions", {
-    grant: grant.grant_version ?? "-",
-    catalog: grant.catalog_version ?? "-",
-    snapshot: grant.snapshot_version ?? "-",
-  });
 }
 
 function formatDirectGrants(directGrants: PortalRequestRow["direct_grants"] | undefined): string {

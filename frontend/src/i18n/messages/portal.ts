@@ -9,11 +9,16 @@ export const zhCN = {
   // 门户三张表结构相近, 只念「表格」无从分辨, 因此每张表都要有自己的名字。
   "portal.grants.ariaLabel": "我的授权列表",
   "portal.grants.expiringAriaLabel": "即将过期授权列表",
+  // 权限详情列: 单元格只放条数, 明细在悬停浮层里按来源分组展示。
+  "portal.grants.permissionCount": "{count} 项权限",
+  "portal.grants.source.direct": "直接授权",
+  // 过期时间列合并了期限: 混合期限在到期时刻后补一个期限标签。
+  "portal.grants.expiresAtMixed": "{expiresAt}（{term}）",
+  "portal.grants.updatePermissions": "更新权限",
 
   "portal.column.groups": "权限组",
-  "portal.column.expandedGrants": "展开授权",
+  "portal.column.permissionDetails": "权限详情",
   "portal.column.term": "期限",
-  "portal.column.versions": "版本",
   "portal.column.expiresAt": "过期时间",
   "portal.column.directGrants": "直接授权",
   "portal.column.submittedAt": "提交时间",
@@ -32,8 +37,6 @@ export const zhCN = {
   "portal.requests.withdraw": "撤回",
   "portal.requests.withdrawFailed": "撤回失败",
   "portal.requests.ariaLabel": "我的申请记录列表",
-
-  "portal.grant.versions": "授权 {grant} / 目录 {catalog} / 快照 {snapshot}",
 
   "portal.request.catalogLoadFailed": "申请目录加载失败",
   "portal.request.submit": "提交申请",
@@ -102,11 +105,14 @@ export const en: Record<keyof typeof zhCN, string> = {
   "portal.grants.emptyDescription": "No grant records to show in this view.",
   "portal.grants.ariaLabel": "My grants",
   "portal.grants.expiringAriaLabel": "Expiring grants",
+  "portal.grants.permissionCount": "{count} permissions",
+  "portal.grants.source.direct": "Direct grants",
+  "portal.grants.expiresAtMixed": "{expiresAt} ({term})",
+  "portal.grants.updatePermissions": "Update permissions",
 
   "portal.column.groups": "Permission groups",
-  "portal.column.expandedGrants": "Expanded grants",
+  "portal.column.permissionDetails": "Permission details",
   "portal.column.term": "Term",
-  "portal.column.versions": "Versions",
   "portal.column.expiresAt": "Expires at",
   "portal.column.directGrants": "Direct grants",
   "portal.column.submittedAt": "Submitted at",
@@ -123,8 +129,6 @@ export const en: Record<keyof typeof zhCN, string> = {
   "portal.requests.withdraw": "Withdraw",
   "portal.requests.withdrawFailed": "Withdraw failed",
   "portal.requests.ariaLabel": "My access requests",
-
-  "portal.grant.versions": "Grant {grant} / Catalog {catalog} / Snapshot {snapshot}",
 
   "portal.request.catalogLoadFailed": "Failed to load the request catalog",
   "portal.request.submit": "Submit request",

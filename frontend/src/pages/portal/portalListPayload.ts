@@ -12,9 +12,20 @@ interface PortalGrantGroup {
   name: string;
 }
 
+/**
+ * 展开后的单条权限。
+ *
+ * `permission` / `scope` 是接口 key, `*_name` / `*_name_en` 是目录里的双语显示名:
+ * 员工看的是显示名, key 只用来定位。英文名允许为空字符串(目录没配英文名),
+ * 中文名在目录行已被删除时回落成 key —— 两者都由后端决定, 前端不再兜底。
+ */
 interface PortalExpandedGrant {
   permission: string;
+  permission_name: string;
+  permission_name_en: string;
   scope: string;
+  scope_name: string;
+  scope_name_en: string;
   source_type: string;
   source_key: string | null;
 }
@@ -111,9 +122,9 @@ function parsePortalGrantRow(value: unknown, index: number): PortalGrantRow {
   requireArray(row.grants, `${label}.grants`).forEach((grant, grantIndex) => {
     const itemLabel = `${label}.grants[${grantIndex}]`;
     const item = requireRecord(grant, `${itemLabel} 必须是对象`);
-    requireString(item.permission, `${itemLabel}.permission`);
-    requireString(item.scope, `${itemLabel}.scope`);
-    requireString(item.source_type, `${itemLabel}.source_type`);
+    for (const field of ["permission", "permission_name", "permission_name_en", "scope", "scope_name", "scope_name_en", "source_type"] as const) {
+      requireString(item[field], `${itemLabel}.${field}`);
+    }
     requireNullableString(item.source_key, `${itemLabel}.source_key`);
   });
   return {

@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { StrictMode } from "react";
-import { MemoryRouter, Outlet, Route, Routes } from "react-router-dom";
+import { MemoryRouter, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import { describe, expect, test, vi } from "vitest";
 
 import { PortalPage } from "./PortalPage";
@@ -54,6 +54,32 @@ function renderPortalPage(initialEntry = "/portal/request") {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+}
+
+/**
+ * 我的权限 + 一个把路由 state 原样打印出来的申请页替身。
+ *
+ * 「更新权限」的契约是跳到 /portal/request 并把预填放进 react-router 的 location.state,
+ * 消费这段 state 的是申请表单(另一条链路), 这里只验证发出去的东西对不对。
+ */
+function renderGrantsWithRequestStateProbe() {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+  renderWithAntd(
+    <QueryClientProvider client={client}>
+      <MemoryRouter initialEntries={["/portal"]}>
+        <Routes>
+          <Route path="/portal" element={<PortalPage view="grants" />} />
+          <Route path="/portal/request" element={<RequestLocationStateProbe />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+function RequestLocationStateProbe() {
+  const location = useLocation();
+  return <pre data-testid="request-location-state">{JSON.stringify(location.state)}</pre>;
 }
 
 function renderPortalPageStrict(initialEntry = "/portal/request") {
@@ -213,19 +239,18 @@ describe("PortalPage access request form", () => {
       }
       if (url === "/portal/api/v1/me/grants?page=1&page_size=100") {
         return jsonResponse({
-          data: [{
-            grant_id: 42,
-            grant_revision: 7,
-            app_key: "crm",
-            app_name: "CRM",
-            groups: [],
-            grants: [{ permission: "crm.customer.read", scope: "SELF", source_type: "direct", source_key: null }],
-            grant_version: 7,
-            catalog_version: 3,
-            snapshot_version: "crm:7",
-            grant_type: "timed",
-            grant_expires_at: "2030-01-01T00:00:00+00:00",
-          }],
+          data: [
+            portalGrantRow({
+              grant_id: 42,
+              grant_revision: 7,
+              grants: [portalExpandedGrant({ permission: "crm.customer.read", permission_name: "查看客户" })],
+              grant_version: 7,
+              catalog_version: 3,
+              snapshot_version: "crm:7",
+              grant_type: "timed",
+              grant_expires_at: "2030-01-01T00:00:00+00:00",
+            }),
+          ],
           pagination: { page: 1, page_size: 100, total_items: 1, total_pages: 1 },
         });
       }
@@ -1690,7 +1715,7 @@ describe("PortalPage access request form", () => {
 });
 
 describe("PortalPage tables", () => {
-  test("我的权限使用服务端总数翻页，并展示 groups、expanded grants、source 和版本", async () => {
+  test("我的权限使用服务端总数翻页，权限组列只给组名、权限详情列只给条数", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
       if (url === "/portal/api/v1/me/grants?page=1&page_size=20") {
@@ -1701,12 +1726,16 @@ describe("PortalPage tables", () => {
               app_name: "CRM",
               groups: [{ key: "sales-reader", kind: "role", name: "销售只读" }],
               grants: [
-                { permission: "orders.read", scope: "SELF", source_type: "group", source_key: "sales-reader" },
-                { permission: "dashboard.view", scope: "GLOBAL", source_type: "direct", source_key: "" },
+                portalExpandedGrant({ source_type: "group", source_key: "sales-reader" }),
+                portalExpandedGrant({
+                  permission: "dashboard.view",
+                  permission_name: "查看看板",
+                  permission_name_en: "View dashboard",
+                  scope: "GLOBAL",
+                  scope_name: "全局",
+                  scope_name_en: "Global",
+                }),
               ],
-              grant_version: 3,
-              catalog_version: 7,
-              snapshot_version: "3.7",
             }),
           ],
           pagination: { page: 1, page_size: 20, total_items: 21, total_pages: 2 },
@@ -1726,12 +1755,20 @@ describe("PortalPage tables", () => {
     try {
       renderPortalPage("/portal");
 
-      expect(await screen.findByText("销售只读 [角色]")).toBeVisible();
-      expect(screen.getByText(/orders\.read:SELF/)).toBeVisible();
-      expect(screen.getByText(/group:sales-reader/)).toBeVisible();
-      expect(screen.getByText(/dashboard\.view:GLOBAL/)).toBeVisible();
-      expect(screen.getByText(/direct/)).toBeVisible();
-      expect(screen.getByText("授权 3 / 目录 7 / 快照 3.7")).toBeVisible();
+      // 权限组列不再带 [角色] 后缀; 权限明细不再拼成一长串 key。
+      expect(await screen.findByText("销售只读")).toBeVisible();
+      expect(screen.queryByText("销售只读 [角色]")).not.toBeInTheDocument();
+      expect(screen.getByText("2 项权限")).toBeVisible();
+      expect(screen.queryByText(/orders\.read:SELF/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/group:sales-reader/)).not.toBeInTheDocument();
+
+      const table = screen.getByRole("table", { name: "我的授权列表" });
+      expect(within(table).getByRole("columnheader", { name: "权限详情" })).toBeVisible();
+      expect(within(table).getByRole("columnheader", { name: "操作" })).toBeVisible();
+      expect(within(table).queryByRole("columnheader", { name: "来源" })).not.toBeInTheDocument();
+      expect(within(table).queryByRole("columnheader", { name: "版本" })).not.toBeInTheDocument();
+      expect(within(table).queryByRole("columnheader", { name: "期限" })).not.toBeInTheDocument();
+
       // antd 的区间文案按 page/page_size 推算, 不按当前页实际行数收窄。
       expect(screen.getByText("第 1-20 条 / 共 21 条")).toBeVisible();
 
@@ -1744,6 +1781,123 @@ describe("PortalPage tables", () => {
         "/portal/api/v1/me/grants?page=2&page_size=20",
         expect.anything(),
       );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("权限详情浮层按来源分组列出「权限名 · 范围名」, 悬停与聚焦都能打开", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/me/grants?page=1&page_size=20") {
+        return jsonResponse({
+          data: [
+            portalGrantRow({
+              groups: [{ key: "sales-reader", kind: "role", name: "销售只读" }],
+              grants: [
+                portalExpandedGrant({ source_type: "group", source_key: "sales-reader" }),
+                portalExpandedGrant({
+                  permission: "orders.export",
+                  permission_name: "导出订单",
+                  scope: "ALL",
+                  scope_name: "全部",
+                  source_type: "group",
+                  source_key: "sales-reader",
+                }),
+                portalExpandedGrant({ permission: "dashboard.view", permission_name: "查看看板", scope_name: "全局" }),
+              ],
+            }),
+          ],
+          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage("/portal");
+      const user = userEvent.setup();
+
+      const trigger = await screen.findByRole("button", { name: "3 项权限" });
+      expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+      await user.hover(trigger);
+      const tooltip = screen.getByRole("tooltip");
+      expect(trigger).toHaveAttribute("aria-describedby", tooltip.id);
+      // 角色带来的权限归在角色名下, 直接授权单列一组。
+      expect(within(tooltip).getByText("销售只读")).toBeVisible();
+      expect(within(tooltip).getByText("直接授权")).toBeVisible();
+      expect(within(tooltip).getByText("查看订单 · 本人")).toBeVisible();
+      expect(within(tooltip).getByText("导出订单 · 全部")).toBeVisible();
+      expect(within(tooltip).getByText("查看看板 · 全局")).toBeVisible();
+      expect(tooltip).toHaveClass("max-h-80", "overflow-y-auto", "max-w-[28rem]");
+
+      await user.unhover(trigger);
+      expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+
+      // 键盘用户: 触发器可聚焦, 聚焦即展开。
+      act(() => {
+        trigger.focus();
+      });
+      expect(screen.getByRole("tooltip")).toBeVisible();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("过期时间列合并期限: 长期给标签, 限时给时刻, 混合期限两者都给", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/me/grants?page=1&page_size=20") {
+        return jsonResponse({
+          data: [
+            portalGrantRow({ grant_id: 1, app_name: "长期应用", grant_type: "permanent", grant_expires_at: null }),
+            portalGrantRow({ grant_id: 2, app_name: "限时应用", grant_type: "timed", grant_expires_at: "2026-08-01T10:00:00Z" }),
+            portalGrantRow({ grant_id: 3, app_name: "混合应用", grant_type: "mixed", grant_expires_at: "2026-09-01T10:00:00Z" }),
+          ],
+          pagination: { page: 1, page_size: 20, total_items: 3, total_pages: 1 },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage("/portal");
+
+      expect(await screen.findByText("长期应用")).toBeVisible();
+      expect(expiresAtCellText("长期应用")).toBe("长期");
+      expect(expiresAtCellText("限时应用")).toMatch(/^2026\/08\/01/);
+      expect(expiresAtCellText("混合应用")).toMatch(/^2026\/09\/01.*（混合期限）$/);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("更新权限按钮带着变更预填跳到申请页", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/me/grants?page=1&page_size=20") {
+        return jsonResponse({
+          data: [portalGrantRow({ grant_id: 42, app_name: "CRM" })],
+          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderGrantsWithRequestStateProbe();
+
+      await screen.findByText("CRM");
+      await userEvent.click(screen.getByRole("button", { name: "更新权限" }));
+
+      const state = await screen.findByTestId("request-location-state");
+      expect(JSON.parse(state.textContent ?? "null")).toEqual({
+        accessRequestPrefill: { requestType: "change", baseGrantId: "42" },
+      });
     } finally {
       vi.unstubAllGlobals();
     }
@@ -2039,8 +2193,8 @@ describe("PortalPage tables", () => {
       const table = screen.getByRole("table", { name: "我的授权列表" });
       const widths = declaredColumnWidths(table);
 
-      // 应用 / 权限组 / 展开授权 / 来源 / 期限 / 版本 / 过期时间。
-      expect(widths).toEqual([200, 200, 240, 240, 110, 220, 170]);
+      // 应用 / 权限组 / 权限详情 / 过期时间 / 操作。
+      expect(widths).toEqual([200, 200, 160, 220, 160]);
       expect(widths).toHaveLength(table.querySelectorAll("thead.ant-table-thead th").length);
       expect(tableScrollWidth(table)).toBe(widths.reduce((sum, width) => sum + width, 0));
     } finally {
@@ -2051,8 +2205,8 @@ describe("PortalPage tables", () => {
   /**
    * 列宽写死之后, 等宽的多值列还要能断行。
    *
-   * 直接授权 / 展开授权 / 来源渲染的是 `名称 (key):scope、…` 这种没有空格的串,
-   * 浏览器找不到断行点; 这几列又刻意关掉了 ellipsis(内容是多值文本, 该换行而不是截断),
+   * 申请历史的直接授权列渲染的是 `名称 (key):scope、…` 这种没有空格的串,
+   * 浏览器找不到断行点; 这一列又刻意关掉了 ellipsis(内容是多值文本, 该换行而不是截断),
    * 所以必须由 `MONO_WRAP_TEXT_CLASS` 允许在任意字符处断开, 否则整串会溢出到邻格上。
    */
   test("申请历史的直接授权列在固定列宽下可任意断行", async () => {
@@ -2267,6 +2421,15 @@ function tableScrollWidth(table: HTMLElement): number {
   return Number.parseFloat(width);
 }
 
+/** 授权表里某一行的「过期时间」单元格文本; 该列固定是应用 / 权限组 / 权限详情之后的第四列。 */
+function expiresAtCellText(appName: string): string {
+  const row = screen.getByText(appName).closest("tr");
+  if (row === null) {
+    throw new Error(`未找到应用 ${appName} 所在的表格行`);
+  }
+  return within(row).getAllByRole("cell")[3].textContent ?? "";
+}
+
 /** 申请表里某一行的「审批人」单元格文本; 该列固定紧跟在状态列之后。 */
 function approverCellText(appName: string): string {
   const row = screen.getByText(appName).closest("tr");
@@ -2284,6 +2447,7 @@ function portalGrantRow(overrides: Record<string, unknown> = {}) {
   return {
     app_key: "crm",
     app_name: "CRM",
+    app_alias: "",
     grant_id: 1,
     groups: [],
     grants: [],
@@ -2293,6 +2457,21 @@ function portalGrantRow(overrides: Record<string, unknown> = {}) {
     snapshot_version: "1.1",
     grant_type: "permanent",
     grant_expires_at: null,
+    ...overrides,
+  };
+}
+
+/** 展开授权项: permission / scope 是 key, *_name / *_name_en 是目录里的双语显示名。 */
+function portalExpandedGrant(overrides: Record<string, unknown> = {}) {
+  return {
+    permission: "orders.read",
+    permission_name: "查看订单",
+    permission_name_en: "View orders",
+    scope: "SELF",
+    scope_name: "本人",
+    scope_name_en: "Self",
+    source_type: "direct",
+    source_key: null,
     ...overrides,
   };
 }
