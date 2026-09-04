@@ -145,12 +145,24 @@ async function mockVisualData(page: Page) {
           {
             app_key: "demo",
             app_name: "Demo App",
+            app_alias: "",
             grant_type: "permanent",
             grant_expires_at: null,
             grant_id: 101,
             grant_revision: 1,
             groups: [{ key: "reader", kind: "role", name: "只读角色" }],
-            grants: [{ permission: "invoice.read", scope: "customer_id", source_type: "authorization_group", source_key: "reader" }],
+            grants: [
+              {
+                permission: "invoice.read",
+                permission_name: "发票读取",
+                permission_name_en: "Invoice read",
+                scope: "customer_id",
+                scope_name: "客户",
+                scope_name_en: "Customer",
+                source_type: "group",
+                source_key: "reader",
+              },
+            ],
             grant_version: 1,
             catalog_version: 1,
             snapshot_version: "snapshot-visual-v1",
@@ -199,7 +211,12 @@ async function expectSeedDataIsVisible(page: Page, path: string) {
     await expect(page.getByText("Demo App").first()).toBeVisible();
   }
   if (path === "/portal") {
-    await expect(page.getByText("invoice.read").first()).toBeVisible();
+    // 权限明细不在表格里: 单元格只有条数, 悬停浮层才逐条列出「权限名 · 范围名」。
+    await page.getByRole("button", { name: "1 项权限" }).first().hover();
+    await expect(page.getByRole("tooltip").getByText("发票读取 · 客户")).toBeVisible();
+    // 浮层会盖在表格上, 断言完把指针挪开, 否则后面的「控件没被遮挡」判定会误伤。
+    await page.mouse.move(0, 0);
+    await expect(page.getByRole("tooltip")).toBeHidden();
   }
   if (path === "/console/operations/access-requests") {
     await expect(page.getByText("employee-001").first()).toBeVisible();
