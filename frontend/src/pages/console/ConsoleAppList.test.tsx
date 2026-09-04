@@ -237,6 +237,7 @@ describe("ConsoleAppList", () => {
     await user.click(await screen.findByRole("button", { name: "快速新建" }));
     await user.type(screen.getByLabelText("app_key"), "billing");
     await user.type(screen.getByLabelText("名称"), "Billing");
+    await user.type(screen.getByLabelText("别名"), "账单中心");
     await user.type(screen.getByLabelText("描述"), "Billing app");
     await user.type(screen.getByLabelText("Owner 用户 ID"), "owner-a, owner-b");
     await user.type(screen.getByLabelText("Developer 用户 ID"), "dev-a");
@@ -247,6 +248,7 @@ describe("ConsoleAppList", () => {
       expect(parseJsonBody(postCall?.[1])).toEqual({
         app_key: "billing",
         name: "Billing",
+        alias: "账单中心",
         description: "Billing app",
         owner_user_ids: ["owner-a", "owner-b"],
         developer_user_ids: ["dev-a"],

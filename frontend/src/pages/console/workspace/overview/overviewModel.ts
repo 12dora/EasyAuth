@@ -3,6 +3,8 @@ import type { BadgeTone, Translator } from "../../../../lib/status";
 
 export interface AppPatchPayload {
   name: string;
+  /** 面向员工的别名; 清空时提交空字符串, 由后端落成「无别名」。 */
+  alias: string;
   description: string;
 }
 

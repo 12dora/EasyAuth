@@ -6,6 +6,9 @@
  * 格式固定为 `别名(技术名)`; 没有别名时只显示技术名。
  */
 
+/** 与后端 `App.alias` 的 max_length 对齐; 控制台的别名输入框据此截断。 */
+export const APP_ALIAS_MAX_LENGTH = 128;
+
 export interface AppDisplayNameSource {
   name: string;
   alias?: string | null;

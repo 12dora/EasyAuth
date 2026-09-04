@@ -927,6 +927,9 @@ describe("ConsoleAppWorkspace", () => {
     const nameInput = within(dialog).getByLabelText("名称");
     await user.clear(nameInput);
     await user.type(nameInput, "Demo Renamed");
+    const aliasInput = within(dialog).getByLabelText("别名");
+    expect(aliasInput).toHaveAttribute("maxlength", "128");
+    await user.type(aliasInput, "海关数据");
     const descriptionInput = within(dialog).getByLabelText("描述");
     await user.clear(descriptionInput);
     await user.type(descriptionInput, "Updated description");
@@ -936,7 +939,47 @@ describe("ConsoleAppWorkspace", () => {
       const patchCall = findFetchCall(fetchMock, "/console/api/v1/apps/demo", "PATCH");
       expect(parseJsonBody(patchCall?.[1])).toEqual({
         name: "Demo Renamed",
+        alias: "海关数据",
         description: "Updated description",
+      });
+    });
+  });
+
+  test("总览页清空别名时 PATCH 提交空字符串", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/apps/demo" && !init?.method) {
+        return jsonResponse({ app: { ...appPayload.app, alias: "海关数据", is_active: true, can_manage: true } });
+      }
+      if (url === "/console/api/v1/apps/demo/configuration-status" && !init?.method) {
+        return jsonResponse({ status: "ready", data: [] });
+      }
+      if (url === "/console/api/v1/apps/demo/memberships" && !init?.method) {
+        return jsonResponse({ data: [] });
+      }
+      if (url === "/console/api/v1/apps/demo" && init?.method === "PATCH") {
+        return jsonResponse({ app: { ...appPayload.app, can_manage: true } });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWorkspace("/console/apps/demo");
+
+    // 工作区标题和基本信息都按「别名(技术名)」展示。
+    expect(await screen.findByRole("heading", { name: "海关数据(Demo App)" })).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "编辑" }));
+    const dialog = await screen.findByRole("dialog", { name: "编辑基本信息" });
+    await user.clear(within(dialog).getByLabelText("别名"));
+    await user.click(within(dialog).getByRole("button", { name: "保存" }));
+
+    await waitFor(() => {
+      const patchCall = findFetchCall(fetchMock, "/console/api/v1/apps/demo", "PATCH");
+      expect(parseJsonBody(patchCall?.[1])).toEqual({
+        name: "Demo App",
+        alias: "",
+        description: "Demo console app",
       });
     });
   });

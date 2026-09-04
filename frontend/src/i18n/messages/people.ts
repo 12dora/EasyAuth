@@ -22,6 +22,9 @@ export const zhCN = {
 
   "appList.createDialog.title": "新建应用",
   "appList.createDialog.name": "名称",
+  "appList.createDialog.alias": "别名",
+  "appList.createDialog.aliasHint": "选填。留空则界面上只显示技术名。",
+  "appList.createDialog.aliasPlaceholder": "面向员工的显示名，例如 海关数据",
   "appList.createDialog.description": "描述",
   "appList.createDialog.ownerIds": "Owner 用户 ID",
   "appList.createDialog.developerIds": "Developer 用户 ID",
@@ -142,6 +145,9 @@ export const en: Record<keyof typeof zhCN, string> = {
 
   "appList.createDialog.title": "Create Application",
   "appList.createDialog.name": "Name",
+  "appList.createDialog.alias": "Alias",
+  "appList.createDialog.aliasHint": "Optional. Leave empty to show only the technical name.",
+  "appList.createDialog.aliasPlaceholder": "Employee-facing display name, e.g. Customs Data",
   "appList.createDialog.description": "Description",
   "appList.createDialog.ownerIds": "Owner user IDs",
   "appList.createDialog.developerIds": "Developer user IDs",
