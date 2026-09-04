@@ -105,6 +105,8 @@ function parsePortalGrantRow(value: unknown, index: number): PortalGrantRow {
   const row = requireRecord(value, `${label} 必须是对象`);
   requireString(row.app_key, `${label}.app_key`);
   requireString(row.app_name, `${label}.app_name`);
+  // 别名由控制台维护, 应用没配时后端下发空字符串; 字段本身必须存在。
+  requireString(row.app_alias, `${label}.app_alias`);
   requireString(row.grant_type, `${label}.grant_type`);
   requireNullableString(row.grant_expires_at, `${label}.grant_expires_at`);
   requireInteger(row.grant_id, `${label}.grant_id`, 1);
@@ -143,7 +145,8 @@ function parsePortalRequestRow(value: unknown, index: number): PortalRequestRow 
   const label = `申请记录列表 data[${index}]`;
   const row = requireRecord(value, `${label} 必须是对象`);
   requireInteger(row.id, `${label}.id`, 1);
-  for (const field of ["app_key", "app_name", "request_type", "status", "status_label", "grant_type", "reason", "submitted_at"] as const) {
+  // app_alias: 应用没配别名时后端下发空字符串; 字段本身必须存在。
+  for (const field of ["app_key", "app_name", "app_alias", "request_type", "status", "status_label", "grant_type", "reason", "submitted_at"] as const) {
     requireString(row[field], `${label}.${field}`);
   }
   requireNullableInteger(row.base_grant_id, `${label}.base_grant_id`, 1);

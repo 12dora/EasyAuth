@@ -2377,6 +2377,89 @@ describe("PortalPage tables", () => {
     }
   });
 
+  test("两张表的应用列都按「别名(技术名)」展示", async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/me/grants?page=1&page_size=20") {
+        return jsonResponse({
+          data: [portalGrantRow({ app_key: "easycustoms", app_name: "EasyCustoms", app_alias: "海关数据" })],
+          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+        });
+      }
+      if (url === "/portal/api/v1/me/access-requests?page=1&page_size=20") {
+        return jsonResponse({
+          data: [portalRequestRow({ app_key: "easycustoms", app_name: "EasyCustoms", app_alias: "海关数据" })],
+          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage("/portal");
+      expect(await screen.findByText("海关数据(EasyCustoms)")).toBeVisible();
+      // 技术名仍以等宽 app_key 的形式留在第二行, 供对接排查用。
+      expect(screen.getByText("easycustoms")).toBeVisible();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      renderPortalPage("/portal/requests");
+      expect(await screen.findByText("海关数据(EasyCustoms)")).toBeVisible();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test.each([
+    ["授权", "/portal", "授权加载失败", "授权列表 data[0].app_alias 必须是字符串"],
+    ["申请", "/portal/requests", "申请记录加载失败", "申请记录列表 data[0].app_alias 必须是字符串"],
+  ])("%s列表缺少 app_alias 时明确报错", async (_caseName, entry, title, message) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async (input) => {
+        const row = String(input).includes("access-requests") ? portalRequestRow() : portalGrantRow();
+        delete (row as Record<string, unknown>).app_alias;
+        return jsonResponse({ data: [row], pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 } });
+      }),
+    );
+
+    try {
+      renderPortalPage(entry);
+
+      expect(await screen.findByText(title)).toBeVisible();
+      expect(screen.getByText(message)).toBeVisible();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("授权列表缺少权限显示名时明确报错", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => {
+        const grant = portalExpandedGrant();
+        delete (grant as Record<string, unknown>).scope_name_en;
+        return jsonResponse({
+          data: [portalGrantRow({ grants: [grant] })],
+          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+        });
+      }),
+    );
+
+    try {
+      renderPortalPage("/portal");
+
+      expect(await screen.findByText("授权加载失败")).toBeVisible();
+      expect(screen.getByText("授权列表 data[0].grants[0].scope_name_en 必须是字符串")).toBeVisible();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   test("授权列表行结构错误时明确报错", async () => {
     vi.stubGlobal(
       "fetch",
@@ -2481,6 +2564,7 @@ function portalRequestRow(overrides: Record<string, unknown> = {}) {
     id: 1,
     app_key: "crm",
     app_name: "CRM",
+    app_alias: "",
     request_type: "grant",
     base_grant_id: null,
     base_grant_revision: null,
