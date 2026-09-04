@@ -5,10 +5,14 @@
  * 整张表没法看; 条数 + 浮层既保住了「我到底有多少权限」这个第一眼信息,
  * 又让明细随时可查。浮层按来源分组(角色的权限归在角色名下, 直接授权单列一组),
  * 因为员工要回答的往往是「这项权限是哪个角色带来的」。
+ *
+ * 浮层交给 antd Popover: 手写的版本把浮层挂在 body 上, 指针刚离开触发器就 onMouseLeave 关掉,
+ * 于是长列表的滚动条永远够不着, 贴到视口底部也不会翻转。Popover 在浮层自身上挂了
+ * mouseenter/mouseleave 并带关闭延时, 指针能安全走进去, 位置由内建的 autoAdjustOverflow 负责。
+ * 外观不另做深色皮: 全站 antd 浮层(表头筛选下拉等)都直接吃 theme.ts 的令牌, 这里一并对齐。
  */
 
-import { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { createPortal } from "react-dom";
+import { Popover } from "antd";
 
 import { localizedField, useI18n } from "../../../i18n/I18nProvider";
 import type { Locale } from "../../../i18n/messages";
@@ -21,6 +25,15 @@ interface GrantPermissionSection {
   lines: string[];
 }
 
+/**
+ * 浮层的滚动盒就是 antd 的 `.ant-popover-inner`(带 `role="tooltip"` 与 id 的那一层),
+ * 所以尺寸约束挂在 `classNames.body` 上而不是自己再套一层。
+ */
+const POPOVER_BODY_CLASS = "max-h-80 max-w-[28rem] overflow-y-auto";
+
+/** 单位是秒: 指针要从触发器走到浮层上, 关闭必须留出这段路程的时间。 */
+const MOUSE_LEAVE_DELAY_SECONDS = 0.2;
+
 export function GrantPermissionsCell({ row }: { row: PortalGrantRow }) {
   const { locale, t } = useI18n();
   const count = row.grants.length;
@@ -31,80 +44,43 @@ export function GrantPermissionsCell({ row }: { row: PortalGrantRow }) {
   }
 
   return (
-    <HoverTooltip label={countText}>
-      <div className="space-y-2">
-        {buildSections(row, locale, t).map((section) => (
-          <div key={section.key}>
-            <p className="font-semibold text-paper/70">{section.label}</p>
-            <ul>
-              {section.lines.map((line) => (
-                <li key={line}>{line}</li>
-              ))}
-            </ul>
-          </div>
-        ))}
-      </div>
-    </HoverTooltip>
+    <Popover
+      classNames={{ body: POPOVER_BODY_CLASS }}
+      content={<GrantPermissionList row={row} locale={locale} t={t} />}
+      mouseLeaveDelay={MOUSE_LEAVE_DELAY_SECONDS}
+      placement="bottomLeft"
+      trigger={["hover", "focus"]}
+    >
+      <button
+        type="button"
+        className="cursor-help whitespace-nowrap underline decoration-dotted decoration-ink-faint underline-offset-4"
+      >
+        {countText}
+      </button>
+    </Popover>
   );
 }
 
 /**
- * 悬停/聚焦浮层。
+ * 浮层正文。
  *
- * 浮层挂到 document.body 上而不是像 InfoTip 那样在原地绝对定位: antd 表格给
- * `.ant-table-content` 挂了 `overflow: auto hidden`(横向滚动容器), 单元格里的
- * 绝对定位浮层会被这一层直接裁掉, 只剩贴着单元格的一条。
+ * `tabIndex={0}` 是给键盘用户的: 长列表在 `.ant-popover-inner` 上滚动, 焦点落在正文里
+ * 方向键才滚得动最近的滚动祖先。
  */
-function HoverTooltip({ label, children }: { label: string; children: ReactNode }) {
-  const tooltipId = useId();
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const [open, setOpen] = useState(false);
-  const [anchor, setAnchor] = useState({ top: 0, left: 0 });
-
-  useLayoutEffect(() => {
-    const trigger = triggerRef.current;
-    if (!open || trigger === null) {
-      return;
-    }
-    const rect = trigger.getBoundingClientRect();
-    setAnchor({ top: rect.bottom + 6, left: rect.left });
-  }, [open]);
-
+function GrantPermissionList({ row, locale, t }: { row: PortalGrantRow; locale: Locale; t: Translator }) {
   return (
-    <span
-      className="inline-flex"
-      onMouseEnter={() => setOpen(true)}
-      onMouseLeave={() => setOpen(false)}
-    >
-      <button
-        ref={triggerRef}
-        type="button"
-        aria-describedby={open ? tooltipId : undefined}
-        className="cursor-help whitespace-nowrap underline decoration-dotted decoration-ink-faint underline-offset-4"
-        onBlur={() => setOpen(false)}
-        onFocus={() => setOpen(true)}
-        onKeyDown={(event) => {
-          if (event.key === "Escape") {
-            setOpen(false);
-          }
-        }}
-      >
-        {label}
-      </button>
-      {open
-        ? createPortal(
-            <div
-              id={tooltipId}
-              role="tooltip"
-              style={{ top: anchor.top, left: anchor.left }}
-              className="fixed z-50 max-h-80 max-w-[28rem] overflow-y-auto rounded-[3px] bg-ink px-3 py-2 text-xs font-normal normal-case leading-5 tracking-normal text-paper shadow-lg"
-            >
-              {children}
-            </div>,
-            document.body,
-          )
-        : null}
-    </span>
+    <div className="space-y-2" tabIndex={0}>
+      {buildSections(row, locale, t).map((section) => (
+        <div key={section.key}>
+          <p className="font-semibold text-ink-soft">{section.label}</p>
+          <ul>
+            {section.lines.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      ))}
+    </div>
   );
 }
 

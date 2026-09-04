@@ -17,6 +17,10 @@ import {
 // 整套用例并行跑时默认 5s 不够; 这里只放宽本文件的用例超时。
 vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
 
+// 权限详情浮层的 mouseLeaveDelay 是 0.2s(GrantPermissionsCell), 等够这段时间才能证明
+// 指针走进浮层后它没被关掉。
+const POPOVER_MOUSE_LEAVE_GRACE_MS = 400;
+
 function renderPortalPageWithUser(currentUserId: string, initialEntry = "/portal/request") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
@@ -1823,7 +1827,10 @@ describe("PortalPage tables", () => {
       expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
 
       await user.hover(trigger);
-      const tooltip = screen.getByRole("tooltip");
+      const tooltip = await screen.findByRole("tooltip");
+      await waitFor(() => {
+        expect(tooltip).toBeVisible();
+      });
       expect(trigger).toHaveAttribute("aria-describedby", tooltip.id);
       // 角色带来的权限归在角色名下, 直接授权单列一组。
       expect(within(tooltip).getByText("销售只读")).toBeVisible();
@@ -1831,16 +1838,28 @@ describe("PortalPage tables", () => {
       expect(within(tooltip).getByText("查看订单 · 本人")).toBeVisible();
       expect(within(tooltip).getByText("导出订单 · 全部")).toBeVisible();
       expect(within(tooltip).getByText("查看看板 · 全局")).toBeVisible();
+      // 长列表靠浮层自己滚: 滚动盒就是这一层。
       expect(tooltip).toHaveClass("max-h-80", "overflow-y-auto", "max-w-[28rem]");
 
-      await user.unhover(trigger);
-      expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+      // 指针从触发器走进浮层不能把它关掉, 否则滚动条永远够不着; 等过了关闭延时再断言。
+      await user.hover(tooltip);
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, POPOVER_MOUSE_LEAVE_GRACE_MS));
+      });
+      expect(tooltip).toBeVisible();
+
+      await user.unhover(tooltip);
+      await waitFor(() => {
+        expect(screen.queryByRole("tooltip")).not.toBeInTheDocument();
+      });
 
       // 键盘用户: 触发器可聚焦, 聚焦即展开。
       act(() => {
         trigger.focus();
       });
-      expect(screen.getByRole("tooltip")).toBeVisible();
+      await waitFor(() => {
+        expect(screen.getByRole("tooltip")).toBeVisible();
+      });
     } finally {
       vi.unstubAllGlobals();
     }
