@@ -2,7 +2,12 @@ import { describe, expect, test } from "vitest";
 
 import { MESSAGES } from "../i18n/messages";
 import type { Locale, MessageKey } from "../i18n/messages";
-import { accessRequestStatusLabel, badgeToneForAccessRequestStatus, grantTypeLabel } from "./status";
+import {
+  accessRequestStatusColor,
+  accessRequestStatusLabel,
+  badgeToneForAccessRequestStatus,
+  grantTypeLabel,
+} from "./status";
 
 function translatorFor(locale: Locale) {
   return (key: MessageKey) => MESSAGES[locale][key];
@@ -30,6 +35,26 @@ describe("badgeToneForAccessRequestStatus", () => {
     expect(badgeToneForAccessRequestStatus("grant_expired")).toBe("signal");
     expect(badgeToneForAccessRequestStatus("rejected")).toBe("signal");
     expect(badgeToneForAccessRequestStatus("grant_applied")).toBe("evergreen");
+  });
+});
+
+describe("accessRequestStatusColor", () => {
+  test.each([
+    ["approved", "success"],
+    ["grant_applied", "success"],
+    ["submitted", "processing"],
+    ["rejected", "error"],
+    ["grant_failed", "error"],
+    ["grant_conflict", "warning"],
+    ["grant_expired", "secondary"],
+    ["withdrawn", "secondary"],
+  ])("%s 归到 %s 语义色", (status, color) => {
+    expect(accessRequestStatusColor(status)).toBe(color);
+  });
+
+  test("未知状态不冒充成功或失败, 落在次要文字色", () => {
+    expect(accessRequestStatusColor("something_new")).toBe("secondary");
+    expect(accessRequestStatusColor(null)).toBe("secondary");
   });
 });
 

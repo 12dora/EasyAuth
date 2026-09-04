@@ -43,6 +43,36 @@ export function badgeToneForAccessRequestStatus(status: string | null | undefine
   }
 }
 
+/** 申请状态的语义色; 具体色值由 antd 主题 token 决定, 组件里不写死十六进制。 */
+export type AccessRequestStatusColor = "success" | "processing" | "error" | "warning" | "secondary";
+
+/**
+ * 「我的申请」状态列的文字颜色。
+ *
+ * 状态列是纯文字而不是徽章, 颜色只回答「这条申请是成了、在走、还是坏了」:
+ * 已批准 / 已授权是好结果, 等待审批是进行中, 驳回与授权失败是坏结果,
+ * 授权冲突要人介入(警告), 已过期 / 已撤回是不再需要关注的终态(次要文字色)。
+ */
+export function accessRequestStatusColor(status: string | null | undefined): AccessRequestStatusColor {
+  switch (status) {
+    case "approved":
+    case "grant_applied":
+      return "success";
+    case "submitted":
+      return "processing";
+    case "rejected":
+    case "grant_failed":
+      return "error";
+    case "grant_conflict":
+      return "warning";
+    case "grant_expired":
+    case "withdrawn":
+      return "secondary";
+    default:
+      return "secondary";
+  }
+}
+
 export function readinessLabel(t: Translator, status: string | null | undefined): string {
   switch (status) {
     case "ready":

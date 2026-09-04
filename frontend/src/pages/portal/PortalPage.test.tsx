@@ -2603,6 +2603,9 @@ function portalRequestRow(overrides: Record<string, unknown> = {}) {
     decided_by_name: null,
     decided_at: null,
     decision_comment: "",
+    approved_at: null,
+    applied_at: null,
+    withdrawn_at: null,
     ...overrides,
   };
 }

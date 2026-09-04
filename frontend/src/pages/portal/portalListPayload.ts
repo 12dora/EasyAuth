@@ -52,13 +52,31 @@ interface PortalRequestDirectGrant {
   scope: string;
 }
 
+/**
+ * 解析后的申请行。
+ *
+ * 交集里的字段都是 `parsePortalRequestRow` 已经逐个校验过的, 因此在这里收窄成必填:
+ * 消费方不必再对着 `PortalRequest` 上的可选签名写「万一没有」的分支。
+ */
 export type PortalRequestRow = PortalRequest & {
+  id: number;
+  status: string;
+  status_label: string;
+  grant_type: string;
+  grant_expires_at: string | null;
+  reason: string;
+  submitted_at: string;
   authorization_groups: PortalRequestGroup[];
   direct_grants: PortalRequestDirectGrant[];
   current_approvers: PortalRequestApprover[];
   decided_by: string;
   decision_actor_type: string;
   decided_by_name: string | null;
+  decided_at: string | null;
+  decision_comment: string;
+  approved_at: string | null;
+  applied_at: string | null;
+  withdrawn_at: string | null;
 };
 
 export interface PortalListPayload<T> {
@@ -152,7 +170,11 @@ function parsePortalRequestRow(value: unknown, index: number): PortalRequestRow 
   requireNullableInteger(row.base_grant_id, `${label}.base_grant_id`, 1);
   requireNullableInteger(row.base_grant_revision, `${label}.base_grant_revision`, 1);
   requireNullableString(row.grant_expires_at, `${label}.grant_expires_at`);
-  requireNullableString(row.decided_at, `${label}.decided_at`);
+  // 申请生命周期上的四个时刻: 审批流程图逐个渲染成节点, 缺一个节点就会静默消失,
+  // 因此和 decided_at 一样要求字段必须存在(未到达该阶段时是 null)。
+  for (const field of ["decided_at", "approved_at", "applied_at", "withdrawn_at"] as const) {
+    requireNullableString(row[field], `${label}.${field}`);
+  }
   requireString(row.decision_comment, `${label}.decision_comment`);
   requireString(row.decided_by, `${label}.decided_by`);
   requireString(row.decision_actor_type, `${label}.decision_actor_type`);
@@ -185,6 +207,9 @@ function parsePortalRequestRow(value: unknown, index: number): PortalRequestRow 
     decided_by: row.decided_by,
     decision_actor_type: row.decision_actor_type,
     decided_by_name: row.decided_by_name,
+    approved_at: row.approved_at,
+    applied_at: row.applied_at,
+    withdrawn_at: row.withdrawn_at,
   } as PortalRequestRow;
 }
 

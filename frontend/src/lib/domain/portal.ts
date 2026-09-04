@@ -67,6 +67,12 @@ export interface PortalRequest {
   decided_by_name?: string | null;
   decided_at?: string | null;
   decision_comment?: string | null;
+  /** 审批通过的时刻; 未通过为 null。 */
+  approved_at?: string | null;
+  /** 授权真正落地生效的时刻; 尚未生效或生效失败为 null。 */
+  applied_at?: string | null;
+  /** 申请人撤回的时刻; 未撤回为 null。 */
+  withdrawn_at?: string | null;
 }
 
 export interface PortalApprovalApplicant {
