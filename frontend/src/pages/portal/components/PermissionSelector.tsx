@@ -4,6 +4,11 @@ import { EmptyState } from "../../../components/ui/EmptyState";
 import { useI18n } from "../../../i18n/I18nProvider";
 import type { Translator } from "../../../lib/status";
 
+import {
+  retainableSelectionKeySet,
+  selectionKeysOutsideRetainableTarget,
+  type RevokeBaseGrantSnapshot,
+} from "../hooks/accessRequestTargetLock";
 import type { ScopedPermissionGroupItem, ScopedPermissionItem } from "../hooks/accessRequestTypes";
 import { PermissionSelectorTable } from "./PermissionSelectorTable";
 import { PermissionSelectorToolbar } from "./PermissionSelectorToolbar";
@@ -27,6 +32,11 @@ interface PermissionSelectorProps {
    * 取消勾选其中一项会把权限组落地成逐项直接申请(见 accessRequestActions)。
    */
   coveredKeys?: string[];
+  /**
+   * 撤销申请的基础授权快照: 撤销目标只能在它之内往下减(见 accessRequestTargetLock),
+   * 越界的权限范围 chip 与工具栏"全选/按范围选择"因此要真正禁用。null 表示不是撤销申请。
+   */
+  revokeBaseGrant?: RevokeBaseGrantSnapshot | null;
   expandedGroupKeys: string[];
   loading: boolean;
   errorMessage: string;
@@ -46,6 +56,7 @@ export function PermissionSelector({
   ungroupedPermissions,
   selectedKeys,
   coveredKeys = [],
+  revokeBaseGrant = null,
   expandedGroupKeys,
   loading,
   errorMessage,
@@ -69,6 +80,11 @@ export function PermissionSelector({
   const displaySelectedKeys = useMemo(
     () => Array.from(new Set([...stableSelectedKeys, ...stableCoveredKeys])),
     [stableCoveredKeys, stableSelectedKeys],
+  );
+  // 撤销草稿里还能勾上的权限范围: 基础授权的直接权限 + 当前所选权限组的覆盖范围。
+  const retainableKeySet = useMemo(
+    () => retainableSelectionKeySet(revokeBaseGrant, stableCoveredKeys),
+    [revokeBaseGrant, stableCoveredKeys],
   );
   const rows = useMemo(
     () =>
@@ -97,6 +113,7 @@ export function PermissionSelector({
       locale,
       displaySelectedKeys,
       coveredKeySet,
+      retainableKeySet,
       showSelectedOnly,
       disabled,
       onPermissionScopeChange,
@@ -117,12 +134,17 @@ export function PermissionSelector({
   // 表格不分页, 工具栏因此作用于当前渲染出来的全部行(展开的权限组 + 未折叠的权限)。
   // 工具栏交上去的选择键里可以带上权限组已覆盖的范围: 去重与"落地权限组"都由选择动作统一负责。
   const visibleRows = table.getRowModel().rows;
+  // 撤销申请下"全选/按范围选择"只要会带进任何一项基础授权之外的权限, 整个拆分按钮就禁用。
+  const toolbarAdditionsEscapeTarget =
+    selectionKeysOutsideRetainableTarget(currentPageSelectionKeysFromRows(visibleRows), retainableKeySet).length > 0;
 
   return (
     <div className="permission-selector__surface">
       <PermissionSelectorToolbar
         selectedCount={selectedKeys.length}
         showSelectedOnly={showSelectedOnly}
+        disabled={disabled}
+        additionsDisabled={toolbarAdditionsEscapeTarget}
         onShowSelectedOnlyChange={setShowSelectedOnly}
         onExpandAll={() => onExpandGroups(currentPageGroupKeysFromRows(visibleRows))}
         onCollapseAll={() => onCollapseGroups(currentPageGroupKeysFromRows(visibleRows))}

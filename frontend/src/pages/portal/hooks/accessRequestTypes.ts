@@ -9,6 +9,7 @@ import type {
   PortalRequestCatalog,
 } from "../../../lib/domain";
 import type { PortalGrantRow } from "../portalListPayload";
+import type { RevokeBaseGrantSnapshot } from "./accessRequestTargetLock";
 
 export type AccessGrantType = "permanent" | "timed";
 export type AccessRequestType = "grant" | "change" | "revoke" | "renew";
@@ -170,6 +171,8 @@ export interface AccessRequestFormResult {
   visiblePermissionKeys: string[];
   /** 所选权限组(可多个)覆盖的权限范围并集(展示态联动勾选用, 不计入直接权限提交)。 */
   groupCoveredSelectionKeys: string[];
+  /** 撤销申请的基础授权快照: 目标只能在它之内往下减, 越界的添加入口由界面禁用。非撤销申请为 null。 */
+  revokeBaseGrant: RevokeBaseGrantSnapshot | null;
   catalogIsLoading: boolean;
   catalogErrorMessage: string;
   submitErrorMessage: string;

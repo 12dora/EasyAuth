@@ -7,6 +7,7 @@ import { localizedName, useI18n } from "../../../i18n/I18nProvider";
 import type { Locale } from "../../../i18n/messages";
 
 import { directGrantSelectionKey } from "../hooks/accessRequestSelection";
+import { groupScopeChipAddsOutsideRetainableTarget } from "../hooks/accessRequestTargetLock";
 import type { ScopedPermissionGroupItem, ScopedPermissionItem } from "../hooks/accessRequestTypes";
 import { groupScopeSelectionState, type ScopeOptionView } from "./permissionSelectorRows";
 
@@ -71,12 +72,15 @@ export function PermissionGroupScopeCell({
   group,
   scopeOptions,
   selectedKeys,
+  retainableKeySet,
   onScopeChange,
   locale,
 }: {
   group: ScopedPermissionGroupItem;
   scopeOptions: ScopeOptionView[];
   selectedKeys: string[];
+  /** 撤销申请里还允许勾上的权限范围; null 表示不是撤销申请。 */
+  retainableKeySet: Set<string> | null;
   onScopeChange: (group: ScopedPermissionGroupItem, scopeKey: string, shouldSelect: boolean) => void;
   locale: Locale;
 }) {
@@ -96,6 +100,8 @@ export function PermissionGroupScopeCell({
             label={localizedName(locale, scope)}
             checked={selectionState === "checked"}
             mixed={selectionState === "indeterminate"}
+            // 撤销时这一下会带进基础授权之外的权限就禁用; 清空方向算不出新增, 因此照旧可点。
+            disabled={groupScopeChipAddsOutsideRetainableTarget(group, scope.key, selectedKeys, retainableKeySet)}
             ariaLabel={t("selector.selectGroupScope", { groupKey: group.key, scopeName: localizedName(locale, scope) })}
             // 全勾时点一下清空整个范围; 未勾与半勾都补齐成全勾, 半勾不再变成"再点一次也没反应"。
             onChange={() => onScopeChange(group, scope.key, selectionState !== "checked")}
@@ -110,12 +116,15 @@ export function PermissionScopeCell({
   permission,
   selectedKeys,
   coveredKeySet,
+  retainableKeySet,
   onScopeChange,
   locale,
 }: {
   permission: ScopedPermissionItem;
   selectedKeys: string[];
   coveredKeySet: Set<string>;
+  /** 撤销申请里还允许勾上的权限范围; null 表示不是撤销申请。 */
+  retainableKeySet: Set<string> | null;
   onScopeChange: (permission: ScopedPermissionItem, scopeKey: string) => void;
   locale: Locale;
 }) {
@@ -138,6 +147,8 @@ export function PermissionScopeCell({
             label={localizedName(locale, scope)}
             checked={selectedKeys.includes(selectionKey)}
             covered={isCovered}
+            // 撤销目标只能是基础授权的子集: 基础授权之外的权限范围勾上必被后端拒, 直接禁掉。
+            disabled={retainableKeySet !== null && !retainableKeySet.has(selectionKey)}
             title={isCovered ? t("selector.scope.coveredByGroup") : undefined}
             ariaLabel={scopeLabel}
             onChange={() => onScopeChange(permission, scope.key)}
@@ -153,6 +164,7 @@ function ScopeChip({
   checked,
   mixed = false,
   covered = false,
+  disabled = false,
   title,
   ariaLabel,
   onChange,
@@ -162,6 +174,7 @@ function ScopeChip({
   mixed?: boolean;
   /** 由所选权限组带来的权限范围: 与直接勾选同样可点, 只在样式上标出来源。 */
   covered?: boolean;
+  disabled?: boolean;
   title?: string;
   ariaLabel: string;
   onChange: () => void;
@@ -182,6 +195,8 @@ function ScopeChip({
         checked && "permission-selector__scope-chip--checked",
         mixed && "permission-selector__scope-chip--mixed",
         covered && "permission-selector__scope-chip--covered",
+        // 与只读行一致的禁用样式(见 PermissionSelectorBody.rowClassName)。
+        disabled && "pointer-events-none opacity-60",
       )}
     >
       <input
@@ -189,6 +204,7 @@ function ScopeChip({
         type="checkbox"
         checked={checked}
         aria-checked={mixed ? "mixed" : checked}
+        disabled={disabled}
         onChange={onChange}
         aria-label={ariaLabel}
       />

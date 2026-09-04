@@ -18,6 +18,12 @@ import {
   uniqueStrings,
 } from "./accessRequestSelection";
 import {
+  retainableSelectionKeySet,
+  revokeBaseGrantSnapshot,
+  selectionKeysOutsideRetainableTarget,
+  type RevokeBaseGrantSnapshot,
+} from "./accessRequestTargetLock";
+import {
   ACCESS_REQUEST_MAX_APPROVERS,
   defaultGrantTypeForRequestType,
   type AccessRequestActions,
@@ -34,9 +40,13 @@ export function buildAccessRequestActions(
   currentGrants: PortalGrantRow[],
   submit: () => void,
 ): AccessRequestActions {
+  const revokeSnapshot = revokeBaseGrantSnapshot(
+    fields.requestType,
+    currentGrants.find((item) => String(item.grant_id) === fields.baseGrantId),
+  );
   return {
     ...buildTargetActions(fields, currentGrants),
-    ...buildPermissionSelectionActions(fields, catalogView),
+    ...buildPermissionSelectionActions(fields, catalogView, revokeSnapshot),
     ...buildGroupExpansionActions(fields, catalogView),
     ...buildApproverActions(fields),
     submit,
@@ -96,28 +106,33 @@ type PermissionSelectionActions = Pick<
   "changeAuthorizationGroupKeys" | "selectPermissionKeys" | "clearPermissionKeys" | "changePermissionScope" | "changePermissionGroupScope"
 >;
 
-function buildPermissionSelectionActions(fields: AccessRequestFields, catalogView: CatalogView): PermissionSelectionActions {
+function buildPermissionSelectionActions(
+  fields: AccessRequestFields,
+  catalogView: CatalogView,
+  revokeSnapshot: RevokeBaseGrantSnapshot | null,
+): PermissionSelectionActions {
   return {
     changeAuthorizationGroupKeys: (groupKeys: string[]) => {
       assertTargetIsEditable(fields.requestType);
       const nextGroupKeys = uniqueStrings(groupKeys);
+      assertRevokeKeepsGroupsWithinBaseGrant(nextGroupKeys, revokeSnapshot);
       fields.setAuthorizationGroupKeys(nextGroupKeys);
       fields.setGroupMaterializationNoticeKey("");
       const coveredKeySet = groupCoveredSelectionKeySet(nextGroupKeys, catalogView);
       fields.setSelectedPermissionKeys((current) => current.filter((key) => !coveredKeySet.has(key)));
     },
     selectPermissionKeys: (keys: string[]) => {
-      applySelectionChange(fields, catalogView, (current) => uniqueStrings([...current, ...keys]));
+      applySelectionChange(fields, catalogView, revokeSnapshot, (current) => uniqueStrings([...current, ...keys]));
     },
     clearPermissionKeys: (keys: string[]) => {
       const keySet = new Set(keys);
-      applySelectionChange(fields, catalogView, (current) => current.filter((key) => !keySet.has(key)));
+      applySelectionChange(fields, catalogView, revokeSnapshot, (current) => current.filter((key) => !keySet.has(key)));
     },
     changePermissionScope: (permission: ScopedPermissionItem, scopeKey: string) => {
       // 勾选态看的是展示态: 权限组覆盖的权限也画成勾选, 再点一次就是"取消"。
       const shouldSelect = !selectedScopeKeysForPermission(permission, displaySelectionKeys(fields, catalogView))
         .includes(scopeKey);
-      applySelectionChange(fields, catalogView, (current) =>
+      applySelectionChange(fields, catalogView, revokeSnapshot, (current) =>
         nextPermissionScopeSelection(permission, scopeKey, shouldSelect, current),
       );
     },
@@ -127,7 +142,7 @@ function buildPermissionSelectionActions(fields: AccessRequestFields, catalogVie
       }
       const supportedPermissions = collectScopedGroupPermissions(group).filter((permission) => permissionScopeSelectionKey(permission, scopeKey));
 
-      applySelectionChange(fields, catalogView, (current) =>
+      applySelectionChange(fields, catalogView, revokeSnapshot, (current) =>
         supportedPermissions.reduce(
           (selectionKeys, permission) =>
             shouldSelect
@@ -163,12 +178,15 @@ function displaySelectionKeys(fields: AccessRequestFields, catalogView: CatalogV
 function applySelectionChange(
   fields: AccessRequestFields,
   catalogView: CatalogView,
+  revokeSnapshot: RevokeBaseGrantSnapshot | null,
   changeSelection: (selectionKeys: string[]) => string[],
 ): void {
   assertTargetIsEditable(fields.requestType);
   const groupKeys = fields.authorizationGroupKeys;
   const coveredKeys = groupCoveredSelectionKeys(groupKeys, catalogView);
-  const nextDisplayKeys = changeSelection(displaySelectionKeys(fields, catalogView));
+  const currentDisplayKeys = displaySelectionKeys(fields, catalogView);
+  const nextDisplayKeys = changeSelection(currentDisplayKeys);
+  assertRevokeKeepsSelectionWithinBaseGrant(currentDisplayKeys, nextDisplayKeys, revokeSnapshot, coveredKeys);
   const removedCoveredKeys = new Set(coveredKeys.filter((key) => !nextDisplayKeys.includes(key)));
   if (removedCoveredKeys.size === 0) {
     fields.setGroupMaterializationNoticeKey("");
@@ -222,6 +240,43 @@ function applySelectionChange(
 function assertTargetIsEditable(requestType: AccessRequestType): void {
   if (requestType === "renew") {
     throw new Error("续期申请不能修改申请目标：续期目标必须与基础授权完全一致。");
+  }
+}
+
+/*
+ * 撤销的目标只能从基础授权往下减(submission_validation._validate_revoke_subset), 加入基础授权里
+ * 没有的权限组或直接权限必然被后端拒绝。界面已经把越界的勾选框与 chip 全部禁用, 走到下面两个断言
+ * 说明接线出了问题, 与续期的守卫一样直接失败, 不造一份必被拒绝的草稿。
+ */
+
+function assertRevokeKeepsGroupsWithinBaseGrant(
+  nextGroupKeys: string[],
+  revokeSnapshot: RevokeBaseGrantSnapshot | null,
+): void {
+  if (revokeSnapshot === null) {
+    return;
+  }
+  const addedGroupKeys = nextGroupKeys.filter((key) => !revokeSnapshot.groupKeys.includes(key));
+  if (addedGroupKeys.length > 0) {
+    throw new Error(`撤销申请不能添加基础授权之外的权限组：${addedGroupKeys.join(", ")}`);
+  }
+}
+
+function assertRevokeKeepsSelectionWithinBaseGrant(
+  currentDisplayKeys: string[],
+  nextDisplayKeys: string[],
+  revokeSnapshot: RevokeBaseGrantSnapshot | null,
+  coveredKeys: string[],
+): void {
+  if (revokeSnapshot === null) {
+    return;
+  }
+  const retainableKeySet = retainableSelectionKeySet(revokeSnapshot, coveredKeys);
+  const currentDisplayKeySet = new Set(currentDisplayKeys);
+  const addedKeys = nextDisplayKeys.filter((key) => !currentDisplayKeySet.has(key));
+  const outsideKeys = selectionKeysOutsideRetainableTarget(addedKeys, retainableKeySet);
+  if (outsideKeys.length > 0) {
+    throw new Error(`撤销申请不能添加基础授权之外的权限：${outsideKeys.join(", ")}`);
   }
 }
 

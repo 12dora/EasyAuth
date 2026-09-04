@@ -3,6 +3,7 @@ import type { UseMutationResult } from "@tanstack/react-query";
 import type { MessageKey } from "../../../i18n/messages";
 import type { PortalGrantRow } from "../portalListPayload";
 import { groupCoveredSelectionKeys } from "./accessRequestCatalog";
+import { revokeBaseGrantSnapshot } from "./accessRequestTargetLock";
 import {
   ACCESS_REQUEST_MAX_REASON_LENGTH,
   type AccessRequestActions,
@@ -16,6 +17,7 @@ export interface AccessRequestFormResultInput {
   fields: AccessRequestFields;
   catalogView: CatalogView;
   currentGrants: PortalGrantRow[];
+  selectedBaseGrant: PortalGrantRow | undefined;
   catalogIsLoading: boolean;
   catalogError: Error | null;
   submitMutation: UseMutationResult<unknown, Error, void, unknown>;
@@ -30,6 +32,7 @@ export function buildAccessRequestFormResult(input: AccessRequestFormResultInput
   return {
     ...draftValues(input.fields),
     ...catalogSnapshot(input.fields, input.catalogView, input.currentGrants),
+    revokeBaseGrant: revokeBaseGrantSnapshot(input.fields.requestType, input.selectedBaseGrant),
     ...submissionStatus(input),
     prefillErrorMessageKey: input.prefillErrorMessageKey,
     ...formHandlers(input.fields, input.actions),
@@ -109,7 +112,12 @@ function submissionStatus(input: AccessRequestFormResultInput): SubmissionStatus
     submitErrorMessage: submitMutation.error ? submitMutation.error.message : "",
     toastMessageKey: submitMutation.isSuccess
       ? "portal.request.submitted"
-      : accessRequestToastMessageKey(input.fields, input.catalogView, input.catalogIsLoading),
+      : accessRequestToastMessageKey(
+          input.fields,
+          input.catalogView,
+          input.catalogIsLoading,
+          input.selectedBaseGrant,
+        ),
     canSubmit: input.canSubmit,
     expiresAtError: input.expiresAtError,
     isSubmitting: submitMutation.isPending,

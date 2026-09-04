@@ -2,6 +2,7 @@ import { Field, SelectInput } from "../../../components/Field";
 import { useI18n, localizedField } from "../../../i18n/I18nProvider";
 import { formatAppDisplayName } from "../../../lib/appDisplayName";
 import type { PortalCatalogApp } from "../../../lib/domain";
+import type { RevokeBaseGrantSnapshot } from "../hooks/accessRequestTargetLock";
 import type { AuthorizationGroupItem, ScopedPermissionGroupItem, ScopedPermissionItem } from "../hooks/accessRequestTypes";
 import { PermissionSelector } from "./PermissionSelector";
 
@@ -14,6 +15,12 @@ interface RequestTargetPickerProps {
   ungroupedPermissions: ScopedPermissionItem[];
   selectedPermissionKeys: string[];
   coveredSelectionKeys?: string[];
+  /**
+   * 撤销申请的基础授权快照: 撤销目标是"撤销后保留下来的授权", 后端要求它是基础授权的真子集
+   * (submission_validation._validate_revoke_subset), 所以基础授权之外的权限组与权限都不能勾。
+   * null 表示不是撤销申请, 目标不受基础授权约束。
+   */
+  revokeBaseGrant?: RevokeBaseGrantSnapshot | null;
   expandedGroupKeys: string[];
   catalogIsLoading: boolean;
   catalogErrorMessage: string;
@@ -38,6 +45,7 @@ export function RequestTargetPicker({
   ungroupedPermissions,
   selectedPermissionKeys,
   coveredSelectionKeys = [],
+  revokeBaseGrant = null,
   expandedGroupKeys,
   catalogIsLoading,
   catalogErrorMessage,
@@ -93,7 +101,12 @@ export function RequestTargetPicker({
                     type="checkbox"
                     value={group.key}
                     checked={authorizationGroupKeys.includes(group.key)}
-                    disabled={disabled || !appKey}
+                    // 撤销时基础授权已有的组必须保持可勾: 取消是撤销它, 再勾回来是撤回这次撤销。
+                    disabled={
+                      disabled
+                      || !appKey
+                      || (revokeBaseGrant !== null && !revokeBaseGrant.groupKeys.includes(group.key))
+                    }
                     onChange={(event) =>
                       onAuthorizationGroupKeysChange(
                         event.currentTarget.checked
@@ -128,6 +141,7 @@ export function RequestTargetPicker({
           ungroupedPermissions={ungroupedPermissions}
           selectedKeys={selectedPermissionKeys}
           coveredKeys={coveredSelectionKeys}
+          revokeBaseGrant={revokeBaseGrant}
           expandedGroupKeys={expandedGroupKeys}
           loading={catalogIsLoading}
           errorMessage={catalogErrorMessage}

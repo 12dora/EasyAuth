@@ -65,13 +65,20 @@ function ScopeColumnHeader({ table }: SelectorHeaderContext) {
 }
 
 function ScopeColumnCell({ row, table }: SelectorCellContext) {
-  const { locale, displaySelectedKeys, coveredKeySet, onPermissionScopeChange, onPermissionGroupScopeChange } =
-    permissionSelectorTableMeta(table);
+  const {
+    locale,
+    displaySelectedKeys,
+    coveredKeySet,
+    retainableKeySet,
+    onPermissionScopeChange,
+    onPermissionGroupScopeChange,
+  } = permissionSelectorTableMeta(table);
   return row.original.type === "group" ? (
     <PermissionGroupScopeCell
       group={row.original.group}
       scopeOptions={row.original.scopeOptions}
       selectedKeys={displaySelectedKeys}
+      retainableKeySet={retainableKeySet}
       onScopeChange={onPermissionGroupScopeChange}
       locale={locale}
     />
@@ -80,6 +87,7 @@ function ScopeColumnCell({ row, table }: SelectorCellContext) {
       permission={row.original.permission}
       selectedKeys={displaySelectedKeys}
       coveredKeySet={coveredKeySet}
+      retainableKeySet={retainableKeySet}
       onScopeChange={onPermissionScopeChange}
       locale={locale}
     />

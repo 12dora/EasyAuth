@@ -78,6 +78,7 @@ export function useAccessRequestForm(currentUserId = "", options: UseAccessReque
     fields,
     catalogView,
     currentGrants,
+    selectedBaseGrant,
     catalogIsLoading,
     catalogError: catalogQuery.error ?? (lifecycleSelectorActive ? currentGrantsQuery.error : null),
     submitMutation,

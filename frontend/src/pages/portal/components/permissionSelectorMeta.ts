@@ -25,6 +25,11 @@ declare module "@tanstack/react-table" {
     displaySelectedKeys: string[];
     /** 所选权限组覆盖的权限范围: 与直接勾选同样可点, 只在样式上标出来源。 */
     coveredKeySet: Set<string>;
+    /**
+     * 撤销申请里还允许勾上的权限范围(基础授权的直接权限 + 当前所选权限组的覆盖范围)。
+     * 越界的 chip 必须真正 disabled: 撤销目标只能是基础授权的子集。null 表示不是撤销申请。
+     */
+    retainableKeySet: Set<string> | null;
     /** 仅看已选: 空态文案要跟着换。 */
     showSelectedOnly: boolean;
     disabled: boolean;
