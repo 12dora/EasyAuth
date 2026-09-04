@@ -8,13 +8,8 @@
  */
 
 import type { PortalGrantRow } from "../portalListPayload";
-import { collectScopedGroupPermissions } from "./accessRequestCatalog";
-import { directGrantSelectionKey, nextPermissionScopeSelection } from "./accessRequestSelection";
-import type {
-  AccessRequestPayloadValues,
-  AccessRequestType,
-  ScopedPermissionGroupItem,
-} from "./accessRequestTypes";
+import { directGrantSelectionKey } from "./accessRequestSelection";
+import type { AccessRequestPayloadValues, AccessRequestType } from "./accessRequestTypes";
 
 /** 撤销申请的基础授权快照: 与后端 EffectiveGrantSnapshot 的 group_ids / direct_grants 一一对应。 */
 export interface RevokeBaseGrantSnapshot {
@@ -89,28 +84,32 @@ export function selectionKeysOutsideRetainableTarget(
 }
 
 /**
- * 权限组表头 chip 点一下是否会添加越界权限。
+ * 一次选择变更相对当前展示态新增、且落在保留范围之外的权限范围。
  *
- * 表头 chip 的"选中"方向会按范围递增关系一路补齐低位范围(见 nextPermissionScopeSelection),
- * 所以要拿真正会落下来的范围集合去比, 不能只看被点的那一个范围。
- * 已经全勾时这一次点击是清空, 算不出任何新增, 因此同一个判断也覆盖了"清空方向不禁用"。
+ * 判断的输入是这次变更真正会产生的选择集合(由 accessRequestScopeClick 按动作层同一条路径算出),
+ * 不是被点的那一个范围键: 权限范围是递增关系, 勾上一个范围会连同它以下的范围一并补齐,
+ * 只看被点的键会漏掉低位范围的越界; 反过来取消方向根本算不出新增, 因此天然不会被判成越界。
  */
-export function groupScopeChipAddsOutsideRetainableTarget(
-  group: ScopedPermissionGroupItem,
-  scopeKey: string,
-  displaySelectedKeys: string[],
+export function addedSelectionKeysOutsideRetainableTarget(
+  currentSelectionKeys: string[],
+  nextSelectionKeys: string[],
+  retainableKeySet: Set<string> | null,
+): string[] {
+  if (retainableKeySet === null) {
+    return [];
+  }
+  const currentKeySet = new Set(currentSelectionKeys);
+  return selectionKeysOutsideRetainableTarget(
+    nextSelectionKeys.filter((key) => !currentKeySet.has(key)),
+    retainableKeySet,
+  );
+}
+
+/** 界面禁用判定与动作层断言共用的口径: 这次变更会不会把基础授权之外的权限加进保留范围。 */
+export function selectionChangeAddsOutsideRetainableTarget(
+  currentSelectionKeys: string[],
+  nextSelectionKeys: string[],
   retainableKeySet: Set<string> | null,
 ): boolean {
-  if (retainableKeySet === null) {
-    return false;
-  }
-  const supportedPermissions = collectScopedGroupPermissions(group).filter((permission) =>
-    (permission.scopes ?? []).some((scope) => scope.key === scopeKey),
-  );
-  const nextSelectionKeys = supportedPermissions.reduce(
-    (selectionKeys, permission) => nextPermissionScopeSelection(permission, scopeKey, true, selectionKeys),
-    displaySelectedKeys,
-  );
-  const displayKeySet = new Set(displaySelectedKeys);
-  return nextSelectionKeys.some((key) => !displayKeySet.has(key) && !retainableKeySet.has(key));
+  return addedSelectionKeysOutsideRetainableTarget(currentSelectionKeys, nextSelectionKeys, retainableKeySet).length > 0;
 }

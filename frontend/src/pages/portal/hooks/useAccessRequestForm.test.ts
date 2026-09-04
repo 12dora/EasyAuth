@@ -3,11 +3,21 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { createElement, type ReactNode } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
+import {
+  buildPermissionRows,
+  groupScopeChipState,
+  permissionScopeChipState,
+} from "../components/permissionSelectorRows";
+import { isPermissionGroupItem } from "../permissionTree";
+import { collectScopedGroupPermissions } from "./accessRequestCatalog";
 import { directGrantSelectionKey } from "./accessRequestSelection";
+import { retainableSelectionKeySet } from "./accessRequestTargetLock";
 import {
   ACCESS_REQUEST_MAX_APPROVERS,
   ACCESS_REQUEST_MAX_AUTHORIZATION_GROUPS,
   ACCESS_REQUEST_MAX_REASON_LENGTH,
+  type ScopedPermissionGroupItem,
+  type ScopedPermissionItem,
 } from "./accessRequestTypes";
 import { useAccessRequestForm } from "./useAccessRequestForm";
 
@@ -817,5 +827,246 @@ describe("useAccessRequestForm 按申请类型约束申请目标", () => {
 
     expect(view.result.current.authorizationGroupKeys).toEqual(["reader"]);
     expect(view.result.current.selectedPermissionKeys).toEqual([AUDIT_KEY]);
+  });
+});
+
+/*
+ * 权限范围是递增的: 勾一个范围会连同它以下的范围一起补齐, 取消则连同它以上的范围一起清掉。
+ * 基础授权只给到高位范围时, 低位范围就是"基础授权之外的权限"。因此撤销申请里 chip 能不能点,
+ * 只能按这一下真正会产生的选择集合来判断: 只看被点的那一个范围键, 既会放行必然撞上动作层断言的
+ * 点击, 也会把"取消整个范围"这种合法减法误禁。
+ */
+describe("useAccessRequestForm 撤销申请下分级权限范围的禁用口径", () => {
+  const READ_SELF = directGrantSelectionKey("orders.read", "SELF");
+  const APPROVE_ALL = directGrantSelectionKey("orders.refund.approve", "ALL");
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /** 订单组: orders.read 只有 SELF; 子组退款下的 orders.refund.approve 有 SELF < MANAGED_USERS < ALL 三档。 */
+  function scopedRevokeCatalog() {
+    return {
+      apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: ["boss"] }],
+      approver_options: [{ user_id: "boss", name: "老板" }],
+      authorization_groups: [],
+      permission_groups: [
+        {
+          id: 1,
+          app_key: "crm",
+          type: "group",
+          key: "orders",
+          name: "订单",
+          permissions: [
+            { id: 101, app_key: "crm", key: "orders.read", name: "查看订单", scopes: [{ key: "SELF", name: "本人" }] },
+          ],
+          children: [
+            {
+              id: 2,
+              app_key: "crm",
+              type: "group",
+              key: "orders.refund",
+              name: "退款",
+              permissions: [
+                {
+                  id: 102,
+                  app_key: "crm",
+                  key: "orders.refund.approve",
+                  name: "审批退款",
+                  scopes: [
+                    { key: "SELF", name: "本人" },
+                    { key: "MANAGED_USERS", name: "下级用户" },
+                    { key: "ALL", name: "全部" },
+                  ],
+                },
+              ],
+            },
+          ],
+        },
+      ],
+      ungrouped_permissions: [],
+    };
+  }
+
+  /** 基础授权: orders.read 到 SELF, orders.refund.approve 只到 ALL 这一档, 中间两档都不在授权里。 */
+  function scopedRevokeGrantList() {
+    return {
+      data: [
+        {
+          grant_id: 7,
+          grant_revision: 3,
+          app_key: "crm",
+          app_name: "CRM",
+          app_alias: "",
+          grant_type: "permanent",
+          grant_expires_at: null,
+          grant_version: 5,
+          catalog_version: 2,
+          snapshot_version: "v1",
+          groups: [],
+          grants: [
+            {
+              permission: "orders.read",
+              scope: "SELF",
+              source_type: "direct",
+              source_key: null,
+              permission_name: "查看订单",
+              permission_name_en: "Read orders",
+              scope_name: "本人",
+              scope_name_en: "Self",
+            },
+            {
+              permission: "orders.refund.approve",
+              scope: "ALL",
+              source_type: "direct",
+              source_key: null,
+              permission_name: "审批退款",
+              permission_name_en: "Approve refunds",
+              scope_name: "全部",
+              scope_name_en: "All",
+            },
+          ],
+        },
+      ],
+      pagination: { page: 1, page_size: 100, total_items: 1, total_pages: 1 },
+    };
+  }
+
+  async function renderScopedRevokeForm() {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/request-catalog") {
+        return jsonResponse(scopedRevokeCatalog());
+      }
+      if (url === "/portal/api/v1/me/grants?page=1&page_size=100") {
+        return jsonResponse(scopedRevokeGrantList());
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+    const view = await renderReadyForm();
+    act(() => view.result.current.changeRequestType("revoke"));
+    await waitFor(() => expect(view.result.current.currentGrants).toHaveLength(1));
+    act(() => view.result.current.changeBaseGrantId("7"));
+    await waitFor(() => expect(view.result.current.selectedPermissionKeys).toEqual([READ_SELF, APPROVE_ALL]));
+    return view;
+  }
+
+  type ScopedRevokeForm = Awaited<ReturnType<typeof renderScopedRevokeForm>>;
+
+  /** 界面上的一个权限范围 chip: 禁用与否和点下去做什么, 都取自 PermissionSelectorCells 用的同一套状态。 */
+  interface SelectorChip {
+    label: string;
+    disabled: boolean;
+    click: () => void;
+  }
+
+  function allGroupKeys(groups: ScopedPermissionGroupItem[]): string[] {
+    return groups.flatMap((group) => [
+      group.key,
+      ...allGroupKeys((group.children ?? []).filter(isPermissionGroupItem)),
+    ]);
+  }
+
+  /** 全部展开后表格里渲染出来的每一个权限范围 chip, 顺序稳定, 可按下标在多次渲染间对齐。 */
+  function selectorChips(view: ScopedRevokeForm): SelectorChip[] {
+    const form = view.result.current;
+    const displaySelectedKeys = Array.from(
+      new Set([...form.selectedPermissionKeys, ...form.groupCoveredSelectionKeys]),
+    );
+    const retainableKeySet = retainableSelectionKeySet(form.revokeBaseGrant, form.groupCoveredSelectionKeys);
+    const rows = buildPermissionRows(form.permissionGroups, form.ungroupedPermissions, {
+      expandedGroupKeys: allGroupKeys(form.permissionGroups),
+      enteringGroupKeys: [],
+      exitingGroupKeys: [],
+      selectedKeys: displaySelectedKeys,
+    });
+    return rows.flatMap((row) => {
+      if (row.type === "group") {
+        return row.scopeOptions.map((scope) => {
+          const chip = groupScopeChipState(row.group, scope.key, displaySelectedKeys, retainableKeySet);
+          return {
+            label: `权限组 ${row.group.key} ${scope.key}`,
+            disabled: chip.disabled,
+            click: () => view.result.current.changePermissionGroupScope(row.group, scope.key, chip.shouldSelect),
+          };
+        });
+      }
+      return (row.permission.scopes ?? []).map((scope) => ({
+        label: `${row.permission.key} ${scope.key}`,
+        disabled: permissionScopeChipState(row.permission, scope.key, displaySelectedKeys, retainableKeySet).disabled,
+        click: () => view.result.current.changePermissionScope(row.permission, scope.key),
+      }));
+    });
+  }
+
+  function refundApprovePermission(view: ScopedRevokeForm): ScopedPermissionItem {
+    const permission = view.result.current.permissionGroups
+      .flatMap((group) => collectScopedGroupPermissions(group))
+      .find((item) => item.key === "orders.refund.approve");
+    expect(permission).toBeDefined();
+    return permission!;
+  }
+
+  function chipByLabel(view: ScopedRevokeForm, label: string): SelectorChip {
+    const chip = selectorChips(view).find((item) => item.label === label);
+    expect(chip).toBeDefined();
+    return chip!;
+  }
+
+  test("取消高位范围后再点回来会补上没授权过的低位范围: 这一下必须禁用", async () => {
+    const view = await renderScopedRevokeForm();
+
+    // ALL 这一档在基础授权里, 取消它是合法的减法。
+    expect(chipByLabel(view, "orders.refund.approve ALL").disabled).toBe(false);
+    act(() => chipByLabel(view, "orders.refund.approve ALL").click());
+    expect(view.result.current.selectedPermissionKeys).toEqual([READ_SELF]);
+
+    // 再点回来会连 SELF 与 MANAGED_USERS 一起补进保留范围, 而基础授权里没有这两档:
+    // 只看被点的 ALL 会以为它仍然可点, 点下去就撞上动作层的断言。
+    expect(chipByLabel(view, "orders.refund.approve ALL").disabled).toBe(true);
+    expect(() =>
+      act(() => view.result.current.changePermissionScope(refundApprovePermission(view), "ALL")),
+    ).toThrow("撤销申请不能添加基础授权之外的权限");
+  });
+
+  test("全勾的权限组表头 chip 是清空整个范围: 撤销申请里可点且点了不报错", async () => {
+    const view = await renderScopedRevokeForm();
+
+    // 支持 ALL 的权限只有 orders.refund.approve, 它这一档已经勾着, 所以表头 chip 是全勾态。
+    const allHeaderChip = chipByLabel(view, "权限组 orders ALL");
+    expect(allHeaderChip.disabled).toBe(false);
+
+    act(() => allHeaderChip.click());
+
+    expect(view.result.current.selectedPermissionKeys).toEqual([READ_SELF]);
+    // 半勾的 SELF 表头 chip 点下去是补齐, 会把 approve 的 SELF 档加进来, 因此禁用。
+    expect(chipByLabel(view, "权限组 orders SELF").disabled).toBe(true);
+  });
+
+  test("任何一个没被禁用的 chip 点下去都不会撞上动作层的撤销断言", async () => {
+    const view = await renderScopedRevokeForm();
+    const chipCount = selectorChips(view).length;
+    expect(chipCount).toBe(10);
+
+    let clickedCount = 0;
+    let disabledCount = 0;
+    // 走两遍: 每次都按当前草稿重新算禁用态, 点击后草稿变化, 下一个 chip 在新状态上继续判断。
+    // 第二遍很关键——第一遍清掉的范围在第二遍就是"未勾选", 点回去才是会补齐低位范围的那个方向。
+    for (const _pass of [1, 2]) {
+      for (let index = 0; index < chipCount; index += 1) {
+        const chip = selectorChips(view)[index];
+        if (chip.disabled) {
+          disabledCount += 1;
+          continue;
+        }
+        expect(() => act(() => chip.click())).not.toThrow();
+        clickedCount += 1;
+      }
+    }
+
+    expect(clickedCount).toBeGreaterThan(0);
+    expect(disabledCount).toBeGreaterThan(0);
+    // 撤销目标始终没有跑出基础授权。
+    expect(view.result.current.selectedPermissionKeys.every((key) => [READ_SELF, APPROVE_ALL].includes(key))).toBe(true);
   });
 });

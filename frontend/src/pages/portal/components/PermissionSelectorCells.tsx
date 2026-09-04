@@ -7,9 +7,12 @@ import { localizedName, useI18n } from "../../../i18n/I18nProvider";
 import type { Locale } from "../../../i18n/messages";
 
 import { directGrantSelectionKey } from "../hooks/accessRequestSelection";
-import { groupScopeChipAddsOutsideRetainableTarget } from "../hooks/accessRequestTargetLock";
 import type { ScopedPermissionGroupItem, ScopedPermissionItem } from "../hooks/accessRequestTypes";
-import { groupScopeSelectionState, type ScopeOptionView } from "./permissionSelectorRows";
+import {
+  groupScopeChipState,
+  permissionScopeChipState,
+  type ScopeOptionView,
+} from "./permissionSelectorRows";
 
 export function PermissionGroupNameCell({
   group,
@@ -92,19 +95,17 @@ export function PermissionGroupScopeCell({
   return (
     <div className="permission-selector__scope-chip-list permission-selector__scope-chip-list--single-line">
       {scopeOptions.map((scope) => {
-        const selectionState = groupScopeSelectionState(group, scope.key, selectedKeys);
+        const chip = groupScopeChipState(group, scope.key, selectedKeys, retainableKeySet);
 
         return (
           <ScopeChip
             key={scope.key}
             label={localizedName(locale, scope)}
-            checked={selectionState === "checked"}
-            mixed={selectionState === "indeterminate"}
-            // 撤销时这一下会带进基础授权之外的权限就禁用; 清空方向算不出新增, 因此照旧可点。
-            disabled={groupScopeChipAddsOutsideRetainableTarget(group, scope.key, selectedKeys, retainableKeySet)}
+            checked={chip.checked}
+            mixed={chip.mixed}
+            disabled={chip.disabled}
             ariaLabel={t("selector.selectGroupScope", { groupKey: group.key, scopeName: localizedName(locale, scope) })}
-            // 全勾时点一下清空整个范围; 未勾与半勾都补齐成全勾, 半勾不再变成"再点一次也没反应"。
-            onChange={() => onScopeChange(group, scope.key, selectionState !== "checked")}
+            onChange={() => onScopeChange(group, scope.key, chip.shouldSelect)}
           />
         );
       })}
@@ -137,18 +138,17 @@ export function PermissionScopeCell({
   return (
     <div className="permission-selector__scope-chip-list permission-selector__scope-chip-list--single-line">
       {scopes.map((scope) => {
-        const selectionKey = directGrantSelectionKey(permission.key, scope.key);
         // 权限组覆盖的权限同样可编辑: 取消勾选会把权限组落地成逐项直接申请(见 accessRequestActions)。
-        const isCovered = coveredKeySet.has(selectionKey);
+        const isCovered = coveredKeySet.has(directGrantSelectionKey(permission.key, scope.key));
+        const chip = permissionScopeChipState(permission, scope.key, selectedKeys, retainableKeySet);
         const scopeLabel = t("selector.selectPermissionScope", { permissionKey: permission.key, scopeName: localizedName(locale, scope) });
         return (
           <ScopeChip
             key={scope.key}
             label={localizedName(locale, scope)}
-            checked={selectedKeys.includes(selectionKey)}
+            checked={chip.checked}
             covered={isCovered}
-            // 撤销目标只能是基础授权的子集: 基础授权之外的权限范围勾上必被后端拒, 直接禁掉。
-            disabled={retainableKeySet !== null && !retainableKeySet.has(selectionKey)}
+            disabled={chip.disabled}
             title={isCovered ? t("selector.scope.coveredByGroup") : undefined}
             ariaLabel={scopeLabel}
             onChange={() => onScopeChange(permission, scope.key)}

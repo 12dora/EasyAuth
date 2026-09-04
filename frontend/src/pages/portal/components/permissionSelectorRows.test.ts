@@ -7,8 +7,10 @@ import {
   currentPageGroupKeysFromRows,
   currentPageSelectionKeysFromRows,
   filterRowsToSelected,
+  groupScopeChipState,
   groupScopeSelectionState,
   groupSelectionState,
+  permissionScopeChipState,
   type PermissionSelectorRow,
 } from "./permissionSelectorRows";
 
@@ -100,6 +102,74 @@ describe("groupScopeSelectionState", () => {
     const group = ordersGroup();
 
     expect(groupScopeSelectionState(group, "GLOBAL", [])).toBe("unchecked");
+  });
+});
+
+/*
+ * 撤销申请下 chip 能不能点, 判据是"这一下真正会产生的选择集合有没有跑出保留范围",
+ * 不是被点的那一个范围键: 范围递增, 勾高位会连低位一起补齐; 而已勾上的 chip 点下去是清空。
+ */
+describe("权限范围 chip 的方向与撤销禁用", () => {
+  const READ_SELF = directGrantSelectionKey("orders.read", "SELF");
+  const APPROVE_SELF = directGrantSelectionKey("orders.refund.approve", "SELF");
+  const APPROVE_MANAGED = directGrantSelectionKey("orders.refund.approve", "MANAGED_USERS");
+  const APPROVE_ALL = directGrantSelectionKey("orders.refund.approve", "ALL");
+
+  function approvePermission(): ScopedPermissionItem {
+    return permission("orders.refund.approve", [SELF, MANAGED_USERS, ALL]);
+  }
+
+  test("被点的范围本身在保留范围内, 但它会带上的低位范围越界: 仍然禁用", () => {
+    // 基础授权只有 ALL 这一档; 用户先取消了它, 再点回来会把 SELF 与 MANAGED_USERS 一起补进保留范围。
+    const retainableKeySet = new Set([APPROVE_ALL]);
+
+    const chip = permissionScopeChipState(approvePermission(), "ALL", [], retainableKeySet);
+
+    expect(chip.checked).toBe(false);
+    expect(chip.shouldSelect).toBe(true);
+    expect(chip.disabled).toBe(true);
+  });
+
+  test("已勾上的权限范围点下去是取消: 撤销申请里照旧可点", () => {
+    const retainableKeySet = new Set([APPROVE_ALL]);
+
+    const chip = permissionScopeChipState(approvePermission(), "ALL", [APPROVE_ALL], retainableKeySet);
+
+    expect(chip.checked).toBe(true);
+    expect(chip.shouldSelect).toBe(false);
+    expect(chip.disabled).toBe(false);
+  });
+
+  test("全勾的权限组表头 chip 点下去是清空整个范围: 撤销申请里可点", () => {
+    const selectedKeys = [READ_SELF, APPROVE_ALL];
+    const retainableKeySet = new Set(selectedKeys);
+
+    const allChip = groupScopeChipState(ordersGroup(), "ALL", selectedKeys, retainableKeySet);
+
+    expect(allChip.checked).toBe(true);
+    expect(allChip.shouldSelect).toBe(false);
+    expect(allChip.disabled).toBe(false);
+  });
+
+  test("半勾的权限组表头 chip 点下去是补齐: 会补进保留范围之外的档位时禁用", () => {
+    const selectedKeys = [READ_SELF, APPROVE_ALL];
+    const retainableKeySet = new Set(selectedKeys);
+
+    const selfChip = groupScopeChipState(ordersGroup(), "SELF", selectedKeys, retainableKeySet);
+    const managedChip = groupScopeChipState(ordersGroup(), "MANAGED_USERS", selectedKeys, retainableKeySet);
+
+    expect(selfChip.mixed).toBe(true);
+    expect(selfChip.shouldSelect).toBe(true);
+    // 补齐会加上 orders.refund.approve 的 SELF 档, 它不在基础授权里。
+    expect(selfChip.disabled).toBe(true);
+    expect(managedChip.shouldSelect).toBe(true);
+    expect(managedChip.disabled).toBe(true);
+    expect([APPROVE_SELF, APPROVE_MANAGED].every((key) => !retainableKeySet.has(key))).toBe(true);
+  });
+
+  test("不是撤销申请时没有保留范围一说, chip 一律可点", () => {
+    expect(permissionScopeChipState(approvePermission(), "ALL", [], null).disabled).toBe(false);
+    expect(groupScopeChipState(ordersGroup(), "SELF", [], null).disabled).toBe(false);
   });
 });
 

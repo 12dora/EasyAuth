@@ -1,8 +1,14 @@
 import { collectScopedGroupPermissions } from "../hooks/accessRequestCatalog";
 import {
+  nextSelectionForGroupScopeClick,
+  nextSelectionForPermissionScopeClick,
+  permissionScopeClickSelects,
+} from "../hooks/accessRequestScopeClick";
+import {
   directGrantSelectionKey,
   directGrantSelectionPermissionKey,
 } from "../hooks/accessRequestSelection";
+import { selectionChangeAddsOutsideRetainableTarget } from "../hooks/accessRequestTargetLock";
 import type { ScopedPermissionGroupItem, ScopedPermissionItem } from "../hooks/accessRequestTypes";
 import { isPermissionGroupItem } from "../permissionTree";
 
@@ -188,6 +194,62 @@ export function groupScopeSelectionState(
     return "indeterminate";
   }
   return "unchecked";
+}
+
+/**
+ * 一个权限范围 chip 的完整状态: 画成什么样、点一下往哪个方向走、这一下能不能点。
+ *
+ * 禁用与否只看这次点击真正会产生的选择集合(与动作层同一条路径, 见 accessRequestScopeClick):
+ * 勾上一个范围会连同它以下的范围一起补齐, 只看被点的那一个范围键会把越界判漏;
+ * 而已勾上的 chip 点下去是清空, 算不出新增, 因此撤销申请里合法的减法不会被误禁。
+ */
+export interface ScopeChipState {
+  checked: boolean;
+  mixed: boolean;
+  /** 点一下的方向: true 是补齐成全勾, false 是清空。 */
+  shouldSelect: boolean;
+  /** 撤销申请里这一下会把基础授权之外的权限带进保留范围, 因此禁用。 */
+  disabled: boolean;
+}
+
+export function groupScopeChipState(
+  group: ScopedPermissionGroupItem,
+  scopeKey: string,
+  selectedKeys: string[],
+  retainableKeySet: Set<string> | null,
+): ScopeChipState {
+  const selectionState = groupScopeSelectionState(group, scopeKey, selectedKeys);
+  // 全勾时点一下清空整个范围; 未勾与半勾都补齐成全勾, 半勾不再变成"再点一次也没反应"。
+  const shouldSelect = selectionState !== "checked";
+  return {
+    checked: selectionState === "checked",
+    mixed: selectionState === "indeterminate",
+    shouldSelect,
+    disabled: selectionChangeAddsOutsideRetainableTarget(
+      selectedKeys,
+      nextSelectionForGroupScopeClick(group, scopeKey, shouldSelect, selectedKeys),
+      retainableKeySet,
+    ),
+  };
+}
+
+export function permissionScopeChipState(
+  permission: ScopedPermissionItem,
+  scopeKey: string,
+  selectedKeys: string[],
+  retainableKeySet: Set<string> | null,
+): ScopeChipState {
+  const shouldSelect = permissionScopeClickSelects(permission, scopeKey, selectedKeys);
+  return {
+    checked: !shouldSelect,
+    mixed: false,
+    shouldSelect,
+    disabled: selectionChangeAddsOutsideRetainableTarget(
+      selectedKeys,
+      nextSelectionForPermissionScopeClick(permission, scopeKey, selectedKeys),
+      retainableKeySet,
+    ),
+  };
 }
 
 function hasLowerScopeSelection(permission: ScopedPermissionItem, scopeKey: string, selectedKeySet: Set<string>): boolean {

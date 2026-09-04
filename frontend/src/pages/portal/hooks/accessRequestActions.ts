@@ -1,26 +1,27 @@
 import type { PortalGrantRow } from "../portalListPayload";
 import {
-  collectScopedGroupPermissions,
   descendantGroupKeys,
   filterDirectGrantSelections,
   groupCoveredSelectionKeys,
   groupCoveredSelectionKeySet,
 } from "./accessRequestCatalog";
 import {
+  nextSelectionForGroupScopeClick,
+  permissionScopeClickSelects,
+} from "./accessRequestScopeClick";
+import {
   directGrantSelectionKey,
   directGrantSelectionPermissionKey,
   directGrantSelectionScopeKey,
-  nextPermissionScopeCascadeClearSelection,
   nextPermissionScopeSelection,
   permissionScopeSelectionKey,
-  selectedScopeKeysForPermission,
   toggleListItem,
   uniqueStrings,
 } from "./accessRequestSelection";
 import {
+  addedSelectionKeysOutsideRetainableTarget,
   retainableSelectionKeySet,
   revokeBaseGrantSnapshot,
-  selectionKeysOutsideRetainableTarget,
   type RevokeBaseGrantSnapshot,
 } from "./accessRequestTargetLock";
 import {
@@ -129,9 +130,9 @@ function buildPermissionSelectionActions(
       applySelectionChange(fields, catalogView, revokeSnapshot, (current) => current.filter((key) => !keySet.has(key)));
     },
     changePermissionScope: (permission: ScopedPermissionItem, scopeKey: string) => {
-      // 勾选态看的是展示态: 权限组覆盖的权限也画成勾选, 再点一次就是"取消"。
-      const shouldSelect = !selectedScopeKeysForPermission(permission, displaySelectionKeys(fields, catalogView))
-        .includes(scopeKey);
+      // 勾选态看的是展示态: 权限组覆盖的权限也画成勾选, 再点一次就是"取消"。方向只按展示态定一次,
+      // 后面对直接权限集合重放同一次变更时不能再算一遍, 否则被权限组覆盖的项会反向变成"选中"。
+      const shouldSelect = permissionScopeClickSelects(permission, scopeKey, displaySelectionKeys(fields, catalogView));
       applySelectionChange(fields, catalogView, revokeSnapshot, (current) =>
         nextPermissionScopeSelection(permission, scopeKey, shouldSelect, current),
       );
@@ -140,16 +141,8 @@ function buildPermissionSelectionActions(
       if (!scopeKey) {
         return;
       }
-      const supportedPermissions = collectScopedGroupPermissions(group).filter((permission) => permissionScopeSelectionKey(permission, scopeKey));
-
       applySelectionChange(fields, catalogView, revokeSnapshot, (current) =>
-        supportedPermissions.reduce(
-          (selectionKeys, permission) =>
-            shouldSelect
-              ? nextPermissionScopeSelection(permission, scopeKey, true, selectionKeys)
-              : nextPermissionScopeCascadeClearSelection(permission, scopeKey, selectionKeys),
-          current,
-        ),
+        nextSelectionForGroupScopeClick(group, scopeKey, shouldSelect, current),
       );
     },
   };
@@ -271,10 +264,11 @@ function assertRevokeKeepsSelectionWithinBaseGrant(
   if (revokeSnapshot === null) {
     return;
   }
-  const retainableKeySet = retainableSelectionKeySet(revokeSnapshot, coveredKeys);
-  const currentDisplayKeySet = new Set(currentDisplayKeys);
-  const addedKeys = nextDisplayKeys.filter((key) => !currentDisplayKeySet.has(key));
-  const outsideKeys = selectionKeysOutsideRetainableTarget(addedKeys, retainableKeySet);
+  const outsideKeys = addedSelectionKeysOutsideRetainableTarget(
+    currentDisplayKeys,
+    nextDisplayKeys,
+    retainableSelectionKeySet(revokeSnapshot, coveredKeys),
+  );
   if (outsideKeys.length > 0) {
     throw new Error(`撤销申请不能添加基础授权之外的权限：${outsideKeys.join(", ")}`);
   }
