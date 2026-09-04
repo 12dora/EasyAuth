@@ -81,15 +81,15 @@ describe("ConsoleAppList", () => {
     const crmRow = await screen.findByRole("row", { name: /CRM/ });
     const billingRow = screen.getByRole("row", { name: /Billing/ });
 
-    // 有别名的行展示「别名(技术名)」, 没别名的行只展示技术名。
-    expect(within(crmRow).getByText("客户管理(CRM)")).toBeVisible();
+    // 有别名的行展示「别名 (技术名)」, 没别名的行只展示技术名。
+    expect(within(crmRow).getByText("客户管理 (CRM)")).toBeVisible();
     expect(within(billingRow).getByText("Billing")).toBeVisible();
 
     await user.click(within(crmRow).getByRole("button", { name: "停用" }));
     await user.click(within(billingRow).getByRole("button", { name: "启用" }));
     await user.click(within(crmRow).getByRole("button", { name: "删除" }));
 
-    const deleteDialog = await screen.findByRole("dialog", { name: "删除 客户管理(CRM)" });
+    const deleteDialog = await screen.findByRole("dialog", { name: "删除 客户管理 (CRM)" });
     expect(within(deleteDialog).getByText("应用名称: CRM; 应用 Key: crm")).toBeVisible();
     expect(findFetchCall(fetchMock, "/console/api/v1/apps/crm", "DELETE")).toBeUndefined();
     await user.click(within(deleteDialog).getByRole("button", { name: "删除" }));

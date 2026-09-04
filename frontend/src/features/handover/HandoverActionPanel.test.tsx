@@ -131,11 +131,11 @@ describe("HandoverActionPanel", () => {
     vi.unstubAllGlobals();
   });
 
-  test("应用标题走统一展示名: 有别名拼成「别名(技术名)」, 没别名只显示技术名", () => {
+  test("应用标题走统一展示名: 有别名拼成「别名 (技术名)」, 没别名只显示技术名", () => {
     vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => jsonResponse({})));
 
     const { unmount } = renderPanel({ action: baseAction({ status: "pending", allowed_actions: [] }) });
-    expect(screen.getByText("易交易(EasyTrade)")).toBeVisible();
+    expect(screen.getByText("易交易 (EasyTrade)")).toBeVisible();
     unmount();
 
     renderPanel({ action: baseAction({ status: "pending", allowed_actions: [], app_alias: "" }) });

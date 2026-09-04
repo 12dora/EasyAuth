@@ -66,7 +66,7 @@ export function RequestTargetPicker({
             <option value="">{t("portal.request.appPlaceholder")}</option>
             {apps.map((app) => (
               <option key={app.app_key} value={app.app_key}>
-                {formatAppDisplayName(app)} ({app.app_key})
+                {formatAppDisplayName(app)}
               </option>
             ))}
           </SelectInput>

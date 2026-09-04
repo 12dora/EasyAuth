@@ -73,7 +73,7 @@ describe("RequestTargetPicker", () => {
     expect(screen.queryByRole("option", { name: /\[role\]|\[bundle\]/ })).not.toBeInTheDocument();
   });
 
-  test("应用下拉展示别名: 有别名拼成「别名(技术名)」, 没别名只显示技术名", () => {
+  test("应用下拉展示别名: 有别名拼成「别名 (技术名)」, 没别名只显示技术名", () => {
     render(
       <I18nProvider>
         <RequestTargetPicker
@@ -103,7 +103,7 @@ describe("RequestTargetPicker", () => {
       </I18nProvider>,
     );
 
-    expect(screen.getByRole("option", { name: "客户管理(CRM) (crm)" })).toBeVisible();
-    expect(screen.getByRole("option", { name: "Billing (billing)" })).toBeVisible();
+    expect(screen.getByRole("option", { name: "客户管理 (CRM)" })).toBeVisible();
+    expect(screen.getByRole("option", { name: "Billing" })).toBeVisible();
   });
 });

@@ -1,6 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, test, vi } from "vitest";
 
+import type { PortalGrantRow } from "../portalListPayload";
+
 import { AccessRequestFields } from "./AccessRequestFields";
 
 function renderFields(overrides: Partial<Parameters<typeof AccessRequestFields>[0]> = {}) {
@@ -46,4 +48,35 @@ describe("AccessRequestFields", () => {
     expect(document.getElementById(labelledBy as string)).toHaveTextContent("审批人");
     expect(document.querySelector('label[for][id$="-label"]')).toBeNull();
   });
+
+  test("基础授权下拉按统一展示名渲染, 只跟版本号, 不再重复 app_key", () => {
+    renderFields({
+      requestType: "change",
+      currentGrants: [
+        grantRow({ grant_id: 7, app_key: "crm", app_name: "CRM", app_alias: "客户管理", grant_revision: 3 }),
+        grantRow({ grant_id: 8, app_key: "billing", app_name: "Billing", app_alias: "", grant_revision: 1 }),
+      ],
+    });
+
+    expect(screen.getByRole("option", { name: "客户管理 (CRM) v3" })).toBeVisible();
+    expect(screen.getByRole("option", { name: "Billing v1" })).toBeVisible();
+  });
 });
+
+function grantRow(overrides: Partial<PortalGrantRow>): PortalGrantRow {
+  return {
+    app_key: "crm",
+    app_name: "CRM",
+    app_alias: "",
+    grant_id: 1,
+    grant_revision: 1,
+    groups: [],
+    grants: [],
+    grant_version: 1,
+    catalog_version: 1,
+    snapshot_version: "1.1",
+    grant_type: "permanent",
+    grant_expires_at: null,
+    ...overrides,
+  } as PortalGrantRow;
+}

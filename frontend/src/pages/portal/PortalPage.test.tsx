@@ -141,7 +141,7 @@ describe("PortalPage access request form", () => {
       renderPortalPageStrict();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
 
@@ -188,7 +188,7 @@ describe("PortalPage access request form", () => {
       renderPortalPageStrict();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
 
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
@@ -269,9 +269,9 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("申请类型"), "renew");
-      await screen.findByRole("option", { name: "CRM (crm) v7" });
+      await screen.findByRole("option", { name: "CRM v7" });
       await user.selectOptions(screen.getByLabelText("基础授权"), "42");
       await user.type(screen.getByLabelText("过期时间"), "2030-02-01T09:00");
       await user.type(screen.getByLabelText("申请原因"), "延长期限");
@@ -330,7 +330,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "EasyTrade (easytrade)" });
+      await screen.findByRole("option", { name: "EasyTrade" });
       await user.selectOptions(screen.getByLabelText("应用"), "easytrade");
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
       await user.click(within(permissionTable).getByRole("checkbox", { name: "选择权限组 document 全部" }));
@@ -362,7 +362,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       expect(screen.getByLabelText("过期时间")).toBeDisabled();
       await user.type(screen.getByLabelText("申请原因"), "需要申请权限");
@@ -389,7 +389,7 @@ describe("PortalPage access request form", () => {
     try {
       renderPortalPage();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
 
       // 「直接权限」「审批人」为 group 语义字段(FF-10), 其可见标题渲染为带 id 的 <span> 而非 <label>。
       const labels = ["应用", "可申请权限组", "直接权限", "审批人", "授权期限", "过期时间", "申请原因"].map((label) =>
@@ -427,7 +427,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       await user.selectOptions(screen.getByLabelText("可申请权限组"), "reader");
       await user.type(screen.getByLabelText("申请原因"), "临时处理跨部门工单");
@@ -470,7 +470,7 @@ describe("PortalPage access request form", () => {
       renderPortalPageWithUser("me");
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
 
       // 默认审批人来自应用默认列表, 但必须剔除申请人自己(me)。
@@ -524,7 +524,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       expect(screen.getByLabelText("选择审批人 app-owner")).toBeChecked();
       expect(screen.getByText("可申请权限组")).toBeVisible();
@@ -620,7 +620,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
 
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
@@ -738,7 +738,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
 
@@ -815,7 +815,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
 
@@ -872,7 +872,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
 
@@ -912,7 +912,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       expect(await screen.findByText("直属主管")).toBeVisible();
       expect(screen.getByText("· 销售部")).toBeVisible();
@@ -966,7 +966,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       expect(await screen.findByLabelText("选择审批人 app-owner")).toBeChecked();
 
@@ -1018,7 +1018,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       await user.click(screen.getByRole("checkbox", { name: "选择 customer.assign 下级用户" }));
 
@@ -1075,7 +1075,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       await user.click(screen.getByRole("checkbox", { name: "选择 customer.assign 下级用户" }));
       expect(await screen.findByLabelText("选择审批人 direct-manager")).toBeChecked();
@@ -1100,7 +1100,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
 
@@ -1141,7 +1141,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
 
@@ -1169,7 +1169,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
 
@@ -1204,7 +1204,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
 
@@ -1239,7 +1239,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
 
@@ -1277,7 +1277,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
       const permissionHeader = within(permissionTable).getByRole("columnheader", { name: "权限" });
@@ -1315,7 +1315,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
 
@@ -1361,7 +1361,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
 
@@ -1389,7 +1389,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
 
@@ -1410,7 +1410,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
 
       await user.click(screen.getByRole("button", { name: "展开全部" }));
@@ -1433,7 +1433,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
 
@@ -1497,7 +1497,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
       await user.click(screen.getByRole("button", { name: "展开全部" }));
@@ -1558,7 +1558,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
 
@@ -1611,7 +1611,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
 
@@ -1674,7 +1674,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "EasyTrade (easytrade)" });
+      await screen.findByRole("option", { name: "EasyTrade" });
       await user.selectOptions(screen.getByLabelText("应用"), "easytrade");
       const permissionTable = await screen.findByRole("table", { name: "权限选择" });
 
@@ -1707,7 +1707,7 @@ describe("PortalPage access request form", () => {
       renderPortalPage();
       const user = userEvent.setup();
 
-      await screen.findByRole("option", { name: "CRM (crm)" });
+      await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
 
       expect(await screen.findByRole("status")).toHaveTextContent("当前应用没有可直接申请的权限，可仅按权限组发起申请。");
@@ -2396,7 +2396,7 @@ describe("PortalPage tables", () => {
     }
   });
 
-  test("两张表的应用列都按「别名(技术名)」展示", async () => {
+  test("两张表的应用列都按「别名 (技术名)」展示", async () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
       if (url === "/portal/api/v1/me/grants?page=1&page_size=20") {
@@ -2417,7 +2417,7 @@ describe("PortalPage tables", () => {
 
     try {
       renderPortalPage("/portal");
-      expect(await screen.findByText("海关数据(EasyCustoms)")).toBeVisible();
+      expect(await screen.findByText("海关数据 (EasyCustoms)")).toBeVisible();
       // 技术名仍以等宽 app_key 的形式留在第二行, 供对接排查用。
       expect(screen.getByText("easycustoms")).toBeVisible();
     } finally {
@@ -2427,7 +2427,7 @@ describe("PortalPage tables", () => {
     vi.stubGlobal("fetch", fetchMock);
     try {
       renderPortalPage("/portal/requests");
-      expect(await screen.findByText("海关数据(EasyCustoms)")).toBeVisible();
+      expect(await screen.findByText("海关数据 (EasyCustoms)")).toBeVisible();
     } finally {
       vi.unstubAllGlobals();
     }

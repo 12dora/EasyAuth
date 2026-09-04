@@ -967,8 +967,8 @@ describe("ConsoleAppWorkspace", () => {
 
     renderWorkspace("/console/apps/demo");
 
-    // 工作区标题和基本信息都按「别名(技术名)」展示。
-    expect(await screen.findByRole("heading", { name: "海关数据(Demo App)" })).toBeInTheDocument();
+    // 工作区标题和基本信息都按「别名 (技术名)」展示。
+    expect(await screen.findByRole("heading", { name: "海关数据 (Demo App)" })).toBeInTheDocument();
     await user.click(await screen.findByRole("button", { name: "编辑" }));
     const dialog = await screen.findByRole("dialog", { name: "编辑基本信息" });
     await user.clear(within(dialog).getByLabelText("别名"));

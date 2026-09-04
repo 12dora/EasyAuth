@@ -72,8 +72,7 @@ export function AccessRequestFields({
               <option value="">{t("portal.request.baseGrantPlaceholder")}</option>
               {currentGrants.map((grant) => (
                 <option key={grant.grant_id} value={String(grant.grant_id)}>
-                  {formatAppDisplayName({ name: grant.app_name, alias: grant.app_alias })} ({grant.app_key}) v
-                  {grant.grant_revision}
+                  {formatAppDisplayName({ name: grant.app_name, alias: grant.app_alias })} v{grant.grant_revision}
                 </option>
               ))}
             </SelectInput>
