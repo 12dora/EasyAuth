@@ -440,6 +440,14 @@
   color: rgb(var(--accent));
 }
 
+/*
+ * 由所选权限组带来的权限范围: 虚线边框标出"来源是权限组", 但仍是可点的常规控件——
+ * 取消勾选会把权限组落地成逐项直接申请, 所以这里不能画成禁用态。
+ */
+.permission-selector__scope-chip--covered {
+  border-style: dashed;
+}
+
 @keyframes permissionSelectorRowEnter {
   from {
     opacity: 0;

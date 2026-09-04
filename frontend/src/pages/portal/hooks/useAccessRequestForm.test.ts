@@ -170,10 +170,11 @@ describe("useAccessRequestForm", () => {
     await waitFor(() => expect(submittedPayloads).toHaveLength(1));
     await waitFor(() => expect(result.current.authorizationGroupKey).toBe(""));
 
+    // 反过来先选权限组再勾同一项直接权限: 权限组已覆盖它, 展示态本就是勾选, 因此不会重复进载荷。
     act(() => result.current.changeAuthorizationGroupKey("customer-reader"));
-
-    act(() => result.current.changePermissionScope(permission, "SELF"));
+    act(() => result.current.selectPermissionKeys([directGrantSelectionKey("customer.read", "SELF")]));
     expect(result.current.selectedPermissionKeys).toEqual([]);
+    expect(result.current.groupCoveredSelectionKeys).toEqual([directGrantSelectionKey("customer.read", "SELF")]);
 
     act(() => result.current.changeReason("申请客户查看权限"));
     await waitFor(() => expect(result.current.canSubmit).toBe(true));
@@ -185,6 +186,131 @@ describe("useAccessRequestForm", () => {
 
     act(() => result.current.changePermissionScope(permission, "SELF"));
     expect(result.current.selectedPermissionKeys).toHaveLength(1);
+  });
+
+  test("取消权限组覆盖的权限时把权限组落地成逐项直接申请", async () => {
+    const catalog = scopedCatalog({
+      ungrouped_permissions: [
+        {
+          id: 101,
+          app_key: "crm",
+          key: "customer.read",
+          name: "查看客户",
+          scopes: [{ key: "SELF", name: "本人" }],
+        },
+        {
+          id: 102,
+          app_key: "crm",
+          key: "customer.export",
+          name: "导出客户",
+          scopes: [{ key: "SELF", name: "本人" }],
+        },
+      ],
+      authorization_groups: [
+        {
+          id: 11,
+          app_key: "crm",
+          key: "customer-reader",
+          kind: "role",
+          name: "客户查看",
+          grants: [
+            { permission_key: "customer.read", scope_key: "SELF" },
+            { permission_key: "customer.export", scope_key: "SELF" },
+            // 目录里没有这一项: 当前用户不能单独申请, 落地时只能丢弃。
+            { permission_key: "customer.delete", scope_key: "ALL" },
+          ],
+        },
+      ],
+    });
+    const submittedPayloads: unknown[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input) === "/portal/api/v1/request-catalog") {
+        return jsonResponse(catalog);
+      }
+      if (String(input) === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
+        submittedPayloads.push(JSON.parse(String(init.body)));
+        return jsonResponse({ access_request: { id: 1 } }, 201);
+      }
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = await renderReadyForm();
+
+    act(() => result.current.changeAppKey("crm"));
+    act(() => result.current.changeAuthorizationGroupKey("customer-reader"));
+    expect(result.current.groupCoveredSelectionKeys).toHaveLength(3);
+
+    const readPermission = result.current.ungroupedPermissions.find((item) => item.key === "customer.read");
+    act(() => result.current.changePermissionScope(readPermission!, "SELF"));
+
+    // 权限组整体授予, 少一项就不再是它: 权限组目标清空, 其余可申请的覆盖权限转成直接申请。
+    expect(result.current.authorizationGroupKey).toBe("");
+    expect(result.current.selectedPermissionKeys).toEqual([directGrantSelectionKey("customer.export", "SELF")]);
+    expect(result.current.toastMessageKey).toBe("portal.request.groupMaterializedPartially");
+
+    act(() => result.current.changeReason("只保留导出客户"));
+    await waitFor(() => expect(result.current.canSubmit).toBe(true));
+    act(() => result.current.submit());
+    await waitFor(() => expect(submittedPayloads).toHaveLength(1));
+
+    expect(submittedPayloads[0]).toMatchObject({
+      authorization_group_keys: [],
+      direct_grants: [{ permission: "customer.export", scope: "SELF" }],
+    });
+  });
+
+  test("重新选中权限组后覆盖的权限重回覆盖态, 载荷不重复下发", async () => {
+    const catalog = scopedCatalog({
+      authorization_groups: [
+        {
+          id: 11,
+          app_key: "crm",
+          key: "customer-reader",
+          kind: "role",
+          name: "客户查看",
+          grants: [{ permission_key: "customer.read", scope_key: "SELF" }],
+        },
+      ],
+    });
+    const submittedPayloads: unknown[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input) === "/portal/api/v1/request-catalog") {
+        return jsonResponse(catalog);
+      }
+      if (String(input) === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
+        submittedPayloads.push(JSON.parse(String(init.body)));
+        return jsonResponse({ access_request: { id: 1 } }, 201);
+      }
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = await renderReadyForm();
+
+    act(() => result.current.changeAppKey("crm"));
+    act(() => result.current.changeAuthorizationGroupKey("customer-reader"));
+    const permission = result.current.ungroupedPermissions[0];
+    act(() => result.current.changePermissionScope(permission, "SELF"));
+    expect(result.current.authorizationGroupKey).toBe("");
+    expect(result.current.selectedPermissionKeys).toEqual([]);
+    expect(result.current.toastMessageKey).toBe("portal.request.groupMaterialized");
+
+    // 重新勾上这项权限, 再把权限组选回来: 覆盖关系恢复, 直接权限不再重复下发。
+    act(() => result.current.changePermissionScope(permission, "SELF"));
+    expect(result.current.selectedPermissionKeys).toEqual([directGrantSelectionKey("customer.read", "SELF")]);
+    expect(result.current.toastMessageKey).toBe("");
+
+    act(() => result.current.changeAuthorizationGroupKey("customer-reader"));
+    expect(result.current.selectedPermissionKeys).toEqual([]);
+
+    act(() => result.current.changeReason("申请客户查看权限"));
+    await waitFor(() => expect(result.current.canSubmit).toBe(true));
+    act(() => result.current.submit());
+    await waitFor(() => expect(submittedPayloads).toHaveLength(1));
+
+    expect(submittedPayloads[0]).toMatchObject({
+      authorization_group_keys: ["customer-reader"],
+      direct_grants: [],
+    });
   });
 
   test("FF-10: group 只按 grants 的 MANAGED_USERS 实际范围阻止 owner 回退", async () => {

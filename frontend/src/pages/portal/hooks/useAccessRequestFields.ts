@@ -1,5 +1,6 @@
 import { useState } from "react";
 
+import type { MessageKey } from "../../../i18n/messages";
 import {
   defaultGrantTypeForRequestType,
   type AccessGrantType,
@@ -17,6 +18,7 @@ export function useAccessRequestFields(initialRequestType: AccessRequestType = "
   const [selectedPermissionScopes, setSelectedPermissionScopes] = useState<Record<string, string>>({});
   const [selectedApproverUserIds, setSelectedApproverUserIds] = useState<string[]>([]);
   const [approverSelectionWasEdited, setApproverSelectionWasEdited] = useState(false);
+  const [groupMaterializationNoticeKey, setGroupMaterializationNoticeKey] = useState<MessageKey | "">("");
   const [expandedGroupKeys, setExpandedGroupKeys] = useState<string[]>([]);
   const [grantType, setGrantType] = useState<AccessGrantType>(defaultGrantTypeForRequestType(initialRequestType));
   const [expiresAt, setExpiresAt] = useState("");
@@ -33,6 +35,7 @@ export function useAccessRequestFields(initialRequestType: AccessRequestType = "
     selectedApproverUserIds,
     expandedGroupKeys,
     approverSelectionWasEdited,
+    groupMaterializationNoticeKey,
     grantType,
     expiresAt,
     reason,
@@ -45,6 +48,7 @@ export function useAccessRequestFields(initialRequestType: AccessRequestType = "
     setSelectedPermissionScopes,
     setSelectedApproverUserIds,
     setApproverSelectionWasEdited,
+    setGroupMaterializationNoticeKey,
     setExpandedGroupKeys,
     setGrantType,
     setExpiresAt,

@@ -1236,6 +1236,12 @@ describe("PortalPage access request form", () => {
       await user.click(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 全部" }));
       expect(within(permissionTable).getByRole("checkbox", { name: "选择权限组 orders 全部" })).toHaveAttribute("aria-checked", "mixed");
 
+      // 半选态点一下补齐成全选(而不是再清空一次: 那样半选看起来像点不动)。
+      await user.click(within(permissionTable).getByRole("checkbox", { name: "选择权限组 orders 全部" }));
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择权限组 orders 全部" })).toBeChecked();
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.refund.approve 全部" })).toBeChecked();
+
+      // 全选态点一下清空整个范围。
       await user.click(within(permissionTable).getByRole("checkbox", { name: "选择权限组 orders 全部" }));
       expect(within(permissionTable).getByRole("checkbox", { name: "选择权限组 orders 全部" })).not.toBeChecked();
       expect(within(permissionTable).getByRole("checkbox", { name: "选择权限组 orders 全部" })).toHaveAttribute("aria-checked", "false");
@@ -1715,6 +1721,75 @@ describe("PortalPage access request form", () => {
         await user.click(within(permissionTable).getByRole("button", { name: "收起 活动日志" }));
         await waitFor(() => expect(within(permissionTable).queryByText("activity.log.create")).not.toBeInTheDocument());
       }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("从更新权限预填进来的已有权限可勾可取消, 取消后权限组落地为直接申请", async () => {
+    const submittedPayloads: unknown[] = [];
+    const fetchMock = coveredPermissionRequestFetchMock(submittedPayloads);
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalRequestWithPrefill("7");
+      const user = userEvent.setup();
+
+      await waitFor(() => expect(screen.getByLabelText("基础授权")).toHaveValue("7"));
+      expect(screen.getByLabelText("可申请权限组")).toHaveValue("reader");
+
+      await screen.findByRole("table", { name: "权限选择" });
+      await user.click(permissionSelectorChip("展开 订单", "button"));
+
+      // 已由权限组授予的权限: 勾选且可编辑, 权限组表头因此能到全勾态。
+      await waitFor(() => expect(permissionSelectorChip("选择 orders.read 本人")).toBeChecked());
+      expect(permissionSelectorChip("选择 orders.read 本人")).toBeEnabled();
+      expect(permissionSelectorChip("选择 orders.export 本人")).toBeChecked();
+      expect(permissionSelectorChip("选择 orders.export 本人")).toBeEnabled();
+      expect(permissionSelectorChip("选择权限组 orders 本人")).toBeChecked();
+
+      await user.click(permissionSelectorChip("选择 orders.read 本人"));
+
+      expect(screen.getByLabelText("可申请权限组")).toHaveValue("");
+      expect(permissionSelectorChip("选择 orders.read 本人")).not.toBeChecked();
+      expect(permissionSelectorChip("选择 orders.export 本人")).toBeChecked();
+      expect(await screen.findByRole("status")).toHaveTextContent("已取消所选权限组，其覆盖的其余权限已转为单独申请。");
+
+      await user.type(screen.getByLabelText("申请原因"), "只保留导出订单");
+      await user.click(screen.getByRole("button", { name: "提交申请" }));
+
+      await waitFor(() => expect(submittedPayloads).toHaveLength(1));
+      expect(submittedPayloads[0]).toMatchObject({
+        request_type: "change",
+        base_grant_id: 7,
+        base_grant_revision: 3,
+        authorization_group_keys: [],
+        direct_grants: [{ permission: "orders.export", scope: "SELF" }],
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("权限组表头在已有权限全勾时点一下清空整个范围", async () => {
+    const fetchMock = coveredPermissionRequestFetchMock([]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalRequestWithPrefill("7");
+      const user = userEvent.setup();
+
+      await waitFor(() => expect(screen.getByLabelText("可申请权限组")).toHaveValue("reader"));
+      await screen.findByRole("table", { name: "权限选择" });
+      await user.click(permissionSelectorChip("展开 订单", "button"));
+
+      await user.click(permissionSelectorChip("选择权限组 orders 本人"));
+
+      expect(screen.getByLabelText("可申请权限组")).toHaveValue("");
+      expect(permissionSelectorChip("选择 orders.read 本人")).not.toBeChecked();
+      expect(permissionSelectorChip("选择 orders.export 本人")).not.toBeChecked();
+      expect(permissionSelectorChip("选择权限组 orders 本人")).not.toBeChecked();
+      expect(screen.getByText("已选 0 项")).toBeVisible();
     } finally {
       vi.unstubAllGlobals();
     }
@@ -2357,6 +2432,112 @@ const emptyDirectPermissionCatalog = {
   permission_groups: [],
   ungrouped_permissions: [],
 };
+
+/**
+ * 权限选择表格里的一个控件。
+ *
+ * 变更申请要等基础授权列表加载完, 期间权限选择器会先让位给占位态, 表格节点会被换掉,
+ * 所以这里每次都重新查一遍表格, 不缓存节点。
+ */
+function permissionSelectorChip(name: string, role: "checkbox" | "button" = "checkbox") {
+  return within(screen.getByRole("table", { name: "权限选择" })).getByRole(role, { name });
+}
+
+/** 「更新权限」跳转过来的变更申请: 路由 state 里带着基础授权预填。 */
+function renderPortalRequestWithPrefill(baseGrantId: string) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+
+  renderWithAntd(
+    <QueryClientProvider client={client}>
+      <MemoryRouter
+        initialEntries={[
+          {
+            pathname: "/portal/request",
+            state: { accessRequestPrefill: { requestType: "change", baseGrantId } },
+          },
+        ]}
+      >
+        <Routes>
+          <Route path="/portal/request" element={<PortalPage view="request" />} />
+        </Routes>
+      </MemoryRouter>
+    </QueryClientProvider>,
+  );
+}
+
+/**
+ * 一条「权限全部来自权限组 reader」的当前授权 + 同一批权限可单独申请的目录:
+ * 用来验证预填进来的已有权限可编辑、以及取消其中一项时权限组落地成逐项直接申请。
+ */
+function coveredPermissionRequestFetchMock(submittedPayloads: unknown[]) {
+  const catalog = {
+    apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: ["app-owner"] }],
+    approver_options: [{ user_id: "app-owner", name: "应用负责人" }],
+    authorization_groups: [
+      {
+        id: 11,
+        app_key: "crm",
+        key: "reader",
+        kind: "role",
+        name: "只读",
+        requestable: true,
+        grants: [
+          { permission_key: "orders.read", scope_key: "SELF" },
+          { permission_key: "orders.export", scope_key: "SELF" },
+        ],
+      },
+    ],
+    permission_groups: [
+      {
+        id: 1,
+        app_key: "crm",
+        type: "group",
+        key: "orders",
+        name: "订单",
+        permissions: [
+          { id: 101, app_key: "crm", key: "orders.read", name: "查看订单", scopes: [{ key: "SELF", name: "本人" }] },
+          { id: 102, app_key: "crm", key: "orders.export", name: "导出订单", scopes: [{ key: "SELF", name: "本人" }] },
+        ],
+      },
+    ],
+    ungrouped_permissions: [],
+  };
+  const grantList = {
+    data: [
+      portalGrantRow({
+        grant_id: 7,
+        grant_revision: 3,
+        groups: [{ key: "reader", kind: "role", name: "只读" }],
+        grants: [
+          portalExpandedGrant({ source_type: "group", source_key: "reader" }),
+          portalExpandedGrant({
+            permission: "orders.export",
+            permission_name: "导出订单",
+            permission_name_en: "Export orders",
+            source_type: "group",
+            source_key: "reader",
+          }),
+        ],
+      }),
+    ],
+    pagination: { page: 1, page_size: 100, total_items: 1, total_pages: 1 },
+  };
+
+  return vi.fn<typeof fetch>(async (input, init) => {
+    const url = String(input);
+    if (url === "/portal/api/v1/request-catalog") {
+      return jsonResponse(catalog);
+    }
+    if (url === "/portal/api/v1/me/grants?page=1&page_size=100") {
+      return jsonResponse(grantList);
+    }
+    if (url === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
+      submittedPayloads.push(JSON.parse(String(init.body)));
+      return jsonResponse({ access_request: { id: 1 } });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  });
+}
 
 function permissionSelectorFetchMock(payload: unknown) {
   return vi.fn<typeof fetch>(async (input) => {

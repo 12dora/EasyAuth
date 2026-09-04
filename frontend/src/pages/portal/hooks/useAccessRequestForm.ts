@@ -56,7 +56,10 @@ export function useAccessRequestForm(currentUserId = "", options: UseAccessReque
   const currentGrants = currentGrantsQuery.data?.data ?? [];
   const selectedBaseGrant = currentGrants.find((grant) => String(grant.grant_id) === fields.baseGrantId);
   useLifecycleGrantInvariant(fields, selectedBaseGrant);
-  const actions = buildAccessRequestActions(fields, catalogView, currentGrants, () => submitMutation.mutate());
+  const actions = buildAccessRequestActions(fields, catalogView, currentGrants, () => {
+    fields.setGroupMaterializationNoticeKey("");
+    submitMutation.mutate();
+  });
   const prefillErrorMessageKey = useAccessRequestPrefillApplication({
     prefill,
     currentGrants,
@@ -71,7 +74,7 @@ export function useAccessRequestForm(currentUserId = "", options: UseAccessReque
   // 否则同一次 render 可能同时给出"可提交"和"已过期"。
   const grantTermIsFuture = accessRequestExpiresAtIsFuture(fields);
 
-  return buildAccessRequestFormResult({
+  const result = buildAccessRequestFormResult({
     fields,
     catalogView,
     currentGrants,
@@ -92,4 +95,9 @@ export function useAccessRequestForm(currentUserId = "", options: UseAccessReque
     currentGrantsTruncated,
     prefillErrorMessageKey,
   });
+
+  // 权限组落地是对用户上一次点击的即时反馈, 占用同一条提示位时优先于派生提示。
+  return fields.groupMaterializationNoticeKey
+    ? { ...result, toastMessageKey: fields.groupMaterializationNoticeKey }
+    : result;
 }

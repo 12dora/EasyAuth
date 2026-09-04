@@ -84,11 +84,14 @@ export function useAccessRequestPrefillApplication(input: AccessRequestPrefillAp
       return;
     }
     appliedRef.current = true;
-    const baseGrantExists = currentGrants.some((grant) => String(grant.grant_id) === prefill.baseGrantId);
-    if (baseGrantExists) {
-      changeBaseGrantId(prefill.baseGrantId);
-    } else {
+    const baseGrant = currentGrants.find((grant) => String(grant.grant_id) === prefill.baseGrantId);
+    if (!baseGrant) {
       setErrorMessageKey("portal.request.prefillBaseGrantMissing");
+    } else if (baseGrant.groups.length > 1) {
+      // 申请表只建模一个权限组; 多权限组授权若照搬第一个, 提交出去的变更会静默撤掉其余权限组。
+      setErrorMessageKey("portal.request.prefillMultiGroupUnsupported");
+    } else {
+      changeBaseGrantId(prefill.baseGrantId);
     }
     onApplied?.();
   }, [prefill, currentGrants, currentGrantsAreLoaded, changeBaseGrantId, onApplied]);

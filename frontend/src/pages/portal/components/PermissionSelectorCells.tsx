@@ -97,7 +97,8 @@ export function PermissionGroupScopeCell({
             checked={selectionState === "checked"}
             mixed={selectionState === "indeterminate"}
             ariaLabel={t("selector.selectGroupScope", { groupKey: group.key, scopeName: localizedName(locale, scope) })}
-            onChange={() => onScopeChange(group, scope.key, selectionState === "unchecked")}
+            // 全勾时点一下清空整个范围; 未勾与半勾都补齐成全勾, 半勾不再变成"再点一次也没反应"。
+            onChange={() => onScopeChange(group, scope.key, selectionState !== "checked")}
           />
         );
       })}
@@ -128,6 +129,7 @@ export function PermissionScopeCell({
     <div className="permission-selector__scope-chip-list permission-selector__scope-chip-list--single-line">
       {scopes.map((scope) => {
         const selectionKey = directGrantSelectionKey(permission.key, scope.key);
+        // 权限组覆盖的权限同样可编辑: 取消勾选会把权限组落地成逐项直接申请(见 accessRequestActions)。
         const isCovered = coveredKeySet?.has(selectionKey) ?? false;
         const scopeLabel = t("selector.selectPermissionScope", { permissionKey: permission.key, scopeName: localizedName(locale, scope) });
         return (
@@ -135,9 +137,9 @@ export function PermissionScopeCell({
             key={scope.key}
             label={localizedName(locale, scope)}
             checked={selectedKeys.includes(selectionKey)}
-            disabled={isCovered}
+            covered={isCovered}
             title={isCovered ? t("selector.scope.coveredByGroup") : undefined}
-            ariaLabel={isCovered ? `${scopeLabel} (${t("selector.scope.coveredByGroup")})` : scopeLabel}
+            ariaLabel={scopeLabel}
             onChange={() => onScopeChange(permission, scope.key)}
           />
         );
@@ -150,7 +152,7 @@ function ScopeChip({
   label,
   checked,
   mixed = false,
-  disabled = false,
+  covered = false,
   title,
   ariaLabel,
   onChange,
@@ -158,7 +160,8 @@ function ScopeChip({
   label: string;
   checked: boolean;
   mixed?: boolean;
-  disabled?: boolean;
+  /** 由所选权限组带来的权限范围: 与直接勾选同样可点, 只在样式上标出来源。 */
+  covered?: boolean;
   title?: string;
   ariaLabel: string;
   onChange: () => void;
@@ -178,14 +181,13 @@ function ScopeChip({
         "permission-selector__scope-chip",
         checked && "permission-selector__scope-chip--checked",
         mixed && "permission-selector__scope-chip--mixed",
-        disabled && "permission-selector__scope-chip--disabled opacity-60 cursor-not-allowed",
+        covered && "permission-selector__scope-chip--covered",
       )}
     >
       <input
         ref={checkboxRef}
         type="checkbox"
         checked={checked}
-        disabled={disabled}
         aria-checked={mixed ? "mixed" : checked}
         onChange={onChange}
         aria-label={ariaLabel}

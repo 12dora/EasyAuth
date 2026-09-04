@@ -106,6 +106,11 @@ export const zhCN = {
   "portal.approvals.rejectDescription": "驳回「{applicant}」对「{app}」的申请，驳回理由会展示给申请人。",
 
   "portal.request.prefillBaseGrantMissing": "预填的基础授权已不在你的当前授权中，请手动选择基础授权。",
+  "portal.request.prefillMultiGroupUnsupported": "该授权包含多个权限组，申请表暂不支持多权限组变更，请联系管理员处理。",
+
+  // 取消权限组覆盖的某项权限时，权限组会被落地为逐项直接申请（权限组是整体授予的，少一项就不再是它）。
+  "portal.request.groupMaterialized": "已取消所选权限组，其覆盖的其余权限已转为单独申请。",
+  "portal.request.groupMaterializedPartially": "已取消所选权限组，其覆盖的其余权限已转为单独申请；其中部分权限无法单独申请，已从本次申请中移除。",
 } as const;
 
 export const en: Record<keyof typeof zhCN, string> = {
@@ -208,4 +213,8 @@ export const en: Record<keyof typeof zhCN, string> = {
   "portal.approvals.rejectDescription": "Reject \"{applicant}\"'s request for \"{app}\"; the reason will be shown to the applicant.",
 
   "portal.request.prefillBaseGrantMissing": "The prefilled base grant is no longer among your current grants; select a base grant manually.",
+  "portal.request.prefillMultiGroupUnsupported": "This grant contains multiple permission groups; the request form does not support changing multi-group grants yet. Please contact an administrator.",
+
+  "portal.request.groupMaterialized": "The selected permission group was removed; its remaining permissions are now requested individually.",
+  "portal.request.groupMaterializedPartially": "The selected permission group was removed; its remaining permissions are now requested individually. Some of them cannot be requested individually and were dropped from this request.",
 };

@@ -108,6 +108,12 @@ export interface AccessRequestPayloadValues {
 export interface AccessRequestFields extends AccessRequestPayloadValues {
   expandedGroupKeys: string[];
   approverSelectionWasEdited: boolean;
+  /**
+   * 权限组落地成直接权限后的提示文案 key。
+   *
+   * 只对上一次选择操作负责: 再选一次权限、换权限组、换目标或提交都会清空它。
+   */
+  groupMaterializationNoticeKey: MessageKey | "";
   setRequestType: Dispatch<SetStateAction<AccessRequestType>>;
   setAppKey: Dispatch<SetStateAction<string>>;
   setBaseGrantId: Dispatch<SetStateAction<string>>;
@@ -117,6 +123,7 @@ export interface AccessRequestFields extends AccessRequestPayloadValues {
   setSelectedPermissionScopes: Dispatch<SetStateAction<Record<string, string>>>;
   setSelectedApproverUserIds: Dispatch<SetStateAction<string[]>>;
   setApproverSelectionWasEdited: Dispatch<SetStateAction<boolean>>;
+  setGroupMaterializationNoticeKey: Dispatch<SetStateAction<MessageKey | "">>;
   setExpandedGroupKeys: Dispatch<SetStateAction<string[]>>;
   setGrantType: Dispatch<SetStateAction<AccessGrantType>>;
   setExpiresAt: Dispatch<SetStateAction<string>>;
