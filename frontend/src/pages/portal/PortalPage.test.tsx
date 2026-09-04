@@ -528,8 +528,8 @@ describe("PortalPage access request form", () => {
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       expect(screen.getByLabelText("选择审批人 app-owner")).toBeChecked();
       expect(screen.getByText("可申请权限组")).toBeVisible();
-      expect(screen.getByRole("option", { name: "销售只读 [角色] (sales-reader)" })).toBeVisible();
-      expect(screen.getByRole("option", { name: "订单运营包 [权限包] (order-ops)" })).toBeVisible();
+      expect(screen.getByRole("option", { name: "销售只读" })).toHaveValue("sales-reader");
+      expect(screen.getByRole("option", { name: "订单运营包" })).toHaveValue("order-ops");
 
       await user.selectOptions(screen.getByLabelText("可申请权限组"), "order-ops");
       expect(screen.getByLabelText("选择审批人 ops-owner")).toBeChecked();

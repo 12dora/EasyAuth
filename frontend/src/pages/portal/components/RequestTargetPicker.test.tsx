@@ -38,7 +38,7 @@ describe("RequestTargetPicker", () => {
     expect(document.getElementById(labelledBy as string)).toHaveTextContent("直接权限");
   });
 
-  test("权限组下拉展示翻译后的类别, 不出现接口枚举字面量", () => {
+  test("权限组下拉只展示本地化组名, 不带类别与 key", () => {
     render(
       <I18nProvider>
         <RequestTargetPicker
@@ -68,9 +68,9 @@ describe("RequestTargetPicker", () => {
       </I18nProvider>,
     );
 
-    expect(screen.getByRole("option", { name: "销售只读 [角色] (sales-reader)" })).toBeVisible();
-    expect(screen.getByRole("option", { name: "订单运营包 [权限包] (order-ops)" })).toBeVisible();
-    expect(screen.queryByRole("option", { name: /\[role\]|\[bundle\]/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "销售只读" })).toHaveValue("sales-reader");
+    expect(screen.getByRole("option", { name: "订单运营包" })).toHaveValue("order-ops");
+    expect(screen.queryByRole("option", { name: /\[|\(/ })).not.toBeInTheDocument();
   });
 
   test("应用下拉展示别名: 有别名拼成「别名 (技术名)」, 没别名只显示技术名", () => {
