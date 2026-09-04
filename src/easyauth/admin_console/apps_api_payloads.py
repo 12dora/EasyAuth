@@ -30,6 +30,7 @@ class AppCreatePayload(BaseModel):
 
     app_key: str = Field(max_length=64)
     name: str = Field(max_length=128)
+    alias: str = Field(default="", max_length=128)
     description: str = ""
     is_active: bool = True
     owner_user_ids: list[str] = Field(default_factory=list)
@@ -56,6 +57,11 @@ class AppCreatePayload(BaseModel):
     def normalize_description(cls, value: str) -> str:
         return value.strip()
 
+    @field_validator("alias")
+    @classmethod
+    def normalize_alias(cls, value: str) -> str:
+        return value.strip()
+
     @field_validator("owner_user_ids", "developer_user_ids")
     @classmethod
     def normalize_user_ids(cls, value: list[str]) -> list[str]:
@@ -66,6 +72,7 @@ class AppPatchPayload(BaseModel):
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
 
     name: str | None = Field(default=None, max_length=128)
+    alias: str | None = Field(default=None, max_length=128)
     description: str | None = None
     is_active: bool | None = None
 
@@ -82,6 +89,13 @@ class AppPatchPayload(BaseModel):
     @field_validator("description")
     @classmethod
     def normalize_description(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return value.strip()
+
+    @field_validator("alias")
+    @classmethod
+    def normalize_alias(cls, value: str | None) -> str | None:
         if value is None:
             return None
         return value.strip()

@@ -163,6 +163,7 @@ def _save_created_app(
         app = App.objects.create(
             app_key=payload.app_key,
             name=payload.name,
+            alias=payload.alias,
             description=payload.description,
             is_active=payload.is_active,
         )
@@ -194,6 +195,8 @@ def _patch_changed_fields(payload: AppPatchPayload) -> dict[str, JsonValue]:
     changed_fields: dict[str, JsonValue] = {}
     if "name" in payload.model_fields_set and payload.name is not None:
         changed_fields["name"] = payload.name
+    if "alias" in payload.model_fields_set and payload.alias is not None:
+        changed_fields["alias"] = payload.alias
     if "description" in payload.model_fields_set and payload.description is not None:
         changed_fields["description"] = payload.description
     if "is_active" in payload.model_fields_set and payload.is_active is not None:

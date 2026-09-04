@@ -31,6 +31,8 @@ class App(models.Model):
 
     app_key: models.CharField[str, str] = models.CharField(max_length=64, unique=True)
     name: models.CharField[str, str] = models.CharField(max_length=128)
+    # 面向员工的别名(如「海关数据」); 由控制台维护, manifest 推送不得覆盖。
+    alias: models.CharField[str, str] = models.CharField(max_length=128, blank=True, default="")
     description: models.TextField[str, str] = models.TextField(blank=True)
     is_active: models.BooleanField[bool, bool] = models.BooleanField(default=True)
     catalog_version: models.PositiveIntegerField[int, int] = models.PositiveIntegerField(default=1)

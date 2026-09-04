@@ -188,6 +188,7 @@ def _app_item(
         "id": app.id,
         "app_key": app.app_key,
         "name": app.name,
+        "alias": app.alias,
         "description": app.description,
         "is_active": app.is_active,
         "owners": owner_ids,
