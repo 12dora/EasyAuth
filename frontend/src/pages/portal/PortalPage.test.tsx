@@ -1857,6 +1857,65 @@ describe("PortalPage access request form", () => {
       await screen.findByRole("table", { name: "权限选择" });
       expect(permissionSelectorChip("选择权限组 orders 本人").closest("tr")).toHaveClass("pointer-events-none");
       expect(permissionSelectorChip("选择权限组 orders 本人").closest("tr")).toHaveAttribute("inert");
+
+      // 工具栏不在表格行里, 只读态必须自己带 native disabled: 否则点下去会撞上动作层的续期守卫。
+      expect(screen.getByRole("button", { name: "全选" })).toBeDisabled();
+      expect(screen.getByLabelText("展开全选范围选项")).toBeDisabled();
+      expect(screen.getByRole("button", { name: "清空" })).toBeDisabled();
+      // 只看已选与展开/折叠只改视图, 不动目标: 只读态下仍然可用。
+      expect(within(screen.getByLabelText("权限选择状态")).getByRole("switch", { name: "仅看已选" })).toBeEnabled();
+      expect(screen.getByRole("button", { name: "展开全部" })).toBeEnabled();
+
+      await user.click(screen.getByRole("button", { name: "全选" }));
+      await user.click(screen.getByRole("button", { name: "清空" }));
+      await user.click(screen.getByLabelText("展开全选范围选项"));
+
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      expect(authorizationGroupCheckbox("只读")).toBeChecked();
+      expect(within(screen.getByLabelText("权限选择状态")).getByText("已选 0 项")).toBeVisible();
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("撤销申请只能往下减: 基础授权之外的权限组、权限范围和批量全选入口都禁用", async () => {
+    const fetchMock = revokeRequestFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage();
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "CRM" });
+      await user.selectOptions(screen.getByLabelText("申请类型"), "revoke");
+      await screen.findByRole("option", { name: "CRM v3" });
+      await user.selectOptions(screen.getByLabelText("基础授权"), "7");
+
+      // 撤销提交的目标是"撤销后保留下来的授权", 后端要求它是基础授权的子集: 加进新东西必被拒。
+      await waitFor(() => expect(authorizationGroupCheckbox("只读")).toBeChecked());
+      expect(authorizationGroupCheckbox("只读")).toBeEnabled();
+      expect(authorizationGroupCheckbox("删除")).toBeDisabled();
+
+      await screen.findByRole("table", { name: "权限选择" });
+      await user.click(permissionSelectorChip("展开 订单", "button"));
+
+      expect(permissionSelectorChip("选择 orders.read 本人")).toBeEnabled();
+      expect(permissionSelectorChip("选择 orders.export 本人")).toBeEnabled();
+      expect(permissionSelectorChip("选择 orders.delete 本人")).toBeDisabled();
+      // 表头 chip 的选中方向会把 orders.delete 一起带进来, 因此同样禁用。
+      expect(permissionSelectorChip("选择权限组 orders 本人")).toBeDisabled();
+
+      // 全选与按范围选择都会越界; 清空是纯减法(等于撤销全部), 仍然可用。
+      expect(screen.getByRole("button", { name: "全选" })).toBeDisabled();
+      expect(screen.getByLabelText("展开全选范围选项")).toBeDisabled();
+      expect(screen.getByRole("button", { name: "清空" })).toBeEnabled();
+
+      // 取消权限组覆盖的权限 = 整组不再保留, 之后这些权限也进不了保留范围。
+      await user.click(permissionSelectorChip("选择 orders.read 本人"));
+      expect(authorizationGroupCheckbox("只读")).not.toBeChecked();
+      await waitFor(() => expect(permissionSelectorChip("选择 orders.read 本人")).toBeDisabled());
+      expect(permissionSelectorChip("选择 orders.export 本人")).toBeDisabled();
     } finally {
       vi.unstubAllGlobals();
     }
@@ -2606,6 +2665,86 @@ function coveredPermissionRequestFetchMock(submittedPayloads: unknown[]) {
     if (url === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
       submittedPayloads.push(JSON.parse(String(init.body)));
       return jsonResponse({ access_request: { id: 1 } });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  });
+}
+
+/**
+ * 撤销申请的固定场景: 基础授权只有权限组 reader(覆盖 orders.read / orders.export),
+ * 目录里另外还有它不含的权限组 deleter 与权限 orders.delete —— 这两样都不能加进保留范围。
+ */
+function revokeRequestFetchMock() {
+  const catalog = {
+    apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: ["app-owner"] }],
+    approver_options: [{ user_id: "app-owner", name: "应用负责人" }],
+    authorization_groups: [
+      {
+        id: 11,
+        app_key: "crm",
+        key: "reader",
+        kind: "role",
+        name: "只读",
+        requestable: true,
+        grants: [
+          { permission_key: "orders.read", scope_key: "SELF" },
+          { permission_key: "orders.export", scope_key: "SELF" },
+        ],
+      },
+      {
+        id: 12,
+        app_key: "crm",
+        key: "deleter",
+        kind: "role",
+        name: "删除",
+        requestable: true,
+        grants: [{ permission_key: "orders.delete", scope_key: "SELF" }],
+      },
+    ],
+    permission_groups: [
+      {
+        id: 1,
+        app_key: "crm",
+        type: "group",
+        key: "orders",
+        name: "订单",
+        permissions: [
+          { id: 101, app_key: "crm", key: "orders.read", name: "查看订单", scopes: [{ key: "SELF", name: "本人" }] },
+          { id: 102, app_key: "crm", key: "orders.export", name: "导出订单", scopes: [{ key: "SELF", name: "本人" }] },
+          { id: 103, app_key: "crm", key: "orders.delete", name: "删除订单", scopes: [{ key: "SELF", name: "本人" }] },
+        ],
+      },
+    ],
+    ungrouped_permissions: [],
+  };
+  const grantList = {
+    data: [
+      portalGrantRow({
+        grant_id: 7,
+        grant_revision: 3,
+        groups: [{ key: "reader", kind: "role", name: "只读" }],
+        grants: [
+          portalExpandedGrant({ source_type: "group", source_key: "reader" }),
+          portalExpandedGrant({
+            permission: "orders.export",
+            permission_name: "导出订单",
+            permission_name_en: "Export orders",
+            source_type: "group",
+            source_key: "reader",
+          }),
+        ],
+      }),
+    ],
+    pagination: { page: 1, page_size: 100, total_items: 1, total_pages: 1 },
+  };
+
+  return vi.fn<typeof fetch>(async (input) => {
+    const url = String(input);
+    if (url === "/portal/api/v1/request-catalog") {
+      return jsonResponse(catalog);
+    }
+    if (url === "/portal/api/v1/me/grants?page=1&page_size=100") {
+      return jsonResponse(grantList);
     }
     throw new Error(`Unexpected fetch: ${url}`);
   });

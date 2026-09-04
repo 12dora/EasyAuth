@@ -4,7 +4,11 @@ import { createElement, type ReactNode } from "react";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { directGrantSelectionKey } from "./accessRequestSelection";
-import { ACCESS_REQUEST_MAX_APPROVERS, ACCESS_REQUEST_MAX_REASON_LENGTH } from "./accessRequestTypes";
+import {
+  ACCESS_REQUEST_MAX_APPROVERS,
+  ACCESS_REQUEST_MAX_AUTHORIZATION_GROUPS,
+  ACCESS_REQUEST_MAX_REASON_LENGTH,
+} from "./accessRequestTypes";
 import { useAccessRequestForm } from "./useAccessRequestForm";
 
 function catalogResponse() {
@@ -546,6 +550,35 @@ describe("useAccessRequestForm", () => {
     expect(result.current.selectedApproverUserIds).toHaveLength(ACCESS_REQUEST_MAX_APPROVERS);
     expect(result.current.reason).toHaveLength(ACCESS_REQUEST_MAX_REASON_LENGTH);
   });
+
+  test("权限组超过服务端上限时提交闸门就拦下并说明原因", async () => {
+    const authorizationGroups = Array.from({ length: ACCESS_REQUEST_MAX_AUTHORIZATION_GROUPS + 1 }, (_, index) => ({
+      id: 100 + index,
+      app_key: "crm",
+      key: `group-${index}`,
+      kind: "role",
+      name: `权限组 ${index}`,
+      requestable: true,
+      grants: [],
+    }));
+    const groupKeys = authorizationGroups.map((group) => group.key);
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => jsonResponse(scopedCatalog({ authorization_groups: authorizationGroups }))));
+    const { result } = await renderReadyForm();
+
+    act(() => result.current.changeAppKey("crm"));
+    act(() => result.current.changeReason("申请全部权限组"));
+
+    // 勾选本身不设闸: 超限只在提交闸门里拦下, 并把原因摆到提示位上。
+    act(() => result.current.changeAuthorizationGroupKeys(groupKeys));
+    expect(result.current.authorizationGroupKeys).toHaveLength(ACCESS_REQUEST_MAX_AUTHORIZATION_GROUPS + 1);
+    await waitFor(() => expect(result.current.selectedApproverUserIds).toEqual(["boss"]));
+    expect(result.current.canSubmit).toBe(false);
+    expect(result.current.toastMessageKey).toBe("portal.request.tooManyAuthorizationGroups");
+
+    act(() => result.current.changeAuthorizationGroupKeys(groupKeys.slice(0, ACCESS_REQUEST_MAX_AUTHORIZATION_GROUPS)));
+    await waitFor(() => expect(result.current.canSubmit).toBe(true));
+    expect(result.current.toastMessageKey).toBe("");
+  });
 });
 
 /** 目标可编辑到什么程度由后端 submission_validation 决定, 四种申请类型各不相同。 */
@@ -557,6 +590,7 @@ describe("useAccessRequestForm 按申请类型约束申请目标", () => {
   const READ_KEY = directGrantSelectionKey("orders.read", "SELF");
   const EXPORT_KEY = directGrantSelectionKey("orders.export", "SELF");
   const AUDIT_KEY = directGrantSelectionKey("orders.audit", "SELF");
+  const DELETE_KEY = directGrantSelectionKey("orders.delete", "SELF");
 
   function lifecycleCatalog() {
     return scopedCatalog({
@@ -564,6 +598,8 @@ describe("useAccessRequestForm 按申请类型约束申请目标", () => {
         { id: 101, app_key: "crm", key: "orders.read", name: "查看订单", scopes: [{ key: "SELF", name: "本人" }] },
         { id: 102, app_key: "crm", key: "orders.export", name: "导出订单", scopes: [{ key: "SELF", name: "本人" }] },
         { id: 103, app_key: "crm", key: "orders.audit", name: "审计订单", scopes: [{ key: "SELF", name: "本人" }] },
+        // 基础授权里没有这一项: 撤销时不能把它加进保留范围。
+        { id: 104, app_key: "crm", key: "orders.delete", name: "删除订单", scopes: [{ key: "SELF", name: "本人" }] },
       ],
       authorization_groups: [
         {
@@ -577,6 +613,16 @@ describe("useAccessRequestForm 按申请类型约束申请目标", () => {
             { permission_key: "orders.read", scope_key: "SELF" },
             { permission_key: "orders.export", scope_key: "SELF" },
           ],
+        },
+        // 基础授权里没有这个权限组: 撤销时不能把它加进保留范围。
+        {
+          id: 12,
+          app_key: "crm",
+          key: "deleter",
+          kind: "role",
+          name: "删除",
+          requestable: true,
+          grants: [{ permission_key: "orders.delete", scope_key: "SELF" }],
         },
       ],
     });
@@ -696,6 +742,60 @@ describe("useAccessRequestForm 按申请类型约束申请目标", () => {
     expect(view.result.current.authorizationGroupKeys).toEqual(["reader"]);
     expect(view.result.current.selectedPermissionKeys).toEqual([]);
     expect(view.result.current.toastMessageKey).toBe("");
+  });
+
+  test("revoke: 基础授权之外的权限组与权限都不能加进保留范围", async () => {
+    const view = await renderFormWithBaseGrant("revoke");
+
+    // 撤销目标是"撤销后保留下来的授权", 后端要求它是基础授权的子集(_validate_revoke_subset):
+    // 界面已把越界入口全部禁用, 动作层再兜一道, 不造一份必被拒绝的草稿。
+    expect(() => act(() => view.result.current.changeAuthorizationGroupKeys(["reader", "deleter"]))).toThrow(
+      "撤销申请不能添加基础授权之外的权限组：deleter",
+    );
+    expect(() => act(() => view.result.current.selectPermissionKeys([DELETE_KEY]))).toThrow(
+      "撤销申请不能添加基础授权之外的权限",
+    );
+    expect(() =>
+      act(() => view.result.current.changePermissionScope(ordersPermission(view, "orders.delete"), "SELF")),
+    ).toThrow("撤销申请不能添加基础授权之外的权限");
+
+    expect(view.result.current.authorizationGroupKeys).toEqual(["reader"]);
+    expect(view.result.current.selectedPermissionKeys).toEqual([AUDIT_KEY]);
+
+    // 权限组覆盖的权限本就在保留范围里: 取消它是撤销整组, 再取消已撤销组里的权限才算越界添加。
+    act(() => view.result.current.changePermissionScope(ordersPermission(view, "orders.read"), "SELF"));
+    expect(view.result.current.authorizationGroupKeys).toEqual([]);
+    expect(() => act(() => view.result.current.selectPermissionKeys([READ_KEY]))).toThrow(
+      "撤销申请不能添加基础授权之外的权限",
+    );
+  });
+
+  test("revoke: 保留范围与基础授权完全一致时不能提交, 摘掉任一项后才可提交", async () => {
+    const view = await renderFormWithBaseGrant("revoke");
+    act(() => view.result.current.changeReason("撤销订单权限"));
+    await waitFor(() => expect(view.result.current.selectedApproverUserIds).toEqual(["boss"]));
+
+    // 后端要求撤销真的减少授权(revoke request must reduce current grant), 原样照抄不算撤销。
+    expect(view.result.current.authorizationGroupKeys).toEqual(["reader"]);
+    expect(view.result.current.selectedPermissionKeys).toEqual([AUDIT_KEY]);
+    expect(view.result.current.canSubmit).toBe(false);
+    expect(view.result.current.toastMessageKey).toBe("portal.request.revokeKeepsWholeGrant");
+
+    act(() => view.result.current.changePermissionScope(ordersPermission(view, "orders.audit"), "SELF"));
+    expect(view.result.current.selectedPermissionKeys).toEqual([]);
+    expect(view.result.current.canSubmit).toBe(true);
+
+    // 把基础授权里的直接权限勾回来又变成"什么都没撤": 重新拒绝提交。
+    act(() => view.result.current.changePermissionScope(ordersPermission(view, "orders.audit"), "SELF"));
+    expect(view.result.current.selectedPermissionKeys).toEqual([AUDIT_KEY]);
+    expect(view.result.current.canSubmit).toBe(false);
+
+    // 保留范围清空 = 撤销全部, 空集是非空基础授权的真子集, 后端接受。
+    act(() => view.result.current.changeAuthorizationGroupKeys([]));
+    act(() => view.result.current.changePermissionScope(ordersPermission(view, "orders.audit"), "SELF"));
+    expect(view.result.current.authorizationGroupKeys).toEqual([]);
+    expect(view.result.current.selectedPermissionKeys).toEqual([]);
+    expect(view.result.current.canSubmit).toBe(true);
   });
 
   test("renew: 目标完全不可编辑, 任何改动都直接失败", async () => {
