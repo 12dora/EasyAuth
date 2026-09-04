@@ -4,7 +4,7 @@
 `src/components/tableArchitecture.antd.test.ts` 是护栏：页面里直接 `import { Table } from "antd"`、
 手写 `<table>`、用 `useReactTable`、或引入自研表格原语都会让测试失败。
 未迁移的页面登记在该测试的 `ALLOWED_LEGACY_TABLE_FILES` 里，迁一个删一行；
-现在只剩门户 `PermissionSelector` 一族（TanStack + 原生 table + PaginationBar，按设计保留），
+现在只剩门户 `PermissionSelector` 一族（TanStack + 原生 table，定高滚动不分页，按设计保留），
 `components/ui/Table*` 自研原语已整体删除，它需要的表格 class 搬到了
 `pages/portal/components/permissionSelectorPrimitives.ts`。
 
