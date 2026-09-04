@@ -383,6 +383,38 @@ def test_app_manifest_reimport_overwrites_bilingual_fields() -> None:
     assert (scope.name_en, scope.description_en) == ("", "")
 
 
+def test_app_alias_survives_manifest_repush_and_is_absent_from_export() -> None:
+    app = App.objects.create(app_key=APP_KEY, name="旧名称", alias="海关数据")
+    _ = apply_permission_template(app=app, template=_parsed_manifest())
+
+    app.refresh_from_db()
+    assert app.alias == "海关数据"
+    assert app.name == "Ops1"
+    exported_app = _exported_manifest(app)["app"]
+    assert isinstance(exported_app, dict)
+    assert "alias" not in exported_app
+
+    second_payload = _manifest_payload()
+    second_payload["schema_version"] = 2
+    app_spec = second_payload["app"]
+    assert isinstance(app_spec, dict)
+    app_spec["name"] = "Ops1 新名"
+    second = parse_permission_template(
+        app_key=APP_KEY,
+        raw_template=dumps(second_payload),
+        template_format="json",
+        imported_by="owner-001",
+    )
+    _ = apply_permission_template(app=app, template=second)
+
+    app.refresh_from_db()
+    assert app.alias == "海关数据"
+    assert app.name == "Ops1 新名"
+    exported_again = _exported_manifest(app)["app"]
+    assert isinstance(exported_again, dict)
+    assert "alias" not in exported_again
+
+
 def _exported_manifest(app: App) -> dict[str, JsonValue]:
     exported = JSON_VALUE_ADAPTER.validate_python(export_manifest(app))
     assert isinstance(exported, dict)

@@ -142,6 +142,8 @@ def test_auto_onboarding_creates_app_and_imports_manifest(
     assert payload["created"] is True
     assert payload["already_up_to_date"] is False
     assert payload["template_version"] == 1
+    assert payload["app_name"] == "Demo App"
+    assert payload["app_alias"] == ""
 
     app = App.objects.get(app_key="demoapp")
     assert app.name == "Demo App"
@@ -372,6 +374,32 @@ def test_auto_onboarding_requires_superuser() -> None:
     )
 
     assert response.status_code == HTTPStatus.FORBIDDEN
+
+
+def test_auto_onboarding_keeps_existing_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _logged_in_superuser("auto-onboard-alias-admin")
+    existing = App.objects.create(app_key="demoapp", name="旧名", alias="海关数据")
+    _ = AppMembership.objects.create(
+        app=existing,
+        user_id="auto-onboard-alias-admin",
+        role=APP_MEMBERSHIP_ROLE_OWNER,
+        is_active=True,
+    )
+    _patch_descriptor(monkeypatch, _descriptor(_manifest()))
+
+    response = client.post(
+        AUTO_ONBOARDING_URL,
+        data={"base_url": "https://downstream.example", "app_key": "demoapp"},
+        content_type="application/json",
+    )
+
+    existing.refresh_from_db()
+    payload = cast("dict[str, JsonValue]", response.json())
+    assert response.status_code == HTTPStatus.OK, response.content
+    assert existing.alias == "海关数据"
+    assert payload["app_alias"] == "海关数据"
 
 
 def _logged_in_superuser(username: str) -> Client:

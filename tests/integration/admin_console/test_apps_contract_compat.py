@@ -61,6 +61,7 @@ def test_apps_list_includes_documented_contract_fields() -> None:
     item = _json_object(items[0])
     assert response.status_code == HTTPStatus.OK
     assert item["app_key"] == app.app_key
+    assert item["alias"] == ""
     assert item["description"] == ""
     assert item["id"] == app.id
     assert item["owners"] == ["apps-contract-owner"]
@@ -266,6 +267,7 @@ def test_apps_create_success_response_uses_detail_contract() -> None:
     assert response.status_code == HTTPStatus.CREATED
     assert set(item) == _expected_detail_fields()
     assert item["app_key"] == "apps-contract-create-crm"
+    assert item["alias"] == ""
     assert item["description"] == "客户管理"
     assert item["owners"] == ["apps-contract-create-owner"]
     assert item["developers"] == ["apps-contract-create-dev"]
@@ -291,6 +293,7 @@ def test_apps_patch_success_response_uses_detail_contract() -> None:
     assert set(item) == _expected_detail_fields()
     assert item["app_key"] == app.app_key
     assert item["name"] == "CRM 新版"
+    assert item["alias"] == ""
 
 
 def test_apps_create_and_patch_errors_use_documented_error_codes() -> None:
@@ -432,6 +435,7 @@ def _expected_detail_fields() -> set[str]:
         "id",
         "app_key",
         "name",
+        "alias",
         "description",
         "is_active",
         "owners",
