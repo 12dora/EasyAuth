@@ -113,6 +113,10 @@ export const zhCN = {
   "portal.request.groupMaterialized": "已取消覆盖该权限的权限组，其覆盖的其余权限已转为单独申请。",
   "portal.request.groupMaterializedPartially": "已取消覆盖该权限的权限组，其覆盖的其余权限已转为单独申请；其中部分权限无法单独申请，已从本次申请中移除。",
   "portal.request.groupRevokedWhole": "撤销申请只能按整组撤销：覆盖该权限的权限组已整体移出保留范围。",
+
+  // 提交闸门里"目标本身不合法"的说明: 上限与 ACCESS_REQUEST_MAX_AUTHORIZATION_GROUPS 一致。
+  "portal.request.tooManyAuthorizationGroups": "一次申请最多选择 20 个权限组，请减少权限组数量后再提交。",
+  "portal.request.revokeKeepsWholeGrant": "撤销申请必须至少移除一项授权：当前保留范围与基础授权完全一致。",
 } as const;
 
 export const en: Record<keyof typeof zhCN, string> = {
@@ -221,4 +225,7 @@ export const en: Record<keyof typeof zhCN, string> = {
   "portal.request.groupMaterialized": "The permission groups covering that permission were removed; their remaining permissions are now requested individually.",
   "portal.request.groupMaterializedPartially": "The permission groups covering that permission were removed; their remaining permissions are now requested individually. Some of them cannot be requested individually and were dropped from this request.",
   "portal.request.groupRevokedWhole": "Revoke requests can only drop whole permission groups: every group covering that permission was removed from the retained scope.",
+
+  "portal.request.tooManyAuthorizationGroups": "A request may include at most 20 permission groups; remove some before submitting.",
+  "portal.request.revokeKeepsWholeGrant": "A revoke request must drop at least one item: the retained scope is identical to the base grant.",
 };

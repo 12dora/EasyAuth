@@ -2,8 +2,10 @@ import type { MessageKey } from "../../../i18n/messages";
 import type { PortalGrantRow } from "../portalListPayload";
 import { selectedManagedUsersTargetHasMissingDirectManager } from "./accessRequestApprovers";
 import { hasSelectionScope } from "./accessRequestSelection";
+import { revokeBaseGrantSnapshot, revokeTargetIsStrictReduction } from "./accessRequestTargetLock";
 import {
   ACCESS_REQUEST_MAX_APPROVERS,
+  ACCESS_REQUEST_MAX_AUTHORIZATION_GROUPS,
   ACCESS_REQUEST_MAX_REASON_LENGTH,
   type AccessRequestPayloadValues,
   type CatalogView,
@@ -29,7 +31,9 @@ export function accessRequestCanSubmit(gate: AccessRequestSubmitGate): boolean {
   );
   return (
     hasRequestTarget(gate.values)
+    && authorizationGroupCountIsWithinLimit(gate.values)
     && lifecycleSelectionIsComplete(gate.values, gate.selectedBaseGrant, gate.currentGrantsTruncated)
+    && revokeTargetReducesBaseGrant(gate.values, gate.selectedBaseGrant)
     && selectedScopesAreComplete
     && !managedUsersTargetHasMissingDirectManager
     && approverSelectionIsValid(gate.values, gate.currentUserId)
@@ -50,9 +54,17 @@ export function accessRequestToastMessageKey(
   values: AccessRequestPayloadValues,
   catalogView: CatalogView,
   catalogIsLoading: boolean,
+  selectedBaseGrant: PortalGrantRow | undefined,
 ): MessageKey | "" {
+  // 提交闸门里"目标本身不合法"的两种情况优先说清楚: 否则提交按钮只是灰着, 用户看不出为什么。
+  if (!authorizationGroupCountIsWithinLimit(values)) {
+    return "portal.request.tooManyAuthorizationGroups";
+  }
   if (selectedManagedUsersTargetHasMissingDirectManager(values, catalogView)) {
     return "portal.request.approverMissing";
+  }
+  if (!revokeTargetReducesBaseGrant(values, selectedBaseGrant)) {
+    return "portal.request.revokeKeepsWholeGrant";
   }
   if (catalogIsLoading || !values.appKey || catalogView.visiblePermissionKeys.length > 0) {
     return "";
@@ -68,6 +80,20 @@ function hasRequestTarget(values: AccessRequestPayloadValues): boolean {
     return true;
   }
   return values.authorizationGroupKeys.length > 0 || values.selectedPermissionKeys.length > 0;
+}
+
+/** 后端 AccessRequestSubmitPayload.authorization_group_keys 有 max_length, 超了整个载荷都会被拒。 */
+function authorizationGroupCountIsWithinLimit(values: AccessRequestPayloadValues): boolean {
+  return values.authorizationGroupKeys.length <= ACCESS_REQUEST_MAX_AUTHORIZATION_GROUPS;
+}
+
+/** 撤销必须真的减少授权; 其余申请类型不受基础授权约束。 */
+function revokeTargetReducesBaseGrant(
+  values: AccessRequestPayloadValues,
+  selectedBaseGrant: PortalGrantRow | undefined,
+): boolean {
+  const snapshot = revokeBaseGrantSnapshot(values.requestType, selectedBaseGrant);
+  return snapshot === null || revokeTargetIsStrictReduction(values, snapshot);
 }
 
 function lifecycleSelectionIsComplete(
