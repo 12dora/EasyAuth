@@ -48,6 +48,7 @@ def portal_handover_app_options(request: HttpRequest) -> JsonResponse:
         {
             "app_key": app.app_key,
             "app_name": app.name,
+            "app_alias": app.alias,
             "handover_capability": app.handover_capability,
             "blocked_reason": (
                 ""

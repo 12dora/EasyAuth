@@ -225,6 +225,7 @@ def _result(
     return {
         "app_key": app.app_key,
         "app_name": app.name,
+        "app_alias": app.alias,
         "created": created,
         "already_up_to_date": already_up_to_date,
         "template_version": template_version,

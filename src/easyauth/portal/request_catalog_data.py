@@ -151,6 +151,7 @@ def _catalog_app_item(
         "id": app.id,
         "app_key": app.app_key,
         "name": app.name,
+        "alias": app.alias,
         "description": app.description,
         "catalog_version": app.catalog_version,
         "default_approver_user_ids": json_strings(approver_resolution.user_ids),

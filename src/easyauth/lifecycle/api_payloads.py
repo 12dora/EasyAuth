@@ -322,6 +322,7 @@ def action_item(action: HandoverAppAction, *, surface: str = SURFACE_CONSOLE) ->
     payload: JsonObject = {
         "app_key": action.app_key_snapshot or action.app.app_key,
         "app_name": action.app_name_snapshot or action.app.name,
+        "app_alias": action.app.alias,
         "status": action.status,
         "blocked_reason": action.blocked_reason,
         "skip_reason": action.skip_reason,

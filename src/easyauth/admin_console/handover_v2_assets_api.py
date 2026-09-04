@@ -86,7 +86,7 @@ def console_handover_blocked_apps(request: HttpRequest) -> JsonResponse:
             status=ACTION_STATUS_BLOCKED,
             task__status__in=TASK_OPEN_STATUSES,
         )
-        .values("app_id", "app__app_key", "app__name")
+        .values("app_id", "app__app_key", "app__name", "app__alias")
         .annotate(blocked_task_count=Count("task_id", distinct=True))
         .order_by("app__app_key")
     )
@@ -94,6 +94,7 @@ def console_handover_blocked_apps(request: HttpRequest) -> JsonResponse:
         {
             "app_key": row["app__app_key"],
             "app_name": row["app__name"],
+            "app_alias": row["app__alias"],
             "blocked_task_count": row["blocked_task_count"],
         }
         for row in rows
@@ -127,6 +128,7 @@ def console_handover_app_options(request: HttpRequest) -> JsonResponse:
         {
             "app_key": app.app_key,
             "app_name": app.name,
+            "app_alias": app.alias,
             "handover_capability": app.handover_capability,
             "blocked_reason": (
                 ""

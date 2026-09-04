@@ -197,6 +197,7 @@ def _grant_item(
         "grant_revision": grant.version,
         "app_key": grant.app.app_key,
         "app_name": grant.app.name,
+        "app_alias": grant.app.alias,
         "groups": json_groups(snapshot.groups),
         "grants": json_expanded_grants(snapshot.grants),
         "grant_version": snapshot.grant_version,

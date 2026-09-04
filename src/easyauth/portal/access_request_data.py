@@ -194,6 +194,7 @@ def _access_request_item(
         "id": access_request.id,
         "app_key": access_request.app.app_key,
         "app_name": access_request.app.name,
+        "app_alias": access_request.app.alias,
         "request_type": access_request.request_type,
         "base_grant_id": access_request.base_grant_id,
         "base_grant_revision": access_request.base_grant_revision,
