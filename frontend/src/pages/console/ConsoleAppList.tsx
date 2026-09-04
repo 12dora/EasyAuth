@@ -7,6 +7,7 @@ import { StatusBanner } from "../../components/StatusBanner";
 import { ConfirmDialog } from "../../components/ui/ConfirmDialog";
 import { PageState } from "../../components/ui/PageState";
 import { useI18n } from "../../i18n/I18nProvider";
+import { formatAppDisplayName } from "../../lib/appDisplayName";
 import { ConsoleAppCreateDialog } from "./ConsoleAppCreateDialog";
 import { ConsoleAppTable } from "./ConsoleAppTable";
 import { useConsoleAppList } from "./useConsoleAppList";
@@ -80,7 +81,7 @@ export function ConsoleAppList() {
       ) : null}
       {deleteTarget ? (
         <ConfirmDialog
-          title={`${t("common.delete")} ${deleteTarget.name}`}
+          title={`${t("common.delete")} ${formatAppDisplayName(deleteTarget)}`}
           message={`${t("console.overview.field.appName")}: ${deleteTarget.name}; ${t("console.overview.field.appKey")}: ${deleteTarget.app_key}`}
           confirmLabel={t("common.delete")}
           confirming={deleteMutation.isPending}

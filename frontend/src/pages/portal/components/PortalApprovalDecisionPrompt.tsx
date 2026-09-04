@@ -1,5 +1,6 @@
 import { ApprovalDecisionDialog } from "../../../components/ApprovalDecisionDialog";
 import { useI18n } from "../../../i18n/I18nProvider";
+import { formatAppDisplayName } from "../../../lib/appDisplayName";
 
 import { decisionDetails } from "./PortalApprovalDetails";
 import { applicantLabel, approvalIsDecidable } from "./portalApprovalFacts";
@@ -32,7 +33,10 @@ export function PortalApprovalDecisionPrompt({
         pendingDecision.mode === "approve" ? "portal.approvals.approveDescription" : "portal.approvals.rejectDescription",
         {
           applicant: applicantLabel(pendingDecision.approval),
-          app: pendingDecision.approval.app_name ?? pendingDecision.approval.app_key ?? "-",
+          app: formatAppDisplayName({
+            name: pendingDecision.approval.app_name,
+            alias: pendingDecision.approval.app_alias,
+          }),
         },
       )}
       details={decisionDetails(t, detail.approval, detail.isLoading, detail.error)}

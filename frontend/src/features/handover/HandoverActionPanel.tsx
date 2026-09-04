@@ -4,6 +4,7 @@ import { Badge } from "../../components/Badge";
 import { Button } from "../../components/Button";
 import { StatusBanner } from "../../components/StatusBanner";
 import { useI18n } from "../../i18n/I18nProvider";
+import { formatAppDisplayName } from "../../lib/appDisplayName";
 import { cn } from "../../lib/cn";
 import type { HandoverAction, HandoverTaskDetail } from "../../lib/domain";
 import { AssetAllocator } from "./AssetAllocator";
@@ -54,7 +55,9 @@ export function HandoverActionPanel({
       data-testid={`action-panel-${action.app_key}`}
     >
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <strong className="text-body text-ink">{action.app_name || action.app_key}</strong>
+        <strong className="text-body text-ink">
+          {formatAppDisplayName({ name: action.app_name, alias: action.app_alias })}
+        </strong>
         <Badge tone={actionStatusBadgeTone(status)}>{actionStatusLabel(t, status)}</Badge>
       </div>
 

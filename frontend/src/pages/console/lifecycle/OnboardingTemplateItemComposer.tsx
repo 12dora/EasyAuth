@@ -8,6 +8,7 @@ import { StatusBanner } from "../../../components/StatusBanner";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { apiRequest, itemsFromPayload } from "../../../lib/api";
 import type { ListPayload } from "../../../lib/api";
+import { formatAppDisplayName } from "../../../lib/appDisplayName";
 import type { AuthorizationGroupItem, PermissionItem } from "../../../lib/domain";
 import {
   fetchAllSelectorApps,
@@ -85,7 +86,7 @@ export function TemplateItemComposer({ onAdd }: { onAdd: (item: TemplateItemDraf
             <option value="">{t("onboarding.editor.appPlaceholder")}</option>
             {apps.map((app) => (
               <option key={app.app_key} value={app.app_key}>
-                {app.name} ({app.app_key})
+                {formatAppDisplayName(app)} ({app.app_key})
               </option>
             ))}
           </SelectInput>

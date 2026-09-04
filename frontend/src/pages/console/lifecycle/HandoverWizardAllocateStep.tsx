@@ -2,6 +2,7 @@ import { Button } from "../../../components/Button";
 import { AssetAllocator } from "../../../features/handover/AssetAllocator";
 import { HandoverUserPicker } from "../../../features/handover/HandoverUserPicker";
 import { useI18n } from "../../../i18n/I18nProvider";
+import { formatAppDisplayName } from "../../../lib/appDisplayName";
 import type { HandoverAction, HandoverTaskDetail, HandoverUserRef } from "../../../lib/domain";
 import { StepSection } from "./HandoverWizardChrome";
 
@@ -34,7 +35,9 @@ export function HandoverWizardAllocateStep({
           return (
             <li key={action.app_key} className="space-y-2 rounded-[3px] border border-ink/12 bg-paper-soft px-3 py-3">
               <div className="flex items-center justify-between gap-2">
-                <strong className="text-body text-ink">{action.app_name || action.app_key}</strong>
+                <strong className="text-body text-ink">
+                  {formatAppDisplayName({ name: action.app_name, alias: action.app_alias })}
+                </strong>
                 <Button size="sm" type="button" onClick={() => onPreview(action.app_key)}>
                   {action.status !== "previewed"
                     ? t("handover.portal.detail.preview")

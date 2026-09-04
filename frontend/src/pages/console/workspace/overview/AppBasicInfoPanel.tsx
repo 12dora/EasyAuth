@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import { Badge } from "../../../../components/Badge";
 import { PanelSurface } from "../../../../components/ui/PanelSurface";
 import { useI18n } from "../../../../i18n/I18nProvider";
+import { formatAppDisplayName } from "../../../../lib/appDisplayName";
 import type { AppSummary } from "../../../../lib/domain";
 import { formatDateTime, readinessLabel } from "../../../../lib/status";
 import { safeJoin } from "../utils";
@@ -29,7 +30,8 @@ function AppBasicInfoRows({ app, status }: { app?: AppSummary; status: string | 
 
   return (
     <dl className="grid gap-x-8 gap-y-3 text-body sm:grid-cols-2">
-      <BasicInfoItem label={t("console.overview.field.appName")} value={app?.name || "-"} />
+      <BasicInfoItem label={t("console.overview.field.appName")} value={app ? formatAppDisplayName(app) : "-"} />
+      <BasicInfoItem label={t("console.overview.field.appAlias")} value={app?.alias || "-"} />
       <BasicInfoItem label={t("console.overview.field.appKey")} value={<code>{app?.app_key || "-"}</code>} />
       <BasicInfoItem label={t("appList.column.owners")} value={safeJoin(app?.owners)} />
       <BasicInfoItem label={t("console.overview.field.developers")} value={safeJoin(app?.developers)} />

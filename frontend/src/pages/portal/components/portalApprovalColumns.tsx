@@ -9,6 +9,7 @@ import {
   serverSortColumn,
   textColumn,
 } from "../../../components/antd/columns";
+import { formatAppDisplayName } from "../../../lib/appDisplayName";
 
 import {
   accessRequestStatusLabel,
@@ -85,8 +86,10 @@ function requestColumns(t: Translator, sort: ServerSortState): ColumnsType<Porta
         width: 160,
         render: (_value: unknown, approval: PortalApprovalRow) => (
           <div className="flex min-w-0 flex-col gap-1">
-            <strong className="truncate">{approval.app_name ?? approval.app_key ?? "-"}</strong>
-            <code className={MONO_TEXT_CLASS}>{approval.app_key ?? "-"}</code>
+            <strong className="truncate">
+              {formatAppDisplayName({ name: approval.app_name, alias: approval.app_alias })}
+            </strong>
+            <code className={MONO_TEXT_CLASS}>{approval.app_key}</code>
           </div>
         ),
       },

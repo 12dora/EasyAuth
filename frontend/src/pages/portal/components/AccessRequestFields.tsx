@@ -2,6 +2,7 @@ import { useMemo, useState } from "react";
 
 import { Field, SelectInput, TextArea, TextInput } from "../../../components/Field";
 import { useI18n } from "../../../i18n/I18nProvider";
+import { formatAppDisplayName } from "../../../lib/appDisplayName";
 import type { AccessGrantType, AccessRequestType, ApproverOption } from "../hooks/accessRequestTypes";
 import type { PortalGrantRow } from "../portalListPayload";
 
@@ -71,7 +72,8 @@ export function AccessRequestFields({
               <option value="">{t("portal.request.baseGrantPlaceholder")}</option>
               {currentGrants.map((grant) => (
                 <option key={grant.grant_id} value={String(grant.grant_id)}>
-                  {grant.app_name} ({grant.app_key}) v{grant.grant_revision}
+                  {formatAppDisplayName({ name: grant.app_name, alias: grant.app_alias })} ({grant.app_key}) v
+                  {grant.grant_revision}
                 </option>
               ))}
             </SelectInput>

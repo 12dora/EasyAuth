@@ -9,6 +9,7 @@ import { AppTable, type ColumnsType } from "../../../components/antd/AppTable";
 import { userColumn } from "../../../components/antd/columns";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { apiRequest } from "../../../lib/api";
+import { formatAppDisplayName } from "../../../lib/appDisplayName";
 import type { HandoverBlockedAppsPayload } from "../../../lib/domain";
 import type { Translator } from "../../../lib/status";
 import type { OperationSectionConfig } from "./operationQuery";
@@ -76,7 +77,7 @@ function blockedAppColumns(t: Translator): ColumnsType<BlockedApp> {
     userColumn<BlockedApp>({
       key: "app",
       title: t("handover.console.blockedApps.column.app"),
-      getName: (app) => app.app_name,
+      getName: (app) => formatAppDisplayName({ name: app.app_name, alias: app.app_alias }),
       getUserId: (app) => app.app_key,
       filter: true,
     }),

@@ -1,6 +1,7 @@
 import { Badge } from "../../../components/Badge";
 import { actionStatusBadgeTone, actionStatusLabel } from "../../../features/handover/handoverActionPanelModel";
 import { useI18n } from "../../../i18n/I18nProvider";
+import { formatAppDisplayName } from "../../../lib/appDisplayName";
 import { cn } from "../../../lib/cn";
 import type { HandoverAction } from "../../../lib/domain";
 import { canSelectActionForWizard } from "./handoverWizardController";
@@ -42,7 +43,9 @@ export function HandoverWizardAppsStep({
                     checked={Boolean(selected[action.app_key]) && !blocked}
                     onChange={(event) => onToggle(action.app_key, event.currentTarget.checked)}
                   />
-                  <span className="flex-1 font-medium">{action.app_name || action.app_key}</span>
+                  <span className="flex-1 font-medium">
+                    {formatAppDisplayName({ name: action.app_name, alias: action.app_alias })}
+                  </span>
                   {blocked ? (
                     <span className="text-caption">{t("handover.wizard.apps.blocked")}</span>
                   ) : (

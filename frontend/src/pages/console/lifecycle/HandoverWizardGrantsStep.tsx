@@ -1,5 +1,6 @@
 import { StatusBanner } from "../../../components/StatusBanner";
 import { useI18n } from "../../../i18n/I18nProvider";
+import { formatAppDisplayName } from "../../../lib/appDisplayName";
 import type { HandoverAction, HandoverGrantItemRow } from "../../../lib/domain";
 import { grantTypeLabel } from "../../../lib/status";
 import { groupGrantItemsByApp } from "./handoverWizardModel";
@@ -61,7 +62,9 @@ function GrantItemsChecklist({
     <div className="space-y-4">
       {grouped.map(({ action, items: appItems }) => (
         <div key={action.app_key} className="space-y-2">
-          <h3 className="text-body font-semibold text-ink">{action.app_name || action.app_key}</h3>
+          <h3 className="text-body font-semibold text-ink">
+            {formatAppDisplayName({ name: action.app_name, alias: action.app_alias })}
+          </h3>
           <ul className="grid gap-1.5">
             {appItems.map((item) => (
               <li key={item.id}>

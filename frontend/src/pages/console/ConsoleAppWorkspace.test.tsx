@@ -24,6 +24,7 @@ const appPayload = {
     id: 1,
     app_key: "demo",
     name: "Demo App",
+    alias: "",
     description: "Demo console app",
     can_manage: true,
     capabilities: {

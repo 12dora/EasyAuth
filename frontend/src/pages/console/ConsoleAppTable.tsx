@@ -19,6 +19,7 @@ import {
   userColumn,
 } from "../../components/antd/columns";
 import { useI18n } from "../../i18n/I18nProvider";
+import { formatAppDisplayName } from "../../lib/appDisplayName";
 import type { AppSummary } from "../../lib/domain";
 import { readinessLabel, readinessTone } from "../../lib/status";
 import type { Translator } from "../../lib/status";
@@ -88,7 +89,7 @@ function appColumns(
       userColumn<AppSummary>({
         key: "app",
         title: t("appList.column.app"),
-        getName: (app) => app.name,
+        getName: (app) => formatAppDisplayName(app),
         getUserId: (app) => app.app_key,
       }),
       sort,

@@ -9,11 +9,13 @@ import { StatusBanner } from "../../../components/StatusBanner";
 import { UserSearchInput } from "../../../components/UserSelect";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { apiRequest } from "../../../lib/api";
+import { formatAppDisplayName } from "../../../lib/appDisplayName";
 import type { HandoverTaskPayload } from "../../../lib/domain";
 
 interface AppOption {
   app_key: string;
   app_name: string;
+  app_alias: string;
 }
 
 /** 控制台超管跨管辖范围在职数据移交（D9）。 */
@@ -120,7 +122,7 @@ export function ConsoleReassignDialog({ onClose }: { onClose: () => void }) {
                         );
                       }}
                     />
-                    <span>{app.app_name || app.app_key}</span>
+                    <span>{formatAppDisplayName({ name: app.app_name, alias: app.app_alias })}</span>
                   </label>
                 </li>
               ))}

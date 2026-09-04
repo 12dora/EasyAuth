@@ -20,7 +20,7 @@ describe("PortalReassignDialog", () => {
         );
       }
       if (url.includes("handover-app-options")) {
-        return new Response(JSON.stringify({ items: [{ app_key: "easytrade", app_name: "EasyTrade" }] }), {
+        return new Response(JSON.stringify({ items: [{ app_key: "easytrade", app_name: "EasyTrade", app_alias: "易交易" }] }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         });

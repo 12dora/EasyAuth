@@ -19,10 +19,10 @@ describe("AppOnboardingWizard", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === "/console/api/v1/apps" && init?.method === "POST") {
-        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing" } }, 201);
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", alias: "" } }, 201);
       }
       if (url === "/console/api/v1/apps/billing" && !init?.method) {
-        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", owners: ["owner-a"] } });
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", alias: "", owners: ["owner-a"] } });
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });
@@ -58,6 +58,7 @@ describe("AppOnboardingWizard", () => {
         return jsonResponse({
           app_key: "billing",
           app_name: "Billing",
+          app_alias: "",
           created: true,
           already_up_to_date: false,
           template_version: 4,
@@ -65,7 +66,7 @@ describe("AppOnboardingWizard", () => {
         });
       }
       if (url === "/console/api/v1/apps/billing" && !init?.method) {
-        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing" } });
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", alias: "" } });
       }
       if (url.startsWith("/console/api/v1/apps/billing/configuration-status")) {
         return jsonResponse({ app_key: "billing", status: "ready", data: [] });
@@ -100,7 +101,7 @@ describe("AppOnboardingWizard", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === "/console/api/v1/apps/billing" && !init?.method) {
-        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing" } });
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", alias: "" } });
       }
       if (url === "/console/api/v1/apps/billing/permission-template-imports/preview" && init?.method === "POST") {
         return jsonResponse({
@@ -137,7 +138,7 @@ describe("AppOnboardingWizard", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === "/console/api/v1/apps/billing" && !init?.method) {
-        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing" } });
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", alias: "" } });
       }
       if (url.endsWith("/permission-template-imports/preview") && init?.method === "POST") {
         return jsonResponse({ preview_id: "pv-locked", changes: [] });
@@ -175,7 +176,7 @@ describe("AppOnboardingWizard", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === "/console/api/v1/apps/billing" && !init?.method) {
-        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing" } });
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", alias: "" } });
       }
       if (url.endsWith("/permission-template-imports/preview") && init?.method === "POST") {
         return jsonResponse({ preview_id: "pv-a", changes: [{ action: "create_permission", key: "permission.a" }] });
@@ -215,7 +216,7 @@ describe("AppOnboardingWizard", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === "/console/api/v1/apps/billing" && !init?.method) {
-        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing" } });
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", alias: "" } });
       }
       if (url.endsWith("/permission-template-imports/preview") && init?.method === "POST") {
         return previewResponse.promise;
@@ -244,7 +245,7 @@ describe("AppOnboardingWizard", () => {
     const secondRead = deferred<string>();
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       if (String(input) === "/console/api/v1/apps/billing") {
-        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing" } });
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", alias: "" } });
       }
       throw new Error(`Unexpected fetch: ${String(input)}`);
     });
@@ -282,7 +283,7 @@ describe("AppOnboardingWizard", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
       if (url === "/console/api/v1/apps/billing") {
-        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing" } });
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", alias: "" } });
       }
       if (url.endsWith("/configuration-status")) {
         return jsonResponse({ app_key: "billing", status: "blocking", data: issues });
@@ -312,7 +313,7 @@ describe("AppOnboardingWizard", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
       if (url === "/console/api/v1/apps/billing") {
-        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing" } });
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", alias: "" } });
       }
       if (url.endsWith("/configuration-status")) {
         return jsonResponse({ items: [] });
@@ -354,6 +355,7 @@ describe("AppOnboardingWizard", () => {
       jsonResponse({
         app_key: "billing",
         app_name: "Billing",
+        app_alias: "",
         created: true,
         already_up_to_date: false,
         template_version: 4,
@@ -369,7 +371,7 @@ describe("AppOnboardingWizard", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === "/console/api/v1/apps/billing" && !init?.method) {
-        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", active_credential_count: 0 } });
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", alias: "", active_credential_count: 0 } });
       }
       if (url.endsWith("/credentials/oauth-clients") && init?.method === "POST") {
         return jsonResponse({
@@ -399,7 +401,7 @@ describe("AppOnboardingWizard", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === "/console/api/v1/apps/billing" && !init?.method) {
-        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", active_credential_count: 0 } });
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", alias: "", active_credential_count: 0 } });
       }
       if (url.endsWith("/credentials/static-tokens") && init?.method === "POST") {
         return jsonResponse({
@@ -424,7 +426,7 @@ describe("AppOnboardingWizard", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === "/console/api/v1/apps/billing" && !init?.method) {
-        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", active_credential_count: 0 } });
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", alias: "", active_credential_count: 0 } });
       }
       if (url.endsWith("/credentials/oauth-clients") && init?.method === "POST") {
         return jsonResponse({
@@ -451,7 +453,7 @@ describe("AppOnboardingWizard", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === "/console/api/v1/apps/billing" && !init?.method) {
-        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", active_credential_count: 0 } });
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", alias: "", active_credential_count: 0 } });
       }
       if (url.endsWith("/credentials/oauth-clients") && init?.method === "POST") {
         return jsonResponse({
@@ -494,7 +496,7 @@ describe("AppOnboardingWizard", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === "/console/api/v1/apps/billing" && !init?.method) {
-        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", active_credential_count: 0 } });
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", alias: "", active_credential_count: 0 } });
       }
       if (url.endsWith("/credentials/oauth-clients") && init?.method === "POST") {
         return jsonResponse({
@@ -533,7 +535,7 @@ describe("AppOnboardingWizard", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url === "/console/api/v1/apps/billing" && !init?.method) {
-        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing" } });
+        return jsonResponse({ app: { id: 9, app_key: "billing", name: "Billing", alias: "" } });
       }
       if (url.startsWith("/console/api/v1/user-options?")) {
         return jsonResponse({ data: [] });

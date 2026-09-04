@@ -43,6 +43,7 @@ describe("ConsoleAppList", () => {
               id: 1,
               app_key: "crm",
               name: "CRM",
+              alias: "客户管理",
               owners: ["owner-a"],
               is_active: true,
               updated_at: "2026-07-01T09:00:00Z",
@@ -52,6 +53,7 @@ describe("ConsoleAppList", () => {
               id: 2,
               app_key: "billing",
               name: "Billing",
+              alias: "",
               owners: ["owner-b"],
               is_active: false,
               updated_at: "2026-07-01T09:00:00Z",
@@ -79,11 +81,15 @@ describe("ConsoleAppList", () => {
     const crmRow = await screen.findByRole("row", { name: /CRM/ });
     const billingRow = screen.getByRole("row", { name: /Billing/ });
 
+    // 有别名的行展示「别名(技术名)」, 没别名的行只展示技术名。
+    expect(within(crmRow).getByText("客户管理(CRM)")).toBeVisible();
+    expect(within(billingRow).getByText("Billing")).toBeVisible();
+
     await user.click(within(crmRow).getByRole("button", { name: "停用" }));
     await user.click(within(billingRow).getByRole("button", { name: "启用" }));
     await user.click(within(crmRow).getByRole("button", { name: "删除" }));
 
-    const deleteDialog = await screen.findByRole("dialog", { name: "删除 CRM" });
+    const deleteDialog = await screen.findByRole("dialog", { name: "删除 客户管理(CRM)" });
     expect(within(deleteDialog).getByText("应用名称: CRM; 应用 Key: crm")).toBeVisible();
     expect(findFetchCall(fetchMock, "/console/api/v1/apps/crm", "DELETE")).toBeUndefined();
     await user.click(within(deleteDialog).getByRole("button", { name: "删除" }));
@@ -124,6 +130,7 @@ describe("ConsoleAppList", () => {
             id: 1,
             app_key: `app-${page}`,
             name: `应用${page}`,
+            alias: "",
             owners: [],
             is_active: true,
             updated_at: "2026-07-01T09:00:00Z",
@@ -170,6 +177,7 @@ describe("ConsoleAppList", () => {
             id: 1,
             app_key: "crm",
             name: "CRM",
+            alias: "",
             owners: ["owner-a"],
             is_active: true,
             updated_at: "2026-07-01T09:00:00Z",
@@ -179,6 +187,7 @@ describe("ConsoleAppList", () => {
             id: 2,
             app_key: "billing",
             name: "Billing",
+            alias: "",
             owners: ["owner-b"],
             is_active: false,
             updated_at: "2026-07-01T09:00:00Z",
@@ -216,7 +225,7 @@ describe("ConsoleAppList", () => {
         return jsonResponse({ data: [] });
       }
       if (url === "/console/api/v1/apps" && init?.method === "POST") {
-        return jsonResponse({ app: { id: 2, app_key: "billing", name: "Billing" } }, 201);
+        return jsonResponse({ app: { id: 2, app_key: "billing", name: "Billing", alias: "" } }, 201);
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });

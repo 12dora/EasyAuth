@@ -12,9 +12,9 @@ export interface PortalGrant {
   grant_id?: number;
   grant_revision?: number;
   app_key?: string;
-  app_name?: string;
+  app_name: string;
   /** 应用别名; 后端无别名时下发空字符串。 */
-  app_alias?: string;
+  app_alias: string;
   groups?: PermissionQueryGroupItem[];
   grants?: ExpandedGrantItem[];
   grant_version?: number;
@@ -43,9 +43,9 @@ export interface PortalRequestApprover {
 export interface PortalRequest {
   id?: number;
   app_key?: string;
-  app_name?: string;
+  app_name: string;
   /** 应用别名; 后端无别名时下发空字符串。 */
-  app_alias?: string;
+  app_alias: string;
   authorization_groups?: PermissionQueryGroupItem[];
   direct_grants?: PortalDirectGrantItem[];
   status?: string;
@@ -80,9 +80,9 @@ export interface PortalApprovalApplicant {
 export interface PortalApprovalItem {
   id: number;
   app_key?: string;
-  app_name?: string;
+  app_name: string;
   /** 应用别名; 后端无别名时下发空字符串。 */
-  app_alias?: string;
+  app_alias: string;
   request_type?: string;
   base_grant_id?: number | null;
   base_grant_revision?: number | null;

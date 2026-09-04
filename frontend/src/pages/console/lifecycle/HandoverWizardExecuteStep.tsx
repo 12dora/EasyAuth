@@ -2,6 +2,7 @@ import { Badge } from "../../../components/Badge";
 import { StatusBanner } from "../../../components/StatusBanner";
 import { actionStatusBadgeTone, actionStatusLabel } from "../../../features/handover/handoverActionPanelModel";
 import { useI18n } from "../../../i18n/I18nProvider";
+import { formatAppDisplayName } from "../../../lib/appDisplayName";
 import type { HandoverAction } from "../../../lib/domain";
 import type { WizardExecuteState } from "./handoverWizardModel";
 import { StepSection } from "./HandoverWizardChrome";
@@ -37,7 +38,9 @@ export function HandoverWizardExecuteStep({
           return (
             <li key={action.app_key} className="rounded-[3px] border border-ink/12 bg-paper-soft px-3 py-2.5">
               <div className="flex items-center justify-between gap-2">
-                <strong className="text-body">{action.app_name || action.app_key}</strong>
+                <strong className="text-body">
+                  {formatAppDisplayName({ name: action.app_name, alias: action.app_alias })}
+                </strong>
                 <ExecuteStateBadge state={executeState[action.app_key]} action={action} />
               </div>
             </li>

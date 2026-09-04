@@ -1,5 +1,6 @@
 import { Field, SelectInput } from "../../../components/Field";
 import { useI18n, localizedField } from "../../../i18n/I18nProvider";
+import { formatAppDisplayName } from "../../../lib/appDisplayName";
 import type { PortalCatalogApp } from "../../../lib/domain";
 import { authorizationGroupKindLabel } from "../authorizationGroupLabel";
 import type { AuthorizationGroupItem, ScopedPermissionGroupItem, ScopedPermissionItem } from "../hooks/accessRequestTypes";
@@ -65,7 +66,7 @@ export function RequestTargetPicker({
             <option value="">{t("portal.request.appPlaceholder")}</option>
             {apps.map((app) => (
               <option key={app.app_key} value={app.app_key}>
-                {app.name} ({app.app_key})
+                {formatAppDisplayName(app)} ({app.app_key})
               </option>
             ))}
           </SelectInput>

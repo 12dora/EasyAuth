@@ -2,6 +2,7 @@ import { Button } from "../../../components/Button";
 import { ButtonLink } from "../../../components/ButtonLink";
 import { PageHeader } from "../../../components/PageHeader";
 import { useI18n } from "../../../i18n/I18nProvider";
+import { formatAppDisplayName } from "../../../lib/appDisplayName";
 import type { AppSummary } from "../../../lib/domain";
 
 export function WorkspaceHeader({
@@ -18,7 +19,7 @@ export function WorkspaceHeader({
   return (
     <PageHeader
       eyebrow={t("workspace.eyebrow")}
-      title={app?.name ?? appKey}
+      title={app ? formatAppDisplayName(app) : appKey}
       description={app?.description || t("workspace.defaultDescription")}
       actions={
         <div className="flex flex-col items-stretch gap-2 sm:items-end">

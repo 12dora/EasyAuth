@@ -10,6 +10,7 @@ import { UserMultiSelect } from "../../../components/UserSelect";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { apiRequest } from "../../../lib/api";
 import type { JsonObject } from "../../../lib/api";
+import { formatAppDisplayName } from "../../../lib/appDisplayName";
 import { generateAppKey } from "../../../lib/appKey";
 import type { AppListPayload } from "../../../lib/domain";
 import { AutoOnboardPanel } from "./AutoOnboardPanel";
@@ -49,7 +50,7 @@ function ExistingAppSummary({
       <StatusBanner tone="evergreen" title={t("wizard.basics.existing.title")} message={t("wizard.basics.existing.description")} />
       <dl className="grid gap-x-8 gap-y-3 text-body sm:grid-cols-2">
         <SummaryItem label="app_key" value={<code>{app?.app_key ?? appKey}</code>} />
-        <SummaryItem label={t("common.name")} value={app?.name ?? "-"} />
+        <SummaryItem label={t("common.name")} value={app ? formatAppDisplayName(app) : "-"} />
         <SummaryItem label={t("common.description")} value={app?.description || "-"} />
         <SummaryItem label={t("appList.column.owners")} value={(app?.owners ?? []).join(", ") || "-"} />
       </dl>

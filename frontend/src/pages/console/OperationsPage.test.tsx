@@ -397,6 +397,7 @@ describe("OperationsPage", () => {
     const apps = Array.from({ length: 12 }, (_, index) => ({
       app_key: `app-${index + 1}`,
       app_name: `应用 ${index + 1}`,
+      app_alias: "",
       blocked_task_count: index + 1,
     }));
     const fetchMock = vi.fn<typeof fetch>(async (input) => {

@@ -51,7 +51,7 @@ describe("PortalApprovalsSection", () => {
 
     expect(await screen.findByText("张三")).toBeVisible();
     expect(screen.getByText("销售部")).toBeVisible();
-    expect(screen.getByText("CRM")).toBeVisible();
+    expect(screen.getByText("客户管理(CRM)")).toBeVisible();
     expect(screen.getByText(/销售只读/)).toBeVisible();
     expect(screen.getByText("订单列表 (orders.list) · SELF")).toBeVisible();
     expect(screen.getByText("查看订单 (orders.read) · SELF")).toBeVisible();

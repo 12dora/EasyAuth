@@ -72,4 +72,38 @@ describe("RequestTargetPicker", () => {
     expect(screen.getByRole("option", { name: "订单运营包 [权限包] (order-ops)" })).toBeVisible();
     expect(screen.queryByRole("option", { name: /\[role\]|\[bundle\]/ })).not.toBeInTheDocument();
   });
+
+  test("应用下拉展示别名: 有别名拼成「别名(技术名)」, 没别名只显示技术名", () => {
+    render(
+      <I18nProvider>
+        <RequestTargetPicker
+          appKey="crm"
+          apps={[
+            { id: 1, app_key: "crm", name: "CRM", alias: "客户管理" },
+            { id: 2, app_key: "billing", name: "Billing", alias: "" },
+          ]}
+          authorizationGroupKey=""
+          authorizationGroups={[]}
+          permissionGroups={[]}
+          ungroupedPermissions={[]}
+          selectedPermissionKeys={[]}
+          expandedGroupKeys={[]}
+          catalogIsLoading={false}
+          catalogErrorMessage=""
+          onAppKeyChange={vi.fn()}
+          onAuthorizationGroupKeyChange={vi.fn()}
+          onPermissionScopeChange={vi.fn()}
+          onPermissionGroupScopeChange={vi.fn()}
+          onSelectPermissionKeys={vi.fn()}
+          onClearPermissionKeys={vi.fn()}
+          onExpandGroups={vi.fn()}
+          onCollapseGroups={vi.fn()}
+          onToggleGroup={vi.fn()}
+        />
+      </I18nProvider>,
+    );
+
+    expect(screen.getByRole("option", { name: "客户管理(CRM) (crm)" })).toBeVisible();
+    expect(screen.getByRole("option", { name: "Billing (billing)" })).toBeVisible();
+  });
 });

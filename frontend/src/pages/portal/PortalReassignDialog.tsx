@@ -8,12 +8,14 @@ import { Field, TextArea, TextInput } from "../../components/Field";
 import { StatusBanner } from "../../components/StatusBanner";
 import { useI18n } from "../../i18n/I18nProvider";
 import { apiRequest } from "../../lib/api";
+import { formatAppDisplayName } from "../../lib/appDisplayName";
 import { apiErrorReason } from "../../lib/apiErrorReason";
 import type { HandoverTaskPayload, HandoverUserRef } from "../../lib/domain";
 
 interface AppOption {
   app_key: string;
   app_name: string;
+  app_alias: string;
 }
 
 export function PortalReassignDialog({ onClose }: { onClose: () => void }) {
@@ -123,7 +125,7 @@ export function PortalReassignDialog({ onClose }: { onClose: () => void }) {
                           );
                         }}
                       />
-                      <span>{app.app_name || app.app_key}</span>
+                      <span>{formatAppDisplayName({ name: app.app_name, alias: app.app_alias })}</span>
                     </label>
                   </li>
                 );

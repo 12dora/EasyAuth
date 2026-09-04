@@ -34,6 +34,7 @@ function detailPayload(assigneeState: "manager" | "superuser_pool" = "manager", 
         {
           app_key: "easytrade",
           app_name: "EasyTrade",
+          app_alias: "易交易",
           status: "blocked",
           blocked_reason: "capability_undeclared",
           skip_reason: "",
