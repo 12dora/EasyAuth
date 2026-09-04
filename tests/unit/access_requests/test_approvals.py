@@ -11,11 +11,13 @@ from easyauth.access_requests.approvals import (
     query_approver_user_ids,
     reassign_access_request,
     reject_access_request,
+    withdraw_access_request,
 )
 from easyauth.access_requests.models import (
     GRANT_TYPE_PERMANENT,
     REQUEST_STATUS_GRANT_APPLIED,
     REQUEST_STATUS_REJECTED,
+    REQUEST_STATUS_WITHDRAWN,
     AccessRequest,
     AccessRequestApprover,
     AccessRequestGroup,
@@ -269,6 +271,31 @@ def test_loaded_approver_user_ids_requires_prefetch() -> None:
     # When / Then
     with pytest.raises(AttributeError):
         loaded_approver_user_ids(access_request)
+
+
+def test_requester_withdraw_sets_withdrawn_at_once() -> None:
+    # Given: 待审批申请。
+    access_request = _submitted_request("withdraw-user", "withdraw-app")
+
+    # When: 连续撤回两次。
+    first = withdraw_access_request(
+        request_id=access_request.id,
+        actor_user_id="withdraw-user",
+    )
+    first_withdrawn_at = first.withdrawn_at
+    second = withdraw_access_request(
+        request_id=access_request.id,
+        actor_user_id="withdraw-user",
+    )
+
+    # Then: 状态为 withdrawn, withdrawn_at 只在首次写入。
+    access_request.refresh_from_db()
+    assert first.status == REQUEST_STATUS_WITHDRAWN
+    assert second.status == REQUEST_STATUS_WITHDRAWN
+    assert first_withdrawn_at is not None
+    assert access_request.withdrawn_at == first_withdrawn_at
+    assert second.withdrawn_at == first_withdrawn_at
+    assert AuditLog.objects.filter(event_type="access_request_withdrawn").count() == 1
 
 
 def _submitted_request(

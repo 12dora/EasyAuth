@@ -147,8 +147,9 @@ def withdraw_access_request(*, request_id: int, actor_user_id: str) -> AccessReq
         match access_request.status:
             case status if status == REQUEST_STATUS_SUBMITTED:
                 access_request.status = REQUEST_STATUS_WITHDRAWN
+                access_request.withdrawn_at = timezone.now()
                 access_request.full_clean()
-                access_request.save(update_fields=["status"])
+                access_request.save(update_fields=["status", "withdrawn_at"])
                 _ = AuditService.record(
                     AuditRecord(
                         actor_type=DECISION_ACTOR_USER,

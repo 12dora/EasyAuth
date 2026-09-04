@@ -380,6 +380,7 @@ def _create_request(
     decided_by: str = "",
 ) -> AccessRequest:
     decided_at = timezone.now() if status == REQUEST_STATUS_APPROVED else None
+    withdrawn_at = timezone.now() if status == REQUEST_STATUS_WITHDRAWN else None
     return AccessRequest.objects.create(
         user=user,
         app=app,
@@ -392,6 +393,7 @@ def _create_request(
         decided_at=decided_at,
         decided_by=decided_by,
         decision_actor_type=DECISION_ACTOR_USER if decided_by else "",
+        withdrawn_at=withdrawn_at,
     )
 
 

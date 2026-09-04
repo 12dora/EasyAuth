@@ -44,7 +44,7 @@ def test_requester_can_withdraw_submitted_request_idempotently() -> None:
     first = client.post(url, data="{}", content_type="application/json")
     second = client.post(url, data="{}", content_type="application/json")
 
-    # Then: 均 200, 状态为 withdrawn; 审计只记一次。
+    # Then: 均 200, 状态为 withdrawn, withdrawn_at 已写入; 审计只记一次。
     access_request.refresh_from_db()
     assert first.status_code == HTTPStatus.OK
     assert second.status_code == HTTPStatus.OK
@@ -52,6 +52,7 @@ def test_requester_can_withdraw_submitted_request_idempotently() -> None:
     assert second.json()["access_request"]["status"] == REQUEST_STATUS_WITHDRAWN
     assert first.json()["access_request"]["status_label"] == "已撤回"
     assert access_request.status == REQUEST_STATUS_WITHDRAWN
+    assert access_request.withdrawn_at is not None
     assert AuditLog.objects.filter(event_type="access_request_withdrawn").count() == 1
 
 

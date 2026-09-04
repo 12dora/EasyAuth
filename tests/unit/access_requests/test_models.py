@@ -142,6 +142,7 @@ def test_access_request_group_raw_cross_app_write_is_rejected_by_database() -> N
         "grant_failed",
         "grant_conflict",
         "grant_expired",
+        "withdrawn",
     ],
 )
 def test_status_accepts_supported_values_when_access_request_is_cleaned(status: str) -> None:
@@ -149,11 +150,13 @@ def test_status_accepts_supported_values_when_access_request_is_cleaned(status: 
     user = UserMirror.objects.create(authentik_user_id=f"user-{status}")
     app = App.objects.create(app_key=f"app-{status}", name=f"App {status}")
     applied_at_by_status = {"grant_applied": timezone.now()}
+    withdrawn_at_by_status = {"withdrawn": timezone.now()}
     access_request = AccessRequest(
         user=user,
         app=app,
         status=status,
         applied_at=applied_at_by_status.get(status),
+        withdrawn_at=withdrawn_at_by_status.get(status),
         idempotency_key=f"request-status-{status}",
         payload_digest=VALID_PAYLOAD_DIGEST,
         **_decision_fields(status),
@@ -241,6 +244,47 @@ def test_grant_applied_request_requires_applied_timestamp_when_cleaned() -> None
     # When / Then
     with pytest.raises(ValidationError):
         access_request.full_clean()
+
+
+def test_withdrawn_request_requires_withdrawn_timestamp_when_cleaned() -> None:
+    # Given
+    user = UserMirror.objects.create(authentik_user_id="user-withdrawn-no-timestamp")
+    app = App.objects.create(app_key="withdrawn-no-timestamp-app", name="Withdrawn App")
+    access_request = AccessRequest(
+        user=user,
+        app=app,
+        status="withdrawn",
+        idempotency_key="withdrawn-without-timestamp",
+        payload_digest=VALID_PAYLOAD_DIGEST,
+    )
+
+    # When / Then
+    with pytest.raises(ValidationError) as error:
+        access_request.full_clean()
+    assert error.value.message_dict == {
+        "withdrawn_at": ["Withdrawn access requests must include withdrawn_at."],
+    }
+
+
+def test_submitted_request_rejects_withdrawn_timestamp_when_cleaned() -> None:
+    # Given
+    user = UserMirror.objects.create(authentik_user_id="user-submitted-withdrawn-at")
+    app = App.objects.create(app_key="submitted-withdrawn-at-app", name="Submitted Withdrawn App")
+    access_request = AccessRequest(
+        user=user,
+        app=app,
+        status="submitted",
+        withdrawn_at=timezone.now(),
+        idempotency_key="submitted-with-withdrawn-at",
+        payload_digest=VALID_PAYLOAD_DIGEST,
+    )
+
+    # When / Then
+    with pytest.raises(ValidationError) as error:
+        access_request.full_clean()
+    assert error.value.message_dict == {
+        "withdrawn_at": ["Only withdrawn access requests may include withdrawn_at."],
+    }
 
 
 def test_access_request_group_rejects_cross_app_authorization_group_when_cleaned() -> None:
@@ -458,7 +502,7 @@ def _base_grant_fields(user: UserMirror, app: App, request_type: str) -> dict[st
 
 
 def _decision_fields(status: str) -> dict[str, object]:
-    if status == "submitted":
+    if status in {"submitted", "withdrawn"}:
         return {}
     decided_at = timezone.now()
     fields: dict[str, object] = {

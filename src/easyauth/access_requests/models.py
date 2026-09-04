@@ -163,6 +163,15 @@ class AccessRequest(models.Model):
         str | date | datetime | None,
         datetime | None,
     ] = models.DateTimeField(blank=True, null=True)
+    # 申请人撤回待审批申请的时刻; 仅 status=withdrawn 时有值, 与撤回动作同一事务写入。
+    withdrawn_at: models.DateTimeField[
+        str | date | datetime | None,
+        datetime | None,
+    ] = models.DateTimeField(
+        blank=True,
+        null=True,
+        help_text="申请人撤回该申请的时刻; 仅 status=withdrawn 时填写。",
+    )
     # 01 §4.5.1: 审批人无解时 status 保持 submitted, 路由状态进超管池。
     approval_routing_state: models.CharField[str, str] = models.CharField(
         max_length=16,
@@ -216,6 +225,7 @@ class AccessRequest(models.Model):
                         status=REQUEST_STATUS_SUBMITTED,
                         approved_at__isnull=True,
                         applied_at__isnull=True,
+                        withdrawn_at__isnull=True,
                         decided_by="",
                         decision_actor_type="",
                         decision_comment="",
@@ -225,6 +235,7 @@ class AccessRequest(models.Model):
                         status=REQUEST_STATUS_APPROVED,
                         approved_at__isnull=False,
                         applied_at__isnull=True,
+                        withdrawn_at__isnull=True,
                         decided_by__gt="",
                         decision_actor_type__in=(
                             DECISION_ACTOR_USER,
@@ -236,6 +247,7 @@ class AccessRequest(models.Model):
                         status=REQUEST_STATUS_REJECTED,
                         approved_at__isnull=True,
                         applied_at__isnull=True,
+                        withdrawn_at__isnull=True,
                         decided_by__gt="",
                         decision_actor_type__in=(
                             DECISION_ACTOR_USER,
@@ -248,6 +260,7 @@ class AccessRequest(models.Model):
                         status=REQUEST_STATUS_GRANT_APPLIED,
                         approved_at__isnull=False,
                         applied_at__isnull=False,
+                        withdrawn_at__isnull=True,
                         decided_by__gt="",
                         decision_actor_type__in=(
                             DECISION_ACTOR_USER,
@@ -263,6 +276,7 @@ class AccessRequest(models.Model):
                         ),
                         approved_at__isnull=False,
                         applied_at__isnull=True,
+                        withdrawn_at__isnull=True,
                         decided_by__gt="",
                         decision_actor_type__in=(
                             DECISION_ACTOR_USER,
@@ -274,6 +288,7 @@ class AccessRequest(models.Model):
                         status=REQUEST_STATUS_WITHDRAWN,
                         approved_at__isnull=True,
                         applied_at__isnull=True,
+                        withdrawn_at__isnull=False,
                         decided_by="",
                         decision_actor_type="",
                         decision_comment="",
@@ -300,6 +315,7 @@ class AccessRequest(models.Model):
         errors: dict[str, str] = {}
         errors.update(_grant_window_errors(self))
         errors.update(_applied_state_errors(self))
+        errors.update(_withdrawn_state_errors(self))
         errors.update(_base_grant_errors(self))
         errors.update(_decision_errors(self))
         errors.update(_payload_identity_errors(self))
@@ -324,6 +340,15 @@ def _applied_state_errors(request: AccessRequest) -> dict[str, str]:
         return {"applied_at": "Grant-applied access requests must include applied_at."}
     if request.status != REQUEST_STATUS_GRANT_APPLIED and request.applied_at is not None:
         return {"applied_at": "Only grant-applied access requests may include applied_at."}
+    return {}
+
+
+def _withdrawn_state_errors(request: AccessRequest) -> dict[str, str]:
+    """withdrawn_at 只能出现在 withdrawn 状态上。"""
+    if request.status == REQUEST_STATUS_WITHDRAWN and request.withdrawn_at is None:
+        return {"withdrawn_at": "Withdrawn access requests must include withdrawn_at."}
+    if request.status != REQUEST_STATUS_WITHDRAWN and request.withdrawn_at is not None:
+        return {"withdrawn_at": "Only withdrawn access requests may include withdrawn_at."}
     return {}
 
 
