@@ -16,8 +16,8 @@ function translatorFor(locale: Locale) {
 describe("accessRequestStatusLabel", () => {
   test("用中文业务文案区分审批通过和授权生效", () => {
     const t = translatorFor("zh-CN");
-    expect(accessRequestStatusLabel(t, "approved")).toBe("已批准");
-    expect(accessRequestStatusLabel(t, "grant_applied")).toBe("已授权");
+    expect(accessRequestStatusLabel(t, "approved")).toBe("已通过");
+    expect(accessRequestStatusLabel(t, "grant_applied")).toBe("已生效");
     expect(accessRequestStatusLabel(t, "grant_failed")).toBe("授权失败");
     expect(accessRequestStatusLabel(t, "grant_expired")).toBe("授权期限已过");
   });
@@ -25,7 +25,7 @@ describe("accessRequestStatusLabel", () => {
   test("英文语言下输出英文文案", () => {
     const t = translatorFor("en");
     expect(accessRequestStatusLabel(t, "approved")).toBe("Approved");
-    expect(accessRequestStatusLabel(t, "grant_applied")).toBe("Granted");
+    expect(accessRequestStatusLabel(t, "grant_applied")).toBe("In effect");
   });
 });
 

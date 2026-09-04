@@ -16,7 +16,7 @@ import { PageState } from "../../../components/ui/PageState";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { apiRequest } from "../../../lib/api";
 import { formatAppDisplayName } from "../../../lib/appDisplayName";
-import { accessRequestStatusColor, type AccessRequestStatusColor, type Translator } from "../../../lib/status";
+import { accessRequestStatusColor, accessRequestStatusLabel, type AccessRequestStatusColor, type Translator } from "../../../lib/status";
 import { GrantExpiryCell } from "../grantExpiry";
 import { formatGrantGroupNames } from "../grantGroupNames";
 import { parsePortalRequestList, type PortalRequestRow } from "../portalListPayload";
@@ -77,7 +77,7 @@ export function PortalRequestsSection() {
         {
           key: "status",
           title: t("common.status"),
-          width: 110,
+          width: 100,
           render: (_value: unknown, row: PortalRequestRow) => <RequestStatusText row={row} />,
         },
         sort,
@@ -86,7 +86,7 @@ export function PortalRequestsSection() {
         key: "approver",
         title: t("portal.requests.columns.approver"),
         getValue: (row) => formatApprovers(t, row),
-        width: 130,
+        width: 120,
       }),
       // 排序在后端(ordering=app_key): 预设的 localeCompare 只会重排当前页。
       serverSortColumn(
@@ -94,7 +94,7 @@ export function PortalRequestsSection() {
           key: "app",
           title: t("common.app"),
           getValue: (row) => formatAppDisplayName({ name: row.app_name, alias: row.app_alias }),
-          width: 140,
+          width: 150,
         }),
         sort,
       ),
@@ -105,13 +105,13 @@ export function PortalRequestsSection() {
         // 具体授权在详情弹窗里列。
         getValue: (row) => formatGrantGroupNames(row.authorization_groups),
         ellipsis: false,
-        width: 170,
+        width: 160,
       }),
       serverSortColumn(
         {
           key: "grant_expires_at",
           title: t("portal.column.expiresAt"),
-          width: 140,
+          width: 130,
           render: (_value: unknown, row: PortalRequestRow) => (
             <GrantExpiryCell grantType={row.grant_type} expiresAt={row.grant_expires_at} />
           ),
@@ -127,9 +127,9 @@ export function PortalRequestsSection() {
         }),
         sort,
       ),
-      textColumn<PortalRequestRow>({ key: "reason", title: t("portal.column.reason"), ellipsis: false, width: 180 }),
+      textColumn<PortalRequestRow>({ key: "reason", title: t("portal.column.reason"), ellipsis: false, width: 170 }),
       actionsColumn<PortalRequestRow>({
-        width: 130,
+        width: 120,
         render: (row) => <RequestRowActions mutation={withdrawMutation} row={row} onOpenDetail={(row) => setDetailRequestId(row.id)} />,
       }),
     ],
@@ -158,10 +158,11 @@ export function PortalRequestsSection() {
           // 每一列都必须显式声明宽度, minWidth 必须正好等于它们的和 ——
           // AppTable 固定 `tableLayout: "fixed"`, 无宽度的列只能分摊 minWidth 的剩余量,
           // 定宽列一多剩余量就趋近 0, 权限组 / 原因会被压成一个字宽, 表头竖排成一列字。
-          // 状态 110 + 审批人 130 + 应用 140 + 权限组 170 + 过期时间 140 + 提交时间 140
-          // + 原因 180 + 操作 130 = 1140。
+          // 状态 100 + 审批人 120 + 应用 150 + 权限组 160 + 过期时间 130 + 提交时间 140
+          // + 原因 170 + 操作 120 = 1090 —— 1440 宽的桌面减去侧栏与页边距后正文约 1120,
+          // 和必须小于它, 否则表格横向滚动、操作列的固定阴影常驻。
           // 加列或改列宽时这个和要一起改, `PortalRequestsSection.test.tsx` 会拦住不一致。
-          minWidth={1140}
+          minWidth={1090}
           rowKey="id"
         />
       )}
@@ -182,14 +183,16 @@ const STATUS_COLOR_TOKENS: Record<AccessRequestStatusColor, "colorSuccess" | "co
 /**
  * 状态列: 上色的纯文字, 不用徽章。
  *
- * 一行只有一个状态, 徽章的边框和底色在这里只是噪声; 文案直接用后端的 status_label,
- * 前端不再各自翻译一份, 免得两边口径漂移。
+ * 一行只有一个状态, 徽章的边框和底色在这里只是噪声。文案用前端 `status.request.*` 的短标签
+ * (已通过 / 已生效 / 已拒绝 …): 后端 `status_label` 是一整句说明("授权已落库, 权限已生效"),
+ * 既装不进一列也不随界面语言切换, 它留给详情弹窗里的错误态说明。
  */
 function RequestStatusText({ row }: { row: PortalRequestRow }) {
+  const { t } = useI18n();
   const { token } = theme.useToken();
   return (
     <span className="whitespace-nowrap" style={{ color: token[STATUS_COLOR_TOKENS[accessRequestStatusColor(row.status)]] }}>
-      {row.status_label}
+      {accessRequestStatusLabel(t, row.status)}
     </span>
   );
 }
@@ -221,7 +224,8 @@ function RequestRowActions({
         <span>
           <RowActionButton
             type="button"
-            variant="ghost-danger"
+            // 不可撤回时是灰的普通按钮, 不再带危险色: 红字会被当成还能点。
+            variant={withdrawable ? "ghost-danger" : "ghost"}
             loading={mutation.isPending && mutation.variables === row.id}
             disabled={!withdrawable || mutation.isPending}
             onClick={() => mutation.mutate(row.id)}

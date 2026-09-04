@@ -31,7 +31,7 @@ function renderRequests() {
 describe("PortalRequestsSection 表格", () => {
   test("状态列是按语义上色的纯文字, 既没有徽章也没有审批意见", async () => {
     stubRequests([
-      requestRow({ id: 1, app_name: "已授权应用", status: "grant_applied", status_label: "已授权" }),
+      requestRow({ id: 1, app_name: "已授权应用", status: "grant_applied", status_label: "授权已落库, 权限已生效" }),
       requestRow({ id: 2, app_name: "待审应用", status: "submitted", status_label: "等待审批" }),
       requestRow({
         id: 3,
@@ -48,14 +48,16 @@ describe("PortalRequestsSection 表格", () => {
     try {
       renderRequests();
 
-      expect(await screen.findByText("已授权")).toHaveStyle({ color: DESIGN_TOKENS.evergreen });
-      expect(screen.getByText("等待审批")).toHaveStyle({ color: DESIGN_TOKENS.accent });
-      expect(screen.getByText("已驳回")).toHaveStyle({ color: DESIGN_TOKENS.signal });
-      expect(screen.getByText("授权冲突")).toHaveStyle({ color: DESIGN_TOKENS.amber });
+      // 列里用的是前端短标签, 后端那句长说明("授权已落库, 权限已生效")不进表格。
+      expect(await screen.findByText("已生效")).toHaveStyle({ color: DESIGN_TOKENS.evergreen });
+      expect(screen.queryByText("授权已落库, 权限已生效")).not.toBeInTheDocument();
+      expect(screen.getByText("待审批")).toHaveStyle({ color: DESIGN_TOKENS.accent });
+      expect(screen.getByText("已拒绝")).toHaveStyle({ color: DESIGN_TOKENS.signal });
+      expect(screen.getByText("基础授权已变化")).toHaveStyle({ color: DESIGN_TOKENS.amber });
       expect(screen.getByText("已撤回")).toHaveStyle({ color: DESIGN_TOKENS.inkFaint });
 
       // 徽章会给状态套一层边框底色和等宽小字; 状态列现在只有文字。
-      expect(screen.getByText("已授权")).not.toHaveClass("border", "font-mono");
+      expect(screen.getByText("已生效")).not.toHaveClass("border", "font-mono");
       // 审批意见搬进了详情弹窗, 表格里不再有那一行小字。
       expect(screen.queryByText(/审批意见/)).not.toBeInTheDocument();
       expect(screen.queryByText(/权限范围过大/)).not.toBeInTheDocument();
@@ -99,12 +101,12 @@ describe("PortalRequestsSection 表格", () => {
       const widths = declaredColumnWidths(table);
 
       // 状态 / 审批人 / 应用 / 权限组 / 过期时间 / 提交时间 / 原因 / 操作。
-      expect(widths).toEqual([110, 130, 140, 170, 140, 140, 180, 130]);
+      expect(widths).toEqual([100, 120, 150, 160, 130, 140, 170, 120]);
       expect(widths).toHaveLength(table.querySelectorAll("thead.ant-table-thead th").length);
       const total = widths.reduce((sum, width) => sum + width, 0);
       expect(tableScrollWidth(table)).toBe(total);
       // 「我的权限」是 940; 申请表多三列, 但仍要装得进常见的桌面正文宽度。
-      expect(total).toBeLessThanOrEqual(1200);
+      expect(total).toBeLessThanOrEqual(1100);
     } finally {
       vi.unstubAllGlobals();
     }
