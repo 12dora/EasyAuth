@@ -589,6 +589,107 @@ describe("useAccessRequestForm", () => {
     await waitFor(() => expect(result.current.canSubmit).toBe(true));
     expect(result.current.toastMessageKey).toBe("");
   });
+
+  /*
+   * 权限组落地提示与提交闸门的拦截原因共用同一条提示位。闸门亮着时提交按钮是灰的, 用户唯一能看到的
+   * 解释就是这条提示, 因此它必须让给闸门; 落地提示是对上一次点击的反馈, 迟一步说不影响用户已经看到的结果。
+   */
+  test("闸门先亮着再触发权限组落地: 提示位仍然给出拦截原因, 闸门解除后才轮到落地提示", async () => {
+    // 22 个权限组超过服务端上限, 其中两个各覆盖一项权限: 落地掉一个还剩 21 个, 闸门不会因此解除。
+    const authorizationGroups = Array.from({ length: ACCESS_REQUEST_MAX_AUTHORIZATION_GROUPS + 2 }, (_, index) => ({
+      id: 100 + index,
+      app_key: "crm",
+      key: `group-${index}`,
+      kind: "role",
+      name: `权限组 ${index}`,
+      requestable: true,
+      grants: index === 0
+        ? [{ permission_key: "customer.read", scope_key: "SELF" }]
+        : index === 1
+          ? [{ permission_key: "customer.export", scope_key: "SELF" }]
+          : [],
+    }));
+    const groupKeys = authorizationGroups.map((group) => group.key);
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => jsonResponse(scopedCatalog({
+      authorization_groups: authorizationGroups,
+      ungrouped_permissions: [
+        { id: 101, app_key: "crm", key: "customer.read", name: "查看客户", scopes: [{ key: "SELF", name: "本人" }] },
+        { id: 102, app_key: "crm", key: "customer.export", name: "导出客户", scopes: [{ key: "SELF", name: "本人" }] },
+      ],
+    }))));
+    const { result } = await renderReadyForm();
+
+    act(() => result.current.changeAppKey("crm"));
+    act(() => result.current.changeReason("申请全部权限组"));
+    act(() => result.current.changeAuthorizationGroupKeys(groupKeys));
+    await waitFor(() => expect(result.current.toastMessageKey).toBe("portal.request.tooManyAuthorizationGroups"));
+
+    const readPermission = result.current.ungroupedPermissions.find((item) => item.key === "customer.read");
+    act(() => result.current.changePermissionScope(readPermission!, "SELF"));
+
+    // 落地确实发生了(group-0 被摘掉), 但权限组仍然超上限: 提示位归闸门。
+    expect(result.current.authorizationGroupKeys).toHaveLength(ACCESS_REQUEST_MAX_AUTHORIZATION_GROUPS + 1);
+    expect(result.current.canSubmit).toBe(false);
+    expect(result.current.toastMessageKey).toBe("portal.request.tooManyAuthorizationGroups");
+
+    const exportPermission = result.current.ungroupedPermissions.find((item) => item.key === "customer.export");
+    act(() => result.current.changePermissionScope(exportPermission!, "SELF"));
+
+    // 再落地一个就回到上限之内, 闸门解除, 提示位这才轮到落地提示。
+    expect(result.current.authorizationGroupKeys).toHaveLength(ACCESS_REQUEST_MAX_AUTHORIZATION_GROUPS);
+    await waitFor(() => expect(result.current.canSubmit).toBe(true));
+    expect(result.current.toastMessageKey).toBe("portal.request.groupMaterialized");
+  });
+
+  test("权限组落地这一下自己把闸门点亮: 提示位给的是拦截原因而不是落地提示", async () => {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => jsonResponse(scopedCatalog({
+      ungrouped_permissions: [
+        {
+          id: 101,
+          app_key: "crm",
+          key: "customer.read",
+          name: "查看客户",
+          scopes: [{ key: "MANAGED_USERS", name: "下级用户" }],
+          // 单独申请这一项时找不到直属上级, 但它由权限组覆盖着时审批人走权限组。
+          approver_resolution_status: "direct_manager_missing",
+          default_approver_user_ids: [],
+        },
+        { id: 102, app_key: "crm", key: "customer.export", name: "导出客户", scopes: [{ key: "SELF", name: "本人" }] },
+      ],
+      authorization_groups: [
+        {
+          id: 11,
+          app_key: "crm",
+          key: "mixed-reader",
+          kind: "role",
+          name: "客户查看",
+          requestable: true,
+          default_approver_user_ids: ["boss"],
+          grants: [
+            { permission_key: "customer.read", scope_key: "MANAGED_USERS" },
+            { permission_key: "customer.export", scope_key: "SELF" },
+          ],
+        },
+      ],
+    }))));
+    const { result } = await renderReadyForm();
+
+    act(() => result.current.changeAppKey("crm"));
+    act(() => result.current.changeReason("申请客户查看"));
+    act(() => result.current.changeAuthorizationGroupKeys(["mixed-reader"]));
+    await waitFor(() => expect(result.current.selectedApproverUserIds).toEqual(["boss"]));
+    expect(result.current.toastMessageKey).toBe("");
+
+    // 取消导出把权限组落地成逐项直接申请, 客户查看因此变成单独申请, 审批路径当场断掉。
+    const exportPermission = result.current.ungroupedPermissions.find((item) => item.key === "customer.export");
+    act(() => result.current.changePermissionScope(exportPermission!, "SELF"));
+
+    expect(result.current.authorizationGroupKeys).toEqual([]);
+    expect(result.current.selectedPermissionKeys).toEqual([directGrantSelectionKey("customer.read", "MANAGED_USERS")]);
+    await waitFor(() => expect(result.current.selectedApproverUserIds).toEqual([]));
+    expect(result.current.canSubmit).toBe(false);
+    expect(result.current.toastMessageKey).toBe("portal.request.approverMissing");
+  });
 });
 
 /** 目标可编辑到什么程度由后端 submission_validation 决定, 四种申请类型各不相同。 */

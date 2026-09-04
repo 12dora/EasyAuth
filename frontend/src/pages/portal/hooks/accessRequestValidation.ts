@@ -50,13 +50,17 @@ export function accessRequestExpiresAtError(
   return values.grantType === "timed" && Boolean(values.expiresAt) && !grantTermIsFuture;
 }
 
-export function accessRequestToastMessageKey(
+/**
+ * 提交闸门当前拦下这份草稿的原因; 没被拦下就是空。
+ *
+ * 这几种情况都是"目标本身不合法", 必须说清楚: 否则提交按钮只是灰着, 用户看不出为什么。
+ * 它也决定了提示位的优先级——闸门亮着时任何一次性提示都得让位(见 useAccessRequestForm)。
+ */
+export function accessRequestSubmitGateMessageKey(
   values: AccessRequestPayloadValues,
   catalogView: CatalogView,
-  catalogIsLoading: boolean,
   selectedBaseGrant: PortalGrantRow | undefined,
 ): MessageKey | "" {
-  // 提交闸门里"目标本身不合法"的两种情况优先说清楚: 否则提交按钮只是灰着, 用户看不出为什么。
   if (!authorizationGroupCountIsWithinLimit(values)) {
     return "portal.request.tooManyAuthorizationGroups";
   }
@@ -65,6 +69,19 @@ export function accessRequestToastMessageKey(
   }
   if (!revokeTargetReducesBaseGrant(values, selectedBaseGrant)) {
     return "portal.request.revokeKeepsWholeGrant";
+  }
+  return "";
+}
+
+export function accessRequestToastMessageKey(
+  values: AccessRequestPayloadValues,
+  catalogView: CatalogView,
+  catalogIsLoading: boolean,
+  selectedBaseGrant: PortalGrantRow | undefined,
+): MessageKey | "" {
+  const gateMessageKey = accessRequestSubmitGateMessageKey(values, catalogView, selectedBaseGrant);
+  if (gateMessageKey) {
+    return gateMessageKey;
   }
   if (catalogIsLoading || !values.appKey || catalogView.visiblePermissionKeys.length > 0) {
     return "";

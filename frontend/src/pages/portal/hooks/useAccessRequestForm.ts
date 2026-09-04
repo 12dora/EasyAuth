@@ -12,6 +12,7 @@ import {
   accessRequestCanSubmit,
   accessRequestExpiresAtError,
   accessRequestExpiresAtIsFuture,
+  accessRequestSubmitGateMessageKey,
 } from "./accessRequestValidation";
 import { useAccessRequestFields } from "./useAccessRequestFields";
 import {
@@ -97,8 +98,11 @@ export function useAccessRequestForm(currentUserId = "", options: UseAccessReque
     prefillErrorMessageKey,
   });
 
-  // 权限组落地是对用户上一次点击的即时反馈, 占用同一条提示位时优先于派生提示。
-  return fields.groupMaterializationNoticeKey
+  // 权限组落地是对用户上一次点击的即时反馈, 占用同一条提示位时优先于"当前应用没有直接权限"这类派生提示。
+  // 但提交闸门的拦截原因更要紧: 闸门亮着时提交按钮是灰的, 提示位必须说清楚为什么, 不能被落地提示盖掉。
+  // 提示键留在 fields 里不清, 闸门解除后它还会接着显示, 不会因为让位而丢掉。
+  const submitGateMessageKey = accessRequestSubmitGateMessageKey(fields, catalogView, selectedBaseGrant);
+  return fields.groupMaterializationNoticeKey && !submitGateMessageKey
     ? { ...result, toastMessageKey: fields.groupMaterializationNoticeKey }
     : result;
 }
