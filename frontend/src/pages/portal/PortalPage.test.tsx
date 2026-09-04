@@ -1373,6 +1373,8 @@ describe("PortalPage access request form", () => {
       const scrollContainer = permissionTable.parentElement;
       expect(scrollContainer).toHaveClass("max-h-[28rem]", "overflow-y-auto", "overflow-x-auto");
       expect(permissionTable.querySelector("thead")).toHaveClass("sticky", "top-0");
+      // 表格铺满容器宽度, 同时保留最小宽度让窄布局回落到横向滚动。
+      expect(permissionTable).toHaveClass("w-full", "min-w-[48rem]");
 
       // 「仅看已选」开关仍在, 只是不再有分页条陪着它。
       expect(screen.getByRole("switch", { name: "仅看已选" })).toBeVisible();
