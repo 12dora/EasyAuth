@@ -25,7 +25,7 @@ export function useAccessRequestSubmitMutation(
     fields.requestType,
     fields.baseGrantId,
     fields.baseGrantRevision,
-    fields.authorizationGroupKey,
+    fields.authorizationGroupKeys,
     fields.selectedPermissionKeys,
     fields.selectedPermissionScopes,
     fields.selectedApproverUserIds,
@@ -55,7 +55,7 @@ export function useAccessRequestSubmitMutation(
       pendingSubmission.current = null;
       // 仅当提交期间草稿未变时清空目标与理由, 避免旧成功响应抹掉新编辑。
       if (submittedRevision === draftRevision.current) {
-        fields.setAuthorizationGroupKey("");
+        fields.setAuthorizationGroupKeys([]);
         fields.setSelectedPermissionKeys([]);
         fields.setSelectedPermissionScopes({});
         fields.setApproverSelectionWasEdited(false);

@@ -8,7 +8,7 @@ import { PermissionSelector } from "./PermissionSelector";
 interface RequestTargetPickerProps {
   appKey: string;
   apps: PortalCatalogApp[];
-  authorizationGroupKey: string;
+  authorizationGroupKeys: string[];
   authorizationGroups: AuthorizationGroupItem[];
   permissionGroups: ScopedPermissionGroupItem[];
   ungroupedPermissions: ScopedPermissionItem[];
@@ -19,7 +19,7 @@ interface RequestTargetPickerProps {
   catalogErrorMessage: string;
   disabled?: boolean;
   onAppKeyChange: (appKey: string) => void;
-  onAuthorizationGroupKeyChange: (groupKey: string) => void;
+  onAuthorizationGroupKeysChange: (groupKeys: string[]) => void;
   onPermissionScopeChange: (permission: ScopedPermissionItem, scopeKey: string) => void;
   onPermissionGroupScopeChange: (group: ScopedPermissionGroupItem, scopeKey: string, shouldSelect: boolean) => void;
   onSelectPermissionKeys: (selectionKeys: string[]) => void;
@@ -32,7 +32,7 @@ interface RequestTargetPickerProps {
 export function RequestTargetPicker({
   appKey,
   apps,
-  authorizationGroupKey,
+  authorizationGroupKeys,
   authorizationGroups,
   permissionGroups,
   ungroupedPermissions,
@@ -43,7 +43,7 @@ export function RequestTargetPicker({
   catalogErrorMessage,
   disabled = false,
   onAppKeyChange,
-  onAuthorizationGroupKeyChange,
+  onAuthorizationGroupKeysChange,
   onPermissionScopeChange,
   onPermissionGroupScopeChange,
   onSelectPermissionKeys,
@@ -70,21 +70,49 @@ export function RequestTargetPicker({
             ))}
           </SelectInput>
         </Field>
-        <Field label={t("portal.request.authorizationGroup")}>
-          <SelectInput
-            value={authorizationGroupKey}
-            onChange={(event) => onAuthorizationGroupKeyChange(event.currentTarget.value)}
-            disabled={disabled || !appKey}
-          >
-            <option value="">{t("portal.request.authorizationGroupNone")}</option>
-            {authorizationGroups.map((group) => (
-              <option key={`${group.app_key}:${group.key}`} value={group.key}>
-                {localizedField(locale, group.name, group.name_en)}
-              </option>
-            ))}
-          </SelectInput>
-        </Field>
       </div>
+      {/* 一条授权可以同时挂多个权限组, 因此这里是多选: 单选控件会让变更申请静默撤掉没被选中的那些组。 */}
+      <Field
+        as="group"
+        label={t("portal.request.authorizationGroup")}
+        hint={
+          appKey
+            ? t("portal.request.authorizationGroupsSelected", { count: authorizationGroupKeys.length })
+            : t("portal.request.authorizationGroupNeedApp")
+        }
+      >
+        <div className="max-h-40 overflow-auto rounded-[2px] border border-ink/15 bg-paper-soft p-2">
+          {authorizationGroups.length > 0 ? (
+            <div className="flex flex-col gap-1.5">
+              {authorizationGroups.map((group) => (
+                <label
+                  key={`${group.app_key}:${group.key}`}
+                  className="inline-flex items-center gap-2 rounded-[2px] px-2 py-1.5 text-body text-ink-soft hover:bg-ink/5"
+                >
+                  <input
+                    type="checkbox"
+                    value={group.key}
+                    checked={authorizationGroupKeys.includes(group.key)}
+                    disabled={disabled || !appKey}
+                    onChange={(event) =>
+                      onAuthorizationGroupKeysChange(
+                        event.currentTarget.checked
+                          ? [...authorizationGroupKeys, group.key]
+                          : authorizationGroupKeys.filter((key) => key !== group.key),
+                      )
+                    }
+                  />
+                  <span className="text-ink">{localizedField(locale, group.name, group.name_en)}</span>
+                </label>
+              ))}
+            </div>
+          ) : (
+            <span className="block px-2 py-1.5 text-body text-ink-faint">
+              {appKey ? t("portal.request.authorizationGroupEmpty") : t("portal.request.authorizationGroupNeedApp")}
+            </span>
+          )}
+        </div>
+      </Field>
       <Field
         as="group"
         label={t("portal.request.directPermissions")}

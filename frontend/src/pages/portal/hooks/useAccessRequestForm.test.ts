@@ -95,7 +95,7 @@ describe("useAccessRequestForm", () => {
     const { result } = await renderReadyForm("");
 
     act(() => result.current.changeAppKey("crm"));
-    act(() => result.current.changeAuthorizationGroupKey("reader"));
+    act(() => result.current.changeAuthorizationGroupKeys(["reader"]));
     await waitFor(() => expect(result.current.selectedApproverUserIds.length).toBeGreaterThan(0));
 
     act(() => result.current.changeReason("   \n  "));
@@ -110,7 +110,7 @@ describe("useAccessRequestForm", () => {
     const { result } = await renderReadyForm("");
 
     act(() => result.current.changeAppKey("crm"));
-    act(() => result.current.changeAuthorizationGroupKey("reader"));
+    act(() => result.current.changeAuthorizationGroupKeys(["reader"]));
     await waitFor(() => expect(result.current.selectedApproverUserIds.length).toBeGreaterThan(0));
     act(() => result.current.changeReason("需要访问客户数据"));
     await waitFor(() => expect(result.current.canSubmit).toBe(true));
@@ -161,17 +161,17 @@ describe("useAccessRequestForm", () => {
     act(() => result.current.changePermissionScope(permission, "SELF"));
     expect(result.current.selectedPermissionKeys).toEqual([directGrantSelectionKey("customer.read", "SELF")]);
 
-    act(() => result.current.changeAuthorizationGroupKey("customer-reader"));
+    act(() => result.current.changeAuthorizationGroupKeys(["customer-reader"]));
     expect(result.current.selectedPermissionKeys).toEqual([]);
 
     act(() => result.current.changeReason("申请客户查看权限"));
     await waitFor(() => expect(result.current.canSubmit).toBe(true));
     act(() => result.current.submit());
     await waitFor(() => expect(submittedPayloads).toHaveLength(1));
-    await waitFor(() => expect(result.current.authorizationGroupKey).toBe(""));
+    await waitFor(() => expect(result.current.authorizationGroupKeys).toEqual([]));
 
     // 反过来先选权限组再勾同一项直接权限: 权限组已覆盖它, 展示态本就是勾选, 因此不会重复进载荷。
-    act(() => result.current.changeAuthorizationGroupKey("customer-reader"));
+    act(() => result.current.changeAuthorizationGroupKeys(["customer-reader"]));
     act(() => result.current.selectPermissionKeys([directGrantSelectionKey("customer.read", "SELF")]));
     expect(result.current.selectedPermissionKeys).toEqual([]);
     expect(result.current.groupCoveredSelectionKeys).toEqual([directGrantSelectionKey("customer.read", "SELF")]);
@@ -180,7 +180,7 @@ describe("useAccessRequestForm", () => {
     await waitFor(() => expect(result.current.canSubmit).toBe(true));
     act(() => result.current.submit());
     await waitFor(() => expect(submittedPayloads).toHaveLength(2));
-    await waitFor(() => expect(result.current.authorizationGroupKey).toBe(""));
+    await waitFor(() => expect(result.current.authorizationGroupKeys).toEqual([]));
 
     expect(submittedPayloads[1]).toEqual(submittedPayloads[0]);
 
@@ -237,14 +237,14 @@ describe("useAccessRequestForm", () => {
     const { result } = await renderReadyForm();
 
     act(() => result.current.changeAppKey("crm"));
-    act(() => result.current.changeAuthorizationGroupKey("customer-reader"));
+    act(() => result.current.changeAuthorizationGroupKeys(["customer-reader"]));
     expect(result.current.groupCoveredSelectionKeys).toHaveLength(3);
 
     const readPermission = result.current.ungroupedPermissions.find((item) => item.key === "customer.read");
     act(() => result.current.changePermissionScope(readPermission!, "SELF"));
 
     // 权限组整体授予, 少一项就不再是它: 权限组目标清空, 其余可申请的覆盖权限转成直接申请。
-    expect(result.current.authorizationGroupKey).toBe("");
+    expect(result.current.authorizationGroupKeys).toEqual([]);
     expect(result.current.selectedPermissionKeys).toEqual([directGrantSelectionKey("customer.export", "SELF")]);
     expect(result.current.toastMessageKey).toBe("portal.request.groupMaterializedPartially");
 
@@ -287,10 +287,10 @@ describe("useAccessRequestForm", () => {
     const { result } = await renderReadyForm();
 
     act(() => result.current.changeAppKey("crm"));
-    act(() => result.current.changeAuthorizationGroupKey("customer-reader"));
+    act(() => result.current.changeAuthorizationGroupKeys(["customer-reader"]));
     const permission = result.current.ungroupedPermissions[0];
     act(() => result.current.changePermissionScope(permission, "SELF"));
-    expect(result.current.authorizationGroupKey).toBe("");
+    expect(result.current.authorizationGroupKeys).toEqual([]);
     expect(result.current.selectedPermissionKeys).toEqual([]);
     expect(result.current.toastMessageKey).toBe("portal.request.groupMaterialized");
 
@@ -299,7 +299,7 @@ describe("useAccessRequestForm", () => {
     expect(result.current.selectedPermissionKeys).toEqual([directGrantSelectionKey("customer.read", "SELF")]);
     expect(result.current.toastMessageKey).toBe("");
 
-    act(() => result.current.changeAuthorizationGroupKey("customer-reader"));
+    act(() => result.current.changeAuthorizationGroupKeys(["customer-reader"]));
     expect(result.current.selectedPermissionKeys).toEqual([]);
 
     act(() => result.current.changeReason("申请客户查看权限"));
@@ -310,6 +310,70 @@ describe("useAccessRequestForm", () => {
     expect(submittedPayloads[0]).toMatchObject({
       authorization_group_keys: ["customer-reader"],
       direct_grants: [],
+    });
+  });
+
+  test("多个权限组同时选中: 覆盖范围取并集, 被覆盖的直接权限不重复下发", async () => {
+    const catalog = scopedCatalog({
+      ungrouped_permissions: [
+        { id: 101, app_key: "crm", key: "customer.read", name: "查看客户", scopes: [{ key: "SELF", name: "本人" }] },
+        { id: 102, app_key: "crm", key: "customer.export", name: "导出客户", scopes: [{ key: "SELF", name: "本人" }] },
+        { id: 103, app_key: "crm", key: "customer.audit", name: "审计客户", scopes: [{ key: "SELF", name: "本人" }] },
+      ],
+      authorization_groups: [
+        {
+          id: 11,
+          app_key: "crm",
+          key: "customer-reader",
+          kind: "role",
+          name: "客户查看",
+          grants: [{ permission_key: "customer.read", scope_key: "SELF" }],
+        },
+        {
+          id: 12,
+          app_key: "crm",
+          key: "customer-exporter",
+          kind: "role",
+          name: "客户导出",
+          grants: [{ permission_key: "customer.export", scope_key: "SELF" }],
+        },
+      ],
+    });
+    const submittedPayloads: unknown[] = [];
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      if (String(input) === "/portal/api/v1/request-catalog") {
+        return jsonResponse(catalog);
+      }
+      if (String(input) === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
+        submittedPayloads.push(JSON.parse(String(init.body)));
+        return jsonResponse({ access_request: { id: 1 } }, 201);
+      }
+      throw new Error(`Unexpected fetch: ${String(input)}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const { result } = await renderReadyForm();
+
+    act(() => result.current.changeAppKey("crm"));
+    act(() => result.current.changeAuthorizationGroupKeys(["customer-reader", "customer-exporter"]));
+    expect(result.current.groupCoveredSelectionKeys).toEqual([
+      directGrantSelectionKey("customer.read", "SELF"),
+      directGrantSelectionKey("customer.export", "SELF"),
+    ]);
+
+    const auditPermission = result.current.ungroupedPermissions.find((item) => item.key === "customer.audit");
+    act(() => result.current.changePermissionScope(auditPermission!, "SELF"));
+    // 只加了一项没被任何权限组覆盖的权限: 两个权限组都留着, 不触发落地。
+    expect(result.current.authorizationGroupKeys).toEqual(["customer-reader", "customer-exporter"]);
+    expect(result.current.toastMessageKey).toBe("");
+
+    act(() => result.current.changeReason("同时申请查看与导出"));
+    await waitFor(() => expect(result.current.canSubmit).toBe(true));
+    act(() => result.current.submit());
+    await waitFor(() => expect(submittedPayloads).toHaveLength(1));
+
+    expect(submittedPayloads[0]).toMatchObject({
+      authorization_group_keys: ["customer-reader", "customer-exporter"],
+      direct_grants: [{ permission: "customer.audit", scope: "SELF" }],
     });
   });
 
@@ -331,7 +395,7 @@ describe("useAccessRequestForm", () => {
     const { result } = await renderReadyForm();
 
     act(() => result.current.changeAppKey("crm"));
-    act(() => result.current.changeAuthorizationGroupKey("managed-reader"));
+    act(() => result.current.changeAuthorizationGroupKeys(["managed-reader"]));
     await waitFor(() => expect(result.current.selectedApproverUserIds).toEqual([]));
     expect(result.current.toastMessageKey).toBe("portal.request.approverMissing");
 
@@ -427,7 +491,7 @@ describe("useAccessRequestForm", () => {
     const { result } = await renderReadyForm();
 
     act(() => result.current.changeAppKey("crm"));
-    act(() => result.current.changeAuthorizationGroupKey("reader"));
+    act(() => result.current.changeAuthorizationGroupKeys(["reader"]));
     act(() => result.current.changeReason("幂等重试"));
     await waitFor(() => expect(result.current.canSubmit).toBe(true));
     act(() => result.current.submit());

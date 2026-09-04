@@ -13,7 +13,7 @@ export function useAccessRequestFields(initialRequestType: AccessRequestType = "
   const [appKey, setAppKey] = useState("");
   const [baseGrantId, setBaseGrantId] = useState("");
   const [baseGrantRevision, setBaseGrantRevision] = useState<number | null>(null);
-  const [authorizationGroupKey, setAuthorizationGroupKey] = useState("");
+  const [authorizationGroupKeys, setAuthorizationGroupKeys] = useState<string[]>([]);
   const [selectedPermissionKeys, setSelectedPermissionKeys] = useState<string[]>([]);
   const [selectedPermissionScopes, setSelectedPermissionScopes] = useState<Record<string, string>>({});
   const [selectedApproverUserIds, setSelectedApproverUserIds] = useState<string[]>([]);
@@ -29,7 +29,7 @@ export function useAccessRequestFields(initialRequestType: AccessRequestType = "
     requestType,
     baseGrantId,
     baseGrantRevision,
-    authorizationGroupKey,
+    authorizationGroupKeys,
     selectedPermissionKeys,
     selectedPermissionScopes,
     selectedApproverUserIds,
@@ -43,7 +43,7 @@ export function useAccessRequestFields(initialRequestType: AccessRequestType = "
     setAppKey,
     setBaseGrantId,
     setBaseGrantRevision,
-    setAuthorizationGroupKey,
+    setAuthorizationGroupKeys,
     setSelectedPermissionKeys,
     setSelectedPermissionScopes,
     setSelectedApproverUserIds,

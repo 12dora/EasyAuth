@@ -67,7 +67,7 @@ function hasRequestTarget(values: AccessRequestPayloadValues): boolean {
   if (values.requestType === "revoke") {
     return true;
   }
-  return Boolean(values.authorizationGroupKey) || values.selectedPermissionKeys.length > 0;
+  return values.authorizationGroupKeys.length > 0 || values.selectedPermissionKeys.length > 0;
 }
 
 function lifecycleSelectionIsComplete(

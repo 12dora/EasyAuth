@@ -20,10 +20,10 @@ export function useDefaultSingleScopes(
 }
 
 export function useGroupCoverageInvariant(fields: AccessRequestFields, catalogView: CatalogView): void {
-  const { authorizationGroupKey, setSelectedPermissionKeys } = fields;
+  const { authorizationGroupKeys, setSelectedPermissionKeys } = fields;
   const coveredSelectionKeys = useMemo(
-    () => Array.from(groupCoveredSelectionKeySet(authorizationGroupKey, catalogView)),
-    [authorizationGroupKey, catalogView],
+    () => Array.from(groupCoveredSelectionKeySet(authorizationGroupKeys, catalogView)),
+    [authorizationGroupKeys, catalogView],
   );
 
   useEffect(() => {
@@ -39,10 +39,10 @@ export function useGroupCoverageInvariant(fields: AccessRequestFields, catalogVi
 }
 
 export function useDefaultApprovers(fields: AccessRequestFields, catalogView: CatalogView, currentUserId: string): void {
-  const { appKey, authorizationGroupKey, selectedPermissionKeys, approverSelectionWasEdited, setSelectedApproverUserIds } = fields;
+  const { appKey, authorizationGroupKeys, selectedPermissionKeys, approverSelectionWasEdited, setSelectedApproverUserIds } = fields;
   const defaultApproverUserIds = useMemo(
     () => buildDefaultApproverUserIds(fields, catalogView, currentUserId),
-    [catalogView, appKey, authorizationGroupKey, selectedPermissionKeys, currentUserId],
+    [catalogView, appKey, authorizationGroupKeys, selectedPermissionKeys, currentUserId],
   );
 
   useEffect(() => {
@@ -56,7 +56,7 @@ export function useDefaultApprovers(fields: AccessRequestFields, catalogView: Ca
 }
 
 export function useLifecycleGrantInvariant(fields: AccessRequestFields, selectedBaseGrant: PortalGrantRow | undefined): void {
-  const { requestType, setAppKey, setAuthorizationGroupKey, setBaseGrantRevision, setGrantType, setSelectedPermissionKeys } = fields;
+  const { requestType, setAppKey, setAuthorizationGroupKeys, setBaseGrantRevision, setGrantType, setSelectedPermissionKeys } = fields;
   useEffect(() => {
     if (requestType === "grant" || !selectedBaseGrant) {
       return;
@@ -66,7 +66,7 @@ export function useLifecycleGrantInvariant(fields: AccessRequestFields, selected
     if (requestType !== "renew") {
       return;
     }
-    setAuthorizationGroupKey(selectedBaseGrant.groups[0]?.key ?? "");
+    setAuthorizationGroupKeys(selectedBaseGrant.groups.map((group) => group.key));
     setSelectedPermissionKeys(
       selectedBaseGrant.grants
         .filter((item) => item.source_type === "direct")
@@ -81,7 +81,7 @@ export function useLifecycleGrantInvariant(fields: AccessRequestFields, selected
     selectedBaseGrant?.groups,
     selectedBaseGrant?.grants,
     setAppKey,
-    setAuthorizationGroupKey,
+    setAuthorizationGroupKeys,
     setBaseGrantRevision,
     setGrantType,
     setSelectedPermissionKeys,

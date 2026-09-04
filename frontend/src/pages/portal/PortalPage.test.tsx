@@ -430,7 +430,7 @@ describe("PortalPage access request form", () => {
 
       await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
-      await user.selectOptions(screen.getByLabelText("可申请权限组"), "reader");
+      await user.click(authorizationGroupCheckbox("只读权限组"));
       await user.type(screen.getByLabelText("申请原因"), "临时处理跨部门工单");
       await user.selectOptions(screen.getByLabelText("授权期限"), "timed");
 
@@ -529,10 +529,10 @@ describe("PortalPage access request form", () => {
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       expect(screen.getByLabelText("选择审批人 app-owner")).toBeChecked();
       expect(screen.getByText("可申请权限组")).toBeVisible();
-      expect(screen.getByRole("option", { name: "销售只读" })).toHaveValue("sales-reader");
-      expect(screen.getByRole("option", { name: "订单运营包" })).toHaveValue("order-ops");
+      expect(authorizationGroupCheckbox("销售只读")).toHaveAttribute("value", "sales-reader");
+      expect(authorizationGroupCheckbox("订单运营包")).toHaveAttribute("value", "order-ops");
 
-      await user.selectOptions(screen.getByLabelText("可申请权限组"), "order-ops");
+      await user.click(authorizationGroupCheckbox("订单运营包"));
       expect(screen.getByLabelText("选择审批人 ops-owner")).toBeChecked();
       await user.type(screen.getByLabelText("申请原因"), "处理订单运营");
       await user.click(screen.getByRole("button", { name: "提交申请" }));
@@ -987,7 +987,7 @@ describe("PortalPage access request form", () => {
       expect(await screen.findByLabelText("选择审批人 app-owner")).toBeChecked();
 
       await user.click(screen.getByLabelText("选择审批人 app-owner"));
-      await user.selectOptions(screen.getByLabelText("可申请权限组"), "order-ops");
+      await user.click(authorizationGroupCheckbox("订单运营包"));
 
       await user.type(screen.getByLabelText("搜索审批人"), "owner");
       expect(screen.getByLabelText("选择审批人 app-owner")).not.toBeChecked();
@@ -1774,7 +1774,7 @@ describe("PortalPage access request form", () => {
       const user = userEvent.setup();
 
       await waitFor(() => expect(screen.getByLabelText("基础授权")).toHaveValue("7"));
-      expect(screen.getByLabelText("可申请权限组")).toHaveValue("reader");
+      expect(authorizationGroupCheckbox("只读")).toBeChecked();
 
       await screen.findByRole("table", { name: "权限选择" });
       await user.click(permissionSelectorChip("展开 订单", "button"));
@@ -1788,10 +1788,10 @@ describe("PortalPage access request form", () => {
 
       await user.click(permissionSelectorChip("选择 orders.read 本人"));
 
-      expect(screen.getByLabelText("可申请权限组")).toHaveValue("");
+      expect(authorizationGroupCheckbox("只读")).not.toBeChecked();
       expect(permissionSelectorChip("选择 orders.read 本人")).not.toBeChecked();
       expect(permissionSelectorChip("选择 orders.export 本人")).toBeChecked();
-      expect(await screen.findByRole("status")).toHaveTextContent("已取消所选权限组，其覆盖的其余权限已转为单独申请。");
+      expect(await screen.findByRole("status")).toHaveTextContent("已取消覆盖该权限的权限组，其覆盖的其余权限已转为单独申请。");
 
       await user.type(screen.getByLabelText("申请原因"), "只保留导出订单");
       await user.click(screen.getByRole("button", { name: "提交申请" }));
@@ -1817,13 +1817,13 @@ describe("PortalPage access request form", () => {
       renderPortalRequestWithPrefill("7");
       const user = userEvent.setup();
 
-      await waitFor(() => expect(screen.getByLabelText("可申请权限组")).toHaveValue("reader"));
+      await waitFor(() => expect(authorizationGroupCheckbox("只读")).toBeChecked());
       await screen.findByRole("table", { name: "权限选择" });
       await user.click(permissionSelectorChip("展开 订单", "button"));
 
       await user.click(permissionSelectorChip("选择权限组 orders 本人"));
 
-      expect(screen.getByLabelText("可申请权限组")).toHaveValue("");
+      expect(authorizationGroupCheckbox("只读")).not.toBeChecked();
       expect(permissionSelectorChip("选择 orders.read 本人")).not.toBeChecked();
       expect(permissionSelectorChip("选择 orders.export 本人")).not.toBeChecked();
       expect(permissionSelectorChip("选择权限组 orders 本人")).not.toBeChecked();
@@ -2479,6 +2479,11 @@ const emptyDirectPermissionCatalog = {
  */
 function permissionSelectorChip(name: string, role: "checkbox" | "button" = "checkbox") {
   return within(screen.getByRole("table", { name: "权限选择" })).getByRole(role, { name });
+}
+
+/** 权限组是多选勾选框(一条授权可以挂多个权限组), 按本地化组名定位。 */
+function authorizationGroupCheckbox(name: string) {
+  return within(screen.getByRole("group", { name: "可申请权限组" })).getByRole("checkbox", { name });
 }
 
 /** 「更新权限」跳转过来的变更申请: 路由 state 里带着基础授权预填。 */

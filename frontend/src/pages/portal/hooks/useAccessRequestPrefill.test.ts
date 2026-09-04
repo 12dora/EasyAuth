@@ -32,6 +32,18 @@ function catalog() {
         requestable: true,
         grants: [{ permission_key: "customer.write", scope_key: "SELF" }],
       },
+      {
+        id: 12,
+        app_key: "crm",
+        key: "writer",
+        kind: "role",
+        name: "读写",
+        requestable: true,
+        grants: [
+          { permission_key: "customer.delete", scope_key: "SELF" },
+          { permission_key: "customer.audit", scope_key: "SELF" },
+        ],
+      },
     ],
     permission_groups: [],
     ungrouped_permissions: [
@@ -47,6 +59,20 @@ function catalog() {
         app_key: "crm",
         key: "customer.write",
         name: "编辑客户",
+        scopes: [{ key: "SELF", name: "本人" }],
+      },
+      {
+        id: 103,
+        app_key: "crm",
+        key: "customer.delete",
+        name: "删除客户",
+        scopes: [{ key: "SELF", name: "本人" }],
+      },
+      {
+        id: 104,
+        app_key: "crm",
+        key: "customer.audit",
+        name: "审计客户",
         scopes: [{ key: "SELF", name: "本人" }],
       },
     ],
@@ -167,7 +193,7 @@ describe("useAccessRequestPrefill", () => {
     await waitFor(() => expect(result.current.form.baseGrantId).toBe("7"));
 
     expect(result.current.form.appKey).toBe("crm");
-    expect(result.current.form.authorizationGroupKey).toBe("reader");
+    expect(result.current.form.authorizationGroupKeys).toEqual(["reader"]);
     expect(result.current.form.selectedPermissionKeys).toEqual([directGrantSelectionKey("customer.read", "SELF")]);
     // 权限组带来的权限走覆盖态: 展示为勾选, 但不重复进直接权限。
     expect(result.current.form.groupCoveredSelectionKeys).toEqual([directGrantSelectionKey("customer.write", "SELF")]);
@@ -180,7 +206,7 @@ describe("useAccessRequestPrefill", () => {
     stubFetch();
     const { result } = renderPrefilledForm({ accessRequestPrefill: { requestType: "change", baseGrantId: "7" } });
 
-    await waitFor(() => expect(result.current.form.authorizationGroupKey).toBe("reader"));
+    await waitFor(() => expect(result.current.form.authorizationGroupKeys).toEqual(["reader"]));
     const writePermission = result.current.form.ungroupedPermissions.find(
       (permission) => permission.key === "customer.write",
     );
@@ -188,13 +214,13 @@ describe("useAccessRequestPrefill", () => {
 
     act(() => result.current.form.changePermissionScope(writePermission!, "SELF"));
 
-    expect(result.current.form.authorizationGroupKey).toBe("");
+    expect(result.current.form.authorizationGroupKeys).toEqual([]);
     expect(result.current.form.groupCoveredSelectionKeys).toEqual([]);
     expect(result.current.form.selectedPermissionKeys).toEqual([directGrantSelectionKey("customer.read", "SELF")]);
     expect(result.current.form.toastMessageKey).toBe("portal.request.groupMaterialized");
   });
 
-  test("基础授权含多个权限组时给出可见错误而不是只取第一个", async () => {
+  test("基础授权含多个权限组时全部选中, 不丢弃也不报错", async () => {
     stubFetch(
       grantList({
         groups: [
@@ -205,12 +231,43 @@ describe("useAccessRequestPrefill", () => {
     );
     const { result } = renderPrefilledForm({ accessRequestPrefill: { requestType: "change", baseGrantId: "7" } });
 
-    await waitFor(() =>
-      expect(result.current.form.prefillErrorMessageKey).toBe("portal.request.prefillMultiGroupUnsupported"),
+    await waitFor(() => expect(result.current.form.authorizationGroupKeys).toEqual(["reader", "writer"]));
+    expect(result.current.form.prefillErrorMessageKey).toBe("");
+    expect(result.current.form.baseGrantId).toBe("7");
+    expect(result.current.form.groupCoveredSelectionKeys).toEqual([
+      directGrantSelectionKey("customer.write", "SELF"),
+      directGrantSelectionKey("customer.delete", "SELF"),
+      directGrantSelectionKey("customer.audit", "SELF"),
+    ]);
+  });
+
+  test("取消权限只落地覆盖它的权限组, 其余权限组保持选中", async () => {
+    stubFetch(
+      grantList({
+        groups: [
+          { key: "reader", kind: "role", name: "只读" },
+          { key: "writer", kind: "role", name: "读写" },
+        ],
+      }),
     );
-    expect(result.current.form.baseGrantId).toBe("");
-    expect(result.current.form.authorizationGroupKey).toBe("");
-    expect(result.current.form.selectedPermissionKeys).toEqual([]);
+    const { result } = renderPrefilledForm({ accessRequestPrefill: { requestType: "change", baseGrantId: "7" } });
+
+    await waitFor(() => expect(result.current.form.authorizationGroupKeys).toEqual(["reader", "writer"]));
+    const deletePermission = result.current.form.ungroupedPermissions.find(
+      (permission) => permission.key === "customer.delete",
+    );
+    expect(deletePermission).toBeDefined();
+
+    act(() => result.current.form.changePermissionScope(deletePermission!, "SELF"));
+
+    // writer 覆盖了被取消的 customer.delete: 整组落地成逐项直接申请; reader 没覆盖它, 原样保留。
+    expect(result.current.form.authorizationGroupKeys).toEqual(["reader"]);
+    expect(result.current.form.selectedPermissionKeys).toEqual([
+      directGrantSelectionKey("customer.read", "SELF"),
+      directGrantSelectionKey("customer.audit", "SELF"),
+    ]);
+    expect(result.current.form.groupCoveredSelectionKeys).toEqual([directGrantSelectionKey("customer.write", "SELF")]);
+    expect(result.current.form.toastMessageKey).toBe("portal.request.groupMaterialized");
   });
 
   test("预填的授权不在当前授权列表里时给出可见错误", async () => {

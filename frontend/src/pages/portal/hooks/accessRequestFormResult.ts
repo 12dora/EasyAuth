@@ -41,7 +41,7 @@ type DraftValues = Pick<
   | "requestType"
   | "appKey"
   | "baseGrantId"
-  | "authorizationGroupKey"
+  | "authorizationGroupKeys"
   | "selectedPermissionKeys"
   | "selectedPermissionScopes"
   | "selectedApproverUserIds"
@@ -56,7 +56,7 @@ function draftValues(fields: AccessRequestFields): DraftValues {
     requestType: fields.requestType,
     appKey: fields.appKey,
     baseGrantId: fields.baseGrantId,
-    authorizationGroupKey: fields.authorizationGroupKey,
+    authorizationGroupKeys: fields.authorizationGroupKeys,
     selectedPermissionKeys: fields.selectedPermissionKeys,
     selectedPermissionScopes: fields.selectedPermissionScopes,
     selectedApproverUserIds: fields.selectedApproverUserIds,
@@ -92,7 +92,7 @@ function catalogSnapshot(
     permissionGroups: catalogView.permissionGroups,
     ungroupedPermissions: catalogView.ungroupedPermissions,
     visiblePermissionKeys: catalogView.visiblePermissionKeys,
-    groupCoveredSelectionKeys: groupCoveredSelectionKeys(fields.authorizationGroupKey, catalogView),
+    groupCoveredSelectionKeys: groupCoveredSelectionKeys(fields.authorizationGroupKeys, catalogView),
   };
 }
 
@@ -128,7 +128,7 @@ type FormHandlers = Pick<
   | "changeRequestType"
   | "changeBaseGrantId"
   | "changeAppKey"
-  | "changeAuthorizationGroupKey"
+  | "changeAuthorizationGroupKeys"
   | "changeGrantType"
   | "changeExpiresAt"
   | "changeReason"
@@ -148,7 +148,7 @@ function formHandlers(fields: AccessRequestFields, actions: AccessRequestActions
     changeRequestType: actions.changeRequestType,
     changeBaseGrantId: actions.changeBaseGrantId,
     changeAppKey: actions.changeAppKey,
-    changeAuthorizationGroupKey: actions.changeAuthorizationGroupKey,
+    changeAuthorizationGroupKeys: actions.changeAuthorizationGroupKeys,
     changeGrantType: fields.setGrantType,
     changeExpiresAt: fields.setExpiresAt,
     changeReason: (nextReason) => {

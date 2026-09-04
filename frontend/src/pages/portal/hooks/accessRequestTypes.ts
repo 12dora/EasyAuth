@@ -66,6 +66,8 @@ export type ScopedPermissionGroupItem = Omit<PermissionGroupItem, "children" | "
 
 export const ACCESS_REQUEST_MAX_APPROVERS = 20;
 export const ACCESS_REQUEST_MAX_REASON_LENGTH = 1000;
+/** 与后端 AccessRequestSubmitPayload.authorization_group_keys 的 max_length 一致。 */
+export const ACCESS_REQUEST_MAX_AUTHORIZATION_GROUPS = 20;
 
 /** 申请类型决定授权期限的初始值: 续期必然是限时授权, 其余从长期开始。 */
 export function defaultGrantTypeForRequestType(requestType: AccessRequestType): AccessGrantType {
@@ -96,7 +98,7 @@ export interface AccessRequestPayloadValues {
   appKey: string;
   baseGrantId: string;
   baseGrantRevision: number | null;
-  authorizationGroupKey: string;
+  authorizationGroupKeys: string[];
   selectedPermissionKeys: string[];
   selectedPermissionScopes: Record<string, string>;
   selectedApproverUserIds: string[];
@@ -118,7 +120,7 @@ export interface AccessRequestFields extends AccessRequestPayloadValues {
   setAppKey: Dispatch<SetStateAction<string>>;
   setBaseGrantId: Dispatch<SetStateAction<string>>;
   setBaseGrantRevision: Dispatch<SetStateAction<number | null>>;
-  setAuthorizationGroupKey: Dispatch<SetStateAction<string>>;
+  setAuthorizationGroupKeys: Dispatch<SetStateAction<string[]>>;
   setSelectedPermissionKeys: Dispatch<SetStateAction<string[]>>;
   setSelectedPermissionScopes: Dispatch<SetStateAction<Record<string, string>>>;
   setSelectedApproverUserIds: Dispatch<SetStateAction<string[]>>;
@@ -134,7 +136,7 @@ export interface AccessRequestActions {
   changeRequestType: (requestType: AccessRequestType) => void;
   changeBaseGrantId: (grantId: string) => void;
   changeAppKey: (nextAppKey: string) => void;
-  changeAuthorizationGroupKey: (groupKey: string) => void;
+  changeAuthorizationGroupKeys: (groupKeys: string[]) => void;
   selectPermissionKeys: (keys: string[]) => void;
   clearPermissionKeys: (keys: string[]) => void;
   expandGroups: (keys: string[]) => void;
@@ -150,7 +152,7 @@ export interface AccessRequestFormResult {
   requestType: AccessRequestType;
   appKey: string;
   baseGrantId: string;
-  authorizationGroupKey: string;
+  authorizationGroupKeys: string[];
   selectedPermissionKeys: string[];
   selectedPermissionScopes: Record<string, string>;
   selectedApproverUserIds: string[];
@@ -165,7 +167,7 @@ export interface AccessRequestFormResult {
   permissionGroups: ScopedPermissionGroupItem[];
   ungroupedPermissions: ScopedPermissionItem[];
   visiblePermissionKeys: string[];
-  /** 所选权限组覆盖的权限范围(展示态联动勾选用, 不计入直接权限提交)。 */
+  /** 所选权限组(可多个)覆盖的权限范围并集(展示态联动勾选用, 不计入直接权限提交)。 */
   groupCoveredSelectionKeys: string[];
   catalogIsLoading: boolean;
   catalogErrorMessage: string;
@@ -180,7 +182,7 @@ export interface AccessRequestFormResult {
   changeAppKey: (nextAppKey: string) => void;
   changeRequestType: (requestType: AccessRequestType) => void;
   changeBaseGrantId: (grantId: string) => void;
-  changeAuthorizationGroupKey: (groupKey: string) => void;
+  changeAuthorizationGroupKeys: (groupKeys: string[]) => void;
   changeGrantType: Dispatch<SetStateAction<AccessGrantType>>;
   changeExpiresAt: Dispatch<SetStateAction<string>>;
   changeReason: Dispatch<SetStateAction<string>>;

@@ -55,21 +55,26 @@ export function nextDefaultPermissionScopes(
   return changed || Object.keys(current).length !== Object.keys(next).length ? next : current;
 }
 
-export function groupCoveredSelectionKeys(groupKey: string, catalogView: CatalogView): string[] {
-  const group = catalogView.authorizationGroups.find((item) => item.key === groupKey);
-  return (group?.grants ?? []).map((grant) => directGrantSelectionKey(grant.permission_key, grant.scope_key));
+/** 一条授权可以挂多个权限组, 覆盖范围按并集算(顺序按 groupKeys 给定的顺序去重)。 */
+export function groupCoveredSelectionKeys(groupKeys: string[], catalogView: CatalogView): string[] {
+  return uniqueStrings(
+    groupKeys.flatMap((groupKey) => {
+      const group = catalogView.authorizationGroups.find((item) => item.key === groupKey);
+      return (group?.grants ?? []).map((grant) => directGrantSelectionKey(grant.permission_key, grant.scope_key));
+    }),
+  );
 }
 
-export function groupCoveredSelectionKeySet(groupKey: string, catalogView: CatalogView): Set<string> {
-  return new Set(groupCoveredSelectionKeys(groupKey, catalogView));
+export function groupCoveredSelectionKeySet(groupKeys: string[], catalogView: CatalogView): Set<string> {
+  return new Set(groupCoveredSelectionKeys(groupKeys, catalogView));
 }
 
 export function filterDirectGrantSelections(
   selectionKeys: string[],
-  groupKey: string,
+  groupKeys: string[],
   catalogView: CatalogView,
 ): string[] {
-  const coveredKeySet = groupCoveredSelectionKeySet(groupKey, catalogView);
+  const coveredKeySet = groupCoveredSelectionKeySet(groupKeys, catalogView);
   return uniqueStrings(selectionKeys)
     .filter((key) => !coveredKeySet.has(key));
 }

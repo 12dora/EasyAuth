@@ -25,7 +25,7 @@ export function AccessRequestForm({ currentUserId = "" }: { currentUserId?: stri
         <RequestTargetPicker
           appKey={form.appKey}
           apps={form.apps}
-          authorizationGroupKey={form.authorizationGroupKey}
+          authorizationGroupKeys={form.authorizationGroupKeys}
           authorizationGroups={form.authorizationGroups}
           permissionGroups={form.permissionGroups}
           ungroupedPermissions={form.ungroupedPermissions}
@@ -36,7 +36,7 @@ export function AccessRequestForm({ currentUserId = "" }: { currentUserId?: stri
           catalogErrorMessage={form.catalogErrorMessage}
           disabled={fieldsDisabled}
           onAppKeyChange={form.changeAppKey}
-          onAuthorizationGroupKeyChange={form.changeAuthorizationGroupKey}
+          onAuthorizationGroupKeysChange={form.changeAuthorizationGroupKeys}
           onPermissionScopeChange={form.changePermissionScope}
           onPermissionGroupScopeChange={form.changePermissionGroupScope}
           onSelectPermissionKeys={form.selectPermissionKeys}

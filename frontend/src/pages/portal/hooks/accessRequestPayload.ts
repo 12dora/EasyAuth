@@ -3,6 +3,7 @@ import { groupCoveredSelectionKeySet } from "./accessRequestCatalog";
 import { directGrantSelectionPermissionKey, directGrantSelectionScopeKey } from "./accessRequestSelection";
 import {
   ACCESS_REQUEST_MAX_APPROVERS,
+  ACCESS_REQUEST_MAX_AUTHORIZATION_GROUPS,
   ACCESS_REQUEST_MAX_REASON_LENGTH,
   type AccessRequestPayloadValues,
   type CatalogView,
@@ -10,7 +11,7 @@ import {
 
 export function buildAccessRequestPayload(values: AccessRequestPayloadValues, catalogView: CatalogView): JsonObject {
   assertAccessRequestPayloadLimits(values);
-  const coveredKeySet = groupCoveredSelectionKeySet(values.authorizationGroupKey, catalogView);
+  const coveredKeySet = groupCoveredSelectionKeySet(values.authorizationGroupKeys, catalogView);
   const overlappingSelection = values.selectedPermissionKeys.find((key) => coveredKeySet.has(key));
   if (overlappingSelection) {
     throw new Error(`直接权限与权限组覆盖范围重复: ${overlappingSelection}`);
@@ -25,7 +26,7 @@ export function buildAccessRequestPayload(values: AccessRequestPayloadValues, ca
     app_key: values.appKey,
     request_type: values.requestType,
     ...baseGrant,
-    authorization_group_keys: values.authorizationGroupKey ? [values.authorizationGroupKey] : [],
+    authorization_group_keys: values.authorizationGroupKeys,
     direct_grants: values.selectedPermissionKeys.map((selectionKey) => buildDirectGrantPayload(selectionKey)),
     approver_user_ids: values.selectedApproverUserIds,
     grant_type: values.grantType,
@@ -37,6 +38,9 @@ export function buildAccessRequestPayload(values: AccessRequestPayloadValues, ca
 function assertAccessRequestPayloadLimits(values: AccessRequestPayloadValues): void {
   if (values.requestType !== "grant" && (!values.baseGrantId || values.baseGrantRevision === null)) {
     throw new Error("生命周期申请缺少基础授权。");
+  }
+  if (values.authorizationGroupKeys.length > ACCESS_REQUEST_MAX_AUTHORIZATION_GROUPS) {
+    throw new Error(`权限组不能超过 ${ACCESS_REQUEST_MAX_AUTHORIZATION_GROUPS} 个`);
   }
   if (values.selectedApproverUserIds.length > ACCESS_REQUEST_MAX_APPROVERS) {
     throw new Error(`审批人不能超过 ${ACCESS_REQUEST_MAX_APPROVERS} 名`);
