@@ -67,6 +67,11 @@ export type ScopedPermissionGroupItem = Omit<PermissionGroupItem, "children" | "
 export const ACCESS_REQUEST_MAX_APPROVERS = 20;
 export const ACCESS_REQUEST_MAX_REASON_LENGTH = 1000;
 
+/** 申请类型决定授权期限的初始值: 续期必然是限时授权, 其余从长期开始。 */
+export function defaultGrantTypeForRequestType(requestType: AccessRequestType): AccessGrantType {
+  return requestType === "renew" ? "timed" : "permanent";
+}
+
 export interface PortalRequestCatalogView extends Omit<PortalRequestCatalog, "permission_groups" | "ungrouped_permissions"> {
   apps?: PortalCatalogAppView[];
   approver_options?: ApproverOption[];
@@ -160,6 +165,8 @@ export interface AccessRequestFormResult {
   submitErrorMessage: string;
   /** 提示条文案的 i18n key: 由组件用 t() 渲染, hook 不生产用户可见文案。 */
   toastMessageKey: MessageKey | "";
+  /** 路由预填失效(基础授权已不在当前授权里)时的错误文案 key。 */
+  prefillErrorMessageKey: MessageKey | "";
   canSubmit: boolean;
   expiresAtError: boolean;
   isSubmitting: boolean;

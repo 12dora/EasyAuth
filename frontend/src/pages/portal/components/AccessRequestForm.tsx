@@ -5,18 +5,23 @@ import { StatusBanner } from "../../../components/StatusBanner";
 import { PanelSurface } from "../../../components/ui/PanelSurface";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { useAccessRequestForm } from "../hooks/useAccessRequestForm";
+import { useAccessRequestPrefill } from "../hooks/useAccessRequestPrefill";
 import { AccessRequestFields } from "./AccessRequestFields";
 import { RequestTargetPicker } from "./RequestTargetPicker";
 
 export function AccessRequestForm({ currentUserId = "" }: { currentUserId?: string }) {
   const { t } = useI18n();
-  const form = useAccessRequestForm(currentUserId);
+  const { prefill, clearRouterState } = useAccessRequestPrefill();
+  const form = useAccessRequestForm(currentUserId, { prefill, onPrefillApplied: clearRouterState });
 
   const fieldsDisabled = form.isSubmitting;
 
   return (
     <PanelSurface>
       <div className="flex flex-col gap-5" aria-busy={form.isSubmitting || undefined}>
+        {form.prefillErrorMessageKey ? (
+          <StatusBanner live="alert" tone="signal" title={t(form.prefillErrorMessageKey)} />
+        ) : null}
         <RequestTargetPicker
           appKey={form.appKey}
           apps={form.apps}

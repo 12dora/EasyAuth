@@ -1,5 +1,6 @@
 import type { UseMutationResult } from "@tanstack/react-query";
 
+import type { MessageKey } from "../../../i18n/messages";
 import type { PortalGrantRow } from "../portalListPayload";
 import { groupCoveredSelectionKeys } from "./accessRequestCatalog";
 import {
@@ -22,6 +23,7 @@ export interface AccessRequestFormResultInput {
   expiresAtError: boolean;
   actions: AccessRequestActions;
   currentGrantsTruncated: boolean;
+  prefillErrorMessageKey: MessageKey | "";
 }
 
 export function buildAccessRequestFormResult(input: AccessRequestFormResultInput): AccessRequestFormResult {
@@ -29,6 +31,7 @@ export function buildAccessRequestFormResult(input: AccessRequestFormResultInput
     ...draftValues(input.fields),
     ...catalogSnapshot(input.fields, input.catalogView, input.currentGrants),
     ...submissionStatus(input),
+    prefillErrorMessageKey: input.prefillErrorMessageKey,
     ...formHandlers(input.fields, input.actions),
   };
 }

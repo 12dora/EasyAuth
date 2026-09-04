@@ -16,6 +16,7 @@ import {
 } from "./accessRequestSelection";
 import {
   ACCESS_REQUEST_MAX_APPROVERS,
+  defaultGrantTypeForRequestType,
   type AccessRequestActions,
   type AccessRequestFields,
   type AccessRequestType,
@@ -46,7 +47,7 @@ function buildTargetActions(fields: AccessRequestFields, currentGrants: PortalGr
     changeRequestType: (requestType: AccessRequestType) => {
       fields.setRequestType(requestType);
       resetTargetDraft(fields, "");
-      fields.setGrantType(requestType === "renew" ? "timed" : "permanent");
+      fields.setGrantType(defaultGrantTypeForRequestType(requestType));
       fields.setExpiresAt("");
     },
     changeBaseGrantId: (grantId: string) => {
