@@ -1,3 +1,6 @@
+import { Select } from "antd";
+import { useMemo } from "react";
+
 import { Field, SelectInput } from "../../../components/Field";
 import { useI18n, localizedField } from "../../../i18n/I18nProvider";
 import { formatAppDisplayName } from "../../../lib/appDisplayName";
@@ -61,6 +64,17 @@ export function RequestTargetPicker({
   onToggleGroup,
 }: RequestTargetPickerProps) {
   const { t, locale } = useI18n();
+  const authorizationGroupOptions = useMemo(
+    () =>
+      authorizationGroups.map((group) => ({
+        label: localizedField(locale, group.name, group.name_en),
+        value: group.key,
+        // 撤销时基础授权已有的组必须保持可选: 取消是撤销它, 再选回来是撤回这次撤销;
+        // 基础授权之外的组加进来必被后端拒(submission_validation._validate_revoke_subset)。
+        disabled: revokeBaseGrant !== null && !revokeBaseGrant.groupKeys.includes(group.key),
+      })),
+    [authorizationGroups, locale, revokeBaseGrant],
+  );
   return (
     <>
       <div className="grid gap-4 md:grid-cols-2">
@@ -78,54 +92,37 @@ export function RequestTargetPicker({
             ))}
           </SelectInput>
         </Field>
+        {/*
+          一条授权可以同时挂多个权限组, 因此这里是多选: 单选控件会让变更申请静默撤掉没被选中的那些组。
+          高度与圆角来自 APP_ANTD_THEME 的 controlHeight 36 / borderRadius 2, 与 SelectInput 的
+          h-9 rounded-[2px] 是同一组设计令牌, 不需要额外样式。
+        */}
+        <Field
+          label={t("portal.request.authorizationGroup")}
+          hint={
+            appKey
+              ? t("portal.request.authorizationGroupsSelected", { count: authorizationGroupKeys.length })
+              : t("portal.request.authorizationGroupNeedApp")
+          }
+        >
+          <Select
+            className="w-full"
+            mode="multiple"
+            value={authorizationGroupKeys}
+            options={authorizationGroupOptions}
+            placeholder={t("portal.request.authorizationGroupNone")}
+            notFoundContent={t("portal.request.authorizationGroupEmpty")}
+            allowClear
+            maxTagCount="responsive"
+            // 目录里的权限组可以有几十个, 保留 antd 多选默认的输入过滤; 但要按展示给用户的组名匹配,
+            // antd 默认拿 value(也就是 group.key)去比, 用户看不到 key 就无从下手。
+            optionFilterProp="label"
+            // 应用未选定时目录里没有任何可申请权限组, 控件直接置灰; 选定应用后 authorizationGroups 变化, 选项随之出现。
+            disabled={disabled || !appKey}
+            onChange={onAuthorizationGroupKeysChange}
+          />
+        </Field>
       </div>
-      {/* 一条授权可以同时挂多个权限组, 因此这里是多选: 单选控件会让变更申请静默撤掉没被选中的那些组。 */}
-      <Field
-        as="group"
-        label={t("portal.request.authorizationGroup")}
-        hint={
-          appKey
-            ? t("portal.request.authorizationGroupsSelected", { count: authorizationGroupKeys.length })
-            : t("portal.request.authorizationGroupNeedApp")
-        }
-      >
-        <div className="max-h-40 overflow-auto rounded-[2px] border border-ink/15 bg-paper-soft p-2">
-          {authorizationGroups.length > 0 ? (
-            <div className="flex flex-col gap-1.5">
-              {authorizationGroups.map((group) => (
-                <label
-                  key={`${group.app_key}:${group.key}`}
-                  className="inline-flex items-center gap-2 rounded-[2px] px-2 py-1.5 text-body text-ink-soft hover:bg-ink/5"
-                >
-                  <input
-                    type="checkbox"
-                    value={group.key}
-                    checked={authorizationGroupKeys.includes(group.key)}
-                    // 撤销时基础授权已有的组必须保持可勾: 取消是撤销它, 再勾回来是撤回这次撤销。
-                    disabled={
-                      disabled
-                      || !appKey
-                      || (revokeBaseGrant !== null && !revokeBaseGrant.groupKeys.includes(group.key))
-                    }
-                    onChange={(event) =>
-                      onAuthorizationGroupKeysChange(
-                        event.currentTarget.checked
-                          ? [...authorizationGroupKeys, group.key]
-                          : authorizationGroupKeys.filter((key) => key !== group.key),
-                      )
-                    }
-                  />
-                  <span className="text-ink">{localizedField(locale, group.name, group.name_en)}</span>
-                </label>
-              ))}
-            </div>
-          ) : (
-            <span className="block px-2 py-1.5 text-body text-ink-faint">
-              {appKey ? t("portal.request.authorizationGroupEmpty") : t("portal.request.authorizationGroupNeedApp")}
-            </span>
-          )}
-        </div>
-      </Field>
       <Field
         as="group"
         label={t("portal.request.directPermissions")}

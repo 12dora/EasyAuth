@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { StrictMode } from "react";
 import { MemoryRouter, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import { describe, expect, test, vi } from "vitest";
@@ -430,7 +430,7 @@ describe("PortalPage access request form", () => {
 
       await screen.findByRole("option", { name: "CRM" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
-      await user.click(authorizationGroupCheckbox("只读权限组"));
+      await user.click(await authorizationGroupOption(user, "只读权限组"));
       await user.type(screen.getByLabelText("申请原因"), "临时处理跨部门工单");
       await user.selectOptions(screen.getByLabelText("授权期限"), "timed");
 
@@ -530,10 +530,12 @@ describe("PortalPage access request form", () => {
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
       expect(screen.getByLabelText("选择审批人 app-owner")).toBeChecked();
       expect(screen.getByText("可申请权限组")).toBeVisible();
-      expect(authorizationGroupCheckbox("销售只读")).toHaveAttribute("value", "sales-reader");
-      expect(authorizationGroupCheckbox("订单运营包")).toHaveAttribute("value", "order-ops");
+      const groupDropdown = await openAuthorizationGroups(user);
+      expect(
+        [...groupDropdown.querySelectorAll(".ant-select-item-option")].map((option) => option.getAttribute("title")),
+      ).toEqual(["销售只读", "订单运营包"]);
 
-      await user.click(authorizationGroupCheckbox("订单运营包"));
+      await user.click(await authorizationGroupOption(user, "订单运营包"));
       expect(screen.getByLabelText("选择审批人 ops-owner")).toBeChecked();
       await user.type(screen.getByLabelText("申请原因"), "处理订单运营");
       await user.click(screen.getByRole("button", { name: "提交申请" }));
@@ -989,7 +991,7 @@ describe("PortalPage access request form", () => {
       expect(await screen.findByLabelText("选择审批人 app-owner")).toBeChecked();
 
       await user.click(screen.getByLabelText("选择审批人 app-owner"));
-      await user.click(authorizationGroupCheckbox("订单运营包"));
+      await user.click(await authorizationGroupOption(user, "订单运营包"));
 
       await user.type(screen.getByLabelText("搜索审批人"), "owner");
       expect(screen.getByLabelText("选择审批人 app-owner")).not.toBeChecked();
@@ -1776,7 +1778,7 @@ describe("PortalPage access request form", () => {
       const user = userEvent.setup();
 
       await waitFor(() => expect(screen.getByLabelText("基础授权")).toHaveValue("7"));
-      expect(authorizationGroupCheckbox("只读")).toBeChecked();
+      expect(await selectedAuthorizationGroupNames(user)).toEqual(["只读"]);
 
       await screen.findByRole("table", { name: "权限选择" });
       await user.click(permissionSelectorChip("展开 订单", "button"));
@@ -1790,7 +1792,7 @@ describe("PortalPage access request form", () => {
 
       await user.click(permissionSelectorChip("选择 orders.read 本人"));
 
-      expect(authorizationGroupCheckbox("只读")).not.toBeChecked();
+      expect(await selectedAuthorizationGroupNames(user)).toEqual([]);
       expect(permissionSelectorChip("选择 orders.read 本人")).not.toBeChecked();
       expect(permissionSelectorChip("选择 orders.export 本人")).toBeChecked();
       expect(await screen.findByRole("status")).toHaveTextContent("已取消覆盖该权限的权限组，其覆盖的其余权限已转为单独申请。");
@@ -1819,13 +1821,14 @@ describe("PortalPage access request form", () => {
       renderPortalRequestWithPrefill("7");
       const user = userEvent.setup();
 
-      await waitFor(() => expect(authorizationGroupCheckbox("只读")).toBeChecked());
+      await waitFor(() => expect(screen.getByText("已选 1 个权限组，可留空。")).toBeVisible());
+      expect(await selectedAuthorizationGroupNames(user)).toEqual(["只读"]);
       await screen.findByRole("table", { name: "权限选择" });
       await user.click(permissionSelectorChip("展开 订单", "button"));
 
       await user.click(permissionSelectorChip("选择权限组 orders 本人"));
 
-      expect(authorizationGroupCheckbox("只读")).not.toBeChecked();
+      expect(await selectedAuthorizationGroupNames(user)).toEqual([]);
       expect(permissionSelectorChip("选择 orders.read 本人")).not.toBeChecked();
       expect(permissionSelectorChip("选择 orders.export 本人")).not.toBeChecked();
       expect(permissionSelectorChip("选择权限组 orders 本人")).not.toBeChecked();
@@ -1849,8 +1852,9 @@ describe("PortalPage access request form", () => {
       await user.selectOptions(screen.getByLabelText("基础授权"), "7");
 
       // 后端要求续期目标与基础授权完全一致, 目标只能照抄不能改。
-      await waitFor(() => expect(authorizationGroupCheckbox("只读")).toBeChecked());
-      expect(authorizationGroupCheckbox("只读")).toBeDisabled();
+      // 只读态下下拉打不开, 已选权限组只能从计数提示上读(基础授权只有「只读」一个组)。
+      await waitFor(() => expect(screen.getByText("已选 1 个权限组，可留空。")).toBeVisible());
+      expect(authorizationGroupCombobox()).toBeDisabled();
       expect(screen.getByLabelText("应用")).toBeDisabled();
 
       // PermissionSelector 的只读态作用在整行上(见 PermissionSelectorBody), 不是逐个 disabled。
@@ -1871,7 +1875,7 @@ describe("PortalPage access request form", () => {
       await user.click(screen.getByLabelText("展开全选范围选项"));
 
       expect(screen.queryByRole("menu")).not.toBeInTheDocument();
-      expect(authorizationGroupCheckbox("只读")).toBeChecked();
+      expect(screen.getByText("已选 1 个权限组，可留空。")).toBeVisible();
       expect(within(screen.getByLabelText("权限选择状态")).getByText("已选 0 项")).toBeVisible();
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     } finally {
@@ -1893,9 +1897,10 @@ describe("PortalPage access request form", () => {
       await user.selectOptions(screen.getByLabelText("基础授权"), "7");
 
       // 撤销提交的目标是"撤销后保留下来的授权", 后端要求它是基础授权的子集: 加进新东西必被拒。
-      await waitFor(() => expect(authorizationGroupCheckbox("只读")).toBeChecked());
-      expect(authorizationGroupCheckbox("只读")).toBeEnabled();
-      expect(authorizationGroupCheckbox("删除")).toBeDisabled();
+      await waitFor(() => expect(screen.getByText("已选 1 个权限组，可留空。")).toBeVisible());
+      expect(await selectedAuthorizationGroupNames(user)).toEqual(["只读"]);
+      expect(await authorizationGroupOption(user, "只读")).not.toHaveClass("ant-select-item-option-disabled");
+      expect(await authorizationGroupOption(user, "删除")).toHaveClass("ant-select-item-option-disabled");
 
       await screen.findByRole("table", { name: "权限选择" });
       await user.click(permissionSelectorChip("展开 订单", "button"));
@@ -1913,7 +1918,7 @@ describe("PortalPage access request form", () => {
 
       // 取消权限组覆盖的权限 = 整组不再保留, 之后这些权限也进不了保留范围。
       await user.click(permissionSelectorChip("选择 orders.read 本人"));
-      expect(authorizationGroupCheckbox("只读")).not.toBeChecked();
+      expect(await selectedAuthorizationGroupNames(user)).toEqual([]);
       await waitFor(() => expect(permissionSelectorChip("选择 orders.read 本人")).toBeDisabled());
       expect(permissionSelectorChip("选择 orders.export 本人")).toBeDisabled();
     } finally {
@@ -2569,9 +2574,53 @@ function permissionSelectorChip(name: string, role: "checkbox" | "button" = "che
   return within(screen.getByRole("table", { name: "权限选择" })).getByRole(role, { name });
 }
 
-/** 权限组是多选勾选框(一条授权可以挂多个权限组), 按本地化组名定位。 */
-function authorizationGroupCheckbox(name: string) {
-  return within(screen.getByRole("group", { name: "可申请权限组" })).getByRole("checkbox", { name });
+/** 「可申请权限组」是 antd 多选下拉(一条授权可以挂多个权限组)。 */
+function authorizationGroupCombobox() {
+  return screen.getByLabelText("可申请权限组");
+}
+
+/** 已挂载的权限组下拉面板; 还没点开过时返回 null(antd 的下拉是延迟挂载的 portal)。 */
+function mountedAuthorizationGroupDropdown(): HTMLElement | null {
+  const listId = authorizationGroupCombobox().getAttribute("aria-controls") ?? "";
+  const dropdown = document.getElementById(listId)?.closest(".ant-select-dropdown");
+  return dropdown instanceof HTMLElement ? dropdown : null;
+}
+
+/** 点开(或复用已挂载的)权限组下拉。收起后 antd 仍保留面板, 因此选中态可以一直从这里读。 */
+async function openAuthorizationGroups(user: UserEvent): Promise<HTMLElement> {
+  const mounted = mountedAuthorizationGroupDropdown();
+  if (mounted) {
+    return mounted;
+  }
+  const selector = authorizationGroupCombobox().closest(".ant-select")?.querySelector(".ant-select-selector");
+  if (!(selector instanceof HTMLElement)) {
+    throw new Error("「可申请权限组」不是 antd Select");
+  }
+  await user.click(selector);
+  return waitFor(() => {
+    const dropdown = mountedAuthorizationGroupDropdown();
+    if (!dropdown) {
+      throw new Error("「可申请权限组」的下拉没有出现");
+    }
+    return dropdown;
+  });
+}
+
+/**
+ * 下拉里的某个权限组选项(选项以本地化组名作为 title)。
+ *
+ * 已选值读的是选项的 aria-selected 而不是控件里的标签: maxTagCount="responsive" 要靠
+ * ResizeObserver 量宽度决定显示几个标签, jsdom 的 stub 从不回调, 标签会全被折叠掉。
+ */
+async function authorizationGroupOption(user: UserEvent, name: string): Promise<HTMLElement> {
+  return within(await openAuthorizationGroups(user)).getByTitle(name);
+}
+
+async function selectedAuthorizationGroupNames(user: UserEvent): Promise<string[]> {
+  const dropdown = await openAuthorizationGroups(user);
+  return [...dropdown.querySelectorAll(".ant-select-item-option[aria-selected='true']")].map(
+    (option) => option.getAttribute("title") ?? "",
+  );
 }
 
 /** 「更新权限」跳转过来的变更申请: 路由 state 里带着基础授权预填。 */
