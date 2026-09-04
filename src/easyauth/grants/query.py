@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, cast
 
 from django.db.models import Q
@@ -11,6 +11,7 @@ from django.utils import timezone
 from easyauth.accounts.models import UserMirror
 from easyauth.accounts.status import parse_user_status
 from easyauth.applications.models import App, AppScope, AuthorizationGroupGrant
+from easyauth.grants.catalog_names import resolve_catalog_display_names
 from easyauth.grants.managed_users import (
     MANAGED_USERS_SCOPE,
     ManagedUsersDirectoryCache,
@@ -47,6 +48,11 @@ class ExpandedGrant:
     source_key: str
     expires_at: datetime | None
     resolved: ResolvedManagedUsers | None = None
+    # 目录展示名不参与相等比较: 既有调用方仍按 key 构造 ExpandedGrant。
+    permission_name: str = field(default="", compare=False)
+    permission_name_en: str = field(default="", compare=False)
+    scope_name: str = field(default="", compare=False)
+    scope_name_en: str = field(default="", compare=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -177,7 +183,10 @@ def _expanded_grants(
         directory_cache,
         now,
     )
-    return tuple(sorted(expanded, key=_expanded_grant_sort_key))
+    return _with_catalog_names(
+        grant.app_id,
+        tuple(sorted(expanded, key=_expanded_grant_sort_key)),
+    )
 
 
 def _active_scope_keys(app_id: int) -> set[str]:
@@ -298,6 +307,29 @@ def _supported_scope_keys(value: object) -> list[str]:
 
 def _expanded_grant_sort_key(grant: ExpandedGrant) -> tuple[str, str, str, str]:
     return (grant.permission, grant.scope, grant.source_type, grant.source_key)
+
+
+def _with_catalog_names(
+    app_id: int,
+    grants: tuple[ExpandedGrant, ...],
+) -> tuple[ExpandedGrant, ...]:
+    if not grants:
+        return grants
+    catalog = resolve_catalog_display_names(
+        app_id=app_id,
+        permission_keys={grant.permission for grant in grants},
+        scope_keys={grant.scope for grant in grants},
+    )
+    return tuple(
+        replace(
+            grant,
+            permission_name=catalog.permissions[grant.permission].name,
+            permission_name_en=catalog.permissions[grant.permission].name_en,
+            scope_name=catalog.scopes[grant.scope].name,
+            scope_name_en=catalog.scopes[grant.scope].name_en,
+        )
+        for grant in grants
+    )
 
 
 def _empty_snapshot(*, user_id: str, app: App, grant_version: int) -> PermissionSnapshot:
