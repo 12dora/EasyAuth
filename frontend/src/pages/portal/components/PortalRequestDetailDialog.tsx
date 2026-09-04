@@ -81,11 +81,12 @@ function flowSteps(row: PortalRequestRow, t: ReturnType<typeof useI18n>["t"], fo
     approvalStep(row, t, formatDateTime),
     effectiveStep(row, t, formatDateTime),
   ];
-  if (row.grant_expires_at) {
+  // grant_expired 表示审批通过后授权窗口已过、从未生效, 生效节点已经以错误态说明了原因, 不再挂一个到期节点。
+  if (row.grant_expires_at && row.status !== "grant_expired") {
     steps.push({
       title: t("portal.requests.flow.expiry"),
       description: formatDateTime(row.grant_expires_at),
-      status: row.status === "grant_expired" ? "finish" : "wait",
+      status: "wait",
     });
   }
   return steps;
@@ -127,10 +128,10 @@ function approvalStep(row: PortalRequestRow, t: ReturnType<typeof useI18n>["t"],
 
 function effectiveStep(row: PortalRequestRow, t: ReturnType<typeof useI18n>["t"], formatDateTime: DateTimeFormatter): FlowStep {
   const title = t("portal.requests.flow.applied");
-  if (row.status === "grant_failed" || row.status === "grant_conflict") {
+  // grant_expired 与失败/冲突同类: 后端语义是「授权期限已过, 未应用」, applied_at 恒为空。
+  if (row.status === "grant_failed" || row.status === "grant_conflict" || row.status === "grant_expired") {
     return { title, description: row.status_label, status: "error" };
   }
-  // 已过期的授权也是先生效过的, 判据用 applied_at 而不是「状态恰好等于 grant_applied」。
   if (row.applied_at) {
     return { title, description: formatDateTime(row.applied_at), status: "finish" };
   }

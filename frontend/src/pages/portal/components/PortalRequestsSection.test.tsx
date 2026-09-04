@@ -534,11 +534,11 @@ describe("PortalRequestsSection 详情弹窗", () => {
     }
   });
 
-  test("授权已过期: 到期节点走完", async () => {
+  test("授权期限已过未应用: 生效节点是错误态, 不再挂到期节点", async () => {
     stubRequests([
       requestRow({
         status: "grant_expired",
-        status_label: "授权期限已过",
+        status_label: "授权期限已过, 未应用",
         grant_type: "timed",
         grant_expires_at: "2026-08-01T10:00:00Z",
         decided_by: "manager-001",
@@ -546,15 +546,15 @@ describe("PortalRequestsSection 详情弹窗", () => {
         decided_by_name: "张主管",
         decided_at: "2026-07-02T10:00:00Z",
         approved_at: "2026-07-02T10:00:00Z",
-        applied_at: "2026-07-02T10:05:00Z",
       }),
     ]);
 
     try {
       await openDetail();
 
-      expect(stepStatus("权限生效")).toBe("finish");
-      expect(stepStatus("到期")).toBe("finish");
+      expect(stepTitles()).toEqual(["提交申请", "审批", "权限生效"]);
+      expect(stepStatus("权限生效")).toBe("error");
+      expect(stepDescription("权限生效")).toBe("授权期限已过, 未应用");
     } finally {
       vi.unstubAllGlobals();
     }
