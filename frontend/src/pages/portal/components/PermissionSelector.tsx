@@ -1,5 +1,5 @@
-import { getCoreRowModel, getPaginationRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
+import { useMemo, useState } from "react";
 import { EmptyState } from "../../../components/ui/EmptyState";
 import { useI18n } from "../../../i18n/I18nProvider";
 import type { Translator } from "../../../lib/status";
@@ -92,21 +92,13 @@ export function PermissionSelector({
       }),
     [coveredKeySet, displaySelectedKeys, locale, onPermissionGroupScopeChange, onPermissionScopeChange, onToggleGroup, t],
   );
+  // 不挂 getPaginationRowModel: 权限目录整棵树一次渲染完, 由表格容器纵向滚动。
   const table = useReactTable({
     data: displayRows,
     columns,
     getCoreRowModel: getCoreRowModel(),
-    getPaginationRowModel: getPaginationRowModel(),
     getRowId: (row) => row.id,
   });
-  const previousShowSelectedOnly = useRef(showSelectedOnly);
-
-  useEffect(() => {
-    if (previousShowSelectedOnly.current !== showSelectedOnly) {
-      previousShowSelectedOnly.current = showSelectedOnly;
-      table.setPageIndex(0);
-    }
-  }, [showSelectedOnly, table]);
 
   const placeholder = selectorPlaceholder({ appKey, loading, errorMessage, isEmpty: rows.length === 0 }, t);
   if (placeholder) {
@@ -117,7 +109,8 @@ export function PermissionSelector({
     );
   }
 
-  const currentPageRows = table.getRowModel().rows;
+  // 表格不分页, 工具栏因此作用于当前渲染出来的全部行(展开的权限组 + 未折叠的权限)。
+  const visibleRows = table.getRowModel().rows;
 
   return (
     <div className="permission-selector__surface">
@@ -125,11 +118,11 @@ export function PermissionSelector({
         selectedCount={selectedKeys.length}
         showSelectedOnly={showSelectedOnly}
         onShowSelectedOnlyChange={setShowSelectedOnly}
-        onExpandAll={() => onExpandGroups(currentPageGroupKeysFromRows(currentPageRows))}
-        onCollapseAll={() => onCollapseGroups(currentPageGroupKeysFromRows(currentPageRows))}
-        onSelectAll={() => onSelectPermissionKeys(currentPageSelectionKeysFromRows(currentPageRows).filter((key) => !coveredKeySet.has(key)))}
-        onSelectScope={(scopeKey) => onSelectPermissionKeys(currentPageSelectionKeysFromRows(currentPageRows, scopeKey).filter((key) => !coveredKeySet.has(key)))}
-        onClear={() => onClearPermissionKeys(currentPageSelectionKeysFromRows(currentPageRows))}
+        onExpandAll={() => onExpandGroups(currentPageGroupKeysFromRows(visibleRows))}
+        onCollapseAll={() => onCollapseGroups(currentPageGroupKeysFromRows(visibleRows))}
+        onSelectAll={() => onSelectPermissionKeys(currentPageSelectionKeysFromRows(visibleRows).filter((key) => !coveredKeySet.has(key)))}
+        onSelectScope={(scopeKey) => onSelectPermissionKeys(currentPageSelectionKeysFromRows(visibleRows, scopeKey).filter((key) => !coveredKeySet.has(key)))}
+        onClear={() => onClearPermissionKeys(currentPageSelectionKeysFromRows(visibleRows))}
       />
       <PermissionSelectorTable
         table={table}

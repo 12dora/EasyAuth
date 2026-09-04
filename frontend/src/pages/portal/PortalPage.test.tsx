@@ -84,7 +84,7 @@ describe("PortalPage access request form", () => {
       const url = String(input);
       if (url === "/portal/api/v1/request-catalog") {
         return jsonResponse({
-          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["manager-001"] }],
+          apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: ["manager-001"] }],
           approver_options: [{ user_id: "manager-001", name: "直属主管" }],
           authorization_groups: [],
           permission_groups: [
@@ -128,7 +128,7 @@ describe("PortalPage access request form", () => {
       const url = String(input);
       if (url === "/portal/api/v1/request-catalog") {
         return jsonResponse({
-          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["manager-001"] }],
+          apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: ["manager-001"] }],
           approver_options: [{ user_id: "manager-001", name: "直属主管" }],
           authorization_groups: [],
           permission_groups: [
@@ -202,7 +202,7 @@ describe("PortalPage access request form", () => {
       const url = String(input);
       if (url === "/portal/api/v1/request-catalog") {
         return jsonResponse({
-          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["manager-001"] }],
+          apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: ["manager-001"] }],
           approver_options: [{ user_id: "manager-001", name: "直属主管" }],
           authorization_groups: [],
           permission_groups: [],
@@ -279,7 +279,7 @@ describe("PortalPage access request form", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       if (String(input) === "/portal/api/v1/request-catalog") {
         return jsonResponse({
-          apps: [{ id: 1, app_key: "easytrade", name: "EasyTrade", default_approver_user_ids: ["manager-001"] }],
+          apps: [{ id: 1, app_key: "easytrade", name: "EasyTrade", alias: "", default_approver_user_ids: ["manager-001"] }],
           approver_options: [{ user_id: "manager-001", name: "直属主管" }],
           authorization_groups: [],
           permission_groups: [{
@@ -317,7 +317,7 @@ describe("PortalPage access request form", () => {
       const url = String(input);
       if (url === "/portal/api/v1/request-catalog") {
         return jsonResponse({
-          apps: [{ id: 1, app_key: "crm", name: "CRM" }],
+          apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "" }],
           approver_options: [{ user_id: "manager-001", name: "直属主管" }],
           authorization_groups: [],
           permission_groups: [],
@@ -349,7 +349,7 @@ describe("PortalPage access request form", () => {
 
   test("申请权限表单按单列流程展示核心字段", async () => {
     const fetchMock = permissionSelectorFetchMock({
-      apps: [{ id: 1, app_key: "crm", name: "CRM" }],
+      apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "" }],
       approver_options: [{ user_id: "app-owner", name: "应用负责人" }],
       authorization_groups: [{ id: 11, app_key: "crm", key: "reader", kind: "role", name: "只读权限组" }],
       permission_groups: [],
@@ -380,7 +380,7 @@ describe("PortalPage access request form", () => {
       const url = String(input);
       if (url === "/portal/api/v1/request-catalog") {
         return jsonResponse({
-          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["manager-001"] }],
+          apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: ["manager-001"] }],
           approver_options: [{ user_id: "manager-001", name: "直属主管" }],
           authorization_groups: [
             { id: 11, app_key: "crm", key: "reader", kind: "role", name: "只读权限组", requestable: true, requires_approval: true },
@@ -423,7 +423,7 @@ describe("PortalPage access request form", () => {
       const url = String(input);
       if (url === "/portal/api/v1/request-catalog") {
         return jsonResponse({
-          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["me", "boss"] }],
+          apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: ["me", "boss"] }],
           approver_options: [
             { user_id: "me", name: "我本人" },
             { user_id: "boss", name: "老板" },
@@ -461,7 +461,7 @@ describe("PortalPage access request form", () => {
       const url = String(input);
       if (url === "/portal/api/v1/request-catalog") {
         return jsonResponse({
-          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["app-owner"] }],
+          apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: ["app-owner"] }],
           approver_options: [
             { user_id: "app-owner", name: "应用负责人" },
             { user_id: "ops-owner", name: "运营负责人" },
@@ -537,7 +537,7 @@ describe("PortalPage access request form", () => {
       const url = String(input);
       if (url === "/portal/api/v1/request-catalog") {
         return jsonResponse({
-          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["app-owner"] }],
+          apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: ["app-owner"] }],
           approver_options: [
             { user_id: "app-owner", name: "应用负责人" },
             { user_id: "security-owner", name: "安全负责人" },
@@ -646,7 +646,7 @@ describe("PortalPage access request form", () => {
       const url = String(input);
       if (url === "/portal/api/v1/request-catalog") {
         return jsonResponse({
-          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["app-owner"] }],
+          apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: ["app-owner"] }],
           approver_options: [{ user_id: "app-owner", name: "应用负责人" }],
           authorization_groups: [],
           permission_groups: [
@@ -758,7 +758,7 @@ describe("PortalPage access request form", () => {
       const url = String(input);
       if (url === "/portal/api/v1/request-catalog") {
         return jsonResponse({
-          apps: [{ id: 1, app_key: "crm", name: "CRM" }],
+          apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "" }],
           approver_options: [],
           authorization_groups: [],
           permission_groups: [
@@ -806,7 +806,7 @@ describe("PortalPage access request form", () => {
       const url = String(input);
       if (url === "/portal/api/v1/request-catalog") {
         return jsonResponse({
-          apps: [{ id: 1, app_key: "crm", name: "CRM" }],
+          apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "" }],
           approver_options: [],
           authorization_groups: [],
           permission_groups: [
@@ -867,7 +867,7 @@ describe("PortalPage access request form", () => {
       const url = String(input);
       if (url === "/portal/api/v1/request-catalog") {
         return jsonResponse({
-          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["manager-001"] }],
+          apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: ["manager-001"] }],
           approver_options: [{ user_id: "manager-001", name: "直属主管", department: "销售部", email: "manager@example.test" }],
           authorization_groups: [],
           permission_groups: [],
@@ -904,8 +904,8 @@ describe("PortalPage access request form", () => {
       if (url === "/portal/api/v1/request-catalog") {
         return jsonResponse({
           apps: [
-            { id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["app-owner"] },
-            { id: 2, app_key: "erp", name: "ERP", default_approver_user_ids: ["finance-owner"] },
+            { id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: ["app-owner"] },
+            { id: 2, app_key: "erp", name: "ERP", alias: "", default_approver_user_ids: ["finance-owner"] },
           ],
           approver_options: [
             { user_id: "app-owner", name: "应用负责人" },
@@ -960,7 +960,7 @@ describe("PortalPage access request form", () => {
       const url = String(input);
       if (url === "/portal/api/v1/request-catalog") {
         return jsonResponse({
-          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["app-owner"] }],
+          apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: ["app-owner"] }],
           approver_options: [
             { user_id: "app-owner", name: "应用负责人" },
             { user_id: "security-owner", name: "安全负责人" },
@@ -1007,7 +1007,7 @@ describe("PortalPage access request form", () => {
       const url = String(input);
       if (url === "/portal/api/v1/request-catalog") {
         return jsonResponse({
-          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["app-owner"] }],
+          apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: ["app-owner"] }],
           approver_options: [
             { user_id: "app-owner", name: "应用负责人" },
             { user_id: "direct-manager", name: "直属上级" },
@@ -1315,11 +1315,38 @@ describe("PortalPage access request form", () => {
       expect(within(permissionTable).getByText("导出订单")).toBeVisible();
       expect(within(permissionTable).queryByText("查看订单")).not.toBeInTheDocument();
       expect(within(permissionTable).queryByText("查看看板")).not.toBeInTheDocument();
-      expect(screen.getByText("第 1-2 条 / 共 2 条")).toBeVisible();
 
       await user.click(within(screen.getByLabelText("权限选择状态")).getByRole("switch", { name: "仅看已选" }));
       expect(within(permissionTable).getByText("查看订单")).toBeVisible();
       expect(within(permissionTable).getByText("查看看板")).toBeVisible();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  test("权限选择表格没有分页控件, 整棵权限树装在固定高度的滚动容器里", async () => {
+    const fetchMock = permissionSelectorFetchMock(portalPermissionSelectorCatalog);
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage();
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "CRM (crm)" });
+      await user.selectOptions(screen.getByLabelText("应用"), "crm");
+      const permissionTable = await screen.findByRole("table", { name: "权限选择" });
+
+      expect(screen.queryByLabelText("每页条目数")).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "下一页" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "上一页" })).not.toBeInTheDocument();
+      expect(screen.queryByText(/共 \d+ 条/)).not.toBeInTheDocument();
+
+      const scrollContainer = permissionTable.parentElement;
+      expect(scrollContainer).toHaveClass("max-h-[28rem]", "overflow-y-auto", "overflow-x-auto");
+      expect(permissionTable.querySelector("thead")).toHaveClass("sticky", "top-0");
+
+      // 「仅看已选」开关仍在, 只是不再有分页条陪着它。
+      expect(screen.getByRole("switch", { name: "仅看已选" })).toBeVisible();
     } finally {
       vi.unstubAllGlobals();
     }
@@ -1346,7 +1373,7 @@ describe("PortalPage access request form", () => {
     }
   });
 
-  test("工具条只操作当前页且翻页保留已选权限范围", async () => {
+  test("工具条作用于全部已渲染行, 清空后回到零选中", async () => {
     const fetchMock = permissionSelectorFetchMock(portalPermissionSelectorCatalog);
     vi.stubGlobal("fetch", fetchMock);
 
@@ -1357,17 +1384,10 @@ describe("PortalPage access request form", () => {
       await screen.findByRole("option", { name: "CRM (crm)" });
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
 
-      await user.selectOptions(screen.getByLabelText("每页条目数"), "5");
       await user.click(screen.getByRole("button", { name: "展开全部" }));
       await user.click(screen.getByRole("button", { name: "全选" }));
 
       expect(within(screen.getByLabelText("权限选择状态")).getByText(/已选 [1-9]\d* 项/)).toBeVisible();
-
-      if (screen.queryByRole("button", { name: "下一页" })?.hasAttribute("disabled") === false) {
-        await user.click(screen.getByRole("button", { name: "下一页" }));
-        expect(within(screen.getByLabelText("权限选择状态")).getByText(/已选 [1-9]\d* 项/)).toBeVisible();
-        await user.click(screen.getByRole("button", { name: "上一页" }));
-      }
 
       await user.click(screen.getByRole("button", { name: "清空" }));
       expect(screen.getByText("已选 0 项")).toBeVisible();
@@ -1408,7 +1428,7 @@ describe("PortalPage access request form", () => {
       const url = String(input);
       if (url === "/portal/api/v1/request-catalog") {
         return jsonResponse({
-          apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["app-owner"] }],
+          apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: ["app-owner"] }],
           approver_options: [{ user_id: "app-owner", name: "应用负责人" }],
           authorization_groups: [],
           permission_groups: [
@@ -1528,7 +1548,7 @@ describe("PortalPage access request form", () => {
 
   test("权限组 children 中的权限叶子参与渲染和父组权限范围选择", async () => {
     const fetchMock = permissionSelectorFetchMock({
-      apps: [{ id: 1, app_key: "crm", name: "CRM" }],
+      apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "" }],
       approver_options: [],
       authorization_groups: [],
       permission_groups: [
@@ -1593,7 +1613,7 @@ describe("PortalPage access request form", () => {
       scopes: [{ key: "SELF", name: "本人" }],
     };
     const fetchMock = permissionSelectorFetchMock({
-      apps: [{ id: 1, app_key: "easytrade", name: "EasyTrade" }],
+      apps: [{ id: 1, app_key: "easytrade", name: "EasyTrade", alias: "" }],
       approver_options: [],
       authorization_groups: [],
       permission_groups: [
@@ -2304,7 +2324,7 @@ function portalRequestRow(overrides: Record<string, unknown> = {}) {
 }
 
 const portalPermissionSelectorCatalog = {
-  apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["app-owner"] }],
+  apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: ["app-owner"] }],
   approver_options: [{ user_id: "app-owner", name: "应用负责人" }],
   authorization_groups: [],
   permission_groups: [
@@ -2346,7 +2366,7 @@ const portalPermissionSelectorCatalog = {
 };
 
 const threeLevelPermissionSelectorCatalog = {
-  apps: [{ id: 1, app_key: "crm", name: "CRM", default_approver_user_ids: ["app-owner"] }],
+  apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: ["app-owner"] }],
   approver_options: [{ user_id: "app-owner", name: "应用负责人" }],
   authorization_groups: [],
   permission_groups: [
@@ -2385,7 +2405,7 @@ const threeLevelPermissionSelectorCatalog = {
 };
 
 const emptyDirectPermissionCatalog = {
-  apps: [{ id: 1, app_key: "crm", name: "CRM" }],
+  apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "" }],
   approver_options: [{ user_id: "app-owner", name: "应用负责人" }],
   authorization_groups: [],
   permission_groups: [],

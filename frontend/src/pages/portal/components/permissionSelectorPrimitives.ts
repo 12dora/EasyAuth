@@ -8,7 +8,12 @@
  */
 export const TABLE_ROOT_CLASS = "min-w-[48rem] border-separate border-spacing-0 text-body";
 
-export const TABLE_HEAD_CLASS = "bg-paper-deep/60";
+/*
+ * 表头底色必须不透明: 表头粘在滚动容器顶部(见 PermissionSelectorTable),
+ * 半透明底色会把从它底下滚过去的权限行透上来叠成两层字。
+ * 取值与 permission-selector.css 里粘住的权限列表头(--paper-deep)同一个口径。
+ */
+export const TABLE_HEAD_CLASS = "bg-paper-deep";
 
 export const TABLE_ROW_CLASS = "group transition-colors hover:bg-accent/5";
 
