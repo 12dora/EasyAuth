@@ -99,6 +99,7 @@ type PermissionSelectionActions = Pick<
 function buildPermissionSelectionActions(fields: AccessRequestFields, catalogView: CatalogView): PermissionSelectionActions {
   return {
     changeAuthorizationGroupKeys: (groupKeys: string[]) => {
+      assertTargetIsEditable(fields.requestType);
       const nextGroupKeys = uniqueStrings(groupKeys);
       fields.setAuthorizationGroupKeys(nextGroupKeys);
       fields.setGroupMaterializationNoticeKey("");
@@ -155,12 +156,16 @@ function displaySelectionKeys(fields: AccessRequestFields, catalogView: CatalogV
  * 把这些权限组从目标里摘掉, 把它们覆盖的其余权限转成直接申请, 再在这份基线上执行本次变更。
  * 没有覆盖到这一项的权限组保持选中。
  * 被落地的权限组覆盖但目录里不能单独申请的权限只能丢弃, 由提示文案明确告诉用户。
+ *
+ * 只有 grant / change 能这样落地: renew 完全不能改目标, revoke 只能整组摘掉,
+ * 见 assertTargetIsEditable 与下面撤销分支的注释。
  */
 function applySelectionChange(
   fields: AccessRequestFields,
   catalogView: CatalogView,
   changeSelection: (selectionKeys: string[]) => string[],
 ): void {
+  assertTargetIsEditable(fields.requestType);
   const groupKeys = fields.authorizationGroupKeys;
   const coveredKeys = groupCoveredSelectionKeys(groupKeys, catalogView);
   const nextDisplayKeys = changeSelection(displaySelectionKeys(fields, catalogView));
@@ -177,6 +182,19 @@ function applySelectionChange(
     groupCoveredSelectionKeys([groupKey], catalogView).some((key) => removedCoveredKeys.has(key)),
   );
   const keptGroupKeys = groupKeys.filter((groupKey) => !materializedGroupKeys.includes(groupKey));
+  if (fields.requestType === "revoke") {
+    // 撤销申请提交的目标是"撤销之后保留下来的授权"(application_grants._apply_revoke_request 直接
+    // 拿它当新的成员关系), 后端要求它是基础授权的子集(submission_validation._validate_revoke_subset)。
+    // 把权限组落地成逐项直接申请会引入基础授权里没有的直接权限, 必然被拒, 所以撤销只能整组摘掉:
+    // 取消权限组覆盖的任一权限 = 该权限组整体不再保留。
+    fields.setAuthorizationGroupKeys(keptGroupKeys);
+    fields.setSelectedPermissionKeys((current) =>
+      filterDirectGrantSelections(changeSelection(current), keptGroupKeys, catalogView),
+    );
+    fields.setGroupMaterializationNoticeKey("portal.request.groupRevokedWhole");
+    return;
+  }
+
   const materializedCoveredKeys = groupCoveredSelectionKeys(materializedGroupKeys, catalogView);
   const requestableCoveredKeys = materializedCoveredKeys.filter((key) =>
     selectionIsDirectlyRequestable(key, catalogView),
@@ -194,6 +212,17 @@ function applySelectionChange(
       ? "portal.request.groupMaterialized"
       : "portal.request.groupMaterializedPartially",
   );
+}
+
+/**
+ * 续期的目标必须与基础授权一模一样(submission_validation._validate_renew_targets: 权限组集合与
+ * 直接权限集合都要求相等), 所以整个申请目标不可编辑。界面上目标选择器对 renew 是只读的,
+ * 走到这里说明接线出了问题, 直接失败而不是悄悄改出一份必被后端拒绝的草稿。
+ */
+function assertTargetIsEditable(requestType: AccessRequestType): void {
+  if (requestType === "renew") {
+    throw new Error("续期申请不能修改申请目标：续期目标必须与基础授权完全一致。");
+  }
 }
 
 /** 权限组可以覆盖当前用户在目录里看不到的权限范围, 那部分无法转成直接申请。 */

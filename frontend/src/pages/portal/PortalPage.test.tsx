@@ -1833,6 +1833,32 @@ describe("PortalPage access request form", () => {
     }
   });
 
+  test("续期申请的申请目标整体只读", async () => {
+    const fetchMock = coveredPermissionRequestFetchMock([]);
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage();
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "CRM" });
+      await user.selectOptions(screen.getByLabelText("申请类型"), "renew");
+      await screen.findByRole("option", { name: "CRM v3" });
+      await user.selectOptions(screen.getByLabelText("基础授权"), "7");
+
+      // 后端要求续期目标与基础授权完全一致, 目标只能照抄不能改。
+      await waitFor(() => expect(authorizationGroupCheckbox("只读")).toBeChecked());
+      expect(authorizationGroupCheckbox("只读")).toBeDisabled();
+      expect(screen.getByLabelText("应用")).toBeDisabled();
+
+      // PermissionSelector 的只读态作用在整行上(见 PermissionSelectorBody), 不是逐个 disabled。
+      await screen.findByRole("table", { name: "权限选择" });
+      expect(permissionSelectorChip("选择权限组 orders 本人").closest("tr")).toHaveClass("pointer-events-none");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   test("应用存在但没有直接权限时直接权限区域显示空状态", async () => {
     const fetchMock = permissionSelectorFetchMock(emptyDirectPermissionCatalog);
     vi.stubGlobal("fetch", fetchMock);

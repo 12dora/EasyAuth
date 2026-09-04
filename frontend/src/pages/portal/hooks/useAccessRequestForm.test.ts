@@ -547,3 +547,175 @@ describe("useAccessRequestForm", () => {
     expect(result.current.reason).toHaveLength(ACCESS_REQUEST_MAX_REASON_LENGTH);
   });
 });
+
+/** 目标可编辑到什么程度由后端 submission_validation 决定, 四种申请类型各不相同。 */
+describe("useAccessRequestForm 按申请类型约束申请目标", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  const READ_KEY = directGrantSelectionKey("orders.read", "SELF");
+  const EXPORT_KEY = directGrantSelectionKey("orders.export", "SELF");
+  const AUDIT_KEY = directGrantSelectionKey("orders.audit", "SELF");
+
+  function lifecycleCatalog() {
+    return scopedCatalog({
+      ungrouped_permissions: [
+        { id: 101, app_key: "crm", key: "orders.read", name: "查看订单", scopes: [{ key: "SELF", name: "本人" }] },
+        { id: 102, app_key: "crm", key: "orders.export", name: "导出订单", scopes: [{ key: "SELF", name: "本人" }] },
+        { id: 103, app_key: "crm", key: "orders.audit", name: "审计订单", scopes: [{ key: "SELF", name: "本人" }] },
+      ],
+      authorization_groups: [
+        {
+          id: 11,
+          app_key: "crm",
+          key: "reader",
+          kind: "role",
+          name: "只读",
+          requestable: true,
+          grants: [
+            { permission_key: "orders.read", scope_key: "SELF" },
+            { permission_key: "orders.export", scope_key: "SELF" },
+          ],
+        },
+      ],
+    });
+  }
+
+  function expandedGrant(permission: string, sourceType: string, sourceKey: string | null) {
+    return {
+      permission,
+      scope: "SELF",
+      source_type: sourceType,
+      source_key: sourceKey,
+      permission_name: permission,
+      permission_name_en: permission,
+      scope_name: "本人",
+      scope_name_en: "Self",
+    };
+  }
+
+  /** 一条 reader 权限组 + 一项直接权限的当前授权, 供 change / revoke / renew 当基础授权。 */
+  function lifecycleGrantList() {
+    return {
+      data: [
+        {
+          grant_id: 7,
+          grant_revision: 3,
+          app_key: "crm",
+          app_name: "CRM",
+          app_alias: "",
+          grant_type: "timed",
+          grant_expires_at: "2030-01-01T00:00:00+00:00",
+          grant_version: 5,
+          catalog_version: 2,
+          snapshot_version: "v1",
+          groups: [{ key: "reader", kind: "role", name: "只读" }],
+          grants: [
+            expandedGrant("orders.read", "group", "reader"),
+            expandedGrant("orders.export", "group", "reader"),
+            expandedGrant("orders.audit", "direct", null),
+          ],
+        },
+      ],
+      pagination: { page: 1, page_size: 100, total_items: 1, total_pages: 1 },
+    };
+  }
+
+  function stubLifecycleFetch() {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/request-catalog") {
+        return jsonResponse(lifecycleCatalog());
+      }
+      if (url === "/portal/api/v1/me/grants?page=1&page_size=100") {
+        return jsonResponse(lifecycleGrantList());
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+  }
+
+  async function renderFormWithBaseGrant(requestType: "change" | "revoke" | "renew") {
+    stubLifecycleFetch();
+    const view = await renderReadyForm();
+    act(() => view.result.current.changeRequestType(requestType));
+    await waitFor(() => expect(view.result.current.currentGrants).toHaveLength(1));
+    act(() => view.result.current.changeBaseGrantId("7"));
+    await waitFor(() => expect(view.result.current.authorizationGroupKeys).toEqual(["reader"]));
+    return view;
+  }
+
+  function ordersPermission(view: Awaited<ReturnType<typeof renderReadyForm>>, key: string) {
+    const permission = view.result.current.ungroupedPermissions.find((item) => item.key === key);
+    expect(permission).toBeDefined();
+    return permission!;
+  }
+
+  test("grant: 取消权限组覆盖的权限把该组落地成逐项直接申请", async () => {
+    stubLifecycleFetch();
+    const view = await renderReadyForm();
+
+    act(() => view.result.current.changeAppKey("crm"));
+    act(() => view.result.current.changeAuthorizationGroupKeys(["reader"]));
+    act(() => view.result.current.changePermissionScope(ordersPermission(view, "orders.read"), "SELF"));
+
+    expect(view.result.current.authorizationGroupKeys).toEqual([]);
+    expect(view.result.current.selectedPermissionKeys).toEqual([EXPORT_KEY]);
+    expect(view.result.current.toastMessageKey).toBe("portal.request.groupMaterialized");
+  });
+
+  test("change: 取消权限组覆盖的权限把该组落地, 原有直接权限保留", async () => {
+    const view = await renderFormWithBaseGrant("change");
+    expect(view.result.current.selectedPermissionKeys).toEqual([AUDIT_KEY]);
+    expect(view.result.current.groupCoveredSelectionKeys).toEqual([READ_KEY, EXPORT_KEY]);
+
+    act(() => view.result.current.changePermissionScope(ordersPermission(view, "orders.read"), "SELF"));
+
+    expect(view.result.current.authorizationGroupKeys).toEqual([]);
+    expect(view.result.current.selectedPermissionKeys).toEqual([AUDIT_KEY, EXPORT_KEY]);
+    expect(view.result.current.toastMessageKey).toBe("portal.request.groupMaterialized");
+  });
+
+  test("revoke: 取消权限组覆盖的权限整组撤销, 不落地成直接权限", async () => {
+    const view = await renderFormWithBaseGrant("revoke");
+
+    act(() => view.result.current.changePermissionScope(ordersPermission(view, "orders.read"), "SELF"));
+
+    // 撤销目标是"保留下来的授权", 必须是基础授权的子集: 落地会引入基础授权里没有的直接权限。
+    expect(view.result.current.authorizationGroupKeys).toEqual([]);
+    expect(view.result.current.selectedPermissionKeys).toEqual([AUDIT_KEY]);
+    expect(view.result.current.groupCoveredSelectionKeys).toEqual([]);
+    expect(view.result.current.toastMessageKey).toBe("portal.request.groupRevokedWhole");
+  });
+
+  test("revoke: 取消直接权限只影响这一项, 权限组照旧保留", async () => {
+    const view = await renderFormWithBaseGrant("revoke");
+
+    act(() => view.result.current.changePermissionScope(ordersPermission(view, "orders.audit"), "SELF"));
+
+    expect(view.result.current.authorizationGroupKeys).toEqual(["reader"]);
+    expect(view.result.current.selectedPermissionKeys).toEqual([]);
+    expect(view.result.current.toastMessageKey).toBe("");
+  });
+
+  test("renew: 目标完全不可编辑, 任何改动都直接失败", async () => {
+    const view = await renderFormWithBaseGrant("renew");
+    expect(view.result.current.selectedPermissionKeys).toEqual([AUDIT_KEY]);
+
+    expect(() =>
+      act(() => view.result.current.changePermissionScope(ordersPermission(view, "orders.audit"), "SELF")),
+    ).toThrow("续期申请不能修改申请目标");
+    expect(() => act(() => view.result.current.selectPermissionKeys([READ_KEY]))).toThrow(
+      "续期申请不能修改申请目标",
+    );
+    expect(() => act(() => view.result.current.clearPermissionKeys([AUDIT_KEY]))).toThrow(
+      "续期申请不能修改申请目标",
+    );
+    expect(() => act(() => view.result.current.changeAuthorizationGroupKeys([]))).toThrow(
+      "续期申请不能修改申请目标",
+    );
+
+    expect(view.result.current.authorizationGroupKeys).toEqual(["reader"]);
+    expect(view.result.current.selectedPermissionKeys).toEqual([AUDIT_KEY]);
+  });
+});

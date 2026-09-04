@@ -112,6 +112,7 @@ export const zhCN = {
   // 取消权限组覆盖的某项权限时，权限组会被落地为逐项直接申请（权限组是整体授予的，少一项就不再是它）。
   "portal.request.groupMaterialized": "已取消覆盖该权限的权限组，其覆盖的其余权限已转为单独申请。",
   "portal.request.groupMaterializedPartially": "已取消覆盖该权限的权限组，其覆盖的其余权限已转为单独申请；其中部分权限无法单独申请，已从本次申请中移除。",
+  "portal.request.groupRevokedWhole": "撤销申请只能按整组撤销：覆盖该权限的权限组已整体移出保留范围。",
 } as const;
 
 export const en: Record<keyof typeof zhCN, string> = {
@@ -219,4 +220,5 @@ export const en: Record<keyof typeof zhCN, string> = {
 
   "portal.request.groupMaterialized": "The permission groups covering that permission were removed; their remaining permissions are now requested individually.",
   "portal.request.groupMaterializedPartially": "The permission groups covering that permission were removed; their remaining permissions are now requested individually. Some of them cannot be requested individually and were dropped from this request.",
+  "portal.request.groupRevokedWhole": "Revoke requests can only drop whole permission groups: every group covering that permission was removed from the retained scope.",
 };

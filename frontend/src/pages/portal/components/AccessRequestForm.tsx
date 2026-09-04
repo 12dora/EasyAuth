@@ -15,6 +15,8 @@ export function AccessRequestForm({ currentUserId = "" }: { currentUserId?: stri
   const form = useAccessRequestForm(currentUserId, { prefill, onPrefillApplied: clearRouterState });
 
   const fieldsDisabled = form.isSubmitting;
+  // 续期目标必须与基础授权完全一致(后端 _validate_renew_targets), 因此目标选择器整体只读。
+  const targetPickerDisabled = fieldsDisabled || form.requestType === "renew";
 
   return (
     <PanelSurface>
@@ -34,7 +36,7 @@ export function AccessRequestForm({ currentUserId = "" }: { currentUserId?: stri
           expandedGroupKeys={form.expandedGroupKeys}
           catalogIsLoading={form.catalogIsLoading}
           catalogErrorMessage={form.catalogErrorMessage}
-          disabled={fieldsDisabled}
+          disabled={targetPickerDisabled}
           onAppKeyChange={form.changeAppKey}
           onAuthorizationGroupKeysChange={form.changeAuthorizationGroupKeys}
           onPermissionScopeChange={form.changePermissionScope}
