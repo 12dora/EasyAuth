@@ -16,7 +16,6 @@ from easyauth.applications.models import (
     ApprovalRule,
     AppScope,
     AuthorizationGroup,
-    AuthorizationGroupGrant,
     Permission,
 )
 from easyauth.grants.models import AccessGrant, AccessGrantPermission
