@@ -36,7 +36,9 @@ node scripts/check-build-budget.mjs
 
 - 入口 `main` 原始体积不超过 `80 KiB`，gzip 不超过 `30 KiB`；
 - 单个同步 chunk 原始体积不超过 `360 KiB`，gzip 不超过 `110 KiB`；
-  例外：`antd` chunk 单独走 `CHUNK_BUDGET_OVERRIDES`，上限 `720 KiB` / gzip `230 KiB`。
+  例外：`antd` chunk 单独走 `CHUNK_BUDGET_OVERRIDES`，上限 `760 KiB` / gzip `240 KiB`
+  （2026-09-04 从 720 / 230 上调：门户「我的申请」详情弹窗接入 `Modal` + `Steps` + `Tooltip`，
+  实测 antd chunk 732 KiB / gzip 229 KiB；antd 是手工 chunk，页面级懒加载不会把这些组件拆出去）。
   之所以不整体调高 `synchronousChunk*`，是为了让 `vendor` 继续守住 360 KiB —— 否则
   antd 的体积会顺带把 vendor 的门禁一起放松掉；
 - 单个异步路由 chunk 原始体积不超过 `140 KiB`，gzip 不超过 `40 KiB`；

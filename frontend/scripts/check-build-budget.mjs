@@ -23,9 +23,11 @@ const DEFAULT_BUDGETS = {
  * 因此只给 antd 开单独额度，其他同步 chunk 仍守 360 KiB / 110 KiB。
  */
 const CHUNK_BUDGET_OVERRIDES = {
+  // 2026-09-04: 门户「我的申请」详情弹窗引入 Modal + Steps + Tooltip, antd chunk 720 → 732 KiB,
+  // 额度上调到 760 / 240 KiB; 见 docs/operations/frontend-build-budget.md。
   antd: {
-    rawBytes: 720 * 1024,
-    gzipBytes: 230 * 1024,
+    rawBytes: 760 * 1024,
+    gzipBytes: 240 * 1024,
   },
 };
 
