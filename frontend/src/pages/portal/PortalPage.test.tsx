@@ -1177,6 +1177,44 @@ describe("PortalPage access request form", () => {
     }
   });
 
+  test("勾选权限范围 chip 不换掉单元格 DOM: 原节点仍在、仍聚焦, 再点一下立刻取消", async () => {
+    const fetchMock = permissionSelectorFetchMock(portalPermissionSelectorCatalog);
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      renderPortalPage();
+      const user = userEvent.setup();
+
+      await screen.findByRole("option", { name: "CRM" });
+      await user.selectOptions(screen.getByLabelText("应用"), "crm");
+      const permissionTable = await screen.findByRole("table", { name: "权限选择" });
+      await user.click(within(permissionTable).getByRole("button", { name: "展开 订单" }));
+
+      const exportChip = within(permissionTable).getByRole("checkbox", { name: "选择 orders.export 本人" });
+      const collapseButton = within(permissionTable).getByRole("button", { name: "收起 订单" });
+
+      await user.click(exportChip);
+
+      // 列定义是模块级常量, 勾选只换 data 与 meta: 单元格不会卸载重挂, 焦点因此留在原节点上,
+      // 紧接着的第二次点击也还落在同一个节点上(节点被换掉时连点就会丢)。
+      expect(exportChip).toBeInTheDocument();
+      expect(within(permissionTable).getByRole("checkbox", { name: "选择 orders.export 本人" })).toBe(exportChip);
+      expect(document.activeElement).toBe(exportChip);
+      expect(exportChip).toBeChecked();
+      expect(within(permissionTable).getByRole("button", { name: "收起 订单" })).toBe(collapseButton);
+      expect(screen.getByText("已选 1 项")).toBeVisible();
+
+      await user.click(exportChip);
+
+      expect(exportChip).toBeInTheDocument();
+      expect(document.activeElement).toBe(exportChip);
+      expect(exportChip).not.toBeChecked();
+      expect(screen.getByText("已选 0 项")).toBeVisible();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   test("多权限范围按递增关系自动补齐和收缩", async () => {
     const fetchMock = permissionSelectorFetchMock(portalPermissionSelectorCatalog);
     vi.stubGlobal("fetch", fetchMock);

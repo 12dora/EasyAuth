@@ -1,32 +1,26 @@
-import { flexRender, type Row } from "@tanstack/react-table";
+import { flexRender, type Table } from "@tanstack/react-table";
 import type { MouseEvent } from "react";
 
 import { EmptyState } from "../../../components/ui/EmptyState";
 import { cn } from "../../../lib/cn";
 import { useI18n } from "../../../i18n/I18nProvider";
 
+import { permissionSelectorTableMeta } from "./permissionSelectorMeta";
 import { TABLE_CELL_CLASS, TABLE_ROW_CLASS } from "./permissionSelectorPrimitives";
 import type { PermissionSelectorRow } from "./permissionSelectorRows";
 
-export function PermissionSelectorBody({
-  rows,
-  columnCount,
-  disabled,
-  showSelectedOnly,
-  onToggleGroup,
-}: {
-  rows: Array<Row<PermissionSelectorRow>>;
-  columnCount: number;
-  disabled: boolean;
-  showSelectedOnly: boolean;
-  onToggleGroup: (key: string) => void;
-}) {
+export function PermissionSelectorBody({ table }: { table: Table<PermissionSelectorRow> }) {
   const { t } = useI18n();
+  const { disabled, showSelectedOnly, onToggleGroup } = permissionSelectorTableMeta(table);
+  const rows = table.getRowModel().rows;
   if (rows.length === 0) {
     return (
       <tbody>
         <tr className="group transition-colors hover:bg-transparent">
-          <td colSpan={columnCount} className={cn(TABLE_CELL_CLASS, "py-10 text-center text-ink-soft")}>
+          <td
+            colSpan={table.getAllLeafColumns().length}
+            className={cn(TABLE_CELL_CLASS, "py-10 text-center text-ink-soft")}
+          >
             <EmptyState
               title={showSelectedOnly ? t("selector.emptySelected.title") : t("selector.empty.title")}
               description={showSelectedOnly ? t("selector.emptySelected.description") : t("selector.empty.description")}

@@ -1,94 +1,87 @@
-import type { ColumnDef } from "@tanstack/react-table";
+/*
+ * 权限选择表格的列定义: 模块级常量, 组件整个生命周期里身份不变。
+ *
+ * 表头与单元格渲染器同样是模块级组件, 只从 table.options.meta 读会变的状态
+ * (见 permissionSelectorMeta.ts) —— 这样勾选一下不会重建列, 单元格 DOM 不再卸载重挂。
+ */
+
+import type { CellContext, ColumnDef, HeaderContext } from "@tanstack/react-table";
 
 import { MONO_TEXT_CLASS } from "../../../components/antd/columns";
-import type { Locale } from "../../../i18n/messages";
-import type { Translator } from "../../../lib/status";
 
-import type { ScopedPermissionGroupItem, ScopedPermissionItem } from "../hooks/accessRequestTypes";
 import {
   PermissionGroupNameCell,
   PermissionGroupScopeCell,
   PermissionNameCell,
   PermissionScopeCell,
 } from "./PermissionSelectorCells";
+import { permissionSelectorTableMeta } from "./permissionSelectorMeta";
 import type { PermissionSelectorRow } from "./permissionSelectorRows";
 
-/** 列定义所需的全部外部输入: 文案/语言 + 展示勾选态 + 三个回调。 */
-export interface PermissionSelectorColumnsInput {
-  t: Translator;
-  locale: Locale;
-  displaySelectedKeys: string[];
-  coveredKeySet: Set<string>;
-  onPermissionScopeChange: (permission: ScopedPermissionItem, scopeKey: string) => void;
-  onPermissionGroupScopeChange: (group: ScopedPermissionGroupItem, scopeKey: string, shouldSelect: boolean) => void;
-  onToggleGroup: (key: string) => void;
+type SelectorHeaderContext = HeaderContext<PermissionSelectorRow, unknown>;
+type SelectorCellContext = CellContext<PermissionSelectorRow, unknown>;
+
+export const PERMISSION_SELECTOR_COLUMNS: ColumnDef<PermissionSelectorRow>[] = [
+  { id: "permission", header: PermissionColumnHeader, cell: PermissionColumnCell },
+  { id: "key", header: KeyColumnHeader, cell: KeyColumnCell },
+  { id: "scope", header: ScopeColumnHeader, cell: ScopeColumnCell },
+];
+
+function PermissionColumnHeader({ table }: SelectorHeaderContext) {
+  return permissionSelectorTableMeta(table).t("selector.column.permission");
 }
 
-export function permissionSelectorColumns(input: PermissionSelectorColumnsInput): ColumnDef<PermissionSelectorRow>[] {
-  return [nameColumn(input), keyColumn(input.t), scopeColumn(input)];
+function PermissionColumnCell({ row, table }: SelectorCellContext) {
+  const { locale, onToggleGroup } = permissionSelectorTableMeta(table);
+  return row.original.type === "group" ? (
+    <PermissionGroupNameCell
+      group={row.original.group}
+      depth={row.original.depth}
+      isExpanded={row.original.isExpanded}
+      selectedCount={row.original.selectedCount}
+      permissionCount={row.original.permissionCount}
+      onToggleGroup={onToggleGroup}
+      locale={locale}
+    />
+  ) : (
+    <PermissionNameCell permission={row.original.permission} depth={row.original.depth} locale={locale} />
+  );
 }
 
-function nameColumn({ t, locale, onToggleGroup }: PermissionSelectorColumnsInput): ColumnDef<PermissionSelectorRow> {
-  return {
-    id: "permission",
-    header: t("selector.column.permission"),
-    cell: ({ row }) =>
-      row.original.type === "group" ? (
-        <PermissionGroupNameCell
-          group={row.original.group}
-          depth={row.original.depth}
-          isExpanded={row.original.isExpanded}
-          selectedCount={row.original.selectedCount}
-          permissionCount={row.original.permissionCount}
-          onToggleGroup={onToggleGroup}
-          locale={locale}
-        />
-      ) : (
-        <PermissionNameCell permission={row.original.permission} depth={row.original.depth} locale={locale} />
-      ),
-  };
+function KeyColumnHeader({ table }: SelectorHeaderContext) {
+  return permissionSelectorTableMeta(table).t("selector.column.key");
 }
 
-function keyColumn(t: Translator): ColumnDef<PermissionSelectorRow> {
-  return {
-    id: "key",
-    header: t("selector.column.key"),
-    cell: ({ row }) => (
-      <code className={MONO_TEXT_CLASS}>
-        {row.original.type === "group" ? row.original.group.key : row.original.permission.key}
-      </code>
-    ),
-  };
+function KeyColumnCell({ row }: SelectorCellContext) {
+  return (
+    <code className={MONO_TEXT_CLASS}>
+      {row.original.type === "group" ? row.original.group.key : row.original.permission.key}
+    </code>
+  );
 }
 
-function scopeColumn({
-  t,
-  locale,
-  displaySelectedKeys,
-  coveredKeySet,
-  onPermissionScopeChange,
-  onPermissionGroupScopeChange,
-}: PermissionSelectorColumnsInput): ColumnDef<PermissionSelectorRow> {
-  return {
-    id: "scope",
-    header: t("selector.column.scope"),
-    cell: ({ row }) =>
-      row.original.type === "group" ? (
-        <PermissionGroupScopeCell
-          group={row.original.group}
-          scopeOptions={row.original.scopeOptions}
-          selectedKeys={displaySelectedKeys}
-          onScopeChange={onPermissionGroupScopeChange}
-          locale={locale}
-        />
-      ) : (
-        <PermissionScopeCell
-          permission={row.original.permission}
-          selectedKeys={displaySelectedKeys}
-          coveredKeySet={coveredKeySet}
-          onScopeChange={onPermissionScopeChange}
-          locale={locale}
-        />
-      ),
-  };
+function ScopeColumnHeader({ table }: SelectorHeaderContext) {
+  return permissionSelectorTableMeta(table).t("selector.column.scope");
+}
+
+function ScopeColumnCell({ row, table }: SelectorCellContext) {
+  const { locale, displaySelectedKeys, coveredKeySet, onPermissionScopeChange, onPermissionGroupScopeChange } =
+    permissionSelectorTableMeta(table);
+  return row.original.type === "group" ? (
+    <PermissionGroupScopeCell
+      group={row.original.group}
+      scopeOptions={row.original.scopeOptions}
+      selectedKeys={displaySelectedKeys}
+      onScopeChange={onPermissionGroupScopeChange}
+      locale={locale}
+    />
+  ) : (
+    <PermissionScopeCell
+      permission={row.original.permission}
+      selectedKeys={displaySelectedKeys}
+      coveredKeySet={coveredKeySet}
+      onScopeChange={onPermissionScopeChange}
+      locale={locale}
+    />
+  );
 }

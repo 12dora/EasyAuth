@@ -14,19 +14,8 @@ import {
 } from "./permissionSelectorPrimitives";
 import type { PermissionSelectorRow } from "./permissionSelectorRows";
 
-export function PermissionSelectorTable({
-  table,
-  disabled,
-  showSelectedOnly,
-  onToggleGroup,
-}: {
-  table: Table<PermissionSelectorRow>;
-  disabled: boolean;
-  showSelectedOnly: boolean;
-  onToggleGroup: (key: string) => void;
-}) {
+export function PermissionSelectorTable({ table }: { table: Table<PermissionSelectorRow> }) {
   const { t } = useI18n();
-  const visibleRows = table.getRowModel().rows;
 
   /*
    * 权限目录不分页: 权限之间是树关系, 翻页会把同一个权限组的权限切到两页去,
@@ -61,13 +50,7 @@ export function PermissionSelectorTable({
             </tr>
           ))}
         </thead>
-        <PermissionSelectorBody
-          rows={visibleRows}
-          columnCount={table.getAllLeafColumns().length}
-          disabled={disabled}
-          showSelectedOnly={showSelectedOnly}
-          onToggleGroup={onToggleGroup}
-        />
+        <PermissionSelectorBody table={table} />
       </table>
     </div>
   );

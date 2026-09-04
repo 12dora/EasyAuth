@@ -1,5 +1,5 @@
-import { getCoreRowModel, useReactTable, type ColumnDef } from "@tanstack/react-table";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { getCoreRowModel, useReactTable } from "@tanstack/react-table";
+import { useMemo, useRef, useState } from "react";
 import { EmptyState } from "../../../components/ui/EmptyState";
 import { useI18n } from "../../../i18n/I18nProvider";
 import type { Translator } from "../../../lib/status";
@@ -7,7 +7,7 @@ import type { Translator } from "../../../lib/status";
 import type { ScopedPermissionGroupItem, ScopedPermissionItem } from "../hooks/accessRequestTypes";
 import { PermissionSelectorTable } from "./PermissionSelectorTable";
 import { PermissionSelectorToolbar } from "./PermissionSelectorToolbar";
-import { permissionSelectorColumns } from "./permissionSelectorColumns";
+import { PERMISSION_SELECTOR_COLUMNS } from "./permissionSelectorColumns";
 import {
   buildPermissionRows,
   currentPageGroupKeysFromRows,
@@ -85,28 +85,24 @@ export function PermissionSelector({
     () => (showSelectedOnly ? filterRowsToSelected(rows) : rows),
     [rows, showSelectedOnly],
   );
-  const changePermissionScope = useStableHandler(onPermissionScopeChange);
-  const changePermissionGroupScope = useStableHandler(onPermissionGroupScopeChange);
-  const toggleGroup = useStableHandler(onToggleGroup);
-  const columns = useMemo<ColumnDef<PermissionSelectorRow>[]>(
-    () =>
-      permissionSelectorColumns({
-        t,
-        locale,
-        displaySelectedKeys,
-        coveredKeySet,
-        onPermissionScopeChange: changePermissionScope,
-        onPermissionGroupScopeChange: changePermissionGroupScope,
-        onToggleGroup: toggleGroup,
-      }),
-    [changePermissionGroupScope, changePermissionScope, coveredKeySet, displaySelectedKeys, locale, t, toggleGroup],
-  );
   // 不挂 getPaginationRowModel: 权限目录整棵树一次渲染完, 由表格容器纵向滚动。
+  // 列定义是模块级常量, 会变的状态全走 meta: 勾选一下只换 data 与 meta, 不重建列。
   const table = useReactTable({
     data: displayRows,
-    columns,
+    columns: PERMISSION_SELECTOR_COLUMNS,
     getCoreRowModel: getCoreRowModel(),
     getRowId: (row) => row.id,
+    meta: {
+      t,
+      locale,
+      displaySelectedKeys,
+      coveredKeySet,
+      showSelectedOnly,
+      disabled,
+      onPermissionScopeChange,
+      onPermissionGroupScopeChange,
+      onToggleGroup,
+    },
   });
 
   const placeholder = selectorPlaceholder({ appKey, loading, errorMessage, isEmpty: rows.length === 0 }, t);
@@ -134,12 +130,7 @@ export function PermissionSelector({
         onSelectScope={(scopeKey) => onSelectPermissionKeys(currentPageSelectionKeysFromRows(visibleRows, scopeKey))}
         onClear={() => onClearPermissionKeys(currentPageSelectionKeysFromRows(visibleRows))}
       />
-      <PermissionSelectorTable
-        table={table}
-        disabled={disabled}
-        showSelectedOnly={showSelectedOnly}
-        onToggleGroup={toggleGroup}
-      />
+      <PermissionSelectorTable table={table} />
     </div>
   );
 }
@@ -148,13 +139,11 @@ export function PermissionSelector({
 /** 工具栏子组件内部保留 `role="switch"` 与 `aria-label={t("selector.toolbar.showSelectedOnly")}`。 */
 
 /*
- * 列定义的输入必须只在真正变化时才换身份。
+ * 上游每次渲染都会新建 selectedKeys / coveredKeys(派生数组), 直接拿来做 useMemo 依赖,
+ * 任何一次无关渲染都会重建整棵行树、白跑一遍 TanStack 行模型。这里按内容复用数组,
+ * 让行树只在选择态真的变化时重建。
  *
- * TanStack 的 columnDef.cell 是函数组件, flexRender 直接把它当组件类型渲染: 列定义一重建,
- * React 就把每一格的子树当成"换了组件"整体卸载重挂, 表格里的按钮与勾选框全部换成新 DOM 节点。
- * 上游每次渲染都会新建 coveredKeys(派生数组)与三个回调(每次渲染重建的 actions),
- * 因此若直接用它们做 useMemo 依赖, 任何一次无关渲染都会把节点换掉 ——
- * 正落在用户按下与松开之间的那一次, 点击就丢了。
+ * 单元格 DOM 的稳定不再依赖这里: 列定义已经是模块级常量(见 permissionSelectorColumns.tsx)。
  */
 function useStableStringList(list: string[]): string[] {
   const stableList = useRef(list);
@@ -166,15 +155,6 @@ function useStableStringList(list: string[]): string[] {
 
 function stringListsAreEqual(left: string[], right: string[]): boolean {
   return left.length === right.length && left.every((item, index) => item === right[index]);
-}
-
-/** 身份稳定的事件回调: 调用时取最新的那个实现。 */
-function useStableHandler<Args extends unknown[]>(handler: (...args: Args) => void): (...args: Args) => void {
-  const latestHandler = useRef(handler);
-  useEffect(() => {
-    latestHandler.current = handler;
-  }, [handler]);
-  return useCallback((...args: Args) => latestHandler.current(...args), []);
 }
 
 /** 无应用/加载中/加载失败/无数据四种占位态: 命中任一即整表让位给占位文案。 */

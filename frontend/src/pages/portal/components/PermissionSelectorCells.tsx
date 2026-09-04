@@ -115,7 +115,7 @@ export function PermissionScopeCell({
 }: {
   permission: ScopedPermissionItem;
   selectedKeys: string[];
-  coveredKeySet?: Set<string>;
+  coveredKeySet: Set<string>;
   onScopeChange: (permission: ScopedPermissionItem, scopeKey: string) => void;
   locale: Locale;
 }) {
@@ -130,7 +130,7 @@ export function PermissionScopeCell({
       {scopes.map((scope) => {
         const selectionKey = directGrantSelectionKey(permission.key, scope.key);
         // 权限组覆盖的权限同样可编辑: 取消勾选会把权限组落地成逐项直接申请(见 accessRequestActions)。
-        const isCovered = coveredKeySet?.has(selectionKey) ?? false;
+        const isCovered = coveredKeySet.has(selectionKey);
         const scopeLabel = t("selector.selectPermissionScope", { permissionKey: permission.key, scopeName: localizedName(locale, scope) });
         return (
           <ScopeChip
