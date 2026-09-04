@@ -1856,6 +1856,7 @@ describe("PortalPage access request form", () => {
       // PermissionSelector 的只读态作用在整行上(见 PermissionSelectorBody), 不是逐个 disabled。
       await screen.findByRole("table", { name: "权限选择" });
       expect(permissionSelectorChip("选择权限组 orders 本人").closest("tr")).toHaveClass("pointer-events-none");
+      expect(permissionSelectorChip("选择权限组 orders 本人").closest("tr")).toHaveAttribute("inert");
     } finally {
       vi.unstubAllGlobals();
     }

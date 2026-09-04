@@ -38,8 +38,8 @@ export function PermissionSelectorBody({ table }: { table: Table<PermissionSelec
           key={row.id}
           className={rowClassName(row.original, disabled)}
           aria-hidden={row.original.isExiting || undefined}
-          // 退出动画开始即移出可访问树, 避免读屏/Tab 仍命中。
-          {...(row.original.isExiting || disabled ? ({ inert: "" } as object) : {})}
+          // 退出动画开始即移出可访问树, 避免读屏/Tab 仍命中。React 19 把 inert 当布尔属性: 空串会被当成 false 且不落 DOM。
+          inert={row.original.isExiting || disabled}
           onClick={disabled ? undefined : groupRowClickHandler(row.original, onToggleGroup)}
         >
           {row.getVisibleCells().map((cell) => (
