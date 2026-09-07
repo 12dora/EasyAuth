@@ -431,24 +431,26 @@ def test_scheduler_buckets_at_commit_after_earlier_event_was_published(
 ) -> None:
     now = timezone.now().replace(microsecond=0)
     monkeypatch.setattr(timezone, "now", lambda: now)
+    # 只关注本用例产生的事件: 其它模块(含事务型用例)可能留下无关的 outbox 行。
+    events = OutboxEvent.objects.filter(event_key__startswith="department-grant-reconcile:policy:")
     with TestCase.captureOnCommitCallbacks(execute=False) as callbacks:
         schedule_department_grant_reconcile(trigger="policy")
         schedule_department_grant_reconcile(trigger="policy")
-    assert not OutboxEvent.objects.exists()
+    assert not events.exists()
     callbacks[0]()
-    event = OutboxEvent.objects.get()
+    event = events.get()
     assert event.available_at > now + timedelta(seconds=1)
     event.status = "published"
     event.published_at = now
     event.save(update_fields=["status", "published_at"])
     now += timedelta(seconds=1)
     callbacks[1]()
-    pending = OutboxEvent.objects.get(status="pending")
+    pending = events.get(status="pending")
     assert pending.pk != event.pk
     assert pending.event_key.endswith(f":{int(now.timestamp())}")
     with TestCase.captureOnCommitCallbacks(execute=True):
         schedule_department_grant_reconcile(trigger="policy")
-    assert OutboxEvent.objects.count() == 2
+    assert events.count() == 2
 
 
 def test_overlapping_pass_retries_then_applies_new_policy(
