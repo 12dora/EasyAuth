@@ -1,0 +1,10 @@
+<!doctype html>
+<html lang="zh-CN">
+<head><meta charset="utf-8"><title>身份检查</title></head>
+<body>
+{{ outcome|json_script:"identity-check-outcome" }}
+<script>
+window.parent.postMessage({type: "easyauth:identity-check", outcome: JSON.parse(document.getElementById("identity-check-outcome").textContent)}, window.location.origin);
+</script>
+</body>
+</html>

@@ -15,10 +15,13 @@ from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
 from easyauth.accounts.auth import (
+    AUTHENTIK_SESSION_KEY,
     DEFAULT_AUTH_SUCCESS_NEXT,
+    LOCAL_ADMIN_SESSION_FLAG,
     OIDC_ID_TOKEN_SESSION_KEY,
     OIDC_NEXT_SESSION_KEY,
     OIDC_NONCE_SESSION_KEY,
+    OIDC_SILENT_SESSION_KEY,
     OIDC_STATE_SESSION_KEY,
     OidcClientConfig,
     OidcSessionError,
@@ -63,7 +66,10 @@ SETTING_TOKEN_ENDPOINT = "EASYAUTH_AUTHENTIK_OIDC_TOKEN_ENDPOINT"  # noqa: S105 
 OIDC_ISSUER_PROVIDER_SLUG_SEGMENT_COUNT: Final = 3
 
 
-def oidc_login(request: HttpRequest) -> HttpResponseRedirect:
+def oidc_login(request: HttpRequest) -> HttpResponse:
+    silent = request.GET.get("silent") == "1"
+    if silent and request.session.get(LOCAL_ADMIN_SESSION_FLAG) is True:
+        return _silent_result(request, "unchanged")
     config = _oidc_config_from_settings()
     redirect_uri = _effective_redirect_uri(request, config.redirect_uri)
     canonical_login_url = _canonical_request_url(request, redirect_uri)
@@ -74,6 +80,7 @@ def oidc_login(request: HttpRequest) -> HttpResponseRedirect:
     config = replace(config, redirect_uri=redirect_uri)
     state = token_urlsafe(32)
     nonce = token_urlsafe(32)
+    request.session[OIDC_SILENT_SESSION_KEY] = silent
     request.session[OIDC_STATE_SESSION_KEY] = state
     request.session[OIDC_NONCE_SESSION_KEY] = nonce
     request.session[OIDC_NEXT_SESSION_KEY] = _safe_auth_success_next(request)
@@ -82,6 +89,7 @@ def oidc_login(request: HttpRequest) -> HttpResponseRedirect:
             config,
             state=state,
             nonce=nonce,
+            prompt="none" if silent else "",
         ),
     )
     clear_browser_logged_out(response)
@@ -89,6 +97,9 @@ def oidc_login(request: HttpRequest) -> HttpResponseRedirect:
 
 
 def oidc_callback(request: HttpRequest) -> HttpResponse:
+    silent = request.session.pop(OIDC_SILENT_SESSION_KEY, False) is True
+    if silent:
+        return _silent_callback(request)
     config = _oidc_config_from_settings()
     config = replace(config, redirect_uri=_effective_redirect_uri(request, config.redirect_uri))
     code = request.GET.get("code", "")
@@ -355,3 +366,59 @@ def backchannel_logout(request: HttpRequest) -> JsonResponse:
 def _remember_logout_jti(jti: str, timeout: int) -> None:
     if not cache.add(f"easyauth:oidc:logout-jti:{jti}", value=True, timeout=timeout):
         raise OidcSessionError(FIELD_BACKCHANNEL, "logout token was already used")
+
+
+SILENT_LOGOUT_ERRORS: Final = frozenset(
+    {
+        "login_required",
+        "interaction_required",
+        "consent_required",
+        "access_denied",
+    }
+)
+
+
+def _silent_callback(request: HttpRequest) -> HttpResponse:
+    previous_subject = _session_string(request, AUTHENTIK_SESSION_KEY)
+    try:
+        verify_callback_state(
+            received_state=request.GET.get("state", ""),
+            expected_state=_session_string(request, OIDC_STATE_SESSION_KEY),
+        )
+        upstream_error = request.GET.get("error", "")
+        if upstream_error in SILENT_LOGOUT_ERRORS:
+            clear_auth_session(request)
+            outcome = "logged_out"
+        elif upstream_error:
+            outcome = "error"
+        else:
+            outcome = _silent_bind(request, previous_subject)
+    except OidcUserInactiveError:
+        clear_auth_session(request)
+        outcome = "logged_out"
+    except OidcSessionError:
+        outcome = "error"
+    clear_oidc_login_attempt(request)
+    return _silent_result(request, outcome)
+
+
+def _silent_bind(request: HttpRequest, previous_subject: str) -> str:
+    config = _oidc_config_from_settings()
+    config = replace(config, redirect_uri=_effective_redirect_uri(request, config.redirect_uri))
+    code = request.GET.get("code", "")
+    _require_authorization_code(code)
+    claims = exchange_authorization_code_for_claims(request, code, config)
+    verified = verify_oidc_claims(
+        claims,
+        config,
+        expected_nonce=_session_string(request, OIDC_NONCE_SESSION_KEY),
+    )
+    _ = bind_oidc_session(request, verified)
+    return "unchanged" if previous_subject == verified.subject else "changed"
+
+
+@xframe_options_sameorigin
+def _silent_result(request: HttpRequest, outcome: str) -> HttpResponse:
+    response = render(request, "easyauth/oidc_silent_result.html", {"outcome": outcome})
+    response.headers["Cache-Control"] = "no-store"
+    return response
