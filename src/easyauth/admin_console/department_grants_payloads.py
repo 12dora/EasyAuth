@@ -14,7 +14,7 @@ from easyauth.grants.department_policies import (
     CorpMembershipIndex,
     DirectoryCorp,
     direct_member_count,
-    eligible_user_count,
+    directory_member_count,
     eligible_user_ids_in_depts,
 )
 from easyauth.grants.models import DepartmentGrantPolicy
@@ -76,7 +76,7 @@ def serialize_department_summary(
         "name": node.name,
         "path": path_items,
         "member_count": direct_member_count(memberships, dept_id),
-        "subtree_member_count": eligible_user_count(memberships, subtree_ids),
+        "subtree_member_count": directory_member_count(memberships, subtree_ids),
     }
 
 

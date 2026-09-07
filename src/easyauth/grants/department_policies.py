@@ -86,6 +86,7 @@ class DirectoryCorp:
 @dataclass(frozen=True, slots=True)
 class CorpMembershipIndex:
     eligible_user_ids_by_dept: dict[str, frozenset[str]]
+    directory_user_ids_by_dept: dict[str, frozenset[str]]
     direct_member_counts: dict[str, int]
 
 
@@ -137,7 +138,11 @@ def load_corp_membership_index(*, source_slug: str, corp_id: str) -> CorpMembers
     )
     memberships = tuple((user_id, _string_dept_ids(raw_ids)) for user_id, raw_ids in ding_rows)
     if not memberships:
-        return CorpMembershipIndex(eligible_user_ids_by_dept={}, direct_member_counts={})
+        return CorpMembershipIndex(
+            eligible_user_ids_by_dept={},
+            directory_user_ids_by_dept={},
+            direct_member_counts={},
+        )
     eligible = frozenset(
         UserMirror.objects.filter(
             status=USER_STATUS_ACTIVE,
@@ -147,16 +152,21 @@ def load_corp_membership_index(*, source_slug: str, corp_id: str) -> CorpMembers
         ).values_list("dingtalk_userid", flat=True),
     )
     eligible_user_ids_by_dept: dict[str, set[str]] = {}
+    directory_user_ids_by_dept: dict[str, set[str]] = {}
     direct_member_counts: dict[str, int] = {}
     for user_id, dept_ids in memberships:
         is_eligible = user_id in eligible
         for dept_id in dept_ids:
             direct_member_counts[dept_id] = direct_member_counts.get(dept_id, 0) + 1
+            directory_user_ids_by_dept.setdefault(dept_id, set()).add(user_id)
             if is_eligible:
                 eligible_user_ids_by_dept.setdefault(dept_id, set()).add(user_id)
     return CorpMembershipIndex(
         eligible_user_ids_by_dept={
             dept_id: frozenset(user_ids) for dept_id, user_ids in eligible_user_ids_by_dept.items()
+        },
+        directory_user_ids_by_dept={
+            dept_id: frozenset(user_ids) for dept_id, user_ids in directory_user_ids_by_dept.items()
         },
         direct_member_counts=direct_member_counts,
     )
@@ -179,6 +189,16 @@ def eligible_user_ids_in_depts(
 
 def eligible_user_count(index: CorpMembershipIndex, dept_ids: Iterable[str]) -> int:
     return len(eligible_user_ids_in_depts(index, dept_ids))
+
+
+def directory_member_count(index: CorpMembershipIndex, dept_ids: Iterable[str]) -> int:
+    """子树内目录在职人数(去重), 与 member_count 同口径; 生效人数另按 EasyAuth 在职账号计算。"""
+    users: set[str] = set()
+    for dept_id in dept_ids:
+        members = index.directory_user_ids_by_dept.get(dept_id)
+        if members is not None:
+            users.update(members)
+    return len(users)
 
 
 def create_department_grant_policy(write: DepartmentPolicyWrite) -> DepartmentGrantPolicy:

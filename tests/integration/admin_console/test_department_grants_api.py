@@ -157,7 +157,8 @@ def test_department_policies_list_inheritance_and_counts() -> None:
         {"dept_id": "99", "name": "销售一组"},
     ]
     assert department["member_count"] == 2
-    assert department["subtree_member_count"] == 1
+    # 含子部门人数与直属人数同为目录口径; 生效人数(affected_user_count)才按 EasyAuth 在职账号计算。
+    assert department["subtree_member_count"] == 2
     assert [item["defined_on"]["dept_id"] for item in items] == ["99", "12", "1"]
     team_item = next(item for item in items if item["defined_on"]["dept_id"] == "99")
     company_item = next(item for item in items if item["defined_on"]["dept_id"] == "1")
