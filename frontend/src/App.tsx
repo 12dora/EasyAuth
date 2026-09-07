@@ -24,6 +24,12 @@ const ConsoleAppWorkspace = lazy(() =>
 const ConsoleSettingsPage = lazy(() =>
   import("./pages/console/ConsoleSettingsPage").then((module) => ({ default: module.ConsoleSettingsPage })),
 );
+const DepartmentGrantsPage = lazy(() =>
+  import("./pages/console/DepartmentGrantsPage").then((module) => ({ default: module.DepartmentGrantsPage })),
+);
+const DirectGrantPage = lazy(() =>
+  import("./pages/console/DirectGrantPage").then((module) => ({ default: module.DirectGrantPage })),
+);
 const ConsoleTeamDetail = lazy(() =>
   import("./pages/console/ConsoleTeamDetail").then((module) => ({ default: module.ConsoleTeamDetail })),
 );
@@ -133,6 +139,8 @@ export function App({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUse
         {/* 创建应用仅超管; 非超管深链回应用列表, API 仍为最终权威。 */}
         <Route path="/console/apps/new" element={isSuperuser ? <LazyRoute routeName="console"><AppOnboardingWizard /></LazyRoute> : <Navigate to="/console" replace />} />
         <Route path="/console/apps/:appKey" element={<LazyRoute routeName="workspace"><ConsoleAppWorkspace /></LazyRoute>} />
+        <Route path="/console/grants/direct" element={isSuperuser ? <LazyRoute routeName="console"><DirectGrantPage /></LazyRoute> : <Navigate to="/console" replace />} />
+        <Route path="/console/grants/departments" element={isSuperuser ? <LazyRoute routeName="console"><DepartmentGrantsPage /></LazyRoute> : <Navigate to="/console" replace />} />
         <Route path="/console/teams" element={isSuperuser ? <LazyRoute routeName="console"><ConsoleTeamList /></LazyRoute> : <Navigate to="/console" replace />} />
         <Route path="/console/teams/:teamId" element={isSuperuser ? <LazyRoute routeName="console"><ConsoleTeamDetail /></LazyRoute> : <Navigate to="/console" replace />} />
         <Route path="/console/people" element={isSuperuser ? <LazyRoute routeName="lifecycle"><ConsolePeopleList /></LazyRoute> : <Navigate to="/console" replace />} />

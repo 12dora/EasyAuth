@@ -97,6 +97,9 @@ export const zhCN = {
 
   "nav.console.overview": "概览",
   "nav.console.apps": "应用",
+  "nav.console.grantManagement": "授权管理",
+  "nav.console.directGrant": "授予权限",
+  "nav.console.departmentGrants": "组织授权",
   "nav.console.organization": "组织",
   "nav.console.teams": "团队管理",
   "nav.console.people": "人员管理",
@@ -310,6 +313,9 @@ export const en: Record<keyof typeof zhCN, string> = {
 
   "nav.console.overview": "Overview",
   "nav.console.apps": "Applications",
+  "nav.console.grantManagement": "Grant management",
+  "nav.console.directGrant": "Grant access",
+  "nav.console.departmentGrants": "Department grants",
   "nav.console.organization": "Organization",
   "nav.console.teams": "Teams",
   "nav.console.people": "People",

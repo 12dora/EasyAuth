@@ -27,6 +27,13 @@ const CONSOLE_GROUPS: NavGroupSpec[] = [
     links: [{ to: "/console", labelKey: "nav.console.apps" }],
   },
   {
+    labelKey: "nav.console.grantManagement",
+    links: [
+      { to: "/console/grants/direct", labelKey: "nav.console.directGrant" },
+      { to: "/console/grants/departments", labelKey: "nav.console.departmentGrants" },
+    ],
+  },
+  {
     labelKey: "nav.console.organization",
     links: [
       { to: "/console/teams", labelKey: "nav.console.teams" },
