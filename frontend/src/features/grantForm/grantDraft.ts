@@ -10,7 +10,7 @@ import {
   directGrantSelectionPermissionKey,
   directGrantSelectionScopeKey,
 } from "../../pages/portal/hooks/accessRequestSelection";
-import type { PortalRequestCatalogView } from "../../pages/portal/hooks/accessRequestTypes";
+import type { PortalCatalogAppView, PortalRequestCatalogView } from "../../pages/portal/hooks/accessRequestTypes";
 
 export type GrantTermType = "permanent" | "timed";
 
@@ -60,6 +60,23 @@ export function grantDraftIsValid(draft: GrantDraft, catalog: PortalRequestCatal
     return false;
   }
   return grantDraftTargetIsPresent(draft) && grantDraftReasonIsValid(draft) && grantDraftTermIsValid(draft);
+}
+
+/**
+ * 草稿指向的应用条目。
+ *
+ * 应用不在目录里就直接失败: grantDraftIsValid 已经拦下这种草稿, 走到这里说明接线出了问题,
+ * 不能再拼一份必被后端拒(app_for_key 404)的载荷。
+ */
+export function grantCatalogApp(
+  catalog: PortalRequestCatalogView | undefined,
+  appKey: string,
+): PortalCatalogAppView {
+  const app = (catalog?.apps ?? []).find((item) => item.app_key === appKey);
+  if (!app) {
+    throw new Error(`授权目标的应用不在目录中: ${appKey}`);
+  }
+  return app;
 }
 
 /** 限时授权的到期时间必须晚于当前时刻, 否则授出去就已经过期。 */

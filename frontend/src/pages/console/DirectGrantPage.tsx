@@ -14,6 +14,7 @@ import {
   EMPTY_GRANT_DRAFT,
   GrantForm,
   buildGrantSubmission,
+  grantCatalogApp,
   grantDraftIsValid,
   useGrantCatalog,
 } from "../../features/grantForm";
@@ -51,19 +52,14 @@ export function DirectGrantPage() {
   });
 
   const catalogErrorMessage = catalogQuery.error ? catalogQuery.error.message : "";
-  const selectedApp = (catalogQuery.data?.apps ?? []).find((app) => app.app_key === draft.appKey);
   const canSubmit = Boolean(userId) && grantDraftIsValid(draft, catalogQuery.data);
   const submitErrorMessages = detailErrorMessages(grantMutation.error);
 
   const submit = () => {
-    if (!selectedApp) {
-      // canSubmit 已保证应用落在目录里, 走到这里说明接线出了问题, 直接失败而不是提交一份必被拒的载荷。
-      throw new Error(`授权目标的应用不在目录中: ${draft.appKey}`);
-    }
     grantMutation.mutate({
       payload: { user_id: userId, ...buildGrantSubmission(draft) },
       granteeLabel: granteeLabel || userId,
-      appLabel: formatAppDisplayName(selectedApp),
+      appLabel: formatAppDisplayName(grantCatalogApp(catalogQuery.data, draft.appKey)),
     });
   };
 

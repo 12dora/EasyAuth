@@ -2,6 +2,7 @@ export {
   EMPTY_GRANT_DRAFT,
   GRANT_REASON_MAX_LENGTH,
   buildGrantSubmission,
+  grantCatalogApp,
   grantDraftExpiresAtError,
   grantDraftFromPolicy,
   grantDraftIsValid,
