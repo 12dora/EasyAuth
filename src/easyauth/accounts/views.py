@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import replace
 from http import HTTPStatus
 from secrets import token_urlsafe
-from typing import Final
+from time import time
+from typing import Final, TypedDict, cast
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 from django.conf import settings as django_settings
@@ -22,12 +23,12 @@ from easyauth.accounts.auth import (
     OIDC_ID_TOKEN_SESSION_KEY,
     OIDC_NEXT_SESSION_KEY,
     OIDC_NONCE_SESSION_KEY,
-    OIDC_SILENT_SESSION_KEY,
+    OIDC_SILENT_ATTEMPTS_SESSION_KEY,
     OIDC_STATE_SESSION_KEY,
     OidcClientConfig,
     OidcSessionError,
     OidcUserInactiveError,
-    _update_existing_user_profile,
+    _update_existing_user_profile,  # pyright: ignore[reportPrivateUsage]
     bind_oidc_session,
     build_authorization_url,
     clear_auth_session,
@@ -84,10 +85,14 @@ def oidc_login(request: HttpRequest) -> HttpResponse:
     config = replace(config, redirect_uri=redirect_uri)
     state = token_urlsafe(32)
     nonce = token_urlsafe(32)
-    request.session[OIDC_SILENT_SESSION_KEY] = silent
-    request.session[OIDC_STATE_SESSION_KEY] = state
-    request.session[OIDC_NONCE_SESSION_KEY] = nonce
-    request.session[OIDC_NEXT_SESSION_KEY] = _safe_auth_success_next(request)
+    if silent:
+        attempts = _silent_attempts(request)
+        attempts[state] = {"nonce": nonce, "created_at": time()}
+        _save_silent_attempts(request, attempts)
+    else:
+        request.session[OIDC_STATE_SESSION_KEY] = state
+        request.session[OIDC_NONCE_SESSION_KEY] = nonce
+        request.session[OIDC_NEXT_SESSION_KEY] = _safe_auth_success_next(request)
     response = HttpResponseRedirect(
         build_authorization_url(
             config,
@@ -101,9 +106,11 @@ def oidc_login(request: HttpRequest) -> HttpResponse:
 
 
 def oidc_callback(request: HttpRequest) -> HttpResponse:
-    silent = request.session.pop(OIDC_SILENT_SESSION_KEY, False) is True
-    if silent:
-        return _silent_callback(request)
+    attempts = _silent_attempts(request)
+    attempt = attempts.pop(request.GET.get("state", ""), None)
+    if attempt is not None:
+        _save_silent_attempts(request, attempts)
+        return _silent_callback(request, attempt)
     config = _oidc_config_from_settings()
     config = replace(config, redirect_uri=_effective_redirect_uri(request, config.redirect_uri))
     code = request.GET.get("code", "")
@@ -382,13 +389,39 @@ SILENT_LOGOUT_ERRORS: Final = frozenset(
 )
 
 
-def _silent_callback(request: HttpRequest) -> HttpResponse:
+class SilentAttempt(TypedDict):
+    nonce: str
+    created_at: float
+
+
+SILENT_ATTEMPT_TTL: Final = 600
+SILENT_ATTEMPT_LIMIT: Final = 10
+
+
+def _silent_attempts(request: HttpRequest) -> dict[str, SilentAttempt]:
+    return cast(
+        "dict[str, SilentAttempt]", request.session.get(OIDC_SILENT_ATTEMPTS_SESSION_KEY, {})
+    )
+
+
+def _save_silent_attempts(request: HttpRequest, attempts: dict[str, SilentAttempt]) -> None:
+    cutoff = time() - SILENT_ATTEMPT_TTL
+    valid = sorted(
+        (
+            (state, attempt)
+            for state, attempt in attempts.items()
+            if attempt["created_at"] >= cutoff
+        ),
+        key=lambda item: item[1]["created_at"],
+    )
+    request.session[OIDC_SILENT_ATTEMPTS_SESSION_KEY] = dict(valid[-SILENT_ATTEMPT_LIMIT:])
+
+
+def _silent_callback(request: HttpRequest, attempt: SilentAttempt) -> HttpResponse:
     previous_subject = _session_string(request, AUTHENTIK_SESSION_KEY)
+    if time() - attempt["created_at"] > SILENT_ATTEMPT_TTL:
+        return _silent_result(request, "error", "")
     try:
-        verify_callback_state(
-            received_state=request.GET.get("state", ""),
-            expected_state=_session_string(request, OIDC_STATE_SESSION_KEY),
-        )
         upstream_error = request.GET.get("error", "")
         if upstream_error in SILENT_LOGOUT_ERRORS:
             clear_auth_session(request)
@@ -396,13 +429,12 @@ def _silent_callback(request: HttpRequest) -> HttpResponse:
         elif upstream_error:
             outcome = "error"
         else:
-            outcome = _silent_bind(request, previous_subject)
+            outcome = _silent_bind(request, previous_subject, attempt["nonce"])
     except OidcUserInactiveError:
         clear_auth_session(request)
         outcome = "logged_out"
     except OidcSessionError:
         outcome = "error"
-    clear_oidc_login_attempt(request)
     user_id = (
         _session_string(request, AUTHENTIK_SESSION_KEY)
         if outcome in {"unchanged", "changed"}
@@ -411,7 +443,7 @@ def _silent_callback(request: HttpRequest) -> HttpResponse:
     return _silent_result(request, outcome, user_id)
 
 
-def _silent_bind(request: HttpRequest, previous_subject: str) -> str:
+def _silent_bind(request: HttpRequest, previous_subject: str, nonce: str) -> str:
     config = _oidc_config_from_settings()
     config = replace(config, redirect_uri=_effective_redirect_uri(request, config.redirect_uri))
     code = request.GET.get("code", "")
@@ -420,7 +452,7 @@ def _silent_bind(request: HttpRequest, previous_subject: str) -> str:
     verified = verify_oidc_claims(
         claims,
         config,
-        expected_nonce=_session_string(request, OIDC_NONCE_SESSION_KEY),
+        expected_nonce=nonce,
     )
     if previous_subject == verified.subject:
         with transaction.atomic():

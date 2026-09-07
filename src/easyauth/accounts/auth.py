@@ -15,7 +15,7 @@ if TYPE_CHECKING:
     from django.http import HttpRequest
 
 AUTHENTIK_SESSION_KEY: Final = "easyauth_authentik_user_id"
-OIDC_SILENT_SESSION_KEY: Final = "easyauth_oidc_silent"
+OIDC_SILENT_ATTEMPTS_SESSION_KEY: Final = "easyauth_oidc_silent_attempts"
 OIDC_STATE_SESSION_KEY: Final = "easyauth_oidc_state"
 OIDC_NONCE_SESSION_KEY: Final = "easyauth_oidc_nonce"
 OIDC_NEXT_SESSION_KEY: Final = "easyauth_oidc_next"
@@ -208,7 +208,6 @@ def bind_oidc_session(
 
 
 def clear_oidc_login_attempt(request: HttpRequest) -> None:
-    request.session.pop(OIDC_SILENT_SESSION_KEY, None)
     request.session.pop(OIDC_STATE_SESSION_KEY, None)
     request.session.pop(OIDC_NONCE_SESSION_KEY, None)
     request.session.pop(OIDC_NEXT_SESSION_KEY, None)
