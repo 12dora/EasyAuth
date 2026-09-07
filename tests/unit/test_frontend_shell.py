@@ -8,10 +8,14 @@ from django.contrib.sessions.middleware import SessionMiddleware
 from django.http import JsonResponse
 from django.test import RequestFactory, override_settings
 
-from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
-from easyauth.accounts.models import UserMirror
+from easyauth.accounts.auth import (
+    AUTHENTIK_SESSION_KEY,
+    LOCAL_ADMIN_SESSION_FLAG,
+    LOCAL_ADMIN_SESSION_VERSION_KEY,
+)
+from easyauth.accounts.models import LocalAdminAccount, UserMirror
 from easyauth.applications.models import App, AppMembership
-from easyauth.frontend_shell import shell_user_from_user
+from easyauth.frontend_shell import render_react_shell, shell_user_from_user
 
 if TYPE_CHECKING:
     from django.http import HttpRequest
@@ -42,6 +46,7 @@ def test_shell_user_hides_console_from_app_member_who_is_not_admin(
 
     shell = shell_user_from_user(request, user)
 
+    assert shell.auth_kind == "oidc"
     assert shell.can_access_console is False
     assert shell.is_superuser is False
 
@@ -98,3 +103,30 @@ def _session_request(
     request.session.save()
     request.user = AnonymousUser()
     return request
+
+
+@pytest.mark.parametrize("local_admin", [False, True])
+def test_shell_exposes_auth_kind(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    local_admin: bool,
+) -> None:
+    user = UserMirror.objects.create(
+        authentik_user_id="local-admin:root" if local_admin else "shell-oidc",
+        name="当前用户",
+    )
+    request = _session_request(monkeypatch, user.authentik_user_id, groups=())
+    if local_admin:
+        account = LocalAdminAccount.objects.create(username="root", password_hash="!")
+        request.session[LOCAL_ADMIN_SESSION_FLAG] = True
+        request.session[LOCAL_ADMIN_SESSION_VERSION_KEY] = account.session_version
+    shell = shell_user_from_user(request, user)
+    expected = "local_admin" if local_admin else "oidc"
+    assert shell.auth_kind == expected
+    response = render_react_shell(
+        request,
+        surface="portal",
+        title="门户",
+        current_user=shell,
+    )
+    assert f'data-current-user-auth-kind="{expected}"' in response.content.decode()

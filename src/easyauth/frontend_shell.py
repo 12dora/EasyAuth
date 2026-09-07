@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Final, Literal, TypeGuard, cast
 from django.core.exceptions import ImproperlyConfigured
 from django.shortcuts import render
 
-from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY
+from easyauth.accounts.auth import AUTHENTIK_SESSION_KEY, LOCAL_ADMIN_SESSION_FLAG
 from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
 from easyauth.admin_console.identity import actor_from_request
 from easyauth.config.settings.base import BASE_DIR
@@ -50,6 +50,7 @@ class ShellUser:
     user_id: str
     display_name: str
     role: ShellRole
+    auth_kind: Literal["oidc", "local_admin"]
     # 门户「管理后台」入口: 仅控制台管理员(actor.is_superuser)可见, 与 App 成员无关。
     can_access_console: bool = False
     is_superuser: bool = False
@@ -143,6 +144,9 @@ def shell_user_from_user(request: HttpRequest, user: UserMirror) -> ShellUser:
         user_id=user.authentik_user_id,
         display_name=_display_name(user),
         role=_role_code(is_superuser=is_superuser),
+        auth_kind="local_admin"
+        if request.session.get(LOCAL_ADMIN_SESSION_FLAG) is True
+        else "oidc",
         can_access_console=is_superuser,
         is_superuser=is_superuser,
         avatar_url=user.avatar_url,
