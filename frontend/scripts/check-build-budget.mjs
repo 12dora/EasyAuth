@@ -13,8 +13,9 @@ const DEFAULT_BUDGETS = {
   synchronousChunkGzipBytes: 110 * 1024,
   asyncChunkRawBytes: 140 * 1024,
   asyncChunkGzipBytes: 40 * 1024,
-  // Ant Design 表格地基落地后总量上调；见 docs/operations/frontend-build-budget.md
-  totalJavaScriptRawBytes: 1700 * 1024,
+  // Ant Design 表格地基落地后总量上调；2026-09-08 控制台「授予权限」「组织授权」两个异步路由落地后
+  // 实测 1732 KiB，上调到 1780 KiB；见 docs/operations/frontend-build-budget.md
+  totalJavaScriptRawBytes: 1780 * 1024,
 };
 
 /**
@@ -39,6 +40,8 @@ const REQUIRED_DYNAMIC_ROUTE_KEYS = [
   "src/pages/console/ConsoleSettingsPage.tsx",
   "src/pages/console/ConsoleTeamDetail.tsx",
   "src/pages/console/ConsoleTeamList.tsx",
+  "src/pages/console/DepartmentGrantsPage.tsx",
+  "src/pages/console/DirectGrantPage.tsx",
   "src/pages/console/OperationsPage.tsx",
   "src/pages/console/lifecycle/ConsolePeopleList.tsx",
   "src/pages/console/lifecycle/HandoverTaskDetail.tsx",

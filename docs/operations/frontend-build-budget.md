@@ -16,7 +16,8 @@
 - `i18n`：中英文消息目录。
 - 门户路由：`PortalPage`、`PortalHandoverList`、`PortalHandoverDetail` 独立异步 chunk。
 - 控制台路由：`ConsoleAppList`、`ConsoleAppWorkspace`、`ConsoleSettingsPage`、`ConsoleTeamList`、
-  `ConsoleTeamDetail`、`ApprovalTemplatesPage`、`ApprovalInstancesPage`、`OperationsPage` 独立异步 chunk。
+  `ConsoleTeamDetail`、`ApprovalTemplatesPage`、`ApprovalInstancesPage`、`OperationsPage`、
+  `DirectGrantPage`、`DepartmentGrantsPage` 独立异步 chunk（后两者共享 `features/grantForm` 异步 chunk）。
 - 生命周期路由：`ConsolePeopleList`、`HandoverTaskList`、`HandoverTaskDetail`、`OnboardingPage` 独立异步 chunk。
 - 应用接入路由：`AppOnboardingWizard` 独立异步 chunk。
 - 数据交接共享组件（`features/handover/*`）由门户详情与控制台详情/向导异步 chunk 复用，不进入 `main`。
@@ -42,7 +43,9 @@ node scripts/check-build-budget.mjs
   之所以不整体调高 `synchronousChunk*`，是为了让 `vendor` 继续守住 360 KiB —— 否则
   antd 的体积会顺带把 vendor 的门禁一起放松掉；
 - 单个异步路由 chunk 原始体积不超过 `140 KiB`，gzip 不超过 `40 KiB`；
-- 全部 JavaScript 原始体积不超过 `1700 KiB`（Ant Design 表格地基落地后上调，见下节基线）；
+- 全部 JavaScript 原始体积不超过 `1780 KiB`（Ant Design 表格地基落地后上调到 1700，2026-09-08 控制台
+  「授予权限」`DirectGrantPage` 与「组织授权」`DepartmentGrantsPage` 两个异步路由落地后实测 1732 KiB，
+  再上调到 1780；两个新路由均为独立异步 chunk，并已加入 `REQUIRED_DYNAMIC_ROUTE_KEYS`）；
 - `App.tsx` 中的全部页面级路由必须继续以 Vite manifest key 出现在入口 `dynamicImports` 中,且对应
   manifest 条目必须标记 `isDynamicEntry`。删除任一控制台、门户或生命周期路由 chunk 都会使预算检查失败。
 
