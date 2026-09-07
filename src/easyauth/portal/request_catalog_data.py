@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from easyauth.applications.models import (
     App,
@@ -23,6 +23,10 @@ from easyauth.portal.request_catalog_approvers import (
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
 
+type RequestCatalogScope = Literal["portal", "console"]
+CONSOLE_CATALOG_SCOPE: Literal["console"] = "console"
+PORTAL_CATALOG_SCOPE: Literal["portal"] = "portal"
+
 
 @dataclass(frozen=True, slots=True)
 class RequestCatalogData:
@@ -40,10 +44,13 @@ class _PermissionCatalogContext:
     default_approver_by_permission_id: dict[int, ApproverResolution]
 
 
-def load_request_catalog_data() -> RequestCatalogData:
+def load_request_catalog_data(
+    *,
+    scope: RequestCatalogScope = PORTAL_CATALOG_SCOPE,
+) -> RequestCatalogData:
     apps = tuple(App.objects.filter(is_active=True).order_by("app_key"))
     scope_options_by_app_id = _scope_options_by_app_id(tuple(app.id for app in apps))
-    authorization_groups = _request_catalog_authorization_groups()
+    authorization_groups = _request_catalog_authorization_groups(scope=scope)
     permissions = tuple(
         permission
         for permission in _request_catalog_permissions()
@@ -116,18 +123,17 @@ def _permission_approver_resolution(
     )
 
 
-def _request_catalog_authorization_groups() -> tuple[AuthorizationGroup, ...]:
-    return tuple(
-        AuthorizationGroup.objects.select_related("app")
-        .filter(
-            app__is_active=True,
-            is_active=True,
-            requestable=True,
-            approval_rules__is_active=True,
-        )
-        .distinct()
-        .order_by("app__app_key", "kind", "key"),
+def _request_catalog_authorization_groups(
+    *,
+    scope: RequestCatalogScope,
+) -> tuple[AuthorizationGroup, ...]:
+    queryset = AuthorizationGroup.objects.select_related("app").filter(
+        app__is_active=True,
+        is_active=True,
     )
+    if scope == PORTAL_CATALOG_SCOPE:
+        queryset = queryset.filter(requestable=True, approval_rules__is_active=True).distinct()
+    return tuple(queryset.order_by("app__app_key", "kind", "key"))
 
 
 def _request_catalog_permissions() -> tuple[Permission, ...]:

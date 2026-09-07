@@ -28,6 +28,7 @@ def test_user_search_matches_name_email_and_id() -> None:
         name="销售运行用户",
         email="sales.runtime@example.com",
         department="销售部",
+        avatar_url="https://avatar.example.test/sales.png",
     )
     _ = UserMirror.objects.create(
         authentik_user_id="ak_uid_ops_001",
@@ -42,7 +43,9 @@ def test_user_search_matches_name_email_and_id() -> None:
     items = cast("list[dict[str, JsonValue]]", payload["data"])
     assert [item["user_id"] for item in items] == ["ak_uid_sales_001"]
     assert items[0]["name"] == "销售运行用户"
-    assert set(items[0]) == {"user_id", "name"}
+    assert items[0]["department"] == "销售部"
+    assert items[0]["avatar_url"] == "https://avatar.example.test/sales.png"
+    assert set(items[0]) == {"user_id", "name", "department", "avatar_url"}
 
     response_by_name = client.get(USER_OPTIONS_API_URL, {"q": "运维"})
     payload_by_name = cast("dict[str, JsonValue]", response_by_name.json())
