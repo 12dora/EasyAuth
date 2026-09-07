@@ -8,7 +8,13 @@ import pytest
 from django.utils import timezone
 
 from easyauth.accounts.models import UserMirror
-from easyauth.applications.models import App, AuthorizationGroup
+from easyauth.applications.models import (
+    App,
+    AppScope,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
+    Permission,
+)
 from easyauth.connectors.base import RECONCILE_STATUS_PARTIAL, ReconcileReport
 from easyauth.connectors.models import (
     SYNC_TRIGGER_MANUAL,
@@ -24,11 +30,12 @@ from easyauth.connectors.services import (
     mark_reconcile_dirty,
     reconcile_instance,
 )
-from easyauth.grants.models import AccessGrantGroup
+from easyauth.grants.models import AccessGrantGroup, AccessGrantPermission
 from easyauth.grants.services import (
     AuthorizationGroupGrantInput,
     GrantMutationInput,
     GrantService,
+    ScopedDirectGrantInput,
 )
 from tests.unit.connectors.fakes import FakeConnector
 
@@ -61,6 +68,49 @@ def _grant(user: UserMirror, app: App, groups: tuple[AuthorizationGroup, ...]) -
             authorization_groups=tuple(
                 AuthorizationGroupGrantInput(authorization_group=group, expires_at=None)
                 for group in groups
+            ),
+            actor_type="user",
+            actor_id="tester",
+        ),
+    )
+
+
+def _scope(app: App, key: str = "GLOBAL") -> AppScope:
+    return AppScope.objects.create(app=app, key=key, name=key.title())
+
+
+def _permission(app: App, key: str, *, scopes: list[str]) -> Permission:
+    return Permission.objects.create(app=app, key=key, name=key, supported_scopes=scopes)
+
+
+def _group_permission(
+    group: AuthorizationGroup,
+    permission: Permission,
+    scope_key: str,
+) -> AuthorizationGroupGrant:
+    return AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key=scope_key,
+    )
+
+
+def _grant_direct(
+    user: UserMirror,
+    app: App,
+    permissions: tuple[tuple[Permission, str], ...],
+) -> None:
+    _ = GrantService.create_grant(
+        GrantMutationInput(
+            user=user,
+            app=app,
+            direct_grants=tuple(
+                ScopedDirectGrantInput(
+                    permission=permission,
+                    scope_key=scope_key,
+                    expires_at=None,
+                )
+                for permission, scope_key in permissions
             ),
             actor_type="user",
             actor_id="tester",
@@ -143,6 +193,205 @@ def test_build_desired_state_excludes_inactive_group_and_expired_membership() ->
     assert "conn-eff-expired" not in desired.user_groups
     assert "conn-eff-inactive" not in desired.user_groups
     assert desired.auto_create_group_refs == frozenset()
+
+
+def test_build_desired_state_projects_direct_permissions_covering_mapped_group() -> None:
+    # Given: 直接权限恰好覆盖映射组所需权限, 无 AccessGrantGroup。
+    app, mapped, _unmapped = _app_with_groups("conn-direct-cover")
+    _ = _scope(app)
+    permission = _permission(app, "vpn.access", scopes=["GLOBAL"])
+    _ = _group_permission(mapped, permission, "GLOBAL")
+    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+    _ = ConnectorMapping.objects.create(
+        instance=instance,
+        authorization_group=mapped,
+        external_ref="netbird-vpn-users",
+    )
+    user = UserMirror.objects.create(
+        authentik_user_id="conn-direct-cover-u1",
+        name="Direct",
+        email="direct@example.com",
+    )
+    _grant_direct(user, app, ((permission, "GLOBAL"),))
+
+    desired = build_desired_state(instance)
+
+    assert dict(desired.user_groups) == {"conn-direct-cover-u1": frozenset({"netbird-vpn-users"})}
+    assert desired.profiles["conn-direct-cover-u1"].email == "direct@example.com"
+
+
+def test_build_desired_state_does_not_project_direct_permission_subset() -> None:
+    # Given: 直接权限只覆盖映射组所需集合的真子集。
+    app, mapped, _unmapped = _app_with_groups("conn-direct-subset")
+    _ = _scope(app)
+    vlan88 = _permission(app, "vpn.vlan88", scopes=["GLOBAL"])
+    vlan10 = _permission(app, "vpn.vlan10", scopes=["GLOBAL"])
+    _ = _group_permission(mapped, vlan88, "GLOBAL")
+    _ = _group_permission(mapped, vlan10, "GLOBAL")
+    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+    _ = ConnectorMapping.objects.create(
+        instance=instance,
+        authorization_group=mapped,
+        external_ref="netbird-vpn-users",
+    )
+    user = UserMirror.objects.create(authentik_user_id="conn-direct-subset-u1")
+    _grant_direct(user, app, ((vlan88, "GLOBAL"),))
+
+    desired = build_desired_state(instance)
+
+    assert "conn-direct-subset-u1" not in desired.user_groups
+    assert desired.profiles == {}
+
+
+def test_build_desired_state_expired_direct_permission_does_not_cover() -> None:
+    # Given: 过期直接权限不计入有效权限, 覆盖失效后退出投影。
+    app, mapped, _unmapped = _app_with_groups("conn-direct-expired")
+    _ = _scope(app)
+    vlan88 = _permission(app, "vpn.vlan88", scopes=["GLOBAL"])
+    vlan10 = _permission(app, "vpn.vlan10", scopes=["GLOBAL"])
+    _ = _group_permission(mapped, vlan88, "GLOBAL")
+    _ = _group_permission(mapped, vlan10, "GLOBAL")
+    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+    _ = ConnectorMapping.objects.create(
+        instance=instance,
+        authorization_group=mapped,
+        external_ref="netbird-vpn-users",
+    )
+    user = UserMirror.objects.create(authentik_user_id="conn-direct-expired-u1")
+    _grant_direct(user, app, ((vlan88, "GLOBAL"), (vlan10, "GLOBAL")))
+
+    desired = build_desired_state(instance)
+    assert "conn-direct-expired-u1" in desired.user_groups
+
+    expired = AccessGrantPermission.objects.get(grant__user=user, permission=vlan10)
+    expired.expires_at = timezone.now() - timedelta(hours=1)
+    expired.save(update_fields=["expires_at"])
+
+    desired = build_desired_state(instance)
+
+    assert "conn-direct-expired-u1" not in desired.user_groups
+
+
+def test_build_desired_state_projects_via_unmapped_group_coverage() -> None:
+    # Given: 未映射授权组的权限覆盖了映射组所需权限。
+    app, mapped, unmapped = _app_with_groups("conn-unmapped-cover")
+    _ = _scope(app)
+    permission = _permission(app, "vpn.access", scopes=["GLOBAL"])
+    _ = _group_permission(mapped, permission, "GLOBAL")
+    _ = _group_permission(unmapped, permission, "GLOBAL")
+    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+    _ = ConnectorMapping.objects.create(
+        instance=instance,
+        authorization_group=mapped,
+        external_ref="netbird-vpn-users",
+    )
+    user = UserMirror.objects.create(authentik_user_id="conn-unmapped-cover-u1")
+    _grant(user, app, (unmapped,))
+
+    desired = build_desired_state(instance)
+
+    assert dict(desired.user_groups) == {"conn-unmapped-cover-u1": frozenset({"netbird-vpn-users"})}
+
+
+def test_build_desired_state_empty_required_only_projects_explicit_membership() -> None:
+    # Given: 映射组没有任何有效 AuthorizationGroupGrant, 只能走规则 (a)。
+    app, mapped, _unmapped = _app_with_groups("conn-empty-required")
+    _ = _scope(app)
+    extra = _permission(app, "vpn.unrelated", scopes=["GLOBAL"])
+    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+    _ = ConnectorMapping.objects.create(
+        instance=instance,
+        authorization_group=mapped,
+        external_ref="netbird-empty",
+    )
+    member = UserMirror.objects.create(authentik_user_id="conn-empty-member")
+    outsider = UserMirror.objects.create(authentik_user_id="conn-empty-outsider")
+    _grant(member, app, (mapped,))
+    _grant_direct(outsider, app, ((extra, "GLOBAL"),))
+
+    desired = build_desired_state(instance)
+
+    assert dict(desired.user_groups) == {"conn-empty-member": frozenset({"netbird-empty"})}
+    assert "conn-empty-outsider" not in desired.user_groups
+
+
+def test_build_desired_state_keeps_projection_after_group_replaced_by_covering_directs() -> None:
+    # 事故回归 2026-09-07: grant 从 vlan88-access 组改为三条等价直接权限后仍应投影。
+    app = App.objects.create(app_key="conn-incident-vlan", name="VPN")
+    _ = _scope(app)
+    vlan88_group = AuthorizationGroup.objects.create(
+        app=app,
+        key="vlan88-access",
+        kind="bundle",
+        name="VLAN88",
+    )
+    vlan88_servers_group = AuthorizationGroup.objects.create(
+        app=app,
+        key="vlan88-servers",
+        kind="bundle",
+        name="VLAN88 Servers",
+    )
+    vlan10_group = AuthorizationGroup.objects.create(
+        app=app,
+        key="vlan10-access",
+        kind="bundle",
+        name="VLAN10",
+    )
+    vlan88 = _permission(app, "vpn.vlan88", scopes=["GLOBAL"])
+    vlan88_servers = _permission(app, "vpn.vlan88_servers", scopes=["GLOBAL"])
+    vlan10 = _permission(app, "vpn.vlan10", scopes=["GLOBAL"])
+    _ = _group_permission(vlan88_group, vlan88, "GLOBAL")
+    _ = _group_permission(vlan88_servers_group, vlan88_servers, "GLOBAL")
+    _ = _group_permission(vlan10_group, vlan10, "GLOBAL")
+    instance = ConnectorInstance.objects.create(app=app, connector_key="fake", enabled=True)
+    _ = ConnectorMapping.objects.create(
+        instance=instance,
+        authorization_group=vlan88_group,
+        external_ref="nb-vlan88",
+    )
+    _ = ConnectorMapping.objects.create(
+        instance=instance,
+        authorization_group=vlan88_servers_group,
+        external_ref="nb-vlan88-servers",
+    )
+    _ = ConnectorMapping.objects.create(
+        instance=instance,
+        authorization_group=vlan10_group,
+        external_ref="nb-vlan10",
+    )
+    user = UserMirror.objects.create(
+        authentik_user_id="conn-incident-u1",
+        name="Incident",
+        email="incident@example.com",
+    )
+    _grant(user, app, (vlan88_group,))
+
+    desired_v1 = build_desired_state(instance)
+    assert dict(desired_v1.user_groups) == {"conn-incident-u1": frozenset({"nb-vlan88"})}
+
+    _ = GrantService.change_grant(
+        GrantMutationInput(
+            user=user,
+            app=app,
+            direct_grants=(
+                ScopedDirectGrantInput(vlan88, "GLOBAL", None),
+                ScopedDirectGrantInput(vlan88_servers, "GLOBAL", None),
+                ScopedDirectGrantInput(vlan10, "GLOBAL", None),
+            ),
+            actor_type="user",
+            actor_id="tester",
+        ),
+    )
+
+    desired_v2 = build_desired_state(instance)
+    assert dict(desired_v2.user_groups) == {
+        "conn-incident-u1": frozenset({"nb-vlan88", "nb-vlan88-servers", "nb-vlan10"}),
+    }
+    assert desired_v2.profiles["conn-incident-u1"].email == "incident@example.com"
+    assert not AccessGrantGroup.objects.filter(
+        grant__user=user,
+        grant__is_current=True,
+    ).exists()
 
 
 def test_reconcile_records_run_and_passes_desired_state() -> None:
