@@ -52,6 +52,14 @@ PAGE_URLPATTERNS = [
         views.console_home,
         name="console-approval-templates-page-slash",
     ),
+    path("grants/direct", views.console_home, name="console-direct-grant-page"),
+    path("grants/direct/", views.console_home, name="console-direct-grant-page-slash"),
+    path("grants/departments", views.console_home, name="console-department-grants-page"),
+    path(
+        "grants/departments/",
+        views.console_home,
+        name="console-department-grants-page-slash",
+    ),
     path("apps/<str:app_key>", views.app_detail, name="app-detail-no-slash"),
     path("apps/<str:app_key>/", views.app_detail, name="app-detail"),
 ]
