@@ -53,6 +53,7 @@ const USER_OPTIONS = {
 describe("DirectGrantPage", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   test("未选被授权人时不能提交", async () => {
@@ -105,6 +106,33 @@ describe("DirectGrantPage", () => {
     // 被授权人保留, 目标草稿清空。
     expect(await screen.findByText("已选择：张三 · 销售部")).toBeVisible();
     await waitFor(() => expect(screen.getByLabelText("应用")).toHaveValue(""));
+  });
+
+  test("到期时间在填完之后走进过去, 点提交给出提示且不发请求", async () => {
+    // 只伪造时钟, 不伪造定时器: 输入防抖与 react-query 仍走真实计时。
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
+    const fetchMock = stubFetch(async (url) => {
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    const user = userEvent.setup({ delay: null });
+
+    renderPage();
+    await fillGrantForm(user);
+    await user.selectOptions(screen.getByLabelText("有效期"), "timed");
+    await user.type(screen.getByLabelText("到期时间"), datetimeLocalIn(60 * 60 * 1000));
+    await waitFor(() => expect(screen.getByRole("button", { name: "授予权限" })).toBeEnabled());
+
+    // 用户填完之后一直没点, 到期时间走进了过去; 按钮此刻仍然亮着(渲染时的结论已经过期)。
+    vi.setSystemTime(new Date("2030-01-02T00:00:00Z"));
+    await user.click(screen.getByRole("button", { name: "授予权限" }));
+
+    expect(await screen.findByText("授权信息不完整")).toBeVisible();
+    // 提示条逐条列出拦点; 到期时间字段自己也会亮红, 因此按列表项断言。
+    expect(screen.getAllByRole("listitem").map((item) => item.textContent)).toContain(
+      "到期时间必须晚于当前时间。",
+    );
+    expect(fetchMock.mock.calls.some(([input]) => String(input) === "/console/api/v1/direct-grants")).toBe(false);
   });
 
   test("后端 422 的逐条语义错误全部展示", async () => {
@@ -204,6 +232,12 @@ async function authorizationGroupOption(user: UserEvent, name: string): Promise<
     return node;
   });
   return within(dropdown).getByTitle(name);
+}
+
+/** 以当前(可能被伪造的)时钟为基准, 生成 datetime-local 控件值。 */
+function datetimeLocalIn(offsetMs: number): string {
+  const target = new Date(Date.now() + offsetMs);
+  return new Date(target.getTime() - target.getTimezoneOffset() * 60_000).toISOString().slice(0, 16);
 }
 
 function jsonResponse(payload: unknown, status = 200) {

@@ -10,6 +10,7 @@ import {
   directGrantSelectionPermissionKey,
   directGrantSelectionScopeKey,
 } from "../../pages/portal/hooks/accessRequestSelection";
+import type { MessageKey } from "../../i18n/messages";
 import type { PortalCatalogAppView, PortalRequestCatalogView } from "../../pages/portal/hooks/accessRequestTypes";
 
 export type GrantTermType = "permanent" | "timed";
@@ -20,8 +21,16 @@ export type GrantDraft = {
   /** 门户选择键: JSON.stringify([permissionKey, scopeKey]), 与 PermissionSelector 完全一致。 */
   selectedPermissionKeys: string[];
   grantType: GrantTermType;
-  /** datetime-local 控件值; 长期授权时为空串。 */
+  /** datetime-local 控件值; 长期授权时为空串。分钟精度。 */
   expiresAt: string;
+  /**
+   * 回填草稿时后端给出的原始到期时间(ISO 字符串), 没有回填来源时为空串。
+   *
+   * datetime-local 只有分钟精度, 后端的时间戳带秒与微秒: 只改说明就提交会把秒数抹掉,
+   * 相当于把有效期悄悄提前。因此保留原值, 只要控件值仍是它的分钟精度投影就原样回传;
+   * 用户动过控件, 这份来源立即作废(GrantForm 在 onChange 里清空)。
+   */
+  expiresAtSource: string;
   reason: string;
 };
 
@@ -31,6 +40,7 @@ export const EMPTY_GRANT_DRAFT: GrantDraft = {
   selectedPermissionKeys: [],
   grantType: "permanent",
   expiresAt: "",
+  expiresAtSource: "",
   reason: "",
 };
 
@@ -46,20 +56,54 @@ export type GrantSubmission = {
 /** 与后端 direct-grants / department-grant-policies 载荷的 reason max_length 一致。 */
 export const GRANT_REASON_MAX_LENGTH = 1000;
 
+export type GrantDraftErrorField = "catalog" | "app" | "target" | "expiresAt" | "reason";
+
+export interface GrantDraftError {
+  field: GrantDraftErrorField;
+  /** 由调用方用 t() 渲染: 这一层不生产用户可见文案。 */
+  messageKey: MessageKey;
+}
+
 /**
- * 提交闸门。
+ * 这份草稿现在拦在哪里; 没有拦点就是空数组。
  *
- * 目录是必须的: 应用键要落在目录里, 否则这份草稿必然被后端拒(app_for_key 404)。目录还没加载完
- * 就不放行, 而不是先放行再期待后端兜底。
+ * 提交前必须重新调用一次: 渲染时算出来的结论会过期——限时授权的到期时间会在用户填完与点击
+ * 之间走到过去, 那时按钮还亮着, 但草稿已经不能提交了。
+ *
+ * 目录是必须的: 应用键要落在目录里, 否则这份草稿必然被后端拒(app_for_key 404)。
  */
-export function grantDraftIsValid(draft: GrantDraft, catalog: PortalRequestCatalogView | undefined): boolean {
+export function grantDraftErrors(
+  draft: GrantDraft,
+  catalog: PortalRequestCatalogView | undefined,
+): GrantDraftError[] {
   if (!catalog) {
-    return false;
+    return [{ field: "catalog", messageKey: "grantForm.error.catalogUnavailable" }];
   }
+  const errors: GrantDraftError[] = [];
   if (!draft.appKey || !(catalog.apps ?? []).some((app) => app.app_key === draft.appKey)) {
-    return false;
+    errors.push({ field: "app", messageKey: "grantForm.error.appRequired" });
   }
-  return grantDraftTargetIsPresent(draft) && grantDraftReasonIsValid(draft) && grantDraftTermIsValid(draft);
+  if (!grantDraftTargetIsPresent(draft)) {
+    errors.push({ field: "target", messageKey: "grantForm.error.targetRequired" });
+  }
+  if (draft.grantType === "timed") {
+    if (!draft.expiresAt) {
+      errors.push({ field: "expiresAt", messageKey: "grantForm.error.expiresAtRequired" });
+    } else if (!grantDraftTermIsValid(draft)) {
+      errors.push({ field: "expiresAt", messageKey: "grantForm.expiresAtInvalid" });
+    }
+  }
+  if (draft.reason.trim().length === 0) {
+    errors.push({ field: "reason", messageKey: "grantForm.error.reasonRequired" });
+  } else if (draft.reason.length > GRANT_REASON_MAX_LENGTH) {
+    errors.push({ field: "reason", messageKey: "grantForm.error.reasonTooLong" });
+  }
+  return errors;
+}
+
+/** 提交闸门(按钮禁用态): 与 grantDraftErrors 同一口径。 */
+export function grantDraftIsValid(draft: GrantDraft, catalog: PortalRequestCatalogView | undefined): boolean {
+  return grantDraftErrors(draft, catalog).length === 0;
 }
 
 /**
@@ -105,7 +149,7 @@ export function buildGrantSubmission(draft: GrantDraft): GrantSubmission {
       scope: requireScopeKey(selectionKey),
     })),
     grant_type: draft.grantType,
-    grant_expires_at: draft.grantType === "timed" ? new Date(draft.expiresAt).toISOString() : null,
+    grant_expires_at: draft.grantType === "timed" ? grantExpiresAtIso(draft) : null,
     reason: draft.reason.trim(),
   };
 }
@@ -135,6 +179,7 @@ export function grantDraftFromPolicy(input: GrantPolicySnapshot): GrantDraft {
     ),
     grantType: input.grant_type,
     expiresAt: input.expires_at ? isoToDatetimeLocal(input.expires_at) : "",
+    expiresAtSource: input.expires_at ?? "",
     reason: input.reason,
   };
 }
@@ -145,6 +190,19 @@ function grantDraftTargetIsPresent(draft: GrantDraft): boolean {
 
 function grantDraftReasonIsValid(draft: GrantDraft): boolean {
   return draft.reason.trim().length > 0 && draft.reason.length <= GRANT_REASON_MAX_LENGTH;
+}
+
+/**
+ * 提交用的到期时间。
+ *
+ * 控件值仍是回填来源的分钟精度投影时原样回传后端给的那一串, 秒与微秒都不丢;
+ * 用户改过控件(来源已被清空, 或投影对不上)就以控件值为准。
+ */
+function grantExpiresAtIso(draft: GrantDraft): string {
+  if (draft.expiresAtSource && isoToDatetimeLocal(draft.expiresAtSource) === draft.expiresAt) {
+    return draft.expiresAtSource;
+  }
+  return new Date(draft.expiresAt).toISOString();
 }
 
 function grantDraftTermIsValid(draft: GrantDraft): boolean {

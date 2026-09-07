@@ -202,8 +202,12 @@ export function GrantForm({
             disabled={disabled}
             onChange={(event) => {
               const grantType = event.currentTarget.value as GrantTermType;
-              // 切回长期必须同时清掉到期时间, 否则草稿会带着一个不会被提交的残值。
-              onDraftChange({ ...draft, grantType, expiresAt: grantType === "timed" ? draft.expiresAt : "" });
+              // 切回长期必须同时清掉到期时间与它的回填来源, 否则草稿会带着不会被提交的残值。
+              onDraftChange(
+                grantType === "timed"
+                  ? { ...draft, grantType }
+                  : { ...draft, grantType, expiresAt: "", expiresAtSource: "" },
+              );
             }}
           >
             <option value="permanent">{t("grantForm.term.permanent")}</option>
@@ -219,7 +223,10 @@ export function GrantForm({
             value={draft.expiresAt}
             min={nowMin}
             disabled={disabled || draft.grantType !== "timed"}
-            onChange={(event) => onDraftChange({ ...draft, expiresAt: event.currentTarget.value })}
+            // 用户一动控件, 回填来源(带秒/微秒的原始时间戳)立即作废, 以控件值为准。
+            onChange={(event) =>
+              onDraftChange({ ...draft, expiresAt: event.currentTarget.value, expiresAtSource: "" })
+            }
           />
         </Field>
       </div>

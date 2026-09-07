@@ -10,6 +10,7 @@ import {
   EMPTY_GRANT_DRAFT,
   GrantForm,
   buildGrantSubmission,
+  grantDraftErrors,
   grantDraftFromPolicy,
   grantDraftIsValid,
 } from "./index";
@@ -115,14 +116,15 @@ describe("授权草稿", () => {
     expect(() => buildGrantSubmission({ ...GROUP_DRAFT, grantType: "timed" })).toThrow(/到期时间/);
   });
 
-  test("策略回填草稿后再构造载荷能拿回同一份策略", () => {
-    // datetime-local 是分钟精度, 因此策略里的到期时间取整分。
+  test("策略回填草稿后再构造载荷能拿回同一份策略, 秒与微秒都不丢", () => {
+    // 后端用 datetime.isoformat() 序列化, 时间戳带秒与微秒; datetime-local 只有分钟精度,
+    // 只改说明就提交绝不能把有效期悄悄提前。
     const policy = {
       app_key: "crm",
       authorization_groups: [{ key: "sales" }],
       permissions: [{ key: "crm.customer.read", scope: "SELF" }],
       grant_type: "timed" as const,
-      expires_at: "2030-12-31T15:59:00.000Z",
+      expires_at: "2030-12-31T15:59:59.123456+00:00",
       reason: "销售部统一授权",
     };
 
@@ -137,9 +139,29 @@ describe("授权草稿", () => {
       authorization_group_keys: ["sales"],
       direct_grants: [{ permission: "crm.customer.read", scope: "SELF" }],
       grant_type: "timed",
-      grant_expires_at: "2030-12-31T15:59:00.000Z",
+      grant_expires_at: "2030-12-31T15:59:59.123456+00:00",
       reason: "销售部统一授权",
     });
+
+    // 只改说明: 到期时间原样回传。
+    expect(buildGrantSubmission({ ...draft, reason: "改一下说明" }).grant_expires_at).toBe(
+      "2030-12-31T15:59:59.123456+00:00",
+    );
+  });
+
+  test("改过到期时间控件后以控件值为准", () => {
+    const draft = grantDraftFromPolicy({
+      app_key: "crm",
+      authorization_groups: [{ key: "sales" }],
+      permissions: [],
+      grant_type: "timed",
+      expires_at: "2030-12-31T15:59:59.123456+00:00",
+      reason: "销售部统一授权",
+    });
+
+    // GrantForm 在 onChange 里清空回填来源。
+    const edited = { ...draft, expiresAt: "2031-01-31T10:30", expiresAtSource: "" };
+    expect(buildGrantSubmission(edited).grant_expires_at).toBe(new Date("2031-01-31T10:30").toISOString());
   });
 
   test("长期策略回填后到期时间为空", () => {
@@ -154,6 +176,45 @@ describe("授权草稿", () => {
 
     expect(draft.expiresAt).toBe("");
     expect(buildGrantSubmission(draft).grant_expires_at).toBeNull();
+  });
+
+  test("grantDraftErrors 逐项给出拦点与文案 key", () => {
+    expect(grantDraftErrors(GROUP_DRAFT, undefined)).toEqual([
+      { field: "catalog", messageKey: "grantForm.error.catalogUnavailable" },
+    ]);
+    expect(grantDraftErrors(EMPTY_GRANT_DRAFT, CATALOG)).toEqual([
+      { field: "app", messageKey: "grantForm.error.appRequired" },
+      { field: "target", messageKey: "grantForm.error.targetRequired" },
+      { field: "reason", messageKey: "grantForm.error.reasonRequired" },
+    ]);
+    expect(grantDraftErrors({ ...GROUP_DRAFT, grantType: "timed" }, CATALOG)).toEqual([
+      { field: "expiresAt", messageKey: "grantForm.error.expiresAtRequired" },
+    ]);
+    expect(
+      grantDraftErrors({ ...GROUP_DRAFT, grantType: "timed", expiresAt: "2020-01-01T00:00" }, CATALOG),
+    ).toEqual([{ field: "expiresAt", messageKey: "grantForm.expiresAtInvalid" }]);
+    expect(grantDraftErrors(GROUP_DRAFT, CATALOG)).toEqual([]);
+  });
+
+  test("到期时间走到过去后同一份草稿不再合法", () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(new Date("2030-01-01T00:00:00Z"));
+      const draft: GrantDraft = {
+        ...GROUP_DRAFT,
+        grantType: "timed",
+        expiresAt: "2030-01-01T09:00",
+        expiresAtSource: "",
+      };
+      expect(grantDraftIsValid(draft, CATALOG)).toBe(true);
+
+      vi.setSystemTime(new Date("2030-01-02T00:00:00Z"));
+      expect(grantDraftErrors(draft, CATALOG)).toEqual([
+        { field: "expiresAt", messageKey: "grantForm.expiresAtInvalid" },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("期限与到期时间不匹配的策略直接抛错", () => {
@@ -212,6 +273,24 @@ describe("GrantForm", () => {
     expect(await screen.findByText("到期时间必须晚于当前时间。")).toBeVisible();
   });
 
+  test("改动到期时间控件会清空回填来源", async () => {
+    const user = userEvent.setup({ delay: null });
+    const drafts: GrantDraft[] = [];
+    renderForm((draft) => drafts.push(draft), {
+      ...EMPTY_GRANT_DRAFT,
+      appKey: "crm",
+      grantType: "timed",
+      expiresAt: "2030-12-31T23:59",
+      expiresAtSource: "2030-12-31T15:59:59.123456+00:00",
+    });
+
+    await user.clear(screen.getByLabelText("到期时间"));
+    await user.type(screen.getByLabelText("到期时间"), "2031-01-31T10:30");
+
+    await waitFor(() => expect(drafts.at(-1)?.expiresAt).toBe("2031-01-31T10:30"));
+    expect(drafts.at(-1)?.expiresAtSource).toBe("");
+  });
+
   test("说明写回草稿", async () => {
     const user = userEvent.setup({ delay: null });
     const drafts: GrantDraft[] = [];
@@ -223,13 +302,19 @@ describe("GrantForm", () => {
   });
 });
 
-function renderForm(onDraftChange?: (draft: GrantDraft) => void) {
-  renderWithAntd(<GrantFormHarness onDraftChange={onDraftChange} />);
+function renderForm(onDraftChange?: (draft: GrantDraft) => void, initialDraft: GrantDraft = EMPTY_GRANT_DRAFT) {
+  renderWithAntd(<GrantFormHarness onDraftChange={onDraftChange} initialDraft={initialDraft} />);
 }
 
 /** 草稿由调用方持有, 用例里用一个最小的受控壳子把它接起来。 */
-function GrantFormHarness({ onDraftChange }: { onDraftChange?: (draft: GrantDraft) => void }) {
-  const [draft, setDraft] = useState<GrantDraft>(EMPTY_GRANT_DRAFT);
+function GrantFormHarness({
+  onDraftChange,
+  initialDraft,
+}: {
+  onDraftChange?: (draft: GrantDraft) => void;
+  initialDraft: GrantDraft;
+}) {
+  const [draft, setDraft] = useState<GrantDraft>(initialDraft);
   return (
     <GrantForm
       catalog={CATALOG}
