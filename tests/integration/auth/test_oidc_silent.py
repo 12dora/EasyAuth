@@ -28,7 +28,6 @@ if TYPE_CHECKING:
 
     from cryptography.hazmat.primitives.asymmetric import rsa
 
-pytest_plugins = ("tests.integration.auth.test_backchannel_logout",)
 pytestmark = pytest.mark.django_db
 
 

@@ -81,7 +81,9 @@ def test_get_account_id_requires_one_immutable_id(monkeypatch: pytest.MonkeyPatc
 
 def test_list_users_rejects_non_object_elements(monkeypatch: pytest.MonkeyPatch) -> None:
     response = _Response(
-        [b'[{"id":"u1","role":"user","is_blocked":false,"is_service_user":false,"pending_approval":false},1]'],
+        [
+            b'[{"id":"u1","role":"user","is_blocked":false,"is_service_user":false,"pending_approval":false},1]'
+        ],
     )
     monkeypatch.setattr(client_module, "urlopen", _static_response(response))
 

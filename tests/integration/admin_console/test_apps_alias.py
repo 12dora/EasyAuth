@@ -38,9 +38,7 @@ def test_apps_api_creates_and_lists_alias() -> None:
     assert response.status_code == HTTPStatus.CREATED
     assert app.alias == "海关数据"
     assert response.json()["app"]["alias"] == "海关数据"
-    listed_item = next(
-        item for item in listed.json()["data"] if item["app_key"] == app.app_key
-    )
+    listed_item = next(item for item in listed.json()["data"] if item["app_key"] == app.app_key)
     assert listed_item["alias"] == "海关数据"
     assert listed_item["name"] == "EasyCustoms"
 

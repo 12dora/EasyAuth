@@ -159,9 +159,7 @@ def _decided_by_names(access_requests: tuple[AccessRequest, ...]) -> dict[int, s
         user.authentik_user_id: user.name
         for user in UserMirror.objects.filter(authentik_user_id__in=actor_ids)
     }
-    missing_user_ids = tuple(
-        actor_id for actor_id in actor_ids if actor_id not in names_by_user_id
-    )
+    missing_user_ids = tuple(actor_id for actor_id in actor_ids if actor_id not in names_by_user_id)
     if missing_user_ids:
         raise AccessRequestDecisionActorMissingError(missing_user_ids)
     return {

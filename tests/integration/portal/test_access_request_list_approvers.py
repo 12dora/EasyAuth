@@ -410,8 +410,6 @@ def _row_by_id(response: HttpResponseLike, request_id: int) -> dict[str, JsonVal
     payload = json_object(response)
     data = payload["data"]
     assert isinstance(data, list)
-    matches = [
-        item for item in data if isinstance(item, dict) and item["id"] == request_id
-    ]
+    matches = [item for item in data if isinstance(item, dict) and item["id"] == request_id]
     assert len(matches) == 1
     return matches[0]

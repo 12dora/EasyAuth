@@ -42,9 +42,7 @@ def test_portal_handover_app_options_emit_app_alias() -> None:
 
     assert response.status_code == HTTPStatus.OK
     item = next(
-        option
-        for option in response.json()["items"]
-        if option["app_key"] == "portal-alias-options"
+        option for option in response.json()["items"] if option["app_key"] == "portal-alias-options"
     )
     assert item["app_name"] == "EasyCustoms"
     assert item["app_alias"] == ALIAS

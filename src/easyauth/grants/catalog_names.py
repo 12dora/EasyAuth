@@ -54,10 +54,10 @@ def _display_names(
     if not unique_keys:
         return {}
     rows = {
-        key: CatalogDisplayName(name=name, name_en=name_en)
-        for key, name, name_en in model.objects.filter(
+        row.key: CatalogDisplayName(name=row.name, name_en=row.name_en)
+        for row in model.objects.filter(
             app_id=app_id,
             key__in=unique_keys,
-        ).values_list("key", "name", "name_en")
+        ).only("key", "name", "name_en")
     }
     return {key: rows.get(key, CatalogDisplayName(name=key, name_en="")) for key in unique_keys}

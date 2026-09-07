@@ -60,11 +60,7 @@ def test_requester_can_withdraw_submitted_request_idempotently() -> None:
     assert first.json()["access_request"]["applied_at"] is None
     listed = client.get("/portal/api/v1/me/access-requests")
     assert listed.status_code == HTTPStatus.OK
-    listed_row = next(
-        item
-        for item in listed.json()["data"]
-        if item["id"] == access_request.id
-    )
+    listed_row = next(item for item in listed.json()["data"] if item["id"] == access_request.id)
     assert listed_row["withdrawn_at"] == withdrawn_at
     assert listed_row["approved_at"] is None
     assert listed_row["applied_at"] is None
