@@ -16,6 +16,7 @@ def test_bind_oidc_session_updates_dingtalk_org_context() -> None:
     SessionMiddleware(lambda _request: HttpResponse()).process_request(request)
     request.session.save()
     claims = VerifiedOidcClaims(
+        sid="test-sid",
         subject="ak-user",
         name="张三",
         email="zhangsan@example.test",
@@ -54,6 +55,7 @@ def test_bind_oidc_session_accepts_authentik_empty_org_context() -> None:
     SessionMiddleware(lambda _request: HttpResponse()).process_request(request)
     request.session.save()
     claims = VerifiedOidcClaims(
+        sid="test-sid",
         subject="ak-admin",
         name="akadmin",
         email="akadmin@example.test",

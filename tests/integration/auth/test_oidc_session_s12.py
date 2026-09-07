@@ -444,9 +444,7 @@ def test_s12_logout_posts_id_token_hint_through_hidden_authentik_frame() -> None
     assert f'src="{AUTHENTIK_LOGOUT_FRAME_PATH}"' in logged_out.content.decode()
     assert frame.status_code == HTTPStatus.OK
     assert frame.headers["X-Frame-Options"] == "SAMEORIGIN"
-    assert (
-        'action="https://authentik.example.test/application/o/easyauth/end-session/"' in html
-    )
+    assert 'action="https://authentik.example.test/application/o/easyauth/end-session/"' in html
     assert 'name="id_token_hint"' in html
     assert "s12.id.token" in html
     assert "post_logout_redirect_uri" not in html
@@ -616,6 +614,7 @@ def _valid_claims() -> OidcClaims:
         "iss": AUTHENTIK_ISSUER,
         "aud": CLIENT_ID,
         "sub": OIDC_SUBJECT,
+        "sid": "test-sid",
         "nonce": OIDC_NONCE,
     }
 
@@ -632,6 +631,7 @@ def _valid_claims() -> OidcClaims:
         ({**_valid_claims(), "iss": "https://evil.example.test/application/o/easyauth/"}, "issuer"),
         ({**_valid_claims(), "aud": "other-client"}, "audience"),
         ({**_valid_claims(), "sub": ""}, "subject"),
+        ({key: value for key, value in _valid_claims().items() if key != "sid"}, "sid"),
     ],
 )
 def test_s12_callback_rejects_invalid_claims_without_writing_session(

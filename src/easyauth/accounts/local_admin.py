@@ -134,6 +134,7 @@ def bind_local_admin_session(
     user = bind_oidc_session(
         request,
         VerifiedOidcClaims(
+            sid="",
             subject=local_admin_subject(account.username),
             name=f"本地管理员 {account.username}",
             email=f"{account.username}@local.admin",

@@ -404,3 +404,19 @@ class DingTalkDirectorySyncState(models.Model):
     @override
     def __str__(self) -> str:
         return f"{self.source_slug}:{self.corp_id}:{self.status}"
+
+
+class OidcSessionBinding(models.Model):
+    session_key: models.CharField[str, str] = models.CharField(max_length=40, unique=True)
+    authentik_user_id: models.CharField[str, str] = models.CharField(
+        max_length=128,
+        db_index=True,
+    )
+    sid: models.CharField[str, str] = models.CharField(max_length=128, db_index=True)
+    created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    @override
+    def __str__(self) -> str:
+        return f"{self.authentik_user_id}:{self.sid}"

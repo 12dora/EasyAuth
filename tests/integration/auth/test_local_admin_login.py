@@ -1074,6 +1074,7 @@ def test_bind_oidc_session_rejects_reserved_local_admin_subject() -> None:
         _ = bind_oidc_session(
             request,
             VerifiedOidcClaims(
+                sid="test-sid",
                 subject="local-admin:admin",
                 name="伪装",
                 email="e@example.com",
@@ -1089,6 +1090,7 @@ def test_bind_oidc_session_allows_empty_groups() -> None:
     user = bind_oidc_session(
         request,
         VerifiedOidcClaims(
+            sid="test-sid",
             subject="oidc-admin",
             name="OIDC 管理员",
             email="admin@example.com",
@@ -1123,6 +1125,7 @@ def test_console_actor_revokes_oidc_superuser_after_upstream_group_removed(
     user = bind_oidc_session(
         request,
         VerifiedOidcClaims(
+            sid="test-sid",
             subject="oidc-admin-revoked",
             name="OIDC 管理员",
             email="admin@example.com",

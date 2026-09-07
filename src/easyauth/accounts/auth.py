@@ -5,9 +5,10 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, cast, override
 from urllib.parse import urlencode, urlsplit, urlunsplit
 
+from django.contrib.sessions.models import Session
 from django.db import transaction
 
-from easyauth.accounts.models import USER_STATUS_ACTIVE, UserMirror
+from easyauth.accounts.models import USER_STATUS_ACTIVE, OidcSessionBinding, UserMirror
 from easyauth.accounts.org_context import apply_dingtalk_org_context
 
 if TYPE_CHECKING:
@@ -23,6 +24,9 @@ OIDC_ID_TOKEN_SESSION_KEY: Final = "easyauth_oidc_id_token"  # noqa: S105 - sess
 LOCAL_ADMIN_SESSION_FLAG: Final = "easyauth_local_admin"
 LOCAL_ADMIN_SESSION_VERSION_KEY: Final = "easyauth_local_admin_session_version"
 LOCAL_ADMIN_RESERVED_SUBJECT_PREFIX: Final = "local-admin:"
+FIELD_SID: Final = "sid"
+FIELD_LOGOUT: Final = "logout_token"
+SID_MAX_LENGTH: Final = 128
 FIELD_SUBJECT: Final = "subject"
 REASON_RESERVED_SUBJECT: Final = "must not use reserved local-admin namespace"
 DEFAULT_AUTH_SUCCESS_NEXT: Final = "/portal/"
@@ -66,6 +70,7 @@ class OidcClientConfig:
 
 @dataclass(frozen=True, slots=True)
 class VerifiedOidcClaims:
+    sid: str
     subject: str
     name: str
     email: str
@@ -142,6 +147,7 @@ def verify_oidc_claims(
         raise OidcSessionError(FIELD_NONCE, REASON_LOGIN_NONCE_MISMATCH)
 
     return VerifiedOidcClaims(
+        sid=_required_string_claim(claims, "sid", "sid"),
         subject=subject,
         name=_display_name_claim(claims),
         email=_optional_string_claim(claims, "email"),
@@ -160,6 +166,8 @@ def bind_oidc_session(
     # OIDC 登录路径禁止绑定 local-admin: 命名空间的 subject; 只有本地超管绑定才允许该前缀。
     if not local_admin and claims.subject.startswith(LOCAL_ADMIN_RESERVED_SUBJECT_PREFIX):
         raise OidcSessionError(FIELD_SUBJECT, REASON_RESERVED_SUBJECT)
+    if not local_admin and (not claims.sid or len(claims.sid) > SID_MAX_LENGTH):
+        raise OidcSessionError(FIELD_SID, "must be non-empty and at most 128 characters")
     with transaction.atomic():
         user, created = UserMirror.objects.select_for_update().get_or_create(
             authentik_user_id=claims.subject,
@@ -179,7 +187,16 @@ def bind_oidc_session(
             changed_fields.append("updated_at")
             user.full_clean()
             user.save(update_fields=changed_fields)
+    previous_key = request.session.session_key
     request.session.cycle_key()
+    with transaction.atomic():
+        _ = OidcSessionBinding.objects.filter(session_key=previous_key).delete()
+        if not local_admin:
+            _ = OidcSessionBinding.objects.create(
+                session_key=request.session.session_key,
+                authentik_user_id=claims.subject,
+                sid=claims.sid,
+            )
     request.session[AUTHENTIK_SESSION_KEY] = user.authentik_user_id
     if local_admin:
         request.session[LOCAL_ADMIN_SESSION_FLAG] = True
@@ -196,6 +213,7 @@ def clear_oidc_login_attempt(request: HttpRequest) -> None:
 
 
 def clear_auth_session(request: HttpRequest) -> None:
+    _ = OidcSessionBinding.objects.filter(session_key=request.session.session_key).delete()
     request.session.pop(AUTHENTIK_SESSION_KEY, None)
     request.session.pop(OIDC_ID_TOKEN_SESSION_KEY, None)
     request.session.pop(LOCAL_ADMIN_SESSION_FLAG, None)
@@ -336,3 +354,15 @@ def _is_safe_avatar_url(value: str) -> bool:
         return True
     parsed = urlsplit(value)
     return parsed.scheme == "https" and parsed.netloc != ""
+
+
+def revoke_authentik_sessions(*, sid: str = "", subject: str = "") -> int:
+    if not sid and not subject:
+        raise OidcSessionError(FIELD_LOGOUT, "sid or subject is required")
+    with transaction.atomic():
+        bindings = OidcSessionBinding.objects.select_for_update()
+        bindings = bindings.filter(sid=sid) if sid else bindings.filter(authentik_user_id=subject)
+        keys = list(bindings.values_list("session_key", flat=True))
+        _ = Session.objects.filter(session_key__in=keys).delete()
+        _ = OidcSessionBinding.objects.filter(session_key__in=keys).delete()
+    return len(keys)

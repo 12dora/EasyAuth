@@ -23,6 +23,7 @@ from easyauth.accounts.auth import (
     OidcUserInactiveError,
     bind_oidc_session,
     build_authorization_url,
+    clear_auth_session,
     clear_oidc_login_attempt,
     verify_callback_state,
     verify_oidc_claims,
@@ -115,6 +116,7 @@ def oidc_callback(request: HttpRequest) -> HttpResponse:
 def logout(request: HttpRequest) -> HttpResponseRedirect:
     id_token_hint = _session_string(request, OIDC_ID_TOKEN_SESSION_KEY)
     authentik_endpoint = _authentik_logout_endpoint()
+    clear_auth_session(request)
     request.session.flush()
     if authentik_endpoint != "":
         request.session[PENDING_AUTHENTIK_LOGOUT_SESSION_KEY] = id_token_hint

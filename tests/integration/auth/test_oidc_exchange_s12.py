@@ -550,6 +550,7 @@ def _signed_id_token(
             "name": "JWKS 用户",
             "nonce": nonce,
             "sub": OIDC_SUBJECT,
+            "sid": "test-sid",
         },
         private_key,
         algorithm=algorithm,
