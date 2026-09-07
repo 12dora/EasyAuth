@@ -91,6 +91,35 @@ describe("OrgTree", () => {
     expect(treeItem("1")).toHaveAttribute("aria-selected", "false");
   });
 
+  test("鼠标点开三角后, 方向键与回车作用在刚点的那一行", async () => {
+    const user = userEvent.setup();
+    renderTree();
+
+    await user.click(screen.getByRole("button", { name: "展开 销售部" }));
+    expect(treeItem("12")).toHaveFocus();
+
+    // 左键收起的必须是销售部, 不能落回上一次记录的公司。
+    await user.keyboard("{ArrowLeft}");
+    expect(treeItem("12")).toHaveAttribute("aria-expanded", "false");
+    expect(treeItem("1")).toHaveAttribute("aria-expanded", "true");
+
+    await user.keyboard("{Enter}");
+    expect(treeItem("12")).toHaveAttribute("aria-selected", "true");
+    expect(treeItem("1")).toHaveAttribute("aria-selected", "false");
+  });
+
+  test("鼠标点行选中后, 方向键从该行继续移动", async () => {
+    const user = userEvent.setup();
+    renderTree();
+
+    await user.click(screen.getByText("技术部"));
+    expect(treeItem("13")).toHaveFocus();
+    expect(treeItem("13")).toHaveAttribute("aria-selected", "true");
+
+    await user.keyboard("{ArrowUp}");
+    expect(treeItem("12")).toHaveFocus();
+  });
+
   test("搜索命中时自动展开祖先, 未命中的分支隐藏", () => {
     renderTree({ filter: "华东" });
 

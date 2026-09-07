@@ -32,6 +32,7 @@ export const zhCN = {
   "departmentGrants.source.own": "本部门",
   "departmentGrants.source.inherited": "继承自 {name}",
   "departmentGrants.content.more": "+{count}",
+  "departmentGrants.content.moreLabel": "查看其余 {count} 项授权内容",
   "departmentGrants.content.empty": "未选择权限",
   "departmentGrants.empty.title": "该部门暂无授权",
   "departmentGrants.empty.description": "新增授权后，该部门及其子部门的在职人员会自动获得对应权限。",
@@ -89,6 +90,7 @@ export const en: Record<keyof typeof zhCN, string> = {
   "departmentGrants.source.own": "This department",
   "departmentGrants.source.inherited": "Inherited from {name}",
   "departmentGrants.content.more": "+{count}",
+  "departmentGrants.content.moreLabel": "Show the other {count} items",
   "departmentGrants.content.empty": "No access selected",
   "departmentGrants.empty.title": "No grants for this department",
   "departmentGrants.empty.description":

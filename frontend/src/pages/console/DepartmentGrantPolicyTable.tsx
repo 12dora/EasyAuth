@@ -157,6 +157,8 @@ function GrantContentCell({ policy }: { policy: DepartmentGrantPolicy }) {
       )}
       {overflow.length > 0 ? (
         <Tooltip
+          // 键盘用户也要看得到被折叠的授权内容, 因此聚焦即展开, 而不是只在悬浮时显示。
+          trigger={["hover", "focus", "click"]}
           title={
             <ul className="m-0 list-none p-0">
               {overflow.map((chip) => (
@@ -165,9 +167,13 @@ function GrantContentCell({ policy }: { policy: DepartmentGrantPolicy }) {
             </ul>
           }
         >
-          <span className="inline-flex cursor-default items-center rounded-[2px] border border-dashed border-ink/25 px-1.5 py-0.5 text-caption leading-4 text-ink-faint">
+          <button
+            type="button"
+            aria-label={t("departmentGrants.content.moreLabel", { count: overflow.length })}
+            className="inline-flex items-center rounded-[2px] border border-dashed border-ink/25 px-1.5 py-0.5 text-caption leading-4 text-ink-faint transition-colors hover:border-ink/45 hover:text-ink-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/60"
+          >
             {t("departmentGrants.content.more", { count: overflow.length })}
-          </span>
+          </button>
         </Tooltip>
       ) : null}
     </div>

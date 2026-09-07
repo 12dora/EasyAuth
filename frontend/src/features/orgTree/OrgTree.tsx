@@ -168,12 +168,19 @@ export function OrgTree({
         aria-level={depth + 1}
         tabIndex={node.dept_id === activeDeptId ? 0 : -1}
         data-dept-id={node.dept_id}
+        // 焦点可能由浏览器给出(点行时落到最近的可聚焦祖先), 落焦点即键盘操作的落点,
+        // 两者必须同步, 否则方向键会作用在上一次记录的部门上。focus 会冒泡, 只认自己这一层。
+        onFocus={(event) => {
+          if (event.target === event.currentTarget) {
+            setFocusedDeptId(node.dept_id);
+          }
+        }}
       >
         <div
           className="org-tree__row"
           style={{ "--org-tree-depth": depth } as CSSProperties}
           onClick={() => {
-            setFocusedDeptId(node.dept_id);
+            moveFocusTo(node.dept_id);
             onSelect(node.dept_id);
           }}
         >
@@ -188,6 +195,8 @@ export function OrgTree({
               })}
               onClick={(event) => {
                 event.stopPropagation();
+                // 鼠标点三角同样是在操作这一行: 焦点跟过来, 紧接着的方向键/回车才作用在它身上。
+                moveFocusTo(node.dept_id);
                 setExpanded(node.dept_id, !expanded);
               }}
             >

@@ -7,11 +7,12 @@ import {
   EMPTY_GRANT_DRAFT,
   GrantForm,
   buildGrantSubmission,
+  grantDraftErrors,
   grantDraftFromPolicy,
   grantDraftIsValid,
   useGrantCatalog,
 } from "../../features/grantForm";
-import type { GrantDraft, GrantSubmission } from "../../features/grantForm";
+import type { GrantDraft, GrantDraftError, GrantSubmission } from "../../features/grantForm";
 import { useI18n } from "../../i18n/I18nProvider";
 import type { DepartmentGrantPolicy } from "../../lib/domain/departmentGrants";
 
@@ -52,6 +53,8 @@ export function DepartmentGrantEditorDialog({
       : EMPTY_GRANT_DRAFT,
   );
 
+  const [draftErrors, setDraftErrors] = useState<GrantDraftError[]>([]);
+
   const title = policy
     ? policy.inherited
       ? t("departmentGrants.dialog.editInheritedTitle", { name: policy.defined_on.name })
@@ -59,7 +62,20 @@ export function DepartmentGrantEditorDialog({
     : t("departmentGrants.dialog.createTitle");
   // 编辑继承来的策略时, 影响范围是它定义所在的部门(及其子部门), 不是当前浏览的部门。
   const affectedDepartmentName = policy ? policy.defined_on.name : departmentName;
+  // 提交闸门在点击那一刻重算: 渲染期算出来的结论会过期(限时授权的到期时间会走到过去),
+  // 那时按钮还亮着, 载荷却已经不能拼了 —— 拦下来展示在横幅里, 而不是让构造函数抛出去。
+  const submit = () => {
+    const errors = grantDraftErrors(draft, catalogQuery.data);
+    setDraftErrors(errors);
+    if (errors.length === 0) {
+      onSubmit(buildGrantSubmission(draft));
+    }
+  };
   const canSubmit = grantDraftIsValid(draft, catalogQuery.data) && !isSubmitting;
+  const draftErrorMessages = draftErrors.map((error) => t(error.messageKey));
+  const bannerTitle = draftErrors.length > 0 ? t("grantForm.invalidDraft") : t("departmentGrants.dialog.saveFailed");
+  const bannerMessage = draftErrors.length > 0 ? "" : errorMessage;
+  const bannerDetails = draftErrors.length > 0 ? draftErrorMessages : errorDetails;
 
   return (
     <Dialog
@@ -77,7 +93,7 @@ export function DepartmentGrantEditorDialog({
             variant="primary"
             loading={isSubmitting}
             disabled={!canSubmit}
-            onClick={() => onSubmit(buildGrantSubmission(draft))}
+            onClick={submit}
           >
             {t("departmentGrants.dialog.submit")}
           </Button>
@@ -86,12 +102,12 @@ export function DepartmentGrantEditorDialog({
     >
       <div className="space-y-4">
         <StatusBanner tone="bond" title={t("departmentGrants.dialog.notice", { dept: affectedDepartmentName })} />
-        {errorMessage ? (
+        {errorMessage || draftErrors.length > 0 ? (
           <div className="space-y-2">
-            <StatusBanner live="alert" tone="signal" title={t("departmentGrants.dialog.saveFailed")} message={errorMessage} />
-            {errorDetails.length > 0 ? (
+            <StatusBanner live="alert" tone="signal" title={bannerTitle} message={bannerMessage} />
+            {bannerDetails.length > 0 ? (
               <ul className="list-disc space-y-1 pl-5 text-body leading-5 text-signal">
-                {errorDetails.map((detail) => (
+                {bannerDetails.map((detail) => (
                   <li key={detail}>{detail}</li>
                 ))}
               </ul>
@@ -103,7 +119,10 @@ export function DepartmentGrantEditorDialog({
           catalogIsLoading={catalogQuery.isLoading}
           catalogErrorMessage={catalogQuery.error ? catalogQuery.error.message : ""}
           draft={draft}
-          onDraftChange={setDraft}
+          onDraftChange={(next) => {
+            setDraftErrors([]);
+            setDraft(next);
+          }}
           disabled={isSubmitting}
           lockedAppKey={policy ? policy.app.app_key : undefined}
         />
