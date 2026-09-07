@@ -233,6 +233,111 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 
 ---
 
+## 管理员直接授权与组织授权
+
+全部接口要求 **superuser**。前缀 `/console/api/v1/`。写操作走既有控制台 CSRF。错误信封
+`{ "error": { "code", "message", "details" } }`；列表/详情成功体为 `{ "data": ... }`。
+`grant-catalog` 与门户申请目录同形，**不**再包一层 `data`。
+
+| 方法 | 路径 | URL name | 说明 |
+| --- | --- | --- | --- |
+| GET | `/grant-catalog` | `console-grant-catalog` | 管理员授权目录（全量 active 应用/授权组/权限） |
+| GET | `/user-options` | `console-user-options` | 被授权人联想；项含 `user_id`、`name`、`department`、`avatar_url` |
+| POST | `/direct-grants` | `console-direct-grants` | 管理员直接授予，立即合并进用户当前授权 |
+| GET | `/departments/tree` | `console-departments-tree` | 钉钉组织树 |
+| GET | `/departments/{dept_id}/grant-policies` | `console-department-grant-policies` | 本部门 + 祖先继承的生效策略 |
+| POST | `/departments/{dept_id}/grant-policies` | `console-department-grant-policies` | 在该部门新建预授权策略 |
+| PUT | `/department-grant-policies/{id}` | `console-department-grant-policy` | 全量替换策略目标；不可改部门或应用 |
+| DELETE | `/department-grant-policies/{id}` | `console-department-grant-policy` | 删除策略，204 |
+
+### 授权目录
+
+`GET /grant-catalog` 复用门户 `serialize_request_catalog` 形状：`apps`、
+`authorization_groups`（含 `grants[]`）、`permission_groups`、`ungrouped_permissions`、
+`approver_options`。与门户的差异：
+
+- 所有 `is_active` 应用；所有 active 授权组与未废弃权限，**不**看 `requestable` / 审批规则
+- `approver_options` 恒为 `[]`；`default_approver_user_ids` 为 `[]`，
+  `approver_resolution_status` 为 `not_required`
+
+### 直接授权
+
+`POST /direct-grants` 请求体：
+
+```json
+{
+  "user_id": "<authentik id>",
+  "app_key": "easytrade",
+  "authorization_group_keys": ["sales"],
+  "direct_grants": [{"permission": "order.order.view", "scope": "GLOBAL"}],
+  "grant_type": "timed",
+  "grant_expires_at": "2026-12-31T15:59:59Z",
+  "reason": "说明"
+}
+```
+
+校验：用户必须存在且 `active`；应用 active；组/权限/范围必须存在、启用且受支持。
+管理员授予**忽略** `requestable` 与审批规则。限时必须未来到期，永久必须
+`grant_expires_at=null`；至少一组或一条直接权限。
+
+合并语义：读取当前授权上 `source="user"` 的组/权限行，与本次提交做并集
+（同一授权组或同一权限+范围时，**新到期时间覆盖旧值**），再把完整用户来源集合交给
+`GrantService.change_grant`（无当前授权时由其创建）。部门来源行不被改写。
+授权组按组落库，不展开为权限。操作者 `actor_type="admin"`。额外审计
+`direct_grant_applied`（`target_type=grant`）。
+
+错误：用户/应用不存在 → 404；用户非在职 → 409；目录/范围问题 → 422
+`SEMANTIC_VALIDATION_ERROR`，`details.errors` 为中文列表。成功 201，
+`data` 含 `grant_id`、`version`、合并后的用户来源 `authorization_group_keys` 与
+`direct_grants`。
+
+### 组织授权
+
+当前只支持**一个**钉钉企业。从 `DingTalkDirectorySyncState` /
+`DingTalkDepartmentMirror` 推导 `(source_slug, corp_id)`：尚无部门镜像 → 409
+`directory_not_synced`（「尚未同步钉钉组织架构」）；多个企业 → 409，不猜测。
+
+`GET /departments/tree` 返回单根树；多个根（含孤儿部门）挂到主根下。
+`member_count` 为该部门的**直接**成员：active 且未 tombstone 的
+`DingTalkUserMirror`，`department_ids` 含该部门 ID。
+
+`GET /departments/{dept_id}/grant-policies` 列出本部门策略，再按祖先由近到远继承；
+同层按应用别名/名称、id。公司策略会出现在之后新建的子孙部门中，
+`inherited=true` 且 `defined_on` 指向公司。镜像中已不存在的部门上的策略不展示。
+`affected_user_count` / `subtree_member_count` 统计子树内在职且已绑定钉钉的员工：
+`UserMirror.status=active`，对应 `DingTalkUserMirror` 为 active、未 tombstone，
+且 `department_ids` 与子树相交。
+
+策略写（POST/PUT/DELETE）与直接授权使用同一套目标校验。每次写入在同一事务内：
+
+1. 审计 `department_policy_created` / `updated` / `deleted`（`target_type=department_policy`）
+2. `schedule_department_grant_reconcile(trigger="policy")`，经 outbox 入队
+   `easyauth.grants.reconcile_department_grants`
+
+PUT 不得变更策略所属部门或应用，否则 422。
+
+### `source=user` 与 `source=department`
+
+同一 `(用户, 应用)` 只有一条当前 `AccessGrant`。组成员来自两条通道，唯一约束按
+`(grant, 目标, source)` 分开：
+
+| source | 写入方 | 含义 |
+| --- | --- | --- |
+| `user` | 审批通过、交接、入职、管理员直接授予等既有路径 | 显式授予 |
+| `department` | **仅**部门对账 `GrantService.sync_department_memberships` | 由部门预授权策略物化 |
+
+用户侧变更只改写 `source=user` 行，不会丢掉部门行。对账只改写部门行。
+查询侧的有效授权快照按来源无关合并（永久优先，否则取最晚到期）。
+
+部门策略对子树内在职员工是权威来源：员工加入子树则授予，离开则收回部门行。
+在职员工的当前授权若被撤销，下一次对账仍会按生效策略**重新创建**部门行。
+离职/非 active / 无钉钉绑定的人期望集合为空。
+
+对账触发：目录同步结束（`trigger=directory-sync`）、策略 CRUD
+（`trigger=policy`）、以及定时 beat（默认 30 分钟）。
+
+---
+
 ## 用户、审计、设置、安全
 
 | 方法 | 路径 | 说明 |
