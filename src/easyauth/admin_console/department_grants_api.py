@@ -53,6 +53,7 @@ type PolicyResult = DepartmentGrantPolicy | JsonResponse
 
 DEPT_NOT_FOUND_MESSAGE = "部门不存在。"
 POLICY_NOT_FOUND_MESSAGE = "组织授权策略不存在。"
+POLICY_DEPT_GONE_MESSAGE = "该部门已不在组织架构中，无法修改；请删除后在新部门重新创建"  # noqa: RUF001
 DIRECTORY_CYCLE_MESSAGE = "部门镜像存在循环引用,请先修复目录数据。"
 SOURCE_MISMATCH_MESSAGE = "请求的组织来源与当前目录不一致。"
 SOURCE_PAIR_MESSAGE = "source_slug 与 corp_id 必须同时提供。"
@@ -214,6 +215,8 @@ def _update_policy(request: HttpRequest, *, policy_id: int, actor_id: str) -> Js
             return response
         case tuple() as loaded:
             _corp, tree, memberships = loaded
+    if policy.dept_id not in tree.nodes:
+        return _conflict(POLICY_DEPT_GONE_MESSAGE, "department_removed")
     try:
         targets = resolve_admin_grant_targets(payload)
         updated = update_department_grant_policy(

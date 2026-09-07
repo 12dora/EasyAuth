@@ -14,6 +14,7 @@ from easyauth.accounts.models import (
     DingTalkUserMirror,
     UserMirror,
 )
+from easyauth.admin_console.department_grants_api import POLICY_DEPT_GONE_MESSAGE
 from easyauth.applications.models import App, AppScope, AuthorizationGroup, Permission
 from easyauth.audit.models import AuditLog
 from easyauth.grants.department_policies import (
@@ -241,6 +242,59 @@ def test_department_policies_create_update_delete_audit_and_outbox(
     assert AuditLog.objects.filter(event_type=POLICY_UPDATED_ACTION).exists()
     assert AuditLog.objects.filter(event_type=POLICY_DELETED_ACTION).exists()
     assert OutboxEvent.objects.filter(task_name=DEPARTMENT_GRANT_RECONCILE_TASK_NAME).exists()
+
+
+def test_update_policy_conflicts_when_department_removed_delete_still_works() -> None:
+    client = _logged_in_superuser("dept-grant-gone-dept")
+    _seed_org()
+    app, group, _permission = _catalog("dept-gone")
+    created = _create_policy_via_api(
+        client, dept_id="12", app=app, group=group, reason="原销售部策略"
+    )
+    policy_id = created["id"]
+    assert isinstance(policy_id, int)
+    original_reason = DepartmentGrantPolicy.objects.get(pk=policy_id).reason
+    deleted_count, _ = DingTalkDepartmentMirror.objects.filter(
+        source_slug=SOURCE_SLUG,
+        corp_id=CORP_ID,
+        dept_id="12",
+    ).delete()
+    assert deleted_count == 1
+
+    updated = client.put(
+        POLICY_URL.format(policy_id=policy_id),
+        data=dumps(
+            {
+                "app_key": app.app_key,
+                "authorization_group_keys": [group.key],
+                "direct_grants": [],
+                "grant_type": "permanent",
+                "grant_expires_at": None,
+                "reason": "部门消失后仍尝试修改",
+            },
+        ),
+        content_type="application/json",
+    )
+
+    assert updated.status_code == HTTPStatus.CONFLICT
+    error = updated.json()["error"]
+    assert error["code"] == "CONFLICT"
+    assert error["message"] == POLICY_DEPT_GONE_MESSAGE
+    assert error["details"]["reason"] == "department_removed"
+    policy = DepartmentGrantPolicy.objects.get(pk=policy_id)
+    assert policy.reason == original_reason
+    assert not AuditLog.objects.filter(
+        event_type=POLICY_UPDATED_ACTION,
+        target_id=str(policy_id),
+    ).exists()
+
+    deleted = client.delete(POLICY_URL.format(policy_id=policy_id))
+    assert deleted.status_code == HTTPStatus.NO_CONTENT
+    assert not DepartmentGrantPolicy.objects.filter(pk=policy_id).exists()
+    assert AuditLog.objects.filter(
+        event_type=POLICY_DELETED_ACTION,
+        target_id=str(policy_id),
+    ).exists()
 
 
 def _seed_org() -> None:
