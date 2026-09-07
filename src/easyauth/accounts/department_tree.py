@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, final
+from typing import TYPE_CHECKING, cast, final
 
 from easyauth.accounts.models import DingTalkDepartmentMirror
 
@@ -54,10 +54,13 @@ class DepartmentTree:
 
     @classmethod
     def load(cls, *, source_slug: str, corp_id: str) -> DepartmentTree:
-        rows = DingTalkDepartmentMirror.objects.filter(
-            source_slug=source_slug,
-            corp_id=corp_id,
-        ).values_list("dept_id", "parent_id", "name", "order")
+        rows = cast(
+            "Iterable[tuple[str, str, str, int]]",
+            DingTalkDepartmentMirror.objects.filter(
+                source_slug=source_slug,
+                corp_id=corp_id,
+            ).values_list("dept_id", "parent_id", "name", "order"),
+        )
         nodes = {
             dept_id: DepartmentNode(dept_id=dept_id, parent_id=parent_id, name=name, order=order)
             for dept_id, parent_id, name, order in rows
