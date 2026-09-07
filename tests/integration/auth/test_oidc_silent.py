@@ -42,6 +42,12 @@ def assert_outcome(client: Client, outcome: str, **params: str) -> None:
     response = client.get("/auth/callback/", params)
     assert response.status_code == 200
     assert f'>"{outcome}"</script>' in response.content.decode()
+    user_id = client.session[AUTHENTIK_SESSION_KEY] if outcome in {"unchanged", "changed"} else ""
+    assert response.context["user_id"] == user_id
+    assert (
+        f'id="identity-check-user-id" type="application/json">"{user_id}"</script>'
+        in response.content.decode()
+    )
     assert response.headers["Cache-Control"] == "no-store"
     assert response.headers["X-Frame-Options"] == "SAMEORIGIN"
     assert OIDC_SILENT_SESSION_KEY not in client.session

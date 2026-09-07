@@ -73,7 +73,7 @@ OIDC_ISSUER_PROVIDER_SLUG_SEGMENT_COUNT: Final = 3
 def oidc_login(request: HttpRequest) -> HttpResponse:
     silent = request.GET.get("silent") == "1"
     if silent and request.session.get(LOCAL_ADMIN_SESSION_FLAG) is True:
-        return _silent_result(request, "unchanged")
+        return _silent_result(request, "unchanged", _session_string(request, AUTHENTIK_SESSION_KEY))
     config = _oidc_config_from_settings()
     redirect_uri = _effective_redirect_uri(request, config.redirect_uri)
     canonical_login_url = _canonical_request_url(request, redirect_uri)
@@ -403,7 +403,12 @@ def _silent_callback(request: HttpRequest) -> HttpResponse:
     except OidcSessionError:
         outcome = "error"
     clear_oidc_login_attempt(request)
-    return _silent_result(request, outcome)
+    user_id = (
+        _session_string(request, AUTHENTIK_SESSION_KEY)
+        if outcome in {"unchanged", "changed"}
+        else ""
+    )
+    return _silent_result(request, outcome, user_id)
 
 
 def _silent_bind(request: HttpRequest, previous_subject: str) -> str:
@@ -441,7 +446,9 @@ def _silent_bind(request: HttpRequest, previous_subject: str) -> str:
 
 
 @xframe_options_sameorigin
-def _silent_result(request: HttpRequest, outcome: str) -> HttpResponse:
-    response = render(request, "easyauth/oidc_silent_result.html", {"outcome": outcome})
+def _silent_result(request: HttpRequest, outcome: str, user_id: str) -> HttpResponse:
+    response = render(
+        request, "easyauth/oidc_silent_result.html", {"outcome": outcome, "user_id": user_id}
+    )
     response.headers["Cache-Control"] = "no-store"
     return response
