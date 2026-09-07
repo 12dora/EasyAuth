@@ -405,3 +405,46 @@ Interface can only be accessed by internal users.
 原因通常是外部用户登录 Authentik 后被送到了 Authentik 内部界面，而不是 EasyAuth Application。
 
 处理：进入 `System` -> `Brands`，将当前 Brand 的 `Default application` 设置为 `EasyAuth Portal`。
+
+## 上游会话撤销与静默身份复核
+
+在 Authentik 中打开 EasyAuth 对应的 OAuth2/OIDC Provider, **设置该 Provider 的
+Logout URI** 为：
+
+```text
+https://iam.jiefakj.com/auth/backchannel-logout/
+```
+
+登出方式选择后通道（`logout_method=backchannel`）。仅选择后通道而不填写
+`logout_uri` 不会向 EasyAuth 投递登出通知。保留 OIDC 回调地址
+`https://iam.jiefakj.com/auth/callback/`, 并确保 Authentik 能访问上述公网登出地址。
+Provider 签名密钥必须与 EasyAuth 配置的 JWKS、issuer、client_id 和签名算法一致。
+
+EasyAuth 使用数据库表 `accounts_oidcsessionbinding` 保存 Django `session_key`
+与 Authentik `sub`、`sid` 的绑定及创建时间。OIDC ID token 必须带非空 `sid`。
+登录轮换 session key 后创建新绑定并删除旧绑定；退出或清除认证时删除当前绑定。
+本地应急管理员不进入该表, 不参与上游会话撤销与静默复核。
+
+后通道地址仅接受表单 POST 的 `logout_token`, 无需浏览器会话或 CSRF token。
+服务端独立验证签名、issuer、audience、iat、jti、登出事件及 nonce 缺席；
+带 exp 时验证到期时间, 不带 exp 时只接受五分钟内的通知。使用 Django 共享缓存
+保存 jti 防重放；部署须保持各 web 进程使用同一 Redis 缓存。带 sid 时只撤销该
+上游会话的绑定与 Django 会话；仅带 sub 时撤销该用户的全部绑定会话。
+成功返回 `200 {}`, 无效或重放返回 `400 invalid_request`, 两者均禁止缓存。
+成功处理记录 `oidc_backchannel_logout` 审计事件及撤销数量。
+
+浏览器通过同源隐藏 iframe 访问 `/auth/login/?silent=1`, EasyAuth 保留正常的
+state/nonce 校验并向 Authentik 发送 `prompt=none`。回调核实当前上游用户后,
+通过仅允许同源嵌入且禁止缓存的结果页发送 `easyauth:identity-check` 消息：
+
+- `unchanged`：仍是同一用户。
+- `changed`：已绑定新用户并轮换会话, 父页面重新加载。
+- `logged_out`：上游要求登录、交互、同意、拒绝访问或本地用户已停用,
+  清除本地认证与绑定, 父页面进入登录页。
+- `error`：状态校验、交换或其他协议步骤失败, 保留既有身份并交由页面现有错误流程处理。
+
+SPA 壳层通过 `data-current-user-auth-kind` 区分 `oidc` 与 `local_admin`。
+前端仅对 OIDC 会话在启动、标签页重新可见、可见期间每五分钟以及 API 返回 401
+时触发复核；标签页可见事件至少间隔 60 秒, 同时只允许一次检查, 超时为 15 秒。
+部署验收应分别验证上游登出后原会话失效、切换上游账号后页面切换身份,
+以及本地应急管理员不受影响。
