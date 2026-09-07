@@ -9,6 +9,7 @@ from easyauth.accounts.models import UserMirror
 from easyauth.accounts.status import UserStatus, is_non_active_status
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.connectors.dispatch import dispatch_user_offboarded
+from easyauth.grants.department_reconcile import schedule_department_grant_reconcile
 from easyauth.grants.services import GrantService
 from easyauth.integrations.authentik.payloads import (
     AuthentikPayloadInput,
@@ -46,6 +47,9 @@ class AuthentikSyncService:
                 # 连接器离职快路径(秒级 block); 只在新检出离职时触发,
                 # 避免周期目录同步对既有离职用户反复出站调用。
                 dispatch_user_offboarded(upsert.user)
+            if _should_reconcile_department_grants(upsert):
+                # 首次登录建档或重新启用的在职员工, 立即补齐部门预授权, 不等下一轮目录同步。
+                schedule_department_grant_reconcile(trigger="user-sync")
             return AuthentikSyncResult(
                 user=upsert.user,
                 created=upsert.created,
@@ -117,6 +121,13 @@ def _upsert_user(profile: AuthentikUserProfile) -> _UserUpsertResult:
         ],
     )
     return _UserUpsertResult(user=user, created=False, was_non_active=was_non_active)
+
+
+def _should_reconcile_department_grants(upsert: _UserUpsertResult) -> bool:
+    user = upsert.user
+    if is_non_active_status(user.status) or user.dingtalk_userid == "":
+        return False
+    return upsert.created or upsert.was_non_active
 
 
 def _revoke_current_grants_for_departed_user(user: UserMirror) -> int:

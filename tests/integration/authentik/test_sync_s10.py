@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Final
 
 import pytest
+from django.test import TestCase
 
 from easyauth.accounts.models import (
     USER_STATUS_ACTIVE,
@@ -18,6 +19,7 @@ from easyauth.grants.models import (
     AccessGrant,
     AccessGrantGroup,
 )
+from easyauth.outbox.models import OutboxEvent
 from easyauth.tasks.authentik import StaticAuthentikPayloadSource, sync_authentik_users_from_source
 
 if TYPE_CHECKING:
@@ -304,3 +306,36 @@ def _permanent_grant(user: UserMirror, app: App) -> AccessGrant:
         expires_at=None,
     )
     return grant
+
+
+def test_first_login_of_bound_active_user_schedules_department_grant_reconcile() -> None:
+    payload: AuthentikPayloadInput = {
+        "user": {
+            "uid": "s10-first-login-dept-reconcile",
+            "name": "新员工",
+            "email": "new-hire@example.test",
+            "attributes": {
+                "department": "研发部",
+                "dingtalk": {
+                    "source_slug": "dingtalk",
+                    "corp_id": "corp-1",
+                    "user_id": "ding-new-hire",
+                },
+            },
+        },
+        "is_active": True,
+    }
+    events = OutboxEvent.objects.filter(
+        event_key__startswith="department-grant-reconcile:user-sync:"
+    )
+
+    with TestCase.captureOnCommitCallbacks(execute=True):
+        created = AuthentikSyncService.sync_payload(payload)
+    assert created.created is True
+    assert events.count() == 1
+
+    # 同一用户再次同步(普通登录)不再触发对账。
+    with TestCase.captureOnCommitCallbacks(execute=True):
+        updated = AuthentikSyncService.sync_payload(payload)
+    assert updated.created is False
+    assert events.count() == 1
