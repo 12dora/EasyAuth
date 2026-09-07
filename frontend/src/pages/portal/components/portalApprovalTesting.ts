@@ -4,7 +4,7 @@ import type { PortalApprovalRow } from "./portalApprovalTypes";
  * 门户审批测试共用的行事实。
  *
  * 这里刻意逐字对齐后端 `/portal/api/v1/me/approvals` 的真实序列化字段
- * (`_access_request_item` + `_approval_item`, 共 23 个 key)。
+ * (`_access_request_item` + `_approval_item`, 共 26 个 key)。
  * `parseApprovalListPayload` 按 key 数量精确匹配, 所以夹具一旦少一个字段,
  * 用例就会在一份「后端根本不会返回的形状」上通过, 掩盖真实的契约漂移。
  *
@@ -46,7 +46,38 @@ export const pendingApproval = {
   decided_by: "",
   decision_actor_type: "",
   decided_by_name: null,
+  approved_at: null,
+  applied_at: null,
+  withdrawn_at: null,
 } satisfies PortalApprovalRow;
+
+const APPROVED_AT = "2026-07-02T09:00:00Z";
+const APPLIED_AT = "2026-07-02T09:00:05Z";
+const WITHDRAWN_AT = "2026-07-02T09:00:00Z";
+
+/**
+ * 生命周期时间戳的真实取值只由 status 决定, 这张表逐条抄自后端数据库约束
+ * `access_requests_status_field_shape`。未知状态直接抛错, 不给静默默认值 ——
+ * 否则夹具会造出一条后端永远不可能返回的行。
+ */
+function timelineForStatus(status: string): Pick<PortalApprovalRow, "approved_at" | "applied_at" | "withdrawn_at"> {
+  switch (status) {
+    case "submitted":
+    case "rejected":
+      return { approved_at: null, applied_at: null, withdrawn_at: null };
+    case "approved":
+    case "grant_failed":
+    case "grant_conflict":
+    case "grant_expired":
+      return { approved_at: APPROVED_AT, applied_at: null, withdrawn_at: null };
+    case "grant_applied":
+      return { approved_at: APPROVED_AT, applied_at: APPLIED_AT, withdrawn_at: null };
+    case "withdrawn":
+      return { approved_at: null, applied_at: null, withdrawn_at: WITHDRAWN_AT };
+    default:
+      throw new Error(`未知的申请状态: ${status}`);
+  }
+}
 
 /**
  * 已决行: 后端在申请离开 submitted 后会清空 `current_approvers`,
@@ -61,6 +92,8 @@ export function decidedApproval(overrides: Record<string, unknown> = {}): Record
     decision_actor_type: "user",
     decided_by_name: "我本人",
     decided_at: "2026-07-02T09:00:00Z",
+    // 时间戳按最终 status 取值, 保证覆盖 status 的用例拿到的仍是后端会真实返回的行。
+    ...timelineForStatus(typeof overrides.status === "string" ? overrides.status : pendingApproval.status),
     ...overrides,
   };
 }

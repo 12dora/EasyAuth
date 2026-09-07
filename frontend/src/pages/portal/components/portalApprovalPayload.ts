@@ -50,7 +50,33 @@ const APPROVAL_ROW_KEYS = [
   "decided_by",
   "decision_actor_type",
   "decided_by_name",
+  "approved_at",
+  "applied_at",
+  "withdrawn_at",
 ] as const;
+
+/**
+ * 生命周期时间戳与 status 的对应关系, 逐条抄自后端约束
+ * `access_requests_status_field_shape`(src/easyauth/access_requests/models.py):
+ * true 表示该状态下这个时间戳必须非空, false 表示必须为 null。
+ * 数据库层就是这么约束的, 所以前端按同一张表校验, 出现不一致即为契约漂移而非可容忍的差异。
+ */
+const APPROVAL_TIMELINE_SHAPES: Record<string, ApprovalTimelineShape> = {
+  submitted: { approved_at: false, applied_at: false, withdrawn_at: false },
+  approved: { approved_at: true, applied_at: false, withdrawn_at: false },
+  rejected: { approved_at: false, applied_at: false, withdrawn_at: false },
+  grant_applied: { approved_at: true, applied_at: true, withdrawn_at: false },
+  grant_failed: { approved_at: true, applied_at: false, withdrawn_at: false },
+  grant_conflict: { approved_at: true, applied_at: false, withdrawn_at: false },
+  grant_expired: { approved_at: true, applied_at: false, withdrawn_at: false },
+  withdrawn: { approved_at: false, applied_at: false, withdrawn_at: true },
+};
+
+interface ApprovalTimelineShape {
+  approved_at: boolean;
+  applied_at: boolean;
+  withdrawn_at: boolean;
+}
 
 export function committedGrantStatus(error: unknown, expectedApprovalId: number): CommittedGrantStatus | null {
   if (!(error instanceof ApiError) || error.status !== 422 || !isRecord(error.details)) {
@@ -126,7 +152,8 @@ function isPortalApprovalRow(value: unknown): value is PortalApprovalRow {
     hasApprovalIdentity(value) &&
     hasApprovalLifecycleShape(value) &&
     hasApprovalTargets(value) &&
-    hasApprovalDecisionShape(value)
+    hasApprovalDecisionShape(value) &&
+    hasApprovalTimelineShape(value)
   );
 }
 
@@ -160,6 +187,20 @@ function hasApprovalLifecycleShape(value: Record<string, unknown>): boolean {
     isNullableDateTimeString(value.grant_expires_at) &&
     (value.grant_type === "timed" ? value.grant_expires_at !== null : value.grant_expires_at === null) &&
     isDateTimeString(value.submitted_at)
+  );
+}
+
+/**
+ * 审批通过时间、授权生效时间与撤回时间。
+ * 三者都是可空 ISO 时间串, 且空与非空由 status 唯一决定(见 APPROVAL_TIMELINE_SHAPES)。
+ */
+function hasApprovalTimelineShape(value: Record<string, unknown>): boolean {
+  const shape = APPROVAL_TIMELINE_SHAPES[value.status as string];
+  if (shape === undefined) {
+    return false;
+  }
+  return (["approved_at", "applied_at", "withdrawn_at"] as const).every(
+    (key) => isNullableDateTimeString(value[key]) && (value[key] !== null) === shape[key],
   );
 }
 

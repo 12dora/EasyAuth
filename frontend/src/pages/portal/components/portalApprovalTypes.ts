@@ -61,6 +61,12 @@ export interface PortalApprovalRow {
   decision_actor_type: string;
   /** 决定人显示名; 后端解析不出姓名时为 null(此时只能回退展示 decided_by)。 */
   decided_by_name: string | null;
+  /** 审批通过时间; 仅 approved / grant_applied / grant_failed / grant_conflict / grant_expired 非空。 */
+  approved_at: string | null;
+  /** 授权落库生效时间; 仅 grant_applied 非空。 */
+  applied_at: string | null;
+  /** 申请人撤回时间; 仅 withdrawn 非空。 */
+  withdrawn_at: string | null;
 }
 
 export interface ApprovalListPayload {
