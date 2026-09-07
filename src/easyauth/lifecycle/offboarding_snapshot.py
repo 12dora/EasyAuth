@@ -13,7 +13,12 @@ from easyauth.applications.models import (
     App,
     AppScope,
 )
-from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
+from easyauth.grants.models import (
+    MEMBERSHIP_SOURCE_USER,
+    AccessGrant,
+    AccessGrantGroup,
+    AccessGrantPermission,
+)
 from easyauth.lifecycle.core import LIFECYCLE_ACTOR_ID, record_task_event
 from easyauth.lifecycle.errors import HandoverError
 from easyauth.lifecycle.handover_actions import (
@@ -52,7 +57,7 @@ def _snapshot_group_grant_items(
 ) -> None:
     group_links = (
         AccessGrantGroup.objects.select_related("authorization_group")
-        .filter(grant=grant, authorization_group__is_active=True)
+        .filter(grant=grant, source=MEMBERSHIP_SOURCE_USER, authorization_group__is_active=True)
         .filter(Q(expires_at__isnull=True) | Q(expires_at__gt=now))
     )
     for link in group_links:
@@ -84,6 +89,7 @@ def _snapshot_permission_grant_items(
         AccessGrantPermission.objects.select_related("permission")
         .filter(
             grant=grant,
+            source=MEMBERSHIP_SOURCE_USER,
             permission__is_active=True,
             permission__deprecated_at__isnull=True,
         )

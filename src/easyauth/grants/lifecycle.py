@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Protocol
 
-from easyauth.grants.models import GRANT_STATUS_ACTIVE, GRANT_STATUS_REVOKED, AccessGrant
+from easyauth.grants.models import (
+    GRANT_STATUS_ACTIVE,
+    GRANT_STATUS_REVOKED,
+    AccessGrant,
+    AccessGrantGroup,
+    AccessGrantPermission,
+)
 from easyauth.grants.operations import (
     current_grant,
     next_version,
@@ -149,3 +155,30 @@ def revoke_grant(
         actor_id=actor_id,
         reason=reason,
     )
+
+
+def revoke_user_memberships(
+    *,
+    user: UserMirror,
+    app: App,
+    actor_type: str,
+    actor_id: str,
+    reason: str = "",
+) -> AccessGrant | None:
+    grant = current_grant(user, app)
+    if grant is None or not can_revoke(grant):
+        return None
+    replace_memberships(grant, (), ())
+    if not (
+        AccessGrantGroup.objects.filter(grant=grant).exists()
+        or AccessGrantPermission.objects.filter(grant=grant).exists()
+    ):
+        revoke_grant(grant, actor_type=actor_type, actor_id=actor_id, reason=reason)
+    else:
+        grant.version += 1
+        grant.full_clean()
+        grant.save(update_fields=["version", "updated_at"])
+        record_grant_event(
+            grant, action="grant_changed", actor_type=actor_type, actor_id=actor_id, reason=reason
+        )
+    return grant

@@ -4,6 +4,8 @@ from typing import TYPE_CHECKING
 
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.grants.models import (
+    MEMBERSHIP_SOURCE_DEPARTMENT,
+    MEMBERSHIP_SOURCE_USER,
     AccessGrant,
     AccessGrantGroup,
     AccessGrantPermission,
@@ -47,14 +49,43 @@ def replace_memberships(
     authorization_groups: Iterable[AuthorizationGroupGrantInput],
     direct_grants: Iterable[ScopedDirectGrantInput],
 ) -> None:
-    _ = AccessGrantGroup.objects.filter(grant=grant).delete()
-    _ = AccessGrantPermission.objects.filter(grant=grant).delete()
+    _replace_source_memberships(
+        grant, authorization_groups, direct_grants, source=MEMBERSHIP_SOURCE_USER
+    )
+
+
+def replace_department_memberships(
+    grant: AccessGrant,
+    authorization_groups: Iterable[AuthorizationGroupGrantInput],
+    direct_grants: Iterable[ScopedDirectGrantInput],
+) -> None:
+    _replace_source_memberships(
+        grant, authorization_groups, direct_grants, source=MEMBERSHIP_SOURCE_DEPARTMENT
+    )
+
+
+def _replace_source_memberships(
+    grant: AccessGrant,
+    authorization_groups: Iterable[AuthorizationGroupGrantInput],
+    direct_grants: Iterable[ScopedDirectGrantInput],
+    *,
+    source: str,
+) -> None:
+    authorization_groups = tuple(authorization_groups)
+    direct_grants = tuple(direct_grants)
+    if any(item.source != source for item in (*authorization_groups, *direct_grants)):
+        message = "membership source does not match the mutation source"
+        raise ValueError(message)
+    _ = AccessGrantGroup.objects.filter(grant=grant, source=source).delete()
+    _ = AccessGrantPermission.objects.filter(grant=grant, source=source).delete()
 
     for item in authorization_groups:
         link = AccessGrantGroup(
             grant=grant,
             authorization_group=item.authorization_group,
             expires_at=item.expires_at,
+            source=item.source,
+            department_policy_id=item.department_policy_id,
         )
         link.full_clean()
         link.save()
@@ -69,6 +100,8 @@ def replace_memberships(
             permission=direct_grant.permission,
             scope_key=direct_grant.scope_key,
             expires_at=direct_grant.expires_at,
+            source=direct_grant.source,
+            department_policy_id=direct_grant.department_policy_id,
         )
         link.full_clean()
         link.save()

@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from django.utils import timezone
 
+from easyauth.access_requests.membership_snapshot import user_membership_snapshot
 from easyauth.access_requests.submission_types import (
     AccessRequestGrantType,
     AccessRequestSubmission,
@@ -367,7 +368,7 @@ def base_lifecycle_grant_snapshot(
         or snapshot.grant.version != input_data.base_grant_revision
     ):
         raise AccessRequestSubmissionError(("base grant revision conflict",))
-    return snapshot
+    return user_membership_snapshot(snapshot.grant)
 
 
 def _validate_renew_request(

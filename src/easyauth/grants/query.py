@@ -154,21 +154,30 @@ def _grant_snapshot(
 
 
 def _group_snapshots(grant: AccessGrant, now: datetime) -> tuple[GroupSnapshot, ...]:
-    return tuple(
-        GroupSnapshot(
-            key=link.authorization_group.key,
-            kind=link.authorization_group.kind,
-            name=link.authorization_group.name,
-            expires_at=link.expires_at,
-        )
-        for link in AccessGrantGroup.objects.select_related("authorization_group")
+    snapshots: dict[int, GroupSnapshot] = {}
+    for link in (
+        AccessGrantGroup.objects.select_related("authorization_group")
         .filter(
             Q(expires_at__isnull=True) | Q(expires_at__gt=now),
             grant=grant,
             authorization_group__is_active=True,
         )
         .order_by("authorization_group__key")
-    )
+    ):
+        previous = snapshots.get(link.authorization_group_id)
+        snapshots[link.authorization_group_id] = GroupSnapshot(
+            key=link.authorization_group.key,
+            kind=link.authorization_group.kind,
+            name=link.authorization_group.name,
+            expires_at=link.expires_at
+            if previous is None
+            else _later_expiry(previous.expires_at, link.expires_at),
+        )
+    return tuple(snapshots.values())
+
+
+def _later_expiry(left: datetime | None, right: datetime | None) -> datetime | None:
+    return None if left is None or right is None else max(left, right)
 
 
 def _expanded_grants(
@@ -211,7 +220,13 @@ def _group_grants(
             ).values_list("authorization_group_id", "expires_at"),
         ),
     )
-    group_expirations = dict(group_expiration_rows)
+    group_expirations: dict[int, datetime | None] = {}
+    for group_id, expires_at in group_expiration_rows:
+        group_expirations[group_id] = (
+            _later_expiry(group_expirations[group_id], expires_at)
+            if group_id in group_expirations
+            else expires_at
+        )
     links = (
         AuthorizationGroupGrant.objects.select_related("authorization_group", "permission")
         .filter(
@@ -269,7 +284,7 @@ def _direct_grants(
         )
         .order_by("permission__key", "scope_key")
     )
-    expanded: set[ExpandedGrant] = set()
+    expanded: dict[tuple[int, str], ExpandedGrant] = {}
     for link in links:
         if not (
             link.scope_key in active_scope_keys
@@ -285,17 +300,19 @@ def _direct_grants(
             )
             if resolved is None:
                 continue
-        expanded.add(
-            ExpandedGrant(
-                permission=link.permission.key,
-                scope=link.scope_key,
-                source_type="direct",
-                source_key="",
-                expires_at=link.expires_at,
-                resolved=resolved,
-            ),
+        identity = (link.permission_id, link.scope_key)
+        previous = expanded.get(identity)
+        expanded[identity] = ExpandedGrant(
+            permission=link.permission.key,
+            scope=link.scope_key,
+            source_type="direct",
+            source_key="",
+            expires_at=link.expires_at
+            if previous is None
+            else _later_expiry(previous.expires_at, link.expires_at),
+            resolved=resolved,
         )
-    return expanded
+    return set(expanded.values())
 
 
 def _supported_scope_keys(value: object) -> list[str]:

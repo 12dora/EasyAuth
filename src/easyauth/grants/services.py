@@ -14,7 +14,14 @@ from easyauth.grants.lifecycle import (
     create_current_grant,
     revoke_current_grant,
     revoke_current_grants_for_user,
+    revoke_user_memberships,
 )
+from easyauth.grants.models import (
+    MEMBERSHIP_SOURCE_DEPARTMENT,
+    AccessGrantGroup,
+    AccessGrantPermission,
+)
+from easyauth.grants.operations import current_grant
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -90,6 +97,38 @@ class GrantService:
                 actor_type=actor_type,
                 actor_id=actor_id,
                 reason=reason,
+            )
+            if grant is not None:
+                notify_grant_mutation(grant)
+            return grant
+
+    @staticmethod
+    def revoke_user_memberships(
+        *,
+        user: UserMirror,
+        app: App,
+        actor_type: str,
+        actor_id: str,
+        reason: str = "",
+    ) -> AccessGrant | None:
+        with transaction.atomic():
+            current = current_grant(user, app)
+            if current is None:
+                return None
+            has_department = (
+                AccessGrantGroup.objects.filter(
+                    grant=current, source=MEMBERSHIP_SOURCE_DEPARTMENT
+                ).exists()
+                or AccessGrantPermission.objects.filter(
+                    grant=current, source=MEMBERSHIP_SOURCE_DEPARTMENT
+                ).exists()
+            )
+            if not has_department:
+                return GrantService.revoke_grant(
+                    user=user, app=app, actor_type=actor_type, actor_id=actor_id, reason=reason
+                )
+            grant = revoke_user_memberships(
+                user=user, app=app, actor_type=actor_type, actor_id=actor_id, reason=reason
             )
             if grant is not None:
                 notify_grant_mutation(grant)

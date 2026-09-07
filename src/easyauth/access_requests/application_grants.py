@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Final, Protocol, cast, override
 from django.utils import timezone
 
 from easyauth.access_requests.application_target_validation import apply_target_errors
+from easyauth.access_requests.membership_snapshot import user_membership_snapshot
 from easyauth.access_requests.models import (
     AccessRequest,
     AccessRequestGroup,
@@ -18,6 +19,7 @@ from easyauth.applications.models import Permission
 from easyauth.grants.effective_snapshot import EffectiveGrantSnapshot, effective_grant_snapshot
 from easyauth.grants.models import (
     GRANT_STATUS_ACTIVE,
+    MEMBERSHIP_SOURCE_USER,
     AccessGrant,
     AccessGrantGroup,
     AccessGrantPermission,
@@ -232,7 +234,7 @@ def _apply_revoke_request(
                 current,
             ),
         )
-    revoked = GrantService.revoke_grant(
+    revoked = GrantService.revoke_user_memberships(
         user=access_request.user,
         app=access_request.app,
         actor_type=input_data.actor_type,
@@ -282,7 +284,7 @@ def _base_current_snapshot(access_request: AccessRequest) -> EffectiveGrantSnaps
     snapshot = effective_grant_snapshot(grant)
     if not snapshot.has_membership():
         raise GrantBaseRevisionConflictError
-    return snapshot
+    return user_membership_snapshot(grant)
 
 
 def _validate_revoke_target(
@@ -391,7 +393,7 @@ def _current_group_expirations(grant: AccessGrant) -> dict[int, datetime | None]
     group_expiration_rows = cast(
         "tuple[tuple[int, datetime | None], ...]",
         tuple(
-            AccessGrantGroup.objects.filter(grant=grant).values_list(
+            AccessGrantGroup.objects.filter(grant=grant, source=MEMBERSHIP_SOURCE_USER).values_list(
                 "authorization_group_id",
                 "expires_at",
             )
@@ -407,7 +409,9 @@ def _current_direct_expirations(
     direct_expiration_rows = cast(
         "tuple[tuple[int, str, datetime | None], ...]",
         tuple(
-            AccessGrantPermission.objects.filter(grant=grant).values_list(
+            AccessGrantPermission.objects.filter(
+                grant=grant, source=MEMBERSHIP_SOURCE_USER
+            ).values_list(
                 "permission_id",
                 "scope_key",
                 "expires_at",

@@ -9,7 +9,12 @@ from django.utils import timezone
 
 from easyauth.applications.models import App
 from easyauth.grants.inputs import AuthorizationGroupGrantInput, ScopedDirectGrantInput
-from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
+from easyauth.grants.models import (
+    MEMBERSHIP_SOURCE_USER,
+    AccessGrant,
+    AccessGrantGroup,
+    AccessGrantPermission,
+)
 from easyauth.grants.services import GrantExpirationInput, GrantMutationInput, GrantService
 from easyauth.lifecycle.core import CATALOG_TARGET_DELETED_MESSAGE, TRANSFER_PLAN_STALE_MESSAGE
 from easyauth.lifecycle.errors import HandoverConflictError, HandoverError
@@ -204,6 +209,7 @@ def _merge_existing_grant_targets(
 ) -> None:
     for link in AccessGrantGroup.objects.select_related("authorization_group").filter(
         grant=existing,
+        source=MEMBERSHIP_SOURCE_USER,
     ):
         incoming = groups.get(link.authorization_group.id)
         groups[link.authorization_group.id] = AuthorizationGroupGrantInput(
@@ -216,6 +222,7 @@ def _merge_existing_grant_targets(
         )
     for permission_link in AccessGrantPermission.objects.select_related("permission").filter(
         grant=existing,
+        source=MEMBERSHIP_SOURCE_USER,
     ):
         key = (permission_link.permission.id, permission_link.scope_key)
         incoming = direct.get(key)
@@ -268,7 +275,7 @@ def apply_transfer_diff_for_app(
     )
     if not groups and not direct:
         if existing is not None:
-            _ = GrantService.revoke_grant(
+            _ = GrantService.revoke_user_memberships(
                 user=subject,
                 app=app,
                 actor_type="system",
@@ -344,6 +351,7 @@ def collect_kept_targets(
 ) -> None:
     for link in AccessGrantGroup.objects.select_related("authorization_group").filter(
         grant=existing,
+        source=MEMBERSHIP_SOURCE_USER,
     ):
         key = f"{app_key}:group:{link.authorization_group.key}"
         if key not in revoke_keys:
@@ -353,6 +361,7 @@ def collect_kept_targets(
             )
     for permission_link in AccessGrantPermission.objects.select_related("permission").filter(
         grant=existing,
+        source=MEMBERSHIP_SOURCE_USER,
     ):
         key = f"{app_key}:permission:{permission_link.permission.key}:{permission_link.scope_key}"
         if key not in revoke_keys:
