@@ -112,8 +112,6 @@ def test_silent_identity_binds_current_upstream_user(
     "error",
     [
         "login_required",
-        "interaction_required",
-        "consent_required",
         "access_denied",
     ],
 )
@@ -132,14 +130,16 @@ def test_silent_upstream_logout(signing_key: rsa.RSAPrivateKey, error: str) -> N
     assert not OidcSessionBinding.objects.filter(session_key=old_key).exists()
 
 
-@pytest.mark.parametrize("failure", ["unknown_error", "missing_code"])
+@pytest.mark.parametrize(
+    "failure", ["server_error", "interaction_required", "consent_required", "missing_code"]
+)
 def test_silent_error_preserves_identity(signing_key: rsa.RSAPrivateKey, failure: str) -> None:
     assert signing_key
     client = silent_client()
     client.get("/auth/login/?silent=1")
     params = {"state": next(iter(client.session[OIDC_SILENT_ATTEMPTS_SESSION_KEY]))}
-    if failure == "unknown_error":
-        params["error"] = "server_error"
+    if failure != "missing_code":
+        params["error"] = failure
     assert_outcome(client, "error", **params)
     assert client.session[AUTHENTIK_SESSION_KEY] == "one"
     assert OidcSessionBinding.objects.filter(session_key=client.session.session_key).exists()

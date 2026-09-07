@@ -439,9 +439,10 @@ state/nonce 校验并向 Authentik 发送 `prompt=none`。回调核实当前上�
 
 - `unchanged`：仍是同一用户。
 - `changed`：已绑定新用户并轮换会话, 父页面重新加载。
-- `logged_out`：上游要求登录、交互、同意、拒绝访问或本地用户已停用,
+- `logged_out`：上游返回 `login_required`、`access_denied` 或本地用户已停用,
   清除本地认证与绑定, 父页面进入登录页。
-- `error`：状态校验、交换或其他协议步骤失败, 保留既有身份并交由页面现有错误流程处理。
+- `error`：上游要求交互（`interaction_required`）或同意（`consent_required`），
+  或状态校验、交换及其他协议步骤失败；保留既有身份并交由页面现有错误流程处理。
 
 SPA 壳层通过 `data-current-user-auth-kind` 区分 `oidc` 与 `local_admin`。
 前端仅对 OIDC 会话在启动、标签页重新可见、可见期间每五分钟以及 API 返回 401

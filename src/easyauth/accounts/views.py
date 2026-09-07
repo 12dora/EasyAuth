@@ -378,7 +378,7 @@ def backchannel_logout(request: HttpRequest) -> JsonResponse:
         except Exception:
             # 缓存清理失败不能替换撤销或审计的原始异常。
             with suppress(Exception):
-                cache.delete(f"easyauth:oidc:logout-jti:{claims.jti}")
+                _ = cache.delete(f"easyauth:oidc:logout-jti:{claims.jti}")
             raise
         response = JsonResponse({})
     response.headers["Cache-Control"] = "no-store"
@@ -393,8 +393,6 @@ def _remember_logout_jti(jti: str, timeout: int) -> None:
 SILENT_LOGOUT_ERRORS: Final = frozenset(
     {
         "login_required",
-        "interaction_required",
-        "consent_required",
         "access_denied",
     }
 )
