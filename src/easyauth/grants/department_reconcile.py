@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Protocol, cast, final
 
 from django.core.cache import cache
 from django.db import transaction
-from django.db.models import Prefetch, Q
+from django.db.models import Exists, OuterRef, Prefetch, Q
 from django.utils import timezone
 
 from easyauth.accounts.department_tree import DepartmentTree
@@ -218,8 +218,20 @@ def _load_current_grants(user_ids: Iterable[int]) -> dict[tuple[int, int], Acces
         (grant.user_id, grant.app_id): grant
         for grant in AccessGrant.objects.filter(
             Q(user_id__in=user_ids)
-            | Q(grant_groups__source=MEMBERSHIP_SOURCE_DEPARTMENT)
-            | Q(grant_permissions__source=MEMBERSHIP_SOURCE_DEPARTMENT),
+            | Q(
+                Exists(
+                    AccessGrantGroup.objects.filter(
+                        grant_id=OuterRef("pk"), source=MEMBERSHIP_SOURCE_DEPARTMENT
+                    )
+                )
+            )
+            | Q(
+                Exists(
+                    AccessGrantPermission.objects.filter(
+                        grant_id=OuterRef("pk"), source=MEMBERSHIP_SOURCE_DEPARTMENT
+                    )
+                )
+            ),
             is_current=True,
             status=GRANT_STATUS_ACTIVE,
         )
@@ -228,7 +240,6 @@ def _load_current_grants(user_ids: Iterable[int]) -> dict[tuple[int, int], Acces
             Prefetch("grant_groups", to_attr="loaded_groups"),
             Prefetch("grant_permissions", to_attr="loaded_permissions"),
         )
-        .distinct()
     }
 
 
@@ -330,16 +341,14 @@ def _desired_by_pair(
     trees: dict[tuple[str, str], DepartmentTree],
     cutoff: datetime,
 ) -> tuple[dict[tuple[int, int], _Desired], dict[int, App]]:
-    indexed: dict[tuple[str, str, str, int], list[_Policy]] = {}
-    apps_by_corp: dict[tuple[str, str], set[int]] = {}
+    indexed: dict[tuple[str, str, str], list[_Policy]] = {}
     apps: dict[int, App] = {}
     for policy in policies:
         row = policy.model
         corp = (row.source_slug, row.corp_id)
-        apps[row.app_id] = row.app
-        apps_by_corp.setdefault(corp, set()).add(row.app_id)
         if row.dept_id in trees[corp].nodes and (row.expires_at is None or row.expires_at > cutoff):
-            indexed.setdefault((*corp, row.dept_id, row.app_id), []).append(policy)
+            indexed.setdefault((*corp, row.dept_id), []).append(policy)
+            apps[row.app_id] = row.app
     desired: dict[tuple[int, int], _Desired] = {}
     for user_id in users:
         mirror = bindings[user_id]
@@ -347,10 +356,12 @@ def _desired_by_pair(
         departments = mirror.department_ids
         tree = trees[corp]
         ancestors = tree.ancestors_or_self_for(dept for dept in departments if dept in tree.nodes)
-        for app_id in sorted(apps_by_corp[corp]):
-            matching = sorted(
-                (policy for dept in ancestors for policy in indexed.get((*corp, dept, app_id), ())),
-                key=lambda policy: policy.model.id,
+        matching_by_app: dict[int, list[_Policy]] = {}
+        for dept in ancestors:
+            for policy in indexed.get((*corp, dept), ()):
+                matching_by_app.setdefault(policy.model.app_id, []).append(policy)
+        for app_id, matching in matching_by_app.items():
+            desired[(user_id, app_id)] = _desired_memberships(
+                sorted(matching, key=lambda policy: policy.model.id)
             )
-            desired[(user_id, app_id)] = _desired_memberships(matching)
     return desired, apps

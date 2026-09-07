@@ -376,7 +376,7 @@ def test_policy_for_missing_department_does_not_match_stale_user_membership(
     _policy(catalog)
     DingTalkDepartmentMirror.objects.all().delete()
     result = reconcile_department_grants()
-    assert result.unchanged == 1
+    assert result.unchanged == 0
     assert not AccessGrant.objects.exists()
 
 
@@ -504,3 +504,90 @@ def test_failed_pass_releases_lock(catalog: Catalog) -> None:
     dept.parent_id = ""
     dept.save(update_fields=["parent_id"])
     assert reconcile_department_grants().grants_created == 1
+
+
+def test_current_grant_query_uses_exists_without_membership_joins(catalog: Catalog) -> None:
+    user, _mirror = _user()
+    policy = _policy(catalog)
+    reconcile_department_grants()
+    grant = AccessGrant.objects.get()
+    for index in range(8):
+        group = AuthorizationGroup.objects.create(
+            app=catalog.app, key=f"group-{index}", name="授权组", kind="role"
+        )
+        permission = Permission.objects.create(
+            app=catalog.app, key=f"permission-{index}", name="权限", supported_scopes=["GLOBAL"]
+        )
+        AccessGrantGroup.objects.create(
+            grant=grant, authorization_group=group, source="department", department_policy=policy
+        )
+        AccessGrantPermission.objects.create(
+            grant=grant, permission=permission, source="department", department_policy=policy
+        )
+    for user_ids in [[], [user.id]]:
+        with CaptureQueriesContext(connection) as captured:
+            current = department_reconcile._load_current_grants(user_ids)  # noqa: SLF001 - 直接验证候选查询与预取的 SQL 形态。
+        assert current[(user.id, catalog.app.id)] == grant
+        assert len(captured) == 3
+        sql = captured[0]["sql"]
+        assert sql.count("EXISTS(") == 2
+        assert 'JOIN "grants_accessgrantgroup"' not in sql
+        assert 'JOIN "grants_accessgrantpermission"' not in sql
+        assert "SELECT DISTINCT" not in sql
+
+
+def test_sparse_desired_pairs_include_only_matches_and_department_cleanup(
+    catalog: Catalog, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    users: list[UserMirror] = []
+    matches: set[tuple[int, int]] = set()
+    for index in range(4):
+        dept_id = str(10 + index)
+        DingTalkDepartmentMirror.objects.create(
+            source_slug="dingtalk", corp_id="corp", dept_id=dept_id, parent_id="1", name=dept_id
+        )
+        user, mirror = _user(f"sparse-{index}")
+        mirror.department_ids = [dept_id]
+        mirror.save(update_fields=["department_ids"])
+        users.append(user)
+        app_catalog = _extra_catalog(f"sparse-{index}")
+        _policy(app_catalog, dept_id=dept_id)
+        matches.add((user.id, app_catalog.app.id))
+    expired_catalog = _extra_catalog("expired")
+    expired = _policy(expired_catalog, expires_at=timezone.now() - timedelta(days=1))
+    grant = AccessGrant.objects.create(user=users[0], app=expired_catalog.app)
+    AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=expired_catalog.permission,
+        source="department",
+        department_policy=expired,
+        expires_at=expired.expires_at,
+    )
+    _policy(_extra_catalog("expired-without-grant"), expires_at=expired.expires_at)
+    _policy(catalog, dept_id="4")
+    cleanup = (users[0].id, expired_catalog.app.id)
+    original = department_reconcile._sync_pairs  # noqa: SLF001 - 检查实际传入写入阶段的集合, 再执行真实写入。
+
+    def check_pairs(*args: object) -> object:
+        desired = args[3]
+        assert set(desired) == matches | {cleanup}
+        assert len(desired) == len(matches) + 1
+        assert not desired[cleanup].groups
+        assert not desired[cleanup].permissions
+        return original(*args)
+
+    monkeypatch.setattr(department_reconcile, "_sync_pairs", check_pairs)
+    result = reconcile_department_grants()
+    assert result.grants_created == len(matches)
+    assert result.grants_revoked == 1
+    assert result.unchanged == 0
+
+
+def _extra_catalog(key: str) -> Catalog:
+    app = App.objects.create(app_key=key, name="稀疏匹配应用")
+    AppScope.objects.get_or_create(app=app, key="GLOBAL", defaults={"name": "全局"})
+    group = AuthorizationGroup.objects.create(app=app, key="reader", name="读取", kind="role")
+    permission = Permission.objects.create(
+        app=app, key="read", name="读取", supported_scopes=["GLOBAL"]
+    )
+    return Catalog(app, group, permission)
