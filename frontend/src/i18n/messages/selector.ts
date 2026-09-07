@@ -19,12 +19,12 @@ export const zhCN = {
   "selector.selectAppFirst.description": "直接权限可留空，也可在应用目录加载后勾选具体权限。",
 
   "selector.loading.title": "权限目录加载中",
-  "selector.loading.description": "正在读取可申请的直接权限。",
+  "selector.loading.description": "正在读取直接权限目录。",
 
   "selector.loadFailed.title": "权限目录加载失败",
 
   "selector.empty.title": "暂无可选直接权限",
-  "selector.empty.description": "当前应用未返回可直接申请的权限，可仅选择权限组发起申请。",
+  "selector.empty.description": "当前应用没有可单独选择的权限，可仅选择权限组。",
 
   "selector.emptySelected.title": "当前没有已选直接权限",
   "selector.emptySelected.description": "关闭仅看已选后可继续浏览并选择权限。",
@@ -75,12 +75,12 @@ export const en: Record<keyof typeof zhCN, string> = {
   "selector.selectAppFirst.description": "Direct permissions are optional; pick specific permissions once the catalog is loaded.",
 
   "selector.loading.title": "Loading permission catalog",
-  "selector.loading.description": "Fetching directly requestable permissions.",
+  "selector.loading.description": "Loading direct permissions.",
 
   "selector.loadFailed.title": "Failed to load permission catalog",
 
   "selector.empty.title": "No direct permissions available",
-  "selector.empty.description": "This application returned no directly requestable permissions; you can request authorization groups only.",
+  "selector.empty.description": "This application has no individually selectable permissions; choose authorization groups only.",
 
   "selector.emptySelected.title": "No direct permissions selected",
   "selector.emptySelected.description": "Turn off \"Selected only\" to keep browsing and selecting permissions.",

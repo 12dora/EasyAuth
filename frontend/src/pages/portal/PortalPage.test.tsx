@@ -370,7 +370,7 @@ describe("PortalPage access request form", () => {
 
       expect(await screen.findByRole("status")).toHaveTextContent("当前应用没有可直接申请的权限，可仅按权限组发起申请。");
       expect(screen.queryByText("未发现可选直接权限")).not.toBeInTheDocument();
-      expect(screen.getByText("当前应用未返回可直接申请的权限，可仅选择权限组发起申请。")).toBeVisible();
+      expect(screen.getByText("当前应用没有可单独选择的权限，可仅选择权限组。")).toBeVisible();
       expect(screen.getByRole("button", { name: "提交申请" })).toBeDisabled();
     } finally {
       vi.unstubAllGlobals();
@@ -1938,7 +1938,7 @@ describe("PortalPage access request form", () => {
       await user.selectOptions(screen.getByLabelText("应用"), "crm");
 
       expect(await screen.findByRole("status")).toHaveTextContent("当前应用没有可直接申请的权限，可仅按权限组发起申请。");
-      expect(screen.getByText("当前应用未返回可直接申请的权限，可仅选择权限组发起申请。")).toBeVisible();
+      expect(screen.getByText("当前应用没有可单独选择的权限，可仅选择权限组。")).toBeVisible();
     } finally {
       vi.unstubAllGlobals();
     }
