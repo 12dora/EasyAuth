@@ -129,8 +129,8 @@ def test_access_grant_group_migration_scan_blocks_existing_bad_rows() -> None:
             cursor.execute(
                 """
                 INSERT INTO grants_accessgrantgroup
-                    (grant_id, authorization_group_id, expires_at, created_at)
-                VALUES (%s, %s, NULL, CURRENT_TIMESTAMP)
+                    (grant_id, authorization_group_id, expires_at, source, created_at)
+                VALUES (%s, %s, NULL, 'user', CURRENT_TIMESTAMP)
                 """,
                 [grant.id, group.id],
             )
@@ -160,8 +160,8 @@ def test_access_grant_group_raw_cross_app_write_is_rejected_by_database() -> Non
         cursor.execute(
             """
                 INSERT INTO grants_accessgrantgroup
-                    (grant_id, authorization_group_id, expires_at, created_at)
-                VALUES (%s, %s, NULL, CURRENT_TIMESTAMP)
+                    (grant_id, authorization_group_id, expires_at, source, created_at)
+                VALUES (%s, %s, NULL, 'user', CURRENT_TIMESTAMP)
                 """,
             [grant.id, group.id],
         )

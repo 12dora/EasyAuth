@@ -34,6 +34,18 @@ GRANT_STATUS_VALUES: Final[tuple[str, ...]] = (
     GRANT_STATUS_EXPIRED,
 )
 
+# 授权成员来源: user = 显式授权(审批通过/交接/管理员直接授予); department = 由部门预授权策略物化。
+MEMBERSHIP_SOURCE_USER: Final = "user"
+MEMBERSHIP_SOURCE_DEPARTMENT: Final = "department"
+MEMBERSHIP_SOURCE_CHOICES: Final[tuple[tuple[str, str], ...]] = (
+    (MEMBERSHIP_SOURCE_USER, "user"),
+    (MEMBERSHIP_SOURCE_DEPARTMENT, "department"),
+)
+MEMBERSHIP_SOURCE_VALUES: Final[tuple[str, ...]] = (
+    MEMBERSHIP_SOURCE_USER,
+    MEMBERSHIP_SOURCE_DEPARTMENT,
+)
+
 
 class AccessGrant(models.Model):
     if TYPE_CHECKING:
@@ -90,6 +102,151 @@ class AccessGrant(models.Model):
         return f"{self.user.authentik_user_id}:{self.app.app_key}:v{self.version}"
 
 
+class DepartmentGrantPolicy(models.Model):
+    """部门预授权策略: 挂在钉钉部门上, 对该部门及其全部子部门的在职人员自动生效。"""
+
+    if TYPE_CHECKING:
+        id: ClassVar[int]
+        app_id: ClassVar[int]
+
+    source_slug: models.CharField[str, str] = models.CharField(max_length=128)
+    corp_id: models.CharField[str, str] = models.CharField(max_length=128)
+    dept_id: models.CharField[str, str] = models.CharField(max_length=128)
+    app: models.ForeignKey[App, App] = models.ForeignKey(
+        App,
+        on_delete=models.PROTECT,
+        related_name="department_grant_policies",
+    )
+    grant_type: models.CharField[str, str] = models.CharField(
+        max_length=16,
+        choices=GRANT_TYPE_CHOICES,
+    )
+    expires_at: models.DateTimeField[
+        str | date | datetime | None,
+        datetime | None,
+    ] = models.DateTimeField(blank=True, null=True, db_index=True)
+    reason: models.CharField[str, str] = models.CharField(max_length=1000)
+    created_by_type: models.CharField[str, str] = models.CharField(max_length=32)
+    created_by_id: models.CharField[str, str] = models.CharField(max_length=128)
+    updated_by_type: models.CharField[str, str] = models.CharField(max_length=32)
+    updated_by_id: models.CharField[str, str] = models.CharField(max_length=128)
+    created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
+        auto_now_add=True,
+    )
+    updated_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.CheckConstraint(
+                condition=Q(grant_type__in=GRANT_TYPE_VALUES),
+                name="grants_department_policy_grant_type_supported",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    Q(grant_type=GRANT_TYPE_TIMED, expires_at__isnull=False)
+                    | Q(grant_type=GRANT_TYPE_PERMANENT, expires_at__isnull=True)
+                ),
+                name="grants_department_policy_expiry_shape",
+            ),
+        ]
+        indexes: ClassVar[list[models.Index]] = [
+            models.Index(
+                fields=["source_slug", "corp_id", "dept_id"],
+                name="grants_dept_policy_dept_idx",
+            ),
+        ]
+        ordering: ClassVar[list[str]] = ["app__app_key", "dept_id", "id"]
+
+    @override
+    def __str__(self) -> str:
+        return f"{self.source_slug}/{self.corp_id}/{self.dept_id}:{self.app.app_key}:{self.id}"
+
+
+class DepartmentGrantPolicyGroup(models.Model):
+    if TYPE_CHECKING:
+        policy_id: ClassVar[int]
+        authorization_group_id: ClassVar[int]
+
+    policy: models.ForeignKey[DepartmentGrantPolicy, DepartmentGrantPolicy] = models.ForeignKey(
+        DepartmentGrantPolicy,
+        on_delete=models.CASCADE,
+        related_name="policy_groups",
+    )
+    authorization_group: models.ForeignKey[AuthorizationGroup, AuthorizationGroup] = (
+        models.ForeignKey(
+            AuthorizationGroup,
+            on_delete=models.CASCADE,
+            related_name="department_policy_groups",
+        )
+    )
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["policy", "authorization_group"],
+                name="grants_department_policy_group_unique",
+            ),
+        ]
+        ordering: ClassVar[list[str]] = ["policy_id", "authorization_group__key"]
+
+    @override
+    def __str__(self) -> str:
+        return f"{self.policy} -> {self.authorization_group}"
+
+    @override
+    def clean(self) -> None:
+        super().clean()
+        if self.authorization_group.app_id != self.policy.app_id:
+            raise ValidationError(
+                {"authorization_group": "Authorization group must belong to the policy app."},
+            )
+
+
+class DepartmentGrantPolicyPermission(models.Model):
+    if TYPE_CHECKING:
+        policy_id: ClassVar[int]
+        permission_id: ClassVar[int]
+
+    policy: models.ForeignKey[DepartmentGrantPolicy, DepartmentGrantPolicy] = models.ForeignKey(
+        DepartmentGrantPolicy,
+        on_delete=models.CASCADE,
+        related_name="policy_permissions",
+    )
+    permission: models.ForeignKey[Permission, Permission] = models.ForeignKey(
+        Permission,
+        on_delete=models.CASCADE,
+        related_name="department_policy_permissions",
+    )
+    scope_key: models.CharField[str, str] = models.CharField(max_length=64, default="GLOBAL")
+
+    class Meta:
+        constraints: ClassVar[list[models.BaseConstraint]] = [
+            models.UniqueConstraint(
+                fields=["policy", "permission", "scope_key"],
+                name="grants_department_policy_permission_unique",
+            ),
+        ]
+        ordering: ClassVar[list[str]] = ["policy_id", "permission__key", "scope_key"]
+
+    @override
+    def __str__(self) -> str:
+        return f"{self.policy} -> {self.permission}:{self.scope_key}"
+
+    @override
+    def clean(self) -> None:
+        super().clean()
+        errors: dict[str, str] = {}
+        if self.permission.app_id != self.policy.app_id:
+            errors["permission"] = "Permission must belong to the policy app."
+        supported_scopes = cast("list[str]", self.permission.supported_scopes)
+        if self.scope_key not in supported_scopes:
+            errors["scope_key"] = "Scope must be supported by the permission."
+        if errors:
+            raise ValidationError(errors)
+
+
 class AccessGrantGroup(models.Model):
     if TYPE_CHECKING:
         grant_id: ClassVar[int]
@@ -111,6 +268,21 @@ class AccessGrantGroup(models.Model):
         str | date | datetime | None,
         datetime | None,
     ] = models.DateTimeField(blank=True, null=True, db_index=True)
+    source: models.CharField[str, str] = models.CharField(
+        max_length=16,
+        choices=MEMBERSHIP_SOURCE_CHOICES,
+        default=MEMBERSHIP_SOURCE_USER,
+    )
+    department_policy: models.ForeignKey[
+        DepartmentGrantPolicy | None,
+        DepartmentGrantPolicy | None,
+    ] = models.ForeignKey(
+        DepartmentGrantPolicy,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="+",
+    )
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
     )
@@ -118,8 +290,12 @@ class AccessGrantGroup(models.Model):
     class Meta:
         constraints: ClassVar[list[models.BaseConstraint]] = [
             models.UniqueConstraint(
-                fields=["grant", "authorization_group"],
+                fields=["grant", "authorization_group", "source"],
                 name="grants_access_grant_group_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(source__in=MEMBERSHIP_SOURCE_VALUES),
+                name="grants_access_grant_group_source_supported",
             ),
         ]
         ordering: ClassVar[list[str]] = ["grant_id", "authorization_group__key"]
@@ -158,6 +334,21 @@ class AccessGrantPermission(models.Model):
         str | date | datetime | None,
         datetime | None,
     ] = models.DateTimeField(blank=True, null=True, db_index=True)
+    source: models.CharField[str, str] = models.CharField(
+        max_length=16,
+        choices=MEMBERSHIP_SOURCE_CHOICES,
+        default=MEMBERSHIP_SOURCE_USER,
+    )
+    department_policy: models.ForeignKey[
+        DepartmentGrantPolicy | None,
+        DepartmentGrantPolicy | None,
+    ] = models.ForeignKey(
+        DepartmentGrantPolicy,
+        on_delete=models.SET_NULL,
+        blank=True,
+        null=True,
+        related_name="+",
+    )
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
         auto_now_add=True,
     )
@@ -165,8 +356,12 @@ class AccessGrantPermission(models.Model):
     class Meta:
         constraints: ClassVar[list[models.BaseConstraint]] = [
             models.UniqueConstraint(
-                fields=["grant", "permission", "scope_key"],
+                fields=["grant", "permission", "scope_key", "source"],
                 name="grants_access_grant_permission_unique",
+            ),
+            models.CheckConstraint(
+                condition=Q(source__in=MEMBERSHIP_SOURCE_VALUES),
+                name="grants_access_grant_permission_source_supported",
             ),
         ]
         ordering: ClassVar[list[str]] = ["grant_id", "permission__key", "scope_key"]
