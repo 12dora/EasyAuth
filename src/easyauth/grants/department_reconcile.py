@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from time import monotonic
 from typing import TYPE_CHECKING, Protocol, cast, final
 
+from django.core.cache import cache
 from django.db import transaction
 from django.db.models import Prefetch, Q
 from django.utils import timezone
@@ -35,9 +37,12 @@ if TYPE_CHECKING:
 # 部门预授权对账任务, 由目录同步完成、策略增删改与 beat 定时触发。
 DEPARTMENT_GRANT_RECONCILE_TASK_NAME = "easyauth.grants.reconcile_department_grants"
 _ENQUEUE_COUNTDOWN_SECONDS = 2
+DEPARTMENT_GRANT_RECONCILE_LOCK_KEY = "department-grant-reconcile:lock"
+DEPARTMENT_GRANT_RECONCILE_LOCK_TTL_SECONDS = 1800
 
 __all__ = [
     "DEPARTMENT_GRANT_RECONCILE_TASK_NAME",
+    "DepartmentGrantReconcileBusyError",
     "DepartmentGrantReconcileError",
     "DepartmentGrantReconcileResult",
     "reconcile_department_grants",
@@ -51,10 +56,10 @@ def schedule_department_grant_reconcile(*, trigger: str) -> None:
     event_key 按 (trigger, 秒) 归并: 同一秒内的重复调用只保留一条; countdown 大于归并窗口,
     因此归并到的事件一定尚未派发, 不会漏掉窗口末尾的变更。
     """
-    bucket = int(timezone.now().timestamp())
-    event_key = f"department-grant-reconcile:{trigger}:{bucket}"
 
     def _enqueue() -> None:
+        bucket = int(timezone.now().timestamp())
+        event_key = f"department-grant-reconcile:{trigger}:{bucket}"
         _ = enqueue_task(
             event_key=event_key,
             task_name=DEPARTMENT_GRANT_RECONCILE_TASK_NAME,
@@ -62,6 +67,13 @@ def schedule_department_grant_reconcile(*, trigger: str) -> None:
         )
 
     transaction.on_commit(_enqueue)
+
+
+class DepartmentGrantReconcileBusyError(RuntimeError):
+    """已有批次持有全量对账锁; 调用方必须稍后重试。"""
+
+    def __init__(self) -> None:
+        super().__init__("department grant reconciliation is already running")
 
 
 @dataclass(frozen=True, slots=True)
@@ -230,6 +242,23 @@ def _current_state(grant: AccessGrant | None) -> DepartmentMembershipState:
 
 
 def reconcile_department_grants(*, now: datetime | None = None) -> DepartmentGrantReconcileResult:
+    # 所有读取与写入共用同一把锁, 防止旧快照晚于新批次落地。
+    release_before = monotonic() + DEPARTMENT_GRANT_RECONCILE_LOCK_TTL_SECONDS - 3
+    if not cache.add(
+        DEPARTMENT_GRANT_RECONCILE_LOCK_KEY,
+        "1",
+        timeout=DEPARTMENT_GRANT_RECONCILE_LOCK_TTL_SECONDS,
+    ):
+        raise DepartmentGrantReconcileBusyError
+    try:
+        return _reconcile_department_grants(now=now)
+    finally:
+        # 锁过期后可能已属于另一批次, 此时不可删除。
+        if monotonic() < release_before:
+            _ = cache.delete(DEPARTMENT_GRANT_RECONCILE_LOCK_KEY)
+
+
+def _reconcile_department_grants(*, now: datetime | None) -> DepartmentGrantReconcileResult:
     cutoff = timezone.now() if now is None else now
     policies = _load_policies()
     corps = {(policy.model.source_slug, policy.model.corp_id) for policy in policies}

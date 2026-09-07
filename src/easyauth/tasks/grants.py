@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Never, Protocol
 
 from celery import shared_task
 from django.db import OperationalError, connection, transaction
 from django.utils import timezone
 
 from easyauth.grants.department_reconcile import (
+    DEPARTMENT_GRANT_RECONCILE_LOCK_TTL_SECONDS,
     DEPARTMENT_GRANT_RECONCILE_TASK_NAME,
+    DepartmentGrantReconcileBusyError,
     DepartmentGrantReconcileError,
     reconcile_department_grants,
 )
@@ -97,17 +99,28 @@ def cleanup_expired_grants_task() -> int:
     return cleanup_expired_grants().expired_count
 
 
+class _ReconcileTask(Protocol):
+    def retry(self, *, exc: Exception, countdown: int) -> Never: ...
+
+
 @shared_task(
     name=DEPARTMENT_GRANT_RECONCILE_TASK_NAME,
+    bind=True,
+    time_limit=DEPARTMENT_GRANT_RECONCILE_LOCK_TTL_SECONDS - 60,
     acks_late=True,
     autoretry_for=(DepartmentGrantReconcileError, OperationalError),
-    max_retries=3,
+    max_retries=None,
+    retry_kwargs={"max_retries": 3},
     retry_backoff=30,
     retry_backoff_max=600,
     retry_jitter=True,
 )
-def reconcile_department_grants_task() -> dict[str, int]:
-    result = reconcile_department_grants()
+def reconcile_department_grants_task(self: _ReconcileTask) -> dict[str, int]:
+    try:
+        result = reconcile_department_grants()
+    except DepartmentGrantReconcileBusyError as exc:
+        # 锁竞争持续重试, 确保最新触发最终获得执行机会。
+        self.retry(exc=exc, countdown=5)
     return {
         "users_considered": result.users_considered,
         "grants_created": result.grants_created,

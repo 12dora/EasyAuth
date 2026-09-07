@@ -5,8 +5,11 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
+from celery.exceptions import Retry
 from django.conf import settings
+from django.core.cache import cache
 from django.db import connection
+from django.test import TestCase
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
@@ -14,9 +17,14 @@ from easyauth.accounts.department_tree import DepartmentTreeCycleError
 from easyauth.accounts.models import DingTalkDepartmentMirror, DingTalkUserMirror, UserMirror
 from easyauth.applications.models import App, AppScope, AuthorizationGroup, Permission
 from easyauth.audit.models import AuditLog
+from easyauth.grants import department_reconcile
 from easyauth.grants.department_reconcile import (
+    DEPARTMENT_GRANT_RECONCILE_LOCK_KEY,
+    DEPARTMENT_GRANT_RECONCILE_LOCK_TTL_SECONDS,
+    DepartmentGrantReconcileBusyError,
     DepartmentGrantReconcileError,
     reconcile_department_grants,
+    schedule_department_grant_reconcile,
 )
 from easyauth.grants.inputs import AuthorizationGroupGrantInput, ScopedDirectGrantInput
 from easyauth.grants.models import (
@@ -28,6 +36,7 @@ from easyauth.grants.models import (
     DepartmentGrantPolicyPermission,
 )
 from easyauth.grants.services import GrantService
+from easyauth.outbox.models import OutboxEvent
 from easyauth.tasks.grants import reconcile_department_grants_task
 
 if TYPE_CHECKING:
@@ -380,7 +389,9 @@ def test_department_task_registration_and_result(catalog: Catalog) -> None:
         == "easyauth.grants.reconcile_department_grants"
     )
     assert reconcile_department_grants_task.acks_late is True
-    assert reconcile_department_grants_task.max_retries == 3
+    assert reconcile_department_grants_task.max_retries is None
+    assert reconcile_department_grants_task.retry_kwargs["max_retries"] == 3
+    assert reconcile_department_grants_task.time_limit < DEPARTMENT_GRANT_RECONCILE_LOCK_TTL_SECONDS
     assert reconcile_department_grants_task.retry_backoff == 30
     assert DepartmentTreeCycleError not in reconcile_department_grants_task.autoretry_for
     assert reconcile_department_grants_task.run() == {
@@ -413,3 +424,83 @@ def test_eligibility_uses_complete_directory_binding(catalog: Catalog) -> None:
     assert result.users_considered == 1
     assert AccessGrant.objects.get().user == eligible
     assert not AccessGrant.objects.filter(user__in=[outside, missing]).exists()
+
+
+def test_scheduler_buckets_at_commit_after_earlier_event_was_published(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = timezone.now().replace(microsecond=0)
+    monkeypatch.setattr(timezone, "now", lambda: now)
+    with TestCase.captureOnCommitCallbacks(execute=False) as callbacks:
+        schedule_department_grant_reconcile(trigger="policy")
+        schedule_department_grant_reconcile(trigger="policy")
+    assert not OutboxEvent.objects.exists()
+    callbacks[0]()
+    event = OutboxEvent.objects.get()
+    assert event.available_at > now + timedelta(seconds=1)
+    event.status = "published"
+    event.published_at = now
+    event.save(update_fields=["status", "published_at"])
+    now += timedelta(seconds=1)
+    callbacks[1]()
+    pending = OutboxEvent.objects.get(status="pending")
+    assert pending.pk != event.pk
+    assert pending.event_key.endswith(f":{int(now.timestamp())}")
+    with TestCase.captureOnCommitCallbacks(execute=True):
+        schedule_department_grant_reconcile(trigger="policy")
+    assert OutboxEvent.objects.count() == 2
+
+
+def test_overlapping_pass_retries_then_applies_new_policy(
+    catalog: Catalog, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _user()
+    policy = _policy(catalog)
+    expiry = timezone.now() + timedelta(days=1)
+    original = department_reconcile._desired_by_pair  # noqa: SLF001 - 在读取旧快照后交错触发第二批次。
+
+    def change_policy_after_snapshot(*args: object, **kwargs: object) -> object:
+        desired = original(*args, **kwargs)
+        policy.grant_type = "timed"
+        policy.expires_at = expiry
+        policy.save(update_fields=["grant_type", "expires_at"])
+        with CaptureQueriesContext(connection) as captured:
+            with pytest.raises(DepartmentGrantReconcileBusyError):
+                reconcile_department_grants()
+            # 多次锁竞争后仍需重试; 使用真实 Celery retry, 隔离 broker 发送。
+            reconcile_department_grants_task.push_request(
+                retries=10, called_directly=False, is_eager=True
+            )
+            try:
+                with pytest.raises(Retry) as retried:
+                    reconcile_department_grants_task.run()
+            finally:
+                reconcile_department_grants_task.pop_request()
+        assert retried.value.when == 5
+        assert not captured.captured_queries
+        assert cache.get(DEPARTMENT_GRANT_RECONCILE_LOCK_KEY) is not None
+        return desired
+
+    with monkeypatch.context() as patch:
+        patch.setattr(department_reconcile, "_desired_by_pair", change_policy_after_snapshot)
+        assert reconcile_department_grants().grants_created == 1
+    assert cache.get(DEPARTMENT_GRANT_RECONCILE_LOCK_KEY) is None
+    assert AccessGrantPermission.objects.get().expires_at is None
+    assert reconcile_department_grants_task.run()["grants_changed"] == 1
+    assert AccessGrantPermission.objects.get().expires_at == expiry
+    assert AccessGrant.objects.get().version == 2
+    assert cache.get(DEPARTMENT_GRANT_RECONCILE_LOCK_KEY) is None
+
+
+def test_failed_pass_releases_lock(catalog: Catalog) -> None:
+    _user()
+    _policy(catalog)
+    dept = DingTalkDepartmentMirror.objects.get(dept_id="1")
+    dept.parent_id = "3"
+    dept.save(update_fields=["parent_id"])
+    with pytest.raises(DepartmentTreeCycleError):
+        reconcile_department_grants()
+    assert cache.get(DEPARTMENT_GRANT_RECONCILE_LOCK_KEY) is None
+    dept.parent_id = ""
+    dept.save(update_fields=["parent_id"])
+    assert reconcile_department_grants().grants_created == 1

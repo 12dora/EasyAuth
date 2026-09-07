@@ -39,6 +39,9 @@ def shared_task[**P, R](
 def shared_task[**P, R](
     *,
     name: str | None = None,
+    bind: bool = False,
+    time_limit: int | None = None,
+    retry_kwargs: dict[str, object] | None = None,
     acks_late: bool = False,
     autoretry_for: tuple[type[BaseException], ...] = (),
     retry_backoff: bool | int = False,
