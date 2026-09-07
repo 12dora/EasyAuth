@@ -297,6 +297,42 @@ def test_update_policy_conflicts_when_department_removed_delete_still_works() ->
     ).exists()
 
 
+def test_department_policies_shared_defined_on_deduplicates_subtree_users() -> None:
+    client = _logged_in_superuser("dept-grant-shared-defined")
+    _seed_org()
+    _ = _bound_user("ak-company-only", "u-company-only", ["1"])
+    _ = _bound_user("ak-dual", "u-dual", ["12", "99"])
+    _ = _bound_user("ak-team-only", "u-team-only", ["99"])
+    app_a, group_a, _permission_a = _catalog("dept-shared-a")
+    app_b, group_b, _permission_b = _catalog("dept-shared-b")
+    policy_a = _create_policy_via_api(
+        client,
+        dept_id="12",
+        app=app_a,
+        group=group_a,
+        reason="销售策略甲",
+    )
+    policy_b = _create_policy_via_api(
+        client,
+        dept_id="12",
+        app=app_b,
+        group=group_b,
+        reason="销售策略乙",
+    )
+
+    response = client.get(POLICIES_URL.format(dept_id="12"))
+
+    assert response.status_code == HTTPStatus.OK
+    body = response.json()["data"]
+    department = body["department"]
+    own = [item for item in body["items"] if item["defined_on"]["dept_id"] == "12"]
+    assert {item["id"] for item in own} == {policy_a["id"], policy_b["id"]}
+    assert [item["affected_user_count"] for item in own] == [2, 2]
+    assert department["dept_id"] == "12"
+    assert department["member_count"] == 1
+    assert department["subtree_member_count"] == 2
+
+
 def _seed_org() -> None:
     _ = DingTalkDirectorySyncState.objects.create(source_slug=SOURCE_SLUG, corp_id=CORP_ID)
     _ = DingTalkDepartmentMirror.objects.create(

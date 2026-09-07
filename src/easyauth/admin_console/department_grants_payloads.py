@@ -15,6 +15,7 @@ from easyauth.grants.department_policies import (
     DirectoryCorp,
     direct_member_count,
     eligible_user_count,
+    eligible_user_ids_in_depts,
 )
 from easyauth.grants.models import DepartmentGrantPolicy
 
@@ -32,9 +33,9 @@ type JsonObject = dict[str, JsonValue]
 class PolicyViewContext:
     tree: DepartmentTree
     viewing_dept_id: str
-    memberships: CorpMembershipIndex
     scope_names: dict[tuple[int, str], str]
     actors: dict[str, UserMirror]
+    subtree_eligible_user_ids: dict[str, frozenset[str]]
 
 
 def serialize_department_tree(
@@ -66,7 +67,7 @@ def serialize_department_summary(
     memberships: CorpMembershipIndex,
 ) -> JsonObject:
     node = tree.nodes[dept_id]
-    subtree = frozenset(tree.subtree_ids(dept_id))
+    subtree_ids = tree.subtree_ids(dept_id)
     path_items: list[JsonValue] = [
         {"dept_id": item.dept_id, "name": item.name} for item in tree.path(dept_id)
     ]
@@ -75,7 +76,7 @@ def serialize_department_summary(
         "name": node.name,
         "path": path_items,
         "member_count": direct_member_count(memberships, dept_id),
-        "subtree_member_count": eligible_user_count(memberships, subtree),
+        "subtree_member_count": eligible_user_count(memberships, subtree_ids),
     }
 
 
@@ -99,12 +100,17 @@ def build_policy_view_context(
         user.authentik_user_id: user
         for user in UserMirror.objects.filter(authentik_user_id__in=actor_ids)
     }
+    defined_on_ids = {policy.dept_id for policy in policies if policy.dept_id in tree.nodes}
+    subtree_eligible_user_ids = {
+        dept_id: eligible_user_ids_in_depts(memberships, tree.subtree_ids(dept_id))
+        for dept_id in defined_on_ids
+    }
     return PolicyViewContext(
         tree=tree,
         viewing_dept_id=viewing_dept_id,
-        memberships=memberships,
         scope_names=scope_names,
         actors=actors,
+        subtree_eligible_user_ids=subtree_eligible_user_ids,
     )
 
 
@@ -152,7 +158,6 @@ def effective_policies(
 
 def serialize_policy_item(policy: DepartmentGrantPolicy, context: PolicyViewContext) -> JsonObject:
     defined_node = context.tree.nodes[policy.dept_id]
-    subtree = frozenset(context.tree.subtree_ids(policy.dept_id))
     groups: list[JsonValue] = [
         _group_item(link.authorization_group) for link in _policy_groups(policy)
     ]
@@ -174,7 +179,7 @@ def serialize_policy_item(policy: DepartmentGrantPolicy, context: PolicyViewCont
         "reason": policy.reason,
         "defined_on": {"dept_id": defined_node.dept_id, "name": defined_node.name},
         "inherited": policy.dept_id != context.viewing_dept_id,
-        "affected_user_count": eligible_user_count(context.memberships, subtree),
+        "affected_user_count": len(context.subtree_eligible_user_ids[policy.dept_id]),
         "created_at": datetime_value(policy.created_at),
         "updated_at": datetime_value(policy.updated_at),
         "created_by": _actor_item(policy.created_by_id, context.actors),
