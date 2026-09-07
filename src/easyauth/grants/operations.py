@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Protocol, cast
 
 from easyauth.audit.services import AuditRecord, AuditService
 from easyauth.grants.models import (
@@ -13,10 +13,12 @@ from easyauth.grants.models import (
 from easyauth.grants.status import GrantStatus, parse_grant_status
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Mapping
+    from datetime import datetime
 
     from easyauth.accounts.models import UserMirror
     from easyauth.applications.models import App
+    from easyauth.audit.models import JsonValue
     from easyauth.grants.inputs import AuthorizationGroupGrantInput, ScopedDirectGrantInput
 
 
@@ -107,14 +109,18 @@ def _replace_source_memberships(
         link.save()
 
 
-def record_grant_event(
+def record_grant_event(  # noqa: PLR0913 - 授权接口显式保留调用方、目标和审计字段。
     grant: AccessGrant,
     *,
     action: str,
     actor_type: str,
     actor_id: str,
     reason: str = "",
+    extra: Mapping[str, JsonValue] | None = None,
 ) -> None:
+    metadata: dict[str, JsonValue] = dict(audit_metadata(grant, reason=reason))
+    if extra is not None:
+        metadata.update(extra)
     _ = AuditService.record(
         AuditRecord(
             actor_type=actor_type,
@@ -122,7 +128,7 @@ def record_grant_event(
             action=action,
             target_type="grant",
             target_id=grant_target_id(grant),
-            metadata=audit_metadata(grant, reason=reason),
+            metadata=metadata,
         ),
     )
 
@@ -140,3 +146,57 @@ def audit_metadata(grant: AccessGrant, *, reason: str = "") -> dict[str, str | i
 
 def grant_target_id(grant: AccessGrant) -> str:
     return f"{grant.user.authentik_user_id}:{grant.app.app_key}"
+
+
+class _PolicyReference(Protocol):
+    @property
+    def department_policy_id(self) -> int | None: ...
+
+
+type DepartmentMembershipState = tuple[
+    frozenset[tuple[int, datetime | None, int | None]],
+    frozenset[tuple[int, str, datetime | None, int | None]],
+]
+
+
+def department_membership_state(
+    groups: Iterable[AccessGrantGroup],
+    permissions: Iterable[AccessGrantPermission],
+) -> DepartmentMembershipState:
+    return (
+        frozenset(
+            (
+                row.authorization_group_id,
+                row.expires_at,
+                cast("_PolicyReference", cast("object", row)).department_policy_id,
+            )
+            for row in groups
+            if row.source == MEMBERSHIP_SOURCE_DEPARTMENT
+        ),
+        frozenset(
+            (
+                row.permission_id,
+                row.scope_key,
+                row.expires_at,
+                cast("_PolicyReference", cast("object", row)).department_policy_id,
+            )
+            for row in permissions
+            if row.source == MEMBERSHIP_SOURCE_DEPARTMENT
+        ),
+    )
+
+
+def department_input_state(
+    groups: Iterable[AuthorizationGroupGrantInput],
+    permissions: Iterable[ScopedDirectGrantInput],
+) -> DepartmentMembershipState:
+    return (
+        frozenset(
+            (item.authorization_group.id, item.expires_at, item.department_policy_id)
+            for item in groups
+        ),
+        frozenset(
+            (item.permission.id, item.scope_key, item.expires_at, item.department_policy_id)
+            for item in permissions
+        ),
+    )

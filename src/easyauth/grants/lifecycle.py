@@ -11,9 +11,12 @@ from easyauth.grants.models import (
 )
 from easyauth.grants.operations import (
     current_grant,
+    department_input_state,
+    department_membership_state,
     next_version,
     parse_status,
     record_grant_event,
+    replace_department_memberships,
     replace_memberships,
 )
 
@@ -182,3 +185,63 @@ def revoke_user_memberships(
             grant, action="grant_changed", actor_type=actor_type, actor_id=actor_id, reason=reason
         )
     return grant
+
+
+def sync_department_memberships(input_data: GrantMutationData) -> tuple[AccessGrant | None, bool]:
+    groups = tuple(input_data.authorization_groups)
+    permissions = tuple(input_data.direct_grants)
+    desired = department_input_state(groups, permissions)
+    grant = current_grant(input_data.user, input_data.app)
+    if grant is not None and grant.status != GRANT_STATUS_ACTIVE:
+        message = "current grant must be active"
+        raise ValueError(message)
+    if grant is None:
+        if not groups and not permissions:
+            return None, False
+        grant = AccessGrant(
+            user=input_data.user,
+            app=input_data.app,
+            status=GRANT_STATUS_ACTIVE,
+            is_current=True,
+            version=next_version(input_data.user, input_data.app),
+        )
+        action = "grant_created"
+        grant.full_clean()
+        grant.save()
+    else:
+        current = department_membership_state(
+            AccessGrantGroup.objects.filter(grant=grant),
+            AccessGrantPermission.objects.filter(grant=grant),
+        )
+        if desired == current:
+            return grant, False
+        grant.version += 1
+        action = "grant_changed"
+    replace_department_memberships(grant, groups, permissions)
+    reason = ""
+    if not (
+        AccessGrantGroup.objects.filter(grant=grant).exists()
+        or AccessGrantPermission.objects.filter(grant=grant).exists()
+    ):
+        grant.status = GRANT_STATUS_REVOKED
+        grant.is_current = False
+        action = "grant_revoked"
+        reason = "department policy removed"
+    grant.full_clean()
+    grant.save(update_fields=["status", "is_current", "version", "updated_at"])
+    policy_ids = sorted(
+        {
+            item.department_policy_id
+            for item in (*groups, *permissions)
+            if item.department_policy_id is not None
+        }
+    )
+    record_grant_event(
+        grant,
+        action=action,
+        actor_type=input_data.actor_type,
+        actor_id=input_data.actor_id,
+        reason=reason,
+        extra={"source": "department", "policy_ids": list(policy_ids)},
+    )
+    return grant, True

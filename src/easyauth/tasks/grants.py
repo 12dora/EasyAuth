@@ -4,9 +4,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from celery import shared_task
-from django.db import connection, transaction
+from django.db import OperationalError, connection, transaction
 from django.utils import timezone
 
+from easyauth.grants.department_reconcile import (
+    DEPARTMENT_GRANT_RECONCILE_TASK_NAME,
+    DepartmentGrantReconcileError,
+    reconcile_department_grants,
+)
 from easyauth.grants.models import (
     GRANT_STATUS_ACTIVE,
     AccessGrant,
@@ -90,3 +95,23 @@ def _expired_candidate_grant_ids(*, cutoff: datetime, batch_size: int) -> tuple[
 @shared_task(name=GRANT_EXPIRATION_TASK_NAME)
 def cleanup_expired_grants_task() -> int:
     return cleanup_expired_grants().expired_count
+
+
+@shared_task(
+    name=DEPARTMENT_GRANT_RECONCILE_TASK_NAME,
+    acks_late=True,
+    autoretry_for=(DepartmentGrantReconcileError, OperationalError),
+    max_retries=3,
+    retry_backoff=30,
+    retry_backoff_max=600,
+    retry_jitter=True,
+)
+def reconcile_department_grants_task() -> dict[str, int]:
+    result = reconcile_department_grants()
+    return {
+        "users_considered": result.users_considered,
+        "grants_created": result.grants_created,
+        "grants_changed": result.grants_changed,
+        "grants_revoked": result.grants_revoked,
+        "unchanged": result.unchanged,
+    }

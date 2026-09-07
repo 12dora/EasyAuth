@@ -15,11 +15,13 @@ from easyauth.grants.lifecycle import (
     revoke_current_grant,
     revoke_current_grants_for_user,
     revoke_user_memberships,
+    sync_department_memberships,
 )
 from easyauth.grants.models import (
     MEMBERSHIP_SOURCE_DEPARTMENT,
     AccessGrantGroup,
     AccessGrantPermission,
+    DepartmentGrantPolicy,
 )
 from easyauth.grants.operations import current_grant
 
@@ -79,6 +81,52 @@ class GrantService:
             input_data = _validated_mutation_input(input_data)
             grant = change_current_grant(input_data)
             notify_grant_mutation(grant)
+            return grant
+
+    @staticmethod
+    def sync_department_memberships(  # noqa: PLR0913 - 授权接口显式保留调用方、目标和审计字段。
+        *,
+        user: UserMirror,
+        app: App,
+        authorization_groups: Iterable[AuthorizationGroupGrantInput],
+        direct_grants: Iterable[ScopedDirectGrantInput],
+        actor_type: str = "system",
+        actor_id: str = "department-policy",
+    ) -> AccessGrant | None:
+        groups = tuple(authorization_groups)
+        permissions = tuple(direct_grants)
+        _validate_unique_authorization_groups([item.authorization_group.id for item in groups])
+        _validate_unique_direct_grants(
+            [(item.permission.id, item.scope_key) for item in permissions]
+        )
+        if any(
+            item.source != MEMBERSHIP_SOURCE_DEPARTMENT or item.department_policy_id is None
+            for item in (*groups, *permissions)
+        ):
+            message = "department memberships require department source and policy"
+            raise ValueError(message)
+        with transaction.atomic():
+            policy_ids = {item.department_policy_id for item in (*groups, *permissions)}
+            valid_ids = set(
+                DepartmentGrantPolicy.objects.filter(id__in=policy_ids, app=app).values_list(
+                    "id", flat=True
+                )
+            )
+            if valid_ids != policy_ids:
+                message = "department membership policy must exist and belong to the grant app"
+                raise ValueError(message)
+            grant, changed = sync_department_memberships(
+                GrantMutationInput(
+                    user=user,
+                    app=app,
+                    authorization_groups=groups,
+                    direct_grants=permissions,
+                    actor_type=actor_type,
+                    actor_id=actor_id,
+                )
+            )
+            if changed and grant is not None:
+                notify_grant_mutation(grant)
             return grant
 
     @staticmethod
