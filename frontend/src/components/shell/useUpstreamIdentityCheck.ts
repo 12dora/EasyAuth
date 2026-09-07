@@ -3,17 +3,18 @@ import { useEffect, useRef } from "react";
 import { API_SESSION_EXPIRED_EVENT } from "../../lib/api";
 import { signInUrlForCurrentPage } from "../../lib/signInUrl";
 import {
+  IDENTITY_CHECK_ERROR_RESULT,
   IDENTITY_CHECK_INTERVAL_MS,
   IDENTITY_CHECK_TIMEOUT_MS,
   IDENTITY_CHECK_URL,
   INITIAL_IDENTITY_CHECK_STATE,
   completeIdentityCheck,
-  identityCheckOutcomeFromMessage,
+  identityCheckResultFromMessage,
   requestIdentityCheck,
 } from "../../lib/upstreamIdentityCheck";
 import type {
   IdentityCheckAction,
-  IdentityCheckOutcome,
+  IdentityCheckResult,
   IdentityCheckState,
   IdentityCheckTrigger,
 } from "../../lib/upstreamIdentityCheck";
@@ -42,6 +43,8 @@ export const browserPageNavigator: PageNavigator = {
 export interface UpstreamIdentityCheckOptions {
   /** 只有 Authentik 建立的会话才复核; 本地管理员会话没有上游, 必须整体跳过。 */
   enabled: boolean;
+  /** 本标签页正在显示的上游(Authentik)用户 id; 用来和结论里的身份对账(见 IdentityCheckResult)。 */
+  currentUserId: string;
   /** 复核自身失败(含超时)且这次是 401 触发时调用, 由壳层落回既有的登录失效提示。 */
   onSessionExpiredNotice: () => void;
   navigator?: PageNavigator;
@@ -57,6 +60,7 @@ export interface UpstreamIdentityCheckOptions {
  */
 export function useUpstreamIdentityCheck({
   enabled,
+  currentUserId,
   onSessionExpiredNotice,
   navigator = browserPageNavigator,
 }: UpstreamIdentityCheckOptions): void {
@@ -82,12 +86,12 @@ export function useUpstreamIdentityCheck({
       frame = null;
     };
 
-    const finish = (outcome: IdentityCheckOutcome) => {
+    const finish = (result: IdentityCheckResult) => {
       if (state.runningTrigger === null) {
         // 超时收尾之后迟到的那条消息, 丢弃(理由见 completeIdentityCheck 的注释)。
         return;
       }
-      const completion = completeIdentityCheck(state, outcome, Date.now());
+      const completion = completeIdentityCheck(state, result, Date.now(), currentUserId);
       state = completion.state;
       teardownFrame();
       runAction(completion.action);
@@ -122,13 +126,18 @@ export function useUpstreamIdentityCheck({
       frame.setAttribute("aria-hidden", "true");
       frame.dataset.testid = IDENTITY_CHECK_FRAME_TEST_ID;
       document.body.append(frame);
-      timeoutId = window.setTimeout(() => finish("error"), IDENTITY_CHECK_TIMEOUT_MS);
+      timeoutId = window.setTimeout(() => finish(IDENTITY_CHECK_ERROR_RESULT), IDENTITY_CHECK_TIMEOUT_MS);
     };
 
     const onMessage = (event: MessageEvent) => {
-      const outcome = identityCheckOutcomeFromMessage(event, window.location.origin);
-      if (outcome !== null) {
-        finish(outcome);
+      // 只认当前这个 iframe 自己发回来的消息: 同源窗口(上一次超时后才回话的旧 iframe、别的 iframe、
+      // opener 等)都能往这里 postMessage, 光看 origin 和 type 会把别人的结论当成本次复核的结果。
+      if (frame === null || event.source !== frame.contentWindow) {
+        return;
+      }
+      const result = identityCheckResultFromMessage(event, window.location.origin);
+      if (result !== null) {
+        finish(result);
       }
     };
     const onVisibilityChange = () => {
@@ -155,5 +164,5 @@ export function useUpstreamIdentityCheck({
       window.removeEventListener(API_SESSION_EXPIRED_EVENT, onSessionExpired);
       teardownFrame();
     };
-  }, [enabled]);
+  }, [enabled, currentUserId]);
 }

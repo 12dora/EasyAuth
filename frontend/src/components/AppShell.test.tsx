@@ -23,12 +23,14 @@ function identityCheckFrame(): HTMLIFrameElement | null {
   return document.querySelector<HTMLIFrameElement>(`iframe[data-testid="${IDENTITY_CHECK_FRAME_TEST_ID}"]`);
 }
 
-function postIdentityCheckOutcome(outcome: string): void {
+function postIdentityCheckOutcome(outcome: string, userId = ""): void {
   act(() => {
     window.dispatchEvent(
       new MessageEvent("message", {
-        data: { type: IDENTITY_CHECK_MESSAGE_TYPE, outcome },
+        data: { type: IDENTITY_CHECK_MESSAGE_TYPE, outcome, user_id: userId },
         origin: window.location.origin,
+        // 结论只认当前那个隐藏 iframe 自己发回来的。
+        source: identityCheckFrame()?.contentWindow ?? null,
       }),
     );
   });

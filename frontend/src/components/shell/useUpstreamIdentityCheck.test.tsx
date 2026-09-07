@@ -16,10 +16,29 @@ function frames(): HTMLIFrameElement[] {
   return Array.from(document.querySelectorAll<HTMLIFrameElement>(`iframe[data-testid="${IDENTITY_CHECK_FRAME_TEST_ID}"]`));
 }
 
-function postOutcome(outcome: IdentityCheckOutcome, origin = window.location.origin): void {
+const ME = "alice@example.com";
+
+/** 结论必须来自当前那个隐藏 iframe 自己; 别的来源一律不算数。 */
+function currentFrameSource(): Window | null {
+  const [frame] = frames();
+  return frame?.contentWindow ?? null;
+}
+
+function postOutcome(
+  outcome: IdentityCheckOutcome,
+  {
+    origin = window.location.origin,
+    userId = outcome === "unchanged" || outcome === "changed" ? ME : "",
+    source = currentFrameSource(),
+  }: { origin?: string; userId?: string; source?: Window | null } = {},
+): void {
   act(() => {
     window.dispatchEvent(
-      new MessageEvent("message", { data: { type: IDENTITY_CHECK_MESSAGE_TYPE, outcome }, origin }),
+      new MessageEvent("message", {
+        data: { type: IDENTITY_CHECK_MESSAGE_TYPE, outcome, user_id: userId },
+        origin,
+        source,
+      }),
     );
   });
 }
@@ -34,7 +53,9 @@ function setVisibility(state: DocumentVisibilityState): void {
 function renderCheck(enabled = true) {
   const navigator = { reload: vi.fn(), assign: vi.fn() };
   const onSessionExpiredNotice = vi.fn();
-  const view = renderHook(() => useUpstreamIdentityCheck({ enabled, navigator, onSessionExpiredNotice }));
+  const view = renderHook(() =>
+    useUpstreamIdentityCheck({ enabled, currentUserId: ME, navigator, onSessionExpiredNotice }),
+  );
   return { ...view, navigator, onSessionExpiredNotice };
 }
 
@@ -97,10 +118,30 @@ describe("useUpstreamIdentityCheck", () => {
   test("跨源消息不被采信", () => {
     const { navigator } = renderCheck();
 
-    postOutcome("logged_out", "https://evil.example.test");
+    postOutcome("logged_out", { origin: "https://evil.example.test" });
 
     expect(navigator.assign).not.toHaveBeenCalled();
     expect(frames()).toHaveLength(1);
+  });
+
+  test("同源但不是当前 iframe 发来的消息不被采信", () => {
+    const { navigator } = renderCheck();
+
+    postOutcome("logged_out", { source: null });
+    postOutcome("changed", { source: window });
+
+    expect(navigator.assign).not.toHaveBeenCalled();
+    expect(navigator.reload).not.toHaveBeenCalled();
+    expect(frames()).toHaveLength(1);
+  });
+
+  test("结论说身份没变但会话绑的是另一个人时整页重载", () => {
+    const { navigator } = renderCheck();
+
+    postOutcome("unchanged", { userId: "bob@example.com" });
+
+    expect(navigator.reload).toHaveBeenCalledTimes(1);
+    expect(frames()).toHaveLength(0);
   });
 
   test("启动复核失败时不打扰用户, 只收掉 iframe", () => {

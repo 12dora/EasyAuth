@@ -22,6 +22,23 @@ const IDENTITY_CHECK_OUTCOMES = ["unchanged", "changed", "logged_out", "error"] 
 /** 回调页给出的四种结论, 取值由后端契约固定。 */
 export type IdentityCheckOutcome = (typeof IDENTITY_CHECK_OUTCOMES)[number];
 
+/**
+ * 回调页给出的完整结论。
+ *
+ * `userId` 是复核走完之后会话真正绑定的上游(Authentik)用户 id, logged_out/error 下为空串。
+ * 结论必须带上它: 后端比的是「新的上游身份」与「会话 cookie 当前绑定的身份」,
+ * 而 cookie 是同一浏览器所有标签页共享的。两个标签页都显示 A 时, 其中一个把 cookie 换成了 B,
+ * 另一个标签页再复核只会拿到 unchanged(B == B), 但它渲染的还是 A。
+ * 所以本标签页必须再拿 `userId` 和自己显示的人对一遍, 对不上就重载。
+ */
+export interface IdentityCheckResult {
+  outcome: IdentityCheckOutcome;
+  userId: string;
+}
+
+/** 复核自身失败(含超时)时的结论; 失败下没有身份可言。 */
+export const IDENTITY_CHECK_ERROR_RESULT: IdentityCheckResult = { outcome: "error", userId: "" };
+
 /** 复核的触发源; 只有 session_expired(API 返回 401) 需要把结论落到用户可见的提示上。 */
 export type IdentityCheckTrigger = "boot" | "visible" | "interval" | "session_expired";
 
@@ -89,8 +106,9 @@ export interface IdentityCheckCompletion {
  */
 export function completeIdentityCheck(
   state: IdentityCheckState,
-  outcome: IdentityCheckOutcome,
+  result: IdentityCheckResult,
   now: number,
+  currentUserId: string,
 ): IdentityCheckCompletion {
   const trigger = state.runningTrigger;
   if (trigger === null) {
@@ -98,27 +116,34 @@ export function completeIdentityCheck(
   }
   return {
     state: { runningTrigger: null, lastCompletedAt: now },
-    action: identityCheckAction(outcome, trigger),
+    action: identityCheckAction(result, trigger, currentUserId),
   };
 }
 
 /**
  * 结论到动作的映射。
  *
+ * unchanged/changed 都先拿结论里的上游身份和本标签页正在显示的人对一遍, 对不上就重载:
+ * 后端的「变没变」是相对共享的会话 cookie 说的, 不是相对本标签页渲染的那个人说的(见 IdentityCheckResult)。
+ *
  * unchanged 在 401 触发下同样要重载: 静默复核走的是真实 OIDC 回调,
  * 上游身份没变意味着本地会话已经被这次回调重新建立好, 重载即可让刚才 401 的请求成功;
  * 重载会重新经过后端的登录门控, 所以即使会话没恢复也只会被服务端引导到登录页, 不会在前端空转。
  */
 export function identityCheckAction(
-  outcome: IdentityCheckOutcome,
+  result: IdentityCheckResult,
   trigger: IdentityCheckTrigger,
+  currentUserId: string,
 ): IdentityCheckAction {
-  switch (outcome) {
+  switch (result.outcome) {
     case "changed":
       return "reload";
     case "logged_out":
       return "sign_in";
     case "unchanged":
+      if (result.userId !== currentUserId) {
+        return "reload";
+      }
       return trigger === "session_expired" ? "reload" : "none";
     case "error":
       return trigger === "session_expired" ? "session_expired_notice" : "none";
@@ -135,11 +160,15 @@ export interface IdentityCheckMessage {
  *
  * 非同源、非本协议的消息一律返回 null(页面上还有别的 postMessage 来源, 这是正常流量, 不是故障)。
  * 但同源且声明了本协议却给出未知 outcome, 说明前后端契约漂移, 必须当场抛错而不是静默忽略。
+ *
+ * unchanged/changed 必须带上 `user_id`(会话复核后绑定的上游身份); 缺了就无从判断这条结论说的是不是
+ * 本标签页显示的那个人, 按 error 落地(什么都不做 / 401 下回落到提示), 绝不假装身份没变。
+ * logged_out/error 用不上身份, 后端给的是空串。
  */
-export function identityCheckOutcomeFromMessage(
+export function identityCheckResultFromMessage(
   message: IdentityCheckMessage,
   expectedOrigin: string,
-): IdentityCheckOutcome | null {
+): IdentityCheckResult | null {
   if (message.origin !== expectedOrigin || !isRecord(message.data)) {
     return null;
   }
@@ -150,7 +179,14 @@ export function identityCheckOutcomeFromMessage(
   if (!isIdentityCheckOutcome(outcome)) {
     throw new Error(`身份复核回调给出了未知的 outcome: ${String(outcome)}`);
   }
-  return outcome;
+  const userId = message.data.user_id;
+  if (typeof userId === "string") {
+    return { outcome, userId };
+  }
+  if (outcome === "unchanged" || outcome === "changed") {
+    return IDENTITY_CHECK_ERROR_RESULT;
+  }
+  return { outcome, userId: "" };
 }
 
 function isWithinVisibleThrottle(lastCompletedAt: number | null, now: number): boolean {

@@ -77,6 +77,8 @@ export function AppShell({
 
   useUpstreamIdentityCheck({
     enabled: upstreamCheckEnabled,
+    // 对账用的是壳层渲染的那个上游身份, 不是路由用的 currentUserId prop。
+    currentUserId: currentUser?.id ?? "",
     onSessionExpiredNotice: showSessionExpired,
     navigator: pageNavigator,
   });
