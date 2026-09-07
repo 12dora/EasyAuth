@@ -14,6 +14,7 @@ import { zhCN as onboardingZhCN, en as onboardingEn } from "./messages/onboardin
 import { zhCN as approvalsZhCN, en as approvalsEn } from "./messages/approvals";
 import { zhCN as peopleZhCN, en as peopleEn } from "./messages/people";
 import { zhCN as consoleDirectGrantZhCN, en as consoleDirectGrantEn } from "./messages/console-direct-grant";
+import { zhCN as consoleDepartmentGrantsZhCN, en as consoleDepartmentGrantsEn } from "./messages/console-department-grants";
 
 
 export type Locale = "zh-CN" | "en";
@@ -44,6 +45,7 @@ const zhCN = {
   ...approvalsZhCN,
   ...peopleZhCN,
   ...consoleDirectGrantZhCN,
+  ...consoleDepartmentGrantsZhCN,
 } as const;
 
 export type MessageKey = keyof typeof zhCN;
@@ -65,6 +67,7 @@ const en: Record<MessageKey, string> = {
   ...approvalsEn,
   ...peopleEn,
   ...consoleDirectGrantEn,
+  ...consoleDepartmentGrantsEn,
 };
 
 export const MESSAGES: Record<Locale, Record<MessageKey, string>> = {

@@ -1,0 +1,113 @@
+export const zhCN = {
+  "departmentGrants.eyebrow": "授权管理",
+  "departmentGrants.title": "组织授权",
+  "departmentGrants.description": "按部门预先授权，所选部门及其子部门的在职人员自动获得对应权限。",
+  "departmentGrants.create": "新增授权",
+
+  "departmentGrants.tree.ariaLabel": "组织架构",
+  "departmentGrants.tree.searchLabel": "搜索部门",
+  "departmentGrants.tree.searchPlaceholder": "输入部门名称",
+  "departmentGrants.tree.memberCount": "{count} 人",
+  "departmentGrants.tree.expand": "展开 {name}",
+  "departmentGrants.tree.collapse": "收起 {name}",
+  "departmentGrants.tree.noMatch": "没有匹配的部门",
+  "departmentGrants.tree.loading": "正在加载组织架构",
+  "departmentGrants.tree.loadFailed": "组织架构加载失败",
+  "departmentGrants.tree.notSyncedTitle": "尚未同步钉钉组织架构",
+  "departmentGrants.tree.notSyncedDescription": "组织授权依赖钉钉部门数据，请先在设置中完成钉钉目录同步。",
+
+  "departmentGrants.department.memberSummary": "直属 {direct} 人 · 含子部门 {subtree} 人",
+  "departmentGrants.department.pathAriaLabel": "部门层级",
+  "departmentGrants.selectDepartment.title": "请选择部门",
+  "departmentGrants.selectDepartment.description": "在左侧选择部门，查看并维护该部门的授权。",
+
+  "departmentGrants.tableAriaLabel": "部门授权列表",
+  "departmentGrants.column.app": "应用",
+  "departmentGrants.column.content": "授权内容",
+  "departmentGrants.column.term": "有效期",
+  "departmentGrants.column.source": "来源",
+  "departmentGrants.column.affected": "生效人数",
+  "departmentGrants.column.reason": "说明",
+  "departmentGrants.term.permanent": "永久",
+  "departmentGrants.source.own": "本部门",
+  "departmentGrants.source.inherited": "继承自 {name}",
+  "departmentGrants.content.more": "+{count}",
+  "departmentGrants.content.empty": "未选择权限",
+  "departmentGrants.empty.title": "该部门暂无授权",
+  "departmentGrants.empty.description": "新增授权后，该部门及其子部门的在职人员会自动获得对应权限。",
+  "departmentGrants.loadFailed": "部门授权加载失败",
+
+  "departmentGrants.dialog.createTitle": "新增授权",
+  "departmentGrants.dialog.editTitle": "编辑授权",
+  "departmentGrants.dialog.editInheritedTitle": "编辑 {name} 的授权",
+  "departmentGrants.dialog.notice": "将自动授予 {dept} 及其子部门的全部在职人员",
+  "departmentGrants.dialog.submit": "保存",
+  "departmentGrants.dialog.saveFailed": "保存失败",
+
+  "departmentGrants.delete.title": "删除授权",
+  "departmentGrants.delete.message": "删除后，{dept} 及其子部门的在职人员将失去这条授权带来的权限。确定删除？",
+  "departmentGrants.delete.failed": "删除失败",
+
+  "departmentGrants.toast.created": "已新增授权",
+  "departmentGrants.toast.updated": "已更新授权",
+  "departmentGrants.toast.deleted": "已删除授权",
+} as const;
+
+export const en: Record<keyof typeof zhCN, string> = {
+  "departmentGrants.eyebrow": "Grant management",
+  "departmentGrants.title": "Department grants",
+  "departmentGrants.description":
+    "Pre-authorize by department: active employees of the selected department and its sub-departments receive the access automatically.",
+  "departmentGrants.create": "New grant",
+
+  "departmentGrants.tree.ariaLabel": "Organisation",
+  "departmentGrants.tree.searchLabel": "Search departments",
+  "departmentGrants.tree.searchPlaceholder": "Department name",
+  "departmentGrants.tree.memberCount": "{count} people",
+  "departmentGrants.tree.expand": "Expand {name}",
+  "departmentGrants.tree.collapse": "Collapse {name}",
+  "departmentGrants.tree.noMatch": "No matching department",
+  "departmentGrants.tree.loading": "Loading organisation",
+  "departmentGrants.tree.loadFailed": "Failed to load the organisation",
+  "departmentGrants.tree.notSyncedTitle": "DingTalk organisation not synced yet",
+  "departmentGrants.tree.notSyncedDescription":
+    "Department grants rely on DingTalk department data. Run the DingTalk directory sync in settings first.",
+
+  "departmentGrants.department.memberSummary": "{direct} direct · {subtree} incl. sub-departments",
+  "departmentGrants.department.pathAriaLabel": "Department path",
+  "departmentGrants.selectDepartment.title": "Select a department",
+  "departmentGrants.selectDepartment.description": "Pick a department on the left to review and maintain its grants.",
+
+  "departmentGrants.tableAriaLabel": "Department grant policies",
+  "departmentGrants.column.app": "Application",
+  "departmentGrants.column.content": "Access",
+  "departmentGrants.column.term": "Validity",
+  "departmentGrants.column.source": "Source",
+  "departmentGrants.column.affected": "People affected",
+  "departmentGrants.column.reason": "Note",
+  "departmentGrants.term.permanent": "Permanent",
+  "departmentGrants.source.own": "This department",
+  "departmentGrants.source.inherited": "Inherited from {name}",
+  "departmentGrants.content.more": "+{count}",
+  "departmentGrants.content.empty": "No access selected",
+  "departmentGrants.empty.title": "No grants for this department",
+  "departmentGrants.empty.description":
+    "Once a grant is added, active employees of this department and its sub-departments receive it automatically.",
+  "departmentGrants.loadFailed": "Failed to load department grants",
+
+  "departmentGrants.dialog.createTitle": "New grant",
+  "departmentGrants.dialog.editTitle": "Edit grant",
+  "departmentGrants.dialog.editInheritedTitle": "Edit the grant of {name}",
+  "departmentGrants.dialog.notice": "Applies automatically to every active employee of {dept} and its sub-departments",
+  "departmentGrants.dialog.submit": "Save",
+  "departmentGrants.dialog.saveFailed": "Save failed",
+
+  "departmentGrants.delete.title": "Delete grant",
+  "departmentGrants.delete.message":
+    "Active employees of {dept} and its sub-departments will lose the access from this grant. Delete it?",
+  "departmentGrants.delete.failed": "Delete failed",
+
+  "departmentGrants.toast.created": "Grant added",
+  "departmentGrants.toast.updated": "Grant updated",
+  "departmentGrants.toast.deleted": "Grant deleted",
+};

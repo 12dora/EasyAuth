@@ -1,0 +1,156 @@
+/*
+ * 组织架构树(控制台「组织授权」左栏)。
+ *
+ * 展开/收起与权限选择器同一套口径: 160ms、仓库自带的缓动令牌, 高度靠
+ * grid-template-rows 0fr <-> 1fr 过渡(子节点容器的高度不确定, 只有 grid 行高能动画),
+ * 透明度同一条时长曲线一起收拢; 退场期间子节点仍然挂载(见 useGroupTransitionKeys),
+ * 动画放完才卸载, 否则收起会先卸载再闪一下。
+ */
+
+.org-tree {
+  display: flex;
+  flex-direction: column;
+  gap: 0.125rem;
+}
+
+.org-tree__item {
+  outline: none;
+}
+
+.org-tree__row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-width: 0;
+  border-radius: 4px;
+  padding: 0.35rem 0.5rem;
+  padding-left: calc(0.5rem + var(--org-tree-depth, 0) * 1.15rem);
+  color: rgb(var(--ink));
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+  transition: background 160ms var(--ease-press), color 160ms var(--ease-press);
+}
+
+.org-tree__row:hover {
+  background: rgb(var(--ink) / 0.05);
+}
+
+.org-tree__item[aria-selected="true"] > .org-tree__row {
+  background: rgb(var(--accent) / 0.1);
+  color: rgb(var(--accent));
+  font-weight: 600;
+}
+
+.org-tree__item:focus-visible > .org-tree__row {
+  outline: 2px solid rgb(var(--accent) / 0.5);
+  outline-offset: -2px;
+}
+
+.org-tree__chevron-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 1.125rem;
+  height: 1.125rem;
+  border-radius: 3px;
+  color: rgb(var(--ink-soft));
+}
+
+.org-tree__chevron-button:hover {
+  background: rgb(var(--ink) / 0.08);
+  color: rgb(var(--ink));
+}
+
+.org-tree__chevron {
+  transition: transform 160ms var(--ease-press);
+}
+
+.org-tree__chevron--expanded {
+  transform: rotate(90deg);
+}
+
+/* 叶子节点占位: 保证同一层的名字左边界对齐。 */
+.org-tree__chevron-placeholder {
+  flex: 0 0 auto;
+  width: 1.125rem;
+  height: 1.125rem;
+}
+
+.org-tree__name {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.org-tree__count {
+  margin-left: auto;
+  color: rgb(var(--ink-faint));
+  font-family: var(--font-mono);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.org-tree__children {
+  display: grid;
+  grid-template-rows: 1fr;
+}
+
+/* 只有进出场期间才裁剪溢出: 常态下裁剪会切掉行的焦点描边。 */
+.org-tree__children--entering > .org-tree__children-body,
+.org-tree__children--exiting > .org-tree__children-body {
+  min-height: 0;
+  overflow: hidden;
+}
+
+.org-tree__children--entering {
+  animation: orgTreeChildrenExpand 160ms var(--ease-out-paper) both;
+}
+
+.org-tree__children--exiting {
+  pointer-events: none;
+  animation: orgTreeChildrenCollapse 160ms var(--ease-press) both;
+}
+
+.org-tree__empty {
+  padding: 0.75rem 0.5rem;
+  color: rgb(var(--ink-faint));
+  font-size: 12px;
+}
+
+@keyframes orgTreeChildrenExpand {
+  from {
+    opacity: 0;
+    grid-template-rows: 0fr;
+  }
+  to {
+    opacity: 1;
+    grid-template-rows: 1fr;
+  }
+}
+
+@keyframes orgTreeChildrenCollapse {
+  from {
+    opacity: 1;
+    grid-template-rows: 1fr;
+  }
+  to {
+    opacity: 0;
+    grid-template-rows: 0fr;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .org-tree__children--entering,
+  .org-tree__children--exiting {
+    animation: none;
+  }
+
+  .org-tree__row,
+  .org-tree__chevron {
+    transition: none;
+  }
+}
