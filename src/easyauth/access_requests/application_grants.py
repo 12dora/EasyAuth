@@ -146,6 +146,20 @@ def _create_request_grant(
     authorization_group_ids: tuple[int, ...],
     direct_grants: tuple[ScopedAccessRequestGrant, ...],
 ) -> AccessGrant:
+    current = (
+        AccessGrant.objects.select_for_update()
+        .filter(user=access_request.user, app=access_request.app, is_current=True)
+        .first()
+    )
+    if current is not None and not (
+        AccessGrantGroup.objects.filter(grant=current, source=MEMBERSHIP_SOURCE_USER).exists()
+        or AccessGrantPermission.objects.filter(
+            grant=current, source=MEMBERSHIP_SOURCE_USER
+        ).exists()
+    ):
+        return _change_request_grant(
+            access_request, input_data, authorization_group_ids, direct_grants
+        )
     return GrantService.create_grant(
         _request_grant_mutation_input(
             access_request,

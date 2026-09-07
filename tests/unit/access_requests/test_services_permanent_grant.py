@@ -22,7 +22,7 @@ from easyauth.applications.models import (
     AuthorizationGroupGrant,
     Permission,
 )
-from easyauth.grants.models import AccessGrant
+from easyauth.grants.models import AccessGrant, AccessGrantGroup
 
 pytestmark = pytest.mark.django_db
 
@@ -87,7 +87,8 @@ def test_submit_grant_request_rejects_when_current_grant_exists() -> None:
     user = UserMirror.objects.create(authentik_user_id="dup-grant-user")
     app = App.objects.create(app_key="dup-grant-app", name="Dup Grant")
     group = AuthorizationGroup.objects.create(app=app, key="viewer", kind="role", name="Viewer")
-    _ = AccessGrant.objects.create(user=user, app=app)
+    grant = AccessGrant.objects.create(user=user, app=app)
+    AccessGrantGroup.objects.create(grant=grant, authorization_group=group, source="user")
 
     # When / Then: grant 请求在提交阶段 fail-fast, 不再等审批落地时撞唯一约束。
     with pytest.raises(AccessRequestSubmissionError) as exc_info:

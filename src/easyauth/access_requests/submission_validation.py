@@ -23,7 +23,12 @@ from easyauth.grants.effective_snapshot import (
     EffectiveGrantSnapshot,
     current_effective_grant_snapshot,
 )
-from easyauth.grants.models import AccessGrant
+from easyauth.grants.models import (
+    MEMBERSHIP_SOURCE_USER,
+    AccessGrant,
+    AccessGrantGroup,
+    AccessGrantPermission,
+)
 from easyauth.lifecycle.assignee import resolve_assignee
 
 MANAGED_USERS_SCOPE = "MANAGED_USERS"
@@ -334,9 +339,14 @@ _contains_managed_users_target = contains_managed_users_target
 
 
 def _validate_no_current_grant(user: UserMirror, app: App) -> None:
-    # grant 请求落地时会插入 is_current=True 的新行; 已有 current 授权必须在提交阶段拒绝,
-    # 否则审批通过后才撞 grants_access_grant_one_current 唯一约束, 白白消耗一次审批。
-    if AccessGrant.objects.filter(user=user, app=app, is_current=True).exists():
+    # 仅部门来源的授权可承接普通申请; 已有个人成员时必须提交变更申请。
+    current = AccessGrant.objects.filter(user=user, app=app, is_current=True).first()
+    if current is not None and (
+        AccessGrantGroup.objects.filter(grant=current, source=MEMBERSHIP_SOURCE_USER).exists()
+        or AccessGrantPermission.objects.filter(
+            grant=current, source=MEMBERSHIP_SOURCE_USER
+        ).exists()
+    ):
         raise AccessRequestSubmissionError(
             ("current grant already exists, submit a change request instead",),
         )
