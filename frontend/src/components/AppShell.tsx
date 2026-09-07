@@ -1,14 +1,17 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
 
 import type { CurrentUser } from "../App";
 import { useI18n } from "../i18n/I18nProvider";
 import { cn } from "../lib/cn";
 import { API_SESSION_EXPIRED_EVENT } from "../lib/api";
+import { signInUrlForCurrentPage } from "../lib/signInUrl";
 import { BUTTON_BASE_CLASSES, BUTTON_SIZE_CLASSES, BUTTON_VARIANT_CLASSES } from "./Button";
 import { Sidebar } from "./shell/Sidebar";
 import { Topbar } from "./shell/Topbar";
+import { useUpstreamIdentityCheck } from "./shell/useUpstreamIdentityCheck";
+import type { PageNavigator } from "./shell/useUpstreamIdentityCheck";
 import { StatusBanner } from "./StatusBanner";
 
 const BlockedAppsBanner = lazy(() =>
@@ -20,6 +23,8 @@ interface AppShellProps {
   currentUser?: CurrentUser;
   currentUserId?: string;
   brandLogoUrl?: string;
+  /** 仅供测试注入: jsdom 里 window.location.reload/assign 会抛 Not implemented。 */
+  pageNavigator?: PageNavigator;
 }
 
 /** 通过 Outlet context 向路由页面下传当前用户标识(如门户申请页需据此排除自审批)。 */
@@ -28,26 +33,53 @@ export interface AppShellOutletContext {
   isSuperuser: boolean;
 }
 
-export function AppShell({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUser, currentUserId = "", mode }: AppShellProps) {
+export function AppShell({
+  brandLogoUrl = "/assets/brand/jiefa_logo.webp",
+  currentUser,
+  currentUserId = "",
+  mode,
+  pageNavigator,
+}: AppShellProps) {
   const { t } = useI18n();
   const location = useLocation();
   const queryClient = useQueryClient();
   const [sessionExpired, setSessionExpired] = useState(false);
   const sessionExpiredRef = useRef(false);
-  const loginHref = useMemo(() => loginUrlForCurrentPage(), [location.pathname, location.search, location.hash]);
+  const loginHref = useMemo(() => signInUrlForCurrentPage(), [location.pathname, location.search, location.hash]);
+  // 上游身份复核只对 Authentik 会话有意义; 本地管理员会话没有上游, 401 仍走原来的提示。
+  const upstreamCheckEnabled = currentUser?.authKind === "oidc";
+
+  const showSessionExpired = useCallback(() => {
+    if (sessionExpiredRef.current) {
+      return;
+    }
+    sessionExpiredRef.current = true;
+    setSessionExpired(true);
+  }, []);
 
   useEffect(() => {
     const onSessionExpired = () => {
       if (sessionExpiredRef.current) {
         return;
       }
-      sessionExpiredRef.current = true;
       queryClient.clear();
+      if (upstreamCheckEnabled) {
+        // 先等静默复核给结论: 上游换人要整页重载、上游已登出要跳登录页,
+        // 只有复核自身失败(含超时)才回落到这块提示, 否则用户会先看到一个马上就被替换掉的横幅。
+        return;
+      }
+      sessionExpiredRef.current = true;
       setSessionExpired(true);
     };
     window.addEventListener(API_SESSION_EXPIRED_EVENT, onSessionExpired);
     return () => window.removeEventListener(API_SESSION_EXPIRED_EVENT, onSessionExpired);
-  }, [queryClient]);
+  }, [queryClient, upstreamCheckEnabled]);
+
+  useUpstreamIdentityCheck({
+    enabled: upstreamCheckEnabled,
+    onSessionExpiredNotice: showSessionExpired,
+    navigator: pageNavigator,
+  });
 
   return (
     <div className="app-shell">
@@ -82,11 +114,4 @@ export function AppShell({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", curre
       </div>
     </div>
   );
-}
-
-function loginUrlForCurrentPage(): string {
-  const next = `${window.location.pathname}${window.location.search}${window.location.hash}`;
-  // 统一登录入口: 先看到 EasyAuth 自己的登录页, 由用户点「使用工作账号登录」再跳上游。
-  // (旧实现指向 /auth/local/, 那个页面不读 next, 回跳目标会被丢掉。)
-  return `/auth/sign-in/?next=${encodeURIComponent(next)}`;
 }

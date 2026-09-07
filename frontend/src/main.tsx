@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 
 import { App } from "./App";
-import type { CurrentUser, CurrentUserRole } from "./App";
+import type { CurrentUser, CurrentUserAuthKind, CurrentUserRole } from "./App";
 import { UnsupportedBrowserPage } from "./components/UnsupportedBrowserPage";
 import { AppConfigProvider } from "./components/antd/AppConfigProvider";
 import { ToastProvider } from "./components/ui/Toast";
@@ -72,6 +72,7 @@ function readCurrentUser(root: HTMLElement, currentUserId: string): CurrentUser 
     id: currentUserId,
     logoutUrl: dataset.logoutUrl ?? "/auth/logout/",
     role: readCurrentUserRole(dataset.currentUserRole),
+    authKind: readCurrentUserAuthKind(dataset.currentUserAuthKind),
     isSuperuser: dataset.currentUserIsSuperuser === "true",
     canAccessConsole: dataset.currentUserCanAccessConsole === "true",
   };
@@ -86,6 +87,18 @@ function readCurrentUserRole(value: string | undefined): CurrentUserRole {
     return value;
   }
   throw new Error(`data-current-user-role 不是已知的角色 code: ${String(value)}`);
+}
+
+/**
+ * `data-current-user-auth-kind` 只接受后端下发的两种会话来源。
+ * 认不出来说明后端契约变了, 必须当场炸掉: 猜成 local_admin 会让上游会话永远不复核(用户一直用着过期身份),
+ * 猜成 oidc 又会让本地管理员会话被拉去跑一个根本不存在的上游流程。
+ */
+function readCurrentUserAuthKind(value: string | undefined): CurrentUserAuthKind {
+  if (value === "oidc" || value === "local_admin") {
+    return value;
+  }
+  throw new Error(`data-current-user-auth-kind 不是已知的会话来源: ${String(value)}`);
 }
 
 function readBrandLogoUrl(root: HTMLElement): string {

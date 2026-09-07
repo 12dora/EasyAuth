@@ -69,12 +69,21 @@ interface AppProps {
  */
 export type CurrentUserRole = "admin" | "member";
 
+/**
+ * 会话是怎么建立的(src/easyauth/frontend_shell.py 下发的 `data-current-user-auth-kind`)。
+ * 只有 oidc 会话在上游 Authentik 有对应会话, 静默身份复核只对它生效;
+ * local_admin 是本地管理员口令会话, 没有上游可复核。
+ */
+export type CurrentUserAuthKind = "oidc" | "local_admin";
+
 export interface CurrentUser {
   avatarUrl?: string;
   displayName?: string;
   id: string;
   logoutUrl?: string;
   role: CurrentUserRole;
+  /** 会话来源; 决定壳层是否对上游 Authentik 做静默身份复核。 */
+  authKind: CurrentUserAuthKind;
   /** 权威超管能力; 不得用本地化 role 展示字符串做门禁。 */
   isSuperuser?: boolean;
   /** 后端判定的控制台准入能力; 门户壳层据此展示「管理后台」入口。 */

@@ -8,14 +8,32 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { App } from "../App";
+import type { CurrentUser } from "../App";
 import { I18nProvider } from "../i18n/I18nProvider";
 import { API_SESSION_EXPIRED_EVENT } from "../lib/api";
+import { IDENTITY_CHECK_MESSAGE_TYPE } from "../lib/upstreamIdentityCheck";
 import { AppShell } from "./AppShell";
+import { IDENTITY_CHECK_FRAME_TEST_ID } from "./shell/useUpstreamIdentityCheck";
 
 const layoutShellCss = readFileSync(resolve(__dirname, "../styles/layout-shell.css"), "utf8");
 const responsiveCss = readFileSync(resolve(__dirname, "../styles/responsive.css"), "utf8");
 
 // Sidebar 的门户「待我审批」角标依赖 React Query, 壳层测试统一提供 QueryClient 并静音角标请求。
+function identityCheckFrame(): HTMLIFrameElement | null {
+  return document.querySelector<HTMLIFrameElement>(`iframe[data-testid="${IDENTITY_CHECK_FRAME_TEST_ID}"]`);
+}
+
+function postIdentityCheckOutcome(outcome: string): void {
+  act(() => {
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        data: { type: IDENTITY_CHECK_MESSAGE_TYPE, outcome },
+        origin: window.location.origin,
+      }),
+    );
+  });
+}
+
 function renderWithQueryClient(ui: ReactElement) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return {
@@ -29,6 +47,7 @@ function renderShell(
   currentUserId = "",
   initialEntry?: string,
   canAccessConsole?: boolean,
+  authKind?: CurrentUser["authKind"],
 ) {
   const currentUser = {
     avatarUrl: "https://authentik.example.test/media/avatars/alice.png",
@@ -38,6 +57,7 @@ function renderShell(
     isSuperuser: mode === "console",
     logoutUrl: "/auth/logout/",
     role: mode === "console" ? ("admin" as const) : ("member" as const),
+    authKind: authKind ?? ("oidc" as const),
   };
 
   renderWithQueryClient(
@@ -109,7 +129,7 @@ describe("AppShell", () => {
             <Route
               element={
                 <AppShell
-                  currentUser={{ avatarUrl: "javascript:alert(1)", displayName: "张三", id: "u1", logoutUrl: "/auth/logout/", role: "member" }}
+                  currentUser={{ avatarUrl: "javascript:alert(1)", displayName: "张三", id: "u1", logoutUrl: "/auth/logout/", role: "member", authKind: "oidc" }}
                   mode="portal"
                 />
               }
@@ -133,7 +153,7 @@ describe("AppShell", () => {
             <Route
               element={
                 <AppShell
-                  currentUser={{ avatarUrl: "/media/avatars/alice.png", displayName: "张三", id: "u1", logoutUrl: "/auth/logout/", role: "member" }}
+                  currentUser={{ avatarUrl: "/media/avatars/alice.png", displayName: "张三", id: "u1", logoutUrl: "/auth/logout/", role: "member", authKind: "oidc" }}
                   mode="portal"
                 />
               }
@@ -159,6 +179,7 @@ describe("AppShell", () => {
                   id: "dingmockcorp000000000000000000000000:100000000000000001",
                   logoutUrl: "/auth/logout/",
                   role: "member",
+                  authKind: "oidc",
                 }}
                 mode="portal"
               />
@@ -205,6 +226,7 @@ describe("AppShell", () => {
             id: "alice@example.com",
             logoutUrl: "/auth/logout/",
             role: "member",
+            authKind: "oidc",
           }}
           shell="portal"
         />
@@ -297,6 +319,7 @@ describe("AppShell", () => {
                   id: "alice@example.com",
                   logoutUrl: "https://authentik.example.test/if/session-end/easyauth/",
                   role: "member",
+                  authKind: "oidc",
                 }}
                 mode="portal"
               />
@@ -366,7 +389,15 @@ describe("AppShell", () => {
             <Route
               element={
                 <AppShell
-                  currentUser={{ displayName: "控制台用户", id: "admin", isSuperuser: true, logoutUrl: "/auth/logout/", role: "admin" }}
+                  currentUser={{
+                    displayName: "控制台用户",
+                    id: "admin",
+                    isSuperuser: true,
+                    logoutUrl: "/auth/logout/",
+                    role: "admin",
+                    // 本地管理员会话没有上游可复核, 401 直接落到提示上。
+                    authKind: "local_admin",
+                  }}
                   currentUserId="admin"
                   mode="console"
                 />
@@ -392,6 +423,32 @@ describe("AppShell", () => {
       "/auth/sign-in/?next=%2Fconsole%2Foperations%2Faccess-requests%3Fstatus%3Dsubmitted",
     );
     expect(client.getQueryData(["console", "operations", "access-requests"])).toBeUndefined();
+    // 本地管理员会话没有上游, 壳层不应该挂静默复核的 iframe。
+    expect(identityCheckFrame()).toBeNull();
+  });
+
+  test("上游会话启动即静默复核身份", () => {
+    renderShell("portal", "alice@example.com");
+
+    const frame = identityCheckFrame();
+    expect(frame).not.toBeNull();
+    expect(frame?.getAttribute("src")).toBe("/auth/login/?silent=1");
+  });
+
+  test("上游会话 401 时先等身份复核结论, 复核失败才显示登录失效提示", () => {
+    renderShell("portal", "alice@example.com");
+
+    act(() => {
+      window.dispatchEvent(new CustomEvent(API_SESSION_EXPIRED_EVENT));
+    });
+
+    expect(screen.queryByText("登录状态已失效")).not.toBeInTheDocument();
+    expect(identityCheckFrame()).not.toBeNull();
+
+    postIdentityCheckOutcome("error");
+
+    expect(screen.getByText("登录状态已失效")).toBeVisible();
+    expect(identityCheckFrame()).toBeNull();
   });
 
   test("壳层布局保留 EasyTrade 基准尺寸并收敛导航圆角", () => {
