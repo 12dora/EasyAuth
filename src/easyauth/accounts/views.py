@@ -8,6 +8,7 @@ from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 from django.conf import settings as django_settings
 from django.core.cache import cache
+from django.db import transaction
 from django.http import HttpRequest, HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import render
 from django.views.decorators.clickjacking import xframe_options_sameorigin
@@ -26,6 +27,7 @@ from easyauth.accounts.auth import (
     OidcClientConfig,
     OidcSessionError,
     OidcUserInactiveError,
+    _update_existing_user_profile,
     bind_oidc_session,
     build_authorization_url,
     clear_auth_session,
@@ -41,11 +43,13 @@ from easyauth.accounts.logout_state import (
     logged_out_response,
     mark_browser_logged_out,
 )
+from easyauth.accounts.models import USER_STATUS_ACTIVE, OidcSessionBinding, UserMirror
 from easyauth.accounts.next_path import safe_next_path
 from easyauth.accounts.oidc_exchange import (
     exchange_authorization_code_for_claims,
     verify_logout_token,
 )
+from easyauth.accounts.org_context import apply_dingtalk_org_context
 from easyauth.audit.services import AuditRecord, AuditService
 
 FIELD_BACKCHANNEL = "logout_token"
@@ -413,8 +417,27 @@ def _silent_bind(request: HttpRequest, previous_subject: str) -> str:
         config,
         expected_nonce=_session_string(request, OIDC_NONCE_SESSION_KEY),
     )
+    if previous_subject == verified.subject:
+        with transaction.atomic():
+            user = UserMirror.objects.select_for_update().get(authentik_user_id=previous_subject)
+            if user.status != USER_STATUS_ACTIVE:
+                raise OidcUserInactiveError
+            _update_existing_user_profile(user, verified)
+            changed_fields = apply_dingtalk_org_context(user, verified.dingtalk_org)
+            if changed_fields:
+                changed_fields.append("updated_at")
+                user.full_clean()
+                user.save(update_fields=changed_fields)
+            binding = OidcSessionBinding.objects.select_for_update().get(
+                session_key=request.session.session_key,
+                authentik_user_id=previous_subject,
+            )
+            binding.sid = verified.sid
+            binding.full_clean()
+            binding.save(update_fields=["sid"])
+        return "unchanged"
     _ = bind_oidc_session(request, verified)
-    return "unchanged" if previous_subject == verified.subject else "changed"
+    return "changed"
 
 
 @xframe_options_sameorigin

@@ -60,6 +60,8 @@ def test_silent_identity_binds_current_upstream_user(
     assert query["prompt"] == ["none"]
     claims = logout_claims()
     claims["sub"] = "one"
+    claims["sid"] = "sid-refreshed"
+    claims["name"] = "更新后的姓名"
     claims["nonce"] = client.session[OIDC_NONCE_SESSION_KEY]
 
     def urlopen(request: Request, *, timeout: float) -> FakeResponse:
@@ -78,9 +80,18 @@ def test_silent_identity_binds_current_upstream_user(
             state=client.session[OIDC_STATE_SESSION_KEY],
         )
     assert client.session[AUTHENTIK_SESSION_KEY] == "one"
-    assert client.session.session_key != old_key
-    assert not Session.objects.filter(session_key=old_key).exists()
-    assert not OidcSessionBinding.objects.filter(session_key=old_key).exists()
+    assert (client.session.session_key == old_key) == (subject == "one")
+    assert Session.objects.filter(session_key=old_key).exists() == (subject == "one")
+    assert OidcSessionBinding.objects.filter(session_key=old_key).exists() == (subject == "one")
+    assert (
+        OidcSessionBinding.objects.get(session_key=client.session.session_key).sid
+        == "sid-refreshed"
+    )
+    assert UserMirror.objects.get(authentik_user_id="one").name == "更新后的姓名"
+    if subject == "one":
+        previous_cookie_client = Client()
+        previous_cookie_client.cookies["sessionid"] = old_key
+        assert previous_cookie_client.get("/portal/api/v1/me/grants").status_code == 200
     assert (
         OidcSessionBinding.objects.get(
             session_key=client.session.session_key,
