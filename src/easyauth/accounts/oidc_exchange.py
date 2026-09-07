@@ -419,3 +419,73 @@ def _is_local_http_oidc_endpoint(scheme: str, hostname: str | None) -> bool:
         return ip_address(hostname).is_loopback
     except ValueError:
         return False
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedLogoutClaims:
+    subject: str
+    sid: str
+    jti: str
+    replay_timeout: int
+
+
+BACKCHANNEL_EVENT: Final = "http://schemas.openid.net/event/backchannel-logout"
+LOGOUT_MAX_AGE: Final = 300
+LOGOUT_MIN_REPLAY_TTL: Final = 60
+FIELD_LOGOUT: Final = "logout_token"
+
+
+def verify_logout_token(token: str, config: OidcClientConfig) -> VerifiedLogoutClaims:
+    try:
+        header = _jwt_header(token)
+        if header.algorithm not in config.signing_algorithms:
+            raise OidcSessionError(FIELD_JWT_HEADER, REASON_UNSUPPORTED_ALGORITHM)
+        key = _jwks_public_key(
+            issuer=config.issuer,
+            jwks_url=config.jwks_url,
+            key_id=header.key_id,
+            algorithm=header.algorithm,
+            timeout_seconds=config.http_timeout_seconds,
+        )
+        claims = cast(
+            "JsonObject",
+            jwt.decode(
+                token,
+                key,
+                algorithms=config.signing_algorithms,
+                audience=config.client_id,
+                issuer=config.issuer,
+                options={"require": ["iss", "aud", "iat", "jti"]},
+            ),
+        )
+        return _validate_logout_claims(claims)
+    except (InvalidTokenError, ValueError, TypeError, BinasciiError, UnicodeError) as error:
+        raise OidcSessionError(FIELD_LOGOUT, "logout token is invalid") from error
+
+
+def _validate_logout_claims(claims: JsonObject) -> VerifiedLogoutClaims:
+    events = claims.get("events")
+    if not isinstance(events, dict) or BACKCHANNEL_EVENT not in events:
+        raise OidcSessionError(FIELD_LOGOUT, "back-channel logout event is required")
+    if events[BACKCHANNEL_EVENT] != {}:
+        raise OidcSessionError(FIELD_LOGOUT, "logout event must be an empty object")
+    if "nonce" in claims:
+        raise OidcSessionError(FIELD_LOGOUT, "nonce must be absent")
+    subject = _required_json_string(claims, "sub") if "sub" in claims else ""
+    sid = _required_json_string(claims, "sid") if "sid" in claims else ""
+    if not subject and not sid:
+        raise OidcSessionError(FIELD_LOGOUT, "sub or sid is required")
+    jti = _required_json_string(claims, "jti")
+    issued_at = claims["iat"]
+    if type(issued_at) is not int:
+        raise OidcSessionError(FIELD_LOGOUT, "iat must be an integer")
+    now = time.time()
+    expires_at = claims.get("exp", issued_at + LOGOUT_MAX_AGE)
+    if type(expires_at) is not int or expires_at <= now:
+        raise OidcSessionError(FIELD_LOGOUT, "logout token is expired")
+    return VerifiedLogoutClaims(
+        subject=subject,
+        sid=sid,
+        jti=jti,
+        replay_timeout=max(int(expires_at - now), LOGOUT_MIN_REPLAY_TTL),
+    )

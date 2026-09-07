@@ -7,9 +7,11 @@ from typing import Final
 from urllib.parse import SplitResult, urlsplit, urlunsplit
 
 from django.conf import settings as django_settings
-from django.http import HttpRequest, HttpResponse, HttpResponseRedirect
+from django.core.cache import cache
+from django.http import HttpRequest, HttpResponse, HttpResponseRedirect, JsonResponse
 from django.shortcuts import render
 from django.views.decorators.clickjacking import xframe_options_sameorigin
+from django.views.decorators.csrf import csrf_exempt
 from django.views.decorators.http import require_GET, require_POST
 
 from easyauth.accounts.auth import (
@@ -25,6 +27,7 @@ from easyauth.accounts.auth import (
     build_authorization_url,
     clear_auth_session,
     clear_oidc_login_attempt,
+    revoke_authentik_sessions,
     verify_callback_state,
     verify_oidc_claims,
 )
@@ -36,8 +39,13 @@ from easyauth.accounts.logout_state import (
     mark_browser_logged_out,
 )
 from easyauth.accounts.next_path import safe_next_path
-from easyauth.accounts.oidc_exchange import exchange_authorization_code_for_claims
+from easyauth.accounts.oidc_exchange import (
+    exchange_authorization_code_for_claims,
+    verify_logout_token,
+)
+from easyauth.audit.services import AuditRecord, AuditService
 
+FIELD_BACKCHANNEL = "logout_token"
 FIELD_AUTHORIZATION_CODE = "code"
 LOCAL_LOOPBACK_HOSTS: Final = frozenset({"127.0.0.1", "::1", "localhost"})
 REASON_CODE_REQUIRED = "is required"
@@ -311,3 +319,39 @@ def _session_string(request: HttpRequest, key: str) -> str:
             return value
         case _:
             return ""
+
+
+@csrf_exempt
+@require_POST
+def backchannel_logout(request: HttpRequest) -> JsonResponse:
+    try:
+        claims = verify_logout_token(
+            request.POST.get("logout_token", ""),
+            _oidc_config_from_settings(),
+        )
+        _remember_logout_jti(claims.jti, claims.replay_timeout)
+    except OidcSessionError as error:
+        response = JsonResponse(
+            {"error": "invalid_request", "error_description": str(error)},
+            status=HTTPStatus.BAD_REQUEST,
+        )
+    else:
+        count = revoke_authentik_sessions(sid=claims.sid, subject=claims.subject)
+        _ = AuditService.record(
+            AuditRecord(
+                actor_type="authentik",
+                actor_id=claims.subject,
+                action="oidc_backchannel_logout",
+                target_type="user",
+                target_id=claims.subject,
+                metadata={"sid": claims.sid, "subject": claims.subject, "revoked_sessions": count},
+            )
+        )
+        response = JsonResponse({})
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+def _remember_logout_jti(jti: str, timeout: int) -> None:
+    if not cache.add(f"easyauth:oidc:logout-jti:{jti}", value=True, timeout=timeout):
+        raise OidcSessionError(FIELD_BACKCHANNEL, "logout token was already used")

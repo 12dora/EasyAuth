@@ -5,6 +5,7 @@ from django.urls import path
 from easyauth.accounts import local_admin_views, sign_in_views, views
 
 urlpatterns = [
+    path("backchannel-logout/", views.backchannel_logout, name="backchannel-logout"),
     path("sign-in/", sign_in_views.sign_in_page, name="sign-in"),
     path("logged-out/", views.logged_out, name="logged-out"),
     path("authentik-logout/", views.authentik_logout_frame, name="authentik-logout"),
