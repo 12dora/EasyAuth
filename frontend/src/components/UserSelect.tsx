@@ -13,6 +13,13 @@ interface UserSearchInputProps {
   id?: string;
   value: string;
   onChange: (value: string) => void;
+  /**
+   * 从候选列表里选中某个用户时额外回调完整候选项。
+   *
+   * 输入框的值是用户 ID(允许手输), 调用方要展示"姓名 · 部门"就必须拿到这一份候选项;
+   * 手输 ID 不会触发它, 因为那时并没有可信的姓名。
+   */
+  onSelectOption?: (option: UserOption) => void;
   placeholder?: string;
   required?: boolean;
   "aria-label"?: string;
@@ -20,7 +27,7 @@ interface UserSearchInputProps {
 }
 
 /** 单个用户 ID 输入: 聚焦即拉取候选, 支持按姓名/邮箱/ID 模糊搜索, 也允许直接输入 ID。 */
-export function UserSearchInput({ id, value, onChange, placeholder, required, ...aria }: UserSearchInputProps) {
+export function UserSearchInput({ id, value, onChange, onSelectOption, placeholder, required, ...aria }: UserSearchInputProps) {
   const { t } = useI18n();
   const generatedId = useId();
   const listId = `${id ?? generatedId}-listbox`;
@@ -30,7 +37,10 @@ export function UserSearchInput({ id, value, onChange, placeholder, required, ..
     navigateWhenClosed: false,
     openOnArrowDown: false,
     closeOnPick: true,
-    onPick: (option) => onChange(option.user_id),
+    onPick: (option) => {
+      onChange(option.user_id);
+      onSelectOption?.(option);
+    },
   });
   const getOptionId = (option: UserOption) => `${listId}-option-${encodeURIComponent(option.user_id)}`;
 

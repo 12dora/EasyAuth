@@ -12,6 +12,10 @@ import { cn } from "../lib/cn";
 export interface UserOption {
   user_id: string;
   name: string;
+  /** 部门名; 后端目录未同步到部门时为空串。 */
+  department?: string;
+  /** 头像地址; 为空表示没有头像, 此时不渲染任何占位图形。 */
+  avatar_url?: string;
 }
 
 export type UserSearchPurpose = "employee" | "approver";
@@ -233,10 +237,28 @@ function UserOptionRow({
         onPick(option);
       }}
     >
-      <span className="text-body font-medium">{option.name || option.user_id}</span>
+      <span className="flex items-center gap-2 text-body font-medium">
+        {/* 没有头像就不画任何占位图形: 首字母占位会让"未同步头像"和"头像是这个字"看起来一样。 */}
+        {option.avatar_url ? (
+          <img
+            src={option.avatar_url}
+            alt=""
+            width={20}
+            height={20}
+            className="h-5 w-5 shrink-0 rounded-full object-cover"
+          />
+        ) : null}
+        <span>{userOptionDisplayName(option)}</span>
+      </span>
       <span className="flex flex-wrap items-center gap-x-2 text-xs text-ink-faint">
         <code>{option.user_id}</code>
       </span>
     </div>
   );
+}
+
+/** 候选行的主标题: 姓名(缺失时退回用户 ID), 有部门时补上"姓名 · 部门"。 */
+export function userOptionDisplayName(option: UserOption): string {
+  const name = option.name || option.user_id;
+  return option.department ? `${name} · ${option.department}` : name;
 }
