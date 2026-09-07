@@ -409,6 +409,11 @@ CELERY_BEAT_SCHEDULE: dict[str, dict[str, object]] = {
         "task": "easyauth.authentik.sync_dingtalk_directory",
         "schedule": float(os.environ.get("EASYAUTH_DINGTALK_DIRECTORY_SYNC_SECONDS", "300")),
     },
+    # 部门策略全量对账: 新入职、调岗、策略到期和目录事件遗漏均由权威镜像校准。
+    "department-grant-reconcile": {
+        "task": "easyauth.grants.reconcile_department_grants",
+        "schedule": float(os.environ.get("EASYAUTH_DEPARTMENT_GRANT_RECONCILE_SECONDS", "1800")),
+    },
     # 上游依赖健康探测: Authentik 存活/目录 API/钉钉同步链路/Celery worker。
     "dependency-health-check": {
         "task": "easyauth.health.run_dependency_health_checks",

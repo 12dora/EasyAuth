@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING, Final, cast
 from django.db import transaction
 
 from easyauth.accounts.models import DingTalkDirectorySyncState
+from easyauth.grants.department_reconcile import schedule_department_grant_reconcile
 from easyauth.integrations.authentik.directory_client import AuthentikDirectoryUnavailableError
 from easyauth.integrations.authentik.directory_contract import directory_user_key
 from easyauth.integrations.authentik.directory_sync_mirror import (
@@ -109,6 +110,7 @@ def sync_authentik_dingtalk_directory(
                 confirmed_corp_count=len(confirmed_corp_ids),
             )
         _refresh_confirmed_sync_states(snapshot, locked_states, confirmed_corp_ids)
+        schedule_department_grant_reconcile(trigger="directory-sync")
         return result
 
 

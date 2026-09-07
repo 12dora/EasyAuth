@@ -7,7 +7,8 @@ from threading import Event
 from typing import TYPE_CHECKING, cast
 
 import pytest
-from django.test import override_settings
+from django.db import transaction
+from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from easyauth.accounts.directory_snapshot import (
@@ -24,6 +25,7 @@ from easyauth.accounts.models import (
 from easyauth.api.directory_payloads import build_user_list_items
 from easyauth.applications.models import App, AppScope, AuthorizationGroup, Permission
 from easyauth.audit.models import AuditLog
+from easyauth.grants.department_reconcile import DEPARTMENT_GRANT_RECONCILE_TASK_NAME
 from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
 from easyauth.integrations.authentik.directory_client import (
     DIRECTORY_NOT_FOUND_MESSAGE,
@@ -1429,3 +1431,24 @@ def test_directory_sync_applies_higher_generation_after_unchanged_confirmation()
     assert user.status == "departed"
     assert user_mirror.status == "departed"
     assert state.generation == 4
+
+
+def test_directory_sync_schedules_department_reconcile_after_commit() -> None:
+    client_stub = _DirectoryClientStub()
+    with TestCase.captureOnCommitCallbacks(execute=True):
+        sync_authentik_dingtalk_directory(client_stub)
+        assert not OutboxEvent.objects.filter(
+            task_name=DEPARTMENT_GRANT_RECONCILE_TASK_NAME
+        ).exists()
+    event = OutboxEvent.objects.get(task_name=DEPARTMENT_GRANT_RECONCILE_TASK_NAME)
+    assert event.event_key.startswith("department-grant-reconcile:directory-sync:")
+    assert event.args == []
+    assert event.kwargs == {}
+    assert event.available_at > event.created_at
+
+
+def test_directory_sync_rollback_does_not_enqueue_department_reconcile() -> None:
+    with TestCase.captureOnCommitCallbacks(execute=True), transaction.atomic():
+        sync_authentik_dingtalk_directory(_DirectoryClientStub())
+        transaction.set_rollback(True)
+    assert not OutboxEvent.objects.filter(task_name=DEPARTMENT_GRANT_RECONCILE_TASK_NAME).exists()

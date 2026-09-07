@@ -13,11 +13,12 @@ from easyauth.applications.models import (
     AuthorizationGroupGrant,
     Permission,
 )
+from easyauth.grants.effective_snapshot import effective_grant_snapshot
 from easyauth.grants.inputs import AuthorizationGroupGrantInput, ScopedDirectGrantInput
 from easyauth.grants.models import AccessGrant, AccessGrantGroup, AccessGrantPermission
 from easyauth.grants.operations import replace_memberships
 from easyauth.grants.query import resolve_user_permissions
-from easyauth.grants.services import GrantService
+from easyauth.grants.services import GrantExpirationInput, GrantService
 
 pytestmark = pytest.mark.django_db
 
@@ -89,3 +90,35 @@ def test_query_merges_duplicate_sources_with_longest_expiry(
     assert len(snapshot.grants) == 2
     assert snapshot.groups[0].expires_at == expected
     assert all(item.expires_at == expected for item in snapshot.grants)
+
+
+def test_expiration_removes_only_due_duplicate_rows() -> None:
+    user, app, permission, group, grant = _catalog()
+    cutoff = timezone.now()
+    for source, expiry in (("user", cutoff - timedelta(seconds=1)), ("department", None)):
+        AccessGrantGroup.objects.create(
+            grant=grant, authorization_group=group, source=source, expires_at=expiry
+        )
+        AccessGrantPermission.objects.create(
+            grant=grant, permission=permission, source=source, expires_at=expiry
+        )
+    result = GrantService.expire_grant(
+        GrantExpirationInput(
+            user=user,
+            app=app,
+            actor_type="system",
+            actor_id="test-expiration",
+            expires_at_or_before=cutoff,
+        )
+    )
+    assert result is not None
+    assert result.is_current
+    snapshot = effective_grant_snapshot(result)
+    assert snapshot.group_ids == frozenset([group.id])
+    assert snapshot.direct_grants == frozenset([(permission.id, "GLOBAL")])
+    assert set(AccessGrantGroup.objects.filter(grant=grant).values_list("source", flat=True)) == {
+        "department"
+    }
+    assert set(
+        AccessGrantPermission.objects.filter(grant=grant).values_list("source", flat=True)
+    ) == {"department"}

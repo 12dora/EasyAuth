@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
 import pytest
+from django.conf import settings
 from django.db import connection
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
@@ -27,6 +28,7 @@ from easyauth.grants.models import (
     DepartmentGrantPolicyPermission,
 )
 from easyauth.grants.services import GrantService
+from easyauth.tasks.grants import reconcile_department_grants_task
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -341,3 +343,73 @@ def test_pair_failure_rolls_back_only_failed_pair_and_raises_summary(
     assert not AccessGrant.objects.filter(user=bad).exists()
     assert AccessGrant.objects.filter(user=good).exists()
     assert AuditLog.objects.count() == 1
+
+
+def test_identical_expiry_uses_lowest_policy_id_and_policy_change_bumps_version(
+    catalog: Catalog,
+) -> None:
+    user, _mirror = _user()
+    first = _policy(catalog, dept_id="3")
+    second = _policy(catalog, dept_id="1")
+    reconcile_department_grants()
+    assert AccessGrantGroup.objects.get().department_policy == first
+    first.delete()
+    result = reconcile_department_grants()
+    assert result.grants_changed == 1
+    assert AccessGrant.objects.get(user=user).version == 2
+    assert AccessGrantGroup.objects.get().department_policy == second
+
+
+def test_policy_for_missing_department_does_not_match_stale_user_membership(
+    catalog: Catalog,
+) -> None:
+    _user()
+    _policy(catalog)
+    DingTalkDepartmentMirror.objects.all().delete()
+    result = reconcile_department_grants()
+    assert result.unchanged == 1
+    assert not AccessGrant.objects.exists()
+
+
+def test_department_task_registration_and_result(catalog: Catalog) -> None:
+    _user()
+    _policy(catalog)
+    assert "easyauth.tasks.grants" in settings.CELERY_IMPORTS
+    assert (
+        settings.CELERY_BEAT_SCHEDULE["department-grant-reconcile"]["task"]
+        == "easyauth.grants.reconcile_department_grants"
+    )
+    assert reconcile_department_grants_task.acks_late is True
+    assert reconcile_department_grants_task.max_retries == 3
+    assert reconcile_department_grants_task.retry_backoff == 30
+    assert DepartmentTreeCycleError not in reconcile_department_grants_task.autoretry_for
+    assert reconcile_department_grants_task.run() == {
+        "users_considered": 1,
+        "grants_created": 1,
+        "grants_changed": 0,
+        "grants_revoked": 0,
+        "unchanged": 0,
+    }
+
+
+def test_eligibility_uses_complete_directory_binding(catalog: Catalog) -> None:
+    _policy(catalog)
+    eligible, _mirror = _user("shared-id")
+    outside = UserMirror.objects.create(
+        authentik_user_id="outside-corp",
+        status="active",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="other-corp",
+        dingtalk_userid="shared-id",
+    )
+    missing = UserMirror.objects.create(
+        authentik_user_id="missing-binding",
+        status="active",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="corp",
+        dingtalk_userid="missing",
+    )
+    result = reconcile_department_grants()
+    assert result.users_considered == 1
+    assert AccessGrant.objects.get().user == eligible
+    assert not AccessGrant.objects.filter(user__in=[outside, missing]).exists()
