@@ -14,6 +14,7 @@ import {
 } from "../../features/grantForm";
 import type { GrantDraft, GrantDraftError, GrantSubmission } from "../../features/grantForm";
 import { useI18n } from "../../i18n/I18nProvider";
+import { departmentDisplayName } from "../../lib/departmentDisplayName";
 import type { DepartmentGrantPolicy } from "../../lib/domain/departmentGrants";
 
 interface DepartmentGrantEditorDialogProps {
@@ -57,11 +58,11 @@ export function DepartmentGrantEditorDialog({
 
   const title = policy
     ? policy.inherited
-      ? t("departmentGrants.dialog.editInheritedTitle", { name: policy.defined_on.name })
+      ? t("departmentGrants.dialog.editInheritedTitle", { name: departmentDisplayName(policy.defined_on, t) })
       : t("departmentGrants.dialog.editTitle")
     : t("departmentGrants.dialog.createTitle");
   // 编辑继承来的策略时, 影响范围是它定义所在的部门(及其子部门), 不是当前浏览的部门。
-  const affectedDepartmentName = policy ? policy.defined_on.name : departmentName;
+  const affectedDepartmentName = policy ? departmentDisplayName(policy.defined_on, t) : departmentName;
   // 提交闸门在点击那一刻重算: 渲染期算出来的结论会过期(限时授权的到期时间会走到过去),
   // 那时按钮还亮着, 载荷却已经不能拼了 —— 拦下来展示在横幅里, 而不是让构造函数抛出去。
   const submit = () => {

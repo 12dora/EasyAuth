@@ -57,6 +57,8 @@ export function useDepartmentGrants() {
     queryKey: DEPARTMENT_TREE_QUERY_KEY,
     queryFn: async ({ signal }) =>
       parseDepartmentTree(await apiRequest<unknown>("/console/api/v1/departments/tree", { signal })),
+    // 契约错误与 409 未同步都不是瞬时故障: 重试只会把错误页面拖成一直"正在加载", 让人以为在转圈。
+    retry: false,
   });
   const tree = treeQuery.data;
 
@@ -78,6 +80,7 @@ export function useDepartmentGrants() {
               await apiRequest<unknown>(grantPoliciesUrl(tree, selectedDeptId), { signal }),
             )
         : skipToken,
+    retry: false,
   });
 
   const invalidateDepartments = () => {

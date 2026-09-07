@@ -4,6 +4,7 @@ export const zhCN = {
   "departmentGrants.description": "按部门预先授权，所选部门及其子部门的在职人员自动获得对应权限。",
   "departmentGrants.create": "新增授权",
 
+  "departmentGrants.rootDepartment": "全公司",
   "departmentGrants.tree.ariaLabel": "组织架构",
   "departmentGrants.tree.searchLabel": "搜索部门",
   "departmentGrants.tree.searchPlaceholder": "输入部门名称",
@@ -61,6 +62,7 @@ export const en: Record<keyof typeof zhCN, string> = {
     "Pre-authorize by department: active employees of the selected department and its sub-departments receive the access automatically.",
   "departmentGrants.create": "New grant",
 
+  "departmentGrants.rootDepartment": "Whole company",
   "departmentGrants.tree.ariaLabel": "Organisation",
   "departmentGrants.tree.searchLabel": "Search departments",
   "departmentGrants.tree.searchPlaceholder": "Department name",

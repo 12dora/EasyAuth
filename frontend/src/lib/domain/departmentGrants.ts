@@ -99,7 +99,8 @@ export function parseDepartmentGrantPolicies(value: unknown): DepartmentGrantPol
 function validateOrgTreeNode(value: unknown, path: string): void {
   const node = contractRecord(value, path);
   contractNonEmptyString(node.dept_id, `${path}.dept_id`);
-  contractNonEmptyString(node.name, `${path}.name`);
+  // 钉钉根部门在镜像里就是空名字, 展示层用「全公司」兜底(departmentDisplayName), 契约这一层只要求是字符串。
+  contractString(node.name, `${path}.name`);
   contractNumber(node.member_count, `${path}.member_count`);
   contractArray(node.children, `${path}.children`).forEach((child, index) =>
     validateOrgTreeNode(child, `${path}.children[${index}]`),
@@ -109,7 +110,8 @@ function validateOrgTreeNode(value: unknown, path: string): void {
 function validateDepartmentRef(value: unknown, path: string): void {
   const ref = contractRecord(value, path);
   contractNonEmptyString(ref.dept_id, `${path}.dept_id`);
-  contractNonEmptyString(ref.name, `${path}.name`);
+  // 同上: 根部门可以没有名字。
+  contractString(ref.name, `${path}.name`);
 }
 
 function validateDepartmentSummary(value: unknown, path: string): void {

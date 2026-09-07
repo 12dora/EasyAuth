@@ -15,28 +15,34 @@ vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
 const SOURCE_SLUG = "dingtalk";
 const CORP_ID = "corp-1";
 
-const TREE = {
-  data: {
-    source_slug: SOURCE_SLUG,
-    corp_id: CORP_ID,
-    synced_at: "2026-09-01T02:00:00Z",
-    root: {
-      dept_id: "1",
-      name: "公司",
-      member_count: 5,
-      children: [
-        { dept_id: "12", name: "销售部", member_count: 8, children: [] },
-        { dept_id: "13", name: "技术部", member_count: 6, children: [] },
-      ],
+/** 部门名; 根部门的名字可被用例改写(钉钉企业根部门在镜像里没有名字)。 */
+type DepartmentNames = Record<string, string>;
+const DEFAULT_NAMES: DepartmentNames = { "1": "公司", "12": "销售部", "13": "技术部" };
+
+function treePayload(names: DepartmentNames) {
+  return {
+    data: {
+      source_slug: SOURCE_SLUG,
+      corp_id: CORP_ID,
+      synced_at: "2026-09-01T02:00:00Z",
+      root: {
+        dept_id: "1",
+        name: names["1"],
+        member_count: 5,
+        children: [
+          { dept_id: "12", name: names["12"], member_count: 8, children: [] },
+          { dept_id: "13", name: names["13"], member_count: 6, children: [] },
+        ],
+      },
     },
-  },
-};
+  };
+}
 
 /** 部门摘要与「祖先或自身」链(自根到自身), 后端按这条链算继承。 */
-const DEPARTMENTS: Record<string, { name: string; memberCount: number; subtreeMemberCount: number; chain: string[] }> = {
-  "1": { name: "公司", memberCount: 5, subtreeMemberCount: 21, chain: ["1"] },
-  "12": { name: "销售部", memberCount: 8, subtreeMemberCount: 8, chain: ["1", "12"] },
-  "13": { name: "技术部", memberCount: 6, subtreeMemberCount: 6, chain: ["1", "13"] },
+const DEPARTMENTS: Record<string, { memberCount: number; subtreeMemberCount: number; chain: string[] }> = {
+  "1": { memberCount: 5, subtreeMemberCount: 21, chain: ["1"] },
+  "12": { memberCount: 8, subtreeMemberCount: 8, chain: ["1", "12"] },
+  "13": { memberCount: 6, subtreeMemberCount: 6, chain: ["1", "13"] },
 };
 
 const APPS: Record<string, { app_key: string; name: string; alias: string }> = {
@@ -143,29 +149,29 @@ function createPolicyStore() {
   ];
 
   return {
-    listFor(deptId: string) {
+    listFor(deptId: string, names: DepartmentNames) {
       const department = DEPARTMENTS[deptId];
       // 本部门在前, 再由近及远地列出继承来的策略。
       const order = [...department.chain].reverse();
       return order.flatMap((ownerDeptId) =>
         policies
           .filter((policy) => policy.definedOn === ownerDeptId)
-          .map((policy) => serializePolicy(policy, deptId)),
+          .map((policy) => serializePolicy(policy, deptId, names)),
       );
     },
-    create(deptId: string, body: PolicyBody) {
+    create(deptId: string, body: PolicyBody, names: DepartmentNames) {
       nextId += 1;
       const policy: StoredPolicy = { id: nextId, definedOn: deptId, body };
       policies.push(policy);
-      return serializePolicy(policy, deptId);
+      return serializePolicy(policy, deptId, names);
     },
-    update(id: number, body: PolicyBody) {
+    update(id: number, body: PolicyBody, names: DepartmentNames) {
       const policy = policies.find((item) => item.id === id);
       if (!policy) {
         throw new Error(`策略 ${id} 不存在`);
       }
       policy.body = body;
-      return serializePolicy(policy, policy.definedOn);
+      return serializePolicy(policy, policy.definedOn, names);
     },
     remove(id: number) {
       const index = policies.findIndex((item) => item.id === id);
@@ -177,7 +183,7 @@ function createPolicyStore() {
   };
 }
 
-function serializePolicy(policy: StoredPolicy, deptId: string) {
+function serializePolicy(policy: StoredPolicy, deptId: string, names: DepartmentNames) {
   const owner = DEPARTMENTS[policy.definedOn];
   return {
     id: policy.id,
@@ -187,7 +193,7 @@ function serializePolicy(policy: StoredPolicy, deptId: string) {
     grant_type: policy.body.grant_type,
     expires_at: policy.body.grant_expires_at,
     reason: policy.body.reason,
-    defined_on: { dept_id: policy.definedOn, name: owner.name },
+    defined_on: { dept_id: policy.definedOn, name: names[policy.definedOn] },
     inherited: policy.definedOn !== deptId,
     affected_user_count: owner.subtreeMemberCount,
     created_at: "2026-08-01T02:00:00Z",
@@ -197,18 +203,18 @@ function serializePolicy(policy: StoredPolicy, deptId: string) {
   };
 }
 
-function departmentPayload(deptId: string, store: ReturnType<typeof createPolicyStore>) {
+function departmentPayload(deptId: string, store: ReturnType<typeof createPolicyStore>, names: DepartmentNames) {
   const department = DEPARTMENTS[deptId];
   return {
     data: {
       department: {
         dept_id: deptId,
-        name: department.name,
-        path: department.chain.map((id) => ({ dept_id: id, name: DEPARTMENTS[id].name })),
+        name: names[deptId],
+        path: department.chain.map((id) => ({ dept_id: id, name: names[id] })),
         member_count: department.memberCount,
         subtree_member_count: department.subtreeMemberCount,
       },
-      items: store.listFor(deptId),
+      items: store.listFor(deptId, names),
     },
   };
 }
@@ -382,6 +388,48 @@ describe("DepartmentGrantsPage", () => {
     expect(screen.queryByText("继承自 公司")).not.toBeInTheDocument();
   });
 
+  test("根部门没有名字时按「全公司」展示, 且可选中并列出授权", async () => {
+    stubFetch({ rootName: "" });
+    const user = userEvent.setup({ delay: null });
+
+    renderPage();
+
+    const root = await screen.findByRole("treeitem", { name: /全公司/ });
+    expect(root).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByText("客户管理 (CRM)")).toBeVisible();
+    expect(screen.getByRole("button", { name: "新增授权" })).toBeEnabled();
+
+    await user.click(screen.getByText("销售部"));
+    // 定义在根部门上的策略, 在子部门里同样按「全公司」展示来源。
+    expect(await screen.findByText("继承自 全公司")).toBeVisible();
+
+    await user.click(screen.getByText("全公司"));
+    await waitFor(() => expect(screen.getByText("本部门")).toBeVisible());
+    expect(screen.getByText("直属 5 人 · 含子部门 21 人")).toBeVisible();
+  });
+
+  test("部门树契约不符时立刻显示错误页, 不会一直停在加载中", async () => {
+    stubFetch({
+      // member_count 缺失: 契约错误不是瞬时故障, 不该被重试成"一直在加载"。
+      tree: () =>
+        jsonResponse({
+          data: {
+            source_slug: SOURCE_SLUG,
+            corp_id: CORP_ID,
+            synced_at: "2026-09-01T02:00:00Z",
+            root: { dept_id: "1", name: "", children: [] },
+          },
+        }),
+    });
+
+    renderPage();
+
+    expect(await screen.findByText("组织架构加载失败")).toBeVisible();
+    expect(screen.getByText("部门树.data.root.member_count 必须为数字")).toBeVisible();
+    expect(screen.getByRole("button", { name: "重新加载" })).toBeVisible();
+    expect(screen.queryByText("正在加载组织架构")).not.toBeInTheDocument();
+  });
+
   test("尚未同步钉钉组织架构时给出同步指引", async () => {
     stubFetch({
       tree: () =>
@@ -467,15 +515,16 @@ function updatePolicyBody(fetchMock: FetchMock, policyId: number): unknown {
   return typeof body === "string" ? JSON.parse(body) : null;
 }
 
-function stubFetch({ tree }: { tree?: () => Response } = {}) {
+function stubFetch({ tree, rootName = DEFAULT_NAMES["1"] }: { tree?: () => Response; rootName?: string } = {}) {
   const store = createPolicyStore();
+  const names: DepartmentNames = { ...DEFAULT_NAMES, "1": rootName };
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     const url = String(input);
     const [path, search = ""] = url.split("?");
     const body = typeof init?.body === "string" ? (JSON.parse(init.body) as PolicyBody & Record<string, unknown>) : null;
 
     if (path === "/console/api/v1/departments/tree") {
-      return tree ? tree() : jsonResponse(TREE);
+      return tree ? tree() : jsonResponse(treePayload(names));
     }
     if (path === "/console/api/v1/grant-catalog") {
       return jsonResponse(CATALOG);
@@ -488,19 +537,19 @@ function stubFetch({ tree }: { tree?: () => Response } = {}) {
       if (query.get("source_slug") !== SOURCE_SLUG || query.get("corp_id") !== CORP_ID) {
         return jsonResponse({ error: { code: "BAD_REQUEST", message: "缺少目录来源参数" } }, 400);
       }
-      return jsonResponse(departmentPayload(deptId, store));
+      return jsonResponse(departmentPayload(deptId, store, names));
     }
     if (listMatch && init?.method === "POST" && body) {
       const { source_slug: sourceSlug, corp_id: corpId, ...policyBody } = body;
       if (sourceSlug !== SOURCE_SLUG || corpId !== CORP_ID) {
         return jsonResponse({ error: { code: "BAD_REQUEST", message: "缺少目录来源参数" } }, 400);
       }
-      return jsonResponse({ data: store.create(decodeURIComponent(listMatch[1]), policyBody as PolicyBody) }, 201);
+      return jsonResponse({ data: store.create(decodeURIComponent(listMatch[1]), policyBody as PolicyBody, names) }, 201);
     }
 
     const policyMatch = /^\/console\/api\/v1\/department-grant-policies\/(\d+)$/.exec(path);
     if (policyMatch && init?.method === "PUT" && body) {
-      return jsonResponse({ data: store.update(Number(policyMatch[1]), body) });
+      return jsonResponse({ data: store.update(Number(policyMatch[1]), body, names) });
     }
     if (policyMatch && init?.method === "DELETE") {
       store.remove(Number(policyMatch[1]));

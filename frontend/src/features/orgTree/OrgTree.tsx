@@ -23,6 +23,15 @@ export interface OrgTreeProps {
   onExpandedChange: (deptIds: string[]) => void;
   /** 按部门名过滤; 空串表示不过滤。搜索框由调用方渲染。 */
   filter?: string;
+  /**
+   * 行文案。缺省用 `node.name`; 名字可能为空(钉钉根部门)的场景由调用方传入兜底文案,
+   * 组件本身不认识任何业务口径。过滤与无障碍名同样按这份文案走。
+   */
+  labelFor?: (node: OrgTreeNode) => string;
+}
+
+function nodeName(node: OrgTreeNode): string {
+  return node.name;
 }
 
 interface FlatRow {
@@ -45,12 +54,16 @@ export function OrgTree({
   onSelect,
   onExpandedChange,
   filter = "",
+  labelFor = nodeName,
 }: OrgTreeProps) {
   const { t } = useI18n();
   const keyword = filter.trim().toLowerCase();
 
-  const visibleDeptIds = useMemo(() => collectVisibleDeptIds(root, keyword), [root, keyword]);
-  const autoExpandedDeptIds = useMemo(() => collectMatchAncestorIds(root, keyword), [root, keyword]);
+  const visibleDeptIds = useMemo(() => collectVisibleDeptIds(root, keyword, labelFor), [root, keyword, labelFor]);
+  const autoExpandedDeptIds = useMemo(
+    () => collectMatchAncestorIds(root, keyword, labelFor),
+    [root, keyword, labelFor],
+  );
   // 过滤命中时祖先必须展开才看得到匹配项; 这是渲染期的派生值, 不回写受控状态,
   // 清空搜索后展开集合原样回到用户自己的选择。
   const effectiveExpandedIds = useMemo(
@@ -191,7 +204,7 @@ export function OrgTree({
               tabIndex={-1}
               className="org-tree__chevron-button"
               aria-label={t(expanded ? "departmentGrants.tree.collapse" : "departmentGrants.tree.expand", {
-                name: node.name,
+                name: labelFor(node),
               })}
               onClick={(event) => {
                 event.stopPropagation();
@@ -209,7 +222,7 @@ export function OrgTree({
           ) : (
             <span className="org-tree__chevron-placeholder" aria-hidden="true" />
           )}
-          <span className="org-tree__name">{node.name}</span>
+          <span className="org-tree__name">{labelFor(node)}</span>
           <span className="org-tree__count">
             {t("departmentGrants.tree.memberCount", { count: node.member_count })}
           </span>
@@ -246,17 +259,21 @@ export function OrgTree({
   );
 }
 
-function nodeMatches(node: OrgTreeNode, keyword: string): boolean {
-  return keyword === "" || node.name.toLowerCase().includes(keyword);
+function nodeMatches(node: OrgTreeNode, keyword: string, labelFor: (node: OrgTreeNode) => string): boolean {
+  return keyword === "" || labelFor(node).toLowerCase().includes(keyword);
 }
 
 /** 自身命中或有后代命中的节点; 过滤为空时即全部节点。 */
-function collectVisibleDeptIds(root: OrgTreeNode, keyword: string): Set<string> {
+function collectVisibleDeptIds(
+  root: OrgTreeNode,
+  keyword: string,
+  labelFor: (node: OrgTreeNode) => string,
+): Set<string> {
   const visible = new Set<string>();
 
   const walk = (node: OrgTreeNode): boolean => {
     const childMatched = node.children.map(walk).some(Boolean);
-    const matched = nodeMatches(node, keyword) || childMatched;
+    const matched = nodeMatches(node, keyword, labelFor) || childMatched;
     if (matched) {
       visible.add(node.dept_id);
     }
@@ -268,7 +285,11 @@ function collectVisibleDeptIds(root: OrgTreeNode, keyword: string): Set<string> 
 }
 
 /** 命中节点的祖先(不含命中节点自身); 过滤为空时无自动展开。 */
-function collectMatchAncestorIds(root: OrgTreeNode, keyword: string): string[] {
+function collectMatchAncestorIds(
+  root: OrgTreeNode,
+  keyword: string,
+  labelFor: (node: OrgTreeNode) => string,
+): string[] {
   if (keyword === "") {
     return [];
   }
@@ -279,7 +300,7 @@ function collectMatchAncestorIds(root: OrgTreeNode, keyword: string): string[] {
     if (childMatched) {
       ancestors.push(node.dept_id);
     }
-    return nodeMatches(node, keyword) || childMatched;
+    return nodeMatches(node, keyword, labelFor) || childMatched;
   };
 
   walk(root);

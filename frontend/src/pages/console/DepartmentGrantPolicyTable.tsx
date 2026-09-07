@@ -6,6 +6,7 @@ import { RowActionButton, actionsColumn, textColumn } from "../../components/ant
 import { Badge } from "../../components/Badge";
 import { useI18n } from "../../i18n/I18nProvider";
 import { formatAppDisplayName } from "../../lib/appDisplayName";
+import { departmentDisplayName } from "../../lib/departmentDisplayName";
 import type { DepartmentGrantPolicy } from "../../lib/domain/departmentGrants";
 
 /** 「授权内容」列最多平铺的徽章数, 其余收进 +N 的悬浮提示。 */
@@ -59,7 +60,7 @@ export function DepartmentGrantPolicyTable({
         render: (_value: unknown, policy: DepartmentGrantPolicy) => (
           <Badge tone="faint">
             {policy.inherited
-              ? t("departmentGrants.source.inherited", { name: policy.defined_on.name })
+              ? t("departmentGrants.source.inherited", { name: departmentDisplayName(policy.defined_on, t) })
               : t("departmentGrants.source.own")}
           </Badge>
         ),

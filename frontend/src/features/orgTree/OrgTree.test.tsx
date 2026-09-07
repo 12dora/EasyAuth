@@ -128,6 +128,29 @@ describe("OrgTree", () => {
     expect(queryTreeItem("13")).toBeNull();
   });
 
+  test("labelFor 决定行文案、无障碍名与过滤口径", async () => {
+    const user = userEvent.setup();
+    const namelessRoot: OrgTreeNode = { ...ROOT, name: "" };
+
+    renderTree({ root: namelessRoot, labelFor: (node) => node.name || "全公司" });
+
+    expect(screen.getByRole("treeitem", { name: /全公司/ })).toBeVisible();
+    expect(screen.getByRole("button", { name: "收起 全公司" })).toBeVisible();
+
+    // 过滤按同一份文案走: 输入兜底名也能命中根部门。
+    await user.click(screen.getByRole("button", { name: "收起 全公司" }));
+    expect(treeItem("1")).toHaveAttribute("aria-expanded", "false");
+  });
+
+  test("按 labelFor 的文案过滤", () => {
+    const namelessRoot: OrgTreeNode = { ...ROOT, name: "" };
+
+    renderTree({ root: namelessRoot, labelFor: (node) => node.name || "全公司", filter: "全公司" });
+
+    expect(screen.getByRole("treeitem", { name: /全公司/ })).toBeVisible();
+    expect(queryTreeItem("12")).toBeNull();
+  });
+
   test("搜索无命中时给出空文案", () => {
     renderTree({ filter: "不存在的部门" });
 
@@ -157,18 +180,31 @@ describe("OrgTree", () => {
   });
 });
 
-function renderTree({ filter = "" }: { filter?: string } = {}) {
-  renderWithAntd(<TreeHarness filter={filter} />);
+function renderTree({
+  filter = "",
+  root = ROOT,
+  labelFor,
+}: { filter?: string; root?: OrgTreeNode; labelFor?: (node: OrgTreeNode) => string } = {}) {
+  renderWithAntd(<TreeHarness filter={filter} root={root} labelFor={labelFor} />);
 }
 
 /** OrgTree 是受控组件; 用例里由这层壳持有选中与展开状态。 */
-function TreeHarness({ filter }: { filter: string }) {
+function TreeHarness({
+  filter,
+  root,
+  labelFor,
+}: {
+  filter: string;
+  root: OrgTreeNode;
+  labelFor?: (node: OrgTreeNode) => string;
+}) {
   const [selectedDeptId, setSelectedDeptId] = useState("1");
   const [expandedDeptIds, setExpandedDeptIds] = useState<string[]>(["1"]);
 
   return (
     <OrgTree
-      root={ROOT}
+      root={root}
+      labelFor={labelFor}
       selectedDeptId={selectedDeptId}
       expandedDeptIds={expandedDeptIds}
       onSelect={setSelectedDeptId}

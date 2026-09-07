@@ -1,4 +1,5 @@
 import { Plus, RefreshCcw } from "lucide-react";
+import { useCallback } from "react";
 
 import { Button } from "../../components/Button";
 import { TextInput } from "../../components/Field";
@@ -10,7 +11,8 @@ import { PanelSurface } from "../../components/ui/PanelSurface";
 import { OrgTree } from "../../features/orgTree/OrgTree";
 import { useI18n } from "../../i18n/I18nProvider";
 import { ApiError } from "../../lib/api";
-import type { DepartmentSummary } from "../../lib/domain/departmentGrants";
+import { departmentDisplayName } from "../../lib/departmentDisplayName";
+import type { DepartmentSummary, OrgTreeNode } from "../../lib/domain/departmentGrants";
 import { DepartmentGrantEditorDialog } from "./DepartmentGrantEditorDialog";
 import { DepartmentGrantPolicyTable } from "./DepartmentGrantPolicyTable";
 import { apiErrorDetailMessages, useDepartmentGrants } from "./useDepartmentGrants";
@@ -20,6 +22,8 @@ export function DepartmentGrantsPage() {
   const page = useDepartmentGrants();
   const { deleteMutation, deleteTarget, department, editor, policies, policiesQuery, saveMutation, tree, treeQuery } = page;
 
+  // 根部门在钉钉镜像里没有名字, 树、右栏与弹窗都得走同一份兜底文案。
+  const departmentLabel = useCallback((node: OrgTreeNode) => departmentDisplayName(node, t), [t]);
   const treeError = treeQuery.error;
   const directoryNotSynced = treeError instanceof ApiError && treeError.status === 409;
 
@@ -89,6 +93,7 @@ export function DepartmentGrantsPage() {
                   onSelect={page.selectDepartment}
                   onExpandedChange={page.setExpandedDeptIds}
                   filter={page.treeFilter}
+                  labelFor={departmentLabel}
                 />
               ) : (
                 <p className="px-2 py-3 text-caption text-ink-faint" role="status">
@@ -142,7 +147,7 @@ export function DepartmentGrantsPage() {
 
       {editor ? (
         <DepartmentGrantEditorDialog
-          departmentName={department ? department.name : ""}
+          departmentName={department ? departmentDisplayName(department, t) : ""}
           policy={editor.policy}
           errorMessage={saveMutation.error ? saveMutation.error.message : ""}
           errorDetails={apiErrorDetailMessages(saveMutation.error)}
@@ -159,7 +164,7 @@ export function DepartmentGrantsPage() {
       {deleteTarget ? (
         <ConfirmDialog
           title={t("departmentGrants.delete.title")}
-          message={t("departmentGrants.delete.message", { dept: deleteTarget.defined_on.name })}
+          message={t("departmentGrants.delete.message", { dept: departmentDisplayName(deleteTarget.defined_on, t) })}
           confirmLabel={t("common.delete")}
           confirming={deleteMutation.isPending}
           onConfirm={() => deleteMutation.mutate(deleteTarget)}
@@ -180,9 +185,9 @@ function DepartmentHeading({ department }: { department: DepartmentSummary }) {
   return (
     <div className="space-y-1">
       <p className="text-caption text-ink-faint" aria-label={t("departmentGrants.department.pathAriaLabel")}>
-        {department.path.map((item) => item.name).join(" / ")}
+        {department.path.map((item) => departmentDisplayName(item, t)).join(" / ")}
       </p>
-      <h2 className="text-lg font-semibold leading-tight text-ink">{department.name}</h2>
+      <h2 className="text-lg font-semibold leading-tight text-ink">{departmentDisplayName(department, t)}</h2>
       <p className="text-body leading-5 text-ink-soft">
         {t("departmentGrants.department.memberSummary", {
           direct: department.member_count,
