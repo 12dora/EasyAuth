@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from dataclasses import replace
 from http import HTTPStatus
 from secrets import token_urlsafe
@@ -358,17 +359,27 @@ def backchannel_logout(request: HttpRequest) -> JsonResponse:
             status=HTTPStatus.BAD_REQUEST,
         )
     else:
-        count = revoke_authentik_sessions(sid=claims.sid, subject=claims.subject)
-        _ = AuditService.record(
-            AuditRecord(
-                actor_type="authentik",
-                actor_id=claims.subject,
-                action="oidc_backchannel_logout",
-                target_type="user",
-                target_id=claims.subject,
-                metadata={"sid": claims.sid, "subject": claims.subject, "revoked_sessions": count},
+        try:
+            count = revoke_authentik_sessions(sid=claims.sid, subject=claims.subject)
+            _ = AuditService.record(
+                AuditRecord(
+                    actor_type="authentik",
+                    actor_id=claims.subject,
+                    action="oidc_backchannel_logout",
+                    target_type="user",
+                    target_id=claims.subject,
+                    metadata={
+                        "sid": claims.sid,
+                        "subject": claims.subject,
+                        "revoked_sessions": count,
+                    },
+                )
             )
-        )
+        except Exception:
+            # 缓存清理失败不能替换撤销或审计的原始异常。
+            with suppress(Exception):
+                cache.delete(f"easyauth:oidc:logout-jti:{claims.jti}")
+            raise
         response = JsonResponse({})
     response.headers["Cache-Control"] = "no-store"
     return response

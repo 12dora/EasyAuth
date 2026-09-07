@@ -10,7 +10,7 @@ from django.contrib.sessions.backends.db import SessionStore
 from django.contrib.sessions.models import Session
 from django.test import Client, RequestFactory
 
-from easyauth.accounts.auth import VerifiedOidcClaims, bind_oidc_session
+from easyauth.accounts.auth import VerifiedOidcClaims, bind_oidc_session, revoke_authentik_sessions
 from easyauth.accounts.models import OidcSessionBinding
 from easyauth.accounts.oidc_exchange import BACKCHANNEL_EVENT
 from easyauth.audit.models import AuditLog
@@ -147,3 +147,30 @@ def test_fresh_logout_without_exp(signing_key: rsa.RSAPrivateKey) -> None:
 
 def test_get_is_not_allowed() -> None:
     assert Client().get(URL).status_code == 405
+
+
+def test_failed_revocation_allows_retry(
+    signing_key: rsa.RSAPrivateKey,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key = bound_session("one", "sid-one")
+    token = signed(signing_key, logout_claims())
+    calls = 0
+
+    def revoke_once(*, sid: str, subject: str) -> int:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            message = "撤销暂时失败"
+            raise RuntimeError(message)
+        return revoke_authentik_sessions(sid=sid, subject=subject)
+
+    monkeypatch.setattr("easyauth.accounts.views.revoke_authentik_sessions", revoke_once)
+    client = Client()
+    with pytest.raises(RuntimeError, match="撤销暂时失败"):
+        client.post(URL, {"logout_token": token})
+    assert Session.objects.filter(session_key=key).exists()
+    assert client.post(URL, {"logout_token": token}).status_code == 200
+    assert not Session.objects.filter(session_key=key).exists()
+    assert AuditLog.objects.filter(event_type="oidc_backchannel_logout").count() == 1
+    assert client.post(URL, {"logout_token": token}).status_code == 400
