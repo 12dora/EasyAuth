@@ -14,7 +14,7 @@ import type { PortalRequestCatalogView } from "../../pages/portal/hooks/accessRe
 
 export type GrantTermType = "permanent" | "timed";
 
-export interface GrantDraft {
+export type GrantDraft = {
   appKey: string;
   authorizationGroupKeys: string[];
   /** 门户选择键: JSON.stringify([permissionKey, scopeKey]), 与 PermissionSelector 完全一致。 */
@@ -23,7 +23,7 @@ export interface GrantDraft {
   /** datetime-local 控件值; 长期授权时为空串。 */
   expiresAt: string;
   reason: string;
-}
+};
 
 export const EMPTY_GRANT_DRAFT: GrantDraft = {
   appKey: "",
@@ -34,14 +34,14 @@ export const EMPTY_GRANT_DRAFT: GrantDraft = {
   reason: "",
 };
 
-export interface GrantSubmission {
+export type GrantSubmission = {
   app_key: string;
   authorization_group_keys: string[];
   direct_grants: { permission: string; scope: string }[];
   grant_type: GrantTermType;
   grant_expires_at: string | null;
   reason: string;
-}
+};
 
 /** 与后端 direct-grants / department-grant-policies 载荷的 reason max_length 一致。 */
 export const GRANT_REASON_MAX_LENGTH = 1000;
