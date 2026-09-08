@@ -12,6 +12,15 @@ const ANTD_LOCALES: Record<string, AntdLocale> = {
   en: enUS,
 };
 
+/*
+ * autoInsertSpace: antd 默认会把两个汉字的按钮渲染成「确 定」, 与仓库自研 Button 的排版不一致, 统一关掉。
+ *
+ * 提到模块级常量: ConfigProvider 把 button 这类透传配置按引用比较来决定要不要换掉
+ * 整个 config context(antd/es/config-provider 的 memoedConfig), 写成行内字面量会让
+ * 壳层的每一次渲染都换一个新对象, 全站 antd 组件跟着白重渲染一轮。
+ */
+const ANTD_BUTTON_CONFIG = { autoInsertSpace: false } as const;
+
 /**
  * 全局 antd 配置: 设计令牌主题 + 跟随 I18nProvider 的 locale。
  *
@@ -27,9 +36,7 @@ export function AppConfigProvider({ children }: { children: ReactNode }) {
   const antdLocale = useMemo(() => ANTD_LOCALES[locale] ?? zhCN, [locale]);
 
   return (
-    // autoInsertSpace: antd 默认会把两个汉字的按钮渲染成「确 定」,
-    // 与仓库自研 Button 的排版不一致, 统一关掉。
-    <ConfigProvider button={{ autoInsertSpace: false }} locale={antdLocale} theme={APP_ANTD_THEME}>
+    <ConfigProvider button={ANTD_BUTTON_CONFIG} locale={antdLocale} theme={APP_ANTD_THEME}>
       {children}
     </ConfigProvider>
   );

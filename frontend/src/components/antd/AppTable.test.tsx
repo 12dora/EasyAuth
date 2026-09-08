@@ -284,6 +284,22 @@ describe("AppTable 客户端模式", () => {
   });
 });
 
+describe("antd 样式生成方式", () => {
+  test("主题走 CSS 变量且不再给每条选择器加版本哈希类", () => {
+    expect(APP_ANTD_THEME.cssVar).toBe(true);
+    expect(APP_ANTD_THEME.hashed).toBe(false);
+
+    renderTable(<AppTable<Row> columns={COLUMNS} dataSource={ROWS} rowKey="id" />);
+
+    const wrapper = document.querySelector(".ant-table-wrapper") as HTMLElement;
+    const classNames = [...wrapper.classList];
+    // CSS 变量模式的标记类还在(组件样式里写的是 var(--ant-*))。
+    expect(classNames.some((name) => name.startsWith("css-var-"))).toBe(true);
+    // 全仓只有一个 antd 版本, 不需要 .css-<hash> 这层隔离; 留着只会让每条生成的选择器都变长。
+    expect(classNames.filter((name) => /^css-(?!var-)[a-z0-9]+$/.test(name))).toEqual([]);
+  });
+});
+
 describe("AppTable 语言切换", () => {
   test("en 下 showTotal 与 antd 内建分页文案都走英文", async () => {
     window.localStorage.setItem("easyauth.locale", "en");

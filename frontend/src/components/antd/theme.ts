@@ -66,6 +66,21 @@ export const ROW_HOVER_BG = "rgba(37, 99, 235, 0.05)";
  * 将来接入深色时在这里追加 `algorithm: theme.darkAlgorithm` 即可。
  */
 export const APP_ANTD_THEME: ThemeConfig = {
+  /*
+   * cssVar: antd 的 CSS-in-JS 默认把每个令牌的具体值直接烤进样式串, 于是每种组件的样式
+   * 都要按"令牌值"这一维度重新生成一遍并注入。开了 CSS 变量模式后, 组件样式里写的是
+   * var(--ant-*), 与令牌取值解耦, 首屏与首次用到某个组件时的样式计算和注入都少一轮。
+   *
+   * hashed: false: 全仓只有一个 antd 版本(package.json 单一依赖, 也没有把 antd 打进
+   * 任何子包), 不需要靠 .css-<hash> 这一层来隔离多版本样式。关掉之后每条选择器少一个类,
+   * 生成的样式串更短、注入的 CSS 更小, 元素上也少挂一个类名。
+   *
+   * 两者都不改令牌取值: theme.useToken() 返回的仍是实打实的色值
+   * (antd 的公开 useToken 取的是 realToken), PortalRequestsSection 那种直接吃令牌算
+   * 内联样式的用法不受影响。
+   */
+  cssVar: true,
+  hashed: false,
   token: {
     colorPrimary: DESIGN_TOKENS.accent,
     colorInfo: DESIGN_TOKENS.accent,
