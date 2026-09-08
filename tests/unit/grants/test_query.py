@@ -30,6 +30,7 @@ from easyauth.grants.query import (
     ResolvedManagedUsers,
     _resolved_digest,
     resolve_user_permissions,
+    snapshot_for_grant,
 )
 from easyauth.integrations.authentik.directory_client import AuthentikDirectoryUnavailableError
 from easyauth.integrations.authentik.directory_payloads import DingTalkManagedUsers
@@ -719,6 +720,98 @@ def test_resolve_user_permissions_returns_empty_for_revoked_or_expired_grant() -
     assert expired_snapshot.grant_version == EXPIRED_VERSION
     assert expired_snapshot.groups == ()
     assert expired_snapshot.grants == ()
+
+
+def test_snapshot_for_grant_expands_historical_version_not_current_grant() -> None:
+    user = UserMirror.objects.create(authentik_user_id="user-historical-snapshot")
+    app = App.objects.create(app_key="historical-snapshot-app", name="Historical Snapshot")
+    _scope(app, "SELF")
+    sales = AuthorizationGroup.objects.create(app=app, key="sales", kind="role", name="销售")
+    finance = AuthorizationGroup.objects.create(app=app, key="finance", kind="bundle", name="财务")
+    read = _permission(app, "invoice.read", scopes=["SELF"])
+    approve = _permission(app, "invoice.approve", scopes=["SELF"])
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=sales,
+        permission=read,
+        scope_key="SELF",
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=finance,
+        permission=approve,
+        scope_key="SELF",
+    )
+    historical = AccessGrant.objects.create(
+        user=user,
+        app=app,
+        status=GRANT_STATUS_REVOKED,
+        is_current=False,
+        version=1,
+    )
+    current = AccessGrant.objects.create(user=user, app=app, version=2)
+    _ = AccessGrantGroup.objects.create(grant=historical, authorization_group=sales)
+    _ = AccessGrantGroup.objects.create(grant=current, authorization_group=finance)
+
+    historical_snapshot = snapshot_for_grant(historical)
+    current_snapshot = snapshot_for_grant(current)
+    resolved = resolve_user_permissions(user=user, app=app)
+
+    assert historical_snapshot.grant_version == 1
+    assert historical_snapshot.groups == (
+        GroupSnapshot(key="sales", kind="role", name="销售", expires_at=None),
+    )
+    assert historical_snapshot.grants == (
+        ExpandedGrant("invoice.read", "SELF", "group", "sales", None),
+    )
+    assert current_snapshot.grant_version == 2
+    assert current_snapshot.groups == (
+        GroupSnapshot(key="finance", kind="bundle", name="财务", expires_at=None),
+    )
+    assert resolved.grant_version == 2
+    assert resolved.groups == current_snapshot.groups
+    assert resolved.grants == current_snapshot.grants
+
+
+def test_snapshot_for_grant_keeps_department_and_user_sources_separate() -> None:
+    user = UserMirror.objects.create(authentik_user_id="user-mixed-source-snapshot")
+    app = App.objects.create(app_key="mixed-source-snapshot-app", name="Mixed Source Snapshot")
+    _scope(app, "SELF")
+    group = AuthorizationGroup.objects.create(app=app, key="sales", kind="role", name="销售")
+    permission = _permission(app, "invoice.read", scopes=["SELF"])
+    grant = AccessGrant.objects.create(user=user, app=app)
+    user_expiry = timezone.now() + timedelta(days=3)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        expires_at=user_expiry,
+        source="user",
+    )
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        expires_at=None,
+        source="department",
+    )
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=permission,
+        scope_key="SELF",
+        source="user",
+    )
+    _ = AccessGrantPermission.objects.create(
+        grant=grant,
+        permission=permission,
+        scope_key="SELF",
+        source="department",
+    )
+
+    snapshot = snapshot_for_grant(grant)
+
+    assert snapshot.groups == (
+        GroupSnapshot(key="sales", kind="role", name="销售", expires_at=None),
+    )
+    assert snapshot.grants == (
+        ExpandedGrant("invoice.read", "SELF", "direct", "", None),
+    )
 
 
 def _scope(app: App, key: str, *, is_active: bool = True) -> AppScope:

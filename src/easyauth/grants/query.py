@@ -5,7 +5,6 @@ import json
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, cast
 
-from django.db.models import Q
 from django.utils import timezone
 
 from easyauth.accounts.models import UserMirror
@@ -26,10 +25,10 @@ from easyauth.grants.query_types import ResolvedManagedUsers  # noqa: TC001 - å¯
 from easyauth.grants.status import parse_grant_status
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
     from datetime import datetime
 
 type UserSelector = UserMirror | str
-type GroupExpirationRows = list[tuple[int, datetime | None]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -81,13 +80,22 @@ def resolve_user_permissions(
     grant_version = 0 if latest_grant is None else latest_grant.version
     if latest_grant is None or not _grant_has_effective_permissions(resolved_user, latest_grant):
         return _empty_snapshot(user_id=user_id, app=app, grant_version=grant_version)
+    return snapshot_for_grant(latest_grant, managed_users_cache=managed_users_cache)
+
+
+def snapshot_for_grant(
+    grant: AccessGrant,
+    *,
+    managed_users_cache: ManagedUsersDirectoryCache | None = None,
+    now: datetime | None = None,
+) -> PermissionSnapshot:
     cache: ManagedUsersDirectoryCache = {} if managed_users_cache is None else managed_users_cache
     return _grant_snapshot(
-        user_id=user_id,
-        app=app,
-        grant=latest_grant,
+        user_id=grant.user.authentik_user_id,
+        app=grant.app,
+        grant=grant,
         directory_cache=cache,
-        now=timezone.now(),
+        now=timezone.now() if now is None else now,
     )
 
 
@@ -155,15 +163,7 @@ def _grant_snapshot(
 
 def _group_snapshots(grant: AccessGrant, now: datetime) -> tuple[GroupSnapshot, ...]:
     snapshots: dict[int, GroupSnapshot] = {}
-    for link in (
-        AccessGrantGroup.objects.select_related("authorization_group")
-        .filter(
-            Q(expires_at__isnull=True) | Q(expires_at__gt=now),
-            grant=grant,
-            authorization_group__is_active=True,
-        )
-        .order_by("authorization_group__key")
-    ):
+    for link in _effective_group_links(grant, now):
         previous = snapshots.get(link.authorization_group_id)
         snapshots[link.authorization_group_id] = GroupSnapshot(
             key=link.authorization_group.key,
@@ -180,12 +180,77 @@ def _later_expiry(left: datetime | None, right: datetime | None) -> datetime | N
     return None if left is None or right is None else max(left, right)
 
 
+def _membership_is_effective(expires_at: datetime | None, now: datetime) -> bool:
+    return expires_at is None or expires_at > now
+
+
+def _group_memberships(grant: AccessGrant) -> tuple[AccessGrantGroup, ...]:
+    cache = getattr(grant, "_prefetched_objects_cache", {})
+    if "grant_groups" in cache:
+        rows = cast(
+            "Iterable[AccessGrantGroup]",
+            grant.grant_groups.all(),  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+        )
+    else:
+        rows = AccessGrantGroup.objects.select_related("authorization_group").filter(grant=grant)
+    return tuple(
+        sorted(rows, key=lambda link: (link.authorization_group.key, link.source)),
+    )
+
+
+def _permission_memberships(grant: AccessGrant) -> tuple[AccessGrantPermission, ...]:
+    cache = getattr(grant, "_prefetched_objects_cache", {})
+    if "grant_permissions" in cache:
+        rows = cast(
+            "Iterable[AccessGrantPermission]",
+            grant.grant_permissions.all(),  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+        )
+    else:
+        rows = AccessGrantPermission.objects.select_related("permission").filter(grant=grant)
+    return tuple(
+        sorted(rows, key=lambda link: (link.permission.key, link.scope_key, link.source)),
+    )
+
+
+def _effective_group_links(grant: AccessGrant, now: datetime) -> tuple[AccessGrantGroup, ...]:
+    return tuple(
+        link
+        for link in _group_memberships(grant)
+        if link.authorization_group.is_active and _membership_is_effective(link.expires_at, now)
+    )
+
+
+def _group_expirations(grant: AccessGrant, now: datetime) -> dict[int, datetime | None]:
+    group_expirations: dict[int, datetime | None] = {}
+    for link in _effective_group_links(grant, now):
+        group_id = link.authorization_group_id
+        group_expirations[group_id] = (
+            _later_expiry(group_expirations[group_id], link.expires_at)
+            if group_id in group_expirations
+            else link.expires_at
+        )
+    return group_expirations
+
+
+def _effective_permission_links(
+    grant: AccessGrant,
+    now: datetime,
+) -> tuple[AccessGrantPermission, ...]:
+    return tuple(
+        link
+        for link in _permission_memberships(grant)
+        if link.permission.is_active
+        and link.permission.deprecated_at is None
+        and _membership_is_effective(link.expires_at, now)
+    )
+
+
 def _expanded_grants(
     grant: AccessGrant,
     directory_cache: ManagedUsersDirectoryCache,
     now: datetime,
 ) -> tuple[ExpandedGrant, ...]:
-    scopes = _active_scope_keys(grant.app_id)
+    scopes = _active_scope_keys(grant.app)
     expanded = _group_grants(grant, scopes, directory_cache, now) | _direct_grants(
         grant,
         scopes,
@@ -198,9 +263,9 @@ def _expanded_grants(
     )
 
 
-def _active_scope_keys(app_id: int) -> set[str]:
+def _active_scope_keys(app: App) -> set[str]:
     return set(
-        AppScope.objects.filter(app_id=app_id, is_active=True).values_list("key", flat=True),
+        AppScope.objects.filter(app_id=app.id, is_active=True).values_list("key", flat=True),
     )
 
 
@@ -210,23 +275,7 @@ def _group_grants(
     directory_cache: ManagedUsersDirectoryCache,
     now: datetime,
 ) -> set[ExpandedGrant]:
-    group_expiration_rows = cast(
-        "GroupExpirationRows",
-        list(
-            AccessGrantGroup.objects.filter(
-                Q(expires_at__isnull=True) | Q(expires_at__gt=now),
-                grant=grant,
-                authorization_group__is_active=True,
-            ).values_list("authorization_group_id", "expires_at"),
-        ),
-    )
-    group_expirations: dict[int, datetime | None] = {}
-    for group_id, expires_at in group_expiration_rows:
-        group_expirations[group_id] = (
-            _later_expiry(group_expirations[group_id], expires_at)
-            if group_id in group_expirations
-            else expires_at
-        )
+    group_expirations = _group_expirations(grant, now)
     links = (
         AuthorizationGroupGrant.objects.select_related("authorization_group", "permission")
         .filter(
@@ -274,18 +323,8 @@ def _direct_grants(
     directory_cache: ManagedUsersDirectoryCache,
     now: datetime,
 ) -> set[ExpandedGrant]:
-    links = (
-        AccessGrantPermission.objects.select_related("permission")
-        .filter(
-            Q(expires_at__isnull=True) | Q(expires_at__gt=now),
-            grant=grant,
-            permission__is_active=True,
-            permission__deprecated_at__isnull=True,
-        )
-        .order_by("permission__key", "scope_key")
-    )
     expanded: dict[tuple[int, str], ExpandedGrant] = {}
-    for link in links:
+    for link in _effective_permission_links(grant, now):
         if not (
             link.scope_key in active_scope_keys
             and link.scope_key in _supported_scope_keys(link.permission.supported_scopes)

@@ -15,7 +15,8 @@ from easyauth.grants.models import (
     AccessGrantGroup,
     AccessGrantPermission,
 )
-from easyauth.grants.query import PermissionSnapshot, resolve_user_permissions
+from easyauth.grants.permission_aggregation import grant_lifecycle_summary
+from easyauth.grants.query import resolve_user_permissions
 from easyauth.portal.access_request_data import (
     access_request_item,
     access_request_page_for_user,
@@ -191,7 +192,7 @@ def _grant_item(
         app=grant.app,
         managed_users_cache=directory_cache,
     )
-    grant_type, grant_expires_at = _grant_lifecycle_summary(snapshot)
+    grant_type, grant_expires_at = grant_lifecycle_summary(snapshot)
     return {
         "grant_id": grant.id,
         "grant_revision": grant.version,
@@ -206,13 +207,3 @@ def _grant_item(
         "grant_type": grant_type,
         "grant_expires_at": datetime_value(grant_expires_at),
     }
-
-
-def _grant_lifecycle_summary(snapshot: PermissionSnapshot) -> tuple[str, datetime | None]:
-    expirations = tuple(item.expires_at for item in (*snapshot.groups, *snapshot.grants))
-    timed_expirations = tuple(expiration for expiration in expirations if expiration is not None)
-    if not timed_expirations:
-        return "permanent", None
-    if len(timed_expirations) == len(expirations):
-        return "timed", min(timed_expirations)
-    return "mixed", min(timed_expirations)
