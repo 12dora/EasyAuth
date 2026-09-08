@@ -1889,8 +1889,10 @@ describe("PortalPage access request form", () => {
       renderPortalRequestWithPrefill("7");
       const user = userEvent.setup();
 
-      await waitFor(async () => expect(await selectedAuthorizationGroupNames(user)).toEqual(["只读"]));
+      // 预填是异步的: 等基础授权落到表单上再读选中的权限组(打开下拉这件事不能放进 waitFor 里重试)。
+      await waitFor(() => expect(screen.getByLabelText("基础授权")).toHaveValue("7"));
       await screen.findByRole("table", { name: "权限选择" });
+      expect(await selectedAuthorizationGroupNames(user)).toEqual(["只读"]);
       await user.click(permissionSelectorChip("展开 订单", "button"));
 
       await user.click(permissionSelectorChip("选择权限组 orders 本人"));
@@ -1963,7 +1965,8 @@ describe("PortalPage access request form", () => {
       await user.selectOptions(screen.getByLabelText("基础授权"), "7");
 
       // 撤销提交的目标是"撤销后保留下来的授权", 后端要求它是基础授权的子集: 加进新东西必被拒。
-      await waitFor(async () => expect(await selectedAuthorizationGroupNames(user)).toEqual(["只读"]));
+      await screen.findByRole("table", { name: "权限选择" });
+      expect(await selectedAuthorizationGroupNames(user)).toEqual(["只读"]);
       expect(await authorizationGroupOption(user, "只读")).not.toHaveClass("ant-select-item-option-disabled");
       expect(await authorizationGroupOption(user, "删除")).toHaveClass("ant-select-item-option-disabled");
 
