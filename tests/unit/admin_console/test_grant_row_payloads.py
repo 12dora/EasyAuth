@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import TYPE_CHECKING, Final
 
 import pytest
 from django.utils import timezone
 
 from easyauth.accounts.models import UserMirror
-from easyauth.admin_console.grant_row_payloads import serialize_access_grant_row
+from easyauth.admin_console.grant_row_payloads import (
+    access_grant_row_queryset,
+    serialize_access_grant_row,
+    serialize_access_grant_rows,
+)
 from easyauth.applications.models import (
     App,
     AppScope,
@@ -15,6 +20,7 @@ from easyauth.applications.models import (
     Permission,
 )
 from easyauth.grants.models import (
+    GRANT_STATUS_REVOKED,
     MEMBERSHIP_SOURCE_DEPARTMENT,
     MEMBERSHIP_SOURCE_USER,
     AccessGrant,
@@ -22,7 +28,14 @@ from easyauth.grants.models import (
     AccessGrantPermission,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+    from contextlib import AbstractContextManager
+
 pytestmark = pytest.mark.django_db
+
+_LIST_SERIALIZE_QUERIES: Final = 0
+_LIST_ROW_COUNT: Final = 20
 
 
 def test_serialize_access_grant_row_includes_names_sources_and_expansion() -> None:
@@ -97,3 +110,93 @@ def test_serialize_access_grant_row_includes_names_sources_and_expansion() -> No
     grants = row["grants"]
     assert isinstance(grants, list)
     assert {item["source_type"] for item in grants} == {"group", "direct"}
+
+
+def test_serialize_access_grant_row_keeps_expired_historical_lifecycle() -> None:
+    user = UserMirror.objects.create(authentik_user_id="grant-row-historical-user")
+    app = App.objects.create(app_key="grant-row-historical-app", name="CRM")
+    _ = AppScope.objects.create(app=app, key="GLOBAL", name="全局")
+    group = AuthorizationGroup.objects.create(app=app, key="sales", kind="role", name="销售")
+    permission = Permission.objects.create(
+        app=app,
+        key="order.order.view",
+        name="查看订单",
+        supported_scopes=["GLOBAL"],
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key="GLOBAL",
+    )
+    expired_at = timezone.now() - timedelta(days=2)
+    grant = AccessGrant.objects.create(
+        user=user,
+        app=app,
+        status=GRANT_STATUS_REVOKED,
+        is_current=False,
+    )
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        expires_at=expired_at,
+        source=MEMBERSHIP_SOURCE_USER,
+    )
+
+    row = serialize_access_grant_row(grant)
+
+    assert row["is_current"] is False
+    assert row["grant_type"] == "timed"
+    assert row["grant_expires_at"] == expired_at.isoformat()
+    assert row["groups"] == [{"key": "sales", "kind": "role", "name": "销售"}]
+
+
+def test_serialize_access_grant_rows_query_count_does_not_grow_with_row_count(
+    django_assert_num_queries: Callable[[int], AbstractContextManager[object]],
+) -> None:
+    grants = _grants_for_list_query_count(_LIST_ROW_COUNT)
+    one = list(access_grant_row_queryset().filter(pk=grants[0].pk))
+    twenty = list(access_grant_row_queryset().filter(pk__in=[grant.pk for grant in grants]))
+
+    with django_assert_num_queries(_LIST_SERIALIZE_QUERIES):
+        rows_one = serialize_access_grant_rows(one)
+    with django_assert_num_queries(_LIST_SERIALIZE_QUERIES):
+        rows_twenty = serialize_access_grant_rows(twenty)
+
+    assert len(rows_one) == 1
+    assert len(rows_twenty) == _LIST_ROW_COUNT
+    assert rows_one[0]["grants"]
+    assert rows_twenty[-1]["grants"]
+
+
+def _grants_for_list_query_count(count: int) -> list[AccessGrant]:
+    app = App.objects.create(app_key="grant-row-query-app", name="CRM")
+    _ = AppScope.objects.create(app=app, key="GLOBAL", name="全局")
+    group = AuthorizationGroup.objects.create(app=app, key="sales", kind="role", name="销售")
+    permission = Permission.objects.create(
+        app=app,
+        key="order.order.view",
+        name="查看订单",
+        supported_scopes=["GLOBAL"],
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key="GLOBAL",
+    )
+    grants: list[AccessGrant] = []
+    for index in range(count):
+        user = UserMirror.objects.create(authentik_user_id=f"grant-row-query-user-{index}")
+        grant = AccessGrant.objects.create(user=user, app=app)
+        _ = AccessGrantGroup.objects.create(
+            grant=grant,
+            authorization_group=group,
+            source=MEMBERSHIP_SOURCE_USER,
+        )
+        _ = AccessGrantPermission.objects.create(
+            grant=grant,
+            permission=permission,
+            scope_key="GLOBAL",
+            source=MEMBERSHIP_SOURCE_USER,
+        )
+        grants.append(grant)
+    return grants

@@ -814,6 +814,97 @@ def test_snapshot_for_grant_keeps_department_and_user_sources_separate() -> None
     )
 
 
+def test_snapshot_for_grant_keeps_expired_membership_on_historical_row() -> None:
+    user = UserMirror.objects.create(authentik_user_id="user-historical-expired")
+    app = App.objects.create(app_key="historical-expired-app", name="Historical Expired")
+    _scope(app, "SELF")
+    sales = AuthorizationGroup.objects.create(app=app, key="sales", kind="role", name="销售")
+    read = _permission(app, "invoice.read", scopes=["SELF"])
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=sales,
+        permission=read,
+        scope_key="SELF",
+    )
+    expired_at = timezone.now() - timedelta(days=1)
+    historical = AccessGrant.objects.create(
+        user=user,
+        app=app,
+        status=GRANT_STATUS_REVOKED,
+        is_current=False,
+        version=1,
+    )
+    current = AccessGrant.objects.create(user=user, app=app, version=2)
+    _ = AccessGrantGroup.objects.create(
+        grant=historical,
+        authorization_group=sales,
+        expires_at=expired_at,
+    )
+    _ = AccessGrantGroup.objects.create(
+        grant=current,
+        authorization_group=sales,
+        expires_at=expired_at,
+    )
+
+    historical_snapshot = snapshot_for_grant(historical)
+    current_snapshot = snapshot_for_grant(current)
+    resolved = resolve_user_permissions(user=user, app=app)
+
+    assert historical_snapshot.groups == (
+        GroupSnapshot(key="sales", kind="role", name="销售", expires_at=expired_at),
+    )
+    assert historical_snapshot.grants == (
+        ExpandedGrant("invoice.read", "SELF", "group", "sales", expired_at),
+    )
+    assert current_snapshot.groups == ()
+    assert current_snapshot.grants == ()
+    assert resolved.groups == ()
+    assert resolved.grants == ()
+
+
+def test_snapshot_for_grant_keeps_deactivated_group_on_historical_row() -> None:
+    user = UserMirror.objects.create(authentik_user_id="user-historical-inactive")
+    app = App.objects.create(app_key="historical-inactive-app", name="Historical Inactive")
+    _scope(app, "SELF")
+    sales = AuthorizationGroup.objects.create(
+        app=app,
+        key="sales",
+        kind="role",
+        name="销售",
+        is_active=False,
+    )
+    read = _permission(app, "invoice.read", scopes=["SELF"])
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=sales,
+        permission=read,
+        scope_key="SELF",
+    )
+    historical = AccessGrant.objects.create(
+        user=user,
+        app=app,
+        status=GRANT_STATUS_REVOKED,
+        is_current=False,
+        version=1,
+    )
+    current = AccessGrant.objects.create(user=user, app=app, version=2)
+    _ = AccessGrantGroup.objects.create(grant=historical, authorization_group=sales)
+    _ = AccessGrantGroup.objects.create(grant=current, authorization_group=sales)
+
+    historical_snapshot = snapshot_for_grant(historical)
+    current_snapshot = snapshot_for_grant(current)
+    resolved = resolve_user_permissions(user=user, app=app)
+
+    assert historical_snapshot.groups == (
+        GroupSnapshot(key="sales", kind="role", name="销售", expires_at=None),
+    )
+    assert historical_snapshot.grants == (
+        ExpandedGrant("invoice.read", "SELF", "group", "sales", None),
+    )
+    assert current_snapshot.groups == ()
+    assert current_snapshot.grants == ()
+    assert resolved.groups == ()
+    assert resolved.grants == ()
+
+
 def _scope(app: App, key: str, *, is_active: bool = True) -> AppScope:
     return AppScope.objects.create(app=app, key=key, name=key.title(), is_active=is_active)
 

@@ -10,7 +10,7 @@ from django.utils import timezone
 from easyauth.accounts.models import UserMirror
 from easyauth.accounts.status import parse_user_status
 from easyauth.applications.models import App, AppScope, AuthorizationGroupGrant
-from easyauth.grants.catalog_names import resolve_catalog_display_names
+from easyauth.grants.catalog_names import CatalogDisplayName, GrantCatalogNames
 from easyauth.grants.managed_users import (
     MANAGED_USERS_SCOPE,
     ManagedUsersDirectoryCache,
@@ -25,7 +25,7 @@ from easyauth.grants.query_types import ResolvedManagedUsers  # noqa: TC001 - å¯
 from easyauth.grants.status import parse_grant_status
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Iterable, Sequence
     from datetime import datetime
 
 type UserSelector = UserMirror | str
@@ -65,6 +65,133 @@ class PermissionSnapshot:
     snapshot_version: str
 
 
+@dataclass(frozen=True, slots=True)
+class GrantExpansionCatalog:
+    scopes_by_app_id: dict[int, tuple[AppScope, ...]]
+    group_grants_by_group_id: dict[int, tuple[AuthorizationGroupGrant, ...]]
+    names_by_app_id: dict[int, GrantCatalogNames]
+
+
+def expansion_catalog_for_grants(grants: Sequence[AccessGrant]) -> GrantExpansionCatalog:
+    grant_list = tuple(grants)
+    if not grant_list:
+        return GrantExpansionCatalog(
+            scopes_by_app_id={},
+            group_grants_by_group_id={},
+            names_by_app_id={},
+        )
+    scopes_by_app_id = _scopes_by_app_id(grant_list)
+    group_grants_by_group_id = _loaded_group_grants_by_group_id(grant_list)
+    return GrantExpansionCatalog(
+        scopes_by_app_id=scopes_by_app_id,
+        group_grants_by_group_id=group_grants_by_group_id,
+        names_by_app_id=_catalog_names_by_app_id(
+            grant_list,
+            scopes_by_app_id=scopes_by_app_id,
+            group_grants_by_group_id=group_grants_by_group_id,
+        ),
+    )
+
+
+def _scopes_by_app_id(grants: tuple[AccessGrant, ...]) -> dict[int, tuple[AppScope, ...]]:
+    scopes_by_app_id: dict[int, tuple[AppScope, ...]] = {}
+    for grant in grants:
+        if grant.app_id in scopes_by_app_id:
+            continue
+        scopes_by_app_id[grant.app_id] = tuple(
+            cast(
+                "Iterable[AppScope]",
+                grant.app.scopes.all(),  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+            ),
+        )
+    return scopes_by_app_id
+
+
+def _loaded_group_grants_by_group_id(
+    grants: tuple[AccessGrant, ...],
+) -> dict[int, tuple[AuthorizationGroupGrant, ...]]:
+    loaded: dict[int, tuple[AuthorizationGroupGrant, ...]] = {}
+    missing_ids: set[int] = set()
+    for grant in grants:
+        for link in _group_memberships(grant):
+            group_id = link.authorization_group_id
+            if group_id in loaded or group_id in missing_ids:
+                continue
+            cache = getattr(link.authorization_group, "_prefetched_objects_cache", {})
+            if "grants" in cache:
+                loaded[group_id] = tuple(
+                    cast(
+                        "Iterable[AuthorizationGroupGrant]",
+                        link.authorization_group.grants.all(),  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+                    ),
+                )
+            else:
+                missing_ids.add(group_id)
+    if not missing_ids:
+        return loaded
+    grouped: dict[int, list[AuthorizationGroupGrant]] = {group_id: [] for group_id in missing_ids}
+    rows = AuthorizationGroupGrant.objects.select_related(
+        "authorization_group",
+        "permission",
+    ).filter(authorization_group_id__in=missing_ids)
+    for row in rows:
+        grouped[row.authorization_group_id].append(row)
+    loaded.update({group_id: tuple(items) for group_id, items in grouped.items()})
+    return loaded
+
+
+def _catalog_names_by_app_id(
+    grants: tuple[AccessGrant, ...],
+    *,
+    scopes_by_app_id: dict[int, tuple[AppScope, ...]],
+    group_grants_by_group_id: dict[int, tuple[AuthorizationGroupGrant, ...]],
+) -> dict[int, GrantCatalogNames]:
+    permission_names: dict[int, dict[str, CatalogDisplayName]] = {}
+    permission_keys: dict[int, set[str]] = {}
+    scope_keys: dict[int, set[str]] = {}
+    for grant in grants:
+        app_id = grant.app_id
+        app_permission_names = permission_names.setdefault(app_id, {})
+        app_permission_keys = permission_keys.setdefault(app_id, set())
+        app_scope_keys = scope_keys.setdefault(app_id, set())
+        for link in _permission_memberships(grant):
+            permission = link.permission
+            app_permission_names[permission.key] = CatalogDisplayName(
+                name=permission.name,
+                name_en=permission.name_en,
+            )
+            app_permission_keys.add(permission.key)
+            app_scope_keys.add(link.scope_key)
+        for link in _group_memberships(grant):
+            for mapping in group_grants_by_group_id.get(link.authorization_group_id, ()):
+                permission = mapping.permission
+                app_permission_names[permission.key] = CatalogDisplayName(
+                    name=permission.name,
+                    name_en=permission.name_en,
+                )
+                app_permission_keys.add(permission.key)
+                app_scope_keys.add(mapping.scope_key)
+        for scope in scopes_by_app_id.get(app_id, ()):
+            app_scope_keys.add(scope.key)
+    names_by_app_id: dict[int, GrantCatalogNames] = {}
+    for app_id, keys in permission_keys.items():
+        scope_name_map = {
+            scope.key: CatalogDisplayName(name=scope.name, name_en=scope.name_en)
+            for scope in scopes_by_app_id.get(app_id, ())
+        }
+        names_by_app_id[app_id] = GrantCatalogNames(
+            permissions={
+                key: permission_names[app_id].get(key, CatalogDisplayName(name=key, name_en=""))
+                for key in keys
+            },
+            scopes={
+                key: scope_name_map.get(key, CatalogDisplayName(name=key, name_en=""))
+                for key in scope_keys[app_id]
+            },
+        )
+    return names_by_app_id
+
+
 def resolve_user_permissions(
     *,
     user: UserSelector,
@@ -88,14 +215,24 @@ def snapshot_for_grant(
     *,
     managed_users_cache: ManagedUsersDirectoryCache | None = None,
     now: datetime | None = None,
+    expansion_catalog: GrantExpansionCatalog | None = None,
 ) -> PermissionSnapshot:
     cache: ManagedUsersDirectoryCache = {} if managed_users_cache is None else managed_users_cache
+    catalog = (
+        expansion_catalog
+        if expansion_catalog is not None
+        else expansion_catalog_for_grants((grant,))
+    )
     return _grant_snapshot(
         user_id=grant.user.authentik_user_id,
         app=grant.app,
         grant=grant,
-        directory_cache=cache,
-        now=timezone.now() if now is None else now,
+        work=_ExpansionWork(
+            directory_cache=cache,
+            now=timezone.now() if now is None else now,
+            catalog=catalog,
+            effective=grant.is_current,
+        ),
     )
 
 
@@ -136,16 +273,23 @@ def _grant_has_effective_permissions(user: UserMirror, grant: AccessGrant) -> bo
             return False
 
 
+@dataclass(frozen=True, slots=True)
+class _ExpansionWork:
+    directory_cache: ManagedUsersDirectoryCache
+    now: datetime
+    catalog: GrantExpansionCatalog
+    effective: bool
+
+
 def _grant_snapshot(
     *,
     user_id: str,
     app: App,
     grant: AccessGrant,
-    directory_cache: ManagedUsersDirectoryCache,
-    now: datetime,
+    work: _ExpansionWork,
 ) -> PermissionSnapshot:
-    groups = _group_snapshots(grant, now)
-    grants = _expanded_grants(grant, directory_cache, now)
+    groups = _group_snapshots(grant, work.now, effective=work.effective)
+    grants = _expanded_grants(grant, work)
     return PermissionSnapshot(
         user_id=user_id,
         app_key=app.app_key,
@@ -161,9 +305,14 @@ def _grant_snapshot(
     )
 
 
-def _group_snapshots(grant: AccessGrant, now: datetime) -> tuple[GroupSnapshot, ...]:
+def _group_snapshots(
+    grant: AccessGrant,
+    now: datetime,
+    *,
+    effective: bool,
+) -> tuple[GroupSnapshot, ...]:
     snapshots: dict[int, GroupSnapshot] = {}
-    for link in _effective_group_links(grant, now):
+    for link in _group_links(grant, now, effective=effective):
         previous = snapshots.get(link.authorization_group_id)
         snapshots[link.authorization_group_id] = GroupSnapshot(
             key=link.authorization_group.key,
@@ -212,17 +361,28 @@ def _permission_memberships(grant: AccessGrant) -> tuple[AccessGrantPermission, 
     )
 
 
-def _effective_group_links(grant: AccessGrant, now: datetime) -> tuple[AccessGrantGroup, ...]:
+def _group_links(
+    grant: AccessGrant,
+    now: datetime,
+    *,
+    effective: bool,
+) -> tuple[AccessGrantGroup, ...]:
     return tuple(
         link
         for link in _group_memberships(grant)
-        if link.authorization_group.is_active and _membership_is_effective(link.expires_at, now)
+        if (not effective)
+        or (link.authorization_group.is_active and _membership_is_effective(link.expires_at, now))
     )
 
 
-def _group_expirations(grant: AccessGrant, now: datetime) -> dict[int, datetime | None]:
+def _group_expirations(
+    grant: AccessGrant,
+    now: datetime,
+    *,
+    effective: bool,
+) -> dict[int, datetime | None]:
     group_expirations: dict[int, datetime | None] = {}
-    for link in _effective_group_links(grant, now):
+    for link in _group_links(grant, now, effective=effective):
         group_id = link.authorization_group_id
         group_expirations[group_id] = (
             _later_expiry(group_expirations[group_id], link.expires_at)
@@ -232,101 +392,108 @@ def _group_expirations(grant: AccessGrant, now: datetime) -> dict[int, datetime 
     return group_expirations
 
 
-def _effective_permission_links(
+def _permission_links(
     grant: AccessGrant,
     now: datetime,
+    *,
+    effective: bool,
 ) -> tuple[AccessGrantPermission, ...]:
     return tuple(
         link
         for link in _permission_memberships(grant)
-        if link.permission.is_active
-        and link.permission.deprecated_at is None
-        and _membership_is_effective(link.expires_at, now)
+        if (not effective)
+        or (
+            link.permission.is_active
+            and link.permission.deprecated_at is None
+            and _membership_is_effective(link.expires_at, now)
+        )
     )
 
 
 def _expanded_grants(
     grant: AccessGrant,
-    directory_cache: ManagedUsersDirectoryCache,
-    now: datetime,
+    work: _ExpansionWork,
 ) -> tuple[ExpandedGrant, ...]:
-    scopes = _active_scope_keys(grant.app)
-    expanded = _group_grants(grant, scopes, directory_cache, now) | _direct_grants(
-        grant,
-        scopes,
-        directory_cache,
-        now,
-    )
+    scopes = _scope_keys(grant.app, catalog=work.catalog, active_only=work.effective)
+    expanded = _group_grants(grant, scopes, work) | _direct_grants(grant, scopes, work)
     return _with_catalog_names(
-        grant.app_id,
+        work.catalog.names_by_app_id.get(
+            grant.app_id,
+            GrantCatalogNames(permissions={}, scopes={}),
+        ),
         tuple(sorted(expanded, key=_expanded_grant_sort_key)),
     )
 
 
-def _active_scope_keys(app: App) -> set[str]:
-    return set(
-        AppScope.objects.filter(app_id=app.id, is_active=True).values_list("key", flat=True),
+def _scope_keys(
+    app: App,
+    *,
+    catalog: GrantExpansionCatalog,
+    active_only: bool,
+) -> set[str]:
+    scopes = catalog.scopes_by_app_id.get(app.id, ())
+    if active_only:
+        return {scope.key for scope in scopes if scope.is_active}
+    return {scope.key for scope in scopes}
+
+
+def _catalog_mapping_is_effective(link: AuthorizationGroupGrant) -> bool:
+    return (
+        link.is_active
+        and link.authorization_group.is_active
+        and link.permission.is_active
+        and link.permission.deprecated_at is None
     )
 
 
 def _group_grants(
     grant: AccessGrant,
-    active_scope_keys: set[str],
-    directory_cache: ManagedUsersDirectoryCache,
-    now: datetime,
+    scope_keys: set[str],
+    work: _ExpansionWork,
 ) -> set[ExpandedGrant]:
-    group_expirations = _group_expirations(grant, now)
-    links = (
-        AuthorizationGroupGrant.objects.select_related("authorization_group", "permission")
-        .filter(
-            authorization_group_id__in=group_expirations,
-            authorization_group__is_active=True,
-            is_active=True,
-            permission__is_active=True,
-            permission__deprecated_at__isnull=True,
-        )
-        .order_by("permission__key", "scope_key", "authorization_group__key")
-    )
+    group_expirations = _group_expirations(grant, work.now, effective=work.effective)
     expanded: set[ExpandedGrant] = set()
-    for link in links:
-        if not (
-            link.scope_key in active_scope_keys
-            and link.scope_key in _supported_scope_keys(link.permission.supported_scopes)
-        ):
-            continue
-        resolved = None
-        if link.scope_key == MANAGED_USERS_SCOPE:
-            resolved = resolve_managed_users(
-                user=grant.user,
-                app=grant.app,
-                authorization_group_grant=link,
-                directory_cache=directory_cache,
-            )
-            if resolved is None:
+    for group_id, expires_at in group_expirations.items():
+        for link in work.catalog.group_grants_by_group_id.get(group_id, ()):
+            if work.effective and not _catalog_mapping_is_effective(link):
                 continue
-        expanded.add(
-            ExpandedGrant(
-                permission=link.permission.key,
-                scope=link.scope_key,
-                source_type="group",
-                source_key=link.authorization_group.key,
-                expires_at=group_expirations[link.authorization_group_id],
-                resolved=resolved,
-            ),
-        )
+            if not (
+                link.scope_key in scope_keys
+                and link.scope_key in _supported_scope_keys(link.permission.supported_scopes)
+            ):
+                continue
+            resolved = None
+            if link.scope_key == MANAGED_USERS_SCOPE:
+                resolved = resolve_managed_users(
+                    user=grant.user,
+                    app=grant.app,
+                    authorization_group_grant=link,
+                    directory_cache=work.directory_cache,
+                )
+                if resolved is None:
+                    continue
+            expanded.add(
+                ExpandedGrant(
+                    permission=link.permission.key,
+                    scope=link.scope_key,
+                    source_type="group",
+                    source_key=link.authorization_group.key,
+                    expires_at=expires_at,
+                    resolved=resolved,
+                ),
+            )
     return expanded
 
 
 def _direct_grants(
     grant: AccessGrant,
-    active_scope_keys: set[str],
-    directory_cache: ManagedUsersDirectoryCache,
-    now: datetime,
+    scope_keys: set[str],
+    work: _ExpansionWork,
 ) -> set[ExpandedGrant]:
     expanded: dict[tuple[int, str], ExpandedGrant] = {}
-    for link in _effective_permission_links(grant, now):
+    for link in _permission_links(grant, work.now, effective=work.effective):
         if not (
-            link.scope_key in active_scope_keys
+            link.scope_key in scope_keys
             and link.scope_key in _supported_scope_keys(link.permission.supported_scopes)
         ):
             continue
@@ -335,7 +502,7 @@ def _direct_grants(
             resolved = resolve_managed_users(
                 user=grant.user,
                 app=grant.app,
-                directory_cache=directory_cache,
+                directory_cache=work.directory_cache,
             )
             if resolved is None:
                 continue
@@ -366,26 +533,31 @@ def _expanded_grant_sort_key(grant: ExpandedGrant) -> tuple[str, str, str, str]:
 
 
 def _with_catalog_names(
-    app_id: int,
+    catalog: GrantCatalogNames,
     grants: tuple[ExpandedGrant, ...],
 ) -> tuple[ExpandedGrant, ...]:
     if not grants:
         return grants
-    catalog = resolve_catalog_display_names(
-        app_id=app_id,
-        permission_keys={grant.permission for grant in grants},
-        scope_keys={grant.scope for grant in grants},
-    )
-    return tuple(
-        replace(
-            grant,
-            permission_name=catalog.permissions[grant.permission].name,
-            permission_name_en=catalog.permissions[grant.permission].name_en,
-            scope_name=catalog.scopes[grant.scope].name,
-            scope_name_en=catalog.scopes[grant.scope].name_en,
+    named: list[ExpandedGrant] = []
+    for grant in grants:
+        permission = catalog.permissions.get(
+            grant.permission,
+            CatalogDisplayName(name=grant.permission, name_en=""),
         )
-        for grant in grants
-    )
+        scope = catalog.scopes.get(
+            grant.scope,
+            CatalogDisplayName(name=grant.scope, name_en=""),
+        )
+        named.append(
+            replace(
+                grant,
+                permission_name=permission.name,
+                permission_name_en=permission.name_en,
+                scope_name=scope.name,
+                scope_name_en=scope.name_en,
+            ),
+        )
+    return tuple(named)
 
 
 def _empty_snapshot(*, user_id: str, app: App, grant_version: int) -> PermissionSnapshot:
