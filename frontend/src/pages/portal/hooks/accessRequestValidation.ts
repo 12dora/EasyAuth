@@ -15,6 +15,13 @@ export interface AccessRequestSubmitGate {
   values: AccessRequestPayloadValues;
   catalogView: CatalogView;
   selectedBaseGrant: PortalGrantRow | undefined;
+  /**
+   * "我的授权"是否已经完整读到。
+   *
+   * 读不全就判不出这个应用是不是已经有生效授权: 那时提交出去的很可能是一份后端必拒的新增申请
+   * (submission_validation._validate_no_current_grant), 所以闸门直接关上, 由目录错误条说明原因。
+   */
+  currentGrantsAreLoaded: boolean;
   isSubmitting: boolean;
   currentUserId: string;
   /** 与 accessRequestExpiresAtError 共享的同一次时钟读数, 避免两者对"是否已过期"给出互相矛盾的结论。 */
@@ -29,7 +36,8 @@ export function accessRequestCanSubmit(gate: AccessRequestSubmitGate): boolean {
     gate.catalogView,
   );
   return (
-    hasRequestTarget(gate.values)
+    gate.currentGrantsAreLoaded
+    && hasRequestTarget(gate.values)
     && authorizationGroupCountIsWithinLimit(gate.values)
     && lifecycleSelectionIsComplete(gate.values, gate.selectedBaseGrant)
     && revokeTargetReducesBaseGrant(gate.values, gate.selectedBaseGrant)

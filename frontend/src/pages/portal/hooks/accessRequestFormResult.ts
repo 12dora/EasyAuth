@@ -32,6 +32,10 @@ export function buildAccessRequestFormResult(input: AccessRequestFormResultInput
     ...draftValues(input.fields),
     ...catalogSnapshot(input.fields, input.catalogView, input.currentGrants),
     revokeBaseGrant: revokeBaseGrantSnapshot(input.fields.requestType, input.selectedBaseGrant),
+    baseGrantLockedToApp:
+      input.fields.requestType === "change"
+      && input.fields.appKey !== ""
+      && input.currentGrants.some((grant) => grant.app_key === input.fields.appKey),
     ...submissionStatus(input),
     prefillErrorMessageKey: input.prefillErrorMessageKey,
     ...formHandlers(input.fields, input.actions),

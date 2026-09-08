@@ -59,6 +59,7 @@ export function AccessRequestForm({ currentUserId = "" }: { currentUserId?: stri
           requestType={form.requestType}
           appKey={form.appKey}
           baseGrantId={form.baseGrantId}
+          baseGrantLockedToApp={form.baseGrantLockedToApp}
           currentGrants={form.currentGrants}
           approverOptions={form.approverOptions}
           selectedApproverUserIds={form.selectedApproverUserIds}

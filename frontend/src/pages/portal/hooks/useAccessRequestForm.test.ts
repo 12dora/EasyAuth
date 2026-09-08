@@ -900,8 +900,9 @@ describe("useAccessRequestForm 按申请类型约束申请目标", () => {
     expect(view.result.current.selectedPermissionKeys).toEqual([AUDIT_KEY]);
   });
 
-  test("我的授权分页时读全每一页: 后面几页里的应用照样能认出来", async () => {
-    const firstPage = {
+  /** 第一页: 100 条与 crm 无关的授权, 后面还有一页。 */
+  function firstGrantPageOfTwo() {
+    return {
       data: Array.from({ length: 100 }, (_, index) => ({
         ...lifecycleGrantList().data[0],
         grant_id: 100 + index,
@@ -912,6 +913,10 @@ describe("useAccessRequestForm 按申请类型约束申请目标", () => {
       })),
       pagination: { page: 1, page_size: 100, total_items: 101, total_pages: 2 },
     };
+  }
+
+  test("我的授权分页时读全每一页: 后面几页里的应用照样能认出来", async () => {
+    const firstPage = firstGrantPageOfTwo();
     const secondPage = {
       data: lifecycleGrantList().data,
       pagination: { page: 2, page_size: 100, total_items: 101, total_pages: 2 },
@@ -937,6 +942,52 @@ describe("useAccessRequestForm 按申请类型约束申请目标", () => {
     expect(view.result.current.baseGrantId).toBe("7");
     // 读全之后不再有"截断"这回事: 申请照常可提交。
     expect(view.result.current.catalogErrorMessage).toBe("");
+  });
+
+  test("我的授权后面几页读失败: 判不出现状就不许提交, 由目录错误条说明", async () => {
+    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url === "/portal/api/v1/request-catalog") {
+        return jsonResponse(lifecycleCatalog());
+      }
+      if (url === CURRENT_GRANTS_URL) {
+        return jsonResponse(firstGrantPageOfTwo());
+      }
+      if (url === "/portal/api/v1/me/grants?page=2&page_size=100") {
+        return jsonResponse({ error: { code: "INTERNAL_ERROR", message: "授权列表读取失败" } }, 500);
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+    const view = await renderReadyForm();
+
+    await waitFor(() => expect(view.result.current.catalogErrorMessage).toContain("授权列表读取失败"));
+
+    // 草稿本身是完整的, 但现状读不全: crm 可能已经有生效授权, 这时提交必然被后端拒。
+    act(() => view.result.current.changeAppKey("crm"));
+    act(() => view.result.current.changeAuthorizationGroupKeys(["reader"]));
+    act(() => view.result.current.changeReason("申请订单权限"));
+    await waitFor(() => expect(view.result.current.selectedApproverUserIds).toEqual(["boss"]));
+
+    expect(view.result.current.currentGrants).toEqual([]);
+    expect(view.result.current.canSubmit).toBe(false);
+  });
+
+  test("该应用已有授权: 基础授权锁定在这条授权上, 用户的增删不会被重算冲掉", async () => {
+    stubLifecycleFetch();
+    const view = await renderReadyForm();
+    await waitFor(() => expect(view.result.current.currentGrants).toHaveLength(1));
+
+    act(() => view.result.current.changeAppKey("crm"));
+    expect(view.result.current.baseGrantLockedToApp).toBe(true);
+
+    // 用户从带出来的现状里摘掉权限组: 重算不能把它加回来。
+    act(() => view.result.current.changeAuthorizationGroupKeys([]));
+    expect(view.result.current.authorizationGroupKeys).toEqual([]);
+
+    // 界面已经把基础授权选择器置灰; 即使清掉它, 也只按用户的编辑走, 不重放一次预填。
+    act(() => view.result.current.changeBaseGrantId(""));
+    expect(view.result.current.authorizationGroupKeys).toEqual([]);
+    expect(view.result.current.selectedPermissionKeys).toEqual([AUDIT_KEY]);
   });
 
   test("选中没有生效授权的应用: 保持新增申请, 已选的变更类型回落成新增", async () => {

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { Dispatch, SetStateAction } from "react";
 
 import type { PortalGrantRow } from "../portalListPayload";
@@ -70,11 +70,15 @@ export function useCurrentGrantForAppInvariant(
   currentGrantsAreLoaded: boolean,
 ): void {
   const { appKey, baseGrantId, requestType } = fields;
+  // 每次"选中某个应用"只判一次: 判过之后草稿归用户, 重算会把用户的增删原样冲掉。
+  const settledAppKeyRef = useRef("");
   useEffect(() => {
-    if (!currentGrantsAreLoaded || appKey === "" || baseGrantId !== "") {
+    if (!currentGrantsAreLoaded || appKey === "" || settledAppKeyRef.current === appKey) {
       return;
     }
-    if (requestType !== "grant" && requestType !== "change") {
+    settledAppKeyRef.current = appKey;
+    if (baseGrantId !== "" || (requestType !== "grant" && requestType !== "change")) {
+      // 选应用时已经判过(changeAppKey), 或者是撤销/续期这种由基础授权定目标的申请。
       return;
     }
     const grant = currentGrants.find((item) => item.app_key === appKey);

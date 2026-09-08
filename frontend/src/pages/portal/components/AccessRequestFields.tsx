@@ -10,6 +10,8 @@ interface AccessRequestFieldsProps {
   requestType: AccessRequestType;
   appKey: string;
   baseGrantId: string;
+  /** 基础授权由所选应用锁定(该应用已有生效授权): 选择器只读, 换目标要换应用。 */
+  baseGrantLockedToApp: boolean;
   currentGrants: PortalGrantRow[];
   approverOptions: ApproverOption[];
   selectedApproverUserIds: string[];
@@ -30,6 +32,7 @@ export function AccessRequestFields({
   requestType,
   appKey,
   baseGrantId,
+  baseGrantLockedToApp,
   currentGrants,
   approverOptions,
   selectedApproverUserIds,
@@ -63,10 +66,13 @@ export function AccessRequestFields({
           </SelectInput>
         </Field>
         {requestType !== "grant" ? (
-          <Field label={t("portal.request.baseGrant")}>
+          <Field
+            label={t("portal.request.baseGrant")}
+            hint={baseGrantLockedToApp ? t("portal.request.baseGrantLockedToApp") : undefined}
+          >
             <SelectInput
               value={baseGrantId}
-              disabled={disabled}
+              disabled={disabled || baseGrantLockedToApp}
               onChange={(event) => onBaseGrantChange(event.currentTarget.value)}
             >
               <option value="">{t("portal.request.baseGrantPlaceholder")}</option>

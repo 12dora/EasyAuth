@@ -111,6 +111,7 @@ export function useAccessRequestForm(currentUserId = "", options: UseAccessReque
       values: fields,
       catalogView,
       selectedBaseGrant,
+      currentGrantsAreLoaded: currentGrantsQuery.isSuccess,
       isSubmitting: submitMutation.isPending,
       currentUserId,
     }),

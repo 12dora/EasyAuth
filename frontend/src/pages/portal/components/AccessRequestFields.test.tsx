@@ -11,6 +11,7 @@ function renderFields(overrides: Partial<Parameters<typeof AccessRequestFields>[
       requestType="grant"
       appKey="crm"
       baseGrantId=""
+      baseGrantLockedToApp={false}
       currentGrants={[]}
       approverOptions={[{ user_id: "boss", name: "老板" }]}
       selectedApproverUserIds={[]}
@@ -30,6 +31,18 @@ function renderFields(overrides: Partial<Parameters<typeof AccessRequestFields>[
 }
 
 describe("AccessRequestFields", () => {
+  test("该应用已有授权时基础授权只读, 并说明这次会作为变更提交", () => {
+    renderFields({
+      requestType: "change",
+      baseGrantId: "7",
+      baseGrantLockedToApp: true,
+      currentGrants: [grantRow({ grant_id: 7, grant_revision: 3 })],
+    });
+
+    expect(screen.getByLabelText("基础授权")).toBeDisabled();
+    expect(screen.getByText("该应用已有授权，本次将作为变更申请提交。")).toBeVisible();
+  });
+
   test("FF-5: 过期时间输入带 min 约束且过去值展示内联错误", () => {
     renderFields({ expiresAtError: true });
 

@@ -173,6 +173,13 @@ export interface AccessRequestFormResult {
   groupCoveredSelectionKeys: string[];
   /** 撤销申请的基础授权快照: 目标只能在它之内往下减, 越界的添加入口由界面禁用。非撤销申请为 null。 */
   revokeBaseGrant: RevokeBaseGrantSnapshot | null;
+  /**
+   * 基础授权是否被所选应用锁定。
+   *
+   * 变更申请的基础授权由应用唯一决定(一个人在一个应用上只有一条生效授权): 让用户在这里改或清空,
+   * 只会让草稿与应用对不上, 清空之后重选还会把他刚做的增删冲掉。要换目标就换应用。
+   */
+  baseGrantLockedToApp: boolean;
   catalogIsLoading: boolean;
   catalogErrorMessage: string;
   submitErrorMessage: string;
