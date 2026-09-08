@@ -17,12 +17,13 @@ import type { JsonObject } from "../../../../lib/api";
 import type { WebhookConfigItem, WebhookConfigPayload } from "../../../../lib/domain";
 import { deliveryStateLabel, formatDateTime } from "../../../../lib/status";
 
-type WebhookTarget = "approval_callback_url" | "handover_url" | "onboard_url";
+type WebhookTarget = "approval_callback_url" | "handover_url" | "onboard_url" | "events_url";
 
 const TARGET_FIELDS: Array<{ target: WebhookTarget; labelKey: MessageKey }> = [
   { target: "approval_callback_url", labelKey: "webhook.field.approvalCallbackUrl" },
   { target: "handover_url", labelKey: "webhook.field.handoverUrl" },
   { target: "onboard_url", labelKey: "webhook.field.onboardUrl" },
+  { target: "events_url", labelKey: "webhook.field.eventsUrl" },
 ];
 
 interface WebhookTestResult {
@@ -46,6 +47,7 @@ export function WebhookTab({ appKey }: { appKey: string }) {
     approval_callback_url: "",
     handover_url: "",
     onboard_url: "",
+    events_url: "",
   });
   const [rotateConfirmOpen, setRotateConfirmOpen] = useState(false);
   const [oneTimeSecret, setOneTimeSecret] = useState("");
@@ -82,6 +84,7 @@ export function WebhookTab({ appKey }: { appKey: string }) {
       approval_callback_url: config?.approval_callback_url ?? "",
       handover_url: config?.handover_url ?? "",
       onboard_url: config?.onboard_url ?? "",
+      events_url: config?.events_url ?? "",
     });
   }, [canWrite, config]);
 
@@ -97,6 +100,7 @@ export function WebhookTab({ appKey }: { appKey: string }) {
           approval_callback_url: urls.approval_callback_url.trim(),
           handover_url: urls.handover_url.trim(),
           onboard_url: urls.onboard_url.trim(),
+          events_url: urls.events_url.trim(),
           rotate_secret: rotateSecret,
         } satisfies JsonObject,
       });
@@ -323,6 +327,7 @@ function parseWebhookConfigPayload(payload: unknown, errorMessage: string): Webh
     typeof config.approval_callback_url !== "string" ||
     typeof config.handover_url !== "string" ||
     typeof config.onboard_url !== "string" ||
+    typeof config.events_url !== "string" ||
     (config.secret !== undefined && typeof config.secret !== "string") ||
     (config.updated_by !== undefined && typeof config.updated_by !== "string") ||
     (config.updated_at !== undefined && config.updated_at !== null && typeof config.updated_at !== "string")

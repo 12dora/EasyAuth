@@ -35,7 +35,7 @@ export const zhCN = {
 
   "webhook.heading": "Webhook 推送",
 
-  "webhook.description": "EasyAuth 会将审批结果回调、权限交接与入职事件以带签名的 POST 请求推送到以下地址，应用侧需用签名密钥验签后再处理事件。留空的 URL 不接收对应事件。",
+  "webhook.description": "EasyAuth 会将审批结果回调、权限交接、入职事件以及授权/目录变更以带签名的 POST 请求推送到以下地址，应用侧需用签名密钥验签后再处理事件。留空的 URL 不接收对应事件。",
 
   "webhook.loadFailed": "Webhook 配置加载失败",
 
@@ -50,6 +50,7 @@ export const zhCN = {
   "webhook.field.approvalCallbackUrl": "审批回调 URL（approval_callback_url）",
   "webhook.field.handoverUrl": "交接事件 URL（handover_url）",
   "webhook.field.onboardUrl": "入职事件 URL（onboard_url）",
+  "webhook.field.eventsUrl": "权限传播事件 URL（events_url）",
 
   "webhook.secretLabel": "签名密钥",
 
@@ -158,7 +159,7 @@ export const en: Record<keyof typeof zhCN, string> = {
 
   "webhook.heading": "Webhook Delivery",
 
-  "webhook.description": "EasyAuth pushes approval result callbacks, handover and onboarding events to the URLs below as signed POST requests. Verify the signature with the signing secret before processing an event. An empty URL receives no events.",
+  "webhook.description": "EasyAuth pushes approval result callbacks, handover, onboarding, and grant/catalog change events to the URLs below as signed POST requests. Verify the signature with the signing secret before processing an event. An empty URL receives no events.",
 
   "webhook.loadFailed": "Failed to load the webhook configuration",
 
@@ -173,6 +174,7 @@ export const en: Record<keyof typeof zhCN, string> = {
   "webhook.field.approvalCallbackUrl": "Approval callback URL (approval_callback_url)",
   "webhook.field.handoverUrl": "Handover event URL (handover_url)",
   "webhook.field.onboardUrl": "Onboarding event URL (onboard_url)",
+  "webhook.field.eventsUrl": "Permission event URL (events_url)",
 
   "webhook.secretLabel": "Signing secret",
 

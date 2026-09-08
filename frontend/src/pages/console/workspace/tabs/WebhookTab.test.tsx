@@ -180,6 +180,7 @@ function configuredPayload(approvalCallbackUrl = "https://hooks.example.com/appr
       approval_callback_url: approvalCallbackUrl,
       handover_url: "",
       onboard_url: "",
+      events_url: "",
       updated_by: "owner",
       updated_at: "2026-07-10T00:00:00Z",
     },

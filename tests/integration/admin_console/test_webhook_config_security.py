@@ -12,7 +12,7 @@ from easyauth.admin_console import webhook_config_api
 from easyauth.applications.models import App, AppMembership
 from easyauth.config import net_dns
 from easyauth.config.net import ValidatedHttpsUrl
-from easyauth.webhooks.models import AppWebhookConfig
+from easyauth.webhooks.models import AppWebhookConfig, WebhookDelivery
 from tests.integration.admin_console.auth_helpers import authenticate_console_admin
 
 pytestmark = pytest.mark.django_db
@@ -107,6 +107,67 @@ def test_webhook_config_persists_exact_per_app_host_allowlist(
     assert config.allowed_hosts == ["hooks.example.com", "lifecycle.example.com"]
 
 
+def test_webhook_config_persists_events_url_in_host_allowlist(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, app = _owner_client_and_app("webhook-config-events")
+
+    def validate(url: str, *, dns_timeout_seconds: float) -> ValidatedHttpsUrl:
+        assert url.startswith("https://")
+        assert dns_timeout_seconds > 0
+        host = url.split("/")[2]
+        return ValidatedHttpsUrl(host, 443, "/api/v1/easyauth/events", ("8.8.8.8",))
+
+    monkeypatch.setattr(webhook_config_api, "validate_public_https_url", validate)
+    payload = _payload("")
+    payload["events_url"] = "https://events.example.com/api/v1/easyauth/events"
+
+    response = client.put(
+        _url(app),
+        data=json.dumps(payload),
+        content_type="application/json",
+    )
+
+    assert response.status_code == HTTPStatus.OK
+    body = response.json()
+    assert body["webhook_config"]["events_url"] == payload["events_url"]
+    config = AppWebhookConfig.objects.get(app=app)
+    assert config.events_url == payload["events_url"]
+    assert config.allowed_hosts == ["events.example.com"]
+
+
+def test_webhook_test_can_target_events_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, app = _owner_client_and_app("webhook-test-events")
+
+    def validate(url: str, *, dns_timeout_seconds: float) -> ValidatedHttpsUrl:
+        _ = (url, dns_timeout_seconds)
+        return ValidatedHttpsUrl("events.example.com", 443, "/api/v1/easyauth/events", ("8.8.8.8",))
+
+    monkeypatch.setattr(webhook_config_api, "validate_public_https_url", validate)
+    payload = _payload("")
+    payload["events_url"] = "https://events.example.com/api/v1/easyauth/events"
+    payload["rotate_secret"] = True
+    save = client.put(
+        _url(app),
+        data=json.dumps(payload),
+        content_type="application/json",
+    )
+    assert save.status_code == HTTPStatus.OK
+
+    response = client.post(
+        f"{_url(app)}/test",
+        data=json.dumps({"target": "events_url"}),
+        content_type="application/json",
+    )
+
+    assert response.status_code == HTTPStatus.OK
+    delivery = WebhookDelivery.objects.get(delivery_id=response.json()["delivery_id"])
+    assert delivery.event_type == "webhook.test"
+    assert delivery.target_url == payload["events_url"]
+
+
 def _owner_client_and_app(suffix: str) -> tuple[Client, App]:
     username = f"{suffix}-owner"
     _ = User.objects.create_user(username=username, password=LOGIN_PASSWORD)
@@ -127,6 +188,7 @@ def _payload(approval_url: str) -> dict[str, object]:
         "approval_callback_url": approval_url,
         "handover_url": "",
         "onboard_url": "",
+        "events_url": "",
         "rotate_secret": False,
     }
 

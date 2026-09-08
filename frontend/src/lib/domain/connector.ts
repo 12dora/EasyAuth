@@ -9,6 +9,7 @@ export interface WebhookConfigItem {
   approval_callback_url: string;
   handover_url: string;
   onboard_url: string;
+  events_url: string;
   updated_by?: string;
   updated_at?: string | null;
   secret?: string;

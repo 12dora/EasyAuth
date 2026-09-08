@@ -45,6 +45,7 @@ class WebhookConfigPayload(BaseModel):
     approval_callback_url: str = Field(default="", max_length=512)
     handover_url: str = Field(default="", max_length=512)
     onboard_url: str = Field(default="", max_length=512)
+    events_url: str = Field(default="", max_length=512)
     # true 时生成并轮换密钥(明文只在本次响应返回一次)。
     rotate_secret: bool = False
 
@@ -56,7 +57,7 @@ class WebhookTestPayload(BaseModel):
         str_strip_whitespace=True,
     )
 
-    # 事件的目标 URL 字段名: approval_callback_url / handover_url / onboard_url。
+    # 事件的目标 URL 字段名。
     target: str = Field(default="approval_callback_url", max_length=32)
 
 
@@ -90,7 +91,7 @@ def console_app_webhook_test(request: HttpRequest, app_key: str) -> JsonResponse
     url = _target_url(config, payload.target)
     if url is None:
         return _validation_error(
-            "target 必须为 approval_callback_url、handover_url 或 onboard_url。",
+            "target 必须为 approval_callback_url、handover_url、onboard_url 或 events_url。",
         )
     try:
         delivery = enqueue_delivery(
@@ -131,6 +132,7 @@ def _update_config(request: HttpRequest, app: App, actor: ConsoleActor) -> JsonR
             payload.approval_callback_url,
             payload.handover_url,
             payload.onboard_url,
+            payload.events_url,
         ):
             if url:
                 _ = validate_public_https_url(
@@ -148,6 +150,7 @@ def _update_config(request: HttpRequest, app: App, actor: ConsoleActor) -> JsonR
     config.approval_callback_url = payload.approval_callback_url
     config.handover_url = payload.handover_url
     config.onboard_url = payload.onboard_url
+    config.events_url = payload.events_url
     config.updated_by = actor.user_id
     new_secret = ""
     if payload.rotate_secret or not config.secret:
@@ -188,6 +191,7 @@ def _config_payload(config: AppWebhookConfig) -> JsonObject:
         "approval_callback_url": config.approval_callback_url,
         "handover_url": config.handover_url,
         "onboard_url": config.onboard_url,
+        "events_url": config.events_url,
         "updated_by": config.updated_by,
         "updated_at": config.updated_at.isoformat(),
     }
@@ -203,6 +207,8 @@ def _target_url(config: AppWebhookConfig | None, target: str) -> str | None:
             return config.handover_url
         case "onboard_url":
             return config.onboard_url
+        case "events_url":
+            return config.events_url
         case _:
             return None
 
