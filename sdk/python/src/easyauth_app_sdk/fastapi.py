@@ -1,4 +1,4 @@
-"""FastAPI 集成: 一行挂载描述符端点与生命周期交接端点。
+"""FastAPI 集成: 一行挂载描述符端点、生命周期交接端点与权限传播事件端点。
 
 注意: 本模块刻意不使用 ``from __future__ import annotations`` ——
 endpoint 的 ``Request`` 注解必须在运行时保持真实类型, 否则 FastAPI
@@ -8,6 +8,11 @@ endpoint 的 ``Request`` 注解必须在运行时保持真实类型, 否则 Fast
 from typing import TYPE_CHECKING
 
 from easyauth_app_sdk.descriptor import DESCRIPTOR_WELL_KNOWN_PATH
+from easyauth_app_sdk.events import (
+    DEFAULT_EVENTS_PATH,
+    EventCallbacks,
+    events_http_response,
+)
 from easyauth_app_sdk.integration import (
     DescriptorProvider,
     TokenValidator,
@@ -97,6 +102,47 @@ def easyauth_lifecycle_router(
             status_code, headers, body = body_too_large_response(max_body_bytes)
             return _as_response(status_code, headers, body)
         status_code, headers, body = lifecycle_http_response(
+            secret_provider=secret_provider,
+            headers=dict(request.headers),
+            raw_body=raw_body,
+            callbacks=callbacks,
+            signature_failure_status=signature_failure_status,
+        )
+        return _as_response(status_code, headers, body)
+
+    return router
+
+
+def easyauth_events_router(
+    secret_provider: SecretProvider,
+    callbacks: EventCallbacks,
+    *,
+    path: str = DEFAULT_EVENTS_PATH,
+    max_body_bytes: int = DEFAULT_MAX_BODY_BYTES,
+    signature_failure_status: int = 401,
+) -> "APIRouter":
+    """创建接收 EasyAuth 权限传播 webhook 的 FastAPI router。
+
+    验签/事件分发/异常边界均由 SDK 承担。APP 可选实现
+    ``callbacks.on_grant_changed`` (强制刷新该用户权限快照) 与
+    ``callbacks.on_catalog_changed`` (将该应用全部缓存快照标为过期)。
+    ``secret_provider`` 在每次请求时取密钥。默认路径为
+    ``/api/v1/easyauth/events``; 签名失败默认 **401**。
+    """
+    from fastapi import APIRouter, Request, Response
+
+    _validate_signature_failure_status(signature_failure_status)
+
+    router = APIRouter()
+
+    @router.post(path, include_in_schema=False)
+    async def post_easyauth_events(request: Request) -> Response:
+        try:
+            raw_body = await read_bounded_body(request, max_body_bytes=max_body_bytes)
+        except BodyTooLargeError:
+            status_code, headers, body = body_too_large_response(max_body_bytes)
+            return _as_response(status_code, headers, body)
+        status_code, headers, body = events_http_response(
             secret_provider=secret_provider,
             headers=dict(request.headers),
             raw_body=raw_body,

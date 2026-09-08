@@ -169,16 +169,19 @@ def _validate_handover_asset_flags(item: dict[str, Any], label: str) -> None:
 def _validate_webhook(webhook: Any) -> None:
     if not isinstance(webhook, dict):
         raise ManifestValidationError("webhook 必须是 JSON object")
-    unknown = sorted(set(webhook) - {"signing"})
+    unknown = sorted(set(webhook) - {"signing", "events_url"})
     if unknown:
         raise ManifestValidationError(f"webhook 含未知字段: {unknown}")
     signing = webhook.get("signing")
     if signing is None:
-        return
-    if not isinstance(signing, str) or signing not in ALLOWED_WEBHOOK_SIGNING:
+        pass
+    elif not isinstance(signing, str) or signing not in ALLOWED_WEBHOOK_SIGNING:
         raise ManifestValidationError(
             f"webhook.signing 必须是 {sorted(ALLOWED_WEBHOOK_SIGNING)} 之一",
         )
+    events_url = webhook.get("events_url")
+    if events_url is not None and not isinstance(events_url, str):
+        raise ManifestValidationError("webhook.events_url 必须是字符串或 null")
 
 
 def _validate_scopes(scopes: list[Any]) -> set[str]:

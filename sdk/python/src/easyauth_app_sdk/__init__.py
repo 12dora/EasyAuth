@@ -1,14 +1,16 @@
 """EasyAuth 下游应用接入 SDK。
 
-提供五块能力, 与任何下游应用的业务代码解耦:
+提供六块能力, 与任何下游应用的业务代码解耦:
 
 1. 集成描述符: 下游应用在 ``/.well-known/easyauth-app.json`` 暴露应用元数据与权限 manifest,
    EasyAuth 控制台凭 ``下游地址 + app_key`` 即可自动完成注册与目录导入。
 2. 描述符 HTTP 端点: 纯函数内核 + 可选 FastAPI 路由封装。
 3. API 客户端: 以 app 凭据调用 EasyAuth 权限、审批、企业目录与钉钉通知 API。
-4. webhook 验签: 校验 EasyAuth 反向推送(审批结果/交接事件)的签名与时间戳。
+4. webhook 验签: 校验 EasyAuth 反向推送(审批结果/交接/权限传播事件)的签名与时间戳。
 5. 生命周期交接端点: 接收离职/转岗数据交接的 preview/items/execute 同步回调,
    纯函数内核 + 可选 FastAPI 路由封装(``easyauth_lifecycle_router``)。
+6. 权限传播事件端点: 接收 ``grant.changed`` / ``catalog.changed`` 异步推送,
+   纯函数内核 + 可选 FastAPI 路由封装(``easyauth_events_router``)。
 """
 
 from easyauth_app_sdk.client import (
@@ -28,7 +30,16 @@ from easyauth_app_sdk.descriptor import (
     build_descriptor_payload,
     parse_descriptor_payload,
 )
-from easyauth_app_sdk.fastapi import easyauth_lifecycle_router
+from easyauth_app_sdk.events import (
+    CATALOG_CHANGED_EVENT,
+    DEFAULT_EVENTS_PATH,
+    GRANT_CHANGED_EVENT,
+    CatalogChangedPayload,
+    EventCallbacks,
+    GrantChangedPayload,
+    events_http_response,
+)
+from easyauth_app_sdk.fastapi import easyauth_events_router, easyauth_lifecycle_router
 from easyauth_app_sdk.integration import (
     DescriptorProvider,
     TokenValidator,
@@ -55,9 +66,12 @@ from easyauth_app_sdk.webhook import (
 )
 
 __all__ = [
+    "CATALOG_CHANGED_EVENT",
+    "DEFAULT_EVENTS_PATH",
     "DEFAULT_HANDOVER_PATH",
     "DESCRIPTOR_VERSION",
     "DESCRIPTOR_WELL_KNOWN_PATH",
+    "GRANT_CHANGED_EVENT",
     "HANDOVER_EXECUTE_EVENT",
     "HANDOVER_ITEMS_EVENT",
     "HANDOVER_PREVIEW_EVENT",
@@ -68,10 +82,13 @@ __all__ = [
     "SDK_VERSION",
     "WEBHOOK_TEST_EVENT",
     "AppDescriptor",
+    "CatalogChangedPayload",
     "DescriptorError",
     "DescriptorProvider",
     "EasyAuthAppClient",
     "EasyAuthClientError",
+    "EventCallbacks",
+    "GrantChangedPayload",
     "HandoverBusinessError",
     "HandoverCallback",
     "LifecycleCallbacks",
@@ -83,7 +100,9 @@ __all__ = [
     "bearer_token",
     "build_descriptor_payload",
     "descriptor_http_response",
+    "easyauth_events_router",
     "easyauth_lifecycle_router",
+    "events_http_response",
     "lifecycle_http_response",
     "parse_descriptor_payload",
     "validate_manifest",

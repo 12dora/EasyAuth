@@ -1,6 +1,6 @@
 Metadata-Version: 2.4
 Name: easyauth-app-sdk
-Version: 0.4.0
+Version: 0.5.0
 Summary: EasyAuth 下游应用接入 SDK: 描述符、授权、目录、通知与审批客户端
 Requires-Python: >=3.11
 Description-Content-Type: text/markdown
@@ -21,11 +21,13 @@ EasyAuth 下游应用接入 SDK(Python)。与任何下游应用的业务代码�
 4. **企业目录客户端**: 分页搜索员工、查询员工及主管/下属、列出部门，并消费目录返回的
    opaque `user_ref` / `department_ref`。
 5. **钉钉通知客户端**: 异步提交通知并查询消息及逐收件人投递状态。
-6. **webhook 验签**: `verify_webhook` 校验 EasyAuth 反向推送(审批结果/交接事件)的签名与时间戳;
+6. **webhook 验签**: `verify_webhook` 校验 EasyAuth 反向推送(审批结果/交接/权限传播事件)的签名与时间戳;
    空 body 合法(异步状态查询 GET 分支)。
 7. **生命周期交接端点**: `easyauth_lifecycle_router` 接收离职/转岗数据交接的
    `lifecycle.handover.preview` / `lifecycle.handover.items` / `lifecycle.handover.execute`
    三事件同步回调, 验签、`event_type` 一致性校验与事件分发由 SDK 承担。
+8. **权限传播事件端点**: `easyauth_events_router` 接收 `grant.changed` /
+   `catalog.changed` 异步推送, 供下游立即刷新用户权限快照或使目录缓存失效。
 
 ## 下游集成(FastAPI 示例)
 
@@ -83,6 +85,7 @@ EasyAuth 会向 manifest `lifecycle.handover_url` 声明的地址发同步 POST(
 ```python
 from easyauth_app_sdk import (
     HandoverBusinessError,
+    LifecycleCallbacks,
     WebhookEvent,
     easyauth_lifecycle_router,
 )
@@ -104,12 +107,17 @@ def on_execute(event: WebhookEvent) -> dict:
 app.include_router(
     easyauth_lifecycle_router(
         lambda: settings.easyauth_webhook_secret,
-        on_preview,
-        on_execute,
-        on_items,  # 必填; EasyProject 可再传 signature_failure_status=401
+        LifecycleCallbacks(
+            on_handover_preview=on_preview,
+            on_handover_execute=on_execute,
+            on_handover_items=on_items,
+        ),
+        # EasyProject 可再传 signature_failure_status=401
     )
 )
 ```
+
+三个回调都通过 frozen dataclass `LifecycleCallbacks` 提供，三个字段均为必填项。
 
 状态码约定:
 
@@ -132,7 +140,40 @@ sample = resources.files("easyauth_app_sdk.contract_samples.handover_v2").joinpa
 ```
 
 `secret_provider` 在每次请求时取密钥。不使用 FastAPI 时可直接调用纯函数内核
-`lifecycle_http_response`。
+`lifecycle_http_response`，并同样通过 `callbacks=LifecycleCallbacks(...)` 提供三个回调。
+
+## 权限传播事件端点
+
+EasyAuth 在用户当前授权或应用权限目录变化后, 向 manifest `webhook.events_url`
+(控制台字段同名 `events_url`) 异步 POST。下游应挂载:
+
+```python
+from easyauth_app_sdk import EventCallbacks, WebhookEvent, easyauth_events_router
+
+def on_grant_changed(event: WebhookEvent) -> None:
+    # 立即拉取 event.payload["user_id"] 的权限快照, 并核对 snapshot_version 已前进。
+    ...
+
+def on_catalog_changed(event: WebhookEvent) -> None:
+    # 将该应用全部缓存快照标为过期, 下次权限检查/登录时再拉取。
+    ...
+
+app.include_router(
+    easyauth_events_router(
+        lambda: settings.easyauth_webhook_secret,
+        EventCallbacks(
+            on_grant_changed=on_grant_changed,
+            on_catalog_changed=on_catalog_changed,
+        ),
+    )
+)
+```
+
+默认路径 `/api/v1/easyauth/events`。签名失败默认 **401**; `webhook.test` 与未知事件
+的处理与生命周期端点相同(200 `{"ok": true}` / 422 `unsupported_event`)。
+两个回调均可省略, 省略时仍确认收讫。
+
+不使用 FastAPI 时调用纯函数内核 `events_http_response`。
 
 manifest 可选顶层节(结构由 `validate_manifest` 校验, 描述符 build/parse 原样携带):
 
@@ -147,7 +188,10 @@ manifest 可选顶层节(结构由 `validate_manifest` 校验, 描述符 build/p
       {"type": "customer", "label": "名下客户", "detail_supported": true, "releasable": true}
     ]
   },
-  "webhook": {"signing": "hmac-sha256"}
+  "webhook": {
+    "signing": "hmac-sha256",
+    "events_url": "/api/v1/easyauth/events"
+  }
 }
 ```
 

@@ -5,6 +5,18 @@
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-08
+
+### Added
+
+- 权限传播事件端点: `events_http_response` / `easyauth_events_router`(默认路径
+  `/api/v1/easyauth/events`), 接收 `grant.changed` 与 `catalog.changed`。
+  `EventCallbacks.on_grant_changed` / `on_catalog_changed` 均为可选;
+  验签通过后统一响应 `{"ok": true}`。未知事件 422 `unsupported_event`,
+  签名失败默认 **401**。TypedDict: `GrantChangedPayload` / `CatalogChangedPayload`。
+- manifest 顶层 `webhook.events_url`(绝对地址或以 `/` 开头的站内路径),
+  由 `validate_manifest` 放行。
+
 ### Breaking
 
 - `lifecycle_http_response` / `easyauth_lifecycle_router` 原有的

@@ -3,6 +3,7 @@ pyproject.toml
 src/easyauth_app_sdk/__init__.py
 src/easyauth_app_sdk/client.py
 src/easyauth_app_sdk/descriptor.py
+src/easyauth_app_sdk/events.py
 src/easyauth_app_sdk/fastapi.py
 src/easyauth_app_sdk/handover_payloads.py
 src/easyauth_app_sdk/integration.py
@@ -28,6 +29,8 @@ tests/test_client.py
 tests/test_client_directory_notify.py
 tests/test_contract_samples.py
 tests/test_descriptor.py
+tests/test_events.py
+tests/test_events_fastapi.py
 tests/test_fastapi.py
 tests/test_lifecycle.py
 tests/test_lifecycle_fastapi.py

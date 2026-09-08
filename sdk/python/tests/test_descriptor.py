@@ -47,7 +47,7 @@ def test_build_and_parse_descriptor_roundtrip() -> None:
     payload = build_descriptor_payload(manifest=_manifest())
 
     assert payload["descriptor_version"] == DESCRIPTOR_VERSION
-    assert payload["sdk"]["version"] == SDK_VERSION == "0.4.0"
+    assert payload["sdk"]["version"] == SDK_VERSION == "0.5.0"
     assert payload["app"]["app_key"] == "demoapp"
 
     descriptor = parse_descriptor_payload(payload)
@@ -103,6 +103,18 @@ def test_validate_manifest_accepts_lifecycle_and_webhook_sections() -> None:
     assert validated["lifecycle"]["capabilities"] == ["handover.v2"]
     assert validated["lifecycle"]["handover_asset_types"][0]["type"] == "customer"
     assert validated["webhook"]["signing"] == "hmac-sha256"
+
+
+def test_validate_manifest_accepts_webhook_events_url() -> None:
+    manifest = _manifest()
+    manifest["webhook"] = {
+        "signing": "hmac-sha256",
+        "events_url": "/api/v1/easyauth/events",
+    }
+
+    validated = validate_manifest(manifest)
+
+    assert validated["webhook"]["events_url"] == "/api/v1/easyauth/events"
 
 
 def test_validate_manifest_rejects_unknown_lifecycle_fields() -> None:
