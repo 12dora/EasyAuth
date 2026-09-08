@@ -303,9 +303,9 @@ describe("DepartmentGrantsPage", () => {
     expect(await screen.findByText("公司统一放开销售权限")).toBeVisible();
 
     await user.click(screen.getByText("销售部"));
-    // 新策略定义在公司, 因此在销售部是继承行。
-    await waitFor(() => expect(screen.getByText("公司统一放开销售权限")).toBeVisible());
-    expect(screen.getAllByText("继承自 公司")).toHaveLength(2);
+    // 新策略定义在公司, 因此在销售部是继承行。切部门期间上一份数据还留着, 断言要等新载荷。
+    await waitFor(() => expect(screen.getAllByText("继承自 公司")).toHaveLength(2));
+    expect(screen.getByText("公司统一放开销售权限")).toBeVisible();
   });
 
   test("在子部门编辑继承行改的是定义它的那条策略, 公司与其它部门同步更新", async () => {
@@ -405,8 +405,31 @@ describe("DepartmentGrantsPage", () => {
     expect(await screen.findByText("继承自 全公司")).toBeVisible();
 
     await user.click(screen.getByText("全公司"));
-    await waitFor(() => expect(screen.getByText("本部门")).toBeVisible());
-    expect(screen.getByText("直属 5 人 · 含子部门 21 人")).toBeVisible();
+    expect(await screen.findByText("直属 5 人 · 含子部门 21 人")).toBeVisible();
+    expect(screen.getByText("本部门")).toBeVisible();
+  });
+
+  test("切部门时标题立刻更新, 上一部门的行留在表格里直到新数据到达", async () => {
+    const { releasePolicies } = stubFetch({ pausePoliciesFor: "12" });
+    const user = userEvent.setup({ delay: null });
+
+    renderPage();
+    await screen.findByText("客户管理 (CRM)");
+
+    await user.click(screen.getByText("销售部"));
+
+    // 标题来自左树选中的节点, 不等载荷。
+    expect(screen.getByRole("heading", { name: "销售部" })).toBeVisible();
+    // 人数只能来自载荷, 没到就空着, 不编一个数字顶上。
+    expect(screen.queryByText("直属 5 人 · 含子部门 21 人")).not.toBeInTheDocument();
+    expect(screen.queryByText("直属 8 人 · 含子部门 8 人")).not.toBeInTheDocument();
+    // 上一部门的行仍在, 表格自己转圈, 而不是先塌成空白。
+    expect(screen.getByText("全员可查看本人客户")).toBeVisible();
+
+    releasePolicies();
+
+    expect(await screen.findByText("直属 8 人 · 含子部门 8 人")).toBeVisible();
+    expect(screen.getByText("销售部季度支持")).toBeVisible();
   });
 
   test("部门树契约不符时立刻显示错误页, 不会一直停在加载中", async () => {
@@ -516,9 +539,18 @@ function updatePolicyBody(fetchMock: FetchMock, policyId: number): unknown {
   return typeof body === "string" ? JSON.parse(body) : null;
 }
 
-function stubFetch({ tree, rootName = DEFAULT_NAMES["1"] }: { tree?: () => Response; rootName?: string } = {}) {
+function stubFetch({
+  tree,
+  rootName = DEFAULT_NAMES["1"],
+  pausePoliciesFor = "",
+}: { tree?: () => Response; rootName?: string; pausePoliciesFor?: string } = {}) {
   const store = createPolicyStore();
   const names: DepartmentNames = { ...DEFAULT_NAMES, "1": rootName };
+  // 该部门的授权请求挂起, 直到用例放行; 用来观察"切部门但数据还没到"的中间态。
+  let releasePolicies = () => undefined as void;
+  const policiesGate = new Promise<void>((resolve) => {
+    releasePolicies = resolve;
+  });
   const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
     const url = String(input);
     const [path, search = ""] = url.split("?");
@@ -534,6 +566,9 @@ function stubFetch({ tree, rootName = DEFAULT_NAMES["1"] }: { tree?: () => Respo
     const listMatch = /^\/console\/api\/v1\/departments\/([^/]+)\/grant-policies$/.exec(path);
     if (listMatch && (init?.method ?? "GET") === "GET") {
       const deptId = decodeURIComponent(listMatch[1]);
+      if (deptId === pausePoliciesFor) {
+        await policiesGate;
+      }
       const query = new URLSearchParams(search);
       if (query.get("source_slug") !== SOURCE_SLUG || query.get("corp_id") !== CORP_ID) {
         return jsonResponse({ error: { code: "BAD_REQUEST", message: "缺少目录来源参数" } }, 400);
@@ -560,7 +595,7 @@ function stubFetch({ tree, rootName = DEFAULT_NAMES["1"] }: { tree?: () => Respo
     throw new Error(`Unexpected fetch: ${url}`);
   });
   vi.stubGlobal("fetch", fetchMock);
-  return { fetchMock, store };
+  return { fetchMock, store, releasePolicies: () => releasePolicies() };
 }
 
 function renderPage() {

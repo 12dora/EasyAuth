@@ -11,6 +11,7 @@ import { PanelSurface } from "../../components/ui/PanelSurface";
 import { OrgTree } from "../../features/orgTree/OrgTree";
 import { useI18n } from "../../i18n/I18nProvider";
 import { ApiError } from "../../lib/api";
+import { cn } from "../../lib/cn";
 import { departmentDisplayName } from "../../lib/departmentDisplayName";
 import type { DepartmentSummary, OrgTreeNode } from "../../lib/domain/departmentGrants";
 import { DepartmentGrantEditorDialog } from "./DepartmentGrantEditorDialog";
@@ -21,6 +22,9 @@ export function DepartmentGrantsPage() {
   const { t } = useI18n();
   const page = useDepartmentGrants();
   const { deleteMutation, deleteTarget, department, editor, policies, policiesQuery, saveMutation, tree, treeQuery } = page;
+  // 标题与弹窗文案直接取自树上选中的节点, 不等授权载荷; 人数只能等载荷, 不编数字。
+  const selectedDepartment = page.selectedPath[page.selectedPath.length - 1];
+  const selectedDepartmentName = selectedDepartment ? departmentDisplayName(selectedDepartment, t) : "";
 
   // 根部门在钉钉镜像里没有名字, 树、右栏与弹窗都得走同一份兜底文案。
   const departmentLabel = useCallback((node: OrgTreeNode) => departmentDisplayName(node, t), [t]);
@@ -104,50 +108,58 @@ export function DepartmentGrantsPage() {
           </PanelSurface>
 
           <div className="min-w-0 space-y-4">
-            {department ? <DepartmentHeading department={department} /> : null}
-            {policiesQuery.error && policies.length > 0 ? (
-              <StatusBanner
-                live="alert"
-                tone="signal"
-                title={t("departmentGrants.loadFailed")}
-                message={policiesQuery.error.message}
-              />
-            ) : null}
-            {policiesQuery.error && policies.length === 0 ? (
-              <PageState
-                tone="signal"
-                title={t("departmentGrants.loadFailed")}
-                description={policiesQuery.error.message}
-                action={
-                  <Button
-                    icon={<RefreshCcw size={16} />}
-                    loading={policiesQuery.isFetching}
-                    onClick={() => void policiesQuery.refetch()}
-                  >
-                    {t("common.retry")}
-                  </Button>
-                }
-              />
-            ) : !page.selectedDeptId ? (
-              <PageState
-                title={t("departmentGrants.selectDepartment.title")}
-                description={t("departmentGrants.selectDepartment.description")}
-              />
-            ) : (
-              <DepartmentGrantPolicyTable
-                policies={policies}
-                isLoading={policiesQuery.isLoading}
-                onEdit={page.openEditor}
-                onDelete={page.setDeleteTarget}
-              />
-            )}
+            {selectedDepartment ? <DepartmentHeading path={page.selectedPath} department={department} /> : null}
+            {/* 换部门时上一份内容淡出再淡入, 而不是整块塌掉; 表格自己带加载态, 行留在原地。 */}
+            <div
+              className={cn(
+                "transition-opacity duration-[120ms] motion-reduce:transition-none",
+                policiesQuery.isFetching ? "opacity-60" : "opacity-100",
+              )}
+            >
+              {policiesQuery.error && policies.length > 0 ? (
+                <StatusBanner
+                  live="alert"
+                  tone="signal"
+                  title={t("departmentGrants.loadFailed")}
+                  message={policiesQuery.error.message}
+                />
+              ) : null}
+              {policiesQuery.error && policies.length === 0 ? (
+                <PageState
+                  tone="signal"
+                  title={t("departmentGrants.loadFailed")}
+                  description={policiesQuery.error.message}
+                  action={
+                    <Button
+                      icon={<RefreshCcw size={16} />}
+                      loading={policiesQuery.isFetching}
+                      onClick={() => void policiesQuery.refetch()}
+                    >
+                      {t("common.retry")}
+                    </Button>
+                  }
+                />
+              ) : !page.selectedDeptId ? (
+                <PageState
+                  title={t("departmentGrants.selectDepartment.title")}
+                  description={t("departmentGrants.selectDepartment.description")}
+                />
+              ) : (
+                <DepartmentGrantPolicyTable
+                  policies={policies}
+                  loading={policiesQuery.isFetching}
+                  onEdit={page.openEditor}
+                  onDelete={page.setDeleteTarget}
+                />
+              )}
+            </div>
           </div>
         </div>
       )}
 
       {editor ? (
         <DepartmentGrantEditorDialog
-          departmentName={department ? departmentDisplayName(department, t) : ""}
+          departmentName={selectedDepartmentName}
           policy={editor.policy}
           errorMessage={saveMutation.error ? saveMutation.error.message : ""}
           errorDetails={apiErrorDetailMessages(saveMutation.error)}
@@ -179,20 +191,29 @@ export function DepartmentGrantsPage() {
   );
 }
 
-function DepartmentHeading({ department }: { department: DepartmentSummary }) {
+/**
+ * 右栏标题。
+ *
+ * 层级与部门名来自左树选中的节点, 换部门立刻就变; 人数只有当前部门的载荷到位才写,
+ * 空着的那一行仍占住高度, 否则下面的表格会上下跳。
+ */
+function DepartmentHeading({ path, department }: { path: OrgTreeNode[]; department: DepartmentSummary | undefined }) {
   const { t } = useI18n();
+  const node = path[path.length - 1];
 
   return (
     <div className="space-y-1">
       <p className="text-caption text-ink-faint" aria-label={t("departmentGrants.department.pathAriaLabel")}>
-        {department.path.map((item) => departmentDisplayName(item, t)).join(" / ")}
+        {path.map((item) => departmentDisplayName(item, t)).join(" / ")}
       </p>
-      <h2 className="text-lg font-semibold leading-tight text-ink">{departmentDisplayName(department, t)}</h2>
-      <p className="text-body leading-5 text-ink-soft">
-        {t("departmentGrants.department.memberSummary", {
-          direct: department.member_count,
-          subtree: department.subtree_member_count,
-        })}
+      <h2 className="text-lg font-semibold leading-tight text-ink">{departmentDisplayName(node, t)}</h2>
+      <p className="min-h-5 text-body leading-5 text-ink-soft">
+        {department
+          ? t("departmentGrants.department.memberSummary", {
+              direct: department.member_count,
+              subtree: department.subtree_member_count,
+            })
+          : ""}
       </p>
     </div>
   );

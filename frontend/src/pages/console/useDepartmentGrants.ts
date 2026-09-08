@@ -1,5 +1,5 @@
-import { skipToken, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { keepPreviousData, skipToken, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
 
 import { useToast } from "../../components/ui/Toast";
 import type { GrantSubmission } from "../../features/grantForm";
@@ -11,6 +11,7 @@ import {
   parseDepartmentTree,
   type DepartmentGrantPolicy,
   type DepartmentTree,
+  type OrgTreeNode,
 } from "../../lib/domain/departmentGrants";
 
 /**
@@ -31,6 +32,25 @@ export interface DepartmentGrantEditorState {
 function grantPoliciesUrl(tree: DepartmentTree, deptId: string): string {
   const query = new URLSearchParams({ source_slug: tree.source_slug, corp_id: tree.corp_id });
   return `/console/api/v1/departments/${encodeURIComponent(deptId)}/grant-policies?${query.toString()}`;
+}
+
+/** 从根到该部门的层级; 部门不在树里时为空数组。右栏标题据此在载荷到达之前就能显示。 */
+function departmentPathTo(root: OrgTreeNode, deptId: string): OrgTreeNode[] {
+  const walk = (node: OrgTreeNode, trail: OrgTreeNode[]): OrgTreeNode[] | null => {
+    const path = [...trail, node];
+    if (node.dept_id === deptId) {
+      return path;
+    }
+    for (const child of node.children) {
+      const found = walk(child, path);
+      if (found) {
+        return found;
+      }
+    }
+    return null;
+  };
+
+  return walk(root, []) ?? [];
 }
 
 /** 后端 422 的逐条中文校验信息(`details.errors`); 没有就是空数组。 */
@@ -80,8 +100,19 @@ export function useDepartmentGrants() {
               await apiRequest<unknown>(grantPoliciesUrl(tree, selectedDeptId), { signal }),
             )
         : skipToken,
+    // 切部门时保留上一份数据: 右栏不再整块塌掉再弹回来, 加载态改由 isFetching 画在表格上。
+    placeholderData: keepPreviousData,
     retry: false,
   });
+
+  // 留存的数据可能还是上一个部门的; 人数与"本部门已有策略"这类口径必须等载荷对得上才算数。
+  const loadedList = policiesQuery.data;
+  const currentList = loadedList && loadedList.department.dept_id === selectedDeptId ? loadedList : undefined;
+
+  const selectedPath = useMemo(
+    () => (tree ? departmentPathTo(tree.root, selectedDeptId) : []),
+    [tree, selectedDeptId],
+  );
 
   const invalidateDepartments = () => {
     void queryClient.invalidateQueries({ queryKey: DEPARTMENTS_QUERY_PREFIX });
@@ -138,8 +169,9 @@ export function useDepartmentGrants() {
     treeQuery,
     tree,
     policiesQuery,
-    department: policiesQuery.data?.department,
-    policies: policiesQuery.data?.items ?? [],
+    department: currentList?.department,
+    policies: loadedList?.items ?? [],
+    selectedPath,
     selectedDeptId,
     selectDepartment: setSelectedDeptId,
     expandedDeptIds,

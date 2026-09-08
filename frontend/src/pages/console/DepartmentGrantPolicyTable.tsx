@@ -14,14 +14,15 @@ const VISIBLE_CHIP_COUNT = 3;
 
 interface DepartmentGrantPolicyTableProps {
   policies: DepartmentGrantPolicy[];
-  isLoading: boolean;
+  /** 取的是 isFetching: 换部门时上一份行留在原地转圈, 而不是先清空再重画。 */
+  loading: boolean;
   onEdit: (policy: DepartmentGrantPolicy) => void;
   onDelete: (policy: DepartmentGrantPolicy) => void;
 }
 
 export function DepartmentGrantPolicyTable({
   policies,
-  isLoading,
+  loading,
   onEdit,
   onDelete,
 }: DepartmentGrantPolicyTableProps) {
@@ -103,7 +104,7 @@ export function DepartmentGrantPolicyTable({
       ariaLabel={t("departmentGrants.tableAriaLabel")}
       columns={columns}
       dataSource={policies}
-      loading={isLoading}
+      loading={loading}
       minWidth={1130}
       emptyTitle={t("departmentGrants.empty.title")}
       emptyDescription={t("departmentGrants.empty.description")}
