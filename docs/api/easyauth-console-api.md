@@ -263,6 +263,8 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 
 **POST `/operations/emergency-revokes`** 请求体含 `user_id`、`app_key`、`reason`。
 当前应用授权不存在 → 409，`details.reason="active_grant_not_found"`。
+部门来源检查发生在行锁之后、与撤权同一事务：先 `select_for_update` 当前授权，再看成员行。
+组织对账若在锁前写入 `source="department"` 成员，撤权会 409，而不会在检查通过后整单撤销。
 当前授权含任意 `source="department"` 的成员行 → 409，错误信封：
 
 ```json
@@ -414,7 +416,9 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 `direct_grant_applied`（`target_type=grant`）。
 
 错误：用户/应用不存在 → 404；用户非在职 → 409；目录/范围问题 → 422
-`SEMANTIC_VALIDATION_ERROR`，`details.errors` 为中文列表。成功 201，
+`SEMANTIC_VALIDATION_ERROR`，`details.errors` 为中文列表。含 `MANAGED_USERS` 的授权组在展开
+响应行时若组织目录不可用 → **503 `DEPENDENCY_UNAVAILABLE`**，授权写入与
+`direct_grant_applied` 成功审计一并回滚，不留下半成功状态。成功 201，
 `data` 为 `{ "grant": <授权行> }`，形状见下方「授权行」。
 
 ### 当前授权
@@ -481,7 +485,12 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 `grant_expires_at` 为限时成员的最早到期时间，全部永久则为 `null`。
 `authorization_groups` / `direct_grants` 来自该授权版本自身的成员行（含
 `source`：`user` 或 `department`）。`groups` / `grants` 由该行成员展开，
-历史版本同样按该版本展开，不读取后续版本。`user_name` 为 `UserMirror.name`，
+历史版本同样按该版本展开，不读取后续版本。
+**非当前**历史行按展示语义展开：不过滤过期成员，也不按当前目录 `is_active` /
+`deprecated_at` 过滤授权组、权限、范围或组映射；生命周期摘要跟这些展示成员走，
+因此过期限时或已停用目录行不会把历史行变成 `permanent` / `null`。
+**当前授权**与 SDK 有效快照仍按到期与目录启用状态过滤。
+`user_name` 为 `UserMirror.name`，
 镜像无姓名时为空字符串。
 
 ### 组织授权
