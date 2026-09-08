@@ -23,7 +23,16 @@ export function isDecisionCommittedError(error: Error): boolean {
 }
 
 export function isActiveGrantNotFoundConflict(error: Error): boolean {
-  return error instanceof ApiError && error.status === 409 && detailString(error.details, "reason") === "active_grant_not_found";
+  return isRevokeConflict(error, "active_grant_not_found");
+}
+
+/** 权限来自组织授权: 只能在组织授权里调整, 不是一次可重试的失败。 */
+export function isDepartmentSourcedGrantConflict(error: Error): boolean {
+  return isRevokeConflict(error, "department_sourced_grant");
+}
+
+function isRevokeConflict(error: Error, reason: string): boolean {
+  return error instanceof ApiError && error.status === 409 && detailString(error.details, "reason") === reason;
 }
 
 function detailFlag(details: JsonValue | undefined, key: string): boolean | undefined {

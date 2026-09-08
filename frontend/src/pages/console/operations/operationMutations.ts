@@ -7,7 +7,11 @@ import { useI18n } from "../../../i18n/I18nProvider";
 import { ApiError, apiRequest } from "../../../lib/api";
 import type { JsonObject, ListPayload } from "../../../lib/api";
 import type { AccessGrantRow } from "../../../lib/domain/accessGrantRow";
-import { isActiveGrantNotFoundConflict, isDecisionCommittedError } from "./operationErrors";
+import {
+  isActiveGrantNotFoundConflict,
+  isDecisionCommittedError,
+  isDepartmentSourcedGrantConflict,
+} from "./operationErrors";
 import type {
   AccessRequestAction,
   AccessRequestActionType,
@@ -17,7 +21,7 @@ import type {
 
 export interface OperationPendingControls {
   setPendingAction: Dispatch<SetStateAction<AccessRequestAction | null>>;
-  setPendingEmergencyRevoke: Dispatch<SetStateAction<AccessGrantRow | null>>;
+  setPendingRevokeGrant: Dispatch<SetStateAction<AccessGrantRow | null>>;
   setOperationNotice: Dispatch<SetStateAction<OperationNotice | null>>;
 }
 
@@ -117,45 +121,55 @@ export function useAccessRequestMutations(controls: OperationPendingControls) {
   return { decisionMutation, reassignMutation, retryGrantMutation, openAccessRequestAction };
 }
 
-export type EmergencyRevokeControls = ReturnType<typeof useEmergencyRevokeMutation>;
+export type RevokeGrantControls = ReturnType<typeof useRevokeGrantMutation>;
 
-export function useEmergencyRevokeMutation(controls: OperationPendingControls) {
+export function useRevokeGrantMutation(controls: OperationPendingControls) {
   const { t } = useI18n();
   const toast = useToast();
   const queryClient = useQueryClient();
   const invalidateAccessGrants = () =>
     queryClient.invalidateQueries({ queryKey: ["console", "operations", "access-grants"] });
 
-  const emergencyRevokeMutation = useMutation({
+  const revokeGrantMutation = useMutation({
     mutationFn: ({ row, reason }: { row: AccessGrantRow; reason: string }) =>
       apiRequest("/console/api/v1/operations/emergency-revokes", {
         method: "POST",
         body: { user_id: row.user_id, app_key: row.app_key, reason } satisfies JsonObject,
       }),
     onSuccess: () => {
-      controls.setPendingEmergencyRevoke(null);
+      controls.setPendingRevokeGrant(null);
       controls.setOperationNotice(null);
-      toast.success(t("console.operations.emergencyRevokeSuccess"));
+      toast.success(t("console.operations.revokeSuccess"));
       void invalidateAccessGrants();
     },
     onError: (error: Error) => {
       if (isActiveGrantNotFoundConflict(error)) {
-        controls.setPendingEmergencyRevoke(null);
+        controls.setPendingRevokeGrant(null);
         controls.setOperationNotice({
           tone: "amber",
-          title: t("console.operations.emergencyRevokeConflict"),
-          message: t("console.operations.emergencyRevokeConflictDescription"),
+          title: t("console.operations.revokeConflict"),
+          message: t("console.operations.revokeConflictDescription"),
         });
-        toast.warning(t("console.operations.emergencyRevokeConflict"));
+        toast.warning(t("console.operations.revokeConflict"));
         void invalidateAccessGrants();
+        return;
+      }
+      // 权限来自组织授权: 授权本身没有变化, 不必刷新列表, 也不该当成一次失败留在弹窗里。
+      if (isDepartmentSourcedGrantConflict(error)) {
+        controls.setPendingRevokeGrant(null);
+        controls.setOperationNotice(null);
+        toast.warning(
+          t("console.operations.revokeDepartmentConflict"),
+          t("console.operations.revokeDepartmentConflictDescription"),
+        );
       }
     },
   });
 
-  const openEmergencyRevoke = (row: AccessGrantRow) => {
-    emergencyRevokeMutation.reset();
-    controls.setPendingEmergencyRevoke(row);
+  const openRevokeGrant = (row: AccessGrantRow) => {
+    revokeGrantMutation.reset();
+    controls.setPendingRevokeGrant(row);
   };
 
-  return { emergencyRevokeMutation, openEmergencyRevoke };
+  return { revokeGrantMutation, openRevokeGrant };
 }

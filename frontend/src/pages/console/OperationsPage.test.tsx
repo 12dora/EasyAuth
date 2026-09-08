@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, describe, expect, test, vi } from "vitest";
 
 import { OperationsPage } from "./OperationsPage";
+import { ToastProvider } from "../../components/ui/Toast";
 import { ANTD_TEST_TIMEOUT_MS, openFilterDropdown, openHeaderFilter, renderWithAntd } from "../../components/antd/testing";
 
 // antd Table 在 jsdom 里每次筛选/翻页都要重建整棵表格, 默认 5s 不够。
@@ -365,13 +366,13 @@ describe("OperationsPage", () => {
       );
     });
 
-    await user.click(screen.getByRole("button", { name: "紧急撤权" }));
-    const dialog = screen.getByRole("dialog", { name: "紧急撤权" });
+    await user.click(screen.getByRole("button", { name: "撤销权限" }));
+    const dialog = screen.getByRole("dialog", { name: "撤销权限" });
     // 确认框按姓名与应用展示名描述操作对象, 不出现裸 id / app_key。
     expect(within(dialog).getByText(/胡玉琴/)).toBeInTheDocument();
     expect(within(dialog).getByText(/客户管理 \(CRM\)/)).toBeInTheDocument();
     await user.type(within(dialog).getByRole("textbox", { name: "原因" }), "发现账号泄露");
-    await user.click(within(dialog).getByRole("button", { name: "紧急撤权" }));
+    await user.click(within(dialog).getByRole("button", { name: "撤销权限" }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
@@ -559,7 +560,7 @@ describe("OperationsPage", () => {
     expect(screen.queryByRole("button", { name: "清除" })).not.toBeInTheDocument();
   });
 
-  test("紧急撤权目标不存在时显示冲突并刷新授权列表", async () => {
+  test("撤销目标不存在时显示冲突并刷新授权列表", async () => {
     document.body.dataset.currentUserRole = "admin";
     let listCalls = 0;
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
@@ -594,14 +595,60 @@ describe("OperationsPage", () => {
 
     renderOperationsPage("access-grants");
 
-    await user.click(await screen.findByRole("button", { name: "紧急撤权" }));
-    const dialog = screen.getByRole("dialog", { name: "紧急撤权" });
+    await user.click(await screen.findByRole("button", { name: "撤销权限" }));
+    const dialog = screen.getByRole("dialog", { name: "撤销权限" });
     await user.type(within(dialog).getByRole("textbox", { name: "原因" }), "核对风险授权");
-    await user.click(within(dialog).getByRole("button", { name: "紧急撤权" }));
+    await user.click(within(dialog).getByRole("button", { name: "撤销权限" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("当前授权已不存在");
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "紧急撤权" })).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "撤销权限" })).not.toBeInTheDocument());
     await waitFor(() => expect(listCalls).toBeGreaterThan(1));
+  });
+
+  test("权限来自组织授权时提示无法撤销, 不留失败态", async () => {
+    document.body.dataset.currentUserRole = "admin";
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url.startsWith("/console/api/v1/operations/access-grants?")) {
+        return jsonResponse({
+          data: [accessGrantRow()],
+          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+        });
+      }
+      if (url === "/console/api/v1/operations/emergency-revokes" && init?.method === "POST") {
+        return jsonResponse(
+          {
+            error: {
+              code: "CONFLICT",
+              message: "该用户在此应用的权限来自组织授权，请在组织授权中调整。",
+              details: {
+                reason: "department_sourced_grant",
+                user_id: "risk-user",
+                app_key: "crm",
+                department_policy_ids: [12],
+              },
+            },
+          },
+          409,
+        );
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup({ delay: null });
+
+    renderOperationsPage("access-grants");
+
+    await user.click(await screen.findByRole("button", { name: "撤销权限" }));
+    const dialog = screen.getByRole("dialog", { name: "撤销权限" });
+    await user.type(within(dialog).getByRole("textbox", { name: "原因" }), "核对风险授权");
+    await user.click(within(dialog).getByRole("button", { name: "撤销权限" }));
+
+    expect(await screen.findByText("无法撤销")).toBeInTheDocument();
+    expect(screen.getByText("该权限来自组织授权，请在组织授权中调整。")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "撤销权限" })).not.toBeInTheDocument());
+    // 不是一次普通失败: 页面不出撤销失败横幅。
+    expect(screen.queryByText("撤销权限失败")).not.toBeInTheDocument();
   });
 });
 
@@ -687,12 +734,14 @@ function renderOperationsPage(section = "access-requests", search = "") {
 
   return renderWithAntd(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[`/console/operations/${section}${search}`]}>
-        <LocationSearch />
-        <Routes>
-          <Route path="/console/operations/:section" element={<OperationsPage />} />
-        </Routes>
-      </MemoryRouter>
+      <ToastProvider>
+        <MemoryRouter initialEntries={[`/console/operations/${section}${search}`]}>
+          <LocationSearch />
+          <Routes>
+            <Route path="/console/operations/:section" element={<OperationsPage />} />
+          </Routes>
+        </MemoryRouter>
+      </ToastProvider>
     </QueryClientProvider>,
   );
 }

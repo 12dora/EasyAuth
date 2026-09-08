@@ -16,7 +16,7 @@ import { accessGrantColumns, operationColumns, type OperationFilterValues } from
 import { SECTION_FILTER_MAPS, filterValuesFromSearchParams } from "./operationFilterMap";
 import {
   useAccessRequestMutations,
-  useEmergencyRevokeMutation,
+  useRevokeGrantMutation,
   useHealthCheckMutation,
 } from "./operationMutations";
 import { operationQueryString, type OperationSectionConfig } from "./operationQuery";
@@ -64,7 +64,7 @@ export function useOperationsSection(section: string, config: OperationSectionCo
   const isAccessGrants = section === "access-grants";
   const params = useOperationsSearchParams();
   const [pendingAction, setPendingAction] = useState<AccessRequestAction | null>(null);
-  const [pendingEmergencyRevoke, setPendingEmergencyRevoke] = useState<AccessGrantRow | null>(null);
+  const [pendingRevokeGrant, setPendingRevokeGrant] = useState<AccessGrantRow | null>(null);
   const [operationNotice, setOperationNotice] = useState<OperationNotice | null>(null);
   const queryString = isPaginated
     ? operationQueryString(section, params.searchParams, params.pagination)
@@ -93,9 +93,9 @@ export function useOperationsSection(section: string, config: OperationSectionCo
     },
   });
   const healthCheckMutation = useHealthCheckMutation();
-  const controls = { setPendingAction, setPendingEmergencyRevoke, setOperationNotice };
+  const controls = { setPendingAction, setPendingRevokeGrant, setOperationNotice };
   const accessRequestMutations = useAccessRequestMutations(controls);
-  const { emergencyRevokeMutation, openEmergencyRevoke } = useEmergencyRevokeMutation(controls);
+  const { revokeGrantMutation, openRevokeGrant } = useRevokeGrantMutation(controls);
 
   const grantRows = query.data?.kind === "grants" ? query.data.rows : [];
   const genericRows = query.data?.kind === "generic" ? query.data.rows : [];
@@ -145,12 +145,12 @@ export function useOperationsSection(section: string, config: OperationSectionCo
   const grantColumns = useMemo(
     () =>
       accessGrantColumns(t, filterValues, {
-        disabled: emergencyRevokeMutation.isPending,
-        onEmergencyRevoke: openEmergencyRevoke,
+        disabled: revokeGrantMutation.isPending,
+        onRevoke: openRevokeGrant,
       }),
-    // openEmergencyRevoke 每次渲染都是新闭包, 但它只调用 mutation.reset 与 setState, 行为恒定,
+    // openRevokeGrant 每次渲染都是新闭包, 但它只调用 mutation.reset 与 setState, 行为恒定,
     // 因此不进依赖数组 —— 否则这个 useMemo 每次渲染都会失效。
-    [t, filterValues, emergencyRevokeMutation.isPending],
+    [t, filterValues, revokeGrantMutation.isPending],
   );
   const genericColumns = useMemo(
     () =>
@@ -195,10 +195,10 @@ export function useOperationsSection(section: string, config: OperationSectionCo
     operationNotice,
     pendingAction,
     closePendingAction: () => setPendingAction(null),
-    pendingEmergencyRevoke,
-    closeEmergencyRevoke: () => setPendingEmergencyRevoke(null),
+    pendingRevokeGrant,
+    closeRevokeGrant: () => setPendingRevokeGrant(null),
     accessRequestMutations,
-    emergencyRevokeMutation,
+    revokeGrantMutation,
   };
 }
 

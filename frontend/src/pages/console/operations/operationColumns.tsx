@@ -41,7 +41,7 @@ export interface AccessRequestColumnActions {
 
 export interface AccessGrantColumnActions {
   disabled: boolean;
-  onEmergencyRevoke: (row: AccessGrantRow) => void;
+  onRevoke: (row: AccessGrantRow) => void;
 }
 
 /** 列 key -> 当前选中的筛选值(来自 URL), 交给 antd 做受控表头筛选。 */
@@ -245,9 +245,9 @@ function renderAccessGrantActions(t: Translator, actions: AccessGrantColumnActio
       type="button"
       variant="ghost-danger"
       disabled={actions.disabled}
-      onClick={() => actions.onEmergencyRevoke(row)}
+      onClick={() => actions.onRevoke(row)}
     >
-      {t("console.operations.emergencyRevoke")}
+      {t("console.operations.revoke")}
     </RowActionButton>
   );
 }

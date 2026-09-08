@@ -32,7 +32,7 @@ export function OperationDialogs({
   controller: OperationsSectionController;
 }) {
   const { t } = useI18n();
-  const { pendingAction, pendingEmergencyRevoke, accessRequestMutations } = controller;
+  const { pendingAction, pendingRevokeGrant, accessRequestMutations } = controller;
   const { decisionMutation, reassignMutation, retryGrantMutation } = accessRequestMutations;
 
   return (
@@ -72,16 +72,16 @@ export function OperationDialogs({
           onSubmit={(reason) => retryGrantMutation.mutate({ row: pendingAction.row, reason })}
         />
       ) : null}
-      {pendingEmergencyRevoke ? (
+      {pendingRevokeGrant ? (
         <ReasonActionDialog
-          title={t("console.operations.emergencyRevoke")}
-          description={t("console.operations.emergencyRevokeDescription", grantTarget(pendingEmergencyRevoke))}
-          confirmLabel={t("console.operations.emergencyRevoke")}
-          errorTitle={t("console.operations.emergencyRevokeFailed")}
-          errorMessage={dialogErrorMessage(controller.emergencyRevokeMutation.error)}
-          isSubmitting={controller.emergencyRevokeMutation.isPending}
-          onClose={controller.closeEmergencyRevoke}
-          onSubmit={(reason) => controller.emergencyRevokeMutation.mutate({ row: pendingEmergencyRevoke, reason })}
+          title={t("console.operations.revoke")}
+          description={t("console.operations.revokeDescription", grantTarget(pendingRevokeGrant))}
+          confirmLabel={t("console.operations.revoke")}
+          errorTitle={t("console.operations.revokeFailed")}
+          errorMessage={dialogErrorMessage(controller.revokeGrantMutation.error)}
+          isSubmitting={controller.revokeGrantMutation.isPending}
+          onClose={controller.closeRevokeGrant}
+          onSubmit={(reason) => controller.revokeGrantMutation.mutate({ row: pendingRevokeGrant, reason })}
         />
       ) : null}
     </>
