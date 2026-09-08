@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import type { ReactElement } from "react";
@@ -112,6 +112,50 @@ describe("UserSelect", () => {
       .map(([input]) => String(input))
       .filter((url) => url.includes("user_ids="));
     expect(lookupUrls).toEqual(["/console/api/v1/user-options?user_ids=u-1%2Cu-3&purpose=employee"]);
+  });
+
+  test("缓存里的旧姓名不会盖掉后来搜到的新姓名", async () => {
+    let lookupCalls = 0;
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.includes("user_ids=")) {
+        lookupCalls += 1;
+        if (lookupCalls === 1) {
+          return jsonResponse({ data: [{ user_id: "u-1", name: "张三(旧)", department: "", avatar_url: "" }] });
+        }
+        // 第二次解析一直不回来: 这时候界面上只剩缓存里的那份旧姓名和搜索见过的新姓名。
+        return new Promise<Response>(() => {});
+      }
+      if (url.includes("q=%E6%9D%8E")) {
+        return jsonResponse({ data: [{ user_id: "u-2", name: "李四", department: "", avatar_url: "" }] });
+      }
+      return jsonResponse({
+        data: [
+          { user_id: "u-1", name: "张三(新)", department: "", avatar_url: "" },
+          { user_id: "u-2", name: "李四", department: "", avatar_url: "" },
+        ],
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup();
+
+    renderWithProviders(<UserMultiSelect id="approvers" value={["u-1"]} onChange={vi.fn()} />);
+
+    // 先由批量解析给出姓名。
+    expect(await screen.findByText("张三(旧)")).toBeVisible();
+
+    // 再搜一次: 同一个人在搜索结果里是新姓名, 它比缓存里的那份新。
+    const input = screen.getByRole("combobox");
+    await user.type(input, "张");
+    expect(await screen.findByText("张三(新)")).toBeVisible();
+
+    // 换个搜索词, 这个人离开搜索结果 => 又回到批量解析那条路, 而它命中的正是最早那份缓存。
+    await user.clear(input);
+    await user.type(input, "李");
+    await waitFor(() => expect(lookupCalls).toBe(2));
+
+    expect(screen.getByText("张三(新)")).toBeVisible();
+    expect(screen.queryByText("张三(旧)")).toBeNull();
   });
 
   test("审批人多选按 approver 口径批量解析: 本地管理账号不会被过滤成裸 ID", async () => {

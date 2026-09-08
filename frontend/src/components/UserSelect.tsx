@@ -1,5 +1,6 @@
 import { X } from "lucide-react";
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
+import type { Dispatch, SetStateAction } from "react";
 
 import { useI18n } from "../i18n/I18nProvider";
 import { TextInput } from "./Field";
@@ -123,12 +124,13 @@ export function UserMultiSelect({ id, value, onChange, placeholder, searchPurpos
   const listId = `${id ?? generatedId}-listbox`;
   const [inputValue, setInputValue] = useState("");
   /**
-   * 选中那一刻拿到的候选项。
+   * 每个已选用户"最近一次看到"的候选项及其时间。
    *
-   * 只用来盖住"刚选完、批量解析还没回来"这一小段空窗: 真正的姓名以搜索结果和批量解析为准,
-   * 移除某个人时这里也要跟着丢掉, 否则调用方再回填同一个 ID 会显示一份过期的姓名。
+   * 姓名有两个来源(搜索结果与按 ID 批量解析), 两边都可能是缓存: 固定谁优先就会让一份早就取回来的
+   * 旧姓名盖住刚刚取回的新姓名。这里按观察时间取最新的一份, 移除某个人时把他丢掉 ——
+   * 调用方再回填同一个 ID 时重新解析, 而不是拿一份过期姓名顶上。
    */
-  const [pickedOptions, setPickedOptions] = useState<Record<string, UserOption>>({});
+  const [seenOptions, setSeenOptions] = useState<Record<string, SeenUserOption>>({});
   const add = (raw: string) => {
     // 手输内容沿用逗号/换行分隔语义, 与字段提示保持一致。
     const ids = raw
@@ -147,7 +149,7 @@ export function UserMultiSelect({ id, value, onChange, placeholder, searchPurpos
   };
 
   const remove = (userId: string) => {
-    setPickedOptions((current) => {
+    setSeenOptions((current) => {
       if (!(userId in current)) {
         return current;
       }
@@ -164,10 +166,8 @@ export function UserMultiSelect({ id, value, onChange, placeholder, searchPurpos
     navigateWhenClosed: true,
     openOnArrowDown: true,
     closeOnPick: false,
-    onPick: (option) => {
-      setPickedOptions((current) => ({ ...current, [option.user_id]: option }));
-      add(option.user_id);
-    },
+    // 选中的人一定在当前搜索结果里, 下面的记录效果已经把姓名收下了, 这里只管加进已选。
+    onPick: (option) => add(option.user_id),
     onEnterWithoutOption: () => add(inputValue),
     onEmptyBackspace: inputValue === "" && value.length > 0 ? () => remove(value[value.length - 1]) : undefined,
   });
@@ -178,19 +178,17 @@ export function UserMultiSelect({ id, value, onChange, placeholder, searchPurpos
     value.filter((userId) => !(userId in searchOptionsByUserId)),
     searchPurpose,
   );
-  // 越新的来源优先: 搜索结果 > 批量解析 > 选中时的快照。
-  const nameSourceByUserId: Record<string, UserOption> = {
-    ...pickedOptions,
-    ...optionsByUserId(lookupQuery.data ?? []),
-    ...searchOptionsByUserId,
-  };
+  // dataUpdatedAt 是这份数据真正取回来的时刻(缓存命中时仍是当初那一刻), 正好用来比新旧;
+  // 占位数据(上一次搜索的结果)没有取回时刻, 会被跳过。
+  useSeenOptions(setSeenOptions, optionsQuery.data, optionsQuery.dataUpdatedAt);
+  useSeenOptions(setSeenOptions, lookupQuery.data, lookupQuery.dataUpdatedAt);
 
   return (
     <div className="relative" ref={containerRef}>
       <div className="flex flex-wrap items-center gap-1.5">
         {value.map((userId) => {
           // 姓名还没解析出来(查询在飞行中, 或目录镜像本就没有姓名)就显示 ID: 不编一个占位姓名。
-          const label = userOptionName(nameSourceByUserId[userId], userId);
+          const label = userOptionName(seenOptions[userId]?.option, userId);
           return (
             <UserChip
               key={userId}
@@ -241,8 +239,43 @@ export function UserMultiSelect({ id, value, onChange, placeholder, searchPurpos
   );
 }
 
+interface SeenUserOption {
+  option: UserOption;
+  /** 这一份候选项是什么时候从后端取回来的(react-query 的 dataUpdatedAt)。 */
+  seenAt: number;
+}
+
 function optionsByUserId(options: UserOption[]): Record<string, UserOption> {
   return Object.fromEntries(options.map((option) => [option.user_id, option]));
+}
+
+/**
+ * 把一份候选项按"取回时刻"记进已见姓名表, 只有更新的一份才覆盖旧的。
+ *
+ * 两个来源(搜索与按 ID 批量解析)谁先回来都行: 表里留下的始终是最近一次真正取回的姓名。
+ */
+function useSeenOptions(
+  setSeenOptions: Dispatch<SetStateAction<Record<string, SeenUserOption>>>,
+  options: UserOption[] | undefined,
+  seenAt: number,
+): void {
+  useEffect(() => {
+    if (!options || options.length === 0 || seenAt === 0) {
+      return;
+    }
+    setSeenOptions((current) => {
+      let next = current;
+      for (const option of options) {
+        const seen = next[option.user_id];
+        if (seen && seen.seenAt >= seenAt) {
+          continue;
+        }
+        next = next === current ? { ...current } : next;
+        next[option.user_id] = { option, seenAt };
+      }
+      return next;
+    });
+  }, [options, seenAt, setSeenOptions]);
 }
 
 function UserChip({
