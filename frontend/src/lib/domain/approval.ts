@@ -33,10 +33,15 @@ export interface ApprovalTemplateTestResult {
 export interface ApprovalInstanceRow {
   instance_id: string;
   app_key: string;
+  app_name: string;
+  /** 管理员维护的应用别名; 没配别名时是空串。 */
+  app_alias: string;
   template_key: string;
   biz_key: string;
   status: "created" | "submitted" | "approved" | "rejected" | "canceled" | "failed" | string;
   originator_user_id: string;
+  /** 发起人显示名; 目录里没有姓名时为空串, 此时界面回落展示 originator_user_id。 */
+  originator_name: string;
   dingtalk_process_instance_id: string;
   delivery_state: "" | "pending" | "delivered" | "failed" | "skipped" | string;
   delivery_attempts: number;

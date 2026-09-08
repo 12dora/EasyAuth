@@ -23,10 +23,13 @@ const INSTANCES = [
   {
     instance_id: "ai-1",
     app_key: "crm",
+    app_name: "CRM",
+    app_alias: "客户管理",
     template_key: "leave",
     biz_key: "REQ-1",
     status: "approved",
     originator_user_id: "emp-1",
+    originator_name: "胡玉琴",
     dingtalk_process_instance_id: "PROC-1",
     delivery_state: "delivered",
     delivery_attempts: 1,
@@ -38,10 +41,13 @@ const INSTANCES = [
   {
     instance_id: "ai-2",
     app_key: "erp",
+    app_name: "ERP",
+    app_alias: "",
     template_key: "purchase",
     biz_key: "REQ-2",
     status: "failed",
     originator_user_id: "emp-2",
+    originator_name: "李四",
     dingtalk_process_instance_id: "",
     delivery_state: "failed",
     delivery_attempts: 3,
@@ -53,10 +59,13 @@ const INSTANCES = [
   {
     instance_id: "ai-3",
     app_key: "crm",
+    app_name: "CRM",
+    app_alias: "客户管理",
     template_key: "leave",
     biz_key: "REQ-3",
     status: "submitted",
     originator_user_id: "emp-3",
+    originator_name: "",
     dingtalk_process_instance_id: "PROC-3",
     delivery_state: "skipped",
     delivery_attempts: 0,
@@ -95,7 +104,13 @@ describe("ApprovalInstancesPage", () => {
     expect(table.getByText("投递失败")).toBeVisible();
     expect(table.getByText("未配置推送")).toBeVisible();
     expect(table.getByText("审批中")).toBeVisible();
+    // 发起人按姓名展示, id 退到第二行; 目录里没有姓名的行才直接显示 id。
+    expect(table.getByText("李四")).toBeVisible();
     expect(table.getByText("emp-2")).toBeVisible();
+    expect(table.getByText("emp-3")).toBeVisible();
+    // 应用按展示名呈现(别名 + 技术名), 没有别名时只给技术名。
+    expect(table.getAllByText("客户管理 (CRM)")).toHaveLength(2);
+    expect(table.getByText("ERP")).toBeVisible();
     // 仅投递失败的行出现重投按钮。
     expect(screen.getAllByRole("button", { name: "重新投递" })).toHaveLength(1);
     const failedRow = screen.getByText("REQ-2").closest("tr");

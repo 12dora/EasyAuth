@@ -9,16 +9,20 @@ import {
   type ColumnsType,
   type ServerSortState,
 } from "../../components/antd/AppTable";
+import { textFilter } from "../../components/antd/AppTable";
 import {
+  MONO_TEXT_CLASS,
   RowActionButton,
   dateTimeColumn,
   serverColumn,
   serverSortColumn,
   statusColumn,
   textColumn,
+  userColumn,
   type StatusColumnOption,
 } from "../../components/antd/columns";
 import { useI18n } from "../../i18n/I18nProvider";
+import { formatAppDisplayName } from "../../lib/appDisplayName";
 import type { ApprovalInstanceRow } from "../../lib/domain";
 import { APPROVAL_STATUS_LABEL_KEYS } from "../../lib/status";
 import type { BadgeTone, Translator } from "../../lib/status";
@@ -55,7 +59,7 @@ export function ApprovalInstancesTable({
       emptyTitle={t("console.operations.empty")}
       emptyDescription={t("console.operations.emptyDescription")}
       loading={isLoading}
-      minWidth={1240}
+      minWidth={1320}
       rowKey="instance_id"
     />
   );
@@ -72,15 +76,21 @@ function instanceColumns(
   actions: RedeliverActions,
 ): ColumnsType<ApprovalInstanceRow> {
   return [
+    // 应用按展示名(别名 + 技术名)呈现, app_key 退到第二行: 筛选与排序仍按 app_key 走后端。
     serverSortColumn(
       serverColumn(
-        textColumn<ApprovalInstanceRow>({
+        {
           key: "app_key",
           title: t("approvalInstances.column.app"),
-          mono: true,
-          filter: true,
-          width: 150,
-        }),
+          width: 190,
+          render: (_value: unknown, row: ApprovalInstanceRow) => (
+            <div className="flex min-w-0 flex-col gap-1">
+              <strong className="truncate">{formatAppDisplayName({ name: row.app_name, alias: row.app_alias })}</strong>
+              <code className={`${MONO_TEXT_CLASS} truncate`}>{row.app_key}</code>
+            </div>
+          ),
+          ...textFilter<ApprovalInstanceRow>("app_key", { getValue: (row) => row.app_key }),
+        },
         filters.app_key,
       ),
       sort,
@@ -95,11 +105,12 @@ function instanceColumns(
       sort,
     ),
     textColumn<ApprovalInstanceRow>({ key: "biz_key", title: t("approvalInstances.column.bizKey"), mono: true }),
-    textColumn<ApprovalInstanceRow>({
+    userColumn<ApprovalInstanceRow>({
       key: "originator_user_id",
       title: t("approvalInstances.column.originator"),
-      mono: true,
-      width: 160,
+      getName: (row) => row.originator_name,
+      getUserId: (row) => row.originator_user_id,
+      width: 190,
     }),
     // 失败原因没有独立的列, 沿用旧表格挂在状态徽章上的 title 提示。
     withTitle(

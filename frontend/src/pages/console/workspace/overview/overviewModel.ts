@@ -16,6 +16,8 @@ export interface MembershipCreatePayload {
 export interface MembershipItem {
   id: number;
   user_id: string;
+  /** 成员显示名; 目录里没有姓名时为空串, 此时界面回落展示 user_id。 */
+  user_name: string;
   role: MembershipRole | string;
   is_active?: boolean;
 }

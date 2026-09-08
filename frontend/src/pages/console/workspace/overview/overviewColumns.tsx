@@ -1,4 +1,4 @@
-import { RowActionButton, actionsColumn, textColumn } from "../../../../components/antd/columns";
+import { RowActionButton, actionsColumn, textColumn, userColumn } from "../../../../components/antd/columns";
 import { enumFilter, type ColumnsType } from "../../../../components/antd/AppTable";
 import type { ConfigurationIssue } from "../../../../lib/domain";
 import type { Translator } from "../../../../lib/status";
@@ -15,7 +15,13 @@ export function membershipTableColumns({
   onDisable: (membershipId: number) => void;
 }): ColumnsType<MembershipItem> {
   return [
-    textColumn<MembershipItem>({ key: "user_id", title: t("common.user"), mono: true, filter: true }),
+    userColumn<MembershipItem>({
+      key: "user_id",
+      title: t("common.user"),
+      getName: (membership) => membership.user_name,
+      getUserId: (membership) => membership.user_id,
+      filter: true,
+    }),
     {
       key: "role",
       dataIndex: "role",
