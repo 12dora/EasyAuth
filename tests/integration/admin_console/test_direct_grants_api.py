@@ -10,9 +10,17 @@ from django.test import Client
 from django.utils import timezone
 
 from easyauth.accounts.models import USER_STATUS_DISABLED, UserMirror
-from easyauth.applications.models import App, AppScope, AuthorizationGroup, Permission
+from easyauth.applications.models import (
+    App,
+    AppScope,
+    AuthorizationGroup,
+    AuthorizationGroupGrant,
+    ManagedScopePolicy,
+    Permission,
+)
 from easyauth.audit.models import AuditLog
 from easyauth.grants.direct_grant import DIRECT_GRANT_APPLIED_ACTION
+from easyauth.grants.managed_users import MANAGED_USERS_DIRECTORY_UNAVAILABLE_MESSAGE
 from easyauth.grants.models import (
     MEMBERSHIP_SOURCE_DEPARTMENT,
     MEMBERSHIP_SOURCE_USER,
@@ -20,6 +28,7 @@ from easyauth.grants.models import (
     AccessGrantGroup,
     AccessGrantPermission,
 )
+from easyauth.integrations.authentik.directory_client import AuthentikDirectoryUnavailableError
 from tests.integration.admin_console.auth_helpers import (
     authenticate_console_admin,
     authenticate_console_user,
@@ -27,6 +36,7 @@ from tests.integration.admin_console.auth_helpers import (
 
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
+    from easyauth.integrations.authentik.directory_payloads import DingTalkManagedUsers
 
 pytestmark = pytest.mark.django_db
 
@@ -308,6 +318,76 @@ def test_direct_grants_persists_groups_not_expanded_permissions() -> None:
         permission=permission,
         scope_key="GLOBAL",
     ).exists()
+
+
+class _UnavailableManagedUsersClient:
+    def get_managed_users(self, corp_id: str, manager_user_id: str) -> DingTalkManagedUsers:
+        _ = corp_id, manager_user_id
+        message = "目录不可用"
+        raise AuthentikDirectoryUnavailableError(message)
+
+
+def test_direct_grants_rolls_back_when_directory_unavailable_for_managed_users(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _logged_in_superuser("direct-grant-directory-admin")
+    user = UserMirror.objects.create(
+        authentik_user_id="direct-grant-directory-user",
+        dingtalk_source_slug="dingtalk",
+        dingtalk_corp_id="corp-1",
+        dingtalk_userid="manager-dt",
+    )
+    app = App.objects.create(app_key="direct-grant-directory-app", name="CRM")
+    _ = AppScope.objects.create(app=app, key="MANAGED_USERS", name="管理范围")
+    permission = Permission.objects.create(
+        app=app,
+        key="customer.profile.view",
+        name="查看客户",
+        supported_scopes=["MANAGED_USERS"],
+    )
+    group = AuthorizationGroup.objects.create(
+        app=app,
+        key="team-manager",
+        kind="role",
+        name="主管",
+        requestable=False,
+    )
+    _ = AuthorizationGroupGrant.objects.create(
+        authorization_group=group,
+        permission=permission,
+        scope_key="MANAGED_USERS",
+    )
+    _ = ManagedScopePolicy.objects.create(
+        app=app,
+        target_type="app_default",
+        scope="MANAGED_USERS",
+        resolver="dingtalk_manager_chain",
+    )
+    monkeypatch.setattr(
+        "easyauth.grants.managed_users.AuthentikDirectoryClient.from_settings",
+        lambda: _UnavailableManagedUsersClient(),
+    )
+
+    response = client.post(
+        DIRECT_GRANTS_API_URL,
+        data=dumps(
+            _payload(
+                user_id=user.authentik_user_id,
+                app_key=app.app_key,
+                groups=[group.key],
+            ),
+        ),
+        content_type="application/json",
+    )
+
+    assert response.status_code == HTTPStatus.SERVICE_UNAVAILABLE
+    assert response.json()["error"] == {
+        "code": "DEPENDENCY_UNAVAILABLE",
+        "message": MANAGED_USERS_DIRECTORY_UNAVAILABLE_MESSAGE,
+        "details": {},
+    }
+    assert AccessGrant.objects.filter(user=user, app=app).count() == 0
+    assert AuditLog.objects.filter(event_type=DIRECT_GRANT_APPLIED_ACTION).count() == 0
 
 
 def _catalog(prefix: str) -> tuple[App, AuthorizationGroup, Permission]:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from http import HTTPStatus
 from typing import ClassVar
 
+from django.db import transaction
 from django.http import HttpRequest, JsonResponse
 from pydantic import ConfigDict, Field, ValidationError
 
@@ -26,6 +27,7 @@ from easyauth.admin_console.grant_write_common import (
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import App
 from easyauth.grants.direct_grant import apply_admin_direct_grant
+from easyauth.grants.managed_users import ManagedUsersResolutionUnavailableError
 from easyauth.grants.models import GRANT_STATUS_ACTIVE, AccessGrant
 from easyauth.grants.services import GrantMutationExpiredError
 
@@ -57,7 +59,9 @@ def _create_direct_grant(request: HttpRequest, *, actor_id: str) -> JsonResponse
         payload = DirectGrantRequestPayload.model_validate_json(request.body)
         user = _active_user_for_id(payload.user_id)
         targets = resolve_admin_grant_targets(payload)
-        grant = apply_admin_direct_grant(user=user, targets=targets, actor_id=actor_id)
+        with transaction.atomic():
+            grant = apply_admin_direct_grant(user=user, targets=targets, actor_id=actor_id)
+            row = serialize_access_grant_row(_grant_for_row(grant))
     except ValidationError as exc:
         return error_response(
             ErrorCode.VALIDATION_ERROR,
@@ -73,8 +77,14 @@ def _create_direct_grant(request: HttpRequest, *, actor_id: str) -> JsonResponse
         return _semantic_error_response(
             AdminGrantSemanticError(GRANT_EXPIRED_MESSAGE, (GRANT_EXPIRED_MESSAGE,)),
         )
+    except ManagedUsersResolutionUnavailableError as exc:
+        return error_response(
+            ErrorCode.DEPENDENCY_UNAVAILABLE,
+            str(exc),
+            status=HTTPStatus.SERVICE_UNAVAILABLE,
+        )
     return json_response(
-        {"data": {"grant": serialize_access_grant_row(_grant_for_row(grant))}},
+        {"data": {"grant": row}},
         status=HTTPStatus.CREATED,
     )
 
@@ -146,6 +156,14 @@ def console_user_app_current_grant(
         .filter(user=user, app=app, is_current=True, status=GRANT_STATUS_ACTIVE)
         .first()
     )
+    try:
+        serialized = None if grant is None else serialize_access_grant_row(grant)
+    except ManagedUsersResolutionUnavailableError as exc:
+        return error_response(
+            ErrorCode.DEPENDENCY_UNAVAILABLE,
+            str(exc),
+            status=HTTPStatus.SERVICE_UNAVAILABLE,
+        )
     return json_response(
-        {"grant": None if grant is None else serialize_access_grant_row(grant)},
+        {"grant": serialized},
     )
