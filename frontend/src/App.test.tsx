@@ -1,13 +1,71 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
-import { afterEach, describe, expect, test, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter, useNavigate } from "react-router-dom";
+import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { App } from "./App";
 import { ToastProvider } from "./components/ui/Toast";
 import { I18nProvider } from "./i18n/I18nProvider";
 
 vi.mock("./pages/console/ConsoleAppList", () => new Promise(() => undefined));
+
+/** 路由结构用例的观察点: 页面被挂载了几次、设置页要不要抛错。 */
+const routeProbes = vi.hoisted(() => ({ workspaceMounts: 0, operationsMounts: 0, settingsThrows: false }));
+
+vi.mock("./pages/console/ConsoleAppWorkspace", async () => {
+  const React = await import("react");
+  const { useParams } = await import("react-router-dom");
+  return {
+    ConsoleAppWorkspace: function ConsoleAppWorkspaceStub() {
+      const { appKey = "" } = useParams();
+      const [count, setCount] = React.useState(0);
+      React.useEffect(() => {
+        routeProbes.workspaceMounts += 1;
+      }, []);
+      return React.createElement(
+        "div",
+        null,
+        React.createElement("span", { "data-testid": "workspace-app" }, appKey),
+        React.createElement("span", { "data-testid": "workspace-count" }, String(count)),
+        React.createElement("button", { type: "button", onClick: () => setCount((current) => current + 1) }, "工作台加一"),
+      );
+    },
+  };
+});
+
+vi.mock("./pages/console/OperationsPage", async () => {
+  const React = await import("react");
+  const { useParams } = await import("react-router-dom");
+  return {
+    OperationsPage: function OperationsPageStub() {
+      const { section = "" } = useParams();
+      const [count, setCount] = React.useState(0);
+      React.useEffect(() => {
+        routeProbes.operationsMounts += 1;
+      }, []);
+      return React.createElement(
+        "div",
+        null,
+        React.createElement("span", { "data-testid": "operations-section" }, section),
+        React.createElement("span", { "data-testid": "operations-count" }, String(count)),
+        React.createElement("button", { type: "button", onClick: () => setCount((current) => current + 1) }, "运维加一"),
+      );
+    },
+  };
+});
+
+vi.mock("./pages/console/ConsoleSettingsPage", async () => {
+  const React = await import("react");
+  return {
+    ConsoleSettingsPage: function ConsoleSettingsPageStub() {
+      if (routeProbes.settingsThrows) {
+        throw new Error("路由 chunk 加载失败");
+      }
+      return React.createElement("span", { "data-testid": "settings-page" }, "设置页");
+    },
+  };
+});
 
 describe("App 未知路由策略", () => {
   afterEach(() => {
@@ -45,6 +103,87 @@ describe("App 未知路由策略", () => {
   });
 });
 
+describe("App 路由不再靠重挂载整棵子树复位", () => {
+  beforeEach(() => {
+    routeProbes.workspaceMounts = 0;
+    routeProbes.operationsMounts = 0;
+    routeProbes.settingsThrows = false;
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  test("同一个工作台换应用只换参数, 页面保持挂载", async () => {
+    stubResizeObserver();
+    const user = userEvent.setup();
+    renderApp("/console/apps/alpha", "console");
+
+    expect(await screen.findByTestId("workspace-app")).toHaveTextContent("alpha");
+    await user.click(screen.getByRole("button", { name: "工作台加一" }));
+    await user.click(screen.getByRole("button", { name: "工作台加一" }));
+    expect(screen.getByTestId("workspace-count")).toHaveTextContent("2");
+    expect(routeProbes.workspaceMounts).toBe(1);
+
+    await user.click(screen.getByRole("button", { name: "去应用 beta" }));
+
+    expect(screen.getByTestId("workspace-app")).toHaveTextContent("beta");
+    // 工作台自己按 appKey 复位需要复位的东西, 不需要路由层把整页拆了重建。
+    expect(routeProbes.workspaceMounts).toBe(1);
+    expect(screen.getByTestId("workspace-count")).toHaveTextContent("2");
+  });
+
+  test("运维分区是页面主体资源, 换分区仍然重挂载这一个页面", async () => {
+    stubResizeObserver();
+    const user = userEvent.setup();
+    renderApp("/console/operations/access-requests", "console");
+
+    expect(await screen.findByTestId("operations-section")).toHaveTextContent("access-requests");
+    await user.click(screen.getByRole("button", { name: "运维加一" }));
+    expect(screen.getByTestId("operations-count")).toHaveTextContent("1");
+    expect(routeProbes.operationsMounts).toBe(1);
+
+    await user.click(screen.getByRole("button", { name: "去运维审计" }));
+
+    // 上一个分区的筛选/分页/待办对话框都绑在那个分区上, 换分区必须归零。
+    expect(screen.getByTestId("operations-section")).toHaveTextContent("audit");
+    expect(screen.getByTestId("operations-count")).toHaveTextContent("0");
+    expect(routeProbes.operationsMounts).toBe(2);
+  });
+
+  test("页面渲染出错后导航到别的路由即恢复", async () => {
+    stubResizeObserver();
+    routeProbes.settingsThrows = true;
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const user = userEvent.setup();
+    renderApp("/console/settings", "console");
+
+    expect(await screen.findByRole("heading", { name: "页面加载失败" })).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "去应用 beta" }));
+
+    // 错误边界靠 resetKey 就地复位; 不再需要用 React key 把整棵子树卸载重挂。
+    expect(await screen.findByTestId("workspace-app")).toHaveTextContent("beta");
+    expect(screen.queryByRole("heading", { name: "页面加载失败" })).not.toBeInTheDocument();
+  });
+});
+
+/** 用例里的程序化导航入口; 真实壳层的侧边栏没有到具体应用/分区的链接。 */
+function RouteNavProbe() {
+  const navigate = useNavigate();
+
+  return (
+    <div>
+      <button type="button" onClick={() => navigate("/console/apps/beta")}>
+        去应用 beta
+      </button>
+      <button type="button" onClick={() => navigate("/console/operations/audit")}>
+        去运维审计
+      </button>
+    </div>
+  );
+}
+
 function renderApp(path: string, shell: "console" | "portal") {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
@@ -57,6 +196,7 @@ function renderApp(path: string, shell: "console" | "portal") {
               currentUser={{ id: "admin", displayName: "管理员", isSuperuser: true, role: "admin", authKind: "oidc" }}
               currentUserId="admin"
             />
+            <RouteNavProbe />
           </MemoryRouter>
         </ToastProvider>
       </I18nProvider>

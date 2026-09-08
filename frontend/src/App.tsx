@@ -1,6 +1,6 @@
 import { Settings } from "lucide-react";
-import { Component, lazy, Suspense, useEffect, type ErrorInfo, type ReactNode } from "react";
-import { Navigate, Outlet, Route, Routes, useLocation } from "react-router-dom";
+import { Component, Fragment, lazy, Suspense, useEffect, type ErrorInfo, type ReactNode } from "react";
+import { Navigate, Outlet, Route, Routes, useLocation, useParams } from "react-router-dom";
 
 import { AppShell } from "./components/AppShell";
 import { ButtonLink } from "./components/ButtonLink";
@@ -115,13 +115,18 @@ export function App({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUse
           <Route path="/auth/logged-out/" element={<LoggedOutPage />} />
         </Route>
         <Route element={<AppShell brandLogoUrl={brandLogoUrl} currentUser={currentUser} currentUserId={currentUserId} mode="portal" />}>
-          <Route path="/portal" element={<LazyRoute routeName="portal"><PortalPage view="grants" /></LazyRoute>} />
-          <Route path="/portal/request" element={<LazyRoute routeName="portal"><PortalPage view="request" /></LazyRoute>} />
-          <Route path="/portal/requests" element={<LazyRoute routeName="portal"><PortalPage view="requests" /></LazyRoute>} />
-          <Route path="/portal/expiring" element={<LazyRoute routeName="portal"><PortalPage view="expiring" /></LazyRoute>} />
-          <Route path="/portal/approvals" element={<LazyRoute routeName="portal"><PortalPage view="approvals" /></LazyRoute>} />
+          {/*
+            * 五个门户视图是同一个 PortalPage 组件换 view: 按 view 打 key, 切视图仍然重挂载页面本体。
+            * PortalPage 的"离职前置"对话框开关只在 grants 视图上打得开, 却是整页级状态,
+            * 不重挂载就会被带到下一个视图上; 各视图的内容区本来也各自挂载, 这个 key 不多花什么。
+            */}
+          <Route path="/portal" element={<LazyRoute routeName="portal"><PortalPage key="grants" view="grants" /></LazyRoute>} />
+          <Route path="/portal/request" element={<LazyRoute routeName="portal"><PortalPage key="request" view="request" /></LazyRoute>} />
+          <Route path="/portal/requests" element={<LazyRoute routeName="portal"><PortalPage key="requests" view="requests" /></LazyRoute>} />
+          <Route path="/portal/expiring" element={<LazyRoute routeName="portal"><PortalPage key="expiring" view="expiring" /></LazyRoute>} />
+          <Route path="/portal/approvals" element={<LazyRoute routeName="portal"><PortalPage key="approvals" view="approvals" /></LazyRoute>} />
           <Route path="/portal/handovers" element={<LazyRoute routeName="portal"><PortalHandoverList /></LazyRoute>} />
-          <Route path="/portal/handovers/:taskId" element={<LazyRoute routeName="portal"><PortalHandoverDetail /></LazyRoute>} />
+          <Route path="/portal/handovers/:taskId" element={<LazyRoute routeName="portal"><ParamScoped param="taskId"><PortalHandoverDetail /></ParamScoped></LazyRoute>} />
           <Route path="*" element={<NotFoundRoute mode="portal" />} />
         </Route>
       </Routes>
@@ -138,18 +143,23 @@ export function App({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUse
         <Route path="/console" element={<LazyRoute routeName="console"><ConsoleAppList /></LazyRoute>} />
         {/* 创建应用仅超管; 非超管深链回应用列表, API 仍为最终权威。 */}
         <Route path="/console/apps/new" element={isSuperuser ? <LazyRoute routeName="console"><AppOnboardingWizard /></LazyRoute> : <Navigate to="/console" replace />} />
+        {/*
+          * 工作台不按 :appKey 打 key: ConsoleAppWorkspace 自己就是按 appKey 变化写的
+          * (useEffect([appKey]) 复位编辑态, 面板 key={`${appKey}:${activeTab}`}),
+          * 换应用时不需要把整页拆了重建。
+          */}
         <Route path="/console/apps/:appKey" element={<LazyRoute routeName="workspace"><ConsoleAppWorkspace /></LazyRoute>} />
         <Route path="/console/grants/direct" element={isSuperuser ? <LazyRoute routeName="console"><DirectGrantPage /></LazyRoute> : <Navigate to="/console" replace />} />
         <Route path="/console/grants/departments" element={isSuperuser ? <LazyRoute routeName="console"><DepartmentGrantsPage /></LazyRoute> : <Navigate to="/console" replace />} />
         <Route path="/console/teams" element={isSuperuser ? <LazyRoute routeName="console"><ConsoleTeamList /></LazyRoute> : <Navigate to="/console" replace />} />
-        <Route path="/console/teams/:teamId" element={isSuperuser ? <LazyRoute routeName="console"><ConsoleTeamDetail /></LazyRoute> : <Navigate to="/console" replace />} />
+        <Route path="/console/teams/:teamId" element={isSuperuser ? <LazyRoute routeName="console"><ParamScoped param="teamId"><ConsoleTeamDetail /></ParamScoped></LazyRoute> : <Navigate to="/console" replace />} />
         <Route path="/console/people" element={isSuperuser ? <LazyRoute routeName="lifecycle"><ConsolePeopleList /></LazyRoute> : <Navigate to="/console" replace />} />
         <Route path="/console/lifecycle/handover-tasks" element={isSuperuser ? <LazyRoute routeName="lifecycle"><HandoverTaskList /></LazyRoute> : <Navigate to="/console" replace />} />
-        <Route path="/console/lifecycle/handover-tasks/:taskId" element={isSuperuser ? <LazyRoute routeName="lifecycle"><HandoverTaskDetail /></LazyRoute> : <Navigate to="/console" replace />} />
+        <Route path="/console/lifecycle/handover-tasks/:taskId" element={isSuperuser ? <LazyRoute routeName="lifecycle"><ParamScoped param="taskId"><HandoverTaskDetail /></ParamScoped></LazyRoute> : <Navigate to="/console" replace />} />
         <Route path="/console/lifecycle/onboarding" element={isSuperuser ? <LazyRoute routeName="lifecycle"><OnboardingPage /></LazyRoute> : <Navigate to="/console" replace />} />
         <Route path="/console/approval-templates" element={isSuperuser ? <LazyRoute routeName="console"><ApprovalTemplatesPage /></LazyRoute> : <Navigate to="/console" replace />} />
         <Route path="/console/operations/approval-instances" element={isSuperuser ? <LazyRoute routeName="operations"><ApprovalInstancesPage /></LazyRoute> : <Navigate to="/console" replace />} />
-        <Route path="/console/operations/:section" element={isSuperuser ? <LazyRoute routeName="operations"><OperationsPage /></LazyRoute> : <Navigate to="/console" replace />} />
+        <Route path="/console/operations/:section" element={isSuperuser ? <LazyRoute routeName="operations"><ParamScoped param="section"><OperationsPage /></ParamScoped></LazyRoute> : <Navigate to="/console" replace />} />
         <Route path="/console/operations" element={<Navigate to="/console/operations/access-requests" replace />} />
         <Route path="/console/settings" element={<LazyRoute routeName="console"><ConsoleSettingsPage /></LazyRoute>} />
         <Route path="*" element={<NotFoundRoute mode="console" />} />
@@ -158,14 +168,36 @@ export function App({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUse
   );
 }
 
+/*
+ * 路由错误边界按 resetKey 复位, 不再用 React key。
+ *
+ * 用 key 复位等于每次导航(以及每次路由参数变化)都把错误边界、Suspense 和整个页面子树
+ * 卸载重挂一遍 —— 而"离开出错的页面后要能恢复"本来只需要把边界自己的错误状态清掉。
+ * 换成 resetKey 之后, 换页面时该重挂的仍然重挂(React 按元素类型对账:
+ * 不同路由渲染的是不同的页面组件), 而同一个页面组件跨路由参数变化时可以留在原地。
+ */
 function LazyRoute({ children, routeName }: { children: ReactNode; routeName: "console" | "lifecycle" | "operations" | "portal" | "workspace" }) {
   const location = useLocation();
 
   return (
-    <RouteErrorBoundary key={`${routeName}:${location.pathname}`}>
+    <RouteErrorBoundary resetKey={`${routeName}:${location.pathname}`}>
       <Suspense fallback={<RouteLoadingState />}>{children}</Suspense>
     </RouteErrorBoundary>
   );
+}
+
+/**
+ * 按路由参数给页面本体打 key: 参数变了只重挂载这一个页面。
+ *
+ * 用在"参数就是页面主体资源"的路由上 —— 页面里的对话框开关、待删除成员、
+ * 表格分页/筛选这些局部状态都是绑在那个资源上的, 换了资源必须归零,
+ * 否则会把上一个团队的待删除成员、上一个运维分区的筛选带到下一个页面。
+ * 这与"每次导航重挂整棵子树"不同: 代价只落在真正换了资源的那一次。
+ */
+function ParamScoped({ children, param }: { children: ReactNode; param: string }) {
+  const params = useParams();
+
+  return <Fragment key={params[param] ?? ""}>{children}</Fragment>;
 }
 
 function RouteLoadingState() {
@@ -178,15 +210,32 @@ function RouteLoadingState() {
   );
 }
 
-interface RouteErrorBoundaryState {
-  hasError: boolean;
+interface RouteErrorBoundaryProps {
+  children: ReactNode;
+  /** 变化即视为"换了一个页面", 边界的错误状态就地清掉; 不需要靠重挂载子树来复位。 */
+  resetKey: string;
 }
 
-class RouteErrorBoundary extends Component<{ children: ReactNode }, RouteErrorBoundaryState> {
-  state: RouteErrorBoundaryState = { hasError: false };
+interface RouteErrorBoundaryState {
+  hasError: boolean;
+  resetKey: string;
+}
 
-  static getDerivedStateFromError(): RouteErrorBoundaryState {
+class RouteErrorBoundary extends Component<RouteErrorBoundaryProps, RouteErrorBoundaryState> {
+  state: RouteErrorBoundaryState = { hasError: false, resetKey: this.props.resetKey };
+
+  static getDerivedStateFromError(): Pick<RouteErrorBoundaryState, "hasError"> {
     return { hasError: true };
+  }
+
+  static getDerivedStateFromProps(
+    props: RouteErrorBoundaryProps,
+    state: RouteErrorBoundaryState,
+  ): RouteErrorBoundaryState | null {
+    if (props.resetKey === state.resetKey) {
+      return null;
+    }
+    return { hasError: false, resetKey: props.resetKey };
   }
 
   componentDidCatch(error: Error, info: ErrorInfo) {
