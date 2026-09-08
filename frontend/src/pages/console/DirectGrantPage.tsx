@@ -48,17 +48,28 @@ export function DirectGrantPage() {
   const [draft, setDraft] = useState<GrantDraft>(EMPTY_GRANT_DRAFT);
   const [draftErrorKeys, setDraftErrorKeys] = useState<MessageKey[]>([]);
   const currentGrantQuery = useCurrentGrant(userId, draft.appKey);
-  // 现有权限每个"被授权人 + 应用"只回填一次: 迟到的响应不能盖掉管理员回填之后的编辑。
-  const prefilledPairRef = useRef("");
+  /**
+   * 已经结清回填的那一对"被授权人 + 应用"。
+   *
+   * 回填对每一对只做一次: 管理员在响应到达之前就动了表单, 这一对立即结清, 迟到的响应不能盖掉编辑。
+   * 换人、换应用或清空之后这一对重新开张(见下面的效果), 否则再选回同一对时表单会一直空着。
+   */
+  const settledPairRef = useRef("");
+  const lastPairRef = useRef("");
   const reportedErrorPairRef = useRef("");
   const grantPairKey = userId !== "" && draft.appKey !== "" ? `${userId}\u0000${draft.appKey}` : "";
   const currentGrant = currentGrantQuery.data ?? null;
 
   useEffect(() => {
-    if (grantPairKey === "" || prefilledPairRef.current === grantPairKey || !currentGrantQuery.isSuccess) {
+    if (lastPairRef.current !== grantPairKey) {
+      // 换了人、换了应用或清空重来: 上一对的结论作废, 这一对重新等待回填。
+      lastPairRef.current = grantPairKey;
+      settledPairRef.current = "";
+    }
+    if (grantPairKey === "" || settledPairRef.current === grantPairKey || !currentGrantQuery.isSuccess) {
       return;
     }
-    prefilledPairRef.current = grantPairKey;
+    settledPairRef.current = grantPairKey;
     const grant = currentGrantQuery.data;
     if (grant) {
       setDraft((current) => grantDraftFromCurrentGrant(grant, current));
@@ -82,9 +93,10 @@ export function DirectGrantPage() {
       setDraftErrorKeys([]);
       // 被授权人保持选中: 连续给同一个人授权是最常见的操作。
       setDraft(EMPTY_GRANT_DRAFT);
-      // 现状已经被这次授权改写: 作废缓存并允许重新回填, 否则再选回同一个应用会拿到过期的现状。
-      prefilledPairRef.current = "";
-      void queryClient.invalidateQueries({ queryKey: ["console", "current-grant"] });
+      // 现状已经被这次授权改写: 连缓存一起丢掉并允许重新回填, 否则再选回同一个应用会回填过期的现状。
+      settledPairRef.current = "";
+      lastPairRef.current = "";
+      queryClient.removeQueries({ queryKey: ["console", "current-grant"] });
       void queryClient.invalidateQueries({ queryKey: ["console", "operations", "access-grants"] });
     },
   });
@@ -122,7 +134,8 @@ export function DirectGrantPage() {
     setGrantee(null);
     setDraft(EMPTY_GRANT_DRAFT);
     setDraftErrorKeys([]);
-    prefilledPairRef.current = "";
+    settledPairRef.current = "";
+    lastPairRef.current = "";
     reportedErrorPairRef.current = "";
     grantMutation.reset();
   };
@@ -141,9 +154,10 @@ export function DirectGrantPage() {
           catalogErrorMessage={catalogErrorMessage}
           draft={draft}
           onDraftChange={(next) => {
-            // 管理员在回填到达之前就动了目标: 这一对"人 + 应用"不再回填, 免得响应回来把编辑抹掉。
-            if (next.appKey === draft.appKey && targetWasEdited(draft, next)) {
-              prefilledPairRef.current = grantPairKey;
+            // 应用没变 => 这一次是管理员自己的编辑(目标、期限或说明): 这一对"人 + 应用"就此结清,
+            // 免得还在路上的现状响应回来把编辑抹掉。换应用会带出新的一对, 那一对照常回填。
+            if (next.appKey === draft.appKey) {
+              settledPairRef.current = grantPairKey;
             }
             setDraft(next);
             setDraftErrorKeys([]);
@@ -244,14 +258,6 @@ function DepartmentSourcedGrants({ grant }: { grant: AccessGrantRow | null }) {
         ))}
       </ul>
     </section>
-  );
-}
-
-/** 管理员是否动过授权目标(授权组或直接权限)。 */
-function targetWasEdited(draft: GrantDraft, next: GrantDraft): boolean {
-  return (
-    next.authorizationGroupKeys.join("\u0000") !== draft.authorizationGroupKeys.join("\u0000")
-    || next.selectedPermissionKeys.join("\u0000") !== draft.selectedPermissionKeys.join("\u0000")
   );
 }
 

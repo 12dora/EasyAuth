@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { screen, waitFor, within } from "@testing-library/react";
+import { act, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { UserEvent } from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -102,6 +102,25 @@ const CURRENT_GRANT = {
       { key: "audit", kind: "role", name: "审计" },
     ],
     grants: [],
+  },
+};
+
+/** 这次授权之后的现状: 本人来源多了一项"查看客户"。 */
+const GRANT_AFTER_DIRECT_GRANT = {
+  grant: {
+    ...CURRENT_GRANT.grant,
+    version: 4,
+    direct_grants: [
+      ...CURRENT_GRANT.grant.direct_grants,
+      {
+        permission: "crm.customer.read",
+        permission_name: "查看客户",
+        scope: "SELF",
+        scope_name: "本人",
+        expires_at: null,
+        source: "user",
+      },
+    ],
   },
 };
 
@@ -221,7 +240,7 @@ describe("DirectGrantPage", () => {
     expect(within(departmentBlock as HTMLElement).getByText("审计")).toBeVisible();
     expect(within(departmentBlock as HTMLElement).getByText("查看报表 · 全部")).toBeVisible();
 
-    // 提交时只替换本人来源的成员关系, 秒与微秒都不丢。
+    // 提交的载荷就是表单上的现状(只有本人来源那部分), 秒与微秒都不丢。
     await user.type(screen.getByLabelText("说明"), "延续现有权限");
     await user.click(screen.getByRole("button", { name: "授予权限" }));
 
@@ -235,6 +254,99 @@ describe("DirectGrantPage", () => {
       grant_expires_at: "2030-06-30T15:59:59.123456+00:00",
       reason: "延续现有权限",
     });
+  });
+
+  test("现状还在路上时管理员已经改了期限: 迟到的现状不覆盖这次编辑", async () => {
+    let releaseCurrentGrant = () => {};
+    const currentGrantArrived = new Promise<void>((resolve) => {
+      releaseCurrentGrant = resolve;
+    });
+    stubFetch(async (url) => {
+      if (url.endsWith("/current-grant")) {
+        await currentGrantArrived;
+        return jsonResponse(CURRENT_GRANT);
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }, CURRENT_GRANT_FROM_HANDLER);
+    const user = userEvent.setup({ delay: null });
+
+    renderPage();
+    await selectGrantee(user);
+    await user.selectOptions(screen.getByLabelText("应用"), "crm");
+    // 现状还没回来, 管理员已经自己把期限改成限时(还没填到期时间)。
+    await user.selectOptions(screen.getByLabelText("有效期"), "timed");
+
+    await act(async () => {
+      releaseCurrentGrant();
+      await currentGrantArrived;
+    });
+
+    // 现状照常展示组织授权来源, 但不能把管理员的编辑抹掉。
+    expect(await screen.findByRole("heading", { name: "来自组织授权" })).toBeVisible();
+    // 回填会写上现状里的到期时间与目标; 这里一个都不能出现。
+    expect(screen.getByLabelText("有效期")).toHaveValue("timed");
+    expect(screen.getByLabelText("到期时间")).toHaveValue("");
+    expect(await selectedAuthorizationGroupNames(user)).toEqual([]);
+    await user.click(await screen.findByRole("button", { name: "展开 客户管理" }));
+    expect(screen.getByRole("checkbox", { name: "选择 crm.customer.export 本人" })).not.toBeChecked();
+  });
+
+  test("清空应用后再选回同一个人和应用, 现状重新回填", async () => {
+    stubFetch(async (url) => {
+      throw new Error(`Unexpected fetch: ${url}`);
+    }, CURRENT_GRANT);
+    const user = userEvent.setup({ delay: null });
+
+    renderPage();
+    await selectGrantee(user);
+    await user.selectOptions(screen.getByLabelText("应用"), "crm");
+    await user.click(await screen.findByRole("button", { name: "展开 客户管理" }));
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: "选择 crm.customer.export 本人" })).toBeChecked(),
+    );
+
+    await user.selectOptions(screen.getByLabelText("应用"), "");
+    await user.selectOptions(screen.getByLabelText("应用"), "crm");
+
+    await user.click(await screen.findByRole("button", { name: "展开 客户管理" }));
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: "选择 crm.customer.export 本人" })).toBeChecked(),
+    );
+  });
+
+  test("授权成功后再选回同一个应用, 回填的是最新现状而不是缓存", async () => {
+    let currentGrant: unknown = CURRENT_GRANT;
+    stubFetch(async (url) => {
+      if (url === "/console/api/v1/direct-grants") {
+        // 这次授权改写了现状: 之后读回来的应该是新的一份。
+        currentGrant = GRANT_AFTER_DIRECT_GRANT;
+        return jsonResponse({ data: { grant_id: 9 } }, 201);
+      }
+      if (url.endsWith("/current-grant")) {
+        return jsonResponse(currentGrant);
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }, CURRENT_GRANT_FROM_HANDLER);
+    const user = userEvent.setup({ delay: null });
+
+    renderPage();
+    await selectGrantee(user);
+    await user.selectOptions(screen.getByLabelText("应用"), "crm");
+    await user.click(await screen.findByRole("button", { name: "展开 客户管理" }));
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: "选择 crm.customer.export 本人" })).toBeChecked(),
+    );
+
+    await user.type(screen.getByLabelText("说明"), "延续现有权限");
+    await user.click(screen.getByRole("button", { name: "授予权限" }));
+    await screen.findByText("已授予 张三 客户管理 (CRM) 的权限");
+
+    await user.selectOptions(screen.getByLabelText("应用"), "crm");
+    await user.click(await screen.findByRole("button", { name: "展开 客户管理" }));
+    await waitFor(() =>
+      expect(screen.getByRole("checkbox", { name: "选择 crm.customer.read 本人" })).toBeChecked(),
+    );
+    expect(screen.getByRole("checkbox", { name: "选择 crm.customer.export 本人" })).toBeChecked();
   });
 
   test("现有权限读取失败时给出提示, 表单停在空白态", async () => {
