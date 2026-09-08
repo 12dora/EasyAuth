@@ -29,6 +29,7 @@ from easyauth.applications.permission_template_types import (
     AppManifestPermissionGroupInput,
     AppManifestPermissionInput,
     AppManifestScopeInput,
+    AppManifestWebhookInput,
 )
 from easyauth.config.net import BlockedHostError
 from easyauth.lifecycle.handover_actions import initial_action_status_for_app
@@ -42,8 +43,10 @@ pytestmark = pytest.mark.django_db
 
 HTTPS_PORT: Final = 443
 RELATIVE_HANDOVER_PATH: Final = "/api/v1/easyauth/lifecycle/handover"
+RELATIVE_EVENTS_PATH: Final = "/api/v1/easyauth/events"
 PUBLIC_BASE_URL: Final = "https://etrade.example.com"
 ABSOLUTE_HANDOVER_URL: Final = f"{PUBLIC_BASE_URL}{RELATIVE_HANDOVER_PATH}"
+ABSOLUTE_EVENTS_URL: Final = f"{PUBLIC_BASE_URL}{RELATIVE_EVENTS_PATH}"
 ADMIN_HANDOVER_URL: Final = "https://admin.example.com/handover"
 TRUSTED_BASE_URL: Final = "https://etrade.jiefakj.com"
 TRUSTED_HANDOVER_URL: Final = f"{TRUSTED_BASE_URL}{RELATIVE_HANDOVER_PATH}"
@@ -118,6 +121,57 @@ def test_absolute_public_https_handover_url_is_declared(
     app.refresh_from_db()
     assert app.handover_capability == HANDOVER_CAPABILITY_DECLARED
     assert AppWebhookConfig.objects.get(app=app).handover_url == ABSOLUTE_HANDOVER_URL
+
+
+def test_manifest_events_url_is_resolved_and_persisted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _allow_public_https(monkeypatch)
+    app = _app("life-events-rel")
+
+    sync_manifest_lifecycle(
+        app=app,
+        template=_template(
+            app.app_key,
+            lifecycle=None,
+            webhook=AppManifestWebhookInput(events_url=RELATIVE_EVENTS_PATH),
+        ),
+        downstream_base_url=PUBLIC_BASE_URL,
+        actor_type="system",
+    )
+
+    config = AppWebhookConfig.objects.get(app=app)
+    assert config.events_url == ABSOLUTE_EVENTS_URL
+    assert config.updated_by == "manifest"
+    assert "etrade.example.com" in config.allowed_hosts
+
+
+def test_console_overridden_events_url_is_not_overwritten(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _allow_public_https(monkeypatch)
+    app = _app("life-events-console")
+    _ = AppWebhookConfig.objects.create(
+        app=app,
+        events_url="https://admin.example.com/events",
+        enabled=True,
+        updated_by="admin-1",
+    )
+
+    sync_manifest_lifecycle(
+        app=app,
+        template=_template(
+            app.app_key,
+            lifecycle=None,
+            webhook=AppManifestWebhookInput(events_url=ABSOLUTE_EVENTS_URL),
+        ),
+        downstream_base_url=None,
+        actor_type="system",
+    )
+
+    config = AppWebhookConfig.objects.get(app=app)
+    assert config.events_url == "https://admin.example.com/events"
+    assert config.updated_by == "admin-1"
 
 
 def test_console_overridden_webhook_url_drives_capability_when_usable() -> None:
@@ -427,7 +481,12 @@ def _none_template(app_key: str, *, handover_url: str) -> AppManifestInput:
     )
 
 
-def _template(app_key: str, *, lifecycle: AppManifestLifecycleInput) -> AppManifestInput:
+def _template(
+    app_key: str,
+    *,
+    lifecycle: AppManifestLifecycleInput | None,
+    webhook: AppManifestWebhookInput | None = None,
+) -> AppManifestInput:
     return AppManifestInput(
         schema_version=1,
         source="paste",
@@ -447,4 +506,5 @@ def _template(app_key: str, *, lifecycle: AppManifestLifecycleInput) -> AppManif
         authorization_groups=(),
         approval_rules=(),
         lifecycle=lifecycle,
+        webhook=webhook,
     )

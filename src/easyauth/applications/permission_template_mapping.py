@@ -13,6 +13,7 @@ from easyauth.applications.permission_template_types import (
     AppManifestPermissionGroupInput,
     AppManifestPermissionInput,
     AppManifestScopeInput,
+    AppManifestWebhookInput,
 )
 
 if TYPE_CHECKING:
@@ -27,6 +28,7 @@ if TYPE_CHECKING:
         PermissionGroupPayload,
         PermissionPayload,
         ScopePayload,
+        WebhookPayload,
     )
 
 
@@ -52,6 +54,7 @@ def build_manifest_input(
         ),
         approval_rules=tuple(_approval_rule_input(rule) for rule in payload.approval_rules),
         lifecycle=_lifecycle_input(payload.lifecycle),
+        webhook=_webhook_input(payload.webhook),
         capabilities=payload.capabilities,
     )
 
@@ -149,6 +152,15 @@ def _lifecycle_input(lifecycle: LifecyclePayload | None) -> AppManifestLifecycle
         handover_asset_types=tuple(
             _handover_asset_type_input(item) for item in lifecycle.handover_asset_types
         ),
+    )
+
+
+def _webhook_input(webhook: WebhookPayload | None) -> AppManifestWebhookInput | None:
+    if webhook is None:
+        return None
+    return AppManifestWebhookInput(
+        signing=webhook.signing,
+        events_url=webhook.events_url or "",
     )
 
 

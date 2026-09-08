@@ -116,10 +116,11 @@ class LifecyclePayload(BaseModel):
 
 
 class WebhookPayload(BaseModel):
-    # 下游 webhook 验签方式声明; 目前契约只支持 hmac-sha256。
+    # 下游 webhook 验签方式与权限传播事件 URL; 目前契约只支持 hmac-sha256。
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="forbid", frozen=True)
 
     signing: Literal["hmac-sha256"] = "hmac-sha256"
+    events_url: str | None = Field(default=None, max_length=512)
 
 
 class AppManifestPayload(BaseModel):

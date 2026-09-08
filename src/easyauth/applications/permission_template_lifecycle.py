@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 # 只有配置从未被控制台管理员改过(updated_by 为空或 manifest)时才回填, 避免覆盖人工设置。
 _MANIFEST_ACTOR: Final = "manifest"
 _MANIFEST_DNS_TIMEOUT_SECONDS: Final = 5.0
-_LIFECYCLE_URL_FIELDS: Final[tuple[str, str]] = ("handover_url", "onboard_url")
+_WEBHOOK_URL_FIELDS: Final[tuple[str, str, str]] = ("handover_url", "onboard_url", "events_url")
 
 __all__ = ["sync_manifest_lifecycle"]
 
@@ -78,8 +78,8 @@ def _sync_webhook_config_from_manifest(
     config, config_is_new = locked
     if config.updated_by not in ("", _MANIFEST_ACTOR):
         return
-    resolved_urls = _resolve_lifecycle_urls(template, downstream_base_url)
-    updates = _validate_lifecycle_urls(config, resolved_urls)
+    resolved_urls = _resolve_webhook_urls(template, downstream_base_url)
+    updates = _validate_webhook_urls(config, resolved_urls)
     _apply_manifest_ownership(config, updates, config_is_new=config_is_new)
 
 
@@ -90,34 +90,40 @@ def _lock_or_create_webhook_config(
     try:
         config = AppWebhookConfig.objects.select_for_update().get(app=app)
     except AppWebhookConfig.DoesNotExist:
-        if template.lifecycle is None:
+        if template.lifecycle is None and not _declares_events_url(template):
             return None
         return AppWebhookConfig(app=app), True
     return config, False
 
 
-def _resolve_lifecycle_urls(
+def _declares_events_url(template: AppManifestInput) -> bool:
+    return template.webhook is not None and bool(template.webhook.events_url)
+
+
+def _resolve_webhook_urls(
     template: AppManifestInput,
     downstream_base_url: str | None,
-) -> tuple[str | None, str | None]:
-    raw_urls = (
+) -> tuple[str | None, str | None, str | None]:
+    raw_lifecycle = (
         ("", "")
         if template.lifecycle is None
         else (template.lifecycle.handover_url, template.lifecycle.onboard_url)
     )
-    handover_url, onboard_url = raw_urls
+    handover_url, onboard_url = raw_lifecycle
+    events_url = None if template.webhook is None else template.webhook.events_url
     return (
         _resolve_manifest_url(handover_url, downstream_base_url),
         _resolve_manifest_url(onboard_url, downstream_base_url),
+        None if events_url is None else _resolve_manifest_url(events_url, downstream_base_url),
     )
 
 
-def _validate_lifecycle_urls(
+def _validate_webhook_urls(
     config: AppWebhookConfig,
-    resolved_urls: tuple[str | None, str | None],
+    resolved_urls: tuple[str | None, str | None, str | None],
 ) -> list[str]:
     updates: list[str] = []
-    for field, resolved in zip(_LIFECYCLE_URL_FIELDS, resolved_urls, strict=True):
+    for field, resolved in zip(_WEBHOOK_URL_FIELDS, resolved_urls, strict=True):
         if resolved is not None and getattr(config, field) != resolved:
             if resolved:
                 _ = validate_public_https_url(
