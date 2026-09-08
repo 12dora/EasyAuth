@@ -21,7 +21,7 @@ describe("OperationsPage", () => {
   test("系统管理员打开运营页时请求运营 API 并渲染数据", async () => {
     document.body.dataset.currentUserRole = "admin";
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
-      if (String(input) === "/console/api/v1/operations/access-requests?page=1&page_size=20") {
+      if (String(input) === "/console/api/v1/operations/access-requests?page=1&page_size=20&status=submitted") {
         return jsonResponse({
           data: [
             {
@@ -54,7 +54,7 @@ describe("OperationsPage", () => {
       expect(screen.getByText("新增授权")).toBeInTheDocument();
       expect(screen.queryByText("grant")).not.toBeInTheDocument();
       expect(fetchMock).toHaveBeenCalledWith(
-        "/console/api/v1/operations/access-requests?page=1&page_size=20",
+        "/console/api/v1/operations/access-requests?page=1&page_size=20&status=submitted",
         expect.objectContaining({ credentials: "include" }),
       );
     });
@@ -110,13 +110,13 @@ describe("OperationsPage", () => {
     document.body.dataset.currentUserRole = "admin";
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
-      if (url === "/console/api/v1/operations/access-requests?page=1&page_size=20") {
+      if (url === "/console/api/v1/operations/access-requests?page=1&page_size=20&status=submitted") {
         return jsonResponse({
           data: [accessRequestRow({ id: 1, user_id: "user-a", user_name: "胡玉琴" })],
           pagination: { page: 1, page_size: 20, total_items: 40, total_pages: 3 },
         });
       }
-      if (url === "/console/api/v1/operations/access-requests?page=2&page_size=20") {
+      if (url === "/console/api/v1/operations/access-requests?page=2&page_size=20&status=submitted") {
         return jsonResponse({
           data: [accessRequestRow({ id: 21, user_id: "user-b", user_name: "李四" })],
           pagination: { page: 2, page_size: 20, total_items: 40, total_pages: 3 },
@@ -134,7 +134,7 @@ describe("OperationsPage", () => {
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        "/console/api/v1/operations/access-requests?page=2&page_size=20",
+        "/console/api/v1/operations/access-requests?page=2&page_size=20&status=submitted",
         expect.objectContaining({ credentials: "include" }),
       );
       expect(screen.getByText("李四")).toBeInTheDocument();
@@ -187,6 +187,89 @@ describe("OperationsPage", () => {
     });
   });
 
+  test("待审批页默认只取 submitted, 表头筛选显示默认口径", async () => {
+    document.body.dataset.currentUserRole = "admin";
+    const fetchMock = accessRequestsFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup({ delay: null });
+
+    renderOperationsPage("access-requests");
+
+    await screen.findByText("胡玉琴");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/console/api/v1/operations/access-requests?page=1&page_size=20&status=submitted",
+      expect.objectContaining({ credentials: "include" }),
+    );
+    expect(screen.getByText("仅显示待审批的申请；可在状态筛选中查看历史。")).toBeInTheDocument();
+    // 默认口径必须在表头看得见: 状态列显示为已筛选, 下拉里选中「待审批」。
+    expect(columnHeader("状态").querySelector(".ant-table-filter-trigger")).toHaveClass("active");
+    const statusFilter = await openHeaderFilter(user, "状态");
+    expect(selectedFilterOption(statusFilter)).toBe("待审批");
+  });
+
+  test("状态筛选选其他状态时按该状态取数, 选「全部」才不带 status", async () => {
+    document.body.dataset.currentUserRole = "admin";
+    const fetchMock = accessRequestsFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup({ delay: null });
+
+    renderOperationsPage("access-requests");
+    await screen.findByText("胡玉琴");
+
+    const rejectedFilter = await openHeaderFilter(user, "状态");
+    await user.click(within(rejectedFilter).getByText("已拒绝"));
+    await user.click(within(rejectedFilter).getByRole("button", { name: "确定" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("location-search")).toHaveTextContent("status=rejected");
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        "/console/api/v1/operations/access-requests?page=1&page_size=20&status=rejected",
+        expect.objectContaining({ credentials: "include" }),
+      );
+    });
+
+    // 「全部」是显式取值: URL 记 status=all, 请求不带 status。
+    const allFilter = await openHeaderFilter(user, "状态");
+    await user.click(within(allFilter).getByText("全部"));
+    await user.click(within(allFilter).getByRole("button", { name: "确定" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("location-search")).toHaveTextContent("status=all");
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        "/console/api/v1/operations/access-requests?page=1&page_size=20",
+        expect.objectContaining({ credentials: "include" }),
+      );
+    });
+  });
+
+  test("重置状态筛选回到默认的待审批口径, 空筛选不等于全部", async () => {
+    document.body.dataset.currentUserRole = "admin";
+    const fetchMock = accessRequestsFetchMock();
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup({ delay: null });
+
+    renderOperationsPage("access-requests", "?status=all");
+
+    await screen.findByText("胡玉琴");
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/console/api/v1/operations/access-requests?page=1&page_size=20",
+      expect.objectContaining({ credentials: "include" }),
+    );
+
+    // antd 的「重置」只清空下拉里的选中项, 提交仍要点「确定」。
+    const statusFilter = await openHeaderFilter(user, "状态");
+    await user.click(within(statusFilter).getByRole("button", { name: "重置" }));
+    await user.click(within(statusFilter).getByRole("button", { name: "确定" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("location-search")).not.toHaveTextContent("status=");
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        "/console/api/v1/operations/access-requests?page=1&page_size=20&status=submitted",
+        expect.objectContaining({ credentials: "include" }),
+      );
+    });
+  });
+
   test("表头的时间范围筛选写回 URL 的 created_from/created_to(FF-21)", async () => {
     document.body.dataset.currentUserRole = "admin";
     const fetchMock = vi.fn<typeof fetch>(async (input) => {
@@ -232,7 +315,7 @@ describe("OperationsPage", () => {
     document.body.dataset.currentUserRole = "admin";
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
-      if (url === "/console/api/v1/operations/access-requests?page=1&page_size=20") {
+      if (url === "/console/api/v1/operations/access-requests?page=1&page_size=20&status=submitted") {
         return jsonResponse({
           data: [accessRequestRow({
             id: 88,
@@ -283,7 +366,7 @@ describe("OperationsPage", () => {
     let listCalls = 0;
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
-      if (url === "/console/api/v1/operations/access-requests?page=1&page_size=20") {
+      if (url === "/console/api/v1/operations/access-requests?page=1&page_size=20&status=submitted") {
         listCalls += 1;
         return jsonResponse({
           data: [accessRequestRow({
@@ -686,6 +769,26 @@ describe("OperationsPage", () => {
     expect(screen.queryByText("撤销权限失败")).not.toBeInTheDocument();
   });
 });
+
+/** 访问申请分区的取数桩: 只关心请求 URL, 行内容固定。 */
+function accessRequestsFetchMock() {
+  return vi.fn<typeof fetch>(async (input) => {
+    const url = String(input);
+    if (url.startsWith("/console/api/v1/operations/access-requests?")) {
+      return jsonResponse({
+        data: [accessRequestRow()],
+        pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+      });
+    }
+    throw new Error(`Unexpected fetch: ${url}`);
+  });
+}
+
+/** 表头枚举筛选里当前选中项的文案(单选下拉)。 */
+function selectedFilterOption(dropdown: HTMLElement): string {
+  const selected = dropdown.querySelector(".ant-dropdown-menu-item-selected");
+  return selected?.textContent?.trim() ?? "";
+}
 
 /** 访问申请行(A3: 姓名 / 应用名 / 审批人姓名随行下发)。 */
 function accessRequestRow(overrides: Record<string, unknown> = {}) {

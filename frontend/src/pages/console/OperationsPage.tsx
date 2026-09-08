@@ -56,7 +56,7 @@ function OperationsSectionPage({
       <PageHeader
         eyebrow={t("nav.console.operations")}
         title={t(config.titleKey)}
-        description={t("console.operations.description")}
+        description={t(config.descriptionKey ?? "console.operations.description")}
         actions={<OperationsHeaderActions controller={controller} />}
       />
       {section === "access-grants" ? (

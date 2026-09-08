@@ -1,6 +1,7 @@
 export const zhCN = {
   "console.operations.title.audit": "审计日志",
   "console.operations.description": "系统管理员的授权运营和依赖观测入口。",
+  "console.operations.accessRequests.description": "仅显示待审批的申请；可在状态筛选中查看历史。",
   "console.operations.loadFailed": "运营数据加载失败",
   "console.operations.empty": "暂无运营数据",
   "console.operations.emptyDescription": "当前筛选下没有可展示的记录。",
@@ -20,6 +21,7 @@ export const zhCN = {
   "console.operations.column.failureReason": "失败原因",
   "console.operations.decidedBy": "决定人 {name}",
   "console.operations.filter.includeHistory": "包含历史版本",
+  "console.operations.filter.allStatuses": "全部",
   "console.operations.retryGrant": "重试授权",
   "console.operations.retryGrantDescription": "重新为 {user} 应用 {app} 的失败授权；操作原因将写入审计日志。",
   "console.operations.retryGrantSuccess": "授权重试成功",
@@ -111,6 +113,7 @@ export const zhCN = {
 export const en: Record<keyof typeof zhCN, string> = {
   "console.operations.title.audit": "Audit Logs",
   "console.operations.description": "Authorization operations and dependency observability for system administrators.",
+  "console.operations.accessRequests.description": "Shows only requests awaiting approval; use the status filter to see history.",
   "console.operations.loadFailed": "Failed to load operations data",
   "console.operations.empty": "No operations data",
   "console.operations.emptyDescription": "No records to show for the current filter.",
@@ -130,6 +133,7 @@ export const en: Record<keyof typeof zhCN, string> = {
   "console.operations.column.failureReason": "Failure reason",
   "console.operations.decidedBy": "Decided by {name}",
   "console.operations.filter.includeHistory": "Include historical versions",
+  "console.operations.filter.allStatuses": "All statuses",
   "console.operations.retryGrant": "Retry grant",
   "console.operations.retryGrantDescription": "Retry applying the failed grant for {user} in {app}; the reason is recorded in the audit log.",
   "console.operations.retryGrantSuccess": "Grant retry succeeded",

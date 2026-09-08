@@ -3,10 +3,16 @@ import type { MessageKey } from "../../../i18n/messages";
 export interface OperationSectionConfig {
   titleKey: MessageKey;
   endpoint: string;
+  /** 分区自己的副标题; 省略时用运营页通用副标题。 */
+  descriptionKey?: MessageKey;
 }
 
 export const ENDPOINTS: Record<string, OperationSectionConfig> = {
-  "access-requests": { titleKey: "nav.console.accessRequests", endpoint: "/console/api/v1/operations/access-requests" },
+  "access-requests": {
+    titleKey: "nav.console.accessRequests",
+    endpoint: "/console/api/v1/operations/access-requests",
+    descriptionKey: "console.operations.accessRequests.description",
+  },
   "access-grants": { titleKey: "nav.console.accessGrants", endpoint: "/console/api/v1/operations/access-grants" },
   "dependency-health": { titleKey: "nav.console.dependencyHealth", endpoint: "/console/api/v1/operations/dependency-health" },
   "blocked-apps": {
@@ -25,7 +31,34 @@ export interface OperationsPagination {
   pageSize: number;
 }
 
-export const ACCESS_REQUEST_STATUSES = ["submitted", "approved", "rejected", "grant_applied", "grant_failed"] as const;
+/** 与后端 access_requests.models.REQUEST_STATUS_VALUES 对齐; 顺序即状态筛选下拉的顺序。 */
+export const ACCESS_REQUEST_STATUSES = [
+  "submitted",
+  "approved",
+  "rejected",
+  "grant_applied",
+  "grant_failed",
+  "grant_conflict",
+  "grant_expired",
+  "withdrawn",
+] as const;
+
+/**
+ * 「待审批」页的默认状态口径。
+ *
+ * 页面标题就是「待审批」, 所以未选状态时只取 submitted, 而不是把已批准/已驳回/已授权
+ * 全都列出来。要看历史必须在状态筛选里显式选另一个状态, 或者选「全部」——
+ * 「全部」是一个显式取值(URL 上 `status=all`, 请求时不带 status 参数), 因此
+ * 清空/重置筛选(URL 上没有 status)回到的是待审批, 而不是全部历史。
+ */
+export const ACCESS_REQUEST_DEFAULT_STATUS = "submitted";
+export const ALL_STATUSES_VALUE = "all";
+
+/** 待审批页要发给后端的 status; 返回 null 表示「全部」, 不带该参数。 */
+export function accessRequestStatusParam(searchParams: URLSearchParams): string | null {
+  const status = searchParams.get("status") || ACCESS_REQUEST_DEFAULT_STATUS;
+  return status === ALL_STATUSES_VALUE ? null : status;
+}
 export const ACCESS_GRANT_STATUSES = ["active", "revoked", "expired"] as const;
 
 export function paginationFromSearchParams(searchParams: URLSearchParams): OperationsPagination {
@@ -67,7 +100,10 @@ export function operationQueryString(
   });
   const filterKeys = SECTION_FILTER_KEYS[section] ?? [];
   for (const key of filterKeys) {
-    const value = searchParams.get(key);
+    const value =
+      section === "access-requests" && key === "status"
+        ? accessRequestStatusParam(searchParams)
+        : searchParams.get(key);
     if (value) {
       query.set(key, value);
     }

@@ -1,3 +1,4 @@
+import { ACCESS_REQUEST_DEFAULT_STATUS } from "./operationQuery";
 import {
   decodeDateRange,
   encodeDateRange,
@@ -22,12 +23,21 @@ export interface OperationFilterMap {
   params: ServerFilterParamMap;
   /** 承载 created_from/created_to 的时间列 key; 该分区没有时间列时省略。 */
   dateColumnKey?: string;
+  /**
+   * 列 key -> URL 上没有该筛选时的默认选中值。
+   *
+   * 默认口径必须在表头筛选里可见(否则列表已经被过滤, 用户却看不出按什么过滤),
+   * 因此这里的默认值会写进受控筛选态。
+   */
+  defaultValues?: Record<string, string>;
 }
 
 export const SECTION_FILTER_MAPS: Record<string, OperationFilterMap> = {
+  // 「待审批」页默认只列待审批申请; 「全部」是状态筛选里的显式取值, 见 operationQuery。
   "access-requests": {
     params: { user_id: "user_id", app_key: "app_key", status: "status" },
     dateColumnKey: "submitted_at",
+    defaultValues: { status: ACCESS_REQUEST_DEFAULT_STATUS },
   },
   // 授权列表的后端载荷没有 created_at 字段, 没有时间列可以挂 created_from/created_to,
   // 因此该分区的时间范围留在表格上方(全站唯一的例外筛选控件)。
@@ -47,7 +57,7 @@ export function filterValuesFromSearchParams(
 ): Record<string, string[]> {
   const filters: Record<string, string[]> = {};
   for (const [columnKey, config] of Object.entries(map.params)) {
-    const value = searchParams.get(paramName(config));
+    const value = searchParams.get(paramName(config)) || map.defaultValues?.[columnKey] || "";
     if (value) {
       filters[columnKey] = [value];
     }

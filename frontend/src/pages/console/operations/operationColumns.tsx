@@ -23,7 +23,7 @@ import {
   healthStatusLabel,
 } from "../../../lib/status";
 import { requestTypeLabel } from "../../portal/components/portalApprovalFacts";
-import { ACCESS_GRANT_STATUSES, ACCESS_REQUEST_STATUSES } from "./operationQuery";
+import { ACCESS_GRANT_STATUSES, ACCESS_REQUEST_STATUSES, ALL_STATUSES_VALUE } from "./operationQuery";
 import {
   auditAppKey,
   auditPair,
@@ -372,12 +372,22 @@ function renderAccessRequestActions(t: Translator, actions: AccessRequestColumnA
   return <span className="text-caption text-ink-faint">{t("common.none")}</span>;
 }
 
+/**
+ * 申请状态筛选项。
+ *
+ * 首项「全部」不是申请状态, 而是显式的筛选取值: 该页默认只列待审批申请,
+ * 空筛选不等于全部, 所以要看历史必须能选到「全部」。没有一行的 status 会等于它,
+ * 因此不会被状态徽章渲染到。
+ */
 function accessRequestStatusOptions(t: Translator): StatusColumnOption[] {
-  return ACCESS_REQUEST_STATUSES.map((status) => ({
-    value: status,
-    label: accessRequestStatusLabel(t, status),
-    tone: badgeToneForAccessRequestStatus(status),
-  }));
+  return [
+    { value: ALL_STATUSES_VALUE, label: t("console.operations.filter.allStatuses"), tone: "neutral" },
+    ...ACCESS_REQUEST_STATUSES.map((status) => ({
+      value: status,
+      label: accessRequestStatusLabel(t, status),
+      tone: badgeToneForAccessRequestStatus(status),
+    })),
+  ];
 }
 
 function grantStatusOptions(t: Translator): StatusColumnOption[] {
