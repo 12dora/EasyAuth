@@ -26,6 +26,56 @@ class HttpResponseLike(Protocol):
     content: bytes
 
 
+def test_approval_instances_list_includes_originator_and_app_display_names() -> None:
+    client = _logged_in_superuser("ops-approval-names-admin")
+    app = App.objects.create(
+        app_key="ops-approval-names-app",
+        name="EasyLearning",
+        alias="学习工作台",
+    )
+    template = ApprovalTemplate.objects.create(
+        app=app,
+        key="onboard",
+        name="入职",
+        dingtalk_process_code="PROC-NAMES",
+    )
+    originator = UserMirror.objects.create(
+        authentik_user_id="ops-approval-originator",
+        name="胡玉琴A",
+    )
+    unnamed = UserMirror.objects.create(authentik_user_id="ops-approval-unnamed")
+    named_instance = ApprovalInstance.objects.create(
+        app=app,
+        template=template,
+        biz_key="ops-names-named",
+        originator_user=originator,
+        payload_hash="1" * 64,
+    )
+    unnamed_instance = ApprovalInstance.objects.create(
+        app=app,
+        template=template,
+        biz_key="ops-names-unnamed",
+        originator_user=unnamed,
+        payload_hash="2" * 64,
+    )
+
+    response = client.get("/console/api/v1/operations/approval-instances")
+
+    payload = _response_json(response)
+    items = payload["data"]
+    assert isinstance(items, list)
+    by_id = {item["instance_id"]: item for item in items if isinstance(item, dict)}
+    named_item = by_id[str(named_instance.id)]
+    unnamed_item = by_id[str(unnamed_instance.id)]
+    assert response.status_code == HTTPStatus.OK
+    assert named_item["originator_name"] == "胡玉琴A"
+    assert named_item["app_name"] == "EasyLearning"
+    assert named_item["app_alias"] == "学习工作台"
+    assert unnamed_item["originator_name"] == ""
+    assert unnamed_item["app_name"] == "EasyLearning"
+    assert unnamed_item["app_alias"] == "学习工作台"
+
+
 def test_approval_instances_list_honors_ordering_and_rejects_unknown_field() -> None:
     client = _logged_in_superuser("ops-approval-ordering-admin")
     first = _make_instance("ops-order-a", "alpha", "ops-order-origin-a", "biz-a")

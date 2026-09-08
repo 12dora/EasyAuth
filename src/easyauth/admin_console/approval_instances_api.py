@@ -133,13 +133,18 @@ def _filtered_instances(request: HttpRequest) -> QuerySet[ApprovalInstance]:
 
 def _instance_item(instance: ApprovalInstance) -> JsonObject:
     delivery = instance.completion_delivery
+    originator = instance.originator_user
+    app = instance.app
     return {
         "instance_id": str(instance.id),
-        "app_key": instance.app.app_key,
+        "app_key": app.app_key,
+        "app_name": app.name,
+        "app_alias": app.alias,
         "template_key": instance.template.key,
         "biz_key": instance.biz_key,
         "status": instance.status,
-        "originator_user_id": instance.originator_user.authentik_user_id,
+        "originator_user_id": originator.authentik_user_id,
+        "originator_name": originator.name,
         "dingtalk_process_instance_id": instance.dingtalk_process_instance_id,
         "delivery_state": instance.delivery_state(),
         "delivery_attempts": delivery.attempts if delivery is not None else 0,

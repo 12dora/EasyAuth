@@ -203,6 +203,23 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 | GET | `/operations/approval-instances` | 钉钉审批实例运营列表 |
 | POST | `/operations/approval-instances/{instance_id}/redeliver` | 审批结果 webhook 重投 |
 
+### 审批实例
+
+**GET `/operations/approval-instances`** 要求 **superuser**。成功体为分页信封
+`{ "data": [...], "pagination": { page, page_size, total_items, total_pages } }`。
+
+列表项在既有运营字段外提供展示名：
+
+| 字段 | 说明 |
+| --- | --- |
+| `originator_name` | 发起人 `UserMirror.name`；镜像无姓名时为空字符串 |
+| `app_name` | 应用名称 |
+| `app_alias` | 应用别名；未设置时为空字符串 |
+
+`originator_user_id` 仍为 Authentik 用户 ID。前端有姓名时展示姓名，无姓名时再回退到 ID。
+`POST /operations/approval-instances/{instance_id}/redeliver` 成功体中的
+`approval_instance` 使用同一项形状。
+
 ---
 
 ## 审批模板（平台/全局）
