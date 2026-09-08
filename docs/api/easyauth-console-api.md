@@ -245,6 +245,43 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 | GET | `/operations/approval-instances` | 钉钉审批实例运营列表 |
 | POST | `/operations/approval-instances/{instance_id}/redeliver` | 审批结果 webhook 重投 |
 
+### 申请运营列表
+
+**GET `/operations/access-requests`** 列表项在既有字段外提供展示名。`user_name` 为
+申请人 `UserMirror.name`（镜像无姓名时为空字符串）；`app_name` / `app_alias` 为应用
+名称与别名。`approvers` 为 `[{ "user_id", "name" }]`，与既有 `approver_user_ids` 并列。
+`decided_by_name` 为决定人姓名；无决定人或镜像中无该用户时为空字符串。
+
+### 授权运营列表
+
+**GET `/operations/access-grants`** 列表项使用与直接授权、当前授权相同的授权行形状
+（见下方「授权行」）。查询参数 `current_only` 默认为 `true`，只返回 `is_current=true`
+的行；`current_only=false` 才包含历史版本。取值必须是 `true` 或 `false`，否则 422。
+既有 `app_key`、`status`、`user_id`、`version`、`current`、`revoked` 等筛选仍然生效。
+
+### 紧急撤权
+
+**POST `/operations/emergency-revokes`** 请求体含 `user_id`、`app_key`、`reason`。
+当前应用授权不存在 → 409，`details.reason="active_grant_not_found"`。
+当前授权含任意 `source="department"` 的成员行 → 409，错误信封：
+
+```json
+{
+  "error": {
+    "code": "CONFLICT",
+    "message": "该用户在此应用的权限来自组织授权，请在组织授权中调整。",
+    "details": {
+      "reason": "department_sourced_grant",
+      "user_id": "<authentik uuid>",
+      "app_key": "easylearning",
+      "department_policy_ids": [1, 2]
+    }
+  }
+}
+```
+
+成功路径审计仍为 `emergency_revoke_applied`，冲突拒绝不写该审计。
+
 ### 审批实例
 
 **GET `/operations/approval-instances`** 要求 **superuser**。成功体为分页信封
@@ -303,6 +340,7 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 | GET | `/grant-catalog` | `console-grant-catalog` | 管理员授权目录（全量 active 应用/授权组/权限） |
 | GET | `/user-options` | `console-user-options` | 被授权人联想或按 ID 回填；项含 `user_id`、`name`、`department`、`avatar_url` |
 | POST | `/direct-grants` | `console-direct-grants` | 管理员直接授予，立即合并进用户当前授权 |
+| GET | `/users/{user_id}/apps/{app_key}/current-grant` | `console-user-app-current-grant` | 读取该用户在该应用的当前授权行 |
 | GET | `/departments/tree` | `console-departments-tree` | 钉钉组织树 |
 | GET | `/departments/{dept_id}/grant-policies` | `console-department-grant-policies` | 本部门 + 祖先继承的生效策略 |
 | POST | `/departments/{dept_id}/grant-policies` | `console-department-grant-policies` | 在该部门新建预授权策略 |
@@ -373,8 +411,74 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 
 错误：用户/应用不存在 → 404；用户非在职 → 409；目录/范围问题 → 422
 `SEMANTIC_VALIDATION_ERROR`，`details.errors` 为中文列表。成功 201，
-`data` 含 `grant_id`、`version`、合并后的用户来源 `authorization_group_keys` 与
-`direct_grants`。
+`data` 为 `{ "grant": <授权行> }`，形状见下方「授权行」。
+
+### 当前授权
+
+**GET `/users/{user_id}/apps/{app_key}/current-grant`** 要求 **superuser**。
+成功体为 `{ "grant": <授权行> | null }`：无当前有效授权时 `grant` 为 `null`。
+用户或应用不存在 → 404 错误信封（`details` 含 `user_id` 或 `app_key`）。
+
+### 授权行
+
+以下接口共用同一授权行形状：`GET /operations/access-grants` 列表项、
+`POST /direct-grants` 的 `data.grant`、`GET /users/{user_id}/apps/{app_key}/current-grant`
+的 `grant`（非 null 时）。
+
+```json
+{
+  "id": 6,
+  "version": 3,
+  "is_current": true,
+  "status": "active",
+  "user_id": "<authentik uuid>",
+  "user_name": "胡玉琴A",
+  "app_key": "easylearning",
+  "app_name": "EasyLearning",
+  "app_alias": "学习工作台",
+  "grant_type": "permanent",
+  "grant_expires_at": null,
+  "authorization_groups": [
+    {
+      "key": "sales",
+      "kind": "role",
+      "name": "销售",
+      "expires_at": null,
+      "source": "user"
+    }
+  ],
+  "direct_grants": [
+    {
+      "permission": "order.order.view",
+      "permission_name": "查看订单",
+      "scope": "GLOBAL",
+      "scope_name": "全局",
+      "expires_at": null,
+      "source": "user"
+    }
+  ],
+  "groups": [{"key": "sales", "kind": "role", "name": "销售"}],
+  "grants": [
+    {
+      "permission": "order.order.view",
+      "scope": "GLOBAL",
+      "source_type": "group",
+      "source_key": "sales",
+      "permission_name": "查看订单",
+      "permission_name_en": "View orders",
+      "scope_name": "全局",
+      "scope_name_en": "Global"
+    }
+  ]
+}
+```
+
+`grant_type` 为 `permanent` / `timed` / `mixed`，语义与门户当前授权生命周期摘要相同。
+`grant_expires_at` 为限时成员的最早到期时间，全部永久则为 `null`。
+`authorization_groups` / `direct_grants` 来自该授权版本自身的成员行（含
+`source`：`user` 或 `department`）。`groups` / `grants` 由该行成员展开，
+历史版本同样按该版本展开，不读取后续版本。`user_name` 为 `UserMirror.name`，
+镜像无姓名时为空字符串。
 
 ### 组织授权
 
