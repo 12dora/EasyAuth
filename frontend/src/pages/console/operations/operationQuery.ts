@@ -42,9 +42,19 @@ function positiveInteger(value: string | null, fallback: number): number {
 
 const SECTION_FILTER_KEYS: Record<string, string[]> = {
   "access-requests": ["app_key", "user_id", "status", "created_from", "created_to"],
-  "access-grants": ["app_key", "user_id", "status", "created_from", "created_to", "version", "current"],
+  "access-grants": ["app_key", "user_id", "status", "created_from", "created_to"],
   audit: ["app_key", "actor_id", "created_from", "created_to"],
 };
+
+/**
+ * 授权明细默认只列当前版本(`current_only=true`), 历史版本由表格上方的开关打开。
+ * 开关状态挂在 URL 上, 与其余筛选条件一样可深链。
+ */
+export const INCLUDE_HISTORY_PARAM = "include_history";
+
+export function includeHistoryFromSearchParams(searchParams: URLSearchParams): boolean {
+  return searchParams.get(INCLUDE_HISTORY_PARAM) === "1";
+}
 
 export function operationQueryString(
   section: string,
@@ -61,6 +71,9 @@ export function operationQueryString(
     if (value) {
       query.set(key, value);
     }
+  }
+  if (section === "access-grants") {
+    query.set("current_only", includeHistoryFromSearchParams(searchParams) ? "false" : "true");
   }
   return query.toString();
 }

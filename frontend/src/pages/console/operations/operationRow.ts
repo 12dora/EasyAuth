@@ -1,12 +1,8 @@
 import type { ApprovalDecisionMode } from "../../../components/ApprovalDecisionDialog";
 import type { OperationRow as DomainOperationRow } from "../../../lib/domain";
-import type { OperationAuthorizationGroup, OperationDirectGrant } from "../../../lib/domain";
-import type { Translator } from "../../../lib/status";
-import { formatDateTime, grantTypeLabel } from "../../../lib/status";
+import { formatAppDisplayName } from "../../../lib/appDisplayName";
 
 export type OperationRow = DomainOperationRow & {
-  version?: number;
-  is_current?: boolean;
   failure_reason?: string;
 };
 
@@ -27,69 +23,26 @@ export function stringValue(value: unknown): string {
   return typeof value === "string" && value !== "" ? value : "-";
 }
 
-export function requiredString(value: unknown): string {
-  if (typeof value !== "string" || value === "") {
-    throw new Error("Operation row is missing a required string field.");
+/**
+ * 申请行的应用展示名(`别名 (技术名)`)。
+ *
+ * `app_name` 由后端契约保证存在, 缺失即契约违约, 直接抛错而不是退回展示 app_key;
+ * `app_alias` 允许为空串(应用没配别名), 此时只展示技术名。
+ */
+export function operationAppDisplayName(row: OperationRow): string {
+  if (typeof row.app_name !== "string" || row.app_name === "") {
+    throw new Error("Operation row is missing app_name.");
   }
-  return value;
+  return formatAppDisplayName({ name: row.app_name, alias: row.app_alias });
 }
 
-export function numberValue(value: unknown): string {
-  return typeof value === "number" && Number.isInteger(value) ? String(value) : "-";
-}
-
-export function booleanValue(value: unknown): string {
-  return typeof value === "boolean" ? String(value) : "-";
-}
-
-export function operationAuthorizationGroupSummary(
-  t: Translator,
-  value: OperationAuthorizationGroup[] | undefined,
-): string {
-  if (!Array.isArray(value)) {
-    throw new Error(t("console.operations.contract.authorizationGroups"));
+/** 审批人列: 只展示姓名, 目录里没有姓名的审批人回落展示其 user_id。 */
+export function operationApproverNames(row: OperationRow): string {
+  const approvers = row.approvers ?? [];
+  if (approvers.length === 0) {
+    return "-";
   }
-  if (value.length === 0) {
-    return t("common.none");
-  }
-  return value.map((group, index) => {
-    const key = requiredContractString(t, group.key, `authorization_groups[${index}].key`);
-    const name = requiredContractString(t, group.name, `authorization_groups[${index}].name`);
-    return `${name || key} (${operationItemTerm(t, group.expires_at, `authorization_groups[${index}].expires_at`)})`;
-  }).join("；");
-}
-
-export function operationDirectGrantSummary(
-  t: Translator,
-  value: OperationDirectGrant[] | undefined,
-): string {
-  if (!Array.isArray(value)) {
-    throw new Error(t("console.operations.contract.directGrants"));
-  }
-  if (value.length === 0) {
-    return t("common.none");
-  }
-  return value.map((grant, index) => {
-    const permission = requiredContractString(t, grant.permission, `direct_grants[${index}].permission`);
-    const name = requiredContractString(t, grant.permission_name, `direct_grants[${index}].permission_name`);
-    const scope = requiredContractString(t, grant.scope, `direct_grants[${index}].scope`);
-    const term = operationItemTerm(t, grant.expires_at, `direct_grants[${index}].expires_at`);
-    return `${name || permission} [${scope}] (${term})`;
-  }).join("；");
-}
-
-function operationItemTerm(t: Translator, value: unknown, field: string): string {
-  if (value === null) {
-    return grantTypeLabel(t, "permanent");
-  }
-  return formatDateTime(requiredContractString(t, value, field));
-}
-
-function requiredContractString(t: Translator, value: unknown, field: string): string {
-  if (typeof value !== "string" || value === "") {
-    throw new Error(t("console.operations.contract.requiredString", { field }));
-  }
-  return value;
+  return approvers.map((approver) => approver.name || approver.user_id).join("、");
 }
 
 export function auditPair(type: string | undefined, id: string | undefined): string {

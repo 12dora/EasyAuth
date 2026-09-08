@@ -6,18 +6,18 @@ import { useToast } from "../../../components/ui/Toast";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { ApiError, apiRequest } from "../../../lib/api";
 import type { JsonObject, ListPayload } from "../../../lib/api";
+import type { AccessGrantRow } from "../../../lib/domain/accessGrantRow";
 import { isActiveGrantNotFoundConflict, isDecisionCommittedError } from "./operationErrors";
-import {
-  requiredString,
-  type AccessRequestAction,
-  type AccessRequestActionType,
-  type OperationNotice,
-  type OperationRow,
+import type {
+  AccessRequestAction,
+  AccessRequestActionType,
+  OperationNotice,
+  OperationRow,
 } from "./operationRow";
 
 export interface OperationPendingControls {
   setPendingAction: Dispatch<SetStateAction<AccessRequestAction | null>>;
-  setPendingEmergencyRevoke: Dispatch<SetStateAction<OperationRow | null>>;
+  setPendingEmergencyRevoke: Dispatch<SetStateAction<AccessGrantRow | null>>;
   setOperationNotice: Dispatch<SetStateAction<OperationNotice | null>>;
 }
 
@@ -127,14 +127,10 @@ export function useEmergencyRevokeMutation(controls: OperationPendingControls) {
     queryClient.invalidateQueries({ queryKey: ["console", "operations", "access-grants"] });
 
   const emergencyRevokeMutation = useMutation({
-    mutationFn: ({ row, reason }: { row: OperationRow; reason: string }) =>
+    mutationFn: ({ row, reason }: { row: AccessGrantRow; reason: string }) =>
       apiRequest("/console/api/v1/operations/emergency-revokes", {
         method: "POST",
-        body: {
-          user_id: requiredString(row.user_id),
-          app_key: requiredString(row.app_key),
-          reason,
-        } satisfies JsonObject,
+        body: { user_id: row.user_id, app_key: row.app_key, reason } satisfies JsonObject,
       }),
     onSuccess: () => {
       controls.setPendingEmergencyRevoke(null);
@@ -156,7 +152,7 @@ export function useEmergencyRevokeMutation(controls: OperationPendingControls) {
     },
   });
 
-  const openEmergencyRevoke = (row: OperationRow) => {
+  const openEmergencyRevoke = (row: AccessGrantRow) => {
     emergencyRevokeMutation.reset();
     controls.setPendingEmergencyRevoke(row);
   };

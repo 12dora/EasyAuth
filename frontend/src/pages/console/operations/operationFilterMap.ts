@@ -32,13 +32,7 @@ export const SECTION_FILTER_MAPS: Record<string, OperationFilterMap> = {
   // 授权列表的后端载荷没有 created_at 字段, 没有时间列可以挂 created_from/created_to,
   // 因此该分区的时间范围留在表格上方(全站唯一的例外筛选控件)。
   "access-grants": {
-    params: {
-      user_id: "user_id",
-      app_key: "app_key",
-      status: "status",
-      version: "version",
-      is_current: "current",
-    },
+    params: { user_id: "user_id", app_key: "app_key", status: "status" },
   },
   audit: {
     params: { actor: "actor_id", app: "app_key" },

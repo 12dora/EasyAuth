@@ -11,7 +11,12 @@ import { useI18n } from "../../i18n/I18nProvider";
 import { BlockedAppsOperationsSection } from "./operations/BlockedAppsSection";
 import { OperationDialogs } from "./operations/OperationDialogs";
 import { OperationsTable } from "./operations/OperationsTable";
-import { ENDPOINTS, type OperationSectionConfig } from "./operations/operationQuery";
+import {
+  ENDPOINTS,
+  INCLUDE_HISTORY_PARAM,
+  includeHistoryFromSearchParams,
+  type OperationSectionConfig,
+} from "./operations/operationQuery";
 import {
   useOperationsSection,
   type OperationsSectionController,
@@ -55,10 +60,7 @@ function OperationsSectionPage({
         actions={<OperationsHeaderActions controller={controller} />}
       />
       {section === "access-grants" ? (
-        <GrantCreatedRangeFilter
-          searchParams={controller.searchParams}
-          onChange={controller.updateSearchParam}
-        />
+        <GrantFilters searchParams={controller.searchParams} onChange={controller.updateSearchParam} />
       ) : null}
       <OperationsNotices controller={controller} />
       <OperationsResult controller={controller} />
@@ -74,11 +76,11 @@ function OperationsNotices({
   controller: OperationsSectionController;
 }) {
   const { t } = useI18n();
-  const { query, rows, operationNotice } = controller;
+  const { query, rowCount, operationNotice } = controller;
 
   return (
     <>
-      {query.error && rows.length > 0 ? (
+      {query.error && rowCount > 0 ? (
         <StatusBanner live="alert" tone="signal" title={t("console.operations.loadFailed")} message={(query.error as Error).message} />
       ) : null}
       {operationNotice ? (
@@ -94,9 +96,9 @@ function OperationsResult({
   controller: OperationsSectionController;
 }) {
   const { t } = useI18n();
-  const { query, rows } = controller;
+  const { query, rowCount, table } = controller;
 
-  if (query.error && rows.length === 0) {
+  if (query.error && rowCount === 0) {
     return (
       <PageState
         tone="signal"
@@ -110,7 +112,26 @@ function OperationsResult({
       />
     );
   }
-  return <OperationsTable controller={controller} />;
+  // 授权明细与其余分区的行类型不同, 列定义无法互相赋值, 因此在这里判别后各自实例化。
+  return table.kind === "grants" ? (
+    <OperationsTable
+      columns={table.columns}
+      isLoading={query.isLoading}
+      minWidth={table.minWidth}
+      rowKey={table.rowKey}
+      rows={table.rows}
+      tableProps={table.tableProps}
+    />
+  ) : (
+    <OperationsTable
+      columns={table.columns}
+      isLoading={query.isLoading}
+      minWidth={table.minWidth}
+      rowKey={table.rowKey}
+      rows={table.rows}
+      tableProps={table.tableProps}
+    />
+  );
 }
 
 function OperationsHeaderActions({
@@ -141,13 +162,13 @@ function OperationsHeaderActions({
 }
 
 /**
- * 授权列表的时间范围筛选。
+ * 授权明细表格上方的筛选条。
  *
- * 全站唯一保留在表格上方的筛选控件: 后端支持 created_from/created_to,
- * 但授权列表的载荷里没有 created_at 字段, 没有对应的列可以挂表头筛选
- * (其余分区都走列上的共享 dateRangeFilter)。
+ * 两个条件都没有列可以挂表头筛选, 因此是全站仅有的留在表格上方的筛选控件:
+ * 后端支持 created_from/created_to, 但授权载荷里没有 created_at 字段;
+ * 「包含历史版本」控制的是列表口径本身(`current_only`), 不是某一列的取值。
  */
-function GrantCreatedRangeFilter({
+function GrantFilters({
   searchParams,
   onChange,
 }: {
@@ -206,6 +227,14 @@ function GrantCreatedRangeFilter({
           {t("common.clear")}
         </Button>
       ) : null}
+      <label className="ml-auto inline-flex shrink-0 items-center gap-2 text-body text-ink">
+        <input
+          type="checkbox"
+          checked={includeHistoryFromSearchParams(searchParams)}
+          onChange={(event) => onChange(INCLUDE_HISTORY_PARAM, event.currentTarget.checked ? "1" : "")}
+        />
+        <span>{t("console.operations.filter.includeHistory")}</span>
+      </label>
     </div>
   );
 }

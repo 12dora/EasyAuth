@@ -1,19 +1,29 @@
 import { ApprovalDecisionDialog } from "../../../components/ApprovalDecisionDialog";
 import type { ApprovalDecisionMode } from "../../../components/ApprovalDecisionDialog";
 import { useI18n } from "../../../i18n/I18nProvider";
+import { formatAppDisplayName } from "../../../lib/appDisplayName";
+import type { AccessGrantRow } from "../../../lib/domain/accessGrantRow";
 import { dialogErrorMessage } from "./operationErrors";
 import { ReasonActionDialog } from "./ReasonActionDialog";
 import { ReassignApproversDialog } from "./ReassignApproversDialog";
-import { stringValue } from "./operationRow";
+import { operationAppDisplayName, stringValue } from "./operationRow";
 import type { OperationRow } from "./operationRow";
 import type { Translator } from "../../../lib/status";
 import type { OperationsSectionController } from "./useOperationsSection";
 
+/** 弹窗里的操作对象一律按姓名与应用展示名描述; 目录里没有姓名时才回落到 user_id。 */
 function rowTarget(t: Translator, row: OperationRow): string {
   return t("console.accessRequests.target", {
-    user: stringValue(row.user_id),
-    app: stringValue(row.app_key),
+    user: row.user_name || stringValue(row.user_id),
+    app: operationAppDisplayName(row),
   });
+}
+
+function grantTarget(row: AccessGrantRow): { user: string; app: string } {
+  return {
+    user: row.user_name || row.user_id,
+    app: formatAppDisplayName({ name: row.app_name, alias: row.app_alias }),
+  };
 }
 
 export function OperationDialogs({
@@ -51,8 +61,8 @@ export function OperationDialogs({
         <ReasonActionDialog
           title={t("console.operations.retryGrant")}
           description={t("console.operations.retryGrantDescription", {
-            user: stringValue(pendingAction.row.user_id),
-            app: stringValue(pendingAction.row.app_key),
+            user: pendingAction.row.user_name || stringValue(pendingAction.row.user_id),
+            app: operationAppDisplayName(pendingAction.row),
           })}
           confirmLabel={t("console.operations.retryGrant")}
           errorTitle={t("console.operations.retryGrantFailed")}
@@ -65,10 +75,7 @@ export function OperationDialogs({
       {pendingEmergencyRevoke ? (
         <ReasonActionDialog
           title={t("console.operations.emergencyRevoke")}
-          description={t("console.operations.emergencyRevokeDescription", {
-            user: stringValue(pendingEmergencyRevoke.user_id),
-            app: stringValue(pendingEmergencyRevoke.app_key),
-          })}
+          description={t("console.operations.emergencyRevokeDescription", grantTarget(pendingEmergencyRevoke))}
           confirmLabel={t("console.operations.emergencyRevoke")}
           errorTitle={t("console.operations.emergencyRevokeFailed")}
           errorMessage={dialogErrorMessage(controller.emergencyRevokeMutation.error)}

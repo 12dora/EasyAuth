@@ -26,9 +26,14 @@ describe("OperationsPage", () => {
             {
               id: 101,
               user_id: "user-a",
+              user_name: "胡玉琴",
               app_key: "crm",
+              app_name: "CRM",
+              app_alias: "客户管理",
               status: "pending",
               request_type: "grant",
+              approvers: [{ user_id: "manager-1", name: "张主管" }],
+              decided_by_name: "",
               submitted_at: "2026-07-02T00:00:00Z",
             },
           ],
@@ -41,8 +46,12 @@ describe("OperationsPage", () => {
     renderOperationsPage();
 
     await waitFor(() => {
-      expect(screen.getByText("user-a")).toBeInTheDocument();
-      expect(screen.getByText("crm")).toBeInTheDocument();
+      expect(screen.getByText("胡玉琴")).toBeInTheDocument();
+      expect(screen.getByText("客户管理 (CRM)")).toBeInTheDocument();
+      expect(screen.getByText("张主管")).toBeInTheDocument();
+      // 申请类型按文案展示, 不再暴露 grant/change/revoke/renew 这些接口取值。
+      expect(screen.getByText("新增授权")).toBeInTheDocument();
+      expect(screen.queryByText("grant")).not.toBeInTheDocument();
       expect(fetchMock).toHaveBeenCalledWith(
         "/console/api/v1/operations/access-requests?page=1&page_size=20",
         expect.objectContaining({ credentials: "include" }),
@@ -102,13 +111,13 @@ describe("OperationsPage", () => {
       const url = String(input);
       if (url === "/console/api/v1/operations/access-requests?page=1&page_size=20") {
         return jsonResponse({
-          data: [{ id: 1, user_id: "user-a", app_key: "crm", status: "pending", request_type: "grant", submitted_at: "2026-07-02T00:00:00Z" }],
+          data: [accessRequestRow({ id: 1, user_id: "user-a", user_name: "胡玉琴" })],
           pagination: { page: 1, page_size: 20, total_items: 40, total_pages: 3 },
         });
       }
       if (url === "/console/api/v1/operations/access-requests?page=2&page_size=20") {
         return jsonResponse({
-          data: [{ id: 21, user_id: "user-b", app_key: "crm", status: "pending", request_type: "grant", submitted_at: "2026-07-03T00:00:00Z" }],
+          data: [accessRequestRow({ id: 21, user_id: "user-b", user_name: "李四" })],
           pagination: { page: 2, page_size: 20, total_items: 40, total_pages: 3 },
         });
       }
@@ -119,7 +128,7 @@ describe("OperationsPage", () => {
 
     renderOperationsPage("access-requests");
 
-    await screen.findByText("user-a");
+    await screen.findByText("胡玉琴");
     await user.click(screen.getByTitle("下一页"));
 
     await waitFor(() => {
@@ -127,7 +136,7 @@ describe("OperationsPage", () => {
         "/console/api/v1/operations/access-requests?page=2&page_size=20",
         expect.objectContaining({ credentials: "include" }),
       );
-      expect(screen.getByText("user-b")).toBeInTheDocument();
+      expect(screen.getByText("李四")).toBeInTheDocument();
     });
   });
 
@@ -224,15 +233,13 @@ describe("OperationsPage", () => {
       const url = String(input);
       if (url === "/console/api/v1/operations/access-requests?page=1&page_size=20") {
         return jsonResponse({
-          data: [{
+          data: [accessRequestRow({
             id: 88,
             user_id: "failed-user",
-            app_key: "crm",
+            user_name: "王五",
             status: "grant_failed",
-            request_type: "grant",
             failure_reason: "目录写入失败",
-            submitted_at: "2026-07-02T00:00:00Z",
-          }],
+          })],
           pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
         });
       }
@@ -278,15 +285,13 @@ describe("OperationsPage", () => {
       if (url === "/console/api/v1/operations/access-requests?page=1&page_size=20") {
         listCalls += 1;
         return jsonResponse({
-          data: [{
+          data: [accessRequestRow({
             id: 91,
             user_id: "needs-retry",
-            app_key: "crm",
+            user_name: "赵六",
             status: listCalls > 1 ? "grant_failed" : "submitted",
-            request_type: "grant",
             failure_reason: listCalls > 1 ? "目录写入失败" : "",
-            submitted_at: "2026-07-02T00:00:00Z",
-          }],
+          })],
           pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
         });
       }
@@ -322,32 +327,13 @@ describe("OperationsPage", () => {
     await waitFor(() => expect(listCalls).toBeGreaterThan(1));
   });
 
-  test("授权列表展示版本状态并通过带原因确认框紧急撤权(FF-21)", async () => {
+  test("授权明细按姓名与应用别名展示, 并通过带原因确认框撤销权限(FF-21)", async () => {
     document.body.dataset.currentUserRole = "admin";
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       const url = String(input);
       if (url.startsWith("/console/api/v1/operations/access-grants?")) {
         return jsonResponse({
-          data: [{
-            id: 7,
-            user_id: "risk-user",
-            app_key: "crm",
-            status: "active",
-            version: 3,
-            is_current: true,
-            authorization_groups: [{
-              key: "auditor",
-              kind: "role",
-              name: "审计员",
-              expires_at: null,
-            }],
-            direct_grants: [{
-              permission: "invoice.export",
-              permission_name: "导出发票",
-              scope: "GLOBAL",
-              expires_at: "2026-08-01T10:00:00Z",
-            }],
-          }],
+          data: [accessGrantRow()],
           pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
         });
       }
@@ -359,25 +345,31 @@ describe("OperationsPage", () => {
     vi.stubGlobal("fetch", fetchMock);
     const user = userEvent.setup({ delay: null });
 
-    renderOperationsPage("access-grants", "?version=3&current=true");
+    renderOperationsPage("access-grants");
 
-    expect(await screen.findByText("v3")).toBeInTheDocument();
-    // 该列带枚举筛选, 表头可访问名里还会包含筛选图标的 label。
-    expect(screen.getByRole("columnheader", { name: /当前版本/ })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "授权组期限" })).toBeInTheDocument();
-    expect(screen.getByRole("columnheader", { name: "直接权限期限" })).toBeInTheDocument();
-    expect(screen.getByText("审计员 (长期)")).toBeInTheDocument();
-    expect(screen.getByText(/导出发票 \[GLOBAL\].*2026/)).toBeInTheDocument();
-    expect(screen.getByText("true")).toBeInTheDocument();
+    expect(await screen.findByText("胡玉琴")).toBeInTheDocument();
+    expect(screen.getByText("客户管理 (CRM)")).toBeInTheDocument();
+    expect(screen.getByText("审计员")).toBeInTheDocument();
+    expect(screen.getByText("2 项权限")).toBeInTheDocument();
+    expect(screen.getByText(/2026/)).toBeInTheDocument();
+    for (const title of ["权限组", "权限详情", "过期时间"]) {
+      expect(screen.getByRole("columnheader", { name: title })).toBeInTheDocument();
+    }
+    // 版本不再单独占列: 列表默认只给当前版本。
+    expect(screen.queryByRole("columnheader", { name: /授权版本/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("columnheader", { name: /当前版本/ })).not.toBeInTheDocument();
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        "/console/api/v1/operations/access-grants?page=1&page_size=20&version=3&current=true",
+        "/console/api/v1/operations/access-grants?page=1&page_size=20&current_only=true",
         expect.objectContaining({ credentials: "include" }),
       );
     });
 
     await user.click(screen.getByRole("button", { name: "紧急撤权" }));
     const dialog = screen.getByRole("dialog", { name: "紧急撤权" });
+    // 确认框按姓名与应用展示名描述操作对象, 不出现裸 id / app_key。
+    expect(within(dialog).getByText(/胡玉琴/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/客户管理 \(CRM\)/)).toBeInTheDocument();
     await user.type(within(dialog).getByRole("textbox", { name: "原因" }), "发现账号泄露");
     await user.click(within(dialog).getByRole("button", { name: "紧急撤权" }));
 
@@ -390,6 +382,55 @@ describe("OperationsPage", () => {
         }),
       );
     });
+  });
+
+  test("授权明细勾选包含历史版本后按 current_only=false 取数", async () => {
+    document.body.dataset.currentUserRole = "admin";
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.startsWith("/console/api/v1/operations/access-grants?")) {
+        return jsonResponse({
+          data: [accessGrantRow()],
+          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup({ delay: null });
+
+    renderOperationsPage("access-grants");
+
+    await user.click(await screen.findByRole("checkbox", { name: "包含历史版本" }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenLastCalledWith(
+        "/console/api/v1/operations/access-grants?page=1&page_size=20&current_only=false",
+        expect.objectContaining({ credentials: "include" }),
+      );
+    });
+    expect(screen.getByTestId("location-search")).toHaveTextContent("include_history=1");
+  });
+
+  test("授权行缺少契约字段时整页报加载失败, 不静默丢字段", async () => {
+    document.body.dataset.currentUserRole = "admin";
+    const fetchMock = vi.fn<typeof fetch>(async (input) => {
+      const url = String(input);
+      if (url.startsWith("/console/api/v1/operations/access-grants?")) {
+        const { user_name: _dropped, ...rowWithoutUserName } = accessGrantRow();
+        return jsonResponse({
+          data: [rowWithoutUserName],
+          pagination: { page: 1, page_size: 20, total_items: 1, total_pages: 1 },
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderOperationsPage("access-grants");
+
+    expect(await screen.findByText("运营数据加载失败")).toBeInTheDocument();
+    expect(screen.getByText(/user_name/)).toBeInTheDocument();
   });
 
   test("未接入应用清单走客户端分页(迁移前没有分页)", async () => {
@@ -469,7 +510,7 @@ describe("OperationsPage", () => {
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        "/console/api/v1/operations/access-grants?page=1&page_size=20&created_from=2026-07-01T08%3A30",
+        "/console/api/v1/operations/access-grants?page=1&page_size=20&created_from=2026-07-01T08%3A30&current_only=true",
         expect.objectContaining({ credentials: "include" }),
       );
     });
@@ -526,16 +567,7 @@ describe("OperationsPage", () => {
       if (url.startsWith("/console/api/v1/operations/access-grants?")) {
         listCalls += 1;
         return jsonResponse({
-          data: listCalls > 1 ? [] : [{
-            id: 7,
-            user_id: "risk-user",
-            app_key: "crm",
-            status: "active",
-            version: 3,
-            is_current: true,
-            authorization_groups: [],
-            direct_grants: [],
-          }],
+          data: listCalls > 1 ? [] : [accessGrantRow()],
           pagination: { page: 1, page_size: 20, total_items: listCalls > 1 ? 0 : 1, total_pages: 1 },
         });
       }
@@ -572,6 +604,79 @@ describe("OperationsPage", () => {
     await waitFor(() => expect(listCalls).toBeGreaterThan(1));
   });
 });
+
+/** 访问申请行(A3: 姓名 / 应用名 / 审批人姓名随行下发)。 */
+function accessRequestRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 1,
+    user_id: "user-a",
+    user_name: "胡玉琴",
+    app_key: "crm",
+    app_name: "CRM",
+    app_alias: "客户管理",
+    status: "submitted",
+    request_type: "grant",
+    approvers: [{ user_id: "manager-1", name: "张主管" }],
+    decided_by_name: "",
+    failure_reason: "",
+    submitted_at: "2026-07-02T00:00:00Z",
+    ...overrides,
+  };
+}
+
+/** 授权明细行(A1: 后端 serialize_access_grant_row 的形状)。 */
+function accessGrantRow(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 7,
+    version: 3,
+    is_current: true,
+    status: "active",
+    user_id: "risk-user",
+    user_name: "胡玉琴",
+    app_key: "crm",
+    app_name: "CRM",
+    app_alias: "客户管理",
+    grant_type: "timed",
+    grant_expires_at: "2026-08-01T10:00:00Z",
+    authorization_groups: [
+      { key: "auditor", kind: "role", name: "审计员", expires_at: null, source: "user" },
+    ],
+    direct_grants: [
+      {
+        permission: "invoice.export",
+        permission_name: "导出发票",
+        scope: "GLOBAL",
+        scope_name: "全局",
+        expires_at: "2026-08-01T10:00:00Z",
+        source: "user",
+      },
+    ],
+    groups: [{ key: "auditor", kind: "role", name: "审计员" }],
+    grants: [
+      {
+        permission: "invoice.view",
+        scope: "GLOBAL",
+        source_type: "group",
+        source_key: "auditor",
+        permission_name: "查看发票",
+        permission_name_en: "View invoice",
+        scope_name: "全局",
+        scope_name_en: "Global",
+      },
+      {
+        permission: "invoice.export",
+        scope: "GLOBAL",
+        source_type: "direct",
+        source_key: "",
+        permission_name: "导出发票",
+        permission_name_en: "Export invoice",
+        scope_name: "全局",
+        scope_name_en: "Global",
+      },
+    ],
+    ...overrides,
+  };
+}
 
 function renderOperationsPage(section = "access-requests", search = "") {
   const client = new QueryClient({
