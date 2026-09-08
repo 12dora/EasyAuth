@@ -7,7 +7,7 @@ export const zhCN = {
 
   "userSelect.loadFailed": "候选用户加载失败，请重试。",
 
-  "userSelect.remove": "移除 {id}",
+  "userSelect.remove": "移除 {name}",
 
   "selector.ariaLabel": "权限选择",
 
@@ -63,7 +63,7 @@ export const en: Record<keyof typeof zhCN, string> = {
 
   "userSelect.loadFailed": "Failed to load user suggestions. Try again.",
 
-  "userSelect.remove": "Remove {id}",
+  "userSelect.remove": "Remove {name}",
 
   "selector.ariaLabel": "Permission selection",
 

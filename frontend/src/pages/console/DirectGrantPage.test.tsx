@@ -103,8 +103,11 @@ describe("DirectGrantPage", () => {
       grant_expires_at: null,
       reason: "新同事接手客户维护",
     });
-    // 被授权人保留, 目标草稿清空。
-    expect(await screen.findByText("已选择：张三 · 销售部")).toBeVisible();
+    // 成功提示用姓名而不是用户 ID。
+    expect(await screen.findByText("已授予 张三 客户管理 (CRM) 的权限")).toBeVisible();
+    // 被授权人保留(输入框显示姓名, 部门与 ID 在次要行), 目标草稿清空。
+    expect(screen.getByLabelText("被授权人")).toHaveValue("张三");
+    expect(screen.getByText("销售部")).toBeVisible();
     await waitFor(() => expect(screen.getByLabelText("应用")).toHaveValue(""));
   });
 

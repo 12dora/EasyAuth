@@ -7,7 +7,8 @@ import { Field } from "../../components/Field";
 import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
 import { UserSearchInput } from "../../components/UserSelect";
-import { userOptionDisplayName } from "../../components/UserCombobox";
+import { userOptionName } from "../../components/UserCombobox";
+import type { UserOption } from "../../components/UserCombobox";
 import { PanelSurface } from "../../components/ui/PanelSurface";
 import { useToast } from "../../components/ui/Toast";
 import {
@@ -39,7 +40,7 @@ export function DirectGrantPage() {
   const queryClient = useQueryClient();
   const catalogQuery = useGrantCatalog();
   const [userId, setUserId] = useState("");
-  const [granteeLabel, setGranteeLabel] = useState("");
+  const [grantee, setGrantee] = useState<UserOption | null>(null);
   const [draft, setDraft] = useState<GrantDraft>(EMPTY_GRANT_DRAFT);
   const [draftErrorKeys, setDraftErrorKeys] = useState<MessageKey[]>([]);
 
@@ -70,14 +71,14 @@ export function DirectGrantPage() {
     setDraftErrorKeys([]);
     grantMutation.mutate({
       payload: { user_id: userId, ...buildGrantSubmission(draft) },
-      granteeLabel: granteeLabel || userId,
+      granteeLabel: userOptionName(grantee ?? undefined, userId),
       appLabel: formatAppDisplayName(grantCatalogApp(catalogQuery.data, draft.appKey)),
     });
   };
 
   const reset = () => {
     setUserId("");
-    setGranteeLabel("");
+    setGrantee(null);
     setDraft(EMPTY_GRANT_DRAFT);
     setDraftErrorKeys([]);
     grantMutation.reset();
@@ -102,26 +103,22 @@ export function DirectGrantPage() {
           }}
           disabled={grantMutation.isPending}
           header={
-            <Field label={t("directGrant.grantee")} hint={granteeLabel ? undefined : t("directGrant.granteeHint")}>
+            <Field label={t("directGrant.grantee")} hint={grantee ? undefined : t("directGrant.granteeHint")}>
               <UserSearchInput
                 value={userId}
                 required
                 placeholder={t("directGrant.granteePlaceholder")}
+                selectedOption={grantee}
                 onChange={(value) => {
                   setUserId(value);
                   // 手输 ID 没有可信姓名, 清掉上一次候选带来的展示名。
-                  setGranteeLabel("");
+                  setGrantee(null);
                 }}
-                onSelectOption={(option) => setGranteeLabel(userOptionDisplayName(option))}
+                onSelectOption={(option) => setGrantee(option)}
               />
             </Field>
           }
         />
-        {granteeLabel ? (
-          <p className="mt-2 text-xs leading-5 text-ink-faint">
-            {t("directGrant.granteeSelected", { name: granteeLabel })}
-          </p>
-        ) : null}
         {catalogErrorMessage ? (
           <div className="mt-5">
             <StatusBanner

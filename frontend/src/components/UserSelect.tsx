@@ -1,16 +1,16 @@
 import { X } from "lucide-react";
 import { useId, useState } from "react";
-import type { ReactNode } from "react";
 
 import { useI18n } from "../i18n/I18nProvider";
 import { TextInput } from "./Field";
-import { UserOptionList, useUserCombobox } from "./UserCombobox";
+import { UserOptionList, useUserCombobox, useUserOptionsByIds, userOptionName } from "./UserCombobox";
 import type { UserOption, UserSearchPurpose } from "./UserCombobox";
 
 export type { UserOption } from "./UserCombobox";
 
 interface UserSearchInputProps {
   id?: string;
+  /** 提交值: 用户 ID。选中候选后输入框显示的是姓名, 这一份始终是 ID。 */
   value: string;
   onChange: (value: string) => void;
   /**
@@ -20,6 +20,12 @@ interface UserSearchInputProps {
    * 手输 ID 不会触发它, 因为那时并没有可信的姓名。
    */
   onSelectOption?: (option: UserOption) => void;
+  /**
+   * 当前选中的候选项: 有它(且与 value 同一个人)时输入框显示姓名, 部门与 ID 落到次要行。
+   *
+   * 调用方手输 ID 时应传 null —— 那时没有可信姓名, 只能原样显示 ID。
+   */
+  selectedOption?: UserOption | null;
   placeholder?: string;
   required?: boolean;
   "aria-label"?: string;
@@ -27,12 +33,24 @@ interface UserSearchInputProps {
 }
 
 /** 单个用户 ID 输入: 聚焦即拉取候选, 支持按姓名/邮箱/ID 模糊搜索, 也允许直接输入 ID。 */
-export function UserSearchInput({ id, value, onChange, onSelectOption, placeholder, required, ...aria }: UserSearchInputProps) {
+export function UserSearchInput({
+  id,
+  value,
+  onChange,
+  onSelectOption,
+  selectedOption = null,
+  placeholder,
+  required,
+  ...aria
+}: UserSearchInputProps) {
   const { t } = useI18n();
   const generatedId = useId();
   const listId = `${id ?? generatedId}-listbox`;
+  // 选中的人用姓名展示: 让管理员对着一串 UUID 核对被授权人是谁是不可接受的。
+  const selected = selectedOption && selectedOption.user_id === value ? selectedOption : null;
+  const inputValue = selected ? userOptionName(selected) : value;
   const { open, setOpen, options, optionsQuery, highlightIndex, activeOption, containerRef, onKeyDown, pick } = useUserCombobox({
-    query: value.trim(),
+    query: inputValue.trim(),
     purpose: "employee",
     navigateWhenClosed: false,
     openOnArrowDown: false,
@@ -56,7 +74,7 @@ export function UserSearchInput({ id, value, onChange, onSelectOption, placehold
         autoComplete="off"
         required={required}
         placeholder={placeholder ?? t("userSelect.searchPlaceholder")}
-        value={value}
+        value={inputValue}
         onFocus={() => setOpen(true)}
         onChange={(event) => {
           onChange(event.currentTarget.value);
@@ -76,6 +94,12 @@ export function UserSearchInput({ id, value, onChange, onSelectOption, placehold
           onPick={pick}
           onRetry={() => void optionsQuery.refetch()}
         />
+      ) : null}
+      {selected ? (
+        <p className="mt-1 flex flex-wrap items-center gap-x-2 text-xs leading-5 text-ink-faint">
+          {selected.department ? <span>{selected.department}</span> : null}
+          <code>{selected.user_id}</code>
+        </p>
       ) : null}
     </div>
   );
@@ -98,6 +122,13 @@ export function UserMultiSelect({ id, value, onChange, placeholder, searchPurpos
   const generatedId = useId();
   const listId = `${id ?? generatedId}-listbox`;
   const [inputValue, setInputValue] = useState("");
+  // 从候选里选中的人自带姓名, 不必再问一次后端; 其余(调用方回填或手输的)ID 一次批量解析。
+  const [pickedOptions, setPickedOptions] = useState<Record<string, UserOption>>({});
+  const lookupQuery = useUserOptionsByIds(value.filter((userId) => !(userId in pickedOptions)));
+  const optionsByUserId: Record<string, UserOption> = {
+    ...Object.fromEntries((lookupQuery.data ?? []).map((option) => [option.user_id, option])),
+    ...pickedOptions,
+  };
   const add = (raw: string) => {
     // 手输内容沿用逗号/换行分隔语义, 与字段提示保持一致。
     const ids = raw
@@ -125,7 +156,10 @@ export function UserMultiSelect({ id, value, onChange, placeholder, searchPurpos
     navigateWhenClosed: true,
     openOnArrowDown: true,
     closeOnPick: false,
-    onPick: (option) => add(option.user_id),
+    onPick: (option) => {
+      setPickedOptions((current) => ({ ...current, [option.user_id]: option }));
+      add(option.user_id);
+    },
     onEnterWithoutOption: () => add(inputValue),
     onEmptyBackspace: inputValue === "" && value.length > 0 ? () => remove(value[value.length - 1]) : undefined,
   });
@@ -134,11 +168,19 @@ export function UserMultiSelect({ id, value, onChange, placeholder, searchPurpos
   return (
     <div className="relative" ref={containerRef}>
       <div className="flex flex-wrap items-center gap-1.5">
-        {value.map((userId) => (
-          <UserChip key={userId} onRemove={() => remove(userId)} removeLabel={t("userSelect.remove", { id: userId })}>
-            {userId}
-          </UserChip>
-        ))}
+        {value.map((userId) => {
+          // 姓名还没解析出来(查询在飞行中, 或目录镜像本就没有姓名)就显示 ID: 不编一个占位姓名。
+          const label = userOptionName(optionsByUserId[userId], userId);
+          return (
+            <UserChip
+              key={userId}
+              label={label}
+              isUserId={label === userId}
+              onRemove={() => remove(userId)}
+              removeLabel={t("userSelect.remove", { name: label })}
+            />
+          );
+        })}
       </div>
       <TextInput
         id={id}
@@ -180,17 +222,20 @@ export function UserMultiSelect({ id, value, onChange, placeholder, searchPurpos
 }
 
 function UserChip({
-  children,
+  label,
+  isUserId,
   onRemove,
   removeLabel,
 }: {
-  children: ReactNode;
+  label: string;
+  /** 显示的是 ID 而不是姓名时用等宽字体, 让"没有姓名"一眼可辨。 */
+  isUserId: boolean;
   onRemove: () => void;
   removeLabel: string;
 }) {
   return (
     <span className="inline-flex items-center gap-1 rounded-[2px] border border-ink/12 bg-paper-deep px-1.5 py-0.5 text-xs text-ink">
-      <code>{children}</code>
+      {isUserId ? <code>{label}</code> : <span>{label}</span>}
       <button
         type="button"
         aria-label={removeLabel}

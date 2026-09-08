@@ -1,6 +1,7 @@
 /** 用户选择框共用的键盘导航与候选列表。 */
 
 import { useQuery } from "@tanstack/react-query";
+import type { UseQueryResult } from "@tanstack/react-query";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { KeyboardEvent } from "react";
 
@@ -135,6 +136,25 @@ function useUserOptions(query: string, enabled: boolean, purpose: UserSearchPurp
   });
 }
 
+/**
+ * 按 user_id 批量解析候选(后端 GET /console/api/v1/user-options?user_ids=a,b)。
+ *
+ * chip 与回填值里只有 ID, 但界面必须显示姓名: 这里一次查询解析组件内全部未知 ID,
+ * 不逐个发请求。后端一次最多接受 50 个 ID, 超了由它报错, 前端不截断也不伪造姓名。
+ */
+export function useUserOptionsByIds(userIds: string[]): UseQueryResult<UserOption[], Error> {
+  const uniqueSortedIds = [...new Set(userIds)].sort();
+  return useQuery({
+    queryKey: ["console", "user-options", "by-ids", uniqueSortedIds],
+    queryFn: () =>
+      apiRequest<ListPayload<UserOption>>(
+        `/console/api/v1/user-options?user_ids=${encodeURIComponent(uniqueSortedIds.join(","))}`,
+      ),
+    enabled: uniqueSortedIds.length > 0,
+    select: (payload) => itemsFromPayload<UserOption>(payload),
+  });
+}
+
 function useCloseOnOutsidePointerDown(onClose: () => void) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -259,6 +279,16 @@ function UserOptionRow({
 
 /** 候选行的主标题: 姓名(缺失时退回用户 ID), 有部门时补上"姓名 · 部门"。 */
 export function userOptionDisplayName(option: UserOption): string {
-  const name = option.name || option.user_id;
+  const name = userOptionName(option);
   return option.department ? `${name} · ${option.department}` : name;
+}
+
+/**
+ * 用户的展示名: 目录里有姓名就用姓名, 否则只能退回用户 ID。
+ *
+ * 姓名可能是空串(目录镜像没同步到姓名, 见批次契约 A3), 那时显示 ID 是唯一诚实的选择,
+ * 不能拿 ID 拼一个假名字。
+ */
+export function userOptionName(option: UserOption | undefined, fallbackUserId: string = ""): string {
+  return option?.name || option?.user_id || fallbackUserId;
 }
