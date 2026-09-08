@@ -174,6 +174,54 @@ def test_console_overridden_events_url_is_not_overwritten(
     assert config.updated_by == "admin-1"
 
 
+def test_omitted_webhook_section_clears_manifest_events_url(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _allow_public_https(monkeypatch)
+    app = _app("life-events-omit")
+    _ = AppWebhookConfig.objects.create(
+        app=app,
+        events_url=ABSOLUTE_EVENTS_URL,
+        enabled=True,
+        updated_by="manifest",
+    )
+
+    sync_manifest_lifecycle(
+        app=app,
+        template=_template(app.app_key, lifecycle=None, webhook=None),
+        downstream_base_url=None,
+        actor_type="system",
+    )
+
+    config = AppWebhookConfig.objects.get(app=app)
+    assert config.events_url == ""
+    assert config.updated_by == "manifest"
+    assert "etrade.example.com" not in config.allowed_hosts
+
+
+def test_omitted_webhook_section_keeps_console_overridden_events_url() -> None:
+    app = _app("life-events-omit-admin")
+    admin_url = "https://admin.example.com/events"
+    _ = AppWebhookConfig.objects.create(
+        app=app,
+        events_url=admin_url,
+        enabled=True,
+        updated_by="admin-1",
+    )
+
+    sync_manifest_lifecycle(
+        app=app,
+        template=_template(app.app_key, lifecycle=None, webhook=None),
+        downstream_base_url=None,
+        actor_type="system",
+    )
+
+    config = AppWebhookConfig.objects.get(app=app)
+    assert config.events_url == admin_url
+    assert config.updated_by == "admin-1"
+    assert "admin.example.com" in config.allowed_hosts
+
+
 def test_console_overridden_webhook_url_drives_capability_when_usable() -> None:
     app = _app("life-console-usable")
     _ = AppWebhookConfig.objects.create(

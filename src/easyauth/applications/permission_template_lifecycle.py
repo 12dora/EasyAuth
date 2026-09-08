@@ -16,8 +16,9 @@ if TYPE_CHECKING:
     from easyauth.applications.models import App
     from easyauth.applications.permission_template_types import AppManifestInput
 
-# webhook 事件 URL 的语义是"接入时从 manifest 读入、控制台可覆盖"(AppWebhookConfig 注释):
-# 只有配置从未被控制台管理员改过(updated_by 为空或 manifest)时才回填, 避免覆盖人工设置。
+# webhook URL 与 lifecycle URL 一样按完整 manifest 同步: 未声明则清空。
+# 只有配置从未被控制台管理员改过(updated_by 为空或 manifest)时才写入,
+# 避免覆盖人工设置。
 _MANIFEST_ACTOR: Final = "manifest"
 _MANIFEST_DNS_TIMEOUT_SECONDS: Final = 5.0
 _WEBHOOK_URL_FIELDS: Final[tuple[str, str, str]] = ("handover_url", "onboard_url", "events_url")
@@ -110,11 +111,11 @@ def _resolve_webhook_urls(
         else (template.lifecycle.handover_url, template.lifecycle.onboard_url)
     )
     handover_url, onboard_url = raw_lifecycle
-    events_url = None if template.webhook is None else template.webhook.events_url
+    events_url = "" if template.webhook is None else template.webhook.events_url
     return (
         _resolve_manifest_url(handover_url, downstream_base_url),
         _resolve_manifest_url(onboard_url, downstream_base_url),
-        None if events_url is None else _resolve_manifest_url(events_url, downstream_base_url),
+        _resolve_manifest_url(events_url, downstream_base_url),
     )
 
 
