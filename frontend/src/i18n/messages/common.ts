@@ -77,7 +77,7 @@ export const zhCN = {
 
   "shell.adminConsole": "管理后台",
 
-  "shell.backToPortal": "返回员工门户",
+  "shell.employeePortal": "员工门户",
 
   "shell.logout": "退出登录",
 
@@ -293,7 +293,7 @@ export const en: Record<keyof typeof zhCN, string> = {
 
   "shell.adminConsole": "Admin console",
 
-  "shell.backToPortal": "Back to portal",
+  "shell.employeePortal": "Employee portal",
 
   "shell.logout": "Log out",
 

@@ -33,9 +33,16 @@ describe("Topbar", () => {
     const trigger = screen.getByRole("button", { name: "当前登录用户菜单" });
     await user.click(trigger);
 
-    const securityItem = await screen.findByRole("menuitem", { name: "安全设置" });
-    await waitFor(() => expect(securityItem).toHaveFocus());
+    // 控制台三项菜单的渲染顺序: 员工门户 → 安全设置 → 退出登录。
+    const portalItem = await screen.findByRole("menuitem", { name: "员工门户" });
+    await waitFor(() => expect(portalItem).toHaveFocus());
     await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitem", { name: "安全设置" })).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(screen.getByRole("menuitem", { name: "退出登录" })).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(portalItem).toHaveFocus();
+    await user.keyboard("{End}");
     expect(screen.getByRole("menuitem", { name: "退出登录" })).toHaveFocus();
     await user.keyboard("{Escape}");
     await waitFor(() => expect(trigger).toHaveFocus());
@@ -78,6 +85,7 @@ describe("Topbar", () => {
     const logoutItem = await screen.findByRole("menuitem", { name: "退出登录" });
     await waitFor(() => expect(logoutItem).toHaveFocus());
     expect(screen.queryByRole("menuitem", { name: "管理后台" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "员工门户" })).not.toBeInTheDocument();
     // 单项菜单的上下键都停在自身, 不应把焦点丢出菜单。
     await user.keyboard("{ArrowDown}");
     expect(logoutItem).toHaveFocus();
@@ -85,7 +93,7 @@ describe("Topbar", () => {
     expect(logoutItem).toHaveFocus();
   });
 
-  test("控制台用户菜单不出现管理后台入口", async () => {
+  test("控制台用户菜单不出现管理后台入口, 改以员工门户整页链接回门户", async () => {
     const user = userEvent.setup();
     renderTopbar({ canAccessConsole: true });
 
@@ -93,6 +101,10 @@ describe("Topbar", () => {
 
     await screen.findByRole("menuitem", { name: "安全设置" });
     expect(screen.queryByRole("menuitem", { name: "管理后台" })).not.toBeInTheDocument();
+    const portalItem = screen.getByRole("menuitem", { name: "员工门户" });
+    // 壳层模式启动时定死, 必须整页跳转; react-router 的 Link 会渲染同样的 href, 故额外断言不走 SPA 导航。
+    expect(portalItem).toHaveAttribute("href", "/portal/");
+    expect(portalItem).not.toHaveAttribute("data-discover");
   });
 
   test("未实现通知事实源前不渲染通知入口", () => {

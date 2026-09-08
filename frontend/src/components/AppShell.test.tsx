@@ -341,25 +341,29 @@ describe("AppShell", () => {
     );
   });
 
-  test("控制台侧边栏底部展示设置入口并用分隔线隔开", () => {
+  test("控制台侧边栏底部只保留设置入口并用分隔线隔开", () => {
     renderShell("console");
 
     const footer = screen.getByLabelText("侧边栏底部操作");
     expect(within(footer).getByRole("separator")).toBeVisible();
     expect(within(footer).getByRole("link", { name: "设置" })).toHaveAttribute("href", "/console/settings");
+    // 回门户的入口已移至头像菜单, 侧边栏底部不再有第二个链接。
+    expect(within(footer).getAllByRole("link")).toHaveLength(1);
+    expect(within(footer).queryByRole("link", { name: "员工门户" })).not.toBeInTheDocument();
   });
 
-  test("控制台侧边栏底部展示返回员工门户的整页链接", () => {
-    renderShell("console");
+  test("控制台头像菜单展示员工门户的整页链接", async () => {
+    const user = userEvent.setup();
+    renderShell("console", "admin@example.com");
 
-    const footer = screen.getByLabelText("侧边栏底部操作");
-    const backLink = within(footer).getByRole("link", { name: "返回员工门户" });
-    expect(backLink).toHaveAttribute("href", "/portal/");
-    // data-discover 是 react-router Link/NavLink 的标记; 同分组的设置项作为正对照, 确保下面这条断言非空转。
-    expect(within(footer).getByRole("link", { name: "设置" })).toHaveAttribute("data-discover", "true");
-    expect(backLink).not.toHaveAttribute("data-discover");
-    // 底部返回入口不参与侧边栏指示灯定位。
-    expect(backLink).not.toHaveAttribute("data-nav-path");
+    await user.click(screen.getByRole("button", { name: "当前登录用户菜单" }));
+
+    const menu = screen.getByRole("menu");
+    const portalEntry = within(menu).getByRole("menuitem", { name: "员工门户" });
+    // 壳层模式启动时定死, 必须整页跳转; 同菜单里的安全设置(Link)作为正对照, 确保断言非空转。
+    expect(portalEntry).toHaveAttribute("href", "/portal/");
+    expect(portalEntry).not.toHaveAttribute("data-discover");
+    expect(within(menu).getByRole("menuitem", { name: "安全设置" })).toHaveAttribute("data-discover", "true");
   });
 
   test("门户没有安全设置占位入口", () => {
