@@ -1,5 +1,5 @@
-import { render } from "@testing-library/react";
-import { describe, expect, test } from "vitest";
+import { act, render } from "@testing-library/react";
+import { afterEach, describe, expect, test, vi } from "vitest";
 
 import type { ScopedPermissionGroupItem, ScopedPermissionItem } from "../hooks/accessRequestTypes";
 import { PermissionSelector } from "./PermissionSelector";
@@ -10,23 +10,27 @@ function permission(index: number): ScopedPermissionItem {
   return { id: index, app_key: "crm", key: `crm.perm.${index}`, name: `权限 ${index}`, scopes: [SELF] } as ScopedPermissionItem;
 }
 
-function groupWith(permissionCount: number): ScopedPermissionGroupItem {
+function groupWith(permissionCount: number, key = "orders", offset = 0): ScopedPermissionGroupItem {
   return {
-    id: 1,
+    id: offset + 1,
     app_key: "crm",
     type: "group",
-    key: "orders",
-    name: "订单",
-    permissions: Array.from({ length: permissionCount }, (_, index) => permission(index)),
+    key,
+    name: key,
+    permissions: Array.from({ length: permissionCount }, (_, index) => permission(offset + index)),
   } as ScopedPermissionGroupItem;
 }
 
 function selector(permissionCount: number, expandedGroupKeys: string[]) {
+  return selectorWithGroups([groupWith(permissionCount)], expandedGroupKeys);
+}
+
+function selectorWithGroups(groups: ScopedPermissionGroupItem[], expandedGroupKeys: string[]) {
   const noop = () => undefined;
   return (
     <PermissionSelector
       appKey="crm"
-      groups={[groupWith(permissionCount)]}
+      groups={groups}
       ungroupedPermissions={[]}
       selectedKeys={[]}
       expandedGroupKeys={expandedGroupKeys}
@@ -87,5 +91,48 @@ describe("PermissionSelector 展开动画的规模上限", () => {
 
     expect(container.querySelectorAll("tbody tr")).toHaveLength(6);
     expect(motionRowCount(container, "exiting")).toBe(5);
+  });
+});
+
+describe("PermissionSelector 前后两批过渡各自定案", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  test("先后收起两个大组: 第一批放完不会让第二批反悔重播退场动画", () => {
+    vi.useFakeTimers();
+    const groups = [groupWith(30, "a", 0), groupWith(30, "b", 100)];
+    const { container, rerender } = render(selectorWithGroups(groups, ["a", "b"]));
+    // 两个组的行都在场: 2 个组行 + 60 条权限。
+    expect(container.querySelectorAll("tbody tr")).toHaveLength(62);
+
+    // 第一批: 收起 a。30 行不到阈值, 照常播退场动画, 行留在 DOM 里等动画放完。
+    rerender(selectorWithGroups(groups, ["b"]));
+    expect(motionRowCount(container, "exiting")).toBe(30);
+    expect(container.querySelectorAll("tbody tr")).toHaveLength(62);
+
+    act(() => {
+      vi.advanceTimersByTime(80);
+    });
+
+    // 第二批: 收起 b。此刻还在播的 30 行 + 新的 30 行 = 60, 超阈值, 这一批直接摘掉。
+    rerender(selectorWithGroups(groups, []));
+    expect(motionRowCount(container, "exiting")).toBe(30);
+    expect(container.querySelectorAll("tbody tr")).toHaveLength(32);
+
+    // 第一批的计时器到点: a 的行被摘掉。b 那一批的决定必须还是"跳过",
+    // 否则它的 30 行会重新挂上、重播一遍退场动画, 再被 a 的计时器提前摘走。
+    act(() => {
+      vi.advanceTimersByTime(80);
+    });
+    expect(motionRowCount(container, "exiting")).toBe(0);
+    expect(container.querySelectorAll("tbody tr")).toHaveLength(2);
+
+    // 第二批的计时器到点后同样只剩两个组行。
+    act(() => {
+      vi.advanceTimersByTime(120);
+    });
+    expect(motionRowCount(container, "exiting")).toBe(0);
+    expect(container.querySelectorAll("tbody tr")).toHaveLength(2);
   });
 });

@@ -1,5 +1,5 @@
 import { flexRender, type Table } from "@tanstack/react-table";
-import type { MouseEvent } from "react";
+import { useRef, type MouseEvent } from "react";
 
 import { EmptyState } from "../../../components/ui/EmptyState";
 import { cn } from "../../../lib/cn";
@@ -10,7 +10,7 @@ import { TABLE_CELL_CLASS, TABLE_ROW_CLASS } from "./permissionSelectorPrimitive
 import type { PermissionSelectorRow } from "./permissionSelectorRows";
 
 /*
- * 一次过渡里最多逐行做动画的行数。
+ * 同时逐行做动画的行数上限。
  *
  * 进出场动画不是一条 opacity: 每行的每个单元格都在动 grid-template-rows(0fr <-> 1fr)
  * 以及单元格自身的上下内边距与下边框, 全都是要重新布局的属性。
@@ -24,7 +24,7 @@ export function PermissionSelectorBody({ table }: { table: Table<PermissionSelec
   const { t } = useI18n();
   const { disabled, showSelectedOnly, onToggleGroup } = permissionSelectorTableMeta(table);
   const rows = table.getRowModel().rows;
-  const skipRowMotion = countMotionRows(rows) > ROW_MOTION_LIMIT;
+  const rowMotionSkips = useRowMotionSkips(rows);
   if (rows.length === 0) {
     return (
       <tbody>
@@ -46,6 +46,7 @@ export function PermissionSelectorBody({ table }: { table: Table<PermissionSelec
   return (
     <tbody>
       {rows.map((row) => {
+        const skipRowMotion = rowMotionSkips.get(row.id) === true;
         // 跳过动画时退场行没有可播的动画, 直接不渲染, 否则它们会原地停留一个动画时长才消失。
         if (skipRowMotion && row.original.isExiting) {
           return null;
@@ -87,15 +88,52 @@ export function PermissionSelectorBody({ table }: { table: Table<PermissionSelec
   );
 }
 
-/** 本次渲染里带进出场标记的行数; 阈值判断只看行, 不看单元格。 */
-function countMotionRows(rows: Array<{ original: PermissionSelectorRow }>): number {
-  let count = 0;
+/**
+ * 行 id -> 这一行所属的那批过渡要不要跳过逐行动画。
+ *
+ * 决定必须跟着"批次"活到过渡结束, 不能每次渲染按当时的行数重算。
+ * 反例: 两个 30 行的组间隔 80ms 先后收起 —— 第二批到来时在场的过渡行有 60 行(超阈值)
+ * 因而被跳过; 等第一批的计时器到点、行数掉回 30, 重算就会把第二批从"跳过"翻回"要动画",
+ * 已经摘掉的行重新挂上、重放一遍退场动画, 再被第一批那个计时器提前摘走。
+ * 因此决定按行记在 ref 里, 直到这一行不再处于过渡态才连同记录一起清掉。
+ *
+ * 新一批的代价要把"还在播的行"一起算进去: 它们仍在每帧参与重排。
+ * 已经定下的决定不会因此改变, 所以不存在上面那种来回翻转。
+ *
+ * 这里在渲染期改 ref: 与 useGroupTransitionKeys 在渲染期推进过渡集合是同一套做法,
+ * 且对同一批输入是幂等的(重复渲染既不会新增决定也不会改写决定)。
+ */
+function useRowMotionSkips(rows: Array<{ id: string; original: PermissionSelectorRow }>): Map<string, boolean> {
+  const skipsByRowId = useRef(new Map<string, boolean>()).current;
+
+  const motionRowIds = new Set<string>();
   for (const row of rows) {
     if (row.original.isEntering || row.original.isExiting) {
-      count += 1;
+      motionRowIds.add(row.id);
     }
   }
-  return count;
+
+  for (const rowId of [...skipsByRowId.keys()]) {
+    if (!motionRowIds.has(rowId)) {
+      skipsByRowId.delete(rowId);
+    }
+  }
+
+  const freshRowIds = [...motionRowIds].filter((rowId) => !skipsByRowId.has(rowId));
+  if (freshRowIds.length > 0) {
+    let animatingCount = 0;
+    for (const skip of skipsByRowId.values()) {
+      if (!skip) {
+        animatingCount += 1;
+      }
+    }
+    const skip = animatingCount + freshRowIds.length > ROW_MOTION_LIMIT;
+    for (const rowId of freshRowIds) {
+      skipsByRowId.set(rowId, skip);
+    }
+  }
+
+  return skipsByRowId;
 }
 
 function rowClassName(row: PermissionSelectorRow, disabled: boolean, skipRowMotion: boolean): string {
