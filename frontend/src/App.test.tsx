@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useNavigate } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -11,15 +11,27 @@ import { I18nProvider } from "./i18n/I18nProvider";
 vi.mock("./pages/console/ConsoleAppList", () => new Promise(() => undefined));
 
 /** 路由结构用例的观察点: 页面被挂载了几次、设置页要不要抛错。 */
-const routeProbes = vi.hoisted(() => ({ workspaceMounts: 0, operationsMounts: 0, settingsThrows: false }));
+const routeProbes = vi.hoisted(() => ({
+  workspaceMounts: 0,
+  operationsMounts: 0,
+  settingsThrows: false,
+  /** 在途"保存": 用例决定它什么时候结算。 */
+  pendingSave: Promise.resolve(),
+  resolvePendingSave: () => undefined as void,
+}));
 
+/*
+ * 工作台桩件按真实工作台的写法把 appKey 闭在"保存"的回调里:
+ * 点保存时记下发起那一刻的 appKey, 请求回来后再按它结算。
+ * 路由不重挂载的话, 这个组件实例会跨应用存活, alpha 的保存就会落到 beta 的界面上。
+ */
 vi.mock("./pages/console/ConsoleAppWorkspace", async () => {
   const React = await import("react");
   const { useParams } = await import("react-router-dom");
   return {
     ConsoleAppWorkspace: function ConsoleAppWorkspaceStub() {
       const { appKey = "" } = useParams();
-      const [count, setCount] = React.useState(0);
+      const [savedApp, setSavedApp] = React.useState("");
       React.useEffect(() => {
         routeProbes.workspaceMounts += 1;
       }, []);
@@ -27,8 +39,20 @@ vi.mock("./pages/console/ConsoleAppWorkspace", async () => {
         "div",
         null,
         React.createElement("span", { "data-testid": "workspace-app" }, appKey),
-        React.createElement("span", { "data-testid": "workspace-count" }, String(count)),
-        React.createElement("button", { type: "button", onClick: () => setCount((current) => current + 1) }, "工作台加一"),
+        React.createElement("span", { "data-testid": "workspace-saved" }, savedApp),
+        React.createElement(
+          "button",
+          {
+            type: "button",
+            onClick: () => {
+              const target = appKey;
+              routeProbes.pendingSave = routeProbes.pendingSave.then(() => {
+                setSavedApp(target);
+              });
+            },
+          },
+          "保存",
+        ),
       );
     },
   };
@@ -108,29 +132,39 @@ describe("App 路由不再靠重挂载整棵子树复位", () => {
     routeProbes.workspaceMounts = 0;
     routeProbes.operationsMounts = 0;
     routeProbes.settingsThrows = false;
+    routeProbes.pendingSave = new Promise<void>((resolve) => {
+      routeProbes.resolvePendingSave = resolve;
+    });
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  test("同一个工作台换应用只换参数, 页面保持挂载", async () => {
+  test("在 alpha 上发起的保存回来时不会结算到 beta 的工作台上", async () => {
     stubResizeObserver();
     const user = userEvent.setup();
     renderApp("/console/apps/alpha", "console");
 
     expect(await screen.findByTestId("workspace-app")).toHaveTextContent("alpha");
-    await user.click(screen.getByRole("button", { name: "工作台加一" }));
-    await user.click(screen.getByRole("button", { name: "工作台加一" }));
-    expect(screen.getByTestId("workspace-count")).toHaveTextContent("2");
     expect(routeProbes.workspaceMounts).toBe(1);
+    await user.click(screen.getByRole("button", { name: "保存" }));
 
+    // 请求还在飞的时候切到另一个应用。
     await user.click(screen.getByRole("button", { name: "去应用 beta" }));
-
     expect(screen.getByTestId("workspace-app")).toHaveTextContent("beta");
-    // 工作台自己按 appKey 复位需要复位的东西, 不需要路由层把整页拆了重建。
-    expect(routeProbes.workspaceMounts).toBe(1);
-    expect(screen.getByTestId("workspace-count")).toHaveTextContent("2");
+
+    await act(async () => {
+      routeProbes.resolvePendingSave();
+      await routeProbes.pendingSave;
+    });
+
+    // alpha 那次保存结算时, beta 的界面必须一点没动。
+    expect(screen.getByTestId("workspace-saved")).toBeEmptyDOMElement();
+    expect(screen.getByTestId("workspace-app")).toHaveTextContent("beta");
+    // 工作台下面十几处 mutation 都把 appKey 闭在回调里, 所以这条路由按 appKey 重挂载,
+    // 上一个应用的在途请求随组件一起被摘掉。
+    expect(routeProbes.workspaceMounts).toBe(2);
   });
 
   test("运维分区是页面主体资源, 换分区仍然重挂载这一个页面", async () => {

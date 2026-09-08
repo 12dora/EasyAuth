@@ -144,11 +144,18 @@ export function App({ brandLogoUrl = "/assets/brand/jiefa_logo.webp", currentUse
         {/* 创建应用仅超管; 非超管深链回应用列表, API 仍为最终权威。 */}
         <Route path="/console/apps/new" element={isSuperuser ? <LazyRoute routeName="console"><AppOnboardingWizard /></LazyRoute> : <Navigate to="/console" replace />} />
         {/*
-          * 工作台不按 :appKey 打 key: ConsoleAppWorkspace 自己就是按 appKey 变化写的
-          * (useEffect([appKey]) 复位编辑态, 面板 key={`${appKey}:${activeTab}`}),
-          * 换应用时不需要把整页拆了重建。
+          * 工作台必须按 :appKey 打 key。
+          *
+          * 它自己虽然复位了编辑态(useEffect([appKey]))和面板(key={`${appKey}:${activeTab}`}),
+          * 但整个工作台下面十几处 useMutation 都把 appKey 闭在 mutationFn / onSuccess 里,
+          * 而 TanStack Query 会在重渲染时把这些选项更新到还在飞的那次 mutation 上:
+          * 在 alpha 上点了保存、请求还没回来就切到 beta, 这次保存会打到 beta 的接口去,
+          * 成功回调也会按 beta 结算(关掉 beta 的编辑器、失效错的缓存)。
+          * 要在不重挂载的前提下做对, 得把目标应用绑进每一次 mutate 的入参并在结算时比对,
+          * 那是工作台自己那十几个 mutation 的事; 在它们改好之前, 这里按 appKey 重挂载,
+          * 让上一个应用的请求随组件一起被摘掉 —— 正确性优先于这一处的重挂载开销。
           */}
-        <Route path="/console/apps/:appKey" element={<LazyRoute routeName="workspace"><ConsoleAppWorkspace /></LazyRoute>} />
+        <Route path="/console/apps/:appKey" element={<LazyRoute routeName="workspace"><ParamScoped param="appKey"><ConsoleAppWorkspace /></ParamScoped></LazyRoute>} />
         <Route path="/console/grants/direct" element={isSuperuser ? <LazyRoute routeName="console"><DirectGrantPage /></LazyRoute> : <Navigate to="/console" replace />} />
         <Route path="/console/grants/departments" element={isSuperuser ? <LazyRoute routeName="console"><DepartmentGrantsPage /></LazyRoute> : <Navigate to="/console" replace />} />
         <Route path="/console/teams" element={isSuperuser ? <LazyRoute routeName="console"><ConsoleTeamList /></LazyRoute> : <Navigate to="/console" replace />} />
