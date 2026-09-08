@@ -15,6 +15,8 @@ type JsonValue = None | bool | int | float | str | list[JsonValue] | dict[str, J
 APP_SCOPE_KEY_PATTERN = re.compile(r"^[A-Z0-9_]+$")
 
 AUTHORIZATION_GROUP_KINDS = ("role", "bundle")
+# 每个应用由平台维护的内置授权组; manifest 与控制台不得声明、重命名、停用或删除。
+BUILTIN_SUPER_ADMIN_GROUP_KEY: Final = "super_admin"
 PERMISSION_RISK_LEVELS = ("standard", "high")
 MANAGED_SCOPE_POLICY_TARGET_APP_DEFAULT = "app_default"
 MANAGED_SCOPE_POLICY_TARGET_AUTHORIZATION_GROUP_GRANT = "authorization_group_grant"
