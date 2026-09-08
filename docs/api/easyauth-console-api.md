@@ -275,13 +275,34 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 | 方法 | 路径 | URL name | 说明 |
 | --- | --- | --- | --- |
 | GET | `/grant-catalog` | `console-grant-catalog` | 管理员授权目录（全量 active 应用/授权组/权限） |
-| GET | `/user-options` | `console-user-options` | 被授权人联想；项含 `user_id`、`name`、`department`、`avatar_url` |
+| GET | `/user-options` | `console-user-options` | 被授权人联想或按 ID 回填；项含 `user_id`、`name`、`department`、`avatar_url` |
 | POST | `/direct-grants` | `console-direct-grants` | 管理员直接授予，立即合并进用户当前授权 |
 | GET | `/departments/tree` | `console-departments-tree` | 钉钉组织树 |
 | GET | `/departments/{dept_id}/grant-policies` | `console-department-grant-policies` | 本部门 + 祖先继承的生效策略 |
 | POST | `/departments/{dept_id}/grant-policies` | `console-department-grant-policies` | 在该部门新建预授权策略 |
 | PUT | `/department-grant-policies/{id}` | `console-department-grant-policy` | 全量替换策略目标；不可改部门或应用 |
 | DELETE | `/department-grant-policies/{id}` | `console-department-grant-policy` | 删除策略，204 |
+
+### 用户选项
+
+**GET `/user-options`** 要求 **superuser**。成功信封 `{ "data": [...] }`，项形状固定为
+`{ "user_id", "name", "department", "avatar_url" }`。
+
+查询方式：
+
+| 参数 | 说明 |
+| --- | --- |
+| `user_ids` | 逗号分隔的 Authentik 用户 ID。给出后 `q` 可不传且被忽略，按这些 ID 回填 |
+| `q` | 联想搜索关键字；未给 `user_ids` 时不得为空 |
+| `purpose` | `employee`（默认）或 `approver`；给出则必须合法 |
+| `limit` | 仅联想搜索生效，默认 10、最大 50 |
+
+`user_ids` 去空白后须为 1–50 个，否则 400 `VALIDATION_ERROR`（`details.field=user_ids`）。
+超过 50 个或解析结果为空均拒绝。回填结果只含在职用户；`purpose=employee` 排除本地管理员，
+`approver` 可包含。未知 ID、停用用户不出现在 `data` 中，顺序无约定。
+
+未给 `user_ids` 时保持既有联想：空 `q` 为 422；按姓名、邮箱、用户 ID、工号模糊匹配，
+并受 `limit` 截断。非法 `purpose` 无论哪条路径均为 422。
 
 ### 授权目录
 

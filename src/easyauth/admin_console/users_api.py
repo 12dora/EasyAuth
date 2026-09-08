@@ -83,32 +83,16 @@ def console_user_options(request: HttpRequest) -> JsonResponse:
             return response
         case _:
             pass
+    return _user_options_payload(request)
 
-    query = request.GET.get("q", "").strip()
-    if query == "":
-        return error_response(
-            ErrorCode.VALIDATION_ERROR,
-            "q 不得为空。",
-            {"field": "q"},
-            status=HTTPStatus.UNPROCESSABLE_ENTITY,
-        )
-    purpose = request.GET.get("purpose", USER_SEARCH_PURPOSE_EMPLOYEE).strip()
-    if purpose not in USER_SEARCH_PURPOSES:
-        return error_response(
-            ErrorCode.VALIDATION_ERROR,
-            "purpose 仅支持 employee 或 approver。",
-            {"field": "purpose"},
-            status=HTTPStatus.UNPROCESSABLE_ENTITY,
-        )
-    users = UserMirror.objects.filter(status=USER_STATUS_ACTIVE)
-    if purpose == USER_SEARCH_PURPOSE_EMPLOYEE:
-        # 本地管理员是 break-glass 系统账号。它不进入员工选择控件。交接接收人与成员都在此列。
-        users = users.exclude(authentik_user_id__startswith=LOCAL_ADMIN_SUBJECT_PREFIX)
-    users = _apply_query_filter(users, query)
-    items: list[JsonValue] = [
-        _user_item(user) for user in users.order_by("name", "authentik_user_id")[: _limit(request)]
-    ]
-    return json_response(list_payload(items))
+
+def _user_options_payload(request: HttpRequest) -> JsonResponse:
+    lookup_ids = _parse_user_option_ids(request)
+    if isinstance(lookup_ids, JsonResponse):
+        return lookup_ids
+    if lookup_ids is not None:
+        return _user_options_lookup(request, lookup_ids)
+    return _user_options_search(request)
 
 
 def console_user_console_admin(request: HttpRequest, user_id: str) -> JsonResponse:
@@ -153,6 +137,85 @@ def _people_page(request: HttpRequest) -> JsonResponse:
             pagination=pagination_item(cast("Pagination", cast("object", page))),
         ),
     )
+
+
+def _user_options_purpose(request: HttpRequest) -> str | JsonResponse:
+    purpose = request.GET.get("purpose", USER_SEARCH_PURPOSE_EMPLOYEE).strip()
+    if purpose not in USER_SEARCH_PURPOSES:
+        return error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "purpose 仅支持 employee 或 approver。",
+            {"field": "purpose"},
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+        )
+    return purpose
+
+
+def _parse_user_option_ids(request: HttpRequest) -> tuple[str, ...] | JsonResponse | None:
+    if "user_ids" not in request.GET:
+        return None
+    raw_ids = request.GET.get("user_ids", "")
+    user_ids = tuple(part.strip() for part in raw_ids.split(",") if part.strip())
+    if not user_ids:
+        return error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "user_ids 不得为空。",
+            {"field": "user_ids"},
+            status=HTTPStatus.BAD_REQUEST,
+        )
+    if len(user_ids) > USER_SEARCH_MAX_LIMIT:
+        return error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "user_ids 不得超过 50 个。",
+            {"field": "user_ids"},
+            status=HTTPStatus.BAD_REQUEST,
+        )
+    return user_ids
+
+
+def _active_option_users(purpose: str) -> QuerySet[UserMirror]:
+    users = UserMirror.objects.filter(status=USER_STATUS_ACTIVE)
+    if purpose == USER_SEARCH_PURPOSE_EMPLOYEE:
+        # 本地管理员是 break-glass 系统账号。它不进入员工选择控件。交接接收人与成员都在此列。
+        users = users.exclude(authentik_user_id__startswith=LOCAL_ADMIN_SUBJECT_PREFIX)
+    return users
+
+
+def _user_options_lookup(request: HttpRequest, user_ids: tuple[str, ...]) -> JsonResponse:
+    match _user_options_purpose(request):
+        case JsonResponse() as response:
+            return response
+        case str() as purpose:
+            return _user_options_for_ids(purpose, user_ids)
+
+
+def _user_options_search(request: HttpRequest) -> JsonResponse:
+    query = request.GET.get("q", "").strip()
+    if query == "":
+        return error_response(
+            ErrorCode.VALIDATION_ERROR,
+            "q 不得为空。",
+            {"field": "q"},
+            status=HTTPStatus.UNPROCESSABLE_ENTITY,
+        )
+    match _user_options_purpose(request):
+        case JsonResponse() as response:
+            return response
+        case str() as purpose:
+            pass
+    users = _apply_query_filter(_active_option_users(purpose), query)
+    items: list[JsonValue] = [
+        _user_item(user) for user in users.order_by("name", "authentik_user_id")[: _limit(request)]
+    ]
+    return json_response(list_payload(items))
+
+
+def _user_options_for_ids(purpose: str, user_ids: tuple[str, ...]) -> JsonResponse:
+    users = _active_option_users(purpose).filter(authentik_user_id__in=user_ids)
+    items: list[JsonValue] = [
+        _user_item(user) for user in users.order_by("name", "authentik_user_id")
+    ]
+    return json_response(list_payload(items))
 
 
 def _apply_query_filter(

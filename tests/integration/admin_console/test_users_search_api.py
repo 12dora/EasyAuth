@@ -89,6 +89,126 @@ def test_approver_search_includes_active_local_admin() -> None:
     assert any(item["user_id"] == local_admin.authentik_user_id for item in items)
 
 
+def test_user_options_lookup_by_ids_ignores_q_and_keeps_item_shape() -> None:
+    client = _logged_in_superuser("user-options-ids-admin")
+    sales = UserMirror.objects.create(
+        authentik_user_id="ak_uid_lookup_sales",
+        name="销售运行用户",
+        email="sales.lookup@example.com",
+        department="销售部",
+        avatar_url="https://avatar.example.test/lookup-sales.png",
+    )
+    ops = UserMirror.objects.create(
+        authentik_user_id="ak_uid_lookup_ops",
+        name="运维用户",
+        department="运维部",
+    )
+    _ = UserMirror.objects.create(
+        authentik_user_id="ak_uid_lookup_other",
+        name="其他用户",
+    )
+
+    response = client.get(
+        USER_OPTIONS_API_URL,
+        {"user_ids": f"{ops.authentik_user_id},{sales.authentik_user_id}", "q": "不会匹配"},
+    )
+
+    payload = cast("dict[str, JsonValue]", response.json())
+    items = cast("list[dict[str, JsonValue]]", payload["data"])
+    by_id = {item["user_id"]: item for item in items}
+    assert response.status_code == HTTPStatus.OK
+    assert set(by_id) == {sales.authentik_user_id, ops.authentik_user_id}
+    assert by_id[sales.authentik_user_id] == {
+        "user_id": "ak_uid_lookup_sales",
+        "name": "销售运行用户",
+        "department": "销售部",
+        "avatar_url": "https://avatar.example.test/lookup-sales.png",
+    }
+    assert set(items[0]) == {"user_id", "name", "department", "avatar_url"}
+
+
+def test_user_options_lookup_by_ids_uses_same_active_and_purpose_semantics() -> None:
+    client = _logged_in_superuser("user-options-ids-purpose-admin")
+    active = UserMirror.objects.create(
+        authentik_user_id="ak_uid_lookup_active",
+        name="在职用户",
+    )
+    departed = UserMirror.objects.create(
+        authentik_user_id="ak_uid_lookup_departed",
+        name="离职用户",
+        status=USER_STATUS_DISABLED,
+    )
+    local_admin = UserMirror.objects.create(
+        authentik_user_id="local-admin:lookup-admin",
+        name="本地管理员 lookup",
+    )
+    user_ids = (
+        f"{active.authentik_user_id},{departed.authentik_user_id},"
+        f"{local_admin.authentik_user_id},ak_uid_lookup_unknown"
+    )
+
+    employee = client.get(USER_OPTIONS_API_URL, {"user_ids": user_ids})
+    approver = client.get(
+        USER_OPTIONS_API_URL,
+        {"user_ids": user_ids, "purpose": "approver"},
+    )
+
+    employee_ids = {
+        item["user_id"]
+        for item in cast("list[dict[str, JsonValue]]", employee.json()["data"])
+    }
+    approver_ids = {
+        item["user_id"]
+        for item in cast("list[dict[str, JsonValue]]", approver.json()["data"])
+    }
+    assert employee.status_code == HTTPStatus.OK
+    assert employee_ids == {active.authentik_user_id}
+    assert approver.status_code == HTTPStatus.OK
+    assert approver_ids == {active.authentik_user_id, local_admin.authentik_user_id}
+
+
+def test_user_options_lookup_by_ids_rejects_more_than_fifty() -> None:
+    client = _logged_in_superuser("user-options-ids-limit-admin")
+    user_ids = ",".join(f"ak_uid_lookup_limit_{index}" for index in range(51))
+
+    response = client.get(USER_OPTIONS_API_URL, {"user_ids": user_ids})
+
+    payload = cast("dict[str, JsonValue]", response.json())
+    error = payload["error"]
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+    assert isinstance(error, dict)
+    assert error["code"] == "VALIDATION_ERROR"
+    assert error["details"] == {"field": "user_ids"}
+
+
+def test_user_options_lookup_by_ids_rejects_empty_list() -> None:
+    client = _logged_in_superuser("user-options-ids-empty-admin")
+
+    response = client.get(USER_OPTIONS_API_URL, {"user_ids": " , , "})
+
+    payload = cast("dict[str, JsonValue]", response.json())
+    error = payload["error"]
+    assert response.status_code == HTTPStatus.BAD_REQUEST
+    assert isinstance(error, dict)
+    assert error["code"] == "VALIDATION_ERROR"
+
+
+def test_user_options_lookup_by_ids_still_validates_purpose() -> None:
+    client = _logged_in_superuser("user-options-ids-purpose-invalid-admin")
+
+    response = client.get(
+        USER_OPTIONS_API_URL,
+        {"user_ids": "ak_uid_lookup_purpose", "purpose": "receiver"},
+    )
+
+    payload = cast("dict[str, JsonValue]", response.json())
+    error = payload["error"]
+    assert response.status_code == HTTPStatus.UNPROCESSABLE_ENTITY
+    assert isinstance(error, dict)
+    assert error["code"] == "VALIDATION_ERROR"
+    assert error["details"] == {"field": "purpose"}
+
+
 def test_user_search_requires_console_session() -> None:
     client = Client(HTTP_HOST="localhost")
 
