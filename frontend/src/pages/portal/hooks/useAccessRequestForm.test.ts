@@ -20,23 +20,40 @@ import {
   type ScopedPermissionItem,
 } from "./accessRequestTypes";
 import { useAccessRequestForm } from "./useAccessRequestForm";
+import type { UseAccessRequestFormOptions } from "./useAccessRequestForm";
 
-function catalogResponse() {
-  return jsonResponse(
-    {
-      apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: ["me", "boss"] }],
-      approver_options: [
-        { user_id: "me", name: "我" },
-        { user_id: "boss", name: "老板" },
-      ],
-      authorization_groups: [
-        { id: 11, app_key: "crm", key: "reader", kind: "role", name: "只读", requestable: true, requires_approval: true, grants: [] },
-      ],
-      permission_groups: [],
-      // app_key 缺省 => 应用无关的未分组权限, FF-12 应在选定应用后仍然可见。
-      ungrouped_permissions: [{ id: 101, key: "shared.view", name: "共享查看", scopes: [{ key: "GLOBAL", name: "全局" }] }],
-    },
-  );
+/** 申请表除了目录还会读"我的授权": 选中应用时要按它判断这次申请是新增还是变更。 */
+const EMPTY_GRANT_LIST = {
+  data: [],
+  pagination: { page: 1, page_size: 100, total_items: 0, total_pages: 0 },
+};
+
+const CURRENT_GRANTS_URL = "/portal/api/v1/me/grants?page=1&page_size=100";
+
+/** 只提供目录(与空的"我的授权")的 fetch 替身。 */
+function catalogOnlyFetch(catalog: unknown, grantList: unknown = EMPTY_GRANT_LIST) {
+  return vi.fn<typeof fetch>(async (input) => {
+    if (String(input) === CURRENT_GRANTS_URL) {
+      return jsonResponse(grantList);
+    }
+    return jsonResponse(catalog);
+  });
+}
+
+function catalogPayload() {
+  return {
+    apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: ["me", "boss"] }],
+    approver_options: [
+      { user_id: "me", name: "我" },
+      { user_id: "boss", name: "老板" },
+    ],
+    authorization_groups: [
+      { id: 11, app_key: "crm", key: "reader", kind: "role", name: "只读", requestable: true, requires_approval: true, grants: [] },
+    ],
+    permission_groups: [],
+    // app_key 缺省 => 应用无关的未分组权限, FF-12 应在选定应用后仍然可见。
+    ungrouped_permissions: [{ id: 101, key: "shared.view", name: "共享查看", scopes: [{ key: "GLOBAL", name: "全局" }] }],
+  };
 }
 
 function jsonResponse(payload: unknown, status = 200) {
@@ -73,8 +90,8 @@ function wrapper({ children }: { children: ReactNode }) {
   return createElement(QueryClientProvider, { client }, children);
 }
 
-async function renderReadyForm(currentUserId = "") {
-  const view = renderHook(() => useAccessRequestForm(currentUserId), { wrapper });
+async function renderReadyForm(currentUserId = "", options: UseAccessRequestFormOptions = {}) {
+  const view = renderHook(() => useAccessRequestForm(currentUserId, options), { wrapper });
   await waitFor(() => expect(view.result.current.apps).toHaveLength(1));
   return view;
 }
@@ -85,7 +102,7 @@ describe("useAccessRequestForm", () => {
   });
 
   test("FF-7: 申请人被排除出审批人候选与默认审批人", async () => {
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => catalogResponse()));
+    vi.stubGlobal("fetch", catalogOnlyFetch(catalogPayload()));
     const { result } = await renderReadyForm("me");
 
     expect(result.current.approverOptions.map((option) => option.user_id)).toEqual(["boss"]);
@@ -95,7 +112,7 @@ describe("useAccessRequestForm", () => {
   });
 
   test("FF-12: 选定应用后应用无关的未分组权限仍然可见", async () => {
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => catalogResponse()));
+    vi.stubGlobal("fetch", catalogOnlyFetch(catalogPayload()));
     const { result } = await renderReadyForm("");
 
     act(() => result.current.changeAppKey("crm"));
@@ -105,7 +122,7 @@ describe("useAccessRequestForm", () => {
   });
 
   test("FF-14: 纯空白理由不能提交且提交理由会被 trim", async () => {
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => catalogResponse()));
+    vi.stubGlobal("fetch", catalogOnlyFetch(catalogPayload()));
     const { result } = await renderReadyForm("");
 
     act(() => result.current.changeAppKey("crm"));
@@ -120,7 +137,7 @@ describe("useAccessRequestForm", () => {
   });
 
   test("FF-5: 限时授权仅在过期时间为未来时才能提交", async () => {
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => catalogResponse()));
+    vi.stubGlobal("fetch", catalogOnlyFetch(catalogPayload()));
     const { result } = await renderReadyForm("");
 
     act(() => result.current.changeAppKey("crm"));
@@ -160,6 +177,9 @@ describe("useAccessRequestForm", () => {
     const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
       if (String(input) === "/portal/api/v1/request-catalog") {
         return jsonResponse(catalog);
+      }
+      if (String(input) === CURRENT_GRANTS_URL) {
+        return jsonResponse(EMPTY_GRANT_LIST);
       }
       if (String(input) === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
         submittedPayloads.push(JSON.parse(String(init.body)));
@@ -241,6 +261,9 @@ describe("useAccessRequestForm", () => {
       if (String(input) === "/portal/api/v1/request-catalog") {
         return jsonResponse(catalog);
       }
+      if (String(input) === CURRENT_GRANTS_URL) {
+        return jsonResponse(EMPTY_GRANT_LIST);
+      }
       if (String(input) === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
         submittedPayloads.push(JSON.parse(String(init.body)));
         return jsonResponse({ access_request: { id: 1 } }, 201);
@@ -260,7 +283,7 @@ describe("useAccessRequestForm", () => {
     // 权限组整体授予, 少一项就不再是它: 权限组目标清空, 其余可申请的覆盖权限转成直接申请。
     expect(result.current.authorizationGroupKeys).toEqual([]);
     expect(result.current.selectedPermissionKeys).toEqual([directGrantSelectionKey("customer.export", "SELF")]);
-    expect(result.current.toastMessageKey).toBe("portal.request.groupMaterializedPartially");
+    expect(result.current.noticeMessageKey).toBe("portal.request.groupMaterializedPartially");
 
     act(() => result.current.changeReason("只保留导出客户"));
     await waitFor(() => expect(result.current.canSubmit).toBe(true));
@@ -291,6 +314,9 @@ describe("useAccessRequestForm", () => {
       if (String(input) === "/portal/api/v1/request-catalog") {
         return jsonResponse(catalog);
       }
+      if (String(input) === CURRENT_GRANTS_URL) {
+        return jsonResponse(EMPTY_GRANT_LIST);
+      }
       if (String(input) === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
         submittedPayloads.push(JSON.parse(String(init.body)));
         return jsonResponse({ access_request: { id: 1 } }, 201);
@@ -306,12 +332,12 @@ describe("useAccessRequestForm", () => {
     act(() => result.current.changePermissionScope(permission, "SELF"));
     expect(result.current.authorizationGroupKeys).toEqual([]);
     expect(result.current.selectedPermissionKeys).toEqual([]);
-    expect(result.current.toastMessageKey).toBe("portal.request.groupMaterialized");
+    expect(result.current.noticeMessageKey).toBe("portal.request.groupMaterialized");
 
     // 重新勾上这项权限, 再把权限组选回来: 覆盖关系恢复, 直接权限不再重复下发。
     act(() => result.current.changePermissionScope(permission, "SELF"));
     expect(result.current.selectedPermissionKeys).toEqual([directGrantSelectionKey("customer.read", "SELF")]);
-    expect(result.current.toastMessageKey).toBe("");
+    expect(result.current.noticeMessageKey).toBe("");
 
     act(() => result.current.changeAuthorizationGroupKeys(["customer-reader"]));
     expect(result.current.selectedPermissionKeys).toEqual([]);
@@ -358,6 +384,9 @@ describe("useAccessRequestForm", () => {
       if (String(input) === "/portal/api/v1/request-catalog") {
         return jsonResponse(catalog);
       }
+      if (String(input) === CURRENT_GRANTS_URL) {
+        return jsonResponse(EMPTY_GRANT_LIST);
+      }
       if (String(input) === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
         submittedPayloads.push(JSON.parse(String(init.body)));
         return jsonResponse({ access_request: { id: 1 } }, 201);
@@ -378,7 +407,7 @@ describe("useAccessRequestForm", () => {
     act(() => result.current.changePermissionScope(auditPermission!, "SELF"));
     // 只加了一项没被任何权限组覆盖的权限: 两个权限组都留着, 不触发落地。
     expect(result.current.authorizationGroupKeys).toEqual(["customer-reader", "customer-exporter"]);
-    expect(result.current.toastMessageKey).toBe("");
+    expect(result.current.noticeMessageKey).toBe("");
 
     act(() => result.current.changeReason("同时申请查看与导出"));
     await waitFor(() => expect(result.current.canSubmit).toBe(true));
@@ -392,7 +421,7 @@ describe("useAccessRequestForm", () => {
   });
 
   test("FF-10: group 只按 grants 的 MANAGED_USERS 实际范围阻止 owner 回退", async () => {
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => jsonResponse(scopedCatalog({
+    vi.stubGlobal("fetch", catalogOnlyFetch(scopedCatalog({
       authorization_groups: [
         {
           id: 11,
@@ -405,13 +434,13 @@ describe("useAccessRequestForm", () => {
           grants: [{ permission_key: "customer.read", scope_key: "MANAGED_USERS" }],
         },
       ],
-    }))));
+    })));
     const { result } = await renderReadyForm();
 
     act(() => result.current.changeAppKey("crm"));
     act(() => result.current.changeAuthorizationGroupKeys(["managed-reader"]));
     await waitFor(() => expect(result.current.selectedApproverUserIds).toEqual([]));
-    expect(result.current.toastMessageKey).toBe("portal.request.approverMissing");
+    expect(result.current.noticeMessageKey).toBe("portal.request.approverMissing");
 
     act(() => result.current.toggleApprover("boss"));
     act(() => result.current.changeReason("查看下级客户"));
@@ -420,7 +449,7 @@ describe("useAccessRequestForm", () => {
   });
 
   test("FF-10: direct 只按本次选中的 MANAGED_USERS 范围判断审批路径", async () => {
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => jsonResponse(scopedCatalog({
+    vi.stubGlobal("fetch", catalogOnlyFetch(scopedCatalog({
       ungrouped_permissions: [
         {
           id: 101,
@@ -435,18 +464,18 @@ describe("useAccessRequestForm", () => {
           default_approver_user_ids: [],
         },
       ],
-    }))));
+    })));
     const { result } = await renderReadyForm();
 
     act(() => result.current.changeAppKey("crm"));
     const permission = result.current.ungroupedPermissions[0];
     act(() => result.current.changePermissionScope(permission, "SELF"));
     await waitFor(() => expect(result.current.selectedApproverUserIds).toEqual(["boss"]));
-    expect(result.current.toastMessageKey).toBe("");
+    expect(result.current.noticeMessageKey).toBe("");
 
     act(() => result.current.changePermissionScope(permission, "MANAGED_USERS"));
     await waitFor(() => expect(result.current.selectedApproverUserIds).toEqual([]));
-    expect(result.current.toastMessageKey).toBe("portal.request.approverMissing");
+    expect(result.current.noticeMessageKey).toBe("portal.request.approverMissing");
   });
 
   test("FF-23: 合法 key 含旧分隔符时仍按结构化二元组无损提交", async () => {
@@ -459,6 +488,9 @@ describe("useAccessRequestForm", () => {
             { id: 101, app_key: "crm", key: permissionKey, name: "查看报告", scopes: [{ key: scopeKey, name: "本人" }] },
           ],
         }));
+      }
+      if (String(input) === CURRENT_GRANTS_URL) {
+        return jsonResponse(EMPTY_GRANT_LIST);
       }
       if (String(input) === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
         return jsonResponse({ ok: true });
@@ -491,6 +523,9 @@ describe("useAccessRequestForm", () => {
       if (String(input) === "/portal/api/v1/request-catalog") {
         return jsonResponse(scopedCatalog());
       }
+      if (String(input) === CURRENT_GRANTS_URL) {
+        return jsonResponse(EMPTY_GRANT_LIST);
+      }
       if (String(input) === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
         requestHeaders.push(new Headers(init.headers).get("Idempotency-Key") ?? "");
         submitAttempts += 1;
@@ -502,7 +537,8 @@ describe("useAccessRequestForm", () => {
       throw new Error(`Unexpected fetch: ${String(input)}`);
     });
     vi.stubGlobal("fetch", fetchMock);
-    const { result } = await renderReadyForm();
+    const onSubmitted = vi.fn();
+    const { result } = await renderReadyForm("", { onSubmitted });
 
     act(() => result.current.changeAppKey("crm"));
     act(() => result.current.changeAuthorizationGroupKeys(["reader"]));
@@ -511,7 +547,9 @@ describe("useAccessRequestForm", () => {
     act(() => result.current.submit());
     await waitFor(() => expect(result.current.submitErrorMessage).toContain("网络连接失败"));
     act(() => result.current.submit());
-    await waitFor(() => expect(result.current.toastMessageKey).toBe("portal.request.submitted"));
+    // 提交成功是一次性事件, 由调用方弹 toast; 表单里的提示位不再留一条"申请已提交"。
+    await waitFor(() => expect(onSubmitted).toHaveBeenCalledTimes(1));
+    expect(result.current.noticeMessageKey).toBe("");
 
     expect(requestHeaders).toHaveLength(2);
     expect(requestHeaders[0]).toMatch(/^[0-9a-f-]{36}$/);
@@ -519,7 +557,7 @@ describe("useAccessRequestForm", () => {
   });
 
   test("FF-23: catalog 成功响应缺少数组契约时进入明确错误态", async () => {
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => jsonResponse({})));
+    vi.stubGlobal("fetch", catalogOnlyFetch({}));
     const { result } = renderHook(() => useAccessRequestForm(), { wrapper });
 
     await waitFor(() => expect(result.current.catalogErrorMessage).toContain("申请目录.apps 必须为数组"));
@@ -527,9 +565,9 @@ describe("useAccessRequestForm", () => {
   });
 
   test("FF-23: catalog 行结构错误时拒绝消费", async () => {
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => jsonResponse(scopedCatalog({
+    vi.stubGlobal("fetch", catalogOnlyFetch(scopedCatalog({
       apps: [{ id: "1", app_key: "crm", name: "CRM", alias: "" }],
-    }))));
+    })));
     const { result } = renderHook(() => useAccessRequestForm(), { wrapper });
 
     await waitFor(() => expect(result.current.catalogErrorMessage).toContain("申请目录.apps[0].id 必须为有限数字"));
@@ -540,11 +578,11 @@ describe("useAccessRequestForm", () => {
       user_id: `approver-${index}`,
       name: `审批人 ${index}`,
     }));
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => jsonResponse(scopedCatalog({
+    vi.stubGlobal("fetch", catalogOnlyFetch(scopedCatalog({
       apps: [{ id: 1, app_key: "crm", name: "CRM", alias: "", default_approver_user_ids: [] }],
       approver_options: approverOptions,
       ungrouped_permissions: [],
-    }))));
+    })));
     const { result } = await renderReadyForm();
 
     act(() => result.current.changeAppKey("crm"));
@@ -572,7 +610,7 @@ describe("useAccessRequestForm", () => {
       grants: [],
     }));
     const groupKeys = authorizationGroups.map((group) => group.key);
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => jsonResponse(scopedCatalog({ authorization_groups: authorizationGroups }))));
+    vi.stubGlobal("fetch", catalogOnlyFetch(scopedCatalog({ authorization_groups: authorizationGroups })));
     const { result } = await renderReadyForm();
 
     act(() => result.current.changeAppKey("crm"));
@@ -583,11 +621,11 @@ describe("useAccessRequestForm", () => {
     expect(result.current.authorizationGroupKeys).toHaveLength(ACCESS_REQUEST_MAX_AUTHORIZATION_GROUPS + 1);
     await waitFor(() => expect(result.current.selectedApproverUserIds).toEqual(["boss"]));
     expect(result.current.canSubmit).toBe(false);
-    expect(result.current.toastMessageKey).toBe("portal.request.tooManyAuthorizationGroups");
+    expect(result.current.noticeMessageKey).toBe("portal.request.tooManyAuthorizationGroups");
 
     act(() => result.current.changeAuthorizationGroupKeys(groupKeys.slice(0, ACCESS_REQUEST_MAX_AUTHORIZATION_GROUPS)));
     await waitFor(() => expect(result.current.canSubmit).toBe(true));
-    expect(result.current.toastMessageKey).toBe("");
+    expect(result.current.noticeMessageKey).toBe("");
   });
 
   /*
@@ -610,19 +648,19 @@ describe("useAccessRequestForm", () => {
           : [],
     }));
     const groupKeys = authorizationGroups.map((group) => group.key);
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => jsonResponse(scopedCatalog({
+    vi.stubGlobal("fetch", catalogOnlyFetch(scopedCatalog({
       authorization_groups: authorizationGroups,
       ungrouped_permissions: [
         { id: 101, app_key: "crm", key: "customer.read", name: "查看客户", scopes: [{ key: "SELF", name: "本人" }] },
         { id: 102, app_key: "crm", key: "customer.export", name: "导出客户", scopes: [{ key: "SELF", name: "本人" }] },
       ],
-    }))));
+    })));
     const { result } = await renderReadyForm();
 
     act(() => result.current.changeAppKey("crm"));
     act(() => result.current.changeReason("申请全部权限组"));
     act(() => result.current.changeAuthorizationGroupKeys(groupKeys));
-    await waitFor(() => expect(result.current.toastMessageKey).toBe("portal.request.tooManyAuthorizationGroups"));
+    await waitFor(() => expect(result.current.noticeMessageKey).toBe("portal.request.tooManyAuthorizationGroups"));
 
     const readPermission = result.current.ungroupedPermissions.find((item) => item.key === "customer.read");
     act(() => result.current.changePermissionScope(readPermission!, "SELF"));
@@ -630,7 +668,7 @@ describe("useAccessRequestForm", () => {
     // 落地确实发生了(group-0 被摘掉), 但权限组仍然超上限: 提示位归闸门。
     expect(result.current.authorizationGroupKeys).toHaveLength(ACCESS_REQUEST_MAX_AUTHORIZATION_GROUPS + 1);
     expect(result.current.canSubmit).toBe(false);
-    expect(result.current.toastMessageKey).toBe("portal.request.tooManyAuthorizationGroups");
+    expect(result.current.noticeMessageKey).toBe("portal.request.tooManyAuthorizationGroups");
 
     const exportPermission = result.current.ungroupedPermissions.find((item) => item.key === "customer.export");
     act(() => result.current.changePermissionScope(exportPermission!, "SELF"));
@@ -638,11 +676,11 @@ describe("useAccessRequestForm", () => {
     // 再落地一个就回到上限之内, 闸门解除, 提示位这才轮到落地提示。
     expect(result.current.authorizationGroupKeys).toHaveLength(ACCESS_REQUEST_MAX_AUTHORIZATION_GROUPS);
     await waitFor(() => expect(result.current.canSubmit).toBe(true));
-    expect(result.current.toastMessageKey).toBe("portal.request.groupMaterialized");
+    expect(result.current.noticeMessageKey).toBe("portal.request.groupMaterialized");
   });
 
   test("权限组落地这一下自己把闸门点亮: 提示位给的是拦截原因而不是落地提示", async () => {
-    vi.stubGlobal("fetch", vi.fn<typeof fetch>(async () => jsonResponse(scopedCatalog({
+    vi.stubGlobal("fetch", catalogOnlyFetch(scopedCatalog({
       ungrouped_permissions: [
         {
           id: 101,
@@ -671,14 +709,14 @@ describe("useAccessRequestForm", () => {
           ],
         },
       ],
-    }))));
+    })));
     const { result } = await renderReadyForm();
 
     act(() => result.current.changeAppKey("crm"));
     act(() => result.current.changeReason("申请客户查看"));
     act(() => result.current.changeAuthorizationGroupKeys(["mixed-reader"]));
     await waitFor(() => expect(result.current.selectedApproverUserIds).toEqual(["boss"]));
-    expect(result.current.toastMessageKey).toBe("");
+    expect(result.current.noticeMessageKey).toBe("");
 
     // 取消导出把权限组落地成逐项直接申请, 客户查看因此变成单独申请, 审批路径当场断掉。
     const exportPermission = result.current.ungroupedPermissions.find((item) => item.key === "customer.export");
@@ -688,7 +726,7 @@ describe("useAccessRequestForm", () => {
     expect(result.current.selectedPermissionKeys).toEqual([directGrantSelectionKey("customer.read", "MANAGED_USERS")]);
     await waitFor(() => expect(result.current.selectedApproverUserIds).toEqual([]));
     expect(result.current.canSubmit).toBe(false);
-    expect(result.current.toastMessageKey).toBe("portal.request.approverMissing");
+    expect(result.current.noticeMessageKey).toBe("portal.request.approverMissing");
   });
 });
 
@@ -808,17 +846,40 @@ describe("useAccessRequestForm 按申请类型约束申请目标", () => {
     return permission!;
   }
 
-  test("grant: 取消权限组覆盖的权限把该组落地成逐项直接申请", async () => {
+  test("选中已有生效授权的应用: 转成变更申请并带出现状", async () => {
     stubLifecycleFetch();
+    const view = await renderReadyForm();
+    await waitFor(() => expect(view.result.current.currentGrants).toHaveLength(1));
+
+    act(() => view.result.current.changeAppKey("crm"));
+
+    // 后端拒绝对已有生效授权的应用再发新增申请: 这次申请只能是在现有授权上变更。
+    expect(view.result.current.requestType).toBe("change");
+    expect(view.result.current.baseGrantId).toBe("7");
+    expect(view.result.current.authorizationGroupKeys).toEqual(["reader"]);
+    expect(view.result.current.selectedPermissionKeys).toEqual([AUDIT_KEY]);
+
+    // 带出来的现状照样可编辑: 取消权限组覆盖的权限把该组落地成逐项直接申请。
+    act(() => view.result.current.changePermissionScope(ordersPermission(view, "orders.read"), "SELF"));
+    expect(view.result.current.authorizationGroupKeys).toEqual([]);
+    expect(view.result.current.selectedPermissionKeys).toEqual([AUDIT_KEY, EXPORT_KEY]);
+    expect(view.result.current.noticeMessageKey).toBe("portal.request.groupMaterialized");
+  });
+
+  test("选中没有生效授权的应用: 保持新增申请, 已选的变更类型回落成新增", async () => {
+    vi.stubGlobal("fetch", catalogOnlyFetch(lifecycleCatalog()));
     const view = await renderReadyForm();
 
     act(() => view.result.current.changeAppKey("crm"));
-    act(() => view.result.current.changeAuthorizationGroupKeys(["reader"]));
-    act(() => view.result.current.changePermissionScope(ordersPermission(view, "orders.read"), "SELF"));
-
+    expect(view.result.current.requestType).toBe("grant");
+    expect(view.result.current.baseGrantId).toBe("");
     expect(view.result.current.authorizationGroupKeys).toEqual([]);
-    expect(view.result.current.selectedPermissionKeys).toEqual([EXPORT_KEY]);
-    expect(view.result.current.toastMessageKey).toBe("portal.request.groupMaterialized");
+
+    // 变更申请要求基础授权: 这个应用没有生效授权, 只有新增申请成立。
+    act(() => view.result.current.changeRequestType("change"));
+    act(() => view.result.current.changeAppKey("crm"));
+    expect(view.result.current.requestType).toBe("grant");
+    expect(view.result.current.baseGrantId).toBe("");
   });
 
   test("change: 取消权限组覆盖的权限把该组落地, 原有直接权限保留", async () => {
@@ -830,7 +891,7 @@ describe("useAccessRequestForm 按申请类型约束申请目标", () => {
 
     expect(view.result.current.authorizationGroupKeys).toEqual([]);
     expect(view.result.current.selectedPermissionKeys).toEqual([AUDIT_KEY, EXPORT_KEY]);
-    expect(view.result.current.toastMessageKey).toBe("portal.request.groupMaterialized");
+    expect(view.result.current.noticeMessageKey).toBe("portal.request.groupMaterialized");
   });
 
   test("revoke: 取消权限组覆盖的权限整组撤销, 不落地成直接权限", async () => {
@@ -842,7 +903,7 @@ describe("useAccessRequestForm 按申请类型约束申请目标", () => {
     expect(view.result.current.authorizationGroupKeys).toEqual([]);
     expect(view.result.current.selectedPermissionKeys).toEqual([AUDIT_KEY]);
     expect(view.result.current.groupCoveredSelectionKeys).toEqual([]);
-    expect(view.result.current.toastMessageKey).toBe("portal.request.groupRevokedWhole");
+    expect(view.result.current.noticeMessageKey).toBe("portal.request.groupRevokedWhole");
   });
 
   test("revoke: 取消直接权限只影响这一项, 权限组照旧保留", async () => {
@@ -852,7 +913,7 @@ describe("useAccessRequestForm 按申请类型约束申请目标", () => {
 
     expect(view.result.current.authorizationGroupKeys).toEqual(["reader"]);
     expect(view.result.current.selectedPermissionKeys).toEqual([]);
-    expect(view.result.current.toastMessageKey).toBe("");
+    expect(view.result.current.noticeMessageKey).toBe("");
   });
 
   test("revoke: 基础授权之外的权限组与权限都不能加进保留范围", async () => {
@@ -890,7 +951,7 @@ describe("useAccessRequestForm 按申请类型约束申请目标", () => {
     expect(view.result.current.authorizationGroupKeys).toEqual(["reader"]);
     expect(view.result.current.selectedPermissionKeys).toEqual([AUDIT_KEY]);
     expect(view.result.current.canSubmit).toBe(false);
-    expect(view.result.current.toastMessageKey).toBe("portal.request.revokeKeepsWholeGrant");
+    expect(view.result.current.noticeMessageKey).toBe("portal.request.revokeKeepsWholeGrant");
 
     act(() => view.result.current.changePermissionScope(ordersPermission(view, "orders.audit"), "SELF"));
     expect(view.result.current.selectedPermissionKeys).toEqual([]);

@@ -6,6 +6,7 @@ import { MemoryRouter, Outlet, Route, Routes, useLocation } from "react-router-d
 import { describe, expect, test, vi } from "vitest";
 
 import { PortalPage } from "./PortalPage";
+import { ToastProvider } from "../../components/ui/Toast";
 import { formatAppDisplayName } from "../../lib/appDisplayName";
 import {
   ANTD_TEST_TIMEOUT_MS,
@@ -18,6 +19,16 @@ import {
 // 整套用例并行跑时默认 5s 不够; 这里只放宽本文件的用例超时。
 vi.setConfig({ testTimeout: ANTD_TEST_TIMEOUT_MS });
 
+/**
+ * 申请表除了目录还会读一次"我的授权": 选中应用时要按它判断这次申请是新增还是变更
+ * (后端拒绝对已有生效授权的应用再发新增申请)。没有现有授权的用例统一给空列表。
+ */
+const CURRENT_GRANTS_URL = "/portal/api/v1/me/grants?page=1&page_size=100";
+const EMPTY_CURRENT_GRANTS = {
+  data: [],
+  pagination: { page: 1, page_size: 100, total_items: 0, total_pages: 0 },
+};
+
 // 权限详情浮层的 mouseLeaveDelay 是 0.2s(GrantPermissionsCell), 等够这段时间才能证明
 // 指针走进浮层后它没被关掉。
 const POPOVER_MOUSE_LEAVE_GRACE_MS = 400;
@@ -26,6 +37,7 @@ function renderPortalPageWithUser(currentUserId: string, initialEntry = "/portal
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
   renderWithAntd(
+    <ToastProvider>
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[initialEntry]}>
         <Routes>
@@ -34,7 +46,8 @@ function renderPortalPageWithUser(currentUserId: string, initialEntry = "/portal
           </Route>
         </Routes>
       </MemoryRouter>
-    </QueryClientProvider>,
+    </QueryClientProvider>
+    </ToastProvider>,
   );
 }
 
@@ -48,6 +61,7 @@ function renderPortalPage(initialEntry = "/portal/request") {
   });
 
   renderWithAntd(
+    <ToastProvider>
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[initialEntry]}>
         <Routes>
@@ -57,7 +71,8 @@ function renderPortalPage(initialEntry = "/portal/request") {
           <Route path="/portal" element={<PortalPage view="grants" />} />
         </Routes>
       </MemoryRouter>
-    </QueryClientProvider>,
+    </QueryClientProvider>
+    </ToastProvider>,
   );
 }
 
@@ -71,6 +86,7 @@ function renderGrantsWithRequestStateProbe() {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
   renderWithAntd(
+    <ToastProvider>
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={["/portal"]}>
         <Routes>
@@ -78,7 +94,8 @@ function renderGrantsWithRequestStateProbe() {
           <Route path="/portal/request" element={<RequestLocationStateProbe />} />
         </Routes>
       </MemoryRouter>
-    </QueryClientProvider>,
+    </QueryClientProvider>
+    </ToastProvider>,
   );
 }
 
@@ -97,6 +114,7 @@ function renderPortalPageStrict(initialEntry = "/portal/request") {
   });
 
   renderWithAntd(
+    <ToastProvider>
     <StrictMode>
       <QueryClientProvider client={client}>
         <MemoryRouter initialEntries={[initialEntry]}>
@@ -105,7 +123,8 @@ function renderPortalPageStrict(initialEntry = "/portal/request") {
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>
-    </StrictMode>,
+    </StrictMode>
+    </ToastProvider>,
   );
 }
 
@@ -132,6 +151,9 @@ describe("PortalPage access request form", () => {
           ],
           ungrouped_permissions: [],
         });
+      }
+      if (url === CURRENT_GRANTS_URL) {
+        return jsonResponse(EMPTY_CURRENT_GRANTS);
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });
@@ -177,6 +199,9 @@ describe("PortalPage access request form", () => {
           ungrouped_permissions: [],
         });
       }
+      if (url === CURRENT_GRANTS_URL) {
+        return jsonResponse(EMPTY_CURRENT_GRANTS);
+      }
       if (url === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
         return jsonResponse({ ok: true });
       }
@@ -220,9 +245,10 @@ describe("PortalPage access request form", () => {
           }),
         ),
       );
+      // 提交成功走 toast, 不再在表单里留一条常驻提示条。
       const submittedNotice = await screen.findByRole("status");
       expect(submittedNotice).toHaveTextContent("申请已提交");
-      expect(submittedNotice).toHaveAttribute("aria-live", "polite");
+      expect(submittedNotice.closest("[aria-live='polite']")).not.toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }
@@ -323,6 +349,9 @@ describe("PortalPage access request form", () => {
           ungrouped_permissions: [],
         });
       }
+      if (String(input) === CURRENT_GRANTS_URL) {
+        return jsonResponse(EMPTY_CURRENT_GRANTS);
+      }
       throw new Error(`Unexpected fetch: ${String(input)}`);
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -353,6 +382,9 @@ describe("PortalPage access request form", () => {
           permission_groups: [],
           ungrouped_permissions: [],
         });
+      }
+      if (url === CURRENT_GRANTS_URL) {
+        return jsonResponse(EMPTY_CURRENT_GRANTS);
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });
@@ -419,6 +451,9 @@ describe("PortalPage access request form", () => {
           ungrouped_permissions: [],
         });
       }
+      if (url === CURRENT_GRANTS_URL) {
+        return jsonResponse(EMPTY_CURRENT_GRANTS);
+      }
       throw new Error(`Unexpected fetch: ${url}`);
     });
 
@@ -462,6 +497,9 @@ describe("PortalPage access request form", () => {
           permission_groups: [],
           ungrouped_permissions: [],
         });
+      }
+      if (url === CURRENT_GRANTS_URL) {
+        return jsonResponse(EMPTY_CURRENT_GRANTS);
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });
@@ -513,6 +551,9 @@ describe("PortalPage access request form", () => {
           permission_groups: [],
           ungrouped_permissions: [],
         });
+      }
+      if (url === CURRENT_GRANTS_URL) {
+        return jsonResponse(EMPTY_CURRENT_GRANTS);
       }
       if (url === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
         return jsonResponse({ ok: true });
@@ -611,6 +652,9 @@ describe("PortalPage access request form", () => {
           ],
           ungrouped_permissions: [{ id: 103, app_key: "crm", key: "dashboard.view", name: "查看看板", scopes: [{ key: "GLOBAL", name: "全局" }] }],
         });
+      }
+      if (url === CURRENT_GRANTS_URL) {
+        return jsonResponse(EMPTY_CURRENT_GRANTS);
       }
       if (url === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
         return jsonResponse({ ok: true });
@@ -730,6 +774,9 @@ describe("PortalPage access request form", () => {
           ungrouped_permissions: [],
         });
       }
+      if (url === CURRENT_GRANTS_URL) {
+        return jsonResponse(EMPTY_CURRENT_GRANTS);
+      }
       if (url === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
         return jsonResponse({ ok: true });
       }
@@ -810,6 +857,9 @@ describe("PortalPage access request form", () => {
           ungrouped_permissions: [],
         });
       }
+      if (url === CURRENT_GRANTS_URL) {
+        return jsonResponse(EMPTY_CURRENT_GRANTS);
+      }
       throw new Error(`Unexpected fetch: ${url}`);
     });
 
@@ -867,6 +917,9 @@ describe("PortalPage access request form", () => {
           ungrouped_permissions: [],
         });
       }
+      if (url === CURRENT_GRANTS_URL) {
+        return jsonResponse(EMPTY_CURRENT_GRANTS);
+      }
       throw new Error(`Unexpected fetch: ${url}`);
     });
 
@@ -921,6 +974,9 @@ describe("PortalPage access request form", () => {
           permission_groups: [],
           ungrouped_permissions: [],
         });
+      }
+      if (url === CURRENT_GRANTS_URL) {
+        return jsonResponse(EMPTY_CURRENT_GRANTS);
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });
@@ -977,6 +1033,9 @@ describe("PortalPage access request form", () => {
           ungrouped_permissions: [],
         });
       }
+      if (url === CURRENT_GRANTS_URL) {
+        return jsonResponse(EMPTY_CURRENT_GRANTS);
+      }
       throw new Error(`Unexpected fetch: ${url}`);
     });
 
@@ -1028,6 +1087,9 @@ describe("PortalPage access request form", () => {
             },
           ],
         });
+      }
+      if (url === CURRENT_GRANTS_URL) {
+        return jsonResponse(EMPTY_CURRENT_GRANTS);
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });
@@ -1085,6 +1147,9 @@ describe("PortalPage access request form", () => {
             },
           ],
         });
+      }
+      if (url === CURRENT_GRANTS_URL) {
+        return jsonResponse(EMPTY_CURRENT_GRANTS);
       }
       throw new Error(`Unexpected fetch: ${url}`);
     });
@@ -1555,6 +1620,9 @@ describe("PortalPage access request form", () => {
           ungrouped_permissions: [],
         });
       }
+      if (url === CURRENT_GRANTS_URL) {
+        return jsonResponse(EMPTY_CURRENT_GRANTS);
+      }
       if (url === "/portal/api/v1/me/access-requests" && init?.method === "POST") {
         return jsonResponse({ ok: true });
       }
@@ -1821,8 +1889,7 @@ describe("PortalPage access request form", () => {
       renderPortalRequestWithPrefill("7");
       const user = userEvent.setup();
 
-      await waitFor(() => expect(screen.getByText("已选 1 个权限组，可留空。")).toBeVisible());
-      expect(await selectedAuthorizationGroupNames(user)).toEqual(["只读"]);
+      await waitFor(async () => expect(await selectedAuthorizationGroupNames(user)).toEqual(["只读"]));
       await screen.findByRole("table", { name: "权限选择" });
       await user.click(permissionSelectorChip("展开 订单", "button"));
 
@@ -1851,9 +1918,9 @@ describe("PortalPage access request form", () => {
       await screen.findByRole("option", { name: "CRM v3" });
       await user.selectOptions(screen.getByLabelText("基础授权"), "7");
 
-      // 后端要求续期目标与基础授权完全一致, 目标只能照抄不能改。
-      // 只读态下下拉打不开, 已选权限组只能从计数提示上读(基础授权只有「只读」一个组)。
-      await waitFor(() => expect(screen.getByText("已选 1 个权限组，可留空。")).toBeVisible());
+      // 后端要求续期目标与基础授权完全一致, 目标只能照抄不能改: 应用由基础授权定死, 控件全部只读。
+      // (续期目标带出的权限组由 useAccessRequestForm 的用例覆盖; 只读态下 antd 下拉打不开, 读不到选中项。)
+      await waitFor(() => expect(screen.getByLabelText("应用")).toHaveValue("crm"));
       expect(authorizationGroupCombobox()).toBeDisabled();
       expect(screen.getByLabelText("应用")).toBeDisabled();
 
@@ -1875,7 +1942,6 @@ describe("PortalPage access request form", () => {
       await user.click(screen.getByLabelText("展开全选范围选项"));
 
       expect(screen.queryByRole("menu")).not.toBeInTheDocument();
-      expect(screen.getByText("已选 1 个权限组，可留空。")).toBeVisible();
       expect(within(screen.getByLabelText("权限选择状态")).getByText("已选 0 项")).toBeVisible();
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     } finally {
@@ -1897,8 +1963,7 @@ describe("PortalPage access request form", () => {
       await user.selectOptions(screen.getByLabelText("基础授权"), "7");
 
       // 撤销提交的目标是"撤销后保留下来的授权", 后端要求它是基础授权的子集: 加进新东西必被拒。
-      await waitFor(() => expect(screen.getByText("已选 1 个权限组，可留空。")).toBeVisible());
-      expect(await selectedAuthorizationGroupNames(user)).toEqual(["只读"]);
+      await waitFor(async () => expect(await selectedAuthorizationGroupNames(user)).toEqual(["只读"]));
       expect(await authorizationGroupOption(user, "只读")).not.toHaveClass("ant-select-item-option-disabled");
       expect(await authorizationGroupOption(user, "删除")).toHaveClass("ant-select-item-option-disabled");
 
@@ -2628,6 +2693,7 @@ function renderPortalRequestWithPrefill(baseGrantId: string) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
 
   renderWithAntd(
+    <ToastProvider>
     <QueryClientProvider client={client}>
       <MemoryRouter
         initialEntries={[
@@ -2641,7 +2707,8 @@ function renderPortalRequestWithPrefill(baseGrantId: string) {
           <Route path="/portal/request" element={<PortalPage view="request" />} />
         </Routes>
       </MemoryRouter>
-    </QueryClientProvider>,
+    </QueryClientProvider>
+    </ToastProvider>,
   );
 }
 
@@ -2804,6 +2871,9 @@ function permissionSelectorFetchMock(payload: unknown) {
     const url = String(input);
     if (url === "/portal/api/v1/request-catalog") {
       return jsonResponse(payload);
+    }
+    if (url === CURRENT_GRANTS_URL) {
+      return jsonResponse(EMPTY_CURRENT_GRANTS);
     }
     throw new Error(`Unexpected fetch: ${url}`);
   });

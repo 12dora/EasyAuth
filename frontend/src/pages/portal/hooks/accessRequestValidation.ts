@@ -73,7 +73,7 @@ export function accessRequestSubmitGateMessageKey(
   return "";
 }
 
-export function accessRequestToastMessageKey(
+export function accessRequestNoticeMessageKey(
   values: AccessRequestPayloadValues,
   catalogView: CatalogView,
   catalogIsLoading: boolean,

@@ -31,6 +31,8 @@ export interface UseAccessRequestFormOptions {
   /** 由路由 state 带来的预填; null 表示本次进入页面没有预填。 */
   prefill?: AccessRequestPrefill | null;
   onPrefillApplied?: () => void;
+  /** 申请提交成功时的回调(页面用它弹 toast); hook 本身不生产用户可见文案。 */
+  onSubmitted?: () => void;
 }
 
 export function useAccessRequestForm(currentUserId = "", options: UseAccessRequestFormOptions = {}): AccessRequestFormResult {
@@ -40,11 +42,12 @@ export function useAccessRequestForm(currentUserId = "", options: UseAccessReque
     queryKey: ["portal", "request-catalog"],
     queryFn: async () => parsePortalRequestCatalog(await apiRequest<unknown>("/portal/api/v1/request-catalog")),
   });
+  // 现有授权对每一种申请类型都是必需的: 选中应用时要按它判断这次申请是新增还是变更(后端对已有
+  // 生效授权的应用拒绝新增申请), 生命周期申请还要用它当基础授权。
   const currentGrantsQuery = useQuery({
     queryKey: ["portal", "current-grants-selector"],
     queryFn: async () =>
       parsePortalGrantList(await apiRequest<unknown>("/portal/api/v1/me/grants?page=1&page_size=100")),
-    enabled: fields.requestType !== "grant",
   });
   const catalogView = useMemo(
     () => buildCatalogView(catalogQuery.data, fields.appKey, currentUserId),
@@ -53,7 +56,7 @@ export function useAccessRequestForm(currentUserId = "", options: UseAccessReque
   useDefaultSingleScopes(fields.setSelectedPermissionScopes, catalogView);
   useGroupCoverageInvariant(fields, catalogView);
   useDefaultApprovers(fields, catalogView, currentUserId);
-  const submitMutation = useAccessRequestSubmitMutation(fields, catalogView);
+  const submitMutation = useAccessRequestSubmitMutation(fields, catalogView, options.onSubmitted);
   const currentGrants = currentGrantsQuery.data?.data ?? [];
   const selectedBaseGrant = currentGrants.find((grant) => String(grant.grant_id) === fields.baseGrantId);
   useLifecycleGrantInvariant(fields, selectedBaseGrant);
@@ -68,9 +71,8 @@ export function useAccessRequestForm(currentUserId = "", options: UseAccessReque
     changeBaseGrantId: actions.changeBaseGrantId,
     onApplied: options.onPrefillApplied,
   });
-  const lifecycleSelectorActive = fields.requestType !== "grant";
   const currentGrantsTruncated = Boolean(currentGrantsQuery.data && currentGrantsQuery.data.pagination.total_pages > 1);
-  const catalogIsLoading = catalogQuery.isLoading || (lifecycleSelectorActive && currentGrantsQuery.isLoading);
+  const catalogIsLoading = catalogQuery.isLoading || currentGrantsQuery.isLoading;
   // 只读一次时钟: canSubmit 与 expiresAtError 必须基于同一瞬间判断限时授权是否已过期,
   // 否则同一次 render 可能同时给出"可提交"和"已过期"。
   const grantTermIsFuture = accessRequestExpiresAtIsFuture(fields);
@@ -81,7 +83,7 @@ export function useAccessRequestForm(currentUserId = "", options: UseAccessReque
     currentGrants,
     selectedBaseGrant,
     catalogIsLoading,
-    catalogError: catalogQuery.error ?? (lifecycleSelectorActive ? currentGrantsQuery.error : null),
+    catalogError: catalogQuery.error ?? currentGrantsQuery.error,
     submitMutation,
     canSubmit: accessRequestCanSubmit({
       grantTermIsFuture,
@@ -103,6 +105,6 @@ export function useAccessRequestForm(currentUserId = "", options: UseAccessReque
   // 提示键留在 fields 里不清, 闸门解除后它还会接着显示, 不会因为让位而丢掉。
   const submitGateMessageKey = accessRequestSubmitGateMessageKey(fields, catalogView, selectedBaseGrant);
   return fields.groupMaterializationNoticeKey && !submitGateMessageKey
-    ? { ...result, toastMessageKey: fields.groupMaterializationNoticeKey }
+    ? { ...result, noticeMessageKey: fields.groupMaterializationNoticeKey }
     : result;
 }

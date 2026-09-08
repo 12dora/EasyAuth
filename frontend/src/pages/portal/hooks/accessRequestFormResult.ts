@@ -11,7 +11,7 @@ import {
   type AccessRequestFormResult,
   type CatalogView,
 } from "./accessRequestTypes";
-import { accessRequestToastMessageKey } from "./accessRequestValidation";
+import { accessRequestNoticeMessageKey } from "./accessRequestValidation";
 
 export interface AccessRequestFormResultInput {
   fields: AccessRequestFields;
@@ -101,7 +101,7 @@ function catalogSnapshot(
 
 type SubmissionStatus = Pick<
   AccessRequestFormResult,
-  "catalogIsLoading" | "catalogErrorMessage" | "submitErrorMessage" | "toastMessageKey" | "canSubmit" | "expiresAtError" | "isSubmitting"
+  "catalogIsLoading" | "catalogErrorMessage" | "submitErrorMessage" | "noticeMessageKey" | "canSubmit" | "expiresAtError" | "isSubmitting"
 >;
 
 function submissionStatus(input: AccessRequestFormResultInput): SubmissionStatus {
@@ -110,14 +110,12 @@ function submissionStatus(input: AccessRequestFormResultInput): SubmissionStatus
     catalogIsLoading: input.catalogIsLoading,
     catalogErrorMessage: catalogErrorMessage(input.catalogError, input.currentGrantsTruncated),
     submitErrorMessage: submitMutation.error ? submitMutation.error.message : "",
-    toastMessageKey: submitMutation.isSuccess
-      ? "portal.request.submitted"
-      : accessRequestToastMessageKey(
-          input.fields,
-          input.catalogView,
-          input.catalogIsLoading,
-          input.selectedBaseGrant,
-        ),
+    noticeMessageKey: accessRequestNoticeMessageKey(
+      input.fields,
+      input.catalogView,
+      input.catalogIsLoading,
+      input.selectedBaseGrant,
+    ),
     canSubmit: input.canSubmit,
     expiresAtError: input.expiresAtError,
     isSubmitting: submitMutation.isPending,

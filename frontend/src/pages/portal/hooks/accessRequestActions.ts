@@ -71,21 +71,45 @@ function buildTargetActions(fields: AccessRequestFields, currentGrants: PortalGr
       if (!grant) {
         return;
       }
-      fields.setAppKey(grant.app_key ?? "");
-      // 一条授权可以挂多个权限组(入职、交接、控制台授权都会写 AccessGrantGroup), 必须整套带进草稿:
-      // 少带一个, 提交出去的变更就会把它当成"要撤掉"。
-      fields.setAuthorizationGroupKeys(grant.groups.map((group) => group.key));
-      fields.setGroupMaterializationNoticeKey("");
-      fields.setSelectedPermissionKeys(
-        grant.grants
-          .filter((item) => item.source_type === "direct")
-          .map((item) => directGrantSelectionKey(item.permission, item.scope)),
-      );
+      applyBaseGrantToDraft(fields, grant);
     },
     changeAppKey: (nextAppKey: string) => {
       resetTargetDraft(fields, nextAppKey);
+      const grant = currentGrants.find((item) => item.app_key === nextAppKey);
+      if (!grant) {
+        // 这个应用还没有生效授权: 变更/撤销/续期都要求基础授权, 只有新增申请成立。
+        if (fields.requestType === "change") {
+          fields.setRequestType("grant");
+        }
+        return;
+      }
+      // 已经有生效授权: 后端拒绝对同一应用再发新增申请(submission_validation._validate_no_current_grant),
+      // 这次申请只能是在现有授权上变更。把现状带进草稿, 员工在自己已有的权限上加减。
+      if (fields.requestType === "grant") {
+        fields.setRequestType("change");
+      }
+      fields.setBaseGrantId(String(grant.grant_id));
+      applyBaseGrantToDraft(fields, grant);
     },
   };
+}
+
+/**
+ * 把一条现有授权带进草稿: 选基础授权与选应用走的是同一段回填。
+ *
+ * 一条授权可以挂多个权限组(入职、交接、控制台授权都会写 AccessGrantGroup), 必须整套带进草稿:
+ * 少带一个, 提交出去的变更就会把它当成"要撤掉"。
+ */
+function applyBaseGrantToDraft(fields: AccessRequestFields, grant: PortalGrantRow): void {
+  fields.setBaseGrantRevision(grant.grant_revision);
+  fields.setAppKey(grant.app_key ?? "");
+  fields.setAuthorizationGroupKeys(grant.groups.map((group) => group.key));
+  fields.setGroupMaterializationNoticeKey("");
+  fields.setSelectedPermissionKeys(
+    grant.grants
+      .filter((item) => item.source_type === "direct")
+      .map((item) => directGrantSelectionKey(item.permission, item.scope)),
+  );
 }
 
 /** 换申请类型或换应用都会作废整张草稿: 基础授权、权限组、直接权限、展开态与审批人一并清空。 */

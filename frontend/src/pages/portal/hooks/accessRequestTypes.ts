@@ -176,8 +176,12 @@ export interface AccessRequestFormResult {
   catalogIsLoading: boolean;
   catalogErrorMessage: string;
   submitErrorMessage: string;
-  /** 提示条文案的 i18n key: 由组件用 t() 渲染, hook 不生产用户可见文案。 */
-  toastMessageKey: MessageKey | "";
+  /**
+   * 表单内提示条文案的 i18n key: 由组件用 t() 渲染, hook 不生产用户可见文案。
+   *
+   * 只承载"这份草稿现在有什么问题"这类需要停留在表单里的提示; 提交成功是一次性事件, 走 toast。
+   */
+  noticeMessageKey: MessageKey | "";
   /** 路由预填失效(基础授权已不在当前授权里)时的错误文案 key。 */
   prefillErrorMessageKey: MessageKey | "";
   canSubmit: boolean;

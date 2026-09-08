@@ -217,7 +217,7 @@ describe("useAccessRequestPrefill", () => {
     expect(result.current.form.authorizationGroupKeys).toEqual([]);
     expect(result.current.form.groupCoveredSelectionKeys).toEqual([]);
     expect(result.current.form.selectedPermissionKeys).toEqual([directGrantSelectionKey("customer.read", "SELF")]);
-    expect(result.current.form.toastMessageKey).toBe("portal.request.groupMaterialized");
+    expect(result.current.form.noticeMessageKey).toBe("portal.request.groupMaterialized");
   });
 
   test("基础授权含多个权限组时全部选中, 不丢弃也不报错", async () => {
@@ -267,7 +267,7 @@ describe("useAccessRequestPrefill", () => {
       directGrantSelectionKey("customer.audit", "SELF"),
     ]);
     expect(result.current.form.groupCoveredSelectionKeys).toEqual([directGrantSelectionKey("customer.write", "SELF")]);
-    expect(result.current.form.toastMessageKey).toBe("portal.request.groupMaterialized");
+    expect(result.current.form.noticeMessageKey).toBe("portal.request.groupMaterialized");
   });
 
   test("预填的授权不在当前授权列表里时给出可见错误", async () => {
@@ -291,7 +291,9 @@ describe("useAccessRequestPrefill", () => {
     expect(result.current.form.requestType).toBe("grant");
     expect(result.current.form.baseGrantId).toBe("");
     expect(result.current.form.prefillErrorMessageKey).toBe("");
-    // 申请新增授权不需要基础授权列表, 不应该多打一次授权接口。
-    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([CATALOG_URL]);
+    // 目录之外还要读一次"我的授权": 选中应用时要按它判断这次申请是新增还是变更。
+    expect(fetchMock.mock.calls.map(([input]) => String(input)).sort()).toEqual(
+      [CATALOG_URL, GRANTS_URL].sort(),
+    );
   });
 });

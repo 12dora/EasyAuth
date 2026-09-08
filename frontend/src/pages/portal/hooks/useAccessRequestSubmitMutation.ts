@@ -10,6 +10,7 @@ import type { AccessRequestFields, CatalogView } from "./accessRequestTypes";
 export function useAccessRequestSubmitMutation(
   fields: AccessRequestFields,
   catalogView: CatalogView,
+  onSubmitted?: () => void,
 ): UseMutationResult<unknown, Error, void, unknown> {
   const pendingSubmission = useRef<{
     payload: string;
@@ -62,6 +63,7 @@ export function useAccessRequestSubmitMutation(
         fields.setReason("");
       }
       void queryClient.invalidateQueries({ queryKey: ["portal", "requests"] });
+      onSubmitted?.();
     },
   });
 }
