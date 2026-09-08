@@ -111,7 +111,20 @@ describe("UserSelect", () => {
     const lookupUrls = fetchMock.mock.calls
       .map(([input]) => String(input))
       .filter((url) => url.includes("user_ids="));
-    expect(lookupUrls).toEqual(["/console/api/v1/user-options?user_ids=u-1%2Cu-3"]);
+    expect(lookupUrls).toEqual(["/console/api/v1/user-options?user_ids=u-1%2Cu-3&purpose=employee"]);
+  });
+
+  test("审批人多选按 approver 口径批量解析: 本地管理账号不会被过滤成裸 ID", async () => {
+    const fetchMock = stubUserOptions();
+
+    renderWithProviders(
+      <UserMultiSelect id="approvers" value={["u-1"]} searchPurpose="approver" onChange={vi.fn()} />,
+    );
+
+    await screen.findByText("张三");
+    expect(
+      fetchMock.mock.calls.map(([input]) => String(input)).filter((url) => url.includes("user_ids=")),
+    ).toEqual(["/console/api/v1/user-options?user_ids=u-1&purpose=approver"]);
   });
 });
 

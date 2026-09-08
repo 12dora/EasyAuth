@@ -122,13 +122,13 @@ export function UserMultiSelect({ id, value, onChange, placeholder, searchPurpos
   const generatedId = useId();
   const listId = `${id ?? generatedId}-listbox`;
   const [inputValue, setInputValue] = useState("");
-  // 从候选里选中的人自带姓名, 不必再问一次后端; 其余(调用方回填或手输的)ID 一次批量解析。
+  /**
+   * 选中那一刻拿到的候选项。
+   *
+   * 只用来盖住"刚选完、批量解析还没回来"这一小段空窗: 真正的姓名以搜索结果和批量解析为准,
+   * 移除某个人时这里也要跟着丢掉, 否则调用方再回填同一个 ID 会显示一份过期的姓名。
+   */
   const [pickedOptions, setPickedOptions] = useState<Record<string, UserOption>>({});
-  const lookupQuery = useUserOptionsByIds(value.filter((userId) => !(userId in pickedOptions)));
-  const optionsByUserId: Record<string, UserOption> = {
-    ...Object.fromEntries((lookupQuery.data ?? []).map((option) => [option.user_id, option])),
-    ...pickedOptions,
-  };
   const add = (raw: string) => {
     // 手输内容沿用逗号/换行分隔语义, 与字段提示保持一致。
     const ids = raw
@@ -147,6 +147,14 @@ export function UserMultiSelect({ id, value, onChange, placeholder, searchPurpos
   };
 
   const remove = (userId: string) => {
+    setPickedOptions((current) => {
+      if (!(userId in current)) {
+        return current;
+      }
+      const next = { ...current };
+      delete next[userId];
+      return next;
+    });
     onChange(value.filter((item) => item !== userId));
   };
   const { open, setOpen, options, optionsQuery, highlightIndex, activeOption, containerRef, onKeyDown, pick } = useUserCombobox({
@@ -164,13 +172,25 @@ export function UserMultiSelect({ id, value, onChange, placeholder, searchPurpos
     onEmptyBackspace: inputValue === "" && value.length > 0 ? () => remove(value[value.length - 1]) : undefined,
   });
   const getOptionId = (option: UserOption) => `${listId}-option-${encodeURIComponent(option.user_id)}`;
+  // 当前搜索结果里已经有的人不必再问一次后端; 其余(调用方回填或手输的)ID 一次批量解析。
+  const searchOptionsByUserId = optionsByUserId(optionsQuery.data ?? []);
+  const lookupQuery = useUserOptionsByIds(
+    value.filter((userId) => !(userId in searchOptionsByUserId)),
+    searchPurpose,
+  );
+  // 越新的来源优先: 搜索结果 > 批量解析 > 选中时的快照。
+  const nameSourceByUserId: Record<string, UserOption> = {
+    ...pickedOptions,
+    ...optionsByUserId(lookupQuery.data ?? []),
+    ...searchOptionsByUserId,
+  };
 
   return (
     <div className="relative" ref={containerRef}>
       <div className="flex flex-wrap items-center gap-1.5">
         {value.map((userId) => {
           // 姓名还没解析出来(查询在飞行中, 或目录镜像本就没有姓名)就显示 ID: 不编一个占位姓名。
-          const label = userOptionName(optionsByUserId[userId], userId);
+          const label = userOptionName(nameSourceByUserId[userId], userId);
           return (
             <UserChip
               key={userId}
@@ -219,6 +239,10 @@ export function UserMultiSelect({ id, value, onChange, placeholder, searchPurpos
       ) : null}
     </div>
   );
+}
+
+function optionsByUserId(options: UserOption[]): Record<string, UserOption> {
+  return Object.fromEntries(options.map((option) => [option.user_id, option]));
 }
 
 function UserChip({

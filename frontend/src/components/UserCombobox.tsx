@@ -137,18 +137,22 @@ function useUserOptions(query: string, enabled: boolean, purpose: UserSearchPurp
 }
 
 /**
- * 按 user_id 批量解析候选(后端 GET /console/api/v1/user-options?user_ids=a,b)。
+ * 按 user_id 批量解析候选(后端 GET /console/api/v1/user-options?user_ids=a,b&purpose=…)。
  *
- * chip 与回填值里只有 ID, 但界面必须显示姓名: 这里一次查询解析组件内全部未知 ID,
- * 不逐个发请求。后端一次最多接受 50 个 ID, 超了由它报错, 前端不截断也不伪造姓名。
+ * chip 与回填值里只有 ID, 但界面必须显示姓名: 这里一次查询解析组件内全部未知 ID, 不逐个发请求。
+ * purpose 必须跟着调用方走: 审批人候选包含本地紧急管理账号, 用 employee 口径去解析会把它们过滤掉,
+ * chip 于是退回裸 ID。后端一次最多接受 50 个 ID, 超了由它报错, 前端不截断也不伪造姓名。
  */
-export function useUserOptionsByIds(userIds: string[]): UseQueryResult<UserOption[], Error> {
+export function useUserOptionsByIds(
+  userIds: string[],
+  purpose: UserSearchPurpose,
+): UseQueryResult<UserOption[], Error> {
   const uniqueSortedIds = [...new Set(userIds)].sort();
   return useQuery({
-    queryKey: ["console", "user-options", "by-ids", uniqueSortedIds],
+    queryKey: ["console", "user-options", "by-ids", purpose, uniqueSortedIds],
     queryFn: () =>
       apiRequest<ListPayload<UserOption>>(
-        `/console/api/v1/user-options?user_ids=${encodeURIComponent(uniqueSortedIds.join(","))}`,
+        `/console/api/v1/user-options?user_ids=${encodeURIComponent(uniqueSortedIds.join(","))}&purpose=${purpose}`,
       ),
     enabled: uniqueSortedIds.length > 0,
     select: (payload) => itemsFromPayload<UserOption>(payload),
