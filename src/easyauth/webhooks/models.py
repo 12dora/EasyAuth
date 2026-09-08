@@ -21,6 +21,8 @@ if TYPE_CHECKING:
 WEBHOOK_EVENT_APPROVAL_COMPLETED: Final = "approval.completed"
 WEBHOOK_EVENT_HANDOVER_PREVIEW: Final = "lifecycle.handover.preview"
 WEBHOOK_EVENT_HANDOVER_EXECUTE: Final = "lifecycle.handover.execute"
+WEBHOOK_EVENT_GRANT_CHANGED: Final = "grant.changed"
+WEBHOOK_EVENT_CATALOG_CHANGED: Final = "catalog.changed"
 WEBHOOK_EVENT_TEST: Final = "webhook.test"
 
 DELIVERY_STATUS_PENDING: Final = "pending"
@@ -57,7 +59,8 @@ class AppWebhookConfig(models.Model):
     )
     handover_url: models.CharField[str, str] = models.CharField(max_length=512, blank=True)
     onboard_url: models.CharField[str, str] = models.CharField(max_length=512, blank=True)
-    # 精确域名 allowlist 由三类 URL 自动生成, 调用方不能另行扩大范围。
+    events_url: models.CharField[str, str] = models.CharField(max_length=512, blank=True)
+    # 精确域名 allowlist 由回调 URL 自动生成, 调用方不能另行扩大范围。
     allowed_hosts: models.JSONField[list[str], list[str]] = models.JSONField(default=list)
     updated_by: models.CharField[str, str] = models.CharField(max_length=128, blank=True)
     created_at: models.DateTimeField[str | date | datetime, datetime] = models.DateTimeField(
@@ -88,6 +91,7 @@ class AppWebhookConfig(models.Model):
             self.approval_callback_url,
             self.handover_url,
             self.onboard_url,
+            self.events_url,
         ):
             if url:
                 hosts.add(parse_https_url(url).hostname)
