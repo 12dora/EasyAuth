@@ -1,10 +1,10 @@
 import { Modal, Steps, type StepsProps } from "antd";
 import type { ReactNode } from "react";
 
+import { GrantExpiryCell } from "../../../components/grants/GrantExpiryCell";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { formatAppDisplayName } from "../../../lib/appDisplayName";
-import { GrantExpiryCell } from "../grantExpiry";
-import { formatGrantGroupNames } from "../grantGroupNames";
+import { formatGrantGroupNames } from "../../../lib/grantMembership";
 import type { PortalRequestRow } from "../portalListPayload";
 
 type FlowStep = NonNullable<StepsProps["items"]>[number];

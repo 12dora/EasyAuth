@@ -11,14 +11,14 @@ import {
   type ColumnsType,
 } from "../../../components/antd/AppTable";
 import { RowActionButton, actionsColumn, dateTimeColumn, serverSortColumn, textColumn } from "../../../components/antd/columns";
+import { GrantExpiryCell } from "../../../components/grants/GrantExpiryCell";
 import { StatusBanner } from "../../../components/StatusBanner";
 import { PageState } from "../../../components/ui/PageState";
 import { useI18n } from "../../../i18n/I18nProvider";
 import { apiRequest } from "../../../lib/api";
 import { formatAppDisplayName } from "../../../lib/appDisplayName";
+import { formatGrantGroupNames } from "../../../lib/grantMembership";
 import { accessRequestStatusColor, accessRequestStatusLabel, type AccessRequestStatusColor, type Translator } from "../../../lib/status";
-import { GrantExpiryCell } from "../grantExpiry";
-import { formatGrantGroupNames } from "../grantGroupNames";
 import { parsePortalRequestList, type PortalRequestRow } from "../portalListPayload";
 import { PORTAL_DEFAULT_PAGE_SIZE, useClampPage } from "../portalTable";
 import { PortalRequestDetailDialog } from "./PortalRequestDetailDialog";

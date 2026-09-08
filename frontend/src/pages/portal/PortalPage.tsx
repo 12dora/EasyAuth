@@ -18,6 +18,8 @@ import {
   serverSortColumn,
   textColumn,
 } from "../../components/antd/columns";
+import { GrantExpiryCell } from "../../components/grants/GrantExpiryCell";
+import { GrantPermissionsCell } from "../../components/grants/GrantPermissionsCell";
 import { PageState } from "../../components/ui/PageState";
 
 import { Button } from "../../components/Button";
@@ -25,15 +27,13 @@ import { PageHeader } from "../../components/PageHeader";
 import { StatusBanner } from "../../components/StatusBanner";
 import { apiRequest } from "../../lib/api";
 import { formatAppDisplayName } from "../../lib/appDisplayName";
+import { formatGrantGroupNames } from "../../lib/grantMembership";
 import type { Translator } from "../../lib/status";
 import { useI18n } from "../../i18n/I18nProvider";
 import { AccessRequestForm } from "./components/AccessRequestForm";
-import { GrantPermissionsCell } from "./components/GrantPermissionsCell";
 import { PortalApprovalsSection } from "./components/PortalApprovalsSection";
 import { PortalRequestsSection } from "./components/PortalRequestsSection";
 import { PortalPreOffboardDialog } from "./PortalPreOffboardDialog";
-import { GrantExpiryCell } from "./grantExpiry";
-import { formatGrantGroupNames } from "./grantGroupNames";
 import { parsePortalGrantList, type PortalGrantRow } from "./portalListPayload";
 import { PORTAL_DEFAULT_PAGE_SIZE, useClampPage } from "./portalTable";
 
