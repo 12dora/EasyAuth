@@ -35,7 +35,9 @@ from easyauth.admin_console.operations_audit import (
     record_dependency_health_read,
 )
 from easyauth.admin_console.operations_payloads import (
+    access_request_approvers,
     access_request_decision_fields,
+    decided_by_names,
     dependency_health_map_payload,
     health_item,
 )
@@ -334,11 +336,15 @@ def _filter_current_only(
 def _access_request_item(
     access_request: AccessRequest,
     failure_reasons: dict[int, str],
+    decided_by_name: str,
 ) -> dict[str, JsonValue]:
     item: dict[str, JsonValue] = {
         "id": access_request.id,
         "user_id": access_request.user.authentik_user_id,
+        "user_name": access_request.user.name,
         "app_key": access_request.app.app_key,
+        "app_name": access_request.app.name,
+        "app_alias": access_request.app.alias,
         "status": access_request.status,
         "request_type": access_request.request_type,
         "grant_type": access_request.grant_type,
@@ -350,7 +356,9 @@ def _access_request_item(
             "normal",
         ),
         "routing_reason": getattr(access_request, "routing_reason", "") or "",
+        "approvers": access_request_approvers(access_request),
         **access_request_decision_fields(access_request),
+        "decided_by_name": decided_by_name,
     }
     if access_request.status == "grant_failed":
         try:
@@ -401,10 +409,15 @@ def _record_emergency_revoke(
 
 def _access_request_page_response(page: Page[AccessRequest]) -> JsonResponse:
     failure_reasons = _access_request_failure_reasons(page.items)
-    result: list[JsonValue] = []
-    result.extend(
-        _access_request_item(access_request, failure_reasons) for access_request in page.items
-    )
+    names = decided_by_names(page.items)
+    result: list[JsonValue] = [
+        _access_request_item(
+            access_request,
+            failure_reasons,
+            names[access_request.id],
+        )
+        for access_request in page.items
+    ]
     return _json_response(
         paginated_list_payload(items=result, pagination=pagination_item(page)),
     )

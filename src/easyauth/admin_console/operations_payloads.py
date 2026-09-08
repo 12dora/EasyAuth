@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from easyauth.access_requests.approvals import loaded_approver_user_ids
+from easyauth.accounts.models import UserMirror
 from easyauth.api.datetime_json import datetime_value
 from easyauth.applications import health_models
 
@@ -24,6 +25,45 @@ def access_request_decision_fields(access_request: AccessRequest) -> JsonObject:
         "decision_actor_type": access_request.decision_actor_type,
         "decision_comment": access_request.decision_comment,
         "decided_at": datetime_value(access_request.decided_at),
+    }
+
+
+def access_request_approvers(access_request: AccessRequest) -> list[JsonValue]:
+    assignments = sorted(
+        access_request.loaded_approver_assignments,
+        key=lambda assignment: assignment.id,
+    )
+    items: list[JsonValue] = [
+        {
+            "user_id": assignment.approver.authentik_user_id,
+            "name": assignment.approver.name,
+        }
+        for assignment in assignments
+    ]
+    return items
+
+
+def decided_by_names(access_requests: tuple[AccessRequest, ...]) -> dict[int, str]:
+    actor_ids = tuple(
+        dict.fromkeys(
+            access_request.decided_by
+            for access_request in access_requests
+            if access_request.decided_by
+        ),
+    )
+    names_by_user_id = (
+        {
+            user.authentik_user_id: user.name
+            for user in UserMirror.objects.filter(authentik_user_id__in=actor_ids)
+        }
+        if actor_ids
+        else {}
+    )
+    return {
+        access_request.id: names_by_user_id.get(access_request.decided_by, "")
+        if access_request.decided_by
+        else ""
+        for access_request in access_requests
     }
 
 

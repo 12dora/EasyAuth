@@ -15,6 +15,7 @@ from easyauth.access_requests.models import (
     REQUEST_STATUS_GRANT_FAILED,
     REQUEST_STATUS_SUBMITTED,
     AccessRequest,
+    AccessRequestApprover,
     AccessRequestGroup,
     AccessRequestGroupGrantSnapshot,
 )
@@ -122,6 +123,77 @@ def test_ops3_console_operations_api_filters_access_requests_and_grants() -> Non
     assert "ERP 等待审批" not in requests_body
     assert crm.app_key in grants_body
     assert erp.app_key not in grants_body
+
+
+def test_ops3_access_requests_include_user_app_and_approver_names() -> None:
+    client = _logged_in_superuser("ops3-request-names-admin")
+    user = UserMirror.objects.create(authentik_user_id="ops3-request-names-user", name="胡玉琴A")
+    app = App.objects.create(
+        app_key="ops3-request-names-app",
+        name="EasyLearning",
+        alias="学习工作台",
+    )
+    approver = UserMirror.objects.create(
+        authentik_user_id="ops3-request-names-approver",
+        name="审批人甲",
+    )
+    decided_by = UserMirror.objects.create(
+        authentik_user_id="ops3-request-names-decider",
+        name="管理员乙",
+    )
+    submitted = AccessRequest.objects.create(
+        user=user,
+        app=app,
+        status=REQUEST_STATUS_SUBMITTED,
+        reason="需要学习权限",
+        idempotency_key="ops3-request-names-submitted",
+        payload_digest="a" * 64,
+    )
+    _ = AccessRequestApprover.objects.create(access_request=submitted, approver=approver)
+    failed = AccessRequest.objects.create(
+        user=user,
+        app=app,
+        status=REQUEST_STATUS_GRANT_FAILED,
+        reason="授权失败",
+        idempotency_key="ops3-request-names-failed",
+        payload_digest="b" * 64,
+        approved_at=timezone.now(),
+        decided_at=timezone.now(),
+        decided_by=decided_by.authentik_user_id,
+        decision_actor_type=DECISION_ACTOR_CONSOLE_ADMIN,
+    )
+    _ = AuditLog.objects.create(
+        actor_type="admin",
+        actor_id=decided_by.authentik_user_id,
+        event_type="grant_apply_failed",
+        target_type="access_request",
+        target_id=str(failed.id),
+        metadata={"error": "目录写入失败"},
+    )
+
+    submitted_response = client.get(
+        ACCESS_REQUESTS_API_URL,
+        {"app_key": app.app_key, "status": REQUEST_STATUS_SUBMITTED},
+    )
+    failed_response = client.get(
+        ACCESS_REQUESTS_API_URL,
+        {"app_key": app.app_key, "status": REQUEST_STATUS_GRANT_FAILED},
+    )
+
+    submitted_item = submitted_response.json()["data"][0]
+    failed_item = failed_response.json()["data"][0]
+    assert submitted_response.status_code == HTTPStatus.OK
+    assert submitted_item["user_name"] == "胡玉琴A"
+    assert submitted_item["app_name"] == "EasyLearning"
+    assert submitted_item["app_alias"] == "学习工作台"
+    assert submitted_item["approver_user_ids"] == [approver.authentik_user_id]
+    assert submitted_item["approvers"] == [
+        {"user_id": approver.authentik_user_id, "name": "审批人甲"},
+    ]
+    assert submitted_item["decided_by_name"] == ""
+    assert failed_response.status_code == HTTPStatus.OK
+    assert failed_item["decided_by"] == decided_by.authentik_user_id
+    assert failed_item["decided_by_name"] == "管理员乙"
 
 
 def test_ops3_access_request_failure_reason_uses_latest_failure_event() -> None:
