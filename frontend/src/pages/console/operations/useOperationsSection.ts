@@ -9,9 +9,9 @@ import type {
   TablePaginationConfig,
 } from "../../../components/antd/AppTable";
 import { useI18n } from "../../../i18n/I18nProvider";
-import { apiRequest, itemsFromPayload } from "../../../lib/api";
-import type { JsonValue, ListPayload, Pagination } from "../../../lib/api";
-import { parseAccessGrantRow, type AccessGrantRow } from "../../../lib/domain/accessGrantRow";
+import { apiRequest } from "../../../lib/api";
+import type { JsonValue, ListPayload } from "../../../lib/api";
+import type { AccessGrantRow } from "../../../lib/domain/accessGrantRow";
 import { accessGrantColumns, operationColumns, type OperationFilterValues } from "./operationColumns";
 import { SECTION_FILTER_MAPS, filterValuesFromSearchParams } from "./operationFilterMap";
 import {
@@ -19,6 +19,7 @@ import {
   useRevokeGrantMutation,
   useHealthCheckMutation,
 } from "./operationMutations";
+import { operationsPayload, type OperationsPayload } from "./operationPayload";
 import { operationQueryString, type OperationSectionConfig } from "./operationQuery";
 import type { AccessRequestAction, OperationNotice, OperationRow } from "./operationRow";
 import { useOperationsSearchParams } from "./operationsSearchParams";
@@ -30,17 +31,6 @@ const SECTION_MIN_WIDTH: Record<string, number | undefined> = {
   "access-requests": 1400,
   "access-grants": 1260,
 };
-
-/**
- * 分区载荷。
- *
- * 授权明细的行按 A1 契约(`parseAccessGrantRow`)解析: 字段缺失即契约违约, 解析在
- * queryFn 里做, 错误直接变成查询错误、走页面已有的「运营数据加载失败」路径,
- * 不在渲染期炸表格, 也不静默兜底。
- */
-type OperationsPayload =
-  | { kind: "grants"; pagination?: Pagination; rows: AccessGrantRow[] }
-  | { kind: "generic"; pagination?: Pagination; rows: OperationRow[] };
 
 /** antd 回调的第四个参数只用到 action; 收窄成这一项后同一个处理函数能给任意行类型用。 */
 type TableChangeExtra = { action: TableCurrentDataSource<never>["action"] };
@@ -78,18 +68,7 @@ export function useOperationsSection(section: string, config: OperationSectionCo
       const payload = await apiRequest<ListPayload<JsonValue>>(
         isPaginated ? `${config.endpoint}?${queryString}` : config.endpoint,
       );
-      if (isAccessGrants) {
-        return {
-          kind: "grants",
-          pagination: payload.pagination,
-          rows: itemsFromPayload<JsonValue>(payload).map(parseAccessGrantRow),
-        };
-      }
-      return {
-        kind: "generic",
-        pagination: payload.pagination,
-        rows: itemsFromPayload<OperationRow>(payload),
-      };
+      return operationsPayload(section, payload);
     },
   });
   const healthCheckMutation = useHealthCheckMutation();

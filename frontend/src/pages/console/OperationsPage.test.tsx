@@ -493,6 +493,41 @@ describe("OperationsPage", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  test("依赖健康立即检测成功后按响应刷新表格, 不清空行", async () => {
+    document.body.dataset.currentUserRole = "admin";
+    const fetchMock = vi.fn<typeof fetch>(async (input, init) => {
+      const url = String(input);
+      if (url === "/console/api/v1/operations/dependency-health") {
+        return jsonResponse({
+          data: [
+            { component: "authentik", status: "healthy", summary: "正常", error_summary: "", last_checked_at: "2026-07-02T00:00:00Z" },
+          ],
+        });
+      }
+      if (url === "/console/api/v1/operations/dependency-health/checks" && init?.method === "POST") {
+        return jsonResponse({
+          data: [
+            { component: "authentik", status: "unhealthy", summary: "调用失败", error_summary: "HTTP 500", last_checked_at: "2026-07-02T01:00:00Z" },
+          ],
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const user = userEvent.setup({ delay: null });
+
+    renderOperationsPage("dependency-health");
+
+    expect(await screen.findByText("正常")).toBeVisible();
+
+    await user.click(screen.getByRole("button", { name: "立即检测" }));
+
+    // 检测响应直接写回分区缓存: 行必须仍在, 且换成最新结果。
+    expect(await screen.findByText("调用失败")).toBeVisible();
+    expect(screen.getByText("authentik")).toBeVisible();
+    expect(screen.queryByText("暂无运营数据")).not.toBeInTheDocument();
+  });
+
   test("授权列表的创建时间范围仍由表格上方控件承载并写回 URL", async () => {
     // 授权列表载荷里没有 created_at 字段, 没有时间列可以挂表头筛选,
     // 因此这是全站唯一保留在表格上方的筛选控件。
