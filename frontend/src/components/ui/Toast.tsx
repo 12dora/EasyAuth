@@ -15,6 +15,7 @@ interface ToastItem {
   title: string;
   message?: string;
   persistent?: boolean;
+  closing?: boolean;
 }
 
 export interface ToastApi {
@@ -43,12 +44,19 @@ const BADGE_TONE: Record<ToastTone, BadgeTone> = {
   info: "neutral",
 };
 
-// 与 StatusBanner 的配色保持一致, 让 toast 与内联提示观感统一。
-const TONE_CLASSES: Record<ToastTone, string> = {
-  success: "border-evergreen/30 bg-evergreen/8 text-evergreen",
-  error: "border-signal/30 bg-signal/8 text-signal",
-  warning: "border-amber/30 bg-amber/8 text-amber",
-  info: "border-ink/15 bg-paper-soft text-ink-soft",
+// 卡片是不透明纸面 + 3px 语义色左边框: toast 浮在内容之上, 半透明底会与下方表格糊在一起。
+const TONE_BORDER_CLASSES: Record<ToastTone, string> = {
+  success: "border-l-evergreen",
+  error: "border-l-signal",
+  warning: "border-l-amber",
+  info: "border-l-accent",
+};
+
+const TONE_ICON_CLASSES: Record<ToastTone, string> = {
+  success: "text-evergreen",
+  error: "text-signal",
+  warning: "text-amber",
+  info: "text-accent",
 };
 
 // 成功/提示停留较短, 失败默认持久直到用户关闭(关键错误可读)。
@@ -59,10 +67,22 @@ const TONE_DURATION: Record<ToastTone, number | null> = {
   error: null,
 };
 
+// 与 styles/index.css 的 .toast-card--closing 动画时长对齐; 兜底超时留出余量,
+// 覆盖 animationend 不触发的场景(jsdom、动画被打断、标签页后台化)。
+const EXIT_FALLBACK_MS = 260;
+
+function prefersReducedMotion(): boolean {
+  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
+    return false;
+  }
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   const idRef = useRef(0);
   const timersRef = useRef(new Map<number, ReturnType<typeof setTimeout>>());
+  const exitTimersRef = useRef(new Map<number, ReturnType<typeof setTimeout>>());
   const remainingRef = useRef(new Map<number, number>());
   const startedAtRef = useRef(new Map<number, number>());
 
@@ -74,14 +94,42 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const dismiss = useCallback(
+  // 真正把卡片从 DOM 摘掉; 退场动画结束(或兜底超时)后调用。
+  const remove = useCallback(
     (id: number) => {
       setToasts((current) => current.filter((toast) => toast.id !== id));
       clearTimer(id);
+      const exitTimer = exitTimersRef.current.get(id);
+      if (exitTimer) {
+        clearTimeout(exitTimer);
+        exitTimersRef.current.delete(id);
+      }
       remainingRef.current.delete(id);
       startedAtRef.current.delete(id);
     },
     [clearTimer],
+  );
+
+  // 关闭 = 先进入 closing 态播退场动画, 自动关闭与手动关闭走同一条路径。
+  const dismiss = useCallback(
+    (id: number) => {
+      clearTimer(id);
+      remainingRef.current.delete(id);
+      startedAtRef.current.delete(id);
+      if (prefersReducedMotion()) {
+        remove(id);
+        return;
+      }
+      if (exitTimersRef.current.has(id)) {
+        return;
+      }
+      setToasts((current) => current.map((toast) => (toast.id === id ? { ...toast, closing: true } : toast)));
+      exitTimersRef.current.set(
+        id,
+        setTimeout(() => remove(id), EXIT_FALLBACK_MS),
+      );
+    },
+    [clearTimer, remove],
   );
 
   const schedule = useCallback(
@@ -162,9 +210,12 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   // 卸载时清空所有计时器, 避免在已卸载组件上 setState。
   useEffect(() => {
     const timers = timersRef.current;
+    const exitTimers = exitTimersRef.current;
     return () => {
       timers.forEach((timer) => clearTimeout(timer));
       timers.clear();
+      exitTimers.forEach((timer) => clearTimeout(timer));
+      exitTimers.clear();
     };
   }, []);
 
@@ -182,7 +233,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   return (
     <ToastContext.Provider value={api}>
       {children}
-      <ToastViewport toasts={toasts} onDismiss={dismiss} onPause={pause} onResume={resume} />
+      <ToastViewport
+        toasts={toasts}
+        onDismiss={dismiss}
+        onExited={remove}
+        onPause={pause}
+        onResume={resume}
+      />
     </ToastContext.Provider>
   );
 }
@@ -194,11 +251,13 @@ export function useToast(): ToastApi {
 function ToastViewport({
   toasts,
   onDismiss,
+  onExited,
   onPause,
   onResume,
 }: {
   toasts: ToastItem[];
   onDismiss: (id: number) => void;
+  onExited: (id: number) => void;
   onPause: (id: number) => void;
   onResume: (id: number) => void;
 }) {
@@ -219,6 +278,7 @@ function ToastViewport({
           toast={toast}
           dismissLabel={t("common.close")}
           onDismiss={() => onDismiss(toast.id)}
+          onExited={() => onExited(toast.id)}
           onPause={() => onPause(toast.id)}
           onResume={() => onResume(toast.id)}
         />
@@ -232,28 +292,33 @@ function ToastCard({
   toast,
   dismissLabel,
   onDismiss,
+  onExited,
   onPause,
   onResume,
 }: {
   toast: ToastItem;
   dismissLabel: string;
   onDismiss: () => void;
+  onExited: () => void;
   onPause: () => void;
   onResume: () => void;
 }) {
   const Icon = toneIcon(BADGE_TONE[toast.tone]);
+  const closing = toast.closing === true;
   return (
     <div
       role={toast.tone === "error" ? "alert" : "status"}
       data-testid="toast"
       data-tone={toast.tone}
-      className={`pointer-events-auto flex items-start gap-3 rounded-[3px] border px-4 py-3 shadow-lg ${TONE_CLASSES[toast.tone]}`}
+      data-state={closing ? "closing" : "open"}
+      className={`toast-card pointer-events-auto flex items-start gap-3 rounded-[3px] border border-ink/12 border-l-[3px] bg-paper px-4 py-3 text-ink shadow-lg ${TONE_BORDER_CLASSES[toast.tone]} ${closing ? "toast-card--closing" : ""}`}
+      onAnimationEnd={closing ? onExited : undefined}
       onMouseEnter={toast.persistent ? undefined : onPause}
       onMouseLeave={toast.persistent ? undefined : onResume}
       onFocus={toast.persistent ? undefined : onPause}
       onBlur={toast.persistent ? undefined : onResume}
     >
-      <Icon size={18} className="mt-0.5 shrink-0" />
+      <Icon size={18} className={`mt-0.5 shrink-0 ${TONE_ICON_CLASSES[toast.tone]}`} />
       <div className="min-w-0 flex-1">
         <strong className="block text-sm font-semibold leading-5">{toast.title}</strong>
         {toast.message ? <p className="mt-1 text-sm leading-5 text-ink-soft">{toast.message}</p> : null}

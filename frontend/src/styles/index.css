@@ -187,6 +187,37 @@ table,
   animation: shimmer 1.6s ease-in-out infinite;
 }
 
+/* Toast 进出场动画: 卡片本身不透明, 只有进出场瞬间做位移+淡入淡出。 */
+@keyframes toast-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes toast-exit {
+  from {
+    opacity: 1;
+    transform: translateY(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+}
+
+.toast-card {
+  animation: toast-enter 180ms var(--ease-out-paper) both;
+}
+
+.toast-card--closing {
+  animation: toast-exit 140ms var(--ease-press) both;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
@@ -198,6 +229,8 @@ table,
   }
 
   .animate-shimmer,
+  .toast-card,
+  .toast-card--closing,
   .topbar-popover,
   .user-menu-popover,
   .permission-selector__row--entering,
