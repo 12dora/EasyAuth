@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import ClassVar, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal
 
 from django.db import IntegrityError, transaction
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from easyauth.accounts.models import UserMirror
 from easyauth.admin_console.api_payloads import list_payload
 from easyauth.admin_console.api_responses import (
     error_response as _error_response,
@@ -20,6 +21,9 @@ from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.applications.models import App, AppMembership
 from easyauth.applications.ownership import ConsoleActor, can_view_app
 from easyauth.audit.services import AuditRecord, AuditService
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
 
 type VisibleAppResult = App | JsonResponse
 type ManageableAppResult = tuple[App, ConsoleActor] | JsonResponse
@@ -54,9 +58,15 @@ def console_app_memberships(request: HttpRequest, app_key: str) -> JsonResponse:
 
     match _visible_app(actor, app_key):
         case App() as app:
-            memberships = AppMembership.objects.filter(app=app).order_by("user_id", "role")
+            memberships = tuple(
+                AppMembership.objects.filter(app=app).order_by("user_id", "role"),
+            )
+            names = _user_names_by_id(membership.user_id for membership in memberships)
             return _items_response(
-                tuple(_membership_item(membership) for membership in memberships),
+                tuple(
+                    _membership_item(membership, names.get(membership.user_id, ""))
+                    for membership in memberships
+                ),
             )
         case JsonResponse() as response:
             return response
@@ -103,7 +113,7 @@ def _create_membership(request: HttpRequest, app_key: str) -> JsonResponse:
     except IntegrityError:
         return _membership_conflict_response()
     return _json_response(
-        {"membership": _membership_item(membership)},
+        {"membership": _membership_item(membership, _user_name(membership.user_id))},
         status=HTTPStatus.CREATED,
     )
 
@@ -140,7 +150,9 @@ def _update_membership(request: HttpRequest, app_key: str, membership_id: int) -
             _record_membership_event(app, actor, "console_app_membership_updated", membership)
     except IntegrityError:
         return _membership_conflict_response()
-    return _json_response({"membership": _membership_item(membership)})
+    return _json_response(
+        {"membership": _membership_item(membership, _user_name(membership.user_id))},
+    )
 
 
 def _apply_membership_patch(
@@ -191,15 +203,30 @@ def _manageable_app(request: HttpRequest, app_key: str) -> ManageableAppResult:
     return app, actor
 
 
-def _membership_item(
-    membership: AppMembership,
-) -> dict[str, JsonValue]:
+def _membership_item(membership: AppMembership, user_name: str) -> dict[str, JsonValue]:
     return {
         "id": membership.id,
         "user_id": membership.user_id,
+        "user_name": user_name,
         "role": membership.role,
         "is_active": membership.is_active,
     }
+
+
+def _user_name(user_id: str) -> str:
+    return _user_names_by_id((user_id,)).get(user_id, "")
+
+
+def _user_names_by_id(user_ids: Iterable[str]) -> dict[str, str]:
+    unique_ids = tuple(dict.fromkeys(user_ids))
+    if not unique_ids:
+        return {}
+    return dict(
+        UserMirror.objects.filter(authentik_user_id__in=unique_ids).values_list(
+            "authentik_user_id",
+            "name",
+        ),
+    )
 
 
 def _items_response(items: tuple[dict[str, JsonValue], ...]) -> JsonResponse:

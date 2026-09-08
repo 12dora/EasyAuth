@@ -704,18 +704,21 @@ def test_ops1_memberships_api_lists_app_memberships_for_visible_app() -> None:
         {
             "id": inactive.id,
             "user_id": "ops1-membership-inactive",
+            "user_name": "",
             "role": "developer",
             "is_active": False,
         },
         {
             "id": owner.id,
             "user_id": "ops1-membership-owner",
+            "user_name": "",
             "role": "owner",
             "is_active": True,
         },
         {
             "id": developer.id,
             "user_id": "ops1-memberships-api-developer",
+            "user_name": "",
             "role": "developer",
             "is_active": True,
         },
@@ -740,6 +743,7 @@ def test_ops1_memberships_api_superuser_creates_developer_membership() -> None:
     assert response.json()["membership"] == {
         "id": membership.id,
         "user_id": "ops1-membership-new-dev",
+        "user_name": "",
         "role": "developer",
         "is_active": True,
     }
@@ -796,6 +800,7 @@ def test_ops1_memberships_api_superuser_patches_role_and_active_state() -> None:
     assert response.json()["membership"] == {
         "id": membership.id,
         "user_id": "ops1-membership-patch-target",
+        "user_name": "",
         "role": "owner",
         "is_active": False,
     }

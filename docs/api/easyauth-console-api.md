@@ -109,6 +109,22 @@
 | POST | `/apps/{app_key}/credentials/oauth-clients` | 创建 OAuth client，可同时授予 credential capabilities |
 | PUT | `/apps/{app_key}/credentials/{credential_type}/{credential_id}/capabilities` | **owner**：替换单凭据的 `directory` / `notify` 授权集 |
 
+### 应用成员
+
+**GET `/apps/{app_key}/memberships`** 对可见该应用的成员可读。成功体 `{ "data": [...] }`。
+列表项：
+
+| 字段 | 说明 |
+| --- | --- |
+| `id` | 成员关系 ID |
+| `user_id` | Authentik 用户 ID |
+| `user_name` | 对应用户 `UserMirror.name`；无镜像或镜像无姓名时为空字符串 |
+| `role` | `owner` / `developer` |
+| `is_active` | 是否有效 |
+
+`user_name` 按当前列表一次性批量查询 `UserMirror`，不按行回源。创建与 PATCH 成功体中的
+`membership` 使用同一项形状。
+
 App capability 与 credential capability 必须同时开启；manifest 声明只供展示，
 不会自动开通 App 能力或授权凭据。
 `/capabilities` GET 响应不返回 manifest 声明；列表根对象是
