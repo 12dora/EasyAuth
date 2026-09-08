@@ -109,14 +109,7 @@ export function GrantForm({
           一条授权可以同时挂多个授权组, 因此这里是多选。高度与圆角来自 APP_ANTD_THEME 的
           controlHeight 36 / borderRadius 2, 与 SelectInput 的 h-9 rounded-[2px] 是同一组设计令牌。
         */}
-        <Field
-          label={t("grantForm.authorizationGroup")}
-          hint={
-            appKey
-              ? t("grantForm.authorizationGroupsSelected", { count: draft.authorizationGroupKeys.length })
-              : t("grantForm.authorizationGroupNeedApp")
-          }
-        >
+        <Field label={t("grantForm.authorizationGroup")}>
           <Select
             className="w-full"
             mode="multiple"
@@ -136,15 +129,7 @@ export function GrantForm({
           />
         </Field>
       </div>
-      <Field
-        as="group"
-        label={t("grantForm.permissions")}
-        hint={
-          appKey
-            ? t("grantForm.permissionsSelected", { count: draft.selectedPermissionKeys.length })
-            : t("grantForm.permissionsNeedApp")
-        }
-      >
+      <Field as="group" label={t("grantForm.permissions")}>
         <PermissionSelector
           appKey={appKey}
           groups={catalogView.permissionGroups}

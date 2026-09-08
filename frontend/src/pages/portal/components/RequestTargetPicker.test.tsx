@@ -142,7 +142,6 @@ describe("RequestTargetPicker", () => {
 
     expect(authorizationGroupCombobox()).toBeDisabled();
     expect(screen.getByText("不选择权限组")).toBeVisible();
-    expect(screen.getByText("请先选择应用后再选择权限组。")).toBeVisible();
 
     const selector = authorizationGroupCombobox().closest(".ant-select")?.querySelector(".ant-select-selector");
     await user.click(selector as HTMLElement);
@@ -204,7 +203,6 @@ describe("RequestTargetPicker", () => {
     const user = userEvent.setup();
 
     expect(authorizationGroupCombobox()).toBeDisabled();
-    expect(screen.getByText("已选 1 个权限组，可留空。")).toBeVisible();
 
     const selector = authorizationGroupCombobox().closest(".ant-select")?.querySelector(".ant-select-selector");
     await user.click(selector as HTMLElement);

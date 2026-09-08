@@ -97,14 +97,7 @@ export function RequestTargetPicker({
           高度与圆角来自 APP_ANTD_THEME 的 controlHeight 36 / borderRadius 2, 与 SelectInput 的
           h-9 rounded-[2px] 是同一组设计令牌, 不需要额外样式。
         */}
-        <Field
-          label={t("portal.request.authorizationGroup")}
-          hint={
-            appKey
-              ? t("portal.request.authorizationGroupsSelected", { count: authorizationGroupKeys.length })
-              : t("portal.request.authorizationGroupNeedApp")
-          }
-        >
+        <Field label={t("portal.request.authorizationGroup")}>
           <Select
             className="w-full"
             mode="multiple"
@@ -123,15 +116,7 @@ export function RequestTargetPicker({
           />
         </Field>
       </div>
-      <Field
-        as="group"
-        label={t("portal.request.directPermissions")}
-        hint={
-          appKey
-            ? t("portal.request.directPermissionsSelected", { count: selectedPermissionKeys.length })
-            : t("portal.request.directPermissionsNeedApp")
-        }
-      >
+      <Field as="group" label={t("portal.request.directPermissions")}>
         <PermissionSelector
           appKey={appKey}
           groups={permissionGroups}
