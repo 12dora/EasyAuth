@@ -46,6 +46,16 @@ export function AppShell({
   const [sessionExpired, setSessionExpired] = useState(false);
   const sessionExpiredRef = useRef(false);
   const loginHref = useMemo(() => signInUrlForCurrentPage(), [location.pathname, location.search, location.hash]);
+  const isSuperuser = currentUser?.isSuperuser === true;
+  /*
+   * Outlet context 必须按内容记忆化: 这个对象是所有路由页面共享的上下文值,
+   * 每次渲染新建一个字面量会让每个 useOutletContext 的消费者跟着壳层的任意一次渲染
+   * (路由变化、会话复核、语言切换)重渲染一遍, 与它们真正依赖的两个字段无关。
+   */
+  const outletContext = useMemo<AppShellOutletContext>(
+    () => ({ currentUserId, isSuperuser }),
+    [currentUserId, isSuperuser],
+  );
   // 上游身份复核只对 Authentik 会话有意义; 本地管理员会话没有上游, 401 仍走原来的提示。
   const upstreamCheckEnabled = currentUser?.authKind === "oidc";
 
@@ -104,13 +114,18 @@ export function AppShell({
               </div>
             </div>
           ) : null}
-          {mode === "console" && currentUser?.isSuperuser === true ? (
+          {mode === "console" && isSuperuser ? (
             <Suspense fallback={null}>
               <BlockedAppsBanner enabled />
             </Suspense>
           ) : null}
-          <div className="route-transition" data-route-pathname={location.pathname} data-testid="route-transition" key={location.pathname}>
-            <Outlet context={{ currentUserId, isSuperuser: currentUser?.isSuperuser === true } satisfies AppShellOutletContext} />
+          {/*
+            * 这层容器不按 pathname 打 key: 打了 key 等于每次导航都把整个 <main> 的子树
+            * 卸载重挂一遍(路由页面自己的挂载由 App.tsx 的路由结构决定, 不需要壳层再来一次),
+            * 已经渲染好的 DOM、滚动位置和路由页面的本地状态全部作废, 是导航发卡顿的主因之一。
+            */}
+          <div className="route-transition" data-route-pathname={location.pathname} data-testid="route-transition">
+            <Outlet context={outletContext} />
           </div>
         </main>
       </div>

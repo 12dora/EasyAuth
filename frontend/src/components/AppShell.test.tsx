@@ -3,8 +3,8 @@ import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import type { ReactElement } from "react";
-import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { useState, type ReactElement } from "react";
+import { MemoryRouter, Route, Routes, useOutletContext } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
 import { App } from "../App";
@@ -12,7 +12,7 @@ import type { CurrentUser } from "../App";
 import { I18nProvider } from "../i18n/I18nProvider";
 import { API_SESSION_EXPIRED_EVENT } from "../lib/api";
 import { IDENTITY_CHECK_MESSAGE_TYPE } from "../lib/upstreamIdentityCheck";
-import { AppShell } from "./AppShell";
+import { AppShell, type AppShellOutletContext } from "./AppShell";
 import { IDENTITY_CHECK_FRAME_TEST_ID } from "./shell/useUpstreamIdentityCheck";
 
 const layoutShellCss = readFileSync(resolve(__dirname, "../styles/layout-shell.css"), "utf8");
@@ -70,6 +70,55 @@ function renderShell(
             <Route path={mode === "console" ? "/console" : "/portal"} element={<div>页面内容</div>} />
             <Route path={mode === "console" ? "/console/settings" : "/portal/settings"} element={<div>设置页面</div>} />
             <Route path={mode === "console" ? "/console/operations/access-requests" : "/portal/request"} element={<div>申请页面</div>} />
+          </Route>
+        </Routes>
+      </MemoryRouter>
+    </I18nProvider>,
+  );
+}
+
+const observedOutletContexts: AppShellOutletContext[] = [];
+
+/** 两个门户路由渲染同一个带本地状态的组件, 用来观察导航是否把子树整个重挂载。 */
+function RouteStateProbe() {
+  const context = useOutletContext<AppShellOutletContext>();
+  const [count, setCount] = useState(0);
+  observedOutletContexts.push(context);
+
+  return (
+    <div>
+      <span data-testid="probe-count">{count}</span>
+      <button type="button" onClick={() => setCount((current) => current + 1)}>
+        加一
+      </button>
+    </div>
+  );
+}
+
+function renderShellWithProbe() {
+  observedOutletContexts.length = 0;
+  renderWithQueryClient(
+    <I18nProvider>
+      <MemoryRouter initialEntries={["/portal"]}>
+        <Routes>
+          <Route
+            element={
+              <AppShell
+                currentUser={{
+                  displayName: "张三",
+                  id: "u-1",
+                  isSuperuser: false,
+                  logoutUrl: "/auth/logout/",
+                  role: "member",
+                  authKind: "local_admin",
+                }}
+                currentUserId="u-1"
+                mode="portal"
+              />
+            }
+          >
+            <Route path="/portal" element={<RouteStateProbe />} />
+            <Route path="/portal/request" element={<RouteStateProbe />} />
           </Route>
         </Routes>
       </MemoryRouter>
@@ -386,6 +435,26 @@ describe("AppShell", () => {
     expect(screen.getByTestId("route-transition")).toHaveAttribute("data-route-pathname", "/portal/request");
   });
 
+  test("导航不重挂载路由子树: 页面本地状态与 Outlet 上下文都跨路由存活", async () => {
+    const user = userEvent.setup();
+    renderShellWithProbe();
+
+    await user.click(screen.getByRole("button", { name: "加一" }));
+    await user.click(screen.getByRole("button", { name: "加一" }));
+    expect(screen.getByTestId("probe-count")).toHaveTextContent("2");
+    expect(screen.getByTestId("route-transition")).toHaveAttribute("data-route-pathname", "/portal");
+    const contextBeforeNavigation = observedOutletContexts.at(-1);
+
+    await user.click(screen.getByRole("link", { name: "申请权限" }));
+
+    expect(screen.getByTestId("route-transition")).toHaveAttribute("data-route-pathname", "/portal/request");
+    // 壳层不再按 pathname 打 key, 同一个路由组件跨导航保持挂载, 计数不回到 0。
+    expect(screen.getByTestId("probe-count")).toHaveTextContent("2");
+    // Outlet context 按内容记忆化: 两个字段没变, 消费者拿到的就该是同一个对象。
+    expect(observedOutletContexts.at(-1)).toBe(contextBeforeNavigation);
+    expect(contextBeforeNavigation).toEqual({ currentUserId: "u-1", isSuperuser: false });
+  });
+
   test("并发 401 只显示一个登录失效提示并清理缓存", () => {
     window.history.pushState({}, "", "/console/operations/access-requests?status=submitted");
     const { client } = renderWithQueryClient(
@@ -465,6 +534,15 @@ describe("AppShell", () => {
     expect(layoutShellCss).toMatch(/\.sidebar-footer a\s*\{[^}]*border-radius: 2px;/s);
     expect(layoutShellCss).not.toMatch(/border-radius:\s*6px/);
     expect(layoutShellCss).toContain("background: rgb(var(--accent));");
+  });
+
+  test("内容区入场动画只动透明度且不超过 150ms, 并让位于减少动效", () => {
+    expect(layoutShellCss).toMatch(/\.route-transition\s*\{[^}]*animation: route-enter 120ms/s);
+    // 位移会让整块内容区在导航期间逐帧重新合成, 是可感知的卡顿来源。
+    expect(layoutShellCss).not.toMatch(/@keyframes route-enter\s*\{(?:[^{}]|\{[^{}]*\})*transform/s);
+    expect(layoutShellCss).toMatch(
+      /@media \(prefers-reduced-motion: reduce\)\s*\{\s*\.route-transition\s*\{\s*animation: none;/s,
+    );
   });
 
   test("用户菜单浮层使用 2px 圆角、hairline 边框和低阴影", () => {

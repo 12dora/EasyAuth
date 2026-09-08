@@ -403,19 +403,31 @@
   color: rgb(var(--ink));
 }
 
+/*
+ * 内容区的入场淡入。
+ *
+ * 只做透明度、不做位移: translateY 会让整块内容区在每一帧重新合成一层,
+ * 而它恰好和路由 chunk 加载、首屏查询渲染撞在同一段时间里, 是"点一下菜单就卡一下"的来源。
+ * 容器本身不再按 pathname 重挂载(见 AppShell), 因此这条动画只在壳层首次挂载时跑一次,
+ * 导航不再重复付这份合成与重绘的代价。
+ */
 .route-transition {
-  animation: route-enter 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  animation: route-enter 120ms ease-out;
 }
 
 @keyframes route-enter {
   from {
     opacity: 0;
-    transform: translateY(8px);
   }
 
   to {
     opacity: 1;
-    transform: translateY(0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .route-transition {
+    animation: none;
   }
 }
 
