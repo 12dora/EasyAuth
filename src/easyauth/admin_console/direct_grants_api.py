@@ -30,10 +30,21 @@ from easyauth.admin_console.grant_write_common import (
     resolve_admin_grant_targets,
 )
 from easyauth.api.errors import ErrorCode, JsonValue
-from easyauth.applications.models import App
+from easyauth.applications.models import App, AuthorizationGroupGrant
 from easyauth.grants.direct_grant import DirectGrantEmptyReplaceError, apply_admin_direct_grant
-from easyauth.grants.managed_users import ManagedUsersResolutionUnavailableError
-from easyauth.grants.models import GRANT_STATUS_ACTIVE, AccessGrant
+from easyauth.grants.managed_users import (
+    MANAGED_USERS_SCOPE,
+    ManagedUsersDirectoryCache,
+    ManagedUsersResolutionUnavailableError,
+    resolve_managed_users,
+)
+from easyauth.grants.models import (
+    GRANT_STATUS_ACTIVE,
+    MEMBERSHIP_SOURCE_DEPARTMENT,
+    AccessGrant,
+    AccessGrantGroup,
+    AccessGrantPermission,
+)
 from easyauth.grants.services import GrantMutationExpiredError
 from easyauth.portal.access_request_payloads import (
     APP_NOT_REQUESTABLE_MESSAGE,
@@ -69,9 +80,18 @@ def _create_direct_grant(request: HttpRequest, *, actor_id: str) -> JsonResponse
         payload = DirectGrantRequestPayload.model_validate_json(request.body)
         user = _active_user_for_id(payload.user_id)
         targets = _resolve_direct_grant_targets(payload)
+        directory_cache: ManagedUsersDirectoryCache = {}
+        _warm_managed_users_directory_cache(
+            user=user,
+            targets=targets,
+            directory_cache=directory_cache,
+        )
         with transaction.atomic():
             grant = apply_admin_direct_grant(user=user, targets=targets, actor_id=actor_id)
-            row = serialize_access_grant_row(_grant_for_row(grant))
+            row = serialize_access_grant_row(
+                _grant_for_row(grant),
+                managed_users_cache=directory_cache,
+            )
     except ValidationError as exc:
         return error_response(
             ErrorCode.VALIDATION_ERROR,
@@ -179,6 +199,63 @@ def _semantic_error_response(exc: AdminGrantSemanticError) -> JsonResponse:
 
 def _grant_for_row(grant: AccessGrant) -> AccessGrant:
     return access_grant_row_queryset().get(pk=grant.id)
+
+
+def _warm_managed_users_directory_cache(
+    *,
+    user: UserMirror,
+    targets: ResolvedAdminGrantTargets,
+    directory_cache: ManagedUsersDirectoryCache,
+) -> None:
+    current = AccessGrant.objects.filter(user=user, app=targets.app, is_current=True).first()
+    mappings = _managed_users_group_mappings(targets, current)
+    if not mappings and not _has_managed_users_direct(targets, current):
+        return
+    _ = resolve_managed_users(user=user, app=targets.app, directory_cache=directory_cache)
+    for mapping in mappings:
+        _ = resolve_managed_users(
+            user=user,
+            app=targets.app,
+            authorization_group_grant=mapping,
+            directory_cache=directory_cache,
+        )
+
+
+def _managed_users_group_mappings(
+    targets: ResolvedAdminGrantTargets,
+    current: AccessGrant | None,
+) -> tuple[AuthorizationGroupGrant, ...]:
+    group_ids = {group.id for group in targets.authorization_groups}
+    if current is not None:
+        group_ids.update(
+            AccessGrantGroup.objects.filter(
+                grant=current,
+                source=MEMBERSHIP_SOURCE_DEPARTMENT,
+            ).values_list("authorization_group_id", flat=True),
+        )
+    if not group_ids:
+        return ()
+    return tuple(
+        AuthorizationGroupGrant.objects.select_related("authorization_group", "permission").filter(
+            authorization_group_id__in=group_ids,
+            scope_key=MANAGED_USERS_SCOPE,
+        ),
+    )
+
+
+def _has_managed_users_direct(
+    targets: ResolvedAdminGrantTargets,
+    current: AccessGrant | None,
+) -> bool:
+    if any(item.scope_key == MANAGED_USERS_SCOPE for item in targets.direct_grants):
+        return True
+    if current is None:
+        return False
+    return AccessGrantPermission.objects.filter(
+        grant=current,
+        source=MEMBERSHIP_SOURCE_DEPARTMENT,
+        scope_key=MANAGED_USERS_SCOPE,
+    ).exists()
 
 
 def console_user_app_current_grant(

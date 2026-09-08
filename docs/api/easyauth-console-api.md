@@ -427,7 +427,8 @@ App capability 与 credential capability 必须同时开启；manifest 声明只
 
 错误：用户/应用不存在 → 404；用户非在职 → 409；目录/范围问题 → 422
 `SEMANTIC_VALIDATION_ERROR`，`details.errors` 为中文列表。**当前**授权含 `MANAGED_USERS`
-在展开响应行时若组织目录不可用 → **503 `DEPENDENCY_UNAVAILABLE`**，授权写入与
+时，先按 user/app 预热目录缓存，再进入写事务；锁内展开只读这份缓存，不再发目录 HTTP。
+预热或展开时组织目录不可用 → **503 `DEPENDENCY_UNAVAILABLE`**，授权写入与
 `direct_grant_applied` 成功审计一并回滚，不留下半成功状态。空目标收回最后一条用户来源成员后，
 响应展开的是已收回的历史行：只保留权限/范围名称，不解析管理对象名单，也不访问组织目录；
 目录不可用不得回滚这次收回。成功 201，

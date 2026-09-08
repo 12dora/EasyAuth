@@ -6,6 +6,7 @@ from json import dumps
 from typing import TYPE_CHECKING, Final, cast
 
 import pytest
+from django.db import connection
 from django.test import Client
 from django.utils import timezone
 
@@ -30,6 +31,7 @@ from easyauth.grants.models import (
     AccessGrantPermission,
 )
 from easyauth.integrations.authentik.directory_client import AuthentikDirectoryUnavailableError
+from easyauth.integrations.authentik.directory_payloads import DingTalkManagedUsers
 from tests.integration.admin_console.auth_helpers import (
     authenticate_console_admin,
     authenticate_console_user,
@@ -37,7 +39,6 @@ from tests.integration.admin_console.auth_helpers import (
 
 if TYPE_CHECKING:
     from easyauth.api.errors import JsonValue
-    from easyauth.integrations.authentik.directory_payloads import DingTalkManagedUsers
 
 pytestmark = pytest.mark.django_db
 
@@ -410,6 +411,32 @@ class _UnavailableManagedUsersClient:
         raise AuthentikDirectoryUnavailableError(message)
 
 
+class _TransactionalManagedUsersClient:
+    call_count: int
+    calls_inside_savepoint: int
+
+    def __init__(self) -> None:
+        self.call_count = 0
+        self.calls_inside_savepoint = 0
+
+    def get_managed_users(self, corp_id: str, manager_user_id: str) -> DingTalkManagedUsers:
+        self.call_count += 1
+        if connection.savepoint_ids:
+            self.calls_inside_savepoint += 1
+            message = "写事务内不得访问组织目录"
+            raise AuthentikDirectoryUnavailableError(message)
+        return DingTalkManagedUsers(
+            source_slug="dingtalk",
+            corp_id=corp_id,
+            manager_user_id=manager_user_id,
+            resolver="dingtalk_manager_chain",
+            stale=False,
+            resolved_at="2026-07-02T12:00:00+08:00",
+            users=(),
+            active_authentik_user_ids=("employee-1",),
+        )
+
+
 def test_direct_grants_rolls_back_when_directory_unavailable_for_managed_users(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -440,6 +467,35 @@ def test_direct_grants_rolls_back_when_directory_unavailable_for_managed_users(
     }
     assert AccessGrant.objects.filter(user=user, app=app).count() == 0
     assert AuditLog.objects.filter(event_type=DIRECT_GRANT_APPLIED_ACTION).count() == 0
+
+
+def test_direct_grants_does_not_resolve_directory_inside_write_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _logged_in_superuser("direct-grant-directory-lock-admin")
+    user, app, group, _permission = _managed_users_catalog("direct-grant-directory-lock")
+    directory = _TransactionalManagedUsersClient()
+    monkeypatch.setattr(
+        "easyauth.grants.managed_users.AuthentikDirectoryClient.from_settings",
+        lambda: directory,
+    )
+
+    response = client.post(
+        DIRECT_GRANTS_API_URL,
+        data=dumps(
+            _payload(
+                user_id=user.authentik_user_id,
+                app_key=app.app_key,
+                groups=[group.key],
+            ),
+        ),
+        content_type="application/json",
+    )
+
+    assert response.status_code == HTTPStatus.CREATED
+    assert directory.call_count == 1
+    assert directory.calls_inside_savepoint == 0
+    assert AccessGrant.objects.filter(user=user, app=app, is_current=True).count() == 1
 
 
 def test_direct_grants_empty_replace_revokes_when_directory_unavailable(
