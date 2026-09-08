@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from http import HTTPStatus
-from typing import TYPE_CHECKING, ClassVar, Protocol, cast, override
+from typing import TYPE_CHECKING, ClassVar, override
 
-from django.db.models import Prefetch
+from django.db.models import Prefetch, QuerySet
 from django.http import HttpRequest, JsonResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -18,6 +18,10 @@ from easyauth.admin_console.api_responses import (
     json_response as _json_response,
 )
 from easyauth.admin_console.authz import require_superuser
+from easyauth.admin_console.grant_row_payloads import (
+    access_grant_row_queryset,
+    serialize_access_grant_row,
+)
 from easyauth.admin_console.operation_filters import (
     OperationFilterValidationError,
     Page,
@@ -35,7 +39,6 @@ from easyauth.admin_console.operations_payloads import (
     dependency_health_map_payload,
     health_item,
 )
-from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue
 from easyauth.api.pagination import pagination_item
 from easyauth.applications.dependency_health import (
@@ -46,30 +49,18 @@ from easyauth.applications.dependency_health_checks import run_dependency_health
 from easyauth.applications.models import App
 from easyauth.audit.models import AuditLog
 from easyauth.audit.services import AuditRecord, AuditService
-from easyauth.grants.models import AccessGrant
 from easyauth.grants.services import GrantService
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
-    from datetime import datetime
+    from django.http import QueryDict
 
-    from easyauth.applications.models import AuthorizationGroup, Permission
+    from easyauth.grants.managed_users import ManagedUsersDirectoryCache
+    from easyauth.grants.models import AccessGrant
 
 USER_NOT_FOUND_MESSAGE = "用户不存在。"
 APP_NOT_FOUND_MESSAGE = "应用不存在。"
 FAILURE_REASON_CONTRACT_MESSAGE = "授权失败原因事实缺失或无效。"
 ACTIVE_GRANT_NOT_FOUND_MESSAGE = "当前有效授权不存在, 紧急撤权未执行。"
-
-
-class _GrantGroupLink(Protocol):
-    authorization_group: AuthorizationGroup
-    expires_at: datetime | None
-
-
-class _GrantPermissionLink(Protocol):
-    permission: Permission
-    scope_key: str
-    expires_at: datetime | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -259,12 +250,32 @@ def _access_request_page(request: HttpRequest) -> Page[AccessRequest]:
 
 
 def _access_grant_page(request: HttpRequest) -> Page[AccessGrant]:
-    queryset = (
-        AccessGrant.objects.select_related("user", "app")
-        .prefetch_related("grant_groups__authorization_group", "grant_permissions__permission")
-        .all()
-    )
+    queryset = _filter_current_only(access_grant_row_queryset(), request.GET)
     return paginate_queryset(filter_access_grants(queryset, request.GET), request.GET)
+
+
+def _filter_current_only(
+    queryset: QuerySet[AccessGrant],
+    query: QueryDict,
+) -> QuerySet[AccessGrant]:
+    raw = query.get("current_only")
+    if raw is None or raw == "":
+        current_only = True
+    else:
+        match raw:
+            case "true":
+                current_only = True
+            case "false":
+                current_only = False
+            case _:
+                raise OperationFilterValidationError(
+                    key="current_only",
+                    value=raw,
+                    message="current_only 必须为 true 或 false。",
+                )
+    if current_only:
+        return queryset.filter(is_current=True)
+    return queryset
 
 
 def _access_request_item(
@@ -294,55 +305,6 @@ def _access_request_item(
         except KeyError as exc:
             raise AccessRequestFailureReasonContractError(access_request.id) from exc
     return item
-
-
-def _access_grant_item(access_grant: AccessGrant) -> dict[str, JsonValue]:
-    return {
-        "id": access_grant.id,
-        "user_id": access_grant.user.authentik_user_id,
-        "app_key": access_grant.app.app_key,
-        "status": access_grant.status,
-        "version": access_grant.version,
-        "is_current": access_grant.is_current,
-        "authorization_groups": _access_grant_groups(access_grant),
-        "direct_grants": _access_grant_permissions(access_grant),
-    }
-
-
-def _access_grant_groups(access_grant: AccessGrant) -> list[JsonValue]:
-    items: list[JsonValue] = []
-    for link in cast(
-        "Iterable[_GrantGroupLink]",
-        access_grant.grant_groups.all(),  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
-    ):
-        group = link.authorization_group
-        items.append(
-            {
-                "key": group.key,
-                "kind": group.kind,
-                "name": group.name,
-                "expires_at": datetime_value(link.expires_at),
-            },
-        )
-    return items
-
-
-def _access_grant_permissions(access_grant: AccessGrant) -> list[JsonValue]:
-    items: list[JsonValue] = []
-    for link in cast(
-        "Iterable[_GrantPermissionLink]",
-        access_grant.grant_permissions.all(),  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
-    ):
-        permission = link.permission
-        items.append(
-            {
-                "permission": permission.key,
-                "permission_name": permission.name,
-                "scope": link.scope_key,
-                "expires_at": datetime_value(link.expires_at),
-            },
-        )
-    return items
 
 
 def _user_for_id(user_id: str) -> UserMirror:
@@ -438,8 +400,11 @@ def _validated_failure_reasons(
 
 
 def _access_grant_page_response(page: Page[AccessGrant]) -> JsonResponse:
-    result: list[JsonValue] = []
-    result.extend(_access_grant_item(access_grant) for access_grant in page.items)
+    directory_cache: ManagedUsersDirectoryCache = {}
+    result: list[JsonValue] = [
+        serialize_access_grant_row(access_grant, managed_users_cache=directory_cache)
+        for access_grant in page.items
+    ]
     return _json_response(
         paginated_list_payload(items=result, pagination=pagination_item(page)),
     )

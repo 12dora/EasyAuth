@@ -142,6 +142,7 @@ def test_ops3_access_grants_supports_version_current_revoked_and_expiration_filt
     response = client.get(
         ACCESS_GRANTS_API_URL,
         {
+            "current_only": "false",
             "version": "2",
             "current": "false",
             "revoked": "true",
@@ -158,17 +159,52 @@ def test_ops3_access_grants_supports_version_current_revoked_and_expiration_filt
     assert "ops3-grant-filter-other" not in body
     assert _json_int(response, "total_items") == 1
     item = _json_object(_json_list(_response_json(response)["data"])[0])
-    assert "grant_type" not in item
-    assert "grant_expires_at" not in item
+    assert item["grant_type"] == "timed"
+    assert item["grant_expires_at"] == soon.isoformat()
+    assert item["user_name"] == ""
+    assert item["app_name"] == "CRM"
+    assert item["app_alias"] == ""
     assert item["authorization_groups"] == [
         {
             "key": group.key,
             "kind": group.kind,
             "name": group.name,
             "expires_at": soon.isoformat(),
+            "source": "user",
         },
     ]
     assert item["direct_grants"] == []
+    assert item["groups"] == [
+        {"key": group.key, "kind": group.kind, "name": group.name},
+    ]
+    assert item["grants"] == []
+
+
+def test_ops3_access_grants_defaults_to_current_only() -> None:
+    client = _logged_in_superuser("ops3-current-only-admin")
+    user = UserMirror.objects.create(authentik_user_id="ops3-current-only-user")
+    app = App.objects.create(app_key="ops3-current-only-app", name="CRM")
+    current = AccessGrant.objects.create(user=user, app=app)
+    historical = AccessGrant.objects.create(
+        user=user,
+        app=app,
+        status=GRANT_STATUS_REVOKED,
+        is_current=False,
+        version=2,
+    )
+
+    default_response = client.get(ACCESS_GRANTS_API_URL, {"app_key": app.app_key})
+    all_versions = client.get(
+        ACCESS_GRANTS_API_URL,
+        {"app_key": app.app_key, "current_only": "false"},
+    )
+
+    default_ids = {item["id"] for item in default_response.json()["data"]}
+    all_ids = {item["id"] for item in all_versions.json()["data"]}
+    assert default_response.status_code == HTTPStatus.OK
+    assert all_versions.status_code == HTTPStatus.OK
+    assert default_ids == {current.id}
+    assert all_ids == {current.id, historical.id}
 
 
 @pytest.mark.parametrize(
@@ -243,6 +279,7 @@ def test_ops3_audit_logs_supports_target_time_range_and_pagination() -> None:
         (ACCESS_GRANTS_API_URL, {"version": "two"}, "version"),
         (ACCESS_GRANTS_API_URL, {"version": "0"}, "version"),
         (ACCESS_GRANTS_API_URL, {"current": "yes"}, "current"),
+        (ACCESS_GRANTS_API_URL, {"current_only": "yes"}, "current_only"),
         (ACCESS_GRANTS_API_URL, {"revoked": "1"}, "revoked"),
         (AUDIT_LOGS_API_URL, {"created_to": "2026-99-99"}, "created_to"),
     ],

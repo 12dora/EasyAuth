@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from http import HTTPStatus
-from typing import TYPE_CHECKING, ClassVar, cast
+from typing import ClassVar
 
 from django.http import HttpRequest, JsonResponse
 from pydantic import ConfigDict, Field, ValidationError
@@ -13,25 +13,26 @@ from easyauth.admin_console.api_responses import (
     method_not_allowed_response,
 )
 from easyauth.admin_console.authz import require_superuser
+from easyauth.admin_console.grant_row_payloads import (
+    access_grant_row_queryset,
+    serialize_access_grant_row,
+)
 from easyauth.admin_console.grant_write_common import (
     AdminGrantLookupError,
     AdminGrantSemanticError,
     AdminGrantWritePayload,
     resolve_admin_grant_targets,
 )
-from easyauth.api.datetime_json import datetime_value
 from easyauth.api.errors import ErrorCode, JsonValue
+from easyauth.applications.models import App
 from easyauth.grants.direct_grant import apply_admin_direct_grant
-from easyauth.grants.models import MEMBERSHIP_SOURCE_USER, AccessGrantGroup, AccessGrantPermission
+from easyauth.grants.models import GRANT_STATUS_ACTIVE, AccessGrant
 from easyauth.grants.services import GrantMutationExpiredError
-
-if TYPE_CHECKING:
-    from easyauth.admin_console.grant_write_common import ResolvedAdminGrantTargets
-    from easyauth.grants.models import AccessGrant
 
 USER_NOT_FOUND_MESSAGE = "用户不存在。"
 USER_INACTIVE_MESSAGE = "用户当前不是在职状态,无法授予权限。"
 GRANT_EXPIRED_MESSAGE = "授权到期时间必须晚于当前时间。"
+APP_NOT_FOUND_MESSAGE = "应用不存在。"
 
 
 class DirectGrantRequestPayload(AdminGrantWritePayload):
@@ -73,7 +74,7 @@ def _create_direct_grant(request: HttpRequest, *, actor_id: str) -> JsonResponse
             AdminGrantSemanticError(GRANT_EXPIRED_MESSAGE, (GRANT_EXPIRED_MESSAGE,)),
         )
     return json_response(
-        {"data": _direct_grant_response(grant, targets)},
+        {"data": {"grant": serialize_access_grant_row(_grant_for_row(grant))}},
         status=HTTPStatus.CREATED,
     )
 
@@ -108,30 +109,43 @@ def _semantic_error_response(exc: AdminGrantSemanticError) -> JsonResponse:
     )
 
 
-def _direct_grant_response(
-    grant: AccessGrant,
-    targets: ResolvedAdminGrantTargets,
-) -> dict[str, JsonValue]:
-    group_keys = list(
-        AccessGrantGroup.objects.filter(grant=grant, source=MEMBERSHIP_SOURCE_USER)
-        .order_by("authorization_group__key")
-        .values_list("authorization_group__key", flat=True),
+def _grant_for_row(grant: AccessGrant) -> AccessGrant:
+    return access_grant_row_queryset().get(pk=grant.id)
+
+
+def console_user_app_current_grant(
+    request: HttpRequest,
+    user_id: str,
+    app_key: str,
+) -> JsonResponse:
+    match require_superuser(request):
+        case JsonResponse() as response:
+            return response
+        case str():
+            pass
+    if request.method != "GET":
+        return method_not_allowed_response()
+    user = UserMirror.objects.filter(authentik_user_id=user_id).first()
+    if user is None:
+        return error_response(
+            ErrorCode.NOT_FOUND,
+            USER_NOT_FOUND_MESSAGE,
+            {"user_id": user_id},
+            status=HTTPStatus.NOT_FOUND,
+        )
+    app = App.objects.filter(app_key=app_key).first()
+    if app is None:
+        return error_response(
+            ErrorCode.NOT_FOUND,
+            APP_NOT_FOUND_MESSAGE,
+            {"app_key": app_key},
+            status=HTTPStatus.NOT_FOUND,
+        )
+    grant = (
+        access_grant_row_queryset()
+        .filter(user=user, app=app, is_current=True, status=GRANT_STATUS_ACTIVE)
+        .first()
     )
-    direct_rows = (
-        AccessGrantPermission.objects.filter(grant=grant, source=MEMBERSHIP_SOURCE_USER)
-        .select_related("permission")
-        .order_by("permission__key", "scope_key")
+    return json_response(
+        {"grant": None if grant is None else serialize_access_grant_row(grant)},
     )
-    direct_grants: list[JsonValue] = [
-        {"permission": row.permission.key, "scope": row.scope_key} for row in direct_rows
-    ]
-    return {
-        "grant_id": grant.id,
-        "version": grant.version,
-        "user_id": grant.user.authentik_user_id,
-        "app_key": grant.app.app_key,
-        "authorization_group_keys": cast("list[JsonValue]", list(group_keys)),
-        "direct_grants": direct_grants,
-        "grant_type": targets.grant_type,
-        "grant_expires_at": datetime_value(targets.grant_expires_at),
-    }

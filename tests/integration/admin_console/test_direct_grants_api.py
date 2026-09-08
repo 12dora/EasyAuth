@@ -165,7 +165,7 @@ def test_direct_grants_merges_groups_replaces_expiry_and_keeps_department_rows()
         ),
         content_type="application/json",
     )
-    grant_id = first.json()["data"]["grant_id"]
+    grant_id = first.json()["data"]["grant"]["id"]
     grant = AccessGrant.objects.get(pk=grant_id)
     _ = AccessGrantGroup.objects.create(
         grant=grant,
@@ -225,15 +225,16 @@ def test_direct_grants_merges_groups_replaces_expiry_and_keeps_department_rows()
     second_body = cast("dict[str, JsonValue]", second.json()["data"])
     replaced_body = cast("dict[str, JsonValue]", replaced.json()["data"])
     assert first.status_code == HTTPStatus.CREATED
-    assert first.json()["data"]["version"] == 1
+    assert first.json()["data"]["grant"]["version"] == 1
     assert second.status_code == HTTPStatus.CREATED
-    assert second_body["version"] == 2
-    assert set(cast("list[str]", second_body["authorization_group_keys"])) == {
-        sales.key,
-        finance.key,
-    }
+    assert second_body["grant"]["version"] == 2
+    assert {
+        item["key"]
+        for item in second_body["grant"]["authorization_groups"]
+        if item["source"] == MEMBERSHIP_SOURCE_USER
+    } == {sales.key, finance.key}
     assert replaced.status_code == HTTPStatus.CREATED
-    assert replaced_body["version"] == 3
+    assert replaced_body["grant"]["version"] == 3
     assert grant.version == 3
     sales_expiry = next(expires_at for key, expires_at in user_groups if key == sales.key)
     finance_expiry = next(expires_at for key, expires_at in user_groups if key == finance.key)
@@ -274,11 +275,28 @@ def test_direct_grants_persists_groups_not_expanded_permissions() -> None:
         content_type="application/json",
     )
 
-    payload = response.json()["data"]
-    grant = AccessGrant.objects.get(pk=payload["grant_id"])
+    payload = response.json()["data"]["grant"]
+    grant = AccessGrant.objects.get(pk=payload["id"])
     assert response.status_code == HTTPStatus.CREATED
-    assert payload["authorization_group_keys"] == [group.key]
-    assert payload["direct_grants"] == [{"permission": permission.key, "scope": "GLOBAL"}]
+    assert payload["authorization_groups"] == [
+        {
+            "key": group.key,
+            "kind": "role",
+            "name": "销售",
+            "expires_at": None,
+            "source": MEMBERSHIP_SOURCE_USER,
+        },
+    ]
+    assert payload["direct_grants"] == [
+        {
+            "permission": permission.key,
+            "permission_name": permission.name,
+            "scope": "GLOBAL",
+            "scope_name": "全局",
+            "expires_at": None,
+            "source": MEMBERSHIP_SOURCE_USER,
+        },
+    ]
     assert AccessGrantGroup.objects.filter(
         grant=grant,
         source=MEMBERSHIP_SOURCE_USER,
