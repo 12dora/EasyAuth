@@ -38,6 +38,7 @@ from easyauth.grants.models import (
     AccessGrantGroup,
     DepartmentGrantPolicy,
 )
+from easyauth.grants.operations import current_grant as lock_current_grant
 from tests.integration.admin_console.auth_helpers import (
     authenticate_console_admin,
     authenticate_console_user,
@@ -376,6 +377,77 @@ def test_ops3_console_emergency_revoke_rejects_department_sourced_grant() -> Non
         authorization_group=group,
         source=MEMBERSHIP_SOURCE_USER,
     )
+
+    response = client.post(
+        EMERGENCY_REVOKES_API_URL,
+        data=dumps(
+            {
+                "user_id": target_user.authentik_user_id,
+                "app_key": app.app_key,
+                "reason": "安全事件应急",
+            },
+        ),
+        content_type="application/json",
+    )
+
+    grant.refresh_from_db()
+    assert response.status_code == HTTPStatus.CONFLICT
+    assert response.json()["error"] == {
+        "code": "CONFLICT",
+        "message": DEPARTMENT_SOURCED_GRANT_MESSAGE,
+        "details": {
+            "reason": "department_sourced_grant",
+            "user_id": target_user.authentik_user_id,
+            "app_key": app.app_key,
+            "department_policy_ids": [policy.id],
+        },
+    }
+    assert grant.status == "active"
+    assert grant.is_current is True
+    assert AuditLog.objects.count() == 0
+
+
+def test_ops3_console_emergency_revoke_rejects_department_rows_appearing_after_initial_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _logged_in_superuser("ops3-dept-race-admin")
+    target_user = UserMirror.objects.create(authentik_user_id="ops3-dept-race-target")
+    app = App.objects.create(app_key="ops3-dept-race-app", name="Emergency CRM")
+    group = AuthorizationGroup.objects.create(app=app, key="sales", kind="role", name="销售")
+    policy = DepartmentGrantPolicy.objects.create(
+        source_slug="dingtalk",
+        corp_id="corp",
+        dept_id="1",
+        app=app,
+        grant_type="permanent",
+        reason="部门策略",
+        created_by_type="admin",
+        created_by_id="admin",
+        updated_by_type="admin",
+        updated_by_id="admin",
+    )
+    grant = AccessGrant.objects.create(user=target_user, app=app)
+    _ = AccessGrantGroup.objects.create(
+        grant=grant,
+        authorization_group=group,
+        source=MEMBERSHIP_SOURCE_USER,
+    )
+
+    def current_grant_after_reconcile(user: UserMirror, locked_app: App) -> AccessGrant | None:
+        unlocked = AccessGrant.objects.filter(user=user, app=locked_app, is_current=True).first()
+        if unlocked is not None and not AccessGrantGroup.objects.filter(
+            grant=unlocked,
+            source=MEMBERSHIP_SOURCE_DEPARTMENT,
+        ).exists():
+            _ = AccessGrantGroup.objects.create(
+                grant=unlocked,
+                authorization_group=group,
+                source=MEMBERSHIP_SOURCE_DEPARTMENT,
+                department_policy=policy,
+            )
+        return lock_current_grant(user, locked_app)
+
+    monkeypatch.setattr("easyauth.grants.lifecycle.current_grant", current_grant_after_reconcile)
 
     response = client.post(
         EMERGENCY_REVOKES_API_URL,

@@ -21,7 +21,7 @@ from easyauth.grants.operations import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Iterable
+    from collections.abc import Callable, Iterable
 
     from easyauth.accounts.models import UserMirror
     from easyauth.applications.models import App
@@ -95,17 +95,20 @@ def change_current_grant(input_data: GrantMutationData) -> AccessGrant:
     return grant
 
 
-def revoke_current_grant(
+def revoke_current_grant(  # noqa: PLR0913 - 撤权入口显式保留调用方、原因与锁后校验。
     *,
     user: UserMirror,
     app: App,
     actor_type: str,
     actor_id: str,
     reason: str = "",
+    before_revoke: Callable[[AccessGrant], None] | None = None,
 ) -> AccessGrant | None:
     grant = current_grant(user, app)
     if grant is None or not can_revoke(grant):
         return None
+    if before_revoke is not None:
+        before_revoke(grant)
 
     revoke_grant(grant, actor_type=actor_type, actor_id=actor_id, reason=reason)
     return grant

@@ -198,6 +198,39 @@ def test_revoke_grant_marks_current_grant_revoked_and_is_idempotent() -> None:
     )
 
 
+def test_revoke_grant_runs_before_revoke_after_lock_and_rolls_back() -> None:
+    user = UserMirror.objects.create(authentik_user_id="user-revoke-guard")
+    app = App.objects.create(app_key="revoke-guard-app", name="Revoke Guard App")
+    grant = AccessGrant.objects.create(user=user, app=app)
+    seen: list[int] = []
+
+    def before_revoke(locked: AccessGrant) -> None:
+        seen.append(locked.id)
+        message = "department source appeared under lock"
+        raise ValueError(message)
+
+    with pytest.raises(ValueError, match="department source appeared under lock"):
+        _ = GrantService.revoke_grant(
+            user=user,
+            app=app,
+            actor_type="admin",
+            actor_id="admin-revoke",
+            before_revoke=before_revoke,
+        )
+
+    grant.refresh_from_db()
+    assert seen == [grant.id]
+    assert grant.status == GRANT_STATUS_ACTIVE
+    assert grant.is_current is True
+    assert (
+        AuditLog.objects.filter(
+            event_type="grant_revoked",
+            target_id=grant_target_id(user, app),
+        ).count()
+        == 0
+    )
+
+
 def test_expire_grant_marks_current_timed_grant_expired_and_is_idempotent() -> None:
     # Given
     user = UserMirror.objects.create(authentik_user_id="user-expire-grant")

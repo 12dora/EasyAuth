@@ -20,7 +20,7 @@ from easyauth.admin_console.api_responses import (
 from easyauth.admin_console.authz import require_superuser
 from easyauth.admin_console.grant_row_payloads import (
     access_grant_row_queryset,
-    serialize_access_grant_row,
+    serialize_access_grant_rows,
 )
 from easyauth.admin_console.operation_filters import (
     OperationFilterValidationError,
@@ -175,13 +175,17 @@ def _execute_emergency_revoke(
     payload = _EmergencyRevokePayload.model_validate_json(request.body)
     user = _user_for_id(payload.user_id)
     app = _app_for_key(payload.app_key)
-    _reject_department_sourced_grant(user=user, app=app, payload=payload)
+
+    def reject_department_source(grant: AccessGrant) -> None:
+        _reject_department_sourced_grant(grant=grant, payload=payload)
+
     revoked_grant = GrantService.revoke_grant(
         user=user,
         app=app,
         actor_type="admin",
         actor_id=actor_id,
         reason=payload.reason,
+        before_revoke=reject_department_source,
     )
     if revoked_grant is None:
         raise ConsoleOperationsSemanticError(
@@ -198,13 +202,9 @@ def _execute_emergency_revoke(
 
 def _reject_department_sourced_grant(
     *,
-    user: UserMirror,
-    app: App,
+    grant: AccessGrant,
     payload: _EmergencyRevokePayload,
 ) -> None:
-    grant = AccessGrant.objects.filter(user=user, app=app, is_current=True).first()
-    if grant is None:
-        return
     group_policy_ids, has_department_groups = _membership_department_policy_ids(
         AccessGrantGroup.objects.filter(grant=grant, source=MEMBERSHIP_SOURCE_DEPARTMENT),
     )
@@ -467,10 +467,12 @@ def _validated_failure_reasons(
 
 def _access_grant_page_response(page: Page[AccessGrant]) -> JsonResponse:
     directory_cache: ManagedUsersDirectoryCache = {}
-    result: list[JsonValue] = [
-        serialize_access_grant_row(access_grant, managed_users_cache=directory_cache)
-        for access_grant in page.items
-    ]
     return _json_response(
-        paginated_list_payload(items=result, pagination=pagination_item(page)),
+        paginated_list_payload(
+            items=serialize_access_grant_rows(
+                page.items,
+                managed_users_cache=directory_cache,
+            ),
+            pagination=pagination_item(page),
+        ),
     )
