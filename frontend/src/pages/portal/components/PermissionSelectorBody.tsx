@@ -1,5 +1,5 @@
 import { flexRender, type Table } from "@tanstack/react-table";
-import { useRef, type MouseEvent } from "react";
+import { useState, type MouseEvent } from "react";
 
 import { EmptyState } from "../../../components/ui/EmptyState";
 import { cn } from "../../../lib/cn";
@@ -24,7 +24,17 @@ export function PermissionSelectorBody({ table }: { table: Table<PermissionSelec
   const { t } = useI18n();
   const { disabled, showSelectedOnly, onToggleGroup } = permissionSelectorTableMeta(table);
   const rows = table.getRowModel().rows;
-  const rowMotionSkips = useRowMotionSkips(rows);
+  /*
+   * 过渡批次的决定跟着渲染走, 不能写在 ref 里: ref 是绕过 React 状态的副作用,
+   * 并发渲染下一次被丢弃的渲染也会把决定留下来, 泄漏到下一次真正提交的渲染里。
+   * 放进 state + 渲染期推进(与 useGroupTransitionKeys 同一套做法): 渲染被丢弃,
+   * 这次的决定也跟着一起作废。本次渲染直接用刚算出来的 next, 不必等下一轮。
+   */
+  const [committedRowMotionSkips, setCommittedRowMotionSkips] = useState(EMPTY_ROW_MOTION_SKIPS);
+  const rowMotionSkips = nextRowMotionSkips(committedRowMotionSkips, rows);
+  if (rowMotionSkips !== committedRowMotionSkips) {
+    setCommittedRowMotionSkips(rowMotionSkips);
+  }
   if (rows.length === 0) {
     return (
       <tbody>
@@ -88,6 +98,8 @@ export function PermissionSelectorBody({ table }: { table: Table<PermissionSelec
   );
 }
 
+const EMPTY_ROW_MOTION_SKIPS: ReadonlyMap<string, boolean> = new Map();
+
 /**
  * 行 id -> 这一行所属的那批过渡要不要跳过逐行动画。
  *
@@ -95,17 +107,17 @@ export function PermissionSelectorBody({ table }: { table: Table<PermissionSelec
  * 反例: 两个 30 行的组间隔 80ms 先后收起 —— 第二批到来时在场的过渡行有 60 行(超阈值)
  * 因而被跳过; 等第一批的计时器到点、行数掉回 30, 重算就会把第二批从"跳过"翻回"要动画",
  * 已经摘掉的行重新挂上、重放一遍退场动画, 再被第一批那个计时器提前摘走。
- * 因此决定按行记在 ref 里, 直到这一行不再处于过渡态才连同记录一起清掉。
+ * 所以已经定下的决定只跟着行一起淘汰, 不重新判定。
  *
  * 新一批的代价要把"还在播的行"一起算进去: 它们仍在每帧参与重排。
  * 已经定下的决定不会因此改变, 所以不存在上面那种来回翻转。
  *
- * 这里在渲染期改 ref: 与 useGroupTransitionKeys 在渲染期推进过渡集合是同一套做法,
- * 且对同一批输入是幂等的(重复渲染既不会新增决定也不会改写决定)。
+ * 纯函数: 集合没有变化时原样返回上一份, 渲染期的 setState 因此不会自激。
  */
-function useRowMotionSkips(rows: Array<{ id: string; original: PermissionSelectorRow }>): Map<string, boolean> {
-  const skipsByRowId = useRef(new Map<string, boolean>()).current;
-
+function nextRowMotionSkips(
+  current: ReadonlyMap<string, boolean>,
+  rows: Array<{ id: string; original: PermissionSelectorRow }>,
+): ReadonlyMap<string, boolean> {
   const motionRowIds = new Set<string>();
   for (const row of rows) {
     if (row.original.isEntering || row.original.isExiting) {
@@ -113,27 +125,28 @@ function useRowMotionSkips(rows: Array<{ id: string; original: PermissionSelecto
     }
   }
 
-  for (const rowId of [...skipsByRowId.keys()]) {
-    if (!motionRowIds.has(rowId)) {
-      skipsByRowId.delete(rowId);
-    }
+  const keptRowIds = [...current.keys()].filter((rowId) => motionRowIds.has(rowId));
+  const freshRowIds = [...motionRowIds].filter((rowId) => !current.has(rowId));
+  if (keptRowIds.length === current.size && freshRowIds.length === 0) {
+    return current;
   }
 
-  const freshRowIds = [...motionRowIds].filter((rowId) => !skipsByRowId.has(rowId));
-  if (freshRowIds.length > 0) {
-    let animatingCount = 0;
-    for (const skip of skipsByRowId.values()) {
-      if (!skip) {
-        animatingCount += 1;
-      }
+  const next = new Map<string, boolean>();
+  let animatingCount = 0;
+  for (const rowId of keptRowIds) {
+    const skip = current.get(rowId) === true;
+    next.set(rowId, skip);
+    if (!skip) {
+      animatingCount += 1;
     }
+  }
+  if (freshRowIds.length > 0) {
     const skip = animatingCount + freshRowIds.length > ROW_MOTION_LIMIT;
     for (const rowId of freshRowIds) {
-      skipsByRowId.set(rowId, skip);
+      next.set(rowId, skip);
     }
   }
-
-  return skipsByRowId;
+  return next;
 }
 
 function rowClassName(row: PermissionSelectorRow, disabled: boolean, skipRowMotion: boolean): string {
